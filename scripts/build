@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=env.sh
+source "${ROOT}/scripts/env.sh"
+mkdir -p "${ZEPHYR_BUILD}"
+
+args=("$@")
+if [[ ${#args[@]} -gt 0 ]]; then
+	last="${args[-1]}"
+	case "${last}" in
+	app) args[-1]="${METAL_APP}" ;;
+	/*) ;;
+	*)
+		if [[ -e "${METAL_ROOT}/${last}" ]]; then
+			args[-1]="${METAL_ROOT}/${last}"
+		fi
+		;;
+	esac
+fi
+
+exec "${ROOT}/scripts/west" build -d "${ZEPHYR_BUILD}" "${args[@]}"

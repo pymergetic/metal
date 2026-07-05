@@ -1,0 +1,2 @@
+mainmenu "pymergetic-metal app"
+source "Kconfig.zephyr"

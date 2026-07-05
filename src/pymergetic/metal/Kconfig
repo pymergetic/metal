@@ -1,0 +1,5 @@
+menu "Pymergetic metal (OS core)"
+config PM_METAL
+	bool "Pymergetic metal runtime"
+	default y
+endmenu

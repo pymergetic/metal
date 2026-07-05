@@ -1,39 +1,70 @@
 # pymergetic-metal
 
-Zephyr application shell for Pymergetic.
+Zephyr OS core for Pymergetic: memory layout, portable `.o` loading, `pm_port` glue.
+
+**Not here:** CPython, zlib, OpenSSL, etc. — those belong in [`packages/kernel`](../kernel/).
 
 **Fake metal** — `native_sim`, fast dev on Linux.  
-**Real metal** — QEMU x64 / hardware.
+**Real metal** — QEMU x86_64 / hardware.
 
-Port layer (`pm_port`) hides Zephyr. Kernel mods compile to portable `.o` against the kernel API; this repo loads or glues them.
+## Layout
 
-## third_party (pinned submodules)
+```
+src/pymergetic/metal/     tracked source (app, module, port, ram, mod)
+scripts/                  env.sh, setup-west, build, west
+third_party/zephyr/       pinned Zephyr kernel (submodule)
+.west/config              west workspace pointer (committed)
+```
 
-| Source | Tag | Path |
-|--------|-----|------|
-| [python/cpython](https://github.com/python/cpython) | `v3.14.6` | `third_party/cpython/` |
-| [zephyrproject-rtos/zephyr](https://github.com/zephyrproject-rtos/zephyr) | `v4.4.0` | `third_party/zephyr/` |
+Gitignored local Zephyr workspace (created by `setup-west` / builds — normal for any Zephyr project):
+
+```
+modules/ bootloader/ tools/   west update
+build/zephyr/                west build output
+.venv/                       west + python deps
+```
+
+## First-time setup
 
 ```bash
-git submodule update --init --recursive
+cd packages/metal
+git submodule update --init third_party/zephyr
+./scripts/setup-west
+source scripts/env.sh
 ```
 
-Zephyr HAL/modules still come from `west update` with `third_party/zephyr` as manifest root (separate west workspace dir for the rest).
+Requires [Zephyr SDK](https://github.com/zephyrproject-rtos/sdk-ng) on `PATH` (or `ZEPHYR_SDK_INSTALL_DIR`).
 
-## Layout (planned)
+**Zephyr IDE / VS Code:** import west workspace root = **`packages/metal`** (this directory).
+
+## Build hello world (fake metal)
+
+```bash
+source scripts/env.sh
+./scripts/build -p always -b native_sim/native/64 app
+timeout 5 "${ZEPHYR_BUILD}/zephyr/zephyr.exe"
+```
+
+Expected:
 
 ```
-app/          Zephyr application entry
-port/         pm_port implementation
-boards/       fake + real defconfigs
-scripts/      west wrappers, optional glue step
+Hello from pymergetic-metal on native_sim/native/64
+  pymergetic/metal: ok
 ```
 
-## Modes
+## Build hello world (QEMU x86_64)
 
-| | fake metal | real metal |
-|---|------------|------------|
-| Board | `native_sim` | `qemu_x86_64` / HW |
-| `CONFIG_PM_DEV` default | on | off |
+```bash
+source scripts/env.sh
+./scripts/build -p always -b qemu_x86_64 app
+./scripts/west build -t run
+```
 
-Dev (JIT, dynload, tooling) is a separate Kconfig menu.
+## Scope
+
+| Package | Responsibility |
+|---------|----------------|
+| **metal** (this) | Zephyr app, RAM policy, mod loader, port layer |
+| **kernel** | CPython 3.14, vendored C libs, language runtime |
+
+Metal requirements: `REQUIREMENTS.md`. Python port checklist: `../kernel/REQUIREMENTS_PYTHON.md`.
