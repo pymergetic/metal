@@ -1,9 +1,0 @@
-west
-pyelftools
-pyyaml
-canopen
-packaging
-progress
-psutil
-pykwalify
-intelhex

@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=env.sh
-source "${ROOT}/scripts/env.sh"
-cd "${METAL_ROOT}"
-exec west "$@"
