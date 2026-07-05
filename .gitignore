@@ -1,3 +1,6 @@
+# pymergetic-metal runtime
+runtime/build/
+
 # IDE
 .vscode/
 .idea/

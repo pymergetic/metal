@@ -20,14 +20,14 @@ Same behavior on **fake metal** (`native_sim`) and **real metal** (QEMU / HW).
 
 ## Phase 1 — Zephyr shell
 
-**`third_party/zephyr/`** · `v4.4.0`
+**`external/zephyr/`** · `v4.4.0` (west manifest)
 
-- [x] submodule
-- [x] west workspace in `packages/metal/` (gitignored `modules/`, `build/`, `.venv/`)
-- [x] hello app + out-of-tree module under `src/pymergetic/metal/`
+- [x] west workspace in `packages/metal/` (`.west/config`, `west-manifest/west.yml`)
+- [x] hello app in `runtime/` (`west build -b native_sim/native/64 runtime`)
+- [ ] `include/pymergetic/metal/` + `src/pymergetic/metal/` layout
 - [ ] board-specific RAM/linker maps
 
-**Verification:** `./scripts/build -b native_sim/native/64 app` runs; prints `pymergetic/metal: ok`.
+**Verification:** `west build -b native_sim/native/64 runtime` runs; prints `pymergetic/metal: ok`.
 
 ---
 
