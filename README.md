@@ -5,7 +5,20 @@ Zephyr application shell for Pymergetic.
 **Fake metal** — `native_sim`, fast dev on Linux.  
 **Real metal** — QEMU x64 / hardware.
 
-Port layer (`pm_port`) hides Zephyr. Kernel mods compile to portable `.o` against the kernel API; this repo loads or glues them. Vendor Zephyr lives in an external west workspace — not here.
+Port layer (`pm_port`) hides Zephyr. Kernel mods compile to portable `.o` against the kernel API; this repo loads or glues them.
+
+## third_party (pinned submodules)
+
+| Source | Tag | Path |
+|--------|-----|------|
+| [python/cpython](https://github.com/python/cpython) | `v3.14.6` | `third_party/cpython/` |
+| [zephyrproject-rtos/zephyr](https://github.com/zephyrproject-rtos/zephyr) | `v4.4.0` | `third_party/zephyr/` |
+
+```bash
+git submodule update --init --recursive
+```
+
+Zephyr HAL/modules still come from `west update` with `third_party/zephyr` as manifest root (separate west workspace dir for the rest).
 
 ## Layout (planned)
 
