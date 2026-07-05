@@ -1,39 +1,3 @@
-[submodule "third_party/cpython"]
-	path = third_party/cpython
-	url = https://github.com/python/cpython.git
 [submodule "third_party/zephyr"]
 	path = third_party/zephyr
 	url = https://github.com/zephyrproject-rtos/zephyr.git
-[submodule "third_party/zlib"]
-	path = third_party/zlib
-	url = https://github.com/madler/zlib.git
-[submodule "third_party/libffi"]
-	path = third_party/libffi
-	url = https://github.com/libffi/libffi.git
-[submodule "third_party/openssl"]
-	path = third_party/openssl
-	url = https://github.com/openssl/openssl.git
-[submodule "third_party/sqlite"]
-	path = third_party/sqlite
-	url = https://github.com/sqlite/sqlite.git
-[submodule "third_party/xz"]
-	path = third_party/xz
-	url = https://github.com/tukaani-project/xz.git
-[submodule "third_party/zstd"]
-	path = third_party/zstd
-	url = https://github.com/facebook/zstd.git
-[submodule "third_party/bzip2"]
-	path = third_party/bzip2
-	url = https://gitlab.com/bzip2/bzip2.git
-[submodule "third_party/libedit"]
-	path = third_party/libedit
-	url = https://github.com/ksherlock/libedit.git
-[submodule "third_party/ncurses"]
-	path = third_party/ncurses
-	url = https://github.com/mirror/ncurses.git
-[submodule "third_party/libuuid"]
-	path = third_party/libuuid
-	url = https://github.com/util-linux/util-linux.git
-[submodule "third_party/gdbm"]
-	path = third_party/gdbm
-	url = https://git.savannah.gnu.org/git/gdbm.git

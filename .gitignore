@@ -1,15 +1,15 @@
-# Build / local
-/build/
-/.cache/
-/.venv/
-.west/
-
-# Zephyr west workspace (if outside third_party/)
-/zephyr-ws/
-
-# CPython cross-build artifacts
-/third_party/cpython-build/
-
 # IDE
 .vscode/
 .idea/
+
+# West + build artifacts (standard Zephyr layout, not committed)
+/modules/
+/bootloader/
+/tools/
+/build/
+/.venv/
+/.cache/
+
+# Keep committed workspace pointer; ignore other west local state
+.west/*
+!.west/config
