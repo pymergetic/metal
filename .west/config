@@ -1,7 +1,4 @@
 [manifest]
-path = third_party/zephyr
+path = west-manifest
 file = west.yml
 
-[zephyr]
-type = zephyr
-base = third_party/zephyr

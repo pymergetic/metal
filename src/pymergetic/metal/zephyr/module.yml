@@ -1,4 +1,0 @@
-name: pymergetic-metal
-build:
-  cmake: .
-  kconfig: Kconfig
