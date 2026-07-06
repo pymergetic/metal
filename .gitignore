@@ -4,6 +4,7 @@ runtime/build/
 # IDE
 .vscode/
 .idea/
+compile_commands.json
 
 # West + build artifacts (standard Zephyr layout, not committed)
 /modules/
