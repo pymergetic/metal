@@ -4,12 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr/kernel.h>
-#include <stdio.h>
+#include <pymergetic/metal/memory/boot.h>
 
 int main(void)
 {
-	printf("Hello from pymergetic-metal on %s\n", CONFIG_BOARD_TARGET);
-	printf("  pymergetic/metal: ok\n");
-	return 0;
+	return pm_metal_memory_boot();
 }

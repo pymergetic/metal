@@ -1,0 +1,18 @@
+#include "pm_machine_ram.dtsi"
+
+/ {
+	chosen {
+		zephyr,sram = &pm_sram0;
+	};
+
+	/* Nest under /ram so unit-address @0 does not clash with /flash-controller@0 */
+	ram: ram {
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		pm_sram0: memory@0 {
+			compatible = "mmio-sram";
+			reg = <0x0 PM_MACHINE_RAM_BYTES>;
+		};
+	};
+};

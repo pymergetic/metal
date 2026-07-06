@@ -1,0 +1,16 @@
+CompileFlags:
+  CompilationDatabase: .
+  Remove:
+    - -fno-reorder-functions
+    - -fno-defer-pop
+    - -fcheck-new
+  Add:
+    - -Iinclude
+    - -Iexternal/zephyr/include
+    - -imacros
+    - include/pymergetic/metal/ide/autoconf.h
+    - -D__ZEPHYR__=1
+    - -DK_HEAP_MEM_POOL_SIZE=4194304
+
+Index:
+  Background: Build
