@@ -1,25 +1,30 @@
 # pymergetic-metal build outputs
-runtime/zephyr/build/
-runtime/zephyr/images/
-runtime/linux/build/
-runtime/linux/bench/build/
-mods/build/
-!mods/build/.gitkeep
+**/runtime/zephyr/build/
+**/runtime/zephyr/images/
+**/runtime/linux/build/
+**/runtime/linux/bench/build/
+**/mods/build/
+!**/mods/build/.gitkeep
 
 # Zephyr / west test artifacts
 twister-out/
+**/twister-out/
 
-# IDE
+# IDE / tooling
 .vscode/
 .idea/
 compile_commands.json
+**/compile_commands.json
 
-# West workspace symlinks (cloned locally, not committed)
+# West workspace clones and symlinks (west update output — not committed)
+**/external/
 /modules/
 /bootloader/
 /tools/
 /build/
+**/.venv/
 /.venv/
+**/.cache/
 /.cache/
 
 # Keep committed workspace pointer; ignore other west local state

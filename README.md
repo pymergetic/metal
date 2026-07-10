@@ -1,40 +1,70 @@
 # pymergetic-metal
 
-Zephyr OS core for Pymergetic: memory layout, portable `.o` loading, host/plugin API glue.
+Pymergetic orchestrator metal: memory layout, mod loading, and host/guest stack on Zephyr (ship) and Linux (dev).
 
-**Not here:** CPython, zlib, OpenSSL, etc. — those belong in [`packages/kernel`](../kernel/).
+**Not here:** CPython, zlib, OpenSSL, etc. — those live in [`packages/kernel`](../kernel/).
 
-**Fake metal** — `native_sim`, fast dev on Linux.  
-**Real metal** — QEMU x86_64 / hardware.
+**Fake metal** — `native_sim`, fast dev loop on Linux.  
+**Real metal** — QEMU x86_64 multiboot/EFI, VirtualBox, hardware.
 
-## Layout (today)
+**Target:** portable orchestrator guest (`wasm32-wasip1`) + per-target host (`linux`, `zephyr`, `rump`, `unikraft`). Host probes RAM and writes `/sys/pm` once at boot; guest `pm_sys` reads it once, caches, and runs layout policy in `orchestrator/boot` + `pm_mem`.
+
+---
+
+## Documentation
+
+| Doc | What |
+|-----|------|
+| [docs/LAYERS.md](docs/LAYERS.md) | Layer model — host stack, guest stack, WASI |
+| [docs/SOURCETREE.md](docs/SOURCETREE.md) | Target repo layout (`include/` / `host/` / `guest/`) |
+| [docs/PLATFORM.md](docs/PLATFORM.md) | Contract / policy / port split |
+| [docs/MEMORY_MODEL.md](docs/MEMORY_MODEL.md) | RAM probes, slots, arena, `/sys/pm` handoff |
+| [docs/MEMORY_BASELINE.md](docs/MEMORY_BASELINE.md) | Fake vs real metal numbers today |
+
+**Symmetry rule:** `include/pymergetic/metal/<mod>.h` + `host/<plat>/pymergetic/metal/<mod>.c` + `guest/pymergetic/metal/<mod>.c`. `port/` is host-only but lives inside `metal/port/`.
+
+---
+
+## Layout
+
+### Today (working tree)
+
+Implementation and Zephyr runtime live under **`backup/1st_try/`** while the package is restructured toward the target layout in [SOURCETREE.md](docs/SOURCETREE.md).
 
 ```
-runtime/
-  zephyr/               Zephyr application (hello world, metal on fake/real metal)
-    prj.conf            app Kconfig
-    src/                application source
-    boards/             RAM overlays + board conf fragments
-    build/              west build output (local, not committed)
-  linux/                Linux host runtime (placeholder)
-    config/
-    src/
-external/zephyr/          Zephyr v4.4.0 (west update, gitignored tree)
-west-manifest/west.yml    west manifest (pinned kernel revision)
-.west/config              west workspace pointer (committed)
-.venv/                    Python venv with west (local)
-.vscode/zephyr-ide.json   Zephyr IDE project (board, build dir, extra Kconfig)
+packages/metal/
+├── docs/                   Architecture (authoritative for target design)
+├── backup/1st_try/         Working Zephyr app + src + scripts + west manifest
+│   ├── runtime/
+│   │   ├── zephyr/         Zephyr application (fake + real metal)
+│   │   └── linux/          Linux bench twin
+│   ├── src/pymergetic/     metal policy + port mechanism
+│   ├── include/pymergetic/ Public headers
+│   ├── scripts/            build, verify, images
+│   └── west-manifest/      west manifest (Zephyr v4.4.0 + tlsf)
+└── README.md
 ```
 
-Gitignored by west / setup (normal for Zephyr workspaces): `external/modules/`, `external/bootloader/`, `external/tools/`, `.venv/`, `.cache/`.
+Gitignored build outputs: `runtime/*/build/`, `runtime/zephyr/images/`, `mods/build/`, `compile_commands.json`, `.venv/`, `.cache/` — see `.gitignore`.
 
-include/pymergetic/       Public headers only (metal host API, export mod SDK)
-src/pymergetic/           Implementation + private headers beside .c files
+### Target (in progress)
+
+```
+include/pymergetic/metal/     contract headers
+host/<plat>/pymergetic/       native shell + metal/ + wasi/ + pm_host.c
+guest/pymergetic/metal/       portable wasm32-wasip1 orchestrator
+```
+
+`runtime/<plat>/` → `host/<plat>/`. Details: [SOURCETREE.md](docs/SOURCETREE.md).
+
+---
 
 ## First-time setup
 
+From the working tree:
+
 ```bash
-cd packages/metal
+cd packages/metal/backup/1st_try
 west update
 python3 -m venv .venv
 source .venv/bin/activate
@@ -44,58 +74,81 @@ pip install -r external/zephyr/scripts/requirements-base.txt
 
 Requires [Zephyr SDK](https://github.com/zephyrproject-rtos/sdk-ng) on `PATH` (or `ZEPHYR_SDK_INSTALL_DIR`).
 
-**Zephyr IDE / VS Code:** open workspace root = **`packages/metal`**. Active app project: **`runtime/zephyr`**, board profile **`native_sim/native/64`** (see `.vscode/zephyr-ide.json`).
+**IDE:** open `packages/metal/backup/1st_try` as workspace root. Zephyr app: `runtime/zephyr`, board `native_sim/native/64`. Run `scripts/setup-ide.sh` for `compile_commands.json` symlink.
 
-## Build hello world (fake metal)
+---
 
-Via Zephyr IDE: build the `runtime/zephyr` project for `native_sim/native/64`.
+## Build & verify
 
-Or from the shell:
+All commands from `backup/1st_try/`:
 
 ```bash
 source .venv/bin/activate
+export ZEPHYR_BASE="$(pwd)/external/zephyr"
+```
+
+**Fake metal (native_sim):**
+
+```bash
 west build -b native_sim/native/64 runtime/zephyr \
   -p --build-dir runtime/zephyr/build/native_sim/native/64
-timeout 5 runtime/zephyr/build/native_sim/native/64/zephyr/zephyr.exe
+timeout 8 runtime/zephyr/build/native_sim/native/64/zephyr/zephyr.exe
 ```
 
-Expected output:
-
-```
-Hello from pymergetic-metal on native_sim/native/64
-  pymergetic/metal: ok
-```
-
-## Configuration
-
-Kconfig merge order:
-
-1. Board defconfig (`external/zephyr/boards/native/native_sim/native_sim_64_defconfig`, …)
-2. `runtime/zephyr/prj.conf`
-3. CMake `-DCONFIG_*` from Zephyr IDE / west (e.g. debug options in `zephyr-ide.json`)
-
-After a build, the full merged config is:
-
-```
-runtime/zephyr/build/<board>/zephyr/.config
-```
-
-Inspect with `rg '^CONFIG_.*=y' runtime/zephyr/build/.../zephyr/.config` or `west build -t menuconfig`.
-
-## Build hello world (QEMU x86_64)
+**Real metal (QEMU multiboot):**
 
 ```bash
-source .venv/bin/activate
 west build -b qemu_x86_64 runtime/zephyr \
   -p --build-dir runtime/zephyr/build/qemu_x86_64
 west build -d runtime/zephyr/build/qemu_x86_64 -t run
 ```
 
+**Twin smoke** (native_sim + qemu):
+
+```bash
+./scripts/verify-twin-targets.sh
+```
+
+**EFI / VirtualBox images:**
+
+```bash
+./scripts/build-images.sh
+# → runtime/zephyr/images/pymetal-zephyr-efi.{img,vdi}
+```
+
+**Freestanding mod `.o`:**
+
+```bash
+./scripts/build-mod.sh mods/hello
+# → mods/build/hello.o
+```
+
+Expected boot output includes machine RAM probe, heap steps, and a memory layout report from `pm_metal_memory_boot()`.
+
+---
+
+## Configuration
+
+Kconfig merge order:
+
+1. Board defconfig (`external/zephyr/boards/...`)
+2. `runtime/zephyr/prj.conf`
+3. Board fragments in `runtime/zephyr/boards/` (RAM overlays, fake-metal blob size)
+4. Extra conf via west / IDE (e.g. `qemu_x86_64_efi.conf`)
+
+Merged config after build:
+
+```
+runtime/zephyr/build/<board>/zephyr/.config
+```
+
+---
+
 ## Scope
 
 | Package | Responsibility |
 |---------|----------------|
-| **metal** (this) | Zephyr app, RAM policy, mod loader, port layer |
+| **metal** (this) | Orchestrator stack, RAM policy, mod loader, host port layer |
 | **kernel** | CPython 3.14, vendored C libs, language runtime |
 
-Roadmap: `REQUIREMENTS.md`. Memory design: [docs/MEMORY_MODEL.md](docs/MEMORY_MODEL.md). Python port checklist: `../kernel/REQUIREMENTS_PYTHON.md`.
+Python port checklist: `../kernel/REQUIREMENTS_PYTHON.md`.
