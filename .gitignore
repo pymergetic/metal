@@ -1,4 +1,7 @@
 # pymergetic-metal build outputs
+**/host/zephyr/build/
+**/host/zephyr/images/
+**/host/linux/build/
 **/runtime/zephyr/build/
 **/runtime/zephyr/images/
 **/runtime/linux/build/

@@ -6,19 +6,17 @@ See [PLATFORM.md](PLATFORM.md) for contract/policy/port split · [LAYERS.md](LAY
 
 ---
 
-## Host + guest, not host-only
+## Engine + orchestrator, not engine-only
 
-Memory **policy** (slots, layout math, boot report, malloc/mmap semantics) lives in the **symmetric metal modules** — same headers, `.c` on both sides:
+Memory **policy** lives in **orchestrator** metal (`orchestrator/boot`, `pm_mem`). The **engine** probes hardware and publishes host info.
 
-| Module | Host role | Guest role |
-|--------|-----------|------------|
-| **`pm_sys`** | Read probes from `port/`, encode exchange records → `/sys/pm` (via `pm_host`) | **Once at boot:** `fd_read` `/sys/pm`, decode, cache; steady-state uses typed getters only |
-| **`pm_mem`** | Native arena backing during transitional in-process path; later host-side shim only | **Primary allocator** — malloc, mmap, shmalloc shim for orchestrator + mods |
-| **`orchestrator/boot`** | — (guest policy) | Layout report, arena sizing from `pm_sys` inputs |
+| Module | Engine role | Orchestrator role |
+|--------|-------------|-------------------|
+| **`pm_sys`** | Read `port/` probes, encode → `/sys/pm` (via `pm_hostinfo`) | **Once at boot:** `fd_read` `/sys/pm`, decode, cache |
+| **`pm_mem`** | Engine-side shim during bring-up (later minimal) | **Primary allocator** — malloc, mmap for orchestrator + instances |
+| **`orchestrator/boot`** | — | Layout report, arena sizing from `pm_sys` |
 
-**`port/` is not the memory model.** It is host-only mechanism: E820, EFI, `k_mem_map`, TLSF backing establishment. Raw probe numbers flow **port → host `pm_sys` → `/sys/pm` → guest `pm_sys` → guest `pm_mem` / `orchestrator/boot`**.
-
-Today (transitional): Zephyr still runs `src/pymergetic/metal/memory/` in-process on the host and calls `pm_plat_*` directly. That folds into the modules above — not a permanent `host/.../memory/` tree.
+**`port/` is not the memory model.** Engine-only mechanism. Flow: **port → engine `pm_sys` → `pm_hostinfo` → `/sys/pm` → orchestrator `pm_sys` → `pm_mem` / `orchestrator/boot`**.
 
 ---
 
@@ -31,11 +29,11 @@ Today (transitional): Zephyr still runs `src/pymergetic/metal/memory/` in-proces
 
 2. **`CONFIG_SRAM_SIZE` / devicetree `zephyr,sram` is the link window only.** It is not machine RAM on dynamic x86 targets.
 
-3. **Layout policy never includes OS headers.** Slot math and boot report live in `pm_mem` / `orchestrator/boot` (guest + host). OS probes live in `host/.../metal/port/` only.
+3. **Layout policy never includes OS headers.** Slot math and boot report live in orchestrator `pm_mem` / `orchestrator/boot`. OS probes live in engine `metal/port/` only.
 
-4. **One userspace allocator per runtime.** Guest: one TLSF pool in `pm_mem` (malloc + mmap siblings). No second heap for app/mod code.
+4. **One userspace allocator per runtime.** Orchestrator: one pool in `pm_mem` (malloc + mmap siblings). Instances use orchestrator arena or component shared blob.
 
-5. **Kernel borrow only (native host path).** `k_malloc` is for kernel-side, short-lived use during port bring-up — not the orchestrator arena.
+5. **Kernel borrow only (engine path).** `k_malloc` is for engine-side, short-lived port bring-up — not the orchestrator arena.
 
 ---
 
@@ -43,15 +41,15 @@ Today (transitional): Zephyr still runs `src/pymergetic/metal/memory/` in-proces
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ orchestrator/boot, pm_mem        POLICY — slots, report,     │
-│ (guest + host .c)                              arena, malloc │
+│ orchestrator/boot, pm_mem        POLICY — slots, report, arena │
+│ (orchestrator)                                                 │
 ├──────────────────────────────────────────────────────────────┤
-│ pm_sys (guest + host .c)         EXCHANGE — /sys/pm records  │
+│ pm_sys (engine + orchestrator)   EXCHANGE — /sys/pm records  │
 ├──────────────────────────────────────────────────────────────┤
-│ metal/port/plat.h                CONTRACT — host probe API   │
+│ metal/port/plat.h                  CONTRACT — engine probe API │
 ├──────────────────────────────────────────────────────────────┤
-│ metal/port/plat.c, efi_ram.c     MECHANISM — OS-specific     │
-│ (host only)                                                  │
+│ metal/port/plat.c, efi_ram.c       MECHANISM — OS-specific     │
+│ (engine only)                                                  │
 ├──────────────────────────────────────────────────────────────┤
 │ Zephyr kernel                    BORROW — k_malloc, MMU, E820│
 └──────────────────────────────────────────────────────────────┘
@@ -59,9 +57,9 @@ Today (transitional): Zephyr still runs `src/pymergetic/metal/memory/` in-proces
 
 ### Metal slots (policy — guest `orchestrator/boot`)
 
-| Slot | Meaning | Guest source | Host source (transitional) |
-|------|---------|--------------|----------------------------|
-| `machine_ram` | Total installed RAM (probe) | `pm_sys` → `/sys/pm` | `pm_plat_machine_ram()` |
+| Slot | Meaning | Orchestrator source | Engine source |
+|------|---------|---------------------|-----------------|
+| `machine_ram` | Total installed RAM (probe) | `pm_sys` ← `/sys/pm` | `pm_plat_machine_ram()` |
 | `kernel_link` | Bytes from RAM base to `_end` | `pm_sys` | `pm_plat_link_used()` |
 | `kernel_static` | Link image minus in-link reserved buffers | arithmetic | arithmetic |
 | `kernel_heap` | Kernel pool size | `pm_sys` | `CONFIG_HEAP_MEM_POOL_SIZE` |
@@ -73,10 +71,10 @@ Accounting identity on real metal:
 machine_ram  ≥  kernel_link + userspace_blob   (ideal: equality when blob uses all tail RAM)
 ```
 
-### Port contract (host only — feeds `pm_sys`)
+### Port contract (engine only — feeds `pm_sys`)
 
 ```c
-/* probe — encoded by host pm_sys, consumed by guest pm_sys */
+/* probe — encoded by engine pm_sys, consumed by orchestrator pm_sys */
 size_t    pm_plat_machine_ram(void);
 size_t    pm_plat_link_used(void);
 size_t    pm_plat_arena_budget(void);
@@ -89,24 +87,23 @@ void     *pm_plat_arena_map(size_t n, size_t align);
 int       pm_plat_arena_unmap(void *p, size_t n);
 ```
 
-On the WASI path, guest code never calls these — only host `port/` + `pm_sys` do. Today the arena helpers are split across `userspace_blob.c`, `tlsf_malloc_port.c`, and `mmap_port.c` under `src/pymergetic/port/zephyr/`; they fold into `metal/port/` (backing) + `pm_mem` (allocator policy).
+On the WASI path, orchestrator code never calls these — only engine `port/` + `pm_sys` do.
 
 ---
 
-## Data flow (target)
+## Data flow
 
-**`/sys/pm` is a one-time bootstrap handoff** — not a runtime syscall surface. Host writes probe records before the guest starts (or before each FRESH instance). Guest `pm_sys_init()` reads once, decodes into a cached struct, and closes the fd. After that, `orchestrator/boot`, `pm_mem`, and the rest call `pm_sys_machine_ram()` etc. — plain in-memory getters, no further WASI I/O.
+**`/sys/pm` is a one-time bootstrap handoff** — not a runtime syscall surface. Engine writes probe records before the orchestrator starts. Orchestrator `pm_sys_init()` reads once, decodes into a cached struct, and closes the fd.
 
 ```
-host port/*.c          host pm_sys.c           pm_host.c
-  probe E820/EFI    →    encode records    →    write /sys/pm (once)
+engine port/*.c        engine pm_sys.c         pm_hostinfo.c
+  probe              →    encode records    →    write /sys/pm (once)
                                                     │
-                              guest boot: one fd_read /sys/pm
+                         orchestrator boot: one fd_read /sys/pm
                                                     │
                                                     ▼
-                              guest pm_sys.c    guest pm_mem.c    orchestrator/boot.c
-                              decode + cache  →  establish arena → layout report
-                              (no more I/O)      (steady-state)
+                    orchestrator pm_sys.c    pm_mem.c    orchestrator/boot.c
+                    decode + cache         →  arena     → layout report
 ```
 
 ---
