@@ -18,6 +18,12 @@ extern "C" {
  */
 int pm_metal_util_size_format(char *out, size_t cap, uint64_t bytes);
 
+/*
+ * Format byte count as "N (human)" e.g. "92946432 (88 MiB)".
+ * Returns snprintf length, or -1 on error.
+ */
+int pm_metal_util_size_format_bytes(char *out, size_t cap, uint64_t bytes);
+
 #ifdef __cplusplus
 }
 

@@ -1,4 +1,4 @@
-#include "pymergetic/kernel/util/size.h"
+#include "size.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -28,4 +28,18 @@ int pm_metal_util_size_format(char *out, size_t cap, uint64_t bytes)
     }
 
     return snprintf(out, cap, "%" PRIu64 " B", bytes);
+}
+
+int pm_metal_util_size_format_bytes(char *out, size_t cap, uint64_t bytes)
+{
+    char human[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+
+    if (out == NULL || cap == 0U) {
+        return -1;
+    }
+    if (pm_metal_util_size_format(human, sizeof(human), bytes) < 0) {
+        return -1;
+    }
+
+    return snprintf(out, cap, "%" PRIu64 " (%s)", bytes, human);
 }

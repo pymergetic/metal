@@ -7,7 +7,7 @@ cd "$ROOT"
 source .venv/bin/activate 2>/dev/null || true
 export ZEPHYR_BASE="${ZEPHYR_BASE:-${ROOT}/external/zephyr}"
 
-BUILD_DIR="runtime/build/native_sim/native/64"
+BUILD_DIR="runtime/zephyr/build/native_sim/native/64"
 BUILD_DB="${BUILD_DIR}/compile_commands.json"
 AUTOCONF="${BUILD_DIR}/zephyr/include/generated/zephyr/autoconf.h"
 IDE_AUTOCONF="include/pymergetic/metal/ide/autoconf.h"
@@ -17,7 +17,7 @@ cp -f "$IDE_AUTOCONF" "$AUTOCONF"
 
 if [[ ! -f "$BUILD_DB" ]]; then
   echo "Building native_sim to generate compile_commands.json ..."
-  west build -b native_sim/native/64 runtime -d "$BUILD_DIR"
+  west build -b native_sim/native/64 runtime/zephyr -d "$BUILD_DIR"
 fi
 
 ln -sf "$BUILD_DB" "${ROOT}/compile_commands.json"

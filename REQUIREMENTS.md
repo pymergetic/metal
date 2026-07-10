@@ -25,7 +25,7 @@ Same behavior on **fake metal** (`native_sim`) and **real metal** (QEMU / HW).
 **`external/zephyr/`** · `v4.4.0` (west manifest)
 
 - [x] west workspace in `packages/metal/` (`.west/config`, `west-manifest/west.yml`)
-- [x] hello app in `runtime/` (`west build -b native_sim/native/64 runtime`)
+- [x] hello app in `runtime/zephyr/` (`west build -b native_sim/native/64 runtime/zephyr`)
 - [x] `include/pymergetic/metal/` + `src/pymergetic/metal/` layout (boot, ram, port)
 **Verification:** `scripts/verify-twin-targets.sh` builds both targets; boot prints layout + malloc smoke test.
 

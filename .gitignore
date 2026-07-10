@@ -1,12 +1,20 @@
-# pymergetic-metal runtime
-runtime/build/
+# pymergetic-metal build outputs
+runtime/zephyr/build/
+runtime/zephyr/images/
+runtime/linux/build/
+runtime/linux/bench/build/
+mods/build/
+!mods/build/.gitkeep
+
+# Zephyr / west test artifacts
+twister-out/
 
 # IDE
 .vscode/
 .idea/
 compile_commands.json
 
-# West + build artifacts (standard Zephyr layout, not committed)
+# West workspace symlinks (cloned locally, not committed)
 /modules/
 /bootloader/
 /tools/

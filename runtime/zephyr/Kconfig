@@ -1,0 +1,35 @@
+mainmenu "Pymergetic Metal Runtime"
+
+source "Kconfig.zephyr"
+
+config PM_USERSPACE_BLOB
+	bool "Userspace blob (TLSF pool for malloc and mmap)"
+	default y
+	help
+	  Route libc malloc/free and wrapped mmap/munmap through one TLSF pool
+	  over the userspace blob RAM window.
+	  Disables Zephyr common libc sys_heap malloc (CONFIG_COMMON_LIBC_MALLOC).
+
+config PM_USERSPACE_BLOB_SIZE
+	int "Fixed userspace blob size in bytes (fake metal)"
+	depends on PM_USERSPACE_BLOB
+	default 0
+	help
+	  native_sim: fixed in-link TLSF pool backing (set in board conf).
+	  0 on real metal: use dynamic SRAM tail after the kernel link map.
+
+config PM_USERSPACE_BLOB_MEMTEST
+	bool "Memtest userspace blob backing at registration"
+	depends on PM_USERSPACE_BLOB
+	default y
+	help
+	  Write and verify test patterns over the full blob backing before
+	  TLSF takes ownership. Uses one worker per CPU (up to 4).
+
+config PM_MEMORY_BENCH
+	bool "Userspace allocator boot benchmark"
+	depends on PM_USERSPACE_BLOB
+	default y
+	help
+	  Run shared malloc/mmap micro-benchmarks after the memory layout report.
+	  Compare with scripts/run-linux-bench.sh on host glibc.
