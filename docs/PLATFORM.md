@@ -10,7 +10,7 @@ See also: [LAYERS.md](LAYERS.md) (naming: engine / orchestrator / instance) · [
 
 > **Metal decides meaning. Port defines the portable floor. Port impls lie about the OS so metal does not have to.**
 
-`port/` is a **metal module** — engine-only, but same symmetry row as `pm_mem`, `pm_sys`, etc. Contract in `include/pymergetic/metal/port/`; per-target impl in `host/<plat>/pymergetic/metal/port/`. `pm_hostinfo.c` and `wasi/` sit outside `metal/` as engine siblings.
+`port/` is a **metal module** — engine-only, but same symmetry row as `pm_mem`, `pm_sys`, `pm_hostinfo`, etc. Contract in `include/pymergetic/metal/port/`; per-target impl in `host/<plat>/pymergetic/metal/port/`. `wasi/` sits outside `metal/` as engine sibling.
 
 Dependency direction (strict):
 
@@ -91,7 +91,7 @@ host/<plat>/                       engine — per target (linux, zephyr, rump, u
     │   ├── pm_mem.c, pm_sys.c, …
     │   └── port/                  plat.c, efi_ram.c, …
     ├── wasi/wasi_impl.c
-    └── pm_hostinfo.c              publish bootstrap blob → /sys/pm
+    └── pm_hostinfo.c              publish bootstrap blob → /sys/pm (under metal/)
 
 guest/pymergetic/metal/            orchestrator — portable wasm32-wasip1 (no port/)
 
@@ -104,34 +104,34 @@ mods/, apps/                       instance sources → wasm
 
 ### `metal/port/plat.h` — portable floor (contract)
 
-Smallest intersection of Linux and Zephyr capabilities. Add a function here only if **both** ports can implement it (or it sits behind an explicit `PM_PLAT_HAS_*` capability in `metal/port/config.h`).
+Smallest intersection of Linux and Zephyr capabilities. Add a function here only if **both** ports can implement it (or it sits behind an explicit `PM_METAL_PORT_HAS_*` capability in `metal/port/config.h`).
 
-Planned surface:
+Planned surface (names per [NAMING.md](NAMING.md)):
 
 ```c
 /* --- probes (layout inputs) --- */
-size_t   pm_plat_machine_ram(void);
-size_t   pm_plat_link_used(void);
-uintptr_t pm_plat_ram_base(void);
+uint64_t pm_metal_port_machine_ram(void);
+uint64_t pm_metal_port_link_used(void);
+uintptr_t pm_metal_port_ram_base(void);
 
 /* --- backing store (heaps, mod arenas) --- */
-void *pm_plat_map(size_t size, unsigned prot);
-void  pm_plat_unmap(void *addr, size_t size);
-void  pm_plat_bzero(void *addr, size_t size);
+void *pm_metal_port_map(size_t size, unsigned prot);
+void  pm_metal_port_unmap(void *addr, size_t size);
+void  pm_metal_port_bzero(void *addr, size_t size);
 
 /* --- heap buckets (not raw libc in metal) --- */
 typedef enum {
-  PM_PLAT_HEAP_KERNEL,
-  PM_PLAT_HEAP_MALLOC,
-  PM_PLAT_HEAP_MOD,
-} pm_plat_heap_t;
+  PM_METAL_PORT_HEAP_KERNEL,
+  PM_METAL_PORT_HEAP_MALLOC,
+  PM_METAL_PORT_HEAP_MOD,
+} pm_metal_port_heap_t;
 
-void *pm_plat_alloc(size_t n, pm_plat_heap_t heap);
-void  pm_plat_free(void *p, pm_plat_heap_t heap);
+void *pm_metal_port_alloc(size_t n, pm_metal_port_heap_t heap);
+void  pm_metal_port_free(void *p, pm_metal_port_heap_t heap);
 
 /* --- instance / mod runtime --- */
-void *pm_plat_tls_get(unsigned slot);
-int   pm_plat_vfs_read(const char *path, void *buf, size_t cap, size_t *out);
+void *pm_metal_port_tls_get(unsigned slot);
+int   pm_metal_port_vfs_read(const char *path, void *buf, size_t cap, size_t *out);
 ```
 
 Policy code under orchestrator `metal/` includes `metal/port/plat.h` only — never OS headers. Engine `metal/` `.c` files encode probes; they must not include OS headers either except via `port/`.
@@ -149,7 +149,7 @@ Policy code under orchestrator `metal/` includes `metal/port/plat.h` only — ne
 
 ```c
 /* orchestrator/boot */
-size_t machine = pm_sys_machine_ram();
+uint64_t machine = pm_metal_sys_machine_ram();
 ```
 
 ### `metal/port/*.c` — adaptation (thick on purpose, engine only)
@@ -176,7 +176,7 @@ Transitional reference for probe/backing ideas: `backup/1st_try/` — not built 
 | Metal slot (policy — orchestrator `orchestrator/boot`) | Where values come from |
 |--------------------------------------------------------|------------------------|
 | `machine_ram` | orchestrator `pm_sys` ← engine `pm_sys` ← port probe |
-| `kernel_link` | orchestrator `pm_sys` ← engine `pm_sys` ← `pm_plat_link_used()` |
+| `kernel_link` | orchestrator `pm_sys` ← engine `pm_sys` ← `pm_metal_port_link_used()` |
 | `kernel_static` | arithmetic in `orchestrator/boot` |
 | `kernel_heap` | orchestrator `pm_sys` exchange record |
 | `userspace_blob` | orchestrator `pm_mem` sized from `pm_sys` `arena_budget` |
@@ -207,12 +207,12 @@ Metal and port contract code must not use Zephyr `CONFIG_*` directly. Port impls
 
 ```c
 /* include/pymergetic/metal/port/config.h — values set by port build */
-#define PM_PLAT_HAS_MMAP       1
-#define PM_PLAT_HAS_TLS        1
-#define PM_PLAT_HAS_VFS_EMBED  0   /* zephyr ship path when ready */
+#define PM_METAL_PORT_HAS_MMAP       1
+#define PM_METAL_PORT_HAS_TLS        1
+#define PM_METAL_PORT_HAS_VFS_EMBED  0   /* zephyr ship path when ready */
 ```
 
-Check `PM_PLAT_HAS_*` in shared code. Set flags in `metal/port/plat.c` build glue or generated headers (`host/linux/config/pm_config.h`, Zephyr `autoconf` shim).
+Check `PM_METAL_PORT_HAS_*` in shared code. Set flags in `metal/port/plat.c` build glue or generated headers (`host/linux/config/pm_config.h`, Zephyr `autoconf` shim).
 
 ---
 
@@ -229,10 +229,10 @@ Check `PM_PLAT_HAS_*` in shared code. Set flags in `metal/port/plat.c` build glu
 
 Prove engine → orchestrator handoff before full metal stack:
 
-1. `include/pymergetic/metal/pm_sys.h` — bootstrap exchange format.
+1. `include/pymergetic/metal/sys/sys.h` — bootstrap exchange format.
 2. `include/pymergetic/metal/port/plat.h` — probe trio (`machine_ram`, `link_used`, `arena_budget`).
-3. Engine: `pm_sys.c` + `pm_hostinfo.c` on **linux and zephyr in parallel**.
-4. Orchestrator: `pm_sys.c` + `orchestrator/boot.c` — one `/sys/pm` read, print `machine_ram`, `ready`.
+3. Engine: `sys/sys.c` + `sys/hostinfo.c` on **linux and zephyr in parallel**.
+4. Orchestrator: `sys/sys.c` + `orchestrator/boot.c` — one `/sys/pm` read, print `machine_ram`, `ready`.
 5. CI: same `orchestrator.wasm` on both engines; stdout matches.
 
 Then extend exchange types and `pm_mem` one piece at a time.

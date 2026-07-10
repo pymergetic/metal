@@ -16,7 +16,8 @@ Pymergetic: **engine** (native per target) + **orchestrator** (portable wasm) + 
 
 | Doc | What |
 |-----|------|
-| [docs/LAYERS.md](docs/LAYERS.md) | Naming + layer model |
+| [docs/NAMING.md](docs/NAMING.md) | **Symbol prefixes** — module path → `pm_*` names |
+| [docs/LAYERS.md](docs/LAYERS.md) | Roles + layer model |
 | [docs/SOURCETREE.md](docs/SOURCETREE.md) | Repo layout (`include/` / `host/` / `guest/`) |
 | [docs/PLATFORM.md](docs/PLATFORM.md) | Contract / policy / port split |
 | [docs/MEMORY_MODEL.md](docs/MEMORY_MODEL.md) | RAM probes, `/sys/pm` handoff |

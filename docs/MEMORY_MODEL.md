@@ -59,8 +59,8 @@ Memory **policy** lives in **orchestrator** metal (`orchestrator/boot`, `pm_mem`
 
 | Slot | Meaning | Orchestrator source | Engine source |
 |------|---------|---------------------|-----------------|
-| `machine_ram` | Total installed RAM (probe) | `pm_sys` ← `/sys/pm` | `pm_plat_machine_ram()` |
-| `kernel_link` | Bytes from RAM base to `_end` | `pm_sys` | `pm_plat_link_used()` |
+| `machine_ram` | Total installed RAM (probe) | `pm_sys` ← `/sys/pm` | `pm_metal_port_machine_ram()` |
+| `kernel_link` | Bytes from RAM base to `_end` | `pm_sys` | `pm_metal_port_link_used()` |
 | `kernel_static` | Link image minus in-link reserved buffers | arithmetic | arithmetic |
 | `kernel_heap` | Kernel pool size | `pm_sys` | `CONFIG_HEAP_MEM_POOL_SIZE` |
 | `userspace_blob` | TLSF arena size | `pm_mem` after `pm_sys` budget | port backing + `pm_mem` |
@@ -75,16 +75,16 @@ machine_ram  ≥  kernel_link + userspace_blob   (ideal: equality when blob uses
 
 ```c
 /* probe — encoded by engine pm_sys, consumed by orchestrator pm_sys */
-size_t    pm_plat_machine_ram(void);
-size_t    pm_plat_link_used(void);
-size_t    pm_plat_arena_budget(void);
+uint64_t pm_metal_port_machine_ram(void);
+uint64_t pm_metal_port_link_used(void);
+uint64_t pm_metal_port_arena_budget(void);
 
-/* userspace arena backing — native host path only */
-int       pm_plat_arena_establish(size_t want_bytes, uintptr_t *base_out, size_t *size_out);
-void     *pm_plat_arena_alloc(size_t n);
-void      pm_plat_arena_free(void *p);
-void     *pm_plat_arena_map(size_t n, size_t align);
-int       pm_plat_arena_unmap(void *p, size_t n);
+/* userspace arena backing — native host path only (planned) */
+int       pm_metal_port_arena_establish(size_t want_bytes, uintptr_t *base_out, size_t *size_out);
+void     *pm_metal_port_arena_alloc(size_t n);
+void      pm_metal_port_arena_free(void *p);
+void     *pm_metal_port_arena_map(size_t n, size_t align);
+int       pm_metal_port_arena_unmap(void *p, size_t n);
 ```
 
 On the WASI path, orchestrator code never calls these — only engine `port/` + `pm_sys` do.
@@ -93,7 +93,7 @@ On the WASI path, orchestrator code never calls these — only engine `port/` + 
 
 ## Data flow
 
-**`/sys/pm` is a one-time bootstrap handoff** — not a runtime syscall surface. Engine writes probe records before the orchestrator starts. Orchestrator `pm_sys_init()` reads once, decodes into a cached struct, and closes the fd.
+**`/sys/pm` is a one-time bootstrap handoff** — not a runtime syscall surface. Engine writes probe records before the orchestrator starts. Orchestrator `pm_metal_sys_init()` reads once, decodes into a cached struct, and closes the fd.
 
 ```
 engine port/*.c        engine pm_sys.c         pm_hostinfo.c
@@ -153,7 +153,7 @@ Zephyr does **not** expose “all remaining RAM” as one heap. Host port compos
 |-------|----------|
 | Probe | `metal/port/efi_ram.c` (today: `src/pymergetic/port/zephyr/efi_ram.c`) |
 | Link window | DT / `CONFIG_SRAM_SIZE` (96 MiB today) |
-| Arena backing | `k_mem_map_phys_bare` from `_end` for `pm_plat_arena_budget()` |
+| Arena backing | `k_mem_map_phys_bare` from `_end` for `pm_metal_port_arena_budget()` |
 | `machine_ram` source | `EFI memory map` |
 
 **Status: implemented** in `src/pymergetic/port/zephyr/efi_ram.c` (target: `host/zephyr/pymergetic/metal/port/efi_ram.c`).
@@ -186,7 +186,7 @@ arena [base, base + size)
 ```
 
 - **Guest:** arena sized from `pm_sys` `arena_budget`; backing is wasm linear memory + WASI `mmap` where available.
-- **Native transitional host:** pre-arena bootstrap uses `k_malloc` only until `pm_plat_arena_establish()` completes.
+- **Native transitional host:** pre-arena bootstrap uses `k_malloc` only until `pm_metal_port_arena_establish()` completes.
 - `mmap` rejects file-backed mappings (`ENOTSUP`).
 - Page alignment for mmap comes from `CONFIG_MMU_PAGE_SIZE` on real metal host port.
 

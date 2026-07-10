@@ -5,7 +5,12 @@ CompileFlags:
     - -fno-reorder-functions
     - -fno-defer-pop
     - --param=min-pagesize=0
+  Add:
+    - -Iinclude
+    - -Ihost/linux/pymergetic
+    - -Ihost/zephyr/pymergetic
 
+---
 # zefi-segments.h is generated during CONFIG_BUILD_OUTPUT_EFI builds (zefi.py).
 # stubs/zefi-segments.h silences IDE diagnostics on vanilla zefi.c.
 If:
