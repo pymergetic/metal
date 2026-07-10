@@ -4,15 +4,44 @@
 targets = { linux, zephyr, rump, unikraft }
 ```
 
+## Naming
+
+**Pymergetic** is the whole system. In prose, use **role names**; in the tree, keep short dir names.
+
+| Role | Dir | What |
+|------|-----|------|
+| **Engine** | `host/<plat>/` | Native runner per target: probe, encode host info, WASI impl, load orchestrator wasm |
+| **Orchestrator** | `guest/` | Root portable wasm (`wasm32-wasip1`): boot policy, layout, instance loader |
+| **Instance** | `mods/`, `apps/` | Wasm units the orchestrator loads after boot |
+
+**Kinds of instance:** **mod** (system plugin, `include/pymergetic/mod/` only) · **app** (user program — python, rust, c++, …).
+
+**Metal** — shared module contract both sides compile against (`include/pymergetic/metal/` + symmetric `.c` under engine and orchestrator).
+
+**`pm_hostinfo.c`** — engine module that publishes the bootstrap blob to `/sys/pm` (machine ram, arena budget, …). Not “the engine” — just host **info** for the orchestrator to read once at boot.
+
+```
+Pymergetic
+├── Engine (host/linux, host/zephyr, …)
+│   └── pm_hostinfo → /sys/pm
+├── Orchestrator (guest/)
+│   └── loads Instances (mods/, apps/)
+└── Metal — shared pm_sys, pm_mem, orchestrator/, …
+```
+
+One-liner: **Engine** probes and publishes host info; **orchestrator** runs in wasm and loads **instances**.
+
+---
+
 ## Repo layout
 
-**Rule:** `include/pymergetic/metal/<mod>.h` + `host/<plat>/pymergetic/metal/<mod>.c` + `guest/pymergetic/metal/<mod>.c`. Modules under `metal/`, A–Z. `port/` is host-only but lives in `metal/port/`; `pm_host.c` and `wasi/` are siblings of `metal/` under `host/<plat>/pymergetic/`. See [SOURCETREE.md](SOURCETREE.md).
+**Rule:** `include/pymergetic/metal/<mod>.h` + `host/<plat>/pymergetic/metal/<mod>.c` (engine) + `guest/pymergetic/metal/<mod>.c` (orchestrator). Modules under `metal/`, A–Z. `port/` is engine-only but lives in `metal/port/`; `pm_hostinfo.c` and `wasi/` are siblings of `metal/` under `host/<plat>/pymergetic/`. See [SOURCETREE.md](SOURCETREE.md).
 
-WASI = transport — headers in `include/wasi/`, syscall **impl** on host, **wasi-libc** on guest. `include/pymergetic/metal/` = orchestrator guest stack contract. Read across each row.
+WASI = transport — headers in `include/wasi/`, syscall **impl** on engine, **wasi-libc** on orchestrator. `include/pymergetic/metal/` = orchestrator metal contract. Read across each row.
 
 ```
 ┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│    module   │  │    include/pymergetic/metal/    │  │ host/<plat>/pymergetic/metal/   │  │   guest/pymergetic/metal/       │
+│    module   │  │    include/pymergetic/metal/    │  │ host/<plat>/…/metal/  (engine)  │  │ guest/…/metal/  (orchestrator)  │
 └─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
 
 ┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
@@ -52,17 +81,15 @@ WASI = transport — headers in `include/wasi/`, syscall **impl** on host, **was
 └─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
 
 ┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│   pm_host   │  │                                 │  │            pm_host.c            │  │                                 │
+│ pm_hostinfo │  │                                 │  │          pm_hostinfo.c          │  │                                 │
 └─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
 ```
 
-**Orchestrator** — same triple under `metal/`, split by policy vs mechanism. Headers in `include/pymergetic/metal/orchestrator/`. **Guest** owns policy (`boot.c`, `loader.c`). **Host** owns mechanism (`mod_host.c`). See [SOURCETREE.md](SOURCETREE.md).
+**Orchestrator metal** — same triple under `metal/`, split by policy vs mechanism. Headers in `include/pymergetic/metal/orchestrator/`. **Orchestrator** owns policy (`boot.c`, `loader.c`). **Engine** owns mechanism (`mod_host.c`, `port/`, `pm_hostinfo`). See [SOURCETREE.md](SOURCETREE.md).
 
-**Today:** `src/pymergetic/` + `runtime/<plat>/` → migrates into `host/<plat>/pymergetic/`. Guest tree is new. `PM_VIS_MOD` + `export/` drop when wasm mods replace native `.o` loader — mods use `mod/` include path instead.
+**Orchestrator stack** — portable `wasm32-wasip1`, identical on every target. Local memory first (`pm_mem`: malloc, mmap), then type machinery (`registry` → `pm_types`), named catalog (`vartree`), posix, orchestration. Loads **instances** (mods, apps) after boot.
 
-**Guest stack** — portable `wasm32-wasip1`, identical on every target. Local memory first (`pm_mem`: malloc, mmap), then type machinery (`registry` → `pm_types`), named catalog (`vartree`), posix, orchestration.
-
-**Where things live:** cross-instance data uses the **component model shared blob** (host/engine). `shmalloc` is not a third heap — it is a **shim inside `pm_mem`** that presents that blob as usable bytes/handles to guest code. `registry` holds WIT/type schemas; `pm_types` lifts/lowers resources at boundaries. `vartree` is the live named var catalog above types.
+**Where things live:** cross-instance data uses the **component model shared blob** (engine). `shmalloc` is not a third heap — it is a **shim inside `pm_mem`** that presents that blob as usable bytes/handles to orchestrator code. `registry` holds WIT/type schemas; `pm_types` lifts/lowers resources at boundaries. `vartree` is the live named var catalog above types.
 
 ```
 ┌────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
@@ -98,7 +125,7 @@ WASI = transport — headers in `include/wasi/`, syscall **impl** on host, **was
 └────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘
 
 ┌────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
-│  pm host   │  │   pm host (/sys/pm)    │  │   pm host (/sys/pm)    │  │     pm host (stub)     │  │     pm host (stub)     │
+│ pm_hostinfo│  │  pm_hostinfo (/sys/pm) │  │  pm_hostinfo (/sys/pm) │  │   pm_hostinfo (stub)   │  │   pm_hostinfo (stub)   │
 └────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘
 
 ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -106,7 +133,7 @@ WASI = transport — headers in `include/wasi/`, syscall **impl** on host, **was
 └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 ┌────────────┐  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│   pm_sys   │  │         guest API — machine_ram, arena_budget, … (one /sys/pm read at boot)          │
+│   pm_sys   │  │    orchestrator API — machine_ram, arena_budget, … (one /sys/pm read at boot)    │
 └────────────┘  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 ┌────────────┐  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -130,10 +157,10 @@ WASI = transport — headers in `include/wasi/`, syscall **impl** on host, **was
 └────────────┘  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 ┌────────────┐  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│orchestrator│  │                                   boot report, layout slots, mod loader                                    │
+│orchestrator│  │              boot report, layout slots, instance loader (mods + apps)              │
 └────────────┘  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                          apps — python interp · rust · c++ · mods                                          │
+│                         instances — mods (system plugins) · apps (python · rust · c++ · …)                                 │
 └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
