@@ -9,7 +9,11 @@
 **/mods/build/
 !**/mods/build/.gitkeep
 
-# Zephyr / west test artifacts
+# Toolchain (local download)
+.tools/
+
+# Slice build outputs
+build/slice/
 twister-out/
 **/twister-out/
 

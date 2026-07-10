@@ -8,6 +8,8 @@ targets = { linux, zephyr, rump, unikraft }
 
 **Pymergetic** is the whole system. In prose, use **role names**; in the tree, keep short dir names.
 
+**Symbol prefixes** (functions, types, macros) follow the contract header path — see **[NAMING.md](NAMING.md)**. Quick rule: `include/pymergetic/metal/<path>.h` → `pm_metal_<path>_…` (e.g. `metal/pm_hostinfo.h` → `pm_metal_hostinfo_publish`).
+
 | Role | Dir | What |
 |------|-----|------|
 | **Engine** | `host/<plat>/` | Native runner per target: probe, encode host info, WASI impl, load orchestrator wasm |
@@ -18,7 +20,7 @@ targets = { linux, zephyr, rump, unikraft }
 
 **Metal** — shared module contract both sides compile against (`include/pymergetic/metal/` + symmetric `.c` under engine and orchestrator).
 
-**`pm_hostinfo.c`** — engine module that publishes the bootstrap blob to `/sys/pm` (machine ram, arena budget, …). Not “the engine” — just host **info** for the orchestrator to read once at boot.
+**`pm_hostinfo`** — engine-only metal module (`metal/pm_hostinfo.h`) that publishes the bootstrap blob to `/sys/pm` (machine ram, arena budget, …). Not “the engine” — just host **info** for the orchestrator to read once at boot.
 
 ```
 Pymergetic
@@ -35,7 +37,7 @@ One-liner: **Engine** probes and publishes host info; **orchestrator** runs in w
 
 ## Repo layout
 
-**Rule:** `include/pymergetic/metal/<mod>.h` + `host/<plat>/pymergetic/metal/<mod>.c` (engine) + `guest/pymergetic/metal/<mod>.c` (orchestrator). Modules under `metal/`, A–Z. `port/` is engine-only but lives in `metal/port/`; `pm_hostinfo.c` and `wasi/` are siblings of `metal/` under `host/<plat>/pymergetic/`. See [SOURCETREE.md](SOURCETREE.md).
+**Rule:** `include/pymergetic/metal/<mod>.h` + `host/<plat>/pymergetic/metal/<mod>.c` (engine) + `guest/pymergetic/metal/<mod>.c` (orchestrator when symmetric). Modules under `metal/`, A–Z. `port/` and `pm_hostinfo` are engine-only (no guest `.c`). `wasi/` sits in `host/<plat>/pymergetic/` outside `metal/`. See [SOURCETREE.md](SOURCETREE.md).
 
 WASI = transport — headers in `include/wasi/`, syscall **impl** on engine, **wasi-libc** on orchestrator. `include/pymergetic/metal/` = orchestrator metal contract. Read across each row.
 

@@ -1,8 +1,8 @@
 # Source tree
 
-Target layout for pymergetic-metal. See [LAYERS.md](LAYERS.md) for naming (engine / orchestrator / instance) and the module matrix.
+Target layout for pymergetic-metal. See [LAYERS.md](LAYERS.md) for roles and [NAMING.md](NAMING.md) for symbol prefixes.
 
-**Rule:** `include/pymergetic/metal/<mod>.h` + `host/<plat>/pymergetic/metal/<mod>.c` (engine) + `guest/pymergetic/metal/<mod>.c` (orchestrator). Modules listed **A–Z** under `metal/`. `port/` is engine-only but lives in `metal/port/`. `pm_hostinfo.c` and `wasi/` sit in `host/<plat>/pymergetic/` (outside `metal/`).
+**Rule:** `include/pymergetic/metal/<mod>.h` + `host/<plat>/pymergetic/metal/<mod>.c` (engine) + `guest/pymergetic/metal/<mod>.c` (orchestrator when symmetric). Modules listed **A–Z** under `metal/`. `port/` and `pm_hostinfo` are engine-only. `wasi/` sits in `host/<plat>/pymergetic/` (outside `metal/`).
 
 **Legend:** `[stub]` directory present, not implemented · `[ref]` ideas in `backup/1st_try/` only
 
@@ -19,8 +19,11 @@ packages/metal/
 │       │   └── pm_mod.h                     optional helpers; WIT world later
 │       ├── export/                          [transitional] native .o mods only
 │       │   └── pm_export_v1.h
-│       └── metal/                           orchestrator metal contract
-│           ├── metal.h                      [stub] umbrella
+│       └── metal/                           metal contract
+│           ├── metal.h                      umbrella — `#include <pymergetic/metal/metal.h>`
+│           ├── sys/
+│           │   ├── pm_sys.h                 bootstrap exchange (`pm_metal_sys_*`)
+│           │   └── hostinfo.h               engine-only publish (`pm_metal_sys_hostinfo_*`)
 │           ├── orchestrator/                [stub]
 │           │   ├── boot.h                   layout slots, boot report
 │           │   ├── instance.h               FRESH / PERSIST handles
@@ -31,9 +34,8 @@ packages/metal/
 │           │   ├── layout.h
 │           │   └── …
 │           ├── pm_mem.h                     [stub] arena, malloc, mmap, shmalloc shim
-│           ├── pm_sys.h                     [stub] machine_ram, arena_budget, exchange types
 │           ├── pm_types.h                   [stub] slices, handles, ownership
-│           ├── port/                          [stub] plat.h — probe contract (engine impl only)
+│           ├── port/                        plat.h — probe contract (engine impl only)
 │           │   └── plat.h
 │           ├── posix.h                      [stub] libc floor on WASI
 │           ├── registry.h                   [stub] type ids, WIT/layout schemas
@@ -47,18 +49,19 @@ packages/metal/
 │   │       ├── metal/
 │   │       │   ├── orchestrator/
 │   │       │   │   └── mod_host.c           [stub] wasmtime instantiate / component link
+│   │       │   ├── sys/
+│   │       │   │   ├── hostinfo.c           publish bootstrap → /sys/pm
+│   │       │   │   └── pm_sys.c             encode probe → /sys/pm
 │   │       │   ├── pm_mem.c                 [stub]
-│   │       │   ├── pm_sys.c                 [stub] encode probe → /sys/pm
 │   │       │   ├── pm_types.c               [stub]
-│   │       │   ├── port/                    [stub] from src/pymergetic/port/linux/
+│   │       │   ├── port/                    plat.c
 │   │       │   │   ├── plat.c
 │   │       │   │   └── traits.h
 │   │       │   ├── posix.c                  [stub]
 │   │       │   ├── registry.c               [stub]
 │   │       │   └── vartree.c                [stub]
-│   │       ├── wasi/                        [stub] syscall impl glue (wasmtime WASI)
-│   │       │   └── wasi_impl.c
-│   │       └── pm_hostinfo.c                [stub] publish bootstrap blob → /sys/pm
+│   │       └── wasi/                        [stub] syscall impl glue (wasmtime WASI)
+│   │           └── wasi_impl.c
 │   │
 │   ├── zephyr/
 │   │   ├── CMakeLists.txt                   [stub] from runtime/zephyr/
@@ -67,29 +70,28 @@ packages/metal/
 │   │   └── pymergetic/
 │   │       ├── metal/
 │   │       │   ├── orchestrator/mod_host.c  [stub] WAMR instantiate / component link
+│   │       │   ├── sys/hostinfo.c, pm_sys.c
 │   │       │   ├── pm_mem.c                 [stub] layout/arena from memory/ + port TLSF
-│   │       │   ├── pm_sys.c                 [stub] encode port probes → /sys/pm
 │   │       │   ├── pm_types.c, posix.c, registry.c, vartree.c
-│   │       │   └── port/                    [stub] plat.c, efi_ram.c, traits.h, …
-│   │       ├── wasi/wasi_impl.c             [stub] WAMR WASI + preopens
-│   │       └── pm_hostinfo.c                [stub]
+│   │       │   └── port/                    plat.c, efi_ram.c, traits.h, …
+│   │       └── wasi/wasi_impl.c             [stub] WAMR WASI + preopens
 │   │
 │   ├── rump/
 │   │   ├── CMakeLists.txt, main.c           [stub]
 │   │   └── pymergetic/
-│   │       ├── metal/                       [stub] stub
+│   │       ├── metal/                       [stub]
+│   │       │   ├── sys/hostinfo.c, pm_sys.c
 │   │       │   ├── …
 │   │       │   └── port/plat.c
-│   │       ├── pm_hostinfo.c
 │   │       └── wasi/wasi_impl.c
 │   │
 │   └── unikraft/
 │       ├── CMakeLists.txt, main.c           [stub]
 │       └── pymergetic/
-│           ├── metal/                       [stub] stub
+│           ├── metal/                       [stub]
+│           │   ├── pm_hostinfo.c
 │           │   ├── …
 │           │   └── port/plat.c
-│           ├── pm_hostinfo.c
 │           └── wasi/wasi_impl.c
 │
 ├── guest/                                   # orchestrator — portable wasm32-wasip1
@@ -101,7 +103,7 @@ packages/metal/
 │           │   ├── boot.c                   layout report, arena sizing (uses pm_sys)
 │           │   └── loader.c                 FRESH / PERSIST, vartree bind, instance load
 │           ├── pm_mem.c                     [stub] malloc + mmap; shmalloc shim
-│           ├── pm_sys.c                     [stub] one-time fd_read /sys/pm at init → cached getters
+│           ├── sys/pm_sys.c                 one-time fd_read /sys/pm at init → cached getters
 │           ├── pm_types.c                   [stub]
 │           ├── posix.c                      [stub] wasi-libc floor
 │           ├── registry.c                   [stub]
@@ -127,15 +129,14 @@ packages/metal/
 |--------|-----------------------------|-------------------------------|-------------------------------|
 | orchestrator | `orchestrator/*.h` | `orchestrator/mod_host.c` | `orchestrator/boot.c`, `loader.c` |
 | pm_mem | `pm_mem.h` | `pm_mem.c` | `pm_mem.c` |
-| pm_sys | `pm_sys.h` | `pm_sys.c` | `pm_sys.c` |
+| sys | `sys/pm_sys.h`, `sys/hostinfo.h` | `sys/pm_sys.c`, `sys/hostinfo.c` | `sys/pm_sys.c` |
 | pm_types | `pm_types.h` | `pm_types.c` | `pm_types.c` |
 | posix | `posix.h` | `posix.c` | `posix.c` |
 | registry | `registry.h` | `registry.c` | `registry.c` |
 | vartree | `vartree.h` | `vartree.c` | `vartree.c` |
 | port | `port/plat.h` | `port/plat.c`, `efi_ram.c`, … | — |
 | wasi | `include/wasi/` | `../wasi/wasi_impl.c` | wasi-libc (linked) |
-| pm_hostinfo | — | `../pm_hostinfo.c` | — |
 
-`pm_hostinfo.c` and `wasi/` live in `host/<plat>/pymergetic/` — siblings of `metal/`. `port/` is inside `metal/` (engine impl only). **Instances** (mods, apps) are separate wasm trees under `mods/`, `apps/`.
+`sys/hostinfo` is engine-only (no guest `.c`). `port/` is engine-only. `wasi/` lives outside `metal/`. **Instances** (mods, apps) are separate wasm trees under `mods/`, `apps/`.
 
 Prior experiment code lives in `backup/1st_try/` for reference when implementing each module.
