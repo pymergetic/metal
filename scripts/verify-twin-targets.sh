@@ -5,14 +5,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-NATIVE_SIM_BUILD="${ROOT}/runtime/build/native_sim/native/64"
-QEMU_BUILD="${ROOT}/runtime/build/qemu_x86_64"
+NATIVE_SIM_BUILD="${ROOT}/runtime/zephyr/build/native_sim/native/64"
+QEMU_BUILD="${ROOT}/runtime/zephyr/build/qemu_x86_64"
 NATIVE_SIM_TIMEOUT="${NATIVE_SIM_TIMEOUT:-8}"
 # qemu_x86_64 cold boot (SeaBIOS + SMP) is ~25s on typical CI boxes
 QEMU_TIMEOUT="${QEMU_TIMEOUT:-45}"
 
 source .venv/bin/activate
-export ZEPHYR_BASE="${ZEPHYR_BASE:-${ROOT}/external/zephyr}"
+export ZEPHYR_BASE="${ROOT}/external/zephyr"
 
 run_with_timeout() {
 	local secs=$1
@@ -34,14 +34,14 @@ run_with_timeout() {
 }
 
 echo "=== build: native_sim/native/64 ==="
-west build -p always -b native_sim/native/64 runtime \
+west build -p always -b native_sim/native/64 runtime/zephyr \
   --build-dir "${NATIVE_SIM_BUILD}"
 
 ln -sf "${NATIVE_SIM_BUILD}/compile_commands.json" "${ROOT}/compile_commands.json"
 
 echo
 echo "=== build: qemu_x86_64 ==="
-west build -p always -b qemu_x86_64 runtime \
+west build -p always -b qemu_x86_64 runtime/zephyr \
   --build-dir "${QEMU_BUILD}"
 
 echo

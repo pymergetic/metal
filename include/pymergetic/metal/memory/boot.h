@@ -7,11 +7,13 @@
 #ifndef PM_METAL_MEMORY_BOOT_H_
 #define PM_METAL_MEMORY_BOOT_H_
 
+#include <pymergetic/pm_vis.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-int pm_metal_memory_boot(void);
+PM_API(PM_VIS_RUNTIME, int, pm_metal_memory_boot, (void))
 
 #ifdef __cplusplus
 }

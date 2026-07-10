@@ -10,3 +10,7 @@ manifest:
       clone-depth: 1
       import:
         path-prefix: external
+    - name: tlsf
+      url: https://github.com/mattconte/tlsf
+      revision: deff9ab509341f264addbd3c8ada533678591905
+      path: external/tlsf
