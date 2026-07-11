@@ -126,6 +126,14 @@ pymergetic/metal/<module>/…/<stem>.h  →  pm_metal_<module>_…_<stem>_
 | `port/platform.h` | `pm_metal_port_` | `pm_metal_port_read_file()` |
 | `runtime/runtime.h` | `pm_metal_runtime_` | `pm_metal_runtime_run_wasm()` |
 | `memory/kheap.h` | `pm_metal_memory_kheap_` | `pm_metal_memory_kheap_ops()->establish()` |
+| `console/console.h` | `pm_metal_console_` | `pm_metal_console_open()` |
+| `console/viewport.h` | `pm_metal_viewport_` | `pm_metal_viewport_pump()` |
+| `shell/shell.h` | `pm_metal_shell_` | `pm_metal_shell_dispatch_line()` |
+| `shell/commands.h` | `pm_metal_shell_` | `pm_metal_shell_builtins_ops()` |
+| `shell/commands/<name>.h` | `pm_metal_shell_` | `pm_metal_shell_cmd_load()` |
+| `runtime/process.h` | `pm_metal_process_` | `pm_metal_process_spawn()` |
+| `app/app.h` | `pm_metal_app_` | `pm_metal_app_run_console()` |
+| `util/log.h` | `pm_metal_util_log_` | `pm_metal_util_log_write()` |
 
 Private `src/<plat>/` symbols: `static` or plat-local.
 
@@ -142,12 +150,17 @@ packages/metal/
 │       ├── size.h                 # contract — mods and runtime may include
 │       ├── size_impl.h            # body — only a shared/ loader includes this
 │       ├── arena.h                # contract — mods and runtime may include
-│       └── arena_impl.h           # body — only a shared/ loader includes this
+│       ├── arena_impl.h           # body — only a shared/ loader includes this
+│       ├── log.h                  # contract — mods and runtime may include
+│       └── log_impl.h             # body — only a shared/ loader includes this
 │
 ├── src/
 │   ├── common/pymergetic/metal/   # cross-target — runtime + contracts
 │   │   ├── port/platform.h        # OS floor API (impl in src/<plat>/)
 │   │   ├── port/lock.h            # one mutex primitive (impl in src/<plat>/) — see docs/RUNTIME.md "Concurrency"
+│   │   ├── port/worker.h          # one background-thread primitive (impl in src/<plat>/)
+│   │   ├── port/term.h            # one "write to the real local terminal" primitive (impl in src/<plat>/)
+│   │   ├── port/dir.h             # one "list/check a real directory" primitive (impl in src/<plat>/)
 │   │   ├── memory/                # ops-struct contracts (impl in src/<plat>/)
 │   │   │   ├── memory.h           # convenience umbrella — re-exports the 4 below
 │   │   │   ├── ops.h              # shared struct layout + kind enum + resolve()
@@ -155,22 +168,55 @@ packages/metal/
 │   │   │   ├── ram.h              # machine RAM probe
 │   │   │   ├── kheap.h            # WAMR pool (wasm linear mem + WAMR structs)
 │   │   │   └── bytecode.h         # mod bytecode arena — separate from kheap
-│   │   └── runtime/
-│   │       ├── runtime.h
-│   │       └── runtime.c
+│   │   ├── console/               # host-only — see docs/CONSOLE.md
+│   │   │   ├── console.h          # sinks — bidirectional pipes, kernel + per-handle (impl in src/<plat>/)
+│   │   │   ├── viewport.h         # render/focus/input routing over a set of sinks
+│   │   │   ├── viewport.c         # registration/focus/filter/ring/escape-byte — impl: common; pump() stays bind
+│   │   │   └── viewport_local.h   # private — seam between viewport.c and each bind's pump()
+│   │   ├── shell/                 # host-only, impl: common — see docs/CONSOLE.md "Shell"
+│   │   │   ├── shell.h            # registry, resolver (native + wasm-override), dispatch_line, cwd + env helpers
+│   │   │   ├── shell.c
+│   │   │   ├── commands.h         # pm_metal_shell_builtins_ops_t (one field/builtin) + register_builtins()
+│   │   │   ├── commands.c         # assembles the ops struct from commands/*.h, drives register_builtins()
+│   │   │   ├── handles.h          # private — the handle table + kernel_sink/quit_cb, shared by commands + commands/*
+│   │   │   ├── handles.c          # storage + handles_init()/handles_shutdown() (declared in commands.h)
+│   │   │   └── commands/          # one .h/.c pair per builtin — each fn is plain, callable outside dispatch too
+│   │   │       ├── cd.{h,c}
+│   │   │       ├── env.{h,c}
+│   │   │       ├── exit.{h,c}     # thin forward to quit.c's own implementation, not the same fn pointer twice
+│   │   │       ├── export.{h,c}
+│   │   │       ├── focus.{h,c}
+│   │   │       ├── help.{h,c}
+│   │   │       ├── load.{h,c}
+│   │   │       ├── ls.{h,c}
+│   │   │       ├── ps.{h,c}
+│   │   │       ├── pwd.{h,c}
+│   │   │       ├── quit.{h,c}
+│   │   │       ├── run.{h,c}
+│   │   │       └── unload.{h,c}
+│   │   ├── runtime/
+│   │   │   ├── runtime.h
+│   │   │   ├── runtime.c
+│   │   │   ├── process.h          # processes — decoupled from handles, see docs/RUNTIME.md "Processes"
+│   │   │   └── process.c          # impl: common, built entirely on runtime.h's own public API
+│   │   └── app/                   # the two whole-process run modes, librarified out of src/linux/main.c
+│   │       ├── app.h              # run_scripted()/run_console() — see there for the exact split with main.c
+│   │       └── app.c              # impl: common (port/worker.h + console.h's stop_feed(), not raw pthread/fd)
 │   │
 │   ├── shared/pymergetic/metal/   # thin loaders only — real body in include/…_impl.h
 │   │   └── util/
 │   │       ├── size.c
-│   │       └── arena.c            # backs memory/bytecode.c's arena
+│   │       ├── arena.c            # backs memory/bytecode.c's arena
+│   │       └── log.c
 │   │
 │   ├── linux/
 │   │   ├── CMakeLists.txt
-│   │   ├── main.c
+│   │   ├── main.c                 # thin: argv parsing + realpath only — both run modes live in common/…/app/
 │   │   ├── thread_stress_test.c   # pm-linux-thread-stress — EXCLUDE_FROM_ALL, see scripts/verify-linux-threads.sh
 │   │   └── pymergetic/metal/
-│   │       ├── port/{platform,lock}.c
-│   │       └── memory/{ram,kheap,bytecode}.c
+│   │       ├── port/{platform,lock,worker,term,dir}.c
+│   │       ├── memory/{ram,kheap,bytecode}.c
+│   │       └── console/{console,viewport}.c  # viewport.c here is just pump() — see common/…/console/viewport.c
 │   │   # wasi: WAMR linux platform
 │   │
 │   ├── zephyr/
@@ -178,7 +224,10 @@ packages/metal/
 │   │   ├── main.c
 │   │   └── pymergetic/metal/
 │   │       ├── port/{platform,lock}.c
+│   │       ├── port/{worker,term,dir}.c        # stub — deferred, see docs/RUNTIME.md "Bring-up plan" §5
 │   │       ├── memory/{ram,kheap,bytecode}.c
+│   │       ├── console/console.c               # stub — deferred, see docs/RUNTIME.md "Bring-up plan" §5
+│   │       ├── console/viewport.c              # only pump() stubbed — registration/focus/filter come from common/
 │   │       └── wasi/              # private
 │   │           ├── file.h
 │   │           └── file.c
@@ -217,8 +266,20 @@ packages/metal/
 | `memory/kheap` | `src/common/…/memory/kheap.h` | `src/<plat>/…/memory/kheap.c` — ops-struct `bind`, one getter per target |
 | `memory/bytecode` | `src/common/…/memory/bytecode.h` | `src/<plat>/…/memory/bytecode.c` — ops-struct `bind`, one getter per target |
 | `wasi/file` | `src/zephyr/…/file.h` | `src/zephyr/…/file.c` — all `impl: zephyr` |
+| `port/worker` | `src/common/…/port/worker.h` | `src/<plat>/…/port/worker.c` — `bind`, one background-thread primitive per target |
+| `port/term` | `src/common/…/port/term.h` | `src/<plat>/…/port/term.c` — `bind`, one real-terminal-write primitive per target |
+| `port/dir` | `src/common/…/port/dir.h` | `src/<plat>/…/port/dir.c` — `bind`, one directory list/check primitive per target |
+| `console/console` | `src/common/…/console/console.h` | `src/<plat>/…/console/console.c` — `bind`, sinks |
+| `console/viewport` | `src/common/…/console/viewport.h` | `src/common/…/console/viewport.c` (registration/focus/filter — `impl: common`) + `src/<plat>/…/console/viewport.c` (`pump()` — `bind`) |
+| `shell/shell` | `src/common/…/shell/shell.h` | `src/common/…/shell/shell.c` — `impl: common`, no per-target impl |
+| `shell/commands` | `src/common/…/shell/commands.h` | `src/common/…/shell/commands.c` — `impl: common`, assembles the ops struct from `shell/commands/*.h`, no per-target impl |
+| `shell/commands/<name>` | `src/common/…/shell/commands/<name>.h` | `src/common/…/shell/commands/<name>.c` — `impl: common`, one pair per builtin only (see `shell/handles.{h,c}` below for the shared, non-command state they all draw on) |
+| `shell/handles` | `src/common/…/shell/handles.h` | `src/common/…/shell/handles.c` — `impl: common`; private, not a command — the handle table + init/shutdown shared by `commands.c` and every `commands/*.c` |
+| `runtime/process` | `src/common/…/runtime/process.h` | `src/common/…/runtime/process.c` — `impl: common`, no per-target impl; built on `runtime.h`'s own public API, no new runtime-internal locking |
+| `app/app` | `src/common/…/app/app.h` | `src/common/…/app/app.c` — `impl: common`, no per-target impl; the console-mode dispatcher thread goes through `port/worker.h`, not raw `pthread`/`k_thread` |
 | `util/size` | `include/…/size.h` (+ body in `size_impl.h`) | `src/shared/…/size.c` (loader) — all `impl: shared` |
 | `util/arena` | `include/…/arena.h` (+ body in `arena_impl.h`) | `src/shared/…/arena.c` (loader) — all `impl: shared`; backs `memory/bytecode.c`'s arena |
+| `util/log` | `include/…/log.h` (+ body in `log_impl.h`) | `src/shared/…/log.c` (loader) — all `impl: shared` |
 
 ---
 
@@ -244,7 +305,12 @@ Per-function `impl:` tags in each header are authoritative — not the directory
 | `src/<plat>/…/port/platform.c` | port impl |
 | `src/common/…/memory/*.h` | memory contracts (ops-struct `bind`) |
 | `src/<plat>/…/memory/*.c` | memory impl — one ops table per module per target |
-| `src/common/…/runtime/` | runtime + wamr |
+| `src/common/…/console/*.h` | console contracts — host-only, see docs/CONSOLE.md |
+| `src/common/…/console/viewport.c` | viewport impl: common (registration/focus/filter) |
+| `src/<plat>/…/console/*.c` | console impl — sinks (`bind`) + viewport's `pump()` (`bind`) per target |
+| `src/common/…/shell/*.h`, `*.c` | shell contracts + impl — host-only, `impl: common` only, see docs/CONSOLE.md "Shell" |
+| `src/common/…/runtime/` | runtime + wamr (`runtime.h`/`.c`) + processes, decoupled from handles (`process.h`/`.c`, `impl: common`, see docs/RUNTIME.md "Processes") |
+| `src/common/…/app/` | the two whole-process run modes (`app.h`/`.c`, `impl: common`) — every target's own `main.c` is just argv/Kconfig parsing + one call in here |
 | `src/shared/…/` | leaf-util loaders — body in `include/…_impl.h` |
 | `src/<plat>/…/` (private) | plat-only (wasi shim, …) |
 | `src/<plat>/main.c` | entry |

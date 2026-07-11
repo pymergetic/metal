@@ -24,8 +24,11 @@
 
 #include "pymergetic/metal/runtime/runtime.h"
 
-#define NUM_WORKERS 6 /* + 1 shared handle == 7, under PM_METAL_RUNTIME_MAX_HANDLES (8) */
+#define NUM_WORKERS 6 /* + 1 shared handle must stay under runtime.h's PM_METAL_RUNTIME_MAX_HANDLES */
 #define ITERATIONS 150
+
+_Static_assert(NUM_WORKERS + 1 <= PM_METAL_RUNTIME_MAX_HANDLES,
+	       "independent_worker's own load()s + the one shared_handle_runner handle would exceed the handle table");
 
 static pm_metal_runtime_handle_t g_shared_handle;
 

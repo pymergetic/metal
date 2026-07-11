@@ -33,4 +33,19 @@ pm_metal_port_target_id_t pm_metal_port_target_id(void);
  * allocated on failure), -1 on failure. */
 int pm_metal_port_read_file(const char *host_path, uint8_t **out_buf, uint32_t *out_len);
 
+/* impl: bind — src/linux/pymergetic/metal/port/platform.c
+ *              src/zephyr/pymergetic/metal/port/platform.c
+ *
+ * Quiet "does a regular file exist at host_path" check — no read, no
+ * error logging on a miss (unlike read_file() above, which is meant to
+ * be called for a path the caller already expects to exist and logs
+ * accordingly). Exists specifically for shell/shell.c's wasm-override
+ * probe (see there): trying every bare command name against
+ * "/bin/<name>.wasm" is expected to usually miss, so that path must stay
+ * silent — this is what makes it safe to call in that hot path without
+ * spamming every ordinary native command with a bogus "read failed".
+ * Returns 1/0 (exists-and-is-a-regular-file / does not), never -1 — a
+ * missing file is not an error here, just a "no". */
+int pm_metal_port_file_exists(const char *host_path);
+
 #endif /* PYMERGETIC_METAL_PORT_PLATFORM_H_ */
