@@ -32,7 +32,8 @@ Set once at `init`. Every `load`/`run` sees the **same** tree. No per-mod remapp
 
 | Config | Meaning |
 |--------|---------|
-| `memory_bytes` | WAMR pool budget — **linux:** sole source (CLI/`malloc`); **zephyr:** optional cap on probed remainder |
+| `memory_bytes` | kheap pool budget — **linux:** sole source (CLI/`malloc`); **zephyr:** optional cap on probed remainder |
+| `bytecode_bytes` | bytecode arena budget — raw `.wasm` module buffers, separate pool from `memory_bytes` |
 | `vfs_root` | host-side root of the guest filesystem |
 
 Guest path = path under `vfs_root`. Preopen that directory as WASI `/`. Guest opens `/foo/bar` → host `vfs_root/foo/bar`. **1:1 — what you see in wasm is what is on disk under root.**
@@ -50,8 +51,9 @@ Guest path = path under `vfs_root`. Preopen that directory as WASI `/`. Guest op
 
 ```c
 typedef struct pm_metal_runtime_config {
-	uint64_t memory_bytes;   /* WAMR pool budget */
-	const char *vfs_root;    /* preopened as guest / — same for all loads */
+	uint64_t memory_bytes;    /* WAMR pool budget */
+	uint64_t bytecode_bytes;  /* bytecode arena budget — separate pool, see below */
+	const char *vfs_root;     /* preopened as guest / — same for all loads */
 } pm_metal_runtime_config_t;
 
 /* impl: common — lifecycle */
@@ -66,23 +68,51 @@ int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv);
 int pm_metal_runtime_unload(pm_metal_runtime_handle_t h);
 ```
 
-`memory_bytes` is a *request*; `runtime_init()` never touches memory itself — it hands the request to the port and gets a pool back:
+`memory_bytes` is a *request*; `runtime_init()` never touches memory itself — it hands the request to an ops table and gets a pool back. Memory (probe + the two pools below) lives in `pymergetic/metal/memory/`, not `platform.h` — three small modules, each a contract header declaring one struct-of-function-pointers and one `bind` getter that returns it. All three share the *same* struct layout, `pm_metal_memory_ops_t`, defined once in `memory/ops.h` alongside a `pm_metal_memory_kind_t` enum and a `pm_metal_memory_resolve(kind)` lookup for callers that pick a kind dynamically; `ram.h`/`kheap.h`/`bytecode.h` each `#include` it and declare their own dedicated getter for the common case where the call site already knows its kind at compile time (see docs/SOURCETREE.md "Ops-struct flavor of `bind`" for the pattern and why: these three are always used together and always come from the one target implementation linked into the binary, so grouping each one's functions beats one symbol per function — at effectively zero cost, since the getter is resolved at build/link time and the indirect calls through the table happen a handful of times per mod load, nowhere near a hot path):
 
 ```c
-/* src/common/pymergetic/metal/port/platform.h */
+/* src/common/pymergetic/metal/memory/ops.h — the one shared layout + kind enum */
+typedef enum pm_metal_memory_kind {
+	PM_METAL_MEMORY_RAM = 0,
+	PM_METAL_MEMORY_KHEAP,
+	PM_METAL_MEMORY_BYTECODE,
+	PM_METAL_MEMORY_KIND_COUNT,
+} pm_metal_memory_kind_t;
 
-/* impl: bind */
-uint64_t pm_metal_port_machine_ram(void);
+typedef struct pm_metal_memory_ops {
+	uint64_t (*probe)(void);
+	void *(*establish)(uint64_t requested_bytes, uint64_t *out_bytes);
+	void (*release)(void);
+	uint64_t (*bytes)(void);
+	void *(*alloc)(uint32_t size);
+	void (*free)(void *ptr);
+} pm_metal_memory_ops_t;
 
-/* impl: bind */
-void *pm_metal_port_wamr_pool_establish(uint64_t requested_bytes, uint64_t *out_bytes);
-void pm_metal_port_wamr_pool_release(void);
-uint64_t pm_metal_port_wamr_pool_bytes(void);
+const pm_metal_memory_ops_t *pm_metal_memory_resolve(pm_metal_memory_kind_t kind); /* impl: common */
+
+/* src/common/pymergetic/metal/memory/ram.h */
+const pm_metal_memory_ops_t *pm_metal_memory_ram_ops(void); /* impl: bind */
+
+/* src/common/pymergetic/metal/memory/kheap.h */
+const pm_metal_memory_ops_t *pm_metal_memory_kheap_ops(void); /* impl: bind */
 ```
 
-Two different "how much RAM" numbers, both in `platform.h`, kept as two different functions — never conflated, and **runtime.c never allocates memory itself**: `pm_metal_port_machine_ram()` is always **real total machine RAM**, the same meaning on every target. `pm_metal_port_wamr_pool_establish()`/`_bytes()` is **what WAMR actually got** — on linux, `establish()` is a plain `malloc(requested_bytes)` echoing the request back verbatim; on zephyr it will probe `machine_ram()`, subtract kernel static + heap, and establish from the remainder — capping or ignoring the request (see Bring-up plan §5). The two are never equal on linux and must not be derived from one another there. `runtime_init()` calls `establish()` and wires the returned pointer into WAMR's `RuntimeInitArgs`; `runtime_shutdown()` calls `release()` — the *only* place pool memory is decided or freed is the port, per target.
+`pm_metal_memory_resolve()` has exactly one implementation (`memory/ops.c`, `impl: common`, not per-target) — it just `switch`es on `kind` and forwards to the matching dedicated getter, so runtime.c/main.c still call `pm_metal_memory_kheap_ops()`/`bytecode_ops()`/`ram_ops()` directly wherever the kind is already known; `resolve()` exists for the rarer case of picking a kind at runtime.
 
-Same rule for reading mod bytecode off storage — **runtime.c never touches stdio itself**:
+Each module's ops table leaves the slots it has no use for `NULL` (`ram`'s table only sets `.probe`; `kheap`'s only sets `.establish`/`.release`/`.bytes`) — `NULL` here means "not applicable to this module," never "not implemented yet" (a target that hasn't implemented a slot its module *does* use, like zephyr's kheap/bytecode today, still assigns a real stub function that returns `0`/`NULL`, so callers never null-check before calling a slot their module is documented to support).
+
+Two different "how much RAM" numbers, kept as two different modules — never conflated, and **runtime.c never allocates memory itself**: `ram_ops()->probe()` is always **real total machine RAM**, the same meaning on every target. `kheap_ops()->establish()`/`bytes()` is **what WAMR actually got** — on linux, `establish()` is a plain `malloc(requested_bytes)` echoing the request back verbatim; on zephyr it will probe `ram_ops()->probe()`, subtract kernel static + heap, and establish from the remainder — capping or ignoring the request (see Bring-up plan §5). The two are never equal on linux and must not be derived from one another there. `runtime_init()` calls `establish()` and wires the returned pointer into WAMR's `RuntimeInitArgs`; `runtime_shutdown()` calls `release()` — the *only* place pool memory is decided or freed is the target's `memory/kheap.c`.
+
+A **third** pool, sized by `bytecode_bytes` and completely separate from the kheap pool above, holds raw `.wasm` module bytes — the buffers `load_file()`/`load_bytes()` hand to `wasm_runtime_load()` and that stay alive until `unload()`:
+
+```c
+/* src/common/pymergetic/metal/memory/bytecode.h */
+const pm_metal_memory_ops_t *pm_metal_memory_bytecode_ops(void); /* impl: bind */
+```
+
+Why a *third* pool instead of just `malloc`ing bytecode buffers, or folding them into the kheap pool: on linux `malloc` is effectively unlimited so it would not matter — but on zephyr **everything** not inside the kheap pool lands in the kernel heap, which is small, fixed, and shared with the rest of the OS. Handing WAMR's own `Alloc_With_Pool` allocator a mix of "its own bookkeeping + guest linear memory" *and* "arbitrarily large raw mod files" makes the one pool's sizing unpredictable — a big mod could starve WAMR's internal structs. A dedicated, separately-budgeted arena keeps the two failure modes apart and gives an explicit, testable "no room for this mod" error instead of a WAMR-internal allocation failure deep in `wasm_runtime_load()`. `bytecode_ops()`'s `establish()`/`release()`/`bytes()` mirror the kheap pool's shape exactly (it's the same struct layout, one arena per process, same init/shutdown enforcement); `alloc()`/`free()` are the sub-allocators `load_file()`/`load_bytes()`/`unload()` use per mod, and the slots `kheap_ops()` leaves `NULL`. linux backs the arena with `malloc(requested_bytes)` carved up by a small first-fit, coalescing free-list allocator (`pymergetic/metal/util/arena.h`, `impl: shared` — pure C, no OS dependency, so the same code will back zephyr's slice of kernel heap unchanged); zephyr (later) draws this from the *same* `arena_budget` remainder the kheap pool is sized from (see Bring-up plan §5) — the two pools are two slices of one probed budget, not two independent probes.
+
+Same "runtime.c never touches the raw resource itself" rule for reading mod bytecode off storage — this one stays a plain per-function `bind` symbol in `platform.h` (not an ops struct — it stands alone):
 
 ```c
 /* src/common/pymergetic/metal/port/platform.h */
@@ -91,7 +121,7 @@ Same rule for reading mod bytecode off storage — **runtime.c never touches std
 int pm_metal_port_read_file(const char *host_path, uint8_t **out_buf, uint32_t *out_len);
 ```
 
-`load_file()`'s guest-style path (e.g. `/mods/foo.wasm`) is resolved against `vfs_root` by plain string concat *in* `runtime.c` — that part is genuinely OS-independent. But turning a resolved host path into bytes is not: linux backs it with `fopen`/`fread`; zephyr (later) will back it with `fs_open()`/`fs_read()` (`CONFIG_FILE_SYSTEM`) instead, since bare libc stdio is not guaranteed to reach mounted storage on embedded targets. Keeping the actual read behind the port means `load_file()` does not change at all when zephyr lands.
+`load_file()`'s guest-style path (e.g. `/mods/foo.wasm`) is resolved against `vfs_root` by plain string concat *in* `runtime.c` — that part is genuinely OS-independent. But turning a resolved host path into bytes is not: linux backs it with `fopen`/`fread` into a buffer from `pm_metal_memory_bytecode_ops()->alloc()`; zephyr (later) will back it with `fs_open()`/`fs_read()` (`CONFIG_FILE_SYSTEM`) instead, since bare libc stdio is not guaranteed to reach mounted storage on embedded targets. Keeping the actual read (and the allocation it reads into) behind the port means `load_file()` does not change at all when zephyr lands.
 
 WASI preopen at instantiate: guest `/` must come from WAMR `map_dir_list` (format `<guest>::<host>`), not plain `dir_list` — `dir_list` preopens under the *same* string on both sides, and `vfs_root` is a host-absolute path while the guest wants `/`. So the one map entry, built once at `init` and reused on every `run`, is `"/::" + vfs_root` (`vfs_root` must be absolute).
 
@@ -99,11 +129,11 @@ WASI args (dir/map-dir/argv/env) are only consumed by WAMR at `wasm_runtime_inst
 
 | Phase | WAMR | Memory |
 |-------|------|--------|
-| `init` | `wasm_runtime_full_init` once | pool from `platform` — lives until `shutdown` |
-| `load` | `load` only (parse; buffer kept, not yet freed) | buffer owned by the runtime until `unload` |
-| `run` | `set_wasi_args` + `instantiate` + `execute_main` + `deinstantiate` | per-call stack/heap; guest linear memory freed when the call returns |
-| `unload` | `unload` | buffer freed; pool remains |
-| `shutdown` | `wasm_runtime_destroy` | pool released |
+| `init` | `wasm_runtime_full_init` once | kheap pool + bytecode arena from `memory/` ops — both live until `shutdown` |
+| `load` | `load` only (parse; buffer kept, not yet freed) | buffer from the bytecode arena, owned by the runtime until `unload` |
+| `run` | `set_wasi_args` + `instantiate` + `execute_main` + `deinstantiate` | per-call stack/heap from the kheap pool; guest linear memory freed when the call returns |
+| `unload` | `unload` | buffer freed back to the bytecode arena; pools remain |
+| `shutdown` | `wasm_runtime_destroy` | both pools released |
 
 No `run_file()` shortcut that hides load/unload — callers use the loop explicitly. `run()` may be called more than once per handle (e.g. same mod, different `argv`); `load`/`unload` still bracket it exactly once each.
 
@@ -113,7 +143,8 @@ No `run_file()` shortcut that hides load/unload — callers use the loop explici
 
 | Field | linux | zephyr |
 |-------|-------|--------|
-| `memory_bytes` | WAMR pool size — **given** at init (`malloc`/`mmap`) | optional cap; default = probed tail after kernel static + heap |
+| `memory_bytes` | kheap pool size — **given** at init (`malloc`/`mmap`) | optional cap; default = a share of the probed tail after kernel static + heap |
+| `bytecode_bytes` | bytecode arena size — **given** at init (`malloc`) | optional cap; default = the remaining share of that same probed tail |
 | `vfs_root` | host dir path | mounted FAT ramdisk path (e.g. `/`) |
 
 Then: load → run → unload (any number of mods). VFS config does not change between loads.
@@ -200,11 +231,11 @@ Scaffold is in place (`src/`, `mods/`, `scripts/setup-ide.sh`). Order:
 
 ### 2. Linux — first green path — done
 
-**Memory (linux):** only the **given** WAMR budget matters — `memory_bytes` on `pm_metal_runtime_init()` (CLI/argv), handed to the port's `pm_metal_port_wamr_pool_establish()`, which `malloc`s it verbatim (`Alloc_With_Pool`); no machine probe, no kernel static/heap math feeds pool sizing. `pm_metal_port_machine_ram()` *is* a real probe on linux (`sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGE_SIZE)`) — diagnostics/reporting only; unlike zephyr it is not wired into pool sizing, since the process shares the host with everything else and does not own all of it.
+**Memory (linux):** only the **given** kheap budget matters — `memory_bytes` on `pm_metal_runtime_init()` (CLI/argv), handed to `pm_metal_memory_kheap_ops()->establish()`, which `malloc`s it verbatim (`Alloc_With_Pool`); no machine probe, no kernel static/heap math feeds pool sizing. `pm_metal_memory_ram_ops()->probe()` *is* a real probe on linux (`sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGE_SIZE)`) — diagnostics/reporting only; unlike zephyr it is not wired into pool sizing, since the process shares the host with everything else and does not own all of it.
 
-1. **`runtime.c` (common)** — WAMR: `init` takes `memory_bytes` → calls `pm_metal_port_wamr_pool_establish()` for the pool (never allocates it directly); `load_file` / `load_bytes` parse + keep the buffer; `run` sets WASI args + instantiates + executes `main` + deinstantiates; `unload` unloads + frees the buffer; `shutdown` unloads any live handles, destroys the runtime, calls `pm_metal_port_wamr_pool_release()`. One `wasm_runtime_full_init()`/`wasm_runtime_destroy()` pair per process — a second `init()` without an intervening `shutdown()` is rejected.
-2. **`linux/main.c`** — CLI: `--memory=<bytes> --vfs-root=<dir> /mod.wasm [/mod2.wasm ...]`; resolves `vfs_root` to an absolute path (`realpath`), then loads/runs/unloads each positional `.wasm` in turn inside one `init`/`shutdown` pair. Positional paths are guest-style, not host paths — `load_file()` resolves them against `vfs_root`.
-3. **`platform.c` (linux)** — real `machine_ram` probe; `wamr_pool_establish`/`_release`/`_bytes` = `malloc`/`free` of exactly the requested size; `read_file` = `fopen`/`fread`/`fclose`.
+1. **`runtime.c` (common)** — WAMR: `init` takes `memory_bytes` + `bytecode_bytes` → calls `pm_metal_memory_kheap_ops()->establish()` for the kheap pool and `pm_metal_memory_bytecode_ops()->establish()` for the bytecode arena (never allocates either directly); `load_file` / `load_bytes` allocate from the bytecode arena via `bytecode_ops()->alloc()` and keep the buffer; `run` sets WASI args + instantiates + executes `main` + deinstantiates; `unload` unloads + frees the buffer back via `bytecode_ops()->free()`; `shutdown` unloads any live handles, destroys the runtime, releases both pools. One `wasm_runtime_full_init()`/`wasm_runtime_destroy()` pair per process — a second `init()` without an intervening `shutdown()` is rejected.
+2. **`linux/main.c`** — CLI: `--memory=<bytes> --bytecode-memory=<bytes> --vfs-root=<dir> /mod.wasm [/mod2.wasm ...]`; resolves `vfs_root` to an absolute path (`realpath`), then loads/runs/unloads each positional `.wasm` in turn inside one `init`/`shutdown` pair. Positional paths are guest-style, not host paths — `load_file()` resolves them against `vfs_root`.
+3. **`memory/{ram,kheap,bytecode}.c` (linux)** — `ram`: real `machine_ram` probe. `kheap`: `establish`/`release`/`bytes` = `malloc`/`free` of exactly the requested size. `bytecode`: `establish`/`release`/`bytes`/`alloc`/`free` = `malloc`/`free` of the requested size, carved up by `pymergetic/metal/util/arena.h`. **`port/platform.c` (linux)** — `read_file` = `fopen`/`fread`/`fclose` into a buffer from `pm_metal_memory_bytecode_ops()->alloc()`.
 
 Proof: `scripts/verify-linux.sh` — `t0_hello.wasm` prints hello from a host-dir vfs root.
 
@@ -218,18 +249,20 @@ Fixture file under vfs root → `t1_read.wasm` → confirms 1:1 guest paths (`sc
 
 ### 5. Zephyr (after linux green)
 
-**Memory (zephyr):** kernel **static** (link image through `&_end`) and kernel **heap** (`CONFIG_HEAP_MEM_POOL_SIZE`, in-link `k_malloc` pool) are accounted first. Port **probes** total installed RAM, subtracts kernel footprint → **remainder → WAMR pool** (map past `_end` on MMU targets, static cap on native_sim). Probe samples: `backup/2nd_try/host/zephyr/pymergetic/metal/port/plat.c` (E820/`x86_memmap` on qemu, `CONFIG_SRAM_SIZE` fallback on native_sim).
+**Memory (zephyr):** kernel **static** (link image through `&_end`) and kernel **heap** (`CONFIG_HEAP_MEM_POOL_SIZE`, in-link `k_malloc` pool) are accounted first. `memory/ram.c` **probes** total installed RAM, subtracts kernel footprint → **remainder split between `memory/kheap.c` and `memory/bytecode.c`** (map past `_end` on MMU targets, static cap on native_sim). Probe samples: `backup/2nd_try/host/zephyr/pymergetic/metal/port/plat.c` (E820/`x86_memmap` on qemu, `CONFIG_SRAM_SIZE` fallback on native_sim).
 
 | Piece | Source |
 |-------|--------|
-| `machine_ram` | probe — multiboot E820 / devicetree / `CONFIG_SRAM` per profile |
+| `machine_ram` | probe — multiboot E820 / devicetree / `CONFIG_SRAM` per profile (`memory/ram.c`) |
 | `link_used` | `&_end` − `CONFIG_SRAM_BASE_ADDRESS` |
 | `kernel_heap` | `CONFIG_HEAP_MEM_POOL_SIZE` (not given to WAMR) |
-| WAMR pool | `arena_budget` ≈ `machine_ram − link_used` (page-rounded), via `pm_metal_port_wamr_pool_establish()` |
+| `arena_budget` | ≈ `machine_ram − link_used` (page-rounded) — split between the two pools below |
+| kheap pool | a share of `arena_budget`, via `pm_metal_memory_kheap_ops()->establish()` |
+| bytecode arena | the remaining share of the *same* `arena_budget`, via `pm_metal_memory_bytecode_ops()->establish()` |
 
-`pm_metal_runtime_init()` on zephyr may ignore or cap `memory_bytes` against probed `arena_budget` — detail at implement time.
+`pm_metal_runtime_init()` on zephyr may ignore or cap `memory_bytes`/`bytecode_bytes` against probed `arena_budget` — detail at implement time. Both pools drawing from one probed budget (rather than each probing independently) is what keeps the split honest: the firmware only owns `arena_budget` once, not twice.
 
-Build path: `build-zephyr-native-sim.sh` → **`platform.c` (zephyr)** probe + pool establish → `wasi/file.c` → FAT ramdisk overlay → same mods on native_sim, then qemu.
+Build path: `build-zephyr-native-sim.sh` → **`memory/{ram,kheap,bytecode}.c` (zephyr)** probe + pool establish → `wasi/file.c` → FAT ramdisk overlay → same mods on native_sim, then qemu.
 
 ### 6. Later (non-blocking)
 
@@ -239,9 +272,10 @@ Virtual `/sys/loader` · `include/metal.h` convenience · HTTPS fetch-on-miss ·
 
 ## Done when
 
-- [x] `init(memory, vfs_root)` → load → run → unload → `shutdown` on linux
+- [x] `init(memory, bytecode_memory, vfs_root)` → load → run → unload → `shutdown` on linux
 - [ ] zephyr: FAT ramdisk mounted, same `vfs_root` semantics
 - [x] guest `/path` = file under `vfs_root/path` on linux (no remapping) — zephyr pending
 - [x] two mods in one process, same vfs_root for both — linux; zephyr pending
 - [x] WASI T1 read works on linux — zephyr pending
+- [x] mod bytecode lives in a dedicated arena, separate from the WAMR pool — linux; zephyr pending (single probed `arena_budget`, split)
 - [x] `verify` uses dynamic loader API — `scripts/verify-linux.sh`

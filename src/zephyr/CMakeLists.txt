@@ -55,9 +55,14 @@ include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
 target_sources(app PRIVATE
 	main.c
 	${PM_COMMON}/port/platform.c
+	${PM_COMMON}/memory/ops.c
 	${PM_COMMON}/runtime/runtime.c
 	${PM_SHARED}/util/size.c
+	${PM_SHARED}/util/arena.c
 	pymergetic/metal/port/platform.c
+	pymergetic/metal/memory/ram.c
+	pymergetic/metal/memory/kheap.c
+	pymergetic/metal/memory/bytecode.c
 	pymergetic/metal/wasi/file.c
 	${WAMR_RUNTIME_LIB_SOURCE}
 )

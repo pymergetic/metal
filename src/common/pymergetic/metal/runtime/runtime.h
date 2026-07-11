@@ -8,7 +8,8 @@
 #include <stdint.h>
 
 typedef struct pm_metal_runtime_config {
-	uint64_t memory_bytes;
+	uint64_t memory_bytes; /* WAMR pool — wasm linear memory + WAMR's own runtime structs */
+	uint64_t bytecode_bytes; /* bytecode arena — raw .wasm module buffers, separate pool */
 	const char *vfs_root;
 } pm_metal_runtime_config_t;
 

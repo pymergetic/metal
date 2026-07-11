@@ -56,9 +56,14 @@ set_target_properties(pm-wamr-vmlib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_executable(pm-linux-runtime
 	main.c
 	pymergetic/metal/port/platform.c
+	pymergetic/metal/memory/ram.c
+	pymergetic/metal/memory/kheap.c
+	pymergetic/metal/memory/bytecode.c
 	${PM_COMMON}/port/platform.c
+	${PM_COMMON}/memory/ops.c
 	${PM_COMMON}/runtime/runtime.c
 	${PM_SHARED}/util/size.c
+	${PM_SHARED}/util/arena.c
 )
 
 target_include_directories(pm-linux-runtime PRIVATE

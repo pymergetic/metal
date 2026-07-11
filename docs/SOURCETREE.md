@@ -63,10 +63,53 @@ One header can mix tags. Example `platform.h`: some calls OS-neutral → `common
 pm_metal_port_target_id_t pm_metal_port_target_id(void);
 
 /* impl: bind */
-uint64_t pm_metal_port_machine_ram(void);
+int pm_metal_port_read_file(const char *host_path, uint8_t **out_buf, uint32_t *out_len);
 ```
 
 Symmetric naming lets you find `platform.c` in common and/or `src/linux/`, `src/zephyr/` and know which file owns which symbol.
+
+**Ops-struct flavor of `bind`:** `pymergetic/metal/memory/` (see Tree below) groups closely-related `bind` functions into one struct-of-function-pointers per module instead of tagging each function separately. All three memory modules (`ram`, `kheap`, `bytecode`) share **one struct layout**, `pm_metal_memory_ops_t` in `memory/ops.h` — that header holds *only* the struct definition, nothing else. Each module then gets its own contract header declaring its own `bind` getter that returns a pointer to that shared struct type, with only the slots it uses filled in (the rest `NULL`):
+
+```c
+/* src/common/pymergetic/metal/memory/ops.h — the one shared layout,
+ * plus a kind enum + resolve() for dynamic lookup (see below) */
+
+typedef enum pm_metal_memory_kind {
+	PM_METAL_MEMORY_RAM = 0,
+	PM_METAL_MEMORY_KHEAP,
+	PM_METAL_MEMORY_BYTECODE,
+	PM_METAL_MEMORY_KIND_COUNT,
+} pm_metal_memory_kind_t;
+
+typedef struct pm_metal_memory_ops {
+	uint64_t (*probe)(void);
+	void *(*establish)(uint64_t requested_bytes, uint64_t *out_bytes);
+	void (*release)(void);
+	uint64_t (*bytes)(void);
+	void *(*alloc)(uint32_t size);
+	void (*free)(void *ptr);
+} pm_metal_memory_ops_t;
+
+/* impl: common — src/common/pymergetic/metal/memory/ops.c */
+const pm_metal_memory_ops_t *pm_metal_memory_resolve(pm_metal_memory_kind_t kind);
+```
+
+```c
+/* src/common/pymergetic/metal/memory/kheap.h — one getter, this module's contract */
+
+#include "pymergetic/metal/memory/ops.h"
+
+/* impl: bind — src/linux/…/memory/kheap.c
+ *              src/zephyr/…/memory/kheap.c
+ *
+ * ->establish()/->release()/->bytes() are set; ->probe()/->alloc()/->free()
+ * are NULL — this kind has no probe and is never sub-allocated. */
+const pm_metal_memory_ops_t *pm_metal_memory_kheap_ops(void);
+```
+
+Each target's `.c` (one per module — `memory/kheap.c`, not a shared per-target `memory/ops.c`) defines one `static const` ops table (function pointers to `static` functions in that same file, `NULL` for the slots this module doesn't use) and the getter just returns its address — bound at build/link time like any other `bind` symbol, so there is no runtime registration step and the returned pointer is valid for the whole process lifetime. Callers do `pm_metal_memory_kheap_ops()->establish(...)`. `NULL` here always means "this module doesn't have this operation" (e.g. `ram` has no `alloc`) — a slot a module *does* use but a target hasn't implemented yet (e.g. zephyr's `kheap`/`bytecode` today) still gets a real stub function that returns `0`/`NULL` at call time, never a `NULL` field, so callers never need to null-check before calling a slot their module is documented to support. Use this flavor when a handful of functions are always used together and always come from the same target implementation (so grouping them behind one lookup is more useful than N separate symbols); use plain per-function `bind` (like `read_file` above) when a symbol stands alone.
+
+`pm_metal_memory_ops.h`'s `pm_metal_memory_resolve(kind)` is a companion lookup for callers that pick a kind dynamically (e.g. a diagnostics loop over all three) instead of calling a dedicated getter at a call site that already knows its kind at compile time. It has exactly one implementation, `src/common/pymergetic/metal/memory/ops.c` (`impl: common`, not per-target) — it just `switch`es on `kind` and forwards to `pm_metal_memory_ram_ops()`/`kheap_ops()`/`bytecode_ops()`, so it carries no target-specific logic of its own.
 
 ### Symbols
 
@@ -80,8 +123,9 @@ pymergetic/metal/<module>/…/<stem>.h  →  pm_metal_<module>_…_<stem>_
 | Header | Prefix | Example |
 |--------|--------|---------|
 | `metal/metal.h` | — | umbrella only |
-| `port/platform.h` | `pm_metal_port_` | `pm_metal_port_machine_ram()` |
+| `port/platform.h` | `pm_metal_port_` | `pm_metal_port_read_file()` |
 | `runtime/runtime.h` | `pm_metal_runtime_` | `pm_metal_runtime_run_wasm()` |
+| `memory/kheap.h` | `pm_metal_memory_kheap_` | `pm_metal_memory_kheap_ops()->establish()` |
 
 Private `src/<plat>/` symbols: `static` or plat-local.
 
@@ -96,22 +140,35 @@ packages/metal/
 │   ├── metal.h
 │   └── util/
 │       ├── size.h                 # contract — mods and runtime may include
-│       └── size_impl.h            # body — only a shared/ loader includes this
+│       ├── size_impl.h            # body — only a shared/ loader includes this
+│       ├── arena.h                # contract — mods and runtime may include
+│       └── arena_impl.h           # body — only a shared/ loader includes this
 │
 ├── src/
 │   ├── common/pymergetic/metal/   # cross-target — runtime + contracts
 │   │   ├── port/platform.h        # OS floor API (impl in src/<plat>/)
+│   │   ├── memory/                # ops-struct contracts (impl in src/<plat>/)
+│   │   │   ├── memory.h           # convenience umbrella — re-exports the 4 below
+│   │   │   ├── ops.h              # shared struct layout + kind enum + resolve()
+│   │   │   ├── ops.c              # resolve() impl — impl: common, dispatches only
+│   │   │   ├── ram.h              # machine RAM probe
+│   │   │   ├── kheap.h            # WAMR pool (wasm linear mem + WAMR structs)
+│   │   │   └── bytecode.h         # mod bytecode arena — separate from kheap
 │   │   └── runtime/
 │   │       ├── runtime.h
 │   │       └── runtime.c
 │   │
 │   ├── shared/pymergetic/metal/   # thin loaders only — real body in include/…_impl.h
-│   │   └── util/size.c
+│   │   └── util/
+│   │       ├── size.c
+│   │       └── arena.c            # backs memory/bytecode.c's arena
 │   │
 │   ├── linux/
 │   │   ├── CMakeLists.txt
 │   │   ├── main.c
-│   │   └── pymergetic/metal/port/platform.c
+│   │   └── pymergetic/metal/
+│   │       ├── port/platform.c
+│   │       └── memory/{ram,kheap,bytecode}.c
 │   │   # wasi: WAMR linux platform
 │   │
 │   ├── zephyr/
@@ -119,6 +176,7 @@ packages/metal/
 │   │   ├── main.c
 │   │   └── pymergetic/metal/
 │   │       ├── port/platform.c
+│   │       ├── memory/{ram,kheap,bytecode}.c
 │   │       └── wasi/              # private
 │   │           ├── file.h
 │   │           └── file.c
@@ -151,8 +209,13 @@ packages/metal/
 |--------|--------|---------------------|
 | `runtime` | `src/common/…/runtime.h` | `src/common/…/runtime.c` |
 | `platform` | `src/common/…/platform.h` | `src/common/…/platform.c`? + `src/<plat>/…/platform.c` — per `impl:` tags |
+| `memory/ops` | `src/common/…/memory/ops.h` | `src/common/…/memory/ops.c` — `impl: common`, `resolve()` only, no per-target impl |
+| `memory/ram` | `src/common/…/memory/ram.h` | `src/<plat>/…/memory/ram.c` — ops-struct `bind`, one getter per target |
+| `memory/kheap` | `src/common/…/memory/kheap.h` | `src/<plat>/…/memory/kheap.c` — ops-struct `bind`, one getter per target |
+| `memory/bytecode` | `src/common/…/memory/bytecode.h` | `src/<plat>/…/memory/bytecode.c` — ops-struct `bind`, one getter per target |
 | `wasi/file` | `src/zephyr/…/file.h` | `src/zephyr/…/file.c` — all `impl: zephyr` |
 | `util/size` | `include/…/size.h` (+ body in `size_impl.h`) | `src/shared/…/size.c` (loader) — all `impl: shared` |
+| `util/arena` | `include/…/arena.h` (+ body in `arena_impl.h`) | `src/shared/…/arena.c` (loader) — all `impl: shared`; backs `memory/bytecode.c`'s arena |
 
 ---
 
@@ -176,6 +239,8 @@ Per-function `impl:` tags in each header are authoritative — not the directory
 | `include/…/` | mod contract (+ `util/` leaf-util contract shared with the runtime) |
 | `src/common/…/port/platform.h` | port contract |
 | `src/<plat>/…/port/platform.c` | port impl |
+| `src/common/…/memory/*.h` | memory contracts (ops-struct `bind`) |
+| `src/<plat>/…/memory/*.c` | memory impl — one ops table per module per target |
 | `src/common/…/runtime/` | runtime + wamr |
 | `src/shared/…/` | leaf-util loaders — body in `include/…_impl.h` |
 | `src/<plat>/…/` (private) | plat-only (wasi shim, …) |

@@ -8,8 +8,12 @@
  * module (wasm_runtime_load) and keeps the byte buffer alive; run() sets
  * WASI args for that call, instantiates, executes main, then deinstantiates.
  * unload() unloads the parsed module and frees the buffer the runtime has
- * owned since load(). The pool established at init() is untouched by any of
- * this and is only released at shutdown().
+ * owned since load(). Module bytecode buffers live in a dedicated arena —
+ * separate from the kheap pool handed to wasm_runtime_full_init() — so a
+ * mod's raw .wasm bytes never compete with WAMR's own runtime structs or
+ * guest linear memory for space; see pm_metal_memory_bytecode_ops() in
+ * memory/bytecode.h. Both pools are established at init() and released
+ * together at shutdown(), untouched by anything in between.
  *
  * load_file() takes a guest-style path (e.g. "/mods/foo.wasm") resolved
  * against vfs_root — the exact same tree WASI preopens as "/" for the guest.
@@ -28,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "pymergetic/metal/memory/memory.h"
 #include "pymergetic/metal/port/platform.h"
 #include "wasm_export.h"
 
@@ -111,7 +116,7 @@ static int pm_metal_runtime_resolve_vfs_path(const char *guest_path, char *out, 
 static void pm_metal_runtime_unload_slot(pm_metal_runtime_slot_t *slot)
 {
 	wasm_runtime_unload(slot->module);
-	free(slot->buf);
+	pm_metal_memory_bytecode_ops()->free(slot->buf);
 	slot->used = 0;
 	slot->module = NULL;
 	slot->buf = NULL;
@@ -125,18 +130,33 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 		return -1;
 	}
 	if (!cfg || !cfg->vfs_root || cfg->memory_bytes == 0
-	    || cfg->memory_bytes > UINT32_MAX) {
+	    || cfg->memory_bytes > UINT32_MAX || cfg->bytecode_bytes == 0
+	    || cfg->bytecode_bytes > UINT32_MAX) {
 		fprintf(stderr, "pm_metal_runtime: bad config\n");
 		return -1;
 	}
 
+	const pm_metal_memory_ops_t *kheap = pm_metal_memory_kheap_ops();
+	const pm_metal_memory_ops_t *bytecode = pm_metal_memory_bytecode_ops();
+
 	uint64_t pool_bytes = 0;
-	void *pool = pm_metal_port_wamr_pool_establish(cfg->memory_bytes, &pool_bytes);
+	void *pool = kheap->establish(cfg->memory_bytes, &pool_bytes);
 	if (!pool || pool_bytes == 0 || pool_bytes > UINT32_MAX) {
 		fprintf(stderr, "pm_metal_runtime: pool establish failed\n");
 		if (pool) {
-			pm_metal_port_wamr_pool_release();
+			kheap->release();
 		}
+		return -1;
+	}
+
+	uint64_t bytecode_bytes = 0;
+	void *bytecode_pool = bytecode->establish(cfg->bytecode_bytes, &bytecode_bytes);
+	if (!bytecode_pool || bytecode_bytes == 0) {
+		fprintf(stderr, "pm_metal_runtime: bytecode pool establish failed\n");
+		if (bytecode_pool) {
+			bytecode->release();
+		}
+		kheap->release();
 		return -1;
 	}
 
@@ -145,7 +165,8 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	size_t vfs_root_len = strlen(cfg->vfs_root) + 1;
 	char *vfs_root = malloc(vfs_root_len);
 	if (!vfs_root) {
-		pm_metal_port_wamr_pool_release();
+		bytecode->release();
+		kheap->release();
 		return -1;
 	}
 	memcpy(vfs_root, cfg->vfs_root, vfs_root_len);
@@ -154,7 +175,8 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	char *map_dir_entry = malloc(map_dir_len);
 	if (!map_dir_entry) {
 		free(vfs_root);
-		pm_metal_port_wamr_pool_release();
+		bytecode->release();
+		kheap->release();
 		return -1;
 	}
 	snprintf(map_dir_entry, map_dir_len, "/::%s", vfs_root);
@@ -169,7 +191,8 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 		fprintf(stderr, "pm_metal_runtime: wasm_runtime_full_init failed\n");
 		free(map_dir_entry);
 		free(vfs_root);
-		pm_metal_port_wamr_pool_release();
+		bytecode->release();
+		kheap->release();
 		return -1;
 	}
 
@@ -199,7 +222,8 @@ int pm_metal_runtime_shutdown(void)
 
 	free(g_pm_metal_runtime.map_dir_entry);
 	free(g_pm_metal_runtime.vfs_root);
-	pm_metal_port_wamr_pool_release();
+	pm_metal_memory_bytecode_ops()->release();
+	pm_metal_memory_kheap_ops()->release();
 
 	memset(&g_pm_metal_runtime, 0, sizeof(g_pm_metal_runtime));
 
@@ -227,7 +251,7 @@ int pm_metal_runtime_load_file(const char *path, pm_metal_runtime_handle_t *out)
 	}
 
 	if (pm_metal_runtime_load_common(buf, len, out) != 0) {
-		free(buf);
+		pm_metal_memory_bytecode_ops()->free(buf);
 		return -1;
 	}
 
@@ -241,17 +265,20 @@ int pm_metal_runtime_load_bytes(const uint8_t *wasm, uint32_t len,
 		return -1;
 	}
 
+	const pm_metal_memory_ops_t *bytecode = pm_metal_memory_bytecode_ops();
+
 	/* Runtime owns writable wasm buffers until unload — copy caller bytes
-	 * so wasm_runtime_load() may mutate/reference them independent of the
-	 * caller's original buffer lifetime. */
-	uint8_t *buf = malloc(len);
+	 * into the bytecode arena so wasm_runtime_load() may mutate/reference
+	 * them independent of the caller's original buffer lifetime. */
+	uint8_t *buf = bytecode->alloc(len);
 	if (!buf) {
+		fprintf(stderr, "pm_metal_runtime: bytecode arena exhausted (%u bytes)\n", len);
 		return -1;
 	}
 	memcpy(buf, wasm, len);
 
 	if (pm_metal_runtime_load_common(buf, len, out) != 0) {
-		free(buf);
+		bytecode->free(buf);
 		return -1;
 	}
 
