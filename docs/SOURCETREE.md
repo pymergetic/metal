@@ -1,142 +1,221 @@
 # Source tree
 
-Target layout for pymergetic-metal. See [LAYERS.md](LAYERS.md) for roles and [NAMING.md](NAMING.md) for symbol prefixes.
-
-**Rule:** `include/pymergetic/metal/<mod>.h` + `host/<plat>/pymergetic/metal/<mod>.c` (engine) + `guest/pymergetic/metal/<mod>.c` (orchestrator when symmetric). Modules listed **A–Z** under `metal/`. `port/` and `pm_hostinfo` are engine-only. `wasi/` sits in `host/<plat>/pymergetic/` (outside `metal/`).
-
-**Legend:** `[stub]` directory present, not implemented · `[ref]` ideas in `backup/1st_try/` only
+Maps to [LAYERS.md](LAYERS.md). Stops at wasm interface.
 
 ---
+
+## Two trees
+
+| Tree | Who compiles against it |
+|------|-------------------------|
+| `include/pymergetic/metal/` | **mods** (guest API) |
+| `src/` | **runtime binary** (everything else) |
+
+Mods use **wasi-sdk sysroot** + `-I include/`. Start with `#include <pymergetic/metal/metal.h>`.
+
+---
+
+## Naming
+
+### Files
+
+**Rule:** `foo.h` ↔ `foo.c` same basename. A module may have **multiple** `foo.c` (common + per-plat) — linker merges; each function lives in exactly one `.c`.
+
+**Order:** definitions in every `foo.c` follow the **same order** as declarations in `foo.h`. Skip symbols a given `.c` does not implement; do not reorder.
+
+**Placeholders:** for each skipped symbol, leave a comment in that slot — same order, no code:
+
+```c
+/* not impl: bind — src/linux/pymergetic/metal/port/platform.c */
+/* not impl: bind — src/zephyr/pymergetic/metal/port/platform.c */
+```
+
+Reason optional (`WAMR provides`, `plat-only`, …). Makes gaps grep-able and reviews obvious.
+
+| Tree | Path |
+|------|------|
+| mod-facing | `include/pymergetic/metal/…/foo.h` |
+| common | `src/common/pymergetic/metal/…/foo.h` · `foo.c` |
+| per-plat | `src/<plat>/pymergetic/metal/…/foo.c` |
+| plat-private | `src/<plat>/pymergetic/metal/…/foo.h` · `foo.c` (no common header) |
+
+Exceptions: `main.c`, `mods/*/main.c`.
+
+### Impl sites (per function)
+
+Every declaration in a contract header tags where the body lives:
+
+| Tag | Body in | Rule |
+|-----|---------|------|
+| `/* impl: common */` | `src/common/…/foo.c` | one copy, all targets link it |
+| `/* impl: bind */` | `src/<plat>/…/foo.c` | **every** built target has an impl |
+| `/* impl: zephyr */` | `src/zephyr/…/foo.c` | that target only (plat-private header) |
+
+One header can mix tags. Example `platform.h`: some calls OS-neutral → `common`; probes → `bind` on each plat.
+
+```c
+/* src/common/pymergetic/metal/port/platform.h */
+
+/* impl: common */
+pm_metal_port_target_id_t pm_metal_port_target_id(void);
+
+/* impl: bind */
+uint64_t pm_metal_port_machine_ram(void);
+```
+
+Symmetric naming lets you find `platform.c` in common and/or `src/linux/`, `src/zephyr/` and know which file owns which symbol.
+
+### Symbols
+
+```
+pymergetic/metal/<module>/…/<stem>.h  →  pm_metal_<module>_…_<stem>_
+```
+
+- omit `<stem>` when it repeats the last dir (`runtime/runtime.h` → `pm_metal_runtime_`)
+- sole contract in a module dir (`port/platform.h`) → `pm_metal_port_`
+
+| Header | Prefix | Example |
+|--------|--------|---------|
+| `metal/metal.h` | — | umbrella only |
+| `port/platform.h` | `pm_metal_port_` | `pm_metal_port_machine_ram()` |
+| `runtime/runtime.h` | `pm_metal_runtime_` | `pm_metal_runtime_run_wasm()` |
+
+Private `src/<plat>/` symbols: `static` or plat-local.
+
+---
+
+## Tree
 
 ```
 packages/metal/
 │
-├── include/                                 # contract — engine + orchestrator compile against this
-│   ├── wasi/                                [stub] vendored WASI snapshot (syscall transport)
-│   └── pymergetic/
-│       ├── pm_vis.h                         [stub] orchestrator/engine only — RUNTIME vs DEBUG
-│       ├── mod/                             [stub] wasm mod SDK (replaces export/)
-│       │   └── pm_mod.h                     optional helpers; WIT world later
-│       ├── export/                          [transitional] native .o mods only
-│       │   └── pm_export_v1.h
-│       └── metal/                           metal contract
-│           ├── metal.h                      umbrella — `#include <pymergetic/metal/metal.h>`
-│           ├── sys/
-│           │   ├── pm_sys.h                 bootstrap exchange (`pm_metal_sys_*`)
-│           │   └── hostinfo.h               engine-only publish (`pm_metal_sys_hostinfo_*`)
-│           ├── orchestrator/                [stub]
-│           │   ├── boot.h                   layout slots, boot report
-│           │   ├── instance.h               FRESH / PERSIST handles
-│           │   └── loader.h                 pm_mod_load / call / drop API
-│           ├── memory/                      [stub] transitional → pm_mem + orchestrator/boot
-│           │   ├── arena.h
-│           │   ├── boot.h
-│           │   ├── layout.h
-│           │   └── …
-│           ├── pm_mem.h                     [stub] arena, malloc, mmap, shmalloc shim
-│           ├── pm_types.h                   [stub] slices, handles, ownership
-│           ├── port/                        plat.h — probe contract (engine impl only)
-│           │   └── plat.h
-│           ├── posix.h                      [stub] libc floor on WASI
-│           ├── registry.h                   [stub] type ids, WIT/layout schemas
-│           └── vartree.h                    [stub] named var catalog
+├── include/pymergetic/metal/
+│   └── metal.h
 │
-├── host/                                    # engine — native forks per target
+├── src/
+│   ├── common/pymergetic/metal/   # cross-target — runtime + contracts
+│   │   ├── port/platform.h        # OS floor API (impl in src/<plat>/)
+│   │   ├── runtime/
+│   │   │   ├── runtime.h
+│   │   │   └── runtime.c
+│   │   └── util/
+│   │
 │   ├── linux/
-│   │   ├── CMakeLists.txt                   [stub]
-│   │   ├── main.c                           [stub] engine entry (wasmtime runner)
-│   │   └── pymergetic/
-│   │       ├── metal/
-│   │       │   ├── orchestrator/
-│   │       │   │   └── mod_host.c           [stub] wasmtime instantiate / component link
-│   │       │   ├── sys/
-│   │       │   │   ├── hostinfo.c           publish bootstrap → /sys/pm
-│   │       │   │   └── pm_sys.c             encode probe → /sys/pm
-│   │       │   ├── pm_mem.c                 [stub]
-│   │       │   ├── pm_types.c               [stub]
-│   │       │   ├── port/                    plat.c
-│   │       │   │   ├── plat.c
-│   │       │   │   └── traits.h
-│   │       │   ├── posix.c                  [stub]
-│   │       │   ├── registry.c               [stub]
-│   │       │   └── vartree.c                [stub]
-│   │       └── wasi/                        [stub] syscall impl glue (wasmtime WASI)
-│   │           └── wasi_impl.c
+│   │   ├── CMakeLists.txt
+│   │   ├── main.c
+│   │   └── pymergetic/metal/port/platform.c
+│   │   # wasi: WAMR linux platform
 │   │
 │   ├── zephyr/
-│   │   ├── CMakeLists.txt                   [stub] from runtime/zephyr/
-│   │   ├── prj.conf, Kconfig, boards/       [stub]
-│   │   ├── src/main.c                       [stub]
-│   │   └── pymergetic/
-│   │       ├── metal/
-│   │       │   ├── orchestrator/mod_host.c  [stub] WAMR instantiate / component link
-│   │       │   ├── sys/hostinfo.c, pm_sys.c
-│   │       │   ├── pm_mem.c                 [stub] layout/arena from memory/ + port TLSF
-│   │       │   ├── pm_types.c, posix.c, registry.c, vartree.c
-│   │       │   └── port/                    plat.c, efi_ram.c, traits.h, …
-│   │       └── wasi/wasi_impl.c             [stub] WAMR WASI + preopens
+│   │   ├── CMakeLists.txt, Kconfig, prj.conf, boards/
+│   │   ├── main.c
+│   │   └── pymergetic/metal/
+│   │       ├── port/platform.c
+│   │       └── wasi/              # private
+│   │           ├── file.h
+│   │           └── file.c
 │   │
-│   ├── rump/
-│   │   ├── CMakeLists.txt, main.c           [stub]
-│   │   └── pymergetic/
-│   │       ├── metal/                       [stub]
-│   │       │   ├── sys/hostinfo.c, pm_sys.c
-│   │       │   ├── …
-│   │       │   └── port/plat.c
-│   │       └── wasi/wasi_impl.c
-│   │
-│   └── unikraft/
-│       ├── CMakeLists.txt, main.c           [stub]
-│       └── pymergetic/
-│           ├── metal/                       [stub]
-│           │   ├── pm_hostinfo.c
-│           │   ├── …
-│           │   └── port/plat.c
-│           └── wasi/wasi_impl.c
+│   ├── rump/                      # [stub]
+│   └── unikraft/                  # [stub]
 │
-├── guest/                                   # orchestrator — portable wasm32-wasip1
-│   ├── CMakeLists.txt                       [stub] builds orchestrator.wasm
-│   └── pymergetic/
-│       ├── main.c                           [stub] orchestrator entry → metal/orchestrator boot
-│       └── metal/
-│           ├── orchestrator/                [stub] policy
-│           │   ├── boot.c                   layout report, arena sizing (uses pm_sys)
-│           │   └── loader.c                 FRESH / PERSIST, vartree bind, instance load
-│           ├── pm_mem.c                     [stub] malloc + mmap; shmalloc shim
-│           ├── sys/pm_sys.c                 one-time fd_read /sys/pm at init → cached getters
-│           ├── pm_types.c                   [stub]
-│           ├── posix.c                      [stub] wasi-libc floor
-│           ├── registry.c                   [stub]
-│           └── vartree.c                    [stub] named live catalog
+├── mods/
+│   ├── t0_hello/main.c
+│   └── t1_read/main.c
 │
-├── mods/                                    [stub] mod instances — wasm32-wasip1; `mod/` only
-├── apps/                                    [stub] app instances — python / rust / cpp
-├── scripts/                                 [stub]
+├── build/                         # gitignored
+│   ├── linux/runtime/
+│   ├── zephyr/{native_sim,native_sim_mod,qemu_x86_64,qemu_x86_64_mod}/
+│   ├── mods/
+│   └── ide/
+│
+├── scripts/
 ├── docs/
-├── external/                                [stub] west deps (zephyr, …)
-├── west-manifest/west.yml
-├── stubs/
-├── vfs/image/
-│
-└── backup/1st_try/                          [ref] prior experiments — not built from
+├── external/                      # west — gitignored, vanilla only
+├── west-manifest/
+└── backup/
 ```
 
 ---
 
-## Module map (read across)
+## Header ↔ .c map
 
-| module | `include/pymergetic/metal/` | engine `host/<plat>/…/metal/` | orchestrator `guest/…/metal/` |
-|--------|-----------------------------|-------------------------------|-------------------------------|
-| orchestrator | `orchestrator/*.h` | `orchestrator/mod_host.c` | `orchestrator/boot.c`, `loader.c` |
-| pm_mem | `pm_mem.h` | `pm_mem.c` | `pm_mem.c` |
-| sys | `sys/pm_sys.h`, `sys/hostinfo.h` | `sys/pm_sys.c`, `sys/hostinfo.c` | `sys/pm_sys.c` |
-| pm_types | `pm_types.h` | `pm_types.c` | `pm_types.c` |
-| posix | `posix.h` | `posix.c` | `posix.c` |
-| registry | `registry.h` | `registry.c` | `registry.c` |
-| vartree | `vartree.h` | `vartree.c` | `vartree.c` |
-| port | `port/plat.h` | `port/plat.c`, `efi_ram.c`, … | — |
-| wasi | `include/wasi/` | `../wasi/wasi_impl.c` | wasi-libc (linked) |
+| Module | Header | `.c` (one or more) |
+|--------|--------|---------------------|
+| `runtime` | `src/common/…/runtime.h` | `src/common/…/runtime.c` |
+| `platform` | `src/common/…/platform.h` | `src/common/…/platform.c`? + `src/<plat>/…/platform.c` — per `impl:` tags |
+| `wasi/file` | `src/zephyr/…/file.h` | `src/zephyr/…/file.c` — all `impl: zephyr` |
 
-`sys/hostinfo` is engine-only (no guest `.c`). `port/` is engine-only. `wasi/` lives outside `metal/`. **Instances** (mods, apps) are separate wasm trees under `mods/`, `apps/`.
+---
 
-Prior experiment code lives in `backup/1st_try/` for reference when implementing each module.
+## Common vs per-target
+
+| Path | What |
+|------|------|
+| `src/common/pymergetic/metal/` | contract `.h` + any `impl: common` `.c` |
+| `src/<plat>/pymergetic/metal/` | `impl: bind` + plat-private modules |
+| `src/<plat>/main.c` | entry |
+
+Per-function `impl:` tags in each header are authoritative — not the directory alone.
+
+---
+
+## Path → layer
+
+| Path | Layer |
+|------|-------|
+| `include/…/` | mod contract |
+| `src/common/…/port/platform.h` | port contract |
+| `src/<plat>/…/port/platform.c` | port impl |
+| `src/common/…/runtime/` | runtime + wamr |
+| `src/<plat>/…/` (private) | plat-only (wasi shim, …) |
+| `src/<plat>/main.c` | entry |
+| `mods/` + wasi-sdk | wasm guests |
+
+---
+
+## Rules
+
+| Rule | |
+|------|--|
+| `include/` = mod-facing only | runtime must not include from here |
+| Every contract function | `/* impl: common */`, `/* impl: bind */`, or `/* impl: <plat> */` |
+| `.c` function order | matches `.h` declaration order |
+| Skipped symbols in `.c` | `/* not impl: <tag> — <path> */` placeholder, same slot |
+| `src/common/` | contract `.h` + `impl: common` `.c` |
+| `src/<plat>/` | `impl: bind` + plat-private; OS `#include`s only here |
+| Public symbols | `pm_metal_<module_path>_` |
+| `external/` + `.tools/` | **vanilla** — west/toolchain pins only; no patches in-tree |
+| Artifacts | `build/` — gitignored |
+
+Adapt WAMR, Zephyr, wasi-sdk, etc. from `src/` (CMake flags, shims, wrappers) — never edit vendored trees. Fork/patch upstream only if unavoidable; then bump pin in `west-manifest/` and document why.
+
+---
+
+## Build outputs
+
+| Path | Output |
+|------|--------|
+| `build/linux/runtime/` | `pm-linux-runtime` |
+| `build/zephyr/<profile>/` | `zephyr.elf` / `zephyr.exe` |
+| `build/mods/` | `*.wasm` |
+| `build/ide/` | merged `compile_commands.json` |
+
+Also gitignored: `.tools/`, `external/`, `.cache/`, `.venv/`.
+
+---
+
+## Builds
+
+| Artifact | Inputs | Output |
+|----------|--------|--------|
+| **runtime binary** | `src/common/pymergetic/metal/` + `src/<plat>/` + WAMR | `build/<plat>/…` |
+| **mod `.wasm`** | `mods/` + wasi-sdk + `-I include/` | `build/mods/` |
+
+---
+
+## Omit (now)
+
+```
+apps/
+orchestrator/ mem/ types/ …        # mod API in include/ — later
+```
