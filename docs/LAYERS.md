@@ -1,168 +1,87 @@
 # Layers
 
-```
-targets = { linux, zephyr, rump, unikraft }
-```
-
-## Naming
-
-**Pymergetic** is the whole system. In prose, use **role names**; in the tree, keep short dir names.
-
-**Symbol prefixes** (functions, types, macros) follow the contract header path — see **[NAMING.md](NAMING.md)**. Quick rule: `include/pymergetic/metal/<path>.h` → `pm_metal_<path>_…` (e.g. `metal/pm_hostinfo.h` → `pm_metal_hostinfo_publish`).
-
-| Role | Dir | What |
-|------|-----|------|
-| **Engine** | `host/<plat>/` | Native runner per target: probe, encode host info, WASI impl, load orchestrator wasm |
-| **Orchestrator** | `guest/` | Root portable wasm (`wasm32-wasip1`): boot policy, layout, instance loader |
-| **Instance** | `mods/`, `apps/` | Wasm units the orchestrator loads after boot |
-
-**Kinds of instance:** **mod** (system plugin, `include/pymergetic/mod/` only) · **app** (user program — python, rust, c++, …).
-
-**Metal** — shared module contract both sides compile against (`include/pymergetic/metal/` + symmetric `.c` under engine and orchestrator).
-
-**`pm_hostinfo`** — engine-only metal module (`metal/pm_hostinfo.h`) that publishes the bootstrap blob to `/sys/pm` (machine ram, arena budget, …). Not “the engine” — just host **info** for the orchestrator to read once at boot.
+Base stack only — from hardware/OS up to the point where a `.wasm` file can run.
+Everything above the **wasm interface** is out of scope here.
 
 ```
-Pymergetic
-├── Engine (host/linux, host/zephyr, …)
-│   └── pm_hostinfo → /sys/pm
-├── Orchestrator (guest/)
-│   └── loads Instances (mods/, apps/)
-└── Metal — shared pm_sys, pm_mem, orchestrator/, …
+targets = { linux, zephyr, rump, unikraft }   # experiment: linux + zephyr first
 ```
-
-One-liner: **Engine** probes and publishes host info; **orchestrator** runs in wasm and loads **instances**.
 
 ---
 
-## Repo layout
-
-**Rule:** `include/pymergetic/metal/<mod>.h` + `host/<plat>/pymergetic/metal/<mod>.c` (engine) + `guest/pymergetic/metal/<mod>.c` (orchestrator when symmetric). Modules under `metal/`, A–Z. `port/` and `pm_hostinfo` are engine-only (no guest `.c`). `wasi/` sits in `host/<plat>/pymergetic/` outside `metal/`. See [SOURCETREE.md](SOURCETREE.md).
-
-WASI = transport — headers in `include/wasi/`, syscall **impl** on engine, **wasi-libc** on orchestrator. `include/pymergetic/metal/` = orchestrator metal contract. Read across each row.
+## Stack
 
 ```
-┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│    module   │  │    include/pymergetic/metal/    │  │ host/<plat>/…/metal/  (engine)  │  │ guest/…/metal/  (orchestrator)  │
-└─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
-
-┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│ orchestrator│  │     orchestrator/loader.h, …    │  │     orchestrator/mod_host.c     │  │      orchestrator/boot.c, …     │
-└─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
-
-┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│    pm_mem   │  │             pm_mem.h            │  │             pm_mem.c            │  │             pm_mem.c            │
-└─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
-
-┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│    pm_sys   │  │             pm_sys.h            │  │             pm_sys.c            │  │             pm_sys.c            │
-└─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
-
-┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│   pm_types  │  │            pm_types.h           │  │            pm_types.c           │  │            pm_types.c           │
-└─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
-
-┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│    posix    │  │             posix.h             │  │             posix.c             │  │             posix.c             │
-└─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
-
-┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│   registry  │  │            registry.h           │  │            registry.c           │  │            registry.c           │
-└─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
-
-┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│   vartree   │  │            vartree.h            │  │            vartree.c            │  │            vartree.c            │
-└─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
-
-┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│     wasi    │  │         include/wasi/           │  │            wasi/ impl           │  │            wasi-libc            │
-└─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
-
-┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│     port    │  │          port/plat.h            │  │     port/plat.c, efi_ram.c, …     │  │                                 │
-└─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
-
-┌─────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐
-│ pm_hostinfo │  │                                 │  │          pm_hostinfo.c          │  │                                 │
-└─────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘  └─────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│  WASM INTERFACE                         │  guest sees this — nothing below
+│  wasm32-wasip1 · WASI preview 1         │
+├─────────────────────────────────────────┤
+│  WASI host                              │  implement preview-1 syscalls
+├─────────────────────────────────────────┤
+│  WAMR                                   │  load · instantiate · run
+├─────────────────────────────────────────┤
+│  runtime                                │  one native binary per target
+├─────────────────────────────────────────┤
+│  port                                   │  OS → portable floor (probes, alloc)
+├─────────────────────────────────────────┤
+│  os                                     │  Linux kernel · Zephyr kernel · …
+├─────────────────────────────────────────┤
+│  boot                                   │  GRUB · UEFI · multiboot · …
+├─────────────────────────────────────────┤
+│  hardware                               │
+└─────────────────────────────────────────┘
 ```
 
-**Orchestrator metal** — same triple under `metal/`, split by policy vs mechanism. Headers in `include/pymergetic/metal/orchestrator/`. **Orchestrator** owns policy (`boot.c`, `loader.c`). **Engine** owns mechanism (`mod_host.c`, `port/`, `pm_hostinfo`). See [SOURCETREE.md](SOURCETREE.md).
+**Wasm interface** = a `wasm32-wasip1` module running under WAMR with a pinned WASI preview 1 host.
+Same `.wasm` artifact on every target. Same engine. Same syscall surface.
 
-**Orchestrator stack** — portable `wasm32-wasip1`, identical on every target. Local memory first (`pm_mem`: malloc, mmap), then type machinery (`registry` → `pm_types`), named catalog (`vartree`), posix, orchestration. Loads **instances** (mods, apps) after boot.
+---
 
-**Where things live:** cross-instance data uses the **component model shared blob** (engine). `shmalloc` is not a third heap — it is a **shim inside `pm_mem`** that presents that blob as usable bytes/handles to orchestrator code. `registry` holds WIT/type schemas; `pm_types` lifts/lowers resources at boundaries. `vartree` is the live named var catalog above types.
+## Layers (bottom → wasm)
 
-```
-┌────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
-│   target   │  │         linux          │  │         zephyr         │  │          rump          │  │        unikraft        │
-└────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘
+| # | Layer | Job |
+|---|-------|-----|
+| 1 | **hardware** | CPU, RAM, devices |
+| 2 | **boot** | firmware hands off to an OS image |
+| 3 | **os** | kernel + libc the port talks to |
+| 4 | **port** | hide the OS; expose a small C API (RAM probe, heap, map, time, …) |
+| 5 | **runtime** | long-lived host — `init`, dynamic `load`/`run`/`unload`, `shutdown` |
+| 6 | **wamr** | wasm engine — one build (WAMR) on all targets |
+| 7 | **wasi host** | syscall backend behind preview 1 (POSIX on linux, shim on zephyr, …) |
+| 8 | **wasm interface** | `.wasm` in, execution out — **stop here** |
 
-┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                          HARDWARE                                                          │
-└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+---
 
-┌────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
-│    boot    │  │      GRUB / UEFI       │  │    EFI / multiboot     │  │    anyboot / loader    │  │         ukboot         │
-└────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘
+## Rules
 
-┌────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
-│   kernel   │  │      Linux kernel      │  │     Zephyr kernel      │  │      rump kernel       │  │     unikernel libs     │
-└────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘
+1. **One engine** — WAMR everywhere. No per-target wasm runtimes.
+2. **One mod format** — `wasm32-wasip1`. Pin WASI preview 1; no component model in this slice.
+3. **Port is the only OS leak** — no `#include <zephyr/…>` or `<unistd.h>` outside `src/<plat>/pymergetic/metal/`.
+4. **Runtime is native C** — not wasm. It hosts guests; it does not execute through WASI.
+5. **Behavioural parity** — same `.wasm` + same preopened guest paths → same observable result on every target.
 
-┌────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
-│    libc    │  │       host libc        │  │        picolibc        │  │       rump libc        │  │         uklibc         │
-└────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘
+---
 
-┌────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
-│  drivers   │  │    kernel drivers      │  │     board drivers      │  │    anykern + virtio    │  │    virtio + ukplat     │
-└────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘
+## Per-target (what changes)
 
-┌────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
-│   probe    │  │   mem config + /proc   │  │   efi_ram mem probe    │  │    probe or config     │  │    probe or config     │
-└────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘
+| Layer | linux | zephyr |
+|-------|-------|--------|
+| boot | (host OS already up) | multiboot / native_sim / EFI |
+| os | Linux | Zephyr |
+| port | env probe, malloc, POSIX | E820/DT probe, k_malloc, VFS |
+| runtime | same shape | same shape |
+| wamr | `WAMR_BUILD_PLATFORM=linux` | `WAMR_BUILD_PLATFORM=zephyr` |
+| wasi host | WAMR linux WASI (POSIX) | WAMR zephyr WASI shim |
+| wasm interface | **identical** | **identical** |
 
-┌────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
-│    wasm    │  │        wasmtime        │  │          WAMR          │  │   wasm engine (TBD)    │  │   wasm engine (TBD)    │
-└────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘
+Upper rows differ. The wasm interface does not.
 
-┌────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
-│ pm_hostinfo│  │  pm_hostinfo (/sys/pm) │  │  pm_hostinfo (/sys/pm) │  │   pm_hostinfo (stub)   │  │   pm_hostinfo (stub)   │
-└────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘  └────────────────────────┘
+---
 
-┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                            WASI                                                            │
-└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+## Done when
 
-┌────────────┐  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│   pm_sys   │  │    orchestrator API — machine_ram, arena_budget, … (one /sys/pm read at boot)    │
-└────────────┘  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-
-┌────────────┐  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│   pm_mem   │  │          malloc + mmap (local); shmalloc shim → component shared blob                                      │
-└────────────┘  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-
-┌────────────┐  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  registry  │  │                            type registry — ids, layouts, field schemas (const)                             │
-└────────────┘  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-
-┌────────────┐  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  pm_types  │  │                                 runtime types — slices, handles, ownership                                 │
-└────────────┘  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-
-┌────────────┐  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  vartree   │  │                      named catalog — var headers, const char* name, linked list tree                       │
-└────────────┘  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-
-┌────────────┐  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│   posix    │  │                               posix floor — fd, paths, env, clocks (on WASI)                               │
-└────────────┘  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-
-┌────────────┐  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│orchestrator│  │              boot report, layout slots, instance loader (mods + apps)              │
-└────────────┘  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-
-┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                         instances — mods (system plugins) · apps (python · rust · c++ · …)                                 │
-└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-```
+- [ ] `src/linux` and `src/zephyr` each build a runtime binary
+- [ ] dynamic loader: `init` → load → run → unload (see [RUNTIME.md](RUNTIME.md))
+- [ ] two mods in one process without restart
+- [ ] WASI preview 1 syscalls used by tests work on both
+- [ ] `verify`: build mods → load/run on linux + zephyr → same stdout

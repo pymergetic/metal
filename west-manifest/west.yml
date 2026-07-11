@@ -14,3 +14,7 @@ manifest:
       url: https://github.com/mattconte/tlsf
       revision: deff9ab509341f264addbd3c8ada533678591905
       path: external/tlsf
+    - name: wasm-micro-runtime
+      url: https://github.com/bytecodealliance/wasm-micro-runtime
+      revision: WAMR-2.4.5
+      path: external/wamr

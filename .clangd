@@ -1,14 +1,209 @@
 ---
-# Zephyr compile_commands.json is generated for GCC; strip GCC-only flags for clangd.
+# Run scripts/setup-ide.sh after building — merges linux + zephyr compile_commands.
+# Zephyr DB is GCC; clangd must query gcc and strip gcc-only flags.
 CompileFlags:
+  Compiler: /usr/bin/gcc
   Remove:
     - -fno-reorder-functions
     - -fno-defer-pop
     - --param=min-pagesize=0
+    - -fno-pic
+    - -fno-pie
   Add:
     - -Iinclude
-    - -Ihost/linux/pymergetic
+    - -Isrc/common
+
+---
+# src/ tree — fallback when compile_commands.json is missing.
+If:
+  PathMatch: src/linux/.*\.c
+CompileFlags:
+  Add:
+    - -Isrc/common
+    - -DPM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
+
+---
+If:
+  PathMatch: src/common/.*\.c
+CompileFlags:
+  Add:
+    - -Isrc/common
+
+---
+If:
+  PathMatch: src/zephyr/.*\.c
+CompileFlags:
+  Add:
+    - -Isrc/common
+    - -Isrc/zephyr
+    - -DPM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_ZEPHYR
+
+---
+If:
+  PathMatch: src/zephyr/.*\.h
+CompileFlags:
+  Add:
+    - -Isrc/zephyr
+
+---
+# Legacy backup/ — host/zephyr firmware only.
+If:
+  PathMatch: host/zephyr/.*\.c
+CompileFlags:
+  Add:
+    - -DKERNEL
+    - -D__ZEPHYR__=1
+    - -DPM_METAL_BUILD_KERNEL=1
+    - -imacros
+    - build/zephyr/native_sim/zephyr/include/generated/zephyr/autoconf.h
+    - -Iexternal/zephyr/include
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated/zephyr
+    - -Iexternal/zephyr/soc/native/inf_clock
+    - -Iexternal/zephyr/boards/native/native_sim
+    - -Iexternal/zephyr/lib/libc/picolibc/include
+    - -Iexternal/zephyr/lib/posix/c_lib_ext/getopt
+    - -Iexternal/zephyr/include/zephyr/posix
+    - -Iexternal/zephyr/scripts/native_simulator/common/src/include
+    - -Iexternal/zephyr/scripts/native_simulator/native/src/include
+    - -isystem
+    - build/zephyr/native_sim/modules/picolibc/picolibc/include
+    - -Iinclude
     - -Ihost/zephyr/pymergetic
+    - -Iexternal/wamr/core/iwasm/include
+    - -Iexternal/wamr/core/shared/utils
+    - -Iexternal/wamr/core/shared/platform/include
+    - -Iexternal/wamr/core/shared/platform/zephyr
+
+---
+# hostinfo.c — Zephyr VFS (CONFIG_FILE_SYSTEM); needs autoconf for fs_* / printk.
+If:
+  PathMatch: host/zephyr/pymergetic/metal/sys/hostinfo\.c
+CompileFlags:
+  Add:
+    - -DKERNEL
+    - -D__ZEPHYR__=1
+    - -DPM_METAL_BUILD_KERNEL=1
+    - -imacros
+    - build/zephyr/native_sim/zephyr/include/generated/zephyr/autoconf.h
+    - -Iexternal/zephyr/include
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated/zephyr
+    - -Iinclude
+
+---
+# zephyr_file.c — WAMR WASI VFS; needs wasm mods compile flags + autoconf.
+If:
+  PathMatch: host/zephyr/pymergetic/wasi/zephyr_file\.c
+CompileFlags:
+  Add:
+    - -DKERNEL
+    - -D__ZEPHYR__=1
+    - -DPM_METAL_BUILD_KERNEL=1
+    - -DWASM_ENABLE_LIBC_WASI=1
+    - -DBH_MALLOC=wasm_runtime_malloc
+    - -DBH_FREE=wasm_runtime_free
+    - -include
+    - build/zephyr/native_sim/zephyr/include/generated/zephyr/autoconf.h
+    - -Iexternal/zephyr/include
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated/zephyr
+    - -Iexternal/zephyr/soc/native/inf_clock
+    - -Iexternal/zephyr/boards/native/native_sim
+    - -Iexternal/zephyr/lib/libc/picolibc/include
+    - -Iexternal/zephyr/lib/posix/c_lib_ext/getopt
+    - -Iexternal/zephyr/include/zephyr/posix
+    - -Iexternal/zephyr/scripts/native_simulator/common/src/include
+    - -Iexternal/zephyr/scripts/native_simulator/native/src/include
+    - -isystem
+    - build/zephyr/native_sim/modules/picolibc/picolibc/include
+    - -Iinclude
+    - -Ihost/zephyr/pymergetic/wasi
+    - -Iexternal/wamr/core/iwasm/include
+    - -Iexternal/wamr/core/iwasm/common
+    - -Iexternal/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+    - -Iexternal/wamr/core/shared/platform/include
+    - -Iexternal/wamr/core/shared/platform/zephyr
+    - -Iexternal/wamr/core/shared/platform/common/libc-util
+    - -include
+    - host/zephyr/pymergetic/wasi/zephyr_shim.h
+
+---
+# wasm_host.c — WAMR + Zephyr logging (optional; compile_commands preferred).
+If:
+  PathMatch: host/zephyr/pymergetic/metal/orchestrator/wasm_host\.c
+CompileFlags:
+  Add:
+    - -DKERNEL
+    - -D__ZEPHYR__=1
+    - -DPM_METAL_BUILD_KERNEL=1
+    - -imacros
+    - build/zephyr/native_sim/zephyr/include/generated/zephyr/autoconf.h
+    - -Iexternal/zephyr/include
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated/zephyr
+    - -Iinclude
+    - -Ihost/zephyr/pymergetic/wasi
+    - -Iexternal/wamr/core/iwasm/include
+    - -Iexternal/wamr/core/iwasm/common
+    - -Iexternal/wamr/core/shared/utils
+    - -Iexternal/wamr/core/shared/platform/include
+    - -Iexternal/wamr/core/shared/platform/zephyr
+    - -include
+    - host/zephyr/pymergetic/wasi/zephyr_shim.h
+
+---
+# Zephyr lower metal sources — plat.c, hostinfo.c, sys.c, wasm_host.c
+If:
+  PathMatch: host/zephyr/pymergetic/metal/.*\.c
+CompileFlags:
+  Add:
+    - -DKERNEL
+    - -D__ZEPHYR__=1
+    - -DPM_METAL_BUILD_KERNEL=1
+    - -include
+    - build/zephyr/native_sim/zephyr/include/generated/zephyr/autoconf.h
+    - -Iexternal/zephyr/include
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated/zephyr
+    - -Iexternal/zephyr/soc/native/inf_clock
+    - -Iexternal/zephyr/boards/native/native_sim
+    - -Iexternal/zephyr/lib/libc/picolibc/include
+    - -Iexternal/zephyr/lib/posix/c_lib_ext/getopt
+    - -Iexternal/zephyr/include/zephyr/posix
+    - -Iexternal/zephyr/scripts/native_simulator/common/src/include
+    - -Iexternal/zephyr/scripts/native_simulator/native/src/include
+    - -isystem
+    - build/zephyr/native_sim/modules/picolibc/picolibc/include
+    - -Iinclude
+    - -Ihost/zephyr/pymergetic
+
+---
+# Zephyr WASI headers — WAMR platform_wasi_types.h + zephyr generated headers.
+If:
+  PathMatch: host/zephyr/pymergetic/wasi/.*\.h
+CompileFlags:
+  Add:
+    - -DKERNEL
+    - -D__ZEPHYR__=1
+    - -DPM_METAL_BUILD_KERNEL=1
+    - -DWASM_ENABLE_LIBC_WASI=1
+    - -include
+    - build/zephyr/native_sim/zephyr/include/generated/zephyr/autoconf.h
+    - -Iexternal/zephyr/include
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated/zephyr
+    - -Iexternal/zephyr/soc/native/inf_clock
+    - -Iexternal/zephyr/boards/native/native_sim
+    - -Iexternal/zephyr/lib/libc/picolibc/include
+    - -Iexternal/zephyr/lib/posix/c_lib_ext/getopt
+    - -Iexternal/zephyr/include/zephyr/posix
+    - -Iexternal/zephyr/scripts/native_simulator/common/src/include
+    - -Iexternal/zephyr/scripts/native_simulator/native/src/include
+    - -isystem
+    - build/zephyr/native_sim/modules/picolibc/picolibc/include
+    - -Ihost/zephyr/pymergetic/wasi
+    - -Iexternal/wamr/core/shared/platform/include
 
 ---
 # zefi-segments.h is generated during CONFIG_BUILD_OUTPUT_EFI builds (zefi.py).

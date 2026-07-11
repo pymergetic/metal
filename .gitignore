@@ -1,39 +1,49 @@
-# pymergetic-metal build outputs
-**/host/zephyr/build/
-**/host/zephyr/images/
-**/host/linux/build/
-**/runtime/zephyr/build/
-**/runtime/zephyr/images/
-**/runtime/linux/build/
-**/runtime/linux/bench/build/
-**/mods/build/
-!**/mods/build/.gitkeep
+# Build outputs — see docs/SOURCETREE.md
+/build/
+
+# Legacy layout (pre-src/ migration; may still exist under backup/)
+host/**/build/
+host/**/images/
+runtime/**/build/
+runtime/**/images/
+runtime/**/bench/build/
+mods/build/
+
+# Backup tries — west clones and local build output (source snapshots stay tracked)
+backup/**/external/
+backup/**/build/
+backup/**/images/
+backup/**/generated/
 
 # Toolchain (local download)
 .tools/
 
-# Slice build outputs
-build/slice/
-twister-out/
-**/twister-out/
+# West workspace clones
+/external/
+/modules/
+/bootloader/
+/tools/
+
+# Git submodule checkout (.gitmodules; west uses external/)
+/third_party/
+
+# West local state (keep config)
+.west/*
+!.west/config
 
 # IDE / tooling
 .vscode/
 .idea/
+.cache/
+.venv/
 compile_commands.json
 **/compile_commands.json
+cmake-build-*/
 
-# West workspace clones and symlinks (west update output — not committed)
-**/external/
-/modules/
-/bootloader/
-/tools/
-/build/
-**/.venv/
-/.venv/
-**/.cache/
-/.cache/
+# Zephyr test runner
+twister-out/
+**/twister-out/
 
-# Keep committed workspace pointer; ignore other west local state
-.west/*
-!.west/config
+# Generated embeds (wasm → C arrays)
+src/zephyr/generated/
+**/host/zephyr/generated/
