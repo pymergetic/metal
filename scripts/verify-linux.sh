@@ -26,7 +26,7 @@ printf 'hello from vfs root\n' > "${VFS_ROOT}/README"
 mkdir -p "${VFS_ROOT}/mods"
 cp "${ROOT}/build/mods/t0_hello.wasm" "${ROOT}/build/mods/t1_read.wasm" "${VFS_ROOT}/mods/"
 
-OUT="$("${RUNTIME}" --memory=16777216 --vfs-root="${VFS_ROOT}" \
+OUT="$("${RUNTIME}" --memory=16777216 --bytecode-memory=1048576 --vfs-root="${VFS_ROOT}" \
 	/mods/t0_hello.wasm \
 	/mods/t1_read.wasm)"
 
