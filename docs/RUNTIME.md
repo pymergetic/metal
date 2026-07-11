@@ -65,8 +65,12 @@ int pm_metal_runtime_load_file(const char *path, pm_metal_runtime_handle_t *out)
 int pm_metal_runtime_load_bytes(const uint8_t *wasm, uint32_t len,
 				pm_metal_runtime_handle_t *out);
 int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv);
+int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv,
+			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd);
 int pm_metal_runtime_unload(pm_metal_runtime_handle_t h);
 ```
+
+`run()` is `run_ex()` with `-1,-1,-1` — see "Console model" below for what that `-1` means and the per-handle-console extension point `run_ex()` exists for.
 
 `memory_bytes` is a *request*; `runtime_init()` never touches memory itself — it hands the request to an ops table and gets a pool back. Memory (probe + the two pools below) lives in `pymergetic/metal/memory/`, not `platform.h` — three small modules, each a contract header declaring one struct-of-function-pointers and one `bind` getter that returns it. All three share the *same* struct layout, `pm_metal_memory_ops_t`, defined once in `memory/ops.h` alongside a `pm_metal_memory_kind_t` enum and a `pm_metal_memory_resolve(kind)` lookup for callers that pick a kind dynamically; `ram.h`/`kheap.h`/`bytecode.h` each `#include` it and declare their own dedicated getter for the common case where the call site already knows its kind at compile time (see docs/SOURCETREE.md "Ops-struct flavor of `bind`" for the pattern and why: these three are always used together and always come from the one target implementation linked into the binary, so grouping each one's functions beats one symbol per function — at effectively zero cost, since the getter is resolved at build/link time and the indirect calls through the table happen a handful of times per mod load, nowhere near a hot path):
 
@@ -136,6 +140,19 @@ WASI args (dir/map-dir/argv/env) are only consumed by WAMR at `wasm_runtime_inst
 | `shutdown` | `wasm_runtime_destroy` | both pools released |
 
 No `run_file()` shortcut that hides load/unload — callers use the loop explicitly. `run()` may be called more than once per handle (e.g. same mod, different `argv`); `load`/`unload` still bracket it exactly once each.
+
+---
+
+## Console model
+
+Two different things both get called "console" here — worth keeping separate, since only one of them is a `runtime.c` concern:
+
+- **The runtime's own diagnostics** (`fprintf(stderr, "pm_metal_runtime: ...")`) — plain host-side C, ours to route wherever we like; not addressed by anything below.
+- **Each loaded module's own WASI stdio (fd 0/1/2)** — this one is a WAMR-level mechanism, not something a logging helper can retrofit after the fact.
+
+Today every handle shares **one global console**: `run()` passes `-1` for stdin/stdout/stderr, which is WAMR's own sentinel for "inherit the host process's real fd 0/1/2" (`os_convert_std{in,out,err}_handle()` in WAMR's posix platform code) — so every mod's `printf` lands on the same fd our own diagnostics use. That's deliberate for now: it's the cheapest option, it's what every test in this repo exercises, and it matches how e.g. Zephyr's own logging subsystem works too (threads don't get their own virtual console; output is just tagged by module).
+
+If a **per-handle console** (its own pipe/log fd, switchable into view later — e.g. by hotkey or command) is ever wanted, the seam for it already exists: `pm_metal_runtime_run_ex()` takes real `stdin_fd`/`stdout_fd`/`stderr_fd` per call instead of the `-1` default `run()` uses, forwarded straight to `wasm_runtime_set_wasi_args_ex()`. Nothing else in `runtime.c` needs to change to support it — a caller just opens e.g. a `pipe()` per handle, hands the write end to `run_ex()`, and reads the other end on its own (a reader thread per handle, buffering into a ring when that handle isn't the one currently "focused"). That reader-thread/focus-switch layer is a real feature in its own right and isn't built — this only makes sure the day it's wanted, it's additive, not a `runtime.c` rewrite.
 
 ---
 

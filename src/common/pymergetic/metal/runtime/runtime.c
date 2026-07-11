@@ -347,6 +347,12 @@ int pm_metal_runtime_load_bytes(const uint8_t *wasm, uint32_t len,
 
 int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv)
 {
+	return pm_metal_runtime_run_ex(h, argc, argv, -1, -1, -1);
+}
+
+int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv,
+			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd)
+{
 	if (!g_pm_metal_runtime.initialized) {
 		return -1;
 	}
@@ -372,8 +378,14 @@ int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv)
 	}
 	slot->refcount++;
 
-	wasm_runtime_set_wasi_args(slot->module, NULL, 0, map_dir_list, 1, NULL, 0,
-				    argv, argc);
+	/* -1 means "inherit the host's own fd" (WAMR's own sentinel, see
+	 * os_convert_std{in,out,err}_handle() in WAMR's posix platform) —
+	 * i.e. today's one-shared-console behavior. A caller wanting a
+	 * private console per handle (see docs/RUNTIME.md "Console model")
+	 * passes real fds here instead (e.g. a pipe() it owns and reads
+	 * from); nothing else in this function needs to change for that. */
+	wasm_runtime_set_wasi_args_ex(slot->module, NULL, 0, map_dir_list, 1, NULL, 0,
+				       argv, argc, stdin_fd, stdout_fd, stderr_fd);
 
 	char error_buf[PM_METAL_RUNTIME_ERROR_BUF_SIZE];
 	wasm_module_inst_t inst = wasm_runtime_instantiate(
