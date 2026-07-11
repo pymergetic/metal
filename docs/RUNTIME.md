@@ -139,6 +139,25 @@ No `run_file()` shortcut that hides load/unload — callers use the loop explici
 
 ---
 
+## Concurrency
+
+`init()`/`shutdown()` are **controller-thread-only**: call each exactly once, with no other `pm_metal_runtime_*()` call in flight — the same rule WAMR itself uses for `wasm_runtime_full_init()`/`wasm_runtime_destroy()`. In practice: call `init()` before spawning any worker threads, and only call `shutdown()` after joining all of them.
+
+Once `init()` has returned, `load_file()`/`load_bytes()`/`run()`/`unload()` are safe to call **concurrently from multiple threads**, including on different handles at the same time — one process-wide mutex (`g_pm_metal_runtime_lock`, `port/lock.h`'s `pm_metal_port_mutex_t`) in `runtime.c` guards:
+
+- the shared handle table (claiming a slot in `load_*()`, disowning it in `unload()`, the busy `refcount` used to reject `unload()` while a `run()` on that handle is in flight — it returns `-1` rather than racing the module out from under a running instance; the caller must retry),
+- and — this is the important part — **every call into `wasm_runtime_load()`/`instantiate()`/`deinstantiate()`/`unload()`**, full stop, even across different handles/modules.
+
+That last point is more conservative than WAMR's own docs suggest. Upstream describes the shared `Alloc_With_Pool` heap (`external/wamr/core/shared/mem-alloc/ems/`) as internally locked, which would imply concurrent `load()`/`instantiate()` on *different* modules from different threads is safe without a caller-side lock. **It isn't, empirically, in this vendored build:** `scripts/verify-linux-threads.sh` builds a pthread-based stress harness (`src/linux/thread_stress_test.c`) with ThreadSanitizer and, before the fix above, TSan caught real data races inside `ems_alloc.c`'s `alloc_hmu()`/`gc_alloc_vo()`/`gc_free_vo()` when `load`/`instantiate`/`deinstantiate`/`unload` ran concurrently on different modules — every one of the four calls hit it, not just one. So this codebase doesn't trust the "pool is internally locked" assumption; it serializes those four calls itself instead.
+
+`wasm_application_execute_main()` — the actual guest bytecode interpretation — showed **no races** in the same run and is deliberately left unlocked, so two different handles' guest code still runs fully in parallel; only the WAMR-internal setup/teardown around it is serialized. `set_wasi_args()` is folded into the same locked section as `instantiate()` for an independent, second reason: it writes onto the *module* (not a future instance), consumed by the very next `instantiate()` call, so the two must stay paired — no other `run()` on the same handle may sneak its own `set_wasi_args()` in between, or one call's `argv` could end up baked into the other's instance.
+
+The mutex primitive itself (`init`/`destroy`/`lock`/`unlock`) is a `bind` port module (`port/lock.h`, `impl: bind` in `src/linux/.../port/lock.c` and `src/zephyr/.../port/lock.c`) — `pthread_mutex_t` on linux, `struct k_mutex` on zephyr, reinterpreted in place from a fixed-size opaque buffer so the shared header never `#include`s an OS header. `runtime.c` inits it right before publishing `initialized = 1` in `init()` and destroys it in `shutdown()`, so repeated `init()`→`shutdown()`→`init()` cycles never re-init a live mutex. `memory/bytecode.c`'s arena (`pymergetic/metal/util/arena.h`, no locking of its own) gets its own separate `pm_metal_port_mutex_t` around `alloc()`/`free()`, following the same pattern — see the comment there — since concurrent `load()`/`unload()` calls on different handles mutate the same free-list.
+
+Reproduce: `scripts/verify-linux-threads.sh` — builds `pm-linux-thread-stress` and `pm-wamr-vmlib` with `-fsanitize=thread` (and `WAMR_DISABLE_HW_BOUND_CHECK=1`, since WAMR's default hardware-bounds-check guard-page `mmap` and TSan's shadow-memory layout don't get along — unrelated to the locking itself), runs it under `setarch -R` (ASLR off — this host's TSan build aborts at startup under full ASLR; also unrelated to the locking), and fails if TSan reports anything.
+
+---
+
 ## What the binary expects at `init`
 
 | Field | linux | zephyr |
@@ -228,6 +247,7 @@ Scaffold is in place (`src/`, `mods/`, `scripts/setup-ide.sh`). Order:
 | `build-linux.sh` | WAMR (via `src/linux/CMakeLists.txt`) + link `pm-linux-runtime` |
 | `build-mod.sh` | `mods/*` → `build/mods/*.wasm` (wasi-sdk, `wasm32-wasip1`) |
 | `verify-linux.sh` | build mods + runtime → init → load → run → unload → shutdown |
+| `verify-linux-threads.sh` | ThreadSanitizer proof of the "Concurrency" section above — `pm-linux-thread-stress` |
 
 ### 2. Linux — first green path — done
 
@@ -279,3 +299,4 @@ Virtual `/sys/loader` · `include/metal.h` convenience · HTTPS fetch-on-miss ·
 - [x] WASI T1 read works on linux — zephyr pending
 - [x] mod bytecode lives in a dedicated arena, separate from the WAMR pool — linux; zephyr pending (single probed `arena_budget`, split)
 - [x] `verify` uses dynamic loader API — `scripts/verify-linux.sh`
+- [x] concurrent load/run/unload across handles from multiple threads, proven under ThreadSanitizer — see "Concurrency" above, `scripts/verify-linux-threads.sh`

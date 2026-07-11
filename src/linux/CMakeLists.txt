@@ -56,6 +56,7 @@ set_target_properties(pm-wamr-vmlib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_executable(pm-linux-runtime
 	main.c
 	pymergetic/metal/port/platform.c
+	pymergetic/metal/port/lock.c
 	pymergetic/metal/memory/ram.c
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c
@@ -76,6 +77,40 @@ target_compile_definitions(pm-linux-runtime PRIVATE
 )
 
 target_link_libraries(pm-linux-runtime PRIVATE
+	pm-wamr-vmlib
+	m
+	dl
+	pthread
+)
+
+# ---- pm-linux-thread-stress (opt-in — see scripts/verify-linux-threads.sh) ----
+# Same common/port/memory sources as pm-linux-runtime, minus main.c, plus a
+# pthread-based stress harness. EXCLUDE_FROM_ALL: not part of a normal build.
+
+add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
+	thread_stress_test.c
+	pymergetic/metal/port/platform.c
+	pymergetic/metal/port/lock.c
+	pymergetic/metal/memory/ram.c
+	pymergetic/metal/memory/kheap.c
+	pymergetic/metal/memory/bytecode.c
+	${PM_COMMON}/port/platform.c
+	${PM_COMMON}/memory/ops.c
+	${PM_COMMON}/runtime/runtime.c
+	${PM_SHARED}/util/size.c
+	${PM_SHARED}/util/arena.c
+)
+
+target_include_directories(pm-linux-thread-stress PRIVATE
+	${PM_COMMON_INC}
+	${PM_INCLUDE_INC}
+)
+
+target_compile_definitions(pm-linux-thread-stress PRIVATE
+	PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
+)
+
+target_link_libraries(pm-linux-thread-stress PRIVATE
 	pm-wamr-vmlib
 	m
 	dl

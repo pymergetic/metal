@@ -147,6 +147,7 @@ packages/metal/
 ├── src/
 │   ├── common/pymergetic/metal/   # cross-target — runtime + contracts
 │   │   ├── port/platform.h        # OS floor API (impl in src/<plat>/)
+│   │   ├── port/lock.h            # one mutex primitive (impl in src/<plat>/) — see docs/RUNTIME.md "Concurrency"
 │   │   ├── memory/                # ops-struct contracts (impl in src/<plat>/)
 │   │   │   ├── memory.h           # convenience umbrella — re-exports the 4 below
 │   │   │   ├── ops.h              # shared struct layout + kind enum + resolve()
@@ -166,8 +167,9 @@ packages/metal/
 │   ├── linux/
 │   │   ├── CMakeLists.txt
 │   │   ├── main.c
+│   │   ├── thread_stress_test.c   # pm-linux-thread-stress — EXCLUDE_FROM_ALL, see scripts/verify-linux-threads.sh
 │   │   └── pymergetic/metal/
-│   │       ├── port/platform.c
+│   │       ├── port/{platform,lock}.c
 │   │       └── memory/{ram,kheap,bytecode}.c
 │   │   # wasi: WAMR linux platform
 │   │
@@ -175,7 +177,7 @@ packages/metal/
 │   │   ├── CMakeLists.txt, Kconfig, prj.conf, boards/
 │   │   ├── main.c
 │   │   └── pymergetic/metal/
-│   │       ├── port/platform.c
+│   │       ├── port/{platform,lock}.c
 │   │       ├── memory/{ram,kheap,bytecode}.c
 │   │       └── wasi/              # private
 │   │           ├── file.h
@@ -209,6 +211,7 @@ packages/metal/
 |--------|--------|---------------------|
 | `runtime` | `src/common/…/runtime.h` | `src/common/…/runtime.c` |
 | `platform` | `src/common/…/platform.h` | `src/common/…/platform.c`? + `src/<plat>/…/platform.c` — per `impl:` tags |
+| `port/lock` | `src/common/…/port/lock.h` | `src/<plat>/…/port/lock.c` — `bind`, one mutex primitive per target |
 | `memory/ops` | `src/common/…/memory/ops.h` | `src/common/…/memory/ops.c` — `impl: common`, `resolve()` only, no per-target impl |
 | `memory/ram` | `src/common/…/memory/ram.h` | `src/<plat>/…/memory/ram.c` — ops-struct `bind`, one getter per target |
 | `memory/kheap` | `src/common/…/memory/kheap.h` | `src/<plat>/…/memory/kheap.c` — ops-struct `bind`, one getter per target |
