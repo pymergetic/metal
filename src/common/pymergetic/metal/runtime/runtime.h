@@ -28,7 +28,17 @@ int pm_metal_runtime_shutdown(void);
 int pm_metal_runtime_load_file(const char *path, pm_metal_runtime_handle_t *out);
 int pm_metal_runtime_load_bytes(const uint8_t *wasm, uint32_t len,
 				pm_metal_runtime_handle_t *out);
+
+/* run(): guest stdio inherits the host's own fd 0/1/2 — one shared console
+ * for every handle (see docs/RUNTIME.md "Console model"). run_ex(): same,
+ * but the caller supplies real fds for the guest's fd 0/1/2 instead (-1 in
+ * any slot still means "inherit the host's", per-slot) — the seam a future
+ * per-process console (its own pipe/log fd per handle) hangs off, so run()
+ * can stay a thin wrapper and this signature doesn't need to change again. */
 int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv);
+int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv,
+			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd);
+
 int pm_metal_runtime_unload(pm_metal_runtime_handle_t h);
 
 #endif /* PYMERGETIC_METAL_RUNTIME_RUNTIME_H_ */
