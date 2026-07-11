@@ -19,8 +19,10 @@ project(pm-zephyr-runtime)
 get_filename_component(PM_METAL_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 set(PM_COMMON "${PM_METAL_ROOT}/src/common/pymergetic/metal")
 set(PM_COMMON_INC "${PM_METAL_ROOT}/src/common")
+set(PM_SHARED "${PM_METAL_ROOT}/src/shared/pymergetic/metal")
 
 zephyr_include_directories(${PM_COMMON_INC})
+zephyr_include_directories(${PM_METAL_ROOT}/include)
 zephyr_include_directories(${CMAKE_CURRENT_LIST_DIR})
 
 if(DEFINED ENV{WAMR_ROOT_DIR} AND NOT "$ENV{WAMR_ROOT_DIR}" STREQUAL "")
@@ -54,6 +56,7 @@ target_sources(app PRIVATE
 	main.c
 	${PM_COMMON}/port/platform.c
 	${PM_COMMON}/runtime/runtime.c
+	${PM_SHARED}/util/size.c
 	pymergetic/metal/port/platform.c
 	pymergetic/metal/wasi/file.c
 	${WAMR_RUNTIME_LIB_SOURCE}
