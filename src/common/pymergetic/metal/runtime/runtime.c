@@ -24,6 +24,38 @@
  * actual bytes-from-storage read is a port call (pm_metal_port_read_file):
  * bare libc stdio is not guaranteed to reach mounted storage on embedded
  * targets, so this file must never call fopen()/fread() etc. directly.
+ *
+ * Concurrency — see docs/RUNTIME.md "Concurrency" for the full writeup.
+ * Short version: init()/shutdown() are controller-thread-only — call each
+ * exactly once, with no other pm_metal_runtime_*() call in flight (same
+ * rule WAMR itself uses for wasm_runtime_full_init()/destroy()). Once
+ * init() has returned, load_file()/load_bytes()/run()/unload() are safe
+ * to call concurrently from multiple threads, including on different
+ * handles at the same time.
+ *
+ * g_pm_metal_runtime_lock guards the shared handle table AND every call
+ * into wasm_runtime_load()/instantiate()/deinstantiate()/unload() — i.e.
+ * those four calls are fully serialized process-wide, even across
+ * different handles. This is more conservative than WAMR's own docs
+ * suggest (they describe the shared Alloc_With_Pool heap as internally
+ * locked, implying concurrent load/instantiate on different modules
+ * should be safe without a caller-side lock) — but running the actual
+ * stress test in scripts/verify-linux-threads.sh under ThreadSanitizer
+ * caught real data races inside WAMR's own EMS allocator
+ * (external/wamr/core/shared/mem-alloc/ems/ems_alloc.c, e.g. alloc_hmu())
+ * when load/instantiate/deinstantiate/unload ran concurrently on
+ * different modules in this vendored build — so this file doesn't trust
+ * that assumption. wasm_application_execute_main() itself showed no
+ * races in the same run and stays unlocked here, so two different
+ * handles' guest code still runs fully in parallel — only the
+ * WAMR-internal setup/teardown calls around it are serialized. A handle
+ * mid-run() (refcount > 0) cannot be unload()ed — unload() fails with -1
+ * rather than racing the module out from under a running instance; the
+ * caller must retry. set_wasi_args() is included in the same serialized
+ * section for a second, independent reason: it writes onto slot->module
+ * itself (not a future instance), consumed by the very next
+ * instantiate() call — those two must stay paired with no other run() on
+ * the same handle sneaking its own set_wasi_args() in between.
  */
 #include "pymergetic/metal/runtime/runtime.h"
 
@@ -33,6 +65,7 @@
 #include <string.h>
 
 #include "pymergetic/metal/memory/memory.h"
+#include "pymergetic/metal/port/lock.h"
 #include "pymergetic/metal/port/platform.h"
 #include "wasm_export.h"
 
@@ -44,6 +77,7 @@
 
 typedef struct pm_metal_runtime_slot {
 	int used;
+	int refcount; /* # of run() calls currently in flight on this handle — unload() refuses while > 0 */
 	wasm_module_t module;
 	uint8_t *buf;
 	uint32_t buf_len;
@@ -56,6 +90,14 @@ static struct {
 	pm_metal_runtime_slot_t slots[PM_METAL_RUNTIME_MAX_HANDLES];
 } g_pm_metal_runtime;
 
+/* Guards g_pm_metal_runtime.slots[] (used/refcount/module/buf/buf_len) and
+ * the set_wasi_args()+instantiate() pair in run() — see file header. Not
+ * needed for vfs_root/map_dir_entry (write-once at init(), read-only
+ * after, per the controller-thread contract) nor for `initialized` itself
+ * (checked unlocked as a fast precondition — see file header). */
+static pm_metal_port_mutex_t g_pm_metal_runtime_lock;
+
+/* Caller must hold g_pm_metal_runtime_lock. */
 static pm_metal_runtime_slot_t *pm_metal_runtime_slot_for(pm_metal_runtime_handle_t h)
 {
 	if (h.id == 0 || h.id > PM_METAL_RUNTIME_MAX_HANDLES) {
@@ -70,10 +112,14 @@ static pm_metal_runtime_slot_t *pm_metal_runtime_slot_for(pm_metal_runtime_handl
 static int pm_metal_runtime_load_common(uint8_t *buf, uint32_t len,
 					 pm_metal_runtime_handle_t *out)
 {
-	char error_buf[PM_METAL_RUNTIME_ERROR_BUF_SIZE];
 	pm_metal_runtime_slot_t *slot = NULL;
 	uint32_t i;
 
+	/* wasm_runtime_load() stays inside the lock along with the slot
+	 * claim — see file header re: WAMR's shared pool allocator not
+	 * actually being safe for concurrent load() on different modules in
+	 * this vendored build (empirically found via ThreadSanitizer). */
+	pm_metal_port_mutex_lock(&g_pm_metal_runtime_lock);
 	for (i = 0; i < PM_METAL_RUNTIME_MAX_HANDLES; i++) {
 		if (!g_pm_metal_runtime.slots[i].used) {
 			slot = &g_pm_metal_runtime.slots[i];
@@ -81,21 +127,25 @@ static int pm_metal_runtime_load_common(uint8_t *buf, uint32_t len,
 		}
 	}
 	if (!slot) {
+		pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
 		fprintf(stderr, "pm_metal_runtime: handle table full\n");
 		return -1;
 	}
 
+	char error_buf[PM_METAL_RUNTIME_ERROR_BUF_SIZE];
 	wasm_module_t module =
 		wasm_runtime_load(buf, len, error_buf, sizeof(error_buf));
 	if (!module) {
+		pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
 		fprintf(stderr, "pm_metal_runtime: load failed: %s\n", error_buf);
 		return -1;
 	}
-
 	slot->used = 1;
 	slot->module = module;
 	slot->buf = buf;
 	slot->buf_len = len;
+	slot->refcount = 0;
+	pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
 
 	out->id = (uint32_t)(i + 1);
 	return 0;
@@ -199,6 +249,12 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	memset(g_pm_metal_runtime.slots, 0, sizeof(g_pm_metal_runtime.slots));
 	g_pm_metal_runtime.vfs_root = vfs_root;
 	g_pm_metal_runtime.map_dir_entry = map_dir_entry;
+
+	/* Init last, right before publishing `initialized` — nothing past
+	 * this point can fail, so this runs exactly once per init()/
+	 * shutdown() cycle (see destroy() in shutdown()); re-init()ing a
+	 * live mutex without destroy() first is undefined behavior. */
+	pm_metal_port_mutex_init(&g_pm_metal_runtime_lock);
 	g_pm_metal_runtime.initialized = 1;
 
 	return 0;
@@ -212,6 +268,9 @@ int pm_metal_runtime_shutdown(void)
 
 	uint32_t i;
 
+	/* Controller-thread-only, per the file-header contract — no worker
+	 * should still be calling load/run/unload at this point, so the
+	 * lock below is defensive, not load-bearing. */
 	for (i = 0; i < PM_METAL_RUNTIME_MAX_HANDLES; i++) {
 		if (g_pm_metal_runtime.slots[i].used) {
 			pm_metal_runtime_unload_slot(&g_pm_metal_runtime.slots[i]);
@@ -225,6 +284,7 @@ int pm_metal_runtime_shutdown(void)
 	pm_metal_memory_bytecode_ops()->release();
 	pm_metal_memory_kheap_ops()->release();
 
+	pm_metal_port_mutex_destroy(&g_pm_metal_runtime_lock);
 	memset(&g_pm_metal_runtime, 0, sizeof(g_pm_metal_runtime));
 
 	return 0;
@@ -291,14 +351,26 @@ int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv)
 		return -1;
 	}
 
+	const char *map_dir_list[1];
+	map_dir_list[0] = g_pm_metal_runtime.map_dir_entry;
+
+	/* set_wasi_args() + instantiate() locked: set_wasi_args() writes
+	 * argv/map_dir onto slot->module itself (not a future instance), and
+	 * instantiate() is what consumes it, so those two must stay paired
+	 * with no other run() on this handle sneaking its own
+	 * set_wasi_args() in between — plus instantiate() itself needs the
+	 * lock regardless, see file header re: WAMR's shared pool allocator.
+	 * The lock is released before the actual wasm execution so other
+	 * handles keep running fully in parallel; re-taken only for
+	 * deinstantiate() (same allocator concern), not for execute_main(). */
+	pm_metal_port_mutex_lock(&g_pm_metal_runtime_lock);
 	pm_metal_runtime_slot_t *slot = pm_metal_runtime_slot_for(h);
 	if (!slot) {
+		pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
 		fprintf(stderr, "pm_metal_runtime: bad handle\n");
 		return -1;
 	}
-
-	const char *map_dir_list[1];
-	map_dir_list[0] = g_pm_metal_runtime.map_dir_entry;
+	slot->refcount++;
 
 	wasm_runtime_set_wasi_args(slot->module, NULL, 0, map_dir_list, 1, NULL, 0,
 				    argv, argc);
@@ -307,14 +379,14 @@ int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv)
 	wasm_module_inst_t inst = wasm_runtime_instantiate(
 		slot->module, PM_METAL_RUNTIME_STACK_SIZE,
 		PM_METAL_RUNTIME_HEAP_SIZE, error_buf, sizeof(error_buf));
+	pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
+
+	int exit_code;
 	if (!inst) {
 		fprintf(stderr, "pm_metal_runtime: instantiate failed: %s\n",
 			error_buf);
-		return -1;
-	}
-
-	int exit_code;
-	if (wasm_application_execute_main(inst, argc, argv)) {
+		exit_code = -1;
+	} else if (wasm_application_execute_main(inst, argc, argv)) {
 		exit_code = (int)wasm_runtime_get_wasi_exit_code(inst);
 	} else {
 		const char *exception = wasm_runtime_get_exception(inst);
@@ -323,7 +395,12 @@ int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv)
 		exit_code = -1;
 	}
 
-	wasm_runtime_deinstantiate(inst);
+	pm_metal_port_mutex_lock(&g_pm_metal_runtime_lock);
+	if (inst) {
+		wasm_runtime_deinstantiate(inst);
+	}
+	slot->refcount--;
+	pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
 
 	return exit_code;
 }
@@ -334,13 +411,38 @@ int pm_metal_runtime_unload(pm_metal_runtime_handle_t h)
 		return -1;
 	}
 
+	pm_metal_port_mutex_lock(&g_pm_metal_runtime_lock);
 	pm_metal_runtime_slot_t *slot = pm_metal_runtime_slot_for(h);
 	if (!slot) {
+		pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
 		fprintf(stderr, "pm_metal_runtime: bad handle\n");
 		return -1;
 	}
+	if (slot->refcount > 0) {
+		pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
+		/* Deliberate rejection, not a fault — see docs/RUNTIME.md
+		 * "Concurrency". Caller raced unload() against an in-flight
+		 * run() on the same handle; retry once run() returns. */
+		fprintf(stderr,
+			"pm_metal_runtime: unload refused (by design) — handle busy, run in flight\n");
+		return -1;
+	}
 
-	pm_metal_runtime_unload_slot(slot);
+	/* wasm_runtime_unload() stays inside the lock — see file header re:
+	 * WAMR's shared pool allocator. bytecode->free() runs after unlock:
+	 * it only touches our own arena, which has its own separate lock
+	 * around the free-list (see memory/bytecode.c), unrelated to WAMR's
+	 * pool. */
+	wasm_module_t module = slot->module;
+	uint8_t *buf = slot->buf;
+	wasm_runtime_unload(module);
+	slot->used = 0;
+	slot->module = NULL;
+	slot->buf = NULL;
+	slot->buf_len = 0;
+	pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
+
+	pm_metal_memory_bytecode_ops()->free(buf);
 
 	return 0;
 }

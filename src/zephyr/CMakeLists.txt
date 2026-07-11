@@ -60,6 +60,7 @@ target_sources(app PRIVATE
 	${PM_SHARED}/util/size.c
 	${PM_SHARED}/util/arena.c
 	pymergetic/metal/port/platform.c
+	pymergetic/metal/port/lock.c
 	pymergetic/metal/memory/ram.c
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c

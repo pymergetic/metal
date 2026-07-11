@@ -30,6 +30,11 @@ CompileFlags:
     - -Isrc/common
 
 ---
+# src/zephyr/*.c may now #include real <zephyr/...> headers (e.g. port/lock.c
+# -> <zephyr/kernel.h>). No compile_commands.json exists for src/zephyr yet
+# (native_sim build here is the legacy host/zephyr app, pre-restructure) —
+# reuse its already-configured autoconf.h/include dirs for IDE hinting only,
+# same trick the "Zephyr lower metal sources" rule below already relies on.
 If:
   PathMatch: src/zephyr/.*\.c
 CompileFlags:
@@ -37,6 +42,34 @@ CompileFlags:
     - -Isrc/common
     - -Isrc/zephyr
     - -DPM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_ZEPHYR
+    - -DKERNEL
+    - -D__ZEPHYR__=1
+    - -imacros
+    - build/zephyr/native_sim/zephyr/include/generated/zephyr/autoconf.h
+    - -Iexternal/zephyr/include
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated
+    - -Ibuild/zephyr/native_sim/zephyr/include/generated/zephyr
+    - -Iexternal/zephyr/soc/native/inf_clock
+    - -Iexternal/zephyr/boards/native/native_sim
+    - -Iexternal/zephyr/lib/libc/picolibc/include
+    - -Iexternal/zephyr/lib/posix/c_lib_ext/getopt
+    - -Iexternal/zephyr/include/zephyr/posix
+    - -Iexternal/zephyr/scripts/native_simulator/common/src/include
+    - -Iexternal/zephyr/scripts/native_simulator/native/src/include
+    - -isystem
+    - build/zephyr/native_sim/modules/picolibc/picolibc/include
+# The flags above are verified correct — real gcc/clang (and even clangd's own
+# -cc1 pipeline reconstructed by hand) parse <zephyr/kernel.h> and struct
+# k_mutex cleanly with them. Only clangd's bundled Clang 22.1 mis-parses this
+# particular real Zephyr header (struct k_mutex ends up "incomplete", cascading
+# into k_mutex_init/lock/unlock/K_FOREVER "undeclared") — a clangd-version-
+# specific quirk in third-party code, not a bug in ours. Suppress the resulting
+# noise rather than chase a llvm-project parser discrepancy for a deferred target.
+Diagnostics:
+  Suppress:
+    - sizeof_alignof_incomplete_or_sizeless_type
+    - undeclared_var_use
+    - implicit-function-declaration
 
 ---
 If:

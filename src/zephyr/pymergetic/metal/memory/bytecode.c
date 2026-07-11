@@ -1,6 +1,11 @@
 /*
  * Memory — zephyr bytecode ops (bind). Stub — second slice of the same
- * arena_budget remainder pending.
+ * arena_budget remainder pending. When implemented, alloc()/free() must
+ * guard the arena with a pm_metal_port_mutex_t the same way
+ * src/linux/pymergetic/metal/memory/bytecode.c does — the arena itself
+ * has no locking of its own (see util/arena.h) and runtime.c allows
+ * concurrent load()/unload() across handles (see docs/RUNTIME.md
+ * "Concurrency").
  */
 #include "pymergetic/metal/memory/bytecode.h"
 
