@@ -69,7 +69,8 @@
 #include "pymergetic/metal/port/platform.h"
 #include "wasm_export.h"
 
-#define PM_METAL_RUNTIME_MAX_HANDLES 8
+/* PM_METAL_RUNTIME_MAX_HANDLES itself now lives in runtime.h — public, see
+ * there — not redefined here. */
 #define PM_METAL_RUNTIME_MAX_PATH 256 /* resolved vfs path buffer — not PATH_MAX (POSIX-only, and too large for small stacks) */
 #define PM_METAL_RUNTIME_STACK_SIZE (64 * 1024)
 #define PM_METAL_RUNTIME_HEAP_SIZE 0 /* wasi-libc manages its own heap in linear memory */
@@ -345,15 +346,45 @@ int pm_metal_runtime_load_bytes(const uint8_t *wasm, uint32_t len,
 	return 0;
 }
 
-int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv)
+int pm_metal_runtime_resolve_path(const char *guest_path, char *out, size_t out_len)
 {
-	return pm_metal_runtime_run_ex(h, argc, argv, -1, -1, -1);
+	if (!g_pm_metal_runtime.initialized || !guest_path || !out) {
+		return -1;
+	}
+	return pm_metal_runtime_resolve_vfs_path(guest_path, out, out_len);
 }
 
-int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv,
+int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv)
+{
+	return pm_metal_runtime_run_ex(h, argc, argv, 0, NULL, -1, -1, -1);
+}
+
+int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, int envc, const char **envp,
 			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd)
 {
 	if (!g_pm_metal_runtime.initialized) {
+		return -1;
+	}
+
+	/* Worker threads this codebase spawns to call run()/run_ex()
+	 * concurrently (e.g. runtime/process.c's spawn(), one new worker
+	 * thread per process) are plain pthreads WAMR knows nothing
+	 * about — unlike the thread that called wasm_runtime_full_init()
+	 * (which gets this set up for free as part of that call), each of
+	 * these needs its own thread signal/guard-page env set up before any
+	 * instantiate()/execute_main() call below, and torn down after —
+	 * that is exactly what wasm_runtime_{init,destroy}_thread_env() are
+	 * for (see wasm_export.h's own doc comment on them). A no-op on a
+	 * thread that already has one (the thread that called
+	 * wasm_runtime_full_init(), or *any* thread on a build with hardware
+	 * bounds checking compiled out, e.g. -DWAMR_DISABLE_HW_BOUND_CHECK=1
+	 * — see scripts/verify-linux-threads.sh) — wasm_runtime_thread_env_
+	 * inited() says so up front, so this only does the real work where
+	 * it is actually needed. */
+	int owns_thread_env = !wasm_runtime_thread_env_inited();
+
+	if (owns_thread_env && !wasm_runtime_init_thread_env()) {
+		fprintf(stderr, "pm_metal_runtime: thread env init failed\n");
 		return -1;
 	}
 
@@ -374,6 +405,9 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv,
 	if (!slot) {
 		pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
 		fprintf(stderr, "pm_metal_runtime: bad handle\n");
+		if (owns_thread_env) {
+			wasm_runtime_destroy_thread_env();
+		}
 		return -1;
 	}
 	slot->refcount++;
@@ -384,7 +418,7 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv,
 	 * private console per handle (see docs/RUNTIME.md "Console model")
 	 * passes real fds here instead (e.g. a pipe() it owns and reads
 	 * from); nothing else in this function needs to change for that. */
-	wasm_runtime_set_wasi_args_ex(slot->module, NULL, 0, map_dir_list, 1, NULL, 0,
+	wasm_runtime_set_wasi_args_ex(slot->module, NULL, 0, map_dir_list, 1, envp, (uint32_t)envc,
 				       argv, argc, stdin_fd, stdout_fd, stderr_fd);
 
 	char error_buf[PM_METAL_RUNTIME_ERROR_BUF_SIZE];
@@ -414,6 +448,9 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv,
 	slot->refcount--;
 	pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
 
+	if (owns_thread_env) {
+		wasm_runtime_destroy_thread_env();
+	}
 	return exit_code;
 }
 

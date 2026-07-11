@@ -56,14 +56,39 @@ target_sources(app PRIVATE
 	main.c
 	${PM_COMMON}/port/platform.c
 	${PM_COMMON}/memory/ops.c
+	${PM_COMMON}/console/viewport.c
 	${PM_COMMON}/runtime/runtime.c
+	${PM_COMMON}/runtime/process.c
+	${PM_COMMON}/app/app.c
+	${PM_COMMON}/shell/shell.c
+	${PM_COMMON}/shell/handles.c
+	${PM_COMMON}/shell/commands.c
+	${PM_COMMON}/shell/commands/help.c
+	${PM_COMMON}/shell/commands/load.c
+	${PM_COMMON}/shell/commands/run.c
+	${PM_COMMON}/shell/commands/unload.c
+	${PM_COMMON}/shell/commands/focus.c
+	${PM_COMMON}/shell/commands/ps.c
+	${PM_COMMON}/shell/commands/cd.c
+	${PM_COMMON}/shell/commands/pwd.c
+	${PM_COMMON}/shell/commands/ls.c
+	${PM_COMMON}/shell/commands/export.c
+	${PM_COMMON}/shell/commands/env.c
+	${PM_COMMON}/shell/commands/quit.c
+	${PM_COMMON}/shell/commands/exit.c
 	${PM_SHARED}/util/size.c
 	${PM_SHARED}/util/arena.c
+	${PM_SHARED}/util/log.c
 	pymergetic/metal/port/platform.c
 	pymergetic/metal/port/lock.c
+	pymergetic/metal/port/worker.c
+	pymergetic/metal/port/term.c
+	pymergetic/metal/port/dir.c
 	pymergetic/metal/memory/ram.c
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c
+	pymergetic/metal/console/console.c
+	pymergetic/metal/console/viewport.c
 	pymergetic/metal/wasi/file.c
 	${WAMR_RUNTIME_LIB_SOURCE}
 )

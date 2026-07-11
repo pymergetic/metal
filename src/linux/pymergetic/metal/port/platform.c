@@ -4,6 +4,7 @@
  */
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/stat.h>
 
 #include "pymergetic/metal/memory/bytecode.h"
 #include "pymergetic/metal/port/platform.h"
@@ -42,4 +43,11 @@ int pm_metal_port_read_file(const char *host_path, uint8_t **out_buf, uint32_t *
 	*out_buf = buf;
 	*out_len = (uint32_t)size;
 	return 0;
+}
+
+int pm_metal_port_file_exists(const char *host_path)
+{
+	struct stat st;
+
+	return stat(host_path, &st) == 0 && S_ISREG(st.st_mode);
 }

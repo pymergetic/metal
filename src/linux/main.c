@@ -1,9 +1,9 @@
 /*
- * Linux runtime entry — init → loader loop → shutdown.
- * See docs/RUNTIME.md.
+ * Linux runtime entry — arg parsing → init → app/app.h's run mode →
+ * shutdown. See docs/RUNTIME.md, docs/CONSOLE.md.
  *
  * Usage: pm-linux-runtime --memory=<bytes> --bytecode-memory=<bytes>
- *                          --vfs-root=<dir> /mod.wasm [/mod2.wasm ...]
+ *                          --vfs-root=<dir> [--console] [/mod.wasm ...]
  *
  * --memory sizes the kheap pool (wasm linear memory + WAMR's own runtime
  * structs); --bytecode-memory sizes the separate arena raw .wasm module
@@ -11,11 +11,29 @@
  * the two never share space, so a big mod can't starve WAMR's own
  * bookkeeping or vice versa.
  *
- * Each positional .wasm path is guest-style, resolved against --vfs-root by
- * the runtime (see pm_metal_runtime_load_file) — not a host path outside the
- * VFS tree. Each is loaded, run once (argv[0] = its basename), and unloaded —
- * all inside a single init()/shutdown() pair, proving the persistent-host
- * model: one process, many mods, shared vfs_root.
+ * Two run modes, chosen by --console:
+ *
+ *  - Scripted (default, no --console): each positional .wasm path is
+ *    guest-style, resolved against --vfs-root by the runtime (see
+ *    pm_metal_runtime_load_file) — loaded, run once (argv[0] = its
+ *    basename), and unloaded, all inside a single init()/shutdown() pair.
+ *    This is what scripts/verify-linux.sh and verify-linux-threads.sh
+ *    exercise; its behavior does not change when --console exists.
+ *
+ *  - Console (--console): a live kernel shell (see
+ *    pymergetic/metal/shell/{shell,commands}.h for the command set — type
+ *    'help') fed from real stdin, with one switchable console per loaded
+ *    handle — see docs/CONSOLE.md. Any positional .wasm paths are
+ *    pre-loaded (not run) before the shell starts, same as typing
+ *    `load <path>` for each. See scripts/verify-linux-console.sh.
+ *
+ * This file itself only does what is inherently linux-CLI-specific:
+ * parsing argv (incl. resolving --vfs-root to an absolute path via
+ * realpath(), POSIX-only) into a pm_metal_runtime_config_t, then handing
+ * off to pymergetic/metal/app/app.h for the actual run mode — both modes'
+ * entire command set/handle table/console-mode pump+dispatch loop are
+ * impl: common (see there), reachable identically from any future
+ * target's own main.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -23,7 +41,9 @@
 #include <string.h>
 #include <limits.h>
 
+#include "pymergetic/metal/app/app.h"
 #include "pymergetic/metal/memory/memory.h"
+#include "pymergetic/metal/runtime/process.h"
 #include "pymergetic/metal/runtime/runtime.h"
 #include "pymergetic/metal/util/size.h"
 
@@ -31,15 +51,8 @@ static void print_usage(const char *argv0)
 {
 	fprintf(stderr,
 		"usage: %s --memory=<bytes> --bytecode-memory=<bytes> --vfs-root=<dir> "
-		"/mod.wasm [/mod2.wasm ...]\n",
+		"[--console] [/mod.wasm ...]\n",
 		argv0);
-}
-
-static const char *basename_of(const char *path)
-{
-	const char *slash = strrchr(path, '/');
-
-	return slash ? slash + 1 : path;
 }
 
 int main(int argc, char **argv)
@@ -47,10 +60,10 @@ int main(int argc, char **argv)
 	uint64_t memory_bytes = 0;
 	uint64_t bytecode_bytes = 0;
 	const char *vfs_root_arg = NULL;
+	int console_mode = 0;
 	int wasm_argc = 0;
 	char **wasm_argv;
 	int i;
-	int rc = 0;
 
 	wasm_argv = malloc(sizeof(char *) * (size_t)(argc > 0 ? argc : 1));
 	if (!wasm_argv) {
@@ -64,6 +77,8 @@ int main(int argc, char **argv)
 			bytecode_bytes = strtoull(argv[i] + 18, NULL, 0);
 		} else if (!strncmp(argv[i], "--vfs-root=", 11)) {
 			vfs_root_arg = argv[i] + 11;
+		} else if (!strcmp(argv[i], "--console")) {
+			console_mode = 1;
 		} else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
 			print_usage(argv[0]);
 			free(wasm_argv);
@@ -73,7 +88,8 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (memory_bytes == 0 || bytecode_bytes == 0 || !vfs_root_arg || wasm_argc == 0) {
+	if (memory_bytes == 0 || bytecode_bytes == 0 || !vfs_root_arg
+	    || (wasm_argc == 0 && !console_mode)) {
 		print_usage(argv[0]);
 		free(wasm_argv);
 		return 1;
@@ -97,6 +113,12 @@ int main(int argc, char **argv)
 		free(wasm_argv);
 		return 1;
 	}
+	if (pm_metal_process_init() != 0) {
+		fprintf(stderr, "%s: process table init failed\n", argv[0]);
+		pm_metal_runtime_shutdown();
+		free(wasm_argv);
+		return 1;
+	}
 
 	/* machine_ram = real total host RAM (diagnostics only); kheap_pool =
 	 * what WAMR actually got; bytecode_pool = the separate arena raw
@@ -106,41 +128,22 @@ int main(int argc, char **argv)
 	char ram_human[48];
 	char pool_human[48];
 	char bytecode_human[48];
-	pm_metal_util_size_format_bytes(ram_human, sizeof(ram_human),
-					 pm_metal_memory_ram_ops()->probe());
-	pm_metal_util_size_format_bytes(pool_human, sizeof(pool_human),
-					 pm_metal_memory_kheap_ops()->bytes());
+	pm_metal_util_size_format_bytes(ram_human, sizeof(ram_human), pm_metal_memory_ram_ops()->probe());
+	pm_metal_util_size_format_bytes(pool_human, sizeof(pool_human), pm_metal_memory_kheap_ops()->bytes());
 	pm_metal_util_size_format_bytes(bytecode_human, sizeof(bytecode_human),
 					 pm_metal_memory_bytecode_ops()->bytes());
-	printf("machine_ram=%s kheap_pool=%s bytecode_pool=%s vfs_root=%s\n",
-	       ram_human, pool_human, bytecode_human, vfs_root_abs);
+	printf("machine_ram=%s kheap_pool=%s bytecode_pool=%s vfs_root=%s\n", ram_human, pool_human,
+	       bytecode_human, vfs_root_abs);
 	fflush(stdout);
 
-	for (i = 0; i < wasm_argc; i++) {
-		const char *path = wasm_argv[i];
-		pm_metal_runtime_handle_t h;
+	int rc;
 
-		if (pm_metal_runtime_load_file(path, &h) != 0) {
-			fprintf(stderr, "%s: load failed: %s\n", argv[0], path);
-			rc = 1;
-			continue;
-		}
-
-		char *mod_argv[1];
-		mod_argv[0] = (char *)basename_of(path);
-
-		int exit_code = pm_metal_runtime_run(h, 1, mod_argv);
-		printf("%s: exit=%d\n", path, exit_code);
-		fflush(stdout);
-		if (exit_code != 0) {
-			rc = 1;
-		}
-
-		pm_metal_runtime_unload(h);
+	if (console_mode) {
+		rc = pm_metal_app_run_console(argv[0], vfs_root_abs, wasm_argc, wasm_argv);
+	} else {
+		rc = pm_metal_app_run_scripted(argv[0], wasm_argc, wasm_argv);
 	}
 
-	pm_metal_runtime_shutdown();
 	free(wasm_argv);
-
 	return rc;
 }
