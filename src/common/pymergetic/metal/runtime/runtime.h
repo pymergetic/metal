@@ -70,6 +70,26 @@ int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv);
 int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, int envc, const char **envp,
 			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd);
 
+/* impl: common — src/common/pymergetic/metal/runtime/runtime.c
+ *
+ * hold()/release(): bump/drop a handle's busy refcount directly — the
+ * same refcount run_ex() itself bumps for the duration of one actual
+ * execution (see runtime.c's file header — unload() refuses while it's
+ * above zero). Exists for runtime/process.h's spawn(), which starts a
+ * process on its own worker thread and returns before that thread has
+ * necessarily run far enough to reach run_ex()'s own refcount++: without
+ * a synchronous hold() taken at spawn() time (released once that
+ * thread's run_ex() call returns), unload() could see a not-yet-
+ * scheduled process's handle as idle and race it out from under the
+ * thread about to use it. Ordinary callers of run()/run_ex() directly
+ * (e.g. thread_stress_test.c, which calls them synchronously on threads
+ * it manages itself) have no such gap and never need these. hold()
+ * returns 0/-1 (bad handle — same as any other call here); release() is
+ * a no-op on a bad handle (the caller already holds a valid reference by
+ * construction, but this stays defensive rather than assuming that). */
+int pm_metal_runtime_hold(pm_metal_runtime_handle_t h);
+void pm_metal_runtime_release(pm_metal_runtime_handle_t h);
+
 /* impl: common — src/common/pymergetic/metal/runtime/runtime.c */
 int pm_metal_runtime_unload(pm_metal_runtime_handle_t h);
 

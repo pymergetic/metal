@@ -9,6 +9,6 @@ int pm_metal_shell_cmd_pwd(pm_metal_shell_ctx_t *ctx, int argc, char **argv)
 {
 	(void)argc;
 	(void)argv;
-	pm_metal_util_log_write(ctx->sink->out, PM_METAL_LOG_INFO, "%s", ctx->cwd);
+	pm_metal_util_log_write_raw(ctx->sink->out, "%s", ctx->cwd);
 	return 0;
 }

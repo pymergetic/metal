@@ -1,10 +1,12 @@
 /*
  * App — see app.h. Ported straight from src/linux/main.c's own
  * run_console_mode()/shutdown_console_mode()/kernel_dispatch_thread()/
- * run_scripted_mode(), unchanged in behavior, just: raw pthread_create()/
- * pthread_join() -> port/worker.h, and the raw viewport_feed_fd close() ->
- * console.h's own pm_metal_console_stop_feed() — the two things that used
- * to make this impl: bind by necessity.
+ * run_scripted_mode(): raw pthread_create()/pthread_join() -> port/worker.h,
+ * and the raw viewport_feed_fd close() -> console.h's own
+ * pm_metal_console_stop_feed() — the two things that used to make this
+ * impl: bind by necessity. One behavior change since that port: Ctrl+C/
+ * SIGINT now runs the same full teardown as `quit`/EOF instead of the
+ * OS's own default "just die" action — see port/intr.h.
  */
 #include "pymergetic/metal/app/app.h"
 
@@ -13,6 +15,7 @@
 
 #include "pymergetic/metal/console/console.h"
 #include "pymergetic/metal/console/viewport.h"
+#include "pymergetic/metal/port/intr.h"
 #include "pymergetic/metal/port/worker.h"
 #include "pymergetic/metal/runtime/process.h"
 #include "pymergetic/metal/runtime/runtime.h"
@@ -208,9 +211,20 @@ int pm_metal_app_run_console(const char *argv0, const char *vfs_root_abs, int wa
 		return 1;
 	}
 
+	/* Installed right before the loop that polls it — see port/intr.h.
+	 * Ctrl+C/SIGINT must run the exact same teardown below as `quit`/
+	 * EOF, never the OS's own default "just die" action, which would
+	 * skip unload()ing every handle. */
+	pm_metal_port_intr_install();
+
 	for (;;) {
 		if (pm_metal_viewport_pump(PM_METAL_VIEWPORT_LOCAL) != 0) {
 			g_pm_metal_app_quit_requested = 1; /* real stdin EOF (piped input exhausted, or Ctrl-D) also means "stop" */
+			break;
+		}
+		if (pm_metal_port_intr_requested()) {
+			pm_metal_util_log_write(g_pm_metal_app_kernel_sink.out, PM_METAL_LOG_INFO,
+						 "interrupted — shutting down...");
 			break;
 		}
 		if (g_pm_metal_app_quit_requested) {

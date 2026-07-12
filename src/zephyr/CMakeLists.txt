@@ -76,6 +76,8 @@ target_sources(app PRIVATE
 	${PM_COMMON}/shell/commands/env.c
 	${PM_COMMON}/shell/commands/quit.c
 	${PM_COMMON}/shell/commands/exit.c
+	${PM_COMMON}/shell/commands/uname.c
+	${PM_COMMON}/shell/commands/sleep.c
 	${PM_SHARED}/util/size.c
 	${PM_SHARED}/util/arena.c
 	${PM_SHARED}/util/log.c
@@ -84,6 +86,8 @@ target_sources(app PRIVATE
 	pymergetic/metal/port/worker.c
 	pymergetic/metal/port/term.c
 	pymergetic/metal/port/dir.c
+	pymergetic/metal/port/intr.c
+	pymergetic/metal/port/sleep.c
 	pymergetic/metal/memory/ram.c
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c

@@ -61,6 +61,14 @@ static int pm_metal_process_worker(void *arg)
 						 (const char **)slot->envp, slot->stdin_fd, slot->stdout_fd,
 						 slot->stderr_fd);
 
+	/* Drops the hold spawn() took synchronously before this thread
+	 * even started — see spawn()'s own comment on why that hold
+	 * exists. run_ex() above has its own refcount bump/drop around the
+	 * actual execution; this is the outer one, covering the full
+	 * spawn()-to-here span regardless of how long this thread took to
+	 * get scheduled. */
+	pm_metal_runtime_release(slot->handle);
+
 	pm_metal_port_mutex_lock(&g_pm_metal_process_lock);
 	slot->exit_code = exit_code;
 	slot->finished = 1;
@@ -147,6 +155,21 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 		return -1;
 	}
 
+	/* Taken synchronously, before this function does anything else —
+	 * closes the exact race this file exists to avoid: without it,
+	 * unload() could see handle's refcount still at zero (run_ex()'s
+	 * own bump only happens once the worker thread below actually gets
+	 * scheduled, which is not guaranteed to be before this call
+	 * returns) and free the module out from under a process that has
+	 * been spawn()ed but not yet actually started running. Released in
+	 * pm_metal_process_worker() once run_ex() returns, or right here on
+	 * any failure path below that means no worker thread will ever run
+	 * to release it itself. See runtime.h's own doc comment on
+	 * hold()/release(). */
+	if (pm_metal_runtime_hold(handle) != 0) {
+		return -1; /* bad handle — runtime.c already logged */
+	}
+
 	pm_metal_port_mutex_lock(&g_pm_metal_process_lock);
 	pm_metal_process_reap_finished_locked();
 
@@ -161,6 +184,7 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 	}
 	if (slot_idx < 0) {
 		pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
+		pm_metal_runtime_release(handle);
 		fprintf(stderr, "pm_metal_process: process table full\n");
 		return -1;
 	}
@@ -179,6 +203,7 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 		free(slot->argv);
 		free(slot->envp);
 		pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
+		pm_metal_runtime_release(handle);
 		fprintf(stderr, "pm_metal_process: out of memory\n");
 		return -1;
 	}
@@ -212,6 +237,7 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 	if (pm_metal_port_worker_spawn(&slot->worker, pm_metal_process_worker, slot) != 0) {
 		pm_metal_process_free_owned(slot);
 		pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
+		pm_metal_runtime_release(handle);
 		fprintf(stderr, "pm_metal_process: failed to start worker thread\n");
 		return -1;
 	}

@@ -22,6 +22,8 @@
 #include "pymergetic/metal/shell/commands/pwd.h"
 #include "pymergetic/metal/shell/commands/quit.h"
 #include "pymergetic/metal/shell/commands/run.h"
+#include "pymergetic/metal/shell/commands/sleep.h"
+#include "pymergetic/metal/shell/commands/uname.h"
 #include "pymergetic/metal/shell/commands/unload.h"
 
 const pm_metal_shell_builtins_ops_t *pm_metal_shell_builtins_ops(void)
@@ -39,6 +41,8 @@ const pm_metal_shell_builtins_ops_t *pm_metal_shell_builtins_ops(void)
 		.pwd = pm_metal_shell_cmd_pwd,
 		.quit = pm_metal_shell_cmd_quit,
 		.run = pm_metal_shell_cmd_run,
+		.sleep = pm_metal_shell_cmd_sleep,
+		.uname = pm_metal_shell_cmd_uname,
 		.unload = pm_metal_shell_cmd_unload,
 	};
 
@@ -61,6 +65,8 @@ void pm_metal_shell_register_builtins(void)
 		{ "pwd", ops->pwd, "print the shell's working directory" },
 		{ "quit", ops->quit, "shut down the runtime" },
 		{ "run", ops->run, "run <id> [args...] -- run a loaded handle" },
+		{ "sleep", ops->sleep, "sleep <seconds> -- pause this console for a while" },
+		{ "uname", ops->uname, "print the runtime's target/machine" },
 		{ "unload", ops->unload, "unload <id> -- unload a handle" },
 	};
 	size_t i;

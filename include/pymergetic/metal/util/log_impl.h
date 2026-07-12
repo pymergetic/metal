@@ -50,4 +50,19 @@ void pm_metal_util_log_write(FILE *out, pm_metal_log_level_t level, const char *
 	fflush(out);
 }
 
+void pm_metal_util_log_write_raw(FILE *out, const char *fmt, ...)
+{
+	if (!out) {
+		return;
+	}
+
+	va_list ap;
+
+	va_start(ap, fmt);
+	vfprintf(out, fmt, ap);
+	va_end(ap);
+	fputc('\n', out);
+	fflush(out);
+}
+
 #endif /* PYMERGETIC_METAL_UTIL_LOG_IMPL_H_ */

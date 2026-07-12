@@ -161,6 +161,8 @@ packages/metal/
 │   │   ├── port/worker.h          # one background-thread primitive (impl in src/<plat>/)
 │   │   ├── port/term.h            # one "write to the real local terminal" primitive (impl in src/<plat>/)
 │   │   ├── port/dir.h             # one "list/check a real directory" primitive (impl in src/<plat>/)
+│   │   ├── port/intr.h            # one "operator asked us to stop" primitive (impl in src/<plat>/) — Ctrl+C/SIGINT
+│   │   ├── port/sleep.h           # one "block for at least N ms" primitive (impl in src/<plat>/)
 │   │   ├── memory/                # ops-struct contracts (impl in src/<plat>/)
 │   │   │   ├── memory.h           # convenience umbrella — re-exports the 4 below
 │   │   │   ├── ops.h              # shared struct layout + kind enum + resolve()
@@ -193,6 +195,8 @@ packages/metal/
 │   │   │       ├── pwd.{h,c}
 │   │   │       ├── quit.{h,c}
 │   │   │       ├── run.{h,c}
+│   │   │       ├── sleep.{h,c}    # chunked + polls port/intr.h — see docs/CONSOLE.md
+│   │   │       ├── uname.{h,c}
 │   │   │       └── unload.{h,c}
 │   │   ├── runtime/
 │   │   │   ├── runtime.h
@@ -201,7 +205,7 @@ packages/metal/
 │   │   │   └── process.c          # impl: common, built entirely on runtime.h's own public API
 │   │   └── app/                   # the two whole-process run modes, librarified out of src/linux/main.c
 │   │       ├── app.h              # run_scripted()/run_console() — see there for the exact split with main.c
-│   │       └── app.c              # impl: common (port/worker.h + console.h's stop_feed(), not raw pthread/fd)
+│   │       └── app.c              # impl: common (port/worker.h + console.h's stop_feed() + port/intr.h, not raw pthread/fd/signal)
 │   │
 │   ├── shared/pymergetic/metal/   # thin loaders only — real body in include/…_impl.h
 │   │   └── util/
@@ -269,6 +273,8 @@ packages/metal/
 | `port/worker` | `src/common/…/port/worker.h` | `src/<plat>/…/port/worker.c` — `bind`, one background-thread primitive per target |
 | `port/term` | `src/common/…/port/term.h` | `src/<plat>/…/port/term.c` — `bind`, one real-terminal-write primitive per target |
 | `port/dir` | `src/common/…/port/dir.h` | `src/<plat>/…/port/dir.c` — `bind`, one directory list/check primitive per target |
+| `port/intr` | `src/common/…/port/intr.h` | `src/<plat>/…/port/intr.c` — `bind`, one "operator asked us to stop" primitive per target (Ctrl+C/SIGINT on linux) |
+| `port/sleep` | `src/common/…/port/sleep.h` | `src/<plat>/…/port/sleep.c` — `bind`, one "block for at least N ms" primitive per target (`nanosleep()` on linux) |
 | `console/console` | `src/common/…/console/console.h` | `src/<plat>/…/console/console.c` — `bind`, sinks |
 | `console/viewport` | `src/common/…/console/viewport.h` | `src/common/…/console/viewport.c` (registration/focus/filter — `impl: common`) + `src/<plat>/…/console/viewport.c` (`pump()` — `bind`) |
 | `shell/shell` | `src/common/…/shell/shell.h` | `src/common/…/shell/shell.c` — `impl: common`, no per-target impl |
