@@ -51,11 +51,15 @@
  * WAMR-internal setup/teardown calls around it are serialized. A handle
  * mid-run() (refcount > 0) cannot be unload()ed — unload() fails with -1
  * rather than racing the module out from under a running instance; the
- * caller must retry. set_wasi_args() is included in the same serialized
- * section for a second, independent reason: it writes onto slot->module
- * itself (not a future instance), consumed by the very next
- * instantiate() call — those two must stay paired with no other run() on
- * the same handle sneaking its own set_wasi_args() in between.
+ * caller must retry. hold()/release() below let a caller bump/drop that
+ * same refcount directly, synchronously, without an actual run_ex() call
+ * of their own — see their own doc comment in runtime.h for why
+ * runtime/process.h's spawn() needs exactly that. set_wasi_args() is
+ * included in the same serialized section for a second, independent
+ * reason: it writes onto slot->module itself (not a future instance),
+ * consumed by the very next instantiate() call — those two must stay
+ * paired with no other run() on the same handle sneaking its own
+ * set_wasi_args() in between.
  */
 #include "pymergetic/metal/runtime/runtime.h"
 
@@ -452,6 +456,38 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 		wasm_runtime_destroy_thread_env();
 	}
 	return exit_code;
+}
+
+int pm_metal_runtime_hold(pm_metal_runtime_handle_t h)
+{
+	if (!g_pm_metal_runtime.initialized) {
+		return -1;
+	}
+
+	pm_metal_port_mutex_lock(&g_pm_metal_runtime_lock);
+	pm_metal_runtime_slot_t *slot = pm_metal_runtime_slot_for(h);
+	if (!slot) {
+		pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
+		fprintf(stderr, "pm_metal_runtime: bad handle\n");
+		return -1;
+	}
+	slot->refcount++;
+	pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
+	return 0;
+}
+
+void pm_metal_runtime_release(pm_metal_runtime_handle_t h)
+{
+	if (!g_pm_metal_runtime.initialized) {
+		return;
+	}
+
+	pm_metal_port_mutex_lock(&g_pm_metal_runtime_lock);
+	pm_metal_runtime_slot_t *slot = pm_metal_runtime_slot_for(h);
+	if (slot) {
+		slot->refcount--;
+	}
+	pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
 }
 
 int pm_metal_runtime_unload(pm_metal_runtime_handle_t h)

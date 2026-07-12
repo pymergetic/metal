@@ -41,6 +41,8 @@ typedef struct pm_metal_shell_builtins_ops {
 	pm_metal_shell_cmd_fn pwd;
 	pm_metal_shell_cmd_fn quit;
 	pm_metal_shell_cmd_fn run;
+	pm_metal_shell_cmd_fn sleep;
+	pm_metal_shell_cmd_fn uname;
 	pm_metal_shell_cmd_fn unload;
 } pm_metal_shell_builtins_ops_t;
 
@@ -67,9 +69,9 @@ void pm_metal_shell_handles_init(pm_metal_console_sink_t *kernel_sink, void (*qu
 /* impl: common — src/common/pymergetic/metal/shell/commands.c
  *
  * Registers every builtin (cd/env/exit/export/focus/help/load/ls/ps/
- * pwd/quit/run/unload) with the shell registry (see shell.h), sourcing
- * each one straight from pm_metal_shell_builtins_ops() — call once,
- * after pm_metal_shell_handles_init(). */
+ * pwd/quit/run/sleep/uname/unload) with the shell registry (see
+ * shell.h), sourcing each one straight from pm_metal_shell_builtins_ops()
+ * — call once, after pm_metal_shell_handles_init(). */
 void pm_metal_shell_register_builtins(void);
 
 /* impl: common — src/common/pymergetic/metal/shell/handles.c

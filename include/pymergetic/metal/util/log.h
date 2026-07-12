@@ -64,4 +64,25 @@ void pm_metal_util_log_write(FILE *out, pm_metal_log_level_t level, const char *
  * already-captured lines for per-pane filtering. */
 const char *pm_metal_util_log_level_name(pm_metal_log_level_t level);
 
+/* impl: shared — include/pymergetic/metal/util/log_impl.h
+ *
+ * vsnprintf(fmt, ...) + "\n" onto `out`, fflush()'d — same framing as
+ * pm_metal_util_log_write() minus the "[LEVEL] " prefix and the global
+ * floor check (this always writes, iff `out` is non-NULL). For a
+ * command's own *data* — the literal answer to what was typed (e.g.
+ * `pwd`'s path, `ls`'s listing, `env`'s vars, `uname`'s one line) —
+ * which a real shell never annotates with a log severity, as opposed to
+ * a genuine diagnostic/event message (a confirmation, an error), which
+ * should keep going through pm_metal_util_log_write() so it stays
+ * leveled and filterable. This is not a loophole around the global
+ * floor for diagnostics — callers that need that stay on
+ * pm_metal_util_log_write(); this is only for lines that were never a
+ * "log message" in the first place. A useful side effect: a line
+ * written this way has no "[LEVEL] " prefix for viewport.c's per-pane
+ * filter to recognize, so it always passes through unfiltered (see
+ * that filter's own "no bracket -> passes through unfiltered" rule) —
+ * exactly right for output the operator explicitly asked for, which a
+ * pane's display filter threshold should never be able to hide. */
+void pm_metal_util_log_write_raw(FILE *out, const char *fmt, ...);
+
 #endif /* PYMERGETIC_METAL_UTIL_LOG_H_ */

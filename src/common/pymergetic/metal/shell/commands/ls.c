@@ -12,14 +12,14 @@ static void pm_metal_shell_cmd_ls_visit_entry(const char *name, int is_dir, void
 {
 	pm_metal_shell_ctx_t *ctx = raw;
 
-	pm_metal_util_log_write(ctx->sink->out, PM_METAL_LOG_INFO, "%s%s", name, is_dir ? "/" : "");
+	pm_metal_util_log_write_raw(ctx->sink->out, "%s%s", name, is_dir ? "/" : "");
 }
 
 static void pm_metal_shell_cmd_ls_visit_command(const pm_metal_shell_command_t *cmd, void *raw)
 {
 	pm_metal_shell_ctx_t *ctx = raw;
 
-	pm_metal_util_log_write(ctx->sink->out, PM_METAL_LOG_INFO, "%s", cmd->name);
+	pm_metal_util_log_write_raw(ctx->sink->out, "%s", cmd->name);
 }
 
 int pm_metal_shell_cmd_ls(pm_metal_shell_ctx_t *ctx, int argc, char **argv)

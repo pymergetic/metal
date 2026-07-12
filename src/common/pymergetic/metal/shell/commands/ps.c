@@ -12,11 +12,11 @@ static void pm_metal_shell_cmd_ps_visit_process(const pm_metal_process_info_t *i
 	pm_metal_shell_ctx_t *ctx = raw;
 
 	if (info->running) {
-		pm_metal_util_log_write(ctx->sink->out, PM_METAL_LOG_INFO, "  pid=%u handle=%u cmd=%s (running)",
-					 info->pid.pid, info->handle.id, info->cmd);
+		pm_metal_util_log_write_raw(ctx->sink->out, "  pid=%u handle=%u cmd=%s (running)", info->pid.pid,
+					     info->handle.id, info->cmd);
 	} else {
-		pm_metal_util_log_write(ctx->sink->out, PM_METAL_LOG_INFO, "  pid=%u handle=%u cmd=%s exit=%d",
-					 info->pid.pid, info->handle.id, info->cmd, info->exit_code);
+		pm_metal_util_log_write_raw(ctx->sink->out, "  pid=%u handle=%u cmd=%s exit=%d", info->pid.pid,
+					     info->handle.id, info->cmd, info->exit_code);
 	}
 }
 
@@ -31,7 +31,7 @@ int pm_metal_shell_cmd_ps(pm_metal_shell_ctx_t *ctx, int argc, char **argv)
 	(void)argc;
 	(void)argv;
 
-	pm_metal_util_log_write(ctx->sink->out, PM_METAL_LOG_INFO, "kernel (sink 0)");
+	pm_metal_util_log_write_raw(ctx->sink->out, "kernel (sink 0)");
 
 	int i;
 
@@ -39,11 +39,11 @@ int pm_metal_shell_cmd_ps(pm_metal_shell_ctx_t *ctx, int argc, char **argv)
 		if (!g_pm_metal_shell_handles[i].active) {
 			continue;
 		}
-		pm_metal_util_log_write(ctx->sink->out, PM_METAL_LOG_INFO, "handle=%d label=%s", i + 1,
-					 g_pm_metal_shell_handles[i].sink.label);
+		pm_metal_util_log_write_raw(ctx->sink->out, "handle=%d label=%s", i + 1,
+					     g_pm_metal_shell_handles[i].sink.label);
 	}
 
-	pm_metal_util_log_write(ctx->sink->out, PM_METAL_LOG_INFO, "processes:");
+	pm_metal_util_log_write_raw(ctx->sink->out, "processes:");
 	pm_metal_process_list(pm_metal_shell_cmd_ps_visit_process, ctx);
 	return 0;
 }

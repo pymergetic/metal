@@ -40,8 +40,10 @@ int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv
  * every builtin (see shell/commands.h), pre-load()s wasm_argv[0..wasm_argc)
  * same as typing `load <path>` for each, then starts the kernel dispatcher
  * (its own worker thread, see port/worker.h) and pumps
- * PM_METAL_VIEWPORT_LOCAL on the calling thread until either real stdin
- * hits EOF or the `quit`/`exit` builtin fires — at which point it stops
+ * PM_METAL_VIEWPORT_LOCAL on the calling thread until real stdin hits EOF,
+ * the `quit`/`exit` builtin fires, or the operator hits Ctrl+C (see
+ * port/intr.h — treated identically to the other two, never the OS's own
+ * default "just die" action) — at which point it stops
  * feeding the dispatcher (pm_metal_console_stop_feed()), joins it, drains
  * whatever pump() output was still in flight, and tears everything down in
  * order (pm_metal_process_shutdown(), shell/commands.h's

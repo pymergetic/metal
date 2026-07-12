@@ -46,6 +46,21 @@ two:
 Everything else in this document builds on top of this — `log.h` itself
 never becomes aware of any of it.
 
+`log.h` also exports `pm_metal_util_log_write_raw()` — same framing minus
+the `"[LEVEL] "` prefix and the floor check, always writes. Not a second
+logging facility: it exists for a command's own *data* output, the literal
+answer to what was typed (`pwd`'s path, `ls`'s listing, `env`'s vars,
+`uname`'s one line, `help`'s/`ps`'s whole report) — a real shell never
+annotates that with a log severity, and it should never be a candidate for
+a per-pane filter to hide (see "Log level: global floor vs per-pane filter"
+below — an unbracketed line always passes a `LOCAL` pane's filter
+unconditionally, which is exactly what data the operator explicitly asked
+for should do). Genuine diagnostics/events on the same commands — `load`'s
+confirmation, `cd`'s/`focus`'s errors, `quit`'s shutdown notice — stay on
+`pm_metal_util_log_write()`, leveled and filterable as before. See
+`shell/commands/pwd.c` (raw) vs. `shell/commands/cd.c` (leveled, errors
+only) for the two ends of this split side by side.
+
 ### `console/console.h` — sinks
 
 A **sink** is one full-duplex byte-pipe pair between a producer and a
@@ -217,7 +232,7 @@ target's own console entry point, not just linux's.
 A **native command** is a C function registered once via
 `pm_metal_shell_register()` — `name`, `pm_metal_shell_cmd_fn`, `help` text.
 Every builtin (`cd`, `env`, `exit`, `export`, `focus`, `help`, `load`, `ls`,
-`ps`, `pwd`, `quit`, `run`, `unload`) is just an entry in this registry;
+`ps`, `pwd`, `quit`, `run`, `sleep`, `uname`, `unload`) is just an entry in this registry;
 there is nothing structurally different about a "builtin" versus a
 command some other module registers later. Each builtin's own
 implementation lives in its own `shell/commands/<name>.{h,c}` pair — a
@@ -330,24 +345,26 @@ process the same way (see [RUNTIME.md](RUNTIME.md) "Processes").
 
 | Piece | File |
 |-------|------|
-| formatter + global floor | `include/pymergetic/metal/util/log.h` (+ `log_impl.h`, loaded by `src/shared/.../util/log.c`) |
+| formatter + global floor (+ unleveled `_write_raw()` for commands' own data output) | `include/pymergetic/metal/util/log.h` (+ `log_impl.h`, loaded by `src/shared/.../util/log.c`) |
 | sinks | `src/common/.../console/console.h`, `src/linux/.../console/console.c` |
 | viewport (registration/focus/filter — impl: common) | `src/common/.../console/{viewport.h,viewport.c,viewport_local.h}` |
 | viewport (`pump()` — impl: bind) | `src/linux/.../console/viewport.c` |
 | terminal-write primitive | `src/common/.../port/term.h`, `src/linux/.../port/term.c` |
 | worker-thread primitive | `src/common/.../port/worker.h`, `src/linux/.../port/worker.c` |
 | directory-listing primitive | `src/common/.../port/dir.h`, `src/linux/.../port/dir.c` |
+| sleep primitive (chunked + interrupt-polled by the `sleep` builtin) | `src/common/.../port/sleep.h`, `src/linux/.../port/sleep.c` |
 | processes (decoupled from handles, env) | `src/common/.../runtime/process.h`, `process.c` — see [RUNTIME.md](RUNTIME.md) "Processes" |
 | shell registry/resolver/dispatch/cwd/env | `src/common/.../shell/shell.h`, `shell.c` |
 | shell builtins ops struct | `src/common/.../shell/commands.h`, `commands.c` |
 | shell builtins (one pair/command) + handle table | `src/common/.../shell/commands/*.{h,c}` |
 | console-mode run loop (kernel sink, pump/dispatch-thread handshake — impl: common) | `src/common/.../app/app.h`, `app.c` |
+| Ctrl+C/SIGINT — same teardown as `quit`/EOF | `src/common/.../port/intr.h` (`bind`) |
 | console-mode CLI (argv parsing only) | `src/linux/main.c` (`--console`) |
 | proof | `scripts/verify-linux-console.sh` |
 
 Console mode commands (`help` at the prompt): `load <path>`, `run <id>
 [args...]`, `unload <id>`, `focus <id|kernel>`, `ps`, `cd [path]`, `pwd`,
-`ls [path]`, `export KEY=VALUE`, `env`, `quit`/`exit` — plus any `.wasm`
+`ls [path]`, `export KEY=VALUE`, `env`, `uname`, `sleep <seconds>`, `quit`/`exit` — plus any `.wasm`
 override dropped into `vfs_root/bin/` (see "Shell" above), and every
 builtin's explicit `/bin/pm/<name>` escape-hatch form. `run` spawns one
 process per call (`runtime/process.h` — so the kernel prompt stays
@@ -359,3 +376,29 @@ anything themselves — the runtime's own busy-refcount guard (see
 process is still in flight against that handle, and `quit`'s teardown path
 (`pm_metal_process_shutdown()`, see `commands.h`) joins everything globally,
 by pid, before any handle's `unload()` runs.
+
+Three equivalent ways to stop a console-mode session, all running the exact
+same teardown in `app.c`'s `pm_metal_app_run_console()`: typing `quit`/`exit`
+at the prompt, real stdin hitting EOF (Ctrl-D on a real terminal, or piped
+input running out), and the operator hitting Ctrl+C. The last one needs a
+dedicated port primitive (`port/intr.h`) precisely because it *isn't*
+ordinary input the pump loop would otherwise see — SIGINT bypasses the read
+loop entirely, so without a handler installed the OS's own default action
+(kill immediately, no unload, no "shutdown complete") would run instead.
+`intr.c`'s handler does the one thing a signal handler is allowed to do
+safely (flip a `sig_atomic_t`); the pump loop polls it every iteration, same
+as it already polls the `quit`/`exit` builtin's own flag.
+
+The `sleep` builtin (`shell/commands/sleep.c`) is the one command that
+deliberately blocks its own console's dispatcher thread for a while, so it
+has to cooperate with Ctrl+C explicitly rather than riding along for free:
+`port/intr.h`'s flag is set process-wide, from whichever thread the OS
+actually delivers `SIGINT` to (not guaranteed to be the dispatcher thread
+blocked inside `sleep`, and in practice usually isn't — it typically lands on
+`app.c`'s own pump-loop thread instead), so `sleep` sleeps in small chunks
+(`port/sleep.h`) and polls `pm_metal_port_intr_requested()` between them
+rather than making one long blocking call — otherwise Ctrl+C would still
+*eventually* shut things down, but only after the full requested duration
+had run its course on that thread, which `pm_metal_app_run_console()`'s own
+shutdown path joins on. Proven in `scripts/verify-linux-console.sh` (a
+`sleep 30` aborted by `SIGINT` in ~1s, not ~30).
