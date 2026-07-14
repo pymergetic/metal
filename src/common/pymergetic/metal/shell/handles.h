@@ -7,8 +7,7 @@
  * own split parts" pattern as console/viewport_local.h). One directory up
  * from shell/commands/ on purpose: this is shared infrastructure, not a
  * command itself, so it does not get a commands/<name>.{h,c} pair of its
- * own. Nothing outside shell/commands.c and shell/commands/ should
- * include this.
+ * own. Nothing outside those should include this.
  */
 #ifndef PYMERGETIC_METAL_SHELL_HANDLES_H_
 #define PYMERGETIC_METAL_SHELL_HANDLES_H_

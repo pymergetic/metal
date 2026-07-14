@@ -57,7 +57,7 @@ int pm_metal_shell_cmd_run(pm_metal_shell_ctx_t *ctx, int argc, char **argv)
 	int envc = pm_metal_shell_env_snapshot(ctx, envp);
 	pm_metal_process_id_t pid;
 	int rc = pm_metal_process_spawn(mh->handle, argn + 1, run_argv, envc, envp, mh->sink.consumer_in_fd,
-					 mh->sink.producer_out_fd, mh->sink.producer_out_fd,
+					 mh->sink.producer_out_fd, mh->sink.producer_out_fd, mh->sink.out,
 					 pm_metal_shell_run_on_exit, mh, &pid);
 
 	free(run_argv);

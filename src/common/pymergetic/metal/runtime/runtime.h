@@ -65,10 +65,26 @@ int pm_metal_runtime_resolve_path(const char *guest_path, char *out, size_t out_
  * support both hang off, so run() can stay a thin wrapper. `envp` is not
  * retained past this call — copy it yourself first if it needs to
  * outlive a background caller (see runtime/process.h, the one caller
- * that actually needs to). */
+ * that actually needs to).
+ *
+ * `custom_tag`: every instance run_ex() successfully instantiates gets
+ * tagged with this value via wasm_runtime_set_custom_data() before
+ * execute_main() runs — generic per-instance metadata, opaque to
+ * runtime.c itself, whose only meaning is whatever the caller decides.
+ * run() always passes 0. The one real consumer today is
+ * runtime/process.h's spawn(), which passes its own pid (see there) —
+ * that is what lets shell/guest_exec.c's native-import bridge map "a
+ * guest is calling me right now" back to the exact process (not just
+ * handle — the same handle may have several processes in flight at
+ * once, see process.h) that's currently executing, and from there to
+ * wherever *that* process's own output should go (see
+ * pm_metal_process_guest_out()). A direct caller with no process.h pid
+ * of its own (e.g. thread_stress_test.c) passes 0, same as run() —
+ * nothing currently reads custom_data outside of a process.h-spawned
+ * execution, so 0 there is simply unused, not a special case to handle. */
 int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv);
 int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, int envc, const char **envp,
-			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd);
+			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, uint32_t custom_tag);
 
 /* impl: common — src/common/pymergetic/metal/runtime/runtime.c
  *

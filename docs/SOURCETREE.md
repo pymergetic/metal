@@ -131,6 +131,7 @@ pymergetic/metal/<module>/…/<stem>.h  →  pm_metal_<module>_…_<stem>_
 | `shell/shell.h` | `pm_metal_shell_` | `pm_metal_shell_dispatch_line()` |
 | `shell/commands.h` | `pm_metal_shell_` | `pm_metal_shell_builtins_ops()` |
 | `shell/commands/<name>.h` | `pm_metal_shell_` | `pm_metal_shell_cmd_load()` |
+| `shell/guest_exec.h` | `pm_metal_shell_` | `pm_metal_shell_guest_exec_register()` |
 | `runtime/process.h` | `pm_metal_process_` | `pm_metal_process_spawn()` |
 | `app/app.h` | `pm_metal_app_` | `pm_metal_app_run_console()` |
 | `util/log.h` | `pm_metal_util_log_` | `pm_metal_util_log_write()` |
@@ -182,6 +183,8 @@ packages/metal/
 │   │   │   ├── commands.c         # assembles the ops struct from commands/*.h, drives register_builtins()
 │   │   │   ├── handles.h          # private — the handle table + kernel_sink/quit_cb, shared by commands + commands/*
 │   │   │   ├── handles.c          # storage + handles_init()/handles_shutdown() (declared in commands.h)
+│   │   │   ├── guest_exec.h       # WAMR native import: a guest calls a subset of the registry directly
+│   │   │   ├── guest_exec.c       # the only shell/ file that #includes wasm_export.h — see docs/CONSOLE.md
 │   │   │   └── commands/          # one .h/.c pair per builtin — each fn is plain, callable outside dispatch too
 │   │   │       ├── cd.{h,c}
 │   │   │       ├── env.{h,c}
@@ -241,7 +244,9 @@ packages/metal/
 │
 ├── mods/
 │   ├── t0_hello/main.c
-│   └── t1_read/main.c
+│   ├── t1_read/main.c
+│   ├── t2_env/main.c
+│   └── t3_shell_exec/main.c       # exercises shell/guest_exec.h's native import — see docs/CONSOLE.md
 │
 ├── build/                         # gitignored
 │   ├── linux/runtime/
@@ -281,6 +286,7 @@ packages/metal/
 | `shell/commands` | `src/common/…/shell/commands.h` | `src/common/…/shell/commands.c` — `impl: common`, assembles the ops struct from `shell/commands/*.h`, no per-target impl |
 | `shell/commands/<name>` | `src/common/…/shell/commands/<name>.h` | `src/common/…/shell/commands/<name>.c` — `impl: common`, one pair per builtin only (see `shell/handles.{h,c}` below for the shared, non-command state they all draw on) |
 | `shell/handles` | `src/common/…/shell/handles.h` | `src/common/…/shell/handles.c` — `impl: common`; private, not a command — the handle table + init/shutdown shared by `commands.c` and every `commands/*.c` |
+| `shell/guest_exec` | `src/common/…/shell/guest_exec.h` | `src/common/…/shell/guest_exec.c` — `impl: common`; the one shell/ file that touches WAMR directly (`wasm_export.h`) — bridges a guest's native-import call to `shell.c`'s own registry, see docs/CONSOLE.md "Guest-callable commands" |
 | `runtime/process` | `src/common/…/runtime/process.h` | `src/common/…/runtime/process.c` — `impl: common`, no per-target impl; built on `runtime.h`'s own public API, no new runtime-internal locking |
 | `app/app` | `src/common/…/app/app.h` | `src/common/…/app/app.c` — `impl: common`, no per-target impl; the console-mode dispatcher thread goes through `port/worker.h`, not raw `pthread`/`k_thread` |
 | `util/size` | `include/…/size.h` (+ body in `size_impl.h`) | `src/shared/…/size.c` (loader) — all `impl: shared` |

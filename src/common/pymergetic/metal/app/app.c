@@ -6,7 +6,9 @@
  * pm_metal_console_stop_feed() — the two things that used to make this
  * impl: bind by necessity. One behavior change since that port: Ctrl+C/
  * SIGINT now runs the same full teardown as `quit`/EOF instead of the
- * OS's own default "just die" action — see port/intr.h.
+ * OS's own default "just die" action — see port/intr.h. Both entry
+ * points also register shell/guest_exec.h's native import before their
+ * first load_file() — see there.
  */
 #include "pymergetic/metal/app/app.h"
 
@@ -20,6 +22,7 @@
 #include "pymergetic/metal/runtime/process.h"
 #include "pymergetic/metal/runtime/runtime.h"
 #include "pymergetic/metal/shell/commands.h"
+#include "pymergetic/metal/shell/guest_exec.h"
 #include "pymergetic/metal/shell/shell.h"
 #include "pymergetic/metal/util/log.h"
 
@@ -34,6 +37,22 @@ static const char *pm_metal_app_basename_of(const char *path)
 
 int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv)
 {
+	/* register_builtins(): populates shell.c's native registry (pure
+	 * static-table bookkeeping — no dependency on shell/handles.c's
+	 * console-mode-only table) — needed here too, not just console
+	 * mode's own call further below, so that a guest calling
+	 * shell/guest_exec.h's native import from a scripted-mode module
+	 * (see mods/t3_shell_exec/main.c, scripts/verify-linux.sh) finds
+	 * anything registered to resolve "pwd" et al. against; harmless
+	 * to call from both run modes since a process only ever runs one
+	 * of them. guest_exec_register(): must precede every load_file()
+	 * below — natives have to be registered before a module importing
+	 * them is instantiated (see guest_exec.h). pm_metal_runtime_init()
+	 * (called by main.c before this) has already brought WAMR itself
+	 * up, so both are safe here. */
+	pm_metal_shell_register_builtins();
+	pm_metal_shell_guest_exec_register();
+
 	int rc = 0;
 	int i;
 
@@ -56,11 +75,17 @@ int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv
 		 * as sequential/blocking as a direct run() itself was, just
 		 * now also visible to anything else that might list the
 		 * process table while it's in flight (nothing does, today —
-		 * scripted mode has no console/shell). */
+		 * scripted mode has no console/shell). guest_out=stdout: no
+		 * console sink exists here (see above), but a guest calling
+		 * shell/guest_exec.c's bridge should still land somewhere
+		 * visible rather than nowhere — real stdout, interleaved
+		 * with this same module's own prints just above/below,
+		 * mirrors -1's own "inherit real stdio" meaning for
+		 * stdin_fd/stdout_fd/stderr_fd right next to it. */
 		pm_metal_process_id_t pid;
 		int exit_code;
 
-		if (pm_metal_process_spawn(h, 1, mod_argv, 0, NULL, -1, -1, -1, NULL, NULL, &pid) != 0
+		if (pm_metal_process_spawn(h, 1, mod_argv, 0, NULL, -1, -1, -1, stdout, NULL, NULL, &pid) != 0
 		    || pm_metal_process_wait(pid, &exit_code) != 0) {
 			fprintf(stderr, "%s: run failed: %s\n", argv0, path);
 			exit_code = -1;
@@ -184,6 +209,11 @@ int pm_metal_app_run_console(const char *argv0, const char *vfs_root_abs, int wa
 	snprintf(g_pm_metal_app_kernel_shell_ctx.cwd, sizeof(g_pm_metal_app_kernel_shell_ctx.cwd), "/");
 	pm_metal_shell_handles_init(&g_pm_metal_app_kernel_sink, pm_metal_app_request_quit);
 	pm_metal_shell_register_builtins();
+	/* Must precede every load_file() below (the preload loop right
+	 * after this, and every `load` typed at the prompt later) — see
+	 * guest_exec.h on why natives have to be registered before any
+	 * module importing them is instantiated. */
+	pm_metal_shell_guest_exec_register();
 
 	pm_metal_util_log_write(g_pm_metal_app_kernel_sink.out, PM_METAL_LOG_INFO,
 				 "%s console — type 'help'. vfs_root=%s", pm_metal_app_basename_of(argv0),

@@ -291,3 +291,40 @@ echo "${SLEEP_INTR_OUT}" | grep -q "shutdown complete" \
 	|| { echo "FAIL: SIGINT during 'sleep 30' took ${SLEEP_ELAPSED_MS}ms — sleep builtin is not actually interruptible" >&2; exit 1; }
 
 echo "verify-linux-console-sleep: OK"
+
+# ---- guest-exec: a running .wasm guest calling back into the native
+# shell registry directly (shell/guest_exec.h's pm_metal_shell_exec()
+# native import) — not through any file I/O, WASI has no "exec" concept.
+# t3_shell_exec.wasm calls it three ways and prints all three results on
+# one line; see mods/t3_shell_exec/main.c for exactly which. Scope: this
+# only resolves a console sink for a handle tracked in shell/handles.c's
+# table (see guest_exec.h's own "Scope" paragraph) — i.e. exactly the
+# `load` then `run` sequence below, not scripted mode.
+
+EXEC_VFS_ROOT="$(mktemp -d)"
+trap 'rm -rf "${VFS_ROOT}" "${SHELL_VFS_ROOT}" "${ENV_VFS_ROOT}" "${RACE_VFS_ROOT}" "${INTR_VFS_ROOT}" "${SLEEP_VFS_ROOT}" "${EXEC_VFS_ROOT}"' EXIT
+
+mkdir -p "${EXEC_VFS_ROOT}/mods"
+cp "${ROOT}/build/mods/t3_shell_exec.wasm" "${EXEC_VFS_ROOT}/mods/"
+
+EXEC_OUT="$( { \
+	printf 'load /mods/t3_shell_exec.wasm\n'; sleep 0.1; \
+	printf 'run 1\n'; sleep 0.3; \
+	printf 'focus 1\n'; sleep 0.2; \
+	printf '\x01'; sleep 0.1; \
+	printf 'unload 1\nquit\n'; sleep 0.2; \
+} | timeout 10 "${RUNTIME}" --memory=16777216 --bytecode-memory=1048576 \
+	--vfs-root="${EXEC_VFS_ROOT}" --console )"
+
+echo "${EXEC_OUT}"
+
+echo "${EXEC_OUT}" | grep -q "t3_shell_exec: allowed=0 denied=-1001 not_found=-1000" \
+	|| { echo "FAIL: guest-exec did not produce the expected allowed/denied/not_found outcomes" >&2; exit 1; }
+# `quit` being DENIED (not run) is only worth anything if the runtime
+# actually kept going afterward — proven by the deliberate `unload 1`
+# right after in the same script succeeding, rather than the process
+# having already shut itself down from inside the guest's own call.
+echo "${EXEC_OUT}" | grep -q "unloaded handle=1" \
+	|| { echo "FAIL: runtime did not survive the guest's DENIED 'quit' call (unload never ran)" >&2; exit 1; }
+
+echo "verify-linux-console-guest-exec: OK"

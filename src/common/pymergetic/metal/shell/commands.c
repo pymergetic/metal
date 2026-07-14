@@ -52,22 +52,28 @@ const pm_metal_shell_builtins_ops_t *pm_metal_shell_builtins_ops(void)
 void pm_metal_shell_register_builtins(void)
 {
 	const pm_metal_shell_builtins_ops_t *ops = pm_metal_shell_builtins_ops();
+	/* Trailing 1/0 is guest_callable (see shell.h's own doc comment on
+	 * that field, and shell/guest_exec.c) — only commands with no
+	 * shared/global side effect (nothing here touches another
+	 * handle/process, the runtime's own lifecycle, or another
+	 * console's state) opt in; everything else stays 0 (denied, but
+	 * still listed — see ls.c/help.c, unaffected by this flag). */
 	const pm_metal_shell_command_t builtins[] = {
-		{ "cd", ops->cd, "cd [path] -- change the shell's working directory" },
-		{ "env", ops->env, "print this console's exported env vars" },
-		{ "exit", ops->exit, "alias for quit" },
-		{ "export", ops->export, "export KEY=VALUE -- set an env var for future run/wasm guests" },
-		{ "focus", ops->focus, "focus <id|kernel> -- switch the live pane" },
-		{ "help", ops->help, "list commands" },
-		{ "load", ops->load, "load <path> -- load a .wasm module" },
-		{ "ls", ops->ls, "ls [path] -- list a vfs_root directory" },
-		{ "ps", ops->ps, "list loaded handles and their processes" },
-		{ "pwd", ops->pwd, "print the shell's working directory" },
-		{ "quit", ops->quit, "shut down the runtime" },
-		{ "run", ops->run, "run <id> [args...] -- run a loaded handle" },
-		{ "sleep", ops->sleep, "sleep <seconds> -- pause this console for a while" },
-		{ "uname", ops->uname, "print the runtime's target/machine" },
-		{ "unload", ops->unload, "unload <id> -- unload a handle" },
+		{ "cd", ops->cd, "cd [path] -- change the shell's working directory", 0 },
+		{ "env", ops->env, "print this console's exported env vars", 1 },
+		{ "exit", ops->exit, "alias for quit", 0 },
+		{ "export", ops->export, "export KEY=VALUE -- set an env var for future run/wasm guests", 0 },
+		{ "focus", ops->focus, "focus <id|kernel> -- switch the live pane", 0 },
+		{ "help", ops->help, "list commands", 1 },
+		{ "load", ops->load, "load <path> -- load a .wasm module", 0 },
+		{ "ls", ops->ls, "ls [path] -- list a vfs_root directory", 1 },
+		{ "ps", ops->ps, "list loaded handles and their processes", 1 },
+		{ "pwd", ops->pwd, "print the shell's working directory", 1 },
+		{ "quit", ops->quit, "shut down the runtime", 0 },
+		{ "run", ops->run, "run <id> [args...] -- run a loaded handle", 0 },
+		{ "sleep", ops->sleep, "sleep <seconds> -- pause this console for a while", 1 },
+		{ "uname", ops->uname, "print the runtime's target/machine", 1 },
+		{ "unload", ops->unload, "unload <id> -- unload a handle", 0 },
 	};
 	size_t i;
 

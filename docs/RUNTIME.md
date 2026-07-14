@@ -69,7 +69,7 @@ int pm_metal_runtime_load_bytes(const uint8_t *wasm, uint32_t len,
 				pm_metal_runtime_handle_t *out);
 int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv);
 int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, int envc, const char **envp,
-			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd);
+			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, uint32_t custom_tag);
 int pm_metal_runtime_unload(pm_metal_runtime_handle_t h);
 ```
 
@@ -156,10 +156,10 @@ version, from `runtime.c`'s side only:
 
 ```c
 int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, int envc, const char **envp,
-			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd);
+			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, uint32_t custom_tag);
 ```
 
-`run()` is `run_ex()` with `-1,-1,-1` for the fds — WAMR's own sentinel for "inherit the host process's real fd 0/1/2". `run_ex()` forwards whatever it's given straight to `wasm_runtime_set_wasi_args_ex()`; `runtime.c` does not know or care whether those fds are real terminal fds or one end of a per-handle console pipe. `src/linux/main.c`'s `--console` mode is the reference caller (per-handle sinks + a switchable-focus viewport onto a real terminal) — see [CONSOLE.md](CONSOLE.md) for the full sink/viewport/log-level design and `scripts/verify-linux-console.sh` for the proof. The console-mode run loop itself (kernel sink, `PM_METAL_VIEWPORT_LOCAL` pump loop, dispatcher thread) is `impl: common`, in `pymergetic/metal/app/app.h`'s `pm_metal_app_run_console()` — `src/linux/main.c` only does argv parsing and one call into it, so any future target's own `main.c` reaches the same console mode without reimplementing it (see docs/SOURCETREE.md's `app/` entry). Command *dispatch* itself (turning a typed line into a `load`/`run`/`unload`/... call, or a `.wasm` override's own execution) lives one layer further down, in `pymergetic/metal/shell/` (`impl: common`, see [CONSOLE.md](CONSOLE.md) "Shell") — `app.c` only owns the kernel sink and the pump/dispatch-thread handshake, not the command set.
+`run()` is `run_ex()` with `-1,-1,-1` for the fds and `0` for `custom_tag` — WAMR's own sentinel for "inherit the host process's real fd 0/1/2". `run_ex()` forwards whatever it's given straight to `wasm_runtime_set_wasi_args_ex()`; `runtime.c` does not know or care whether those fds are real terminal fds or one end of a per-handle console pipe. `src/linux/main.c`'s `--console` mode is the reference caller (per-handle sinks + a switchable-focus viewport onto a real terminal) — see [CONSOLE.md](CONSOLE.md) for the full sink/viewport/log-level design and `scripts/verify-linux-console.sh` for the proof. The console-mode run loop itself (kernel sink, `PM_METAL_VIEWPORT_LOCAL` pump loop, dispatcher thread) is `impl: common`, in `pymergetic/metal/app/app.h`'s `pm_metal_app_run_console()` — `src/linux/main.c` only does argv parsing and one call into it, so any future target's own `main.c` reaches the same console mode without reimplementing it (see docs/SOURCETREE.md's `app/` entry). Command *dispatch* itself (turning a typed line into a `load`/`run`/`unload`/... call, or a `.wasm` override's own execution) lives one layer further down, in `pymergetic/metal/shell/` (`impl: common`, see [CONSOLE.md](CONSOLE.md) "Shell") — `app.c` only owns the kernel sink and the pump/dispatch-thread handshake, not the command set.
 
 ---
 
@@ -174,8 +174,9 @@ int pm_metal_process_init(void);
 void pm_metal_process_shutdown(void);
 
 int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **argv, int envc, const char **envp,
-			    int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd,
+			    int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, FILE *guest_out,
 			    pm_metal_process_exit_cb on_exit, void *on_exit_ctx, pm_metal_process_id_t *out_pid);
+FILE *pm_metal_process_guest_out(pm_metal_process_id_t pid);
 int pm_metal_process_try_wait(pm_metal_process_id_t pid, int *out_exit_code);
 int pm_metal_process_wait(pm_metal_process_id_t pid, int *out_exit_code);
 void pm_metal_process_list(void (*visit)(const pm_metal_process_info_t *info, void *ctx), void *ctx);
@@ -186,6 +187,8 @@ A **handle** (`runtime.h`, `1..PM_METAL_RUNTIME_MAX_HANDLES`) is one loaded modu
 Env vars are real WASI env (`run_ex()`'s `envc`/`envp`, forwarded to `wasm_runtime_set_wasi_args_ex()`) — nothing to do with the host's own `environ`. The shell keeps one small `export`ed set per console (`pm_metal_shell_ctx_t.env`, see [CONSOLE.md](CONSOLE.md) "Shell"), snapshotted into `spawn()`'s `envp` on every `run`/wasm-override dispatch; a bare `run 3` with nothing exported passes `envc=0, envp=NULL`, identical to calling `run()` directly.
 
 `pm_metal_process_shutdown()` must run **before** any handle-table teardown (`shell/commands.c`'s `handles_shutdown()`, then `pm_metal_runtime_shutdown()`) — it blocks until every in-flight process has actually finished, so no handle's `refcount` is still held above zero when `unload()`/`runtime_shutdown()`'s own unload loop runs. Both of `app/app.c`'s run modes (console mode and scripted mode) call it in that order — see [CONSOLE.md](CONSOLE.md) "Shell" and `commands.h`'s own doc comment.
+
+`run_ex()` also tags every instance it successfully instantiates with a caller-supplied `custom_tag`, via `wasm_runtime_set_custom_data()`, before `execute_main()` runs — generic per-instance metadata `runtime.c` sets unconditionally (opaque to `runtime.c` itself; `run()` always passes `0`), not a shell-specific concept, but the one thing that lets a native function a guest calls *from inside* `execute_main()` (`wasm_runtime_get_custom_data()` on its own `wasm_runtime_get_module_inst()`) find its way back to whatever the caller cares about. `spawn()` above is the one real user: it passes its own `pid` as `custom_tag`, deliberately pid- rather than handle-grained, since the same handle can have several processes in flight at once and it's specifically *this* execution's own state that matters. The one consumer today is [CONSOLE.md](CONSOLE.md)'s "Guest-callable commands" (`shell/guest_exec.c`), which resolves that pid via `pm_metal_process_guest_out()` to the `FILE*` this process's own output should land on (a console sink's `->out` for console `run`/wasm-override dispatch, plain host `stdout` for scripted mode — see each of `spawn()`'s three call sites) — nothing in `runtime.c` or `process.c` itself depends on shell/console at all; `guest_out` is just an opaque `FILE*` to both.
 
 ---
 

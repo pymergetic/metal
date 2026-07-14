@@ -67,7 +67,27 @@ typedef struct pm_metal_shell_command {
 	const char *name;
 	pm_metal_shell_cmd_fn fn;
 	const char *help;
+
+	/* Whether shell/guest_exec.c's native-import bridge (a running WASM
+	 * guest calling pm_metal_shell_guest_exec() below directly, not a
+	 * human at a console) is allowed to invoke this one. Irrelevant to
+	 * every other caller here — dispatch_line() (a human, or a .wasm
+	 * command's own foreground exec) never consults this field, and
+	 * ls/help's registry listing still shows every command regardless
+	 * (see pm_metal_shell_list_commands()) — a denied command stays
+	 * *visible*, only guest *invocation* of it is refused. Defaults to
+	 * 0 (denied) for anything that doesn't explicitly opt in — see
+	 * shell/commands.c's registration table for which ones do and why. */
+	int guest_callable;
 } pm_metal_shell_command_t;
+
+/* pm_metal_shell_guest_exec()'s two failure returns — chosen well outside
+ * the range any real command's own pm_metal_shell_cmd_fn return value
+ * could plausibly land in (today: 0 on success, small negative like -1
+ * on a handled error) so a guest can tell "the command itself failed"
+ * apart from "that wasn't even attempted". */
+#define PM_METAL_SHELL_EXEC_NOT_FOUND (-1000) /* no such registered native command */
+#define PM_METAL_SHELL_EXEC_DENIED    (-1001) /* registered, but guest_callable == 0 */
 
 typedef enum pm_metal_shell_entry_kind {
 	PM_METAL_SHELL_ENTRY_NATIVE = 0,
@@ -142,6 +162,26 @@ void pm_metal_shell_list_commands(void (*visit)(const pm_metal_shell_command_t *
  * ctx->sink and returns -1. Otherwise returns the command's own exit
  * code/return value. */
 int pm_metal_shell_dispatch_line(pm_metal_shell_ctx_t *ctx, char *line);
+
+/* impl: common — src/common/pymergetic/metal/shell/shell.c
+ *
+ * The guest-invocation counterpart to dispatch_line() above — called
+ * from shell/guest_exec.c's native-import bridge, never from a human
+ * console. Looks `name` up in the *native registry only* (no
+ * PM_METAL_SHELL_BIN_DIR wasm-override check — a guest invoking another
+ * guest's .wasm override is out of scope for this call) and:
+ *   - PM_METAL_SHELL_EXEC_NOT_FOUND if no such command is registered;
+ *   - PM_METAL_SHELL_EXEC_DENIED if it is, but guest_callable == 0;
+ *   - otherwise calls it — cmd->fn(ctx, argc, argv) with argv = {name}
+ *     (argc 1) or {name, arg} (argc 2, iff arg[0] != '\0') — and
+ *     returns its own exit code.
+ * `arg` must be non-NULL (pass "" for "no argument", never NULL) — see
+ * shell/guest_exec.c, the one caller, on why the wasm-side signature
+ * makes that guarantee rather than this function defending against
+ * NULL itself. `ctx` is the caller's own throwaway context (see
+ * guest_exec.c on why it's not the same persistent per-console
+ * cwd/env this function's dispatch_line() sibling gets). */
+int pm_metal_shell_guest_exec(pm_metal_shell_ctx_t *ctx, const char *name, const char *arg);
 
 /* impl: common — src/common/pymergetic/metal/shell/shell.c
  *
