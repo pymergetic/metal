@@ -25,6 +25,7 @@
 #define PYMERGETIC_METAL_RUNTIME_PROCESS_H_
 
 #include <stdint.h>
+#include <stdio.h>
 
 #include "pymergetic/metal/runtime/runtime.h"
 
@@ -79,19 +80,35 @@ void pm_metal_process_shutdown(void);
 /* impl: common — src/common/pymergetic/metal/runtime/process.c
  *
  * spawn(): starts run_ex(handle, argc, argv, envc, envp, stdin_fd,
- * stdout_fd, stderr_fd) on a new worker thread and hands back its pid in
- * *out_pid. argv/envp are copied internally before this returns — the
- * caller's own arrays (e.g. a tokenized command line living on some
- * other thread's stack) need not outlive this call, unlike run_ex()
- * itself. Opportunistically reaps any already-finished, not-yet-waited
- * process first (bounded, best-effort zero-effort hygiene — see
- * process.c — so a caller that never calls try_wait()/wait()/ps still
- * cannot leak the table indefinitely as long as spawn() keeps getting
- * called). Returns 0/-1 (bad args, or the table is still genuinely full
- * even after that sweep). */
+ * stdout_fd, stderr_fd, <this process's own pid>) on a new worker thread
+ * and hands back that pid in *out_pid. argv/envp are copied internally
+ * before this returns — the caller's own arrays (e.g. a tokenized
+ * command line living on some other thread's stack) need not outlive
+ * this call, unlike run_ex() itself. Opportunistically reaps any
+ * already-finished, not-yet-waited process first (bounded, best-effort
+ * zero-effort hygiene — see process.c — so a caller that never calls
+ * try_wait()/wait()/ps still cannot leak the table indefinitely as long
+ * as spawn() keeps getting called). Returns 0/-1 (bad args, or the table
+ * is still genuinely full even after that sweep).
+ *
+ * `guest_out`: the FILE* shell/guest_exec.c's native-import bridge
+ * should write a guest-triggered command's output onto, for *this*
+ * process specifically (see pm_metal_process_guest_out() below) — not
+ * involved in the guest's own WASI stdio at all (that's `stdout_fd`
+ * above); this is purely for output guest_exec.c's bridge produces on
+ * this process's behalf. Pass whatever FILE* this process's own stdout
+ * already effectively goes to: an open console sink's `->out` for a
+ * caller with one (shell/commands/run.c's `run`, shell.c's wasm-override
+ * dispatch), or plain `stdout` for one that doesn't (scripted mode, see
+ * app/app.c) — same "real stdio" fallback run_ex()'s own `-1` sentinel
+ * already uses for stdout_fd, just as an already-open FILE* instead of a
+ * raw fd, so a caller with a real sink is never juggling two competing
+ * FILE*s over the one pipe fd. NULL is safe (guest_exec.c's bridge then
+ * returns NOT_FOUND for this process, exactly as if the name didn't
+ * exist — never a crash) but should not be needed by any real caller. */
 int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **argv, int envc, const char **envp,
-			    int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, pm_metal_process_exit_cb on_exit,
-			    void *on_exit_ctx, pm_metal_process_id_t *out_pid);
+			    int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, FILE *guest_out,
+			    pm_metal_process_exit_cb on_exit, void *on_exit_ctx, pm_metal_process_id_t *out_pid);
 
 /* impl: common — src/common/pymergetic/metal/runtime/process.c
  *
@@ -116,5 +133,21 @@ int pm_metal_process_wait(pm_metal_process_id_t pid, int *out_exit_code);
  * reaps anything itself (see spawn()'s own opportunistic sweep for that)
  * so calling this (e.g. shell/commands/ps.c's `ps`) has no side effects. */
 void pm_metal_process_list(void (*visit)(const pm_metal_process_info_t *info, void *ctx), void *ctx);
+
+/* impl: common — src/common/pymergetic/metal/runtime/process.c
+ *
+ * Returns the `guest_out` FILE* spawn() was given for `pid` (see above),
+ * or NULL if `pid` names no currently-tracked process. The one caller is
+ * shell/guest_exec.c's native-import bridge, resolving the pid it was
+ * tagged with (runtime.h's run_ex() `custom_tag`, set by this file's own
+ * spawn() right before starting the worker below) back to somewhere to
+ * write that guest's requested command's output. Safe to call from
+ * inside that exact process's own execution (i.e. from the worker thread
+ * this pid's own run_ex() call is running on, synchronously, from a
+ * native import the guest itself just called) without racing this pid
+ * ever being reaped: reaping only ever happens after the worker function
+ * this pid belongs to has returned, which cannot happen while that same
+ * function is still on the stack waiting for this exact call to return. */
+FILE *pm_metal_process_guest_out(pm_metal_process_id_t pid);
 
 #endif /* PYMERGETIC_METAL_RUNTIME_PROCESS_H_ */

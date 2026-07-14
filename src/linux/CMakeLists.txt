@@ -75,6 +75,7 @@ add_executable(pm-linux-runtime
 	${PM_COMMON}/app/app.c
 	${PM_COMMON}/shell/shell.c
 	${PM_COMMON}/shell/handles.c
+	${PM_COMMON}/shell/guest_exec.c
 	${PM_COMMON}/shell/commands.c
 	${PM_COMMON}/shell/commands/help.c
 	${PM_COMMON}/shell/commands/load.c

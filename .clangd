@@ -14,6 +14,46 @@ CompileFlags:
     - -Isrc/common
 
 ---
+# mods/*/main.c — wasm32-wasip1 target + the repo's own wasi-sysroot (see
+# scripts/build-mod.sh, the actual build command this mirrors). Needed for
+# clangd to recognize wasm-only attributes like import_module/import_name at
+# all — the top block's host gcc target above has no concept of them, hence
+# "Unknown attribute 'import_module' ignored" without this override.
+#
+# No compile_commands.json entry exists for mods/ itself (only src/,
+# built by CMake), but once ANY compile_commands.json exists anywhere in
+# the tree (see scripts/setup-ide.sh) clangd stops using the "no CDB at
+# all" fallback for *every* file, mods/*.c included — instead it
+# "infers" a compile command by borrowing the nearest unrelated file's
+# own entry (e.g. src/linux/main.c's), *working directory and all*
+# (typically some build/.../ subdir). A relative --sysroot here then
+# resolves against *that* borrowed directory, not the project root —
+# the empty compile_flags.txt at the project root (still there for
+# genuinely CDB-less trees, e.g. before the first setup-ide.sh run) does
+# not help once inference is in play, since inference wins over the
+# plain fallback whenever any compile_commands.json is loaded at all.
+# See https://github.com/clangd/clangd/issues/1038 and
+# https://github.com/clangd/clangd/issues/2459 for the underlying
+# "relative paths in .clangd resolve against the compile command's own
+# working directory, whatever clangd decided that was" behavior — an
+# absolute path below is the only resolution that cannot be pulled out
+# from under this rule by which directory inference happens to borrow.
+If:
+  PathMatch: mods/.*\.c
+CompileFlags:
+  # Absolute or PATH-searchable only — unlike the Add path below, a
+  # repo-relative Compiler: path here silently fails to resolve and was
+  # cascading into "stdio.h not found" for every #include. System clang,
+  # not scripts/build-mod.sh's own .tools/wasi-sdk one: verified identical
+  # --target=wasm32-wasip1 behavior, and it is already guaranteed findable
+  # rather than depending on scripts/setup-tools.sh having run.
+  Compiler: /usr/bin/clang
+  Add:
+    - --target=wasm32-wasip1
+    - --sysroot
+    - /home/ladmin/Devel/os-sdk/packages/metal/.tools/wasi-sdk/share/wasi-sysroot
+
+---
 # src/ tree — fallback when compile_commands.json is missing.
 If:
   PathMatch: src/linux/.*\.c

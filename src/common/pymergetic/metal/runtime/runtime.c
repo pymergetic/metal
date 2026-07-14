@@ -360,11 +360,11 @@ int pm_metal_runtime_resolve_path(const char *guest_path, char *out, size_t out_
 
 int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv)
 {
-	return pm_metal_runtime_run_ex(h, argc, argv, 0, NULL, -1, -1, -1);
+	return pm_metal_runtime_run_ex(h, argc, argv, 0, NULL, -1, -1, -1, 0);
 }
 
 int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, int envc, const char **envp,
-			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd)
+			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, uint32_t custom_tag)
 {
 	if (!g_pm_metal_runtime.initialized) {
 		return -1;
@@ -436,13 +436,24 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 		fprintf(stderr, "pm_metal_runtime: instantiate failed: %s\n",
 			error_buf);
 		exit_code = -1;
-	} else if (wasm_application_execute_main(inst, argc, argv)) {
-		exit_code = (int)wasm_runtime_get_wasi_exit_code(inst);
 	} else {
-		const char *exception = wasm_runtime_get_exception(inst);
-		fprintf(stderr, "pm_metal_runtime: %s\n",
-			exception ? exception : "run failed");
-		exit_code = -1;
+		/* Tags the instance with the caller-supplied `custom_tag` —
+		 * see run_ex()'s own doc comment in runtime.h. Generic
+		 * per-instance metadata, not a shell-specific concept — set
+		 * unconditionally, whether or not anything ever reads it on
+		 * this target. Must happen before execute_main() below,
+		 * since that's the only place a guest could call in (see
+		 * shell/guest_exec.c). */
+		wasm_runtime_set_custom_data(inst, (void *)(uintptr_t)custom_tag);
+
+		if (wasm_application_execute_main(inst, argc, argv)) {
+			exit_code = (int)wasm_runtime_get_wasi_exit_code(inst);
+		} else {
+			const char *exception = wasm_runtime_get_exception(inst);
+			fprintf(stderr, "pm_metal_runtime: %s\n",
+				exception ? exception : "run failed");
+			exit_code = -1;
+		}
 	}
 
 	pm_metal_port_mutex_lock(&g_pm_metal_runtime_lock);

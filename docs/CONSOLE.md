@@ -306,6 +306,121 @@ process the same way (see [RUNTIME.md](RUNTIME.md) "Processes").
 
 ---
 
+## Guest-callable commands
+
+A WASM guest can call back into a subset of the native command registry
+directly — not through the VFS, which has no "exec another program"
+concept (`fd_read()` only ever returns bytes from a real file; a native
+command is a host C function `(ctx, argc, argv) -> int`, not a byte
+stream). This is a genuine new capability, wired as a WAMR
+native-import function a guest calls like a syscall:
+
+```c
+extern int pm_metal_shell_exec(const char *name, const char *arg)
+	__attribute__((import_module("env"), import_name("pm_metal_shell_exec")));
+```
+
+`arg` is always a valid string on the wasm side — `""` means "no
+argument", never a null pointer — using WAMR's `"($$)i"` auto-validated
+string-parameter signature (`wasm_runtime_register_natives()`, see
+`external/wamr/core/iwasm/include/wasm_export.h`), so the native side
+never has to hand-marshal a guest pointer.
+
+### Access model: visible vs. callable
+
+Every registered command stays *visible* regardless (`ls /bin/pm`/`help`
+list everything unchanged) — a new `guest_callable` flag on each command
+(`shell/shell.h`'s `pm_metal_shell_command_t`) separately controls
+whether *this* invocation path will actually run it:
+
+| | Commands | Why |
+|---|---|---|
+| **Guest-callable** | `pwd`, `ls`, `env`, `uname`, `ps`, `help`, `sleep` | read-only or self-contained — `sleep` blocks only the calling guest's own process worker thread (`runtime/process.h`), never the kernel or another handle. |
+| **Denied** | `cd`, `load`, `run`, `unload`, `focus`, `export`, `quit`, `exit` | mutate shared/global state (another handle, the runtime's own lifecycle, another console's cwd/env). |
+
+A denied command returns a distinct sentinel from an unknown one — a
+guest can tell "that command doesn't exist" apart from "that command
+exists, but you're not allowed to call it":
+
+| Return | Meaning |
+|---|---|
+| the command's own exit code | ran normally |
+| `PM_METAL_SHELL_EXEC_DENIED` (`-1001`) | registered, but `guest_callable == 0` |
+| `PM_METAL_SHELL_EXEC_NOT_FOUND` (`-1000`) | no such registered command — also returned if this exact process was never given anywhere to write to (see "Scope" below, effectively never happens for anything started through `app.c`); a guest cannot tell those two apart |
+
+### Scope
+
+- **Output, not return value** — a guest-triggered command's textual
+  output lands wherever *this specific process's* own stdout already
+  goes: a real console pane's `sink->out` for a handle running under
+  console `run` or a `.wasm` `PATH` override, or plain host stdout for
+  scripted mode — exactly like any other output that destination
+  already shows (live/backlogged for a pane, interleaved with the
+  guest's own prints for scripted mode). The guest itself only gets the
+  integer exit code back, not the text — reading output back
+  programmatically is future work.
+- **No persistent per-guest shell state** — each call gets a throwaway
+  `cwd="/"`, empty env, not the calling console's own tracked
+  `cwd`/`export`ed vars. Harmless for the allowed set above (none of
+  them depend on `cwd` besides `ls`, which already defaults to `/`
+  with no argument).
+- **Works from any execution `runtime/process.h`'s `spawn()` started**
+  — console `run`, a `.wasm` `PATH` override's foreground dispatch, and
+  scripted mode alike, not just a module `load`ed then `run` from the
+  interactive console. Resolution is per-*process* (pid), not
+  per-handle — see "Implementation" below for why that distinction
+  matters once the same handle has several processes running at once.
+
+### Implementation
+
+```mermaid
+sequenceDiagram
+    participant Guest as WASM guest (its own process worker thread)
+    participant Native as guest_exec.c
+    participant Proc as process.c
+    participant Shell as shell.c (registry)
+    participant Cmd as shell/commands/*.c
+    Guest->>Native: pm_metal_shell_exec("pwd", "")
+    Native->>Native: wasm_runtime_get_custom_data(inst) -> pid
+    Native->>Proc: pm_metal_process_guest_out(pid)
+    Proc-->>Native: FILE* (a sink's ->out, or real stdout)
+    Native->>Shell: pm_metal_shell_guest_exec(ctx, "pwd", "")
+    Shell->>Shell: find_native("pwd") + guest_callable check
+    Shell->>Cmd: pm_metal_shell_cmd_pwd(ctx, 1, argv)
+    Cmd-->>Native: exit code
+    Native-->>Guest: i32 return value
+```
+
+`shell/guest_exec.c` is the one file under `shell/` that includes
+`wasm_export.h` — kept isolated there on purpose so `shell.c`,
+`commands.c`, and every file under `shell/commands/` stay entirely
+WAMR-free, same "impl: common, zero OS dependency" promise as the rest
+of the shell. Its native function resolves
+`wasm_runtime_get_module_inst()` → `wasm_runtime_get_custom_data()` (a
+**pid**, not a handle id — deliberately, since the same handle can have
+several processes running at once and it's specifically *this*
+execution's own output that matters, not "some process or other
+against this handle"; tagged onto the instance by `runtime.c`'s
+`run_ex()` right after `wasm_runtime_instantiate()`, before
+`execute_main()` runs, via its `custom_tag` param — see
+[RUNTIME.md](RUNTIME.md) "Processes") → `pm_metal_process_guest_out()`
+(`runtime/process.c`) → a throwaway `pm_metal_shell_ctx_t` wrapping that
+`FILE*` in a throwaway `pm_metal_console_sink_t` → `pm_metal_shell_guest_exec()`
+(`shell.c` — pure logic, no WAMR, independently callable/testable). The
+`custom_tag`/`guest_out` a pid resolves to both come from the same
+place: `runtime/process.h`'s `spawn()`, whose three call sites
+(`shell/commands/run.c`, `shell.c`'s wasm-override dispatch, `app.c`'s
+scripted mode) each pass whatever `FILE*` that process's own stdout
+already effectively uses. Registration
+(`pm_metal_shell_guest_exec_register()`) runs once, from both of
+`app.c`'s entry points, right after `pm_metal_shell_register_builtins()`/
+before either's first `load_file()` — natives must be registered before
+a module importing them is instantiated. Proven end-to-end by
+`mods/t3_shell_exec/main.c` (calls all three outcomes) in
+`scripts/verify-linux-console.sh`.
+
+---
+
 ## Not yet
 
 - **`PM_METAL_VIEWPORT_NETWORK`** — the interface exists (`init`/`pump`
@@ -357,10 +472,11 @@ process the same way (see [RUNTIME.md](RUNTIME.md) "Processes").
 | shell registry/resolver/dispatch/cwd/env | `src/common/.../shell/shell.h`, `shell.c` |
 | shell builtins ops struct | `src/common/.../shell/commands.h`, `commands.c` |
 | shell builtins (one pair/command) + handle table | `src/common/.../shell/commands/*.{h,c}` |
+| guest-exec bridge (native import + registration) | `src/common/.../shell/guest_exec.h`, `guest_exec.c` |
 | console-mode run loop (kernel sink, pump/dispatch-thread handshake — impl: common) | `src/common/.../app/app.h`, `app.c` |
 | Ctrl+C/SIGINT — same teardown as `quit`/EOF | `src/common/.../port/intr.h` (`bind`) |
 | console-mode CLI (argv parsing only) | `src/linux/main.c` (`--console`) |
-| proof | `scripts/verify-linux-console.sh` |
+| proof | `scripts/verify-linux-console.sh` (+ `mods/t3_shell_exec/main.c` for guest-exec) |
 
 Console mode commands (`help` at the prompt): `load <path>`, `run <id>
 [args...]`, `unload <id>`, `focus <id|kernel>`, `ps`, `cd [path]`, `pwd`,

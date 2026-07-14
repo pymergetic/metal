@@ -19,6 +19,7 @@ typedef struct pm_metal_process_slot {
 	int envc;
 	char **envp; /* owned, strdup'd copies; NULL if envc == 0 */
 	int64_t stdin_fd, stdout_fd, stderr_fd;
+	FILE *guest_out; /* see process.h's own doc comment on spawn()'s guest_out param */
 	pm_metal_process_exit_cb on_exit;
 	void *on_exit_ctx;
 	pm_metal_port_worker_t worker;
@@ -59,7 +60,7 @@ static int pm_metal_process_worker(void *arg)
 	pm_metal_process_slot_t *slot = arg;
 	int exit_code = pm_metal_runtime_run_ex(slot->handle, slot->argc, slot->argv, slot->envc,
 						 (const char **)slot->envp, slot->stdin_fd, slot->stdout_fd,
-						 slot->stderr_fd);
+						 slot->stderr_fd, slot->pid.pid);
 
 	/* Drops the hold spawn() took synchronously before this thread
 	 * even started — see spawn()'s own comment on why that hold
@@ -148,8 +149,8 @@ void pm_metal_process_shutdown(void)
 }
 
 int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **argv, int envc, const char **envp,
-			    int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, pm_metal_process_exit_cb on_exit,
-			    void *on_exit_ctx, pm_metal_process_id_t *out_pid)
+			    int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, FILE *guest_out,
+			    pm_metal_process_exit_cb on_exit, void *on_exit_ctx, pm_metal_process_id_t *out_pid)
 {
 	if (!g_pm_metal_process.initialized || !out_pid || argc <= 0 || !argv || envc < 0) {
 		return -1;
@@ -230,6 +231,7 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 	slot->stdin_fd = stdin_fd;
 	slot->stdout_fd = stdout_fd;
 	slot->stderr_fd = stderr_fd;
+	slot->guest_out = guest_out;
 	slot->on_exit = on_exit;
 	slot->on_exit_ctx = on_exit_ctx;
 	slot->pid.pid = (uint32_t)(slot_idx + 1);
@@ -339,4 +341,19 @@ void pm_metal_process_list(void (*visit)(const pm_metal_process_info_t *info, vo
 	}
 
 	pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
+}
+
+FILE *pm_metal_process_guest_out(pm_metal_process_id_t pid)
+{
+	if (!g_pm_metal_process.initialized || pid.pid == 0 || pid.pid > PM_METAL_PROCESS_MAX) {
+		return NULL;
+	}
+
+	pm_metal_port_mutex_lock(&g_pm_metal_process_lock);
+
+	pm_metal_process_slot_t *slot = &g_pm_metal_process.slots[pid.pid - 1];
+	FILE *out = (slot->used && slot->pid.pid == pid.pid) ? slot->guest_out : NULL;
+
+	pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
+	return out;
 }

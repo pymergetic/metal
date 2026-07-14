@@ -187,8 +187,8 @@ int pm_metal_shell_dispatch_line(pm_metal_shell_ctx_t *ctx, char *line)
 	int exit_code = -1;
 
 	if (pm_metal_process_spawn(entry.wasm_handle, ntok, tokens, envc, envp, ctx->sink->consumer_in_fd,
-				    ctx->sink->producer_out_fd, ctx->sink->producer_out_fd, NULL, NULL,
-				    &pid) != 0
+				    ctx->sink->producer_out_fd, ctx->sink->producer_out_fd, ctx->sink->out, NULL,
+				    NULL, &pid) != 0
 	    || pm_metal_process_wait(pid, &exit_code) != 0) {
 		exit_code = -1;
 	}
@@ -196,6 +196,32 @@ int pm_metal_shell_dispatch_line(pm_metal_shell_ctx_t *ctx, char *line)
 	pm_metal_util_log_write(ctx->sink->out, PM_METAL_LOG_INFO, "%s: exit=%d", tokens[0], exit_code);
 	pm_metal_runtime_unload(entry.wasm_handle);
 	return exit_code;
+}
+
+int pm_metal_shell_guest_exec(pm_metal_shell_ctx_t *ctx, const char *name, const char *arg)
+{
+	const pm_metal_shell_command_t *cmd = pm_metal_shell_find_native(name);
+
+	if (!cmd) {
+		return PM_METAL_SHELL_EXEC_NOT_FOUND;
+	}
+	if (!cmd->guest_callable) {
+		return PM_METAL_SHELL_EXEC_DENIED;
+	}
+
+	char name_buf[PM_METAL_SHELL_PATH_MAX];
+	char arg_buf[PM_METAL_SHELL_PATH_MAX];
+	char *argv[2];
+	int argc = 1;
+
+	snprintf(name_buf, sizeof(name_buf), "%s", name);
+	argv[0] = name_buf;
+	if (arg[0] != '\0') {
+		snprintf(arg_buf, sizeof(arg_buf), "%s", arg);
+		argv[1] = arg_buf;
+		argc = 2;
+	}
+	return cmd->fn(ctx, argc, argv);
 }
 
 void pm_metal_shell_resolve_path(const char *cwd, const char *arg, char *out, size_t out_sz)
