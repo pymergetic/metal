@@ -17,9 +17,8 @@ int pm_metal_port_read_file(const char *host_path, uint8_t **out_buf, uint32_t *
 }
 
 /* stub — fs_stat() backend pending, see docs/RUNTIME.md §5. Returning 0
- * (never "exists") is the safe default: shell/shell.c's wasm-override
- * probe treats that as "no override, fall back to the native command" —
- * exactly right while zephyr's shell/filesystem support stays deferred. */
+ * (never "exists") is the safe default while zephyr's filesystem
+ * support stays deferred. */
 int pm_metal_port_file_exists(const char *host_path)
 {
 	(void)host_path;

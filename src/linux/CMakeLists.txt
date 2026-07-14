@@ -12,7 +12,6 @@ get_filename_component(PM_METAL_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 
 set(PM_COMMON "${PM_METAL_ROOT}/src/common/pymergetic/metal")
 set(PM_COMMON_INC "${PM_METAL_ROOT}/src/common")
-set(PM_SHARED "${PM_METAL_ROOT}/src/shared/pymergetic/metal")
 set(PM_INCLUDE_INC "${PM_METAL_ROOT}/include")
 
 # ---- WAMR (vendored, vanilla — see docs/SOURCETREE.md) ----
@@ -58,43 +57,17 @@ add_executable(pm-linux-runtime
 	pymergetic/metal/port/platform.c
 	pymergetic/metal/port/lock.c
 	pymergetic/metal/port/worker.c
-	pymergetic/metal/port/term.c
-	pymergetic/metal/port/dir.c
-	pymergetic/metal/port/intr.c
-	pymergetic/metal/port/sleep.c
 	pymergetic/metal/memory/ram.c
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c
-	pymergetic/metal/console/console.c
-	pymergetic/metal/console/viewport.c
 	${PM_COMMON}/port/platform.c
 	${PM_COMMON}/memory/ops.c
-	${PM_COMMON}/console/viewport.c
 	${PM_COMMON}/runtime/runtime.c
 	${PM_COMMON}/runtime/process.c
 	${PM_COMMON}/app/app.c
-	${PM_COMMON}/shell/shell.c
-	${PM_COMMON}/shell/handles.c
-	${PM_COMMON}/shell/guest_exec.c
-	${PM_COMMON}/shell/commands.c
-	${PM_COMMON}/shell/commands/help.c
-	${PM_COMMON}/shell/commands/load.c
-	${PM_COMMON}/shell/commands/run.c
-	${PM_COMMON}/shell/commands/unload.c
-	${PM_COMMON}/shell/commands/focus.c
-	${PM_COMMON}/shell/commands/ps.c
-	${PM_COMMON}/shell/commands/cd.c
-	${PM_COMMON}/shell/commands/pwd.c
-	${PM_COMMON}/shell/commands/ls.c
-	${PM_COMMON}/shell/commands/export.c
-	${PM_COMMON}/shell/commands/env.c
-	${PM_COMMON}/shell/commands/quit.c
-	${PM_COMMON}/shell/commands/exit.c
-	${PM_COMMON}/shell/commands/uname.c
-	${PM_COMMON}/shell/commands/sleep.c
-	${PM_SHARED}/util/size.c
-	${PM_SHARED}/util/arena.c
-	${PM_SHARED}/util/log.c
+	${PM_COMMON}/util/size.c
+	${PM_COMMON}/util/arena.c
+	${PM_COMMON}/util/log.c
 )
 
 target_include_directories(pm-linux-runtime PRIVATE
@@ -127,8 +100,9 @@ add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
 	${PM_COMMON}/port/platform.c
 	${PM_COMMON}/memory/ops.c
 	${PM_COMMON}/runtime/runtime.c
-	${PM_SHARED}/util/size.c
-	${PM_SHARED}/util/arena.c
+	${PM_COMMON}/util/size.c
+	${PM_COMMON}/util/arena.c
+	${PM_COMMON}/util/log.c
 )
 
 target_include_directories(pm-linux-thread-stress PRIVATE

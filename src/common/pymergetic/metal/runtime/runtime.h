@@ -22,9 +22,9 @@ typedef struct pm_metal_runtime_handle {
  * ids are "1..PM_METAL_RUNTIME_MAX_HANDLES", 0 meaning "no handle". Public
  * (not just an internal runtime.c detail) specifically so every caller that
  * needs its own per-handle bookkeeping array sized to match (e.g.
- * shell/handles.c's handle table, src/linux/thread_stress_test.c's worker
- * count) can size against *this* one definition instead of hardcoding — and
- * silently drifting from — their own copy of the same number. */
+ * src/linux/thread_stress_test.c's worker count) can size against *this*
+ * one definition instead of hardcoding — and silently drifting from —
+ * their own copy of the same number. */
 #define PM_METAL_RUNTIME_MAX_HANDLES 8
 
 /* impl: common — src/common/pymergetic/metal/runtime/runtime.c — lifecycle */
@@ -46,45 +46,27 @@ int pm_metal_runtime_load_bytes(const uint8_t *wasm, uint32_t len,
  * path) to the real host path backing it — the exact string concat
  * load_file() already does internally before handing the result to
  * pm_metal_port_read_file(), exposed here for callers that need to hand
- * a host path to some *other* port primitive themselves (see
- * shell/commands/cd.c, ls.c, which validate/list a guest directory via
- * port/dir.h this way — this call does no I/O itself, so it works
- * whether or not `guest_path` actually exists). Returns 0/-1
- * (uninitialized, or out_len too small for the resolved path). */
+ * a host path to some *other* port primitive themselves — this call
+ * does no I/O itself, so it works whether or not `guest_path` actually
+ * exists. Returns 0/-1 (uninitialized, or out_len too small for the
+ * resolved path). */
 int pm_metal_runtime_resolve_path(const char *guest_path, char *out, size_t out_len);
 
 /* impl: common — src/common/pymergetic/metal/runtime/runtime.c
  *
  * run(): guest stdio inherits the host's own fd 0/1/2, no WASI env vars —
- * one shared console for every handle (see docs/RUNTIME.md "Console
- * model"). run_ex(): same, but the caller supplies real fds for the
- * guest's fd 0/1/2 instead (-1 in any slot still means "inherit the
- * host's", per-slot) and its own "KEY=VALUE" WASI env list (envc==0/
- * envp==NULL means none, same as run()) — the seam a future per-process
- * console (its own pipe/log fd per handle) and runtime/process.h's env
- * support both hang off, so run() can stay a thin wrapper. `envp` is not
- * retained past this call — copy it yourself first if it needs to
- * outlive a background caller (see runtime/process.h, the one caller
- * that actually needs to).
- *
- * `custom_tag`: every instance run_ex() successfully instantiates gets
- * tagged with this value via wasm_runtime_set_custom_data() before
- * execute_main() runs — generic per-instance metadata, opaque to
- * runtime.c itself, whose only meaning is whatever the caller decides.
- * run() always passes 0. The one real consumer today is
- * runtime/process.h's spawn(), which passes its own pid (see there) —
- * that is what lets shell/guest_exec.c's native-import bridge map "a
- * guest is calling me right now" back to the exact process (not just
- * handle — the same handle may have several processes in flight at
- * once, see process.h) that's currently executing, and from there to
- * wherever *that* process's own output should go (see
- * pm_metal_process_guest_out()). A direct caller with no process.h pid
- * of its own (e.g. thread_stress_test.c) passes 0, same as run() —
- * nothing currently reads custom_data outside of a process.h-spawned
- * execution, so 0 there is simply unused, not a special case to handle. */
+ * one shared console for every handle. run_ex(): same, but the caller
+ * supplies real fds for the guest's fd 0/1/2 instead (-1 in any slot
+ * still means "inherit the host's", per-slot) and its own "KEY=VALUE"
+ * WASI env list (envc==0/envp==NULL means none, same as run()) — the
+ * seam a future per-process console (its own pipe/log fd per handle)
+ * and runtime/process.h's env support both hang off, so run() can stay
+ * a thin wrapper. `envp` is not retained past this call — copy it
+ * yourself first if it needs to outlive a background caller (see
+ * runtime/process.h, the one caller that actually needs to). */
 int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv);
 int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, int envc, const char **envp,
-			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, uint32_t custom_tag);
+			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd);
 
 /* impl: common — src/common/pymergetic/metal/runtime/runtime.c
  *

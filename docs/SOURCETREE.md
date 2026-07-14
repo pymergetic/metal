@@ -13,7 +13,7 @@ Maps to [LAYERS.md](LAYERS.md). Stops at wasm interface.
 
 Mods use **wasi-sdk sysroot** + `-I include/`. Start with `#include <pymergetic/metal/metal.h>`.
 
-**Exception — `shared`:** a handful of leaf, zero-OS-dependency utilities (e.g. `util/size.h`) are genuinely useful on both sides. For these only, `include/…/foo.h` is the contract (either side may include it) and `include/…/foo_impl.h` holds the real bodies. `foo_impl.h` is never included directly by callers — exactly one thin loader `.c` per *binary* pulls it in: `src/shared/pymergetic/metal/…/foo.c` for the runtime today, and (later) a modlib loader for guests. This keeps the logic written once (DRY) while still letting each binary — native runtime, wasm guest — compile its own object code, which is unavoidable since they're different targets; that duplication is cheap for small leaf utilities. Everything else in `include/` remains **mod-facing only** — the runtime must not include from there.
+**Exception — `util/` wasi-style imports:** a handful of small utilities (`util/size.h`, `util/arena.h`, `util/log.h`) are genuinely useful on both sides, but unlike everything else here there is only **one** implementation of them, ever — `src/common/pymergetic/metal/util/{size,arena,log}.c`, `impl: common`, linked into the runtime binary same as any other common module. A mod including one of these three headers gets a *different* declaration on wasm32 than the runtime does on its native target: instead of an ordinary prototype backed by that mod's own compiled object code, it gets a real wasm import (`PM_METAL_UTIL_WASI_IMPORT(module, name)` from `util/wasi.h`, expanding to `__attribute__((import_module(module), import_name(#name)))`, guarded by `#if defined(__wasm__)` in the header itself) with **no local body at all** — resolved against that same `.c` file's own `wasm_runtime_register_natives()` call (each module registers its own small `NativeSymbol` table, called once from `runtime.c`'s `init()` — no shared central bridge file; WAMR's registration list is a plain linked list keyed by module-name string, so N independent calls under different names coexist without conflict) at `wasm_runtime_instantiate()` time, exactly like a real WASI import. `util/wasi.h` only unifies the attribute *shape* — each header still picks its own `import_module` name (`PM_METAL_UTIL_ARENA_WASI_MODULE` = `"pymergetic.metal.util.arena"`, `..._LOG_...` = `"…log"`, `..._SIZE_...` = `"…size"`), one per module rather than one shared across all three, so none of these imports can ever collide with anything else, including each other; not the Emscripten-popularized `"env"` convention either way. Each name is a plain `#define`d string constant that both the guest-side attribute and that module's own host-side registration call build from, so they can never drift apart into two different strings. This is DRY in the stronger sense — one compiled implementation, not two copies of the same logic built for two targets — at the cost of a wasm import call replacing what would otherwise be a local function call; cheap enough for these three leaf utilities that it isn't worth avoiding. Pointer parameters/returns (`arena_init()`'s `buf`, `arena_alloc()`'s return, …) are always addresses in the *calling* module's own linear memory — WAMR auto-translates each at the import boundary, see each module's own "wasi-style import bridge" comment (bottom of `size.c`/`arena.c`/`log.c`) for the exact rules. Everything else in `include/` remains **mod-facing only** — the runtime must not include from there.
 
 ---
 
@@ -52,7 +52,7 @@ Every declaration in a contract header tags where the body lives:
 | `/* impl: common */` | `src/common/…/foo.c` | one copy, all targets link it |
 | `/* impl: bind */` | `src/<plat>/…/foo.c` | **every** built target has an impl |
 | `/* impl: zephyr */` | `src/zephyr/…/foo.c` | that target only (plat-private header) |
-| `/* impl: shared */` | `include/…/foo_impl.h`, via `src/shared/…/foo.c` (+ later a modlib loader) | leaf util, no OS dependency — usable by mods too |
+| `/* impl: wasi import */` | `src/common/…/util/{size,arena,log}.c` — each registers its own `NativeSymbol` table, no shared bridge file | mod-facing `util/*.h` only — one host impl, guests get a real wasm import, no local body at all (see "Two trees" above) |
 
 One header can mix tags. Example `platform.h`: some calls OS-neutral → `common`; probes → `bind` on each plat.
 
@@ -126,14 +126,8 @@ pymergetic/metal/<module>/…/<stem>.h  →  pm_metal_<module>_…_<stem>_
 | `port/platform.h` | `pm_metal_port_` | `pm_metal_port_read_file()` |
 | `runtime/runtime.h` | `pm_metal_runtime_` | `pm_metal_runtime_run_wasm()` |
 | `memory/kheap.h` | `pm_metal_memory_kheap_` | `pm_metal_memory_kheap_ops()->establish()` |
-| `console/console.h` | `pm_metal_console_` | `pm_metal_console_open()` |
-| `console/viewport.h` | `pm_metal_viewport_` | `pm_metal_viewport_pump()` |
-| `shell/shell.h` | `pm_metal_shell_` | `pm_metal_shell_dispatch_line()` |
-| `shell/commands.h` | `pm_metal_shell_` | `pm_metal_shell_builtins_ops()` |
-| `shell/commands/<name>.h` | `pm_metal_shell_` | `pm_metal_shell_cmd_load()` |
-| `shell/guest_exec.h` | `pm_metal_shell_` | `pm_metal_shell_guest_exec_register()` |
 | `runtime/process.h` | `pm_metal_process_` | `pm_metal_process_spawn()` |
-| `app/app.h` | `pm_metal_app_` | `pm_metal_app_run_console()` |
+| `app/app.h` | `pm_metal_app_` | `pm_metal_app_run_scripted()` |
 | `util/log.h` | `pm_metal_util_log_` | `pm_metal_util_log_write()` |
 
 Private `src/<plat>/` symbols: `static` or plat-local.
@@ -148,22 +142,16 @@ packages/metal/
 ├── include/pymergetic/metal/
 │   ├── metal.h
 │   └── util/
-│       ├── size.h                 # contract — mods and runtime may include
-│       ├── size_impl.h            # body — only a shared/ loader includes this
-│       ├── arena.h                # contract — mods and runtime may include
-│       ├── arena_impl.h           # body — only a shared/ loader includes this
-│       ├── log.h                  # contract — mods and runtime may include
-│       └── log_impl.h             # body — only a shared/ loader includes this
+│       ├── wasi.h                 # PM_METAL_UTIL_WASI_IMPORT() — shared attribute shape; each of the 3 below picks its own module name
+│       ├── size.h                 # contract — wasi import on wasm32, else src/common/…/size.c
+│       ├── arena.h                # contract — wasi import on wasm32, else src/common/…/arena.c
+│       └── log.h                  # contract — wasi import on wasm32, else src/common/…/log.c
 │
 ├── src/
 │   ├── common/pymergetic/metal/   # cross-target — runtime + contracts
 │   │   ├── port/platform.h        # OS floor API (impl in src/<plat>/)
 │   │   ├── port/lock.h            # one mutex primitive (impl in src/<plat>/) — see docs/RUNTIME.md "Concurrency"
 │   │   ├── port/worker.h          # one background-thread primitive (impl in src/<plat>/)
-│   │   ├── port/term.h            # one "write to the real local terminal" primitive (impl in src/<plat>/)
-│   │   ├── port/dir.h             # one "list/check a real directory" primitive (impl in src/<plat>/)
-│   │   ├── port/intr.h            # one "operator asked us to stop" primitive (impl in src/<plat>/) — Ctrl+C/SIGINT
-│   │   ├── port/sleep.h           # one "block for at least N ms" primitive (impl in src/<plat>/)
 │   │   ├── memory/                # ops-struct contracts (impl in src/<plat>/)
 │   │   │   ├── memory.h           # convenience umbrella — re-exports the 4 below
 │   │   │   ├── ops.h              # shared struct layout + kind enum + resolve()
@@ -171,59 +159,26 @@ packages/metal/
 │   │   │   ├── ram.h              # machine RAM probe
 │   │   │   ├── kheap.h            # WAMR pool (wasm linear mem + WAMR structs)
 │   │   │   └── bytecode.h         # mod bytecode arena — separate from kheap
-│   │   ├── console/               # host-only — see docs/CONSOLE.md
-│   │   │   ├── console.h          # sinks — bidirectional pipes, kernel + per-handle (impl in src/<plat>/)
-│   │   │   ├── viewport.h         # render/focus/input routing over a set of sinks
-│   │   │   ├── viewport.c         # registration/focus/filter/ring/escape-byte — impl: common; pump() stays bind
-│   │   │   └── viewport_local.h   # private — seam between viewport.c and each bind's pump()
-│   │   ├── shell/                 # host-only, impl: common — see docs/CONSOLE.md "Shell"
-│   │   │   ├── shell.h            # registry, resolver (native + wasm-override), dispatch_line, cwd + env helpers
-│   │   │   ├── shell.c
-│   │   │   ├── commands.h         # pm_metal_shell_builtins_ops_t (one field/builtin) + register_builtins()
-│   │   │   ├── commands.c         # assembles the ops struct from commands/*.h, drives register_builtins()
-│   │   │   ├── handles.h          # private — the handle table + kernel_sink/quit_cb, shared by commands + commands/*
-│   │   │   ├── handles.c          # storage + handles_init()/handles_shutdown() (declared in commands.h)
-│   │   │   ├── guest_exec.h       # WAMR native import: a guest calls a subset of the registry directly
-│   │   │   ├── guest_exec.c       # the only shell/ file that #includes wasm_export.h — see docs/CONSOLE.md
-│   │   │   └── commands/          # one .h/.c pair per builtin — each fn is plain, callable outside dispatch too
-│   │   │       ├── cd.{h,c}
-│   │   │       ├── env.{h,c}
-│   │   │       ├── exit.{h,c}     # thin forward to quit.c's own implementation, not the same fn pointer twice
-│   │   │       ├── export.{h,c}
-│   │   │       ├── focus.{h,c}
-│   │   │       ├── help.{h,c}
-│   │   │       ├── load.{h,c}
-│   │   │       ├── ls.{h,c}
-│   │   │       ├── ps.{h,c}
-│   │   │       ├── pwd.{h,c}
-│   │   │       ├── quit.{h,c}
-│   │   │       ├── run.{h,c}
-│   │   │       ├── sleep.{h,c}    # chunked + polls port/intr.h — see docs/CONSOLE.md
-│   │   │       ├── uname.{h,c}
-│   │   │       └── unload.{h,c}
 │   │   ├── runtime/
 │   │   │   ├── runtime.h
-│   │   │   ├── runtime.c
+│   │   │   ├── runtime.c          # calls each util/*.h's own native_register() once, right after wasm_runtime_full_init()
 │   │   │   ├── process.h          # processes — decoupled from handles, see docs/RUNTIME.md "Processes"
 │   │   │   └── process.c          # impl: common, built entirely on runtime.h's own public API
-│   │   └── app/                   # the two whole-process run modes, librarified out of src/linux/main.c
-│   │       ├── app.h              # run_scripted()/run_console() — see there for the exact split with main.c
-│   │       └── app.c              # impl: common (port/worker.h + console.h's stop_feed() + port/intr.h, not raw pthread/fd/signal)
-│   │
-│   ├── shared/pymergetic/metal/   # thin loaders only — real body in include/…_impl.h
-│   │   └── util/
-│   │       ├── size.c
-│   │       ├── arena.c            # backs memory/bytecode.c's arena
-│   │       └── log.c
+│   │   ├── app/                   # the scripted whole-process run mode, librarified out of src/linux/main.c
+│   │   │   ├── app.h              # run_scripted() — see there for the exact split with main.c
+│   │   │   └── app.c              # impl: common (port/worker.h via runtime/process.h, not raw pthread)
+│   │   └── util/                  # include/…/util/*.h's *only* implementation — see "Two trees" above
+│   │       ├── size.c             # impl: common + its own wasi-import NativeSymbol table/register()
+│   │       ├── arena.c            # impl: common (backs memory/bytecode.c's arena too) + its own wasi-import bridge
+│   │       └── log.c              # impl: common + its own wasi-import bridge
 │   │
 │   ├── linux/
 │   │   ├── CMakeLists.txt
-│   │   ├── main.c                 # thin: argv parsing + realpath only — both run modes live in common/…/app/
+│   │   ├── main.c                 # thin: argv parsing + realpath only — the run mode lives in common/…/app/
 │   │   ├── thread_stress_test.c   # pm-linux-thread-stress — EXCLUDE_FROM_ALL, see scripts/verify-linux-threads.sh
 │   │   └── pymergetic/metal/
-│   │       ├── port/{platform,lock,worker,term,dir}.c
-│   │       ├── memory/{ram,kheap,bytecode}.c
-│   │       └── console/{console,viewport}.c  # viewport.c here is just pump() — see common/…/console/viewport.c
+│   │       ├── port/{platform,lock,worker}.c
+│   │       └── memory/{ram,kheap,bytecode}.c
 │   │   # wasi: WAMR linux platform
 │   │
 │   ├── zephyr/
@@ -231,10 +186,8 @@ packages/metal/
 │   │   ├── main.c
 │   │   └── pymergetic/metal/
 │   │       ├── port/{platform,lock}.c
-│   │       ├── port/{worker,term,dir}.c        # stub — deferred, see docs/RUNTIME.md "Bring-up plan" §5
+│   │       ├── port/worker.c                   # stub — deferred, see docs/RUNTIME.md "Bring-up plan" §5
 │   │       ├── memory/{ram,kheap,bytecode}.c
-│   │       ├── console/console.c               # stub — deferred, see docs/RUNTIME.md "Bring-up plan" §5
-│   │       ├── console/viewport.c              # only pump() stubbed — registration/focus/filter come from common/
 │   │       └── wasi/              # private
 │   │           ├── file.h
 │   │           └── file.c
@@ -246,7 +199,7 @@ packages/metal/
 │   ├── t0_hello/main.c
 │   ├── t1_read/main.c
 │   ├── t2_env/main.c
-│   └── t3_shell_exec/main.c       # exercises shell/guest_exec.h's native import — see docs/CONSOLE.md
+│   └── t3_util_native/main.c      # exercises util/{size,arena,log}.h's wasi-style imports end to end
 │
 ├── build/                         # gitignored
 │   ├── linux/runtime/
@@ -276,22 +229,12 @@ packages/metal/
 | `memory/bytecode` | `src/common/…/memory/bytecode.h` | `src/<plat>/…/memory/bytecode.c` — ops-struct `bind`, one getter per target |
 | `wasi/file` | `src/zephyr/…/file.h` | `src/zephyr/…/file.c` — all `impl: zephyr` |
 | `port/worker` | `src/common/…/port/worker.h` | `src/<plat>/…/port/worker.c` — `bind`, one background-thread primitive per target |
-| `port/term` | `src/common/…/port/term.h` | `src/<plat>/…/port/term.c` — `bind`, one real-terminal-write primitive per target |
-| `port/dir` | `src/common/…/port/dir.h` | `src/<plat>/…/port/dir.c` — `bind`, one directory list/check primitive per target |
-| `port/intr` | `src/common/…/port/intr.h` | `src/<plat>/…/port/intr.c` — `bind`, one "operator asked us to stop" primitive per target (Ctrl+C/SIGINT on linux) |
-| `port/sleep` | `src/common/…/port/sleep.h` | `src/<plat>/…/port/sleep.c` — `bind`, one "block for at least N ms" primitive per target (`nanosleep()` on linux) |
-| `console/console` | `src/common/…/console/console.h` | `src/<plat>/…/console/console.c` — `bind`, sinks |
-| `console/viewport` | `src/common/…/console/viewport.h` | `src/common/…/console/viewport.c` (registration/focus/filter — `impl: common`) + `src/<plat>/…/console/viewport.c` (`pump()` — `bind`) |
-| `shell/shell` | `src/common/…/shell/shell.h` | `src/common/…/shell/shell.c` — `impl: common`, no per-target impl |
-| `shell/commands` | `src/common/…/shell/commands.h` | `src/common/…/shell/commands.c` — `impl: common`, assembles the ops struct from `shell/commands/*.h`, no per-target impl |
-| `shell/commands/<name>` | `src/common/…/shell/commands/<name>.h` | `src/common/…/shell/commands/<name>.c` — `impl: common`, one pair per builtin only (see `shell/handles.{h,c}` below for the shared, non-command state they all draw on) |
-| `shell/handles` | `src/common/…/shell/handles.h` | `src/common/…/shell/handles.c` — `impl: common`; private, not a command — the handle table + init/shutdown shared by `commands.c` and every `commands/*.c` |
-| `shell/guest_exec` | `src/common/…/shell/guest_exec.h` | `src/common/…/shell/guest_exec.c` — `impl: common`; the one shell/ file that touches WAMR directly (`wasm_export.h`) — bridges a guest's native-import call to `shell.c`'s own registry, see docs/CONSOLE.md "Guest-callable commands" |
 | `runtime/process` | `src/common/…/runtime/process.h` | `src/common/…/runtime/process.c` — `impl: common`, no per-target impl; built on `runtime.h`'s own public API, no new runtime-internal locking |
-| `app/app` | `src/common/…/app/app.h` | `src/common/…/app/app.c` — `impl: common`, no per-target impl; the console-mode dispatcher thread goes through `port/worker.h`, not raw `pthread`/`k_thread` |
-| `util/size` | `include/…/size.h` (+ body in `size_impl.h`) | `src/shared/…/size.c` (loader) — all `impl: shared` |
-| `util/arena` | `include/…/arena.h` (+ body in `arena_impl.h`) | `src/shared/…/arena.c` (loader) — all `impl: shared`; backs `memory/bytecode.c`'s arena |
-| `util/log` | `include/…/log.h` (+ body in `log_impl.h`) | `src/shared/…/log.c` (loader) — all `impl: shared` |
+| `app/app` | `src/common/…/app/app.h` | `src/common/…/app/app.c` — `impl: common`, no per-target impl; spawn()s each mod's process through `port/worker.h` (via `runtime/process.h`), not raw `pthread`/`k_thread` |
+| `util/wasi` | `include/…/wasi.h` | header-only — just `PM_METAL_UTIL_WASI_IMPORT()`, no `.c` |
+| `util/size` | `include/…/size.h` | `src/common/…/util/size.c` — `impl: common` + its own wasi-import `NativeSymbol` bridge |
+| `util/arena` | `include/…/arena.h` | `src/common/…/util/arena.c` — `impl: common` + its own wasi-import bridge; backs `memory/bytecode.c`'s arena |
+| `util/log` | `include/…/log.h` | `src/common/…/util/log.c` — `impl: common` + its own wasi-import bridge |
 
 ---
 
@@ -299,8 +242,7 @@ packages/metal/
 
 | Path | What |
 |------|------|
-| `src/common/pymergetic/metal/` | contract `.h` + any `impl: common` `.c` |
-| `src/shared/pymergetic/metal/` | thin `impl: shared` loaders only — real body in `include/…_impl.h` |
+| `src/common/pymergetic/metal/` | contract `.h` + any `impl: common` `.c` (incl. `util/`'s wasi-import bodies, see "Two trees") |
 | `src/<plat>/pymergetic/metal/` | `impl: bind` + plat-private modules |
 | `src/<plat>/main.c` | entry |
 
@@ -312,18 +254,14 @@ Per-function `impl:` tags in each header are authoritative — not the directory
 
 | Path | Layer |
 |------|-------|
-| `include/…/` | mod contract (+ `util/` leaf-util contract shared with the runtime) |
+| `include/…/` | mod contract (+ `util/` — wasi-import contract on wasm32, see "Two trees") |
 | `src/common/…/port/platform.h` | port contract |
 | `src/<plat>/…/port/platform.c` | port impl |
 | `src/common/…/memory/*.h` | memory contracts (ops-struct `bind`) |
 | `src/<plat>/…/memory/*.c` | memory impl — one ops table per module per target |
-| `src/common/…/console/*.h` | console contracts — host-only, see docs/CONSOLE.md |
-| `src/common/…/console/viewport.c` | viewport impl: common (registration/focus/filter) |
-| `src/<plat>/…/console/*.c` | console impl — sinks (`bind`) + viewport's `pump()` (`bind`) per target |
-| `src/common/…/shell/*.h`, `*.c` | shell contracts + impl — host-only, `impl: common` only, see docs/CONSOLE.md "Shell" |
 | `src/common/…/runtime/` | runtime + wamr (`runtime.h`/`.c`) + processes, decoupled from handles (`process.h`/`.c`, `impl: common`, see docs/RUNTIME.md "Processes") |
-| `src/common/…/app/` | the two whole-process run modes (`app.h`/`.c`, `impl: common`) — every target's own `main.c` is just argv/Kconfig parsing + one call in here |
-| `src/shared/…/` | leaf-util loaders — body in `include/…_impl.h` |
+| `src/common/…/app/` | the scripted whole-process run mode (`app.h`/`.c`, `impl: common`) — every target's own `main.c` is just argv/Kconfig parsing + one call in here |
+| `src/common/…/util/` | `include/…/util/*.h`'s one implementation — each `.c` also resolves its own wasm32 side, no shared bridge file |
 | `src/<plat>/…/` (private) | plat-only (wasi shim, …) |
 | `src/<plat>/main.c` | entry |
 | `mods/` + wasi-sdk | wasm guests |
@@ -334,13 +272,12 @@ Per-function `impl:` tags in each header are authoritative — not the directory
 
 | Rule | |
 |------|--|
-| `include/` = mod-facing only, **except** `impl: shared` leaf utils (`util/`, zero OS dependency) | runtime must not otherwise include from here |
-| `include/…_impl.h` | never included by ordinary callers — only by its one `src/shared/…` loader `.c` (+ later a modlib loader) |
-| Every contract function | `/* impl: common */`, `/* impl: bind */`, `/* impl: <plat> */`, or `/* impl: shared */` |
+| `include/` = mod-facing only, **except** `util/` (`size.h`/`arena.h`/`log.h` — wasi imports, one host impl, zero OS dependency) | runtime must not otherwise include from here |
+| `include/…/util/*.h` | on wasm32, declares a wasi-style import (`#if defined(__wasm__)`), no local body ever exists in a mod's own `.wasm`; on the runtime's own native target, an ordinary prototype backed by `src/common/…/util/*.c` |
+| Every contract function | `/* impl: common */`, `/* impl: bind */`, or `/* impl: <plat> */` |
 | `.c` function order | matches `.h` declaration order |
 | Skipped symbols in `.c` | `/* not impl: <tag> — <path> */` placeholder, same slot |
 | `src/common/` | contract `.h` + `impl: common` `.c` |
-| `src/shared/` | thin `impl: shared` loader `.c` only — no logic, no OS `#include`s |
 | `src/<plat>/` | `impl: bind` + plat-private; OS `#include`s only here |
 | Public symbols | `pm_metal_<module_path>_` |
 | `external/` + `.tools/` | **vanilla** — west/toolchain pins only; no patches in-tree |

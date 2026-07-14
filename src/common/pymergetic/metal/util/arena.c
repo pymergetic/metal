@@ -1,16 +1,13 @@
 /*
- * pm_metal_util_arena_* bodies. #include this from exactly one loader .c
- * per binary — never from more than one TU (see size_impl.h for the same
- * pattern and why).
+ * pm_metal_util_arena_* — impl: common (see util/arena.h; wasm32 mods reach
+ * this same code via this file's own wasi-style import registration at
+ * the bottom, not via a second compiled copy of this file).
  *
  * Layout: the arena control struct and every block header live inside the
  * caller's own buffer — no separate bookkeeping allocation. Blocks form a
  * doubly linked list in address order (next/prev = physically adjacent
  * blocks), so free() can coalesce in O(1) without a full-arena scan.
  */
-#ifndef PYMERGETIC_METAL_UTIL_ARENA_IMPL_H_
-#define PYMERGETIC_METAL_UTIL_ARENA_IMPL_H_
-
 #include "pymergetic/metal/util/arena.h"
 
 #include <stdint.h>
@@ -140,4 +137,71 @@ size_t pm_metal_util_arena_used(const pm_metal_util_arena_t *arena)
 	return arena ? arena->used : 0;
 }
 
-#endif /* PYMERGETIC_METAL_UTIL_ARENA_IMPL_H_ */
+/*
+ * wasi-style import bridge — see size.c's own bridge comment for the
+ * general signature-string rules this follows.
+ *
+ * init()'s return and alloc()'s return are app-offset-shaped (guest
+ * linear-memory addresses) but WAMR natives cannot declare a pointer
+ * *result* type (only i32/i64/f32/f64) — so both wrappers return a plain
+ * 'i' plus an explicit wasm_runtime_addr_native_to_app() call to convert
+ * the other way, since only *parameters* get automatic app->native
+ * translation.
+ *
+ * alloc()/free()/used() take the caller's `arena`/`ptr` as a bare '*'
+ * (checked length 1, not the full struct size — there is no natural
+ * "length" argument at those call sites to pair a '~' with). A guest
+ * holds an opaque handle it never dereferences itself, so this is the
+ * same trade-off any opaque-handle-over-'*' native API makes; documented
+ * here rather than hidden.
+ */
+#include "wasm_export.h"
+
+static int32_t pm_metal_util_arena_init_native(wasm_exec_env_t exec_env, void *buf, uint32_t buf_len)
+{
+	pm_metal_util_arena_t *arena = pm_metal_util_arena_init(buf, (size_t)buf_len);
+
+	if (!arena) {
+		return 0; /* 0 is never a valid app offset for a live object — NULL */
+	}
+	return (int32_t)wasm_runtime_addr_native_to_app(wasm_runtime_get_module_inst(exec_env), arena);
+}
+
+static int32_t pm_metal_util_arena_alloc_native(wasm_exec_env_t exec_env, void *arena, uint32_t size)
+{
+	void *ptr = pm_metal_util_arena_alloc((pm_metal_util_arena_t *)arena, (size_t)size);
+
+	if (!ptr) {
+		return 0;
+	}
+	return (int32_t)wasm_runtime_addr_native_to_app(wasm_runtime_get_module_inst(exec_env), ptr);
+}
+
+static void pm_metal_util_arena_free_native(wasm_exec_env_t exec_env, void *arena, void *ptr)
+{
+	(void)exec_env;
+	pm_metal_util_arena_free((pm_metal_util_arena_t *)arena, ptr);
+}
+
+static int32_t pm_metal_util_arena_used_native(wasm_exec_env_t exec_env, void *arena)
+{
+	(void)exec_env;
+	return (int32_t)pm_metal_util_arena_used((const pm_metal_util_arena_t *)arena);
+}
+
+static NativeSymbol g_pm_metal_util_arena_native_symbols[] = {
+	{"pm_metal_util_arena_init", (void *)pm_metal_util_arena_init_native, "(*~)i", NULL},
+	{"pm_metal_util_arena_alloc", (void *)pm_metal_util_arena_alloc_native, "(*i)i", NULL},
+	{"pm_metal_util_arena_free", (void *)pm_metal_util_arena_free_native, "(**)", NULL},
+	{"pm_metal_util_arena_used", (void *)pm_metal_util_arena_used_native, "(*)i", NULL},
+};
+
+int pm_metal_util_arena_native_register(void)
+{
+	if (!wasm_runtime_register_natives(PM_METAL_UTIL_ARENA_WASI_MODULE, g_pm_metal_util_arena_native_symbols,
+					    sizeof(g_pm_metal_util_arena_native_symbols)
+						    / sizeof(g_pm_metal_util_arena_native_symbols[0]))) {
+		return -1;
+	}
+	return 0;
+}

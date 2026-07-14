@@ -2,11 +2,10 @@
  * Port contract — one background-worker primitive: spawn a function on a
  * new OS thread, poll it non-blockingly, or join it blockingly. Generalizes
  * what src/linux/main.c used to do ad hoc with raw pthread_create()/
- * pthread_join()/pthread_tryjoin_np() for each `run` command's worker
- * thread — now a named port primitive, same spirit as port/lock.h, so
- * runtime/process.c's spawn() (one worker thread per process) and
- * app/app.c's kernel dispatcher thread stay impl: common instead of
- * leaking pthread_t into common code.
+ * pthread_join()/pthread_tryjoin_np() for each background worker thread —
+ * now a named port primitive, same spirit as port/lock.h, so
+ * runtime/process.c's spawn() (one worker thread per process) stays
+ * impl: common instead of leaking pthread_t into common code.
  */
 #ifndef PYMERGETIC_METAL_PORT_WORKER_H_
 #define PYMERGETIC_METAL_PORT_WORKER_H_
@@ -28,7 +27,7 @@ typedef struct pm_metal_port_worker {
 typedef int (*pm_metal_port_worker_fn)(void *arg);
 
 /* impl: bind — src/linux/pymergetic/metal/port/worker.c
- *              src/zephyr/pymergetic/metal/port/worker.c (stub — deferred with the rest of zephyr's console/shell, see docs/RUNTIME.md "Bring-up plan")
+ *              src/zephyr/pymergetic/metal/port/worker.c (stub — deferred, see docs/RUNTIME.md "Bring-up plan")
  *
  * spawn(): starts fn(arg) on a new thread, filling in *w. Caller owns arg's
  * lifetime — same convention as pthread_create() itself, spawn() does not

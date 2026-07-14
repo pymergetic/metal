@@ -1,6 +1,6 @@
 /*
- * Port — zephyr bind. Stub — deferred with the rest of zephyr's console/
- * shell (see docs/RUNTIME.md "Bring-up plan" §5). A real implementation
+ * Port — zephyr bind. Stub — deferred (see docs/RUNTIME.md "Bring-up
+ * plan" §5). A real implementation
  * would reinterpret pm_metal_port_worker_t as a struct k_thread (plus its
  * own stack, unlike pthread — k_thread_create() takes an explicit stack
  * buffer/size the caller must own, so the real signature here will likely
