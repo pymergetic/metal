@@ -71,6 +71,9 @@
 #include "pymergetic/metal/memory/memory.h"
 #include "pymergetic/metal/port/lock.h"
 #include "pymergetic/metal/port/platform.h"
+#include "pymergetic/metal/util/arena.h"
+#include "pymergetic/metal/util/log.h"
+#include "pymergetic/metal/util/size.h"
 #include "wasm_export.h"
 
 /* PM_METAL_RUNTIME_MAX_HANDLES itself now lives in runtime.h — public, see
@@ -251,6 +254,31 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 		return -1;
 	}
 
+	/* Must happen before any load()/instantiate() of a module that
+	 * might import these — every mod's own compile already resolved
+	 * them to unresolved imports under that module's own
+	 * PM_METAL_UTIL_{ARENA,LOG,SIZE}_WASI_MODULE name (see
+	 * util/{arena,log,size}.h), so this is the one place that has to
+	 * run first, exactly once per init()/shutdown() cycle. Each of the
+	 * three registers its own small NativeSymbol table under its own
+	 * name (see that module's own .c) rather than one shared table
+	 * here — nothing about resolving an import needs a central table,
+	 * and this way each module's wasm-import glue lives right next to
+	 * its host impl. wasm_runtime_destroy() below frees WAMR's own
+	 * registration bookkeeping for us; nothing to undo here on our
+	 * side. */
+	if (pm_metal_util_arena_native_register() != 0
+	    || pm_metal_util_log_native_register() != 0
+	    || pm_metal_util_size_native_register() != 0) {
+		fprintf(stderr, "pm_metal_runtime: native registration failed\n");
+		wasm_runtime_destroy();
+		free(map_dir_entry);
+		free(vfs_root);
+		bytecode->release();
+		kheap->release();
+		return -1;
+	}
+
 	memset(g_pm_metal_runtime.slots, 0, sizeof(g_pm_metal_runtime.slots));
 	g_pm_metal_runtime.vfs_root = vfs_root;
 	g_pm_metal_runtime.map_dir_entry = map_dir_entry;
@@ -360,11 +388,11 @@ int pm_metal_runtime_resolve_path(const char *guest_path, char *out, size_t out_
 
 int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv)
 {
-	return pm_metal_runtime_run_ex(h, argc, argv, 0, NULL, -1, -1, -1, 0);
+	return pm_metal_runtime_run_ex(h, argc, argv, 0, NULL, -1, -1, -1);
 }
 
 int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, int envc, const char **envp,
-			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, uint32_t custom_tag)
+			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd)
 {
 	if (!g_pm_metal_runtime.initialized) {
 		return -1;
@@ -437,15 +465,6 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 			error_buf);
 		exit_code = -1;
 	} else {
-		/* Tags the instance with the caller-supplied `custom_tag` —
-		 * see run_ex()'s own doc comment in runtime.h. Generic
-		 * per-instance metadata, not a shell-specific concept — set
-		 * unconditionally, whether or not anything ever reads it on
-		 * this target. Must happen before execute_main() below,
-		 * since that's the only place a guest could call in (see
-		 * shell/guest_exec.c). */
-		wasm_runtime_set_custom_data(inst, (void *)(uintptr_t)custom_tag);
-
 		if (wasm_application_execute_main(inst, argc, argv)) {
 			exit_code = (int)wasm_runtime_get_wasi_exit_code(inst);
 		} else {

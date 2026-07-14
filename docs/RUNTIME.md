@@ -2,7 +2,7 @@
 
 Fundamental process model. Not one-shot — **long-lived host with dynamic load/unload**.
 
-See [LAYERS.md](LAYERS.md) · [SOURCETREE.md](SOURCETREE.md) · [CONSOLE.md](CONSOLE.md).
+See [LAYERS.md](LAYERS.md) · [SOURCETREE.md](SOURCETREE.md).
 
 ---
 
@@ -23,7 +23,7 @@ shutdown
   WAMR destroy
 ```
 
-`run()`/`run_ex()` (below) are the low-level, synchronous-only primitive `runtime.c` itself exposes — one call, one execution, blocks until it returns. `runtime/process.h`'s `spawn()`/`wait()`/`try_wait()`/`list()` is the layer built on top that every actual caller (the shell's `run`, its wasm-override dispatch, and scripted mode alike) uses instead: it puts that one execution on its own background worker and hands back a `pid`, so the *same* handle can have several executions in flight at once, each independently trackable — see "Processes" below.
+`run()`/`run_ex()` (below) are the low-level, synchronous-only primitive `runtime.c` itself exposes — one call, one execution, blocks until it returns. `runtime/process.h`'s `spawn()`/`wait()`/`try_wait()`/`list()` is the layer built on top that every actual caller (scripted mode today) uses instead: it puts that one execution on its own background worker and hands back a `pid`, so the *same* handle can have several executions in flight at once, each independently trackable — see "Processes" below.
 
 Linux may expose the loop via CLI, stdin, or socket — **same API** on every target. Zephyr `main` calls the same functions; no special one-shot path.
 
@@ -69,11 +69,11 @@ int pm_metal_runtime_load_bytes(const uint8_t *wasm, uint32_t len,
 				pm_metal_runtime_handle_t *out);
 int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv);
 int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, int envc, const char **envp,
-			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, uint32_t custom_tag);
+			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd);
 int pm_metal_runtime_unload(pm_metal_runtime_handle_t h);
 ```
 
-`run()` is `run_ex()` with `0, NULL, -1, -1, -1` — see "Console model" below for what the `-1`s mean and the per-handle-console extension point `run_ex()` exists for, and "Processes" below for `envc`/`envp`.
+`run()` is `run_ex()` with `0, NULL, -1, -1, -1` — the `-1`s are WAMR's own sentinel for "inherit the host process's real fd 0/1/2"; `run_ex()` forwards whatever it's given straight to `wasm_runtime_set_wasi_args_ex()`, so a future caller wanting a private stdio stream per handle (its own pipe, log fd, etc.) just passes real fds here instead — `runtime.c` does not know or care what they actually are. See "Processes" below for `envc`/`envp`.
 
 `memory_bytes` is a *request*; `runtime_init()` never touches memory itself — it hands the request to an ops table and gets a pool back. Memory (probe + the two pools below) lives in `pymergetic/metal/memory/`, not `platform.h` — three small modules, each a contract header declaring one struct-of-function-pointers and one `bind` getter that returns it. All three share the *same* struct layout, `pm_metal_memory_ops_t`, defined once in `memory/ops.h` alongside a `pm_metal_memory_kind_t` enum and a `pm_metal_memory_resolve(kind)` lookup for callers that pick a kind dynamically; `ram.h`/`kheap.h`/`bytecode.h` each `#include` it and declare their own dedicated getter for the common case where the call site already knows its kind at compile time (see docs/SOURCETREE.md "Ops-struct flavor of `bind`" for the pattern and why: these three are always used together and always come from the one target implementation linked into the binary, so grouping each one's functions beats one symbol per function — at effectively zero cost, since the getter is resolved at build/link time and the indirect calls through the table happen a handful of times per mod load, nowhere near a hot path):
 
@@ -117,7 +117,7 @@ A **third** pool, sized by `bytecode_bytes` and completely separate from the khe
 const pm_metal_memory_ops_t *pm_metal_memory_bytecode_ops(void); /* impl: bind */
 ```
 
-Why a *third* pool instead of just `malloc`ing bytecode buffers, or folding them into the kheap pool: on linux `malloc` is effectively unlimited so it would not matter — but on zephyr **everything** not inside the kheap pool lands in the kernel heap, which is small, fixed, and shared with the rest of the OS. Handing WAMR's own `Alloc_With_Pool` allocator a mix of "its own bookkeeping + guest linear memory" *and* "arbitrarily large raw mod files" makes the one pool's sizing unpredictable — a big mod could starve WAMR's internal structs. A dedicated, separately-budgeted arena keeps the two failure modes apart and gives an explicit, testable "no room for this mod" error instead of a WAMR-internal allocation failure deep in `wasm_runtime_load()`. `bytecode_ops()`'s `establish()`/`release()`/`bytes()` mirror the kheap pool's shape exactly (it's the same struct layout, one arena per process, same init/shutdown enforcement); `alloc()`/`free()` are the sub-allocators `load_file()`/`load_bytes()`/`unload()` use per mod, and the slots `kheap_ops()` leaves `NULL`. linux backs the arena with `malloc(requested_bytes)` carved up by a small first-fit, coalescing free-list allocator (`pymergetic/metal/util/arena.h`, `impl: shared` — pure C, no OS dependency, so the same code will back zephyr's slice of kernel heap unchanged); zephyr (later) draws this from the *same* `arena_budget` remainder the kheap pool is sized from (see Bring-up plan §5) — the two pools are two slices of one probed budget, not two independent probes.
+Why a *third* pool instead of just `malloc`ing bytecode buffers, or folding them into the kheap pool: on linux `malloc` is effectively unlimited so it would not matter — but on zephyr **everything** not inside the kheap pool lands in the kernel heap, which is small, fixed, and shared with the rest of the OS. Handing WAMR's own `Alloc_With_Pool` allocator a mix of "its own bookkeeping + guest linear memory" *and* "arbitrarily large raw mod files" makes the one pool's sizing unpredictable — a big mod could starve WAMR's internal structs. A dedicated, separately-budgeted arena keeps the two failure modes apart and gives an explicit, testable "no room for this mod" error instead of a WAMR-internal allocation failure deep in `wasm_runtime_load()`. `bytecode_ops()`'s `establish()`/`release()`/`bytes()` mirror the kheap pool's shape exactly (it's the same struct layout, one arena per process, same init/shutdown enforcement); `alloc()`/`free()` are the sub-allocators `load_file()`/`load_bytes()`/`unload()` use per mod, and the slots `kheap_ops()` leaves `NULL`. linux backs the arena with `malloc(requested_bytes)` carved up by a small first-fit, coalescing free-list allocator (`pymergetic/metal/util/arena.h`, `impl: common` — pure C, no OS dependency, so the same code will back zephyr's slice of kernel heap unchanged); zephyr (later) draws this from the *same* `arena_budget` remainder the kheap pool is sized from (see Bring-up plan §5) — the two pools are two slices of one probed budget, not two independent probes.
 
 Same "runtime.c never touches the raw resource itself" rule for reading mod bytecode off storage — this one stays a plain per-function `bind` symbol in `platform.h` (not an ops struct — it stands alone):
 
@@ -146,23 +146,6 @@ No `run_file()` shortcut that hides load/unload — callers use the loop explici
 
 ---
 
-## Console model
-
-Full design + implementation status: **[CONSOLE.md](CONSOLE.md)**. Short
-version, from `runtime.c`'s side only:
-
-- **The runtime's own diagnostics** (`fprintf(stderr, "pm_metal_runtime: ...")`) stay plain host-side C, unaffected by any of this — `runtime.c` itself never calls into `console.h`/`viewport.h`, and does not need to: those live one layer up, in `app/app.h`'s console-mode runner.
-- **Each loaded module's own WASI stdio (fd 0/1/2)** goes through `run_ex()` — the one seam `runtime.c` exposes for this:
-
-```c
-int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, int envc, const char **envp,
-			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, uint32_t custom_tag);
-```
-
-`run()` is `run_ex()` with `-1,-1,-1` for the fds and `0` for `custom_tag` — WAMR's own sentinel for "inherit the host process's real fd 0/1/2". `run_ex()` forwards whatever it's given straight to `wasm_runtime_set_wasi_args_ex()`; `runtime.c` does not know or care whether those fds are real terminal fds or one end of a per-handle console pipe. `src/linux/main.c`'s `--console` mode is the reference caller (per-handle sinks + a switchable-focus viewport onto a real terminal) — see [CONSOLE.md](CONSOLE.md) for the full sink/viewport/log-level design and `scripts/verify-linux-console.sh` for the proof. The console-mode run loop itself (kernel sink, `PM_METAL_VIEWPORT_LOCAL` pump loop, dispatcher thread) is `impl: common`, in `pymergetic/metal/app/app.h`'s `pm_metal_app_run_console()` — `src/linux/main.c` only does argv parsing and one call into it, so any future target's own `main.c` reaches the same console mode without reimplementing it (see docs/SOURCETREE.md's `app/` entry). Command *dispatch* itself (turning a typed line into a `load`/`run`/`unload`/... call, or a `.wasm` override's own execution) lives one layer further down, in `pymergetic/metal/shell/` (`impl: common`, see [CONSOLE.md](CONSOLE.md) "Shell") — `app.c` only owns the kernel sink and the pump/dispatch-thread handshake, not the command set.
-
----
-
 ## Processes (`runtime/process.h`)
 
 `runtime.c`'s own `run()`/`run_ex()` are synchronous: one call, one execution, on the calling thread. Every real caller wants something else — a background execution it can check on or wait for later — and, now, more than one execution of the *same* handle at once (e.g. `run 3` twice before the first finishes). `runtime/process.h` is that layer, built entirely on top of `runtime.h`'s own public API (`run_ex()` plus the `refcount` `runtime.c` already keeps per handle — see "Concurrency" below) — it adds no new synchronization *inside* the runtime itself:
@@ -174,21 +157,18 @@ int pm_metal_process_init(void);
 void pm_metal_process_shutdown(void);
 
 int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **argv, int envc, const char **envp,
-			    int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd, FILE *guest_out,
+			    int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd,
 			    pm_metal_process_exit_cb on_exit, void *on_exit_ctx, pm_metal_process_id_t *out_pid);
-FILE *pm_metal_process_guest_out(pm_metal_process_id_t pid);
 int pm_metal_process_try_wait(pm_metal_process_id_t pid, int *out_exit_code);
 int pm_metal_process_wait(pm_metal_process_id_t pid, int *out_exit_code);
 void pm_metal_process_list(void (*visit)(const pm_metal_process_info_t *info, void *ctx), void *ctx);
 ```
 
-A **handle** (`runtime.h`, `1..PM_METAL_RUNTIME_MAX_HANDLES`) is one loaded module; a **process** (`process.h`, `pm_metal_process_id_t`, `1..PM_METAL_PROCESS_MAX`) is one execution of it, on its own background worker (`port/worker.h`) — same relationship a real OS has between a binary on disk and its N currently-running instances. `spawn()` copies `argv`/`envp` itself before returning (the caller's own arrays, e.g. a tokenized command line, need not outlive the call, unlike `run_ex()`'s), starts the worker, and hands back a `pid` immediately; `wait()`/`try_wait()` reap it (blocking / non-blocking) once it finishes; `list()` is read-only, for a `ps`-style command. `on_exit` (optional) fires once, on the process's own worker thread, the instant it finishes — the shell's `run` builtin uses it to log `exit=%d` onto the handle's own console pane live, without a poll loop; a caller that's going to `wait()` the pid itself right away (e.g. the shell's synchronous wasm-override dispatch) passes `NULL` instead.
+A **handle** (`runtime.h`, `1..PM_METAL_RUNTIME_MAX_HANDLES`) is one loaded module; a **process** (`process.h`, `pm_metal_process_id_t`, `1..PM_METAL_PROCESS_MAX`) is one execution of it, on its own background worker (`port/worker.h`) — same relationship a real OS has between a binary on disk and its N currently-running instances. `spawn()` copies `argv`/`envp` itself before returning (the caller's own arrays, e.g. a tokenized command line, need not outlive the call, unlike `run_ex()`'s), starts the worker, and hands back a `pid` immediately; `wait()`/`try_wait()` reap it (blocking / non-blocking) once it finishes; `list()` is read-only, for a `ps`-style caller. `on_exit` (optional) fires once, on the process's own worker thread, the instant it finishes, for a caller that wants to react without a poll loop; a caller that's going to `wait()` the pid itself right away passes `NULL` instead.
 
-Env vars are real WASI env (`run_ex()`'s `envc`/`envp`, forwarded to `wasm_runtime_set_wasi_args_ex()`) — nothing to do with the host's own `environ`. The shell keeps one small `export`ed set per console (`pm_metal_shell_ctx_t.env`, see [CONSOLE.md](CONSOLE.md) "Shell"), snapshotted into `spawn()`'s `envp` on every `run`/wasm-override dispatch; a bare `run 3` with nothing exported passes `envc=0, envp=NULL`, identical to calling `run()` directly.
+Env vars are real WASI env (`run_ex()`'s `envc`/`envp`, forwarded to `wasm_runtime_set_wasi_args_ex()`) — nothing to do with the host's own `environ`. A bare `spawn()` call with `envc=0, envp=NULL` is identical to calling `run()` directly.
 
-`pm_metal_process_shutdown()` must run **before** any handle-table teardown (`shell/commands.c`'s `handles_shutdown()`, then `pm_metal_runtime_shutdown()`) — it blocks until every in-flight process has actually finished, so no handle's `refcount` is still held above zero when `unload()`/`runtime_shutdown()`'s own unload loop runs. Both of `app/app.c`'s run modes (console mode and scripted mode) call it in that order — see [CONSOLE.md](CONSOLE.md) "Shell" and `commands.h`'s own doc comment.
-
-`run_ex()` also tags every instance it successfully instantiates with a caller-supplied `custom_tag`, via `wasm_runtime_set_custom_data()`, before `execute_main()` runs — generic per-instance metadata `runtime.c` sets unconditionally (opaque to `runtime.c` itself; `run()` always passes `0`), not a shell-specific concept, but the one thing that lets a native function a guest calls *from inside* `execute_main()` (`wasm_runtime_get_custom_data()` on its own `wasm_runtime_get_module_inst()`) find its way back to whatever the caller cares about. `spawn()` above is the one real user: it passes its own `pid` as `custom_tag`, deliberately pid- rather than handle-grained, since the same handle can have several processes in flight at once and it's specifically *this* execution's own state that matters. The one consumer today is [CONSOLE.md](CONSOLE.md)'s "Guest-callable commands" (`shell/guest_exec.c`), which resolves that pid via `pm_metal_process_guest_out()` to the `FILE*` this process's own output should land on (a console sink's `->out` for console `run`/wasm-override dispatch, plain host `stdout` for scripted mode — see each of `spawn()`'s three call sites) — nothing in `runtime.c` or `process.c` itself depends on shell/console at all; `guest_out` is just an opaque `FILE*` to both.
+`pm_metal_process_shutdown()` must run **before** any handle-table teardown, then `pm_metal_runtime_shutdown()` — it blocks until every in-flight process has actually finished, so no handle's `refcount` is still held above zero when `unload()`/`runtime_shutdown()`'s own unload loop runs. `app/app.c`'s scripted mode calls it in that order.
 
 ---
 
@@ -201,7 +181,7 @@ Once `init()` has returned, `load_file()`/`load_bytes()`/`run()`/`unload()` are 
 - the shared handle table (claiming a slot in `load_*()`, disowning it in `unload()`, the busy `refcount` used to reject `unload()` while a `run()` on that handle is in flight — it returns `-1` rather than racing the module out from under a running instance; the caller must retry),
 - and — this is the important part — **every call into `wasm_runtime_load()`/`instantiate()`/`deinstantiate()`/`unload()`**, full stop, even across different handles/modules.
 
-`hold()`/`release()` bump/drop that same `refcount` directly, with no `run_ex()` call of their own — `runtime/process.h`'s `spawn()` is the one caller: it starts a process on its own background worker thread and returns immediately, *before* that thread is guaranteed to have run far enough to reach `run_ex()`'s own `refcount++`. Without a synchronous `hold()` taken at `spawn()` time (dropped by that worker once its `run_ex()` call returns), `unload()` could see a just-spawned-but-not-yet-scheduled process's handle as idle and free the module out from under the thread about to use it — a real, easily-reproduced race (typing `run 1` immediately followed by `unload 1` at the console prompt hit it on nearly every attempt before this fix). Ordinary direct callers of `run()`/`run_ex()` that stay on their own thread the whole time (`thread_stress_test.c`) have no such gap and never call `hold()`/`release()` themselves.
+`hold()`/`release()` bump/drop that same `refcount` directly, with no `run_ex()` call of their own — `runtime/process.h`'s `spawn()` is the one caller: it starts a process on its own background worker thread and returns immediately, *before* that thread is guaranteed to have run far enough to reach `run_ex()`'s own `refcount++`. Without a synchronous `hold()` taken at `spawn()` time (dropped by that worker once its `run_ex()` call returns), `unload()` could see a just-spawned-but-not-yet-scheduled process's handle as idle and free the module out from under the thread about to use it — a real, easily-reproduced race (`spawn()` immediately followed by `unload()` on the same handle hit it on nearly every attempt before this fix). Ordinary direct callers of `run()`/`run_ex()` that stay on their own thread the whole time (`thread_stress_test.c`) have no such gap and never call `hold()`/`release()` themselves.
 
 That last point is more conservative than WAMR's own docs suggest. Upstream describes the shared `Alloc_With_Pool` heap (`external/wamr/core/shared/mem-alloc/ems/`) as internally locked, which would imply concurrent `load()`/`instantiate()` on *different* modules from different threads is safe without a caller-side lock. **It isn't, empirically, in this vendored build:** `scripts/verify-linux-threads.sh` builds a pthread-based stress harness (`src/linux/thread_stress_test.c`) with ThreadSanitizer and, before the fix above, TSan caught real data races inside `ems_alloc.c`'s `alloc_hmu()`/`gc_alloc_vo()`/`gc_free_vo()` when `load`/`instantiate`/`deinstantiate`/`unload` ran concurrently on different modules — every one of the four calls hit it, not just one. So this codebase doesn't trust the "pool is internally locked" assumption; it serializes those four calls itself instead.
 
@@ -303,7 +283,6 @@ Scaffold is in place (`src/`, `mods/`, `scripts/setup-ide.sh`). Order:
 | `build-mod.sh` | `mods/*` → `build/mods/*.wasm` (wasi-sdk, `wasm32-wasip1`) |
 | `verify-linux.sh` | build mods + runtime → init → load → run → unload → shutdown |
 | `verify-linux-threads.sh` | ThreadSanitizer proof of the "Concurrency" section above — `pm-linux-thread-stress` |
-| `verify-linux-console.sh` | `--console` mode: load/run/focus/escape/unload/quit — see [CONSOLE.md](CONSOLE.md) |
 
 ### 2. Linux — first green path — done
 
@@ -356,6 +335,5 @@ Virtual `/sys/loader` · `include/metal.h` convenience · HTTPS fetch-on-miss ·
 - [x] mod bytecode lives in a dedicated arena, separate from the WAMR pool — linux; zephyr pending (single probed `arena_budget`, split)
 - [x] `verify` uses dynamic loader API — `scripts/verify-linux.sh`
 - [x] concurrent load/run/unload across handles from multiple threads, proven under ThreadSanitizer — see "Concurrency" above, `scripts/verify-linux-threads.sh`
-- [x] per-handle console (own pane, switchable focus, escape back to kernel) — linux, see [CONSOLE.md](CONSOLE.md), `scripts/verify-linux-console.sh`; zephyr pending
-- [x] shell command registry + cwd + virtual `/bin/pm` + `.wasm` overrides under `vfs_root/bin/` — linux, see [CONSOLE.md](CONSOLE.md) "Shell", `scripts/verify-linux-console.sh`; zephyr pending (same `impl: common` code, blocked on zephyr's own console/`port/{worker,dir}` binds)
-- [x] processes decoupled from handles (`runtime/process.h`, several concurrent `run`s per handle, each own pid) + real WASI env (`export`/`env` builtins, `ps` command) — linux, see "Processes" above, `scripts/verify-linux-console.sh`; zephyr pending
+- [x] processes decoupled from handles (`runtime/process.h`, several concurrent `run`s per handle, each own pid) + real WASI env support (`run_ex()`'s `envc`/`envp`) — linux, see "Processes" above; zephyr pending
+- [x] `util/{arena,log,size}.h` are wasi-style host imports, not a second compiled-into-every-mod copy — one implementation per module (`src/common/…/util/{arena,log,size}.c`), each registering its own small `NativeSymbol` table under its own `PM_METAL_UTIL_{ARENA,LOG,SIZE}_WASI_MODULE` name (built from the shared `PM_METAL_UTIL_WASI_IMPORT()` macro in `util/wasi.h`) from `runtime.c`'s `init()`; proven end-to-end by `mods/t3_util_native.wasm` in `scripts/verify-linux.sh` (round-trips through a guest's own linear memory via WAMR's app<->native address translation, not a host-side buffer)
