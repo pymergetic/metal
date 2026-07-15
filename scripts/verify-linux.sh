@@ -26,12 +26,16 @@ printf 'hello from vfs root\n' > "${VFS_ROOT}/README"
 mkdir -p "${VFS_ROOT}/mods"
 cp "${ROOT}/build/mods/t0_hello.wasm" "${ROOT}/build/mods/t1_read.wasm" \
 	"${ROOT}/build/mods/t3_util_native.wasm" \
+	"${ROOT}/build/mods/t4_getpid.wasm" \
+	"${ROOT}/build/mods/t8_multimod_lib.wasm" "${ROOT}/build/mods/t9_multimod_app.wasm" \
 	"${VFS_ROOT}/mods/"
 
 OUT="$("${RUNTIME}" --memory=16777216 --bytecode-memory=1048576 --vfs-root="${VFS_ROOT}" \
 	/mods/t0_hello.wasm \
 	/mods/t1_read.wasm \
-	/mods/t3_util_native.wasm)"
+	/mods/t3_util_native.wasm \
+	/mods/t4_getpid.wasm \
+	/mods/t9_multimod_app.wasm)"
 
 echo "${OUT}"
 
@@ -64,5 +68,24 @@ echo "${OUT}" | grep -q "t3_util_native: used_after_free=0" \
 	|| { echo "FAIL: arena.h free() did not coalesce back to empty" >&2; exit 1; }
 echo "${OUT}" | grep -qE "t3_util_native\.wasm: exit=0" \
 	|| { echo "FAIL: t3_util_native did not exit 0" >&2; exit 1; }
+
+# t4_getpid — runtime/process.h's spawn() auto-injects "PID=<n>"; app.c's
+# scripted mode already routes every run through spawn()+wait() (see
+# app.c), so this exercises the real end-to-end path, not a synthetic one.
+echo "${OUT}" | grep -qE "t4_getpid: PID=[0-9]+" \
+	|| { echo "FAIL: PID env var missing/malformed for t4_getpid" >&2; exit 1; }
+echo "${OUT}" | grep -qE "t4_getpid\.wasm: exit=0" \
+	|| { echo "FAIL: t4_getpid did not exit 0" >&2; exit 1; }
+
+# t9_multimod_app -> t8_multimod_lib — WAMR's own WASM_ENABLE_MULTI_MODULE
+# feature (runtime/runtime.c's module_reader), one .wasm importing a
+# function straight from another .wasm's own .wasm bytes, no host
+# round-trip for that one call. t8_multimod_lib.wasm itself is never named
+# on pm-linux-runtime's own argv above — it only ever gets loaded because
+# module_reader resolves it lazily, by name, while loading t9 itself.
+echo "${OUT}" | grep -q "t9_multimod_app: t8_multimod_lib_add(3, 4) = 7" \
+	|| { echo "FAIL: multi-module import (t9_multimod_app -> t8_multimod_lib) did not run" >&2; exit 1; }
+echo "${OUT}" | grep -qE "t9_multimod_app\.wasm: exit=0" \
+	|| { echo "FAIL: t9_multimod_app did not exit 0" >&2; exit 1; }
 
 echo "verify-linux: OK"

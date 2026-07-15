@@ -36,9 +36,22 @@ set(WAMR_BUILD_JIT 0)
 set(WAMR_BUILD_FAST_JIT 0)
 set(WAMR_BUILD_LIBC_BUILTIN 1)
 set(WAMR_BUILD_LIBC_WASI 1)
-set(WAMR_BUILD_MULTI_MODULE 0)
+# Lets one .wasm import functions/globals/memory directly from another
+# already-loaded .wasm instead of everything being statically linked into
+# one file — see runtime/runtime.c's own module_reader (wired against this
+# same vfs_root) and docs/RUNTIME.md "Multi-module" for the worked example
+# and what WAMR does/doesn't actually share across importers.
+set(WAMR_BUILD_MULTI_MODULE 1)
 set(WAMR_BUILD_LIB_PTHREAD 0)
-set(WAMR_BUILD_LIB_WASI_THREADS 0)
+# Standards-track wasi-threads (thread-spawn import + shared linear memory),
+# not WAMR's own older non-standard lib-pthread — this is also what turns on
+# WASM_ENABLE_THREAD_MGR internally (see external/wamr/build-scripts/
+# runtime_lib.cmake), which is what makes runtime.c's
+# pm_metal_runtime_terminate() able to actually interrupt a hot compute loop
+# (its CHECK_SUSPEND_FLAGS() poll is compiled out entirely without this —
+# see scripts/verify-linux-process.sh) rather than only ever being noticed at
+# an import-call boundary.
+set(WAMR_BUILD_LIB_WASI_THREADS 1)
 set(WAMR_BUILD_MINI_LOADER 0)
 set(WAMR_BUILD_SIMD 1)
 set(WAMR_BUILD_REF_TYPES 1)
@@ -57,6 +70,7 @@ add_executable(pm-linux-runtime
 	pymergetic/metal/port/platform.c
 	pymergetic/metal/port/lock.c
 	pymergetic/metal/port/worker.c
+	pymergetic/metal/port/pipe.c
 	pymergetic/metal/memory/ram.c
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c
@@ -64,6 +78,7 @@ add_executable(pm-linux-runtime
 	${PM_COMMON}/memory/ops.c
 	${PM_COMMON}/runtime/runtime.c
 	${PM_COMMON}/runtime/process.c
+	${PM_COMMON}/runtime/env.c
 	${PM_COMMON}/app/app.c
 	${PM_COMMON}/util/size.c
 	${PM_COMMON}/util/arena.c
@@ -75,8 +90,17 @@ target_include_directories(pm-linux-runtime PRIVATE
 	${PM_INCLUDE_INC}
 )
 
+# PM_METAL_RUNTIME_MULTI_MODULE: our own flag (not WAMR's WASM_ENABLE_MULTI_
+# MODULE — that macro lives in WAMR's internal core/config.h, never exposed
+# through the public core/iwasm/include headers this target actually sees)
+# gating runtime.c's own module_reader/module_destroyer registration, which
+# calls a WAMR API that only *exists* in pm-wamr-vmlib when WAMR_BUILD_MULTI_
+# MODULE above is 1 — kept in lockstep with that setting so runtime.c stays
+# buildable unchanged against a future zephyr WAMR build with multi-module
+# still off (see src/zephyr/CMakeLists.txt, which does not define this).
 target_compile_definitions(pm-linux-runtime PRIVATE
 	PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
+	PM_METAL_RUNTIME_MULTI_MODULE=1
 )
 
 target_link_libraries(pm-linux-runtime PRIVATE
@@ -112,9 +136,52 @@ target_include_directories(pm-linux-thread-stress PRIVATE
 
 target_compile_definitions(pm-linux-thread-stress PRIVATE
 	PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
+	PM_METAL_RUNTIME_MULTI_MODULE=1
 )
 
 target_link_libraries(pm-linux-thread-stress PRIVATE
+	pm-wamr-vmlib
+	m
+	dl
+	pthread
+)
+
+# ---- pm-linux-process-test (opt-in — see scripts/verify-linux-process.sh) ----
+# runtime/process.h's own spawn()/wait()/kill() end-to-end, incl. worker.c
+# (process.c's real dependency, unlike thread-stress above which drives
+# runtime.h directly with its own pthreads). EXCLUDE_FROM_ALL: not part of
+# a normal build.
+
+add_executable(pm-linux-process-test EXCLUDE_FROM_ALL
+	process_test.c
+	pymergetic/metal/port/platform.c
+	pymergetic/metal/port/lock.c
+	pymergetic/metal/port/worker.c
+	pymergetic/metal/port/pipe.c
+	pymergetic/metal/memory/ram.c
+	pymergetic/metal/memory/kheap.c
+	pymergetic/metal/memory/bytecode.c
+	${PM_COMMON}/port/platform.c
+	${PM_COMMON}/memory/ops.c
+	${PM_COMMON}/runtime/runtime.c
+	${PM_COMMON}/runtime/process.c
+	${PM_COMMON}/runtime/env.c
+	${PM_COMMON}/util/size.c
+	${PM_COMMON}/util/arena.c
+	${PM_COMMON}/util/log.c
+)
+
+target_include_directories(pm-linux-process-test PRIVATE
+	${PM_COMMON_INC}
+	${PM_INCLUDE_INC}
+)
+
+target_compile_definitions(pm-linux-process-test PRIVATE
+	PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
+	PM_METAL_RUNTIME_MULTI_MODULE=1
+)
+
+target_link_libraries(pm-linux-process-test PRIVATE
 	pm-wamr-vmlib
 	m
 	dl

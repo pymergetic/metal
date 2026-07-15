@@ -9,14 +9,23 @@
  * and its N currently-running instances. Host-only convenience layer
  * built entirely on top of runtime.h's own public API (run_ex() + the
  * refcount it already maintains — see runtime.c's file header) — this
- * file adds no new synchronization *inside* the runtime itself, it only
- * tracks the worker threads its own spawn() starts.
+ * file adds no new synchronization *inside* the runtime itself beyond
+ * what run_ex()'s own pm_metal_runtime_exec_t out-param already gives
+ * kill() (see below); otherwise it only tracks the worker threads its
+ * own spawn() starts.
+ *
+ * getpid(): there is deliberately no such call here — spawn() instead
+ * injects a "PID=<n>" entry into the process's own env (on top of
+ * whatever the caller passed), so any guest gets its own pid back from
+ * its language's ordinary getenv("PID"), exactly like every other WASI
+ * env var, no new host import needed for something libc already has a
+ * standard door for.
  *
  * Concurrency: init()/shutdown() are controller-thread-only, same
  * contract as runtime.h's own init()/shutdown() (in fact shutdown() here
  * must run *before* runtime_shutdown() — see shutdown()'s own doc
- * comment). Once init() has returned, spawn()/try_wait()/wait()/list()
- * are all safe to call concurrently from multiple threads. wait()/
+ * comment). Once init() has returned, spawn()/try_wait()/wait()/kill()/
+ * list() are all safe to call concurrently from multiple threads. wait()/
  * try_wait() on the *same* pid must not race each other — same
  * single-reaper precondition port/worker.h's own join()/try_join()
  * already documents, just inherited here rather than re-invented.
@@ -82,12 +91,28 @@ void pm_metal_process_shutdown(void);
  * in *out_pid. argv/envp are copied internally before this returns —
  * the caller's own arrays (e.g. a tokenized command line living on some
  * other thread's stack) need not outlive this call, unlike run_ex()
- * itself. Opportunistically reaps any already-finished, not-yet-waited
- * process first (bounded, best-effort zero-effort hygiene — see
- * process.c — so a caller that never calls try_wait()/wait()/ps still
- * cannot leak the table indefinitely as long as spawn() keeps getting
- * called). Returns 0/-1 (bad args, or the table is still genuinely full
- * even after that sweep). */
+ * itself. A "PID=<n>" entry (this process's own *out_pid, decimal) is
+ * appended to the copied env automatically — on top of whatever envc/
+ * envp the caller passed, never replacing it — see this file's own
+ * getpid() note above. Opportunistically reaps any already-finished,
+ * not-yet-waited process first (bounded, best-effort zero-effort hygiene
+ * — see process.c — so a caller that never calls try_wait()/wait()/ps
+ * still cannot leak the table indefinitely as long as spawn() keeps
+ * getting called). Returns 0/-1 (bad args, or the table is still
+ * genuinely full even after that sweep).
+ *
+ * Ownership of stdin_fd/stdout_fd/stderr_fd passes to this call: any
+ * value >= 0 (never -1, the "inherit the host's own" sentinel — that
+ * one is never touched) is closed automatically, by this process's own
+ * worker thread, the moment its run_ex() call returns — the caller must
+ * not close it itself, and must not reuse that fd number for anything
+ * else until this pid has actually finished. This is what makes
+ * port/pipe.h's pipe() safe to chain two spawn()s with no dup()ing: hand
+ * the write end to one as stdout_fd, the read end to the other as
+ * stdin_fd, then forget both — each is closed by its own sole owner
+ * right when it's done, which is also exactly when the *other* end
+ * needs to see EOF. See docs/RUNTIME.md "Processes" for the worked
+ * example. */
 int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **argv, int envc, const char **envp,
 			    int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd,
 			    pm_metal_process_exit_cb on_exit, void *on_exit_ctx, pm_metal_process_id_t *out_pid);
@@ -107,6 +132,19 @@ int pm_metal_process_try_wait(pm_metal_process_id_t pid, int *out_exit_code);
  * wait(): blocks until it finishes, then reaps it (same pid-reuse note as
  * try_wait() above). Returns 0/-1 (no such pid). */
 int pm_metal_process_wait(pm_metal_process_id_t pid, int *out_exit_code);
+
+/* impl: common — src/common/pymergetic/metal/runtime/process.c
+ *
+ * kill(): a hard stop only, not a real POSIX signal — see
+ * pm_metal_runtime_terminate()'s own doc comment (runtime.h) for exactly
+ * what that means and why it is safe to call concurrently with the
+ * target's own worker thread. Does not wait for the target to actually
+ * exit — call wait()/try_wait() afterward for that, same as always.
+ * Returns 0 (found and asked to stop — including the harmless case
+ * where it had already finished on its own, or hadn't reached
+ * run_ex()'s own instantiate() yet, in which case this is a silent
+ * no-op), -1 (no such pid). */
+int pm_metal_process_kill(pm_metal_process_id_t pid);
 
 /* impl: common — src/common/pymergetic/metal/runtime/process.c
  *

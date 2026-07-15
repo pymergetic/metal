@@ -1,0 +1,21 @@
+Zephyr has no pthread_condattr_setclock() — WAMR's own upstream #if
+chain here only excludes it for Apple/SGX/Windows/Cosmopolitan/FreeRTOS,
+so a Zephyr build otherwise picks the wrong (unavailable) branch. Carried
+over from this tree's earlier (pre-patches/) Zephyr bring-up work. See
+docs/RUNTIME.md "Bring-up plan" and docs/SOURCETREE.md "Vendoring".
+Applied by scripts/setup-wamr.sh.
+
+diff --git a/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/ssp_config.h b/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/ssp_config.h
+index 82967721..81aac896 100644
+--- a/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/ssp_config.h
++++ b/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/ssp_config.h
+@@ -63,7 +63,8 @@
+ #endif
+ 
+ #if !defined(__APPLE__) && !defined(BH_PLATFORM_LINUX_SGX) && !defined(_WIN32) \
+-    && !defined(__COSMOPOLITAN__) && !defined(BH_PLATFORM_FREERTOS)
++    && !defined(__COSMOPOLITAN__) && !defined(BH_PLATFORM_FREERTOS) \
++    && !defined(BH_PLATFORM_ZEPHYR)
+ #define CONFIG_HAS_PTHREAD_CONDATTR_SETCLOCK 1
+ #else
+ #define CONFIG_HAS_PTHREAD_CONDATTR_SETCLOCK 0

@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "pymergetic/metal/port/lock.h"
+#include "pymergetic/metal/port/pipe.h"
 #include "pymergetic/metal/port/worker.h"
 
 typedef struct pm_metal_process_slot {
@@ -17,13 +18,18 @@ typedef struct pm_metal_process_slot {
 	int argc;
 	char **argv; /* owned, strdup'd copies — see spawn() */
 	int envc;
-	char **envp; /* owned, strdup'd copies; NULL if envc == 0 */
+	char **envp; /* owned, strdup'd copies plus one "PID=<n>" entry — see spawn() */
 	int64_t stdin_fd, stdout_fd, stderr_fd;
 	pm_metal_process_exit_cb on_exit;
 	void *on_exit_ctx;
 	pm_metal_port_worker_t worker;
 	volatile int finished; /* set by the worker itself, right before it returns */
 	int exit_code;         /* valid once finished == 1 */
+	/* Owned by run_ex() itself once the worker below calls it — see
+	 * pm_metal_runtime_exec_t's own doc comment (runtime.h) and
+	 * kill()'s doc comment here for the locking rule that makes
+	 * reading this from a different thread than the worker safe. */
+	pm_metal_runtime_exec_t exec;
 } pm_metal_process_slot_t;
 
 static struct {
@@ -59,7 +65,19 @@ static int pm_metal_process_worker(void *arg)
 	pm_metal_process_slot_t *slot = arg;
 	int exit_code = pm_metal_runtime_run_ex(slot->handle, slot->argc, slot->argv, slot->envc,
 						 (const char **)slot->envp, slot->stdin_fd, slot->stdout_fd,
-						 slot->stderr_fd);
+						 slot->stderr_fd, &slot->exec);
+
+	/* Ownership transfer per spawn()'s own doc comment (process.h) —
+	 * pm_metal_port_close() itself is a no-op on the -1 "inherit the
+	 * host's own" sentinel, so this is safe unconditionally regardless
+	 * of which slots were actually real fds. Done here, not by
+	 * whoever called spawn(): this is the exact moment each fd's sole
+	 * owner is done with it, which for a pipe()d stdout_fd is also
+	 * exactly when the process on the *other* end needs to see EOF —
+	 * see port/pipe.h's own file header. */
+	pm_metal_port_close(slot->stdin_fd);
+	pm_metal_port_close(slot->stdout_fd);
+	pm_metal_port_close(slot->stderr_fd);
 
 	/* Drops the hold spawn() took synchronously before this thread
 	 * even started — see spawn()'s own comment on why that hold
@@ -192,14 +210,22 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 	pm_metal_process_slot_t *slot = &g_pm_metal_process.slots[slot_idx];
 
 	memset(slot, 0, sizeof(*slot));
+	slot->pid.pid = (uint32_t)(slot_idx + 1);
+
+	/* One extra slot for the "PID=<n>" entry spawn() always appends —
+	 * see process.h's own getpid() note. */
+	char pid_env[16]; /* "PID=" + up to 10 digits + NUL */
+	int total_envc = envc + 1;
+
+	snprintf(pid_env, sizeof(pid_env), "PID=%u", (unsigned)slot->pid.pid);
 
 	/* Owned copies: argv/envp typically point at a caller's stack
 	 * buffer (e.g. a tokenized command line) that will not outlive
 	 * this call — the worker thread below runs concurrently with the
 	 * caller and needs its own, independently-lifetimed strings. */
 	slot->argv = malloc(sizeof(char *) * (size_t)argc);
-	slot->envp = envc > 0 ? malloc(sizeof(char *) * (size_t)envc) : NULL;
-	if (!slot->argv || (envc > 0 && !slot->envp)) {
+	slot->envp = malloc(sizeof(char *) * (size_t)total_envc);
+	if (!slot->argv || !slot->envp) {
 		free(slot->argv);
 		free(slot->envp);
 		pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
@@ -223,16 +249,19 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 			memcpy(slot->envp[i], envp[i], len);
 		}
 	}
+	slot->envp[envc] = malloc(strlen(pid_env) + 1);
+	if (slot->envp[envc]) {
+		memcpy(slot->envp[envc], pid_env, strlen(pid_env) + 1);
+	}
 
 	slot->handle = handle;
 	slot->argc = argc;
-	slot->envc = envc;
+	slot->envc = total_envc;
 	slot->stdin_fd = stdin_fd;
 	slot->stdout_fd = stdout_fd;
 	slot->stderr_fd = stderr_fd;
 	slot->on_exit = on_exit;
 	slot->on_exit_ctx = on_exit_ctx;
-	slot->pid.pid = (uint32_t)(slot_idx + 1);
 
 	if (pm_metal_port_worker_spawn(&slot->worker, pm_metal_process_worker, slot) != 0) {
 		pm_metal_process_free_owned(slot);
@@ -309,6 +338,38 @@ int pm_metal_process_wait(pm_metal_process_id_t pid, int *out_exit_code)
 	slot->used = 0;
 	pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
 	return 0;
+}
+
+int pm_metal_process_kill(pm_metal_process_id_t pid)
+{
+	if (!g_pm_metal_process.initialized || pid.pid == 0 || pid.pid > PM_METAL_PROCESS_MAX) {
+		return -1;
+	}
+
+	pm_metal_port_mutex_lock(&g_pm_metal_process_lock);
+
+	pm_metal_process_slot_t *slot = &g_pm_metal_process.slots[pid.pid - 1];
+	int rc;
+
+	if (!slot->used || slot->pid.pid != pid.pid) {
+		rc = -1;
+	} else {
+		/* Held for the whole call below, not just this lookup —
+		 * this is what keeps a concurrent wait()/try_wait() from
+		 * reaping (and a future spawn() from reusing) this exact
+		 * slot out from under us between the check above and
+		 * pm_metal_runtime_terminate() actually touching
+		 * slot->exec. Lock nesting order is always this lock
+		 * first, then g_pm_metal_runtime_lock (runtime.c's own,
+		 * taken inside terminate() itself) — never the reverse,
+		 * so this can never deadlock against anything runtime.c
+		 * itself does. */
+		pm_metal_runtime_terminate(&slot->exec);
+		rc = 0;
+	}
+
+	pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
+	return rc;
 }
 
 void pm_metal_process_list(void (*visit)(const pm_metal_process_info_t *info, void *ctx), void *ctx)

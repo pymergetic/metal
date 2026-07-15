@@ -1,0 +1,60 @@
+Fix a real, TSan-reproducible data race in WAMR's own thread manager:
+wasm_exec_env_destroy() removes itself from its cluster's exec_env list
+without taking cluster->lock, on the assumption that being the cluster's
+last live thread makes that safe — an assumption wasm_set_exception()'s
+global wasm_clusters_search_exec_env() lookup (triggered by *any* wasm
+exception anywhere, including our own kill()/wasm_runtime_terminate())
+violates by locking every live cluster while scanning, including one
+mid-teardown elsewhere. See pymergetic/metal's scripts/verify-linux-
+threads.sh (thread_stress_test.c) for the reproduction, and this same
+tree's docs/SOURCETREE.md "Vendoring" for how/why this patch exists.
+Applied by scripts/setup-wamr.sh.
+
+diff --git a/core/iwasm/libraries/thread-mgr/thread_manager.c b/core/iwasm/libraries/thread-mgr/thread_manager.c
+index 8f3a6317..ee9c6912 100644
+--- a/core/iwasm/libraries/thread-mgr/thread_manager.c
++++ b/core/iwasm/libraries/thread-mgr/thread_manager.c
+@@ -440,11 +440,41 @@ wasm_cluster_del_exec_env_internal(WASMCluster *cluster, WASMExecEnv *exec_env,
+     return ret;
+ }
+ 
+-/* The caller should lock cluster->lock for thread safety */
++/*
++ * pymergetic/metal vendor patch (patches/wamr/0002-thread-mgr-exec-env-destroy-lock.patch):
++ * this used to be "return wasm_cluster_del_exec_env_internal(cluster,
++ * exec_env, true)" with no lock at all, on the strength of this
++ * function's *only* caller (wasm_exec_env_destroy()) reasoning that
++ * being the cluster's last live thread makes cluster->lock unnecessary.
++ * That reasoning doesn't hold against wasm_clusters_search_exec_env()
++ * (wasm_set_exception()'s own lookup, walking *every* live cluster,
++ * including one mid-teardown on another thread, whenever *any* wasm
++ * code anywhere raises an exception) — under ThreadSanitizer this is a
++ * real, reproducible data race the moment more than one module instance
++ * can be running/tearing down concurrently, which is the normal case
++ * for a long-lived multi-module host. Locking here instead (matching
++ * every *other* bh_list_remove(&cluster->exec_env_list) caller in this
++ * file, e.g. wasm_cluster_wait_for_all_except_self() a few lines above)
++ * closes it. can_destroy_cluster=false + destroying below, once
++ * unlocked, avoids the alternative bug that risks: calling
++ * os_mutex_destroy() on a mutex this same thread still holds (which is
++ * exactly what wasm_cluster_destroy() does to cluster->lock itself).
++ */
+ bool
+ wasm_cluster_del_exec_env(WASMCluster *cluster, WASMExecEnv *exec_env)
+ {
+-    return wasm_cluster_del_exec_env_internal(cluster, exec_env, true);
++    bool ret, now_empty;
++
++    os_mutex_lock(&cluster->lock);
++    ret = wasm_cluster_del_exec_env_internal(cluster, exec_env, false);
++    now_empty = (cluster->exec_env_list.len == 0);
++    os_mutex_unlock(&cluster->lock);
++
++    if (now_empty) {
++        wasm_cluster_destroy(cluster);
++    }
++
++    return ret;
+ }
+ 
+ static WASMExecEnv *

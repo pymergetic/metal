@@ -95,6 +95,10 @@ static struct {
 	int initialized;
 	char *vfs_root;
 	char *map_dir_entry; /* "/::<vfs_root>", built once at init */
+	char **addr_pool; /* owned copies of cfg->addr_pool's strings, see runtime.h */
+	uint32_t addr_pool_count;
+	char **ns_lookup_pool; /* owned copies of cfg->ns_lookup_pool's strings */
+	uint32_t ns_lookup_pool_count;
 	pm_metal_runtime_slot_t slots[PM_METAL_RUNTIME_MAX_HANDLES];
 } g_pm_metal_runtime;
 
@@ -171,6 +175,96 @@ static int pm_metal_runtime_resolve_vfs_path(const char *guest_path, char *out, 
 	return (n > 0 && (size_t)n < out_len) ? 0 : -1;
 }
 
+#ifdef PM_METAL_RUNTIME_MULTI_MODULE
+/* Multi-module: one .wasm's own (import "libb" "add" (func ...)) names
+ * "libb" as a *module*, not a file — WAMR calls back here to actually turn
+ * that name into bytes the moment it first needs them (i.e. lazily, while
+ * loading whatever module imported it), by the exact same convention
+ * load_file() already uses for a top-level mod: "<module_name>.wasm",
+ * resolved against vfs_root under /mods — so a dependency named "libb" is
+ * just another ordinary /mods/libb.wasm, loadable standalone too, nothing
+ * multi-module-specific about how it's stored. Reuses the bytecode arena
+ * (not malloc) for the same reason load_file() does — see this file's own
+ * header — and module_destroyer below is WAMR's own paired callback to
+ * free exactly that allocation once the dependency is unloaded. */
+static bool pm_metal_runtime_module_reader(package_type_t module_type, const char *module_name, uint8_t **p_buffer,
+					    uint32_t *p_size)
+{
+	(void)module_type;
+
+	char guest_path[PM_METAL_RUNTIME_MAX_PATH];
+	int n = snprintf(guest_path, sizeof(guest_path), "/mods/%s.wasm", module_name);
+	if (n <= 0 || (size_t)n >= sizeof(guest_path)) {
+		return false;
+	}
+
+	char host_path[PM_METAL_RUNTIME_MAX_PATH];
+	if (pm_metal_runtime_resolve_vfs_path(guest_path, host_path, sizeof(host_path)) != 0) {
+		return false;
+	}
+
+	if (pm_metal_port_read_file(host_path, p_buffer, p_size) != 0) {
+		fprintf(stderr, "pm_metal_runtime: dependency module read failed: %s\n", guest_path);
+		return false;
+	}
+	return true;
+}
+
+static void pm_metal_runtime_module_destroyer(uint8_t *buffer, uint32_t size)
+{
+	(void)size;
+	pm_metal_memory_bytecode_ops()->free(buffer);
+}
+#endif /* PM_METAL_RUNTIME_MULTI_MODULE */
+
+/* Copies `count` strings out of `src` (caller-owned, need not outlive this
+ * call) into a freshly malloc'd array of freshly malloc'd strings — used
+ * for cfg->addr_pool/ns_lookup_pool below, same reasoning as vfs_root's
+ * own hand-rolled copy just above (no strdup() — POSIX/BSD extension, not
+ * ISO C). count == 0 is not an error: *out is set to NULL, matching what
+ * a config that opts out of sockets entirely passes to
+ * wasm_runtime_set_wasi_{addr,ns_lookup}_pool() every run_ex() call. On
+ * failure, anything already allocated this call is freed before
+ * returning -1 — never leaves a partially-built array in *out. */
+static int pm_metal_runtime_dup_string_array(const char **src, uint32_t count, char ***out)
+{
+	if (count == 0) {
+		*out = NULL;
+		return 0;
+	}
+
+	char **dst = malloc(sizeof(char *) * count);
+	if (!dst) {
+		return -1;
+	}
+
+	uint32_t i;
+	for (i = 0; i < count; i++) {
+		size_t len = strlen(src[i]) + 1;
+		dst[i] = malloc(len);
+		if (!dst[i]) {
+			while (i > 0) {
+				free(dst[--i]);
+			}
+			free(dst);
+			return -1;
+		}
+		memcpy(dst[i], src[i], len);
+	}
+	*out = dst;
+	return 0;
+}
+
+static void pm_metal_runtime_free_string_array(char **arr, uint32_t count)
+{
+	uint32_t i;
+
+	for (i = 0; i < count; i++) {
+		free(arr[i]);
+	}
+	free(arr);
+}
+
 static void pm_metal_runtime_unload_slot(pm_metal_runtime_slot_t *slot)
 {
 	wasm_runtime_unload(slot->module);
@@ -239,6 +333,25 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	}
 	snprintf(map_dir_entry, map_dir_len, "/::%s", vfs_root);
 
+	char **addr_pool = NULL;
+	if (pm_metal_runtime_dup_string_array(cfg->addr_pool, cfg->addr_pool_count, &addr_pool) != 0) {
+		free(map_dir_entry);
+		free(vfs_root);
+		bytecode->release();
+		kheap->release();
+		return -1;
+	}
+
+	char **ns_lookup_pool = NULL;
+	if (pm_metal_runtime_dup_string_array(cfg->ns_lookup_pool, cfg->ns_lookup_pool_count, &ns_lookup_pool) != 0) {
+		pm_metal_runtime_free_string_array(addr_pool, cfg->addr_pool_count);
+		free(map_dir_entry);
+		free(vfs_root);
+		bytecode->release();
+		kheap->release();
+		return -1;
+	}
+
 	RuntimeInitArgs init_args;
 	memset(&init_args, 0, sizeof(init_args));
 	init_args.mem_alloc_type = Alloc_With_Pool;
@@ -247,12 +360,21 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 
 	if (!wasm_runtime_full_init(&init_args)) {
 		fprintf(stderr, "pm_metal_runtime: wasm_runtime_full_init failed\n");
+		pm_metal_runtime_free_string_array(ns_lookup_pool, cfg->ns_lookup_pool_count);
+		pm_metal_runtime_free_string_array(addr_pool, cfg->addr_pool_count);
 		free(map_dir_entry);
 		free(vfs_root);
 		bytecode->release();
 		kheap->release();
 		return -1;
 	}
+
+#ifdef PM_METAL_RUNTIME_MULTI_MODULE
+	/* Must happen before any load() of a module that might depend on
+	 * another one by name — see pm_metal_runtime_module_reader() above
+	 * for the actual "module_name" -> bytes convention. */
+	wasm_runtime_set_module_reader(pm_metal_runtime_module_reader, pm_metal_runtime_module_destroyer);
+#endif
 
 	/* Must happen before any load()/instantiate() of a module that
 	 * might import these — every mod's own compile already resolved
@@ -272,6 +394,8 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	    || pm_metal_util_size_native_register() != 0) {
 		fprintf(stderr, "pm_metal_runtime: native registration failed\n");
 		wasm_runtime_destroy();
+		pm_metal_runtime_free_string_array(ns_lookup_pool, cfg->ns_lookup_pool_count);
+		pm_metal_runtime_free_string_array(addr_pool, cfg->addr_pool_count);
 		free(map_dir_entry);
 		free(vfs_root);
 		bytecode->release();
@@ -282,6 +406,10 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	memset(g_pm_metal_runtime.slots, 0, sizeof(g_pm_metal_runtime.slots));
 	g_pm_metal_runtime.vfs_root = vfs_root;
 	g_pm_metal_runtime.map_dir_entry = map_dir_entry;
+	g_pm_metal_runtime.addr_pool = addr_pool;
+	g_pm_metal_runtime.addr_pool_count = cfg->addr_pool_count;
+	g_pm_metal_runtime.ns_lookup_pool = ns_lookup_pool;
+	g_pm_metal_runtime.ns_lookup_pool_count = cfg->ns_lookup_pool_count;
 
 	/* Init last, right before publishing `initialized` — nothing past
 	 * this point can fail, so this runs exactly once per init()/
@@ -312,6 +440,8 @@ int pm_metal_runtime_shutdown(void)
 
 	wasm_runtime_destroy();
 
+	pm_metal_runtime_free_string_array(g_pm_metal_runtime.ns_lookup_pool, g_pm_metal_runtime.ns_lookup_pool_count);
+	pm_metal_runtime_free_string_array(g_pm_metal_runtime.addr_pool, g_pm_metal_runtime.addr_pool_count);
 	free(g_pm_metal_runtime.map_dir_entry);
 	free(g_pm_metal_runtime.vfs_root);
 	pm_metal_memory_bytecode_ops()->release();
@@ -388,11 +518,12 @@ int pm_metal_runtime_resolve_path(const char *guest_path, char *out, size_t out_
 
 int pm_metal_runtime_run(pm_metal_runtime_handle_t h, int argc, char **argv)
 {
-	return pm_metal_runtime_run_ex(h, argc, argv, 0, NULL, -1, -1, -1);
+	return pm_metal_runtime_run_ex(h, argc, argv, 0, NULL, -1, -1, -1, NULL);
 }
 
 int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, int envc, const char **envp,
-			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd)
+			     int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd,
+			     pm_metal_runtime_exec_t *exec_out)
 {
 	if (!g_pm_metal_runtime.initialized) {
 		return -1;
@@ -453,10 +584,30 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 	wasm_runtime_set_wasi_args_ex(slot->module, NULL, 0, map_dir_list, 1, envp, (uint32_t)envc,
 				       argv, argc, stdin_fd, stdout_fd, stderr_fd);
 
+	/* One fixed policy for every run_ex() call on every handle this
+	 * whole init()/shutdown() cycle — set unconditionally (even when
+	 * both counts are 0) so a handle can never end up keeping some
+	 * *other* run_ex() call's addr_pool by accident (WAMR's own
+	 * WASIArguments lives on the module, reused across calls; skipping
+	 * this call on a 0-count config would just leave whatever was set
+	 * last time). See runtime.h's own doc comment on cfg->addr_pool for
+	 * what "0 entries" actually means (deny all, not allow all). */
+	wasm_runtime_set_wasi_addr_pool(slot->module, (const char **)g_pm_metal_runtime.addr_pool,
+					 g_pm_metal_runtime.addr_pool_count);
+	wasm_runtime_set_wasi_ns_lookup_pool(slot->module, (const char **)g_pm_metal_runtime.ns_lookup_pool,
+					      g_pm_metal_runtime.ns_lookup_pool_count);
+
 	char error_buf[PM_METAL_RUNTIME_ERROR_BUF_SIZE];
 	wasm_module_inst_t inst = wasm_runtime_instantiate(
 		slot->module, PM_METAL_RUNTIME_STACK_SIZE,
 		PM_METAL_RUNTIME_HEAP_SIZE, error_buf, sizeof(error_buf));
+	/* Published while still holding the lock — see
+	 * pm_metal_runtime_exec_t's own doc comment (runtime.h) for why a
+	 * concurrent terminate() reading exec_out->inst can never race
+	 * this specific write. */
+	if (exec_out && inst) {
+		exec_out->inst = inst;
+	}
 	pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
 
 	int exit_code;
@@ -476,6 +627,12 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 	}
 
 	pm_metal_port_mutex_lock(&g_pm_metal_runtime_lock);
+	/* Cleared before deinstantiate() actually frees anything — same
+	 * lock as the publish above, so terminate() can never observe a
+	 * stale, about-to-be-freed inst. */
+	if (exec_out) {
+		exec_out->inst = NULL;
+	}
 	if (inst) {
 		wasm_runtime_deinstantiate(inst);
 	}
@@ -486,6 +643,19 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 		wasm_runtime_destroy_thread_env();
 	}
 	return exit_code;
+}
+
+void pm_metal_runtime_terminate(pm_metal_runtime_exec_t *exec)
+{
+	if (!exec) {
+		return;
+	}
+
+	pm_metal_port_mutex_lock(&g_pm_metal_runtime_lock);
+	if (exec->inst) {
+		wasm_runtime_terminate((wasm_module_inst_t)exec->inst);
+	}
+	pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
 }
 
 int pm_metal_runtime_hold(pm_metal_runtime_handle_t h)
