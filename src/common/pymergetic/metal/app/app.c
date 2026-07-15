@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "pymergetic/metal/mount/fstab.h"
 #include "pymergetic/metal/runtime/process.h"
 #include "pymergetic/metal/runtime/runtime.h"
 
@@ -18,10 +19,30 @@ static const char *pm_metal_app_basename_of(const char *path)
 	return slash ? slash + 1 : path;
 }
 
-int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv)
+int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv,
+			       const pm_metal_app_cli_mount_t *cli_mounts, size_t cli_mount_count)
 {
 	int rc = 0;
 	int i;
+
+	/* Stage B — see docs/MOUNT.md "Boot sequence". Right after init()'s
+	 * own Stage A root mount, before any mod is loaded, so a mod's own
+	 * WASI I/O and this file's own load_file() calls both see every
+	 * fstab-declared (and CLI --mount=, below) mount already in place.
+	 * No-op if the just-mounted root has no /etc/fstab — every existing
+	 * scripted-mode caller that never added one keeps behaving exactly
+	 * as before. */
+	pm_metal_mount_fstab_apply("/etc/fstab");
+
+	/* CLI --mount= sugar — same apply function fstab lines themselves
+	 * use, deliberately applied *after* the real fstab above (see
+	 * app.h's own doc comment) so an ad hoc CLI mount overrides a
+	 * conflicting fstab line rather than the other way around. */
+	for (i = 0; i < (int)cli_mount_count; i++) {
+		const pm_metal_app_cli_mount_t *m = &cli_mounts[i];
+
+		pm_metal_mount_fstab_apply_fields(m->source, m->target, m->fstype, m->opts);
+	}
 
 	for (i = 0; i < wasm_argc; i++) {
 		const char *path = wasm_argv[i];

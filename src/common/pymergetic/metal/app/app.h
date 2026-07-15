@@ -18,9 +18,29 @@
 #ifndef PYMERGETIC_METAL_APP_APP_H_
 #define PYMERGETIC_METAL_APP_APP_H_
 
+#include <stddef.h>
+
+/* One CLI --mount= flag's fields, already split by main.c's own
+ * "<fstype>:<source>:<target>[:opts]" syntax — see mount/fstab.h's
+ * apply_fields() for the field order this gets reordered into. `opts`
+ * may be NULL. Not target-specific despite living behind a CLI flag
+ * today — any future target's own main() (or Kconfig-driven bring-up)
+ * can build this same array without going through argv at all. */
+typedef struct pm_metal_app_cli_mount {
+	const char *fstype;
+	const char *source;
+	const char *target;
+	const char *opts;
+} pm_metal_app_cli_mount_t;
+
 /* impl: common — src/common/pymergetic/metal/app/app.c
  *
- * Loads, runs (argv[0] = its basename), and unloads each of
+ * Stage B (see docs/MOUNT.md "Boot sequence") first — applies /etc/fstab
+ * (missing file: no-op), then cli_mounts[0..cli_mount_count) in order
+ * (cli_mount_count == 0 is fine, cli_mounts may be NULL then) — CLI
+ * mounts intentionally applied *after* the real fstab, so a CLI mount at
+ * the same target path wins (last-mount-wins, see mount/mount.h). Then
+ * loads, runs (argv[0] = its basename), and unloads each of
  * wasm_argv[0..wasm_argc), in order, via runtime/process.h's spawn()+wait()
  * — sequential/blocking, one after another. Logs "<path>: exit=%d" to
  * real stdout per module (fflush()ed immediately). Calls
@@ -29,6 +49,7 @@
  * module exited 0, else 1 — never -1/negative, safe to return straight
  * from main(). `argv0` is used only in its own stderr diagnostics
  * ("<argv0>: load failed: <path>", etc). */
-int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv);
+int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv,
+			       const pm_metal_app_cli_mount_t *cli_mounts, size_t cli_mount_count);
 
 #endif /* PYMERGETIC_METAL_APP_APP_H_ */

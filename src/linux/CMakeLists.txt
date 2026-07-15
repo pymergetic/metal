@@ -92,8 +92,14 @@ add_executable(pm-linux-runtime
 	pymergetic/metal/memory/ram.c
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c
+	pymergetic/metal/mount/tmpfs.c
 	${PM_COMMON}/port/platform.c
 	${PM_COMMON}/memory/ops.c
+	${PM_COMMON}/mount/ops.c
+	${PM_COMMON}/mount/hostdir.c
+	${PM_COMMON}/mount/tmpfs_registry.c
+	${PM_COMMON}/mount/mount.c
+	${PM_COMMON}/mount/fstab.c
 	${PM_COMMON}/runtime/runtime.c
 	${PM_COMMON}/runtime/process.c
 	${PM_COMMON}/runtime/env.c
@@ -143,8 +149,14 @@ add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
 	pymergetic/metal/memory/ram.c
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c
+	pymergetic/metal/mount/tmpfs.c
 	${PM_COMMON}/port/platform.c
 	${PM_COMMON}/memory/ops.c
+	${PM_COMMON}/mount/ops.c
+	${PM_COMMON}/mount/hostdir.c
+	${PM_COMMON}/mount/tmpfs_registry.c
+	${PM_COMMON}/mount/mount.c
+	${PM_COMMON}/mount/fstab.c
 	${PM_COMMON}/runtime/runtime.c
 	${PM_COMMON}/util/size.c
 	${PM_COMMON}/util/arena.c
@@ -187,8 +199,14 @@ add_executable(pm-linux-process-test EXCLUDE_FROM_ALL
 	pymergetic/metal/memory/ram.c
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c
+	pymergetic/metal/mount/tmpfs.c
 	${PM_COMMON}/port/platform.c
 	${PM_COMMON}/memory/ops.c
+	${PM_COMMON}/mount/ops.c
+	${PM_COMMON}/mount/hostdir.c
+	${PM_COMMON}/mount/tmpfs_registry.c
+	${PM_COMMON}/mount/mount.c
+	${PM_COMMON}/mount/fstab.c
 	${PM_COMMON}/runtime/runtime.c
 	${PM_COMMON}/runtime/process.c
 	${PM_COMMON}/runtime/env.c

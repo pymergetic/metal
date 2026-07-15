@@ -70,6 +70,11 @@ target_sources(app PRIVATE
 	main.c
 	${PM_COMMON}/port/platform.c
 	${PM_COMMON}/memory/ops.c
+	${PM_COMMON}/mount/ops.c
+	${PM_COMMON}/mount/hostdir.c
+	${PM_COMMON}/mount/tmpfs_registry.c
+	${PM_COMMON}/mount/mount.c
+	${PM_COMMON}/mount/fstab.c
 	${PM_COMMON}/runtime/runtime.c
 	${PM_COMMON}/runtime/process.c
 	${PM_COMMON}/app/app.c
@@ -86,6 +91,7 @@ target_sources(app PRIVATE
 	pymergetic/metal/memory/ram.c
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c
+	pymergetic/metal/mount/tmpfs.c
 	pymergetic/metal/wasi/file.c
 	${WAMR_RUNTIME_LIB_SOURCE}
 )

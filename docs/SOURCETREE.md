@@ -164,15 +164,23 @@ packages/metal/
 │   │   │   ├── ram.h              # machine RAM probe
 │   │   │   ├── kheap.h            # WAMR pool (wasm linear mem + WAMR structs)
 │   │   │   └── bytecode.h         # mod bytecode arena — separate from kheap
+│   │   ├── mount/                 # mount table — see docs/MOUNT.md (Phases 1-2 landed, 3 landed on linux only, 4-6 design only)
+│   │   │   ├── ops.h              # shared ops-struct layout + kind enum + resolve()/kind_by_name()
+│   │   │   ├── ops.c              # impl: common, dispatches only (mirrors memory/ops.c)
+│   │   │   ├── hostdir.h / hostdir.c  # HOSTDIR fstype — impl: common (no per-target logic needed)
+│   │   │   ├── tmpfs.h            # TMPFS fstype — shared ops-struct decl only, impl: bind (one .c per target)
+│   │   │   ├── tmpfs_registry.h / tmpfs_registry.c  # name -> host-path + refcount bookkeeping — impl: common, shared by every target's own tmpfs.c
+│   │   │   ├── mount.h / mount.c  # the table itself — mount()/umount()/resolve()/build_map_dir_list()
+│   │   │   └── fstab.h / fstab.c  # Stage B — /etc/fstab parse+apply, shared with --mount= CLI sugar
 │   │   ├── runtime/
 │   │   │   ├── runtime.h
-│   │   │   ├── runtime.c          # calls each util/*.h's own native_register() once, right after wasm_runtime_full_init()
+│   │   │   ├── runtime.c          # calls each util/*.h's own native_register() once, right after wasm_runtime_full_init(); root mount established here (Stage A)
 │   │   │   ├── process.h          # processes — decoupled from handles, see docs/RUNTIME.md "Processes"
 │   │   │   ├── process.c          # impl: common, built entirely on runtime.h's own public API
 │   │   │   ├── env.h              # export-style local/exported env split for a respawned "subshell"
 │   │   │   └── env.c              # impl: common, no per-target impl
 │   │   ├── app/                   # the scripted whole-process run mode, librarified out of src/linux/main.c
-│   │   │   ├── app.h              # run_scripted() — see there for the exact split with main.c
+│   │   │   ├── app.h              # run_scripted() — applies /etc/fstab + CLI mounts (Stage B), see there for the exact split with main.c
 │   │   │   └── app.c              # impl: common (port/worker.h via runtime/process.h, not raw pthread)
 │   │   └── util/                  # include/…/util/*.h's *only* implementation — see "Two trees" above
 │   │       ├── size.c             # impl: common + its own wasi-import NativeSymbol table/register()
@@ -186,7 +194,8 @@ packages/metal/
 │   │   ├── process_test.c         # pm-linux-process-test — EXCLUDE_FROM_ALL, see scripts/verify-linux-process.sh
 │   │   └── pymergetic/metal/
 │   │       ├── port/{platform,lock,worker,pipe}.c
-│   │       └── memory/{ram,kheap,bytecode}.c
+│   │       ├── memory/{ram,kheap,bytecode}.c
+│   │       └── mount/tmpfs.c      # TMPFS fstype — impl: linux, mkdtemp() under /dev/shm + nftw() rm -rf on release
 │   │   # wasi: WAMR linux platform
 │   │
 │   ├── zephyr/
@@ -197,10 +206,14 @@ packages/metal/
 │   │       ├── port/worker.c                   # stub — deferred, see docs/RUNTIME.md "Bring-up plan" §5
 │   │       ├── port/pipe.c                     # stub — deferred, see docs/RUNTIME.md "Bring-up plan" §5
 │   │       ├── memory/{ram,kheap,bytecode}.c
+│   │       ├── mount/tmpfs.c      # TMPFS fstype — impl: zephyr, stub (always fails — blocked on wasi/file.c + device.h, see docs/MOUNT.md)
 │   │       └── wasi/              # private
 │   │           ├── file.h
 │   │           └── file.c
 │   │
+│   ├── nuttx/                      # [stub] — see docs/LAYERS.md, cheaper bring-up than zephyr:
+│   │                                # WAMR's own nuttx platform reuses common/posix/posix_file.c
+│   │                                # + real pthread_t/sem_t unchanged, no custom os_* file shim
 │   ├── rump/                      # [stub]
 │   └── unikraft/                  # [stub]
 │
@@ -216,7 +229,12 @@ packages/metal/
 │   ├── t8_multimod_lib/main.c     # REACTOR marker (no _start) — dependency half, see docs/RUNTIME.md "Multi-module"
 │   ├── t9_multimod_app/main.c     # imports t8's add() directly, no host round-trip
 │   ├── t10_socket_server/main.c   # SOCKET marker — WASI preview1 sockets, see docs/RUNTIME.md "Sockets"
-│   └── t11_socket_client/main.c   # paired with t10 above, bounded connect() retry
+│   ├── t11_socket_client/main.c   # paired with t10 above, bounded connect() retry
+│   ├── t1y_mount_data/main.c      # opens /data/README — non-root mount table entry, see docs/MOUNT.md, scripts/verify-linux-mount.sh
+│   ├── t12_tmpfs_write/main.c     # writes through a tmpfs mount — paired with t13 below, see docs/MOUNT.md, scripts/verify-linux-tmpfs.sh
+│   ├── t13_tmpfs_read/main.c      # reads t12's write back from a separate process, same tmpfs mount
+│   ├── t14_tmpfs_read_alt/main.c  # reads via a second fstab line naming the same tmpfs source — proves reuse, not re-creation
+│   └── t15_tmpfs_read_other/main.c # reads a differently-named tmpfs source — proves independence (expected to fail)
 │
 ├── build/                         # gitignored
 │   ├── linux/runtime/
@@ -245,6 +263,12 @@ packages/metal/
 | `memory/ram` | `src/common/…/memory/ram.h` | `src/<plat>/…/memory/ram.c` — ops-struct `bind`, one getter per target |
 | `memory/kheap` | `src/common/…/memory/kheap.h` | `src/<plat>/…/memory/kheap.c` — ops-struct `bind`, one getter per target |
 | `memory/bytecode` | `src/common/…/memory/bytecode.h` | `src/<plat>/…/memory/bytecode.c` — ops-struct `bind`, one getter per target |
+| `mount/ops` | `src/common/…/mount/ops.h` | `src/common/…/mount/ops.c` — `impl: common`, `resolve()`/`kind_by_name()` only |
+| `mount/hostdir` | `src/common/…/mount/hostdir.h` | `src/common/…/mount/hostdir.c` — `impl: common` (trivial passthrough, no per-target logic needed) |
+| `mount/tmpfs` | `src/common/…/mount/tmpfs.h` | `src/<plat>/…/mount/tmpfs.c` — `impl: bind`, one per target (linux: `mkdtemp()` under `/dev/shm`; zephyr: stub, blocked on `wasi/file.c`) |
+| `mount/tmpfs_registry` | `src/common/…/mount/tmpfs_registry.h` | `src/common/…/mount/tmpfs_registry.c` — `impl: common`, name → host-path + refcount bookkeeping shared by every target's own `tmpfs.c` |
+| `mount/mount` | `src/common/…/mount/mount.h` | `src/common/…/mount/mount.c` — `impl: common`, the table itself; see docs/MOUNT.md |
+| `mount/fstab` | `src/common/…/mount/fstab.h` | `src/common/…/mount/fstab.c` — `impl: common`, Stage B parser/applier |
 | `wasi/file` | `src/zephyr/…/file.h` | `src/zephyr/…/file.c` — all `impl: zephyr` |
 | `port/worker` | `src/common/…/port/worker.h` | `src/<plat>/…/port/worker.c` — `bind`, one background-thread primitive per target |
 | `port/pipe` | `src/common/…/port/pipe.h` | `src/<plat>/…/port/pipe.c` — `bind`, one host pipe primitive per target |

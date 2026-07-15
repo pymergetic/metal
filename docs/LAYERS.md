@@ -4,8 +4,15 @@ Base stack only — from hardware/OS up to the point where a `.wasm` file can ru
 Everything above the **wasm interface** is out of scope here.
 
 ```
-targets = { linux, zephyr, rump, unikraft }   # experiment: linux + zephyr first
+targets = { linux, zephyr, nuttx, rump, unikraft }   # experiment: linux + zephyr first
 ```
+
+`nuttx` is a stub today (`src/nuttx/`, see SOURCETREE.md), but worth calling out as the
+cheapest of the remaining three to actually bring up: WAMR already ships a maintained
+`core/shared/platform/nuttx/` backend that reuses `common/posix/posix_file.c` (WASI file I/O)
+and real `pthread_t`/`sem_t` (threading) unchanged — closer in shape to `linux` than to
+`zephyr` for this codebase's own port/wasi layers. See `docs/MOUNT.md` § "Zephyr prerequisite"
+for why zephyr specifically needs a custom `os_*` file shim that nuttx would not.
 
 ---
 
