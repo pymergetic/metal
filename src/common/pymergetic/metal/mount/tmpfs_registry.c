@@ -5,7 +5,7 @@
 
 #include <string.h>
 
-#include "pymergetic/metal/mount/mount.h"
+#include "pymergetic/metal/mount/table.h"
 
 /* One entry per distinct name ever establish()'d this boot — bounded by
  * PM_METAL_MOUNT_MAX for the same reason mount.c's own table is: at most

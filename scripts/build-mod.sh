@@ -75,6 +75,12 @@ for mod_dir in "${ROOT}"/mods/*/; do
 		fi
 		extra_srcs+=("${WAMR_SOCKET_EXT_OBJ}")
 	fi
+	# Privileged mount()/umount() — empty mods/<name>/MOUNT marker opts into
+	# -DPM_METAL_BUILD_KERNEL so include/pymergetic/metal/mount/mount.h is visible.
+	# See docs/MOUNT.md Phase 5.
+	if [ -f "${mod_dir}MOUNT" ]; then
+		extra_flags+=(-DPM_METAL_BUILD_KERNEL)
+	fi
 
 	"${CLANG}" --target=wasm32-wasip1 --sysroot="${SYSROOT}" \
 		-O2 -Wall -Wextra \

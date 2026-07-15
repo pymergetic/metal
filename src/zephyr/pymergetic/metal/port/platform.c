@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <zephyr/kernel.h>
+
 #include "pymergetic/metal/port/platform.h"
 
 /* stub — fs_open()/fs_read() backend pending, see docs/RUNTIME.md §5 */
@@ -23,4 +25,23 @@ int pm_metal_port_file_exists(const char *host_path)
 {
 	(void)host_path;
 	return 0;
+}
+
+int pm_metal_port_write_file(const char *host_path, const uint8_t *data, uint32_t len)
+{
+	(void)host_path;
+	(void)data;
+	(void)len;
+	return -1;
+}
+
+int pm_metal_port_mkdir(const char *host_path)
+{
+	(void)host_path;
+	return -1;
+}
+
+uint64_t pm_metal_port_monotonic_ms(void)
+{
+	return (uint64_t)k_uptime_get();
 }

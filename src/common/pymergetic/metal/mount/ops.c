@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "pymergetic/metal/mount/hostdir.h"
+#include "pymergetic/metal/mount/proc.h"
 #include "pymergetic/metal/mount/tmpfs.h"
 
 const pm_metal_mount_ops_t *pm_metal_mount_resolve_kind(pm_metal_mount_kind_t kind)
@@ -16,6 +17,8 @@ const pm_metal_mount_ops_t *pm_metal_mount_resolve_kind(pm_metal_mount_kind_t ki
 		return pm_metal_mount_hostdir_ops();
 	case PM_METAL_MOUNT_TMPFS:
 		return pm_metal_mount_tmpfs_ops();
+	case PM_METAL_MOUNT_PROC:
+		return pm_metal_mount_proc_ops();
 	default:
 		return NULL;
 	}
@@ -34,5 +37,23 @@ int pm_metal_mount_kind_by_name(const char *name, pm_metal_mount_kind_t *out_kin
 		*out_kind = PM_METAL_MOUNT_TMPFS;
 		return 0;
 	}
+	if (strcmp(name, "proc") == 0) {
+		*out_kind = PM_METAL_MOUNT_PROC;
+		return 0;
+	}
 	return -1;
+}
+
+const char *pm_metal_mount_kind_name(pm_metal_mount_kind_t kind)
+{
+	switch (kind) {
+	case PM_METAL_MOUNT_HOSTDIR:
+		return "hostdir";
+	case PM_METAL_MOUNT_TMPFS:
+		return "tmpfs";
+	case PM_METAL_MOUNT_PROC:
+		return "proc";
+	default:
+		return NULL;
+	}
 }

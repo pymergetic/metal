@@ -52,7 +52,7 @@ Every declaration in a contract header tags where the body lives:
 | `/* impl: common */` | `src/common/…/foo.c` | one copy, all targets link it |
 | `/* impl: bind */` | `src/<plat>/…/foo.c` | **every** built target has an impl |
 | `/* impl: zephyr */` | `src/zephyr/…/foo.c` | that target only (plat-private header) |
-| `/* impl: wasi import */` | `src/common/…/util/{size,arena,log,lz4,tar}.c` — each registers its own `NativeSymbol` table, no shared bridge file | mod-facing `util/*.h` only — one host impl, guests get a real wasm import, no local body at all (see "Two trees" above) |
+| `/* impl: wasi import */` | `src/common/…/util/{size,arena,log,lz4,tar}.c` + `src/common/…/mount/mount.c` — each registers its own `NativeSymbol` table, no shared bridge file | mod-facing `util/*.h` / `mount/mount.h` — one host impl, guests get a real wasm import, no local body at all (see "Two trees" above) |
 
 One header can mix tags. Example `platform.h`: some calls OS-neutral → `common`; probes → `bind` on each plat.
 
@@ -143,6 +143,9 @@ packages/metal/
 │
 ├── include/pymergetic/metal/
 │   ├── metal.h
+│   ├── build.h                    # PM_METAL_BUILD_KERNEL — Visibility contract home
+│   ├── mount/
+│   │   └── mount.h                # privileged mount()/umount() — wasi import on wasm32 (+ KERNEL); bridge in src/…/mount/mount.c
 │   └── util/
 │       ├── wasi.h                 # PM_METAL_UTIL_WASI_IMPORT() — shared attribute shape; each of the 3 below picks its own module name
 │       ├── size.h                 # contract — wasi import on wasm32, else src/common/…/size.c
@@ -164,13 +167,17 @@ packages/metal/
 │   │   │   ├── ram.h              # machine RAM probe
 │   │   │   ├── kheap.h            # WAMR pool (wasm linear mem + WAMR structs)
 │   │   │   └── bytecode.h         # mod bytecode arena — separate from kheap
-│   │   ├── mount/                 # mount table — see docs/MOUNT.md (Phases 1-2 landed, 3 landed on linux only, 4-6 design only)
+│   │   ├── mount/                 # mount table — see docs/MOUNT.md (linux feature-complete through 6c; zephyr blocked on wasi/file.c)
 │   │   │   ├── ops.h              # shared ops-struct layout + kind enum + resolve()/kind_by_name()
 │   │   │   ├── ops.c              # impl: common, dispatches only (mirrors memory/ops.c)
 │   │   │   ├── hostdir.h / hostdir.c  # HOSTDIR fstype — impl: common (no per-target logic needed)
 │   │   │   ├── tmpfs.h            # TMPFS fstype — shared ops-struct decl only, impl: bind (one .c per target)
-│   │   │   ├── tmpfs_registry.h / tmpfs_registry.c  # name -> host-path + refcount bookkeeping — impl: common, shared by every target's own tmpfs.c
-│   │   │   ├── mount.h / mount.c  # the table itself — mount()/umount()/resolve()/build_map_dir_list()
+│   │   │   ├── tmpfs_registry.h / tmpfs_registry.c  # name -> host-path + refcount bookkeeping — impl: common
+│   │   │   ├── populate.h / populate.c  # ustar [+ lz4] blob registry + populate_all() extract against / — impl: common
+│   │   │   ├── table.h / table.c  # host-only mount table — impl: common (resolve_ex / find_by_host for live remount)
+│   │   │   ├── proc.h / proc.c    # virtual proc fstype + hook registry — impl: common
+│   │   │   ├── proc/              # per-node generators + guest TLS (cmdline/environ via /proc/self)
+│   │   │   ├── mount.c            # include/…/mount/mount.h's *only* impl + wasi native_register — same shape as util/*.c
 │   │   │   └── fstab.h / fstab.c  # Stage B — /etc/fstab parse+apply, shared with --mount= CLI sugar
 │   │   ├── runtime/
 │   │   │   ├── runtime.h
@@ -195,8 +202,11 @@ packages/metal/
 │   │   └── pymergetic/metal/
 │   │       ├── port/{platform,lock,worker,pipe}.c
 │   │       ├── memory/{ram,kheap,bytecode}.c
-│   │       └── mount/tmpfs.c      # TMPFS fstype — impl: linux, mkdtemp() under /dev/shm + nftw() rm -rf on release
-│   │   # wasi: WAMR linux platform
+│   │       ├── mount/tmpfs.c      # TMPFS fstype — impl: linux, mkdtemp() under /dev/shm + nftw() rm -rf on release
+│   │       └── wasi/
+│   │           ├── file.c         # Metal os_* — virtual proc + live remount; else __real_os_*
+│   │           └── posix_file_real.c  # WAMR posix_file.c renamed to __real_os_*
+│   │   # CMake drops stock posix_file.c from vmlib — see docs/MOUNT.md
 │   │
 │   ├── zephyr/
 │   │   ├── CMakeLists.txt, Kconfig, prj.conf, boards/
@@ -234,7 +244,14 @@ packages/metal/
 │   ├── t12_tmpfs_write/main.c     # writes through a tmpfs mount — paired with t13 below, see docs/MOUNT.md, scripts/verify-linux-tmpfs.sh
 │   ├── t13_tmpfs_read/main.c      # reads t12's write back from a separate process, same tmpfs mount
 │   ├── t14_tmpfs_read_alt/main.c  # reads via a second fstab line naming the same tmpfs source — proves reuse, not re-creation
-│   └── t15_tmpfs_read_other/main.c # reads a differently-named tmpfs source — proves independence (expected to fail)
+│   ├── t15_tmpfs_read_other/main.c # reads a differently-named tmpfs source — proves independence (expected to fail)
+│   ├── t16_populate_read/main.c   # reads /scratch/hello.txt planted by populate_all() — see scripts/verify-linux-populate.sh
+│   ├── t17_sys_mount/main.c       # MOUNT marker — mount tmpfs at /dyn + same-process use (live remount)
+│   ├── t18_sys_use/main.c         # write+read /dyn after t17 (next process still sees the mount)
+│   ├── t19_sys_umount/main.c      # MOUNT marker — privileged guest umount(/dyn)
+│   ├── t20_sys_gone/main.c        # open /dyn must fail after t19
+│   ├── t21_proc_mounts/main.c     # reads Metal /proc nodes + /proc/self — see scripts/verify-linux-proc.sh
+│   └── t22_fstypes/main.c         # lists fstypes via mount.h readonly imports
 │
 ├── build/                         # gitignored
 │   ├── linux/runtime/
@@ -242,7 +259,7 @@ packages/metal/
 │   ├── mods/
 │   └── ide/
 │
-├── scripts/
+├── scripts/                       # verify-linux-{mount,tmpfs,populate,sys-mount,proc}.sh among others
 ├── patches/{wamr,microtar}/       # tracked diffs against external/{wamr,microtar} — see "Vendoring" above
 ├── docs/
 ├── external/                      # gitignored — plain upstream checkouts, reproduced by scripts/setup-{wamr,lz4,microtar}.sh + patches/ above
@@ -267,9 +284,13 @@ packages/metal/
 | `mount/hostdir` | `src/common/…/mount/hostdir.h` | `src/common/…/mount/hostdir.c` — `impl: common` (trivial passthrough, no per-target logic needed) |
 | `mount/tmpfs` | `src/common/…/mount/tmpfs.h` | `src/<plat>/…/mount/tmpfs.c` — `impl: bind`, one per target (linux: `mkdtemp()` under `/dev/shm`; zephyr: stub, blocked on `wasi/file.c`) |
 | `mount/tmpfs_registry` | `src/common/…/mount/tmpfs_registry.h` | `src/common/…/mount/tmpfs_registry.c` — `impl: common`, name → host-path + refcount bookkeeping shared by every target's own `tmpfs.c` |
-| `mount/mount` | `src/common/…/mount/mount.h` | `src/common/…/mount/mount.c` — `impl: common`, the table itself; see docs/MOUNT.md |
+| `mount/populate` | `src/common/…/mount/populate.h` | `src/common/…/mount/populate.c` — `impl: common`, ustar [+ lz4] blob registry + `populate_all()` |
+| `mount/table` | `src/common/…/mount/table.h` | `src/common/…/mount/table.c` — `impl: common`, the table itself; see docs/MOUNT.md |
+| `mount/proc` | `src/common/…/mount/proc.h` | `src/common/…/mount/proc.c` + `proc/*` — `impl: common`, virtual proc + hooks |
+| `mount/mount` | `include/…/mount/mount.h` | `src/common/…/mount/mount.c` — wasi-import bridge for privileged mount()/umount() (same shape as `util/*`) |
 | `mount/fstab` | `src/common/…/mount/fstab.h` | `src/common/…/mount/fstab.c` — `impl: common`, Stage B parser/applier |
-| `wasi/file` | `src/zephyr/…/file.h` | `src/zephyr/…/file.c` — all `impl: zephyr` |
+| `wasi/file` (linux) | — | `src/linux/…/wasi/file.c` + `posix_file_real.c` — Metal `os_*` (proc + live remount) |
+| `wasi/file` (zephyr) | `src/zephyr/…/file.h` | `src/zephyr/…/file.c` — stub today; all `impl: zephyr` |
 | `port/worker` | `src/common/…/port/worker.h` | `src/<plat>/…/port/worker.c` — `bind`, one background-thread primitive per target |
 | `port/pipe` | `src/common/…/port/pipe.h` | `src/<plat>/…/port/pipe.c` — `bind`, one host pipe primitive per target |
 | `runtime/process` | `src/common/…/runtime/process.h` | `src/common/…/runtime/process.c` — `impl: common`, no per-target impl; built on `runtime.h`'s own public API, no new runtime-internal locking |

@@ -19,7 +19,7 @@ Pymergetic-metal: native **runtime** per target that runs **wasm** mods (`wasm32
 | [docs/WASI.md](docs/WASI.md) | WASI preview1 syscalls, host requirements, tiers |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | Process model — long-lived dynamic loader |
 | [docs/SOURCETREE.md](docs/SOURCETREE.md) | Folder layout (`include/` / `src/`) |
-| [docs/MOUNT.md](docs/MOUNT.md) | Mount system — table, `/etc/fstab`, `--mount=` CLI, `tmpfs` (**Phases 1–3 landed on linux**; zephyr `tmpfs`/ramdisk + guest `mount()` still design only) |
+| [docs/MOUNT.md](docs/MOUNT.md) | Mount system — table, fstab, tmpfs, populate, guest `mount()`/`umount()`, virtual `/proc`, live remount (**linux feature-complete** through Phase 6c; Zephyr deferred) |
 
 ---
 
@@ -35,7 +35,7 @@ packages/metal/
 │   ├── nuttx/                    [stub — see docs/LAYERS.md, cheaper bring-up than zephyr]
 │   ├── rump/                     [stub]
 │   └── unikraft/                 [stub]
-├── mods/                       t0..t15 — test .wasm guests (wasi-sdk, wasm32-wasip1)
+├── mods/                       t0..t20 — test .wasm guests (wasi-sdk, wasm32-wasip1)
 ├── apps/                        [empty — later]
 ├── scripts/                    build-linux.sh, build-mod.sh, verify-*.sh, setup-*.sh
 ├── patches/{wamr,microtar}/     tracked diffs against external/{wamr,microtar} — see docs/SOURCETREE.md § Vendoring
@@ -73,7 +73,7 @@ Other checks: `scripts/verify-linux-threads.sh` (ThreadSanitizer, concurrent loa
 
 ## Build status
 
-**Linux runtime — green.** Long-lived `pm-linux-runtime` binary: `init` → dynamic `load`/`run`/`unload` (many mods per process, no restart) → `shutdown`, over a real mount table (a Linux-like `hostdir` root mount, `/etc/fstab`, `--mount=` CLI sugar, `tmpfs` fstype (`/dev/shm`-backed, named sources) — see `docs/MOUNT.md`; single `vfs_root` is now just its "root, no other mounts" special case, `--vfs-root=` kept as a deprecated alias). Landed on top of that: WASI preview1 tier T1 (file I/O under the resolved mount table), multi-module (`.wasm` importing another `.wasm`), decoupled processes (`spawn`/`wait`/`kill`, host pipes between mods), WASI preview1 sockets (loopback TCP proven across two spawned processes), and concurrent `load`/`run`/`unload` across handles/threads proven race-free under ThreadSanitizer (including a real WAMR thread-manager race fixed via a tracked vendor patch, `patches/wamr/`).
+**Linux runtime — green.** Long-lived `pm-linux-runtime` binary: `init` → dynamic `load`/`run`/`unload` (many mods per process, no restart) → `shutdown`, over a real mount table (a Linux-like `hostdir` root mount, `/etc/fstab`, `--mount=` CLI sugar, `tmpfs` fstype (`/dev/shm`-backed, named sources), boot-time ustar [+ lz4] populate against guest `/`, privileged guest `mount()`/`umount()` with same-process visibility, virtual `/proc` — see `docs/MOUNT.md`; single `vfs_root` is now just its "root, no other mounts" special case, `--vfs-root=` kept as a deprecated alias). Landed on top of that: WASI preview1 tier T1 (file I/O under the resolved mount table), multi-module (`.wasm` importing another `.wasm`), decoupled processes (`spawn`/`wait`/`kill`, host pipes between mods), WASI preview1 sockets (loopback TCP proven across two spawned processes), and concurrent `load`/`run`/`unload` across handles/threads proven race-free under ThreadSanitizer (including a real WAMR thread-manager race fixed via a tracked vendor patch, `patches/wamr/`).
 
 **Zephyr** — scaffolded (`src/zephyr/`, CMake/Kconfig/`prj.conf`), not yet brought up. **NuttX / Rump / Unikraft** — stubs only (NuttX's own stub notes why it should be cheaper to bring up than Zephyr — see `src/nuttx/README.md`).
 

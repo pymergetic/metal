@@ -65,6 +65,18 @@ CompileFlags:
     - "-I@@ROOT@@/external/wamr/core/iwasm/libraries/lib-socket/inc"
 
 ---
+# Privileged mount()/umount() mods — empty mods/<name>/MOUNT marker →
+# build-mod.sh adds -DPM_METAL_BUILD_KERNEL. Clangd has no compile_commands
+# entry for mods/, so mirror that -D here or include/.../mount/mount.h's
+# gated mount()/umount() look undeclared (ISO C99 implicit-decl error).
+# Keep in sync with mods that ship a MOUNT marker.
+If:
+  PathMatch: mods/(t17_sys_mount|t19_sys_umount)/.*\.c
+CompileFlags:
+  Add:
+    - -DPM_METAL_BUILD_KERNEL
+
+---
 # src/ tree — fallback when compile_commands.json is missing.
 If:
   PathMatch: src/linux/.*\.c

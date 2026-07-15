@@ -39,7 +39,7 @@ typedef struct pm_metal_app_cli_mount {
  * (missing file: no-op), then cli_mounts[0..cli_mount_count) in order
  * (cli_mount_count == 0 is fine, cli_mounts may be NULL then) — CLI
  * mounts intentionally applied *after* the real fstab, so a CLI mount at
- * the same target path wins (last-mount-wins, see mount/mount.h). Then
+ * the same target path wins (last-mount-wins, see mount/table.h). Then
  * loads, runs (argv[0] = its basename), and unloads each of
  * wasm_argv[0..wasm_argc), in order, via runtime/process.h's spawn()+wait()
  * — sequential/blocking, one after another. Logs "<path>: exit=%d" to

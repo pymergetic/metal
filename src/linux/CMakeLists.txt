@@ -59,9 +59,29 @@ set(WAMR_BUILD_DEBUG_INTERP 0)
 
 include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
 
+# Drop stock posix_file — Metal provides os_* (virtual proc + __real_* posix).
+# --wrap cannot redirect calls inside libpm-wamr-vmlib.a.
+list(REMOVE_ITEM WAMR_RUNTIME_LIB_SOURCE
+	"${WAMR_ROOT_DIR}/core/shared/platform/common/posix/posix_file.c")
+
 add_library(pm-wamr-vmlib STATIC ${WAMR_RUNTIME_LIB_SOURCE})
 target_include_directories(pm-wamr-vmlib PUBLIC ${WAMR_ROOT_DIR}/core/iwasm/include)
 set_target_properties(pm-wamr-vmlib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# Virtual /proc os_* + renamed stock posix_file as __real_os_*.
+# See docs/MOUNT.md Phase 6b.
+set(PM_METAL_WASI_FILE_SRC
+	pymergetic/metal/wasi/file.c
+	pymergetic/metal/wasi/posix_file_real.c
+)
+set(PM_METAL_WASI_FILE_INCLUDES
+	${WAMR_ROOT_DIR}/core/shared/platform/linux
+	${WAMR_ROOT_DIR}/core/shared/platform/include
+	${WAMR_ROOT_DIR}/core/shared/platform/common/posix
+	${WAMR_ROOT_DIR}/core/shared/platform/common/libc-util
+	${WAMR_ROOT_DIR}/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+	${WAMR_ROOT_DIR}/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src
+)
 
 # ---- LZ4 (vendored, vanilla — see docs/SOURCETREE.md; block API only,
 # util/lz4.c's own host impl links this straight in like any other
@@ -93,11 +113,26 @@ add_executable(pm-linux-runtime
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c
 	pymergetic/metal/mount/tmpfs.c
+	${PM_METAL_WASI_FILE_SRC}
 	${PM_COMMON}/port/platform.c
 	${PM_COMMON}/memory/ops.c
 	${PM_COMMON}/mount/ops.c
 	${PM_COMMON}/mount/hostdir.c
+	${PM_COMMON}/mount/proc.c
+	${PM_COMMON}/mount/proc/util.c
+	${PM_COMMON}/mount/proc/guest.c
+	${PM_COMMON}/mount/proc/boot.c
+	${PM_COMMON}/mount/proc/mounts.c
+	${PM_COMMON}/mount/proc/filesystems.c
+	${PM_COMMON}/mount/proc/version.c
+	${PM_COMMON}/mount/proc/cpuinfo.c
+	${PM_COMMON}/mount/proc/meminfo.c
+	${PM_COMMON}/mount/proc/cmdline.c
+	${PM_COMMON}/mount/proc/uptime.c
+	${PM_COMMON}/mount/proc/environ.c
 	${PM_COMMON}/mount/tmpfs_registry.c
+	${PM_COMMON}/mount/populate.c
+	${PM_COMMON}/mount/table.c
 	${PM_COMMON}/mount/mount.c
 	${PM_COMMON}/mount/fstab.c
 	${PM_COMMON}/runtime/runtime.c
@@ -113,9 +148,18 @@ add_executable(pm-linux-runtime
 	${MICROTAR_ROOT_DIR}/src/microtar.c
 )
 
+# Optional embed .c from scripts/pack-image.sh (Phase 4 populate) — link when
+# the file exists so verify-linux-populate.sh can regenerate + rebuild without
+# permanently baking a fixture into the default binary.
+set(PM_METAL_POPULATE_EMBED "" CACHE FILEPATH "Optional mount populate embed .c from pack-image.sh")
+if(PM_METAL_POPULATE_EMBED AND EXISTS "${PM_METAL_POPULATE_EMBED}")
+	target_sources(pm-linux-runtime PRIVATE "${PM_METAL_POPULATE_EMBED}")
+endif()
+
 target_include_directories(pm-linux-runtime PRIVATE
 	${PM_COMMON_INC}
 	${PM_INCLUDE_INC}
+	${PM_METAL_WASI_FILE_INCLUDES}
 )
 
 # PM_METAL_RUNTIME_MULTI_MODULE: our own flag (not WAMR's WASM_ENABLE_MULTI_
@@ -150,11 +194,26 @@ add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c
 	pymergetic/metal/mount/tmpfs.c
+	${PM_METAL_WASI_FILE_SRC}
 	${PM_COMMON}/port/platform.c
 	${PM_COMMON}/memory/ops.c
 	${PM_COMMON}/mount/ops.c
 	${PM_COMMON}/mount/hostdir.c
+	${PM_COMMON}/mount/proc.c
+	${PM_COMMON}/mount/proc/util.c
+	${PM_COMMON}/mount/proc/guest.c
+	${PM_COMMON}/mount/proc/boot.c
+	${PM_COMMON}/mount/proc/mounts.c
+	${PM_COMMON}/mount/proc/filesystems.c
+	${PM_COMMON}/mount/proc/version.c
+	${PM_COMMON}/mount/proc/cpuinfo.c
+	${PM_COMMON}/mount/proc/meminfo.c
+	${PM_COMMON}/mount/proc/cmdline.c
+	${PM_COMMON}/mount/proc/uptime.c
+	${PM_COMMON}/mount/proc/environ.c
 	${PM_COMMON}/mount/tmpfs_registry.c
+	${PM_COMMON}/mount/populate.c
+	${PM_COMMON}/mount/table.c
 	${PM_COMMON}/mount/mount.c
 	${PM_COMMON}/mount/fstab.c
 	${PM_COMMON}/runtime/runtime.c
@@ -170,6 +229,7 @@ add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
 target_include_directories(pm-linux-thread-stress PRIVATE
 	${PM_COMMON_INC}
 	${PM_INCLUDE_INC}
+	${PM_METAL_WASI_FILE_INCLUDES}
 )
 
 target_compile_definitions(pm-linux-thread-stress PRIVATE
@@ -200,11 +260,26 @@ add_executable(pm-linux-process-test EXCLUDE_FROM_ALL
 	pymergetic/metal/memory/kheap.c
 	pymergetic/metal/memory/bytecode.c
 	pymergetic/metal/mount/tmpfs.c
+	${PM_METAL_WASI_FILE_SRC}
 	${PM_COMMON}/port/platform.c
 	${PM_COMMON}/memory/ops.c
 	${PM_COMMON}/mount/ops.c
 	${PM_COMMON}/mount/hostdir.c
+	${PM_COMMON}/mount/proc.c
+	${PM_COMMON}/mount/proc/util.c
+	${PM_COMMON}/mount/proc/guest.c
+	${PM_COMMON}/mount/proc/boot.c
+	${PM_COMMON}/mount/proc/mounts.c
+	${PM_COMMON}/mount/proc/filesystems.c
+	${PM_COMMON}/mount/proc/version.c
+	${PM_COMMON}/mount/proc/cpuinfo.c
+	${PM_COMMON}/mount/proc/meminfo.c
+	${PM_COMMON}/mount/proc/cmdline.c
+	${PM_COMMON}/mount/proc/uptime.c
+	${PM_COMMON}/mount/proc/environ.c
 	${PM_COMMON}/mount/tmpfs_registry.c
+	${PM_COMMON}/mount/populate.c
+	${PM_COMMON}/mount/table.c
 	${PM_COMMON}/mount/mount.c
 	${PM_COMMON}/mount/fstab.c
 	${PM_COMMON}/runtime/runtime.c
@@ -222,6 +297,7 @@ add_executable(pm-linux-process-test EXCLUDE_FROM_ALL
 target_include_directories(pm-linux-process-test PRIVATE
 	${PM_COMMON_INC}
 	${PM_INCLUDE_INC}
+	${PM_METAL_WASI_FILE_INCLUDES}
 )
 
 target_compile_definitions(pm-linux-process-test PRIVATE
