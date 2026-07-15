@@ -152,6 +152,7 @@ packages/metal/
 │   │   ├── port/platform.h        # OS floor API (impl in src/<plat>/)
 │   │   ├── port/lock.h            # one mutex primitive (impl in src/<plat>/) — see docs/RUNTIME.md "Concurrency"
 │   │   ├── port/worker.h          # one background-thread primitive (impl in src/<plat>/)
+│   │   ├── port/pipe.h            # one host pipe primitive (impl in src/<plat>/) — see docs/RUNTIME.md "Processes" > "Pipes"
 │   │   ├── memory/                # ops-struct contracts (impl in src/<plat>/)
 │   │   │   ├── memory.h           # convenience umbrella — re-exports the 4 below
 │   │   │   ├── ops.h              # shared struct layout + kind enum + resolve()
@@ -163,7 +164,9 @@ packages/metal/
 │   │   │   ├── runtime.h
 │   │   │   ├── runtime.c          # calls each util/*.h's own native_register() once, right after wasm_runtime_full_init()
 │   │   │   ├── process.h          # processes — decoupled from handles, see docs/RUNTIME.md "Processes"
-│   │   │   └── process.c          # impl: common, built entirely on runtime.h's own public API
+│   │   │   ├── process.c          # impl: common, built entirely on runtime.h's own public API
+│   │   │   ├── env.h              # export-style local/exported env split for a respawned "subshell"
+│   │   │   └── env.c              # impl: common, no per-target impl
 │   │   ├── app/                   # the scripted whole-process run mode, librarified out of src/linux/main.c
 │   │   │   ├── app.h              # run_scripted() — see there for the exact split with main.c
 │   │   │   └── app.c              # impl: common (port/worker.h via runtime/process.h, not raw pthread)
@@ -176,8 +179,9 @@ packages/metal/
 │   │   ├── CMakeLists.txt
 │   │   ├── main.c                 # thin: argv parsing + realpath only — the run mode lives in common/…/app/
 │   │   ├── thread_stress_test.c   # pm-linux-thread-stress — EXCLUDE_FROM_ALL, see scripts/verify-linux-threads.sh
+│   │   ├── process_test.c         # pm-linux-process-test — EXCLUDE_FROM_ALL, see scripts/verify-linux-process.sh
 │   │   └── pymergetic/metal/
-│   │       ├── port/{platform,lock,worker}.c
+│   │       ├── port/{platform,lock,worker,pipe}.c
 │   │       └── memory/{ram,kheap,bytecode}.c
 │   │   # wasi: WAMR linux platform
 │   │
@@ -187,6 +191,7 @@ packages/metal/
 │   │   └── pymergetic/metal/
 │   │       ├── port/{platform,lock}.c
 │   │       ├── port/worker.c                   # stub — deferred, see docs/RUNTIME.md "Bring-up plan" §5
+│   │       ├── port/pipe.c                     # stub — deferred, see docs/RUNTIME.md "Bring-up plan" §5
 │   │       ├── memory/{ram,kheap,bytecode}.c
 │   │       └── wasi/              # private
 │   │           ├── file.h
@@ -199,7 +204,15 @@ packages/metal/
 │   ├── t0_hello/main.c
 │   ├── t1_read/main.c
 │   ├── t2_env/main.c
-│   └── t3_util_native/main.c      # exercises util/{size,arena,log}.h's wasi-style imports end to end
+│   ├── t3_util_native/main.c      # exercises util/{size,arena,log}.h's wasi-style imports end to end
+│   ├── t4_getpid/main.c           # getenv("PID") — see docs/RUNTIME.md "Processes"
+│   ├── t5_spin/main.c             # infinite loop — proves process.h's kill(), see docs/RUNTIME.md "Threading"
+│   ├── t6_pipe_writer/main.c      # paired with t7 below — see docs/RUNTIME.md "Processes" > "Pipes"
+│   ├── t7_pipe_reader/main.c
+│   ├── t8_multimod_lib/main.c     # REACTOR marker (no _start) — dependency half, see docs/RUNTIME.md "Multi-module"
+│   ├── t9_multimod_app/main.c     # imports t8's add() directly, no host round-trip
+│   ├── t10_socket_server/main.c   # SOCKET marker — WASI preview1 sockets, see docs/RUNTIME.md "Sockets"
+│   └── t11_socket_client/main.c   # paired with t10 above, bounded connect() retry
 │
 ├── build/                         # gitignored
 │   ├── linux/runtime/
@@ -208,8 +221,9 @@ packages/metal/
 │   └── ide/
 │
 ├── scripts/
+├── patches/wamr/                  # tracked diffs against external/wamr — see "Vendoring" above
 ├── docs/
-├── external/                      # west — gitignored, vanilla only
+├── external/                      # gitignored — plain upstream checkout, reproduced by scripts/setup-wamr.sh + patches/ above
 ├── west-manifest/
 └── backup/
 ```
@@ -220,7 +234,7 @@ packages/metal/
 
 | Module | Header | `.c` (one or more) |
 |--------|--------|---------------------|
-| `runtime` | `src/common/…/runtime.h` | `src/common/…/runtime.c` |
+| `runtime` | `src/common/…/runtime.h` | `src/common/…/runtime.c` — also owns the multi-module `module_reader`/`module_destroyer` (`PM_METAL_RUNTIME_MULTI_MODULE`-gated), see docs/RUNTIME.md "Multi-module" |
 | `platform` | `src/common/…/platform.h` | `src/common/…/platform.c`? + `src/<plat>/…/platform.c` — per `impl:` tags |
 | `port/lock` | `src/common/…/port/lock.h` | `src/<plat>/…/port/lock.c` — `bind`, one mutex primitive per target |
 | `memory/ops` | `src/common/…/memory/ops.h` | `src/common/…/memory/ops.c` — `impl: common`, `resolve()` only, no per-target impl |
@@ -229,6 +243,7 @@ packages/metal/
 | `memory/bytecode` | `src/common/…/memory/bytecode.h` | `src/<plat>/…/memory/bytecode.c` — ops-struct `bind`, one getter per target |
 | `wasi/file` | `src/zephyr/…/file.h` | `src/zephyr/…/file.c` — all `impl: zephyr` |
 | `port/worker` | `src/common/…/port/worker.h` | `src/<plat>/…/port/worker.c` — `bind`, one background-thread primitive per target |
+| `port/pipe` | `src/common/…/port/pipe.h` | `src/<plat>/…/port/pipe.c` — `bind`, one host pipe primitive per target |
 | `runtime/process` | `src/common/…/runtime/process.h` | `src/common/…/runtime/process.c` — `impl: common`, no per-target impl; built on `runtime.h`'s own public API, no new runtime-internal locking |
 | `app/app` | `src/common/…/app/app.h` | `src/common/…/app/app.c` — `impl: common`, no per-target impl; spawn()s each mod's process through `port/worker.h` (via `runtime/process.h`), not raw `pthread`/`k_thread` |
 | `util/wasi` | `include/…/wasi.h` | header-only — just `PM_METAL_UTIL_WASI_IMPORT()`, no `.c` |
@@ -280,10 +295,14 @@ Per-function `impl:` tags in each header are authoritative — not the directory
 | `src/common/` | contract `.h` + `impl: common` `.c` |
 | `src/<plat>/` | `impl: bind` + plat-private; OS `#include`s only here |
 | Public symbols | `pm_metal_<module_path>_` |
-| `external/` + `.tools/` | **vanilla** — west/toolchain pins only; no patches in-tree |
+| `external/` + `.tools/` | never hand-edited in place — pin + `patches/` only (below) |
 | Artifacts | `build/` — gitignored |
 
-Adapt WAMR, Zephyr, wasi-sdk, etc. from `src/` (CMake flags, shims, wrappers) — never edit vendored trees. Fork/patch upstream only if unavoidable; then bump pin in `west-manifest/` and document why.
+Adapt WAMR, Zephyr, wasi-sdk, etc. from `src/` (CMake flags, shims, wrappers) first — never hand-edit a vendored tree directly (it's gitignored, so an in-place edit is invisible to git and vanishes on the next re-vendor). Patch upstream only if unavoidable (a real upstream bug with no `src/`-side workaround, e.g. a genuine data race) — see "Vendoring" below for the actual mechanism.
+
+### Vendoring
+
+`external/wamr` (and any future `external/<dep>`) is a plain upstream checkout pinned to one tag/commit, reproduced by `scripts/setup-<dep>.sh` (e.g. `scripts/setup-wamr.sh`) — never committed itself (gitignored), so re-running that script after `rm -rf external/<dep>` always gets back to the exact same tree. When a fix genuinely can't be done from `src/`'s side (see above), the script also applies this repo's own `patches/<dep>/NNNN-*.patch` files (in order, via `git apply`, against the pinned checkout) — those *are* tracked (plain diffs, reviewable in a normal PR), so the fix survives a fresh re-vendor without ever hand-editing the checked-out tree itself. Each patch file's own leading comment (before its `diff --git`) says which upstream bug it works around and why `src/` alone couldn't. Bump the pin + patches together, in the same change, if upstream ever fixes the same bug differently.
 
 ---
 
@@ -305,7 +324,7 @@ Also gitignored: `.tools/`, `external/`, `.cache/`, `.venv/`.
 | Artifact | Inputs | Output |
 |----------|--------|--------|
 | **runtime binary** | `src/common/pymergetic/metal/` + `src/<plat>/` + WAMR | `build/<plat>/…` |
-| **mod `.wasm`** | `mods/` + wasi-sdk + `-I include/` | `build/mods/` |
+| **mod `.wasm`** | `mods/` + wasi-sdk + `-I include/` | `build/mods/` — a mod meant to be *depended on* by another via multi-module (docs/RUNTIME.md "Multi-module") opts into `-mexec-model=reactor` with an empty `mods/<name>/REACTOR` marker file (`scripts/build-mod.sh`), since WAMR refuses a command module (one with `_start`) as a sub-module; a mod using sockets (docs/RUNTIME.md "Sockets") opts into WAMR's own `wasi_socket_ext.h`/`.c` (plain wasi-libc doesn't declare `socket()`/`bind()`/`connect()`/`listen()` on this target at all) the same way, via an empty `mods/<name>/SOCKET` marker file |
 
 ---
 

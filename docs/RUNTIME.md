@@ -161,14 +161,76 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 			    pm_metal_process_exit_cb on_exit, void *on_exit_ctx, pm_metal_process_id_t *out_pid);
 int pm_metal_process_try_wait(pm_metal_process_id_t pid, int *out_exit_code);
 int pm_metal_process_wait(pm_metal_process_id_t pid, int *out_exit_code);
+int pm_metal_process_kill(pm_metal_process_id_t pid);
 void pm_metal_process_list(void (*visit)(const pm_metal_process_info_t *info, void *ctx), void *ctx);
 ```
 
 A **handle** (`runtime.h`, `1..PM_METAL_RUNTIME_MAX_HANDLES`) is one loaded module; a **process** (`process.h`, `pm_metal_process_id_t`, `1..PM_METAL_PROCESS_MAX`) is one execution of it, on its own background worker (`port/worker.h`) — same relationship a real OS has between a binary on disk and its N currently-running instances. `spawn()` copies `argv`/`envp` itself before returning (the caller's own arrays, e.g. a tokenized command line, need not outlive the call, unlike `run_ex()`'s), starts the worker, and hands back a `pid` immediately; `wait()`/`try_wait()` reap it (blocking / non-blocking) once it finishes; `list()` is read-only, for a `ps`-style caller. `on_exit` (optional) fires once, on the process's own worker thread, the instant it finishes, for a caller that wants to react without a poll loop; a caller that's going to `wait()` the pid itself right away passes `NULL` instead.
 
-Env vars are real WASI env (`run_ex()`'s `envc`/`envp`, forwarded to `wasm_runtime_set_wasi_args_ex()`) — nothing to do with the host's own `environ`. A bare `spawn()` call with `envc=0, envp=NULL` is identical to calling `run()` directly.
+Env vars are real WASI env (`run_ex()`'s `envc`/`envp`, forwarded to `wasm_runtime_set_wasi_args_ex()`) — nothing to do with the host's own `environ`. A bare `spawn()` call with `envc=0, envp=NULL` is identical to calling `run()` directly, **except** `spawn()` always appends one more entry, `"PID=<n>"` (that same call's own `*out_pid`, decimal) — there is deliberately no separate `getpid()` call in this header; any guest, in any language, already has a standard door to its own pid via ordinary `getenv("PID")`, so this needed no new host import (see `mods/t4_getpid/main.c`, exercised end-to-end by `scripts/verify-linux-process.sh`).
+
+`kill(pid)` is a hard stop only, not a real POSIX signal — no handler runs, it just makes the target's *next* trap-check fail as if it had hit a real trap (WAMR's own `wasm_runtime_terminate()`, which this wraps). It does not block waiting for the target to actually exit; call `wait()`/`try_wait()` afterward for that. Safe to call concurrently with the target's own worker thread finishing/being reaped at the same moment (see `runtime.h`'s `pm_metal_runtime_exec_t`/`pm_metal_runtime_terminate()` and `process.c`'s own lock-nesting comment on `kill()`) — killing a pid that already finished, or hasn't reached `run_ex()`'s own `instantiate()` yet, is a silent no-op, not an error. **Requires the thread manager to actually interrupt a hot compute loop** (a guest doing nothing but arithmetic, no calls at all) — see "Threading" below; without it, `kill()` still sets the same exception, but WAMR's interpreter has nothing compiled in that polls for it until the guest happens to make its next host call. Proven end-to-end (a genuinely-still-running guest, not one that just happened to finish first) by `mods/t5_spin/main.c` + `src/linux/process_test.c`, see `scripts/verify-linux-process.sh`.
+
+### Pipes ("A's stdout -> B's stdin")
+
+`spawn()`'s `stdin_fd`/`stdout_fd`/`stderr_fd` were always real host fds (`run_ex()`'s own `-1` = "inherit the host's own"); `port/pipe.h`'s `pm_metal_port_pipe(&read_fd, &write_fd)` opens one, and chaining two processes together is then just:
+
+```c
+int64_t read_fd, write_fd;
+pm_metal_port_pipe(&read_fd, &write_fd);
+
+pm_metal_process_spawn(h_a, ..., /*stdin*/ -1, /*stdout*/ write_fd, /*stderr*/ -1, ..., &pid_a);
+pm_metal_process_spawn(h_b, ..., /*stdin*/ read_fd, /*stdout*/ -1, /*stderr*/ -1, ..., &pid_b);
+/* neither read_fd nor write_fd is touched again by this caller */
+```
+
+No `dup()`, no manual closing by the caller: `spawn()` takes ownership of any fd >= 0 it's given, and `process.c`'s own worker closes it automatically the instant that specific process's `run_ex()` call returns — not before (or A's write end could vanish out from under a still-running A) and not left to the caller (or B could block on `fgets()`/`read()` forever, since nothing else will ever close the write end to signal EOF once A is actually done). Each end has exactly one owner for its whole lifetime, so there's nothing to refcount. Proven end-to-end (real bytes crossing the pipe *and* EOF actually arriving, not a hang) by `mods/t6_pipe_writer` -> `mods/t7_pipe_reader` in `src/linux/process_test.c`, see `scripts/verify-linux-process.sh`.
+
+### Export-style env (`runtime/env.h`)
+
+Real shells split their variables into local (visible only to that shell) and exported (also handed to every child it spawns) — `export FOO`. There is no shell in this tree, and no WASI import lets a guest `spawn()` another process itself (only a native host driver can call `process.h`'s `spawn()`) — but any *future* driver that wants that same split needs a correct, reusable way to build spawn()'s own `envc`/`envp` from a table of `{name, value, exported}` triples without hand-rolling string concatenation at every call site:
+
+```c
+typedef struct pm_metal_env_var { const char *name; const char *value; int exported; } pm_metal_env_var_t;
+
+int pm_metal_env_build_exported(const pm_metal_env_var_t *vars, int count, char ***out_envp, int *out_envc);
+void pm_metal_env_free_exported(char **envp, int envc);
+```
+
+`build_exported()` walks `vars` and mallocs a plain `"NAME=VALUE"` array containing only the entries whose `exported` is nonzero — passed straight into `spawn()`'s own `envc`/`envp`, no conversion needed. Proven end-to-end (a genuinely spawned child, not just the array shape) by `src/linux/process_test.c` spawning `mods/t2_env.wasm` twice with the same built env — once asking for a local-only var (must print `(unset)`) and once for the exported one (must print its real value) — see `scripts/verify-linux-process.sh`.
 
 `pm_metal_process_shutdown()` must run **before** any handle-table teardown, then `pm_metal_runtime_shutdown()` — it blocks until every in-flight process has actually finished, so no handle's `refcount` is still held above zero when `unload()`/`runtime_shutdown()`'s own unload loop runs. `app/app.c`'s scripted mode calls it in that order.
+
+---
+
+## Multi-module (one `.wasm` importing another `.wasm`)
+
+`src/linux/CMakeLists.txt` sets `WAMR_BUILD_MULTI_MODULE=1`, WAMR's own feature letting one module's import section name *another wasm module* instead of (or alongside) a host one — e.g. `(import "some_lib" "add" (func ...))` where `"some_lib"` is a module, not `util/{arena,log,size}.h`'s kind of host glue. WAMR resolves that name to actual bytes by calling back into a reader this codebase registers at `init()` (`wasm_runtime_set_module_reader()`, guarded by this codebase's own `PM_METAL_RUNTIME_MULTI_MODULE` build flag — see `runtime.c`'s own `pm_metal_runtime_module_reader()`): the same `"<name>.wasm"`-under-`/mods`-under-`vfs_root` convention `load_file()` already uses for a top-level mod, so a dependency is just another ordinary file in the same tree, loadable standalone too — nothing multi-module-specific about how it's stored. Resolution happens **lazily, inside `wasm_runtime_load()` itself** (not at `instantiate()`/`run()` time) the first time the importing module's own import section is parsed — so it is transparent to every caller of `load_file()`/`run()`; nothing about the call sequence changes for a module that happens to depend on another one.
+
+One real restriction, found empirically rather than documented up front: **a dependency must be a wasi "reactor"** (no `_start` of its own) — WAMR's own loader flatly rejects a "command" module (one with a `_start`, i.e. anything with an ordinary `main()` built the normal way) as a sub-module ("a command (with `_start` function) can not be a sub-module"). `scripts/build-mod.sh` opts a mod into this with an empty `mods/<name>/REACTOR` marker file, which adds `-mexec-model=reactor` to that mod's own clang invocation — see `mods/t8_multimod_lib` (the dependency, reactor, exports `add()` via `__attribute__((export_name("add")))`, no `main()`) and `mods/t9_multimod_app` (the importer, an ordinary command module, imports `add()` via `__attribute__((import_module("t8_multimod_lib"), import_name("add")))` and calls it directly — no host round-trip for that one call at all). Proven end-to-end by `scripts/verify-linux.sh` running `t9_multimod_app.wasm`, which is the *only* one of the two ever named on that script's own `pm-linux-runtime` argv — `t8_multimod_lib.wasm` is only ever reached through `wasm_runtime_load()`'s own dependency resolution.
+
+What WAMR does **not** give for free: each importer gets its own freshly-instantiated *instance* of the dependency (own linear memory, own globals) — only the parsed/compiled *code* is shared/cached across importers (confirmed by reading `wasm_runtime_common.c`'s own `wasm_runtime_load_depended_module()`/`wasm_runtime_find_module_registered()`/`wasm_runtime_sub_module_instantiate()`). This is the wasm analog of static linking's code-sharing, not a real OS's `.so` (which also shares the *instance*, i.e. one resident copy of mutable state across every process using it) — see the BusyBox `libbusybox.so` discussion this feature was originally investigated to answer. Good enough for sharing pure logic (like this demo's `add()`); not a substitute for genuine shared *state* across modules.
+
+---
+
+## Sockets (WASI preview1's own extension — wasi1, not preview2)
+
+WAMR's `libc_wasi_wrapper.c` implements a non-standard `wasi_snapshot_preview1` extension — `sock_open`/`bind`/`connect`/`listen`/`accept`/`send`/`recv`/`shutdown`/… (`external/wamr/core/iwasm/libraries/libc-wasi/libc_wasi_wrapper.c`) — sandboxed by an **address pool**: every `sock_bind()`/`sock_connect()`/`sock_addr_resolve()` result is checked against a CIDR allow-list the *host* sets, never the guest; an empty pool (the default — nothing this codebase does automatically populates it) means **every** socket call is refused, not allowed. This is deliberately WASI **preview1's** extension, not preview2's component-model sockets — matching every other WASI surface this codebase already uses (`wasm_runtime_set_wasi_args_ex()`'s `map_dir_list`/`envp`/etc. are all preview1 shapes too).
+
+`runtime.h`'s `pm_metal_runtime_config_t` gets two more fields, both optional, both a single fixed policy for the whole `init()`/`shutdown()` cycle (not a per-`run()` choice — same as `vfs_root`):
+
+```c
+const char **addr_pool;        /* CIDR allow-list, e.g. "127.0.0.1/32" — checked at bind()/connect() */
+uint32_t addr_pool_count;
+const char **ns_lookup_pool;   /* plain hostname allow-list — checked at sock_addr_resolve(), independently, first */
+uint32_t ns_lookup_pool_count;
+```
+
+`runtime.c` copies both arrays' strings at `init()` (same reasoning as its own `vfs_root` copy — caller's arrays need not outlive the call) and calls `wasm_runtime_set_wasi_addr_pool()`/`wasm_runtime_set_wasi_ns_lookup_pool()` on every `run_ex()`, **unconditionally** — even when both counts are 0 — so a handle can never end up keeping some *other* run's pool by accident (WAMR keeps this on the module's own `WASIArguments`, reused across calls). `src/linux/main.c` exposes both as repeatable CLI flags, `--addr-pool=<cidr>` / `--ns-lookup-pool=<host>`; neither given at all (every existing `mods/*` in `scripts/verify-linux.sh`) means those mods get no socket access whatsoever, unchanged from before this feature existed.
+
+**Guest side needs a different header than plain wasi-libc.** This wasi-sdk's own `wasm32-wasip1` `sys/socket.h` leaves `socket()`/`bind()`/`connect()`/`listen()` **undeclared** on that target (only declared under a `__wasilibc_unmodified_upstream`/`_use_wasip2` macro nothing here defines) — found empirically by hitting exactly that compile error first. WAMR ships its own drop-in instead: `external/wamr/core/iwasm/libraries/lib-socket/inc/wasi_socket_ext.h` (POSIX-shaped declarations) + `.../src/wasi/wasi_socket_ext.c` (the one small `.c` backing them, calling the real `wasi_snapshot_preview1` `sock_*` imports directly via `__attribute__((import_module(...)))`, bypassing wasi-libc's own socket code entirely). `scripts/build-mod.sh` wires this in per-mod via an empty `mods/<name>/SOCKET` marker file (mirroring `REACTOR`'s own convention) — adds that header's include dir and compiles `wasi_socket_ext.c` straight alongside that mod's own `main.c`, no separate static-lib step. Guest code itself is then just ordinary BSD sockets behind `#ifdef __wasi__ #include <wasi_socket_ext.h> #endif`.
+
+Proven end-to-end (a real loopback TCP round trip across two independently-`spawn()`ed processes, not just two calls in one guest) by `mods/t10_socket_server` (binds/listens/accepts on fixed `127.0.0.1:9931`) + `mods/t11_socket_client` (connects, with a bounded retry loop — the two processes have no other synchronization, so this is what actually copes with `t11` possibly starting before `t10` reaches `listen()`) — `src/linux/process_test.c` `init()`s with `addr_pool = {"127.0.0.1/32"}` and spawns both, see `scripts/verify-linux-process.sh`.
 
 ---
 
@@ -190,6 +252,16 @@ That last point is more conservative than WAMR's own docs suggest. Upstream desc
 The mutex primitive itself (`init`/`destroy`/`lock`/`unlock`) is a `bind` port module (`port/lock.h`, `impl: bind` in `src/linux/.../port/lock.c` and `src/zephyr/.../port/lock.c`) — `pthread_mutex_t` on linux, `struct k_mutex` on zephyr, reinterpreted in place from a fixed-size opaque buffer so the shared header never `#include`s an OS header. `runtime.c` inits it right before publishing `initialized = 1` in `init()` and destroys it in `shutdown()`, so repeated `init()`→`shutdown()`→`init()` cycles never re-init a live mutex. `memory/bytecode.c`'s arena (`pymergetic/metal/util/arena.h`, no locking of its own) gets its own separate `pm_metal_port_mutex_t` around `alloc()`/`free()`, following the same pattern — see the comment there — since concurrent `load()`/`unload()` calls on different handles mutate the same free-list.
 
 Reproduce: `scripts/verify-linux-threads.sh` — builds `pm-linux-thread-stress` and `pm-wamr-vmlib` with `-fsanitize=thread` (and `WAMR_DISABLE_HW_BOUND_CHECK=1`, since WAMR's default hardware-bounds-check guard-page `mmap` and TSan's shadow-memory layout don't get along — unrelated to the locking itself), runs it under `setarch -R` (ASLR off — this host's TSan build aborts at startup under full ASLR; also unrelated to the locking), and fails if TSan reports anything.
+
+---
+
+## Threading
+
+`src/linux/CMakeLists.txt` sets `WAMR_BUILD_LIB_WASI_THREADS=1` (standards-track wasi-threads — thread-spawn import + shared linear memory — not WAMR's own older, non-standard `lib-pthread`), which also turns on `WASM_ENABLE_THREAD_MGR` internally (see `external/wamr/build-scripts/runtime_lib.cmake`). That's load-bearing for something unrelated to guest threading at all: WAMR's interpreter only has an async-interrupt poll (`CHECK_SUSPEND_FLAGS()`) compiled in *at all* when the thread manager is present — without it, `pm_metal_runtime_terminate()`/`process.h`'s `kill()` still sets the same exception, but a guest doing a hot compute loop with no host calls never notices until it happens to make one. This was verified empirically: `scripts/verify-linux-process.sh`'s `t5_spin` (`while(1) i++;`, no calls at all) hung forever under `kill()` before this flag was on, and stops within one interpreter loop iteration after.
+
+Turning it on surfaced a real, TSan-reproducible data race **inside WAMR's own thread-manager code**, not this codebase's locking: `wasm_exec_env_destroy()` removes itself from its cluster's exec-env list without taking that cluster's own lock, reasoning it's the cluster's last live thread — an assumption `wasm_set_exception()`'s global cluster search (triggered by *any* exception anywhere, including our own `kill()`) violates, since it locks *every* live cluster while scanning for the one that owns a given `module_inst`, including one mid-teardown on another thread at that exact moment. Unlike the `ems_alloc.c` race documented above (closed entirely by this codebase's own `g_pm_metal_runtime_lock`, since both racing accesses go through calls this codebase controls), closing *this* one from our side would mean moving `wasm_application_execute_main()` itself inside that same lock — i.e. no two handles' guest code could ever actually run concurrently, anywhere, which is the entire point of `runtime/process.h`. So this one is fixed upstream instead: `patches/wamr/0002-thread-mgr-exec-env-destroy-lock.patch` (see `docs/SOURCETREE.md` "Vendoring" for the mechanism, `scripts/setup-wamr.sh` for how it's applied) takes `cluster->lock` around the list removal, matching every *other* caller of the same internal removal function in that file. Confirmed by three consecutive clean `scripts/verify-linux-threads.sh` runs after the patch, versus a reliable reproduction before it.
+
+**Guest-side `pthread_create()` is not proven yet** — this section only covers the host-side infrastructure (thread manager + wasi-threads library) being compiled in and not racing. Every mod today still builds against plain `wasm32-wasip1` (see `scripts/build-mod.sh`); a mod that actually wants to spawn wasm threads itself needs a threads-enabled wasi-sdk target (`wasm32-wasip1-threads`) and its own shared-memory-aware build flags — tracked as follow-up, not yet exercised by any `mods/*`.
 
 ---
 
@@ -335,5 +407,13 @@ Virtual `/sys/loader` · `include/metal.h` convenience · HTTPS fetch-on-miss ·
 - [x] mod bytecode lives in a dedicated arena, separate from the WAMR pool — linux; zephyr pending (single probed `arena_budget`, split)
 - [x] `verify` uses dynamic loader API — `scripts/verify-linux.sh`
 - [x] concurrent load/run/unload across handles from multiple threads, proven under ThreadSanitizer — see "Concurrency" above, `scripts/verify-linux-threads.sh`
+- [x] `process.h`'s `kill()` actually interrupts a hot compute loop (not just a best-effort exception that's never noticed) — see "Threading" above, `scripts/verify-linux-process.sh`
+- [x] `getpid()`-via-`PID=<n>` env, injected by `spawn()` — see "Processes" above, `mods/t4_getpid`
+- [x] WAMR's own thread-manager data race (surfaced by enabling wasi-threads) fixed via a tracked vendor patch, not by sacrificing concurrent guest execution — see "Threading" above, `patches/wamr/0002-*`
+- [ ] guest-side `pthread_create()` (`wasm32-wasip1-threads` mod build + shared-memory-aware flags) — host infra only so far, see "Threading" above
+- [x] `spawn()`s chainable via a real host pipe (`port/pipe.h`), no `dup()`/refcounting needed — see "Processes" > "Pipes" above, `scripts/verify-linux-process.sh`
+- [x] export-style local/exported env split for a respawn()ed "subshell" (`runtime/env.h`) — host-side building block, no shell consumer yet — see "Processes" > "Export-style env" above
+- [x] `WASM_ENABLE_MULTI_MODULE` on, `module_reader` wired against `vfs_root`, proven with a real 2-module demo (one `.wasm` calling directly into another) — see "Multi-module" above, `mods/t8_multimod_lib` + `mods/t9_multimod_app`, `scripts/verify-linux.sh`
+- [x] WASI preview1's own socket extension (wasi1, not preview2), address-pool-gated, proven with a real loopback TCP round trip across two spawned processes — see "Sockets" above, `mods/t10_socket_server` + `mods/t11_socket_client`, `scripts/verify-linux-process.sh`
 - [x] processes decoupled from handles (`runtime/process.h`, several concurrent `run`s per handle, each own pid) + real WASI env support (`run_ex()`'s `envc`/`envp`) — linux, see "Processes" above; zephyr pending
 - [x] `util/{arena,log,size}.h` are wasi-style host imports, not a second compiled-into-every-mod copy — one implementation per module (`src/common/…/util/{arena,log,size}.c`), each registering its own small `NativeSymbol` table under its own `PM_METAL_UTIL_{ARENA,LOG,SIZE}_WASI_MODULE` name (built from the shared `PM_METAL_UTIL_WASI_IMPORT()` macro in `util/wasi.h`) from `runtime.c`'s `init()`; proven end-to-end by `mods/t3_util_native.wasm` in `scripts/verify-linux.sh` (round-trips through a guest's own linear memory via WAMR's app<->native address translation, not a host-side buffer)
