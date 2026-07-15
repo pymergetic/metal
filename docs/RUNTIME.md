@@ -31,11 +31,12 @@ Linux may expose the loop via CLI, stdin, or socket — **same API** on every ta
 
 ## VFS root (same every load)
 
-Set once at `init`. Every `load`/`run` sees the **same** tree. No per-mod remapping, no guest path hiding.
-
-A real mount table (multiple mounts, `/etc/fstab`, ramdisk backend, later guest-callable
-`mount()`) is planned on top of this single-root model — design only so far, not implemented:
-see [MOUNT.md](MOUNT.md).
+Set once at `init` (Stage A — a real mount table underneath now, not a bare string; see
+[MOUNT.md](MOUNT.md), Phases 1–2 landed: `hostdir` root mount, `/etc/fstab`, `--mount=` CLI). Every
+`load`/`run` sees the **same** tree, resolved through that mount table's own longest-prefix match —
+the single-root case below is just that table with exactly one entry, no per-mod remapping, no guest
+path hiding. `tmpfs` (Phase 3) is landed on linux (`/dev/shm`-backed); zephyr's own `tmpfs`/ramdisk
+backend and guest-callable `mount()` (Phases 3–5) are still design only, not implemented.
 
 | Config | Meaning |
 |--------|---------|
@@ -50,7 +51,7 @@ Guest path = path under `vfs_root`. Preopen that directory as WASI `/`. Guest op
 | **linux** | normal host directory | pass path at `init` (CLI/config) |
 | **zephyr** | FAT ramdisk (or image) mounted as rootfs | build/populate image, mount `/`, pass mount point at `init` |
 
-`.wasm` files live **inside** the tree (e.g. `/mods/t0_hello.wasm`) or are loaded via `load_bytes` — VFS root is still the same preopen for WASI file I/O. **`load_file()` enforces this**: its `path` is guest-style and is resolved against `vfs_root` inside `runtime.c` (same rule the `map_dir_list` preopen uses for the guest) — there is no separate "host path" for mod bytecode, so the call is identical whether `vfs_root` is a host dir (linux) or a mounted ramdisk (zephyr). `scripts/verify-linux.sh` copies mods into `<vfs_root>/mods/` and passes `/mods/t0_hello.wasm` etc. as positional args, exactly as it would look on zephyr.
+`.wasm` files live **inside** the tree (e.g. `/mods/t0_hello.wasm`) or are loaded via `load_bytes` — the mount table is still the same set of preopens for WASI file I/O. **`load_file()` enforces this**: its `path` is guest-style and is resolved through `mount/mount.h`'s own longest-prefix `resolve()` inside `runtime.c` (same rule the `map_dir_list` preopen uses for the guest) — there is no separate "host path" for mod bytecode, so the call is identical whether the matched mount is a host dir (linux) or a mounted ramdisk (zephyr, later). `scripts/verify-linux.sh` copies mods into `<vfs_root>/mods/` and passes `/mods/t0_hello.wasm` etc. as positional args, exactly as it would look on zephyr; `scripts/verify-linux-mount.sh` exercises a second, non-root mount the same way.
 
 ---
 

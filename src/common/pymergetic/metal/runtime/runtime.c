@@ -16,14 +16,17 @@
  * together at shutdown(), untouched by anything in between.
  *
  * load_file() takes a guest-style path (e.g. "/mods/foo.wasm") resolved
- * against vfs_root — the exact same tree WASI preopens as "/" for the guest.
- * There is no separate "host path" for mod bytecode: the loader and the
- * guest read from the same storage, so this keeps working unchanged when
- * vfs_root is a mounted ramdisk/littlefs on zephyr instead of a host dir.
- * Path resolution (string concat) stays here — OS-independent — but the
- * actual bytes-from-storage read is a port call (pm_metal_port_read_file):
- * bare libc stdio is not guaranteed to reach mounted storage on embedded
- * targets, so this file must never call fopen()/fread() etc. directly.
+ * against the mount table (see mount/mount.h) — the exact same longest-
+ * prefix resolution WASI itself does against build_map_dir_list()'s own
+ * output for the guest. There is no separate "host path" for mod
+ * bytecode: the loader and the guest read from the same mounted storage,
+ * so this keeps working unchanged whether the matched mount is today's
+ * single host-dir root or (later) a mounted tmpfs/littlefs on zephyr —
+ * see docs/MOUNT.md. Path resolution (string concat) stays here — OS-
+ * independent — but the actual bytes-from-storage read is a port call
+ * (pm_metal_port_read_file): bare libc stdio is not guaranteed to reach
+ * mounted storage on embedded targets, so this file must never call
+ * fopen()/fread() etc. directly.
  *
  * Concurrency — see docs/RUNTIME.md "Concurrency" for the full writeup.
  * Short version: init()/shutdown() are controller-thread-only — call each
@@ -69,6 +72,8 @@
 #include <string.h>
 
 #include "pymergetic/metal/memory/memory.h"
+#include "pymergetic/metal/mount/mount.h"
+#include "pymergetic/metal/mount/ops.h"
 #include "pymergetic/metal/port/lock.h"
 #include "pymergetic/metal/port/platform.h"
 #include "pymergetic/metal/util/arena.h"
@@ -95,8 +100,6 @@ typedef struct pm_metal_runtime_slot {
 
 static struct {
 	int initialized;
-	char *vfs_root;
-	char *map_dir_entry; /* "/::<vfs_root>", built once at init */
 	char **addr_pool; /* owned copies of cfg->addr_pool's strings, see runtime.h */
 	uint32_t addr_pool_count;
 	char **ns_lookup_pool; /* owned copies of cfg->ns_lookup_pool's strings */
@@ -106,9 +109,10 @@ static struct {
 
 /* Guards g_pm_metal_runtime.slots[] (used/refcount/module/buf/buf_len) and
  * the set_wasi_args()+instantiate() pair in run() — see file header. Not
- * needed for vfs_root/map_dir_entry (write-once at init(), read-only
- * after, per the controller-thread contract) nor for `initialized` itself
- * (checked unlocked as a fast precondition — see file header). */
+ * needed for the mount table (see mount/mount.h — write-once/rarely at
+ * init()/fstab-apply time, read-only after, same controller-thread
+ * contract) nor for `initialized` itself (checked unlocked as a fast
+ * precondition — see file header). */
 static pm_metal_port_mutex_t g_pm_metal_runtime_lock;
 
 /* Caller must hold g_pm_metal_runtime_lock. */
@@ -165,16 +169,14 @@ static int pm_metal_runtime_load_common(uint8_t *buf, uint32_t len,
 	return 0;
 }
 
-/* load_file() paths are guest-style, resolved against vfs_root exactly like
- * WASI resolves a guest open() — never an arbitrary host path. Same rule as
- * the map_dir_list preopen, so the loader keeps working unchanged when
- * vfs_root is a mounted ramdisk/littlefs on zephyr instead of a host dir. */
+/* load_file() paths are guest-style, resolved through the mount table
+ * exactly like WASI resolves a guest open() (same longest-prefix rule —
+ * see mount/mount.h) — never an arbitrary host path. Keeps working
+ * unchanged whether the matched mount is a host dir or (later) a mounted
+ * tmpfs/littlefs — see docs/MOUNT.md. */
 static int pm_metal_runtime_resolve_vfs_path(const char *guest_path, char *out, size_t out_len)
 {
-	int n = snprintf(out, out_len, "%s%s%s", g_pm_metal_runtime.vfs_root,
-			  guest_path[0] == '/' ? "" : "/", guest_path);
-
-	return (n > 0 && (size_t)n < out_len) ? 0 : -1;
+	return pm_metal_mount_resolve(guest_path, out, out_len);
 }
 
 #ifdef PM_METAL_RUNTIME_MULTI_MODULE
@@ -314,31 +316,23 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 		return -1;
 	}
 
-	/* strdup() is a POSIX/BSD extension, not ISO C — not guaranteed on
-	 * every target's libc, so copy by hand instead. */
-	size_t vfs_root_len = strlen(cfg->vfs_root) + 1;
-	char *vfs_root = malloc(vfs_root_len);
-	if (!vfs_root) {
+	/* Stage A (root mount) — see docs/MOUNT.md "Boot sequence". Establishes
+	 * the mount table's own "/" entry from cfg->vfs_root exactly like
+	 * today's single vfs_root, via the HOSTDIR kind's trivial passthrough
+	 * (mount/hostdir.c) — no behavior change, just routed through the
+	 * mount table instead of a hand-rolled pair of strings. Stage B
+	 * (/etc/fstab, later mounts) is layered on top of this by callers
+	 * (see app.c/main.c), not by init() itself. */
+	if (pm_metal_mount("/", PM_METAL_MOUNT_HOSTDIR, cfg->vfs_root, NULL) != 0) {
+		fprintf(stderr, "pm_metal_runtime: root mount failed: %s\n", cfg->vfs_root);
 		bytecode->release();
 		kheap->release();
 		return -1;
 	}
-	memcpy(vfs_root, cfg->vfs_root, vfs_root_len);
-
-	size_t map_dir_len = strlen("/::") + strlen(vfs_root) + 1;
-	char *map_dir_entry = malloc(map_dir_len);
-	if (!map_dir_entry) {
-		free(vfs_root);
-		bytecode->release();
-		kheap->release();
-		return -1;
-	}
-	snprintf(map_dir_entry, map_dir_len, "/::%s", vfs_root);
 
 	char **addr_pool = NULL;
 	if (pm_metal_runtime_dup_string_array(cfg->addr_pool, cfg->addr_pool_count, &addr_pool) != 0) {
-		free(map_dir_entry);
-		free(vfs_root);
+		pm_metal_umount("/");
 		bytecode->release();
 		kheap->release();
 		return -1;
@@ -347,8 +341,7 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	char **ns_lookup_pool = NULL;
 	if (pm_metal_runtime_dup_string_array(cfg->ns_lookup_pool, cfg->ns_lookup_pool_count, &ns_lookup_pool) != 0) {
 		pm_metal_runtime_free_string_array(addr_pool, cfg->addr_pool_count);
-		free(map_dir_entry);
-		free(vfs_root);
+		pm_metal_umount("/");
 		bytecode->release();
 		kheap->release();
 		return -1;
@@ -364,8 +357,7 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 		fprintf(stderr, "pm_metal_runtime: wasm_runtime_full_init failed\n");
 		pm_metal_runtime_free_string_array(ns_lookup_pool, cfg->ns_lookup_pool_count);
 		pm_metal_runtime_free_string_array(addr_pool, cfg->addr_pool_count);
-		free(map_dir_entry);
-		free(vfs_root);
+		pm_metal_umount("/");
 		bytecode->release();
 		kheap->release();
 		return -1;
@@ -400,16 +392,13 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 		wasm_runtime_destroy();
 		pm_metal_runtime_free_string_array(ns_lookup_pool, cfg->ns_lookup_pool_count);
 		pm_metal_runtime_free_string_array(addr_pool, cfg->addr_pool_count);
-		free(map_dir_entry);
-		free(vfs_root);
+		pm_metal_umount("/");
 		bytecode->release();
 		kheap->release();
 		return -1;
 	}
 
 	memset(g_pm_metal_runtime.slots, 0, sizeof(g_pm_metal_runtime.slots));
-	g_pm_metal_runtime.vfs_root = vfs_root;
-	g_pm_metal_runtime.map_dir_entry = map_dir_entry;
 	g_pm_metal_runtime.addr_pool = addr_pool;
 	g_pm_metal_runtime.addr_pool_count = cfg->addr_pool_count;
 	g_pm_metal_runtime.ns_lookup_pool = ns_lookup_pool;
@@ -446,8 +435,7 @@ int pm_metal_runtime_shutdown(void)
 
 	pm_metal_runtime_free_string_array(g_pm_metal_runtime.ns_lookup_pool, g_pm_metal_runtime.ns_lookup_pool_count);
 	pm_metal_runtime_free_string_array(g_pm_metal_runtime.addr_pool, g_pm_metal_runtime.addr_pool_count);
-	free(g_pm_metal_runtime.map_dir_entry);
-	free(g_pm_metal_runtime.vfs_root);
+	pm_metal_mount_shutdown_all();
 	pm_metal_memory_bytecode_ops()->release();
 	pm_metal_memory_kheap_ops()->release();
 
@@ -472,8 +460,7 @@ int pm_metal_runtime_load_file(const char *path, pm_metal_runtime_handle_t *out)
 	uint8_t *buf;
 	uint32_t len;
 	if (pm_metal_port_read_file(host_path, &buf, &len) != 0) {
-		fprintf(stderr, "pm_metal_runtime: read failed: %s (vfs_root=%s)\n",
-			path, g_pm_metal_runtime.vfs_root);
+		fprintf(stderr, "pm_metal_runtime: read failed: %s (host_path=%s)\n", path, host_path);
 		return -1;
 	}
 
@@ -555,8 +542,31 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 		return -1;
 	}
 
-	const char *map_dir_list[1];
-	map_dir_list[0] = g_pm_metal_runtime.map_dir_entry;
+	/* Built fresh from the mount table every call — cheap (table is
+	 * PM_METAL_MOUNT_MAX entries, no allocation) and means a mount
+	 * added since the *last* run_ex() on some other handle is picked up
+	 * by the very next one, same "only new processes see new mounts"
+	 * rule as any other WASI preopen limitation (see docs/MOUNT.md "One
+	 * hard limitation"). map_dir_bufs must outlive set_wasi_args_ex()
+	 * below — it does, since instantiate() (the only thing that reads
+	 * wasi_args->map_dir_list) runs later in this same stack frame,
+	 * same lifetime WAMR already assumed of the old single-entry
+	 * pointer this replaces. */
+	char map_dir_bufs[PM_METAL_MOUNT_MAX][PM_METAL_MOUNT_MAP_DIR_ENTRY_MAX];
+	const char *map_dir_list[PM_METAL_MOUNT_MAX];
+	size_t map_dir_count = 0;
+	size_t map_dir_i;
+
+	if (pm_metal_mount_build_map_dir_list(map_dir_bufs, PM_METAL_MOUNT_MAX, &map_dir_count) != 0) {
+		fprintf(stderr, "pm_metal_runtime: map_dir_list build failed\n");
+		if (owns_thread_env) {
+			wasm_runtime_destroy_thread_env();
+		}
+		return -1;
+	}
+	for (map_dir_i = 0; map_dir_i < map_dir_count; map_dir_i++) {
+		map_dir_list[map_dir_i] = map_dir_bufs[map_dir_i];
+	}
 
 	/* set_wasi_args() + instantiate() locked: set_wasi_args() writes
 	 * argv/map_dir onto slot->module itself (not a future instance), and
@@ -585,8 +595,8 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 	 * private console per handle (see docs/RUNTIME.md "Console model")
 	 * passes real fds here instead (e.g. a pipe() it owns and reads
 	 * from); nothing else in this function needs to change for that. */
-	wasm_runtime_set_wasi_args_ex(slot->module, NULL, 0, map_dir_list, 1, envp, (uint32_t)envc,
-				       argv, argc, stdin_fd, stdout_fd, stderr_fd);
+	wasm_runtime_set_wasi_args_ex(slot->module, NULL, 0, map_dir_list, (uint32_t)map_dir_count, envp,
+				       (uint32_t)envc, argv, argc, stdin_fd, stdout_fd, stderr_fd);
 
 	/* One fixed policy for every run_ex() call on every handle this
 	 * whole init()/shutdown() cycle — set unconditionally (even when
