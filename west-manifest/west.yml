@@ -18,3 +18,7 @@ manifest:
       url: https://github.com/bytecodealliance/wasm-micro-runtime
       revision: WAMR-2.4.5
       path: external/wamr
+    - name: lz4
+      url: https://github.com/lz4/lz4
+      revision: v1.10.0
+      path: external/lz4

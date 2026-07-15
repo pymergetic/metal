@@ -26,19 +26,37 @@ Pymergetic-metal: native **runtime** per target that runs **wasm** mods (`wasm32
 
 ```
 packages/metal/
-├── include/pymergetic/metal/   mod-facing (metal.h)
+├── include/pymergetic/metal/   mod-facing (metal.h, util/{size,arena,log,lz4}.h)
 ├── src/
 │   ├── common/pymergetic/metal/  cross-target runtime + contracts
-│   ├── linux/                    OS bind
-│   └── zephyr/
-├── mods/                       test .wasm guests (wasi-sdk)
-├── scripts/
+│   ├── linux/                    OS bind — builds pm-linux-runtime
+│   ├── zephyr/                   OS bind — stub bring-up (native_sim / qemu_x86_64)
+│   ├── rump/                     [stub]
+│   └── unikraft/                 [stub]
+├── mods/                       t0..t11 — test .wasm guests (wasi-sdk, wasm32-wasip1)
+├── apps/                        [empty — later]
+├── scripts/                    build-linux.sh, build-mod.sh, verify-*.sh, setup-*.sh
+├── patches/wamr/                tracked diffs against external/wamr — see docs/SOURCETREE.md § Vendoring
 ├── docs/
+├── external/                    gitignored — vendored WAMR/Zephyr/wasi-sdk/LZ4, reproduced by scripts/setup-*.sh
 ├── west-manifest/
-└── backup/                     old tries — not built from
+└── backup/                      old tries — not built from
 ```
 
 See [docs/SOURCETREE.md](docs/SOURCETREE.md).
+
+---
+
+## Quickstart (linux)
+
+```bash
+scripts/setup-wamr.sh      # once — vendors + patches external/wamr
+scripts/setup-lz4.sh       # once — vendors external/lz4 (util/lz4.h's backing lib)
+scripts/setup-ide.sh       # once — compile_commands.json + .clangd for this checkout
+scripts/verify-linux.sh    # build mods + runtime, then init -> load -> run -> unload -> shutdown
+```
+
+Other checks: `scripts/verify-linux-threads.sh` (ThreadSanitizer, concurrent load/run/unload), `scripts/verify-linux-process.sh` (`spawn()`/`kill()`/pipes/sockets across processes).
 
 ---
 
@@ -52,7 +70,13 @@ See [docs/SOURCETREE.md](docs/SOURCETREE.md).
 
 ## Build status
 
-Scaffold landed (`src/`, `mods/`, linux stub builds). Implementation plan: [docs/RUNTIME.md § Bring-up plan](docs/RUNTIME.md#bring-up-plan).
+**Linux runtime — green.** Long-lived `pm-linux-runtime` binary: `init` → dynamic `load`/`run`/`unload` (many mods per process, no restart) → `shutdown`, over a shared `vfs_root`. Landed on top of that: WASI preview1 tier T1 (file I/O under a preopened root), multi-module (`.wasm` importing another `.wasm`), decoupled processes (`spawn`/`wait`/`kill`, host pipes between mods), WASI preview1 sockets (loopback TCP proven across two spawned processes), and concurrent `load`/`run`/`unload` across handles/threads proven race-free under ThreadSanitizer (including a real WAMR thread-manager race fixed via a tracked vendor patch, `patches/wamr/`).
+
+**Zephyr** — scaffolded (`src/zephyr/`, CMake/Kconfig/`prj.conf`), not yet brought up. **Rump / Unikraft** — stubs only.
+
+Not yet exercised: guest-side `pthread_create()` (host thread-manager infra is in; no mod builds against `wasm32-wasip1-threads` yet).
+
+Detail + remaining steps: [docs/RUNTIME.md § Bring-up plan](docs/RUNTIME.md#bring-up-plan).
 
 ---
 
