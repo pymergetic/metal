@@ -75,6 +75,12 @@ set_target_properties(pm-wamr-vmlib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set(LZ4_ROOT_DIR "${PM_METAL_ROOT}/external/lz4")
 set_source_files_properties(${PM_COMMON}/util/lz4.c PROPERTIES INCLUDE_DIRECTORIES ${PM_METAL_ROOT})
 
+# ---- microtar (vendored + patched — see docs/SOURCETREE.md; same
+# "scoped include dir, not a target-wide one" shape as LZ4 above) ----
+
+set(MICROTAR_ROOT_DIR "${PM_METAL_ROOT}/external/microtar")
+set_source_files_properties(${PM_COMMON}/util/tar.c PROPERTIES INCLUDE_DIRECTORIES ${PM_METAL_ROOT})
+
 # ---- pm-linux-runtime ----
 
 add_executable(pm-linux-runtime
@@ -97,6 +103,8 @@ add_executable(pm-linux-runtime
 	${PM_COMMON}/util/log.c
 	${PM_COMMON}/util/lz4.c
 	${LZ4_ROOT_DIR}/lib/lz4.c
+	${PM_COMMON}/util/tar.c
+	${MICROTAR_ROOT_DIR}/src/microtar.c
 )
 
 target_include_directories(pm-linux-runtime PRIVATE
@@ -143,6 +151,8 @@ add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
 	${PM_COMMON}/util/log.c
 	${PM_COMMON}/util/lz4.c
 	${LZ4_ROOT_DIR}/lib/lz4.c
+	${PM_COMMON}/util/tar.c
+	${MICROTAR_ROOT_DIR}/src/microtar.c
 )
 
 target_include_directories(pm-linux-thread-stress PRIVATE
@@ -187,6 +197,8 @@ add_executable(pm-linux-process-test EXCLUDE_FROM_ALL
 	${PM_COMMON}/util/log.c
 	${PM_COMMON}/util/lz4.c
 	${LZ4_ROOT_DIR}/lib/lz4.c
+	${PM_COMMON}/util/tar.c
+	${MICROTAR_ROOT_DIR}/src/microtar.c
 )
 
 target_include_directories(pm-linux-process-test PRIVATE
