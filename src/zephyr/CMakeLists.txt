@@ -29,6 +29,12 @@ set(PM_COMMON_INC "${PM_METAL_ROOT}/src/common")
 set(LZ4_ROOT_DIR "${PM_METAL_ROOT}/external/lz4")
 set_source_files_properties(${PM_COMMON}/util/lz4.c PROPERTIES INCLUDE_DIRECTORIES ${PM_METAL_ROOT})
 
+# ---- microtar (vendored + patched — see docs/SOURCETREE.md; same
+# "scoped include dir, not zephyr_include_directories()" shape as LZ4
+# above) ----
+set(MICROTAR_ROOT_DIR "${PM_METAL_ROOT}/external/microtar")
+set_source_files_properties(${PM_COMMON}/util/tar.c PROPERTIES INCLUDE_DIRECTORIES ${PM_METAL_ROOT})
+
 zephyr_include_directories(${PM_COMMON_INC})
 zephyr_include_directories(${PM_METAL_ROOT}/include)
 zephyr_include_directories(${CMAKE_CURRENT_LIST_DIR})
@@ -72,6 +78,8 @@ target_sources(app PRIVATE
 	${PM_COMMON}/util/log.c
 	${PM_COMMON}/util/lz4.c
 	${LZ4_ROOT_DIR}/lib/lz4.c
+	${PM_COMMON}/util/tar.c
+	${MICROTAR_ROOT_DIR}/src/microtar.c
 	pymergetic/metal/port/platform.c
 	pymergetic/metal/port/lock.c
 	pymergetic/metal/port/worker.c

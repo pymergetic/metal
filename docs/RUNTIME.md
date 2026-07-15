@@ -33,6 +33,10 @@ Linux may expose the loop via CLI, stdin, or socket — **same API** on every ta
 
 Set once at `init`. Every `load`/`run` sees the **same** tree. No per-mod remapping, no guest path hiding.
 
+A real mount table (multiple mounts, `/etc/fstab`, ramdisk backend, later guest-callable
+`mount()`) is planned on top of this single-root model — design only so far, not implemented:
+see [MOUNT.md](MOUNT.md).
+
 | Config | Meaning |
 |--------|---------|
 | `memory_bytes` | kheap pool budget — **linux:** sole source (CLI/`malloc`); **zephyr:** optional cap on probed remainder |
@@ -416,4 +420,4 @@ Virtual `/sys/loader` · `include/metal.h` convenience · HTTPS fetch-on-miss ·
 - [x] `WASM_ENABLE_MULTI_MODULE` on, `module_reader` wired against `vfs_root`, proven with a real 2-module demo (one `.wasm` calling directly into another) — see "Multi-module" above, `mods/t8_multimod_lib` + `mods/t9_multimod_app`, `scripts/verify-linux.sh`
 - [x] WASI preview1's own socket extension (wasi1, not preview2), address-pool-gated, proven with a real loopback TCP round trip across two spawned processes — see "Sockets" above, `mods/t10_socket_server` + `mods/t11_socket_client`, `scripts/verify-linux-process.sh`
 - [x] processes decoupled from handles (`runtime/process.h`, several concurrent `run`s per handle, each own pid) + real WASI env support (`run_ex()`'s `envc`/`envp`) — linux, see "Processes" above; zephyr pending
-- [x] `util/{arena,log,size,lz4}.h` are wasi-style host imports, not a second compiled-into-every-mod copy — one implementation per module (`src/common/…/util/{arena,log,size,lz4}.c`), each registering its own small `NativeSymbol` table under its own `PM_METAL_UTIL_{ARENA,LOG,SIZE,LZ4}_WASI_MODULE` name (built from the shared `PM_METAL_UTIL_WASI_IMPORT()` macro in `util/wasi.h`) from `runtime.c`'s `init()`; proven end-to-end by `mods/t3_util_native.wasm` in `scripts/verify-linux.sh` (round-trips through a guest's own linear memory via WAMR's app<->native address translation, not a host-side buffer); `util/lz4.c` itself is a thin wrapper over vendored `external/lz4` (`scripts/setup-lz4.sh`, see docs/SOURCETREE.md "Vendoring") — plain LZ4 block format, no frame/dictionary support
+- [x] `util/{arena,log,size,lz4,tar}.h` are wasi-style host imports, not a second compiled-into-every-mod copy — one implementation per module (`src/common/…/util/{arena,log,size,lz4,tar}.c`), each registering its own small `NativeSymbol` table under its own `PM_METAL_UTIL_{ARENA,LOG,SIZE,LZ4,TAR}_WASI_MODULE` name (built from the shared `PM_METAL_UTIL_WASI_IMPORT()` macro in `util/wasi.h`) from `runtime.c`'s `init()`; proven end-to-end by `mods/t3_util_native.wasm` in `scripts/verify-linux.sh` (round-trips through a guest's own linear memory via WAMR's app<->native address translation, not a host-side buffer); `util/lz4.c` itself is a thin wrapper over vendored `external/lz4` (`scripts/setup-lz4.sh`, see docs/SOURCETREE.md "Vendoring") — plain LZ4 block format, no frame/dictionary support; `util/tar.c` is the same shape over vendored + patched `external/microtar` (`scripts/setup-microtar.sh`) — ustar reader (zero-copy header parse, chunked data reads) and writer (chunked data writes), no GNU/PAX long-name support, entirely independent of `util/lz4` — a caller composes both for a compressed archive, as `mods/t3_util_native.wasm` does

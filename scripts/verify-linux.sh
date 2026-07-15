@@ -70,6 +70,16 @@ echo "${OUT}" | grep -qE "t3_util_native: lz4 [0-9]+ -> [0-9]+ bytes" \
 	|| { echo "FAIL: lz4.h compress() import missing/failed" >&2; exit 1; }
 echo "${OUT}" | grep -q "t3_util_native: lz4 round-trip ok" \
 	|| { echo "FAIL: lz4.h decompress() did not round-trip back to the original bytes" >&2; exit 1; }
+echo "${OUT}" | grep -qE "t3_util_native: tar wrote [0-9]+ bytes \(2 entries\)" \
+	|| { echo "FAIL: tar.h writer import missing/failed" >&2; exit 1; }
+echo "${OUT}" | grep -qE "t3_util_native: tar archive lz4 [0-9]+ -> [0-9]+ bytes" \
+	|| { echo "FAIL: tar+lz4 archive compression missing/failed" >&2; exit 1; }
+echo "${OUT}" | grep -q "t3_util_native: tar entry name=data/ size=0 is_dir=1" \
+	|| { echo "FAIL: tar.h iter did not walk back the dir entry" >&2; exit 1; }
+echo "${OUT}" | grep -qE "t3_util_native: tar entry name=data/quote\.txt size=[0-9]+ is_dir=0" \
+	|| { echo "FAIL: tar.h iter did not walk back the file entry" >&2; exit 1; }
+echo "${OUT}" | grep -q "t3_util_native: tar+lz4 round-trip ok" \
+	|| { echo "FAIL: tar.h writer->lz4->tar.h iter round-trip did not match the original entries" >&2; exit 1; }
 echo "${OUT}" | grep -qE "t3_util_native\.wasm: exit=0" \
 	|| { echo "FAIL: t3_util_native did not exit 0" >&2; exit 1; }
 

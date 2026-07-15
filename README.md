@@ -19,6 +19,7 @@ Pymergetic-metal: native **runtime** per target that runs **wasm** mods (`wasm32
 | [docs/WASI.md](docs/WASI.md) | WASI preview1 syscalls, host requirements, tiers |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | Process model — long-lived dynamic loader |
 | [docs/SOURCETREE.md](docs/SOURCETREE.md) | Folder layout (`include/` / `src/`) |
+| [docs/MOUNT.md](docs/MOUNT.md) | Mount system design — table, fstab, ramdisk (**design only, not implemented**) |
 
 ---
 
@@ -26,7 +27,7 @@ Pymergetic-metal: native **runtime** per target that runs **wasm** mods (`wasm32
 
 ```
 packages/metal/
-├── include/pymergetic/metal/   mod-facing (metal.h, util/{size,arena,log,lz4}.h)
+├── include/pymergetic/metal/   mod-facing (metal.h, util/{size,arena,log,lz4,tar}.h)
 ├── src/
 │   ├── common/pymergetic/metal/  cross-target runtime + contracts
 │   ├── linux/                    OS bind — builds pm-linux-runtime
@@ -36,9 +37,9 @@ packages/metal/
 ├── mods/                       t0..t11 — test .wasm guests (wasi-sdk, wasm32-wasip1)
 ├── apps/                        [empty — later]
 ├── scripts/                    build-linux.sh, build-mod.sh, verify-*.sh, setup-*.sh
-├── patches/wamr/                tracked diffs against external/wamr — see docs/SOURCETREE.md § Vendoring
+├── patches/{wamr,microtar}/     tracked diffs against external/{wamr,microtar} — see docs/SOURCETREE.md § Vendoring
 ├── docs/
-├── external/                    gitignored — vendored WAMR/Zephyr/wasi-sdk/LZ4, reproduced by scripts/setup-*.sh
+├── external/                    gitignored — vendored WAMR/Zephyr/wasi-sdk/LZ4/microtar, reproduced by scripts/setup-*.sh
 ├── west-manifest/
 └── backup/                      old tries — not built from
 ```
@@ -52,6 +53,7 @@ See [docs/SOURCETREE.md](docs/SOURCETREE.md).
 ```bash
 scripts/setup-wamr.sh      # once — vendors + patches external/wamr
 scripts/setup-lz4.sh       # once — vendors external/lz4 (util/lz4.h's backing lib)
+scripts/setup-microtar.sh  # once — vendors + patches external/microtar (util/tar.h's backing lib)
 scripts/setup-ide.sh       # once — compile_commands.json + .clangd for this checkout
 scripts/verify-linux.sh    # build mods + runtime, then init -> load -> run -> unload -> shutdown
 ```
