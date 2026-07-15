@@ -63,6 +63,18 @@ add_library(pm-wamr-vmlib STATIC ${WAMR_RUNTIME_LIB_SOURCE})
 target_include_directories(pm-wamr-vmlib PUBLIC ${WAMR_ROOT_DIR}/core/iwasm/include)
 set_target_properties(pm-wamr-vmlib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# ---- LZ4 (vendored, vanilla — see docs/SOURCETREE.md; block API only,
+# util/lz4.c's own host impl links this straight in like any other
+# common source, no separate static-lib step). util/lz4.c itself includes
+# it as "external/lz4/lib/lz4.h" — a full path from PM_METAL_ROOT, not a
+# bare "lz4.h" — but PM_METAL_ROOT is *not* added to any target's own
+# include dirs for that (every other source in the target would also
+# gain the whole repo tree as includable, for no reason of its own).
+# Scoped to just this one source file instead — see below. ----
+
+set(LZ4_ROOT_DIR "${PM_METAL_ROOT}/external/lz4")
+set_source_files_properties(${PM_COMMON}/util/lz4.c PROPERTIES INCLUDE_DIRECTORIES ${PM_METAL_ROOT})
+
 # ---- pm-linux-runtime ----
 
 add_executable(pm-linux-runtime
@@ -83,6 +95,8 @@ add_executable(pm-linux-runtime
 	${PM_COMMON}/util/size.c
 	${PM_COMMON}/util/arena.c
 	${PM_COMMON}/util/log.c
+	${PM_COMMON}/util/lz4.c
+	${LZ4_ROOT_DIR}/lib/lz4.c
 )
 
 target_include_directories(pm-linux-runtime PRIVATE
@@ -127,6 +141,8 @@ add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
 	${PM_COMMON}/util/size.c
 	${PM_COMMON}/util/arena.c
 	${PM_COMMON}/util/log.c
+	${PM_COMMON}/util/lz4.c
+	${LZ4_ROOT_DIR}/lib/lz4.c
 )
 
 target_include_directories(pm-linux-thread-stress PRIVATE
@@ -169,6 +185,8 @@ add_executable(pm-linux-process-test EXCLUDE_FROM_ALL
 	${PM_COMMON}/util/size.c
 	${PM_COMMON}/util/arena.c
 	${PM_COMMON}/util/log.c
+	${PM_COMMON}/util/lz4.c
+	${LZ4_ROOT_DIR}/lib/lz4.c
 )
 
 target_include_directories(pm-linux-process-test PRIVATE

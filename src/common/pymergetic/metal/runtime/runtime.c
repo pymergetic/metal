@@ -73,6 +73,7 @@
 #include "pymergetic/metal/port/platform.h"
 #include "pymergetic/metal/util/arena.h"
 #include "pymergetic/metal/util/log.h"
+#include "pymergetic/metal/util/lz4.h"
 #include "pymergetic/metal/util/size.h"
 #include "wasm_export.h"
 
@@ -379,10 +380,10 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	/* Must happen before any load()/instantiate() of a module that
 	 * might import these — every mod's own compile already resolved
 	 * them to unresolved imports under that module's own
-	 * PM_METAL_UTIL_{ARENA,LOG,SIZE}_WASI_MODULE name (see
-	 * util/{arena,log,size}.h), so this is the one place that has to
+	 * PM_METAL_UTIL_{ARENA,LOG,LZ4,SIZE}_WASI_MODULE name (see
+	 * util/{arena,log,lz4,size}.h), so this is the one place that has to
 	 * run first, exactly once per init()/shutdown() cycle. Each of the
-	 * three registers its own small NativeSymbol table under its own
+	 * four registers its own small NativeSymbol table under its own
 	 * name (see that module's own .c) rather than one shared table
 	 * here — nothing about resolving an import needs a central table,
 	 * and this way each module's wasm-import glue lives right next to
@@ -391,6 +392,7 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	 * side. */
 	if (pm_metal_util_arena_native_register() != 0
 	    || pm_metal_util_log_native_register() != 0
+	    || pm_metal_util_lz4_native_register() != 0
 	    || pm_metal_util_size_native_register() != 0) {
 		fprintf(stderr, "pm_metal_runtime: native registration failed\n");
 		wasm_runtime_destroy();

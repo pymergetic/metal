@@ -1,17 +1,19 @@
 /*
- * T3 — exercises util/{size,log,arena}.h's wasi-style imports: on
+ * T3 — exercises util/{size,log,arena,lz4}.h's wasi-style imports: on
  * wasm32-wasip1 none of these have a local body in this .wasm at all (see
  * their own headers) — every call below is resolved against each host
  * module's own native registration (src/common/pymergetic/metal/util/
- * {size,arena,log}.c, each under its own PM_METAL_UTIL_{SIZE,ARENA,LOG}_
- * WASI_MODULE import name, see util/wasi.h) at instantiate() time.
- * `arena_init()` is called over this mod's *own* stack buffer to prove
- * the host really is reading/writing this guest's linear memory through
- * the app<->native address translation, not some unrelated host-side
- * buffer.
+ * {size,arena,log,lz4}.c, each under its own PM_METAL_UTIL_{SIZE,ARENA,
+ * LOG,LZ4}_WASI_MODULE import name, see util/wasi.h) at instantiate()
+ * time. `arena_init()` is called over this mod's *own* stack buffer, and
+ * lz4_compress()/decompress() round-trip through two more of this mod's
+ * own stack buffers, to prove the host really is reading/writing this
+ * guest's linear memory through the app<->native address translation,
+ * not some unrelated host-side buffer.
  */
 #include <pymergetic/metal/util/arena.h>
 #include <pymergetic/metal/util/log.h>
+#include <pymergetic/metal/util/lz4.h>
 #include <pymergetic/metal/util/size.h>
 
 #include <stdio.h>
@@ -56,6 +58,31 @@ int main(void)
 	pm_metal_util_arena_free(arena, a);
 	pm_metal_util_arena_free(arena, b);
 	printf("t3_util_native: used_after_free=%zu\n", pm_metal_util_arena_used(arena));
+
+	static const char plain[] = "the quick brown fox jumps over the lazy dog, "
+				     "the quick brown fox jumps over the lazy dog";
+	size_t bound = pm_metal_util_lz4_compress_bound(sizeof(plain));
+	static unsigned char packed[256];
+	if (bound == 0 || bound > sizeof(packed)) {
+		printf("t3_util_native: lz4_compress_bound failed\n");
+		return 1;
+	}
+
+	int packed_len = pm_metal_util_lz4_compress(plain, sizeof(plain), packed, sizeof(packed));
+	if (packed_len < 0) {
+		printf("t3_util_native: lz4_compress failed\n");
+		return 1;
+	}
+	printf("t3_util_native: lz4 %zu -> %d bytes\n", sizeof(plain), packed_len);
+
+	static char unpacked[sizeof(plain)];
+	int unpacked_len =
+		pm_metal_util_lz4_decompress(packed, (size_t)packed_len, unpacked, sizeof(unpacked));
+	if (unpacked_len != (int)sizeof(plain) || memcmp(unpacked, plain, sizeof(plain)) != 0) {
+		printf("t3_util_native: lz4_decompress mismatch\n");
+		return 1;
+	}
+	printf("t3_util_native: lz4 round-trip ok\n");
 
 	return 0;
 }

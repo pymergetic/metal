@@ -66,6 +66,10 @@ echo "${OUT}" | grep -q "t3_util_native: a\[0\]=0xab used=64" \
 	|| { echo "FAIL: arena.h import did not alloc into this guest's own memory" >&2; exit 1; }
 echo "${OUT}" | grep -q "t3_util_native: used_after_free=0" \
 	|| { echo "FAIL: arena.h free() did not coalesce back to empty" >&2; exit 1; }
+echo "${OUT}" | grep -qE "t3_util_native: lz4 [0-9]+ -> [0-9]+ bytes" \
+	|| { echo "FAIL: lz4.h compress() import missing/failed" >&2; exit 1; }
+echo "${OUT}" | grep -q "t3_util_native: lz4 round-trip ok" \
+	|| { echo "FAIL: lz4.h decompress() did not round-trip back to the original bytes" >&2; exit 1; }
 echo "${OUT}" | grep -qE "t3_util_native\.wasm: exit=0" \
 	|| { echo "FAIL: t3_util_native did not exit 0" >&2; exit 1; }
 

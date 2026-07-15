@@ -20,6 +20,15 @@ get_filename_component(PM_METAL_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 set(PM_COMMON "${PM_METAL_ROOT}/src/common/pymergetic/metal")
 set(PM_COMMON_INC "${PM_METAL_ROOT}/src/common")
 
+# ---- LZ4 (vendored, vanilla — see docs/SOURCETREE.md; block API only).
+# util/lz4.c includes it as "external/lz4/lib/lz4.h" — a full path from
+# PM_METAL_ROOT, not a bare "lz4.h" — but PM_METAL_ROOT is *not* added
+# via zephyr_include_directories() for that: that macro feeds the global
+# zephyr_interface, i.e. every Zephyr subsystem in the build, not just
+# this app — scoped to just this one source file instead, see below. ----
+set(LZ4_ROOT_DIR "${PM_METAL_ROOT}/external/lz4")
+set_source_files_properties(${PM_COMMON}/util/lz4.c PROPERTIES INCLUDE_DIRECTORIES ${PM_METAL_ROOT})
+
 zephyr_include_directories(${PM_COMMON_INC})
 zephyr_include_directories(${PM_METAL_ROOT}/include)
 zephyr_include_directories(${CMAKE_CURRENT_LIST_DIR})
@@ -61,6 +70,8 @@ target_sources(app PRIVATE
 	${PM_COMMON}/util/size.c
 	${PM_COMMON}/util/arena.c
 	${PM_COMMON}/util/log.c
+	${PM_COMMON}/util/lz4.c
+	${LZ4_ROOT_DIR}/lib/lz4.c
 	pymergetic/metal/port/platform.c
 	pymergetic/metal/port/lock.c
 	pymergetic/metal/port/worker.c
