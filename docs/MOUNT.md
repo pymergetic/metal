@@ -1,19 +1,18 @@
 # Mount
 
 A real, Linux-like mount system: a mount table instead of one fixed `vfs_root`, multiple
-fstypes (host dir passthrough, tmpfs, later real device FS), a boot-time `/etc/fstab`, and —
-eventually — a guest-callable `mount()`/`umount()` for a real `busybox mount`.
+fstypes (host dir passthrough, tmpfs, virtual `proc`, later real device FS on Zephyr), a
+boot-time `/etc/fstab`, and a guest-callable `mount()`/`umount()` (same-process visible on
+linux via live remount).
 
 See [RUNTIME.md § VFS root](RUNTIME.md#vfs-root-same-every-load) (what this replaces) ·
 [LAYERS.md](LAYERS.md) · [SOURCETREE.md](SOURCETREE.md).
 
-Status: **Phases 1–2 landed** (mount table + `hostdir` fstype, `/etc/fstab` Stage B, `--mount=`/
-`--rootfs=` CLI, `--vfs-root=` kept as a deprecated alias) — see `src/common/pymergetic/metal/mount/`,
-`scripts/verify-linux-mount.sh`. **Phase 3 landed on linux only** (`tmpfs` fstype, `/dev/shm`-backed,
-named-source registry — see `mount/tmpfs.c`, `mount/tmpfs_registry.c`,
-`scripts/verify-linux-tmpfs.sh`); **zephyr's own `tmpfs` is still a stub, blocked on `wasi/file.c` +
-`device.h`** (see "Zephyr prerequisite" below). **Phases 4–6 (boot-time populate, guest
-`mount()`/`umount()`, overlays/real device FS) are still design only, not implemented.**
+**Landed on linux (Phases 1–6c):** mount table, `hostdir`/`tmpfs`/`proc`, fstab/`--mount=`/
+`--rootfs=`, populate, guest `mount()`/`umount()` with same-process visibility (live remount),
+virtual `/proc`. **Zephyr still needs a real `wasi/file.c`** (tmpfs/device/proc/live remount
+all blocked there). **Later:** real device/partition FS on Zephyr. Overlay/union is **out of
+scope**.
 
 ---
 
@@ -23,20 +22,18 @@ WASI preview1 already has real multi-mount plumbing — this is mostly *generali
 exists*, not inventing a VFS layer from scratch.
 
 - WAMR's `wasm_runtime_set_wasi_args_ex()` already takes an *array* of `map_dir_list` entries
-  (`"<guest>::<host>"`), not just one. `runtime.c` today only ever builds **one**
-  (`map_dir_entry`, `"/::<vfs_root>"`) and hands it in as a 1-element array — see
-  `pm_metal_runtime_run_ex()`.
+  (`"<guest>::<host>"`), not just one. `run_ex()` builds that array from the live mount table
+  every spawn (`pm_metal_mount_build_map_dir_list`).
 - The guest side (wasi-libc) resolves an absolute path against whichever preopened directory
   has the **longest matching prefix** on its own, in guest code
-  (`__wasilibc_find_relpath`, `wasi/libc-find-relpath.h`) — the host does not need to do any
-  path-routing for guest WASI file I/O itself. Multiple simultaneous mounts already work at
-  that layer for free, once the host hands over more than one `map_dir_list` entry.
+  (`__wasilibc_find_relpath`, `wasi/libc-find-relpath.h`). On linux, Metal's `os_*` then
+  re-resolves against the live table (live remount) so mounts added after instantiate are
+  still visible.
 
-What is actually missing: a real mount **table** (replacing the single `vfs_root` string), more
-**fstypes** than "host directory", the host-side loader's own path resolution
-(`pm_metal_runtime_resolve_vfs_path()`, used to read `.wasm` bytecode off disk — a separate
-concern from guest WASI I/O) generalized to the same table, and a guest-callable mount/unmount
-surface for later.
+**Landed on linux:** mount table (not a single `vfs_root`), `hostdir` / `tmpfs` / `proc`,
+loader `resolve()` against that table, guest `mount()`/`umount()`, and Metal `os_*` live
+remount so path ops re-resolve after instantiate. **Still open:** Zephyr `wasi/file.c` (+
+tmpfs/device/proc on that target), optional real partition FS later.
 
 ---
 
@@ -55,6 +52,7 @@ here is writing an actual block-device driver or an on-disk filesystem parser:
 |--------|-------------------|------------|-------------|
 | `hostdir` | a real host directory path (required) | literal passthrough — whatever real filesystem the host has that directory on (ext4, tmpfs, NFS, doesn't matter) is the host's problem, not ours | n/a for now — no real mounted FS to point at yet |
 | `tmpfs` | a **name** (see "Named ramdisks" below — not literally `none`) | delegates to the host's *own* real tmpfs — `mkdtemp()` under `/dev/shm`, then treated internally as an ordinary `hostdir` | no true device-less pseudo-fs on Zephyr, so `establish()` does **two** steps under one fstype: provision a `zephyr,ram-disk` block device, then `fs_mount()` littlefs/FAT onto it — the block-device step is an implementation detail of *this* fstype's own `bind`, never a separate mount-table entry or fstab line |
+| `proc` | ignored (conventionally `proc`) | sentinel `pm-metal:proc` + Metal `os_*` hooks (no host dir) | same contract once `wasi/file.c` is real |
 
 Later, real device-backed fstypes (Phase 6, not building yet) *do* need a meaningful
 `<source>` — e.g. `littlefs /data littlefs <partition-or-image-path>` — because at that point
@@ -191,23 +189,78 @@ name (`root`).
 
 ---
 
-## One hard limitation — document, don't fight
+## Preopen freeze — and live remount (linux)
 
-WASI preopens are wired into a module **once, at `wasm_runtime_instantiate()` time**
-(`runtime.c`'s `run_ex()`: `set_wasi_args_ex()` → `instantiate()`, back to back, same lock). A
-"process" here (`runtime/process.h`'s `spawn()`) is one such instance, for its whole life. A
-mount registered *after* a process was spawned is invisible to that already-running process —
-only to processes spawned (instantiated) *afterward*. This is a WASI preview1 spec property
-(no runtime, WAMR included, has a "here's a new preopen" syscall — and wasi-libc only scans
-`fd_prestat_get` once at startup anyway), not a WAMR bug and not something to patch upstream.
+WASI preopens are still wired **once** at `wasm_runtime_instantiate()` (`set_wasi_args_ex` →
+`instantiate`). wasi-libc still scans `fd_prestat_get` only at startup — there is no "add
+preopen" syscall. That is unchanged.
 
-In practice this is fine: `mount` and a following `ls` are two separate process spawns already
-(two separate `exec`s), each picking up the mount table as of its own spawn — the gap only
-matters for a single long-running process expecting to see its own `mount()` call without
-re-exec'ing. Real fix, if ever needed: stop delegating `path_open`/`fd_*` to WAMR's built-in
-POSIX WASI backend and intercept them ourselves so every guest file op re-resolves against the
-live table — a real custom WASI-host layer, tracked as Phase 6, not built until something
-actually needs it.
+**On linux, Metal closes the visibility gap:** tagged preopen fds carry a guest prefix; every
+`os_openat` / `os_*at` rebuilds the absolute guest path and calls `pm_metal_mount_resolve_ex`
+against the **live** table. A `mount("/dyn", tmpfs)` is therefore visible to later opens in
+the **same** process (routed through the frozen `/` preopen as relpath `dyn/...`). Open fds
+keep their old backing (Linux-like). Proven by `scripts/verify-linux-sys-mount.sh` (t17
+mounts + same-process use).
+
+Virtual `/proc` was the first consumer of this `os_*` seam (Phase 6b); live remount extends
+it to hostdir/tmpfs. Zephyr gets the same contract once its `wasi/file.c` is real.
+
+---
+
+## Procfs (virtual)
+
+Guest `/proc` is Metal-internal state answered by **functions**, never a passthrough of the
+host's own `/proc`, and never a directory of files written under `/tmp`.
+
+### Wrong interim (Phase 6a — deleted)
+
+```
+hook → write file under /tmp/pm_metal_proc → WASI preopen as hostdir → guest read
+```
+
+That path is gone. It was not hook-on-open, raced across processes on cmdline/environ, and
+needed host `/tmp` (dead on Zephyr).
+
+### Landed (Phase 6b — linux)
+
+```
+guest open/read /proc/<node>
+  → Metal WASI path layer (linux: wasi/file.c)
+  → mount table: prefix is kind `proc` (preopen sentinel `pm-metal:proc`)
+  → proc registry: lookup hook for <node>
+  → hook generates bytes → memfd snapshot (dirs use opaque /dev/null + side table)
+  → stock fd_read / lseek / fstat / close on that fd
+```
+
+| Piece | Contract |
+|-------|----------|
+| `pm_metal_mount_proc_register(name, fn)` | Keep — `name` is relative to the proc root (`"mounts"` → `/proc/mounts`). |
+| `pm_metal_mount_proc_hook_fn` | Keep — `int (*)(char *out, size_t cap, size_t *out_len)`; may embed NULs (`cmdline` / `environ`). |
+| Per-node generators | Under `mount/proc/*.c` (mounts, filesystems, version, cpuinfo, meminfo, uptime; cmdline/environ only via `/proc/self/`). |
+| `proc` fstype `establish()` | Writes sentinel `pm-metal:proc` (no host dir). Table + WASI layer treat that preopen as virtual. |
+| Open / read | On open of a registered node: call the hook once into a memfd. Global nodes regenerate each open (no `refresh()`). |
+| Directory listing | `/proc` lists registered root hooks + `self/`; `/proc/self` lists `cmdline` + `environ`. |
+| Process bind | `pm_metal_mount_proc_bind_current` / `unbind_current` around `run_ex` (TLS argv/env). |
+| Dropped | `/tmp/pm_metal_proc`, `refresh()`, global `set_guest` as cmdline/environ source of truth. |
+
+### Per-process nodes (`/proc/self`)
+
+`/proc/cmdline` and `/proc/environ` are **not** one global file. v1 exposes them only as:
+
+- `/proc/self/cmdline` — that process's argv (NUL-separated)
+- `/proc/self/environ` — that process's WASI env (NUL-separated), including spawn's appended `PID=`
+
+Bound to the calling process's slot (the env/argv actually passed into `run_ex` / `set_wasi_args_ex`), not a process-global `set_guest` overwrite. No `/proc/<pid>/` tree in v1 beyond `self`.
+
+Shared nodes stay at the proc root and are process-independent:
+
+`/proc/mounts`, `/proc/filesystems`, `/proc/version`, `/proc/cpuinfo`, `/proc/meminfo`, `/proc/uptime`.
+
+### Relationship to other mounts
+
+On linux, hostdir/tmpfs and `proc` share the same live-resolve `os_*` seam: preopens are still
+established at instantiate, but path ops re-resolve against the live table. Zephyr remains
+blocked on a real `wasi/file.c` for *all* mounts (same contract once that lands).
 
 ---
 
@@ -249,9 +302,10 @@ scratch           /tmp       tmpfs      size=8M     0       0
 (`scratch` is a **name** — see "Named ramdisks" further down for what it resolves to per
 target, and how to address more than one.)
 
-  - `<fstype>` = one of our own registered fstype names (`hostdir`, `tmpfs`, later
-    `littlefs`/`fat`/`overlay` — see "fstype vs. source" above for what `<source>` means for
+  - `<fstype>` = one of our own registered fstype names (`hostdir`, `tmpfs`, `proc`, later
+    `littlefs`/`fat` — see "fstype vs. source" above for what `<source>` means for
     each) — a small string→ops-struct lookup, same shape as `memory/ops.c`'s `resolve()`.
+    No overlay/union fstype.
   - `<dump>`/`<pass>` parsed but ignored — kept only so a real/reused fstab-line parser doesn't
     choke on them; no fsck, no dump utility here.
   - `<options>`: `ro`/`rw` → the mount table's `readonly` flag; kind-specific tokens
@@ -286,13 +340,14 @@ New module, `src/common/pymergetic/metal/mount/` — `impl: common`, ops-struct 
 
 | File | Prefix | Role |
 |------|--------|------|
-| `mount.h` / `.c` | `pm_metal_mount_` | table CRUD (`mount()`/`umount()`/`list()`), `resolve(guest_path)` → host path + remainder (longest-prefix, mirrors wasi-libc's own algorithm — used by the *loader's* own reads, e.g. `.wasm` bytecode, not guest WASI I/O), `build_map_dir_list()` (emits one `"<guest>::<host>"` per directory-backed mount for `run_ex()`) |
+| `table.h` / `table.c` | `pm_metal_mount_` | table CRUD (`mount()`/`umount()`/`list()`), `resolve(guest_path)` → host path + remainder (longest-prefix, mirrors wasi-libc's own algorithm — used by the *loader's* own reads, e.g. `.wasm` bytecode, not guest WASI I/O), `build_map_dir_list()` (emits one `"<guest>::<host>"` per directory-backed mount for `run_ex()`) |
 | `ops.h` | — | shared `pm_metal_mount_ops_t` struct (`establish`/`release`, mirrors `memory/ops.h`) + `pm_metal_mount_kind_t` enum |
 | `hostdir.h` / `.c` | `pm_metal_mount_hostdir_` | passthrough of a real host directory — `impl: bind`, trivial on linux (validate + `realpath`), `impl: common`-ish on zephyr too once its own FS is real (backing dir must already be a mounted FS there) |
 | `device.h` / `.c` | `pm_metal_mount_device_` | **zephyr-only** ops-struct for block devices (`RAMDISK` kind now) — see "Block device layer" above; not yet added |
 | `tmpfs.h` / `.c` | `pm_metal_mount_tmpfs_` | `impl: bind` per target — **linux landed**: `mkdtemp()` under `/dev/shm` (already real tmpfs = RAM), then registered internally as an ordinary hostdir (no device layer involved at all); **zephyr still a stub**: will call `device.h`'s `ramdisk` kind `establish()` for the device, then `fs_mount()` littlefs directly onto it — the one genuinely new per-target backend, blocked on `wasi/file.c` (see "Zephyr prerequisite" below) |
 | `tmpfs_registry.h` / `.c` | `pm_metal_mount_tmpfs_registry_` | **landed**, `impl: common` — name → host-path + refcount bookkeeping shared by every target's own `tmpfs.c` (see "Named ramdisks" above); deliberately keyed by *name*, separate from `mount.c`'s own guest-path-keyed table |
-| `fstab.h` / `.c` | `pm_metal_mount_fstab_` | Stage B parser/applier, `impl: common` (pure text + calls into `mount.h`, no per-target code) |
+| `populate.h` / `.c` | `pm_metal_mount_populate_` | **landed**, `impl: common` — global ustar [+ lz4] blob registry + `populate_all()` extract against guest `/` |
+| `fstab.h` / `.c` | `pm_metal_mount_fstab_` | Stage B parser/applier, `impl: common` (pure text + calls into `table.h`, no per-target code) |
 
 `PM_METAL_MOUNT_MAX` bounds the table (same style as `PM_METAL_RUNTIME_MAX_HANDLES`).
 
@@ -303,28 +358,28 @@ New module, `src/common/pymergetic/metal/mount/` — `impl: common`, ops-struct 
 
 ---
 
-## Guest-callable `mount()`/`umount()` (for busybox)
+## Guest-callable `mount()`/`umount()` (for busybox) — **landed**
 
-WASI preview1 has no mount syscall at all — needs our own extension, same shape as
+WASI preview1 has no mount syscall at all — our own extension, same shape as
 `util/{arena,log,size,lz4,tar}.h`'s wasi-style imports (own `NativeSymbol` table, own
-`import_module` string), **but privileged**: gated behind `-DPM_METAL_BUILD_KERNEL`, per the
-README's existing Visibility model (mounting is not something an arbitrary unprivileged mod
-should get to do). This would be the first real consumer of that already-documented-but-not-yet-
-written `metal/build.h` split — a small new file, not an existing dependency.
+`import_module` string `"pymergetic.metal.mount"`), **privileged**: gated behind
+`-DPM_METAL_BUILD_KERNEL` via `include/pymergetic/metal/build.h` + an empty
+`mods/<name>/MOUNT` marker (`build-mod.sh`).
 
-Proposed home: `include/pymergetic/metal/mount.h` (top-level mod-facing tree, *not* under
-`util/` — this isn't a leaf utility like `arena`/`log`, it's a first-class privileged runtime
-API), declarations visible only when `PM_METAL_BUILD_KERNEL` is defined.
+| Piece | Role |
+|-------|------|
+| `include/pymergetic/metal/build.h` | Visibility contract home (`PM_METAL_BUILD_KERNEL`) |
+| `include/pymergetic/metal/mount/mount.h` | wasi-import contract (same shape as `util/*.h`): `pm_metal_mount_mount` / `pm_metal_mount_umount` + Linux-shaped `mount()`/`umount()` inlines — guest surface gated on `PM_METAL_BUILD_KERNEL` |
+| `src/common/.../mount/table.h` / `table.c` | host-only mount table (`pm_metal_mount` / `resolve` / …) |
+| `src/common/.../mount/mount.c` | wasi bridge + `pm_metal_mount_native_register()` (pairs with include/.../mount/mount.h) |
 
-- Signature mirrors what busybox's own `mount(source, target, filesystemtype, mountflags,
-  data)` / `umount(target)` expect closely enough that a small shim header (own
-  `sys/mount.h`-shaped wrapper — same trick as `wasi_socket_ext.h` for sockets, since plain
-  wasi-libc has no `mount()` either) can translate busybox's real calls into this import with
-  no changes to busybox's own source.
-- Effects are subject to the "one hard limitation" above — visible to the next `run()` on any
-  handle, not to an already-running process. Document this at the call site, not just here.
-- `build-mod.sh` gets a `MOUNT` marker file (same convention as `REACTOR`/`SOCKET`) for a mod
-  that needs `-DPM_METAL_BUILD_KERNEL` + this header's native symbols linked in.
+- Signature: `pm_metal_mount_mount(source, target, fstype, options)` — same field meaning as an
+  fstab/`--mount=` line (tmpfs `source` is a name). Same header also exposes Linux
+  `mount()`/`umount()` + `MS_RDONLY` as thin inlines over those imports.
+- Effects update the live table immediately. On linux, path ops in the **same** process see
+  them (live remount); later spawns also pick them up via a fresh `map_dir_list`. Proven by
+  `scripts/verify-linux-sys-mount.sh` (t17 mount + same-process use → t18 still uses → t19
+  umount → t20 gone).
 
 ---
 
@@ -336,28 +391,38 @@ against what exists today:
 ```
 packages/metal/
 ├── include/pymergetic/metal/
-│   └── mount.h                      NEW [5]  privileged (-DPM_METAL_BUILD_KERNEL) guest API
+│   ├── build.h                      NEW [5]  Visibility (`PM_METAL_BUILD_KERNEL`)
+│   └── mount/
+│       └── mount.h                  NEW [5]  privileged mount()/umount() wasi-import contract (like util/*.h)
 │
 ├── src/common/pymergetic/metal/
 │   ├── mount/                       NEW module
 │   │   ├── ops.h                    [1]  shared pm_metal_mount_ops_t + kind enum
-│   │   ├── mount.h / mount.c        [1]  table CRUD + resolve() + build_map_dir_list() — impl: common
+│   │   ├── table.h / table.c        [1]  host-only mount table — impl: common
+│   │   ├── proc.h / proc.c          [6b] virtual proc registry + sentinel establish; lookup/hooks/bind TLS
+│   │   ├── proc/                    [6b] per-node generators + guest TLS (cmdline/environ via /proc/self)
+│   │   ├── mount.c                  [5]  wasi bridge for include/.../mount/mount.h — impl: common
 │   │   ├── hostdir.h / hostdir.c    [1]  impl: bind (linux trivial; zephyr once its own FS is real)
 │   │   ├── device.h                 [3]  zephyr-only block-device ops-struct + kind enum — see "Block device layer" — not yet added
 │   │   ├── tmpfs.h                  [3]  DONE (linux) — shared ops-struct decl, impl: bind per target
 │   │   ├── tmpfs_registry.h / .c    [3]  DONE — impl: common, name → host-path + refcount bookkeeping
+│   │   ├── populate.h / populate.c  [4]  DONE — global blob registry + populate_all() (ustar/lz4 → resolve → port write)
 │   │   └── fstab.h / fstab.c        [2]  impl: common — Stage B parser/applier
-│   ├── port/platform.h              CHANGED [4]  + write_file()/mkdir() (impl: bind both plats) — not yet added
+│   ├── port/platform.h              CHANGED [4]  + write_file()/mkdir() (impl: bind both plats)
 │   ├── runtime/runtime.c            CHANGED [1]  vfs_root/map_dir_entry hand-rolling → mount/ calls
-│   └── app/app.c                    CHANGED [2]  calls fstab_apply() after init(), before mod-run loop
+│   └── app/app.c                    CHANGED [2,4]  fstab_apply + CLI mounts + populate_all() before mod-run loop
 │
 ├── src/linux/
 │   ├── main.c                       CHANGED [1,2]  --rootfs=, --mount= (--vfs-root= kept as alias)
+│   ├── CMakeLists.txt               CHANGED [6b]  drop WAMR posix_file.c from vmlib; Metal wasi/file.c + posix_file_real.c
 │   └── pymergetic/metal/
 │       ├── mount/
 │       │   ├── hostdir.c            [1]  impl: bind — realpath() validate
 │       │   └── tmpfs.c              [3]  DONE — impl: bind — mkdtemp() under /dev/shm, nftw() rm -rf on release
-│       └── port/platform.c          CHANGED [4]  write_file()/mkdir() impl — not yet added
+│       ├── wasi/
+│       │   ├── file.c               [6b, 6c] DONE — virtual proc + live remount resolve_ex; else __real_os_*
+│       │   └── posix_file_real.c    [6b] DONE — WAMR posix_file.c with os_* → __real_os_*
+│       └── port/platform.c          CHANGED [4]  write_file()/mkdir() impl — DONE (linux)
 │
 ├── src/zephyr/
 │   ├── Kconfig                      CHANGED [1]  CONFIG_PM_METAL_ROOTFS_NAME etc. (which
@@ -368,28 +433,28 @@ packages/metal/
 │   │                                          zephyr ram disk itself" / "Named ramdisks" above
 │   │                                          (dir exists today, empty/.gitkeep)
 │   └── pymergetic/metal/
-│       ├── wasi/file.c              CHANGED [3, prereq]  real os_* backend over zephyr's own
-│       │                                                  POSIX open/read/write/opendir/readdir
-│       │                                                  (not raw fs_*) — currently a stub, see below
+│       ├── wasi/file.c              CHANGED [3, 6b prereq]  real os_* backend + virtual proc open/read
+│       │                                                  — currently a stub, see below
 │       ├── mount/
 │       │   ├── device.c             [3]  impl: bind — RAMDISK kind: registers a zephyr,ram-disk disk_access device — not yet added
 │       │   └── tmpfs.c              [3]  STUB landed (always fails — blocked on wasi/file.c + device.c above)
-│       └── port/platform.c          CHANGED [4]  write_file()/mkdir() impl — not yet added
+│       └── port/platform.c          CHANGED [4]  write_file()/mkdir() stub until wasi/file.c + real FS
 │
 ├── mods/
 │   ├── t12_tmpfs_write/main.c       DONE [3]  writes through a tmpfs mount
 │   ├── t13_tmpfs_read/main.c        DONE [3]  reads it back from a separate process
 │   ├── t14_tmpfs_read_alt/main.c    DONE [3]  reads via a second fstab line naming the same source — proves reuse
 │   ├── t15_tmpfs_read_other/main.c  DONE [3]  reads a differently-named source — proves independence
+│   ├── t16_populate_read/main.c     DONE [4]  reads a file only present via populate_all() extract
 │   ├── t1x_mount_write/main.c       NEW [5]  calls mount() — own MOUNT marker file
 │   └── t1y_mount_read/main.c        NEW [5]  reads back through the new mount
 │
 ├── scripts/
 │   ├── build-mod.sh                 CHANGED [5]  MOUNT marker (same convention as REACTOR/SOCKET)
-│   ├── pack-image.sh                 NEW [4]  dir -> embedded C array (src/zephyr/generated/,
-│   │                                          already anticipated by .gitignore's own comment there)
+│   ├── pack-image.sh                DONE [4]  dir → ustar [→ lz4] → generated .c that registers the blob
 │   ├── verify-linux-mount.sh         DONE [2]
-│   └── verify-linux-tmpfs.sh         DONE [3] (linux only)
+│   ├── verify-linux-tmpfs.sh         DONE [3] (linux only)
+│   └── verify-linux-populate.sh      DONE [4] (linux only)
 │
 └── docs/
     └── MOUNT.md                     this file
@@ -407,9 +472,12 @@ scope until either target itself is brought up.
 | 1 | Mount table refactor | `mount/` module; single root mount, behavior identical to today | — |
 | 2 | `/etc/fstab` + `--mount=` | Stage B parser/applier; CLI sugar as synthetic fstab line | 1 |
 | 3 | `tmpfs` fstype + `device.h` layer | **linux: done** (`/dev/shm`-backed hostdir + named-source registry); **zephyr: still stub** — new `device.h` (`RAMDISK` kind) + `tmpfs.c` composing it with `fs_mount()` littlefs | 1–2; zephyr also blocked on `wasi/file.c` (below) |
-| 4 | Boot-time populate | build-time packer (dir → embedded C array, per `.gitignore`'s already-anticipated `src/zephyr/generated/`); new `pm_metal_port_write_file()`/`mkdir`; `pm_metal_mount_populate()` | 3 |
-| 5 | Guest `mount()`/`umount()` | privileged wasi-style import + busybox shim header | 1–3 |
-| 6 (later, non-blocking) | Overlay/union mounts, real device/partition FS, `mount`-with-no-args listing (`/sys/mounts`, ties into RUNTIME.md's own not-yet-built virtual `/sys/loader` idea), live-remount custom WASI host (only if the "one hard limitation" above ever actually needs closing) | 1–5 |
+| 4 | Boot-time populate | ustar [+ lz4] embeds; global `populate_register` list; `populate_all()` extracts against guest `/` via resolve + port `write_file`/`mkdir`; `pack-image.sh` | 3 (linux half enough to prove) |
+| 5 | Guest `mount()`/`umount()` | **done** — privileged wasi import in `include/.../mount/mount.h` (bridge in `mount.c`) + `MOUNT` marker | 1–3 |
+| 6a | Procfs hooks (interim) | **deleted** — materialize-to-`/tmp` path removed when 6b landed | 1–5 |
+| 6b | Virtual `/proc` + WASI path intercept | **done (linux)** — sentinel establish, hook-on-open, `/proc/self/{cmdline,environ}` via TLS bind, Metal `os_*` shim; **zephyr still stub** (`wasi/file.c`) | 1–5, WASI file seam |
+| 6c | Live remount | **done (linux)** — every `os_*at` re-resolves against the live mount table; same-process `mount()` visible; **zephyr deferred** with its `wasi/file.c` | 6b |
+| 6 (later) | Real device/partition FS (`littlefs`/`fat`) on Zephyr. **Not** overlay/union — out of scope. | 1–5, 6c, Zephyr WASI |
 
 ### Zephyr prerequisite (blocks Phase 3+ testing on that target, not the design itself)
 
@@ -468,7 +536,9 @@ follow):
 | existing `scripts/verify-linux*.sh` | Phase 1 changed nothing observable |
 | `scripts/verify-linux-mount.sh` | multiple simultaneous mounts resolve correctly from real guest code, `--mount=` overriding a conflicting fstab line, `--vfs-root=` alias unregressed (Phase 2) |
 | `scripts/verify-linux-tmpfs.sh` (**done, linux only**) | write from one mod (`t12_tmpfs_write`), read from another (`t13_tmpfs_read`), same `tmpfs` mount, gone after shutdown (a fresh process sees none of a prior run's content, and `/dev/shm/pm_metal_tmpfs_*` leftover count is unchanged) (Phase 3); `t14_tmpfs_read_alt` proves a second fstab line naming the same source reuses rather than re-creates it; `t15_tmpfs_read_other` proves two differently-named `tmpfs` sources stay independent |
-| a `mods/t1x_mount_*` pair (new) | guest-side `mount()`/`umount()` round trip (Phase 5) |
+| `scripts/verify-linux-populate.sh` (**done, linux only**) | Stage B mounts a `tmpfs` at `/scratch`; an embedded ustar (from `pack-image.sh`) registers `scratch/hello.txt`; `populate_all()` extracts against `/`; guest `t16_populate_read` sees the file (Phase 4) |
+| `scripts/verify-linux-sys-mount.sh` (**done, linux**) | t17 `mount` + same-process use (live remount); t18 still uses across spawn; t19 umount; t20 gone (Phases 5 + 6c) |
+| `scripts/verify-linux-proc.sh` (**done, linux**) | guest open/read of `/proc/*` via hooks; `/proc/self/{cmdline,environ}` (incl. `PID=`); no host `/tmp/pm_metal_proc` (Phase 6b) |
 
 ---
 
@@ -481,6 +551,11 @@ follow):
 - [ ] `device.h` (`RAMDISK` kind) lands on zephyr as its own reusable primitive, not buried in `tmpfs.c` (Phase 3)
 - [ ] `tmpfs` fstype works on zephyr (real ram-disk + `fs_mount()`) — blocked on `wasi/file.c` (Phase 3)
 - [x] two independently-named `tmpfs` sources coexist without clobbering each other; a repeated name reuses instead of re-creating (Phase 3, linux)
-- [ ] compiled-in image extracted onto a *named* `tmpfs` mount (e.g. `builtin`) at boot, both targets, via one `pm_metal_mount_populate(name, blob)` call (Phase 4)
-- [ ] guest-callable `mount()`/`umount()`, privileged-only, proven by a mod pair (Phase 5)
-- [ ] the WASI-preopen limitation is documented at every call site that needs it, not just here
+- [x] boot-time populate: ustar [+ lz4] embeds register into a global list; `populate_all()` extracts against guest `/` via resolve + port write (Phase 4, linux)
+- [x] guest-callable `mount()`/`umount()`, privileged-only, proven by a mod sequence (Phase 5)
+- [x] Phase 6a interim materialization deleted (replaced by 6b)
+- [x] Phase 6b: virtual `proc` — open/read answered by hooks; no host backing dir; `/proc/self/{cmdline,environ}` per process (**linux**)
+- [x] Phase 6b: Metal WASI path intercept for `proc` on linux (`wasi/file.c` + `posix_file_real.c`)
+- [x] Phase 6c: live remount on linux — path ops re-resolve against the live table; same-process `mount()` visible
+- [ ] Phase 6b/6c on zephyr: same virtual-proc + live-remount contract once `wasi/file.c` is real
+- [x] WASI prestat freeze + linux live-remount fix documented here

@@ -1,288 +1,92 @@
 /*
- * Mount table — impl: common. See mount.h.
+ * Privileged mount()/umount() — host impl + wasi native bridge.
+ * See include/pymergetic/metal/mount/mount.h (same shape as util/size.c).
  */
 #include "pymergetic/metal/mount/mount.h"
 
-#include <stdio.h>
+#include "pymergetic/metal/mount/fstab.h"
+#include "pymergetic/metal/mount/ops.h"
+#include "pymergetic/metal/mount/table.h"
+
+#include <stdint.h>
 #include <string.h>
 
-typedef struct pm_metal_mount_entry {
-	int used;
-	char guest_path[PM_METAL_MOUNT_GUEST_PATH_MAX]; /* normalized — see normalize() below */
-	pm_metal_mount_kind_t kind;
-	char host_path[PM_METAL_MOUNT_HOST_PATH_MAX]; /* whatever this kind's own establish() wrote */
-	int readonly; /* tracked, not yet enforced — see mount.h */
-} pm_metal_mount_entry_t;
+#include "wasm_export.h"
 
-static pm_metal_mount_entry_t g_pm_metal_mount_table[PM_METAL_MOUNT_MAX];
-
-/* "/foo" stays "/foo"; "foo" becomes "/foo"; "/foo/" becomes "/foo"; "/"
- * stays "/" (the one path this never strips the trailing slash from —
- * there is nothing left to strip). Same normalization wasi-libc itself
- * expects of a map_dir_list guest-side prefix. */
-static int pm_metal_mount_normalize(const char *in, char *out, size_t out_cap)
+int pm_metal_mount_mount(const char *source, const char *target, const char *fstype, const char *options)
 {
-	int n;
+	return pm_metal_mount_fstab_apply_fields(source, target, fstype, options);
+}
+
+int pm_metal_mount_umount(const char *target)
+{
+	return pm_metal_umount(target);
+}
+
+int pm_metal_mount_fstype_count(void)
+{
+	return (int)PM_METAL_MOUNT_KIND_COUNT;
+}
+
+int pm_metal_mount_fstype_name(unsigned index, char *out, size_t cap)
+{
+	const char *name;
 	size_t len;
 
-	if (!in || !in[0] || !out) {
+	if (!out || cap == 0) {
 		return -1;
 	}
-	n = snprintf(out, out_cap, "%s%s", in[0] == '/' ? "" : "/", in);
-	if (n <= 0 || (size_t)n >= out_cap) {
+	name = pm_metal_mount_kind_name((pm_metal_mount_kind_t)index);
+	if (!name) {
 		return -1;
 	}
-	len = (size_t)n;
-	if (len > 1 && out[len - 1] == '/') {
-		out[len - 1] = '\0';
+	len = strlen(name);
+	if (len + 1 > cap) {
+		return -1;
 	}
+	memcpy(out, name, len + 1);
 	return 0;
 }
 
-static pm_metal_mount_entry_t *pm_metal_mount_find_exact(const char *norm_guest_path)
+static int32_t pm_metal_mount_mount_native(wasm_exec_env_t exec_env, char *source, char *target, char *fstype,
+					    char *options)
 {
-	int i;
-
-	for (i = 0; i < PM_METAL_MOUNT_MAX; i++) {
-		if (g_pm_metal_mount_table[i].used
-		    && strcmp(g_pm_metal_mount_table[i].guest_path, norm_guest_path) == 0) {
-			return &g_pm_metal_mount_table[i];
-		}
-	}
-	return NULL;
+	(void)exec_env;
+	return (int32_t)pm_metal_mount_mount(source, target, fstype, options && options[0] ? options : NULL);
 }
 
-/* Longest-prefix match — see mount.h's own doc comment on resolve(). A
- * prefix only counts if the next char in norm_guest_path is '/' or the
- * string end, so "/data" never matches a query like "/database" — same
- * boundary rule wasi-libc's own libc-find-relpath.c uses. */
-static const pm_metal_mount_entry_t *pm_metal_mount_find_best(const char *norm_guest_path)
+static int32_t pm_metal_mount_umount_native(wasm_exec_env_t exec_env, char *target)
 {
-	const pm_metal_mount_entry_t *best = NULL;
-	size_t best_len = 0;
-	int i;
-
-	for (i = 0; i < PM_METAL_MOUNT_MAX; i++) {
-		const pm_metal_mount_entry_t *e = &g_pm_metal_mount_table[i];
-		size_t plen;
-
-		if (!e->used) {
-			continue;
-		}
-		plen = strlen(e->guest_path);
-		if (plen == 1) {
-			/* root "/" matches everything, at the lowest priority. */
-			if (best_len < 1) {
-				best = e;
-				best_len = 1;
-			}
-			continue;
-		}
-		if (strncmp(norm_guest_path, e->guest_path, plen) == 0
-		    && (norm_guest_path[plen] == '/' || norm_guest_path[plen] == '\0')) {
-			if (plen > best_len) {
-				best = e;
-				best_len = plen;
-			}
-		}
-	}
-	return best;
+	(void)exec_env;
+	return (int32_t)pm_metal_mount_umount(target);
 }
 
-/* Plain comma-separated token scan for the two generic options — no
- * quoting, no key=value here (that's kind-specific, left in the full
- * opts string handed to establish() untouched). */
-static int pm_metal_mount_opts_has(const char *opts, const char *token)
+static int32_t pm_metal_mount_fstype_count_native(wasm_exec_env_t exec_env)
 {
-	const char *p = opts;
-	size_t tok_len = strlen(token);
+	(void)exec_env;
+	return (int32_t)pm_metal_mount_fstype_count();
+}
 
-	if (!opts) {
-		return 0;
-	}
-	while (*p) {
-		const char *start = p;
+static int32_t pm_metal_mount_fstype_name_native(wasm_exec_env_t exec_env, uint32_t index, char *out,
+						 uint32_t cap)
+{
+	(void)exec_env;
+	return (int32_t)pm_metal_mount_fstype_name((unsigned)index, out, (size_t)cap);
+}
 
-		while (*p && *p != ',') {
-			p++;
-		}
-		if ((size_t)(p - start) == tok_len && strncmp(start, token, tok_len) == 0) {
-			return 1;
-		}
-		if (*p == ',') {
-			p++;
-		}
+static NativeSymbol g_pm_metal_mount_native_symbols[] = {
+	{"pm_metal_mount_mount", (void *)pm_metal_mount_mount_native, "($$$$)i", NULL},
+	{"pm_metal_mount_umount", (void *)pm_metal_mount_umount_native, "($)i", NULL},
+	{"pm_metal_mount_fstype_count", (void *)pm_metal_mount_fstype_count_native, "()i", NULL},
+	{"pm_metal_mount_fstype_name", (void *)pm_metal_mount_fstype_name_native, "(i*~)i", NULL},
+};
+
+int pm_metal_mount_native_register(void)
+{
+	if (!wasm_runtime_register_natives(PM_METAL_MOUNT_WASI_MODULE, g_pm_metal_mount_native_symbols,
+					    sizeof(g_pm_metal_mount_native_symbols)
+						    / sizeof(g_pm_metal_mount_native_symbols[0]))) {
+		return -1;
 	}
 	return 0;
-}
-
-static pm_metal_mount_entry_t *pm_metal_mount_find_free_slot(void)
-{
-	int i;
-
-	for (i = 0; i < PM_METAL_MOUNT_MAX; i++) {
-		if (!g_pm_metal_mount_table[i].used) {
-			return &g_pm_metal_mount_table[i];
-		}
-	}
-	return NULL;
-}
-
-int pm_metal_mount(const char *guest_path, pm_metal_mount_kind_t kind, const char *source, const char *opts)
-{
-	char norm[PM_METAL_MOUNT_GUEST_PATH_MAX];
-	const pm_metal_mount_ops_t *ops;
-	pm_metal_mount_entry_t *slot;
-	char host_path[PM_METAL_MOUNT_HOST_PATH_MAX];
-	size_t host_len;
-
-	if (pm_metal_mount_normalize(guest_path, norm, sizeof(norm)) != 0) {
-		fprintf(stderr, "pm_metal_mount: bad guest path\n");
-		return -1;
-	}
-	ops = pm_metal_mount_resolve_kind(kind);
-	if (!ops || !ops->establish) {
-		fprintf(stderr, "pm_metal_mount: unknown kind\n");
-		return -1;
-	}
-	if (ops->establish(source, opts, host_path, sizeof(host_path)) != 0) {
-		fprintf(stderr, "pm_metal_mount: establish failed for %s\n", norm);
-		return -1;
-	}
-	host_len = strlen(host_path);
-	if (host_len + 1 > sizeof(slot->host_path)) {
-		fprintf(stderr, "pm_metal_mount: host path too long for %s\n", norm);
-		if (ops->release) {
-			ops->release(host_path);
-		}
-		return -1;
-	}
-
-	/* Last-mount-at-this-path-wins (see mount.h) — release the previous
-	 * kind's backing before overwriting the slot. */
-	slot = pm_metal_mount_find_exact(norm);
-	if (slot) {
-		const pm_metal_mount_ops_t *old_ops = pm_metal_mount_resolve_kind(slot->kind);
-
-		if (old_ops && old_ops->release) {
-			old_ops->release(slot->host_path);
-		}
-	} else {
-		slot = pm_metal_mount_find_free_slot();
-		if (!slot) {
-			fprintf(stderr, "pm_metal_mount: table full\n");
-			if (ops->release) {
-				ops->release(host_path);
-			}
-			return -1;
-		}
-	}
-
-	memcpy(slot->guest_path, norm, sizeof(norm));
-	memcpy(slot->host_path, host_path, host_len + 1);
-	slot->kind = kind;
-	slot->readonly = pm_metal_mount_opts_has(opts, "ro") ? 1 : 0;
-	slot->used = 1;
-	return 0;
-}
-
-int pm_metal_umount(const char *guest_path)
-{
-	char norm[PM_METAL_MOUNT_GUEST_PATH_MAX];
-	pm_metal_mount_entry_t *slot;
-	const pm_metal_mount_ops_t *ops;
-
-	if (pm_metal_mount_normalize(guest_path, norm, sizeof(norm)) != 0) {
-		return -1;
-	}
-	slot = pm_metal_mount_find_exact(norm);
-	if (!slot) {
-		return -1;
-	}
-	ops = pm_metal_mount_resolve_kind(slot->kind);
-	if (ops && ops->release) {
-		ops->release(slot->host_path);
-	}
-	memset(slot, 0, sizeof(*slot));
-	return 0;
-}
-
-int pm_metal_mount_resolve(const char *guest_path, char *out_host_path, size_t out_cap)
-{
-	char norm[PM_METAL_MOUNT_GUEST_PATH_MAX];
-	const pm_metal_mount_entry_t *best;
-	const char *remainder;
-	size_t plen;
-	int n;
-
-	if (!out_host_path) {
-		return -1;
-	}
-	if (pm_metal_mount_normalize(guest_path, norm, sizeof(norm)) != 0) {
-		return -1;
-	}
-	best = pm_metal_mount_find_best(norm);
-	if (!best) {
-		return -1;
-	}
-
-	plen = strlen(best->guest_path);
-	if (plen == 1) {
-		remainder = norm + 1; /* skip norm's own leading '/' — root has none of its own to skip past */
-	} else if (norm[plen] == '/') {
-		remainder = norm + plen + 1; /* skip the boundary '/' itself */
-	} else {
-		remainder = norm + plen; /* exact match — points at norm's own terminating NUL */
-	}
-
-	n = snprintf(out_host_path, out_cap, "%s%s%s", best->host_path, remainder[0] ? "/" : "", remainder);
-	return (n > 0 && (size_t)n < out_cap) ? 0 : -1;
-}
-
-int pm_metal_mount_build_map_dir_list(char out_bufs[][PM_METAL_MOUNT_MAP_DIR_ENTRY_MAX], size_t max_entries,
-				       size_t *out_count)
-{
-	size_t count = 0;
-	int i;
-
-	if (!out_bufs || !out_count) {
-		return -1;
-	}
-	for (i = 0; i < PM_METAL_MOUNT_MAX; i++) {
-		const pm_metal_mount_entry_t *e = &g_pm_metal_mount_table[i];
-		int n;
-
-		if (!e->used) {
-			continue;
-		}
-		if (count >= max_entries) {
-			return -1;
-		}
-		n = snprintf(out_bufs[count], PM_METAL_MOUNT_MAP_DIR_ENTRY_MAX, "%s::%s", e->guest_path,
-			     e->host_path);
-		if (n <= 0 || (size_t)n >= PM_METAL_MOUNT_MAP_DIR_ENTRY_MAX) {
-			return -1;
-		}
-		count++;
-	}
-	*out_count = count;
-	return 0;
-}
-
-void pm_metal_mount_shutdown_all(void)
-{
-	int i;
-
-	for (i = 0; i < PM_METAL_MOUNT_MAX; i++) {
-		pm_metal_mount_entry_t *e = &g_pm_metal_mount_table[i];
-
-		if (e->used) {
-			const pm_metal_mount_ops_t *ops = pm_metal_mount_resolve_kind(e->kind);
-
-			if (ops && ops->release) {
-				ops->release(e->host_path);
-			}
-		}
-	}
-	memset(g_pm_metal_mount_table, 0, sizeof(g_pm_metal_mount_table));
 }

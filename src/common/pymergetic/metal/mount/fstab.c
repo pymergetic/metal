@@ -9,7 +9,7 @@
 #include <string.h>
 
 #include "pymergetic/metal/memory/bytecode.h"
-#include "pymergetic/metal/mount/mount.h"
+#include "pymergetic/metal/mount/table.h"
 #include "pymergetic/metal/mount/ops.h"
 #include "pymergetic/metal/port/platform.h"
 

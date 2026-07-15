@@ -14,10 +14,15 @@ typedef enum pm_metal_port_target_id {
 	PM_METAL_PORT_TARGET_ZEPHYR,
 	PM_METAL_PORT_TARGET_RUMP,
 	PM_METAL_PORT_TARGET_UNIKRAFT,
+	PM_METAL_PORT_TARGET_NUTTX,
 } pm_metal_port_target_id_t;
 
 /* impl: common — src/common/pymergetic/metal/port/platform.c */
 pm_metal_port_target_id_t pm_metal_port_target_id(void);
+
+/* Stable lowercase name for id ("linux", "zephyr", …). "unknown" if
+ * out of range. impl: common — src/common/pymergetic/metal/port/platform.c */
+const char *pm_metal_port_target_name(pm_metal_port_target_id_t id);
 
 /* impl: bind — src/linux/pymergetic/metal/port/platform.c
  *              src/zephyr/pymergetic/metal/port/platform.c
@@ -44,5 +49,28 @@ int pm_metal_port_read_file(const char *host_path, uint8_t **out_buf, uint32_t *
  * regular-file / does not), never -1 — a missing file is not an error
  * here, just a "no". */
 int pm_metal_port_file_exists(const char *host_path);
+
+/* impl: bind — src/linux/pymergetic/metal/port/platform.c
+ *              src/zephyr/pymergetic/metal/port/platform.c
+ *
+ * Write len bytes at data to host_path (create/truncate). Parent
+ * directories must already exist (callers that need mkdir -p use
+ * mkdir() below first). Returns 0/-1. */
+int pm_metal_port_write_file(const char *host_path, const uint8_t *data, uint32_t len);
+
+/* impl: bind — src/linux/pymergetic/metal/port/platform.c
+ *              src/zephyr/pymergetic/metal/port/platform.c
+ *
+ * Create directory at host_path, including any missing parents
+ * (mkdir -p). Existing directory is success (0), not an error.
+ * Returns 0/-1. */
+int pm_metal_port_mkdir(const char *host_path);
+
+/* impl: bind — src/linux/pymergetic/metal/port/platform.c
+ *              src/zephyr/pymergetic/metal/port/platform.c
+ *
+ * Monotonic milliseconds since an arbitrary epoch (boot / process
+ * start). Used for Metal /proc/uptime — not wall-clock time. */
+uint64_t pm_metal_port_monotonic_ms(void);
 
 #endif /* PYMERGETIC_METAL_PORT_PLATFORM_H_ */

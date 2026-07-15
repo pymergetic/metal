@@ -32,11 +32,12 @@ Linux may expose the loop via CLI, stdin, or socket — **same API** on every ta
 ## VFS root (same every load)
 
 Set once at `init` (Stage A — a real mount table underneath now, not a bare string; see
-[MOUNT.md](MOUNT.md), Phases 1–2 landed: `hostdir` root mount, `/etc/fstab`, `--mount=` CLI). Every
-`load`/`run` sees the **same** tree, resolved through that mount table's own longest-prefix match —
-the single-root case below is just that table with exactly one entry, no per-mod remapping, no guest
-path hiding. `tmpfs` (Phase 3) is landed on linux (`/dev/shm`-backed); zephyr's own `tmpfs`/ramdisk
-backend and guest-callable `mount()` (Phases 3–5) are still design only, not implemented.
+[MOUNT.md](MOUNT.md)). Every `load`/`run` sees the **same** tree, resolved through that mount
+table's own longest-prefix match — the single-root case below is just that table with exactly
+one entry, no per-mod remapping, no guest path hiding. **Linux mount stack is feature-complete
+through Phase 6c** (table, `hostdir`/`tmpfs`/`proc`, fstab/CLI, populate, guest `mount()`/
+`umount()` with live remount, virtual `/proc`). Zephyr's `tmpfs`/ramdisk/`wasi/file.c` is still
+design only.
 
 | Config | Meaning |
 |--------|---------|
@@ -51,7 +52,7 @@ Guest path = path under `vfs_root`. Preopen that directory as WASI `/`. Guest op
 | **linux** | normal host directory | pass path at `init` (CLI/config) |
 | **zephyr** | FAT ramdisk (or image) mounted as rootfs | build/populate image, mount `/`, pass mount point at `init` |
 
-`.wasm` files live **inside** the tree (e.g. `/mods/t0_hello.wasm`) or are loaded via `load_bytes` — the mount table is still the same set of preopens for WASI file I/O. **`load_file()` enforces this**: its `path` is guest-style and is resolved through `mount/mount.h`'s own longest-prefix `resolve()` inside `runtime.c` (same rule the `map_dir_list` preopen uses for the guest) — there is no separate "host path" for mod bytecode, so the call is identical whether the matched mount is a host dir (linux) or a mounted ramdisk (zephyr, later). `scripts/verify-linux.sh` copies mods into `<vfs_root>/mods/` and passes `/mods/t0_hello.wasm` etc. as positional args, exactly as it would look on zephyr; `scripts/verify-linux-mount.sh` exercises a second, non-root mount the same way.
+`.wasm` files live **inside** the tree (e.g. `/mods/t0_hello.wasm`) or are loaded via `load_bytes` — the mount table is still the same set of preopens for WASI file I/O. **`load_file()` enforces this**: its `path` is guest-style and is resolved through `mount/table.h`'s own longest-prefix `resolve()` inside `runtime.c` (same rule the `map_dir_list` preopen uses for the guest) — there is no separate "host path" for mod bytecode, so the call is identical whether the matched mount is a host dir (linux) or a mounted ramdisk (zephyr, later). `scripts/verify-linux.sh` copies mods into `<vfs_root>/mods/` and passes `/mods/t0_hello.wasm` etc. as positional args, exactly as it would look on zephyr; `scripts/verify-linux-mount.sh` exercises a second, non-root mount the same way.
 
 ---
 
@@ -133,9 +134,20 @@ Same "runtime.c never touches the raw resource itself" rule for reading mod byte
 int pm_metal_port_read_file(const char *host_path, uint8_t **out_buf, uint32_t *out_len);
 ```
 
-`load_file()`'s guest-style path (e.g. `/mods/foo.wasm`) is resolved against `vfs_root` by plain string concat *in* `runtime.c` — that part is genuinely OS-independent. But turning a resolved host path into bytes is not: linux backs it with `fopen`/`fread` into a buffer from `pm_metal_memory_bytecode_ops()->alloc()`; zephyr (later) will back it with `fs_open()`/`fs_read()` (`CONFIG_FILE_SYSTEM`) instead, since bare libc stdio is not guaranteed to reach mounted storage on embedded targets. Keeping the actual read (and the allocation it reads into) behind the port means `load_file()` does not change at all when zephyr lands.
+`load_file()`'s guest-style path (e.g. `/mods/foo.wasm`) is resolved against the mount table
+via `pm_metal_mount_resolve()` in `runtime.c` — that part is genuinely OS-independent. But
+turning a resolved host path into bytes is not: linux backs it with `fopen`/`fread` into a
+buffer from `pm_metal_memory_bytecode_ops()->alloc()`; zephyr (later) will back it with
+`fs_open()`/`fs_read()` (`CONFIG_FILE_SYSTEM`) instead, since bare libc stdio is not guaranteed
+to reach mounted storage on embedded targets. Keeping the actual read (and the allocation it
+reads into) behind the port means `load_file()` does not change at all when zephyr lands.
 
-WASI preopen at instantiate: guest `/` must come from WAMR `map_dir_list` (format `<guest>::<host>`), not plain `dir_list` — `dir_list` preopens under the *same* string on both sides, and `vfs_root` is a host-absolute path while the guest wants `/`. So the one map entry, built once at `init` and reused on every `run`, is `"/::" + vfs_root` (`vfs_root` must be absolute).
+WASI preopen at instantiate: guest mounts come from WAMR `map_dir_list` (format
+`<guest>::<host>`), not plain `dir_list` — `dir_list` preopens under the *same* string on both
+sides, while guests want `/`-style prefixes and hosts need absolute paths. `run_ex()` rebuilds
+`map_dir_list` from the live mount table each spawn (root, `/data`, `/proc` sentinel, …). On
+linux, Metal's `wasi/file.c` then re-resolves path ops against that table after instantiate
+(live remount) so a guest `mount()` is visible in the same process.
 
 WASI args (dir/map-dir/argv/env) are only consumed by WAMR at `wasm_runtime_instantiate()` — set on the *module*, baked into the instance at that call. Since this API takes `argv` on `run()`, after `load()` already returned a handle, `load()` cannot instantiate up front: it only `wasm_runtime_load()`s (parse) and keeps the byte buffer alive. `run()` sets WASI args for that call, instantiates, executes `main`, then deinstantiates — so every `run()` gets a fresh instance (and may pass different `argv`), while the parsed module + buffer persist across runs until `unload`.
 

@@ -1,7 +1,7 @@
 /*
  * T1y — like t1_read, but opens "/data/README" instead of "/README" —
  * exercises a *non-root* mount table entry from guest WASI I/O (see
- * scripts/verify-linux-mount.sh, mount/mount.h's own longest-prefix
+ * scripts/verify-linux-mount.sh, mount/table.h's own longest-prefix
  * resolve). wasm32-wasip1.
  */
 #include <fcntl.h>

@@ -72,7 +72,21 @@ target_sources(app PRIVATE
 	${PM_COMMON}/memory/ops.c
 	${PM_COMMON}/mount/ops.c
 	${PM_COMMON}/mount/hostdir.c
+	${PM_COMMON}/mount/proc.c
+	${PM_COMMON}/mount/proc/util.c
+	${PM_COMMON}/mount/proc/guest.c
+	${PM_COMMON}/mount/proc/boot.c
+	${PM_COMMON}/mount/proc/mounts.c
+	${PM_COMMON}/mount/proc/filesystems.c
+	${PM_COMMON}/mount/proc/version.c
+	${PM_COMMON}/mount/proc/cpuinfo.c
+	${PM_COMMON}/mount/proc/meminfo.c
+	${PM_COMMON}/mount/proc/cmdline.c
+	${PM_COMMON}/mount/proc/uptime.c
+	${PM_COMMON}/mount/proc/environ.c
 	${PM_COMMON}/mount/tmpfs_registry.c
+	${PM_COMMON}/mount/populate.c
+	${PM_COMMON}/mount/table.c
 	${PM_COMMON}/mount/mount.c
 	${PM_COMMON}/mount/fstab.c
 	${PM_COMMON}/runtime/runtime.c

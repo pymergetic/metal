@@ -14,6 +14,7 @@
 typedef enum pm_metal_mount_kind {
 	PM_METAL_MOUNT_HOSTDIR = 0,
 	PM_METAL_MOUNT_TMPFS,
+	PM_METAL_MOUNT_PROC,
 	PM_METAL_MOUNT_KIND_COUNT,
 } pm_metal_mount_kind_t;
 
@@ -54,5 +55,9 @@ const pm_metal_mount_ops_t *pm_metal_mount_resolve_kind(pm_metal_mount_kind_t ki
  * *out_kind is only written on success.
  */
 int pm_metal_mount_kind_by_name(const char *name, pm_metal_mount_kind_t *out_kind);
+
+/* Inverse of kind_by_name — stable fstype column for /proc/mounts. NULL if
+ * kind is out of range. */
+const char *pm_metal_mount_kind_name(pm_metal_mount_kind_t kind);
 
 #endif /* PYMERGETIC_METAL_MOUNT_OPS_H_ */

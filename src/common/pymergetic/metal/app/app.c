@@ -9,6 +9,9 @@
 #include <string.h>
 
 #include "pymergetic/metal/mount/fstab.h"
+#include "pymergetic/metal/mount/ops.h"
+#include "pymergetic/metal/mount/populate.h"
+#include "pymergetic/metal/mount/table.h"
 #include "pymergetic/metal/runtime/process.h"
 #include "pymergetic/metal/runtime/runtime.h"
 
@@ -43,6 +46,20 @@ int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv
 
 		pm_metal_mount_fstab_apply_fields(m->source, m->target, m->fstype, m->opts);
 	}
+
+	/* Ensure guest /proc (procfs hooks → /proc/mounts, …). fstab/CLI may
+	 * already have mounted it; otherwise mount the proc fstype here so
+	 * busybox `mount` and debugging always have a standard path. */
+	if (!pm_metal_mount_exists("/proc")) {
+		if (pm_metal_mount("/proc", PM_METAL_MOUNT_PROC, "proc", NULL) != 0) {
+			fprintf(stderr, "%s: warning: failed to mount proc at /proc\n", argv0);
+		}
+	}
+
+	/* Phase 4 — extract every registered ustar [+ lz4] embed against
+	 * guest "/" now that Stage B mounts exist. No-op if nothing
+	 * registered (every existing caller). See mount/populate.h. */
+	pm_metal_mount_populate_all();
 
 	for (i = 0; i < wasm_argc; i++) {
 		const char *path = wasm_argv[i];

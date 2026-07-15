@@ -2,18 +2,20 @@
  * Mount table — the thing runtime.c's own vfs_root used to be a single
  * hand-rolled instance of. See docs/MOUNT.md.
  *
+ * Host-only (src/common). Privileged guest mount()/umount() wasi imports
+ * live in include/pymergetic/metal/mount/mount.h — same shape as util/ headers.
+ *
  * One process-wide table (same "controller-thread only for
  * mutation" contract as runtime.h's init()/shutdown() — nothing here
  * takes its own lock; see runtime.c's own file header for why the root
  * mount is safe to establish before g_pm_metal_runtime_lock even exists).
- * Every WASI guest I/O path resolves through wasi-libc's own longest-
- * prefix match against build_map_dir_list()'s output — this table exists
- * so the *loader's* own host-side reads (mod bytecode, dependency
- * modules) can do the exact same longest-prefix resolution themselves,
- * via resolve() below, rather than assuming there is only ever one entry.
+ * Guest WASI I/O still picks a frozen preopen via wasi-libc, then Metal's
+ * linux wasi/file.c re-resolves the absolute guest path against this table
+ * (live remount — see docs/MOUNT.md). The loader uses resolve() for the
+ * same longest-prefix rule on host-side reads (mod bytecode, etc.).
  */
-#ifndef PYMERGETIC_METAL_MOUNT_MOUNT_H_
-#define PYMERGETIC_METAL_MOUNT_MOUNT_H_
+#ifndef PYMERGETIC_METAL_MOUNT_TABLE_H_
+#define PYMERGETIC_METAL_MOUNT_TABLE_H_
 
 #include <stddef.h>
 
@@ -26,11 +28,12 @@
 #define PM_METAL_MOUNT_MAX 8
 #define PM_METAL_MOUNT_GUEST_PATH_MAX 128
 #define PM_METAL_MOUNT_HOST_PATH_MAX 256
+#define PM_METAL_MOUNT_OPTS_MAX 64
 /* One build_map_dir_list() entry is "<guest>::<host>\0" — "::" (2) + NUL (1),
  * rounded up a little for slack. */
 #define PM_METAL_MOUNT_MAP_DIR_ENTRY_MAX (PM_METAL_MOUNT_GUEST_PATH_MAX + PM_METAL_MOUNT_HOST_PATH_MAX + 8)
 
-/* impl: common — src/common/pymergetic/metal/mount/mount.c
+/* impl: common — src/common/pymergetic/metal/mount/table.c
  *
  * Register one mount. guest_path is normalized (leading "/" added if
  * missing, exactly one trailing slash stripped — "/" itself is left
@@ -59,15 +62,33 @@ int pm_metal_mount(const char *guest_path, pm_metal_mount_kind_t kind, const cha
 int pm_metal_umount(const char *guest_path);
 
 /*
- * Longest-prefix resolve of a guest-style path (e.g. "/mods/foo.wasm")
- * against the mount table, mirroring wasi-libc's own preopen-selection
- * algorithm (see docs/MOUNT.md "Key insight") — for the *loader's* own
- * host-side reads, never guest WASI I/O (WAMR/wasi-libc resolve that
- * themselves, against build_map_dir_list()'s output below). Writes the
- * resolved real host path into out_host_path. Returns 0/-1
- * (uninitialized table, no mount matches, or out_host_path too small).
+ * Live longest-prefix resolve for WASI path ops (and the loader).
+ * For HOSTDIR/TMPFS: host_path is host_base + remainder.
+ * For PROC: host_path / host_base are the sentinel; remainder is under /proc
+ * (never concatenated onto the sentinel).
+ */
+typedef struct pm_metal_mount_resolve {
+	pm_metal_mount_kind_t kind;
+	char guest_mount[PM_METAL_MOUNT_GUEST_PATH_MAX];
+	char host_base[PM_METAL_MOUNT_HOST_PATH_MAX];
+	char host_path[PM_METAL_MOUNT_HOST_PATH_MAX];
+	char remainder[PM_METAL_MOUNT_GUEST_PATH_MAX];
+} pm_metal_mount_resolve_t;
+
+int pm_metal_mount_resolve_ex(const char *guest_path, pm_metal_mount_resolve_t *out);
+
+/*
+ * Loader convenience: resolve_ex then write host_path (full host file path
+ * for hostdir/tmpfs; sentinel for proc). Returns 0/-1.
  */
 int pm_metal_mount_resolve(const char *guest_path, char *out_host_path, size_t out_cap);
+
+/*
+ * Reverse lookup for os_open_preopendir tagging (WAMR only passes the host
+ * half of guest::host). Exact match on establish()'s host_path. 0/-1.
+ */
+int pm_metal_mount_find_by_host(const char *host_path, char *out_guest, size_t guest_cap,
+				 pm_metal_mount_kind_t *out_kind);
 
 /*
  * Emits one "<guest>::<host>" string per registered mount into
@@ -85,4 +106,16 @@ int pm_metal_mount_build_map_dir_list(char out_bufs[][PM_METAL_MOUNT_MAP_DIR_ENT
  * shutdown(). */
 void pm_metal_mount_shutdown_all(void);
 
-#endif /* PYMERGETIC_METAL_MOUNT_MOUNT_H_ */
+/* Exact-match: 1 if something is mounted at guest_path, else 0. */
+int pm_metal_mount_exists(const char *guest_path);
+
+/*
+ * Walk every active table entry (arbitrary order). Used by procfs
+ * /proc/mounts generation — see mount/proc.h.
+ */
+typedef void (*pm_metal_mount_foreach_fn)(const char *guest_path, const char *source,
+					   const char *host_path, pm_metal_mount_kind_t kind,
+					   const char *opts, int readonly, void *ctx);
+void pm_metal_mount_foreach(pm_metal_mount_foreach_fn fn, void *ctx);
+
+#endif /* PYMERGETIC_METAL_MOUNT_TABLE_H_ */

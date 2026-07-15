@@ -16,7 +16,7 @@
  * together at shutdown(), untouched by anything in between.
  *
  * load_file() takes a guest-style path (e.g. "/mods/foo.wasm") resolved
- * against the mount table (see mount/mount.h) — the exact same longest-
+ * against the mount table (see mount/table.h) — the exact same longest-
  * prefix resolution WASI itself does against build_map_dir_list()'s own
  * output for the guest. There is no separate "host path" for mod
  * bytecode: the loader and the guest read from the same mounted storage,
@@ -73,7 +73,10 @@
 
 #include "pymergetic/metal/memory/memory.h"
 #include "pymergetic/metal/mount/mount.h"
+#include "pymergetic/metal/mount/table.h"
 #include "pymergetic/metal/mount/ops.h"
+#include "pymergetic/metal/mount/populate.h"
+#include "pymergetic/metal/mount/proc.h"
 #include "pymergetic/metal/port/lock.h"
 #include "pymergetic/metal/port/platform.h"
 #include "pymergetic/metal/util/arena.h"
@@ -109,7 +112,7 @@ static struct {
 
 /* Guards g_pm_metal_runtime.slots[] (used/refcount/module/buf/buf_len) and
  * the set_wasi_args()+instantiate() pair in run() — see file header. Not
- * needed for the mount table (see mount/mount.h — write-once/rarely at
+ * needed for the mount table (see mount/table.h — write-once/rarely at
  * init()/fstab-apply time, read-only after, same controller-thread
  * contract) nor for `initialized` itself (checked unlocked as a fast
  * precondition — see file header). */
@@ -171,7 +174,7 @@ static int pm_metal_runtime_load_common(uint8_t *buf, uint32_t len,
 
 /* load_file() paths are guest-style, resolved through the mount table
  * exactly like WASI resolves a guest open() (same longest-prefix rule —
- * see mount/mount.h) — never an arbitrary host path. Keeps working
+ * see mount/table.h) — never an arbitrary host path. Keeps working
  * unchanged whether the matched mount is a host dir or (later) a mounted
  * tmpfs/littlefs — see docs/MOUNT.md. */
 static int pm_metal_runtime_resolve_vfs_path(const char *guest_path, char *out, size_t out_len)
@@ -387,7 +390,8 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	    || pm_metal_util_log_native_register() != 0
 	    || pm_metal_util_lz4_native_register() != 0
 	    || pm_metal_util_size_native_register() != 0
-	    || pm_metal_util_tar_native_register() != 0) {
+	    || pm_metal_util_tar_native_register() != 0
+	    || pm_metal_mount_native_register() != 0) {
 		fprintf(stderr, "pm_metal_runtime: native registration failed\n");
 		wasm_runtime_destroy();
 		pm_metal_runtime_free_string_array(ns_lookup_pool, cfg->ns_lookup_pool_count);
@@ -410,6 +414,7 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	 * live mutex without destroy() first is undefined behavior. */
 	pm_metal_port_mutex_init(&g_pm_metal_runtime_lock);
 	g_pm_metal_runtime.initialized = 1;
+	pm_metal_mount_proc_note_boot();
 
 	return 0;
 }
@@ -436,6 +441,7 @@ int pm_metal_runtime_shutdown(void)
 	pm_metal_runtime_free_string_array(g_pm_metal_runtime.ns_lookup_pool, g_pm_metal_runtime.ns_lookup_pool_count);
 	pm_metal_runtime_free_string_array(g_pm_metal_runtime.addr_pool, g_pm_metal_runtime.addr_pool_count);
 	pm_metal_mount_shutdown_all();
+	pm_metal_mount_populate_clear();
 	pm_metal_memory_bytecode_ops()->release();
 	pm_metal_memory_kheap_ops()->release();
 
@@ -542,6 +548,10 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 		return -1;
 	}
 
+	/* Bind this worker's guest argv/env for /proc/self before any WASI
+	 * file op; virtual proc answers on open from hooks (no refresh). */
+	pm_metal_mount_proc_bind_current(argc, argv, envc, envp);
+
 	/* Built fresh from the mount table every call — cheap (table is
 	 * PM_METAL_MOUNT_MAX entries, no allocation) and means a mount
 	 * added since the *last* run_ex() on some other handle is picked up
@@ -559,6 +569,7 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 
 	if (pm_metal_mount_build_map_dir_list(map_dir_bufs, PM_METAL_MOUNT_MAX, &map_dir_count) != 0) {
 		fprintf(stderr, "pm_metal_runtime: map_dir_list build failed\n");
+		pm_metal_mount_proc_unbind_current();
 		if (owns_thread_env) {
 			wasm_runtime_destroy_thread_env();
 		}
@@ -582,6 +593,7 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 	if (!slot) {
 		pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
 		fprintf(stderr, "pm_metal_runtime: bad handle\n");
+		pm_metal_mount_proc_unbind_current();
 		if (owns_thread_env) {
 			wasm_runtime_destroy_thread_env();
 		}
@@ -656,6 +668,7 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 	if (owns_thread_env) {
 		wasm_runtime_destroy_thread_env();
 	}
+	pm_metal_mount_proc_unbind_current();
 	return exit_code;
 }
 
