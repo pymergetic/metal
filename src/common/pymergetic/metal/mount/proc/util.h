@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+/* impl: common — src/common/pymergetic/metal/mount/proc/util.c */
 int pm_metal_mount_proc_put_str(char *out, size_t cap, size_t *out_len, const char *s);
 
 int pm_metal_mount_proc_put_nul_list(char *out, size_t cap, size_t *out_len, int count,

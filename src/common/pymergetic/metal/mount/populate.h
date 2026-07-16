@@ -31,11 +31,13 @@ int pm_metal_mount_populate_register(const uint8_t *blob, size_t blob_len, size_
  * the guest path against the mount table and mkdir/write via the port.
  * Per-entry failure is logged and skipped (same spirit as Stage B per-line).
  * Empty registry is a no-op. Returns 0 always in practice (never fatal to boot).
+ * impl: common — src/common/pymergetic/metal/mount/populate.c
  */
 int pm_metal_mount_populate_all(void);
 
 /* Drop every registration (test/shutdown hygiene). Does not free blob bytes —
- * those are caller-owned (usually static). */
+ * those are caller-owned (usually static).
+ * impl: common — src/common/pymergetic/metal/mount/populate.c */
 void pm_metal_mount_populate_clear(void);
 
 #endif /* PYMERGETIC_METAL_MOUNT_POPULATE_H_ */

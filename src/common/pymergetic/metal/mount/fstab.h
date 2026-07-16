@@ -34,6 +34,7 @@ int pm_metal_mount_fstab_apply_fields(const char *source, const char *target, co
  * to never be fatal (only Stage A is, per docs/MOUNT.md) — a per-line
  * failure, or even a hard failure reading an *existing* fstab, just logs
  * and moves on rather than propagating up as a whole-file failure.
+ * impl: common — src/common/pymergetic/metal/mount/fstab.c
  */
 int pm_metal_mount_fstab_apply(const char *guest_fstab_path);
 

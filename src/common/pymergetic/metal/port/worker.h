@@ -11,10 +11,10 @@
 #define PYMERGETIC_METAL_PORT_WORKER_H_
 
 /* Opaque, fixed-size storage for one native thread handle (pthread_t on
- * linux) — sized generously so every target's native handle fits without
- * this header ever #include-ing an OS header; impl: bind .c files
- * reinterpret the whole struct as their real type (each has a
- * _Static_assert guarding the size fits). Same pattern as
+ * linux, k_tid_t + stack on zephyr) — sized generously so every target's
+ * native handle fits without this header ever #include-ing an OS header;
+ * impl: bind .c files reinterpret the whole struct as their real type
+ * (each has a _Static_assert guarding the size fits). Same pattern as
  * pm_metal_port_mutex_t in port/lock.h. */
 typedef struct pm_metal_port_worker {
 	union {
@@ -27,7 +27,7 @@ typedef struct pm_metal_port_worker {
 typedef int (*pm_metal_port_worker_fn)(void *arg);
 
 /* impl: bind — src/linux/pymergetic/metal/port/worker.c
- *              src/zephyr/pymergetic/metal/port/worker.c (stub — deferred, see docs/RUNTIME.md "Bring-up plan")
+ *              src/zephyr/pymergetic/metal/port/worker.c
  *
  * spawn(): starts fn(arg) on a new thread, filling in *w. Caller owns arg's
  * lifetime — same convention as pthread_create() itself, spawn() does not
