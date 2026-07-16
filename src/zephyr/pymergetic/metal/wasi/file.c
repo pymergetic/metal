@@ -70,31 +70,166 @@ os_is_virtual_fd(int fd)
     };
 }
 
-// Macro to retrieve a file system descriptor and check it's validity.
-// fd's 0-2 are reserved for standard streams, hence the by-3 offsets.
-#define GET_FILE_SYSTEM_DESCRIPTOR(fd, ptr)                   \
-    do {                                                      \
-        if (os_is_virtual_fd(fd)) {                           \
-            ptr = NULL;                                       \
-            break;                                            \
-        }                                                     \
-        if (fd < 3 || fd >= CONFIG_WASI_MAX_OPEN_FILES + 3) { \
-            return __WASI_EBADF;                              \
-        }                                                     \
-        k_mutex_lock(&desc_array_mutex, K_FOREVER);           \
-        ptr = &desc_array[(int)fd - 3];                       \
-        if (!ptr->used) {                                     \
-            k_mutex_unlock(&desc_array_mutex);                \
-            return __WASI_EBADF;                              \
-        }                                                     \
-        k_mutex_unlock(&desc_array_mutex);                    \
-    } while (0)
-
 // Array to keep track of file system descriptors.
 static struct zephyr_fs_desc desc_array[CONFIG_WASI_MAX_OPEN_FILES];
 
 // mutex to protect the file descriptor array
 K_MUTEX_DEFINE(desc_array_mutex);
+
+/* Acquire a live (non-closing) slot for an op. Pair with pm_metal_desc_release.
+ * Virtual stdio fds set *out = NULL and return 0 (same as legacy macro). */
+static int
+pm_metal_desc_acquire(os_file_handle fd, struct zephyr_fs_desc **out)
+{
+	struct zephyr_fs_desc *ptr;
+
+	if (out == NULL) {
+		return -1;
+	}
+	if (os_is_virtual_fd(fd)) {
+		*out = NULL;
+		return 0;
+	}
+	if (fd < 3 || fd >= CONFIG_WASI_MAX_OPEN_FILES + 3) {
+		return -1;
+	}
+	k_mutex_lock(&desc_array_mutex, K_FOREVER);
+	ptr = &desc_array[(int)fd - 3];
+	if (!ptr->used || ptr->closing) {
+		k_mutex_unlock(&desc_array_mutex);
+		return -1;
+	}
+	ptr->refs++;
+	*out = ptr;
+	k_mutex_unlock(&desc_array_mutex);
+	return 0;
+}
+
+/* Finish FS close + free path after the slot was cleared under the mutex. */
+static void
+pm_metal_desc_teardown(char *path, int is_dir, int dir_opened,
+		       struct fs_file_t *file, struct fs_dir_t *dir)
+{
+	if (is_dir) {
+		if (dir_opened && dir != NULL) {
+			(void)fs_closedir(dir);
+		}
+	} else if (file != NULL) {
+		(void)fs_close(file);
+	}
+	if (path != NULL) {
+		BH_FREE(path);
+	}
+}
+
+static void
+pm_metal_desc_release(struct zephyr_fs_desc *ptr)
+{
+	char *path = NULL;
+	int is_dir = 0;
+	int dir_opened = 0;
+	int do_teardown = 0;
+	struct fs_file_t file;
+	struct fs_dir_t dir;
+
+	if (ptr == NULL) {
+		return;
+	}
+	k_mutex_lock(&desc_array_mutex, K_FOREVER);
+	if (ptr->refs > 0) {
+		ptr->refs--;
+	}
+	if (ptr->closing && ptr->refs == 0) {
+		path = ptr->path;
+		is_dir = ptr->is_dir;
+		dir_opened = ptr->dir_opened;
+		if (is_dir) {
+			dir = ptr->dir;
+		} else {
+			file = ptr->file;
+		}
+		ptr->path = NULL;
+		ptr->dir_opened = false;
+		ptr->closing = false;
+		ptr->used = false;
+		ptr->is_dir = false;
+		do_teardown = 1;
+	}
+	k_mutex_unlock(&desc_array_mutex);
+	if (do_teardown) {
+		pm_metal_desc_teardown(path, is_dir, dir_opened, &file, &dir);
+	}
+}
+
+/* Mark closing; tear down now if no in-flight ops (else last release does). */
+static __wasi_errno_t
+pm_metal_desc_close(os_file_handle fd)
+{
+	struct zephyr_fs_desc *ptr;
+	char *path = NULL;
+	int is_dir = 0;
+	int dir_opened = 0;
+	int do_teardown = 0;
+	struct fs_file_t file;
+	struct fs_dir_t dir;
+
+	if (fd < 3 || fd >= CONFIG_WASI_MAX_OPEN_FILES + 3) {
+		return __WASI_EBADF;
+	}
+	k_mutex_lock(&desc_array_mutex, K_FOREVER);
+	ptr = &desc_array[(int)fd - 3];
+	if (!ptr->used || ptr->closing) {
+		k_mutex_unlock(&desc_array_mutex);
+		return __WASI_EBADF;
+	}
+	ptr->closing = true;
+	if (ptr->refs == 0) {
+		path = ptr->path;
+		is_dir = ptr->is_dir;
+		dir_opened = ptr->dir_opened;
+		if (is_dir) {
+			dir = ptr->dir;
+		} else {
+			file = ptr->file;
+		}
+		ptr->path = NULL;
+		ptr->dir_opened = false;
+		ptr->closing = false;
+		ptr->used = false;
+		ptr->is_dir = false;
+		do_teardown = 1;
+	}
+	k_mutex_unlock(&desc_array_mutex);
+	if (do_teardown) {
+		/* Surface fs_close/fs_closedir errors; path is always freed. */
+		int rc = 0;
+
+		if (is_dir) {
+			if (dir_opened) {
+				rc = fs_closedir(&dir);
+			}
+		} else {
+			rc = fs_close(&file);
+		}
+		if (path != NULL) {
+			BH_FREE(path);
+		}
+		if (rc < 0) {
+			return convert_errno(-rc);
+		}
+	}
+	return __WASI_ESUCCESS;
+}
+
+// fd's 0-2 are reserved for standard streams, hence the by-3 offsets.
+#define GET_FILE_SYSTEM_DESCRIPTOR(fd, ptr)                   \
+    do {                                                      \
+        if (pm_metal_desc_acquire((fd), &(ptr)) != 0) {       \
+            return __WASI_EBADF;                              \
+        }                                                     \
+    } while (0)
+
+#define RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr) pm_metal_desc_release(ptr)
 
 static char prestat_dir[MAX_FILE_NAME + 1];
 
@@ -295,6 +430,8 @@ zephyr_fs_alloc_obj(bool is_dir, const char *path, int *index)
             ptr->used = true;
             ptr->is_dir = is_dir;
             ptr->dir_opened = false;
+            ptr->closing = false;
+            ptr->refs = 0;
             ptr->dir_index = 0;
             size_t path_len = strlen(path) + 1;
             ptr->path = BH_MALLOC(path_len);
@@ -319,12 +456,15 @@ zephyr_fs_alloc_obj(bool is_dir, const char *path, int *index)
     return ptr;
 }
 
+/* Immediate free for failed-open cleanup (slot never handed to a guest op). */
 static inline void
 zephyr_fs_free_obj(struct zephyr_fs_desc *ptr)
 {
     BH_FREE(ptr->path);
     ptr->path = NULL;
     ptr->dir_opened = false;
+    ptr->closing = false;
+    ptr->refs = 0;
     ptr->used = false;
 }
 
@@ -358,6 +498,7 @@ os_fstat(os_file_handle handle, struct __wasi_filestat_t *buf)
 
 	if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
 		pm_metal_wasi_fill_dir_stat(buf);
+		RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
 		return __WASI_ESUCCESS;
 	}
 
@@ -365,6 +506,7 @@ os_fstat(os_file_handle handle, struct __wasi_filestat_t *buf)
 
 	rc = fs_stat(ptr->path, &entry);
 	if (rc < 0) {
+		RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
 		return convert_errno(-rc);
 	}
 
@@ -378,6 +520,7 @@ os_fstat(os_file_handle handle, struct __wasi_filestat_t *buf)
 	buf->st_mtim = 0;
 	buf->st_ctim = 0;
 
+	RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
 	return __WASI_ESUCCESS;
 }
 
@@ -472,6 +615,7 @@ os_file_get_fdflags(os_file_handle handle, __wasi_fdflags_t *flags)
      *     - __WASI_FDFLAG_NONBLOCK
      * Have no equivalent in Zephyr.
      */
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -490,6 +634,7 @@ os_file_set_fdflags(os_file_handle handle, __wasi_fdflags_t flags)
         ptr->file.flags |= FS_O_APPEND;
     }
     /* Same as above */
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -512,14 +657,17 @@ os_fsync(os_file_handle handle)
     GET_FILE_SYSTEM_DESCRIPTOR(handle, ptr);
 
     if (ptr->is_dir) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_EISDIR;
     }
 
     rc = fs_sync(&ptr->file);
     if (rc < 0) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return convert_errno(-rc);
     }
 
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -788,6 +936,7 @@ os_file_get_access_mode(os_file_handle handle,
 
     if (ptr->is_dir) {
         *access_mode = WASI_LIBC_ACCESS_MODE_READ_WRITE;
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ESUCCESS;
     }
 
@@ -803,6 +952,7 @@ os_file_get_access_mode(os_file_handle handle,
     else {
         *access_mode = WASI_LIBC_ACCESS_MODE_READ_WRITE;
     }
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -821,31 +971,10 @@ os_close(os_file_handle handle, bool is_stdio)
         return __WASI_ESUCCESS;
     }
 
-    int rc;
-    struct zephyr_fs_desc *ptr = NULL;
-
     if (is_stdio)
         return __WASI_ESUCCESS;
 
-    GET_FILE_SYSTEM_DESCRIPTOR(handle, ptr);
-
-    if (ptr->is_dir) {
-        if (ptr->dir_opened) {
-            rc = fs_closedir(&ptr->dir);
-            ptr->dir_opened = false;
-        } else {
-            rc = 0;
-        }
-    } else {
-        rc = fs_close(&ptr->file);
-    }
-    zephyr_fs_free_obj(ptr);
-
-    if (rc < 0) {
-        return convert_errno(-rc);
-    }
-
-    return __WASI_ESUCCESS;
+    return pm_metal_desc_close(handle);
 }
 
 __wasi_errno_t
@@ -865,6 +994,7 @@ os_preadv(os_file_handle handle, const struct __wasi_iovec_t *iov, int iovcnt,
     // Seek to the offset
     rc = fs_seek(&ptr->file, offset, FS_SEEK_SET);
     if (rc < 0) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return convert_errno(-rc);
     }
 
@@ -872,6 +1002,7 @@ os_preadv(os_file_handle handle, const struct __wasi_iovec_t *iov, int iovcnt,
     for (int i = 0; i < iovcnt; i++) {
         ssize_t bytes_read = fs_read(&ptr->file, iov[i].buf, iov[i].buf_len);
         if (bytes_read < 0) {
+            RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
             return convert_errno(-bytes_read);
         }
 
@@ -886,6 +1017,7 @@ os_preadv(os_file_handle handle, const struct __wasi_iovec_t *iov, int iovcnt,
 
     *nread = total_read;
 
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -905,6 +1037,7 @@ os_pwritev(os_file_handle handle, const struct __wasi_ciovec_t *iov, int iovcnt,
     // Seek to the offset
     int rc = fs_seek(&ptr->file, offset, FS_SEEK_SET);
     if (rc < 0) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return convert_errno(-rc);
     }
 
@@ -913,6 +1046,7 @@ os_pwritev(os_file_handle handle, const struct __wasi_ciovec_t *iov, int iovcnt,
         ssize_t bytes_written =
             fs_write(&ptr->file, iov[i].buf, iov[i].buf_len);
         if (bytes_written < 0) {
+            RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
             return convert_errno(-bytes_written);
         }
 
@@ -927,6 +1061,7 @@ os_pwritev(os_file_handle handle, const struct __wasi_ciovec_t *iov, int iovcnt,
 
     *nwritten = total_written;
 
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -984,6 +1119,7 @@ os_readv(os_file_handle handle, const struct __wasi_iovec_t *iov, int iovcnt,
         ssize_t bytes_read = fs_read(&ptr->file, iov[i].buf, iov[i].buf_len);
         if (bytes_read < 0) {
             // If an error occurred, return it
+            RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
             return convert_errno(-bytes_read);
         }
 
@@ -998,6 +1134,7 @@ os_readv(os_file_handle handle, const struct __wasi_iovec_t *iov, int iovcnt,
 
     *nread = total_read;
 
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -1066,6 +1203,7 @@ os_writev(os_file_handle handle, const struct __wasi_ciovec_t *iov, int iovcnt,
         ssize_t bytes_written =
             fs_write(&ptr->file, iov[i].buf, iov[i].buf_len);
         if (bytes_written < 0) {
+            RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
             return convert_errno(-bytes_written);
         }
 
@@ -1080,6 +1218,7 @@ os_writev(os_file_handle handle, const struct __wasi_ciovec_t *iov, int iovcnt,
 
     *nwritten = total_written;
 
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -1103,9 +1242,11 @@ os_ftruncate(os_file_handle handle, __wasi_filesize_t size)
 
     int rc = fs_truncate(&ptr->file, (off_t)size);
     if (rc < 0) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return convert_errno(-rc);
     }
 
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -1292,16 +1433,19 @@ os_lseek(os_file_handle handle, __wasi_filedelta_t offset,
             zwhence = FS_SEEK_END;
             break;
         default:
+            RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
             return __WASI_EINVAL;
     }
 
     off_t rc = fs_seek(&ptr->file, (off_t)offset, zwhence);
     if (rc < 0) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return convert_errno(-rc);
     }
 
     *new_offset = (__wasi_filesize_t)rc;
 
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -1362,16 +1506,19 @@ os_fdopendir(os_file_handle handle, os_dir_stream *dir_stream)
 
     GET_FILE_SYSTEM_DESCRIPTOR(handle, ptr);
     if (!ptr->is_dir) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTDIR;
     }
 
     if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTSUP;
     }
 
     if (!ptr->dir_opened) {
         int rc = fs_opendir(&ptr->dir, ptr->path);
         if (rc < 0) {
+            RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
             return convert_errno(-rc);
         }
         ptr->dir_opened = true;
@@ -1380,6 +1527,7 @@ os_fdopendir(os_file_handle handle, os_dir_stream *dir_stream)
     /* we store the fd in the `os_dir_stream` to use other function */
     *dir_stream = handle;
 
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -1390,24 +1538,32 @@ os_rewinddir(os_dir_stream dir_stream)
     struct zephyr_fs_desc *ptr = NULL;
     GET_FILE_SYSTEM_DESCRIPTOR(dir_stream, ptr);
 
-    if (!ptr->is_dir)
+    if (!ptr->is_dir) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTDIR;
+    }
 
     if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTSUP;
     }
 
     int rc = fs_closedir(&ptr->dir); // Close current stream
-    if (rc < 0)
+    if (rc < 0) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return convert_errno(-rc);
+    }
     ptr->dir_opened = false;
 
     rc = fs_opendir(&ptr->dir, ptr->path); // Reopen from start
-    if (rc < 0)
+    if (rc < 0) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return convert_errno(-rc);
+    }
     ptr->dir_opened = true;
 
     ptr->dir_index = 0; // Reset virtual position tracker
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -1419,34 +1575,44 @@ os_seekdir(os_dir_stream dir_stream, __wasi_dircookie_t position)
     struct zephyr_fs_desc *ptr = NULL;
     GET_FILE_SYSTEM_DESCRIPTOR(dir_stream, ptr);
 
-    if (!ptr->is_dir)
+    if (!ptr->is_dir) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTDIR;
+    }
 
     if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTSUP;
     }
 
     int rc = fs_closedir(&ptr->dir);
-    if (rc < 0)
+    if (rc < 0) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return convert_errno(-rc);
+    }
     ptr->dir_opened = false;
 
     rc = fs_opendir(&ptr->dir, ptr->path);
-    if (rc < 0)
+    if (rc < 0) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return convert_errno(-rc);
+    }
     ptr->dir_opened = true;
 
     // Emulate seek by re-reading entries up to 'position'
     struct fs_dirent tmp;
     for (__wasi_dircookie_t i = 0; i < position; i++) {
         rc = fs_readdir(&ptr->dir, &tmp);
-        if (rc < 0)
+        if (rc < 0) {
+            RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
             return convert_errno(-rc);
+        }
         if (tmp.name[0] == '\0')
             break; // End of directory
     }
 
     ptr->dir_index = position;
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
@@ -1458,15 +1624,18 @@ os_readdir(os_dir_stream dir_stream, __wasi_dirent_t *entry,
     struct zephyr_fs_desc *ptr = NULL;
     GET_FILE_SYSTEM_DESCRIPTOR(dir_stream, ptr);
     if (!ptr->is_dir) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTDIR;
     }
 
     if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTSUP;
     }
 
     int rc = fs_readdir(&ptr->dir, &fs_entry);
     if (rc < 0) {
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return convert_errno(-rc);
     }
 
@@ -1474,6 +1643,7 @@ os_readdir(os_dir_stream dir_stream, __wasi_dirent_t *entry,
         // DSK: the caller expects the name buffer to be null
         // when we've reached the end of the directory.
         *d_name = NULL;
+        RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ESUCCESS;
     }
 
@@ -1495,31 +1665,38 @@ os_readdir(os_dir_stream dir_stream, __wasi_dirent_t *entry,
     name_buf[MAX_FILE_NAME] = '\0';
     *d_name = name_buf;
 
+    RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;
 }
 
 __wasi_errno_t
 os_closedir(os_dir_stream dir_stream)
 {
-    struct zephyr_fs_desc *ptr = NULL;
+	struct zephyr_fs_desc *ptr;
+	int is_dir;
+	int is_proc = 0;
 
-    GET_FILE_SYSTEM_DESCRIPTOR(dir_stream, ptr);
-    if (!ptr->is_dir) {
-        return __WASI_ENOTDIR;
-    }
-
-    if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
-        return __WASI_ENOTSUP;
-    }
-
-    int rc = fs_closedir(&ptr->dir);
-    ptr->dir_opened = false;
-    zephyr_fs_free_obj(ptr); // free in any case.
-    if (rc < 0) {
-        return convert_errno(-rc);
-    }
-
-    return __WASI_ESUCCESS;
+	if (dir_stream < 3 || dir_stream >= CONFIG_WASI_MAX_OPEN_FILES + 3) {
+		return __WASI_EBADF;
+	}
+	k_mutex_lock(&desc_array_mutex, K_FOREVER);
+	ptr = &desc_array[(int)dir_stream - 3];
+	if (!ptr->used || ptr->closing) {
+		k_mutex_unlock(&desc_array_mutex);
+		return __WASI_EBADF;
+	}
+	is_dir = ptr->is_dir;
+	if (ptr->path != NULL && pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+		is_proc = 1;
+	}
+	k_mutex_unlock(&desc_array_mutex);
+	if (!is_dir) {
+		return __WASI_ENOTDIR;
+	}
+	if (is_proc) {
+		return __WASI_ENOTSUP;
+	}
+	return pm_metal_desc_close(dir_stream);
 }
 
 os_dir_stream

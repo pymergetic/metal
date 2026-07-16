@@ -1,0 +1,22 @@
+Give Zephyr korp_rwlock real mutex storage so Metal can back
+os_rwlock_* with k_mutex (wasi-threads needs real exclusion for the
+WASI fd table). Formerly a dummy int-sized stub. Applied by
+scripts/setup-wamr.sh / setup-west.sh.
+
+diff --git a/core/shared/platform/zephyr/platform_internal.h b/core/shared/platform/zephyr/platform_internal.h
+--- a/core/shared/platform/zephyr/platform_internal.h
++++ b/core/shared/platform/zephyr/platform_internal.h
+@@ -114,11 +114,8 @@ typedef korp_thread *korp_tid;
+ typedef zmutex_t korp_mutex;
+ typedef unsigned int korp_sem;
+ 
+-/* korp_rwlock is used in platform_api_extension.h,
+-   we just define the type to make the compiler happy */
+-typedef struct {
+-    int dummy;
+-} korp_rwlock;
++/* Writer-exclusive rwlock: same storage as korp_mutex (k_mutex / sys_mutex). */
++typedef zmutex_t korp_rwlock;
+ 
+ struct os_thread_wait_node;
+ typedef struct os_thread_wait_node *os_thread_wait_list;

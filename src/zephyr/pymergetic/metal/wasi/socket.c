@@ -149,7 +149,11 @@ pm_metal_wasi_socket_is_ours(int handle)
 		return 0;
 	}
 	k_mutex_lock(&g_pm_metal_sock_table_lock, K_FOREVER);
-	ours = g_pm_metal_socks[idx].used && !g_pm_metal_socks[idx].closing;
+	/* Include closing slots: callers that gate on is_ours() must not fall
+	 * through to the file fd table while refs remain (SOCK-9). Ops still
+	 * go through acquire(), which rejects closing with EBADF.
+	 */
+	ours = g_pm_metal_socks[idx].used;
 	k_mutex_unlock(&g_pm_metal_sock_table_lock);
 	return ours;
 }
@@ -169,23 +173,6 @@ pm_metal_wasi_socket_is_tcp(int handle)
 	}
 	k_mutex_unlock(&g_pm_metal_sock_table_lock);
 	return is_tcp;
-}
-
-int
-pm_metal_wasi_socket_zfd(int handle)
-{
-	int idx = pm_metal_sock_index(handle);
-	int zfd = -1;
-
-	if (idx < 0) {
-		return -1;
-	}
-	k_mutex_lock(&g_pm_metal_sock_table_lock, K_FOREVER);
-	if (g_pm_metal_socks[idx].used) {
-		zfd = g_pm_metal_socks[idx].zfd;
-	}
-	k_mutex_unlock(&g_pm_metal_sock_table_lock);
-	return zfd;
 }
 
 int
@@ -1761,9 +1748,7 @@ pm_metal_wasi_socket_poll(void *fds_v, int nfds, int timeout)
 		if (timeout > 0 && k_uptime_get() >= deadline_ms) {
 			break;
 		}
-		if (nsock > 0 && npipe == 0 && timeout < 0) {
-			break;
-		}
+		/* Infinite timeout: retry if zsock_poll woke with nothing ready. */
 	}
 
 	for (i = 0; i < nsock; i++) {
@@ -1790,13 +1775,6 @@ pm_metal_wasi_socket_is_ours(int handle)
 
 int
 pm_metal_wasi_socket_is_tcp(int handle)
-{
-	(void)handle;
-	return -1;
-}
-
-int
-pm_metal_wasi_socket_zfd(int handle)
 {
 	(void)handle;
 	return -1;
