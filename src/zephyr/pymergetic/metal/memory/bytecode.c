@@ -29,12 +29,14 @@ static void *pm_metal_memory_zephyr_bytecode_establish(uint64_t requested_bytes,
 
 	block = pm_metal_memory_zephyr_pool_alloc(take);
 	if (!block) {
+		pm_metal_memory_zephyr_budget_give(take);
 		return NULL;
 	}
 
 	arena = pm_metal_util_arena_init(block, (size_t)take);
 	if (!arena) {
 		pm_metal_memory_zephyr_pool_free(block);
+		pm_metal_memory_zephyr_budget_give(take);
 		return NULL;
 	}
 

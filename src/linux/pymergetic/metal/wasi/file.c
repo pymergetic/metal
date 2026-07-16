@@ -11,9 +11,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <pthread.h>
+
 #include "platform_api_extension.h"
 #include "pymergetic/metal/mount/proc.h"
 #include "pymergetic/metal/mount/table.h"
+#include "pymergetic/metal/port/lock.h"
 
 #define PM_METAL_VFD_MAX 64
 #define PM_METAL_PROC_DIR_MAGIC 0x504d4452u /* 'PMDR' */
@@ -40,6 +43,24 @@ typedef struct pm_metal_proc_dirstream {
 } pm_metal_proc_dirstream_t;
 
 static pm_metal_vfd_t g_pm_metal_vfds[PM_METAL_VFD_MAX];
+static pm_metal_port_mutex_t g_pm_metal_vfd_lock;
+static pthread_once_t g_pm_metal_vfd_once = PTHREAD_ONCE_INIT;
+
+static void pm_metal_vfd_lock_init_once(void)
+{
+	pm_metal_port_mutex_init(&g_pm_metal_vfd_lock);
+}
+
+static void pm_metal_vfd_lock(void)
+{
+	pthread_once(&g_pm_metal_vfd_once, pm_metal_vfd_lock_init_once);
+	pm_metal_port_mutex_lock(&g_pm_metal_vfd_lock);
+}
+
+static void pm_metal_vfd_unlock(void)
+{
+	pm_metal_port_mutex_unlock(&g_pm_metal_vfd_lock);
+}
 
 char *__real_os_realpath(const char *path, char *resolved_path);
 __wasi_errno_t __real_os_open_preopendir(const char *path, os_file_handle *out);
@@ -69,7 +90,7 @@ __wasi_errno_t __real_os_utimensat(os_file_handle handle, const char *path, __wa
 				    __wasi_timestamp_t modification_time, __wasi_fstflags_t fstflags,
 				    __wasi_lookupflags_t lookup_flags);
 
-static pm_metal_vfd_t *pm_metal_vfd_find(int fd)
+static pm_metal_vfd_t *pm_metal_vfd_find_unlocked(int fd)
 {
 	int i;
 
@@ -84,6 +105,23 @@ static pm_metal_vfd_t *pm_metal_vfd_find(int fd)
 	return NULL;
 }
 
+/* Copy a tagged entry under the table lock — callers must not retain a
+ * pointer into g_pm_metal_vfds across any unlock (tag/untag can reuse slots). */
+static int pm_metal_vfd_lookup(int fd, pm_metal_vfd_t *out)
+{
+	pm_metal_vfd_t *v;
+
+	pm_metal_vfd_lock();
+	v = pm_metal_vfd_find_unlocked(fd);
+	if (!v) {
+		pm_metal_vfd_unlock();
+		return 0;
+	}
+	*out = *v;
+	pm_metal_vfd_unlock();
+	return 1;
+}
+
 static int pm_metal_vfd_is_proc(const pm_metal_vfd_t *v)
 {
 	return v && (v->kind == PM_METAL_VFD_PROC_ROOT || v->kind == PM_METAL_VFD_PROC_SELF);
@@ -92,11 +130,14 @@ static int pm_metal_vfd_is_proc(const pm_metal_vfd_t *v)
 static __wasi_errno_t pm_metal_vfd_tag(int fd, pm_metal_vfd_kind_t kind, const char *guest_prefix)
 {
 	int i;
+	__wasi_errno_t err = __WASI_EMFILE;
 
 	if (fd < 0 || !guest_prefix) {
 		return __WASI_EINVAL;
 	}
-	if (pm_metal_vfd_find(fd)) {
+	pm_metal_vfd_lock();
+	if (pm_metal_vfd_find_unlocked(fd)) {
+		pm_metal_vfd_unlock();
 		return __WASI_ESUCCESS;
 	}
 	for (i = 0; i < PM_METAL_VFD_MAX; i++) {
@@ -106,20 +147,24 @@ static __wasi_errno_t pm_metal_vfd_tag(int fd, pm_metal_vfd_kind_t kind, const c
 			g_pm_metal_vfds[i].kind = kind;
 			snprintf(g_pm_metal_vfds[i].guest_prefix, sizeof(g_pm_metal_vfds[i].guest_prefix), "%s",
 				 guest_prefix);
-			return __WASI_ESUCCESS;
+			err = __WASI_ESUCCESS;
+			break;
 		}
 	}
-	return __WASI_EMFILE;
+	pm_metal_vfd_unlock();
+	return err;
 }
 
 static void pm_metal_vfd_untag(int fd)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(fd);
+	pm_metal_vfd_t *v;
 
-	if (!v) {
-		return;
+	pm_metal_vfd_lock();
+	v = pm_metal_vfd_find_unlocked(fd);
+	if (v) {
+		memset(v, 0, sizeof(*v));
 	}
-	memset(v, 0, sizeof(*v));
+	pm_metal_vfd_unlock();
 }
 
 static __wasi_errno_t pm_metal_proc_vfd_alloc(pm_metal_vfd_kind_t kind, const char *guest_prefix,
@@ -143,12 +188,12 @@ static __wasi_errno_t pm_metal_proc_vfd_alloc(pm_metal_vfd_kind_t kind, const ch
 
 static void pm_metal_proc_vfd_free(int fd)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(fd);
+	pm_metal_vfd_t v;
 
-	if (!v || !pm_metal_vfd_is_proc(v)) {
+	if (!pm_metal_vfd_lookup(fd, &v) || !pm_metal_vfd_is_proc(&v)) {
 		return;
 	}
-	close(v->fd);
+	close(v.fd);
 	pm_metal_vfd_untag(fd);
 }
 
@@ -427,18 +472,18 @@ __wasi_errno_t os_openat(os_file_handle handle, const char *path, __wasi_oflags_
 			  __wasi_fdflags_t fs_flags, __wasi_lookupflags_t lookup_flags,
 			  wasi_libc_file_access_mode read_write_mode, os_file_handle *out)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(handle);
+	pm_metal_vfd_t v;
 	pm_metal_mount_resolve_t r;
 	__wasi_errno_t err;
 
-	if (!v) {
+	if (!pm_metal_vfd_lookup(handle, &v)) {
 		return __real_os_openat(handle, path, oflags, fs_flags, lookup_flags, read_write_mode, out);
 	}
-	if (pm_metal_vfd_is_proc(v)) {
-		return pm_metal_proc_open_rel(v->kind, path, oflags, out);
+	if (pm_metal_vfd_is_proc(&v)) {
+		return pm_metal_proc_open_rel(v.kind, path, oflags, out);
 	}
 
-	err = pm_metal_live_resolve_from(v, path, &r);
+	err = pm_metal_live_resolve_from(&v, path, &r);
 	if (err != __WASI_ESUCCESS) {
 		return err;
 	}
@@ -447,13 +492,13 @@ __wasi_errno_t os_openat(os_file_handle handle, const char *path, __wasi_oflags_
 
 __wasi_errno_t os_close(os_file_handle handle, bool is_stdio)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(handle);
+	pm_metal_vfd_t v;
 
-	if (v && pm_metal_vfd_is_proc(v)) {
+	if (pm_metal_vfd_lookup(handle, &v) && pm_metal_vfd_is_proc(&v)) {
 		pm_metal_proc_vfd_free(handle);
 		return __WASI_ESUCCESS;
 	}
-	if (v) {
+	if (pm_metal_vfd_lookup(handle, &v)) {
 		pm_metal_vfd_untag(handle);
 	}
 	return __real_os_close(handle, is_stdio);
@@ -461,9 +506,9 @@ __wasi_errno_t os_close(os_file_handle handle, bool is_stdio)
 
 __wasi_errno_t os_fstat(os_file_handle handle, struct __wasi_filestat_t *buf)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(handle);
+	pm_metal_vfd_t v;
 
-	if (v && pm_metal_vfd_is_proc(v)) {
+	if (pm_metal_vfd_lookup(handle, &v) && pm_metal_vfd_is_proc(&v)) {
 		pm_metal_proc_fill_dir_stat(buf);
 		return __WASI_ESUCCESS;
 	}
@@ -473,20 +518,21 @@ __wasi_errno_t os_fstat(os_file_handle handle, struct __wasi_filestat_t *buf)
 __wasi_errno_t os_fstatat(os_file_handle handle, const char *path, struct __wasi_filestat_t *buf,
 			   __wasi_lookupflags_t lookup_flags)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(handle);
+	pm_metal_vfd_t v;
+	pm_metal_vfd_t tmpv;
 	pm_metal_mount_resolve_t r;
 	os_file_handle tmp;
 	__wasi_errno_t err;
 
-	if (!v) {
+	if (!pm_metal_vfd_lookup(handle, &v)) {
 		return __real_os_fstatat(handle, path, buf, lookup_flags);
 	}
-	if (pm_metal_vfd_is_proc(v)) {
-		err = pm_metal_proc_open_rel(v->kind, path, 0, &tmp);
+	if (pm_metal_vfd_is_proc(&v)) {
+		err = pm_metal_proc_open_rel(v.kind, path, 0, &tmp);
 		if (err != __WASI_ESUCCESS) {
 			return err;
 		}
-		if (pm_metal_vfd_find(tmp) && pm_metal_vfd_is_proc(pm_metal_vfd_find(tmp))) {
+		if (pm_metal_vfd_lookup(tmp, &tmpv) && pm_metal_vfd_is_proc(&tmpv)) {
 			pm_metal_proc_fill_dir_stat(buf);
 			pm_metal_proc_vfd_free(tmp);
 			return __WASI_ESUCCESS;
@@ -496,7 +542,7 @@ __wasi_errno_t os_fstatat(os_file_handle handle, const char *path, struct __wasi
 		return err;
 	}
 
-	err = pm_metal_live_resolve_from(v, path, &r);
+	err = pm_metal_live_resolve_from(&v, path, &r);
 	if (err != __WASI_ESUCCESS) {
 		return err;
 	}
@@ -505,7 +551,7 @@ __wasi_errno_t os_fstatat(os_file_handle handle, const char *path, struct __wasi
 		if (err != __WASI_ESUCCESS) {
 			return err;
 		}
-		if (pm_metal_vfd_find(tmp) && pm_metal_vfd_is_proc(pm_metal_vfd_find(tmp))) {
+		if (pm_metal_vfd_lookup(tmp, &tmpv) && pm_metal_vfd_is_proc(&tmpv)) {
 			pm_metal_proc_fill_dir_stat(buf);
 			pm_metal_proc_vfd_free(tmp);
 			return __WASI_ESUCCESS;
@@ -530,9 +576,9 @@ __wasi_errno_t os_fstatat(os_file_handle handle, const char *path, struct __wasi
 
 __wasi_errno_t os_file_get_access_mode(os_file_handle handle, wasi_libc_file_access_mode *access_mode)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(handle);
+	pm_metal_vfd_t v;
 
-	if (v && pm_metal_vfd_is_proc(v)) {
+	if (pm_metal_vfd_lookup(handle, &v) && pm_metal_vfd_is_proc(&v)) {
 		*access_mode = WASI_LIBC_ACCESS_MODE_READ_ONLY;
 		return __WASI_ESUCCESS;
 	}
@@ -542,17 +588,17 @@ __wasi_errno_t os_file_get_access_mode(os_file_handle handle, wasi_libc_file_acc
 __wasi_errno_t os_readlinkat(os_file_handle handle, const char *path, char *buf, size_t bufsize,
 			      size_t *bufused)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(handle);
+	pm_metal_vfd_t v;
 	pm_metal_mount_resolve_t r;
 	os_file_handle root;
 	__wasi_errno_t err;
 	const char *rel;
 
-	if (!v) {
+	if (!pm_metal_vfd_lookup(handle, &v)) {
 		return __real_os_readlinkat(handle, path, buf, bufsize, bufused);
 	}
 	/* Proc tokens are not symlinks; host live-resolve still uses readlinkat. */
-	if (pm_metal_vfd_is_proc(v)) {
+	if (pm_metal_vfd_is_proc(&v)) {
 		(void)path;
 		(void)buf;
 		(void)bufsize;
@@ -560,7 +606,7 @@ __wasi_errno_t os_readlinkat(os_file_handle handle, const char *path, char *buf,
 		return __WASI_EINVAL;
 	}
 
-	err = pm_metal_live_resolve_from(v, path, &r);
+	err = pm_metal_live_resolve_from(&v, path, &r);
 	if (err != __WASI_ESUCCESS) {
 		return err;
 	}
@@ -579,19 +625,19 @@ __wasi_errno_t os_readlinkat(os_file_handle handle, const char *path, char *buf,
 
 __wasi_errno_t os_mkdirat(os_file_handle handle, const char *path)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(handle);
+	pm_metal_vfd_t v;
 	pm_metal_mount_resolve_t r;
 	os_file_handle root;
 	__wasi_errno_t err;
 	const char *rel;
 
-	if (!v) {
+	if (!pm_metal_vfd_lookup(handle, &v)) {
 		return __real_os_mkdirat(handle, path);
 	}
-	if (pm_metal_vfd_is_proc(v)) {
+	if (pm_metal_vfd_is_proc(&v)) {
 		return __WASI_EROFS;
 	}
-	err = pm_metal_live_resolve_from(v, path, &r);
+	err = pm_metal_live_resolve_from(&v, path, &r);
 	if (err != __WASI_ESUCCESS) {
 		return err;
 	}
@@ -610,19 +656,19 @@ __wasi_errno_t os_mkdirat(os_file_handle handle, const char *path)
 
 __wasi_errno_t os_unlinkat(os_file_handle handle, const char *path, bool is_dir)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(handle);
+	pm_metal_vfd_t v;
 	pm_metal_mount_resolve_t r;
 	os_file_handle root;
 	__wasi_errno_t err;
 	const char *rel;
 
-	if (!v) {
+	if (!pm_metal_vfd_lookup(handle, &v)) {
 		return __real_os_unlinkat(handle, path, is_dir);
 	}
-	if (pm_metal_vfd_is_proc(v)) {
+	if (pm_metal_vfd_is_proc(&v)) {
 		return __WASI_EROFS;
 	}
-	err = pm_metal_live_resolve_from(v, path, &r);
+	err = pm_metal_live_resolve_from(&v, path, &r);
 	if (err != __WASI_ESUCCESS) {
 		return err;
 	}
@@ -642,24 +688,25 @@ __wasi_errno_t os_unlinkat(os_file_handle handle, const char *path, bool is_dir)
 __wasi_errno_t os_renameat(os_file_handle old_handle, const char *old_path, os_file_handle new_handle,
 			    const char *new_path)
 {
-	pm_metal_vfd_t *ov = pm_metal_vfd_find(old_handle);
-	pm_metal_vfd_t *nv = pm_metal_vfd_find(new_handle);
+	pm_metal_vfd_t ov, nv;
 	pm_metal_mount_resolve_t orr, nrr;
 	os_file_handle old_root, new_root;
 	__wasi_errno_t err;
 	const char *old_rel, *new_rel;
+	int have_ov = pm_metal_vfd_lookup(old_handle, &ov);
+	int have_nv = pm_metal_vfd_lookup(new_handle, &nv);
 
-	if (!ov && !nv) {
+	if (!have_ov && !have_nv) {
 		return __real_os_renameat(old_handle, old_path, new_handle, new_path);
 	}
-	if (!ov || !nv || pm_metal_vfd_is_proc(ov) || pm_metal_vfd_is_proc(nv)) {
+	if (!have_ov || !have_nv || pm_metal_vfd_is_proc(&ov) || pm_metal_vfd_is_proc(&nv)) {
 		return __WASI_EROFS;
 	}
-	err = pm_metal_live_resolve_from(ov, old_path, &orr);
+	err = pm_metal_live_resolve_from(&ov, old_path, &orr);
 	if (err != __WASI_ESUCCESS) {
 		return err;
 	}
-	err = pm_metal_live_resolve_from(nv, new_path, &nrr);
+	err = pm_metal_live_resolve_from(&nv, new_path, &nrr);
 	if (err != __WASI_ESUCCESS) {
 		return err;
 	}
@@ -686,24 +733,25 @@ __wasi_errno_t os_renameat(os_file_handle old_handle, const char *old_path, os_f
 __wasi_errno_t os_linkat(os_file_handle from_handle, const char *from_path, os_file_handle to_handle,
 			  const char *to_path, __wasi_lookupflags_t lookup_flags)
 {
-	pm_metal_vfd_t *fv = pm_metal_vfd_find(from_handle);
-	pm_metal_vfd_t *tv = pm_metal_vfd_find(to_handle);
+	pm_metal_vfd_t fv, tv;
 	pm_metal_mount_resolve_t fr, tr;
 	os_file_handle from_root, to_root;
 	__wasi_errno_t err;
 	const char *from_rel, *to_rel;
+	int have_fv = pm_metal_vfd_lookup(from_handle, &fv);
+	int have_tv = pm_metal_vfd_lookup(to_handle, &tv);
 
-	if (!fv && !tv) {
+	if (!have_fv && !have_tv) {
 		return __real_os_linkat(from_handle, from_path, to_handle, to_path, lookup_flags);
 	}
-	if (!fv || !tv || pm_metal_vfd_is_proc(fv) || pm_metal_vfd_is_proc(tv)) {
+	if (!have_fv || !have_tv || pm_metal_vfd_is_proc(&fv) || pm_metal_vfd_is_proc(&tv)) {
 		return __WASI_EROFS;
 	}
-	err = pm_metal_live_resolve_from(fv, from_path, &fr);
+	err = pm_metal_live_resolve_from(&fv, from_path, &fr);
 	if (err != __WASI_ESUCCESS) {
 		return err;
 	}
-	err = pm_metal_live_resolve_from(tv, to_path, &tr);
+	err = pm_metal_live_resolve_from(&tv, to_path, &tr);
 	if (err != __WASI_ESUCCESS) {
 		return err;
 	}
@@ -729,19 +777,19 @@ __wasi_errno_t os_linkat(os_file_handle from_handle, const char *from_path, os_f
 
 __wasi_errno_t os_symlinkat(const char *old_path, os_file_handle handle, const char *new_path)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(handle);
+	pm_metal_vfd_t v;
 	pm_metal_mount_resolve_t r;
 	os_file_handle root;
 	__wasi_errno_t err;
 	const char *rel;
 
-	if (!v) {
+	if (!pm_metal_vfd_lookup(handle, &v)) {
 		return __real_os_symlinkat(old_path, handle, new_path);
 	}
-	if (pm_metal_vfd_is_proc(v)) {
+	if (pm_metal_vfd_is_proc(&v)) {
 		return __WASI_EROFS;
 	}
-	err = pm_metal_live_resolve_from(v, new_path, &r);
+	err = pm_metal_live_resolve_from(&v, new_path, &r);
 	if (err != __WASI_ESUCCESS) {
 		return err;
 	}
@@ -762,19 +810,19 @@ __wasi_errno_t os_utimensat(os_file_handle handle, const char *path, __wasi_time
 			     __wasi_timestamp_t modification_time, __wasi_fstflags_t fstflags,
 			     __wasi_lookupflags_t lookup_flags)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(handle);
+	pm_metal_vfd_t v;
 	pm_metal_mount_resolve_t r;
 	os_file_handle root;
 	__wasi_errno_t err;
 	const char *rel;
 
-	if (!v) {
+	if (!pm_metal_vfd_lookup(handle, &v)) {
 		return __real_os_utimensat(handle, path, access_time, modification_time, fstflags, lookup_flags);
 	}
-	if (pm_metal_vfd_is_proc(v)) {
+	if (pm_metal_vfd_is_proc(&v)) {
 		return __WASI_EROFS;
 	}
-	err = pm_metal_live_resolve_from(v, path, &r);
+	err = pm_metal_live_resolve_from(&v, path, &r);
 	if (err != __WASI_ESUCCESS) {
 		return err;
 	}
@@ -793,10 +841,10 @@ __wasi_errno_t os_utimensat(os_file_handle handle, const char *path, __wasi_time
 
 __wasi_errno_t os_fdopendir(os_file_handle handle, os_dir_stream *dir_stream)
 {
-	pm_metal_vfd_t *v = pm_metal_vfd_find(handle);
+	pm_metal_vfd_t v;
 	pm_metal_proc_dirstream_t *ds;
 
-	if (!v || !pm_metal_vfd_is_proc(v)) {
+	if (!pm_metal_vfd_lookup(handle, &v) || !pm_metal_vfd_is_proc(&v)) {
 		return __real_os_fdopendir(handle, dir_stream);
 	}
 	ds = calloc(1, sizeof(*ds));
@@ -804,7 +852,7 @@ __wasi_errno_t os_fdopendir(os_file_handle handle, os_dir_stream *dir_stream)
 		return __WASI_ENOMEM;
 	}
 	ds->magic = PM_METAL_PROC_DIR_MAGIC;
-	ds->kind = v->kind;
+	ds->kind = v.kind;
 	ds->index = 0;
 	*dir_stream = (os_dir_stream)ds;
 	return __WASI_ESUCCESS;

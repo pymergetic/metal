@@ -110,11 +110,19 @@ uint64_t pm_metal_memory_zephyr_budget_take(uint64_t requested)
 		take = g_pm_metal_memory_budget_remaining;
 	}
 	take = pm_metal_memory_zephyr_round_down(take, pm_metal_memory_zephyr_page_size());
-	if (take == 0 && g_pm_metal_memory_budget_remaining > 0) {
-		take = g_pm_metal_memory_budget_remaining;
+	if (take == 0) {
+		return 0;
 	}
 	g_pm_metal_memory_budget_remaining -= take;
 	return take;
+}
+
+void pm_metal_memory_zephyr_budget_give(uint64_t bytes)
+{
+	if (bytes == 0 || !g_pm_metal_memory_budget_inited) {
+		return;
+	}
+	g_pm_metal_memory_budget_remaining += bytes;
 }
 
 void pm_metal_memory_zephyr_budget_reset(void)
@@ -169,7 +177,8 @@ void *pm_metal_memory_zephyr_pool_alloc(uint64_t bytes)
 		size_t off = g_pm_metal_static_pool_off;
 		size_t need = (size_t)bytes;
 
-		if (off + need > sizeof(g_pm_metal_static_pool)) {
+		if (off > sizeof(g_pm_metal_static_pool)
+		    || need > sizeof(g_pm_metal_static_pool) - off) {
 			return NULL;
 		}
 		g_pm_metal_static_pool_off = off + need;

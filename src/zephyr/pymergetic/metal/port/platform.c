@@ -1,6 +1,7 @@
 /*
  * Port — zephyr bind implementations.
  */
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -28,10 +29,14 @@ int pm_metal_port_read_file(const char *host_path, uint8_t **out_buf, uint32_t *
 	if (rc < 0 || entry.type != FS_DIR_ENTRY_FILE) {
 		return -1;
 	}
+	if (entry.size > UINT32_MAX) {
+		return -1;
+	}
 
+	uint32_t len = (uint32_t)entry.size;
 	bytecode = pm_metal_memory_bytecode_ops();
-	buf = bytecode->alloc((uint32_t)entry.size);
-	if (!buf && entry.size > 0) {
+	buf = bytecode->alloc(len);
+	if (!buf && len > 0) {
 		return -1;
 	}
 
@@ -44,9 +49,9 @@ int pm_metal_port_read_file(const char *host_path, uint8_t **out_buf, uint32_t *
 		return -1;
 	}
 
-	n = entry.size ? fs_read(&file, buf, entry.size) : 0;
+	n = len ? fs_read(&file, buf, len) : 0;
 	fs_close(&file);
-	if (n < 0 || (uint32_t)n != entry.size) {
+	if (n < 0 || (uint32_t)n != len) {
 		if (buf) {
 			bytecode->free(buf);
 		}
@@ -54,7 +59,7 @@ int pm_metal_port_read_file(const char *host_path, uint8_t **out_buf, uint32_t *
 	}
 
 	*out_buf = buf;
-	*out_len = (uint32_t)entry.size;
+	*out_len = len;
 	return 0;
 }
 
@@ -81,6 +86,11 @@ int pm_metal_port_write_file(const char *host_path, const uint8_t *data, uint32_
 	fs_file_t_init(&file);
 	rc = fs_open(&file, host_path, FS_O_CREATE | FS_O_WRITE);
 	if (rc < 0) {
+		return -1;
+	}
+	rc = fs_truncate(&file, 0);
+	if (rc < 0) {
+		fs_close(&file);
 		return -1;
 	}
 	n = len ? fs_write(&file, data, len) : 0;

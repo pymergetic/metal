@@ -278,7 +278,9 @@ Reproduce: `scripts/verify-linux-threads.sh` — builds `pm-linux-thread-stress`
 
 Turning it on surfaced a real, TSan-reproducible data race **inside WAMR's own thread-manager code**, not this codebase's locking: `wasm_exec_env_destroy()` removes itself from its cluster's exec-env list without taking that cluster's own lock, reasoning it's the cluster's last live thread — an assumption `wasm_set_exception()`'s global cluster search (triggered by *any* exception anywhere, including our own `kill()`) violates, since it locks *every* live cluster while scanning for the one that owns a given `module_inst`, including one mid-teardown on another thread at that exact moment. Unlike the `ems_alloc.c` race documented above (closed entirely by this codebase's own `g_pm_metal_runtime_lock`, since both racing accesses go through calls this codebase controls), closing *this* one from our side would mean moving `wasm_application_execute_main()` itself inside that same lock — i.e. no two handles' guest code could ever actually run concurrently, anywhere, which is the entire point of `runtime/process.h`. So this one is fixed upstream instead: `patches/wamr/0002-thread-mgr-exec-env-destroy-lock.patch` (see `docs/SOURCETREE.md` "Vendoring" for the mechanism, `scripts/setup-wamr.sh` for how it's applied) takes `cluster->lock` around the list removal, matching every *other* caller of the same internal removal function in that file. Confirmed by three consecutive clean `scripts/verify-linux-threads.sh` runs after the patch, versus a reliable reproduction before it.
 
-**Guest-side `pthread_create()` is not proven yet** — this section only covers the host-side infrastructure (thread manager + wasi-threads library) being compiled in and not racing. Every mod today still builds against plain `wasm32-wasip1` (see `scripts/build-mod.sh`); a mod that actually wants to spawn wasm threads itself needs a threads-enabled wasi-sdk target (`wasm32-wasip1-threads`) and its own shared-memory-aware build flags — tracked as follow-up, not yet exercised by any `mods/*`.
+**Guest-side `pthread_create()` is proven** — `scripts/build-mod.sh` builds every mod against `wasm32-wasip1-threads` by default (`-pthread` + `-Wl,--max-memory=4194304`; without an explicit max, clang pins shared-memory max to the 128 KiB minimum and `pthread_create` fails at runtime). `mods/t23_pthread` spawns a worker, writes through shared linear memory, and joins; covered by `scripts/verify-linux.sh`.
+
+**`--max-memory` ≠ Linux `--memory=`.** On Linux, guest linear memory is host `mmap` (the CLI `--memory=` only sizes WAMR's internal EMS/kheap pool). On Zephyr, `os_mmap` is `BH_MALLOC` out of that same kheap — and for shared memory WAMR reserves the **full** max up front. So Zephyr's `PM_METAL_ZEPHYR_MEMORY_REQ` must stay `≥ 2 × MAX_MEMORY + slack` (two multimod instances). Raising either knob without the other re-breaks Zephyr instantiate (`allocate linear memory failed`).
 
 ---
 
@@ -369,7 +371,7 @@ Scaffold is in place (`src/`, `mods/`, `scripts/setup-ide.sh`). Order:
 | Script | Purpose |
 |--------|---------|
 | `build-linux.sh` | WAMR (via `src/linux/CMakeLists.txt`) + link `pm-linux-runtime` |
-| `build-mod.sh` | `mods/*` → `build/mods/*.wasm` (wasi-sdk, `wasm32-wasip1`) |
+| `build-mod.sh` | `mods/*` → `build/mods/*.wasm` (wasi-sdk, `wasm32-wasip1-threads`) |
 | `verify-linux.sh` | build mods + runtime → init → load → run → unload → shutdown |
 | `verify-linux-threads.sh` | ThreadSanitizer proof of the "Concurrency" section above — `pm-linux-thread-stress` |
 
@@ -427,7 +429,7 @@ Virtual `/sys/loader` · `include/metal.h` convenience · HTTPS fetch-on-miss ·
 - [x] `process.h`'s `kill()` actually interrupts a hot compute loop (not just a best-effort exception that's never noticed) — see "Threading" above, `scripts/verify-linux-process.sh`
 - [x] `getpid()`-via-`PID=<n>` env, injected by `spawn()` — see "Processes" above, `mods/t4_getpid`
 - [x] WAMR's own thread-manager data race (surfaced by enabling wasi-threads) fixed via a tracked vendor patch, not by sacrificing concurrent guest execution — see "Threading" above, `patches/wamr/0002-*`
-- [ ] guest-side `pthread_create()` (`wasm32-wasip1-threads` mod build + shared-memory-aware flags) — host infra only so far, see "Threading" above
+- [x] guest-side `pthread_create()` — mods default to `wasm32-wasip1-threads`; see "Threading" above, `mods/t23_pthread`, `scripts/verify-linux.sh`
 - [x] `spawn()`s chainable via a real host pipe (`port/pipe.h`), no `dup()`/refcounting needed — see "Processes" > "Pipes" above, `scripts/verify-linux-process.sh`
 - [x] export-style local/exported env split for a respawn()ed "subshell" (`runtime/env.h`) — host-side building block, no shell consumer yet — see "Processes" > "Export-style env" above
 - [x] `WASM_ENABLE_MULTI_MODULE` on, `module_reader` wired against `vfs_root`, proven with a real 2-module demo (one `.wasm` calling directly into another) — see "Multi-module" above, `mods/t8_multimod_lib` + `mods/t9_multimod_app`, `scripts/verify-linux.sh`

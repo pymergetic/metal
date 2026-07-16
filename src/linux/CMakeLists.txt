@@ -141,6 +141,9 @@ add_executable(pm-linux-runtime
 	${PM_COMMON}/app/app.c
 	${PM_COMMON}/util/size.c
 	${PM_COMMON}/util/arena.c
+	${PM_COMMON}/util/endian.c
+	${PM_COMMON}/util/fourcc.c
+	${PM_COMMON}/util/eightcc.c
 	${PM_COMMON}/util/log.c
 	${PM_COMMON}/util/lz4.c
 	${LZ4_ROOT_DIR}/lib/lz4.c
@@ -219,6 +222,9 @@ add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
 	${PM_COMMON}/runtime/runtime.c
 	${PM_COMMON}/util/size.c
 	${PM_COMMON}/util/arena.c
+	${PM_COMMON}/util/endian.c
+	${PM_COMMON}/util/fourcc.c
+	${PM_COMMON}/util/eightcc.c
 	${PM_COMMON}/util/log.c
 	${PM_COMMON}/util/lz4.c
 	${LZ4_ROOT_DIR}/lib/lz4.c
@@ -287,6 +293,9 @@ add_executable(pm-linux-process-test EXCLUDE_FROM_ALL
 	${PM_COMMON}/runtime/env.c
 	${PM_COMMON}/util/size.c
 	${PM_COMMON}/util/arena.c
+	${PM_COMMON}/util/endian.c
+	${PM_COMMON}/util/fourcc.c
+	${PM_COMMON}/util/eightcc.c
 	${PM_COMMON}/util/log.c
 	${PM_COMMON}/util/lz4.c
 	${LZ4_ROOT_DIR}/lib/lz4.c

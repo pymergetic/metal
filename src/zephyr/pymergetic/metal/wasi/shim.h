@@ -5,17 +5,17 @@
  * Force-included only for WAMR ssp posix.c / blocking_op.c (see
  * src/zephyr/CMakeLists.txt). Avoid <fcntl.h> / <zephyr/posix/poll.h>:
  * those pull kernel/net and redefine util.h KB/MB/GB/MIN (or need
- * NETWORKING). Avoid stacking <zephyr/posix/posix_time.h> on top of
- * <time.h> — conflicts on locale_t / itimerspec under the Zephyr SDK.
+ * NETWORKING). Do not pull in <time.h> / <zephyr/posix/posix_time.h>
+ * here — locale_t / itimerspec conflicts under the Zephyr SDK.
  */
 #ifndef PM_METAL_WASI_ZEPHYR_SHIM_H_
 #define PM_METAL_WASI_ZEPHYR_SHIM_H_
 
 #include <assert.h>
+#include <errno.h>
 #include <sched.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <time.h>
 
 typedef unsigned nfds_t;
 
@@ -56,6 +56,7 @@ static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 	(void)fds;
 	(void)nfds;
 	(void)timeout;
+	errno = ENOSYS;
 	return -1;
 }
 
@@ -67,6 +68,7 @@ static inline int ioctl(int fd, unsigned long request, ...)
 {
 	(void)fd;
 	(void)request;
+	errno = ENOSYS;
 	return -1;
 }
 

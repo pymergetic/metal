@@ -5,20 +5,8 @@
 
 #include "pymergetic/metal/wasi/platform.h"
 
-/* Hide WAMR stub typedefs/inlines that conflict with our platform.h. */
-#define os_file_handle __pm_metal_wamr_stub_file_handle
-#define os_dir_stream __pm_metal_wamr_stub_dir_stream
-#define os_raw_file_handle __pm_metal_wamr_stub_raw_file_handle
-#define os_get_invalid_handle __pm_metal_wamr_stub_get_invalid_handle
-
 #include "platform_wasi_types.h"
-#include "platform_internal.h"
 #include "libc_errno.h"
-
-#undef os_file_handle
-#undef os_dir_stream
-#undef os_raw_file_handle
-#undef os_get_invalid_handle
 
 /* Declared by -DBH_MALLOC/-DBH_FREE=wasm_runtime_* from the WAMR build. */
 void *wasm_runtime_malloc(unsigned int size);
@@ -65,9 +53,7 @@ __wasi_errno_t os_fsync(os_file_handle handle);
 //     int fs_register(int type, const struct fs_file_system_t *fs)
 //     int fs_unregister(int type, const struct fs_file_system_t *fs)
 
-// We will take the maximum number of open files
-// from the Zephyr POSIX configuration
-#define CONFIG_WASI_MAX_OPEN_FILES CONFIG_ZVFS_OPEN_MAX
+/* CONFIG_WASI_MAX_OPEN_FILES comes from platform.h (→ CONFIG_ZVFS_OPEN_MAX). */
 
 static inline bool
 os_is_virtual_fd(int fd)
@@ -163,8 +149,17 @@ build_absolute_path(char *abs_path, size_t abs_path_len, const char *path)
 }
 
 static bool
+pm_metal_wasi_is_proc_sentinel(const char *path)
+{
+	return path
+	       && (pm_metal_mount_proc_is_sentinel(path)
+		   || strcmp(path, "pm-metal:proc/self") == 0);
+}
+
+static bool
 resolve_open_path(os_file_handle handle, const char *path, char *abs_path, size_t abs_path_len)
 {
+	char base_buf[MAX_FILE_NAME + 1];
 	const char *base = prestat_dir;
 
 	if (path == NULL) {
@@ -180,7 +175,9 @@ resolve_open_path(os_file_handle handle, const char *path, char *abs_path, size_
 			k_mutex_lock(&desc_array_mutex, K_FOREVER);
 			parent = &desc_array[fd - 3];
 			if (parent->used && parent->path != NULL) {
-				base = parent->path;
+				strncpy(base_buf, parent->path, MAX_FILE_NAME);
+				base_buf[MAX_FILE_NAME] = '\0';
+				base = base_buf;
 			}
 			k_mutex_unlock(&desc_array_mutex);
 		}
@@ -193,7 +190,14 @@ static struct zephyr_fs_desc *
 zephyr_fs_alloc_obj(bool is_dir, const char *path, int *index)
 {
     struct zephyr_fs_desc *ptr = NULL;
+
+    if (index == NULL) {
+        return NULL;
+    }
     *index = -1; // give a default value to index in case table is full
+    if (path == NULL) {
+        return NULL;
+    }
 
     k_mutex_lock(&desc_array_mutex, K_FOREVER);
     for (int i = 0; i < CONFIG_WASI_MAX_OPEN_FILES; i++) {
@@ -201,6 +205,7 @@ zephyr_fs_alloc_obj(bool is_dir, const char *path, int *index)
             ptr = &desc_array[i];
             ptr->used = true;
             ptr->is_dir = is_dir;
+            ptr->dir_opened = false;
             ptr->dir_index = 0;
             size_t path_len = strlen(path) + 1;
             ptr->path = BH_MALLOC(path_len);
@@ -230,6 +235,7 @@ zephyr_fs_free_obj(struct zephyr_fs_desc *ptr)
 {
     BH_FREE(ptr->path);
     ptr->path = NULL;
+    ptr->dir_opened = false;
     ptr->used = false;
 }
 
@@ -251,8 +257,7 @@ os_fstat(os_file_handle handle, struct __wasi_filestat_t *buf)
 
 	GET_FILE_SYSTEM_DESCRIPTOR(handle, ptr);
 
-	if (ptr->path && (pm_metal_mount_proc_is_sentinel(ptr->path)
-			  || strcmp(ptr->path, "pm-metal:proc/self") == 0)) {
+	if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
 		buf->st_dev = 0;
 		buf->st_ino = 1;
 		buf->st_filetype = __WASI_FILETYPE_DIRECTORY;
@@ -290,15 +295,28 @@ os_fstatat(os_file_handle handle, const char *path,
 {
     struct fs_dirent entry;
     int rc;
+    char abs_path[MAX_FILE_NAME + 1];
+
+    (void)lookup_flags;
 
     if (handle < 0) {
         return __WASI_EBADF;
     }
 
-    char abs_path[MAX_FILE_NAME + 1];
-
-    if (!build_absolute_path(abs_path, sizeof(abs_path), path)) {
+    if (!resolve_open_path(handle, path, abs_path, sizeof(abs_path))) {
         return __WASI_ENOMEM;
+    }
+
+    if (pm_metal_wasi_is_proc_sentinel(abs_path)) {
+	buf->st_dev = 0;
+	buf->st_ino = 1;
+	buf->st_filetype = __WASI_FILETYPE_DIRECTORY;
+	buf->st_nlink = 1;
+	buf->st_size = 0;
+	buf->st_atim = 0;
+	buf->st_mtim = 0;
+	buf->st_ctim = 0;
+	return __WASI_ESUCCESS;
     }
 
     // Get file information using Zephyr's fs_stat function
@@ -403,8 +421,11 @@ os_open_preopendir(const char *path, os_file_handle *out)
 	int rc, index;
 	struct zephyr_fs_desc *ptr;
 
-	if (pm_metal_mount_proc_is_sentinel(path)
-	    || (path && strcmp(path, "pm-metal:proc/self") == 0)) {
+	if (path == NULL || out == NULL) {
+		return __WASI_EINVAL;
+	}
+
+	if (pm_metal_wasi_is_proc_sentinel(path)) {
 		ptr = zephyr_fs_alloc_obj(true, path, &index);
 		if (ptr == NULL) {
 			return __WASI_EMFILE;
@@ -425,14 +446,17 @@ os_open_preopendir(const char *path, os_file_handle *out)
 		zephyr_fs_free_obj(ptr);
 		return convert_errno(-rc);
 	}
+	ptr->dir_opened = true;
 
 	*out = index;
 
 	/* Keep first preopen as fallback base; each desc stores its own path. */
+	k_mutex_lock(&desc_array_mutex, K_FOREVER);
 	if (prestat_dir[0] == '\0') {
 		strncpy(prestat_dir, path, MAX_FILE_NAME + 1);
 		prestat_dir[MAX_FILE_NAME] = '\0';
 	}
+	k_mutex_unlock(&desc_array_mutex);
 
 	return __WASI_ESUCCESS;
 }
@@ -611,6 +635,7 @@ os_openat(os_file_handle handle, const char *path, __wasi_oflags_t oflags,
 			zephyr_fs_free_obj(ptr);
 			return convert_errno(-rc);
 		}
+		ptr->dir_opened = true;
     }
     else {
         // Is a file
@@ -695,7 +720,16 @@ os_close(os_file_handle handle, bool is_stdio)
     else {
         GET_FILE_SYSTEM_DESCRIPTOR(handle, ptr);
 
-        rc = ptr->is_dir ? fs_closedir(&ptr->dir) : fs_close(&ptr->file);
+        if (ptr->is_dir) {
+            if (ptr->dir_opened) {
+                rc = fs_closedir(&ptr->dir);
+                ptr->dir_opened = false;
+            } else {
+                rc = 0;
+            }
+        } else {
+            rc = fs_close(&ptr->file);
+        }
         zephyr_fs_free_obj(ptr);
     }
 
@@ -710,8 +744,8 @@ __wasi_errno_t
 os_preadv(os_file_handle handle, const struct __wasi_iovec_t *iov, int iovcnt,
           __wasi_filesize_t offset, size_t *nread)
 {
-    if (handle == STDIN_FILENO) {
-        return __WASI_ENOSYS;
+    if (os_is_virtual_fd(handle)) {
+        return __WASI_ESPIPE;
     }
 
     struct zephyr_fs_desc *ptr = NULL;
@@ -751,6 +785,10 @@ __wasi_errno_t
 os_pwritev(os_file_handle handle, const struct __wasi_ciovec_t *iov, int iovcnt,
            __wasi_filesize_t offset, size_t *nwritten)
 {
+    if (os_is_virtual_fd(handle)) {
+        return __WASI_ESPIPE;
+    }
+
     struct zephyr_fs_desc *ptr = NULL;
     ssize_t total_written = 0;
 
@@ -790,6 +828,10 @@ os_readv(os_file_handle handle, const struct __wasi_iovec_t *iov, int iovcnt,
 {
     struct zephyr_fs_desc *ptr = NULL;
     ssize_t total_read = 0;
+
+    if (os_is_virtual_fd(handle)) {
+        return __WASI_ENOSYS;
+    }
 
     if (pm_metal_port_pipe_is_ours(handle)) {
         for (int i = 0; i < iovcnt; i++) {
@@ -964,8 +1006,7 @@ os_symlinkat(const char *old_path, os_file_handle handle, const char *new_path)
 __wasi_errno_t
 os_mkdirat(os_file_handle handle, const char *path)
 {
-    struct zephyr_fs_desc *ptr = NULL;
-    int index, rc;
+    int rc;
     char abs_path[MAX_FILE_NAME + 1];
 
     if (handle < 0) {
@@ -976,18 +1017,12 @@ os_mkdirat(os_file_handle handle, const char *path)
         return __WASI_ENOMEM;
     }
 
+    /* mkdir needs no open fd — do not allocate a desc_array slot (that
+     * would leak one CONFIG_WASI_MAX_OPEN_FILES entry per successful mkdir). */
     rc = fs_mkdir(abs_path);
     if (rc < 0) {
         return convert_errno(-rc);
     }
-
-    ptr = zephyr_fs_alloc_obj(true, abs_path, &index);
-    if (!ptr) {
-        fs_unlink(abs_path);
-        return __WASI_EMFILE;
-    }
-    fs_dir_t_init(&ptr->dir);
-
 
     return __WASI_ESUCCESS;
 }
@@ -1073,16 +1108,10 @@ os_unlinkat(os_file_handle handle, const char *path, bool is_dir)
         return convert_errno(-rc);
     }
 
-    // Search for any active descriptor referencing this path and free it.
-    k_mutex_lock(&desc_array_mutex, K_FOREVER);
-    for (int i = 0; i < CONFIG_WASI_MAX_OPEN_FILES; i++) {
-        struct zephyr_fs_desc *ptr = &desc_array[i];
-        if (ptr->used && ptr->path && strcmp(ptr->path, abs_path) == 0) {
-            zephyr_fs_free_obj(ptr);
-            break;
-        }
-    }
-    k_mutex_unlock(&desc_array_mutex);
+    /* POSIX unlink-while-open: remove the directory entry only. Any still-
+     * open desc_array entry for this path stays valid until os_close —
+     * do not fs_close/free here (that would leak the Zephyr handle mid-
+     * reuse and invalidate a live guest fd). */
 
     return __WASI_ESUCCESS;
 }
@@ -1186,9 +1215,16 @@ os_fdopendir(os_file_handle handle, os_dir_stream *dir_stream)
         return __WASI_ENOTDIR;
     }
 
-    int rc = fs_opendir(&ptr->dir, ptr->path);
-    if (rc < 0) {
-        return convert_errno(-rc);
+    if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+        return __WASI_ENOTSUP;
+    }
+
+    if (!ptr->dir_opened) {
+        int rc = fs_opendir(&ptr->dir, ptr->path);
+        if (rc < 0) {
+            return convert_errno(-rc);
+        }
+        ptr->dir_opened = true;
     }
 
     /* we store the fd in the `os_dir_stream` to use other function */
@@ -1207,13 +1243,19 @@ os_rewinddir(os_dir_stream dir_stream)
     if (!ptr->is_dir)
         return __WASI_ENOTDIR;
 
+    if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+        return __WASI_ENOTSUP;
+    }
+
     int rc = fs_closedir(&ptr->dir); // Close current stream
     if (rc < 0)
         return convert_errno(-rc);
+    ptr->dir_opened = false;
 
     rc = fs_opendir(&ptr->dir, ptr->path); // Reopen from start
     if (rc < 0)
         return convert_errno(-rc);
+    ptr->dir_opened = true;
 
     ptr->dir_index = 0; // Reset virtual position tracker
     return __WASI_ESUCCESS;
@@ -1230,13 +1272,19 @@ os_seekdir(os_dir_stream dir_stream, __wasi_dircookie_t position)
     if (!ptr->is_dir)
         return __WASI_ENOTDIR;
 
+    if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+        return __WASI_ENOTSUP;
+    }
+
     int rc = fs_closedir(&ptr->dir);
     if (rc < 0)
         return convert_errno(-rc);
+    ptr->dir_opened = false;
 
     rc = fs_opendir(&ptr->dir, ptr->path);
     if (rc < 0)
         return convert_errno(-rc);
+    ptr->dir_opened = true;
 
     // Emulate seek by re-reading entries up to 'position'
     struct fs_dirent tmp;
@@ -1261,6 +1309,10 @@ os_readdir(os_dir_stream dir_stream, __wasi_dirent_t *entry,
     GET_FILE_SYSTEM_DESCRIPTOR(dir_stream, ptr);
     if (!ptr->is_dir) {
         return __WASI_ENOTDIR;
+    }
+
+    if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+        return __WASI_ENOTSUP;
     }
 
     int rc = fs_readdir(&ptr->dir, &fs_entry);
@@ -1306,7 +1358,12 @@ os_closedir(os_dir_stream dir_stream)
         return __WASI_ENOTDIR;
     }
 
+    if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+        return __WASI_ENOTSUP;
+    }
+
     int rc = fs_closedir(&ptr->dir);
+    ptr->dir_opened = false;
     zephyr_fs_free_obj(ptr); // free in any case.
     if (rc < 0) {
         return convert_errno(-rc);
@@ -1324,8 +1381,22 @@ os_get_invalid_dir_stream()
 bool
 os_is_dir_stream_valid(os_dir_stream *dir_stream)
 {
-    // DSK: this probably needs a check...
-    return false;
+    struct zephyr_fs_desc *ptr;
+    int fd;
+    bool ok;
+
+    if (dir_stream == NULL) {
+        return false;
+    }
+    fd = *dir_stream;
+    if (fd < 3 || fd >= CONFIG_WASI_MAX_OPEN_FILES + 3) {
+        return false;
+    }
+    k_mutex_lock(&desc_array_mutex, K_FOREVER);
+    ptr = &desc_array[fd - 3];
+    ok = ptr->used && ptr->is_dir;
+    k_mutex_unlock(&desc_array_mutex);
+    return ok;
 }
 
 bool
@@ -1345,11 +1416,12 @@ os_realpath(const char *path, char *resolved_path)
      *            * (fs_file_t) file.mp->mnt_point
      * But we will just use absolute path for now.
      */
-    if ((!path) || (strlen(path) > PATH_MAX)) {
-        // Invalid input, path has to be valid and less than PATH_MAX
+    if ((!path) || (!resolved_path) || (strlen(path) >= PATH_MAX)) {
+        // Reject paths that cannot fit with a trailing NUL in PATH_MAX bytes
         return NULL;
     }
 
+    /* strlen < PATH_MAX ⇒ strncpy copies the NUL within PATH_MAX bytes. */
     return strncpy(resolved_path, path, PATH_MAX);
 }
 

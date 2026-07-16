@@ -26,6 +26,11 @@
 #endif
 
 #define PM_METAL_ZEPHYR_VFS_ROOT "/RAM:"
+/* WAMR kheap — must cover shared linear memory. Mods use wasm32-wasip1-threads
+ * with --max-memory=4MiB (scripts/build-mod.sh); WAMR reserves that full max
+ * from this pool via BH_MALLOC, and multimod can hold two instances:
+ *   MEMORY_REQ >= 2 * MAX_MEMORY + WAMR slack.  Keep in lockstep with
+ * build-mod.sh's MAX_MEMORY and (on native_sim) STATIC_POOL_BYTES. */
 #define PM_METAL_ZEPHYR_MEMORY_REQ (12ull * 1024ull * 1024ull)
 #define PM_METAL_ZEPHYR_BYTECODE_REQ (4ull * 1024ull * 1024ull)
 
@@ -275,17 +280,22 @@ int main(void)
 	/* Leave enough bytecode arena for the largest embedded mod (~250 KiB)
 	 * plus populate scratch; on qemu E820 the arena is much smaller than
 	 * native_sim's static pool. */
-	cfg.bytecode_bytes = PM_METAL_ZEPHYR_BYTECODE_REQ;
-	if (budget > 0 && cfg.bytecode_bytes + (2ull * 1024ull * 1024ull) > budget) {
-		cfg.bytecode_bytes = budget / 4;
-		if (cfg.bytecode_bytes < (512ull * 1024ull)) {
-			cfg.bytecode_bytes = budget / 2;
+	if (budget == 0) {
+		cfg.bytecode_bytes = 0;
+		cfg.memory_bytes = 0;
+	} else {
+		cfg.bytecode_bytes = PM_METAL_ZEPHYR_BYTECODE_REQ;
+		if (cfg.bytecode_bytes + (2ull * 1024ull * 1024ull) > budget) {
+			cfg.bytecode_bytes = budget / 4;
+			if (cfg.bytecode_bytes < (512ull * 1024ull)) {
+				cfg.bytecode_bytes = budget / 2;
+			}
 		}
-	}
-	cfg.memory_bytes = (budget > cfg.bytecode_bytes) ? (budget - cfg.bytecode_bytes)
-							 : PM_METAL_ZEPHYR_MEMORY_REQ;
-	if (cfg.memory_bytes > PM_METAL_ZEPHYR_MEMORY_REQ) {
-		cfg.memory_bytes = PM_METAL_ZEPHYR_MEMORY_REQ;
+		cfg.memory_bytes = (budget > cfg.bytecode_bytes) ? (budget - cfg.bytecode_bytes)
+								 : PM_METAL_ZEPHYR_MEMORY_REQ;
+		if (cfg.memory_bytes > PM_METAL_ZEPHYR_MEMORY_REQ) {
+			cfg.memory_bytes = PM_METAL_ZEPHYR_MEMORY_REQ;
+		}
 	}
 	cfg.vfs_root = PM_METAL_ZEPHYR_VFS_ROOT;
 

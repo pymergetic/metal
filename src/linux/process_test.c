@@ -130,7 +130,7 @@ int main(void)
 
 	/* --- pipe(): "A's stdout -> B's stdin" via two spawn()s and one
 	 * host pipe, no dup()ing (see port/pipe.h's own file header). --- */
-	int64_t pipe_read_fd, pipe_write_fd;
+	int64_t pipe_read_fd = -1, pipe_write_fd = -1;
 	if (pm_metal_port_pipe(&pipe_read_fd, &pipe_write_fd) != 0) {
 		fprintf(stderr, "pipe() failed\n");
 		goto done;
@@ -139,11 +139,15 @@ int main(void)
 	pm_metal_runtime_handle_t h_writer, h_reader;
 	if (pm_metal_runtime_load_file("/mods/t6_pipe_writer.wasm", &h_writer) != 0) {
 		fprintf(stderr, "load t6_pipe_writer failed\n");
+		pm_metal_port_close(pipe_read_fd);
+		pm_metal_port_close(pipe_write_fd);
 		goto done;
 	}
 	if (pm_metal_runtime_load_file("/mods/t7_pipe_reader.wasm", &h_reader) != 0) {
 		fprintf(stderr, "load t7_pipe_reader failed\n");
 		pm_metal_runtime_unload(h_writer);
+		pm_metal_port_close(pipe_read_fd);
+		pm_metal_port_close(pipe_write_fd);
 		goto done;
 	}
 
@@ -161,15 +165,20 @@ int main(void)
 		fprintf(stderr, "spawn t6_pipe_writer failed\n");
 		pm_metal_runtime_unload(h_writer);
 		pm_metal_runtime_unload(h_reader);
+		pm_metal_port_close(pipe_read_fd);
+		pm_metal_port_close(pipe_write_fd);
 		goto done;
 	}
+	pipe_write_fd = -1; /* handed to writer */
 	if (pm_metal_process_spawn(h_reader, 1, reader_argv, 0, NULL, pipe_read_fd, -1, -1, NULL, NULL, &reader_pid)
 	    != 0) {
 		fprintf(stderr, "spawn t7_pipe_reader failed\n");
 		pm_metal_runtime_unload(h_writer);
 		pm_metal_runtime_unload(h_reader);
+		pm_metal_port_close(pipe_read_fd);
 		goto done;
 	}
+	pipe_read_fd = -1; /* handed to reader */
 
 	int writer_exit, reader_exit;
 	if (pm_metal_process_wait(writer_pid, &writer_exit) != 0

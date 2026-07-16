@@ -4,25 +4,36 @@
  * the bottom, not via a second compiled copy of this file).
  *
  * Layout: the arena control struct and every block header live inside the
- * caller's own buffer — no separate bookkeeping allocation. Blocks form a
- * doubly linked list in address order (next/prev = physically adjacent
- * blocks), so free() can coalesce in O(1) without a full-arena scan.
+ * caller's own buffer — no separate bookkeeping allocation. Block links are
+ * *offsets from the arena base* (not raw host pointers), so a wasm guest that
+ * can write its own linear memory cannot forge next/prev into host address
+ * space. free() also requires a live magic + a walk from head so double-free
+ * / bogus pointers are rejected.
  */
 #include "pymergetic/metal/util/arena.h"
 
+#include <limits.h>
 #include <stdint.h>
 
+#include "pymergetic/metal/util/fourcc.h"
+
 #define PM_METAL_UTIL_ARENA_ALIGN (sizeof(void *))
+#define PM_METAL_UTIL_ARENA_MAGIC_USED PM_METAL_UTIL_FOURCC('A', 'R', 'N', 'U')
+#define PM_METAL_UTIL_ARENA_MAGIC_FREE PM_METAL_UTIL_FOURCC('A', 'R', 'N', 'F')
+#define PM_METAL_UTIL_ARENA_OFF_NULL ((size_t)0)
 
 typedef struct pm_metal_util_arena_block {
 	size_t size; /* payload capacity, excludes this header */
 	int used;
-	struct pm_metal_util_arena_block *next; /* next block by address, NULL at end */
-	struct pm_metal_util_arena_block *prev; /* prev block by address, NULL at start */
+	uint32_t magic;
+	size_t next_off; /* 0 = end; else byte offset from arena base */
+	size_t prev_off;
 } pm_metal_util_arena_block_t;
 
 struct pm_metal_util_arena {
-	pm_metal_util_arena_block_t *head;
+	uint8_t *base;
+	size_t buf_len;
+	size_t head_off;
 	size_t used;
 };
 
@@ -31,25 +42,67 @@ static size_t pm_metal_util_arena_round_up(size_t n)
 	return (n + (PM_METAL_UTIL_ARENA_ALIGN - 1)) & ~(PM_METAL_UTIL_ARENA_ALIGN - 1);
 }
 
+static size_t pm_metal_util_arena_block_hdr(void)
+{
+	return pm_metal_util_arena_round_up(sizeof(pm_metal_util_arena_block_t));
+}
+
+static size_t pm_metal_util_arena_off_of(const pm_metal_util_arena_t *arena, const void *p)
+{
+	return (size_t)((const uint8_t *)p - arena->base);
+}
+
+static int pm_metal_util_arena_off_ok(const pm_metal_util_arena_t *arena, size_t off)
+{
+	size_t hdr = pm_metal_util_arena_block_hdr();
+
+	if (off == PM_METAL_UTIL_ARENA_OFF_NULL) {
+		return 0;
+	}
+	if (off < pm_metal_util_arena_round_up(sizeof(pm_metal_util_arena_t))) {
+		return 0;
+	}
+	if (off + hdr > arena->buf_len) {
+		return 0;
+	}
+	if ((off % PM_METAL_UTIL_ARENA_ALIGN) != 0) {
+		return 0;
+	}
+	return 1;
+}
+
+static pm_metal_util_arena_block_t *pm_metal_util_arena_block_at(pm_metal_util_arena_t *arena,
+								 size_t off)
+{
+	if (!pm_metal_util_arena_off_ok(arena, off)) {
+		return NULL;
+	}
+	return (pm_metal_util_arena_block_t *)(arena->base + off);
+}
+
 pm_metal_util_arena_t *pm_metal_util_arena_init(void *buf, size_t buf_len)
 {
 	size_t arena_hdr = pm_metal_util_arena_round_up(sizeof(pm_metal_util_arena_t));
-	size_t block_hdr = pm_metal_util_arena_round_up(sizeof(pm_metal_util_arena_block_t));
+	size_t block_hdr = pm_metal_util_arena_block_hdr();
+	pm_metal_util_arena_t *arena;
+	pm_metal_util_arena_block_t *first;
 
 	if (!buf || buf_len < arena_hdr + block_hdr) {
 		return NULL;
 	}
 
-	pm_metal_util_arena_t *arena = (pm_metal_util_arena_t *)buf;
-	pm_metal_util_arena_block_t *first =
-		(pm_metal_util_arena_block_t *)((uint8_t *)buf + arena_hdr);
+	arena = (pm_metal_util_arena_t *)buf;
+	first = (pm_metal_util_arena_block_t *)((uint8_t *)buf + arena_hdr);
 
 	first->size = buf_len - arena_hdr - block_hdr;
 	first->used = 0;
-	first->next = NULL;
-	first->prev = NULL;
+	first->magic = PM_METAL_UTIL_ARENA_MAGIC_FREE;
+	first->next_off = PM_METAL_UTIL_ARENA_OFF_NULL;
+	first->prev_off = PM_METAL_UTIL_ARENA_OFF_NULL;
 
-	arena->head = first;
+	arena->base = (uint8_t *)buf;
+	arena->buf_len = buf_len;
+	arena->head_off = arena_hdr;
 	arena->used = 0;
 
 	return arena;
@@ -57,18 +110,35 @@ pm_metal_util_arena_t *pm_metal_util_arena_init(void *buf, size_t buf_len)
 
 void *pm_metal_util_arena_alloc(pm_metal_util_arena_t *arena, size_t size)
 {
+	size_t need;
+	size_t block_hdr;
+	size_t off;
+	pm_metal_util_arena_block_t *b;
+
 	if (!arena || size == 0) {
 		return NULL;
 	}
+	if (size > SIZE_MAX - (PM_METAL_UTIL_ARENA_ALIGN - 1)) {
+		return NULL;
+	}
 
-	size_t need = pm_metal_util_arena_round_up(size);
-	size_t block_hdr = pm_metal_util_arena_round_up(sizeof(pm_metal_util_arena_block_t));
-	pm_metal_util_arena_block_t *b;
+	need = pm_metal_util_arena_round_up(size);
+	block_hdr = pm_metal_util_arena_block_hdr();
+	b = NULL;
 
-	for (b = arena->head; b; b = b->next) {
-		if (!b->used && b->size >= need) {
+	for (off = arena->head_off; off != PM_METAL_UTIL_ARENA_OFF_NULL; ) {
+		size_t next_off;
+		pm_metal_util_arena_block_t *cur = pm_metal_util_arena_block_at(arena, off);
+
+		if (!cur) {
+			return NULL;
+		}
+		next_off = cur->next_off;
+		if (!cur->used && cur->size >= need) {
+			b = cur;
 			break;
 		}
+		off = next_off;
 	}
 	if (!b) {
 		return NULL;
@@ -77,22 +147,31 @@ void *pm_metal_util_arena_alloc(pm_metal_util_arena_t *arena, size_t size)
 	/* Split off the remainder as its own free block if there's enough
 	 * room left for another header plus at least one aligned unit. */
 	if (b->size >= need + block_hdr + PM_METAL_UTIL_ARENA_ALIGN) {
+		size_t rest_off = off + block_hdr + need;
 		pm_metal_util_arena_block_t *rest =
-			(pm_metal_util_arena_block_t *)((uint8_t *)b + block_hdr + need);
+			(pm_metal_util_arena_block_t *)(arena->base + rest_off);
 
 		rest->size = b->size - need - block_hdr;
 		rest->used = 0;
-		rest->next = b->next;
-		rest->prev = b;
-		if (rest->next) {
-			rest->next->prev = rest;
+		rest->magic = PM_METAL_UTIL_ARENA_MAGIC_FREE;
+		rest->next_off = b->next_off;
+		rest->prev_off = off;
+		if (rest->next_off != PM_METAL_UTIL_ARENA_OFF_NULL) {
+			pm_metal_util_arena_block_t *n =
+				pm_metal_util_arena_block_at(arena, rest->next_off);
+
+			if (!n) {
+				return NULL;
+			}
+			n->prev_off = rest_off;
 		}
 
-		b->next = rest;
+		b->next_off = rest_off;
 		b->size = need;
 	}
 
 	b->used = 1;
+	b->magic = PM_METAL_UTIL_ARENA_MAGIC_USED;
 	arena->used += b->size;
 
 	return (uint8_t *)b + block_hdr;
@@ -100,34 +179,87 @@ void *pm_metal_util_arena_alloc(pm_metal_util_arena_t *arena, size_t size)
 
 void pm_metal_util_arena_free(pm_metal_util_arena_t *arena, void *ptr)
 {
+	size_t block_hdr;
+	size_t off;
+	size_t walk;
+	pm_metal_util_arena_block_t *b;
+	int found = 0;
+
 	if (!arena || !ptr) {
 		return;
 	}
+	if ((uint8_t *)ptr < arena->base || (uint8_t *)ptr >= arena->base + arena->buf_len) {
+		return;
+	}
 
-	size_t block_hdr = pm_metal_util_arena_round_up(sizeof(pm_metal_util_arena_block_t));
-	pm_metal_util_arena_block_t *b =
-		(pm_metal_util_arena_block_t *)((uint8_t *)ptr - block_hdr);
+	block_hdr = pm_metal_util_arena_block_hdr();
+	off = pm_metal_util_arena_off_of(arena, (uint8_t *)ptr - block_hdr);
+	if (!pm_metal_util_arena_off_ok(arena, off)) {
+		return;
+	}
 
+	/* Must be reachable from head — rejects forged interior pointers. */
+	for (walk = arena->head_off; walk != PM_METAL_UTIL_ARENA_OFF_NULL; ) {
+		pm_metal_util_arena_block_t *w = pm_metal_util_arena_block_at(arena, walk);
+
+		if (!w) {
+			return;
+		}
+		if (walk == off) {
+			found = 1;
+			break;
+		}
+		walk = w->next_off;
+	}
+	if (!found) {
+		return;
+	}
+
+	b = pm_metal_util_arena_block_at(arena, off);
+	if (!b || b->magic != PM_METAL_UTIL_ARENA_MAGIC_USED || !b->used) {
+		return; /* double-free / corrupt */
+	}
+
+	if (arena->used < b->size) {
+		return;
+	}
 	arena->used -= b->size;
 	b->used = 0;
+	b->magic = PM_METAL_UTIL_ARENA_MAGIC_FREE;
 
-	if (b->next && !b->next->used) {
-		pm_metal_util_arena_block_t *n = b->next;
+	if (b->next_off != PM_METAL_UTIL_ARENA_OFF_NULL) {
+		pm_metal_util_arena_block_t *n = pm_metal_util_arena_block_at(arena, b->next_off);
 
-		b->size += block_hdr + n->size;
-		b->next = n->next;
-		if (b->next) {
-			b->next->prev = b;
+		if (n && !n->used && n->magic == PM_METAL_UTIL_ARENA_MAGIC_FREE) {
+			b->size += block_hdr + n->size;
+			b->next_off = n->next_off;
+			if (b->next_off != PM_METAL_UTIL_ARENA_OFF_NULL) {
+				pm_metal_util_arena_block_t *nn =
+					pm_metal_util_arena_block_at(arena, b->next_off);
+
+				if (nn) {
+					nn->prev_off = off;
+				}
+			}
+			n->magic = 0;
 		}
 	}
 
-	if (b->prev && !b->prev->used) {
-		pm_metal_util_arena_block_t *p = b->prev;
+	if (b->prev_off != PM_METAL_UTIL_ARENA_OFF_NULL) {
+		pm_metal_util_arena_block_t *p = pm_metal_util_arena_block_at(arena, b->prev_off);
 
-		p->size += block_hdr + b->size;
-		p->next = b->next;
-		if (p->next) {
-			p->next->prev = p;
+		if (p && !p->used && p->magic == PM_METAL_UTIL_ARENA_MAGIC_FREE) {
+			p->size += block_hdr + b->size;
+			p->next_off = b->next_off;
+			if (p->next_off != PM_METAL_UTIL_ARENA_OFF_NULL) {
+				pm_metal_util_arena_block_t *nn =
+					pm_metal_util_arena_block_at(arena, p->next_off);
+
+				if (nn) {
+					nn->prev_off = b->prev_off;
+				}
+			}
+			b->magic = 0;
 		}
 	}
 }
@@ -147,13 +279,6 @@ size_t pm_metal_util_arena_used(const pm_metal_util_arena_t *arena)
  * 'i' plus an explicit wasm_runtime_addr_native_to_app() call to convert
  * the other way, since only *parameters* get automatic app->native
  * translation.
- *
- * alloc()/free()/used() take the caller's `arena`/`ptr` as a bare '*'
- * (checked length 1, not the full struct size — there is no natural
- * "length" argument at those call sites to pair a '~' with). A guest
- * holds an opaque handle it never dereferences itself, so this is the
- * same trade-off any opaque-handle-over-'*' native API makes; documented
- * here rather than hidden.
  */
 #include "wasm_export.h"
 

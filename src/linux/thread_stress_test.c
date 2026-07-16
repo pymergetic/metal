@@ -127,29 +127,53 @@ int main(void)
 	pthread_t independent[NUM_WORKERS];
 	pthread_t shared_runners[NUM_WORKERS];
 	pthread_t racer;
+	int independent_n = 0;
+	int shared_n = 0;
+	int racer_ok = 0;
 	int i;
+	int fail = 0;
 
 	for (i = 0; i < NUM_WORKERS; i++) {
-		pthread_create(&independent[i], NULL, independent_worker, (void *)(intptr_t)i);
+		if (pthread_create(&independent[i], NULL, independent_worker, (void *)(intptr_t)i) != 0) {
+			fprintf(stderr, "pthread_create(independent[%d]) failed\n", i);
+			fail = 1;
+			break;
+		}
+		independent_n++;
 	}
 	for (i = 0; i < NUM_WORKERS; i++) {
-		pthread_create(&shared_runners[i], NULL, shared_handle_runner, (void *)(intptr_t)i);
+		if (pthread_create(&shared_runners[i], NULL, shared_handle_runner, (void *)(intptr_t)i) != 0) {
+			fprintf(stderr, "pthread_create(shared_runners[%d]) failed\n", i);
+			fail = 1;
+			break;
+		}
+		shared_n++;
 	}
-	pthread_create(&racer, NULL, unload_attempt, NULL);
+	if (pthread_create(&racer, NULL, unload_attempt, NULL) != 0) {
+		fprintf(stderr, "pthread_create(racer) failed\n");
+		fail = 1;
+	} else {
+		racer_ok = 1;
+	}
 
-	for (i = 0; i < NUM_WORKERS; i++) {
+	for (i = 0; i < independent_n; i++) {
 		pthread_join(independent[i], NULL);
 	}
-	for (i = 0; i < NUM_WORKERS; i++) {
+	for (i = 0; i < shared_n; i++) {
 		pthread_join(shared_runners[i], NULL);
 	}
-	pthread_join(racer, NULL);
+	if (racer_ok) {
+		pthread_join(racer, NULL);
+	}
 
 	/* Idempotent-safe: -1 if unload_attempt() above already won the race. */
 	pm_metal_runtime_unload(g_shared_handle);
 
 	pm_metal_runtime_shutdown();
 
+	if (fail) {
+		return 1;
+	}
 	printf("thread_stress: OK\n");
 	return 0;
 }

@@ -31,7 +31,9 @@ int main(void)
 	}
 
 	int reuse = 1;
-	setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+	if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) != 0) {
+		printf("t10_socket_server: setsockopt(SO_REUSEADDR) failed\n");
+	}
 
 	struct sockaddr_in addr;
 	memset(&addr, 0, sizeof(addr));
@@ -78,6 +80,15 @@ int main(void)
 
 	char reply[160];
 	int reply_len = snprintf(reply, sizeof(reply), "echo: %s", buf);
+	if (reply_len < 0) {
+		printf("t10_socket_server: snprintf() failed\n");
+		close(conn_fd);
+		close(listen_fd);
+		return 1;
+	}
+	if ((size_t)reply_len >= sizeof(reply)) {
+		reply_len = (int)sizeof(reply) - 1;
+	}
 	write(conn_fd, reply, (size_t)reply_len);
 
 	printf("t10_socket_server: served \"%s\"\n", buf);

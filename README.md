@@ -16,6 +16,7 @@ Pymergetic-metal: native **runtime** per target that runs **wasm** mods (`wasm32
 | [docs/LAYERS.md](docs/LAYERS.md) | Base layer model — hardware/OS up to the wasm interface |
 | [docs/WASI.md](docs/WASI.md) | WASI preview1 syscalls, host requirements, tiers |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | Process model — long-lived dynamic loader |
+| [docs/MEMORY.md](docs/MEMORY.md) | Host pools vs guest linear memory / mounts — platform comparison + lockstep knobs |
 | [docs/SOURCETREE.md](docs/SOURCETREE.md) | Folder layout (`include/` / `src/`) |
 | [docs/MOUNT.md](docs/MOUNT.md) | Mount system — table, fstab, tmpfs, populate, guest `mount()`/`umount()`, virtual `/proc`, live remount (**linux feature-complete** through Phase 6c; Zephyr deferred) |
 
@@ -74,7 +75,7 @@ Other checks: `scripts/verify-linux-threads.sh` (ThreadSanitizer, concurrent loa
 
 **Zephyr** — scaffolded (`src/zephyr/`, CMake/Kconfig/`prj.conf`), not yet brought up. **NuttX / Rump / Unikraft** — stubs only (NuttX's own stub notes why it should be cheaper to bring up than Zephyr — see `src/nuttx/README.md`).
 
-Not yet exercised: guest-side `pthread_create()` (host thread-manager infra is in; no mod builds against `wasm32-wasip1-threads` yet).
+Mods build against `wasm32-wasip1-threads` by default (`scripts/build-mod.sh`); guest `pthread_create()` is covered by `mods/t23_pthread` in `scripts/verify-linux.sh`.
 
 Detail + remaining steps: [docs/RUNTIME.md § Bring-up plan](docs/RUNTIME.md#bring-up-plan).
 

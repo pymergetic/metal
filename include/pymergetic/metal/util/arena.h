@@ -12,10 +12,12 @@
  * alloc()/free()/used() still only ever touch memory the guest itself
  * owns, init() still never allocates on its own; running the free-list
  * bookkeeping on the host side instead of compiling a second copy of it
- * into every mod is the only thing that changed. The opaque `arena`
- * handle a guest gets back from init()/alloc() is an app offset, not a
- * native pointer — never dereference it directly, only ever pass it back
- * into another call here.
+ * into every mod is the only thing that changed. Block next/prev links are
+ * stored as offsets from the arena base (never raw host pointers) and free()
+ * validates magic + list reachability, so a guest cannot forge host pointers
+ * through its writable linear memory. The opaque `arena` handle a guest gets
+ * back from init()/alloc() is an app offset, not a native pointer — never
+ * dereference it directly, only ever pass it back into another call here.
  */
 #ifndef PYMERGETIC_METAL_UTIL_ARENA_H_
 #define PYMERGETIC_METAL_UTIL_ARENA_H_

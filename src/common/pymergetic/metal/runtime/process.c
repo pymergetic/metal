@@ -169,7 +169,8 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 			    int64_t stdin_fd, int64_t stdout_fd, int64_t stderr_fd,
 			    pm_metal_process_exit_cb on_exit, void *on_exit_ctx, pm_metal_process_id_t *out_pid)
 {
-	if (!g_pm_metal_process.initialized || !out_pid || argc <= 0 || !argv || envc < 0) {
+	if (!g_pm_metal_process.initialized || !out_pid || argc <= 0 || !argv || envc < 0
+	    || (envc > 0 && !envp)) {
 		return -1;
 	}
 
@@ -237,22 +238,37 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 		size_t len = strlen(argv[i]) + 1;
 
 		slot->argv[i] = malloc(len);
-		if (slot->argv[i]) {
-			memcpy(slot->argv[i], argv[i], len);
+		if (!slot->argv[i]) {
+			pm_metal_process_free_owned(slot);
+			pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
+			pm_metal_runtime_release(handle);
+			fprintf(stderr, "pm_metal_process: out of memory\n");
+			return -1;
 		}
+		memcpy(slot->argv[i], argv[i], len);
 	}
 	for (i = 0; i < envc; i++) {
 		size_t len = strlen(envp[i]) + 1;
 
 		slot->envp[i] = malloc(len);
-		if (slot->envp[i]) {
-			memcpy(slot->envp[i], envp[i], len);
+		if (!slot->envp[i]) {
+			pm_metal_process_free_owned(slot);
+			pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
+			pm_metal_runtime_release(handle);
+			fprintf(stderr, "pm_metal_process: out of memory\n");
+			return -1;
 		}
+		memcpy(slot->envp[i], envp[i], len);
 	}
 	slot->envp[envc] = malloc(strlen(pid_env) + 1);
-	if (slot->envp[envc]) {
-		memcpy(slot->envp[envc], pid_env, strlen(pid_env) + 1);
+	if (!slot->envp[envc]) {
+		pm_metal_process_free_owned(slot);
+		pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
+		pm_metal_runtime_release(handle);
+		fprintf(stderr, "pm_metal_process: out of memory\n");
+		return -1;
 	}
+	memcpy(slot->envp[envc], pid_env, strlen(pid_env) + 1);
 
 	slot->handle = handle;
 	slot->argc = argc;

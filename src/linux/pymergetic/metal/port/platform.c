@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <limits.h>
 #include <time.h>
 #include <errno.h>
 
@@ -28,23 +29,30 @@ int pm_metal_port_read_file(const char *host_path, uint8_t **out_buf, uint32_t *
 		fclose(f);
 		return -1;
 	}
+	/* bytecode->alloc takes uint32_t; reject before truncating so fread
+	 * length can never diverge from the allocated buffer size. */
+	if ((unsigned long)size > UINT32_MAX) {
+		fclose(f);
+		return -1;
+	}
 
+	uint32_t len = (uint32_t)size;
 	const pm_metal_memory_ops_t *bytecode = pm_metal_memory_bytecode_ops();
-	uint8_t *buf = bytecode->alloc((uint32_t)size);
+	uint8_t *buf = bytecode->alloc(len);
 	if (!buf) {
 		fclose(f);
 		return -1;
 	}
 
-	size_t n = fread(buf, 1, (size_t)size, f);
+	size_t n = fread(buf, 1, (size_t)len, f);
 	fclose(f);
-	if (n != (size_t)size) {
+	if (n != (size_t)len) {
 		bytecode->free(buf);
 		return -1;
 	}
 
 	*out_buf = buf;
-	*out_len = (uint32_t)size;
+	*out_len = len;
 	return 0;
 }
 
@@ -76,7 +84,7 @@ int pm_metal_port_write_file(const char *host_path, const uint8_t *data, uint32_
 
 int pm_metal_port_mkdir(const char *host_path)
 {
-	char path[512];
+	char path[PATH_MAX];
 	size_t len;
 	size_t i;
 	struct stat st;
