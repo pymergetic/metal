@@ -6,12 +6,10 @@
 #ifndef PM_METAL_WASI_SOCKET_H_
 #define PM_METAL_WASI_SOCKET_H_
 
-/* 1 if handle is a metal WASI socket slot, else 0 */
+/* 1 if handle is a metal WASI socket slot (including mid-close), else 0 */
 int pm_metal_wasi_socket_is_ours(int handle);
 /* 1 tcp, 0 udp, -1 unknown / not ours */
 int pm_metal_wasi_socket_is_tcp(int handle);
-/* underlying zsock fd or -1 */
-int pm_metal_wasi_socket_zfd(int handle);
 
 /* Same contracts as WAMR os_socket_* (bh_socket_t == int here). */
 int os_socket_close(int socket);

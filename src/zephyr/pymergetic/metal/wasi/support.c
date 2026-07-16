@@ -104,36 +104,44 @@ os_clock_time_get(__wasi_clockid_t clock_id, __wasi_timestamp_t precision,
 }
 
 /*
- * Zephyr WASI rwlocks are intentional no-ops for this single-threaded-per-instance
- * bring-up. They must be replaced (e.g. with k_mutex) before multi-threaded guest
- * use relies on them — concurrent readers/writers currently get no exclusion.
+ * WASI fd-table / prestats rwlocks (libc-wasi). Writer-exclusive via k_mutex
+ * — enough for wasi-threads; korp_rwlock is zmutex_t (patches/wamr/0007-*).
  */
 int
 os_rwlock_init(korp_rwlock *lock)
 {
-	(void)lock;
+	if (lock == NULL) {
+		return -1;
+	}
+	k_mutex_init(lock);
 	return 0;
 }
 
 int
 os_rwlock_rdlock(korp_rwlock *lock)
 {
-	(void)lock;
-	return 0;
+	if (lock == NULL) {
+		return -1;
+	}
+	return k_mutex_lock(lock, K_FOREVER);
 }
 
 int
 os_rwlock_wrlock(korp_rwlock *lock)
 {
-	(void)lock;
-	return 0;
+	if (lock == NULL) {
+		return -1;
+	}
+	return k_mutex_lock(lock, K_FOREVER);
 }
 
 int
 os_rwlock_unlock(korp_rwlock *lock)
 {
-	(void)lock;
-	return 0;
+	if (lock == NULL) {
+		return -1;
+	}
+	return k_mutex_unlock(lock);
 }
 
 int

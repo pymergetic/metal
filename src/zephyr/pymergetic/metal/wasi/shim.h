@@ -55,7 +55,6 @@ static inline uint32_t htonl(uint32_t hostlong)
 #include <stdarg.h> /* ioctl(FIONREAD, int *) varargs below */
 
 int pm_metal_wasi_socket_is_ours(int handle);
-int pm_metal_wasi_socket_zfd(int handle);
 int pm_metal_wasi_socket_poll(void *fds, int nfds, int timeout);
 int pm_metal_wasi_socket_ioctl_fionread(int handle, int *avail);
 

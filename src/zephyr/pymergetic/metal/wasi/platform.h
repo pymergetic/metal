@@ -44,6 +44,8 @@ typedef struct zephyr_fs_desc {
 	bool used;
 	bool is_sock;
 	bool dir_opened; /* true after successful fs_opendir; skip double-open */
+	bool closing; /* close requested; reject new acquires */
+	int refs; /* in-flight ops; slot freed when closing && refs == 0 */
 	uint32_t dir_index;
 } zephyr_fs_desc;
 
