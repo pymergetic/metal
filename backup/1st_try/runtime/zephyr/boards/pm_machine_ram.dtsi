@@ -1,5 +1,0 @@
-#include <mem.h>
-
-/* Machine RAM size (KiB). Both board overlays include this file. */
-#define PM_MACHINE_RAM_KIB 98304
-#define PM_MACHINE_RAM_BYTES DT_SIZE_K(PM_MACHINE_RAM_KIB)
