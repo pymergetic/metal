@@ -342,6 +342,8 @@ int pm_metal_process_wait(pm_metal_process_id_t pid, int *out_exit_code)
 
 int pm_metal_process_kill(pm_metal_process_id_t pid)
 {
+	pm_metal_runtime_exec_t *exec = NULL;
+
 	if (!g_pm_metal_process.initialized || pid.pid == 0 || pid.pid > PM_METAL_PROCESS_MAX) {
 		return -1;
 	}
@@ -354,22 +356,44 @@ int pm_metal_process_kill(pm_metal_process_id_t pid)
 	if (!slot->used || slot->pid.pid != pid.pid) {
 		rc = -1;
 	} else {
-		/* Held for the whole call below, not just this lookup —
-		 * this is what keeps a concurrent wait()/try_wait() from
-		 * reaping (and a future spawn() from reusing) this exact
-		 * slot out from under us between the check above and
-		 * pm_metal_runtime_terminate() actually touching
-		 * slot->exec. Lock nesting order is always this lock
-		 * first, then g_pm_metal_runtime_lock (runtime.c's own,
-		 * taken inside terminate() itself) — never the reverse,
-		 * so this can never deadlock against anything runtime.c
-		 * itself does. */
-		pm_metal_runtime_terminate(&slot->exec);
+		/* Snapshot under the table lock, then terminate outside it —
+		 * terminate() only needs the exec token, and holding the
+		 * process lock across wasm_runtime_terminate() can stall a
+		 * worker that is trying to mark finished=1 on the same lock
+		 * (and on native_sim, any sleep while a busy guest runs is
+		 * itself risky). Slot reuse is still prevented: only
+		 * wait()/try_wait() reap, and those must not race kill on
+		 * the same pid. */
+		exec = &slot->exec;
 		rc = 0;
 	}
 
 	pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
+
+	if (rc == 0 && exec) {
+		pm_metal_runtime_terminate(exec);
+	}
 	return rc;
+}
+
+int pm_metal_process_exec_live(pm_metal_process_id_t pid)
+{
+	int live = 0;
+
+	if (!g_pm_metal_process.initialized || pid.pid == 0 || pid.pid > PM_METAL_PROCESS_MAX) {
+		return 0;
+	}
+
+	pm_metal_port_mutex_lock(&g_pm_metal_process_lock);
+	{
+		pm_metal_process_slot_t *slot = &g_pm_metal_process.slots[pid.pid - 1];
+
+		if (slot->used && slot->pid.pid == pid.pid && !slot->finished && slot->exec.inst) {
+			live = 1;
+		}
+	}
+	pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);
+	return live;
 }
 
 void pm_metal_process_list(void (*visit)(const pm_metal_process_info_t *info, void *ctx), void *ctx)

@@ -75,7 +75,11 @@ int pm_metal_port_worker_spawn(pm_metal_port_worker_t *w, pm_metal_port_worker_f
 
 	slot->tid = k_thread_create(&slot->thread, slot->stack, PM_METAL_PORT_WORKER_STACK_SIZE,
 				     pm_metal_port_worker_entry, slot, NULL, NULL,
-				     K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
+				     /* Same priority as main so k_yield()/timeslicing
+				      * can preempt a busy wasm loop (native_sim); a
+				      * lower-priority worker is starved forever under
+				      * a hot guest, and kill()/wait() never run. */
+				     K_PRIO_PREEMPT(0), 0, K_NO_WAIT);
 	if (!slot->tid) {
 		slot->used = 0;
 		return -1;

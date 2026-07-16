@@ -297,10 +297,6 @@ os_fstatat(os_file_handle handle, const char *path,
 
     char abs_path[MAX_FILE_NAME + 1];
 
-    if (handle < 0) {
-        return __WASI_EINVAL; // Or another appropriate error code
-    }
-
     if (!build_absolute_path(abs_path, sizeof(abs_path), path)) {
         return __WASI_ENOMEM;
     }

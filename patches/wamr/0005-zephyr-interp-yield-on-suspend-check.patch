@@ -1,0 +1,57 @@
+Zephyr: yield inside CHECK_SUSPEND_FLAGS() so a hot wasm loop cannot
+starve the controller thread on native_sim (and similar), and also
+observe cur_exception[] so terminate() still stops the loop when
+wasm_clusters_search_exec_env() misses (local exception only — no
+SUSPEND_FLAG_TERMINATE). That miss has been seen on qemu_x86_64 SMP:
+kill() returns, exception is set, but the BR path never saw TERMINATE
+and wait() hung forever; UP (native_sim / MP_MAX_NUM_CPUS=1) was fine.
+
+native_sim only runs lower-priority threads when the current thread
+blocks or yields. Metal's process smoke kill()s t5_spin from the main
+thread; without a yield on the BR path that already polls
+WASM_SUSPEND_FLAG_TERMINATE, main never gets CPU after the worker
+enters its busy loop (and k_msleep never advances while a guest spins).
+Yielding here is also what lets terminate() be observed promptly.
+
+Applied by scripts/setup-wamr.sh. See docs/SOURCETREE.md "Vendoring".
+
+diff --git a/core/iwasm/interpreter/wasm_interp_classic.c b/core/iwasm/interpreter/wasm_interp_classic.c
+index 9f7e03e2..c3d4e5f6 100644
+--- a/core/iwasm/interpreter/wasm_interp_classic.c
++++ b/core/iwasm/interpreter/wasm_interp_classic.c
+@@ -1432,6 +1432,12 @@ wasm_interp_call_func_import(WASMModuleInstance *module_inst,
+ #define SUSPENSION_UNLOCK()
+ #endif
+ 
++#if defined(BH_PLATFORM_ZEPHYR)
++#include <zephyr/kernel.h>
++#define PM_METAL_WAMR_YIELD() k_yield()
++#else
++#define PM_METAL_WAMR_YIELD() ((void)0)
++#endif
+ #define CHECK_SUSPEND_FLAGS()                                         \
+     do {                                                              \
+         WASM_SUSPEND_FLAGS_LOCK(exec_env->wait_lock);                 \
+@@ -1440,6 +1446,12 @@ wasm_interp_call_func_import(WASMModuleInstance *module_inst,
+             WASM_SUSPEND_FLAGS_UNLOCK(exec_env->wait_lock);           \
+             return;                                                   \
+         }                                                             \
++        /* pymergetic/metal: wasm_runtime_terminate() may only set     \
++         * cur_exception (search_exec_env miss) without TERMINATE. */ \
++        if (module->cur_exception[0] != '\0') {                       \
++            WASM_SUSPEND_FLAGS_UNLOCK(exec_env->wait_lock);           \
++            return;                                                   \
++        }                                                             \
+         while (WASM_SUSPEND_FLAGS_GET(exec_env->suspend_flags)        \
+                & WASM_SUSPEND_FLAG_SUSPEND) {                         \
+             /* suspend current thread */                              \
+@@ -1449,6 +1461,9 @@ wasm_interp_call_func_import(WASMModuleInstance *module_inst,
+             SUSPENSION_UNLOCK()                                       \
+         }                                                             \
+         WASM_SUSPEND_FLAGS_UNLOCK(exec_env->wait_lock);               \
++        /* pymergetic/metal: let the controller run kill()/wait() on   \
++         * native_sim while a guest is in a pure compute loop. */     \
++        PM_METAL_WAMR_YIELD();                                        \
+     } while (0)
+ #endif /* WASM_ENABLE_DEBUG_INTERP */
+ #endif /* WASM_ENABLE_THREAD_MGR */

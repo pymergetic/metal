@@ -142,6 +142,18 @@ void *pm_metal_memory_zephyr_pool_alloc(uint64_t bytes)
 		void *virt = NULL;
 		size_t need = (size_t)bytes;
 
+		/*
+		 * Cursor is a virtual address in the kernel linear map starting
+		 * at &_end (unused RAM after the image). k_mem_phys_addr() is
+		 * the linear-map formula (virt - vm_base + phys_base), not a
+		 * page-table walk of an already-mapped region — so advancing
+		 * past the originally mapped image still yields consecutive
+		 * physical frames. k_mem_map_phys_bare() then installs a fresh
+		 * RW alias for that frame range.
+		 *
+		 * Exercised by qemu_x86_64 (CONFIG_MMU=y); native_sim uses the
+		 * static-pool path below (!CONFIG_MMU).
+		 */
 		phys = (uintptr_t)k_mem_phys_addr((void *)g_pm_metal_memory_phys_cursor);
 		k_mem_map_phys_bare((uint8_t **)&virt, phys, need, K_MEM_PERM_RW);
 		if (!virt) {

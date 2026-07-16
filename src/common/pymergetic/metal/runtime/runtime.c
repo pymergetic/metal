@@ -646,6 +646,7 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 			exit_code = (int)wasm_runtime_get_wasi_exit_code(inst);
 		} else {
 			const char *exception = wasm_runtime_get_exception(inst);
+
 			fprintf(stderr, "pm_metal_runtime: %s\n",
 				exception ? exception : "run failed");
 			exit_code = -1;
@@ -674,15 +675,28 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 
 void pm_metal_runtime_terminate(pm_metal_runtime_exec_t *exec)
 {
+	wasm_module_inst_t inst = NULL;
+
 	if (!exec) {
 		return;
 	}
 
+	/* Snapshot under the runtime lock, then terminate outside it.
+	 * Holding g_pm_metal_runtime_lock across wasm_runtime_terminate()
+	 * can deadlock the worker on SMP targets: terminate() may need
+	 * cluster/wait locks while the worker is trying to re-take this
+	 * same runtime lock for deinstantiate() after noticing the flag
+	 * (or while already holding a WAMR lock that terminate also
+	 * needs). Instantiating concurrent deinstantiate() is still safe
+	 * — run_ex() clears exec->inst under the same lock before freeing
+	 * the instance, and kill only runs while the worker is mid-flight. */
 	pm_metal_port_mutex_lock(&g_pm_metal_runtime_lock);
-	if (exec->inst) {
-		wasm_runtime_terminate((wasm_module_inst_t)exec->inst);
-	}
+	inst = (wasm_module_inst_t)exec->inst;
 	pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
+
+	if (inst) {
+		wasm_runtime_terminate(inst);
+	}
 }
 
 int pm_metal_runtime_hold(pm_metal_runtime_handle_t h)

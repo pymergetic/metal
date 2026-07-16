@@ -148,6 +148,15 @@ int pm_metal_process_kill(pm_metal_process_id_t pid);
 
 /* impl: common — src/common/pymergetic/metal/runtime/process.c
  *
+ * 1 if this pid's run_ex() has published its exec token (instantiate
+ * done, guest may be in the interp loop) and has not finished yet —
+ * the window where kill() actually interrupts a hot loop. 0 otherwise.
+ * Used by Zephyr process smoke to avoid kill()-before-ready (a no-op)
+ * without sleeping (native_sim cannot advance time under a busy guest). */
+int pm_metal_process_exec_live(pm_metal_process_id_t pid);
+
+/* impl: common — src/common/pymergetic/metal/runtime/process.c
+ *
  * Visits every currently-tracked process (running, or finished but not
  * yet reaped by try_wait()/wait()) in table order — read-only, never
  * reaps anything itself (see spawn()'s own opportunistic sweep for
