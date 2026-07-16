@@ -141,10 +141,74 @@ static int pm_metal_zephyr_process_smoke(void)
 	printk("verify: process t4_getpid pid=%u exit=%d\n", pid.pid, exit_code);
 	pm_metal_runtime_unload(h);
 
-	/* kill()+t5_spin: wasm_runtime_terminate can stall the interpreter on
-	 * this Zephyr build; spawn/wait/PID injection is covered by t4 above.
-	 * Pipe pairs are exercised on linux verify-linux-process.sh. */
-	printk("verify: process t5_spin killed exit=0\n");
+	/* kill() must stop a still-running hot loop (mods/t5_spin). */
+	if (pm_metal_runtime_load_file("/mods/t5_spin.wasm", &h) != 0) {
+		printk("verify: process load t5 failed\n");
+		return -1;
+	}
+	{
+		char *argv_spin[] = { "t5_spin" };
+		pm_metal_process_id_t spin_pid;
+		int still;
+		int spin_exit = 0;
+		int i;
+
+		if (pm_metal_process_spawn(h, 1, argv_spin, 0, NULL, -1, -1, -1, NULL, NULL,
+					    &spin_pid)
+		    != 0) {
+			printk("verify: process spawn t5 failed\n");
+			pm_metal_runtime_unload(h);
+			return -1;
+		}
+		/*
+		 * Wait until run_ex() has published exec.inst (kill before
+		 * that is a documented no-op). Yield-poll — workers run at
+		 * the same priority as main and WAMR patch 0005 yields on
+		 * BR, so this makes progress on native_sim (k_msleep cannot:
+		 * simulated time does not advance under a busy guest).
+		 */
+		for (i = 0; i < 100000; i++) {
+			if (pm_metal_process_exec_live(spin_pid)) {
+				break;
+			}
+			still = pm_metal_process_try_wait(spin_pid, &spin_exit);
+			if (still < 0) {
+				printk("verify: t5 try_wait error before kill\n");
+				pm_metal_runtime_unload(h);
+				return -1;
+			}
+			if (still > 0) {
+				printk("verify: t5 finished before kill (exit=%d)\n", spin_exit);
+				pm_metal_runtime_unload(h);
+				return -1;
+			}
+			k_yield();
+		}
+		if (!pm_metal_process_exec_live(spin_pid)) {
+			printk("verify: t5 exec never went live before kill\n");
+			(void)pm_metal_process_kill(spin_pid);
+			(void)pm_metal_process_wait(spin_pid, &spin_exit);
+			pm_metal_runtime_unload(h);
+			return -1;
+		}
+		if (pm_metal_process_kill(spin_pid) != 0) {
+			printk("verify: process kill t5 failed\n");
+			pm_metal_runtime_unload(h);
+			return -1;
+		}
+		if (pm_metal_process_wait(spin_pid, &spin_exit) != 0) {
+			printk("verify: process wait t5 after kill failed\n");
+			pm_metal_runtime_unload(h);
+			return -1;
+		}
+		if (spin_exit == 0) {
+			printk("verify: t5 exited 0 — kill() proved nothing\n");
+			pm_metal_runtime_unload(h);
+			return -1;
+		}
+		printk("verify: process t5_spin killed exit=%d\n", spin_exit);
+	}
+	pm_metal_runtime_unload(h);
 	return 0;
 }
 #endif
