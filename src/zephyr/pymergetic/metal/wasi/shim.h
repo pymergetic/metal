@@ -65,11 +65,6 @@ int pm_metal_wasi_socket_ioctl_fionread(int handle, int *avail);
 
 static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 {
-	struct pollfd zfds[PM_METAL_WASI_SHIM_POLL_MAX];
-	int saved[PM_METAL_WASI_SHIM_POLL_MAX];
-	nfds_t i;
-	int ret;
-
 	if (fds == NULL && nfds > 0) {
 		errno = EFAULT;
 		return -1;
@@ -78,25 +73,8 @@ static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 		errno = EINVAL;
 		return -1;
 	}
-
-	for (i = 0; i < nfds; i++) {
-		saved[i] = fds[i].fd;
-		zfds[i].events = fds[i].events;
-		zfds[i].revents = 0;
-		if (pm_metal_wasi_socket_is_ours(fds[i].fd)) {
-			zfds[i].fd = pm_metal_wasi_socket_zfd(fds[i].fd);
-		} else {
-			/* Non-socket fds: leave as-is for zsock_poll / vfs. */
-			zfds[i].fd = fds[i].fd;
-		}
-	}
-
-	ret = pm_metal_wasi_socket_poll(zfds, (int)nfds, timeout);
-	for (i = 0; i < nfds; i++) {
-		fds[i].fd = saved[i];
-		fds[i].revents = zfds[i].revents;
-	}
-	return ret;
+	/* socket.c filters/translates sockets, pipes, and other synthetic fds. */
+	return pm_metal_wasi_socket_poll(fds, (int)nfds, timeout);
 }
 
 #else /* !CONFIG_NET_SOCKETS */

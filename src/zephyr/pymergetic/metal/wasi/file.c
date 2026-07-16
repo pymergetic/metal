@@ -961,6 +961,11 @@ os_readv(os_file_handle handle, const struct __wasi_iovec_t *iov, int iovcnt,
             int bytes_read =
                 os_socket_recv(handle, iov[i].buf, (unsigned int)iov[i].buf_len);
             if (bytes_read < 0) {
+                /* Report progress from earlier iovecs (WASI readv semantics). */
+                if (total_read > 0) {
+                    *nread = total_read;
+                    return __WASI_ESUCCESS;
+                }
                 return convert_errno(errno);
             }
             total_read += bytes_read;
@@ -1037,6 +1042,11 @@ os_writev(os_file_handle handle, const struct __wasi_ciovec_t *iov, int iovcnt,
             int bytes_written = os_socket_send(
                 handle, iov[i].buf, (unsigned int)iov[i].buf_len);
             if (bytes_written < 0) {
+                /* Report progress from earlier iovecs (WASI writev semantics). */
+                if (total_written > 0) {
+                    *nwritten = total_written;
+                    return __WASI_ESUCCESS;
+                }
                 return convert_errno(errno);
             }
             total_written += bytes_written;

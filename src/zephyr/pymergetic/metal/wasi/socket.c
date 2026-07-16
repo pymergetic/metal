@@ -9,8 +9,10 @@
 #include "libc_errno.h"
 
 #include "pymergetic/metal/wasi/socket.h"
+#include "pymergetic/metal/port/pipe_zephyr.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -28,6 +30,8 @@ typedef struct {
 	int zfd;
 	int is_tcp; /* 1 stream, 0 dgram */
 	int used;
+	int closing;
+	int refs; /* in-flight ops; close waits until 0 before zsock_close */
 } pm_metal_sock_t;
 
 static pm_metal_sock_t g_pm_metal_socks[PM_METAL_SOCK_MAX];
@@ -53,26 +57,59 @@ pm_metal_sock_index(int handle)
 	return idx;
 }
 
+/* Acquire a live slot for an op (bumps refs). Pair with pm_metal_sock_release. */
 static int
-pm_metal_sock_lookup_zfd(bh_socket_t handle, int *out_zfd)
+pm_metal_sock_acquire(bh_socket_t handle, int *out_zfd)
 {
 	int idx = pm_metal_sock_index((int)handle);
-	int zfd = -1;
 
 	if (idx < 0 || out_zfd == NULL) {
 		errno = EBADF;
 		return BHT_ERROR;
 	}
 	k_mutex_lock(&g_pm_metal_sock_table_lock, K_FOREVER);
-	if (!g_pm_metal_socks[idx].used) {
+	if (!g_pm_metal_socks[idx].used || g_pm_metal_socks[idx].closing) {
 		k_mutex_unlock(&g_pm_metal_sock_table_lock);
 		errno = EBADF;
 		return BHT_ERROR;
 	}
-	zfd = g_pm_metal_socks[idx].zfd;
+	g_pm_metal_socks[idx].refs++;
+	*out_zfd = g_pm_metal_socks[idx].zfd;
 	k_mutex_unlock(&g_pm_metal_sock_table_lock);
-	*out_zfd = zfd;
 	return BHT_OK;
+}
+
+static void
+pm_metal_sock_release(bh_socket_t handle)
+{
+	int idx = pm_metal_sock_index((int)handle);
+	int zfd_close = -1;
+
+	if (idx < 0) {
+		return;
+	}
+	k_mutex_lock(&g_pm_metal_sock_table_lock, K_FOREVER);
+	if (g_pm_metal_socks[idx].refs > 0) {
+		g_pm_metal_socks[idx].refs--;
+	}
+	if (g_pm_metal_socks[idx].closing && g_pm_metal_socks[idx].refs == 0) {
+		zfd_close = g_pm_metal_socks[idx].zfd;
+		g_pm_metal_socks[idx].used = 0;
+		g_pm_metal_socks[idx].closing = 0;
+		g_pm_metal_socks[idx].zfd = -1;
+		g_pm_metal_socks[idx].is_tcp = 0;
+	}
+	k_mutex_unlock(&g_pm_metal_sock_table_lock);
+	if (zfd_close >= 0) {
+		(void)zsock_close(zfd_close);
+	}
+}
+
+/* Legacy name: acquire for an op (callers must pm_metal_sock_release). */
+static int
+pm_metal_sock_lookup_zfd(bh_socket_t handle, int *out_zfd)
+{
+	return pm_metal_sock_acquire(handle, out_zfd);
 }
 
 static int
@@ -90,6 +127,8 @@ pm_metal_sock_alloc(int zfd, int is_tcp, bh_socket_t *out)
 			g_pm_metal_socks[i].zfd = zfd;
 			g_pm_metal_socks[i].is_tcp = is_tcp ? 1 : 0;
 			g_pm_metal_socks[i].used = 1;
+			g_pm_metal_socks[i].closing = 0;
+			g_pm_metal_socks[i].refs = 0;
 			*out = (bh_socket_t)(PM_METAL_SOCK_FD_BASE + i);
 			k_mutex_unlock(&g_pm_metal_sock_table_lock);
 			return BHT_OK;
@@ -100,34 +139,19 @@ pm_metal_sock_alloc(int zfd, int is_tcp, bh_socket_t *out)
 	return BHT_ERROR;
 }
 
-static void
-pm_metal_sock_free(int handle)
-{
-	int idx = pm_metal_sock_index(handle);
-
-	if (idx < 0) {
-		return;
-	}
-	k_mutex_lock(&g_pm_metal_sock_table_lock, K_FOREVER);
-	g_pm_metal_socks[idx].used = 0;
-	g_pm_metal_socks[idx].zfd = -1;
-	g_pm_metal_socks[idx].is_tcp = 0;
-	k_mutex_unlock(&g_pm_metal_sock_table_lock);
-}
-
 int
 pm_metal_wasi_socket_is_ours(int handle)
 {
 	int idx = pm_metal_sock_index(handle);
-	int used = 0;
+	int ours = 0;
 
 	if (idx < 0) {
 		return 0;
 	}
 	k_mutex_lock(&g_pm_metal_sock_table_lock, K_FOREVER);
-	used = g_pm_metal_socks[idx].used;
+	ours = g_pm_metal_socks[idx].used && !g_pm_metal_socks[idx].closing;
 	k_mutex_unlock(&g_pm_metal_sock_table_lock);
-	return used;
+	return ours;
 }
 
 int
@@ -165,21 +189,21 @@ pm_metal_wasi_socket_zfd(int handle)
 }
 
 int
-pm_metal_wasi_socket_poll(void *fds, int nfds, int timeout)
-{
-	return zsock_poll((struct zsock_pollfd *)fds, nfds, timeout);
-}
-
-int
 pm_metal_wasi_socket_ioctl_fionread(int handle, int *avail)
 {
-	int zfd = pm_metal_wasi_socket_zfd(handle);
+	int zfd;
+	int ret;
 
-	if (zfd < 0 || avail == NULL) {
+	if (avail == NULL) {
 		errno = EBADF;
 		return -1;
 	}
-	return zsock_ioctl(zfd, ZFD_IOCTL_FIONREAD, avail);
+	if (pm_metal_sock_acquire((bh_socket_t)handle, &zfd) != BHT_OK) {
+		return -1;
+	}
+	ret = zsock_ioctl(zfd, ZFD_IOCTL_FIONREAD, avail);
+	pm_metal_sock_release((bh_socket_t)handle);
+	return ret;
 }
 
 static bool
@@ -306,8 +330,10 @@ os_socket_setbooloption(bh_socket_t socket, int level, int optname,
 	}
 	if (zsock_setsockopt(zfd, level, optname, &option, sizeof(option))
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -327,9 +353,11 @@ os_socket_getbooloption(bh_socket_t socket, int level, int optname,
 		return BHT_ERROR;
 	}
 	if (zsock_getsockopt(zfd, level, optname, &optval, &optval_size) != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
 	*is_enabled = (bool)optval;
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -385,26 +413,30 @@ os_socket_bind(bh_socket_t socket, const char *addr, int *port)
 		return BHT_ERROR;
 	}
 
-	ling.l_onoff = 1;
-	ling.l_linger = 0;
-
 	if (!textual_addr_to_sockaddr(addr, *port,
 				      (struct net_sockaddr *)&addr_storage,
 				      &socklen)) {
 		errno = EINVAL;
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
 
 	/* Skip Linux-only fcntl(FD_CLOEXEC). */
-
-	ret = zsock_setsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_LINGER, &ling,
-			       sizeof(ling));
-	if (ret < 0) {
-		return BHT_ERROR;
+	/* SO_LINGER is TCP-only; skip for UDP (SOCK-6). */
+	if (pm_metal_wasi_socket_is_tcp((int)socket) == 1) {
+		ling.l_onoff = 1;
+		ling.l_linger = 0;
+		ret = zsock_setsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_LINGER,
+				       &ling, sizeof(ling));
+		if (ret < 0) {
+			pm_metal_sock_release(socket);
+			return BHT_ERROR;
+		}
 	}
 
 	ret = zsock_bind(zfd, (struct net_sockaddr *)&addr_storage, socklen);
 	if (ret < 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
 
@@ -412,6 +444,7 @@ os_socket_bind(bh_socket_t socket, const char *addr, int *port)
 	if (zsock_getsockname(zfd, (struct net_sockaddr *)&addr_storage,
 			      &socklen)
 	    == -1) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
 
@@ -424,10 +457,12 @@ os_socket_bind(bh_socket_t socket, const char *addr, int *port)
 			((struct net_sockaddr_in6 *)&addr_storage)->sin6_port);
 #else
 		errno = EAFNOSUPPORT;
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 #endif
 	}
 
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -445,8 +480,10 @@ os_socket_settimeout(bh_socket_t socket, uint64 timeout_us)
 	if (zsock_setsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_RCVTIMEO, &tv,
 			     sizeof(tv))
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -459,8 +496,10 @@ os_socket_listen(bh_socket_t socket, int max_client)
 		return BHT_ERROR;
 	}
 	if (zsock_listen(zfd, max_client) != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -473,6 +512,14 @@ os_socket_accept(bh_socket_t server_sock, bh_socket_t *sock, void *addr,
 	bh_socket_t metal;
 
 	if (sock == NULL) {
+		errno = EINVAL;
+		return BHT_ERROR;
+	}
+	/*
+	 * Match WAMR posix_socket.c: addr == NULL skips peer address output;
+	 * non-NULL addr requires a valid addrlen in/out (POSIX accept).
+	 */
+	if (addr != NULL && addrlen == NULL) {
 		errno = EINVAL;
 		return BHT_ERROR;
 	}
@@ -489,15 +536,18 @@ os_socket_accept(bh_socket_t server_sock, bh_socket_t *sock, void *addr,
 		*addrlen = (unsigned int)len;
 	}
 	if (new_zfd < 0) {
+		pm_metal_sock_release(server_sock);
 		return BHT_ERROR;
 	}
 
 	/* accept() is TCP only */
 	if (pm_metal_sock_alloc(new_zfd, 1, &metal) != BHT_OK) {
 		zsock_close(new_zfd);
+		pm_metal_sock_release(server_sock);
 		return BHT_ERROR;
 	}
 	*sock = metal;
+	pm_metal_sock_release(server_sock);
 	return BHT_OK;
 }
 
@@ -515,12 +565,15 @@ os_socket_connect(bh_socket_t socket, const char *addr, int port)
 				      (struct net_sockaddr *)&addr_in,
 				      &addr_len)) {
 		errno = EINVAL;
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
 	if (zsock_connect(zfd, (struct net_sockaddr *)&addr_in, addr_len)
 	    == -1) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -528,11 +581,14 @@ int
 os_socket_recv(bh_socket_t socket, void *buf, unsigned int len)
 {
 	int zfd;
+	int ret;
 
 	if (pm_metal_sock_lookup_zfd(socket, &zfd) != BHT_OK) {
 		return -1;
 	}
-	return (int)zsock_recv(zfd, buf, len, 0);
+	ret = (int)zsock_recv(zfd, buf, len, 0);
+	pm_metal_sock_release(socket);
+	return ret;
 }
 
 int
@@ -551,6 +607,7 @@ os_socket_recv_from(bh_socket_t socket, void *buf, unsigned int len, int flags,
 	ret = (int)zsock_recvfrom(zfd, buf, len, flags,
 				  (struct net_sockaddr *)&sock_addr, &socklen);
 	if (ret < 0) {
+		pm_metal_sock_release(socket);
 		return ret;
 	}
 
@@ -558,12 +615,14 @@ os_socket_recv_from(bh_socket_t socket, void *buf, unsigned int len, int flags,
 		if (sockaddr_to_bh_sockaddr((struct net_sockaddr *)&sock_addr,
 					    src_addr)
 		    == BHT_ERROR) {
+			pm_metal_sock_release(socket);
 			return -1;
 		}
 	} else if (src_addr) {
 		memset(src_addr, 0, sizeof(*src_addr));
 	}
 
+	pm_metal_sock_release(socket);
 	return ret;
 }
 
@@ -571,11 +630,14 @@ int
 os_socket_send(bh_socket_t socket, const void *buf, unsigned int len)
 {
 	int zfd;
+	int ret;
 
 	if (pm_metal_sock_lookup_zfd(socket, &zfd) != BHT_OK) {
 		return -1;
 	}
-	return (int)zsock_send(zfd, buf, len, 0);
+	ret = (int)zsock_send(zfd, buf, len, 0);
+	pm_metal_sock_release(socket);
+	return ret;
 }
 
 int
@@ -595,21 +657,44 @@ os_socket_send_to(bh_socket_t socket, const void *buf, unsigned int len,
 	}
 
 	bh_sockaddr_to_sockaddr(dest_addr, &sock_addr, &socklen);
-	return (int)zsock_sendto(zfd, buf, len, flags,
-				 (const struct net_sockaddr *)&sock_addr,
-				 socklen);
+	{
+		int ret = (int)zsock_sendto(zfd, buf, len, flags,
+					    (const struct net_sockaddr *)&sock_addr,
+					    socklen);
+
+		pm_metal_sock_release(socket);
+		return ret;
+	}
 }
 
 int
 os_socket_close(bh_socket_t socket)
 {
-	int zfd;
+	int idx = pm_metal_sock_index((int)socket);
+	int zfd_close = -1;
 
-	if (pm_metal_sock_lookup_zfd(socket, &zfd) != BHT_OK) {
+	if (idx < 0) {
+		errno = EBADF;
 		return BHT_ERROR;
 	}
-	(void)zsock_close(zfd);
-	pm_metal_sock_free((int)socket);
+	k_mutex_lock(&g_pm_metal_sock_table_lock, K_FOREVER);
+	if (!g_pm_metal_socks[idx].used || g_pm_metal_socks[idx].closing) {
+		k_mutex_unlock(&g_pm_metal_sock_table_lock);
+		errno = EBADF;
+		return BHT_ERROR;
+	}
+	g_pm_metal_socks[idx].closing = 1;
+	if (g_pm_metal_socks[idx].refs == 0) {
+		zfd_close = g_pm_metal_socks[idx].zfd;
+		g_pm_metal_socks[idx].used = 0;
+		g_pm_metal_socks[idx].closing = 0;
+		g_pm_metal_socks[idx].zfd = -1;
+		g_pm_metal_socks[idx].is_tcp = 0;
+	}
+	k_mutex_unlock(&g_pm_metal_sock_table_lock);
+	if (zfd_close >= 0) {
+		(void)zsock_close(zfd_close);
+	}
 	return BHT_OK;
 }
 
@@ -622,8 +707,10 @@ os_socket_shutdown(bh_socket_t socket)
 		return convert_errno(errno);
 	}
 	if (zsock_shutdown(zfd, ZSOCK_SHUT_RDWR) != 0) {
+		pm_metal_sock_release(socket);
 		return convert_errno(errno);
 	}
+	pm_metal_sock_release(socket);
 	return __WASI_ESUCCESS;
 }
 
@@ -812,8 +899,10 @@ os_socket_addr_local(bh_socket_t socket, bh_sockaddr_t *sockaddr)
 	if (zsock_getsockname(zfd, (struct net_sockaddr *)&addr_storage,
 			      &addr_len)
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return sockaddr_to_bh_sockaddr((struct net_sockaddr *)&addr_storage,
 				       sockaddr);
 }
@@ -835,8 +924,10 @@ os_socket_addr_remote(bh_socket_t socket, bh_sockaddr_t *sockaddr)
 	if (zsock_getpeername(zfd, (struct net_sockaddr *)&addr_storage,
 			      &addr_len)
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return sockaddr_to_bh_sockaddr((struct net_sockaddr *)&addr_storage,
 				       sockaddr);
 }
@@ -853,8 +944,10 @@ os_socket_set_send_buf_size(bh_socket_t socket, size_t bufsiz)
 	if (zsock_setsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_SNDBUF,
 			     &buf_size_int, sizeof(buf_size_int))
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -875,9 +968,11 @@ os_socket_get_send_buf_size(bh_socket_t socket, size_t *bufsiz)
 	if (zsock_getsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_SNDBUF,
 			     &buf_size_int, &bufsiz_len)
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
 	*bufsiz = (size_t)buf_size_int;
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -893,8 +988,10 @@ os_socket_set_recv_buf_size(bh_socket_t socket, size_t bufsiz)
 	if (zsock_setsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_RCVBUF,
 			     &buf_size_int, sizeof(buf_size_int))
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -915,9 +1012,11 @@ os_socket_get_recv_buf_size(bh_socket_t socket, size_t *bufsiz)
 	if (zsock_getsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_RCVBUF,
 			     &buf_size_int, &bufsiz_len)
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
 	*bufsiz = (size_t)buf_size_int;
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -949,8 +1048,10 @@ os_socket_set_send_timeout(bh_socket_t socket, uint64 timeout_us)
 	if (zsock_setsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_SNDTIMEO, &tv,
 			     sizeof(tv))
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -971,9 +1072,11 @@ os_socket_get_send_timeout(bh_socket_t socket, uint64 *timeout_us)
 	if (zsock_getsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_SNDTIMEO, &tv,
 			     &tv_len)
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
 	*timeout_us = ((uint64)tv.tv_sec * 1000000UL) + (uint64)tv.tv_usec;
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -991,8 +1094,10 @@ os_socket_set_recv_timeout(bh_socket_t socket, uint64 timeout_us)
 	if (zsock_setsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_RCVTIMEO, &tv,
 			     sizeof(tv))
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1013,9 +1118,11 @@ os_socket_get_recv_timeout(bh_socket_t socket, uint64 *timeout_us)
 	if (zsock_getsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_RCVTIMEO, &tv,
 			     &tv_len)
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
 	*timeout_us = ((uint64)tv.tv_sec * 1000000UL) + (uint64)tv.tv_usec;
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1057,11 +1164,18 @@ os_socket_set_linger(bh_socket_t socket, bool is_enabled, int linger_s)
 	if (pm_metal_sock_lookup_zfd(socket, &zfd) != BHT_OK) {
 		return BHT_ERROR;
 	}
+	/* SO_LINGER is meaningless on UDP — no-op success. */
+	if (pm_metal_wasi_socket_is_tcp((int)socket) != 1) {
+		pm_metal_sock_release(socket);
+		return BHT_OK;
+	}
 	if (zsock_setsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_LINGER,
 			     &linger_opts, sizeof(linger_opts))
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1082,10 +1196,12 @@ os_socket_get_linger(bh_socket_t socket, bool *is_enabled, int *linger_s)
 	if (zsock_getsockopt(zfd, ZSOCK_SOL_SOCKET, ZSOCK_SO_LINGER,
 			     &linger_opts, &linger_opts_len)
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
 	*linger_s = linger_opts.l_linger;
 	*is_enabled = (bool)linger_opts.l_onoff;
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1133,8 +1249,10 @@ os_socket_set_tcp_keep_idle(bh_socket_t socket, uint32_t time_s)
 	if (zsock_setsockopt(zfd, NET_IPPROTO_TCP, ZSOCK_TCP_KEEPIDLE,
 			     &time_s_int, sizeof(time_s_int))
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1155,9 +1273,11 @@ os_socket_get_tcp_keep_idle(bh_socket_t socket, uint32_t *time_s)
 	if (zsock_getsockopt(zfd, NET_IPPROTO_TCP, ZSOCK_TCP_KEEPIDLE,
 			     &time_s_int, &time_s_len)
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
 	*time_s = (uint32_t)time_s_int;
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1173,8 +1293,10 @@ os_socket_set_tcp_keep_intvl(bh_socket_t socket, uint32_t time_s)
 	if (zsock_setsockopt(zfd, NET_IPPROTO_TCP, ZSOCK_TCP_KEEPINTVL,
 			     &time_s_int, sizeof(time_s_int))
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1195,9 +1317,11 @@ os_socket_get_tcp_keep_intvl(bh_socket_t socket, uint32_t *time_s)
 	if (zsock_getsockopt(zfd, NET_IPPROTO_TCP, ZSOCK_TCP_KEEPINTVL,
 			     &time_s_int, &time_s_len)
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
 	*time_s = (uint32_t)time_s_int;
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1277,33 +1401,41 @@ os_socket_set_ip_add_membership(bh_socket_t socket,
 		struct net_ipv6_mreq mreq;
 		int i;
 
+		/* Host-order bh buffer → network order (same as bind/connect). */
 		for (i = 0; i < 8; i++) {
-			((uint16_t *)mreq.ipv6mr_multiaddr.s6_addr)[i] =
-				imr_multiaddr->ipv6[i];
+			uint16_t part_addr = net_htons(imr_multiaddr->ipv6[i]);
+
+			mreq.ipv6mr_multiaddr.s6_addr[i * 2] = 0xff & part_addr;
+			mreq.ipv6mr_multiaddr.s6_addr[i * 2 + 1] =
+				(0xff00 & part_addr) >> 8;
 		}
 		mreq.ipv6mr_ifindex = (int)imr_interface;
 		if (zsock_setsockopt(zfd, NET_IPPROTO_IPV6,
 				     ZSOCK_IPV6_ADD_MEMBERSHIP, &mreq,
 				     sizeof(mreq))
 		    != 0) {
+			pm_metal_sock_release(socket);
 			return BHT_ERROR;
 		}
 #else
 		errno = EAFNOSUPPORT;
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 #endif
 	} else {
 		struct net_ip_mreq mreq;
 
-		mreq.imr_multiaddr.s_addr = imr_multiaddr->ipv4;
-		mreq.imr_interface.s_addr = imr_interface;
+		mreq.imr_multiaddr.s_addr = net_htonl(imr_multiaddr->ipv4);
+		mreq.imr_interface.s_addr = net_htonl(imr_interface);
 		if (zsock_setsockopt(zfd, NET_IPPROTO_IP,
 				     ZSOCK_IP_ADD_MEMBERSHIP, &mreq,
 				     sizeof(mreq))
 		    != 0) {
+			pm_metal_sock_release(socket);
 			return BHT_ERROR;
 		}
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1328,32 +1460,39 @@ os_socket_set_ip_drop_membership(bh_socket_t socket,
 		int i;
 
 		for (i = 0; i < 8; i++) {
-			((uint16_t *)mreq.ipv6mr_multiaddr.s6_addr)[i] =
-				imr_multiaddr->ipv6[i];
+			uint16_t part_addr = net_htons(imr_multiaddr->ipv6[i]);
+
+			mreq.ipv6mr_multiaddr.s6_addr[i * 2] = 0xff & part_addr;
+			mreq.ipv6mr_multiaddr.s6_addr[i * 2 + 1] =
+				(0xff00 & part_addr) >> 8;
 		}
 		mreq.ipv6mr_ifindex = (int)imr_interface;
 		if (zsock_setsockopt(zfd, NET_IPPROTO_IPV6,
 				     ZSOCK_IPV6_DROP_MEMBERSHIP, &mreq,
 				     sizeof(mreq))
 		    != 0) {
+			pm_metal_sock_release(socket);
 			return BHT_ERROR;
 		}
 #else
 		errno = EAFNOSUPPORT;
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 #endif
 	} else {
 		struct net_ip_mreq mreq;
 
-		mreq.imr_multiaddr.s_addr = imr_multiaddr->ipv4;
-		mreq.imr_interface.s_addr = imr_interface;
+		mreq.imr_multiaddr.s_addr = net_htonl(imr_multiaddr->ipv4);
+		mreq.imr_interface.s_addr = net_htonl(imr_interface);
 		if (zsock_setsockopt(zfd, NET_IPPROTO_IP,
 				     ZSOCK_IP_DROP_MEMBERSHIP, &mreq,
 				     sizeof(mreq))
 		    != 0) {
+			pm_metal_sock_release(socket);
 			return BHT_ERROR;
 		}
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1368,8 +1507,10 @@ os_socket_set_ip_ttl(bh_socket_t socket, uint8_t ttl_s)
 	if (zsock_setsockopt(zfd, NET_IPPROTO_IP, ZSOCK_IP_TTL, &ttl_s,
 			     sizeof(ttl_s))
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1388,8 +1529,10 @@ os_socket_get_ip_ttl(bh_socket_t socket, uint8_t *ttl_s)
 	}
 	if (zsock_getsockopt(zfd, NET_IPPROTO_IP, ZSOCK_IP_TTL, ttl_s, &opt_len)
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1404,8 +1547,10 @@ os_socket_set_ip_multicast_ttl(bh_socket_t socket, uint8_t ttl_s)
 	if (zsock_setsockopt(zfd, NET_IPPROTO_IP, ZSOCK_IP_MULTICAST_TTL,
 			     &ttl_s, sizeof(ttl_s))
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1425,8 +1570,10 @@ os_socket_get_ip_multicast_ttl(bh_socket_t socket, uint8_t *ttl_s)
 	if (zsock_getsockopt(zfd, NET_IPPROTO_IP, ZSOCK_IP_MULTICAST_TTL, ttl_s,
 			     &opt_len)
 	    != 0) {
+		pm_metal_sock_release(socket);
 		return BHT_ERROR;
 	}
+	pm_metal_sock_release(socket);
 	return BHT_OK;
 }
 
@@ -1470,6 +1617,166 @@ os_socket_get_ipv6_only(bh_socket_t socket, bool *is_enabled)
 	errno = EAFNOSUPPORT;
 	return BHT_ERROR;
 #endif
+}
+
+#ifndef PM_METAL_WASI_POLL_MAX
+#define PM_METAL_WASI_POLL_MAX 16
+#endif
+
+/*
+ * Metal poll: translate socket handles to zsock fds under acquire, evaluate
+ * pipe readiness via the virtual pipe table, and reject other synthetic fds
+ * (WASI file handles) with POLLNVAL — they are not in Zephyr's fd table.
+ */
+int
+pm_metal_wasi_socket_poll(void *fds_v, int nfds, int timeout)
+{
+	struct {
+		int fd;
+		short events;
+		short revents;
+	} *fds = fds_v;
+	struct zsock_pollfd zfds[PM_METAL_WASI_POLL_MAX];
+	bh_socket_t acquired[PM_METAL_WASI_POLL_MAX];
+	int sock_map[PM_METAL_WASI_POLL_MAX];
+	int nsock = 0;
+	int npipe = 0;
+	int i;
+	int ready;
+	int64_t deadline_ms = -1;
+	int slice;
+
+	if (fds == NULL && nfds > 0) {
+		errno = EFAULT;
+		return -1;
+	}
+	if (nfds < 0 || nfds > PM_METAL_WASI_POLL_MAX) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	for (i = 0; i < nfds; i++) {
+		fds[i].revents = 0;
+	}
+
+	for (i = 0; i < nfds; i++) {
+		int zfd;
+
+		if (fds[i].fd < 0) {
+			continue;
+		}
+		if (pm_metal_wasi_socket_is_ours(fds[i].fd)) {
+			if (pm_metal_sock_acquire((bh_socket_t)fds[i].fd, &zfd)
+			    != BHT_OK) {
+				fds[i].revents = ZSOCK_POLLNVAL;
+				continue;
+			}
+			zfds[nsock].fd = zfd;
+			zfds[nsock].events = fds[i].events;
+			zfds[nsock].revents = 0;
+			acquired[nsock] = (bh_socket_t)fds[i].fd;
+			sock_map[nsock] = i;
+			nsock++;
+		} else if (pm_metal_port_pipe_is_ours(fds[i].fd)) {
+			npipe++;
+		} else {
+			/* File / unknown synthetic handles are not zsock fds. */
+			fds[i].revents = ZSOCK_POLLNVAL;
+		}
+	}
+
+	if (timeout > 0) {
+		deadline_ms = k_uptime_get() + timeout;
+	}
+
+	for (;;) {
+		ready = 0;
+
+		for (i = 0; i < nfds; i++) {
+			if (fds[i].fd < 0) {
+				continue;
+			}
+			if (pm_metal_port_pipe_is_ours(fds[i].fd)) {
+				fds[i].revents = pm_metal_port_pipe_poll_revents(
+					fds[i].fd, fds[i].events);
+			}
+			if (fds[i].revents != 0) {
+				ready++;
+			}
+		}
+
+		if (nsock > 0) {
+			if (ready > 0 || timeout == 0) {
+				slice = 0;
+			} else if (timeout < 0) {
+				/* Slice when pipes are also watched so we can
+				 * observe pipe readiness without a socket event.
+				 */
+				slice = (npipe > 0) ? 10 : -1;
+			} else {
+				int64_t left = deadline_ms - k_uptime_get();
+
+				if (left <= 0) {
+					slice = 0;
+				} else if (npipe > 0 && left > 10) {
+					slice = 10;
+				} else if (left > (int64_t)INT_MAX) {
+					slice = INT_MAX;
+				} else {
+					slice = (int)left;
+				}
+			}
+
+			if (zsock_poll(zfds, nsock, slice) < 0) {
+				for (i = 0; i < nsock; i++) {
+					pm_metal_sock_release(acquired[i]);
+				}
+				return -1;
+			}
+			for (i = 0; i < nsock; i++) {
+				int fi = sock_map[i];
+
+				fds[fi].revents = zfds[i].revents;
+				if (fds[fi].revents != 0) {
+					ready++;
+				}
+			}
+		} else if (ready == 0 && timeout != 0) {
+			if (timeout < 0) {
+				k_sleep(K_MSEC(10));
+			} else {
+				int64_t left = deadline_ms - k_uptime_get();
+
+				if (left <= 0) {
+					break;
+				}
+				k_sleep(K_MSEC(left < 10 ? left : 10));
+			}
+			continue;
+		}
+
+		if (ready > 0 || timeout == 0) {
+			break;
+		}
+		if (timeout > 0 && k_uptime_get() >= deadline_ms) {
+			break;
+		}
+		if (nsock > 0 && npipe == 0 && timeout < 0) {
+			break;
+		}
+	}
+
+	for (i = 0; i < nsock; i++) {
+		pm_metal_sock_release(acquired[i]);
+	}
+
+	ready = 0;
+	for (i = 0; i < nfds; i++) {
+		if (fds[i].revents != 0) {
+			ready++;
+		}
+	}
+	return ready;
 }
 
 #else /* !CONFIG_NET_SOCKETS */
