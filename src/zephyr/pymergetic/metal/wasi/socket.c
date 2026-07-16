@@ -101,7 +101,10 @@ pm_metal_sock_release(bh_socket_t handle)
 	}
 	k_mutex_unlock(&g_pm_metal_sock_table_lock);
 	if (zfd_close >= 0) {
-		(void)zsock_close(zfd_close);
+		if (zsock_close(zfd_close) != 0) {
+			printk("pm_metal_wasi_socket: zsock_close(%d) failed errno=%d\n",
+			       zfd_close, errno);
+		}
 	}
 }
 
@@ -377,7 +380,10 @@ os_socket_create(bh_socket_t *sock, bool is_ipv4, bool is_tcp)
 	}
 
 	if (pm_metal_sock_alloc(zfd, is_tcp ? 1 : 0, sock) != BHT_OK) {
-		zsock_close(zfd);
+		if (zsock_close(zfd) != 0) {
+			printk("pm_metal_wasi_socket: zsock_close(%d) after alloc fail errno=%d\n",
+			       zfd, errno);
+		}
 		return BHT_ERROR;
 	}
 	return BHT_OK;
@@ -529,7 +535,10 @@ os_socket_accept(bh_socket_t server_sock, bh_socket_t *sock, void *addr,
 
 	/* accept() is TCP only */
 	if (pm_metal_sock_alloc(new_zfd, 1, &metal) != BHT_OK) {
-		zsock_close(new_zfd);
+		if (zsock_close(new_zfd) != 0) {
+			printk("pm_metal_wasi_socket: zsock_close(%d) after accept alloc fail errno=%d\n",
+			       new_zfd, errno);
+		}
 		pm_metal_sock_release(server_sock);
 		return BHT_ERROR;
 	}
@@ -680,7 +689,11 @@ os_socket_close(bh_socket_t socket)
 	}
 	k_mutex_unlock(&g_pm_metal_sock_table_lock);
 	if (zfd_close >= 0) {
-		(void)zsock_close(zfd_close);
+		if (zsock_close(zfd_close) != 0) {
+			printk("pm_metal_wasi_socket: zsock_close(%d) on close errno=%d\n",
+			       zfd_close, errno);
+			return BHT_ERROR;
+		}
 	}
 	return BHT_OK;
 }

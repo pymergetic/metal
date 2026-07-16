@@ -49,6 +49,10 @@ int pm_metal_env_build_exported(const pm_metal_env_var_t *vars, int count, char 
 		if (!vars[i].exported) {
 			continue;
 		}
+		if (!vars[i].name || !vars[i].value) {
+			pm_metal_env_free_exported(envp, built);
+			return -1;
+		}
 
 		size_t name_len = strlen(vars[i].name);
 		size_t value_len = strlen(vars[i].value);

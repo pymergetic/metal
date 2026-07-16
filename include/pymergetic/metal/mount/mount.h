@@ -19,6 +19,7 @@
 #define PYMERGETIC_METAL_MOUNT_MOUNT_H_
 
 #include <stddef.h>
+#include <stdio.h>
 
 #include "pymergetic/metal/util/wasi.h" /* IWYU pragma: keep */
 
@@ -83,12 +84,42 @@ static inline int mount(const char *source, const char *target, const char *file
 			unsigned long mountflags, const void *data)
 {
 	const char *opts = data ? (const char *)data : NULL;
+	char combined[128];
 
 	if (mountflags & ~(unsigned long)MS_RDONLY) {
 		return -1;
 	}
-	if ((mountflags & MS_RDONLY) && !(opts && opts[0])) {
-		opts = "ro";
+	if (mountflags & MS_RDONLY) {
+		if (opts && opts[0]) {
+			/* Already has ro? keep caller string; else prepend. */
+			const char *p = opts;
+			int has_ro = 0;
+
+			while (*p) {
+				const char *start = p;
+
+				while (*p && *p != ',') {
+					p++;
+				}
+				if ((size_t)(p - start) == 2 && start[0] == 'r' && start[1] == 'o') {
+					has_ro = 1;
+					break;
+				}
+				if (*p == ',') {
+					p++;
+				}
+			}
+			if (!has_ro) {
+				int n = snprintf(combined, sizeof(combined), "ro,%s", opts);
+
+				if (n <= 0 || (size_t)n >= sizeof(combined)) {
+					return -1;
+				}
+				opts = combined;
+			}
+		} else {
+			opts = "ro";
+		}
 	}
 	return pm_metal_mount_mount(source, target, filesystemtype, opts);
 }

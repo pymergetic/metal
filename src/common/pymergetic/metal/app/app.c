@@ -114,7 +114,10 @@ int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv
 			rc = 1;
 		}
 
-		pm_metal_runtime_unload(h);
+		if (pm_metal_runtime_unload(h) != 0) {
+			fprintf(stderr, "%s: unload failed: %s\n", argv0, path);
+			rc = 1;
+		}
 	}
 
 	pm_metal_process_shutdown();

@@ -1,6 +1,6 @@
 /*
  * T20 — after t19 umounted /dyn, open must fail (mount gone for this new
- * process). Expected exit=1 with "open failed".
+ * process). Exit 0 when open fails; exit 1 if still mounted.
  */
 #include <fcntl.h>
 #include <stdio.h>
@@ -12,7 +12,7 @@ int main(void)
 
 	if (fd < 0) {
 		printf("t20_sys_gone: open failed\n");
-		return 1;
+		return 0;
 	}
 	close(fd);
 	printf("t20_sys_gone: unexpectedly still mounted\n");

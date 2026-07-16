@@ -82,6 +82,7 @@ static int g_pm_metal_memory_budget_inited;
 #if defined(CONFIG_MMU)
 static uintptr_t g_pm_metal_memory_phys_cursor;
 #endif
+K_MUTEX_DEFINE(g_pm_metal_memory_budget_lock);
 
 static void pm_metal_memory_zephyr_budget_ensure(void)
 {
@@ -101,8 +102,10 @@ uint64_t pm_metal_memory_zephyr_budget_take(uint64_t requested)
 {
 	uint64_t take;
 
+	k_mutex_lock(&g_pm_metal_memory_budget_lock, K_FOREVER);
 	pm_metal_memory_zephyr_budget_ensure();
 	if (requested == 0 || g_pm_metal_memory_budget_remaining == 0) {
+		k_mutex_unlock(&g_pm_metal_memory_budget_lock);
 		return 0;
 	}
 	take = requested;
@@ -111,22 +114,29 @@ uint64_t pm_metal_memory_zephyr_budget_take(uint64_t requested)
 	}
 	take = pm_metal_memory_zephyr_round_down(take, pm_metal_memory_zephyr_page_size());
 	if (take == 0) {
+		k_mutex_unlock(&g_pm_metal_memory_budget_lock);
 		return 0;
 	}
 	g_pm_metal_memory_budget_remaining -= take;
+	k_mutex_unlock(&g_pm_metal_memory_budget_lock);
 	return take;
 }
 
 void pm_metal_memory_zephyr_budget_give(uint64_t bytes)
 {
-	if (bytes == 0 || !g_pm_metal_memory_budget_inited) {
+	if (bytes == 0) {
 		return;
 	}
-	g_pm_metal_memory_budget_remaining += bytes;
+	k_mutex_lock(&g_pm_metal_memory_budget_lock, K_FOREVER);
+	if (g_pm_metal_memory_budget_inited) {
+		g_pm_metal_memory_budget_remaining += bytes;
+	}
+	k_mutex_unlock(&g_pm_metal_memory_budget_lock);
 }
 
 void pm_metal_memory_zephyr_budget_reset(void)
 {
+	k_mutex_lock(&g_pm_metal_memory_budget_lock, K_FOREVER);
 	g_pm_metal_memory_budget_remaining = 0;
 	g_pm_metal_memory_budget_inited = 0;
 #if !defined(CONFIG_MMU)
@@ -134,14 +144,18 @@ void pm_metal_memory_zephyr_budget_reset(void)
 #else
 	g_pm_metal_memory_phys_cursor = 0;
 #endif
+	k_mutex_unlock(&g_pm_metal_memory_budget_lock);
 }
 
 void *pm_metal_memory_zephyr_pool_alloc(uint64_t bytes)
 {
+	void *ret = NULL;
+
 	if (bytes == 0 || bytes > SIZE_MAX) {
 		return NULL;
 	}
 
+	k_mutex_lock(&g_pm_metal_memory_budget_lock, K_FOREVER);
 	pm_metal_memory_zephyr_budget_ensure();
 
 #if defined(CONFIG_MMU)
@@ -164,27 +178,28 @@ void *pm_metal_memory_zephyr_pool_alloc(uint64_t bytes)
 		 */
 		phys = (uintptr_t)k_mem_phys_addr((void *)g_pm_metal_memory_phys_cursor);
 		k_mem_map_phys_bare((uint8_t **)&virt, phys, need, K_MEM_PERM_RW);
-		if (!virt) {
-			return NULL;
+		if (virt) {
+			g_pm_metal_memory_phys_cursor =
+				pm_metal_memory_zephyr_round_up_ptr(
+					g_pm_metal_memory_phys_cursor + need,
+					pm_metal_memory_zephyr_page_size());
+			ret = virt;
 		}
-		g_pm_metal_memory_phys_cursor =
-			pm_metal_memory_zephyr_round_up_ptr(g_pm_metal_memory_phys_cursor + need,
-							     pm_metal_memory_zephyr_page_size());
-		return virt;
 	}
 #else
 	{
 		size_t off = g_pm_metal_static_pool_off;
 		size_t need = (size_t)bytes;
 
-		if (off > sizeof(g_pm_metal_static_pool)
-		    || need > sizeof(g_pm_metal_static_pool) - off) {
-			return NULL;
+		if (off <= sizeof(g_pm_metal_static_pool)
+		    && need <= sizeof(g_pm_metal_static_pool) - off) {
+			g_pm_metal_static_pool_off = off + need;
+			ret = &g_pm_metal_static_pool[off];
 		}
-		g_pm_metal_static_pool_off = off + need;
-		return &g_pm_metal_static_pool[off];
 	}
 #endif
+	k_mutex_unlock(&g_pm_metal_memory_budget_lock);
+	return ret;
 }
 
 void pm_metal_memory_zephyr_pool_free(void *ptr)

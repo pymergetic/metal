@@ -273,10 +273,14 @@ static int pm_metal_join_guest(const char *prefix, const char *rel, char *out, s
 }
 
 static __wasi_errno_t pm_metal_proc_open_rel(pm_metal_vfd_kind_t parent_kind, const char *path,
-					      __wasi_oflags_t oflags, os_file_handle *out)
+					      __wasi_oflags_t oflags, wasi_libc_file_access_mode access_mode,
+					      os_file_handle *out)
 {
 	pm_metal_mount_proc_hook_fn fn = NULL;
 	const char *node = path;
+	int write_intent = (access_mode == WASI_LIBC_ACCESS_MODE_WRITE_ONLY
+			    || access_mode == WASI_LIBC_ACCESS_MODE_READ_WRITE
+			    || (oflags & __WASI_O_CREAT) != 0);
 
 	if (!path || !out) {
 		return __WASI_EINVAL;
@@ -285,6 +289,10 @@ static __wasi_errno_t pm_metal_proc_open_rel(pm_metal_vfd_kind_t parent_kind, co
 		node++;
 	}
 	if (node[0] == '\0' || strcmp(node, ".") == 0) {
+		/* Directory nodes: reject write-intent opens (not only O_CREAT). */
+		if ((oflags & __WASI_O_DIRECTORY) == 0 && write_intent) {
+			return __WASI_EISDIR;
+		}
 		if (parent_kind == PM_METAL_VFD_PROC_SELF) {
 			return pm_metal_proc_vfd_alloc(PM_METAL_VFD_PROC_SELF, "/proc/self", out);
 		}
@@ -293,7 +301,7 @@ static __wasi_errno_t pm_metal_proc_open_rel(pm_metal_vfd_kind_t parent_kind, co
 
 	if (parent_kind == PM_METAL_VFD_PROC_ROOT) {
 		if (strcmp(node, "self") == 0) {
-			if ((oflags & __WASI_O_DIRECTORY) == 0 && (oflags & __WASI_O_CREAT) != 0) {
+			if ((oflags & __WASI_O_DIRECTORY) == 0 && write_intent) {
 				return __WASI_EISDIR;
 			}
 			return pm_metal_proc_vfd_alloc(PM_METAL_VFD_PROC_SELF, "/proc/self", out);
@@ -363,7 +371,8 @@ static __wasi_errno_t pm_metal_live_open_resolved(const pm_metal_mount_resolve_t
 	__wasi_errno_t err;
 
 	if (r->kind == PM_METAL_MOUNT_PROC) {
-		return pm_metal_proc_open_rel(PM_METAL_VFD_PROC_ROOT, r->remainder, oflags, out);
+		return pm_metal_proc_open_rel(PM_METAL_VFD_PROC_ROOT, r->remainder, oflags, read_write_mode,
+						out);
 	}
 
 	err = pm_metal_live_open_host(r->host_base, r->remainder, oflags, fs_flags, lookup_flags, read_write_mode,
@@ -373,7 +382,13 @@ static __wasi_errno_t pm_metal_live_open_resolved(const pm_metal_mount_resolve_t
 	}
 
 	if (pm_metal_join_guest(r->guest_mount, r->remainder, guest_abs, sizeof(guest_abs)) == 0) {
-		(void)pm_metal_live_tag_if_dir(*out, guest_abs);
+		__wasi_errno_t tag_err = pm_metal_live_tag_if_dir(*out, guest_abs);
+
+		if (tag_err != __WASI_ESUCCESS) {
+			os_close(*out, false);
+			*out = -1;
+			return tag_err;
+		}
 	}
 	return __WASI_ESUCCESS;
 }
@@ -486,7 +501,7 @@ __wasi_errno_t os_openat(os_file_handle handle, const char *path, __wasi_oflags_
 		return __real_os_openat(handle, path, oflags, fs_flags, lookup_flags, read_write_mode, out);
 	}
 	if (pm_metal_vfd_is_proc(&v)) {
-		return pm_metal_proc_open_rel(v.kind, path, oflags, out);
+		return pm_metal_proc_open_rel(v.kind, path, oflags, read_write_mode, out);
 	}
 
 	err = pm_metal_live_resolve_from(&v, path, &r);
@@ -534,7 +549,7 @@ __wasi_errno_t os_fstatat(os_file_handle handle, const char *path, struct __wasi
 		return __real_os_fstatat(handle, path, buf, lookup_flags);
 	}
 	if (pm_metal_vfd_is_proc(&v)) {
-		err = pm_metal_proc_open_rel(v.kind, path, 0, &tmp);
+		err = pm_metal_proc_open_rel(v.kind, path, 0, WASI_LIBC_ACCESS_MODE_READ_ONLY, &tmp);
 		if (err != __WASI_ESUCCESS) {
 			return err;
 		}
@@ -553,7 +568,8 @@ __wasi_errno_t os_fstatat(os_file_handle handle, const char *path, struct __wasi
 		return err;
 	}
 	if (r.kind == PM_METAL_MOUNT_PROC) {
-		err = pm_metal_proc_open_rel(PM_METAL_VFD_PROC_ROOT, r.remainder, 0, &tmp);
+		err = pm_metal_proc_open_rel(PM_METAL_VFD_PROC_ROOT, r.remainder, 0,
+					      WASI_LIBC_ACCESS_MODE_READ_ONLY, &tmp);
 		if (err != __WASI_ESUCCESS) {
 			return err;
 		}

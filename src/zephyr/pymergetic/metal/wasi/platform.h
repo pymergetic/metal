@@ -49,6 +49,7 @@ typedef struct zephyr_fs_desc {
 	bool closing; /* close requested; reject new acquires */
 	int refs; /* in-flight ops; slot freed when closing && refs == 0 */
 	uint32_t dir_index;
+	char readdir_name[MAX_FILE_NAME + 1]; /* per-desc; not a process-wide static */
 } zephyr_fs_desc;
 
 typedef int os_file_handle;

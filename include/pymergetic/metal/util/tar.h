@@ -7,10 +7,10 @@
  * buffer (no FILE*, no filesystem) and a small sequential cursor/writer
  * API on top.
  *
- * No heap allocation anywhere: iter_t/writer_t are fixed-size, caller-
- * held state (stack, .bss, or inside a mod's own util/arena.h block) —
- * the only "real" memory either one ever touches is the archive buffer
- * itself, which the caller already owns. To read/write a *compressed*
+ * Guest-facing iter_t/writer_t hold only an opaque host id; full tar
+ * state (including microtar function pointers) lives in a host-only
+ * slot table. The only guest memory touched for archive bytes is the
+ * caller-owned buffer. To read/write a *compressed*
  * archive, compose with util/lz4.h at the call site (lz4_decompress()
  * into your own buffer, then iter_init() that buffer; or writer_finish()
  * into a buffer, then lz4_compress() it) — this header has no idea lz4
@@ -56,21 +56,11 @@
 #define PM_METAL_UTIL_TAR_NAME_MAX 100U
 
 /*
- * Fixed-size, opaque cursor over an in-memory tar archive — caller-held
- * (no heap), same "reinterpret storage as the real type in the .c file,
- * _Static_assert the size fits" shape as port/lock.h's
- * pm_metal_port_mutex_t. Layout is tar.c's own business (a vendored
- * mtar_t + this module's memory-stream context); sized generously so
- * tar.c can grow the real struct without ever changing this public ABI.
- * The union only forces pointer/long-long alignment — never read or
- * write these bytes directly, only ever pass the address back in here.
+ * Opaque cursor — only a host handle id. Zero-init before first init();
+ * call iter_close() when done (or before reusing). Never interpret `id`.
  */
 typedef struct pm_metal_util_tar_iter {
-	union {
-		void *pm_metal_util_tar_iter_ptr_align;
-		long long pm_metal_util_tar_iter_int_align;
-		unsigned char pm_metal_util_tar_iter_storage[384];
-	} pm_metal_util_tar_iter_opaque;
+	uint32_t id;
 } pm_metal_util_tar_iter_t;
 
 /*
@@ -170,15 +160,25 @@ int pm_metal_util_tar_iter_read(pm_metal_util_tar_iter_t *it, void *dst, size_t 
 #endif
 
 /*
- * Fixed-size, opaque writer over an in-memory tar archive under
- * construction — same "caller-held, no heap" shape as iter_t above.
+ * Release the host slot for this iterator. Safe on a zeroed or already
+ * closed handle.
+ *
+ * impl: common — src/common/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ */
+#if defined(__wasm__)
+extern void pm_metal_util_tar_iter_close(pm_metal_util_tar_iter_t *it)
+	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_close);
+#else
+void pm_metal_util_tar_iter_close(pm_metal_util_tar_iter_t *it);
+#endif
+
+/*
+ * Opaque writer — host handle id only (see iter_t). writer_finish()
+ * releases the slot.
  */
 typedef struct pm_metal_util_tar_writer {
-	union {
-		void *pm_metal_util_tar_writer_ptr_align;
-		long long pm_metal_util_tar_writer_int_align;
-		unsigned char pm_metal_util_tar_writer_storage[384];
-	} pm_metal_util_tar_writer_opaque;
+	uint32_t id;
 } pm_metal_util_tar_writer_t;
 
 /*

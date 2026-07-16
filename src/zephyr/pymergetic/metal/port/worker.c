@@ -116,7 +116,11 @@ int pm_metal_port_worker_try_join(pm_metal_port_worker_t *w)
 	if (k_sem_take(&slot->done_sem, K_NO_WAIT) != 0) {
 		return -1;
 	}
-	k_thread_join(slot->tid, K_NO_WAIT);
+	if (k_thread_join(slot->tid, K_NO_WAIT) != 0) {
+		/* Thread marked done but not joinable yet — restore sem for retry. */
+		k_sem_give(&slot->done_sem);
+		return -1;
+	}
 	pm_metal_port_worker_slot_free(slot);
 	return 0;
 }

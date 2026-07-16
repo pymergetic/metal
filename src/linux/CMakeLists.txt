@@ -67,6 +67,11 @@ list(REMOVE_ITEM WAMR_RUNTIME_LIB_SOURCE
 add_library(pm-wamr-vmlib STATIC ${WAMR_RUNTIME_LIB_SOURCE})
 target_include_directories(pm-wamr-vmlib PUBLIC ${WAMR_ROOT_DIR}/core/iwasm/include)
 set_target_properties(pm-wamr-vmlib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# Upstream WAMR noise (float32→double printf; unused loader locals) — not ours.
+target_compile_options(pm-wamr-vmlib PRIVATE
+	-Wno-double-promotion
+	-Wno-unused-variable
+)
 
 # Virtual /proc os_* + renamed stock posix_file as __real_os_*.
 # See docs/MOUNT.md Phase 6b.

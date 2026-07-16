@@ -99,8 +99,10 @@ int main(void)
 				cfg.bytecode_bytes = budget / 2;
 			}
 		}
-		cfg.memory_bytes = (budget > cfg.bytecode_bytes) ? (budget - cfg.bytecode_bytes)
-								 : PM_METAL_ZEPHYR_MEMORY_REQ;
+		if (cfg.bytecode_bytes > budget) {
+			cfg.bytecode_bytes = budget;
+		}
+		cfg.memory_bytes = budget - cfg.bytecode_bytes;
 		if (cfg.memory_bytes > PM_METAL_ZEPHYR_MEMORY_REQ) {
 			cfg.memory_bytes = PM_METAL_ZEPHYR_MEMORY_REQ;
 		}

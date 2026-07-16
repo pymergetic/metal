@@ -53,6 +53,10 @@
  * Returns 0/-1 (bad args, table full, or the kind's own establish()
  * failed).
  */
+/* Lexical normalize for guest paths — reject "..", drop ".", absolute form.
+ * Used by mount/umount/resolve and populate (zip-slip). Returns 0/-1. */
+int pm_metal_mount_normalize(const char *in, char *out, size_t out_cap);
+
 int pm_metal_mount(const char *guest_path, pm_metal_mount_kind_t kind, const char *source, const char *opts);
 
 /* Unmount whatever is registered at guest_path (exact match against the

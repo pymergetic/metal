@@ -361,9 +361,16 @@ New module, `src/common/pymergetic/metal/mount/` — `impl: common`, ops-struct 
 
 WASI preview1 has no mount syscall at all — our own extension, same shape as
 `util/{arena,log,size,lz4,tar}.h`'s wasi-style imports (own `NativeSymbol` table, own
-`import_module` string `"pymergetic.metal.mount"`), **privileged**: gated behind
-`-DPM_METAL_BUILD_KERNEL` via `include/pymergetic/metal/build.h` + an empty
-`mods/<name>/MOUNT` marker (`build-mod.sh`).
+`import_module` string `"pymergetic.metal.mount"`), **privileged**.
+
+Compile-time: guest headers expose `mount()`/`umount()` only with
+`-DPM_METAL_BUILD_KERNEL` (`include/pymergetic/metal/build.h` + empty
+`mods/<name>/MOUNT` marker in `build-mod.sh`). That is **not** a security
+boundary — crafted wasm can still import the natives.
+
+Runtime: host must opt in with `--allow-guest-mount` (linux CLI →
+`pm_metal_runtime_set_allow_guest_mount(1)`). Without it, mount/umount
+natives return -1; `fstype_count`/`fstype_name` stay public.
 
 | Piece | Role |
 |-------|------|

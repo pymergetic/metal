@@ -21,6 +21,7 @@ __wasi_errno_t os_fsync(os_file_handle handle);
 #include <zephyr/fs/fs.h>
 #include <zephyr/fs/fs_interface.h>
 #include <zephyr/fs/fs_sys.h>
+#include <zephyr/kernel.h>
 #include <zephyr/posix/unistd.h>
 
 #include "pymergetic/metal/mount/proc.h"
@@ -134,7 +135,11 @@ pm_metal_desc_teardown(char *path, char *path_retired, int is_dir,
 	} else if (file != NULL) {
 		rc = fs_close(file);
 	}
+	/* Virtual /proc temps must stay named until close — os_fstat uses fs_stat(path). */
 	if (path != NULL) {
+		if (strncmp(path, "/RAM:/.pm_proc_", 15) == 0) {
+			(void)fs_unlink(path);
+		}
 		BH_FREE(path);
 	}
 	if (path_retired != NULL) {
@@ -494,16 +499,21 @@ zephyr_fs_alloc_obj(bool is_dir, const char *path, int *index)
 static inline void
 zephyr_fs_free_obj(struct zephyr_fs_desc *ptr)
 {
-    BH_FREE(ptr->path);
-    ptr->path = NULL;
-    if (ptr->path_retired != NULL) {
-	    BH_FREE(ptr->path_retired);
-	    ptr->path_retired = NULL;
-    }
-    ptr->dir_opened = false;
-    ptr->closing = false;
-    ptr->refs = 0;
-    ptr->used = false;
+	if (ptr == NULL) {
+		return;
+	}
+	k_mutex_lock(&desc_array_mutex, K_FOREVER);
+	BH_FREE(ptr->path);
+	ptr->path = NULL;
+	if (ptr->path_retired != NULL) {
+		BH_FREE(ptr->path_retired);
+		ptr->path_retired = NULL;
+	}
+	ptr->dir_opened = false;
+	ptr->closing = false;
+	ptr->refs = 0;
+	ptr->used = false;
+	k_mutex_unlock(&desc_array_mutex);
 }
 
 /* /!\ Needed for socket to work */
@@ -866,11 +876,16 @@ os_openat(os_file_handle handle, const char *path, __wasi_oflags_t oflags,
 					return __WASI_ENOENT;
 				}
 				{
+					/* Serialize name mint + create; parent lock already dropped.
+					 * Unlink on close (teardown) — os_fstat still needs the path. */
+					static struct k_mutex proc_tmp_lock;
 					static uint32_t proc_tmp_seq;
+					static int proc_tmp_lock_inited;
 					char *buf;
 					size_t len = 0;
 					char tmpath[64];
 					struct fs_file_t file;
+					ssize_t wrote;
 					int rc2;
 
 					buf = BH_MALLOC(PM_METAL_MOUNT_PROC_CONTENT_MAX);
@@ -881,21 +896,49 @@ os_openat(os_file_handle handle, const char *path, __wasi_oflags_t oflags,
 						BH_FREE(buf);
 						return __WASI_EIO;
 					}
+					if (!proc_tmp_lock_inited) {
+						k_mutex_init(&proc_tmp_lock);
+						proc_tmp_lock_inited = 1;
+					}
+					k_mutex_lock(&proc_tmp_lock, K_FOREVER);
 					snprintf(tmpath, sizeof(tmpath), "/RAM:/.pm_proc_%u",
 						 ++proc_tmp_seq);
 					fs_file_t_init(&file);
 					rc2 = fs_open(&file, tmpath,
 						      FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
 					if (rc2 < 0) {
+						k_mutex_unlock(&proc_tmp_lock);
 						BH_FREE(buf);
 						return convert_errno(-rc2);
 					}
-					fs_write(&file, buf, len);
+					{
+						size_t off = 0;
+
+						while (off < len) {
+							wrote = fs_write(&file, buf + off, len - off);
+							if (wrote < 0) {
+								fs_close(&file);
+								fs_unlink(tmpath);
+								k_mutex_unlock(&proc_tmp_lock);
+								BH_FREE(buf);
+								return convert_errno(-wrote);
+							}
+							if (wrote == 0) {
+								fs_close(&file);
+								fs_unlink(tmpath);
+								k_mutex_unlock(&proc_tmp_lock);
+								BH_FREE(buf);
+								return __WASI_EIO;
+							}
+							off += (size_t)wrote;
+						}
+					}
 					fs_close(&file);
 					BH_FREE(buf);
 					ptr = zephyr_fs_alloc_obj(false, tmpath, &index);
 					if (!ptr) {
 						fs_unlink(tmpath);
+						k_mutex_unlock(&proc_tmp_lock);
 						return __WASI_EMFILE;
 					}
 					fs_file_t_init(&ptr->file);
@@ -903,8 +946,10 @@ os_openat(os_file_handle handle, const char *path, __wasi_oflags_t oflags,
 					if (rc2 < 0) {
 						zephyr_fs_free_obj(ptr);
 						fs_unlink(tmpath);
+						k_mutex_unlock(&proc_tmp_lock);
 						return convert_errno(-rc2);
 					}
+					k_mutex_unlock(&proc_tmp_lock);
 					*out = index;
 					return __WASI_ESUCCESS;
 				}
@@ -1086,6 +1131,11 @@ os_pwritev(os_file_handle handle, const struct __wasi_ciovec_t *iov, int iovcnt,
         ssize_t bytes_written =
             fs_write(&ptr->file, iov[i].buf, iov[i].buf_len);
         if (bytes_written < 0) {
+            if (total_written > 0) {
+                *nwritten = total_written;
+                RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
+                return __WASI_ESUCCESS;
+            }
             RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
             return convert_errno(-bytes_written);
         }
@@ -1158,7 +1208,12 @@ os_readv(os_file_handle handle, const struct __wasi_iovec_t *iov, int iovcnt,
     for (int i = 0; i < iovcnt; i++) {
         ssize_t bytes_read = fs_read(&ptr->file, iov[i].buf, iov[i].buf_len);
         if (bytes_read < 0) {
-            // If an error occurred, return it
+            /* Report progress from earlier iovecs (WASI readv semantics). */
+            if (total_read > 0) {
+                *nread = total_read;
+                RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
+                return __WASI_ESUCCESS;
+            }
             RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
             return convert_errno(-bytes_read);
         }
@@ -1243,6 +1298,12 @@ os_writev(os_file_handle handle, const struct __wasi_ciovec_t *iov, int iovcnt,
         ssize_t bytes_written =
             fs_write(&ptr->file, iov[i].buf, iov[i].buf_len);
         if (bytes_written < 0) {
+            /* Report progress from earlier iovecs (WASI writev semantics). */
+            if (total_written > 0) {
+                *nwritten = total_written;
+                RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
+                return __WASI_ESUCCESS;
+            }
             RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
             return convert_errno(-bytes_written);
         }
@@ -1722,11 +1783,10 @@ os_readdir(os_dir_stream dir_stream, __wasi_dirent_t *entry,
                         ? __WASI_FILETYPE_DIRECTORY
                         : __WASI_FILETYPE_REGULAR_FILE;
 
-    // DSK: name exists in fs_entry and we need to return it
-    static char name_buf[MAX_FILE_NAME + 1];
-    strncpy(name_buf, fs_entry.name, MAX_FILE_NAME);
-    name_buf[MAX_FILE_NAME] = '\0';
-    *d_name = name_buf;
+    /* Per-descriptor buffer — concurrent readdir on two dirs must not race. */
+    strncpy(ptr->readdir_name, fs_entry.name, MAX_FILE_NAME);
+    ptr->readdir_name[MAX_FILE_NAME] = '\0';
+    *d_name = ptr->readdir_name;
 
     RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
     return __WASI_ESUCCESS;

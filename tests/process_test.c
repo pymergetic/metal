@@ -174,7 +174,11 @@ int main(void)
 	pipe_write_fd = -1; /* handed to writer */
 	if (pm_metal_process_spawn(h_reader, 1, reader_argv, 0, NULL, pipe_read_fd, -1, -1, NULL, NULL, &reader_pid)
 	    != 0) {
+		int writer_exit = -1;
+
 		fprintf(stderr, "spawn t7_pipe_reader failed\n");
+		(void)pm_metal_process_kill(writer_pid);
+		(void)pm_metal_process_wait(writer_pid, &writer_exit);
 		pm_metal_runtime_unload(h_writer);
 		pm_metal_runtime_unload(h_reader);
 		pm_metal_port_close(pipe_read_fd);
@@ -290,7 +294,11 @@ int main(void)
 	if (pm_metal_process_spawn(h_sock_client, 1, sock_client_argv, 0, NULL, -1, -1, -1, NULL, NULL,
 				    &sock_client_pid)
 	    != 0) {
+		int sock_server_exit = -1;
+
 		fprintf(stderr, "spawn t11_socket_client failed\n");
+		(void)pm_metal_process_kill(sock_server_pid);
+		(void)pm_metal_process_wait(sock_server_pid, &sock_server_exit);
 		pm_metal_runtime_unload(h_sock_client);
 		pm_metal_runtime_unload(h_sock_server);
 		goto done;

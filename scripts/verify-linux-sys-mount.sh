@@ -32,6 +32,7 @@ cp "${ROOT}/build/mods/t17_sys_mount.wasm" \
 	"${VFS_ROOT}/mods/"
 
 OUT="$("${RUNTIME}" --memory=16777216 --bytecode-memory=1048576 --rootfs=hostdir:"${VFS_ROOT}" \
+	--allow-guest-mount \
 	/mods/t17_sys_mount.wasm \
 	/mods/t18_sys_use.wasm \
 	/mods/t19_sys_umount.wasm \
@@ -49,6 +50,8 @@ echo "${OUT}" | grep -q "t18_sys_use: hello from guest mount" \
 	|| { echo "FAIL: readback through guest-mounted tmpfs failed" >&2; exit 1; }
 echo "${OUT}" | grep -qE "t19_sys_umount\.wasm: exit=0" \
 	|| { echo "FAIL: guest umount() failed" >&2; exit 1; }
+echo "${OUT}" | grep -qE "t20_sys_gone\.wasm: exit=0" \
+	|| { echo "FAIL: /dyn still visible after umount" >&2; exit 1; }
 echo "${OUT}" | grep -q "t20_sys_gone: open failed" \
 	|| { echo "FAIL: /dyn still visible after umount" >&2; exit 1; }
 

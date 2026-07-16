@@ -5,24 +5,19 @@
  * Single implementation, host-side only (src/common/pymergetic/metal/util/
  * arena.c) — backs the runtime's bytecode pool (memory/bytecode.h
  * pm_metal_memory_bytecode_ops). On wasm32 the declarations below are
- * wasi-style imports (see util/size.h for the pattern this follows):
- * `buf`/`arena`/`ptr` are always addresses in the *calling* module's own
- * linear memory — WAMR auto-translates each to/from a real host pointer at
- * the import boundary (see arena.c's own native registration), so
- * alloc()/free()/used() still only ever touch memory the guest itself
- * owns, init() still never allocates on its own; running the free-list
- * bookkeeping on the host side instead of compiling a second copy of it
- * into every mod is the only thing that changed. Block next/prev links are
- * stored as offsets from the arena base (never raw host pointers) and free()
- * validates magic + list reachability, so a guest cannot forge host pointers
- * through its writable linear memory. The opaque `arena` handle a guest gets
- * back from init()/alloc() is an app offset, not a native pointer — never
- * dereference it directly, only ever pass it back into another call here.
+ * wasi-style imports (see util/size.h for the pattern this follows).
+ *
+ * The arena *control block* lives in a host-only slot table — never in
+ * guest linear memory. `buf` still holds block headers + payloads only.
+ * On wasm, the opaque handle from init() is a host id (uint32_t), not an
+ * app offset — pass it back into alloc/free/used; never dereference it.
+ * Alloc results remain ordinary guest pointers into `buf`.
  */
 #ifndef PYMERGETIC_METAL_UTIL_ARENA_H_
 #define PYMERGETIC_METAL_UTIL_ARENA_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "pymergetic/metal/util/wasi.h" /* IWYU pragma: keep */
 
@@ -35,18 +30,20 @@ typedef struct pm_metal_util_arena pm_metal_util_arena_t;
 #if defined(__wasm__)
 #define PM_METAL_UTIL_ARENA_IMPORT(name) \
 	PM_METAL_UTIL_WASI_IMPORT(PM_METAL_UTIL_ARENA_WASI_MODULE, name)
+/* Opaque host id — not a pointer into guest linear memory. */
+typedef uint32_t pm_metal_util_arena_handle_t;
 #endif
 
 /*
  * Carve an arena out of buf/buf_len — buf is owned by the caller for the
- * arena's lifetime; init() does not allocate or take ownership. Returns
- * NULL if buf_len is too small to hold even the arena's own bookkeeping.
+ * arena's lifetime; init() does not allocate guest memory. Returns NULL /
+ * 0 if buf_len is too small or the host handle table is full.
  *
  * impl: common — src/common/pymergetic/metal/util/arena.c
  * impl: wasi import — src/common/pymergetic/metal/util/arena.c (wasm32 only)
  */
 #if defined(__wasm__)
-extern pm_metal_util_arena_t *pm_metal_util_arena_init(void *buf, size_t buf_len)
+extern pm_metal_util_arena_handle_t pm_metal_util_arena_init(void *buf, size_t buf_len)
 	PM_METAL_UTIL_ARENA_IMPORT(pm_metal_util_arena_init);
 #else
 pm_metal_util_arena_t *pm_metal_util_arena_init(void *buf, size_t buf_len);
@@ -60,7 +57,7 @@ pm_metal_util_arena_t *pm_metal_util_arena_init(void *buf, size_t buf_len);
  * impl: wasi import — src/common/pymergetic/metal/util/arena.c (wasm32 only)
  */
 #if defined(__wasm__)
-extern void *pm_metal_util_arena_alloc(pm_metal_util_arena_t *arena, size_t size)
+extern void *pm_metal_util_arena_alloc(pm_metal_util_arena_handle_t arena, size_t size)
 	PM_METAL_UTIL_ARENA_IMPORT(pm_metal_util_arena_alloc);
 #else
 void *pm_metal_util_arena_alloc(pm_metal_util_arena_t *arena, size_t size);
@@ -74,7 +71,7 @@ void *pm_metal_util_arena_alloc(pm_metal_util_arena_t *arena, size_t size);
  * impl: wasi import — src/common/pymergetic/metal/util/arena.c (wasm32 only)
  */
 #if defined(__wasm__)
-extern void pm_metal_util_arena_free(pm_metal_util_arena_t *arena, void *ptr)
+extern void pm_metal_util_arena_free(pm_metal_util_arena_handle_t arena, void *ptr)
 	PM_METAL_UTIL_ARENA_IMPORT(pm_metal_util_arena_free);
 #else
 void pm_metal_util_arena_free(pm_metal_util_arena_t *arena, void *ptr);
@@ -87,7 +84,7 @@ void pm_metal_util_arena_free(pm_metal_util_arena_t *arena, void *ptr);
  * impl: wasi import — src/common/pymergetic/metal/util/arena.c (wasm32 only)
  */
 #if defined(__wasm__)
-extern size_t pm_metal_util_arena_used(const pm_metal_util_arena_t *arena)
+extern size_t pm_metal_util_arena_used(pm_metal_util_arena_handle_t arena)
 	PM_METAL_UTIL_ARENA_IMPORT(pm_metal_util_arena_used);
 #else
 size_t pm_metal_util_arena_used(const pm_metal_util_arena_t *arena);

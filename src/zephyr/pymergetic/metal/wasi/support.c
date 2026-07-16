@@ -4,7 +4,6 @@
  * Socket APIs live in wasi/socket.c.
  */
 #include "platform_api_extension.h"
-#include "platform_api_vmcore.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/random/random.h>
@@ -26,33 +25,7 @@ arc4random_buf(void *buf, size_t nbytes)
 	}
 }
 
-int
-os_mutex_init(korp_mutex *mutex)
-{
-	if (mutex == NULL) {
-		return -1;
-	}
-	k_mutex_init(mutex);
-	return 0;
-}
-
-int
-os_mutex_lock(korp_mutex *mutex)
-{
-	if (mutex == NULL) {
-		return -1;
-	}
-	return k_mutex_lock(mutex, K_FOREVER);
-}
-
-int
-os_mutex_unlock(korp_mutex *mutex)
-{
-	if (mutex == NULL) {
-		return -1;
-	}
-	return k_mutex_unlock(mutex);
-}
+/* os_mutex_* come from WAMR zephyr_thread.c (zmutex macros under the hood). */
 
 static __wasi_errno_t
 pm_wasi_clock_value(__wasi_clockid_t clock_id, __wasi_timestamp_t *out)

@@ -124,6 +124,10 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
  * running" is a normal outcome, not a failure. */
 void pm_metal_runtime_terminate(pm_metal_runtime_exec_t *exec);
 
+/* 1 if exec->inst is currently published (mid run_ex), else 0.
+ * Takes the runtime lock — use instead of reading exec->inst unlocked. */
+int pm_metal_runtime_exec_is_live(const pm_metal_runtime_exec_t *exec);
+
 /* impl: common — src/common/pymergetic/metal/runtime/runtime.c
  *
  * hold()/release(): bump/drop a handle's busy refcount directly — the
@@ -146,5 +150,12 @@ void pm_metal_runtime_release(pm_metal_runtime_handle_t h);
 
 /* impl: common — src/common/pymergetic/metal/runtime/runtime.c */
 int pm_metal_runtime_unload(pm_metal_runtime_handle_t h);
+
+/* Guest mount()/umount() natives (pymergetic.metal.mount) are denied unless
+ * this is set. Default 0. Compile-time MOUNT / PM_METAL_BUILD_KERNEL only
+ * affects mod builds — not a runtime privilege boundary. Host CLI:
+ * --allow-guest-mount (see docs/MOUNT.md). */
+void pm_metal_runtime_set_allow_guest_mount(int allow);
+int pm_metal_runtime_allow_guest_mount(void);
 
 #endif /* PYMERGETIC_METAL_RUNTIME_RUNTIME_H_ */

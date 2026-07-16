@@ -7,6 +7,7 @@
 #include "pymergetic/metal/mount/fstab.h"
 #include "pymergetic/metal/mount/ops.h"
 #include "pymergetic/metal/mount/table.h"
+#include "pymergetic/metal/runtime/runtime.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -52,12 +53,18 @@ static int32_t pm_metal_mount_mount_native(wasm_exec_env_t exec_env, char *sourc
 					    char *options)
 {
 	(void)exec_env;
+	if (!pm_metal_runtime_allow_guest_mount()) {
+		return -1;
+	}
 	return (int32_t)pm_metal_mount_mount(source, target, fstype, options && options[0] ? options : NULL);
 }
 
 static int32_t pm_metal_mount_umount_native(wasm_exec_env_t exec_env, char *target)
 {
 	(void)exec_env;
+	if (!pm_metal_runtime_allow_guest_mount()) {
+		return -1;
+	}
 	return (int32_t)pm_metal_mount_umount(target);
 }
 

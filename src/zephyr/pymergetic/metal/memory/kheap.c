@@ -15,6 +15,13 @@ static void *pm_metal_memory_zephyr_kheap_establish(uint64_t requested_bytes, ui
 	uint64_t take;
 	void *pool;
 
+	if (g_pm_metal_memory_kheap_pool) {
+		if (out_bytes) {
+			*out_bytes = g_pm_metal_memory_kheap_bytes;
+		}
+		return g_pm_metal_memory_kheap_pool;
+	}
+
 	take = pm_metal_memory_zephyr_budget_take(requested_bytes);
 	if (take == 0) {
 		return NULL;

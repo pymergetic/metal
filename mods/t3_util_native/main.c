@@ -44,7 +44,7 @@ int main(void)
 	pm_metal_util_log_write_raw(PM_METAL_LOG_STREAM_STDOUT, "t3_util_native: raw, unfiltered");
 
 	static unsigned char buf[256];
-	pm_metal_util_arena_t *arena = pm_metal_util_arena_init(buf, sizeof(buf));
+	pm_metal_util_arena_handle_t arena = pm_metal_util_arena_init(buf, sizeof(buf));
 	if (!arena) {
 		printf("t3_util_native: arena_init failed\n");
 		return 1;
@@ -95,7 +95,7 @@ int main(void)
 	/* Build a 2-entry archive (one dir, one file — the file's data split
 	 * across two put_data() calls, proving the chunked-write path). */
 	static unsigned char archive[4096];
-	pm_metal_util_tar_writer_t w;
+	pm_metal_util_tar_writer_t w = { 0 };
 	pm_metal_util_tar_writer_init(&w, archive, sizeof(archive));
 
 	if (pm_metal_util_tar_writer_put_header(&w, "data/", 0, 1) != 0) {
@@ -148,7 +148,7 @@ int main(void)
 	}
 
 	/* Walk the decompressed archive back with the iterator side. */
-	pm_metal_util_tar_iter_t it;
+	pm_metal_util_tar_iter_t it = { 0 };
 	pm_metal_util_tar_iter_init(&it, archive_unpacked, (size_t)archive_unpacked_len);
 
 	int rc;
@@ -192,8 +192,10 @@ int main(void)
 	}
 	if (rc != 0 || entries != 2) {
 		printf("t3_util_native: tar iteration failed (rc=%d entries=%d)\n", rc, entries);
+		pm_metal_util_tar_iter_close(&it);
 		return 1;
 	}
+	pm_metal_util_tar_iter_close(&it);
 	printf("t3_util_native: tar+lz4 round-trip ok\n");
 
 	return 0;

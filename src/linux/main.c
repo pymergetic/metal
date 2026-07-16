@@ -61,8 +61,9 @@ static void print_usage(const char *argv0)
 	fprintf(stderr,
 		"usage: %s --memory=<bytes> --bytecode-memory=<bytes> --rootfs=<fstype>:<source>\n"
 		"       [--mount=<fstype>:<source>:<target>[:opts]]... [--addr-pool=<cidr>]...\n"
-		"       [--ns-lookup-pool=<host>]... /mod.wasm [...]\n"
-		"  (--vfs-root=<dir> is a deprecated alias for --rootfs=hostdir:<dir>)\n",
+		"       [--ns-lookup-pool=<host>]... [--allow-guest-mount] /mod.wasm [...]\n"
+		"  (--vfs-root=<dir> is a deprecated alias for --rootfs=hostdir:<dir>)\n"
+		"  --allow-guest-mount: permit guest mount()/umount() natives (default deny)\n",
 		argv0);
 }
 
@@ -155,6 +156,7 @@ int main(int argc, char **argv)
 	uint32_t ns_lookup_pool_count = 0;
 	pm_metal_app_cli_mount_t *cli_mounts = NULL;
 	uint32_t cli_mount_count = 0;
+	int allow_guest_mount = 0;
 	int wasm_argc = 0;
 	char **wasm_argv;
 	int i;
@@ -211,6 +213,8 @@ int main(int argc, char **argv)
 				free(cli_mounts);
 				return 1;
 			}
+		} else if (!strcmp(argv[i], "--allow-guest-mount")) {
+			allow_guest_mount = 1;
 		} else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
 			print_usage(argv[0]);
 			free(wasm_argv);
@@ -319,6 +323,7 @@ int main(int argc, char **argv)
 		free(cli_mounts);
 		return 1;
 	}
+	pm_metal_runtime_set_allow_guest_mount(allow_guest_mount);
 	/* init() already made its own copies of addr_pool/ns_lookup_pool
 	 * (see runtime.h's own doc comment on cfg->addr_pool) — this
 	 * process's own copy of the flag list is done being useful the

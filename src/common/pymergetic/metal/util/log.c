@@ -10,7 +10,25 @@
 
 #include <stdio.h>
 
+#include "pymergetic/metal/port/lock.h"
+
 static pm_metal_log_level_t g_pm_metal_util_log_level = PM_METAL_LOG_INFO;
+static pm_metal_port_mutex_t g_pm_metal_util_log_lock;
+static int g_pm_metal_util_log_lock_ready;
+
+static void pm_metal_util_log_lock(void)
+{
+	if (!g_pm_metal_util_log_lock_ready) {
+		pm_metal_port_mutex_init(&g_pm_metal_util_log_lock);
+		g_pm_metal_util_log_lock_ready = 1;
+	}
+	pm_metal_port_mutex_lock(&g_pm_metal_util_log_lock);
+}
+
+static void pm_metal_util_log_unlock(void)
+{
+	pm_metal_port_mutex_unlock(&g_pm_metal_util_log_lock);
+}
 
 static FILE *pm_metal_util_log_stream_file(pm_metal_log_stream_t stream)
 {
@@ -19,12 +37,19 @@ static FILE *pm_metal_util_log_stream_file(pm_metal_log_stream_t stream)
 
 void pm_metal_util_log_set_level(pm_metal_log_level_t level)
 {
+	pm_metal_util_log_lock();
 	g_pm_metal_util_log_level = level;
+	pm_metal_util_log_unlock();
 }
 
 pm_metal_log_level_t pm_metal_util_log_get_level(void)
 {
-	return g_pm_metal_util_log_level;
+	pm_metal_log_level_t level;
+
+	pm_metal_util_log_lock();
+	level = g_pm_metal_util_log_level;
+	pm_metal_util_log_unlock();
+	return level;
 }
 
 int pm_metal_util_log_level_name(pm_metal_log_level_t level, char *out, size_t cap)
@@ -44,7 +69,15 @@ int pm_metal_util_log_level_name(pm_metal_log_level_t level, char *out, size_t c
 
 void pm_metal_util_log_write(pm_metal_log_stream_t stream, pm_metal_log_level_t level, const char *msg)
 {
-	if (!msg || level < g_pm_metal_util_log_level) {
+	pm_metal_log_level_t floor;
+
+	if (!msg) {
+		return;
+	}
+	pm_metal_util_log_lock();
+	floor = g_pm_metal_util_log_level;
+	pm_metal_util_log_unlock();
+	if (level < floor) {
 		return;
 	}
 
@@ -73,7 +106,15 @@ void pm_metal_util_log_write_raw(pm_metal_log_stream_t stream, const char *msg)
 
 void pm_metal_util_log_writef(pm_metal_log_stream_t stream, pm_metal_log_level_t level, const char *fmt, ...)
 {
-	if (!fmt || level < g_pm_metal_util_log_level) {
+	pm_metal_log_level_t floor;
+
+	if (!fmt) {
+		return;
+	}
+	pm_metal_util_log_lock();
+	floor = g_pm_metal_util_log_level;
+	pm_metal_util_log_unlock();
+	if (level < floor) {
 		return;
 	}
 
