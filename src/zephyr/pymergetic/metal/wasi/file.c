@@ -77,9 +77,11 @@ static struct zephyr_fs_desc desc_array[CONFIG_WASI_MAX_OPEN_FILES];
 K_MUTEX_DEFINE(desc_array_mutex);
 
 /* Acquire a live (non-closing) slot for an op. Pair with pm_metal_desc_release.
- * Virtual stdio fds set *out = NULL and return 0 (same as legacy macro). */
+ * Virtual stdio fds set *out = NULL and return 0 (same as legacy macro).
+ * If path_snap != NULL, copy ptr->path under the mutex (FD-1: rename-safe). */
 static int
-pm_metal_desc_acquire(os_file_handle fd, struct zephyr_fs_desc **out)
+pm_metal_desc_acquire(os_file_handle fd, struct zephyr_fs_desc **out,
+		      char *path_snap, size_t path_snap_len)
 {
 	struct zephyr_fs_desc *ptr;
 
@@ -88,6 +90,9 @@ pm_metal_desc_acquire(os_file_handle fd, struct zephyr_fs_desc **out)
 	}
 	if (os_is_virtual_fd(fd)) {
 		*out = NULL;
+		if (path_snap != NULL && path_snap_len > 0) {
+			path_snap[0] = '\0';
+		}
 		return 0;
 	}
 	if (fd < 3 || fd >= CONFIG_WASI_MAX_OPEN_FILES + 3) {
@@ -99,33 +104,50 @@ pm_metal_desc_acquire(os_file_handle fd, struct zephyr_fs_desc **out)
 		k_mutex_unlock(&desc_array_mutex);
 		return -1;
 	}
+	if (path_snap != NULL && path_snap_len > 0) {
+		if (ptr->path != NULL) {
+			strncpy(path_snap, ptr->path, path_snap_len - 1);
+			path_snap[path_snap_len - 1] = '\0';
+		} else {
+			path_snap[0] = '\0';
+		}
+	}
 	ptr->refs++;
 	*out = ptr;
 	k_mutex_unlock(&desc_array_mutex);
 	return 0;
 }
 
-/* Finish FS close + free path after the slot was cleared under the mutex. */
-static void
-pm_metal_desc_teardown(char *path, int is_dir, int dir_opened,
-		       struct fs_file_t *file, struct fs_dir_t *dir)
+/* Finish FS close + free path after the slot was cleared under the mutex.
+ * Returns fs_close/fs_closedir status (0 or negative errno); path always freed. */
+static int
+pm_metal_desc_teardown(char *path, char *path_retired, int is_dir,
+		       int dir_opened, struct fs_file_t *file,
+		       struct fs_dir_t *dir)
 {
+	int rc = 0;
+
 	if (is_dir) {
 		if (dir_opened && dir != NULL) {
-			(void)fs_closedir(dir);
+			rc = fs_closedir(dir);
 		}
 	} else if (file != NULL) {
-		(void)fs_close(file);
+		rc = fs_close(file);
 	}
 	if (path != NULL) {
 		BH_FREE(path);
 	}
+	if (path_retired != NULL) {
+		BH_FREE(path_retired);
+	}
+	return rc;
 }
 
 static void
 pm_metal_desc_release(struct zephyr_fs_desc *ptr)
 {
 	char *path = NULL;
+	char *path_retired = NULL;
 	int is_dir = 0;
 	int dir_opened = 0;
 	int do_teardown = 0;
@@ -138,6 +160,11 @@ pm_metal_desc_release(struct zephyr_fs_desc *ptr)
 	k_mutex_lock(&desc_array_mutex, K_FOREVER);
 	if (ptr->refs > 0) {
 		ptr->refs--;
+	}
+	/* Retire renamed-away path strings once no op holds a snapshot. */
+	if (ptr->refs == 0 && ptr->path_retired != NULL) {
+		path_retired = ptr->path_retired;
+		ptr->path_retired = NULL;
 	}
 	if (ptr->closing && ptr->refs == 0) {
 		path = ptr->path;
@@ -157,7 +184,10 @@ pm_metal_desc_release(struct zephyr_fs_desc *ptr)
 	}
 	k_mutex_unlock(&desc_array_mutex);
 	if (do_teardown) {
-		pm_metal_desc_teardown(path, is_dir, dir_opened, &file, &dir);
+		(void)pm_metal_desc_teardown(path, path_retired, is_dir,
+					     dir_opened, &file, &dir);
+	} else if (path_retired != NULL) {
+		BH_FREE(path_retired);
 	}
 }
 
@@ -167,6 +197,7 @@ pm_metal_desc_close(os_file_handle fd)
 {
 	struct zephyr_fs_desc *ptr;
 	char *path = NULL;
+	char *path_retired = NULL;
 	int is_dir = 0;
 	int dir_opened = 0;
 	int do_teardown = 0;
@@ -185,6 +216,7 @@ pm_metal_desc_close(os_file_handle fd)
 	ptr->closing = true;
 	if (ptr->refs == 0) {
 		path = ptr->path;
+		path_retired = ptr->path_retired;
 		is_dir = ptr->is_dir;
 		dir_opened = ptr->dir_opened;
 		if (is_dir) {
@@ -193,6 +225,7 @@ pm_metal_desc_close(os_file_handle fd)
 			file = ptr->file;
 		}
 		ptr->path = NULL;
+		ptr->path_retired = NULL;
 		ptr->dir_opened = false;
 		ptr->closing = false;
 		ptr->used = false;
@@ -201,19 +234,9 @@ pm_metal_desc_close(os_file_handle fd)
 	}
 	k_mutex_unlock(&desc_array_mutex);
 	if (do_teardown) {
-		/* Surface fs_close/fs_closedir errors; path is always freed. */
-		int rc = 0;
+		int rc = pm_metal_desc_teardown(path, path_retired, is_dir,
+						dir_opened, &file, &dir);
 
-		if (is_dir) {
-			if (dir_opened) {
-				rc = fs_closedir(&dir);
-			}
-		} else {
-			rc = fs_close(&file);
-		}
-		if (path != NULL) {
-			BH_FREE(path);
-		}
 		if (rc < 0) {
 			return convert_errno(-rc);
 		}
@@ -222,12 +245,22 @@ pm_metal_desc_close(os_file_handle fd)
 }
 
 // fd's 0-2 are reserved for standard streams, hence the by-3 offsets.
-#define GET_FILE_SYSTEM_DESCRIPTOR(fd, ptr)                   \
-    do {                                                      \
-        if (pm_metal_desc_acquire((fd), &(ptr)) != 0) {       \
-            return __WASI_EBADF;                              \
-        }                                                     \
-    } while (0)
+#define GET_FILE_SYSTEM_DESCRIPTOR(fd, ptr)                                    \
+	do {                                                                   \
+		if (pm_metal_desc_acquire((fd), &(ptr), NULL, 0) != 0) {       \
+			return __WASI_EBADF;                                   \
+		}                                                              \
+	} while (0)
+
+/* Acquire and snapshot path under desc_array_mutex (safe vs os_renameat). */
+#define GET_FILE_SYSTEM_DESCRIPTOR_PATH(fd, ptr, pathbuf)                      \
+	do {                                                                   \
+		if (pm_metal_desc_acquire((fd), &(ptr), (pathbuf),             \
+					  sizeof(pathbuf))                     \
+		    != 0) {                                                    \
+			return __WASI_EBADF;                                   \
+		}                                                              \
+	} while (0)
 
 #define RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr) pm_metal_desc_release(ptr)
 
@@ -432,6 +465,7 @@ zephyr_fs_alloc_obj(bool is_dir, const char *path, int *index)
             ptr->dir_opened = false;
             ptr->closing = false;
             ptr->refs = 0;
+            ptr->path_retired = NULL;
             ptr->dir_index = 0;
             size_t path_len = strlen(path) + 1;
             ptr->path = BH_MALLOC(path_len);
@@ -462,6 +496,10 @@ zephyr_fs_free_obj(struct zephyr_fs_desc *ptr)
 {
     BH_FREE(ptr->path);
     ptr->path = NULL;
+    if (ptr->path_retired != NULL) {
+	    BH_FREE(ptr->path_retired);
+	    ptr->path_retired = NULL;
+    }
     ptr->dir_opened = false;
     ptr->closing = false;
     ptr->refs = 0;
@@ -494,9 +532,11 @@ os_fstat(os_file_handle handle, struct __wasi_filestat_t *buf)
 		return __WASI_ESUCCESS;
 	}
 
-	GET_FILE_SYSTEM_DESCRIPTOR(handle, ptr);
+	char path_snap[MAX_FILE_NAME + 1];
 
-	if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+	GET_FILE_SYSTEM_DESCRIPTOR_PATH(handle, ptr, path_snap);
+
+	if (pm_metal_wasi_is_proc_sentinel(path_snap)) {
 		pm_metal_wasi_fill_dir_stat(buf);
 		RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
 		return __WASI_ESUCCESS;
@@ -504,7 +544,7 @@ os_fstat(os_file_handle handle, struct __wasi_filestat_t *buf)
 
 	struct fs_dirent entry;
 
-	rc = fs_stat(ptr->path, &entry);
+	rc = fs_stat(path_snap, &entry);
 	if (rc < 0) {
 		RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
 		return convert_errno(-rc);
@@ -1353,25 +1393,41 @@ os_renameat(os_file_handle old_handle, const char *old_path,
         return convert_errno(-rc);
     }
 
-    // If there is an allocated fd in our table, update the descriptor table
-    // entry DSK: better approach here?
+    /* Update open descriptors that still name the old path. Skip closing
+     * slots. If refs > 0, defer free of the old path string until release
+     * (path_retired) so in-flight path snapshots stay valid (FD-1). */
     k_mutex_lock(&desc_array_mutex, K_FOREVER);
     for (int i = 0; i < CONFIG_WASI_MAX_OPEN_FILES; i++) {
         struct zephyr_fs_desc *ptr = &desc_array[i];
-        if (ptr->used && ptr->path && strcmp(ptr->path, abs_old_path) == 0) {
+        char *old_path;
+
+        if (!ptr->used || ptr->closing || ptr->path == NULL) {
+            continue;
+        }
+        if (strcmp(ptr->path, abs_old_path) != 0) {
+            continue;
+        }
+        {
             size_t new_path_len = strlen(abs_new_path) + 1;
             char *new_path_copy = BH_MALLOC(new_path_len);
-            if (new_path_copy != NULL) {
-                strcpy(new_path_copy, abs_new_path);
-                BH_FREE(ptr->path);
-                ptr->path = new_path_copy;
-            }
-            else {
+
+            if (new_path_copy == NULL) {
                 k_mutex_unlock(&desc_array_mutex);
                 return __WASI_ENOMEM;
             }
-            break; // Only one descriptor should match
+            strcpy(new_path_copy, abs_new_path);
+            old_path = ptr->path;
+            ptr->path = new_path_copy;
+            if (ptr->refs == 0) {
+                BH_FREE(old_path);
+            } else {
+                if (ptr->path_retired != NULL) {
+                    BH_FREE(ptr->path_retired);
+                }
+                ptr->path_retired = old_path;
+            }
         }
+        break; /* Only one descriptor should match */
     }
     k_mutex_unlock(&desc_array_mutex);
 
@@ -1503,20 +1559,21 @@ os_fdopendir(os_file_handle handle, os_dir_stream *dir_stream)
      * before otherwise function will fail.
      */
     struct zephyr_fs_desc *ptr = NULL;
+    char path_snap[MAX_FILE_NAME + 1];
 
-    GET_FILE_SYSTEM_DESCRIPTOR(handle, ptr);
+    GET_FILE_SYSTEM_DESCRIPTOR_PATH(handle, ptr, path_snap);
     if (!ptr->is_dir) {
         RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTDIR;
     }
 
-    if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+    if (pm_metal_wasi_is_proc_sentinel(path_snap)) {
         RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTSUP;
     }
 
     if (!ptr->dir_opened) {
-        int rc = fs_opendir(&ptr->dir, ptr->path);
+        int rc = fs_opendir(&ptr->dir, path_snap);
         if (rc < 0) {
             RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
             return convert_errno(-rc);
@@ -1536,14 +1593,16 @@ __wasi_errno_t
 os_rewinddir(os_dir_stream dir_stream)
 {
     struct zephyr_fs_desc *ptr = NULL;
-    GET_FILE_SYSTEM_DESCRIPTOR(dir_stream, ptr);
+    char path_snap[MAX_FILE_NAME + 1];
+
+    GET_FILE_SYSTEM_DESCRIPTOR_PATH(dir_stream, ptr, path_snap);
 
     if (!ptr->is_dir) {
         RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTDIR;
     }
 
-    if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+    if (pm_metal_wasi_is_proc_sentinel(path_snap)) {
         RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTSUP;
     }
@@ -1555,7 +1614,7 @@ os_rewinddir(os_dir_stream dir_stream)
     }
     ptr->dir_opened = false;
 
-    rc = fs_opendir(&ptr->dir, ptr->path); // Reopen from start
+    rc = fs_opendir(&ptr->dir, path_snap); // Reopen from start
     if (rc < 0) {
         RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return convert_errno(-rc);
@@ -1573,14 +1632,16 @@ __wasi_errno_t
 os_seekdir(os_dir_stream dir_stream, __wasi_dircookie_t position)
 {
     struct zephyr_fs_desc *ptr = NULL;
-    GET_FILE_SYSTEM_DESCRIPTOR(dir_stream, ptr);
+    char path_snap[MAX_FILE_NAME + 1];
+
+    GET_FILE_SYSTEM_DESCRIPTOR_PATH(dir_stream, ptr, path_snap);
 
     if (!ptr->is_dir) {
         RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTDIR;
     }
 
-    if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+    if (pm_metal_wasi_is_proc_sentinel(path_snap)) {
         RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTSUP;
     }
@@ -1592,7 +1653,7 @@ os_seekdir(os_dir_stream dir_stream, __wasi_dircookie_t position)
     }
     ptr->dir_opened = false;
 
-    rc = fs_opendir(&ptr->dir, ptr->path);
+    rc = fs_opendir(&ptr->dir, path_snap);
     if (rc < 0) {
         RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return convert_errno(-rc);
@@ -1622,13 +1683,15 @@ os_readdir(os_dir_stream dir_stream, __wasi_dirent_t *entry,
 {
     struct fs_dirent fs_entry;
     struct zephyr_fs_desc *ptr = NULL;
-    GET_FILE_SYSTEM_DESCRIPTOR(dir_stream, ptr);
+    char path_snap[MAX_FILE_NAME + 1];
+
+    GET_FILE_SYSTEM_DESCRIPTOR_PATH(dir_stream, ptr, path_snap);
     if (!ptr->is_dir) {
         RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTDIR;
     }
 
-    if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
+    if (pm_metal_wasi_is_proc_sentinel(path_snap)) {
         RELEASE_FILE_SYSTEM_DESCRIPTOR(ptr);
         return __WASI_ENOTSUP;
     }
@@ -1721,7 +1784,8 @@ os_is_dir_stream_valid(os_dir_stream *dir_stream)
     }
     k_mutex_lock(&desc_array_mutex, K_FOREVER);
     ptr = &desc_array[fd - 3];
-    ok = ptr->used && ptr->is_dir;
+    /* Mid-close streams are invalid for new dir ops (FD-2). */
+    ok = ptr->used && ptr->is_dir && !ptr->closing;
     k_mutex_unlock(&desc_array_mutex);
     return ok;
 }
