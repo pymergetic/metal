@@ -4,8 +4,8 @@
  * scripts/verify-linux-tmpfs.sh's fstab). Expected to fail (nothing was
  * ever written here) — proving two independently-named tmpfs sources
  * really are independent backings, not silently the same one (see
- * docs/MOUNT.md "Named ramdisks"). A non-zero exit here is the pass case;
- * the verify script checks for that explicitly. wasm32-wasip1.
+ * docs/MOUNT.md "Named ramdisks"). Exit 0 when open fails (correct
+ * isolation); exit 1 if a file is found.
  */
 #include <fcntl.h>
 #include <stdio.h>
@@ -17,7 +17,7 @@ int main(void)
 
 	if (fd < 0) {
 		printf("t15_tmpfs_read_other: open failed (expected)\n");
-		return 1;
+		return 0;
 	}
 
 	close(fd);

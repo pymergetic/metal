@@ -26,6 +26,9 @@ int main(void)
 	rc = getaddrinfo("localhost", NULL, &hints, &res);
 	if (rc != 0 || res == NULL || res->ai_addr == NULL) {
 		printf("t28_dns_lookup: getaddrinfo(localhost) failed (%d)\n", rc);
+		if (res != NULL) {
+			freeaddrinfo(res);
+		}
 		return 1;
 	}
 

@@ -66,7 +66,8 @@ set(PM_MODS_EMBED_H "${CMAKE_CURRENT_LIST_DIR}/generated/mods_embed.h")
 set(PM_POPULATE_EMBED_C "${CMAKE_CURRENT_LIST_DIR}/generated/populate_embed.c")
 if(CONFIG_PM_METAL_VERIFY_MODS)
 	if(NOT EXISTS "${PM_MODS_EMBED_C}")
-		message(WARNING "Missing ${PM_MODS_EMBED_C}; run scripts/gen-zephyr-mods-embed.sh")
+		message(FATAL_ERROR
+			"Missing ${PM_MODS_EMBED_C}; run scripts/gen-zephyr-mods-embed.sh")
 	endif()
 endif()
 
@@ -164,6 +165,17 @@ set_source_files_properties(
 	TARGET_DIRECTORY app
 	PROPERTIES COMPILE_OPTIONS "${PM_WASI_SHIM_INCLUDE}"
 )
+
+# Upstream WAMR noise (float32→double printf; unused loader locals) — not ours.
+# Scoped to WAMR TUs only so metal sources still see those warnings.
+foreach(_pm_wamr_src IN LISTS WAMR_RUNTIME_LIB_SOURCE)
+	set_property(SOURCE "${_pm_wamr_src}" TARGET_DIRECTORY app APPEND PROPERTY
+		COMPILE_OPTIONS -Wno-double-promotion -Wno-unused-variable)
+endforeach()
+set_property(SOURCE
+	"${WAMR_ROOT_DIR}/core/shared/platform/common/libc-util/libc_errno.c"
+	TARGET_DIRECTORY app APPEND PROPERTY
+	COMPILE_OPTIONS -Wno-double-promotion -Wno-unused-variable)
 
 target_compile_options(app PRIVATE
 	-Wno-type-limits

@@ -1,53 +1,127 @@
 /*
- * pm_metal_util_tar_* — impl: common (see util/tar.h; wasm32 mods reach
- * this same code via this file's own wasi-style import registration at
- * the bottom, not via a second compiled copy of this file, and never
- * link a byte of upstream microtar themselves).
+ * pm_metal_util_tar_* — impl: common (see util/tar.h).
  *
- * Layout: pm_metal_util_tar_iter_t/pm_metal_util_tar_writer_t are both
- * reinterpreted in place as pm_metal_util_tar_state_t below — same
- * "_Static_assert the size fits" shape as port/lock.c. One state struct
- * for both directions (a vendored mtar_t + this file's own memory-stream
- * context) — a writer simply never populates the read-only fields
- * (hdr/data_read), trading a few unused bytes for one shared set of
- * memory-stream callbacks instead of two.
+ * Full tar state (incl. mtar_t function pointers) lives in a host-only
+ * slot table. Guest-facing iter_t/writer_t hold only an opaque host id.
  */
 #include "pymergetic/metal/util/tar.h"
 
 #include <limits.h>
 #include <string.h>
 
-/* vendored — full path from this package's own root (see CMakeLists.txt's
- * PM_METAL_ROOT include dir, scoped to just this file), not a bare
- * "microtar.h"; see util/lz4.c for the same convention. */
 #include "external/microtar/src/microtar.h"
 
+#define PM_METAL_UTIL_TAR_MAX_SLOTS 32
+
 typedef struct {
-	void *base;   /* archive bytes — read mode: caller's `buf`; write mode: caller's output `buf` */
-	size_t limit; /* read mode: `len` given to iter_init(); write mode: `cap` given to writer_init() */
+	void *base;
+	size_t limit;
 } pm_metal_util_tar_mem_t;
 
 typedef struct {
 	mtar_t tar;
 	pm_metal_util_tar_mem_t mem;
-	mtar_header_t hdr;   /* iter only: cached header of the current entry */
-	size_t data_read;    /* iter only: bytes of hdr already handed out via iter_read() */
-	int have_entry;      /* iter only: 1 once next() has produced a current entry */
+	mtar_header_t hdr;
+	size_t data_read;
+	int have_entry;
 } pm_metal_util_tar_state_t;
 
-_Static_assert(sizeof(pm_metal_util_tar_state_t) <= sizeof(pm_metal_util_tar_iter_t),
-	       "pm_metal_util_tar_state_t does not fit in pm_metal_util_tar_iter_t storage");
-_Static_assert(sizeof(pm_metal_util_tar_state_t) <= sizeof(pm_metal_util_tar_writer_t),
-	       "pm_metal_util_tar_state_t does not fit in pm_metal_util_tar_writer_t storage");
+typedef struct {
+	int used;
+	uint32_t gen;
+	pm_metal_util_tar_state_t state;
+} pm_metal_util_tar_slot_t;
 
-/*
- * Memory-stream callbacks — bounds-checked read/write directly against
- * the caller-owned buffer handed to iter_init()/writer_init(), no libc
- * FILE* involved. tar->pos is always the *pre*-operation offset here:
- * microtar's own tread()/twrite() wrappers advance it themselves right
- * after calling us. Promoting to size_t before adding avoids a 32-bit
- * wraparound false-negative on the bounds check near UINT_MAX.
- */
+static pm_metal_util_tar_slot_t g_pm_metal_util_tar_slots[PM_METAL_UTIL_TAR_MAX_SLOTS];
+
+static pm_metal_util_tar_slot_t *pm_metal_util_tar_slot_claim(void)
+{
+	int i;
+
+	for (i = 0; i < PM_METAL_UTIL_TAR_MAX_SLOTS; i++) {
+		pm_metal_util_tar_slot_t *s = &g_pm_metal_util_tar_slots[i];
+
+		if (!s->used) {
+			s->used = 1;
+			s->gen++;
+			if (s->gen == 0) {
+				s->gen = 1;
+			}
+			memset(&s->state, 0, sizeof(s->state));
+			return s;
+		}
+	}
+	return NULL;
+}
+
+static void pm_metal_util_tar_slot_release(pm_metal_util_tar_slot_t *s)
+{
+	if (!s || !s->used) {
+		return;
+	}
+	s->used = 0;
+	memset(&s->state, 0, sizeof(s->state));
+}
+
+static uint32_t pm_metal_util_tar_handle_of(const pm_metal_util_tar_slot_t *s)
+{
+	int idx;
+
+	if (!s || !s->used) {
+		return 0;
+	}
+	idx = (int)(s - g_pm_metal_util_tar_slots);
+	return (s->gen << 16) | (uint32_t)(idx + 1);
+}
+
+static pm_metal_util_tar_slot_t *pm_metal_util_tar_slot_from_handle(uint32_t handle)
+{
+	uint32_t idx;
+	uint32_t gen;
+	pm_metal_util_tar_slot_t *s;
+
+	if (handle == 0) {
+		return NULL;
+	}
+	idx = (handle & 0xffffu) - 1u;
+	gen = handle >> 16;
+	if (idx >= PM_METAL_UTIL_TAR_MAX_SLOTS) {
+		return NULL;
+	}
+	s = &g_pm_metal_util_tar_slots[idx];
+	if (!s->used || s->gen != gen) {
+		return NULL;
+	}
+	return s;
+}
+
+static pm_metal_util_tar_state_t *pm_metal_util_tar_state(const pm_metal_util_tar_iter_t *it)
+{
+	pm_metal_util_tar_slot_t *s;
+
+	if (!it) {
+		return NULL;
+	}
+	s = pm_metal_util_tar_slot_from_handle(it->id);
+	return s ? &s->state : NULL;
+}
+
+static pm_metal_util_tar_state_t *pm_metal_util_tar_writer_state(const pm_metal_util_tar_writer_t *w)
+{
+	pm_metal_util_tar_slot_t *s;
+
+	if (!w) {
+		return NULL;
+	}
+	s = pm_metal_util_tar_slot_from_handle(w->id);
+	return s ? &s->state : NULL;
+}
+
+static void pm_metal_util_tar_release_handle(uint32_t handle)
+{
+	pm_metal_util_tar_slot_release(pm_metal_util_tar_slot_from_handle(handle));
+}
+
 static int pm_metal_util_tar_mem_read(mtar_t *tar, void *data, unsigned size)
 {
 	pm_metal_util_tar_mem_t *mem = (pm_metal_util_tar_mem_t *)tar->stream;
@@ -80,34 +154,46 @@ static int pm_metal_util_tar_mem_seek(mtar_t *tar, unsigned pos)
 static int pm_metal_util_tar_mem_close(mtar_t *tar)
 {
 	(void)tar;
-	return MTAR_ESUCCESS; /* nothing owned beyond the caller's own buffer */
+	return MTAR_ESUCCESS;
 }
 
 void pm_metal_util_tar_iter_init(pm_metal_util_tar_iter_t *it, const void *buf, size_t len)
 {
-	pm_metal_util_tar_state_t *st = (pm_metal_util_tar_state_t *)it;
+	pm_metal_util_tar_slot_t *slot;
+	pm_metal_util_tar_state_t *st;
 
-	memset(st, 0, sizeof(*st));
-	/* Cast away const: this read-mode mem context is only ever touched by
-	 * mem_read()/mem_seek() above, which never write through it. */
+	if (!it) {
+		return;
+	}
+	if (it->id) {
+		pm_metal_util_tar_release_handle(it->id);
+		it->id = 0;
+	}
+	slot = pm_metal_util_tar_slot_claim();
+	if (!slot) {
+		it->id = 0;
+		return;
+	}
+	st = &slot->state;
 	st->mem.base = (void *)buf;
 	st->mem.limit = len;
 	st->tar.read = pm_metal_util_tar_mem_read;
 	st->tar.seek = pm_metal_util_tar_mem_seek;
 	st->tar.close = pm_metal_util_tar_mem_close;
 	st->tar.stream = &st->mem;
+	it->id = pm_metal_util_tar_handle_of(slot);
 }
 
 int pm_metal_util_tar_iter_next(pm_metal_util_tar_iter_t *it)
 {
-	pm_metal_util_tar_state_t *st = (pm_metal_util_tar_state_t *)it;
+	pm_metal_util_tar_state_t *st = pm_metal_util_tar_state(it);
 	int err;
 
+	if (!st) {
+		return -1;
+	}
+
 	if (st->have_entry) {
-		/* A caller may not have fully drained the current entry via
-		 * iter_read() — re-anchor on its own header before asking
-		 * microtar to skip it, since mtar_next()/mtar_read_data()
-		 * both assume tar->pos already sits there. */
 		if (pm_metal_util_tar_mem_seek(&st->tar, st->tar.last_header) != MTAR_ESUCCESS) {
 			st->have_entry = 0;
 			return -1;
@@ -129,9 +215,6 @@ int pm_metal_util_tar_iter_next(pm_metal_util_tar_iter_t *it)
 		return -1;
 	}
 
-	/* Force the first iter_read() call for this entry to (re-)seek past
-	 * its header and load remaining_data — see mtar_read_data()'s own
-	 * "if (tar->remaining_data == 0)" branch. */
 	st->tar.remaining_data = 0;
 	st->data_read = 0;
 	st->have_entry = 1;
@@ -140,14 +223,13 @@ int pm_metal_util_tar_iter_next(pm_metal_util_tar_iter_t *it)
 
 int pm_metal_util_tar_iter_name(const pm_metal_util_tar_iter_t *it, char *out, size_t cap)
 {
-	const pm_metal_util_tar_state_t *st = (const pm_metal_util_tar_state_t *)it;
+	const pm_metal_util_tar_state_t *st = pm_metal_util_tar_state(it);
 	size_t n;
 
-	if (!st->have_entry || !out || cap == 0) {
+	if (!st || !st->have_entry || !out || cap == 0) {
 		return -1;
 	}
 
-	/* ustar name is a fixed 100-byte field — may lack a trailing NUL. */
 	n = strnlen(st->hdr.name, sizeof(st->hdr.name));
 	if (n + 1 > cap) {
 		return -1;
@@ -159,16 +241,16 @@ int pm_metal_util_tar_iter_name(const pm_metal_util_tar_iter_t *it, char *out, s
 
 uint64_t pm_metal_util_tar_iter_size(const pm_metal_util_tar_iter_t *it)
 {
-	const pm_metal_util_tar_state_t *st = (const pm_metal_util_tar_state_t *)it;
+	const pm_metal_util_tar_state_t *st = pm_metal_util_tar_state(it);
 
-	return st->have_entry ? (uint64_t)st->hdr.size : 0;
+	return (st && st->have_entry) ? (uint64_t)st->hdr.size : 0;
 }
 
 int pm_metal_util_tar_iter_is_dir(const pm_metal_util_tar_iter_t *it)
 {
-	const pm_metal_util_tar_state_t *st = (const pm_metal_util_tar_state_t *)it;
+	const pm_metal_util_tar_state_t *st = pm_metal_util_tar_state(it);
 
-	if (!st->have_entry) {
+	if (!st || !st->have_entry) {
 		return -1;
 	}
 	return st->hdr.type == MTAR_TDIR ? 1 : 0;
@@ -176,20 +258,20 @@ int pm_metal_util_tar_iter_is_dir(const pm_metal_util_tar_iter_t *it)
 
 int pm_metal_util_tar_iter_read(pm_metal_util_tar_iter_t *it, void *dst, size_t dst_cap)
 {
-	pm_metal_util_tar_state_t *st = (pm_metal_util_tar_state_t *)it;
+	pm_metal_util_tar_state_t *st = pm_metal_util_tar_state(it);
 	size_t remaining, want;
 
-	if (!st->have_entry || !dst) {
+	if (!st || !st->have_entry || !dst) {
 		return -1;
 	}
 	if (st->data_read >= (size_t)st->hdr.size) {
-		return 0; /* this entry's data is fully consumed */
+		return 0;
 	}
 
 	remaining = (size_t)st->hdr.size - st->data_read;
 	want = dst_cap < remaining ? dst_cap : remaining;
 	if (want > (size_t)INT_MAX) {
-		want = (size_t)INT_MAX; /* keep the returned byte count representable */
+		want = (size_t)INT_MAX;
 	}
 	if (want == 0) {
 		return 0;
@@ -201,36 +283,59 @@ int pm_metal_util_tar_iter_read(pm_metal_util_tar_iter_t *it, void *dst, size_t 
 	return (int)want;
 }
 
+void pm_metal_util_tar_iter_close(pm_metal_util_tar_iter_t *it)
+{
+	if (!it || !it->id) {
+		return;
+	}
+	pm_metal_util_tar_release_handle(it->id);
+	it->id = 0;
+}
+
 void pm_metal_util_tar_writer_init(pm_metal_util_tar_writer_t *w, void *buf, size_t cap)
 {
-	pm_metal_util_tar_state_t *st = (pm_metal_util_tar_state_t *)w;
+	pm_metal_util_tar_slot_t *slot;
+	pm_metal_util_tar_state_t *st;
 
-	memset(st, 0, sizeof(*st));
+	if (!w) {
+		return;
+	}
+	if (w->id) {
+		pm_metal_util_tar_release_handle(w->id);
+		w->id = 0;
+	}
+	slot = pm_metal_util_tar_slot_claim();
+	if (!slot) {
+		w->id = 0;
+		return;
+	}
+	st = &slot->state;
 	st->mem.base = buf;
 	st->mem.limit = cap;
 	st->tar.write = pm_metal_util_tar_mem_write;
 	st->tar.seek = pm_metal_util_tar_mem_seek;
 	st->tar.close = pm_metal_util_tar_mem_close;
 	st->tar.stream = &st->mem;
+	w->id = pm_metal_util_tar_handle_of(slot);
 }
 
 int pm_metal_util_tar_writer_put_header(pm_metal_util_tar_writer_t *w, const char *name, uint64_t size,
 					 int is_dir)
 {
-	pm_metal_util_tar_state_t *st = (pm_metal_util_tar_state_t *)w;
+	pm_metal_util_tar_state_t *st = pm_metal_util_tar_writer_state(w);
 	int err;
 
-	if (!name || strlen(name) >= PM_METAL_UTIL_TAR_NAME_MAX) {
+	if (!st || !name || strlen(name) >= PM_METAL_UTIL_TAR_NAME_MAX) {
 		return -1;
 	}
 	if (is_dir && size != 0) {
 		return -1;
 	}
 	if (size > (uint64_t)UINT_MAX) {
-		return -1; /* upstream mtar_header_t.size is a plain 32-bit unsigned */
+		return -1;
 	}
 	if (st->tar.remaining_data != 0) {
-		return -1; /* previous entry's put_data() calls didn't add up to its own size yet */
+		return -1;
 	}
 
 	err = is_dir ? mtar_write_dir_header(&st->tar, name)
@@ -241,13 +346,16 @@ int pm_metal_util_tar_writer_put_header(pm_metal_util_tar_writer_t *w, const cha
 
 int pm_metal_util_tar_writer_put_data(pm_metal_util_tar_writer_t *w, const void *src, size_t src_len)
 {
-	pm_metal_util_tar_state_t *st = (pm_metal_util_tar_state_t *)w;
+	pm_metal_util_tar_state_t *st = pm_metal_util_tar_writer_state(w);
 
+	if (!st) {
+		return -1;
+	}
 	if (src_len == 0) {
 		return 0;
 	}
 	if (!src || src_len > (size_t)st->tar.remaining_data || src_len > (size_t)UINT_MAX) {
-		return -1; /* would overrun the entry's own put_header() size */
+		return -1;
 	}
 
 	return mtar_write_data(&st->tar, src, (unsigned)src_len) == MTAR_ESUCCESS ? 0 : -1;
@@ -269,26 +377,26 @@ int pm_metal_util_tar_writer_put(pm_metal_util_tar_writer_t *w, const char *name
 
 int64_t pm_metal_util_tar_writer_finish(pm_metal_util_tar_writer_t *w)
 {
-	pm_metal_util_tar_state_t *st = (pm_metal_util_tar_state_t *)w;
+	pm_metal_util_tar_state_t *st = pm_metal_util_tar_writer_state(w);
+	int64_t pos;
 
+	if (!st) {
+		return -1;
+	}
 	if (st->tar.remaining_data != 0) {
-		return -1; /* last entry's put_data() calls didn't add up to its own size yet */
+		return -1;
 	}
 	if (mtar_finalize(&st->tar) != MTAR_ESUCCESS) {
 		return -1;
 	}
-	return (int64_t)st->tar.pos;
+	pos = (int64_t)st->tar.pos;
+	if (w) {
+		pm_metal_util_tar_release_handle(w->id);
+		w->id = 0;
+	}
+	return pos;
 }
 
-/*
- * wasi-style import bridge — see size.c's own bridge comment for the
- * general signature-string rules this follows. it/w cross as a bare '*'
- * (checked length 1, not the full opaque struct size — same accepted
- * trade-off as arena.h's opaque handles, see arena.c); name crosses as
- * '$' (NUL-terminated string, same as log.c's msg); every real data
- * buffer (buf/out/dst/src) is a '*'+'~' pair, never a bare '*', since
- * unlike it/w a guest also reads/writes through these directly.
- */
 #include "wasm_export.h"
 
 static void pm_metal_util_tar_iter_init_native(wasm_exec_env_t exec_env, pm_metal_util_tar_iter_t *it,
@@ -331,6 +439,12 @@ static int32_t pm_metal_util_tar_iter_read_native(wasm_exec_env_t exec_env, pm_m
 {
 	(void)exec_env;
 	return (int32_t)pm_metal_util_tar_iter_read(it, dst, (size_t)dst_cap);
+}
+
+static void pm_metal_util_tar_iter_close_native(wasm_exec_env_t exec_env, pm_metal_util_tar_iter_t *it)
+{
+	(void)exec_env;
+	pm_metal_util_tar_iter_close(it);
 }
 
 static void pm_metal_util_tar_writer_init_native(wasm_exec_env_t exec_env,
@@ -378,6 +492,7 @@ static NativeSymbol g_pm_metal_util_tar_native_symbols[] = {
 	{"pm_metal_util_tar_iter_size", (void *)pm_metal_util_tar_iter_size_native, "(*)I", NULL},
 	{"pm_metal_util_tar_iter_is_dir", (void *)pm_metal_util_tar_iter_is_dir_native, "(*)i", NULL},
 	{"pm_metal_util_tar_iter_read", (void *)pm_metal_util_tar_iter_read_native, "(**~)i", NULL},
+	{"pm_metal_util_tar_iter_close", (void *)pm_metal_util_tar_iter_close_native, "(*)", NULL},
 	{"pm_metal_util_tar_writer_init", (void *)pm_metal_util_tar_writer_init_native, "(**~)", NULL},
 	{"pm_metal_util_tar_writer_put_header", (void *)pm_metal_util_tar_writer_put_header_native, "(*$Ii)i",
 	 NULL},

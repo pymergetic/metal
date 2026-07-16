@@ -234,6 +234,10 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 		fprintf(stderr, "pm_metal_process: out of memory\n");
 		return -1;
 	}
+	/* Track argc/envc as each string is owned so free_owned() can
+	 * reclaim a partial build on malloc failure. */
+	slot->argc = 0;
+	slot->envc = 0;
 	for (i = 0; i < argc; i++) {
 		size_t len = strlen(argv[i]) + 1;
 
@@ -246,6 +250,7 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 			return -1;
 		}
 		memcpy(slot->argv[i], argv[i], len);
+		slot->argc = i + 1;
 	}
 	for (i = 0; i < envc; i++) {
 		size_t len = strlen(envp[i]) + 1;
@@ -259,6 +264,7 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 			return -1;
 		}
 		memcpy(slot->envp[i], envp[i], len);
+		slot->envc = i + 1;
 	}
 	slot->envp[envc] = malloc(strlen(pid_env) + 1);
 	if (!slot->envp[envc]) {
@@ -269,10 +275,9 @@ int pm_metal_process_spawn(pm_metal_runtime_handle_t handle, int argc, char **ar
 		return -1;
 	}
 	memcpy(slot->envp[envc], pid_env, strlen(pid_env) + 1);
+	slot->envc = total_envc;
 
 	slot->handle = handle;
-	slot->argc = argc;
-	slot->envc = total_envc;
 	slot->stdin_fd = stdin_fd;
 	slot->stdout_fd = stdout_fd;
 	slot->stderr_fd = stderr_fd;
@@ -404,8 +409,9 @@ int pm_metal_process_exec_live(pm_metal_process_id_t pid)
 	{
 		pm_metal_process_slot_t *slot = &g_pm_metal_process.slots[pid.pid - 1];
 
-		if (slot->used && slot->pid.pid == pid.pid && !slot->finished && slot->exec.inst) {
-			live = 1;
+		if (slot->used && slot->pid.pid == pid.pid && !slot->finished) {
+			/* exec.inst is guarded by the runtime lock — not this one. */
+			live = pm_metal_runtime_exec_is_live(&slot->exec);
 		}
 	}
 	pm_metal_port_mutex_unlock(&g_pm_metal_process_lock);

@@ -21,6 +21,42 @@
 #include "generated/mods_embed.h"
 #include "zephyr_verify.h"
 
+/* Bounded try_wait then kill+wait so a stuck peer cannot hang verify forever. */
+static void pm_metal_zephyr_reap(pm_metal_process_id_t pid)
+{
+	int exit_code = -1;
+	int i;
+
+	for (i = 0; i < 200; i++) {
+		int st = pm_metal_process_try_wait(pid, &exit_code);
+
+		if (st > 0) {
+			return;
+		}
+		if (st < 0) {
+			break;
+		}
+		k_yield();
+		if ((i & 15) == 15) {
+			k_msleep(1);
+		}
+	}
+	(void)pm_metal_process_kill(pid);
+	(void)pm_metal_process_wait(pid, &exit_code);
+}
+
+static void pm_metal_zephyr_unload(pm_metal_runtime_handle_t h,
+				    pm_metal_process_id_t *maybe_pid)
+{
+	if (maybe_pid) {
+		pm_metal_zephyr_reap(*maybe_pid);
+	}
+	if (pm_metal_runtime_unload(h) != 0 && maybe_pid) {
+		pm_metal_zephyr_reap(*maybe_pid);
+		(void)pm_metal_runtime_unload(h);
+	}
+}
+
 static int pm_metal_zephyr_stage_file(const char *path, const uint8_t *data, uint32_t len)
 {
 	struct fs_file_t file;
@@ -92,16 +128,22 @@ static int pm_metal_zephyr_run_batch(const char *label, int n, char **mods)
 				mod_argv[0] = (char *)(slash + 1);
 			}
 		}
-		if (pm_metal_process_spawn(h, 1, mod_argv, 0, NULL, -1, -1, -1, NULL, NULL, &pid) != 0
-		    || pm_metal_process_wait(pid, &exit_code) != 0) {
-			printk("%s: run failed: %s\n", label, path);
+		if (pm_metal_process_spawn(h, 1, mod_argv, 0, NULL, -1, -1, -1, NULL, NULL, &pid)
+		    != 0) {
+			printk("%s: spawn failed: %s\n", label, path);
 			exit_code = -1;
+			pm_metal_zephyr_unload(h, NULL);
+		} else if (pm_metal_process_wait(pid, &exit_code) != 0) {
+			printk("%s: wait failed: %s\n", label, path);
+			exit_code = -1;
+			pm_metal_zephyr_unload(h, &pid);
+		} else {
+			printk("%s: exit=%d\n", path, exit_code);
+			pm_metal_zephyr_unload(h, NULL);
 		}
-		printk("%s: exit=%d\n", path, exit_code);
 		if (exit_code != 0) {
 			rc = 1;
 		}
-		pm_metal_runtime_unload(h);
 	}
 
 	printk("verify: %s exit=%d\n", label, rc);
@@ -126,7 +168,7 @@ static int pm_metal_zephyr_process_smoke(void)
 	}
 	if (pm_metal_process_wait(pid, &exit_code) != 0 || exit_code != 0) {
 		printk("verify: process wait t4 failed exit=%d\n", exit_code);
-		pm_metal_runtime_unload(h);
+		pm_metal_zephyr_unload(h, &pid);
 		return -1;
 	}
 	printk("verify: process t4_getpid pid=%u exit=%d\n", pid.pid, exit_code);
@@ -165,7 +207,7 @@ static int pm_metal_zephyr_process_smoke(void)
 			still = pm_metal_process_try_wait(spin_pid, &spin_exit);
 			if (still < 0) {
 				printk("verify: t5 try_wait error before kill\n");
-				pm_metal_runtime_unload(h);
+				pm_metal_zephyr_unload(h, &spin_pid);
 				return -1;
 			}
 			if (still > 0) {
@@ -191,7 +233,7 @@ static int pm_metal_zephyr_process_smoke(void)
 		}
 		if (pm_metal_process_wait(spin_pid, &spin_exit) != 0) {
 			printk("verify: process wait t5 after kill failed\n");
-			pm_metal_runtime_unload(h);
+			pm_metal_zephyr_unload(h, &spin_pid);
 			return -1;
 		}
 		if (spin_exit == 0) {
@@ -246,9 +288,9 @@ static int pm_metal_zephyr_socket_pair(const char *server_mod, const char *clien
 				    &client_pid)
 	    != 0) {
 		printk("verify: sockets spawn %s failed\n", client_mod);
-		(void)pm_metal_process_wait(server_pid, &server_exit);
-		pm_metal_runtime_unload(h_client);
-		pm_metal_runtime_unload(h_server);
+		pm_metal_zephyr_reap(server_pid);
+		pm_metal_zephyr_unload(h_client, NULL);
+		pm_metal_zephyr_unload(h_server, NULL);
 		return -1;
 	}
 	/* Interleave try_wait so a blocked server cannot starve the client.
@@ -267,8 +309,10 @@ static int pm_metal_zephyr_socket_pair(const char *server_mod, const char *clien
 				if (st < 0) {
 					printk("verify: sockets try_wait %s failed\n",
 					       server_mod);
-					pm_metal_runtime_unload(h_client);
-					pm_metal_runtime_unload(h_server);
+					pm_metal_zephyr_reap(client_pid);
+					pm_metal_zephyr_reap(server_pid);
+					pm_metal_zephyr_unload(h_client, NULL);
+					pm_metal_zephyr_unload(h_server, NULL);
 					return -1;
 				}
 				if (st > 0) {
@@ -280,8 +324,10 @@ static int pm_metal_zephyr_socket_pair(const char *server_mod, const char *clien
 				if (st < 0) {
 					printk("verify: sockets try_wait %s failed\n",
 					       client_mod);
-					pm_metal_runtime_unload(h_client);
-					pm_metal_runtime_unload(h_server);
+					pm_metal_zephyr_reap(client_pid);
+					pm_metal_zephyr_reap(server_pid);
+					pm_metal_zephyr_unload(h_client, NULL);
+					pm_metal_zephyr_unload(h_server, NULL);
 					return -1;
 				}
 				if (st > 0) {
@@ -296,17 +342,15 @@ static int pm_metal_zephyr_socket_pair(const char *server_mod, const char *clien
 		if (!server_done || !client_done) {
 			printk("verify: sockets timeout %s/%s (server_done=%d client_done=%d)\n",
 			       server_mod, client_mod, server_done, client_done);
-			(void)pm_metal_process_kill(server_pid);
-			(void)pm_metal_process_kill(client_pid);
-			(void)pm_metal_process_wait(server_pid, &server_exit);
-			(void)pm_metal_process_wait(client_pid, &client_exit);
-			pm_metal_runtime_unload(h_client);
-			pm_metal_runtime_unload(h_server);
+			pm_metal_zephyr_reap(server_pid);
+			pm_metal_zephyr_reap(client_pid);
+			pm_metal_zephyr_unload(h_client, NULL);
+			pm_metal_zephyr_unload(h_server, NULL);
 			return -1;
 		}
 	}
-	pm_metal_runtime_unload(h_client);
-	pm_metal_runtime_unload(h_server);
+	pm_metal_zephyr_unload(h_client, NULL);
+	pm_metal_zephyr_unload(h_server, NULL);
 	printk("verify: sockets %s/%s exit=%d/%d\n", server_mod, client_mod, server_exit,
 	       client_exit);
 	if (server_exit != 0 || client_exit != 0) {
@@ -337,7 +381,7 @@ static int pm_metal_zephyr_socket_one(const char *mod)
 	}
 	if (pm_metal_process_wait(pid, &exit_code) != 0 || exit_code != 0) {
 		printk("verify: sockets %s exit=%d\n", mod, exit_code);
-		pm_metal_runtime_unload(h);
+		pm_metal_zephyr_unload(h, &pid);
 		return -1;
 	}
 	printk("verify: sockets %s exit=0\n", mod);
@@ -452,11 +496,12 @@ int pm_metal_zephyr_verify(void)
 		failures++;
 	}
 
-	/* t15 must fail open on /other — Zephyr FS also logs <err> open (-2). */
+	/* t15 exits 0 when open on /other fails (isolation). Zephyr FS also
+	 * logs <err> open (-2) for that expected miss. */
 	printk("verify: tmpfs-indep next open fail is expected\n");
 	rc = pm_metal_zephyr_run_batch("tmpfs-indep", 1, tmpfs_indep);
-	if (rc == 0) {
-		printk("verify: tmpfs independence unexpectedly succeeded\n");
+	if (rc != 0) {
+		printk("verify: tmpfs independence failed (t15 should exit 0)\n");
 		failures++;
 	} else {
 		printk("verify: tmpfs-indep expected-fail ok\n");

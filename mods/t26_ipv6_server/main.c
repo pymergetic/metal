@@ -74,7 +74,21 @@ int main(void)
 	if ((size_t)reply_len >= sizeof(reply)) {
 		reply_len = (int)sizeof(reply) - 1;
 	}
-	write(conn_fd, reply, (size_t)reply_len);
+	{
+		size_t sent = 0;
+
+		while (sent < (size_t)reply_len) {
+			ssize_t n = write(conn_fd, reply + sent, (size_t)reply_len - sent);
+
+			if (n <= 0) {
+				perror("t26_ipv6_server: write");
+				close(conn_fd);
+				close(listen_fd);
+				return 1;
+			}
+			sent += (size_t)n;
+		}
+	}
 
 	printf("t26_ipv6_server: served \"%s\"\n", buf);
 	fflush(stdout);

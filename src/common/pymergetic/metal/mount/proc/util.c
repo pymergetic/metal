@@ -36,7 +36,7 @@ int pm_metal_mount_proc_put_nul_list(char *out, size_t cap, size_t *out_len, int
 		const char *s = items[i] ? items[i] : "";
 		size_t len = strlen(s);
 
-		if (used + len + 1 >= cap) {
+		if (used + len + 1 > cap) {
 			return -1;
 		}
 		memcpy(out + used, s, len);

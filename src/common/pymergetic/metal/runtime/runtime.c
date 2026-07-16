@@ -239,6 +239,9 @@ static int pm_metal_runtime_dup_string_array(const char **src, uint32_t count, c
 		*out = NULL;
 		return 0;
 	}
+	if (!src) {
+		return -1;
+	}
 
 	char **dst = malloc(sizeof(char *) * count);
 	if (!dst) {
@@ -247,7 +250,16 @@ static int pm_metal_runtime_dup_string_array(const char **src, uint32_t count, c
 
 	uint32_t i;
 	for (i = 0; i < count; i++) {
-		size_t len = strlen(src[i]) + 1;
+		size_t len;
+
+		if (!src[i]) {
+			while (i > 0) {
+				free(dst[--i]);
+			}
+			free(dst);
+			return -1;
+		}
+		len = strlen(src[i]) + 1;
 		dst[i] = malloc(len);
 		if (!dst[i]) {
 			while (i > 0) {
@@ -290,7 +302,9 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	}
 	if (!cfg || !cfg->vfs_root || cfg->memory_bytes == 0
 	    || cfg->memory_bytes > UINT32_MAX || cfg->bytecode_bytes == 0
-	    || cfg->bytecode_bytes > UINT32_MAX) {
+	    || cfg->bytecode_bytes > UINT32_MAX
+	    || (cfg->addr_pool_count > 0 && !cfg->addr_pool)
+	    || (cfg->ns_lookup_pool_count > 0 && !cfg->ns_lookup_pool)) {
 		fprintf(stderr, "pm_metal_runtime: bad config\n");
 		return -1;
 	}
@@ -673,6 +687,19 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 	return exit_code;
 }
 
+int pm_metal_runtime_exec_is_live(const pm_metal_runtime_exec_t *exec)
+{
+	int live = 0;
+
+	if (!exec) {
+		return 0;
+	}
+	pm_metal_port_mutex_lock(&g_pm_metal_runtime_lock);
+	live = exec->inst != NULL ? 1 : 0;
+	pm_metal_port_mutex_unlock(&g_pm_metal_runtime_lock);
+	return live;
+}
+
 void pm_metal_runtime_terminate(pm_metal_runtime_exec_t *exec)
 {
 	wasm_module_inst_t inst = NULL;
@@ -771,4 +798,16 @@ int pm_metal_runtime_unload(pm_metal_runtime_handle_t h)
 	pm_metal_memory_bytecode_ops()->free(buf);
 
 	return 0;
+}
+
+static int g_pm_metal_runtime_allow_guest_mount;
+
+void pm_metal_runtime_set_allow_guest_mount(int allow)
+{
+	g_pm_metal_runtime_allow_guest_mount = allow ? 1 : 0;
+}
+
+int pm_metal_runtime_allow_guest_mount(void)
+{
+	return g_pm_metal_runtime_allow_guest_mount;
 }

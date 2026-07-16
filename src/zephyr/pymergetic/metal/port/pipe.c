@@ -24,6 +24,7 @@ typedef struct pm_metal_pipe {
 	struct k_condvar readable;
 	struct k_condvar writable;
 	int used;
+	int refs; /* I/O in flight — reclaim only when 0 and both ends closed */
 } pm_metal_pipe_t;
 
 static pm_metal_pipe_t g_pm_metal_pipes[PM_METAL_PIPE_MAX];
@@ -127,11 +128,24 @@ ssize_t pm_metal_port_pipe_read(int fd, void *buf, size_t n)
 	size_t got = 0;
 	uint8_t *out = buf;
 
-	if (!pm_metal_port_pipe_is_read_end(fd) || !buf) {
+	if (fd < PM_METAL_PIPE_FD_BASE || !buf) {
+		return -1;
+	}
+	if (idx < 0 || idx >= PM_METAL_PIPE_MAX || ((fd - PM_METAL_PIPE_FD_BASE) % 2) != 0) {
 		return -1;
 	}
 	p = &g_pm_metal_pipes[idx];
+
+	/* table_lock → pipe_lock; hold a ref so close cannot reinit under us. */
+	k_mutex_lock(&g_pm_metal_pipe_table_lock, K_FOREVER);
+	if (!p->used) {
+		k_mutex_unlock(&g_pm_metal_pipe_table_lock);
+		return -1;
+	}
+	p->refs++;
 	k_mutex_lock(&p->lock, K_FOREVER);
+	k_mutex_unlock(&g_pm_metal_pipe_table_lock);
+
 	while (p->len == 0 && p->write_open) {
 		k_condvar_wait(&p->readable, &p->lock, K_FOREVER);
 	}
@@ -142,6 +156,13 @@ ssize_t pm_metal_port_pipe_read(int fd, void *buf, size_t n)
 	}
 	k_condvar_signal(&p->writable);
 	k_mutex_unlock(&p->lock);
+
+	k_mutex_lock(&g_pm_metal_pipe_table_lock, K_FOREVER);
+	p->refs--;
+	if (!p->read_open && !p->write_open && p->refs == 0) {
+		p->used = 0;
+	}
+	k_mutex_unlock(&g_pm_metal_pipe_table_lock);
 	return (ssize_t)got;
 }
 
@@ -152,13 +173,31 @@ ssize_t pm_metal_port_pipe_write(int fd, const void *buf, size_t n)
 	size_t put = 0;
 	const uint8_t *in = buf;
 
-	if (pm_metal_port_pipe_is_read_end(fd) || !pm_metal_port_pipe_is_ours(fd) || !buf) {
+	if (fd < PM_METAL_PIPE_FD_BASE || !buf) {
+		return -1;
+	}
+	if (idx < 0 || idx >= PM_METAL_PIPE_MAX || ((fd - PM_METAL_PIPE_FD_BASE) % 2) == 0) {
 		return -1;
 	}
 	p = &g_pm_metal_pipes[idx];
+
+	k_mutex_lock(&g_pm_metal_pipe_table_lock, K_FOREVER);
+	if (!p->used) {
+		k_mutex_unlock(&g_pm_metal_pipe_table_lock);
+		return -1;
+	}
+	p->refs++;
 	k_mutex_lock(&p->lock, K_FOREVER);
+	k_mutex_unlock(&g_pm_metal_pipe_table_lock);
+
 	if (!p->read_open) {
 		k_mutex_unlock(&p->lock);
+		k_mutex_lock(&g_pm_metal_pipe_table_lock, K_FOREVER);
+		p->refs--;
+		if (!p->read_open && !p->write_open && p->refs == 0) {
+			p->used = 0;
+		}
+		k_mutex_unlock(&g_pm_metal_pipe_table_lock);
 		return -1;
 	}
 	while (put < n) {
@@ -174,6 +213,13 @@ ssize_t pm_metal_port_pipe_write(int fd, const void *buf, size_t n)
 		k_condvar_signal(&p->readable);
 	}
 	k_mutex_unlock(&p->lock);
+
+	k_mutex_lock(&g_pm_metal_pipe_table_lock, K_FOREVER);
+	p->refs--;
+	if (!p->read_open && !p->write_open && p->refs == 0) {
+		p->used = 0;
+	}
+	k_mutex_unlock(&g_pm_metal_pipe_table_lock);
 	return (ssize_t)put;
 }
 
@@ -207,7 +253,8 @@ void pm_metal_port_pipe_close_fd(int fd)
 	}
 	k_condvar_broadcast(&p->readable);
 	k_condvar_broadcast(&p->writable);
-	if (!p->read_open && !p->write_open) {
+	/* Defer used=0 until no I/O refs remain (see read/write). */
+	if (!p->read_open && !p->write_open && p->refs == 0) {
 		p->used = 0;
 	}
 	k_mutex_unlock(&p->lock);
@@ -223,13 +270,14 @@ int pm_metal_port_pipe(int64_t *out_read_fd, int64_t *out_write_fd)
 	}
 	k_mutex_lock(&g_pm_metal_pipe_table_lock, K_FOREVER);
 	for (i = 0; i < PM_METAL_PIPE_MAX; i++) {
-		if (!g_pm_metal_pipes[i].used) {
+		if (!g_pm_metal_pipes[i].used && g_pm_metal_pipes[i].refs == 0) {
 			memset(&g_pm_metal_pipes[i], 0, sizeof(g_pm_metal_pipes[i]));
 			k_mutex_init(&g_pm_metal_pipes[i].lock);
 			k_condvar_init(&g_pm_metal_pipes[i].readable);
 			k_condvar_init(&g_pm_metal_pipes[i].writable);
 			g_pm_metal_pipes[i].read_open = 1;
 			g_pm_metal_pipes[i].write_open = 1;
+			g_pm_metal_pipes[i].refs = 0;
 			g_pm_metal_pipes[i].used = 1;
 			*out_read_fd = PM_METAL_PIPE_FD_BASE + i * 2;
 			*out_write_fd = PM_METAL_PIPE_FD_BASE + i * 2 + 1;

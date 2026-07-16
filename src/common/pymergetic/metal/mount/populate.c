@@ -55,32 +55,18 @@ void pm_metal_mount_populate_clear(void)
 	memset(g_pm_metal_mount_populate_table, 0, sizeof(g_pm_metal_mount_populate_table));
 }
 
-/* Build guest path "/..." from a tar name; strip a leading "./" or "/". */
+/* Build guest path from a tar name; reject ".." (zip-slip) via table normalize. */
 static int pm_metal_mount_populate_guest_path(const char *tar_name, char *out, size_t out_cap)
 {
-	const char *p = tar_name;
-	int n;
-	size_t len;
-
-	if (!p || !p[0]) {
+	if (!tar_name || !tar_name[0]) {
 		return -1;
 	}
-	while (p[0] == '.' && p[1] == '/') {
-		p += 2;
-	}
-	while (*p == '/') {
-		p++;
-	}
-	if (!*p) {
-		return -1; /* bare "/" / empty — nothing to extract */
-	}
-	n = snprintf(out, out_cap, "/%s", p);
-	if (n <= 0 || (size_t)n >= out_cap) {
+	if (pm_metal_mount_normalize(tar_name, out, out_cap) != 0) {
 		return -1;
 	}
-	len = (size_t)n;
-	if (len > 1 && out[len - 1] == '/') {
-		out[len - 1] = '\0';
+	/* bare "/" — nothing to extract */
+	if (out[0] == '/' && out[1] == '\0') {
+		return -1;
 	}
 	return 0;
 }
@@ -110,7 +96,7 @@ static int pm_metal_mount_populate_dirname(const char *host_path, char *out, siz
 
 static int pm_metal_mount_populate_extract_tar(const uint8_t *tar, size_t tar_len)
 {
-	pm_metal_util_tar_iter_t it;
+	pm_metal_util_tar_iter_t it = { 0 };
 	char guest[PM_METAL_MOUNT_GUEST_PATH_MAX];
 	char host[PM_METAL_MOUNT_HOST_PATH_MAX];
 	char parent[PM_METAL_MOUNT_HOST_PATH_MAX];
@@ -126,10 +112,12 @@ static int pm_metal_mount_populate_extract_tar(const uint8_t *tar, size_t tar_le
 		uint64_t got;
 
 		if (rc == 0) {
+			pm_metal_util_tar_iter_close(&it);
 			return 0;
 		}
 		if (rc < 0) {
 			fprintf(stderr, "pm_metal_mount: populate: malformed tar entry, skipping rest of archive\n");
+			pm_metal_util_tar_iter_close(&it);
 			return -1;
 		}
 		if (pm_metal_util_tar_iter_name(&it, name, sizeof(name)) < 0) {
@@ -203,7 +191,13 @@ static int pm_metal_mount_populate_extract_tar(const uint8_t *tar, size_t tar_le
 			if (!buf && len > 0) {
 				continue;
 			}
-			if (pm_metal_port_write_file(host, buf, len) != 0) {
+			/* Zero-length files: write_file must not see a NULL buf. */
+			if (len == 0) {
+				static const uint8_t empty;
+				if (pm_metal_port_write_file(host, &empty, 0) != 0) {
+					fprintf(stderr, "pm_metal_mount: populate: write failed: %s\n", guest);
+				}
+			} else if (pm_metal_port_write_file(host, buf, len) != 0) {
 				fprintf(stderr, "pm_metal_mount: populate: write failed: %s\n", guest);
 			}
 			if (buf) {

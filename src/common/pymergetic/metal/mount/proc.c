@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "pymergetic/metal/port/lock.h"
 #include "pymergetic/metal/mount/proc/cpuinfo.h"
 #include "pymergetic/metal/mount/proc/filesystems.h"
 #include "pymergetic/metal/mount/proc/meminfo.h"
@@ -21,28 +22,24 @@ typedef struct pm_metal_mount_proc_hook {
 
 static pm_metal_mount_proc_hook_t g_pm_metal_mount_proc_hooks[PM_METAL_MOUNT_PROC_MAX_HOOKS];
 static int g_pm_metal_mount_proc_builtins;
+static pm_metal_port_mutex_t g_pm_metal_mount_proc_lock;
+static int g_pm_metal_mount_proc_lock_ready;
 
-static void pm_metal_mount_proc_ensure_builtins(void)
+static void pm_metal_mount_proc_lock(void)
 {
-	if (g_pm_metal_mount_proc_builtins) {
-		return;
+	if (!g_pm_metal_mount_proc_lock_ready) {
+		pm_metal_port_mutex_init(&g_pm_metal_mount_proc_lock);
+		g_pm_metal_mount_proc_lock_ready = 1;
 	}
-	/* cmdline/environ are only via /proc/self/ — see WASI proc layer. */
-	(void)pm_metal_mount_proc_register("mounts", pm_metal_mount_proc_generate_mounts);
-	(void)pm_metal_mount_proc_register("filesystems", pm_metal_mount_proc_generate_filesystems);
-	(void)pm_metal_mount_proc_register("version", pm_metal_mount_proc_generate_version);
-	(void)pm_metal_mount_proc_register("cpuinfo", pm_metal_mount_proc_generate_cpuinfo);
-	(void)pm_metal_mount_proc_register("meminfo", pm_metal_mount_proc_generate_meminfo);
-	(void)pm_metal_mount_proc_register("uptime", pm_metal_mount_proc_generate_uptime);
-	g_pm_metal_mount_proc_builtins = 1;
+	pm_metal_port_mutex_lock(&g_pm_metal_mount_proc_lock);
 }
 
-int pm_metal_mount_proc_is_sentinel(const char *host_path)
+static void pm_metal_mount_proc_unlock(void)
 {
-	return host_path && strcmp(host_path, PM_METAL_MOUNT_PROC_SENTINEL) == 0;
+	pm_metal_port_mutex_unlock(&g_pm_metal_mount_proc_lock);
 }
 
-int pm_metal_mount_proc_register(const char *name, pm_metal_mount_proc_hook_fn fn)
+static int pm_metal_mount_proc_register_locked(const char *name, pm_metal_mount_proc_hook_fn fn)
 {
 	int i;
 	int free_slot = -1;
@@ -72,6 +69,39 @@ int pm_metal_mount_proc_register(const char *name, pm_metal_mount_proc_hook_fn f
 	g_pm_metal_mount_proc_hooks[free_slot].fn = fn;
 	g_pm_metal_mount_proc_hooks[free_slot].used = 1;
 	return 0;
+}
+
+static void pm_metal_mount_proc_ensure_builtins(void)
+{
+	pm_metal_mount_proc_lock();
+	if (g_pm_metal_mount_proc_builtins) {
+		pm_metal_mount_proc_unlock();
+		return;
+	}
+	/* cmdline/environ are only via /proc/self/ — see WASI proc layer. */
+	(void)pm_metal_mount_proc_register_locked("mounts", pm_metal_mount_proc_generate_mounts);
+	(void)pm_metal_mount_proc_register_locked("filesystems", pm_metal_mount_proc_generate_filesystems);
+	(void)pm_metal_mount_proc_register_locked("version", pm_metal_mount_proc_generate_version);
+	(void)pm_metal_mount_proc_register_locked("cpuinfo", pm_metal_mount_proc_generate_cpuinfo);
+	(void)pm_metal_mount_proc_register_locked("meminfo", pm_metal_mount_proc_generate_meminfo);
+	(void)pm_metal_mount_proc_register_locked("uptime", pm_metal_mount_proc_generate_uptime);
+	g_pm_metal_mount_proc_builtins = 1;
+	pm_metal_mount_proc_unlock();
+}
+
+int pm_metal_mount_proc_is_sentinel(const char *host_path)
+{
+	return host_path && strcmp(host_path, PM_METAL_MOUNT_PROC_SENTINEL) == 0;
+}
+
+int pm_metal_mount_proc_register(const char *name, pm_metal_mount_proc_hook_fn fn)
+{
+	int rc;
+
+	pm_metal_mount_proc_lock();
+	rc = pm_metal_mount_proc_register_locked(name, fn);
+	pm_metal_mount_proc_unlock();
+	return rc;
 }
 
 int pm_metal_mount_proc_lookup(const char *name, pm_metal_mount_proc_hook_fn *out_fn)

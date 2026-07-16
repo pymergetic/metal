@@ -289,8 +289,7 @@ index 31aaad7a..4f439c95 100644
  }
  
  int
--os_mutex_init(korp_mutex *mutex)
-+os_zmutex_init(korp_mutex *mutex)
+ os_mutex_init(korp_mutex *mutex)
  {
 -    mutex_init(mutex);
 +    zmutex_init(mutex);
@@ -298,8 +297,7 @@ index 31aaad7a..4f439c95 100644
  }
  
  int
--os_recursive_mutex_init(korp_mutex *mutex)
-+os_recursive_zmutex_init(korp_mutex *mutex)
+ os_recursive_mutex_init(korp_mutex *mutex)
  {
 -    mutex_init(mutex);
 +    zmutex_init(mutex);
@@ -310,16 +308,14 @@ index 31aaad7a..4f439c95 100644
  }
  
  int
--os_mutex_lock(korp_mutex *mutex)
-+os_zmutex_lock(korp_mutex *mutex)
+ os_mutex_lock(korp_mutex *mutex)
  {
 -    return mutex_lock(mutex, K_FOREVER);
 +    return zmutex_lock(mutex, K_FOREVER);
  }
  
  int
--os_mutex_unlock(korp_mutex *mutex)
-+os_zmutex_unlock(korp_mutex *mutex)
+ os_mutex_unlock(korp_mutex *mutex)
  {
  #if KERNEL_VERSION_NUMBER >= 0x020200 /* version 2.2.0 */
 -    return mutex_unlock(mutex);

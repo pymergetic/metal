@@ -22,6 +22,13 @@ static void *pm_metal_memory_zephyr_bytecode_establish(uint64_t requested_bytes,
 	void *block;
 	pm_metal_util_arena_t *arena;
 
+	if (g_pm_metal_memory_bytecode_block) {
+		if (out_bytes) {
+			*out_bytes = g_pm_metal_memory_bytecode_bytes;
+		}
+		return g_pm_metal_memory_bytecode_block;
+	}
+
 	take = pm_metal_memory_zephyr_budget_take(requested_bytes);
 	if (take == 0) {
 		return NULL;
