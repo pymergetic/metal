@@ -1748,7 +1748,9 @@ pm_metal_wasi_socket_poll(void *fds_v, int nfds, int timeout)
 		if (timeout > 0 && k_uptime_get() >= deadline_ms) {
 			break;
 		}
-		/* Infinite timeout: retry if zsock_poll woke with nothing ready. */
+		/* SOCK-8: timeout < 0 must not break on a zero-ready wakeup
+		 * (zsock_poll(..., -1) returning 0). Loop and retry.
+		 */
 	}
 
 	for (i = 0; i < nsock; i++) {
