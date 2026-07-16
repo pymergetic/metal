@@ -9,7 +9,7 @@
  * not a busy-spin) is what actually copes with the real race of possibly
  * starting before t10 has reached listen() yet, rather than assuming
  * some fixed startup order between two independently scheduled worker
- * threads (see src/linux/process_test.c's own spawn() calls for both).
+ * threads (see tests/process_test.c's own spawn() calls for both).
  */
 #include <arpa/inet.h>
 #include <netinet/in.h>

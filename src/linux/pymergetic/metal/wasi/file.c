@@ -395,11 +395,17 @@ static __wasi_errno_t pm_metal_live_resolve_from(const pm_metal_vfd_t *parent, c
 char *os_realpath(const char *path, char *resolved_path)
 {
 	if (pm_metal_mount_proc_is_sentinel(path)) {
-		if (!resolved_path) {
-			return NULL;
+		char *out = resolved_path;
+
+		/* Match glibc/POSIX: NULL buffer → malloc(PATH_MAX). */
+		if (!out) {
+			out = malloc(PATH_MAX);
+			if (!out) {
+				return NULL;
+			}
 		}
-		snprintf(resolved_path, PATH_MAX, "%s", PM_METAL_MOUNT_PROC_SENTINEL);
-		return resolved_path;
+		snprintf(out, PATH_MAX, "%s", PM_METAL_MOUNT_PROC_SENTINEL);
+		return out;
 	}
 	return __real_os_realpath(path, resolved_path);
 }

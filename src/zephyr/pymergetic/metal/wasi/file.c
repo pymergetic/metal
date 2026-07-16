@@ -14,6 +14,7 @@ void wasm_runtime_free(void *ptr);
 
 __wasi_errno_t os_fsync(os_file_handle handle);
 
+#include <errno.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -24,6 +25,7 @@ __wasi_errno_t os_fsync(os_file_handle handle);
 
 #include "pymergetic/metal/mount/proc.h"
 #include "pymergetic/metal/port/pipe_zephyr.h"
+#include "pymergetic/metal/wasi/socket.h"
 
 /* Notes:
  * This is the implementation of a POSIX-like file system interface for Zephyr.
@@ -156,6 +158,93 @@ pm_metal_wasi_is_proc_sentinel(const char *path)
 		   || strcmp(path, "pm-metal:proc/self") == 0);
 }
 
+static void
+pm_metal_wasi_fill_dir_stat(struct __wasi_filestat_t *buf)
+{
+	buf->st_dev = 0;
+	buf->st_ino = 1;
+	buf->st_filetype = __WASI_FILETYPE_DIRECTORY;
+	buf->st_nlink = 1;
+	buf->st_size = 0;
+	buf->st_atim = 0;
+	buf->st_mtim = 0;
+	buf->st_ctim = 0;
+}
+
+/*
+ * Resolve a path relative to a /proc or /proc/self sentinel for fstatat.
+ * Never concatenate onto the sentinel — it is not a host filesystem path.
+ */
+static __wasi_errno_t
+pm_metal_wasi_fstatat_proc(const char *parent_path, const char *path,
+			   struct __wasi_filestat_t *buf)
+{
+	pm_metal_mount_proc_hook_fn fn = NULL;
+	int is_self;
+	const char *node = path;
+	char *gen;
+	size_t len = 0;
+
+	if (!parent_path || !buf) {
+		return __WASI_EINVAL;
+	}
+	is_self = (strcmp(parent_path, "pm-metal:proc/self") == 0);
+	if (!node) {
+		return __WASI_EINVAL;
+	}
+	while (node[0] == '/') {
+		node++;
+	}
+	if (node[0] == '\0' || strcmp(node, ".") == 0) {
+		pm_metal_wasi_fill_dir_stat(buf);
+		return __WASI_ESUCCESS;
+	}
+	if (!is_self && strcmp(node, "self") == 0) {
+		pm_metal_wasi_fill_dir_stat(buf);
+		return __WASI_ESUCCESS;
+	}
+	if (!is_self && strncmp(node, "self/", 5) == 0) {
+		node += 5;
+		is_self = 1;
+		if (node[0] == '\0' || strcmp(node, ".") == 0) {
+			pm_metal_wasi_fill_dir_stat(buf);
+			return __WASI_ESUCCESS;
+		}
+	}
+	if (is_self) {
+		if (strcmp(node, "cmdline") == 0) {
+			fn = pm_metal_mount_proc_generate_cmdline;
+		} else if (strcmp(node, "environ") == 0) {
+			fn = pm_metal_mount_proc_generate_environ;
+		}
+	} else if (pm_metal_mount_proc_lookup(node, &fn) != 0) {
+		fn = NULL;
+	}
+	if (!fn) {
+		return __WASI_ENOENT;
+	}
+
+	gen = BH_MALLOC(PM_METAL_MOUNT_PROC_CONTENT_MAX);
+	if (!gen) {
+		return __WASI_ENOMEM;
+	}
+	if (fn(gen, PM_METAL_MOUNT_PROC_CONTENT_MAX, &len) != 0) {
+		BH_FREE(gen);
+		return __WASI_EIO;
+	}
+	BH_FREE(gen);
+
+	buf->st_dev = 0;
+	buf->st_ino = 1;
+	buf->st_filetype = __WASI_FILETYPE_REGULAR_FILE;
+	buf->st_nlink = 1;
+	buf->st_size = (__wasi_filesize_t)len;
+	buf->st_atim = 0;
+	buf->st_mtim = 0;
+	buf->st_ctim = 0;
+	return __WASI_ESUCCESS;
+}
+
 static bool
 resolve_open_path(os_file_handle handle, const char *path, char *abs_path, size_t abs_path_len)
 {
@@ -255,17 +344,20 @@ os_fstat(os_file_handle handle, struct __wasi_filestat_t *buf)
 		return __WASI_ESUCCESS;
 	}
 
+	if (pm_metal_wasi_socket_is_ours(handle)) {
+		int is_tcp = pm_metal_wasi_socket_is_tcp(handle);
+
+		memset(buf, 0, sizeof(*buf));
+		buf->st_filetype = (is_tcp == 0) ? __WASI_FILETYPE_SOCKET_DGRAM
+						 : __WASI_FILETYPE_SOCKET_STREAM;
+		buf->st_nlink = 1;
+		return __WASI_ESUCCESS;
+	}
+
 	GET_FILE_SYSTEM_DESCRIPTOR(handle, ptr);
 
 	if (pm_metal_wasi_is_proc_sentinel(ptr->path)) {
-		buf->st_dev = 0;
-		buf->st_ino = 1;
-		buf->st_filetype = __WASI_FILETYPE_DIRECTORY;
-		buf->st_nlink = 1;
-		buf->st_size = 0;
-		buf->st_atim = 0;
-		buf->st_mtim = 0;
-		buf->st_ctim = 0;
+		pm_metal_wasi_fill_dir_stat(buf);
 		return __WASI_ESUCCESS;
 	}
 
@@ -303,19 +395,35 @@ os_fstatat(os_file_handle handle, const char *path,
         return __WASI_EBADF;
     }
 
+	/* Virtual /proc — never join remainder onto the sentinel for fs_stat. */
+	if (handle >= 3 && !os_is_virtual_fd(handle)
+	    && handle < CONFIG_WASI_MAX_OPEN_FILES + 3) {
+		char parent_path[MAX_FILE_NAME + 1];
+		int is_proc = 0;
+
+		k_mutex_lock(&desc_array_mutex, K_FOREVER);
+		{
+			struct zephyr_fs_desc *parent = &desc_array[handle - 3];
+
+			if (parent->used && parent->path
+			    && pm_metal_wasi_is_proc_sentinel(parent->path)) {
+				strncpy(parent_path, parent->path, MAX_FILE_NAME);
+				parent_path[MAX_FILE_NAME] = '\0';
+				is_proc = 1;
+			}
+		}
+		k_mutex_unlock(&desc_array_mutex);
+		if (is_proc) {
+			return pm_metal_wasi_fstatat_proc(parent_path, path, buf);
+		}
+	}
+
     if (!resolve_open_path(handle, path, abs_path, sizeof(abs_path))) {
         return __WASI_ENOMEM;
     }
 
     if (pm_metal_wasi_is_proc_sentinel(abs_path)) {
-	buf->st_dev = 0;
-	buf->st_ino = 1;
-	buf->st_filetype = __WASI_FILETYPE_DIRECTORY;
-	buf->st_nlink = 1;
-	buf->st_size = 0;
-	buf->st_atim = 0;
-	buf->st_mtim = 0;
-	buf->st_ctim = 0;
+	pm_metal_wasi_fill_dir_stat(buf);
 	return __WASI_ESUCCESS;
     }
 
@@ -472,11 +580,12 @@ wasi_flags_to_zephyr(__wasi_oflags_t oflags, __wasi_fdflags_t fd_flags,
     if ((oflags & __WASI_O_CREAT) != 0) {
         mode |= FS_O_CREATE;
     }
-    if (((oflags & __WASI_O_EXCL) != 0) || ((oflags & __WASI_O_TRUNC) != 0)
-        || ((oflags & __WASI_O_DIRECTORY) != 0)) {
-        /* Zephyr is not POSIX no equivalent for these flags */
-        /* __WASI_O_DIRECTORY: Open shouldn't handle directories */
-        // TODO: log warning
+    if ((oflags & __WASI_O_TRUNC) != 0) {
+        mode |= FS_O_TRUNC;
+    }
+    if (((oflags & __WASI_O_EXCL) != 0) || ((oflags & __WASI_O_DIRECTORY) != 0)) {
+        /* Zephyr FS has no EXCL; DIRECTORY must not open as a file. */
+        // TODO: log warning / reject DIRECTORY opens
     }
 
     // Convert file descriptor flags.
@@ -668,14 +777,12 @@ os_file_get_access_mode(os_file_handle handle,
         return __WASI_ESUCCESS;
     }
 
-    struct zephyr_fs_desc *ptr = NULL;
-
-    if (0) {
-        // for socket we can use the following code
-        // TODO: Need to determine better logic
+    if (pm_metal_wasi_socket_is_ours(handle)) {
         *access_mode = WASI_LIBC_ACCESS_MODE_READ_WRITE;
         return __WASI_ESUCCESS;
     }
+
+    struct zephyr_fs_desc *ptr = NULL;
 
     GET_FILE_SYSTEM_DESCRIPTOR(handle, ptr);
 
@@ -707,31 +814,32 @@ os_close(os_file_handle handle, bool is_stdio)
         return __WASI_ESUCCESS;
     }
 
+    if (pm_metal_wasi_socket_is_ours(handle)) {
+        if (os_socket_close(handle) != 0) {
+            return convert_errno(errno);
+        }
+        return __WASI_ESUCCESS;
+    }
+
     int rc;
     struct zephyr_fs_desc *ptr = NULL;
 
     if (is_stdio)
         return __WASI_ESUCCESS;
 
-    if (0) {
-        rc = close(handle);
-    }
-    // Handle is assumed to be a file descriptor
-    else {
-        GET_FILE_SYSTEM_DESCRIPTOR(handle, ptr);
+    GET_FILE_SYSTEM_DESCRIPTOR(handle, ptr);
 
-        if (ptr->is_dir) {
-            if (ptr->dir_opened) {
-                rc = fs_closedir(&ptr->dir);
-                ptr->dir_opened = false;
-            } else {
-                rc = 0;
-            }
+    if (ptr->is_dir) {
+        if (ptr->dir_opened) {
+            rc = fs_closedir(&ptr->dir);
+            ptr->dir_opened = false;
         } else {
-            rc = fs_close(&ptr->file);
+            rc = 0;
         }
-        zephyr_fs_free_obj(ptr);
+    } else {
+        rc = fs_close(&ptr->file);
     }
+    zephyr_fs_free_obj(ptr);
 
     if (rc < 0) {
         return convert_errno(-rc);
@@ -848,6 +956,22 @@ os_readv(os_file_handle handle, const struct __wasi_iovec_t *iov, int iovcnt,
         return __WASI_ESUCCESS;
     }
 
+    if (pm_metal_wasi_socket_is_ours(handle)) {
+        for (int i = 0; i < iovcnt; i++) {
+            int bytes_read =
+                os_socket_recv(handle, iov[i].buf, (unsigned int)iov[i].buf_len);
+            if (bytes_read < 0) {
+                return convert_errno(errno);
+            }
+            total_read += bytes_read;
+            if ((size_t)bytes_read < iov[i].buf_len) {
+                break;
+            }
+        }
+        *nread = total_read;
+        return __WASI_ESUCCESS;
+    }
+
     GET_FILE_SYSTEM_DESCRIPTOR(handle, ptr);
 
     // Read data into each buffer
@@ -898,6 +1022,22 @@ os_writev(os_file_handle handle, const struct __wasi_ciovec_t *iov, int iovcnt,
             ssize_t bytes_written = pm_metal_port_pipe_write(handle, iov[i].buf, iov[i].buf_len);
             if (bytes_written < 0) {
                 return __WASI_EIO;
+            }
+            total_written += bytes_written;
+            if ((size_t)bytes_written < iov[i].buf_len) {
+                break;
+            }
+        }
+        *nwritten = total_written;
+        return __WASI_ESUCCESS;
+    }
+
+    if (pm_metal_wasi_socket_is_ours(handle)) {
+        for (int i = 0; i < iovcnt; i++) {
+            int bytes_written = os_socket_send(
+                handle, iov[i].buf, (unsigned int)iov[i].buf_len);
+            if (bytes_written < 0) {
+                return convert_errno(errno);
             }
             total_written += bytes_written;
             if ((size_t)bytes_written < iov[i].buf_len) {

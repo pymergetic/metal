@@ -16,7 +16,7 @@ int main(void)
 	int fd = open("/other/hello.txt", O_RDONLY);
 
 	if (fd < 0) {
-		printf("t15_tmpfs_read_other: open failed\n");
+		printf("t15_tmpfs_read_other: open failed (expected)\n");
 		return 1;
 	}
 

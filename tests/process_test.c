@@ -3,10 +3,10 @@
  * proves kill() actually stops a genuinely still-running guest (not one
  * that already happened to finish on its own), by racing it against
  * mods/t5_spin.wasm's own infinite loop. Not part of the normal build —
- * see scripts/verify-linux-process.sh. Linux-only test harness: calls
- * usleep()/sleep() directly (same reasoning as thread_stress_test.c
- * calling pthread directly — native-only test code, not the portable
- * common layer).
+ * see scripts/verify-linux-process.sh. Host harness (built by the Linux
+ * CMake today): calls usleep()/sleep() directly (same reasoning as
+ * thread_stress_test.c calling pthread — native host test code, not
+ * the portable common layer).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,18 +25,18 @@ int main(void)
 		return 1;
 	}
 
-	/* "127.0.0.1/32" (exactly one host, no broader CIDR) is all
-	 * mods/t10_socket_server + t11_socket_client below actually need —
-	 * see runtime.h's own doc comment on cfg->addr_pool for what an
-	 * empty pool (every *other* test above this one runs under) means
-	 * instead. */
-	static const char *addr_pool[] = { "127.0.0.1/32" };
+	/* Loopback IPv4 + IPv6 for TCP/UDP socket mods; ns_lookup_pool for
+	 * t28_dns_lookup's getaddrinfo("localhost"). See runtime.h. */
+	static const char *addr_pool[] = { "127.0.0.1/32", "::1/128" };
+	static const char *ns_lookup_pool[] = { "localhost" };
 	pm_metal_runtime_config_t cfg = {
 		.memory_bytes = 64 * 1024 * 1024,
 		.bytecode_bytes = 4 * 1024 * 1024,
 		.vfs_root = vfs_root,
 		.addr_pool = addr_pool,
-		.addr_pool_count = 1,
+		.addr_pool_count = 2,
+		.ns_lookup_pool = ns_lookup_pool,
+		.ns_lookup_pool_count = 1,
 	};
 
 	if (pm_metal_runtime_init(&cfg) != 0) {
@@ -102,6 +102,8 @@ int main(void)
 		goto done;
 	}
 
+	/* WAMR prints "Exception: terminated by user" — that is the kill. */
+	printf("process_test: killing t5_spin (expected Exception follows)\n");
 	if (pm_metal_process_kill(spin_pid) != 0) {
 		fprintf(stderr, "kill(t5_spin) failed\n");
 		pm_metal_runtime_unload(h_spin);
@@ -119,7 +121,7 @@ int main(void)
 	 * any other trap: exit_code == -1 (see runtime.c's own execute_main()
 	 * failure path) — never 0, since t5_spin's own main() never returns
 	 * on its own. */
-	printf("process_test: t5_spin exit_code after kill() = %d\n", spin_exit);
+	printf("process_test: t5_spin exit_code after kill() = %d (expected)\n", spin_exit);
 	if (spin_exit == 0) {
 		fprintf(stderr, "t5_spin exited 0 — it must have finished on its own, kill() proved nothing\n");
 		pm_metal_runtime_unload(h_spin);
@@ -311,6 +313,129 @@ int main(void)
 		fprintf(stderr, "socket pair did not both exit 0\n");
 		goto done;
 	}
+
+	/* --- UDP echo: t24_udp_server + t25_udp_client on 127.0.0.1:9933 --- */
+	pm_metal_runtime_handle_t h_udp_server, h_udp_client;
+	if (pm_metal_runtime_load_file("/mods/t24_udp_server.wasm", &h_udp_server) != 0) {
+		fprintf(stderr, "load t24_udp_server failed\n");
+		goto done;
+	}
+	if (pm_metal_runtime_load_file("/mods/t25_udp_client.wasm", &h_udp_client) != 0) {
+		fprintf(stderr, "load t25_udp_client failed\n");
+		pm_metal_runtime_unload(h_udp_server);
+		goto done;
+	}
+
+	char *udp_server_argv[1] = { "t24_udp_server" };
+	char *udp_client_argv[1] = { "t25_udp_client" };
+	pm_metal_process_id_t udp_server_pid, udp_client_pid;
+
+	if (pm_metal_process_spawn(h_udp_server, 1, udp_server_argv, 0, NULL, -1, -1, -1, NULL, NULL,
+				    &udp_server_pid)
+	    != 0) {
+		fprintf(stderr, "spawn t24_udp_server failed\n");
+		pm_metal_runtime_unload(h_udp_client);
+		pm_metal_runtime_unload(h_udp_server);
+		goto done;
+	}
+	if (pm_metal_process_spawn(h_udp_client, 1, udp_client_argv, 0, NULL, -1, -1, -1, NULL, NULL,
+				    &udp_client_pid)
+	    != 0) {
+		fprintf(stderr, "spawn t25_udp_client failed\n");
+		pm_metal_runtime_unload(h_udp_client);
+		pm_metal_runtime_unload(h_udp_server);
+		goto done;
+	}
+
+	int udp_server_exit, udp_client_exit;
+	if (pm_metal_process_wait(udp_server_pid, &udp_server_exit) != 0
+	    || pm_metal_process_wait(udp_client_pid, &udp_client_exit) != 0) {
+		fprintf(stderr, "wait() on udp pair failed\n");
+		pm_metal_runtime_unload(h_udp_client);
+		pm_metal_runtime_unload(h_udp_server);
+		goto done;
+	}
+	pm_metal_runtime_unload(h_udp_client);
+	pm_metal_runtime_unload(h_udp_server);
+	printf("process_test: udp pair exit codes server=%d client=%d\n", udp_server_exit,
+	       udp_client_exit);
+	if (udp_server_exit != 0 || udp_client_exit != 0) {
+		fprintf(stderr, "udp pair did not both exit 0\n");
+		goto done;
+	}
+
+	/* --- IPv6 TCP echo: t26_ipv6_server + t27_ipv6_client on ::1:9932 --- */
+	pm_metal_runtime_handle_t h_v6_server, h_v6_client;
+	if (pm_metal_runtime_load_file("/mods/t26_ipv6_server.wasm", &h_v6_server) != 0) {
+		fprintf(stderr, "load t26_ipv6_server failed\n");
+		goto done;
+	}
+	if (pm_metal_runtime_load_file("/mods/t27_ipv6_client.wasm", &h_v6_client) != 0) {
+		fprintf(stderr, "load t27_ipv6_client failed\n");
+		pm_metal_runtime_unload(h_v6_server);
+		goto done;
+	}
+
+	char *v6_server_argv[1] = { "t26_ipv6_server" };
+	char *v6_client_argv[1] = { "t27_ipv6_client" };
+	pm_metal_process_id_t v6_server_pid, v6_client_pid;
+
+	if (pm_metal_process_spawn(h_v6_server, 1, v6_server_argv, 0, NULL, -1, -1, -1, NULL, NULL,
+				    &v6_server_pid)
+	    != 0) {
+		fprintf(stderr, "spawn t26_ipv6_server failed\n");
+		pm_metal_runtime_unload(h_v6_client);
+		pm_metal_runtime_unload(h_v6_server);
+		goto done;
+	}
+	if (pm_metal_process_spawn(h_v6_client, 1, v6_client_argv, 0, NULL, -1, -1, -1, NULL, NULL,
+				    &v6_client_pid)
+	    != 0) {
+		fprintf(stderr, "spawn t27_ipv6_client failed\n");
+		pm_metal_runtime_unload(h_v6_client);
+		pm_metal_runtime_unload(h_v6_server);
+		goto done;
+	}
+
+	int v6_server_exit, v6_client_exit;
+	if (pm_metal_process_wait(v6_server_pid, &v6_server_exit) != 0
+	    || pm_metal_process_wait(v6_client_pid, &v6_client_exit) != 0) {
+		fprintf(stderr, "wait() on ipv6 pair failed\n");
+		pm_metal_runtime_unload(h_v6_client);
+		pm_metal_runtime_unload(h_v6_server);
+		goto done;
+	}
+	pm_metal_runtime_unload(h_v6_client);
+	pm_metal_runtime_unload(h_v6_server);
+	printf("process_test: ipv6 pair exit codes server=%d client=%d\n", v6_server_exit,
+	       v6_client_exit);
+	if (v6_server_exit != 0 || v6_client_exit != 0) {
+		fprintf(stderr, "ipv6 pair did not both exit 0\n");
+		goto done;
+	}
+
+	/* --- DNS: t28_dns_lookup getaddrinfo("localhost") --- */
+	pm_metal_runtime_handle_t h_dns;
+	if (pm_metal_runtime_load_file("/mods/t28_dns_lookup.wasm", &h_dns) != 0) {
+		fprintf(stderr, "load t28_dns_lookup failed\n");
+		goto done;
+	}
+	char *dns_argv[1] = { "t28_dns_lookup" };
+	pm_metal_process_id_t dns_pid;
+	if (pm_metal_process_spawn(h_dns, 1, dns_argv, 0, NULL, -1, -1, -1, NULL, NULL, &dns_pid)
+	    != 0) {
+		fprintf(stderr, "spawn t28_dns_lookup failed\n");
+		pm_metal_runtime_unload(h_dns);
+		goto done;
+	}
+	int dns_exit;
+	if (pm_metal_process_wait(dns_pid, &dns_exit) != 0 || dns_exit != 0) {
+		fprintf(stderr, "t28_dns_lookup did not exit 0 (exit=%d)\n", dns_exit);
+		pm_metal_runtime_unload(h_dns);
+		goto done;
+	}
+	pm_metal_runtime_unload(h_dns);
+	printf("process_test: dns lookup exit=%d\n", dns_exit);
 
 	rc = 0;
 	printf("process_test: OK\n");

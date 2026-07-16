@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end proof for runtime/process.h's spawn()/wait()/kill() — builds
-# pm-linux-process-test (src/linux/process_test.c) in the normal (non-TSan)
+# pm-linux-process-test (tests/process_test.c) in the normal (non-TSan)
 # build dir and runs it against mods/t4_getpid.wasm + mods/t5_spin.wasm.
 set -euo pipefail
 
@@ -27,6 +27,9 @@ cp "${ROOT}/build/mods/t2_env.wasm" \
 	"${ROOT}/build/mods/t4_getpid.wasm" "${ROOT}/build/mods/t5_spin.wasm" \
 	"${ROOT}/build/mods/t6_pipe_writer.wasm" "${ROOT}/build/mods/t7_pipe_reader.wasm" \
 	"${ROOT}/build/mods/t10_socket_server.wasm" "${ROOT}/build/mods/t11_socket_client.wasm" \
+	"${ROOT}/build/mods/t24_udp_server.wasm" "${ROOT}/build/mods/t25_udp_client.wasm" \
+	"${ROOT}/build/mods/t26_ipv6_server.wasm" "${ROOT}/build/mods/t27_ipv6_client.wasm" \
+	"${ROOT}/build/mods/t28_dns_lookup.wasm" \
 	"${VFS_ROOT}/mods/"
 
 # t5_spin.wasm never returns on its own — bounded here so a real kill()
@@ -60,12 +63,21 @@ echo "${OUT}" | grep -q "t2_env: EXPORTED_VAR=should-be-visible" \
 	|| { echo "FAIL: build_exported() did not pass through an exported var" >&2; exit 1; }
 
 # WASI preview1's own socket extension (docs/RUNTIME.md "Sockets") —
-# t11_socket_client -> t10_socket_server over a real loopback TCP socket,
-# gated on the "127.0.0.1/32" addr_pool process_test.c's own cfg passes to
-# init().
+# TCP IPv4, UDP, TCP IPv6, and getaddrinfo("localhost"), gated on
+# process_test.c's addr_pool / ns_lookup_pool.
 echo "${OUT}" | grep -q "t10_socket_server: served \"hello socket\"" \
 	|| { echo "FAIL: socket server did not receive the client's message" >&2; exit 1; }
 echo "${OUT}" | grep -q "t11_socket_client: got: echo: hello socket" \
 	|| { echo "FAIL: socket client did not get the server's reply" >&2; exit 1; }
+echo "${OUT}" | grep -q "t24_udp_server: served \"hello udp\"" \
+	|| { echo "FAIL: udp server did not receive the client's message" >&2; exit 1; }
+echo "${OUT}" | grep -q "t25_udp_client: got: echo: hello udp" \
+	|| { echo "FAIL: udp client did not get the server's reply" >&2; exit 1; }
+echo "${OUT}" | grep -q "t26_ipv6_server: served \"hello ipv6\"" \
+	|| { echo "FAIL: ipv6 server did not receive the client's message" >&2; exit 1; }
+echo "${OUT}" | grep -q "t27_ipv6_client: got: echo: hello ipv6" \
+	|| { echo "FAIL: ipv6 client did not get the server's reply" >&2; exit 1; }
+echo "${OUT}" | grep -q "t28_dns_lookup: localhost -> 127.0.0.1" \
+	|| { echo "FAIL: dns lookup did not resolve localhost to 127.0.0.1" >&2; exit 1; }
 
 echo "verify-linux-process: OK"

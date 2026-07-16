@@ -77,7 +77,7 @@ echo "${OUT1}" | grep -qE "t14_tmpfs_read_alt\.wasm: exit=0" \
 	|| { echo "FAIL: second fstab line for the same tmpfs name ('scratch' at /scratchB) did not resolve" >&2; exit 1; }
 echo "${OUT1}" | grep -q "t14_tmpfs_read_alt: hello from tmpfs" \
 	|| { echo "FAIL: repeated fstab name did not reuse the already-established backing (re-created instead?)" >&2; exit 1; }
-echo "${OUT1}" | grep -q "t15_tmpfs_read_other: open failed" \
+echo "${OUT1}" | grep -q "t15_tmpfs_read_other: open failed (expected)" \
 	|| { echo "FAIL: differently-named tmpfs source ('other') was not independent from 'scratch'" >&2; exit 1; }
 
 # --- Run 2: fresh process, same fstab — a brand-new "scratch" tmpfs is

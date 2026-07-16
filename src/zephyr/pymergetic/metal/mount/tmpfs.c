@@ -93,20 +93,19 @@ static int pm_metal_mount_tmpfs_establish(const char *source, const char *opts, 
 	g_pm_metal_tmpfs_mnt[slot].mnt_point = g_pm_metal_tmpfs_mp[slot];
 	g_pm_metal_tmpfs_mnt[slot].fs_data = g_pm_metal_tmpfs_cfg[slot];
 	g_pm_metal_tmpfs_mnt[slot].storage_dev = storage_ids[slot];
-	g_pm_metal_tmpfs_mnt[slot].flags = FS_MOUNT_FLAG_USE_DISK_ACCESS;
+	/* RAMDISK is blank every boot. Format first + NO_FORMAT so littlefs
+	 * does not probe empty media, log "Corrupted dir pair", and auto-format. */
+	g_pm_metal_tmpfs_mnt[slot].flags =
+		FS_MOUNT_FLAG_USE_DISK_ACCESS | FS_MOUNT_FLAG_NO_FORMAT;
 
-	rc = fs_mount(&g_pm_metal_tmpfs_mnt[slot]);
+	rc = fs_mkfs(FS_LITTLEFS, (uintptr_t)storage_ids[slot], NULL,
+		     FS_MOUNT_FLAG_USE_DISK_ACCESS);
 	if (rc < 0) {
-		/* Unformatted — mkfs then remount. */
-		rc = fs_mkfs(FS_LITTLEFS, (uintptr_t)storage_ids[slot], NULL,
-			     FS_MOUNT_FLAG_USE_DISK_ACCESS);
-		if (rc < 0) {
-			printk("pm_metal_mount: tmpfs: mkfs failed for '%s' (%d)\n", source, rc);
-			pm_metal_mount_device_release(dev);
-			return -1;
-		}
-		rc = fs_mount(&g_pm_metal_tmpfs_mnt[slot]);
+		printk("pm_metal_mount: tmpfs: mkfs failed for '%s' (%d)\n", source, rc);
+		pm_metal_mount_device_release(dev);
+		return -1;
 	}
+	rc = fs_mount(&g_pm_metal_tmpfs_mnt[slot]);
 	if (rc < 0) {
 		printk("pm_metal_mount: tmpfs: mount failed for '%s' (%d)\n", source, rc);
 		pm_metal_mount_device_release(dev);

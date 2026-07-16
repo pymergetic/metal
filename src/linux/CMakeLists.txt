@@ -190,7 +190,7 @@ target_link_libraries(pm-linux-runtime PRIVATE
 # pthread-based stress harness. EXCLUDE_FROM_ALL: not part of a normal build.
 
 add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
-	thread_stress_test.c
+	${PM_METAL_ROOT}/tests/thread_stress_test.c
 	pymergetic/metal/port/platform.c
 	pymergetic/metal/port/lock.c
 	pymergetic/metal/memory/ram.c
@@ -257,7 +257,7 @@ target_link_libraries(pm-linux-thread-stress PRIVATE
 # a normal build.
 
 add_executable(pm-linux-process-test EXCLUDE_FROM_ALL
-	process_test.c
+	${PM_METAL_ROOT}/tests/process_test.c
 	pymergetic/metal/port/platform.c
 	pymergetic/metal/port/lock.c
 	pymergetic/metal/port/worker.c

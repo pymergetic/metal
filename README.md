@@ -54,10 +54,10 @@ scripts/setup-wamr.sh      # once — vendors + patches external/wamr
 scripts/setup-lz4.sh       # once — vendors external/lz4 (util/lz4.h's backing lib)
 scripts/setup-microtar.sh  # once — vendors + patches external/microtar (util/tar.h's backing lib)
 scripts/setup-ide.sh       # once — compile_commands.json + .clangd for this checkout
-scripts/verify-linux.sh    # build mods + runtime, then init -> load -> run -> unload -> shutdown
+scripts/verify-linux.sh    # main Linux verify (scripted + process/socket smoke; peer of verify-zephyr-*.sh)
 ```
 
-Other checks: `scripts/verify-linux-threads.sh` (ThreadSanitizer, concurrent load/run/unload), `scripts/verify-linux-process.sh` (`spawn()`/`kill()`/pipes/sockets across processes).
+Also: `scripts/verify-linux-threads.sh` (TSan). Focused helpers (`verify-linux-process.sh`, tmpfs/proc/…) are still callable alone; the main script chains the process/socket half.
 
 ---
 

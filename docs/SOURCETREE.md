@@ -197,8 +197,6 @@ packages/metal/
 │   ├── linux/
 │   │   ├── CMakeLists.txt
 │   │   ├── main.c                 # thin: argv parsing + realpath only — the run mode lives in common/…/app/
-│   │   ├── thread_stress_test.c   # pm-linux-thread-stress — EXCLUDE_FROM_ALL, see scripts/verify-linux-threads.sh
-│   │   ├── process_test.c         # pm-linux-process-test — EXCLUDE_FROM_ALL, see scripts/verify-linux-process.sh
 │   │   └── pymergetic/metal/
 │   │       ├── port/{platform,lock,worker,pipe}.c
 │   │       ├── memory/{ram,kheap,bytecode}.c
@@ -210,7 +208,7 @@ packages/metal/
 │   │
 │   ├── zephyr/
 │   │   ├── CMakeLists.txt, Kconfig, prj.conf, boards/
-│   │   ├── main.c
+│   │   ├── main.c                 # thin: FAT root + init — optional smoke via tests/zephyr_verify.c
 │   │   └── pymergetic/metal/
 │   │       ├── port/{platform,lock}.c
 │   │       ├── port/worker.c                   # stub — deferred, see docs/RUNTIME.md "Bring-up plan" §5
@@ -226,6 +224,12 @@ packages/metal/
 │   │                                # + real pthread_t/sem_t unchanged, no custom os_* file shim
 │   ├── rump/                      # [stub]
 │   └── unikraft/                  # [stub]
+│
+├── tests/                         # smoke harnesses for common runtime/process APIs — not plat code
+│   ├── process_test.c             # pm-linux-process-test — see scripts/verify-linux-process.sh
+│   ├── thread_stress_test.c       # pm-linux-thread-stress — see scripts/verify-linux-threads.sh
+│   ├── zephyr_verify.h
+│   └── zephyr_verify.c            # CONFIG_PM_METAL_VERIFY_MODS boot suite (embed stage + batches)
 │
 ├── mods/
 │   ├── t0_hello/main.c
