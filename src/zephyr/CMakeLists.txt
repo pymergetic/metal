@@ -161,6 +161,10 @@ target_compile_options(app PRIVATE
 	-Wno-type-limits
 )
 
+# WAMR invokeNative_*.s omit .note.GNU-stack; force a non-executable stack on
+# the final ELF without patching external/wamr (keeps the tree vanilla).
+target_link_options(app PRIVATE -Wl,-z,noexecstack)
+
 if(DEFINED ENV{WASI_SDK_PATH} AND NOT "$ENV{WASI_SDK_PATH}" STREQUAL "")
 	set(WASI_SDK_PATH $ENV{WASI_SDK_PATH})
 elseif(EXISTS "${PM_METAL_ROOT}/.tools/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi/libm.a")

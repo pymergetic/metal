@@ -311,3 +311,9 @@ target_link_libraries(pm-linux-process-test PRIVATE
 	dl
 	pthread
 )
+
+# WAMR invokeNative_*.s omit .note.GNU-stack; force a non-executable stack on
+# the final ELF without patching external/wamr (keeps the tree vanilla).
+foreach(_pm_exe pm-linux-runtime pm-linux-thread-stress pm-linux-process-test)
+	target_link_options(${_pm_exe} PRIVATE -Wl,-z,noexecstack)
+endforeach()
