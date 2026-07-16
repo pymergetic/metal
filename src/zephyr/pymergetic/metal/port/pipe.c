@@ -54,6 +54,72 @@ int pm_metal_port_pipe_is_read_end(int fd)
 	return pm_metal_port_pipe_is_ours(fd) && ((fd - PM_METAL_PIPE_FD_BASE) % 2) == 0;
 }
 
+#ifndef POLLIN
+#define POLLIN 0x0001
+#endif
+#ifndef POLLOUT
+#define POLLOUT 0x0004
+#endif
+#ifndef POLLHUP
+#define POLLHUP 0x0010
+#endif
+#ifndef POLLNVAL
+#define POLLNVAL 0x0020
+#endif
+
+short pm_metal_port_pipe_poll_revents(int fd, short events)
+{
+	int idx;
+	pm_metal_pipe_t *p;
+	int is_read;
+	short revents = 0;
+	size_t len;
+	int read_open;
+	int write_open;
+
+	if (fd < PM_METAL_PIPE_FD_BASE) {
+		return POLLNVAL;
+	}
+	idx = (fd - PM_METAL_PIPE_FD_BASE) / 2;
+	if (idx < 0 || idx >= PM_METAL_PIPE_MAX) {
+		return POLLNVAL;
+	}
+	is_read = ((fd - PM_METAL_PIPE_FD_BASE) % 2) == 0;
+	p = &g_pm_metal_pipes[idx];
+
+	k_mutex_lock(&g_pm_metal_pipe_table_lock, K_FOREVER);
+	if (!p->used) {
+		k_mutex_unlock(&g_pm_metal_pipe_table_lock);
+		return POLLNVAL;
+	}
+	k_mutex_lock(&p->lock, K_FOREVER);
+	len = p->len;
+	read_open = p->read_open;
+	write_open = p->write_open;
+	k_mutex_unlock(&p->lock);
+	k_mutex_unlock(&g_pm_metal_pipe_table_lock);
+
+	if (is_read) {
+		if ((events & POLLIN) && (len > 0 || !write_open)) {
+			revents |= POLLIN;
+		}
+		if (!write_open) {
+			revents |= POLLHUP;
+		}
+	} else {
+		if ((events & POLLOUT) && read_open && len < PM_METAL_PIPE_BUF) {
+			revents |= POLLOUT;
+		}
+		if (!read_open) {
+			revents |= POLLHUP;
+			if (events & POLLOUT) {
+				revents |= POLLOUT;
+			}
+		}
+	}
+	return revents;
+}
+
 ssize_t pm_metal_port_pipe_read(int fd, void *buf, size_t n)
 {
 	int idx = (fd - PM_METAL_PIPE_FD_BASE) / 2;
