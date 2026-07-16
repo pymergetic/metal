@@ -1,0 +1,24 @@
+WAMR's zephyr/module.yml sets kconfig-ext without shipping a Kconfig;
+Zephyr west then fails module discovery. Point at a tiny stub Kconfig
+instead (Metal wires WAMR from src/zephyr/CMakeLists.txt via
+runtime_lib.cmake). Formerly created by scripts/setup-west.sh sed/cat
+— now a tracked patch. See docs/SOURCETREE.md "Vendoring".
+
+diff --git a/zephyr/module.yml b/zephyr/module.yml
+index 059c7368..8ef7dac7 100644
+--- a/zephyr/module.yml
++++ b/zephyr/module.yml
+@@ -2,4 +2,4 @@ name: wasm-micro-runtime
+ 
+ build:
+   cmake-ext: True
+-  kconfig-ext: True
++  kconfig: Kconfig
+diff --git a/Kconfig b/Kconfig
+new file mode 100644
+index 00000000..e69de29b
+--- /dev/null
++++ b/Kconfig
+@@ -0,0 +1,2 @@
++# WAMR is wired from src/zephyr/CMakeLists.txt (runtime_lib.cmake).
++

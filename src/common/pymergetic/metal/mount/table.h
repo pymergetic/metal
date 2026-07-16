@@ -58,7 +58,8 @@ int pm_metal_mount(const char *guest_path, pm_metal_mount_kind_t kind, const cha
 /* Unmount whatever is registered at guest_path (exact match against the
  * normalized form — not a prefix match). release()s that kind's own
  * backing, then frees the table slot. Returns 0/-1 (nothing mounted
- * there, once normalized). */
+ * there, once normalized).
+ * impl: common — src/common/pymergetic/metal/mount/table.c */
 int pm_metal_umount(const char *guest_path);
 
 /*
@@ -75,17 +76,20 @@ typedef struct pm_metal_mount_resolve {
 	char remainder[PM_METAL_MOUNT_GUEST_PATH_MAX];
 } pm_metal_mount_resolve_t;
 
+/* impl: common — src/common/pymergetic/metal/mount/table.c */
 int pm_metal_mount_resolve_ex(const char *guest_path, pm_metal_mount_resolve_t *out);
 
 /*
  * Loader convenience: resolve_ex then write host_path (full host file path
  * for hostdir/tmpfs; sentinel for proc). Returns 0/-1.
+ * impl: common — src/common/pymergetic/metal/mount/table.c
  */
 int pm_metal_mount_resolve(const char *guest_path, char *out_host_path, size_t out_cap);
 
 /*
  * Reverse lookup for os_open_preopendir tagging (WAMR only passes the host
  * half of guest::host). Exact match on establish()'s host_path. 0/-1.
+ * impl: common — src/common/pymergetic/metal/mount/table.c
  */
 int pm_metal_mount_find_by_host(const char *host_path, char *out_guest, size_t guest_cap,
 				 pm_metal_mount_kind_t *out_kind);
@@ -97,16 +101,19 @@ int pm_metal_mount_find_by_host(const char *host_path, char *out_guest, size_t g
  * runtime.c's run_ex(). *out_count is the number written (<=
  * max_entries). Returns 0/-1 (bad args, or max_entries too small for the
  * table's current entry count — nothing partially written in that case).
+ * impl: common — src/common/pymergetic/metal/mount/table.c
  */
 int pm_metal_mount_build_map_dir_list(char out_bufs[][PM_METAL_MOUNT_MAP_DIR_ENTRY_MAX], size_t max_entries,
 				       size_t *out_count);
 
 /* Tear down every registered mount (release()ing each kind's own
  * backing) and clear the table. Called once from runtime.c's
- * shutdown(). */
+ * shutdown().
+ * impl: common — src/common/pymergetic/metal/mount/table.c */
 void pm_metal_mount_shutdown_all(void);
 
-/* Exact-match: 1 if something is mounted at guest_path, else 0. */
+/* Exact-match: 1 if something is mounted at guest_path, else 0.
+ * impl: common — src/common/pymergetic/metal/mount/table.c */
 int pm_metal_mount_exists(const char *guest_path);
 
 /*
@@ -116,6 +123,7 @@ int pm_metal_mount_exists(const char *guest_path);
 typedef void (*pm_metal_mount_foreach_fn)(const char *guest_path, const char *source,
 					   const char *host_path, pm_metal_mount_kind_t kind,
 					   const char *opts, int readonly, void *ctx);
+/* impl: common — src/common/pymergetic/metal/mount/table.c */
 void pm_metal_mount_foreach(pm_metal_mount_foreach_fn fn, void *ctx);
 
 #endif /* PYMERGETIC_METAL_MOUNT_TABLE_H_ */

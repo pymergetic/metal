@@ -31,6 +31,7 @@ int pm_metal_mount_tmpfs_registry_acquire(const char *name, char *out_host_path,
  * host_path). Caller must have already confirmed via acquire() above that
  * `name` isn't registered yet — this does not check. Returns 0/-1 (registry
  * full, or name/host_path too long).
+ * impl: common — src/common/pymergetic/metal/mount/tmpfs_registry.c
  */
 int pm_metal_mount_tmpfs_registry_insert(const char *name, const char *host_path);
 
@@ -42,6 +43,7 @@ int pm_metal_mount_tmpfs_registry_insert(const char *name, const char *host_path
  * other references remain (caller must leave host_path alone), -1 if
  * host_path isn't registered at all (caller bug — logged by the caller,
  * not here).
+ * impl: common — src/common/pymergetic/metal/mount/tmpfs_registry.c
  */
 int pm_metal_mount_tmpfs_registry_release(const char *host_path);
 

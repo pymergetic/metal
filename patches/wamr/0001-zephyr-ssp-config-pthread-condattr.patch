@@ -1,15 +1,36 @@
-Zephyr has no pthread_condattr_setclock() — WAMR's own upstream #if
-chain here only excludes it for Apple/SGX/Windows/Cosmopolitan/FreeRTOS,
-so a Zephyr build otherwise picks the wrong (unavailable) branch. Carried
-over from this tree's earlier (pre-patches/) Zephyr bring-up work. See
-docs/RUNTIME.md "Bring-up plan" and docs/SOURCETREE.md "Vendoring".
-Applied by scripts/setup-wamr.sh.
+Zephyr ssp_config tweaks that cannot live in src/:
+1. No pthread_condattr_setclock() — upstream's #if chain only excludes
+   Apple/SGX/Windows/Cosmopolitan/FreeRTOS, so Zephyr otherwise picks the
+   wrong (unavailable) branch.
+2. No /dev/urandom — without CONFIG_HAS_ARC4RANDOM_BUF, libc-wasi's
+   random_uniform() opens /dev/urandom and breaks every path_open after
+   the first real open. Metal provides arc4random_buf() in
+   src/zephyr/.../wasi/support.c (sys_rand_get); this patch only flips
+   the feature flag and declares the symbol for WAMR's C.
+See docs/SOURCETREE.md "Vendoring". Applied by scripts/setup-wamr.sh
+(and scripts/setup-west.sh after west update).
 
 diff --git a/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/ssp_config.h b/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/ssp_config.h
-index 82967721..81aac896 100644
+index 82967721..470c8fd2 100644
 --- a/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/ssp_config.h
 +++ b/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/ssp_config.h
-@@ -63,7 +63,8 @@
+@@ -17,9 +17,14 @@
+ #include "bh_platform.h"
+ #include "gnuc.h"
+ 
+-#if defined(__FreeBSD__) || defined(__APPLE__) \
++#if defined(__FreeBSD__) || defined(__APPLE__) || defined(BH_PLATFORM_ZEPHYR) \
+     || ((defined(ANDROID) || defined(__ANDROID__)) && (__ANDROID_API__ < 28))
++/* Zephyr: no /dev/urandom; Metal provides arc4random_buf via sys_rand_get. */
+ #define CONFIG_HAS_ARC4RANDOM_BUF 1
++#if defined(BH_PLATFORM_ZEPHYR)
++#include <stddef.h>
++void arc4random_buf(void *buf, size_t nbytes);
++#endif
+ #else
+ #define CONFIG_HAS_ARC4RANDOM_BUF 0
+ #endif
+@@ -63,7 +68,8 @@
  #endif
  
  #if !defined(__APPLE__) && !defined(BH_PLATFORM_LINUX_SGX) && !defined(_WIN32) \

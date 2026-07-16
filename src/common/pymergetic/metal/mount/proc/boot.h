@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+/* impl: common — src/common/pymergetic/metal/mount/proc/boot.c */
 int pm_metal_mount_proc_boot_is_set(void);
 uint64_t pm_metal_mount_proc_boot_ms(void);
 
