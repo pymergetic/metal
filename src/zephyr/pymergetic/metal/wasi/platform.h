@@ -36,6 +36,8 @@
 
 typedef struct zephyr_fs_desc {
 	char *path;
+	/* Freed when refs hit 0 (rename while ops hold a path snapshot). */
+	char *path_retired;
 	union {
 		struct fs_file_t file;
 		struct fs_dir_t dir;
