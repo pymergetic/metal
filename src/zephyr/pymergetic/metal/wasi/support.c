@@ -104,8 +104,16 @@ os_clock_time_get(__wasi_clockid_t clock_id, __wasi_timestamp_t precision,
 }
 
 /*
- * WASI fd-table / prestats rwlocks (libc-wasi). Writer-exclusive via k_mutex
- * — enough for wasi-threads; korp_rwlock is zmutex_t (patches/wamr/0007-*).
+ * WASI fd-table / prestats rwlocks (libc-wasi locking.h → os_rwlock_*).
+ * Writer-exclusive via k_mutex (korp_rwlock is zmutex_t; patches/wamr/0007-*).
+ * Concurrent readers are serialized — acceptable for wasi-threads; no consumer
+ * relies on shared-read parallelism.
+ *
+ * Lock order (FD-4): WAMR posix.c always takes ft->lock / prestats->lock
+ * (these rwlocks) *before* calling os_* entry points that take
+ * desc_array_mutex or the socket-table mutex. Metal never takes the WASI
+ * fd-table rwlock, so there is no reverse nesting / deadlock with those
+ * inner mutexes.
  */
 int
 os_rwlock_init(korp_rwlock *lock)
