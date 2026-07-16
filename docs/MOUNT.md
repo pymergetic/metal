@@ -80,8 +80,7 @@ steps.
 
 ### The zephyr ram disk itself — devicetree-declared, not runtime-allocated
 
-Concretely, per `backup/2nd_try/host/zephyr/boards/pm_ramdisk.overlay` (old try, reference
-only, but the mechanism itself is real Zephyr, not something that attempt invented):
+Concretely, via a Zephyr `zephyr,ram-disk` overlay (the mechanism itself is real Zephyr):
 
 ```dts
 ramdisk0 {
@@ -486,11 +485,9 @@ just `return -1`). Needs a real WAMR `os_*` file backend before *any* zephyr mou
 today's already-planned root `tmpfs` from `docs/RUNTIME.md` § "Bring-up plan" #5 — can work at
 all.
 
-**Checked directly against the vendored `external/zephyr` (4.4), not assumed, and not copied
-from `backup/2nd_try/host/zephyr/pymergetic/wasi/zephyr_file.c`** (that file is still readable
-for the `fs_*` struct shapes, but its own approach — hand-rolled against raw `fs_*`, one global
-`prestat_dir`, single-preopen only — is exactly what this design corrects; not the model to
-follow):
+**Checked directly against the vendored `external/zephyr` (4.4), not assumed.** An earlier
+hand-rolled `fs_*` backend (one global `prestat_dir`, single-preopen only) is exactly what
+this design corrects — not the model to follow:
 
 - Zephyr's own POSIX subsystem (`CONFIG_POSIX_API`, `lib/posix/options/fs.c` +
   `device_io.c`) genuinely provides real, fd-table-backed `open()`/`read()`/`write()`/
@@ -507,8 +504,8 @@ follow):
   `compilation_on_nuttx.yml`), while zephyr cannot: that door is closed for this target
   specifically, confirmed by reading the source, not by inference from the old attempt.
 - Design for the new `os_*` backend: each `os_file_handle` (one per `os_open_preopendir()` —
-  i.e. one per active mount-table entry, **not** the old backup's single global
-  `prestat_dir`, which is what made it single-mount-only — plus one per intermediate directory
+  i.e. one per active mount-table entry, **not** a single global `prestat_dir` (which is what
+  made an earlier attempt single-mount-only) — plus one per intermediate directory
   WAMR opens while walking a multi-component `path_open()`) carries **its own** absolute base
   path. `os_openat(handle, relpath, ...)` becomes a plain absolute `open(handle->base_path +
   "/" + relpath, ...)` (via the real POSIX `open()` above) — synthesizing the missing `*at()`

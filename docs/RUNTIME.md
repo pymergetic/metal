@@ -393,7 +393,7 @@ Fixture file under vfs root → `t1_read.wasm` → confirms 1:1 guest paths (`sc
 
 ### 5. Zephyr (after linux green)
 
-**Memory (zephyr):** kernel **static** (link image through `&_end`) and kernel **heap** (`CONFIG_HEAP_MEM_POOL_SIZE`, in-link `k_malloc` pool) are accounted first. `memory/ram.c` **probes** total installed RAM, subtracts kernel footprint → **remainder split between `memory/kheap.c` and `memory/bytecode.c`** (map past `_end` on MMU targets, static cap on native_sim). Probe samples: `backup/2nd_try/host/zephyr/pymergetic/metal/port/plat.c` (E820/`x86_memmap` on qemu, `CONFIG_SRAM_SIZE` fallback on native_sim).
+**Memory (zephyr):** kernel **static** (link image through `&_end`) and kernel **heap** (`CONFIG_HEAP_MEM_POOL_SIZE`, in-link `k_malloc` pool) are accounted first. `memory/ram.c` **probes** total installed RAM, subtracts kernel footprint → **remainder split between `memory/kheap.c` and `memory/bytecode.c`** (map past `_end` on MMU targets, static cap on native_sim). Probe sources: E820/`x86_memmap` on qemu, `CONFIG_SRAM_SIZE` fallback on native_sim.
 
 | Piece | Source |
 |-------|--------|

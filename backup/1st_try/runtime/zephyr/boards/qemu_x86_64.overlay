@@ -1,5 +1,0 @@
-#include "pm_machine_ram.dtsi"
-
-&dram0 {
-	reg = <0x0 PM_MACHINE_RAM_BYTES>;
-};

@@ -263,8 +263,7 @@ packages/metal/
 ├── patches/{wamr,microtar}/       # tracked diffs against external/{wamr,microtar} — see "Vendoring" above
 ├── docs/
 ├── external/                      # gitignored — plain upstream checkouts, reproduced by scripts/setup-{wamr,lz4,microtar}.sh + patches/ above
-├── west-manifest/
-└── backup/
+└── west-manifest/
 ```
 
 ---

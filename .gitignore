@@ -1,19 +1,13 @@
 # Build outputs — see docs/SOURCETREE.md
 /build/
 
-# Legacy layout (pre-src/ migration; may still exist under backup/)
+# Legacy layout leftovers (pre-src/ migration)
 host/**/build/
 host/**/images/
 runtime/**/build/
 runtime/**/images/
 runtime/**/bench/build/
 mods/build/
-
-# Backup tries — west clones and local build output (source snapshots stay tracked)
-backup/**/external/
-backup/**/build/
-backup/**/images/
-backup/**/generated/
 
 # Toolchain (local download)
 .tools/

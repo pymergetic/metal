@@ -7,8 +7,6 @@ Pymergetic-metal: native **runtime** per target that runs **wasm** mods (`wasm32
 **Runtime** — long-lived native binary per target: dynamic load/run/unload via WAMR.  
 **Mods** — `.wasm` files loaded and executed through the wasm interface.
 
-`backup/1st_try/` is reference only — not the codebase being built.
-
 ---
 
 ## Documentation
@@ -41,8 +39,7 @@ packages/metal/
 ├── patches/{wamr,microtar}/     tracked diffs against external/{wamr,microtar} — see docs/SOURCETREE.md § Vendoring
 ├── docs/
 ├── external/                    gitignored — vendored WAMR/Zephyr/wasi-sdk/LZ4/microtar, reproduced by scripts/setup-*.sh
-├── west-manifest/
-└── backup/                      old tries — not built from
+└── west-manifest/
 ```
 
 See [docs/SOURCETREE.md](docs/SOURCETREE.md).
