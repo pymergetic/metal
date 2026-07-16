@@ -8,6 +8,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/random/random.h>
 
+#include <errno.h>
 #include <time.h>
 
 #define PM_WASI_NS_PER_SEC 1000000000ULL
@@ -102,10 +103,12 @@ os_clock_time_get(__wasi_clockid_t clock_id, __wasi_timestamp_t precision,
 	return pm_wasi_clock_value(clock_id, time);
 }
 
+/* Int-returning os_socket_* stubs: POSIX-style -1 + errno. Hand-written
+ * os_socket_shutdown below returns __wasi_errno_t (__WASI_ENOSYS) instead. */
 #define PM_WASI_SOCK_STUB(name, args)                                                                \
 	int name args                                                                                  \
 	{                                                                                              \
-		(void)0;                                                                               \
+		errno = ENOSYS;                                                                        \
 		return -1;                                                                             \
 	}
 
@@ -184,6 +187,11 @@ PM_WASI_SOCK_STUB(os_socket_get_broadcast, (bh_socket_t socket, bool *is_enabled
 PM_WASI_SOCK_STUB(os_socket_set_ipv6_only, (bh_socket_t socket, bool is_enabled))
 PM_WASI_SOCK_STUB(os_socket_get_ipv6_only, (bh_socket_t socket, bool *is_enabled))
 
+/*
+ * Zephyr WASI rwlocks are intentional no-ops for this single-threaded-per-instance
+ * bring-up. They must be replaced (e.g. with k_mutex) before multi-threaded guest
+ * use relies on them — concurrent readers/writers currently get no exclusion.
+ */
 int
 os_rwlock_init(korp_rwlock *lock)
 {

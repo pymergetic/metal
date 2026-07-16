@@ -251,7 +251,8 @@ packages/metal/
 │   ├── t19_sys_umount/main.c      # MOUNT marker — privileged guest umount(/dyn)
 │   ├── t20_sys_gone/main.c        # open /dyn must fail after t19
 │   ├── t21_proc_mounts/main.c     # reads Metal /proc nodes + /proc/self — see scripts/verify-linux-proc.sh
-│   └── t22_fstypes/main.c         # lists fstypes via mount.h readonly imports
+│   ├── t22_fstypes/main.c         # lists fstypes via mount.h readonly imports
+│   └── t23_pthread/main.c         # guest pthread_create/join — default wasm32-wasip1-threads build
 │
 ├── build/                         # gitignored
 │   ├── linux/runtime/
@@ -374,7 +375,7 @@ Also gitignored: `.tools/`, `external/`, `.cache/`, `.venv/`.
 | Artifact | Inputs | Output |
 |----------|--------|--------|
 | **runtime binary** | `src/common/pymergetic/metal/` + `src/<plat>/` + WAMR + LZ4 + microtar | `build/<plat>/…` |
-| **mod `.wasm`** | `mods/` + wasi-sdk + `-I include/` | `build/mods/` — a mod meant to be *depended on* by another via multi-module (docs/RUNTIME.md "Multi-module") opts into `-mexec-model=reactor` with an empty `mods/<name>/REACTOR` marker file (`scripts/build-mod.sh`), since WAMR refuses a command module (one with `_start`) as a sub-module; a mod using sockets (docs/RUNTIME.md "Sockets") opts into WAMR's own `wasi_socket_ext.h`/`.c` (plain wasi-libc doesn't declare `socket()`/`bind()`/`connect()`/`listen()` on this target at all) the same way, via an empty `mods/<name>/SOCKET` marker file |
+| **mod `.wasm`** | `mods/` + wasi-sdk `wasm32-wasip1-threads` + `-I include/` | `build/mods/` — threads/shared-memory is the default (guest `pthread_create` works; see `mods/t23_pthread`); a mod meant to be *depended on* by another via multi-module (docs/RUNTIME.md "Multi-module") opts into `-mexec-model=reactor` with an empty `mods/<name>/REACTOR` marker file (`scripts/build-mod.sh`), since WAMR refuses a command module (one with `_start`) as a sub-module; a mod using sockets (docs/RUNTIME.md "Sockets") opts into WAMR's own `wasi_socket_ext.h`/`.c` (plain wasi-libc doesn't declare `socket()`/`bind()`/`connect()`/`listen()` on this target at all) the same way, via an empty `mods/<name>/SOCKET` marker file |
 
 ---
 

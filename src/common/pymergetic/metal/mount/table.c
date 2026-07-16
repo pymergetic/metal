@@ -180,7 +180,7 @@ int pm_metal_mount(const char *guest_path, pm_metal_mount_kind_t kind, const cha
 		}
 	}
 
-	memcpy(slot->guest_path, norm, sizeof(norm));
+	memcpy(slot->guest_path, norm, strlen(norm) + 1);
 	memcpy(slot->host_path, host_path, host_len + 1);
 	if (source && source[0]) {
 		snprintf(slot->source, sizeof(slot->source), "%s", source);

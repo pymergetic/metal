@@ -14,6 +14,9 @@ uint64_t pm_metal_memory_zephyr_arena_budget(void);
 /* Take up to `requested` from the shared remaining budget (first-come).
  * impl: zephyr — src/zephyr/pymergetic/metal/memory/budget.c */
 uint64_t pm_metal_memory_zephyr_budget_take(uint64_t requested);
+/* Return previously taken bytes on a failed establish path (pool_alloc /
+ * arena_init). No-op if budget was never ensured. */
+void pm_metal_memory_zephyr_budget_give(uint64_t bytes);
 void pm_metal_memory_zephyr_budget_reset(void);
 
 /* impl: zephyr — src/zephyr/pymergetic/metal/memory/budget.c */

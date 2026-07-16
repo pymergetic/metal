@@ -76,12 +76,17 @@ int pm_metal_mount_umount(const char *target);
 #endif
 
 #if defined(PM_METAL_BUILD_KERNEL)
-/* Linux-shaped aliases — same imports, for busybox / familiar call sites. */
+/* Linux-shaped aliases — same imports, for busybox / familiar call sites.
+ * Only MS_RDONLY is translated today; any other flag bit is rejected
+ * (-1) so callers don't silently get a non-bind / non-remount mount. */
 static inline int mount(const char *source, const char *target, const char *filesystemtype,
 			unsigned long mountflags, const void *data)
 {
 	const char *opts = data ? (const char *)data : NULL;
 
+	if (mountflags & ~(unsigned long)MS_RDONLY) {
+		return -1;
+	}
 	if ((mountflags & MS_RDONLY) && !(opts && opts[0])) {
 		opts = "ro";
 	}

@@ -60,11 +60,13 @@ typedef enum pm_metal_log_stream {
  * The one global capture floor: write()/write_raw() drop (do not format,
  * do not touch either stream at all) any message below `level`. There is
  * exactly one floor for the whole process — kernel and every guest share
- * it, there is no per-caller override. Defaults to PM_METAL_LOG_INFO. Not
- * thread-safe against concurrent set_level() calls racing writes (a
- * coarse, rarely-changed knob) — safe to call from init()/main() before
- * other threads exist, which is the only place this codebase calls it
- * today.
+ * it, there is no per-caller override. Defaults to PM_METAL_LOG_INFO.
+ * Intentionally callable from any guest (not gated like mount()): any mod
+ * can raise or lower the shared floor for the whole host process — that
+ * is a known coarse control, not a privilege boundary. Not thread-safe
+ * against concurrent set_level() calls racing writes — safe to call from
+ * init()/main() before other threads exist, which is the only place this
+ * codebase calls it today.
  *
  * impl: common — src/common/pymergetic/metal/util/log.c
  * impl: wasi import — src/common/pymergetic/metal/util/log.c (wasm32 only)

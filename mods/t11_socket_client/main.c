@@ -55,7 +55,18 @@ int main(void)
 	}
 
 	const char *msg = "hello socket";
-	write(fd, msg, strlen(msg));
+	size_t msg_len = strlen(msg);
+	size_t sent = 0;
+
+	while (sent < msg_len) {
+		ssize_t w = write(fd, msg + sent, msg_len - sent);
+		if (w <= 0) {
+			printf("t11_socket_client: write() failed\n");
+			close(fd);
+			return 1;
+		}
+		sent += (size_t)w;
+	}
 
 	char buf[128];
 	ssize_t n = read(fd, buf, sizeof(buf) - 1);

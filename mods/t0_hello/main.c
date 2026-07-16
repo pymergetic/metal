@@ -1,5 +1,5 @@
 /*
- * T0 — hello via WASI libc. wasm32-wasip1.
+ * T0 — hello via WASI libc. wasm32-wasip1-threads (default mod target).
  */
 #include <stdio.h>
 

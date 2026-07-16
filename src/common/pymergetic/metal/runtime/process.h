@@ -29,6 +29,12 @@
  * try_wait() on the *same* pid must not race each other — same
  * single-reaper precondition port/worker.h's own join()/try_join()
  * already documents, just inherited here rather than re-invented.
+ * kill() must likewise not race a reaping wait()/try_wait() on that same
+ * pid: pids are slot_idx+1 with no generation counter, so a kill() that
+ * outlives the reap can terminate() a brand-new process reused into the
+ * same slot. Memory-safe (runtime lock protects the exec token) but
+ * wrong-target — do not kill() from one thread while another reaps and
+ * a third respawns into the same pid.
  */
 #ifndef PYMERGETIC_METAL_RUNTIME_PROCESS_H_
 #define PYMERGETIC_METAL_RUNTIME_PROCESS_H_
@@ -140,8 +146,9 @@ int pm_metal_process_wait(pm_metal_process_id_t pid, int *out_exit_code);
  * what that means and why it is safe to call concurrently with the
  * target's own worker thread. Does not wait for the target to actually
  * exit — call wait()/try_wait() afterward for that, same as always.
- * Returns 0 (found and asked to stop — including the harmless case
- * where it had already finished on its own, or hadn't reached
+ * Must not race wait()/try_wait() reaping the same pid (see Concurrency
+ * above). Returns 0 (found and asked to stop — including the harmless
+ * case where it had already finished on its own, or hadn't reached
  * run_ex()'s own instantiate() yet, in which case this is a silent
  * no-op), -1 (no such pid). */
 int pm_metal_process_kill(pm_metal_process_id_t pid);

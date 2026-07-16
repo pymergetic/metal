@@ -28,15 +28,25 @@ typedef struct pm_metal_pipe {
 
 static pm_metal_pipe_t g_pm_metal_pipes[PM_METAL_PIPE_MAX];
 
+/* Protects slot .used allocation; always acquire before per-pipe lock. */
+K_MUTEX_DEFINE(g_pm_metal_pipe_table_lock);
+
 int pm_metal_port_pipe_is_ours(int fd)
 {
 	int idx;
+	int used;
 
 	if (fd < PM_METAL_PIPE_FD_BASE) {
 		return 0;
 	}
 	idx = (fd - PM_METAL_PIPE_FD_BASE) / 2;
-	return idx >= 0 && idx < PM_METAL_PIPE_MAX && g_pm_metal_pipes[idx].used;
+	if (idx < 0 || idx >= PM_METAL_PIPE_MAX) {
+		return 0;
+	}
+	k_mutex_lock(&g_pm_metal_pipe_table_lock, K_FOREVER);
+	used = g_pm_metal_pipes[idx].used;
+	k_mutex_unlock(&g_pm_metal_pipe_table_lock);
+	return used;
 }
 
 int pm_metal_port_pipe_is_read_end(int fd)
@@ -107,12 +117,22 @@ void pm_metal_port_pipe_close_fd(int fd)
 	pm_metal_pipe_t *p;
 	int is_read;
 
-	if (!pm_metal_port_pipe_is_ours(fd)) {
+	if (fd < PM_METAL_PIPE_FD_BASE) {
 		return;
 	}
 	idx = (fd - PM_METAL_PIPE_FD_BASE) / 2;
-	is_read = pm_metal_port_pipe_is_read_end(fd);
+	if (idx < 0 || idx >= PM_METAL_PIPE_MAX) {
+		return;
+	}
+	is_read = ((fd - PM_METAL_PIPE_FD_BASE) % 2) == 0;
 	p = &g_pm_metal_pipes[idx];
+
+	/* Deadlock-safe order: table_lock then pipe_lock. */
+	k_mutex_lock(&g_pm_metal_pipe_table_lock, K_FOREVER);
+	if (!p->used) {
+		k_mutex_unlock(&g_pm_metal_pipe_table_lock);
+		return;
+	}
 	k_mutex_lock(&p->lock, K_FOREVER);
 	if (is_read) {
 		p->read_open = 0;
@@ -125,6 +145,7 @@ void pm_metal_port_pipe_close_fd(int fd)
 		p->used = 0;
 	}
 	k_mutex_unlock(&p->lock);
+	k_mutex_unlock(&g_pm_metal_pipe_table_lock);
 }
 
 int pm_metal_port_pipe(int64_t *out_read_fd, int64_t *out_write_fd)
@@ -134,6 +155,7 @@ int pm_metal_port_pipe(int64_t *out_read_fd, int64_t *out_write_fd)
 	if (!out_read_fd || !out_write_fd) {
 		return -1;
 	}
+	k_mutex_lock(&g_pm_metal_pipe_table_lock, K_FOREVER);
 	for (i = 0; i < PM_METAL_PIPE_MAX; i++) {
 		if (!g_pm_metal_pipes[i].used) {
 			memset(&g_pm_metal_pipes[i], 0, sizeof(g_pm_metal_pipes[i]));
@@ -145,9 +167,11 @@ int pm_metal_port_pipe(int64_t *out_read_fd, int64_t *out_write_fd)
 			g_pm_metal_pipes[i].used = 1;
 			*out_read_fd = PM_METAL_PIPE_FD_BASE + i * 2;
 			*out_write_fd = PM_METAL_PIPE_FD_BASE + i * 2 + 1;
+			k_mutex_unlock(&g_pm_metal_pipe_table_lock);
 			return 0;
 		}
 	}
+	k_mutex_unlock(&g_pm_metal_pipe_table_lock);
 	return -1;
 }
 

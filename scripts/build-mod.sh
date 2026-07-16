@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build mods/*/main.c -> build/mods/*.wasm with wasi-sdk (wasm32-wasip1).
+# Build mods/*/main.c -> build/mods/*.wasm with wasi-sdk (wasm32-wasip1-threads).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -7,6 +7,22 @@ WASI_SDK="${ROOT}/.tools/wasi-sdk"
 CLANG="${WASI_SDK}/bin/clang"
 SYSROOT="${WASI_SDK}/share/wasi-sysroot"
 OUT="${ROOT}/build/mods"
+
+# Threads-capable WASI preview1 is the default mod target: shared linear
+# memory + wasi thread-spawn, so guest pthread_create() works without a
+# per-mod opt-in. --max-memory is required — without it clang's threads
+# triple pins shared memory max == min (128 KiB) and pthread_create fails
+# silently at runtime.
+#
+# Size is coupled to Zephyr's WAMR kheap (not Linux --memory=): on Zephyr,
+# os_mmap → BH_MALLOC out of the kheap pool, and WAMR reserves the *full*
+# shared-memory max at instantiate. Multimod can hold two instances, so:
+#   PM_METAL_ZEPHYR_MEMORY_REQ  >=  2 * MAX_MEMORY  + WAMR slack
+# 4 MiB fits today's 12 MiB Zephyr kheap (2×4 + slack) and every current mod.
+# Do NOT raise this without raising src/zephyr/main.c's MEMORY_REQ (and
+# native_sim's CONFIG_PM_METAL_STATIC_POOL_BYTES) in lockstep.
+TARGET=wasm32-wasip1-threads
+MAX_MEMORY=4194304
 
 # WASI preview1's own socket extension (docs/RUNTIME.md "Sockets") is not
 # plain wasi-libc — this wasi-sdk's own wasm32-wasip1 sys/socket.h leaves
@@ -29,7 +45,7 @@ WAMR_SOCKET_EXT_SRC="${ROOT}/external/wamr/core/iwasm/libraries/lib-socket/src/w
 # for that one translation unit only. Rebuilt automatically if the
 # vendored source itself is ever newer (a fresh scripts/setup-wamr.sh
 # re-vendor, or a new patches/wamr/*.patch touching this file).
-WAMR_SOCKET_EXT_OBJ="${OUT}/.wasi_socket_ext.o"
+WAMR_SOCKET_EXT_OBJ="${OUT}/.wasi_socket_ext.${TARGET}.o"
 
 if [ ! -x "${CLANG}" ]; then
 	echo "wasi-sdk clang not found at ${CLANG} (see scripts/setup-tools.sh)" >&2
@@ -69,7 +85,7 @@ for mod_dir in "${ROOT}"/mods/*/; do
 		extra_flags+=(-I "${WAMR_SOCKET_EXT_INC}")
 		if [ ! -f "${WAMR_SOCKET_EXT_OBJ}" ] || [ "${WAMR_SOCKET_EXT_SRC}" -nt "${WAMR_SOCKET_EXT_OBJ}" ]; then
 			echo "  (compiling vendored wasi_socket_ext.o, warnings not this codebase's own)"
-			"${CLANG}" --target=wasm32-wasip1 --sysroot="${SYSROOT}" -O2 -w \
+			"${CLANG}" --target="${TARGET}" --sysroot="${SYSROOT}" -pthread -O2 -w \
 				-I "${WAMR_SOCKET_EXT_INC}" \
 				-c -o "${WAMR_SOCKET_EXT_OBJ}" "${WAMR_SOCKET_EXT_SRC}"
 		fi
@@ -82,8 +98,9 @@ for mod_dir in "${ROOT}"/mods/*/; do
 		extra_flags+=(-DPM_METAL_BUILD_KERNEL)
 	fi
 
-	"${CLANG}" --target=wasm32-wasip1 --sysroot="${SYSROOT}" \
+	"${CLANG}" --target="${TARGET}" --sysroot="${SYSROOT}" -pthread \
 		-O2 -Wall -Wextra \
+		-Wl,--max-memory="${MAX_MEMORY}" \
 		-I "${ROOT}/include" \
 		"${extra_flags[@]}" \
 		-o "${out}" "${src}" "${extra_srcs[@]}"

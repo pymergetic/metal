@@ -15,11 +15,11 @@ static int dump_file(const char *path)
 		return 1;
 	}
 	printf("--- %s ---\n", path);
-	while (fgets(line, sizeof(line), f) && n < 8) {
+	while (n < 8 && fgets(line, sizeof(line), f)) {
 		fputs(line, stdout);
 		n++;
 	}
-	if (!feof(f) && n >= 8) {
+	if (n >= 8 && !feof(f)) {
 		printf("...\n");
 	}
 	fclose(f);

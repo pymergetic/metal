@@ -26,6 +26,7 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(pm_metal_tmpfs_lfs_3);
 static struct fs_mount_t g_pm_metal_tmpfs_mnt[PM_METAL_MOUNT_TMPFS_ZEPHYR_MAX];
 static char g_pm_metal_tmpfs_mp[PM_METAL_MOUNT_TMPFS_ZEPHYR_MAX][64];
 static char g_pm_metal_tmpfs_disk[PM_METAL_MOUNT_TMPFS_ZEPHYR_MAX][32];
+static pm_metal_mount_device_handle_t g_pm_metal_tmpfs_dev[PM_METAL_MOUNT_TMPFS_ZEPHYR_MAX];
 static int g_pm_metal_tmpfs_used[PM_METAL_MOUNT_TMPFS_ZEPHYR_MAX];
 static struct fs_littlefs *g_pm_metal_tmpfs_cfg[PM_METAL_MOUNT_TMPFS_ZEPHYR_MAX] = {
 	&pm_metal_tmpfs_lfs_0,
@@ -113,12 +114,15 @@ static int pm_metal_mount_tmpfs_establish(const char *source, const char *opts, 
 	}
 
 	g_pm_metal_tmpfs_used[slot] = 1;
+	/* Durable handle: disk-name buffer outlives caller's source string. */
+	g_pm_metal_tmpfs_dev[slot] = g_pm_metal_tmpfs_disk[slot];
 
 	len = strlen(g_pm_metal_tmpfs_mp[slot]);
 	if (len + 1 > out_cap) {
 		fs_unmount(&g_pm_metal_tmpfs_mnt[slot]);
 		g_pm_metal_tmpfs_used[slot] = 0;
-		pm_metal_mount_device_release(dev);
+		pm_metal_mount_device_release(g_pm_metal_tmpfs_dev[slot]);
+		g_pm_metal_tmpfs_dev[slot] = NULL;
 		return -1;
 	}
 	memcpy(out_host_path, g_pm_metal_tmpfs_mp[slot], len + 1);
@@ -126,7 +130,8 @@ static int pm_metal_mount_tmpfs_establish(const char *source, const char *opts, 
 	if (pm_metal_mount_tmpfs_registry_insert(source, out_host_path) != 0) {
 		fs_unmount(&g_pm_metal_tmpfs_mnt[slot]);
 		g_pm_metal_tmpfs_used[slot] = 0;
-		pm_metal_mount_device_release(dev);
+		pm_metal_mount_device_release(g_pm_metal_tmpfs_dev[slot]);
+		g_pm_metal_tmpfs_dev[slot] = NULL;
 		return -1;
 	}
 
@@ -145,7 +150,8 @@ static void pm_metal_mount_tmpfs_release(const char *host_path)
 			    && strcmp(g_pm_metal_tmpfs_mp[i], host_path) == 0) {
 				fs_unmount(&g_pm_metal_tmpfs_mnt[i]);
 				g_pm_metal_tmpfs_used[i] = 0;
-				pm_metal_mount_device_release(g_pm_metal_tmpfs_disk[i]);
+				pm_metal_mount_device_release(g_pm_metal_tmpfs_dev[i]);
+				g_pm_metal_tmpfs_dev[i] = NULL;
 				break;
 			}
 		}

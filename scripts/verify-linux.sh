@@ -28,6 +28,7 @@ cp "${ROOT}/build/mods/t0_hello.wasm" "${ROOT}/build/mods/t1_read.wasm" \
 	"${ROOT}/build/mods/t3_util_native.wasm" \
 	"${ROOT}/build/mods/t4_getpid.wasm" \
 	"${ROOT}/build/mods/t8_multimod_lib.wasm" "${ROOT}/build/mods/t9_multimod_app.wasm" \
+	"${ROOT}/build/mods/t23_pthread.wasm" \
 	"${VFS_ROOT}/mods/"
 
 OUT="$("${RUNTIME}" --memory=16777216 --bytecode-memory=1048576 --vfs-root="${VFS_ROOT}" \
@@ -35,7 +36,8 @@ OUT="$("${RUNTIME}" --memory=16777216 --bytecode-memory=1048576 --vfs-root="${VF
 	/mods/t1_read.wasm \
 	/mods/t3_util_native.wasm \
 	/mods/t4_getpid.wasm \
-	/mods/t9_multimod_app.wasm)"
+	/mods/t9_multimod_app.wasm \
+	/mods/t23_pthread.wasm)"
 
 echo "${OUT}"
 
@@ -101,5 +103,12 @@ echo "${OUT}" | grep -q "t9_multimod_app: t8_multimod_lib_add(3, 4) = 7" \
 	|| { echo "FAIL: multi-module import (t9_multimod_app -> t8_multimod_lib) did not run" >&2; exit 1; }
 echo "${OUT}" | grep -qE "t9_multimod_app\.wasm: exit=0" \
 	|| { echo "FAIL: t9_multimod_app did not exit 0" >&2; exit 1; }
+
+# t23_pthread — guest pthread_create()/join() against the default
+# wasm32-wasip1-threads mod build (shared linear memory + wasi thread-spawn).
+echo "${OUT}" | grep -q "t23_pthread: worker wrote 42" \
+	|| { echo "FAIL: guest pthread_create/join did not share the worker write" >&2; exit 1; }
+echo "${OUT}" | grep -qE "t23_pthread\.wasm: exit=0" \
+	|| { echo "FAIL: t23_pthread did not exit 0" >&2; exit 1; }
 
 echo "verify-linux: OK"

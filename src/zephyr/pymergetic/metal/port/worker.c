@@ -26,6 +26,8 @@ K_THREAD_STACK_ARRAY_DEFINE(g_pm_metal_port_worker_stacks, PM_METAL_PORT_WORKER_
 
 static pm_metal_port_worker_slot_t g_pm_metal_port_worker_slots[PM_METAL_PORT_WORKER_MAX];
 
+K_MUTEX_DEFINE(g_pm_metal_port_worker_table_lock);
+
 _Static_assert(sizeof(pm_metal_port_worker_slot_t *) <= sizeof(pm_metal_port_worker_t),
 	       "worker slot pointer does not fit in pm_metal_port_worker_t");
 
@@ -44,14 +46,24 @@ static pm_metal_port_worker_slot_t *pm_metal_port_worker_slot_alloc(void)
 {
 	int i;
 
+	k_mutex_lock(&g_pm_metal_port_worker_table_lock, K_FOREVER);
 	for (i = 0; i < PM_METAL_PORT_WORKER_MAX; i++) {
 		if (!g_pm_metal_port_worker_slots[i].used) {
 			g_pm_metal_port_worker_slots[i].used = 1;
 			g_pm_metal_port_worker_slots[i].stack = g_pm_metal_port_worker_stacks[i];
+			k_mutex_unlock(&g_pm_metal_port_worker_table_lock);
 			return &g_pm_metal_port_worker_slots[i];
 		}
 	}
+	k_mutex_unlock(&g_pm_metal_port_worker_table_lock);
 	return NULL;
+}
+
+static void pm_metal_port_worker_slot_free(pm_metal_port_worker_slot_t *slot)
+{
+	k_mutex_lock(&g_pm_metal_port_worker_table_lock, K_FOREVER);
+	slot->used = 0;
+	k_mutex_unlock(&g_pm_metal_port_worker_table_lock);
 }
 
 int pm_metal_port_worker_spawn(pm_metal_port_worker_t *w, pm_metal_port_worker_fn fn, void *arg)
@@ -81,7 +93,7 @@ int pm_metal_port_worker_spawn(pm_metal_port_worker_t *w, pm_metal_port_worker_f
 				      * a hot guest, and kill()/wait() never run. */
 				     K_PRIO_PREEMPT(0), 0, K_NO_WAIT);
 	if (!slot->tid) {
-		slot->used = 0;
+		pm_metal_port_worker_slot_free(slot);
 		return -1;
 	}
 
@@ -97,14 +109,15 @@ int pm_metal_port_worker_try_join(pm_metal_port_worker_t *w)
 		return -1;
 	}
 	slot = *(pm_metal_port_worker_slot_t **)w;
-	if (!slot || !slot->used) {
+	if (!slot) {
 		return -1;
 	}
-	if (!slot->done) {
+	/* Sem take is the finished check — avoids racing a plain done flag. */
+	if (k_sem_take(&slot->done_sem, K_NO_WAIT) != 0) {
 		return -1;
 	}
 	k_thread_join(slot->tid, K_NO_WAIT);
-	slot->used = 0;
+	pm_metal_port_worker_slot_free(slot);
 	return 0;
 }
 
@@ -116,10 +129,10 @@ void pm_metal_port_worker_join(pm_metal_port_worker_t *w)
 		return;
 	}
 	slot = *(pm_metal_port_worker_slot_t **)w;
-	if (!slot || !slot->used) {
+	if (!slot) {
 		return;
 	}
 	k_sem_take(&slot->done_sem, K_FOREVER);
 	k_thread_join(slot->tid, K_FOREVER);
-	slot->used = 0;
+	pm_metal_port_worker_slot_free(slot);
 }

@@ -15,11 +15,21 @@
 #include "pymergetic/metal/runtime/process.h"
 #include "pymergetic/metal/runtime/runtime.h"
 
+/* Trailing-slash paths yield an empty basename — unsupported for argv[0]. */
 static const char *pm_metal_app_basename_of(const char *path)
 {
-	const char *slash = strrchr(path, '/');
+	const char *slash;
+	const char *base;
 
-	return slash ? slash + 1 : path;
+	if (!path || !path[0]) {
+		return NULL;
+	}
+	slash = strrchr(path, '/');
+	base = slash ? slash + 1 : path;
+	if (!base[0]) {
+		return NULL;
+	}
+	return base;
 }
 
 int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv,
@@ -27,6 +37,7 @@ int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv
 {
 	int rc = 0;
 	int i;
+	size_t mi;
 
 	/* Stage B — see docs/MOUNT.md "Boot sequence". Right after init()'s
 	 * own Stage A root mount, before any mod is loaded, so a mod's own
@@ -41,8 +52,8 @@ int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv
 	 * use, deliberately applied *after* the real fstab above (see
 	 * app.h's own doc comment) so an ad hoc CLI mount overrides a
 	 * conflicting fstab line rather than the other way around. */
-	for (i = 0; i < (int)cli_mount_count; i++) {
-		const pm_metal_app_cli_mount_t *m = &cli_mounts[i];
+	for (mi = 0; mi < cli_mount_count; mi++) {
+		const pm_metal_app_cli_mount_t *m = &cli_mounts[mi];
 
 		pm_metal_mount_fstab_apply_fields(m->source, m->target, m->fstype, m->opts);
 	}
@@ -63,7 +74,16 @@ int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv
 
 	for (i = 0; i < wasm_argc; i++) {
 		const char *path = wasm_argv[i];
+		const char *base;
 		pm_metal_runtime_handle_t h;
+
+		base = pm_metal_app_basename_of(path);
+		if (!base) {
+			fprintf(stderr, "%s: bad mod path (empty basename): %s\n", argv0,
+				path ? path : "(null)");
+			rc = 1;
+			continue;
+		}
 
 		if (pm_metal_runtime_load_file(path, &h) != 0) {
 			fprintf(stderr, "%s: load failed: %s\n", argv0, path);
@@ -72,7 +92,7 @@ int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv
 		}
 
 		char *mod_argv[1];
-		mod_argv[0] = (char *)pm_metal_app_basename_of(path);
+		mod_argv[0] = (char *)base;
 
 		/* spawn()+wait() rather than a direct run(): one consistent
 		 * model for every execution (see runtime/process.h) — stays

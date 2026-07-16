@@ -22,6 +22,7 @@ static void *pm_metal_memory_zephyr_kheap_establish(uint64_t requested_bytes, ui
 
 	pool = pm_metal_memory_zephyr_pool_alloc(take);
 	if (!pool) {
+		pm_metal_memory_zephyr_budget_give(take);
 		return NULL;
 	}
 
@@ -36,7 +37,8 @@ static void pm_metal_memory_zephyr_kheap_release(void)
 	pm_metal_memory_zephyr_pool_free(g_pm_metal_memory_kheap_pool);
 	g_pm_metal_memory_kheap_pool = NULL;
 	g_pm_metal_memory_kheap_bytes = 0;
-	pm_metal_memory_zephyr_budget_reset();
+	/* Do not budget_reset here — bytecode pool may still be alive.
+	 * Budget lives until process teardown / both pools released. */
 }
 
 static uint64_t pm_metal_memory_zephyr_kheap_bytes(void)

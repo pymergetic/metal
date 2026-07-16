@@ -147,11 +147,13 @@ int pm_metal_util_tar_iter_name(const pm_metal_util_tar_iter_t *it, char *out, s
 		return -1;
 	}
 
-	n = strlen(st->hdr.name);
+	/* ustar name is a fixed 100-byte field — may lack a trailing NUL. */
+	n = strnlen(st->hdr.name, sizeof(st->hdr.name));
 	if (n + 1 > cap) {
 		return -1;
 	}
-	memcpy(out, st->hdr.name, n + 1);
+	memcpy(out, st->hdr.name, n);
+	out[n] = '\0';
 	return (int)n;
 }
 

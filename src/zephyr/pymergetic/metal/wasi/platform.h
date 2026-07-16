@@ -43,6 +43,7 @@ typedef struct zephyr_fs_desc {
 	bool is_dir;
 	bool used;
 	bool is_sock;
+	bool dir_opened; /* true after successful fs_opendir; skip double-open */
 	uint32_t dir_index;
 } zephyr_fs_desc;
 
