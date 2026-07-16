@@ -70,7 +70,8 @@ pm_zephyr_run_smoke() {
 	while (( elapsed < max_secs )); do
 		ok=1
 		for pat in "${patterns[@]}"; do
-			if ! grep -q "${pat}" "${out_file}"; then
+			# Fixed-string: markers like "[ERROR] …" must not be BRE char classes.
+			if ! grep -qF -- "${pat}" "${out_file}"; then
 				ok=0
 				break
 			fi
@@ -154,7 +155,8 @@ pm_zephyr_qemu_run_smoke() {
 	while (( elapsed < max_secs )); do
 		local ok=1
 		for pat in "${patterns[@]}"; do
-			if ! grep -q "${pat}" "${out_file}"; then
+			# Fixed-string: markers like "[ERROR] …" must not be BRE char classes.
+			if ! grep -qF -- "${pat}" "${out_file}"; then
 				ok=0
 				break
 			fi

@@ -15,6 +15,7 @@ mkdir -p "${OUT_DIR}"
 MODS=(
 	t0_hello
 	t1_read
+	t3_util_native
 	t12_tmpfs_write
 	t13_tmpfs_read
 	t14_tmpfs_read_alt
@@ -25,6 +26,14 @@ MODS=(
 	t9_multimod_app
 	t4_getpid
 	t5_spin
+	t10_socket_server
+	t11_socket_client
+	t23_pthread
+	t24_udp_server
+	t25_udp_client
+	t26_ipv6_server
+	t27_ipv6_client
+	t28_dns_lookup
 )
 
 for m in "${MODS[@]}"; do

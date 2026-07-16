@@ -18,8 +18,23 @@ trap 'rm -f "${OUT}"' EXIT
 pm_zephyr_qemu_run_smoke "${QEMU_BUILD}" "${OUT}" "${QEMU_TIMEOUT}" \
 	"runtime: target=zephyr" \
 	"verify: basic exit=0" \
+	"verify: utils exit=0" \
+	"[ERROR] t3_util_native: at/above floor (expected)" \
+	"t23_pthread: worker wrote 42" \
+	"verify: tmpfs-indep next open fail is expected" \
+	"t15_tmpfs_read_other: open failed (expected)" \
+	"verify: process killing t5_spin (expected Exception follows)" \
+	"verify: sockets tcp/udp/ipv6/dns ok" \
 	"verify: scripted exit=0"
 
 grep -q "runtime: target=zephyr" "${OUT}"
-grep -q "verify: scripted exit=0" "${OUT}"
+grep -qF -- "verify: utils exit=0" "${OUT}"
+grep -qF -- "[ERROR] t3_util_native: at/above floor (expected)" "${OUT}"
+grep -qF -- "t23_pthread: worker wrote 42" "${OUT}"
+grep -qF -- "verify: tmpfs-indep next open fail is expected" "${OUT}"
+grep -qF -- "t15_tmpfs_read_other: open failed (expected)" "${OUT}"
+grep -qF -- "verify: process killing t5_spin (expected Exception follows)" "${OUT}"
+grep -qF -- "verify: sockets tcp/udp/ipv6/dns ok" "${OUT}"
+grep -qF -- "verify: scripted exit=0" "${OUT}"
+grep -qxF -- "te" "${OUT}" && { echo "FAIL: O_TRUNC left populate tail in tmpfs read" >&2; exit 1; }
 echo "zephyr qemu verify: ok"

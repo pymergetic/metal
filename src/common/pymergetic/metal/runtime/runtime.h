@@ -43,7 +43,7 @@ typedef struct pm_metal_runtime_handle {
  * ids are "1..PM_METAL_RUNTIME_MAX_HANDLES", 0 meaning "no handle". Public
  * (not just an internal runtime.c detail) specifically so every caller that
  * needs its own per-handle bookkeeping array sized to match (e.g.
- * src/linux/thread_stress_test.c's worker count) can size against *this*
+ * tests/thread_stress_test.c's worker count) can size against *this*
  * one definition instead of hardcoding — and silently drifting from —
  * their own copy of the same number. */
 #define PM_METAL_RUNTIME_MAX_HANDLES 8

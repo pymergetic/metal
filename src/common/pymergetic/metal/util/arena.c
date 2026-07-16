@@ -39,6 +39,11 @@ struct pm_metal_util_arena {
 
 static size_t pm_metal_util_arena_round_up(size_t n)
 {
+	size_t aligned_max = SIZE_MAX - (PM_METAL_UTIL_ARENA_ALIGN - 1);
+
+	if (n > aligned_max) {
+		return 0; /* cannot round without overflow */
+	}
 	return (n + (PM_METAL_UTIL_ARENA_ALIGN - 1)) & ~(PM_METAL_UTIL_ARENA_ALIGN - 1);
 }
 
@@ -118,11 +123,11 @@ void *pm_metal_util_arena_alloc(pm_metal_util_arena_t *arena, size_t size)
 	if (!arena || size == 0) {
 		return NULL;
 	}
-	if (size > SIZE_MAX - (PM_METAL_UTIL_ARENA_ALIGN - 1)) {
-		return NULL;
-	}
 
 	need = pm_metal_util_arena_round_up(size);
+	if (need == 0) {
+		return NULL;
+	}
 	block_hdr = pm_metal_util_arena_block_hdr();
 	b = NULL;
 

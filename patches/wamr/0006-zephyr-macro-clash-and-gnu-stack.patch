@@ -1,0 +1,48 @@
+Avoid Zephyr header macro clashes and GNU ld executable-stack warning when
+building WAMR under Zephyr: undef GB/MIN before redefining (sys/util.h), and
+emit .note.GNU-stack from invokeNative_em64.s. Applied by scripts/setup-wamr.sh.
+
+diff --git a/core/iwasm/common/arch/invokeNative_em64.s b/core/iwasm/common/arch/invokeNative_em64.s
+index 739e84e4..2c3c9746 100644
+--- a/core/iwasm/common/arch/invokeNative_em64.s
++++ b/core/iwasm/common/arch/invokeNative_em64.s
+@@ -62,3 +62,9 @@ push_args_end:
+     leave
+     ret
+ 
++/* Mark non-executable stack — without this, GNU ld warns and links an
++ * executable stack (deprecated). Same note as typical glibc asm objects. */
++#if defined(__linux__) || defined(__ELF__)
++    .section .note.GNU-stack,"",@progbits
++#endif
++
+diff --git a/core/iwasm/libraries/lib-wasi-threads/tid_allocator.c b/core/iwasm/libraries/lib-wasi-threads/tid_allocator.c
+index dc2d4f1b..75b16e11 100644
+--- a/core/iwasm/libraries/lib-wasi-threads/tid_allocator.c
++++ b/core/iwasm/libraries/lib-wasi-threads/tid_allocator.c
+@@ -8,6 +8,10 @@
+ #include "bh_log.h"
+ 
+ bh_static_assert(TID_MIN <= TID_MAX);
++/* Avoid clash with Zephyr sys/util.h's MIN() when building for zephyr. */
++#ifdef MIN
++#undef MIN
++#endif
+ #define MIN(a, b) (((a) < (b)) ? (a) : (b))
+ 
+ bool
+diff --git a/core/shared/mem-alloc/ems/ems_gc.c b/core/shared/mem-alloc/ems/ems_gc.c
+index 26e83a97..e8a2e102 100644
+--- a/core/shared/mem-alloc/ems/ems_gc.c
++++ b/core/shared/mem-alloc/ems/ems_gc.c
+@@ -6,6 +6,10 @@
+ #include "ems_gc.h"
+ #include "ems_gc_internal.h"
+ 
++/* Avoid clash with Zephyr sys/util.h's GB(x) macro when building for zephyr. */
++#ifdef GB
++#undef GB
++#endif
+ #define GB (1 << 30UL)
+ 
+ #define MARK_NODE_OBJ_CNT 256

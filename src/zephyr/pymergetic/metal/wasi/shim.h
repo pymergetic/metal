@@ -51,6 +51,56 @@ static inline uint32_t htonl(uint32_t hostlong)
 	return __builtin_bswap32(hostlong);
 }
 
+#if defined(CONFIG_NET_SOCKETS)
+#include <stdarg.h> /* ioctl(FIONREAD, int *) varargs below */
+
+int pm_metal_wasi_socket_is_ours(int handle);
+int pm_metal_wasi_socket_zfd(int handle);
+int pm_metal_wasi_socket_poll(void *fds, int nfds, int timeout);
+int pm_metal_wasi_socket_ioctl_fionread(int handle, int *avail);
+
+#ifndef PM_METAL_WASI_SHIM_POLL_MAX
+#define PM_METAL_WASI_SHIM_POLL_MAX 16
+#endif
+
+static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout)
+{
+	struct pollfd zfds[PM_METAL_WASI_SHIM_POLL_MAX];
+	int saved[PM_METAL_WASI_SHIM_POLL_MAX];
+	nfds_t i;
+	int ret;
+
+	if (fds == NULL && nfds > 0) {
+		errno = EFAULT;
+		return -1;
+	}
+	if (nfds > PM_METAL_WASI_SHIM_POLL_MAX) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	for (i = 0; i < nfds; i++) {
+		saved[i] = fds[i].fd;
+		zfds[i].events = fds[i].events;
+		zfds[i].revents = 0;
+		if (pm_metal_wasi_socket_is_ours(fds[i].fd)) {
+			zfds[i].fd = pm_metal_wasi_socket_zfd(fds[i].fd);
+		} else {
+			/* Non-socket fds: leave as-is for zsock_poll / vfs. */
+			zfds[i].fd = fds[i].fd;
+		}
+	}
+
+	ret = pm_metal_wasi_socket_poll(zfds, (int)nfds, timeout);
+	for (i = 0; i < nfds; i++) {
+		fds[i].fd = saved[i];
+		fds[i].revents = zfds[i].revents;
+	}
+	return ret;
+}
+
+#else /* !CONFIG_NET_SOCKETS */
+
 static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 {
 	(void)fds;
@@ -60,14 +110,28 @@ static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 	return -1;
 }
 
+#endif /* CONFIG_NET_SOCKETS */
+
 #ifndef FIONREAD
 #define FIONREAD 0x541B
 #endif
 
 static inline int ioctl(int fd, unsigned long request, ...)
 {
+#if defined(CONFIG_NET_SOCKETS)
+	if (request == FIONREAD && pm_metal_wasi_socket_is_ours(fd)) {
+		va_list ap;
+		int *avail;
+
+		va_start(ap, request);
+		avail = va_arg(ap, int *);
+		va_end(ap);
+		return pm_metal_wasi_socket_ioctl_fionread(fd, avail);
+	}
+#else
 	(void)fd;
 	(void)request;
+#endif
 	errno = ENOSYS;
 	return -1;
 }

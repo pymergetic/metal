@@ -93,17 +93,28 @@ CompileFlags:
     - -Isrc/common
 
 ---
-# src/zephyr/*.c — prefer compile_commands.json from
+# Host smoke harnesses under tests/ (built by Linux CMake; CDB preferred).
+If:
+  PathMatch: tests/(process_test|thread_stress_test)\.c
+CompileFlags:
+  Add:
+    - -Isrc/common
+    - -Iinclude
+    - -DPM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
+
+---
+# src/zephyr/* + tests/zephyr_verify.* — prefer compile_commands.json from
 # build/zephyr/native_sim (merged by scripts/setup-ide.sh). The flags
 # below are a fallback when that CDB is missing. clangd's bundled Clang
 # still mis-parses some Zephyr headers (incomplete k_mutex); suppress the
 # resulting cascade rather than chasing a third-party parser quirk.
 If:
-  PathMatch: src/zephyr/.*\.(c|h)
+  PathMatch: (src/zephyr/.*\.(c|h)|tests/zephyr_verify\.(c|h))
 CompileFlags:
   Add:
     - -Isrc/common
     - -Isrc/zephyr
+    - -Itests
     - -Iinclude
     - -DPM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_ZEPHYR
     - -DKERNEL

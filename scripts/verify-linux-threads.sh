@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Concurrency proof for pm_metal_runtime — builds pm-linux-thread-stress
-# (src/linux/thread_stress_test.c) and pm-wamr-vmlib with ThreadSanitizer
+# (tests/thread_stress_test.c) and pm-wamr-vmlib with ThreadSanitizer
 # in a separate build dir, runs it, and fails if TSan reports anything.
 # See docs/RUNTIME.md "Concurrency" for the threading contract this checks.
 set -euo pipefail

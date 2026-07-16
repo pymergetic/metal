@@ -36,9 +36,11 @@ int main(void)
 	pm_metal_util_log_level_name(pm_metal_util_log_get_level(), name, sizeof(name));
 	printf("t3_util_native: level=%s\n", name);
 
-	/* Below the floor just set — must be a silent no-op, not an error. */
+	/* Below the floor just set — must be a silent no-op, not an error.
+	 * The ERROR line is intentional (proves the floor); not a failure. */
 	pm_metal_util_log_write(PM_METAL_LOG_STREAM_STDOUT, PM_METAL_LOG_INFO, "should not appear");
-	pm_metal_util_log_write(PM_METAL_LOG_STREAM_STDOUT, PM_METAL_LOG_ERROR, "t3_util_native: at/above floor");
+	pm_metal_util_log_write(PM_METAL_LOG_STREAM_STDOUT, PM_METAL_LOG_ERROR,
+				"t3_util_native: at/above floor (expected)");
 	pm_metal_util_log_write_raw(PM_METAL_LOG_STREAM_STDOUT, "t3_util_native: raw, unfiltered");
 
 	static unsigned char buf[256];

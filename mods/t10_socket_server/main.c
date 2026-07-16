@@ -9,7 +9,7 @@
  * than a real kernel socket. Paired with mods/t11_socket_client (that mod
  * connects here). Fixed 127.0.0.1:9931 — this codebase's own runtime.h's
  * own cfg->addr_pool must allow that exact address (see
- * src/linux/process_test.c's own cfg literal) or bind() itself fails
+ * tests/process_test.c's own cfg literal) or bind() itself fails
  * before a single byte of this file's own logic runs at all.
  */
 #include <arpa/inet.h>

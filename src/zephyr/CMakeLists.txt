@@ -119,18 +119,23 @@ target_sources(app PRIVATE
 	pymergetic/metal/mount/tmpfs.c
 	pymergetic/metal/wasi/file.c
 	pymergetic/metal/wasi/support.c
+	pymergetic/metal/wasi/socket.c
 	${WAMR_RUNTIME_LIB_SOURCE}
 	${WAMR_ROOT_DIR}/core/shared/platform/common/libc-util/libc_errno.c
 )
 
-if(CONFIG_PM_METAL_VERIFY_MODS AND EXISTS "${PM_MODS_EMBED_C}")
-	target_sources(app PRIVATE ${PM_MODS_EMBED_C})
-endif()
-if(CONFIG_PM_METAL_VERIFY_MODS AND EXISTS "${PM_POPULATE_EMBED_C}")
-	target_sources(app PRIVATE ${PM_POPULATE_EMBED_C})
+if(CONFIG_PM_METAL_VERIFY_MODS)
+	target_sources(app PRIVATE ${PM_METAL_ROOT}/tests/zephyr_verify.c)
+	if(EXISTS "${PM_MODS_EMBED_C}")
+		target_sources(app PRIVATE ${PM_MODS_EMBED_C})
+	endif()
+	if(EXISTS "${PM_POPULATE_EMBED_C}")
+		target_sources(app PRIVATE ${PM_POPULATE_EMBED_C})
+	endif()
 endif()
 
 target_include_directories(app PRIVATE
+	${PM_METAL_ROOT}/tests
 	${PM_WAMR_LIBC_UTIL}
 	${WAMR_ROOT_DIR}/core/shared/platform/zephyr
 	${WAMR_ROOT_DIR}/core/shared/platform/include

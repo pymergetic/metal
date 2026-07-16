@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# init -> load -> run -> unload -> shutdown, on linux, using the dynamic
-# loader API — two mods, one process, one shared vfs_root.
+# Linux main verify — same coverage tier as verify-zephyr-*.sh's boot smoke:
+# scripted load/run (vfs, utils, multimod, guest pthread) plus concurrent
+# process/socket proof (TCP/UDP/IPv6/DNS) via verify-linux-process.sh.
+# Socket pairs need two live processes + addr_pool, which scripted
+# sequential argv cannot do — that half lives in process_test.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -60,7 +63,7 @@ echo "${OUT}" | grep -q "t3_util_native: size=88 MiB" \
 	|| { echo "FAIL: size.h import wrong/missing" >&2; exit 1; }
 echo "${OUT}" | grep -q "should not appear" \
 	&& { echo "FAIL: log.h global floor did not drop a below-floor write" >&2; exit 1; }
-echo "${OUT}" | grep -q "\[ERROR\] t3_util_native: at/above floor" \
+echo "${OUT}" | grep -q "\[ERROR\] t3_util_native: at/above floor (expected)" \
 	|| { echo "FAIL: log.h write() at/above floor missing" >&2; exit 1; }
 echo "${OUT}" | grep -q "t3_util_native: raw, unfiltered" \
 	|| { echo "FAIL: log.h write_raw() missing" >&2; exit 1; }
@@ -110,5 +113,10 @@ echo "${OUT}" | grep -q "t23_pthread: worker wrote 42" \
 	|| { echo "FAIL: guest pthread_create/join did not share the worker write" >&2; exit 1; }
 echo "${OUT}" | grep -qE "t23_pthread\.wasm: exit=0" \
 	|| { echo "FAIL: t23_pthread did not exit 0" >&2; exit 1; }
+
+echo "verify-linux: scripted OK"
+
+# Match Zephyr's `verify: sockets tcp/udp/ipv6/dns ok` — spawn pairs + DNS.
+"${ROOT}/scripts/verify-linux-process.sh"
 
 echo "verify-linux: OK"

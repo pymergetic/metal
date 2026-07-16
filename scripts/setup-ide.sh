@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Generate a merged compile_commands.json + .clangd for this checkout.
-# Linux CDB alone makes clangd invent host flags for src/zephyr/* (lots of
-# fake red squiggles). Prefer merging in the native_sim CDB when present.
+# Linux CDB alone makes clangd invent host flags for src/zephyr/* and
+# tests/zephyr_verify.* (lots of fake red squiggles). Prefer merging in
+# the native_sim CDB when present.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

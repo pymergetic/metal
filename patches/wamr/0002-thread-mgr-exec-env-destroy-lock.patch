@@ -6,7 +6,7 @@ global wasm_clusters_search_exec_env() lookup (triggered by *any* wasm
 exception anywhere, including our own kill()/wasm_runtime_terminate())
 violates by locking every live cluster while scanning, including one
 mid-teardown elsewhere. See pymergetic/metal's scripts/verify-linux-
-threads.sh (thread_stress_test.c) for the reproduction, and this same
+threads.sh (tests/thread_stress_test.c) for the reproduction, and this same
 tree's docs/SOURCETREE.md "Vendoring" for how/why this patch exists.
 Applied by scripts/setup-wamr.sh.
 
