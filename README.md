@@ -26,7 +26,7 @@ Pymergetic-metal: native **runtime** per target that runs **wasm** mods (`wasm32
 
 ```
 packages/metal/
-├── include/pymergetic/metal/   mod-facing (metal.h, util/{size,arena,log,lz4,tar}.h)
+├── include/pymergetic/metal/   mod-facing (metal.h, util/{size,arena,log,lz4,tar,crypto,ntp,http}.h)
 ├── src/
 │   ├── common/pymergetic/metal/  cross-target runtime + contracts
 │   ├── linux/                    OS bind — builds pm-linux-runtime
@@ -37,9 +37,9 @@ packages/metal/
 ├── mods/                       t0..t20 — test .wasm guests (wasi-sdk, wasm32-wasip1)
 ├── apps/                        [empty — later]
 ├── scripts/                    build-linux.sh, build-mod.sh, verify-*.sh, setup-*.sh
-├── patches/{wamr,microtar}/     tracked diffs against external/{wamr,microtar} — see docs/SOURCETREE.md § Vendoring
+├── patches/{wamr,microtar,…}/  tracked diffs against external/* — see docs/SOURCETREE.md § Vendoring
 ├── docs/
-├── external/                    gitignored — vendored WAMR/Zephyr/wasi-sdk/LZ4/microtar, reproduced by scripts/setup-*.sh
+├── external/                    gitignored — vendored deps, reproduced by scripts/setup-*.sh
 └── west-manifest/
 ```
 
@@ -53,8 +53,10 @@ See [docs/SOURCETREE.md](docs/SOURCETREE.md).
 scripts/setup-wamr.sh      # once — vendors + patches external/wamr
 scripts/setup-lz4.sh       # once — vendors external/lz4 (util/lz4.h's backing lib)
 scripts/setup-microtar.sh  # once — vendors + patches external/microtar (util/tar.h's backing lib)
+scripts/setup-net.sh       # once — Monocypher + mbedTLS + nghttp2 + curl (util/{crypto,ntp,http})
 scripts/setup-ide.sh       # once — compile_commands.json + .clangd for this checkout
 scripts/verify-linux.sh    # main Linux verify (scripted + process/socket smoke; peer of verify-zephyr-*.sh)
+scripts/verify-linux-net.sh  # util/{crypto,ntp,http} smoke (needs network)
 ```
 
 Also: `scripts/verify-linux-threads.sh` (TSan). Focused helpers (`verify-linux-process.sh`, tmpfs/proc/…) are still callable alone; the main script chains the process/socket half.

@@ -26,6 +26,9 @@ set_source_files_properties(${PM_COMMON}/util/lz4.c PROPERTIES INCLUDE_DIRECTORI
 set(MICROTAR_ROOT_DIR "${PM_METAL_ROOT}/external/microtar")
 set_source_files_properties(${PM_COMMON}/util/tar.c PROPERTIES INCLUDE_DIRECTORIES ${PM_METAL_ROOT})
 
+set(MONOCYPHER_ROOT_DIR "${PM_METAL_ROOT}/external/monocypher")
+set_source_files_properties(${PM_COMMON}/util/crypto.c PROPERTIES INCLUDE_DIRECTORIES ${PM_METAL_ROOT})
+
 zephyr_include_directories(${PM_COMMON_INC})
 zephyr_include_directories(${PM_METAL_ROOT}/include)
 zephyr_include_directories(${CMAKE_CURRENT_LIST_DIR})
@@ -108,6 +111,10 @@ target_sources(app PRIVATE
 	${LZ4_ROOT_DIR}/lib/lz4.c
 	${PM_COMMON}/util/tar.c
 	${MICROTAR_ROOT_DIR}/src/microtar.c
+	${PM_COMMON}/util/crypto.c
+	${MONOCYPHER_ROOT_DIR}/src/monocypher.c
+	${PM_COMMON}/util/ntp.c
+	${PM_COMMON}/util/http.c
 	pymergetic/metal/port/platform.c
 	pymergetic/metal/port/lock.c
 	pymergetic/metal/port/worker.c

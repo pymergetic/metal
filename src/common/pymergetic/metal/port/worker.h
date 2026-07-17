@@ -28,6 +28,7 @@ typedef int (*pm_metal_port_worker_fn)(void *arg);
 
 /* impl: bind — src/linux/pymergetic/metal/port/worker.c
  *              src/zephyr/pymergetic/metal/port/worker.c
+ *              src/nuttx/pymergetic/metal/port/worker.c
  *
  * spawn(): starts fn(arg) on a new thread, filling in *w. Caller owns arg's
  * lifetime — same convention as pthread_create() itself, spawn() does not

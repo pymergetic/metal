@@ -10,6 +10,7 @@
 
 /* impl: bind — src/linux/pymergetic/metal/memory/kheap.c
  *              src/zephyr/pymergetic/metal/memory/kheap.c
+ *              src/nuttx/pymergetic/metal/memory/kheap.c
  *
  * ->establish()/->release()/->bytes() are set; ->probe()/->alloc()/->free()
  * are NULL — this kind has no probe and is never sub-allocated (handed to

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Classic NuttX apps registration — include from an apps/ tree that symlinks
+# or copies this directory (see scripts/setup-nuttx.sh).
+
+ifneq ($(CONFIG_PYMERGETIC_METAL),)
+CONFIGURED_APPS += $(APPDIR)/system/pm_metal
+endif

@@ -106,6 +106,15 @@ set_source_files_properties(${PM_COMMON}/util/lz4.c PROPERTIES INCLUDE_DIRECTORI
 set(MICROTAR_ROOT_DIR "${PM_METAL_ROOT}/external/microtar")
 set_source_files_properties(${PM_COMMON}/util/tar.c PROPERTIES INCLUDE_DIRECTORIES ${PM_METAL_ROOT})
 
+# ---- Monocypher (vendored — util/crypto.c; scoped include like LZ4) ----
+
+set(MONOCYPHER_ROOT_DIR "${PM_METAL_ROOT}/external/monocypher")
+set_source_files_properties(${PM_COMMON}/util/crypto.c PROPERTIES INCLUDE_DIRECTORIES ${PM_METAL_ROOT})
+
+# ---- mbedTLS + nghttp2 + libcurl (HTTP/1.1 + HTTP/2) ----
+
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/PmNetDeps.cmake)
+
 # ---- pm-linux-runtime ----
 
 add_executable(pm-linux-runtime
@@ -154,6 +163,10 @@ add_executable(pm-linux-runtime
 	${LZ4_ROOT_DIR}/lib/lz4.c
 	${PM_COMMON}/util/tar.c
 	${MICROTAR_ROOT_DIR}/src/microtar.c
+	${PM_COMMON}/util/crypto.c
+	${MONOCYPHER_ROOT_DIR}/src/monocypher.c
+	${PM_COMMON}/util/ntp.c
+	${PM_COMMON}/util/http.c
 )
 
 # Optional embed .c from scripts/pack-image.sh (Phase 4 populate) — link when
@@ -178,13 +191,16 @@ target_include_directories(pm-linux-runtime PRIVATE
 # MODULE above is 1 — kept in lockstep with that setting so runtime.c stays
 # buildable unchanged against a future zephyr WAMR build with multi-module
 # still off (see src/zephyr/CMakeLists.txt, which does not define this).
+# PM_METAL_HAVE_NET: enables real SNTP + curl in util/{ntp,http}.c.
 target_compile_definitions(pm-linux-runtime PRIVATE
 	PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
 	PM_METAL_RUNTIME_MULTI_MODULE=1
+	PM_METAL_HAVE_NET=1
 )
 
 target_link_libraries(pm-linux-runtime PRIVATE
 	pm-wamr-vmlib
+	${PM_METAL_NET_LIBS}
 	m
 	dl
 	pthread
@@ -235,6 +251,10 @@ add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
 	${LZ4_ROOT_DIR}/lib/lz4.c
 	${PM_COMMON}/util/tar.c
 	${MICROTAR_ROOT_DIR}/src/microtar.c
+	${PM_COMMON}/util/crypto.c
+	${MONOCYPHER_ROOT_DIR}/src/monocypher.c
+	${PM_COMMON}/util/ntp.c
+	${PM_COMMON}/util/http.c
 )
 
 target_include_directories(pm-linux-thread-stress PRIVATE
@@ -246,10 +266,12 @@ target_include_directories(pm-linux-thread-stress PRIVATE
 target_compile_definitions(pm-linux-thread-stress PRIVATE
 	PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
 	PM_METAL_RUNTIME_MULTI_MODULE=1
+	PM_METAL_HAVE_NET=1
 )
 
 target_link_libraries(pm-linux-thread-stress PRIVATE
 	pm-wamr-vmlib
+	${PM_METAL_NET_LIBS}
 	m
 	dl
 	pthread
@@ -306,6 +328,10 @@ add_executable(pm-linux-process-test EXCLUDE_FROM_ALL
 	${LZ4_ROOT_DIR}/lib/lz4.c
 	${PM_COMMON}/util/tar.c
 	${MICROTAR_ROOT_DIR}/src/microtar.c
+	${PM_COMMON}/util/crypto.c
+	${MONOCYPHER_ROOT_DIR}/src/monocypher.c
+	${PM_COMMON}/util/ntp.c
+	${PM_COMMON}/util/http.c
 )
 
 target_include_directories(pm-linux-process-test PRIVATE
@@ -317,10 +343,12 @@ target_include_directories(pm-linux-process-test PRIVATE
 target_compile_definitions(pm-linux-process-test PRIVATE
 	PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
 	PM_METAL_RUNTIME_MULTI_MODULE=1
+	PM_METAL_HAVE_NET=1
 )
 
 target_link_libraries(pm-linux-process-test PRIVATE
 	pm-wamr-vmlib
+	${PM_METAL_NET_LIBS}
 	m
 	dl
 	pthread

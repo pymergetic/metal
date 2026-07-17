@@ -24,6 +24,7 @@
 
 /* impl: bind — src/linux/pymergetic/metal/port/pipe.c
  *              src/zephyr/pymergetic/metal/port/pipe.c
+ *              src/nuttx/pymergetic/metal/port/pipe.c
  *
  * pipe(): opens one unidirectional host pipe, filling in *out_read_fd
  * (readable end) and *out_write_fd (writable end) — both real fds in
@@ -35,6 +36,7 @@ int pm_metal_port_pipe(int64_t *out_read_fd, int64_t *out_write_fd);
 
 /* impl: bind — src/linux/pymergetic/metal/port/pipe.c
  *              src/zephyr/pymergetic/metal/port/pipe.c
+ *              src/nuttx/pymergetic/metal/port/pipe.c
  *
  * close(): closes one fd previously handed to run_ex()/spawn() as
  * stdin_fd/stdout_fd/stderr_fd, or returned by pipe() above — the one

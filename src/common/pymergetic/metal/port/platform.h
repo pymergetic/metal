@@ -26,6 +26,7 @@ const char *pm_metal_port_target_name(pm_metal_port_target_id_t id);
 
 /* impl: bind — src/linux/pymergetic/metal/port/platform.c
  *              src/zephyr/pymergetic/metal/port/platform.c
+ *              src/nuttx/pymergetic/metal/port/platform.c
  *
  * Read an entire file at host_path into a buffer obtained from
  * pm_metal_memory_bytecode_ops()->alloc() — the caller frees it with
@@ -40,6 +41,7 @@ int pm_metal_port_read_file(const char *host_path, uint8_t **out_buf, uint32_t *
 
 /* impl: bind — src/linux/pymergetic/metal/port/platform.c
  *              src/zephyr/pymergetic/metal/port/platform.c
+ *              src/nuttx/pymergetic/metal/port/platform.c
  *
  * Quiet "does a regular file exist at host_path" check — no read, no
  * error logging on a miss (unlike read_file() above, which is meant to
@@ -52,6 +54,7 @@ int pm_metal_port_file_exists(const char *host_path);
 
 /* impl: bind — src/linux/pymergetic/metal/port/platform.c
  *              src/zephyr/pymergetic/metal/port/platform.c
+ *              src/nuttx/pymergetic/metal/port/platform.c
  *
  * Write len bytes at data to host_path (create/truncate). Parent
  * directories must already exist (callers that need mkdir -p use
@@ -60,6 +63,7 @@ int pm_metal_port_write_file(const char *host_path, const uint8_t *data, uint32_
 
 /* impl: bind — src/linux/pymergetic/metal/port/platform.c
  *              src/zephyr/pymergetic/metal/port/platform.c
+ *              src/nuttx/pymergetic/metal/port/platform.c
  *
  * Create directory at host_path, including any missing parents
  * (mkdir -p). Existing directory is success (0), not an error.
@@ -68,6 +72,7 @@ int pm_metal_port_mkdir(const char *host_path);
 
 /* impl: bind — src/linux/pymergetic/metal/port/platform.c
  *              src/zephyr/pymergetic/metal/port/platform.c
+ *              src/nuttx/pymergetic/metal/port/platform.c
  *
  * Monotonic milliseconds since an arbitrary epoch (boot / process
  * start). Used for Metal /proc/uptime — not wall-clock time. */

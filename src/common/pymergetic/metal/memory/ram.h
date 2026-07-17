@@ -10,6 +10,7 @@
 
 /* impl: bind — src/linux/pymergetic/metal/memory/ram.c
  *              src/zephyr/pymergetic/metal/memory/ram.c
+ *              src/nuttx/pymergetic/metal/memory/ram.c
  *
  * Only ->probe() is set — ram is not a pool, so every other slot is NULL. */
 const pm_metal_memory_ops_t *pm_metal_memory_ram_ops(void);
