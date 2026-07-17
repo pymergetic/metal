@@ -11,6 +11,7 @@
 
 /* impl: bind — src/linux/pymergetic/metal/memory/bytecode.c
  *              src/zephyr/pymergetic/metal/memory/bytecode.c
+ *              src/nuttx/pymergetic/metal/memory/bytecode.c
  *
  * All of ->establish()/->release()/->bytes()/->alloc()/->free() are set;
  * ->probe() is NULL — this kind has no probe of its own. */

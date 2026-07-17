@@ -38,6 +38,7 @@ typedef struct pm_metal_port_once {
 
 /* impl: bind — src/linux/pymergetic/metal/port/lock.c
  *              src/zephyr/pymergetic/metal/port/lock.c
+ *              src/nuttx/pymergetic/metal/port/lock.c
  *
  * init(): call exactly once per mutex, from a context with no concurrent
  * access yet (the caller that owns the mutex is responsible for this —

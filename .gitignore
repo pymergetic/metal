@@ -45,3 +45,6 @@ twister-out/
 # Generated embeds (wasm → C arrays)
 src/zephyr/generated/
 **/host/zephyr/generated/
+
+# setup-nuttx.sh local link for upstream wamr.mk layouts
+/src/nuttx/wamr
