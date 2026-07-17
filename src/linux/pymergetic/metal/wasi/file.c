@@ -193,8 +193,9 @@ static void pm_metal_proc_vfd_free(int fd)
 	if (!pm_metal_vfd_lookup(fd, &v) || !pm_metal_vfd_is_proc(&v)) {
 		return;
 	}
-	close(v.fd);
+	/* Untag before close so a recycled fd number cannot inherit a stale proc tag. */
 	pm_metal_vfd_untag(fd);
+	close(v.fd);
 }
 
 static __wasi_errno_t pm_metal_proc_open_memfd(pm_metal_mount_proc_hook_fn fn, os_file_handle *out)

@@ -1,8 +1,12 @@
 /*
  * T17 — privileged guest mount() of a named tmpfs at /dyn, then use it in
  * the *same* process (live remount — see docs/MOUNT.md).
- * Needs mods/t17_sys_mount/MOUNT + -DPM_METAL_BUILD_KERNEL.
+ * Privileged: empty MOUNT marker; define matches build-mod -DPM_METAL_BUILD_KERNEL.
  */
+#ifndef PM_METAL_BUILD_KERNEL
+#define PM_METAL_BUILD_KERNEL 1
+#endif
+
 #include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>

@@ -9,9 +9,14 @@
 
 #include <zephyr/kernel.h>
 
+#include "pymergetic/metal/wasi/platform.h"
+
 #define PM_METAL_PIPE_FD_BASE 1000
 #define PM_METAL_PIPE_MAX 4
 #define PM_METAL_PIPE_BUF 4096
+
+_Static_assert(CONFIG_WASI_MAX_OPEN_FILES + 3 < 1000,
+	       "WASI file fds must not overlap PM_METAL_PIPE_FD_BASE");
 
 typedef struct pm_metal_pipe {
 	uint8_t buf[PM_METAL_PIPE_BUF];
