@@ -37,20 +37,45 @@ static struct fs_littlefs *g_pm_metal_tmpfs_cfg[PM_METAL_MOUNT_TMPFS_ZEPHYR_MAX]
 };
 K_MUTEX_DEFINE(g_pm_metal_tmpfs_table_lock);
 
-static int pm_metal_mount_tmpfs_slot_alloc(void)
+/* Disk-name only: no path separators or ".." (concatenated into mount paths). */
+static int pm_metal_mount_tmpfs_source_ok(const char *source)
+{
+	size_t i;
+
+	if (!source || !source[0]) {
+		return 0;
+	}
+	for (i = 0; source[i] != '\0'; i++) {
+		if (source[i] == '/' || source[i] == '\\') {
+			return 0;
+		}
+	}
+	if (strstr(source, "..") != NULL) {
+		return 0;
+	}
+	return 1;
+}
+
+/* Caller must hold g_pm_metal_tmpfs_table_lock. */
+static int pm_metal_mount_tmpfs_slot_alloc_locked(void)
 {
 	int i;
 
-	k_mutex_lock(&g_pm_metal_tmpfs_table_lock, K_FOREVER);
 	for (i = 0; i < PM_METAL_MOUNT_TMPFS_ZEPHYR_MAX; i++) {
 		if (!g_pm_metal_tmpfs_used[i]) {
 			g_pm_metal_tmpfs_used[i] = 1;
-			k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 			return i;
 		}
 	}
-	k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 	return -1;
+}
+
+/* Caller must hold g_pm_metal_tmpfs_table_lock. */
+static void pm_metal_mount_tmpfs_slot_free_locked(int slot)
+{
+	if (slot >= 0 && slot < PM_METAL_MOUNT_TMPFS_ZEPHYR_MAX) {
+		g_pm_metal_tmpfs_used[slot] = 0;
+	}
 }
 
 static int pm_metal_mount_tmpfs_establish(const char *source, const char *opts, char *out_host_path,
@@ -61,7 +86,7 @@ static int pm_metal_mount_tmpfs_establish(const char *source, const char *opts, 
 	int rc;
 	size_t len;
 
-	if (!source || !source[0] || !out_host_path) {
+	if (!pm_metal_mount_tmpfs_source_ok(source) || !out_host_path) {
 		return -1;
 	}
 
@@ -73,15 +98,33 @@ static int pm_metal_mount_tmpfs_establish(const char *source, const char *opts, 
 		return 0;
 	}
 
+	/*
+	 * Cold path: hold the table lock across device/mkfs/mount + registry
+	 * insert so a concurrent last-ref release cannot tear down the same
+	 * RAMDISK mid-establish (and vice versa).
+	 */
+	k_mutex_lock(&g_pm_metal_tmpfs_table_lock, K_FOREVER);
+
+	if (pm_metal_mount_tmpfs_registry_acquire(source, out_host_path, out_cap) == 0) {
+		k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
+		if (opts && opts[0]) {
+			printk("pm_metal_mount: tmpfs: '%s' already established, ignoring options\n",
+			       source);
+		}
+		return 0;
+	}
+
 	if (pm_metal_mount_device_establish(PM_METAL_MOUNT_DEVICE_RAMDISK, source, &dev) != 0) {
 		printk("pm_metal_mount: tmpfs: device '%s' failed\n", source);
+		k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 		return -1;
 	}
 
-	slot = pm_metal_mount_tmpfs_slot_alloc();
+	slot = pm_metal_mount_tmpfs_slot_alloc_locked();
 	if (slot < 0) {
 		printk("pm_metal_mount: tmpfs: no littlefs slots left for '%s'\n", source);
 		pm_metal_mount_device_release(dev);
+		k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 		return -1;
 	}
 
@@ -92,20 +135,18 @@ static int pm_metal_mount_tmpfs_establish(const char *source, const char *opts, 
 			     "%s%s", PM_METAL_MOUNT_TMPFS_MP_PREFIX, source);
 		if (n < 0 || (size_t)n >= sizeof(g_pm_metal_tmpfs_mp[slot])) {
 			printk("pm_metal_mount: tmpfs: source name too long for mount path\n");
-			k_mutex_lock(&g_pm_metal_tmpfs_table_lock, K_FOREVER);
-			g_pm_metal_tmpfs_used[slot] = 0;
-			k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
+			pm_metal_mount_tmpfs_slot_free_locked(slot);
 			pm_metal_mount_device_release(dev);
+			k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 			return -1;
 		}
 		n = snprintf(g_pm_metal_tmpfs_disk[slot], sizeof(g_pm_metal_tmpfs_disk[slot]),
 			     "%s", pm_metal_mount_device_disk_name(dev));
 		if (n < 0 || (size_t)n >= sizeof(g_pm_metal_tmpfs_disk[slot])) {
 			printk("pm_metal_mount: tmpfs: disk name truncated\n");
-			k_mutex_lock(&g_pm_metal_tmpfs_table_lock, K_FOREVER);
-			g_pm_metal_tmpfs_used[slot] = 0;
-			k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
+			pm_metal_mount_tmpfs_slot_free_locked(slot);
 			pm_metal_mount_device_release(dev);
+			k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 			return -1;
 		}
 	}
@@ -117,10 +158,9 @@ static int pm_metal_mount_tmpfs_establish(const char *source, const char *opts, 
 				 g_pm_metal_tmpfs_disk[slot]);
 		if (n < 0 || (size_t)n >= sizeof(storage_ids[slot])) {
 			printk("pm_metal_mount: tmpfs: storage id truncated\n");
-			k_mutex_lock(&g_pm_metal_tmpfs_table_lock, K_FOREVER);
-			g_pm_metal_tmpfs_used[slot] = 0;
-			k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
+			pm_metal_mount_tmpfs_slot_free_locked(slot);
 			pm_metal_mount_device_release(dev);
+			k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 			return -1;
 		}
 	}
@@ -138,58 +178,65 @@ static int pm_metal_mount_tmpfs_establish(const char *source, const char *opts, 
 		     FS_MOUNT_FLAG_USE_DISK_ACCESS);
 	if (rc < 0) {
 		printk("pm_metal_mount: tmpfs: mkfs failed for '%s' (%d)\n", source, rc);
-		k_mutex_lock(&g_pm_metal_tmpfs_table_lock, K_FOREVER);
-		g_pm_metal_tmpfs_used[slot] = 0;
-		k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
+		pm_metal_mount_tmpfs_slot_free_locked(slot);
 		pm_metal_mount_device_release(dev);
+		k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 		return -1;
 	}
 	rc = fs_mount(&g_pm_metal_tmpfs_mnt[slot]);
 	if (rc < 0) {
 		printk("pm_metal_mount: tmpfs: mount failed for '%s' (%d)\n", source, rc);
-		k_mutex_lock(&g_pm_metal_tmpfs_table_lock, K_FOREVER);
-		g_pm_metal_tmpfs_used[slot] = 0;
-		k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
+		pm_metal_mount_tmpfs_slot_free_locked(slot);
 		pm_metal_mount_device_release(dev);
+		k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 		return -1;
 	}
 
-	/* Durable handle: disk-name buffer outlives caller's source string. */
+	/*
+	 * pm_metal_mount_device_handle_t is const char * (disk-name). Keep a
+	 * durable copy in g_pm_metal_tmpfs_disk — caller's source/opts may be
+	 * ephemeral (e.g. fstab line buffer).
+	 */
 	g_pm_metal_tmpfs_dev[slot] = g_pm_metal_tmpfs_disk[slot];
 
 	len = strlen(g_pm_metal_tmpfs_mp[slot]);
 	if (len + 1 > out_cap) {
 		fs_unmount(&g_pm_metal_tmpfs_mnt[slot]);
-		k_mutex_lock(&g_pm_metal_tmpfs_table_lock, K_FOREVER);
-		g_pm_metal_tmpfs_used[slot] = 0;
-		k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
+		pm_metal_mount_tmpfs_slot_free_locked(slot);
 		pm_metal_mount_device_release(g_pm_metal_tmpfs_dev[slot]);
 		g_pm_metal_tmpfs_dev[slot] = NULL;
+		k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 		return -1;
 	}
 	memcpy(out_host_path, g_pm_metal_tmpfs_mp[slot], len + 1);
 
 	if (pm_metal_mount_tmpfs_registry_insert(source, out_host_path) != 0) {
 		fs_unmount(&g_pm_metal_tmpfs_mnt[slot]);
-		k_mutex_lock(&g_pm_metal_tmpfs_table_lock, K_FOREVER);
-		g_pm_metal_tmpfs_used[slot] = 0;
-		k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
+		pm_metal_mount_tmpfs_slot_free_locked(slot);
 		pm_metal_mount_device_release(g_pm_metal_tmpfs_dev[slot]);
 		g_pm_metal_tmpfs_dev[slot] = NULL;
+		k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 		return -1;
 	}
 
+	k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 	(void)opts;
 	return 0;
 }
 
 static void pm_metal_mount_tmpfs_release(const char *host_path)
 {
-	int rc = pm_metal_mount_tmpfs_registry_release(host_path);
+	int rc;
 	int i;
 
+	if (!host_path) {
+		return;
+	}
+
+	/* Table lock spans last-ref drop + unmount so establish cannot race. */
+	k_mutex_lock(&g_pm_metal_tmpfs_table_lock, K_FOREVER);
+	rc = pm_metal_mount_tmpfs_registry_release(host_path);
 	if (rc == 1) {
-		k_mutex_lock(&g_pm_metal_tmpfs_table_lock, K_FOREVER);
 		for (i = 0; i < PM_METAL_MOUNT_TMPFS_ZEPHYR_MAX; i++) {
 			if (g_pm_metal_tmpfs_used[i]
 			    && strcmp(g_pm_metal_tmpfs_mp[i], host_path) == 0) {
@@ -200,10 +247,10 @@ static void pm_metal_mount_tmpfs_release(const char *host_path)
 				break;
 			}
 		}
-		k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 	} else if (rc < 0) {
 		printk("pm_metal_mount: tmpfs: release of untracked path %s\n", host_path);
 	}
+	k_mutex_unlock(&g_pm_metal_tmpfs_table_lock);
 }
 
 static const pm_metal_mount_ops_t g_pm_metal_mount_tmpfs_ops = {

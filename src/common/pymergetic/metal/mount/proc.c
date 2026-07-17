@@ -23,14 +23,11 @@ typedef struct pm_metal_mount_proc_hook {
 static pm_metal_mount_proc_hook_t g_pm_metal_mount_proc_hooks[PM_METAL_MOUNT_PROC_MAX_HOOKS];
 static int g_pm_metal_mount_proc_builtins;
 static pm_metal_port_mutex_t g_pm_metal_mount_proc_lock;
-static int g_pm_metal_mount_proc_lock_ready;
+static pm_metal_port_once_t g_pm_metal_mount_proc_lock_once = PM_METAL_PORT_ONCE_INIT;
 
 static void pm_metal_mount_proc_lock(void)
 {
-	if (!g_pm_metal_mount_proc_lock_ready) {
-		pm_metal_port_mutex_init(&g_pm_metal_mount_proc_lock);
-		g_pm_metal_mount_proc_lock_ready = 1;
-	}
+	pm_metal_port_mutex_ensure(&g_pm_metal_mount_proc_lock, &g_pm_metal_mount_proc_lock_once);
 	pm_metal_port_mutex_lock(&g_pm_metal_mount_proc_lock);
 }
 

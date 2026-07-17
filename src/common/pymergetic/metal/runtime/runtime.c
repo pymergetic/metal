@@ -68,6 +68,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -117,6 +118,7 @@ static struct {
  * contract) nor for `initialized` itself (checked unlocked as a fast
  * precondition — see file header). */
 static pm_metal_port_mutex_t g_pm_metal_runtime_lock;
+static atomic_int g_pm_metal_runtime_allow_guest_mount;
 
 /* Caller must hold g_pm_metal_runtime_lock. */
 static pm_metal_runtime_slot_t *pm_metal_runtime_slot_for(pm_metal_runtime_handle_t h)
@@ -461,6 +463,7 @@ int pm_metal_runtime_shutdown(void)
 
 	pm_metal_port_mutex_destroy(&g_pm_metal_runtime_lock);
 	memset(&g_pm_metal_runtime, 0, sizeof(g_pm_metal_runtime));
+	atomic_store(&g_pm_metal_runtime_allow_guest_mount, 0);
 
 	return 0;
 }
@@ -800,14 +803,12 @@ int pm_metal_runtime_unload(pm_metal_runtime_handle_t h)
 	return 0;
 }
 
-static int g_pm_metal_runtime_allow_guest_mount;
-
 void pm_metal_runtime_set_allow_guest_mount(int allow)
 {
-	g_pm_metal_runtime_allow_guest_mount = allow ? 1 : 0;
+	atomic_store(&g_pm_metal_runtime_allow_guest_mount, allow ? 1 : 0);
 }
 
 int pm_metal_runtime_allow_guest_mount(void)
 {
-	return g_pm_metal_runtime_allow_guest_mount;
+	return atomic_load(&g_pm_metal_runtime_allow_guest_mount);
 }

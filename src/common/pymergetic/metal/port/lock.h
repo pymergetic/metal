@@ -20,6 +20,22 @@ typedef struct pm_metal_port_mutex {
 	} pm_metal_port_mutex_opaque;
 } pm_metal_port_mutex_t;
 
+/* One-time init gate (pthread_once / atomic). Zero-init or PM_METAL_PORT_ONCE_INIT. */
+typedef struct pm_metal_port_once {
+	union {
+		void *pm_metal_port_once_ptr_align;
+		long long pm_metal_port_once_int_align;
+		unsigned char pm_metal_port_once_storage[64];
+	} pm_metal_port_once_opaque;
+} pm_metal_port_once_t;
+
+#define PM_METAL_PORT_ONCE_INIT \
+	{                       \
+		{               \
+			0       \
+		}               \
+	}
+
 /* impl: bind — src/linux/pymergetic/metal/port/lock.c
  *              src/zephyr/pymergetic/metal/port/lock.c
  *
@@ -32,10 +48,17 @@ typedef struct pm_metal_port_mutex {
  * init() on the same pm_metal_port_mutex_t (e.g. across an init→shutdown→
  * init cycle), since re-init()ing a live pthread_mutex_t without
  * destroy() first is undefined behavior. lock()/unlock(): ordinary
- * blocking mutex semantics, no recursion, no timeout. */
+ * blocking mutex semantics, no recursion, no timeout.
+ *
+ * call_once(): run fn(arg) exactly once for this once object; concurrent
+ * callers block until the winner finishes. mutex_ensure(): call_once that
+ * runs mutex_init(m) — pair each mutex with a dedicated once. */
 void pm_metal_port_mutex_init(pm_metal_port_mutex_t *m);
 void pm_metal_port_mutex_destroy(pm_metal_port_mutex_t *m);
 void pm_metal_port_mutex_lock(pm_metal_port_mutex_t *m);
 void pm_metal_port_mutex_unlock(pm_metal_port_mutex_t *m);
+
+void pm_metal_port_call_once(pm_metal_port_once_t *once, void (*fn)(void *), void *arg);
+void pm_metal_port_mutex_ensure(pm_metal_port_mutex_t *m, pm_metal_port_once_t *once);
 
 #endif /* PYMERGETIC_METAL_PORT_LOCK_H_ */

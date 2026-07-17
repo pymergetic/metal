@@ -187,8 +187,10 @@ int main(void)
 	pipe_read_fd = -1; /* handed to reader */
 
 	int writer_exit, reader_exit;
-	if (pm_metal_process_wait(writer_pid, &writer_exit) != 0
-	    || pm_metal_process_wait(reader_pid, &reader_exit) != 0) {
+	int wait_writer = pm_metal_process_wait(writer_pid, &writer_exit);
+	int wait_reader = pm_metal_process_wait(reader_pid, &reader_exit);
+
+	if (wait_writer != 0 || wait_reader != 0) {
 		fprintf(stderr, "wait() on pipe pair failed\n");
 		pm_metal_runtime_unload(h_writer);
 		pm_metal_runtime_unload(h_reader);
@@ -305,8 +307,10 @@ int main(void)
 	}
 
 	int sock_server_exit, sock_client_exit;
-	if (pm_metal_process_wait(sock_server_pid, &sock_server_exit) != 0
-	    || pm_metal_process_wait(sock_client_pid, &sock_client_exit) != 0) {
+	int wait_sock_server = pm_metal_process_wait(sock_server_pid, &sock_server_exit);
+	int wait_sock_client = pm_metal_process_wait(sock_client_pid, &sock_client_exit);
+
+	if (wait_sock_server != 0 || wait_sock_client != 0) {
 		fprintf(stderr, "wait() on socket pair failed\n");
 		pm_metal_runtime_unload(h_sock_client);
 		pm_metal_runtime_unload(h_sock_server);
@@ -349,15 +353,21 @@ int main(void)
 	if (pm_metal_process_spawn(h_udp_client, 1, udp_client_argv, 0, NULL, -1, -1, -1, NULL, NULL,
 				    &udp_client_pid)
 	    != 0) {
+		int udp_server_exit = -1;
+
 		fprintf(stderr, "spawn t25_udp_client failed\n");
+		(void)pm_metal_process_kill(udp_server_pid);
+		(void)pm_metal_process_wait(udp_server_pid, &udp_server_exit);
 		pm_metal_runtime_unload(h_udp_client);
 		pm_metal_runtime_unload(h_udp_server);
 		goto done;
 	}
 
 	int udp_server_exit, udp_client_exit;
-	if (pm_metal_process_wait(udp_server_pid, &udp_server_exit) != 0
-	    || pm_metal_process_wait(udp_client_pid, &udp_client_exit) != 0) {
+	int wait_udp_server = pm_metal_process_wait(udp_server_pid, &udp_server_exit);
+	int wait_udp_client = pm_metal_process_wait(udp_client_pid, &udp_client_exit);
+
+	if (wait_udp_server != 0 || wait_udp_client != 0) {
 		fprintf(stderr, "wait() on udp pair failed\n");
 		pm_metal_runtime_unload(h_udp_client);
 		pm_metal_runtime_unload(h_udp_server);
@@ -399,15 +409,21 @@ int main(void)
 	if (pm_metal_process_spawn(h_v6_client, 1, v6_client_argv, 0, NULL, -1, -1, -1, NULL, NULL,
 				    &v6_client_pid)
 	    != 0) {
+		int v6_server_exit = -1;
+
 		fprintf(stderr, "spawn t27_ipv6_client failed\n");
+		(void)pm_metal_process_kill(v6_server_pid);
+		(void)pm_metal_process_wait(v6_server_pid, &v6_server_exit);
 		pm_metal_runtime_unload(h_v6_client);
 		pm_metal_runtime_unload(h_v6_server);
 		goto done;
 	}
 
 	int v6_server_exit, v6_client_exit;
-	if (pm_metal_process_wait(v6_server_pid, &v6_server_exit) != 0
-	    || pm_metal_process_wait(v6_client_pid, &v6_client_exit) != 0) {
+	int wait_v6_server = pm_metal_process_wait(v6_server_pid, &v6_server_exit);
+	int wait_v6_client = pm_metal_process_wait(v6_client_pid, &v6_client_exit);
+
+	if (wait_v6_server != 0 || wait_v6_client != 0) {
 		fprintf(stderr, "wait() on ipv6 pair failed\n");
 		pm_metal_runtime_unload(h_v6_client);
 		pm_metal_runtime_unload(h_v6_server);

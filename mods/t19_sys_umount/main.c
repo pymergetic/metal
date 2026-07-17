@@ -1,6 +1,11 @@
 /*
  * T19 — privileged umount("/dyn") after t18 used it. Needs MOUNT marker.
+ * Privileged: define matches build-mod -DPM_METAL_BUILD_KERNEL.
  */
+#ifndef PM_METAL_BUILD_KERNEL
+#define PM_METAL_BUILD_KERNEL 1
+#endif
+
 #include <stdio.h>
 
 #include "pymergetic/metal/mount/mount.h"

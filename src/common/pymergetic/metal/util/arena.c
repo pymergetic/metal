@@ -73,7 +73,7 @@ static int pm_metal_util_arena_off_ok(const pm_metal_util_arena_t *arena, size_t
 	if (off == PM_METAL_UTIL_ARENA_OFF_NULL) {
 		return 0;
 	}
-	if (off + hdr > arena->buf_len) {
+	if (arena->buf_len < hdr || off > arena->buf_len - hdr) {
 		return 0;
 	}
 	if ((off % PM_METAL_UTIL_ARENA_ALIGN) != 0) {
@@ -229,28 +229,41 @@ void *pm_metal_util_arena_alloc(pm_metal_util_arena_t *arena, size_t size)
 		return NULL;
 	}
 
+	/* Guest-writable headers: claimed payload must fit in-buf. */
+	if (b->size > arena->buf_len - off - block_hdr) {
+		return NULL;
+	}
+
+	/* Split only when the remainder header also fits in-buf. */
 	if (b->size >= need + block_hdr + PM_METAL_UTIL_ARENA_ALIGN) {
 		size_t rest_off = off + block_hdr + need;
-		pm_metal_util_arena_block_t *rest =
-			(pm_metal_util_arena_block_t *)(arena->base + rest_off);
 
-		rest->size = b->size - need - block_hdr;
-		rest->used = 0;
-		rest->magic = PM_METAL_UTIL_ARENA_MAGIC_FREE;
-		rest->next_off = b->next_off;
-		rest->prev_off = off;
-		if (rest->next_off != PM_METAL_UTIL_ARENA_OFF_NULL) {
-			pm_metal_util_arena_block_t *n =
-				pm_metal_util_arena_block_at(arena, rest->next_off);
-
-			if (!n) {
-				return NULL;
-			}
-			n->prev_off = rest_off;
+		if (!pm_metal_util_arena_off_ok(arena, rest_off)) {
+			return NULL;
 		}
 
-		b->next_off = rest_off;
-		b->size = need;
+		{
+			pm_metal_util_arena_block_t *rest =
+				(pm_metal_util_arena_block_t *)(arena->base + rest_off);
+
+			rest->size = b->size - need - block_hdr;
+			rest->used = 0;
+			rest->magic = PM_METAL_UTIL_ARENA_MAGIC_FREE;
+			rest->next_off = b->next_off;
+			rest->prev_off = off;
+			if (rest->next_off != PM_METAL_UTIL_ARENA_OFF_NULL) {
+				pm_metal_util_arena_block_t *n =
+					pm_metal_util_arena_block_at(arena, rest->next_off);
+
+				if (!n) {
+					return NULL;
+				}
+				n->prev_off = rest_off;
+			}
+
+			b->next_off = rest_off;
+			b->size = need;
+		}
 	}
 
 	b->used = 1;

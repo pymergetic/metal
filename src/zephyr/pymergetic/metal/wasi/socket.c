@@ -26,6 +26,10 @@
 #define PM_METAL_SOCK_FD_BASE 2000
 #define PM_METAL_SOCK_MAX 16
 
+/* Matches file.c CONFIG_WASI_MAX_OPEN_FILES (= CONFIG_ZVFS_OPEN_MAX). */
+_Static_assert(CONFIG_ZVFS_OPEN_MAX + 3 < 1000,
+	       "WASI file fds must not overlap pipe/socket synthetic bases");
+
 typedef struct {
 	int zfd;
 	int is_tcp; /* 1 stream, 0 dgram */
