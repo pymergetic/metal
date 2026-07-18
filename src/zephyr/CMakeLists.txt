@@ -10,7 +10,7 @@ else()
 endif()
 
 if(NOT EXISTS "${PM_ZEPHYR_BASE}/share/zephyr-package/cmake/ZephyrConfig.cmake")
-	message(FATAL_ERROR "Zephyr not found at ${PM_ZEPHYR_BASE}; run scripts/setup-west.sh")
+	message(FATAL_ERROR "Zephyr not found at ${PM_ZEPHYR_BASE}; run scripts/setup west")
 endif()
 
 find_package(Zephyr REQUIRED HINTS ${PM_ZEPHYR_BASE})
@@ -41,16 +41,23 @@ endif()
 
 set(WAMR_BUILD_PLATFORM "zephyr")
 set(WAMR_BUILD_INTERP 1)
-set(WAMR_BUILD_AOT 0)
+# Match linux + WAMR's own zephyr product-mini defaults. FAST_INTERP speeds
+# .wasm execution immediately; AOT enables loading host-arch .aot (wamrc) when
+# packaged — classic interp alone is why qemu python felt multi-minute.
+set(WAMR_BUILD_FAST_INTERP 1)
+set(WAMR_BUILD_AOT 1)
+set(WAMR_BUILD_JIT 0)
+set(WAMR_BUILD_FAST_JIT 0)
 set(WAMR_BUILD_LIBC_BUILTIN 1)
 set(WAMR_BUILD_LIBC_WASI 1)
 set(WAMR_BUILD_LIB_PTHREAD 0)
 set(WAMR_BUILD_LIB_WASI_THREADS 1)
 set(WAMR_BUILD_MULTI_MODULE 1)
 set(WAMR_BUILD_GLOBAL_HEAP_POOL 0)
+set(WAMR_BUILD_REF_TYPES 1)
 
 if(NOT EXISTS "${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake")
-	message(FATAL_ERROR "WAMR not found at ${WAMR_ROOT_DIR}; run scripts/setup-west.sh")
+	message(FATAL_ERROR "WAMR not found at ${WAMR_ROOT_DIR}; run scripts/setup west")
 endif()
 
 if(CONFIG_64BIT)
@@ -63,15 +70,14 @@ include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
 
 set(PM_WAMR_LIBC_UTIL "${WAMR_ROOT_DIR}/core/shared/platform/common/libc-util")
 
-# Embed verify mods when enabled
-set(PM_MODS_EMBED_C "${CMAKE_CURRENT_LIST_DIR}/generated/mods_embed.c")
-set(PM_MODS_EMBED_H "${CMAKE_CURRENT_LIST_DIR}/generated/mods_embed.h")
-set(PM_POPULATE_EMBED_C "${CMAKE_CURRENT_LIST_DIR}/generated/populate_embed.c")
+# Named lz4 guest packages (scripts/build zephyr embed → generated/pkg_*.c)
+set(PM_ZEPHYR_PKGS_CMAKE "${CMAKE_CURRENT_LIST_DIR}/generated/pkgs.cmake")
 if(CONFIG_PM_METAL_VERIFY_MODS)
-	if(NOT EXISTS "${PM_MODS_EMBED_C}")
+	if(NOT EXISTS "${PM_ZEPHYR_PKGS_CMAKE}")
 		message(FATAL_ERROR
-			"Missing ${PM_MODS_EMBED_C}; run scripts/gen-zephyr-mods-embed.sh")
+			"Missing ${PM_ZEPHYR_PKGS_CMAKE}; run scripts/build zephyr none embed")
 	endif()
+	include(${PM_ZEPHYR_PKGS_CMAKE})
 endif()
 
 target_sources(app PRIVATE
@@ -94,6 +100,7 @@ target_sources(app PRIVATE
 	${PM_COMMON}/mount/proc/environ.c
 	${PM_COMMON}/mount/tmpfs_registry.c
 	${PM_COMMON}/mount/populate.c
+	${PM_COMMON}/mount/pkg.c
 	${PM_COMMON}/mount/table.c
 	${PM_COMMON}/mount/mount.c
 	${PM_COMMON}/mount/fstab.c
@@ -142,11 +149,8 @@ target_sources(app PRIVATE
 
 if(CONFIG_PM_METAL_VERIFY_MODS)
 	target_sources(app PRIVATE ${PM_METAL_ROOT}/tests/zephyr_verify.c)
-	if(EXISTS "${PM_MODS_EMBED_C}")
-		target_sources(app PRIVATE ${PM_MODS_EMBED_C})
-	endif()
-	if(EXISTS "${PM_POPULATE_EMBED_C}")
-		target_sources(app PRIVATE ${PM_POPULATE_EMBED_C})
+	if(DEFINED PM_METAL_GUEST_PKG_SOURCES)
+		target_sources(app PRIVATE ${PM_METAL_GUEST_PKG_SOURCES})
 	endif()
 endif()
 
@@ -164,6 +168,40 @@ target_compile_definitions(app PRIVATE
 	PM_METAL_RUNTIME_MULTI_MODULE=1
 	PM_METAL_ZEPHYR_WASI_FILE=1
 )
+
+# http.c includes http_ca_pem.inc from the same directory.
+set_source_files_properties(${PM_COMMON}/net/http.c PROPERTIES
+	INCLUDE_DIRECTORIES ${PM_COMMON}/net
+)
+
+# HTTPS/DNS/UDP: native_sim → host libc (host_net_adapt.c); qemu → vendored mbedTLS 3.x.
+if(CONFIG_ARCH_POSIX)
+	target_compile_definitions(app PRIVATE PM_METAL_HAVE_CURL=1)
+	target_sources(native_simulator INTERFACE
+		${CMAKE_CURRENT_LIST_DIR}/pymergetic/metal/port/host_net_adapt.c)
+	target_compile_options(native_simulator INTERFACE
+		-I${PM_METAL_ROOT}/include
+		-I${PM_METAL_ROOT}/external/curl/include)
+	target_link_options(native_simulator INTERFACE
+		/usr/lib/x86_64-linux-gnu/libcurl.so.4)
+else()
+	set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+	set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+	set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+	set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE BOOL "" FORCE)
+	set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
+	# Quote path for -DMBEDTLS_USER_CONFIG_FILE="..."
+	set(PM_MBEDTLS_USER_CFG
+		"${CMAKE_CURRENT_LIST_DIR}/mbedtls_user_config.h")
+	add_compile_definitions(
+		MBEDTLS_USER_CONFIG_FILE="${PM_MBEDTLS_USER_CFG}")
+	add_subdirectory(${PM_METAL_ROOT}/external/mbedtls
+		${CMAKE_BINARY_DIR}/pm_mbedtls EXCLUDE_FROM_ALL)
+	target_sources(app PRIVATE
+		pymergetic/metal/port/mbedtls_entropy.c)
+	target_compile_definitions(app PRIVATE PM_METAL_HAVE_MBEDTLS=1)
+	target_link_libraries(app PRIVATE mbedtls mbedx509 mbedcrypto)
+endif()
 
 # posix.c / blocking_op.c need poll/htons/ioctl stubs. TARGET_DIRECTORY is
 # required: these sources are added via WAMR's runtime_lib.cmake (another

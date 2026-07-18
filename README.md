@@ -34,12 +34,12 @@ packages/metal/
 │   ├── nuttx/                    [stub — see docs/LAYERS.md, cheaper bring-up than zephyr]
 │   ├── rump/                     [stub]
 │   └── unikraft/                 [stub]
-├── mods/                       t0..t20 — test .wasm guests (wasi-sdk, wasm32-wasip1)
-├── apps/                        [empty — later]
-├── scripts/                    build-linux.sh, build-mod.sh, verify-*.sh, setup-*.sh
+├── mods/tests/                 harness .wasm guests → guest /mods/tests/
+├── mods/apps/                  real guests (python) → guest /mods/apps/
+├── scripts/                    setup|build|verify + *.d/port/<platform>/ + setup.d/deps/ + lib/
 ├── patches/{wamr,microtar,…}/  tracked diffs against external/* — see docs/SOURCETREE.md § Vendoring
 ├── docs/
-├── external/                    gitignored — vendored deps, reproduced by scripts/setup-*.sh
+├── external/                    gitignored — vendored deps, reproduced by scripts/setup <name>
 └── west-manifest/
 ```
 
@@ -50,16 +50,18 @@ See [docs/SOURCETREE.md](docs/SOURCETREE.md).
 ## Quickstart (linux)
 
 ```bash
-scripts/setup-wamr.sh      # once — vendors + patches external/wamr
-scripts/setup-lz4.sh       # once — vendors external/lz4 (util/lz4.h's backing lib)
-scripts/setup-microtar.sh  # once — vendors + patches external/microtar (util/tar.h's backing lib)
-scripts/setup-net.sh       # once — Monocypher + mbedTLS + nghttp2 + curl (util/{crypto,ntp,http})
-scripts/setup-ide.sh       # once — compile_commands.json + .clangd for this checkout
-scripts/verify-linux.sh    # main Linux verify (scripted + process/socket smoke; peer of verify-zephyr-*.sh)
-scripts/verify-linux-net.sh  # util/{crypto,ntp,http} smoke (needs network)
+scripts/setup wamr      # once — vendors + patches external/wamr
+scripts/setup lz4       # once — vendors external/lz4 (util/lz4.h's backing lib)
+scripts/setup microtar  # once — vendors + patches external/microtar (util/tar.h's backing lib)
+scripts/setup net       # once — Monocypher + mbedTLS + nghttp2 + curl (util/{crypto,ntp,http})
+scripts/setup ide       # once — compile_commands.json + .clangd for this checkout
+scripts/verify linux           # default suite (same slices as zephyr/nuttx)
+scripts/verify linux net       # focused util/{crypto,ntp,http} smoke
+scripts/build all              # guest + every host/firmware target
+scripts/verify all             # linux + zephyr qemu/native-sim + nuttx sim
 ```
 
-Also: `scripts/verify-linux-threads.sh` (TSan). Focused helpers (`verify-linux-process.sh`, tmpfs/proc/…) are still callable alone; the main script chains the process/socket half.
+Also: `scripts/verify linux threads` (TSan). Per-platform: `scripts/verify zephyr all`, `scripts/build zephyr all`.
 
 ---
 
@@ -77,7 +79,7 @@ Also: `scripts/verify-linux-threads.sh` (TSan). Focused helpers (`verify-linux-p
 
 **Zephyr** — scaffolded (`src/zephyr/`, CMake/Kconfig/`prj.conf`), not yet brought up. **NuttX / Rump / Unikraft** — stubs only (NuttX's own stub notes why it should be cheaper to bring up than Zephyr — see `src/nuttx/README.md`).
 
-Mods build against `wasm32-wasip1-threads` by default (`scripts/build-mod.sh`); guest `pthread_create()` is covered by `mods/t23_pthread` in `scripts/verify-linux.sh`.
+Mods build against `wasm32-wasip1-threads` by default (`scripts/build mod`); guest `pthread_create()` is covered by `mods/tests/t23_pthread` in `scripts/verify linux`. Package knobs: `PM_METAL_GUEST_TESTS`, `PM_METAL_APP_PYTHON` (`scripts/lib/guest-package.sh`).
 
 Detail + remaining steps: [docs/RUNTIME.md § Bring-up plan](docs/RUNTIME.md#bring-up-plan).
 

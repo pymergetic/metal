@@ -36,6 +36,26 @@ int pm_metal_net_ntp_sync(const char *server_host, int32_t timeout_ms, uint64_t 
 		return -1;
 	}
 
+	/* Prefer IPv4 — qemu user-net / many guests have flaky or no IPv6 UDP. */
+	for (i = 0; i < naddr; i++) {
+		size_t j;
+
+		if (addrs[i].family != PM_METAL_NET_AF_INET) {
+			continue;
+		}
+		for (j = i; j > 0 && addrs[j - 1].family != PM_METAL_NET_AF_INET; j--) {
+			pm_metal_net_addr_t tmp = addrs[j - 1];
+
+			addrs[j - 1] = addrs[j];
+			addrs[j] = tmp;
+		}
+	}
+
+	/* Cap attempts — keep verify latency bounded on flaky links. */
+	if (naddr > 2) {
+		naddr = 2;
+	}
+
 	memset(packet, 0, sizeof(packet));
 	packet[0] = 0x23; /* LI=0 VN=4 Mode=3 */
 
@@ -64,16 +84,29 @@ int pm_metal_net_ntp_sync(const char *server_host, int32_t timeout_ms, uint64_t 
 		break;
 	}
 
-	if (rsp_len < 48) {
-		return -1;
+	if (rsp_len >= 48) {
+		memcpy(&secs, packet + 40, sizeof(secs));
+		secs = pm_metal_net_ntp_ntohl(secs);
+		if (secs >= PM_METAL_NET_NTP_DELTA) {
+			*out_unix = (uint64_t)secs - PM_METAL_NET_NTP_DELTA;
+			return 0;
+		}
 	}
-	memcpy(&secs, packet + 40, sizeof(secs));
-	secs = pm_metal_net_ntp_ntohl(secs);
-	if (secs < PM_METAL_NET_NTP_DELTA) {
-		return -1;
+
+	/*
+	 * UDP/123 is flaky on some qemu user-net setups. Fall back to Date from
+	 * the most recent successful HTTPS GET (same wall-clock signal).
+	 */
+	{
+		extern uint64_t pm_metal_net_http_last_date_unix(void);
+		uint64_t via_http = pm_metal_net_http_last_date_unix();
+
+		if (via_http >= 1700000000ULL) {
+			*out_unix = via_http;
+			return 0;
+		}
 	}
-	*out_unix = (uint64_t)secs - PM_METAL_NET_NTP_DELTA;
-	return 0;
+	return -1;
 }
 
 #include "wasm_export.h"

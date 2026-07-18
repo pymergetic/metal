@@ -1,11 +1,22 @@
 /*
- * Port DNS — zephyr bind (zsock_getaddrinfo).
+ * Port DNS — native_sim: host getaddrinfo; else zsock_getaddrinfo.
  */
 #include "pymergetic/metal/port/dns.h"
 
 #include <string.h>
 
-#if !defined(CONFIG_NET_SOCKETS)
+#if defined(CONFIG_ARCH_POSIX)
+
+int pm_metal_host_dns_lookup(const char *host, uint16_t port, pm_metal_net_addr_t *out, size_t out_cap,
+			       size_t *out_n);
+
+int pm_metal_port_dns_lookup(const char *host, uint16_t port, pm_metal_net_addr_t *out, size_t out_cap,
+			     size_t *out_n)
+{
+	return pm_metal_host_dns_lookup(host, port, out, out_cap, out_n);
+}
+
+#elif !defined(CONFIG_NET_SOCKETS)
 
 int pm_metal_port_dns_lookup(const char *host, uint16_t port, pm_metal_net_addr_t *out, size_t out_cap,
 			     size_t *out_n)
@@ -56,7 +67,8 @@ int pm_metal_port_dns_lookup(const char *host, uint16_t port, pm_metal_net_addr_
 	}
 	(void)snprintf(portstr, sizeof(portstr), "%u", (unsigned)port);
 	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = NET_AF_UNSPEC;
+	/* IPv4 first — qemu user-net SLIRP has no usable IPv6 for Metal net smoke. */
+	hints.ai_family = NET_AF_INET;
 	hints.ai_socktype = 0;
 	hints.ai_protocol = 0;
 	ret = zsock_getaddrinfo(host, portstr, &hints, &res);
@@ -81,4 +93,4 @@ int pm_metal_port_dns_lookup(const char *host, uint16_t port, pm_metal_net_addr_
 	return 0;
 }
 
-#endif /* CONFIG_NET_SOCKETS */
+#endif

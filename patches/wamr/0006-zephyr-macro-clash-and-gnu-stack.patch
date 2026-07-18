@@ -4,7 +4,7 @@ building WAMR: undef GB/MIN before redefining (sys/util.h), and emit
 
 The GNU-stack note is always emitted (no #if): CMake compiles these as
 plain ASM (.s), so the C preprocessor does not run and a #if guard would
-be left as literal text for gas. Applied by scripts/setup-wamr.sh.
+be left as literal text for gas. Applied by scripts/setup wamr.
 
 diff -ruN a/core/iwasm/common/arch/invokeNative_em64.s b/core/iwasm/common/arch/invokeNative_em64.s
 --- a/core/iwasm/common/arch/invokeNative_em64.s	2026-07-16 15:45:27.612434909 +0000

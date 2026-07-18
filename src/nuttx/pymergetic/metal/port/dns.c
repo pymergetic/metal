@@ -1,7 +1,22 @@
 /*
- * Port DNS — nuttx bind (getaddrinfo).
+ * Port DNS — sim: host getaddrinfo; else NuttX getaddrinfo.
  */
 #include "pymergetic/metal/port/dns.h"
+
+#include <nuttx/config.h>
+
+#if defined(CONFIG_ARCH_SIM)
+
+int pm_metal_host_dns_lookup(const char *host, uint16_t port, pm_metal_net_addr_t *out, size_t out_cap,
+			       size_t *out_n);
+
+int pm_metal_port_dns_lookup(const char *host, uint16_t port, pm_metal_net_addr_t *out, size_t out_cap,
+			     size_t *out_n)
+{
+	return pm_metal_host_dns_lookup(host, port, out, out_cap, out_n);
+}
+
+#else /* !CONFIG_ARCH_SIM */
 
 #include "sockaddr_conv.h"
 
@@ -46,3 +61,5 @@ int pm_metal_port_dns_lookup(const char *host, uint16_t port, pm_metal_net_addr_
 	*out_n = n;
 	return 0;
 }
+
+#endif /* CONFIG_ARCH_SIM */

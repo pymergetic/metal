@@ -1,11 +1,42 @@
 /*
- * Port UDP — zephyr bind (zsock_*).
+ * Port UDP — native_sim: host sockets; else zsock_*.
  */
 #include "pymergetic/metal/port/udp.h"
 
-#include <string.h>
+#if defined(CONFIG_ARCH_POSIX)
 
-#if !defined(CONFIG_NET_SOCKETS)
+int pm_metal_host_udp_open(uint8_t family);
+int pm_metal_host_udp_close(int fd);
+int pm_metal_host_udp_set_timeout_ms(int fd, int32_t timeout_ms);
+int pm_metal_host_udp_sendto(int fd, const void *buf, uint32_t len, const pm_metal_net_addr_t *to);
+int pm_metal_host_udp_recv(int fd, void *buf, uint32_t cap, uint32_t *out_len);
+
+int pm_metal_port_udp_open(uint8_t family)
+{
+	return pm_metal_host_udp_open(family);
+}
+
+int pm_metal_port_udp_close(int fd)
+{
+	return pm_metal_host_udp_close(fd);
+}
+
+int pm_metal_port_udp_set_timeout_ms(int fd, int32_t timeout_ms)
+{
+	return pm_metal_host_udp_set_timeout_ms(fd, timeout_ms);
+}
+
+int pm_metal_port_udp_sendto(int fd, const void *buf, uint32_t len, const pm_metal_net_addr_t *to)
+{
+	return pm_metal_host_udp_sendto(fd, buf, len, to);
+}
+
+int pm_metal_port_udp_recv(int fd, void *buf, uint32_t cap, uint32_t *out_len)
+{
+	return pm_metal_host_udp_recv(fd, buf, cap, out_len);
+}
+
+#elif !defined(CONFIG_NET_SOCKETS)
 
 int pm_metal_port_udp_open(uint8_t family)
 {
@@ -45,6 +76,8 @@ int pm_metal_port_udp_recv(int fd, void *buf, uint32_t cap, uint32_t *out_len)
 }
 
 #else /* CONFIG_NET_SOCKETS */
+
+#include <string.h>
 
 #include <zephyr/net/socket.h>
 
@@ -146,4 +179,4 @@ int pm_metal_port_udp_recv(int fd, void *buf, uint32_t cap, uint32_t *out_len)
 	return 0;
 }
 
-#endif /* CONFIG_NET_SOCKETS */
+#endif

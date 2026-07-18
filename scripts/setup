@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Shared setup interface — platform bring-up in setup.d/port/, deps in setup.d/deps/.
+# Usage: scripts/setup <name>
+#        scripts/setup all
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DEPS="${ROOT}/scripts/setup.d/deps"
+PORT="${ROOT}/scripts/setup.d/port"
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/run-steps.sh"
+
+usage() {
+	cat >&2 <<'EOF'
+usage: scripts/setup <name>
+       scripts/setup all
+
+Deps (setup.d/deps/):
+  tools  wamr  lz4  microtar  monocypher  mbedtls  nghttp2  curl  net
+  cpython  ide
+
+  net  — chains monocypher + mbedtls + nghttp2 + curl
+
+Platform bring-up (setup.d/port/):
+  nuttx   — external/nuttx + apps + WAMR deps
+  west    — Zephyr west update + WAMR (alias for zephyr west)
+
+  all     — tools + wamr + lz4 + microtar + net + cpython + west + nuttx + ide
+EOF
+	exit 1
+}
+
+[[ $# -ge 1 ]] || usage
+name="$1"
+shift
+
+case "${name}" in
+-h | --help | help) usage ;;
+all)
+	[[ $# -eq 0 ]] || usage
+	pm_run_steps "${ROOT}/scripts/setup" \
+		"tools" \
+		"wamr" \
+		"lz4" \
+		"microtar" \
+		"net" \
+		"cpython" \
+		"west" \
+		"nuttx" \
+		"ide"
+	exit $?
+	;;
+nuttx)
+	exec "${PORT}/nuttx/default.sh" "$@"
+	;;
+west)
+	exec "${PORT}/zephyr/west.sh" "$@"
+	;;
+*)
+	script="${DEPS}/${name}.sh"
+	if [[ ! -f "${script}" ]]; then
+		echo "unknown setup name: ${name}" >&2
+		usage
+	fi
+	exec "${script}" "$@"
+	;;
+esac

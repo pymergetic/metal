@@ -1,7 +1,7 @@
 WAMR's zephyr/module.yml sets kconfig-ext without shipping a Kconfig;
 Zephyr west then fails module discovery. Point at a tiny stub Kconfig
 instead (Metal wires WAMR from src/zephyr/CMakeLists.txt via
-runtime_lib.cmake). Formerly created by scripts/setup-west.sh sed/cat
+runtime_lib.cmake). Formerly created by scripts/setup west sed/cat
 — now a tracked patch. See docs/SOURCETREE.md "Vendoring".
 
 diff --git a/zephyr/module.yml b/zephyr/module.yml

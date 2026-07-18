@@ -1,43 +1,54 @@
 # Memory model — pools, linear memory, mounts
 
-Compact comparison across platforms. Keep these knobs in lockstep or Zephyr
-instantiate fails with `allocate linear memory failed`.
+Server-class layout is **one shared preference** on every platform
+(`src/common/pymergetic/metal/memory/layout.h`, mirrored by
+`scripts/lib/memory-layout.sh`):
+
+| Pool | Size | Role |
+|------|------|------|
+| kheap | **256 MiB** | WAMR `Alloc_With_Pool` — guest linear mem (Zephyr), stacks, EMS |
+| bytecode | **64 MiB** | raw `.wasm` buffers (`load_file` / `load_bytes`) |
+| WASM stack | **16 MiB** | per-instantiate operand stack (default) |
+
+Linux / NuttX CLIs omit `--memory=` / `--bytecode-memory=` /
+`--stack-memory=` to get these defaults. Zephyr prefers the same sizes,
+capped by probed/`STATIC_POOL` `arena_budget`. Platforms differ only in
+**backing** (malloc / host mmap / BSS / MMU map), not in the split.
 
 ## Guest linear memory vs host pools
 
-| Quantity | Linux | Zephyr native_sim | Zephyr qemu_x86_64 |
-|----------|-------|-------------------|--------------------|
-| Mod build `--max-memory` | **4 MiB** shared (`scripts/build-mod.sh`) | same | same |
+| Quantity | Linux / NuttX | Zephyr native_sim | Zephyr qemu_x86_64 |
+|----------|---------------|-------------------|--------------------|
+| Mod build `--max-memory` | **4 MiB** shared (`scripts/build mod none`) | same | same |
 | Linear mem backing | host `mmap` (not from kheap) | WAMR `BH_MALLOC` → **kheap** | same |
-| WAMR kheap pool | CLI `--memory=` (verify: 16 MiB) | capped **12 MiB** of 24 MiB static | capped **12 MiB** of `arena_budget` |
-| Bytecode arena | CLI `--bytecode-memory=` (1 MiB) | prefer **4 MiB** | prefer **4 MiB** |
-| `machine_ram` / budget | `sysconf` diag only | `STATIC_POOL` 24 MiB BSS | E820 / `CONFIG_SRAM` − link − kernel heap |
+| WAMR kheap pool | layout default (256 MiB) | prefer 256 MiB of `STATIC_POOL` | prefer 256 MiB of `arena_budget` |
+| Bytecode arena | layout default (64 MiB) | prefer 64 MiB | prefer 64 MiB |
+| `machine_ram` / budget | `sysconf` / probe diag | `STATIC_POOL` 512 MiB BSS | E820 / `CONFIG_SRAM` − link − kernel heap |
 
 **Invariant (Zephyr):**
 
 ```text
-PM_METAL_ZEPHYR_MEMORY_REQ  ≥  2 × MAX_MEMORY  + WAMR slack
+PM_METAL_MEMORY_KHEAP_BYTES  ≥  2 × MAX_MEMORY  + WAMR slack
+STATIC_POOL / arena          ≥  kheap + bytecode
 ```
 
 WAMR reserves the **full** shared-memory max at instantiate. Multimod can hold
-two instances. Raising `MAX_MEMORY` without raising
-`src/zephyr/main.c`'s `MEMORY_REQ` (and native_sim
-`CONFIG_PM_METAL_STATIC_POOL_BYTES`) re-breaks Zephyr.
+two instances. Raising `MAX_MEMORY` without keeping `layout.h` (and native_sim
+`CONFIG_PM_METAL_STATIC_POOL_BYTES`) honest re-breaks Zephyr instantiate
+(`allocate linear memory failed`).
 
-Linux `--memory=` only sizes WAMR's internal EMS/kheap bookkeeping — it does
-**not** size guest linear memory.
+On Linux/NuttX, `--memory=` sizes WAMR's EMS/kheap bookkeeping (and stacks);
+guest linear memory is still host `mmap` and is **not** carved from that pool.
 
 ## VFS / disks
 
 | Mount | Linux | Zephyr | Size |
 |-------|-------|--------|------|
-| Root Stage A | `hostdir:<dir>` | FAT on DT `RAM` @ `/RAM:` | Zephyr: **8 MiB** ramdisk |
+| Root Stage A | `hostdir:<dir>` | FAT on DT `RAM` @ `/RAM:` | Zephyr: large FAT for python stdlib |
 | tmpfs `scratch` | `/dev/shm` via `mkdtemp` | littlefs on DT `scratch` | Zephyr: **1 MiB** |
 | tmpfs `other` | same | littlefs on DT `other` | Zephyr: **1 MiB** |
 | DT `scratch2` | — | present, unused by fstab | 1 MiB |
 | Mount table / `/proc` buf | 8 mounts / 16 KiB | same | shared caps |
-
-Zephyr ramdisk BSS ≈ 8+1+1+1 = **11 MiB** inside `link_used` on qemu.
 
 ## Related docs
 

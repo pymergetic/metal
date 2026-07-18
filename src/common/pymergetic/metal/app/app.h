@@ -40,16 +40,25 @@ typedef struct pm_metal_app_cli_mount {
  * (cli_mount_count == 0 is fine, cli_mounts may be NULL then) — CLI
  * mounts intentionally applied *after* the real fstab, so a CLI mount at
  * the same target path wins (last-mount-wins, see mount/table.h). Then
- * loads, runs (argv[0] = its basename), and unloads each of
- * wasm_argv[0..wasm_argc), in order, via runtime/process.h's spawn()+wait()
- * — sequential/blocking, one after another. Logs "<path>: exit=%d" to
- * real stdout per module (fflush()ed immediately). Calls
- * pm_metal_process_shutdown() + pm_metal_runtime_shutdown() itself before
- * returning, whether or not every module succeeded. Returns 0 if every
- * module exited 0, else 1 — never -1/negative, safe to return straight
- * from main(). `argv0` is used only in its own stderr diagnostics
- * ("<argv0>: load failed: <path>", etc). */
+ * loads, runs, and unloads each of wasm_argv[0..wasm_argc), in order, via
+ * runtime/process.h's spawn()+wait() — sequential/blocking, one after
+ * another. Logs "<path>: exit=%d" to real stdout per module (fflush()ed
+ * immediately). Calls pm_metal_process_shutdown() +
+ * pm_metal_runtime_shutdown() itself before returning, whether or not
+ * every module succeeded. Returns 0 if every module exited 0, else 1 —
+ * never -1/negative, safe to return straight from main(). `argv0` is used
+ * only in its own stderr diagnostics ("<argv0>: load failed: <path>", etc).
+ *
+ * Guest argv/env:
+ * - guest_argc == 0 and guest_envc == 0 (or guest_argv/guest_envp NULL):
+ *   multi-mod mode — each wasm path runs with argv = [basename] and no
+ *   extra env (same as historically).
+ * - guest_argc > 0 or guest_envc > 0: single-guest mode — wasm_argc must
+ *   be 1; spawn uses guest_argv (argv[0] should be the basename) and
+ *   guest_envp. Used by CLI `--` / `--env=` for python.wasm etc. */
 int pm_metal_app_run_scripted(const char *argv0, int wasm_argc, char **wasm_argv,
-			       const pm_metal_app_cli_mount_t *cli_mounts, size_t cli_mount_count);
+			       const pm_metal_app_cli_mount_t *cli_mounts, size_t cli_mount_count,
+			       int guest_argc, char **guest_argv, int guest_envc,
+			       const char **guest_envp);
 
 #endif /* PYMERGETIC_METAL_APP_APP_H_ */

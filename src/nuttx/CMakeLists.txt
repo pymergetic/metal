@@ -23,7 +23,7 @@ if(CONFIG_PYMERGETIC_METAL)
   endif()
 
   if(NOT EXISTS "${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake")
-    message(FATAL_ERROR "WAMR not found at ${WAMR_ROOT_DIR}; run scripts/setup-wamr.sh")
+    message(FATAL_ERROR "WAMR not found at ${WAMR_ROOT_DIR}; run scripts/setup wamr")
   endif()
 
   set(WAMR_BUILD_PLATFORM "nuttx")
@@ -137,6 +137,7 @@ if(CONFIG_PYMERGETIC_METAL)
       ${PM_COMMON}/mount/proc/environ.c
       ${PM_COMMON}/mount/tmpfs_registry.c
       ${PM_COMMON}/mount/populate.c
+      ${PM_COMMON}/mount/pkg.c
       ${PM_COMMON}/mount/table.c
       ${PM_COMMON}/mount/mount.c
       ${PM_COMMON}/mount/fstab.c
@@ -164,6 +165,29 @@ if(CONFIG_PYMERGETIC_METAL)
       ${PM_COMMON}/net/http.c
       ${WAMR_RUNTIME_LIB_SOURCE})
 
+  # Named lz4 guest packages (scripts/lib/guest-pkgs.sh → build/guest-pkgs/).
+  set(PM_METAL_GUEST_PKGS_CMAKE "${PM_METAL_ROOT}/build/guest-pkgs/pkgs.cmake")
+  if(EXISTS "${PM_METAL_GUEST_PKGS_CMAKE}")
+    include(${PM_METAL_GUEST_PKGS_CMAKE})
+    if(DEFINED PM_METAL_GUEST_PKG_SOURCES)
+      list(APPEND PM_METAL_NUTTX_SRCS ${PM_METAL_GUEST_PKG_SOURCES})
+    else()
+      list(APPEND PM_METAL_NUTTX_SRCS ${PM_COMMON}/mount/pkg_embed_stub.c)
+    endif()
+  else()
+    list(APPEND PM_METAL_NUTTX_SRCS ${PM_COMMON}/mount/pkg_embed_stub.c)
+  endif()
+
+  set(PM_METAL_NUTTX_DEFS
+      PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_NUTTX
+      PM_METAL_RUNTIME_MULTI_MODULE=1
+      WASM_HAVE_MREMAP=0
+      PM_METAL_HAVE_CURL=1)
+  # Host mmap pools for large python.wasm budgets — see memory/{kheap,bytecode}.c
+  if(CONFIG_ARCH_SIM)
+    list(APPEND PM_METAL_NUTTX_DEFS PM_METAL_NUTTX_HOST_POOL=1)
+  endif()
+
   nuttx_add_application(
     NAME
     pm_metal
@@ -178,6 +202,7 @@ if(CONFIG_PYMERGETIC_METAL)
     INCLUDE_DIRECTORIES
     ${PM_COMMON_INC}
     ${PM_INCLUDE_INC}
+    ${PM_METAL_ROOT}/external/curl/include
     ${WAMR_ROOT_DIR}/core/shared/platform/nuttx
     ${WAMR_ROOT_DIR}/core/shared/platform/include
     ${WAMR_ROOT_DIR}/core/shared/platform/common/posix
@@ -190,8 +215,18 @@ if(CONFIG_PYMERGETIC_METAL)
     -Wno-unused-variable
     -DWASM_HAVE_MREMAP=0
     DEFINITIONS
-    PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_NUTTX
-    PM_METAL_RUNTIME_MULTI_MODULE=1
-    WASM_HAVE_MREMAP=0)
+    ${PM_METAL_NUTTX_DEFS})
+
+  # Host DNS/UDP + libcurl + large mmap pools for sim — final nuttx link
+  # only (not nuttx.rel).
+  if(CONFIG_ARCH_SIM)
+    target_sources(nuttx PRIVATE
+      ${CMAKE_CURRENT_LIST_DIR}/pymergetic/metal/port/host_net_adapt.c
+      ${CMAKE_CURRENT_LIST_DIR}/pymergetic/metal/port/host_mem_adapt.c)
+    target_include_directories(nuttx PRIVATE ${PM_INCLUDE_INC})
+    target_link_libraries(nuttx PRIVATE
+      dl
+      /usr/lib/x86_64-linux-gnu/libcurl.so.4)
+  endif()
 
 endif()

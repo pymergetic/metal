@@ -49,7 +49,7 @@ set(WAMR_BUILD_LIB_PTHREAD 0)
 # runtime_lib.cmake), which is what makes runtime.c's
 # pm_metal_runtime_terminate() able to actually interrupt a hot compute loop
 # (its CHECK_SUSPEND_FLAGS() poll is compiled out entirely without this —
-# see scripts/verify-linux-process.sh) rather than only ever being noticed at
+# see scripts/verify linux none process) rather than only ever being noticed at
 # an import-call boundary.
 set(WAMR_BUILD_LIB_WASI_THREADS 1)
 set(WAMR_BUILD_MINI_LOADER 0)
@@ -150,6 +150,7 @@ add_executable(pm-linux-runtime
 	${PM_COMMON}/mount/proc/environ.c
 	${PM_COMMON}/mount/tmpfs_registry.c
 	${PM_COMMON}/mount/populate.c
+	${PM_COMMON}/mount/pkg.c
 	${PM_COMMON}/mount/table.c
 	${PM_COMMON}/mount/mount.c
 	${PM_COMMON}/mount/fstab.c
@@ -177,9 +178,23 @@ add_executable(pm-linux-runtime
 	${PM_COMMON}/net/http.c
 )
 
-# Optional embed .c from scripts/pack-image.sh (Phase 4 populate) — link when
-# the file exists so verify-linux-populate.sh can regenerate + rebuild without
-# permanently baking a fixture into the default binary.
+# Named lz4 guest packages (scripts/lib/guest-pkgs.sh → build/guest-pkgs/).
+# Linked into every Linux binary that loads guest mods (runtime + harnesses).
+set(PM_METAL_HAVE_GUEST_PKG_SOURCES 0)
+set(PM_METAL_GUEST_PKGS_CMAKE "${PM_METAL_ROOT}/build/guest-pkgs/pkgs.cmake")
+if(EXISTS "${PM_METAL_GUEST_PKGS_CMAKE}")
+	include(${PM_METAL_GUEST_PKGS_CMAKE})
+	if(DEFINED PM_METAL_GUEST_PKG_SOURCES)
+		set(PM_METAL_HAVE_GUEST_PKG_SOURCES 1)
+	endif()
+endif()
+if(PM_METAL_HAVE_GUEST_PKG_SOURCES)
+	target_sources(pm-linux-runtime PRIVATE ${PM_METAL_GUEST_PKG_SOURCES})
+else()
+	target_sources(pm-linux-runtime PRIVATE ${PM_COMMON}/mount/pkg_embed_stub.c)
+endif()
+
+# Optional anonymous populate embed (verify linux populate only).
 set(PM_METAL_POPULATE_EMBED "" CACHE FILEPATH "Optional mount populate embed .c from pack-image.sh")
 if(PM_METAL_POPULATE_EMBED AND EXISTS "${PM_METAL_POPULATE_EMBED}")
 	target_sources(pm-linux-runtime PRIVATE "${PM_METAL_POPULATE_EMBED}")
@@ -213,7 +228,7 @@ target_link_libraries(pm-linux-runtime PRIVATE
 	pthread
 )
 
-# ---- pm-linux-thread-stress (opt-in — see scripts/verify-linux-threads.sh) ----
+# ---- pm-linux-thread-stress (opt-in — see scripts/verify linux none threads) ----
 # Same common/port/memory sources as pm-linux-runtime, minus main.c, plus a
 # pthread-based stress harness. EXCLUDE_FROM_ALL: not part of a normal build.
 
@@ -248,6 +263,7 @@ add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
 	${PM_COMMON}/mount/proc/environ.c
 	${PM_COMMON}/mount/tmpfs_registry.c
 	${PM_COMMON}/mount/populate.c
+	${PM_COMMON}/mount/pkg.c
 	${PM_COMMON}/mount/table.c
 	${PM_COMMON}/mount/mount.c
 	${PM_COMMON}/mount/fstab.c
@@ -284,6 +300,12 @@ target_compile_definitions(pm-linux-thread-stress PRIVATE
 	PM_METAL_HAVE_CURL=1
 )
 
+if(PM_METAL_HAVE_GUEST_PKG_SOURCES)
+	target_sources(pm-linux-thread-stress PRIVATE ${PM_METAL_GUEST_PKG_SOURCES})
+else()
+	target_sources(pm-linux-thread-stress PRIVATE ${PM_COMMON}/mount/pkg_embed_stub.c)
+endif()
+
 target_link_libraries(pm-linux-thread-stress PRIVATE
 	pm-wamr-vmlib
 	${PM_METAL_NET_LIBS}
@@ -292,7 +314,7 @@ target_link_libraries(pm-linux-thread-stress PRIVATE
 	pthread
 )
 
-# ---- pm-linux-process-test (opt-in — see scripts/verify-linux-process.sh) ----
+# ---- pm-linux-process-test (opt-in — see scripts/verify linux none process) ----
 # runtime/process.h's own spawn()/wait()/kill() end-to-end, incl. worker.c
 # (process.c's real dependency, unlike thread-stress above which drives
 # runtime.h directly with its own pthreads). EXCLUDE_FROM_ALL: not part of
@@ -331,6 +353,7 @@ add_executable(pm-linux-process-test EXCLUDE_FROM_ALL
 	${PM_COMMON}/mount/proc/environ.c
 	${PM_COMMON}/mount/tmpfs_registry.c
 	${PM_COMMON}/mount/populate.c
+	${PM_COMMON}/mount/pkg.c
 	${PM_COMMON}/mount/table.c
 	${PM_COMMON}/mount/mount.c
 	${PM_COMMON}/mount/fstab.c
@@ -368,6 +391,12 @@ target_compile_definitions(pm-linux-process-test PRIVATE
 	PM_METAL_RUNTIME_MULTI_MODULE=1
 	PM_METAL_HAVE_CURL=1
 )
+
+if(PM_METAL_HAVE_GUEST_PKG_SOURCES)
+	target_sources(pm-linux-process-test PRIVATE ${PM_METAL_GUEST_PKG_SOURCES})
+else()
+	target_sources(pm-linux-process-test PRIVATE ${PM_COMMON}/mount/pkg_embed_stub.c)
+endif()
 
 target_link_libraries(pm-linux-process-test PRIVATE
 	pm-wamr-vmlib

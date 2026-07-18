@@ -1,7 +1,7 @@
 /*
  * LZ4 block (de)compression — thin wrapper around the vendored upstream
  * library (external/lz4/lib/lz4.{c,h}, pinned + reproduced by
- * scripts/setup-lz4.sh, see docs/SOURCETREE.md "Vendoring"): plain LZ4
+ * scripts/setup lz4, see docs/SOURCETREE.md "Vendoring"): plain LZ4
  * block format (no frame header, no checksum, no dictionary) via
  * upstream's own LZ4_compressBound() / LZ4_compress_default() /
  * LZ4_decompress_safe().

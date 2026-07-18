@@ -1,5 +1,5 @@
 /*
- * Memory — linux bytecode ops (bind).
+ * Memory — nuttx bytecode ops (bind).
  *
  * pm_metal_util_arena_* has no locking of its own (see util/arena.h) and
  * alloc()/free() mutate its free-list on every call, so concurrent
@@ -9,13 +9,24 @@
  * once each per init()/shutdown() cycle, from runtime.c's single
  * controller thread (same contract as runtime.c's own lock) — no
  * concurrent access to guard there, only alloc()/free() need it.
+ *
+ * Large pools: host mmap on sim (see kheap.c / host_mem_adapt.c).
  */
 #include "pymergetic/metal/memory/bytecode.h"
 
+#include <stddef.h>
 #include <stdlib.h>
 
 #include "pymergetic/metal/port/lock.h"
 #include "pymergetic/metal/util/arena.h"
+
+/* PM_METAL_NUTTX_HOST_POOL is set by CMake on CONFIG_ARCH_SIM (not via
+ * nuttx/config.h — that header is outside clangd's Metal compile DB). */
+#if defined(PM_METAL_NUTTX_HOST_POOL)
+/* Defined in host_mem_adapt.c (final nuttx link). */
+void *pm_metal_host_pool_alloc(size_t bytes);
+void pm_metal_host_pool_free(void *ptr, size_t bytes);
+#endif
 
 static void *g_pm_metal_memory_bytecode_block;
 static pm_metal_util_arena_t *g_pm_metal_memory_bytecode_arena;
@@ -25,16 +36,29 @@ static pm_metal_port_mutex_t g_pm_metal_memory_bytecode_lock;
 static void *pm_metal_memory_nuttx_bytecode_establish(uint64_t requested_bytes,
 						       uint64_t *out_bytes)
 {
-	void *block = malloc((size_t)requested_bytes);
+	void *block;
+	pm_metal_util_arena_t *arena;
 
+	if (requested_bytes == 0 || requested_bytes > SIZE_MAX) {
+		return NULL;
+	}
+
+#if defined(PM_METAL_NUTTX_HOST_POOL)
+	block = pm_metal_host_pool_alloc((size_t)requested_bytes);
+#else
+	block = malloc((size_t)requested_bytes);
+#endif
 	if (!block) {
 		return NULL;
 	}
 
-	pm_metal_util_arena_t *arena = pm_metal_util_arena_init(block, (size_t)requested_bytes);
-
+	arena = pm_metal_util_arena_init(block, (size_t)requested_bytes);
 	if (!arena) {
+#if defined(PM_METAL_NUTTX_HOST_POOL)
+		pm_metal_host_pool_free(block, (size_t)requested_bytes);
+#else
 		free(block);
+#endif
 		return NULL;
 	}
 
@@ -52,7 +76,12 @@ static void pm_metal_memory_nuttx_bytecode_release(void)
 {
 	pm_metal_port_mutex_destroy(&g_pm_metal_memory_bytecode_lock);
 
+#if defined(PM_METAL_NUTTX_HOST_POOL)
+	pm_metal_host_pool_free(g_pm_metal_memory_bytecode_block,
+				(size_t)g_pm_metal_memory_bytecode_bytes);
+#else
 	free(g_pm_metal_memory_bytecode_block);
+#endif
 	g_pm_metal_memory_bytecode_block = NULL;
 	g_pm_metal_memory_bytecode_arena = NULL;
 	g_pm_metal_memory_bytecode_bytes = 0;

@@ -1,0 +1,38 @@
+# When PYTHONHOME is taken from the environment inside getpath, also set
+# home_was_set (same as Py_SetPythonHome / PyConfig.home). Without this, WASI
+# embeds that only surface ENV_PYTHONHOME still probe ._pth / pybuilddir /
+# Modules / pyvenv.cfg, and a present pyvenv.cfg rewrites prefix to
+# dirname(dirname(executable)) — fighting PYTHONHOME=/.
+# No Metal src/ workaround: path calc lives entirely in frozen getpath.
+# Apply via scripts/setup cpython only.
+diff --git a/Modules/getpath.py b/Modules/getpath.py
+index b89d7427e3f..3de8a685e00 100644
+--- a/Modules/getpath.py
++++ b/Modules/getpath.py
+@@ -336,6 +336,11 @@ def search_up(prefix, *landmarks, test=isfile):
+     home_was_set = True
+ elif use_environment and ENV_PYTHONHOME and not py_setpath:
+     home = ENV_PYTHONHOME
++    # Match PyConfig.home from PYTHONHOME: an explicit home must skip
++    # ._pth / in-tree build-layout probes (same as Py_SetPythonHome).
++    # Without this, wasi embeds that only surface ENV_PYTHONHOME inside
++    # getpath still open python.wasm._pth / pybuilddir.txt / Modules/*.
++    home_was_set = True
+ 
+ 
+ # ******************************************************************************
+@@ -345,9 +350,11 @@ def search_up(prefix, *landmarks, test=isfile):
+ venv_prefix = None
+ 
+ # Calling Py_SetPath() will override venv detection.
+-# Calling Py_SetPythonHome() or setting $PYTHONHOME will override the 'home' key
+-# specified in pyvenv.cfg.
+-if not py_setpath:
++# Calling Py_SetPythonHome() or setting $PYTHONHOME (home_was_set) skips
++# venv detection entirely — same as ._pth / build-layout probes. An explicit
++# home must not open pyvenv.cfg (ENOENT noise) nor let a present cfg rewrite
++# prefix to dirname(dirname(executable)).
++if not py_setpath and not home_was_set:
+     try:
+         # prefix2 is just to avoid calculating dirname again later,
+         # as the path in venv_prefix is the more common case.

@@ -41,7 +41,7 @@ Reason optional (`WAMR provides`, `plat-only`, …). Makes gaps grep-able and re
 | per-plat | `src/<plat>/pymergetic/metal/…/foo.c` |
 | plat-private | `src/<plat>/pymergetic/metal/…/foo.h` · `foo.c` (no common header) |
 
-Exceptions: `main.c`, `mods/*/main.c`.
+Exceptions: `main.c`, `mods/tests/*/main.c`.
 
 ### Impl sites (per function)
 
@@ -253,46 +253,33 @@ packages/metal/
 │   └── unikraft/                  # [stub]
 │
 ├── tests/                         # smoke harnesses for common runtime/process APIs — not plat code
-│   ├── process_test.c             # pm-linux-process-test — see scripts/verify-linux-process.sh
-│   ├── thread_stress_test.c       # pm-linux-thread-stress — see scripts/verify-linux-threads.sh
+│   ├── process_test.c             # pm-linux-process-test — see scripts/verify linux process
+│   ├── thread_stress_test.c       # pm-linux-thread-stress — see scripts/verify linux threads
 │   ├── zephyr_verify.h
 │   └── zephyr_verify.c            # CONFIG_PM_METAL_VERIFY_MODS boot suite (embed stage + batches)
 │
 ├── mods/
-│   ├── t0_hello/main.c
-│   ├── t1_read/main.c
-│   ├── t2_env/main.c
-│   ├── t3_util_native/main.c      # exercises util/{size,arena,log,lz4,tar}.h's wasi-style imports end to end
-│   ├── t31_net_util/main.c        # exercises util/{crypto,ntp,http}.h (needs network for ntp/http)
-│   ├── t4_getpid/main.c           # getenv("PID") — see docs/RUNTIME.md "Processes"
-│   ├── t5_spin/main.c             # infinite loop — proves process.h's kill(), see docs/RUNTIME.md "Threading"
-│   ├── t6_pipe_writer/main.c      # paired with t7 below — see docs/RUNTIME.md "Processes" > "Pipes"
-│   ├── t7_pipe_reader/main.c
-│   ├── t8_multimod_lib/main.c     # REACTOR marker (no _start) — dependency half, see docs/RUNTIME.md "Multi-module"
-│   ├── t9_multimod_app/main.c     # imports t8's add() directly, no host round-trip
-│   ├── t10_socket_server/main.c   # SOCKET marker — WASI preview1 sockets, see docs/RUNTIME.md "Sockets"
-│   ├── t11_socket_client/main.c   # paired with t10 above, bounded connect() retry
-│   ├── t1y_mount_data/main.c      # opens /data/README — non-root mount table entry, see docs/MOUNT.md, scripts/verify-linux-mount.sh
-│   ├── t12_tmpfs_write/main.c     # writes through a tmpfs mount — paired with t13 below, see docs/MOUNT.md, scripts/verify-linux-tmpfs.sh
-│   ├── t13_tmpfs_read/main.c      # reads t12's write back from a separate process, same tmpfs mount
-│   ├── t14_tmpfs_read_alt/main.c  # reads via a second fstab line naming the same tmpfs source — proves reuse, not re-creation
-│   ├── t15_tmpfs_read_other/main.c # reads a differently-named tmpfs source — proves independence (expected to fail)
-│   ├── t16_populate_read/main.c   # reads /scratch/hello.txt planted by populate_all() — see scripts/verify-linux-populate.sh
-│   ├── t17_sys_mount/main.c       # MOUNT marker — mount tmpfs at /dyn + same-process use (live remount)
-│   ├── t18_sys_use/main.c         # write+read /dyn after t17 (next process still sees the mount)
-│   ├── t19_sys_umount/main.c      # MOUNT marker — privileged guest umount(/dyn)
-│   ├── t20_sys_gone/main.c        # open /dyn must fail after t19
-│   ├── t21_proc_mounts/main.c     # reads Metal /proc nodes + /proc/self — see scripts/verify-linux-proc.sh
-│   ├── t22_fstypes/main.c         # lists fstypes via mount.h readonly imports
-│   └── t23_pthread/main.c         # guest pthread_create/join — default wasm32-wasip1-threads build
+│   ├── tests/                     # harness .wasm sources → guest /mods/tests/<name>.wasm
+│   │   ├── t0_hello/main.c
+│   │   ├── t1_read/main.c
+│   │   ├── t2_env/main.c
+│   │   ├── t3_util_native/main.c  # util/{size,arena,log,lz4,tar}.h imports
+│   │   ├── t4_getpid/ … t31_net_util/  # process/pipe/socket/tmpfs/mount/proc/net/…
+│   │   └── t8_multimod_lib/ + t9_multimod_app/  # multi-module (REACTOR on t8)
+│   └── apps/
+│       └── python/                # manifest; binary from scripts/build cpython
 │
 ├── build/                         # gitignored
 │   ├── linux/runtime/
 │   ├── zephyr/{native_sim,native_sim_mod,qemu_x86_64,qemu_x86_64_mod}/
-│   ├── mods/
+│   ├── mods/tests/                # compile scratch
+│   ├── guest-package/mods/{tests,apps}/  # symmetric package (all platforms)
+│   ├── cpython/python.wasm
 │   └── ide/
 │
-├── scripts/                       # setup/build-nuttx-sim.sh; verify-linux-{mount,tmpfs,...}.sh; zephyr helpers
+├── scripts/                       # setup|build|verify dispatchers
+│                                  # *.d/{expect,suite,…} = agnostic; *.d/port/<plat>/ = per-host
+│                                  # build.d/guest/ = wasm artifacts; setup.d/deps/; lib/
 ├── patches/{wamr,microtar}/       # tracked diffs against external/{wamr,microtar} — see "Vendoring" above
 ├── docs/
 ├── external/                      # gitignored — plain upstream checkouts, reproduced by scripts/setup-{wamr,lz4,microtar,net}.sh + patches/ above
@@ -332,8 +319,8 @@ packages/metal/
 | `util/arena` | `include/…/arena.h` | `src/common/…/util/arena.c` — `impl: common` + its own wasi-import bridge; backs `memory/bytecode.c`'s arena |
 | `util/log` | `include/…/log.h` | `src/common/…/util/log.c` — `impl: common` + its own wasi-import bridge |
 | `util/lz4` | `include/…/lz4.h` | `src/common/…/util/lz4.c` — `impl: common` + its own wasi-import bridge; thin wrapper over vendored `external/lz4` (see "Vendoring") |
-| `util/tar` | `include/…/tar.h` | `src/common/…/util/tar.c` — `impl: common` + its own wasi-import bridge; thin wrapper over vendored + patched `external/microtar` (see "Vendoring") — independent of `util/lz4`, a caller composes both for a compressed archive (see `mods/t3_util_native`) |
-| `util/crypto` | `include/…/crypto.h` | `src/common/…/util/crypto.c` — Monocypher (`external/monocypher`, `scripts/setup-monocypher.sh`) |
+| `util/tar` | `include/…/tar.h` | `src/common/…/util/tar.c` — `impl: common` + its own wasi-import bridge; thin wrapper over vendored + patched `external/microtar` (see "Vendoring") — independent of `util/lz4`, a caller composes both for a compressed archive (see `mods/tests/t3_util_native`) |
+| `util/crypto` | `include/…/crypto.h` | `src/common/…/util/crypto.c` — Monocypher (`external/monocypher`, `scripts/setup monocypher`) |
 | `port/dns` | `src/common/…/port/dns.h` | OS DNS resolve — `impl: bind` |
 | `port/udp` | `src/common/…/port/udp.h` | OS UDP open/sendto/recv/close — `impl: bind` |
 | `port/tcp` | `src/common/…/port/tcp.h` | OS TCP open/bind/listen/accept/connect/send/recv — `impl: bind` |
@@ -396,7 +383,7 @@ Adapt WAMR, Zephyr, wasi-sdk, etc. from `src/` (CMake flags, shims, wrappers) fi
 
 ### Vendoring
 
-`external/wamr` (and any future `external/<dep>`) is a plain upstream checkout pinned to one tag/commit, reproduced by `scripts/setup-<dep>.sh` (e.g. `scripts/setup-wamr.sh`) — never committed itself (gitignored), so re-running that script after `rm -rf external/<dep>` always gets back to the exact same tree. When a fix genuinely can't be done from `src/`'s side (see above), the script also applies this repo's own `patches/<dep>/NNNN-*.patch` files (in order, via `git apply`, against the pinned checkout) — those *are* tracked (plain diffs, reviewable in a normal PR), so the fix survives a fresh re-vendor without ever hand-editing the checked-out tree itself. Each patch file's own leading comment (before its `diff --git`) says which upstream bug it works around and why `src/` alone couldn't. Bump the pin + patches together, in the same change, if upstream ever fixes the same bug differently.
+`external/wamr` (and any future `external/<dep>`) is a plain upstream checkout pinned to one tag/commit, reproduced by `scripts/setup-<dep>.sh` (e.g. `scripts/setup wamr`) — never committed itself (gitignored), so re-running that script after `rm -rf external/<dep>` always gets back to the exact same tree. When a fix genuinely can't be done from `src/`'s side (see above), the script also applies this repo's own `patches/<dep>/NNNN-*.patch` files (in order, via `git apply`, against the pinned checkout) — those *are* tracked (plain diffs, reviewable in a normal PR), so the fix survives a fresh re-vendor without ever hand-editing the checked-out tree itself. Each patch file's own leading comment (before its `diff --git`) says which upstream bug it works around and why `src/` alone couldn't. Bump the pin + patches together, in the same change, if upstream ever fixes the same bug differently.
 
 ---
 
@@ -406,7 +393,9 @@ Adapt WAMR, Zephyr, wasi-sdk, etc. from `src/` (CMake flags, shims, wrappers) fi
 |------|--------|
 | `build/linux/runtime/` | `pm-linux-runtime` |
 | `build/zephyr/<profile>/` | `zephyr.elf` / `zephyr.exe` |
-| `build/mods/` | `*.wasm` |
+| `build/mods/tests/` | compiled test `*.wasm` |
+| `build/guest-package/` | staged `/mods/{tests,apps}/` package |
+| `build/cpython/` | `python.wasm` |
 | `build/ide/` | merged `compile_commands.json` |
 
 Also gitignored: `.tools/`, `external/`, `.cache/`, `.venv/`.
@@ -418,7 +407,7 @@ Also gitignored: `.tools/`, `external/`, `.cache/`, `.venv/`.
 | Artifact | Inputs | Output |
 |----------|--------|--------|
 | **runtime binary** | `src/common/pymergetic/metal/` + `src/<plat>/` + WAMR + LZ4 + microtar | `build/<plat>/…` |
-| **mod `.wasm`** | `mods/` + wasi-sdk `wasm32-wasip1-threads` + `-I include/` | `build/mods/` — threads/shared-memory is the default (guest `pthread_create` works; see `mods/t23_pthread`); a mod meant to be *depended on* by another via multi-module (docs/RUNTIME.md "Multi-module") opts into `-mexec-model=reactor` with an empty `mods/<name>/REACTOR` marker file (`scripts/build-mod.sh`), since WAMR refuses a command module (one with `_start`) as a sub-module; a mod using sockets (docs/RUNTIME.md "Sockets") opts into WAMR's own `wasi_socket_ext.h`/`.c` (plain wasi-libc doesn't declare `socket()`/`bind()`/`connect()`/`listen()` on this target at all) the same way, via an empty `mods/<name>/SOCKET` marker file |
+| **mod `.wasm`** | `mods/tests/` + wasi-sdk `wasm32-wasip1-threads` + `-I include/` | `build/mods/tests/` then packaged to `build/guest-package/mods/tests/` — guest path `/mods/tests/<name>.wasm` on every platform (`scripts/lib/guest-package.sh`; knobs `PM_METAL_GUEST_TESTS`, `PM_METAL_APP_PYTHON`). Threads/shared-memory default; `REACTOR` / `SOCKET` / `MOUNT` empty markers under `mods/tests/<name>/` as before. Apps (python) land at `/mods/apps/<name>.wasm`. |
 
 ---
 

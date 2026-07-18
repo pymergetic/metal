@@ -7,18 +7,17 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <zephyr/fs/fs.h>
 #include <zephyr/kernel.h>
 
 #include "pymergetic/metal/mount/fstab.h"
 #include "pymergetic/metal/mount/ops.h"
+#include "pymergetic/metal/mount/pkg.h"
 #include "pymergetic/metal/mount/populate.h"
 #include "pymergetic/metal/mount/table.h"
 #include "pymergetic/metal/port/platform.h"
 #include "pymergetic/metal/runtime/process.h"
 #include "pymergetic/metal/runtime/runtime.h"
 
-#include "generated/mods_embed.h"
 #include "zephyr_verify.h"
 
 /* Bounded try_wait then kill+wait so a stuck peer cannot hang verify forever. */
@@ -57,42 +56,31 @@ static void pm_metal_zephyr_unload(pm_metal_runtime_handle_t h,
 	}
 }
 
-static int pm_metal_zephyr_stage_file(const char *path, const uint8_t *data, uint32_t len)
+/*
+ * Like pm_metal_app_run_scripted, but does not tear down process/runtime —
+ * Zephyr runs several batches in one boot. Stage B (proc/tmp/populate) runs
+ * only on the first call. Test-only scratch/other mounts are applied later.
+ */
+static int g_pm_metal_zephyr_stage_b_done;
+
+/* Test-only tmpfs layout (linux tmpfs.sh / populate.sh) — not product default. */
+static int pm_metal_zephyr_mount_scratch_tmpfs(void)
 {
-	struct fs_file_t file;
-	int rc;
-	ssize_t n;
+	static const char hello[] = "hello from populate\n";
+	char host[PM_METAL_MOUNT_HOST_PATH_MAX];
 
-	rc = pm_metal_port_mkdir("/RAM:/mods");
-	(void)rc;
-	rc = pm_metal_port_mkdir("/RAM:/etc");
-	(void)rc;
+	(void)pm_metal_mount_fstab_apply_fields("scratch", "/scratch", "tmpfs", "rw");
+	(void)pm_metal_mount_fstab_apply_fields("scratch", "/scratchB", "tmpfs", "rw");
+	(void)pm_metal_mount_fstab_apply_fields("other", "/other", "tmpfs", "rw");
 
-	fs_file_t_init(&file);
-	rc = fs_open(&file, path, FS_O_CREATE | FS_O_WRITE);
-	if (rc < 0) {
-		printk("stage: open %s failed (%d)\n", path, rc);
-		return -1;
-	}
-	n = len ? fs_write(&file, data, len) : 0;
-	fs_close(&file);
-	if (n < 0 || (uint32_t)n != len) {
-		printk("stage: write %s failed\n", path);
-		return -1;
-	}
-	if (!pm_metal_port_file_exists(path)) {
-		printk("stage: %s missing after write\n", path);
+	if (pm_metal_mount_resolve("/scratch/hello.txt", host, sizeof(host)) != 0
+	    || pm_metal_port_write_file(host, (const uint8_t *)hello,
+					(uint32_t)(sizeof(hello) - 1)) != 0) {
+		printk("verify: stage /scratch/hello.txt failed\n");
 		return -1;
 	}
 	return 0;
 }
-
-/*
- * Like pm_metal_app_run_scripted, but does not tear down process/runtime —
- * Zephyr runs several batches in one boot. Stage B (fstab/proc/populate) runs
- * only on the first call.
- */
-static int g_pm_metal_zephyr_stage_b_done;
 
 static int pm_metal_zephyr_run_batch(const char *label, int n, char **mods)
 {
@@ -100,10 +88,15 @@ static int pm_metal_zephyr_run_batch(const char *label, int n, char **mods)
 	int rc = 0;
 
 	if (!g_pm_metal_zephyr_stage_b_done) {
+		/* Same as app.c: fstab → /proc → /tmp → packages → populate. */
 		pm_metal_mount_fstab_apply("/etc/fstab");
 		if (!pm_metal_mount_exists("/proc")) {
 			(void)pm_metal_mount("/proc", PM_METAL_MOUNT_PROC, "proc", NULL);
 		}
+		if (!pm_metal_mount_exists("/tmp")) {
+			(void)pm_metal_mount("/tmp", PM_METAL_MOUNT_TMPFS, "tmp", NULL);
+		}
+		(void)pm_metal_pkg_apply_all();
 		pm_metal_mount_populate_all();
 		g_pm_metal_zephyr_stage_b_done = 1;
 	}
@@ -157,7 +150,7 @@ static int pm_metal_zephyr_process_smoke(void)
 	char *argv1[] = { "t4_getpid" };
 	int exit_code = -1;
 
-	if (pm_metal_runtime_load_file("/mods/t4_getpid.wasm", &h) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t4_getpid.wasm", &h) != 0) {
 		printk("verify: process load t4 failed\n");
 		return -1;
 	}
@@ -175,7 +168,7 @@ static int pm_metal_zephyr_process_smoke(void)
 	pm_metal_runtime_unload(h);
 
 	/* kill() must stop a still-running hot loop (mods/t5_spin). */
-	if (pm_metal_runtime_load_file("/mods/t5_spin.wasm", &h) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t5_spin.wasm", &h) != 0) {
 		printk("verify: process load t5 failed\n");
 		return -1;
 	}
@@ -262,8 +255,8 @@ static int pm_metal_zephyr_socket_pair(const char *server_mod, const char *clien
 	int server_exit = -1;
 	int client_exit = -1;
 
-	snprintf(server_path, sizeof(server_path), "/mods/%s.wasm", server_mod);
-	snprintf(client_path, sizeof(client_path), "/mods/%s.wasm", client_mod);
+	snprintf(server_path, sizeof(server_path), "/mods/tests/%s.wasm", server_mod);
+	snprintf(client_path, sizeof(client_path), "/mods/tests/%s.wasm", client_mod);
 	server_argv[0] = (char *)server_mod;
 	client_argv[0] = (char *)client_mod;
 
@@ -367,7 +360,7 @@ static int pm_metal_zephyr_socket_one(const char *mod)
 	char path[64];
 	int exit_code = -1;
 
-	snprintf(path, sizeof(path), "/mods/%s.wasm", mod);
+	snprintf(path, sizeof(path), "/mods/tests/%s.wasm", mod);
 	argv1[0] = (char *)mod;
 
 	if (pm_metal_runtime_load_file(path, &h) != 0) {
@@ -385,6 +378,45 @@ static int pm_metal_zephyr_socket_one(const char *mod)
 		return -1;
 	}
 	printk("verify: sockets %s exit=0\n", mod);
+	pm_metal_runtime_unload(h);
+	return 0;
+}
+
+static int pm_metal_zephyr_python_smoke(void)
+{
+	pm_metal_runtime_handle_t h;
+	pm_metal_process_id_t pid;
+	/* argv[0] must be the real guest path — getpath uses dirname(argv[0])
+	 * for pyvenv.cfg / build-dir probes. A bare "python.wasm" makes those
+	 * land on / and spam FatFs ENOENT. */
+	char *argv_ver[] = { "/mods/apps/python.wasm", "--version" };
+	/* Same guest path + env as Linux/NuttX — full site import, full Lib. */
+	char *argv_test[] = { "/mods/apps/python.wasm", "/mods/apps/pm-test.py" };
+	/* PYTHONHOME=/ — stdlib at /lib/python3.14 (guest packages).
+	 * PYTHONDONTWRITEBYTECODE — avoid .pyc rename/unlink traffic on FatFs. */
+	const char *envp[] = { "PYTHONHOME=/", "PYTHONDONTWRITEBYTECODE=1" };
+	int exit_code = -1;
+
+	if (pm_metal_runtime_load_file("/mods/apps/python.wasm", &h) != 0) {
+		printk("verify: python load failed\n");
+		return -1;
+	}
+	if (pm_metal_process_spawn(h, 2, argv_ver, 2, envp, -1, -1, -1, NULL, NULL, &pid) != 0
+	    || pm_metal_process_wait(pid, &exit_code) != 0 || exit_code != 0) {
+		printk("verify: python --version failed exit=%d\n", exit_code);
+		pm_metal_zephyr_unload(h, &pid);
+		return -1;
+	}
+	printk("verify: python version ok\n");
+
+	exit_code = -1;
+	if (pm_metal_process_spawn(h, 2, argv_test, 2, envp, -1, -1, -1, NULL, NULL, &pid) != 0
+	    || pm_metal_process_wait(pid, &exit_code) != 0 || exit_code != 0) {
+		printk("verify: python pm-test.py failed exit=%d\n", exit_code);
+		pm_metal_zephyr_unload(h, &pid);
+		return -1;
+	}
+	printk("verify: python exit=0\n");
 	pm_metal_runtime_unload(h);
 	return 0;
 }
@@ -410,70 +442,31 @@ static int pm_metal_zephyr_socket_smoke(void)
 int pm_metal_zephyr_verify(void)
 {
 	static const char readme[] = "hello from zephyr vfs\n";
-	static const char fstab[] =
-		"# <source>   <target>    <fstype>   <options>\n"
-		"scratch      /scratch    tmpfs      rw\n"
-		"scratch      /scratchB   tmpfs      rw\n"
-		"other        /other      tmpfs      rw\n";
 
-	char *populate[] = { "/mods/t16_populate_read.wasm" };
+	char *populate[] = { "/mods/tests/t16_populate_read.wasm" };
 	char *tmpfs_ok[] = {
-		"/mods/t12_tmpfs_write.wasm",
-		"/mods/t13_tmpfs_read.wasm",
-		"/mods/t14_tmpfs_read_alt.wasm",
+		"/mods/tests/t12_tmpfs_write.wasm",
+		"/mods/tests/t13_tmpfs_read.wasm",
+		"/mods/tests/t14_tmpfs_read_alt.wasm",
 	};
-	char *tmpfs_indep[] = { "/mods/t15_tmpfs_read_other.wasm" };
-	/* Match verify-linux.sh scripted set: t0/t1 + util natives + guest pthread. */
-	char *basic[] = { "/mods/t0_hello.wasm", "/mods/t1_read.wasm" };
-	char *utils[] = { "/mods/t3_util_native.wasm", "/mods/t23_pthread.wasm" };
-	char *proc[] = { "/mods/t21_proc_mounts.wasm" };
-	char *multimod[] = { "/mods/t9_multimod_app.wasm" };
+	char *tmpfs_indep[] = { "/mods/tests/t15_tmpfs_read_other.wasm" };
+	/* Match scripts/verify linux none scripted set: t0/t1 + util natives + guest pthread. */
+	char *basic[] = { "/mods/tests/t0_hello.wasm", "/mods/tests/t1_read.wasm" };
+	char *utils[] = { "/mods/tests/t3_util_native.wasm", "/mods/tests/t23_pthread.wasm" };
+	char *net_util[] = { "/mods/tests/t31_net_util.wasm" };
+	char *proc[] = { "/mods/tests/t21_proc_mounts.wasm" };
+	char *multimod[] = { "/mods/tests/t9_multimod_app.wasm" };
 	int rc;
 	int failures = 0;
 
+	/* Product root skel — packages land via pkg_apply_all in Stage B. */
 	if (pm_metal_port_mkdir("/RAM:/etc") != 0
 	    || pm_metal_port_write_file("/RAM:/README", (const uint8_t *)readme,
-					(uint32_t)(sizeof(readme) - 1)) != 0
-	    || pm_metal_port_write_file("/RAM:/etc/fstab", (const uint8_t *)fstab,
-					(uint32_t)(sizeof(fstab) - 1)) != 0) {
+					(uint32_t)(sizeof(readme) - 1)) != 0) {
 		printk("stage root files failed\n");
 		failures++;
 		goto verify_done;
 	}
-
-#define STAGE(name)                                                                                \
-	do {                                                                                       \
-		if (pm_metal_zephyr_stage_file("/RAM:/mods/" #name ".wasm",                        \
-					       pm_metal_embed_##name,                              \
-					       pm_metal_embed_##name##_len) != 0) {                \
-			printk("stage " #name " failed\n");                                        \
-			failures++;                                                                \
-			goto verify_done;                                                          \
-		}                                                                                  \
-	} while (0)
-
-	STAGE(t0_hello);
-	STAGE(t1_read);
-	STAGE(t3_util_native);
-	STAGE(t12_tmpfs_write);
-	STAGE(t13_tmpfs_read);
-	STAGE(t14_tmpfs_read_alt);
-	STAGE(t15_tmpfs_read_other);
-	STAGE(t16_populate_read);
-	STAGE(t21_proc_mounts);
-	STAGE(t8_multimod_lib);
-	STAGE(t9_multimod_app);
-	STAGE(t4_getpid);
-	STAGE(t5_spin);
-	STAGE(t10_socket_server);
-	STAGE(t11_socket_client);
-	STAGE(t23_pthread);
-	STAGE(t24_udp_server);
-	STAGE(t25_udp_client);
-	STAGE(t26_ipv6_server);
-	STAGE(t27_ipv6_client);
-	STAGE(t28_dns_lookup);
-#undef STAGE
 
 	rc = pm_metal_zephyr_run_batch("basic", 2, basic);
 	if (rc != 0) {
@@ -485,12 +478,23 @@ int pm_metal_zephyr_verify(void)
 		failures++;
 	}
 
-	/* Populate before tmpfs writers so t16 sees populate content. */
-	rc = pm_metal_zephyr_run_batch("populate", 1, populate);
+	/* Metal net/{dns,ntp,http} + util/crypto — needs host egress (NSOS /
+	 * QEMU user-net). Same markers as scripts/verify linux none net. */
+	rc = pm_metal_zephyr_run_batch("net", 1, net_util);
 	if (rc != 0) {
 		failures++;
 	}
 
+	/* Test-only scratch/other tmpfs + t16 fixture (not product default). */
+	if (pm_metal_zephyr_mount_scratch_tmpfs() != 0) {
+		failures++;
+		goto verify_done;
+	}
+
+	rc = pm_metal_zephyr_run_batch("populate", 1, populate);
+	if (rc != 0) {
+		failures++;
+	}
 	rc = pm_metal_zephyr_run_batch("tmpfs", 3, tmpfs_ok);
 	if (rc != 0) {
 		failures++;
@@ -522,6 +526,11 @@ int pm_metal_zephyr_verify(void)
 	}
 
 	if (pm_metal_zephyr_socket_smoke() != 0) {
+		failures++;
+	}
+
+	/* After pkg_apply (python-stdlib + mods-apps-python) — CPython under WAMR. */
+	if (pm_metal_zephyr_python_smoke() != 0) {
 		failures++;
 	}
 

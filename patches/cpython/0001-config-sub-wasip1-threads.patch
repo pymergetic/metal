@@ -1,0 +1,31 @@
+# Teach config.sub to accept wasi-sdk threads triples (wasm32-wasip1-threads).
+# Without this, configure splits the triple as OS=threads and fails. Metal
+# builds guests with --host-triple=wasm32-wasip1-threads (scripts/build mod none
+# / build-cpython-wasm.sh); no Metal src/ workaround — configure must accept
+# the triple. Apply via scripts/setup cpython only.
+diff --git a/config.sub b/config.sub
+index 1bb6a05dc11..2c0e827da9f 100755
+--- a/config.sub
++++ b/config.sub
+@@ -147,7 +147,8 @@ case $1 in
+ 			| uclinux-gnu* | kfreebsd*-gnu* | knetbsd*-gnu* | netbsd*-gnu* \
+ 			| netbsd*-eabi* | kopensolaris*-gnu* | cloudabi*-eabi* \
+ 			| storm-chaos* | os2-emx* | rtmk-nova* | managarm-* \
+-			| windows-* )
++			| windows-* \
++			| wasip1-threads* | wasi-threads* )
+ 				basic_machine=$field1
+ 				basic_os=$maybe_os
+ 				;;
+@@ -1307,6 +1308,11 @@ case $basic_os in
+ 		kernel=nto
+ 		os=`echo "$basic_os" | sed -e 's|nto-qnx|qnx|'`
+ 		;;
++	# wasi-sdk threads triples are a single OS name (not kernel-os).
++	wasip1-threads* | wasi-threads*)
++		kernel=
++		os=$basic_os
++		;;
+ 	*-*)
+ 		# shellcheck disable=SC2162
+ 		saved_IFS=$IFS

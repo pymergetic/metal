@@ -1,5 +1,5 @@
 ---
-# Run scripts/setup-ide.sh after building — merges linux + zephyr compile_commands.
+# Run scripts/setup ide after building — merges linux + zephyr compile_commands.
 # Zephyr DB is GCC; clangd must query gcc and strip gcc-only flags.
 CompileFlags:
   Compiler: /usr/bin/gcc
@@ -16,17 +16,19 @@ CompileFlags:
     - -I@@ROOT@@
     - -I@@ROOT@@/include
     - -I@@ROOT@@/src/common
+    # qemu mbedtls_entropy.c (and any inferred command) needs vendored mbedTLS.
+    - -I@@ROOT@@/external/mbedtls/include
 
 ---
 # mods/*/main.c — wasm32-wasip1 target + the repo's own wasi-sysroot (see
-# scripts/build-mod.sh, the actual build command this mirrors). Needed for
+# scripts/build mod none, the actual build command this mirrors). Needed for
 # clangd to recognize wasm-only attributes like import_module/import_name at
 # all — the top block's host gcc target above has no concept of them, hence
 # "Unknown attribute 'import_module' ignored" without this override.
 #
 # No compile_commands.json entry exists for mods/ itself (only src/,
 # built by CMake), but once ANY compile_commands.json exists anywhere in
-# the tree (see scripts/setup-ide.sh) clangd stops using the "no CDB at
+# the tree (see scripts/setup ide) clangd stops using the "no CDB at
 # all" fallback for *every* file, mods/*.c included — instead it
 # "infers" a compile command by borrowing the nearest unrelated file's
 # own entry (e.g. src/linux/main.c's), *working directory and all*
@@ -44,7 +46,7 @@ CompileFlags:
 # from under this rule by which directory inference happens to borrow.
 #
 # @@ROOT@@ is substituted with this checkout's own absolute path by
-# scripts/setup-ide.sh (see there), which writes the real .clangd next to
+# scripts/setup ide (see there), which writes the real .clangd next to
 # this template — .clangd itself is gitignored so no machine-specific path
 # ever lands in version control; only this placeholder-bearing template does.
 If:
@@ -53,9 +55,9 @@ CompileFlags:
   # Absolute or PATH-searchable only — unlike the Add path below, a
   # repo-relative Compiler: path here silently fails to resolve and was
   # cascading into "stdio.h not found" for every #include. System clang,
-  # not scripts/build-mod.sh's own .tools/wasi-sdk one: verified identical
+  # not scripts/build mod none's own .tools/wasi-sdk one: verified identical
   # --target=wasm32-wasip1 behavior, and it is already guaranteed findable
-  # rather than depending on scripts/setup-tools.sh having run.
+  # rather than depending on scripts/setup tools having run.
   Compiler: /usr/bin/clang
   Add:
     - --target=wasm32-wasip1
@@ -115,7 +117,7 @@ CompileFlags:
 If:
   PathMatch: .*/src/zephyr/pymergetic/metal/port/(dns|udp|tcp|tls)\.c
 CompileFlags:
-  CompilationDatabase: None
+  CompilationDatabase: "None"
   Add:
     - -std=gnu11
     - -I@@ROOT@@/src/common
@@ -148,13 +150,66 @@ Diagnostics:
     - implicit-function-declaration
 
 ---
+# host_net_adapt.c is compiled into the native_simulator *host* context
+# (real glibc + vendored curl), not the Zephyr KERNEL TU. It never appears
+# in the zephyr CDB (INTERFACE source on native_simulator), so clangd would
+# otherwise inherit src/zephyr/* KERNEL flags and miss <curl/curl.h>.
+If:
+  PathMatch: .*/src/zephyr/pymergetic/metal/port/host_net_adapt\.c
+CompileFlags:
+  # Must be the string "None" (YAML null is ignored).
+  CompilationDatabase: "None"
+  Compiler: /usr/bin/gcc
+  Add:
+    - -std=gnu11
+    - -I@@ROOT@@/include
+    - -I@@ROOT@@/src/common
+    - -I@@ROOT@@/external/curl/include
+
+---
+# mbedtls_entropy.c is qemu-only (not in native_sim CDB). Prefer an explicit
+# host-side clangd command so we never depend on a borrowed socket.c entry
+# that may place -I after -c (IDE parsers then miss mbedtls headers).
+If:
+  PathMatch: .*/src/zephyr/pymergetic/metal/port/mbedtls_entropy\.c
+CompileFlags:
+  CompilationDatabase: "None"
+  Compiler: /usr/bin/gcc
+  Add:
+    - -std=gnu11
+    - -I@@ROOT@@/src/common
+    - -I@@ROOT@@/src/zephyr
+    - -I@@ROOT@@/include
+    - -I@@ROOT@@/external/mbedtls/include
+    - '-DMBEDTLS_USER_CONFIG_FILE="@@ROOT@@/src/zephyr/mbedtls_user_config.h"'
+    - -DPM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_ZEPHYR
+    - -DKERNEL
+    - -D__ZEPHYR__=1
+    - -imacros
+    - "@@ROOT@@/build/zephyr/native_sim/zephyr/include/generated/zephyr/autoconf.h"
+    - -I@@ROOT@@/external/zephyr/include
+    - -I@@ROOT@@/build/zephyr/native_sim/zephyr/include/generated
+    - -I@@ROOT@@/build/zephyr/native_sim/zephyr/include/generated/zephyr
+    - -I@@ROOT@@/external/zephyr/soc/native/inf_clock
+    - -I@@ROOT@@/external/zephyr/boards/native/native_sim
+    - -I@@ROOT@@/external/zephyr/lib/libc/picolibc/include
+    - -I@@ROOT@@/external/zephyr/lib/posix/c_lib_ext/getopt
+    - -I@@ROOT@@/external/zephyr/include/zephyr/posix
+    - -I@@ROOT@@/external/zephyr/scripts/native_simulator/common/src/include
+    - -I@@ROOT@@/external/zephyr/scripts/native_simulator/native/src/include
+    - -isystem
+    - "@@ROOT@@/build/zephyr/native_sim/modules/picolibc/picolibc/include"
+
+---
 # src/zephyr/* + tests/zephyr_verify.* — prefer compile_commands.json from
-# build/zephyr/native_sim (merged by scripts/setup-ide.sh). The flags
+# build/zephyr/native_sim (merged by scripts/setup ide). The flags
 # below are a fallback when that CDB is missing. clangd's bundled Clang
 # still mis-parses some Zephyr headers (incomplete k_mutex); suppress the
 # resulting cascade rather than chasing a third-party parser quirk.
+# host_net_adapt.c / mbedtls_entropy.c have dedicated blocks above.
 If:
   PathMatch: (src/zephyr/.*\.(c|h)|tests/zephyr_verify\.(c|h))
+  PathExclude: .*/(host_net_adapt|mbedtls_entropy)\.c
 CompileFlags:
   Add:
     # Absolute @@ROOT@@ paths: these files are often missing from

@@ -198,7 +198,7 @@ preopen" syscall. That is unchanged.
 `os_openat` / `os_*at` rebuilds the absolute guest path and calls `pm_metal_mount_resolve_ex`
 against the **live** table. A `mount("/dyn", tmpfs)` is therefore visible to later opens in
 the **same** process (routed through the frozen `/` preopen as relpath `dyn/...`). Open fds
-keep their old backing (Linux-like). Proven by `scripts/verify-linux-sys-mount.sh` (t17
+keep their old backing (Linux-like). Proven by `scripts/verify linux none sys-mount` (t17
 mounts + same-process use).
 
 Virtual `/proc` was the first consumer of this `os_*` seam (Phase 6b); live remount extends
@@ -322,11 +322,28 @@ CLI mount on top of a path fstab already mounted just wins (last-mount-at-a-path
 rule real Linux uses for stacking mounts) — exactly the override behavior you want for ad hoc
 testing without editing an image's fstab.
 
-### After Stage B
+### After Stage B — product defaults, then populate
 
-Whatever currently follows `init()` (today: `app.c`'s scripted mode running the CLI-given mod
-list) runs against the now-fully-mounted namespace. A future "look for a real init path instead
-of a CLI mod list" step would hook in right here too — related but out of scope for this doc;
+`app.c` (and Zephyr verify's Stage B mirror) always ensure, if missing:
+
+| Guest path | Kind | Notes |
+|------------|------|--------|
+| `/proc` | `proc` | Virtual procfs |
+| `/tmp` | `tmpfs` source `tmp` | Named ramdisk / host tmpfs; Zephyr DT `disk-name = "tmp"` |
+
+Then **`pkg_apply_all()`** extracts named lz4+ustar guest packages (`mods-tests`,
+`python-stdlib`, `mods-apps-python`, …) onto `/`, then **`populate_all()`** extracts any
+anonymous verify-only populate embeds. Missing `/etc/fstab` is normal for product boot —
+content arrives via packages (and optional populate embeds), not via a multi-line scratch
+fstab. Same package set is embedded on Linux, NuttX, and Zephyr (`scripts/lib/guest-pkgs.sh`).
+
+**Test-only mounts** (`scratch` → `/scratch`/`/scratchB`, `other` → `/other`) live only in
+verify scripts (`scripts/verify.d/port/linux/tmpfs.sh`, `populate.sh`, and Zephyr verify just
+before those batches). They are not part of the product default boot layout.
+
+Whatever currently follows (today: `app.c`'s scripted mode running the CLI-given mod list)
+runs against the now-fully-mounted namespace. A future "look for a real init path instead of a
+CLI mod list" step would hook in right here too — related but out of scope for this doc;
 noted only so the seam is in the right place when that gets designed.
 
 ---
@@ -345,7 +362,8 @@ New module, `src/common/pymergetic/metal/mount/` — `impl: common`, ops-struct 
 | `device.h` / `.c` | `pm_metal_mount_device_` | **zephyr-only** ops-struct for block devices (`RAMDISK` kind now) — see "Block device layer" above; not yet added |
 | `tmpfs.h` / `.c` | `pm_metal_mount_tmpfs_` | `impl: bind` per target — **linux landed**: `mkdtemp()` under `/dev/shm` (already real tmpfs = RAM), then registered internally as an ordinary hostdir (no device layer involved at all); **zephyr still a stub**: will call `device.h`'s `ramdisk` kind `establish()` for the device, then `fs_mount()` littlefs directly onto it — the one genuinely new per-target backend, blocked on `wasi/file.c` (see "Zephyr prerequisite" below) |
 | `tmpfs_registry.h` / `.c` | `pm_metal_mount_tmpfs_registry_` | **landed**, `impl: common` — name → host-path + refcount bookkeeping shared by every target's own `tmpfs.c` (see "Named ramdisks" above); deliberately keyed by *name*, separate from `mount.c`'s own guest-path-keyed table |
-| `populate.h` / `.c` | `pm_metal_mount_populate_` | **landed**, `impl: common` — global ustar [+ lz4] blob registry + `populate_all()` extract against guest `/` |
+| `populate.h` / `.c` | `pm_metal_mount_populate_` | **landed**, `impl: common` — anonymous ustar [+ lz4] blob registry + `populate_all()` / `populate_extract()` against guest `/` |
+| `pkg.h` / `.c` | `pm_metal_pkg_` | **landed**, `impl: common` — named packages with dep graph; `pkg_apply_all()` / `pkg_ensure()` call `populate_extract()` |
 | `fstab.h` / `.c` | `pm_metal_mount_fstab_` | Stage B parser/applier, `impl: common` (pure text + calls into `table.h`, no per-target code) |
 
 `PM_METAL_MOUNT_MAX` bounds the table (same style as `PM_METAL_RUNTIME_MAX_HANDLES`).
@@ -365,7 +383,7 @@ WASI preview1 has no mount syscall at all — our own extension, same shape as
 
 Compile-time: guest headers expose `mount()`/`umount()` only with
 `-DPM_METAL_BUILD_KERNEL` (`include/pymergetic/metal/build.h` + empty
-`mods/<name>/MOUNT` marker in `build-mod.sh`). That is **not** a security
+`mods/<name>/MOUNT` marker in `scripts/build mod none`). That is **not** a security
 boundary — crafted wasm can still import the natives.
 
 Runtime: host must opt in with `--allow-guest-mount` (linux CLI →
@@ -384,7 +402,7 @@ natives return -1; `fstype_count`/`fstype_name` stay public.
   `mount()`/`umount()` + `MS_RDONLY` as thin inlines over those imports.
 - Effects update the live table immediately. On linux, path ops in the **same** process see
   them (live remount); later spawns also pick them up via a fresh `map_dir_list`. Proven by
-  `scripts/verify-linux-sys-mount.sh` (t17 mount + same-process use → t18 still uses → t19
+  `scripts/verify linux none sys-mount` (t17 mount + same-process use → t18 still uses → t19
   umount → t20 gone).
 
 ---
@@ -456,11 +474,11 @@ packages/metal/
 │   └── t1y_mount_read/main.c        NEW [5]  reads back through the new mount
 │
 ├── scripts/
-│   ├── build-mod.sh                 CHANGED [5]  MOUNT marker (same convention as REACTOR/SOCKET)
-│   ├── pack-image.sh                DONE [4]  dir → ustar [→ lz4] → generated .c that registers the blob
-│   ├── verify-linux-mount.sh         DONE [2]
-│   ├── verify-linux-tmpfs.sh         DONE [3] (linux only)
-│   └── verify-linux-populate.sh      DONE [4] (linux only)
+│   ├── build mod                    CHANGED [5]  MOUNT marker (same convention as REACTOR/SOCKET)
+│   ├── lib/pack-image.sh            DONE [4]  dir → ustar [→ lz4] → generated .c that registers the blob
+│   ├── verify linux mount           DONE [2]
+│   ├── verify linux tmpfs           DONE [3] (linux only)
+│   └── verify linux populate        DONE [4] (linux only)
 │
 └── docs/
     └── MOUNT.md                     this file
@@ -537,12 +555,12 @@ this design corrects — not the model to follow:
 
 | Script | Proves |
 |--------|--------|
-| existing `scripts/verify-linux*.sh` | Phase 1 changed nothing observable |
-| `scripts/verify-linux-mount.sh` | multiple simultaneous mounts resolve correctly from real guest code, `--mount=` overriding a conflicting fstab line, `--vfs-root=` alias unregressed (Phase 2) |
-| `scripts/verify-linux-tmpfs.sh` (**done, linux only**) | write from one mod (`t12_tmpfs_write`), read from another (`t13_tmpfs_read`), same `tmpfs` mount, gone after shutdown (a fresh process sees none of a prior run's content, and `/dev/shm/pm_metal_tmpfs_*` leftover count is unchanged) (Phase 3); `t14_tmpfs_read_alt` proves a second fstab line naming the same source reuses rather than re-creates it; `t15_tmpfs_read_other` proves two differently-named `tmpfs` sources stay independent |
-| `scripts/verify-linux-populate.sh` (**done, linux only**) | Stage B mounts a `tmpfs` at `/scratch`; an embedded ustar (from `pack-image.sh`) registers `scratch/hello.txt`; `populate_all()` extracts against `/`; guest `t16_populate_read` sees the file (Phase 4) |
-| `scripts/verify-linux-sys-mount.sh` (**done, linux**) | t17 `mount` + same-process use (live remount); t18 still uses across spawn; t19 umount; t20 gone (Phases 5 + 6c) |
-| `scripts/verify-linux-proc.sh` (**done, linux**) | guest open/read of `/proc/*` via hooks; `/proc/self/{cmdline,environ}` (incl. `PID=`); no host `/tmp/pm_metal_proc` (Phase 6b) |
+| existing `scripts/verify linux none …` | Phase 1 changed nothing observable |
+| `scripts/verify linux none mount` | multiple simultaneous mounts resolve correctly from real guest code, `--mount=` overriding a conflicting fstab line, `--vfs-root=` alias unregressed (Phase 2) |
+| `scripts/verify linux none tmpfs` (**done, linux only**) | write from one mod (`t12_tmpfs_write`), read from another (`t13_tmpfs_read`), same `tmpfs` mount, gone after shutdown (a fresh process sees none of a prior run's content, and `/dev/shm/pm_metal_tmpfs_*` leftover count is unchanged) (Phase 3); `t14_tmpfs_read_alt` proves a second fstab line naming the same source reuses rather than re-creates it; `t15_tmpfs_read_other` proves two differently-named `tmpfs` sources stay independent |
+| `scripts/verify linux none populate` (**done, linux only**) | Stage B mounts a `tmpfs` at `/scratch`; an embedded ustar (from `pack-image.sh`) registers `scratch/hello.txt`; `populate_all()` extracts against `/`; guest `t16_populate_read` sees the file (Phase 4) |
+| `scripts/verify linux none sys-mount` (**done, linux**) | t17 `mount` + same-process use (live remount); t18 still uses across spawn; t19 umount; t20 gone (Phases 5 + 6c) |
+| `scripts/verify linux none proc` (**done, linux**) | guest open/read of `/proc/*` via hooks; `/proc/self/{cmdline,environ}` (incl. `PID=`); no host `/tmp/pm_metal_proc` (Phase 6b) |
 
 ---
 

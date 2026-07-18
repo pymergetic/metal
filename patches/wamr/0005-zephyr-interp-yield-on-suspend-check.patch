@@ -20,7 +20,7 @@ WASM_SUSPEND_FLAG_TERMINATE, main never gets CPU after the worker
 enters its busy loop (and k_msleep never advances while a guest spins).
 Yielding here is also what lets terminate() be observed promptly.
 
-Applied by scripts/setup-wamr.sh. See docs/SOURCETREE.md "Vendoring".
+Applied by scripts/setup wamr. See docs/SOURCETREE.md "Vendoring".
 
 diff --git a/core/iwasm/interpreter/wasm_interp_classic.c b/core/iwasm/interpreter/wasm_interp_classic.c
 index 9f7e03e2..c3d4e5f6 100644

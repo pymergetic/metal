@@ -8,7 +8,7 @@ tar.c hands raw guest/host buffers straight to mtar_read_header()/
 mtar_next(), never a trusted local file). No src/-side workaround exists:
 raw_to_header() is `static`, called only from inside microtar.c's own
 mtar_read_header(). See docs/SOURCETREE.md "Vendoring". Applied by
-scripts/setup-microtar.sh.
+scripts/setup microtar.
 
 diff --git a/src/microtar.c b/src/microtar.c
 index 4b89776..e5d0dc6 100644

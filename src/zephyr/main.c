@@ -9,6 +9,12 @@
 #include <zephyr/kernel.h>
 #include <zephyr/storage/disk_access.h>
 
+#if defined(CONFIG_NET_L2_ETHERNET) && !defined(CONFIG_NET_CONFIG_AUTO_INIT)
+#include <zephyr/net/ethernet.h>
+#include <zephyr/net/net_config.h>
+#include <zephyr/net/net_if.h>
+#endif
+
 #include "pymergetic/metal/memory/budget.h"
 #include "pymergetic/metal/memory/memory.h"
 #include "pymergetic/metal/runtime/process.h"
@@ -20,13 +26,8 @@
 #endif
 
 #define PM_METAL_ZEPHYR_VFS_ROOT "/RAM:"
-/* WAMR kheap — must cover shared linear memory. Mods use wasm32-wasip1-threads
- * with --max-memory=4MiB (scripts/build-mod.sh); WAMR reserves that full max
- * from this pool via BH_MALLOC, and multimod can hold two instances:
- *   MEMORY_REQ >= 2 * MAX_MEMORY + WAMR slack.  Keep in lockstep with
- * build-mod.sh's MAX_MEMORY and (on native_sim) STATIC_POOL_BYTES. */
-#define PM_METAL_ZEPHYR_MEMORY_REQ (12ull * 1024ull * 1024ull)
-#define PM_METAL_ZEPHYR_BYTECODE_REQ (4ull * 1024ull * 1024ull)
+/* Preferred pool sizes — same server layout as linux/nuttx (memory/layout.h).
+ * Caps when arena_budget is smaller; static/MMU pool must be ≥ kheap+bytecode. */
 
 int main(void)
 {
@@ -35,6 +36,25 @@ int main(void)
 	uint64_t budget;
 
 	printk("runtime: target=zephyr\n");
+
+#if defined(CONFIG_NET_L2_ETHERNET) && !defined(CONFIG_NET_CONFIG_AUTO_INIT)
+	/* qemu: apply NET_CONFIG_* to e1000, not loopback (WASI still uses lo). */
+	{
+		struct net_if *eth = net_if_get_first_by_type(&NET_L2_GET_NAME(ETHERNET));
+		int nrc;
+
+		if (eth) {
+			net_if_set_default(eth);
+			nrc = net_config_init_by_iface(eth, "pm-metal", NET_CONFIG_NEED_IPV4,
+							 CONFIG_NET_CONFIG_INIT_TIMEOUT * MSEC_PER_SEC);
+			if (nrc != 0) {
+				printk("runtime: eth net_config rc=%d\n", nrc);
+			}
+		} else {
+			printk("runtime: eth iface missing\n");
+		}
+	}
+#endif
 
 	/* Stage A: format + mount FAT ramdisk at /RAM: (ELM FatFs volume name). */
 	{
@@ -92,7 +112,7 @@ int main(void)
 		cfg.bytecode_bytes = 0;
 		cfg.memory_bytes = 0;
 	} else {
-		cfg.bytecode_bytes = PM_METAL_ZEPHYR_BYTECODE_REQ;
+		cfg.bytecode_bytes = PM_METAL_MEMORY_BYTECODE_BYTES;
 		if (cfg.bytecode_bytes + (2ull * 1024ull * 1024ull) > budget) {
 			cfg.bytecode_bytes = budget / 4;
 			if (cfg.bytecode_bytes < (512ull * 1024ull)) {
@@ -103,8 +123,8 @@ int main(void)
 			cfg.bytecode_bytes = budget;
 		}
 		cfg.memory_bytes = budget - cfg.bytecode_bytes;
-		if (cfg.memory_bytes > PM_METAL_ZEPHYR_MEMORY_REQ) {
-			cfg.memory_bytes = PM_METAL_ZEPHYR_MEMORY_REQ;
+		if (cfg.memory_bytes > PM_METAL_MEMORY_KHEAP_BYTES) {
+			cfg.memory_bytes = PM_METAL_MEMORY_KHEAP_BYTES;
 		}
 	}
 	cfg.vfs_root = PM_METAL_ZEPHYR_VFS_ROOT;

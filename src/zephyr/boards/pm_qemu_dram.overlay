@@ -1,0 +1,7 @@
+/*
+ * Enlarge link-time DRAM for qemu_x86_64 so python.wasm + stdlib populate
+ * embeds fit (board default is 32 MiB).
+ */
+&dram0 {
+	reg = <0x0 DT_SIZE_M(512)>;
+};

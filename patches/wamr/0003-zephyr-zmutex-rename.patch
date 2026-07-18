@@ -1,8 +1,8 @@
 Rename WAMR Zephyr platform mutex_* macros to zmutex_* so they do not
 collide with libc/POSIX mutex_* symbols when CONFIG_POSIX_API (needed
 for Metal's WASI/FS path) is enabled. Formerly applied via sed in
-scripts/setup-west.sh — now a tracked patch. See docs/SOURCETREE.md
-"Vendoring". Applied by scripts/setup-wamr.sh / setup-west.sh.
+scripts/setup west — now a tracked patch. See docs/SOURCETREE.md
+"Vendoring". Applied by scripts/setup wamr / setup-west.sh.
 
 diff --git a/core/shared/platform/zephyr/platform_internal.h b/core/shared/platform/zephyr/platform_internal.h
 index 5bc9ca98..cc7bd85e 100644

@@ -6,7 +6,8 @@
  *                          --rootfs=<fstype>:<source>
  *                          [--mount=<fstype>:<source>:<target>[:opts]]...
  *                          [--addr-pool=<cidr>]... [--ns-lookup-pool=<host>]...
- *                          /mod.wasm [...]
+ *                          [--env=KEY=VAL]... /mod.wasm [...]
+ *                          | -- [--env=KEY=VAL]... /mod.wasm [guest argv...]
  *
  * --memory sizes the kheap pool (wasm linear memory + WAMR's own runtime
  * structs); --bytecode-memory sizes the separate arena raw .wasm module
@@ -26,14 +27,15 @@
  * CLI door onto runtime.h's own cfg->addr_pool/ns_lookup_pool — see that
  * struct's own doc comment and docs/RUNTIME.md "Sockets". Neither flag
  * given at all means no guest gets any socket access this whole run,
- * which is why every mod in scripts/verify-nuttx.sh keeps working
+ * which is why every mod in scripts/verify nuttx sim keeps working
  * unchanged without ever passing either.
  *
  * Each positional .wasm path is guest-style, resolved against the mount
  * table by the runtime (see pm_metal_runtime_load_file) — loaded, run once
  * (argv[0] = its basename), and unloaded, all inside a single
- * init()/shutdown() pair. This is what scripts/verify-nuttx.sh and
- * verify-nuttx-threads.sh exercise.
+ * init()/shutdown() pair. With `--`, only one .wasm is allowed and
+ * remaining args become that guest's argv; `--env=KEY=VAL` (repeatable)
+ * is passed through WASI env (needed for PYTHONPATH etc).
  *
  * This file itself only does NuttX entry / argv parsing (incl. resolving a
  * hostdir --rootfs=/--vfs-root= to an absolute path via realpath()) into a
@@ -59,11 +61,16 @@
 static void print_usage(const char *argv0)
 {
 	fprintf(stderr,
-		"usage: %s --memory=<bytes> --bytecode-memory=<bytes> --rootfs=<fstype>:<source>\n"
+		"usage: %s [--memory=<bytes>] [--bytecode-memory=<bytes>] --rootfs=<fstype>:<source>\n"
 		"       [--mount=<fstype>:<source>:<target>[:opts]]... [--addr-pool=<cidr>]...\n"
-		"       [--ns-lookup-pool=<host>]... [--allow-guest-mount] /mod.wasm [...]\n"
+		"       [--ns-lookup-pool=<host>]... [--env=KEY=VAL]...\n"
+		"       [--stack-memory=<bytes>] [--allow-guest-mount]\n"
+		"       /mod.wasm [...] | -- /mod.wasm [guest argv...]\n"
 		"  (--vfs-root=<dir> is a deprecated alias for --rootfs=hostdir:<dir>)\n"
-		"  --allow-guest-mount: permit guest mount()/umount() natives (default deny)\n",
+		"  --memory=/--bytecode-memory=/--stack-memory=: omit for server layout\n"
+		"    (256 MiB kheap / 64 MiB bytecode / 16 MiB stack — memory/layout.h)\n"
+		"  --allow-guest-mount: permit guest mount()/umount() natives (default deny)\n"
+		"  -- : single-guest mode — first path is the .wasm, rest are guest argv\n",
 		argv0);
 }
 
@@ -148,17 +155,23 @@ int main(int argc, char **argv)
 {
 	uint64_t memory_bytes = 0;
 	uint64_t bytecode_bytes = 0;
+	uint32_t stack_bytes = 0;
 	const char *vfs_root_arg = NULL; /* deprecated --vfs-root= alias, see split below */
 	const char *rootfs_arg = NULL; /* raw --rootfs=<fstype>:<source>, not yet split */
 	const char **addr_pool = NULL;
 	uint32_t addr_pool_count = 0;
 	const char **ns_lookup_pool = NULL;
 	uint32_t ns_lookup_pool_count = 0;
+	const char **guest_envp = NULL;
+	uint32_t guest_envc = 0;
 	pm_metal_app_cli_mount_t *cli_mounts = NULL;
 	uint32_t cli_mount_count = 0;
 	int allow_guest_mount = 0;
+	int single_guest = 0;
 	int wasm_argc = 0;
 	char **wasm_argv;
+	int guest_argc = 0;
+	char **guest_argv = NULL;
 	int i;
 
 	wasm_argv = malloc(sizeof(char *) * (size_t)(argc > 0 ? argc : 1));
@@ -167,10 +180,44 @@ int main(int argc, char **argv)
 	}
 
 	for (i = 1; i < argc; i++) {
-		if (!strncmp(argv[i], "--memory=", 9)) {
+		if (!strcmp(argv[i], "--")) {
+			single_guest = 1;
+			i++;
+			if (i >= argc) {
+				fprintf(stderr, "%s: -- requires /mod.wasm [guest argv...]\n", argv[0]);
+				free(wasm_argv);
+				free((void *)addr_pool);
+				free((void *)ns_lookup_pool);
+				free((void *)guest_envp);
+				free(cli_mounts);
+				return 1;
+			}
+			wasm_argv[wasm_argc++] = argv[i];
+			guest_argv = malloc(sizeof(char *) * (size_t)(argc - i));
+			if (!guest_argv) {
+				free(wasm_argv);
+				free((void *)addr_pool);
+				free((void *)ns_lookup_pool);
+				free((void *)guest_envp);
+				free(cli_mounts);
+				return 1;
+			}
+			{
+				const char *slash = strrchr(argv[i], '/');
+				const char *base = slash ? slash + 1 : argv[i];
+
+				guest_argv[guest_argc++] = (char *)base;
+			}
+			for (i++; i < argc; i++) {
+				guest_argv[guest_argc++] = argv[i];
+			}
+			break;
+		} else if (!strncmp(argv[i], "--memory=", 9)) {
 			memory_bytes = strtoull(argv[i] + 9, NULL, 0);
 		} else if (!strncmp(argv[i], "--bytecode-memory=", 18)) {
 			bytecode_bytes = strtoull(argv[i] + 18, NULL, 0);
+		} else if (!strncmp(argv[i], "--stack-memory=", 15)) {
+			stack_bytes = (uint32_t)strtoul(argv[i] + 15, NULL, 0);
 		} else if (!strncmp(argv[i], "--rootfs=", 9)) {
 			rootfs_arg = argv[i] + 9;
 		} else if (!strncmp(argv[i], "--vfs-root=", 11)) {
@@ -187,6 +234,7 @@ int main(int argc, char **argv)
 				free(wasm_argv);
 				free((void *)addr_pool);
 				free((void *)ns_lookup_pool);
+				free((void *)guest_envp);
 				free(cli_mounts);
 				return 1;
 			}
@@ -194,6 +242,7 @@ int main(int argc, char **argv)
 				free(wasm_argv);
 				free((void *)addr_pool);
 				free((void *)ns_lookup_pool);
+				free((void *)guest_envp);
 				free(cli_mounts);
 				return 1;
 			}
@@ -202,6 +251,7 @@ int main(int argc, char **argv)
 				free(wasm_argv);
 				free((void *)addr_pool);
 				free((void *)ns_lookup_pool);
+				free((void *)guest_envp);
 				free(cli_mounts);
 				return 1;
 			}
@@ -210,6 +260,25 @@ int main(int argc, char **argv)
 				free(wasm_argv);
 				free((void *)addr_pool);
 				free((void *)ns_lookup_pool);
+				free((void *)guest_envp);
+				free(cli_mounts);
+				return 1;
+			}
+		} else if (!strncmp(argv[i], "--env=", 6)) {
+			if (!strchr(argv[i] + 6, '=')) {
+				fprintf(stderr, "%s: bad --env= (want KEY=VAL): %s\n", argv[0], argv[i] + 6);
+				free(wasm_argv);
+				free((void *)addr_pool);
+				free((void *)ns_lookup_pool);
+				free((void *)guest_envp);
+				free(cli_mounts);
+				return 1;
+			}
+			if (append_string(&guest_envp, &guest_envc, argv[i] + 6) != 0) {
+				free(wasm_argv);
+				free((void *)addr_pool);
+				free((void *)ns_lookup_pool);
+				free((void *)guest_envp);
 				free(cli_mounts);
 				return 1;
 			}
@@ -220,6 +289,7 @@ int main(int argc, char **argv)
 			free(wasm_argv);
 			free((void *)addr_pool);
 			free((void *)ns_lookup_pool);
+			free((void *)guest_envp);
 			free(cli_mounts);
 			return 0;
 		} else {
@@ -227,19 +297,43 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (memory_bytes == 0 || bytecode_bytes == 0 || (!rootfs_arg && !vfs_root_arg) || wasm_argc == 0) {
+	if (memory_bytes == 0) {
+		memory_bytes = PM_METAL_MEMORY_KHEAP_BYTES;
+	}
+	if (bytecode_bytes == 0) {
+		bytecode_bytes = PM_METAL_MEMORY_BYTECODE_BYTES;
+	}
+	if (stack_bytes == 0) {
+		stack_bytes = PM_METAL_MEMORY_STACK_BYTES;
+	}
+	if ((!rootfs_arg && !vfs_root_arg) || wasm_argc == 0) {
 		print_usage(argv[0]);
 		free(wasm_argv);
+		free(guest_argv);
 		free((void *)addr_pool);
 		free((void *)ns_lookup_pool);
+		free((void *)guest_envp);
 		free(cli_mounts);
 		return 1;
 	}
 	if (rootfs_arg && vfs_root_arg) {
 		fprintf(stderr, "%s: pass either --rootfs= or --vfs-root=, not both\n", argv[0]);
 		free(wasm_argv);
+		free(guest_argv);
 		free((void *)addr_pool);
 		free((void *)ns_lookup_pool);
+		free((void *)guest_envp);
+		free(cli_mounts);
+		return 1;
+	}
+	if (guest_envc > 0 && !single_guest && wasm_argc != 1) {
+		fprintf(stderr, "%s: --env= with multiple .wasm paths requires -- (single-guest mode)\n",
+			argv[0]);
+		free(wasm_argv);
+		free(guest_argv);
+		free((void *)addr_pool);
+		free((void *)ns_lookup_pool);
+		free((void *)guest_envp);
 		free(cli_mounts);
 		return 1;
 	}
@@ -264,8 +358,10 @@ int main(int argc, char **argv)
 		if (strlen(rootfs_arg) + 1 > sizeof(rootfs_split)) {
 			fprintf(stderr, "%s: --rootfs= too long\n", argv[0]);
 			free(wasm_argv);
+			free(guest_argv);
 			free((void *)addr_pool);
 			free((void *)ns_lookup_pool);
+			free((void *)guest_envp);
 			free(cli_mounts);
 			return 1;
 		}
@@ -274,8 +370,10 @@ int main(int argc, char **argv)
 		if (!colon) {
 			fprintf(stderr, "%s: bad --rootfs= (want <fstype>:<source>): %s\n", argv[0], rootfs_arg);
 			free(wasm_argv);
+			free(guest_argv);
 			free((void *)addr_pool);
 			free((void *)ns_lookup_pool);
+			free((void *)guest_envp);
 			free(cli_mounts);
 			return 1;
 		}
@@ -289,8 +387,10 @@ int main(int argc, char **argv)
 			"%s: --rootfs= fstype '%s' not yet supported (only hostdir today — see docs/MOUNT.md)\n",
 			argv[0], rootfs_fstype);
 		free(wasm_argv);
+		free(guest_argv);
 		free((void *)addr_pool);
 		free((void *)ns_lookup_pool);
+		free((void *)guest_envp);
 		free(cli_mounts);
 		return 1;
 	}
@@ -299,8 +399,10 @@ int main(int argc, char **argv)
 	if (!realpath(rootfs_source, vfs_root_abs)) {
 		fprintf(stderr, "%s: bad --rootfs=/--vfs-root= source: %s\n", argv[0], rootfs_source);
 		free(wasm_argv);
+		free(guest_argv);
 		free((void *)addr_pool);
 		free((void *)ns_lookup_pool);
+		free((void *)guest_envp);
 		free(cli_mounts);
 		return 1;
 	}
@@ -308,6 +410,7 @@ int main(int argc, char **argv)
 	pm_metal_runtime_config_t cfg = {
 		.memory_bytes = memory_bytes,
 		.bytecode_bytes = bytecode_bytes,
+		.stack_bytes = stack_bytes,
 		.vfs_root = vfs_root_abs,
 		.addr_pool = addr_pool,
 		.addr_pool_count = addr_pool_count,
@@ -318,8 +421,10 @@ int main(int argc, char **argv)
 	if (pm_metal_runtime_init(&cfg) != 0) {
 		fprintf(stderr, "%s: runtime init failed\n", argv[0]);
 		free(wasm_argv);
+		free(guest_argv);
 		free((void *)addr_pool);
 		free((void *)ns_lookup_pool);
+		free((void *)guest_envp);
 		free(cli_mounts);
 		return 1;
 	}
@@ -327,15 +432,16 @@ int main(int argc, char **argv)
 	/* init() already made its own copies of addr_pool/ns_lookup_pool
 	 * (see runtime.h's own doc comment on cfg->addr_pool) — this
 	 * process's own copy of the flag list is done being useful the
-	 * moment that call returns. cli_mounts is not copied anywhere yet —
-	 * kept alive until the run_scripted() call below, which is the one
-	 * that actually consumes it. */
+	 * moment that call returns. cli_mounts / guest_envp stay alive until
+	 * run_scripted() returns. */
 	free((void *)addr_pool);
 	free((void *)ns_lookup_pool);
 	if (pm_metal_process_init() != 0) {
 		fprintf(stderr, "%s: process table init failed\n", argv[0]);
 		pm_metal_runtime_shutdown();
 		free(wasm_argv);
+		free(guest_argv);
+		free((void *)guest_envp);
 		free(cli_mounts);
 		return 1;
 	}
@@ -353,9 +459,12 @@ int main(int argc, char **argv)
 	       bytecode_human, vfs_root_abs);
 	fflush(stdout);
 
-	int rc = pm_metal_app_run_scripted(argv[0], wasm_argc, wasm_argv, cli_mounts, cli_mount_count);
+	int rc = pm_metal_app_run_scripted(argv[0], wasm_argc, wasm_argv, cli_mounts, cli_mount_count,
+					    guest_argc, guest_argv, (int)guest_envc, guest_envp);
 
 	free(cli_mounts);
+	free(guest_argv);
+	free((void *)guest_envp);
 	free(wasm_argv);
 	return rc;
 }

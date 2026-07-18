@@ -43,7 +43,7 @@
  * suggest (they describe the shared Alloc_With_Pool heap as internally
  * locked, implying concurrent load/instantiate on different modules
  * should be safe without a caller-side lock) — but running the actual
- * stress test in scripts/verify-linux-threads.sh under ThreadSanitizer
+ * stress test in scripts/verify linux none threads under ThreadSanitizer
  * caught real data races inside WAMR's own EMS allocator
  * (external/wamr/core/shared/mem-alloc/ems/ems_alloc.c, e.g. alloc_hmu())
  * when load/instantiate/deinstantiate/unload ran concurrently on
@@ -97,7 +97,8 @@
 /* PM_METAL_RUNTIME_MAX_HANDLES itself now lives in runtime.h — public, see
  * there — not redefined here. */
 #define PM_METAL_RUNTIME_MAX_PATH 256 /* resolved vfs path buffer — not PATH_MAX (POSIX-only, and too large for small stacks) */
-#define PM_METAL_RUNTIME_STACK_SIZE (64 * 1024)
+/* Default stack — PM_METAL_MEMORY_STACK_BYTES from memory/layout.h. */
+#define PM_METAL_RUNTIME_STACK_SIZE PM_METAL_MEMORY_STACK_BYTES
 #define PM_METAL_RUNTIME_HEAP_SIZE 0 /* wasi-libc manages its own heap in linear memory */
 #define PM_METAL_RUNTIME_ERROR_BUF_SIZE 128
 
@@ -111,6 +112,7 @@ typedef struct pm_metal_runtime_slot {
 
 static struct {
 	int initialized;
+	uint32_t stack_bytes; /* per-instantiate WASM stack; see cfg->stack_bytes */
 	char **addr_pool; /* owned copies of cfg->addr_pool's strings, see runtime.h */
 	uint32_t addr_pool_count;
 	char **ns_lookup_pool; /* owned copies of cfg->ns_lookup_pool's strings */
@@ -195,35 +197,41 @@ static int pm_metal_runtime_resolve_vfs_path(const char *guest_path, char *out, 
 /* Multi-module: one .wasm's own (import "libb" "add" (func ...)) names
  * "libb" as a *module*, not a file — WAMR calls back here to actually turn
  * that name into bytes the moment it first needs them (i.e. lazily, while
- * loading whatever module imported it), by the exact same convention
- * load_file() already uses for a top-level mod: "<module_name>.wasm",
- * resolved against vfs_root under /mods — so a dependency named "libb" is
- * just another ordinary /mods/libb.wasm, loadable standalone too, nothing
- * multi-module-specific about how it's stored. Reuses the bytecode arena
- * (not malloc) for the same reason load_file() does — see this file's own
- * header — and module_destroyer below is WAMR's own paired callback to
- * free exactly that allocation once the dependency is unloaded. */
+ * loading whatever module imported it). Search order matches the guest
+ * package layout (scripts/lib/guest-package.sh):
+ *   /mods/tests/<module_name>.wasm
+ *   /mods/apps/<module_name>.wasm
+ * so a dependency named "libb" is an ordinary file under tests/ or apps/,
+ * loadable standalone too. Reuses the bytecode arena (not malloc) for the
+ * same reason load_file() does — see this file's own header — and
+ * module_destroyer below is WAMR's own paired callback to free exactly that
+ * allocation once the dependency is unloaded. */
 static bool pm_metal_runtime_module_reader(package_type_t module_type, const char *module_name, uint8_t **p_buffer,
 					    uint32_t *p_size)
 {
 	(void)module_type;
 
+	static const char *const prefixes[] = { "/mods/tests/", "/mods/apps/" };
 	char guest_path[PM_METAL_RUNTIME_MAX_PATH];
-	int n = snprintf(guest_path, sizeof(guest_path), "/mods/%s.wasm", module_name);
-	if (n <= 0 || (size_t)n >= sizeof(guest_path)) {
-		return false;
-	}
-
 	char host_path[PM_METAL_RUNTIME_MAX_PATH];
-	if (pm_metal_runtime_resolve_vfs_path(guest_path, host_path, sizeof(host_path)) != 0) {
-		return false;
+	size_t i;
+
+	for (i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++) {
+		int n = snprintf(guest_path, sizeof(guest_path), "%s%s.wasm", prefixes[i], module_name);
+		if (n <= 0 || (size_t)n >= sizeof(guest_path)) {
+			continue;
+		}
+		if (pm_metal_runtime_resolve_vfs_path(guest_path, host_path, sizeof(host_path)) != 0) {
+			continue;
+		}
+		if (pm_metal_port_read_file(host_path, p_buffer, p_size) == 0) {
+			return true;
+		}
 	}
 
-	if (pm_metal_port_read_file(host_path, p_buffer, p_size) != 0) {
-		fprintf(stderr, "pm_metal_runtime: dependency module read failed: %s\n", guest_path);
-		return false;
-	}
-	return true;
+	fprintf(stderr, "pm_metal_runtime: dependency module not found under /mods/tests|apps: %s\n",
+		module_name);
+	return false;
 }
 
 static void pm_metal_runtime_module_destroyer(uint8_t *buffer, uint32_t size)
@@ -432,6 +440,8 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	}
 
 	memset(g_pm_metal_runtime.slots, 0, sizeof(g_pm_metal_runtime.slots));
+	g_pm_metal_runtime.stack_bytes =
+		cfg->stack_bytes ? cfg->stack_bytes : (uint32_t)PM_METAL_RUNTIME_STACK_SIZE;
 	g_pm_metal_runtime.addr_pool = addr_pool;
 	g_pm_metal_runtime.addr_pool_count = cfg->addr_pool_count;
 	g_pm_metal_runtime.ns_lookup_pool = ns_lookup_pool;
@@ -568,7 +578,7 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 	 * thread that already has one (the thread that called
 	 * wasm_runtime_full_init(), or *any* thread on a build with hardware
 	 * bounds checking compiled out, e.g. -DWAMR_DISABLE_HW_BOUND_CHECK=1
-	 * — see scripts/verify-linux-threads.sh) — wasm_runtime_thread_env_
+	 * — see scripts/verify linux none threads) — wasm_runtime_thread_env_
 	 * inited() says so up front, so this only does the real work where
 	 * it is actually needed. */
 	int owns_thread_env = !wasm_runtime_thread_env_inited();
@@ -655,7 +665,7 @@ int pm_metal_runtime_run_ex(pm_metal_runtime_handle_t h, int argc, char **argv, 
 
 	char error_buf[PM_METAL_RUNTIME_ERROR_BUF_SIZE];
 	wasm_module_inst_t inst = wasm_runtime_instantiate(
-		slot->module, PM_METAL_RUNTIME_STACK_SIZE,
+		slot->module, g_pm_metal_runtime.stack_bytes,
 		PM_METAL_RUNTIME_HEAP_SIZE, error_buf, sizeof(error_buf));
 	/* Published while still holding the lock — see
 	 * pm_metal_runtime_exec_t's own doc comment (runtime.h) for why a
