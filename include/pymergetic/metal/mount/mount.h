@@ -21,7 +21,7 @@
 #include <stddef.h>
 #include <stdio.h>
 
-#include "pymergetic/metal/util/wasi.h" /* IWYU pragma: keep */
+#include "pymergetic/metal/wasi.h" /* IWYU pragma: keep */
 
 /* This module's own import_module name — see mount.c's native_register()
  * for the host side that must build from this exact same constant. */
@@ -29,7 +29,7 @@
 
 #if defined(__wasm__)
 #define PM_METAL_MOUNT_IMPORT(name) \
-	PM_METAL_UTIL_WASI_IMPORT(PM_METAL_MOUNT_WASI_MODULE, name)
+	PM_METAL_WASI_IMPORT(PM_METAL_MOUNT_WASI_MODULE, name)
 #endif
 
 /*

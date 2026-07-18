@@ -9,7 +9,6 @@
 #include <limits.h>
 #include <time.h>
 #include <errno.h>
-
 #include "pymergetic/metal/memory/bytecode.h"
 #include "pymergetic/metal/port/platform.h"
 

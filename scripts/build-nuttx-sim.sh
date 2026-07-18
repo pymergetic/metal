@@ -45,10 +45,20 @@ cmake -S "${NUTTX_DIR}" -B "${BUILD_DIR}" \
 	-DNUTTX_APPS_DIR="${APPS_DIR}" \
 	-DCMAKE_BUILD_TYPE=Release
 
-# Merge fragment into .config: replace KEY=val or "# KEY is not set".
+# Merge fragment into .config: KEY=val sets; "# KEY is not set" unsets.
 if [[ -f "${BUILD_DIR}/.config" ]]; then
 	while IFS= read -r line || [[ -n "${line}" ]]; do
-		[[ -z "${line}" || "${line}" =~ ^# ]] && continue
+		[[ -z "${line}" ]] && continue
+		if [[ "${line}" =~ ^#\ (CONFIG_[A-Za-z0-9_]+)\ is\ not\ set$ ]]; then
+			key="${BASH_REMATCH[1]}"
+			if grep -q "^${key}=" "${BUILD_DIR}/.config" 2>/dev/null; then
+				sed -i "s|^${key}=.*|# ${key} is not set|" "${BUILD_DIR}/.config"
+			elif ! grep -q "^# ${key} is not set\$" "${BUILD_DIR}/.config" 2>/dev/null; then
+				echo "# ${key} is not set" >>"${BUILD_DIR}/.config"
+			fi
+			continue
+		fi
+		[[ "${line}" =~ ^# ]] && continue
 		key="${line%%=*}"
 		if grep -q "^${key}=" "${BUILD_DIR}/.config" 2>/dev/null; then
 			sed -i "s|^${key}=.*|${line}|" "${BUILD_DIR}/.config"

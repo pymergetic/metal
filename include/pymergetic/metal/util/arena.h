@@ -19,7 +19,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "pymergetic/metal/util/wasi.h" /* IWYU pragma: keep */
+#include "pymergetic/metal/wasi.h" /* IWYU pragma: keep */
 
 typedef struct pm_metal_util_arena pm_metal_util_arena_t;
 
@@ -29,7 +29,7 @@ typedef struct pm_metal_util_arena pm_metal_util_arena_t;
 
 #if defined(__wasm__)
 #define PM_METAL_UTIL_ARENA_IMPORT(name) \
-	PM_METAL_UTIL_WASI_IMPORT(PM_METAL_UTIL_ARENA_WASI_MODULE, name)
+	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_ARENA_WASI_MODULE, name)
 /* Opaque host id — not a pointer into guest linear memory. */
 typedef uint32_t pm_metal_util_arena_handle_t;
 #endif

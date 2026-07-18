@@ -6,7 +6,7 @@
  * Monocypher themselves (same shape as util/lz4.h).
  *
  * Deliberately a small leaf API: Blake2b and ChaCha20-Poly1305 AEAD.
- * TLS/HTTPS lives in util/http.h (libcurl + mbedTLS), not here.
+ * TLS/HTTPS lives in net/http.h (libcurl + mbedTLS), not here.
  */
 #ifndef PYMERGETIC_METAL_UTIL_CRYPTO_H_
 #define PYMERGETIC_METAL_UTIL_CRYPTO_H_
@@ -14,7 +14,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "pymergetic/metal/util/wasi.h" /* IWYU pragma: keep */
+#include "pymergetic/metal/wasi.h" /* IWYU pragma: keep */
 
 #define PM_METAL_UTIL_CRYPTO_WASI_MODULE "pymergetic.metal.util.crypto"
 
@@ -27,7 +27,7 @@
 
 #if defined(__wasm__)
 #define PM_METAL_UTIL_CRYPTO_IMPORT(name) \
-	PM_METAL_UTIL_WASI_IMPORT(PM_METAL_UTIL_CRYPTO_WASI_MODULE, name)
+	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_CRYPTO_WASI_MODULE, name)
 #endif
 
 /*

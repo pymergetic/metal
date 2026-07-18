@@ -14,8 +14,8 @@ CompileFlags:
     # "external/<dep>/…" (CMake sets this per-source; needed here too when
     # clangd falls back to these Add flags / an inferred command).
     - -I@@ROOT@@
-    - -Iinclude
-    - -Isrc/common
+    - -I@@ROOT@@/include
+    - -I@@ROOT@@/src/common
 
 ---
 # mods/*/main.c — wasm32-wasip1 target + the repo's own wasi-sysroot (see
@@ -107,6 +107,47 @@ CompileFlags:
     - -DPM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
 
 ---
+# Zephyr port net binds (dns/udp/tcp/tls) — often missing from the native_sim
+# compile_commands until a full zephyr rebuild. clangd then borrows the
+# same-basename linux file (e.g. src/linux/.../port/udp.c) and
+# <zephyr/net/socket.h> is "not found". Ignore CDB for these paths and use
+# absolute Zephyr flags only.
+If:
+  PathMatch: .*/src/zephyr/pymergetic/metal/port/(dns|udp|tcp|tls)\.c
+CompileFlags:
+  CompilationDatabase: None
+  Add:
+    - -std=gnu11
+    - -I@@ROOT@@/src/common
+    - -I@@ROOT@@/src/zephyr
+    - -I@@ROOT@@/include
+    - -DPM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_ZEPHYR
+    - -DKERNEL
+    - -D__ZEPHYR__=1
+    - -imacros
+    - "@@ROOT@@/build/zephyr/native_sim/zephyr/include/generated/zephyr/autoconf.h"
+    - -I@@ROOT@@/external/zephyr/include
+    - -I@@ROOT@@/build/zephyr/native_sim/zephyr/include/generated
+    - -I@@ROOT@@/build/zephyr/native_sim/zephyr/include/generated/zephyr
+    - -I@@ROOT@@/external/zephyr/soc/native/inf_clock
+    - -I@@ROOT@@/external/zephyr/boards/native/native_sim
+    - -I@@ROOT@@/external/zephyr/lib/libc/picolibc/include
+    - -I@@ROOT@@/external/zephyr/lib/posix/c_lib_ext/getopt
+    - -I@@ROOT@@/external/zephyr/include/zephyr/posix
+    - -I@@ROOT@@/external/zephyr/scripts/native_simulator/common/src/include
+    - -I@@ROOT@@/external/zephyr/scripts/native_simulator/native/src/include
+    - -I@@ROOT@@/external/wamr/core/iwasm/include
+    - -I@@ROOT@@/external/wamr/core/shared/platform/include
+    - -I@@ROOT@@/external/wamr/core/shared/platform/zephyr
+    - -isystem
+    - "@@ROOT@@/build/zephyr/native_sim/modules/picolibc/picolibc/include"
+Diagnostics:
+  Suppress:
+    - sizeof_alignof_incomplete_or_sizeless_type
+    - undeclared_var_use
+    - implicit-function-declaration
+
+---
 # src/zephyr/* + tests/zephyr_verify.* — prefer compile_commands.json from
 # build/zephyr/native_sim (merged by scripts/setup-ide.sh). The flags
 # below are a fallback when that CDB is missing. clangd's bundled Clang
@@ -116,30 +157,34 @@ If:
   PathMatch: (src/zephyr/.*\.(c|h)|tests/zephyr_verify\.(c|h))
 CompileFlags:
   Add:
-    - -Isrc/common
-    - -Isrc/zephyr
-    - -Itests
-    - -Iinclude
+    # Absolute @@ROOT@@ paths: these files are often missing from
+    # compile_commands (stale zephyr CDB / newly added sources). clangd then
+    # infers a command whose working directory is a build/ subdir, and any
+    # relative -I here would miss external/zephyr/include (e.g. net/socket.h).
+    - -I@@ROOT@@/src/common
+    - -I@@ROOT@@/src/zephyr
+    - -I@@ROOT@@/tests
+    - -I@@ROOT@@/include
     - -DPM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_ZEPHYR
     - -DKERNEL
     - -D__ZEPHYR__=1
     - -imacros
-    - build/zephyr/native_sim/zephyr/include/generated/zephyr/autoconf.h
-    - -Iexternal/zephyr/include
-    - -Ibuild/zephyr/native_sim/zephyr/include/generated
-    - -Ibuild/zephyr/native_sim/zephyr/include/generated/zephyr
-    - -Iexternal/zephyr/soc/native/inf_clock
-    - -Iexternal/zephyr/boards/native/native_sim
-    - -Iexternal/zephyr/lib/libc/picolibc/include
-    - -Iexternal/zephyr/lib/posix/c_lib_ext/getopt
-    - -Iexternal/zephyr/include/zephyr/posix
-    - -Iexternal/zephyr/scripts/native_simulator/common/src/include
-    - -Iexternal/zephyr/scripts/native_simulator/native/src/include
-    - -Iexternal/wamr/core/iwasm/include
-    - -Iexternal/wamr/core/shared/platform/include
-    - -Iexternal/wamr/core/shared/platform/zephyr
+    - "@@ROOT@@/build/zephyr/native_sim/zephyr/include/generated/zephyr/autoconf.h"
+    - -I@@ROOT@@/external/zephyr/include
+    - -I@@ROOT@@/build/zephyr/native_sim/zephyr/include/generated
+    - -I@@ROOT@@/build/zephyr/native_sim/zephyr/include/generated/zephyr
+    - -I@@ROOT@@/external/zephyr/soc/native/inf_clock
+    - -I@@ROOT@@/external/zephyr/boards/native/native_sim
+    - -I@@ROOT@@/external/zephyr/lib/libc/picolibc/include
+    - -I@@ROOT@@/external/zephyr/lib/posix/c_lib_ext/getopt
+    - -I@@ROOT@@/external/zephyr/include/zephyr/posix
+    - -I@@ROOT@@/external/zephyr/scripts/native_simulator/common/src/include
+    - -I@@ROOT@@/external/zephyr/scripts/native_simulator/native/src/include
+    - -I@@ROOT@@/external/wamr/core/iwasm/include
+    - -I@@ROOT@@/external/wamr/core/shared/platform/include
+    - -I@@ROOT@@/external/wamr/core/shared/platform/zephyr
     - -isystem
-    - build/zephyr/native_sim/modules/picolibc/picolibc/include
+    - "@@ROOT@@/build/zephyr/native_sim/modules/picolibc/picolibc/include"
 Diagnostics:
   Suppress:
     - sizeof_alignof_incomplete_or_sizeless_type

@@ -120,6 +120,10 @@ include(${CMAKE_CURRENT_LIST_DIR}/cmake/PmNetDeps.cmake)
 add_executable(pm-linux-runtime
 	main.c
 	pymergetic/metal/port/platform.c
+	pymergetic/metal/port/dns.c
+	pymergetic/metal/port/tls.c
+	pymergetic/metal/port/udp.c
+	pymergetic/metal/port/tcp.c
 	pymergetic/metal/port/lock.c
 	pymergetic/metal/port/worker.c
 	pymergetic/metal/port/pipe.c
@@ -165,8 +169,12 @@ add_executable(pm-linux-runtime
 	${MICROTAR_ROOT_DIR}/src/microtar.c
 	${PM_COMMON}/util/crypto.c
 	${MONOCYPHER_ROOT_DIR}/src/monocypher.c
-	${PM_COMMON}/util/ntp.c
-	${PM_COMMON}/util/http.c
+	${PM_COMMON}/net/ntp.c
+	${PM_COMMON}/net/dns.c
+	${PM_COMMON}/net/udp.c
+	${PM_COMMON}/net/tcp.c
+	${PM_COMMON}/net/tls.c
+	${PM_COMMON}/net/http.c
 )
 
 # Optional embed .c from scripts/pack-image.sh (Phase 4 populate) — link when
@@ -191,11 +199,10 @@ target_include_directories(pm-linux-runtime PRIVATE
 # MODULE above is 1 — kept in lockstep with that setting so runtime.c stays
 # buildable unchanged against a future zephyr WAMR build with multi-module
 # still off (see src/zephyr/CMakeLists.txt, which does not define this).
-# PM_METAL_HAVE_NET: enables real SNTP + curl in util/{ntp,http}.c.
 target_compile_definitions(pm-linux-runtime PRIVATE
 	PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
 	PM_METAL_RUNTIME_MULTI_MODULE=1
-	PM_METAL_HAVE_NET=1
+	PM_METAL_HAVE_CURL=1
 )
 
 target_link_libraries(pm-linux-runtime PRIVATE
@@ -213,6 +220,10 @@ target_link_libraries(pm-linux-runtime PRIVATE
 add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
 	${PM_METAL_ROOT}/tests/thread_stress_test.c
 	pymergetic/metal/port/platform.c
+	pymergetic/metal/port/dns.c
+	pymergetic/metal/port/tls.c
+	pymergetic/metal/port/udp.c
+	pymergetic/metal/port/tcp.c
 	pymergetic/metal/port/lock.c
 	pymergetic/metal/memory/ram.c
 	pymergetic/metal/memory/kheap.c
@@ -253,8 +264,12 @@ add_executable(pm-linux-thread-stress EXCLUDE_FROM_ALL
 	${MICROTAR_ROOT_DIR}/src/microtar.c
 	${PM_COMMON}/util/crypto.c
 	${MONOCYPHER_ROOT_DIR}/src/monocypher.c
-	${PM_COMMON}/util/ntp.c
-	${PM_COMMON}/util/http.c
+	${PM_COMMON}/net/ntp.c
+	${PM_COMMON}/net/dns.c
+	${PM_COMMON}/net/udp.c
+	${PM_COMMON}/net/tcp.c
+	${PM_COMMON}/net/tls.c
+	${PM_COMMON}/net/http.c
 )
 
 target_include_directories(pm-linux-thread-stress PRIVATE
@@ -266,7 +281,7 @@ target_include_directories(pm-linux-thread-stress PRIVATE
 target_compile_definitions(pm-linux-thread-stress PRIVATE
 	PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
 	PM_METAL_RUNTIME_MULTI_MODULE=1
-	PM_METAL_HAVE_NET=1
+	PM_METAL_HAVE_CURL=1
 )
 
 target_link_libraries(pm-linux-thread-stress PRIVATE
@@ -286,6 +301,10 @@ target_link_libraries(pm-linux-thread-stress PRIVATE
 add_executable(pm-linux-process-test EXCLUDE_FROM_ALL
 	${PM_METAL_ROOT}/tests/process_test.c
 	pymergetic/metal/port/platform.c
+	pymergetic/metal/port/dns.c
+	pymergetic/metal/port/tls.c
+	pymergetic/metal/port/udp.c
+	pymergetic/metal/port/tcp.c
 	pymergetic/metal/port/lock.c
 	pymergetic/metal/port/worker.c
 	pymergetic/metal/port/pipe.c
@@ -330,8 +349,12 @@ add_executable(pm-linux-process-test EXCLUDE_FROM_ALL
 	${MICROTAR_ROOT_DIR}/src/microtar.c
 	${PM_COMMON}/util/crypto.c
 	${MONOCYPHER_ROOT_DIR}/src/monocypher.c
-	${PM_COMMON}/util/ntp.c
-	${PM_COMMON}/util/http.c
+	${PM_COMMON}/net/ntp.c
+	${PM_COMMON}/net/dns.c
+	${PM_COMMON}/net/udp.c
+	${PM_COMMON}/net/tcp.c
+	${PM_COMMON}/net/tls.c
+	${PM_COMMON}/net/http.c
 )
 
 target_include_directories(pm-linux-process-test PRIVATE
@@ -343,7 +366,7 @@ target_include_directories(pm-linux-process-test PRIVATE
 target_compile_definitions(pm-linux-process-test PRIVATE
 	PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_LINUX
 	PM_METAL_RUNTIME_MULTI_MODULE=1
-	PM_METAL_HAVE_NET=1
+	PM_METAL_HAVE_CURL=1
 )
 
 target_link_libraries(pm-linux-process-test PRIVATE

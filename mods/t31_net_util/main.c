@@ -1,11 +1,12 @@
 /*
- * T31 — util/{crypto,ntp,http}.h wasi-style imports: Blake2b + AEAD
- * round-trip (offline), SNTP sync, HTTPS GET. Network steps need a live
- * host (see scripts/verify-linux-net.sh).
+ * T31 — net/{dns,ntp,http} + util/crypto wasi-style imports: Blake2b +
+ * AEAD (offline), DNS, SNTP, HTTPS GET. Network steps need a live host
+ * (see scripts/verify-linux-net.sh).
  */
+#include <pymergetic/metal/net/dns.h>
+#include <pymergetic/metal/net/http.h>
+#include <pymergetic/metal/net/ntp.h>
 #include <pymergetic/metal/util/crypto.h>
-#include <pymergetic/metal/util/http.h>
-#include <pymergetic/metal/util/ntp.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -19,6 +20,8 @@ int main(void)
 	uint8_t mac[PM_METAL_UTIL_CRYPTO_MAC_LEN];
 	uint8_t cipher[sizeof(msg)];
 	uint8_t plain[sizeof(msg)];
+	pm_metal_net_addr_t addrs[4];
+	size_t naddr = 0;
 	uint64_t unix_s = 0;
 	static char body[4096];
 	size_t body_len = 0;
@@ -50,23 +53,29 @@ int main(void)
 	}
 	printf("t31_net_util: aead round-trip ok\n");
 
-	if (pm_metal_util_ntp_sync("pool.ntp.org", 5000, &unix_s) != 0 || unix_s < 1700000000ULL) {
+	if (pm_metal_net_dns_lookup("example.com", 443, addrs, 4, &naddr) != 0 || naddr == 0) {
+		printf("t31_net_util: net_dns_lookup failed\n");
+		return 1;
+	}
+	printf("t31_net_util: net dns n=%zu family=%u\n", naddr, (unsigned)addrs[0].family);
+
+	if (pm_metal_net_ntp_sync("pool.ntp.org", 5000, &unix_s) != 0 || unix_s < 1700000000ULL) {
 		printf("t31_net_util: ntp_sync failed\n");
 		return 1;
 	}
 	printf("t31_net_util: ntp unix=%llu\n", (unsigned long long)unix_s);
 
-	status = pm_metal_util_http_get("https://example.com/", body, sizeof(body) - 1, &body_len);
+	status = pm_metal_net_http_get("https://example.com/", body, sizeof(body) - 1, &body_len);
 	if (status < 200 || status >= 400 || body_len == 0) {
-		printf("t31_net_util: http_get failed status=%d len=%zu\n", status, body_len);
+		printf("t31_net_util: net_http_get failed status=%d len=%zu\n", status, body_len);
 		return 1;
 	}
 	body[body_len < sizeof(body) ? body_len : sizeof(body) - 1] = '\0';
-	printf("t31_net_util: http status=%d len=%zu\n", status, body_len);
+	printf("t31_net_util: net http status=%d len=%zu\n", status, body_len);
 	if (!strstr(body, "Example Domain") && !strstr(body, "example")) {
 		printf("t31_net_util: unexpected body\n");
 		return 1;
 	}
-	printf("t31_net_util: http ok\n");
+	printf("t31_net_util: net http ok\n");
 	return 0;
 }

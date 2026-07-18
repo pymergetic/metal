@@ -4,7 +4,7 @@
  * their own headers) — every call below is resolved against each host
  * module's own native registration (src/common/pymergetic/metal/util/
  * {size,arena,log,lz4,tar}.c, each under its own PM_METAL_UTIL_{SIZE,ARENA,
- * LOG,LZ4,TAR}_WASI_MODULE import name, see util/wasi.h) at instantiate()
+ * LOG,LZ4,TAR}_WASI_MODULE import name, see metal/wasi.h) at instantiate()
  * time. `arena_init()` is called over this mod's *own* stack buffer, and
  * lz4_compress()/decompress() round-trip through two more of this mod's
  * own stack buffers, to prove the host really is reading/writing this

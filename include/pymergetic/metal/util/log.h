@@ -28,7 +28,7 @@
 
 #include <stddef.h>
 
-#include "pymergetic/metal/util/wasi.h" /* IWYU pragma: keep */
+#include "pymergetic/metal/wasi.h" /* IWYU pragma: keep */
 
 typedef enum pm_metal_log_level {
 	PM_METAL_LOG_TRACE = 0,
@@ -53,7 +53,7 @@ typedef enum pm_metal_log_stream {
 
 #if defined(__wasm__)
 #define PM_METAL_UTIL_LOG_IMPORT(name) \
-	PM_METAL_UTIL_WASI_IMPORT(PM_METAL_UTIL_LOG_WASI_MODULE, name)
+	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_LOG_WASI_MODULE, name)
 #endif
 
 /*

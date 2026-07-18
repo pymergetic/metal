@@ -40,7 +40,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "pymergetic/metal/util/wasi.h" /* IWYU pragma: keep */
+#include "pymergetic/metal/wasi.h" /* IWYU pragma: keep */
 
 /* This module's own import_module name — see tar.c's native_register()
  * for the host side that must build from this exact same constant. */
@@ -48,7 +48,7 @@
 
 #if defined(__wasm__)
 #define PM_METAL_UTIL_TAR_IMPORT(name) \
-	PM_METAL_UTIL_WASI_IMPORT(PM_METAL_UTIL_TAR_WASI_MODULE, name)
+	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_TAR_WASI_MODULE, name)
 #endif
 
 /* ustar's own fixed name-field width (incl. NUL) — see file header re:
