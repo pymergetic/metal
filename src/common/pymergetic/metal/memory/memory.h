@@ -10,6 +10,7 @@
 
 #include "pymergetic/metal/memory/bytecode.h" /* IWYU pragma: export */
 #include "pymergetic/metal/memory/kheap.h" /* IWYU pragma: export */
+#include "pymergetic/metal/memory/layout.h" /* IWYU pragma: export */
 #include "pymergetic/metal/memory/ops.h" /* IWYU pragma: export */
 #include "pymergetic/metal/memory/ram.h" /* IWYU pragma: export */
 

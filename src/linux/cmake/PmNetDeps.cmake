@@ -1,5 +1,5 @@
 # Vendored net stack: mbedTLS + nghttp2 + libcurl (HTTP/1.1 + HTTP/2).
-# Called from src/linux/CMakeLists.txt. See scripts/setup-net.sh.
+# Called from src/linux/CMakeLists.txt. See scripts/setup net.
 #
 # Monocypher is compiled as a single source next to util/crypto.c (lz4 shape),
 # not via this file.
@@ -11,7 +11,7 @@ set(PM_CURL_DIR "${PM_METAL_ROOT}/external/curl")
 foreach(_pm_net_dir PM_MBEDTLS_DIR PM_NGHTTP2_DIR PM_CURL_DIR)
 	if (NOT EXISTS "${${_pm_net_dir}}/CMakeLists.txt")
 		message(FATAL_ERROR
-			"${${_pm_net_dir}} missing — run scripts/setup-net.sh")
+			"${${_pm_net_dir}} missing — run scripts/setup net")
 	endif ()
 endforeach()
 

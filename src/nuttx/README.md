@@ -24,16 +24,17 @@ src/nuttx/
 ## Bring-up (sim)
 
 ```bash
-./scripts/setup-nuttx.sh          # external/nuttx, nuttx-apps, WAMR, app symlink
-./scripts/build-nuttx-sim.sh      # build/nuttx/sim/nuttx
-./scripts/verify-nuttx-sim.sh     # nsh scripted smoke (t0/t1/t3/t4)
+./scripts/setup nuttx          # external/nuttx, nuttx-apps, WAMR, app symlink
+./scripts/build nuttx sim      # build/nuttx/sim/nuttx
+./scripts/verify nuttx sim     # nsh scripted smoke (t0/t1/t3/t4)
 ```
 
 Manual nsh (watch `CONFIG_LINE_MAX` — long lines truncate; prefer the verify script):
 
 ```text
 mount -t hostfs -o fs=/path/to/vfs /v
-pm_metal --memory=8388608 --bytecode-memory=524288 --vfs-root=/v /t0.wasm
+pm_metal --vfs-root=/v /t0.wasm
+# (omit --memory/--bytecode-memory → server layout, same as linux/zephyr)
 ```
 
 Use **copies** of `.wasm` files on the host dir, not symlinks — hostfs

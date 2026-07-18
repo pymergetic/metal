@@ -21,7 +21,9 @@ config PM_METAL_VERIFY_MODS
 
 config PM_METAL_STATIC_POOL_BYTES
 	int "Static Metal pool region (non-MMU targets)"
-	default 16777216
+	default 536870912
 	help
 	  BSS-backed region carved into kheap + bytecode pools when CONFIG_MMU
-	  is off (e.g. native_sim). Ignored when MMU mapping is used.
+	  is off (e.g. native_sim). Must be ≥ PM_METAL_MEMORY_KHEAP_BYTES +
+	  PM_METAL_MEMORY_BYTECODE_BYTES from memory/layout.h (256+64 MiB);
+	  default 512 MiB matches prj.conf. Ignored when MMU mapping is used.

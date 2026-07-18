@@ -3,7 +3,7 @@ On NuttX, #include <stdio.h> pulls in nuttx/fs/fs.h which declares those
 exact names as VFS APIs — conflicting types with these static helpers even
 though they are file-local. No src/-side workaround: the names live inside
 vendored microtar.c. Harmless on linux/zephyr. Applied by
-scripts/setup-microtar.sh. See docs/SOURCETREE.md "Vendoring".
+scripts/setup microtar. See docs/SOURCETREE.md "Vendoring".
 
 diff --git a/src/microtar.c b/src/microtar.c
 index e5d0dc6..8bdf736 100644

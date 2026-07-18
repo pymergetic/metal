@@ -3,7 +3,7 @@
 # Classic Application.mk path is intentionally thin: WAMR's nuttx wamr.mk is
 # driven by CONFIG_INTERPRETERS_WAMR_* (stock WAMR interpreter app). Metal sets
 # WAMR_BUILD_* itself in CMakeLists.txt instead — use the NuttX CMake build
-# (scripts/build-nuttx-sim.sh). Make.defs still registers this app directory.
+# (scripts/build nuttx sim). Make.defs still registers this app directory.
 
 include $(APPDIR)/Make.defs
 

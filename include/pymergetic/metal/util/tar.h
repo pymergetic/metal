@@ -1,7 +1,7 @@
 /*
  * Minimal ustar reader/writer — thin wrapper around vendored upstream
  * microtar (external/microtar, pinned + patched by
- * scripts/setup-microtar.sh, see docs/SOURCETREE.md "Vendoring"):
+ * scripts/setup microtar, see docs/SOURCETREE.md "Vendoring"):
  * microtar owns header (de)serialization + checksum handling, this
  * module adds bounds-checked memory-stream callbacks over a caller-owned
  * buffer (no FILE*, no filesystem) and a small sequential cursor/writer

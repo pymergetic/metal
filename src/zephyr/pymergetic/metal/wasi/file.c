@@ -309,18 +309,16 @@ join_host_path(const char *base, const char *path, char *abs_path, size_t abs_pa
 		abs_path[0] = '\0';
 		return false;
 	}
+	/* memcpy: sizes already checked; avoids -Wformat-truncation on snprintf. */
 	if (base[len1 - 1] == '/') {
-		snprintf(abs_path, abs_path_len, "%s%s", base, rel);
+		memcpy(abs_path, base, len1);
+		memcpy(abs_path + len1, rel, len2 + 1);
 	} else {
-		snprintf(abs_path, abs_path_len, "%s/%s", base, rel);
+		memcpy(abs_path, base, len1);
+		abs_path[len1] = '/';
+		memcpy(abs_path + len1 + 1, rel, len2 + 1);
 	}
 	return true;
-}
-
-bool
-build_absolute_path(char *abs_path, size_t abs_path_len, const char *path)
-{
-	return join_host_path(prestat_dir, path, abs_path, abs_path_len);
 }
 
 static bool
@@ -1402,10 +1400,12 @@ os_mkdirat(os_file_handle handle, const char *path)
     char abs_path[MAX_FILE_NAME + 1];
 
     if (handle < 0) {
-        return __WASI_EINVAL; // Or another appropriate error code
+        return __WASI_EBADF;
     }
 
-    if (!build_absolute_path(abs_path, sizeof(abs_path), path)) {
+    /* Same dirfd-relative join as os_openat — wasi-libc passes paths
+     * relative to the containing directory fd, not the root preopen. */
+    if (!resolve_open_path(handle, path, abs_path, sizeof(abs_path))) {
         return __WASI_ENOMEM;
     }
 
@@ -1419,32 +1419,22 @@ os_mkdirat(os_file_handle handle, const char *path)
     return __WASI_ESUCCESS;
 }
 
-// DSK: Somewhere along the WASI libc implementation path, the knowledge
-// was lost that `old_handle` and `new_handle` refer to directories that
-// contain the files to be renamed, rather than the file fds themselves:
-//
-// __wasilibc_nocwd_renameat(old_dirfd, old_relative_path,
-//                           new_dirfd, new_relative_path);
-//
-// Therefore we won't mess with the supplied fd's, and work only off
-// of the supplied paths. Note: this will change when more than one
-// pre-opened dir is supported in the future.
 __wasi_errno_t
 os_renameat(os_file_handle old_handle, const char *old_path,
             os_file_handle new_handle, const char *new_path)
 {
-    // directories, safe to ignore
-    (void)old_handle;
-    (void)new_handle;
-
     char abs_old_path[MAX_FILE_NAME + 1];
     char abs_new_path[MAX_FILE_NAME + 1];
 
-    if (!build_absolute_path(abs_old_path, sizeof(abs_old_path), old_path)) {
-        return __WASI_ENOMEM;
+    if (old_handle < 0 || new_handle < 0) {
+        return __WASI_EBADF;
     }
 
-    if (!build_absolute_path(abs_new_path, sizeof(abs_new_path), new_path)) {
+    /* dirfd + relative path (see os_openat / docs/MOUNT.md Zephyr *at). */
+    if (!resolve_open_path(old_handle, old_path, abs_old_path, sizeof(abs_old_path))) {
+        return __WASI_ENOMEM;
+    }
+    if (!resolve_open_path(new_handle, new_path, abs_new_path, sizeof(abs_new_path))) {
         return __WASI_ENOMEM;
     }
 
@@ -1495,19 +1485,18 @@ os_renameat(os_file_handle old_handle, const char *old_path,
     return __WASI_ESUCCESS;
 }
 
-// DSK: Same thing as renameat: `handle` refers to the containing directory,
-// not the file handle to unlink. We ignore the handle and use the path
-// exclusively.
-//
-// TODO: is there anything we need to do in case is_dir=true?
 __wasi_errno_t
 os_unlinkat(os_file_handle handle, const char *path, bool is_dir)
 {
-    (void)handle;
-
     char abs_path[MAX_FILE_NAME + 1];
 
-    if (!build_absolute_path(abs_path, sizeof(abs_path), path)) {
+    (void)is_dir; /* Zephyr fs_unlink covers files and empty dirs. */
+
+    if (handle < 0) {
+        return __WASI_EBADF;
+    }
+
+    if (!resolve_open_path(handle, path, abs_path, sizeof(abs_path))) {
         return __WASI_ENOMEM;
     }
 

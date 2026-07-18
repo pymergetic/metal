@@ -5,8 +5,8 @@ arch_new_thread() calls fxsave into thread->arch.sse (offset 0x160),
 which #GPs unless that address is 16-byte aligned. Growing the Metal
 image (net/crypto) moved the MMU-backed kheap base so pthread_create
 from mods/t23_pthread started landing k_thread objects at 8-mod-16 —
-reproduced by scripts/verify-zephyr-qemu.sh right after t3_util_native.
-Applied by scripts/setup-wamr.sh.
+reproduced by scripts/verify zephyr qemu right after t3_util_native.
+Applied by scripts/setup wamr.
 
 --- a/core/shared/platform/zephyr/zephyr_thread.c
 +++ b/core/shared/platform/zephyr/zephyr_thread.c

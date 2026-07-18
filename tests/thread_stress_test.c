@@ -3,7 +3,7 @@
  * ThreadSanitizer) the threading contract documented in runtime.c and
  * docs/RUNTIME.md "Concurrency", rather than just asserting it in a
  * comment. Not part of the normal build — see
- * scripts/verify-linux-threads.sh, which builds this target with TSan
+ * scripts/verify linux none threads, which builds this target with TSan
  * and fails the build if TSan reports anything.
  *
  * Exercises three things concurrently:
@@ -22,6 +22,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "pymergetic/metal/memory/layout.h"
+#include "pymergetic/metal/mount/pkg.h"
 #include "pymergetic/metal/runtime/runtime.h"
 
 #define NUM_WORKERS 6 /* + 1 shared handle must stay under runtime.h's PM_METAL_RUNTIME_MAX_HANDLES */
@@ -35,7 +37,7 @@ static pm_metal_runtime_handle_t g_shared_handle;
 static void *independent_worker(void *arg)
 {
 	intptr_t id = (intptr_t)arg;
-	const char *path = (id % 2 == 0) ? "/mods/t0_hello.wasm" : "/mods/t1_read.wasm";
+	const char *path = (id % 2 == 0) ? "/mods/tests/t0_hello.wasm" : "/mods/tests/t1_read.wasm";
 	int i;
 
 	for (i = 0; i < ITERATIONS; i++) {
@@ -108,8 +110,8 @@ int main(void)
 	}
 
 	pm_metal_runtime_config_t cfg = {
-		.memory_bytes = 64 * 1024 * 1024,
-		.bytecode_bytes = 4 * 1024 * 1024,
+		.memory_bytes = PM_METAL_MEMORY_KHEAP_BYTES,
+		.bytecode_bytes = PM_METAL_MEMORY_BYTECODE_BYTES,
 		.vfs_root = vfs_root,
 	};
 
@@ -117,8 +119,13 @@ int main(void)
 		fprintf(stderr, "init failed\n");
 		return 1;
 	}
+	if (pm_metal_pkg_apply_all() != 0) {
+		fprintf(stderr, "guest package apply failed\n");
+		pm_metal_runtime_shutdown();
+		return 1;
+	}
 
-	if (pm_metal_runtime_load_file("/mods/t0_hello.wasm", &g_shared_handle) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t0_hello.wasm", &g_shared_handle) != 0) {
 		fprintf(stderr, "shared handle load failed\n");
 		pm_metal_runtime_shutdown();
 		return 1;

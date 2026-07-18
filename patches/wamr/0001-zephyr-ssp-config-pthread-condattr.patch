@@ -7,8 +7,8 @@ Zephyr ssp_config tweaks that cannot live in src/:
    the first real open. Metal provides arc4random_buf() in
    src/zephyr/.../wasi/support.c (sys_rand_get); this patch only flips
    the feature flag and declares the symbol for WAMR's C.
-See docs/SOURCETREE.md "Vendoring". Applied by scripts/setup-wamr.sh
-(and scripts/setup-west.sh after west update).
+See docs/SOURCETREE.md "Vendoring". Applied by scripts/setup wamr
+(and scripts/setup west after west update).
 
 diff --git a/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/ssp_config.h b/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/ssp_config.h
 index 82967721..470c8fd2 100644

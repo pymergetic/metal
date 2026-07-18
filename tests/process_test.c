@@ -3,7 +3,7 @@
  * proves kill() actually stops a genuinely still-running guest (not one
  * that already happened to finish on its own), by racing it against
  * mods/t5_spin.wasm's own infinite loop. Not part of the normal build —
- * see scripts/verify-linux-process.sh. Host harness (built by the Linux
+ * see scripts/verify linux none process. Host harness (built by the Linux
  * CMake today): calls usleep()/sleep() directly (same reasoning as
  * thread_stress_test.c calling pthread — native host test code, not
  * the portable common layer).
@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include "pymergetic/metal/memory/layout.h"
+#include "pymergetic/metal/mount/pkg.h"
 #include "pymergetic/metal/port/pipe.h"
 #include "pymergetic/metal/runtime/env.h"
 #include "pymergetic/metal/runtime/process.h"
@@ -30,8 +32,8 @@ int main(void)
 	static const char *addr_pool[] = { "127.0.0.1/32", "::1/128" };
 	static const char *ns_lookup_pool[] = { "localhost" };
 	pm_metal_runtime_config_t cfg = {
-		.memory_bytes = 64 * 1024 * 1024,
-		.bytecode_bytes = 4 * 1024 * 1024,
+		.memory_bytes = PM_METAL_MEMORY_KHEAP_BYTES,
+		.bytecode_bytes = PM_METAL_MEMORY_BYTECODE_BYTES,
 		.vfs_root = vfs_root,
 		.addr_pool = addr_pool,
 		.addr_pool_count = 2,
@@ -41,6 +43,11 @@ int main(void)
 
 	if (pm_metal_runtime_init(&cfg) != 0) {
 		fprintf(stderr, "runtime init failed\n");
+		return 1;
+	}
+	if (pm_metal_pkg_apply_all() != 0) {
+		fprintf(stderr, "guest package apply failed\n");
+		pm_metal_runtime_shutdown();
 		return 1;
 	}
 	if (pm_metal_process_init() != 0) {
@@ -54,7 +61,7 @@ int main(void)
 	/* --- getpid()-via-env: spawn() must inject PID=<n> even with no
 	 * caller-supplied env at all. --- */
 	pm_metal_runtime_handle_t h_getpid;
-	if (pm_metal_runtime_load_file("/mods/t4_getpid.wasm", &h_getpid) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t4_getpid.wasm", &h_getpid) != 0) {
 		fprintf(stderr, "load t4_getpid failed\n");
 		goto done;
 	}
@@ -76,7 +83,7 @@ int main(void)
 
 	/* --- kill(): must stop a genuinely still-running guest. --- */
 	pm_metal_runtime_handle_t h_spin;
-	if (pm_metal_runtime_load_file("/mods/t5_spin.wasm", &h_spin) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t5_spin.wasm", &h_spin) != 0) {
 		fprintf(stderr, "load t5_spin failed\n");
 		goto done;
 	}
@@ -139,13 +146,13 @@ int main(void)
 	}
 
 	pm_metal_runtime_handle_t h_writer, h_reader;
-	if (pm_metal_runtime_load_file("/mods/t6_pipe_writer.wasm", &h_writer) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t6_pipe_writer.wasm", &h_writer) != 0) {
 		fprintf(stderr, "load t6_pipe_writer failed\n");
 		pm_metal_port_close(pipe_read_fd);
 		pm_metal_port_close(pipe_write_fd);
 		goto done;
 	}
-	if (pm_metal_runtime_load_file("/mods/t7_pipe_reader.wasm", &h_reader) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t7_pipe_reader.wasm", &h_reader) != 0) {
 		fprintf(stderr, "load t7_pipe_reader failed\n");
 		pm_metal_runtime_unload(h_writer);
 		pm_metal_port_close(pipe_read_fd);
@@ -221,7 +228,7 @@ int main(void)
 	}
 
 	pm_metal_runtime_handle_t h_env;
-	if (pm_metal_runtime_load_file("/mods/t2_env.wasm", &h_env) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t2_env.wasm", &h_env) != 0) {
 		fprintf(stderr, "load t2_env failed\n");
 		pm_metal_env_free_exported(exported_envp, exported_envc);
 		goto done;
@@ -264,14 +271,14 @@ int main(void)
 	 * process was init()ed with above. Both processes' own stdout is
 	 * left on -1 (inherit this process's own, same as every earlier
 	 * test here) — their real proof is each one's own exit code plus
-	 * scripts/verify-linux-process.sh's own grep over the combined
+	 * scripts/verify linux none process's own grep over the combined
 	 * output for t11_socket_client's "got: echo: hello socket" line. --- */
 	pm_metal_runtime_handle_t h_sock_server, h_sock_client;
-	if (pm_metal_runtime_load_file("/mods/t10_socket_server.wasm", &h_sock_server) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t10_socket_server.wasm", &h_sock_server) != 0) {
 		fprintf(stderr, "load t10_socket_server failed\n");
 		goto done;
 	}
-	if (pm_metal_runtime_load_file("/mods/t11_socket_client.wasm", &h_sock_client) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t11_socket_client.wasm", &h_sock_client) != 0) {
 		fprintf(stderr, "load t11_socket_client failed\n");
 		pm_metal_runtime_unload(h_sock_server);
 		goto done;
@@ -328,11 +335,11 @@ int main(void)
 
 	/* --- UDP echo: t24_udp_server + t25_udp_client on 127.0.0.1:9933 --- */
 	pm_metal_runtime_handle_t h_udp_server, h_udp_client;
-	if (pm_metal_runtime_load_file("/mods/t24_udp_server.wasm", &h_udp_server) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t24_udp_server.wasm", &h_udp_server) != 0) {
 		fprintf(stderr, "load t24_udp_server failed\n");
 		goto done;
 	}
-	if (pm_metal_runtime_load_file("/mods/t25_udp_client.wasm", &h_udp_client) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t25_udp_client.wasm", &h_udp_client) != 0) {
 		fprintf(stderr, "load t25_udp_client failed\n");
 		pm_metal_runtime_unload(h_udp_server);
 		goto done;
@@ -384,11 +391,11 @@ int main(void)
 
 	/* --- IPv6 TCP echo: t26_ipv6_server + t27_ipv6_client on ::1:9932 --- */
 	pm_metal_runtime_handle_t h_v6_server, h_v6_client;
-	if (pm_metal_runtime_load_file("/mods/t26_ipv6_server.wasm", &h_v6_server) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t26_ipv6_server.wasm", &h_v6_server) != 0) {
 		fprintf(stderr, "load t26_ipv6_server failed\n");
 		goto done;
 	}
-	if (pm_metal_runtime_load_file("/mods/t27_ipv6_client.wasm", &h_v6_client) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t27_ipv6_client.wasm", &h_v6_client) != 0) {
 		fprintf(stderr, "load t27_ipv6_client failed\n");
 		pm_metal_runtime_unload(h_v6_server);
 		goto done;
@@ -440,7 +447,7 @@ int main(void)
 
 	/* --- DNS: t28_dns_lookup getaddrinfo("localhost") --- */
 	pm_metal_runtime_handle_t h_dns;
-	if (pm_metal_runtime_load_file("/mods/t28_dns_lookup.wasm", &h_dns) != 0) {
+	if (pm_metal_runtime_load_file("/mods/tests/t28_dns_lookup.wasm", &h_dns) != 0) {
 		fprintf(stderr, "load t28_dns_lookup failed\n");
 		goto done;
 	}

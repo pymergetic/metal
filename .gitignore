@@ -34,7 +34,7 @@ compile_commands.json
 **/compile_commands.json
 cmake-build-*/
 
-# Generated from .clangd.template by scripts/setup-ide.sh (checkout-specific
+# Generated from .clangd.template by scripts/setup ide (checkout-specific
 # absolute paths — see that script and .clangd.template's own comment)
 /.clangd
 

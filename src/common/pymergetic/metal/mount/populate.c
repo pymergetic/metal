@@ -207,50 +207,61 @@ static int pm_metal_mount_populate_extract_tar(const uint8_t *tar, size_t tar_le
 	}
 }
 
+int pm_metal_mount_populate_extract(const uint8_t *blob, size_t blob_len, size_t uncompressed_len,
+				     unsigned flags)
+{
+	const pm_metal_memory_ops_t *bytecode = pm_metal_memory_bytecode_ops();
+	const uint8_t *tar;
+	size_t tar_len;
+	uint8_t *decomp = NULL;
+
+	if (!blob || blob_len == 0) {
+		return -1;
+	}
+	if (flags & PM_METAL_MOUNT_POPULATE_FLAG_LZ4) {
+		int n;
+
+		if (uncompressed_len == 0 || uncompressed_len > UINT32_MAX) {
+			fprintf(stderr, "pm_metal_mount: populate: lz4 uncompressed bad/too large\n");
+			return -1;
+		}
+		decomp = bytecode->alloc((uint32_t)uncompressed_len);
+		if (!decomp) {
+			fprintf(stderr, "pm_metal_mount: populate: OOM decompressing archive\n");
+			return -1;
+		}
+		n = pm_metal_util_lz4_decompress(blob, blob_len, decomp, uncompressed_len);
+		if (n < 0 || (size_t)n != uncompressed_len) {
+			fprintf(stderr, "pm_metal_mount: populate: lz4 decompress failed\n");
+			bytecode->free(decomp);
+			return -1;
+		}
+		tar = decomp;
+		tar_len = uncompressed_len;
+	} else {
+		tar = blob;
+		tar_len = blob_len;
+	}
+
+	pm_metal_mount_populate_extract_tar(tar, tar_len);
+
+	if (decomp) {
+		bytecode->free(decomp);
+	}
+	return 0;
+}
+
 int pm_metal_mount_populate_all(void)
 {
 	int i;
-	const pm_metal_memory_ops_t *bytecode = pm_metal_memory_bytecode_ops();
 
 	for (i = 0; i < PM_METAL_MOUNT_POPULATE_MAX; i++) {
 		const pm_metal_mount_populate_entry_t *e = &g_pm_metal_mount_populate_table[i];
-		const uint8_t *tar;
-		size_t tar_len;
-		uint8_t *decomp = NULL;
 
 		if (!e->used) {
 			continue;
 		}
-		if (e->flags & PM_METAL_MOUNT_POPULATE_FLAG_LZ4) {
-			int n;
-
-			if (e->uncompressed_len > UINT32_MAX) {
-				fprintf(stderr, "pm_metal_mount: populate: lz4 uncompressed too large\n");
-				continue;
-			}
-			decomp = bytecode->alloc((uint32_t)e->uncompressed_len);
-			if (!decomp) {
-				fprintf(stderr, "pm_metal_mount: populate: OOM decompressing archive\n");
-				continue;
-			}
-			n = pm_metal_util_lz4_decompress(e->blob, e->blob_len, decomp, e->uncompressed_len);
-			if (n < 0 || (size_t)n != e->uncompressed_len) {
-				fprintf(stderr, "pm_metal_mount: populate: lz4 decompress failed\n");
-				bytecode->free(decomp);
-				continue;
-			}
-			tar = decomp;
-			tar_len = e->uncompressed_len;
-		} else {
-			tar = e->blob;
-			tar_len = e->blob_len;
-		}
-
-		pm_metal_mount_populate_extract_tar(tar, tar_len);
-
-		if (decomp) {
-			bytecode->free(decomp);
-		}
+		(void)pm_metal_mount_populate_extract(e->blob, e->blob_len, e->uncompressed_len, e->flags);
 	}
 	return 0;
 }

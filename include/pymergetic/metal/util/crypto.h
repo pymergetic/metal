@@ -1,6 +1,6 @@
 /*
  * Authenticated encryption + hashing — thin wrapper around vendored
- * Monocypher (external/monocypher, pinned by scripts/setup-monocypher.sh).
+ * Monocypher (external/monocypher, pinned by scripts/setup monocypher).
  * Host-side only (src/common/pymergetic/metal/util/crypto.c); wasm32 mods
  * call through this module's wasi-style import bridge, never link
  * Monocypher themselves (same shape as util/lz4.h).

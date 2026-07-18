@@ -35,6 +35,14 @@ int pm_metal_mount_populate_register(const uint8_t *blob, size_t blob_len, size_
  */
 int pm_metal_mount_populate_all(void);
 
+/*
+ * Decompress (if needed) + extract one archive. Used by populate_all and by
+ * mount/pkg.c. Returns 0 (per-entry failures are logged and skipped).
+ * impl: common — src/common/pymergetic/metal/mount/populate.c
+ */
+int pm_metal_mount_populate_extract(const uint8_t *blob, size_t blob_len, size_t uncompressed_len,
+				     unsigned flags);
+
 /* Drop every registration (test/shutdown hygiene). Does not free blob bytes —
  * those are caller-owned (usually static).
  * impl: common — src/common/pymergetic/metal/mount/populate.c */

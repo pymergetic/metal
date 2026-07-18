@@ -10,7 +10,7 @@ menuconfig PYMERGETIC_METAL
 	---help---
 		Long-lived Metal host: load/run wasm32-wasip1 mods via WAMR.
 		First bring-up target is the NuttX sim board (hostdir rootfs).
-		Build with NuttX CMake — see scripts/build-nuttx-sim.sh.
+		Build with NuttX CMake — see scripts/build nuttx sim.
 
 if PYMERGETIC_METAL
 
