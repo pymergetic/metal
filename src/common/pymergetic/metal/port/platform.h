@@ -6,6 +6,7 @@
 #ifndef PYMERGETIC_METAL_PORT_PLATFORM_H_
 #define PYMERGETIC_METAL_PORT_PLATFORM_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
 typedef enum pm_metal_port_target_id {

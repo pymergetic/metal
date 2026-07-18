@@ -81,11 +81,15 @@
 #include "pymergetic/metal/port/lock.h"
 #include "pymergetic/metal/port/platform.h"
 #include "pymergetic/metal/util/arena.h"
+#include "pymergetic/metal/net/dns.h"
+#include "pymergetic/metal/net/http.h"
+#include "pymergetic/metal/net/ntp.h"
+#include "pymergetic/metal/net/tcp.h"
+#include "pymergetic/metal/net/tls.h"
+#include "pymergetic/metal/net/udp.h"
 #include "pymergetic/metal/util/crypto.h"
-#include "pymergetic/metal/util/http.h"
 #include "pymergetic/metal/util/log.h"
 #include "pymergetic/metal/util/lz4.h"
-#include "pymergetic/metal/util/ntp.h"
 #include "pymergetic/metal/util/size.h"
 #include "pymergetic/metal/util/tar.h"
 #include "wasm_export.h"
@@ -395,15 +399,14 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	/* Must happen before any load()/instantiate() of a module that
 	 * might import these — every mod's own compile already resolved
 	 * them to unresolved imports under that module's own
-	 * PM_METAL_UTIL_{ARENA,LOG,LZ4,SIZE,TAR,CRYPTO,NTP,HTTP}_WASI_MODULE
-	 * name (see util/{arena,log,lz4,size,tar,crypto,ntp,http}.h), so
-	 * this is the one place that has to run first, exactly once per
-	 * init()/shutdown() cycle. Each registers its own small
-	 * NativeSymbol table under its own name (see that module's own .c)
-	 * rather than one shared table here — nothing about resolving an
-	 * import needs a central table, and this way each module's
-	 * wasm-import glue lives right next to its host impl.
-	 * wasm_runtime_destroy() below frees WAMR's own registration
+	 * PM_METAL_UTIL_*_WASI_MODULE and PM_METAL_NET_*_WASI_MODULE names
+	 * (see util headers and net headers), so this is the one place that
+	 * has to run first, exactly once per init()/shutdown() cycle. Each
+	 * registers its own small NativeSymbol table under its own name
+	 * (see that module's own .c) rather than one shared table here —
+	 * nothing about resolving an import needs a central table, and this
+	 * way each module's wasm-import glue lives right next to its host
+	 * impl. wasm_runtime_destroy() below frees WAMR's own registration
 	 * bookkeeping for us; nothing to undo here on our side. */
 	if (pm_metal_util_arena_native_register() != 0
 	    || pm_metal_util_log_native_register() != 0
@@ -411,8 +414,12 @@ int pm_metal_runtime_init(const pm_metal_runtime_config_t *cfg)
 	    || pm_metal_util_size_native_register() != 0
 	    || pm_metal_util_tar_native_register() != 0
 	    || pm_metal_util_crypto_native_register() != 0
-	    || pm_metal_util_ntp_native_register() != 0
-	    || pm_metal_util_http_native_register() != 0
+	    || pm_metal_net_dns_native_register() != 0
+	    || pm_metal_net_udp_native_register() != 0
+	    || pm_metal_net_tcp_native_register() != 0
+	    || pm_metal_net_tls_native_register() != 0
+	    || pm_metal_net_ntp_native_register() != 0
+	    || pm_metal_net_http_native_register() != 0
 	    || pm_metal_mount_native_register() != 0) {
 		fprintf(stderr, "pm_metal_runtime: native registration failed\n");
 		wasm_runtime_destroy();

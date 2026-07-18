@@ -1,0 +1,87 @@
+Align WAMR Zephyr os_thread_obj allocations to 16 bytes.
+
+BH_MALLOC only guarantees 8-byte alignment. On x86_64 Zephyr,
+arch_new_thread() calls fxsave into thread->arch.sse (offset 0x160),
+which #GPs unless that address is 16-byte aligned. Growing the Metal
+image (net/crypto) moved the MMU-backed kheap base so pthread_create
+from mods/t23_pthread started landing k_thread objects at 8-mod-16 —
+reproduced by scripts/verify-zephyr-qemu.sh right after t3_util_native.
+Applied by scripts/setup-wamr.sh.
+
+--- a/core/shared/platform/zephyr/zephyr_thread.c
++++ b/core/shared/platform/zephyr/zephyr_thread.c
+@@ -101,6 +101,38 @@
+     struct os_thread_obj *next;
+ } os_thread_obj;
+ 
++/*
++ * BH_MALLOC is 8-byte aligned. On x86_64, arch_new_thread() fxsave's into
++ * thread->arch.sse (offset 0x160 on current Zephyr), which requires a
++ * 16-byte-aligned destination — a #GP if the k_thread lands at 8-mod-16.
++ * Over-allocate and realign; stash the raw BH_MALLOC pointer immediately
++ * before the aligned object for reclaim/free.
++ */
++#define OS_THREAD_OBJ_ALIGN 16
++
++static os_thread_obj *
++os_thread_obj_alloc(void)
++{
++    size_t need = sizeof(void *) + sizeof(os_thread_obj) + OS_THREAD_OBJ_ALIGN
++                  - 1;
++    uintptr_t raw = (uintptr_t)BH_MALLOC(need);
++    uintptr_t aligned;
++
++    if (!raw)
++        return NULL;
++    aligned = (raw + sizeof(void *) + (OS_THREAD_OBJ_ALIGN - 1))
++              & ~(uintptr_t)(OS_THREAD_OBJ_ALIGN - 1);
++    ((void **)aligned)[-1] = (void *)raw;
++    return (os_thread_obj *)aligned;
++}
++
++static void
++os_thread_obj_free(os_thread_obj *obj)
++{
++    if (obj)
++        BH_FREE(((void **)obj)[-1]);
++}
++
+ static bool is_thread_sys_inited = false;
+ 
+ /* Thread data of supervisor thread */
+@@ -205,12 +237,12 @@
+         if (p->to_be_freed) {
+             if (p_prev == NULL) { /* p is the head of list */
+                 thread_obj_list = p->next;
+-                BH_FREE(p);
++                os_thread_obj_free(p);
+                 p = thread_obj_list;
+             }
+             else { /* p is not the head of list */
+                 p_prev->next = p->next;
+-                BH_FREE(p);
++                os_thread_obj_free(p);
+                 p = p_prev->next;
+             }
+         }
+@@ -322,8 +354,9 @@
+     /* Free the thread objects of terminated threads */
+     thread_obj_list_reclaim();
+ 
+-    /* Create and initialize thread object */
+-    if (!(tid = BH_MALLOC(sizeof(os_thread_obj))))
++    /* Create and initialize thread object (16-byte aligned — see
++     * os_thread_obj_alloc). */
++    if (!(tid = (korp_tid)os_thread_obj_alloc()))
+         return BHT_ERROR;
+ 
+     memset(tid, 0, sizeof(os_thread_obj));
+@@ -376,7 +409,7 @@
+ #endif
+     BH_FREE(thread_data);
+ fail1:
+-    BH_FREE(tid);
++    os_thread_obj_free((os_thread_obj *)tid);
+     return BHT_ERROR;
+ }
+ 

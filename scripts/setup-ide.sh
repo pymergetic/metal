@@ -32,6 +32,31 @@ for path in (linux, zephyr):
             continue
         seen.add(key)
         entries.append(e)
+
+# Newly added zephyr port/{dns,udp,tcp,tls}.c may be absent from a stale
+# native_sim CDB. Clone wasi/socket.c's command so clangd does not borrow
+# src/linux/.../port/udp.c (same basename) and miss <zephyr/net/socket.h>.
+sock = None
+for e in entries:
+    f = e.get("file") or ""
+    if f.endswith("src/zephyr/pymergetic/metal/wasi/socket.c"):
+        sock = e
+        break
+if sock and "command" in sock:
+    port_dir = root / "src/zephyr/pymergetic/metal/port"
+    for name in ("dns.c", "udp.c", "tcp.c", "tls.c"):
+        src = port_dir / name
+        if not src.is_file():
+            continue
+        fpath = str(src.resolve())
+        key = (fpath, sock.get("directory"))
+        if key in seen:
+            continue
+        cmd = sock["command"].replace(sock["file"], fpath)
+        entries.append({"directory": sock["directory"], "command": cmd, "file": fpath})
+        seen.add(key)
+        print(f"  synthesized CDB entry: {fpath}")
+
 out.write_text(json.dumps(entries, indent=2) + "\n")
 print(f"merged {len(entries)} entries -> {out}")
 for path in (linux, zephyr):

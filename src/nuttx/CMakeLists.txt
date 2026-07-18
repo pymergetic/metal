@@ -106,6 +106,10 @@ if(CONFIG_PYMERGETIC_METAL)
   set(PM_METAL_NUTTX_SRCS
       main.c
       pymergetic/metal/port/platform.c
+      pymergetic/metal/port/dns.c
+      pymergetic/metal/port/tls.c
+      pymergetic/metal/port/udp.c
+      pymergetic/metal/port/tcp.c
       pymergetic/metal/port/lock.c
       pymergetic/metal/port/worker.c
       pymergetic/metal/port/pipe.c
@@ -152,8 +156,12 @@ if(CONFIG_PYMERGETIC_METAL)
       ${MICROTAR_ROOT_DIR}/src/microtar.c
       ${PM_COMMON}/util/crypto.c
       ${MONOCYPHER_ROOT_DIR}/src/monocypher.c
-      ${PM_COMMON}/util/ntp.c
-      ${PM_COMMON}/util/http.c
+      ${PM_COMMON}/net/ntp.c
+      ${PM_COMMON}/net/dns.c
+      ${PM_COMMON}/net/udp.c
+      ${PM_COMMON}/net/tcp.c
+      ${PM_COMMON}/net/tls.c
+      ${PM_COMMON}/net/http.c
       ${WAMR_RUNTIME_LIB_SOURCE})
 
   nuttx_add_application(

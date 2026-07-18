@@ -16,7 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "pymergetic/metal/util/wasi.h" /* IWYU pragma: keep */
+#include "pymergetic/metal/wasi.h" /* IWYU pragma: keep */
 
 /* "1023 TiB" + NUL */
 #define PM_METAL_UTIL_SIZE_FORMAT_MAX 16U
@@ -27,7 +27,7 @@
 
 #if defined(__wasm__)
 #define PM_METAL_UTIL_SIZE_IMPORT(name) \
-	PM_METAL_UTIL_WASI_IMPORT(PM_METAL_UTIL_SIZE_WASI_MODULE, name)
+	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_SIZE_WASI_MODULE, name)
 #endif
 
 /*
