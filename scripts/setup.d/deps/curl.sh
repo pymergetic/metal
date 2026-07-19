@@ -17,10 +17,11 @@ git -C "${DIR}" fetch --tags origin
 git -C "${DIR}" checkout --force "${REF}"
 git -C "${DIR}" clean -x -f -d
 
+shopt -s nullglob
 for patch in "${ROOT}"/patches/curl/*.patch; do
-	[ -f "${patch}" ] || continue
 	echo "curl patch: $(basename "${patch}")"
 	git -C "${DIR}" apply --whitespace=nowarn "${patch}"
 done
+shopt -u nullglob
 
-echo "external/curl -> ${REF} + $(ls "${ROOT}/patches/curl"/*.patch 2>/dev/null | wc -l) patch(es)"
+echo "external/curl -> ${REF}"

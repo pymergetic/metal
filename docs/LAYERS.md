@@ -27,7 +27,7 @@ branch; full trees live on `archive/multi-host-linux-zephyr-nuttx`.
 ├─────────────────────────────────────────┤
 │  WAMR                                   │
 ├─────────────────────────────────────────┤
-│  runtime (Metal)                        │
+│  runtime (Metal) — restore from archive │
 ├─────────────────────────────────────────┤
 │  port / virtio (static)                 │
 ├─────────────────────────────────────────┤
@@ -37,4 +37,5 @@ branch; full trees live on `archive/multi-host-linux-zephyr-nuttx`.
 └─────────────────────────────────────────┘
 ```
 
-See [src/efi/README.md](../src/efi/README.md) for bring-up.
+Metal `src/common` host modules are on the archive branch until EFI WAMR needs
+them. Bring-up design: [EFI.md](EFI.md). Tree/build: [src/efi/README.md](../src/efi/README.md).

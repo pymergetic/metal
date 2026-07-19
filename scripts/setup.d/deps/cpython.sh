@@ -25,10 +25,12 @@ git -C "${CPYTHON_DIR}" checkout --force "${CPYTHON_REF}"
 # directories, -f is redundant with -x but spelled out for clarity.
 git -C "${CPYTHON_DIR}" clean -x -f -d
 
+# Optional patches/ (none on freestanding-efi; archive may carry them).
+shopt -s nullglob
 for patch in "${ROOT}"/patches/cpython/*.patch; do
-	[ -f "${patch}" ] || continue
 	echo "cpython patch: $(basename "${patch}")"
 	git -C "${CPYTHON_DIR}" apply --whitespace=nowarn "${patch}"
 done
+shopt -u nullglob
 
-echo "external/cpython -> ${CPYTHON_REF} + $(ls "${ROOT}/patches/cpython"/*.patch 2>/dev/null | wc -l) patch(es)"
+echo "external/cpython -> ${CPYTHON_REF}"

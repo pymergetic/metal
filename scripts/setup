@@ -16,15 +16,16 @@ usage: scripts/setup <name>
        scripts/setup all
 
 Deps (setup.d/deps/):
+  edk2   — Tianocore EDK2 + local nasm (required for metal.efi)
   tools  wamr  lz4  microtar  monocypher  mbedtls  nghttp2  curl  net
   cpython  ide
 
   net  — chains monocypher + mbedtls + nghttp2 + curl
 
 Platform:
-  efi   — toolchain / OVMF notes for freestanding Metal
+  efi   — OVMF / toolchain notes
 
-  all   — tools + wamr + lz4 + microtar + net + cpython + efi + ide
+  all   — edk2 + efi (+ optional guest deps)
 EOF
 	exit 1
 }
@@ -38,14 +39,8 @@ case "${name}" in
 all)
 	[[ $# -eq 0 ]] || usage
 	pm_run_steps "${ROOT}/scripts/setup" \
-		"tools" \
-		"wamr" \
-		"lz4" \
-		"microtar" \
-		"net" \
-		"cpython" \
-		"efi" \
-		"ide"
+		"edk2" \
+		"efi"
 	exit $?
 	;;
 efi)

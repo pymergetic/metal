@@ -20,10 +20,11 @@ git -C "${DIR}" clean -x -f -d
 # mbedTLS 3.x ships mbedtls-framework / everest / p256-m as submodules.
 git -C "${DIR}" submodule update --init --recursive --depth 1
 
+shopt -s nullglob
 for patch in "${ROOT}"/patches/mbedtls/*.patch; do
-	[ -f "${patch}" ] || continue
 	echo "mbedtls patch: $(basename "${patch}")"
 	git -C "${DIR}" apply --whitespace=nowarn "${patch}"
 done
+shopt -u nullglob
 
-echo "external/mbedtls -> ${REF} + $(ls "${ROOT}/patches/mbedtls"/*.patch 2>/dev/null | wc -l) patch(es)"
+echo "external/mbedtls -> ${REF}"

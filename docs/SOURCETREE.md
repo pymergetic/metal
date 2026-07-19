@@ -2,9 +2,12 @@
 
 Maps to [LAYERS.md](LAYERS.md). Stops at wasm interface.
 
-**Active target:** `efi` only (`src/efi/`). Hosted linux/zephyr/nuttx trees are on
-`archive/multi-host-linux-zephyr-nuttx`. Examples below may still mention `linux` /
-`zephyr` as historical `impl: bind` patterns — new binds go under `src/efi/`.
+**Active target:** `efi` only (`src/efi/`). Hosted linux/zephyr/nuttx trees **and**
+the full `src/common/…` host stack (`runtime`, `memory`, `mount`, `port`, `net`,
+`app`, `util`) are on `archive/multi-host-linux-zephyr-nuttx`. This branch keeps
+`src/common/` as a restore pointer only ([src/common/README.md](../src/common/README.md)).
+Examples below may still describe that archived layout — new EFI binds go under
+`src/efi/`.
 
 ---
 
@@ -256,11 +259,7 @@ packages/metal/
 │   ├── rump/                      # [stub]
 │   └── unikraft/                  # [stub]
 │
-├── tests/                         # smoke harnesses for common runtime/process APIs — not plat code
-│   ├── process_test.c             # pm-linux-process-test — see scripts/verify linux process
-│   ├── thread_stress_test.c       # pm-linux-thread-stress — see scripts/verify linux threads
-│   ├── zephyr_verify.h
-│   └── zephyr_verify.c            # CONFIG_PM_METAL_VERIFY_MODS boot suite (embed stage + batches)
+│   # tests/ (process_test, thread_stress, zephyr_verify) — on archive branch only
 │
 ├── mods/
 │   ├── tests/                     # harness .wasm sources → guest /mods/tests/<name>.wasm
@@ -284,9 +283,9 @@ packages/metal/
 ├── scripts/                       # setup|build|verify dispatchers
 │                                  # *.d/{expect,suite,…} = agnostic; *.d/port/<plat>/ = per-host
 │                                  # build.d/guest/ = wasm artifacts; setup.d/deps/; lib/
-├── patches/{wamr,microtar}/       # tracked diffs against external/{wamr,microtar} — see "Vendoring" above
+│   # patches/ — on archive branch (freestanding-efi has none)
 ├── docs/
-├── external/                      # gitignored — plain upstream checkouts, reproduced by scripts/setup-{wamr,lz4,microtar,net}.sh + patches/ above
+├── external/                      # gitignored — plain upstream checkouts via scripts/setup
 └── west-manifest/
 ```
 

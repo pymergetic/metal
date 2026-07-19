@@ -22,10 +22,11 @@ git -C "${LZ4_DIR}" checkout --force "${LZ4_REF}"
 # is redundant with -x but spelled out for clarity.
 git -C "${LZ4_DIR}" clean -x -f -d
 
+shopt -s nullglob
 for patch in "${ROOT}"/patches/lz4/*.patch; do
-	[ -f "${patch}" ] || continue
 	echo "lz4 patch: $(basename "${patch}")"
 	git -C "${LZ4_DIR}" apply --whitespace=nowarn "${patch}"
 done
+shopt -u nullglob
 
-echo "external/lz4 -> ${LZ4_REF} + $(ls "${ROOT}/patches/lz4"/*.patch 2>/dev/null | wc -l) patch(es)"
+echo "external/lz4 -> ${LZ4_REF}"

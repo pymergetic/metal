@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Vendors WAMR into external/wamr (gitignored — see docs/SOURCETREE.md
-# "Vendoring") and applies this tree's own patches/wamr/*.patch on top.
+# "Vendoring"). Optional patches/wamr/*.patch if present (archive may
+# carry them; freestanding-efi has none).
 # external/wamr itself stays a plain, reproducible upstream checkout —
 # nothing here is ever hand-edited in place; re-run this script any time
-# to get back to (pin + patches), including after `rm -rf external/wamr`.
+# to get back to (pin + optional patches), including after `rm -rf external/wamr`.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -17,16 +18,13 @@ fi
 
 git -C "${WAMR_DIR}" fetch --tags origin
 git -C "${WAMR_DIR}" checkout --force "${WAMR_REF}"
-# -x also removes anything patches below might have left behind on a
-# previous run of this same script (e.g. re-running after editing a
-# patch) — -d for untracked directories, -f is redundant with -x but
-# spelled out for clarity.
 git -C "${WAMR_DIR}" clean -x -f -d
 
+shopt -s nullglob
 for patch in "${ROOT}"/patches/wamr/*.patch; do
-	[ -f "${patch}" ] || continue
 	echo "wamr patch: $(basename "${patch}")"
 	git -C "${WAMR_DIR}" apply --whitespace=nowarn "${patch}"
 done
+shopt -u nullglob
 
-echo "external/wamr -> ${WAMR_REF} + $(ls "${ROOT}/patches/wamr"/*.patch 2>/dev/null | wc -l) patch(es)"
+echo "external/wamr -> ${WAMR_REF}"
