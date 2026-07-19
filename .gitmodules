@@ -1,3 +1,0 @@
-[submodule "third_party/zephyr"]
-	path = third_party/zephyr
-	url = https://github.com/zephyrproject-rtos/zephyr.git

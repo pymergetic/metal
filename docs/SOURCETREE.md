@@ -2,6 +2,10 @@
 
 Maps to [LAYERS.md](LAYERS.md). Stops at wasm interface.
 
+**Active target:** `efi` only (`src/efi/`). Hosted linux/zephyr/nuttx trees are on
+`archive/multi-host-linux-zephyr-nuttx`. Examples below may still mention `linux` /
+`zephyr` as historical `impl: bind` patterns — new binds go under `src/efi/`.
+
 ---
 
 ## Two trees (plus one narrow exception)
