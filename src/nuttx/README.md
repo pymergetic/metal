@@ -26,7 +26,7 @@ src/nuttx/
 ```bash
 ./scripts/setup nuttx          # external/nuttx, nuttx-apps, WAMR, app symlink
 ./scripts/build nuttx sim      # build/nuttx/sim/nuttx
-./scripts/verify nuttx sim     # nsh scripted smoke (t0/t1/t3/t4)
+./scripts/verify nuttx sim     # nsh scripted smoke (hostfs + host curl)
 ```
 
 Manual nsh (watch `CONFIG_LINE_MAX` — long lines truncate; prefer the verify script):
@@ -45,6 +45,25 @@ hostfs has no `readlink` op → `EINVAL` (22). Harmless for load/open.
 `/dev/urandom`; without it, guest `open()` fails with ENOENT after a
 successful host open.
 
+## Bring-up (qemu-intel64)
+
+Real kernel under QEMU (KVM when `/dev/kvm` is usable). Guest mods/stdlib
+come from embedded lz4 packages — no hostfs.
+
+```bash
+./scripts/setup nuttx
+./scripts/build nuttx qemu     # build/nuttx/qemu/nuttx
+./scripts/verify nuttx qemu    # serial nsh smoke (skips t31 for now)
+```
+
+`qemu-metal.config` bumps `CONFIG_RAM_SIZE` for python.wasm malloc pools,
+uses readline (not CLE), `USEC_PER_TICK=10000`, and a larger 16550 RX
+buffer so scripted nsh lines are not dropped. `PM_NUTTX_QEMU_ACCEL=auto|kvm|tcg`
+selects accel (same idea as Zephyr).
+
+**Deferred on qemu:** `t31_net_util` (HTTPS) — needs NET + mbedTLS (or similar);
+sim uses host libcurl only.
+
 ## Parity intent
 
 | Surface | Status |
@@ -53,7 +72,8 @@ successful host open.
 | tmpfs (`/tmp` mkdtemp) | implemented |
 | WASI mount table + virtual `/proc` | implemented (linux-shaped wrap) |
 | wasi-threads / process workers | implemented (portable try_join) |
-| verify-nuttx-sim.sh | t0/t1/t3/t4 scripted smoke (linux-shaped) |
+| verify nuttx sim | scripted smoke + t31 (host curl) |
+| verify nuttx qemu | scripted smoke minus t31; embedded packages |
 
 ## Why not blocked on Zephyr
 

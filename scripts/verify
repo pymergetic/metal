@@ -29,7 +29,7 @@ usage: scripts/verify <platform> [<subplatform>] [command]
   platform / subplatform:
     linux   none | all
     zephyr  qemu | native-sim | all
-    nuttx   sim | all
+    nuttx   sim | qemu | all
     all                 — every platform default suite (AI full run)
 
   optional command (focused suite; linux):
@@ -37,7 +37,7 @@ usage: scripts/verify <platform> [<subplatform>] [command]
 
   linux all  — default + mount + sys-mount + net + threads
   zephyr all — qemu + native-sim
-  nuttx all  — sim
+  nuttx all  — sim + qemu (qemu skips t31 until NET+TLS)
 
 Examples:
   scripts/verify all
@@ -45,6 +45,7 @@ Examples:
   scripts/verify linux all
   scripts/verify zephyr all
   scripts/verify nuttx sim
+  scripts/verify nuttx qemu
 EOF
 	exit 1
 }
@@ -78,7 +79,8 @@ all)
 		"linux" \
 		"zephyr qemu" \
 		"zephyr native-sim" \
-		"nuttx sim"
+		"nuttx sim" \
+		"nuttx qemu"
 	exit $?
 	;;
 esac
@@ -133,11 +135,11 @@ if [[ $# -ge 1 ]]; then
 		case "$1" in
 		all)
 			[[ $# -eq 1 ]] || usage
-			pm_run_steps "${ROOT}/scripts/verify" "nuttx sim"
+			pm_run_steps "${ROOT}/scripts/verify" "nuttx sim" "nuttx qemu"
 			exit $?
 			;;
-		sim)
-			sub="sim"
+		sim | qemu)
+			sub="$1"
 			shift
 			extra=("$@")
 			;;
@@ -167,8 +169,11 @@ zephyr)
 	esac
 	;;
 nuttx)
-	[[ "${sub}" == "sim" ]] || usage
-	run "${PORT}/nuttx/sim.sh" "${extra[@]}"
+	case "${sub}" in
+	sim) run "${PORT}/nuttx/sim.sh" "${extra[@]}" ;;
+	qemu) run "${PORT}/nuttx/qemu.sh" "${extra[@]}" ;;
+	*) usage ;;
+	esac
 	;;
 *) usage ;;
 esac
