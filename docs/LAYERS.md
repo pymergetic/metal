@@ -4,7 +4,7 @@ Base stack only — from hardware/OS up to the point where a `.wasm` file can ru
 Everything above the **wasm interface** is out of scope here.
 
 ```
-targets = { linux, zephyr, nuttx, rump, unikraft }   # linux + zephyr first; nuttx binds landed
+targets = { linux, zephyr, nuttx, efi, rump, unikraft }
 ```
 
 `nuttx` (`src/nuttx/`, see SOURCETREE.md + `src/nuttx/README.md`) is the cheapest peer after
@@ -14,6 +14,10 @@ closer in shape to `linux` than to `zephyr` for this codebase's own port/wasi la
 `docs/MOUNT.md` § "Zephyr prerequisite" for why zephyr specifically needs a custom `os_*`
 file shim that nuttx does not (Metal still wraps posix on nuttx for virtual `/proc` + live
 remount parity with linux).
+
+`efi` (`src/efi/`) is freestanding UEFI: Metal/WAMR as the firmware payload, **static virtio
+only** (no hosted OS). Bring-up lives on branch `freestanding-efi`; multi-host qemu work is
+archived on `archive/multi-host-linux-zephyr-nuttx`.
 
 ---
 

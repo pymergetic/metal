@@ -26,6 +26,7 @@ usage: scripts/build <platform> [<subplatform>] [command]
     linux   none | all
     zephyr  qemu | native-sim | none | all
     nuttx   sim | qemu | all
+    efi     none | all    (freestanding UEFI + virtio — scaffold)
     mod     none          (guest wasm tests)
     cpython none          (python.wasm)
     all                   — guest + every host/firmware target (AI full run)
@@ -36,6 +37,7 @@ usage: scripts/build <platform> [<subplatform>] [command]
   zephyr all — embed + qemu + native-sim
   nuttx all  — sim + qemu
   linux all  — linux
+  efi all    — efi
 
 Examples:
   scripts/build all
@@ -44,6 +46,7 @@ Examples:
   scripts/build zephyr qemu
   scripts/build nuttx sim
   scripts/build nuttx qemu
+  scripts/build efi
 EOF
 	exit 1
 }
@@ -84,13 +87,14 @@ cmd=""
 
 if [[ $# -ge 1 ]]; then
 	case "${plat}" in
-	linux | mod | cpython)
+	linux | mod | cpython | efi)
 		if [[ "$1" == "all" ]]; then
 			[[ $# -eq 1 ]] || usage
 			case "${plat}" in
 			linux) pm_run_steps "${ROOT}/scripts/build" "linux" ;;
 			mod) pm_run_steps "${ROOT}/scripts/build" "mod" ;;
 			cpython) pm_run_steps "${ROOT}/scripts/build" "cpython" ;;
+			efi) pm_run_steps "${ROOT}/scripts/build" "efi" ;;
 			esac
 			exit $?
 		elif [[ "$1" == "none" ]]; then
@@ -154,6 +158,10 @@ case "${plat}" in
 linux)
 	[[ "${sub}" == "none" && -z "${cmd}" ]] || usage
 	run "${PORT}/linux/default.sh"
+	;;
+efi)
+	[[ "${sub}" == "none" && -z "${cmd}" ]] || usage
+	run "${PORT}/efi/default.sh"
 	;;
 mod)
 	[[ "${sub}" == "none" && -z "${cmd}" ]] || usage

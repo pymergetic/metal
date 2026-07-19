@@ -48,3 +48,8 @@ src/zephyr/generated/
 
 # setup-nuttx.sh local link for upstream wamr.mk layouts
 /src/nuttx/wamr
+
+# Accidental local NuttX ELF symlinks (do not commit)
+/nuttx.elf
+/*.efi
+/build/efi/

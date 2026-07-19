@@ -31,7 +31,8 @@ packages/metal/
 │   ├── common/pymergetic/metal/  cross-target runtime + contracts
 │   ├── linux/                    OS bind — builds pm-linux-runtime
 │   ├── zephyr/                   OS bind — stub bring-up (native_sim / qemu_x86_64)
-│   ├── nuttx/                    [stub — see docs/LAYERS.md, cheaper bring-up than zephyr]
+│   ├── nuttx/                    OS bind — sim + qemu-intel64
+│   ├── efi/                      freestanding UEFI + static virtio (scaffold)
 │   ├── rump/                     [stub]
 │   └── unikraft/                 [stub]
 ├── mods/tests/                 harness .wasm guests → guest /mods/tests/
