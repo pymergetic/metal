@@ -113,6 +113,7 @@ if(CONFIG_PYMERGETIC_METAL)
       pymergetic/metal/port/lock.c
       pymergetic/metal/port/worker.c
       pymergetic/metal/port/pipe.c
+      pymergetic/metal/port/qemu_romfs_stub.c
       pymergetic/metal/memory/ram.c
       pymergetic/metal/memory/kheap.c
       pymergetic/metal/memory/bytecode.c
@@ -181,11 +182,21 @@ if(CONFIG_PYMERGETIC_METAL)
   set(PM_METAL_NUTTX_DEFS
       PM_METAL_PORT_TARGET=PM_METAL_PORT_TARGET_NUTTX
       PM_METAL_RUNTIME_MULTI_MODULE=1
-      WASM_HAVE_MREMAP=0
-      PM_METAL_HAVE_CURL=1)
-  # Host mmap pools for large python.wasm budgets — see memory/{kheap,bytecode}.c
+      WASM_HAVE_MREMAP=0)
+  set(PM_METAL_NUTTX_INCLUDES
+      ${PM_COMMON_INC}
+      ${PM_INCLUDE_INC}
+      ${WAMR_ROOT_DIR}/core/shared/platform/nuttx
+      ${WAMR_ROOT_DIR}/core/shared/platform/include
+      ${WAMR_ROOT_DIR}/core/shared/platform/common/posix
+      ${WAMR_ROOT_DIR}/core/shared/platform/common/libc-util
+      ${WAMR_ROOT_DIR}/core/iwasm/include
+      ${WAMR_ROOT_DIR}/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+      ${WAMR_ROOT_DIR}/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src)
+  # Host mmap pools + libcurl only on sim (qemu has no host libc/curl).
   if(CONFIG_ARCH_SIM)
-    list(APPEND PM_METAL_NUTTX_DEFS PM_METAL_NUTTX_HOST_POOL=1)
+    list(APPEND PM_METAL_NUTTX_DEFS PM_METAL_NUTTX_HOST_POOL=1 PM_METAL_HAVE_CURL=1)
+    list(APPEND PM_METAL_NUTTX_INCLUDES ${PM_METAL_ROOT}/external/curl/include)
   endif()
 
   nuttx_add_application(
@@ -200,16 +211,7 @@ if(CONFIG_PYMERGETIC_METAL)
     SRCS
     ${PM_METAL_NUTTX_SRCS}
     INCLUDE_DIRECTORIES
-    ${PM_COMMON_INC}
-    ${PM_INCLUDE_INC}
-    ${PM_METAL_ROOT}/external/curl/include
-    ${WAMR_ROOT_DIR}/core/shared/platform/nuttx
-    ${WAMR_ROOT_DIR}/core/shared/platform/include
-    ${WAMR_ROOT_DIR}/core/shared/platform/common/posix
-    ${WAMR_ROOT_DIR}/core/shared/platform/common/libc-util
-    ${WAMR_ROOT_DIR}/core/iwasm/include
-    ${WAMR_ROOT_DIR}/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
-    ${WAMR_ROOT_DIR}/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src
+    ${PM_METAL_NUTTX_INCLUDES}
     COMPILE_FLAGS
     -Wno-double-promotion
     -Wno-unused-variable

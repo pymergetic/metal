@@ -25,7 +25,7 @@ usage: scripts/build <platform> [<subplatform>] [command]
   platform / subplatform:
     linux   none | all
     zephyr  qemu | native-sim | none | all
-    nuttx   sim | all
+    nuttx   sim | qemu | all
     mod     none          (guest wasm tests)
     cpython none          (python.wasm)
     all                   — guest + every host/firmware target (AI full run)
@@ -34,7 +34,7 @@ usage: scripts/build <platform> [<subplatform>] [command]
     zephyr [none] embed
 
   zephyr all — embed + qemu + native-sim
-  nuttx all  — sim
+  nuttx all  — sim + qemu
   linux all  — linux
 
 Examples:
@@ -43,6 +43,7 @@ Examples:
   scripts/build zephyr all
   scripts/build zephyr qemu
   scripts/build nuttx sim
+  scripts/build nuttx qemu
 EOF
 	exit 1
 }
@@ -72,7 +73,8 @@ all)
 		"zephyr embed" \
 		"zephyr qemu" \
 		"zephyr native-sim" \
-		"nuttx sim"
+		"nuttx sim" \
+		"nuttx qemu"
 	exit $?
 	;;
 esac
@@ -133,11 +135,11 @@ if [[ $# -ge 1 ]]; then
 		case "$1" in
 		all)
 			[[ $# -eq 1 ]] || usage
-			pm_run_steps "${ROOT}/scripts/build" "nuttx sim"
+			pm_run_steps "${ROOT}/scripts/build" "nuttx sim" "nuttx qemu"
 			exit $?
 			;;
-		sim)
-			sub="sim"
+		sim | qemu)
+			sub="$1"
 			shift
 			[[ $# -eq 0 ]] || usage
 			;;
@@ -162,8 +164,17 @@ cpython)
 	run "${GUEST}/cpython.sh"
 	;;
 nuttx)
-	[[ "${sub}" == "sim" && -z "${cmd}" ]] || usage
-	run "${PORT}/nuttx/sim.sh"
+	case "${sub}" in
+	sim)
+		[[ -z "${cmd}" ]] || usage
+		run "${PORT}/nuttx/sim.sh"
+		;;
+	qemu)
+		[[ -z "${cmd}" ]] || usage
+		run "${PORT}/nuttx/qemu.sh"
+		;;
+	*) usage ;;
+	esac
 	;;
 zephyr)
 	case "${sub}" in
