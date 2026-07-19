@@ -1,179 +1,33 @@
 #!/usr/bin/env bash
-# Shared verify interface:
-#   verify.d/{common,expect,suite}.sh — platform-agnostic suite contract
-#   verify.d/port/<platform>/         — run/collect per host
-# Usage: scripts/verify <platform> [<subplatform>] [command]
+# Verify interface — EFI freestanding smoke (hosted ports archived).
+# Usage: scripts/verify efi
 #        scripts/verify all
-#        scripts/verify <platform> all
-# Omitted subplatform → none. Omitted command → default suite.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${ROOT}/scripts/verify.d/port"
-# shellcheck disable=SC1091
-source "${ROOT}/scripts/lib/run-steps.sh"
 
 usage() {
 	cat >&2 <<'EOF'
-usage: scripts/verify <platform> [<subplatform>] [command]
+usage: scripts/verify efi
        scripts/verify all
-       scripts/verify <platform> all
 
-  subplatform defaults to none when omitted.
-  omitted command → default suite (same slices on every platform):
+  efi / all — QEMU+OVMF smoke once metal.efi links (scaffold stub today)
 
-    basic t0/t1 | utils t3 | pid t4 | multimod t9←t8 | pthread t23
-    net t31 | process+sockets | python --version + print(1)
-    tmpfs / populate / proc   (linux + zephyr; not yet on nuttx)
-
-  platform / subplatform:
-    linux   none | all
-    zephyr  qemu | native-sim | all
-    nuttx   sim | qemu | all
-    all                 — every platform default suite (AI full run)
-
-  optional command (focused suite; linux):
-    process|mount|tmpfs|populate|sys-mount|proc|net|threads|python
-
-  linux all  — default + mount + sys-mount + net + threads
-  zephyr all — qemu + native-sim
-  nuttx all  — sim + qemu (qemu skips t31 until NET+TLS)
-
-Examples:
-  scripts/verify all
-  scripts/verify linux
-  scripts/verify linux all
-  scripts/verify zephyr all
-  scripts/verify nuttx sim
-  scripts/verify nuttx qemu
+Hosted linux/zephyr/nuttx verify lives on archive/multi-host-linux-zephyr-nuttx.
 EOF
 	exit 1
-}
-
-run() {
-	local script="$1"
-	shift
-	if [[ ! -f "${script}" ]]; then
-		echo "missing ${script}" >&2
-		exit 1
-	fi
-	exec "${script}" "$@"
-}
-
-is_linux_cmd() {
-	case "$1" in
-	process | mount | tmpfs | populate | sys-mount | proc | net | threads | python) return 0 ;;
-	*) return 1 ;;
-	esac
 }
 
 [[ $# -ge 1 ]] || usage
 plat="$1"
 shift
+[[ $# -eq 0 ]] || usage
 
 case "${plat}" in
 -h | --help | help) usage ;;
-all)
-	[[ $# -eq 0 ]] || usage
-	pm_run_steps "${ROOT}/scripts/verify" \
-		"linux" \
-		"zephyr qemu" \
-		"zephyr native-sim" \
-		"nuttx sim" \
-		"nuttx qemu"
-	exit $?
-	;;
-esac
-
-sub="none"
-cmd=""
-extra=()
-
-if [[ $# -ge 1 ]]; then
-	case "${plat}" in
-	linux)
-		if [[ "$1" == "all" ]]; then
-			[[ $# -eq 1 ]] || usage
-			pm_run_steps "${ROOT}/scripts/verify" \
-				"linux" \
-				"linux mount" \
-				"linux sys-mount" \
-				"linux net" \
-				"linux threads"
-			exit $?
-		elif [[ "$1" == "none" ]]; then
-			sub="none"
-			shift
-			cmd="${1:-}"
-			[[ $# -gt 0 ]] && shift || true
-		elif is_linux_cmd "$1"; then
-			sub="none"
-			cmd="$1"
-			shift
-		else
-			usage
-		fi
-		;;
-	zephyr)
-		case "$1" in
-		all)
-			[[ $# -eq 1 ]] || usage
-			pm_run_steps "${ROOT}/scripts/verify" \
-				"zephyr qemu" \
-				"zephyr native-sim"
-			exit $?
-			;;
-		qemu | native-sim)
-			sub="$1"
-			shift
-			extra=("$@")
-			;;
-		*) usage ;;
-		esac
-		;;
-	nuttx)
-		case "$1" in
-		all)
-			[[ $# -eq 1 ]] || usage
-			pm_run_steps "${ROOT}/scripts/verify" "nuttx sim" "nuttx qemu"
-			exit $?
-			;;
-		sim | qemu)
-			sub="$1"
-			shift
-			extra=("$@")
-			;;
-		*) usage ;;
-		esac
-		;;
-	*) usage ;;
-	esac
-fi
-
-case "${plat}" in
-linux)
-	[[ "${sub}" == "none" ]] || usage
-	if [[ -z "${cmd}" ]]; then
-		run "${PORT}/linux/default.sh"
-	elif [[ "${cmd}" == "python" ]]; then
-		run "${PORT}/linux/python.sh" linux
-	else
-		run "${PORT}/linux/${cmd}.sh"
-	fi
-	;;
-zephyr)
-	case "${sub}" in
-	qemu) run "${PORT}/zephyr/qemu.sh" "${extra[@]}" ;;
-	native-sim) run "${PORT}/zephyr/native-sim.sh" "${extra[@]}" ;;
-	*) usage ;;
-	esac
-	;;
-nuttx)
-	case "${sub}" in
-	sim) run "${PORT}/nuttx/sim.sh" "${extra[@]}" ;;
-	qemu) run "${PORT}/nuttx/qemu.sh" "${extra[@]}" ;;
-	*) usage ;;
-	esac
+efi | all)
+	exec "${PORT}/efi/default.sh"
 	;;
 *) usage ;;
 esac

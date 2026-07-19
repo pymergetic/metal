@@ -1,9 +1,12 @@
 # Mount
 
+> Hosted linux/zephyr/nuttx ports are on `archive/multi-host-linux-zephyr-nuttx`.
+> This doc remains the guest mount *contract*; EFI will implement a subset (RAM / virtio-blk).
+
 A real, Linux-like mount system: a mount table instead of one fixed `vfs_root`, multiple
-fstypes (host dir passthrough, tmpfs, virtual `proc`, later real device FS on Zephyr), a
-boot-time `/etc/fstab`, and a guest-callable `mount()`/`umount()` (same-process visible on
-linux via live remount).
+fstypes (host dir passthrough, tmpfs, virtual `proc`, later real device FS), a
+boot-time `/etc/fstab`, and a guest-callable `mount()`/`umount()` (same-process visible via
+live remount on hosted ports).
 
 See [RUNTIME.md § VFS root](RUNTIME.md#vfs-root-same-every-load) (what this replaces) ·
 [LAYERS.md](LAYERS.md) · [SOURCETREE.md](SOURCETREE.md).

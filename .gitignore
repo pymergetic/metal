@@ -1,7 +1,7 @@
-# Build outputs — see docs/SOURCETREE.md
+# Build outputs
 /build/
 
-# Legacy layout leftovers (pre-src/ migration)
+# Legacy layout leftovers
 host/**/build/
 host/**/images/
 runtime/**/build/
@@ -12,18 +12,12 @@ mods/build/
 # Toolchain (local download)
 .tools/
 
-# West workspace clones
+# Vendored / generated trees
 /external/
 /modules/
 /bootloader/
 /tools/
-
-# Git submodule checkout (.gitmodules; west uses external/)
 /third_party/
-
-# West local state (keep config)
-.west/*
-!.west/config
 
 # IDE / tooling
 .vscode/
@@ -34,22 +28,12 @@ compile_commands.json
 **/compile_commands.json
 cmake-build-*/
 
-# Generated from .clangd.template by scripts/setup ide (checkout-specific
-# absolute paths — see that script and .clangd.template's own comment)
+# Generated from .clangd.template by scripts/setup ide
 /.clangd
 
-# Zephyr test runner
-twister-out/
-**/twister-out/
-
-# Generated embeds (wasm → C arrays)
-src/zephyr/generated/
-**/host/zephyr/generated/
-
-# setup-nuttx.sh local link for upstream wamr.mk layouts
-/src/nuttx/wamr
-
-# Accidental local NuttX ELF symlinks (do not commit)
-/nuttx.elf
+# EFI artifacts
 /*.efi
 /build/efi/
+
+# Accidental local ELF symlinks
+/nuttx.elf

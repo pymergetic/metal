@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared setup interface — platform bring-up in setup.d/port/, deps in setup.d/deps/.
+# Setup — EFI freestanding deps (hosted west/nuttx setup archived).
 # Usage: scripts/setup <name>
 #        scripts/setup all
 set -euo pipefail
@@ -21,11 +21,10 @@ Deps (setup.d/deps/):
 
   net  — chains monocypher + mbedtls + nghttp2 + curl
 
-Platform bring-up (setup.d/port/):
-  nuttx   — external/nuttx + apps + WAMR deps
-  west    — Zephyr west update + WAMR (alias for zephyr west)
+Platform:
+  efi   — toolchain / OVMF notes for freestanding Metal
 
-  all     — tools + wamr + lz4 + microtar + net + cpython + west + nuttx + ide
+  all   — tools + wamr + lz4 + microtar + net + cpython + efi + ide
 EOF
 	exit 1
 }
@@ -45,16 +44,12 @@ all)
 		"microtar" \
 		"net" \
 		"cpython" \
-		"west" \
-		"nuttx" \
+		"efi" \
 		"ide"
 	exit $?
 	;;
-nuttx)
-	exec "${PORT}/nuttx/default.sh" "$@"
-	;;
-west)
-	exec "${PORT}/zephyr/west.sh" "$@"
+efi)
+	exec "${PORT}/efi/default.sh" "$@"
 	;;
 *)
 	script="${DEPS}/${name}.sh"
