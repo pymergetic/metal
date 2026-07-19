@@ -147,7 +147,15 @@ pm_zephyr_qemu_apply_accel() {
 	if [[ ${use_kvm} -eq 1 ]]; then
 		# Strip any prior accel so we don't double up on re-runs / custom ninja.
 		cmd=$(printf '%s' "${cmd}" | sed -E 's/(^| )-accel[= ][^ ]+//g;s/(^| )-enable-kvm//g')
-		cmd="-accel kvm ${cmd}"
+		# Insert after the qemu binary — never prepend. bash -c "-accel …"
+		# treats a leading dash as a bash option → "bash: - : invalid option".
+		if [[ "${cmd}" =~ (^| )([^ ]*qemu-system-[^ ]+)( |$) ]]; then
+			cmd="${cmd/${BASH_REMATCH[2]}/${BASH_REMATCH[2]} -accel kvm}"
+		else
+			echo "zephyr qemu: accel=kvm requested but no qemu-system-* in cmd — TCG" >&2
+			printf '%s' "${cmd}"
+			return 0
+		fi
 		echo "zephyr qemu: accel=kvm" >&2
 	fi
 	printf '%s' "${cmd}"
