@@ -16,10 +16,11 @@ git -C "${DIR}" fetch --tags origin
 git -C "${DIR}" checkout --force "${REF}"
 git -C "${DIR}" clean -x -f -d
 
+shopt -s nullglob
 for patch in "${ROOT}"/patches/monocypher/*.patch; do
-	[ -f "${patch}" ] || continue
 	echo "monocypher patch: $(basename "${patch}")"
 	git -C "${DIR}" apply --whitespace=nowarn "${patch}"
 done
+shopt -u nullglob
 
-echo "external/monocypher -> ${REF} + $(ls "${ROOT}/patches/monocypher"/*.patch 2>/dev/null | wc -l) patch(es)"
+echo "external/monocypher -> ${REF}"

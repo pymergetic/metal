@@ -28,10 +28,11 @@ git -C "${MICROTAR_DIR}" checkout --force "${MICROTAR_REF}"
 # is redundant with -x but spelled out for clarity.
 git -C "${MICROTAR_DIR}" clean -x -f -d
 
+shopt -s nullglob
 for patch in "${ROOT}"/patches/microtar/*.patch; do
-	[ -f "${patch}" ] || continue
 	echo "microtar patch: $(basename "${patch}")"
 	git -C "${MICROTAR_DIR}" apply --whitespace=nowarn "${patch}"
 done
+shopt -u nullglob
 
-echo "external/microtar -> ${MICROTAR_REF} + $(ls "${ROOT}/patches/microtar"/*.patch 2>/dev/null | wc -l) patch(es)"
+echo "external/microtar -> ${MICROTAR_REF}"

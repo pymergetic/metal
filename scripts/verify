@@ -12,7 +12,7 @@ usage() {
 usage: scripts/verify efi
        scripts/verify all
 
-  efi / all — QEMU+OVMF smoke once metal.efi links (scaffold stub today)
+  efi / all — QEMU+OVMF smoke (banner + Total memory + ok marker)
 
 Hosted linux/zephyr/nuttx verify lives on archive/multi-host-linux-zephyr-nuttx.
 EOF

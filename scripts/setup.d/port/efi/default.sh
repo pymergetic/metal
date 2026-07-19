@@ -1,30 +1,33 @@
 #!/usr/bin/env bash
-# EFI / freestanding Metal — toolchain notes (no heavy fetch yet).
+# EFI / freestanding Metal — OVMF + EDK2 readiness check.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 
-echo "efi setup (scaffold)"
-echo "  target: UEFI x86_64 application (metal.efi)"
-echo "  drivers: static virtio only (planned)"
-echo "  tree:    ${ROOT}/src/efi"
+echo "efi setup"
+echo "  target: UEFI x86_64 application (metal.efi via EDK2)"
+echo "  design: ${ROOT}/docs/EFI.md"
+echo "  package: ${ROOT}/src/efi/MetalPkg"
 echo
-echo "Toolchain options (pick one later):"
-echo "  - clang --target=x86_64-unknown-windows -ffreestanding -fno-stack-protector"
-echo "  - gnu-efi + gcc"
-echo "  - EDK2 package (heavier)"
-echo
-echo "QEMU smoke (planned):"
-echo "  qemu-system-x86_64 -bios OVMF.fd -drive format=raw,file=fat:rw:esp ..."
-echo
-if command -v clang >/dev/null 2>&1; then
-	echo "found: clang $(clang --version | head -1)"
+
+if [[ -x "${ROOT}/.tools/nasm/bin/nasm" ]]; then
+	echo "found: $("${ROOT}/.tools/nasm/bin/nasm" -v)"
 else
-	echo "missing: clang (recommended for freestanding EFI)"
+	echo "missing: .tools/nasm — run ./scripts/setup edk2"
 fi
-if [[ -f /usr/share/ovmf/OVMF.fd ]] || [[ -f /usr/share/OVMF/OVMF_CODE.fd ]]; then
+if [[ -d "${ROOT}/external/edk2/.git" ]]; then
+	echo "found: edk2 $(git -C "${ROOT}/external/edk2" rev-parse --short HEAD)"
+else
+	echo "missing: external/edk2 — run ./scripts/setup edk2"
+fi
+if [[ -f /usr/share/ovmf/OVMF.fd ]] || [[ -f /usr/share/OVMF/OVMF.fd ]]; then
 	echo "found: OVMF firmware"
 else
 	echo "missing: OVMF (Debian/Ubuntu: ovmf)"
 fi
-echo "efi setup: ok (scaffold)"
+if command -v qemu-system-x86_64 >/dev/null 2>&1; then
+	echo "found: qemu-system-x86_64"
+else
+	echo "missing: qemu-system-x86_64"
+fi
+echo "efi setup: ok"

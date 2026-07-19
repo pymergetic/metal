@@ -15,12 +15,14 @@ see git branch `archive/multi-host-linux-zephyr-nuttx`.
 | Doc | What |
 |-----|------|
 | [docs/LAYERS.md](docs/LAYERS.md) | Stack from firmware up to the wasm interface |
+| [docs/EFI.md](docs/EFI.md) | EFI bring-up: boot → EBS → library → WAMR → virtio cut line |
+| [docs/COOP_MEMORY.md](docs/COOP_MEMORY.md) | Per-CPU TLSF + custom SHARED typed alloc |
 | [docs/WASI.md](docs/WASI.md) | WASI preview1 syscalls, host requirements |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | Process / load model |
 | [docs/MEMORY.md](docs/MEMORY.md) | Host pools vs guest linear memory |
 | [docs/SOURCETREE.md](docs/SOURCETREE.md) | Folder layout |
 | [docs/MOUNT.md](docs/MOUNT.md) | Mount design (from hosted era; still the contract) |
-| [src/efi/README.md](src/efi/README.md) | EFI + virtio bring-up |
+| [src/efi/README.md](src/efi/README.md) | EFI tree + build entrypoints |
 
 ---
 
@@ -28,23 +30,22 @@ see git branch `archive/multi-host-linux-zephyr-nuttx`.
 
 ```
 packages/metal/
-├── include/pymergetic/metal/   mod-facing API
+├── include/pymergetic/metal/   mod-facing API (thin on this branch)
 ├── src/
-│   ├── common/pymergetic/metal/  cross-target runtime
-│   └── efi/                      freestanding UEFI + static virtio
+│   ├── common/                 placeholder — host stack on archive branch
+│   └── efi/                    freestanding UEFI + static virtio
 ├── mods/tests/                 harness .wasm guests
 ├── mods/apps/                  real guests (python)
-├── scripts/                    setup|build|verify
-└── patches/                    tracked diffs against external/*
+└── scripts/                    setup|build|verify
 ```
+(Hosted `patches/` live on `archive/multi-host-linux-zephyr-nuttx`.)
 
 ---
 
 ## Quick start
 
 ```bash
-./scripts/setup all          # deps + efi toolchain notes
-./scripts/build mod          # guest tests
-./scripts/build efi          # scaffold → build/efi (metal.efi next)
-./scripts/verify efi         # QEMU+OVMF once metal.efi exists
+./scripts/setup edk2         # once — EDK2 + nasm + BaseTools
+./scripts/build efi          # → build/efi/metal.efi (hello + memory)
+./scripts/verify efi         # QEMU + OVMF smoke
 ```

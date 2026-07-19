@@ -19,10 +19,11 @@ git -C "${DIR}" clean -x -f -d
 # nghttp2 uses a submodule for neverbleed / mruby only when building apps;
 # lib-only does not need them. Keep checkout clean.
 
+shopt -s nullglob
 for patch in "${ROOT}"/patches/nghttp2/*.patch; do
-	[ -f "${patch}" ] || continue
 	echo "nghttp2 patch: $(basename "${patch}")"
 	git -C "${DIR}" apply --whitespace=nowarn "${patch}"
 done
+shopt -u nullglob
 
-echo "external/nghttp2 -> ${REF} + $(ls "${ROOT}/patches/nghttp2"/*.patch 2>/dev/null | wc -l) patch(es)"
+echo "external/nghttp2 -> ${REF}"

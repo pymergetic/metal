@@ -1,0 +1,21 @@
+## @file
+# pymergetic Metal — freestanding UEFI package
+##
+
+[Defines]
+  DEC_SPECIFICATION = 0x00010005
+  PACKAGE_NAME      = MetalPkg
+  PACKAGE_GUID      = A7C3E91F-2B4D-4E8A-9C1F-6D0E5A4B3C21
+  PACKAGE_VERSION   = 0.1
+
+[Includes]
+
+[LibraryClasses]
+
+[Guids]
+
+[Ppis]
+
+[Protocols]
+
+[Pcds]

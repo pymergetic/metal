@@ -1,44 +1,28 @@
 # Freestanding EFI target (Metal as firmware)
 
-UEFI application that runs WAMR/Metal with **no hosted OS**.
-I/O policy: **static virtio only** (console, then blk, then net) — not a
-general PC driver zoo.
+UEFI application built with the **Intel/Tianocore EDK2 SDK**
+([docs/EFI.md](../../docs/EFI.md) Slice C). I/O policy later: static virtio
+only. Today: Boot Services hello (banner + memory map).
 
-## Goals
-
-- Boot under QEMU/OVMF (and later Firecracker-class virt) as `metal.efi`
-- After `ExitBootServices`: Metal owns heap, timers, and the runloop
-- Same guest ABI as other ports (packages, WASI, mods) where possible
-- Hosted ports (linux / zephyr / nuttx) stay for real hardware breadth
-
-## Non-goals (for now)
-
-- FreeDOS / POSIX-on-DOS
-- Dynamic PCI drivers beyond virtio
-- Replacing Zephyr/NuttX MCU paths
-
-## Layout (bring-up)
+## Layout
 
 ```
 src/efi/
-  README.md          — this file
-  CMakeLists.txt     — freestanding / PE/COFF EFI app
-  main.c             — UEFI entry → Metal
-  virtio/            — static virtio-pci (later)
+  README.md
+  MetalPkg/           EDK2 package (PACKAGES_PATH)
+    MetalPkg.dec / .dsc / Metal.inf
+    main.c            entry: banner + claim RAM + mem smoke
+    mem/              coop allocator (TLSF LOCAL + SHARED slabs)
 ```
-
-## Build
+See docs/COOP_MEMORY.md.
+## Build / verify
 
 ```bash
-./scripts/setup.d/port/efi/default.sh   # toolchain notes / deps
-./scripts/build efi
-./scripts/verify efi                    # QEMU + OVMF smoke (later)
+./scripts/setup edk2    # once — external/edk2 + .tools/nasm + BaseTools
+./scripts/build efi     # → build/efi/metal.efi
+./scripts/verify efi    # QEMU + OVMF; greps banner / Total memory / ok
 ```
-
-Requires a UEFI-capable toolchain (see setup script). Until the PE/COFF
-link works end-to-end, `scripts/build efi` reports what is missing.
 
 ## Related archive
 
-Multi-host bring-up (linux / zephyr / nuttx qemu) is on branch
-`archive/multi-host-linux-zephyr-nuttx`.
+Hosted ports: `archive/multi-host-linux-zephyr-nuttx`.
