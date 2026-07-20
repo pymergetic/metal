@@ -1,7 +1,7 @@
 /*
  * FourCC tags — semantic BE u32 + LE wire bytes. See endian.h.
  *
- * impl: common — src/common/pymergetic/metal/util/fourcc.c
+ * impl: common — src/pymergetic/metal/util/fourcc.c
  */
 #ifndef PYMERGETIC_METAL_UTIL_FOURCC_H_
 #define PYMERGETIC_METAL_UTIL_FOURCC_H_
@@ -34,7 +34,7 @@ typedef union pm_metal_util_fourcc {
 extern "C" {
 #endif
 
-/* Defined: src/common/pymergetic/metal/util/fourcc.c */
+/* Defined: src/pymergetic/metal/util/fourcc.c */
 PM_METAL_API(void, pm_metal_util_fourcc_from_u32, (pm_metal_util_fourcc_t *out, uint32_t v));
 PM_METAL_API(uint32_t, pm_metal_util_fourcc_to_u32, (const pm_metal_util_fourcc_t *tag));
 PM_METAL_API(void, pm_metal_util_fourcc_from_wire_bytes,

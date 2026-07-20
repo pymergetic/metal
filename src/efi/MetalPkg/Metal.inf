@@ -1,5 +1,5 @@
 ## @file
-# metal.efi — pymergetic Metal UEFI application
+# metal.efi — pymergetic Metal UEFI application (+ WAMR)
 ##
 
 [Defines]
@@ -12,19 +12,80 @@
 
 [Sources]
   main.c
-  mem/metal_arena.c
-  mem/metal_mem.c
-  mem/metal_libc.c
-  mem/tlsf_edk2.c
-  cpu/metal_run.c
-  cpu/metal_stack.c
-  cpu/metal_coro.c
+  smoke.c
+  ../../pymergetic/metal/util/fourcc.c
+  ../../pymergetic/metal/util/eightcc.c
+  ../pymergetic/metal/arena/arena.c
+  ../pymergetic/metal/mem/mem.c
+  ../pymergetic/metal/mem/libc.c
+  ../pymergetic/metal/mem/libc_wamr.c
+  ../pymergetic/metal/mem/tlsf_edk2.c
+  ../pymergetic/metal/run/run.c
+  ../pymergetic/metal/stack/stack.c
+  ../pymergetic/metal/coro/coro.c
+  ../pymergetic/metal/task/task.c
+  ../pymergetic/metal/time/time.c
+  ../pymergetic/metal/gfx/gfx.c
+  ../pymergetic/metal/ui/ui.c
+  ../pymergetic/metal/shell/shell.c
+  ../pymergetic/metal/async/async.c
+  ../pymergetic/metal/input/input.c
+  ../pymergetic/metal/esp/esp.c
+  ../pymergetic/metal/fs/fs.c
+  ../pymergetic/metal/wasm/wasm.c
+  ../pymergetic/metal/wamr/efi_platform.c
+  ../pymergetic/metal/wamr/efi_thread.c
+  ../pymergetic/metal/wamr/efi_socket.c
+  ../pymergetic/metal/wamr/efi_wasi_fs.c
+  ../wamr/core/shared/platform/common/math/math.c
+  ../wamr/core/shared/mem-alloc/ems/ems_alloc.c
+  ../wamr/core/shared/mem-alloc/ems/ems_gc.c
+  ../wamr/core/shared/mem-alloc/ems/ems_hmu.c
+  ../wamr/core/shared/mem-alloc/ems/ems_kfc.c
+  ../wamr/core/shared/mem-alloc/mem_alloc.c
+  ../wamr/core/shared/utils/bh_assert.c
+  ../wamr/core/shared/utils/bh_bitmap.c
+  ../wamr/core/shared/utils/bh_common.c
+  ../wamr/core/shared/utils/bh_hashmap.c
+  ../wamr/core/shared/utils/bh_leb128.c
+  ../wamr/core/shared/utils/bh_list.c
+  ../wamr/core/shared/utils/bh_log.c
+  ../wamr/core/shared/utils/bh_queue.c
+  ../wamr/core/shared/utils/bh_vector.c
+  ../wamr/core/shared/utils/runtime_timer.c
+  ../wamr/core/iwasm/libraries/libc-wasi/libc_wasi_wrapper.c
+  ../wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/blocking_op.c
+  ../wamr/core/shared/platform/common/libc-util/libc_errno.c
+  ../wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/posix.c
+  ../wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/random.c
+  ../wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/str.c
+  ../wamr/core/iwasm/common/wasm_application.c
+  ../wamr/core/iwasm/common/wasm_blocking_op.c
+  ../wamr/core/iwasm/common/wasm_c_api.c
+  ../wamr/core/iwasm/common/wasm_exec_env.c
+  ../wamr/core/iwasm/common/wasm_loader_common.c
+  ../wamr/core/iwasm/common/wasm_memory.c
+  ../wamr/core/iwasm/common/wasm_native.c
+  ../wamr/core/iwasm/common/wasm_runtime_common.c
+  ../wamr/core/iwasm/common/wasm_shared_memory.c
+  # x86_64 SysV — general C invokeNative corrupts 64-bit pointers (uint32 argv).
+  ../wamr/core/iwasm/common/arch/invokeNative_em64.s
+  ../wamr/core/iwasm/interpreter/wasm_interp_fast.c
+  ../wamr/core/iwasm/interpreter/wasm_loader.c
+  ../wamr/core/iwasm/interpreter/wasm_runtime.c
 
 [Packages]
   MdePkg/MdePkg.dec
 
 [Protocols]
   gEfiMpServiceProtocolGuid
+  gEfiGraphicsOutputProtocolGuid
+  gEfiLoadedImageProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiSimpleTextInputExProtocolGuid
+
+[Guids]
+  gEfiFileInfoGuid
 
 [LibraryClasses]
   UefiApplicationEntryPoint
@@ -40,4 +101,5 @@
   BaseLib
 
 [BuildOptions]
-  GCC:*_*_*_CC_FLAGS = -I$(MODULE_DIR)/../../../external/tlsf
+  GCC:*_*_*_CC_FLAGS = -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/pymergetic/metal/mem/host_stubs -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/pymergetic/metal/wamr -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal -I/home/ladmin/Devel/os-sdk/packages/metal/include -I/home/ladmin/Devel/os-sdk/packages/metal/external/tlsf -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/include -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/interpreter -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/common -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/libraries/libc-wasi -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/shared/platform/include -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/shared/mem-alloc -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/shared/utils -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/shared/utils/uncommon -DBUILD_TARGET_X86_64 -DBH_PLATFORM_METAL_EFI -DBH_PLATFORM_ZEPHYR -DDISABLE_CLOCK_NANOSLEEP -U__linux__ -Ulinux -U__gnu_linux__ -DWASM_ENABLE_INTERP=1 -DWASM_ENABLE_FAST_INTERP=1 -DWASM_ENABLE_LIBC_WASI=1 -DWASM_ENABLE_MULTI_MODULE=0 -DWASM_ENABLE_BULK_MEMORY=1 -DWASM_ENABLE_SHARED_MEMORY=0 -DWASM_ENABLE_MINI_LOADER=0 -DWASM_DISABLE_HW_BOUND_CHECK=1 -DWASM_DISABLE_STACK_HW_BOUND_CHECK=1 -DWASM_DISABLE_WAKEUP_BLOCKING_OP=0 -DWASM_GLOBAL_HEAP_SIZE=50331648 -DWASM_ENABLE_MODULE_INST_CONTEXT=1 -DWASM_ENABLE_QUICK_AOT_ENTRY=0 -DWASM_ENABLE_AOT_INTRINSICS=0 -DWASM_ENABLE_SHRUNK_MEMORY=1 -DWASM_ENABLE_EXTENDED_CONST_EXPR=0 -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free -Wno-error -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-format -fno-strict-aliasing
+

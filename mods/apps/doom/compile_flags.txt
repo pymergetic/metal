@@ -1,0 +1,11 @@
+--target=wasm32-wasip1
+--sysroot=../../../.tools/wasi-sdk/share/wasi-sysroot
+-std=c11
+-I../../../include
+-I../../../external/doomgeneric/doomgeneric
+-Iide_stubs
+-DNORMALUNIX
+-DLINUX
+-D_DEFAULT_SOURCE
+-DDOOMGENERIC_RESX=320
+-DDOOMGENERIC_RESY=200

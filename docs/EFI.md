@@ -171,7 +171,8 @@ MOUNT / WASI).
 ### Locked decisions (Slice D)
 
 - **v1 threading model:** one native thread = WAMR runloop (cooperative / no preemptive Metal scheduler yet).
-- **Interpreter first** for bring-up; AOT/JIT is a later performance lever, not a Slice D blocker.
+- **Fast interpreter** (`WASM_ENABLE_FAST_INTERP=1`) for bring-up; AOT (`wamrc` +
+  `WASM_ENABLE_AOT`) is the next performance lever once the doom path is solid.
 - Platform code lives under `src/efi/` (WAMR platform + Metal binds), sharing `src/common/` runtime.
 
 ---
@@ -192,18 +193,37 @@ Primary bring-up machine: **QEMU + OVMF**, virt-class device set as we adopt vir
 
 ### Guests
 
-- Same guest ABI idea: `wasm32-wasip1` mods, paths under `/mods/…` when the mount exists.
-- First guest proof: embedded **`t0_hello`** (or equivalent) bytes in the image or early blk — print one line through WASI/Metal log.
-- Packages / Python / HTTPS are **out of v1 cut line** (below).
+- Guest ABI: `wasm32-wasip1` plus Metal WASI-style imports from
+  `include/pymergetic/metal/{gfx,ui,shell,async,input}.h`. UI/async/input are
+  handle-based (no host pointers across the boundary). Guest await is real
+  resume: export `pm_metal_guest_step` + host coro trampoline.
+- Proofs: PE-embedded **`hello`** / **`ui_hello`** / **`async_sleep`**; ESP
+  package **`doom`**:
+  ```text
+  build/efi/esp/
+    EFI/BOOT/BOOTX64.EFI
+    mods/apps/doom/doom.wasm
+    mods/apps/doom/doom1.wad
+  ```
+  Guest loads IWAD through `pymergetic.metal.fs` (size + read into wasi-libc
+  malloc) and WASI preopen `/` for existence probes. Long-lived async sessions
+  (`pm_metal_guest_step` + `await(sleep ~28ms)`, doomgeneric `singletics`,
+  integer-scale centered blit) are pumped from `shell_poll`; shell chrome is
+  not redrawn while game focus is on. Headless verify rebuilds doom with
+  `METAL_DOOM_MAX_TICKS=120` plus ESP marker `mods/apps/doom/autostart`, and
+  greps `metal-wasm: t0_hello ok`, `metal-async: sleep ok`, `metal-doom: ok`.
+  Interactive: `METAL_DOOM_MAX_TICKS=0`, no autostart — `./scripts/run efi` +
+  VNC, then `run doom` / `tab doom`.
+- virtio-blk / full package mounts remain later; ESP is the interim package root.
 
 ### Cut line — v1 must
 
-- [ ] EDK2 builds `metal.efi` and it boots under QEMU/OVMF
-- [ ] Slice A ConOut marker
+- [x] EDK2 builds `metal.efi` and it boots under QEMU/OVMF
+- [x] Slice A ConOut marker
 - [ ] ExitBootServices + `pm_metal_efi_run`
-- [ ] WAMR platform layer over Metal heap + console
-- [ ] Run one embedded wasm hello
-- [ ] `./scripts/verify efi` watches for an agreed success string
+- [x] Slim WAMR (interp + libc-wasi) over Metal heap; WASI stdout → UI tab
+- [x] Run embedded wasm hello via shell / auto-init
+- [x] `./scripts/verify efi` watches for agreed success strings
 
 ### Cut line — v1 must not
 
