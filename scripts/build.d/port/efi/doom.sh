@@ -51,6 +51,7 @@ done
 OBJS+=(
 	"${ROOT}/mods/apps/doom/w_file_metal.c"
 	"${ROOT}/mods/apps/doom/m_fileexists_metal.c"
+	"${ROOT}/mods/apps/doom/g_checkdemo_atexit.c"
 	"${ROOT}/mods/apps/doom/doomgeneric_metal.c"
 	"${ROOT}/mods/apps/doom/metal_main.c"
 )
