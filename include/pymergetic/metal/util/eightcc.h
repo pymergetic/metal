@@ -1,7 +1,7 @@
 /*
  * EightCC tags — semantic BE u64 + LE wire bytes. See endian.h.
  *
- * impl: common — src/common/pymergetic/metal/util/eightcc.c
+ * impl: common — src/pymergetic/metal/util/eightcc.c
  */
 #ifndef PYMERGETIC_METAL_UTIL_EIGHTCC_H_
 #define PYMERGETIC_METAL_UTIL_EIGHTCC_H_
@@ -38,7 +38,7 @@ typedef union pm_metal_util_eightcc {
 extern "C" {
 #endif
 
-/* Defined: src/common/pymergetic/metal/util/eightcc.c */
+/* Defined: src/pymergetic/metal/util/eightcc.c */
 PM_METAL_API(void, pm_metal_util_eightcc_from_u64, (pm_metal_util_eightcc_t *out, uint64_t v));
 PM_METAL_API(uint64_t, pm_metal_util_eightcc_to_u64, (const pm_metal_util_eightcc_t *tag));
 PM_METAL_API(void, pm_metal_util_eightcc_from_wire_bytes,

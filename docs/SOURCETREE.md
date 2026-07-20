@@ -2,12 +2,12 @@
 
 Maps to [LAYERS.md](LAYERS.md). Stops at wasm interface.
 
-**Active target:** `efi` only (`src/efi/`). Hosted linux/zephyr/nuttx trees **and**
-the full `src/common/…` host stack (`runtime`, `memory`, `mount`, `port`, `net`,
-`app`, `util`) are on `archive/multi-host-linux-zephyr-nuttx`. This branch keeps
-`src/common/` as a restore pointer only ([src/common/README.md](../src/common/README.md)).
-Examples below may still describe that archived layout — new EFI binds go under
-`src/efi/`.
+**Active target:** `efi` only. Freestanding Metal modules live under
+`src/pymergetic/metal/` (contracts, `pm_metal_<module>_*`) with EFI bodies in
+`src/efi/pymergetic/metal/` and EDK2 entry in `src/efi/MetalPkg/`. Hosted
+linux/zephyr/nuttx trees and the old `src/common/…` host stack are on
+`archive/multi-host-linux-zephyr-nuttx`. Examples below may still describe that
+archived layout.
 
 ---
 
@@ -20,7 +20,9 @@ Examples below may still describe that archived layout — new EFI binds go unde
 
 Mods use **wasi-sdk sysroot** + `-I include/`. Start with `#include <pymergetic/metal/metal.h>`.
 
-**Exception — `util/` and `net/` wasi-style imports:** small utilities (`util/size.h`, `util/arena.h`, `util/log.h`, `util/lz4.h`, `util/tar.h`, `util/crypto.h`) and the Metal networking surface (`net/addr.h`, `net/dns.h`, `net/udp.h`, `net/tcp.h`, `net/ntp.h`, `net/http.h`) are genuinely useful on both sides, but unlike everything else here there is only **one** implementation of them, ever — `src/common/pymergetic/metal/util/{size,arena,log,lz4,tar,crypto}.c` and `src/common/pymergetic/metal/net/{dns,udp,tcp,ntp,http}.c`, `impl: common`, linked into the runtime binary same as any other common module. A mod including one of these headers gets a *different* declaration on wasm32 than the runtime does on its native target: instead of an ordinary prototype backed by that mod's own compiled object code, it gets a real wasm import (`PM_METAL_WASI_IMPORT(module, name)` from `metal/wasi.h`, expanding to `__attribute__((import_module(module), import_name(#name)))`, guarded by `#if defined(__wasm__)` in the header itself) with **no local body at all** — resolved against that same `.c` file's own `wasm_runtime_register_natives()` call (each module registers its own small `NativeSymbol` table, called once from `runtime.c`'s `init()` — no shared central bridge file; WAMR's registration list is a plain linked list keyed by module-name string, so N independent calls under different names coexist without conflict) at `wasm_runtime_instantiate()` time, exactly like a real WASI import. `metal/wasi.h` only unifies the attribute *shape* — each header still picks its own `import_module` name (`PM_METAL_UTIL_ARENA_WASI_MODULE` = `"pymergetic.metal.util.arena"`, `PM_METAL_NET_DNS_WASI_MODULE` = `"pymergetic.metal.net.dns"`, …), one per module rather than one shared name, so none of these imports can ever collide with anything else, including each other; not the Emscripten-popularized `"env"` convention either way. Each name is a plain `#define`d string constant that both the guest-side attribute and that module's own host-side registration call build from, so they can never drift apart into two different strings. This is DRY in the stronger sense — one compiled implementation, not two copies of the same logic built for two targets — at the cost of a wasm import call replacing what would otherwise be a local function call. `net/{dns,udp,tcp,ntp,http}` sits **alongside** WASI sockets as a second Metal net API (socket fds opaque to WASI fd space). Pointer parameters/returns are always addresses in the *calling* module's own linear memory — WAMR auto-translates each at the import boundary. Everything else in `include/` remains **mod-facing only** — the runtime must not include from there (except `util/` + `net/` as above).
+**Exception — dual WASI-import headers (`util/`, `net/`, and EFI `gfx`/`ui`/`shell`):** small utilities (`util/size.h`, `util/arena.h`, `util/log.h`, `util/lz4.h`, `util/tar.h`, `util/crypto.h`) and the Metal networking surface (`net/addr.h`, `net/dns.h`, `net/udp.h`, `net/tcp.h`, `net/ntp.h`, `net/http.h`) are genuinely useful on both sides, but unlike everything else here there is only **one** implementation of them, ever — `src/common/pymergetic/metal/util/{size,arena,log,lz4,tar,crypto}.c` and `src/common/pymergetic/metal/net/{dns,udp,tcp,ntp,http}.c`, `impl: common`, linked into the runtime binary same as any other common module. A mod including one of these headers gets a *different* declaration on wasm32 than the runtime does on its native target: instead of an ordinary prototype backed by that mod's own compiled object code, it gets a real wasm import (`PM_METAL_WASI_IMPORT(module, name)` from `metal/wasi.h`, expanding to `__attribute__((import_module(module), import_name(#name)))`, guarded by `#if defined(__wasm__)` in the header itself) with **no local body at all** — resolved against that same `.c` file's own `wasm_runtime_register_natives()` call (each module registers its own small `NativeSymbol` table, called once from `runtime.c`'s `init()` — no shared central bridge file; WAMR's registration list is a plain linked list keyed by module-name string, so N independent calls under different names coexist without conflict) at `wasm_runtime_instantiate()` time, exactly like a real WASI import. `metal/wasi.h` only unifies the attribute *shape* — each header still picks its own `import_module` name (`PM_METAL_UTIL_ARENA_WASI_MODULE` = `"pymergetic.metal.util.arena"`, `PM_METAL_NET_DNS_WASI_MODULE` = `"pymergetic.metal.net.dns"`, …), one per module rather than one shared name, so none of these imports can ever collide with anything else, including each other; not the Emscripten-popularized `"env"` convention either way. Each name is a plain `#define`d string constant that both the guest-side attribute and that module's own host-side registration call build from, so they can never drift apart into two different strings. This is DRY in the stronger sense — one compiled implementation, not two copies of the same logic built for two targets — at the cost of a wasm import call replacing what would otherwise be a local function call. `net/{dns,udp,tcp,ntp,http}` sits **alongside** WASI sockets as a second Metal net API (socket fds opaque to WASI fd space). Pointer parameters/returns are always addresses in the *calling* module's own linear memory — WAMR auto-translates each at the import boundary.
+
+On the active **efi** target the same dual-header pattern applies to product surface APIs under `include/pymergetic/metal/{gfx,ui,shell,async,input,fs}.h` (`pymergetic.metal.gfx` / `.ui` / `.shell` / `.async` / `.input` / `.fs`): guests import them; EFI bodies + `*_native_register()` live in `src/efi/pymergetic/metal/{gfx,ui,shell,async,input,fs}/`. **UI/shell/async/input guest ABIs are handle-based** (no host pointers across the wasm boundary). Host-only helpers (`init`/`poll`/`ready`, session pump, ESP root, raw widget pointers) stay `#if !__wasm__`. ESP packages (e.g. `mods/apps/doom/{doom.wasm,doom1.wad}`) are staged beside `BOOTX64.EFI`; doom reads the IWAD via `metal.fs` into wasi-libc heap (WASI preopen `/` is available for `fopen` probes). Everything else in `include/` remains **mod-facing only** — the runtime must not include from there (except these dual-header modules).
 
 ---
 
@@ -264,12 +266,14 @@ packages/metal/
 ├── mods/
 │   ├── tests/                     # harness .wasm sources → guest /mods/tests/<name>.wasm
 │   │   ├── t0_hello/main.c
+│   │   ├── t_async_sleep/main.c   # EFI guest async proof (pm_metal_guest_step)
 │   │   ├── t1_read/main.c
 │   │   ├── t2_env/main.c
 │   │   ├── t3_util_native/main.c  # util/{size,arena,log,lz4,tar}.h imports
 │   │   ├── t4_getpid/ … t31_net_util/  # process/pipe/socket/tmpfs/mount/proc/net/…
 │   │   └── t8_multimod_lib/ + t9_multimod_app/  # multi-module (REACTOR on t8)
 │   └── apps/
+│       ├── doom/                  # doomgeneric → ESP mods/apps/doom/{doom.wasm,doom1.wad}
 │       └── python/                # manifest; binary from scripts/build cpython
 │
 ├── build/                         # gitignored

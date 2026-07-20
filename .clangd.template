@@ -8,12 +8,18 @@ CompileFlags:
     - -std=c11
     - -I@@ROOT@@
     - -I@@ROOT@@/include
+    # Always visible so quoted WAMR platform includes resolve even if a
+    # PathMatch fragment is skipped (clangd matches absolute paths).
+    - -I@@ROOT@@/src/efi/pymergetic/metal/wamr
+    - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
+    - -I@@ROOT@@/src/efi/pymergetic/metal/mem/host_stubs
 
 ---
 # metal.efi sources — EDK2 MdePkg (clangd; real build is EDK2 `build`).
 # CompilationDatabase: None so we never borrow a host/linux CDB entry.
+# PathMatch is unanchored so it matches absolute URIs/paths too.
 If:
-  PathMatch: src/efi/.*\.(c|h)
+  PathMatch: .*/src/efi/.*\.(c|h)$
 CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
@@ -26,15 +32,80 @@ CompileFlags:
     - "-DEFIAPI=__attribute__((ms_abi))"
     - -I@@ROOT@@/external/edk2/MdePkg/Include
     - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
+    - -I@@ROOT@@/src/efi/pymergetic/metal/mem/host_stubs
     - -I@@ROOT@@/external/tlsf
+    - -I@@ROOT@@/include
+    - -I@@ROOT@@/src/pymergetic/metal
     - -I@@ROOT@@/src/efi/MetalPkg
-    - -I@@ROOT@@/src/efi/MetalPkg/mem
-    - -I@@ROOT@@/src/efi/MetalPkg/cpu
+    - -I@@ROOT@@/src/efi/pymergetic/metal/mem
+    - -I@@ROOT@@/src/efi/pymergetic/metal/wamr
+    - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
+    - -I@@ROOT@@/src/efi/wamr/core/shared/utils
+    - -I@@ROOT@@/src/efi/wamr/core/iwasm/include
+    - -I@@ROOT@@/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+    - -DBH_PLATFORM_METAL_EFI
+    - -DBH_PLATFORM_ZEPHYR
+    - -DBUILD_TARGET_X86_64
+    - -DWASM_ENABLE_LIBC_WASI=1
 
 ---
-# Guest mods (wasm) — optional; needs ./scripts/setup tools for wasi-sysroot.
+# Metal contracts + EFI binds
 If:
-  PathMatch: mods/.*\.c
+  PathMatch: .*/src/(pymergetic|efi/pymergetic)/metal/.*\.(c|h)$
+CompileFlags:
+  CompilationDatabase: "None"
+  Compiler: /usr/bin/clang
+  Add:
+    - -std=c11
+    - -ffreestanding
+    - -fno-stack-protector
+    - -target
+    - x86_64-unknown-windows
+    - "-DEFIAPI=__attribute__((ms_abi))"
+    - -I@@ROOT@@/external/edk2/MdePkg/Include
+    - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
+    - -I@@ROOT@@/src/efi/pymergetic/metal/mem/host_stubs
+    - -I@@ROOT@@/external/tlsf
+    - -I@@ROOT@@/include
+    - -I@@ROOT@@/src/pymergetic/metal
+    - -I@@ROOT@@/src/efi/pymergetic/metal/mem
+    - -I@@ROOT@@/src/efi/pymergetic/metal/wamr
+    - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
+    - -I@@ROOT@@/src/efi/wamr/core/shared/utils
+    - -I@@ROOT@@/src/efi/wamr/core/iwasm/include
+    - -I@@ROOT@@/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+    - -DBH_PLATFORM_METAL_EFI
+    - -DBH_PLATFORM_ZEPHYR
+    - -DBUILD_TARGET_X86_64
+    - -DWASM_ENABLE_LIBC_WASI=1
+
+---
+# EFI WAMR platform .c — use compile_commands.json (setup ide), not "None".
+# Must come after the broader src/efi PathMatch so it overrides CompilationDatabase.
+If:
+  PathMatch: .*/src/efi/pymergetic/metal/wamr/.*\.(c|h)$
+CompileFlags:
+  CompilationDatabase: "@@ROOT@@"
+  Compiler: /usr/bin/clang
+  Add:
+    - -I@@ROOT@@/src/efi/pymergetic/metal/wamr
+    - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
+    - -I@@ROOT@@/src/efi/pymergetic/metal/mem/host_stubs
+    - -I@@ROOT@@/src/efi/wamr/core/shared/utils
+    - -I@@ROOT@@/src/efi/wamr/core/iwasm/include
+    - -I@@ROOT@@/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+    - -I@@ROOT@@/include
+    - -I@@ROOT@@/src/pymergetic/metal
+    - -DBH_PLATFORM_METAL_EFI
+    - -DBH_PLATFORM_ZEPHYR
+    - -DBUILD_TARGET_X86_64
+    - -DWASM_ENABLE_LIBC_WASI=1
+
+---
+# Guest test mods (wasm) — optional; needs ./scripts/setup tools for wasi-sysroot.
+# apps/doom has its own fragment (doomgeneric -I + CDB).
+If:
+  PathMatch: .*/mods/tests/.*\.c
 CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
@@ -43,3 +114,23 @@ CompileFlags:
     - --sysroot
     - "@@ROOT@@/.tools/wasi-sdk/share/wasi-sysroot"
     - -I@@ROOT@@/include
+
+---
+# doomgeneric Metal port — vendor headers + wasi sysroot (strings.h).
+# CompilationDatabase None so mods/apps/doom/compile_flags.txt applies.
+If:
+  PathMatch: .*/mods/apps/doom/.*\.(c|h)$
+CompileFlags:
+  CompilationDatabase: "None"
+  Compiler: /usr/bin/clang
+  Add:
+    - --target=wasm32-wasip1
+    - --sysroot=@@ROOT@@/.tools/wasi-sdk/share/wasi-sysroot
+    - -I@@ROOT@@/include
+    - -I@@ROOT@@/external/doomgeneric/doomgeneric
+    - -I@@ROOT@@/mods/apps/doom/ide_stubs
+    - -DNORMALUNIX
+    - -DLINUX
+    - -D_DEFAULT_SOURCE
+    - -DDOOMGENERIC_RESX=320
+    - -DDOOMGENERIC_RESY=200

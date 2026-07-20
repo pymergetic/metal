@@ -36,6 +36,11 @@ set -u
 [[ -f "${CONF_PATH}/tools_def.txt" ]] || cp "${EDK_TOOLS_PATH}/Conf/tools_def.template" "${CONF_PATH}/tools_def.txt"
 [[ -f "${CONF_PATH}/build_rule.txt" ]] || cp "${EDK_TOOLS_PATH}/Conf/build_rule.template" "${CONF_PATH}/build_rule.txt"
 
+# Embed guest wasm (hello / ui_hello / async_sleep) before EDK2 compile.
+"${ROOT}/scripts/build.d/port/efi/embed-mods.sh"
+# ESP-staged doomgeneric app (wasm + shareware WAD).
+"${ROOT}/scripts/build.d/port/efi/doom.sh"
+
 echo "efi build: MetalPkg (X64 ${TOOL_CHAIN} ${TARGET})"
 build \
 	-p MetalPkg/MetalPkg.dsc \

@@ -10,7 +10,8 @@ targets = { efi }   # freestanding UEFI + static virtio
 Hosted ports (linux, zephyr, nuttx, rump, unikraft) were removed from this
 branch; full trees live on `archive/multi-host-linux-zephyr-nuttx`.
 
-`efi` (`src/efi/`) is Metal/WAMR as a UEFI application: after
+`efi` is Metal as a UEFI application (`src/efi/MetalPkg` + binds under
+`src/efi/pymergetic/metal/`; contracts in `src/pymergetic/metal/`). After
 `ExitBootServices`, Metal owns heap and the runloop. I/O policy is
 **static virtio only** (console → blk → net).
 
@@ -37,5 +38,5 @@ branch; full trees live on `archive/multi-host-linux-zephyr-nuttx`.
 └─────────────────────────────────────────┘
 ```
 
-Metal `src/common` host modules are on the archive branch until EFI WAMR needs
-them. Bring-up design: [EFI.md](EFI.md). Tree/build: [src/efi/README.md](../src/efi/README.md).
+Bring-up: [EFI.md](EFI.md), [COOP_MEMORY.md](COOP_MEMORY.md).
+Tree/build: [src/efi/README.md](../src/efi/README.md).

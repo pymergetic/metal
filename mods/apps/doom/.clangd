@@ -1,0 +1,13 @@
+# wasi target + local stubs so doomtype.h finds <strings.h> in the IDE.
+CompileFlags:
+  Add:
+    - --target=wasm32-wasip1
+    - --sysroot=../../../.tools/wasi-sdk/share/wasi-sysroot
+    - -I../../../include
+    - -I../../../external/doomgeneric/doomgeneric
+    - -Iide_stubs
+    - -DNORMALUNIX
+    - -DLINUX
+    - -D_DEFAULT_SOURCE
+    - -DDOOMGENERIC_RESX=320
+    - -DDOOMGENERIC_RESY=200
