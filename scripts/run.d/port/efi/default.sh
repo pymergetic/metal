@@ -79,6 +79,12 @@ args=(
 )
 
 case "${DISPLAY_BACKEND}" in
+none)
+	args+=(-display none)
+	echo "run-efi: BENCH — no VNC, no window (on purpose)" >&2
+	echo "run-efi: after boot: run doom — watch serial for metal-doom: N fps" >&2
+	echo "run-efi: want a picture? re-run without --bench:  ./scripts/run efi" >&2
+	;;
 gtk | sdl)
 	if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
 		echo "run-efi: ${DISPLAY_BACKEND} needs DISPLAY/WAYLAND_DISPLAY (this shell has neither)." >&2
@@ -86,12 +92,18 @@ gtk | sdl)
 		exit 1
 	fi
 	args+=(-display "${DISPLAY_BACKEND}")
-	echo "run-efi: display ${DISPLAY_BACKEND} (real QEMU window — Ctrl reaches the guest)" >&2
+	echo "run-efi: display ${DISPLAY_BACKEND} (X11-over-SSH is usually slower than VNC)" >&2
 	;;
 *)
-	args+=(-display none -vnc "${VNC}")
-	echo "run-efi: VNC ${VNC}  (e.g. ssh -L 5901:127.0.0.1:5901 … → localhost:5901)" >&2
-	echo "run-efi: tip: TightVNC steals Ctrl; fire with z/f or use --gtk on a machine with DISPLAY" >&2
+	# :N → TCP 5900+N on all interfaces (LAN + localhost). No viewer window here.
+	vnc_port=$((5900 + ${VNC#:}))
+	if ss -lnt 2>/dev/null | grep -qE ":${vnc_port}\\b"; then
+		echo "run-efi: port ${vnc_port} already in use — kill the other QEMU or: --vnc 2" >&2
+		exit 1
+	fi
+	args+=(-display none -vnc "0.0.0.0${VNC}")
+	echo "run-efi: VNC on *:${vnc_port}  → TightVNC to this host:${vnc_port} (keep this QEMU running)" >&2
+	echo "run-efi: tip: TightVNC steals Ctrl; fire with z/f. Real fps: --bench" >&2
 	;;
 esac
 
