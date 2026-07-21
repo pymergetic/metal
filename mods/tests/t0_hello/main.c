@@ -1,10 +1,11 @@
 /*
- * T0 — hello via WASI libc. wasm32-wasip1-threads (default mod target).
+ * T0 — hello via Metal shell_log (no WASI stdio).
  */
-#include <stdio.h>
+#include "pymergetic/metal/shell/shell.h"
 
-int main(void)
+int
+main(void)
 {
-	printf("t0_hello\n");
+	pm_metal_shell_log("t0_hello");
 	return 0;
 }

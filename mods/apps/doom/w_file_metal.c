@@ -17,8 +17,8 @@ typedef uint8_t byte;
 #include "../../../external/doomgeneric/doomgeneric/w_file.h"
 #include "../../../external/doomgeneric/doomgeneric/z_zone.h"
 
-#include "pymergetic/metal/fs.h"
-#include "pymergetic/metal/shell.h"
+#include "pymergetic/metal/fs/fs.h"
+#include "pymergetic/metal/shell/shell.h"
 
 typedef struct {
 	wad_file_t wad;

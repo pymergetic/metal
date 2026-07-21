@@ -33,7 +33,6 @@ while [[ $# -gt 0 ]]; do
 		shift
 		;;
 	--bench | --none)
-		# No guest display path — read metal-doom: N fps on serial.
 		DISPLAY_BACKEND="none"
 		shift
 		;;
@@ -45,9 +44,9 @@ while [[ $# -gt 0 ]]; do
 	-h | --help)
 		echo "usage: scripts/run efi [--vnc N | --gtk | --sdl | --bench]" >&2
 		echo "  --vnc N   headless + VNC on display N (default :1 → port 5901)" >&2
-		echo "  --gtk     QEMU window via GTK (needs DISPLAY; X11-over-SSH is slow)" >&2
+		echo "  --gtk     QEMU window via GTK (needs DISPLAY)" >&2
 		echo "  --sdl     QEMU window via SDL (needs DISPLAY)" >&2
-		echo "  --bench   -display none; measure real fps on serial (no VNC/X11)" >&2
+		echo "  --bench   -display none (serial only)" >&2
 		exit 0
 		;;
 	*)
@@ -63,6 +62,7 @@ OVMF="$(pm_metal_efi_ovmf)" || {
 }
 
 pm_metal_efi_stage_esp "${EFI}" "${ESP}"
+VBLK="$(pm_metal_efi_stage_vblk)"
 
 echo "run-efi: staged ${ESP}/EFI/BOOT/BOOTX64.EFI from ${EFI}" >&2
 
@@ -71,7 +71,15 @@ args=(
 	-machine q35,accel=kvm:tcg
 	-smp 4
 	-m 512
-	-audio none
+	-audiodev none,id=a0
+	-netdev user,id=n0
+	-device virtio-net-pci,netdev=n0
+	-device virtio-sound-pci,audiodev=a0
+	-drive if=none,id=vd0,format=raw,file="${VBLK}"
+	-device virtio-blk-pci,drive=vd0
+	-chardev null,id=vcon
+	-device virtio-serial-pci,max_ports=1
+	-device virtconsole,chardev=vcon
 	-serial stdio
 	-drive if=pflash,format=raw,readonly=on,file="${OVMF}"
 	-drive format=raw,file=fat:rw:"${ESP}"
@@ -81,9 +89,7 @@ args=(
 case "${DISPLAY_BACKEND}" in
 none)
 	args+=(-display none)
-	echo "run-efi: BENCH — no VNC, no window (on purpose)" >&2
-	echo "run-efi: after boot: run doom — watch serial for metal-doom: N fps" >&2
-	echo "run-efi: want a picture? re-run without --bench:  ./scripts/run efi" >&2
+	echo "run-efi: display none (serial only)" >&2
 	;;
 gtk | sdl)
 	if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
@@ -92,10 +98,9 @@ gtk | sdl)
 		exit 1
 	fi
 	args+=(-display "${DISPLAY_BACKEND}")
-	echo "run-efi: display ${DISPLAY_BACKEND} (X11-over-SSH is usually slower than VNC)" >&2
+	echo "run-efi: display ${DISPLAY_BACKEND}" >&2
 	;;
 *)
-	# :N → TCP 5900+N on all interfaces (LAN + localhost). No viewer window here.
 	vnc_port=$((5900 + ${VNC#:}))
 	if ss -lnt 2>/dev/null | grep -qE ":${vnc_port}\\b"; then
 		echo "run-efi: port ${vnc_port} already in use — kill the other QEMU or: --vnc 2" >&2
@@ -103,7 +108,6 @@ gtk | sdl)
 	fi
 	args+=(-display none -vnc "0.0.0.0${VNC}")
 	echo "run-efi: VNC on *:${vnc_port}  → TightVNC to this host:${vnc_port} (keep this QEMU running)" >&2
-	echo "run-efi: tip: TightVNC steals Ctrl; fire with z/f. Real fps: --bench" >&2
 	;;
 esac
 

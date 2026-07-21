@@ -66,8 +66,12 @@ pm_metal_time_usleep(us);   /* TSC busy-wait (MP-safe; no Boot Services) */
 pm_metal_time_msleep(ms);
 pm_metal_time_sleep(sec);
 pm_metal_time_mono_us();    /* timer deadlines */
-pm_metal_sleep(ms);         /* awaitable — coop */
+pm_metal_sleep(ms);         /* awaitable — coop (= sleep_us(ms*1000)) */
+pm_metal_sleep_us(us);      /* awaitable µs */
+pm_metal_sleep_until_us(t); /* absolute mono deadline */
 ```
+
+**Runners:** N CPUs = N equal cooperative runners (FCFS). No CPU0-only Extrawurst for wasm — `create_task` round-robins; `run_poll_all` drains every inbox. See `docs/IO.md`.
 
 ---
 
@@ -125,11 +129,11 @@ Wasm guests share the same park model — not blocking natives, not Asyncify.
 - Guest **exports** `i32 pm_metal_guest_step(i32 self_h)` (stackless switch on
   state in guest linear memory).
 - Host wraps each fiber as a coro trampoline that `call_wasm`s that export.
-- Imports (`include/pymergetic/metal/async.h`, module `pymergetic.metal.async`)
+- Imports (`include/pymergetic/metal/async/async.h`, module `pymergetic.metal.async`)
   arm host `sleep` / `yield` / tasks behind **uint32 handles** only.
 - Await returns `WAITING` to the host runloop; `run_poll` + timer poll resumes
   the guest on wake. Sync mods without the export still use `execute_main`.
-- Long-lived guests (e.g. doomgeneric) park every tick with `await(yield)`;
+- Long-lived guests park every tick with `await(sleep|yield)`;
   `shell_poll` pumps until `DONE`. Only `wasi proc exit` (not bare traps) is
   treated as clean `DONE`. Game state is **one fiber**; Metal can schedule
   that task on any CPU with a live looper (this cut: CPU0 + shell pump).

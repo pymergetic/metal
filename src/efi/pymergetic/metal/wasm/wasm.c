@@ -1,20 +1,27 @@
 /** @file
   Slim WAMR runner for EFI Metal. (impl: efi)
 **/
-#include <pymergetic/metal/wasm.h>
-#include <pymergetic/metal/gfx.h>
-#include <pymergetic/metal/ui.h>
-#include <pymergetic/metal/shell.h>
-#include <pymergetic/metal/async.h>
-#include <pymergetic/metal/input.h>
-#include <pymergetic/metal/esp.h>
-#include <pymergetic/metal/fs.h>
+#include <pymergetic/metal/wasm/wasm.h>
+#include <pymergetic/metal/gfx/gfx.h>
+#include <pymergetic/metal/ui/ui.h>
+#include <pymergetic/metal/shell/shell.h>
+#include <pymergetic/metal/async/async.h>
+#include <pymergetic/metal/input/input.h>
+#include <pymergetic/metal/lifecycle/lifecycle.h>
+#include <pymergetic/metal/esp/esp.h>
+#include <pymergetic/metal/fs/fs.h>
+#include <pymergetic/metal/audio/audio.h>
+#include <pymergetic/metal/stream/stream.h>
+#include <pymergetic/metal/net/net.h>
+#include <pymergetic/metal/random/random.h>
+#include <pymergetic/metal/log/log.h>
 #include <mem/mem.h>
 #include <time/time.h>
 
 #include <Uefi.h>
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/CpuLib.h>
 #include <Library/PrintLib.h>
 #include <Library/UefiLib.h>
 #include <Library/UefiBootServicesTableLib.h>
@@ -48,9 +55,8 @@
 STATIC INT32                 mReady;
 STATIC UINT8                *mPool;
 STATIC UINT32                mPoolSize;
-/* Must outlive set_wasi_args → instantiate (WAMR keeps the pointer). */
-STATIC CONST CHAR8          *mWasiDirs[1] = { "/" };
 STATIC pm_metal_ui_handle_t  mStdoutTab;
+STATIC pm_metal_stream_h     mStdoutStream;
 
 /* Long-lived async session owns these until finish. */
 STATIC wasm_module_t         mLiveModule;
@@ -73,6 +79,46 @@ pm_metal_wasm_set_stdout_tab (
   )
 {
   mStdoutTab = tab;
+
+  {
+    pm_metal_stream_h  old_in;
+
+    old_in = pm_metal_stdio_in ();
+    if (old_in != PM_METAL_STREAM_INVALID) {
+      pm_metal_stream_close (old_in);
+    }
+  }
+
+  if (mStdoutStream != PM_METAL_STREAM_INVALID) {
+    pm_metal_stream_close (mStdoutStream);
+    mStdoutStream = PM_METAL_STREAM_INVALID;
+  }
+
+  if (tab == PM_METAL_UI_HANDLE_INVALID) {
+    (VOID)pm_metal_stdio_attach (
+            PM_METAL_STREAM_INVALID,
+            PM_METAL_STREAM_INVALID,
+            PM_METAL_STREAM_INVALID
+            );
+    return;
+  }
+
+  mStdoutStream = pm_metal_stream_open_ui_tab (tab);
+  if (mStdoutStream == PM_METAL_STREAM_INVALID) {
+    (VOID)pm_metal_stdio_attach (
+            PM_METAL_STREAM_INVALID,
+            PM_METAL_STREAM_INVALID,
+            PM_METAL_STREAM_INVALID
+            );
+    return;
+  }
+
+  {
+    pm_metal_stream_h  in;
+
+    in = pm_metal_stream_open_uart ();
+    (VOID)pm_metal_stdio_attach (in, mStdoutStream, mStdoutStream);
+  }
 }
 
 int
@@ -90,6 +136,12 @@ MetalWasmLiveClear (
   )
 {
   pm_metal_fs_bind_inst (NULL);
+  pm_metal_audio_bind_inst (NULL);
+  pm_metal_input_bind_inst (NULL);
+  pm_metal_lifecycle_bind_inst (NULL);
+  pm_metal_stream_bind_inst (NULL);
+  pm_metal_net_bind_inst (NULL);
+  pm_metal_random_bind_inst (NULL);
 
   if (mLiveEnv != NULL) {
     wasm_runtime_destroy_exec_env (mLiveEnv);
@@ -120,6 +172,8 @@ MetalWasmLiveFinish (
   VOID
   )
 {
+  pm_metal_lifecycle_blur ();
+  /* blur already unlocks pointer */
   pm_metal_input_set_game_focus (0);
   if (pm_metal_async_session_active ()) {
     pm_metal_async_session_end ();
@@ -146,7 +200,7 @@ pm_metal_wasm_init (
                          PM_METAL_MEM_ID_NONE
                          );
   if (mPool == NULL) {
-    Print (L"metal-wasm: pool alloc failed\r\n");
+    pm_metal_log ("metal-wasm: pool alloc failed");
     return -1;
   }
 
@@ -156,7 +210,7 @@ pm_metal_wasm_init (
   init_args.mem_alloc_option.pool.heap_size = mPoolSize;
 
   if (!wasm_runtime_full_init (&init_args)) {
-    Print (L"metal-wasm: wasm_runtime_full_init failed\r\n");
+    pm_metal_log ("metal-wasm: wasm_runtime_full_init failed");
     pm_metal_mem_free (mPool);
     mPool = NULL;
     return -1;
@@ -167,9 +221,14 @@ pm_metal_wasm_init (
       || pm_metal_shell_native_register () != 0
       || pm_metal_async_native_register () != 0
       || pm_metal_input_native_register () != 0
-      || pm_metal_fs_native_register () != 0)
+      || pm_metal_lifecycle_native_register () != 0
+      || pm_metal_fs_native_register () != 0
+      || pm_metal_audio_native_register () != 0
+      || pm_metal_stream_native_register () != 0
+      || pm_metal_net_native_register () != 0
+      || pm_metal_random_native_register () != 0)
   {
-    Print (L"metal-wasm: native_register failed\r\n");
+    pm_metal_log ("metal-wasm: native_register failed");
     wasm_runtime_destroy ();
     pm_metal_mem_free (mPool);
     mPool = NULL;
@@ -178,7 +237,7 @@ pm_metal_wasm_init (
 
   mStdoutTab = PM_METAL_UI_HANDLE_INVALID;
   mReady     = 1;
-  Print (L"metal-wasm: ok\r\n");
+  /* success — boot tree / callers log status */
   return 0;
 }
 
@@ -256,9 +315,8 @@ MetalWasmRunAsyncLive (
       break;
     }
 
-    if (gBS != NULL) {
-      (VOID)gBS->Stall (1000);
-    }
+    /* No Boot Services Stall — that adds 1 ms wake latency per idle loop. */
+    CpuPause ();
   }
 
   if (pm_metal_async_session_root_done ()) {
@@ -278,6 +336,10 @@ MetalWasmRunAsyncLive (
   AsciiStrnCpyS (mLiveName, sizeof (mLiveName),
                  name != NULL ? name : "mod", sizeof (mLiveName) - 1);
   pm_metal_input_set_game_focus (1);
+  pm_metal_lifecycle_set (
+    PM_METAL_GFX_SURFACE_DEFAULT,
+    PM_METAL_LIFE_FOCUSED | PM_METAL_LIFE_VISIBLE
+    );
   return 0;
 }
 
@@ -328,16 +390,13 @@ pm_metal_wasm_session_await (
   while (!pm_metal_async_session_root_done ()) {
     pm_metal_async_session_pump ();
     if (pm_metal_time_mono_us () >= deadline) {
-      Print (L"metal-wasm: session await timed out\r\n");
+      pm_metal_log ("metal-wasm: session await timed out");
       MetalWasmLiveFinish ();
       return -1;
     }
 
-    if (gBS != NULL) {
-      (VOID)gBS->Stall (1000);
-    } else {
-      pm_metal_time_usleep (1000);
-    }
+    /* Busy-pump on CPU0; timers wake via coro_poll inside run_poll. */
+    CpuPause ();
   }
 
   st = pm_metal_async_session_root_status ();
@@ -383,7 +442,7 @@ pm_metal_wasm_run_bytes (
   }
 
   if (pm_metal_async_session_active ()) {
-    Print (L"metal-wasm: session already active\r\n");
+    pm_metal_log ("metal-wasm: session already active");
     return -1;
   }
 
@@ -393,14 +452,16 @@ pm_metal_wasm_run_bytes (
                     PM_METAL_MEM_ID_NONE
                     );
   if (copy == NULL) {
-    Print (L"metal-wasm: copy %a failed (%u bytes)\r\n",
-           name != NULL ? name : "?",
-           len);
+    pm_metal_logf (
+      "metal-wasm: copy %a failed (%u bytes)",
+      name != NULL ? name : "?",
+      len
+      );
     return -1;
   }
 
   CopyMem (copy, bytes, len);
-  Print (L"metal-wasm: load begin %a\r\n", name != NULL ? name : "?");
+  pm_metal_logf ("metal-wasm: load begin %a", name != NULL ? name : "?");
 
   error_buf[0] = '\0';
   module       = wasm_runtime_load (
@@ -410,22 +471,27 @@ pm_metal_wasm_run_bytes (
                    sizeof (error_buf)
                    );
   if (module == NULL) {
-    Print (L"metal-wasm: load %a failed: %a\r\n",
-           name != NULL ? name : "?",
-           error_buf);
+    pm_metal_logf (
+      "metal-wasm: load %a failed: %a",
+      name != NULL ? name : "?",
+      error_buf
+      );
     pm_metal_mem_free (copy);
     return -1;
   }
 
-  Print (L"metal-wasm: load ok %a\r\n", name != NULL ? name : "?");
+  pm_metal_logf ("metal-wasm: load ok %a", name != NULL ? name : "?");
 
   argv[0] = (name != NULL) ? name : "mod";
   argc    = 1;
-  /* Preopen "/" → ESP for doomgeneric fopen/M_FileExists (IWAD probe). */
+  /*
+   * No WASI preopen — guests use Metal FS (awaitable). Parked doom will
+   * need Metal ABI before re-enable; do not reintroduce "/" → ESP here.
+   */
   wasm_runtime_set_wasi_args (
     module,
-    mWasiDirs,
-    pm_metal_esp_ready () ? 1u : 0u,
+    NULL,
+    0,
     NULL,
     0,
     NULL,
@@ -434,10 +500,12 @@ pm_metal_wasm_run_bytes (
     argc
     );
 
-  Print (L"metal-wasm: instantiate %a stack=%u heap=%u\r\n",
-         name != NULL ? name : "?",
-         (UINT32)PM_METAL_WASM_STACK_SIZE,
-         (UINT32)PM_METAL_WASM_HEAP_BYTES);
+  pm_metal_logf (
+    "metal-wasm: instantiate %a stack=%u heap=%u",
+    name != NULL ? name : "?",
+    (UINT32)PM_METAL_WASM_STACK_SIZE,
+    (UINT32)PM_METAL_WASM_HEAP_BYTES
+    );
   error_buf[0] = '\0';
   inst         = wasm_runtime_instantiate (
                    module,
@@ -447,22 +515,26 @@ pm_metal_wasm_run_bytes (
                    sizeof (error_buf)
                    );
   if (inst == NULL) {
-    Print (L"metal-wasm: instantiate %a failed: %a\r\n",
-           name != NULL ? name : "?",
-           error_buf);
+    pm_metal_logf (
+      "metal-wasm: instantiate %a failed: %a",
+      name != NULL ? name : "?",
+      error_buf
+      );
     wasm_runtime_unload (module);
     pm_metal_mem_free (copy);
     return -1;
   }
 
-  Print (L"metal-wasm: instantiate ok %a\r\n", name != NULL ? name : "?");
+  pm_metal_logf ("metal-wasm: instantiate ok %a", name != NULL ? name : "?");
 
   step_fn = wasm_runtime_lookup_function (inst, "pm_metal_guest_step");
   if (step_fn != NULL) {
     exec_env = wasm_runtime_create_exec_env (inst, PM_METAL_WASM_STACK_SIZE);
     if (exec_env == NULL) {
-      Print (L"metal-wasm: async exec_env %a failed\r\n",
-             name != NULL ? name : "?");
+      pm_metal_logf (
+        "metal-wasm: async exec_env %a failed",
+        name != NULL ? name : "?"
+        );
       wasm_runtime_deinstantiate (inst);
       wasm_runtime_unload (module);
       pm_metal_mem_free (copy);
@@ -471,6 +543,12 @@ pm_metal_wasm_run_bytes (
 
     mLiveCopy = copy;
     pm_metal_fs_bind_inst (inst);
+    pm_metal_audio_bind_inst (inst);
+    pm_metal_input_bind_inst (inst);
+    pm_metal_lifecycle_bind_inst (inst);
+    pm_metal_stream_bind_inst (inst);
+    pm_metal_net_bind_inst (inst);
+    pm_metal_random_bind_inst (inst);
     ret       = MetalWasmRunAsyncLive (name, module, inst, exec_env, step_fn);
     if (ret != 0 || !pm_metal_async_session_active ()) {
       /* Finished during startup or failed — drop ownership. */
@@ -488,14 +566,23 @@ pm_metal_wasm_run_bytes (
   }
 
   /* Sync mod — one-shot execute_main. */
+  pm_metal_fs_bind_inst (inst);
+  pm_metal_audio_bind_inst (inst);
+  pm_metal_input_bind_inst (inst);
+  pm_metal_lifecycle_bind_inst (inst);
+  pm_metal_stream_bind_inst (inst);
+  pm_metal_net_bind_inst (inst);
+  pm_metal_random_bind_inst (inst);
   ret = 0;
   if (!wasm_application_execute_main (inst, argc, (CHAR8 **)argv)) {
     CONST CHAR8  *exc;
 
     exc = wasm_runtime_get_exception (inst);
-    Print (L"metal-wasm: execute %a failed: %a\r\n",
-           name != NULL ? name : "?",
-           exc != NULL ? exc : "?");
+    pm_metal_logf (
+      "metal-wasm: execute %a failed: %a",
+      name != NULL ? name : "?",
+      exc != NULL ? exc : "?"
+      );
     ret = -1;
   } else {
     ret = (INT32)wasm_runtime_get_wasi_exit_code (inst);
@@ -534,16 +621,18 @@ pm_metal_wasm_run_mod (
   if (pm_metal_esp_ready ()
       && pm_metal_esp_read_file (path, &esp_bytes, &esp_len) == 0)
   {
-    Print (L"metal-wasm: esp %a (%u bytes)\r\n", path, esp_len);
+    pm_metal_logf ("metal-wasm: esp %a (%u bytes)", path, esp_len);
     rc = pm_metal_wasm_run_bytes (name, esp_bytes, esp_len);
-    Print (L"metal-wasm: esp %a rc=%d live=%d\r\n",
-           path,
-           rc,
-           pm_metal_async_session_active ());
+    pm_metal_logf (
+      "metal-wasm: esp %a rc=%d live=%d",
+      path,
+      rc,
+      pm_metal_async_session_active ()
+      );
     pm_metal_mem_free (esp_bytes);
     return rc;
   }
 
-  Print (L"metal-wasm: unknown mod '%a'\r\n", name);
+  pm_metal_logf ("metal-wasm: unknown mod '%a'", name);
   return -1;
 }

@@ -78,6 +78,8 @@ leave firmware behind. Do **not** leave any hot-path dependency on Boot Services
 
 - Any Boot Service (`AllocatePool`, `LocateProtocol`, file I/O via UEFI, etc.).
 - Rely on ConOut forever if we move to virtio-console (ConOut may still work on some OVMF setups via Runtime; do not count on it for the product path).
+- Rely on ConIn / AbsolutePointer — dead after EBS. VNC keys land on i8042; owned shell polls PS/2 set-1 make-codes (`pm_metal_input_ps2_read`) plus COM1/virtio-console RX.
+- Rely on ConOut / `Print` / SerialIo — also dead; owned echo goes UI FB + COM1/virtio-console only.
 
 ### Performance note
 
@@ -86,8 +88,31 @@ allocator + WAMR + virtio MMIO/queues only.
 
 ### Locked decisions (Slice B)
 
-- Owned entry after EBS: **`pm_metal_efi_run(...)`** (parameters refined when coding).
-- Minimum phase-1 success after Slice A marker: **ExitBootServices returns success** and `pm_metal_efi_run` can print via a Metal-owned console stub (even if that stub still wraps a captured ConOut pointer for early bring-up).
+- Owned entry after EBS: **`pm_metal_efi_exit_boot_and_run`** → seed init task → **`pm_metal_run_enter`** (BSP main ends; pool is the program).
+- Minimum phase-1 success: **ExitBootServices returns success** and logs continue via Metal UART (COM1 / virtio-console), not ConOut/`Print`.
+
+### Boot + unified log (current)
+
+```text
+sync floor:
+  log_init → mem/stacks → harvest DT/virtio → gfx_harvest → run_init
+  print boot tree (mem + cpu + devices)
+  APs wait → ExitBootServices → UART attach → seed init → run_enter
+
+pool (seeded init coro, BSP):
+  gfx → ui (+ log_attach_ui) → wasm → shell → metal-boot: ready → shell_poll
+
+shutdown (shell `exit` / `quit` / `shutdown`):
+  reverse fini shell → wasm → ui → gfx → STOP runners → ResetSystem
+
+net: lwIP (NO_SYS) on virtio-net L2; static IPv4 (SLIRP defaults);
+     shell `net` / optional ESP `metal/net.conf`
+
+manual: shell command `test` runs wasm proof suite (not on normal boot)
+```
+
+Boot serial is one tree (`pymergetic metal` / `+-- mem` / `+-- devices` / init).  
+One API: `pm_metal_log` / `pm_metal_logf`. Headers mirror sources: `include/pymergetic/metal/<mod>/<mod>.h`.
 
 ---
 
@@ -171,8 +196,9 @@ MOUNT / WASI).
 ### Locked decisions (Slice D)
 
 - **v1 threading model:** one native thread = WAMR runloop (cooperative / no preemptive Metal scheduler yet).
-- **Fast interpreter** (`WASM_ENABLE_FAST_INTERP=1`) for bring-up; AOT (`wamrc` +
-  `WASM_ENABLE_AOT`) is the next performance lever once the doom path is solid.
+- **Fast interpreter** (`WASM_ENABLE_FAST_INTERP=1`) for bring-up; AOT later if
+  wasm packaging stays. Product ABI direction: Metal async + freestanding libc
+  (see `docs/LIBC_ASYNC.md`); WASI is scaffolding to retire.
 - Platform code lives under `src/efi/` (WAMR platform + Metal binds), sharing `src/common/` runtime.
 
 ---
@@ -183,9 +209,9 @@ MOUNT / WASI).
 
 Order of enablement:
 
-1. **virtio-console** — product console; replaces ConOut dependency for owned phase.
-2. **virtio-blk** — guest packages / root image.
-3. **virtio-net** — later; not required for first guest hello.
+1. **virtio-console** — product serial after EBS (ConOut captured as fallback stub).
+2. **virtio-blk** — raw sector device + LBA0 magic proof; package root still ESP pre-EBS.
+3. **virtio-net** / **virtio-snd** — Metal-owned; PciIo probe maps BARs to MMIO for post-EBS.
 
 No general PCI driver zoo. Discover virtio-pci (or virtio-mmio on the chosen QEMU machine) with a **fixed, small** probe — not a dynamic driver framework.
 
@@ -193,34 +219,24 @@ Primary bring-up machine: **QEMU + OVMF**, virt-class device set as we adopt vir
 
 ### Guests
 
-- Guest ABI: `wasm32-wasip1` plus Metal WASI-style imports from
-  `include/pymergetic/metal/{gfx,ui,shell,async,input}.h`. UI/async/input are
-  handle-based (no host pointers across the boundary). Guest await is real
+- Guest ABI (current scaffold): wasm + Metal imports from
+  `include/pymergetic/metal/{gfx,ui,shell,async,input,fs}.h`. Target ABI:
+  Metal async I/O + sync freestanding libc — **not** WASI as product surface
+  (`docs/LIBC_ASYNC.md`). UI/async/input are handle-based. Guest await is real
   resume: export `pm_metal_guest_step` + host coro trampoline.
-- Proofs: PE-embedded **`hello`** / **`ui_hello`** / **`async_sleep`**; ESP
-  package **`doom`**:
-  ```text
-  build/efi/esp/
-    EFI/BOOT/BOOTX64.EFI
-    mods/apps/doom/doom.wasm
-    mods/apps/doom/doom1.wad
-  ```
-  Guest loads IWAD through `pymergetic.metal.fs` (size + read into wasi-libc
-  malloc) and WASI preopen `/` for existence probes. Long-lived async sessions
-  (`pm_metal_guest_step` + `await(sleep ~28ms)`, doomgeneric `singletics`,
-  integer-scale centered blit) are pumped from `shell_poll`; shell chrome is
-  not redrawn while game focus is on. Headless verify rebuilds doom with
-  `METAL_DOOM_MAX_TICKS=120` plus ESP marker `mods/apps/doom/autostart`, and
-  greps `metal-wasm: t0_hello ok`, `metal-async: sleep ok`, `metal-doom: ok`.
-  Interactive: `METAL_DOOM_MAX_TICKS=0`, no autostart — `./scripts/run efi` +
-  VNC, then `run doom` / `tab doom`.
+- Proofs: PE-embedded **`hello`** / **`ui_hello`** / **`async_sleep`** /
+  **`async_fs`** / **`async_time`** / **`async_net`** / **`async_audio`**.
+  Verify greps `metal-wasm: t0_hello ok`, `metal-async: sleep|fs|time|net|audio ok`,
+  plus `metal-net: virtio-net` / `metal-audio: virtio-snd` when QEMU attaches devices.
+- **`doom` parked** (`mods/apps/doom` kept; not built/staged by default).
+  Opt-in: `METAL_BUILD_DOOM=1` + optional `METAL_DOOM_DIR` staging.
 - virtio-blk / full package mounts remain later; ESP is the interim package root.
 
 ### Cut line — v1 must
 
 - [x] EDK2 builds `metal.efi` and it boots under QEMU/OVMF
 - [x] Slice A ConOut marker
-- [ ] ExitBootServices + `pm_metal_efi_run`
+- [x] ExitBootServices + owned runner pool (`pm_metal_efi_exit_boot_and_run`)
 - [x] Slim WAMR (interp + libc-wasi) over Metal heap; WASI stdout → UI tab
 - [x] Run embedded wasm hello via shell / auto-init
 - [x] `./scripts/verify efi` watches for agreed success strings
@@ -228,8 +244,7 @@ Primary bring-up machine: **QEMU + OVMF**, virt-class device set as we adopt vir
 ### Cut line — v1 must not
 
 - Full suite (util natives, multi-module, HTTPS)
-- virtio-net
-- Dynamic PCI / non-virtio device zoo
+- Dynamic PCI / non-virtio device zoo (virtio-net/snd are intentional fixed probes)
 - Restoring hosted linux/zephyr/nuttx ports on this branch
 
 ### Build & verify (human signal)

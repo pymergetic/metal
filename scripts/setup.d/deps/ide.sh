@@ -37,9 +37,12 @@ stubs = efi_mem / "host_stubs"
 pkg = root / "src/efi/MetalPkg"
 inc_root = root / "include"
 out = root / "build/compile_commands.json"
+efi_net = root / "src/efi/pymergetic/metal/net"
+lwip_inc = root / "src/efi/lwip/src/include"
 inc = (
     f"-I{stubs} -I{edk2} -I{edk2_x64} -I{tlsf} -I{inc_root} "
-    f"-I{metal_src} -I{pkg} -I{efi_mem} -I{efi_wamr} -I{wamr_plat} "
+    f"-I{metal_src} -I{pkg} -I{efi_mem} -I{efi_net} -I{lwip_inc} "
+    f"-I{efi_wamr} -I{wamr_plat} "
     f"-I{wamr_utils} -I{wamr_iwasm} -I{wamr_wasi} "
     f"-DBH_PLATFORM_METAL_EFI -DBH_PLATFORM_ZEPHYR "
     f"-DBUILD_TARGET_X86_64 -DWASM_ENABLE_LIBC_WASI=1 "
@@ -54,6 +57,8 @@ entries = []
 for rel in (
     "src/efi/MetalPkg/main.c",
     "src/efi/pymergetic/metal/mem/tlsf_edk2.c",
+    "src/efi/pymergetic/metal/net/lwip_sys.c",
+    "src/efi/pymergetic/metal/net/net_lwip.c",
     "src/efi/pymergetic/metal/wamr/efi_platform.c",
     "src/efi/pymergetic/metal/wamr/efi_thread.c",
     "src/efi/pymergetic/metal/wamr/efi_socket.c",
@@ -117,6 +122,8 @@ CLANG_EFI=(
 	-I"${METAL_SRC}"
 	-I"${METAL_PKG}"
 	-I"${METAL_EFI_MEM}"
+	-I"${ROOT}/src/efi/pymergetic/metal/net"
+	-I"${ROOT}/src/efi/lwip/src/include"
 	-I"${METAL_EFI_WAMR}"
 	-I"${WAMR_PLAT_INC}"
 	-I"${ROOT}/src/efi/wamr/core/shared/utils"
@@ -134,6 +141,11 @@ if [[ -f "${EDK2_INC}/Uefi.h" && -f "${MAIN}" ]]; then
 	if [[ -f "${TLSF_C}" && -f "${TLSF_INC}/tlsf.h" ]]; then
 		"${CLANG_EFI[@]}" "${TLSF_C}"
 		echo "ide: clang -fsyntax-only ok (${TLSF_C})"
+	fi
+	LWIP_SYS="${ROOT}/src/efi/pymergetic/metal/net/lwip_sys.c"
+	if [[ -f "${LWIP_SYS}" && -f "${ROOT}/src/efi/lwip/src/include/lwip/sys.h" ]]; then
+		"${CLANG_EFI[@]}" "${LWIP_SYS}"
+		echo "ide: clang -fsyntax-only ok (${LWIP_SYS})"
 	fi
 	if [[ -f "${WAMR_PLAT_INC}/platform_api_vmcore.h" ]]; then
 		for f in \

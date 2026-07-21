@@ -96,10 +96,23 @@ pm_metal_status_t pm_metal_coro_resume (
 /**
   Python: asyncio.sleep(ms / 1000)
   Returns a new awaitable that completes after `ms` milliseconds.
+  Implemented as sleep_us(ms * 1000).
 */
 /* impl: efi */
 pm_metal_coro_t *pm_metal_sleep (
   uint32_t  ms
+  );
+
+/** Relative coop sleep in microseconds. us==0 → eager DONE (use yield for fairness). */
+/* impl: efi */
+pm_metal_coro_t *pm_metal_sleep_us (
+  uint64_t  us
+  );
+
+/** Absolute coop wake at mono deadline (µs). Past deadline → eager DONE. */
+/* impl: efi */
+pm_metal_coro_t *pm_metal_sleep_until_us (
+  uint64_t  deadline_us
   );
 
 /**
@@ -141,6 +154,12 @@ pm_metal_coro_t *pm_metal_wait_for (
 /** Wake due sleep/wait_for timers (called from idle runloop). */
 /* impl: efi */
 void pm_metal_coro_poll_timers (
+  void
+  );
+
+/** Init timer list lock once (call from run_init before any sleep). */
+/* impl: efi */
+void pm_metal_coro_timers_init (
   void
   );
 

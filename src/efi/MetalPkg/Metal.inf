@@ -25,13 +25,53 @@
   ../pymergetic/metal/coro/coro.c
   ../pymergetic/metal/task/task.c
   ../pymergetic/metal/time/time.c
+  ../pymergetic/metal/io/io.c
+  ../pymergetic/metal/virtio/virtio_pci.c
+  ../pymergetic/metal/console/virtio_console.c
+  ../pymergetic/metal/blk/virtio_blk.c
+  ../pymergetic/metal/efi/efi_run.c
+  ../pymergetic/metal/efi/boot_init.c
+  ../pymergetic/metal/log/log.c
+  ../pymergetic/metal/audio/audio.c
+  ../pymergetic/metal/audio/audio_null.c
+  ../pymergetic/metal/audio/virtio_snd.c
   ../pymergetic/metal/gfx/gfx.c
   ../pymergetic/metal/ui/ui.c
   ../pymergetic/metal/shell/shell.c
   ../pymergetic/metal/async/async.c
   ../pymergetic/metal/input/input.c
+  ../pymergetic/metal/lifecycle/lifecycle.c
   ../pymergetic/metal/esp/esp.c
   ../pymergetic/metal/fs/fs.c
+  ../pymergetic/metal/stream/stream.c
+  ../pymergetic/metal/net/net.c
+  ../pymergetic/metal/net/net_null.c
+  ../pymergetic/metal/net/virtio_net.c
+  ../pymergetic/metal/net/net_lwip.c
+  ../pymergetic/metal/net/lwip_sys.c
+  ../lwip/src/core/init.c
+  ../lwip/src/core/def.c
+  ../lwip/src/core/dns.c
+  ../lwip/src/core/inet_chksum.c
+  ../lwip/src/core/ip.c
+  ../lwip/src/core/mem.c
+  ../lwip/src/core/memp.c
+  ../lwip/src/core/netif.c
+  ../lwip/src/core/pbuf.c
+  ../lwip/src/core/stats.c
+  ../lwip/src/core/sys.c
+  ../lwip/src/core/tcp.c
+  ../lwip/src/core/tcp_in.c
+  ../lwip/src/core/tcp_out.c
+  ../lwip/src/core/timeouts.c
+  ../lwip/src/core/udp.c
+  ../lwip/src/core/ipv4/etharp.c
+  ../lwip/src/core/ipv4/icmp.c
+  ../lwip/src/core/ipv4/ip4.c
+  ../lwip/src/core/ipv4/ip4_addr.c
+  ../lwip/src/core/ipv4/ip4_frag.c
+  ../lwip/src/netif/ethernet.c
+  ../pymergetic/metal/random/random.c
   ../pymergetic/metal/wasm/wasm.c
   ../pymergetic/metal/wamr/efi_platform.c
   ../pymergetic/metal/wamr/efi_thread.c
@@ -83,6 +123,11 @@
   gEfiLoadedImageProtocolGuid
   gEfiSimpleFileSystemProtocolGuid
   gEfiSimpleTextInputExProtocolGuid
+  gEfiSerialIoProtocolGuid
+  gEfiAbsolutePointerProtocolGuid
+  gEfiSimplePointerProtocolGuid
+  gEfiRngProtocolGuid
+  gEfiPciIoProtocolGuid
 
 [Guids]
   gEfiFileInfoGuid
@@ -99,7 +144,8 @@
   SynchronizationLib
   CpuLib
   BaseLib
+  IoLib
 
 [BuildOptions]
-  GCC:*_*_*_CC_FLAGS = -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/pymergetic/metal/mem/host_stubs -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/pymergetic/metal/wamr -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal -I/home/ladmin/Devel/os-sdk/packages/metal/include -I/home/ladmin/Devel/os-sdk/packages/metal/external/tlsf -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/include -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/interpreter -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/common -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/libraries/libc-wasi -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/shared/platform/include -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/shared/mem-alloc -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/shared/utils -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/shared/utils/uncommon -DBUILD_TARGET_X86_64 -DBH_PLATFORM_METAL_EFI -DBH_PLATFORM_ZEPHYR -DDISABLE_CLOCK_NANOSLEEP -U__linux__ -Ulinux -U__gnu_linux__ -DWASM_ENABLE_INTERP=1 -DWASM_ENABLE_FAST_INTERP=1 -DWASM_ENABLE_LIBC_WASI=1 -DWASM_ENABLE_MULTI_MODULE=0 -DWASM_ENABLE_BULK_MEMORY=1 -DWASM_ENABLE_SHARED_MEMORY=0 -DWASM_ENABLE_MINI_LOADER=0 -DWASM_DISABLE_HW_BOUND_CHECK=1 -DWASM_DISABLE_STACK_HW_BOUND_CHECK=1 -DWASM_DISABLE_WAKEUP_BLOCKING_OP=0 -DWASM_GLOBAL_HEAP_SIZE=50331648 -DWASM_ENABLE_MODULE_INST_CONTEXT=1 -DWASM_ENABLE_QUICK_AOT_ENTRY=0 -DWASM_ENABLE_AOT_INTRINSICS=0 -DWASM_ENABLE_SHRUNK_MEMORY=1 -DWASM_ENABLE_EXTENDED_CONST_EXPR=0 -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free -Wno-error -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-format -fno-strict-aliasing
+  GCC:*_*_*_CC_FLAGS = -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/pymergetic/metal/net -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/lwip/src/include -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/pymergetic/metal/mem/host_stubs -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/pymergetic/metal/wamr -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal -I/home/ladmin/Devel/os-sdk/packages/metal/include -I/home/ladmin/Devel/os-sdk/packages/metal/external/tlsf -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/include -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/interpreter -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/common -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/libraries/libc-wasi -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/shared/platform/include -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/shared/mem-alloc -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/shared/utils -I/home/ladmin/Devel/os-sdk/packages/metal/src/efi/wamr/core/shared/utils/uncommon -DBUILD_TARGET_X86_64 -DBH_PLATFORM_METAL_EFI -DBH_PLATFORM_ZEPHYR -DDISABLE_CLOCK_NANOSLEEP -U__linux__ -Ulinux -U__gnu_linux__ -DWASM_ENABLE_INTERP=1 -DWASM_ENABLE_FAST_INTERP=1 -DWASM_ENABLE_LIBC_WASI=1 -DWASM_ENABLE_MULTI_MODULE=0 -DWASM_ENABLE_BULK_MEMORY=1 -DWASM_ENABLE_SHARED_MEMORY=0 -DWASM_ENABLE_MINI_LOADER=0 -DWASM_DISABLE_HW_BOUND_CHECK=1 -DWASM_DISABLE_STACK_HW_BOUND_CHECK=1 -DWASM_DISABLE_WAKEUP_BLOCKING_OP=0 -DWASM_GLOBAL_HEAP_SIZE=50331648 -DWASM_ENABLE_MODULE_INST_CONTEXT=1 -DWASM_ENABLE_QUICK_AOT_ENTRY=0 -DWASM_ENABLE_AOT_INTRINSICS=0 -DWASM_ENABLE_SHRUNK_MEMORY=1 -DWASM_ENABLE_EXTENDED_CONST_EXPR=0 -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free -Wno-error -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-format -fno-strict-aliasing
 

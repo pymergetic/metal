@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Build doomgeneric → build/efi/doom/doom.wasm (+ stage helpers copy WAD).
+# Parked from default EFI build — opt-in: METAL_BUILD_DOOM=1 ./scripts/build.d/port/efi/doom.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -11,8 +12,12 @@ OUT_DIR="${METAL_DOOM_OUT_DIR:-${ROOT}/build/efi/doom}"
 WAD_CACHE="${ROOT}/.tools/doom/doom1.wad"
 TARGET=wasm32-wasip1
 
-# 0 = interactive forever (default). Verify sets METAL_DOOM_MAX_TICKS=120
-# into METAL_DOOM_OUT_DIR=build/efi/doom-verify so it does not clobber play builds.
+if [[ "${METAL_BUILD_DOOM:-0}" != "1" ]]; then
+	echo "doom: parked (set METAL_BUILD_DOOM=1 to build)" >&2
+	exit 0
+fi
+
+# 0 = interactive forever (default).
 METAL_DOOM_MAX_TICKS="${METAL_DOOM_MAX_TICKS:-0}"
 
 if [[ ! -x "${CLANG}" ]]; then
@@ -69,6 +74,7 @@ echo "doom: compiling wasm (METAL_DOOM_MAX_TICKS=${METAL_DOOM_MAX_TICKS})"
 	-Wl,--export=main \
 	-Wl,--export=pm_metal_guest_step \
 	-Wl,--wrap=M_FileExists \
+	-Wl,--wrap=I_AtExit \
 	-Wl,--allow-undefined \
 	-Wl,--stack-first \
 	-Wl,-z,stack-size=1048576 \

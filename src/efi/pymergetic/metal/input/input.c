@@ -1,13 +1,18 @@
 /** @file
-  Game key ring + WASI natives. (impl: efi)
+  Game key ring + pointer + lock + WASI natives. (impl: efi)
 
   EFI SimpleTextIn has no key-up events. Hold-keys stay down until a long idle
   after the last ConIn (covers missing VNC typematic); menu keys pulse short.
 **/
-#include <pymergetic/metal/input.h>
+#include <pymergetic/metal/input/input.h>
+#include <pymergetic/metal/gfx/gfx.h>
 
 #include <Uefi.h>
+#include <Protocol/AbsolutePointer.h>
+#include <Protocol/SimplePointer.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/IoLib.h>
+#include <Library/UefiBootServicesTableLib.h>
 #include <stdint.h>
 
 #include "wasm_export.h"
@@ -29,6 +34,77 @@ STATIC INT32   mGameFocus;
 
 STATIC UINT8    mHeld[256];
 STATIC uint64_t mHeldMs[256];
+
+STATIC pm_metal_input_pointer_t  mPtrQ[PM_METAL_INPUT_Q];
+STATIC UINT32                    mPtrHead;
+STATIC UINT32                    mPtrTail;
+STATIC INT32                     mPtrLocked;
+STATIC UINT32                    mPtrLockSurf;
+STATIC INT32                     mPtrX;
+STATIC INT32                     mPtrY;
+STATIC UINT32                    mPtrButtons;
+STATIC INT32                     mPtrHaveAbs;
+STATIC EFI_ABSOLUTE_POINTER_PROTOCOL  *mAbs;
+STATIC EFI_SIMPLE_POINTER_PROTOCOL    *mSimple;
+STATIC INT32                           mPtrProbed;
+STATIC wasm_module_inst_t              mInputInst;
+STATIC UINT8                           mPs2ShiftDown;
+STATIC UINT8                           mPs2Ext;
+
+STATIC
+UINT16
+MetalDoomToMetalKey (
+  unsigned char  doom_key
+  )
+{
+  switch (doom_key) {
+    case 0x1b:
+      return PM_METAL_KEY_ESCAPE;
+    case 0xac:
+      return PM_METAL_KEY_LEFT;
+    case 0xae:
+      return PM_METAL_KEY_RIGHT;
+    case 0xad:
+      return PM_METAL_KEY_UP;
+    case 0xaf:
+      return PM_METAL_KEY_DOWN;
+    case ' ':
+      return PM_METAL_KEY_SPACE;
+    case '\r':
+      return PM_METAL_KEY_ENTER;
+    default:
+      if (doom_key >= 'a' && doom_key <= 'z') {
+        return (UINT16)(PM_METAL_KEY_A + (doom_key - 'a'));
+      }
+
+      if (doom_key >= 'A' && doom_key <= 'Z') {
+        return (UINT16)(PM_METAL_KEY_A + (doom_key - 'A'));
+      }
+
+      return (UINT16)doom_key;
+  }
+}
+
+STATIC
+VOID
+MetalPtrEnqueue (
+  CONST pm_metal_input_pointer_t  *ev
+  )
+{
+  UINT32  next;
+
+  if (ev == NULL) {
+    return;
+  }
+
+  next = (mPtrHead + 1u) % PM_METAL_INPUT_Q;
+  if (next == mPtrTail) {
+    return;
+  }
+
+  mPtrQ[mPtrHead] = *ev;
+  mPtrHead        = next;
+}
 
 STATIC
 UINT32
@@ -179,6 +255,8 @@ pm_metal_input_note_key (
         mHeldMs[i] = 0;
       }
     }
+
+    pm_metal_input_pointer_unlock ();
   }
 
   /*
@@ -289,6 +367,390 @@ pm_metal_input_poll_key_packed (
   return (INT32)v == 0 ? 0x100 : (INT32)v;
 }
 
+int32_t
+pm_metal_input_poll_key_event (
+  pm_metal_input_key_event_t  *out
+  )
+{
+  UINT16  v;
+
+  if (out == NULL || mHead == mTail) {
+    return 0;
+  }
+
+  v     = mQ[mTail];
+  mTail = (mTail + 1u) % PM_METAL_INPUT_Q;
+  out->pressed = (UINT8)((v >> 8) & 1u);
+  out->mods    = 0;
+  out->code    = MetalDoomToMetalKey ((unsigned char)(v & 0xffu));
+  return 1;
+}
+
+int32_t
+pm_metal_input_poll_pointer (
+  pm_metal_input_pointer_t  *out
+  )
+{
+  if (out == NULL || mPtrHead == mPtrTail) {
+    return 0;
+  }
+
+  *out     = mPtrQ[mPtrTail];
+  mPtrTail = (mPtrTail + 1u) % PM_METAL_INPUT_Q;
+  return 1;
+}
+
+int32_t
+pm_metal_input_pointer_lock (
+  uint32_t  surface
+  )
+{
+  if (surface != 0 && surface != PM_METAL_GFX_SURFACE_DEFAULT) {
+    /* Tab surfaces OK once compositing lands; accept any non-zero for now. */
+  }
+
+  mPtrLocked   = 1;
+  mPtrLockSurf = surface == 0 ? PM_METAL_GFX_SURFACE_DEFAULT : surface;
+  return 0;
+}
+
+void
+pm_metal_input_pointer_unlock (
+  VOID
+  )
+{
+  mPtrLocked   = 0;
+  mPtrLockSurf = 0;
+}
+
+int32_t
+pm_metal_input_pointer_locked (
+  VOID
+  )
+{
+  return mPtrLocked;
+}
+
+STATIC
+VOID
+MetalInputProbePointer (
+  VOID
+  )
+{
+  EFI_STATUS  Status;
+  EFI_HANDLE  *Handles;
+  UINTN       Count;
+
+  if (mPtrProbed || gBS == NULL) {
+    return;
+  }
+
+  mPtrProbed = 1;
+  Handles    = NULL;
+  Count      = 0;
+  Status     = gBS->LocateHandleBuffer (
+                      ByProtocol,
+                      &gEfiAbsolutePointerProtocolGuid,
+                      NULL,
+                      &Count,
+                      &Handles
+                      );
+  if (!EFI_ERROR (Status) && Count > 0 && Handles != NULL) {
+    Status = gBS->HandleProtocol (
+                    Handles[0],
+                    &gEfiAbsolutePointerProtocolGuid,
+                    (VOID **)&mAbs
+                    );
+    if (EFI_ERROR (Status)) {
+      mAbs = NULL;
+    }
+  }
+
+  if (Handles != NULL) {
+    gBS->FreePool (Handles);
+  }
+
+  Handles = NULL;
+  Count   = 0;
+  Status  = gBS->LocateHandleBuffer (
+                   ByProtocol,
+                   &gEfiSimplePointerProtocolGuid,
+                   NULL,
+                   &Count,
+                   &Handles
+                   );
+  if (!EFI_ERROR (Status) && Count > 0 && Handles != NULL) {
+    Status = gBS->HandleProtocol (
+                    Handles[0],
+                    &gEfiSimplePointerProtocolGuid,
+                    (VOID **)&mSimple
+                    );
+    if (EFI_ERROR (Status)) {
+      mSimple = NULL;
+    }
+  }
+
+  if (Handles != NULL) {
+    gBS->FreePool (Handles);
+  }
+}
+
+void
+pm_metal_input_hw_poll (
+  VOID
+  )
+{
+  pm_metal_input_pointer_t  ev;
+  INT32                     gw;
+  INT32                     gh;
+
+  MetalInputProbePointer ();
+  ZeroMem (&ev, sizeof (ev));
+  gw = pm_metal_gfx_width ();
+  gh = pm_metal_gfx_height ();
+  if (gw <= 0) {
+    gw = 1;
+  }
+
+  if (gh <= 0) {
+    gh = 1;
+  }
+
+  if (mAbs != NULL) {
+    EFI_STATUS                 Status;
+    EFI_ABSOLUTE_POINTER_STATE St;
+    INT32                      nx;
+    INT32                      ny;
+
+    Status = mAbs->GetState (mAbs, &St);
+    if (Status == EFI_SUCCESS) {
+      if (mAbs->Mode->AbsoluteMaxX > mAbs->Mode->AbsoluteMinX) {
+        nx = (INT32)(((St.CurrentX - mAbs->Mode->AbsoluteMinX)
+                      * (UINT64)gw)
+                     / (mAbs->Mode->AbsoluteMaxX - mAbs->Mode->AbsoluteMinX));
+      } else {
+        nx = mPtrX;
+      }
+
+      if (mAbs->Mode->AbsoluteMaxY > mAbs->Mode->AbsoluteMinY) {
+        ny = (INT32)(((St.CurrentY - mAbs->Mode->AbsoluteMinY)
+                      * (UINT64)gh)
+                     / (mAbs->Mode->AbsoluteMaxY - mAbs->Mode->AbsoluteMinY));
+      } else {
+        ny = mPtrY;
+      }
+
+      if (nx < 0) {
+        nx = 0;
+      }
+
+      if (ny < 0) {
+        ny = 0;
+      }
+
+      if (nx >= gw) {
+        nx = gw - 1;
+      }
+
+      if (ny >= gh) {
+        ny = gh - 1;
+      }
+
+      ev.dx = mPtrHaveAbs ? (nx - mPtrX) : 0;
+      ev.dy = mPtrHaveAbs ? (ny - mPtrY) : 0;
+      mPtrX = nx;
+      mPtrY = ny;
+      mPtrHaveAbs = 1;
+      ev.x  = nx;
+      ev.y  = ny;
+      ev.buttons = 0;
+      if (St.ActiveButtons & EFI_ABSP_TouchActive) {
+        ev.buttons |= 1u;
+      }
+
+      mPtrButtons = ev.buttons;
+      ev.flags = mPtrLocked
+                   ? PM_METAL_INPUT_PTR_RELATIVE
+                   : PM_METAL_INPUT_PTR_ABSOLUTE;
+      if (mPtrLocked) {
+        ev.x = -1;
+        ev.y = -1;
+      }
+
+      if (ev.dx != 0 || ev.dy != 0 || ev.buttons != 0) {
+        MetalPtrEnqueue (&ev);
+      }
+
+      return;
+    }
+  }
+
+  if (mSimple != NULL) {
+    EFI_STATUS               Status;
+    EFI_SIMPLE_POINTER_STATE St;
+
+    Status = mSimple->GetState (mSimple, &St);
+    if (Status == EFI_SUCCESS) {
+      ev.dx = (INT32)St.RelativeMovementX;
+      ev.dy = (INT32)St.RelativeMovementY;
+      mPtrX += ev.dx;
+      mPtrY += ev.dy;
+      if (mPtrX < 0) {
+        mPtrX = 0;
+      }
+
+      if (mPtrY < 0) {
+        mPtrY = 0;
+      }
+
+      if (mPtrX >= gw) {
+        mPtrX = gw - 1;
+      }
+
+      if (mPtrY >= gh) {
+        mPtrY = gh - 1;
+      }
+
+      ev.x       = mPtrLocked ? -1 : mPtrX;
+      ev.y       = mPtrLocked ? -1 : mPtrY;
+      ev.buttons = 0;
+      if (St.LeftButton) {
+        ev.buttons |= 1u;
+      }
+
+      if (St.RightButton) {
+        ev.buttons |= 2u;
+      }
+
+      mPtrButtons = ev.buttons;
+      ev.flags    = PM_METAL_INPUT_PTR_RELATIVE;
+      if (ev.dx != 0 || ev.dy != 0 || ev.buttons != 0) {
+        MetalPtrEnqueue (&ev);
+      }
+    }
+  }
+}
+
+void
+pm_metal_input_bind_inst (
+  VOID  *module_inst
+  )
+{
+  mInputInst = (wasm_module_inst_t)module_inst;
+}
+
+void
+pm_metal_input_pointer_sample (
+  int32_t   *x,
+  int32_t   *y,
+  uint32_t  *buttons
+  )
+{
+  if (x != NULL) {
+    *x = mPtrX;
+  }
+
+  if (y != NULL) {
+    *y = mPtrY;
+  }
+
+  if (buttons != NULL) {
+    *buttons = mPtrButtons;
+  }
+}
+
+/* Set-1 make → ASCII (unshifted / shifted). Unused slots are 0. */
+STATIC CONST CHAR8  mPs2Unshift[0x80] = {
+  [0x02] = '1', [0x03] = '2', [0x04] = '3', [0x05] = '4', [0x06] = '5',
+  [0x07] = '6', [0x08] = '7', [0x09] = '8', [0x0A] = '9', [0x0B] = '0',
+  [0x0C] = '-', [0x0D] = '=', [0x0E] = 0x08, [0x0F] = '\t',
+  [0x10] = 'q', [0x11] = 'w', [0x12] = 'e', [0x13] = 'r', [0x14] = 't',
+  [0x15] = 'y', [0x16] = 'u', [0x17] = 'i', [0x18] = 'o', [0x19] = 'p',
+  [0x1A] = '[', [0x1B] = ']', [0x1C] = '\r',
+  [0x1E] = 'a', [0x1F] = 's', [0x20] = 'd', [0x21] = 'f', [0x22] = 'g',
+  [0x23] = 'h', [0x24] = 'j', [0x25] = 'k', [0x26] = 'l', [0x27] = ';',
+  [0x28] = '\'', [0x29] = '`', [0x2B] = '\\',
+  [0x2C] = 'z', [0x2D] = 'x', [0x2E] = 'c', [0x2F] = 'v', [0x30] = 'b',
+  [0x31] = 'n', [0x32] = 'm', [0x33] = ',', [0x34] = '.', [0x35] = '/',
+  [0x39] = ' ',
+};
+
+STATIC CONST CHAR8  mPs2ShiftMap[0x80] = {
+  [0x02] = '!', [0x03] = '@', [0x04] = '#', [0x05] = '$', [0x06] = '%',
+  [0x07] = '^', [0x08] = '&', [0x09] = '*', [0x0A] = '(', [0x0B] = ')',
+  [0x0C] = '_', [0x0D] = '+', [0x0E] = 0x08, [0x0F] = '\t',
+  [0x10] = 'Q', [0x11] = 'W', [0x12] = 'E', [0x13] = 'R', [0x14] = 'T',
+  [0x15] = 'Y', [0x16] = 'U', [0x17] = 'I', [0x18] = 'O', [0x19] = 'P',
+  [0x1A] = '{', [0x1B] = '}', [0x1C] = '\r',
+  [0x1E] = 'A', [0x1F] = 'S', [0x20] = 'D', [0x21] = 'F', [0x22] = 'G',
+  [0x23] = 'H', [0x24] = 'J', [0x25] = 'K', [0x26] = 'L', [0x27] = ':',
+  [0x28] = '"', [0x29] = '~', [0x2B] = '|',
+  [0x2C] = 'Z', [0x2D] = 'X', [0x2E] = 'C', [0x2F] = 'V', [0x30] = 'B',
+  [0x31] = 'N', [0x32] = 'M', [0x33] = ',', [0x34] = '.', [0x35] = '?',
+  [0x39] = ' ',
+};
+
+uint32_t
+pm_metal_input_ps2_read (
+  char      *buf,
+  uint32_t  len
+  )
+{
+  UINT32  n;
+
+  if (buf == NULL || len == 0) {
+    return 0;
+  }
+
+  n = 0;
+  while (n < len) {
+    UINT8  st;
+    UINT8  sc;
+    CHAR8  ch;
+
+    st = IoRead8 (0x64);
+    if ((st & 0x01u) == 0) {
+      break;
+    }
+
+    sc = IoRead8 (0x60);
+    if (sc == 0xE0) {
+      mPs2Ext = 1;
+      continue;
+    }
+
+    if (sc == 0x2A || sc == 0x36) {
+      mPs2ShiftDown = 1;
+      mPs2Ext = 0;
+      continue;
+    }
+
+    if (sc == 0xAA || sc == 0xB6) {
+      mPs2ShiftDown = 0;
+      mPs2Ext = 0;
+      continue;
+    }
+
+    /* Ignore break codes and E0-prefixed (arrows etc.) for UI ASCII. */
+    if ((sc & 0x80u) != 0 || mPs2Ext != 0) {
+      mPs2Ext = 0;
+      continue;
+    }
+
+    mPs2Ext = 0;
+    ch = (mPs2ShiftDown != 0)
+           ? mPs2ShiftMap[sc & 0x7Fu]
+           : mPs2Unshift[sc & 0x7Fu];
+    if (ch == 0) {
+      continue;
+    }
+
+    buf[n++] = ch;
+  }
+
+  return n;
+}
+
 STATIC INT32
 pm_metal_input_poll_key_packed_native (
   wasm_exec_env_t  exec_env
@@ -298,8 +760,99 @@ pm_metal_input_poll_key_packed_native (
   return pm_metal_input_poll_key_packed ();
 }
 
+STATIC INT32
+pm_metal_input_poll_key_event_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           dest
+  )
+{
+  pm_metal_input_key_event_t  ev;
+  VOID                       *native;
+
+  (VOID)exec_env;
+  if (mInputInst == NULL
+      || !wasm_runtime_validate_app_addr (mInputInst, dest, sizeof (ev)))
+  {
+    return 0;
+  }
+
+  if (pm_metal_input_poll_key_event (&ev) == 0) {
+    return 0;
+  }
+
+  native = wasm_runtime_addr_app_to_native (mInputInst, dest);
+  if (native == NULL) {
+    return 0;
+  }
+
+  CopyMem (native, &ev, sizeof (ev));
+  return 1;
+}
+
+STATIC INT32
+pm_metal_input_poll_pointer_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           dest
+  )
+{
+  pm_metal_input_pointer_t  ev;
+  VOID                     *native;
+
+  (VOID)exec_env;
+  if (mInputInst == NULL
+      || !wasm_runtime_validate_app_addr (mInputInst, dest, sizeof (ev)))
+  {
+    return 0;
+  }
+
+  if (pm_metal_input_poll_pointer (&ev) == 0) {
+    return 0;
+  }
+
+  native = wasm_runtime_addr_app_to_native (mInputInst, dest);
+  if (native == NULL) {
+    return 0;
+  }
+
+  CopyMem (native, &ev, sizeof (ev));
+  return 1;
+}
+
+STATIC INT32
+pm_metal_input_pointer_lock_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           surface
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_input_pointer_lock (surface);
+}
+
+STATIC VOID
+pm_metal_input_pointer_unlock_native (
+  wasm_exec_env_t  exec_env
+  )
+{
+  (VOID)exec_env;
+  pm_metal_input_pointer_unlock ();
+}
+
+STATIC INT32
+pm_metal_input_pointer_locked_native (
+  wasm_exec_env_t  exec_env
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_input_pointer_locked ();
+}
+
 STATIC NativeSymbol g_pm_metal_input_native_symbols[] = {
   { "pm_metal_input_poll_key_packed", (VOID *)pm_metal_input_poll_key_packed_native, "()i", NULL },
+  { "pm_metal_input_poll_key_event", (VOID *)pm_metal_input_poll_key_event_native, "(i)i", NULL },
+  { "pm_metal_input_poll_pointer", (VOID *)pm_metal_input_poll_pointer_native, "(i)i", NULL },
+  { "pm_metal_input_pointer_lock", (VOID *)pm_metal_input_pointer_lock_native, "(i)i", NULL },
+  { "pm_metal_input_pointer_unlock", (VOID *)pm_metal_input_pointer_unlock_native, "()", NULL },
+  { "pm_metal_input_pointer_locked", (VOID *)pm_metal_input_pointer_locked_native, "()i", NULL },
 };
 
 int

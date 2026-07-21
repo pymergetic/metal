@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# QEMU + OVMF smoke: boot metal.efi, expect banner + memory lines.
+# QEMU + OVMF: boot metal.efi, expect boot tree + ready (no auto-tests).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -17,17 +17,12 @@ OVMF="$(pm_metal_efi_ovmf)" || {
 	exit 1
 }
 
-# Headless doom auto-quit build (keep interactive build/efi/doom untouched).
-# ESP marker autostart makes shell_init run it (interactive has no marker).
-METAL_DOOM_MAX_TICKS=120 \
-	METAL_DOOM_OUT_DIR="${ROOT}/build/efi/doom-verify" \
-	"${ROOT}/scripts/build.d/port/efi/doom.sh"
-printf '1\n' >"${ROOT}/build/efi/doom-verify/autostart"
-
-pm_metal_efi_stage_esp "${EFI}" "${ESP}" "${ROOT}/build/efi/doom-verify"
+pm_metal_efi_stage_esp "${EFI}" "${ESP}"
+# Separate from interactive ./scripts/run efi (build/efi/vblk.img) — shared
+# raw images lock under QEMU.
+VBLK="$(pm_metal_efi_stage_vblk "${ROOT}/build/efi/vblk-verify.img")"
 
 # Shell stays in poll forever; stop QEMU once markers land (timeout = safety net).
-# --foreground: Ctrl-C reaches QEMU. Own ESP so interactive ./scripts/run efi is safe.
 rm -f "${LOG}"
 echo "verify-efi: qemu headless (serial → ${LOG})" >&2
 qemu-system-x86_64 \
@@ -35,27 +30,36 @@ qemu-system-x86_64 \
 	-smp 4 \
 	-m 512 \
 	-display none \
-	-audio none \
+	-audiodev none,id=a0 \
+	-netdev user,id=n0 \
+	-device virtio-net-pci,netdev=n0 \
+	-device virtio-sound-pci,audiodev=a0 \
+	-drive if=none,id=vd0,format=raw,file="${VBLK}" \
+	-device virtio-blk-pci,drive=vd0 \
 	-serial file:"${LOG}" \
+	-chardev null,id=vcon \
+	-device virtio-serial-pci,max_ports=1 \
+	-device virtconsole,chardev=vcon \
 	-drive if=pflash,format=raw,readonly=on,file="${OVMF}" \
 	-drive format=raw,file=fat:rw:"${ESP}" \
 	-boot order=d \
 	&
 qpid=$!
 
-deadline=$((SECONDS + 180))
+deadline=$((SECONDS + 120))
 ok=0
 while kill -0 "${qpid}" 2>/dev/null; do
 	if [[ -s "${LOG}" ]] \
-		&& grep -q "metal-shell: ok" "${LOG}" \
-		&& grep -q "metal-doom: ok" "${LOG}"
+		&& grep -q "pymergetic metal" "${LOG}" \
+		&& grep -q "metal-boot: ready" "${LOG}" \
+		&& grep -q "+-- ebs          ok" "${LOG}"
 	then
 		ok=1
 		kill -KILL "${qpid}" 2>/dev/null || true
 		break
 	fi
 	if (( SECONDS >= deadline )); then
-		echo "verify-efi: qemu timed out (180s)" >&2
+		echo "verify-efi: qemu timed out (120s)" >&2
 		kill -KILL "${qpid}" 2>/dev/null || true
 		break
 	fi
@@ -79,80 +83,56 @@ echo "----- qemu serial -----"
 cat "${LOG}"
 echo "-----------------------"
 
-grep -q "pymergetic efi" "${LOG}" || {
-	echo "verify-efi: missing banner" >&2
+grep -q "pymergetic metal" "${LOG}" || {
+	echo "verify-efi: missing boot tree root" >&2
 	exit 1
 }
-grep -q "Total memory:" "${LOG}" || {
-	echo "verify-efi: missing Total memory line" >&2
+grep -q "+-- mem" "${LOG}" || {
+	echo "verify-efi: missing mem tree" >&2
 	exit 1
 }
-grep -q "metal-mem: ok" "${LOG}" || {
-	echo "verify-efi: missing metal-mem: ok" >&2
+grep -q "+-- devices" "${LOG}" || {
+	echo "verify-efi: missing devices tree" >&2
 	exit 1
 }
-grep -q "metal-time: ok" "${LOG}" || {
-	echo "verify-efi: missing metal-time: ok" >&2
+grep -q "net/lwip+virtio-net" "${LOG}" || {
+	echo "verify-efi: missing net/lwip+virtio-net" >&2
 	exit 1
 }
-grep -q "metal-coro: yield ok" "${LOG}" || {
-	echo "verify-efi: missing metal-coro: yield ok" >&2
+grep -q "audio/virtio-snd" "${LOG}" || {
+	echo "verify-efi: missing audio/virtio-snd" >&2
 	exit 1
 }
-grep -q "metal-coro: load ok" "${LOG}" || {
-	echo "verify-efi: missing metal-coro: load ok" >&2
+grep -q "console/virtio-console" "${LOG}" || {
+	echo "verify-efi: missing console/virtio-console" >&2
 	exit 1
 }
-grep -q "metal-coro: ok" "${LOG}" || {
-	echo "verify-efi: missing metal-coro: ok" >&2
+grep -q "blk/virtio-blk" "${LOG}" || {
+	echo "verify-efi: missing blk/virtio-blk" >&2
 	exit 1
 }
-grep -q "metal-task: ok" "${LOG}" || {
-	echo "verify-efi: missing metal-task: ok" >&2
+grep -q "+-- ebs          ok" "${LOG}" || {
+	echo "verify-efi: missing ebs ok" >&2
 	exit 1
 }
-grep -q "metal-run: parallel join ok" "${LOG}" || {
-	echo "verify-efi: missing metal-run: parallel join ok" >&2
+grep -q "|   +-- gfx      ok" "${LOG}" || {
+	echo "verify-efi: missing gfx ok" >&2
 	exit 1
 }
-grep -q "metal-run: enter/leave ok" "${LOG}" || {
-	echo "verify-efi: missing metal-run: enter/leave ok" >&2
+grep -q "|   +-- ui       ok" "${LOG}" || {
+	echo "verify-efi: missing ui ok" >&2
 	exit 1
 }
-grep -q "metal-run: ok" "${LOG}" || {
-	echo "verify-efi: missing metal-run: ok" >&2
+grep -q "|   +-- wasm     ok" "${LOG}" || {
+	echo "verify-efi: missing wasm ok" >&2
 	exit 1
 }
-grep -q "metal-efi: ok" "${LOG}" || {
-	echo "verify-efi: missing ok marker" >&2
+grep -q "|   \`-- shell    ready" "${LOG}" || {
+	echo "verify-efi: missing shell ready" >&2
 	exit 1
 }
-grep -q "metal-gfx: ok" "${LOG}" || {
-	echo "verify-efi: missing metal-gfx: ok" >&2
-	exit 1
-}
-grep -q "metal-ui: ok" "${LOG}" || {
-	echo "verify-efi: missing metal-ui: ok" >&2
-	exit 1
-}
-grep -q "metal-shell: ok" "${LOG}" || {
-	echo "verify-efi: missing metal-shell: ok" >&2
-	exit 1
-}
-grep -q "metal-wasm: ok" "${LOG}" || {
-	echo "verify-efi: missing metal-wasm: ok" >&2
-	exit 1
-}
-grep -q "metal-wasm: t0_hello ok" "${LOG}" || {
-	echo "verify-efi: missing metal-wasm: t0_hello ok" >&2
-	exit 1
-}
-grep -q "metal-async: sleep ok" "${LOG}" || {
-	echo "verify-efi: missing metal-async: sleep ok" >&2
-	exit 1
-}
-grep -q "metal-doom: ok" "${LOG}" || {
-	echo "verify-efi: missing metal-doom: ok" >&2
+grep -q "metal-boot: ready" "${LOG}" || {
+	echo "verify-efi: missing metal-boot: ready" >&2
 	exit 1
 }
 

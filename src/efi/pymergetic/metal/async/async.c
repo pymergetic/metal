@@ -1,7 +1,13 @@
 /** @file
   Guest async ABI — handle tables + trampoline into pm_metal_guest_step. (impl: efi)
 **/
-#include <pymergetic/metal/async.h>
+#include <pymergetic/metal/async/async.h>
+#include <pymergetic/metal/shell/shell.h>
+#include <pymergetic/metal/input/input.h>
+#include <pymergetic/metal/gfx/gfx.h>
+#include <pymergetic/metal/net/net_ops.h>
+#include <pymergetic/metal/audio/audio_ops.h>
+#include <pymergetic/metal/efi/efi_run.h>
 #include <coro/coro.h>
 #include <task/task.h>
 #include <run/run.h>
@@ -50,6 +56,117 @@ STATIC wasm_function_inst_t   mStepFn;
 STATIC pm_metal_async_handle_t mRootCoroH;
 STATIC pm_metal_async_handle_t mRootTaskH;
 STATIC INT32                  mActive;
+
+/* Session perf window (serial once/sec while guest steps). */
+STATIC UINT64  mPerfWinStartUs;
+STATIC UINT64  mPerfLastStepEndUs;
+STATIC UINT32  mPerfSteps;
+STATIC UINT64  mPerfStepUsSum;
+STATIC UINT64  mPerfGapUsSum;
+STATIC UINT64  mPerfBlitUsSum;
+STATIC UINT64  mPerfSleepMsSum;
+STATIC UINT32  mPerfSleepCount;
+STATIC UINT64  mPerfPumpUsSum;
+STATIC UINT32  mPerfPumps;
+
+STATIC
+VOID
+MetalAsyncPerfReset (
+  UINT64  now_us
+  )
+{
+  mPerfWinStartUs     = now_us;
+  mPerfLastStepEndUs  = 0;
+  mPerfSteps          = 0;
+  mPerfStepUsSum      = 0;
+  mPerfGapUsSum       = 0;
+  mPerfBlitUsSum      = 0;
+  mPerfSleepMsSum     = 0;
+  mPerfSleepCount     = 0;
+  mPerfPumpUsSum      = 0;
+  mPerfPumps          = 0;
+}
+
+STATIC
+VOID
+MetalAsyncPerfMaybeReport (
+  UINT64  now_us
+  )
+{
+  UINT64  elapsed;
+  UINT32  hz;
+  UINT32  rt_us;
+  UINT32  step_us;
+  UINT32  blit_us;
+  UINT32  gap_us;
+  UINT32  idle_pct;
+  UINT32  wake_us;
+  UINT32  sleep_ms;
+  UINT32  pump_us;
+
+  if (mPerfWinStartUs == 0) {
+    MetalAsyncPerfReset (now_us);
+    return;
+  }
+
+  elapsed = now_us - mPerfWinStartUs;
+  if (elapsed < 1000000u || mPerfSteps == 0) {
+    return;
+  }
+
+  hz      = (UINT32)(((UINT64)mPerfSteps * 1000000u) / elapsed);
+  step_us = (UINT32)(mPerfStepUsSum / mPerfSteps);
+  blit_us = (UINT32)(mPerfBlitUsSum / mPerfSteps);
+  gap_us  = (UINT32)(mPerfGapUsSum / mPerfSteps);
+  rt_us   = step_us + gap_us;
+  idle_pct = (rt_us > 0) ? (UINT32)(((UINT64)gap_us * 100u) / rt_us) : 0;
+  sleep_ms = (mPerfSleepCount > 0)
+               ? (UINT32)(mPerfSleepMsSum / mPerfSleepCount)
+               : 0;
+  wake_us  = (gap_us > sleep_ms * 1000u)
+               ? (gap_us - sleep_ms * 1000u)
+               : 0;
+  pump_us  = (mPerfPumps > 0)
+               ? (UINT32)(mPerfPumpUsSum / mPerfPumps)
+               : 0;
+
+  {
+    CHAR8  line[192];
+
+    AsciiSPrint (
+      line,
+      sizeof (line),
+      "metal-perf: hz=%u rt=%uus step=%uus blit=%uus gap=%uus idle=%u%% wake~=%uus sleep=%ums pumps=%u pump=%uus",
+      hz,
+      rt_us,
+      step_us,
+      blit_us,
+      gap_us,
+      idle_pct,
+      wake_us,
+      sleep_ms,
+      mPerfPumps,
+      pump_us
+      );
+
+    /* UART during game / after EBS — ConOut paints GOP and dies post-EBS. */
+    if (pm_metal_input_game_focus () || pm_metal_efi_owned ()) {
+      pm_metal_shell_serial_log (line);
+    } else {
+      Print (L"%a\r\n", line);
+    }
+  }
+
+  MetalAsyncPerfReset (now_us);
+}
+
+void
+pm_metal_async_perf_note_blit_us (
+  uint64_t  us
+  )
+{
+  mPerfBlitUsSum += us;
+}
 
 STATIC
 pm_metal_async_handle_t
@@ -131,10 +248,17 @@ MetalGuestCoroFn (
 {
   pm_metal_guest_coro_t  *g;
   UINT32                  argv[1];
+  UINT64                  t0;
+  UINT64                  t1;
 
   g = (pm_metal_guest_coro_t *)self;
   if (!mActive || mExecEnv == NULL || mStepFn == NULL) {
     return PM_METAL_ERROR;
+  }
+
+  t0 = pm_metal_time_mono_us ();
+  if (mPerfLastStepEndUs != 0) {
+    mPerfGapUsSum += t0 - mPerfLastStepEndUs;
   }
 
   argv[0] = g->self_h;
@@ -152,11 +276,30 @@ MetalGuestCoroFn (
       return (code == 0) ? PM_METAL_DONE : PM_METAL_ERROR;
     }
 
-    Print (L"metal-async: guest_step failed: %a (wasi_exit=%u)\r\n",
-           exc != NULL ? exc : "?",
-           code);
+    {
+      CHAR8  msg[160];
+
+      AsciiSPrint (
+        msg,
+        sizeof (msg),
+        "metal-async: guest_step failed: %a (wasi_exit=%u)",
+        exc != NULL ? exc : "?",
+        code
+        );
+      if (pm_metal_efi_owned ()) {
+        pm_metal_shell_serial_log (msg);
+      } else {
+        Print (L"%a\r\n", msg);
+      }
+    }
     return PM_METAL_ERROR;
   }
+
+  t1 = pm_metal_time_mono_us ();
+  mPerfStepUsSum     += t1 - t0;
+  mPerfLastStepEndUs  = t1;
+  mPerfSteps++;
+  MetalAsyncPerfMaybeReport (t1);
 
   return (pm_metal_status_t)argv[0];
 }
@@ -272,14 +415,12 @@ pm_metal_async_coro_close (
 }
 
 pm_metal_async_handle_t
-pm_metal_async_sleep (
-  uint32_t  ms
+pm_metal_async_adopt_host_coro (
+  pm_metal_coro_t  *c
   )
 {
-  pm_metal_coro_t         *c;
   pm_metal_async_handle_t  h;
 
-  c = pm_metal_sleep (ms);
   if (c == NULL) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
@@ -293,24 +434,117 @@ pm_metal_async_sleep (
 }
 
 pm_metal_async_handle_t
+pm_metal_async_sleep_us (
+  uint64_t  us
+  )
+{
+  pm_metal_coro_t  *c;
+
+  mPerfSleepMsSum += (UINT32)(us / 1000u);
+  mPerfSleepCount++;
+
+  c = pm_metal_sleep_us (us);
+  if (c == NULL) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  return pm_metal_async_adopt_host_coro (c);
+}
+
+pm_metal_async_handle_t
+pm_metal_async_sleep_until_us (
+  uint64_t  deadline_us
+  )
+{
+  pm_metal_coro_t  *c;
+
+  mPerfSleepCount++;
+  c = pm_metal_sleep_until_us (deadline_us);
+  if (c == NULL) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  return pm_metal_async_adopt_host_coro (c);
+}
+
+pm_metal_async_handle_t
+pm_metal_async_sleep (
+  uint32_t  ms
+  )
+{
+  return pm_metal_async_sleep_us ((uint64_t)ms * 1000u);
+}
+
+pm_metal_async_handle_t
 pm_metal_async_yield (
   VOID
   )
 {
-  pm_metal_coro_t         *c;
-  pm_metal_async_handle_t  h;
+  pm_metal_coro_t  *c;
 
   c = pm_metal_yield ();
   if (c == NULL) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  h = MetalAsyncAlloc (PM_METAL_ASYNC_SLOT_HOST_CORO, c);
-  if (h == PM_METAL_ASYNC_HANDLE_INVALID) {
-    pm_metal_coro_close (c);
+  return pm_metal_async_adopt_host_coro (c);
+}
+
+typedef struct {
+  pm_metal_coro_t          coro;
+  pm_metal_gfx_surface_h   surface;
+} pm_metal_present_coro_t;
+
+STATIC
+pm_metal_status_t
+MetalPresentCoroFn (
+  pm_metal_coro_t  *self
+  )
+{
+  pm_metal_present_coro_t  *p;
+
+  p = (pm_metal_present_coro_t *)self;
+  if (pm_metal_gfx_present_surface (p->surface) != 0) {
+    return PM_METAL_ERROR;
   }
 
-  return h;
+  return PM_METAL_DONE;
+}
+
+pm_metal_async_handle_t
+pm_metal_async_present (
+  uint32_t  surface
+  )
+{
+  pm_metal_present_coro_t  *c;
+  pm_metal_gfx_surface_h    s;
+
+  s = (surface == 0) ? PM_METAL_GFX_SURFACE_DEFAULT : surface;
+  c = (pm_metal_present_coro_t *)pm_metal_coro (
+                                   MetalPresentCoroFn,
+                                   sizeof (*c)
+                                   );
+  if (c == NULL) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  c->surface = s;
+  return pm_metal_async_adopt_host_coro (&c->coro);
+}
+
+uint32_t
+pm_metal_async_result_u32 (
+  pm_metal_async_handle_t  self_h
+  )
+{
+  pm_metal_coro_t  *self;
+
+  self = MetalAsyncGetCoro (self_h);
+  if (self == NULL || self->result == NULL) {
+    return 0;
+  }
+
+  return (uint32_t)(UINTN)self->result;
 }
 
 int32_t
@@ -350,15 +584,9 @@ pm_metal_async_create_task (
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  /* Pin to CPU0 — shell/wasm pump only drains that inbox. */
-  t = pm_metal_task_new (c);
+  /* Round-robin across equal runners — no CPU0 Extrawurst. */
+  t = pm_metal_create_task (c);
   if (t == NULL) {
-    return PM_METAL_ASYNC_HANDLE_INVALID;
-  }
-
-  if (pm_metal_task_spawn (t, 0) != 0) {
-    c->owner = NULL;
-    pm_metal_mem_free (t);
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
@@ -425,6 +653,14 @@ pm_metal_async_mono_ms (
   return pm_metal_time_mono_us () / 1000u;
 }
 
+uint64_t
+pm_metal_async_mono_us (
+  VOID
+  )
+{
+  return pm_metal_time_mono_us ();
+}
+
 /* ---- natives ---- */
 
 STATIC UINT32
@@ -465,6 +701,36 @@ pm_metal_async_sleep_native (
 {
   (VOID)exec_env;
   return pm_metal_async_sleep (ms);
+}
+
+STATIC UINT32
+pm_metal_async_sleep_us_native (
+  wasm_exec_env_t  exec_env,
+  UINT64           us
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_async_sleep_us (us);
+}
+
+STATIC UINT32
+pm_metal_async_sleep_until_us_native (
+  wasm_exec_env_t  exec_env,
+  UINT64           deadline_us
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_async_sleep_until_us (deadline_us);
+}
+
+STATIC UINT32
+pm_metal_async_present_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           surface
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_async_present (surface);
 }
 
 STATIC UINT32
@@ -537,11 +803,33 @@ pm_metal_async_mono_ms_native (
   return pm_metal_async_mono_ms ();
 }
 
+STATIC UINT64
+pm_metal_async_mono_us_native (
+  wasm_exec_env_t  exec_env
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_async_mono_us ();
+}
+
+STATIC UINT32
+pm_metal_async_result_u32_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           self_h
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_async_result_u32 (self_h);
+}
+
 STATIC NativeSymbol g_pm_metal_async_native_symbols[] = {
   { "pm_metal_async_coro_create", (VOID *)pm_metal_async_coro_create_native, "(i)i", NULL },
   { "pm_metal_async_coro_state", (VOID *)pm_metal_async_coro_state_native, "(i)i", NULL },
   { "pm_metal_async_coro_close", (VOID *)pm_metal_async_coro_close_native, "(i)", NULL },
   { "pm_metal_async_sleep", (VOID *)pm_metal_async_sleep_native, "(i)i", NULL },
+  { "pm_metal_async_sleep_us", (VOID *)pm_metal_async_sleep_us_native, "(I)i", NULL },
+  { "pm_metal_async_sleep_until_us", (VOID *)pm_metal_async_sleep_until_us_native, "(I)i", NULL },
+  { "pm_metal_async_present", (VOID *)pm_metal_async_present_native, "(i)i", NULL },
   { "pm_metal_async_yield", (VOID *)pm_metal_async_yield_native, "()i", NULL },
   { "pm_metal_async_await", (VOID *)pm_metal_async_await_native, "(ii)i", NULL },
   { "pm_metal_async_create_task", (VOID *)pm_metal_async_create_task_native, "(i)i", NULL },
@@ -549,6 +837,8 @@ STATIC NativeSymbol g_pm_metal_async_native_symbols[] = {
   { "pm_metal_async_task_cancel", (VOID *)pm_metal_async_task_cancel_native, "(i)", NULL },
   { "pm_metal_async_task_status", (VOID *)pm_metal_async_task_status_native, "(i)i", NULL },
   { "pm_metal_async_mono_ms", (VOID *)pm_metal_async_mono_ms_native, "()I", NULL },
+  { "pm_metal_async_mono_us", (VOID *)pm_metal_async_mono_us_native, "()I", NULL },
+  { "pm_metal_async_result_u32", (VOID *)pm_metal_async_result_u32_native, "(i)i", NULL },
 };
 
 int
@@ -589,6 +879,7 @@ pm_metal_async_session_begin (
   mRootCoroH  = PM_METAL_ASYNC_HANDLE_INVALID;
   mRootTaskH  = PM_METAL_ASYNC_HANDLE_INVALID;
   mActive     = 1;
+  MetalAsyncPerfReset (pm_metal_time_mono_us ());
   return 0;
 }
 
@@ -625,11 +916,20 @@ pm_metal_async_session_pump (
   VOID
   )
 {
+  UINT64  t0;
+  UINT64  t1;
+
   if (!mActive) {
     return;
   }
 
-  pm_metal_run_poll (0);
+  t0 = pm_metal_time_mono_us ();
+  pm_metal_net_poll ();
+  pm_metal_audio_poll ();
+  pm_metal_run_poll_all ();
+  t1 = pm_metal_time_mono_us ();
+  mPerfPumpUsSum += t1 - t0;
+  mPerfPumps++;
 }
 
 int

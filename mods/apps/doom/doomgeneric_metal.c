@@ -1,13 +1,11 @@
 /*
  * doomgeneric platform — Metal wasm (gfx blit + async clock + input).
  */
-#include <stdio.h>
-
 #include "../../../external/doomgeneric/doomgeneric/doomgeneric.h"
 
-#include "pymergetic/metal/gfx.h"
-#include "pymergetic/metal/async.h"
-#include "pymergetic/metal/input.h"
+#include "pymergetic/metal/gfx/gfx.h"
+#include "pymergetic/metal/async/async.h"
+#include "pymergetic/metal/input/input.h"
 
 /* From d_loop.c — avoid d_loop.h (pulls doomtype.h → <strings.h>). */
 extern int singletics;
@@ -65,25 +63,8 @@ DG_DrawFrame(void)
 	(void)pm_metal_gfx_blit_bgra(
 		dx, dy, dw, dh, DG_ScreenBuffer, DOOMGENERIC_RESX, DOOMGENERIC_RESY,
 		DOOMGENERIC_RESX * (int)sizeof(pixel_t));
-
-	/* Engine+blit rate (serial). Display remoting (VNC/X11) is extra on top. */
-	{
-		static uint32_t s_frames;
-		static uint32_t s_t0;
-		uint32_t        now;
-
-		s_frames++;
-		now = DG_GetTicksMs();
-		if (s_t0 == 0) {
-			s_t0 = now;
-		}
-		if (now - s_t0 >= 1000u) {
-			printf("metal-doom: %u fps (scale=%dx%d)\n", (unsigned)s_frames,
-			       scale, scale);
-			s_frames = 0;
-			s_t0     = now;
-		}
-	}
+	/* Rate/idle: host metal-perf on serial (printf→ConOut paints over GOP). */
+	(void)scale;
 }
 
 void

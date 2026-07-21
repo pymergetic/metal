@@ -41,6 +41,14 @@ build_one hello "${ROOT}/mods/tests/t0_hello/main.c"
 build_one ui_hello "${ROOT}/mods/tests/t_ui_hello/main.c"
 build_one async_sleep "${ROOT}/mods/tests/t_async_sleep/main.c" \
 	-Wl,--export=pm_metal_guest_step
+build_one async_fs "${ROOT}/mods/tests/t_async_fs/main.c" \
+	-Wl,--export=pm_metal_guest_step
+build_one async_time "${ROOT}/mods/tests/t_async_time/main.c" \
+	-Wl,--export=pm_metal_guest_step
+build_one async_net "${ROOT}/mods/tests/t_async_net/main.c" \
+	-Wl,--export=pm_metal_guest_step
+build_one async_audio "${ROOT}/mods/tests/t_async_audio/main.c" \
+	-Wl,--export=pm_metal_guest_step
 
 python3 - "${OUT_DIR}" "${INC_OUT}" <<'PY'
 import pathlib, sys
@@ -51,6 +59,10 @@ mods = [
     ("hello", out_dir / "hello.wasm"),
     ("ui_hello", out_dir / "ui_hello.wasm"),
     ("async_sleep", out_dir / "async_sleep.wasm"),
+    ("async_fs", out_dir / "async_fs.wasm"),
+    ("async_time", out_dir / "async_time.wasm"),
+    ("async_net", out_dir / "async_net.wasm"),
+    ("async_audio", out_dir / "async_audio.wasm"),
 ]
 
 lines = [
