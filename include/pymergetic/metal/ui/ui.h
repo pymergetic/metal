@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "pymergetic/metal/gfx/gfx.h"
 #include "pymergetic/metal/wasi.h"
 
 #ifdef __cplusplus
@@ -50,6 +51,9 @@ extern pm_metal_ui_handle_t pm_metal_ui_tab_active(void)
 	PM_METAL_UI_IMPORT(pm_metal_ui_tab_active);
 extern void pm_metal_ui_tab_puts(pm_metal_ui_handle_t h, const char *line)
 	PM_METAL_UI_IMPORT(pm_metal_ui_tab_puts);
+/** Content surface for tab (clip/present target); 0 if none. */
+extern pm_metal_gfx_surface_h pm_metal_ui_tab_surface(pm_metal_ui_handle_t h)
+	PM_METAL_UI_IMPORT(pm_metal_ui_tab_surface);
 extern void pm_metal_ui_console_puts(const char *line)
 	PM_METAL_UI_IMPORT(pm_metal_ui_console_puts);
 extern void pm_metal_ui_active_puts(const char *line)
@@ -84,6 +88,19 @@ int pm_metal_ui_input_text(char *out, uint32_t cap);
 int pm_metal_ui_tab_activate_index(unsigned index);
 unsigned pm_metal_ui_tab_active_index(void);
 int pm_metal_ui_tab_close_active(void);
+
+/** Tab content surface (clip/present target); 0 if none. */
+pm_metal_gfx_surface_h pm_metal_ui_tab_surface(pm_metal_ui_handle_t h);
+/** Content rect in screen pixels; 0 ok. */
+int pm_metal_ui_tab_content_rect(pm_metal_ui_handle_t tab, int32_t *ox,
+				 int32_t *oy, int32_t *ow, int32_t *oh);
+/**
+ * Hit-test click at screen (x,y). Activates tab under strip; returns 1 if
+ * handled, 0 if missed chrome.
+ */
+int pm_metal_ui_pointer_hit(int32_t x, int32_t y);
+/** Draw software cursor at screen position (unlocked pointer). */
+void pm_metal_ui_cursor_draw(int32_t x, int32_t y);
 
 int pm_metal_ui_native_register(void);
 #endif

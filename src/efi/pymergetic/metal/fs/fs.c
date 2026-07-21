@@ -1,9 +1,11 @@
 /** @file
-  Load ESP files into guest linear memory (caller-provided buffer). (impl: efi)
+  ESP file load — sync helpers + awaitable FS ops. (impl: efi)
 **/
-#include <pymergetic/metal/fs.h>
-#include <pymergetic/metal/esp.h>
+#include <pymergetic/metal/fs/fs.h>
+#include <pymergetic/metal/esp/esp.h>
+#include <pymergetic/metal/async/async.h>
 #include <mem/mem.h>
+#include <coro/coro.h>
 
 #include <Uefi.h>
 #include <Library/BaseMemoryLib.h>
@@ -62,11 +64,10 @@ pm_metal_fs_size (
   CONST CHAR8  *path
   )
 {
-  UINT8  *host;
   UINT32  len;
   CHAR8   cleaned[256];
 
-  if (mFsInst == NULL || !pm_metal_esp_ready ()) {
+  if (!pm_metal_esp_ready ()) {
     return 0;
   }
 
@@ -74,13 +75,11 @@ pm_metal_fs_size (
     return 0;
   }
 
-  host = NULL;
-  len  = 0;
-  if (pm_metal_esp_read_file (cleaned, &host, &len) != 0 || host == NULL) {
+  len = 0;
+  if (pm_metal_esp_file_size (cleaned, &len) != 0) {
     return 0;
   }
 
-  pm_metal_mem_free (host);
   return len;
 }
 
@@ -109,7 +108,16 @@ pm_metal_fs_read (
 
   host = NULL;
   len  = 0;
-  if (pm_metal_esp_read_file (cleaned, &host, &len) != 0 || host == NULL) {
+  if (pm_metal_esp_read_file (cleaned, &host, &len) != 0) {
+    return 0;
+  }
+
+  /* Zero-length file: success with 0 bytes (host may be NULL). */
+  if (len == 0) {
+    return 0;
+  }
+
+  if (host == NULL) {
     return 0;
   }
 
@@ -134,6 +142,160 @@ pm_metal_fs_read (
   return copy_len;
 }
 
+uint32_t
+pm_metal_fs_write (
+  CONST CHAR8  *path,
+  uint32_t      src,
+  uint32_t      src_len
+  )
+{
+  CONST UINT8  *native;
+  CHAR8         cleaned[256];
+
+  if (mFsInst == NULL || path == NULL || !pm_metal_esp_ready ()) {
+    return 0;
+  }
+
+  if (src_len > 0 && (src == 0
+                      || !wasm_runtime_validate_app_addr (mFsInst, src, src_len)))
+  {
+    return 0;
+  }
+
+  if (MetalFsCleanPath (path, cleaned, sizeof (cleaned)) != 0) {
+    return 0;
+  }
+
+  native = NULL;
+  if (src_len > 0) {
+    native = (CONST UINT8 *)wasm_runtime_addr_app_to_native (mFsInst, src);
+    if (native == NULL) {
+      return 0;
+    }
+  }
+
+  if (pm_metal_esp_write_file (cleaned, native, src_len) != 0) {
+    return 0;
+  }
+
+  return src_len;
+}
+
+/* ---- awaitable FS (eager ESP today; still always awaited) ---- */
+
+typedef enum {
+  PM_METAL_FS_OP_SIZE = 0,
+  PM_METAL_FS_OP_READ,
+  PM_METAL_FS_OP_WRITE
+} pm_metal_fs_op_t;
+
+typedef struct {
+  pm_metal_coro_t   coro;
+  pm_metal_fs_op_t  op;
+  CHAR8             path[256];
+  UINT32            dest;
+  UINT32            dest_len;
+} pm_metal_fs_coro_t;
+
+STATIC
+pm_metal_status_t
+MetalFsCoroFn (
+  pm_metal_coro_t  *self
+  )
+{
+  pm_metal_fs_coro_t  *f;
+  UINT32               n;
+
+  f = (pm_metal_fs_coro_t *)self;
+  n = 0;
+
+  if (f->op == PM_METAL_FS_OP_SIZE) {
+    n = pm_metal_fs_size (f->path);
+  } else if (f->op == PM_METAL_FS_OP_READ) {
+    n = pm_metal_fs_read (f->path, f->dest, f->dest_len);
+  } else if (f->op == PM_METAL_FS_OP_WRITE) {
+    n = pm_metal_fs_write (f->path, f->dest, f->dest_len);
+  }
+
+  self->result = (VOID *)(UINTN)n;
+  return PM_METAL_DONE;
+}
+
+STATIC
+pm_metal_async_handle_t
+MetalFsStart (
+  pm_metal_fs_op_t  op,
+  CONST CHAR8      *path,
+  UINT32            dest,
+  UINT32            dest_len
+  )
+{
+  pm_metal_fs_coro_t  *f;
+  CHAR8                cleaned[256];
+
+  if (MetalFsCleanPath (path, cleaned, sizeof (cleaned)) != 0) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  if (op == PM_METAL_FS_OP_READ && (dest == 0 || dest_len == 0)) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  if (op == PM_METAL_FS_OP_WRITE && dest_len > 0 && dest == 0) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  f = (pm_metal_fs_coro_t *)pm_metal_coro (
+                              MetalFsCoroFn,
+                              sizeof (*f)
+                              );
+  if (f == NULL) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  f->op       = op;
+  f->dest     = dest;
+  f->dest_len = dest_len;
+  AsciiStrnCpyS (f->path, sizeof (f->path), cleaned, sizeof (f->path) - 1);
+  return pm_metal_async_adopt_host_coro (&f->coro);
+}
+
+pm_metal_async_handle_t
+pm_metal_fs_size_async (
+  CONST CHAR8  *path
+  )
+{
+  return MetalFsStart (PM_METAL_FS_OP_SIZE, path, 0, 0);
+}
+
+pm_metal_async_handle_t
+pm_metal_fs_read_async (
+  CONST CHAR8  *path,
+  uint32_t      dest,
+  uint32_t      dest_len
+  )
+{
+  return MetalFsStart (PM_METAL_FS_OP_READ, path, dest, dest_len);
+}
+
+pm_metal_async_handle_t
+pm_metal_fs_write_async (
+  CONST CHAR8  *path,
+  uint32_t      src,
+  uint32_t      src_len
+  )
+{
+  return MetalFsStart (PM_METAL_FS_OP_WRITE, path, src, src_len);
+}
+
+uint32_t
+pm_metal_fs_result (
+  pm_metal_async_handle_t  self_h
+  )
+{
+  return pm_metal_async_result_u32 (self_h);
+}
+
 STATIC UINT32
 pm_metal_fs_size_native (
   wasm_exec_env_t  exec_env,
@@ -156,7 +318,55 @@ pm_metal_fs_read_native (
   return pm_metal_fs_read (path, dest, dest_len);
 }
 
+STATIC UINT32
+pm_metal_fs_size_async_native (
+  wasm_exec_env_t  exec_env,
+  CONST CHAR8     *path
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_fs_size_async (path);
+}
+
+STATIC UINT32
+pm_metal_fs_read_async_native (
+  wasm_exec_env_t  exec_env,
+  CONST CHAR8     *path,
+  UINT32           dest,
+  UINT32           dest_len
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_fs_read_async (path, dest, dest_len);
+}
+
+STATIC UINT32
+pm_metal_fs_write_async_native (
+  wasm_exec_env_t  exec_env,
+  CONST CHAR8     *path,
+  UINT32           src,
+  UINT32           src_len
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_fs_write_async (path, src, src_len);
+}
+
+STATIC UINT32
+pm_metal_fs_result_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           self_h
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_fs_result (self_h);
+}
+
 STATIC NativeSymbol g_pm_metal_fs_native_symbols[] = {
+  { "pm_metal_fs_size_async", (VOID *)pm_metal_fs_size_async_native, "($)i", NULL },
+  { "pm_metal_fs_read_async", (VOID *)pm_metal_fs_read_async_native, "($ii)i", NULL },
+  { "pm_metal_fs_write_async", (VOID *)pm_metal_fs_write_async_native, "($ii)i", NULL },
+  { "pm_metal_fs_result", (VOID *)pm_metal_fs_result_native, "(i)i", NULL },
   { "pm_metal_fs_size", (VOID *)pm_metal_fs_size_native, "($)i", NULL },
   { "pm_metal_fs_read", (VOID *)pm_metal_fs_read_native, "($ii)i", NULL },
 };

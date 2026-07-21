@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "pymergetic/metal/ui.h"
+#include "pymergetic/metal/ui/ui.h"
 
 #ifdef __cplusplus
 extern "C" {

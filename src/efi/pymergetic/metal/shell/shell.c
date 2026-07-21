@@ -1,23 +1,29 @@
 /** @file
   Interactive shell — real wasm run/tab. (impl: efi)
 **/
-#include <pymergetic/metal/shell.h>
-#include <pymergetic/metal/ui.h>
-#include <pymergetic/metal/wasm.h>
-#include <pymergetic/metal/async.h>
-#include <pymergetic/metal/input.h>
-#include <pymergetic/metal/gfx.h>
-#include <pymergetic/metal/esp.h>
-#include <mem/mem.h>
+#include <pymergetic/metal/shell/shell.h>
+#include <pymergetic/metal/ui/ui.h>
+#include <pymergetic/metal/wasm/wasm.h>
+#include <pymergetic/metal/async/async.h>
+#include <pymergetic/metal/input/input.h>
+#include <pymergetic/metal/gfx/gfx.h>
+#include <pymergetic/metal/stream/stream.h>
+#include <pymergetic/metal/net/net_ops.h>
+#include <pymergetic/metal/net/net_cfg.h>
+#include <pymergetic/metal/audio/audio_ops.h>
+#include <pymergetic/metal/console/console.h>
+#include <pymergetic/metal/efi/efi_run.h>
+#include <pymergetic/metal/efi/boot.h>
+#include <pymergetic/metal/log/log.h>
 #include <time/time.h>
 
 #include <Uefi.h>
 #include <Protocol/SimpleTextInEx.h>
 #include <Library/UefiBootServicesTableLib.h>
+#include <Library/UefiLib.h>
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/PrintLib.h>
-#include <Library/UefiLib.h>
 
 #define SHELL_LINE_MAX  120
 
@@ -39,10 +45,20 @@
 
 STATIC INT32   mDirty;
 STATIC INT32   mExitReq;
+STATIC UINT32  mPrevPtrButtons;
 STATIC UINT64  mLastFrameMs;
 STATIC INT32   mNest;
 STATIC INT32   mCtrlDown;
 STATIC EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL  *mConInEx;
+
+void
+pm_metal_shell_serial_log (
+  CONST CHAR8  *line
+  )
+{
+  /* Unified log owns UEFI/UART/UI sinks (incl. COM1 after UART attach). */
+  pm_metal_log (line);
+}
 
 STATIC
 unsigned char
@@ -231,23 +247,18 @@ MetalShellEcho (
   )
 {
   /*
-   * ConOut/Print also paints the GOP. During a game: still Print (verify
-   * greps serial) then scrub the FB; the next DG_DrawFrame repaints.
+   * Unified log owns sinks (UEFI/UART/UI viewports). Still mirror into
+   * the active guest tab when not in game focus.
    */
-  if (pm_metal_input_game_focus ()) {
-    Print (L"%a\r\n", line);
-    pm_metal_gfx_clear (PM_METAL_GFX_RGB (0, 0, 0));
-    (VOID)pm_metal_gfx_present ();
-    return;
+  if (!pm_metal_input_game_focus ()) {
+    if (pm_metal_ui_tab_active_index () != 0) {
+      pm_metal_ui_active_puts (line);
+    }
+
+    mDirty = 1;
   }
 
-  pm_metal_ui_console_puts (line);
-  if (pm_metal_ui_tab_active_index () != 0) {
-    pm_metal_ui_active_puts (line);
-  }
-
-  Print (L"%a\r\n", line);
-  mDirty = 1;
+  pm_metal_log (line);
 }
 
 void
@@ -255,6 +266,18 @@ pm_metal_shell_log (
   CONST CHAR8  *line
   )
 {
+  pm_metal_stream_h  out;
+
+  out = pm_metal_stdio_out ();
+  if (out != PM_METAL_STREAM_INVALID) {
+    (VOID)pm_metal_stream_write_line (out, line);
+    /* Keep serial for verify markers; ConOut only before EBS. */
+    pm_metal_shell_serial_log (line);
+
+    mDirty = 1;
+    return;
+  }
+
   MetalShellEcho (line);
 }
 
@@ -294,8 +317,96 @@ MetalShellHelp (
   MetalShellEcho ("  tabs              list tabs");
   MetalShellEcho ("  use <n>           activate tab index");
   MetalShellEcho ("  close [n]         close tab n, or active/last guest");
-  MetalShellEcho ("  exit              shutdown");
-  MetalShellEcho ("mods: hello, ui_hello, async_sleep, doom (ESP)");
+  MetalShellEcho ("  test              run bring-up proof suite");
+  MetalShellEcho ("  net [status]      show iface (ip/mask/gw/dns)");
+  MetalShellEcho ("  net set <ip> <mask> <gw> [dns]");
+  MetalShellEcho ("  exit|quit         shutdown (reverse fini)");
+}
+
+STATIC
+VOID
+MetalShellNet (
+  CONST CHAR8  *arg
+  )
+{
+  CHAR8   buf[160];
+  CHAR8   ip[16];
+  CHAR8   mask[16];
+  CHAR8   gw[16];
+  CHAR8   dns[16];
+  UINTN   i;
+  UINTN   n;
+  CONST CHAR8  *p;
+  CHAR8        *outs[4];
+  CHAR8        *cur;
+  UINTN         oi;
+
+  if (arg == NULL || arg[0] == '\0'
+      || AsciiStrCmp (arg, "status") == 0)
+  {
+    if (pm_metal_net_if_status (buf, sizeof (buf)) != 0) {
+      MetalShellEcho ("net: unavailable");
+    } else {
+      MetalShellEcho (buf);
+    }
+
+    return;
+  }
+
+  if (AsciiStrnCmp (arg, "set ", 4) != 0) {
+    MetalShellEcho ("usage: net [status] | net set <ip> <mask> <gw> [dns]");
+    return;
+  }
+
+  p = arg + 4;
+  while (*p == ' ') {
+    p++;
+  }
+
+  outs[0] = ip;
+  outs[1] = mask;
+  outs[2] = gw;
+  outs[3] = dns;
+  ip[0] = mask[0] = gw[0] = dns[0] = '\0';
+  oi  = 0;
+  cur = outs[0];
+  n   = 0;
+  for (i = 0; p[i] != '\0' && oi < 4; i++) {
+    if (p[i] == ' ') {
+      cur[n] = '\0';
+      oi++;
+      if (oi >= 4) {
+        break;
+      }
+
+      cur = outs[oi];
+      n   = 0;
+      while (p[i + 1] == ' ') {
+        i++;
+      }
+
+      continue;
+    }
+
+    if (n + 1 < 16) {
+      cur[n++] = p[i];
+    }
+  }
+
+  cur[n] = '\0';
+  if (ip[0] == '\0' || mask[0] == '\0' || gw[0] == '\0') {
+    MetalShellEcho ("usage: net set <ip> <mask> <gw> [dns]");
+    return;
+  }
+
+  if (pm_metal_net_if_set (ip, mask, gw, dns[0] != '\0' ? dns : NULL) != 0) {
+    MetalShellEcho ("net set: failed");
+  } else {
+    MetalShellEcho ("net set: ok");
+    if (pm_metal_net_if_status (buf, sizeof (buf)) == 0) {
+      MetalShellEcho (buf);
+    }
+  }
 }
 
 int
@@ -457,6 +568,14 @@ MetalShellDispatch (
     MetalShellHelp ();
   } else if (AsciiStrCmp (cmd, "echo") == 0) {
     MetalShellEcho (arg);
+  } else if (AsciiStrCmp (cmd, "test") == 0) {
+    if (pm_metal_boot_run_tests () != 0) {
+      MetalShellEcho ("test: FAILED");
+    } else {
+      MetalShellEcho ("test: ok");
+    }
+  } else if (AsciiStrCmp (cmd, "net") == 0) {
+    MetalShellNet (arg);
   } else if (AsciiStrCmp (cmd, "run") == 0) {
     (VOID)pm_metal_shell_run (arg);
   } else if (AsciiStrCmp (cmd, "tab") == 0) {
@@ -505,6 +624,7 @@ MetalShellDispatch (
       mDirty = 1;
     }
   } else if (AsciiStrCmp (cmd, "exit") == 0
+             || AsciiStrCmp (cmd, "quit") == 0
              || AsciiStrCmp (cmd, "shutdown") == 0)
   {
     MetalShellEcho ("shutdown requested");
@@ -522,85 +642,58 @@ pm_metal_shell_init (
   VOID
   )
 {
-  INT32  rc;
-
   mDirty       = 1;
   mExitReq     = 0;
   mLastFrameMs = 0;
   mNest        = 0;
 
-  MetalShellEcho ("Metal shell - type help");
-  MetalShellEcho ("mods: hello, ui_hello, async_sleep, doom");
   pm_metal_ui_set_status ("shell ready");
   pm_metal_ui_input_clear ();
-
-  if (pm_metal_wasm_ready ()) {
-    pm_metal_wasm_set_stdout_tab (pm_metal_ui_console_handle ());
-    mNest = 1;
-    rc    = pm_metal_wasm_run_mod ("hello");
-    /* Second load proves embed bytes are not mutated in-place. */
-    if (rc == 0) {
-      rc = pm_metal_wasm_run_mod ("hello");
-    }
-
-    if (rc == 0) {
-      MetalShellEcho ("metal-wasm: t0_hello ok");
-    } else {
-      MetalShellEcho ("metal-wasm: t0_hello fail");
-      Print (L"metal-wasm: t0_hello fail (%d)\r\n", rc);
-    }
-
-    /* Real resume proof — guest await(sleep) parks into host runloop. */
-    if (rc == 0) {
-      rc = pm_metal_wasm_run_mod ("async_sleep");
-      if (rc == 0 && pm_metal_wasm_session_active ()) {
-        rc = pm_metal_wasm_session_await (5000);
-      }
-
-      if (rc == 0) {
-        MetalShellEcho ("metal-async: sleep ok");
-      } else {
-        MetalShellEcho ("metal-async: sleep fail");
-        Print (L"metal-async: sleep fail (%d)\r\n", rc);
-      }
-    }
-
-    /* Headless verify only: ESP marker mods/apps/doom/autostart.
-     * Interactive: type `run doom` / `tab doom`. */
-    if (rc == 0 && pm_metal_esp_ready ()) {
-      UINT8   *marker;
-      UINT32   mlen;
-      INT32    doom_rc;
-
-      marker = NULL;
-      mlen   = 0;
-      if (pm_metal_esp_read_file ("mods/apps/doom/autostart", &marker, &mlen)
-          == 0)
-      {
-        if (marker != NULL) {
-          pm_metal_mem_free (marker);
-        }
-
-        doom_rc = pm_metal_wasm_run_mod ("doom");
-        if (doom_rc == 0 && pm_metal_wasm_session_active ()) {
-          MetalShellEcho ("metal-doom: session live");
-        } else if (doom_rc == 0) {
-          MetalShellEcho ("metal-doom: session ok");
-        } else {
-          MetalShellEcho ("metal-doom: fail");
-          Print (L"metal-doom: fail (%d)\r\n", doom_rc);
-        }
-      }
-    }
-
-    mNest = 0;
-    pm_metal_wasm_set_stdout_tab (PM_METAL_UI_HANDLE_INVALID);
-  } else {
-    Print (L"metal-wasm: not ready\r\n");
-  }
-
   (VOID)pm_metal_ui_frame ();
   return 0;
+}
+
+STATIC
+VOID
+MetalShellHandleAscii (
+  CHAR8  ch,
+  CHAR8  *text,
+  UINTN  text_sz
+  )
+{
+  if (ch == '\r' || ch == '\n') {
+    CHAR8  nl;
+
+    nl = '\n';
+    (VOID)pm_metal_stream_feed_stdin (&nl, 1);
+    if (pm_metal_ui_input_text (text, text_sz) < 0) {
+      text[0] = '\0';
+    }
+
+    {
+      CHAR8  echo[SHELL_LINE_MAX + 4];
+
+      AsciiSPrint (echo, sizeof (echo), "> %a", text);
+      MetalShellEcho (echo);
+    }
+
+    MetalShellDispatch (text);
+    pm_metal_ui_input_clear ();
+    mDirty = 1;
+    return;
+  }
+
+  if (ch == 0x7f || ch == 0x08) {
+    (VOID)pm_metal_ui_input_backspace ();
+    mDirty = 1;
+    return;
+  }
+
+  if (ch >= 32 && ch < 127) {
+    (VOID)pm_metal_stream_feed_stdin (&ch, 1);
+    (VOID)pm_metal_ui_input_append (ch);
+    mDirty = 1;
+  }
 }
 
 int
@@ -613,12 +706,40 @@ pm_metal_shell_poll (
   UINT64         now_ms;
   CHAR8          text[SHELL_LINE_MAX];
 
-  if (gST == NULL || gST->ConIn == NULL || gBS == NULL) {
+  if (gST == NULL) {
+    return -1;
+  }
+
+  if (!pm_metal_efi_owned () && (gST->ConIn == NULL || gBS == NULL)) {
     return -1;
   }
 
   now_ms = pm_metal_time_mono_us () / 1000u;
   pm_metal_ui_tick (now_ms);
+  if (!pm_metal_efi_owned ()) {
+    pm_metal_input_hw_poll ();
+  }
+
+  pm_metal_net_poll ();
+  pm_metal_audio_poll ();
+  pm_metal_console_poll ();
+
+  if (!pm_metal_input_game_focus () && !pm_metal_input_pointer_locked ()) {
+    INT32    px;
+    INT32    py;
+    UINT32   buttons;
+
+    pm_metal_input_pointer_sample (&px, &py, &buttons);
+    if ((buttons & 1u) != 0 && (mPrevPtrButtons & 1u) == 0) {
+      if (pm_metal_ui_pointer_hit (px, py)) {
+        mDirty = 1;
+      }
+    }
+
+    mPrevPtrButtons = buttons;
+  } else {
+    mPrevPtrButtons = 0;
+  }
 
   if (pm_metal_wasm_session_active ()) {
     INT32         st;
@@ -652,7 +773,34 @@ pm_metal_shell_poll (
     }
   }
 
-  if (pm_metal_input_game_focus ()) {
+  if (pm_metal_efi_owned ()) {
+    CHAR8   ch;
+    UINT32  n;
+
+    /*
+     * Post-EBS: ConIn is gone. VNC/QEMU keys hit i8042; COM1 is only
+     * for -serial stdio. Drain both into the UI line.
+     */
+    if (!pm_metal_input_game_focus ()) {
+      for (;;) {
+        n = pm_metal_console_read (&ch, 1);
+        if (n == 0) {
+          break;
+        }
+
+        MetalShellHandleAscii (ch, text, sizeof (text));
+      }
+
+      for (;;) {
+        n = pm_metal_input_ps2_read (&ch, 1);
+        if (n == 0) {
+          break;
+        }
+
+        MetalShellHandleAscii (ch, text, sizeof (text));
+      }
+    }
+  } else if (pm_metal_input_game_focus ()) {
     MetalShellPollGameKeys (now_ms);
   } else {
     Status = gBS->CheckEvent (gST->ConIn->WaitForKey);
@@ -660,26 +808,11 @@ pm_metal_shell_poll (
       Status = gST->ConIn->ReadKeyStroke (gST->ConIn, &Key);
       if (Status == EFI_SUCCESS) {
         if (Key.UnicodeChar == CHAR_CARRIAGE_RETURN) {
-          if (pm_metal_ui_input_text (text, sizeof (text)) < 0) {
-            text[0] = '\0';
-          }
-
-          {
-            CHAR8  echo[SHELL_LINE_MAX + 4];
-
-            AsciiSPrint (echo, sizeof (echo), "> %a", text);
-            MetalShellEcho (echo);
-          }
-
-          MetalShellDispatch (text);
-          pm_metal_ui_input_clear ();
-          mDirty = 1;
+          MetalShellHandleAscii ('\r', text, sizeof (text));
         } else if (Key.UnicodeChar == CHAR_BACKSPACE) {
-          (VOID)pm_metal_ui_input_backspace ();
-          mDirty = 1;
+          MetalShellHandleAscii (0x08, text, sizeof (text));
         } else if (Key.UnicodeChar >= 32 && Key.UnicodeChar < 127) {
-          (VOID)pm_metal_ui_input_append ((CHAR8)Key.UnicodeChar);
-          mDirty = 1;
+          MetalShellHandleAscii ((CHAR8)Key.UnicodeChar, text, sizeof (text));
         }
       }
     }
@@ -689,7 +822,18 @@ pm_metal_shell_poll (
   if (!pm_metal_input_game_focus ()
       && (mDirty || (now_ms - mLastFrameMs) >= 250u))
   {
+    INT32   px;
+    INT32   py;
+    UINT32  buttons;
+
     (VOID)pm_metal_ui_frame ();
+    if (!pm_metal_input_pointer_locked ()) {
+      pm_metal_input_pointer_sample (&px, &py, &buttons);
+      (VOID)buttons;
+      pm_metal_ui_cursor_draw (px, py);
+      (VOID)pm_metal_gfx_present ();
+    }
+
     mLastFrameMs = now_ms;
     mDirty       = 0;
   }
@@ -713,7 +857,12 @@ pm_metal_shell_log_native (
   if (line == NULL || inst == NULL
       || !wasm_runtime_validate_native_addr (inst, (VOID *)line, 1))
   {
-    Print (L"metal-shell: log bad ptr %p\r\n", line);
+    if (pm_metal_efi_owned ()) {
+      pm_metal_shell_serial_log ("metal-shell: log bad ptr");
+    } else {
+      Print (L"metal-shell: log bad ptr %p\r\n", line);
+    }
+
     return;
   }
 

@@ -26,6 +26,11 @@ typedef uint32_t pm_metal_gfx_color_t;
 
 #define PM_METAL_GFX_WASI_MODULE "pymergetic.metal.gfx"
 
+typedef uint32_t pm_metal_gfx_surface_h;
+
+#define PM_METAL_GFX_SURFACE_INVALID 0u
+#define PM_METAL_GFX_SURFACE_DEFAULT 1u /* full GOP / active renderer primary */
+
 #if defined(__wasm__)
 #include "pymergetic/metal/wasi.h"
 #define PM_METAL_GFX_IMPORT(name) \
@@ -40,15 +45,46 @@ typedef struct {
 	uint32_t pitch;
 } pm_metal_gfx_surface_t;
 
+/**
+ * Pre-EBS: LocateProtocol GOP + stash FB base/size (Boot Services).
+ * Safe to call once on the sync floor.
+ */
+int pm_metal_gfx_harvest(void);
+
+/**
+ * Bind shadow FB and mark ready. Uses harvest; may run post-EBS.
+ * Calls harvest itself if still pre-EBS and harvest was skipped.
+ */
 int pm_metal_gfx_init(void);
 void pm_metal_gfx_fini(void);
 int pm_metal_gfx_ready(void);
+int pm_metal_gfx_harvested(void);
 pm_metal_gfx_surface_t *pm_metal_gfx_surface(void);
+
+/** Allocate a named surface (tab content). Handle ≥ 2. */
+pm_metal_gfx_surface_h pm_metal_gfx_surface_alloc(void);
+void pm_metal_gfx_surface_free(pm_metal_gfx_surface_h s);
+void pm_metal_gfx_surface_set_rect(pm_metal_gfx_surface_h s, int32_t x,
+				   int32_t y, int32_t w, int32_t h);
+/** Present only that surface's rect (DEFAULT = full). */
+int pm_metal_gfx_present_surface(pm_metal_gfx_surface_h s);
 #endif
 
 #if defined(__wasm__)
 extern int pm_metal_gfx_width(void) PM_METAL_GFX_IMPORT(pm_metal_gfx_width);
 extern int pm_metal_gfx_height(void) PM_METAL_GFX_IMPORT(pm_metal_gfx_height);
+extern void pm_metal_gfx_set_surface(pm_metal_gfx_surface_h s)
+	PM_METAL_GFX_IMPORT(pm_metal_gfx_set_surface);
+extern pm_metal_gfx_surface_h pm_metal_gfx_draw_surface(void)
+	PM_METAL_GFX_IMPORT(pm_metal_gfx_draw_surface);
+extern int32_t pm_metal_gfx_surface_width(pm_metal_gfx_surface_h s)
+	PM_METAL_GFX_IMPORT(pm_metal_gfx_surface_width);
+extern int32_t pm_metal_gfx_surface_height(pm_metal_gfx_surface_h s)
+	PM_METAL_GFX_IMPORT(pm_metal_gfx_surface_height);
+extern int32_t pm_metal_gfx_surface_origin_x(pm_metal_gfx_surface_h s)
+	PM_METAL_GFX_IMPORT(pm_metal_gfx_surface_origin_x);
+extern int32_t pm_metal_gfx_surface_origin_y(pm_metal_gfx_surface_h s)
+	PM_METAL_GFX_IMPORT(pm_metal_gfx_surface_origin_y);
 extern void pm_metal_gfx_clear(pm_metal_gfx_color_t color)
 	PM_METAL_GFX_IMPORT(pm_metal_gfx_clear);
 extern void pm_metal_gfx_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h,
@@ -83,6 +119,13 @@ extern int pm_metal_gfx_blit_bgra(int32_t dx, int32_t dy, int32_t dw, int32_t dh
 #else
 int pm_metal_gfx_width(void);
 int pm_metal_gfx_height(void);
+/** Draw target: coords relative to surface; width/height/clear/present follow it. */
+void pm_metal_gfx_set_surface(pm_metal_gfx_surface_h s);
+pm_metal_gfx_surface_h pm_metal_gfx_draw_surface(void);
+int32_t pm_metal_gfx_surface_width(pm_metal_gfx_surface_h s);
+int32_t pm_metal_gfx_surface_height(pm_metal_gfx_surface_h s);
+int32_t pm_metal_gfx_surface_origin_x(pm_metal_gfx_surface_h s);
+int32_t pm_metal_gfx_surface_origin_y(pm_metal_gfx_surface_h s);
 void pm_metal_gfx_clear(pm_metal_gfx_color_t color);
 void pm_metal_gfx_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h,
 			    pm_metal_gfx_color_t color);

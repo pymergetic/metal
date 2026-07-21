@@ -1,8 +1,11 @@
 /** @file
   Graphics — GOP shadow framebuffer + Blt present. (impl: efi)
 **/
-#include <pymergetic/metal/gfx.h>
+#include <pymergetic/metal/gfx/gfx.h>
+#include <pymergetic/metal/async/async.h>
+#include <pymergetic/metal/efi/efi_run.h>
 #include <mem/mem.h>
+#include <time/time.h>
 
 #include <Uefi.h>
 #include <Protocol/GraphicsOutput.h>
@@ -13,11 +16,132 @@
 #include "font_vga8x16.inc.c"
 
 STATIC EFI_GRAPHICS_OUTPUT_PROTOCOL  *mGop;
+STATIC UINT32                        *mFb;
+STATIC UINT32                         mFbPixelsPerScanLine;
+STATIC UINT32                         mHarvestW;
+STATIC UINT32                         mHarvestH;
+STATIC INT32                          mHarvested;
 STATIC pm_metal_gfx_surface_t         mSurf;
 STATIC INT32                          mReady;
 /* Tight row-pack scratch for sub-rect Blt (some GOP/QEMU ignore Delta). */
 STATIC UINT32                        *mPack;
 STATIC UINT32                         mPackCap;
+
+#ifndef PM_METAL_GFX_MAX_SURFACES
+#define PM_METAL_GFX_MAX_SURFACES  32u
+#endif
+
+typedef struct {
+  INT32   used;
+  INT32   x;
+  INT32   y;
+  INT32   w;
+  INT32   h;
+} pm_metal_gfx_surf_slot_t;
+
+/* Slot 0 unused; slot 1 = DEFAULT (full FB). Tab surfaces ≥ 2. */
+STATIC pm_metal_gfx_surf_slot_t  mSurfSlots[PM_METAL_GFX_MAX_SURFACES + 1];
+STATIC pm_metal_gfx_surface_h    mDrawSurf = PM_METAL_GFX_SURFACE_DEFAULT;
+
+STATIC
+VOID
+MetalGfxDrawBounds (
+  INT32  *ox,
+  INT32  *oy,
+  INT32  *ow,
+  INT32  *oh
+  )
+{
+  if (ox != NULL) {
+    *ox = 0;
+  }
+
+  if (oy != NULL) {
+    *oy = 0;
+  }
+
+  if (ow != NULL) {
+    *ow = mReady ? (INT32)mSurf.width : 0;
+  }
+
+  if (oh != NULL) {
+    *oh = mReady ? (INT32)mSurf.height : 0;
+  }
+
+  if (mDrawSurf < 2 || mDrawSurf > PM_METAL_GFX_MAX_SURFACES
+      || !mSurfSlots[mDrawSurf].used)
+  {
+    return;
+  }
+
+  if (ox != NULL) {
+    *ox = mSurfSlots[mDrawSurf].x;
+  }
+
+  if (oy != NULL) {
+    *oy = mSurfSlots[mDrawSurf].y;
+  }
+
+  if (ow != NULL) {
+    *ow = mSurfSlots[mDrawSurf].w;
+  }
+
+  if (oh != NULL) {
+    *oh = mSurfSlots[mDrawSurf].h;
+  }
+}
+
+STATIC
+VOID
+MetalGfxMapGuestRect (
+  INT32  *x,
+  INT32  *y,
+  INT32  *w,
+  INT32  *h
+  )
+{
+  INT32  ox;
+  INT32  oy;
+  INT32  ow;
+  INT32  oh;
+  INT32  gx;
+  INT32  gy;
+  INT32  gw;
+  INT32  gh;
+
+  if (x == NULL || y == NULL || w == NULL || h == NULL) {
+    return;
+  }
+
+  MetalGfxDrawBounds (&ox, &oy, &ow, &oh);
+  gx = *x + ox;
+  gy = *y + oy;
+  gw = *w;
+  gh = *h;
+
+  if (gx < ox) {
+    gw -= (ox - gx);
+    gx  = ox;
+  }
+
+  if (gy < oy) {
+    gh -= (oy - gy);
+    gy  = oy;
+  }
+
+  if (gx + gw > ox + ow) {
+    gw = ox + ow - gx;
+  }
+
+  if (gy + gh > oy + oh) {
+    gh = oy + oh - gy;
+  }
+
+  *x = gx;
+  *y = gy;
+  *w = gw;
+  *h = gh;
+}
 
 STATIC
 VOID
@@ -85,18 +209,14 @@ MetalGfxFillClipped (
 }
 
 int
-pm_metal_gfx_init (
+pm_metal_gfx_harvest (
   VOID
   )
 {
-  EFI_STATUS                           Status;
+  EFI_STATUS                            Status;
   EFI_GRAPHICS_OUTPUT_MODE_INFORMATION  *Info;
-  UINT32                               W;
-  UINT32                               H;
-  UINT32                               Pitch;
-  UINTN                                Bytes;
 
-  if (mReady) {
+  if (mHarvested) {
     return 0;
   }
 
@@ -118,12 +238,50 @@ pm_metal_gfx_init (
     return -1;
   }
 
-  W = Info->HorizontalResolution;
-  H = Info->VerticalResolution;
-  if (W < 320 || H < 200) {
+  mHarvestW = Info->HorizontalResolution;
+  mHarvestH = Info->VerticalResolution;
+  if (mHarvestW < 320 || mHarvestH < 200) {
     return -1;
   }
 
+  mFb = (UINT32 *)(UINTN)mGop->Mode->FrameBufferBase;
+  mFbPixelsPerScanLine = Info->PixelsPerScanLine
+                           ? Info->PixelsPerScanLine
+                           : mHarvestW;
+  mHarvested = 1;
+  return 0;
+}
+
+int
+pm_metal_gfx_harvested (
+  VOID
+  )
+{
+  return mHarvested ? 1 : 0;
+}
+
+int
+pm_metal_gfx_init (
+  VOID
+  )
+{
+  UINT32  W;
+  UINT32  H;
+  UINT32  Pitch;
+  UINTN   Bytes;
+
+  if (mReady) {
+    return 0;
+  }
+
+  if (!mHarvested) {
+    if (pm_metal_gfx_harvest () != 0) {
+      return -1;
+    }
+  }
+
+  W     = mHarvestW;
+  H     = mHarvestH;
   Pitch = W;
   Bytes = (UINTN)Pitch * (UINTN)H * sizeof (UINT32);
   mSurf.pixels = (UINT32 *)pm_metal_mem_alloc (
@@ -139,10 +297,16 @@ pm_metal_gfx_init (
   mSurf.width  = W;
   mSurf.height = H;
   mSurf.pitch  = Pitch;
-  mReady       = 1;
-
+  mReady = 1;
   pm_metal_gfx_clear (PM_METAL_GFX_RGB (0x4a, 0x4a, 0x4a));
-  (VOID)pm_metal_gfx_present ();
+  /*
+   * Pre-EBS: Blt is fine. Post-EBS first present uses FB copy — defer until
+   * UI frames (avoids a large silent fault window during bind).
+   */
+  if (!pm_metal_efi_owned ()) {
+    (VOID)pm_metal_gfx_present ();
+  }
+
   return 0;
 }
 
@@ -166,6 +330,10 @@ pm_metal_gfx_fini (
   mSurf.height = 0;
   mSurf.pitch  = 0;
   mGop         = NULL;
+  mFb          = NULL;
+  mHarvested   = 0;
+  mHarvestW    = 0;
+  mHarvestH    = 0;
   mReady       = 0;
 }
 
@@ -190,7 +358,17 @@ pm_metal_gfx_clear (
   pm_metal_gfx_color_t  color
   )
 {
-  MetalGfxFillClipped (0, 0, (INT32)mSurf.width, (INT32)mSurf.height, color);
+  INT32  ox;
+  INT32  oy;
+  INT32  ow;
+  INT32  oh;
+
+  MetalGfxDrawBounds (&ox, &oy, &ow, &oh);
+  if (ow <= 0 || oh <= 0) {
+    return;
+  }
+
+  MetalGfxFillClipped (ox, oy, ox + ow, oy + oh, color);
 }
 
 void
@@ -202,6 +380,11 @@ pm_metal_gfx_fill_rect (
   pm_metal_gfx_color_t  color
   )
 {
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  MetalGfxMapGuestRect (&x, &y, &w, &h);
   if (w <= 0 || h <= 0) {
     return;
   }
@@ -220,6 +403,11 @@ pm_metal_gfx_draw_rect (
 {
   INT32  i;
 
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  MetalGfxMapGuestRect (&x, &y, &w, &h);
   if (w <= 0 || h <= 0) {
     return;
   }
@@ -250,6 +438,11 @@ pm_metal_gfx_bevel_rect (
   pm_metal_gfx_color_t  bot;
   INT32                 i;
 
+  if (w < 2 || h < 2) {
+    return;
+  }
+
+  MetalGfxMapGuestRect (&x, &y, &w, &h);
   if (w < 2 || h < 2) {
     return;
   }
@@ -319,14 +512,30 @@ pm_metal_gfx_draw_text (
   )
 {
   INT32  cx;
+  INT32  ox;
+  INT32  oy;
+  INT32  ow;
+  INT32  oh;
 
   if (text == NULL) {
     return;
   }
 
+  MetalGfxDrawBounds (&ox, &oy, &ow, &oh);
+  x += ox;
+  y += oy;
+  if (y + (INT32)PM_METAL_GFX_FONT_H <= oy || y >= oy + oh) {
+    return;
+  }
+
   cx = x;
   while (*text != '\0') {
-    MetalGfxGlyph (cx, y, (UINT8)*text, fg, bg, transparent_bg);
+    if (cx + (INT32)PM_METAL_GFX_FONT_W > ox
+        && cx < ox + ow)
+    {
+      MetalGfxGlyph (cx, y, (UINT8)*text, fg, bg, transparent_bg);
+    }
+
     cx += PM_METAL_GFX_FONT_W;
     text++;
   }
@@ -353,6 +562,10 @@ pm_metal_gfx_present (
   VOID
   )
 {
+  if (mDrawSurf != PM_METAL_GFX_SURFACE_DEFAULT && mDrawSurf != 0) {
+    return pm_metal_gfx_present_surface (mDrawSurf);
+  }
+
   return pm_metal_gfx_present_rect (0, 0, (INT32)mSurf.width, (INT32)mSurf.height);
 }
 
@@ -366,7 +579,11 @@ pm_metal_gfx_present_rect (
 {
   EFI_STATUS  Status;
 
-  if (!mReady || mGop == NULL || mSurf.pixels == NULL) {
+  if (!mReady || mSurf.pixels == NULL) {
+    return -1;
+  }
+
+  if (!pm_metal_efi_owned () && mGop == NULL) {
     return -1;
   }
 
@@ -394,6 +611,21 @@ pm_metal_gfx_present_rect (
 
   if (y + h > (INT32)mSurf.height) {
     h = (INT32)mSurf.height - y;
+  }
+
+  /* Post-EBS: GOP Blt may be dead — copy into captured framebuffer. */
+  if (pm_metal_efi_owned () && mFb != NULL) {
+    INT32  row;
+
+    for (row = 0; row < h; row++) {
+      CopyMem (
+        &mFb[(UINT32)(y + row) * mFbPixelsPerScanLine + (UINT32)x],
+        &mSurf.pixels[(UINT32)(y + row) * mSurf.pitch + (UINT32)x],
+        (UINTN)w * sizeof (UINT32)
+        );
+    }
+
+    return 0;
   }
 
   /*
@@ -466,12 +698,40 @@ pm_metal_gfx_present_rect (
   return EFI_ERROR (Status) ? -1 : 0;
 }
 
+void
+pm_metal_gfx_set_surface (
+  pm_metal_gfx_surface_h  s
+  )
+{
+  if (s == 0 || s == PM_METAL_GFX_SURFACE_DEFAULT) {
+    mDrawSurf = PM_METAL_GFX_SURFACE_DEFAULT;
+    return;
+  }
+
+  if (s > PM_METAL_GFX_MAX_SURFACES || !mSurfSlots[s].used) {
+    return;
+  }
+
+  mDrawSurf = s;
+}
+
+pm_metal_gfx_surface_h
+pm_metal_gfx_draw_surface (
+  VOID
+  )
+{
+  return mDrawSurf;
+}
+
 int
 pm_metal_gfx_width (
   VOID
   )
 {
-  return mReady ? (INT32)mSurf.width : 0;
+  INT32  ow;
+
+  MetalGfxDrawBounds (NULL, NULL, &ow, NULL);
+  return ow;
 }
 
 int
@@ -479,7 +739,148 @@ pm_metal_gfx_height (
   VOID
   )
 {
-  return mReady ? (INT32)mSurf.height : 0;
+  INT32  oh;
+
+  MetalGfxDrawBounds (NULL, NULL, NULL, &oh);
+  return oh;
+}
+
+pm_metal_gfx_surface_h
+pm_metal_gfx_surface_alloc (
+  VOID
+  )
+{
+  UINT32  i;
+
+  for (i = 2; i <= PM_METAL_GFX_MAX_SURFACES; i++) {
+    if (!mSurfSlots[i].used) {
+      ZeroMem (&mSurfSlots[i], sizeof (mSurfSlots[i]));
+      mSurfSlots[i].used = 1;
+      return (pm_metal_gfx_surface_h)i;
+    }
+  }
+
+  return PM_METAL_GFX_SURFACE_INVALID;
+}
+
+void
+pm_metal_gfx_surface_free (
+  pm_metal_gfx_surface_h  s
+  )
+{
+  if (s < 2 || s > PM_METAL_GFX_MAX_SURFACES) {
+    return;
+  }
+
+  ZeroMem (&mSurfSlots[s], sizeof (mSurfSlots[s]));
+}
+
+void
+pm_metal_gfx_surface_set_rect (
+  pm_metal_gfx_surface_h  s,
+  int32_t                 x,
+  int32_t                 y,
+  int32_t                 w,
+  int32_t                 h
+  )
+{
+  if (s < 2 || s > PM_METAL_GFX_MAX_SURFACES || !mSurfSlots[s].used) {
+    return;
+  }
+
+  mSurfSlots[s].x = x;
+  mSurfSlots[s].y = y;
+  mSurfSlots[s].w = w;
+  mSurfSlots[s].h = h;
+}
+
+int
+pm_metal_gfx_present_surface (
+  pm_metal_gfx_surface_h  s
+  )
+{
+  if (s == PM_METAL_GFX_SURFACE_DEFAULT || s == 0) {
+    return pm_metal_gfx_present ();
+  }
+
+  if (s > PM_METAL_GFX_MAX_SURFACES || !mSurfSlots[s].used) {
+    return -1;
+  }
+
+  if (mSurfSlots[s].w <= 0 || mSurfSlots[s].h <= 0) {
+    return 0;
+  }
+
+  return pm_metal_gfx_present_rect (
+           mSurfSlots[s].x,
+           mSurfSlots[s].y,
+           mSurfSlots[s].w,
+           mSurfSlots[s].h
+           );
+}
+
+int32_t
+pm_metal_gfx_surface_width (
+  pm_metal_gfx_surface_h  s
+  )
+{
+  if (s == PM_METAL_GFX_SURFACE_DEFAULT || s == 0) {
+    return mReady ? (INT32)mSurf.width : 0;
+  }
+
+  if (s > PM_METAL_GFX_MAX_SURFACES || !mSurfSlots[s].used) {
+    return 0;
+  }
+
+  return mSurfSlots[s].w;
+}
+
+int32_t
+pm_metal_gfx_surface_height (
+  pm_metal_gfx_surface_h  s
+  )
+{
+  if (s == PM_METAL_GFX_SURFACE_DEFAULT || s == 0) {
+    return mReady ? (INT32)mSurf.height : 0;
+  }
+
+  if (s > PM_METAL_GFX_MAX_SURFACES || !mSurfSlots[s].used) {
+    return 0;
+  }
+
+  return mSurfSlots[s].h;
+}
+
+int32_t
+pm_metal_gfx_surface_origin_x (
+  pm_metal_gfx_surface_h  s
+  )
+{
+  if (s == PM_METAL_GFX_SURFACE_DEFAULT || s == 0) {
+    return 0;
+  }
+
+  if (s > PM_METAL_GFX_MAX_SURFACES || !mSurfSlots[s].used) {
+    return 0;
+  }
+
+  return mSurfSlots[s].x;
+}
+
+int32_t
+pm_metal_gfx_surface_origin_y (
+  pm_metal_gfx_surface_h  s
+  )
+{
+  if (s == PM_METAL_GFX_SURFACE_DEFAULT || s == 0) {
+    return 0;
+  }
+
+  if (s > PM_METAL_GFX_MAX_SURFACES || !mSurfSlots[s].used) {
+    return 0;
+  }
+
+  return mSurfSlots[s].y;
 }
 
 int
@@ -497,6 +898,10 @@ pm_metal_gfx_blit_bgra (
   INT32         x;
   INT32         y;
   CONST UINT8  *src_base;
+  UINT64        t0;
+  INT32         rc;
+
+  t0 = pm_metal_time_mono_us ();
 
   if (!mReady || mSurf.pixels == NULL || pixels == NULL) {
     return -1;
@@ -504,6 +909,11 @@ pm_metal_gfx_blit_bgra (
 
   if (src_w <= 0 || src_h <= 0 || src_pitch < src_w * 4 || dw <= 0 || dh <= 0) {
     return -1;
+  }
+
+  MetalGfxMapGuestRect (&dx, &dy, &dw, &dh);
+  if (dw <= 0 || dh <= 0) {
+    return 0;
   }
 
   if (dx < 0) {
@@ -573,7 +983,9 @@ pm_metal_gfx_blit_bgra (
       goto nearest;
     }
 
-    return pm_metal_gfx_present_rect (dx, dy, dw, dh);
+    rc = pm_metal_gfx_present_rect (dx, dy, dw, dh);
+    pm_metal_async_perf_note_blit_us (pm_metal_time_mono_us () - t0);
+    return rc;
   }
 
 nearest:
@@ -593,7 +1005,9 @@ nearest:
     }
   }
 
-  return pm_metal_gfx_present_rect (dx, dy, dw, dh);
+  rc = pm_metal_gfx_present_rect (dx, dy, dw, dh);
+  pm_metal_async_perf_note_blit_us (pm_metal_time_mono_us () - t0);
+  return rc;
 }
 
 #include "wasm_export.h"
@@ -791,9 +1205,74 @@ pm_metal_gfx_blit_bgra_native (
                   );
 }
 
+STATIC INT32
+pm_metal_gfx_surface_width_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           s
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_gfx_surface_width (s);
+}
+
+STATIC INT32
+pm_metal_gfx_surface_height_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           s
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_gfx_surface_height (s);
+}
+
+STATIC INT32
+pm_metal_gfx_surface_origin_x_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           s
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_gfx_surface_origin_x (s);
+}
+
+STATIC INT32
+pm_metal_gfx_surface_origin_y_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           s
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_gfx_surface_origin_y (s);
+}
+
+STATIC VOID
+pm_metal_gfx_set_surface_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           s
+  )
+{
+  (VOID)exec_env;
+  pm_metal_gfx_set_surface (s);
+}
+
+STATIC UINT32
+pm_metal_gfx_draw_surface_native (
+  wasm_exec_env_t  exec_env
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_gfx_draw_surface ();
+}
+
 STATIC NativeSymbol g_pm_metal_gfx_native_symbols[] = {
   { "pm_metal_gfx_width", (VOID *)pm_metal_gfx_width_native, "()i", NULL },
   { "pm_metal_gfx_height", (VOID *)pm_metal_gfx_height_native, "()i", NULL },
+  { "pm_metal_gfx_set_surface", (VOID *)pm_metal_gfx_set_surface_native, "(i)", NULL },
+  { "pm_metal_gfx_draw_surface", (VOID *)pm_metal_gfx_draw_surface_native, "()i", NULL },
+  { "pm_metal_gfx_surface_width", (VOID *)pm_metal_gfx_surface_width_native, "(i)i", NULL },
+  { "pm_metal_gfx_surface_height", (VOID *)pm_metal_gfx_surface_height_native, "(i)i", NULL },
+  { "pm_metal_gfx_surface_origin_x", (VOID *)pm_metal_gfx_surface_origin_x_native, "(i)i", NULL },
+  { "pm_metal_gfx_surface_origin_y", (VOID *)pm_metal_gfx_surface_origin_y_native, "(i)i", NULL },
   { "pm_metal_gfx_clear", (VOID *)pm_metal_gfx_clear_native, "(i)", NULL },
   { "pm_metal_gfx_fill_rect", (VOID *)pm_metal_gfx_fill_rect_native, "(iiiii)", NULL },
   { "pm_metal_gfx_draw_rect", (VOID *)pm_metal_gfx_draw_rect_native, "(iiiii)", NULL },

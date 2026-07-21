@@ -10,9 +10,12 @@
 #include <Library/UefiLib.h>
 #include <Library/BaseMemoryLib.h>
 
-#include "pymergetic/metal/wasm.h"
-#include "pymergetic/metal/ui.h"
-#include "pymergetic/metal/esp.h"
+#include "pymergetic/metal/wasm/wasm.h"
+#include "pymergetic/metal/ui/ui.h"
+#include "pymergetic/metal/esp/esp.h"
+#include "pymergetic/metal/shell/shell.h"
+#include "pymergetic/metal/input/input.h"
+#include "pymergetic/metal/stream/stream.h"
 #include <mem/mem.h>
 
 #include <string.h>
@@ -44,13 +47,28 @@ static size_t s_line_len;
 static void
 emit_line(const char *line, int also_serial)
 {
+    pm_metal_stream_h out;
     pm_metal_ui_handle_t tab;
 
     if (line == NULL)
         return;
 
-    if (also_serial)
-        Print(L"%a\n", line);
+    if (also_serial) {
+        /* ConOut paints GOP — keep game frames clean. */
+        if (pm_metal_input_game_focus())
+            pm_metal_shell_serial_log(line);
+        else
+            Print(L"%a\n", line);
+    }
+
+    if (pm_metal_input_game_focus())
+        return;
+
+    out = pm_metal_stdio_out();
+    if (out != PM_METAL_STREAM_INVALID) {
+        (void)pm_metal_stream_write_line(out, line);
+        return;
+    }
 
     tab = pm_metal_wasm_stdout_tab();
     if (tab != PM_METAL_UI_HANDLE_INVALID)

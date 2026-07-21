@@ -38,6 +38,14 @@ MetalTimerLockInit (
   }
 }
 
+void
+pm_metal_coro_timers_init (
+  VOID
+  )
+{
+  MetalTimerLockInit ();
+}
+
 STATIC
 void
 MetalTimerUnlinkLocked (
@@ -101,8 +109,8 @@ MetalTimerDrop (
 
 STATIC
 pm_metal_timer_t *
-MetalTimerArm (
-  uint32_t            ms,
+MetalTimerArmAt (
+  uint64_t            deadline_us,
   pm_metal_task_t    *task,
   pm_metal_coro_t    *wait_for,
   pm_metal_timer_t  **owner_slot
@@ -120,7 +128,7 @@ MetalTimerArm (
   }
 
   ZeroMem (tm, sizeof (*tm));
-  tm->deadline_us = pm_metal_time_mono_us () + (uint64_t)ms * 1000u;
+  tm->deadline_us = deadline_us;
   tm->task        = task;
   tm->wait_for    = wait_for;
   tm->owner_slot  = owner_slot;
@@ -137,11 +145,30 @@ MetalTimerArm (
   return tm;
 }
 
+STATIC
+pm_metal_timer_t *
+MetalTimerArm (
+  uint32_t            ms,
+  pm_metal_task_t    *task,
+  pm_metal_coro_t    *wait_for,
+  pm_metal_timer_t  **owner_slot
+  )
+{
+  return MetalTimerArmAt (
+           pm_metal_time_mono_us () + (uint64_t)ms * 1000u,
+           task,
+           wait_for,
+           owner_slot
+           );
+}
+
 /* ---- sleep ---- */
 
 typedef struct {
   pm_metal_coro_t    coro;
-  uint32_t           ms;
+  uint64_t           us;           /* relative; used if !absolute */
+  uint64_t           deadline_us;  /* absolute if absolute!=0 */
+  int                absolute;
   int                armed;
   pm_metal_timer_t  *tm;
 } pm_metal_sleep_coro_t;
@@ -165,6 +192,8 @@ MetalSleepFn (
   )
 {
   pm_metal_sleep_coro_t  *s;
+  uint64_t                now;
+  uint64_t                deadline;
 
   s = (pm_metal_sleep_coro_t *)self;
   if (!s->armed) {
@@ -172,7 +201,21 @@ MetalSleepFn (
       return PM_METAL_ERROR;
     }
 
-    if (MetalTimerArm (s->ms, self->owner, NULL, &s->tm) == NULL) {
+    now = pm_metal_time_mono_us ();
+    if (s->absolute) {
+      deadline = s->deadline_us;
+    } else if (s->us == 0) {
+      /* sleep(0)/sleep_us(0): eager DONE — fairness via yield. */
+      return PM_METAL_DONE;
+    } else {
+      deadline = now + s->us;
+    }
+
+    if (now >= deadline) {
+      return PM_METAL_DONE;
+    }
+
+    if (MetalTimerArmAt (deadline, self->owner, NULL, &s->tm) == NULL) {
       return PM_METAL_ERROR;
     }
 
@@ -431,8 +474,8 @@ pm_metal_coro_resume (
 }
 
 pm_metal_coro_t *
-pm_metal_sleep (
-  uint32_t  ms
+pm_metal_sleep_us (
+  uint64_t  us
   )
 {
   pm_metal_sleep_coro_t  *s;
@@ -445,9 +488,39 @@ pm_metal_sleep (
     return NULL;
   }
 
-  s->ms          = ms;
+  s->us           = us;
+  s->absolute     = 0;
   s->coro.release = MetalSleepRelease;
   return &s->coro;
+}
+
+pm_metal_coro_t *
+pm_metal_sleep_until_us (
+  uint64_t  deadline_us
+  )
+{
+  pm_metal_sleep_coro_t  *s;
+
+  s = (pm_metal_sleep_coro_t *)pm_metal_coro (
+                                 MetalSleepFn,
+                                 sizeof (*s)
+                                 );
+  if (s == NULL) {
+    return NULL;
+  }
+
+  s->deadline_us  = deadline_us;
+  s->absolute     = 1;
+  s->coro.release = MetalSleepRelease;
+  return &s->coro;
+}
+
+pm_metal_coro_t *
+pm_metal_sleep (
+  uint32_t  ms
+  )
+{
+  return pm_metal_sleep_us ((uint64_t)ms * 1000u);
 }
 
 /* ---- yield (schedule, not time) ---- */

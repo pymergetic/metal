@@ -1,8 +1,9 @@
 /** @file
   UI — IRIX chrome, multi-tab, console + input. Handle ABI. (impl: efi)
 **/
-#include <pymergetic/metal/ui.h>
-#include <pymergetic/metal/gfx.h>
+#include <pymergetic/metal/ui/ui.h>
+#include <pymergetic/metal/gfx/gfx.h>
+#include <pymergetic/metal/lifecycle/lifecycle.h>
 #include <mem/mem.h>
 
 #include <Uefi.h>
@@ -61,6 +62,7 @@ struct metal_ui_widget {
   CHAR8                      title[TITLE_CHARS];
   INT32                      closable;
   pm_metal_ui_handle_t       handle; /* TAB only; 0 = none */
+  pm_metal_gfx_surface_h     surface; /* content present target; 0 none */
   metal_ui_widget_t         *parent;
   metal_ui_widget_t         *child;
   metal_ui_widget_t         *next;
@@ -197,6 +199,11 @@ MetalUiDestroyTree (
     n = c->next;
     MetalUiDestroyTree (c);
     c = n;
+  }
+
+  if (w->kind == METAL_UI_KIND_TAB && w->surface != PM_METAL_GFX_SURFACE_INVALID) {
+    pm_metal_gfx_surface_free (w->surface);
+    w->surface = PM_METAL_GFX_SURFACE_INVALID;
   }
 
   pm_metal_mem_free (w);
@@ -360,6 +367,7 @@ MetalUiMakeTabBody (
 
   AsciiStrCpyS (tab->title, sizeof (tab->title), title);
   tab->closable             = closable;
+  tab->surface              = pm_metal_gfx_surface_alloc ();
   con->u.console.show_input = show_input;
   con->u.console.cursor_on  = 1;
   MetalUiAttach (tab, frame);
@@ -454,6 +462,17 @@ MetalUiLayoutWindow (
     con->y = frame->y + UI_FRAME_PAD;
     con->w = frame->w - 2 * UI_FRAME_PAD;
     con->h = frame->h - 2 * UI_FRAME_PAD - input_h;
+
+    if (tab->surface != PM_METAL_GFX_SURFACE_INVALID) {
+      /* Guest content = frame interior (chrome stays outside). */
+      pm_metal_gfx_surface_set_rect (
+        tab->surface,
+        frame->x,
+        frame->y,
+        frame->w,
+        frame->h
+        );
+    }
   }
 }
 
@@ -815,6 +834,8 @@ pm_metal_ui_frame (
     return -1;
   }
 
+  /* Chrome always paints in screen space (DEFAULT surface). */
+  pm_metal_gfx_set_surface (PM_METAL_GFX_SURFACE_DEFAULT);
   MetalUiLayout ();
   MetalUiPaint ();
   return pm_metal_gfx_present ();
@@ -872,6 +893,10 @@ pm_metal_ui_tab_open (
   mTabs->u.tabs.tabs[mTabs->u.tabs.n] = tab;
   if (activate) {
     mTabs->u.tabs.active = mTabs->u.tabs.n;
+    pm_metal_lifecycle_set (
+      tab->surface != 0 ? tab->surface : PM_METAL_GFX_SURFACE_DEFAULT,
+      PM_METAL_LIFE_FOCUSED | PM_METAL_LIFE_VISIBLE
+      );
   }
 
   mTabs->u.tabs.n++;
@@ -900,6 +925,10 @@ pm_metal_ui_tab_close (
     }
 
     was = mTabs->u.tabs.active;
+    if (was == i) {
+      pm_metal_lifecycle_blur ();
+    }
+
     MetalUiHandleFree (h);
     MetalUiDetach (mTabs, tab);
     MetalUiDestroyTree (tab);
@@ -915,6 +944,17 @@ pm_metal_ui_tab_close (
     } else if (was == i) {
       /* Closed the focused tab — land on console. */
       mTabs->u.tabs.active = 0;
+      {
+        metal_ui_widget_t  *next;
+
+        next = mTabs->u.tabs.tabs[0];
+        if (next != NULL) {
+          pm_metal_lifecycle_set (
+            next->surface != 0 ? next->surface : PM_METAL_GFX_SURFACE_DEFAULT,
+            PM_METAL_LIFE_FOCUSED | PM_METAL_LIFE_VISIBLE
+            );
+        }
+      }
     } else if (was > i) {
       mTabs->u.tabs.active = was - 1;
     }
@@ -940,6 +980,10 @@ pm_metal_ui_tab_activate (
   }
 
   mTabs->u.tabs.active = (UINT32)idx;
+  pm_metal_lifecycle_set (
+    tab->surface != 0 ? tab->surface : PM_METAL_GFX_SURFACE_DEFAULT,
+    PM_METAL_LIFE_FOCUSED | PM_METAL_LIFE_VISIBLE
+    );
   return 0;
 }
 
@@ -1091,11 +1135,21 @@ pm_metal_ui_tab_activate_index (
   unsigned  index
   )
 {
+  metal_ui_widget_t  *tab;
+
   if (mTabs == NULL || index >= mTabs->u.tabs.n) {
     return -1;
   }
 
   mTabs->u.tabs.active = index;
+  tab = mTabs->u.tabs.tabs[index];
+  if (tab != NULL) {
+    pm_metal_lifecycle_set (
+      tab->surface != 0 ? tab->surface : PM_METAL_GFX_SURFACE_DEFAULT,
+      PM_METAL_LIFE_FOCUSED | PM_METAL_LIFE_VISIBLE
+      );
+  }
+
   return 0;
 }
 
@@ -1124,6 +1178,134 @@ pm_metal_ui_tab_close_active (
   }
 
   return pm_metal_ui_tab_close (tab->handle);
+}
+
+pm_metal_gfx_surface_h
+pm_metal_ui_tab_surface (
+  pm_metal_ui_handle_t  h
+  )
+{
+  metal_ui_widget_t  *tab;
+
+  tab = MetalUiTabFromHandle (h);
+  if (tab == NULL) {
+    return PM_METAL_GFX_SURFACE_INVALID;
+  }
+
+  return tab->surface;
+}
+
+int
+pm_metal_ui_tab_content_rect (
+  pm_metal_ui_handle_t  tab_h,
+  int32_t              *ox,
+  int32_t              *oy,
+  int32_t              *ow,
+  int32_t              *oh
+  )
+{
+  metal_ui_widget_t  *tab;
+  metal_ui_widget_t  *frame;
+
+  tab = MetalUiTabFromHandle (tab_h);
+  if (tab == NULL || tab->child == NULL) {
+    return -1;
+  }
+
+  frame = tab->child;
+  if (ox != NULL) {
+    *ox = frame->x;
+  }
+
+  if (oy != NULL) {
+    *oy = frame->y;
+  }
+
+  if (ow != NULL) {
+    *ow = frame->w;
+  }
+
+  if (oh != NULL) {
+    *oh = frame->h;
+  }
+
+  return 0;
+}
+
+int
+pm_metal_ui_pointer_hit (
+  int32_t  x,
+  int32_t  y
+  )
+{
+  UINT32  i;
+  INT32   tx;
+  UINT32  fw;
+
+  if (mTabs == NULL) {
+    return 0;
+  }
+
+  if (y < mTabs->y || y >= mTabs->y + mTabs->h
+      || x < mTabs->x || x >= mTabs->x + mTabs->w)
+  {
+    return 0;
+  }
+
+  fw = pm_metal_gfx_font_width ();
+  tx = mTabs->x + 2;
+  for (i = 0; i < mTabs->u.tabs.n; i++) {
+    metal_ui_widget_t  *tab;
+    INT32               tw;
+    UINT32              tlen;
+
+    tab = mTabs->u.tabs.tabs[i];
+    if (tab == NULL) {
+      continue;
+    }
+
+    tlen = 0;
+    while (tab->title[tlen] != '\0') {
+      tlen++;
+    }
+
+    tw = (INT32)((tlen + 2) * fw) + 16;
+    if (tw < 64) {
+      tw = 64;
+    }
+
+    if (tx + tw > mTabs->x + mTabs->w - 4) {
+      break;
+    }
+
+    if (x >= tx && x < tx + tw) {
+      mTabs->u.tabs.active = i;
+      return 1;
+    }
+
+    tx += tw + 4;
+  }
+
+  return 0;
+}
+
+void
+pm_metal_ui_cursor_draw (
+  int32_t  x,
+  int32_t  y
+  )
+{
+  INT32  i;
+
+  /* Simple arrow: vertical stem + tip. */
+  for (i = 0; i < 14; i++) {
+    pm_metal_gfx_fill_rect (x, y + i, (i < 10) ? 2 : (14 - i), 1,
+                            PM_METAL_GFX_RGB (0xff, 0xff, 0xff));
+    pm_metal_gfx_fill_rect (x + 1, y + i + 1, 1, 1,
+                            PM_METAL_GFX_RGB (0x10, 0x10, 0x10));
+  }
+
+  pm_metal_gfx_fill_rect (x, y, 1, 14, PM_METAL_GFX_RGB (0x10, 0x10, 0x10));
 }
 
 /*
@@ -1270,6 +1452,16 @@ pm_metal_ui_input_text_native (
   return (int32_t)pm_metal_ui_input_text (out, cap);
 }
 
+STATIC UINT32
+pm_metal_ui_tab_surface_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           h
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_ui_tab_surface ((pm_metal_ui_handle_t)h);
+}
+
 static NativeSymbol g_pm_metal_ui_native_symbols[] = {
   { "pm_metal_ui_console_handle", (void *)pm_metal_ui_console_handle_native, "()i", NULL },
   { "pm_metal_ui_tab_open", (void *)pm_metal_ui_tab_open_native, "($i)i", NULL },
@@ -1278,6 +1470,7 @@ static NativeSymbol g_pm_metal_ui_native_symbols[] = {
   { "pm_metal_ui_tab_count", (void *)pm_metal_ui_tab_count_native, "()i", NULL },
   { "pm_metal_ui_tab_active", (void *)pm_metal_ui_tab_active_native, "()i", NULL },
   { "pm_metal_ui_tab_puts", (void *)pm_metal_ui_tab_puts_native, "(i$)", NULL },
+  { "pm_metal_ui_tab_surface", (void *)pm_metal_ui_tab_surface_native, "(i)i", NULL },
   { "pm_metal_ui_console_puts", (void *)pm_metal_ui_console_puts_native, "($)", NULL },
   { "pm_metal_ui_active_puts", (void *)pm_metal_ui_active_puts_native, "($)", NULL },
   { "pm_metal_ui_set_status", (void *)pm_metal_ui_set_status_native, "($)", NULL },

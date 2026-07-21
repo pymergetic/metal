@@ -1,5 +1,9 @@
 # WASI
 
+> **Status:** scaffolding. Product direction is Metal async I/O + freestanding
+> sync libc (`docs/LIBC_ASYNC.md`), not wasip1 as the guest ABI. This page
+> documents the *current* WAMR path until WASI is removed.
+
 `snapshot preview1` · `wasm32-wasip1` · 44 syscalls in `api.h` + `proc_exit` (noreturn, engine).
 
 Host implements a **pinned subset**. Unlisted syscalls → `ENOTSUP` until promoted.
@@ -20,6 +24,8 @@ Host implements a **pinned subset**. Unlisted syscalls → `ENOTSUP` until promo
 ### Launch context
 
 Set at instantiate (`wasm_runtime_set_wasi_args`). No OS backend.
+EFI Metal guests currently get **0** preopens — file I/O is Metal
+`pm_metal_fs_*_async`, not WASI `path_open` on `/`.
 
 | Syscall | libc-ish use |
 |---------|--------------|

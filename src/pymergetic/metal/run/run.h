@@ -46,11 +46,25 @@ void pm_metal_run_loop (unsigned cpu);
 void pm_metal_run_enter (unsigned cpu);
 
 /**
+ * Drop queued inbox messages (e.g. leftover MSG_STOP after smoke).
+ * Call before the owned-phase run_enter / seed.
+ */
+/* impl: efi */
+void pm_metal_run_clear_inboxes (void);
+
+/**
  * Non-blocking: drain pending inbox messages on `cpu`, then poll timers.
  * For shell/wasm pumps when loopers are not sitting in run_loop.
  */
 /* impl: efi */
 void pm_metal_run_poll (unsigned cpu);
+
+/**
+ * Drain every CPU inbox + poll timers once (FCFS — no CPU0-only Extrawurst).
+ * For shell/wasm session pumps on the BSP while equal runners share work.
+ */
+/* impl: efi */
+void pm_metal_run_poll_all (void);
 
 /* impl: efi */
 int pm_metal_run_check (

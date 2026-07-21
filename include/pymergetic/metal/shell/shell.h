@@ -23,7 +23,7 @@ extern "C" {
 #endif
 
 #if !defined(__wasm__)
-/** Bind to UI shell (must exist). Returns 0 ok. Auto-runs embedded hello once. */
+/** Bind to UI shell chrome (must exist). Proofs are pool/init-coro work. */
 int pm_metal_shell_init(void);
 /**
  * One poll: keys, cursor tick, redraw.
@@ -51,6 +51,12 @@ void pm_metal_shell_request_exit(void);
 int pm_metal_shell_run(const char *mod);
 /** Open a tab named after mod, run there, leave tab open. */
 int pm_metal_shell_tab(const char *mod);
+
+/**
+ * UART-only log (no ConOut/GOP). Prefer this while a game owns the FB.
+ * Falls back to Print if SerialIo is missing.
+ */
+void pm_metal_shell_serial_log(const char *line);
 
 int pm_metal_shell_native_register(void);
 #endif

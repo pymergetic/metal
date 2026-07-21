@@ -13,6 +13,9 @@ CompileFlags:
     - -I@@ROOT@@/src/efi/pymergetic/metal/wamr
     - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
     - -I@@ROOT@@/src/efi/pymergetic/metal/mem/host_stubs
+    # lwIP (NO_SYS) — always visible; PathMatch fragments alone are easy to miss.
+    - -I@@ROOT@@/src/efi/pymergetic/metal/net
+    - -I@@ROOT@@/src/efi/lwip/src/include
 
 ---
 # metal.efi sources — EDK2 MdePkg (clangd; real build is EDK2 `build`).
@@ -38,6 +41,8 @@ CompileFlags:
     - -I@@ROOT@@/src/pymergetic/metal
     - -I@@ROOT@@/src/efi/MetalPkg
     - -I@@ROOT@@/src/efi/pymergetic/metal/mem
+    - -I@@ROOT@@/src/efi/pymergetic/metal/net
+    - -I@@ROOT@@/src/efi/lwip/src/include
     - -I@@ROOT@@/src/efi/pymergetic/metal/wamr
     - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
     - -I@@ROOT@@/src/efi/wamr/core/shared/utils
@@ -69,6 +74,8 @@ CompileFlags:
     - -I@@ROOT@@/include
     - -I@@ROOT@@/src/pymergetic/metal
     - -I@@ROOT@@/src/efi/pymergetic/metal/mem
+    - -I@@ROOT@@/src/efi/pymergetic/metal/net
+    - -I@@ROOT@@/src/efi/lwip/src/include
     - -I@@ROOT@@/src/efi/pymergetic/metal/wamr
     - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
     - -I@@ROOT@@/src/efi/wamr/core/shared/utils
@@ -100,6 +107,22 @@ CompileFlags:
     - -DBH_PLATFORM_ZEPHYR
     - -DBUILD_TARGET_X86_64
     - -DWASM_ENABLE_LIBC_WASI=1
+
+---
+# EFI net / lwIP — use compile_commands.json (setup ide) for <lwip/*.h>.
+If:
+  PathMatch: .*/src/efi/pymergetic/metal/net/.*\.(c|h)$
+CompileFlags:
+  CompilationDatabase: "@@ROOT@@"
+  Compiler: /usr/bin/clang
+  Add:
+    - -I@@ROOT@@/src/efi/pymergetic/metal/net
+    - -I@@ROOT@@/src/efi/lwip/src/include
+    - -I@@ROOT@@/src/efi/pymergetic/metal/mem/host_stubs
+    - -I@@ROOT@@/include
+    - -I@@ROOT@@/src/pymergetic/metal
+    - -DBH_PLATFORM_METAL_EFI
+    - -DBUILD_TARGET_X86_64
 
 ---
 # Guest test mods (wasm) — optional; needs ./scripts/setup tools for wasi-sysroot.

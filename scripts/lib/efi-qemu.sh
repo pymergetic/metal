@@ -18,11 +18,12 @@ pm_metal_efi_ovmf() {
 }
 
 # Wipe + restage ESP from metal.efi. Always — never reuse a QEMU-dirtied tree.
-# Also stages ESP packages from doom_dir (arg3 or METAL_DOOM_DIR or build/efi/doom).
+# Optional arg3 / METAL_DOOM_DIR: stage parked doom package when rebuilding with
+# METAL_BUILD_DOOM=1 (default path does not stage doom).
 pm_metal_efi_stage_esp() {
 	local efi="$1"
 	local esp="$2"
-	local doom_dir="${3:-${METAL_DOOM_DIR:-${ROOT}/build/efi/doom}}"
+	local doom_dir="${3:-${METAL_DOOM_DIR:-}}"
 
 	if [[ ! -f "${efi}" ]]; then
 		echo "efi-qemu: missing ${efi} — run ./scripts/build efi" >&2
@@ -33,7 +34,11 @@ pm_metal_efi_stage_esp() {
 	mkdir -p "${esp}/EFI/BOOT"
 	cp -f "${efi}" "${esp}/EFI/BOOT/BOOTX64.EFI"
 
-	if [[ -f "${doom_dir}/doom.wasm" && -f "${doom_dir}/doom1.wad" ]]; then
+	# Marker for embedded async_fs proof (Metal awaitable FS).
+	mkdir -p "${esp}/mods/tests"
+	printf 'metal-async-fs\n' >"${esp}/mods/tests/async_fs.txt"
+
+	if [[ -n "${doom_dir}" && -f "${doom_dir}/doom.wasm" && -f "${doom_dir}/doom1.wad" ]]; then
 		mkdir -p "${esp}/mods/apps/doom"
 		cp -f "${doom_dir}/doom.wasm" "${esp}/mods/apps/doom/doom.wasm"
 		cp -f "${doom_dir}/doom1.wad" "${esp}/mods/apps/doom/doom1.wad"
@@ -44,4 +49,13 @@ pm_metal_efi_stage_esp() {
 			echo "efi-qemu: staged mods/apps/doom/{doom.wasm,doom1.wad} from ${doom_dir}" >&2
 		fi
 	fi
+}
+
+# Raw virtio-blk image with LBA0 magic "METALBLK1".
+pm_metal_efi_stage_vblk() {
+	local img="${1:-${ROOT}/build/efi/vblk.img}"
+	mkdir -p "$(dirname "${img}")"
+	dd if=/dev/zero of="${img}" bs=1M count=8 status=none
+	printf 'METALBLK1' | dd of="${img}" bs=1 seek=0 conv=notrunc status=none
+	printf '%s\n' "${img}"
 }

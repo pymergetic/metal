@@ -7,7 +7,6 @@
 #include <Uefi.h>
 #include <Pi/PiMultiPhase.h>
 #include <Protocol/MpService.h>
-#include <Library/UefiLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/CpuLib.h>
 
@@ -16,6 +15,7 @@
 #include <run/run.h>
 #include <time/time.h>
 #include <mem/mem.h>
+#include <pymergetic/metal/log/log.h>
 
 #define METAL_SMOKE_ADD        100u
 #define METAL_LOAD_WAVE_WIDTH  8u
@@ -326,7 +326,7 @@ MetalRunAllCpus (
 
   Status = gBS->LocateProtocol (&gEfiMpServiceProtocolGuid, NULL, (VOID **)&mMp);
   if (EFI_ERROR (Status) || mMp == NULL) {
-    Print (L"metal-run: MP protocol missing\r\n");
+    pm_metal_log ("metal-run: MP protocol missing");
     return EFI_UNSUPPORTED;
   }
 
@@ -343,7 +343,7 @@ MetalRunAllCpus (
                   &Done
                   );
   if (EFI_ERROR (Status)) {
-    Print (L"metal-run: CreateEvent failed: %r\r\n", Status);
+    pm_metal_logf ("metal-run: CreateEvent failed: %r", Status);
     return Status;
   }
 
@@ -358,7 +358,7 @@ MetalRunAllCpus (
                   );
   if (EFI_ERROR (Status)) {
     gBS->CloseEvent (Done);
-    Print (L"metal-run: StartupAllAPs failed: %r\r\n", Status);
+    pm_metal_logf ("metal-run: StartupAllAPs failed: %r", Status);
     return Status;
   }
 
@@ -370,7 +370,7 @@ MetalRunAllCpus (
 
   gBS->CloseEvent (Done);
 
-  Print (L"metal-run: parallel join ok (%u APs)\r\n", n - 1u);
+  pm_metal_logf ("metal-run: parallel join ok (%u APs)", n - 1u);
   return EFI_SUCCESS;
 }
 
@@ -388,24 +388,24 @@ MetalRunSmoke (
 
   n = pm_metal_mem_n_cpus ();
   if (n == 0 || pm_metal_run_init (n) != 0) {
-    Print (L"metal-run: init failed\r\n");
+    pm_metal_log ("metal-run: init failed");
     return EFI_OUT_OF_RESOURCES;
   }
 
-  Print (L"metal-run: %u inbox(es) ready\r\n", n);
+  pm_metal_logf ("metal-run: %u inbox(es) ready", n);
 
   pm_metal_time_msleep (1);
   if (pm_metal_time_mono_us () == 0) {
-    Print (L"metal-time: mono_us failed\r\n");
+    pm_metal_log ("metal-time: mono_us failed");
     return EFI_DEVICE_ERROR;
   }
 
-  Print (L"metal-time: ok\r\n");
+  pm_metal_log ("metal-time: ok");
 
   bg   = (bg_coro_t *)pm_metal_coro (BgCoroFn, sizeof (*bg));
   load = (load_coro_t *)pm_metal_coro (LoadCoroFn, sizeof (*load));
   if (bg == NULL || load == NULL) {
-    Print (L"metal-coro: alloc failed\r\n");
+    pm_metal_log ("metal-coro: alloc failed");
     return EFI_OUT_OF_RESOURCES;
   }
 
@@ -414,14 +414,14 @@ MetalRunSmoke (
   load->bg      = pm_metal_create_task (&bg->coro);
   load_task     = pm_metal_create_task (&load->coro);
   if (load->bg == NULL || load_task == NULL) {
-    Print (L"metal-coro: create_task failed\r\n");
+    pm_metal_log ("metal-coro: create_task failed");
     return EFI_OUT_OF_RESOURCES;
   }
 
   load_task->stop_on_done = 1;
 
-  Print (
-    L"metal-coro: load %u workers (%ux%u) + bg (RR)\r\n",
+  pm_metal_logf (
+    "metal-coro: load %u workers (%ux%u) + bg (RR)",
     METAL_LOAD_WORKERS,
     METAL_LOAD_WAVES,
     METAL_LOAD_WAVE_WIDTH
@@ -457,40 +457,46 @@ MetalRunSmoke (
     return Status;
   }
 
-  Print (L"metal-run: enter/leave ok\r\n");
+  pm_metal_log ("metal-run: enter/leave ok");
 
   if (pm_metal_task_status (load_task) != PM_METAL_DONE) {
-    Print (L"metal-coro: load not DONE (status=%d total=%d expect=%d)\r\n",
-           (INT32)pm_metal_task_status (load_task),
-           load->total,
-           load->expect);
+    pm_metal_logf (
+      "metal-coro: load not DONE (status=%d total=%d expect=%d)",
+      (INT32)pm_metal_task_status (load_task),
+      load->total,
+      load->expect
+      );
     return EFI_DEVICE_ERROR;
   }
 
   if (load->yield_ok != 1) {
-    Print (L"metal-coro: yield fairness failed\r\n");
+    pm_metal_log ("metal-coro: yield fairness failed");
     return EFI_DEVICE_ERROR;
   }
 
-  Print (L"metal-coro: yield ok\r\n");
-  Print (L"metal-coro: load ok (sum=%d workers=%u)\r\n",
-         load->total,
-         METAL_LOAD_WORKERS);
-  Print (L"metal-coro: ok\r\n");
+  pm_metal_log ("metal-coro: yield ok");
+  pm_metal_logf (
+    "metal-coro: load ok (sum=%d workers=%u)",
+    load->total,
+    METAL_LOAD_WORKERS
+    );
+  pm_metal_log ("metal-coro: ok");
 
   if (pm_metal_run_check (n, METAL_SMOKE_ADD) != 0) {
-    Print (L"metal-run: check failed\r\n");
+    pm_metal_log ("metal-run: check failed");
     return EFI_DEVICE_ERROR;
   }
 
   for (i = 0; i < n; i++) {
-    Print (L"metal-run: cpu%u  done=%u  sum=%u\r\n",
-           i,
-           pm_metal_run_done (i),
-           pm_metal_run_sum (i));
+    pm_metal_logf (
+      "metal-run: cpu%u  done=%u  sum=%u",
+      i,
+      pm_metal_run_done (i),
+      pm_metal_run_sum (i)
+      );
   }
 
-  Print (L"metal-task: ok\r\n");
-  Print (L"metal-run: ok\r\n");
+  pm_metal_log ("metal-task: ok");
+  pm_metal_log ("metal-run: ok");
   return EFI_SUCCESS;
 }

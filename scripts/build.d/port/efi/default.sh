@@ -38,8 +38,10 @@ set -u
 
 # Embed guest wasm (hello / ui_hello / async_sleep) before EDK2 compile.
 "${ROOT}/scripts/build.d/port/efi/embed-mods.sh"
-# ESP-staged doomgeneric app (wasm + shareware WAD).
-"${ROOT}/scripts/build.d/port/efi/doom.sh"
+# Doom parked (Metal async libc ABI work). Opt-in: METAL_BUILD_DOOM=1.
+if [[ "${METAL_BUILD_DOOM:-0}" == "1" ]]; then
+	"${ROOT}/scripts/build.d/port/efi/doom.sh"
+fi
 
 echo "efi build: MetalPkg (X64 ${TOOL_CHAIN} ${TARGET})"
 build \

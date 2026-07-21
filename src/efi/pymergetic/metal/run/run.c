@@ -130,6 +130,8 @@ pm_metal_run_init (
 
   /* TSC calibrate on BSP before any AP touches time/sleep. */
   pm_metal_time_init ();
+  /* Timer list lock before any worker can arm sleep/wait_for. */
+  pm_metal_coro_timers_init ();
 
   for (i = 0; i < n_cpus; i++) {
     pm_metal_run_inbox_t  *in;
@@ -246,6 +248,34 @@ pm_metal_run_enter (
   pm_metal_stack_call (cpu, pm_metal_run_loop);
 }
 
+void
+pm_metal_run_clear_inboxes (
+  VOID
+  )
+{
+  unsigned  n;
+  unsigned  i;
+
+  n = pm_metal_mem_n_cpus ();
+  if (n == 0) {
+    n = 1;
+  }
+
+  for (i = 0; i < n; i++) {
+    pm_metal_run_inbox_t  *in;
+    pm_metal_run_msg_t     msg;
+
+    in = MetalInbox (i);
+    if (in == NULL) {
+      continue;
+    }
+
+    while (MetalInboxPop (in, &msg) == 0) {
+      /* discard */
+    }
+  }
+}
+
 STATIC
 VOID
 MetalRunPollDrain (
@@ -299,6 +329,30 @@ pm_metal_run_poll (
   /* Timers may post TASK wakes — drain again so one pump can resume. */
   pm_metal_coro_poll_timers ();
   MetalRunPollDrain (in);
+}
+
+void
+pm_metal_run_poll_all (
+  VOID
+  )
+{
+  unsigned  n;
+  unsigned  i;
+
+  n = pm_metal_mem_n_cpus ();
+  if (n == 0) {
+    n = 1;
+  }
+
+  for (i = 0; i < n; i++) {
+    MetalRunPollDrain (MetalInbox (i));
+  }
+
+  pm_metal_coro_poll_timers ();
+
+  for (i = 0; i < n; i++) {
+    MetalRunPollDrain (MetalInbox (i));
+  }
 }
 
 int

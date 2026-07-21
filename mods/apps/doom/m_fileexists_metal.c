@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-#include "pymergetic/metal/fs.h"
+#include "pymergetic/metal/fs/fs.h"
 
 typedef bool boolean;
 
