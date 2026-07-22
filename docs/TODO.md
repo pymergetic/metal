@@ -1,59 +1,43 @@
 # Metal — follow-up TODO
 
-Captured **2026-07-22** after today's session (DT/blk, i386 PXE, net multi-if, shell registry, input lag, wasm FS, etc.).
+Living list. Product surfaces are largely in place; what’s left is mostly **iron smoke** and a few optional gaps.
 
 ---
 
-## Shipped today (reference)
+## Shipped (in-tree)
 
-| Area | What landed |
-|------|-------------|
-| **DT / storage** | Multi-node inventory; virtio-blk + IDE PIO detect/bind; boot tree lists all nodes |
-| **BIOS / generic PC** | Native **i386** Multiboot2 build + **PXE drop** (`build/bios/pxe/`) |
-| **Net** | Multi-if (`eth0`…), per-if DHCP/DHCPv4, **bge** L2, `net set …` shell, bind-to-interface |
-| **DHCPv6** | Stateless + **Metal stateful client** (lwIP `dhcp6_enable_stateful()` still stub) |
-| **FS / wasm** | Host pointer parity in `fs.h`; doom `PM_METAL_FS_IO_PTR` fix |
-| **Input** | Tab-based focus (shell vs guest); lag fix (partial present + 1 ms pump); guest `poll_key` |
-| **Shell** | Registration pattern; commands live in topic modules (`net_shell.c`, etc.) |
-| **Cleanup** | Core doom/game cruft removed; unused `string.h` in dhcp6 module |
+| Area | Notes |
+|------|--------|
+| **Boot / DT** | Shared harvest + seed (`gfx → UI → net → wasm → shell`); multi-node DT; virtio-blk + IDE; ACPI S5 power-off |
+| **BIOS** | i386 Multiboot2 + PXE drop; VESA/Bochs/MB LFB detectors (x86_64 VESA RM still stub) |
+| **Net** | `lo` + `eth0`…; virtio-net + **bge**; DHCPv4/v6 (stateful Metal client); bind-if |
+| **Names** | `host` nodename (DHCP opt 12); VFS `/etc/hosts`; resolve = literal → local → hosts → DNS |
+| **TFTP** | Async `pm_metal_net_tftp_get` + DHCP next-server / bootfile; guest proof `async_tftp` (EFI verify + QEMU `tftp=`/`bootfile=`) |
+| **Shell / UI** | Linker-section cmds; tab focus; input lag fixes |
+| **Audio** | virtio-snd → AC97 → null |
+| **Wasm / FS** | Guest FS ABI + proofs; embed mods |
 
----
-
-## Must verify on real hardware (PXE / ThinkPad-class)
-
-- [ ] PXE boot i386 image end-to-end (`./scripts/upload-pxe` → target machine)
-- [ ] Shell typing feels snappy (lag fix built for BIOS; confirm on hardware)
-- [ ] IDE disk visible + usable from shell / guest FS
-- [ ] Wired **bge**: `net list`, `net set eth0 dhcp`, ping/DNS
-- [ ] **Stateful DHCPv6** on a network with RA **M-flag** (lab network)
+Details: `IO.md`, `LIBC_ASYNC.md`.
 
 ---
 
-## Hardware gaps (platform-agnostic)
+## Open — verify on hardware
 
-- [ ] **Real framebuffer** — still Multiboot tag or QEMU Bochs; no 855GM/VESA (or generic VESA) path
-- [ ] **Real audio** — virtio-only; null on bare metal
-- [ ] **More NICs** — virtio + bge today; no broad PCI net class scan / detector model like blk
-
----
-
-## Platform / code health
-
-- [ ] **Single source tree** — `src/bios/…` vs `src/efi/…` still duplicated; behavior can drift
-- [ ] **EFI build smoke** after latest shell/net refactors (BIOS i386 verified; re-run EFI)
-- [ ] **Docs** — update `IO.md`, `LIBC_ASYNC.md` for: bind-if, stateful dhcp6, shell registry, guest `poll_key`
+- [ ] PXE i386 end-to-end (`./scripts/upload-pxe`)
+- [ ] VESA LFB on iron (`metal-bios: fb/vesa …` on COM1)
+- [ ] **bge** DHCP + ping/DNS (MAC/EEPROM path fixed; confirm lease)
+- [ ] Shell typing snappy on BIOS hardware
+- [ ] IDE usable from shell / guest
+- [ ] Stateful DHCPv6 where RA has **M-flag**
+- [ ] TFTP on iron next-server (QEMU path covered by `async_tftp`)
 
 ---
 
-## Nice-to-have / polish
+## Optional / later
 
-- [ ] Shell: linker-section auto-register (drop manual `pm_metal_shell_cmds_register_*()` list in `shell_cmd.c`)
-- [ ] Move `test` shell command next to boot code (`shell_core_cmds.c` → boot module)
-- [ ] Raise or document **32-command** shell registry cap (`PM_METAL_SHELL_CMD_MAX`)
-- [ ] Upstream or delete lwIP `dhcp6_enable_stateful()` stub once Metal client is proven on hardware
+- [ ] x86_64 BIOS VESA (needs LM→RM)
+- [ ] Broader PCI NIC detect (beyond virtio + bge)
+- [ ] Drop or upstream lwIP `dhcp6_enable_stateful()` stub once Metal client is proven on iron
+- [ ] First real wasm app on tab surfaces (ABI is ready)
 
----
-
-## Bottom line
-
-Core app loop (tab → guest focus, wasm FS, faster shell input, i386 PXE, IDE, bge net, shell registry) is in place. **Not fully app-ready on arbitrary bare metal** until real FB, broader device detection, and on-hardware smoke (PXE + net + typing) are green.
+**Deferred:** native 855GM/i915 modeset — only if VESA detector fails on target HW.

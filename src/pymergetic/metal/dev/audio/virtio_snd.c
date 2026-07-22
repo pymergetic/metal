@@ -8,8 +8,10 @@
 #include <runtime/coro/coro.h>
 #include <runtime/mem/mem.h>
 #include <runtime/time/time.h>
+#include <runtime/run/run.h>
 
 #include <Uefi.h>
+#include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/UefiLib.h>
@@ -119,9 +121,9 @@ VsndCtrl (
       return 0;
     }
 
-    if (gBS != NULL) {
-      gBS->Stall (100);
-    }
+    /* Yield the coop pool instead of EFI Stall (keeps shell/net alive). */
+    pm_metal_run_poll_all ();
+    CpuPause ();
   }
 
   return -1;

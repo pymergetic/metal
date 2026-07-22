@@ -8,6 +8,7 @@
 #include <runtime/time/time.h>
 
 #include <Uefi.h>
+#include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/IoLib.h>
 #include <Library/UefiBootServicesTableLib.h>
@@ -95,7 +96,7 @@ IdeWaitNotBusy (
       return 0;
     }
 
-    IdeDelay (50);
+    CpuPause ();
   }
 
   return -1;
@@ -120,7 +121,7 @@ IdeWaitDrq (
     }
 
     if ((st & ATA_SR_BSY) != 0) {
-      IdeDelay (50);
+      CpuPause ();
       continue;
     }
 
@@ -132,7 +133,7 @@ IdeWaitDrq (
       return 0;
     }
 
-    IdeDelay (50);
+    CpuPause ();
   }
 
   return -1;
@@ -206,6 +207,151 @@ IdeIdentify (
   return 0;
 }
 
+typedef struct {
+  UINT32   write;
+  UINT32   nsec;
+  UINT32   sec;
+  UINT16  *words;
+  UINT8    phase; /* 0 issued; 1 sector PIO; 2 final !BSY */
+} ide_xfer_cookie_t;
+
+STATIC
+INT32
+IdeXferStart (
+  VOID      *ctx,
+  INT32      write,
+  UINT64     lba,
+  VOID      *buf,
+  UINT32     nsec,
+  VOID      *cookie
+  )
+{
+  ide_drive_t         *d;
+  ide_xfer_cookie_t   *c;
+  UINT8                st;
+
+  d = (ide_drive_t *)ctx;
+  c = (ide_xfer_cookie_t *)cookie;
+  if (d == NULL || c == NULL || !d->Ready || buf == NULL || nsec == 0
+      || nsec > 256 || lba + nsec > d->Capacity || (lba >> 28) != 0)
+  {
+    return -1;
+  }
+
+  c->write = write ? 1u : 0u;
+  c->nsec  = nsec;
+  c->sec   = 0;
+  c->words = (UINT16 *)buf;
+  c->phase = 0;
+
+  IdeSelect (d);
+  st = IdeStatus (d);
+  if (st == 0xff || (st & ATA_SR_BSY) != 0) {
+    return -1;
+  }
+
+  IoWrite8 ((UINTN)(d->CmdBase + ATA_REG_SECCOUNT), (UINT8)nsec);
+  IoWrite8 ((UINTN)(d->CmdBase + ATA_REG_LBA_LO), (UINT8)(lba & 0xffu));
+  IoWrite8 ((UINTN)(d->CmdBase + ATA_REG_LBA_MID), (UINT8)((lba >> 8) & 0xffu));
+  IoWrite8 ((UINTN)(d->CmdBase + ATA_REG_LBA_HI), (UINT8)((lba >> 16) & 0xffu));
+  IoWrite8 (
+    (UINTN)(d->CmdBase + ATA_REG_DRIVE),
+    (UINT8)(0xE0u | ((UINT8)(d->Drive & 1u) << 4) | (UINT8)((lba >> 24) & 0x0fu))
+    );
+  IoWrite8 (
+    (UINTN)(d->CmdBase + ATA_REG_CMD),
+    write ? ATA_CMD_WRITE_PIO : ATA_CMD_READ_PIO
+    );
+  c->phase = 1;
+  return 0;
+}
+
+STATIC
+INT32
+IdeXferPoll (
+  VOID  *ctx,
+  VOID  *cookie
+  )
+{
+  ide_drive_t        *d;
+  ide_xfer_cookie_t  *c;
+  UINT8               st;
+  UINT32              i;
+
+  d = (ide_drive_t *)ctx;
+  c = (ide_xfer_cookie_t *)cookie;
+  if (d == NULL || c == NULL) {
+    return -1;
+  }
+
+  st = IdeStatus (d);
+  if (st == 0xff) {
+    return -1;
+  }
+
+  if (c->phase == 1) {
+    if ((st & ATA_SR_BSY) != 0) {
+      return 0;
+    }
+
+    if ((st & (ATA_SR_ERR | ATA_SR_DF)) != 0) {
+      return -1;
+    }
+
+    if ((st & ATA_SR_DRQ) == 0) {
+      return 0;
+    }
+
+    if (c->write) {
+      for (i = 0; i < 256; i++) {
+        IoWrite16 (
+          (UINTN)(d->CmdBase + ATA_REG_DATA),
+          c->words[c->sec * 256u + i]
+          );
+      }
+    } else {
+      for (i = 0; i < 256; i++) {
+        c->words[c->sec * 256u + i] = IoRead16 (
+                                        (UINTN)(d->CmdBase + ATA_REG_DATA)
+                                        );
+      }
+    }
+
+    c->sec++;
+    if (c->sec >= c->nsec) {
+      c->phase = 2;
+    }
+
+    return 0;
+  }
+
+  if (c->phase == 2) {
+    if ((st & ATA_SR_BSY) != 0) {
+      return 0;
+    }
+
+    if ((st & (ATA_SR_ERR | ATA_SR_DF)) != 0) {
+      return -1;
+    }
+
+    return 1;
+  }
+
+  return -1;
+}
+
+STATIC
+INT32
+IdeXferFinish (
+  VOID  *ctx,
+  VOID  *cookie
+  )
+{
+  (VOID)ctx;
+  (VOID)cookie;
+  return 0;
+}
+
 STATIC
 INT32
 IdePioXfer (
@@ -216,67 +362,41 @@ IdePioXfer (
   UINT32        Nsec
   )
 {
-  UINT32   s;
-  UINT16  *words;
+  ide_xfer_cookie_t  cookie;
+  UINT64             deadline;
 
-  if (d == NULL || !d->Ready || Buf == NULL || Nsec == 0 || Nsec > 256) {
+  /* Sync path for IDENTIFY-era / boot: poll with CpuPause, no Stall. */
+  if (d == NULL || !d->Ready) {
     return -1;
   }
 
-  if (Lba + Nsec > d->Capacity || (Lba >> 28) != 0) {
-    return -1;
-  }
-
-  words = (UINT16 *)Buf;
   IdeSelect (d);
   if (IdeWaitNotBusy (d, 2000) != 0) {
     return -1;
   }
 
-  IoWrite8 ((UINTN)(d->CmdBase + ATA_REG_SECCOUNT), (UINT8)Nsec);
-  IoWrite8 ((UINTN)(d->CmdBase + ATA_REG_LBA_LO), (UINT8)(Lba & 0xffu));
-  IoWrite8 ((UINTN)(d->CmdBase + ATA_REG_LBA_MID), (UINT8)((Lba >> 8) & 0xffu));
-  IoWrite8 ((UINTN)(d->CmdBase + ATA_REG_LBA_HI), (UINT8)((Lba >> 16) & 0xffu));
-  IoWrite8 (
-    (UINTN)(d->CmdBase + ATA_REG_DRIVE),
-    (UINT8)(0xE0u | ((UINT8)(d->Drive & 1u) << 4) | (UINT8)((Lba >> 24) & 0x0fu))
-    );
-  IoWrite8 (
-    (UINTN)(d->CmdBase + ATA_REG_CMD),
-    Write ? ATA_CMD_WRITE_PIO : ATA_CMD_READ_PIO
-    );
+  ZeroMem (&cookie, sizeof (cookie));
+  if (IdeXferStart (d, (INT32)Write, Lba, Buf, Nsec, &cookie) != 0) {
+    return -1;
+  }
 
-  for (s = 0; s < Nsec; s++) {
-    UINT32  i;
+  deadline = pm_metal_time_mono_us () + 5000000ull;
+  while (pm_metal_time_mono_us () < deadline) {
+    INT32  r;
 
-    if (Write) {
-      if (IdeWaitDrq (d, 5000) != 0) {
-        return -1;
-      }
-
-      for (i = 0; i < 256; i++) {
-        IoWrite16 ((UINTN)(d->CmdBase + ATA_REG_DATA), words[s * 256u + i]);
-      }
-    } else {
-      if (IdeWaitDrq (d, 5000) != 0) {
-        return -1;
-      }
-
-      for (i = 0; i < 256; i++) {
-        words[s * 256u + i] = IoRead16 ((UINTN)(d->CmdBase + ATA_REG_DATA));
-      }
+    r = IdeXferPoll (d, &cookie);
+    if (r < 0) {
+      return -1;
     }
+
+    if (r > 0) {
+      return IdeXferFinish (d, &cookie);
+    }
+
+    CpuPause ();
   }
 
-  if (IdeWaitNotBusy (d, 5000) != 0) {
-    return -1;
-  }
-
-  if ((IdeStatus (d) & (ATA_SR_ERR | ATA_SR_DF)) != 0) {
-    return -1;
-  }
-
-  return 0;
+  return -1;
 }
 
 STATIC
@@ -352,13 +472,16 @@ IdeBindDrive (
   }
 
   ZeroMem (&Ops, sizeof (Ops));
-  Ops.compat   = "ide-ata";
-  Ops.dt_id    = (UINT32)dt_id;
-  Ops.ready    = IdeReady;
-  Ops.capacity = IdeCapacity;
-  Ops.read     = IdeRead;
-  Ops.write    = IdeWrite;
-  Ops.ctx      = d;
+  Ops.compat      = "ide-ata";
+  Ops.dt_id       = (UINT32)dt_id;
+  Ops.ready       = IdeReady;
+  Ops.capacity    = IdeCapacity;
+  Ops.read        = IdeRead;
+  Ops.write       = IdeWrite;
+  Ops.xfer_start  = IdeXferStart;
+  Ops.xfer_poll   = IdeXferPoll;
+  Ops.xfer_finish = IdeXferFinish;
+  Ops.ctx         = d;
   if (pm_metal_blk_bind (&Ops) == PM_METAL_BLK_INVALID) {
     return -1;
   }

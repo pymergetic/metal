@@ -2,11 +2,11 @@
 -std=c11
 -ffreestanding
 -I.
--I../../../../external/wamr/core/shared/platform/include
+-I../../../../../external/wamr/core/shared/platform/include
 -I../../runtime/mem/host_stubs
--I../../../../external/wamr/core/shared/utils
--I../../../../src/efi/wamr/core/iwasm/include
--I../../../../src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+-I../../../../../external/wamr/core/shared/utils
+-I../../../../../external/wamr/core/iwasm/include
+-I../../../../../external/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
 -I../../../../../include
 -I../../..
 -DBH_PLATFORM_METAL_EFI

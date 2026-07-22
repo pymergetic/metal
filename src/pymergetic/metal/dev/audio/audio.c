@@ -1,5 +1,5 @@
 /** @file
-  Metal audio facade — pluggable ops (virtio-snd / null). (impl: efi|bios)
+  Metal audio facade — pluggable ops (virtio-snd / ac97 / null). (impl: efi|bios)
 **/
 #include <pymergetic/metal/dev/audio/audio.h>
 #include <pymergetic/metal/dev/audio/audio_ops.h>

@@ -3,21 +3,50 @@
  *
  * App-local: Metal HID keycodes → doomgeneric key bytes. Host input ABI
  * is Metal-only; this translator stays in the parked doom package.
+ *
+ * Display: default fullscreen (DEFAULT surface). `-w` → active tab surface
+ * only (windowed; shell chrome stays).
  */
 #include "../../../external/doomgeneric/doomgeneric/doomgeneric.h"
 
 #include "pymergetic/metal/dev/gfx/gfx.h"
 #include "pymergetic/metal/runtime/async/async.h"
 #include "pymergetic/metal/dev/input/input.h"
+#include "pymergetic/metal/shell/ui/ui.h"
 
 /* From d_loop.c — avoid d_loop.h (pulls doomtype.h → <strings.h>). */
 extern int singletics;
 
+/* From m_argv.c — set before DG_Init by doomgeneric_Create. */
+extern int M_CheckParm(char *check);
+
+static int s_windowed;
+
 void
 DG_Init(void)
 {
+	pm_metal_ui_handle_t    tab;
+	pm_metal_gfx_surface_h  surf;
+
 	/* Force one tic per Tick — pacing is await(sleep) in guest_step. */
 	singletics = 1;
+
+	s_windowed = M_CheckParm("-w") != 0;
+	if (!s_windowed) {
+		pm_metal_gfx_set_surface(PM_METAL_GFX_SURFACE_DEFAULT);
+		return;
+	}
+
+	tab  = pm_metal_ui_tab_active();
+	surf = pm_metal_ui_tab_surface(tab);
+	if (surf == PM_METAL_GFX_SURFACE_INVALID) {
+		/* No tab surface — fall back to fullscreen. */
+		s_windowed = 0;
+		pm_metal_gfx_set_surface(PM_METAL_GFX_SURFACE_DEFAULT);
+		return;
+	}
+
+	pm_metal_gfx_set_surface(surf);
 }
 
 void
@@ -38,13 +67,27 @@ DG_DrawFrame(void)
 		return;
 	}
 
+	/* Re-bind each frame: shell chrome paint may reset DEFAULT. */
+	if (s_windowed) {
+		pm_metal_ui_handle_t    tab;
+		pm_metal_gfx_surface_h  surf;
+
+		tab  = pm_metal_ui_tab_active();
+		surf = pm_metal_ui_tab_surface(tab);
+		if (surf != PM_METAL_GFX_SURFACE_INVALID) {
+			pm_metal_gfx_set_surface(surf);
+		}
+	} else {
+		pm_metal_gfx_set_surface(PM_METAL_GFX_SURFACE_DEFAULT);
+	}
+
 	gw = pm_metal_gfx_width();
 	gh = pm_metal_gfx_height();
 	if (gw <= 0 || gh <= 0) {
 		return;
 	}
 
-	/* Max integer scale that fits (fullscreen letterbox). */
+	/* Max integer scale that fits (fullscreen or tab content). */
 	sx = gw / DOOMGENERIC_RESX;
 	sy = gh / DOOMGENERIC_RESY;
 	scale = sx < sy ? sx : sy;
@@ -66,7 +109,6 @@ DG_DrawFrame(void)
 	(void)pm_metal_gfx_blit_bgra(
 		dx, dy, dw, dh, DG_ScreenBuffer, DOOMGENERIC_RESX, DOOMGENERIC_RESY,
 		DOOMGENERIC_RESX * (int)sizeof(pixel_t));
-	/* Rate/idle: host metal-perf on serial (printf→ConOut paints over GOP). */
 	(void)scale;
 }
 

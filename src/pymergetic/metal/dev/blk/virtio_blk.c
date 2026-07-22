@@ -41,6 +41,142 @@ typedef struct {
 STATIC vblk_dev_t  mVblk;
 STATIC INT32       mPresent;
 
+typedef struct {
+  UINT16  head;
+  UINT32  type;
+  UINT32  bytes;
+  VOID   *buf;
+  INT32   used;
+} vblk_xfer_cookie_t;
+
+STATIC
+INT32
+VblkXferStart (
+  VOID      *ctx,
+  INT32      write,
+  UINT64     lba,
+  VOID      *buf,
+  UINT32     nsec,
+  VOID      *cookie
+  )
+{
+  vblk_dev_t          *v;
+  vblk_xfer_cookie_t  *c;
+  UINT32               type;
+  INT32                data_write;
+
+  v = (vblk_dev_t *)ctx;
+  c = (vblk_xfer_cookie_t *)cookie;
+  if (v == NULL || c == NULL || !v->Ready || buf == NULL || nsec == 0 || nsec > 8) {
+    return -1;
+  }
+
+  type       = write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
+  c->type    = type;
+  c->bytes   = nsec * VBLK_SEC;
+  c->buf     = buf;
+  c->used    = 0;
+  c->head    = 0;
+  ZeroMem (v->Req, sizeof (*v->Req));
+  v->Req->Type   = type;
+  v->Req->Sector = lba;
+  *v->Status     = 0xff;
+  data_write     = (type == VIRTIO_BLK_T_IN) ? 1 : 0;
+
+  if (type == VIRTIO_BLK_T_OUT) {
+    CopyMem (v->DataBuf, buf, c->bytes);
+  } else {
+    ZeroMem (v->DataBuf, c->bytes);
+  }
+
+  if (pm_metal_virtq_add3 (
+        &v->Dev.vqs[VBLK_Q],
+        v->Req,
+        sizeof (*v->Req),
+        0,
+        v->DataBuf,
+        c->bytes,
+        data_write,
+        v->Status,
+        1,
+        1,
+        &c->head
+        ) != 0)
+  {
+    return -1;
+  }
+
+  pm_metal_virtq_kick (&v->Dev, &v->Dev.vqs[VBLK_Q]);
+  return 0;
+}
+
+STATIC
+INT32
+VblkXferPoll (
+  VOID  *ctx,
+  VOID  *cookie
+  )
+{
+  vblk_dev_t          *v;
+  vblk_xfer_cookie_t  *c;
+  UINT16               head;
+  UINT32               len;
+
+  v = (vblk_dev_t *)ctx;
+  c = (vblk_xfer_cookie_t *)cookie;
+  if (v == NULL || c == NULL) {
+    return -1;
+  }
+
+  if (c->used) {
+    return 1;
+  }
+
+  pm_metal_virtio_ack_isr (&v->Dev);
+  if (!pm_metal_virtq_get_used (&v->Dev.vqs[VBLK_Q], &head, &len)) {
+    return 0;
+  }
+
+  (VOID)len;
+  c->head = head;
+  c->used = 1;
+  return 1;
+}
+
+STATIC
+INT32
+VblkXferFinish (
+  VOID  *ctx,
+  VOID  *cookie
+  )
+{
+  vblk_dev_t          *v;
+  vblk_xfer_cookie_t  *c;
+
+  v = (vblk_dev_t *)ctx;
+  c = (vblk_xfer_cookie_t *)cookie;
+  if (v == NULL || c == NULL) {
+    return -1;
+  }
+
+  if (c->used) {
+    pm_metal_virtq_free_chain (&v->Dev.vqs[VBLK_Q], c->head);
+  } else {
+    pm_metal_virtq_free_chain (&v->Dev.vqs[VBLK_Q], c->head);
+    return -1;
+  }
+
+  if (*v->Status != VIRTIO_BLK_S_OK) {
+    return -1;
+  }
+
+  if (c->type == VIRTIO_BLK_T_IN && c->buf != NULL) {
+    CopyMem (c->buf, v->DataBuf, c->bytes);
+  }
+
+  return 0;
+}
+
 STATIC
 INT32
 VblkXfer (
@@ -51,72 +187,35 @@ VblkXfer (
   UINT32       Nsec
   )
 {
-  UINT16  head;
-  UINT32  len;
-  UINT64  deadline;
-  UINT32  bytes;
-  INT32   data_write;
+  vblk_xfer_cookie_t  cookie;
+  UINT64              deadline;
 
-  if (v == NULL || !v->Ready || Buf == NULL || Nsec == 0 || Nsec > 8) {
-    return -1;
-  }
-
-  bytes = Nsec * VBLK_SEC;
-  ZeroMem (v->Req, sizeof (*v->Req));
-  v->Req->Type   = Type;
-  v->Req->Sector = Lba;
-  *v->Status     = 0xff;
-  data_write     = (Type == VIRTIO_BLK_T_IN) ? 1 : 0;
-
-  if (Type == VIRTIO_BLK_T_OUT) {
-    CopyMem (v->DataBuf, Buf, bytes);
-  } else {
-    ZeroMem (v->DataBuf, bytes);
-  }
-
-  if (pm_metal_virtq_add3 (
-        &v->Dev.vqs[VBLK_Q],
-        v->Req,
-        sizeof (*v->Req),
-        0,
-        v->DataBuf,
-        bytes,
-        data_write,
-        v->Status,
-        1,
-        1,
-        &head
-        ) != 0)
+  ZeroMem (&cookie, sizeof (cookie));
+  if (VblkXferStart (v, (Type == VIRTIO_BLK_T_OUT) ? 1 : 0, Lba, Buf, Nsec,
+                     &cookie) != 0)
   {
     return -1;
   }
 
-  pm_metal_virtq_kick (&v->Dev, &v->Dev.vqs[VBLK_Q]);
+  /* Sync callers (boot smoke) — brief pause only, no Stall. */
   deadline = pm_metal_time_mono_us () + 5000000ull;
   while (pm_metal_time_mono_us () < deadline) {
-    if (pm_metal_virtq_get_used (&v->Dev.vqs[VBLK_Q], &head, &len)) {
-      pm_metal_virtq_free_chain (&v->Dev.vqs[VBLK_Q], head);
-      (VOID)len;
-      if (*v->Status != VIRTIO_BLK_S_OK) {
-        return -1;
-      }
+    INT32  r;
 
-      if (Type == VIRTIO_BLK_T_IN) {
-        CopyMem (Buf, v->DataBuf, bytes);
-      }
-
-      return 0;
+    r = VblkXferPoll (v, &cookie);
+    if (r < 0) {
+      (VOID)VblkXferFinish (v, &cookie);
+      return -1;
     }
 
-    if (gBS != NULL) {
-      gBS->Stall (50);
-    } else {
-      CpuPause ();
+    if (r > 0) {
+      return VblkXferFinish (v, &cookie);
     }
-    pm_metal_virtio_ack_isr (&v->Dev);
+
+    CpuPause ();
   }
 
-  pm_metal_virtq_free_chain (&v->Dev.vqs[VBLK_Q], head);
+  (VOID)VblkXferFinish (v, &cookie);
   return -1;
 }
 
@@ -292,13 +391,16 @@ pm_metal_blk_virtio_detect (
   }
 
   ZeroMem (&Ops, sizeof (Ops));
-  Ops.compat   = "virtio-blk";
-  Ops.dt_id    = (UINT32)dt_id;
-  Ops.ready    = VblkReady;
-  Ops.capacity = VblkCapacity;
-  Ops.read     = VblkRead;
-  Ops.write    = VblkWrite;
-  Ops.ctx      = &mVblk;
+  Ops.compat      = "virtio-blk";
+  Ops.dt_id       = (UINT32)dt_id;
+  Ops.ready       = VblkReady;
+  Ops.capacity    = VblkCapacity;
+  Ops.read        = VblkRead;
+  Ops.write       = VblkWrite;
+  Ops.xfer_start  = VblkXferStart;
+  Ops.xfer_poll   = VblkXferPoll;
+  Ops.xfer_finish = VblkXferFinish;
+  Ops.ctx         = &mVblk;
   h            = pm_metal_blk_bind (&Ops);
   if (h == PM_METAL_BLK_INVALID) {
     return -1;

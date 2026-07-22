@@ -6,7 +6,7 @@ metal_bootinfo:
 	.long 0x4C54454D          /* 'METL' */
 	.long 0
 	.quad pm_metal_bios_entry64
-	/* Trampoline fills these after Multiboot1 handoff (phys 0x100010). */
+	/* Trampoline fills these after Multiboot1 handoff (phys 0x400010). */
 	.globl metal_boot_magic, metal_boot_info
 metal_boot_magic:
 	.long 0

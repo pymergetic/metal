@@ -87,6 +87,10 @@ grep -q "+-- devices" "${LOG}" || {
 	echo "verify-bios: missing devices tree" >&2
 	exit 1
 }
+grep -q "net/loopback" "${LOG}" || {
+	echo "verify-bios: missing net/loopback" >&2
+	exit 1
+}
 grep -q "net/lwip+virtio-net" "${LOG}" || {
 	echo "verify-bios: missing net/lwip+virtio-net" >&2
 	exit 1

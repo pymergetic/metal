@@ -9,11 +9,32 @@
 #ifndef PCI_COMMAND_BUS_MASTER
 #define PCI_COMMAND_BUS_MASTER    EFI_PCI_COMMAND_BUS_MASTER
 #endif
+#ifndef PCI_COMMAND_IO_SPACE
+#define PCI_COMMAND_IO_SPACE      0x0001
+#endif
 #ifndef PCI_BAR0
 #define PCI_BAR0                  0x10
 #endif
 #ifndef PCI_COMMAND_OFFSET
 #define PCI_COMMAND_OFFSET        0x04
+#endif
+#ifndef PCI_REVISION_ID_OFFSET
+#define PCI_REVISION_ID_OFFSET    0x08
+#endif
+#ifndef PCI_CLASSCODE_OFFSET
+#define PCI_CLASSCODE_OFFSET      0x09
+#endif
+#ifndef PCI_HEADER_TYPE_OFFSET
+#define PCI_HEADER_TYPE_OFFSET    0x0E
+#endif
+#ifndef HEADER_TYPE_MULTI_FUNCTION
+#define HEADER_TYPE_MULTI_FUNCTION 0x80
+#endif
+#ifndef PCI_VENDOR_ID_OFFSET
+#define PCI_VENDOR_ID_OFFSET      0x00
+#endif
+#ifndef PCI_DEVICE_ID_OFFSET
+#define PCI_DEVICE_ID_OFFSET      0x02
 #endif
 
 static UINT32
@@ -68,6 +89,14 @@ pm_bios_pci_enable_mem_bm(UINT8 bus, UINT8 dev, UINT8 func)
   pm_bios_pci_write16(bus, dev, func, PCI_COMMAND_OFFSET, cmd);
 }
 
+VOID
+pm_bios_pci_enable_io_bm(UINT8 bus, UINT8 dev, UINT8 func)
+{
+  UINT16 cmd = pm_bios_pci_read16(bus, dev, func, PCI_COMMAND_OFFSET);
+  cmd |= (UINT16)(PCI_COMMAND_IO_SPACE | PCI_COMMAND_BUS_MASTER);
+  pm_bios_pci_write16(bus, dev, func, PCI_COMMAND_OFFSET, cmd);
+}
+
 UINT64
 pm_bios_pci_bar_mmio(UINT8 bus, UINT8 dev, UINT8 func, UINT8 bar_index,
 		     UINT8 *bars_consumed)
@@ -88,6 +117,17 @@ pm_bios_pci_bar_mmio(UINT8 bus, UINT8 dev, UINT8 func, UINT8 bar_index,
       *bars_consumed = 2;
   }
   return base;
+}
+
+UINT16
+pm_bios_pci_bar_io(UINT8 bus, UINT8 dev, UINT8 func, UINT8 bar_index)
+{
+  UINT8 off = (UINT8)(PCI_BAR0 + bar_index * 4);
+  UINT32 bar = pm_bios_pci_read32(bus, dev, func, off);
+
+  if ((bar & 1u) == 0)
+    return 0;
+  return (UINT16)(bar & ~0x3u);
 }
 
 int
@@ -137,6 +177,70 @@ pm_bios_pci_find (
 
           return 0;
         }
+      }
+    }
+  }
+
+  return -1;
+}
+
+int
+pm_bios_pci_find_class (
+  UINT8   base_class,
+  UINT8   subclass,
+  UINT8  *bus_out,
+  UINT8  *dev_out,
+  UINT8  *func_out
+  )
+{
+  UINT8  bus;
+  UINT8  dev;
+  UINT8  func;
+  UINT8  hdr;
+  UINT8  fmax;
+
+  for (bus = 0; bus < 8; bus++) {
+    for (dev = 0; dev < 32; dev++) {
+      UINT16  ven;
+
+      ven = pm_bios_pci_read16 (bus, dev, 0, PCI_VENDOR_ID_OFFSET);
+      if (ven == 0xffff) {
+        continue;
+      }
+
+      hdr  = pm_bios_pci_read8 (bus, dev, 0, PCI_HEADER_TYPE_OFFSET);
+      fmax = (hdr & HEADER_TYPE_MULTI_FUNCTION) ? 8 : 1;
+      for (func = 0; func < fmax; func++) {
+        UINT32  id;
+        UINT8   cls;
+        UINT8   sub;
+
+        ven = pm_bios_pci_read16 (bus, dev, func, PCI_VENDOR_ID_OFFSET);
+        if (ven == 0xffff) {
+          continue;
+        }
+
+        /* dword @ 0x08: rev | progIF | subclass | base_class */
+        id  = pm_bios_pci_read32 (bus, dev, func, PCI_REVISION_ID_OFFSET);
+        cls = (UINT8)((id >> 24) & 0xffu);
+        sub = (UINT8)((id >> 16) & 0xffu);
+        if (cls != base_class || sub != subclass) {
+          continue;
+        }
+
+        if (bus_out != NULL) {
+          *bus_out = bus;
+        }
+
+        if (dev_out != NULL) {
+          *dev_out = dev;
+        }
+
+        if (func_out != NULL) {
+          *func_out = func;
+        }
+
+        return 0;
       }
     }
   }

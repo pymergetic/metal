@@ -249,6 +249,7 @@ UefiMain (
     (VOID)pm_metal_esp_preload ("mods/tests/async_fs.txt");
     (VOID)pm_metal_esp_preload ("mods/tests/autotest");
     (VOID)pm_metal_esp_preload ("metal/net.conf");
+    (VOID)pm_metal_esp_preload ("etc/hosts");
   }
 
   pm_metal_boot_print_floor_tree (

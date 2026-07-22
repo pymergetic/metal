@@ -3,6 +3,7 @@
 **/
 #include <pymergetic/metal/boot/port.h>
 #include <pymergetic/metal/boot/boot.h>
+#include <pymergetic/metal/dev/acpi/acpi.h>
 #include <pymergetic/metal/log/log.h>
 #include <runtime/run/run.h>
 
@@ -71,6 +72,11 @@ PortReset (
            0,
            NULL
            );
+  }
+
+  /* Some firmwares ignore ResetSystem post-EBS; drive ACPI S5 directly. */
+  if (!reboot) {
+    pm_metal_acpi_poweroff ();
   }
 
   for (;;) {

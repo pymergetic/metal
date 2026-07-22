@@ -423,35 +423,26 @@ pm_metal_net_tls_write (
 {
 	tls_sess_t  *t;
 	INT32        e;
-	size_t       off;
 
 	t = TlsFromHandle (h);
 	if (t == NULL || !t->ready || !t->done || buf == NULL || len == 0) {
 		return -1;
 	}
 
-	off = 0;
-	while (off < len) {
-		e = mbedtls_ssl_write (
-		      &t->ssl,
-		      (CONST UINT8 *)buf + off,
-		      len - (UINT32)off
-		      );
-		if (e <= 0) {
-			if (e == MBEDTLS_ERR_SSL_WANT_READ
-			    || e == MBEDTLS_ERR_SSL_WANT_WRITE)
-			{
-				pm_metal_net_poll ();
-				continue;
-			}
-
-			return -1;
-		}
-
-		off += (size_t)e;
+	e = mbedtls_ssl_write (&t->ssl, buf, len);
+	if (e > 0) {
+		return e;
 	}
 
-	return 0;
+	if (e == MBEDTLS_ERR_SSL_WANT_READ) {
+		return PM_METAL_TLS_WANT_READ;
+	}
+
+	if (e == MBEDTLS_ERR_SSL_WANT_WRITE) {
+		return PM_METAL_TLS_WANT_WRITE;
+	}
+
+	return -1;
 }
 
 #if !defined(__wasm__)

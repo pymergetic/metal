@@ -5,6 +5,7 @@
 #include <pymergetic/metal/dev/blk/blk_ops.h>
 #include <pymergetic/metal/runtime/async/async.h>
 #include <runtime/coro/coro.h>
+#include <runtime/time/time.h>
 
 #include <Uefi.h>
 #include <Library/BaseMemoryLib.h>
@@ -132,12 +133,18 @@ pm_metal_blk_poll (
   }
 }
 
-/* ---- awaitable sector I/O (eager host xfer today; always awaited) ---- */
+/* ---- awaitable sector I/O (kick → await → finish) ---- */
 
 typedef enum {
   PM_METAL_BLK_OP_READ = 0,
   PM_METAL_BLK_OP_WRITE
 } pm_metal_blk_op_t;
+
+typedef enum {
+  PM_METAL_BLK_ST_START = 0,
+  PM_METAL_BLK_ST_WAIT,
+  PM_METAL_BLK_ST_FINISH
+} pm_metal_blk_st_t;
 
 typedef struct {
   pm_metal_coro_t   coro;
@@ -146,51 +153,11 @@ typedef struct {
   UINT64            lba;
   UINT32            buf;
   UINT32            nsec;
+  pm_metal_blk_st_t step;
+  VOID             *native;
+  UINT64            deadline;
+  UINT8             cookie[PM_METAL_BLK_XFER_COOKIE_BYTES];
 } pm_metal_blk_coro_t;
-
-STATIC
-UINT32
-MetalBlkGuestXfer (
-  pm_metal_blk_op_t  op,
-  pm_metal_blk_h     h,
-  UINT64             lba,
-  UINT32             buf,
-  UINT32             nsec
-  )
-{
-  UINT32  bytes;
-  VOID   *native;
-
-  if (mBlkInst == NULL || h == PM_METAL_BLK_INVALID || nsec == 0
-      || buf == 0 || pm_metal_blk_ready (h) == 0)
-  {
-    return 0;
-  }
-
-  if (nsec > (0xffffffffu / PM_METAL_BLK_SEC)) {
-    return 0;
-  }
-
-  bytes = nsec * PM_METAL_BLK_SEC;
-  if (!wasm_runtime_validate_app_addr (mBlkInst, buf, bytes)) {
-    return 0;
-  }
-
-  native = wasm_runtime_addr_app_to_native (mBlkInst, buf);
-  if (native == NULL) {
-    return 0;
-  }
-
-  if (op == PM_METAL_BLK_OP_READ) {
-    if (pm_metal_blk_read (h, lba, native, nsec) != 0) {
-      return 0;
-    }
-  } else if (pm_metal_blk_write (h, lba, native, nsec) != 0) {
-    return 0;
-  }
-
-  return nsec;
-}
 
 STATIC
 pm_metal_status_t
@@ -199,11 +166,101 @@ MetalBlkCoroFn (
   )
 {
   pm_metal_blk_coro_t  *b;
-  UINT32                n;
+  pm_metal_blk_ops_t   *ops;
+  UINT32                bytes;
+  INT32                 r;
 
   b = (pm_metal_blk_coro_t *)self;
-  n = MetalBlkGuestXfer (b->op, b->h, b->lba, b->buf, b->nsec);
-  self->result = (VOID *)(UINTN)n;
+  if (b->h >= mCount) {
+    self->result = 0;
+    return PM_METAL_DONE;
+  }
+
+  ops = &mDevs[b->h];
+
+  if (b->step == PM_METAL_BLK_ST_START) {
+    if (mBlkInst == NULL || b->nsec == 0 || b->buf == 0
+        || pm_metal_blk_ready (b->h) == 0
+        || b->nsec > (0xffffffffu / PM_METAL_BLK_SEC))
+    {
+      self->result = 0;
+      return PM_METAL_DONE;
+    }
+
+    bytes = b->nsec * PM_METAL_BLK_SEC;
+    if (!wasm_runtime_validate_app_addr (mBlkInst, b->buf, bytes)) {
+      self->result = 0;
+      return PM_METAL_DONE;
+    }
+
+    b->native = wasm_runtime_addr_app_to_native (mBlkInst, b->buf);
+    if (b->native == NULL) {
+      self->result = 0;
+      return PM_METAL_DONE;
+    }
+
+    /* Legacy backend: one-shot sync (should not happen for virtio/ide). */
+    if (ops->xfer_start == NULL || ops->xfer_poll == NULL
+        || ops->xfer_finish == NULL)
+    {
+      if (b->op == PM_METAL_BLK_OP_READ) {
+        self->result = (VOID *)(UINTN)(
+                         (pm_metal_blk_read (b->h, b->lba, b->native, b->nsec)
+                          == 0) ? b->nsec : 0u
+                         );
+      } else {
+        self->result = (VOID *)(UINTN)(
+                         (pm_metal_blk_write (b->h, b->lba, b->native, b->nsec)
+                          == 0) ? b->nsec : 0u
+                         );
+      }
+
+      return PM_METAL_DONE;
+    }
+
+    ZeroMem (b->cookie, sizeof (b->cookie));
+    if (ops->xfer_start (
+          ops->ctx,
+          (b->op == PM_METAL_BLK_OP_WRITE) ? 1 : 0,
+          b->lba,
+          b->native,
+          b->nsec,
+          b->cookie
+          ) != 0)
+    {
+      self->result = 0;
+      return PM_METAL_DONE;
+    }
+
+    b->deadline = pm_metal_time_mono_us () + 5000000ull;
+    b->step     = PM_METAL_BLK_ST_WAIT;
+  }
+
+  if (b->step == PM_METAL_BLK_ST_WAIT) {
+    if (ops->poll != NULL) {
+      ops->poll (ops->ctx);
+    }
+
+    r = ops->xfer_poll (ops->ctx, b->cookie);
+    if (r < 0 || pm_metal_time_mono_us () > b->deadline) {
+      (VOID)ops->xfer_finish (ops->ctx, b->cookie);
+      self->result = 0;
+      return PM_METAL_DONE;
+    }
+
+    if (r == 0) {
+      return pm_metal_await (self, pm_metal_sleep_us (50));
+    }
+
+    b->step = PM_METAL_BLK_ST_FINISH;
+  }
+
+  if (ops->xfer_finish (ops->ctx, b->cookie) != 0) {
+    self->result = 0;
+  } else {
+    self->result = (VOID *)(UINTN)b->nsec;
+  }
+
   return PM_METAL_DONE;
 }
 
@@ -233,6 +290,7 @@ MetalBlkStart (
   b->lba  = lba;
   b->buf  = buf;
   b->nsec = nsec;
+  b->step = PM_METAL_BLK_ST_START;
   return pm_metal_async_adopt_host_coro (&b->coro);
 }
 

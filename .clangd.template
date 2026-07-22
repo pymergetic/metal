@@ -11,11 +11,11 @@ CompileFlags:
     # Always visible: Metal WAMR platform + freestanding libc stubs.
     - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
     - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
+    - -I@@ROOT@@/external/wamr/core/shared/platform/include
     # Always visible so quoted WAMR platform includes resolve even if a
     # PathMatch fragment is skipped (clangd matches absolute paths).
     - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
+    - -I@@ROOT@@/external/wamr/core/shared/platform/include
     - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
     # lwIP -I lives in efi/bios PathMatch + CDB only — a global EFI net -I
     # steals bios/.../dev/net (wrong lwipopts.h / PmBiosUefi.h).
@@ -50,10 +50,10 @@ CompileFlags:
     - -I@@ROOT@@/external/mbedtls/include
     - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
     - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
-    - -I@@ROOT@@/src/efi/wamr/core/shared/utils
-    - -I@@ROOT@@/src/efi/wamr/core/iwasm/include
-    - -I@@ROOT@@/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+    - -I@@ROOT@@/external/wamr/core/shared/platform/include
+    - -I@@ROOT@@/external/wamr/core/shared/utils
+    - -I@@ROOT@@/external/wamr/core/iwasm/include
+    - -I@@ROOT@@/external/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
     - -DBH_PLATFORM_METAL_EFI
     - -DBH_PLATFORM_ZEPHYR
     - -DBUILD_TARGET_X86_64
@@ -85,10 +85,10 @@ CompileFlags:
     - -I@@ROOT@@/external/mbedtls/include
     - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
     - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
-    - -I@@ROOT@@/src/efi/wamr/core/shared/utils
-    - -I@@ROOT@@/src/efi/wamr/core/iwasm/include
-    - -I@@ROOT@@/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+    - -I@@ROOT@@/external/wamr/core/shared/platform/include
+    - -I@@ROOT@@/external/wamr/core/shared/utils
+    - -I@@ROOT@@/external/wamr/core/iwasm/include
+    - -I@@ROOT@@/external/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
     - -DBH_PLATFORM_METAL_EFI
     - -DBH_PLATFORM_ZEPHYR
     - -DBUILD_TARGET_X86_64
@@ -105,11 +105,11 @@ CompileFlags:
     - -I@@ROOT@@/external/edk2/MdePkg/Include
     - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
     - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
+    - -I@@ROOT@@/external/wamr/core/shared/platform/include
     - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/src/efi/wamr/core/shared/utils
-    - -I@@ROOT@@/src/efi/wamr/core/iwasm/include
-    - -I@@ROOT@@/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+    - -I@@ROOT@@/external/wamr/core/shared/utils
+    - -I@@ROOT@@/external/wamr/core/iwasm/include
+    - -I@@ROOT@@/external/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
     - -I@@ROOT@@/include
     - -I@@ROOT@@/src/pymergetic/metal
     - -DBH_PLATFORM_METAL_EFI
@@ -166,9 +166,9 @@ CompileFlags:
     - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
     - -I@@ROOT@@/src/bios/pymergetic/metal/guest/wamr
     - -I@@ROOT@@/src/bios/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/src/efi/wamr/core/iwasm/include
-    - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
-    - -I@@ROOT@@/src/efi/wamr/core/shared/utils
+    - -I@@ROOT@@/external/wamr/core/iwasm/include
+    - -I@@ROOT@@/external/wamr/core/shared/platform/include
+    - -I@@ROOT@@/external/wamr/core/shared/utils
     - -DBH_PLATFORM_METAL_BIOS
     - -DBH_PLATFORM_METAL_EFI
     - -DBH_PLATFORM_ZEPHYR

@@ -70,9 +70,28 @@ pm_metal_virtio_netif_open (
     }
   }
 
-  if (pm_metal_virtio_cfg_read (&mDev, 0, mMac, 6) != 0) {
-    SetMem (mMac, 6, 0x02);
-    mMac[5] = 0x15;
+  {
+    INT32  mac_ok;
+    UINTN  mi;
+
+    mac_ok = 0;
+    if ((feats & (1ull << 5)) != 0
+        && pm_metal_virtio_cfg_read (&mDev, 0, mMac, 6) == 0
+        && (mMac[0] & 0x01u) == 0)
+    {
+      for (mi = 0; mi < 6; mi++) {
+        if (mMac[mi] != 0) {
+          mac_ok = 1;
+          break;
+        }
+      }
+    }
+
+    if (!mac_ok) {
+      /* Locally administered fallback — never ship 00:00:00:00:00:00. */
+      SetMem (mMac, 6, 0x02);
+      mMac[5] = 0x15;
+    }
   }
 
   if (pm_metal_virtio_setup_queue (&mDev, VNET_RX, VNET_QSZ) != 0

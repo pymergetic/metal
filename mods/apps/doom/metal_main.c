@@ -36,6 +36,15 @@ system(const char *cmd)
 #define METAL_DOOM_IWAD "/mods/apps/doom/doom1.wad"
 #endif
 
+/*
+ * Windowed (-w): draw into the active tab surface; shell chrome stays.
+ * Fullscreen (default): DEFAULT surface letterbox. Until shell forwards
+ * guest argv, set METAL_DOOM_WINDOWED=1 at compile time to append -w.
+ */
+#ifndef METAL_DOOM_WINDOWED
+#define METAL_DOOM_WINDOWED 0
+#endif
+
 typedef struct {
 	uint32_t step;
 	uint32_t ticks;
@@ -47,6 +56,7 @@ static char *g_argv_storage[8];
 static char g_arg0[] = "doom";
 static char g_arg_iwad[] = "-iwad";
 static char g_arg_path[] = METAL_DOOM_IWAD;
+static char g_arg_windowed[] = "-w";
 
 int32_t
 pm_metal_guest_step(int32_t self_h)
@@ -68,6 +78,9 @@ pm_metal_guest_step(int32_t self_h)
 		g_argv_storage[1] = g_arg_iwad;
 		g_argv_storage[2] = g_arg_path;
 		argc = 3;
+#if METAL_DOOM_WINDOWED
+		g_argv_storage[argc++] = g_arg_windowed;
+#endif
 		pm_metal_shell_log("metal-doom: create");
 		doomgeneric_Create(argc, g_argv_storage);
 		pm_metal_shell_log("metal-doom: create done");

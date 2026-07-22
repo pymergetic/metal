@@ -3,6 +3,7 @@
 **/
 #include <pymergetic/metal/shell/hwinfo/hwinfo.h>
 #include <pymergetic/metal/shell/shell_cmd.h>
+#include <pymergetic/metal/host/host.h>
 #include <pymergetic/metal/bus/io/io.h>
 #include <pymergetic/metal/bus/virtio/virtio.h>
 #include "../../bus/pci/pci.h"
@@ -420,6 +421,14 @@ pm_metal_hwinfo_print (
   UINT32                        i;
   UINT32                        nblk;
 
+  {
+    CHAR8  hostname[PM_METAL_HOST_NAME_MAX];
+
+    if (pm_metal_host_name_get (hostname, sizeof (hostname)) == 0) {
+      pm_metal_logf ("hwinfo: hostname %a", hostname);
+    }
+  }
+
   pm_metal_log ("hwinfo: metal devices");
   if (pm_metal_io_dt_count () == 0) {
     pm_metal_log ("  (empty)");
@@ -469,27 +478,22 @@ pm_metal_hwinfo_print (
 STATIC
 VOID
 HwinfoShellCmd (
-  CONST CHAR8  *arg
+  INT32   argc,
+  CHAR8 **argv
   )
 {
-  (VOID)arg;
+  (VOID)argc;
+  (VOID)argv;
   pm_metal_hwinfo_print ();
   pm_metal_shell_mark_full ();
 }
 
-STATIC CONST pm_metal_shell_cmd_t  g_pm_metal_shell_cmd_hwinfo = {
+PM_METAL_SHELL_CMD (
+  g_pm_metal_shell_cmd_hwinfo,
   "hwinfo",
   "hwinfo            metal devices + PCI net/virtio",
   HwinfoShellCmd
-};
-
-void
-pm_metal_shell_cmds_register_hwinfo (
-  VOID
-  )
-{
-  pm_metal_shell_cmd_register (&g_pm_metal_shell_cmd_hwinfo);
-}
+  );
 
 STATIC NativeSymbol g_pm_metal_hwinfo_native_symbols[] = {
   { "pm_metal_hwinfo_print", (VOID *)pm_metal_hwinfo_print, "()", NULL },

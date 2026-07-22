@@ -25,6 +25,8 @@ extern "C" {
 #endif
 
 #if !defined(__wasm__)
+#include "pymergetic/metal/runtime/async/async.h"
+
 /** Bind to UI shell chrome (must exist). Proofs are pool/init-coro work. */
 int pm_metal_shell_init(void);
 /**
@@ -36,6 +38,16 @@ int pm_metal_shell_poll(void);
 int pm_metal_shell_exit_reboot(void);
 /** Suggested coop sleep after the last poll (1 ms when busy, else ~16). */
 uint32_t pm_metal_shell_pump_sleep_ms(void);
+
+/** 1 if a background shell job (ping/test) is already running. */
+int pm_metal_shell_job_busy(void);
+/**
+ * Track a host async task; shell_poll pumps it and prints on completion.
+ * kind: "ping" | "test". detail optional (e.g. hostname). Returns 0 ok.
+ */
+int pm_metal_shell_job_start(const char *kind, pm_metal_async_handle_t task_h,
+			     pm_metal_async_handle_t coro_h, const char *detail,
+			     uint64_t deadline_us);
 #endif
 
 #if defined(__wasm__)
