@@ -9,13 +9,13 @@
 #include <Library/BaseMemoryLib.h>
 #include <Protocol/MpService.h>
 
-#include <mem/mem.h>
-#include <stack/stack.h>
-#include <run/run.h>
-#include <pymergetic/metal/gfx/gfx.h>
-#include <pymergetic/metal/esp/esp.h>
-#include <pymergetic/metal/efi/efi_run.h>
-#include <pymergetic/metal/efi/boot.h>
+#include <runtime/mem/mem.h>
+#include <runtime/stack/stack.h>
+#include <runtime/run/run.h>
+#include <pymergetic/metal/dev/gfx/gfx.h>
+#include <pymergetic/metal/fs/esp/esp.h>
+#include <pymergetic/metal/boot/port.h>
+#include <pymergetic/metal/boot/boot.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/util/fourcc.h>
 
@@ -247,6 +247,7 @@ UefiMain (
   /* RAM-cache while ESP/SimpleFileSystem still live. */
   if (pm_metal_esp_ready ()) {
     (VOID)pm_metal_esp_preload ("mods/tests/async_fs.txt");
+    (VOID)pm_metal_esp_preload ("mods/tests/autotest");
     (VOID)pm_metal_esp_preload ("metal/net.conf");
   }
 
@@ -259,10 +260,9 @@ UefiMain (
     (unsigned)mCpuCount
     );
 
-  Status = pm_metal_efi_exit_boot_and_run (ImageHandle, SystemTable);
-  if (EFI_ERROR (Status)) {
+  if (pm_metal_port_takeover_and_run (ImageHandle, (unsigned)mCpuCount) != 0) {
     pm_metal_log ("metal-ebs: failed - no fallback (owned path required)");
-    return Status;
+    return EFI_DEVICE_ERROR;
   }
 
   gRT->ResetSystem (EfiResetShutdown, EFI_SUCCESS, 0, NULL);

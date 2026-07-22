@@ -12,17 +12,21 @@ source "${ROOT}/scripts/lib/run-steps.sh"
 
 usage() {
 	cat >&2 <<'EOF'
-usage: scripts/build <target> [all]
+usage: scripts/build <target> [all|i386|x86_64]
        scripts/build all
 
   efi       — freestanding UEFI Metal (scaffold → metal.efi)
+  bios      — freestanding Multiboot2 Metal (→ metal.elf)
+              optional: bios i386 | bios x86_64 (default)
   mod       — guest wasm tests
   cpython   — python.wasm
-  all       — mod + cpython + efi
+  all       — mod + cpython + efi + bios
 
 Examples:
   scripts/build all
   scripts/build efi
+  scripts/build bios
+  scripts/build bios i386
   scripts/build mod
 EOF
 	exit 1
@@ -46,7 +50,7 @@ case "${plat}" in
 -h | --help | help) usage ;;
 all)
 	[[ $# -eq 0 ]] || usage
-	pm_run_steps "${ROOT}/scripts/build" "mod" "cpython" "efi"
+	pm_run_steps "${ROOT}/scripts/build" "mod" "cpython" "efi" "bios"
 	exit $?
 	;;
 efi | mod | cpython)
@@ -54,11 +58,27 @@ efi | mod | cpython)
 		[[ "$1" == "all" && $# -eq 1 ]] || usage
 	fi
 	;;
+bios)
+	if [[ $# -ge 1 ]]; then
+		case "$1" in
+		all) [[ $# -eq 1 ]] || usage ;;
+		i386|x86_64) [[ $# -eq 1 ]] || usage ;;
+		*) usage ;;
+		esac
+	fi
+	;;
 *) usage ;;
 esac
 
 case "${plat}" in
 efi) run "${PORT}/efi/default.sh" ;;
+bios)
+	if [[ $# -ge 1 && "$1" != "all" ]]; then
+		run "${PORT}/bios/default.sh" "$1"
+	else
+		run "${PORT}/bios/default.sh"
+	fi
+	;;
 mod) run "${GUEST}/mod.sh" ;;
 cpython) run "${GUEST}/cpython.sh" ;;
 *) usage ;;

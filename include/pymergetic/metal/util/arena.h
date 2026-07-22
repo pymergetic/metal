@@ -2,7 +2,7 @@
  * Fixed-size arena — first-fit, coalescing free-list allocator over a
  * single caller-supplied buffer.
  *
- * Single implementation, host-side only (src/common/pymergetic/metal/util/
+ * Single implementation, host-side only (src/pymergetic/metal/util/
  * arena.c) — backs the runtime's bytecode pool (memory/bytecode.h
  * pm_metal_memory_bytecode_ops). On wasm32 the declarations below are
  * wasi-style imports (see util/size.h for the pattern this follows).
@@ -12,6 +12,9 @@
  * On wasm, the opaque handle from init() is a host id (uint32_t), not an
  * app offset — pass it back into alloc/free/used; never dereference it.
  * Alloc results remain ordinary guest pointers into `buf`.
+ *
+ * impl: common — src/pymergetic/metal/util/arena.c
+ * impl: wasi import — src/pymergetic/metal/util/arena.c (wasm32 only)
  */
 #ifndef PYMERGETIC_METAL_UTIL_ARENA_H_
 #define PYMERGETIC_METAL_UTIL_ARENA_H_
@@ -39,8 +42,8 @@ typedef uint32_t pm_metal_util_arena_handle_t;
  * arena's lifetime; init() does not allocate guest memory. Returns NULL /
  * 0 if buf_len is too small or the host handle table is full.
  *
- * impl: common — src/common/pymergetic/metal/util/arena.c
- * impl: wasi import — src/common/pymergetic/metal/util/arena.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/arena.c
+ * impl: wasi import — src/pymergetic/metal/util/arena.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern pm_metal_util_arena_handle_t pm_metal_util_arena_init(void *buf, size_t buf_len)
@@ -53,8 +56,8 @@ pm_metal_util_arena_t *pm_metal_util_arena_init(void *buf, size_t buf_len);
  * First-fit allocation within the arena. NULL if no free block is big
  * enough (exhausted or fragmented) — never grows past the original buf_len.
  *
- * impl: common — src/common/pymergetic/metal/util/arena.c
- * impl: wasi import — src/common/pymergetic/metal/util/arena.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/arena.c
+ * impl: wasi import — src/pymergetic/metal/util/arena.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern void *pm_metal_util_arena_alloc(pm_metal_util_arena_handle_t arena, size_t size)
@@ -67,8 +70,8 @@ void *pm_metal_util_arena_alloc(pm_metal_util_arena_t *arena, size_t size);
  * Free a block returned by arena_alloc(); coalesces with physically
  * adjacent free neighbors to fight fragmentation.
  *
- * impl: common — src/common/pymergetic/metal/util/arena.c
- * impl: wasi import — src/common/pymergetic/metal/util/arena.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/arena.c
+ * impl: wasi import — src/pymergetic/metal/util/arena.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern void pm_metal_util_arena_free(pm_metal_util_arena_handle_t arena, void *ptr)
@@ -80,8 +83,8 @@ void pm_metal_util_arena_free(pm_metal_util_arena_t *arena, void *ptr);
 /*
  * Bytes currently allocated (excludes block-header bookkeeping overhead).
  *
- * impl: common — src/common/pymergetic/metal/util/arena.c
- * impl: wasi import — src/common/pymergetic/metal/util/arena.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/arena.c
+ * impl: wasi import — src/pymergetic/metal/util/arena.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern size_t pm_metal_util_arena_used(pm_metal_util_arena_handle_t arena)
@@ -100,7 +103,7 @@ size_t pm_metal_util_arena_used(const pm_metal_util_arena_t *arena);
  * init() is the only caller today). Returns 0 on success, -1 if WAMR
  * rejected the registration.
  *
- * impl: common — src/common/pymergetic/metal/util/arena.c
+ * impl: common — src/pymergetic/metal/util/arena.c
  */
 int pm_metal_util_arena_native_register(void);
 #endif

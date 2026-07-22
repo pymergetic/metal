@@ -11,6 +11,9 @@
  * a mod never links a byte of upstream LZ4 itself, only ever calls
  * through this module's own wasi-style import bridge, same as
  * size.h/arena.h/log.h.
+ *
+ * impl: common — src/pymergetic/metal/util/lz4.c
+ * impl: wasi import — src/pymergetic/metal/util/lz4.c (wasm32 only)
  */
 #ifndef PYMERGETIC_METAL_UTIL_LZ4_H_
 #define PYMERGETIC_METAL_UTIL_LZ4_H_
@@ -33,8 +36,8 @@
  * buffer with this before calling compress() below. 0 if src_len
  * exceeds LZ4's own (int-sized) length limit.
  *
- * impl: common — src/common/pymergetic/metal/util/lz4.c
- * impl: wasi import — src/common/pymergetic/metal/util/lz4.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/lz4.c
+ * impl: wasi import — src/pymergetic/metal/util/lz4.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern size_t pm_metal_util_lz4_compress_bound(size_t src_len)
@@ -49,8 +52,8 @@ size_t pm_metal_util_lz4_compress_bound(size_t src_len);
  * small (see compress_bound() above) or src_len/dst_cap exceed LZ4's own
  * length limit.
  *
- * impl: common — src/common/pymergetic/metal/util/lz4.c
- * impl: wasi import — src/common/pymergetic/metal/util/lz4.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/lz4.c
+ * impl: wasi import — src/pymergetic/metal/util/lz4.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_lz4_compress(const void *src, size_t src_len, void *dst, size_t dst_cap)
@@ -64,8 +67,8 @@ int pm_metal_util_lz4_compress(const void *src, size_t src_len, void *dst, size_
  * at src into dst (capacity dst_cap). Returns the decompressed size, or
  * -1 on a malformed/truncated block or if dst_cap is too small for it.
  *
- * impl: common — src/common/pymergetic/metal/util/lz4.c
- * impl: wasi import — src/common/pymergetic/metal/util/lz4.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/lz4.c
+ * impl: wasi import — src/pymergetic/metal/util/lz4.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_lz4_decompress(const void *src, size_t src_len, void *dst, size_t dst_cap)
@@ -83,7 +86,7 @@ int pm_metal_util_lz4_decompress(const void *src, size_t src_len, void *dst, siz
  * these (runtime.c's init() is the only caller today). Returns 0 on
  * success, -1 if WAMR rejected the registration.
  *
- * impl: common — src/common/pymergetic/metal/util/lz4.c
+ * impl: common — src/pymergetic/metal/util/lz4.c
  */
 int pm_metal_util_lz4_native_register(void);
 #endif

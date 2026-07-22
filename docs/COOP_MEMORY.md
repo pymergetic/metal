@@ -129,7 +129,7 @@ Wasm guests share the same park model — not blocking natives, not Asyncify.
 - Guest **exports** `i32 pm_metal_guest_step(i32 self_h)` (stackless switch on
   state in guest linear memory).
 - Host wraps each fiber as a coro trampoline that `call_wasm`s that export.
-- Imports (`include/pymergetic/metal/async/async.h`, module `pymergetic.metal.async`)
+- Imports (`include/pymergetic/metal/runtime/async/async.h`, module `pymergetic.metal.async`)
   arm host `sleep` / `yield` / tasks behind **uint32 handles** only.
 - Await returns `WAITING` to the host runloop; `run_poll` + timer poll resumes
   the guest on wake. Sync mods without the export still use `execute_main`.

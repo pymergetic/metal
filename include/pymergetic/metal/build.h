@@ -10,6 +10,8 @@
  * has a documented include home. Privileged headers `#ifdef
  * PM_METAL_BUILD_KERNEL` against the compile -D; they do not need to
  * #include this file (the macro is not defined here).
+ *
+ * impl: none — header-only (macro documentation)
  */
 #ifndef PYMERGETIC_METAL_BUILD_H_
 #define PYMERGETIC_METAL_BUILD_H_

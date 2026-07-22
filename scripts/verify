@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Verify interface — EFI freestanding smoke (hosted ports archived).
-# Usage: scripts/verify efi
-#        scripts/verify all
+# Verify interface — EFI + BIOS freestanding smoke.
+# Usage: scripts/verify efi|bios|all
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,12 +8,12 @@ PORT="${ROOT}/scripts/verify.d/port"
 
 usage() {
 	cat >&2 <<'EOF'
-usage: scripts/verify efi
-       scripts/verify all
+usage: scripts/verify efi|bios|all|drift
 
-  efi / all — QEMU+OVMF smoke (banner + Total memory + ok marker)
-
-Hosted linux/zephyr/nuttx verify lives on archive/multi-host-linux-zephyr-nuttx.
+  efi   — QEMU+OVMF smoke (boot tree + metal-boot: ready)
+  bios  — QEMU+SeaBIOS Multiboot2 smoke (same markers, handoff)
+  all   — drift check, then efi, then bios
+  drift — BIOS/EFI dual-tree drift gate (no QEMU)
 EOF
 	exit 1
 }
@@ -26,8 +25,19 @@ shift
 
 case "${plat}" in
 -h | --help | help) usage ;;
-efi | all)
+drift)
+	exec "${PORT}/dual-tree-drift.sh"
+	;;
+efi)
 	exec "${PORT}/efi/default.sh"
+	;;
+bios)
+	exec "${PORT}/bios/default.sh"
+	;;
+all)
+	"${PORT}/dual-tree-drift.sh"
+	"${PORT}/efi/default.sh"
+	exec "${PORT}/bios/default.sh"
 	;;
 *) usage ;;
 esac

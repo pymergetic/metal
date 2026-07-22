@@ -22,6 +22,21 @@
 #include <wasi_socket_ext.h>
 #endif
 
+static void
+retry_pause(void)
+{
+#if defined(__wasi__)
+	int i;
+
+	for (i = 0; i < 64; i++)
+		sched_yield();
+#else
+	struct timespec delay = { .tv_sec = 0, .tv_nsec = 20L * 1000 * 1000 };
+
+	nanosleep(&delay, NULL);
+#endif
+}
+
 int main(void)
 {
 	struct sockaddr_in addr;
@@ -45,8 +60,7 @@ int main(void)
 		close(fd);
 		fd = -1;
 
-		struct timespec delay = { .tv_sec = 0, .tv_nsec = 20L * 1000 * 1000 };
-		nanosleep(&delay, NULL);
+		retry_pause();
 	}
 
 	if (fd < 0) {

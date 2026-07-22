@@ -18,7 +18,7 @@ typedef uint8_t byte;
 #include "../../../external/doomgeneric/doomgeneric/z_zone.h"
 
 #include "pymergetic/metal/fs/fs.h"
-#include "pymergetic/metal/shell/shell.h"
+#include "pymergetic/metal/shell/shell/shell.h"
 
 typedef struct {
 	wad_file_t wad;
@@ -48,7 +48,7 @@ W_Metal_OpenFile(char *path)
 		return NULL;
 	}
 
-	got = pm_metal_fs_read(path, (uint32_t)(uintptr_t)buf, len);
+	got = pm_metal_fs_read(path, PM_METAL_FS_IO_PTR(buf), len);
 	if (got != len) {
 		free(buf);
 		pm_metal_shell_log("metal-doom: wad read fail");

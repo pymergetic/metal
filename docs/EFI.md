@@ -88,7 +88,7 @@ allocator + WAMR + virtio MMIO/queues only.
 
 ### Locked decisions (Slice B)
 
-- Owned entry after EBS: **`pm_metal_efi_exit_boot_and_run`** → seed init task → **`pm_metal_run_enter`** (BSP main ends; pool is the program).
+- Owned entry after EBS: **`pm_metal_port_takeover_and_run`** → seed init task → **`pm_metal_run_enter`** (BSP main ends; pool is the program).
 - Minimum phase-1 success: **ExitBootServices returns success** and logs continue via Metal UART (COM1 / virtio-console), not ConOut/`Print`.
 
 ### Boot + unified log (current)
@@ -100,10 +100,10 @@ sync floor:
   APs wait → ExitBootServices → UART attach → seed init → run_enter
 
 pool (seeded init coro, BSP):
-  gfx → ui (+ log_attach_ui) → wasm → shell → metal-boot: ready → shell_poll
+  gfx → ui (+ log_attach_ui) → wasm → shell → ready → metal-boot: ready → shell_poll
 
 shutdown (shell `exit` / `quit` / `shutdown`):
-  reverse fini shell → wasm → ui → gfx → STOP runners → ResetSystem
+  stop shell → wasm → ui → gfx → STOP runners → ResetSystem
 
 net: lwIP (NO_SYS) on virtio-net L2; static IPv4 (SLIRP defaults);
      shell `net` / optional ESP `metal/net.conf`
@@ -112,7 +112,10 @@ manual: shell command `test` runs wasm proof suite (not on normal boot)
 ```
 
 Boot serial is one tree (`pymergetic metal` / `+-- mem` / `+-- devices` / init).  
-One API: `pm_metal_log` / `pm_metal_logf`. Headers mirror sources: `include/pymergetic/metal/<mod>/<mod>.h`.
+Headers mirror sources: `include/pymergetic/metal/<group>/<mod>/…`
+(`boot/`, `runtime/`, `bus/`, `dev/`, `fs/`, `guest/`, `shell/`).
+`dev/<class>/` holds class backends (virtio today; more NICs/GPUs later).
+One API: `pm_metal_log` / `pm_metal_logf`.
 
 ---
 
@@ -220,13 +223,16 @@ Primary bring-up machine: **QEMU + OVMF**, virt-class device set as we adopt vir
 ### Guests
 
 - Guest ABI (current scaffold): wasm + Metal imports from
-  `include/pymergetic/metal/{gfx,ui,shell,async,input,fs}.h`. Target ABI:
+  `include/pymergetic/metal/dev/{gfx,input,fs}.h`,
+  `shell/{ui,shell}.h`, and `runtime/async/async.h` (also via `metal.h`).
+  Target ABI:
   Metal async I/O + sync freestanding libc — **not** WASI as product surface
   (`docs/LIBC_ASYNC.md`). UI/async/input are handle-based. Guest await is real
   resume: export `pm_metal_guest_step` + host coro trampoline.
 - Proofs: PE-embedded **`hello`** / **`ui_hello`** / **`async_sleep`** /
-  **`async_fs`** / **`async_time`** / **`async_net`** / **`async_audio`**.
-  Verify greps `metal-wasm: t0_hello ok`, `metal-async: sleep|fs|time|net|audio ok`,
+  **`async_fs`** / **`async_time`** / **`async_net`** / **`async_audio`** /
+  **`async_blk`**.
+  Verify greps `metal-wasm: t0_hello ok`, `metal-async: sleep|fs|time|net|audio|blk ok`,
   plus `metal-net: virtio-net` / `metal-audio: virtio-snd` when QEMU attaches devices.
 - **`doom` parked** (`mods/apps/doom` kept; not built/staged by default).
   Opt-in: `METAL_BUILD_DOOM=1` + optional `METAL_DOOM_DIR` staging.
@@ -236,7 +242,7 @@ Primary bring-up machine: **QEMU + OVMF**, virt-class device set as we adopt vir
 
 - [x] EDK2 builds `metal.efi` and it boots under QEMU/OVMF
 - [x] Slice A ConOut marker
-- [x] ExitBootServices + owned runner pool (`pm_metal_efi_exit_boot_and_run`)
+- [x] ExitBootServices + owned runner pool (`pm_metal_port_takeover_and_run`)
 - [x] Slim WAMR (interp + libc-wasi) over Metal heap; WASI stdout → UI tab
 - [x] Run embedded wasm hello via shell / auto-init
 - [x] `./scripts/verify efi` watches for agreed success strings

@@ -6,8 +6,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 EDK2_INC="${ROOT}/external/edk2/MdePkg/Include"
 TLSF_INC="${ROOT}/external/tlsf"
 METAL_SRC="${ROOT}/src/pymergetic/metal"
-METAL_EFI_MEM="${ROOT}/src/efi/pymergetic/metal/mem"
-METAL_EFI_WAMR="${ROOT}/src/efi/pymergetic/metal/wamr"
+METAL_EFI_MEM="${ROOT}/src/pymergetic/metal/runtime/mem"
+METAL_EFI_WAMR="${ROOT}/src/pymergetic/metal/guest/wamr"
 WAMR_PLAT_INC="${ROOT}/src/efi/wamr/core/shared/platform/include"
 HOST_STUBS="${METAL_EFI_MEM}/host_stubs"
 METAL_PKG="${ROOT}/src/efi/MetalPkg"
@@ -27,8 +27,8 @@ edk2 = root / "external/edk2/MdePkg/Include"
 edk2_x64 = edk2 / "X64"
 tlsf = root / "external/tlsf"
 metal_src = root / "src/pymergetic/metal"
-efi_mem = root / "src/efi/pymergetic/metal/mem"
-efi_wamr = root / "src/efi/pymergetic/metal/wamr"
+efi_mem = root / "src/pymergetic/metal/runtime/mem"
+efi_wamr = root / "src/pymergetic/metal/guest/wamr"
 wamr_plat = root / "src/efi/wamr/core/shared/platform/include"
 wamr_utils = root / "src/efi/wamr/core/shared/utils"
 wamr_iwasm = root / "src/efi/wamr/core/iwasm/include"
@@ -37,11 +37,16 @@ stubs = efi_mem / "host_stubs"
 pkg = root / "src/efi/MetalPkg"
 inc_root = root / "include"
 out = root / "build/compile_commands.json"
-efi_net = root / "src/efi/pymergetic/metal/net"
-lwip_inc = root / "src/efi/lwip/src/include"
+efi_net = root / "src/pymergetic/metal/dev/net"
+lwip_inc = root / "external/lwip/src/include"
+mbedtls_inc = root / "external/mbedtls/include"
+mbedtls_cfg = (
+    "-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>"
+)
 inc = (
     f"-I{stubs} -I{edk2} -I{edk2_x64} -I{tlsf} -I{inc_root} "
     f"-I{metal_src} -I{pkg} -I{efi_mem} -I{efi_net} -I{lwip_inc} "
+    f"-I{mbedtls_inc} {mbedtls_cfg} "
     f"-I{efi_wamr} -I{wamr_plat} "
     f"-I{wamr_utils} -I{wamr_iwasm} -I{wamr_wasi} "
     f"-DBH_PLATFORM_METAL_EFI -DBH_PLATFORM_ZEPHYR "
@@ -54,23 +59,25 @@ base = (
     f"{inc} "
 )
 entries = []
-for rel in (
-    "src/efi/MetalPkg/main.c",
-    "src/efi/pymergetic/metal/mem/tlsf_edk2.c",
-    "src/efi/pymergetic/metal/net/lwip_sys.c",
-    "src/efi/pymergetic/metal/net/net_lwip.c",
-    "src/efi/pymergetic/metal/wamr/efi_platform.c",
-    "src/efi/pymergetic/metal/wamr/efi_thread.c",
-    "src/efi/pymergetic/metal/wamr/efi_socket.c",
-    "src/efi/pymergetic/metal/wamr/efi_wasi_fs.c",
-):
-    fpath = (root / rel).resolve()
-    if fpath.is_file() and edk2.is_dir():
-        entries.append({
-            "directory": str(root),
-            "command": f"{base}-c -o /dev/null {fpath}",
-            "file": str(fpath),
-        })
+# Exact per-file CDB for all Metal EFI sources — otherwise clangd infers from
+# a BIOS sibling (PmBiosUefi.h) or skips EDK2 -I and reports missing Uefi.h.
+if edk2.is_dir():
+    efi_files = []
+    for base_dir in (
+        root / "src/efi/MetalPkg",
+        root / "src/efi/pymergetic/metal",
+        efi_net,
+    ):
+        if base_dir.is_dir():
+            efi_files.extend(sorted(base_dir.rglob("*.c")))
+    for fpath in efi_files:
+        if fpath.is_file():
+            rp = fpath.resolve()
+            entries.append({
+                "directory": str(root),
+                "command": f"{base}-c -o /dev/null {rp}",
+                "file": str(rp),
+            })
 
 # doomgeneric Metal guests (wasm) — so editors resolve doomgeneric.h.
 wasi_sys = root / ".tools/wasi-sdk/share/wasi-sysroot"
@@ -97,6 +104,42 @@ if wasi_sys.is_dir() and dg_inc.is_dir():
                 "file": str(fpath),
             })
 
+# Metal BIOS shim — PmBiosUefi.h under src/bios/shim (not EDK2 Uefi.h).
+# Exact per-file CDB entries are required: clangd otherwise reuses the EFI
+# sibling (e.g. efi/.../net/net_lwip.c) and misses PmBiosUefi.h.
+bios_shim = root / "src/bios/shim"
+bios_metal = root / "src/bios/pymergetic/metal"
+bios_net = root / "src/pymergetic/metal/dev/net"
+bios_inc = (
+    f"-I{bios_shim} -I{inc_root} -I{metal_src} "
+    f"-I{bios_net} -I{lwip_inc} -I{mbedtls_inc} {mbedtls_cfg} "
+    f"-I{bios_metal / 'guest/wamr'} "
+    f"-I{bios_metal / 'runtime/mem/host_stubs'} "
+    f"-I{wamr_iwasm} -I{wamr_plat} -I{wamr_utils} "
+    f"-DBH_PLATFORM_METAL_BIOS -DBH_PLATFORM_METAL_EFI "
+    f"-DBH_PLATFORM_ZEPHYR -DBUILD_TARGET_X86_64 "
+    f"-DWASM_ENABLE_LIBC_WASI=1 "
+)
+bios_base = (
+    "/usr/bin/clang -std=c11 -ffreestanding -fno-stack-protector -m64 "
+    f"{bios_inc}"
+)
+bios_files = []
+for base_dir in (
+    root / "src/bios/shim",
+    root / "src/bios/BiosPkg",
+    bios_metal,
+):
+    if base_dir.is_dir():
+        bios_files.extend(sorted(base_dir.rglob("*.c")))
+for fpath in bios_files:
+    if fpath.is_file():
+        entries.append({
+            "directory": str(root),
+            "command": f"{bios_base}-c -o /dev/null {fpath.resolve()}",
+            "file": str(fpath.resolve()),
+        })
+
 out.write_text(json.dumps(entries, indent=2) + "\n")
 print(f"compile_commands.json: {len(entries)} entr(y/ies) -> {out}")
 if not (root / "external/edk2/MdePkg/Include/Uefi.h").is_file():
@@ -122,8 +165,10 @@ CLANG_EFI=(
 	-I"${METAL_SRC}"
 	-I"${METAL_PKG}"
 	-I"${METAL_EFI_MEM}"
-	-I"${ROOT}/src/efi/pymergetic/metal/net"
-	-I"${ROOT}/src/efi/lwip/src/include"
+	-I"${ROOT}/src/pymergetic/metal/dev/net"
+	-I"${ROOT}/external/lwip/src/include"
+	-I"${ROOT}/external/mbedtls/include"
+	'-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
 	-I"${METAL_EFI_WAMR}"
 	-I"${WAMR_PLAT_INC}"
 	-I"${ROOT}/src/efi/wamr/core/shared/utils"
@@ -142,8 +187,8 @@ if [[ -f "${EDK2_INC}/Uefi.h" && -f "${MAIN}" ]]; then
 		"${CLANG_EFI[@]}" "${TLSF_C}"
 		echo "ide: clang -fsyntax-only ok (${TLSF_C})"
 	fi
-	LWIP_SYS="${ROOT}/src/efi/pymergetic/metal/net/lwip_sys.c"
-	if [[ -f "${LWIP_SYS}" && -f "${ROOT}/src/efi/lwip/src/include/lwip/sys.h" ]]; then
+	LWIP_SYS="${ROOT}/src/pymergetic/metal/dev/net/lwip_sys.c"
+	if [[ -f "${LWIP_SYS}" && -f "${ROOT}/external/lwip/src/include/lwip/sys.h" ]]; then
 		"${CLANG_EFI[@]}" "${LWIP_SYS}"
 		echo "ide: clang -fsyntax-only ok (${LWIP_SYS})"
 	fi

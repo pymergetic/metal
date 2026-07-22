@@ -1,0 +1,15 @@
+-std=c11
+-ffreestanding
+-fno-stack-protector
+-target
+x86_64-unknown-windows
+-DEFIAPI=__attribute__((ms_abi))
+-I../../../../../../include
+-I../../../../../../external/edk2/MdePkg/Include
+-I../../../../../../external/edk2/MdePkg/Include/X64
+-I../../../../../../src/pymergetic/metal/runtime/mem/host_stubs
+-I../../../../../../src/pymergetic/metal
+-I../../../../../../src/pymergetic/metal/dev/net
+-I.
+-DBH_PLATFORM_METAL_EFI
+-DBUILD_TARGET_X86_64

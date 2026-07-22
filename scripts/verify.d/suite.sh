@@ -6,7 +6,7 @@
 #
 # Slices (every platform default must cover these where the port has support):
 #   basic t0/t1 | utils t3 | pid t4 | multimod t9←t8 | pthread t23
-#   net t31 | process+sockets | python --version + print(1)
+#   crypto t31 | process+sockets | python --version + print(1)
 #   tmpfs / populate / proc   (linux + zephyr; not yet nuttx)
 # shellcheck shell=bash
 
@@ -19,7 +19,7 @@ PM_SUITE_CORE_MODS=(
 	t8_multimod_lib.wasm
 	t9_multimod_app.wasm
 	t23_pthread.wasm
-	t31_net_util.wasm
+	t31_crypto.wasm
 )
 
 # Zephyr firmware markers — same list for qemu + native_sim.
@@ -28,8 +28,8 @@ PM_SUITE_ZEPHYR_MARKERS=(
 	"verify: basic exit=0"
 	"verify: utils exit=0"
 	"[ERROR] t3_util_native: at/above floor (expected)"
-	"t31_net_util: net http ok"
-	"verify: net exit=0"
+	"t31_crypto: aead round-trip ok"
+	"verify: crypto exit=0"
 	"t23_pthread: worker wrote 42"
 	"verify: tmpfs exit=0"
 	"verify: tmpfs-indep next open fail is expected"
@@ -66,7 +66,7 @@ pm_suite_stage_mods() {
 pm_suite_expect_scripted() {
 	local t0b="${1:-t0_hello}" t1b="${2:-t1_read}" t3b="${3:-t3_util_native}"
 	local t4b="${4:-t4_getpid}" t9b="${5:-t9_multimod_app}" t23b="${6:-t23_pthread}"
-	local t31b="${7:-t31_net_util}"
+	local t31b="${7:-t31_crypto}"
 
 	pm_expect - "t0_hello" "missing t0_hello output"
 	pm_expect - "hello from vfs root" "missing t1_read output (vfs root not shared/1:1)"
@@ -97,15 +97,12 @@ pm_suite_expect_scripted() {
 	pm_expect - "t23_pthread: worker wrote 42" "guest pthread_create/join did not share worker write"
 	pm_expect_re - "${t23b}\\.wasm: exit=0" "t23 did not exit 0"
 
-	pm_expect - "t31_net_util: hash ok" "t31 hash"
-	pm_expect - "t31_net_util: aead round-trip ok" "t31 aead"
-	pm_expect_re - "t31_net_util: net dns n=[0-9]+" "t31 net dns"
-	pm_expect - "t31_net_util: net http ok" "t31 net http"
-	pm_expect_re - "t31_net_util: ntp unix=[0-9]+" "t31 ntp"
+	pm_expect - "t31_crypto: hash ok" "t31 hash"
+	pm_expect - "t31_crypto: aead round-trip ok" "t31 aead"
 	pm_expect_re - "${t31b}\\.wasm: exit=0" "t31 did not exit 0"
 }
 
-# Same as pm_suite_expect_scripted but without t31 (NuttX qemu: no HTTPS yet).
+# Same as pm_suite_expect_scripted (historical alias for ports that skip t31).
 pm_suite_expect_scripted_no_net() {
 	local t0b="${1:-t0_hello}" t1b="${2:-t1_read}" t3b="${3:-t3_util_native}"
 	local t4b="${4:-t4_getpid}" t9b="${5:-t9_multimod_app}" t23b="${6:-t23_pthread}"

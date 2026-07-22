@@ -1,5 +1,7 @@
 /*
  * Symbol export — public API always on; kernel API gated by PM_METAL_BUILD_KERNEL.
+ *
+ * impl: none — header-only (API visibility macros)
  */
 #ifndef PYMERGETIC_METAL_EXPORT_H_
 #define PYMERGETIC_METAL_EXPORT_H_

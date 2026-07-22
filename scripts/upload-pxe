@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Upload Metal i386 PXE drop to OpenWrt TFTP root.
+# Usage: scripts/upload-pxe [--build]
+#
+# Defaults (override with env):
+#   METAL_PXE_HOST=192.168.10.1
+#   METAL_PXE_USER=root
+#   METAL_PXE_PATH=/storage/tftp
+#   METAL_PXE_SSH_OPTS=   # e.g. -i ~/.ssh/openwrt
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PXE="${ROOT}/build/bios/pxe"
+HOST="${METAL_PXE_HOST:-192.168.10.1}"
+USER="${METAL_PXE_USER:-root}"
+DEST="${METAL_PXE_PATH:-/storage/tftp}"
+SSH_EXTRA="${METAL_PXE_SSH_OPTS:-}"
+BUILD=0
+
+usage() {
+	cat >&2 <<'EOF'
+usage: scripts/upload-pxe [--build]
+
+  Copy build/bios/pxe/{metal.elf,metal.ipxe} → USER@HOST:DEST
+
+  --build   run ./scripts/build bios i386 first
+
+Env:
+  METAL_PXE_HOST      default 192.168.10.1
+  METAL_PXE_USER      default root
+  METAL_PXE_PATH      default /storage/tftp
+  METAL_PXE_SSH_OPTS  extra ssh/scp options (e.g. -i ~/.ssh/openwrt)
+EOF
+	exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	-h | --help | help) usage ;;
+	--build) BUILD=1 ;;
+	*) usage ;;
+	esac
+	shift
+done
+
+if [[ "${BUILD}" -eq 1 ]]; then
+	"${ROOT}/scripts/build" bios i386
+fi
+
+if [[ ! -f "${PXE}/metal.elf" || ! -f "${PXE}/metal.ipxe" ]]; then
+	echo "upload-pxe: missing ${PXE}/metal.{elf,ipxe} — run: ./scripts/build bios i386" >&2
+	exit 1
+fi
+
+TARGET="${USER}@${HOST}:${DEST}/"
+HTTP="http://${HOST}:8080/"
+echo "upload-pxe: ${PXE}/{metal.elf,metal.ipxe} → ${TARGET}"
+echo "upload-pxe: HTTP mirror (OpenWrt already exports TFTP dir): ${HTTP}"
+
+# OpenWrt: no rsync, often no sftp-server → force legacy SCP (-O).
+# shellcheck disable=SC2086
+scp -O ${SSH_EXTRA} \
+	"${PXE}/metal.elf" "${PXE}/metal.ipxe" \
+	"${TARGET}"
+
+# shellcheck disable=SC2086
+ssh ${SSH_EXTRA} "${USER}@${HOST}" \
+	"ls -la '${DEST}/metal.elf' '${DEST}/metal.ipxe'"
+
+echo "upload-pxe: ok — verify ${HTTP}metal.elf"

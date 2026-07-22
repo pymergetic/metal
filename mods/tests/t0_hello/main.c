@@ -1,7 +1,7 @@
 /*
  * T0 — hello via Metal shell_log (no WASI stdio).
  */
-#include "pymergetic/metal/shell/shell.h"
+#include "pymergetic/metal/shell/shell/shell.h"
 
 int
 main(void)
