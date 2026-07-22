@@ -9,8 +9,8 @@
 
 #include "../../../external/doomgeneric/doomgeneric/doomgeneric.h"
 
-#include "pymergetic/metal/async/async.h"
-#include "pymergetic/metal/shell/shell.h"
+#include "pymergetic/metal/runtime/async/async.h"
+#include "pymergetic/metal/shell/shell/shell.h"
 
 /* From d_loop.c — avoid d_loop.h (pulls doomtype.h → <strings.h>). */
 extern int singletics;

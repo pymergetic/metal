@@ -15,6 +15,21 @@
 #include <wasi_socket_ext.h>
 #endif
 
+static void
+retry_pause(void)
+{
+#if defined(__wasi__)
+	int i;
+
+	for (i = 0; i < 64; i++)
+		sched_yield();
+#else
+	struct timespec delay = { .tv_sec = 0, .tv_nsec = 20L * 1000 * 1000 };
+
+	nanosleep(&delay, NULL);
+#endif
+}
+
 int main(void)
 {
 	struct sockaddr_in addr;
@@ -59,8 +74,7 @@ int main(void)
 		if (sendto(fd, msg, msg_len, 0, (struct sockaddr *)&addr, sizeof(addr))
 		    < 0) {
 			close(fd);
-			struct timespec delay = { .tv_sec = 0, .tv_nsec = 20L * 1000 * 1000 };
-			nanosleep(&delay, NULL);
+			retry_pause();
 			continue;
 		}
 
@@ -77,8 +91,7 @@ int main(void)
 			}
 		}
 
-		struct timespec delay = { .tv_sec = 0, .tv_nsec = 20L * 1000 * 1000 };
-		nanosleep(&delay, NULL);
+		retry_pause();
 	}
 
 	printf("t25_udp_client: sendto/recvfrom never succeeded\n");

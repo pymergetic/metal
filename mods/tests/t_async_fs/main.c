@@ -4,9 +4,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "pymergetic/metal/async/async.h"
+#include "pymergetic/metal/runtime/async/async.h"
 #include "pymergetic/metal/fs/fs.h"
-#include "pymergetic/metal/shell/shell.h"
+#include "pymergetic/metal/shell/shell/shell.h"
 
 #define ASYNC_FS_PATH "mods/tests/async_fs.txt"
 #define ASYNC_FS_OUT "mods/tests/async_fs_out.txt"

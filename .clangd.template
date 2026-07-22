@@ -8,18 +8,22 @@ CompileFlags:
     - -std=c11
     - -I@@ROOT@@
     - -I@@ROOT@@/include
+    # Always visible: Metal WAMR platform + freestanding libc stubs.
+    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+    - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
     # Always visible so quoted WAMR platform includes resolve even if a
     # PathMatch fragment is skipped (clangd matches absolute paths).
-    - -I@@ROOT@@/src/efi/pymergetic/metal/wamr
+    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
     - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
-    - -I@@ROOT@@/src/efi/pymergetic/metal/mem/host_stubs
-    # lwIP (NO_SYS) — always visible; PathMatch fragments alone are easy to miss.
-    - -I@@ROOT@@/src/efi/pymergetic/metal/net
-    - -I@@ROOT@@/src/efi/lwip/src/include
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+    # lwIP -I lives in efi/bios PathMatch + CDB only — a global EFI net -I
+    # steals bios/.../dev/net (wrong lwipopts.h / PmBiosUefi.h).
 
 ---
 # metal.efi sources — EDK2 MdePkg (clangd; real build is EDK2 `build`).
-# CompilationDatabase: None so we never borrow a host/linux CDB entry.
+# CompilationDatabase None: clangd otherwise fuzzy-matches same basenames
+# (virtio_snd.c, net_lwip.c, …) to the BIOS CDB entry and drops Uefi.h.
 # PathMatch is unanchored so it matches absolute URIs/paths too.
 If:
   PathMatch: .*/src/efi/.*\.(c|h)$
@@ -35,15 +39,17 @@ CompileFlags:
     - "-DEFIAPI=__attribute__((ms_abi))"
     - -I@@ROOT@@/external/edk2/MdePkg/Include
     - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
-    - -I@@ROOT@@/src/efi/pymergetic/metal/mem/host_stubs
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
     - -I@@ROOT@@/external/tlsf
     - -I@@ROOT@@/include
     - -I@@ROOT@@/src/pymergetic/metal
     - -I@@ROOT@@/src/efi/MetalPkg
     - -I@@ROOT@@/src/efi/pymergetic/metal/mem
-    - -I@@ROOT@@/src/efi/pymergetic/metal/net
-    - -I@@ROOT@@/src/efi/lwip/src/include
-    - -I@@ROOT@@/src/efi/pymergetic/metal/wamr
+    - -I@@ROOT@@/src/pymergetic/metal/dev/net
+    - -I@@ROOT@@/external/lwip/src/include
+    - -I@@ROOT@@/external/mbedtls/include
+    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
     - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
     - -I@@ROOT@@/src/efi/wamr/core/shared/utils
     - -I@@ROOT@@/src/efi/wamr/core/iwasm/include
@@ -69,14 +75,16 @@ CompileFlags:
     - "-DEFIAPI=__attribute__((ms_abi))"
     - -I@@ROOT@@/external/edk2/MdePkg/Include
     - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
-    - -I@@ROOT@@/src/efi/pymergetic/metal/mem/host_stubs
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
     - -I@@ROOT@@/external/tlsf
     - -I@@ROOT@@/include
     - -I@@ROOT@@/src/pymergetic/metal
     - -I@@ROOT@@/src/efi/pymergetic/metal/mem
-    - -I@@ROOT@@/src/efi/pymergetic/metal/net
-    - -I@@ROOT@@/src/efi/lwip/src/include
-    - -I@@ROOT@@/src/efi/pymergetic/metal/wamr
+    - -I@@ROOT@@/src/pymergetic/metal/dev/net
+    - -I@@ROOT@@/external/lwip/src/include
+    - -I@@ROOT@@/external/mbedtls/include
+    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
     - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
     - -I@@ROOT@@/src/efi/wamr/core/shared/utils
     - -I@@ROOT@@/src/efi/wamr/core/iwasm/include
@@ -87,17 +95,18 @@ CompileFlags:
     - -DWASM_ENABLE_LIBC_WASI=1
 
 ---
-# EFI WAMR platform .c — use compile_commands.json (setup ide), not "None".
-# Must come after the broader src/efi PathMatch so it overrides CompilationDatabase.
+# EFI WAMR platform .c — full EDK2 -I (never BIOS sibling CDB).
 If:
-  PathMatch: .*/src/efi/pymergetic/metal/wamr/.*\.(c|h)$
+  PathMatch: .*/src/pymergetic/metal/guest/wamr/.*\.(c|h)$
 CompileFlags:
-  CompilationDatabase: "@@ROOT@@"
+  CompilationDatabase: "None"
   Compiler: /usr/bin/clang
   Add:
-    - -I@@ROOT@@/src/efi/pymergetic/metal/wamr
+    - -I@@ROOT@@/external/edk2/MdePkg/Include
+    - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
+    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
     - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
-    - -I@@ROOT@@/src/efi/pymergetic/metal/mem/host_stubs
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
     - -I@@ROOT@@/src/efi/wamr/core/shared/utils
     - -I@@ROOT@@/src/efi/wamr/core/iwasm/include
     - -I@@ROOT@@/src/efi/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
@@ -109,20 +118,62 @@ CompileFlags:
     - -DWASM_ENABLE_LIBC_WASI=1
 
 ---
-# EFI net / lwIP — use compile_commands.json (setup ide) for <lwip/*.h>.
+# EFI net / lwIP + mbedTLS — full EDK2 -I (never BIOS sibling CDB).
 If:
-  PathMatch: .*/src/efi/pymergetic/metal/net/.*\.(c|h)$
+  PathMatch: .*/src/pymergetic/metal/dev/net/.*\.(c|h)$
 CompileFlags:
-  CompilationDatabase: "@@ROOT@@"
+  CompilationDatabase: "None"
   Compiler: /usr/bin/clang
   Add:
-    - -I@@ROOT@@/src/efi/pymergetic/metal/net
-    - -I@@ROOT@@/src/efi/lwip/src/include
-    - -I@@ROOT@@/src/efi/pymergetic/metal/mem/host_stubs
+    - -std=c11
+    - -ffreestanding
+    - -fno-stack-protector
+    - -target
+    - x86_64-unknown-windows
+    - "-DEFIAPI=__attribute__((ms_abi))"
+    - -I@@ROOT@@/external/edk2/MdePkg/Include
+    - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
+    - -I@@ROOT@@/src/pymergetic/metal/dev/net
+    - -I@@ROOT@@/external/lwip/src/include
+    - -I@@ROOT@@/external/mbedtls/include
+    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
     - -I@@ROOT@@/include
     - -I@@ROOT@@/src/pymergetic/metal
     - -DBH_PLATFORM_METAL_EFI
     - -DBUILD_TARGET_X86_64
+
+---
+# Metal BIOS freestanding shim (not EDK2) — Multiboot metal.elf / metal.boot.elf.
+# CompilationDatabase None: clangd otherwise fuzzy-matches same basenames
+# (net_lwip.c, virtio_blk.c, …) to the EFI CDB entry and drops PmBiosUefi.h.
+If:
+  PathMatch: .*/src/bios/.*\.(c|h|S)$
+CompileFlags:
+  CompilationDatabase: "None"
+  Compiler: /usr/bin/clang
+  Add:
+    - -std=c11
+    - -ffreestanding
+    - -fno-stack-protector
+    - -m64
+    - -I@@ROOT@@/src/bios/shim
+    - -I@@ROOT@@/include
+    - -I@@ROOT@@/src/pymergetic/metal
+    - -I@@ROOT@@/src/pymergetic/metal/dev/net
+    - -I@@ROOT@@/external/lwip/src/include
+    - -I@@ROOT@@/external/mbedtls/include
+    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+    - -I@@ROOT@@/src/bios/pymergetic/metal/guest/wamr
+    - -I@@ROOT@@/src/bios/pymergetic/metal/runtime/mem/host_stubs
+    - -I@@ROOT@@/src/efi/wamr/core/iwasm/include
+    - -I@@ROOT@@/src/efi/wamr/core/shared/platform/include
+    - -I@@ROOT@@/src/efi/wamr/core/shared/utils
+    - -DBH_PLATFORM_METAL_BIOS
+    - -DBH_PLATFORM_METAL_EFI
+    - -DBH_PLATFORM_ZEPHYR
+    - -DBUILD_TARGET_X86_64
+    - -DWASM_ENABLE_LIBC_WASI=1
 
 ---
 # Guest test mods (wasm) — optional; needs ./scripts/setup tools for wasi-sysroot.

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Vendors lwIP into external/lwip (gitignored — see docs/SOURCETREE.md
 # "Vendoring"). Optional patches/lwip/*.patch if present.
+# No src/efi symlink — Metal.inf / -I point at external/lwip directly.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -23,8 +24,7 @@ for patch in "${ROOT}"/patches/lwip/*.patch; do
 done
 shopt -u nullglob
 
-# EDK2 Sources paths live under src/efi/ (same pattern as wamr).
-ln -sfn ../../external/lwip "${ROOT}/src/efi/lwip"
+# Drop legacy symlink if present (older setup created src/efi/lwip).
+rm -f "${ROOT}/src/efi/lwip"
 
 echo "external/lwip -> ${LWIP_REF}"
-echo "src/efi/lwip -> ../../external/lwip"

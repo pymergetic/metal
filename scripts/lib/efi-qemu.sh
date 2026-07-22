@@ -34,9 +34,9 @@ pm_metal_efi_stage_esp() {
 	mkdir -p "${esp}/EFI/BOOT"
 	cp -f "${efi}" "${esp}/EFI/BOOT/BOOTX64.EFI"
 
-	# Marker for embedded async_fs proof (Metal awaitable FS).
-	mkdir -p "${esp}/mods/tests"
-	printf 'metal-async-fs\n' >"${esp}/mods/tests/async_fs.txt"
+  # Marker for embedded async_fs proof (Metal awaitable FS).
+  mkdir -p "${esp}/mods/tests"
+  printf 'metal-async-fs\n' >"${esp}/mods/tests/async_fs.txt"
 
 	if [[ -n "${doom_dir}" && -f "${doom_dir}/doom.wasm" && -f "${doom_dir}/doom1.wad" ]]; then
 		mkdir -p "${esp}/mods/apps/doom"

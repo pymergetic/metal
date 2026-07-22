@@ -1,7 +1,7 @@
 /*
  * Leveled log formatting — global capture floor + "[LEVEL] msg" framing.
  *
- * Single implementation, host-side only (src/common/pymergetic/metal/util/
+ * Single implementation, host-side only (src/pymergetic/metal/util/
  * log.c) — see util/size.h for the general pattern this follows. Two
  * differences from size.h/arena.h forced a small contract change here
  * instead of a straight port:
@@ -22,6 +22,9 @@
  * This header is deliberately not aware of consoles/sinks/panes of any
  * kind — it only decides "is this message even worth keeping" (the one
  * global floor below) and how to frame what survives that check.
+ *
+ * impl: common — src/pymergetic/metal/util/log.c
+ * impl: wasi import — src/pymergetic/metal/util/log.c (wasm32 only)
  */
 #ifndef PYMERGETIC_METAL_UTIL_LOG_H_
 #define PYMERGETIC_METAL_UTIL_LOG_H_
@@ -68,8 +71,8 @@ typedef enum pm_metal_log_stream {
  * init()/main() before other threads exist, which is the only place this
  * codebase calls it today.
  *
- * impl: common — src/common/pymergetic/metal/util/log.c
- * impl: wasi import — src/common/pymergetic/metal/util/log.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/log.c
+ * impl: wasi import — src/pymergetic/metal/util/log.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern void pm_metal_util_log_set_level(pm_metal_log_level_t level)
@@ -88,8 +91,8 @@ pm_metal_log_level_t pm_metal_util_log_get_level(void);
  * works as a real import too (see util/size.h's format() for the same
  * idiom). Returns snprintf-style length, -1 on error.
  *
- * impl: common — src/common/pymergetic/metal/util/log.c
- * impl: wasi import — src/common/pymergetic/metal/util/log.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/log.c
+ * impl: wasi import — src/pymergetic/metal/util/log.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_log_level_name(pm_metal_log_level_t level, char *out, size_t cap)
@@ -103,8 +106,8 @@ int pm_metal_util_log_level_name(pm_metal_log_level_t level, char *out, size_t c
  * (checked first, before touching `stream` at all) — otherwise a complete
  * no-op. `msg` is one already-formatted line, no trailing newline.
  *
- * impl: common — src/common/pymergetic/metal/util/log.c
- * impl: wasi import — src/common/pymergetic/metal/util/log.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/log.c
+ * impl: wasi import — src/pymergetic/metal/util/log.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern void pm_metal_util_log_write(pm_metal_log_stream_t stream, pm_metal_log_level_t level,
@@ -122,8 +125,8 @@ void pm_metal_util_log_write(pm_metal_log_stream_t stream, pm_metal_log_level_t 
  * should never be dropped by the level floor or tagged with a severity it
  * doesn't have.
  *
- * impl: common — src/common/pymergetic/metal/util/log.c
- * impl: wasi import — src/common/pymergetic/metal/util/log.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/log.c
+ * impl: wasi import — src/pymergetic/metal/util/log.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern void pm_metal_util_log_write_raw(pm_metal_log_stream_t stream, const char *msg)
@@ -139,7 +142,7 @@ void pm_metal_util_log_write_raw(pm_metal_log_stream_t stream, const char *msg);
  * libc vsnprintf to do the same formatting locally before calling the
  * fixed-signature primitives above directly.
  *
- * impl: common — src/common/pymergetic/metal/util/log.c
+ * impl: common — src/pymergetic/metal/util/log.c
  */
 void pm_metal_util_log_writef(pm_metal_log_stream_t stream, pm_metal_log_level_t level,
 			       const char *fmt, ...);
@@ -153,7 +156,7 @@ void pm_metal_util_log_write_rawf(pm_metal_log_stream_t stream, const char *fmt,
  * might import these (runtime.c's init() is the only caller today). Returns
  * 0 on success, -1 if WAMR rejected the registration.
  *
- * impl: common — src/common/pymergetic/metal/util/log.c
+ * impl: common — src/pymergetic/metal/util/log.c
  */
 int pm_metal_util_log_native_register(void);
 #endif

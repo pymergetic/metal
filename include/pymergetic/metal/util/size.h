@@ -1,7 +1,7 @@
 /*
  * Byte-count formatting — binary-prefix (KiB/MiB/GiB/TiB) human strings.
  *
- * Single implementation, host-side only (src/common/pymergetic/metal/util/
+ * Single implementation, host-side only (src/pymergetic/metal/util/
  * size.c) — mods never link a copy of it. On wasm32 the declarations below
  * are wasi-style imports instead of ordinary prototypes: no local body
  * exists in a mod's own .wasm at all, the calls are resolved against
@@ -9,6 +9,9 @@
  * same file) at wasm_runtime_instantiate() time, exactly like a real WASI
  * import. The host build of this same header (native target, no __wasm__)
  * declares plain C prototypes instead, backed directly by size.c.
+ *
+ * impl: common — src/pymergetic/metal/util/size.c
+ * impl: wasi import — src/pymergetic/metal/util/size.c (wasm32 only)
  */
 #ifndef PYMERGETIC_METAL_UTIL_SIZE_H_
 #define PYMERGETIC_METAL_UTIL_SIZE_H_
@@ -34,8 +37,8 @@
  * Format bytes using binary prefixes (KiB/MiB/GiB/TiB) — largest unit with
  * value >= 1, integer division. Returns snprintf-style length, -1 on error.
  *
- * impl: common — src/common/pymergetic/metal/util/size.c
- * impl: wasi import — src/common/pymergetic/metal/util/size.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/size.c
+ * impl: wasi import — src/pymergetic/metal/util/size.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_size_format(char *out, size_t cap, uint64_t bytes)
@@ -48,8 +51,8 @@ int pm_metal_util_size_format(char *out, size_t cap, uint64_t bytes);
  * Format as "<bytes> (<human>)", e.g. "92946432 (88 MiB)". Returns
  * snprintf-style length, -1 on error.
  *
- * impl: common — src/common/pymergetic/metal/util/size.c
- * impl: wasi import — src/common/pymergetic/metal/util/size.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/size.c
+ * impl: wasi import — src/pymergetic/metal/util/size.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_size_format_bytes(char *out, size_t cap, uint64_t bytes)
@@ -68,7 +71,7 @@ int pm_metal_util_size_format_bytes(char *out, size_t cap, uint64_t bytes);
  * init() is the only caller today). Returns 0 on success, -1 if WAMR
  * rejected the registration.
  *
- * impl: common — src/common/pymergetic/metal/util/size.c
+ * impl: common — src/pymergetic/metal/util/size.c
  */
 int pm_metal_util_size_native_register(void);
 #endif

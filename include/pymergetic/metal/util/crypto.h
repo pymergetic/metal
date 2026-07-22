@@ -1,12 +1,14 @@
 /*
  * Authenticated encryption + hashing — thin wrapper around vendored
  * Monocypher (external/monocypher, pinned by scripts/setup monocypher).
- * Host-side only (src/common/pymergetic/metal/util/crypto.c); wasm32 mods
+ * Host-side only (src/pymergetic/metal/util/crypto.c); wasm32 mods
  * call through this module's wasi-style import bridge, never link
  * Monocypher themselves (same shape as util/lz4.h).
  *
  * Deliberately a small leaf API: Blake2b and ChaCha20-Poly1305 AEAD.
- * TLS/HTTPS lives in net/http.h (libcurl + mbedTLS), not here.
+ *
+ * impl: common — src/pymergetic/metal/util/crypto.c
+ * impl: wasi import — src/pymergetic/metal/util/crypto.c (wasm32 only)
  */
 #ifndef PYMERGETIC_METAL_UTIL_CRYPTO_H_
 #define PYMERGETIC_METAL_UTIL_CRYPTO_H_
@@ -34,8 +36,8 @@
  * Blake2b(msg) → hash (must be HASH_LEN bytes). Returns 0 on success, -1
  * if any pointer is NULL or hash_len != HASH_LEN.
  *
- * impl: common — src/common/pymergetic/metal/util/crypto.c
- * impl: wasi import — src/common/pymergetic/metal/util/crypto.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/crypto.c
+ * impl: wasi import — src/pymergetic/metal/util/crypto.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_crypto_hash(void *hash, size_t hash_len, const void *msg, size_t msg_len)
@@ -52,8 +54,8 @@ int pm_metal_util_crypto_hash(void *hash, size_t hash_len, const void *msg, size
  *
  * Buffer lengths are part of the contract (wasi *~ pairs need them).
  *
- * impl: common — src/common/pymergetic/metal/util/crypto.c
- * impl: wasi import — src/common/pymergetic/metal/util/crypto.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/crypto.c
+ * impl: wasi import — src/pymergetic/metal/util/crypto.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_crypto_aead_lock(void *cipher, size_t cipher_cap, void *mac, size_t mac_cap,
@@ -70,8 +72,8 @@ int pm_metal_util_crypto_aead_lock(void *cipher, size_t cipher_cap, void *mac, s
  * AEAD open: inverse of aead_lock(). Returns 0 on success, -1 on bad args
  * or authentication failure (plain is not written on MAC mismatch).
  *
- * impl: common — src/common/pymergetic/metal/util/crypto.c
- * impl: wasi import — src/common/pymergetic/metal/util/crypto.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/crypto.c
+ * impl: wasi import — src/pymergetic/metal/util/crypto.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_crypto_aead_unlock(void *plain, size_t plain_cap, const void *key, size_t key_len,
@@ -88,7 +90,7 @@ int pm_metal_util_crypto_aead_unlock(void *plain, size_t plain_cap, const void *
 /*
  * Registers this module's wasi-style imports. Call once from runtime init.
  *
- * impl: common — src/common/pymergetic/metal/util/crypto.c
+ * impl: common — src/pymergetic/metal/util/crypto.c
  */
 int pm_metal_util_crypto_native_register(void);
 #endif

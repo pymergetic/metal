@@ -18,6 +18,8 @@
  *
  * Union wire views (.wire, .wire[]) in fourcc/version alias .v on LE hosts
  * only; prefer macros or explicit load/store when host endianness is unknown.
+ *
+ * impl: none — header-only (static inline)
  */
 #ifndef PYMERGETIC_METAL_UTIL_ENDIAN_H_
 #define PYMERGETIC_METAL_UTIL_ENDIAN_H_
@@ -48,7 +50,7 @@ extern "C" {
 #endif
 
 #ifndef PM_METAL_UTIL_ENDIAN_HOST_IS_LE
-/* Defined: src/common/pymergetic/metal/util/endian.c */
+/* Defined: src/pymergetic/metal/util/endian.c */
 PM_METAL_API(int, pm_metal_util_endian_host_is_le, (void));
 #else
 static inline int pm_metal_util_endian_host_is_le(void)

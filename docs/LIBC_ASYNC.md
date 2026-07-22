@@ -28,15 +28,15 @@ Opt-in later: `METAL_BUILD_DOOM=1`.
 | `printf` / console write | **sync façade** | Format + enqueue to UART/UI ring; never park the worker |
 | File data path (`open`/`read`/`write`/…) | **async** | Even if ESP is fast today — shape matches virtio-blk later |
 | `stat` / `fstat` / size probe | **async** | Same as read; avoid “sync meta, async data” split |
-| `lseek` | **sync** on open file handle | Cursor math in Metal; no I/O wait |
+| `lseek` | **sync** on open file handle | `pm_metal_fs_lseek(h, off, whence)` |
 | `mmap` / demand paging | **omit** | No MMU paging story; use `fs_read` into buffer |
 | Map already-owned buffer | **omit v1** | Revisit only if a real guest needs it |
 | `poll` / `select` / `epoll` / WASI `poll_oneoff` | **omit** | Metal runloop + handles |
 | `setjmp` / `longjmp` | **omit** | Breaks stackless await |
 | threads / signals / fork / dlopen | **omit** | 1 worker/CPU; Metal tasks/coros; Metal package load ≠ `dlopen` |
 | WASI as product ABI | **retire** | Scaffold only; no new guest deps on wasi-libc I/O |
-| Input | **sync poll** v1 (`poll_key_packed`) | Optional async “wait for key” later, not required now |
-| Gfx / UI / shell log | **sync** | Device kick + CPU; no await |
+| Input | **sync poll** v1 (`poll_key_event`) | Optional async “wait for key” later, not required now |
+| Gfx / UI / shell log | **sync** | Device kick + CPU; `gfx_present` sync. Optional `async_present` is an eager fence |
 
 ---
 
@@ -45,8 +45,9 @@ Opt-in later: `METAL_BUILD_DOOM=1`.
 | Surface | Class | Notes |
 |---------|-------|--------|
 | `pm_metal_async_*` (sleep_us/until, yield, await, present, mono_us) | **async** (+ sync get for mono) | See `docs/IO.md` |
-| `pm_metal_fs_{size,read,write}_async` + `fs_result` | **async** | Eager ESP ok; always `await` then `fs_result`. Sync size/read transitional (parked doom) |
-| `pm_metal_input_poll_key_packed` | **sync poll** | |
+| `pm_metal_fs_{open,close,fread,fwrite,fpread,fpwrite,stat,fstat,readdir,mkdir,unlink,rename,fsync}_async` + sync `lseek` | **async** (+ sync seek) | Fd-shaped v1 on ESP cache. Path `size/read/write_async` transitional |
+| `pm_metal_blk_{count,at,ready,capacity}` + `read/write_async` + `blk_result` | sync meta + **async** I/O | Eager virtq/PIO today; always `await` then `blk_result` |
+| `pm_metal_input_poll_key_event` | **sync poll** | Metal HID keycodes |
 | `pm_metal_gfx_*` | **sync** | |
 | `pm_metal_shell_*` / `pm_metal_ui_*` | **sync** | |
 | host TLSF / `malloc` / `memcpy` / `snprintf` | **sync** | Freestanding kit |
@@ -87,8 +88,9 @@ Opt-in later: `METAL_BUILD_DOOM=1`.
 | `poll` / `select` / `epoll` | **omit** | |
 | `fcntl` / `ioctl` zoo | **omit** | |
 | pipes / tty / stdio | **stream** class | See `docs/IO.md` — raw PTY first; cooked omit until needed |
-| `socket` / `connect` / `send` / `recv` | **async** (post-v1) | Same await shape |
-| `getaddrinfo` | **async** (post-v1) | |
+| `socket` / `connect` / `send` / `recv` | **async** | `pm_metal_net_*` + sync `send`; await then `pm_metal_async_result_u32` / `pm_metal_net_result` |
+| `http get` (HTTP/HTTPS) | **async** | `pm_metal_net_http_get` → await → `pm_metal_net_http_status` / `pm_metal_net_http_body_len` |
+| `getaddrinfo` | **async** | `pm_metal_net_dns` | |
 
 ---
 
@@ -141,7 +143,7 @@ Opt-in later: `METAL_BUILD_DOOM=1`.
 
 ### Step 3–5 notes (2026-07-20)
 
-- **FS:** `pm_metal_fs_size_async` / `read_async` / `write_async` → host coro → `await` → `pm_metal_fs_result(self)` (u32 on guest coro). ESP size uses GetInfo-only (`pm_metal_esp_file_size`); write create/truncates via SimpleFileSystem. Proof: embed `async_fs` + ESP `mods/tests/async_fs.txt` (+ write round-trip).
+- **FS:** fd-shaped `pm_metal_fs_*` on `pymergetic.metal.fs` — `open_async` → handle, sync `lseek`, `fread/fwrite/fpread/fpwrite`, `close`, namespace ops (`stat`, `readdir`, `mkdir`, `unlink`, `rename`, `fsync`). Path `size/read/write_async` remains transitional. Proofs: `async_fs`, `async_fs_fd` + ESP `mods/tests/async_fs.txt`.
 - **WASI:** embed `hello` uses `shell_log` (no printf). Instantiation sets **0** WASI preopens — no `/` → ESP. libc-wasi still linked for CRT/`proc_exit`; no new guest I/O deps.
 - **Runloop:** timer lock init in `pm_metal_run_init`; session pump uses `CpuPause` (no 1 ms `Stall`); `sleep(0)` completes eagerly (fairness via `yield`).
 

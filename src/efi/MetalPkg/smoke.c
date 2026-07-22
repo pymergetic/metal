@@ -8,13 +8,14 @@
 #include <Pi/PiMultiPhase.h>
 #include <Protocol/MpService.h>
 #include <Library/UefiBootServicesTableLib.h>
+#include <Library/BaseLib.h>
 #include <Library/CpuLib.h>
 
-#include <coro/coro.h>
-#include <task/task.h>
-#include <run/run.h>
-#include <time/time.h>
-#include <mem/mem.h>
+#include <runtime/coro/coro.h>
+#include <runtime/task/task.h>
+#include <runtime/run/run.h>
+#include <runtime/time/time.h>
+#include <runtime/mem/mem.h>
 #include <pymergetic/metal/log/log.h>
 
 #define METAL_SMOKE_ADD        100u

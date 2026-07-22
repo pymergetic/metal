@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Interactive runners (not verify).
-# Usage: scripts/run efi [--vnc N] [--no-vnc]
+# Usage: scripts/run efi|bios [--vnc N] [--no-vnc]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -8,10 +8,10 @@ PORT="${ROOT}/scripts/run.d/port"
 
 usage() {
 	cat >&2 <<'EOF'
-usage: scripts/run efi [--vnc N] [--no-vnc]
+usage: scripts/run efi|bios [--vnc N] [--no-vnc]
 
-  efi — QEMU+OVMF, fresh ESP every launch (fat:ro), serial on stdio
-        default: -vnc :1  (SSH tunnel localhost:5901)
+  efi  — QEMU+OVMF, fresh ESP every launch, serial on stdio
+  bios — QEMU+SeaBIOS Multiboot2 -kernel, serial on stdio
 EOF
 	exit 1
 }
@@ -24,6 +24,9 @@ case "${plat}" in
 -h | --help | help) usage ;;
 efi)
 	exec "${PORT}/efi/default.sh" "$@"
+	;;
+bios)
+	exec "${PORT}/bios/default.sh" "$@"
 	;;
 *) usage ;;
 esac

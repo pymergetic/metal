@@ -4,9 +4,11 @@
  * Boot: UEFI viewport (live) → EBS closes it (marker remembered) →
  * UART resumes from marker → UI pulls full history → last detach clears
  * the buffer. After that, only direct viewports remain.
+ *
+ * impl: common — src/pymergetic/metal/log/log.c
  */
-#ifndef PYMERGETIC_METAL_LOG_H_
-#define PYMERGETIC_METAL_LOG_H_
+#ifndef PYMERGETIC_METAL_LOG_LOG_H_
+#define PYMERGETIC_METAL_LOG_LOG_H_
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -73,4 +75,4 @@ void pm_metal_log_boot_complete(void);
 }
 #endif
 
-#endif /* PYMERGETIC_METAL_LOG_H_ */
+#endif /* PYMERGETIC_METAL_LOG_LOG_H_ */

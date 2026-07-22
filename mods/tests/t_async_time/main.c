@@ -4,8 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "pymergetic/metal/async/async.h"
-#include "pymergetic/metal/shell/shell.h"
+#include "pymergetic/metal/runtime/async/async.h"
+#include "pymergetic/metal/shell/shell/shell.h"
 
 typedef struct {
 	uint32_t step;

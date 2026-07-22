@@ -20,9 +20,9 @@ archived layout.
 
 Mods use **wasi-sdk sysroot** + `-I include/`. Start with `#include <pymergetic/metal/metal.h>`.
 
-**Exception — dual WASI-import headers (`util/`, `net/`, and EFI `gfx`/`ui`/`shell`):** small utilities (`util/size.h`, `util/arena.h`, `util/log.h`, `util/lz4.h`, `util/tar.h`, `util/crypto.h`) and the Metal networking surface (`net/addr.h`, `net/dns.h`, `net/udp.h`, `net/tcp.h`, `net/ntp.h`, `net/http.h`) are genuinely useful on both sides, but unlike everything else here there is only **one** implementation of them, ever — `src/common/pymergetic/metal/util/{size,arena,log,lz4,tar,crypto}.c` and `src/common/pymergetic/metal/net/{dns,udp,tcp,ntp,http}.c`, `impl: common`, linked into the runtime binary same as any other common module. A mod including one of these headers gets a *different* declaration on wasm32 than the runtime does on its native target: instead of an ordinary prototype backed by that mod's own compiled object code, it gets a real wasm import (`PM_METAL_WASI_IMPORT(module, name)` from `metal/wasi.h`, expanding to `__attribute__((import_module(module), import_name(#name)))`, guarded by `#if defined(__wasm__)` in the header itself) with **no local body at all** — resolved against that same `.c` file's own `wasm_runtime_register_natives()` call (each module registers its own small `NativeSymbol` table, called once from `runtime.c`'s `init()` — no shared central bridge file; WAMR's registration list is a plain linked list keyed by module-name string, so N independent calls under different names coexist without conflict) at `wasm_runtime_instantiate()` time, exactly like a real WASI import. `metal/wasi.h` only unifies the attribute *shape* — each header still picks its own `import_module` name (`PM_METAL_UTIL_ARENA_WASI_MODULE` = `"pymergetic.metal.util.arena"`, `PM_METAL_NET_DNS_WASI_MODULE` = `"pymergetic.metal.net.dns"`, …), one per module rather than one shared name, so none of these imports can ever collide with anything else, including each other; not the Emscripten-popularized `"env"` convention either way. Each name is a plain `#define`d string constant that both the guest-side attribute and that module's own host-side registration call build from, so they can never drift apart into two different strings. This is DRY in the stronger sense — one compiled implementation, not two copies of the same logic built for two targets — at the cost of a wasm import call replacing what would otherwise be a local function call. `net/{dns,udp,tcp,ntp,http}` sits **alongside** WASI sockets as a second Metal net API (socket fds opaque to WASI fd space). Pointer parameters/returns are always addresses in the *calling* module's own linear memory — WAMR auto-translates each at the import boundary.
+**Exception — dual WASI-import headers:** small utilities under `util/` (and product APIs below) use one host body + wasm import declarations. A mod including such a header gets a *different* declaration on wasm32 than the runtime does on native: a real wasm import (`PM_METAL_WASI_IMPORT` from `metal/wasi.h`) with **no local body** — resolved by that module's `wasm_runtime_register_natives()` (or the freestanding guest runner's central register). `metal/wasi.h` only unifies the attribute *shape*; each header picks its own `import_module` string. Pointer args are addresses in the *calling* module's linear memory.
 
-On the active **efi** target the same dual-header pattern applies to product surface APIs under `include/pymergetic/metal/{gfx,ui,shell,async,input,fs,audio,io,lifecycle,stream,net,random}.h` (see `docs/IO.md`). Guests import dual ABIs; EFI bodies + `*_native_register()` live in `src/efi/pymergetic/metal/…`. **UI/shell/async/input/stream/net guest ABIs are handle-based**. Host-only helpers stay `#if !__wasm__` (`net_ops.h` / `audio_ops.h` / `virtio.h`). Pluggable backends: `net/{net,net_null,virtio_net}.c`, `audio/{audio,audio_null,virtio_snd}.c`, shared `virtio/virtio_pci.c`. **doom is parked** (`docs/LIBC_ASYNC.md`).
+On the active **efi** / **bios** targets the dual-header pattern applies to product surface APIs under `include/pymergetic/metal/dev/{gfx,input,audio,stream,net,random,blk}.h`, `shell/{ui,shell,lifecycle}.h`, `runtime/async/async.h`, `fs/fs.h`, `util/` (incl. ascii), and related helpers (see `docs/IO.md`; also exported via `metal.h`). Guests import dual ABIs; host bodies + `*_native_register()` live under `src/pymergetic/metal/…` and `src/{efi,bios}/pymergetic/metal/…`, with guest natives centralized in `src/pymergetic/metal/guest/wasm/wasm.c`. **UI/shell/async/input/stream/net/blk guest ABIs are handle-based**. Host-only helpers stay `#if !__wasm__` (`dev/net/net_ops.h` / `dev/audio/audio_ops.h` / `dev/blk/blk_ops.h` / `bus/virtio/virtio.h`). Pluggable backends: `dev/net/{net,net_null,net_lwip,virtio_net}.c`, `dev/audio/{audio,audio_null,virtio_snd}.c`, `dev/blk/{virtio_blk,ide_ata}.c`, shared `bus/virtio/virtio_pci.c`. **doom is parked** (`docs/LIBC_ASYNC.md`).
 
 ---
 
@@ -141,8 +141,8 @@ pymergetic/metal/<module>/…/<stem>.h  →  pm_metal_<module>_…_<stem>_
 | `util/lz4.h` | `pm_metal_util_lz4_` | `pm_metal_util_lz4_compress()` |
 | `util/tar.h` | `pm_metal_util_tar_` | `pm_metal_util_tar_iter_next()` |
 | `util/crypto.h` | `pm_metal_util_crypto_` | `pm_metal_util_crypto_hash()` |
-| `net/ntp.h` | `pm_metal_net_ntp_` | `pm_metal_net_ntp_sync()` |
-| `net/http.h` | `pm_metal_net_http_` | `pm_metal_net_http_get()` |
+| `dev/net/net.h` | `pm_metal_net_` | async sockets (efi\|bios) |
+| `dev/net/http.h` | `pm_metal_net_http_` | async HTTP/HTTPS GET (efi\|bios) |
 
 Private `src/<plat>/` symbols: `static` or plat-local.
 
@@ -159,21 +159,14 @@ packages/metal/
 │   ├── mount/
 │   │   └── mount.h                # privileged mount()/umount() — wasi import on wasm32 (+ KERNEL); bridge in src/…/mount/mount.c
 │   ├── wasi.h                     # PM_METAL_WASI_IMPORT() — shared wasi-import attribute
-│   ├── net/
-│   │   ├── addr.h                 # portable IP address (types only)
-│   │   ├── dns.h                  # contract — wasi import; DNS → port/dns
-│   │   ├── udp.h                  # contract — wasi import; UDP → port/udp
-│   │   ├── tcp.h                  # contract — wasi import; TCP → port/tcp
-│   │   ├── ntp.h                  # contract — wasi import; SNTP over net/{dns,udp}
-│   │   ├── tls.h                  # host TLS trust (inline → port/tls); CA for http
-│   │   └── http.h                 # contract — wasi import; HTTP(S) → curl
 │   └── util/
-│       ├── size.h                 # contract — wasi import on wasm32, else src/common/…/size.c
-│       ├── arena.h                # contract — wasi import on wasm32, else src/common/…/arena.c
-│       ├── log.h                  # contract — wasi import on wasm32, else src/common/…/log.c
-│       ├── lz4.h                  # contract — wasi import on wasm32, else src/common/…/lz4.c (thin wrapper over external/lz4)
-│       ├── tar.h                  # contract — wasi import on wasm32, else src/common/…/tar.c (thin wrapper over external/microtar)
-│       └── crypto.h               # contract — wasi import; Monocypher (external/monocypher)
+│       ├── size.h                 # contract — wasi import on wasm32, else host body
+│       ├── arena.h                # contract — wasi import on wasm32, else host body
+│       ├── log.h                  # contract — wasi import on wasm32, else host body
+│       ├── lz4.h                  # contract — wasi import on wasm32, else host body
+│       ├── tar.h                  # contract — wasi import on wasm32, else host body
+│       ├── crypto.h               # contract — wasi import; Monocypher
+│       └── ascii.h                # FIGlet-ish banner render (efi|bios + guest)
 │
 ├── src/
 │   ├── common/pymergetic/metal/   # cross-target — runtime + contracts
@@ -185,11 +178,7 @@ packages/metal/
 │   │   ├── port/udp.h             # UDP OS floor (impl in src/<plat>/…/udp.c)
 │   │   ├── port/tcp.h             # TCP OS floor (impl in src/<plat>/…/tcp.c)
 │   │   ├── port/tls.h             # TLS trust-store OS floor (impl in src/<plat>/…/tls.c)
-│   │   ├── net/dns.c              # DNS wasi bridge (host: inline → port/dns)
-│   │   ├── net/udp.c              # UDP wasi bridge (host: inline → port/udp)
-│   │   ├── net/tcp.c              # TCP wasi bridge (host: inline → port/tcp)
-│   │   ├── net/ntp.c              # SNTP over net/{dns,udp} + wasi bridge
-│   │   ├── net/http.c             # HTTP(S) transport (curl) + wasi bridge; CA via net/tls
+│   │   ├── net/*.c                # archive only — not built on active efi|bios
 │   │   ├── memory/                # ops-struct contracts (impl in src/<plat>/)
 │   │   │   ├── memory.h           # convenience umbrella — re-exports the 4 below
 │   │   │   ├── ops.h              # shared struct layout + kind enum + resolve()
@@ -266,12 +255,16 @@ packages/metal/
 ├── mods/
 │   ├── tests/                     # harness .wasm sources → guest /mods/tests/<name>.wasm
 │   │   ├── t0_hello/main.c
-│   │   ├── t_async_sleep/main.c   # EFI guest async proof (pm_metal_guest_step)
-│   │   ├── t_async_fs/main.c      # EFI guest awaitable FS proof
+│   │   ├── t_async_sleep/main.c   # guest async proof (pm_metal_guest_step)
+│   │   ├── t_async_fs/main.c      # guest awaitable FS proof
+│   │   ├── t_async_time/main.c    # guest awaitable time proof
+│   │   ├── t_async_net/main.c     # guest awaitable net proof
+│   │   ├── t_async_audio/main.c   # guest awaitable audio proof
+│   │   ├── t_async_blk/main.c     # guest awaitable blk proof
 │   │   ├── t1_read/main.c
 │   │   ├── t2_env/main.c
 │   │   ├── t3_util_native/main.c  # util/{size,arena,log,lz4,tar}.h imports
-│   │   ├── t4_getpid/ … t31_net_util/  # process/pipe/socket/tmpfs/mount/proc/net/…
+│   │   ├── t4_getpid/ … t31_crypto/  # process/pipe/socket/tmpfs/mount/proc/crypto/…
 │   │   └── t8_multimod_lib/ + t9_multimod_app/  # multi-module (REACTOR on t8)
 │   └── apps/
 │       ├── doom/                  # parked (METAL_BUILD_DOOM=1); see docs/LIBC_ASYNC.md
@@ -333,12 +326,9 @@ packages/metal/
 | `port/udp` | `src/common/…/port/udp.h` | OS UDP open/sendto/recv/close — `impl: bind` |
 | `port/tcp` | `src/common/…/port/tcp.h` | OS TCP open/bind/listen/accept/connect/send/recv — `impl: bind` |
 | `port/tls` | `src/common/…/port/tls.h` | OS CA bundle path (embed PEM later) — `impl: bind` |
-| `net/dns` | `include/…/net/dns.h` | portable DNS floor → `port/dns` + wasi bridge |
-| `net/udp` | `include/…/net/udp.h` | portable UDP floor → `port/udp` + wasi bridge |
-| `net/tcp` | `include/…/net/tcp.h` | portable TCP floor → `port/tcp` + wasi bridge |
-| `net/tls` | `include/…/net/tls.h` | host TLS trust → `port/tls` (inline) |
-| `net/ntp` | `include/…/net/ntp.h` | SNTP over `net/{dns,udp}` + wasi bridge |
-| `net/http` | `include/…/net/http.h` | HTTP transport (curl when `PM_METAL_HAVE_CURL`) + wasi bridge; CA via `net/tls` |
+| `dev/net` | `include/…/dev/net/net.h` | product dual-ABI sockets (lwIP + virtio / null) |
+| `dev/net/http` | `include/…/dev/net/http.h` | HTTP/HTTPS GET client on `pm_metal_net_*` |
+| `dev/net/ops` | `include/…/dev/net/net_ops.h` | host pluggable backend ops |
 
 ---
 

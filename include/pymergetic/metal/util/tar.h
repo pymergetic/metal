@@ -22,7 +22,7 @@
  * code, and every entry stays exactly one fixed 512-byte header, no
  * variable-length lookahead when reading.
  *
- * Single implementation, host-side only (src/common/pymergetic/metal/
+ * Single implementation, host-side only (src/pymergetic/metal/
  * util/tar.c; see util/size.h for the general pattern this follows) — a
  * mod never links a byte of upstream microtar itself, only ever calls
  * through this module's own wasi-style import bridge, same as
@@ -33,6 +33,9 @@
  * chunked copy (iter_read()), writing takes the name as a NUL-terminated
  * '$' string and data as ordinary '*~' buffers, exactly like every other
  * util/ import here.
+ *
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #ifndef PYMERGETIC_METAL_UTIL_TAR_H_
 #define PYMERGETIC_METAL_UTIL_TAR_H_
@@ -69,8 +72,8 @@ typedef struct pm_metal_util_tar_iter {
  * Does not read or validate anything yet; the first header is only
  * touched by the first iter_next() call.
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
- * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern void pm_metal_util_tar_iter_init(pm_metal_util_tar_iter_t *it, const void *buf, size_t len)
@@ -86,8 +89,8 @@ void pm_metal_util_tar_iter_init(pm_metal_util_tar_iter_t *it, const void *buf, 
  * (bad checksum/magic) or one that runs past the buffer given to
  * init().
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
- * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_tar_iter_next(pm_metal_util_tar_iter_t *it)
@@ -102,8 +105,8 @@ int pm_metal_util_tar_iter_next(pm_metal_util_tar_iter_t *it);
  * the name's length, or -1 if there is no current entry or cap is too
  * small.
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
- * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_tar_iter_name(const pm_metal_util_tar_iter_t *it, char *out, size_t cap)
@@ -116,8 +119,8 @@ int pm_metal_util_tar_iter_name(const pm_metal_util_tar_iter_t *it, char *out, s
  * Current entry's byte size (0 for directories, or if there is no
  * current entry).
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
- * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern uint64_t pm_metal_util_tar_iter_size(const pm_metal_util_tar_iter_t *it)
@@ -130,8 +133,8 @@ uint64_t pm_metal_util_tar_iter_size(const pm_metal_util_tar_iter_t *it);
  * 1 if the current entry is a directory, 0 if a regular file, -1 if
  * there is no current entry.
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
- * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_tar_iter_is_dir(const pm_metal_util_tar_iter_t *it)
@@ -149,8 +152,8 @@ int pm_metal_util_tar_iter_is_dir(const pm_metal_util_tar_iter_t *it);
  * holding it whole in RAM. Returns bytes copied (0 once the entry is
  * exhausted), or -1 on a truncated/malformed entry or no current entry.
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
- * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_tar_iter_read(pm_metal_util_tar_iter_t *it, void *dst, size_t dst_cap)
@@ -163,8 +166,8 @@ int pm_metal_util_tar_iter_read(pm_metal_util_tar_iter_t *it, void *dst, size_t 
  * Release the host slot for this iterator. Safe on a zeroed or already
  * closed handle.
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
- * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern void pm_metal_util_tar_iter_close(pm_metal_util_tar_iter_t *it)
@@ -185,8 +188,8 @@ typedef struct pm_metal_util_tar_writer {
  * Starts building an archive into buf (capacity cap) — buf is owned by
  * the caller for the writer's lifetime, init() never allocates.
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
- * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern void pm_metal_util_tar_writer_init(pm_metal_util_tar_writer_t *w, void *buf, size_t cap)
@@ -203,8 +206,8 @@ void pm_metal_util_tar_writer_init(pm_metal_util_tar_writer_t *w, void *buf, siz
  * wouldn't fit in the writer's own capacity, name is too long, or a
  * previous entry's put_data() calls didn't yet add up to its own size.
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
- * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_tar_writer_put_header(pm_metal_util_tar_writer_t *w, const char *name,
@@ -225,8 +228,8 @@ int pm_metal_util_tar_writer_put_header(pm_metal_util_tar_writer_t *w, const cha
  * overflow (writer capacity) or overrun (more bytes than that entry's
  * own header promised).
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
- * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_tar_writer_put_data(pm_metal_util_tar_writer_t *w, const void *src,
@@ -242,8 +245,8 @@ int pm_metal_util_tar_writer_put_data(pm_metal_util_tar_writer_t *w, const void 
  * src_len are ignored (pass NULL/0). Returns 0, or -1 (see put_header()/
  * put_data() above for the cases that can fail).
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
- * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int pm_metal_util_tar_writer_put(pm_metal_util_tar_writer_t *w, const char *name, int is_dir,
@@ -262,8 +265,8 @@ int pm_metal_util_tar_writer_put(pm_metal_util_tar_writer_t *w, const char *name
  * don't fit in the writer's own capacity or the last entry is still
  * incomplete.
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
- * impl: wasi import — src/common/pymergetic/metal/util/tar.c (wasm32 only)
+ * impl: common — src/pymergetic/metal/util/tar.c
+ * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
 extern int64_t pm_metal_util_tar_writer_finish(pm_metal_util_tar_writer_t *w)
@@ -281,7 +284,7 @@ int64_t pm_metal_util_tar_writer_finish(pm_metal_util_tar_writer_t *w);
  * these (runtime.c's init() is the only caller today). Returns 0 on
  * success, -1 if WAMR rejected the registration.
  *
- * impl: common — src/common/pymergetic/metal/util/tar.c
+ * impl: common — src/pymergetic/metal/util/tar.c
  */
 int pm_metal_util_tar_native_register(void);
 #endif

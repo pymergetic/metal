@@ -1,9 +1,9 @@
 /*
  * EFI guest smoke — Metal ui + gfx imports (surface-clipped draw).
  */
-#include "pymergetic/metal/gfx/gfx.h"
-#include "pymergetic/metal/shell/shell.h"
-#include "pymergetic/metal/ui/ui.h"
+#include "pymergetic/metal/dev/gfx/gfx.h"
+#include "pymergetic/metal/shell/shell/shell.h"
+#include "pymergetic/metal/shell/ui/ui.h"
 
 int
 main(void)
