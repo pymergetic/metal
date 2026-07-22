@@ -22,6 +22,8 @@ extern "C" {
 
 #if defined(__wasm__)
 #define PM_METAL_NET_HTTP_IO_PTR(p) ((uint32_t)(uintptr_t)(p))
+#else
+#define PM_METAL_NET_HTTP_IO_PTR(p) (p)
 #endif
 
 #if defined(__wasm__)

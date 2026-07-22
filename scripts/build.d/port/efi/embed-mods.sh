@@ -53,6 +53,8 @@ build_one async_ping "${ROOT}/mods/tests/t_async_ping/main.c" \
 	-Wl,--export=pm_metal_guest_step
 build_one async_http "${ROOT}/mods/tests/t_async_http/main.c" \
 	-Wl,--export=pm_metal_guest_step
+build_one async_tftp "${ROOT}/mods/tests/t_async_tftp/main.c" \
+	-Wl,--export=pm_metal_guest_step
 build_one async_audio "${ROOT}/mods/tests/t_async_audio/main.c" \
 	-Wl,--export=pm_metal_guest_step
 build_one async_blk "${ROOT}/mods/tests/t_async_blk/main.c" \
@@ -73,6 +75,7 @@ mods = [
     ("async_net", out_dir / "async_net.wasm"),
     ("async_ping", out_dir / "async_ping.wasm"),
     ("async_http", out_dir / "async_http.wasm"),
+    ("async_tftp", out_dir / "async_tftp.wasm"),
     ("async_audio", out_dir / "async_audio.wasm"),
     ("async_blk", out_dir / "async_blk.wasm"),
 ]

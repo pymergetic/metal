@@ -78,6 +78,9 @@ typedef struct {
   CHAR8                    chunk_line[16];
   UINT32                   chunk_line_len;
   INT32                    chunk_done;
+  CHAR8                    req[HTTP_REQ_MAX];
+  UINT32                   req_len;
+  UINT32                   req_off;
   pm_metal_tls_wire_t      wire;
   pm_metal_tls_h           tls_h;
 } http_get_t;
@@ -586,47 +589,6 @@ HttpTlsHandshakeStep (
   return pm_metal_net_tls_handshake_step (h->tls_h);
 }
 
-STATIC INT32
-HttpSendBytes (
-  http_get_t   *h,
-  CONST VOID   *data,
-  UINT32        len
-  )
-{
-  if (h == NULL || data == NULL || len == 0) {
-    return -1;
-  }
-
-  if (h->tls) {
-    return pm_metal_net_tls_write (h->tls_h, data, len);
-  }
-
-  {
-    UINT32  sent;
-    UINT32  spins;
-
-    sent  = 0;
-    spins = 0;
-    while (sent < len) {
-      UINT32  n;
-
-      n = pm_metal_net_send (h->sock, (CONST UINT8 *)data + sent, len - sent);
-      if (n > 0) {
-        sent += n;
-        spins = 0;
-        continue;
-      }
-
-      pm_metal_net_poll ();
-      if (++spins > 100000u) {
-        return -1;
-      }
-    }
-  }
-
-  return 0;
-}
-
 STATIC pm_metal_status_t
 HttpAfterHeadersParsed (
   http_get_t         *h,
@@ -728,6 +690,8 @@ HttpGetCoro (
     h->wire.len         = 0;
     h->wire.off         = 0;
     h->tls_h            = PM_METAL_TLS_INVALID;
+    h->req_len          = 0;
+    h->req_off          = 0;
 
     if (HttpHostIsLiteral (h->host)) {
       h->step = HTTP_STEP_SOCK;
@@ -827,6 +791,12 @@ HttpGetCoro (
   case HTTP_STEP_WIRE_AW:
     n = HttpChildResult (self);
     if (n == 0) {
+      /* Mid-request send may only need a write flush; retry SEND. */
+      if (h->req_len > 0 && h->req_off < h->req_len) {
+        h->step = HTTP_STEP_SEND;
+        return PM_METAL_PENDING;
+      }
+
       if (pm_metal_net_tls_handshake_done (h->tls_h) && h->hdr_done) {
         h->step = HTTP_STEP_DONE;
         return PM_METAL_PENDING;
@@ -844,7 +814,9 @@ HttpGetCoro (
 
     h->wire.len = n;
     h->wire.off = 0;
-    if (h->tls && !pm_metal_net_tls_handshake_done (h->tls_h)) {
+    if (h->req_len > 0 && h->req_off < h->req_len) {
+      h->step = HTTP_STEP_SEND;
+    } else if (h->tls && !pm_metal_net_tls_handshake_done (h->tls_h)) {
       h->step = HTTP_STEP_TLS;
     } else if (!h->hdr_done) {
       h->step = HTTP_STEP_RECV_HDR;
@@ -855,38 +827,93 @@ HttpGetCoro (
     return PM_METAL_PENDING;
 
   case HTTP_STEP_SEND:
-    {
-      CHAR8  req[HTTP_REQ_MAX];
+    if (h->req_len == 0) {
       INT32  v6;
 
       v6 = (AsciiStrStr (h->host, ":") != NULL) ? 1 : 0;
       if (v6) {
         AsciiSPrint (
-          req,
-          sizeof (req),
+          h->req,
+          sizeof (h->req),
           "GET %a HTTP/1.1\r\nHost: [%a]\r\nConnection: close\r\n\r\n",
           h->path,
           h->host
           );
       } else {
         AsciiSPrint (
-          req,
-          sizeof (req),
+          h->req,
+          sizeof (h->req),
           "GET %a HTTP/1.1\r\nHost: %a\r\nConnection: close\r\n\r\n",
           h->path,
           h->host
           );
       }
-      if (HttpSendBytes (h, req, (UINT32)AsciiStrLen (req)) != 0) {
+
+      h->req_len = (UINT32)AsciiStrLen (h->req);
+      h->req_off = 0;
+      if (h->req_len == 0) {
         return PM_METAL_ERROR;
       }
-
-      h->hdr_len  = 0;
-      h->hdr_done = 0;
-      h->step     = HTTP_STEP_RECV_HDR;
     }
 
-    return PM_METAL_PENDING;
+    if (h->tls) {
+      INT32  e;
+
+      e = pm_metal_net_tls_write (
+            h->tls_h,
+            h->req + h->req_off,
+            h->req_len - h->req_off
+            );
+      if (e > 0) {
+        h->req_off += (UINT32)e;
+        if (h->req_off >= h->req_len) {
+          h->hdr_len  = 0;
+          h->hdr_done = 0;
+          h->step     = HTTP_STEP_RECV_HDR;
+        }
+
+        return PM_METAL_PENDING;
+      }
+
+      if (e == PM_METAL_TLS_WANT_READ) {
+        h->aw = pm_metal_net_recv (h->sock, h->wire.buf, sizeof (h->wire.buf));
+        if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
+          return PM_METAL_ERROR;
+        }
+
+        h->step = HTTP_STEP_WIRE_AW;
+        return HttpAwaitAsync (self, h->aw);
+      }
+
+      if (e == PM_METAL_TLS_WANT_WRITE) {
+        return pm_metal_await (self, pm_metal_sleep_us (2000));
+      }
+
+      return PM_METAL_ERROR;
+    }
+
+    {
+      UINT32  nsend;
+
+      nsend = pm_metal_net_send (
+                h->sock,
+                h->req + h->req_off,
+                h->req_len - h->req_off
+                );
+      if (nsend > 0) {
+        h->req_off += nsend;
+        if (h->req_off >= h->req_len) {
+          h->hdr_len  = 0;
+          h->hdr_done = 0;
+          h->step     = HTTP_STEP_RECV_HDR;
+        }
+
+        return PM_METAL_PENDING;
+      }
+    }
+
+    /* TCP send buffer full — cooperative backoff. */
+    return pm_metal_await (self, pm_metal_sleep_us (2000));
 
   case HTTP_STEP_RECV_HDR:
     if (h->tls) {

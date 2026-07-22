@@ -51,6 +51,10 @@ int pm_metal_net_tls_handshake_done(pm_metal_tls_h h);
 
 /** Returns byte count, 0 EOF, MBEDTLS want codes, or negative error. */
 int pm_metal_net_tls_read(pm_metal_tls_h h, void *buf, uint32_t cap);
+/**
+ * One mbedtls_ssl_write attempt (may be partial).
+ * Returns bytes written, WANT_READ/WANT_WRITE, or negative error.
+ */
 int pm_metal_net_tls_write(pm_metal_tls_h h, const void *buf, uint32_t len);
 
 int pm_metal_net_tls_native_register(void);

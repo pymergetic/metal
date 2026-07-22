@@ -19,17 +19,19 @@ fi
 
 # 0 = interactive forever (default).
 METAL_DOOM_MAX_TICKS="${METAL_DOOM_MAX_TICKS:-0}"
+# 1 = append -w (windowed / tab surface). Default fullscreen.
+METAL_DOOM_WINDOWED="${METAL_DOOM_WINDOWED:-0}"
 
 if [[ ! -x "${CLANG}" ]]; then
 	echo "doom: wasi-sdk missing (${CLANG})" >&2
 	exit 1
 fi
 if [[ ! -d "${DG}" ]]; then
-	echo "doom: missing ${DG} — clone ozkl/doomgeneric into external/" >&2
+	echo "doom: missing ${DG} — run ./scripts/setup doomgeneric" >&2
 	exit 1
 fi
 if [[ ! -f "${WAD_CACHE}" ]]; then
-	echo "doom: missing shareware WAD at ${WAD_CACHE}" >&2
+	echo "doom: missing shareware WAD at ${WAD_CACHE} — run ./scripts/setup doomgeneric" >&2
 	exit 1
 fi
 
@@ -61,7 +63,7 @@ OBJS+=(
 	"${ROOT}/mods/apps/doom/metal_main.c"
 )
 
-echo "doom: compiling wasm (METAL_DOOM_MAX_TICKS=${METAL_DOOM_MAX_TICKS})"
+echo "doom: compiling wasm (METAL_DOOM_MAX_TICKS=${METAL_DOOM_MAX_TICKS} METAL_DOOM_WINDOWED=${METAL_DOOM_WINDOWED})"
 "${CLANG}" \
 	--target="${TARGET}" \
 	--sysroot="${SYSROOT}" \
@@ -69,6 +71,7 @@ echo "doom: compiling wasm (METAL_DOOM_MAX_TICKS=${METAL_DOOM_MAX_TICKS})"
 	-DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE \
 	-DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 \
 	"-DMETAL_DOOM_MAX_TICKS=${METAL_DOOM_MAX_TICKS}" \
+	"-DMETAL_DOOM_WINDOWED=${METAL_DOOM_WINDOWED}" \
 	-I "${ROOT}/include" \
 	-I "${DG}" \
 	-Wl,--export=main \

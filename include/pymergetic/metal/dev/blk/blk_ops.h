@@ -17,14 +17,27 @@ extern "C" {
 
 #if !defined(__wasm__)
 
+/** Opaque cookie for kick/poll/finish (backend-private layout). */
+#define PM_METAL_BLK_XFER_COOKIE_BYTES  64u
+
 typedef struct pm_metal_blk_ops {
 	const char *compat;
 	uint32_t    dt_id;
 	int (*ready)(void *ctx);
 	uint64_t (*capacity)(void *ctx);
+	/** Sync I/O (boot smoke). May busy-wait. */
 	int (*read)(void *ctx, uint64_t lba, void *buf, uint32_t nsec);
 	int (*write)(void *ctx, uint64_t lba, const void *buf, uint32_t nsec);
 	void (*poll)(void *ctx);
+	/**
+	 * Async path (NULL → facade falls back to sync read/write).
+	 * start: submit only. poll: 1 complete, 0 pending, -1 error.
+	 * finish: copy-out / cleanup; 0 ok, -1 fail.
+	 */
+	int (*xfer_start)(void *ctx, int write, uint64_t lba, void *buf,
+			   uint32_t nsec, void *cookie);
+	int (*xfer_poll)(void *ctx, void *cookie);
+	int (*xfer_finish)(void *ctx, void *cookie);
 	void *ctx;
 } pm_metal_blk_ops_t;
 

@@ -3,9 +3,8 @@ ENTRY(_start)
 
 PHDRS
 {
-  text   PT_LOAD FLAGS(5); /* PF_R | PF_X */
-  rodata PT_LOAD FLAGS(4); /* PF_R */
-  data   PT_LOAD FLAGS(6); /* PF_R | PF_W */
+  text PT_LOAD FLAGS(5); /* PF_R | PF_X */
+  data PT_LOAD FLAGS(6); /* PF_R | PF_W */
 }
 
 SECTIONS
@@ -20,16 +19,12 @@ SECTIONS
     *(.text .text.*)
   } :text
 
-  . = ALIGN(4096);
-
-  .rodata : {
-    *(.rodata .rodata.*)
-  } :rodata
-
+  /* No empty .rodata PT_LOAD — a zero-sized LOAD at vaddr 0 confuses QEMU Multiboot. */
   . = ALIGN(4096);
 
   .data : {
     *(.data .data.*)
+    *(.rodata .rodata.*)
   } :data
 
   .bss : {

@@ -3,6 +3,7 @@
 #include "metal_bge.h"
 
 #include "../../bus/pci/pci.h"
+#include <pymergetic/metal/log/log.h>
 
 #include <Library/BaseMemoryLib.h>
 
@@ -113,6 +114,16 @@ pm_metal_bge_netif_open (
     CopyMem (mac_out, mSc.mac, 6);
   }
 
+  pm_metal_logf (
+    "metal-bge: up mac %02x:%02x:%02x:%02x:%02x:%02x link=%d",
+    mSc.mac[0],
+    mSc.mac[1],
+    mSc.mac[2],
+    mSc.mac[3],
+    mSc.mac[4],
+    mSc.mac[5],
+    mSc.link
+    );
   return 0;
 }
 
@@ -155,5 +166,5 @@ pm_metal_bge_netif_poll (
     return;
   }
 
-  metal_bge_poll ((metal_bge_rx_fn)on_frame, ctx);
+  metal_bge_poll (&mSc, (metal_bge_rx_fn)on_frame, ctx);
 }

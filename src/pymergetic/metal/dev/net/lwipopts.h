@@ -47,13 +47,36 @@
 #define TCP_SND_BUF                     (4 * TCP_MSS)
 #define TCP_SND_QUEUELEN                8
 
-#define LWIP_NETIF_HOSTNAME             0
+#define LWIP_NETIF_HOSTNAME             1
 #define LWIP_NETIF_STATUS_CALLBACK      0
 #define LWIP_NETIF_LINK_CALLBACK        0
+
+/* Capture BOOTP siaddr + file; Metal hook also keeps DHCP opts 66/67. */
+#define LWIP_DHCP_BOOTP_FILE            1
+
+/* Metal owns the "lo" netif; enable packet loopback + poll drain (NO_SYS). */
+#define LWIP_NETIF_LOOPBACK             1
+#define LWIP_HAVE_LOOPIF                0
+#define LWIP_LOOPBACK_MAX_PBUFS         8
 
 #define DNS_TABLE_SIZE                  4
 #define DNS_MAX_NAME_LENGTH             64
 #define DNS_MAX_SERVERS                 2
+
+struct netif;
+struct dhcp;
+struct dhcp_msg;
+struct pbuf;
+void pm_metal_dhcp_parse_option(struct netif *netif, struct dhcp *dhcp,
+				unsigned char state, struct dhcp_msg *msg,
+				unsigned char msg_type, unsigned char option,
+				unsigned char len, struct pbuf *pbuf,
+				unsigned short offset);
+
+#define LWIP_HOOK_DHCP_PARSE_OPTION(netif, dhcp, state, msg, msg_type, option, \
+				    len, pbuf, offset)                        \
+	pm_metal_dhcp_parse_option(netif, dhcp, state, msg, msg_type, option, \
+				   len, pbuf, offset)
 
 #define LWIP_DEBUG                      0
 #define LWIP_DBG_MIN_LEVEL              LWIP_DBG_LEVEL_ALL

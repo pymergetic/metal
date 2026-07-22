@@ -10,11 +10,14 @@
 #include <pymergetic/metal/dev/gfx/gfx.h>
 #include <pymergetic/metal/dev/stream/stream.h>
 #include <pymergetic/metal/dev/net/net_ops.h>
+#include <pymergetic/metal/dev/net/ping.h>
 #include <pymergetic/metal/dev/audio/audio_ops.h>
 #include <pymergetic/metal/dev/console/console.h>
+#include <pymergetic/metal/boot/boot.h>
 #include <pymergetic/metal/boot/port.h>
 #include <pymergetic/metal/log/log.h>
 #include <runtime/time/time.h>
+#include <runtime/run/run.h>
 
 #include <Uefi.h>
 #include <Library/UefiBootServicesTableLib.h>
@@ -33,6 +36,119 @@ STATIC UINT32  mPrevPtrButtons;
 STATIC UINT64  mLastFrameMs;
 STATIC INT32   mNest;
 STATIC UINT32  mPumpSleepMs;
+
+STATIC struct {
+  INT32                    live;
+  CHAR8                    kind[8];
+  CHAR8                    detail[64];
+  pm_metal_async_handle_t  task_h;
+  pm_metal_async_handle_t  coro_h;
+  UINT64                   deadline_us;
+} mJob;
+
+STATIC VOID MetalShellMarkFull (VOID);
+
+STATIC VOID
+MetalShellJobFinish (
+  INT32  st
+  )
+{
+  CHAR8  msg[96];
+
+  if (AsciiStrCmp (mJob.kind, "ping") == 0) {
+    if (st != (INT32)PM_METAL_DONE) {
+      pm_metal_shell_out ("ping: resolve/send failed");
+    } else {
+      UINT32  rtt;
+
+      rtt = pm_metal_net_ping_rtt_ms (mJob.coro_h);
+      if (rtt == 0u) {
+        pm_metal_shell_out ("ping: no reply");
+      } else {
+        AsciiSPrint (msg, sizeof (msg), "ping %a: %u ms", mJob.detail, rtt);
+        pm_metal_shell_out (msg);
+      }
+    }
+  } else if (AsciiStrCmp (mJob.kind, "test") == 0) {
+    if (st == (INT32)PM_METAL_DONE && pm_metal_boot_tests_result (mJob.coro_h) == 0) {
+      pm_metal_shell_out ("test: ok");
+    } else {
+      pm_metal_shell_out ("test: FAILED");
+    }
+  }
+
+  ZeroMem (&mJob, sizeof (mJob));
+  MetalShellMarkFull ();
+}
+
+int
+pm_metal_shell_job_busy (
+  VOID
+  )
+{
+  return mJob.live ? 1 : 0;
+}
+
+int
+pm_metal_shell_job_start (
+  CONST CHAR8              *kind,
+  pm_metal_async_handle_t   task_h,
+  pm_metal_async_handle_t   coro_h,
+  CONST CHAR8              *detail,
+  UINT64                    deadline_us
+  )
+{
+  if (kind == NULL || task_h == PM_METAL_ASYNC_HANDLE_INVALID || mJob.live) {
+    return -1;
+  }
+
+  ZeroMem (&mJob, sizeof (mJob));
+  AsciiStrCpyS (mJob.kind, sizeof (mJob.kind), kind);
+  if (detail != NULL) {
+    AsciiStrCpyS (mJob.detail, sizeof (mJob.detail), detail);
+  }
+
+  mJob.task_h      = task_h;
+  mJob.coro_h      = coro_h;
+  mJob.deadline_us = deadline_us;
+  mJob.live        = 1;
+  mPumpSleepMs     = 1u;
+  return 0;
+}
+
+STATIC VOID
+MetalShellJobPoll (
+  VOID
+  )
+{
+  INT32  st;
+
+  if (!mJob.live) {
+    return;
+  }
+
+  st = pm_metal_async_task_status (mJob.task_h);
+  if (st == (INT32)PM_METAL_PENDING) {
+    if (mJob.deadline_us != 0
+        && pm_metal_time_mono_us () >= mJob.deadline_us)
+    {
+      pm_metal_async_task_cancel (mJob.task_h);
+      if (AsciiStrCmp (mJob.kind, "ping") == 0) {
+        pm_metal_shell_out ("ping: timeout");
+      } else {
+        pm_metal_shell_out ("test: FAILED");
+      }
+
+      ZeroMem (&mJob, sizeof (mJob));
+      MetalShellMarkFull ();
+    }
+
+    mPumpSleepMs = 1u;
+    return;
+  }
+
+  MetalShellJobFinish (st);
+}
 
 STATIC VOID
 MetalShellMarkFull (
@@ -324,6 +440,7 @@ pm_metal_shell_init (
   mLastFrameMs = 0;
   mNest        = 0;
   mPumpSleepMs = 1u;
+  ZeroMem (&mJob, sizeof (mJob));
 
   pm_metal_ui_set_status ("shell ready");
   pm_metal_ui_input_clear ();
@@ -395,13 +512,20 @@ pm_metal_shell_poll (
 
   now_ms = pm_metal_time_mono_us () / 1000u;
   mPumpSleepMs = 16u;
-  pm_metal_ui_tick (now_ms);
+  if (pm_metal_ui_tick (now_ms)) {
+    MetalShellMarkFull ();
+  }
+
   /* Drain HW into rings before shell/async consumers (port-owned). */
   pm_metal_input_poll ();
 
   pm_metal_net_poll ();
   pm_metal_audio_poll ();
   pm_metal_console_poll ();
+
+  /* Always pump host tasks (ping/test) — not only when a wasm session lives. */
+  pm_metal_run_poll_all ();
+  MetalShellJobPoll ();
 
   if (pm_metal_input_focus () == PM_METAL_INPUT_FOCUS_SHELL && !pm_metal_input_pointer_locked ()) {
     INT32    px;
@@ -479,41 +603,56 @@ pm_metal_shell_poll (
   }
 
   /*
-   * Guest tabs own the FB. Typing: paint+present input strip only.
-   * Full chrome present when console/status/tabs change. One present/tick.
+   * Shell focus: full chrome. Guest fullscreen (DEFAULT surface): game owns
+   * FB — skip chrome. Guest windowed (non-DEFAULT draw surface): keep chrome
+   * (tab strip / status / input); paint skips wiping guest content.
    */
-  if (pm_metal_input_focus () == PM_METAL_INPUT_FOCUS_SHELL) {
-    INT32  blink;
+  {
+    INT32  paint_chrome;
 
-    blink = ((now_ms - mLastFrameMs) >= 250u) ? 1 : 0;
-    if (mDirty || mDirtyInput || blink) {
-      INT32   px;
-      INT32   py;
-      UINT32  buttons;
-      INT32   ix;
-      INT32   iy;
-      INT32   iw;
-      INT32   ih;
+    paint_chrome = 0;
+    if (pm_metal_input_focus () == PM_METAL_INPUT_FOCUS_SHELL) {
+      paint_chrome = 1;
+    } else if (pm_metal_input_focus () == PM_METAL_INPUT_FOCUS_GUEST
+               && pm_metal_gfx_draw_surface () != PM_METAL_GFX_SURFACE_DEFAULT
+               && pm_metal_gfx_draw_surface () != 0)
+    {
+      paint_chrome = 1;
+    }
 
-      if (mDirty) {
-        (VOID)pm_metal_ui_frame ();
-        if (!pm_metal_input_pointer_locked ()) {
-          pm_metal_input_pointer_sample (&px, &py, &buttons);
-          (VOID)buttons;
-          pm_metal_ui_cursor_draw (px, py);
+    if (paint_chrome) {
+      INT32  blink;
+
+      blink = ((now_ms - mLastFrameMs) >= 250u) ? 1 : 0;
+      if (mDirty || mDirtyInput || blink) {
+        INT32   px;
+        INT32   py;
+        UINT32  buttons;
+        INT32   ix;
+        INT32   iy;
+        INT32   iw;
+        INT32   ih;
+
+        if (mDirty) {
+          (VOID)pm_metal_ui_frame ();
+          if (!pm_metal_input_pointer_locked ()) {
+            pm_metal_input_pointer_sample (&px, &py, &buttons);
+            (VOID)buttons;
+            pm_metal_ui_cursor_draw (px, py);
+          }
+
+          (VOID)pm_metal_gfx_present ();
+        } else {
+          (VOID)pm_metal_ui_paint_shell_input ();
+          if (pm_metal_ui_shell_input_rect (&ix, &iy, &iw, &ih) == 0) {
+            (VOID)pm_metal_gfx_present_rect (ix, iy, iw, ih);
+          }
         }
 
-        (VOID)pm_metal_gfx_present ();
-      } else {
-        (VOID)pm_metal_ui_paint_shell_input ();
-        if (pm_metal_ui_shell_input_rect (&ix, &iy, &iw, &ih) == 0) {
-          (VOID)pm_metal_gfx_present_rect (ix, iy, iw, ih);
-        }
+        mLastFrameMs = now_ms;
+        mDirty       = 0;
+        mDirtyInput  = 0;
       }
-
-      mLastFrameMs = now_ms;
-      mDirty       = 0;
-      mDirtyInput  = 0;
     }
   }
 

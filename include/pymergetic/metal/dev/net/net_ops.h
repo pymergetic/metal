@@ -55,6 +55,12 @@ int pm_metal_net_bge_start(void);
 int pm_metal_net_virtio_probe(void);
 /** Install null ops. impl: common — src/pymergetic/metal/dev/net/net_null.c */
 void pm_metal_net_null_install(void);
+/**
+ * Bring up loopback (`lo`, 127.0.0.1/8 + ::1). Always safe alongside NICs;
+ * becomes default only when no ethN is up. Registers lwIP ops if needed.
+ * impl: common — src/pymergetic/metal/dev/net/net_lwip.c
+ */
+int pm_metal_net_loopback_start(void);
 
 #endif
 

@@ -23,6 +23,11 @@ pm_metal_efi_stage_esp "${EFI}" "${ESP}"
 # raw images lock under QEMU.
 VBLK="$(pm_metal_efi_stage_vblk "${ROOT}/build/efi/vblk-verify.img")"
 
+# async_tftp: QEMU slirp built-in TFTP + DHCP next-server / bootfile.
+TFTP_DIR="${ROOT}/build/efi/tftp-verify"
+mkdir -p "${TFTP_DIR}"
+printf 'metal-async-tftp\n' >"${TFTP_DIR}/metal-tftp-proof.txt"
+
 # Shell stays in poll forever; stop QEMU once markers land (timeout = safety net).
 rm -f "${LOG}"
 echo_pid=""
@@ -58,7 +63,7 @@ qemu-system-x86_64 \
 	-m 512 \
 	-display none \
 	-audiodev none,id=a0 \
-	-netdev user,id=n0,restrict=off \
+	-netdev user,id=n0,restrict=off,tftp="${TFTP_DIR}",bootfile=metal-tftp-proof.txt \
 	-device virtio-net-pci,netdev=n0 \
 	-device virtio-sound-pci,audiodev=a0 \
 	-drive if=none,id=vd0,format=raw,file="${VBLK}" \
@@ -127,6 +132,10 @@ grep -q "+-- devices" "${LOG}" || {
 	echo "verify-efi: missing devices tree" >&2
 	exit 1
 }
+grep -q "net/loopback" "${LOG}" || {
+	echo "verify-efi: missing net/loopback" >&2
+	exit 1
+}
 grep -q "net/lwip+virtio-net" "${LOG}" || {
 	echo "verify-efi: missing net/lwip+virtio-net" >&2
 	exit 1
@@ -189,6 +198,14 @@ grep -q "metal-async: blk ok" "${LOG}" || {
 }
 grep -q "metal-async: net ok" "${LOG}" || {
 	echo "verify-efi: missing metal-async: net ok" >&2
+	exit 1
+}
+grep -q "metal-async: tftp ok" "${LOG}" || {
+	echo "verify-efi: missing metal-async: tftp ok" >&2
+	exit 1
+}
+grep -q "metal-test: dhcp-boot tftp=" "${LOG}" || {
+	echo "verify-efi: missing metal-test: dhcp-boot" >&2
 	exit 1
 }
 

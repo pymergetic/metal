@@ -35,6 +35,10 @@ SECTIONS
 
   .data : {
     *(.data .data.*)
+    . = ALIGN(16);
+    PROVIDE_HIDDEN (__pm_metal_shell_cmds_start = .);
+    KEEP (*(SORT_BY_NAME (.pm_metal_shell_cmds.*)));
+    PROVIDE_HIDDEN (__pm_metal_shell_cmds_end = .);
   } :data
 
   .bss : {

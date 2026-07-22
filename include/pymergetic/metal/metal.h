@@ -17,6 +17,7 @@
 #include "pymergetic/metal/dev/net/net.h" /* IWYU pragma: export */
 #include "pymergetic/metal/dev/net/ping.h" /* IWYU pragma: export */
 #include "pymergetic/metal/dev/net/http.h" /* IWYU pragma: export */
+#include "pymergetic/metal/dev/net/tftp.h" /* IWYU pragma: export */
 #if !defined(__wasm__)
 #include "pymergetic/metal/dev/net/tls.h" /* IWYU pragma: export */
 #endif
@@ -31,5 +32,7 @@
 #include "pymergetic/metal/util/crypto.h" /* IWYU pragma: export */
 #include "pymergetic/metal/util/ascii.h" /* IWYU pragma: export */
 #include "pymergetic/metal/util/size.h" /* IWYU pragma: export */
+#include "pymergetic/metal/util/ip.h" /* IWYU pragma: export */
+#include "pymergetic/metal/host/host.h" /* IWYU pragma: export */
 
 #endif /* PYMERGETIC_METAL_METAL_H_ */

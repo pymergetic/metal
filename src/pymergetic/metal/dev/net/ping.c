@@ -4,8 +4,11 @@
 **/
 #include <pymergetic/metal/dev/net/ping.h>
 #include <pymergetic/metal/dev/net/net.h>
+#include <pymergetic/metal/dev/net/net_cfg.h>
 #include <pymergetic/metal/dev/net/net_ops.h>
 #include <pymergetic/metal/runtime/async/async.h>
+#include <pymergetic/metal/shell/shell_cmd.h>
+#include <pymergetic/metal/shell/shell/shell.h>
 #include <runtime/coro/coro.h>
 #include <runtime/time/time.h>
 
@@ -17,13 +20,13 @@
 #include <lwip/ip4.h>
 #include <lwip/ip6.h>
 #include <lwip/ip_addr.h>
-#include <lwip/dns.h>
 #include <lwip/pbuf.h>
 #include <lwip/raw.h>
 
 #include <Uefi.h>
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/PrintLib.h>
 
 #include "wasm_export.h"
 
@@ -65,14 +68,6 @@ STATIC struct {
   INT32   valid;
   UINT32  rtt_ms;
 } mPingLastDone;
-
-STATIC UINT32
-PingChildResult (
-  pm_metal_coro_t  *self
-  )
-{
-  return (UINT32)(UINTN)self->result;
-}
 
 STATIC INT32
 PingParseIpv4 (
@@ -178,6 +173,14 @@ PingHostIsLiteral (
   }
 
   return -1;
+}
+
+STATIC UINT32
+PingChildResult (
+  pm_metal_coro_t  *self
+  )
+{
+  return (UINT32)(UINTN)self->result;
 }
 
 STATIC u8_t
@@ -347,12 +350,14 @@ PingCoro (
     p->rtt_ms = 0;
     p->pcb    = NULL;
     p->seq    = 0;
+    p->aw     = PM_METAL_ASYNC_HANDLE_INVALID;
 
     if (PingHostIsLiteral (p->host, &p->target, &p->target_v6) == 0) {
       p->step = PING_STEP_SEND;
       return PM_METAL_PENDING;
     }
 
+    /* Async DNS (literals/hosts/cache handled inside pm_metal_net_dns). */
     p->aw = pm_metal_net_dns (p->host);
     if (p->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       return PM_METAL_ERROR;
@@ -366,12 +371,17 @@ PingCoro (
       return PM_METAL_ERROR;
     }
 
-    if (dns_gethostbyname (p->host, &p->target, NULL, NULL) != ERR_OK) {
-      return PM_METAL_ERROR;
+    {
+      CHAR8  ipstr[64];
+
+      if (pm_metal_net_dns_last_ntoa (ipstr, sizeof (ipstr)) != 0
+          || PingHostIsLiteral (ipstr, &p->target, &p->target_v6) != 0)
+      {
+        return PM_METAL_ERROR;
+      }
     }
 
-    p->target_v6 = IP_IS_V6_VAL (p->target) ? 1 : 0;
-    p->step       = PING_STEP_SEND;
+    p->step = PING_STEP_SEND;
     return PM_METAL_PENDING;
 
   case PING_STEP_SEND:
@@ -405,7 +415,8 @@ PingCoro (
       return PM_METAL_ERROR;
     }
 
-    return PM_METAL_PENDING;
+    /* Cooperative wait — same cadence as net DNS/connect coros. */
+    return pm_metal_await (self, pm_metal_sleep_us (2000));
 
   case PING_STEP_DONE:
     PingCleanup (p);
@@ -477,6 +488,60 @@ pm_metal_net_ping_rtt_ms (
 }
 
 #if !defined(__wasm__)
+
+#define PING_SHELL_TIMEOUT_MS  5000u
+
+STATIC
+VOID
+PingShellCmd (
+  INT32   argc,
+  CHAR8 **argv
+  )
+{
+  pm_metal_async_handle_t  ping_h;
+  pm_metal_async_handle_t  task_h;
+  UINT64                   deadline;
+
+  if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
+    pm_metal_shell_out ("usage: ping <host>");
+    return;
+  }
+
+  if (pm_metal_shell_job_busy ()) {
+    pm_metal_shell_out ("ping: busy");
+    return;
+  }
+
+  ping_h = pm_metal_net_ping (argv[1], PING_SHELL_TIMEOUT_MS);
+  if (ping_h == PM_METAL_ASYNC_HANDLE_INVALID) {
+    pm_metal_shell_out ("ping: start failed");
+    return;
+  }
+
+  task_h = pm_metal_async_create_task (ping_h);
+  if (task_h == PM_METAL_ASYNC_HANDLE_INVALID) {
+    pm_metal_async_coro_close (ping_h);
+    pm_metal_shell_out ("ping: task failed");
+    return;
+  }
+
+  deadline = pm_metal_time_mono_us ()
+             + ((UINT64)PING_SHELL_TIMEOUT_MS * 1000ull) + 500000ull;
+  if (pm_metal_shell_job_start ("ping", task_h, ping_h, argv[1], deadline) != 0) {
+    pm_metal_async_task_cancel (task_h);
+    pm_metal_shell_out ("ping: job failed");
+    return;
+  }
+
+  pm_metal_shell_out ("ping: …");
+}
+
+PM_METAL_SHELL_CMD (
+  g_pm_metal_shell_cmd_ping,
+  "ping",
+  "ping <host>       ICMP echo (literal or DNS)",
+  PingShellCmd
+  );
 
 STATIC INT32
 PingGuestCopyHost (

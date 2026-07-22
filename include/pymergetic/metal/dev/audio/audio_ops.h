@@ -2,7 +2,7 @@
  * Host-only pluggable audio backend ops.
  *
  * impl: common — src/pymergetic/metal/dev/audio/audio.c
- * impl: backends — src/pymergetic/metal/dev/audio/{audio_null,virtio_snd}.c
+ * impl: backends — src/pymergetic/metal/dev/audio/{audio_null,virtio_snd,ac97}.c
  */
 #ifndef PYMERGETIC_METAL_DEV_AUDIO_AUDIO_OPS_H_
 #define PYMERGETIC_METAL_DEV_AUDIO_AUDIO_OPS_H_
@@ -36,6 +36,7 @@ void pm_metal_audio_poll(void);
 void pm_metal_audio_mute(int on);
 
 int pm_metal_audio_virtio_probe(void);
+int pm_metal_audio_ac97_probe(void);
 void pm_metal_audio_null_install(void);
 
 #endif

@@ -1,70 +1,103 @@
 /** @file
   Core shell commands (help, tabs, exit, …). (impl: efi|bios)
+  `test` lives with boot — see boot_shell.c.
 **/
 #include <pymergetic/metal/shell/shell_cmd.h>
 #include <pymergetic/metal/shell/shell/shell.h>
 #include <pymergetic/metal/shell/ui/ui.h>
-#include <pymergetic/metal/boot/boot.h>
 
 #include <Uefi.h>
 #include <Library/BaseLib.h>
+#include <Library/BaseMemoryLib.h>
 #include <Library/PrintLib.h>
 
 STATIC
 VOID
 CoreHelpCmd (
-  CONST CHAR8  *arg
+  INT32   argc,
+  CHAR8 **argv
   )
 {
-  (VOID)arg;
+  (VOID)argc;
+  (VOID)argv;
   pm_metal_shell_cmd_help ();
 }
 
 STATIC
 VOID
 CoreEchoCmd (
-  CONST CHAR8  *arg
+  INT32   argc,
+  CHAR8 **argv
   )
 {
-  pm_metal_shell_out (arg);
-}
+  CHAR8  line[160];
+  INT32  i;
+  UINTN  off;
+  UINTN  n;
 
-STATIC
-VOID
-CoreTestCmd (
-  CONST CHAR8  *arg
-  )
-{
-  (VOID)arg;
-  if (pm_metal_boot_run_tests () != 0) {
-    pm_metal_shell_out ("test: FAILED");
-  } else {
-    pm_metal_shell_out ("test: ok");
+  if (argc < 2) {
+    pm_metal_shell_out ("");
+    return;
   }
+
+  off = 0;
+  for (i = 1; i < argc; i++) {
+    n = AsciiStrLen (argv[i]);
+    if (i > 1) {
+      if (off + 1 >= sizeof (line)) {
+        break;
+      }
+
+      line[off++] = ' ';
+    }
+
+    if (off + n >= sizeof (line)) {
+      n = sizeof (line) - 1u - off;
+    }
+
+    CopyMem (line + off, argv[i], n);
+    off += n;
+  }
+
+  line[off] = '\0';
+  pm_metal_shell_out (line);
 }
 
 STATIC
 VOID
 CoreRunCmd (
-  CONST CHAR8  *arg
+  INT32   argc,
+  CHAR8 **argv
   )
 {
-  (VOID)pm_metal_shell_run (arg);
+  if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
+    pm_metal_shell_out ("usage: run <mod>");
+    return;
+  }
+
+  (VOID)pm_metal_shell_run (argv[1]);
 }
 
 STATIC
 VOID
 CoreTabCmd (
-  CONST CHAR8  *arg
+  INT32   argc,
+  CHAR8 **argv
   )
 {
-  (VOID)pm_metal_shell_tab (arg);
+  if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
+    pm_metal_shell_out ("usage: tab <mod>");
+    return;
+  }
+
+  (VOID)pm_metal_shell_tab (argv[1]);
 }
 
 STATIC
 VOID
 CoreTabsCmd (
-  CONST CHAR8  *arg
+  INT32   argc,
+  CHAR8 **argv
   )
 {
   UINT32  n;
@@ -72,7 +105,8 @@ CoreTabsCmd (
   UINT32  a;
   CHAR8   line[80];
 
-  (VOID)arg;
+  (VOID)argc;
+  (VOID)argv;
   n = pm_metal_ui_tab_count ();
   a = pm_metal_ui_tab_active_index ();
   AsciiSPrint (line, sizeof (line), "tabs: %u  active: %u", n, a);
@@ -86,12 +120,18 @@ CoreTabsCmd (
 STATIC
 VOID
 CoreUseCmd (
-  CONST CHAR8  *arg
+  INT32   argc,
+  CHAR8 **argv
   )
 {
   UINTN  i;
 
-  i = AsciiStrDecimalToUintn (arg);
+  if (argc < 2) {
+    pm_metal_shell_out ("usage: use <n>");
+    return;
+  }
+
+  i = AsciiStrDecimalToUintn (argv[1]);
   if (pm_metal_ui_tab_activate_index ((UINT32)i) != 0) {
     pm_metal_shell_out ("use: bad index");
   } else {
@@ -106,7 +146,8 @@ CoreUseCmd (
 STATIC
 VOID
 CoreCloseCmd (
-  CONST CHAR8  *arg
+  INT32   argc,
+  CHAR8 **argv
   )
 {
   UINT32  idx;
@@ -115,8 +156,8 @@ CoreCloseCmd (
 
   n = pm_metal_ui_tab_count ();
   a = pm_metal_ui_tab_active_index ();
-  if (arg != NULL && arg[0] != '\0') {
-    idx = (UINT32)AsciiStrDecimalToUintn (arg);
+  if (argc >= 2) {
+    idx = (UINT32)AsciiStrDecimalToUintn (argv[1]);
   } else if (a != 0) {
     idx = a;
   } else if (n > 1) {
@@ -143,22 +184,28 @@ CoreCloseCmd (
 STATIC
 VOID
 CoreExitCmd (
-  CONST CHAR8  *arg
+  INT32   argc,
+  CHAR8 **argv
   )
 {
   INT32  reboot;
 
-  if (arg != NULL && arg[0] != '\0' && AsciiStrCmp (arg, "-r") != 0) {
+  if (argc > 2) {
+    pm_metal_shell_out ("usage: exit [-r]");
+    return;
+  }
+
+  if (argc == 2 && AsciiStrCmp (argv[1], "-r") != 0) {
     pm_metal_shell_out ("exit: use -r to reboot");
     return;
   }
 
-  reboot = (arg != NULL && AsciiStrCmp (arg, "-r") == 0) ? 1 : 0;
+  reboot = (argc == 2) ? 1 : 0;
   pm_metal_shell_out (reboot ? "reboot requested" : "shutdown requested");
   pm_metal_shell_cmd_exit (reboot);
 }
 
-STATIC CONST pm_metal_shell_cmd_t  g_pm_metal_shell_cmds_core[] = {
+PM_METAL_SHELL_CMDS (g_pm_metal_shell_cmds_core) = {
   { "help", "this text", CoreHelpCmd },
   { "echo", "echo <text>       print text", CoreEchoCmd },
   { "run", "run <mod>         run wasm mod in current tab", CoreRunCmd },
@@ -166,20 +213,8 @@ STATIC CONST pm_metal_shell_cmd_t  g_pm_metal_shell_cmds_core[] = {
   { "tabs", "tabs              list tabs", CoreTabsCmd },
   { "use", "use <n>           activate tab index", CoreUseCmd },
   { "close", "close [n]         close tab n, or active/last guest", CoreCloseCmd },
-  { "test", "test              run bring-up proof suite", CoreTestCmd },
   { "exit", "exit|quit [-r]    power off (or reboot with -r)", CoreExitCmd },
   { "quit", "exit|quit [-r]    power off (or reboot with -r)", CoreExitCmd },
   { "shutdown", "exit|quit [-r]    power off (or reboot with -r)", CoreExitCmd },
 };
-
-void
-pm_metal_shell_cmds_register_core (
-  VOID
-  )
-{
-  UINTN  i;
-
-  for (i = 0; i < sizeof (g_pm_metal_shell_cmds_core) / sizeof (g_pm_metal_shell_cmds_core[0]); i++) {
-    pm_metal_shell_cmd_register (&g_pm_metal_shell_cmds_core[i]);
-  }
-}
+PM_METAL_SHELL_CMDS_END (g_pm_metal_shell_cmds_core);

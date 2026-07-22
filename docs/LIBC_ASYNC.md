@@ -35,8 +35,10 @@ Opt-in later: `METAL_BUILD_DOOM=1`.
 | `setjmp` / `longjmp` | **omit** | Breaks stackless await |
 | threads / signals / fork / dlopen | **omit** | 1 worker/CPU; Metal tasks/coros; Metal package load ≠ `dlopen` |
 | WASI as product ABI | **retire** | Scaffold only; no new guest deps on wasi-libc I/O |
-| Input | **sync poll** v1 (`poll_key_event`) | Optional async “wait for key” later, not required now |
+| Input | **sync poll** v1 (`poll_key` / `poll_key_event`) | Optional async “wait for key” later, not required now |
 | Gfx / UI / shell log | **sync** | Device kick + CPU; `gfx_present` sync. Optional `async_present` is an eager fence |
+| Net bind-if | **sync** | `pm_metal_net_bind_if` before connect/listen |
+| DHCPv6 | host config | Stateless (lwIP) + Metal stateful client; not a guest libc surface |
 
 ---
 
@@ -47,9 +49,10 @@ Opt-in later: `METAL_BUILD_DOOM=1`.
 | `pm_metal_async_*` (sleep_us/until, yield, await, present, mono_us) | **async** (+ sync get for mono) | See `docs/IO.md` |
 | `pm_metal_fs_{open,close,fread,fwrite,fpread,fpwrite,stat,fstat,readdir,mkdir,unlink,rename,fsync}_async` + sync `lseek` | **async** (+ sync seek) | Fd-shaped v1 on ESP cache. Path `size/read/write_async` transitional |
 | `pm_metal_blk_{count,at,ready,capacity}` + `read/write_async` + `blk_result` | sync meta + **async** I/O | Eager virtq/PIO today; always `await` then `blk_result` |
-| `pm_metal_input_poll_key_event` | **sync poll** | Metal HID keycodes |
+| `pm_metal_input_poll_key` / `pm_metal_input_poll_key_event` | **sync poll** | Metal HID keycodes; guest focus via tab |
 | `pm_metal_gfx_*` | **sync** | |
-| `pm_metal_shell_*` / `pm_metal_ui_*` | **sync** | |
+| `pm_metal_shell_*` / `pm_metal_ui_*` | **sync** | Host shell cmds via linker-section registry (`PM_METAL_SHELL_CMD*`) |
+| `pm_metal_net_bind_if` | **sync** | Bind sock to `ethN` before connect/listen |
 | host TLSF / `malloc` / `memcpy` / `snprintf` | **sync** | Freestanding kit |
 
 ---
@@ -88,9 +91,11 @@ Opt-in later: `METAL_BUILD_DOOM=1`.
 | `poll` / `select` / `epoll` | **omit** | |
 | `fcntl` / `ioctl` zoo | **omit** | |
 | pipes / tty / stdio | **stream** class | See `docs/IO.md` — raw PTY first; cooked omit until needed |
-| `socket` / `connect` / `send` / `recv` | **async** | `pm_metal_net_*` + sync `send`; await then `pm_metal_async_result_u32` / `pm_metal_net_result` |
+| `socket` / `connect` / `send` / `recv` | **async** (+ sync `send`, sync `bind_if`) | `pm_metal_net_*` + `pm_metal_net_bind_if`; await then `pm_metal_async_result_u32` / `pm_metal_net_result` |
 | `http get` (HTTP/HTTPS) | **async** | `pm_metal_net_http_get` → await → `pm_metal_net_http_status` / `pm_metal_net_http_body_len` |
-| `getaddrinfo` | **async** | `pm_metal_net_dns` | |
+| `getaddrinfo` | **async** | `pm_metal_net_dns` (literal → localhost/nodename → `/etc/hosts` → DNS) | |
+| `gethostname` / `sethostname` | **sync** | `pm_metal_host_name_get` / `pm_metal_host_name_set` (identity; also DHCPv4 option 12) | |
+| TFTP get | **async** | `pm_metal_net_tftp_get` → await → `pm_metal_net_tftp_status` / `pm_metal_net_tftp_len` (proof: `async_tftp`; empty host/path → DHCP boot fields) | |
 
 ---
 
@@ -146,6 +151,8 @@ Opt-in later: `METAL_BUILD_DOOM=1`.
 - **FS:** fd-shaped `pm_metal_fs_*` on `pymergetic.metal.fs` — `open_async` → handle, sync `lseek`, `fread/fwrite/fpread/fpwrite`, `close`, namespace ops (`stat`, `readdir`, `mkdir`, `unlink`, `rename`, `fsync`). Path `size/read/write_async` remains transitional. Proofs: `async_fs`, `async_fs_fd` + ESP `mods/tests/async_fs.txt`.
 - **WASI:** embed `hello` uses `shell_log` (no printf). Instantiation sets **0** WASI preopens — no `/` → ESP. libc-wasi still linked for CRT/`proc_exit`; no new guest I/O deps.
 - **Runloop:** timer lock init in `pm_metal_run_init`; session pump uses `CpuPause` (no 1 ms `Stall`); `sleep(0)` completes eagerly (fairness via `yield`).
+- **Net (2026-07-22):** multi-if + `bind_if`; DHCPv6 stateful Metal client alongside lwIP stateless.
+- **Input (2026-07-22):** guest `poll_key` / `poll_key_event` with tab focus; shell registry is linker-section based.
 
 ---
 

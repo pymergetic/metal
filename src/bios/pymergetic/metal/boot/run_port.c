@@ -3,6 +3,7 @@
 **/
 #include <pymergetic/metal/boot/port.h>
 #include <pymergetic/metal/boot/boot.h>
+#include <pymergetic/metal/dev/acpi/acpi.h>
 #include <pymergetic/metal/log/log.h>
 #include <runtime/run/run.h>
 
@@ -87,14 +88,13 @@ PortReset (
   }
 
   /*
-   * Best-effort power off, then halt. QEMU hits isa-debug-exit / ACPI;
-   * real PCs vary — try common PM1a_CNT locations, then freeze.
+   * Best-effort power off, then halt. QEMU hits isa-debug-exit first;
+   * real PCs need FADT PM1 + \_S5_ (hardcoded ports are QEMU-only).
    */
   IoWrite8 (0x501, 0x00);           /* QEMU isa-debug-exit */
-  IoWrite16 (0x604, 0x2000);        /* QEMU/PIIX ACPI */
+  pm_metal_acpi_poweroff ();
+  IoWrite16 (0x604, 0x2000);        /* QEMU/PIIX ACPI fallback */
   IoWrite16 (0xB004, 0x2000);       /* Bochs/older ACPI */
-  IoWrite16 (0x400 + 4, 0x2000);    /* common ICH PMBASE+PM1a_CNT */
-  IoWrite16 (0x1000 + 4, 0x2000);
   CpuDeadLoop ();
 }
 

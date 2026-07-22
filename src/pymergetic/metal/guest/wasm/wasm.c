@@ -18,6 +18,7 @@
 #include <pymergetic/metal/dev/net/tls.h>
 #include <pymergetic/metal/dev/net/ping.h>
 #include <pymergetic/metal/dev/net/http.h>
+#include <pymergetic/metal/dev/net/tftp.h>
 #include <pymergetic/metal/dev/random/random.h>
 #include <pymergetic/metal/util/arena.h>
 #include <pymergetic/metal/util/log.h>
@@ -26,6 +27,8 @@
 #include <pymergetic/metal/util/crypto.h>
 #include <pymergetic/metal/util/ascii.h>
 #include <pymergetic/metal/util/size.h>
+#include <pymergetic/metal/util/ip.h>
+#include <pymergetic/metal/host/host.h>
 #include <pymergetic/metal/log/log.h>
 #include <runtime/mem/mem.h>
 #include <runtime/time/time.h>
@@ -157,6 +160,7 @@ MetalWasmLiveClear (
   pm_metal_net_tls_bind_inst (NULL);
   pm_metal_net_ping_bind_inst (NULL);
   pm_metal_net_http_bind_inst (NULL);
+  pm_metal_net_tftp_bind_inst (NULL);
   pm_metal_random_bind_inst (NULL);
 
   if (mLiveEnv != NULL) {
@@ -247,6 +251,7 @@ pm_metal_wasm_init (
       || pm_metal_net_tls_native_register () != 0
       || pm_metal_net_ping_native_register () != 0
       || pm_metal_net_http_native_register () != 0
+      || pm_metal_net_tftp_native_register () != 0
       || pm_metal_random_native_register () != 0
       || pm_metal_util_arena_native_register () != 0
       || pm_metal_util_log_native_register () != 0
@@ -254,7 +259,9 @@ pm_metal_wasm_init (
       || pm_metal_util_tar_native_register () != 0
       || pm_metal_util_crypto_native_register () != 0
       || pm_metal_util_ascii_native_register () != 0
-      || pm_metal_util_size_native_register () != 0)
+      || pm_metal_util_size_native_register () != 0
+      || pm_metal_util_ip_native_register () != 0
+      || pm_metal_host_native_register () != 0)
   {
     pm_metal_log ("metal-wasm: native_register failed");
     wasm_runtime_destroy ();
@@ -586,6 +593,7 @@ pm_metal_wasm_run_bytes (
     pm_metal_net_tls_bind_inst (inst);
     pm_metal_net_ping_bind_inst (inst);
     pm_metal_net_http_bind_inst (inst);
+    pm_metal_net_tftp_bind_inst (inst);
     pm_metal_random_bind_inst (inst);
     ret       = MetalWasmRunAsyncLive (name, module, inst, exec_env, step_fn);
     if (ret != 0 || !pm_metal_async_session_active ()) {
@@ -614,6 +622,7 @@ pm_metal_wasm_run_bytes (
   pm_metal_net_tls_bind_inst (inst);
   pm_metal_net_ping_bind_inst (inst);
   pm_metal_net_http_bind_inst (inst);
+  pm_metal_net_tftp_bind_inst (inst);
   pm_metal_random_bind_inst (inst);
   ret = 0;
   if (!wasm_application_execute_main (inst, argc, (CHAR8 **)argv)) {

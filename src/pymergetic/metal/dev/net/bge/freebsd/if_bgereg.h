@@ -2607,14 +2607,15 @@ struct bge_status_block {
  */
 #define	BGE_EVENT_RING_CNT	256
 #define	BGE_CMD_RING_CNT	64
-#define	BGE_STD_RX_RING_CNT	64
+/* Match current FreeBSD (5705+ programmable std ring is 512). */
+#define	BGE_STD_RX_RING_CNT	512
 #define	BGE_JUMBO_RX_RING_CNT	256
 #define	BGE_MINI_RX_RING_CNT	1024
-#define	BGE_RETURN_RING_CNT	128
+#define	BGE_RETURN_RING_CNT	1024
 
-/* 5705 has smaller return ring size */
+/* 5705+ return ring */
 
-#define	BGE_RETURN_RING_CNT_5705	128
+#define	BGE_RETURN_RING_CNT_5705	512
 
 /*
  * Possible TX ring sizes.
@@ -2628,7 +2629,7 @@ struct bge_status_block {
 #define	BGE_TX_RING_CNT_512	512
 #define	BGE_TX_RING_BASE_512	0x2000
 
-#define	BGE_TX_RING_CNT		64
+#define	BGE_TX_RING_CNT		BGE_TX_RING_CNT_512
 #define	BGE_TX_RING_BASE	BGE_TX_RING_BASE_512
 
 /*

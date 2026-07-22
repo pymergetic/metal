@@ -109,7 +109,7 @@ int  metal_bge_attach(metal_bge_softc_t *sc, uint8_t bus, uint8_t dev,
                       uint8_t func);
 void metal_bge_detach(metal_bge_softc_t *sc);
 int  metal_bge_init(metal_bge_softc_t *sc);
-void metal_bge_poll(metal_bge_rx_fn fn, void *ctx);
+void metal_bge_poll(metal_bge_softc_t *sc, metal_bge_rx_fn fn, void *ctx);
 int  metal_bge_tx(metal_bge_softc_t *sc, const void *frame, uint32_t len);
 
 uint32_t bge_pci_read(metal_bge_softc_t *sc, int off);

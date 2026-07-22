@@ -11,14 +11,15 @@
 STATIC
 VOID
 InputKeybShellCmd (
-  CONST CHAR8  *arg
+  INT32   argc,
+  CHAR8 **argv
   )
 {
   pm_metal_input_keyb_t  layout;
   CONST CHAR8           *name;
   CHAR8                  msg[48];
 
-  if (arg == NULL || arg[0] == '\0') {
+  if (argc < 2) {
     name = pm_metal_input_keyb_name (pm_metal_input_keyb_get ());
     AsciiSPrint (
       msg,
@@ -30,7 +31,7 @@ InputKeybShellCmd (
     return;
   }
 
-  if (pm_metal_input_keyb_parse (arg, &layout) != 0) {
+  if (pm_metal_input_keyb_parse (argv[1], &layout) != 0) {
     pm_metal_shell_out ("usage: keyb [us|gr]");
     return;
   }
@@ -45,16 +46,9 @@ InputKeybShellCmd (
   pm_metal_shell_out (msg);
 }
 
-STATIC CONST pm_metal_shell_cmd_t  g_pm_metal_shell_cmd_keyb = {
+PM_METAL_SHELL_CMD (
+  g_pm_metal_shell_cmd_keyb,
   "keyb",
   "keyb [us|gr]      keyboard layout (DOS KEYB)",
   InputKeybShellCmd
-};
-
-void
-pm_metal_shell_cmds_register_input (
-  VOID
-  )
-{
-  pm_metal_shell_cmd_register (&g_pm_metal_shell_cmd_keyb);
-}
+  );
