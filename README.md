@@ -177,6 +177,15 @@ know it.
 
 ---
 
+## Acknowledgments
+
+Thanks to **Terry A. Davis** — TempleOS kept the idea alive that
+**cooperative** multitasking can be the right default (explicit yield / await,
+no preemptive scheduler pretending to be magic). Metal’s equal per-CPU runners
+are our take on that spirit, not a TempleOS clone.
+
+---
+
 ## License
 
 Metal is **[Apache License 2.0](LICENSE)** unless a file says otherwise.
