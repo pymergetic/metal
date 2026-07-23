@@ -2,6 +2,8 @@
 
 Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
 
+**Boot → hardware → CPU runners → certified wasm/AOT → go.**
+
 ![Metal boot UI](screenshots/ui-boot.png)
 
 - **Apps = `wasm32` guests** — `await` Metal APIs (present / net / FS / …) from
