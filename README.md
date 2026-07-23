@@ -1,5 +1,7 @@
 # Metal
 
+![Metal boot UI](screenshots/ui-boot.png)
+
 **Preferred model:** apps are **`wasm32` guests** that talk **async Metal APIs**
 over WASI-style imports (`await` present/net/FS/… from `guest_step`) — not a
 hosted OS, not sync syscalls on a kernel. The freestanding host (UEFI or
@@ -9,6 +11,15 @@ drivers behind exchangeable ops, WAMR for interp/AOT/(soon) JIT.
 That’s the product. Shell, tabs, and Doom are how you prove the machine is
 alive; they are not “the OS.”
 
+**Blank metal → pull apps over the wire:** PXE/BIOS (or ESP) boots a thin
+image, gets a lease, then **HTTP-fetches signed `.wasm` / `.aot` (+ payload)
+from the boot/HTTP server** (DHCP next-server / `:8080`). Detached ECDSA
+(`.sig`) via Mods CA — soft or enforce — so iron can stay almost empty and
+still run **certified** guests (Doom today). See [`docs/TRUST.md`](docs/TRUST.md)
+· [`docs/DOOM_ASYNC.md`](docs/DOOM_ASYNC.md).
+
+![PXE/HTTP seed with .sig](screenshots/pxe-http-sigs.png)
+
 **Target:** not for normal desktop users. Have *almost nothing* in the way —
 no Linux/userspace stack in-tree — and keep the **high-speed awaitable ABI**
 to wasm as the main surface.
@@ -17,8 +28,6 @@ to wasm as the main surface.
 is first-class. Old iron (ThinkPad **T42p** / T43) is the fun side quest that
 forces stable driver interfaces so backends stay swappable later — not
 “UEFI + static virtio only.”
-
-![Shell + help](screenshots/ui-shell.png)
 
 ---
 
@@ -44,12 +53,14 @@ More filenames: [`screenshots/README.md`](screenshots/README.md).
 
 ## Highlights
 
+- **Bare metal + certified HTTP packages** — boot almost empty, DHCP, then pull
+  signed wasm/AOT (and WAD/etc.) from the PXE/HTTP seed server; verify `.sig`
 - **Async host** — Python-shaped coroutines (`await`, tasks, sleep/deadlines);
   **N CPUs → N equal runners** (FCFS, no CPU0 Extrawurst)
 - **Wasm + async (preferred)** — guests `await` Metal imports from `guest_step`;
-  `wasm32-wasip1` mods via shell `run` / `tab` / embed + HTTP/TFTP seed
+  `run` / `tab` / embed when already local
 - **Gfx** — shadow FB + scanout backends (Bochs/QEMU, VESA, **Radeon RV370** GART+CP on ThinkPad T43, i915 sample); status tray with live present FPS
-- **Net** — `lo` + `eth0`…; virtio-net + Broadcom **bge**; DHCPv4/v6, DNS, NTP, ping, TFTP
+- **Net** — `lo` + `eth0`…; virtio-net + Broadcom **bge**; DHCPv4/v6, DNS, NTP, ping, TFTP/HTTP
 - **I/O** — virtio-blk / IDE, virtio-snd → AC97 → null; PS/2 + tablet input
 - **Shell / UI** — tabbed chrome, linker-section commands, serial + framebuffer consoles in parallel
 

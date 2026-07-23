@@ -10,3 +10,4 @@
 | `uart-doom-create.png` | Host UART — Doom create / `pace 35 Hz` |
 | `thinkpad-shell.jpg` | ThinkPad T42p — Metal shell on iron (`radeon_rv370`) |
 | `thinkpad-doom.jpg` | ThinkPad T42p — Doom tabbed on iron |
+| `pxe-http-sigs.png` | `upload-pxe` — HTTP mirror with `doom.*.aot` / `.wasm` + `.sig` |
