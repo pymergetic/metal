@@ -1,5 +1,9 @@
 # Doom → Metal async build plan
 
+Doom is **not the product**. It’s the standard “this is an OS” proof — real
+gfx present, input, pacing, wasm/AOT package pull — so Metal implements it.
+The product remains the thin async host + awaitable ABI.
+
 **Status:** A–D wired (parked app; `METAL_DOOM_BUILD=1` opt-in)  
 **Constraint:** await only from `pm_metal_guest_step`. External `doomgeneric` stays vanilla.
 

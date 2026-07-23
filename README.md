@@ -9,7 +9,9 @@ Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
 - **Host = thin async runtime** — UEFI or BIOS/PXE; **one runner per CPU**;
   exchangeable drivers; WAMR interp / AOT / (soon) JIT
 - **Not** a hosted OS, **not** sync syscalls on a kernel
-- Shell / tabs / Doom prove the machine is alive — they are **not** “the OS”
+- Shell / tabs prove the machine is alive — they are **not** “the OS”
+- **Doom** is here because it’s the classic “you’re an OS” proof (gfx, input,
+  timing, packages) — not because Metal is a game console
 
 **Blank metal → pull apps over the wire**
 
@@ -147,3 +149,13 @@ After Doom, next guest is **Python**. **Preferred path stays wasm + async
 Metal ABI** (same as Doom). Still open: **CPython vs MicroPython**, and whether
 a spike ever justifies a direct host embed instead — check memory/async fit
 before deciding. Tracked in [`docs/TODO.md`](docs/TODO.md).
+
+---
+
+## License
+
+Metal is **[Apache License 2.0](LICENSE)** unless a file says otherwise.
+
+Third-party / vendored bits keep their own terms (e.g. FreeBSD **bge**
+BSD-4-Clause under `src/pymergetic/metal/dev/net/bge/freebsd/`; WAMR, Doom,
+EDK2, etc. under `external/` or their upstream licenses).
