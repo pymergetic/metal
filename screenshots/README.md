@@ -1,12 +1,12 @@
 # Screenshots
 
-Drop real images over these placeholders (keep the filenames so the main README links stay valid).
-
-| File | Shot |
+| File | What |
 |------|------|
-| `ui-shell.png` | Main Metal UI — ideally with `help` (or similar) visible |
-| `uart-parallel.png` | Parallel view: UI + UART/serial console output |
-| `doom-tab.png` | Doom running windowed (`tab doom`) |
-| `thinkpad-doom.jpg` | Photo of the ThinkPad with Doom tabbed on iron |
-
-Tips: PNG for screen grabs, JPEG for the hardware photo. Crop/scale to ~16:10 or 4:3; keep text readable.
+| `ui-boot.png` | QEMU — shell after boot (METAL banner + device tree) |
+| `ui-shell.png` | QEMU — shell with `help` |
+| `doom-tab.png` | QEMU — Doom windowed (`tab doom`, ~35 fps tray) |
+| `ui-after-doom.png` | QEMU — UI console after Doom (`metal-perf`, tab closed) |
+| `uart-after-doom.png` | Host UART — same session as above (UART ⇔ UI console) |
+| `uart-doom-create.png` | Host UART — Doom create / `pace 35 Hz` |
+| `thinkpad-shell.jpg` | ThinkPad T42p — Metal shell on iron (`radeon_rv370`) |
+| `thinkpad-doom.jpg` | ThinkPad T42p — Doom tabbed on iron |
