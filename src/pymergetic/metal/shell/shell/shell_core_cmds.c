@@ -7,11 +7,175 @@
 #include <pymergetic/metal/shell/ui/ui.h>
 #include <pymergetic/metal/guest/process/process.h>
 #include <pymergetic/metal/dev/random/random.h>
+#include <pymergetic/metal/util/size.h>
+#include <runtime/mem/mem.h>
+#include <runtime/stack/stack.h>
 
 #include <Uefi.h>
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/PrintLib.h>
+
+STATIC
+VOID
+CoreFmtBytes (
+  CHAR8   *out,
+  UINTN    cap,
+  UINT64   bytes
+  )
+{
+  if (pm_metal_util_size_format (out, (size_t)cap, bytes) < 0) {
+    if (cap > 0) {
+      out[0] = '?';
+      if (cap > 1) {
+        out[1] = '\0';
+      }
+    }
+  }
+}
+
+STATIC
+VOID
+CoreMemCmd (
+  INT32   argc,
+  CHAR8 **argv
+  )
+{
+  UINT64  phys;
+  UINT64  arena;
+  UINT64  outside;
+  UINT64  map;
+  UINT64  heap;
+  UINT64  hole;
+  UINT64  stacks;
+  UINT64  map_other;
+  UINT32  n_cpus;
+  UINT32  pct_metal;
+  UINT32  pct_hole;
+  UINT32  pct_heap;
+  CHAR8   pbuf[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  CHAR8   a[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  CHAR8   outb[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  CHAR8   s[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  CHAR8   one[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  CHAR8   oth[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  CHAR8   o[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  CHAR8   h[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  CHAR8   line[112];
+
+  (VOID)argc;
+  (VOID)argv;
+
+  /*
+   * system RAM
+   *   +-- metal arena (low → high): stacks | map | hole | heap
+   *   `-- other (UEFI / firmware / unclaimed)
+   */
+  phys   = (UINT64)pm_metal_mem_phys_bytes ();
+  arena  = (UINT64)pm_metal_mem_arena_bytes ();
+  map    = (UINT64)pm_metal_mem_map_bytes ();
+  heap   = (UINT64)pm_metal_mem_heap_bytes ();
+  hole   = (UINT64)pm_metal_mem_hole_bytes ();
+  n_cpus = pm_metal_stack_n_cpus ();
+  if (n_cpus == 0u) {
+    n_cpus = pm_metal_mem_n_cpus ();
+  }
+
+  stacks = (UINT64)pm_metal_stack_bytes () * (UINT64)n_cpus;
+  if (stacks > map) {
+    stacks = map;
+  }
+
+  map_other = map - stacks;
+  outside   = 0;
+  if (phys > arena) {
+    outside = phys - arena;
+  }
+
+  pct_metal = 0;
+  pct_hole  = 0;
+  pct_heap  = 0;
+  if (phys != 0) {
+    pct_metal = (UINT32)((arena * 100ull) / phys);
+  }
+
+  if (arena != 0) {
+    pct_hole = (UINT32)((hole * 100ull) / arena);
+    pct_heap = (UINT32)((heap * 100ull) / arena);
+  }
+
+  CoreFmtBytes (a, sizeof (a), arena);
+  CoreFmtBytes (s, sizeof (s), stacks);
+  CoreFmtBytes (one, sizeof (one), (UINT64)pm_metal_stack_bytes ());
+  CoreFmtBytes (oth, sizeof (oth), map_other);
+  CoreFmtBytes (o, sizeof (o), hole);
+  CoreFmtBytes (h, sizeof (h), heap);
+
+  if (phys != 0) {
+    CoreFmtBytes (pbuf, sizeof (pbuf), phys);
+    CoreFmtBytes (outb, sizeof (outb), outside);
+    AsciiSPrint (line, sizeof (line), "mem: system %a", pbuf);
+    pm_metal_shell_out (line);
+    AsciiSPrint (
+      line,
+      sizeof (line),
+      "  +-- metal   %a   (%u%%, claimed arena)",
+      a,
+      pct_metal
+      );
+    pm_metal_shell_out (line);
+  } else {
+    AsciiSPrint (line, sizeof (line), "mem: metal %a  (arena)", a);
+    pm_metal_shell_out (line);
+  }
+
+  AsciiSPrint (
+    line,
+    sizeof (line),
+    "  %a +-- stacks  %a   (%u x %a)",
+    (phys != 0) ? "|  " : "",
+    s,
+    n_cpus,
+    one
+    );
+  pm_metal_shell_out (line);
+  AsciiSPrint (
+    line,
+    sizeof (line),
+    "  %a +-- map     %a   (virtio/DMA/...)",
+    (phys != 0) ? "|  " : "",
+    oth
+    );
+  pm_metal_shell_out (line);
+  AsciiSPrint (
+    line,
+    sizeof (line),
+    "  %a +-- hole    %a   (%u%% of arena)",
+    (phys != 0) ? "|  " : "",
+    o,
+    pct_hole
+    );
+  pm_metal_shell_out (line);
+  AsciiSPrint (
+    line,
+    sizeof (line),
+    "  %a `-- heap    %a   (%u%% of arena, TLSF)",
+    (phys != 0) ? "|  " : "",
+    h,
+    pct_heap
+    );
+  pm_metal_shell_out (line);
+
+  if (phys != 0) {
+    AsciiSPrint (
+      line,
+      sizeof (line),
+      "  `-- other   %a   (UEFI/firmware/reserved)",
+      outb
+      );
+    pm_metal_shell_out (line);
+  }
+}
 
 STATIC
 CONST CHAR8 *
@@ -368,6 +532,7 @@ PM_METAL_SHELL_CMDS (g_pm_metal_shell_cmds_core) = {
   { "run", "run <mod>         fullscreen in console (guest HID)", CoreRunCmd },
   { "tab", "tab <mod>         windowed in a new tab (guest HID)", CoreTabCmd },
   { "ps", "ps                list fake processes", CorePsCmd },
+  { "mem", "mem               system RAM + arena layout", CoreMemCmd },
   { "tabs", "tabs              list tabs", CoreTabsCmd },
   { "use", "use <n>           activate tab index", CoreUseCmd },
   { "close", "close [n]         close tab n, or active/last guest", CoreCloseCmd },

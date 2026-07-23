@@ -429,7 +429,7 @@ MetalBootInitCoro (
           if (tr != 0) {
             pm_metal_log_styled (
               PM_METAL_LOG_STYLE_FAIL,
-              "|   +-- trust    hard-fail (METAL_TRUST_STRICT)"
+              "|   +-- trust    hard-fail (enforce)"
               );
             return PM_METAL_ERROR;
           }
@@ -457,6 +457,22 @@ MetalBootInitCoro (
           pkg_note = NULL;
           ntp_note = (pm_metal_net_ntp_last_unix_ms () != 0ull) ? "ok" : "pending";
           MetalBootLogNetBranch (dhcp_ok, pkg_note, ntp_note);
+
+          /* Blk smoke after devices are live (verify: metal-blk: lba0 ok). */
+          if (pm_metal_blk_count () > 0) {
+            pm_metal_blk_h  bh;
+            UINT8           sec[512];
+
+            bh = pm_metal_blk_at (0);
+            if (bh != PM_METAL_BLK_INVALID
+                && pm_metal_blk_read (bh, 0, sec, 1) == 0)
+            {
+              pm_metal_log ("metal-blk: lba0 ok");
+            } else {
+              pm_metal_log ("metal-blk: lba0 fail");
+            }
+          }
+
           s->step = BOOT_WASM;
           continue;
         }
@@ -492,6 +508,7 @@ MetalBootInitCoro (
         pm_metal_log (
           "\033[1;36mREADY\033[0m\033[2m  --  type help\033[0m"
           );
+        pm_metal_log ("metal-boot: ready");
         pm_metal_log ("");
         {
           UINT32  ty;

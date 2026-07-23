@@ -328,6 +328,7 @@
   CpuLib
   BaseLib
   IoLib
+  DevicePathLib
 
 [BuildOptions]
   GCC:*_*_*_DLINK_FLAGS = -Wl,-T,$(MODULE_DIR)/shell_cmds.lds

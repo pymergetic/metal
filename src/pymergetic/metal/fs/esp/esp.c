@@ -38,6 +38,9 @@ typedef struct {
 STATIC metal_esp_cache_t  mCache[PM_METAL_ESP_CACHE_MAX];
 STATIC CHAR8              mDirs[PM_METAL_ESP_DIR_MAX][PM_METAL_ESP_PATH_MAX];
 STATIC INT32              mReady;
+STATIC CHAR8              mLoadedPath[PM_METAL_ESP_PATH_MAX];
+STATIC CONST VOID        *mLoadedImageBase;
+STATIC UINT32             mLoadedImageSize;
 
 STATIC
 INT32
@@ -421,6 +424,65 @@ pm_metal_esp_ready (
   )
 {
   return mReady ? 1 : 0;
+}
+
+void
+pm_metal_esp_set_loaded_identity (
+  CONST CHAR8   *path,
+  CONST VOID    *base,
+  UINT32         size
+  )
+{
+  UINTN  i;
+
+  mLoadedPath[0]   = '\0';
+  mLoadedImageBase = base;
+  mLoadedImageSize = size;
+  if (path == NULL || path[0] == '\0') {
+    return;
+  }
+
+  for (i = 0; i + 1 < PM_METAL_ESP_PATH_MAX && path[i] != '\0'; i++) {
+    CHAR8  c;
+
+    c = path[i];
+    if (c == '\\') {
+      c = '/';
+    }
+
+    mLoadedPath[i] = c;
+  }
+
+  mLoadedPath[i] = '\0';
+}
+
+CONST CHAR8 *
+pm_metal_esp_loaded_path (
+  VOID
+  )
+{
+  return (mLoadedPath[0] != '\0') ? mLoadedPath : NULL;
+}
+
+int
+pm_metal_esp_loaded_image (
+  CONST VOID  **base,
+  UINT32       *size
+  )
+{
+  if (mLoadedImageBase == NULL || mLoadedImageSize == 0) {
+    return -1;
+  }
+
+  if (base != NULL) {
+    *base = mLoadedImageBase;
+  }
+
+  if (size != NULL) {
+    *size = mLoadedImageSize;
+  }
+
+  return 0;
 }
 
 int

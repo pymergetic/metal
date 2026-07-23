@@ -25,6 +25,19 @@ int pm_metal_esp_init(void *image_handle);
 int pm_metal_esp_ready(void);
 
 /**
+ * Identity of the artifact that is actually executing (METAL-006).
+ * Path is ESP-relative (e.g. "EFI/BOOT/BOOTX64.EFI") or "metal.elf".
+ * Image base/size are the in-memory loaded bytes when known (UEFI).
+ */
+const char *pm_metal_esp_loaded_path(void);
+
+int pm_metal_esp_loaded_image(const void **base, uint32_t *size);
+
+/** Port helper: record loaded identity during esp_init_port. */
+void pm_metal_esp_set_loaded_identity(const char *path, const void *base,
+				      uint32_t size);
+
+/**
  * Preload an ESP path into RAM so size/read/write work after EBS.
  * Call on the sync floor while Simple File System is alive.
  */

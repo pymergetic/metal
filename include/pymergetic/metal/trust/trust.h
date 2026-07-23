@@ -25,7 +25,15 @@ extern "C" {
 
 #if !defined(__wasm__)
 
-/** Build with -DMETAL_TRUST_STRICT=1 → boot hard-fails on bad/missing kernel sig. */
+/**
+ * Diagnostic escape only: allow boot to continue after an enforce-mode
+ * kernel-trust failure. Disabled by default; must not be set in release.
+ */
+#ifndef PM_METAL_TRUST_ENFORCE_CONTINUE
+#define PM_METAL_TRUST_ENFORCE_CONTINUE 0
+#endif
+
+/** @deprecated Use enforce mode (intrinsically fatal). Kept for soft hard-fail. */
 #ifndef PM_METAL_TRUST_STRICT
 #define PM_METAL_TRUST_STRICT 0
 #endif
@@ -58,7 +66,7 @@ const char *pm_metal_trust_mode_str(void);
 /** 1 if baked CAs parsed and crypto verify is usable. */
 int pm_metal_trust_ready(void);
 
-/** 1 if METAL_TRUST_STRICT / PM_METAL_TRUST_STRICT. */
+/** 1 if PM_METAL_TRUST_STRICT (soft-mode hard-fail / legacy). */
 int pm_metal_trust_strict(void);
 
 /**
@@ -85,8 +93,9 @@ int pm_metal_trust_accept_kernel(const void *data, uint32_t data_len,
 				 const void *sig, uint32_t sig_len);
 
 /**
- * Early boot: load kernel image + .sig from ESP (tried paths) and verify.
- * Updates last boot status. Returns 0 if OK or soft-warn; -1 if FAIL and strict.
+ * Early boot: verify the executing kernel artifact + its .sig.
+ * Enforce mode: any failure returns -1 (unless ENFORCE_CONTINUE).
+ * Soft: missing/unsigned may WARN/OK; STRICT still hard-fails soft.
  */
 int pm_metal_trust_boot_check(void);
 

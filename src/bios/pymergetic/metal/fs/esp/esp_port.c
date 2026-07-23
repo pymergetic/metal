@@ -11,6 +11,8 @@ pm_metal_esp_init_port (
   )
 {
   (VOID)image_handle;
+  /* Multiboot/PXE artifact identity for kernel trust (METAL-006). */
+  pm_metal_esp_set_loaded_identity ("metal.elf", NULL, 0);
   return 0;
 }
 

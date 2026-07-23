@@ -391,19 +391,103 @@ pm_metal_trust_boot_status_str (
   }
 }
 
+/**
+ * Enforce failures are intrinsically fatal (METAL-005). Soft continues
+ * unless STRICT. ENFORCE_CONTINUE is a diagnostic escape only.
+ */
 STATIC
 INT32
-TrustBootTryPair (
-  CONST CHAR8  *img_path,
-  CONST CHAR8  *sig_path
+TrustBootReturnFail (
+  VOID
   )
 {
-  UINT8   *img;
-  UINT32   img_len;
-  UINT8   *sig;
-  UINT32   sig_len;
-  INT32    rc;
+  INT32  mode;
 
+  mBootStatus = PM_METAL_TRUST_BOOT_FAIL;
+  mode        = pm_metal_trust_mode ();
+  if (mode == PM_METAL_TRUST_MODE_ENFORCE) {
+#if PM_METAL_TRUST_ENFORCE_CONTINUE
+    return 0;
+#else
+    return -1;
+#endif
+  }
+
+  return pm_metal_trust_strict () ? -1 : 0;
+}
+
+STATIC
+INT32
+TrustBootReturnWarn (
+  VOID
+  )
+{
+  INT32  mode;
+
+  mBootStatus = PM_METAL_TRUST_BOOT_WARN;
+  mode        = pm_metal_trust_mode ();
+  if (mode == PM_METAL_TRUST_MODE_ENFORCE) {
+#if PM_METAL_TRUST_ENFORCE_CONTINUE
+    return 0;
+#else
+    return -1;
+#endif
+  }
+
+  return pm_metal_trust_strict () ? -1 : 0;
+}
+
+STATIC
+VOID
+TrustSigPath (
+  CONST CHAR8  *img_path,
+  CHAR8        *sig_path,
+  UINTN         sig_cap
+  )
+{
+  UINTN  n;
+
+  n = 0;
+  if (img_path != NULL) {
+    while (img_path[n] != '\0' && n + 5 < sig_cap) {
+      sig_path[n] = img_path[n];
+      n++;
+    }
+  }
+
+  if (n + 4 < sig_cap) {
+    sig_path[n++] = '.';
+    sig_path[n++] = 's';
+    sig_path[n++] = 'i';
+    sig_path[n++] = 'g';
+  }
+
+  sig_path[n] = '\0';
+}
+
+/**
+ * Verify ESP bytes at the LoadedImage path (+ matching .sig).
+ * Path identity comes from EFI_LOADED_IMAGE_PROTOCOL — never another
+ * candidate filename (METAL-006). Returns 0 ok, 1 missing, -1 bad sig.
+ */
+STATIC
+INT32
+TrustBootVerifyLoaded (
+  CONST CHAR8  *img_path
+  )
+{
+  CHAR8   sig_path[160];
+  UINT8  *img;
+  UINT32  img_len;
+  UINT8  *sig;
+  UINT32  sig_len;
+  INT32   rc;
+
+  if (img_path == NULL || img_path[0] == '\0') {
+    return 1;
+  }
+
+  TrustSigPath (img_path, sig_path, sizeof (sig_path));
   img = NULL;
   sig = NULL;
   if (pm_metal_esp_file_size (img_path, &img_len) != 0
@@ -437,12 +521,8 @@ pm_metal_trust_boot_check (
   VOID
   )
 {
-  STATIC CONST CHAR8  *Pairs[][2] = {
-    { "EFI/BOOT/BOOTX64.EFI", "EFI/BOOT/BOOTX64.EFI.sig" },
-    { "metal.efi",            "metal.efi.sig"            },
-    { "metal.elf",            "metal.elf.sig"            },
-  };
-  UINT32  i;
+  CONST CHAR8  *loaded;
+  INT32         tr;
 
   if (pm_metal_trust_mode () == PM_METAL_TRUST_MODE_OFF) {
     mBootStatus = PM_METAL_TRUST_BOOT_OFF;
@@ -451,8 +531,7 @@ pm_metal_trust_boot_check (
 
   if (!pm_metal_trust_baked ()) {
     if (pm_metal_trust_mode () == PM_METAL_TRUST_MODE_ENFORCE) {
-      mBootStatus = PM_METAL_TRUST_BOOT_FAIL;
-      return pm_metal_trust_strict () ? -1 : 0;
+      return TrustBootReturnFail ();
     }
 
     mBootStatus = PM_METAL_TRUST_BOOT_OFF;
@@ -461,14 +540,12 @@ pm_metal_trust_boot_check (
 
   if (!pm_metal_trust_ready ()) {
     /* Pubs baked but parse failed — real problem in any checking mode. */
-    mBootStatus = PM_METAL_TRUST_BOOT_WARN;
-    return pm_metal_trust_strict () ? -1 : 0;
+    return TrustBootReturnWarn ();
   }
 
   if (!pm_metal_esp_ready ()) {
     if (pm_metal_trust_mode () == PM_METAL_TRUST_MODE_ENFORCE) {
-      mBootStatus = PM_METAL_TRUST_BOOT_FAIL;
-      return pm_metal_trust_strict () ? -1 : 0;
+      return TrustBootReturnFail ();
     }
 
     /* soft: no ESP to check → unsigned OK */
@@ -476,30 +553,33 @@ pm_metal_trust_boot_check (
     return 0;
   }
 
-  for (i = 0; i < (UINT32)(sizeof (Pairs) / sizeof (Pairs[0])); i++) {
-    INT32  tr;
-
-    tr = TrustBootTryPair (Pairs[i][0], Pairs[i][1]);
-    if (tr == 1) {
-      continue;
+  /*
+   * METAL-006: only the executing artifact. Never succeed because some
+   * other candidate on the ESP still has a valid signature.
+   */
+  loaded = pm_metal_esp_loaded_path ();
+  if (loaded == NULL) {
+    if (pm_metal_trust_mode () == PM_METAL_TRUST_MODE_ENFORCE) {
+      return TrustBootReturnFail ();
     }
 
-    if (tr == 0) {
-      mBootStatus = PM_METAL_TRUST_BOOT_OK;
-      return 0;
-    }
-
-    mBootStatus = PM_METAL_TRUST_BOOT_FAIL;
-    return pm_metal_trust_strict () ? -1 : 0;
+    mBootStatus = PM_METAL_TRUST_BOOT_OK;
+    return 0;
   }
 
-  /*
-   * No image+.sig pair on ESP.
-   * soft: unsigned is allowed → ok. enforce: signature required → FAIL.
-   */
+  tr = TrustBootVerifyLoaded (loaded);
+  if (tr == 0) {
+    mBootStatus = PM_METAL_TRUST_BOOT_OK;
+    return 0;
+  }
+
+  if (tr < 0) {
+    return TrustBootReturnFail ();
+  }
+
+  /* Missing loaded image+.sig pair. */
   if (pm_metal_trust_mode () == PM_METAL_TRUST_MODE_ENFORCE) {
-    mBootStatus = PM_METAL_TRUST_BOOT_FAIL;
-    return pm_metal_trust_strict () ? -1 : 0;
+    return TrustBootReturnFail ();
   }
 
   mBootStatus = PM_METAL_TRUST_BOOT_OK;

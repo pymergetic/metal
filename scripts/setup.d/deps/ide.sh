@@ -141,6 +141,24 @@ for fpath in bios_files:
             "file": str(fpath.resolve()),
         })
 
+# Host-side regressions (Linux glibc — not freestanding / WASI).
+host_dir = root / "tests/host"
+host_base = (
+    f"/usr/bin/clang -std=c11 --target=x86_64-linux-gnu -D_GNU_SOURCE "
+    f"-I{tlsf} -I{inc_root} "
+)
+if host_dir.is_dir():
+    for fpath in sorted(host_dir.glob("*.c")):
+        rp = fpath.resolve()
+        cmd = f"{host_base}-c -o /dev/null {rp}"
+        # metal001 also compiles vendored tlsf.c at verify time; for IDE
+        # the header -I is enough to resolve includes.
+        entries.append({
+            "directory": str(root),
+            "command": cmd,
+            "file": str(rp),
+        })
+
 out.write_text(json.dumps(entries, indent=2) + "\n")
 print(f"compile_commands.json: {len(entries)} entr(y/ies) -> {out}")
 if not (root / "external/edk2/MdePkg/Include/Uefi.h").is_file():
@@ -154,6 +172,12 @@ echo "compile_commands.json -> ${MERGED}"
 
 sed "s|@@ROOT@@|${ROOT}|g" "${ROOT}/.clangd.template" > "${ROOT}/.clangd"
 echo ".clangd -> generated from .clangd.template (ROOT=${ROOT})"
+
+if [[ -f "${ROOT}/tests/host/.clangd.template" ]]; then
+	sed "s|@@ROOT@@|${ROOT}|g" "${ROOT}/tests/host/.clangd.template" \
+		> "${ROOT}/tests/host/.clangd"
+	echo "tests/host/.clangd -> generated from tests/host/.clangd.template"
+fi
 
 CLANG_EFI=(
 	clang -fsyntax-only -std=c11 -ffreestanding -fno-stack-protector

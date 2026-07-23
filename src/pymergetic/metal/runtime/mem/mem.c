@@ -28,6 +28,7 @@ STATIC unsigned             mCurrentCpu;
 STATIC pm_metal_mem_obj_t  *mObjHead;
 STATIC SPIN_LOCK            mObjLock;
 STATIC INT32                mReady;
+STATIC size_t               mPhysBytes;
 
 STATIC CONST UINTN mSharedClassSizes[PM_METAL_MEM_SHARED_CLASS_COUNT] = {
   64, 256, 1024, 4096
@@ -408,7 +409,9 @@ pm_metal_mem_realloc (
   size_t  size
   )
 {
-  VOID  *n;
+  VOID   *n;
+  size_t  old_size;
+  size_t  copy;
 
   if (!mReady) {
     return NULL;
@@ -423,8 +426,14 @@ pm_metal_mem_realloc (
     return NULL;
   }
 
+  /*
+   * Prefer tlsf_realloc (in-pool resize/move; already MIN(old, new)).
+   * If pools are full: grow via alloc, copy MIN(old, new), free old
+   * (METAL-001 — never copy new_size past the old block).
+   */
   AcquireSpinLock (&mHeapLock);
   n = tlsf_realloc (mTlsf, ptr, size);
+  old_size = (n == NULL) ? tlsf_block_size (ptr) : 0;
   ReleaseSpinLock (&mHeapLock);
   if (n != NULL) {
     return n;
@@ -432,7 +441,8 @@ pm_metal_mem_realloc (
 
   n = pm_metal_mem_alloc (size, PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
   if (n != NULL) {
-    CopyMem (n, ptr, size);
+    copy = (old_size < size) ? old_size : size;
+    CopyMem (n, ptr, copy);
     pm_metal_mem_free (ptr);
   }
 
@@ -525,4 +535,20 @@ pm_metal_mem_n_cpus (
   )
 {
   return mNCpus;
+}
+
+void
+pm_metal_mem_set_phys_bytes (
+  size_t  phys_bytes
+  )
+{
+  mPhysBytes = phys_bytes;
+}
+
+size_t
+pm_metal_mem_phys_bytes (
+  VOID
+  )
+{
+  return mPhysBytes;
 }

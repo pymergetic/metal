@@ -103,6 +103,11 @@ MetalTimerDrop (
   ReleaseSpinLock (&mTimerLock);
 
   if (tm != NULL) {
+    if (tm->task != NULL) {
+      pm_metal_task_unref (tm->task);
+      tm->task = NULL;
+    }
+
     pm_metal_mem_free (tm);
   }
 }
@@ -134,6 +139,11 @@ MetalTimerArmAt (
   tm->owner_slot  = owner_slot;
   if (owner_slot != NULL) {
     *owner_slot = tm;
+  }
+
+  /* Retain owner for the armed timer (METAL-003). */
+  if (task != NULL) {
+    pm_metal_task_ref (task);
   }
 
   MetalTimerLockInit ();
@@ -710,24 +720,47 @@ pm_metal_coro_poll_timers (
     cancelled = tm->cancelled;
     task      = tm->task;
     wait_for  = tm->wait_for;
-    ReleaseSpinLock (&mTimerLock);
+    tm->task     = NULL;
+    tm->wait_for = NULL;
 
-    if (!cancelled) {
-      if (wait_for != NULL) {
+    {
+      pm_metal_task_t  *child;
+
+      child = NULL;
+      /*
+       * Publish timeout under the timer lock so teardown cannot free
+       * wait_for before timed_out is written (METAL-003). Retain child
+       * for cancel after unlock.
+       */
+      if (!cancelled && wait_for != NULL) {
         pm_metal_wait_for_coro_t  *w;
 
         w = (pm_metal_wait_for_coro_t *)wait_for;
         w->timed_out = 1;
-        if (w->child != NULL) {
-          pm_metal_task_cancel (w->child);
+        child = w->child;
+        if (child != NULL) {
+          pm_metal_task_ref (child);
+        }
+      }
+
+      ReleaseSpinLock (&mTimerLock);
+
+      if (!cancelled) {
+        if (child != NULL) {
+          pm_metal_task_cancel (child);
+          pm_metal_task_unref (child);
+        }
+
+        if (task != NULL) {
+          (VOID)pm_metal_task_spawn (task, task->cpu);
         }
       }
 
       if (task != NULL) {
-        (VOID)pm_metal_task_spawn (task, task->cpu);
+        pm_metal_task_unref (task);
       }
-    }
 
-    pm_metal_mem_free (tm);
+      pm_metal_mem_free (tm);
+    }
   }
 }

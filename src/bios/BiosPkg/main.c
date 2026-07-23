@@ -99,9 +99,22 @@ STATIC UINT64 mMapBytes;
 STATIC UINT64 mHoleMiB;
 STATIC UINT64 mHeapBytes;
 STATIC UINT64 mStackKiB;
+STATIC UINT64 mPhysBytes;
 STATIC UINTN mCpuCount = 1;
 STATIC UINTN mVgaRow;
 STATIC UINTN mVgaCol;
+
+/* Multiboot mmap: 1=available, 3=ACPI reclaim, 4=NVS — count as system RAM. */
+STATIC VOID
+MetalBiosAddPhys (
+  UINT32  type,
+  UINT64  len
+  )
+{
+  if (type == 1u || type == 3u || type == 4u) {
+    mPhysBytes += len;
+  }
+}
 
 STATIC VOID
 Com1Init(VOID)
@@ -210,6 +223,7 @@ ParseMb2(UINT32 magic, VOID *info, VOID **arena_out, UINTN *bytes_out)
   if (magic != MB2_BOOTLOADER_MAGIC || info == NULL)
     return -1;
 
+  mPhysBytes = 0;
   hdr = (mb2_info_t *)info;
   p = (UINT8 *)info + 8;
   end = (UINT8 *)info + hdr->TotalSize;
@@ -223,6 +237,7 @@ ParseMb2(UINT32 magic, VOID *info, VOID **arena_out, UINTN *bytes_out)
       UINT8 *mend = p + tag->Size;
       while (e + mm->EntrySize <= mend) {
 	mb2_mmap_entry_t *ent = (mb2_mmap_entry_t *)e;
+	MetalBiosAddPhys (ent->Type, ent->Len);
 	if (ent->Type == 1 && ent->Len > best_len && ent->Addr >= 0x100000ull) {
 	  best_addr = ent->Addr;
 	  best_len = ent->Len;
@@ -256,6 +271,7 @@ ParseMb1(UINT32 magic, VOID *info, VOID **arena_out, UINTN *bytes_out)
   if (magic != MB1_BOOTLOADER_MAGIC || info == NULL)
     return -1;
 
+  mPhysBytes = 0;
   hdr = (mb1_info_t *)info;
 
   if ((hdr->Flags & (1u << 12)) != 0 && hdr->FramebufferBpp == 32
@@ -276,6 +292,7 @@ ParseMb1(UINT32 magic, VOID *info, VOID **arena_out, UINTN *bytes_out)
       UINT32 esz = ent->Size + 4;
       if (esz < sizeof(mb1_mmap_entry_t) || p + esz > end)
 	break;
+      MetalBiosAddPhys (ent->Type, ent->Len);
       if (ent->Type == 1 && ent->Len > best_len && ent->Addr >= 0x100000ull) {
 	best_addr = ent->Addr;
 	best_len = ent->Len;
@@ -286,6 +303,9 @@ ParseMb1(UINT32 magic, VOID *info, VOID **arena_out, UINTN *bytes_out)
   if (best_len == 0 && (hdr->Flags & (1u << 0)) != 0) {
     best_addr = 0x100000ull;
     best_len = (UINT64)hdr->MemUpper * 1024ull;
+    if (mPhysBytes == 0) {
+      mPhysBytes = 1024ull * 1024ull + best_len;
+    }
   }
 
   return ClaimBest(best_addr, best_len, arena_out, bytes_out);
@@ -323,6 +343,9 @@ MetalMemBringUp(VOID *arena, UINTN bytes)
 
   if (pm_metal_mem_init(arena, bytes, (unsigned)mCpuCount) != 0)
     return -1;
+  if (mPhysBytes != 0) {
+    pm_metal_mem_set_phys_bytes ((size_t)mPhysBytes);
+  }
   if (pm_metal_stack_init((unsigned)mCpuCount) != 0)
     return -1;
 

@@ -101,6 +101,15 @@ size_t   pm_metal_mem_os_bytes (void);      /* alias: hole */
 /* impl: efi|bios */
 unsigned pm_metal_mem_n_cpus (void);
 
+/**
+  Installed system RAM (bytes), recorded by the port at bring-up.
+  0 = unknown. Outside Metal = phys - arena (UEFI/firmware/other).
+*/
+/* impl: efi|bios */
+void   pm_metal_mem_set_phys_bytes (size_t phys_bytes);
+/* impl: efi|bios */
+size_t pm_metal_mem_phys_bytes (void);
+
 #ifdef __cplusplus
 }
 #endif

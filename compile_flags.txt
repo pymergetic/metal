@@ -1,5 +1,6 @@
 -Iinclude
 -Isrc/pymergetic/metal/dev/net
+-Iexternal/tlsf
 -Iexternal/mbedtls/include
 -Iexternal/lwip/src/include
 -DMBEDTLS_CONFIG_FILE="<pymergetic/metal/dev/net/mbedtls_metal_config.h>"

@@ -179,6 +179,28 @@ CompileFlags:
     - -DWASM_ENABLE_LIBC_WASI=1
 
 ---
+# Host-side regressions (Linux glibc) — not freestanding host_stubs / WASI.
+# Also mirrored in tests/host/.clangd (closer config; PathMatch alone was
+# insufficient against CDB fuzzy-match to wasm).
+If:
+  PathMatch: [/.]tests/host/.*\.(c|h)$
+CompileFlags:
+  CompilationDatabase: "None"
+  Compiler: /usr/bin/clang
+  Remove:
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
+    - -I@@ROOT@@/external/wamr/core/shared/platform/include
+    - --target=*
+    - --sysroot=*
+  Add:
+    - --target=x86_64-linux-gnu
+    - -std=c11
+    - -D_GNU_SOURCE
+    - -I@@ROOT@@/external/tlsf
+    - -I@@ROOT@@/include
+
+---
 # Guest test mods (wasm) — optional; needs ./scripts/setup tools for wasi-sysroot.
 # apps/doom has its own fragment (doomgeneric -I + CDB).
 If:

@@ -8,14 +8,77 @@
 #include <Uefi.h>
 #include <Protocol/LoadedImage.h>
 #include <Protocol/SimpleFileSystem.h>
+#include <Protocol/DevicePath.h>
 #include <Guid/FileInfo.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/BaseLib.h>
 #include <Library/MemoryAllocationLib.h>
+#include <Library/DevicePathLib.h>
 
 STATIC EFI_FILE_PROTOCOL  *mRoot;
 STATIC INT32               mHwReady;
+
+/**
+ * Walk MEDIA_FILEPATH nodes into an ESP-relative ASCII path
+ * (slashes, no leading separator).
+ */
+STATIC
+INT32
+MetalEspLoadedPathFromDp (
+  EFI_DEVICE_PATH_PROTOCOL  *Dp,
+  CHAR8                     *Out,
+  UINTN                      OutCap
+  )
+{
+  UINTN  o;
+
+  if (Dp == NULL || Out == NULL || OutCap < 2) {
+    return -1;
+  }
+
+  o = 0;
+  Out[0] = '\0';
+  while (!IsDevicePathEnd (Dp)) {
+    if (DevicePathType (Dp) == MEDIA_DEVICE_PATH
+        && DevicePathSubType (Dp) == MEDIA_FILEPATH_DP)
+    {
+      FILEPATH_DEVICE_PATH  *Fp;
+      UINTN                  i;
+
+      Fp = (FILEPATH_DEVICE_PATH *)Dp;
+      for (i = 0; Fp->PathName[i] != L'\0'; i++) {
+        CHAR16  wc;
+        CHAR8   c;
+
+        wc = Fp->PathName[i];
+        if (wc > 0x7f) {
+          return -1;
+        }
+
+        c = (CHAR8)wc;
+        if (c == '\\') {
+          c = '/';
+        }
+
+        if (c == '/' && (o == 0 || Out[o - 1] == '/')) {
+          continue;
+        }
+
+        if (o + 1 >= OutCap) {
+          return -1;
+        }
+
+        Out[o++] = c;
+      }
+    }
+
+    Dp = NextDevicePathNode (Dp);
+  }
+
+  Out[o] = '\0';
+  return (o > 0) ? 0 : -1;
+}
 
 STATIC
 VOID
@@ -160,6 +223,25 @@ pm_metal_esp_init_port (
   if (EFI_ERROR (Status) || mRoot == NULL) {
     pm_metal_log ("metal-esp: OpenVolume failed");
     return -1;
+  }
+
+  /* Bind trust to the exact artifact that is executing (METAL-006). */
+  {
+    CHAR8  path[128];
+
+    if (MetalEspLoadedPathFromDp (Loaded->FilePath, path, sizeof (path)) == 0) {
+      pm_metal_esp_set_loaded_identity (
+        path,
+        Loaded->ImageBase,
+        (UINT32)Loaded->ImageSize
+        );
+    } else if (Loaded->ImageBase != NULL && Loaded->ImageSize > 0) {
+      pm_metal_esp_set_loaded_identity (
+        "metal.efi",
+        Loaded->ImageBase,
+        (UINT32)Loaded->ImageSize
+        );
+    }
   }
 
   mHwReady = 1;
