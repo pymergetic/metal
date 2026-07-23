@@ -39,8 +39,9 @@
 
 #define UI_FONT_W       8
 #define UI_CLOCK_CHARS  5
+#define UI_FPS_CHARS    6   /* e.g. "60fps" / "999fps" */
 
-#define UI_MARGIN       10
+#define UI_MARGIN       0   /* shell window fills the scanout */
 #define UI_TITLE_H      28
 #define UI_TAB_H        26
 #define UI_STATUS_H     24
@@ -162,8 +163,10 @@ metal_ui_widget_t *MetalUiMakeTabBody (
 VOID MetalUiLayout (VOID);
 VOID MetalUiPaint (VOID);
 VOID MetalUiPaintShellInputLine (VOID);
+VOID MetalUiPaintStatusBarOnly (VOID);
 INT32 MetalUiShellInputGeom (INT32 *x, INT32 *y, INT32 *w, INT32 *h);
-/** 1 if clock/systray content differs from last paint. */
+INT32 MetalUiStatusGeom (INT32 *x, INT32 *y, INT32 *w, INT32 *h);
+/** 1 if clock/systray/FPS content differs from last paint. */
 INT32 MetalUiStatusNeedsRefresh (VOID);
 
 #endif /* PYMERGETIC_METAL_SHELL_UI_PRIV_H_ */

@@ -189,6 +189,7 @@ pm_metal_async_perf_note_present_frame (
   )
 {
   mPerfPresentFrames++;
+  pm_metal_gfx_note_frame ();
 }
 
 STATIC

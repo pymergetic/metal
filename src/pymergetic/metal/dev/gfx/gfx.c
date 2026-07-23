@@ -67,6 +67,57 @@ STATIC UINT64  mFrameNextUs;
 
 STATIC INT32   mJobDone;
 
+/* Rolling present FPS for status tray (~0.5 s windows). */
+STATIC UINT64  mFpsWinStartUs;
+STATIC UINT64  mFpsLastUs;
+STATIC UINT32  mFpsWinCount;
+STATIC UINT32  mFpsHz;
+
+void
+pm_metal_gfx_note_frame (
+  VOID
+  )
+{
+  UINT64  now;
+  UINT64  elapsed;
+
+  now         = pm_metal_time_mono_us ();
+  mFpsLastUs  = now;
+  if (mFpsWinStartUs == 0) {
+    mFpsWinStartUs = now;
+    mFpsWinCount   = 1;
+    return;
+  }
+
+  mFpsWinCount++;
+  elapsed = now - mFpsWinStartUs;
+  if (elapsed >= 500000ull) {
+    mFpsHz         = (UINT32)(((UINT64)mFpsWinCount * 1000000ull) / elapsed);
+    mFpsWinStartUs = now;
+    mFpsWinCount   = 0;
+  }
+}
+
+uint32_t
+pm_metal_gfx_fps (
+  VOID
+  )
+{
+  UINT64  now;
+
+  /* No presents for ~1 s → idle (avoid stale "60fps" after a guest exits). */
+  if (mFpsHz != 0 && mFpsLastUs != 0) {
+    now = pm_metal_time_mono_us ();
+    if (now - mFpsLastUs >= 1000000ull) {
+      mFpsHz         = 0;
+      mFpsWinStartUs = 0;
+      mFpsWinCount   = 0;
+    }
+  }
+
+  return mFpsHz;
+}
+
 STATIC
 VOID
 MetalGfxBlitHintSet (
@@ -844,6 +895,19 @@ pm_metal_gfx_present_rect (
     mSurf.pixels = p;
   }
 
+  /*
+   * Count substantial sync presents only (skip cursor / input blinks).
+   * Async jobs are counted via pm_metal_async_perf_note_present_frame.
+   */
+  if (rc == 0
+      && mSurf.width > 0
+      && mSurf.height > 0
+      && ((UINT64)w * (UINT64)h)
+         >= ((UINT64)mSurf.width * (UINT64)mSurf.height / 4ull))
+  {
+    pm_metal_gfx_note_frame ();
+  }
+
   return rc;
 }
 
@@ -1535,6 +1599,15 @@ pm_metal_gfx_font_height_native (
   return pm_metal_gfx_font_height ();
 }
 
+STATIC UINT32
+pm_metal_gfx_fps_native (
+  wasm_exec_env_t  exec_env
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_gfx_fps ();
+}
+
 STATIC INT32
 pm_metal_gfx_present_native (
   wasm_exec_env_t  exec_env
@@ -1683,6 +1756,7 @@ STATIC NativeSymbol g_pm_metal_gfx_native_symbols[] = {
   { "pm_metal_gfx_draw_text", (VOID *)pm_metal_gfx_draw_text_native, "(ii$iii)", NULL },
   { "pm_metal_gfx_font_width", (VOID *)pm_metal_gfx_font_width_native, "()i", NULL },
   { "pm_metal_gfx_font_height", (VOID *)pm_metal_gfx_font_height_native, "()i", NULL },
+  { "pm_metal_gfx_fps", (VOID *)pm_metal_gfx_fps_native, "()i", NULL },
   { "pm_metal_gfx_present", (VOID *)pm_metal_gfx_present_native, "()i", NULL },
   { "pm_metal_gfx_present_rect", (VOID *)pm_metal_gfx_present_rect_native, "(iiii)i", NULL },
   { "pm_metal_gfx_blit_bgra", (VOID *)pm_metal_gfx_blit_bgra_native, "(iiiiiiii)i", NULL },

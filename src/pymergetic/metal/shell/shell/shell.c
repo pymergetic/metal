@@ -31,8 +31,9 @@
 
 #define SHELL_LINE_MAX  120
 
-STATIC INT32   mDirty;      /* full chrome */
-STATIC INT32   mDirtyInput; /* shell input line only */
+STATIC INT32   mDirty;       /* full chrome */
+STATIC INT32   mDirtyInput;  /* shell input line only */
+STATIC INT32   mDirtyStatus; /* status tray only (clock/ifaces/FPS) */
 STATIC INT32   mExitReq;
 STATIC INT32   mExitReboot;
 STATIC UINT32  mPrevPtrButtons;
@@ -453,6 +454,7 @@ MetalShellMarkFull (
 {
   mDirty       = 1;
   mDirtyInput  = 0;
+  mDirtyStatus = 0;
   mPumpSleepMs = 1;
 }
 
@@ -463,6 +465,18 @@ MetalShellMarkInput (
 {
   if (!mDirty) {
     mDirtyInput = 1;
+  }
+
+  mPumpSleepMs = 1;
+}
+
+STATIC VOID
+MetalShellMarkStatus (
+  VOID
+  )
+{
+  if (!mDirty) {
+    mDirtyStatus = 1;
   }
 
   mPumpSleepMs = 1;
@@ -835,6 +849,7 @@ pm_metal_shell_init (
 {
   mDirty          = 1;
   mDirtyInput     = 0;
+  mDirtyStatus    = 0;
   mExitReq        = 0;
   mExitReboot     = 0;
   mLastFrameMs    = 0;
@@ -988,7 +1003,8 @@ pm_metal_shell_poll (
    */
   mPumpSleepMs = pm_metal_process_active () ? 1u : 16u;
   if (!MetalShellGuestFullscreen () && pm_metal_ui_tick (now_ms)) {
-    MetalShellMarkFull ();
+    /* Clock / net / FPS — dirty-rect present, not a full chrome frame. */
+    MetalShellMarkStatus ();
   }
 
   /* After boot banner: first live prompt on serial + input strip. */
@@ -1187,8 +1203,9 @@ pm_metal_shell_poll (
     paint_chrome = 0;
     if (MetalShellGuestFullscreen ()) {
       /* Drop dirty; never blink/present the prompt over the game. */
-      mDirty      = 0;
-      mDirtyInput = 0;
+      mDirty       = 0;
+      mDirtyInput  = 0;
+      mDirtyStatus = 0;
       paint_chrome = 0;
     } else if (pm_metal_input_focus () == PM_METAL_INPUT_FOCUS_SHELL) {
       paint_chrome = 1;
@@ -1204,11 +1221,10 @@ pm_metal_shell_poll (
       win_guest = MetalShellGuestWindowedActive ();
       blink     = ((now_ms - mLastFrameMs) >= 250u) ? 1 : 0;
       /*
-       * Windowed guest: full chrome only when dirty (tab/status). Skip the
-       * 250 ms input-cursor blink present — it fought the game present and
-       * flashed the prompt through the content.
+       * Windowed guest: full chrome only when dirty (tab). Status tray and
+       * input blink use dirty-rect presents so they don't fight the game.
        */
-      if (mDirty || (!win_guest && (mDirtyInput || blink))) {
+      if (mDirty || mDirtyStatus || (!win_guest && (mDirtyInput || blink))) {
         INT32   px;
         INT32   py;
         UINT32  buttons;
@@ -1227,6 +1243,18 @@ pm_metal_shell_poll (
           }
 
           (VOID)pm_metal_gfx_present ();
+        } else if (mDirtyStatus) {
+          pm_metal_ui_cursor_hide ();
+          (VOID)pm_metal_ui_paint_status ();
+          if (pm_metal_ui_status_rect (&ix, &iy, &iw, &ih) == 0) {
+            (VOID)pm_metal_gfx_present_rect (ix, iy, iw, ih);
+          }
+
+          if (!pm_metal_input_pointer_locked ()) {
+            pm_metal_input_pointer_sample (&px, &py, &buttons);
+            (VOID)buttons;
+            pm_metal_ui_cursor_move (px, py);
+          }
         } else {
           pm_metal_ui_cursor_hide ();
           (VOID)pm_metal_ui_paint_shell_input ();
@@ -1244,6 +1272,7 @@ pm_metal_shell_poll (
         mLastFrameMs = now_ms;
         mDirty       = 0;
         mDirtyInput  = 0;
+        mDirtyStatus = 0;
       } else if (win_guest) {
         mDirtyInput = 0;
       }
