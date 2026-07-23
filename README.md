@@ -2,6 +2,11 @@
 
 Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
 
+> **Experimental.** Early preview, not a product release. APIs move, drivers
+> are incomplete, docs lag, iron is “works on *my* ThinkPad.” Fun and real —
+> not polished, not supported, not something to bet a deployment on. Bring
+> curiosity; bring patches; don’t bring production expectations.
+
 **Boot → hardware → CPU runners → certified wasm/AOT → go.**
 
 ![Metal boot UI](screenshots/ui-boot.png)
@@ -142,8 +147,10 @@ packages/metal/
 
 ## Status
 
-Actively developed against **QEMU** (virtio / Bochs) and **ThinkPad-class iron**
-(BIOS i386 + Radeon present path). Expect sharp edges; see [`docs/TODO.md`](docs/TODO.md).
+**Experimental / early.** Actively hacked against **QEMU** (virtio / Bochs) and
+**ThinkPad-class iron** (BIOS i386 + Radeon present). Expect breakage, missing
+paths, and TODOs — see [`docs/TODO.md`](docs/TODO.md). If it runs Doom on your
+box, celebrate; if it doesn’t, that’s still on-brand for this stage.
 
 ### Next: Python
 
