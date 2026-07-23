@@ -4,20 +4,33 @@
 #include "priv.h"
 
 #include <pymergetic/metal/dev/net/net_cfg.h>
+#include <pymergetic/metal/dev/net/ntp.h>
 #include <pymergetic/metal/dev/random/random.h>
 #include <pymergetic/metal/guest/wasm/wasm.h>
+#include <pymergetic/metal/guest/process/process.h>
+#include <pymergetic/metal/shell/shell/shell.h>
+#include <pymergetic/metal/host/host.h>
+#include <pymergetic/metal/util/ip.h>
 
 #include <Library/BaseMemoryLib.h>
 #include <Library/BaseLib.h>
 #include <Library/PrintLib.h>
 
-STATIC UINT32  mStatusClockTod = 0xffffffffu;
-STATIC UINT32  mStatusLinkMask = 0xffffffffu;
-STATIC UINT32  mStatusIfCount  = 0xffffffffu;
+STATIC UINT32  mStatusClockTod  = 0xffffffffu;
+STATIC UINT32  mStatusNetHealth = 0xffffffffu;
+STATIC UINT32  mStatusIfCount   = 0xffffffffu;
+STATIC UINT32  mStatusNtpBit    = 0xffffffffu;
+
+/* Per-iface tray color: 0=down, 1=partial (IP no DNS), 2=good — packed 2 bits. */
+#define NET_HEALTH_DOWN     0u
+#define NET_HEALTH_PARTIAL  1u
+#define NET_HEALTH_GOOD     2u
 
 /**
  * True when a live wasm session draws into this tab's surface (windowed
  * guest). Chrome must not fill that content rect or the game vanishes.
+ * Fullscreen (`run`) draws DEFAULT — not a tab content owner (and must not
+ * keep painting the shared input strip over the game).
  */
 STATIC
 INT32
@@ -25,7 +38,8 @@ MetalUiTabGuestOwnsContent (
   metal_ui_widget_t  *w
   )
 {
-  metal_ui_widget_t  *tab;
+  metal_ui_widget_t       *tab;
+  pm_metal_process_id_t    pid;
 
   tab = w;
   while (tab != NULL && tab->kind != METAL_UI_KIND_TAB) {
@@ -37,6 +51,13 @@ MetalUiTabGuestOwnsContent (
   }
 
   if (!pm_metal_wasm_session_active ()) {
+    return 0;
+  }
+
+  pid = pm_metal_process_current ();
+  if (pid != PM_METAL_PROCESS_ID_INVALID
+      && pm_metal_process_ui_kind (pid) == PM_METAL_PROC_UI_FULLSCREEN)
+  {
     return 0;
   }
 
@@ -122,9 +143,14 @@ MetalUiLayoutWindow (
       continue;
     }
 
-    /* Shell input is shared — reserve a row on every tab so focus
-       switches don't jump, and guests can still type close/use/…. */
-    input_h = (INT32)fh * UI_INPUT_ROWS + 4;
+    /*
+     * Shell input is shared on console/idle tabs. A live windowed guest
+     * owns the whole frame — no prompt row (doom fills the tab content).
+     */
+    input_h = 0;
+    if (!MetalUiTabGuestOwnsContent (tab)) {
+      input_h = (INT32)fh * UI_INPUT_ROWS + 4;
+    }
 
     con->x = frame->x + UI_FRAME_PAD;
     con->y = frame->y + UI_FRAME_PAD;
@@ -132,15 +158,104 @@ MetalUiLayoutWindow (
     con->h = frame->h - 2 * UI_FRAME_PAD - input_h;
 
     if (tab->surface != PM_METAL_GFX_SURFACE_INVALID) {
-      /* Guest content = frame interior (chrome stays outside). */
+      /* Guest = padded frame interior (no prompt strip while playing). */
       pm_metal_gfx_surface_set_rect (
         tab->surface,
-        frame->x,
-        frame->y,
-        frame->w,
-        frame->h
+        con->x,
+        con->y,
+        con->w,
+        con->h
         );
     }
+  }
+}
+
+/**
+ * Draw text with a minimal CSI SGR subset (same codes log/prompt emit).
+ * Advances at most max_cols glyph cells; escape bytes do not consume cells.
+ */
+STATIC
+VOID
+MetalUiDrawTextAnsi (
+  INT32                 x,
+  INT32                 y,
+  CONST CHAR8          *text,
+  pm_metal_gfx_color_t  def_fg,
+  UINT32                max_cols
+  )
+{
+  CONST CHAR8          *p;
+  INT32                 cx;
+  UINT32                cols;
+  UINT32                fw;
+  pm_metal_gfx_color_t  fg;
+  CHAR8                 ch[2];
+
+  if (text == NULL || max_cols == 0u) {
+    return;
+  }
+
+  fw = pm_metal_gfx_font_width ();
+  if (fw == 0u) {
+    fw = UI_FONT_W;
+  }
+
+  p    = text;
+  cx   = x;
+  cols = 0;
+  fg   = def_fg;
+  ch[1] = '\0';
+
+  while (*p != '\0' && cols < max_cols) {
+    if (p[0] == '\033' && p[1] == '[') {
+      p += 2;
+      while (*p != '\0' && *p != 'm') {
+        UINT32  v;
+
+        if (*p < '0' || *p > '9') {
+          p++;
+          continue;
+        }
+
+        v = 0;
+        while (*p >= '0' && *p <= '9') {
+          v = v * 10u + (UINT32)(*p - '0');
+          p++;
+        }
+
+        if (v == 0u) {
+          fg = def_fg;
+        } else if (v == 2u) {
+          fg = COL_LOG_DIM;
+        } else if (v == 31u) {
+          fg = COL_LOG_FAIL;
+        } else if (v == 32u) {
+          fg = COL_LOG_OK;
+        } else if (v == 33u) {
+          fg = COL_LOG_WARN;
+        } else if (v == 34u) {
+          fg = COL_PROMPT_PATH;
+        } else if (v == 36u) {
+          fg = COL_LOG_ACCENT;
+        }
+
+        if (*p == ';') {
+          p++;
+        }
+      }
+
+      if (*p == 'm') {
+        p++;
+      }
+
+      continue;
+    }
+
+    ch[0] = *p;
+    pm_metal_gfx_draw_text (cx, y, ch, fg, COL_CONSOLE_BG, 0);
+    cx += (INT32)fw;
+    cols++;
+    p++;
   }
 }
 
@@ -189,12 +304,34 @@ MetalUiPaintShellInputLine (
   VOID
   )
 {
-  INT32              x;
-  INT32              y;
-  INT32              w;
-  INT32              h;
-  UINT32             plen;
-  CHAR8              prompt[INPUT_CHARS + 8];
+  INT32                    x;
+  INT32                    y;
+  INT32                    w;
+  INT32                    h;
+  INT32                    cx;
+  UINT32                   fw;
+  CONST CHAR8             *host;
+  UINTN                    host_len;
+  CHAR8                    typed[INPUT_CHARS + 2];
+  UINT32                   n;
+  pm_metal_process_id_t    pid;
+
+  /* Live guest (fullscreen or windowed on this tab) — no shell prompt. */
+  pid = pm_metal_process_current ();
+  if (pid != PM_METAL_PROCESS_ID_INVALID) {
+    pm_metal_process_ui_kind_t  kind;
+
+    kind = pm_metal_process_ui_kind (pid);
+    if (kind == PM_METAL_PROC_UI_FULLSCREEN) {
+      return;
+    }
+
+    if (kind == PM_METAL_PROC_UI_TAB
+        && pm_metal_process_tab (pid) == pm_metal_ui_tab_active ())
+    {
+      return;
+    }
+  }
 
   if (MetalUiShellInputGeom (&x, &y, &w, &h) != 0) {
     return;
@@ -203,21 +340,45 @@ MetalUiPaintShellInputLine (
   pm_metal_gfx_set_surface (PM_METAL_GFX_SURFACE_DEFAULT);
   pm_metal_gfx_fill_rect (x, y, w, h, COL_CONSOLE_BG);
 
-  prompt[0] = '>';
-  prompt[1] = ' ';
-  plen     = 2;
-  CopyMem (
-    &prompt[plen],
-    gMetalUiSysConsole->u.console.input,
-    gMetalUiSysConsole->u.console.input_len
-    );
-  plen += gMetalUiSysConsole->u.console.input_len;
-  if (gMetalUiSysConsole->u.console.cursor_on) {
-    prompt[plen++] = 0xDB;
+  host = pm_metal_host_name_cstr ();
+  if (host == NULL || host[0] == '\0') {
+    host = "metal";
   }
 
-  prompt[plen] = '\0';
-  pm_metal_gfx_draw_text (x + 2, y, prompt, COL_INPUT_FG, COL_CONSOLE_BG, 0);
+  host_len = AsciiStrLen (host);
+  fw       = pm_metal_gfx_font_width ();
+  if (fw == 0u) {
+    fw = UI_FONT_W;
+  }
+
+  cx = x + 2;
+  /* hostname green, :~ blue (ANSI 34), $ green, then a real gap before input */
+  pm_metal_gfx_draw_text (cx, y, host, COL_LOG_OK, COL_CONSOLE_BG, 0);
+  cx += (INT32)(host_len * fw);
+  pm_metal_gfx_draw_text (cx, y, ":~", COL_PROMPT_PATH, COL_CONSOLE_BG, 0);
+  cx += (INT32)(2u * fw);
+  pm_metal_gfx_draw_text (cx, y, "$", COL_LOG_OK, COL_CONSOLE_BG, 0);
+  cx += (INT32)fw;
+  /* blank cell = space between prompt and typed text / cursor */
+  cx += (INT32)fw;
+
+  n = gMetalUiSysConsole->u.console.input_len;
+  if (n >= sizeof (typed)) {
+    n = (UINT32)(sizeof (typed) - 1u);
+  }
+
+  if (n > 0u) {
+    CopyMem (typed, gMetalUiSysConsole->u.console.input, n);
+  }
+
+  if (gMetalUiSysConsole->u.console.cursor_on && n + 1u < sizeof (typed)) {
+    typed[n++] = 0xDB;
+  }
+
+  typed[n] = '\0';
+  if (n > 0u) {
+    pm_metal_gfx_draw_text (cx, y, typed, COL_INPUT_FG, COL_CONSOLE_BG, 0);
+  }
 }
 
 STATIC
@@ -234,6 +395,13 @@ MetalUiPaintConsole (
   UINT32  start;
   UINT32  i;
   INT32   ty;
+  INT32   text_w;
+  INT32   trx;
+  INT32   try;
+  INT32   trw;
+  INT32   trh;
+  INT32   thy;
+  INT32   thh;
 
   fw = pm_metal_gfx_font_width ();
   fh = pm_metal_gfx_font_height ();
@@ -243,7 +411,12 @@ MetalUiPaintConsole (
 
   pm_metal_gfx_fill_rect (con->x, con->y, con->w, con->h, COL_CONSOLE_BG);
 
-  cols = (UINT32)con->w / fw;
+  text_w = con->w - UI_SCROLL_W;
+  if (text_w < (INT32)fw) {
+    text_w = con->w;
+  }
+
+  cols = (UINT32)text_w / fw;
   rows = (UINT32)con->h / fh;
   if (cols == 0 || rows == 0) {
     return;
@@ -253,6 +426,8 @@ MetalUiPaintConsole (
     cols = CONSOLE_COLS - 1;
   }
 
+  MetalUiConsoleClampView (con);
+
   visible = con->u.console.count;
   if (visible > rows) {
     visible = rows;
@@ -261,28 +436,80 @@ MetalUiPaintConsole (
   if (con->u.console.count <= rows) {
     start = 0;
   } else {
-    start = con->u.console.count - rows;
+    start = con->u.console.count - rows - con->u.console.view_off;
   }
 
   ty = con->y;
   for (i = 0; i < visible; i++) {
-    UINT32       idx;
-    CONST CHAR8  *line;
-    CHAR8         buf[CONSOLE_COLS];
-    UINT32        len;
+    UINT32                idx;
+    CONST CHAR8          *line;
+    CHAR8                 buf[CONSOLE_COLS];
+    UINT32                len;
+    UINT32                has_ansi;
+    pm_metal_gfx_color_t  fg;
 
     idx = (con->u.console.head + CONSOLE_LINES - con->u.console.count + start + i)
           % CONSOLE_LINES;
     line = con->u.console.lines[idx];
     len  = 0;
-    while (line[len] != '\0' && len < cols) {
+    has_ansi = 0;
+    while (line[len] != '\0' && len < CONSOLE_COLS - 1u) {
+      if (line[len] == '\033') {
+        has_ansi = 1;
+      }
+
       buf[len] = line[len];
       len++;
     }
 
     buf[len] = '\0';
-    pm_metal_gfx_draw_text (con->x + 2, ty, buf, COL_CONSOLE_FG, COL_CONSOLE_BG, 0);
+    switch ((pm_metal_log_style_t)con->u.console.styles[idx]) {
+      case PM_METAL_LOG_STYLE_DIM:
+        fg = COL_LOG_DIM;
+        break;
+      case PM_METAL_LOG_STYLE_OK:
+        fg = COL_LOG_OK;
+        break;
+      case PM_METAL_LOG_STYLE_WARN:
+        fg = COL_LOG_WARN;
+        break;
+      case PM_METAL_LOG_STYLE_FAIL:
+        fg = COL_LOG_FAIL;
+        break;
+      case PM_METAL_LOG_STYLE_ACCENT:
+        fg = COL_LOG_ACCENT;
+        break;
+      case PM_METAL_LOG_STYLE_DEFAULT:
+      default:
+        fg = COL_CONSOLE_FG;
+        break;
+    }
+
+    if (has_ansi != 0u) {
+      MetalUiDrawTextAnsi (con->x + 2, ty, buf, fg, cols);
+    } else {
+      if (len > cols) {
+        buf[cols] = '\0';
+      }
+
+      pm_metal_gfx_draw_text (con->x + 2, ty, buf, fg, COL_CONSOLE_BG, 0);
+    }
+
     ty += (INT32)fh;
+  }
+
+  if (MetalUiConsoleScrollBarGeom (con, &trx, &try, &trw, &trh, &thy, &thh)) {
+    pm_metal_gfx_fill_rect (trx, try, trw, trh, COL_SCROLL_TRACK);
+    pm_metal_gfx_fill_rect (trx, try, 1, trh, COL_SCROLL_EDGE);
+    pm_metal_gfx_fill_rect (trx + 1, thy, trw - 2, thh, COL_SCROLL_THUMB);
+  } else if (text_w < con->w) {
+    pm_metal_gfx_fill_rect (
+      con->x + con->w - UI_SCROLL_W,
+      con->y,
+      UI_SCROLL_W,
+      con->h,
+      COL_SCROLL_TRACK
+      );
   }
 
   if (con == MetalUiActiveConsole ()) {
@@ -329,7 +556,14 @@ MetalUiPaintTabsStrip (
       break;
     }
 
-    face = (i == tabs->u.tabs.active) ? COL_TAB_ON : COL_TAB_OFF;
+    if (i == tabs->u.tabs.active) {
+      face = COL_TAB_ON;
+    } else if ((INT32)i == tabs->u.tabs.hover) {
+      face = COL_TAB_HOVER;
+    } else {
+      face = COL_TAB_OFF;
+    }
+
     pm_metal_gfx_fill_rect (x, tabs->y + 2, tw, tabs->h - 2, face);
     pm_metal_gfx_bevel_rect (
       x,
@@ -353,38 +587,102 @@ MetalUiPaintTabsStrip (
 }
 
 STATIC
+UINT32
+MetalUiNetIfHealth (
+  CONST pm_metal_net_ifcfg_t  *cfg
+  )
+{
+  UINT32  ip;
+  UINT32  dns;
+  INT32   is_lo;
+
+  if (cfg == NULL) {
+    return NET_HEALTH_DOWN;
+  }
+
+  /*
+   * IPv4 is authoritative (FillIfcfg clears link_up while DHCP is still
+   * pending — that must read red/down, not "link up but no DNS").
+   */
+  if (pm_metal_util_ip4_parse (cfg->ip, &ip) != 0
+      || pm_metal_util_ip4_is_unspecified (ip))
+  {
+    return NET_HEALTH_DOWN;
+  }
+
+  is_lo = (AsciiStrCmp (cfg->name, "lo") == 0) ? 1 : 0;
+  if (is_lo != 0) {
+    return NET_HEALTH_GOOD;
+  }
+
+  if (cfg->dns[0] == '\0'
+      || pm_metal_util_ip4_parse (cfg->dns, &dns) != 0
+      || pm_metal_util_ip4_is_unspecified (dns))
+  {
+    return NET_HEALTH_PARTIAL;
+  }
+
+  return NET_HEALTH_GOOD;
+}
+
+STATIC
+pm_metal_gfx_color_t
+MetalUiNetHealthColor (
+  UINT32  health
+  )
+{
+  if (health == NET_HEALTH_GOOD) {
+    return COL_NET_UP;
+  }
+
+  if (health == NET_HEALTH_PARTIAL) {
+    return COL_LOG_WARN;
+  }
+
+  return COL_NET_DOWN;
+}
+
+STATIC
 VOID
 MetalUiStatusSnapshot (
   UINT32  *clock_tod,
-  UINT32  *link_mask,
-  UINT32  *if_count
+  UINT32  *net_health,
+  UINT32  *if_count,
+  UINT32  *ntp_bit
   )
 {
   UINT64               ms;
   UINT32               tod;
   UINT32               n;
   UINT32               i;
-  UINT32               mask;
+  UINT32               health;
   pm_metal_net_ifcfg_t cfg;
 
-  ms  = pm_metal_realtime_ms ();
+  ms  = pm_metal_tz_local_ms ();
   tod = (UINT32)((ms / 1000ull) % 86400ull);
   *clock_tod = (tod / 3600u) * 60u + ((tod % 3600u) / 60u);
 
-  n    = pm_metal_net_if_count ();
-  mask = 0;
-  if (n > 31u) {
-    n = 31u;
+  n      = pm_metal_net_if_count ();
+  health = 0;
+  if (n > 16u) {
+    n = 16u;
   }
 
   for (i = 0; i < n; i++) {
-    if (pm_metal_net_if_get_index (i, &cfg) == 0 && cfg.link_up) {
-      mask |= (1u << i);
+    UINT32  h;
+
+    if (pm_metal_net_if_get_index (i, &cfg) != 0) {
+      h = NET_HEALTH_DOWN;
+    } else {
+      h = MetalUiNetIfHealth (&cfg);
     }
+
+    health |= (h & 3u) << (i * 2u);
   }
 
-  *link_mask = mask;
-  *if_count  = n;
+  *net_health = health;
+  *if_count   = n;
+  *ntp_bit    = (pm_metal_net_ntp_last_unix_ms () != 0ull) ? 1u : 0u;
 }
 
 STATIC
@@ -480,9 +778,10 @@ MetalUiPaintStatusBar (
   }
 
   for (i = 0; i < n; i++) {
-    INT32   item_w;
-    UINT32  fg;
-    UINTN   namelen;
+    INT32                 item_w;
+    pm_metal_gfx_color_t  fg;
+    UINTN                 namelen;
+    UINT32                health;
 
     if (pm_metal_net_if_get_index (i, &cfg) != 0) {
       continue;
@@ -494,7 +793,8 @@ MetalUiPaintStatusBar (
       break;
     }
 
-    fg = cfg.link_up ? COL_NET_UP : COL_NET_DOWN;
+    health = MetalUiNetIfHealth (&cfg);
+    fg     = MetalUiNetHealthColor (health);
     pm_metal_gfx_fill_rect (tx + 2, w->y + 9, 6, 6, fg);
     pm_metal_gfx_draw_text (tx + 10, ty, cfg.name, fg, COL_STATUS, 1);
     tx += item_w;
@@ -518,7 +818,7 @@ MetalUiPaintStatusBar (
     COL_BEVEL_HI
     );
 
-  ms   = pm_metal_realtime_ms ();
+  ms   = pm_metal_tz_local_ms ();
   tod  = (UINT32)((ms / 1000ull) % 86400ull);
   hour = tod / 3600u;
   min  = (tod % 3600u) / 60u;
@@ -527,12 +827,17 @@ MetalUiPaintStatusBar (
     clock_x + (clock_w - UI_CLOCK_CHARS * UI_FONT_W) / 2,
     w->y + 4,
     clock,
-    COL_STATUS_TXT,
+    (pm_metal_net_ntp_last_unix_ms () != 0ull) ? COL_STATUS_TXT : COL_LOG_WARN,
     COL_STATUS_CLK,
     1
     );
 
-  MetalUiStatusSnapshot (&mStatusClockTod, &mStatusLinkMask, &mStatusIfCount);
+  MetalUiStatusSnapshot (
+    &mStatusClockTod,
+    &mStatusNetHealth,
+    &mStatusIfCount,
+    &mStatusNtpBit
+    );
 }
 
 STATIC
@@ -573,11 +878,7 @@ MetalUiPaintWidget (
 
     case METAL_UI_KIND_CONSOLE:
       if (MetalUiTabGuestOwnsContent (w)) {
-        /* Windowed guest owns the content; keep the shared input strip. */
-        if (w == MetalUiActiveConsole ()) {
-          MetalUiPaintShellInputLine ();
-        }
-
+        /* Windowed guest owns the whole content — no prompt under the game. */
         return;
       }
 
@@ -648,13 +949,15 @@ MetalUiStatusNeedsRefresh (
   )
 {
   UINT32  clock_tod;
-  UINT32  link_mask;
+  UINT32  net_health;
   UINT32  if_count;
+  UINT32  ntp_bit;
 
-  MetalUiStatusSnapshot (&clock_tod, &link_mask, &if_count);
+  MetalUiStatusSnapshot (&clock_tod, &net_health, &if_count, &ntp_bit);
   if (clock_tod != mStatusClockTod
-      || link_mask != mStatusLinkMask
-      || if_count != mStatusIfCount)
+      || net_health != mStatusNetHealth
+      || if_count != mStatusIfCount
+      || ntp_bit != mStatusNtpBit)
   {
     return 1;
   }

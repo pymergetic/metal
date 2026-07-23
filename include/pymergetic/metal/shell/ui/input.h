@@ -25,11 +25,15 @@ extern int pm_metal_ui_input_backspace(void)
 	PM_METAL_UI_IMPORT(pm_metal_ui_input_backspace);
 extern int pm_metal_ui_input_text(char *out, uint32_t cap)
 	PM_METAL_UI_IMPORT(pm_metal_ui_input_text);
+extern int pm_metal_ui_input_set(const char *text)
+	PM_METAL_UI_IMPORT(pm_metal_ui_input_set);
 #else
 void pm_metal_ui_input_clear(void);
 int pm_metal_ui_input_append(char ch);
 int pm_metal_ui_input_backspace(void);
 int pm_metal_ui_input_text(char *out, uint32_t cap);
+/** Replace the shared input line (history recall). Truncates to INPUT_CHARS-1. */
+int pm_metal_ui_input_set(const char *text);
 
 /**
  * Route keyboard to shell vs guest from foreground tab + live session.

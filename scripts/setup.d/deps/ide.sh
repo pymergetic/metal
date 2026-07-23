@@ -17,6 +17,11 @@ MERGED="${ROOT}/build/compile_commands.json"
 
 mkdir -p "${ROOT}/build"
 
+# Ensure build/trust/metal_trust_bake.inc.c exists for trust.c / clangd.
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/pki.sh"
+pm_metal_pki_bake || true
+
 # Tiny CDB so editors that ignore .clangd still find Uefi.h / WAMR platform headers.
 python3 - <<PY
 import json
@@ -79,30 +84,26 @@ if edk2.is_dir():
                 "file": str(rp),
             })
 
-# doomgeneric Metal guests (wasm) — so editors resolve doomgeneric.h.
+# doomgeneric Metal guests (wasm) — so editors resolve doomgeneric.h / wasi.
 wasi_sys = root / ".tools/wasi-sdk/share/wasi-sysroot"
 dg_inc = root / "external/doomgeneric/doomgeneric"
-doom_stubs = root / "mods/apps/doom/ide_stubs"
+doom_dir = root / "mods/apps/doom"
+doom_stubs = doom_dir / "ide_stubs"
 doom_base = (
     f"/usr/bin/clang -std=c11 --target=wasm32-wasip1 --sysroot={wasi_sys} "
-    f"-I{inc_root} -I{dg_inc} -I{doom_stubs} "
-    f"-DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE "
+    f"-I{inc_root} -I{dg_inc} -I{doom_dir} -I{doom_stubs} "
+    f"-DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L "
+    f"-DFEATURE_SOUND "
     f"-DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 "
 )
-if wasi_sys.is_dir() and dg_inc.is_dir():
-    for rel in (
-        "mods/apps/doom/doomgeneric_metal.c",
-        "mods/apps/doom/metal_main.c",
-        "mods/apps/doom/w_file_metal.c",
-        "mods/apps/doom/m_fileexists_metal.c",
-    ):
-        fpath = (root / rel).resolve()
-        if fpath.is_file():
-            entries.append({
-                "directory": str(root),
-                "command": f"{doom_base}-c -o /dev/null {fpath}",
-                "file": str(fpath),
-            })
+if wasi_sys.is_dir() and dg_inc.is_dir() and doom_dir.is_dir():
+    for fpath in sorted(doom_dir.glob("*.c")):
+        rp = fpath.resolve()
+        entries.append({
+            "directory": str(root),
+            "command": f"{doom_base}-c -o /dev/null {rp}",
+            "file": str(rp),
+        })
 
 # Metal BIOS shim — PmBiosUefi.h under src/bios/shim (not EDK2 Uefi.h).
 # Exact per-file CDB entries are required: clangd otherwise reuses the EFI

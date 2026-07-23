@@ -180,6 +180,10 @@ pm_metal_input_keyb_hid (
         return PM_METAL_KEY_UP;
       case 0x50u:
         return PM_METAL_KEY_DOWN;
+      case 0x49u:
+        return PM_METAL_KEY_PAGEUP;
+      case 0x51u:
+        return PM_METAL_KEY_PAGEDOWN;
       case 0x1Du:
         return PM_METAL_KEY_RCTRL;
       case 0x38u:

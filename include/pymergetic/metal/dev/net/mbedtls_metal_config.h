@@ -61,4 +61,18 @@ int mbedtls_metal_vsnprintf(char *s, size_t n, const char *fmt, va_list ap);
 #define MBEDTLS_X509_CRT_PARSE_C
 #define MBEDTLS_X509_USE_C
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * Hook mbedTLS PLATFORM_MEMORY calloc/free to the Metal heap.
+ * Must run before any x509/pk parse (trust) or TLS — idempotent.
+ */
+void pm_metal_mbedtls_runtime_init(void);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif /* PYMERGETIC_METAL_DEV_NET_MBEDTLS_METAL_CONFIG_H_ */

@@ -58,6 +58,9 @@ const pm_metal_io_node_t *pm_metal_io_dt_by_class(pm_metal_io_class_t class,
 						  uint32_t index);
 /** First node of class, or NULL. */
 const pm_metal_io_node_t *pm_metal_io_dt_lookup(pm_metal_io_class_t class);
+/** Update compat string on an existing node (e.g. gfx after scanout bind). */
+int pm_metal_io_dt_set_compat(pm_metal_io_class_t class, uint32_t index,
+			      const char *compat);
 void pm_metal_io_dt_foreach(pm_metal_io_dt_iter_fn fn, void *ctx);
 void pm_metal_io_dt_reset(void);
 

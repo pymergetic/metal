@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/doom.sh"
 ELF="${1:-${ROOT}/build/bios/i386/metal.elf}"
 PXE="${ROOT}/build/bios/pxe"
 
@@ -14,6 +16,12 @@ fi
 rm -rf "${PXE}"
 mkdir -p "${PXE}/boot/grub"
 cp -f "${ELF}" "${PXE}/metal.elf"
+if [[ -f "${ELF}.sig" ]]; then
+	cp -f "${ELF}.sig" "${PXE}/metal.elf.sig"
+fi
+
+# Same package layout as EFI ESP — HTTP :8080 mirrors TFTP root.
+pm_metal_doom_stage_into "${PXE}" || true
 
 # iPXE script — DHCP filename must be undionly.kpxe (small), NOT metal.elf.
 # metal.elf is ~1.2MiB and will fail with "NBP is too big for base memory".
@@ -51,6 +59,8 @@ TFTP root files:
 - `undionly.kpxe` (or your usual iPXE NBP — small)
 - `metal.ipxe` (this drop)
 - `metal.elf` (this drop)
+- optional: `mods/apps/doom/{doom.x86_64.aot,doom.i386.aot,doom.wasm,doom1.wad}` (+ `.sig`) when `METAL_DOOM_BUILD=1`
+  (BIOS seeds these into the ESP RAM cache via HTTP :8080 after DHCP)
 
 dnsmasq / luci DHCP:
 

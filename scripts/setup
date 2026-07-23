@@ -17,8 +17,10 @@ usage: scripts/setup <name>
 
 Deps (setup.d/deps/):
   edk2   — Tianocore EDK2 + local nasm (required for metal.efi)
-  tools  wamr  lwip  lz4  microtar  monocypher  mbedtls  nghttp2  curl  net
+  tools  wamr  wamrc  lwip  lz4  microtar  monocypher  mbedtls  nghttp2  curl  net
   cpython  ide  doomgeneric
+
+  wamrc — prebuilt AOT compiler (.tools/wamrc); optional until a mod opts into .aot
 
   lwip — TCP/IP stack for EFI virtio-net (NO_SYS raw API)
   net  — chains monocypher + mbedtls + nghttp2 + curl

@@ -149,7 +149,7 @@ int pm_metal_util_ascii_render(const char *text, char ink, char *out, size_t out
 	return (int)o;
 }
 
-void pm_metal_util_ascii_log(const char *text)
+void pm_metal_util_ascii_log_styled(pm_metal_log_style_t style, const char *text)
 {
 	char out[PM_METAL_ASCII_MAX_H * (PM_METAL_ASCII_MAX_W + 1) + 1];
 	int n;
@@ -169,10 +169,15 @@ void pm_metal_util_ascii_log(const char *text)
 	for (i = 0; i <= n; i++) {
 		if (i == n || out[i] == '\n') {
 			out[i] = '\0';
-			pm_metal_log(out + start);
+			pm_metal_log_styled(style, out + start);
 			start = i + 1;
 		}
 	}
+}
+
+void pm_metal_util_ascii_log(const char *text)
+{
+	pm_metal_util_ascii_log_styled(PM_METAL_LOG_STYLE_DEFAULT, text);
 }
 
 #include "wasm_export.h"

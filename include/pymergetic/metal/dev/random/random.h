@@ -30,6 +30,28 @@ extern uint64_t pm_metal_realtime_ms(void)
 uint32_t pm_metal_random(void *dest, uint32_t len);
 uint64_t pm_metal_realtime_ms(void);
 
+/**
+ * Host: set UTC wall clock from Unix epoch ms (NTP etc).
+ * Subsequent realtime_ms() track mono + this offset.
+ */
+void pm_metal_realtime_set_unix_ms(uint64_t unix_ms);
+
+/** Minutes east of UTC (e.g. +120 for Europe/Berlin summer). */
+void pm_metal_tz_set_minutes(int32_t east_of_utc);
+int32_t pm_metal_tz_minutes(void);
+
+/**
+ * Set timezone by fixed name (`Europe/Berlin`, `UTC`, …) or `+HHMM` / `-HHMM`.
+ * Returns 0 on success, -1 if unknown.
+ */
+int pm_metal_tz_set(const char *spec);
+
+/** Current tz name/spec string (NUL-terminated). */
+const char *pm_metal_tz_name(void);
+
+/** Local wall ms = realtime_ms + tz_minutes * 60 * 1000. */
+uint64_t pm_metal_tz_local_ms(void);
+
 int pm_metal_random_native_register(void);
 void pm_metal_random_bind_inst(void *module_inst);
 #endif

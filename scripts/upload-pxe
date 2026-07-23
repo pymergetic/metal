@@ -7,6 +7,7 @@
 #   METAL_PXE_USER=root
 #   METAL_PXE_PATH=/storage/tftp
 #   METAL_PXE_SSH_OPTS=   # e.g. -i ~/.ssh/openwrt
+#   METAL_DOOM_BUILD=1    # with --build: also build/stage doom package
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,15 +22,17 @@ usage() {
 	cat >&2 <<'EOF'
 usage: scripts/upload-pxe [--build]
 
-  Copy build/bios/pxe/{metal.elf,metal.ipxe} → USER@HOST:DEST
+  Copy build/bios/pxe/{metal.elf,metal.ipxe[,mods/]} → USER@HOST:DEST
 
   --build   run ./scripts/build bios i386 first
+            (set METAL_DOOM_BUILD=1 to include doom under mods/apps/doom/)
 
 Env:
   METAL_PXE_HOST      default 192.168.10.1
   METAL_PXE_USER      default root
   METAL_PXE_PATH      default /storage/tftp
   METAL_PXE_SSH_OPTS  extra ssh/scp options (e.g. -i ~/.ssh/openwrt)
+  METAL_DOOM_BUILD=1  build+stage doom for PXE HTTP seed
 EOF
 	exit 1
 }
@@ -55,6 +58,9 @@ fi
 TARGET="${USER}@${HOST}:${DEST}/"
 HTTP="http://${HOST}:8080/"
 echo "upload-pxe: ${PXE}/{metal.elf,metal.ipxe} → ${TARGET}"
+if [[ -d "${PXE}/mods" ]]; then
+	echo "upload-pxe: ${PXE}/mods/ → ${TARGET}mods/" >&2
+fi
 echo "upload-pxe: HTTP mirror (OpenWrt already exports TFTP dir): ${HTTP}"
 
 # OpenWrt: no rsync, often no sftp-server → force legacy SCP (-O).
@@ -63,8 +69,28 @@ scp -O ${SSH_EXTRA} \
 	"${PXE}/metal.elf" "${PXE}/metal.ipxe" \
 	"${TARGET}"
 
+if [[ -d "${PXE}/mods" ]]; then
+	# OpenSSH scp rejects trailing "/." ; tar|ssh is reliable on OpenWrt (no rsync/sftp).
+	# shellcheck disable=SC2086
+	tar -C "${PXE}" -cf - mods | ssh ${SSH_EXTRA} "${USER}@${HOST}" \
+		"mkdir -p '${DEST}' && tar -C '${DEST}' -xf -"
+fi
+
+# Drop legacy un-infixed AOT left from older uploads (tar does not delete).
 # shellcheck disable=SC2086
 ssh ${SSH_EXTRA} "${USER}@${HOST}" \
-	"ls -la '${DEST}/metal.elf' '${DEST}/metal.ipxe'"
+	"rm -f '${DEST}/mods/apps/doom/doom.aot' '${DEST}/mods/apps/doom/doom.aot.sig'"
+
+# shellcheck disable=SC2086
+ssh ${SSH_EXTRA} "${USER}@${HOST}" \
+	"ls -la '${DEST}/metal.elf' '${DEST}/metal.ipxe'; \
+	 if [ -d '${DEST}/mods/apps/doom' ]; then ls -la '${DEST}/mods/apps/doom'; fi"
 
 echo "upload-pxe: ok — verify ${HTTP}metal.elf"
+if [[ -f "${PXE}/mods/apps/doom/doom.i386.aot" ]]; then
+	echo "upload-pxe: doom → ${HTTP}mods/apps/doom/doom.i386.aot" >&2
+elif [[ -f "${PXE}/mods/apps/doom/doom.x86_64.aot" ]]; then
+	echo "upload-pxe: doom → ${HTTP}mods/apps/doom/doom.x86_64.aot" >&2
+elif [[ -f "${PXE}/mods/apps/doom/doom.wasm" ]]; then
+	echo "upload-pxe: doom → ${HTTP}mods/apps/doom/doom.wasm" >&2
+fi

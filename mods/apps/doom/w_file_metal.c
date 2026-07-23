@@ -1,67 +1,66 @@
 /*
- * WAD file class — load via Metal ESP fs into wasi-libc malloc buffer.
+ * WAD file class — serve async-preloaded IWAD buffer (no FS in OpenFile).
  */
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
 
-/*
- * Provide doomtype bits and skip vendor doomtype.h (pulls <strings.h>,
- * which host/IDE clang often lacks without wasi-sysroot).
- */
-typedef bool boolean;
-typedef uint8_t byte;
-#define __DOOMTYPE__
+#include "metal_doom.h"
 
 #include "../../../external/doomgeneric/doomgeneric/w_file.h"
 #include "../../../external/doomgeneric/doomgeneric/z_zone.h"
 
-#include "pymergetic/metal/fs/fs.h"
 #include "pymergetic/metal/shell/shell/shell.h"
 
 typedef struct {
 	wad_file_t wad;
 	byte *data;
+	int owned;
 } metal_wad_file_t;
 
 extern wad_file_class_t stdc_wad_file;
+
+static uint8_t *s_wad_buf;
+static uint32_t s_wad_len;
+
+int
+metal_doom_wad_install(uint8_t *buf, uint32_t len)
+{
+	if (buf == NULL || len == 0) {
+		return -1;
+	}
+
+	s_wad_buf = buf;
+	s_wad_len = len;
+	return 0;
+}
+
+int
+metal_doom_wad_ready(void)
+{
+	return (s_wad_buf != NULL && s_wad_len > 0) ? 1 : 0;
+}
 
 static wad_file_t *
 W_Metal_OpenFile(char *path)
 {
 	metal_wad_file_t *result;
-	uint32_t len;
-	uint32_t got;
-	byte *buf;
 
-	pm_metal_shell_log("metal-doom: wad open");
-	len = pm_metal_fs_size(path);
-	if (len == 0) {
-		pm_metal_shell_log("metal-doom: wad size fail");
+	(void)path;
+
+	if (!metal_doom_wad_ready()) {
+		pm_metal_shell_log("metal-doom: wad not preloaded");
 		return NULL;
 	}
 
-	buf = (byte *)malloc((size_t)len);
-	if (buf == NULL) {
-		pm_metal_shell_log("metal-doom: wad malloc fail");
-		return NULL;
-	}
-
-	got = pm_metal_fs_read(path, PM_METAL_FS_IO_PTR(buf), len);
-	if (got != len) {
-		free(buf);
-		pm_metal_shell_log("metal-doom: wad read fail");
-		return NULL;
-	}
-
-	pm_metal_shell_log("metal-doom: wad open ok");
+	pm_metal_shell_log("metal-doom: wad open (memory)");
 
 	result = Z_Malloc(sizeof(*result), PU_STATIC, 0);
-	result->data = buf;
+	result->data = s_wad_buf;
+	result->owned = 0; /* owned by metal_main preload */
 	result->wad.file_class = &stdc_wad_file;
-	result->wad.mapped = buf;
-	result->wad.length = len;
+	result->wad.mapped = s_wad_buf;
+	result->wad.length = s_wad_len;
 	return &result->wad;
 }
 
@@ -75,7 +74,10 @@ W_Metal_CloseFile(wad_file_t *wad)
 	}
 
 	m = (metal_wad_file_t *)wad;
-	free(m->data);
+	if (m->owned) {
+		free(m->data);
+	}
+
 	m->data = NULL;
 	m->wad.mapped = NULL;
 	Z_Free(wad);

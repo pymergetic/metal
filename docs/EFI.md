@@ -78,7 +78,7 @@ leave firmware behind. Do **not** leave any hot-path dependency on Boot Services
 
 - Any Boot Service (`AllocatePool`, `LocateProtocol`, file I/O via UEFI, etc.).
 - Rely on ConOut forever if we move to virtio-console (ConOut may still work on some OVMF setups via Runtime; do not count on it for the product path).
-- Rely on ConIn / AbsolutePointer — dead after EBS. VNC keys land on i8042; owned shell polls PS/2 set-1 make-codes (`pm_metal_input_ps2_read`) plus COM1/virtio-console RX.
+- Rely on ConIn / AbsolutePointer — dead after EBS. VNC keys land on i8042; owned shell polls PS/2 set-1 make-codes (`pm_metal_input_ps2_read`) plus COM1/virtio-console RX. Pointer: prefer `virtio-tablet-pci` (absolute, matches VNC); else relative i8042 AUX (host/VNC cursor will drift).
 - Rely on ConOut / `Print` / SerialIo — also dead; owned echo goes UI FB + COM1/virtio-console only.
 
 ### Performance note
@@ -115,7 +115,10 @@ Boot serial is one tree (`pymergetic metal` / `+-- mem` / `+-- devices` / init).
 Headers mirror sources: `include/pymergetic/metal/<group>/<mod>/…`
 (`boot/`, `runtime/`, `bus/`, `dev/`, `fs/`, `guest/`, `shell/`).
 `dev/<class>/` holds class backends (virtio today; more NICs/GPUs later).
-One API: `pm_metal_log` / `pm_metal_logf`.
+One API: `pm_metal_log` / `pm_metal_logf`, plus styled
+`pm_metal_log_styled` / `pm_metal_logf_styled` (`PM_METAL_LOG_STYLE_*`).
+Styles are semantic (OK / WARN / FAIL / DIM / ACCENT): UI maps to RGB,
+UART/virtio-console to ANSI SGR; UEFI ConOut stays plain.
 
 ---
 
@@ -199,9 +202,12 @@ MOUNT / WASI).
 ### Locked decisions (Slice D)
 
 - **v1 threading model:** one native thread = WAMR runloop (cooperative / no preemptive Metal scheduler yet).
-- **Fast interpreter** (`WASM_ENABLE_FAST_INTERP=1`) for bring-up; AOT later if
-  wasm packaging stays. Product ABI direction: Metal async + freestanding libc
-  (see `docs/LIBC_ASYNC.md`); WASI is scaffolding to retire.
+- **Interpreter + AOT:** host builds with `WASM_ENABLE_INTERP` + `WASM_ENABLE_AOT`
+  (+ `QUICK_AOT_ENTRY`). Guests may ship `.wasm` (interp) or `.aot` (offline
+  `wamrc`); ESP load prefers `mods/apps/<n>/<n>.aot` then `.wasm`. Doom and the
+  embed proof `async_aot` use AOT; other embeds stay wasm. Tool: `./scripts/setup wamrc`.
+  Product ABI direction: Metal async + freestanding libc (see `docs/LIBC_ASYNC.md`);
+  WASI is scaffolding to retire.
 - Platform code lives under `src/efi/` (WAMR platform + Metal binds), sharing `src/common/` runtime.
 
 ---
@@ -229,13 +235,19 @@ Primary bring-up machine: **QEMU + OVMF**, virt-class device set as we adopt vir
   Metal async I/O + sync freestanding libc — **not** WASI as product surface
   (`docs/LIBC_ASYNC.md`). UI/async/input are handle-based. Guest await is real
   resume: export `pm_metal_guest_step` + host coro trampoline.
+- **Process:** host fake-process table (`guest/process/`) anchors each live wasm
+  guest; optional UI attachment (tab / fullscreen). Shell `run`/`tab`/`ps`.
+  Guest imports `pymergetic.metal.process` (`self`/`info`/`list`/…) plus WASI
+  `PID=<id>` env. Async tasks stay under the process. v1: one live guest
+  (global async session). See `docs/IO.md` § Process.
 - Proofs: PE-embedded **`hello`** / **`ui_hello`** / **`async_sleep`** /
   **`async_fs`** / **`async_time`** / **`async_net`** / **`async_audio`** /
   **`async_blk`**.
   Verify greps `metal-wasm: t0_hello ok`, `metal-async: sleep|fs|time|net|audio|blk ok`,
   plus `metal-net: virtio-net` / `metal-audio: virtio-snd` when QEMU attaches devices.
 - **`doom` parked** (`mods/apps/doom` kept; not built/staged by default).
-  Opt-in: `METAL_BUILD_DOOM=1` + optional `METAL_DOOM_DIR` staging.
+  Opt-in: `METAL_DOOM_BUILD=1` → `build/doom/`; EFI stages onto ESP,
+  BIOS/PXE stages under `build/bios/pxe/mods/apps/doom/` and seeds via HTTP.
 - virtio-blk / full package mounts remain later; ESP is the interim package root.
 
 ### Cut line — v1 must

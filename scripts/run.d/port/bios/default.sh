@@ -55,5 +55,7 @@ exec qemu-system-x86_64 \
 	-chardev null,id=vcon \
 	-device virtio-serial-pci,max_ports=1 \
 	-device virtconsole,chardev=vcon \
+	-device virtio-tablet-pci \
 	-vga std \
+	-global VGA.vgamem_mb=64 \
 	-kernel "${ELF}"

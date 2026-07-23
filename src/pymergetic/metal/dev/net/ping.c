@@ -22,6 +22,8 @@
 #include <lwip/ip_addr.h>
 #include <lwip/pbuf.h>
 #include <lwip/raw.h>
+#include <lwip/netif.h>
+#include <lwip/err.h>
 
 #include <Uefi.h>
 #include <Library/BaseLib.h>
@@ -32,15 +34,17 @@
 
 #include <stdint.h>
 
-#define PING_HOST_MAX   128u
-#define PING_ID         0x4d54u
-#define PING_PROTO_V4  1u  /* IP_PROTO_ICMP */
-#define PING_PROTO_V6  58u /* IPv6 next header: ICMPv6 */
-#define PING_DATA_SIZE  32u
+#define PING_HOST_MAX     128u
+#define PING_ID           0x4d54u
+#define PING_PROTO_V4     1u  /* IP_PROTO_ICMP */
+#define PING_PROTO_V6     58u /* IPv6 next header: ICMPv6 */
+#define PING_DATA_SIZE    32u
+#define PING_SEND_TRIES   40u /* ~ARP wait: 40 * 25ms */
 
 typedef enum {
   PING_STEP_RESOLVE = 0,
   PING_STEP_DNS_AW,
+  PING_STEP_OPEN,
   PING_STEP_SEND,
   PING_STEP_WAIT,
   PING_STEP_DONE
@@ -58,7 +62,9 @@ typedef struct {
   INT32                    target_v6;
   UINT16                   seq;
   UINT64                   send_us;
-  UINT32                   rtt_ms;
+  UINT32                   rtt_us;
+  UINT32                   send_tries;
+  err_t                    last_err;
   INT32                    ok;
 } ping_ctx_t;
 
@@ -66,8 +72,11 @@ STATIC wasm_module_inst_t  mPingInst;
 
 STATIC struct {
   INT32   valid;
-  UINT32  rtt_ms;
+  UINT32  rtt_us;
+  UINT32  err;
 } mPingLastDone;
+
+STATIC UINT32  mPingLastErr;
 
 STATIC INT32
 PingParseIpv4 (
@@ -270,13 +279,61 @@ PingRecv (
     }
   }
 
-  ctx->rtt_ms = (UINT32)((pm_metal_time_mono_us () - ctx->send_us) / 1000ULL);
-  ctx->ok     = 1;
+  {
+    UINT64  delta;
+
+    delta = pm_metal_time_mono_us () - ctx->send_us;
+    if (delta > 0xffffffffull) {
+      delta = 0xffffffffull;
+    }
+
+    ctx->rtt_us = (UINT32)delta;
+  }
+  ctx->ok = 1;
   pbuf_free (p);
   return 1;
 }
 
 STATIC INT32
+PingIsLoopbackNetif (
+  CONST struct netif  *n
+  )
+{
+  return (n != NULL && n->name[0] == 'l' && n->name[1] == 'o') ? 1 : 0;
+}
+
+/** Prefer a non-loopback up iface so ICMP never exits via lo. */
+STATIC struct netif *
+PingOutNetif (
+  CONST ip_addr_t  *dst
+  )
+{
+  struct netif  *n;
+
+  (VOID)dst;
+  n = netif_default;
+  if (n != NULL && !PingIsLoopbackNetif (n) && netif_is_up (n)
+      && netif_is_link_up (n))
+  {
+    return n;
+  }
+
+  NETIF_FOREACH (n) {
+    if (PingIsLoopbackNetif (n) || !netif_is_up (n) || !netif_is_link_up (n)) {
+      continue;
+    }
+
+#if LWIP_IPV4
+    if (!ip4_addr_isany_val (*netif_ip4_addr (n))) {
+      return n;
+    }
+#endif
+  }
+
+  return netif_default;
+}
+
+STATIC err_t
 PingSend (
   ping_ctx_t  *p
   )
@@ -285,7 +342,7 @@ PingSend (
   err_t         e;
 
   if (p == NULL || p->pcb == NULL) {
-    return -1;
+    return ERR_ARG;
   }
 
   p->seq = (UINT16)((pm_metal_time_mono_us () >> 10) & 0xffffu);
@@ -298,7 +355,7 @@ PingSend (
     ping_size = sizeof (struct icmp_echo_hdr) + PING_DATA_SIZE;
     pb        = pbuf_alloc (PBUF_IP, (UINT16)ping_size, PBUF_RAM);
     if (pb == NULL) {
-      return -1;
+      return ERR_MEM;
     }
 
     iecho = (struct icmp_echo_hdr *)pb->payload;
@@ -311,19 +368,22 @@ PingSend (
       ((UINT8 *)iecho)[sizeof (struct icmp_echo_hdr) + i] = (UINT8)i;
     }
 
-    iecho->chksum = inet_chksum (iecho, ping_size);
+    iecho->chksum = inet_chksum (iecho, (UINT16)ping_size);
   } else {
     struct icmp6_echo_hdr  *ie6;
 
-    pb = pbuf_alloc (PBUF_IP, sizeof (struct icmp6_echo_hdr) + PING_DATA_SIZE,
-                     PBUF_RAM);
+    pb = pbuf_alloc (
+           PBUF_IP,
+           (UINT16)(sizeof (struct icmp6_echo_hdr) + PING_DATA_SIZE),
+           PBUF_RAM
+           );
     if (pb == NULL) {
-      return -1;
+      return ERR_MEM;
     }
 
     ie6 = (struct icmp6_echo_hdr *)pb->payload;
-    ie6->type = ICMP6_TYPE_EREQ;
-    ie6->code = 0;
+    ie6->type   = ICMP6_TYPE_EREQ;
+    ie6->code   = 0;
     ie6->chksum = 0;
     ie6->id     = lwip_htons (PING_ID);
     ie6->seqno  = lwip_htons (p->seq);
@@ -332,7 +392,21 @@ PingSend (
   p->send_us = pm_metal_time_mono_us ();
   e          = raw_sendto (p->pcb, pb, &p->target);
   pbuf_free (pb);
-  return (e == ERR_OK) ? 0 : -1;
+  return e;
+}
+
+STATIC VOID
+PingClassifySendErr (
+  err_t  e
+  )
+{
+  if (e == ERR_RTE) {
+    mPingLastErr = PM_METAL_NET_PING_ERR_NOROUTE;
+  } else if (e == ERR_MEM || e == ERR_BUF) {
+    mPingLastErr = PM_METAL_NET_PING_ERR_NOMEM;
+  } else {
+    mPingLastErr = PM_METAL_NET_PING_ERR_SEND;
+  }
 }
 
 STATIC pm_metal_status_t
@@ -346,20 +420,24 @@ PingCoro (
 
   switch (p->step) {
   case PING_STEP_RESOLVE:
-    p->ok     = 0;
-    p->rtt_ms = 0;
-    p->pcb    = NULL;
-    p->seq    = 0;
-    p->aw     = PM_METAL_ASYNC_HANDLE_INVALID;
+    p->ok         = 0;
+    p->rtt_us     = 0;
+    p->pcb        = NULL;
+    p->seq        = 0;
+    p->send_tries = 0;
+    p->last_err   = ERR_OK;
+    p->aw         = PM_METAL_ASYNC_HANDLE_INVALID;
+    mPingLastErr  = PM_METAL_NET_PING_ERR_NONE;
 
     if (PingHostIsLiteral (p->host, &p->target, &p->target_v6) == 0) {
-      p->step = PING_STEP_SEND;
+      p->step = PING_STEP_OPEN;
       return PM_METAL_PENDING;
     }
 
     /* Async DNS (literals/hosts/cache handled inside pm_metal_net_dns). */
     p->aw = pm_metal_net_dns (p->host);
     if (p->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
+      mPingLastErr = PM_METAL_NET_PING_ERR_RESOLVE;
       return PM_METAL_ERROR;
     }
 
@@ -368,6 +446,7 @@ PingCoro (
 
   case PING_STEP_DNS_AW:
     if (PingChildResult (self) == 0) {
+      mPingLastErr = PM_METAL_NET_PING_ERR_RESOLVE;
       return PM_METAL_ERROR;
     }
 
@@ -377,31 +456,66 @@ PingCoro (
       if (pm_metal_net_dns_last_ntoa (ipstr, sizeof (ipstr)) != 0
           || PingHostIsLiteral (ipstr, &p->target, &p->target_v6) != 0)
       {
+        mPingLastErr = PM_METAL_NET_PING_ERR_RESOLVE;
         return PM_METAL_ERROR;
       }
     }
 
-    p->step = PING_STEP_SEND;
+    p->step = PING_STEP_OPEN;
     return PM_METAL_PENDING;
+
+  case PING_STEP_OPEN:
+    {
+      struct netif  *outif;
+      u8_t           type;
+
+      type = p->target_v6 ? (u8_t)IPADDR_TYPE_V6 : (u8_t)IPADDR_TYPE_V4;
+      p->pcb = raw_new_ip_type (type, PingRawProto (p));
+      if (p->pcb == NULL) {
+        mPingLastErr = PM_METAL_NET_PING_ERR_NOMEM;
+        return PM_METAL_ERROR;
+      }
+
+      if (p->target_v6) {
+        raw_bind (p->pcb, IP6_ADDR_ANY);
+      } else {
+        raw_bind (p->pcb, IP4_ADDR_ANY);
+      }
+
+      outif = PingOutNetif (&p->target);
+      if (outif != NULL) {
+        raw_bind_netif (p->pcb, outif);
+      }
+
+      raw_recv (p->pcb, PingRecv, p);
+      p->send_tries = 0;
+      p->last_err   = ERR_OK;
+      p->step       = PING_STEP_SEND;
+      return PM_METAL_PENDING;
+    }
 
   case PING_STEP_SEND:
-    p->pcb = raw_new (PingRawProto (p));
-    if (p->pcb == NULL) {
-      return PM_METAL_ERROR;
+    pm_metal_net_poll ();
+    p->last_err = PingSend (p);
+    if (p->last_err == ERR_OK) {
+      p->deadline = pm_metal_time_mono_us ()
+                    + ((UINT64)p->timeout_ms * 1000ull);
+      p->step = PING_STEP_WAIT;
+      return PM_METAL_PENDING;
     }
 
-    raw_bind (p->pcb, IP_ADDR_ANY);
-    raw_recv (p->pcb, PingRecv, p);
-
-    if (PingSend (p) != 0) {
-      PingCleanup (p);
-      return PM_METAL_ERROR;
+    /* ARP / route often needs a few polls before the first frame exits. */
+    if ((p->last_err == ERR_RTE || p->last_err == ERR_MEM
+         || p->last_err == ERR_BUF || p->last_err == ERR_IF)
+        && p->send_tries + 1u < PING_SEND_TRIES)
+    {
+      p->send_tries++;
+      return pm_metal_await (self, pm_metal_sleep_us (25000));
     }
 
-    p->deadline = pm_metal_time_mono_us ()
-                  + ((UINT64)p->timeout_ms * 1000ull);
-    p->step = PING_STEP_WAIT;
-    return PM_METAL_PENDING;
+    PingCleanup (p);
+    PingClassifySendErr (p->last_err);
+    return PM_METAL_ERROR;
 
   case PING_STEP_WAIT:
     pm_metal_net_poll ();
@@ -412,6 +526,7 @@ PingCoro (
 
     if (pm_metal_time_mono_us () >= p->deadline) {
       PingCleanup (p);
+      mPingLastErr = PM_METAL_NET_PING_ERR_TIMEOUT;
       return PM_METAL_ERROR;
     }
 
@@ -421,11 +536,15 @@ PingCoro (
   case PING_STEP_DONE:
     PingCleanup (p);
     mPingLastDone.valid  = 1;
-    mPingLastDone.rtt_ms = p->rtt_ms;
-    self->result         = (VOID *)(UINTN)p->rtt_ms;
+    mPingLastDone.rtt_us = p->rtt_us;
+    mPingLastDone.err    = PM_METAL_NET_PING_ERR_NONE;
+    mPingLastErr         = PM_METAL_NET_PING_ERR_NONE;
+    /* result = ms (floored) for older callers; use rtt_us for tenths. */
+    self->result         = (VOID *)(UINTN)(p->rtt_us / 1000u);
     return PM_METAL_DONE;
 
   default:
+    mPingLastErr = PM_METAL_NET_PING_ERR_SEND;
     return PM_METAL_ERROR;
   }
 }
@@ -456,6 +575,7 @@ pm_metal_net_ping (
   }
 
   mPingLastDone.valid = 0;
+  mPingLastErr        = PM_METAL_NET_PING_ERR_NONE;
   p->coro.release     = PingRelease;
   p->step             = PING_STEP_RESOLVE;
   p->timeout_ms       = timeout_ms;
@@ -465,7 +585,7 @@ pm_metal_net_ping (
 }
 
 uint32_t
-pm_metal_net_ping_rtt_ms (
+pm_metal_net_ping_rtt_us (
   pm_metal_async_handle_t  hnd
   )
 {
@@ -473,18 +593,34 @@ pm_metal_net_ping_rtt_ms (
 
   p = (ping_ctx_t *)pm_metal_async_host_coro (hnd);
   if (p != NULL) {
-    if (p->coro.status == PM_METAL_DONE && p->coro.result != NULL) {
-      return (uint32_t)(UINTN)p->coro.result;
-    }
-
-    return p->rtt_ms;
+    return p->rtt_us;
   }
 
   if (mPingLastDone.valid) {
-    return mPingLastDone.rtt_ms;
+    return mPingLastDone.rtt_us;
   }
 
   return 0;
+}
+
+uint32_t
+pm_metal_net_ping_rtt_ms (
+  pm_metal_async_handle_t  hnd
+  )
+{
+  return pm_metal_net_ping_rtt_us (hnd) / 1000u;
+}
+
+uint32_t
+pm_metal_net_ping_last_err (
+  VOID
+  )
+{
+  if (mPingLastDone.valid && mPingLastDone.err != PM_METAL_NET_PING_ERR_NONE) {
+    return mPingLastDone.err;
+  }
+
+  return mPingLastErr;
 }
 
 #if !defined(__wasm__)
@@ -533,7 +669,7 @@ PingShellCmd (
     return;
   }
 
-  pm_metal_shell_out ("ping: …");
+  pm_metal_shell_out ("ping: ...");
 }
 
 PM_METAL_SHELL_CMD (
@@ -607,9 +743,33 @@ pm_metal_net_ping_rtt_ms_native (
   return pm_metal_net_ping_rtt_ms (hnd);
 }
 
+STATIC UINT32
+pm_metal_net_ping_rtt_us_native (
+  wasm_exec_env_t  exec_env,
+  UINT32           hnd
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_net_ping_rtt_us (hnd);
+}
+
+STATIC UINT32
+pm_metal_net_ping_last_err_native (
+  wasm_exec_env_t  exec_env
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_net_ping_last_err ();
+}
+
 STATIC NativeSymbol g_pm_metal_net_ping_native_symbols[] = {
   { "pm_metal_net_ping", (VOID *)pm_metal_net_ping_native, "($i)i", NULL },
-  { "pm_metal_net_ping_rtt_ms", (VOID *)pm_metal_net_ping_rtt_ms_native, "(i)i", NULL },
+  { "pm_metal_net_ping_rtt_ms", (VOID *)pm_metal_net_ping_rtt_ms_native, "(i)i",
+    NULL },
+  { "pm_metal_net_ping_rtt_us", (VOID *)pm_metal_net_ping_rtt_us_native, "(i)i",
+    NULL },
+  { "pm_metal_net_ping_last_err", (VOID *)pm_metal_net_ping_last_err_native,
+    "()i", NULL },
 };
 
 int

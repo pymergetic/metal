@@ -1,9 +1,12 @@
 /** @file
-  Graphics — GOP shadow framebuffer + Blt present. (impl: efi|bios)
+  Graphics — shadow compositor. Scanout backends: see scanout.h.
 **/
 #include <pymergetic/metal/dev/gfx/gfx.h>
+#include <pymergetic/metal/dev/gfx/scanout.h>
 #include <pymergetic/metal/runtime/async/async.h>
 #include <pymergetic/metal/boot/port.h>
+#include <pymergetic/metal/bus/io/io.h>
+#include <pymergetic/metal/log/log.h>
 #include <runtime/mem/mem.h>
 #include <runtime/time/time.h>
 
@@ -26,10 +29,14 @@ STATIC UINT32                         mHarvestW;
 STATIC UINT32                         mHarvestH;
 STATIC INT32                          mHarvested;
 STATIC pm_metal_gfx_surface_t         mSurf;
+STATIC VOID                          *mSurfHeap; /* raw heap; pixels may be 4K-aligned */
 STATIC INT32                          mReady;
-/* Tight row-pack scratch for sub-rect Blt (some GOP/QEMU ignore Delta). */
-STATIC UINT32                        *mPack;
-STATIC UINT32                         mPackCap;
+STATIC INT32                          mDirect; /* 1 = shadow is scanout back buf */
+/* Nearest upscale: dest-x → src-x (rebuilt when dw/src_w change). */
+STATIC UINT16                        *mXMap;
+STATIC UINT32                         mXMapCap;
+STATIC INT32                          mXMapDw;
+STATIC INT32                          mXMapSw;
 
 #ifndef PM_METAL_GFX_MAX_SURFACES
 #define PM_METAL_GFX_MAX_SURFACES  32u
@@ -46,6 +53,138 @@ typedef struct {
 /* Slot 0 unused; slot 1 = DEFAULT (full FB). Tab surfaces ≥ 2. */
 STATIC pm_metal_gfx_surf_slot_t  mSurfSlots[PM_METAL_GFX_MAX_SURFACES + 1];
 STATIC pm_metal_gfx_surface_h    mDrawSurf = PM_METAL_GFX_SURFACE_DEFAULT;
+
+/* Last blit dest — present() kicks this rect (iron: avoid full-FB copy). */
+STATIC INT32                     mBlitHintValid;
+STATIC INT32                     mBlitHintX;
+STATIC INT32                     mBlitHintY;
+STATIC INT32                     mBlitHintW;
+STATIC INT32                     mBlitHintH;
+STATIC pm_metal_gfx_surface_h    mDirtySurf;
+
+/* Shared 60 Hz frame phase (mono µs). */
+STATIC UINT64  mFrameNextUs;
+
+STATIC INT32   mJobDone;
+
+STATIC
+VOID
+MetalGfxBlitHintSet (
+  INT32  x,
+  INT32  y,
+  INT32  w,
+  INT32  h
+  )
+{
+  INT32  x1;
+  INT32  y1;
+
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  mDirtySurf = (mDrawSurf != 0) ? mDrawSurf : PM_METAL_GFX_SURFACE_DEFAULT;
+
+  if (mBlitHintValid == 0) {
+    mBlitHintX     = x;
+    mBlitHintY     = y;
+    mBlitHintW     = w;
+    mBlitHintH     = h;
+    mBlitHintValid = 1;
+    return;
+  }
+
+  x1 = mBlitHintX + mBlitHintW;
+  y1 = mBlitHintY + mBlitHintH;
+  if (x < mBlitHintX) {
+    mBlitHintX = x;
+  }
+
+  if (y < mBlitHintY) {
+    mBlitHintY = y;
+  }
+
+  if (x + w > x1) {
+    x1 = x + w;
+  }
+
+  if (y + h > y1) {
+    y1 = y + h;
+  }
+
+  mBlitHintW = x1 - mBlitHintX;
+  mBlitHintH = y1 - mBlitHintY;
+}
+
+STATIC
+INT32
+MetalGfxBlitHintTake (
+  INT32  *x,
+  INT32  *y,
+  INT32  *w,
+  INT32  *h
+  )
+{
+  if (mBlitHintValid == 0) {
+    return 0;
+  }
+
+  if (x != NULL) {
+    *x = mBlitHintX;
+  }
+
+  if (y != NULL) {
+    *y = mBlitHintY;
+  }
+
+  if (w != NULL) {
+    *w = mBlitHintW;
+  }
+
+  if (h != NULL) {
+    *h = mBlitHintH;
+  }
+
+  mBlitHintValid = 0;
+  return 1;
+}
+
+STATIC
+VOID
+MetalGfxOutputInit (
+  VOID
+  )
+{
+  pm_metal_scanout_bind_t  b;
+
+  ZeroMem (&b, sizeof (b));
+  b.shadow       = mSurf.pixels;
+  b.shadow_w     = mSurf.width;
+  b.shadow_h     = mSurf.height;
+  b.shadow_pitch = mSurf.pitch;
+  b.fb           = mFb;
+  b.fb_ppsl      = mFbPixelsPerScanLine;
+  b.mode_w       = mHarvestW;
+  b.mode_h       = mHarvestH;
+  b.gop          = mGop;
+  b.owned        = pm_metal_port_owned () ? 1 : 0;
+  if (pm_metal_scanout_bind (&b) == 0) {
+    /* Floor tree listed gfx/framebuffer; refine compat to the backend. */
+    (VOID)pm_metal_io_dt_set_compat (
+            PM_METAL_IO_GFX,
+            0,
+            pm_metal_scanout_name ()
+            );
+  }
+
+  /*
+   * Never auto-adopt DIRECT as the compositor shadow. Soft cursor
+   * save/restore assumes a stable heap; drawing into a flip back page then
+   * swapping leaves cursor ghosts on the front.
+   */
+  mDirect  = 0;
+  mJobDone = 1;
+}
 
 STATIC
 VOID
@@ -281,20 +420,23 @@ pm_metal_gfx_init (
   H     = mHarvestH;
   Pitch = W;
   Bytes = (UINTN)Pitch * (UINTN)H * sizeof (UINT32);
-  mSurf.pixels = (UINT32 *)pm_metal_mem_alloc (
-                             Bytes,
-                             PM_METAL_MEM_HEAP,
-                             PM_METAL_MEM_ID_NONE
-                             );
-  if (mSurf.pixels == NULL) {
+  /* 4K-align pixels — radeon GART PTE low bits are flags. */
+  mSurfHeap = pm_metal_mem_alloc (
+                Bytes + 4096u,
+                PM_METAL_MEM_HEAP,
+                PM_METAL_MEM_ID_NONE
+                );
+  if (mSurfHeap == NULL) {
     return -1;
   }
 
+  mSurf.pixels = (UINT32 *)(UINTN)(((UINTN)mSurfHeap + 4095u) & ~4095u);
   ZeroMem (mSurf.pixels, Bytes);
   mSurf.width  = W;
   mSurf.height = H;
   mSurf.pitch  = Pitch;
   mReady = 1;
+  MetalGfxOutputInit ();
   pm_metal_gfx_clear (PM_METAL_GFX_RGB (0x4a, 0x4a, 0x4a));
   /*
    * Pre-EBS: Blt is fine. Post-EBS first present uses FB copy — defer until
@@ -312,26 +454,72 @@ pm_metal_gfx_fini (
   VOID
   )
 {
-  if (mSurf.pixels != NULL) {
+  pm_metal_scanout_fini ();
+
+  /* DIRECT shadow lives in scanout VRAM — do not heap-free it. */
+  if (mSurfHeap != NULL && mDirect == 0) {
+    pm_metal_mem_free (mSurfHeap);
+  } else if (mSurf.pixels != NULL && mDirect == 0 && mSurfHeap == NULL) {
     pm_metal_mem_free (mSurf.pixels);
-    mSurf.pixels = NULL;
   }
 
-  if (mPack != NULL) {
-    pm_metal_mem_free (mPack);
-    mPack    = NULL;
-    mPackCap = 0;
+  mSurfHeap    = NULL;
+  mSurf.pixels = NULL;
+
+  if (mXMap != NULL) {
+    pm_metal_mem_free (mXMap);
+    mXMap    = NULL;
+    mXMapCap = 0;
   }
 
-  mSurf.width  = 0;
-  mSurf.height = 0;
-  mSurf.pitch  = 0;
-  mGop         = NULL;
-  mFb          = NULL;
-  mHarvested   = 0;
-  mHarvestW    = 0;
-  mHarvestH    = 0;
-  mReady       = 0;
+  mXMapDw = 0;
+  mXMapSw = 0;
+
+  mSurf.width        = 0;
+  mSurf.height       = 0;
+  mSurf.pitch        = 0;
+  mGop               = NULL;
+  mFb                = NULL;
+  mHarvested         = 0;
+  mHarvestW          = 0;
+  mHarvestH          = 0;
+  mReady             = 0;
+  mDirect            = 0;
+  mJobDone           = 1;
+  mDirtySurf         = 0;
+  mFrameNextUs       = 0;
+  mBlitHintValid     = 0;
+}
+
+uint64_t
+pm_metal_gfx_frame_next_us (
+  VOID
+  )
+{
+  UINT64  now;
+  UINT64  period;
+
+  period = 1000000u / (UINT64)PM_METAL_GFX_FRAME_HZ;
+  if (period == 0) {
+    period = 16667u;
+  }
+
+  /* Absolute mono grid — same phase guests compute with mono_us. */
+  now          = pm_metal_time_mono_us ();
+  mFrameNextUs = (now / period + 1u) * period;
+  return mFrameNextUs;
+}
+
+pm_metal_gfx_surface_h
+pm_metal_gfx_dirty_surface (
+  VOID
+  )
+{
+  if (mBlitHintValid == 0) {
+    return 0;
+  }
+
+  return (mDirtySurf != 0) ? mDirtySurf : PM_METAL_GFX_SURFACE_DEFAULT;
 }
 
 int
@@ -340,6 +528,14 @@ pm_metal_gfx_ready (
   )
 {
   return mReady ? 1 : 0;
+}
+
+CONST CHAR8 *
+pm_metal_gfx_scanout_name (
+  VOID
+  )
+{
+  return pm_metal_scanout_name ();
 }
 
 pm_metal_gfx_surface_t *
@@ -554,6 +750,30 @@ pm_metal_gfx_font_height (
   return PM_METAL_GFX_FONT_H;
 }
 
+/**
+ * Primary FB present (DEFAULT). Never follows mDrawSurf — callers that want
+ * the current tab slot must use present_surface(slot) explicitly.
+ * (present_surface(DEFAULT) used to bounce into present() and get hijacked
+ * by a leftover tab draw surface, so `run doom` never hit the full LFB.)
+ */
+STATIC
+INT32
+MetalGfxPresentPrimary (
+  VOID
+  )
+{
+  INT32  hx;
+  INT32  hy;
+  INT32  hw;
+  INT32  hh;
+
+  if (MetalGfxBlitHintTake (&hx, &hy, &hw, &hh) != 0) {
+    return pm_metal_gfx_present_rect (hx, hy, hw, hh);
+  }
+
+  return pm_metal_gfx_present_rect (0, 0, (INT32)mSurf.width, (INT32)mSurf.height);
+}
+
 int
 pm_metal_gfx_present (
   VOID
@@ -563,7 +783,7 @@ pm_metal_gfx_present (
     return pm_metal_gfx_present_surface (mDrawSurf);
   }
 
-  return pm_metal_gfx_present_rect (0, 0, (INT32)mSurf.width, (INT32)mSurf.height);
+  return MetalGfxPresentPrimary ();
 }
 
 int
@@ -574,13 +794,10 @@ pm_metal_gfx_present_rect (
   INT32  h
   )
 {
-  EFI_STATUS  Status;
+  CONST pm_metal_scanout_ops_t  *ops;
+  INT32                          rc;
 
   if (!mReady || mSurf.pixels == NULL) {
-    return -1;
-  }
-
-  if (!pm_metal_port_owned () && mGop == NULL) {
     return -1;
   }
 
@@ -610,89 +827,24 @@ pm_metal_gfx_present_rect (
     h = (INT32)mSurf.height - y;
   }
 
-  /* Post-EBS: GOP Blt may be dead — copy into captured framebuffer. */
-  if (pm_metal_port_owned () && mFb != NULL) {
-    INT32  row;
+  mBlitHintValid = 0;
+  pm_metal_scanout_bind_set_shadow (mSurf.pixels, mSurf.pitch);
 
-    for (row = 0; row < h; row++) {
-      CopyMem (
-        &mFb[(UINT32)(y + row) * mFbPixelsPerScanLine + (UINT32)x],
-        &mSurf.pixels[(UINT32)(y + row) * mSurf.pitch + (UINT32)x],
-        (UINTN)w * sizeof (UINT32)
-        );
-    }
-
-    return 0;
+  ops = pm_metal_scanout_ops ();
+  if (ops == NULL || ops->present_rect == NULL) {
+    return -1;
   }
 
-  /*
-   * Full-width rows: Blt in place with Delta = pitch.
-   * Sub-rects: pack into a tight buffer and Blt with Delta=0 — QEMU/OVMF GOP
-   * often corrupts the top of the dest when SrcX!=0 / Delta=stride.
-   */
-  if (x == 0 && (UINT32)w == mSurf.width) {
-    Status = mGop->Blt (
-                     mGop,
-                     (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)mSurf.pixels,
-                     EfiBltBufferToVideo,
-                     0,
-                     (UINTN)y,
-                     0,
-                     (UINTN)y,
-                     (UINTN)w,
-                     (UINTN)h,
-                     (UINTN)mSurf.pitch * sizeof (UINT32)
-                     );
-    return EFI_ERROR (Status) ? -1 : 0;
+  rc = ops->present_rect (x, y, w, h);
+  if (rc == 0 && mDirect != 0 && ops->after_flip != NULL) {
+    UINT32  *p;
+
+    p = mSurf.pixels;
+    ops->after_flip (&p);
+    mSurf.pixels = p;
   }
 
-  {
-    UINT32  need;
-    INT32   row;
-
-    need = (UINT32)w * (UINT32)h;
-    if (mPack == NULL || mPackCap < need) {
-      if (mPack != NULL) {
-        pm_metal_mem_free (mPack);
-        mPack    = NULL;
-        mPackCap = 0;
-      }
-
-      mPack = (UINT32 *)pm_metal_mem_alloc (
-                          (UINTN)need * sizeof (UINT32),
-                          PM_METAL_MEM_HEAP,
-                          PM_METAL_MEM_ID_NONE
-                          );
-      if (mPack == NULL) {
-        return -1;
-      }
-
-      mPackCap = need;
-    }
-
-    for (row = 0; row < h; row++) {
-      CopyMem (
-        &mPack[(UINT32)row * (UINT32)w],
-        &mSurf.pixels[(UINT32)(y + row) * mSurf.pitch + (UINT32)x],
-        (UINTN)w * sizeof (UINT32)
-        );
-    }
-
-    Status = mGop->Blt (
-                     mGop,
-                     (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)mPack,
-                     EfiBltBufferToVideo,
-                     0,
-                     0,
-                     (UINTN)x,
-                     (UINTN)y,
-                     (UINTN)w,
-                     (UINTN)h,
-                     0
-                     );
-  }
-
-  return EFI_ERROR (Status) ? -1 : 0;
+  return rc;
 }
 
 void
@@ -796,8 +948,13 @@ pm_metal_gfx_present_surface (
   pm_metal_gfx_surface_h  s
   )
 {
+  INT32  hx;
+  INT32  hy;
+  INT32  hw;
+  INT32  hh;
+
   if (s == PM_METAL_GFX_SURFACE_DEFAULT || s == 0) {
-    return pm_metal_gfx_present ();
+    return MetalGfxPresentPrimary ();
   }
 
   if (s > PM_METAL_GFX_MAX_SURFACES || !mSurfSlots[s].used) {
@@ -808,12 +965,156 @@ pm_metal_gfx_present_surface (
     return 0;
   }
 
+  /* Same as DEFAULT present(): honor last blit rect when set. */
+  if (MetalGfxBlitHintTake (&hx, &hy, &hw, &hh) != 0) {
+    return pm_metal_gfx_present_rect (hx, hy, hw, hh);
+  }
+
   return pm_metal_gfx_present_rect (
            mSurfSlots[s].x,
            mSurfSlots[s].y,
            mSurfSlots[s].w,
            mSurfSlots[s].h
            );
+}
+
+STATIC
+INT32
+MetalGfxPresentResolveRect (
+  pm_metal_gfx_surface_h  s,
+  INT32                  *x,
+  INT32                  *y,
+  INT32                  *w,
+  INT32                  *h
+  )
+{
+  INT32  hx;
+  INT32  hy;
+  INT32  hw;
+  INT32  hh;
+
+  if (x == NULL || y == NULL || w == NULL || h == NULL) {
+    return -1;
+  }
+
+  if (MetalGfxBlitHintTake (&hx, &hy, &hw, &hh) != 0) {
+    *x = hx;
+    *y = hy;
+    *w = hw;
+    *h = hh;
+    return 0;
+  }
+
+  if (s == PM_METAL_GFX_SURFACE_DEFAULT || s == 0) {
+    *x = 0;
+    *y = 0;
+    *w = (INT32)mSurf.width;
+    *h = (INT32)mSurf.height;
+    return 0;
+  }
+
+  if (s > PM_METAL_GFX_MAX_SURFACES || !mSurfSlots[s].used) {
+    return -1;
+  }
+
+  *x = mSurfSlots[s].x;
+  *y = mSurfSlots[s].y;
+  *w = mSurfSlots[s].w;
+  *h = mSurfSlots[s].h;
+  return 0;
+}
+
+int
+pm_metal_gfx_present_job_begin (
+  pm_metal_gfx_surface_h  s
+  )
+{
+  CONST pm_metal_scanout_ops_t  *ops;
+  INT32                          x;
+  INT32                          y;
+  INT32                          w;
+  INT32                          h;
+  INT32                          jb;
+  UINT64                         t0;
+
+  mJobDone = 1;
+  if (!mReady || mSurf.pixels == NULL) {
+    return -1;
+  }
+
+  if (MetalGfxPresentResolveRect (s, &x, &y, &w, &h) != 0) {
+    return -1;
+  }
+
+  if (w <= 0 || h <= 0) {
+    return 0;
+  }
+
+  mBlitHintValid = 0;
+  pm_metal_scanout_bind_set_shadow (mSurf.pixels, mSurf.pitch);
+  ops = pm_metal_scanout_ops ();
+  if (ops == NULL || ops->job_begin == NULL) {
+    return -1;
+  }
+
+  /* Flip/copy work often finishes in begin — time it (was invisible before). */
+  t0 = pm_metal_time_mono_us ();
+  jb = ops->job_begin (x, y, w, h);
+  pm_metal_async_perf_note_present_us (pm_metal_time_mono_us () - t0);
+  if (jb < 0) {
+    return -1;
+  }
+
+  if (jb == 0) {
+    mJobDone = 1;
+    if (mDirect != 0 && ops->after_flip != NULL) {
+      UINT32  *p;
+
+      p = mSurf.pixels;
+      ops->after_flip (&p);
+      mSurf.pixels = p;
+    }
+
+    return 0;
+  }
+
+  mJobDone = 0;
+  return 0;
+}
+
+int
+pm_metal_gfx_present_job_step (
+  VOID
+  )
+{
+  CONST pm_metal_scanout_ops_t  *ops;
+  INT32                          st;
+
+  if (mJobDone) {
+    return 0;
+  }
+
+  ops = pm_metal_scanout_ops ();
+  if (ops == NULL || ops->job_step == NULL) {
+    mJobDone = 1;
+    return -1;
+  }
+
+  st = ops->job_step ();
+  if (st <= 0) {
+    mJobDone = 1;
+    if (st == 0 && mDirect != 0 && ops->after_flip != NULL) {
+      UINT32  *p;
+
+      p = mSurf.pixels;
+      ops->after_flip (&p);
+      mSurf.pixels = p;
+    }
+
+    return st;
+  }
+
+  return 1;
 }
 
 int32_t
@@ -936,6 +1237,7 @@ pm_metal_gfx_blit_bgra (
   }
 
   src_base = (CONST UINT8 *)pixels;
+  rc       = 0;
 
   /* Integer scale fast path — avoid per-dest-pixel divides. */
   if ((dw % src_w) == 0 && (dh % src_h) == 0
@@ -962,16 +1264,18 @@ pm_metal_gfx_blit_bgra (
         for (ry = 0; ry < scale; ry++) {
           UINT32 *drow;
           INT32   sx;
+          INT32   out;
 
           drow = &mSurf.pixels[(UINT32)(dy + y * scale + ry) * mSurf.pitch
                                + (UINT32)dx];
+          out  = 0;
           for (sx = 0; sx < src_w; sx++) {
             UINT32  px;
             INT32   rx;
 
             px = srow[sx];
             for (rx = 0; rx < scale; rx++) {
-              drow[sx * scale + rx] = px;
+              drow[out++] = px;
             }
           }
         }
@@ -980,29 +1284,131 @@ pm_metal_gfx_blit_bgra (
       goto nearest;
     }
 
-    rc = pm_metal_gfx_present_rect (dx, dy, dw, dh);
+    MetalGfxBlitHintSet (dx, dy, dw, dh);
     pm_metal_async_perf_note_blit_us (pm_metal_time_mono_us () - t0);
     return rc;
   }
 
 nearest:
-  for (y = 0; y < dh; y++) {
-    INT32         sy;
-    CONST UINT32 *srow;
-    UINT32       *drow;
+  /*
+   * Stretch-fill (non-integer scale). X map rebuilt only when size changes;
+   * inner loop is a gather — no per-pixel divide/add.
+   */
+  {
+    UINT32  y_step;
+    UINT32  y_acc;
+    UINT32  x_step;
+    UINT32  x_acc;
+    INT32   xi;
 
-    sy   = (y * src_h) / dh;
-    srow = (CONST UINT32 *)(src_base + (UINTN)sy * (UINTN)src_pitch);
-    drow = &mSurf.pixels[(UINT32)(dy + y) * mSurf.pitch + (UINT32)dx];
-    for (x = 0; x < dw; x++) {
-      INT32  sx;
+    if (mXMap == NULL || mXMapCap < (UINT32)dw
+        || mXMapDw != dw || mXMapSw != src_w)
+    {
+      if (mXMap != NULL && mXMapCap < (UINT32)dw) {
+        pm_metal_mem_free (mXMap);
+        mXMap    = NULL;
+        mXMapCap = 0;
+      }
 
-      sx      = (x * src_w) / dw;
-      drow[x] = srow[sx];
+      if (mXMap == NULL) {
+        mXMap = (UINT16 *)pm_metal_mem_alloc (
+                            (UINTN)dw * sizeof (UINT16),
+                            PM_METAL_MEM_HEAP,
+                            PM_METAL_MEM_ID_NONE
+                            );
+        if (mXMap == NULL) {
+          return -1;
+        }
+
+        mXMapCap = (UINT32)dw;
+      }
+
+      x_step = ((UINT32)src_w << 16) / (UINT32)dw;
+      x_acc  = 0;
+      for (xi = 0; xi < dw; xi++) {
+        INT32  sx;
+
+        sx = (INT32)(x_acc >> 16);
+        if (sx >= src_w) {
+          sx = src_w - 1;
+        }
+
+        mXMap[xi] = (UINT16)sx;
+        x_acc    += x_step;
+      }
+
+      mXMapDw = dw;
+      mXMapSw = src_w;
+    }
+
+    /*
+     * Vertical integer scale: gather each src row once, replicate. Cuts
+     * gather work when dh is a multiple of src_h (common-ish on panels).
+     */
+    if ((dh % src_h) == 0 && (dh / src_h) > 1) {
+      INT32  y_rep;
+
+      y_rep = dh / src_h;
+      for (y = 0; y < src_h; y++) {
+        CONST UINT32 *srow;
+        UINT32       *drow0;
+        INT32         ry;
+
+        srow  = (CONST UINT32 *)(src_base + (UINTN)y * (UINTN)src_pitch);
+        drow0 = &mSurf.pixels[(UINT32)(dy + y * y_rep) * mSurf.pitch
+                              + (UINT32)dx];
+        for (x = 0; x < dw; x++) {
+          drow0[x] = srow[mXMap[x]];
+        }
+
+        for (ry = 1; ry < y_rep; ry++) {
+          CopyMem (
+            &mSurf.pixels[(UINT32)(dy + y * y_rep + ry) * mSurf.pitch
+                          + (UINT32)dx],
+            drow0,
+            (UINTN)dw * sizeof (UINT32)
+            );
+        }
+      }
+    } else {
+      INT32  prev_sy;
+
+      y_step  = ((UINT32)src_h << 16) / (UINT32)dh;
+      y_acc   = 0;
+      prev_sy = -1;
+      for (y = 0; y < dh; y++) {
+        INT32         sy;
+        CONST UINT32 *srow;
+        UINT32       *drow;
+
+        sy    = (INT32)(y_acc >> 16);
+        y_acc += y_step;
+        if (sy >= src_h) {
+          sy = src_h - 1;
+        }
+
+        drow = &mSurf.pixels[(UINT32)(dy + y) * mSurf.pitch + (UINT32)dx];
+        if (sy == prev_sy && y > 0) {
+          /* Same src row as previous dest — replicate (1080p/320×200). */
+          CopyMem (
+            drow,
+            &mSurf.pixels[(UINT32)(dy + y - 1) * mSurf.pitch + (UINT32)dx],
+            (UINTN)dw * sizeof (UINT32)
+            );
+          continue;
+        }
+
+        srow = (CONST UINT32 *)(src_base + (UINTN)sy * (UINTN)src_pitch);
+        for (x = 0; x < dw; x++) {
+          drow[x] = srow[mXMap[x]];
+        }
+
+        prev_sy = sy;
+      }
     }
   }
 
-  rc = pm_metal_gfx_present_rect (dx, dy, dw, dh);
+  MetalGfxBlitHintSet (dx, dy, dw, dh);
   pm_metal_async_perf_note_blit_us (pm_metal_time_mono_us () - t0);
   return rc;
 }

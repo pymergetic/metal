@@ -5,7 +5,9 @@
 #include <runtime/time/time.h>
 
 #include <Uefi.h>
+#include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/PrintLib.h>
 
 #include "wasm_export.h"
 
@@ -16,6 +18,29 @@ uint64_t pm_metal_random_realtime_ms_port(void);
 STATIC wasm_module_inst_t  mRandInst;
 STATIC UINT64              mWeak;
 STATIC INT32               mWeakSeeded;
+
+STATIC INT32               mWallOffsetValid;
+STATIC INT64               mWallOffsetMs;
+
+/* Default: Europe/Berlin summer (+02:00). No DST engine. */
+STATIC INT32               mTzMin = 120;
+STATIC CHAR8               mTzName[32] = "Europe/Berlin";
+
+typedef struct {
+  CONST CHAR8  *name;
+  INT32         minutes;
+} metal_tz_ent_t;
+
+STATIC CONST metal_tz_ent_t  mTzTable[] = {
+  { "UTC", 0 },
+  { "GMT", 0 },
+  { "Europe/Berlin", 120 },
+  { "Europe/Paris", 120 },
+  { "Europe/London", 60 },
+  { "America/New_York", -240 },
+  { "America/Los_Angeles", -420 },
+  { "Asia/Tokyo", 540 },
+};
 
 void
 pm_metal_random_bind_inst (
@@ -59,6 +84,18 @@ pm_metal_random (
   return len;
 }
 
+void
+pm_metal_realtime_set_unix_ms (
+  uint64_t  unix_ms
+  )
+{
+  UINT64  mono_ms;
+
+  mono_ms         = pm_metal_time_mono_us () / 1000u;
+  mWallOffsetMs   = (INT64)unix_ms - (INT64)mono_ms;
+  mWallOffsetValid = 1;
+}
+
 uint64_t
 pm_metal_realtime_ms (
   VOID
@@ -66,12 +103,138 @@ pm_metal_realtime_ms (
 {
   UINT64  ms;
 
+  if (mWallOffsetValid) {
+    return (uint64_t)((INT64)(pm_metal_time_mono_us () / 1000u) + mWallOffsetMs);
+  }
+
   ms = pm_metal_random_realtime_ms_port ();
   if (ms != 0) {
     return ms;
   }
 
   return pm_metal_time_mono_us () / 1000u;
+}
+
+void
+pm_metal_tz_set_minutes (
+  int32_t  east_of_utc
+  )
+{
+  mTzMin = east_of_utc;
+  {
+    INT32  abs_m;
+
+    abs_m = (east_of_utc < 0) ? -east_of_utc : east_of_utc;
+    AsciiSPrint (
+      mTzName,
+      sizeof (mTzName),
+      "%c%02d%02d",
+      (east_of_utc < 0) ? '-' : '+',
+      abs_m / 60,
+      abs_m % 60
+      );
+  }
+}
+
+int32_t
+pm_metal_tz_minutes (
+  VOID
+  )
+{
+  return mTzMin;
+}
+
+CONST CHAR8 *
+pm_metal_tz_name (
+  VOID
+  )
+{
+  return mTzName;
+}
+
+STATIC
+INT32
+TzParseOffset (
+  CONST CHAR8  *spec,
+  INT32        *out_min
+  )
+{
+  CONST CHAR8  *p;
+  INT32         sign;
+  INT32         hh;
+  INT32         mm;
+
+  if (spec == NULL || out_min == NULL || spec[0] == '\0') {
+    return -1;
+  }
+
+  p    = spec;
+  sign = 1;
+  if (*p == '+') {
+    p++;
+  } else if (*p == '-') {
+    sign = -1;
+    p++;
+  }
+
+  if (p[0] < '0' || p[0] > '9' || p[1] < '0' || p[1] > '9') {
+    return -1;
+  }
+
+  hh = (p[0] - '0') * 10 + (p[1] - '0');
+  p += 2;
+  if (*p == ':') {
+    p++;
+  }
+
+  if (p[0] < '0' || p[0] > '9' || p[1] < '0' || p[1] > '9' || p[2] != '\0') {
+    return -1;
+  }
+
+  mm = (p[0] - '0') * 10 + (p[1] - '0');
+  if (hh > 14 || mm > 59) {
+    return -1;
+  }
+
+  *out_min = sign * (hh * 60 + mm);
+  return 0;
+}
+
+int
+pm_metal_tz_set (
+  CONST CHAR8  *spec
+  )
+{
+  UINT32  i;
+  INT32   mins;
+
+  if (spec == NULL || spec[0] == '\0') {
+    return -1;
+  }
+
+  if (TzParseOffset (spec, &mins) == 0) {
+    mTzMin = mins;
+    AsciiStrCpyS (mTzName, sizeof (mTzName), spec);
+    return 0;
+  }
+
+  for (i = 0; i < sizeof (mTzTable) / sizeof (mTzTable[0]); i++) {
+    if (AsciiStrCmp (spec, mTzTable[i].name) == 0) {
+      mTzMin = mTzTable[i].minutes;
+      AsciiStrCpyS (mTzName, sizeof (mTzName), mTzTable[i].name);
+      return 0;
+    }
+  }
+
+  return -1;
+}
+
+uint64_t
+pm_metal_tz_local_ms (
+  VOID
+  )
+{
+  return pm_metal_realtime_ms () + (uint64_t)((INT64)mTzMin * 60ll * 1000ll);
 }
 
 STATIC UINT32

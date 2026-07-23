@@ -83,9 +83,11 @@ os_vprintf(const char *format, va_list ap)
         n = (int)sizeof(buf) - 1;
     buf[n] = '\0';
 
-    /* Serial immediately; tab via line buffer (no second serial Print). */
-    Print(L"%a", buf);
-    efi_wamr_feed_stdout((const char *)buf, (size_t)n, 0);
+    /*
+     * Post-EBS ConOut/Print is unusable. feed_stdout(also_serial=1) logs via
+     * UART when owned; pre-EBS still uses Print inside emit_line.
+     */
+    efi_wamr_feed_stdout((const char *)buf, (size_t)n, 1);
     return n;
 }
 

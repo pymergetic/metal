@@ -489,7 +489,13 @@ pm_metal_net_tftp_status (
   pm_metal_async_handle_t  h
   )
 {
-  (VOID)h;
+  tftp_get_t  *t;
+
+  t = (tftp_get_t *)pm_metal_async_host_coro (h);
+  if (t != NULL) {
+    return t->status;
+  }
+
   return mTftpLastDone.valid ? mTftpLastDone.status : 1u;
 }
 
@@ -498,7 +504,13 @@ pm_metal_net_tftp_len (
   pm_metal_async_handle_t  h
   )
 {
-  (VOID)h;
+  tftp_get_t  *t;
+
+  t = (tftp_get_t *)pm_metal_async_host_coro (h);
+  if (t != NULL) {
+    return t->got;
+  }
+
   return mTftpLastDone.valid ? mTftpLastDone.len : 0u;
 }
 

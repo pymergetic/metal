@@ -27,8 +27,24 @@ extern "C" {
 #if !defined(__wasm__)
 #include "pymergetic/metal/runtime/async/async.h"
 
+/** Bash-like command history capacity (oldest dropped when full). */
+#define PM_METAL_SHELL_HISTORY_MAX  64u
+
 /** Bind to UI shell chrome (must exist). Proofs are pool/init-coro work. */
 int pm_metal_shell_init(void);
+/**
+ * Format bash-like prompt into out (e.g. "metal:~$ ").
+ * Returns length excluding NUL, or 0 on error.
+ */
+uint32_t pm_metal_shell_prompt(char *out, uint32_t cap);
+/** Record a committed command line (skips empty / consecutive dup). */
+void pm_metal_shell_history_add(const char *line);
+/** Number of retained history entries. */
+uint32_t pm_metal_shell_history_count(void);
+/**
+ * Read retained entry by index (0 = oldest). Returns 0 ok, -1 bad idx.
+ */
+int pm_metal_shell_history_get(uint32_t idx, char *out, uint32_t cap);
 /**
  * One poll: keys, cursor tick, redraw.
  * Returns 1 exit, 0 continue, -1 error.
@@ -39,11 +55,17 @@ int pm_metal_shell_exit_reboot(void);
 /** Suggested coop sleep after the last poll (1 ms when busy, else ~16). */
 uint32_t pm_metal_shell_pump_sleep_ms(void);
 
-/** 1 if a background shell job (ping/test) is already running. */
+/** 1 if a background shell job (ping/nslookup/test) is already running. */
 int pm_metal_shell_job_busy(void);
 /**
+ * After a background log line (e.g. metal-net: …) hit the UART mid-prompt,
+ * ask the next shell_poll to re-offer the live prompt when idle.
+ */
+void pm_metal_shell_prompt_dirty(void);
+/**
  * Track a host async task; shell_poll pumps it and prints on completion.
- * kind: "ping" | "test". detail optional (e.g. hostname). Returns 0 ok.
+ * kind: "ping" | "nslookup" | "test". detail optional (e.g. hostname).
+ * Returns 0 ok. Job poll treats WAITING like PENDING (sleep/DNS park).
  */
 int pm_metal_shell_job_start(const char *kind, pm_metal_async_handle_t task_h,
 			     pm_metal_async_handle_t coro_h, const char *detail,

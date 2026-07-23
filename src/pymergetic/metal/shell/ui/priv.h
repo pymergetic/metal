@@ -16,6 +16,7 @@
 #define COL_TITLE_TXT   PM_METAL_GFX_RGB (0xff, 0xff, 0xff)
 #define COL_TAB         PM_METAL_GFX_RGB (0x8a, 0x8a, 0x8a)
 #define COL_TAB_ON      PM_METAL_GFX_RGB (0xc0, 0xc0, 0xc0)
+#define COL_TAB_HOVER   PM_METAL_GFX_RGB (0xa8, 0xa8, 0xa8)
 #define COL_TAB_OFF     PM_METAL_GFX_RGB (0x7a, 0x7a, 0x7a)
 #define COL_TAB_TXT     PM_METAL_GFX_RGB (0x10, 0x10, 0x10)
 #define COL_BEVEL_HI    PM_METAL_GFX_RGB (0xe8, 0xe8, 0xe8)
@@ -23,6 +24,12 @@
 #define COL_FRAME_FACE  PM_METAL_GFX_RGB (0x9a, 0x9a, 0x9a)
 #define COL_CONSOLE_BG  PM_METAL_GFX_RGB (0x1a, 0x1a, 0x22)
 #define COL_CONSOLE_FG  PM_METAL_GFX_RGB (0xc8, 0xe6, 0xc8)
+#define COL_LOG_DIM     PM_METAL_GFX_RGB (0x70, 0x80, 0x70)
+#define COL_LOG_OK      PM_METAL_GFX_RGB (0x50, 0xe0, 0x70)
+#define COL_LOG_WARN    PM_METAL_GFX_RGB (0xe0, 0xc0, 0x40)
+#define COL_LOG_FAIL    PM_METAL_GFX_RGB (0xd0, 0x55, 0x55)
+#define COL_LOG_ACCENT  PM_METAL_GFX_RGB (0x60, 0xd0, 0xe8)
+#define COL_PROMPT_PATH PM_METAL_GFX_RGB (0x55, 0xa0, 0xff) /* :~ — match ANSI 34 */
 #define COL_INPUT_FG    PM_METAL_GFX_RGB (0xff, 0xff, 0xcc)
 #define COL_STATUS      PM_METAL_GFX_RGB (0x6a, 0x6a, 0x6a)
 #define COL_STATUS_TXT  PM_METAL_GFX_RGB (0xf0, 0xf0, 0xf0)
@@ -39,13 +46,19 @@
 #define UI_STATUS_H     24
 #define UI_FRAME_PAD    6
 #define UI_INPUT_ROWS   1
+#define UI_SCROLL_W     10
 
-#define CONSOLE_LINES   512
-#define CONSOLE_COLS    160
-#define STATUS_CHARS    128
-#define TITLE_CHARS     48
-#define INPUT_CHARS     120
-#define MAX_TABS        16
+#define CONSOLE_LINES      1024
+#define CONSOLE_COLS       160
+#define CONSOLE_BYTES_MAX  (CONSOLE_LINES * CONSOLE_COLS)
+#define STATUS_CHARS       128
+#define TITLE_CHARS        48
+#define INPUT_CHARS        120
+#define MAX_TABS           16
+
+#define COL_SCROLL_TRACK  PM_METAL_GFX_RGB (0x28, 0x28, 0x30)
+#define COL_SCROLL_THUMB  PM_METAL_GFX_RGB (0x70, 0x80, 0x70)
+#define COL_SCROLL_EDGE   PM_METAL_GFX_RGB (0x40, 0x40, 0x48)
 
 typedef enum {
   METAL_UI_KIND_WINDOW = 0,
@@ -74,8 +87,10 @@ struct metal_ui_widget {
   union {
     struct {
       CHAR8   lines[CONSOLE_LINES][CONSOLE_COLS];
+      UINT8   styles[CONSOLE_LINES]; /* pm_metal_log_style_t */
       UINT32  count;
       UINT32  head;
+      UINT32  view_off; /* lines scrolled up from bottom; 0 = stick */
       CHAR8   input[INPUT_CHARS];
       UINT32  input_len;
       INT32   show_input;
@@ -83,6 +98,7 @@ struct metal_ui_widget {
     } console;
     struct {
       UINT32              active;
+      INT32               hover; /* -1 = none */
       metal_ui_widget_t  *tabs[MAX_TABS];
       UINT32              n;
     } tabs;
@@ -109,9 +125,33 @@ pm_metal_ui_handle_t MetalUiHandleAlloc (metal_ui_widget_t *tab);
 VOID MetalUiHandleFree (pm_metal_ui_handle_t h);
 metal_ui_widget_t *MetalUiTabFromHandle (pm_metal_ui_handle_t h);
 INT32 MetalUiTabIndex (metal_ui_widget_t *tab);
+/** Tab strip hit-test; -1 if (x,y) is not on a tab label. */
+INT32 MetalUiTabIndexAt (INT32 x, INT32 y);
 metal_ui_widget_t *MetalUiTabConsole (metal_ui_widget_t *tab);
 metal_ui_widget_t *MetalUiActiveConsole (VOID);
 VOID MetalUiConsolePuts (metal_ui_widget_t *con, CONST CHAR8 *line);
+VOID MetalUiConsolePutsStyled (
+  metal_ui_widget_t     *con,
+  CONST CHAR8           *line,
+  pm_metal_log_style_t   style
+  );
+UINT32 MetalUiConsoleVisibleRows (metal_ui_widget_t *con);
+UINT32 MetalUiConsoleMaxOff (metal_ui_widget_t *con);
+VOID MetalUiConsoleClampView (metal_ui_widget_t *con);
+VOID MetalUiConsoleScrollBy (metal_ui_widget_t *con, INT32 delta_lines);
+VOID MetalUiConsoleScrollTo (metal_ui_widget_t *con, UINT32 view_off);
+/**
+ * Scrollbar geometry in screen coords. Returns 1 if a thumb is shown.
+ */
+INT32 MetalUiConsoleScrollBarGeom (
+  metal_ui_widget_t  *con,
+  INT32              *track_x,
+  INT32              *track_y,
+  INT32              *track_w,
+  INT32              *track_h,
+  INT32              *thumb_y,
+  INT32              *thumb_h
+  );
 metal_ui_widget_t *MetalUiMakeTabBody (
   CONST CHAR8  *title,
   INT32         closable,

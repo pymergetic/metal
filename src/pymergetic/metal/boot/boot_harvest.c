@@ -7,9 +7,49 @@
 #include <pymergetic/metal/dev/net/net_ops.h>
 #include <pymergetic/metal/dev/audio/audio_ops.h>
 #include <pymergetic/metal/dev/console/console.h>
+#include <pymergetic/metal/dev/input/virtio_input.h>
 #include <pymergetic/metal/dev/blk/blk.h>
+#include "../bus/pci/pci.h"
 
 #include <Uefi.h>
+#include <Library/BaseMemoryLib.h>
+
+STATIC
+INT32
+MetalBootHarvestGfxPci (
+  pm_metal_io_node_t  *node
+  )
+{
+  UINT8   bus;
+  UINT8   dev;
+  UINT8   func;
+  UINT16  ven;
+  UINT16  did;
+
+  if (node == NULL) {
+    return -1;
+  }
+
+  /* VGA (03:00) then “other display” (03:80) — covers IGP + some dGPU. */
+  if (pm_bios_pci_find_class (0x03, 0x00, &bus, &dev, &func) != 0
+      && pm_bios_pci_find_class (0x03, 0x80, &bus, &dev, &func) != 0)
+  {
+    return -1;
+  }
+
+  ven = pm_bios_pci_read16 (bus, dev, func, 0x00);
+  did = pm_bios_pci_read16 (bus, dev, func, 0x02);
+  if (ven == 0xffffu || did == 0xffffu) {
+    return -1;
+  }
+
+  node->bus    = PM_METAL_IO_BUS_PCI;
+  node->loc[0] = bus;
+  node->loc[1] = dev;
+  node->loc[2] = func;
+  node->loc[3] = ((UINT32)ven << 16) | (UINT32)did;
+  return 0;
+}
 
 void
 pm_metal_boot_harvest_bus_devices (
@@ -44,6 +84,7 @@ pm_metal_boot_harvest_bus_devices (
   }
 
   (VOID)pm_metal_console_virtio_probe ();
+  (VOID)pm_metal_input_virtio_tablet_probe ();
   (VOID)pm_metal_blk_virtio_detect ();
   (VOID)pm_metal_blk_ide_detect ();
 }
@@ -62,11 +103,6 @@ pm_metal_boot_harvest_devices (
     .compat = "tsc",
     .bus = PM_METAL_IO_BUS_PLATFORM
   };
-  STATIC CONST pm_metal_io_node_t  GfxNode = {
-    .class = PM_METAL_IO_GFX,
-    .compat = "framebuffer",
-    .bus = PM_METAL_IO_BUS_PLATFORM
-  };
   STATIC CONST pm_metal_io_node_t  InputNode = {
     .class = PM_METAL_IO_INPUT,
     .compat = "ps2+com1",
@@ -77,6 +113,7 @@ pm_metal_boot_harvest_devices (
     .compat = "uart+ui",
     .bus = PM_METAL_IO_BUS_PLATFORM
   };
+  pm_metal_io_node_t  GfxNode;
 
   pm_metal_boot_port_floor (&fs_compat, &random_compat);
 
@@ -90,6 +127,12 @@ pm_metal_boot_harvest_devices (
     .compat = random_compat,
     .bus = PM_METAL_IO_BUS_PLATFORM
   };
+
+  ZeroMem (&GfxNode, sizeof (GfxNode));
+  GfxNode.class  = PM_METAL_IO_GFX;
+  GfxNode.compat = "framebuffer";
+  GfxNode.bus    = PM_METAL_IO_BUS_PLATFORM;
+  (VOID)MetalBootHarvestGfxPci (&GfxNode);
 
   (VOID)pm_metal_io_dt_add (&TimeNode);
   (VOID)pm_metal_io_dt_add (&GfxNode);

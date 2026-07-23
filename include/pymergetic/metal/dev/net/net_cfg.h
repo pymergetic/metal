@@ -31,6 +31,7 @@ typedef struct pm_metal_net_ifcfg {
 	char mask[16];
 	char gw[16];
 	char dns[16];
+	char ntp[16];
 	char tftp[PM_METAL_NET_TFTP_HOST_MAX];
 	char boot_file[PM_METAL_NET_BOOT_FILE_MAX];
 	unsigned char mac[6];
@@ -92,14 +93,9 @@ void pm_metal_net_on_hostname_changed(void);
 /**
  * Sync IPv4 resolve: literal, localhost/nodename, /etc/hosts, or DNS cache.
  * out_host is host-order. Returns 0, or -1 (need async DNS / unknown).
+ * Product DNS result string lives on net.h: pm_metal_net_dns_last_ntoa.
  */
 int pm_metal_net_resolve_ip4(const char *host, uint32_t *out_host);
-
-/**
- * After await on pm_metal_net_dns with success (result 1): last address as
- * ASCII (IPv4 or IPv6). Returns 0, or -1 if none.
- */
-int pm_metal_net_dns_last_ntoa(char *out, uint32_t out_cap);
 
 #endif
 

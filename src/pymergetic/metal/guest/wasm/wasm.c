@@ -2,6 +2,7 @@
   Slim WAMR runner for EFI Metal. (impl: efi|bios)
 **/
 #include <pymergetic/metal/guest/wasm/wasm.h>
+#include <pymergetic/metal/guest/process/process.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
 #include <pymergetic/metal/shell/ui/ui.h>
 #include <pymergetic/metal/shell/shell/shell.h>
@@ -11,14 +12,17 @@
 #include <pymergetic/metal/shell/hwinfo/hwinfo.h>
 #include <pymergetic/metal/fs/esp/esp.h>
 #include <pymergetic/metal/fs/fs.h>
+#include <pymergetic/metal/trust/trust.h>
 #include <pymergetic/metal/dev/blk/blk.h>
 #include <pymergetic/metal/dev/audio/audio.h>
 #include <pymergetic/metal/dev/stream/stream.h>
 #include <pymergetic/metal/dev/net/net.h>
 #include <pymergetic/metal/dev/net/tls.h>
 #include <pymergetic/metal/dev/net/ping.h>
+#include <pymergetic/metal/dev/net/ntp.h>
 #include <pymergetic/metal/dev/net/http.h>
 #include <pymergetic/metal/dev/net/tftp.h>
+#include <pymergetic/metal/guest/pkg/pkg.h>
 #include <pymergetic/metal/dev/random/random.h>
 #include <pymergetic/metal/util/arena.h>
 #include <pymergetic/metal/util/log.h>
@@ -155,12 +159,14 @@ MetalWasmLiveClear (
   pm_metal_audio_bind_inst (NULL);
   pm_metal_input_bind_inst (NULL);
   pm_metal_lifecycle_bind_inst (NULL);
+  pm_metal_process_bind_inst (NULL);
   pm_metal_stream_bind_inst (NULL);
   pm_metal_net_bind_inst (NULL);
   pm_metal_net_tls_bind_inst (NULL);
   pm_metal_net_ping_bind_inst (NULL);
   pm_metal_net_http_bind_inst (NULL);
   pm_metal_net_tftp_bind_inst (NULL);
+  pm_metal_net_ntp_bind_inst (NULL);
   pm_metal_random_bind_inst (NULL);
 
   if (mLiveEnv != NULL) {
@@ -186,12 +192,18 @@ MetalWasmLiveClear (
   mLiveName[0] = '\0';
 }
 
-STATIC
-VOID
-MetalWasmLiveFinish (
+void
+pm_metal_wasm_live_finish (
   VOID
   )
 {
+  pm_metal_process_id_t  pid;
+
+  pid = pm_metal_process_current ();
+  if (pid == PM_METAL_PROCESS_ID_INVALID) {
+    pid = pm_metal_process_pending ();
+  }
+
   pm_metal_lifecycle_blur ();
   /* blur already unlocks pointer */
   if (pm_metal_async_session_active ()) {
@@ -199,7 +211,20 @@ MetalWasmLiveFinish (
   }
 
   MetalWasmLiveClear ();
+  if (pid != PM_METAL_PROCESS_ID_INVALID) {
+    pm_metal_process_reap (pid);
+  }
+
   pm_metal_ui_sync_input_focus ();
+}
+
+STATIC
+VOID
+MetalWasmLiveFinish (
+  VOID
+  )
+{
+  pm_metal_wasm_live_finish ();
 }
 
 int
@@ -212,6 +237,8 @@ pm_metal_wasm_init (
   if (mReady) {
     return 0;
   }
+
+  pm_metal_pkg_init ();
 
   mPoolSize = PM_METAL_WASM_HEAP_SIZE;
   mPool     = (UINT8 *)pm_metal_mem_alloc (
@@ -242,6 +269,7 @@ pm_metal_wasm_init (
       || pm_metal_async_native_register () != 0
       || pm_metal_input_native_register () != 0
       || pm_metal_lifecycle_native_register () != 0
+      || pm_metal_process_native_register () != 0
       || pm_metal_hwinfo_native_register () != 0
       || pm_metal_fs_native_register () != 0
       || pm_metal_blk_native_register () != 0
@@ -252,6 +280,7 @@ pm_metal_wasm_init (
       || pm_metal_net_ping_native_register () != 0
       || pm_metal_net_http_native_register () != 0
       || pm_metal_net_tftp_native_register () != 0
+      || pm_metal_net_ntp_native_register () != 0
       || pm_metal_random_native_register () != 0
       || pm_metal_util_arena_native_register () != 0
       || pm_metal_util_log_native_register () != 0
@@ -303,6 +332,7 @@ pm_metal_wasm_mod_lookup (
   )
 {
   UINT32  i;
+  CHAR8   arch_name[96];
 
   if (name == NULL || bytes == NULL || len == NULL) {
     return -1;
@@ -316,21 +346,39 @@ pm_metal_wasm_mod_lookup (
     }
   }
 
+  /* Bare name → host-arch AOT embed (async_aot → async_aot.i386 / .x86_64). */
+  AsciiSPrint (
+    arch_name,
+    sizeof (arch_name),
+    "%a.%a",
+    name,
+    pm_metal_host_aot_arch ()
+    );
+  for (i = 0; i < g_pm_metal_embed_mod_count; i++) {
+    if (AsciiStrCmp (arch_name, g_pm_metal_embed_mods[i].name) == 0) {
+      *bytes = g_pm_metal_embed_mods[i].bytes;
+      *len   = g_pm_metal_embed_mods[i].len;
+      return 0;
+    }
+  }
+
   return -1;
 }
 
 STATIC
 INT32
 MetalWasmRunAsyncLive (
-  CONST CHAR8           *name,
-  wasm_module_t          module,
-  wasm_module_inst_t     inst,
-  wasm_exec_env_t        exec_env,
-  wasm_function_inst_t   step_fn
+  CONST CHAR8            *name,
+  wasm_module_t           module,
+  wasm_module_inst_t      inst,
+  wasm_exec_env_t         exec_env,
+  wasm_function_inst_t    step_fn,
+  pm_metal_process_id_t   pid
   )
 {
-  UINT64  t0;
-  UINT64  deadline;
+  UINT64                  t0;
+  UINT64                  deadline;
+  UINT32                  life_surf;
 
   if (pm_metal_async_session_begin (inst, exec_env, step_fn) != 0) {
     return -1;
@@ -375,8 +423,18 @@ MetalWasmRunAsyncLive (
   mLiveEnv    = exec_env;
   AsciiStrnCpyS (mLiveName, sizeof (mLiveName),
                  name != NULL ? name : "mod", sizeof (mLiveName) - 1);
+  if (pid != PM_METAL_PROCESS_ID_INVALID) {
+    pm_metal_process_commit_live (pid);
+    life_surf = pm_metal_process_surface (pid);
+    if (life_surf == PM_METAL_GFX_SURFACE_INVALID) {
+      life_surf = PM_METAL_GFX_SURFACE_DEFAULT;
+    }
+  } else {
+    life_surf = PM_METAL_GFX_SURFACE_DEFAULT;
+  }
+
   pm_metal_lifecycle_set (
-    PM_METAL_GFX_SURFACE_DEFAULT,
+    life_surf,
     PM_METAL_LIFE_FOCUSED | PM_METAL_LIFE_VISIBLE
     );
   /* Foreground tab + live session → guest keys (any mod). */
@@ -393,24 +451,7 @@ pm_metal_wasm_session_poll (
   INT32  *status_out
   )
 {
-  INT32  st;
-
-  if (!pm_metal_async_session_active ()) {
-    return 0;
-  }
-
-  pm_metal_async_session_pump ();
-  if (!pm_metal_async_session_root_done ()) {
-    return 0;
-  }
-
-  st = pm_metal_async_session_root_status ();
-  if (status_out != NULL) {
-    *status_out = st;
-  }
-
-  MetalWasmLiveFinish ();
-  return (st == (INT32)PM_METAL_DONE) ? 1 : -1;
+  return pm_metal_process_poll (status_out);
 }
 
 int
@@ -432,7 +473,7 @@ pm_metal_wasm_session_await (
     pm_metal_async_session_pump ();
     if (pm_metal_time_mono_us () >= deadline) {
       pm_metal_log ("metal-wasm: session await timed out");
-      MetalWasmLiveFinish ();
+      pm_metal_wasm_live_finish ();
       return -1;
     }
 
@@ -441,7 +482,7 @@ pm_metal_wasm_session_await (
   }
 
   st = pm_metal_async_session_root_status ();
-  MetalWasmLiveFinish ();
+  pm_metal_wasm_live_finish ();
   return (st == (INT32)PM_METAL_DONE) ? 0 : -1;
 }
 
@@ -450,6 +491,11 @@ pm_metal_wasm_session_active (
   VOID
   )
 {
+  /* Prefer process anchor; fall back while async is up mid-startup. */
+  if (pm_metal_process_current () != PM_METAL_PROCESS_ID_INVALID) {
+    return pm_metal_process_active ();
+  }
+
   return pm_metal_async_session_active ();
 }
 
@@ -458,6 +504,13 @@ pm_metal_wasm_session_name (
   VOID
   )
 {
+  CONST CHAR8  *nm;
+
+  nm = pm_metal_process_name (pm_metal_process_current ());
+  if (nm != NULL) {
+    return nm;
+  }
+
   return mLiveName[0] != '\0' ? mLiveName : NULL;
 }
 
@@ -468,15 +521,21 @@ pm_metal_wasm_run_bytes (
   UINT32         len
   )
 {
-  wasm_module_t           module;
-  wasm_module_inst_t      inst;
-  wasm_exec_env_t         exec_env;
-  wasm_function_inst_t    step_fn;
-  CHAR8                   error_buf[128];
-  CONST CHAR8            *argv[1];
-  INT32                   argc;
-  INT32                   ret;
-  UINT8                  *copy;
+  wasm_module_t                module;
+  wasm_module_inst_t           inst;
+  wasm_exec_env_t              exec_env;
+  wasm_function_inst_t         step_fn;
+  CHAR8                        error_buf[128];
+  CONST CHAR8                 *argv[1];
+  CONST CHAR8                 *envp[1];
+  CHAR8                        pid_env[24];
+  INT32                        argc;
+  INT32                        envc;
+  INT32                        ret;
+  UINT8                       *copy;
+  pm_metal_process_id_t        pid;
+  pm_metal_process_ui_kind_t   ui_kind;
+  pm_metal_ui_handle_t         ui_tab;
 
   if (!mReady || bytes == NULL || len == 0) {
     return -1;
@@ -484,6 +543,21 @@ pm_metal_wasm_run_bytes (
 
   if (pm_metal_async_session_active ()) {
     pm_metal_log ("metal-wasm: session already active");
+    return -1;
+  }
+
+  ui_kind = PM_METAL_PROC_UI_NONE;
+  ui_tab  = pm_metal_wasm_stdout_tab ();
+  if (pm_metal_process_spawn_hint (&ui_kind, &ui_tab)) {
+    /* spawn_mod supplied kind + tab */
+  } else if (ui_tab == PM_METAL_UI_HANDLE_INVALID) {
+    ui_kind = PM_METAL_PROC_UI_NONE;
+  } else {
+    ui_kind = PM_METAL_PROC_UI_NONE; /* reserve derives from tab */
+  }
+
+  pid = pm_metal_process_reserve (name, ui_kind, ui_tab);
+  if (pid == PM_METAL_PROCESS_ID_INVALID) {
     return -1;
   }
 
@@ -498,6 +572,7 @@ pm_metal_wasm_run_bytes (
       name != NULL ? name : "?",
       len
       );
+    pm_metal_process_release (pid);
     return -1;
   }
 
@@ -518,6 +593,7 @@ pm_metal_wasm_run_bytes (
       error_buf
       );
     pm_metal_mem_free (copy);
+    pm_metal_process_release (pid);
     return -1;
   }
 
@@ -525,6 +601,9 @@ pm_metal_wasm_run_bytes (
 
   argv[0] = (name != NULL) ? name : "mod";
   argc    = 1;
+  AsciiSPrint (pid_env, sizeof (pid_env), "PID=%u", (UINT32)pid);
+  envp[0] = pid_env;
+  envc    = 1;
   /*
    * No WASI preopen — guests use Metal FS (awaitable). Guest packages will
    * need Metal ABI before re-enable; do not reintroduce "/" → ESP here.
@@ -535,17 +614,18 @@ pm_metal_wasm_run_bytes (
     0,
     NULL,
     0,
-    NULL,
-    0,
+    (CONST CHAR8 **)envp,
+    envc,
     (CHAR8 **)argv,
     argc
     );
 
   pm_metal_logf (
-    "metal-wasm: instantiate %a stack=%u heap=%u",
+    "metal-wasm: instantiate %a stack=%u heap=%u pid=%u",
     name != NULL ? name : "?",
     (UINT32)PM_METAL_WASM_STACK_SIZE,
-    (UINT32)PM_METAL_WASM_HEAP_BYTES
+    (UINT32)PM_METAL_WASM_HEAP_BYTES,
+    (UINT32)pid
     );
   error_buf[0] = '\0';
   inst         = wasm_runtime_instantiate (
@@ -563,6 +643,7 @@ pm_metal_wasm_run_bytes (
       );
     wasm_runtime_unload (module);
     pm_metal_mem_free (copy);
+    pm_metal_process_release (pid);
     return -1;
   }
 
@@ -579,6 +660,7 @@ pm_metal_wasm_run_bytes (
       wasm_runtime_deinstantiate (inst);
       wasm_runtime_unload (module);
       pm_metal_mem_free (copy);
+      pm_metal_process_release (pid);
       return -1;
     }
 
@@ -588,14 +670,23 @@ pm_metal_wasm_run_bytes (
     pm_metal_audio_bind_inst (inst);
     pm_metal_input_bind_inst (inst);
     pm_metal_lifecycle_bind_inst (inst);
+    pm_metal_process_bind_inst (inst);
     pm_metal_stream_bind_inst (inst);
     pm_metal_net_bind_inst (inst);
     pm_metal_net_tls_bind_inst (inst);
     pm_metal_net_ping_bind_inst (inst);
     pm_metal_net_http_bind_inst (inst);
     pm_metal_net_tftp_bind_inst (inst);
+    pm_metal_net_ntp_bind_inst (inst);
     pm_metal_random_bind_inst (inst);
-    ret       = MetalWasmRunAsyncLive (name, module, inst, exec_env, step_fn);
+    ret = MetalWasmRunAsyncLive (
+            name,
+            module,
+            inst,
+            exec_env,
+            step_fn,
+            pid
+            );
     if (ret != 0 || !pm_metal_async_session_active ()) {
       /* Finished during startup or failed — drop ownership. */
       wasm_runtime_destroy_exec_env (exec_env);
@@ -606,23 +697,26 @@ pm_metal_wasm_run_bytes (
       mLiveModule = NULL;
       mLiveInst   = NULL;
       mLiveEnv    = NULL;
+      pm_metal_process_release (pid);
     }
 
     return ret;
   }
 
-  /* Sync mod — one-shot execute_main. */
+  /* Sync mod — one-shot execute_main (not retained in process table). */
   pm_metal_fs_bind_inst (inst);
   pm_metal_blk_bind_inst (inst);
   pm_metal_audio_bind_inst (inst);
   pm_metal_input_bind_inst (inst);
   pm_metal_lifecycle_bind_inst (inst);
+  pm_metal_process_bind_inst (inst);
   pm_metal_stream_bind_inst (inst);
   pm_metal_net_bind_inst (inst);
   pm_metal_net_tls_bind_inst (inst);
   pm_metal_net_ping_bind_inst (inst);
   pm_metal_net_http_bind_inst (inst);
   pm_metal_net_tftp_bind_inst (inst);
+  pm_metal_net_ntp_bind_inst (inst);
   pm_metal_random_bind_inst (inst);
   ret = 0;
   if (!wasm_application_execute_main (inst, argc, (CHAR8 **)argv)) {
@@ -642,7 +736,72 @@ pm_metal_wasm_run_bytes (
   wasm_runtime_deinstantiate (inst);
   wasm_runtime_unload (module);
   pm_metal_mem_free (copy);
+  pm_metal_process_release (pid);
   return ret;
+}
+
+STATIC
+INT32
+MetalWasmRunEspPackage (
+  CONST CHAR8  *name,
+  CONST CHAR8  *ext
+  )
+{
+  UINT8   *esp_bytes;
+  UINT32   esp_len;
+  CHAR8    path[96];
+  INT32    rc;
+
+  AsciiSPrint (path, sizeof (path), "mods/apps/%a/%a.%a", name, name, ext);
+  esp_bytes = NULL;
+  esp_len   = 0;
+  if (!pm_metal_esp_ready ()
+      || pm_metal_esp_read_file (path, &esp_bytes, &esp_len) != 0)
+  {
+    return 1; /* not found */
+  }
+
+  if (pm_metal_trust_mode () != PM_METAL_TRUST_MODE_OFF) {
+    CHAR8    sig_path[112];
+    UINT8   *sig;
+    UINT32   sig_len;
+
+    AsciiSPrint (
+      sig_path,
+      sizeof (sig_path),
+      "mods/apps/%a/%a.%a.sig",
+      name,
+      name,
+      ext
+      );
+    sig     = NULL;
+    sig_len = 0;
+    (VOID)pm_metal_esp_read_file (sig_path, &sig, &sig_len);
+    if (pm_metal_trust_accept_mods (esp_bytes, esp_len, sig, sig_len) != 0) {
+      pm_metal_logf ("metal-wasm: trust fail %a", path);
+      if (sig != NULL) {
+        pm_metal_mem_free (sig);
+      }
+
+      pm_metal_mem_free (esp_bytes);
+      return -1;
+    }
+
+    if (sig != NULL) {
+      pm_metal_mem_free (sig);
+    }
+  }
+
+  pm_metal_logf ("metal-wasm: esp %a (%u bytes)", path, esp_len);
+  rc = pm_metal_wasm_run_bytes (name, esp_bytes, esp_len);
+  pm_metal_logf (
+    "metal-wasm: esp %a rc=%d live=%d",
+    path,
+    rc,
+    pm_metal_async_session_active ()
+    );
+  pm_metal_mem_free (esp_bytes);
+  return rc;
 }
 
 int
@@ -652,9 +811,6 @@ pm_metal_wasm_run_mod (
 {
   CONST UINT8  *bytes;
   UINT32        len;
-  UINT8        *esp_bytes;
-  UINT32        esp_len;
-  CHAR8         path[96];
   INT32         rc;
 
   if (name == NULL) {
@@ -665,22 +821,33 @@ pm_metal_wasm_run_mod (
     return pm_metal_wasm_run_bytes (name, bytes, len);
   }
 
-  /* ESP package: mods/apps/<name>/<name>.wasm */
-  AsciiSPrint (path, sizeof (path), "mods/apps/%a/%a.wasm", name, name);
-  esp_bytes = NULL;
-  esp_len   = 0;
-  if (pm_metal_esp_ready ()
-      && pm_metal_esp_read_file (path, &esp_bytes, &esp_len) == 0)
+  /*
+   * ESP package: prefer matching .aot then .wasm (interp). Named packages
+   * HTTP-seed on demand here (run/tab) — never from DHCP/boot.
+   *
+   * AOT is host-bitness specific (wamrc x86_64 vs i386). Wrong-width files
+   * fail load with "invalid target bit width" — fall through to wasm.
+   */
+  (VOID)pm_metal_pkg_ensure (name);
+
   {
-    pm_metal_logf ("metal-wasm: esp %a (%u bytes)", path, esp_len);
-    rc = pm_metal_wasm_run_bytes (name, esp_bytes, esp_len);
-    pm_metal_logf (
-      "metal-wasm: esp %a rc=%d live=%d",
-      path,
-      rc,
-      pm_metal_async_session_active ()
-      );
-    pm_metal_mem_free (esp_bytes);
+    CHAR8  aot_ext[16];
+
+    AsciiSPrint (aot_ext, sizeof (aot_ext), "%a.aot", pm_metal_host_aot_arch ());
+    rc = MetalWasmRunEspPackage (name, aot_ext);
+  }
+  if (rc == 0) {
+    return 0;
+  }
+
+  if (rc < 0) {
+    pm_metal_logf ("metal-wasm: aot %a failed — trying wasm", name);
+  } else {
+    pm_metal_logf ("metal-wasm: aot %a missing — trying wasm", name);
+  }
+
+  rc = MetalWasmRunEspPackage (name, "wasm");
+  if (rc <= 0) {
     return rc;
   }
 

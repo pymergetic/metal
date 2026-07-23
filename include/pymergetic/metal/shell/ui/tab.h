@@ -42,6 +42,8 @@ pm_metal_gfx_surface_h pm_metal_ui_tab_surface(pm_metal_ui_handle_t h);
 
 /** Host helper: activate by index (0 = console). */
 int pm_metal_ui_tab_activate_index(unsigned index);
+/** Host helper: wrap active tab by delta (−1 / +1). */
+int pm_metal_ui_tab_cycle(int delta);
 unsigned pm_metal_ui_tab_active_index(void);
 int pm_metal_ui_tab_close_active(void);
 /** Content rect in screen pixels; 0 ok. */

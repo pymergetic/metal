@@ -18,9 +18,11 @@
 #include "pymergetic/metal/dev/net/ping.h" /* IWYU pragma: export */
 #include "pymergetic/metal/dev/net/http.h" /* IWYU pragma: export */
 #include "pymergetic/metal/dev/net/tftp.h" /* IWYU pragma: export */
+#include "pymergetic/metal/dev/net/ntp.h" /* IWYU pragma: export */
 #if !defined(__wasm__)
 #include "pymergetic/metal/dev/net/tls.h" /* IWYU pragma: export */
 #endif
+#include "pymergetic/metal/guest/process/process.h" /* IWYU pragma: export */
 #include "pymergetic/metal/dev/stream/stream.h" /* IWYU pragma: export */
 #include "pymergetic/metal/shell/lifecycle/lifecycle.h" /* IWYU pragma: export */
 #include "pymergetic/metal/shell/hwinfo/hwinfo.h" /* IWYU pragma: export */

@@ -31,6 +31,13 @@ int pm_metal_esp_ready(void);
 int pm_metal_esp_preload(const char *path);
 
 /**
+ * Recursively preload files under an ESP directory (e.g. "mods/apps").
+ * Skips missing roots. Call before EBS — optional client packages live here,
+ * not hardcoded in MetalPkg/main.
+ */
+int pm_metal_esp_preload_tree(const char *dir);
+
+/**
  * Seed/replace a RAM-cache entry (works after EBS).
  * Used when the file is known/embedded and ESP is gone.
  */

@@ -8,6 +8,8 @@ CompileFlags:
     - -std=c11
     - -I@@ROOT@@
     - -I@@ROOT@@/include
+    # Baked CA pubs for trust.c (#include "metal_trust_bake.inc.c")
+    - -I@@ROOT@@/build/trust
     # Always visible: Metal WAMR platform + freestanding libc stubs.
     - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
     - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
@@ -73,6 +75,7 @@ CompileFlags:
     - -target
     - x86_64-unknown-windows
     - "-DEFIAPI=__attribute__((ms_abi))"
+    - -I@@ROOT@@/build/trust
     - -I@@ROOT@@/external/edk2/MdePkg/Include
     - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
     - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
@@ -190,21 +193,28 @@ CompileFlags:
     - -I@@ROOT@@/include
 
 ---
-# doomgeneric Metal port — vendor headers + wasi sysroot (strings.h).
-# CompilationDatabase None so mods/apps/doom/compile_flags.txt applies.
+# doomgeneric Metal port — wasi sysroot (not freestanding host_stubs).
+# Exact -I paths: clangd Remove globs are unreliable vs absolute global Adds.
 If:
   PathMatch: .*/mods/apps/doom/.*\.(c|h)$
 CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
+  Remove:
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
+    - -I@@ROOT@@/external/wamr/core/shared/platform/include
   Add:
     - --target=wasm32-wasip1
     - --sysroot=@@ROOT@@/.tools/wasi-sdk/share/wasi-sysroot
     - -I@@ROOT@@/include
     - -I@@ROOT@@/external/doomgeneric/doomgeneric
+    - -I@@ROOT@@/mods/apps/doom
     - -I@@ROOT@@/mods/apps/doom/ide_stubs
     - -DNORMALUNIX
     - -DLINUX
     - -D_DEFAULT_SOURCE
+    - -D_POSIX_C_SOURCE=200809L
+    - -DFEATURE_SOUND
     - -DDOOMGENERIC_RESX=320
     - -DDOOMGENERIC_RESY=200

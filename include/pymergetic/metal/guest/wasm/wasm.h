@@ -61,6 +61,9 @@ int pm_metal_wasm_session_active(void);
 
 const char *pm_metal_wasm_session_name(void);
 
+/** Tear down live wasm instance + async session (reaps process). */
+void pm_metal_wasm_live_finish(void);
+
 #endif /* !__wasm__ */
 
 #ifdef __cplusplus

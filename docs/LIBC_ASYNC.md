@@ -15,7 +15,7 @@ Stackless rule: anything that waits on the world is **async**.
 CPU work stays **sync**. Preemptive-OS machinery is **omit**.
 
 Doom is **parked** (`mods/apps/doom` kept; default build/run/verify do not stage it).  
-Opt-in later: `METAL_BUILD_DOOM=1`.
+Opt-in later: `METAL_DOOM_BUILD=1`.
 
 ---
 
@@ -91,11 +91,13 @@ Opt-in later: `METAL_BUILD_DOOM=1`.
 | `poll` / `select` / `epoll` | **omit** | |
 | `fcntl` / `ioctl` zoo | **omit** | |
 | pipes / tty / stdio | **stream** class | See `docs/IO.md` — raw PTY first; cooked omit until needed |
-| `socket` / `connect` / `send` / `recv` | **async** (+ sync `send`, sync `bind_if`) | `pm_metal_net_*` + `pm_metal_net_bind_if`; await then `pm_metal_async_result_u32` / `pm_metal_net_result` |
-| `http get` (HTTP/HTTPS) | **async** | `pm_metal_net_http_get` → await → `pm_metal_net_http_status` / `pm_metal_net_http_body_len` |
-| `getaddrinfo` | **async** | `pm_metal_net_dns` (literal → localhost/nodename → `/etc/hosts` → DNS) | |
-| `gethostname` / `sethostname` | **sync** | `pm_metal_host_name_get` / `pm_metal_host_name_set` (identity; also DHCPv4 option 12) | |
-| TFTP get | **async** | `pm_metal_net_tftp_get` → await → `pm_metal_net_tftp_status` / `pm_metal_net_tftp_len` (proof: `async_tftp`; empty host/path → DHCP boot fields) | |
+| `socket` / `connect` / `send` / `recv` | **async** (+ sync façade `send`, `bind_if`) | `pm_metal_net_*`; await → `pm_metal_net_result` |
+| `getaddrinfo` | **async** | `pm_metal_net_dns` → await → `pm_metal_net_result` (1/0) + `pm_metal_net_dns_last_ntoa` (address string) |
+| ICMP ping | **async** | `pm_metal_net_ping` → await → `pm_metal_net_ping_rtt_us` (prefer) / `rtt_ms` / `last_err` |
+| SNTP | **async** | `pm_metal_net_ntp_sync` → await → `pm_metal_net_ntp_status` / `pm_metal_net_ntp_last_unix_ms` (sets wall on success) |
+| `http get` (HTTP/HTTPS) | **async** | `pm_metal_net_http_get` → await → `pm_metal_net_http_status` / `pm_metal_net_http_body_len` (TLS host-only under http) |
+| TFTP get | **async** | `pm_metal_net_tftp_get` → await → `pm_metal_net_tftp_status` / `pm_metal_net_tftp_len` (proof: `async_tftp`) |
+| `gethostname` / `sethostname` | **sync** | `pm_metal_host_name_get` / `pm_metal_host_name_set` (identity; also DHCPv4 option 12) |
 
 ---
 

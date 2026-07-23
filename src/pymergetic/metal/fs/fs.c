@@ -561,9 +561,7 @@ pm_metal_fs_read (
   uint32_t      dest_len
   )
 {
-  UINT8  *host;
-  UINT32  len;
-  UINT32  copy_len;
+  UINT32  nread;
   CHAR8   cleaned[256];
 
   if (path == NULL || dest == NULL || dest_len == 0 || !pm_metal_esp_ready ()) {
@@ -574,28 +572,17 @@ pm_metal_fs_read (
     return 0;
   }
 
-  host = NULL;
-  len  = 0;
-  if (pm_metal_esp_read_file (cleaned, &host, &len) != 0) {
+  /*
+   * Copy ESP/VFS/cache bytes straight into the caller buffer (guest linear
+   * memory for wasm). Do not allocate a second full-file host copy — that
+   * OOMs on multi-MiB IWADs and made doom look like a guest malloc bug.
+   */
+  nread = 0;
+  if (pm_metal_esp_read_at (cleaned, 0, (UINT8 *)dest, dest_len, &nread) != 0) {
     return 0;
   }
 
-  if (len == 0) {
-    return 0;
-  }
-
-  if (host == NULL) {
-    return 0;
-  }
-
-  copy_len = len;
-  if (copy_len > dest_len) {
-    copy_len = dest_len;
-  }
-
-  CopyMem (dest, host, copy_len);
-  pm_metal_mem_free (host);
-  return copy_len;
+  return nread;
 }
 
 uint32_t

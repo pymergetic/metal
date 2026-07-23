@@ -39,7 +39,7 @@ mod_needs_rebuild() {
 	[[ -f "${out}" ]] || return 0
 	[[ "${src}" -nt "${out}" ]] && return 0
 	local marker
-	for marker in REACTOR SOCKET MOUNT; do
+	for marker in REACTOR SOCKET MOUNT AOT; do
 		if [[ -f "${mod_dir}${marker}" && "${mod_dir}${marker}" -nt "${out}" ]]; then
 			return 0
 		fi
@@ -86,6 +86,15 @@ for mod_dir in "${ROOT}"/mods/tests/*/; do
 		-I "${ROOT}/include" \
 		"${extra_flags[@]}" \
 		-o "${out}" "${src}" "${extra_srcs[@]}"
+
+	# Opt-in AOT: empty mods/tests/<name>/AOT → <name>.{x86_64,i386}.aot
+	if [[ -f "${mod_dir}AOT" ]]; then
+		# shellcheck disable=SC1091
+		source "${ROOT}/scripts/lib/aot.sh"
+		if ! pm_metal_aot_compile_all "${out}" "${OUT}/${name}"; then
+			echo "mod: ${name} AOT skipped (./scripts/setup wamrc)" >&2
+		fi
+	fi
 done
 
 echo "mods/tests -> ${OUT} (built=${built} skipped=${skipped})"

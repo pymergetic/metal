@@ -33,6 +33,7 @@ qemu-system-x86_64 \
 	-chardev null,id=vcon \
 	-device virtio-serial-pci,max_ports=1 \
 	-device virtconsole,chardev=vcon \
+	-device virtio-tablet-pci \
 	-vga std \
 	-kernel "${ELF}" \
 	&
@@ -123,11 +124,11 @@ grep -q "|   +-- wasm     ok" "${LOG}" || {
 	echo "verify-bios: missing wasm ok" >&2
 	exit 1
 }
-grep -q "|   +-- shell    ok" "${LOG}" || {
+grep -q "|   \`-- shell    ok" "${LOG}" || {
 	echo "verify-bios: missing shell ok" >&2
 	exit 1
 }
-grep -q "|   \`-- ready    ok" "${LOG}" || {
+grep -q "\`-- ready        ok" "${LOG}" || {
 	echo "verify-bios: missing ready ok" >&2
 	exit 1
 }

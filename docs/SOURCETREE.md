@@ -267,7 +267,7 @@ packages/metal/
 │   │   ├── t4_getpid/ … t31_crypto/  # process/pipe/socket/tmpfs/mount/proc/crypto/…
 │   │   └── t8_multimod_lib/ + t9_multimod_app/  # multi-module (REACTOR on t8)
 │   └── apps/
-│       ├── doom/                  # parked (METAL_BUILD_DOOM=1); see docs/LIBC_ASYNC.md
+│       ├── doom/                  # parked (METAL_DOOM_BUILD=1); .wasm.sig via METAL_PKI_DIR
 │       └── python/                # manifest; binary from scripts/build cpython
 │
 ├── build/                         # gitignored

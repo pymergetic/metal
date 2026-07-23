@@ -139,32 +139,34 @@ pm_bios_pci_find (
   UINT8  *func_out
   )
 {
-  UINT8  bus;
-  UINT8  dev;
-  UINT8  func;
-  UINT8  hdr;
-  UINT8  fmax;
+  UINT16  bus;
+  UINT8   dev;
+  UINT8   func;
+  UINT8   hdr;
+  UINT8   fmax;
 
-  for (bus = 0; bus < 8; bus++) {
+  for (bus = 0; bus < 256; bus++) {
     for (dev = 0; dev < 32; dev++) {
       UINT16  ven;
 
-      ven = pm_bios_pci_read16 (bus, dev, 0, PCI_VENDOR_ID_OFFSET);
+      ven = pm_bios_pci_read16 ((UINT8)bus, dev, 0, PCI_VENDOR_ID_OFFSET);
       if (ven == 0xffff) {
         continue;
       }
 
-      hdr  = pm_bios_pci_read8 (bus, dev, 0, PCI_HEADER_TYPE_OFFSET);
+      hdr  = pm_bios_pci_read8 ((UINT8)bus, dev, 0, PCI_HEADER_TYPE_OFFSET);
       fmax = (hdr & HEADER_TYPE_MULTI_FUNCTION) ? 8 : 1;
       for (func = 0; func < fmax; func++) {
-        ven = pm_bios_pci_read16 (bus, dev, func, PCI_VENDOR_ID_OFFSET);
+        ven = pm_bios_pci_read16 ((UINT8)bus, dev, func, PCI_VENDOR_ID_OFFSET);
         if (ven != vendor) {
           continue;
         }
 
-        if (pm_bios_pci_read16 (bus, dev, func, PCI_DEVICE_ID_OFFSET) == device) {
+        if (pm_bios_pci_read16 ((UINT8)bus, dev, func, PCI_DEVICE_ID_OFFSET)
+            == device)
+        {
           if (bus_out != NULL) {
-            *bus_out = bus;
+            *bus_out = (UINT8)bus;
           }
 
           if (dev_out != NULL) {
@@ -193,35 +195,40 @@ pm_bios_pci_find_class (
   UINT8  *func_out
   )
 {
-  UINT8  bus;
-  UINT8  dev;
-  UINT8  func;
-  UINT8  hdr;
-  UINT8  fmax;
+  UINT16  bus;
+  UINT8   dev;
+  UINT8   func;
+  UINT8   hdr;
+  UINT8   fmax;
 
-  for (bus = 0; bus < 8; bus++) {
+  for (bus = 0; bus < 256; bus++) {
     for (dev = 0; dev < 32; dev++) {
       UINT16  ven;
 
-      ven = pm_bios_pci_read16 (bus, dev, 0, PCI_VENDOR_ID_OFFSET);
+      ven = pm_bios_pci_read16 ((UINT8)bus, dev, 0, PCI_VENDOR_ID_OFFSET);
       if (ven == 0xffff) {
         continue;
       }
 
-      hdr  = pm_bios_pci_read8 (bus, dev, 0, PCI_HEADER_TYPE_OFFSET);
+      hdr  = pm_bios_pci_read8 ((UINT8)bus, dev, 0, PCI_HEADER_TYPE_OFFSET);
       fmax = (hdr & HEADER_TYPE_MULTI_FUNCTION) ? 8 : 1;
       for (func = 0; func < fmax; func++) {
         UINT32  id;
         UINT8   cls;
         UINT8   sub;
 
-        ven = pm_bios_pci_read16 (bus, dev, func, PCI_VENDOR_ID_OFFSET);
+        ven = pm_bios_pci_read16 ((UINT8)bus, dev, func, PCI_VENDOR_ID_OFFSET);
         if (ven == 0xffff) {
           continue;
         }
 
         /* dword @ 0x08: rev | progIF | subclass | base_class */
-        id  = pm_bios_pci_read32 (bus, dev, func, PCI_REVISION_ID_OFFSET);
+        id  = pm_bios_pci_read32 (
+                (UINT8)bus,
+                dev,
+                func,
+                PCI_REVISION_ID_OFFSET
+                );
         cls = (UINT8)((id >> 24) & 0xffu);
         sub = (UINT8)((id >> 16) & 0xffu);
         if (cls != base_class || sub != subclass) {
@@ -229,7 +236,7 @@ pm_bios_pci_find_class (
         }
 
         if (bus_out != NULL) {
-          *bus_out = bus;
+          *bus_out = (UINT8)bus;
         }
 
         if (dev_out != NULL) {

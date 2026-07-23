@@ -52,12 +52,25 @@ LD="${LD:-ld}"
 
 mkdir -p "${OBJ}"
 
+# Bake CA publics (or stub) before compiling trust.c
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/pki.sh"
+pm_metal_pki_bake
+
 # Embed guest wasm into shared guest path.
 if [[ -x "${ROOT}/scripts/build.d/port/efi/embed-mods.sh" ]]; then
 	"${ROOT}/scripts/build.d/port/efi/embed-mods.sh" || true
 fi
 
+# Parked doom package (same wasm as EFI). Opt-in: METAL_DOOM_BUILD=1.
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/doom.sh"
+if [[ "${METAL_DOOM_BUILD:-0}" == "1" ]]; then
+	pm_metal_doom_build
+fi
+
 INCLUDES=(
+	-I"$(pm_metal_pki_bake_dir)"
 	-I"${ROOT}"
 	-I"${BIOS}/BiosPkg"
 	-I"${BIOS}/shim"
@@ -74,6 +87,7 @@ INCLUDES=(
 	-I"${ROOT}/external/microtar/src"
 	-I"${ROOT}/external/wamr/core/iwasm/include"
 	-I"${ROOT}/external/wamr/core/iwasm/interpreter"
+	-I"${ROOT}/external/wamr/core/iwasm/aot"
 	-I"${ROOT}/external/wamr/core/iwasm/common"
 	-I"${ROOT}/external/wamr/core/iwasm/libraries/libc-wasi"
 	-I"${ROOT}/external/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include"
@@ -112,6 +126,7 @@ CFLAGS=(
 	-U__gnu_linux__
 	-DWASM_ENABLE_INTERP=1
 	-DWASM_ENABLE_FAST_INTERP=1
+	-DWASM_ENABLE_AOT=1
 	-DWASM_ENABLE_LIBC_WASI=1
 	-DWASM_ENABLE_MULTI_MODULE=0
 	-DWASM_ENABLE_BULK_MEMORY=1
@@ -122,13 +137,14 @@ CFLAGS=(
 	-DWASM_DISABLE_WAKEUP_BLOCKING_OP=0
 	-DWASM_GLOBAL_HEAP_SIZE=50331648
 	-DWASM_ENABLE_MODULE_INST_CONTEXT=1
-	-DWASM_ENABLE_QUICK_AOT_ENTRY=0
-	-DWASM_ENABLE_AOT_INTRINSICS=0
+	-DWASM_ENABLE_QUICK_AOT_ENTRY=1
+	-DWASM_ENABLE_AOT_INTRINSICS=1
 	-DWASM_ENABLE_SHRUNK_MEMORY=1
 	-DWASM_ENABLE_EXTENDED_CONST_EXPR=0
 	-DBH_MALLOC=wasm_runtime_malloc
 	-DBH_FREE=wasm_runtime_free
 	-DMBEDTLS_CONFIG_FILE='<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+	${METAL_TRUST_STRICT:+-DPM_METAL_TRUST_STRICT=1}
 	"${INCLUDES[@]}"
 )
 
@@ -151,6 +167,7 @@ SRCS_C=(
 	"${ROOT}/src/pymergetic/metal/util/ascii.c"
 	"${ROOT}/src/pymergetic/metal/util/size.c"
 	"${ROOT}/src/pymergetic/metal/util/ip.c"
+	"${ROOT}/src/pymergetic/metal/trust/trust.c"
 	"${ROOT}/src/pymergetic/metal/host/host.c"
 	"${ROOT}/src/pymergetic/metal/port/lock.c"
 	"${ROOT}/external/lz4/lib/lz4.c"
@@ -188,9 +205,17 @@ SRCS_C=(
 	"${SHARED_METAL}/dev/audio/ac97.c"
 	"${SHARED_METAL}/dev/acpi/acpi_power.c"
 	"${SHARED_METAL}/dev/gfx/gfx.c"
+	"${SHARED_METAL}/dev/gfx/scanout.c"
+	"${SHARED_METAL}/dev/gfx/scanout_bochs.c"
+	"${SHARED_METAL}/dev/gfx/scanout_lfb_copy.c"
+	"${SHARED_METAL}/dev/gfx/scanout_gop_blt.c"
+	"${SHARED_METAL}/dev/gfx/scanout_virtio_gpu.c"
+	"${SHARED_METAL}/dev/gfx/scanout_radeon_rv370.c"
+	"${SHARED_METAL}/dev/gfx/scanout_i915_855gm.c"
 	"${BIOS_METAL}/dev/gfx/gfx_port.c"
 	"${SHARED_METAL}/dev/input/input.c"
 	"${SHARED_METAL}/dev/input/keyb.c"
+	"${SHARED_METAL}/dev/input/virtio_input.c"
 	"${BIOS_METAL}/dev/input/input_port.c"
 	"${SHARED_METAL}/dev/stream/stream.c"
 	"${SHARED_METAL}/dev/random/random.c"
@@ -208,6 +233,8 @@ SRCS_C=(
 	"${SHARED_METAL}/dev/net/ping.c"
 	"${SHARED_METAL}/dev/net/http.c"
 	"${SHARED_METAL}/dev/net/tftp.c"
+	"${SHARED_METAL}/dev/net/ntp.c"
+	"${SHARED_METAL}/dev/net/net_life.c"
 	"${ROOT}/external/lwip/src/core/init.c"
 	"${ROOT}/external/lwip/src/core/def.c"
 	"${ROOT}/external/lwip/src/core/dns.c"
@@ -258,6 +285,9 @@ SRCS_C=(
 	"${SHARED_METAL}/dev/input/input_shell.c"
 	"${SHARED_METAL}/shell/hwinfo/hwinfo.c"
 	"${SHARED_METAL}/shell/lifecycle/lifecycle.c"
+	"${SHARED_METAL}/guest/process/process.c"
+	"${SHARED_METAL}/guest/pkg/pkg.c"
+	"${SHARED_METAL}/guest/pkg/pkg_doom.c"
 	"${SHARED_METAL}/guest/wasm/wasm.c"
 	"${SHARED_METAL}/guest/wamr/efi_platform.c"
 	"${SHARED_METAL}/guest/wamr/efi_thread.c"
@@ -297,7 +327,15 @@ SRCS_C=(
 	"${ROOT}/external/wamr/core/iwasm/interpreter/wasm_interp_fast.c"
 	"${ROOT}/external/wamr/core/iwasm/interpreter/wasm_loader.c"
 	"${ROOT}/external/wamr/core/iwasm/interpreter/wasm_runtime.c"
+	"${ROOT}/external/wamr/core/iwasm/aot/aot_intrinsic.c"
+	"${ROOT}/external/wamr/core/iwasm/aot/aot_loader.c"
+	"${ROOT}/external/wamr/core/iwasm/aot/aot_runtime.c"
 )
+if [[ "${ARCH}" == "i386" ]]; then
+	SRCS_C+=("${ROOT}/external/wamr/core/iwasm/aot/arch/aot_reloc_x86_32.c")
+else
+	SRCS_C+=("${ROOT}/external/wamr/core/iwasm/aot/arch/aot_reloc_x86_64.c")
+fi
 
 mapfile -t MBEDTLS_SRCS < <(
 	grep -E 'external/mbedtls/library/' "${ROOT}/src/efi/MetalPkg/Metal.inf" \
@@ -354,6 +392,11 @@ done
 LIBGCC="$("${CC}" "${MFLAG}" -print-libgcc-file-name)"
 "${LD}" -m "${LD_EMUL}" -nostdlib -static -z noexecstack -T "${LINK_LD}" -o "${ELF}" \
 	"${CRT0_OBJ}" "${OTHER_OBJS[@]}" "${LIBGCC}"
+
+# Optional Kernel-CA detached signature (host PKI; skipped when mode=off).
+if pm_metal_pki_want_sign && [[ -f "$(pm_metal_pki_dir)/kernel/ca.key" ]]; then
+	"${ROOT}/scripts/pki" sign-elf "${ELF}" || true
+fi
 
 if [[ "${ARCH}" == "x86_64" ]]; then
 	# ELF32 Multiboot trampoline embeds metal.elf — QEMU -kernel cannot load ELF64.

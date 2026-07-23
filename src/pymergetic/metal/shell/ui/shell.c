@@ -64,6 +64,7 @@ pm_metal_ui_console_shell (
   tabs->u.tabs.tabs[0] = tab;
   tabs->u.tabs.n       = 1;
   tabs->u.tabs.active  = 0;
+  tabs->u.tabs.hover   = -1;
   MetalUiAttach (tabs, tab);
   MetalUiAttach (win, tabs);
   MetalUiAttach (win, st);
