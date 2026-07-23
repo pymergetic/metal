@@ -1,13 +1,24 @@
 # Metal
 
-Freestanding **os-ish runtime** for x86: boots as **UEFI** or **BIOS/PXE**, owns the
-machine after firmware handoff, and runs **wasm guests** on a cooperative
-**async host** — one equal runner per CPU, no kernel underneath.
+**Preferred model:** apps are **`wasm32` guests** that talk **async Metal APIs**
+over WASI-style imports (`await` present/net/FS/… from `guest_step`) — not a
+hosted OS, not sync syscalls on a kernel. The freestanding host (UEFI or
+BIOS/PXE) is the thin async runtime underneath: **one equal runner per CPU**,
+drivers behind exchangeable ops, WAMR for interp/AOT/(soon) JIT.
 
-Think: shell + tabs + net + gfx + audio, with apps (including **Doom**) as
-`wasm32` modules — interpreted, **AOT**, or (soon) JIT.
+That’s the product. Shell, tabs, and Doom are how you prove the machine is
+alive; they are not “the OS.”
 
-![Shell UI](screenshots/ui-shell.png)
+**Target:** not for normal desktop users. Have *almost nothing* in the way —
+no Linux/userspace stack in-tree — and keep the **high-speed awaitable ABI**
+to wasm as the main surface.
+
+**Platform:** main home is **virtual Metal** (QEMU/KVM-class), so **virtio**
+is first-class. Old iron (ThinkPad **T42p** / T43) is the fun side quest that
+forces stable driver interfaces so backends stay swappable later — not
+“UEFI + static virtio only.”
+
+![Shell + help](screenshots/ui-shell.png)
 
 ---
 
@@ -15,13 +26,19 @@ Think: shell + tabs + net + gfx + audio, with apps (including **Doom**) as
 
 | | |
 |:-:|:-:|
-| ![UART // UI](screenshots/uart-parallel.png) | ![Doom tab](screenshots/doom-tab.png) |
-| Parallel UART beside the UI | Doom in a tab (`tab doom`) |
+| ![Boot UI](screenshots/ui-boot.png) | ![Shell help](screenshots/ui-shell.png) |
+| QEMU — boot / device tree | QEMU — `help` |
+| ![Doom tab](screenshots/doom-tab.png) | ![UI after Doom](screenshots/ui-after-doom.png) |
+| QEMU — `tab doom` (~35 fps) | UI console after Doom |
+| ![UART after Doom](screenshots/uart-after-doom.png) | ![UART create](screenshots/uart-doom-create.png) |
+| Host UART — same log as UI | UART — Doom create / 35 Hz pace |
 
-![ThinkPad](screenshots/thinkpad-doom.jpg)
+| | |
+|:-:|:-:|
+| ![ThinkPad shell](screenshots/thinkpad-shell.jpg) | ![ThinkPad Doom](screenshots/thinkpad-doom.jpg) |
+| ThinkPad T42p — shell (`radeon_rv370`) | ThinkPad T42p — Doom tabbed |
 
-*Placeholder images live under [`screenshots/`](screenshots/) — swap in your
-captures (shell + help, UART parallel, Doom tab, ThinkPad photo).*
+More filenames: [`screenshots/README.md`](screenshots/README.md).
 
 ---
 
@@ -29,7 +46,8 @@ captures (shell + help, UART parallel, Doom tab, ThinkPad photo).*
 
 - **Async host** — Python-shaped coroutines (`await`, tasks, sleep/deadlines);
   **N CPUs → N equal runners** (FCFS, no CPU0 Extrawurst)
-- **Guest apps** — `wasm32-wasip1` mods; shell `run` / `tab` / embed + HTTP/TFTP package seed
+- **Wasm + async (preferred)** — guests `await` Metal imports from `guest_step`;
+  `wasm32-wasip1` mods via shell `run` / `tab` / embed + HTTP/TFTP seed
 - **Gfx** — shadow FB + scanout backends (Bochs/QEMU, VESA, **Radeon RV370** GART+CP on ThinkPad T43, i915 sample); status tray with live present FPS
 - **Net** — `lo` + `eth0`…; virtio-net + Broadcom **bge**; DHCPv4/v6, DNS, NTP, ping, TFTP
 - **I/O** — virtio-blk / IDE, virtio-snd → AC97 → null; PS/2 + tablet input
@@ -113,3 +131,10 @@ packages/metal/
 
 Actively developed against **QEMU** (virtio / Bochs) and **ThinkPad-class iron**
 (BIOS i386 + Radeon present path). Expect sharp edges; see [`docs/TODO.md`](docs/TODO.md).
+
+### Next: Python
+
+After Doom, next guest is **Python**. **Preferred path stays wasm + async
+Metal ABI** (same as Doom). Still open: **CPython vs MicroPython**, and whether
+a spike ever justifies a direct host embed instead — check memory/async fit
+before deciding. Tracked in [`docs/TODO.md`](docs/TODO.md).

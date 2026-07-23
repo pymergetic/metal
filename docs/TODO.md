@@ -33,12 +33,17 @@ Details: `IO.md`, `LIBC_ASYNC.md`.
 
 ---
 
+## Next step — Python guest
+
+- [ ] Spike **CPython vs MicroPython** on the **preferred** path: **wasm + async
+      Metal ABI** (like Doom). Only consider direct host embed if the spike
+      shows wasm can’t fit RAM/async; document the choice (README “Next: Python”)
+
 ## Optional / later
 
 - [ ] x86_64 BIOS VESA (needs LM→RM)
 - [ ] Broader PCI NIC detect (beyond virtio + bge)
-- [ ] Drop or upstream lwIP `dhcp6_enable_stateful()` stub once Metal client is proven on iron
-- [ ] First real wasm app on tab surfaces (ABI is ready)
+- [ ] WAMR Fast JIT on x86_64 (see `FAST_JIT.md`)
 
 **Done (scanout):** `radeon_rv370` for T43 (`1002:5460`) — PCIe GART+CP present (staging fallback). `i915_855gm` T42 sample. Flip/tear-free still TODO.
 **Deferred:** native modeset from dark — only if VESA detector fails on target HW.
