@@ -145,6 +145,19 @@ pm_metal_ui_paint_shell_input (
 }
 
 int
+pm_metal_ui_paint_status (
+  void
+  )
+{
+  if (gMetalUiShellRoot == NULL || gMetalUiStatus == NULL) {
+    return -1;
+  }
+
+  MetalUiPaintStatusBarOnly ();
+  return 0;
+}
+
+int
 pm_metal_ui_shell_input_rect (
   int32_t  *x,
   int32_t  *y,
@@ -153,6 +166,17 @@ pm_metal_ui_shell_input_rect (
   )
 {
   return MetalUiShellInputGeom (x, y, w, h);
+}
+
+int
+pm_metal_ui_status_rect (
+  int32_t  *x,
+  int32_t  *y,
+  int32_t  *w,
+  int32_t  *h
+  )
+{
+  return MetalUiStatusGeom (x, y, w, h);
 }
 
 int

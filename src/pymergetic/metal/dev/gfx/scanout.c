@@ -12,7 +12,7 @@ STATIC pm_metal_scanout_bind_t        mBind;
 STATIC CONST pm_metal_scanout_ops_t *CONST  mProbeOrder[] = {
   &g_pm_metal_scanout_virtio_gpu,
   &g_pm_metal_scanout_bochs,
-  &g_pm_metal_scanout_radeon_rv370, /* T43 1002:5460 — GART readback self-test */
+  &g_pm_metal_scanout_radeon_rv370, /* T43 1002:5460 — PCIe GART+CP / staging */
   &g_pm_metal_scanout_i915_855gm,   /* sample: T42 855GM */
   &g_pm_metal_scanout_gop_blt,
   &g_pm_metal_scanout_lfb_copy,

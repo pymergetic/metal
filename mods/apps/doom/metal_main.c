@@ -3,10 +3,11 @@
  *
  * Stem:
  *   mkdir saves → preload IWAD → Create →
- *   loop(Tick → save I/O → audio drain → present → phase-locked 60 Hz sleep)
+ *   loop(Tick → save I/O → audio drain → present → phase-locked sleep)
  *
- * Pace uses absolute mono phase (same 60 Hz grid as host frame clock).
- * Avoid pm_metal_async_frame in this guest — wamrc AOT #GPs with that import.
+ * Pace is absolute mono phase at METAL_DOOM_FRAME_HZ (default 35 = TICRATE).
+ * A 60 Hz grid was half-locking to 30 fps whenever Tick+present wall time
+ * exceeded one 16.7 ms slot. Avoid pm_metal_async_frame — wamrc AOT #GPs.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -28,8 +29,9 @@ extern int singletics;
 #define METAL_DOOM_MAX_TICKS 0
 #endif
 
+/* Match vanilla TICRATE so one present ≈ one game tic (not host 60 Hz UI). */
 #ifndef METAL_DOOM_FRAME_HZ
-#define METAL_DOOM_FRAME_HZ 60u
+#define METAL_DOOM_FRAME_HZ 35u
 #endif
 
 int
@@ -69,6 +71,7 @@ typedef struct {
 	uint8_t *wad_buf;
 	uint32_t save_len;
 	uint8_t *save_buf;
+	uint64_t pace_next_us; /* absolute mono deadline for next Tick */
 } doom_state_t;
 
 static char *g_argv_storage[8];
@@ -96,27 +99,33 @@ doom_fs_read_async(const char *path, uint32_t dest, uint32_t len)
 	return pm_metal_fs_read_async(path, dest, len);
 }
 
-/** Next boundary on the shared 60 Hz mono grid (matches host frame clock). */
-static uint64_t
-doom_next_frame_us(void)
-{
-	uint64_t now;
-	uint64_t period;
-
-	period = 1000000u / (uint64_t)METAL_DOOM_FRAME_HZ;
-	if (period == 0) {
-		period = 16667u;
-	}
-
-	now = pm_metal_async_mono_us();
-	return (now / period + 1u) * period;
-}
-
+/**
+ * Pace to METAL_DOOM_FRAME_HZ from a running deadline.
+ * If late, do not jump to the next absolute grid slot (that half-locked
+ * 60 Hz → 30 Hz); resync from now and continue immediately.
+ */
 static int32_t
 doom_pace(doom_state_t *s, int32_t self_h)
 {
-	return doom_await(s, self_h,
-			  pm_metal_async_sleep_until_us(doom_next_frame_us()),
+	uint64_t now;
+	uint64_t period;
+	uint64_t target;
+
+	period = 1000000u / (uint64_t)METAL_DOOM_FRAME_HZ;
+	if (period == 0) {
+		period = 28571u;
+	}
+
+	now = pm_metal_async_mono_us();
+	if (s->pace_next_us == 0 || now >= s->pace_next_us) {
+		/* First frame or late — no extra sleep; aim one period ahead. */
+		s->pace_next_us = now + period;
+		return doom_await(s, self_h, pm_metal_async_sleep(0), ST_TICK);
+	}
+
+	target          = s->pace_next_us;
+	s->pace_next_us = target + period;
+	return doom_await(s, self_h, pm_metal_async_sleep_until_us(target),
 			  ST_TICK);
 }
 
@@ -291,9 +300,10 @@ pm_metal_guest_step(int32_t self_h)
 		argc = 3;
 		pm_metal_shell_log("metal-doom: create");
 		doomgeneric_Create(argc, g_argv_storage);
-		pm_metal_shell_log("metal-doom: create done");
-		s->ticks = 0;
-		s->step  = ST_TICK;
+		pm_metal_shell_log("metal-doom: create done; pace 35 Hz");
+		s->ticks         = 0;
+		s->pace_next_us  = 0;
+		s->step          = ST_TICK;
 		return doom_await(s, self_h, pm_metal_async_sleep(0), ST_TICK);
 	}
 

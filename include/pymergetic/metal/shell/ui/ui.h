@@ -33,8 +33,12 @@ void pm_metal_ui_shutdown(void);
 int pm_metal_ui_frame(void);
 /** Repaint only the shared shell input line into the shadow FB. */
 int pm_metal_ui_paint_shell_input(void);
+/** Repaint only the status tray (clock / ifaces / FPS) into the shadow FB. */
+int pm_metal_ui_paint_status(void);
 /** Screen rect of the shell input line; 0 ok. */
 int pm_metal_ui_shell_input_rect(int32_t *x, int32_t *y, int32_t *w, int32_t *h);
+/** Screen rect of the status tray; 0 ok. */
+int pm_metal_ui_status_rect(int32_t *x, int32_t *y, int32_t *w, int32_t *h);
 /** Cursor blink + status tray; returns 1 if status chrome changed. */
 int pm_metal_ui_tick(uint64_t now_ms);
 

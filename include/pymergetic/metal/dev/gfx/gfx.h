@@ -119,6 +119,11 @@ extern uint32_t pm_metal_gfx_font_width(void)
 	PM_METAL_GFX_IMPORT(pm_metal_gfx_font_width);
 extern uint32_t pm_metal_gfx_font_height(void)
 	PM_METAL_GFX_IMPORT(pm_metal_gfx_font_height);
+/**
+ * Recent present rate (Hz), ~0.5 s window. Host meters full-ish sync
+ * presents + completed async present jobs; guests only read.
+ */
+extern uint32_t pm_metal_gfx_fps(void) PM_METAL_GFX_IMPORT(pm_metal_gfx_fps);
 extern int pm_metal_gfx_present(void) PM_METAL_GFX_IMPORT(pm_metal_gfx_present);
 extern int pm_metal_gfx_present_rect(int32_t x, int32_t y, int32_t w, int32_t h)
 	PM_METAL_GFX_IMPORT(pm_metal_gfx_present_rect);
@@ -155,6 +160,11 @@ void pm_metal_gfx_draw_text(int32_t x, int32_t y, const char *text,
 uint32_t pm_metal_gfx_font_width(void);
 uint32_t pm_metal_gfx_font_height(void);
 /**
+ * Recent present rate (Hz), ~0.5 s window. Counts full-ish sync presents
+ * and completed async present jobs (UI chrome + fullscreen/tab apps).
+ */
+uint32_t pm_metal_gfx_fps(void);
+/**
  * Kick shadow → display (sync, one leaf). Prefer async_present + job API for
  * large rects. Mode is chosen at output bind (flip vs chunked LFB copy).
  */
@@ -179,6 +189,9 @@ int pm_metal_gfx_present_job_step(void);
 uint64_t pm_metal_gfx_frame_next_us(void);
 /** Surface with pending blit dirty, or 0 if none. */
 pm_metal_gfx_surface_h pm_metal_gfx_dirty_surface(void);
+
+/** Host: one completed frame for the FPS meter (async present path). */
+void pm_metal_gfx_note_frame(void);
 
 /** Register wasi-style natives. Returns 0 ok, -1 fail. */
 int pm_metal_gfx_native_register(void);

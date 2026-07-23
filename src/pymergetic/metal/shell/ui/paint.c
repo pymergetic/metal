@@ -20,6 +20,7 @@ STATIC UINT32  mStatusClockTod  = 0xffffffffu;
 STATIC UINT32  mStatusNetHealth = 0xffffffffu;
 STATIC UINT32  mStatusIfCount   = 0xffffffffu;
 STATIC UINT32  mStatusNtpBit    = 0xffffffffu;
+STATIC UINT32  mStatusFpsHz     = 0xffffffffu;
 
 /* Per-iface tray color: 0=down, 1=partial (IP no DNS), 2=good — packed 2 bits. */
 #define NET_HEALTH_DOWN     0u
@@ -294,6 +295,39 @@ MetalUiShellInputGeom (
 
   if (h != NULL) {
     *h = (INT32)fh + 2;
+  }
+
+  return 0;
+}
+
+INT32
+MetalUiStatusGeom (
+  INT32  *x,
+  INT32  *y,
+  INT32  *w,
+  INT32  *h
+  )
+{
+  if (gMetalUiStatus == NULL) {
+    return -1;
+  }
+
+  /* Ensure layout coords match current FB before callers present_rect. */
+  MetalUiLayout ();
+  if (x != NULL) {
+    *x = gMetalUiStatus->x;
+  }
+
+  if (y != NULL) {
+    *y = gMetalUiStatus->y;
+  }
+
+  if (w != NULL) {
+    *w = gMetalUiStatus->w;
+  }
+
+  if (h != NULL) {
+    *h = gMetalUiStatus->h;
   }
 
   return 0;
@@ -643,12 +677,38 @@ MetalUiNetHealthColor (
 }
 
 STATIC
+pm_metal_gfx_color_t
+MetalUiFpsColor (
+  UINT32  hz
+  )
+{
+  if (hz == 0u) {
+    return COL_LOG_DIM;     /* idle — no presents lately */
+  }
+
+  if (hz >= 50u) {
+    return COL_LOG_OK;      /* smooth UI / 60 Hz class */
+  }
+
+  if (hz >= 30u) {
+    return COL_LOG_ACCENT;  /* Doom TICRATE class */
+  }
+
+  if (hz >= 20u) {
+    return COL_LOG_WARN;
+  }
+
+  return COL_LOG_FAIL;
+}
+
+STATIC
 VOID
 MetalUiStatusSnapshot (
   UINT32  *clock_tod,
   UINT32  *net_health,
   UINT32  *if_count,
-  UINT32  *ntp_bit
+  UINT32  *ntp_bit,
+  UINT32  *fps_hz
   )
 {
   UINT64               ms;
@@ -661,6 +721,7 @@ MetalUiStatusSnapshot (
   ms  = pm_metal_tz_local_ms ();
   tod = (UINT32)((ms / 1000ull) % 86400ull);
   *clock_tod = (tod / 3600u) * 60u + ((tod % 3600u) / 60u);
+  *fps_hz    = pm_metal_gfx_fps ();
 
   n      = pm_metal_net_if_count ();
   health = 0;
@@ -693,6 +754,8 @@ MetalUiPaintStatusBar (
 {
   INT32                clock_w;
   INT32                clock_x;
+  INT32                fps_w;
+  INT32                fps_x;
   INT32                tray_right;
   INT32                tray_w;
   INT32                tx;
@@ -700,27 +763,37 @@ MetalUiPaintStatusBar (
   INT32                left_max;
   UINT32               n;
   UINT32               i;
+  UINT32               fps_hz;
   UINT64               ms;
   UINT32               tod;
   UINT32               hour;
   UINT32               min;
-  CHAR8               clock[8];
-  CHAR8               left[STATUS_CHARS];
+  CHAR8                clock[8];
+  CHAR8                fps[8];
+  CHAR8                left[STATUS_CHARS];
   UINTN                left_n;
+  UINTN                fps_chars;
   UINTN                max_chars;
   pm_metal_net_ifcfg_t cfg;
+  pm_metal_gfx_color_t fps_fg;
 
   pm_metal_gfx_fill_rect (w->x, w->y, w->w, w->h, COL_STATUS);
   pm_metal_gfx_bevel_rect (w->x, w->y, w->w, w->h, 0, COL_BEVEL_HI, COL_BEVEL_LO);
 
   clock_w = 8 + UI_CLOCK_CHARS * UI_FONT_W + 8;
-  if (clock_w + 16 > w->w) {
-    clock_w = w->w - 16;
+  fps_w   = 8 + UI_FPS_CHARS * UI_FONT_W + 8;
+  if (clock_w + fps_w + 24 > w->w) {
+    fps_w = 8 + 3 * UI_FONT_W + 8; /* fall back to "99" */
   }
 
   clock_x = w->x + w->w - 4 - clock_w;
-  if (clock_x < w->x + 4) {
-    clock_x = w->x + 4;
+  fps_x   = clock_x - 6 - fps_w;
+  if (fps_x < w->x + 4) {
+    fps_x = w->x + 4;
+  }
+
+  if (clock_x < fps_x + fps_w + 6) {
+    clock_x = fps_x + fps_w + 6;
   }
 
   /* Systray width: colored bullet + name + pad per iface. */
@@ -734,7 +807,7 @@ MetalUiPaintStatusBar (
     tray_w += 10 + (INT32)AsciiStrLen (cfg.name) * UI_FONT_W + 6;
   }
 
-  tray_right = clock_x - 8;
+  tray_right = fps_x - 8;
   if (tray_w > 0 && tray_right - tray_w < w->x + 8) {
     tray_w = tray_right - (w->x + 8);
     if (tray_w < 0) {
@@ -742,7 +815,7 @@ MetalUiPaintStatusBar (
     }
   }
 
-  left_max = (tray_w > 0) ? (tray_right - tray_w - 8) : (clock_x - 8);
+  left_max = (tray_w > 0) ? (tray_right - tray_w - 8) : (fps_x - 8);
   if (left_max < w->x + 8) {
     left_max = w->x + 8;
   }
@@ -770,7 +843,7 @@ MetalUiPaintStatusBar (
       );
   }
 
-  /* Net systray left of the clock cell. */
+  /* Net systray left of the FPS cell. */
   tx = tray_right - tray_w;
   ty = w->y + 4;
   if (tx < w->x + 8) {
@@ -800,11 +873,52 @@ MetalUiPaintStatusBar (
     tx += item_w;
   }
 
-  /* Separator between tray and clock. */
+  /* Separator tray | fps. */
   if (tray_w > 0) {
-    pm_metal_gfx_fill_rect (clock_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
-    pm_metal_gfx_fill_rect (clock_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
+    pm_metal_gfx_fill_rect (fps_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
+    pm_metal_gfx_fill_rect (fps_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
   }
+
+  fps_hz = pm_metal_gfx_fps ();
+  fps_fg = MetalUiFpsColor (fps_hz);
+  if (fps_hz == 0u) {
+    AsciiStrCpyS (fps, sizeof (fps), "-fps");
+  } else {
+    if (fps_hz > 999u) {
+      fps_hz = 999u;
+    }
+
+    AsciiSPrint (fps, sizeof (fps), "%ufps", fps_hz);
+  }
+
+  fps_chars = AsciiStrLen (fps);
+  if (fps_chars > UI_FPS_CHARS) {
+    AsciiSPrint (fps, sizeof (fps), "%u", fps_hz);
+    fps_chars = AsciiStrLen (fps);
+  }
+
+  pm_metal_gfx_fill_rect (fps_x, w->y + 2, fps_w, w->h - 4, COL_STATUS_CLK);
+  pm_metal_gfx_bevel_rect (
+    fps_x,
+    w->y + 2,
+    fps_w,
+    w->h - 4,
+    0,
+    COL_BEVEL_LO,
+    COL_BEVEL_HI
+    );
+  pm_metal_gfx_draw_text (
+    fps_x + (fps_w - (INT32)fps_chars * UI_FONT_W) / 2,
+    w->y + 4,
+    fps,
+    fps_fg,
+    COL_STATUS_CLK,
+    1
+    );
+
+  /* Separator fps | clock. */
+  pm_metal_gfx_fill_rect (clock_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
+  pm_metal_gfx_fill_rect (clock_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
 
   /* Separated clock field (inset). */
   pm_metal_gfx_fill_rect (clock_x, w->y + 2, clock_w, w->h - 4, COL_STATUS_CLK);
@@ -836,8 +950,27 @@ MetalUiPaintStatusBar (
     &mStatusClockTod,
     &mStatusNetHealth,
     &mStatusIfCount,
-    &mStatusNtpBit
+    &mStatusNtpBit,
+    &mStatusFpsHz
     );
+}
+
+VOID
+MetalUiPaintStatusBarOnly (
+  VOID
+  )
+{
+  pm_metal_gfx_surface_h  prev;
+
+  if (gMetalUiStatus == NULL) {
+    return;
+  }
+
+  prev = pm_metal_gfx_draw_surface ();
+  pm_metal_gfx_set_surface (PM_METAL_GFX_SURFACE_DEFAULT);
+  MetalUiLayout ();
+  MetalUiPaintStatusBar (gMetalUiStatus);
+  pm_metal_gfx_set_surface (prev);
 }
 
 STATIC
@@ -952,12 +1085,20 @@ MetalUiStatusNeedsRefresh (
   UINT32  net_health;
   UINT32  if_count;
   UINT32  ntp_bit;
+  UINT32  fps_hz;
 
-  MetalUiStatusSnapshot (&clock_tod, &net_health, &if_count, &ntp_bit);
+  MetalUiStatusSnapshot (
+    &clock_tod,
+    &net_health,
+    &if_count,
+    &ntp_bit,
+    &fps_hz
+    );
   if (clock_tod != mStatusClockTod
       || net_health != mStatusNetHealth
       || if_count != mStatusIfCount
-      || ntp_bit != mStatusNtpBit)
+      || ntp_bit != mStatusNtpBit
+      || fps_hz != mStatusFpsHz)
   {
     return 1;
   }

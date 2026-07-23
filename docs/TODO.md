@@ -40,5 +40,5 @@ Details: `IO.md`, `LIBC_ASYNC.md`.
 - [ ] Drop or upstream lwIP `dhcp6_enable_stateful()` stub once Metal client is proven on iron
 - [ ] First real wasm app on tab surfaces (ABI is ready)
 
-**Done (scanout):** `radeon_rv370` for T43 (`1002:5460`) — GART + 2D front blit with probe readback; `i915_855gm` T42 sample. Flip/tear-free still TODO.
+**Done (scanout):** `radeon_rv370` for T43 (`1002:5460`) — PCIe GART+CP present (staging fallback). `i915_855gm` T42 sample. Flip/tear-free still TODO.
 **Deferred:** native modeset from dark — only if VESA detector fails on target HW.
