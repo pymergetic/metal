@@ -102,6 +102,21 @@ HwinfoDtIter (
     return 0;
   }
 
+  if (n->class == PM_METAL_IO_GFX && n->bus == PM_METAL_IO_BUS_PCI) {
+    pm_metal_logf (
+      "  %a/%a  %a  %04x:%04x @%02x:%02x.%x",
+      cls,
+      compat,
+      bus,
+      (UINT32)((n->loc[3] >> 16) & 0xffffu),
+      (UINT32)(n->loc[3] & 0xffffu),
+      (UINT32)n->loc[0],
+      (UINT32)n->loc[1],
+      (UINT32)n->loc[2]
+      );
+    return 0;
+  }
+
   if (pm_metal_io_dt_count_class (n->class) > 1) {
     pm_metal_logf ("  %a/%a#%u  %a", cls, compat, n->unit, bus);
   } else {

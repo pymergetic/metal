@@ -34,6 +34,8 @@ int vsnprintf(char *buf, size_t n, const char *fmt, va_list ap);
 int snprintf(char *buf, size_t n, const char *fmt, ...);
 int fflush(FILE *f);
 FILE *fopen(const char *path, const char *mode);
+/* POSIX.1-2008 — declared so wasm guests (doom) parse under clangd -I stubs. */
+FILE *fmemopen(void *buf, size_t size, const char *mode);
 int fclose(FILE *f);
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f);
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);

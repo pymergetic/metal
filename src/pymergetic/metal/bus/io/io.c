@@ -129,6 +129,37 @@ pm_metal_io_dt_lookup (
   return pm_metal_io_dt_by_class (class, 0);
 }
 
+int
+pm_metal_io_dt_set_compat (
+  pm_metal_io_class_t  class,
+  UINT32               index,
+  CONST CHAR8         *compat
+  )
+{
+  UINT32  i;
+  UINT32  seen;
+
+  if (compat == NULL || (UINT32)class >= (UINT32)PM_METAL_IO_CLASS_COUNT) {
+    return -1;
+  }
+
+  seen = 0;
+  for (i = 0; i < mCount; i++) {
+    if (mNodes[i].class != class) {
+      continue;
+    }
+
+    if (seen == index) {
+      mNodes[i].compat = compat;
+      return 0;
+    }
+
+    seen++;
+  }
+
+  return -1;
+}
+
 void
 pm_metal_io_dt_foreach (
   pm_metal_io_dt_iter_fn  fn,

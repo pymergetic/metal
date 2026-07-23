@@ -34,6 +34,8 @@ typedef uint16_t pm_metal_keycode_t;
 #define PM_METAL_KEY_SPACE    0x2cu
 #define PM_METAL_KEY_F1       0x3au
 #define PM_METAL_KEY_F10      0x43u
+#define PM_METAL_KEY_PAGEUP   0x4bu
+#define PM_METAL_KEY_PAGEDOWN 0x4eu
 #define PM_METAL_KEY_RIGHT    0x4fu
 #define PM_METAL_KEY_LEFT     0x50u
 #define PM_METAL_KEY_DOWN     0x51u
@@ -68,10 +70,14 @@ typedef struct {
 	uint32_t flags;
 } pm_metal_input_pointer_t;
 
+#define PM_METAL_INPUT_MOD_CTRL  1u
+#define PM_METAL_INPUT_MOD_SHIFT 2u
+#define PM_METAL_INPUT_MOD_ALT   4u
+
 typedef struct {
 	uint16_t code;    /* pm_metal_keycode_t */
 	uint8_t  pressed; /* 0/1 */
-	uint8_t  mods;    /* reserved */
+	uint8_t  mods;    /* PM_METAL_INPUT_MOD_* at event time */
 } pm_metal_input_key_event_t;
 
 #if defined(__wasm__)
@@ -106,6 +112,13 @@ void pm_metal_input_push_key(int pressed, pm_metal_keycode_t code);
 void pm_metal_input_note_key(pm_metal_keycode_t code, uint64_t now_ms);
 void pm_metal_input_set_held(pm_metal_keycode_t code, int held, uint64_t now_ms);
 void pm_metal_input_tick(uint64_t now_ms);
+
+/**
+ * Optional host filter: called after mods update, before enqueue.
+ * Return 1 to consume (do not enqueue), 0 to pass through.
+ */
+typedef int (*pm_metal_input_filter_fn)(const pm_metal_input_key_event_t *ev);
+void pm_metal_input_set_filter(pm_metal_input_filter_fn fn);
 
 pm_metal_input_focus_t pm_metal_input_focus(void);
 void pm_metal_input_set_focus(pm_metal_input_focus_t focus);
@@ -151,6 +164,21 @@ pm_metal_keycode_t pm_metal_input_keyb_hid(uint8_t set1_make, int ext);
 void pm_metal_input_ascii_push(char ch);
 void pm_metal_input_pointer_enqueue(const pm_metal_input_pointer_t *ev);
 void pm_metal_input_pointer_set_sample(int32_t x, int32_t y, uint32_t buttons);
+
+/**
+ * Accelerate relative PS/2 deltas in place (TrackPoint / pad crawl).
+ * impl: common — src/pymergetic/metal/dev/input/input.c
+ */
+void pm_metal_input_ptr_accel(int32_t *dx, int32_t *dy);
+/**
+ * Apply one relative packet: accel, clamp to FB, enqueue move/wheel.
+ * Middle-button + motion → wheel (ThinkPad TrackPoint scroll); cursor frozen.
+ * dz_valid: IMPS/2 4th byte present.
+ * x/y/buttons are the port's cursor sample (updated in place).
+ */
+void pm_metal_input_pointer_rel(int32_t *x, int32_t *y, uint32_t *buttons,
+				int32_t dx, int32_t dy, int32_t dz,
+				int dz_valid);
 
 /**
  * Pop shell ASCII ring (filled by input_poll when focus is shell).

@@ -1,7 +1,7 @@
 /** @file
   UI WASI native import bridge.
 **/
-#include "priv.h"
+#include <pymergetic/metal/shell/ui/ui.h>
 
 #include "wasm_export.h"
 
@@ -143,13 +143,23 @@ pm_metal_ui_input_text_native (
   return (int32_t)pm_metal_ui_input_text (out, cap);
 }
 
-STATIC UINT32
-pm_metal_ui_tab_surface_native (
+static int32_t
+pm_metal_ui_input_set_native (
   wasm_exec_env_t  exec_env,
-  UINT32           h
+  char            *text
   )
 {
-  (VOID)exec_env;
+  (void)exec_env;
+  return (int32_t)pm_metal_ui_input_set (text);
+}
+
+static uint32_t
+pm_metal_ui_tab_surface_native (
+  wasm_exec_env_t  exec_env,
+  uint32_t         h
+  )
+{
+  (void)exec_env;
   return pm_metal_ui_tab_surface ((pm_metal_ui_handle_t)h);
 }
 
@@ -169,6 +179,7 @@ static NativeSymbol g_pm_metal_ui_native_symbols[] = {
   { "pm_metal_ui_input_append", (void *)pm_metal_ui_input_append_native, "(i)i", NULL },
   { "pm_metal_ui_input_backspace", (void *)pm_metal_ui_input_backspace_native, "()i", NULL },
   { "pm_metal_ui_input_text", (void *)pm_metal_ui_input_text_native, "(*~)i", NULL },
+  { "pm_metal_ui_input_set", (void *)pm_metal_ui_input_set_native, "($)i", NULL },
 };
 
 int

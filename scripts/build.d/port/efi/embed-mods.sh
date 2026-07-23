@@ -31,6 +31,8 @@ build_one() {
 		-O2 -Wall -Wextra \
 		-I "${ROOT}/include" \
 		-Wl,--export=main \
+		-Wl,--export=malloc \
+		-Wl,--export=free \
 		"$@" \
 		-Wl,--allow-undefined \
 		-o "${out}" \
@@ -60,8 +62,17 @@ build_one async_audio "${ROOT}/mods/tests/t_async_audio/main.c" \
 build_one async_blk "${ROOT}/mods/tests/t_async_blk/main.c" \
 	-Wl,--export=pm_metal_guest_step
 
+# AOT proof embed (same guest as async_sleep) — both host arches, always.
+# Lookup: run async_aot → async_aot.{x86_64,i386} by BUILD_TARGET.
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/aot.sh"
+rm -f "${OUT_DIR}/async_aot.aot" "${OUT_DIR}/async_aot.aot.sig"
+if ! pm_metal_aot_compile_all "${OUT_DIR}/async_sleep.wasm" "${OUT_DIR}/async_aot"; then
+	echo "embed-mods: async_aot skipped (./scripts/setup wamrc)" >&2
+fi
+
 python3 - "${OUT_DIR}" "${INC_OUT}" <<'PY'
-import pathlib, sys
+import pathlib, sys, re
 
 out_dir = pathlib.Path(sys.argv[1])
 inc_out = pathlib.Path(sys.argv[2])
@@ -79,6 +90,13 @@ mods = [
     ("async_audio", out_dir / "async_audio.wasm"),
     ("async_blk", out_dir / "async_blk.wasm"),
 ]
+# Whatever pm_metal_aot_compile_all produced (x86_64/i386/aarch64/arm/…).
+for aot in sorted(out_dir.glob("async_aot.*.aot")):
+    if aot.stat().st_size > 0:
+        mods.append((aot.stem, aot))  # async_aot.x86_64, …
+
+def c_ident(name: str) -> str:
+    return "g_pm_metal_embed_" + re.sub(r"[^A-Za-z0-9_]", "_", name)
 
 # Uefi.h before BaseLib — BaseLib alone does not define CONST/CHAR8/UINT*.
 lines = [
@@ -96,7 +114,7 @@ lines = [
 
 for name, path in mods:
     data = path.read_bytes()
-    arr = f"g_pm_metal_embed_{name}"
+    arr = c_ident(name)
     lines.append(f"STATIC CONST UINT8 {arr}[{len(data)}] = {{")
     for i in range(0, len(data), 12):
         chunk = data[i : i + 12]
@@ -108,7 +126,7 @@ lines.append("STATIC CONST pm_metal_embed_mod_t g_pm_metal_embed_mods[] = {")
 for name, path in mods:
     data = path.read_bytes()
     lines.append(
-        f'  {{ "{name}", g_pm_metal_embed_{name}, {len(data)} }},'
+        f'  {{ "{name}", {c_ident(name)}, {len(data)} }},'
     )
 lines.append("};")
 lines.append("")
@@ -118,5 +136,6 @@ lines.append(
 lines.append("")
 
 inc_out.write_text("\n".join(lines) + "\n")
-print(f"embed-mods: wrote {inc_out} ({sum(p.stat().st_size for _, p in mods)} wasm bytes)")
+nbytes = sum(p.stat().st_size for _, p in mods)
+print(f"embed-mods: wrote {inc_out} ({nbytes} guest bytes, {len(mods)} mods)")
 PY

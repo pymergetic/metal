@@ -2,6 +2,7 @@
   lwIP NO_SYS bridge — DHCPv4 + stateless DHCPv6 on virtio/bge L2.
   (impl: efi|bios)
 **/
+#include <pymergetic/metal/dev/net/net.h>
 #include <pymergetic/metal/dev/net/net_ops.h>
 #include <pymergetic/metal/bus/virtio/virtio.h>
 #include <pymergetic/metal/dev/net/net_cfg.h>
@@ -12,6 +13,7 @@
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/util/ip.h>
 #include <pymergetic/metal/host/host.h>
+#include <pymergetic/metal/dev/random/random.h>
 #include <runtime/coro/coro.h>
 #include <runtime/time/time.h>
 #include <runtime/mem/mem.h>
@@ -67,6 +69,7 @@ typedef struct {
   CHAR8                      mask[16];
   CHAR8                      gw[16];
   CHAR8                      dns[16];
+  CHAR8                      ntp[16];
   CHAR8                      tftp[PM_METAL_NET_TFTP_HOST_MAX];
   CHAR8                      boot_file[PM_METAL_NET_BOOT_FILE_MAX];
   INT32                      use_dhcp;
@@ -140,6 +143,7 @@ STATIC metal_net_iface_t   *IfaceInitOne (UINT32 idx, CONST CHAR8 *backend,
 STATIC metal_net_iface_t   *IfaceByName (CONST CHAR8 *name);
 STATIC metal_net_iface_t   *IfaceDefault (VOID);
 STATIC VOID                 SyncIfaceCfg (metal_net_iface_t *mif);
+STATIC VOID                 EnsureDnsServers (metal_net_iface_t *mif);
 STATIC INT32                ParseIfIndex (CONST CHAR8 *name);
 
 STATIC metal_net_iface_t    mIfaces[METAL_NET_MAX_IFACES];
@@ -675,6 +679,40 @@ ApplyDnsServer (
   dns_setserver (0, &dns);
 }
 
+/*
+ * Slot 0 = DHCP/conf DNS (what `net` shows). QEMU user-net does send
+ * option 6 → 10.0.2.3. Only fill slot 0 when empty; keep 8.8.8.8 as a
+ * silent backup in slot 1 (SLIRP's proxy is host-resolv fragile).
+ */
+STATIC
+VOID
+EnsureDnsServers (
+  metal_net_iface_t  *mif
+  )
+{
+  CONST ip_addr_t  *dns0;
+  ip_addr_t         backup;
+
+  dns0 = dns_getserver (0);
+  if (dns0 == NULL || ip_addr_isany (dns0)) {
+    if (mif != NULL) {
+      ApplyDnsServer (mif);
+    }
+
+    dns0 = dns_getserver (0);
+    if (dns0 == NULL || ip_addr_isany (dns0)) {
+      IP_ADDR4 (&backup, 10, 0, 2, 3);
+      dns_setserver (0, &backup);
+    }
+  }
+
+  dns0 = dns_getserver (1);
+  if (dns0 == NULL || ip_addr_isany (dns0)) {
+    IP_ADDR4 (&backup, 8, 8, 8, 8);
+    dns_setserver (1, &backup);
+  }
+}
+
 STATIC
 VOID
 StoreIp4Ascii (
@@ -760,11 +798,22 @@ SyncIfaceCfg (
   StoreIp4Ascii (mif->mask, sizeof (mif->mask), nm);
   StoreIp4Ascii (mif->gw, sizeof (mif->gw), gw);
 
+  EnsureDnsServers (mif);
+
+  /*
+   * Prefer slot 0 (DHCP/conf); else slot 1 (silent 8.8.8.8 backup).
+   * Tray/UI read mif->dns — empty slot 0 alone used to show "yellow"
+   * even when DNS worked via the backup.
+   */
   dns = dns_getserver (0);
-  if (dns != NULL && !ip_addr_isany (dns)) {
-    if (IP_IS_V4 (dns)) {
-      StoreIp4Ascii (mif->dns, sizeof (mif->dns), ip_2_ip4 (dns));
-    }
+  if (dns == NULL || ip_addr_isany (dns) || !IP_IS_V4 (dns)) {
+    dns = dns_getserver (1);
+  }
+
+  if (dns != NULL && !ip_addr_isany (dns) && IP_IS_V4 (dns)) {
+    StoreIp4Ascii (mif->dns, sizeof (mif->dns), ip_2_ip4 (dns));
+  } else {
+    mif->dns[0] = '\0';
   }
 
   SyncIfaceBoot (mif);
@@ -824,6 +873,21 @@ pm_metal_dhcp_parse_option (
 
     tmp[n] = '\0';
     AsciiStrCpyS (mif->boot_file, sizeof (mif->boot_file), tmp);
+  } else if (option == DHCP_OPTION_NTP && len >= 4u) {
+    /* NTP servers (IPv4 list). Keep first. */
+    UINT8  ipb[4];
+
+    if (pbuf_copy_partial (pbuf, ipb, 4, offset) == 4) {
+      AsciiSPrint (
+        mif->ntp,
+        sizeof (mif->ntp),
+        "%u.%u.%u.%u",
+        (UINT32)ipb[0],
+        (UINT32)ipb[1],
+        (UINT32)ipb[2],
+        (UINT32)ipb[3]
+        );
+    }
   }
 }
 
@@ -922,6 +986,7 @@ ApplyIfaceDhcp (
   AsciiStrCpyS (mif->gw, sizeof (mif->gw), "0.0.0.0");
   mif->tftp[0]      = '\0';
   mif->boot_file[0] = '\0';
+  mif->ntp[0]       = '\0';
   ApplyNetifHostname (mif);
 #if LWIP_IPV6
   netif_create_ip6_linklocal_address (&mif->netif, 1);
@@ -1041,6 +1106,10 @@ ApplyConfKey (
     }
   } else if (AsciiStrCmp (key, "hostname") == 0) {
     (VOID)pm_metal_host_name_set (val);
+  } else if (AsciiStrCmp (key, "tz") == 0
+             || AsciiStrCmp (key, "timezone") == 0)
+  {
+    (VOID)pm_metal_tz_set (val);
   }
 }
 
@@ -1425,16 +1494,21 @@ NetWaitFn (
 
   w = (net_wait_t *)self;
   if (w->kind == WAIT_DNS) {
+    /*
+     * Do not nest LwipPoll here — shell_poll already pumps net before
+     * run_poll. Nested poll during dns_recv/timeouts is unsafe (NO_SYS).
+     */
     if (w->dns_done) {
       w->coro.result = (VOID *)(UINTN)(w->dns_ok ? 1u : 0u);
       return w->dns_ok ? PM_METAL_DONE : PM_METAL_ERROR;
     }
 
-    if (pm_metal_time_mono_us () > w->deadline) {
+    if (pm_metal_time_mono_us () >= w->deadline) {
       if (mDnsWait == w) {
         mDnsWait = NULL;
       }
 
+      w->coro.result = (VOID *)(UINTN)0u;
       return PM_METAL_ERROR;
     }
 
@@ -2244,9 +2318,9 @@ LwipDns (
   }
 
   {
-    ip_addr_t  addr;
+    ip_addr_t  local;
 
-    if (ParseHostAddr (host, &addr) == 0) {
+    if (ParseHostAddr (host, &local) == 0) {
       pm_metal_coro_t  *c;
 
       c = pm_metal_coro (NetOkFn, sizeof (*c));
@@ -2254,25 +2328,34 @@ LwipDns (
         return PM_METAL_ASYNC_HANDLE_INVALID;
       }
 
-      DnsRemember (&addr);
+      DnsRemember (&local);
       return pm_metal_async_adopt_host_coro (c);
     }
   }
+
+  EnsureDnsServers (IfaceDefault ());
 
   w = (net_wait_t *)pm_metal_coro (NetWaitFn, sizeof (*w));
   if (w == NULL) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  w->kind     = WAIT_DNS;
-  w->h        = 0;
-  w->deadline = pm_metal_time_mono_us () + 5000000ull;
-  w->dns_done = 0;
-  w->dns_ok   = 0;
-  mDnsWait    = w;
+  w->kind       = WAIT_DNS;
+  w->h          = 0;
+  w->deadline   = pm_metal_time_mono_us () + 8000000ull;
+  w->dns_done   = 0;
+  w->dns_ok     = 0;
+  mDnsWait      = w;
   mLastDnsValid = 0;
 
-  e = dns_gethostbyname (host, &addr, DnsFoundCb, w);
+  /* IPv4-only: QEMU user-net DNS is IPv4; AAAA-first just burns retries. */
+  e = dns_gethostbyname_addrtype (
+        host,
+        &addr,
+        DnsFoundCb,
+        w,
+        LWIP_DNS_ADDRTYPE_IPV4
+        );
   if (e == ERR_OK) {
     w->dns_done = 1;
     w->dns_ok   = 1;
@@ -2281,7 +2364,7 @@ LwipDns (
     DnsRemember (&addr);
   } else if (e != ERR_INPROGRESS) {
     mDnsWait = NULL;
-    /* coro will be adopted then fail — close by returning invalid */
+    pm_metal_coro_close (&w->coro);
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
@@ -2585,10 +2668,19 @@ FillIfcfg (
   AsciiStrCpyS (out->mask, sizeof (out->mask), mif->mask);
   AsciiStrCpyS (out->gw, sizeof (out->gw), mif->gw);
   AsciiStrCpyS (out->dns, sizeof (out->dns), mif->dns);
+  AsciiStrCpyS (out->ntp, sizeof (out->ntp), mif->ntp);
   AsciiStrCpyS (out->tftp, sizeof (out->tftp), mif->tftp);
   AsciiStrCpyS (out->boot_file, sizeof (out->boot_file), mif->boot_file);
-  mac = (mif->l2_mac != NULL) ? mif->l2_mac () : pm_metal_virtio_netif_mac ();
-  CopyMem (out->mac, mac, 6);
+  if (mif->l2_mac != NULL) {
+    mac = mif->l2_mac ();
+    CopyMem (out->mac, mac, 6);
+  } else if (AsciiStrCmp (mif->backend, "loopback") == 0) {
+    ZeroMem (out->mac, 6);
+  } else {
+    mac = pm_metal_virtio_netif_mac ();
+    CopyMem (out->mac, mac, 6);
+  }
+
   out->link_up = netif_is_link_up (&mif->netif) && netif_is_up (&mif->netif);
 #if LWIP_DHCP
   if (mif->use_dhcp && !dhcp_supplied_address (&mif->netif)) {
@@ -2647,6 +2739,28 @@ FormatIfStatusLine (
 #else
   (VOID)mif;
 #endif
+
+  if (cfg->ntp[0] != '\0') {
+    return AsciiSPrint (
+             buf,
+             buf_len,
+             "%a %a  %a/%a gw %a dns %a ntp %a  mac %02x:%02x:%02x:%02x:%02x:%02x  %a",
+             cfg->name,
+             cfg->backend,
+             cfg->ip,
+             cfg->mask,
+             cfg->gw,
+             cfg->dns,
+             cfg->ntp,
+             cfg->mac[0],
+             cfg->mac[1],
+             cfg->mac[2],
+             cfg->mac[3],
+             cfg->mac[4],
+             cfg->mac[5],
+             cfg->link_up ? "up" : "down"
+             );
+  }
 
   return AsciiSPrint (
            buf,

@@ -36,11 +36,18 @@ set -u
 [[ -f "${CONF_PATH}/tools_def.txt" ]] || cp "${EDK_TOOLS_PATH}/Conf/tools_def.template" "${CONF_PATH}/tools_def.txt"
 [[ -f "${CONF_PATH}/build_rule.txt" ]] || cp "${EDK_TOOLS_PATH}/Conf/build_rule.template" "${CONF_PATH}/build_rule.txt"
 
+# Bake CA publics (or stub) for trust.c
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/pki.sh"
+pm_metal_pki_bake
+
 # Embed guest wasm (hello / ui_hello / async_sleep) before EDK2 compile.
 "${ROOT}/scripts/build.d/port/efi/embed-mods.sh"
-# Doom parked (Metal async libc ABI work). Opt-in: METAL_BUILD_DOOM=1.
-if [[ "${METAL_BUILD_DOOM:-0}" == "1" ]]; then
-	"${ROOT}/scripts/build.d/port/efi/doom.sh"
+# Doom parked. Opt-in: METAL_DOOM_BUILD=1 → build/doom/ (EFI+BIOS/PXE).
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/doom.sh"
+if [[ "${METAL_DOOM_BUILD:-0}" == "1" ]]; then
+	pm_metal_doom_build
 fi
 
 echo "efi build: MetalPkg (X64 ${TOOL_CHAIN} ${TARGET})"
@@ -58,5 +65,8 @@ if [[ ! -f "${EFI_BUILT}" ]]; then
 fi
 
 cp -f "${EFI_BUILT}" "${OUT_DIR}/metal.efi"
+if pm_metal_pki_want_sign && [[ -f "$(pm_metal_pki_dir)/kernel/ca.key" ]]; then
+	"${ROOT}/scripts/pki" sign-elf "${OUT_DIR}/metal.efi" || true
+fi
 ls -la "${OUT_DIR}/metal.efi"
-echo "efi build: ok -> ${OUT_DIR}/metal.efi"
+echo "efi build: ok mode=$(pm_metal_pki_trust_mode) -> ${OUT_DIR}/metal.efi"

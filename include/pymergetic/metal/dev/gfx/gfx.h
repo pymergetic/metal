@@ -1,8 +1,13 @@
 /*
  * Metal graphics — guest/host dual ABI (WASI-style imports on wasm32).
  *
- * Shadow FB is BGRA8888. Guests draw via these calls; no raw pixel pointer
- * crosses the wasm boundary. init/fini/ready are host-only.
+ * Layers:
+ *   upper — surfaces for widgets (alloc/rect/DEFAULT)
+ *   ops   — blit/fill/text/present on surfaces (caller-agnostic)
+ *   lower — scanout.h (physical copy/flip only; no busy-wait)
+ *
+ * Frame cadence: shared 60 Hz async clock (pm_metal_async_frame) — prepare
+ * surfaces anytime; draw-time commit presents dirty work.
  *
  * impl: common — src/pymergetic/metal/dev/gfx/gfx.c
  * impl: port  — src/{bios,efi}/pymergetic/metal/dev/gfx/gfx_port.c (harvest_port)
@@ -28,6 +33,10 @@ typedef uint32_t pm_metal_gfx_color_t;
 #define PM_METAL_GFX_RGB(r, g, b) PM_METAL_GFX_RGBA((r), (g), (b), 0xff)
 
 #define PM_METAL_GFX_WASI_MODULE "pymergetic.metal.gfx"
+
+#ifndef PM_METAL_GFX_FRAME_HZ
+#define PM_METAL_GFX_FRAME_HZ 60u
+#endif
 
 typedef uint32_t pm_metal_gfx_surface_h;
 
@@ -63,6 +72,8 @@ void pm_metal_gfx_fini(void);
 int pm_metal_gfx_ready(void);
 int pm_metal_gfx_harvested(void);
 pm_metal_gfx_surface_t *pm_metal_gfx_surface(void);
+/** Bound scanout backend name (e.g. bochs_flip, lfb_copy), or "none". */
+const char *pm_metal_gfx_scanout_name(void);
 
 /** Allocate a named surface (tab content). Handle ≥ 2. */
 pm_metal_gfx_surface_h pm_metal_gfx_surface_alloc(void);
@@ -113,7 +124,8 @@ extern int pm_metal_gfx_present_rect(int32_t x, int32_t y, int32_t w, int32_t h)
 	PM_METAL_GFX_IMPORT(pm_metal_gfx_present_rect);
 /**
  * Nearest-neighbor scale blit from guest BGRA/XRGB buffer (src_pitch bytes/row)
- * into the shadow FB covering dest (dx,dy,dw,dh), then present that rect.
+ * into the shadow FB covering dest (dx,dy,dw,dh). Does not present — caller
+ * fences with pm_metal_gfx_present* / pm_metal_async_present.
  */
 extern int pm_metal_gfx_blit_bgra(int32_t dx, int32_t dy, int32_t dw, int32_t dh,
 				  const void *pixels, int32_t src_w,
@@ -142,11 +154,31 @@ void pm_metal_gfx_draw_text(int32_t x, int32_t y, const char *text,
 			    int transparent_bg);
 uint32_t pm_metal_gfx_font_width(void);
 uint32_t pm_metal_gfx_font_height(void);
+/**
+ * Kick shadow → display (sync, one leaf). Prefer async_present + job API for
+ * large rects. Mode is chosen at output bind (flip vs chunked LFB copy).
+ */
 int pm_metal_gfx_present(void);
 int pm_metal_gfx_present_rect(int32_t x, int32_t y, int32_t w, int32_t h);
 int pm_metal_gfx_blit_bgra(int32_t dx, int32_t dy, int32_t dw, int32_t dh,
 			   const void *pixels, int32_t src_w, int32_t src_h,
 			   int32_t src_pitch);
+
+/**
+ * Async-friendly present job (host). begin() arms from blit hint / surface;
+ * step() copies one ~1–2 ms band (or finishes flip in one shot).
+ * Returns from step: 1=more (yield), 0=done, -1=error.
+ */
+int pm_metal_gfx_present_job_begin(pm_metal_gfx_surface_h s);
+int pm_metal_gfx_present_job_step(void);
+
+/**
+ * Shared 60 Hz frame clock (host). Arm/return next phase-locked deadline
+ * (mono µs). Late >2 periods resyncs. Used by pm_metal_async_frame.
+ */
+uint64_t pm_metal_gfx_frame_next_us(void);
+/** Surface with pending blit dirty, or 0 if none. */
+pm_metal_gfx_surface_h pm_metal_gfx_dirty_surface(void);
 
 /** Register wasi-style natives. Returns 0 ok, -1 fail. */
 int pm_metal_gfx_native_register(void);

@@ -1,7 +1,33 @@
 # Doom → Metal async build plan
 
-**Status:** plan (parked app; `METAL_BUILD_DOOM=1` opt-in)  
+**Status:** A–D wired (parked app; `METAL_DOOM_BUILD=1` opt-in)  
 **Constraint:** await only from `pm_metal_guest_step`. External `doomgeneric` stays vanilla.
+
+## Run (EFI + BIOS/PXE — same package layout)
+
+```bash
+METAL_DOOM_BUILD=1 ./scripts/build.d/port/efi/doom.sh   # → build/doom/
+# EFI:
+METAL_DOOM_BUILD=1 ./scripts/build efi
+./scripts/run efi --gtk          # stages mods/apps/doom/ onto ESP
+# shell: run doom
+
+# BIOS/PXE (HTTP :8080 mirrors TFTP; fetch on run/tab if not on ESP):
+METAL_DOOM_BUILD=1 ./scripts/upload-pxe --build
+# shell: run doom   /  tab doom
+```
+
+Package files must be served at `http://<next-server|:192.168.10.1>:8080/mods/apps/doom/…` when not staged on ESP. Boot shows `pkg cached` (local preload) or `pkg lazy` (no auto-download). HTTP seed runs only when you `run`/`tab doom`.
+
+| Env | Meaning |
+|-----|---------|
+| `METAL_DOOM_BUILD=1` | build `build/doom/{doom.wasm,doom.x86_64.aot,doom.i386.aot,doom1.wad}` (+ `.sig` when PKI) |
+| `METAL_DOOM_WINDOWED` | `1` (default) tab/windowed; `0` fullscreen |
+| `METAL_DOOM_OUT_DIR` | override build output (default `build/doom`) |
+| `METAL_DOOM_DIR` | override stage source (default = OUT) |
+| `METAL_PKI_DIR` | external PKI (`./scripts/pki init`); signs `doom.*.aot.sig` / `doom.wasm.sig` |
+| `METAL_TRUST_MODE=off\|soft\|enforce` | trust policy (default soft if PKI) |
+| `METAL_TRUST=1` | ⇒ enforce + bake fails if PKI incomplete |
 
 ## Rule
 
@@ -17,11 +43,11 @@ Deep Doom C stays **sync CPU** once its inputs are in memory. Every world wait (
 
 ```
 guest_step
-  step 0:  [async IWAD…] → doomgeneric_Create → D_DoomMain → D_DoomLoop (one Tick) → return
-  step 1+: doomgeneric_Tick → TryRunTics → S_UpdateSounds → D_Display → await(frame sleep)
+  ST_MKDIR:     async mkdir saves/
+  ST_SIZE…READ: async IWAD → memory wad
+  ST_CREATE:    doomgeneric_Create → await(0)
+  ST_TICK+:     Tick (or wipe-only) → save I/O → audio drain → present → sleep
 ```
-
-Vanilla already returns after one Tick (`D_DoomLoop`). Wipe branch (`d_main.c` melt + `I_Sleep`) is the main Tick hog.
 
 ## Inventory
 
@@ -30,81 +56,73 @@ Vanilla already returns after one Tick (`D_DoomLoop`). Wipe branch (`d_main.c` m
 | Outer loop / `guest_step` | done | `metal_main.c` |
 | `singletics` / `TryRunTics` | done | force `singletics=1` |
 | `DG_*` time / blit / keys | done | `doomgeneric_metal.c` |
+| Hybrid controls | done | arrows move/turn + Alt-strafe (classic); WASD → same; mouse look optional; E/Space use, Ctrl fire |
+| Fill tab / FS | done | stretch-fill whole surface (run + tab, no letterbox) |
+| Display pace | done | phase-locked `sleep_until` on 60 Hz mono grid (AOT-safe; `async_frame` host-ready) |
+| Present | done | `async_present` after blit; lower half is work-only (no busy-wait) |
 | `M_FileExists` / `I_AtExit` | done | `--wrap` |
-| `W_OpenFile` / wad class | partial | sync FS today → Phase B preload |
-| Wipe melt loop | gap | one frame / Tick |
-| `I_Quit` / `I_Error` | gap | `--wrap` → `DONE` / `ERROR` |
-| `FEATURE_SOUND` | gap | A: `-UFEATURE_SOUND`; D: Metal module |
-| Save/load `fopen` | gap | Phase C stem + async FS |
+| `W_OpenFile` / wad class | done | async preload → memory wad |
+| Wipe melt loop | done | `--wrap=D_Display` + `doomgeneric_Tick` (1 frame / Tick) |
+| `I_Quit` / `I_Error` | done | `--wrap` → wasi exit → `DONE` / `ERROR` |
+| Present fence | done | `blit_bgra` → shadow; stem `await(present)` once/frame (chunked LFB + yield on iron) |
+| Offline AOT | done | `doom.{x86_64,i386}.aot` via `wamrc` (host picks matching AOT, else `.wasm`) |
+| Save/load | done | memory serialize + stem `fs_*_async` |
+| Audio | done | `DG_sound_module` → queue + stem `drain` |
 | Config / screenshot `fopen` | omit v1 | no-op |
 | Net / multip | omit | already `#undef FEATURE_MULTIPLAYER` |
 | `setjmp` deep yield | omit | never |
 
 ## Phases
 
-### A — Tick hygiene (re-add unblocker)
+### A — Tick hygiene
 
-- Wipe: Metal-owned state — one `wipe_ScreenWipe` advance per Tick; no nested `I_Sleep` loop.
-- `--wrap=I_Quit` / `I_Error` → session `PM_METAL_DONE` / error.
-- Compile `-UFEATURE_SOUND` (or null stubs) until D.
-- **Display:** default fullscreen (DEFAULT surface); `-w` → tab surface only (see below).
-- Done when: menu quit ends session; wipe doesn’t hog one step; no sound-module crash; `-w` keeps chrome.
+- Wipe: `--wrap=D_Display` — one `wipe_ScreenWipe` per Tick; `--wrap=doomgeneric_Tick` freezes sim while melting.
+- `--wrap=I_Quit` / `I_Error` → wasi exit.
+- Display: default fullscreen; `-w` → tab surface.
 
 ### B — Async IWAD stem
 
-`guest_step` before `Create`:
+`guest_step` before `Create`: size → read → memory wad → `Create` (CPU only).
 
-1. `pm_metal_fs_size_async` → await → `pm_metal_fs_result`
-2. malloc + `pm_metal_fs_read_async` → await
-3. Install memory wad class (`OpenFile` attaches buffer; no FS)
-4. `doomgeneric_Create` (CPU only)
+### C — Saves
 
-Retire sync `pm_metal_fs_size` / `read` from the open path.
-
-### C — Saves (optional v1)
-
-- Save/load: deep path sets “need I/O” + buffer; `guest_step` does async write/read then resumes.
-- Config / screenshots: omit or no-op.
+- `--wrap=G_DoSaveGame`: `fmemopen` + archive → pending write; stem `fs_write_async`.
+- `--wrap=G_DoLoadGame`: request read → stem size/read → retry load from memory.
+- `--wrap=M_GetSaveGameDir` → `/mods/apps/doom/saves/`; stem `mkdir_async`.
+- `--wrap=M_ReadSaveStrings`: in-memory slot titles (updated on save).
+- Config / screenshots: omit.
 
 ### D — Audio
 
-- Metal `DG_sound_module`: `pm_metal_audio_queue` (sync); `pm_metal_audio_drain` await between ticks if backpressure.
-- Music stub OK.
+- `i_sound_metal.c`: `DG_sound_module` mixes to S16LE stereo 22050 → `pm_metal_audio_queue`.
+- Stem `await(pm_metal_audio_drain)` when queued.
+- Stub `DG_music_module`; `FEATURE_SOUND` on; no `-nosound`.
 
 ### E — Wire-up / verify
 
-- Opt-in verify / autostart marker; docs. Minimum bar: **A**. “Fully async FS”: **A+B**.
+- Opt-in verify / autostart marker; docs.
 
 ## Mechanism map
 
 | Mechanism | Use for |
 |-----------|---------|
 | `DG_*` | time, blit, keys, sleep no-op |
-| `guest_step` states | IWAD preload, wipe, quit, saves |
-| `--wrap` | `M_FileExists`, `I_AtExit`, `I_Quit`, `I_Error` |
-| Alternate `.c` | wad class, sound module (omit `w_file_stdc.c`) |
-| Compile flags | `-UFEATURE_SOUND` until D |
+| `guest_step` states | IWAD, wipe pacing, quit, saves, audio drain |
+| `--wrap` | `M_FileExists`, `I_AtExit`, `I_Quit`, `I_Error`, `I_Sleep`, `D_Display`, `doomgeneric_Tick`, save/load |
+| Alternate `.c` | wad class, sound module |
+| Compile flags | `-DFEATURE_SOUND` |
 | `patches/doomgeneric` | none |
 
-## Display modes (`-w`)
+## Display modes (`run` / `tab`)
 
-| Mode | Argv | Draw target | Shell chrome |
-|------|------|-------------|--------------|
-| **Fullscreen** (default) | no `-w` | `PM_METAL_GFX_SURFACE_DEFAULT` — letterbox scale to GOP | suppressed while guest focus (game owns FB) |
-| **Windowed** | `-w` | active tab `pm_metal_ui_tab_surface` — scale into tab content | kept: tab strip / status / input; do not wipe guest content rect |
-
-Guest: `M_CheckParm("-w")` in `DG_Init` (after `myargv` is set).  
-`metal_main` may append `-w` when `METAL_DOOM_WINDOWED=1` (until shell forwards guest argv).
-
-Host (needed for windowed): while session live on a tab surface, chrome paint must **skip** clearing that tab’s content; `shell_poll` still paints chrome under guest focus when `pm_metal_gfx_draw_surface() != DEFAULT`.
-
-## First cut
-
-Ship **A** (incl. `-w` display), then **B**. C/D follow. Re-vendor: `./scripts/setup doomgeneric`.
+| Mode | Draw target | Scale | Shell chrome |
+|------|-------------|-------|--------------|
+| **Fullscreen** (`run doom`) | `DEFAULT` | stretch-fill | suppressed while guest focus |
+| **Windowed** (`tab doom`) | tab surface | stretch-fill | kept |
 
 ## Key paths
 
 - `mods/apps/doom/` — Metal glue
 - `scripts/build.d/port/efi/doom.sh` — wasm link + wraps
-- `external/doomgeneric/` — vanilla pin via `scripts/setup doomgeneric`
+- `external/doomgeneric/` — vanilla pin via `./scripts/setup doomgeneric`
 - `docs/LIBC_ASYNC.md` — await / FS / omit `setjmp`

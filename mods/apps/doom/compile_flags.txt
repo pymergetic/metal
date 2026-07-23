@@ -1,11 +1,15 @@
+# Fallback if compile_commands.json is unavailable. Prefer ./scripts/setup ide.
 --target=wasm32-wasip1
 --sysroot=../../../.tools/wasi-sdk/share/wasi-sysroot
 -std=c11
+-I.
 -I../../../include
 -I../../../external/doomgeneric/doomgeneric
 -Iide_stubs
 -DNORMALUNIX
 -DLINUX
 -D_DEFAULT_SOURCE
+-D_POSIX_C_SOURCE=200809L
+-DFEATURE_SOUND
 -DDOOMGENERIC_RESX=320
 -DDOOMGENERIC_RESY=200

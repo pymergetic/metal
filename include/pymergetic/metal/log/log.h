@@ -5,6 +5,9 @@
  * UART resumes from marker → UI pulls full history → last detach clears
  * the buffer. After that, only direct viewports remain.
  *
+ * Styles are semantic (OK/WARN/FAIL/…); each viewport maps them
+ * (UI → RGB, UART → ANSI SGR). UEFI ConOut stays plain.
+ *
  * impl: common — src/pymergetic/metal/log/log.c
  */
 #ifndef PYMERGETIC_METAL_LOG_LOG_H_
@@ -26,20 +29,36 @@ typedef enum {
   PM_METAL_LOG_VP_COUNT
 } pm_metal_log_vp_t;
 
+/** Semantic line style — viewports choose concrete colors. */
+typedef enum {
+  PM_METAL_LOG_STYLE_DEFAULT = 0,
+  PM_METAL_LOG_STYLE_DIM,
+  PM_METAL_LOG_STYLE_OK,
+  PM_METAL_LOG_STYLE_WARN,
+  PM_METAL_LOG_STYLE_FAIL,
+  PM_METAL_LOG_STYLE_ACCENT
+} pm_metal_log_style_t;
+
 /** Install UEFI ConOut/serial viewport (pre-EBS). Idempotent. */
 void pm_metal_log_init(void);
 
-/** Append one line (no trailing newline required). */
+/** Append one line (no trailing newline required). Style DEFAULT. */
 void pm_metal_log(const char *line);
 
+/** Append one line with a semantic style. */
+void pm_metal_log_styled(pm_metal_log_style_t style, const char *line);
+
 /**
- * printf-style append.
+ * printf-style append (DEFAULT style).
  * On EFI, EFIAPI so VA_LIST matches PrintLib (ms_abi).
  */
 #if defined(EFIAPI)
 void EFIAPI pm_metal_logf(const char *fmt, ...);
+void EFIAPI pm_metal_logf_styled(pm_metal_log_style_t style, const char *fmt,
+				 ...);
 #else
 void pm_metal_logf(const char *fmt, ...);
+void pm_metal_logf_styled(pm_metal_log_style_t style, const char *fmt, ...);
 #endif
 
 /**

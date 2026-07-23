@@ -8,12 +8,15 @@
 #include <pymergetic/metal/bus/io/io.h>
 #include <pymergetic/metal/dev/net/net_ops.h>
 #include <pymergetic/metal/dev/net/net_cfg.h>
+#include <pymergetic/metal/dev/net/net_life.h>
+#include <pymergetic/metal/dev/net/ntp.h>
 #include <pymergetic/metal/dev/blk/blk.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
 #include <pymergetic/metal/shell/ui/ui.h>
 #include <pymergetic/metal/shell/shell/shell.h>
 #include <pymergetic/metal/guest/wasm/wasm.h>
 #include <pymergetic/metal/fs/esp/esp.h>
+#include <pymergetic/metal/trust/trust.h>
 #include <pymergetic/metal/util/ip.h>
 #include <pymergetic/metal/runtime/async/async.h>
 #include <runtime/coro/coro.h>
@@ -22,10 +25,13 @@
 #include <runtime/run/run.h>
 
 #include <Uefi.h>
+#include <Library/BaseLib.h>
+#include <Library/PrintLib.h>
 
 typedef enum {
   BOOT_GFX = 0,
   BOOT_UI,
+  BOOT_TRUST,
   BOOT_NET,
   BOOT_WASM,
   BOOT_SHELL,
@@ -37,9 +43,9 @@ typedef enum {
 } metal_boot_step_t;
 
 typedef struct {
-  pm_metal_coro_t           coro;
-  metal_boot_step_t         step;
-  pm_metal_async_handle_t   tests_h;
+  pm_metal_coro_t          coro;
+  metal_boot_step_t        step;
+  pm_metal_async_handle_t  tests_h;
 } metal_boot_init_t;
 
 typedef enum {
@@ -138,24 +144,208 @@ BootTreeDtIter (
 
     h = pm_metal_blk_at (n->unit);
     if (h != PM_METAL_BLK_INVALID && pm_metal_blk_ready (h)) {
-      pm_metal_logf (
-        "%a%a/%a#%u  %Lu sectors",
+      UINT8         sec[512];
+      CONST CHAR8  *lba0;
+
+      {
+        INT32  lba_ok;
+
+        lba_ok = (pm_metal_blk_read (h, 0, sec, 1) == 0) ? 1 : 0;
+        lba0   = lba_ok ? "lba0 ok" : "lba0 fail";
+        pm_metal_logf_styled (
+          lba_ok ? PM_METAL_LOG_STYLE_OK : PM_METAL_LOG_STYLE_FAIL,
+          "%a%a/%a#%u  %Lu sectors  %a",
+          prefix,
+          cls,
+          compat,
+          n->unit,
+          pm_metal_blk_capacity_sectors (h),
+          lba0
+          );
+      }
+    } else {
+      pm_metal_logf_styled (
+        PM_METAL_LOG_STYLE_DIM,
+        "%a%a/%a#%u",
         prefix,
         cls,
         compat,
-        n->unit,
-        pm_metal_blk_capacity_sectors (h)
+        n->unit
         );
-    } else {
-      pm_metal_logf ("%a%a/%a#%u", prefix, cls, compat, n->unit);
     }
+  } else if (n->class == PM_METAL_IO_GFX && n->bus == PM_METAL_IO_BUS_PCI) {
+    /* Floor: show real GPU id before scanout bind (855GM=3582, X300 GM45=2a42…). */
+    pm_metal_logf_styled (
+      PM_METAL_LOG_STYLE_DIM,
+      "%a%a/%a  pci %04x:%04x @%02x:%02x.%x",
+      prefix,
+      cls,
+      compat,
+      (UINT32)((n->loc[3] >> 16) & 0xffffu),
+      (UINT32)(n->loc[3] & 0xffffu),
+      (UINT32)n->loc[0],
+      (UINT32)n->loc[1],
+      (UINT32)n->loc[2]
+      );
   } else if (pm_metal_io_dt_count_class (n->class) > 1) {
-    pm_metal_logf ("%a%a/%a#%u", prefix, cls, compat, n->unit);
+    pm_metal_logf_styled (
+      PM_METAL_LOG_STYLE_DIM,
+      "%a%a/%a#%u",
+      prefix,
+      cls,
+      compat,
+      n->unit
+      );
   } else {
-    pm_metal_logf ("%a%a/%a", prefix, cls, compat);
+    pm_metal_logf_styled (
+      PM_METAL_LOG_STYLE_DIM,
+      "%a%a/%a",
+      prefix,
+      cls,
+      compat
+      );
   }
 
   t->index++;
+  return 0;
+}
+
+/** Emit init-tree net branch: ifs (mac + ip/dhcp), optional pkg, optional ntp. */
+STATIC
+VOID
+MetalBootLogNetBranch (
+  INT32         dhcp_ok,
+  CONST CHAR8  *pkg_note,
+  CONST CHAR8  *ntp_note
+  )
+{
+  UINT32  n;
+  UINT32  i;
+  UINT32  nif;
+  UINT32  seen;
+  UINT32  trail;
+
+  n = pm_metal_net_if_count ();
+  nif = 0;
+  for (i = 0; i < n; i++) {
+    pm_metal_net_ifcfg_t  cfg;
+
+    if (pm_metal_net_if_get_index (i, &cfg) == 0) {
+      nif++;
+    }
+  }
+
+  trail = 0;
+  if (pkg_note != NULL) {
+    trail++;
+  }
+
+  if (ntp_note != NULL) {
+    trail++;
+  }
+
+  pm_metal_log_styled (PM_METAL_LOG_STYLE_OK, "|   +-- net      ok");
+  if (nif == 0u && trail == 0u) {
+    pm_metal_log_styled (PM_METAL_LOG_STYLE_DIM, "|   |   `-- (no ifs)");
+    return;
+  }
+
+  seen = 0;
+  for (i = 0; i < n; i++) {
+    pm_metal_net_ifcfg_t  cfg;
+    UINT32                ip;
+    CONST CHAR8          *pref;
+    CONST CHAR8          *addr;
+
+    if (pm_metal_net_if_get_index (i, &cfg) != 0) {
+      continue;
+    }
+
+    seen++;
+    if (seen < nif || trail != 0u) {
+      pref = "|   |   +--";
+    } else {
+      pref = "|   |   `--";
+    }
+
+    if (pm_metal_util_ip4_parse (cfg.ip, &ip) == 0
+        && !pm_metal_util_ip4_is_unspecified (ip))
+    {
+      addr = cfg.ip;
+    } else if (dhcp_ok) {
+      addr = "0.0.0.0";
+    } else {
+      addr = "dhcp -";
+    }
+
+    pm_metal_logf_styled (
+      PM_METAL_LOG_STYLE_DIM,
+      "%a %a  %02x:%02x:%02x:%02x:%02x:%02x  %a",
+      pref,
+      cfg.name,
+      cfg.mac[0],
+      cfg.mac[1],
+      cfg.mac[2],
+      cfg.mac[3],
+      cfg.mac[4],
+      cfg.mac[5],
+      addr
+      );
+  }
+
+  if (pkg_note != NULL) {
+    if (ntp_note != NULL) {
+      pm_metal_logf_styled (
+        PM_METAL_LOG_STYLE_DIM,
+        "|   |   +-- pkg   %a",
+        pkg_note
+        );
+    } else {
+      pm_metal_logf_styled (
+        PM_METAL_LOG_STYLE_DIM,
+        "|   |   `-- pkg   %a",
+        pkg_note
+        );
+    }
+  }
+
+  if (ntp_note != NULL) {
+    pm_metal_logf_styled (
+      PM_METAL_LOG_STYLE_DIM,
+      "|   |   `-- ntp   %a",
+      ntp_note
+      );
+  }
+}
+
+STATIC
+INT32
+MetalBootHasLease (
+  VOID
+  )
+{
+  UINT32               n;
+  UINT32               i;
+  pm_metal_net_ifcfg_t cfg;
+  UINT32               ip;
+
+  n = pm_metal_net_if_count ();
+  for (i = 0; i < n; i++) {
+    if (pm_metal_net_if_get_index (i, &cfg) != 0) {
+      continue;
+    }
+
+    if (AsciiStrCmp (cfg.name, "lo") == 0) {
+      continue;
+    }
+
+    if (pm_metal_util_ip4_parse (cfg.ip, &ip) == 0
+        && !pm_metal_util_ip4_is_unspecified (ip))
+    {
+      return 1;
+    }
+  }
+
   return 0;
 }
 
@@ -172,70 +362,137 @@ MetalBootInitCoro (
     switch (s->step) {
       case BOOT_GFX:
         if (pm_metal_gfx_init () != 0) {
-          pm_metal_log ("|   +-- gfx      FAIL");
+          pm_metal_log_styled (PM_METAL_LOG_STYLE_FAIL, "|   +-- gfx      FAIL");
           return PM_METAL_ERROR;
         }
 
-        pm_metal_log ("|   +-- gfx      ok");
+        pm_metal_logf_styled (
+          PM_METAL_LOG_STYLE_OK,
+          "|   +-- gfx      ok  %a %dx%d",
+          pm_metal_gfx_scanout_name (),
+          pm_metal_gfx_width (),
+          pm_metal_gfx_height ()
+          );
         s->step = BOOT_UI;
         continue;
 
       case BOOT_UI:
         if (pm_metal_ui_console_shell () != 0) {
-          pm_metal_log ("|   +-- ui       FAIL");
+          pm_metal_log_styled (PM_METAL_LOG_STYLE_FAIL, "|   +-- ui       FAIL");
           return PM_METAL_ERROR;
         }
 
         pm_metal_log_attach_ui ();
         pm_metal_log_boot_complete ();
-        pm_metal_log ("|   +-- ui       ok");
-        /* Paint before NIC open / DHCP so the FB is not stuck on GOP residue. */
-        s->step = BOOT_NET;
+        pm_metal_log_styled (PM_METAL_LOG_STYLE_OK, "|   +-- ui       ok");
+        s->step = BOOT_TRUST;
         continue;
 
-      case BOOT_NET:
-        (VOID)pm_metal_net_bge_start ();
-        (VOID)pm_metal_net_virtio_start ();
-        (VOID)pm_metal_net_loopback_start ();
-        if (pm_metal_blk_count () > 0) {
-          pm_metal_blk_h  bh;
-          UINT8           sec[512];
+      case BOOT_TRUST:
+        {
+          INT32                   tr;
+          pm_metal_trust_boot_t   st;
+          pm_metal_log_style_t    trust_style;
+          CONST CHAR8            *detail;
 
-          bh = pm_metal_blk_at (0);
-          if (pm_metal_blk_read (bh, 0, sec, 1) == 0) {
-            pm_metal_log ("metal-blk: lba0 ok");
+          tr = pm_metal_trust_boot_check ();
+          st = pm_metal_trust_boot_status ();
+          if (st == PM_METAL_TRUST_BOOT_OK) {
+            trust_style = PM_METAL_LOG_STYLE_OK;
+            detail      = NULL;
+          } else if (st == PM_METAL_TRUST_BOOT_WARN) {
+            trust_style = PM_METAL_LOG_STYLE_WARN;
+            detail      = "CA parse";
+          } else if (st == PM_METAL_TRUST_BOOT_FAIL) {
+            trust_style = PM_METAL_LOG_STYLE_FAIL;
+            detail      = "kernel sig";
           } else {
-            pm_metal_log ("metal-blk: lba0 fail");
+            trust_style = PM_METAL_LOG_STYLE_DIM;
+            detail      = NULL;
           }
+
+          if (detail != NULL) {
+            pm_metal_logf_styled (
+              trust_style,
+              "|   +-- trust    %a %a",
+              pm_metal_trust_boot_status_str (),
+              detail
+              );
+          } else {
+            pm_metal_logf_styled (
+              trust_style,
+              "|   +-- trust    %a",
+              pm_metal_trust_boot_status_str ()
+              );
+          }
+
+          if (tr != 0) {
+            pm_metal_log_styled (
+              PM_METAL_LOG_STYLE_FAIL,
+              "|   +-- trust    hard-fail (METAL_TRUST_STRICT)"
+              );
+            return PM_METAL_ERROR;
+          }
+
+          /* Paint before NIC open / DHCP so the FB is not stuck on GOP residue. */
+          s->step = BOOT_NET;
+          continue;
         }
 
-        pm_metal_log ("|   +-- net      ok");
-        s->step = BOOT_WASM;
-        continue;
+      case BOOT_NET:
+        {
+          CONST CHAR8  *pkg_note;
+          CONST CHAR8  *ntp_note;
+          INT32         dhcp_ok;
+
+          (VOID)pm_metal_net_bge_start ();
+          (VOID)pm_metal_net_virtio_start ();
+          (VOID)pm_metal_net_loopback_start ();
+          (VOID)pm_metal_net_life_start ();
+
+          /* Brief peek for the init tree; life coro finishes late work. */
+          pm_metal_net_poll ();
+          dhcp_ok  = MetalBootHasLease ();
+          /* Guest packages are modular — no per-app notes in the boot tree. */
+          pkg_note = NULL;
+          ntp_note = (pm_metal_net_ntp_last_unix_ms () != 0ull) ? "ok" : "pending";
+          MetalBootLogNetBranch (dhcp_ok, pkg_note, ntp_note);
+          s->step = BOOT_WASM;
+          continue;
+        }
 
       case BOOT_WASM:
         if (pm_metal_wasm_init () != 0) {
-          pm_metal_log ("|   +-- wasm     FAIL");
+          pm_metal_log_styled (PM_METAL_LOG_STYLE_FAIL, "|   +-- wasm     FAIL");
           return PM_METAL_ERROR;
         }
 
-        pm_metal_log ("|   +-- wasm     ok");
+        pm_metal_log_styled (PM_METAL_LOG_STYLE_OK, "|   +-- wasm     ok");
         s->step = BOOT_SHELL;
         continue;
 
       case BOOT_SHELL:
         if (pm_metal_shell_init () != 0) {
-          pm_metal_log ("|   +-- shell    FAIL");
+          pm_metal_log_styled (PM_METAL_LOG_STYLE_FAIL, "|   +-- shell    FAIL");
           return PM_METAL_ERROR;
         }
 
-        pm_metal_log ("|   +-- shell    ok");
+        pm_metal_log_styled (PM_METAL_LOG_STYLE_OK, "|   `-- shell    ok");
         s->step = BOOT_READY;
         continue;
 
       case BOOT_READY:
-        pm_metal_log ("|   `-- ready    ok");
-        pm_metal_log ("metal-boot: ready");
+        pm_metal_log_styled (PM_METAL_LOG_STYLE_DIM, "|");
+        pm_metal_log_styled (PM_METAL_LOG_STYLE_OK, "`-- ready        ok");
+        pm_metal_log ("");
+        /*
+         * Embedded ANSI (DEFAULT style): UI MetalUiDrawTextAnsi + UART SGR.
+         * Cyan READY, dim hint — same energy as the shell prompt colors.
+         */
+        pm_metal_log (
+          "\033[1;36mREADY\033[0m\033[2m  --  type help\033[0m"
+          );
+        pm_metal_log ("");
         {
           UINT32  ty;
           UINT32  sz;
@@ -253,16 +510,12 @@ MetalBootInitCoro (
           }
         }
 
-        pm_metal_log ("");
-        pm_metal_log ("type help - test runs proofs");
         s->step = BOOT_PUMP_POLL;
         continue;
 
       case BOOT_TESTS_AW:
         (VOID)pm_metal_boot_tests_result (s->tests_h);
         s->tests_h = PM_METAL_ASYNC_HANDLE_INVALID;
-        pm_metal_log ("");
-        pm_metal_log ("type help - test runs proofs");
         s->step = BOOT_PUMP_POLL;
         continue;
 
@@ -302,16 +555,30 @@ pm_metal_boot_print_floor_tree (
   UINTN  i;
 
   pm_metal_boot_banner ();
-  pm_metal_log ("|");
-  pm_metal_logf ("+-- mem          %Lu MiB claimed", claim_mib);
+  pm_metal_log_styled (PM_METAL_LOG_STYLE_ACCENT, "+-- pymergetic metal");
+  pm_metal_log_styled (PM_METAL_LOG_STYLE_DIM, "|");
+  pm_metal_logf_styled (
+    PM_METAL_LOG_STYLE_DIM,
+    "+-- mem          %Lu MiB claimed",
+    claim_mib
+    );
   if (map_bytes < 1024 * 1024) {
-    pm_metal_logf ("|   +-- MAP      %Lu KiB", map_bytes / 1024);
+    pm_metal_logf_styled (
+      PM_METAL_LOG_STYLE_DIM,
+      "|   +-- MAP      %Lu KiB",
+      map_bytes / 1024
+      );
   } else {
-    pm_metal_logf ("|   +-- MAP      %Lu MiB", map_bytes / (1024 * 1024));
+    pm_metal_logf_styled (
+      PM_METAL_LOG_STYLE_DIM,
+      "|   +-- MAP      %Lu MiB",
+      map_bytes / (1024 * 1024)
+      );
   }
 
   for (i = 0; i < n_cpus; i++) {
-    pm_metal_logf (
+    pm_metal_logf_styled (
+      PM_METAL_LOG_STYLE_DIM,
       "|   |   %a cpu%u   %Lu KiB stack",
       (i + 1 < n_cpus) ? "+--" : "`--",
       (UINT32)i,
@@ -319,31 +586,53 @@ pm_metal_boot_print_floor_tree (
       );
   }
 
-  pm_metal_logf ("|   +-- HOLE     %Lu MiB", hole_mib);
+  pm_metal_logf_styled (
+    PM_METAL_LOG_STYLE_DIM,
+    "|   +-- HOLE     %Lu MiB",
+    hole_mib
+    );
   if (heap_bytes < 1024 * 1024) {
-    pm_metal_logf ("|   `-- HEAP     %Lu KiB", heap_bytes / 1024);
+    pm_metal_logf_styled (
+      PM_METAL_LOG_STYLE_DIM,
+      "|   `-- HEAP     %Lu KiB",
+      heap_bytes / 1024
+      );
   } else {
-    pm_metal_logf (
+    pm_metal_logf_styled (
+      PM_METAL_LOG_STYLE_DIM,
       "|   `-- HEAP     %Lu MiB",
       heap_bytes / (1024 * 1024)
       );
   }
 
-  pm_metal_logf ("+-- cpu          %u runners", n_cpus);
-  pm_metal_log ("+-- devices");
+  pm_metal_logf_styled (
+    PM_METAL_LOG_STYLE_DIM,
+    "+-- cpu          %u runners",
+    n_cpus
+    );
+  pm_metal_log_styled (PM_METAL_LOG_STYLE_DIM, "+-- devices");
   {
     boot_tree_dt_ctx_t  ctx;
 
     ctx.index = 0;
     ctx.total = pm_metal_io_dt_count ();
     if (ctx.total == 0) {
-      pm_metal_log ("|   `-- (none)");
+      pm_metal_log_styled (PM_METAL_LOG_STYLE_DIM, "|   `-- (none)");
     } else {
       pm_metal_io_dt_foreach (BootTreeDtIter, &ctx);
     }
   }
 
-  pm_metal_log ("|");
+  /* Detailed check runs under `-- init` (needs ESP); show policy mode early. */
+  pm_metal_logf_styled (
+    (pm_metal_trust_mode () == PM_METAL_TRUST_MODE_OFF)
+      ? PM_METAL_LOG_STYLE_DIM
+      : PM_METAL_LOG_STYLE_OK,
+    "+-- trust        %a",
+    pm_metal_trust_mode_str ()
+    );
+
+  pm_metal_log_styled (PM_METAL_LOG_STYLE_DIM, "|");
 }
 
 int
@@ -370,7 +659,7 @@ pm_metal_boot_seed_init (
   }
 
   /* NIC/blk smoke run in the init coro after UI paints (BOOT_NET). */
-  pm_metal_log ("`-- init");
+  pm_metal_log_styled (PM_METAL_LOG_STYLE_DIM, "`-- init");
   task = pm_metal_task_new (&init->coro);
   if (task == NULL) {
     return -1;
@@ -399,23 +688,40 @@ pm_metal_boot_shutdown (
    * on real hardware (no serial), then power off or reboot.
    */
   pm_metal_log ("");
-  pm_metal_log (reboot ? "metal-boot: reboot" : "metal-boot: shutdown");
-  pm_metal_log ("`-- stop");
-  pm_metal_log ("|   +-- shell    ok");
+  pm_metal_log_styled (
+    PM_METAL_LOG_STYLE_WARN,
+    reboot ? "metal-boot: reboot" : "metal-boot: shutdown"
+    );
+  pm_metal_log_styled (PM_METAL_LOG_STYLE_DIM, "`-- stop");
+  pm_metal_log_styled (PM_METAL_LOG_STYLE_OK, "|   +-- shell    ok");
 
   pm_metal_wasm_shutdown ();
-  pm_metal_log ("|   +-- wasm     ok");
-  pm_metal_log ("|   +-- ui       ok");
-  pm_metal_log ("|   `-- gfx      ok");
+  pm_metal_log_styled (PM_METAL_LOG_STYLE_OK, "|   +-- wasm     ok");
+  pm_metal_log_styled (PM_METAL_LOG_STYLE_OK, "|   +-- ui       ok");
+  pm_metal_log_styled (PM_METAL_LOG_STYLE_OK, "|   `-- gfx      ok");
 
+  /*
+   * Real 1 s ticks — iron has no serial, so the UI banner must stay up
+   * long enough to read (was 250 ms/tick and vanished).
+   */
   for (i = 3; i > 0; i--) {
-    pm_metal_logf (
+    CHAR8  status[48];
+
+    AsciiSPrint (
+      status,
+      sizeof (status),
+      reboot ? "reboot in %u…" : "power off in %u…",
+      i
+      );
+    pm_metal_ui_set_status (status);
+    pm_metal_logf_styled (
+      PM_METAL_LOG_STYLE_WARN,
       reboot ? "metal-boot: reboot in %u s" : "metal-boot: power off in %u s",
       i
       );
     (VOID)pm_metal_ui_frame ();
-    (VOID)pm_metal_gfx_present ();
-    pm_metal_time_msleep (250u);
+    (VOID)pm_metal_gfx_present_surface (PM_METAL_GFX_SURFACE_DEFAULT);
+    pm_metal_time_msleep (1000u);
   }
 
   pm_metal_boot_dead (reboot);

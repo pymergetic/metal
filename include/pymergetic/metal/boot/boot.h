@@ -77,14 +77,15 @@ int pm_metal_boot_tests_result(pm_metal_async_handle_t h);
 void pm_metal_boot_shutdown(int reboot);
 
 /**
- * Startup METAL ASCII banner (log only). Printed at the head of the floor tree.
+ * Startup METAL ASCII banner (log only). Floor tree follows with
+ * `+-- pymergetic metal` as the first entry.
  * impl: common — src/pymergetic/metal/boot/banner.c
  */
 void pm_metal_boot_banner(void);
 
 /**
- * Big "DEAD" banner after the shutdown countdown; holds briefly so it is
- * visible before fini/reset (longer when reboot != 0).
+ * Big "DEAD" banner after the shutdown countdown, short hold, then ~2.5 s
+ * fade-to-black before fini/reset (readable on iron with no serial).
  * impl: common — src/pymergetic/metal/boot/banner.c
  */
 void pm_metal_boot_dead(int reboot);

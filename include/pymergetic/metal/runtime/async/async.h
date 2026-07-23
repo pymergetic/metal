@@ -59,9 +59,15 @@ extern pm_metal_async_handle_t pm_metal_async_sleep_until_us(uint64_t deadline_u
 	PM_METAL_ASYNC_IMPORT(pm_metal_async_sleep_until_us);
 extern pm_metal_async_handle_t pm_metal_async_yield(void)
 	PM_METAL_ASYNC_IMPORT(pm_metal_async_yield);
-/** Awaitable present fence for surface (1 = DEFAULT). Eager Blt today. */
+/** Awaitable present fence for surface (1 = DEFAULT). Chunked LFB + yield. */
 extern pm_metal_async_handle_t pm_metal_async_present(uint32_t surface)
 	PM_METAL_ASYNC_IMPORT(pm_metal_async_present);
+/**
+ * Shared 60 Hz draw barrier: await next frame deadline, then present dirty
+ * surface if any. Prepare (blit) anytime before this.
+ */
+extern pm_metal_async_handle_t pm_metal_async_frame(void)
+	PM_METAL_ASYNC_IMPORT(pm_metal_async_frame);
 
 /** Wire self→aw; returns WAITING. */
 extern int32_t pm_metal_async_await(pm_metal_async_handle_t self_h,
@@ -98,6 +104,7 @@ pm_metal_async_handle_t pm_metal_async_sleep_us(uint64_t us);
 pm_metal_async_handle_t pm_metal_async_sleep_until_us(uint64_t deadline_us);
 pm_metal_async_handle_t pm_metal_async_yield(void);
 pm_metal_async_handle_t pm_metal_async_present(uint32_t surface);
+pm_metal_async_handle_t pm_metal_async_frame(void);
 int32_t pm_metal_async_await(pm_metal_async_handle_t self_h,
 			     pm_metal_async_handle_t aw_h);
 pm_metal_async_handle_t pm_metal_async_create_task(pm_metal_async_handle_t coro_h);
@@ -143,6 +150,9 @@ int pm_metal_async_session_active(void);
 
 /** Host-only: attribute blit/present time to the open perf window (µs). */
 void pm_metal_async_perf_note_blit_us(uint64_t us);
+void pm_metal_async_perf_note_present_us(uint64_t us);
+/** Host-only: one completed present job (frame) in the open perf window. */
+void pm_metal_async_perf_note_present_frame(void);
 #endif
 
 #ifdef __cplusplus

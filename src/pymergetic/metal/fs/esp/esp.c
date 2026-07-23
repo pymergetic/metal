@@ -7,6 +7,7 @@
 #include <Uefi.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/BaseLib.h>
+#include <Library/PrintLib.h>
 
 /* Port: bios|efi fs/esp/esp_port.c */
 int pm_metal_esp_init_port(void *image_handle);
@@ -467,6 +468,73 @@ pm_metal_esp_preload (
   }
 
   return 0;
+}
+
+int
+pm_metal_esp_preload_tree (
+  CONST CHAR8  *dir
+  )
+{
+  UINT32  idx;
+  UINT32  n;
+  UINT32  ty;
+  UINT32  sz;
+  CHAR8   name[PM_METAL_ESP_PATH_MAX];
+  CHAR8   child[PM_METAL_ESP_PATH_MAX];
+
+  if (!mReady || dir == NULL || dir[0] == '\0') {
+    return -1;
+  }
+
+  if (pm_metal_esp_stat (dir, &sz, &ty) != 0
+      || ty != PM_METAL_ESP_TYPE_DIR)
+  {
+    return -1;
+  }
+
+  n = 0;
+  for (idx = 0; ; idx++) {
+    INT32  rc;
+
+    rc = pm_metal_esp_readdir (dir, idx, name, sizeof (name));
+    if (rc <= 0) {
+      break;
+    }
+
+    if (name[0] == '.'
+        && (name[1] == '\0'
+            || (name[1] == '.' && name[2] == '\0')))
+    {
+      continue;
+    }
+
+    if (AsciiSPrint (
+          child,
+          sizeof (child),
+          "%a/%a",
+          dir,
+          name
+          ) >= sizeof (child))
+    {
+      continue;
+    }
+
+    if (pm_metal_esp_stat (child, &sz, &ty) != 0) {
+      continue;
+    }
+
+    if (ty == PM_METAL_ESP_TYPE_DIR) {
+      if (pm_metal_esp_preload_tree (child) == 0) {
+        n++;
+      }
+    } else if (ty == PM_METAL_ESP_TYPE_FILE) {
+      if (pm_metal_esp_preload (child) == 0) {
+        n++;
+      }
+    }
+  }
+
+  return (n > 0u) ? 0 : -1;
 }
 
 int

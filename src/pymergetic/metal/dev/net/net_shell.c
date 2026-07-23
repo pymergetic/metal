@@ -1,12 +1,18 @@
 /** @file
-  Shell `net` command — lives with net config stack. (impl: efi|bios)
+  Shell `net` / `nslookup` — lives with net config stack. (impl: efi|bios)
 **/
 #include <pymergetic/metal/shell/shell_cmd.h>
+#include <pymergetic/metal/shell/shell/shell.h>
+#include <pymergetic/metal/dev/net/net.h>
 #include <pymergetic/metal/dev/net/net_cfg.h>
+#include <pymergetic/metal/runtime/async/async.h>
+#include <runtime/time/time.h>
 
 #include <Uefi.h>
 #include <Library/BaseLib.h>
 #include <Library/PrintLib.h>
+
+#define NSLOOKUP_TIMEOUT_MS  9000u
 
 STATIC
 VOID
@@ -139,4 +145,63 @@ PM_METAL_SHELL_CMD (
   "net",
   "net [status [ethN]] | net set [ethN] <ip> <mask> <gw> [dns] | dhcp | dhcp6",
   NetShellCmd
+  );
+
+STATIC
+VOID
+NslookupShellCmd (
+  INT32   argc,
+  CHAR8 **argv
+  )
+{
+  pm_metal_async_handle_t  dns_h;
+  pm_metal_async_handle_t  task_h;
+  UINT64                   deadline;
+
+  if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
+    pm_metal_shell_out ("usage: nslookup <host>");
+    return;
+  }
+
+  if (pm_metal_shell_job_busy ()) {
+    pm_metal_shell_out ("nslookup: busy");
+    return;
+  }
+
+  dns_h = pm_metal_net_dns (argv[1]);
+  if (dns_h == PM_METAL_ASYNC_HANDLE_INVALID) {
+    pm_metal_shell_out ("nslookup: start failed");
+    return;
+  }
+
+  task_h = pm_metal_async_create_task (dns_h);
+  if (task_h == PM_METAL_ASYNC_HANDLE_INVALID) {
+    pm_metal_async_coro_close (dns_h);
+    pm_metal_shell_out ("nslookup: task failed");
+    return;
+  }
+
+  deadline = pm_metal_time_mono_us ()
+             + ((UINT64)NSLOOKUP_TIMEOUT_MS * 1000ull) + 500000ull;
+  if (pm_metal_shell_job_start (
+        "nslookup",
+        task_h,
+        dns_h,
+        argv[1],
+        deadline
+        ) != 0)
+  {
+    pm_metal_async_task_cancel (task_h);
+    pm_metal_shell_out ("nslookup: job failed");
+    return;
+  }
+
+  pm_metal_shell_out ("nslookup: ...");
+}
+
+PM_METAL_SHELL_CMD (
+  g_pm_metal_shell_cmd_nslookup,
+  "nslookup",
+  "nslookup <host>   resolve name (DNS / hosts)",
+  NslookupShellCmd
   );

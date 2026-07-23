@@ -43,8 +43,28 @@ int pm_metal_ui_tick(uint64_t now_ms);
  * handled, 0 if missed chrome.
  */
 int pm_metal_ui_pointer_hit(int32_t x, int32_t y);
-/** Draw software cursor at screen position (unlocked pointer). */
-void pm_metal_ui_cursor_draw(int32_t x, int32_t y);
+/**
+ * Update tab-strip hover from pointer (x,y). Returns 1 if hover changed
+ * (caller should repaint chrome).
+ */
+int pm_metal_ui_pointer_hover(int32_t x, int32_t y);
+/**
+ * Console scrollbar / wheel for the active tab console.
+ * See pm_metal_ui_console_pointer in console.h.
+ */
+int pm_metal_ui_console_pointer(int32_t x, int32_t y, uint32_t buttons,
+				int32_t wheel, uint32_t flags);
+void pm_metal_ui_console_scroll_by(int32_t delta_lines);
+
+/**
+ * Software cursor (save/restore under + dirty-rect present).
+ * Invalidate before chrome paints that overwrite the FB; paint after;
+ * move() for pointer tracking without a full frame.
+ */
+void pm_metal_ui_cursor_invalidate(void);
+void pm_metal_ui_cursor_hide(void);
+void pm_metal_ui_cursor_paint(int32_t x, int32_t y);
+void pm_metal_ui_cursor_move(int32_t x, int32_t y);
 
 int pm_metal_ui_native_register(void);
 #endif

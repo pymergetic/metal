@@ -22,6 +22,8 @@ extern "C" {
 #define PM_METAL_VIRTIO_DEV_NET         0x1041u
 #define PM_METAL_VIRTIO_DEV_BLK         0x1042u /* 0x1040 + 2 */
 #define PM_METAL_VIRTIO_DEV_CONSOLE     0x1043u /* 0x1040 + 3 */
+#define PM_METAL_VIRTIO_DEV_GPU         0x1050u /* 0x1040 + 16 */
+#define PM_METAL_VIRTIO_DEV_INPUT       0x1052u /* 0x1040 + 18 */
 #define PM_METAL_VIRTIO_DEV_SOUND       0x1059u /* 0x1040 + 25 */
 
 #define PM_METAL_VIRTIO_S_ACK       1u

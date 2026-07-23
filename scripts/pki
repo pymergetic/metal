@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# Metal PKI — keys outside the source tree (METAL_PKI_DIR).
+# Multi-realm: default pymergetic + team Mods/Root CAs baked together.
+# Usage:
+#   ./scripts/pki init
+#   ./scripts/pki init-realm <id> [--with-kernel]
+#   ./scripts/pki bake
+#   ./scripts/pki sign-wasm <path/to/foo.wasm> [--realm=<id>]
+#   ./scripts/pki sign-elf  <path/to/metal.elf> [--realm=<id>]
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/pki.sh"
+
+PKI="$(pm_metal_pki_dir)"
+
+usage() {
+	cat >&2 <<EOF
+usage: scripts/pki <cmd>
+
+  init                      create default (pymergetic) Root→App→Kernel|Mods
+  init-realm <id>           create realms/<id> Root→App→Mods (+ optional Kernel)
+                            [--with-kernel]
+  bake                      write build/trust/metal_trust_bake.inc.c (all pubs)
+  sign-wasm <file>          Mods CA → <file>.sig  [--realm=<id>]
+  sign-elf  <file>          Kernel CA → <file>.sig [--realm=<id>]
+
+Env:
+  METAL_PKI_DIR          default: ${HOME}/.local/share/metal/pki
+  METAL_TRUST_MODE       off | soft | enforce
+                         default: soft if PKI present, else off
+  METAL_TRUST=1          ⇒ mode=enforce + bake fails if realm incomplete
+  METAL_TRUST_STRICT=1   boot hard-fail on bad/missing kernel sig
+
+Team drop-in (no private keys on build host):
+  \${METAL_PKI_DIR}/extra/mods/<team>.crt   # Mods CA pub → baked
+  \${METAL_PKI_DIR}/extra/roots/<team>.crt  # Root CA pub → baked
+
+Modes: off = no verify; soft = verify if .sig present (unsigned OK);
+       enforce = require valid .sig (prod). Bake writes build/trust/mode.
+
+Current METAL_PKI_DIR=${PKI}
+EOF
+	exit 1
+}
+
+_mk_ca() {
+	local dir="$1"
+	local cn="$2"
+	local days="$3"
+	local parent_crt="${4:-}"
+	local parent_key="${5:-}"
+	local ext="$6"
+
+	mkdir -p "${dir}"
+	if [[ -f "${dir}/ca.key" && -f "${dir}/ca.crt" ]]; then
+		echo "pki: keep ${dir}/ca.crt" >&2
+		return 0
+	fi
+
+	openssl ecparam -name prime256v1 -genkey -noout -out "${dir}/ca.key"
+	chmod 600 "${dir}/ca.key"
+
+	if [[ -z "${parent_crt}" ]]; then
+		openssl req -new -x509 -key "${dir}/ca.key" -sha256 -days "${days}" \
+			-subj "/CN=${cn}" -out "${dir}/ca.crt" \
+			-addext "basicConstraints=critical,CA:TRUE" \
+			-addext "keyUsage=critical,keyCertSign,cRLSign"
+	else
+		openssl req -new -key "${dir}/ca.key" -subj "/CN=${cn}" -out "${dir}/ca.csr"
+		openssl x509 -req -in "${dir}/ca.csr" \
+			-CA "${parent_crt}" -CAkey "${parent_key}" -CAcreateserial \
+			-sha256 -days "${days}" -out "${dir}/ca.crt" \
+			-extfile <(printf '%s\n' "${ext}")
+		rm -f "${dir}/ca.csr"
+	fi
+	echo "pki: created ${dir}/ca.crt (${cn})" >&2
+}
+
+_init_realm_tree() {
+	local base="$1"
+	local label="$2"
+	local with_kernel="${3:-1}"
+	local ext_app ext_leaf
+
+	mkdir -p "${base}"
+	_mk_ca "${base}/root" "${label} Root CA" 3650 "" "" ""
+
+	ext_app=$'basicConstraints=critical,CA:TRUE,pathlen:1\nkeyUsage=critical,keyCertSign,cRLSign'
+	_mk_ca "${base}/app" "${label} App CA" 1825 \
+		"${base}/root/ca.crt" "${base}/root/ca.key" "${ext_app}"
+
+	ext_leaf=$'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,digitalSignature,keyCertSign\nextendedKeyUsage=codeSigning'
+	_mk_ca "${base}/mods" "${label} Mods CA" 730 \
+		"${base}/app/ca.crt" "${base}/app/ca.key" "${ext_leaf}"
+
+	if [[ "${with_kernel}" == "1" ]]; then
+		_mk_ca "${base}/kernel" "${label} Kernel CA" 730 \
+			"${base}/app/ca.crt" "${base}/app/ca.key" "${ext_leaf}"
+	fi
+
+	openssl verify -CAfile "${base}/root/ca.crt" \
+		-untrusted "${base}/app/ca.crt" \
+		"${base}/mods/ca.crt" >/dev/null
+	if [[ -f "${base}/kernel/ca.crt" ]]; then
+		openssl verify -CAfile "${base}/root/ca.crt" \
+			-untrusted "${base}/app/ca.crt" \
+			"${base}/kernel/ca.crt" >/dev/null
+	fi
+}
+
+cmd_init() {
+	echo "pki: init default realm under ${PKI}" >&2
+	_init_realm_tree "${PKI}" "Metal" 1
+	echo "pki: ok — export METAL_PKI_DIR=${PKI}" >&2
+	pm_metal_pki_bake
+}
+
+cmd_init_realm() {
+	local id="${1:-}"
+	local with_kernel=0
+	shift || true
+	[[ -n "${id}" ]] || usage
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--with-kernel) with_kernel=1 ;;
+		*) usage ;;
+		esac
+		shift
+	done
+	if [[ "${id}" == "pymergetic" ]]; then
+		echo "pki: use 'init' for the default pymergetic realm" >&2
+		return 1
+	fi
+	echo "pki: init-realm ${id} under ${PKI}/realms/${id}" >&2
+	# CN must not contain '/' (OpenSSL RDN separator)
+	_init_realm_tree "${PKI}/realms/${id}" "Metal ${id}" "${with_kernel}"
+	mkdir -p "${PKI}/extra/mods"
+	# Convenience: also drop Mods CA pub for bake if someone only copies extras
+	cp -f "${PKI}/realms/${id}/mods/ca.crt" "${PKI}/extra/mods/${id}.crt"
+	echo "pki: copied Mods CA pub → extra/mods/${id}.crt" >&2
+	pm_metal_pki_bake
+}
+
+_parse_realm_arg() {
+	# sets: REALM_ID FILE
+	REALM_ID="pymergetic"
+	FILE=""
+	local a
+	for a in "$@"; do
+		case "${a}" in
+		--realm=*) REALM_ID="${a#--realm=}" ;;
+		--realm)
+			echo "pki: use --realm=<id>" >&2
+			return 1
+			;;
+		-*)
+			echo "pki: unknown flag ${a}" >&2
+			return 1
+			;;
+		*)
+			if [[ -n "${FILE}" ]]; then
+				echo "pki: unexpected arg ${a}" >&2
+				return 1
+			fi
+			FILE="${a}"
+			;;
+		esac
+	done
+	[[ -n "${FILE}" ]] || return 1
+	return 0
+}
+
+cmd_sign_wasm() {
+	local rdir key
+	_parse_realm_arg "$@" || usage
+	rdir="$(pm_metal_pki_realm_dir "${REALM_ID}")"
+	key="${rdir}/mods/ca.key"
+	pm_metal_pki_sign_file "${key}" "${FILE}" "${FILE}.sig"
+}
+
+cmd_sign_elf() {
+	local rdir key
+	_parse_realm_arg "$@" || usage
+	rdir="$(pm_metal_pki_realm_dir "${REALM_ID}")"
+	key="${rdir}/kernel/ca.key"
+	pm_metal_pki_sign_file "${key}" "${FILE}" "${FILE}.sig"
+}
+
+[[ $# -ge 1 ]] || usage
+cmd="$1"
+shift
+
+case "${cmd}" in
+-h | --help | help) usage ;;
+init) cmd_init ;;
+init-realm) cmd_init_realm "$@" ;;
+bake) pm_metal_pki_bake ;;
+sign-wasm) cmd_sign_wasm "$@" ;;
+sign-elf) cmd_sign_elf "$@" ;;
+*) usage ;;
+esac

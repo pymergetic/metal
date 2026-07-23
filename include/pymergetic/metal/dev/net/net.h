@@ -3,9 +3,10 @@
  * Not WASI sockets. See docs/IO.md.
  *
  * Async: connect, listen, accept, recv, dns → await → pm_metal_net_result().
- * Sync:  socket, send, close.
+ * After successful dns await: pm_metal_net_dns_last_ntoa (address string).
+ * Sync façade: socket, send, close, bind_if.
  *
- * impl: common — src/pymergetic/metal/dev/net/net.c
+ * impl: common — src/pymergetic/metal/dev/net/net.c (+ net_lwip.c)
  */
 #ifndef PYMERGETIC_METAL_DEV_NET_NET_H_
 #define PYMERGETIC_METAL_DEV_NET_NET_H_
@@ -60,6 +61,12 @@ extern pm_metal_async_handle_t pm_metal_net_recv(pm_metal_net_sock_h h,
 	PM_METAL_NET_IMPORT(pm_metal_net_recv);
 extern pm_metal_async_handle_t pm_metal_net_dns(const char *host)
 	PM_METAL_NET_IMPORT(pm_metal_net_dns);
+/**
+ * After await on pm_metal_net_dns with result 1: last address as ASCII
+ * (IPv4 or IPv6) into guest buffer. Returns 0, or -1 if none.
+ */
+extern int32_t pm_metal_net_dns_last_ntoa(uint32_t dest, uint32_t dest_cap)
+	PM_METAL_NET_IMPORT(pm_metal_net_dns_last_ntoa);
 extern void pm_metal_net_close(pm_metal_net_sock_h h)
 	PM_METAL_NET_IMPORT(pm_metal_net_close);
 /** Bind socket to interface ("eth0", "eth1"). NULL → default. Before connect/listen. */
@@ -82,9 +89,14 @@ uint32_t pm_metal_net_send(pm_metal_net_sock_h h, const void *ptr, uint32_t len)
 pm_metal_async_handle_t pm_metal_net_recv(pm_metal_net_sock_h h, void *ptr,
 					  uint32_t len);
 pm_metal_async_handle_t pm_metal_net_dns(const char *host);
+/**
+ * After await on pm_metal_net_dns with result 1: last address as ASCII
+ * (IPv4 or IPv6). Returns 0, or -1 if none.
+ */
+int pm_metal_net_dns_last_ntoa(char *out, uint32_t out_cap);
 void pm_metal_net_close(pm_metal_net_sock_h h);
 /** Bind socket to named interface (eth0..). ifname NULL → default. Returns 0 or -1. */
-int pm_metal_net_bind_if(pm_metal_net_sock_h h, const char *ifname);
+int32_t pm_metal_net_bind_if(pm_metal_net_sock_h h, const char *ifname);
 
 static inline uint32_t pm_metal_net_result(pm_metal_async_handle_t self_h)
 {

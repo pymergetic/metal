@@ -1,13 +1,8 @@
-# wasi target + local stubs so doomtype.h finds <strings.h> in the IDE.
+# Prefer wasi libc over repo-global freestanding host_stubs.
 CompileFlags:
+  Remove:
+    - -I**/runtime/mem/host_stubs
+    - -I**/guest/wamr
   Add:
-    - --target=wasm32-wasip1
-    - --sysroot=../../../.tools/wasi-sdk/share/wasi-sysroot
-    - -I../../../include
-    - -I../../../external/doomgeneric/doomgeneric
+    - -I.
     - -Iide_stubs
-    - -DNORMALUNIX
-    - -DLINUX
-    - -D_DEFAULT_SOURCE
-    - -DDOOMGENERIC_RESX=320
-    - -DDOOMGENERIC_RESY=200

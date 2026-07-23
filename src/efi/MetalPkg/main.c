@@ -235,7 +235,7 @@ UefiMain (
   }
 
   if (pm_metal_gfx_harvest () != 0) {
-    pm_metal_log ("metal-gfx: GOP harvest failed");
+    pm_metal_log ("metal-boot: gfx harvest failed");
     return EFI_UNSUPPORTED;
   }
 
@@ -244,12 +244,19 @@ UefiMain (
     return EFI_OUT_OF_RESOURCES;
   }
 
-  /* RAM-cache while ESP/SimpleFileSystem still live. */
+  /* RAM-cache while ESP/SimpleFileSystem still live (gone after EBS). */
   if (pm_metal_esp_ready ()) {
     (VOID)pm_metal_esp_preload ("mods/tests/async_fs.txt");
     (VOID)pm_metal_esp_preload ("mods/tests/autotest");
     (VOID)pm_metal_esp_preload ("metal/net.conf");
     (VOID)pm_metal_esp_preload ("etc/hosts");
+    /* Kernel image + sig for early trust check under `-- init`. */
+    (VOID)pm_metal_esp_preload ("EFI/BOOT/BOOTX64.EFI");
+    (VOID)pm_metal_esp_preload ("EFI/BOOT/BOOTX64.EFI.sig");
+    /* Optional guest packages staged under mods/apps/<name>/ — no app names here. */
+    if (pm_metal_esp_preload_tree ("mods/apps") == 0) {
+      pm_metal_log ("metal-esp: mods/apps cached");
+    }
   }
 
   pm_metal_boot_print_floor_tree (

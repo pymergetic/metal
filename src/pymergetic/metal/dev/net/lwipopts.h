@@ -59,9 +59,13 @@
 #define LWIP_HAVE_LOOPIF                0
 #define LWIP_LOOPBACK_MAX_PBUFS         8
 
-#define DNS_TABLE_SIZE                  4
+#define DNS_TABLE_SIZE                  128 /* ~11 KiB static; was 4 — too small */
 #define DNS_MAX_NAME_LENGTH             64
 #define DNS_MAX_SERVERS                 2
+#define DNS_MAX_RETRIES                 2 /* fail over to backup DNS sooner */
+/* No RAND_SRC_PORT (bit 4): burns UDP PCBs under NO_SYS + small MEMP. */
+#define LWIP_DNS_SECURE                 (1 | 2) /* RAND_XID | NO_MULTIPLE */
+#define LWIP_DNS_ADDRTYPE_DEFAULT       0       /* IPV4 only */
 
 struct netif;
 struct dhcp;

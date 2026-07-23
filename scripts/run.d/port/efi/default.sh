@@ -65,6 +65,13 @@ pm_metal_efi_stage_esp "${EFI}" "${ESP}"
 VBLK="$(pm_metal_efi_stage_vblk)"
 
 echo "run-efi: staged ${ESP}/EFI/BOOT/BOOTX64.EFI from ${EFI}" >&2
+if [[ -f "${ESP}/mods/apps/doom/doom.x86_64.aot" ]]; then
+	echo "run-efi: doom AOT on ESP → shell: run doom" >&2
+elif [[ -f "${ESP}/mods/apps/doom/doom.wasm" ]]; then
+	echo "run-efi: doom wasm on ESP → shell: run doom" >&2
+else
+	echo "run-efi: doom not on ESP (optional: METAL_DOOM_BUILD=1 ./scripts/build efi)" >&2
+fi
 
 args=(
 	qemu-system-x86_64
@@ -80,11 +87,21 @@ args=(
 	-chardev null,id=vcon
 	-device virtio-serial-pci,max_ports=1
 	-device virtconsole,chardev=vcon
+	-device virtio-tablet-pci
 	-serial stdio
 	-drive if=pflash,format=raw,readonly=on,file="${OVMF}"
 	-drive format=raw,file=fat:rw:"${ESP}"
 	-boot order=d
 )
+
+# Scanout: default Bochs stdvga flip; METAL_SCANOUT_VIRTIO_GPU=1 → virtio-vga.
+if [[ "${METAL_SCANOUT_VIRTIO_GPU:-0}" == "1" ]]; then
+	args+=(-vga none -device virtio-vga)
+	echo "run-efi: scanout virtio-vga (metal virtio_gpu backend)" >&2
+else
+	# stdvga: VGA IS1 vblank + Bochs VBE page-flip; 64 MiB for 2× hi-res pages
+	args+=(-vga std -global VGA.vgamem_mb=64)
+fi
 
 case "${DISPLAY_BACKEND}" in
 none)

@@ -3,6 +3,7 @@
 **/
 #include <pymergetic/metal/runtime/async/async.h>
 #include <pymergetic/metal/shell/shell/shell.h>
+#include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/dev/input/input.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
 #include <pymergetic/metal/dev/net/net_ops.h>
@@ -64,7 +65,9 @@ STATIC UINT32  mPerfSteps;
 STATIC UINT64  mPerfStepUsSum;
 STATIC UINT64  mPerfGapUsSum;
 STATIC UINT64  mPerfBlitUsSum;
-STATIC UINT64  mPerfSleepMsSum;
+STATIC UINT64  mPerfPresentUsSum;
+STATIC UINT32  mPerfPresentFrames;
+STATIC UINT64  mPerfSleepUsSum;
 STATIC UINT32  mPerfSleepCount;
 STATIC UINT64  mPerfPumpUsSum;
 STATIC UINT32  mPerfPumps;
@@ -81,7 +84,9 @@ MetalAsyncPerfReset (
   mPerfStepUsSum      = 0;
   mPerfGapUsSum       = 0;
   mPerfBlitUsSum      = 0;
-  mPerfSleepMsSum     = 0;
+  mPerfPresentUsSum   = 0;
+  mPerfPresentFrames  = 0;
+  mPerfSleepUsSum     = 0;
   mPerfSleepCount     = 0;
   mPerfPumpUsSum      = 0;
   mPerfPumps          = 0;
@@ -94,14 +99,14 @@ MetalAsyncPerfMaybeReport (
   )
 {
   UINT64  elapsed;
-  UINT32  hz;
+  UINT32  step_hz;
+  UINT32  frame_hz;
   UINT32  rt_us;
   UINT32  step_us;
   UINT32  blit_us;
+  UINT32  present_us;
   UINT32  gap_us;
-  UINT32  idle_pct;
-  UINT32  wake_us;
-  UINT32  sleep_ms;
+  UINT32  sleep_us;
   UINT32  pump_us;
 
   if (mPerfWinStartUs == 0) {
@@ -114,37 +119,39 @@ MetalAsyncPerfMaybeReport (
     return;
   }
 
-  hz      = (UINT32)(((UINT64)mPerfSteps * 1000000u) / elapsed);
+  step_hz  = (UINT32)(((UINT64)mPerfSteps * 1000000u) / elapsed);
+  frame_hz = (mPerfPresentFrames > 0)
+               ? (UINT32)(((UINT64)mPerfPresentFrames * 1000000u) / elapsed)
+               : 0;
   step_us = (UINT32)(mPerfStepUsSum / mPerfSteps);
   blit_us = (UINT32)(mPerfBlitUsSum / mPerfSteps);
   gap_us  = (UINT32)(mPerfGapUsSum / mPerfSteps);
   rt_us   = step_us + gap_us;
-  idle_pct = (rt_us > 0) ? (UINT32)(((UINT64)gap_us * 100u) / rt_us) : 0;
-  sleep_ms = (mPerfSleepCount > 0)
-               ? (UINT32)(mPerfSleepMsSum / mPerfSleepCount)
-               : 0;
-  wake_us  = (gap_us > sleep_ms * 1000u)
-               ? (gap_us - sleep_ms * 1000u)
+  present_us = (mPerfPresentFrames > 0)
+                 ? (UINT32)(mPerfPresentUsSum / mPerfPresentFrames)
+                 : 0;
+  sleep_us = (mPerfSleepCount > 0)
+               ? (UINT32)(mPerfSleepUsSum / mPerfSleepCount)
                : 0;
   pump_us  = (mPerfPumps > 0)
                ? (UINT32)(mPerfPumpUsSum / mPerfPumps)
                : 0;
 
   {
-    CHAR8  line[192];
+    CHAR8  line[220];
 
     AsciiSPrint (
       line,
       sizeof (line),
-      "metal-perf: hz=%u rt=%uus step=%uus blit=%uus gap=%uus idle=%u%% wake~=%uus sleep=%ums pumps=%u pump=%uus",
-      hz,
-      rt_us,
+      "metal-perf: frame_hz=%u step_hz=%u step=%uus blit=%uus present=%uus sleep=%uus gap=%uus rt=%uus pumps=%u pump=%uus",
+      frame_hz,
+      step_hz,
       step_us,
       blit_us,
+      present_us,
+      sleep_us,
       gap_us,
-      idle_pct,
-      wake_us,
-      sleep_ms,
+      rt_us,
       mPerfPumps,
       pump_us
       );
@@ -166,6 +173,22 @@ pm_metal_async_perf_note_blit_us (
   )
 {
   mPerfBlitUsSum += us;
+}
+
+void
+pm_metal_async_perf_note_present_us (
+  uint64_t  us
+  )
+{
+  mPerfPresentUsSum += us;
+}
+
+void
+pm_metal_async_perf_note_present_frame (
+  VOID
+  )
+{
+  mPerfPresentFrames++;
 }
 
 STATIC
@@ -448,7 +471,7 @@ pm_metal_async_sleep_us (
 {
   pm_metal_coro_t  *c;
 
-  mPerfSleepMsSum += (UINT32)(us / 1000u);
+  mPerfSleepUsSum += us;
   mPerfSleepCount++;
 
   c = pm_metal_sleep_us (us);
@@ -465,6 +488,12 @@ pm_metal_async_sleep_until_us (
   )
 {
   pm_metal_coro_t  *c;
+  UINT64            now;
+
+  now = pm_metal_time_mono_us ();
+  if (deadline_us > now) {
+    mPerfSleepUsSum += deadline_us - now;
+  }
 
   mPerfSleepCount++;
   c = pm_metal_sleep_until_us (deadline_us);
@@ -499,8 +528,9 @@ pm_metal_async_yield (
 }
 
 typedef struct {
-  pm_metal_coro_t          coro;
-  pm_metal_gfx_surface_h   surface;
+  pm_metal_coro_t         coro;
+  pm_metal_gfx_surface_h  surface;
+  INT32                   begun;
 } pm_metal_present_coro_t;
 
 STATIC
@@ -510,12 +540,40 @@ MetalPresentCoroFn (
   )
 {
   pm_metal_present_coro_t  *p;
+  INT32                     more;
+  UINT64                    t0;
 
   p = (pm_metal_present_coro_t *)self;
-  if (pm_metal_gfx_present_surface (p->surface) != 0) {
-    return PM_METAL_ERROR;
+  if (p->begun == 0) {
+    if (pm_metal_gfx_present_job_begin (p->surface) != 0) {
+      pm_metal_logf (
+        "metal-async: present begin surface %u failed (ignored)",
+        (UINT32)p->surface
+        );
+      pm_metal_async_perf_note_present_frame ();
+      return PM_METAL_DONE;
+    }
+
+    p->begun = 1;
   }
 
+  t0   = pm_metal_time_mono_us ();
+  more = pm_metal_gfx_present_job_step ();
+  pm_metal_async_perf_note_present_us (pm_metal_time_mono_us () - t0);
+
+  if (more > 0) {
+    /* Chunky leaf done — yield so net/input can pump. */
+    return pm_metal_await (self, pm_metal_yield ());
+  }
+
+  if (more < 0) {
+    pm_metal_logf (
+      "metal-async: present step surface %u failed (ignored)",
+      (UINT32)p->surface
+      );
+  }
+
+  pm_metal_async_perf_note_present_frame ();
   return PM_METAL_DONE;
 }
 
@@ -537,6 +595,80 @@ pm_metal_async_present (
   }
 
   c->surface = s;
+  c->begun   = 0;
+  return pm_metal_async_adopt_host_coro (&c->coro);
+}
+
+typedef struct {
+  pm_metal_coro_t         coro;
+  INT32                   phase;
+  UINT64                  deadline;
+  pm_metal_gfx_surface_h  surf;
+} pm_metal_frame_coro_t;
+
+STATIC
+pm_metal_status_t
+MetalFrameCoroFn (
+  pm_metal_coro_t  *self
+  )
+{
+  pm_metal_frame_coro_t  *f;
+  pm_metal_coro_t        *sleep_c;
+  pm_metal_present_coro_t *pres;
+
+  f = (pm_metal_frame_coro_t *)self;
+  if (f->phase == 0) {
+    f->deadline = pm_metal_gfx_frame_next_us ();
+    f->surf     = pm_metal_gfx_dirty_surface ();
+    f->phase    = 1;
+    sleep_c     = pm_metal_sleep_until_us (f->deadline);
+    if (sleep_c == NULL) {
+      return PM_METAL_ERROR;
+    }
+
+    return pm_metal_await (self, sleep_c);
+  }
+
+  if (f->phase == 1) {
+    f->phase = 2;
+    if (f->surf == 0) {
+      return PM_METAL_DONE;
+    }
+
+    pres = (pm_metal_present_coro_t *)pm_metal_coro (
+                                       MetalPresentCoroFn,
+                                       sizeof (*pres)
+                                       );
+    if (pres == NULL) {
+      return PM_METAL_ERROR;
+    }
+
+    pres->surface = f->surf;
+    pres->begun   = 0;
+    return pm_metal_await (self, &pres->coro);
+  }
+
+  return PM_METAL_DONE;
+}
+
+pm_metal_async_handle_t
+pm_metal_async_frame (
+  VOID
+  )
+{
+  pm_metal_frame_coro_t  *c;
+
+  c = (pm_metal_frame_coro_t *)pm_metal_coro (
+                                 MetalFrameCoroFn,
+                                 sizeof (*c)
+                                 );
+  if (c == NULL) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  c->phase    = 0;
+  c->deadline = 0;
+  c->surf     = 0;
   return pm_metal_async_adopt_host_coro (&c->coro);
 }
 
@@ -762,6 +894,15 @@ pm_metal_async_present_native (
 }
 
 STATIC UINT32
+pm_metal_async_frame_native (
+  wasm_exec_env_t  exec_env
+  )
+{
+  (VOID)exec_env;
+  return pm_metal_async_frame ();
+}
+
+STATIC UINT32
 pm_metal_async_yield_native (
   wasm_exec_env_t  exec_env
   )
@@ -858,6 +999,7 @@ STATIC NativeSymbol g_pm_metal_async_native_symbols[] = {
   { "pm_metal_async_sleep_us", (VOID *)pm_metal_async_sleep_us_native, "(I)i", NULL },
   { "pm_metal_async_sleep_until_us", (VOID *)pm_metal_async_sleep_until_us_native, "(I)i", NULL },
   { "pm_metal_async_present", (VOID *)pm_metal_async_present_native, "(i)i", NULL },
+  { "pm_metal_async_frame", (VOID *)pm_metal_async_frame_native, "()i", NULL },
   { "pm_metal_async_yield", (VOID *)pm_metal_async_yield_native, "()i", NULL },
   { "pm_metal_async_await", (VOID *)pm_metal_async_await_native, "(ii)i", NULL },
   { "pm_metal_async_create_task", (VOID *)pm_metal_async_create_task_native, "(i)i", NULL },

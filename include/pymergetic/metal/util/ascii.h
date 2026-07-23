@@ -70,7 +70,11 @@ int pm_metal_util_ascii_render(const char *text, char ink, char *out,
 extern void pm_metal_util_ascii_log(const char *text)
 	PM_METAL_UTIL_ASCII_IMPORT(pm_metal_util_ascii_log);
 #else
+#include "pymergetic/metal/log/log.h" /* pm_metal_log_style_t */
 void pm_metal_util_ascii_log(const char *text);
+/** Host: FIGlet rows with a log style (UART ANSI + UI FG). */
+void pm_metal_util_ascii_log_styled(pm_metal_log_style_t style,
+				    const char *text);
 #endif
 
 #if !defined(__wasm__)

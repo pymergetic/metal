@@ -5,8 +5,8 @@
 #include <pymergetic/metal/dev/net/tls.h>
 #include <pymergetic/metal/dev/net/net.h>
 #include <pymergetic/metal/dev/net/net_ops.h>
+#include <pymergetic/metal/dev/net/mbedtls_metal_config.h>
 #include <pymergetic/metal/dev/random/random.h>
-#include <runtime/mem/mem.h>
 
 #include <Uefi.h>
 #include <Library/BaseLib.h>
@@ -18,8 +18,6 @@
 #include <mbedtls/error.h>
 #include <mbedtls/platform.h>
 #include <mbedtls/ssl.h>
-
-#include "wasm_export.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -42,37 +40,6 @@ STATIC tls_sess_t               mTls[TLS_SESS_MAX + 1];
 STATIC INT32                    mTlsGlobal;
 STATIC mbedtls_entropy_context  mEntropy;
 STATIC mbedtls_ctr_drbg_context mCtrDrbg;
-STATIC wasm_module_inst_t       mTlsInst;
-
-STATIC VOID *
-TlsCalloc (
-  size_t  n,
-  size_t  sz
-  )
-{
-	size_t  t;
-	VOID   *p;
-
-	t = n * sz;
-	if (t == 0) {
-		return NULL;
-	}
-
-	p = pm_metal_mem_alloc (t, PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
-	if (p != NULL) {
-		ZeroMem (p, t);
-	}
-
-	return p;
-}
-
-STATIC VOID
-TlsFree (
-  VOID  *p
-  )
-{
-	pm_metal_mem_free (p);
-}
 
 STATIC INT32
 TlsEntropyPoll (
@@ -105,7 +72,7 @@ TlsGlobalInit (
 		return 0;
 	}
 
-	mbedtls_platform_set_calloc_free (TlsCalloc, TlsFree);
+	pm_metal_mbedtls_runtime_init ();
 	mbedtls_entropy_init (&mEntropy);
 	mbedtls_ctr_drbg_init (&mCtrDrbg);
 	e = mbedtls_entropy_add_source (
@@ -445,91 +412,15 @@ pm_metal_net_tls_write (
 	return -1;
 }
 
-#if !defined(__wasm__)
-
-STATIC INT32
-TlsGuestCopyStr (
-  wasm_exec_env_t  exec_env,
-  CONST CHAR8     *src,
-  CHAR8           *out,
-  UINTN            out_sz
-  )
-{
-	wasm_module_inst_t  inst;
-	UINTN               i;
-
-	inst = wasm_runtime_get_module_inst (exec_env);
-	if (inst == NULL || src == NULL || out == NULL || out_sz == 0) {
-		return -1;
-	}
-
-	if (!wasm_runtime_validate_native_addr (inst, (VOID *)src, 1)) {
-		return -1;
-	}
-
-	for (i = 0; i + 1 < out_sz; i++) {
-		if (!wasm_runtime_validate_native_addr (inst, (VOID *)(src + i), 1)) {
-			return -1;
-		}
-
-		out[i] = src[i];
-		if (src[i] == '\0') {
-			return 0;
-		}
-	}
-
-	return -1;
-}
-
-STATIC UINT32
-pm_metal_net_tls_open_native (
-  wasm_exec_env_t  exec_env,
-  CONST CHAR8     *sni
-  )
-{
-	CHAR8  cleaned[TLS_SNI_MAX];
-
-	if (mTlsInst == NULL) {
-		return PM_METAL_TLS_INVALID;
-	}
-
-	if (TlsGuestCopyStr (exec_env, sni, cleaned, sizeof (cleaned)) != 0) {
-		return PM_METAL_TLS_INVALID;
-	}
-
-	return pm_metal_net_tls_open (cleaned);
-}
-
-STATIC VOID
-pm_metal_net_tls_close_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           h
-  )
-{
-	(VOID)exec_env;
-	pm_metal_net_tls_close (h);
-}
-
-STATIC NativeSymbol g_pm_metal_net_tls_native_symbols[] = {
-  { "pm_metal_net_tls_open", (VOID *)pm_metal_net_tls_open_native, "($)i", NULL },
-  { "pm_metal_net_tls_close", (VOID *)pm_metal_net_tls_close_native, "(i)", NULL },
-};
-
+/*
+ * TLS is host-only (http.c). Stubs keep wasm.c call sites; no WASI natives —
+ * guests use pm_metal_net_http_get for HTTPS.
+ */
 int
 pm_metal_net_tls_native_register (
   VOID
   )
 {
-	if (!wasm_runtime_register_natives (
-	       "pymergetic.metal.net.tls",
-	       g_pm_metal_net_tls_native_symbols,
-	       sizeof (g_pm_metal_net_tls_native_symbols)
-	         / sizeof (g_pm_metal_net_tls_native_symbols[0])
-	       ))
-	{
-		return -1;
-	}
-
 	return 0;
 }
 
@@ -538,7 +429,5 @@ pm_metal_net_tls_bind_inst (
   VOID  *module_inst
   )
 {
-	mTlsInst = (wasm_module_inst_t)module_inst;
+	(VOID)module_inst;
 }
-
-#endif

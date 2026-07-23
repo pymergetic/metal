@@ -72,6 +72,7 @@ qemu-system-x86_64 \
 	-chardev null,id=vcon \
 	-device virtio-serial-pci,max_ports=1 \
 	-device virtconsole,chardev=vcon \
+	-device virtio-tablet-pci \
 	-drive if=pflash,format=raw,readonly=on,file="${OVMF}" \
 	-drive format=raw,file=fat:rw:"${ESP}" \
 	-boot order=d \
@@ -168,11 +169,11 @@ grep -q "|   +-- wasm     ok" "${LOG}" || {
 	echo "verify-efi: missing wasm ok" >&2
 	exit 1
 }
-grep -q "|   +-- shell    ok" "${LOG}" || {
+grep -q "|   \`-- shell    ok" "${LOG}" || {
 	echo "verify-efi: missing shell ok" >&2
 	exit 1
 }
-grep -q "|   \`-- ready    ok" "${LOG}" || {
+grep -q "\`-- ready        ok" "${LOG}" || {
 	echo "verify-efi: missing ready ok" >&2
 	exit 1
 }

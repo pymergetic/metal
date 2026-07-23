@@ -26,15 +26,20 @@ pm_metal_ui_sync_input_focus (
   pm_metal_input_focus_t  want;
 
   /*
-   * Foreground tab owns input: console → shell line/stdio; any other tab
-   * with a live guest session → HID key ring. Same rule for every mod.
+   * Live wasm session owns HID while its stdout tab is foreground:
+   *   run <mod>  → console tab + fullscreen FB → guest keys
+   *   tab <mod>  → app tab + tab surface       → guest keys
+   * Switch away (use 0 / close) → shell again.
    */
   want = PM_METAL_INPUT_FOCUS_SHELL;
-  if (gMetalUiTabs != NULL && gMetalUiTabs->u.tabs.n > 0
+  if (pm_metal_wasm_session_active () && gMetalUiTabs != NULL
+      && gMetalUiTabs->u.tabs.n > 0
       && gMetalUiTabs->u.tabs.active < gMetalUiTabs->u.tabs.n)
   {
     tab = gMetalUiTabs->u.tabs.tabs[gMetalUiTabs->u.tabs.active];
-    if (tab != NULL && tab->closable && pm_metal_wasm_session_active ()) {
+    if (tab != NULL
+        && tab->handle == pm_metal_wasm_stdout_tab ())
+    {
       want = PM_METAL_INPUT_FOCUS_GUEST;
     }
   }
@@ -139,6 +144,12 @@ pm_metal_ui_tab_close (
       gMetalUiTabs->u.tabs.active = was - 1;
     }
 
+    if (gMetalUiTabs->u.tabs.hover == (INT32)i) {
+      gMetalUiTabs->u.tabs.hover = -1;
+    } else if (gMetalUiTabs->u.tabs.hover > (INT32)i) {
+      gMetalUiTabs->u.tabs.hover--;
+    }
+
     pm_metal_ui_sync_input_focus ();
     return 0;
   }
@@ -217,6 +228,15 @@ pm_metal_ui_console_puts (
 }
 
 void
+pm_metal_ui_console_puts_styled (
+  pm_metal_log_style_t  style,
+  const char           *line
+  )
+{
+  MetalUiConsolePutsStyled (gMetalUiSysConsole, line, style);
+}
+
+void
 pm_metal_ui_active_puts (
   const char  *line
   )
@@ -258,6 +278,30 @@ pm_metal_ui_tab_activate_index (
 
   pm_metal_ui_sync_input_focus ();
   return 0;
+}
+
+int
+pm_metal_ui_tab_cycle (
+  int  delta
+  )
+{
+  UINT32  n;
+  UINT32  a;
+  INT32   next;
+
+  n = pm_metal_ui_tab_count ();
+  if (n == 0) {
+    return -1;
+  }
+
+  a    = pm_metal_ui_tab_active_index ();
+  next = (INT32)a + delta;
+  while (next < 0) {
+    next += (INT32)n;
+  }
+
+  next %= (INT32)n;
+  return pm_metal_ui_tab_activate_index ((UINT32)next);
 }
 
 unsigned

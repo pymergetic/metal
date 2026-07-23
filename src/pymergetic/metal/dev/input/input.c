@@ -31,8 +31,10 @@ STATIC UINT32                      mHead;
 STATIC UINT32                      mTail;
 STATIC pm_metal_input_focus_t      mFocus;
 
-STATIC UINT8    mHeld[PM_METAL_HELD_N];
-STATIC uint64_t mHeldMs[PM_METAL_HELD_N];
+STATIC UINT8                    mHeld[PM_METAL_HELD_N];
+STATIC uint64_t                 mHeldMs[PM_METAL_HELD_N];
+STATIC UINT8                    mMods;
+STATIC pm_metal_input_filter_fn mFilter;
 
 STATIC pm_metal_input_pointer_t  mPtrQ[PM_METAL_INPUT_Q];
 STATIC UINT32                    mPtrHead;
@@ -110,6 +112,177 @@ pm_metal_input_pointer_set_sample (
 }
 
 STATIC
+INT32
+PtrAccelAxis (
+  INT32  v
+  )
+{
+  INT32  a;
+  INT32  s;
+
+  if (v == 0) {
+    return 0;
+  }
+
+  a = (v < 0) ? -v : v;
+  s = (v < 0) ? -1 : 1;
+  /* TrackPoint often sends ±1; without gain the cursor crawls. */
+  if (a == 1) {
+    return s * 3;
+  }
+
+  if (a == 2) {
+    return s * 6;
+  }
+
+  if (a <= 4) {
+    return v * 3;
+  }
+
+  if (a <= 8) {
+    return v * 4;
+  }
+
+  if (a <= 16) {
+    return v * 5;
+  }
+
+  return v * 6;
+}
+
+void
+pm_metal_input_ptr_accel (
+  INT32  *dx,
+  INT32  *dy
+  )
+{
+  if (dx != NULL) {
+    *dx = PtrAccelAxis (*dx);
+  }
+
+  if (dy != NULL) {
+    *dy = PtrAccelAxis (*dy);
+  }
+}
+
+void
+pm_metal_input_pointer_rel (
+  INT32   *x,
+  INT32   *y,
+  UINT32  *buttons,
+  INT32    dx,
+  INT32    dy,
+  INT32    dz,
+  INT32    dz_valid
+  )
+{
+  INT32                     gw;
+  INT32                     gh;
+  INT32                     nx;
+  INT32                     ny;
+  UINT32                    btns;
+  INT32                     wheel;
+  pm_metal_input_pointer_t  ev;
+
+  if (x == NULL || y == NULL || buttons == NULL) {
+    return;
+  }
+
+  btns  = *buttons;
+  wheel = 0;
+  if (dz_valid && dz != 0) {
+    wheel = dz;
+  }
+
+  /*
+   * ThinkPad TrackPoint: no IMPS/2 wheel — middle + drag scrolls.
+   * Freeze cursor while middle is held so the stick is a scroll wheel.
+   */
+  if ((btns & 4u) != 0 && (dx != 0 || dy != 0)) {
+    if (wheel == 0) {
+      wheel = dy;
+      if (wheel > 8) {
+        wheel = 8;
+      }
+
+      if (wheel < -8) {
+        wheel = -8;
+      }
+
+      if (wheel == 0) {
+        wheel = (dy < 0) ? -1 : 1;
+      }
+    }
+
+    dx = 0;
+    dy = 0;
+  } else {
+    pm_metal_input_ptr_accel (&dx, &dy);
+  }
+
+  gw = pm_metal_gfx_width ();
+  gh = pm_metal_gfx_height ();
+  if (gw <= 0) {
+    gw = 1;
+  }
+
+  if (gh <= 0) {
+    gh = 1;
+  }
+
+  nx = *x + dx;
+  ny = *y + dy;
+  if (nx < 0) {
+    nx = 0;
+  }
+
+  if (ny < 0) {
+    ny = 0;
+  }
+
+  if (nx >= gw) {
+    nx = gw - 1;
+  }
+
+  if (ny >= gh) {
+    ny = gh - 1;
+  }
+
+  *x       = nx;
+  *y       = ny;
+  *buttons = btns;
+
+  ZeroMem (&ev, sizeof (ev));
+  ev.x       = (pm_metal_input_pointer_locked () != 0) ? -1 : nx;
+  ev.y       = (pm_metal_input_pointer_locked () != 0) ? -1 : ny;
+  ev.dx      = dx;
+  ev.dy      = dy;
+  ev.buttons = btns;
+  ev.flags   = PM_METAL_INPUT_PTR_RELATIVE;
+  if (dx != 0 || dy != 0 || btns != 0) {
+    pm_metal_input_pointer_enqueue (&ev);
+  }
+
+  if (wheel != 0) {
+    ZeroMem (&ev, sizeof (ev));
+    ev.x       = (pm_metal_input_pointer_locked () != 0) ? -1 : nx;
+    ev.y       = (pm_metal_input_pointer_locked () != 0) ? -1 : ny;
+    ev.dx      = 0;
+    ev.dy      = wheel;
+    ev.buttons = btns;
+    ev.flags   = PM_METAL_INPUT_PTR_WHEEL;
+    pm_metal_input_pointer_enqueue (&ev);
+  }
+
+  pm_metal_input_pointer_set_sample (nx, ny, btns);
+}
+
+/* HID letters used as movement in Metal guests (doom WASD). */
+#define PM_METAL_KEY_W  ((pm_metal_keycode_t)(PM_METAL_KEY_A + 22u))
+#define PM_METAL_KEY_S  ((pm_metal_keycode_t)(PM_METAL_KEY_A + 18u))
+#define PM_METAL_KEY_D  ((pm_metal_keycode_t)(PM_METAL_KEY_A + 3u))
+
+STATIC
 UINT32
 MetalInputHoldMs (
   pm_metal_keycode_t  code
@@ -121,6 +294,10 @@ MetalInputHoldMs (
       return PM_METAL_INPUT_TURN_MS;
     case PM_METAL_KEY_UP:
     case PM_METAL_KEY_DOWN:
+    case PM_METAL_KEY_W:
+    case PM_METAL_KEY_A:
+    case PM_METAL_KEY_S:
+    case PM_METAL_KEY_D:
       return PM_METAL_INPUT_WALK_MS;
     case PM_METAL_KEY_LCTRL:
     case PM_METAL_KEY_RCTRL:
@@ -141,7 +318,17 @@ MetalInputIsWalkKey (
   pm_metal_keycode_t  code
   )
 {
-  return (code == PM_METAL_KEY_UP || code == PM_METAL_KEY_DOWN) ? 1 : 0;
+  switch (code) {
+    case PM_METAL_KEY_UP:
+    case PM_METAL_KEY_DOWN:
+    case PM_METAL_KEY_W:
+    case PM_METAL_KEY_A:
+    case PM_METAL_KEY_S:
+    case PM_METAL_KEY_D:
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 STATIC
@@ -155,6 +342,10 @@ MetalInputIsMoveOrAction (
     case PM_METAL_KEY_RIGHT:
     case PM_METAL_KEY_UP:
     case PM_METAL_KEY_DOWN:
+    case PM_METAL_KEY_W:
+    case PM_METAL_KEY_A:
+    case PM_METAL_KEY_S:
+    case PM_METAL_KEY_D:
     case PM_METAL_KEY_LCTRL:
     case PM_METAL_KEY_RCTRL:
     case PM_METAL_KEY_LSHIFT:
@@ -170,14 +361,58 @@ MetalInputIsMoveOrAction (
 
 STATIC
 VOID
+MetalInputUpdateMods (
+  INT32               pressed,
+  pm_metal_keycode_t  code
+  )
+{
+  UINT8  bit;
+
+  bit = 0;
+  switch (code) {
+    case PM_METAL_KEY_LCTRL:
+    case PM_METAL_KEY_RCTRL:
+      bit = PM_METAL_INPUT_MOD_CTRL;
+      break;
+    case PM_METAL_KEY_LSHIFT:
+    case PM_METAL_KEY_RSHIFT:
+      bit = PM_METAL_INPUT_MOD_SHIFT;
+      break;
+    case PM_METAL_KEY_LALT:
+    case PM_METAL_KEY_RALT:
+      bit = PM_METAL_INPUT_MOD_ALT;
+      break;
+    default:
+      return;
+  }
+
+  if (pressed) {
+    mMods = (UINT8)(mMods | bit);
+  } else {
+    mMods = (UINT8)(mMods & (UINT8)~bit);
+  }
+}
+
+STATIC
+VOID
 MetalInputEnqueue (
   INT32               pressed,
   pm_metal_keycode_t  code
   )
 {
-  UINT32  next;
+  UINT32                      next;
+  pm_metal_input_key_event_t  ev;
 
   if (code == PM_METAL_KEY_NONE) {
+    return;
+  }
+
+  MetalInputUpdateMods (pressed, code);
+
+  ev.code    = code;
+  ev.pressed = pressed ? 1u : 0u;
+  ev.mods    = mMods;
+  if (mFilter != NULL && mFilter (&ev) != 0) {
     return;
   }
 
@@ -186,10 +421,16 @@ MetalInputEnqueue (
     return;
   }
 
-  mQ[mHead].code    = code;
-  mQ[mHead].pressed = pressed ? 1u : 0u;
-  mQ[mHead].mods    = 0;
-  mHead             = next;
+  mQ[mHead] = ev;
+  mHead     = next;
+}
+
+void
+pm_metal_input_set_filter (
+  pm_metal_input_filter_fn  fn
+  )
+{
+  mFilter = fn;
 }
 
 void
@@ -214,6 +455,7 @@ pm_metal_input_set_focus (
 
   mHead = 0;
   mTail = 0;
+  mMods = 0;
 }
 
 pm_metal_input_focus_t

@@ -16,6 +16,7 @@
 #include "pymergetic/metal/shell/shell/shell.h"
 #include "pymergetic/metal/dev/input/input.h"
 #include "pymergetic/metal/dev/stream/stream.h"
+#include "pymergetic/metal/boot/port.h"
 #include <runtime/mem/mem.h>
 
 #include <string.h>
@@ -54,8 +55,13 @@ emit_line(const char *line, int also_serial)
         return;
 
     if (also_serial) {
-        /* ConOut paints GOP — keep guest frames clean. */
-        if (pm_metal_input_focus() == PM_METAL_INPUT_FOCUS_GUEST)
+        /*
+         * After ExitBootServices, ConOut/Print is dead (call → MMIO junk).
+         * `run <mod>` on the console tab keeps SHELL focus, so guest printf
+         * must not use Print just because focus != GUEST.
+         */
+        if (pm_metal_port_owned()
+            || pm_metal_input_focus() == PM_METAL_INPUT_FOCUS_GUEST)
             pm_metal_shell_serial_log(line);
         else
             Print(L"%a\n", line);
