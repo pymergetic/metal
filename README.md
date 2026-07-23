@@ -1,33 +1,31 @@
 # Metal
 
+Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
+
 ![Metal boot UI](screenshots/ui-boot.png)
 
-**Preferred model:** apps are **`wasm32` guests** that talk **async Metal APIs**
-over WASI-style imports (`await` present/net/FS/… from `guest_step`) — not a
-hosted OS, not sync syscalls on a kernel. The freestanding host (UEFI or
-BIOS/PXE) is the thin async runtime underneath: **one equal runner per CPU**,
-drivers behind exchangeable ops, WAMR for interp/AOT/(soon) JIT.
+- **Apps = `wasm32` guests** — `await` Metal APIs (present / net / FS / …) from
+  `guest_step` via WASI-style imports
+- **Host = thin async runtime** — UEFI or BIOS/PXE; **one runner per CPU**;
+  exchangeable drivers; WAMR interp / AOT / (soon) JIT
+- **Not** a hosted OS, **not** sync syscalls on a kernel
+- Shell / tabs / Doom prove the machine is alive — they are **not** “the OS”
 
-That’s the product. Shell, tabs, and Doom are how you prove the machine is
-alive; they are not “the OS.”
+**Blank metal → pull apps over the wire**
 
-**Blank metal → pull apps over the wire:** PXE/BIOS (or ESP) boots a thin
-image, gets a lease, then **HTTP-fetches signed `.wasm` / `.aot` (+ payload)
-from the boot/HTTP server** (DHCP next-server / `:8080`). Detached ECDSA
-(`.sig`) via Mods CA — soft or enforce — so iron can stay almost empty and
-still run **certified** guests (Doom today). See [`docs/TRUST.md`](docs/TRUST.md)
-· [`docs/DOOM_ASYNC.md`](docs/DOOM_ASYNC.md).
+- Boot a thin image (PXE/BIOS or ESP) → DHCP lease
+- **HTTP-fetch** signed `.wasm` / `.aot` (+ payload) from boot server
+  (`next-server` / `:8080`)
+- Detached ECDSA **`.sig`** (Mods CA; soft or enforce) → certified guests
+- Iron can stay almost empty and still run Doom today  
+  → [`TRUST.md`](docs/TRUST.md) · [`DOOM_ASYNC.md`](docs/DOOM_ASYNC.md)
 
 ![PXE/HTTP seed with .sig](screenshots/pxe-http-sigs.png)
 
-**Target:** not for normal desktop users. Have *almost nothing* in the way —
-no Linux/userspace stack in-tree — and keep the **high-speed awaitable ABI**
-to wasm as the main surface.
-
-**Platform:** main home is **virtual Metal** (QEMU/KVM-class), so **virtio**
-is first-class. Old iron (ThinkPad **T42p** / T43) is the fun side quest that
-forces stable driver interfaces so backends stay swappable later — not
-“UEFI + static virtio only.”
+- **Who:** not normal desktop users — *almost nothing* in the way; product is
+  the high-speed awaitable ABI to wasm
+- **Where:** virtual Metal (QEMU/KVM) first → **virtio**; old ThinkPad
+  **T42p**/T43 as the fun path that keeps driver ops swappable
 
 ---
 

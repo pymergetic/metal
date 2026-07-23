@@ -37,3 +37,9 @@ cmake-build-*/
 
 # Accidental local ELF symlinks
 /nuttx.elf
+
+# West (archived Zephyr workspace; not used by EFI/BIOS Metal)
+.west/
+
+# wamrc temp stack-usage dumps (cwd leftovers)
+wamrc-su-*.su
