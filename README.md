@@ -161,6 +161,22 @@ before deciding. Tracked in [`docs/TODO.md`](docs/TODO.md).
 
 ---
 
+## Contributing
+
+This is already a wide surface (boot, runners, drivers, wasm, net, UI…) and it
+only gets bigger. **Help is welcome** — especially if you bring hardware,
+driver patches, guest apps, docs, or brutal API feedback.
+
+- Open an issue before a huge redesign (async ABI / scanout contracts matter)
+- Small, reviewable PRs beat epic branches
+- QEMU first is fine; iron reports are gold
+- Keep the vibe: thin host, awaitable APIs, exchangeable drivers — not “port Linux”
+
+No CLA drama beyond Apache-2.0. Be kind; the tree is experimental and we all
+know it.
+
+---
+
 ## License
 
 Metal is **[Apache License 2.0](LICENSE)** unless a file says otherwise.
