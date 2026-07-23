@@ -55,9 +55,33 @@ MetalEfiCpuCount (
 }
 
 STATIC
+BOOLEAN
+MetalMemTypeIsSystemRam (
+  UINT32  Type
+  )
+{
+  switch (Type) {
+    case EfiLoaderCode:
+    case EfiLoaderData:
+    case EfiBootServicesCode:
+    case EfiBootServicesData:
+    case EfiRuntimeServicesCode:
+    case EfiRuntimeServicesData:
+    case EfiConventionalMemory:
+    case EfiACPIReclaimMemory:
+    case EfiACPIMemoryNVS:
+    case EfiPersistentMemory:
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
+
+STATIC
 EFI_STATUS
-MetalLargestConventionalPages (
-  OUT UINTN  *LargestPages
+MetalScanMemoryMap (
+  OUT UINTN  *LargestConventionalPages,
+  OUT UINTN  *SystemRamPages
   )
 {
   EFI_STATUS             Status;
@@ -70,8 +94,9 @@ MetalLargestConventionalPages (
   UINTN                  Index;
   UINTN                  Count;
   UINTN                  Best;
+  UINTN                  RamPages;
 
-  if (LargestPages == NULL) {
+  if (LargestConventionalPages == NULL || SystemRamPages == NULL) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -93,17 +118,23 @@ MetalLargestConventionalPages (
     return Status;
   }
 
-  Best  = 0;
-  Count = MapSize / DescSize;
+  Best     = 0;
+  RamPages = 0;
+  Count    = MapSize / DescSize;
   for (Index = 0; Index < Count; Index++) {
     Entry = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)Map + Index * DescSize);
+    if (MetalMemTypeIsSystemRam (Entry->Type)) {
+      RamPages += Entry->NumberOfPages;
+    }
+
     if (Entry->Type == EfiConventionalMemory && Entry->NumberOfPages > Best) {
       Best = Entry->NumberOfPages;
     }
   }
 
   FreePool (Map);
-  *LargestPages = Best;
+  *LargestConventionalPages = Best;
+  *SystemRamPages           = RamPages;
   return EFI_SUCCESS;
 }
 
@@ -116,6 +147,7 @@ MetalMemBringUp (
   EFI_STATUS            Status;
   EFI_PHYSICAL_ADDRESS  ArenaPa;
   UINTN                 LargestPages;
+  UINTN                 SystemRamPages;
   UINTN                 ClaimPages;
   VOID                 *p;
   VOID                 *q;
@@ -124,9 +156,9 @@ MetalMemBringUp (
 
   mCpuCount = MetalEfiCpuCount ();
 
-  Status = MetalLargestConventionalPages (&LargestPages);
+  Status = MetalScanMemoryMap (&LargestPages, &SystemRamPages);
   if (EFI_ERROR (Status)) {
-    pm_metal_logf ("metal-mem: conventional scan failed: %r", Status);
+    pm_metal_logf ("metal-mem: memory map scan failed: %r", Status);
     return Status;
   }
 
@@ -162,6 +194,8 @@ MetalMemBringUp (
     pm_metal_log ("pm_metal_mem_init failed");
     return EFI_OUT_OF_RESOURCES;
   }
+
+  pm_metal_mem_set_phys_bytes ((size_t)SystemRamPages * EFI_PAGE_SIZE);
 
   if (pm_metal_stack_init ((unsigned)mCpuCount) != 0) {
     pm_metal_log ("metal-mem: stack init failed");
@@ -250,9 +284,30 @@ UefiMain (
     (VOID)pm_metal_esp_preload ("mods/tests/autotest");
     (VOID)pm_metal_esp_preload ("metal/net.conf");
     (VOID)pm_metal_esp_preload ("etc/hosts");
-    /* Kernel image + sig for early trust check under `-- init`. */
-    (VOID)pm_metal_esp_preload ("EFI/BOOT/BOOTX64.EFI");
-    (VOID)pm_metal_esp_preload ("EFI/BOOT/BOOTX64.EFI.sig");
+    /* Kernel image + sig for the executing artifact only (METAL-006). */
+    {
+      CONST CHAR8  *loaded;
+
+      loaded = pm_metal_esp_loaded_path ();
+      if (loaded != NULL) {
+        CHAR8  sig[160];
+        UINTN  n;
+
+        (VOID)pm_metal_esp_preload (loaded);
+        n = 0;
+        while (loaded[n] != '\0' && n + 5 < sizeof (sig)) {
+          sig[n] = loaded[n];
+          n++;
+        }
+
+        sig[n++] = '.';
+        sig[n++] = 's';
+        sig[n++] = 'i';
+        sig[n++] = 'g';
+        sig[n]   = '\0';
+        (VOID)pm_metal_esp_preload (sig);
+      }
+    }
     /* Optional guest packages staged under mods/apps/<name>/ — no app names here. */
     if (pm_metal_esp_preload_tree ("mods/apps") == 0) {
       pm_metal_log ("metal-esp: mods/apps cached");

@@ -12,6 +12,8 @@
 #include <Library/SynchronizationLib.h>
 
 STATIC volatile UINT32  mCreateTaskRr;
+STATIC unsigned         mAffinityCpu;
+STATIC INT32            mAffinityOn;
 
 STATIC
 unsigned
@@ -22,6 +24,10 @@ MetalPickCpu (
   unsigned  n;
   UINT32    ticket;
 
+  if (mAffinityOn) {
+    return mAffinityCpu;
+  }
+
   n = pm_metal_mem_n_cpus ();
   if (n <= 1) {
     return 0;
@@ -29,6 +35,87 @@ MetalPickCpu (
 
   ticket = InterlockedIncrement (&mCreateTaskRr);
   return (unsigned)((ticket - 1u) % n);
+}
+
+void
+pm_metal_task_affinity_set (
+  unsigned  cpu
+  )
+{
+  unsigned  n;
+
+  n = pm_metal_mem_n_cpus ();
+  if (n == 0) {
+    n = 1;
+  }
+
+  if (cpu >= n) {
+    cpu = 0;
+  }
+
+  mAffinityCpu = cpu;
+  mAffinityOn  = 1;
+}
+
+void
+pm_metal_task_affinity_clear (
+  VOID
+  )
+{
+  mAffinityOn = 0;
+}
+
+int
+pm_metal_task_affinity_get (
+  unsigned  *cpu_out
+  )
+{
+  if (!mAffinityOn) {
+    return 0;
+  }
+
+  if (cpu_out != NULL) {
+    *cpu_out = mAffinityCpu;
+  }
+
+  return 1;
+}
+
+void
+pm_metal_task_ref (
+  pm_metal_task_t  *task
+  )
+{
+  if (task == NULL) {
+    return;
+  }
+
+  (VOID)InterlockedIncrement (&task->refs);
+}
+
+void
+pm_metal_task_unref (
+  pm_metal_task_t  *task
+  )
+{
+  UINT32  prev;
+
+  if (task == NULL) {
+    return;
+  }
+
+  prev = InterlockedCompareExchange32 (&task->refs, 0, 0);
+  for (;;) {
+    if (prev == 0) {
+      return;
+    }
+
+    if (InterlockedCompareExchange32 (&task->refs, prev, prev - 1) == prev) {
+      return;
+    }
+
+    prev = InterlockedCompareExchange32 (&task->refs, 0, 0);
+  }
 }
 
 STATIC
@@ -107,6 +194,7 @@ pm_metal_task_new (
   ZeroMem (t, sizeof (*t));
   t->coro     = coro;
   t->status   = PM_METAL_PENDING;
+  t->refs     = 1; /* owner hold */
   coro->owner = t;
   return t;
 }
@@ -127,6 +215,8 @@ pm_metal_create_task (
   cpu = MetalPickCpu ();
   if (pm_metal_task_spawn (t, cpu) != 0) {
     t->coro->owner = NULL;
+    t->coro       = NULL;
+    t->refs       = 0;
     pm_metal_mem_free (t);
     return NULL;
   }
@@ -139,16 +229,42 @@ pm_metal_task_destroy (
   pm_metal_task_t  *task
   )
 {
+  UINT32  spins;
+
   if (task == NULL) {
     return;
   }
 
   /*
-    Finisher may still be inside task_step after MetalFinishTask woke us.
-    Wait until busy clears before freeing.
-  */
+   * Stop new posts after a cancel wake, wait for the stepper, then wait
+   * until inbox/timer holds drain (METAL-002). Help the system drain by
+   * polling runners while we wait.
+   */
+  task->cancelled = 1;
+  MemoryFence ();
+  if (task->doomed == 0) {
+    (VOID)pm_metal_task_spawn (task, task->cpu);
+  }
+
+  spins = 0;
   while (task->busy != 0) {
+    pm_metal_run_poll_all ();
     CpuPause ();
+    if (++spins > 1000000u) {
+      break;
+    }
+  }
+
+  task->doomed = 1;
+  MemoryFence ();
+
+  spins = 0;
+  while (InterlockedCompareExchange32 (&task->refs, 0, 0) > 1) {
+    pm_metal_run_poll_all ();
+    CpuPause ();
+    if (++spins > 1000000u) {
+      break;
+    }
   }
 
   if (task->coro != NULL) {
@@ -156,6 +272,17 @@ pm_metal_task_destroy (
     task->coro = NULL;
   }
 
+  /* Timers dropped by coro_close may have released holds — wait again. */
+  spins = 0;
+  while (InterlockedCompareExchange32 (&task->refs, 0, 0) > 1) {
+    pm_metal_run_poll_all ();
+    CpuPause ();
+    if (++spins > 1000000u) {
+      break;
+    }
+  }
+
+  task->refs = 0;
   pm_metal_mem_free (task);
 }
 
@@ -165,7 +292,13 @@ pm_metal_task_spawn (
   unsigned          cpu
   )
 {
+  int  rc;
+
   if (task == NULL) {
+    return -1;
+  }
+
+  if (task->doomed != 0) {
     return -1;
   }
 
@@ -177,12 +310,18 @@ pm_metal_task_spawn (
     task->status = PM_METAL_PENDING;
   }
 
-  return pm_metal_run_post_ex (
-           cpu,
-           PM_METAL_RUN_MSG_TASK,
-           0,
-           (uint64_t)(UINTN)(VOID *)task
-           );
+  pm_metal_task_ref (task);
+  rc = pm_metal_run_post_ex (
+         cpu,
+         PM_METAL_RUN_MSG_TASK,
+         0,
+         (uint64_t)(UINTN)(VOID *)task
+         );
+  if (rc != 0) {
+    pm_metal_task_unref (task);
+  }
+
+  return rc;
 }
 
 STATIC
@@ -347,7 +486,18 @@ pm_metal_await_task (
   pm_metal_task_t  *task
   )
 {
+  pm_metal_coro_t  *prev;
+
   if (self == NULL || task == NULL) {
+    return PM_METAL_ERROR;
+  }
+
+  /*
+   * Exclusive await (METAL-010): a second waiter is a deterministic error
+   * rather than a silent overwrite / lost wakeup.
+   */
+  prev = task->waiter;
+  if (prev != NULL && prev != self) {
     return PM_METAL_ERROR;
   }
 

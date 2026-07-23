@@ -31,6 +31,13 @@ struct pm_metal_task {
   /* MP: at most one looper steps a task; extra wakes set pending_wake. */
   volatile uint32_t  busy;
   volatile uint32_t  pending_wake;
+  /*
+   * Queue-safe lifetime (METAL-002/003): owner holds 1; each inbox TASK
+   * message and each armed timer holds 1. Destroy sets doomed, drains
+   * outstanding refs, then frees. Never free while refs > 1.
+   */
+  volatile uint32_t  refs;
+  volatile uint32_t  doomed;
 };
 
 /**
@@ -58,13 +65,48 @@ void pm_metal_task_destroy (
   );
 
 /**
-  Post TASK to `cpu`’s inbox. Tasks are not CPU-affine: any looper that
-  receives the pointer may step it.
+  Retain/release for inbox cookies and timer arms. Release never frees;
+  only pm_metal_task_destroy frees after refs drain to the owner hold.
+*/
+/* impl: efi|bios */
+void pm_metal_task_ref (
+  pm_metal_task_t  *task
+  );
+
+/* impl: efi|bios */
+void pm_metal_task_unref (
+  pm_metal_task_t  *task
+  );
+
+/**
+  Post TASK to `cpu`’s inbox (retains task for the queued message).
+  When a session affinity CPU is set (async guest), create_task pins
+  there; cross-CPU migrate via spawn is still allowed for non-doomed tasks.
 */
 /* impl: efi|bios */
 int pm_metal_task_spawn (
   pm_metal_task_t  *task,
   unsigned          cpu
+  );
+
+/**
+  While set, pm_metal_create_task places work on `cpu` instead of RR.
+  Used to pin a guest async session to one runner (METAL-004).
+  Pass width 0 / call clear to restore round-robin.
+*/
+/* impl: efi|bios */
+void pm_metal_task_affinity_set (
+  unsigned  cpu
+  );
+
+/* impl: efi|bios */
+void pm_metal_task_affinity_clear (
+  void
+  );
+
+/* impl: efi|bios */
+int pm_metal_task_affinity_get (
+  unsigned  *cpu_out
   );
 
 /** Drive root → leaf until park (WAITING) or terminal status. */

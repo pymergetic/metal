@@ -57,6 +57,7 @@ STATIC wasm_function_inst_t   mStepFn;
 STATIC pm_metal_async_handle_t mRootCoroH;
 STATIC pm_metal_async_handle_t mRootTaskH;
 STATIC INT32                  mActive;
+STATIC unsigned               mSessionCpu; /* METAL-004: pin guest work */
 
 /* Session perf window (serial once/sec while guest steps). */
 STATIC UINT64  mPerfWinStartUs;
@@ -745,7 +746,10 @@ pm_metal_async_create_task (
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  /* Round-robin across equal runners — no CPU0 Extrawurst. */
+  /*
+   * Session affinity pins create_task (and gather/wait_for children) onto
+   * mSessionCpu so a single runner owns the shared WAMR exec_env (METAL-004).
+   */
   t = pm_metal_create_task (c);
   if (t == NULL) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
@@ -1049,7 +1053,9 @@ pm_metal_async_session_begin (
   mStepFn     = (wasm_function_inst_t)step_fn;
   mRootCoroH  = PM_METAL_ASYNC_HANDLE_INVALID;
   mRootTaskH  = PM_METAL_ASYNC_HANDLE_INVALID;
+  mSessionCpu = pm_metal_mem_cpu ();
   mActive     = 1;
+  pm_metal_task_affinity_set (mSessionCpu);
   MetalAsyncPerfReset (pm_metal_time_mono_us ());
   return 0;
 }
@@ -1097,7 +1103,8 @@ pm_metal_async_session_pump (
   t0 = pm_metal_time_mono_us ();
   pm_metal_net_poll ();
   pm_metal_audio_poll ();
-  pm_metal_run_poll_all ();
+  /* Drain only the session runner — guest work must not step elsewhere. */
+  pm_metal_run_poll (mSessionCpu);
   t1 = pm_metal_time_mono_us ();
   mPerfPumpUsSum += t1 - t0;
   mPerfPumps++;
@@ -1188,6 +1195,7 @@ pm_metal_async_session_end (
   mExecEnv = NULL;
   mStepFn  = NULL;
   mActive  = 0;
+  pm_metal_task_affinity_clear ();
 }
 
 int

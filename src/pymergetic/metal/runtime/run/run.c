@@ -223,7 +223,11 @@ pm_metal_run_loop (
 
       case PM_METAL_RUN_MSG_TASK:
         if (msg.cookie != 0) {
-          (VOID)pm_metal_task_step ((pm_metal_task_t *)(VOID *)msg.cookie);
+          pm_metal_task_t  *task;
+
+          task = (pm_metal_task_t *)(VOID *)msg.cookie;
+          (VOID)pm_metal_task_step (task);
+          pm_metal_task_unref (task);
         }
 
         in->done_count++;
@@ -271,7 +275,9 @@ pm_metal_run_clear_inboxes (
     }
 
     while (MetalInboxPop (in, &msg) == 0) {
-      /* discard */
+      if (msg.op == PM_METAL_RUN_MSG_TASK && msg.cookie != 0) {
+        pm_metal_task_unref ((pm_metal_task_t *)(VOID *)msg.cookie);
+      }
     }
   }
 }
@@ -298,7 +304,11 @@ MetalRunPollDrain (
     switch (msg.op) {
       case PM_METAL_RUN_MSG_TASK:
         if (msg.cookie != 0) {
-          (VOID)pm_metal_task_step ((pm_metal_task_t *)(VOID *)msg.cookie);
+          pm_metal_task_t  *task;
+
+          task = (pm_metal_task_t *)(VOID *)msg.cookie;
+          (VOID)pm_metal_task_step (task);
+          pm_metal_task_unref (task);
         }
 
         in->done_count++;
