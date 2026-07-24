@@ -18,7 +18,7 @@ extern "C" {
   (PM_METAL_UTIL_FOURCC ('s', 't', 'k', 0) + (uint32_t)(k))
 
 /* Same size on every CPU. */
-#define PM_METAL_STACK_BYTES  (64u * 1024u)
+#define PM_METAL_STACK_BYTES  (128u * 1024u)
 
 /**
   Carve one MAP stack per CPU. Call after pm_metal_mem_init.

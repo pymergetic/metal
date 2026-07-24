@@ -118,6 +118,7 @@ In the shell: `help`, `tab doom`, `run doom`. More: [`docs/EFI.md`](docs/EFI.md)
 | [docs/LIBC_ASYNC.md](docs/LIBC_ASYNC.md) | Guest libc ↔ async ABI |
 | [docs/DOOM_ASYNC.md](docs/DOOM_ASYNC.md) | Doom package, pace, present path |
 | [docs/FAST_JIT.md](docs/FAST_JIT.md) | Fast JIT bring-up brief (not enabled yet) |
+| [docs/MICROPYTHON.md](docs/MICROPYTHON.md) | Kernel µPy — MAP blob, N runners, no GIL |
 | [docs/TRUST.md](docs/TRUST.md) | Mod signing / trust modes |
 | [docs/WASI.md](docs/WASI.md) | WASI preview1 surface |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | Load / process model |
@@ -154,10 +155,10 @@ box, celebrate; if it doesn’t, that’s still on-brand for this stage.
 
 ### Next: Python
 
-After Doom, next guest is **Python**. **Preferred path stays wasm + async
-Metal ABI** (same as Doom). Still open: **CPython vs MicroPython**, and whether
-a spike ever justifies a direct host embed instead — check memory/async fit
-before deciding. Tracked in [`docs/TODO.md`](docs/TODO.md).
+After Doom: **MicroPython in core** — one always-on MAP blob, N equal runners,
+`await` Metal (no Python GIL); shell `python`/`py` <script> spawns a **task** on
+that blob (not a new VM); host + guest share one engine. Design:
+[`docs/MICROPYTHON.md`](docs/MICROPYTHON.md).
 
 ---
 

@@ -974,9 +974,12 @@ MetalShellHandleAscii (
   if (ch == 0x7f || ch == 0x08) {
     CONST CHAR8  bs[3] = { '\b', ' ', '\b' };
 
-    pm_metal_console_com1_write (bs, 3);
-    (VOID)pm_metal_ui_input_backspace ();
-    MetalShellMarkInput ();
+    /* Empty line: do not erase the prompt on serial. */
+    if (pm_metal_ui_input_backspace () == 0) {
+      pm_metal_console_com1_write (bs, 3);
+      MetalShellMarkInput ();
+    }
+
     return;
   }
 
