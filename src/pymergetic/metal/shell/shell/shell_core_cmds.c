@@ -34,6 +34,37 @@ CoreFmtBytes (
   }
 }
 
+/** One decimal percent: "0.1%", "31.4%". tenths = round(part*1000/whole). */
+STATIC
+VOID
+CoreFmtPct1 (
+  CHAR8   *out,
+  UINTN    cap,
+  UINT64   part,
+  UINT64   whole
+  )
+{
+  UINT64  tenths;
+
+  if (cap == 0) {
+    return;
+  }
+
+  if (whole == 0) {
+    AsciiStrCpyS (out, cap, "?%");
+    return;
+  }
+
+  tenths = (part * 1000ull + whole / 2ull) / whole;
+  AsciiSPrint (
+    out,
+    cap,
+    "%Lu.%Lu%%",
+    tenths / 10ull,
+    tenths % 10ull
+    );
+}
+
 STATIC
 VOID
 CoreMemCmd (
@@ -50,9 +81,6 @@ CoreMemCmd (
   UINT64  stacks;
   UINT64  map_other;
   UINT32  n_cpus;
-  UINT32  pct_metal;
-  UINT32  pct_hole;
-  UINT32  pct_heap;
   CHAR8   pbuf[PM_METAL_UTIL_SIZE_FORMAT_MAX];
   CHAR8   a[PM_METAL_UTIL_SIZE_FORMAT_MAX];
   CHAR8   outb[PM_METAL_UTIL_SIZE_FORMAT_MAX];
@@ -61,7 +89,12 @@ CoreMemCmd (
   CHAR8   oth[PM_METAL_UTIL_SIZE_FORMAT_MAX];
   CHAR8   o[PM_METAL_UTIL_SIZE_FORMAT_MAX];
   CHAR8   h[PM_METAL_UTIL_SIZE_FORMAT_MAX];
-  CHAR8   line[112];
+  CHAR8   pct_metal[8];
+  CHAR8   pct_stacks[8];
+  CHAR8   pct_map[8];
+  CHAR8   pct_hole[8];
+  CHAR8   pct_heap[8];
+  CHAR8   line[128];
 
   (VOID)argc;
   (VOID)argv;
@@ -92,17 +125,11 @@ CoreMemCmd (
     outside = phys - arena;
   }
 
-  pct_metal = 0;
-  pct_hole  = 0;
-  pct_heap  = 0;
-  if (phys != 0) {
-    pct_metal = (UINT32)((arena * 100ull) / phys);
-  }
-
-  if (arena != 0) {
-    pct_hole = (UINT32)((hole * 100ull) / arena);
-    pct_heap = (UINT32)((heap * 100ull) / arena);
-  }
+  CoreFmtPct1 (pct_metal, sizeof (pct_metal), arena, phys);
+  CoreFmtPct1 (pct_stacks, sizeof (pct_stacks), stacks, arena);
+  CoreFmtPct1 (pct_map, sizeof (pct_map), map_other, arena);
+  CoreFmtPct1 (pct_hole, sizeof (pct_hole), hole, arena);
+  CoreFmtPct1 (pct_heap, sizeof (pct_heap), heap, arena);
 
   CoreFmtBytes (a, sizeof (a), arena);
   CoreFmtBytes (s, sizeof (s), stacks);
@@ -119,7 +146,7 @@ CoreMemCmd (
     AsciiSPrint (
       line,
       sizeof (line),
-      "  +-- metal   %a   (%u%%, claimed arena)",
+      "  +-- metal   %a   (%a, claimed arena)",
       a,
       pct_metal
       );
@@ -132,9 +159,10 @@ CoreMemCmd (
   AsciiSPrint (
     line,
     sizeof (line),
-    "  %a +-- stacks  %a   (%u x %a)",
+    "  %a +-- stacks  %a   (%a of arena, %u x %a)",
     (phys != 0) ? "|  " : "",
     s,
+    pct_stacks,
     n_cpus,
     one
     );
@@ -142,15 +170,16 @@ CoreMemCmd (
   AsciiSPrint (
     line,
     sizeof (line),
-    "  %a +-- map     %a   (virtio/DMA/...)",
+    "  %a +-- map     %a   (%a of arena, virtio/DMA/...)",
     (phys != 0) ? "|  " : "",
-    oth
+    oth,
+    pct_map
     );
   pm_metal_shell_out (line);
   AsciiSPrint (
     line,
     sizeof (line),
-    "  %a +-- hole    %a   (%u%% of arena)",
+    "  %a +-- hole    %a   (%a of arena)",
     (phys != 0) ? "|  " : "",
     o,
     pct_hole
@@ -159,7 +188,7 @@ CoreMemCmd (
   AsciiSPrint (
     line,
     sizeof (line),
-    "  %a `-- heap    %a   (%u%% of arena, TLSF)",
+    "  %a `-- heap    %a   (%a of arena, TLSF)",
     (phys != 0) ? "|  " : "",
     h,
     pct_heap

@@ -33,11 +33,12 @@ Details: `IO.md`, `LIBC_ASYNC.md`.
 
 ---
 
-## Next step — Python guest
+## Next step — MicroPython (core)
 
-- [ ] Spike **CPython vs MicroPython** on the **preferred** path: **wasm + async
-      Metal ABI** (like Doom). Only consider direct host embed if the spike
-      shows wasm can’t fit RAM/async; document the choice (README “Next: Python”)
+- [ ] Spike kernel µPy per [`MICROPYTHON.md`](MICROPYTHON.md): Python task =
+      Metal task, MAP blob, Metal awaitables, ≥2 overlapping tasks on multi-CPU,
+      no GIL; then bind/`metal.async`, C↔Py trampolines, signed zip (see integration
+      checklist in that doc)
 
 ## Optional / later
 
