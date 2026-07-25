@@ -8,13 +8,14 @@ PORT="${ROOT}/scripts/verify.d/port"
 
 usage() {
 	cat >&2 <<'EOF'
-usage: scripts/verify efi|bios|all|drift|host
+usage: scripts/verify efi|bios|all|drift|host|format
 
-  efi   — QEMU+OVMF smoke (boot tree + metal-boot: ready)
-  bios  — QEMU+SeaBIOS Multiboot2 smoke (same markers, handoff)
-  all   — drift check, host regressions, then efi, then bios
-  drift — BIOS/EFI dual-tree drift gate (no QEMU)
-  host  — host-side defect regressions (no QEMU; ASan when available)
+  efi    — QEMU+OVMF smoke (boot tree + metal-boot: ready)
+  bios   — QEMU+SeaBIOS Multiboot2 smoke (same markers, handoff)
+  all    — format check, drift check, host regressions, then efi, then bios
+  drift  — BIOS/EFI dual-tree drift gate (no QEMU)
+  host   — host-side defect regressions (no QEMU; ASan when available)
+  format — clang-format check (see scripts/format)
 EOF
 	exit 1
 }
@@ -26,6 +27,9 @@ shift
 
 case "${plat}" in
 -h | --help | help) usage ;;
+format)
+	exec "${ROOT}/scripts/format" check
+	;;
 drift)
 	exec "${PORT}/dual-tree-drift.sh"
 	;;
@@ -39,6 +43,7 @@ bios)
 	exec "${PORT}/bios/default.sh"
 	;;
 all)
+	"${ROOT}/scripts/format" check
 	"${PORT}/dual-tree-drift.sh"
 	"${ROOT}/scripts/verify.d/host/default.sh"
 	"${PORT}/efi/default.sh"

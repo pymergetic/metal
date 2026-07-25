@@ -31,8 +31,7 @@ typedef struct pm_metal_util_arena pm_metal_util_arena_t;
 #define PM_METAL_UTIL_ARENA_WASI_MODULE "pymergetic.metal.util.arena"
 
 #if defined(__wasm__)
-#define PM_METAL_UTIL_ARENA_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_ARENA_WASI_MODULE, name)
+#define PM_METAL_UTIL_ARENA_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_UTIL_ARENA_WASI_MODULE, name)
 /* Opaque host id — not a pointer into guest linear memory. */
 typedef uint32_t pm_metal_util_arena_handle_t;
 #endif
@@ -47,7 +46,7 @@ typedef uint32_t pm_metal_util_arena_handle_t;
  */
 #if defined(__wasm__)
 extern pm_metal_util_arena_handle_t pm_metal_util_arena_init(void *buf, size_t buf_len)
-	PM_METAL_UTIL_ARENA_IMPORT(pm_metal_util_arena_init);
+  PM_METAL_UTIL_ARENA_IMPORT(pm_metal_util_arena_init);
 #else
 pm_metal_util_arena_t *pm_metal_util_arena_init(void *buf, size_t buf_len);
 #endif
@@ -61,7 +60,7 @@ pm_metal_util_arena_t *pm_metal_util_arena_init(void *buf, size_t buf_len);
  */
 #if defined(__wasm__)
 extern void *pm_metal_util_arena_alloc(pm_metal_util_arena_handle_t arena, size_t size)
-	PM_METAL_UTIL_ARENA_IMPORT(pm_metal_util_arena_alloc);
+  PM_METAL_UTIL_ARENA_IMPORT(pm_metal_util_arena_alloc);
 #else
 void *pm_metal_util_arena_alloc(pm_metal_util_arena_t *arena, size_t size);
 #endif
@@ -75,7 +74,7 @@ void *pm_metal_util_arena_alloc(pm_metal_util_arena_t *arena, size_t size);
  */
 #if defined(__wasm__)
 extern void pm_metal_util_arena_free(pm_metal_util_arena_handle_t arena, void *ptr)
-	PM_METAL_UTIL_ARENA_IMPORT(pm_metal_util_arena_free);
+  PM_METAL_UTIL_ARENA_IMPORT(pm_metal_util_arena_free);
 #else
 void pm_metal_util_arena_free(pm_metal_util_arena_t *arena, void *ptr);
 #endif
@@ -88,7 +87,7 @@ void pm_metal_util_arena_free(pm_metal_util_arena_t *arena, void *ptr);
  */
 #if defined(__wasm__)
 extern size_t pm_metal_util_arena_used(pm_metal_util_arena_handle_t arena)
-	PM_METAL_UTIL_ARENA_IMPORT(pm_metal_util_arena_used);
+  PM_METAL_UTIL_ARENA_IMPORT(pm_metal_util_arena_used);
 #else
 size_t pm_metal_util_arena_used(const pm_metal_util_arena_t *arena);
 #endif

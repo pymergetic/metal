@@ -22,15 +22,13 @@ extern "C" {
 
 #if defined(__wasm__)
 #include "pymergetic/metal/wasi.h"
-#define PM_METAL_HOST_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_HOST_WASI_MODULE, name)
+#define PM_METAL_HOST_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_HOST_WASI_MODULE, name)
 
 /** Copy local hostname into out. Returns 0, or -1. */
 extern int pm_metal_host_name_get(char *out, size_t cap)
-	PM_METAL_HOST_IMPORT(pm_metal_host_name_get);
+  PM_METAL_HOST_IMPORT(pm_metal_host_name_get);
 /** Set local hostname. Returns 0, or -1. */
-extern int pm_metal_host_name_set(const char *name)
-	PM_METAL_HOST_IMPORT(pm_metal_host_name_set);
+extern int pm_metal_host_name_set(const char *name) PM_METAL_HOST_IMPORT(pm_metal_host_name_set);
 #else
 int pm_metal_host_name_get(char *out, size_t cap);
 int pm_metal_host_name_set(const char *name);

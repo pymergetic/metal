@@ -3,11 +3,12 @@
 # pm_suite_expect_* against OUT (stdout string) or a log file.
 #
 # Guest paths (symmetric package): /mods/tests/<name>.wasm, /mods/apps/<name>.wasm
+# Kernel MicroPython is core (metal/py), not a guest package.
 #
 # Slices (every platform default must cover these where the port has support):
 #   basic t0/t1 | utils t3 | pid t4 | multimod t9←t8 | pthread t23
-#   crypto t31 | process+sockets | python --version + print(1)
-#   tmpfs / populate / proc   (linux + zephyr; not yet nuttx)
+#   crypto t31 | process+sockets
+#   tmpfs / populate / proc   (where the port supports them)
 # shellcheck shell=bash
 
 # Core scripted set — basenames under /mods/tests/.
@@ -22,34 +23,8 @@ PM_SUITE_CORE_MODS=(
 	t31_crypto.wasm
 )
 
-# Zephyr firmware markers — same list for qemu + native_sim.
-PM_SUITE_ZEPHYR_MARKERS=(
-	"runtime: target=zephyr"
-	"verify: basic exit=0"
-	"verify: utils exit=0"
-	"[ERROR] t3_util_native: at/above floor (expected)"
-	"t31_crypto: aead round-trip ok"
-	"verify: crypto exit=0"
-	"t23_pthread: worker wrote 42"
-	"verify: tmpfs exit=0"
-	"verify: tmpfs-indep next open fail is expected"
-	"t15_tmpfs_read_other: open failed (expected)"
-	"verify: tmpfs-indep expected-fail ok"
-	"verify: populate exit=0"
-	"verify: proc exit=0"
-	"verify: multimod exit=0"
-	"verify: process t4_getpid"
-	"verify: process killing t5_spin (expected Exception follows)"
-	"verify: process t5_spin killed"
-	"verify: sockets tcp/udp/ipv6/dns ok"
-	"Python 3.14"
-	"verify: python version ok"
-	"pm-test: ok"
-	"verify: python exit=0"
-	"verify: scripted exit=0"
-)
 
-# Minimal hostdir VFS root. Guest content (mods, python stdlib, …) comes from
+# Minimal hostdir VFS root. Guest content (mods, …) comes from
 # embedded lz4 packages applied at boot (pkg_apply_all) — not hostdir install.
 # (PM_SUITE_CORE_MODS is only the default *run* list, not the package set.)
 pm_suite_stage_package() {
@@ -61,7 +36,7 @@ pm_suite_stage_package() {
 pm_suite_stage_mods() {
 	pm_suite_stage_package "$1"
 }
-# Expect scripted-core markers in OUT (linux/nuttx text logs).
+# Expect scripted-core markers in OUT (text logs).
 # $1 = path basename pattern for exit lines: "t0_hello" (always long names).
 pm_suite_expect_scripted() {
 	local t0b="${1:-t0_hello}" t1b="${2:-t1_read}" t3b="${3:-t3_util_native}"
@@ -137,23 +112,3 @@ pm_suite_expect_scripted_no_net() {
 	pm_expect_re - "${t23b}\\.wasm: exit=0" "t23 did not exit 0"
 }
 
-pm_suite_expect_python() {
-	local exit_base="${1:-python}"
-	pm_expect_re - "Python 3\\.14" "missing Python 3.14 version string"
-	pm_expect_re - "${exit_base}\\.wasm: exit=0" "python did not exit 0"
-	pm_expect_re - $'^1\r?$' "missing python print(1) output"
-	pm_expect - "pm-test: ok" "missing pm-test.py ok marker"
-}
-
-pm_suite_expect_zephyr_log() {
-	local log="$1" m
-	for m in "${PM_SUITE_ZEPHYR_MARKERS[@]}"; do
-		pm_expect "${log}" "${m}" "missing marker: ${m}"
-	done
-	# QEMU serial often ends lines with CR (`1\r`); allow optional CR.
-	pm_expect_re "${log}" $'^1\r?$' "missing python print(1) on its own line"
-	if grep -qxF -- "te" "${log}"; then
-		echo "FAIL: O_TRUNC left populate tail in tmpfs read" >&2
-		exit 1
-	fi
-}

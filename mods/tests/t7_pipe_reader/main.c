@@ -12,13 +12,13 @@
 
 int main(void)
 {
-	char line[256];
+  char line[256];
 
-	if (fgets(line, sizeof(line), stdin)) {
-		printf("t7_pipe_reader: got: %s", line);
-	} else {
-		printf("t7_pipe_reader: got: (nothing)\n");
-	}
-	fflush(stdout);
-	return 0;
+  if (fgets(line, sizeof(line), stdin)) {
+    printf("t7_pipe_reader: got: %s", line);
+  } else {
+    printf("t7_pipe_reader: got: (nothing)\n");
+  }
+  fflush(stdout);
+  return 0;
 }

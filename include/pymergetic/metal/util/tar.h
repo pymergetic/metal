@@ -50,8 +50,7 @@
 #define PM_METAL_UTIL_TAR_WASI_MODULE "pymergetic.metal.util.tar"
 
 #if defined(__wasm__)
-#define PM_METAL_UTIL_TAR_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_TAR_WASI_MODULE, name)
+#define PM_METAL_UTIL_TAR_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_UTIL_TAR_WASI_MODULE, name)
 #endif
 
 /* ustar's own fixed name-field width (incl. NUL) — see file header re:
@@ -63,7 +62,7 @@
  * call iter_close() when done (or before reusing). Never interpret `id`.
  */
 typedef struct pm_metal_util_tar_iter {
-	uint32_t id;
+  uint32_t id;
 } pm_metal_util_tar_iter_t;
 
 /*
@@ -77,7 +76,7 @@ typedef struct pm_metal_util_tar_iter {
  */
 #if defined(__wasm__)
 extern void pm_metal_util_tar_iter_init(pm_metal_util_tar_iter_t *it, const void *buf, size_t len)
-	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_init);
+  PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_init);
 #else
 void pm_metal_util_tar_iter_init(pm_metal_util_tar_iter_t *it, const void *buf, size_t len);
 #endif
@@ -94,7 +93,7 @@ void pm_metal_util_tar_iter_init(pm_metal_util_tar_iter_t *it, const void *buf, 
  */
 #if defined(__wasm__)
 extern int pm_metal_util_tar_iter_next(pm_metal_util_tar_iter_t *it)
-	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_next);
+  PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_next);
 #else
 int pm_metal_util_tar_iter_next(pm_metal_util_tar_iter_t *it);
 #endif
@@ -110,7 +109,7 @@ int pm_metal_util_tar_iter_next(pm_metal_util_tar_iter_t *it);
  */
 #if defined(__wasm__)
 extern int pm_metal_util_tar_iter_name(const pm_metal_util_tar_iter_t *it, char *out, size_t cap)
-	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_name);
+  PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_name);
 #else
 int pm_metal_util_tar_iter_name(const pm_metal_util_tar_iter_t *it, char *out, size_t cap);
 #endif
@@ -124,7 +123,7 @@ int pm_metal_util_tar_iter_name(const pm_metal_util_tar_iter_t *it, char *out, s
  */
 #if defined(__wasm__)
 extern uint64_t pm_metal_util_tar_iter_size(const pm_metal_util_tar_iter_t *it)
-	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_size);
+  PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_size);
 #else
 uint64_t pm_metal_util_tar_iter_size(const pm_metal_util_tar_iter_t *it);
 #endif
@@ -138,7 +137,7 @@ uint64_t pm_metal_util_tar_iter_size(const pm_metal_util_tar_iter_t *it);
  */
 #if defined(__wasm__)
 extern int pm_metal_util_tar_iter_is_dir(const pm_metal_util_tar_iter_t *it)
-	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_is_dir);
+  PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_is_dir);
 #else
 int pm_metal_util_tar_iter_is_dir(const pm_metal_util_tar_iter_t *it);
 #endif
@@ -157,7 +156,7 @@ int pm_metal_util_tar_iter_is_dir(const pm_metal_util_tar_iter_t *it);
  */
 #if defined(__wasm__)
 extern int pm_metal_util_tar_iter_read(pm_metal_util_tar_iter_t *it, void *dst, size_t dst_cap)
-	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_read);
+  PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_read);
 #else
 int pm_metal_util_tar_iter_read(pm_metal_util_tar_iter_t *it, void *dst, size_t dst_cap);
 #endif
@@ -171,7 +170,7 @@ int pm_metal_util_tar_iter_read(pm_metal_util_tar_iter_t *it, void *dst, size_t 
  */
 #if defined(__wasm__)
 extern void pm_metal_util_tar_iter_close(pm_metal_util_tar_iter_t *it)
-	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_close);
+  PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_iter_close);
 #else
 void pm_metal_util_tar_iter_close(pm_metal_util_tar_iter_t *it);
 #endif
@@ -181,7 +180,7 @@ void pm_metal_util_tar_iter_close(pm_metal_util_tar_iter_t *it);
  * releases the slot.
  */
 typedef struct pm_metal_util_tar_writer {
-	uint32_t id;
+  uint32_t id;
 } pm_metal_util_tar_writer_t;
 
 /*
@@ -193,7 +192,7 @@ typedef struct pm_metal_util_tar_writer {
  */
 #if defined(__wasm__)
 extern void pm_metal_util_tar_writer_init(pm_metal_util_tar_writer_t *w, void *buf, size_t cap)
-	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_writer_init);
+  PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_writer_init);
 #else
 void pm_metal_util_tar_writer_init(pm_metal_util_tar_writer_t *w, void *buf, size_t cap);
 #endif
@@ -210,12 +209,16 @@ void pm_metal_util_tar_writer_init(pm_metal_util_tar_writer_t *w, void *buf, siz
  * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
-extern int pm_metal_util_tar_writer_put_header(pm_metal_util_tar_writer_t *w, const char *name,
-						uint64_t size, int is_dir)
-	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_writer_put_header);
+extern int pm_metal_util_tar_writer_put_header(pm_metal_util_tar_writer_t *w,
+                                               const char                 *name,
+                                               uint64_t                    size,
+                                               int                         is_dir)
+  PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_writer_put_header);
 #else
-int pm_metal_util_tar_writer_put_header(pm_metal_util_tar_writer_t *w, const char *name, uint64_t size,
-					 int is_dir);
+int pm_metal_util_tar_writer_put_header(pm_metal_util_tar_writer_t *w,
+                                        const char                 *name,
+                                        uint64_t                    size,
+                                        int                         is_dir);
 #endif
 
 /*
@@ -232,11 +235,14 @@ int pm_metal_util_tar_writer_put_header(pm_metal_util_tar_writer_t *w, const cha
  * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
-extern int pm_metal_util_tar_writer_put_data(pm_metal_util_tar_writer_t *w, const void *src,
-					      size_t src_len)
-	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_writer_put_data);
+extern int pm_metal_util_tar_writer_put_data(pm_metal_util_tar_writer_t *w,
+                                             const void                 *src,
+                                             size_t                      src_len)
+  PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_writer_put_data);
 #else
-int pm_metal_util_tar_writer_put_data(pm_metal_util_tar_writer_t *w, const void *src, size_t src_len);
+int pm_metal_util_tar_writer_put_data(pm_metal_util_tar_writer_t *w,
+                                      const void                 *src,
+                                      size_t                      src_len);
 #endif
 
 /*
@@ -249,12 +255,12 @@ int pm_metal_util_tar_writer_put_data(pm_metal_util_tar_writer_t *w, const void 
  * impl: wasi import — src/pymergetic/metal/util/tar.c (wasm32 only)
  */
 #if defined(__wasm__)
-extern int pm_metal_util_tar_writer_put(pm_metal_util_tar_writer_t *w, const char *name, int is_dir,
-					 const void *src, size_t src_len)
-	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_writer_put);
+extern int pm_metal_util_tar_writer_put(
+  pm_metal_util_tar_writer_t *w, const char *name, int is_dir, const void *src, size_t src_len)
+  PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_writer_put);
 #else
-int pm_metal_util_tar_writer_put(pm_metal_util_tar_writer_t *w, const char *name, int is_dir,
-				  const void *src, size_t src_len);
+int pm_metal_util_tar_writer_put(
+  pm_metal_util_tar_writer_t *w, const char *name, int is_dir, const void *src, size_t src_len);
 #endif
 
 /*
@@ -270,7 +276,7 @@ int pm_metal_util_tar_writer_put(pm_metal_util_tar_writer_t *w, const char *name
  */
 #if defined(__wasm__)
 extern int64_t pm_metal_util_tar_writer_finish(pm_metal_util_tar_writer_t *w)
-	PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_writer_finish);
+  PM_METAL_UTIL_TAR_IMPORT(pm_metal_util_tar_writer_finish);
 #else
 int64_t pm_metal_util_tar_writer_finish(pm_metal_util_tar_writer_t *w);
 #endif

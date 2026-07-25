@@ -11,8 +11,8 @@ Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
 
 ![Metal boot UI](screenshots/ui-boot.png)
 
-- **Apps = `wasm32` guests** — `await` Metal APIs (present / net / FS / …) from
-  `guest_step` via WASI-style imports
+- **Apps = `wasm32` mods** — `on_load` registers funcs/cmds; `await` Metal APIs
+  via WASI-style imports ([`docs/MODS.md`](docs/MODS.md))
 - **Host = thin async runtime** — UEFI or BIOS/PXE; **one runner per CPU**;
   exchangeable drivers; WAMR interp / AOT / (soon) JIT
 - **Not** a hosted OS, **not** sync syscalls on a kernel
@@ -64,8 +64,8 @@ More filenames: [`screenshots/README.md`](screenshots/README.md).
   signed wasm/AOT (and WAD/etc.) from the PXE/HTTP seed server; verify `.sig`
 - **Async host** — Python-shaped coroutines (`await`, tasks, sleep/deadlines);
   **N CPUs → N equal runners** (FCFS, no CPU0 Extrawurst)
-- **Wasm + async (preferred)** — guests `await` Metal imports from `guest_step`;
-  `run` / `tab` / embed when already local
+- **Wasm + async (preferred)** — mods `await` Metal imports from registered
+  callables; shell `run` / `tab` / bare cmd invoke processes
 - **Gfx** — shadow FB + scanout backends (Bochs/QEMU, VESA, **Radeon RV370** GART+CP on ThinkPad T43, i915 sample); status tray with live present FPS
 - **Net** — `lo` + `eth0`…; virtio-net + Broadcom **bge**; DHCPv4/v6, DNS, NTP, ping, TFTP/HTTP
 - **I/O** — virtio-blk / IDE, virtio-snd → AC97 → null; PS/2 + tablet input

@@ -5,23 +5,21 @@
   PM_METAL_SHELL_CMD / PM_METAL_SHELL_CMDS). Bounds come from the port
   linker script (PROVIDE_HIDDEN __pm_metal_shell_cmds_{start,end}).
 **/
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
 #include <pymergetic/metal/shell/shell_cmd.h>
+#include <pymergetic/metal/shell/shell/shell.h>
 
-#include <Uefi.h>
-#include <Library/BaseLib.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/PrintLib.h>
+extern const pm_metal_shell_cmd_table_t __pm_metal_shell_cmds_start[];
+extern const pm_metal_shell_cmd_table_t __pm_metal_shell_cmds_end[];
 
-extern CONST pm_metal_shell_cmd_table_t  __pm_metal_shell_cmds_start[];
-extern CONST pm_metal_shell_cmd_table_t  __pm_metal_shell_cmds_end[];
+static const pm_metal_shell_cmd_t *mCmds[PM_METAL_SHELL_CMD_MAX];
+static uint32_t                    mCmdCount;
 
-STATIC CONST pm_metal_shell_cmd_t  *mCmds[PM_METAL_SHELL_CMD_MAX];
-STATIC UINT32                       mCmdCount;
-
-void
-pm_metal_shell_cmd_register (
-  CONST pm_metal_shell_cmd_t  *cmd
-  )
+void pm_metal_shell_cmd_register(const pm_metal_shell_cmd_t *cmd)
 {
   if (cmd == NULL || cmd->name == NULL || cmd->fn == NULL) {
     return;
@@ -34,53 +32,40 @@ pm_metal_shell_cmd_register (
   mCmds[mCmdCount++] = cmd;
 }
 
-void
-pm_metal_shell_cmd_help (
-  VOID
-  )
+void pm_metal_shell_cmd_help(void)
 {
-  UINT32  i;
+  uint32_t i;
 
-  pm_metal_shell_out ("commands:");
+  pm_metal_shell_out("commands:");
   for (i = 0; i < mCmdCount; i++) {
-    CHAR8   line[160];
-    CHAR8   namepad[13];
-    UINTN   n;
-    UINTN   p;
+    char      line[160];
+    char      namepad[13];
+    uintptr_t n;
+    uintptr_t p;
 
-    /* PrintLib has no %-width for %a — pad the name by hand. */
-    n = AsciiStrLen (mCmds[i]->name);
+    /* PrintLib has no %-width for %s — pad the name by hand. */
+    n = strlen(mCmds[i]->name);
     if (n > 12u) {
       n = 12u;
     }
 
-    CopyMem (namepad, mCmds[i]->name, n);
+    memcpy(namepad, mCmds[i]->name, n);
     for (p = n; p < 12u; p++) {
       namepad[p] = ' ';
     }
 
     namepad[12] = '\0';
     if (mCmds[i]->help != NULL) {
-      AsciiSPrint (
-        line,
-        sizeof (line),
-        "  %a %a",
-        namepad,
-        mCmds[i]->help
-        );
+      snprintf(line, sizeof(line), "  %s %s", namepad, mCmds[i]->help);
     } else {
-      AsciiSPrint (line, sizeof (line), "  %a", namepad);
+      snprintf(line, sizeof(line), "  %s", namepad);
     }
 
-    pm_metal_shell_out (line);
+    pm_metal_shell_out(line);
   }
 }
 
-STATIC
-INT32
-ShellIsSpace (
-  CHAR8  c
-  )
+static int32_t ShellIsSpace(char c)
 {
   return (c == ' ' || c == '\t' || c == '\r' || c == '\n') ? 1 : 0;
 }
@@ -90,17 +75,11 @@ ShellIsSpace (
  * Supports "double quotes" and \\ \" escapes inside quotes.
  * Returns argc, or -1 on overflow / unmatched quote.
  */
-STATIC
-INT32
-ShellSplitArgv (
-  CHAR8   *buf,
-  CHAR8  **argv,
-  UINT32   argv_max
-  )
+static int32_t ShellSplitArgv(char *buf, char **argv, uint32_t argv_max)
 {
-  CHAR8   *p;
-  CHAR8   *out;
-  UINT32   argc;
+  char    *p;
+  char    *out;
+  uint32_t argc;
 
   if (buf == NULL || argv == NULL || argv_max == 0) {
     return -1;
@@ -109,7 +88,7 @@ ShellSplitArgv (
   p    = buf;
   argc = 0;
   while (*p != '\0') {
-    while (ShellIsSpace (*p)) {
+    while (ShellIsSpace(*p)) {
       p++;
     }
 
@@ -145,11 +124,11 @@ ShellSplitArgv (
       continue;
     }
 
-    while (*p != '\0' && !ShellIsSpace (*p)) {
+    while (*p != '\0' && !ShellIsSpace(*p)) {
       *out++ = *p++;
     }
 
-    if (ShellIsSpace (*p)) {
+    if (ShellIsSpace(*p)) {
       *out = '\0';
       p++;
     } else {
@@ -157,31 +136,31 @@ ShellSplitArgv (
     }
   }
 
-  return (INT32)argc;
+  return (int32_t)argc;
 }
 
-void
-pm_metal_shell_cmd_dispatch (
-  CONST CHAR8  *line
-  )
+void pm_metal_shell_cmd_dispatch(const char *line)
 {
-  CHAR8   buf[160];
-  CHAR8  *argv[PM_METAL_SHELL_ARGV_MAX];
-  INT32   argc;
-  UINTN   i;
+  char      buf[PM_METAL_SHELL_LINE_MAX];
+  char     *argv[PM_METAL_SHELL_ARGV_MAX];
+  int32_t   argc;
+  uintptr_t i;
 
   if (line == NULL) {
     return;
   }
 
-  if (AsciiStrCpyS (buf, sizeof (buf), line) != RETURN_SUCCESS) {
-    pm_metal_shell_out ("line too long");
-    return;
+  {
+    int32_t n = snprintf(buf, sizeof(buf), "%s", line);
+    if (n < 0 || (size_t)n >= sizeof(buf)) {
+      pm_metal_shell_out("line too long");
+      return;
+    }
   }
 
-  argc = ShellSplitArgv (buf, argv, PM_METAL_SHELL_ARGV_MAX);
+  argc = ShellSplitArgv(buf, argv, PM_METAL_SHELL_ARGV_MAX);
   if (argc < 0) {
-    pm_metal_shell_out ("parse error (quote/too many args)");
+    pm_metal_shell_out("parse error (quote/too many args)");
     return;
   }
 
@@ -190,37 +169,34 @@ pm_metal_shell_cmd_dispatch (
   }
 
   for (i = 0; i < mCmdCount; i++) {
-    if (AsciiStrCmp (argv[0], mCmds[i]->name) == 0) {
-      mCmds[i]->fn (argc, argv);
+    if (strcmp(argv[0], mCmds[i]->name) == 0) {
+      mCmds[i]->fn(argc, argv);
       return;
     }
   }
 
   {
-    CHAR8  msg[96];
+    char msg[96];
 
-    AsciiSPrint (msg, sizeof (msg), "unknown: %a  (try help)", argv[0]);
-    pm_metal_shell_out (msg);
+    snprintf(msg, sizeof(msg), "unknown: %s  (try help)", argv[0]);
+    pm_metal_shell_out(msg);
   }
 }
 
-void
-pm_metal_shell_cmds_install (
-  VOID
-  )
+void pm_metal_shell_cmds_install(void)
 {
-  CONST pm_metal_shell_cmd_table_t  *t;
+  const pm_metal_shell_cmd_table_t *t;
 
   mCmdCount = 0;
   for (t = __pm_metal_shell_cmds_start; t < __pm_metal_shell_cmds_end; t++) {
-    UINT32  i;
+    uint32_t i;
 
     if (t->cmds == NULL || t->count == 0) {
       continue;
     }
 
     for (i = 0; i < t->count; i++) {
-      pm_metal_shell_cmd_register (&t->cmds[i]);
+      pm_metal_shell_cmd_register(&t->cmds[i]);
     }
   }
 }

@@ -4,7 +4,7 @@ Living design for the freestanding UEFI target. Grown in micro-slices:
 boot → init → library → WAMR host surface → machine → cut line.
 
 See [LAYERS.md](LAYERS.md) · [src/efi/README.md](../src/efi/README.md).
-Hosted ports live only on `archive/multi-host-linux-zephyr-nuttx`.
+Hosted ports live only on `archive/multi-host`.
 
 **Constraint (every runtime slice):** after handover, the hot path never
 touches UEFI Boot Services. Allocate, print, time, and I/O go through
@@ -188,7 +188,7 @@ Shape it for **single-threaded bring-up first**, then grow.
 ### Metal runtime on top (later — restore from archive)
 
 Hosted-era `src/common/…/{runtime,memory,mount,port,net,app,util}` is **not**
-on this branch; it lives on `archive/multi-host-linux-zephyr-nuttx`. After the
+on this branch; it lives on `archive/multi-host`. After the
 WAMR platform layer works, cherry-pick / restore those modules and re-bind them
 under `src/efi/` (contracts documented on the archive as RUNTIME / MEMORY /
 MOUNT / WASI).
@@ -234,12 +234,11 @@ Primary bring-up machine: **QEMU + OVMF**, virt-class device set as we adopt vir
   Target ABI:
   Metal async I/O + sync freestanding libc — **not** WASI as product surface
   (`docs/LIBC_ASYNC.md`). UI/async/input are handle-based. Guest await is real
-  resume: export `pm_metal_guest_step` + host coro trampoline.
-- **Process:** host fake-process table (`guest/process/`) anchors each live wasm
-  guest; optional UI attachment (tab / fullscreen). Shell `run`/`tab`/`ps`.
-  Guest imports `pymergetic.metal.process` (`self`/`info`/`list`/…) plus WASI
-  `PID=<id>` env. Async tasks stay under the process. v1: one live guest
-  (global async session). See `docs/IO.md` § Process.
+  resume via `async.h` (host ≈ guest on normal runners).
+- **Mods / process:** [`docs/MODS.md`](MODS.md) — loader calls `on_load` /
+  `on_unload`; mod registers funcs/cmds; **process = command runs a function
+  in a task**. Still one live call-in session at a time. µPy binds same
+  registries next. See `docs/IO.md` § Process.
 - Proofs: PE-embedded **`hello`** / **`ui_hello`** / **`async_sleep`** /
   **`async_fs`** / **`async_time`** / **`async_net`** / **`async_audio`** /
   **`async_blk`**.
@@ -263,7 +262,7 @@ Primary bring-up machine: **QEMU + OVMF**, virt-class device set as we adopt vir
 
 - Full suite (util natives, multi-module, HTTPS)
 - Dynamic PCI / non-virtio device zoo (virtio-net/snd are intentional fixed probes)
-- Restoring hosted linux/zephyr/nuttx ports on this branch
+- Restoring hosted ports on this branch
 
 ### Build & verify (human signal)
 

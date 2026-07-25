@@ -10,7 +10,7 @@
 
 int main(void)
 {
-	printf("hello through the pipe\n");
-	fflush(stdout);
-	return 0;
+  printf("hello through the pipe\n");
+  fflush(stdout);
+  return 0;
 }

@@ -27,7 +27,7 @@ Related: [`COOP_MEMORY.md`](COOP_MEMORY.md) · [`IO.md`](IO.md) · [`LIBC_ASYNC.
 | Trust | Same story as mods ([`TRUST.md`](TRUST.md)): verify `.sig` **before** zip on `sys.path`; **fail closed** on bad/missing when enforce |
 | Dual “kernel + wasm” Python engines | **No** — one blob, many callers |
 | Scheduler identity | **Python task = Metal task** — FCFS on N equal runners; no private Python loop, no CPU0 pin |
-| Interpreter lifetime | **One always-on µPy blob** — shell/`python` does **not** start a new VM; it spawns a **new task** on that machinery |
+| Interpreter lifetime | **One always-on µPy blob** — shell/`py` does **not** start a new VM; it spawns a **new task** on that machinery |
 | Ports | Same matrix as the rest of Metal — **spike EFI x64**, then BIOS/i386 like every other feature |
 
 Image rollouts already refresh firmware; independent VM packages buy little.
@@ -51,7 +51,7 @@ Python tasks      ──metal.* / await─────────────�
 
 | Direction | Host | Guest (wasm) |
 |-----------|------|----------------|
-| Start / eval / create Python task | `pm_metal_py_*` C API (shell `python` / `py`, boot hooks) | Same shapes as **wasm imports** (`pymergetic.metal.py`) |
+| Start / eval / create Python task | `pm_metal_py_*` C API (shell `py`, boot hooks) | Same shapes as **wasm imports** (`pymergetic.metal.py`) |
 | Python → C | Bind table → `pm_metal_*` / loaded native | N/A inside VM — guest uses dual-ABI for those ops |
 | C → Python | `pm_metal_py_call` / `py_call_async` trampoline | Same via `pymergetic.metal.py` call imports |
 | Results / awaits | Metal handles both ways | Guest parks on handle like any other async op |
@@ -60,16 +60,19 @@ Guests do **not** embed their own µPy. They ask the core engine to run script /
 spawn a Python task (bytes or path + args), optionally `await` a handle.
 Host shell and C do the same without the import trampoline.
 
-### Shell: `python` / `py` <script>
+### Shell: `py`
 
 The interpreter blob is **brought up with the OS** (or on first use) and **stays
 up** — same MAP machinery, binds, zip mount, GC spaces.
 
 ```text
-python myscript.py          # or: py myscript.py
+py myscript.py                     # script path
+py -c 'print(1)'                   # snippet (shell quotes supported)
+py -f c_py_demo.add 2 3            # C→Py sync call (2 ints → print i32)
+py -f c_py_demo.blink 50000        # C→Py async call (1 int → shell job)
         │
         ▼
-pm_metal_py_run_script(path, argv…)
+pm_metal_py_run_script / run_str / fn_bind+call*
         │
         ▼
 create Metal/Python task on the existing blob  →  schedule on any runner
@@ -80,13 +83,13 @@ script runs (may await metal.*); shell may await the task handle or detach
 
 | Rule | Lock |
 |------|------|
-| VM | **One** blob — never `python` ⇒ new interpreter process |
-| Unit of work | **New Python task** (= Metal task) for that script |
+| VM | **One** blob — never `py` ⇒ new interpreter process |
+| Unit of work | **New Python task** (= Metal task) for that script / `-c` / async `-f` |
 | Concurrent | Many scripts / REPL / C→Py calls can be in flight on the same blob |
-| REPL | `python` with no script (or `py -i`) = interactive task on the same blob |
+| REPL | `py` with no script (or `py -i`) = interactive task on the same blob |
 | Failures | One script’s exception/OOM does not tear down the interpreter |
 
-Spike v1 can be host-only (`python` / `py`); guest import is the same ABI, second binding.
+Spike v1 can be host-only (`py`); guest import is the same ABI, second binding.
 
 ---
 
@@ -115,7 +118,7 @@ Conceptual row (shape, not final typedef):
 
 | Field | Role |
 |-------|------|
-| `mod` / `name` | Python path, e.g. `metal.async` / `sleep_us` |
+| `mod` / `name` | Python path, e.g. `metal.aio` / `sleep_us` |
 | `fn` | C `pm_metal_*` (or thin wrapper / ext trampoline) |
 | `class` | **`sync`** \| **`async`** \| **`façade`** \| **`omit`** (omit = do not bind) |
 | `sig` | Arg/result mapping (ints, buffers, handles — Metal types, not inventing a second ABI) |
@@ -135,31 +138,81 @@ Python callables — callbacks, policy hooks, scripted orchestration — with th
 **same** sync/async discipline as Py → C. Not a blocking “run the interpreter until
 the function returns” on a Metal runner when the Python side needs to `await`.
 
+**Also:** C call sites should feel like **normal functions**, not a bag of
+`py_call(ref, argc, …)` — via small **typed natural wrappers** over the trampoline.
+
 ```text
 pm_metal_py_call(…)         →  sync: run callable to a value (bounded; no await inside)
 pm_metal_py_call_async(…)   →  async: start callable/coro → Python task handle → await like any op
 pm_metal_py_ref / lookup      →  resolve name or keep a handle to a Python callable
+pm_metal_py_fn_* / macros     →  “natural” typed faces (below)
 ```
 
 | C wants | API shape | Runner behavior |
 |---------|-----------|-----------------|
-| Sync result | `pm_metal_py_call` | Enter µPy briefly; callable must **not** `await` / park; bounded CPU |
-| Async work | `pm_metal_py_call_async` → handle | Spawn/resume a Python task; C (or guest) **awaits** the handle; Python may `await metal.*` inside |
+| Sync result | `pm_metal_py_call` or typed `fn(…)` | Enter µPy briefly; callable must **not** `await` / park; bounded CPU |
+| Async work | `pm_metal_py_call_async` / typed async fn → handle | Spawn/resume a Python task; C (or guest) **awaits** the handle; Python may `await metal.*` inside |
 | Fire-and-forget | async call + no awaiter, or explicit detach | Still a Python task; errors go to log / task status — don’t block the caller |
 
-```text
-# C (async) — shell cmd, host coro, etc.
-h = pm_metal_py_call_async(ref, args…);   // → Python task / awaitable
-await h;                                  // park C/guest like any Metal handle
-// result via pm_metal_py_*_result / async result helpers
+#### Natural types (C feels like a normal func)
 
-# C (sync) — only for pure compute / façade hooks
-rc = pm_metal_py_call(ref, args…);        // fail if Python tries to await
+Low-level trampoline stays generic. Happy path = **typed fn objects** (or thin
+macros) bound to a sig once, then called like C:
+
+```c
+/* declare once — sig is C types, class is sync|async */
+PM_METAL_PY_FN(add,   int32_t, (int32_t a, int32_t b), SYNC);
+PM_METAL_PY_FN(blink, void,    (uint32_t ms),          ASYNC);
+
+/* bind to a Python callable (name or ref) */
+pm_metal_py_fn_bind(&add, "c_py_demo.add");
+pm_metal_py_fn_bind(&blink, "c_py_demo.blink");
+
+/* sync — looks like a normal call */
+int32_t sum = 0;
+pm_metal_py_fn_call(add, &sum, 2, 3);   /* or: add.call(&sum, 2, 3) */
+
+/* async — returns Metal handle; await as usual */
+pm_metal_async_handle_t h = pm_metal_py_fn_call_async(blink, 10);
+/* await h … */
+```
+
+Sketch of the carried type (not final):
+
+```c
+typedef struct pm_metal_py_fn {
+	pm_metal_py_ref_t ref;
+	uint8_t class;          /* sync / async */
+	/* sig / marshalling cookie — fixed at PM_METAL_PY_FN declare time */
+} pm_metal_py_fn_t;
+```
+
+| Rule | Lock |
+|------|------|
+| Feel | Call sites read like normal C functions / bound fn objects |
+| Truth | Still the same trampoline + Metal handles underneath |
+| Sig | Declared in C (`PM_METAL_PY_FN`); mismatch with Python is a runtime error, not silent UB |
+| Async | Typed async fn **returns a handle** (or fills `*out_h`) — never blocks the runner |
+| Guest | Same idea optional later as dual-ABI; host C gets the macros first |
+
+Raw `pm_metal_py_call*` remains for dynamic/vararg cases; natural fns are the
+default for known hooks.
+
+```text
+# C (async) — natural
+h = pm_metal_py_fn_call_async(blink, 10);
+await h;
+
+# C (sync) — natural
+pm_metal_py_fn_call(add, &sum, 2, 3);
+
+# C (dynamic) — still available
+rc = pm_metal_py_call(ref, …);        // fail if Python tries to await
 ```
 
 Rules:
 
-- **No fake sync:** if the Python callable may `await`, C must use **`call_async`** and await the handle.
+- **No fake sync:** if the Python callable may `await`, C must use **async** natural fn / `call_async` and await the handle.
 - Sync `call` **rejects** (error) if the bytecode hits a Metal park — never spin the runner.
 - Args/results use the same sig mapping as binds (Metal types ↔ Python objects in the task space).
 - Callable refs are resolvable by dotted name (`mymod.hook`) or by an opaque `pm_metal_py_ref_t` kept after import/eval.
@@ -210,17 +263,17 @@ A **native** *adds* callables *to* that VM. Same loader family, different role.
 
 ```text
 # Py → C (async)
-h = metal.async.sleep_us(1000)
+h = metal.aio.sleep_us(1000)
 await h
 
 # Py → C (sync)
-t = metal.async.mono_us()
+t = metal.aio.mono_us()
 
-# C → Py (async)
-h = pm_metal_py_call_async(ref, …);  await h;
+# C → Py (async, natural)
+h = pm_metal_py_fn_call_async(blink, 10);  await h;
 
-# C → Py (sync)
-rc = pm_metal_py_call(ref, …);       # error if Python parks
+# C → Py (sync, natural)
+pm_metal_py_fn_call(add, &sum, 2, 3);
 ```
 
 **Hard rules:**
@@ -269,7 +322,7 @@ acme/
 |------|------|
 | Naming | `metal.<area>[.<sub>]` ↔ `pymergetic.metal.<area>[.<sub>]` — same split as headers |
 | Semantics | Same `pm_metal_*`, same sync/async class — Python is a face, not a second ABI |
-| Ergonomics | Prefer short Pythonic names at the leaf (`await metal.async.sleep_us(…)`); keep `pm_metal_` out of the happy path |
+| Ergonomics | Prefer short Pythonic names at the leaf (`await metal.aio.sleep_us(…)`); keep `pm_metal_` out of the happy path |
 | Coverage | Grow with the dual-ABI surface; new guest module ⇒ matching `metal.*` bind rows (or explicit omit) |
 | Optional | No boot path imports `metal` for bring-up; shell/`py` and user scripts opt in |
 | Host-only | APIs that are host-only in C stay host-only in Python (or omit) — don’t fake a guest import |
@@ -298,7 +351,7 @@ Packages exist as the freeze/zip tree. C only **attaches functions** onto an
 already-named module (like `m.def`):
 
 ```text
-pm_metal_py_bind("metal.async", "sleep_us", …)   # module path must already exist
+pm_metal_py_bind("metal.aio", "sleep_us", …)   # module path must already exist
 ```
 
 #### Loadable wasm / AOT natives (the nanobind case)
@@ -358,16 +411,16 @@ Orchestration examples (product intent, not spike scope):
 await metal.fs.open_async(...)
 await metal.net.http.get(...)
 metal.wasm.run("mods/apps/…")     # or await job handle
-await metal.async.sleep_us(…)
+await metal.aio.sleep_us(…)
 ```
 
 ### Spike slice for this machinery
 
 - One **sync** bind (`mono_us` or similar).
 - One **async** bind (`sleep_us`) + `await` from Python.
-- One **C → Py** async trampoline (`py_call_async` + await handle) and one sync `py_call`.
+- One **C → Py** natural fn (`PM_METAL_PY_FN` + sync/async call) over the trampoline.
 - Prove a third C function is “add a table row” — not new VM glue.
-- Package root **`metal.async` only** for the sample — shaped like the tree; not a flat dump and not full `fs`/`net` yet.
+- Package root **`metal.aio` only** for the sample — shaped like the tree; not a flat dump and not full `fs`/`net` yet.
 - **Sample zip** (tiny + `.sig`) so the loader integrates; fat pack later.
 - Later: one tiny signed native that self-registers as e.g. `sample` (not under `metal.ext`).
 
@@ -536,7 +589,7 @@ MAP µPy blob (one tree)
 | Task / coro state | **Python task = Metal task** + task-local GC space |
 | Params / published ids | Args + Metal handles (not shared Python object graphs) |
 | Stackless `await` | Python `await` → park; resume on any runner |
-| `create_task` / `await task` | Same Metal ops; thin `metal.async` mirrors ([`COOP_MEMORY.md`](COOP_MEMORY.md)) |
+| `create_task` / `await task` | Same Metal ops; thin `metal.aio` mirrors ([`COOP_MEMORY.md`](COOP_MEMORY.md)) |
 | Runner stack (MAP) | Short native slice while in bytecode |
 
 ### Rules
@@ -547,7 +600,7 @@ MAP µPy blob (one tree)
 4. **GC dissolved into async:**
    - Task at `await` → may GC its nursery (invisible).
    - Blob-wide compact → Metal barrier: every Python task parked, then GC, then resume.
-5. **Non-starvation:** a tight sync Python loop holds its runner. Authors must `await metal.async.yield_()` (or equivalent) for fairness; optional later: bytecode timeslice that injects a yield. Starving FS/net/wasm on that CPU is a bug in the script or missing yield, not a second scheduler.
+5. **Non-starvation:** a tight sync Python loop holds its runner. Authors must `await metal.aio.yield_()` (or equivalent) for fairness; optional later: bytecode timeslice that injects a yield. Starving FS/net/wasm on that CPU is a bug in the script or missing yield, not a second scheduler.
 6. **Cancel / death:** Metal task cancel stops the Python task; uncaught exception or OOM kills **that** task only — not the blob, not other runners. Sync `py_call` that hits a park → hard error (never spin).
 
 Flat shared mutable heap with N cores allocating freely is **out** (concurrent-GC research). Partitioned task spaces inside one blob **are** the Metal-shaped answer.
@@ -564,6 +617,7 @@ Flat shared mutable heap with N cores allocating freely is **out** (concurrent-G
 | Caps | Blob size + max Python tasks + per-task nursery limits (constants; tune in spike) |
 
 Spike may start with **one** task space and prove await/runners first; multi-space + barrier is required before calling concurrency “done.”
+Until task-local GC (§5), bytecode entry uses a **global py run-lock** (released at Metal `await` park) so overlapped sleeps are safe on equal runners.
 
 ---
 
@@ -620,7 +674,7 @@ breadth; this table is the **runtime core**.
 | Item | Notes |
 |------|--------|
 | I/O face | `print` → shell/UART; Ctrl-C / cancel; tracebacks |
-| Sched mirrors | `metal.async` create_task / await task / yield / sleep |
+| Sched mirrors | `metal.aio` create_task / await task / yield / sleep |
 | Caps | Blob / task / nursery limits visible (and in `mem`) |
 | Host tests | Link µPy + await proofs without full EFI where practical |
 | Hot replace | Zip remount / ext unload while tasks live — reject or barrier+drain |
@@ -632,7 +686,7 @@ Integration does **not** wait on full `metal.fs` / `net` / … coverage. Need a
 
 | Piece | Sample (spike) |
 |-------|----------------|
-| Binds | `metal.async` only — e.g. `mono_us` (sync) + `sleep_us` / `yield_` (async) |
+| Binds | `metal.aio` only — e.g. `mono_us` (sync) + `sleep_us` / `yield_` (async) |
 | Stdlib zip | Tiny pack (one or two non-frozen modules, e.g. a stub `logging` or `ure`) + `.sig` |
 | Loader | ESP hit → mount (trust); miss → single-flight HTTP → verify → cache → mount; import order still builtin→frozen→aot→wasm→py |
 | Import proof | sample name from zip (py or native); `import metal` still frozen / unshadowable |
@@ -650,13 +704,14 @@ bring-up pattern as the rest of Metal; not blockers for “async integrated.”
 
 ## Spike order
 
-1. Link trimmed µPy into **EFI x64**; MAP-carve always-on GC blob; shell `python`/`py` <script> → new task (not new VM); `print` → shell.
-2. Python task = Metal task; one sync + one async bind (`sleep_us`); **C → Py** `call` / `call_async`.
+1. Link trimmed µPy into **EFI x64**; MAP-carve always-on GC blob; shell `py` <script> → new task (not new VM); `print` → shell.
+2. Python task = Metal task; one sync + one async bind (`sleep_us`); **C → Py** `call` / `call_async` (`py -f`).
 3. Two Python tasks overlapping awaits; equal runners (no CPU0 pin); `yield` fairness path.
 4. Guest binding: wasm import that starts a py job + `await` completion (proof mod).
 5. Task-local spaces (or staged path to them) + cancel/isolation; note blob size vs Doom HEAP.
-6. **Sample zip loader:** tiny signed `stdlib.zip` + frozen `metal.async`; ESP/HTTP single-flight; import proof + one script.
+6. **Sample zip loader:** tiny signed `stdlib.zip` + frozen `metal.aio`; ESP/HTTP single-flight; import proof + one script.
 7. Same bring-up on **BIOS / i386** as any other Metal feature (not a separate product decision).
+   Shared `metal/py` + boot `pm_metal_py_init` already linked; smoke is `verify bios` / `py` on the shell — not a second port.
 
 ---
 
@@ -691,23 +746,23 @@ No C++ in the µPy spike. Don’t invent a second Python↔native calling conven
 
 ### Runtime integration
 
-- [ ] µPy linked in core; MAP blob visible in `mem` (with caps)
-- [ ] Python task = Metal task; pumped on N equal runners
-- [ ] `await` Metal op from Python without blocking the runner
-- [ ] ≥2 Python tasks with overlapped awaits on multi-CPU (QEMU `-smp`)
-- [ ] No Python GIL surface; cross-task share only via Metal
+- [x] µPy linked in core; MAP blob visible in `mem` (with caps)
+- [x] Python task = Metal task; pumped on N equal runners
+- [x] `await` Metal op from Python without blocking the runner
+- [x] ≥2 Python tasks with overlapped awaits on multi-CPU (QEMU `-smp`) — run-lock interim
+- [x] No Python GIL surface; cross-task share only via Metal
 - [ ] Cancel / exception / OOM isolates one task; sync `py_call` cannot park
-- [ ] Fairness path: `metal.async.yield_` (or equiv.) proven under load
+- [x] Fairness path: `metal.aio.yield_` (or equiv.) proven under load
 - [ ] `.mpy` ABI pinned; NLR/exceptions safe across park/resume
 - [ ] Spike size/RAM note vs Doom
 
 ### Surfaces
 
-- [ ] Always-on blob; shell `python`/`py` <script> → new task on it; `print` + traceback face
-- [ ] Guest can start a py job via import and `await` completion
-- [ ] Bind table: sync + async row; third C fn is table-only (no new VM glue)
-- [ ] C → Py trampoline: sync `py_call` + async `py_call_async` (await handle)
-- [ ] `metal.*` package mirrors guest areas (at least `metal.async`); orchestration optional
+- [x] Always-on blob; shell `py` <script> → new task on it; `print` + traceback face
+- [x] Guest can start a py job via import and `await` completion
+- [x] Bind table: sync + async row; third C fn is table-only (no new VM glue)
+- [x] C → Py trampoline: sync `py_call` + async `py_call_async` (await handle)
+- [x] `metal.*` package mirrors guest areas (at least `metal.aio`); orchestration optional
 - [ ] **Sample** signed zip: tiny pack + verify; single-flight HTTP; import order builtin→frozen→aot→wasm→py; `metal` unshadowable
 - [ ] (later) Task-local GC spaces + all-parked compact barrier
 - [ ] (later) Fat stdlib zip / full `metal.fs`/`net`/… / native self-register (`import sample`)

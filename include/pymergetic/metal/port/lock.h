@@ -9,34 +9,34 @@
 #define PYMERGETIC_METAL_PORT_LOCK_H_
 
 /* Opaque, fixed-size storage for one native mutex (pthread_mutex_t on
- * linux, struct k_mutex on zephyr) — sized generously so every target's
+ * linux hosted archive; freestanding EFI/BIOS use a no-op) — sized so every target's
  * native mutex fits without this header ever #include-ing an OS header;
  * impl: bind .c files reinterpret the whole struct as their real type
  * (each has a _Static_assert guarding the size fits). The union just
  * forces pointer/long-long alignment, nothing in it is ever read here. */
 typedef struct pm_metal_port_mutex {
-	union {
-		void *pm_metal_port_mutex_ptr_align;
-		long long pm_metal_port_mutex_int_align;
-		unsigned char pm_metal_port_mutex_storage[64];
-	} pm_metal_port_mutex_opaque;
+  union {
+    void         *pm_metal_port_mutex_ptr_align;
+    long long     pm_metal_port_mutex_int_align;
+    unsigned char pm_metal_port_mutex_storage[64];
+  } pm_metal_port_mutex_opaque;
 } pm_metal_port_mutex_t;
 
 /* One-time init gate (pthread_once / atomic). Zero-init or PM_METAL_PORT_ONCE_INIT. */
 typedef struct pm_metal_port_once {
-	union {
-		void *pm_metal_port_once_ptr_align;
-		long long pm_metal_port_once_int_align;
-		unsigned char pm_metal_port_once_storage[64];
-	} pm_metal_port_once_opaque;
+  union {
+    void         *pm_metal_port_once_ptr_align;
+    long long     pm_metal_port_once_int_align;
+    unsigned char pm_metal_port_once_storage[64];
+  } pm_metal_port_once_opaque;
 } pm_metal_port_once_t;
 
 #define PM_METAL_PORT_ONCE_INIT \
-	{                       \
-		{               \
-			0       \
-		}               \
-	}
+  {                             \
+    {                           \
+      0                         \
+    }                           \
+  }
 
 /* impl: bind — src/pymergetic/metal/port/lock.c (efi|bios UP no-op)
  *

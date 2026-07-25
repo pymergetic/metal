@@ -14,8 +14,8 @@ Goal: one **Metal ABI** (host ↔ guest symmetric), not WASI and not “async ev
 Stackless rule: anything that waits on the world is **async**.  
 CPU work stays **sync**. Preemptive-OS machinery is **omit**.
 
-Doom is **parked** (`mods/apps/doom` kept; default build/run/verify do not stage it).  
-Opt-in later: `METAL_DOOM_BUILD=1`.
+Doom app staging is **opt-in** (`METAL_DOOM_BUILD=1`); see `docs/DOOM_ASYNC.md`.  
+**Mods / process / async product model:** [`docs/MODS.md`](MODS.md) (mod ≠ process; process = command → func in a task).
 
 ---
 
@@ -33,7 +33,7 @@ Opt-in later: `METAL_DOOM_BUILD=1`.
 | Map already-owned buffer | **omit v1** | Revisit only if a real guest needs it |
 | `poll` / `select` / `epoll` / WASI `poll_oneoff` | **omit** | Metal runloop + handles |
 | `setjmp` / `longjmp` | **omit** | Breaks stackless await |
-| threads / signals / fork / dlopen | **omit** | 1 worker/CPU; Metal tasks/coros; Metal package load ≠ `dlopen` |
+| threads / signals / fork / dlopen | **omit** | 1 worker/CPU; Metal tasks/coros; mod load/connect/unload ≠ `dlopen` ([`docs/MODS.md`](MODS.md)) |
 | WASI as product ABI | **retire** | Scaffold only; no new guest deps on wasi-libc I/O |
 | Input | **sync poll** v1 (`poll_key` / `poll_key_event`) | Optional async “wait for key” later, not required now |
 | Gfx / UI / shell log | **sync** | Device kick + CPU; `gfx_present` sync. Optional `async_present` is an eager fence |

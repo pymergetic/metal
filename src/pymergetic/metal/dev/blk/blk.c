@@ -1,36 +1,30 @@
 /** @file
   Metal blk facade — multi-device table + guest async I/O. (impl: efi|bios)
 **/
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
 #include <pymergetic/metal/dev/blk/blk.h>
 #include <pymergetic/metal/dev/blk/blk_ops.h>
 #include <pymergetic/metal/runtime/async/async.h>
-#include <runtime/coro/coro.h>
 #include <runtime/time/time.h>
-
-#include <Uefi.h>
-#include <Library/BaseMemoryLib.h>
 
 #include "wasm_export.h"
 
-#define PM_METAL_BLK_MAX  8u
-#define PM_METAL_BLK_SEC  512u
+#define PM_METAL_BLK_MAX 8u
+#define PM_METAL_BLK_SEC 512u
 
-STATIC pm_metal_blk_ops_t  mDevs[PM_METAL_BLK_MAX];
-STATIC UINT32              mCount;
-STATIC wasm_module_inst_t  mBlkInst;
+static pm_metal_blk_ops_t mDevs[PM_METAL_BLK_MAX];
+static uint32_t           mCount;
+static wasm_module_inst_t mBlkInst;
 
-void
-pm_metal_blk_bind_inst (
-  VOID  *module_inst
-  )
+void pm_metal_blk_bind_inst(void *module_inst)
 {
   mBlkInst = (wasm_module_inst_t)module_inst;
 }
 
-pm_metal_blk_h
-pm_metal_blk_bind (
-  CONST pm_metal_blk_ops_t  *ops
-  )
+pm_metal_blk_h pm_metal_blk_bind(const pm_metal_blk_ops_t *ops)
 {
   if (ops == NULL || ops->compat == NULL || mCount >= PM_METAL_BLK_MAX) {
     return PM_METAL_BLK_INVALID;
@@ -41,18 +35,12 @@ pm_metal_blk_bind (
   return (pm_metal_blk_h)(mCount - 1);
 }
 
-uint32_t
-pm_metal_blk_count (
-  VOID
-  )
+uint32_t pm_metal_blk_count(void)
 {
   return mCount;
 }
 
-pm_metal_blk_h
-pm_metal_blk_at (
-  UINT32  index
-  )
+pm_metal_blk_h pm_metal_blk_at(uint32_t index)
 {
   if (index >= mCount) {
     return PM_METAL_BLK_INVALID;
@@ -61,10 +49,7 @@ pm_metal_blk_at (
   return (pm_metal_blk_h)index;
 }
 
-int
-pm_metal_blk_ready (
-  pm_metal_blk_h  h
-  )
+int pm_metal_blk_ready(pm_metal_blk_h h)
 {
   if (h >= mCount) {
     return 0;
@@ -74,61 +59,43 @@ pm_metal_blk_ready (
     return 1;
   }
 
-  return mDevs[h].ready (mDevs[h].ctx) ? 1 : 0;
+  return mDevs[h].ready(mDevs[h].ctx) ? 1 : 0;
 }
 
-uint64_t
-pm_metal_blk_capacity_sectors (
-  pm_metal_blk_h  h
-  )
+uint64_t pm_metal_blk_capacity_sectors(pm_metal_blk_h h)
 {
   if (h >= mCount || mDevs[h].capacity == NULL) {
     return 0;
   }
 
-  return mDevs[h].capacity (mDevs[h].ctx);
+  return mDevs[h].capacity(mDevs[h].ctx);
 }
 
-int
-pm_metal_blk_read (
-  pm_metal_blk_h  h,
-  uint64_t        lba,
-  VOID           *buf,
-  uint32_t        nsec
-  )
+int pm_metal_blk_read(pm_metal_blk_h h, uint64_t lba, void *buf, uint32_t nsec)
 {
   if (h >= mCount || mDevs[h].read == NULL) {
     return -1;
   }
 
-  return mDevs[h].read (mDevs[h].ctx, lba, buf, nsec);
+  return mDevs[h].read(mDevs[h].ctx, lba, buf, nsec);
 }
 
-int
-pm_metal_blk_write (
-  pm_metal_blk_h  h,
-  uint64_t        lba,
-  CONST VOID     *buf,
-  uint32_t        nsec
-  )
+int pm_metal_blk_write(pm_metal_blk_h h, uint64_t lba, const void *buf, uint32_t nsec)
 {
   if (h >= mCount || mDevs[h].write == NULL) {
     return -1;
   }
 
-  return mDevs[h].write (mDevs[h].ctx, lba, buf, nsec);
+  return mDevs[h].write(mDevs[h].ctx, lba, buf, nsec);
 }
 
-void
-pm_metal_blk_poll (
-  VOID
-  )
+void pm_metal_blk_poll(void)
 {
-  UINT32  i;
+  uint32_t i;
 
   for (i = 0; i < mCount; i++) {
     if (mDevs[i].poll != NULL) {
-      mDevs[i].poll (mDevs[i].ctx);
+      mDevs[i].poll(mDevs[i].ctx);
     }
   }
 }
@@ -147,283 +114,223 @@ typedef enum {
 } pm_metal_blk_st_t;
 
 typedef struct {
-  pm_metal_coro_t   coro;
   pm_metal_blk_op_t op;
   pm_metal_blk_h    h;
-  UINT64            lba;
-  UINT32            buf;
-  UINT32            nsec;
+  uint64_t          lba;
+  uint32_t          buf;
+  uint32_t          nsec;
   pm_metal_blk_st_t step;
-  VOID             *native;
-  UINT64            deadline;
-  UINT8             cookie[PM_METAL_BLK_XFER_COOKIE_BYTES];
+  void             *native;
+  uint64_t          deadline;
+  uint8_t           cookie[PM_METAL_BLK_XFER_COOKIE_BYTES];
 } pm_metal_blk_coro_t;
 
-STATIC
-pm_metal_status_t
-MetalBlkCoroFn (
-  pm_metal_coro_t  *self
-  )
+static pm_metal_status_t MetalBlkStep(pm_metal_async_handle_t self_h)
 {
-  pm_metal_blk_coro_t  *b;
-  pm_metal_blk_ops_t   *ops;
-  UINT32                bytes;
-  INT32                 r;
+  pm_metal_blk_coro_t *b;
+  pm_metal_blk_ops_t  *ops;
+  int32_t              r;
 
-  b = (pm_metal_blk_coro_t *)self;
+  b = (pm_metal_blk_coro_t *)(uintptr_t)pm_metal_async_coro_state(self_h);
+  if (b == NULL) {
+    return PM_METAL_ERROR;
+  }
+
   if (b->h >= mCount) {
-    self->result = 0;
+    pm_metal_async_set_result_u32(self_h, 0);
     return PM_METAL_DONE;
   }
 
   ops = &mDevs[b->h];
 
   if (b->step == PM_METAL_BLK_ST_START) {
-    if (mBlkInst == NULL || b->nsec == 0 || b->buf == 0
-        || pm_metal_blk_ready (b->h) == 0
-        || b->nsec > (0xffffffffu / PM_METAL_BLK_SEC))
-    {
-      self->result = 0;
-      return PM_METAL_DONE;
-    }
-
-    bytes = b->nsec * PM_METAL_BLK_SEC;
-    if (!wasm_runtime_validate_app_addr (mBlkInst, b->buf, bytes)) {
-      self->result = 0;
-      return PM_METAL_DONE;
-    }
-
-    b->native = wasm_runtime_addr_app_to_native (mBlkInst, b->buf);
-    if (b->native == NULL) {
-      self->result = 0;
+    if (b->native == NULL || b->nsec == 0 || pm_metal_blk_ready(b->h) == 0 ||
+        b->nsec > (0xffffffffu / PM_METAL_BLK_SEC)) {
+      pm_metal_async_set_result_u32(self_h, 0);
       return PM_METAL_DONE;
     }
 
     /* Legacy backend: one-shot sync (should not happen for virtio/ide). */
-    if (ops->xfer_start == NULL || ops->xfer_poll == NULL
-        || ops->xfer_finish == NULL)
-    {
+    if (ops->xfer_start == NULL || ops->xfer_poll == NULL || ops->xfer_finish == NULL) {
       if (b->op == PM_METAL_BLK_OP_READ) {
-        self->result = (VOID *)(UINTN)(
-                         (pm_metal_blk_read (b->h, b->lba, b->native, b->nsec)
-                          == 0) ? b->nsec : 0u
-                         );
+        pm_metal_async_set_result_u32(
+          self_h, (pm_metal_blk_read(b->h, b->lba, b->native, b->nsec) == 0) ? b->nsec : 0u);
       } else {
-        self->result = (VOID *)(UINTN)(
-                         (pm_metal_blk_write (b->h, b->lba, b->native, b->nsec)
-                          == 0) ? b->nsec : 0u
-                         );
+        pm_metal_async_set_result_u32(
+          self_h, (pm_metal_blk_write(b->h, b->lba, b->native, b->nsec) == 0) ? b->nsec : 0u);
       }
 
       return PM_METAL_DONE;
     }
 
-    ZeroMem (b->cookie, sizeof (b->cookie));
-    if (ops->xfer_start (
-          ops->ctx,
-          (b->op == PM_METAL_BLK_OP_WRITE) ? 1 : 0,
-          b->lba,
-          b->native,
-          b->nsec,
-          b->cookie
-          ) != 0)
-    {
-      self->result = 0;
+    memset(b->cookie, 0, sizeof(b->cookie));
+    if (ops->xfer_start(ops->ctx,
+                        (b->op == PM_METAL_BLK_OP_WRITE) ? 1 : 0,
+                        b->lba,
+                        b->native,
+                        b->nsec,
+                        b->cookie) != 0) {
+      pm_metal_async_set_result_u32(self_h, 0);
       return PM_METAL_DONE;
     }
 
-    b->deadline = pm_metal_time_mono_us () + 5000000ull;
+    b->deadline = pm_metal_time_mono_us() + 5000000ull;
     b->step     = PM_METAL_BLK_ST_WAIT;
   }
 
   if (b->step == PM_METAL_BLK_ST_WAIT) {
     if (ops->poll != NULL) {
-      ops->poll (ops->ctx);
+      ops->poll(ops->ctx);
     }
 
-    r = ops->xfer_poll (ops->ctx, b->cookie);
-    if (r < 0 || pm_metal_time_mono_us () > b->deadline) {
-      (VOID)ops->xfer_finish (ops->ctx, b->cookie);
-      self->result = 0;
+    r = ops->xfer_poll(ops->ctx, b->cookie);
+    if (r < 0 || pm_metal_time_mono_us() > b->deadline) {
+      (void)ops->xfer_finish(ops->ctx, b->cookie);
+      pm_metal_async_set_result_u32(self_h, 0);
       return PM_METAL_DONE;
     }
 
     if (r == 0) {
-      return pm_metal_await (self, pm_metal_sleep_us (50));
+      return pm_metal_async_await(self_h, pm_metal_async_sleep_us(50));
     }
 
     b->step = PM_METAL_BLK_ST_FINISH;
   }
 
-  if (ops->xfer_finish (ops->ctx, b->cookie) != 0) {
-    self->result = 0;
+  if (ops->xfer_finish(ops->ctx, b->cookie) != 0) {
+    pm_metal_async_set_result_u32(self_h, 0);
   } else {
-    self->result = (VOID *)(UINTN)b->nsec;
+    pm_metal_async_set_result_u32(self_h, b->nsec);
   }
 
   return PM_METAL_DONE;
 }
 
-STATIC
-pm_metal_async_handle_t
-MetalBlkStart (
-  pm_metal_blk_op_t  op,
-  pm_metal_blk_h     h,
-  UINT64             lba,
-  UINT32             buf,
-  UINT32             nsec
-  )
+static pm_metal_async_handle_t MetalBlkStart(
+  pm_metal_blk_op_t op, pm_metal_blk_h h, uint64_t lba, void *native, uint32_t nsec)
 {
-  pm_metal_blk_coro_t  *b;
+  pm_metal_blk_coro_t    *b;
+  pm_metal_async_handle_t ah;
 
-  if (h == PM_METAL_BLK_INVALID || nsec == 0 || buf == 0) {
+  if (h == PM_METAL_BLK_INVALID || nsec == 0 || native == NULL) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  b = (pm_metal_blk_coro_t *)pm_metal_coro (MetalBlkCoroFn, sizeof (*b));
+  ah = pm_metal_async_coro_create(MetalBlkStep, sizeof(*b));
+  if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  b = (pm_metal_blk_coro_t *)(uintptr_t)pm_metal_async_coro_state(ah);
   if (b == NULL) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  b->op   = op;
-  b->h    = h;
-  b->lba  = lba;
-  b->buf  = buf;
-  b->nsec = nsec;
-  b->step = PM_METAL_BLK_ST_START;
-  return pm_metal_async_adopt_host_coro (&b->coro);
+  b->op     = op;
+  b->h      = h;
+  b->lba    = lba;
+  b->buf    = 0;
+  b->nsec   = nsec;
+  b->native = native;
+  b->step   = PM_METAL_BLK_ST_START;
+  return ah;
 }
 
-pm_metal_async_handle_t
-pm_metal_blk_read_async (
-  pm_metal_blk_h  h,
-  uint64_t        lba,
-  uint32_t        dest,
-  uint32_t        nsec
-  )
+pm_metal_async_handle_t pm_metal_blk_read_async(pm_metal_blk_h h,
+                                                uint64_t       lba,
+                                                uint32_t       dest,
+                                                uint32_t       nsec)
 {
-  return MetalBlkStart (PM_METAL_BLK_OP_READ, h, lba, dest, nsec);
+  void *native;
+
+  if (nsec == 0 || nsec > (0xffffffffu / PM_METAL_BLK_SEC)) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  native = pm_metal_async_guest_buf_durable(NULL, dest, nsec * PM_METAL_BLK_SEC);
+  return MetalBlkStart(PM_METAL_BLK_OP_READ, h, lba, native, nsec);
 }
 
-pm_metal_async_handle_t
-pm_metal_blk_write_async (
-  pm_metal_blk_h  h,
-  uint64_t        lba,
-  uint32_t        src,
-  uint32_t        nsec
-  )
+pm_metal_async_handle_t pm_metal_blk_write_async(pm_metal_blk_h h,
+                                                 uint64_t       lba,
+                                                 uint32_t       src,
+                                                 uint32_t       nsec)
 {
-  return MetalBlkStart (PM_METAL_BLK_OP_WRITE, h, lba, src, nsec);
+  void *native;
+
+  if (nsec == 0 || nsec > (0xffffffffu / PM_METAL_BLK_SEC)) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  native = pm_metal_async_guest_buf_durable(NULL, src, nsec * PM_METAL_BLK_SEC);
+  return MetalBlkStart(PM_METAL_BLK_OP_WRITE, h, lba, native, nsec);
 }
 
-uint32_t
-pm_metal_blk_result (
-  pm_metal_async_handle_t  self_h
-  )
+uint32_t pm_metal_blk_result(pm_metal_async_handle_t self_h)
 {
-  return pm_metal_async_result_u32 (self_h);
+  return pm_metal_async_result_u32(self_h);
 }
 
-STATIC UINT32
-pm_metal_blk_count_native (
-  wasm_exec_env_t  exec_env
-  )
+static uint32_t pm_metal_blk_count_native(wasm_exec_env_t exec_env)
 {
-  (VOID)exec_env;
-  return pm_metal_blk_count ();
+  (void)exec_env;
+  return pm_metal_blk_count();
 }
 
-STATIC UINT32
-pm_metal_blk_at_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           index
-  )
+static uint32_t pm_metal_blk_at_native(wasm_exec_env_t exec_env, uint32_t index)
 {
-  (VOID)exec_env;
-  return pm_metal_blk_at (index);
+  (void)exec_env;
+  return pm_metal_blk_at(index);
 }
 
-STATIC INT32
-pm_metal_blk_ready_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           h
-  )
+static int32_t pm_metal_blk_ready_native(wasm_exec_env_t exec_env, uint32_t h)
 {
-  (VOID)exec_env;
-  return pm_metal_blk_ready (h);
+  (void)exec_env;
+  return pm_metal_blk_ready(h);
 }
 
-STATIC UINT64
-pm_metal_blk_capacity_sectors_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           h
-  )
+static uint64_t pm_metal_blk_capacity_sectors_native(wasm_exec_env_t exec_env, uint32_t h)
 {
-  (VOID)exec_env;
-  return pm_metal_blk_capacity_sectors (h);
+  (void)exec_env;
+  return pm_metal_blk_capacity_sectors(h);
 }
 
-STATIC UINT32
-pm_metal_blk_read_async_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           h,
-  UINT64           lba,
-  UINT32           dest,
-  UINT32           nsec
-  )
+static uint32_t pm_metal_blk_read_async_native(
+  wasm_exec_env_t exec_env, uint32_t h, uint64_t lba, uint32_t dest, uint32_t nsec)
 {
-  (VOID)exec_env;
-  return pm_metal_blk_read_async (h, lba, dest, nsec);
+  (void)exec_env;
+  return pm_metal_blk_read_async(h, lba, dest, nsec);
 }
 
-STATIC UINT32
-pm_metal_blk_write_async_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           h,
-  UINT64           lba,
-  UINT32           src,
-  UINT32           nsec
-  )
+static uint32_t pm_metal_blk_write_async_native(
+  wasm_exec_env_t exec_env, uint32_t h, uint64_t lba, uint32_t src, uint32_t nsec)
 {
-  (VOID)exec_env;
-  return pm_metal_blk_write_async (h, lba, src, nsec);
+  (void)exec_env;
+  return pm_metal_blk_write_async(h, lba, src, nsec);
 }
 
-STATIC UINT32
-pm_metal_blk_result_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           self_h
-  )
+static uint32_t pm_metal_blk_result_native(wasm_exec_env_t exec_env, uint32_t self_h)
 {
-  (VOID)exec_env;
-  return pm_metal_blk_result (self_h);
+  (void)exec_env;
+  return pm_metal_blk_result(self_h);
 }
 
-STATIC NativeSymbol g_pm_metal_blk_native_symbols[] = {
-  { "pm_metal_blk_count", (VOID *)pm_metal_blk_count_native, "()i", NULL },
-  { "pm_metal_blk_at", (VOID *)pm_metal_blk_at_native, "(i)i", NULL },
-  { "pm_metal_blk_ready", (VOID *)pm_metal_blk_ready_native, "(i)i", NULL },
-  { "pm_metal_blk_capacity_sectors", (VOID *)pm_metal_blk_capacity_sectors_native,
-    "(i)I", NULL },
-  { "pm_metal_blk_read_async", (VOID *)pm_metal_blk_read_async_native, "(iIii)i",
-    NULL },
-  { "pm_metal_blk_write_async", (VOID *)pm_metal_blk_write_async_native, "(iIii)i",
-    NULL },
-  { "pm_metal_blk_result", (VOID *)pm_metal_blk_result_native, "(i)i", NULL },
+static NativeSymbol g_pm_metal_blk_native_symbols[] = {
+  { "pm_metal_blk_count", (void *)pm_metal_blk_count_native, "()i", NULL },
+  { "pm_metal_blk_at", (void *)pm_metal_blk_at_native, "(i)i", NULL },
+  { "pm_metal_blk_ready", (void *)pm_metal_blk_ready_native, "(i)i", NULL },
+  { "pm_metal_blk_capacity_sectors", (void *)pm_metal_blk_capacity_sectors_native, "(i)I", NULL },
+  { "pm_metal_blk_read_async", (void *)pm_metal_blk_read_async_native, "(iIii)i", NULL },
+  { "pm_metal_blk_write_async", (void *)pm_metal_blk_write_async_native, "(iIii)i", NULL },
+  { "pm_metal_blk_result", (void *)pm_metal_blk_result_native, "(i)i", NULL },
 };
 
-int
-pm_metal_blk_native_register (
-  VOID
-  )
+int pm_metal_blk_native_register(void)
 {
-  if (!wasm_runtime_register_natives (
-         PM_METAL_BLK_WASI_MODULE,
-         g_pm_metal_blk_native_symbols,
-         sizeof (g_pm_metal_blk_native_symbols)
-           / sizeof (g_pm_metal_blk_native_symbols[0])
-         ))
-  {
+  if (!wasm_runtime_register_natives(PM_METAL_BLK_WASI_MODULE,
+                                     g_pm_metal_blk_native_symbols,
+                                     sizeof(g_pm_metal_blk_native_symbols) /
+                                       sizeof(g_pm_metal_blk_native_symbols[0]))) {
     return -1;
   }
 

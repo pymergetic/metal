@@ -15,11 +15,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "pymergetic/metal/shell/ui/types.h" /* IWYU pragma: export */
-#include "pymergetic/metal/shell/ui/tab.h" /* IWYU pragma: export */
+#include "pymergetic/metal/shell/ui/types.h"   /* IWYU pragma: export */
+#include "pymergetic/metal/shell/ui/tab.h"     /* IWYU pragma: export */
 #include "pymergetic/metal/shell/ui/console.h" /* IWYU pragma: export */
-#include "pymergetic/metal/shell/ui/status.h" /* IWYU pragma: export */
-#include "pymergetic/metal/shell/ui/input.h" /* IWYU pragma: export */
+#include "pymergetic/metal/shell/ui/status.h"  /* IWYU pragma: export */
+#include "pymergetic/metal/shell/ui/input.h"   /* IWYU pragma: export */
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,7 +27,7 @@ extern "C" {
 
 #if !defined(__wasm__)
 /** Build Window→Tabs→console shell. Returns 0 ok. */
-int pm_metal_ui_console_shell(void);
+int  pm_metal_ui_console_shell(void);
 void pm_metal_ui_shutdown(void);
 /** Layout + paint chrome into the shadow FB (does not present). */
 int pm_metal_ui_frame(void);
@@ -56,8 +56,8 @@ int pm_metal_ui_pointer_hover(int32_t x, int32_t y);
  * Console scrollbar / wheel for the active tab console.
  * See pm_metal_ui_console_pointer in console.h.
  */
-int pm_metal_ui_console_pointer(int32_t x, int32_t y, uint32_t buttons,
-				int32_t wheel, uint32_t flags);
+int pm_metal_ui_console_pointer(
+  int32_t x, int32_t y, uint32_t buttons, int32_t wheel, uint32_t flags);
 void pm_metal_ui_console_scroll_by(int32_t delta_lines);
 
 /**

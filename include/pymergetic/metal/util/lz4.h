@@ -27,8 +27,7 @@
 #define PM_METAL_UTIL_LZ4_WASI_MODULE "pymergetic.metal.util.lz4"
 
 #if defined(__wasm__)
-#define PM_METAL_UTIL_LZ4_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_LZ4_WASI_MODULE, name)
+#define PM_METAL_UTIL_LZ4_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_UTIL_LZ4_WASI_MODULE, name)
 #endif
 
 /*
@@ -41,7 +40,7 @@
  */
 #if defined(__wasm__)
 extern size_t pm_metal_util_lz4_compress_bound(size_t src_len)
-	PM_METAL_UTIL_LZ4_IMPORT(pm_metal_util_lz4_compress_bound);
+  PM_METAL_UTIL_LZ4_IMPORT(pm_metal_util_lz4_compress_bound);
 #else
 size_t pm_metal_util_lz4_compress_bound(size_t src_len);
 #endif
@@ -57,7 +56,7 @@ size_t pm_metal_util_lz4_compress_bound(size_t src_len);
  */
 #if defined(__wasm__)
 extern int pm_metal_util_lz4_compress(const void *src, size_t src_len, void *dst, size_t dst_cap)
-	PM_METAL_UTIL_LZ4_IMPORT(pm_metal_util_lz4_compress);
+  PM_METAL_UTIL_LZ4_IMPORT(pm_metal_util_lz4_compress);
 #else
 int pm_metal_util_lz4_compress(const void *src, size_t src_len, void *dst, size_t dst_cap);
 #endif
@@ -72,7 +71,7 @@ int pm_metal_util_lz4_compress(const void *src, size_t src_len, void *dst, size_
  */
 #if defined(__wasm__)
 extern int pm_metal_util_lz4_decompress(const void *src, size_t src_len, void *dst, size_t dst_cap)
-	PM_METAL_UTIL_LZ4_IMPORT(pm_metal_util_lz4_decompress);
+  PM_METAL_UTIL_LZ4_IMPORT(pm_metal_util_lz4_decompress);
 #else
 int pm_metal_util_lz4_decompress(const void *src, size_t src_len, void *dst, size_t dst_cap);
 #endif

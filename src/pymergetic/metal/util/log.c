@@ -18,166 +18,171 @@
 
 static void pm_metal_util_log_emit(const char *msg)
 {
-	size_t n;
+  size_t n;
 
-	if (!msg) {
-		return;
-	}
-	n = strlen(msg);
-	if (n > 0xffffffffu) {
-		n = 0xffffffffu;
-	}
-	pm_metal_console_com1_write(msg, (uint32_t)n);
-	pm_metal_console_com1_write("\r\n", 2);
+  if (!msg) {
+    return;
+  }
+  n = strlen(msg);
+  if (n > 0xffffffffu) {
+    n = 0xffffffffu;
+  }
+  pm_metal_console_com1_write(msg, (uint32_t)n);
+  pm_metal_console_com1_write("\r\n", 2);
 }
 #endif
 
-static pm_metal_log_level_t g_pm_metal_util_log_level = PM_METAL_LOG_INFO;
+static pm_metal_log_level_t  g_pm_metal_util_log_level = PM_METAL_LOG_INFO;
 static pm_metal_port_mutex_t g_pm_metal_util_log_lock;
-static pm_metal_port_once_t g_pm_metal_util_log_lock_once = PM_METAL_PORT_ONCE_INIT;
+static pm_metal_port_once_t  g_pm_metal_util_log_lock_once = PM_METAL_PORT_ONCE_INIT;
 
 static void pm_metal_util_log_lock(void)
 {
-	pm_metal_port_mutex_ensure(&g_pm_metal_util_log_lock, &g_pm_metal_util_log_lock_once);
-	pm_metal_port_mutex_lock(&g_pm_metal_util_log_lock);
+  pm_metal_port_mutex_ensure(&g_pm_metal_util_log_lock, &g_pm_metal_util_log_lock_once);
+  pm_metal_port_mutex_lock(&g_pm_metal_util_log_lock);
 }
 
 static void pm_metal_util_log_unlock(void)
 {
-	pm_metal_port_mutex_unlock(&g_pm_metal_util_log_lock);
+  pm_metal_port_mutex_unlock(&g_pm_metal_util_log_lock);
 }
 
 #if !(defined(BH_PLATFORM_METAL_EFI) || defined(BH_PLATFORM_METAL_BIOS))
 static FILE *pm_metal_util_log_stream_file(pm_metal_log_stream_t stream)
 {
-	return stream == PM_METAL_LOG_STREAM_STDERR ? stderr : stdout;
+  return stream == PM_METAL_LOG_STREAM_STDERR ? stderr : stdout;
 }
 #endif
 
 void pm_metal_util_log_set_level(pm_metal_log_level_t level)
 {
-	pm_metal_util_log_lock();
-	g_pm_metal_util_log_level = level;
-	pm_metal_util_log_unlock();
+  pm_metal_util_log_lock();
+  g_pm_metal_util_log_level = level;
+  pm_metal_util_log_unlock();
 }
 
 pm_metal_log_level_t pm_metal_util_log_get_level(void)
 {
-	pm_metal_log_level_t level;
+  pm_metal_log_level_t level;
 
-	pm_metal_util_log_lock();
-	level = g_pm_metal_util_log_level;
-	pm_metal_util_log_unlock();
-	return level;
+  pm_metal_util_log_lock();
+  level = g_pm_metal_util_log_level;
+  pm_metal_util_log_unlock();
+  return level;
 }
 
 int pm_metal_util_log_level_name(pm_metal_log_level_t level, char *out, size_t cap)
 {
-	static const char *names[PM_METAL_LOG_LEVEL_COUNT] = {
-		"TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL",
-	};
+  static const char *names[PM_METAL_LOG_LEVEL_COUNT] = {
+    "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL",
+  };
 
-	if (!out || cap == 0) {
-		return -1;
-	}
+  if (!out || cap == 0) {
+    return -1;
+  }
 
-	const char *name = ((int)level < 0 || level >= PM_METAL_LOG_LEVEL_COUNT) ? "?" : names[level];
+  const char *name = ((int)level < 0 || level >= PM_METAL_LOG_LEVEL_COUNT) ? "?" : names[level];
 
-	return snprintf(out, cap, "%s", name);
+  return snprintf(out, cap, "%s", name);
 }
 
-void pm_metal_util_log_write(pm_metal_log_stream_t stream, pm_metal_log_level_t level, const char *msg)
+void pm_metal_util_log_write(pm_metal_log_stream_t stream,
+                             pm_metal_log_level_t  level,
+                             const char           *msg)
 {
-	pm_metal_log_level_t floor;
+  pm_metal_log_level_t floor;
 
-	if (!msg) {
-		return;
-	}
-	pm_metal_util_log_lock();
-	floor = g_pm_metal_util_log_level;
-	pm_metal_util_log_unlock();
-	if (level < floor) {
-		return;
-	}
+  if (!msg) {
+    return;
+  }
+  pm_metal_util_log_lock();
+  floor = g_pm_metal_util_log_level;
+  pm_metal_util_log_unlock();
+  if (level < floor) {
+    return;
+  }
 
-	char name[8]; /* "TRACE".."FATAL" + NUL, "?" for out-of-range */
-	char line[520];
+  char name[8]; /* "TRACE".."FATAL" + NUL, "?" for out-of-range */
+  char line[520];
 
-	pm_metal_util_log_level_name(level, name, sizeof(name));
+  pm_metal_util_log_level_name(level, name, sizeof(name));
 #if defined(BH_PLATFORM_METAL_EFI) || defined(BH_PLATFORM_METAL_BIOS)
-	(void)stream;
-	snprintf(line, sizeof(line), "[%s] %s", name, msg);
-	pm_metal_util_log_emit(line);
+  (void)stream;
+  snprintf(line, sizeof(line), "[%s] %s", name, msg);
+  pm_metal_util_log_emit(line);
 #else
-	{
-		FILE *out = pm_metal_util_log_stream_file(stream);
+  {
+    FILE *out = pm_metal_util_log_stream_file(stream);
 
-		fprintf(out, "[%s] %s\n", name, msg);
-		fflush(out);
-	}
+    fprintf(out, "[%s] %s\n", name, msg);
+    fflush(out);
+  }
 #endif
 }
 
 void pm_metal_util_log_write_raw(pm_metal_log_stream_t stream, const char *msg)
 {
-	if (!msg) {
-		return;
-	}
+  if (!msg) {
+    return;
+  }
 
 #if defined(BH_PLATFORM_METAL_EFI) || defined(BH_PLATFORM_METAL_BIOS)
-	(void)stream;
-	pm_metal_util_log_emit(msg);
+  (void)stream;
+  pm_metal_util_log_emit(msg);
 #else
-	{
-		FILE *out = pm_metal_util_log_stream_file(stream);
+  {
+    FILE *out = pm_metal_util_log_stream_file(stream);
 
-		fprintf(out, "%s\n", msg);
-		fflush(out);
-	}
+    fprintf(out, "%s\n", msg);
+    fflush(out);
+  }
 #endif
 }
 
 #if !defined(__wasm__)
 #include <stdarg.h>
 
-void pm_metal_util_log_writef(pm_metal_log_stream_t stream, pm_metal_log_level_t level, const char *fmt, ...)
+void pm_metal_util_log_writef(pm_metal_log_stream_t stream,
+                              pm_metal_log_level_t  level,
+                              const char           *fmt,
+                              ...)
 {
-	pm_metal_log_level_t floor;
+  pm_metal_log_level_t floor;
 
-	if (!fmt) {
-		return;
-	}
-	pm_metal_util_log_lock();
-	floor = g_pm_metal_util_log_level;
-	pm_metal_util_log_unlock();
-	if (level < floor) {
-		return;
-	}
+  if (!fmt) {
+    return;
+  }
+  pm_metal_util_log_lock();
+  floor = g_pm_metal_util_log_level;
+  pm_metal_util_log_unlock();
+  if (level < floor) {
+    return;
+  }
 
-	char msg[512];
-	va_list ap;
+  char    msg[512];
+  va_list ap;
 
-	va_start(ap, fmt);
-	vsnprintf(msg, sizeof(msg), fmt, ap);
-	va_end(ap);
+  va_start(ap, fmt);
+  vsnprintf(msg, sizeof(msg), fmt, ap);
+  va_end(ap);
 
-	pm_metal_util_log_write(stream, level, msg);
+  pm_metal_util_log_write(stream, level, msg);
 }
 
 void pm_metal_util_log_write_rawf(pm_metal_log_stream_t stream, const char *fmt, ...)
 {
-	if (!fmt) {
-		return;
-	}
+  if (!fmt) {
+    return;
+  }
 
-	char msg[512];
-	va_list ap;
+  char    msg[512];
+  va_list ap;
 
-	va_start(ap, fmt);
-	vsnprintf(msg, sizeof(msg), fmt, ap);
-	va_end(ap);
+  va_start(ap, fmt);
+  vsnprintf(msg, sizeof(msg), fmt, ap);
+  va_end(ap);
 
-	pm_metal_util_log_write_raw(stream, msg);
+  pm_metal_util_log_write_raw(stream, msg);
 }
 #endif
 
@@ -189,50 +194,57 @@ void pm_metal_util_log_write_rawf(pm_metal_log_stream_t stream, const char *fmt,
 
 static void pm_metal_util_log_set_level_native(wasm_exec_env_t exec_env, int32_t level)
 {
-	(void)exec_env;
-	pm_metal_util_log_set_level((pm_metal_log_level_t)level);
+  (void)exec_env;
+  pm_metal_util_log_set_level((pm_metal_log_level_t)level);
 }
 
 static int32_t pm_metal_util_log_get_level_native(wasm_exec_env_t exec_env)
 {
-	(void)exec_env;
-	return (int32_t)pm_metal_util_log_get_level();
+  (void)exec_env;
+  return (int32_t)pm_metal_util_log_get_level();
 }
 
-static int32_t pm_metal_util_log_level_name_native(wasm_exec_env_t exec_env, int32_t level, char *out,
-						     uint32_t cap)
+static int32_t pm_metal_util_log_level_name_native(wasm_exec_env_t exec_env,
+                                                   int32_t         level,
+                                                   char           *out,
+                                                   uint32_t        cap)
 {
-	(void)exec_env;
-	return (int32_t)pm_metal_util_log_level_name((pm_metal_log_level_t)level, out, (size_t)cap);
+  (void)exec_env;
+  return (int32_t)pm_metal_util_log_level_name((pm_metal_log_level_t)level, out, (size_t)cap);
 }
 
-static void pm_metal_util_log_write_native(wasm_exec_env_t exec_env, int32_t stream, int32_t level,
-					    const char *msg)
+static void pm_metal_util_log_write_native(wasm_exec_env_t exec_env,
+                                           int32_t         stream,
+                                           int32_t         level,
+                                           const char     *msg)
 {
-	(void)exec_env;
-	pm_metal_util_log_write((pm_metal_log_stream_t)stream, (pm_metal_log_level_t)level, msg);
+  (void)exec_env;
+  pm_metal_util_log_write((pm_metal_log_stream_t)stream, (pm_metal_log_level_t)level, msg);
 }
 
-static void pm_metal_util_log_write_raw_native(wasm_exec_env_t exec_env, int32_t stream, const char *msg)
+static void pm_metal_util_log_write_raw_native(wasm_exec_env_t exec_env,
+                                               int32_t         stream,
+                                               const char     *msg)
 {
-	(void)exec_env;
-	pm_metal_util_log_write_raw((pm_metal_log_stream_t)stream, msg);
+  (void)exec_env;
+  pm_metal_util_log_write_raw((pm_metal_log_stream_t)stream, msg);
 }
 
 static NativeSymbol g_pm_metal_util_log_native_symbols[] = {
-	{"pm_metal_util_log_set_level", (void *)pm_metal_util_log_set_level_native, "(i)", NULL},
-	{"pm_metal_util_log_get_level", (void *)pm_metal_util_log_get_level_native, "()i", NULL},
-	{"pm_metal_util_log_level_name", (void *)pm_metal_util_log_level_name_native, "(i*~)i", NULL},
-	{"pm_metal_util_log_write", (void *)pm_metal_util_log_write_native, "(ii$)", NULL},
-	{"pm_metal_util_log_write_raw", (void *)pm_metal_util_log_write_raw_native, "(i$)", NULL},
+  { "pm_metal_util_log_set_level", (void *)pm_metal_util_log_set_level_native, "(i)", NULL },
+  { "pm_metal_util_log_get_level", (void *)pm_metal_util_log_get_level_native, "()i", NULL },
+  { "pm_metal_util_log_level_name", (void *)pm_metal_util_log_level_name_native, "(i*~)i", NULL },
+  { "pm_metal_util_log_write", (void *)pm_metal_util_log_write_native, "(ii$)", NULL },
+  { "pm_metal_util_log_write_raw", (void *)pm_metal_util_log_write_raw_native, "(i$)", NULL },
 };
 
 int pm_metal_util_log_native_register(void)
 {
-	if (!wasm_runtime_register_natives(PM_METAL_UTIL_LOG_WASI_MODULE, g_pm_metal_util_log_native_symbols,
-					    sizeof(g_pm_metal_util_log_native_symbols)
-						    / sizeof(g_pm_metal_util_log_native_symbols[0]))) {
-		return -1;
-	}
-	return 0;
+  if (!wasm_runtime_register_natives(PM_METAL_UTIL_LOG_WASI_MODULE,
+                                     g_pm_metal_util_log_native_symbols,
+                                     sizeof(g_pm_metal_util_log_native_symbols) /
+                                       sizeof(g_pm_metal_util_log_native_symbols[0]))) {
+    return -1;
+  }
+  return 0;
 }

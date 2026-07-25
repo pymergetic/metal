@@ -194,10 +194,5 @@ random_get  sched_yield
 
 ## Host parity
 
-| Tier | linux (WAMR posix) | zephyr |
-|------|-------------------|--------|
-| T0 | mostly free | shim: virtual stdout |
-| T1 | preopen + posix | VFS + path resolve |
-| T2+ | WAMR covers most | per-syscall shim |
-
-Same guest imports. Different host backend. Expected.
+Active backends are freestanding **EFI / BIOS** (`guest/wamr` + host stubs).
+Same guest WASI imports; host implementation is Metal, not a hosted OS VFS.

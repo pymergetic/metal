@@ -4,8 +4,11 @@ Doom is **not the product**. It’s the standard “this is an OS” proof — r
 gfx present, input, pacing, wasm/AOT package pull — so Metal implements it.
 The product remains the thin async host + awaitable ABI.
 
-**Status:** A–D wired (parked app; `METAL_DOOM_BUILD=1` opt-in)  
-**Constraint:** await only from `pm_metal_guest_step`. External `doomgeneric` stays vanilla.
+**Status:** A–D wired (opt-in app; `METAL_DOOM_BUILD=1`)  
+**Constraint:** await from registered loop export `doom_run` (loader does not
+look it up — `on_load` registers it). External `doomgeneric` stays vanilla.  
+**Product model:** [`docs/MODS.md`](MODS.md) — `on_load` registers cmd `doom` →
+func `run` → export `doom_run`; process = that command’s task.
 
 ## Run (EFI + BIOS/PXE — same package layout)
 
@@ -35,7 +38,7 @@ Package files must be served at `http://<next-server|:192.168.10.1>:8080/mods/ap
 
 ## Rule
 
-Deep Doom C stays **sync CPU** once its inputs are in memory. Every world wait (FS, wipe frame pacing, quit, audio drain) is owned by the **`guest_step` stem** — preload / flag / one-frame advance — not `setjmp` yield from inside `W_OpenFile` or the wipe loop.
+Deep Doom C stays **sync CPU** once its inputs are in memory. Every world wait (FS, wipe frame pacing, quit, audio drain) is owned by the **`doom_run` stem** — preload / flag / one-frame advance — not `setjmp` yield from inside `W_OpenFile` or the wipe loop.
 
 | Do | Don’t |
 |----|--------|
@@ -46,7 +49,7 @@ Deep Doom C stays **sync CPU** once its inputs are in memory. Every world wait (
 ## Callpath stem
 
 ```
-guest_step
+doom_run
   ST_MKDIR:     async mkdir saves/
   ST_SIZE…READ: async IWAD → memory wad
   ST_CREATE:    doomgeneric_Create → await(0)
@@ -57,7 +60,7 @@ guest_step
 
 | Site | Status | Strategy |
 |------|--------|----------|
-| Outer loop / `guest_step` | done | `metal_main.c` |
+| Outer loop / `doom_run` | done | `metal_main.c` |
 | `singletics` / `TryRunTics` | done | force `singletics=1` |
 | `DG_*` time / blit / keys | done | `doomgeneric_metal.c` |
 | Hybrid controls | done | arrows move/turn + Alt-strafe (classic); WASD → same; mouse look optional; E/Space use, Ctrl fire |
@@ -69,7 +72,7 @@ guest_step
 | Wipe melt loop | done | `--wrap=D_Display` + `doomgeneric_Tick` (1 frame / Tick) |
 | `I_Quit` / `I_Error` | done | `--wrap` → wasi exit → `DONE` / `ERROR` |
 | Present fence | done | `blit_bgra` → shadow; stem `await(present)` once/frame (chunked LFB + yield on iron) |
-| Offline AOT | done | `doom.{x86_64,i386}.aot` via `wamrc` (host picks matching AOT, else `.wasm`) |
+| Offline AOT | done | Host-TLSF IWAD residency (`fs_read_mem_async`; lumps via `mem_copy_out_at`); wamrc `-O1 --size-level=0` (large model — medium/PC32 #GPs when AOT text is high); AOT-then-wasm, no prefer-wasm |
 | Save/load | done | memory serialize + stem `fs_*_async` |
 | Audio | done | `DG_sound_module` → queue + stem `drain` |
 | Config / screenshot `fopen` | omit v1 | no-op |
@@ -86,7 +89,7 @@ guest_step
 
 ### B — Async IWAD stem
 
-`guest_step` before `Create`: size → read → memory wad → `Create` (CPU only).
+`doom_run` before `Create`: size → read → memory wad → `Create` (CPU only).
 
 ### C — Saves
 
@@ -111,7 +114,7 @@ guest_step
 | Mechanism | Use for |
 |-----------|---------|
 | `DG_*` | time, blit, keys, sleep no-op |
-| `guest_step` states | IWAD, wipe pacing, quit, saves, audio drain |
+| `doom_run` states | IWAD, wipe pacing, quit, saves, audio drain |
 | `--wrap` | `M_FileExists`, `I_AtExit`, `I_Quit`, `I_Error`, `I_Sleep`, `D_Display`, `doomgeneric_Tick`, save/load |
 | Alternate `.c` | wad class, sound module |
 | Compile flags | `-DFEATURE_SOUND` |

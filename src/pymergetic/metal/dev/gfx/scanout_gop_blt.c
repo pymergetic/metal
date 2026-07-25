@@ -1,22 +1,32 @@
 /** @file
   Pre-EBS EFI GOP Blt scanout (Boot Services still live).
 **/
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
 #include <pymergetic/metal/dev/gfx/scanout.h>
-#include <runtime/mem/mem.h>
+#include <pymergetic/metal/runtime/mem/mem.h>
 
-#include <Uefi.h>
-#include <Protocol/GraphicsOutput.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/UefiBootServicesTableLib.h>
+/* efi: real EFI_GRAPHICS_OUTPUT_PROTOCOL::Blt (EfiBltBufferToVideo);
+ * bios: no real GOP exists — always fails (dead path: GopProbe already
+ * keeps this backend unregistered whenever b->gop is NULL, which is
+ * unconditionally true under BIOS).
+ * impl: src/{efi,bios}/pymergetic/metal/dev/gfx/scanout_gop_blt_port.c */
+int pm_metal_gop_port_blt(void           *gop,
+                          const uint32_t *src,
+                          uint32_t        src_x,
+                          uint32_t        src_y,
+                          uint32_t        dst_x,
+                          uint32_t        dst_y,
+                          uint32_t        w,
+                          uint32_t        h,
+                          uint32_t        delta);
 
-STATIC UINT32  *mPack;
-STATIC UINT32   mPackCap;
+static uint32_t *mPack;
+static uint32_t  mPackCap;
 
-STATIC
-INT32
-GopProbe (
-  CONST pm_metal_scanout_bind_t  *b
-  )
+static int32_t GopProbe(const pm_metal_scanout_bind_t *b)
 {
   if (b == NULL || b->gop == NULL || b->owned) {
     return -1;
@@ -25,59 +35,41 @@ GopProbe (
   return 0;
 }
 
-STATIC
-INT32
-GopPresentRect (
-  INT32  x,
-  INT32  y,
-  INT32  w,
-  INT32  h
-  )
+static int32_t GopPresentRect(int32_t x, int32_t y, int32_t w, int32_t h)
 {
-  CONST pm_metal_scanout_bind_t   *b;
-  EFI_GRAPHICS_OUTPUT_PROTOCOL    *gop;
-  EFI_STATUS                       Status;
+  const pm_metal_scanout_bind_t *b;
 
-  b = pm_metal_scanout_bind_info ();
+  b = pm_metal_scanout_bind_info();
   if (b == NULL || b->gop == NULL || b->shadow == NULL) {
     return -1;
   }
 
-  gop = (EFI_GRAPHICS_OUTPUT_PROTOCOL *)b->gop;
-
-  if (x == 0 && (UINT32)w == b->shadow_w) {
-    Status = gop->Blt (
-               gop,
-               (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)b->shadow,
-               EfiBltBufferToVideo,
-               0,
-               (UINTN)y,
-               0,
-               (UINTN)y,
-               (UINTN)w,
-               (UINTN)h,
-               (UINTN)b->shadow_pitch * sizeof (UINT32)
-               );
-    return EFI_ERROR (Status) ? -1 : 0;
+  if (x == 0 && (uint32_t)w == b->shadow_w) {
+    return pm_metal_gop_port_blt(b->gop,
+                                 b->shadow,
+                                 0,
+                                 (uint32_t)y,
+                                 0,
+                                 (uint32_t)y,
+                                 (uint32_t)w,
+                                 (uint32_t)h,
+                                 b->shadow_pitch * (uint32_t)sizeof(uint32_t));
   }
 
   {
-    UINT32  need;
-    INT32   row;
+    uint32_t need;
+    int32_t  row;
 
-    need = (UINT32)w * (UINT32)h;
+    need = (uint32_t)w * (uint32_t)h;
     if (mPack == NULL || mPackCap < need) {
       if (mPack != NULL) {
-        pm_metal_mem_free (mPack);
+        pm_metal_mem_free(mPack);
         mPack    = NULL;
         mPackCap = 0;
       }
 
-      mPack = (UINT32 *)pm_metal_mem_alloc (
-                          (UINTN)need * sizeof (UINT32),
-                          PM_METAL_MEM_HEAP,
-                          PM_METAL_MEM_ID_NONE
-                          );
+      mPack = (uint32_t *)pm_metal_mem_alloc(
+        (uintptr_t)need * sizeof(uint32_t), PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
       if (mPack == NULL) {
         return -1;
       }
@@ -86,81 +78,40 @@ GopPresentRect (
     }
 
     for (row = 0; row < h; row++) {
-      CopyMem (
-        &mPack[(UINT32)row * (UINT32)w],
-        &b->shadow[(UINT32)(y + row) * b->shadow_pitch + (UINT32)x],
-        (UINTN)w * sizeof (UINT32)
-        );
+      memcpy(&mPack[(uint32_t)row * (uint32_t)w],
+             &b->shadow[(uint32_t)(y + row) * b->shadow_pitch + (uint32_t)x],
+             (uintptr_t)w * sizeof(uint32_t));
     }
 
-    Status = gop->Blt (
-               gop,
-               (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)mPack,
-               EfiBltBufferToVideo,
-               0,
-               0,
-               (UINTN)x,
-               (UINTN)y,
-               (UINTN)w,
-               (UINTN)h,
-               0
-               );
+    return pm_metal_gop_port_blt(
+      b->gop, mPack, 0, 0, (uint32_t)x, (uint32_t)y, (uint32_t)w, (uint32_t)h, 0);
   }
-
-  return EFI_ERROR (Status) ? -1 : 0;
 }
 
-STATIC
-INT32
-GopJobBegin (
-  INT32  x,
-  INT32  y,
-  INT32  w,
-  INT32  h
-  )
+static int32_t GopJobBegin(int32_t x, int32_t y, int32_t w, int32_t h)
 {
-  return (GopPresentRect (x, y, w, h) == 0) ? 0 : -1;
+  return (GopPresentRect(x, y, w, h) == 0) ? 0 : -1;
 }
 
-STATIC
-INT32
-GopJobStep (
-  VOID
-  )
+static int32_t GopJobStep(void)
 {
   return 0;
 }
 
-STATIC
-UINT32
-GopCaps (
-  VOID
-  )
+static uint32_t GopCaps(void)
 {
   return 0;
 }
 
-STATIC
-VOID
-GopFini (
-  VOID
-  )
+static void GopFini(void)
 {
   if (mPack != NULL) {
-    pm_metal_mem_free (mPack);
+    pm_metal_mem_free(mPack);
     mPack    = NULL;
     mPackCap = 0;
   }
 }
 
-CONST pm_metal_scanout_ops_t  g_pm_metal_scanout_gop_blt = {
-  "gop_blt",
-  GopProbe,
-  GopPresentRect,
-  GopJobBegin,
-  GopJobStep,
-  GopCaps,
-  NULL,
-  NULL,
-  GopFini
-};
+const pm_metal_scanout_ops_t g_pm_metal_scanout_gop_blt = { "gop_blt",   GopProbe,   GopPresentRect,
+                                                            GopJobBegin, GopJobStep, GopCaps,
+                                                            NULL,        NULL,       GopFini };

@@ -19,6 +19,12 @@ CompileFlags:
     - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
     - -I@@ROOT@@/external/wamr/core/shared/platform/include
     - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+    # MicroPython embed (metal/py glue); PathMatch alone is easy to miss.
+    - -I@@ROOT@@/build/micropython_embed
+    - -I@@ROOT@@/build/micropython_embed/port
+    - -I@@ROOT@@/build/micropython_embed/genhdr
+    - -I@@ROOT@@/src/pymergetic/metal/py/embed
+    - -DMICROPY_USE_INTERNAL_ERRNO=1
     # lwIP -I lives in efi/bios PathMatch + CDB only — a global EFI net -I
     # steals bios/.../dev/net (wrong lwipopts.h / PmBiosUefi.h).
 
@@ -57,7 +63,8 @@ CompileFlags:
     - -I@@ROOT@@/external/wamr/core/iwasm/include
     - -I@@ROOT@@/external/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
     - -DBH_PLATFORM_METAL_EFI
-    - -DBH_PLATFORM_ZEPHYR
+    - -DAPP_THREAD_STACK_SIZE_DEFAULT=6144
+    - -DAPP_THREAD_STACK_SIZE_MIN=4096
     - -DBUILD_TARGET_X86_64
     - -DWASM_ENABLE_LIBC_WASI=1
 
@@ -93,9 +100,22 @@ CompileFlags:
     - -I@@ROOT@@/external/wamr/core/iwasm/include
     - -I@@ROOT@@/external/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
     - -DBH_PLATFORM_METAL_EFI
-    - -DBH_PLATFORM_ZEPHYR
+    - -DAPP_THREAD_STACK_SIZE_DEFAULT=6144
+    - -DAPP_THREAD_STACK_SIZE_MIN=4096
     - -DBUILD_TARGET_X86_64
     - -DWASM_ENABLE_LIBC_WASI=1
+
+---
+# MicroPython glue — embed package (py/*.h, genhdr, port, mpconfigport).
+If:
+  PathMatch: .*/src/pymergetic/metal/py/.*\.(c|h)$
+CompileFlags:
+  Add:
+    - -I@@ROOT@@/build/micropython_embed
+    - -I@@ROOT@@/build/micropython_embed/port
+    - -I@@ROOT@@/build/micropython_embed/genhdr
+    - -I@@ROOT@@/src/pymergetic/metal/py/embed
+    - -DMICROPY_USE_INTERNAL_ERRNO=1
 
 ---
 # EFI WAMR platform .c — full EDK2 -I (never BIOS sibling CDB).
@@ -116,7 +136,8 @@ CompileFlags:
     - -I@@ROOT@@/include
     - -I@@ROOT@@/src/pymergetic/metal
     - -DBH_PLATFORM_METAL_EFI
-    - -DBH_PLATFORM_ZEPHYR
+    - -DAPP_THREAD_STACK_SIZE_DEFAULT=6144
+    - -DAPP_THREAD_STACK_SIZE_MIN=4096
     - -DBUILD_TARGET_X86_64
     - -DWASM_ENABLE_LIBC_WASI=1
 
@@ -174,7 +195,8 @@ CompileFlags:
     - -I@@ROOT@@/external/wamr/core/shared/utils
     - -DBH_PLATFORM_METAL_BIOS
     - -DBH_PLATFORM_METAL_EFI
-    - -DBH_PLATFORM_ZEPHYR
+    - -DAPP_THREAD_STACK_SIZE_DEFAULT=6144
+    - -DAPP_THREAD_STACK_SIZE_MIN=4096
     - -DBUILD_TARGET_X86_64
     - -DWASM_ENABLE_LIBC_WASI=1
 

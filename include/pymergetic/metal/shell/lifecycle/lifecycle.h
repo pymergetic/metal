@@ -15,26 +15,25 @@ extern "C" {
 
 #define PM_METAL_LIFECYCLE_WASI_MODULE "pymergetic.metal.lifecycle"
 
-#define PM_METAL_LIFE_FOCUSED   1u
-#define PM_METAL_LIFE_VISIBLE   2u
-#define PM_METAL_LIFE_CLOSING   4u
+#define PM_METAL_LIFE_FOCUSED 1u
+#define PM_METAL_LIFE_VISIBLE 2u
+#define PM_METAL_LIFE_CLOSING 4u
 
 typedef struct {
-	uint32_t surface; /* gfx surface handle; 0 = none / DEFAULT clear */
-	uint32_t flags;
+  uint32_t surface; /* gfx surface handle; 0 = none / DEFAULT clear */
+  uint32_t flags;
 } pm_metal_lifecycle_event_t;
 
 #if defined(__wasm__)
 #include "pymergetic/metal/wasi.h"
-#define PM_METAL_LIFECYCLE_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_LIFECYCLE_WASI_MODULE, name)
+#define PM_METAL_LIFECYCLE_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_LIFECYCLE_WASI_MODULE, name)
 
 /** Pop lifecycle event into guest struct at dest; 1=ok, 0=empty. */
 extern int32_t pm_metal_lifecycle_poll(uint32_t dest)
-	PM_METAL_LIFECYCLE_IMPORT(pm_metal_lifecycle_poll);
+  PM_METAL_LIFECYCLE_IMPORT(pm_metal_lifecycle_poll);
 /** 1 if surface currently focused. */
 extern int32_t pm_metal_lifecycle_focused(uint32_t surface)
-	PM_METAL_LIFECYCLE_IMPORT(pm_metal_lifecycle_focused);
+  PM_METAL_LIFECYCLE_IMPORT(pm_metal_lifecycle_focused);
 #else
 int32_t pm_metal_lifecycle_poll(pm_metal_lifecycle_event_t *out);
 int32_t pm_metal_lifecycle_focused(uint32_t surface);
@@ -43,7 +42,7 @@ int32_t pm_metal_lifecycle_focused(uint32_t surface);
 void pm_metal_lifecycle_set(uint32_t surface, uint32_t flags);
 void pm_metal_lifecycle_blur(void);
 
-int pm_metal_lifecycle_native_register(void);
+int  pm_metal_lifecycle_native_register(void);
 void pm_metal_lifecycle_bind_inst(void *module_inst);
 #endif
 

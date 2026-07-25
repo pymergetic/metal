@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Setup — EFI freestanding deps (hosted west/nuttx setup archived).
+# Setup — EFI/BIOS freestanding deps (hosted ports archived).
 # Usage: scripts/setup <name>
 #        scripts/setup all
 set -euo pipefail
@@ -16,19 +16,18 @@ usage: scripts/setup <name>
        scripts/setup all
 
 Deps (setup.d/deps/):
-  edk2   — Tianocore EDK2 + local nasm (required for metal.efi)
-  tools  wamr  wamrc  lwip  lz4  microtar  monocypher  mbedtls  nghttp2  curl  net
-  cpython  ide  doomgeneric
-
-  wamrc — prebuilt AOT compiler (.tools/wamrc); optional until a mod opts into .aot
-
-  lwip — TCP/IP stack for EFI virtio-net (NO_SYS raw API)
-  net  — chains monocypher + mbedtls + nghttp2 + curl
+  edk2         — Tianocore EDK2 + local nasm (required for metal.efi)
+  tools        — wasi-sdk + wasmtime into .tools/ (guest mod builds)
+  wamr wamrc   — runtime + optional AOT compiler (.tools/wamrc)
+  lwip lz4 microtar monocypher mbedtls
+  net          — monocypher + mbedtls (lwIP TLS stack)
+  micropython  — core scripting VM (shared metal/py; EFI/BIOS link)
+  doomgeneric  — Doom app source (METAL_DOOM_BUILD=1)
+  ide          — clangd / compile_flags refresh
 
 Platform:
   efi   — OVMF / toolchain notes
-
-  all   — edk2 + efi (+ optional guest deps)
+  all   — edk2 + efi
 EOF
 	exit 1
 }

@@ -9,7 +9,7 @@
 #ifdef assert
 #undef assert
 #endif
-#define assert(expr)  tlsf_assert (expr)
+#define assert(expr) tlsf_assert(expr)
 
 /*
   Rename C11 static_assert so tlsf's token-paste helper works under
@@ -18,6 +18,6 @@
 #ifdef static_assert
 #undef static_assert
 #endif
-#define static_assert  tlsf_sa_typedef
+#define static_assert tlsf_sa_typedef
 
 #include "tlsf.c"

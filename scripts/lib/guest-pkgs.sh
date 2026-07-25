@@ -1,23 +1,22 @@
 # Build named lz4 guest packages and embed .c files for all platforms.
 # Packages:
 #   mods-tests          /mods/tests/*.wasm
-#   python-stdlib       /lib/python3.14/** (+ folded wasi sysconfig files)
-#   mods-apps-python    /mods/apps/python.wasm, pm-test.py  deps: python-stdlib
 #
 # Outputs under build/guest-pkgs/:
-#   pkg_mods_tests.c  pkg_python_stdlib.c  pkg_mods_apps_python.c
+#   pkg_mods_tests.c
 #   pkgs.cmake        — list of .c to link
+#
+# Kernel MicroPython (metal/py) is not a guest package — see docs/MICROPYTHON.md.
 #
 # shellcheck shell=bash
 
 : "${PM_METAL_GUEST_TESTS:=1}"
-: "${PM_METAL_APP_PYTHON:=1}"
 
 PM_GUEST_PKGS="${ROOT}/build/guest-pkgs"
 PM_GUEST_PKGS_STAMP="${PM_GUEST_PKGS}/.stamp"
 
 pm_guest_pkgs_stamp_payload() {
-	printf 'tests=%s python=%s\n' "${PM_METAL_GUEST_TESTS}" "${PM_METAL_APP_PYTHON}"
+	printf 'tests=%s\n' "${PM_METAL_GUEST_TESTS}"
 }
 
 pm_guest_pkgs_is_fresh() {
@@ -51,34 +50,6 @@ pm_guest_pkgs_compose() {
 		"${ROOT}/scripts/lib/pack-pkg.sh" --id=mods-tests "${stage}" \
 			"${PM_GUEST_PKGS}/pkg_mods_tests.c"
 		cfiles+=("${PM_GUEST_PKGS}/pkg_mods_tests.c")
-		rm -rf "${stage}"
-	fi
-
-	if [[ "${PM_METAL_APP_PYTHON}" == "1" ]]; then
-		stage="$(mktemp -d)"
-		mkdir -p "${stage}/lib/python3.14"
-		cp -a "${PM_GUEST_PACKAGE_LIB}/." "${stage}/lib/python3.14/"
-		# Fold wasi sysconfig into Lib prefix (no /wasi-lib).
-		cp -a "${PM_GUEST_PACKAGE_WASI_LIB}/." "${stage}/lib/python3.14/"
-		# getpath probes …/lib-dynload (isdir). Keep a marker so ustar
-		# always carries the directory (empty dirs are easy to drop).
-		mkdir -p "${stage}/lib/python3.14/lib-dynload"
-		: >"${stage}/lib/python3.14/lib-dynload/.keep"
-		"${ROOT}/scripts/lib/pack-pkg.sh" --id=python-stdlib "${stage}" \
-			"${PM_GUEST_PKGS}/pkg_python_stdlib.c"
-		cfiles+=("${PM_GUEST_PKGS}/pkg_python_stdlib.c")
-		rm -rf "${stage}"
-
-		stage="$(mktemp -d)"
-		mkdir -p "${stage}/mods/apps"
-		cp "${PM_GUEST_PACKAGE_APPS}/python.wasm" "${stage}/mods/apps/python.wasm"
-		cp "${PM_GUEST_PACKAGE_APPS}/pm-test.py" "${stage}/mods/apps/pm-test.py"
-		# Do NOT ship pyvenv.cfg. getpath treats any present file as an active
-		# venv and rewrites prefix/exec_prefix to dirname(dirname(argv[0]))
-		# (/mods) — which then probes /mods/lib and fights PYTHONHOME=/.
-		"${ROOT}/scripts/lib/pack-pkg.sh" --id=mods-apps-python --dep=python-stdlib \
-			"${stage}" "${PM_GUEST_PKGS}/pkg_mods_apps_python.c"
-		cfiles+=("${PM_GUEST_PKGS}/pkg_mods_apps_python.c")
 		rm -rf "${stage}"
 	fi
 

@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-typedef int clockid_t;
+typedef int  clockid_t;
 typedef long time_t;
 
 #ifndef CLOCK_REALTIME
@@ -23,8 +23,8 @@ typedef long time_t;
 #endif
 
 struct timespec {
-	time_t tv_sec;
-	long tv_nsec;
+  time_t tv_sec;
+  long   tv_nsec;
 };
 
 #ifndef TIMER_ABSTIME
@@ -32,8 +32,10 @@ struct timespec {
 #endif
 
 int clock_gettime(clockid_t clock_id, struct timespec *tp);
-int clock_nanosleep(clockid_t clock_id, int flags,
-		    const struct timespec *request, struct timespec *remain);
+int clock_nanosleep(clockid_t              clock_id,
+                    int                    flags,
+                    const struct timespec *request,
+                    struct timespec       *remain);
 int nanosleep(const struct timespec *req, struct timespec *rem);
 int sched_yield(void);
 

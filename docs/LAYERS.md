@@ -7,8 +7,8 @@ Everything above the **wasm interface** is out of scope here.
 targets = { efi }   # freestanding UEFI + static virtio
 ```
 
-Hosted ports (linux, zephyr, nuttx, rump, unikraft) were removed from this
-branch; full trees live on `archive/multi-host-linux-zephyr-nuttx`.
+Hosted ports (linux, nuttx, rump, unikraft) were removed from this branch;
+full trees live on `archive/multi-host`.
 
 `efi` is Metal as a UEFI application (`src/efi/MetalPkg` + binds under
 `src/efi/pymergetic/metal/`; contracts in `src/pymergetic/metal/`). After

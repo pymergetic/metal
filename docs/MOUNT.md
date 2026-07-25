@@ -1,6 +1,6 @@
 # Mount
 
-> Hosted linux/zephyr/nuttx ports are on `archive/multi-host-linux-zephyr-nuttx`.
+> Hosted ports are on `archive/multi-host`.
 > This doc remains the guest mount *contract*; EFI will implement a subset (RAM / virtio-blk).
 
 A real, Linux-like mount system: a mount table instead of one fixed `vfs_root`, multiple
@@ -13,8 +13,7 @@ See [RUNTIME.md § VFS root](RUNTIME.md#vfs-root-same-every-load) (what this rep
 
 **Landed on linux (Phases 1–6c):** mount table, `hostdir`/`tmpfs`/`proc`, fstab/`--mount=`/
 `--rootfs=`, populate, guest `mount()`/`umount()` with same-process visibility (live remount),
-virtual `/proc`. **Zephyr still needs a real `wasi/file.c`** (tmpfs/device/proc/live remount
-all blocked there). **Later:** real device/partition FS on Zephyr. Overlay/union is **out of
+all blocked there). Overlay/union is **out of scope**.
 scope**.
 
 ---
@@ -35,7 +34,7 @@ exists*, not inventing a VFS layer from scratch.
 
 **Landed on linux:** mount table (not a single `vfs_root`), `hostdir` / `tmpfs` / `proc`,
 loader `resolve()` against that table, guest `mount()`/`umount()`, and Metal `os_*` live
-remount so path ops re-resolve after instantiate. **Still open:** Zephyr `wasi/file.c` (+
+remount so path ops re-resolve after instantiate. **Still open:** hosted `wasi/file.c` (+
 tmpfs/device/proc on that target), optional real partition FS later.
 
 ---
@@ -51,10 +50,10 @@ no on-disk structure at all).
 This design only ever needs the **fstype** axis, not a real "ramdisk" concept, because nothing
 here is writing an actual block-device driver or an on-disk filesystem parser:
 
-| fstype | `<source>` column | linux impl | zephyr impl |
+| fstype | `<source>` column | linux impl | hosted impl |
 |--------|-------------------|------------|-------------|
 | `hostdir` | a real host directory path (required) | literal passthrough — whatever real filesystem the host has that directory on (ext4, tmpfs, NFS, doesn't matter) is the host's problem, not ours | n/a for now — no real mounted FS to point at yet |
-| `tmpfs` | a **name** (see "Named ramdisks" below — not literally `none`) | delegates to the host's *own* real tmpfs — `mkdtemp()` under `/dev/shm`, then treated internally as an ordinary `hostdir` | no true device-less pseudo-fs on Zephyr, so `establish()` does **two** steps under one fstype: provision a `zephyr,ram-disk` block device, then `fs_mount()` littlefs/FAT onto it — the block-device step is an implementation detail of *this* fstype's own `bind`, never a separate mount-table entry or fstab line |
+| `tmpfs` | a **name** (see "Named ramdisks" below — not literally `none`) | delegates to the host's *own* real tmpfs — `mkdtemp()` under `/dev/shm`, then treated internally as an ordinary `hostdir` | no true device-less pseudo-fs on hosted, so `establish()` does **two** steps under one fstype: provision a `hosted,ram-disk` block device, then `fs_mount()` littlefs/FAT onto it — the block-device step is an implementation detail of *this* fstype's own `bind`, never a separate mount-table entry or fstab line |
 | `proc` | ignored (conventionally `proc`) | sentinel `pm-metal:proc` + Metal `os_*` hooks (no host dir) | same contract once `wasi/file.c` is real |
 
 Later, real device-backed fstypes (Phase 6, not building yet) *do* need a meaningful
@@ -64,30 +63,30 @@ there's an actual persistent block device/image to name, unlike `tmpfs`/`hostdir
 
 ### Block device layer — yes, add it now, not in Phase 6
 
-Zephyr's own storage stack already forces this split to exist: `fs_mount()` (littlefs or FAT)
+hosted's own storage stack already forces this split to exist: `fs_mount()` (littlefs or FAT)
 can't run against nothing — it needs a `disk_access`-registered device first. So "provision a
 ramdisk, then format it" isn't a `tmpfs`-specific hack to hide, it's a real, separate step
-Zephyr's own API requires regardless — worth making a first-class, reusable primitive from the
+hosted's own API requires regardless — worth making a first-class, reusable primitive from the
 start instead of burying it inside `tmpfs.c` and having to pull it back out for Phase 6 (real
 partitions) later:
 
 | Piece | Role | Scope |
 |-------|------|-------|
-| `mount/device.h` / `.c` | `pm_metal_mount_device_kind_t` (`RAMDISK` now; `PARTITION`/`IMAGE` in Phase 6) + ops-struct `establish(opts)` → opaque device handle, `release(handle)` | `impl: bind`, **zephyr-only for now** — linux's `tmpfs`/`hostdir` talk straight to the host's own already-mounted filesystem and never touch a device concept at all; leave a `/* not impl: bind — linux tmpfs delegates to host tmpfs directly, no device step */` placeholder there per SOURCETREE.md's own convention, same as any other target that has nothing to implement for a given symbol |
-| `mount/tmpfs.c` (zephyr) | **composes**, doesn't own, the device step: `device.h`'s own `ramdisk` kind `establish()` → device handle, then `fs_mount()` littlefs onto it directly (no separate pluggable "littlefs fstype module" yet — one fixed, internal choice, since `tmpfs` only ever needs *a* scratch fs, not a *choice* of one) | zephyr |
-| Phase 6's real device-backed fstypes (`littlefs`/`fat`, deferred) | reuse the *same* `device.h` primitive, swapping in a `PARTITION`/`IMAGE` device kind instead of `RAMDISK` — same "device, then format" shape either way | zephyr (+ whichever real block storage a target adds) |
+| `mount/device.h` / `.c` | `pm_metal_mount_device_kind_t` (`RAMDISK` now; `PARTITION`/`IMAGE` in Phase 6) + ops-struct `establish(opts)` → opaque device handle, `release(handle)` | `impl: bind`, **hosted-only for now** — linux's `tmpfs`/`hostdir` talk straight to the host's own already-mounted filesystem and never touch a device concept at all; leave a `/* not impl: bind — linux tmpfs delegates to host tmpfs directly, no device step */` placeholder there per SOURCETREE.md's own convention, same as any other target that has nothing to implement for a given symbol |
+| `mount/tmpfs.c` (hosted) | **composes**, doesn't own, the device step: `device.h`'s own `ramdisk` kind `establish()` → device handle, then `fs_mount()` littlefs onto it directly (no separate pluggable "littlefs fstype module" yet — one fixed, internal choice, since `tmpfs` only ever needs *a* scratch fs, not a *choice* of one) | hosted |
+| Phase 6's real device-backed fstypes (`littlefs`/`fat`, deferred) | reuse the *same* `device.h` primitive, swapping in a `PARTITION`/`IMAGE` device kind instead of `RAMDISK` — same "device, then format" shape either way | hosted (+ whichever real block storage a target adds) |
 
-`tmpfs`'s own fstab/mount-table contract does not change — this only reshapes what its zephyr
+`tmpfs`'s own fstab/mount-table contract does not change — this only reshapes what its hosted
 `establish()` calls internally, from one opaque blob into two named, independently testable
 steps.
 
-### The zephyr ram disk itself — devicetree-declared, not runtime-allocated
+### The hosted ram disk itself — devicetree-declared, not runtime-allocated
 
-Concretely, via a Zephyr `zephyr,ram-disk` overlay (the mechanism itself is real Zephyr):
+Concretely, via a hosted `hosted,ram-disk` overlay (the mechanism itself is real hosted):
 
 ```dts
 ramdisk0 {
-	compatible = "zephyr,ram-disk";
+	compatible = "hosted,ram-disk";
 	disk-name = "RAM";
 	sector-size = <512>;
 	sector-count = <2048>;      /* 512 * 2048 = 1 MiB, fixed at build time */
@@ -95,27 +94,27 @@ ramdisk0 {
 ```
 
 Plus `CONFIG_DISK_ACCESS=y` / `CONFIG_DISK_DRIVERS=y` / `CONFIG_DISK_DRIVER_RAM=y` in `prj.conf`.
-This is a **devicetree node** — Zephyr's own `ram_disk` driver reads `sector-size`/
+This is a **devicetree node** — hosted's own `ram_disk` driver reads `sector-size`/
 `sector-count` and reserves that many bytes of static image memory, then self-registers against
-`disk_access_init("RAM")` during Zephyr's own driver init, **before** `main()` runs at all. Two
-consequences that change what `device.h`'s zephyr `establish()` actually does and what it can't:
+`disk_access_init("RAM")` during hosted's own driver init, **before** `main()` runs at all. Two
+consequences that change what `device.h`'s hosted `establish()` actually does and what it can't:
 
 1. **`establish()` doesn't create the device — it's already there.** The real work is just
    `disk_access_init(disk_name)` (idempotent — safe to call again) and handing back `disk_name`
    (a plain string, e.g. `"RAM"`) as the opaque device handle `tmpfs.c` passes to `fs_mount()`.
 2. **Size is a build-time constant per board, not a runtime `size=` option.** Unlike linux
    (where `mkdtemp()` under real `/dev/shm` genuinely can grow up to whatever the host's tmpfs
-   allows), a fstab line's `size=8M` on zephyr can only be **validated** against whatever the
+   allows), a fstab line's `size=8M` on hosted can only be **validated** against whatever the
    board's own overlay already declared (query via `disk_access_ioctl(disk_name,
    DISK_IOCTL_GET_SECTOR_COUNT/SIZE, ...)`) — asking for more than that is a hard fail for that
    line (logged + skipped, per Stage B's existing non-fatal-per-line rule), not something
-   `establish()` can grant on demand. Each zephyr board target needs its own
+   `establish()` can grant on demand. Each hosted board target needs its own
    `boards/<board>.overlay` (today: empty, just `.gitkeep`) sized generously enough up front for
    whatever that board's `tmpfs` use actually needs (e.g. Phase 4's embedded-image extraction).
-3. `release()` is close to a no-op on zephyr — the backing memory is static (BSS/image-reserved
+3. `release()` is close to a no-op on hosted — the backing memory is static (BSS/image-reserved
    either way), there's no real "free the ram disk" call the way linux's `release()` genuinely
    `rm -rf`s a real `mkdtemp()`'d directory.
-4. **Multiple simultaneous zephyr `tmpfs` mounts need multiple DT nodes** (distinct
+4. **Multiple simultaneous hosted `tmpfs` mounts need multiple DT nodes** (distinct
    `disk-name`s, e.g. `"RAM0"`/`"RAM1"`) decided at board-overlay-authoring time — not something
    the mount table or fstab can conjure at runtime, since the disk itself doesn't exist until
    it's declared in the tree. `fs_mount()` also needs its own distinct littlefs runtime-state
@@ -124,15 +123,15 @@ consequences that change what `device.h`'s zephyr `establish()` actually does an
 
 Worth calling out plainly: this means "configurable ram disk (all platforms)" from the original
 ask is **not symmetric** between targets — genuinely runtime-configurable on linux, but
-board-overlay-configurable (i.e. a build-time decision per target image) on zephyr. Document
+board-overlay-configurable (i.e. a build-time decision per target image) on hosted. Document
 this at the CLI/fstab level too once Phase 3 actually lands, so `size=` doesn't silently mean
 two different things on the two targets.
 
-Zephyr also has its *own*, separate, devicetree-native `zephyr,fstab` binding (`compatible =
-"zephyr,fstab"`, `automount`/`disk-access`/`mount-point` properties — visible in that same old
+hosted also has its *own*, separate, devicetree-native `hosted,fstab` binding (`compatible =
+"hosted,fstab"`, `automount`/`disk-access`/`mount-point` properties — visible in that same old
 overlay) that can auto-mount a filesystem before `main()` runs, no C code at all. That's a
-plausible simplification for **Stage A's root mount specifically** on zephyr — `pm_metal_mount()`
-at `init()` would then just *record* that Zephyr's own automount already happened (for
+plausible simplification for **Stage A's root mount specifically** on hosted — `pm_metal_mount()`
+at `init()` would then just *record* that hosted's own automount already happened (for
 `resolve()`/`map_dir_list` bookkeeping) rather than performing the mount itself. It's not a
 substitute for Stage B: `/etc/fstab` has to stay a runtime-readable, guest-visible text file
 (for busybox's own `mount -a` to eventually parse), which a static devicetree node can't be.
@@ -155,7 +154,7 @@ How a name resolves to an actual backing differs completely per target — this 
 | Target | How a name is declared | Runtime-configurable? |
 |--------|------------------------|------------------------|
 | **linux** | **Nothing to declare.** First fstab/`--mount=` line (or later guest `mount()` call) referencing a given name creates it on the spot — `mkdtemp()` under `/dev/shm`, size from that line's own `size=` (or a default). A second line naming the same `scratch` just reuses the already-`establish()`'d instance (mounted at a *different* `<target>` if it says so — same backing, two guest paths) rather than creating a second one. | **Yes, fully** — any name, any size, at any time; this is the strictly more flexible side. |
-| **zephyr** | Name must already exist as a `disk-name` in **that board's own overlay** (`boards/<board>.overlay`) — `establish("builtin", opts)` calls `disk_access_init("builtin")`, which only succeeds if a `zephyr,ram-disk` DT node with that exact `disk-name` was compiled in. Referencing an undeclared name is a normal Stage B per-line failure (logged, skipped), not a crash. | **No — build-time only.** Wanting a second, independently-sized named ramdisk means adding a second DT node to the overlay and rebuilding, not a runtime call. |
+| **hosted** | Name must already exist as a `disk-name` in **that board's own overlay** (`boards/<board>.overlay`) — `establish("builtin", opts)` calls `disk_access_init("builtin")`, which only succeeds if a `hosted,ram-disk` DT node with that exact `disk-name` was compiled in. Referencing an undeclared name is a normal Stage B per-line failure (logged, skipped), not a crash. | **No — build-time only.** Wanting a second, independently-sized named ramdisk means adding a second DT node to the overlay and rebuilding, not a runtime call. |
 
 The registry that tracks "has name X already been `establish()`'d this boot" is private to
 `mount/tmpfs.c` (or a small `tmpfs_registry.c` helper) — a name → backing lookup, separate from
@@ -163,7 +162,7 @@ The registry that tracks "has name X already been `establish()`'d this boot" is 
 legitimately back more than one mount point at once, e.g. `builtin` mounted read-write at one
 path for setup and read-only at another for guests). First `establish()` for a name wins; later
 references to the same name reuse it and ignore any conflicting `size=`/opts on that later line
-(a warning, not a Stage-B-failing error) — matches zephyr, where those opts were never anything
+(a warning, not a Stage-B-failing error) — matches hosted, where those opts were never anything
 but validation against an already-fixed DT capacity anyway.
 
 **Phase 4 — boot-time populate (refined):** not name→blob. After Stage B has mounted
@@ -205,7 +204,7 @@ keep their old backing (Linux-like). Proven by `scripts/verify linux none sys-mo
 mounts + same-process use).
 
 Virtual `/proc` was the first consumer of this `os_*` seam (Phase 6b); live remount extends
-it to hostdir/tmpfs. Zephyr gets the same contract once its `wasi/file.c` is real.
+it to hostdir/tmpfs. hosted gets the same contract once its `wasi/file.c` is real.
 
 ---
 
@@ -221,7 +220,7 @@ hook → write file under /tmp/pm_metal_proc → WASI preopen as hostdir → gue
 ```
 
 That path is gone. It was not hook-on-open, raced across processes on cmdline/environ, and
-needed host `/tmp` (dead on Zephyr).
+needed host `/tmp` (dead on hosted).
 
 ### Landed (Phase 6b — linux)
 
@@ -261,7 +260,7 @@ Shared nodes stay at the proc root and are process-independent:
 ### Relationship to other mounts
 
 On linux, hostdir/tmpfs and `proc` share the same live-resolve `os_*` seam: preopens are still
-established at instantiate, but path ops re-resolve against the live table. Zephyr remains
+established at instantiate, but path ops re-resolve against the live table. hosted remains
 blocked on a real `wasi/file.c` for *all* mounts (same contract once that lands).
 
 ---
@@ -277,7 +276,7 @@ cmdline vs. `/etc/fstab` for everything after) — mirror it:
 | Target | Source today | Source proposed |
 |--------|--------------|------------------|
 | linux | `--vfs-root=<dir>` (hostdir, hardcoded kind) | `--rootfs=<fstype>:<source>` (`--rootfs=hostdir:/srv/app`, `--rootfs=tmpfs:root,size=32M` — `<source>` is a **name**, see "Named ramdisks" below, not a size); `--vfs-root=<dir>` kept as a deprecated alias for `--rootfs=hostdir:<dir>` |
-| zephyr | n/a (stub, see below) | Kconfig/board-overlay-selected fixed choice — root's `tmpfs` `<source>` name and its DT `disk-name`/size are both decided by that board's own overlay, not argv |
+| hosted | n/a (stub, see below) | Kconfig/board-overlay-selected fixed choice — root's `tmpfs` `<source>` name and its DT `disk-name`/size are both decided by that board's own overlay, not argv |
 
 Both call the same `pm_metal_mount(kind, "/", source, opts)` — only where the arguments come
 from differs per target. Stage A failing is fatal, same as today's `init()` failing.
@@ -327,21 +326,22 @@ testing without editing an image's fstab.
 
 ### After Stage B — product defaults, then populate
 
-`app.c` (and Zephyr verify's Stage B mirror) always ensure, if missing:
+`app.c` (and hosted verify's Stage B mirror) always ensure, if missing:
 
 | Guest path | Kind | Notes |
 |------------|------|--------|
 | `/proc` | `proc` | Virtual procfs |
-| `/tmp` | `tmpfs` source `tmp` | Named ramdisk / host tmpfs; Zephyr DT `disk-name = "tmp"` |
+| `/tmp` | `tmpfs` source `tmp` | Named ramdisk / host tmpfs; hosted DT `disk-name = "tmp"` |
 
-Then **`pkg_apply_all()`** extracts named lz4+ustar guest packages (`mods-tests`,
-`python-stdlib`, `mods-apps-python`, …) onto `/`, then **`populate_all()`** extracts any
-anonymous verify-only populate embeds. Missing `/etc/fstab` is normal for product boot —
-content arrives via packages (and optional populate embeds), not via a multi-line scratch
-fstab. Same package set is embedded on Linux, NuttX, and Zephyr (`scripts/lib/guest-pkgs.sh`).
+Then **`pkg_apply_all()`** extracts named lz4+ustar guest packages (`mods-tests`, …)
+onto `/`, then **`populate_all()`** extracts any anonymous verify-only populate embeds.
+Missing `/etc/fstab` is normal for product boot — content arrives via packages (and
+optional populate embeds), not via a multi-line scratch fstab. Same package set is
+embedded on Linux, NuttX, and hosted (`scripts/lib/guest-pkgs.sh`). Kernel MicroPython
+is not a guest package (see [`MICROPYTHON.md`](MICROPYTHON.md)).
 
 **Test-only mounts** (`scratch` → `/scratch`/`/scratchB`, `other` → `/other`) live only in
-verify scripts (`scripts/verify.d/port/linux/tmpfs.sh`, `populate.sh`, and Zephyr verify just
+verify scripts (`scripts/verify.d/port/linux/tmpfs.sh`, `populate.sh`, and hosted verify just
 before those batches). They are not part of the product default boot layout.
 
 Whatever currently follows (today: `app.c`'s scripted mode running the CLI-given mod list)
@@ -361,9 +361,9 @@ New module, `src/common/pymergetic/metal/mount/` — `impl: common`, ops-struct 
 |------|--------|------|
 | `table.h` / `table.c` | `pm_metal_mount_` | table CRUD (`mount()`/`umount()`/`list()`), `resolve(guest_path)` → host path + remainder (longest-prefix, mirrors wasi-libc's own algorithm — used by the *loader's* own reads, e.g. `.wasm` bytecode, not guest WASI I/O), `build_map_dir_list()` (emits one `"<guest>::<host>"` per directory-backed mount for `run_ex()`) |
 | `ops.h` | — | shared `pm_metal_mount_ops_t` struct (`establish`/`release`, mirrors `memory/ops.h`) + `pm_metal_mount_kind_t` enum |
-| `hostdir.h` / `.c` | `pm_metal_mount_hostdir_` | passthrough of a real host directory — `impl: bind`, trivial on linux (validate + `realpath`), `impl: common`-ish on zephyr too once its own FS is real (backing dir must already be a mounted FS there) |
-| `device.h` / `.c` | `pm_metal_mount_device_` | **zephyr-only** ops-struct for block devices (`RAMDISK` kind now) — see "Block device layer" above; not yet added |
-| `tmpfs.h` / `.c` | `pm_metal_mount_tmpfs_` | `impl: bind` per target — **linux landed**: `mkdtemp()` under `/dev/shm` (already real tmpfs = RAM), then registered internally as an ordinary hostdir (no device layer involved at all); **zephyr still a stub**: will call `device.h`'s `ramdisk` kind `establish()` for the device, then `fs_mount()` littlefs directly onto it — the one genuinely new per-target backend, blocked on `wasi/file.c` (see "Zephyr prerequisite" below) |
+| `hostdir.h` / `.c` | `pm_metal_mount_hostdir_` | passthrough of a real host directory — `impl: bind`, trivial on linux (validate + `realpath`), `impl: common`-ish on hosted too once its own FS is real (backing dir must already be a mounted FS there) |
+| `device.h` / `.c` | `pm_metal_mount_device_` | **hosted-only** ops-struct for block devices (`RAMDISK` kind now) — see "Block device layer" above; not yet added |
+| `tmpfs.h` / `.c` | `pm_metal_mount_tmpfs_` | `impl: bind` per target — **linux landed**: `mkdtemp()` under `/dev/shm` (already real tmpfs = RAM), then registered internally as an ordinary hostdir (no device layer involved at all); **hosted still a stub**: will call `device.h`'s `ramdisk` kind `establish()` for the device, then `fs_mount()` littlefs directly onto it — the one genuinely new per-target backend, blocked on `wasi/file.c` (see "hosted prerequisite" below) |
 | `tmpfs_registry.h` / `.c` | `pm_metal_mount_tmpfs_registry_` | **landed**, `impl: common` — name → host-path + refcount bookkeeping shared by every target's own `tmpfs.c` (see "Named ramdisks" above); deliberately keyed by *name*, separate from `mount.c`'s own guest-path-keyed table |
 | `populate.h` / `.c` | `pm_metal_mount_populate_` | **landed**, `impl: common` — anonymous ustar [+ lz4] blob registry + `populate_all()` / `populate_extract()` against guest `/` |
 | `pkg.h` / `.c` | `pm_metal_pkg_` | **landed**, `impl: common` — named packages with dep graph; `pkg_apply_all()` / `pkg_ensure()` call `populate_extract()` |
@@ -429,8 +429,8 @@ packages/metal/
 │   │   ├── proc.h / proc.c          [6b] virtual proc registry + sentinel establish; lookup/hooks/bind TLS
 │   │   ├── proc/                    [6b] per-node generators + guest TLS (cmdline/environ via /proc/self)
 │   │   ├── mount.c                  [5]  wasi bridge for include/.../mount/mount.h — impl: common
-│   │   ├── hostdir.h / hostdir.c    [1]  impl: bind (linux trivial; zephyr once its own FS is real)
-│   │   ├── device.h                 [3]  zephyr-only block-device ops-struct + kind enum — see "Block device layer" — not yet added
+│   │   ├── hostdir.h / hostdir.c    [1]  impl: bind (linux trivial; hosted once its own FS is real)
+│   │   ├── device.h                 [3]  hosted-only block-device ops-struct + kind enum — see "Block device layer" — not yet added
 │   │   ├── tmpfs.h                  [3]  DONE (linux) — shared ops-struct decl, impl: bind per target
 │   │   ├── tmpfs_registry.h / .c    [3]  DONE — impl: common, name → host-path + refcount bookkeeping
 │   │   ├── populate.h / populate.c  [4]  DONE — global blob registry + populate_all() (ustar/lz4 → resolve → port write)
@@ -451,19 +451,19 @@ packages/metal/
 │       │   └── posix_file_real.c    [6b] DONE — WAMR posix_file.c with os_* → __real_os_*
 │       └── port/platform.c          CHANGED [4]  write_file()/mkdir() impl — DONE (linux)
 │
-├── src/zephyr/
+├── src/<archived-host>/
 │   ├── Kconfig                      CHANGED [1]  CONFIG_PM_METAL_ROOTFS_NAME etc. (which
 │   │                                             declared disk-name is root — size itself
 │   │                                             lives in the overlay below, not Kconfig) — not yet added
-│   ├── boards/<board>.overlay       NEW [3]  per-board `zephyr,ram-disk` DT node(s) — name(s)
+│   ├── boards/<board>.overlay       NEW [3]  per-board `hosted,ram-disk` DT node(s) — name(s)
 │   │                                          + size fixed here, not at runtime; see "The
-│   │                                          zephyr ram disk itself" / "Named ramdisks" above
+│   │                                          hosted ram disk itself" / "Named ramdisks" above
 │   │                                          (dir exists today, empty/.gitkeep)
 │   └── pymergetic/metal/
 │       ├── wasi/file.c              CHANGED [3, 6b prereq]  real os_* backend + virtual proc open/read
 │       │                                                  — currently a stub, see below
 │       ├── mount/
-│       │   ├── device.c             [3]  impl: bind — RAMDISK kind: registers a zephyr,ram-disk disk_access device — not yet added
+│       │   ├── device.c             [3]  impl: bind — RAMDISK kind: registers a hosted,ram-disk disk_access device — not yet added
 │       │   └── tmpfs.c              [3]  STUB landed (always fails — blocked on wasi/file.c + device.c above)
 │       └── port/platform.c          CHANGED [4]  write_file()/mkdir() stub until wasi/file.c + real FS
 │
@@ -498,38 +498,38 @@ scope until either target itself is brought up.
 |---|-------|------|------------|
 | 1 | Mount table refactor | `mount/` module; single root mount, behavior identical to today | — |
 | 2 | `/etc/fstab` + `--mount=` | Stage B parser/applier; CLI sugar as synthetic fstab line | 1 |
-| 3 | `tmpfs` fstype + `device.h` layer | **linux: done** (`/dev/shm`-backed hostdir + named-source registry); **zephyr: still stub** — new `device.h` (`RAMDISK` kind) + `tmpfs.c` composing it with `fs_mount()` littlefs | 1–2; zephyr also blocked on `wasi/file.c` (below) |
+| 3 | `tmpfs` fstype + `device.h` layer | **linux: done** (`/dev/shm`-backed hostdir + named-source registry); **hosted: still stub** — new `device.h` (`RAMDISK` kind) + `tmpfs.c` composing it with `fs_mount()` littlefs | 1–2; hosted also blocked on `wasi/file.c` (below) |
 | 4 | Boot-time populate | ustar [+ lz4] embeds; global `populate_register` list; `populate_all()` extracts against guest `/` via resolve + port `write_file`/`mkdir`; `pack-image.sh` | 3 (linux half enough to prove) |
 | 5 | Guest `mount()`/`umount()` | **done** — privileged wasi import in `include/.../mount/mount.h` (bridge in `mount.c`) + `MOUNT` marker | 1–3 |
 | 6a | Procfs hooks (interim) | **deleted** — materialize-to-`/tmp` path removed when 6b landed | 1–5 |
-| 6b | Virtual `/proc` + WASI path intercept | **done (linux)** — sentinel establish, hook-on-open, `/proc/self/{cmdline,environ}` via TLS bind, Metal `os_*` shim; **zephyr still stub** (`wasi/file.c`) | 1–5, WASI file seam |
-| 6c | Live remount | **done (linux)** — every `os_*at` re-resolves against the live mount table; same-process `mount()` visible; **zephyr deferred** with its `wasi/file.c` | 6b |
-| 6 (later) | Real device/partition FS (`littlefs`/`fat`) on Zephyr. **Not** overlay/union — out of scope. | 1–5, 6c, Zephyr WASI |
+| 6b | Virtual `/proc` + WASI path intercept | **done (linux)** — sentinel establish, hook-on-open, `/proc/self/{cmdline,environ}` via TLS bind, Metal `os_*` shim; **hosted still stub** (`wasi/file.c`) | 1–5, WASI file seam |
+| 6c | Live remount | **done (linux)** — every `os_*at` re-resolves against the live mount table; same-process `mount()` visible; **hosted deferred** with its `wasi/file.c` | 6b |
+| 6 (later) | Real device/partition FS (`littlefs`/`fat`) on hosted. **Not** overlay/union — out of scope. | 1–5, 6c, hosted WASI |
 
-### Zephyr prerequisite (blocks Phase 3+ testing on that target, not the design itself)
+### hosted prerequisite (blocks Phase 3+ testing on that target, not the design itself)
 
-`src/zephyr/pymergetic/metal/wasi/file.c` is currently a stub (`pm_metal_wasi_file_init()`
-just `return -1`). Needs a real WAMR `os_*` file backend before *any* zephyr mount — including
+`src/<archived-host>/pymergetic/metal/wasi/file.c` is currently a stub (`pm_metal_wasi_file_init()`
+just `return -1`). Needs a real WAMR `os_*` file backend before *any* hosted mount — including
 today's already-planned root `tmpfs` from `docs/RUNTIME.md` § "Bring-up plan" #5 — can work at
 all.
 
-**Checked directly against the vendored `external/zephyr` (4.4), not assumed.** An earlier
+**Checked directly against the vendored `external/<archived-rtos>` (4.4), not assumed.** An earlier
 hand-rolled `fs_*` backend (one global `prestat_dir`, single-preopen only) is exactly what
 this design corrects — not the model to follow:
 
-- Zephyr's own POSIX subsystem (`CONFIG_POSIX_API`, `lib/posix/options/fs.c` +
+- hosted's own POSIX subsystem (`CONFIG_POSIX_API`, `lib/posix/options/fs.c` +
   `device_io.c`) genuinely provides real, fd-table-backed `open()`/`read()`/`write()`/
   `close()`/`stat()`/`fstat()`/`mkdir()`/`rmdir()`/`rename()`/`unlink()`/`opendir()`/
   `readdir()`/`closedir()` — each just forwards to `fs_*`/`zvfs_*` underneath. That's real,
-  maintained upstream compat surface — the zephyr `os_*` backend should build on *these*, not
-  go straight to raw `fs_*` structs itself (less custom code, tracks Zephyr's own fs stack for
+  maintained upstream compat surface — the hosted `os_*` backend should build on *these*, not
+  go straight to raw `fs_*` structs itself (less custom code, tracks hosted's own fs stack for
   free).
 - **Confirmed absent, grep'd, not assumed:** the whole `*at()` family — no `openat()`, no
-  `fstatat()`, no `renameat()`, no `mkdirat()`, anywhere in Zephyr's POSIX layer. This — not
-  "does zephyr have a real filesystem" — is the actual gap. It's why NuttX (which *does* have
+  `fstatat()`, no `renameat()`, no `mkdirat()`, anywhere in hosted's POSIX layer. This — not
+  "does hosted have a real filesystem" — is the actual gap. It's why NuttX (which *does* have
   a full `*at()` family) gets to reuse WAMR's stock `external/wamr/.../platform/common/posix/
   posix_file.c` almost verbatim (a couple of `#ifdef __NuttX__` toggles — see
-  `compilation_on_nuttx.yml`), while zephyr cannot: that door is closed for this target
+  `compilation_on_nuttx.yml`), while hosted cannot: that door is closed for this target
   specifically, confirmed by reading the source, not by inference from the old attempt.
 - Design for the new `os_*` backend: each `os_file_handle` (one per `os_open_preopendir()` —
   i.e. one per active mount-table entry, **not** a single global `prestat_dir` (which is what
@@ -573,8 +573,8 @@ this design corrects — not the model to follow:
 - [x] `/etc/fstab` parsed + applied at boot, missing file is a no-op (Phase 2)
 - [x] `--mount=` CLI flag, linux-only, equivalent to a synthetic fstab line (Phase 2)
 - [x] `tmpfs` fstype works on linux (`/dev/shm`-backed) (Phase 3)
-- [ ] `device.h` (`RAMDISK` kind) lands on zephyr as its own reusable primitive, not buried in `tmpfs.c` (Phase 3)
-- [ ] `tmpfs` fstype works on zephyr (real ram-disk + `fs_mount()`) — blocked on `wasi/file.c` (Phase 3)
+- [ ] `device.h` (`RAMDISK` kind) lands on hosted as its own reusable primitive, not buried in `tmpfs.c` (Phase 3)
+- [ ] `tmpfs` fstype works on hosted (real ram-disk + `fs_mount()`) — blocked on `wasi/file.c` (Phase 3)
 - [x] two independently-named `tmpfs` sources coexist without clobbering each other; a repeated name reuses instead of re-creating (Phase 3, linux)
 - [x] boot-time populate: ustar [+ lz4] embeds register into a global list; `populate_all()` extracts against guest `/` via resolve + port write (Phase 4, linux)
 - [x] guest-callable `mount()`/`umount()`, privileged-only, proven by a mod sequence (Phase 5)
@@ -582,5 +582,5 @@ this design corrects — not the model to follow:
 - [x] Phase 6b: virtual `proc` — open/read answered by hooks; no host backing dir; `/proc/self/{cmdline,environ}` per process (**linux**)
 - [x] Phase 6b: Metal WASI path intercept for `proc` on linux (`wasi/file.c` + `posix_file_real.c`)
 - [x] Phase 6c: live remount on linux — path ops re-resolve against the live table; same-process `mount()` visible
-- [ ] Phase 6b/6c on zephyr: same virtual-proc + live-remount contract once `wasi/file.c` is real
+- [ ] Phase 6b/6c on hosted: same virtual-proc + live-remount contract once `wasi/file.c` is real
 - [x] WASI prestat freeze + linux live-remount fix documented here

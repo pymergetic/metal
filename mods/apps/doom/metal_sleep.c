@@ -13,31 +13,28 @@
 
 static uint32_t s_fake_ms;
 
-void
-metal_doom_sleep_bump_ms(uint32_t ms)
+void metal_doom_sleep_bump_ms(uint32_t ms)
 {
-	s_fake_ms += ms;
+  s_fake_ms += ms;
 }
 
-uint32_t
-metal_doom_fake_ms(void)
+uint32_t metal_doom_fake_ms(void)
 {
-	return s_fake_ms;
+  return s_fake_ms;
 }
 
-void
-__wrap_I_Sleep(int ms)
+void __wrap_I_Sleep(int ms)
 {
-	uint32_t bump;
+  uint32_t bump;
 
-	if (ms < 1) {
-		ms = 1;
-	}
+  if (ms < 1) {
+    ms = 1;
+  }
 
-	bump = (uint32_t)ms;
-	if (bump < METAL_DOOM_TIC_MS) {
-		bump = METAL_DOOM_TIC_MS;
-	}
+  bump = (uint32_t)ms;
+  if (bump < METAL_DOOM_TIC_MS) {
+    bump = METAL_DOOM_TIC_MS;
+  }
 
-	metal_doom_sleep_bump_ms(bump);
+  metal_doom_sleep_bump_ms(bump);
 }

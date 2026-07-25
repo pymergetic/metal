@@ -14,9 +14,6 @@ mods/build/
 
 # Vendored / generated trees
 /external/
-/modules/
-/bootloader/
-/tools/
 /third_party/
 
 # IDE / tooling
@@ -35,11 +32,6 @@ cmake-build-*/
 /*.efi
 /build/efi/
 
-# Accidental local ELF symlinks
-/nuttx.elf
-
-# West (archived Zephyr workspace; not used by EFI/BIOS Metal)
-.west/
 
 # wamrc temp stack-usage dumps (cwd leftovers)
 wamrc-su-*.su

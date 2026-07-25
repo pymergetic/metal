@@ -1,0 +1,71 @@
+# Formatting for the "normal C" Metal dialect: src/pymergetic/metal/**,
+# include/pymergetic/metal/**, tests/, mods/, apps/. See docs/SOURCETREE.md
+# "C dialect" / "Layout — compact, not EDK2-spread" for the prose rule this
+# encodes.
+#
+# Deliberately NOT applied to EDK2-dialect trees (src/efi/**, src/bios/**)
+# or vendored third-party code (external/, build/) — those have their own
+# `.clang-format` with DisableFormat: true so both `clang-format -i` and
+# editor format-on-save leave them alone.
+---
+Language:        Cpp
+BasedOnStyle:    LLVM
+
+IndentWidth:      2
+TabWidth:         2
+UseTab:           Never
+ColumnLimit:      100
+MaxEmptyLinesToKeep: 1
+
+# Function/record layout: brace on its own line only for function
+# definitions; if/for/while/switch/else/struct/enum stay K&R-attached.
+BreakBeforeBraces: Linux
+
+# "Signature on one line whenever it reasonably fits" — never split the
+# return type onto its own line, and don't bin-pack params across many
+# short lines; when a signature genuinely doesn't fit, wrap one arg/param
+# per line instead.
+AlwaysBreakAfterReturnType:  None
+PenaltyReturnTypeOnItsOwnLine: 1000000
+BinPackArguments:  false
+BinPackParameters: false
+AlignAfterOpenBracket: Align
+
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine:    Never
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine:     false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine:     false
+
+IndentCaseLabels:   false
+IndentPPDirectives: None
+
+PointerAlignment:            Right
+AlignConsecutiveDeclarations: Consecutive
+AlignConsecutiveAssignments:  Consecutive
+AlignConsecutiveMacros:       Consecutive
+AlignTrailingComments:        true
+AlignEscapedNewlines:         Left
+
+SpaceBeforeParens: Custom
+SpaceBeforeParensOptions:
+  AfterControlStatements:        true
+  AfterFunctionDeclarationName:  false
+  AfterFunctionDefinitionName:   false
+  AfterForeachMacros:            true
+  AfterIfMacros:                 true
+  AfterOverloadedOperator:       false
+  BeforeNonEmptyParentheses:     false
+SpaceInEmptyParentheses:  false
+SpacesInParentheses:      false
+SpaceAfterCStyleCast:     false
+SpacesInCStyleCastParentheses: false
+
+SortIncludes:  Never
+IncludeBlocks: Preserve
+
+ReflowComments: false
+
+ContinuationIndentWidth: 2
+Cpp11BracedListStyle:    false

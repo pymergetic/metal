@@ -18,35 +18,35 @@
 
 size_t pm_metal_util_lz4_compress_bound(size_t src_len)
 {
-	if (src_len > (size_t)INT_MAX) {
-		return 0;
-	}
+  if (src_len > (size_t)INT_MAX) {
+    return 0;
+  }
 
-	int bound = LZ4_compressBound((int)src_len);
+  int bound = LZ4_compressBound((int)src_len);
 
-	return bound > 0 ? (size_t)bound : 0;
+  return bound > 0 ? (size_t)bound : 0;
 }
 
 int pm_metal_util_lz4_compress(const void *src, size_t src_len, void *dst, size_t dst_cap)
 {
-	if (!src || !dst || src_len > (size_t)INT_MAX || dst_cap > (size_t)INT_MAX) {
-		return -1;
-	}
+  if (!src || !dst || src_len > (size_t)INT_MAX || dst_cap > (size_t)INT_MAX) {
+    return -1;
+  }
 
-	int n = LZ4_compress_default((const char *)src, (char *)dst, (int)src_len, (int)dst_cap);
+  int n = LZ4_compress_default((const char *)src, (char *)dst, (int)src_len, (int)dst_cap);
 
-	return n > 0 ? n : -1;
+  return n > 0 ? n : -1;
 }
 
 int pm_metal_util_lz4_decompress(const void *src, size_t src_len, void *dst, size_t dst_cap)
 {
-	if (!src || !dst || src_len > (size_t)INT_MAX || dst_cap > (size_t)INT_MAX) {
-		return -1;
-	}
+  if (!src || !dst || src_len > (size_t)INT_MAX || dst_cap > (size_t)INT_MAX) {
+    return -1;
+  }
 
-	int n = LZ4_decompress_safe((const char *)src, (char *)dst, (int)src_len, (int)dst_cap);
+  int n = LZ4_decompress_safe((const char *)src, (char *)dst, (int)src_len, (int)dst_cap);
 
-	return n >= 0 ? n : -1;
+  return n >= 0 ? n : -1;
 }
 
 /*
@@ -61,36 +61,40 @@ int pm_metal_util_lz4_decompress(const void *src, size_t src_len, void *dst, siz
 
 static int32_t pm_metal_util_lz4_compress_bound_native(wasm_exec_env_t exec_env, uint32_t src_len)
 {
-	(void)exec_env;
-	return (int32_t)pm_metal_util_lz4_compress_bound((size_t)src_len);
+  (void)exec_env;
+  return (int32_t)pm_metal_util_lz4_compress_bound((size_t)src_len);
 }
 
-static int32_t pm_metal_util_lz4_compress_native(wasm_exec_env_t exec_env, const void *src,
-						   uint32_t src_len, void *dst, uint32_t dst_cap)
+static int32_t pm_metal_util_lz4_compress_native(
+  wasm_exec_env_t exec_env, const void *src, uint32_t src_len, void *dst, uint32_t dst_cap)
 {
-	(void)exec_env;
-	return (int32_t)pm_metal_util_lz4_compress(src, (size_t)src_len, dst, (size_t)dst_cap);
+  (void)exec_env;
+  return (int32_t)pm_metal_util_lz4_compress(src, (size_t)src_len, dst, (size_t)dst_cap);
 }
 
-static int32_t pm_metal_util_lz4_decompress_native(wasm_exec_env_t exec_env, const void *src,
-						     uint32_t src_len, void *dst, uint32_t dst_cap)
+static int32_t pm_metal_util_lz4_decompress_native(
+  wasm_exec_env_t exec_env, const void *src, uint32_t src_len, void *dst, uint32_t dst_cap)
 {
-	(void)exec_env;
-	return (int32_t)pm_metal_util_lz4_decompress(src, (size_t)src_len, dst, (size_t)dst_cap);
+  (void)exec_env;
+  return (int32_t)pm_metal_util_lz4_decompress(src, (size_t)src_len, dst, (size_t)dst_cap);
 }
 
 static NativeSymbol g_pm_metal_util_lz4_native_symbols[] = {
-	{"pm_metal_util_lz4_compress_bound", (void *)pm_metal_util_lz4_compress_bound_native, "(i)i", NULL},
-	{"pm_metal_util_lz4_compress", (void *)pm_metal_util_lz4_compress_native, "(*~*~)i", NULL},
-	{"pm_metal_util_lz4_decompress", (void *)pm_metal_util_lz4_decompress_native, "(*~*~)i", NULL},
+  { "pm_metal_util_lz4_compress_bound",
+    (void *)pm_metal_util_lz4_compress_bound_native,
+    "(i)i",
+    NULL },
+  { "pm_metal_util_lz4_compress", (void *)pm_metal_util_lz4_compress_native, "(*~*~)i", NULL },
+  { "pm_metal_util_lz4_decompress", (void *)pm_metal_util_lz4_decompress_native, "(*~*~)i", NULL },
 };
 
 int pm_metal_util_lz4_native_register(void)
 {
-	if (!wasm_runtime_register_natives(PM_METAL_UTIL_LZ4_WASI_MODULE, g_pm_metal_util_lz4_native_symbols,
-					    sizeof(g_pm_metal_util_lz4_native_symbols)
-						    / sizeof(g_pm_metal_util_lz4_native_symbols[0]))) {
-		return -1;
-	}
-	return 0;
+  if (!wasm_runtime_register_natives(PM_METAL_UTIL_LZ4_WASI_MODULE,
+                                     g_pm_metal_util_lz4_native_symbols,
+                                     sizeof(g_pm_metal_util_lz4_native_symbols) /
+                                       sizeof(g_pm_metal_util_lz4_native_symbols[0]))) {
+    return -1;
+  }
+  return 0;
 }

@@ -3,80 +3,67 @@
 **/
 #include <pymergetic/metal/dev/gfx/scanout.h>
 
-#include <Uefi.h>
-#include <Library/BaseMemoryLib.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 
-STATIC CONST pm_metal_scanout_ops_t  *mOps;
-STATIC pm_metal_scanout_bind_t        mBind;
+static const pm_metal_scanout_ops_t *mOps;
+static pm_metal_scanout_bind_t       mBind;
 
-STATIC CONST pm_metal_scanout_ops_t *CONST  mProbeOrder[] = {
-  &g_pm_metal_scanout_virtio_gpu,
-  &g_pm_metal_scanout_bochs,
+static const pm_metal_scanout_ops_t *const mProbeOrder[] = {
+  &g_pm_metal_scanout_virtio_gpu,   &g_pm_metal_scanout_bochs,
   &g_pm_metal_scanout_radeon_rv370, /* T43 1002:5460 — PCIe GART+CP / staging */
   &g_pm_metal_scanout_i915_855gm,   /* sample: T42 855GM */
-  &g_pm_metal_scanout_gop_blt,
-  &g_pm_metal_scanout_lfb_copy,
+  &g_pm_metal_scanout_gop_blt,      &g_pm_metal_scanout_lfb_copy,
 };
 
-VOID
-pm_metal_scanout_copy_rect (
-  UINT32                         *dst,
-  UINT32                          dst_pitch,
-  INT32                           x,
-  INT32                           y,
-  INT32                           w,
-  INT32                           h,
-  CONST pm_metal_scanout_bind_t  *b
-  )
+void pm_metal_scanout_copy_rect(uint32_t                      *dst,
+                                uint32_t                       dst_pitch,
+                                int32_t                        x,
+                                int32_t                        y,
+                                int32_t                        w,
+                                int32_t                        h,
+                                const pm_metal_scanout_bind_t *b)
 {
-  INT32  row;
-  UINTN  bytes;
+  int32_t row;
+  size_t  bytes;
 
   if (dst == NULL || b == NULL || b->shadow == NULL || w <= 0 || h <= 0) {
     return;
   }
 
-  bytes = (UINTN)w * sizeof (UINT32);
-  if (x == 0 && (UINT32)w == b->shadow_w && dst_pitch == b->shadow_pitch
-      && (UINT32)w == dst_pitch)
-  {
-    CopyMem (
-      &dst[(UINT32)y * dst_pitch],
-      &b->shadow[(UINT32)y * b->shadow_pitch],
-      bytes * (UINTN)h
-      );
+  bytes = (size_t)w * sizeof(uint32_t);
+  if (x == 0 && (uint32_t)w == b->shadow_w && dst_pitch == b->shadow_pitch &&
+      (uint32_t)w == dst_pitch) {
+    memcpy(
+      &dst[(uint32_t)y * dst_pitch], &b->shadow[(uint32_t)y * b->shadow_pitch], bytes * (size_t)h);
     return;
   }
 
   for (row = 0; row < h; row++) {
-    CopyMem (
-      &dst[(UINT32)(y + row) * dst_pitch + (UINT32)x],
-      &b->shadow[(UINT32)(y + row) * b->shadow_pitch + (UINT32)x],
-      bytes
-      );
+    memcpy(&dst[(uint32_t)(y + row) * dst_pitch + (uint32_t)x],
+           &b->shadow[(uint32_t)(y + row) * b->shadow_pitch + (uint32_t)x],
+           bytes);
   }
 }
 
-INT32
-pm_metal_scanout_bind (
-  CONST pm_metal_scanout_bind_t  *b
-  )
+int32_t pm_metal_scanout_bind(const pm_metal_scanout_bind_t *b)
 {
-  UINT32  i;
+  uint32_t i;
 
   if (b == NULL) {
     return -1;
   }
 
   if (mOps != NULL && mOps->fini != NULL) {
-    mOps->fini ();
+    mOps->fini();
   }
 
   mOps = NULL;
-  CopyMem (&mBind, b, sizeof (mBind));
+  memcpy(&mBind, b, sizeof(mBind));
 
-  for (i = 0; i < (UINT32)(sizeof (mProbeOrder) / sizeof (mProbeOrder[0])); i++) {
-    if (mProbeOrder[i]->probe (&mBind) == 0) {
+  for (i = 0; i < (uint32_t)(sizeof(mProbeOrder) / sizeof(mProbeOrder[0])); i++) {
+    if (mProbeOrder[i]->probe(&mBind) == 0) {
       mOps = mProbeOrder[i];
       return 0;
     }
@@ -85,59 +72,40 @@ pm_metal_scanout_bind (
   return -1;
 }
 
-CONST pm_metal_scanout_ops_t *
-pm_metal_scanout_ops (
-  VOID
-  )
+const pm_metal_scanout_ops_t *pm_metal_scanout_ops(void)
 {
   return mOps;
 }
 
-CONST CHAR8 *
-pm_metal_scanout_name (
-  VOID
-  )
+const char *pm_metal_scanout_name(void)
 {
   return (mOps != NULL && mOps->name != NULL) ? mOps->name : "none";
 }
 
-UINT32
-pm_metal_scanout_caps (
-  VOID
-  )
+uint32_t pm_metal_scanout_caps(void)
 {
   if (mOps == NULL || mOps->caps == NULL) {
     return 0;
   }
 
-  return mOps->caps ();
+  return mOps->caps();
 }
 
-VOID
-pm_metal_scanout_fini (
-  VOID
-  )
+void pm_metal_scanout_fini(void)
 {
   if (mOps != NULL && mOps->fini != NULL) {
-    mOps->fini ();
+    mOps->fini();
   }
 
   mOps = NULL;
 }
 
-CONST pm_metal_scanout_bind_t *
-pm_metal_scanout_bind_info (
-  VOID
-  )
+const pm_metal_scanout_bind_t *pm_metal_scanout_bind_info(void)
 {
   return &mBind;
 }
 
-VOID
-pm_metal_scanout_bind_set_shadow (
-  UINT32  *pixels,
-  UINT32   pitch
-  )
+void pm_metal_scanout_bind_set_shadow(uint32_t *pixels, uint32_t pitch)
 {
   mBind.shadow       = pixels;
   mBind.shadow_pitch = pitch;

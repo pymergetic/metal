@@ -10,8 +10,7 @@
 extern "C" {
 #endif
 
-typedef void (*pm_metal_virtio_netif_rx_fn)(void *ctx, const uint8_t *frame,
-					     uint32_t len);
+typedef void (*pm_metal_virtio_netif_rx_fn)(void *ctx, const uint8_t *frame, uint32_t len);
 
 /** Open virtio-net queues; copy MAC to mac_out[6]. Returns 0 on success. */
 int pm_metal_virtio_netif_open(uint8_t mac_out[6]);

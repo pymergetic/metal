@@ -13,20 +13,20 @@ extern "C" {
 #endif
 
 typedef struct metal_dhcp6_stateful {
-	u8_t  state;
-	u8_t  tries;
-	u16_t timeout_ticks;
-	u32_t xid;
-	u32_t iaid;
-	u16_t server_id_len;
-	u8_t  server_id[64];
-	u8_t  bound;
+  u8_t  state;
+  u8_t  tries;
+  u16_t timeout_ticks;
+  u32_t xid;
+  u32_t iaid;
+  u16_t server_id_len;
+  u8_t  server_id[64];
+  u8_t  bound;
 } metal_dhcp6_stateful_t;
 
-void metal_dhcp6_stateful_reset(metal_dhcp6_stateful_t *st);
+void  metal_dhcp6_stateful_reset(metal_dhcp6_stateful_t *st);
 err_t metal_dhcp6_stateful_start(struct netif *netif, metal_dhcp6_stateful_t *st);
-void metal_dhcp6_stateful_stop(struct netif *netif, metal_dhcp6_stateful_t *st);
-void metal_dhcp6_stateful_poll(struct netif *netif, metal_dhcp6_stateful_t *st);
+void  metal_dhcp6_stateful_stop(struct netif *netif, metal_dhcp6_stateful_t *st);
+void  metal_dhcp6_stateful_poll(struct netif *netif, metal_dhcp6_stateful_t *st);
 
 #ifdef __cplusplus
 }

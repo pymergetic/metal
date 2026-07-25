@@ -14,12 +14,10 @@ extern "C" {
 
 #if defined(__wasm__)
 #include "pymergetic/metal/wasi.h"
-#define PM_METAL_HWINFO_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_HWINFO_WASI_MODULE, name)
+#define PM_METAL_HWINFO_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_HWINFO_WASI_MODULE, name)
 
 /** Print metal DT, backends, and PCI net/virtio scan to host log. */
-extern void pm_metal_hwinfo_print(void)
-	PM_METAL_HWINFO_IMPORT(pm_metal_hwinfo_print);
+extern void pm_metal_hwinfo_print(void) PM_METAL_HWINFO_IMPORT(pm_metal_hwinfo_print);
 #else
 /** Print metal DT, backends, and PCI net/virtio scan via pm_metal_logf. */
 void pm_metal_hwinfo_print(void);

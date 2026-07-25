@@ -22,6 +22,10 @@ fi
 
 # Same package layout as EFI ESP — HTTP :8080 mirrors TFTP root.
 pm_metal_doom_stage_into "${PXE}" || true
+if [[ -d "${ROOT}/mods/py" ]]; then
+	mkdir -p "${PXE}/mods/py"
+	cp -a "${ROOT}/mods/py/." "${PXE}/mods/py/"
+fi
 
 # iPXE script — DHCP filename must be undionly.kpxe (small), NOT metal.elf.
 # metal.elf is ~1.2MiB and will fail with "NBP is too big for base memory".

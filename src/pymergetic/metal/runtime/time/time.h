@@ -12,27 +12,27 @@ extern "C" {
 
 /** Calibrate TSC (BSP, before APs). Idempotent. */
 /* impl: efi|bios */
-void pm_metal_time_init (void);
+void pm_metal_time_init(void);
 
 /** Force a fresh TSC calibration (post-ExitBootServices). */
 /* impl: efi|bios */
-void pm_metal_time_recalibrate (void);
+void pm_metal_time_recalibrate(void);
 
 /** Busy-stall at least `us` microseconds (TSC; MP-safe). */
 /* impl: efi|bios */
-void pm_metal_time_usleep (uint32_t us);
+void pm_metal_time_usleep(uint32_t us);
 
 /** Busy-stall at least `ms` milliseconds. */
 /* impl: efi|bios */
-void pm_metal_time_msleep (uint32_t ms);
+void pm_metal_time_msleep(uint32_t ms);
 
 /** Busy-stall at least `sec` seconds. */
 /* impl: efi|bios */
-void pm_metal_time_sleep (uint32_t sec);
+void pm_metal_time_sleep(uint32_t sec);
 
 /** Monotonic microseconds from TSC (MP-safe). */
 /* impl: efi|bios */
-uint64_t pm_metal_time_mono_us (void);
+uint64_t pm_metal_time_mono_us(void);
 
 #ifdef __cplusplus
 }

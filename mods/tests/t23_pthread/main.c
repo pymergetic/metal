@@ -9,30 +9,30 @@
 
 static void *worker(void *arg)
 {
-	int *out = arg;
+  int *out = arg;
 
-	*out = 42;
-	return NULL;
+  *out = 42;
+  return NULL;
 }
 
 int main(void)
 {
-	int value = 0;
-	pthread_t tid;
+  int       value = 0;
+  pthread_t tid;
 
-	if (pthread_create(&tid, NULL, worker, &value) != 0) {
-		printf("t23_pthread: pthread_create failed\n");
-		return 1;
-	}
-	if (pthread_join(tid, NULL) != 0) {
-		printf("t23_pthread: pthread_join failed\n");
-		return 1;
-	}
-	if (value != 42) {
-		printf("t23_pthread: worker did not write shared value (got %d)\n", value);
-		return 1;
-	}
+  if (pthread_create(&tid, NULL, worker, &value) != 0) {
+    printf("t23_pthread: pthread_create failed\n");
+    return 1;
+  }
+  if (pthread_join(tid, NULL) != 0) {
+    printf("t23_pthread: pthread_join failed\n");
+    return 1;
+  }
+  if (value != 42) {
+    printf("t23_pthread: worker did not write shared value (got %d)\n", value);
+    return 1;
+  }
 
-	printf("t23_pthread: worker wrote %d\n", value);
-	return 0;
+  printf("t23_pthread: worker wrote %d\n", value);
+  return 0;
 }

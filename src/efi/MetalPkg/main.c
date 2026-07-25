@@ -9,7 +9,7 @@
 #include <Library/BaseMemoryLib.h>
 #include <Protocol/MpService.h>
 
-#include <runtime/mem/mem.h>
+#include <pymergetic/metal/runtime/mem/mem.h>
 #include <runtime/stack/stack.h>
 #include <runtime/run/run.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
@@ -311,6 +311,9 @@ UefiMain (
     /* Optional guest packages staged under mods/apps/<name>/ — no app names here. */
     if (pm_metal_esp_preload_tree ("mods/apps") == 0) {
       pm_metal_log ("metal-esp: mods/apps cached");
+    }
+    if (pm_metal_esp_preload_tree ("mods/py") == 0) {
+      pm_metal_log ("metal-esp: mods/py cached");
     }
   }
 

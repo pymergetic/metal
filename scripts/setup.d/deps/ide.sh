@@ -54,7 +54,8 @@ inc = (
     f"-I{mbedtls_inc} {mbedtls_cfg} "
     f"-I{efi_wamr} -I{wamr_plat} "
     f"-I{wamr_utils} -I{wamr_iwasm} -I{wamr_wasi} "
-    f"-DBH_PLATFORM_METAL_EFI -DBH_PLATFORM_ZEPHYR "
+    f"-DBH_PLATFORM_METAL_EFI "
+    f"-DAPP_THREAD_STACK_SIZE_DEFAULT=6144 -DAPP_THREAD_STACK_SIZE_MIN=4096 "
     f"-DBUILD_TARGET_X86_64 -DWASM_ENABLE_LIBC_WASI=1 "
 )
 base = (
@@ -118,7 +119,8 @@ bios_inc = (
     f"-I{bios_metal / 'runtime/mem/host_stubs'} "
     f"-I{wamr_iwasm} -I{wamr_plat} -I{wamr_utils} "
     f"-DBH_PLATFORM_METAL_BIOS -DBH_PLATFORM_METAL_EFI "
-    f"-DBH_PLATFORM_ZEPHYR -DBUILD_TARGET_X86_64 "
+    f"-DAPP_THREAD_STACK_SIZE_DEFAULT=6144 -DAPP_THREAD_STACK_SIZE_MIN=4096 "
+    f"-DBUILD_TARGET_X86_64 "
     f"-DWASM_ENABLE_LIBC_WASI=1 "
 )
 bios_base = (
@@ -200,7 +202,8 @@ CLANG_EFI=(
 	-I"${ROOT}/external/wamr/core/iwasm/include"
 	-I"${ROOT}/external/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include"
 	-DBH_PLATFORM_METAL_EFI
-	-DBH_PLATFORM_ZEPHYR
+	-DAPP_THREAD_STACK_SIZE_DEFAULT=6144
+	-DAPP_THREAD_STACK_SIZE_MIN=4096
 	-DBUILD_TARGET_X86_64
 	-DWASM_ENABLE_LIBC_WASI=1
 )

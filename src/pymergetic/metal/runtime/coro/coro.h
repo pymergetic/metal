@@ -3,6 +3,12 @@
 
   Concrete types embed pm_metal_coro_t as the first field and allocate
   sizeof(concrete) via pm_metal_coro().
+
+  impl: common —
+    coro.c          alloc / close / await / resume
+    coro_timers.c   timer list + poll
+    coro_sleep.c    sleep + yield
+    coro_gather.c   gather + wait_for
 **/
 #ifndef PM_METAL_RUNTIME_CORO_CORO_H_
 #define PM_METAL_RUNTIME_CORO_CORO_H_
@@ -26,9 +32,7 @@ typedef struct pm_metal_coro pm_metal_coro_t;
 typedef struct pm_metal_task pm_metal_task_t;
 
 /** One step. Cast self to the concrete type (header must be first). */
-typedef pm_metal_status_t (*pm_metal_coro_fn)(
-  pm_metal_coro_t  *self
-  );
+typedef pm_metal_status_t (*pm_metal_coro_fn)(pm_metal_coro_t *self);
 
 /**
   Awaitable frame — embed as the first field of every concrete coro:
@@ -40,19 +44,17 @@ typedef pm_metal_status_t (*pm_metal_coro_fn)(
     } my_coro_t;
 */
 /** Optional owned-resource teardown (gather kids, wait_for child, …). */
-typedef void (*pm_metal_coro_release_fn)(
-  pm_metal_coro_t  *self
-  );
+typedef void (*pm_metal_coro_release_fn)(pm_metal_coro_t *self);
 
 struct pm_metal_coro {
-  pm_metal_coro_fn          fn;
-  pm_metal_status_t         status;
-  size_t                    bytes;
-  pm_metal_coro_t          *awaiting; /* nested await (NULL if none) */
-  pm_metal_coro_t          *waiter;   /* parent waiting on us */
-  pm_metal_task_t          *owner;    /* independent flow (Task), if any */
-  void                     *result;
-  pm_metal_coro_release_fn  release;  /* called from coro_close, then freed */
+  pm_metal_coro_fn         fn;
+  pm_metal_status_t        status;
+  size_t                   bytes;
+  pm_metal_coro_t         *awaiting; /* nested await (NULL if none) */
+  pm_metal_coro_t         *waiter;   /* parent waiting on us */
+  pm_metal_task_t         *owner;    /* independent flow (Task), if any */
+  void                    *result;
+  pm_metal_coro_release_fn release; /* called from coro_close, then freed */
 };
 
 /**
@@ -60,15 +62,10 @@ struct pm_metal_coro {
   `bytes` must be >= sizeof(pm_metal_coro_t).
 */
 /* impl: efi|bios */
-pm_metal_coro_t *pm_metal_coro (
-  pm_metal_coro_fn  fn,
-  size_t            bytes
-  );
+pm_metal_coro_t *pm_metal_coro(pm_metal_coro_fn fn, size_t bytes);
 
 /* impl: efi|bios */
-void pm_metal_coro_close (
-  pm_metal_coro_t  *c
-  );
+void pm_metal_coro_close(pm_metal_coro_t *c);
 
 /**
   Python: await aw
@@ -79,19 +76,14 @@ void pm_metal_coro_close (
   join path (also used inside gather / wait_for).
 */
 /* impl: efi|bios */
-pm_metal_status_t pm_metal_await (
-  pm_metal_coro_t  *self,
-  pm_metal_coro_t  *aw
-  );
+pm_metal_status_t pm_metal_await(pm_metal_coro_t *self, pm_metal_coro_t *aw);
 
 /**
   Drive one step at the leaf of `c`’s await chain; bubble DONE upward.
   Prefer pm_metal_task_step on a Task; this is for advanced / tests.
 */
 /* impl: efi|bios */
-pm_metal_status_t pm_metal_coro_resume (
-  pm_metal_coro_t  *c
-  );
+pm_metal_status_t pm_metal_coro_resume(pm_metal_coro_t *c);
 
 /**
   Python: asyncio.sleep(ms / 1000)
@@ -99,21 +91,15 @@ pm_metal_status_t pm_metal_coro_resume (
   Implemented as sleep_us(ms * 1000).
 */
 /* impl: efi|bios */
-pm_metal_coro_t *pm_metal_sleep (
-  uint32_t  ms
-  );
+pm_metal_coro_t *pm_metal_sleep(uint32_t ms);
 
 /** Relative coop sleep in microseconds. us==0 → eager DONE (use yield for fairness). */
 /* impl: efi|bios */
-pm_metal_coro_t *pm_metal_sleep_us (
-  uint64_t  us
-  );
+pm_metal_coro_t *pm_metal_sleep_us(uint64_t us);
 
 /** Absolute coop wake at mono deadline (µs). Past deadline → eager DONE. */
 /* impl: efi|bios */
-pm_metal_coro_t *pm_metal_sleep_until_us (
-  uint64_t  deadline_us
-  );
+pm_metal_coro_t *pm_metal_sleep_until_us(uint64_t deadline_us);
 
 /**
   Python: await asyncio.sleep(0) — scheduling yield, not a timer.
@@ -125,9 +111,7 @@ pm_metal_coro_t *pm_metal_sleep_until_us (
   Use: return pm_metal_await(self, pm_metal_yield());
 */
 /* impl: efi|bios */
-pm_metal_coro_t *pm_metal_yield (
-  void
-  );
+pm_metal_coro_t *pm_metal_yield(void);
 
 /**
   Python: asyncio.gather(*aws)
@@ -135,10 +119,7 @@ pm_metal_coro_t *pm_metal_yield (
   Takes ownership of the child coro pointers (not the array).
 */
 /* impl: efi|bios */
-pm_metal_coro_t *pm_metal_gather (
-  pm_metal_coro_t **aws,
-  size_t            n
-  );
+pm_metal_coro_t *pm_metal_gather(pm_metal_coro_t **aws, size_t n);
 
 /**
   Python: asyncio.wait_for(aw, timeout)
@@ -146,22 +127,15 @@ pm_metal_coro_t *pm_metal_gather (
   Takes ownership of `aw`.
 */
 /* impl: efi|bios */
-pm_metal_coro_t *pm_metal_wait_for (
-  pm_metal_coro_t  *aw,
-  uint32_t          ms
-  );
+pm_metal_coro_t *pm_metal_wait_for(pm_metal_coro_t *aw, uint32_t ms);
 
 /** Wake due sleep/wait_for timers (called from idle runloop). */
 /* impl: efi|bios */
-void pm_metal_coro_poll_timers (
-  void
-  );
+void pm_metal_coro_poll_timers(void);
 
 /** Init timer list lock once (call from run_init before any sleep). */
 /* impl: efi|bios */
-void pm_metal_coro_timers_init (
-  void
-  );
+void pm_metal_coro_timers_init(void);
 
 #ifdef __cplusplus
 }

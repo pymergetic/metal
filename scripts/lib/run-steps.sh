@@ -2,7 +2,7 @@
 # Usage:
 #   pm_run_steps <dispatcher> <step> [<step>...]
 # Each <step> is one shell-word string of args after the dispatcher, e.g.
-#   "linux"  or  "zephyr qemu"
+#   "efi"  or  "bios"
 # shellcheck shell=bash
 
 pm_run_steps() {

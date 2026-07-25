@@ -12,18 +12,16 @@ boolean G_CheckDemoStatus(void);
 
 void __real_I_AtExit(atexit_func_t func, boolean run_on_error);
 
-static void
-G_CheckDemoStatusAtExit(void)
+static void G_CheckDemoStatusAtExit(void)
 {
-	(void)G_CheckDemoStatus();
+  (void)G_CheckDemoStatus();
 }
 
-void
-__wrap_I_AtExit(atexit_func_t func, boolean run_on_error)
+void __wrap_I_AtExit(atexit_func_t func, boolean run_on_error)
 {
-	if (func == (atexit_func_t)G_CheckDemoStatus) {
-		func = G_CheckDemoStatusAtExit;
-	}
+  if (func == (atexit_func_t)G_CheckDemoStatus) {
+    func = G_CheckDemoStatusAtExit;
+  }
 
-	__real_I_AtExit(func, run_on_error);
+  __real_I_AtExit(func, run_on_error);
 }

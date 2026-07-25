@@ -100,12 +100,12 @@ _pm_metal_pki_pem_to_c_array() {
 import sys
 path, name = sys.argv[1], sys.argv[2]
 data = open(path, "rb").read()
-print(f"STATIC CONST UINT8 {name}[] = {{")
+print(f"static const uint8_t {name}[] = {{")
 for i in range(0, len(data), 12):
     chunk = data[i : i + 12]
     print("  " + ", ".join(f"0x{b:02x}" for b in chunk) + ",")
 print("};")
-print(f"STATIC CONST UINT32 {name}_len = {len(data)};")
+print(f"static const uint32_t {name}_len = {len(data)};")
 PY
 	rm -f "${der}"
 }
@@ -245,9 +245,9 @@ EOF
 		echo "#ifndef PM_METAL_TRUST_DER_T_DEFINED"
 		echo "#define PM_METAL_TRUST_DER_T_DEFINED"
 		echo "typedef struct {"
-		echo "  const UINT8 *der;"
-		echo "  UINT32       len;"
-		echo "  const CHAR8 *id;"
+		echo "  const uint8_t *der;"
+		echo "  uint32_t       len;"
+		echo "  const char    *id;"
 		echo "} pm_metal_trust_der_t;"
 		echo "#endif"
 
@@ -265,32 +265,32 @@ EOF
 			_pm_metal_pki_pem_to_c_array "${mods_pems[$i]}" "g_pm_metal_trust_mods_${i}_${cid}_der"
 		done
 
-		echo "STATIC CONST pm_metal_trust_der_t g_pm_metal_trust_roots[] = {"
+		echo "static const pm_metal_trust_der_t g_pm_metal_trust_roots[] = {"
 		for i in "${!root_pems[@]}"; do
 			cid="$(_pm_metal_pki_cid "${root_ids[$i]}")"
 			echo "  { g_pm_metal_trust_root_${i}_${cid}_der, g_pm_metal_trust_root_${i}_${cid}_der_len, \"${root_ids[$i]}\" },"
 		done
 		echo "};"
-		echo "STATIC CONST UINT32 g_pm_metal_trust_root_count ="
-		echo "  (UINT32)(sizeof (g_pm_metal_trust_roots) / sizeof (g_pm_metal_trust_roots[0]));"
+		echo "static const uint32_t g_pm_metal_trust_root_count ="
+		echo "  (uint32_t)(sizeof (g_pm_metal_trust_roots) / sizeof (g_pm_metal_trust_roots[0]));"
 
-		echo "STATIC CONST pm_metal_trust_der_t g_pm_metal_trust_kernel_cas[] = {"
+		echo "static const pm_metal_trust_der_t g_pm_metal_trust_kernel_cas[] = {"
 		for i in "${!kern_pems[@]}"; do
 			cid="$(_pm_metal_pki_cid "${kern_ids[$i]}")"
 			echo "  { g_pm_metal_trust_kernel_${i}_${cid}_der, g_pm_metal_trust_kernel_${i}_${cid}_der_len, \"${kern_ids[$i]}\" },"
 		done
 		echo "};"
-		echo "STATIC CONST UINT32 g_pm_metal_trust_kernel_ca_count ="
-		echo "  (UINT32)(sizeof (g_pm_metal_trust_kernel_cas) / sizeof (g_pm_metal_trust_kernel_cas[0]));"
+		echo "static const uint32_t g_pm_metal_trust_kernel_ca_count ="
+		echo "  (uint32_t)(sizeof (g_pm_metal_trust_kernel_cas) / sizeof (g_pm_metal_trust_kernel_cas[0]));"
 
-		echo "STATIC CONST pm_metal_trust_der_t g_pm_metal_trust_mods_cas[] = {"
+		echo "static const pm_metal_trust_der_t g_pm_metal_trust_mods_cas[] = {"
 		for i in "${!mods_pems[@]}"; do
 			cid="$(_pm_metal_pki_cid "${mods_ids[$i]}")"
 			echo "  { g_pm_metal_trust_mods_${i}_${cid}_der, g_pm_metal_trust_mods_${i}_${cid}_der_len, \"${mods_ids[$i]}\" },"
 		done
 		echo "};"
-		echo "STATIC CONST UINT32 g_pm_metal_trust_mods_ca_count ="
-		echo "  (UINT32)(sizeof (g_pm_metal_trust_mods_cas) / sizeof (g_pm_metal_trust_mods_cas[0]));"
+		echo "static const uint32_t g_pm_metal_trust_mods_ca_count ="
+		echo "  (uint32_t)(sizeof (g_pm_metal_trust_mods_cas) / sizeof (g_pm_metal_trust_mods_cas[0]));"
 	} >"${inc}"
 
 	echo "pki-bake: ok mode=${mode} -> ${inc}" >&2

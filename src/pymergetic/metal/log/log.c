@@ -4,186 +4,156 @@
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/dev/console/console.h>
 #include <pymergetic/metal/shell/ui/ui.h>
+#include <runtime/slot/spin.h>
 
-#include <Uefi.h>
-#include <Library/BaseLib.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/PrintLib.h>
-#include <Library/SynchronizationLib.h>
-#include <Library/UefiLib.h>
+#include <stdarg.h>
+#include <string.h>
 
-#define PM_METAL_LOG_LINES  512u
-#define PM_METAL_LOG_COLS   160u
+/* impl: efi|bios — src/{efi,bios}/pymergetic/metal/log/log_port.c
+ * the one EDK2 (UefiLib Print) touchpoint this file needs. */
+void pm_metal_log_port_emit_uefi(const char *line);
+
+/* Portable vsnprintf (runtime/mem/libc.c) — no EDK2 AsciiVSPrint needed. */
+int vsnprintf(char *buf, size_t n, const char *fmt, va_list ap);
+
+#define PM_METAL_LOG_LINES 512u
+/*
+ * 256: metal-perf diagnostic lines (cpu/frame/step/gap/present max + the
+ * present_cpu/offloads fields) run to ~210 chars — the old 160 silently
+ * truncated pm_metal_logf() calls outside the UART/serial fast path.
+ */
+#define PM_METAL_LOG_COLS 256u
 
 typedef struct {
-  UINT32  marker;     /* next line index (absolute generation) to drain */
-  UINT8   on_buffer;  /* counts toward viewport_count */
-  UINT8   direct;     /* receive new lines without buffer */
-  UINT8   live;       /* emit immediately while on_buffer (UEFI) */
-  UINT8   open;
+  uint32_t marker;    /* next line index (absolute generation) to drain */
+  uint8_t  on_buffer; /* counts toward viewport_count */
+  uint8_t  direct;    /* receive new lines without buffer */
+  uint8_t  live;      /* emit immediately while on_buffer (UEFI) */
+  uint8_t  open;
 } metal_log_vp_t;
 
-STATIC CHAR8                 mLines[PM_METAL_LOG_LINES][PM_METAL_LOG_COLS];
-STATIC UINT8                 mStyles[PM_METAL_LOG_LINES];
-STATIC UINT32                mGen;          /* absolute lines appended */
-STATIC UINT32                mViewportCount;
-STATIC UINT32                mUartResumeGen; /* marker remembered at EBS */
-STATIC UINT8                 mUartResumeValid;
-STATIC UINT8                 mBootEpoch;     /* retain ring until boot_complete */
-STATIC UINT8                 mInited;
-STATIC SPIN_LOCK             mLock;
-STATIC metal_log_vp_t        mVp[PM_METAL_LOG_VP_COUNT];
+static char            mLines[PM_METAL_LOG_LINES][PM_METAL_LOG_COLS];
+static uint8_t         mStyles[PM_METAL_LOG_LINES];
+static uint32_t        mGen; /* absolute lines appended */
+static uint32_t        mViewportCount;
+static uint32_t        mUartResumeGen; /* marker remembered at EBS */
+static uint8_t         mUartResumeValid;
+static uint8_t         mBootEpoch; /* retain ring until boot_complete */
+static uint8_t         mInited;
+static pm_metal_spin_t mLock;
+static metal_log_vp_t  mVp[PM_METAL_LOG_VP_COUNT];
 
-STATIC
-CONST CHAR8 *
-LogAnsiPrefix (
-  pm_metal_log_style_t  style
-  )
+static const char *LogAnsiPrefix(pm_metal_log_style_t style)
 {
   switch (style) {
-    case PM_METAL_LOG_STYLE_DIM:
-      return "\033[2m";
-    case PM_METAL_LOG_STYLE_OK:
-      return "\033[32m";
-    case PM_METAL_LOG_STYLE_WARN:
-      return "\033[33m";
-    case PM_METAL_LOG_STYLE_FAIL:
-      return "\033[31m";
-    case PM_METAL_LOG_STYLE_ACCENT:
-      return "\033[36m";
-    case PM_METAL_LOG_STYLE_DEFAULT:
-    default:
-      return NULL;
+  case PM_METAL_LOG_STYLE_DIM:
+    return "\033[2m";
+  case PM_METAL_LOG_STYLE_OK:
+    return "\033[32m";
+  case PM_METAL_LOG_STYLE_WARN:
+    return "\033[33m";
+  case PM_METAL_LOG_STYLE_FAIL:
+    return "\033[31m";
+  case PM_METAL_LOG_STYLE_ACCENT:
+    return "\033[36m";
+  case PM_METAL_LOG_STYLE_DEFAULT:
+  default:
+    return NULL;
   }
 }
 
-STATIC
-VOID
-LogEmitUefi (
-  CONST CHAR8          *line,
-  pm_metal_log_style_t  style
-  )
+static void LogEmitUefi(const char *line, pm_metal_log_style_t style)
 {
-  (VOID)style;
+  (void)style;
   if (line == NULL) {
     return;
   }
 
   /* ConOut only — plain text (no attribute API). */
-  Print (L"%a\r\n", line);
+  pm_metal_log_port_emit_uefi(line);
 }
 
-STATIC
-VOID
-LogEmitUart (
-  CONST CHAR8          *line,
-  pm_metal_log_style_t  style
-  )
+static void LogEmitUart(const char *line, pm_metal_log_style_t style)
 {
-  UINTN         n;
-  CONST CHAR8  *pre;
+  size_t      n;
+  const char *pre;
 
   if (line == NULL) {
     return;
   }
 
-  n   = AsciiStrLen (line);
-  pre = (n > 0) ? LogAnsiPrefix (style) : NULL;
+  n   = strlen(line);
+  pre = (n > 0) ? LogAnsiPrefix(style) : NULL;
 
   if (pre != NULL) {
-    pm_metal_console_com1_write (pre, (UINT32)AsciiStrLen (pre));
+    pm_metal_console_com1_write(pre, (uint32_t)strlen(pre));
   }
 
   if (n > 0) {
-    pm_metal_console_com1_write (line, (UINT32)n);
+    pm_metal_console_com1_write(line, (uint32_t)n);
   }
 
   if (pre != NULL) {
-    pm_metal_console_com1_write ("\033[0m", 4);
+    pm_metal_console_com1_write("\033[0m", 4);
   }
 
-  pm_metal_console_com1_write ("\r\n", 2);
-  if (pm_metal_console_ready ()) {
+  pm_metal_console_com1_write("\r\n", 2);
+  if (pm_metal_console_ready()) {
     if (pre != NULL) {
-      (VOID)pm_metal_console_write (pre, (UINT32)AsciiStrLen (pre));
+      (void)pm_metal_console_write(pre, (uint32_t)strlen(pre));
     }
 
     if (n > 0) {
-      (VOID)pm_metal_console_write (line, (UINT32)n);
+      (void)pm_metal_console_write(line, (uint32_t)n);
     }
 
     if (pre != NULL) {
-      (VOID)pm_metal_console_write ("\033[0m", 4);
+      (void)pm_metal_console_write("\033[0m", 4);
     }
 
-    (VOID)pm_metal_console_write ("\r\n", 2);
+    (void)pm_metal_console_write("\r\n", 2);
   }
 }
 
-STATIC
-VOID
-LogEmitUi (
-  CONST CHAR8          *line,
-  pm_metal_log_style_t  style
-  )
+static void LogEmitUi(const char *line, pm_metal_log_style_t style)
 {
   if (line == NULL) {
     return;
   }
 
-  pm_metal_ui_console_puts_styled (style, line);
+  pm_metal_ui_console_puts_styled(style, line);
 }
 
-STATIC
-VOID
-LogEmitVp (
-  pm_metal_log_vp_t     id,
-  CONST CHAR8          *line,
-  pm_metal_log_style_t  style
-  )
+static void LogEmitVp(pm_metal_log_vp_t id, const char *line, pm_metal_log_style_t style)
 {
   switch (id) {
-    case PM_METAL_LOG_VP_UEFI:
-      LogEmitUefi (line, style);
-      break;
-    case PM_METAL_LOG_VP_UART:
-      LogEmitUart (line, style);
-      break;
-    case PM_METAL_LOG_VP_UI:
-      LogEmitUi (line, style);
-      break;
-    default:
-      break;
+  case PM_METAL_LOG_VP_UEFI:
+    LogEmitUefi(line, style);
+    break;
+  case PM_METAL_LOG_VP_UART:
+    LogEmitUart(line, style);
+    break;
+  case PM_METAL_LOG_VP_UI:
+    LogEmitUi(line, style);
+    break;
+  default:
+    break;
   }
 }
 
-STATIC
-CONST CHAR8 *
-LogLineAt (
-  UINT32  gen
-  )
+static const char *LogLineAt(uint32_t gen)
 {
   return mLines[gen % PM_METAL_LOG_LINES];
 }
 
-STATIC
-pm_metal_log_style_t
-LogStyleAt (
-  UINT32  gen
-  )
+static pm_metal_log_style_t LogStyleAt(uint32_t gen)
 {
   return (pm_metal_log_style_t)mStyles[gen % PM_METAL_LOG_LINES];
 }
 
-STATIC
-VOID
-LogDrainVp (
-  pm_metal_log_vp_t  id,
-  UINT32             from_gen,
-  UINT32             to_gen
-  )
+static void LogDrainVp(pm_metal_log_vp_t id, uint32_t from_gen, uint32_t to_gen)
 {
-  UINT32  g;
+  uint32_t g;
 
   for (g = from_gen; g < to_gen; g++) {
     /* Drop lines overwritten in the ring. */
@@ -191,15 +161,11 @@ LogDrainVp (
       continue;
     }
 
-    LogEmitVp (id, LogLineAt (g), LogStyleAt (g));
+    LogEmitVp(id, LogLineAt(g), LogStyleAt(g));
   }
 }
 
-STATIC
-VOID
-LogTryClearRing (
-  VOID
-  )
+static void LogTryClearRing(void)
 {
   /* Ring stays for the boot epoch so UART/UI can still drain. */
   if (mBootEpoch) {
@@ -207,19 +173,15 @@ LogTryClearRing (
   }
 
   if (mViewportCount == 0) {
-    ZeroMem (mLines, sizeof (mLines));
-    ZeroMem (mStyles, sizeof (mStyles));
+    memset(mLines, 0, sizeof(mLines));
+    memset(mStyles, 0, sizeof(mStyles));
     mGen = 0;
   }
 }
 
-STATIC
-VOID
-LogDetachBuffer (
-  pm_metal_log_vp_t  id
-  )
+static void LogDetachBuffer(pm_metal_log_vp_t id)
 {
-  metal_log_vp_t  *vp;
+  metal_log_vp_t *vp;
 
   vp = &mVp[id];
   if (!vp->on_buffer) {
@@ -231,22 +193,19 @@ LogDetachBuffer (
     mViewportCount--;
   }
 
-  LogTryClearRing ();
+  LogTryClearRing();
 }
 
-void
-pm_metal_log_init (
-  VOID
-  )
+void pm_metal_log_init(void)
 {
   if (mInited) {
     return;
   }
 
-  InitializeSpinLock (&mLock);
-  ZeroMem (mLines, sizeof (mLines));
-  ZeroMem (mStyles, sizeof (mStyles));
-  ZeroMem (mVp, sizeof (mVp));
+  pm_metal_spin_init(&mLock);
+  memset(mLines, 0, sizeof(mLines));
+  memset(mStyles, 0, sizeof(mStyles));
+  memset(mVp, 0, sizeof(mVp));
   mGen             = 0;
   mViewportCount   = 0;
   mUartResumeGen   = 0;
@@ -257,202 +216,167 @@ pm_metal_log_init (
   mVp[PM_METAL_LOG_VP_UEFI].on_buffer = 1;
   mVp[PM_METAL_LOG_VP_UEFI].live      = 1;
   mVp[PM_METAL_LOG_VP_UEFI].marker    = 0;
-  mViewportCount = 1;
-  mInited        = 1;
+  mViewportCount                      = 1;
+  mInited                             = 1;
 }
 
-void
-pm_metal_log_styled (
-  pm_metal_log_style_t  style,
-  CONST CHAR8          *line
-  )
+void pm_metal_log_styled(pm_metal_log_style_t style, const char *line)
 {
-  UINT32  i;
-  UINT32  slot;
-  UINTN   n;
+  uint32_t i;
+  uint32_t slot;
+  size_t   n;
 
   if (line == NULL) {
     return;
   }
 
   if (!mInited) {
-    pm_metal_log_init ();
+    pm_metal_log_init();
   }
 
-  AcquireSpinLock (&mLock);
+  pm_metal_spin_lock(&mLock);
 
   if (mBootEpoch || mViewportCount > 0) {
     slot = mGen % PM_METAL_LOG_LINES;
-    n    = AsciiStrnLenS (line, PM_METAL_LOG_COLS - 1);
-    CopyMem (mLines[slot], line, n);
+    n    = strlen(line);
+    if (n > PM_METAL_LOG_COLS - 1) {
+      n = PM_METAL_LOG_COLS - 1;
+    }
+    memcpy(mLines[slot], line, n);
     mLines[slot][n] = '\0';
-    mStyles[slot]   = (UINT8)style;
+    mStyles[slot]   = (uint8_t)style;
     mGen++;
 
-    for (i = 0; i < (UINT32)PM_METAL_LOG_VP_COUNT; i++) {
+    for (i = 0; i < (uint32_t)PM_METAL_LOG_VP_COUNT; i++) {
       if (mVp[i].on_buffer && mVp[i].live) {
-        LogEmitVp ((pm_metal_log_vp_t)i, line, style);
+        LogEmitVp((pm_metal_log_vp_t)i, line, style);
         mVp[i].marker = mGen;
       }
     }
   }
 
-  for (i = 0; i < (UINT32)PM_METAL_LOG_VP_COUNT; i++) {
+  for (i = 0; i < (uint32_t)PM_METAL_LOG_VP_COUNT; i++) {
     if (mVp[i].direct) {
-      LogEmitVp ((pm_metal_log_vp_t)i, line, style);
+      LogEmitVp((pm_metal_log_vp_t)i, line, style);
     }
   }
 
-  ReleaseSpinLock (&mLock);
+  pm_metal_spin_unlock(&mLock);
 }
 
-void
-pm_metal_log (
-  CONST CHAR8  *line
-  )
+void pm_metal_log(const char *line)
 {
-  pm_metal_log_styled (PM_METAL_LOG_STYLE_DEFAULT, line);
+  pm_metal_log_styled(PM_METAL_LOG_STYLE_DEFAULT, line);
 }
 
-VOID
-EFIAPI
-pm_metal_logf_styled (
-  IN pm_metal_log_style_t  style,
-  IN CONST CHAR8          *fmt,
-  ...
-  )
+void pm_metal_logf_styled(pm_metal_log_style_t style, const char *fmt, ...)
 {
-  VA_LIST  args;
-  CHAR8    buf[PM_METAL_LOG_COLS];
+  va_list args;
+  char    buf[PM_METAL_LOG_COLS];
 
   if (fmt == NULL) {
     return;
   }
 
-  /* Must be EFIAPI: AsciiVSPrint expects ms_abi VA_LIST on X64. */
-  VA_START (args, fmt);
-  AsciiVSPrint (buf, sizeof (buf), fmt, args);
-  VA_END (args);
-  pm_metal_log_styled (style, buf);
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  pm_metal_log_styled(style, buf);
 }
 
-VOID
-EFIAPI
-pm_metal_logf (
-  IN CONST CHAR8  *fmt,
-  ...
-  )
+void pm_metal_logf(const char *fmt, ...)
 {
-  VA_LIST  args;
-  CHAR8    buf[PM_METAL_LOG_COLS];
+  va_list args;
+  char    buf[PM_METAL_LOG_COLS];
 
   if (fmt == NULL) {
     return;
   }
 
-  VA_START (args, fmt);
-  AsciiVSPrint (buf, sizeof (buf), fmt, args);
-  VA_END (args);
-  pm_metal_log_styled (PM_METAL_LOG_STYLE_DEFAULT, buf);
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  pm_metal_log_styled(PM_METAL_LOG_STYLE_DEFAULT, buf);
 }
 
-void
-pm_metal_log_ebs_close_uefi (
-  VOID
-  )
+void pm_metal_log_ebs_close_uefi(void)
 {
   if (!mInited) {
     return;
   }
 
-  AcquireSpinLock (&mLock);
-  mUartResumeGen   = mVp[PM_METAL_LOG_VP_UEFI].marker;
-  mUartResumeValid = 1;
+  pm_metal_spin_lock(&mLock);
+  mUartResumeGen                 = mVp[PM_METAL_LOG_VP_UEFI].marker;
+  mUartResumeValid               = 1;
   mVp[PM_METAL_LOG_VP_UEFI].open = 0;
   mVp[PM_METAL_LOG_VP_UEFI].live = 0;
-  LogDetachBuffer (PM_METAL_LOG_VP_UEFI);
-  ReleaseSpinLock (&mLock);
+  LogDetachBuffer(PM_METAL_LOG_VP_UEFI);
+  pm_metal_spin_unlock(&mLock);
 }
 
-void
-pm_metal_log_attach_uart (
-  VOID
-  )
+void pm_metal_log_attach_uart(void)
 {
-  UINT32  from;
-  UINT32  to;
+  uint32_t from;
+  uint32_t to;
 
   if (!mInited) {
-    pm_metal_log_init ();
+    pm_metal_log_init();
   }
 
-  AcquireSpinLock (&mLock);
+  pm_metal_spin_lock(&mLock);
   if (mVp[PM_METAL_LOG_VP_UART].direct) {
-    ReleaseSpinLock (&mLock);
+    pm_metal_spin_unlock(&mLock);
     return;
   }
 
   from = mUartResumeValid ? mUartResumeGen : 0;
   to   = mGen;
-  LogDrainVp (PM_METAL_LOG_VP_UART, from, to);
+  LogDrainVp(PM_METAL_LOG_VP_UART, from, to);
   mVp[PM_METAL_LOG_VP_UART].open   = 1;
   mVp[PM_METAL_LOG_VP_UART].direct = 1;
   mVp[PM_METAL_LOG_VP_UART].live   = 0;
   if (mVp[PM_METAL_LOG_VP_UART].on_buffer) {
-    LogDetachBuffer (PM_METAL_LOG_VP_UART);
+    LogDetachBuffer(PM_METAL_LOG_VP_UART);
   }
 
-  ReleaseSpinLock (&mLock);
+  pm_metal_spin_unlock(&mLock);
 }
 
-void
-pm_metal_log_attach_ui (
-  VOID
-  )
+void pm_metal_log_attach_ui(void)
 {
-  UINT32  to;
+  uint32_t to;
 
   if (!mInited) {
-    pm_metal_log_init ();
+    pm_metal_log_init();
   }
 
-  AcquireSpinLock (&mLock);
+  pm_metal_spin_lock(&mLock);
   to = mGen;
   /* Full history from the oldest retained line. */
-  LogDrainVp (
-    PM_METAL_LOG_VP_UI,
-    (mGen > PM_METAL_LOG_LINES) ? (mGen - PM_METAL_LOG_LINES) : 0,
-    to
-    );
+  LogDrainVp(PM_METAL_LOG_VP_UI, (mGen > PM_METAL_LOG_LINES) ? (mGen - PM_METAL_LOG_LINES) : 0, to);
   mVp[PM_METAL_LOG_VP_UI].open   = 1;
   mVp[PM_METAL_LOG_VP_UI].direct = 1;
   mVp[PM_METAL_LOG_VP_UI].live   = 0;
   if (mVp[PM_METAL_LOG_VP_UI].on_buffer) {
-    LogDetachBuffer (PM_METAL_LOG_VP_UI);
+    LogDetachBuffer(PM_METAL_LOG_VP_UI);
   }
 
-  ReleaseSpinLock (&mLock);
+  pm_metal_spin_unlock(&mLock);
 }
 
-int
-pm_metal_log_buffer_live (
-  VOID
-  )
+int pm_metal_log_buffer_live(void)
 {
   return (mBootEpoch || mViewportCount > 0) ? 1 : 0;
 }
 
-void
-pm_metal_log_boot_complete (
-  VOID
-  )
+void pm_metal_log_boot_complete(void)
 {
   if (!mInited) {
     return;
   }
 
-  AcquireSpinLock (&mLock);
+  pm_metal_spin_lock(&mLock);
   mBootEpoch = 0;
-  LogTryClearRing ();
-  ReleaseSpinLock (&mLock);
+  LogTryClearRing();
+  pm_metal_spin_unlock(&mLock);
 }

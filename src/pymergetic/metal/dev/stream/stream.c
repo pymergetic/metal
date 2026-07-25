@@ -1,26 +1,25 @@
 /** @file
   Metal byte streams — ui_tab / uart / pipe / pty. (impl: efi|bios)
 **/
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
 #include <pymergetic/metal/dev/stream/stream.h>
 #include <pymergetic/metal/shell/shell/shell.h>
 #include <pymergetic/metal/runtime/async/async.h>
-#include <runtime/coro/coro.h>
-#include <runtime/mem/mem.h>
+#include <pymergetic/metal/runtime/mem/mem.h>
+#include <runtime/slot/slot_table.h>
 #include <runtime/time/time.h>
-
-#include <Uefi.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/BaseLib.h>
-#include <Library/PrintLib.h>
 
 #include "wasm_export.h"
 
 #ifndef PM_METAL_STREAM_MAX
-#define PM_METAL_STREAM_MAX  32u
+#define PM_METAL_STREAM_MAX 32u
 #endif
 
 #ifndef PM_METAL_STREAM_RING
-#define PM_METAL_STREAM_RING  4096u
+#define PM_METAL_STREAM_RING 4096u
 #endif
 
 typedef enum {
@@ -32,42 +31,39 @@ typedef enum {
 } pm_metal_stream_kind_t;
 
 typedef struct {
-  INT32                   used;
-  pm_metal_stream_kind_t  kind;
-  pm_metal_ui_handle_t    tab;
-  UINT32                  peer; /* pipe/pty other end */
-  UINT8                  *ring;
-  UINT32                  rhead;
-  UINT32                  rtail;
-  UINT32                  rcap;
+  volatile uint32_t      used; /* slot ticket - see slot_table.h; must stay first */
+  pm_metal_stream_kind_t kind;
+  pm_metal_ui_handle_t   tab;
+  uint32_t               peer; /* pipe/pty other end */
+  uint8_t               *ring;
+  uint32_t               rhead;
+  uint32_t               rtail;
+  uint32_t               rcap;
 } pm_metal_stream_slot_t;
 
-STATIC pm_metal_stream_slot_t  mSlots[PM_METAL_STREAM_MAX + 1];
-STATIC pm_metal_stream_h       mStdIn;
-STATIC pm_metal_stream_h       mStdOut;
-STATIC pm_metal_stream_h       mStdErr;
-STATIC wasm_module_inst_t      mStreamInst;
+static pm_metal_stream_slot_t mSlots[PM_METAL_STREAM_MAX + 1];
+static pm_metal_stream_h      mStdIn;
+static pm_metal_stream_h      mStdOut;
+static pm_metal_stream_h      mStdErr;
+static wasm_module_inst_t     mStreamInst;
 
-void
-pm_metal_stream_bind_inst (
-  VOID  *module_inst
-  )
+void pm_metal_stream_bind_inst(void *module_inst)
 {
   mStreamInst = (wasm_module_inst_t)module_inst;
 }
 
-STATIC
-UINT32
-MetalStreamAlloc (
-  pm_metal_stream_kind_t  kind
-  )
+static uint32_t MetalStreamAlloc(pm_metal_stream_kind_t kind)
 {
-  UINT32  i;
+  uint32_t i;
 
+  /*
+   * Tasks/fibers can run on any CPU now (no session pinning), so two
+   * CPUs opening a stream at once must not be able to win the same
+   * free index - claim the slot ticket with a CAS before touching it.
+   */
   for (i = 1; i <= PM_METAL_STREAM_MAX; i++) {
-    if (!mSlots[i].used) {
-      ZeroMem (&mSlots[i], sizeof (mSlots[i]));
-      mSlots[i].used = 1;
+    if (pm_metal_slot_try_claim(&mSlots[i].used, 1)) {
+      pm_metal_slot_claimed_zero(&mSlots[i].used, sizeof(mSlots[i]));
       mSlots[i].kind = kind;
       return i;
     }
@@ -76,11 +72,7 @@ MetalStreamAlloc (
   return 0;
 }
 
-STATIC
-INT32
-MetalStreamRingAlloc (
-  UINT32  h
-  )
+static int32_t MetalStreamRingAlloc(uint32_t h)
 {
   if (h == 0 || h > PM_METAL_STREAM_MAX) {
     return -1;
@@ -90,11 +82,8 @@ MetalStreamRingAlloc (
     return 0;
   }
 
-  mSlots[h].ring = (UINT8 *)pm_metal_mem_alloc (
-                              PM_METAL_STREAM_RING,
-                              PM_METAL_MEM_HEAP,
-                              PM_METAL_MEM_ID_NONE
-                              );
+  mSlots[h].ring =
+    (uint8_t *)pm_metal_mem_alloc(PM_METAL_STREAM_RING, PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
   if (mSlots[h].ring == NULL) {
     return -1;
   }
@@ -105,13 +94,9 @@ MetalStreamRingAlloc (
   return 0;
 }
 
-STATIC
-UINT32
-MetalStreamRingUsed (
-  UINT32  h
-  )
+static uint32_t MetalStreamRingUsed(uint32_t h)
 {
-  pm_metal_stream_slot_t  *s;
+  pm_metal_stream_slot_t *s;
 
   s = &mSlots[h];
   if (s->rhead >= s->rtail) {
@@ -121,101 +106,79 @@ MetalStreamRingUsed (
   return s->rcap - (s->rtail - s->rhead);
 }
 
-STATIC
-UINT32
-MetalStreamRingSpace (
-  UINT32  h
-  )
+static uint32_t MetalStreamRingSpace(uint32_t h)
 {
-  return mSlots[h].rcap - MetalStreamRingUsed (h) - 1u;
+  return mSlots[h].rcap - MetalStreamRingUsed(h) - 1u;
 }
 
-STATIC
-UINT32
-MetalStreamRingPut (
-  UINT32       h,
-  CONST UINT8  *data,
-  UINT32        len
-  )
+static uint32_t MetalStreamRingPut(uint32_t h, const uint8_t *data, uint32_t len)
 {
-  UINT32  n;
-  UINT32  i;
+  uint32_t n;
+  uint32_t i;
 
-  if (h == 0 || data == NULL || len == 0 || MetalStreamRingAlloc (h) != 0) {
+  if (h == 0 || data == NULL || len == 0 || MetalStreamRingAlloc(h) != 0) {
     return 0;
   }
 
-  n = MetalStreamRingSpace (h);
+  n = MetalStreamRingSpace(h);
   if (n > len) {
     n = len;
   }
 
   for (i = 0; i < n; i++) {
     mSlots[h].ring[mSlots[h].rhead] = data[i];
-    mSlots[h].rhead = (mSlots[h].rhead + 1u) % mSlots[h].rcap;
+    mSlots[h].rhead                 = (mSlots[h].rhead + 1u) % mSlots[h].rcap;
   }
 
   return n;
 }
 
-STATIC
-UINT32
-MetalStreamRingGet (
-  UINT32  h,
-  UINT8  *data,
-  UINT32  len
-  )
+static uint32_t MetalStreamRingGet(uint32_t h, uint8_t *data, uint32_t len)
 {
-  UINT32  n;
-  UINT32  i;
-  UINT32  used;
+  uint32_t n;
+  uint32_t i;
+  uint32_t used;
 
   if (h == 0 || data == NULL || len == 0 || mSlots[h].ring == NULL) {
     return 0;
   }
 
-  used = MetalStreamRingUsed (h);
+  used = MetalStreamRingUsed(h);
   n    = used < len ? used : len;
   for (i = 0; i < n; i++) {
-    data[i] = mSlots[h].ring[mSlots[h].rtail];
+    data[i]         = mSlots[h].ring[mSlots[h].rtail];
     mSlots[h].rtail = (mSlots[h].rtail + 1u) % mSlots[h].rcap;
   }
 
   return n;
 }
 
-pm_metal_stream_h
-pm_metal_stream_open_uart (
-  VOID
-  )
+pm_metal_stream_h pm_metal_stream_open_uart(void)
 {
-  UINT32  h;
+  uint32_t h;
 
-  h = MetalStreamAlloc (PM_METAL_STREAM_KIND_UART);
+  h = MetalStreamAlloc(PM_METAL_STREAM_KIND_UART);
   if (h == 0) {
     return PM_METAL_STREAM_INVALID;
   }
 
-  if (MetalStreamRingAlloc (h) != 0) {
-    pm_metal_stream_close (h);
+  if (MetalStreamRingAlloc(h) != 0) {
+    pm_metal_stream_close(h);
     return PM_METAL_STREAM_INVALID;
   }
 
   return (pm_metal_stream_h)h;
 }
 
-pm_metal_stream_h
-pm_metal_stream_open_ui_tab (
-  pm_metal_ui_handle_t  tab
-  )
+pm_metal_stream_h pm_metal_stream_open_ui_tab(pm_metal_ui_handle_t tab)
 {
-  UINT32  h;
+  uint32_t h;
 
   if (tab == PM_METAL_UI_HANDLE_INVALID) {
     return PM_METAL_STREAM_INVALID;
   }
 
-  h = MetalStreamAlloc (PM_METAL_STREAM_KIND_UI_TAB);
+  h = MetalStreamAlloc(PM_METAL_STREAM_KIND_UI_TAB);
   if (h == 0) {
     return PM_METAL_STREAM_INVALID;
   }
@@ -224,36 +187,32 @@ pm_metal_stream_open_ui_tab (
   return (pm_metal_stream_h)h;
 }
 
-int
-pm_metal_stream_pipe (
-  pm_metal_stream_h  *read_end,
-  pm_metal_stream_h  *write_end
-  )
+int pm_metal_stream_pipe(pm_metal_stream_h *read_end, pm_metal_stream_h *write_end)
 {
-  UINT32  r;
-  UINT32  w;
+  uint32_t r;
+  uint32_t w;
 
   if (read_end == NULL || write_end == NULL) {
     return -1;
   }
 
-  r = MetalStreamAlloc (PM_METAL_STREAM_KIND_PIPE);
-  w = MetalStreamAlloc (PM_METAL_STREAM_KIND_PIPE);
+  r = MetalStreamAlloc(PM_METAL_STREAM_KIND_PIPE);
+  w = MetalStreamAlloc(PM_METAL_STREAM_KIND_PIPE);
   if (r == 0 || w == 0) {
     if (r != 0) {
-      pm_metal_stream_close (r);
+      pm_metal_stream_close(r);
     }
 
     if (w != 0) {
-      pm_metal_stream_close (w);
+      pm_metal_stream_close(w);
     }
 
     return -1;
   }
 
-  if (MetalStreamRingAlloc (r) != 0) {
-    pm_metal_stream_close (r);
-    pm_metal_stream_close (w);
+  if (MetalStreamRingAlloc(r) != 0) {
+    pm_metal_stream_close(r);
+    pm_metal_stream_close(w);
     return -1;
   }
 
@@ -264,36 +223,32 @@ pm_metal_stream_pipe (
   return 0;
 }
 
-int
-pm_metal_stream_pty (
-  pm_metal_stream_h  *master,
-  pm_metal_stream_h  *slave
-  )
+int pm_metal_stream_pty(pm_metal_stream_h *master, pm_metal_stream_h *slave)
 {
-  UINT32  m;
-  UINT32  s;
+  uint32_t m;
+  uint32_t s;
 
   if (master == NULL || slave == NULL) {
     return -1;
   }
 
-  m = MetalStreamAlloc (PM_METAL_STREAM_KIND_PTY);
-  s = MetalStreamAlloc (PM_METAL_STREAM_KIND_PTY);
+  m = MetalStreamAlloc(PM_METAL_STREAM_KIND_PTY);
+  s = MetalStreamAlloc(PM_METAL_STREAM_KIND_PTY);
   if (m == 0 || s == 0) {
     if (m != 0) {
-      pm_metal_stream_close (m);
+      pm_metal_stream_close(m);
     }
 
     if (s != 0) {
-      pm_metal_stream_close (s);
+      pm_metal_stream_close(s);
     }
 
     return -1;
   }
 
-  if (MetalStreamRingAlloc (m) != 0 || MetalStreamRingAlloc (s) != 0) {
-    pm_metal_stream_close (m);
-    pm_metal_stream_close (s);
+  if (MetalStreamRingAlloc(m) != 0 || MetalStreamRingAlloc(s) != 0) {
+    pm_metal_stream_close(m);
+    pm_metal_stream_close(s);
     return -1;
   }
 
@@ -304,12 +259,9 @@ pm_metal_stream_pty (
   return 0;
 }
 
-void
-pm_metal_stream_close (
-  pm_metal_stream_h  h
-  )
+void pm_metal_stream_close(pm_metal_stream_h h)
 {
-  UINT32  peer;
+  uint32_t peer;
 
   if (h == 0 || h > PM_METAL_STREAM_MAX || !mSlots[h].used) {
     return;
@@ -317,10 +269,10 @@ pm_metal_stream_close (
 
   peer = mSlots[h].peer;
   if (mSlots[h].ring != NULL) {
-    pm_metal_mem_free (mSlots[h].ring);
+    pm_metal_mem_free(mSlots[h].ring);
   }
 
-  ZeroMem (&mSlots[h], sizeof (mSlots[h]));
+  memset(&mSlots[h], 0, sizeof(mSlots[h]));
   if (peer != 0 && peer <= PM_METAL_STREAM_MAX && mSlots[peer].used) {
     mSlots[peer].peer = 0;
   }
@@ -338,33 +290,26 @@ pm_metal_stream_close (
   }
 }
 
-uint32_t
-pm_metal_stream_write (
-  pm_metal_stream_h  h,
-  CONST VOID        *ptr,
-  uint32_t           len
-  )
+uint32_t pm_metal_stream_write(pm_metal_stream_h h, const void *ptr, uint32_t len)
 {
-  CONST UINT8  *p;
-  CHAR8         line[256];
-  UINT32        i;
-  UINT32        o;
+  const uint8_t *p;
+  char           line[256];
+  uint32_t       i;
+  uint32_t       o;
 
-  if (h == 0 || h > PM_METAL_STREAM_MAX || !mSlots[h].used || ptr == NULL
-      || len == 0)
-  {
+  if (h == 0 || h > PM_METAL_STREAM_MAX || !mSlots[h].used || ptr == NULL || len == 0) {
     return 0;
   }
 
-  p = (CONST UINT8 *)ptr;
+  p = (const uint8_t *)ptr;
 
   if (mSlots[h].kind == PM_METAL_STREAM_KIND_UART) {
     /* Line-oriented serial; short-write not used. */
     o = 0;
     for (i = 0; i < len; i++) {
-      if (p[i] == '\n' || o + 1 >= sizeof (line)) {
+      if (p[i] == '\n' || o + 1 >= sizeof(line)) {
         line[o] = '\0';
-        pm_metal_shell_serial_log (line);
+        pm_metal_shell_serial_log(line);
         o = 0;
         if (p[i] == '\n') {
           continue;
@@ -372,13 +317,13 @@ pm_metal_stream_write (
       }
 
       if (p[i] != '\r') {
-        line[o++] = (CHAR8)p[i];
+        line[o++] = (char)p[i];
       }
     }
 
     if (o > 0) {
       line[o] = '\0';
-      pm_metal_shell_serial_log (line);
+      pm_metal_shell_serial_log(line);
     }
 
     return len;
@@ -387,9 +332,9 @@ pm_metal_stream_write (
   if (mSlots[h].kind == PM_METAL_STREAM_KIND_UI_TAB) {
     o = 0;
     for (i = 0; i < len; i++) {
-      if (p[i] == '\n' || o + 1 >= sizeof (line)) {
+      if (p[i] == '\n' || o + 1 >= sizeof(line)) {
         line[o] = '\0';
-        pm_metal_ui_tab_puts (mSlots[h].tab, line);
+        pm_metal_ui_tab_puts(mSlots[h].tab, line);
         o = 0;
         if (p[i] == '\n') {
           continue;
@@ -397,22 +342,20 @@ pm_metal_stream_write (
       }
 
       if (p[i] != '\r') {
-        line[o++] = (CHAR8)p[i];
+        line[o++] = (char)p[i];
       }
     }
 
     if (o > 0) {
       line[o] = '\0';
-      pm_metal_ui_tab_puts (mSlots[h].tab, line);
+      pm_metal_ui_tab_puts(mSlots[h].tab, line);
     }
 
     return len;
   }
 
-  if (mSlots[h].kind == PM_METAL_STREAM_KIND_PIPE
-      || mSlots[h].kind == PM_METAL_STREAM_KIND_PTY)
-  {
-    UINT32  peer;
+  if (mSlots[h].kind == PM_METAL_STREAM_KIND_PIPE || mSlots[h].kind == PM_METAL_STREAM_KIND_PTY) {
+    uint32_t peer;
 
     peer = mSlots[h].peer;
     if (peer == 0) {
@@ -420,33 +363,28 @@ pm_metal_stream_write (
     }
 
     /* Write into peer's ring (reader drains peer). */
-    return MetalStreamRingPut (peer, p, len);
+    return MetalStreamRingPut(peer, p, len);
   }
 
   return 0;
 }
 
 typedef struct {
-  pm_metal_coro_t   coro;
   pm_metal_stream_h h;
-  VOID             *ptr;
-  UINT32            len;
-  UINT32            n;
-  INT32             is_drain;
-  UINT64            deadline;
+  void             *ptr;
+  uint32_t          len;
+  uint32_t          n;
+  int32_t           is_drain;
+  uint64_t          deadline;
 } pm_metal_stream_coro_t;
 
-STATIC
-pm_metal_status_t
-MetalStreamReadFn (
-  pm_metal_coro_t  *self
-  )
+static pm_metal_status_t MetalStreamReadStep(pm_metal_async_handle_t self_h)
 {
-  pm_metal_stream_coro_t  *s;
-  pm_metal_stream_kind_t   kind;
+  pm_metal_stream_coro_t *s;
+  pm_metal_stream_kind_t  kind;
 
-  s = (pm_metal_stream_coro_t *)self;
-  if (s->h == 0 || s->h > PM_METAL_STREAM_MAX || !mSlots[s->h].used) {
+  s = (pm_metal_stream_coro_t *)(uintptr_t)pm_metal_async_coro_state(self_h);
+  if (s == NULL || s->h == 0 || s->h > PM_METAL_STREAM_MAX || !mSlots[s->h].used) {
     return PM_METAL_ERROR;
   }
 
@@ -454,70 +392,59 @@ MetalStreamReadFn (
 
   if (s->is_drain) {
     /* Await TX ring space on pipe/pty write end (peer ring). */
-    if (kind == PM_METAL_STREAM_KIND_PIPE
-        || kind == PM_METAL_STREAM_KIND_PTY)
-    {
-      UINT32  peer;
+    if (kind == PM_METAL_STREAM_KIND_PIPE || kind == PM_METAL_STREAM_KIND_PTY) {
+      uint32_t peer;
 
       peer = mSlots[s->h].peer;
       if (peer == 0) {
         return PM_METAL_ERROR;
       }
 
-      if (MetalStreamRingSpace (peer) > 0) {
-        self->result = (VOID *)(UINTN)0;
+      if (MetalStreamRingSpace(peer) > 0) {
+        pm_metal_async_set_result_u32(self_h, 0);
         return PM_METAL_DONE;
       }
 
-      if (pm_metal_time_mono_us () > s->deadline) {
+      if (pm_metal_time_mono_us() > s->deadline) {
         return PM_METAL_ERROR;
       }
 
-      return pm_metal_await (self, pm_metal_sleep_us (2000));
+      return pm_metal_async_await(self_h, pm_metal_async_sleep_us(2000));
     }
 
     /* uart/ui_tab TX is unbounded line sink — drain completes. */
-    self->result = (VOID *)(UINTN)0;
+    pm_metal_async_set_result_u32(self_h, 0);
     return PM_METAL_DONE;
   }
 
-  if (kind == PM_METAL_STREAM_KIND_PIPE
-      || kind == PM_METAL_STREAM_KIND_PTY
-      || kind == PM_METAL_STREAM_KIND_UART
-      || kind == PM_METAL_STREAM_KIND_UI_TAB)
-  {
-    if (kind == PM_METAL_STREAM_KIND_UI_TAB
-        && mSlots[s->h].ring == NULL)
-    {
-      if (MetalStreamRingAlloc (s->h) != 0) {
+  if (kind == PM_METAL_STREAM_KIND_PIPE || kind == PM_METAL_STREAM_KIND_PTY ||
+      kind == PM_METAL_STREAM_KIND_UART || kind == PM_METAL_STREAM_KIND_UI_TAB) {
+    if (kind == PM_METAL_STREAM_KIND_UI_TAB && mSlots[s->h].ring == NULL) {
+      if (MetalStreamRingAlloc(s->h) != 0) {
         return PM_METAL_ERROR;
       }
     }
 
-    if (MetalStreamRingUsed (s->h) > 0) {
-      s->n = MetalStreamRingGet (s->h, (UINT8 *)s->ptr, s->len);
-      self->result = (VOID *)(UINTN)s->n;
+    if (MetalStreamRingUsed(s->h) > 0) {
+      s->n = MetalStreamRingGet(s->h, (uint8_t *)s->ptr, s->len);
+      pm_metal_async_set_result_u32(self_h, s->n);
       return PM_METAL_DONE;
     }
 
-    if (pm_metal_time_mono_us () > s->deadline) {
+    if (pm_metal_time_mono_us() > s->deadline) {
       return PM_METAL_ERROR;
     }
 
-    return pm_metal_await (self, pm_metal_sleep_us (2000));
+    return pm_metal_async_await(self_h, pm_metal_async_sleep_us(2000));
   }
 
   return PM_METAL_ERROR;
 }
 
-pm_metal_async_handle_t
-pm_metal_stream_read (
-  pm_metal_stream_h  h,
-  VOID              *ptr,
-  uint32_t           len
-  )
+pm_metal_async_handle_t pm_metal_stream_read(pm_metal_stream_h h, void *ptr, uint32_t len)
 {
-  pm_metal_stream_coro_t  *c;
+  pm_metal_async_handle_t ah;
+  pm_metal_stream_coro_t *c;
 
   if (h == 0 || h > PM_METAL_STREAM_MAX || !mSlots[h].used) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
@@ -527,11 +454,14 @@ pm_metal_stream_read (
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  c = (pm_metal_stream_coro_t *)pm_metal_coro (
-                                  MetalStreamReadFn,
-                                  sizeof (*c)
-                                  );
+  ah = pm_metal_async_coro_create(MetalStreamReadStep, sizeof(*c));
+  if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  c = (pm_metal_stream_coro_t *)(uintptr_t)pm_metal_async_coro_state(ah);
   if (c == NULL) {
+    pm_metal_async_coro_close(ah);
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
@@ -540,26 +470,27 @@ pm_metal_stream_read (
   c->len      = len;
   c->n        = 0;
   c->is_drain = 0;
-  c->deadline = pm_metal_time_mono_us () + 30000000ull;
-  return pm_metal_async_adopt_host_coro (&c->coro);
+  c->deadline = pm_metal_time_mono_us() + 30000000ull;
+  return ah;
 }
 
-pm_metal_async_handle_t
-pm_metal_stream_drain (
-  pm_metal_stream_h  h
-  )
+pm_metal_async_handle_t pm_metal_stream_drain(pm_metal_stream_h h)
 {
-  pm_metal_stream_coro_t  *c;
+  pm_metal_async_handle_t ah;
+  pm_metal_stream_coro_t *c;
 
   if (h == 0 || h > PM_METAL_STREAM_MAX || !mSlots[h].used) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  c = (pm_metal_stream_coro_t *)pm_metal_coro (
-                                  MetalStreamReadFn,
-                                  sizeof (*c)
-                                  );
+  ah = pm_metal_async_coro_create(MetalStreamReadStep, sizeof(*c));
+  if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  c = (pm_metal_stream_coro_t *)(uintptr_t)pm_metal_async_coro_state(ah);
   if (c == NULL) {
+    pm_metal_async_coro_close(ah);
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
@@ -567,37 +498,27 @@ pm_metal_stream_drain (
   c->ptr      = NULL;
   c->len      = 0;
   c->is_drain = 1;
-  c->deadline = pm_metal_time_mono_us () + 30000000ull;
-  return pm_metal_async_adopt_host_coro (&c->coro);
+  c->deadline = pm_metal_time_mono_us() + 30000000ull;
+  return ah;
 }
 
-uint32_t
-pm_metal_stream_feed_stdin (
-  CONST VOID  *ptr,
-  uint32_t     len
-  )
+uint32_t pm_metal_stream_feed_stdin(const void *ptr, uint32_t len)
 {
   if (mStdIn == 0 || ptr == NULL || len == 0) {
     return 0;
   }
 
-  if (mSlots[mStdIn].kind != PM_METAL_STREAM_KIND_UART
-      && mSlots[mStdIn].kind != PM_METAL_STREAM_KIND_UI_TAB
-      && mSlots[mStdIn].kind != PM_METAL_STREAM_KIND_PIPE
-      && mSlots[mStdIn].kind != PM_METAL_STREAM_KIND_PTY)
-  {
+  if (mSlots[mStdIn].kind != PM_METAL_STREAM_KIND_UART &&
+      mSlots[mStdIn].kind != PM_METAL_STREAM_KIND_UI_TAB &&
+      mSlots[mStdIn].kind != PM_METAL_STREAM_KIND_PIPE &&
+      mSlots[mStdIn].kind != PM_METAL_STREAM_KIND_PTY) {
     return 0;
   }
 
-  return MetalStreamRingPut (mStdIn, (CONST UINT8 *)ptr, len);
+  return MetalStreamRingPut(mStdIn, (const uint8_t *)ptr, len);
 }
 
-int
-pm_metal_stdio_attach (
-  pm_metal_stream_h  in,
-  pm_metal_stream_h  out,
-  pm_metal_stream_h  err
-  )
+int pm_metal_stdio_attach(pm_metal_stream_h in, pm_metal_stream_h out, pm_metal_stream_h err)
 {
   mStdIn  = in;
   mStdOut = out;
@@ -605,47 +526,34 @@ pm_metal_stdio_attach (
   return 0;
 }
 
-pm_metal_stream_h
-pm_metal_stdio_in (
-  VOID
-  )
+pm_metal_stream_h pm_metal_stdio_in(void)
 {
   return mStdIn;
 }
 
-pm_metal_stream_h
-pm_metal_stdio_out (
-  VOID
-  )
+pm_metal_stream_h pm_metal_stdio_out(void)
 {
   return mStdOut;
 }
 
-pm_metal_stream_h
-pm_metal_stdio_err (
-  VOID
-  )
+pm_metal_stream_h pm_metal_stdio_err(void)
 {
   return mStdErr;
 }
 
-uint32_t
-pm_metal_stream_write_line (
-  pm_metal_stream_h  h,
-  CONST CHAR8       *line
-  )
+uint32_t pm_metal_stream_write_line(pm_metal_stream_h h, const char *line)
 {
-  CHAR8   buf[256];
-  UINTN   n;
-  UINTN   i;
+  char      buf[256];
+  uintptr_t n;
+  uintptr_t i;
 
   if (h == 0 || line == NULL) {
     return 0;
   }
 
-  n = AsciiStrLen (line);
-  if (n + 1 >= sizeof (buf)) {
-    n = sizeof (buf) - 2;
+  n = strlen(line);
+  if (n + 1 >= sizeof(buf)) {
+    n = sizeof(buf) - 2;
   }
 
   for (i = 0; i < n; i++) {
@@ -654,192 +562,152 @@ pm_metal_stream_write_line (
 
   buf[n]     = '\n';
   buf[n + 1] = '\0';
-  return pm_metal_stream_write (h, buf, (UINT32)(n + 1));
+  return pm_metal_stream_write(h, buf, (uint32_t)(n + 1));
 }
 
-STATIC UINT32
-pm_metal_stream_open_uart_native (
-  wasm_exec_env_t  exec_env
-  )
+static uint32_t pm_metal_stream_open_uart_native(wasm_exec_env_t exec_env)
 {
-  (VOID)exec_env;
-  return pm_metal_stream_open_uart ();
+  (void)exec_env;
+  return pm_metal_stream_open_uart();
 }
 
-STATIC UINT32
-pm_metal_stream_open_ui_tab_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           tab
-  )
+static uint32_t pm_metal_stream_open_ui_tab_native(wasm_exec_env_t exec_env, uint32_t tab)
 {
-  (VOID)exec_env;
-  return pm_metal_stream_open_ui_tab (tab);
+  (void)exec_env;
+  return pm_metal_stream_open_ui_tab(tab);
 }
 
-STATIC INT32
-pm_metal_stream_pipe_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           read_out,
-  UINT32           write_out
-  )
+static int32_t pm_metal_stream_pipe_native(wasm_exec_env_t exec_env,
+                                           uint32_t        read_out,
+                                           uint32_t        write_out)
 {
-  pm_metal_stream_h  r;
-  pm_metal_stream_h  w;
-  UINT32            *rn;
-  UINT32            *wn;
+  pm_metal_stream_h r;
+  pm_metal_stream_h w;
+  uint32_t         *rn;
+  uint32_t         *wn;
 
-  (VOID)exec_env;
-  if (mStreamInst == NULL
-      || !wasm_runtime_validate_app_addr (mStreamInst, read_out, 4)
-      || !wasm_runtime_validate_app_addr (mStreamInst, write_out, 4))
-  {
+  (void)exec_env;
+  if (mStreamInst == NULL || !wasm_runtime_validate_app_addr(mStreamInst, read_out, 4) ||
+      !wasm_runtime_validate_app_addr(mStreamInst, write_out, 4)) {
     return -1;
   }
 
-  if (pm_metal_stream_pipe (&r, &w) != 0) {
+  if (pm_metal_stream_pipe(&r, &w) != 0) {
     return -1;
   }
 
-  rn  = (UINT32 *)wasm_runtime_addr_app_to_native (mStreamInst, read_out);
-  wn  = (UINT32 *)wasm_runtime_addr_app_to_native (mStreamInst, write_out);
+  rn  = (uint32_t *)wasm_runtime_addr_app_to_native(mStreamInst, read_out);
+  wn  = (uint32_t *)wasm_runtime_addr_app_to_native(mStreamInst, write_out);
   *rn = r;
   *wn = w;
   return 0;
 }
 
-STATIC INT32
-pm_metal_stream_pty_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           master_out,
-  UINT32           slave_out
-  )
+static int32_t pm_metal_stream_pty_native(wasm_exec_env_t exec_env,
+                                          uint32_t        master_out,
+                                          uint32_t        slave_out)
 {
-  pm_metal_stream_h  m;
-  pm_metal_stream_h  s;
-  UINT32            *mn;
-  UINT32            *sn;
+  pm_metal_stream_h m;
+  pm_metal_stream_h s;
+  uint32_t         *mn;
+  uint32_t         *sn;
 
-  (VOID)exec_env;
-  if (mStreamInst == NULL
-      || !wasm_runtime_validate_app_addr (mStreamInst, master_out, 4)
-      || !wasm_runtime_validate_app_addr (mStreamInst, slave_out, 4))
-  {
+  (void)exec_env;
+  if (mStreamInst == NULL || !wasm_runtime_validate_app_addr(mStreamInst, master_out, 4) ||
+      !wasm_runtime_validate_app_addr(mStreamInst, slave_out, 4)) {
     return -1;
   }
 
-  if (pm_metal_stream_pty (&m, &s) != 0) {
+  if (pm_metal_stream_pty(&m, &s) != 0) {
     return -1;
   }
 
-  mn  = (UINT32 *)wasm_runtime_addr_app_to_native (mStreamInst, master_out);
-  sn  = (UINT32 *)wasm_runtime_addr_app_to_native (mStreamInst, slave_out);
+  mn  = (uint32_t *)wasm_runtime_addr_app_to_native(mStreamInst, master_out);
+  sn  = (uint32_t *)wasm_runtime_addr_app_to_native(mStreamInst, slave_out);
   *mn = m;
   *sn = s;
   return 0;
 }
 
-STATIC UINT32
-pm_metal_stream_write_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           h,
-  UINT32           ptr,
-  UINT32           len
-  )
+static uint32_t pm_metal_stream_write_native(wasm_exec_env_t exec_env,
+                                             uint32_t        h,
+                                             uint32_t        ptr,
+                                             uint32_t        len)
 {
-  VOID  *native;
+  void *native;
 
-  (VOID)exec_env;
+  (void)exec_env;
   if (mStreamInst == NULL || len == 0) {
     return 0;
   }
 
-  if (!wasm_runtime_validate_app_addr (mStreamInst, ptr, len)) {
+  if (!wasm_runtime_validate_app_addr(mStreamInst, ptr, len)) {
     return 0;
   }
 
-  native = wasm_runtime_addr_app_to_native (mStreamInst, ptr);
-  return pm_metal_stream_write (h, native, len);
+  native = wasm_runtime_addr_app_to_native(mStreamInst, ptr);
+  return pm_metal_stream_write(h, native, len);
 }
 
-STATIC UINT32
-pm_metal_stream_read_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           h,
-  UINT32           ptr,
-  UINT32           len
-  )
+static uint32_t pm_metal_stream_read_native(wasm_exec_env_t exec_env,
+                                            uint32_t        h,
+                                            uint32_t        ptr,
+                                            uint32_t        len)
 {
-  VOID  *native;
+  void *native;
 
-  (VOID)exec_env;
+  (void)exec_env;
   if (mStreamInst == NULL) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  if (len > 0 && !wasm_runtime_validate_app_addr (mStreamInst, ptr, len)) {
+  if (len > 0 && !wasm_runtime_validate_app_addr(mStreamInst, ptr, len)) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  native = (len > 0) ? wasm_runtime_addr_app_to_native (mStreamInst, ptr) : NULL;
-  return pm_metal_stream_read (h, native, len);
+  native = (len > 0) ? wasm_runtime_addr_app_to_native(mStreamInst, ptr) : NULL;
+  return pm_metal_stream_read(h, native, len);
 }
 
-STATIC UINT32
-pm_metal_stream_drain_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           h
-  )
+static uint32_t pm_metal_stream_drain_native(wasm_exec_env_t exec_env, uint32_t h)
 {
-  (VOID)exec_env;
-  return pm_metal_stream_drain (h);
+  (void)exec_env;
+  return pm_metal_stream_drain(h);
 }
 
-STATIC VOID
-pm_metal_stream_close_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           h
-  )
+static void pm_metal_stream_close_native(wasm_exec_env_t exec_env, uint32_t h)
 {
-  (VOID)exec_env;
-  pm_metal_stream_close (h);
+  (void)exec_env;
+  pm_metal_stream_close(h);
 }
 
-STATIC INT32
-pm_metal_stdio_attach_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           in,
-  UINT32           out,
-  UINT32           err
-  )
+static int32_t pm_metal_stdio_attach_native(wasm_exec_env_t exec_env,
+                                            uint32_t        in,
+                                            uint32_t        out,
+                                            uint32_t        err)
 {
-  (VOID)exec_env;
-  return pm_metal_stdio_attach (in, out, err);
+  (void)exec_env;
+  return pm_metal_stdio_attach(in, out, err);
 }
 
-STATIC NativeSymbol g_pm_metal_stream_native_symbols[] = {
-  { "pm_metal_stream_open_uart", (VOID *)pm_metal_stream_open_uart_native, "()i", NULL },
-  { "pm_metal_stream_open_ui_tab", (VOID *)pm_metal_stream_open_ui_tab_native, "(i)i", NULL },
-  { "pm_metal_stream_pipe", (VOID *)pm_metal_stream_pipe_native, "(ii)i", NULL },
-  { "pm_metal_stream_pty", (VOID *)pm_metal_stream_pty_native, "(ii)i", NULL },
-  { "pm_metal_stream_write", (VOID *)pm_metal_stream_write_native, "(iii)i", NULL },
-  { "pm_metal_stream_read", (VOID *)pm_metal_stream_read_native, "(iii)i", NULL },
-  { "pm_metal_stream_drain", (VOID *)pm_metal_stream_drain_native, "(i)i", NULL },
-  { "pm_metal_stream_close", (VOID *)pm_metal_stream_close_native, "(i)", NULL },
-  { "pm_metal_stdio_attach", (VOID *)pm_metal_stdio_attach_native, "(iii)i", NULL },
+static NativeSymbol g_pm_metal_stream_native_symbols[] = {
+  { "pm_metal_stream_open_uart", (void *)pm_metal_stream_open_uart_native, "()i", NULL },
+  { "pm_metal_stream_open_ui_tab", (void *)pm_metal_stream_open_ui_tab_native, "(i)i", NULL },
+  { "pm_metal_stream_pipe", (void *)pm_metal_stream_pipe_native, "(ii)i", NULL },
+  { "pm_metal_stream_pty", (void *)pm_metal_stream_pty_native, "(ii)i", NULL },
+  { "pm_metal_stream_write", (void *)pm_metal_stream_write_native, "(iii)i", NULL },
+  { "pm_metal_stream_read", (void *)pm_metal_stream_read_native, "(iii)i", NULL },
+  { "pm_metal_stream_drain", (void *)pm_metal_stream_drain_native, "(i)i", NULL },
+  { "pm_metal_stream_close", (void *)pm_metal_stream_close_native, "(i)", NULL },
+  { "pm_metal_stdio_attach", (void *)pm_metal_stdio_attach_native, "(iii)i", NULL },
 };
 
-int
-pm_metal_stream_native_register (
-  VOID
-  )
+int pm_metal_stream_native_register(void)
 {
-  if (!wasm_runtime_register_natives (
-         PM_METAL_STREAM_WASI_MODULE,
-         g_pm_metal_stream_native_symbols,
-         sizeof (g_pm_metal_stream_native_symbols)
-           / sizeof (g_pm_metal_stream_native_symbols[0])
-         ))
-  {
+  if (!wasm_runtime_register_natives(PM_METAL_STREAM_WASI_MODULE,
+                                     g_pm_metal_stream_native_symbols,
+                                     sizeof(g_pm_metal_stream_native_symbols) /
+                                       sizeof(g_pm_metal_stream_native_symbols[0]))) {
     return -1;
   }
 

@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # Vendors WAMR into external/wamr (gitignored — see docs/SOURCETREE.md
-# "Vendoring"). Optional patches/wamr/*.patch if present (archive may
-# carry them; freestanding-efi has none).
-# external/wamr itself stays a plain, reproducible upstream checkout —
-# nothing here is ever hand-edited in place; re-run this script any time
-# to get back to (pin + optional patches), including after `rm -rf external/wamr`.
+# "Vendoring"). Applies patches/wamr/*.patch after a clean pin checkout.
+# Never hand-edit external/wamr — put Metal deltas in patches/wamr/ and
+# re-run this script (or `rm -rf external/wamr` then setup).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"

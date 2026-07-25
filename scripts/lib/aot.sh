@@ -53,17 +53,21 @@ pm_metal_aot_compile() {
 	tmp="${aot}.tmp.$$"
 	# Portable baseline for QEMU + iron.
 	# opt-level 1: higher opts have emitted SSE that #GP on Metal EFI.
-	# size-level 1 is fine on x86; aarch64 rejects it (code model) → 0.
-	local size_level=1
+	# size-level 0 (large code model): required on x86_64 Metal EFI — with
+	# N runner stacks the AOT text often lands high; size-level 1 (medium /
+	# PC32) then #GPs on first guest step (doom under -smp>1). Override via
+	# METAL_AOT_SIZE_LEVEL if needed.
+	local size_level="${METAL_AOT_SIZE_LEVEL:-0}"
+	local opt_level="${METAL_AOT_OPT_LEVEL:-1}"
 	case "${target}" in
-	aarch64 | riscv64 | riscv32) size_level=0 ;;
+	aarch64 | riscv64 | riscv32) size_level="${METAL_AOT_SIZE_LEVEL:-0}" ;;
 	esac
 	if ! "${wamrc}" \
 		--target="${target}" \
 		--cpu=generic \
 		--bounds-checks=1 \
 		--disable-simd \
-		--opt-level=1 \
+		--opt-level="${opt_level}" \
 		--size-level="${size_level}" \
 		-o "${tmp}" \
 		"${wasm}"

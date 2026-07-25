@@ -1,51 +1,39 @@
 /** @file
   Metal IO device/capability table — multi-device inventory. (impl: efi|bios)
 **/
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
 #include <pymergetic/metal/bus/io/io.h>
 
-#include <Uefi.h>
-#include <Library/BaseLib.h>
-#include <Library/BaseMemoryLib.h>
+#define PM_METAL_IO_DT_MAX 32u
 
-#define PM_METAL_IO_DT_MAX  32u
+static pm_metal_io_node_t mNodes[PM_METAL_IO_DT_MAX];
+static uint32_t           mCount;
+static uint32_t           mClassCount[PM_METAL_IO_CLASS_COUNT];
 
-STATIC pm_metal_io_node_t  mNodes[PM_METAL_IO_DT_MAX];
-STATIC UINT32              mCount;
-STATIC UINT32              mClassCount[PM_METAL_IO_CLASS_COUNT];
-
-STATIC
-INT32
-LocEqual (
-  CONST UINT32  *a,
-  CONST UINT32  *b
-  )
+static int32_t LocEqual(const uint32_t *a, const uint32_t *b)
 {
-  return (a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3])
-         ? 1
-         : 0;
+  return (a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3]) ? 1 : 0;
 }
 
-int
-pm_metal_io_dt_add (
-  CONST pm_metal_io_node_t  *node
-  )
+int pm_metal_io_dt_add(const pm_metal_io_node_t *node)
 {
-  UINT32  i;
+  uint32_t i;
 
   if (node == NULL || node->compat == NULL) {
     return -1;
   }
 
-  if ((UINT32)node->class >= (UINT32)PM_METAL_IO_CLASS_COUNT) {
+  if ((uint32_t)node->class >= (uint32_t)PM_METAL_IO_CLASS_COUNT) {
     return -1;
   }
 
   for (i = 0; i < mCount; i++) {
-    if (mNodes[i].class == node->class
-        && AsciiStrCmp (mNodes[i].compat, node->compat) == 0
-        && LocEqual (mNodes[i].loc, node->loc))
-    {
-      return (INT32)i;
+    if (mNodes[i].class == node->class && strcmp(mNodes[i].compat, node->compat) == 0 &&
+        LocEqual(mNodes[i].loc, node->loc)) {
+      return (int32_t)i;
     }
   }
 
@@ -53,17 +41,14 @@ pm_metal_io_dt_add (
     return -1;
   }
 
-  mNodes[mCount]       = *node;
-  mNodes[mCount].unit  = mClassCount[node->class];
+  mNodes[mCount]      = *node;
+  mNodes[mCount].unit = mClassCount[node->class];
   mClassCount[node->class]++;
   mCount++;
-  return (INT32)(mCount - 1);
+  return (int32_t)(mCount - 1);
 }
 
-CONST pm_metal_io_node_t *
-pm_metal_io_dt_get (
-  UINT32  id
-  )
+const pm_metal_io_node_t *pm_metal_io_dt_get(uint32_t id)
 {
   if (id >= mCount) {
     return NULL;
@@ -72,36 +57,26 @@ pm_metal_io_dt_get (
   return &mNodes[id];
 }
 
-UINT32
-pm_metal_io_dt_count (
-  VOID
-  )
+uint32_t pm_metal_io_dt_count(void)
 {
   return mCount;
 }
 
-UINT32
-pm_metal_io_dt_count_class (
-  pm_metal_io_class_t  class
-  )
+uint32_t pm_metal_io_dt_count_class(pm_metal_io_class_t class)
 {
-  if ((UINT32)class >= (UINT32)PM_METAL_IO_CLASS_COUNT) {
+  if ((uint32_t) class >= (uint32_t)PM_METAL_IO_CLASS_COUNT) {
     return 0;
   }
 
   return mClassCount[class];
 }
 
-CONST pm_metal_io_node_t *
-pm_metal_io_dt_by_class (
-  pm_metal_io_class_t  class,
-  UINT32               index
-  )
+const pm_metal_io_node_t *pm_metal_io_dt_by_class(pm_metal_io_class_t class, uint32_t index)
 {
-  UINT32  i;
-  UINT32  seen;
+  uint32_t i;
+  uint32_t seen;
 
-  if ((UINT32)class >= (UINT32)PM_METAL_IO_CLASS_COUNT) {
+  if ((uint32_t) class >= (uint32_t)PM_METAL_IO_CLASS_COUNT) {
     return NULL;
   }
 
@@ -121,25 +96,17 @@ pm_metal_io_dt_by_class (
   return NULL;
 }
 
-CONST pm_metal_io_node_t *
-pm_metal_io_dt_lookup (
-  pm_metal_io_class_t  class
-  )
+const pm_metal_io_node_t *pm_metal_io_dt_lookup(pm_metal_io_class_t class)
 {
-  return pm_metal_io_dt_by_class (class, 0);
+  return pm_metal_io_dt_by_class(class, 0);
 }
 
-int
-pm_metal_io_dt_set_compat (
-  pm_metal_io_class_t  class,
-  UINT32               index,
-  CONST CHAR8         *compat
-  )
+int pm_metal_io_dt_set_compat(pm_metal_io_class_t class, uint32_t index, const char *compat)
 {
-  UINT32  i;
-  UINT32  seen;
+  uint32_t i;
+  uint32_t seen;
 
-  if (compat == NULL || (UINT32)class >= (UINT32)PM_METAL_IO_CLASS_COUNT) {
+  if (compat == NULL || (uint32_t) class >= (uint32_t)PM_METAL_IO_CLASS_COUNT) {
     return -1;
   }
 
@@ -160,31 +127,24 @@ pm_metal_io_dt_set_compat (
   return -1;
 }
 
-void
-pm_metal_io_dt_foreach (
-  pm_metal_io_dt_iter_fn  fn,
-  VOID                   *ctx
-  )
+void pm_metal_io_dt_foreach(pm_metal_io_dt_iter_fn fn, void *ctx)
 {
-  UINT32  i;
+  uint32_t i;
 
   if (fn == NULL) {
     return;
   }
 
   for (i = 0; i < mCount; i++) {
-    if (fn (&mNodes[i], ctx) != 0) {
+    if (fn(&mNodes[i], ctx) != 0) {
       return;
     }
   }
 }
 
-void
-pm_metal_io_dt_reset (
-  VOID
-  )
+void pm_metal_io_dt_reset(void)
 {
-  ZeroMem (mNodes, sizeof (mNodes));
-  ZeroMem (mClassCount, sizeof (mClassCount));
+  memset(mNodes, 0, sizeof(mNodes));
+  memset(mClassCount, 0, sizeof(mClassCount));
   mCount = 0;
 }

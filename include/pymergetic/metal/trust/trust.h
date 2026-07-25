@@ -45,10 +45,10 @@ extern "C" {
 #endif
 
 typedef enum {
-	PM_METAL_TRUST_BOOT_OFF = 0, /* mode off or CA publics not baked */
-	PM_METAL_TRUST_BOOT_OK,
-	PM_METAL_TRUST_BOOT_WARN, /* missing image/sig or soft failure */
-	PM_METAL_TRUST_BOOT_FAIL  /* crypto verify failed / enforce missing */
+  PM_METAL_TRUST_BOOT_OFF = 0, /* mode off or CA publics not baked */
+  PM_METAL_TRUST_BOOT_OK,
+  PM_METAL_TRUST_BOOT_WARN, /* missing image/sig or soft failure */
+  PM_METAL_TRUST_BOOT_FAIL  /* crypto verify failed / enforce missing */
 } pm_metal_trust_boot_t;
 
 /**
@@ -74,23 +74,31 @@ int pm_metal_trust_strict(void);
  * Pure crypto — prefer pm_metal_trust_accept_mods for policy.
  * Returns 0 on success.
  */
-int pm_metal_trust_verify_mods(const void *data, uint32_t data_len,
-			       const void *sig, uint32_t sig_len);
+int pm_metal_trust_verify_mods(const void *data,
+                               uint32_t    data_len,
+                               const void *sig,
+                               uint32_t    sig_len);
 
 /** Verify with any baked Kernel CA. */
-int pm_metal_trust_verify_kernel(const void *data, uint32_t data_len,
-				 const void *sig, uint32_t sig_len);
+int pm_metal_trust_verify_kernel(const void *data,
+                                 uint32_t    data_len,
+                                 const void *sig,
+                                 uint32_t    sig_len);
 
 /**
  * Policy gate for mods: off → ok; soft → ok if no sig, else verify;
  * enforce → sig required + verify. sig may be NULL / sig_len 0.
  */
-int pm_metal_trust_accept_mods(const void *data, uint32_t data_len,
-			       const void *sig, uint32_t sig_len);
+int pm_metal_trust_accept_mods(const void *data,
+                               uint32_t    data_len,
+                               const void *sig,
+                               uint32_t    sig_len);
 
 /** Same policy for kernel image + detached sig. */
-int pm_metal_trust_accept_kernel(const void *data, uint32_t data_len,
-				 const void *sig, uint32_t sig_len);
+int pm_metal_trust_accept_kernel(const void *data,
+                                 uint32_t    data_len,
+                                 const void *sig,
+                                 uint32_t    sig_len);
 
 /**
  * Early boot: verify the executing kernel artifact + its .sig.

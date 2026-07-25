@@ -1,44 +1,89 @@
 /** @file
   Minimal libc bits for vendored tlsf / WAMR under EDK2.
 **/
-#include <Uefi.h>
-#include <Library/BaseLib.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/DebugLib.h>
-#include <Library/PrintLib.h>
+
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <stddef.h>
 #include <stdarg.h>
 #include <stdint.h>
 
-#include <runtime/mem/mem.h>
+#include <pymergetic/metal/runtime/mem/mem.h>
+#include "host_stubs/assert.h"
 
 int errno;
 
-int
-printf (
-  const char  *fmt,
-  ...
-  )
+/* Local number->ascii helpers — vsnprintf must not call snprintf/itself. */
+static size_t MetalU64ToStr(char *out, size_t cap, uint64_t v, uint32_t base, bool upper)
 {
-  (VOID)fmt;
+  static const char lo[]   = "0123456789abcdef";
+  static const char hi[]   = "0123456789ABCDEF";
+  const char       *digits = upper ? hi : lo;
+  char              tmp[32];
+  size_t            n;
+  size_t            i;
+
+  n = 0;
+  if (v == 0) {
+    tmp[n++] = '0';
+  } else {
+    while (v != 0 && n < sizeof(tmp)) {
+      tmp[n++] = digits[v % base];
+      v /= base;
+    }
+  }
+
+  if (n > cap) {
+    n = cap;
+  }
+
+  for (i = 0; i < n; i++) {
+    out[i] = tmp[n - 1 - i];
+  }
+
+  return n;
+}
+
+static size_t MetalI64ToStr(char *out, size_t cap, int64_t v)
+{
+  uint64_t u;
+  size_t   n;
+
+  n = 0;
+  if (v < 0) {
+    if (cap > 0) {
+      out[0] = '-';
+    }
+
+    n = 1;
+    u = (uint64_t)(-v);
+  } else {
+    u = (uint64_t)v;
+  }
+
+  if (n < cap) {
+    n += MetalU64ToStr(out + n, cap - n, u, 10, false);
+  }
+
+  return n;
+}
+
+int printf(const char *fmt, ...)
+{
+  (void)fmt;
   return 0;
 }
 
 /*
- * C printf → buffer. Do NOT use EDK2 AsciiVSPrint here: its %s is CHAR16*,
- * while WAMR/libc expect CHAR8* (%s). Mis-parse caused host #PF (CR2≈0x30…).
+ * C printf → buffer. Do NOT use EDK2 vsnprintf here: its %s is CHAR16*,
+ * while WAMR/libc expect char* (%s). Mis-parse caused host #PF (CR2≈0x30…).
  */
-int
-vsnprintf (
-  char         *buf,
-  size_t        n,
-  const char   *fmt,
-  va_list       ap
-  )
+int vsnprintf(char *buf, size_t n, const char *fmt, va_list ap)
 {
-  size_t  o;
-  size_t  i;
+  size_t o;
+  size_t i;
 
   if (buf == NULL || n == 0) {
     return 0;
@@ -52,7 +97,7 @@ vsnprintf (
   o = 0;
   i = 0;
   while (fmt[i] != '\0' && o + 1 < n) {
-    char  c;
+    char c;
 
     c = fmt[i++];
     if (c != '%') {
@@ -68,15 +113,13 @@ vsnprintf (
 
     /* Flags / width / precision / length (enough for WAMR + microtar). */
     {
-      int  zero_pad;
-      int  width;
-      int  long_cnt;
+      int zero_pad;
+      int width;
+      int long_cnt;
 
       zero_pad = 0;
       width    = 0;
-      while (fmt[i] == '-' || fmt[i] == '+' || fmt[i] == ' ' || fmt[i] == '#'
-             || fmt[i] == '0')
-      {
+      while (fmt[i] == '-' || fmt[i] == '+' || fmt[i] == ' ' || fmt[i] == '#' || fmt[i] == '0') {
         if (fmt[i] == '0') {
           zero_pad = 1;
         }
@@ -85,7 +128,7 @@ vsnprintf (
       }
 
       if (fmt[i] == '*') {
-        width = va_arg (ap, int);
+        width = va_arg(ap, int);
         i++;
       } else {
         while (fmt[i] >= '0' && fmt[i] <= '9') {
@@ -97,7 +140,7 @@ vsnprintf (
       if (fmt[i] == '.') {
         i++;
         if (fmt[i] == '*') {
-          (VOID)va_arg (ap, int);
+          (void)va_arg(ap, int);
           i++;
         } else {
           while (fmt[i] >= '0' && fmt[i] <= '9') {
@@ -107,9 +150,8 @@ vsnprintf (
       }
 
       long_cnt = 0;
-      while (fmt[i] == 'h' || fmt[i] == 'l' || fmt[i] == 'L' || fmt[i] == 'z'
-             || fmt[i] == 'j' || fmt[i] == 't' || fmt[i] == 'q')
-      {
+      while (fmt[i] == 'h' || fmt[i] == 'l' || fmt[i] == 'L' || fmt[i] == 'z' || fmt[i] == 'j' ||
+             fmt[i] == 't' || fmt[i] == 'q') {
         if (fmt[i] == 'l') {
           long_cnt++;
         }
@@ -124,138 +166,162 @@ vsnprintf (
 
       i++;
       switch (c) {
-        case 's':
-        {
-          CONST CHAR8  *s;
-          size_t        k;
+      case 's': {
+        const char *s;
+        size_t      k;
 
-          s = va_arg (ap, CONST CHAR8 *);
-          if (s == NULL) {
-            s = "(null)";
-          }
-
-          for (k = 0; s[k] != '\0' && o + 1 < n; k++) {
-            buf[o++] = s[k];
-          }
-
-          break;
+        s = va_arg(ap, const char *);
+        if (s == NULL) {
+          s = "(null)";
         }
 
-        case 'c':
-          buf[o++] = (CHAR8)va_arg (ap, int);
-          break;
-
-        case 'd':
-        case 'i':
-        {
-          CHAR8  tmp[32];
-          UINTN  len;
-          INT64  v;
-          size_t k;
-
-          if (long_cnt >= 2) {
-            v = (INT64)va_arg (ap, long long);
-          } else if (long_cnt == 1) {
-            v = (INT64)va_arg (ap, long);
-          } else {
-            v = (INT64)va_arg (ap, int);
-          }
-
-          len = AsciiSPrint (tmp, sizeof (tmp), "%ld", v);
-          for (k = 0; k < (size_t)len && o + 1 < n; k++) {
-            buf[o++] = tmp[k];
-          }
-
-          break;
+        for (k = 0; s[k] != '\0' && o + 1 < n; k++) {
+          buf[o++] = s[k];
         }
 
-        case 'o':
-        {
-          CHAR8   tmp[32];
-          UINT64  v;
-          int     digits;
-          int     pad;
-          int     k;
+        break;
+      }
 
-          if (long_cnt >= 2) {
-            v = (UINT64)va_arg (ap, unsigned long long);
-          } else if (long_cnt == 1) {
-            v = (UINT64)va_arg (ap, unsigned long);
-          } else {
-            v = (UINT64)va_arg (ap, unsigned int);
-          }
+      case 'c':
+        buf[o++] = (char)va_arg(ap, int);
+        break;
 
-          digits = 0;
-          if (v == 0) {
-            tmp[digits++] = '0';
-          } else {
-            while (v != 0 && digits < (int)sizeof (tmp)) {
-              tmp[digits++] = (CHAR8)('0' + (int)(v & 7ull));
-              v >>= 3;
-            }
-          }
+      case 'd':
+      case 'i': {
+        char    tmp[32];
+        size_t  len;
+        int64_t v;
+        size_t  k;
 
-          pad = (width > digits) ? (width - digits) : 0;
-          if (zero_pad) {
-            while (pad-- > 0 && o + 1 < n) {
-              buf[o++] = '0';
-            }
-          } else {
-            while (pad-- > 0 && o + 1 < n) {
-              buf[o++] = ' ';
-            }
-          }
-
-          for (k = digits - 1; k >= 0 && o + 1 < n; k--) {
-            buf[o++] = tmp[k];
-          }
-
-          break;
+        if (long_cnt >= 2) {
+          v = (int64_t)va_arg(ap, long long);
+        } else if (long_cnt == 1) {
+          v = (int64_t)va_arg(ap, long);
+        } else {
+          v = (int64_t)va_arg(ap, int);
         }
 
-        case 'u':
-        case 'x':
-        case 'X':
-        case 'p':
+        len = MetalI64ToStr(tmp, sizeof(tmp), v);
         {
-          CHAR8         tmp[32];
-          UINTN         len;
-          UINT64        v;
-          CONST CHAR8  *edk;
-          size_t        k;
+          int pad;
 
-          if (c == 'p') {
-            v   = (UINT64)(UINTN)va_arg (ap, VOID *);
-            edk = "0x%lx";
-          } else if (long_cnt >= 2) {
-            v   = (UINT64)va_arg (ap, unsigned long long);
-            edk = (c == 'x') ? "%lx" : (c == 'X') ? "%lX" : "%lu";
-          } else if (long_cnt == 1) {
-            v   = (UINT64)va_arg (ap, unsigned long);
-            edk = (c == 'x') ? "%lx" : (c == 'X') ? "%lX" : "%lu";
-          } else {
-            v   = (UINT64)va_arg (ap, unsigned int);
-            edk = (c == 'x') ? "%x" : (c == 'X') ? "%X" : "%u";
+          pad = (width > (int)len) ? (width - (int)len) : 0;
+          while (pad-- > 0 && o + 1 < n) {
+            buf[o++] = zero_pad ? '0' : ' ';
           }
-
-          len = AsciiSPrint (tmp, sizeof (tmp), edk, v);
-          for (k = 0; k < (size_t)len && o + 1 < n; k++) {
-            buf[o++] = tmp[k];
-          }
-
-          break;
         }
 
-        default:
-          if (o + 1 < n) {
-            buf[o++] = '%';
-          }
+        for (k = 0; k < len && o + 1 < n; k++) {
+          buf[o++] = tmp[k];
+        }
 
-          if (o + 1 < n) {
-            buf[o++] = c;
-          }
+        break;
+      }
 
-          break;
+      case 'o': {
+        char     tmp[32];
+        uint64_t v;
+        int      digits;
+        int      pad;
+        int      k;
+
+        if (long_cnt >= 2) {
+          v = (uint64_t)va_arg(ap, unsigned long long);
+        } else if (long_cnt == 1) {
+          v = (uint64_t)va_arg(ap, unsigned long);
+        } else {
+          v = (uint64_t)va_arg(ap, unsigned int);
+        }
+
+        digits = 0;
+        if (v == 0) {
+          tmp[digits++] = '0';
+        } else {
+          while (v != 0 && digits < (int)sizeof(tmp)) {
+            tmp[digits++] = (char)('0' + (int)(v & 7ull));
+            v >>= 3;
+          }
+        }
+
+        pad = (width > digits) ? (width - digits) : 0;
+        if (zero_pad) {
+          while (pad-- > 0 && o + 1 < n) {
+            buf[o++] = '0';
+          }
+        } else {
+          while (pad-- > 0 && o + 1 < n) {
+            buf[o++] = ' ';
+          }
+        }
+
+        for (k = digits - 1; k >= 0 && o + 1 < n; k--) {
+          buf[o++] = tmp[k];
+        }
+
+        break;
+      }
+
+      case 'u':
+      case 'x':
+      case 'X':
+      case 'p': {
+        char     tmp[32];
+        size_t   len;
+        uint64_t v;
+        uint32_t base;
+        bool     upper;
+        bool     prefix;
+        size_t   k;
+
+        upper  = (c == 'X');
+        prefix = false;
+        if (c == 'p') {
+          v      = (uint64_t)(uintptr_t)va_arg(ap, void *);
+          base   = 16;
+          prefix = true;
+        } else if (long_cnt >= 2) {
+          v    = (uint64_t)va_arg(ap, unsigned long long);
+          base = (c == 'u') ? 10 : 16;
+        } else if (long_cnt == 1) {
+          v    = (uint64_t)va_arg(ap, unsigned long);
+          base = (c == 'u') ? 10 : 16;
+        } else {
+          v    = (uint64_t)va_arg(ap, unsigned int);
+          base = (c == 'u') ? 10 : 16;
+        }
+
+        if (prefix && o + 2 < n) {
+          buf[o++] = '0';
+          buf[o++] = 'x';
+        }
+
+        len = MetalU64ToStr(tmp, sizeof(tmp), v, base, upper);
+        {
+          int pad;
+
+          pad = (width > (int)len) ? (width - (int)len) : 0;
+          while (pad-- > 0 && o + 1 < n) {
+            buf[o++] = zero_pad ? '0' : ' ';
+          }
+        }
+
+        for (k = 0; k < len && o + 1 < n; k++) {
+          buf[o++] = tmp[k];
+        }
+
+        break;
+      }
+
+      default:
+        if (o + 1 < n) {
+          buf[o++] = '%';
+        }
+
+        if (o + 1 < n) {
+          buf[o++] = c;
+        }
+
+        break;
       }
     }
   }
@@ -264,78 +330,95 @@ vsnprintf (
   return (int)o;
 }
 
-int
-snprintf (
-  char        *buf,
-  size_t       n,
-  const char  *fmt,
-  ...
-  )
+int snprintf(char *buf, size_t n, const char *fmt, ...)
 {
-  va_list  ap;
-  int      ret;
+  va_list ap;
+  int     ret;
 
-  va_start (ap, fmt);
-  ret = vsnprintf (buf, n, fmt, ap);
-  va_end (ap);
+  va_start(ap, fmt);
+  ret = vsnprintf(buf, n, fmt, ap);
+  va_end(ap);
   return ret;
 }
 
-void *
-memcpy (
-  void        *dst,
-  const void  *src,
-  size_t       n
-  )
+void *memcpy(void *dst, const void *src, size_t n)
 {
-  return CopyMem (dst, (VOID *)(UINTN)src, (UINTN)n);
+  uint8_t       *d = (uint8_t *)dst;
+  const uint8_t *s = (const uint8_t *)src;
+  size_t         i;
+
+  for (i = 0; i < n; i++) {
+    d[i] = s[i];
+  }
+
+  return dst;
 }
 
-void *
-memmove (
-  void        *dst,
-  const void  *src,
-  size_t       n
-  )
+void *memmove(void *dst, const void *src, size_t n)
 {
-  return CopyMem (dst, (VOID *)(UINTN)src, (UINTN)n);
+  uint8_t       *d = (uint8_t *)dst;
+  const uint8_t *s = (const uint8_t *)src;
+  size_t         i;
+
+  if (d == s || n == 0) {
+    return dst;
+  }
+
+  if (d < s) {
+    for (i = 0; i < n; i++) {
+      d[i] = s[i];
+    }
+  } else {
+    for (i = n; i > 0; i--) {
+      d[i - 1] = s[i - 1];
+    }
+  }
+
+  return dst;
 }
 
-void *
-memset (
-  void   *dst,
-  int     c,
-  size_t  n
-  )
+void *memset(void *dst, int c, size_t n)
 {
-  return SetMem (dst, (UINTN)n, (UINT8)c);
+  uint8_t *d = (uint8_t *)dst;
+  size_t   i;
+
+  for (i = 0; i < n; i++) {
+    d[i] = (uint8_t)c;
+  }
+
+  return dst;
 }
 
-int
-memcmp (
-  const void  *a,
-  const void  *b,
-  size_t       n
-  )
+int memcmp(const void *a, const void *b, size_t n)
 {
-  return (int)CompareMem (a, b, (UINTN)n);
+  const uint8_t *pa = (const uint8_t *)a;
+  const uint8_t *pb = (const uint8_t *)b;
+  size_t         i;
+
+  for (i = 0; i < n; i++) {
+    if (pa[i] != pb[i]) {
+      return (int)pa[i] - (int)pb[i];
+    }
+  }
+
+  return 0;
 }
 
-size_t
-strlen (
-  const char  *s
-  )
+size_t strlen(const char *s)
 {
-  return (size_t)AsciiStrLen (s);
+  size_t n;
+
+  n = 0;
+  while (s[n] != '\0') {
+    n++;
+  }
+
+  return n;
 }
 
-char *
-strcpy (
-  char        *dst,
-  const char  *src
-  )
+char *strcpy(char *dst, const char *src)
 {
-  char  *d = dst;
+  char *d = dst;
 
   while ((*d++ = *src++) != '\0') {
   }
@@ -343,14 +426,9 @@ strcpy (
   return dst;
 }
 
-char *
-strncpy (
-  char        *dst,
-  const char  *src,
-  size_t       n
-  )
+char *strncpy(char *dst, const char *src, size_t n)
 {
-  size_t  i;
+  size_t i;
 
   for (i = 0; i < n && src[i] != '\0'; i++) {
     dst[i] = src[i];
@@ -363,32 +441,32 @@ strncpy (
   return dst;
 }
 
-int
-strcmp (
-  const char  *a,
-  const char  *b
-  )
+int strcmp(const char *a, const char *b)
 {
-  return (int)AsciiStrCmp (a, b);
+  while (*a != '\0' && *a == *b) {
+    a++;
+    b++;
+  }
+
+  return (int)(unsigned char)*a - (int)(unsigned char)*b;
 }
 
-int
-strncmp (
-  const char  *a,
-  const char  *b,
-  size_t       n
-  )
+int strncmp(const char *a, const char *b, size_t n)
 {
-  return (int)AsciiStrnCmp (a, b, (UINTN)n);
+  size_t i;
+
+  for (i = 0; i < n; i++) {
+    if (a[i] != b[i] || a[i] == '\0') {
+      return (int)(unsigned char)a[i] - (int)(unsigned char)b[i];
+    }
+  }
+
+  return 0;
 }
 
-char *
-strcat (
-  char        *dst,
-  const char  *src
-  )
+char *strcat(char *dst, const char *src)
 {
-  char  *d = dst + strlen (dst);
+  char *d = dst + strlen(dst);
 
   while ((*d++ = *src++) != '\0') {
   }
@@ -396,15 +474,10 @@ strcat (
   return dst;
 }
 
-char *
-strncat (
-  char        *dst,
-  const char  *src,
-  size_t       n
-  )
+char *strncat(char *dst, const char *src, size_t n)
 {
-  char    *d = dst + strlen (dst);
-  size_t   i;
+  char  *d = dst + strlen(dst);
+  size_t i;
 
   for (i = 0; i < n && src[i] != '\0'; i++) {
     d[i] = src[i];
@@ -414,28 +487,20 @@ strncat (
   return dst;
 }
 
-char *
-strchr (
-  const char  *s,
-  int          c
-  )
+char *strchr(const char *s, int c)
 {
   for (; *s != '\0'; s++) {
     if ((unsigned char)*s == (unsigned char)c) {
-      return (char *)(UINTN)s;
+      return (char *)(uintptr_t)s;
     }
   }
 
-  return (c == 0) ? (char *)(UINTN)s : NULL;
+  return (c == 0) ? (char *)(uintptr_t)s : NULL;
 }
 
-char *
-strrchr (
-  const char  *s,
-  int          c
-  )
+char *strrchr(const char *s, int c)
 {
-  const char  *last = NULL;
+  const char *last = NULL;
 
   for (; *s != '\0'; s++) {
     if ((unsigned char)*s == (unsigned char)c) {
@@ -444,192 +509,184 @@ strrchr (
   }
 
   if (c == 0) {
-    return (char *)(UINTN)s;
+    return (char *)(uintptr_t)s;
   }
 
-  return (char *)(UINTN)last;
+  return (char *)(uintptr_t)last;
 }
 
-char *
-strstr (
-  const char  *haystack,
-  const char  *needle
-  )
+char *strstr(const char *haystack, const char *needle)
 {
-  size_t  nlen;
-  size_t  i;
+  size_t nlen;
+  size_t i;
 
   if (needle == NULL || needle[0] == '\0') {
-    return (char *)(UINTN)haystack;
+    return (char *)(uintptr_t)haystack;
   }
 
-  nlen = strlen (needle);
+  nlen = strlen(needle);
   for (i = 0; haystack[i] != '\0'; i++) {
-    if (strncmp (haystack + i, needle, nlen) == 0) {
-      return (char *)(UINTN)(haystack + i);
+    if (strncmp(haystack + i, needle, nlen) == 0) {
+      return (char *)(uintptr_t)(haystack + i);
     }
   }
 
   return NULL;
 }
 
-void *
-malloc (
-  size_t  n
-  )
+void *malloc(size_t n)
 {
-  return pm_metal_mem_alloc (n, PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
+  return pm_metal_mem_alloc(n, PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
 }
 
-void *
-realloc (
-  void    *p,
-  size_t   n
-  )
+void *realloc(void *p, size_t n)
 {
-  return pm_metal_mem_realloc (p, n);
+  return pm_metal_mem_realloc(p, n);
 }
 
-void
-free (
-  void  *p
-  )
+void free(void *p)
 {
-  pm_metal_mem_free (p);
+  pm_metal_mem_free(p);
 }
 
-void *
-calloc (
-  size_t  nmemb,
-  size_t  size
-  )
+void *calloc(size_t nmemb, size_t size)
 {
-  size_t  total;
-  void   *p;
+  size_t total;
+  void  *p;
 
   if (nmemb != 0 && size > (SIZE_MAX / nmemb)) {
     return NULL;
   }
 
   total = nmemb * size;
-  p     = malloc (total);
+  p     = malloc(total);
   if (p != NULL) {
-    SetMem (p, (UINTN)total, 0);
+    memset(p, 0, (uintptr_t)total);
   }
 
   return p;
 }
 
-int
-atoi (
-  const char  *s
-  )
+int atoi(const char *s)
 {
-  return (int)AsciiStrDecimalToUintn (s);
+  return (int)strtoul(s, NULL, 10);
 }
 
-long
-atol (
-  const char  *s
-  )
+long atol(const char *s)
 {
-  return (long)AsciiStrDecimalToUintn (s);
+  return (long)strtoul(s, NULL, 10);
 }
 
-long
-strtol (
-  const char  *nptr,
-  char       **endptr,
-  int          base
-  )
+long strtol(const char *nptr, char **endptr, int base)
 {
-  (VOID)endptr;
-  (VOID)base;
-  return (long)AsciiStrDecimalToUintn (nptr);
+  (void)endptr;
+  (void)base;
+  return (long)strtoul(nptr, NULL, 10);
 }
 
-unsigned long
-strtoul (
-  const char  *nptr,
-  char       **endptr,
-  int          base
-  )
+/* Decimal only — base param ignored (matches pre-conversion behaviour). */
+unsigned long strtoul(const char *nptr, char **endptr, int base)
 {
-  (VOID)endptr;
-  (VOID)base;
-  return (unsigned long)AsciiStrDecimalToUintn (nptr);
-}
+  unsigned long v;
 
-unsigned long long
-strtoull (
-  const char  *nptr,
-  char       **endptr,
-  int          base
-  )
-{
-  (VOID)endptr;
-  (VOID)base;
-  return (unsigned long long)AsciiStrHexToUint64 (nptr);
-}
+  (void)base;
+  while (*nptr == ' ' || *nptr == '\t') {
+    nptr++;
+  }
 
-double
-strtod (
-  const char  *nptr,
-  char       **endptr
-  )
-{
-  (VOID)nptr;
+  if (*nptr == '+') {
+    nptr++;
+  }
+
+  v = 0;
+  while (*nptr >= '0' && *nptr <= '9') {
+    v = v * 10ul + (unsigned long)(*nptr - '0');
+    nptr++;
+  }
+
   if (endptr != NULL) {
-    *endptr = (char *)(UINTN)nptr;
+    *endptr = (char *)(uintptr_t)nptr;
+  }
+
+  return v;
+}
+
+/* Hex only — base param ignored (matches pre-conversion behaviour). */
+unsigned long long strtoull(const char *nptr, char **endptr, int base)
+{
+  unsigned long long v;
+
+  (void)base;
+  while (*nptr == ' ' || *nptr == '\t') {
+    nptr++;
+  }
+
+  if (nptr[0] == '0' && (nptr[1] == 'x' || nptr[1] == 'X')) {
+    nptr += 2;
+  }
+
+  v = 0;
+  for (;; nptr++) {
+    unsigned long long d;
+
+    if (*nptr >= '0' && *nptr <= '9') {
+      d = (unsigned long long)(*nptr - '0');
+    } else if (*nptr >= 'a' && *nptr <= 'f') {
+      d = (unsigned long long)(*nptr - 'a') + 10ull;
+    } else if (*nptr >= 'A' && *nptr <= 'F') {
+      d = (unsigned long long)(*nptr - 'A') + 10ull;
+    } else {
+      break;
+    }
+
+    v = v * 16ull + d;
+  }
+
+  if (endptr != NULL) {
+    *endptr = (char *)(uintptr_t)nptr;
+  }
+
+  return v;
+}
+
+double strtod(const char *nptr, char **endptr)
+{
+  (void)nptr;
+  if (endptr != NULL) {
+    *endptr = (char *)(uintptr_t)nptr;
   }
 
   return 0.0;
 }
 
-float
-strtof (
-  const char  *nptr,
-  char       **endptr
-  )
+float strtof(const char *nptr, char **endptr)
 {
-  (VOID)nptr;
+  (void)nptr;
   if (endptr != NULL) {
-    *endptr = (char *)(UINTN)nptr;
+    *endptr = (char *)(uintptr_t)nptr;
   }
 
   return 0.0f;
 }
 
-void
-abort (
-  VOID
-  )
+void abort(void)
 {
-  volatile UINTN  stuck;
-
-  ASSERT (FALSE);
-  stuck = 0;
-  while (stuck == 0) {
-  }
+  pm_metal_assert_fail();
 }
 
 #include <time.h>
 #include <runtime/time/time.h>
 
-int
-clock_gettime (
-  clockid_t         clock_id,
-  struct timespec  *tp
-  )
+int clock_gettime(clockid_t clock_id, struct timespec *tp)
 {
-  UINT64  us;
+  uint64_t us;
 
-  (VOID)clock_id;
+  (void)clock_id;
   if (tp == NULL) {
     return -1;
   }
 
-  us = pm_metal_time_mono_us ();
+  us          = pm_metal_time_mono_us();
   tp->tv_sec  = (time_t)(us / 1000000ull);
   tp->tv_nsec = (long)((us % 1000000ull) * 1000ull);
   return 0;
@@ -640,130 +697,85 @@ clock_gettime (
 static FILE g_stdin;
 static FILE g_stdout;
 static FILE g_stderr;
-FILE *stdin = &g_stdin;
-FILE *stdout = &g_stdout;
-FILE *stderr = &g_stderr;
+FILE       *stdin  = &g_stdin;
+FILE       *stdout = &g_stdout;
+FILE       *stderr = &g_stderr;
 
-int
-fprintf (
-  FILE        *f,
-  const char  *fmt,
-  ...
-  )
+int fprintf(FILE *f, const char *fmt, ...)
 {
-  (VOID)f;
-  (VOID)fmt;
+  (void)f;
+  (void)fmt;
   return 0;
 }
 
-int
-fflush (
-  FILE  *f
-  )
+int fflush(FILE *f)
 {
-  (VOID)f;
+  (void)f;
   return 0;
 }
 
-FILE *
-fopen (
-  const char  *path,
-  const char  *mode
-  )
+FILE *fopen(const char *path, const char *mode)
 {
-  (VOID)path;
-  (VOID)mode;
+  (void)path;
+  (void)mode;
   return NULL;
 }
 
-int
-fclose (
-  FILE  *f
-  )
+int fclose(FILE *f)
 {
-  (VOID)f;
+  (void)f;
   return -1;
 }
 
-size_t
-fread (
-  void    *ptr,
-  size_t   size,
-  size_t   nmemb,
-  FILE    *f
-  )
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f)
 {
-  (VOID)ptr;
-  (VOID)size;
-  (VOID)nmemb;
-  (VOID)f;
+  (void)ptr;
+  (void)size;
+  (void)nmemb;
+  (void)f;
   return 0;
 }
 
-size_t
-fwrite (
-  const void  *ptr,
-  size_t       size,
-  size_t       nmemb,
-  FILE        *f
-  )
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f)
 {
-  (VOID)ptr;
-  (VOID)size;
-  (VOID)nmemb;
-  (VOID)f;
+  (void)ptr;
+  (void)size;
+  (void)nmemb;
+  (void)f;
   return 0;
 }
 
-int
-fseek (
-  FILE  *f,
-  long   offset,
-  int    whence
-  )
+int fseek(FILE *f, long offset, int whence)
 {
-  (VOID)f;
-  (VOID)offset;
-  (VOID)whence;
+  (void)f;
+  (void)offset;
+  (void)whence;
   return -1;
 }
 
-long
-ftell (
-  FILE  *f
-  )
+long ftell(FILE *f)
 {
-  (VOID)f;
+  (void)f;
   return -1L;
 }
 
-int
-sprintf (
-  char        *buf,
-  const char  *fmt,
-  ...
-  )
+int sprintf(char *buf, const char *fmt, ...)
 {
-  va_list  ap;
-  int      n;
+  va_list ap;
+  int     n;
 
-  va_start (ap, fmt);
-  n = vsnprintf (buf, 512, fmt, ap);
-  va_end (ap);
+  va_start(ap, fmt);
+  n = vsnprintf(buf, 512, fmt, ap);
+  va_end(ap);
   return n;
 }
 
-int
-sscanf (
-  const char  *str,
-  const char  *fmt,
-  ...
-  )
+int sscanf(const char *str, const char *fmt, ...)
 {
-  unsigned      *out;
-  unsigned       v;
-  const char    *p;
-  va_list        ap;
+  unsigned   *out;
+  unsigned    v;
+  const char *p;
+  va_list     ap;
 
   if (str == NULL || fmt == NULL) {
     return 0;
@@ -774,9 +786,9 @@ sscanf (
     return 0;
   }
 
-  va_start (ap, fmt);
-  out = va_arg (ap, unsigned *);
-  va_end (ap);
+  va_start(ap, fmt);
+  out = va_arg(ap, unsigned *);
+  va_end(ap);
   if (out == NULL) {
     return 0;
   }
@@ -801,32 +813,23 @@ sscanf (
   return 1;
 }
 
-int
-ioctl (
-  int             fd,
-  unsigned long   request,
-  ...
-  )
+int ioctl(int fd, unsigned long request, ...)
 {
-  (VOID)fd;
-  (VOID)request;
+  (void)fd;
+  (void)request;
   return -1;
 }
 
-void
-arc4random_buf (
-  void   *buf,
-  size_t  nbytes
-  )
+void arc4random_buf(void *buf, size_t nbytes)
 {
-  UINT8   *p;
-  UINT64  x;
-  size_t  i;
+  uint8_t *p;
+  uint64_t x;
+  size_t   i;
 
-  p = (UINT8 *)buf;
-  x = pm_metal_time_mono_us ();
+  p = (uint8_t *)buf;
+  x = pm_metal_time_mono_us();
   for (i = 0; i < nbytes; i++) {
-    x = x * 6364136223846793005ull + 1ull;
-    p[i] = (UINT8)(x >> 33);
+    x    = x * 6364136223846793005ull + 1ull;
+    p[i] = (uint8_t)(x >> 33);
   }
 }

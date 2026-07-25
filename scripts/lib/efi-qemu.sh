@@ -39,6 +39,12 @@ pm_metal_efi_stage_esp() {
 	mkdir -p "${esp}/mods/tests"
 	printf 'metal-async-fs\n' >"${esp}/mods/tests/async_fs.txt"
 
+	# MicroPython scripts + sample zip (spike §2 / §6).
+	if [[ -d "${ROOT}/mods/py" ]]; then
+		mkdir -p "${esp}/mods/py"
+		cp -a "${ROOT}/mods/py/." "${esp}/mods/py/"
+	fi
+
 	# shellcheck disable=SC1091
 	source "${ROOT}/scripts/lib/doom.sh"
 	if [[ -n "${3:-}" ]]; then

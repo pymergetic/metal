@@ -95,7 +95,9 @@ echo "doom: compiling wasm (METAL_DOOM_MAX_TICKS=${METAL_DOOM_MAX_TICKS})"
 	-I "${ROOT}/mods/apps/doom" \
 	-I "${ROOT}/mods/apps/doom/ide_stubs" \
 	-Wl,--export=main \
-	-Wl,--export=pm_metal_guest_step \
+	-Wl,--export=pm_metal_mod_on_load \
+	-Wl,--export=pm_metal_mod_on_unload \
+	-Wl,--export=doom_run \
 	-Wl,--export=malloc \
 	-Wl,--export=free \
 	-Wl,--export=__heap_base \

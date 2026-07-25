@@ -15,8 +15,7 @@ extern "C" {
 #endif
 
 #if defined(__wasm__)
-extern void pm_metal_ui_set_status(const char *text)
-	PM_METAL_UI_IMPORT(pm_metal_ui_set_status);
+extern void pm_metal_ui_set_status(const char *text) PM_METAL_UI_IMPORT(pm_metal_ui_set_status);
 #else
 void pm_metal_ui_set_status(const char *text);
 #endif

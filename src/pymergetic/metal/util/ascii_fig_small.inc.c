@@ -3,10 +3,10 @@
  * from fonts/small.flf in cmatsuoka/figlet (BSD-3-Clause FIGlet package).
  * Hardblanks flattened to spaces; no smushing. Used by util/ascii.c.
  */
-#define PM_METAL_ASCII_FIG_H  5
-#define PM_METAL_ASCII_FIG_FIRST  32
-#define PM_METAL_ASCII_FIG_COUNT  95
-#define PM_METAL_ASCII_FIG_MAX_W  11
+#define PM_METAL_ASCII_FIG_H     5
+#define PM_METAL_ASCII_FIG_FIRST 32
+#define PM_METAL_ASCII_FIG_COUNT 95
+#define PM_METAL_ASCII_FIG_MAX_W 11
 typedef struct {
   char row[PM_METAL_ASCII_FIG_H][PM_METAL_ASCII_FIG_MAX_W + 1];
 } pm_metal_ascii_fig_glyph_t;

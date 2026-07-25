@@ -41,6 +41,67 @@ set -u
 source "${ROOT}/scripts/lib/pki.sh"
 pm_metal_pki_bake
 
+# MicroPython embed package (port-neutral sources under build/micropython_embed).
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/micropython.sh"
+pm_metal_upy_generate_embed
+# Refresh Metal.inf µPy source list (BEGIN/END markers).
+ROOT="${ROOT}" python3 - <<'PY'
+from pathlib import Path
+import os
+root = Path(os.environ["ROOT"])
+inf = root / "src/efi/MetalPkg/Metal.inf"
+embed = root / "build/micropython_embed"
+inf_dir = inf.parent
+lines = inf.read_text().splitlines(keepends=True)
+out = []
+i = 0
+while i < len(lines):
+    if lines[i].strip() == "# BEGIN_MICROPYTHON":
+        out.append(lines[i] if lines[i].endswith("\n") else lines[i] + "\n")
+        i += 1
+        while i < len(lines) and lines[i].strip() != "# END_MICROPYTHON":
+            i += 1
+        glue = [
+            "src/pymergetic/metal/py/mphalport_metal.c",
+            "src/pymergetic/metal/py/py.c",
+            "src/pymergetic/metal/py/py_bind.c",
+            "src/pymergetic/metal/py/py_aio_mod.c",
+            "src/pymergetic/metal/py/py_shell.c",
+            "src/pymergetic/metal/py/py_zip.c",
+            "src/pymergetic/metal/py/py_guest.c",
+            "src/pymergetic/metal/py/py_port_stubs.c",
+        ]
+        for g in glue:
+            out.append(f"  {os.path.relpath(root / g, inf_dir)}\n")
+        skip = {
+            "mphalport.c",
+            "asmarm.c", "asmrv32.c", "asmthumb.c", "asmxtensa.c", "asmx86.c",
+            "emitnarm.c", "emitnrv32.c", "emitnthumb.c", "emitnxtensa.c",
+            "emitnxtensawin.c", "emitnx86.c", "emitinlinethumb.c",
+            "emitinlinextensa.c",
+            "nlraarch64.c", "nlrmips.c", "nlrpowerpc.c", "nlrrv32.c",
+            "nlrrv64.c", "nlrthumb.c", "nlrxtensa.c", "nlrx86.c",
+        }
+        for p in sorted(embed.glob("py/*.c")):
+            if p.name in skip:
+                continue
+            out.append(f"  {os.path.relpath(p, inf_dir)}\n")
+        for p in sorted((embed / "shared").rglob("*.c")):
+            out.append(f"  {os.path.relpath(p, inf_dir)}\n")
+        for p in sorted((embed / "port").glob("*.c")):
+            if p.name in skip:
+                continue
+            out.append(f"  {os.path.relpath(p, inf_dir)}\n")
+        if i < len(lines):
+            out.append(lines[i] if lines[i].endswith("\n") else lines[i] + "\n")
+            i += 1
+        continue
+    out.append(lines[i])
+    i += 1
+inf.write_text("".join(out))
+PY
+
 # Embed guest wasm (hello / ui_hello / async_sleep) before EDK2 compile.
 "${ROOT}/scripts/build.d/port/efi/embed-mods.sh"
 # Doom parked. Opt-in: METAL_DOOM_BUILD=1 → build/doom/ (EFI+BIOS/PXE).

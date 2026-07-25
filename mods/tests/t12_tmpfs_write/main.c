@@ -12,22 +12,22 @@
 
 int main(void)
 {
-	static const char msg[] = "hello from tmpfs\n";
-	int fd = open("/scratch/hello.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  static const char msg[] = "hello from tmpfs\n";
+  int               fd    = open("/scratch/hello.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
-	if (fd < 0) {
-		printf("t12_tmpfs_write: open failed\n");
-		return 1;
-	}
+  if (fd < 0) {
+    printf("t12_tmpfs_write: open failed\n");
+    return 1;
+  }
 
-	ssize_t n = write(fd, msg, sizeof(msg) - 1);
-	close(fd);
+  ssize_t n = write(fd, msg, sizeof(msg) - 1);
+  close(fd);
 
-	if (n != (ssize_t)sizeof(msg) - 1) {
-		printf("t12_tmpfs_write: write failed\n");
-		return 1;
-	}
+  if (n != (ssize_t)sizeof(msg) - 1) {
+    printf("t12_tmpfs_write: write failed\n");
+    return 1;
+  }
 
-	printf("t12_tmpfs_write: wrote %zd bytes\n", n);
-	return 0;
+  printf("t12_tmpfs_write: wrote %zd bytes\n", n);
+  return 0;
 }

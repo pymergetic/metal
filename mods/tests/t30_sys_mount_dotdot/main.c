@@ -13,10 +13,10 @@
 
 int main(void)
 {
-	if (pm_metal_mount_mount("dyn", "/tmp/../dyn", "tmpfs", NULL) != 0) {
-		printf("t30_sys_mount_dotdot: mount rejected (expected)\n");
-		return 0;
-	}
-	printf("t30_sys_mount_dotdot: mount with .. unexpectedly succeeded\n");
-	return 1;
+  if (pm_metal_mount_mount("dyn", "/tmp/../dyn", "tmpfs", NULL) != 0) {
+    printf("t30_sys_mount_dotdot: mount rejected (expected)\n");
+    return 0;
+  }
+  printf("t30_sys_mount_dotdot: mount with .. unexpectedly succeeded\n");
+  return 1;
 }

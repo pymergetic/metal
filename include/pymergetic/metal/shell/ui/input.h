@@ -10,30 +10,35 @@
 
 #include <stdint.h>
 
-#include "pymergetic/metal/shell/ui/types.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #if defined(__wasm__)
-extern void pm_metal_ui_input_clear(void)
-	PM_METAL_UI_IMPORT(pm_metal_ui_input_clear);
-extern int pm_metal_ui_input_append(char ch)
-	PM_METAL_UI_IMPORT(pm_metal_ui_input_append);
-extern int pm_metal_ui_input_backspace(void)
-	PM_METAL_UI_IMPORT(pm_metal_ui_input_backspace);
-extern int pm_metal_ui_input_text(char *out, uint32_t cap)
-	PM_METAL_UI_IMPORT(pm_metal_ui_input_text);
-extern int pm_metal_ui_input_set(const char *text)
-	PM_METAL_UI_IMPORT(pm_metal_ui_input_set);
+#include "pymergetic/metal/shell/ui/types.h" /* PM_METAL_UI_IMPORT */
+extern void pm_metal_ui_input_clear(void) PM_METAL_UI_IMPORT(pm_metal_ui_input_clear);
+extern int  pm_metal_ui_input_append(char ch) PM_METAL_UI_IMPORT(pm_metal_ui_input_append);
+extern int  pm_metal_ui_input_backspace(void) PM_METAL_UI_IMPORT(pm_metal_ui_input_backspace);
+extern int  pm_metal_ui_input_text(char *out, uint32_t cap)
+  PM_METAL_UI_IMPORT(pm_metal_ui_input_text);
+extern int pm_metal_ui_input_set(const char *text) PM_METAL_UI_IMPORT(pm_metal_ui_input_set);
 #else
 void pm_metal_ui_input_clear(void);
+/** Insert at cursor (printable or '\\n'). */
 int pm_metal_ui_input_append(char ch);
 int pm_metal_ui_input_backspace(void);
 int pm_metal_ui_input_text(char *out, uint32_t cap);
-/** Replace the shared input line (history recall). Truncates to INPUT_CHARS-1. */
+/** Replace the shared input (history recall). Truncates to INPUT_CHARS-1. */
 int pm_metal_ui_input_set(const char *text);
+/** Move insert cursor by delta bytes; clamps. Returns 0. */
+int pm_metal_ui_input_move_cursor(int delta);
+/**
+ * Move by one visual row. Returns 1 if moved, 0 if at buffer edge
+ * (caller may history-recall).
+ */
+int pm_metal_ui_input_move_visual_row(int delta_rows);
+/** 1 if input strip height changed since last consume (needs full chrome). */
+int pm_metal_ui_input_consume_relayout(void);
 
 /**
  * Route keyboard to shell vs guest from foreground tab + live session.

@@ -12,17 +12,15 @@
 
 typedef bool boolean;
 
-boolean
-__wrap_M_FileExists(char *filename)
+boolean __wrap_M_FileExists(char *filename)
 {
-	if (filename == NULL || filename[0] == '\0') {
-		return false;
-	}
+  if (filename == NULL || filename[0] == '\0') {
+    return false;
+  }
 
-	if (metal_doom_wad_ready()
-	    && strcmp(filename, METAL_DOOM_IWAD) == 0) {
-		return true;
-	}
+  if (metal_doom_wad_ready() && strcmp(filename, METAL_DOOM_IWAD) == 0) {
+    return true;
+  }
 
-	return pm_metal_fs_size(filename) > 0;
+  return pm_metal_fs_size(filename) > 0;
 }

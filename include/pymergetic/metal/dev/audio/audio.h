@@ -26,33 +26,25 @@ typedef uint32_t pm_metal_audio_stream_h;
 
 #if defined(__wasm__)
 #include "pymergetic/metal/wasi.h"
-#define PM_METAL_AUDIO_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_AUDIO_WASI_MODULE, name)
+#define PM_METAL_AUDIO_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_AUDIO_WASI_MODULE, name)
 
-extern int32_t pm_metal_audio_ready(void)
-	PM_METAL_AUDIO_IMPORT(pm_metal_audio_ready);
-extern pm_metal_audio_stream_h pm_metal_audio_open(uint32_t format,
-						   uint32_t frames_buffered)
-	PM_METAL_AUDIO_IMPORT(pm_metal_audio_open);
+extern int32_t pm_metal_audio_ready(void) PM_METAL_AUDIO_IMPORT(pm_metal_audio_ready);
+extern pm_metal_audio_stream_h pm_metal_audio_open(uint32_t format, uint32_t frames_buffered)
+  PM_METAL_AUDIO_IMPORT(pm_metal_audio_open);
 extern void pm_metal_audio_close(pm_metal_audio_stream_h s)
-	PM_METAL_AUDIO_IMPORT(pm_metal_audio_close);
-extern uint32_t pm_metal_audio_queue(pm_metal_audio_stream_h s, uint32_t pcm,
-				     uint32_t nbytes)
-	PM_METAL_AUDIO_IMPORT(pm_metal_audio_queue);
-extern pm_metal_async_handle_t pm_metal_audio_drain(pm_metal_audio_stream_h s,
-						    uint32_t nbytes)
-	PM_METAL_AUDIO_IMPORT(pm_metal_audio_drain);
+  PM_METAL_AUDIO_IMPORT(pm_metal_audio_close);
+extern uint32_t pm_metal_audio_queue(pm_metal_audio_stream_h s, uint32_t pcm, uint32_t nbytes)
+  PM_METAL_AUDIO_IMPORT(pm_metal_audio_queue);
+extern pm_metal_async_handle_t pm_metal_audio_drain(pm_metal_audio_stream_h s, uint32_t nbytes)
+  PM_METAL_AUDIO_IMPORT(pm_metal_audio_drain);
 #else
-int32_t pm_metal_audio_ready(void);
-pm_metal_audio_stream_h pm_metal_audio_open(uint32_t format,
-					    uint32_t frames_buffered);
-void pm_metal_audio_close(pm_metal_audio_stream_h s);
-uint32_t pm_metal_audio_queue(pm_metal_audio_stream_h s, const void *pcm,
-			      uint32_t nbytes);
-pm_metal_async_handle_t pm_metal_audio_drain(pm_metal_audio_stream_h s,
-					     uint32_t nbytes);
-int pm_metal_audio_native_register(void);
-void pm_metal_audio_bind_inst(void *module_inst);
+int32_t                 pm_metal_audio_ready(void);
+pm_metal_audio_stream_h pm_metal_audio_open(uint32_t format, uint32_t frames_buffered);
+void                    pm_metal_audio_close(pm_metal_audio_stream_h s);
+uint32_t pm_metal_audio_queue(pm_metal_audio_stream_h s, const void *pcm, uint32_t nbytes);
+pm_metal_async_handle_t pm_metal_audio_drain(pm_metal_audio_stream_h s, uint32_t nbytes);
+int                     pm_metal_audio_native_register(void);
+void                    pm_metal_audio_bind_inst(void *module_inst);
 #endif
 
 #ifdef __cplusplus

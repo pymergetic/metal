@@ -16,6 +16,8 @@ VOID ReleaseSpinLock(SPIN_LOCK *SpinLock);
 UINT32 InterlockedIncrement(volatile UINT32 *Value);
 UINT32 InterlockedCompareExchange32(volatile UINT32 *Value, UINT32 CompareValue,
 				    UINT32 ExchangeValue);
+UINT64 InterlockedCompareExchange64(volatile UINT64 *Value, UINT64 CompareValue,
+				    UINT64 ExchangeValue);
 
 #endif /* !__PI_UEFI_H__ */
 

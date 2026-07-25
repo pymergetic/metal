@@ -4,47 +4,33 @@
 #include <pymergetic/metal/guest/pkg/pkg.h>
 #include <pymergetic/metal/fs/esp/esp.h>
 
-#include <Uefi.h>
+#include <stdint.h>
 
-STATIC CONST pm_metal_pkg_asset_t  mDoomAssets[] = {
+static const pm_metal_pkg_asset_t mDoomAssets[] = {
   { "doom1.wad", 8u * 1024u * 1024u },
 };
 
-STATIC
-INT32
-DoomEspExists (
-  CONST CHAR8  *path
-  )
+static int32_t DoomEspExists(const char *path)
 {
-  UINT32  sz;
+  uint32_t sz;
 
-  return (pm_metal_esp_file_size (path, &sz) == 0) ? 1 : 0;
+  return (pm_metal_esp_file_size(path, &sz) == 0) ? 1 : 0;
 }
 
-STATIC
-INT32
-DoomReady (
-  VOID
-  )
+static int DoomReady(void)
 {
-  if (!DoomEspExists ("mods/apps/doom/doom1.wad")) {
+  if (!DoomEspExists("mods/apps/doom/doom1.wad")) {
     return 0;
   }
 
-  return pm_metal_pkg_guest_ready ("doom");
+  return pm_metal_pkg_guest_ready("doom");
 }
 
-STATIC CONST pm_metal_pkg_t  mDoomPkg = {
-  "doom",
-  mDoomAssets,
-  (UINT32)(sizeof (mDoomAssets) / sizeof (mDoomAssets[0])),
-  DoomReady
+static const pm_metal_pkg_t mDoomPkg = {
+  "doom", mDoomAssets, (uint32_t)(sizeof(mDoomAssets) / sizeof(mDoomAssets[0])), DoomReady
 };
 
-VOID
-pm_metal_pkg_doom_register (
-  VOID
-  )
+void pm_metal_pkg_doom_register(void)
 {
-  (VOID)pm_metal_pkg_register (&mDoomPkg);
+  (void)pm_metal_pkg_register(&mDoomPkg);
 }

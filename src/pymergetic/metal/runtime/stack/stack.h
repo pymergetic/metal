@@ -14,36 +14,32 @@ extern "C" {
 #endif
 
 /* Published id for CPU k stack base (debug / lookup). */
-#define PM_METAL_MEM_ID_STACK(k) \
-  (PM_METAL_UTIL_FOURCC ('s', 't', 'k', 0) + (uint32_t)(k))
+#define PM_METAL_MEM_ID_STACK(k) (PM_METAL_UTIL_FOURCC('s', 't', 'k', 0) + (uint32_t)(k))
 
 /* Same size on every CPU. */
-#define PM_METAL_STACK_BYTES  (128u * 1024u)
+#define PM_METAL_STACK_BYTES (128u * 1024u)
 
 /**
   Carve one MAP stack per CPU. Call after pm_metal_mem_init.
   Returns 0 on success.
 */
 /* impl: efi|bios */
-int pm_metal_stack_init (unsigned n_cpus);
+int pm_metal_stack_init(unsigned n_cpus);
 
 /**
   Run fn(cpu) on that CPU's Metal stack, then return on the caller's
   (EFI) stack. Uses SetJump / SwitchStack / LongJump.
 */
 /* impl: efi|bios */
-void pm_metal_stack_call (
-  unsigned  cpu,
-  void      (*fn)(unsigned cpu)
-  );
+void pm_metal_stack_call(unsigned cpu, void (*fn)(unsigned cpu));
 
 /** Diagnostics. */
 /* impl: efi|bios */
-size_t   pm_metal_stack_bytes (void);
+size_t pm_metal_stack_bytes(void);
 /* impl: efi|bios */
-void    *pm_metal_stack_base (unsigned cpu);
+void *pm_metal_stack_base(unsigned cpu);
 /* impl: efi|bios */
-unsigned pm_metal_stack_n_cpus (void);
+unsigned pm_metal_stack_n_cpus(void);
 
 #ifdef __cplusplus
 }

@@ -2,6 +2,11 @@
   lwIP NO_SYS bridge — DHCPv4 + stateless DHCPv6 on virtio/bge L2.
   (impl: efi|bios)
 **/
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
 #include <pymergetic/metal/dev/net/net.h>
 #include <pymergetic/metal/dev/net/net_ops.h>
 #include <pymergetic/metal/bus/virtio/virtio.h>
@@ -14,9 +19,8 @@
 #include <pymergetic/metal/util/ip.h>
 #include <pymergetic/metal/host/host.h>
 #include <pymergetic/metal/dev/random/random.h>
-#include <runtime/coro/coro.h>
 #include <runtime/time/time.h>
-#include <runtime/mem/mem.h>
+#include <pymergetic/metal/runtime/mem/mem.h>
 
 #include "virtio_netif.h"
 #include "bge/bge_netif.h"
@@ -39,58 +43,52 @@
 #include <netif/ethernet.h>
 #include <lwip/prot/dhcp.h>
 
-#include <Uefi.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/BaseLib.h>
-#include <Library/PrintLib.h>
-
-typedef void (*pm_metal_net_l2_rx_fn)(void *ctx, const uint8_t *frame,
-				      uint32_t len);
+typedef void (*pm_metal_net_l2_rx_fn)(void *ctx, const uint8_t *frame, uint32_t len);
 typedef void (*pm_metal_net_l2_poll_fn)(pm_metal_net_l2_rx_fn fn, void *ctx);
 
-#define METAL_NET_MAX_IFACES  PM_METAL_NET_MAX_IFS
-#define METAL_NET_MAX_SOCKS   16u
-#define METAL_NET_TX_MAX      1514u
-#define METAL_HOSTS_MAX       64u
-#define METAL_HOSTS_NAME_MAX  64u
-#define METAL_HOSTS_FILE_MAX  4096u
-#define METAL_HOSTS_PATH      "/etc/hosts"
+#define METAL_NET_MAX_IFACES PM_METAL_NET_MAX_IFS
+#define METAL_NET_MAX_SOCKS  16u
+#define METAL_NET_TX_MAX     1514u
+#define METAL_HOSTS_MAX      64u
+#define METAL_HOSTS_NAME_MAX 64u
+#define METAL_HOSTS_FILE_MAX 4096u
+#define METAL_HOSTS_PATH     "/etc/hosts"
 
 typedef struct {
-  INT32                      used;
-  struct netif               netif;
-  CHAR8                      name[PM_METAL_NET_IFNAME_MAX];
-  CHAR8                      backend[24];
-  int                      (*l2_open)(uint8_t mac[6]);
-  const uint8_t *          (*l2_mac)(void);
-  int                      (*l2_tx)(const void *frame, uint32_t len);
-  pm_metal_net_l2_poll_fn    l2_poll;
-  CHAR8                      ip[16];
-  CHAR8                      mask[16];
-  CHAR8                      gw[16];
-  CHAR8                      dns[16];
-  CHAR8                      ntp[16];
-  CHAR8                      tftp[PM_METAL_NET_TFTP_HOST_MAX];
-  CHAR8                      boot_file[PM_METAL_NET_BOOT_FILE_MAX];
-  INT32                      use_dhcp;
-  INT32                      dhcp6_mode;
-  metal_dhcp6_stateful_t     dhcp6_sf;
+  int32_t      used;
+  struct netif netif;
+  char         name[PM_METAL_NET_IFNAME_MAX];
+  char         backend[24];
+  int (*l2_open)(uint8_t mac[6]);
+  const uint8_t *(*l2_mac)(void);
+  int (*l2_tx)(const void *frame, uint32_t len);
+  pm_metal_net_l2_poll_fn l2_poll;
+  char                    ip[16];
+  char                    mask[16];
+  char                    gw[16];
+  char                    dns[16];
+  char                    ntp[16];
+  char                    tftp[PM_METAL_NET_TFTP_HOST_MAX];
+  char                    boot_file[PM_METAL_NET_BOOT_FILE_MAX];
+  int32_t                 use_dhcp;
+  int32_t                 dhcp6_mode;
+  metal_dhcp6_stateful_t  dhcp6_sf;
 } metal_net_iface_t;
 
 typedef struct {
-  INT32   set_dhcp;
-  INT32   set_dhcp6;
-  INT32   set_ip;
-  CHAR8   ip[16];
-  CHAR8   mask[16];
-  CHAR8   gw[16];
-  CHAR8   dns[16];
+  int32_t set_dhcp;
+  int32_t set_dhcp6;
+  int32_t set_ip;
+  char    ip[16];
+  char    mask[16];
+  char    gw[16];
+  char    dns[16];
 } metal_net_conf_ov_t;
 
 typedef struct {
-  INT32      used;
-  CHAR8      name[METAL_HOSTS_NAME_MAX];
-  ip_addr_t  addr;
+  int32_t   used;
+  char      name[METAL_HOSTS_NAME_MAX];
+  ip_addr_t addr;
 } metal_hosts_ent_t;
 
 typedef enum {
@@ -101,121 +99,103 @@ typedef enum {
 } wait_kind_t;
 
 typedef struct {
-  INT32             used;
-  UINT32            domain;
-  UINT32            type;
-  struct tcp_pcb   *tcp;
-  struct udp_pcb   *udp;
-  ip_addr_t         remote;
-  UINT16            remote_port;
-  INT32             have_remote;
-  INT32             conn_done;
-  INT32             conn_ok;
-  INT32             listening;
-  struct tcp_pcb   *accept_pcb;
-  VOID             *recv_buf;
-  UINT32            recv_cap;
-  UINT32            recv_got;
-  INT32             recv_done;
-  INT32             recv_err;
-  struct pbuf      *rx_q;
-  INT32             bound_if;
+  int32_t         used;
+  uint32_t        domain;
+  uint32_t        type;
+  struct tcp_pcb *tcp;
+  struct udp_pcb *udp;
+  ip_addr_t       remote;
+  uint16_t        remote_port;
+  int32_t         have_remote;
+  int32_t         conn_done;
+  int32_t         conn_ok;
+  int32_t         listening;
+  struct tcp_pcb *accept_pcb;
+  void           *recv_buf;
+  uint32_t        recv_cap;
+  uint32_t        recv_got;
+  int32_t         recv_done;
+  int32_t         recv_err;
+  struct pbuf    *rx_q;
+  int32_t         bound_if;
 } msock_t;
 
 typedef struct {
-  pm_metal_coro_t       coro;
-  wait_kind_t           kind;
-  pm_metal_net_sock_h   h;
-  pm_metal_net_sock_h   accept_out;
-  UINT64                deadline;
-  INT32                 dns_done;
-  INT32                 dns_ok;
-  ip_addr_t             dns_addr;
+  wait_kind_t         kind;
+  pm_metal_net_sock_h h;
+  pm_metal_net_sock_h accept_out;
+  uint64_t            deadline;
+  int32_t             dns_done;
+  int32_t             dns_ok;
+  ip_addr_t           dns_addr;
 } net_wait_t;
 
-STATIC pm_metal_net_sock_h  PromoteAcceptPcb (msock_t *s);
-STATIC metal_net_iface_t   *IfaceInitOne (UINT32 idx, CONST CHAR8 *backend,
-                                          int (*open_fn)(uint8_t mac[6]),
-                                          const uint8_t *(*mac_fn)(void),
-                                          int (*tx_fn)(const void *frame,
-                                                       uint32_t len),
-                                          pm_metal_net_l2_poll_fn poll_fn);
-STATIC metal_net_iface_t   *IfaceByName (CONST CHAR8 *name);
-STATIC metal_net_iface_t   *IfaceDefault (VOID);
-STATIC VOID                 SyncIfaceCfg (metal_net_iface_t *mif);
-STATIC VOID                 EnsureDnsServers (metal_net_iface_t *mif);
-STATIC INT32                ParseIfIndex (CONST CHAR8 *name);
+typedef struct {
+  uint32_t result;
+} net_ok_t;
 
-STATIC metal_net_iface_t    mIfaces[METAL_NET_MAX_IFACES];
-STATIC UINT32               mIfaceCount;
-STATIC UINT32               mEthCount;
-STATIC INT32                mDefaultIdx = -1;
-STATIC INT32                mLwipInited;
-STATIC INT32                mOpsRegistered;
-STATIC INT32                mConfLoaded;
-STATIC INT32                mHostsLoaded;
-STATIC UINT32               mHostsCount;
-STATIC metal_hosts_ent_t    mHosts[METAL_HOSTS_MAX];
-STATIC msock_t              mSocks[METAL_NET_MAX_SOCKS + 1];
-STATIC UINT8                mTxScratch[METAL_NET_TX_MAX];
-STATIC metal_net_conf_ov_t  mGlobalConf;
-STATIC metal_net_conf_ov_t  mIfConf[METAL_NET_MAX_IFACES];
-STATIC net_wait_t          *mDnsWait;
-STATIC ip_addr_t            mLastDnsAddr;
-STATIC INT32                mLastDnsValid;
+static pm_metal_net_sock_h PromoteAcceptPcb(msock_t *s);
+static metal_net_iface_t  *IfaceInitOne(uint32_t    idx,
+                                        const char *backend,
+                                        int (*open_fn)(uint8_t mac[6]),
+                                        const uint8_t *(*mac_fn)(void),
+                                        int (*tx_fn)(const void *frame, uint32_t len),
+                                        pm_metal_net_l2_poll_fn poll_fn);
+static metal_net_iface_t  *IfaceByName(const char *name);
+static metal_net_iface_t  *IfaceDefault(void);
+static void                SyncIfaceCfg(metal_net_iface_t *mif);
+static void                EnsureDnsServers(metal_net_iface_t *mif);
+static int32_t             ParseIfIndex(const char *name);
 
-#define METAL_NET_READY()  (mIfaceCount > 0)
+static metal_net_iface_t   mIfaces[METAL_NET_MAX_IFACES];
+static uint32_t            mIfaceCount;
+static uint32_t            mEthCount;
+static int32_t             mDefaultIdx = -1;
+static int32_t             mLwipInited;
+static int32_t             mOpsRegistered;
+static int32_t             mConfLoaded;
+static int32_t             mHostsLoaded;
+static uint32_t            mHostsCount;
+static metal_hosts_ent_t   mHosts[METAL_HOSTS_MAX];
+static msock_t             mSocks[METAL_NET_MAX_SOCKS + 1];
+static uint8_t             mTxScratch[METAL_NET_TX_MAX];
+static metal_net_conf_ov_t mGlobalConf;
+static metal_net_conf_ov_t mIfConf[METAL_NET_MAX_IFACES];
+static net_wait_t         *mDnsWait;
+static ip_addr_t           mLastDnsAddr;
+static int32_t             mLastDnsValid;
 
-STATIC
-INT32
-ParseIpv4 (
-  CONST CHAR8  *s,
-  ip4_addr_t   *out
-  )
+#define METAL_NET_READY() (mIfaceCount > 0)
+
+static int32_t ParseIpv4(const char *s, ip4_addr_t *out)
 {
-  UINT32  host;
+  uint32_t host;
 
   if (s == NULL || out == NULL) {
     return -1;
   }
 
-  if (pm_metal_util_ip4_parse (s, &host) != 0) {
+  if (pm_metal_util_ip4_parse(s, &host) != 0) {
     return -1;
   }
 
-  IP4_ADDR (
-    out,
-    (host >> 24) & 0xffu,
-    (host >> 16) & 0xffu,
-    (host >> 8) & 0xffu,
-    host & 0xffu
-    );
+  IP4_ADDR(out, (host >> 24) & 0xffu, (host >> 16) & 0xffu, (host >> 8) & 0xffu, host & 0xffu);
   return 0;
 }
 
-STATIC
-INT32
-ParseIpv6 (
-  CONST CHAR8  *s,
-  ip6_addr_t   *out
-  )
+static int32_t ParseIpv6(const char *s, ip6_addr_t *out)
 {
   if (s == NULL || out == NULL) {
     return -1;
   }
 
-  return ip6addr_aton (s, out) ? 0 : -1;
+  return ip6addr_aton(s, out) ? 0 : -1;
 }
 
-STATIC
-INT32
-HostNameEq (
-  CONST CHAR8  *a,
-  CONST CHAR8  *b
-  )
+static int32_t HostNameEq(const char *a, const char *b)
 {
-  CHAR8  ca;
-  CHAR8  cb;
+  char ca;
+  char cb;
 
   if (a == NULL || b == NULL) {
     return 0;
@@ -225,11 +205,11 @@ HostNameEq (
     ca = *a;
     cb = *b;
     if (ca >= 'A' && ca <= 'Z') {
-      ca = (CHAR8)(ca - 'A' + 'a');
+      ca = (char)(ca - 'A' + 'a');
     }
 
     if (cb >= 'A' && cb <= 'Z') {
-      cb = (CHAR8)(cb - 'A' + 'a');
+      cb = (char)(cb - 'A' + 'a');
     }
 
     if (ca != cb) {
@@ -243,18 +223,11 @@ HostNameEq (
   return (*a == '\0' && *b == '\0') ? 1 : 0;
 }
 
-STATIC
-INT32
-HostsAdd (
-  CONST CHAR8      *name,
-  CONST ip_addr_t  *addr
-  )
+static int32_t HostsAdd(const char *name, const ip_addr_t *addr)
 {
-  UINT32  i;
+  uint32_t i;
 
-  if (name == NULL || name[0] == '\0' || addr == NULL
-      || mHostsCount >= METAL_HOSTS_MAX)
-  {
+  if (name == NULL || name[0] == '\0' || addr == NULL || mHostsCount >= METAL_HOSTS_MAX) {
     return -1;
   }
 
@@ -265,33 +238,24 @@ HostsAdd (
   }
 
   for (i = 0; i < mHostsCount; i++) {
-    if (mHosts[i].used && HostNameEq (mHosts[i].name, name)) {
+    if (mHosts[i].used && HostNameEq(mHosts[i].name, name)) {
       mHosts[i].addr = *addr;
       return 0;
     }
   }
 
-  ZeroMem (&mHosts[mHostsCount], sizeof (mHosts[0]));
-  AsciiStrCpyS (
-    mHosts[mHostsCount].name,
-    sizeof (mHosts[mHostsCount].name),
-    name
-    );
+  memset(&mHosts[mHostsCount], 0, sizeof(mHosts[0]));
+  snprintf(mHosts[mHostsCount].name, sizeof(mHosts[mHostsCount].name), "%s", name);
   mHosts[mHostsCount].addr = *addr;
   mHosts[mHostsCount].used = 1;
   mHostsCount++;
   return 0;
 }
 
-STATIC
-VOID
-ParseHostsFile (
-  CONST UINT8  *data,
-  UINT32        len
-  )
+static void ParseHostsFile(const uint8_t *data, uint32_t len)
 {
-  UINT32  i;
-  UINT32  line_start;
+  uint32_t i;
+  uint32_t line_start;
 
   if (data == NULL || len == 0) {
     return;
@@ -299,7 +263,7 @@ ParseHostsFile (
 
   line_start = 0;
   for (i = 0; i <= len; i++) {
-    INT32  end;
+    int32_t end;
 
     end = (i == len) || (data[i] == '\n') || (data[i] == '\r');
     if (!end) {
@@ -307,17 +271,17 @@ ParseHostsFile (
     }
 
     {
-      CHAR8       line[160];
-      UINT32      li;
-      UINT32      p;
-      CHAR8       tok[METAL_HOSTS_NAME_MAX];
-      UINT32      ti;
-      ip_addr_t   addr;
-      INT32       have_addr;
+      char      line[160];
+      uint32_t  li;
+      uint32_t  p;
+      char      tok[METAL_HOSTS_NAME_MAX];
+      uint32_t  ti;
+      ip_addr_t addr;
+      int32_t   have_addr;
 
       li = 0;
-      while (line_start < i && li + 1u < sizeof (line)) {
-        line[li++] = (CHAR8)data[line_start++];
+      while (line_start < i && li + 1u < sizeof(line)) {
+        line[li++] = (char)data[line_start++];
       }
 
       line[li] = '\0';
@@ -342,9 +306,8 @@ ParseHostsFile (
         }
 
         ti = 0;
-        while (line[p] != '\0' && line[p] != ' ' && line[p] != '\t'
-               && line[p] != '#' && ti + 1u < sizeof (tok))
-        {
+        while (line[p] != '\0' && line[p] != ' ' && line[p] != '\t' && line[p] != '#' &&
+               ti + 1u < sizeof(tok)) {
           tok[ti++] = line[p++];
         }
 
@@ -354,41 +317,36 @@ ParseHostsFile (
         }
 
         if (!have_addr) {
-          ip4_addr_t  a4;
-          ip6_addr_t  a6;
+          ip4_addr_t a4;
+          ip6_addr_t a6;
 
-          if (pm_metal_util_ip4_is_literal (tok) && ParseIpv4 (tok, &a4) == 0) {
-            ip_addr_copy_from_ip4 (addr, a4);
+          if (pm_metal_util_ip4_is_literal(tok) && ParseIpv4(tok, &a4) == 0) {
+            ip_addr_copy_from_ip4(addr, a4);
             have_addr = 1;
-          } else if (ParseIpv6 (tok, &a6) == 0) {
-            ip_addr_copy_from_ip6 (addr, a6);
+          } else if (ParseIpv6(tok, &a6) == 0) {
+            ip_addr_copy_from_ip6(addr, a6);
             have_addr = 1;
           } else {
             break;
           }
         } else {
-          (VOID)HostsAdd (tok, &addr);
+          (void)HostsAdd(tok, &addr);
         }
       }
     }
   }
 }
 
-STATIC
-INT32
-LookupHosts (
-  CONST CHAR8  *host,
-  ip_addr_t    *out
-  )
+static int32_t LookupHosts(const char *host, ip_addr_t *out)
 {
-  UINT32  i;
+  uint32_t i;
 
   if (host == NULL || out == NULL) {
     return -1;
   }
 
   for (i = 0; i < mHostsCount; i++) {
-    if (mHosts[i].used && HostNameEq (mHosts[i].name, host)) {
+    if (mHosts[i].used && HostNameEq(mHosts[i].name, host)) {
       *out = mHosts[i].addr;
       return 0;
     }
@@ -397,15 +355,11 @@ LookupHosts (
   return -1;
 }
 
-STATIC
-VOID
-TryLoadHosts (
-  VOID
-  )
+static void TryLoadHosts(void)
 {
-  UINT32  sz;
-  UINT32  n;
-  UINT8   buf[METAL_HOSTS_FILE_MAX];
+  uint32_t sz;
+  uint32_t n;
+  uint8_t  buf[METAL_HOSTS_FILE_MAX];
 
   if (mHostsLoaded) {
     return;
@@ -413,95 +367,79 @@ TryLoadHosts (
 
   mHostsLoaded = 1;
   mHostsCount  = 0;
-  ZeroMem (mHosts, sizeof (mHosts));
+  memset(mHosts, 0, sizeof(mHosts));
 
-  sz = pm_metal_fs_size (METAL_HOSTS_PATH);
+  sz = pm_metal_fs_size(METAL_HOSTS_PATH);
   if (sz == 0 || sz > METAL_HOSTS_FILE_MAX) {
     return;
   }
 
-  n = pm_metal_fs_read (METAL_HOSTS_PATH, buf, sz);
+  n = pm_metal_fs_read(METAL_HOSTS_PATH, buf, sz);
   if (n > 0) {
-    ParseHostsFile (buf, n);
+    ParseHostsFile(buf, n);
   }
 }
 
-STATIC
-INT32
-ParseHostAddr (
-  CONST CHAR8  *host,
-  ip_addr_t    *out
-  )
+static int32_t ParseHostAddr(const char *host, ip_addr_t *out)
 {
-  ip4_addr_t  a4;
-  ip6_addr_t  a6;
-  CHAR8       local[PM_METAL_HOST_NAME_MAX];
+  ip4_addr_t a4;
+  ip6_addr_t a6;
+  char       local[PM_METAL_HOST_NAME_MAX];
 
   if (host == NULL || out == NULL) {
     return -1;
   }
 
   /* Literals — sync util/ip (and lwIP IPv6); skip DNS. */
-  if (pm_metal_util_ip4_is_literal (host) && ParseIpv4 (host, &a4) == 0) {
-    ip_addr_copy_from_ip4 (*out, a4);
+  if (pm_metal_util_ip4_is_literal(host) && ParseIpv4(host, &a4) == 0) {
+    ip_addr_copy_from_ip4(*out, a4);
     return 0;
   }
 
-  if (ParseIpv6 (host, &a6) == 0) {
-    ip_addr_copy_from_ip6 (*out, a6);
+  if (ParseIpv6(host, &a6) == 0) {
+    ip_addr_copy_from_ip6(*out, a6);
     return 0;
   }
 
   /* Local identity + well-known loopback names → lo, not remote DNS. */
-  if (HostNameEq (host, "localhost")
-      || (pm_metal_host_name_get (local, sizeof (local)) == 0
-          && HostNameEq (host, local)))
-  {
-    IP4_ADDR (&a4, 127, 0, 0, 1);
-    ip_addr_copy_from_ip4 (*out, a4);
+  if (HostNameEq(host, "localhost") ||
+      (pm_metal_host_name_get(local, sizeof(local)) == 0 && HostNameEq(host, local))) {
+    IP4_ADDR(&a4, 127, 0, 0, 1);
+    ip_addr_copy_from_ip4(*out, a4);
     return 0;
   }
 
-  if (HostNameEq (host, "ip6-localhost")) {
-    IP_ADDR6_HOST (out, 0, 0, 0, 0x00000001UL);
+  if (HostNameEq(host, "ip6-localhost")) {
+    IP_ADDR6_HOST(out, 0, 0, 0, 0x00000001UL);
     return 0;
   }
 
   /* Classical /etc/hosts (VFS) before remote DNS. */
-  if (LookupHosts (host, out) == 0) {
+  if (LookupHosts(host, out) == 0) {
     return 0;
   }
 
   return -1;
 }
 
-STATIC
-VOID
-SockClear (
-  msock_t  *s
-  )
+static void SockClear(msock_t *s)
 {
   if (s->rx_q != NULL) {
-    pbuf_free (s->rx_q);
+    pbuf_free(s->rx_q);
     s->rx_q = NULL;
   }
 
-  ZeroMem (s, sizeof (*s));
+  memset(s, 0, sizeof(*s));
   s->bound_if = -1;
 }
 
-STATIC
-err_t
-MetalLinkOutput (
-  struct netif  *netif,
-  struct pbuf   *p
-  )
+static err_t MetalLinkOutput(struct netif *netif, struct pbuf *p)
 {
-  UINT32  tot;
-  UINT32  off;
-  struct pbuf  *q;
+  uint32_t     tot;
+  uint32_t     off;
+  struct pbuf *q;
 
-  (VOID)netif;
+  (void)netif;
   if (p == NULL) {
     return ERR_ARG;
   }
@@ -513,15 +451,15 @@ MetalLinkOutput (
 
   off = 0;
   for (q = p; q != NULL; q = q->next) {
-    CopyMem (mTxScratch + off, q->payload, q->len);
+    memcpy(mTxScratch + off, q->payload, q->len);
     off += q->len;
   }
 
   {
-    metal_net_iface_t  *mif;
+    metal_net_iface_t *mif;
 
     mif = (metal_net_iface_t *)netif->state;
-    if (mif == NULL || mif->l2_tx == NULL || mif->l2_tx (mTxScratch, tot) != 0) {
+    if (mif == NULL || mif->l2_tx == NULL || mif->l2_tx(mTxScratch, tot) != 0) {
       return ERR_IF;
     }
   }
@@ -529,89 +467,65 @@ MetalLinkOutput (
   return ERR_OK;
 }
 
-STATIC
-err_t
-MetalNetifInit (
-  struct netif  *netif
-  )
+static err_t MetalNetifInit(struct netif *netif)
 {
-  metal_net_iface_t  *mif;
-  CONST UINT8        *mac;
+  metal_net_iface_t *mif;
+  const uint8_t     *mac;
 
   mif = (metal_net_iface_t *)netif->state;
   if (mif == NULL) {
     return ERR_IF;
   }
 
-  mac = (mif->l2_mac != NULL) ? mif->l2_mac () : pm_metal_virtio_netif_mac ();
+  mac               = (mif->l2_mac != NULL) ? mif->l2_mac() : pm_metal_virtio_netif_mac();
   netif->hwaddr_len = ETH_HWADDR_LEN;
-  CopyMem (netif->hwaddr, mac, ETH_HWADDR_LEN);
-  netif->mtu   = 1500;
-  netif->flags = (UINT8)(NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP
-                         | NETIF_FLAG_ETHERNET | NETIF_FLAG_LINK_UP
+  memcpy(netif->hwaddr, mac, ETH_HWADDR_LEN);
+  netif->mtu = 1500;
+  netif->flags =
+    (uint8_t)(NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET | NETIF_FLAG_LINK_UP
 #if LWIP_IPV6
-                         | NETIF_FLAG_MLD6
+              | NETIF_FLAG_MLD6
 #endif
-                         );
-  netif->output     = etharp_output;
+    );
+  netif->output = etharp_output;
 #if LWIP_IPV6
   netif->output_ip6 = ethip6_output;
 #endif
   netif->linkoutput = MetalLinkOutput;
 #if LWIP_NETIF_HOSTNAME
-  netif_set_hostname (netif, pm_metal_host_name_cstr ());
+  netif_set_hostname(netif, pm_metal_host_name_cstr());
 #endif
   return ERR_OK;
 }
 
-STATIC
-VOID
-ApplyNetifHostname (
-  metal_net_iface_t  *mif
-  )
+static void ApplyNetifHostname(metal_net_iface_t *mif)
 {
 #if LWIP_NETIF_HOSTNAME
   if (mif == NULL) {
     return;
   }
 
-  netif_set_hostname (&mif->netif, pm_metal_host_name_cstr ());
+  netif_set_hostname(&mif->netif, pm_metal_host_name_cstr());
 #else
-  (VOID)mif;
+  (void)mif;
 #endif
 }
 
-STATIC
-err_t
-MetalLoopOutputIpv4 (
-  struct netif      *netif,
-  struct pbuf       *p,
-  CONST ip4_addr_t  *addr
-  )
+static err_t MetalLoopOutputIpv4(struct netif *netif, struct pbuf *p, const ip4_addr_t *addr)
 {
-  (VOID)addr;
-  return netif_loop_output (netif, p);
+  (void)addr;
+  return netif_loop_output(netif, p);
 }
 
 #if LWIP_IPV6
-STATIC
-err_t
-MetalLoopOutputIpv6 (
-  struct netif      *netif,
-  struct pbuf       *p,
-  CONST ip6_addr_t  *addr
-  )
+static err_t MetalLoopOutputIpv6(struct netif *netif, struct pbuf *p, const ip6_addr_t *addr)
 {
-  (VOID)addr;
-  return netif_loop_output (netif, p);
+  (void)addr;
+  return netif_loop_output(netif, p);
 }
 #endif
 
-STATIC
-err_t
-MetalLoopNetifInit (
-  struct netif  *netif
-  )
+static err_t MetalLoopNetifInit(struct netif *netif)
 {
   if (netif == NULL) {
     return ERR_IF;
@@ -620,8 +534,8 @@ MetalLoopNetifInit (
   netif->name[0] = 'l';
   netif->name[1] = 'o';
   netif->mtu     = 65535;
-  netif->flags   = (UINT8)(NETIF_FLAG_LINK_UP);
-  ZeroMem (netif->hwaddr, sizeof (netif->hwaddr));
+  netif->flags   = (uint8_t)(NETIF_FLAG_LINK_UP);
+  memset(netif->hwaddr, 0, sizeof(netif->hwaddr));
   netif->hwaddr_len = ETH_HWADDR_LEN;
   netif->output     = MetalLoopOutputIpv4;
 #if LWIP_IPV6
@@ -631,52 +545,42 @@ MetalLoopNetifInit (
   return ERR_OK;
 }
 
-STATIC
-VOID
-MetalOnFrame (
-  VOID          *ctx,
-  CONST UINT8   *frame,
-  UINT32         len
-  )
+static void MetalOnFrame(void *ctx, const uint8_t *frame, uint32_t len)
 {
-  metal_net_iface_t  *mif;
-  struct pbuf        *p;
+  metal_net_iface_t *mif;
+  struct pbuf       *p;
 
   mif = (metal_net_iface_t *)ctx;
   if (mif == NULL || frame == NULL || len == 0) {
     return;
   }
 
-  p = pbuf_alloc (PBUF_RAW, (UINT16)len, PBUF_POOL);
+  p = pbuf_alloc(PBUF_RAW, (uint16_t)len, PBUF_POOL);
   if (p == NULL) {
     return;
   }
 
-  if (pbuf_take (p, frame, (UINT16)len) != ERR_OK) {
-    pbuf_free (p);
+  if (pbuf_take(p, frame, (uint16_t)len) != ERR_OK) {
+    pbuf_free(p);
     return;
   }
 
-  if (mif->netif.input (p, &mif->netif) != ERR_OK) {
-    pbuf_free (p);
+  if (mif->netif.input(p, &mif->netif) != ERR_OK) {
+    pbuf_free(p);
   }
 }
 
-STATIC
-VOID
-ApplyDnsServer (
-  metal_net_iface_t  *mif
-  )
+static void ApplyDnsServer(metal_net_iface_t *mif)
 {
-  ip4_addr_t  dns4;
-  ip_addr_t   dns;
+  ip4_addr_t dns4;
+  ip_addr_t  dns;
 
-  if (mif == NULL || ParseIpv4 (mif->dns, &dns4) != 0) {
+  if (mif == NULL || ParseIpv4(mif->dns, &dns4) != 0) {
     return;
   }
 
-  ip_addr_copy_from_ip4 (dns, dns4);
-  dns_setserver (0, &dns);
+  ip_addr_copy_from_ip4(dns, dns4);
+  dns_setserver(0, &dns);
 }
 
 /*
@@ -684,162 +588,133 @@ ApplyDnsServer (
  * option 6 → 10.0.2.3. Only fill slot 0 when empty; keep 8.8.8.8 as a
  * silent backup in slot 1 (SLIRP's proxy is host-resolv fragile).
  */
-STATIC
-VOID
-EnsureDnsServers (
-  metal_net_iface_t  *mif
-  )
+static void EnsureDnsServers(metal_net_iface_t *mif)
 {
-  CONST ip_addr_t  *dns0;
-  ip_addr_t         backup;
+  const ip_addr_t *dns0;
+  ip_addr_t        backup;
 
-  dns0 = dns_getserver (0);
-  if (dns0 == NULL || ip_addr_isany (dns0)) {
+  dns0 = dns_getserver(0);
+  if (dns0 == NULL || ip_addr_isany(dns0)) {
     if (mif != NULL) {
-      ApplyDnsServer (mif);
+      ApplyDnsServer(mif);
     }
 
-    dns0 = dns_getserver (0);
-    if (dns0 == NULL || ip_addr_isany (dns0)) {
-      IP_ADDR4 (&backup, 10, 0, 2, 3);
-      dns_setserver (0, &backup);
+    dns0 = dns_getserver(0);
+    if (dns0 == NULL || ip_addr_isany(dns0)) {
+      IP_ADDR4(&backup, 10, 0, 2, 3);
+      dns_setserver(0, &backup);
     }
   }
 
-  dns0 = dns_getserver (1);
-  if (dns0 == NULL || ip_addr_isany (dns0)) {
-    IP_ADDR4 (&backup, 8, 8, 8, 8);
-    dns_setserver (1, &backup);
+  dns0 = dns_getserver(1);
+  if (dns0 == NULL || ip_addr_isany(dns0)) {
+    IP_ADDR4(&backup, 8, 8, 8, 8);
+    dns_setserver(1, &backup);
   }
 }
 
-STATIC
-VOID
-StoreIp4Ascii (
-  CHAR8             *dst,
-  UINTN              dst_len,
-  CONST ip4_addr_t  *addr
-  )
+static void StoreIp4Ascii(char *dst, uintptr_t dst_len, const ip4_addr_t *addr)
 {
   if (dst == NULL || dst_len == 0 || addr == NULL) {
     return;
   }
 
-  ip4addr_ntoa_r (addr, dst, (int)dst_len);
+  ip4addr_ntoa_r(addr, dst, (int)dst_len);
 }
 
-STATIC
-VOID
-SyncIfaceBoot (
-  metal_net_iface_t  *mif
-  )
+static void SyncIfaceBoot(metal_net_iface_t *mif)
 {
 #if LWIP_DHCP && LWIP_DHCP_BOOTP_FILE
-  struct dhcp  *dhcp;
+  struct dhcp *dhcp;
 
   if (mif == NULL) {
     return;
   }
 
-  dhcp = netif_dhcp_data (&mif->netif);
-  if (dhcp == NULL || !dhcp_supplied_address (&mif->netif)) {
+  dhcp = netif_dhcp_data(&mif->netif);
+  if (dhcp == NULL || !dhcp_supplied_address(&mif->netif)) {
     return;
   }
 
   /* Prefer option 66 string; else siaddr as dotted IPv4. */
-  if (mif->tftp[0] == '\0' && !ip4_addr_isany_val (dhcp->offered_si_addr)) {
-    StoreIp4Ascii (
-      mif->tftp,
-      sizeof (mif->tftp),
-      &dhcp->offered_si_addr
-      );
+  if (mif->tftp[0] == '\0' && !ip4_addr_isany_val(dhcp->offered_si_addr)) {
+    StoreIp4Ascii(mif->tftp, sizeof(mif->tftp), &dhcp->offered_si_addr);
   }
 
   if (mif->boot_file[0] == '\0' && dhcp->boot_file_name[0] != '\0') {
-    AsciiStrCpyS (
-      mif->boot_file,
-      sizeof (mif->boot_file),
-      dhcp->boot_file_name
-      );
+    snprintf(mif->boot_file, sizeof(mif->boot_file), "%s", dhcp->boot_file_name);
   }
 #else
-  (VOID)mif;
+  (void)mif;
 #endif
 }
 
-STATIC
-VOID
-SyncIfaceCfg (
-  metal_net_iface_t  *mif
-  )
+static void SyncIfaceCfg(metal_net_iface_t *mif)
 {
-  CONST ip4_addr_t  *ip;
-  CONST ip4_addr_t  *nm;
-  CONST ip4_addr_t  *gw;
-  CONST ip_addr_t   *dns;
+  const ip4_addr_t *ip;
+  const ip4_addr_t *nm;
+  const ip4_addr_t *gw;
+  const ip_addr_t  *dns;
 
   if (mif == NULL || !mif->used) {
     return;
   }
 
 #if LWIP_DHCP
-  if (mif->use_dhcp && !dhcp_supplied_address (&mif->netif)) {
-    AsciiStrCpyS (mif->ip, sizeof (mif->ip), "0.0.0.0");
-    AsciiStrCpyS (mif->mask, sizeof (mif->mask), "0.0.0.0");
-    AsciiStrCpyS (mif->gw, sizeof (mif->gw), "0.0.0.0");
+  if (mif->use_dhcp && !dhcp_supplied_address(&mif->netif)) {
+    snprintf(mif->ip, sizeof(mif->ip), "%s", "0.0.0.0");
+    snprintf(mif->mask, sizeof(mif->mask), "%s", "0.0.0.0");
+    snprintf(mif->gw, sizeof(mif->gw), "%s", "0.0.0.0");
     return;
   }
 #endif
 
-  ip = netif_ip4_addr (&mif->netif);
-  nm = netif_ip4_netmask (&mif->netif);
-  gw = netif_ip4_gw (&mif->netif);
-  StoreIp4Ascii (mif->ip, sizeof (mif->ip), ip);
-  StoreIp4Ascii (mif->mask, sizeof (mif->mask), nm);
-  StoreIp4Ascii (mif->gw, sizeof (mif->gw), gw);
+  ip = netif_ip4_addr(&mif->netif);
+  nm = netif_ip4_netmask(&mif->netif);
+  gw = netif_ip4_gw(&mif->netif);
+  StoreIp4Ascii(mif->ip, sizeof(mif->ip), ip);
+  StoreIp4Ascii(mif->mask, sizeof(mif->mask), nm);
+  StoreIp4Ascii(mif->gw, sizeof(mif->gw), gw);
 
-  EnsureDnsServers (mif);
+  EnsureDnsServers(mif);
 
   /*
    * Prefer slot 0 (DHCP/conf); else slot 1 (silent 8.8.8.8 backup).
    * Tray/UI read mif->dns — empty slot 0 alone used to show "yellow"
    * even when DNS worked via the backup.
    */
-  dns = dns_getserver (0);
-  if (dns == NULL || ip_addr_isany (dns) || !IP_IS_V4 (dns)) {
-    dns = dns_getserver (1);
+  dns = dns_getserver(0);
+  if (dns == NULL || ip_addr_isany(dns) || !IP_IS_V4(dns)) {
+    dns = dns_getserver(1);
   }
 
-  if (dns != NULL && !ip_addr_isany (dns) && IP_IS_V4 (dns)) {
-    StoreIp4Ascii (mif->dns, sizeof (mif->dns), ip_2_ip4 (dns));
+  if (dns != NULL && !ip_addr_isany(dns) && IP_IS_V4(dns)) {
+    StoreIp4Ascii(mif->dns, sizeof(mif->dns), ip_2_ip4(dns));
   } else {
     mif->dns[0] = '\0';
   }
 
-  SyncIfaceBoot (mif);
+  SyncIfaceBoot(mif);
 }
 
-void
-pm_metal_dhcp_parse_option (
-  struct netif     *netif,
-  struct dhcp      *dhcp,
-  unsigned char     state,
-  struct dhcp_msg  *msg,
-  unsigned char     msg_type,
-  unsigned char     option,
-  unsigned char     len,
-  struct pbuf      *pbuf,
-  unsigned short    offset
-  )
+void pm_metal_dhcp_parse_option(struct netif    *netif,
+                                struct dhcp     *dhcp,
+                                unsigned char    state,
+                                struct dhcp_msg *msg,
+                                unsigned char    msg_type,
+                                unsigned char    option,
+                                unsigned char    len,
+                                struct pbuf     *pbuf,
+                                unsigned short   offset)
 {
-  metal_net_iface_t  *mif;
-  CHAR8               tmp[PM_METAL_NET_BOOT_FILE_MAX];
-  UINT16              n;
+  metal_net_iface_t *mif;
+  char               tmp[PM_METAL_NET_BOOT_FILE_MAX];
+  uint16_t           n;
 
-  (VOID)dhcp;
-  (VOID)state;
-  (VOID)msg;
-  (VOID)msg_type;
+  (void)dhcp;
+  (void)state;
+  (void)msg;
+  (void)msg_type;
   if (netif == NULL || pbuf == NULL || len == 0) {
     return;
   }
@@ -850,53 +725,47 @@ pm_metal_dhcp_parse_option (
   }
 
   if (option == DHCP_OPTION_TFTP_SERVERNAME) {
-    n = (UINT16)len;
-    if (n >= sizeof (tmp)) {
-      n = (UINT16)(sizeof (tmp) - 1u);
+    n = (uint16_t)len;
+    if (n >= sizeof(tmp)) {
+      n = (uint16_t)(sizeof(tmp) - 1u);
     }
 
-    if (pbuf_copy_partial (pbuf, tmp, n, offset) != n) {
+    if (pbuf_copy_partial(pbuf, tmp, n, offset) != n) {
       return;
     }
 
     tmp[n] = '\0';
-    AsciiStrCpyS (mif->tftp, sizeof (mif->tftp), tmp);
+    snprintf(mif->tftp, sizeof(mif->tftp), "%s", tmp);
   } else if (option == DHCP_OPTION_BOOTFILE) {
-    n = (UINT16)len;
-    if (n >= sizeof (tmp)) {
-      n = (UINT16)(sizeof (tmp) - 1u);
+    n = (uint16_t)len;
+    if (n >= sizeof(tmp)) {
+      n = (uint16_t)(sizeof(tmp) - 1u);
     }
 
-    if (pbuf_copy_partial (pbuf, tmp, n, offset) != n) {
+    if (pbuf_copy_partial(pbuf, tmp, n, offset) != n) {
       return;
     }
 
     tmp[n] = '\0';
-    AsciiStrCpyS (mif->boot_file, sizeof (mif->boot_file), tmp);
+    snprintf(mif->boot_file, sizeof(mif->boot_file), "%s", tmp);
   } else if (option == DHCP_OPTION_NTP && len >= 4u) {
     /* NTP servers (IPv4 list). Keep first. */
-    UINT8  ipb[4];
+    uint8_t ipb[4];
 
-    if (pbuf_copy_partial (pbuf, ipb, 4, offset) == 4) {
-      AsciiSPrint (
-        mif->ntp,
-        sizeof (mif->ntp),
-        "%u.%u.%u.%u",
-        (UINT32)ipb[0],
-        (UINT32)ipb[1],
-        (UINT32)ipb[2],
-        (UINT32)ipb[3]
-        );
+    if (pbuf_copy_partial(pbuf, ipb, 4, offset) == 4) {
+      snprintf(mif->ntp,
+               sizeof(mif->ntp),
+               "%u.%u.%u.%u",
+               (uint32_t)ipb[0],
+               (uint32_t)ipb[1],
+               (uint32_t)ipb[2],
+               (uint32_t)ipb[3]);
     }
   }
 }
 
 #if LWIP_IPV6_DHCP6
-STATIC
-INT32
-StartIfaceDhcp6 (
-  metal_net_iface_t  *mif
-  )
+static int32_t StartIfaceDhcp6(metal_net_iface_t *mif)
 {
   /* Called from IfaceInitOne before mif->used is set. */
   if (mif == NULL) {
@@ -905,121 +774,102 @@ StartIfaceDhcp6 (
 
   switch (mif->dhcp6_mode) {
   case PM_METAL_NET_DHCP6_STATELESS:
-    return (dhcp6_enable_stateless (&mif->netif) == ERR_OK) ? 0 : -1;
+    return (dhcp6_enable_stateless(&mif->netif) == ERR_OK) ? 0 : -1;
   case PM_METAL_NET_DHCP6_STATEFUL:
-    metal_dhcp6_stateful_reset (&mif->dhcp6_sf);
-    return (metal_dhcp6_stateful_start (&mif->netif, &mif->dhcp6_sf) == ERR_OK)
-             ? 0
-             : -1;
+    metal_dhcp6_stateful_reset(&mif->dhcp6_sf);
+    return (metal_dhcp6_stateful_start(&mif->netif, &mif->dhcp6_sf) == ERR_OK) ? 0 : -1;
   default:
     return 0;
   }
 }
 #endif
 
-STATIC
-VOID
-StopIfaceAutoconf (
-  metal_net_iface_t  *mif
-  )
+static void StopIfaceAutoconf(metal_net_iface_t *mif)
 {
   if (mif == NULL || !mif->used) {
     return;
   }
 
 #if LWIP_DHCP
-  dhcp_stop (&mif->netif);
+  dhcp_stop(&mif->netif);
 #endif
 #if LWIP_IPV6_DHCP6
-  dhcp6_disable (&mif->netif);
-  metal_dhcp6_stateful_stop (&mif->netif, &mif->dhcp6_sf);
+  dhcp6_disable(&mif->netif);
+  metal_dhcp6_stateful_stop(&mif->netif, &mif->dhcp6_sf);
 #endif
 }
 
-STATIC
-INT32
-ApplyIfaceAddrs (
-  metal_net_iface_t  *mif
-  )
+static int32_t ApplyIfaceAddrs(metal_net_iface_t *mif)
 {
-  ip4_addr_t  ip;
-  ip4_addr_t  nm;
-  ip4_addr_t  gw;
+  ip4_addr_t ip;
+  ip4_addr_t nm;
+  ip4_addr_t gw;
 
   if (mif == NULL || !mif->used) {
     return -1;
   }
 
-  if (ParseIpv4 (mif->ip, &ip) != 0 || ParseIpv4 (mif->mask, &nm) != 0
-      || ParseIpv4 (mif->gw, &gw) != 0)
-  {
+  if (ParseIpv4(mif->ip, &ip) != 0 || ParseIpv4(mif->mask, &nm) != 0 ||
+      ParseIpv4(mif->gw, &gw) != 0) {
     return -1;
   }
 
-  StopIfaceAutoconf (mif);
+  StopIfaceAutoconf(mif);
   mif->use_dhcp   = 0;
   mif->dhcp6_mode = PM_METAL_NET_DHCP6_OFF;
-  netif_set_addr (&mif->netif, &ip, &nm, &gw);
-  ApplyDnsServer (mif);
+  netif_set_addr(&mif->netif, &ip, &nm, &gw);
+  ApplyDnsServer(mif);
   return 0;
 }
 
-STATIC
-INT32
-ApplyIfaceDhcp (
-  metal_net_iface_t  *mif
-  )
+static int32_t ApplyIfaceDhcp(metal_net_iface_t *mif)
 {
-  ip4_addr_t  z;
+  ip4_addr_t z;
 
   if (mif == NULL || !mif->used) {
     return -1;
   }
 
-  StopIfaceAutoconf (mif);
+  StopIfaceAutoconf(mif);
   mif->use_dhcp   = 1;
   mif->dhcp6_mode = PM_METAL_NET_DHCP6_STATELESS;
-  IP4_ADDR (&z, 0, 0, 0, 0);
-  netif_set_addr (&mif->netif, &z, &z, &z);
-  AsciiStrCpyS (mif->ip, sizeof (mif->ip), "0.0.0.0");
-  AsciiStrCpyS (mif->mask, sizeof (mif->mask), "0.0.0.0");
-  AsciiStrCpyS (mif->gw, sizeof (mif->gw), "0.0.0.0");
+  IP4_ADDR(&z, 0, 0, 0, 0);
+  netif_set_addr(&mif->netif, &z, &z, &z);
+  snprintf(mif->ip, sizeof(mif->ip), "%s", "0.0.0.0");
+  snprintf(mif->mask, sizeof(mif->mask), "%s", "0.0.0.0");
+  snprintf(mif->gw, sizeof(mif->gw), "%s", "0.0.0.0");
   mif->tftp[0]      = '\0';
   mif->boot_file[0] = '\0';
   mif->ntp[0]       = '\0';
-  ApplyNetifHostname (mif);
+  ApplyNetifHostname(mif);
 #if LWIP_IPV6
-  netif_create_ip6_linklocal_address (&mif->netif, 1);
+  netif_create_ip6_linklocal_address(&mif->netif, 1);
 #endif
 #if LWIP_IPV6_DHCP6
-  if (StartIfaceDhcp6 (mif) != 0) {
+  if (StartIfaceDhcp6(mif) != 0) {
     return -1;
   }
 #endif
 #if LWIP_DHCP
-  if (dhcp_start (&mif->netif) != ERR_OK) {
+  if (dhcp_start(&mif->netif) != ERR_OK) {
     return -1;
   }
 #endif
   return 0;
 }
 
-STATIC
-INT32
-ParseIfIndex (
-  CONST CHAR8  *name
-  )
+static int32_t ParseIfIndex(const char *name)
 {
-  UINT32  i;
-  UINT32  n;
+  uint32_t i;
+  uint32_t n;
 
-  if (name == NULL || AsciiStrnCmp (name, "eth", 3) != 0) {
+  if (name == NULL || strncmp(name, "eth", 3) != 0) {
     return -1;
   }
 
   n = 0;
   for (i = 3; name[i] >= '0' && name[i] <= '9'; i++) {
-    n = n * 10u + (UINT32)(name[i] - '0');
+    n = n * 10u + (uint32_t)(name[i] - '0');
     if (n >= METAL_NET_MAX_IFACES) {
       return -1;
     }
@@ -1029,126 +879,102 @@ ParseIfIndex (
     return -1;
   }
 
-  return (INT32)n;
+  return (int32_t)n;
 }
 
-STATIC
-metal_net_conf_ov_t *
-ConfForIfIndex (
-  INT32  idx
-  )
+static metal_net_conf_ov_t *ConfForIfIndex(int32_t idx)
 {
-  if (idx < 0 || idx >= (INT32)METAL_NET_MAX_IFACES) {
+  if (idx < 0 || idx >= (int32_t)METAL_NET_MAX_IFACES) {
     return NULL;
   }
 
   return &mIfConf[idx];
 }
 
-STATIC
-INT32
-ParseConfDhcp6 (
-  CONST CHAR8  *val
-  )
+static int32_t ParseConfDhcp6(const char *val)
 {
   if (val == NULL) {
     return -1;
   }
 
-  if (AsciiStrCmp (val, "off") == 0 || AsciiStrCmp (val, "0") == 0) {
+  if (strcmp(val, "off") == 0 || strcmp(val, "0") == 0) {
     return PM_METAL_NET_DHCP6_OFF;
   }
 
-  if (AsciiStrCmp (val, "stateful") == 0 || AsciiStrCmp (val, "2") == 0) {
+  if (strcmp(val, "stateful") == 0 || strcmp(val, "2") == 0) {
     return PM_METAL_NET_DHCP6_STATEFUL;
   }
 
-  if (AsciiStrCmp (val, "stateless") == 0 || AsciiStrCmp (val, "1") == 0
-      || AsciiStrCmp (val, "on") == 0)
-  {
+  if (strcmp(val, "stateless") == 0 || strcmp(val, "1") == 0 || strcmp(val, "on") == 0) {
     return PM_METAL_NET_DHCP6_STATELESS;
   }
 
   return -1;
 }
 
-STATIC
-VOID
-ApplyConfKey (
-  metal_net_conf_ov_t  *ov,
-  CONST CHAR8          *key,
-  CONST CHAR8          *val
-  )
+static void ApplyConfKey(metal_net_conf_ov_t *ov, const char *key, const char *val)
 {
   if (ov == NULL || key == NULL || val == NULL) {
     return;
   }
 
-  if (AsciiStrCmp (key, "ip") == 0) {
-    AsciiStrCpyS (ov->ip, sizeof (ov->ip), val);
+  if (strcmp(key, "ip") == 0) {
+    snprintf(ov->ip, sizeof(ov->ip), "%s", val);
     ov->set_ip    = 1;
     ov->set_dhcp  = 0;
     ov->set_dhcp6 = 0;
-  } else if (AsciiStrCmp (key, "mask") == 0) {
-    AsciiStrCpyS (ov->mask, sizeof (ov->mask), val);
-  } else if (AsciiStrCmp (key, "gw") == 0) {
-    AsciiStrCpyS (ov->gw, sizeof (ov->gw), val);
-  } else if (AsciiStrCmp (key, "dns") == 0) {
-    AsciiStrCpyS (ov->dns, sizeof (ov->dns), val);
-  } else if (AsciiStrCmp (key, "dhcp") == 0) {
+  } else if (strcmp(key, "mask") == 0) {
+    snprintf(ov->mask, sizeof(ov->mask), "%s", val);
+  } else if (strcmp(key, "gw") == 0) {
+    snprintf(ov->gw, sizeof(ov->gw), "%s", val);
+  } else if (strcmp(key, "dns") == 0) {
+    snprintf(ov->dns, sizeof(ov->dns), "%s", val);
+  } else if (strcmp(key, "dhcp") == 0) {
     ov->set_dhcp = (val[0] != '0') ? 1 : 0;
-  } else if (AsciiStrCmp (key, "dhcp6") == 0) {
-    INT32  mode;
+  } else if (strcmp(key, "dhcp6") == 0) {
+    int32_t mode;
 
-    mode = ParseConfDhcp6 (val);
+    mode = ParseConfDhcp6(val);
     if (mode >= 0) {
       ov->set_dhcp6 = mode;
     }
-  } else if (AsciiStrCmp (key, "hostname") == 0) {
-    (VOID)pm_metal_host_name_set (val);
-  } else if (AsciiStrCmp (key, "tz") == 0
-             || AsciiStrCmp (key, "timezone") == 0)
-  {
-    (VOID)pm_metal_tz_set (val);
+  } else if (strcmp(key, "hostname") == 0) {
+    (void)pm_metal_host_name_set(val);
+  } else if (strcmp(key, "tz") == 0 || strcmp(key, "timezone") == 0) {
+    (void)pm_metal_tz_set(val);
   }
 }
 
-STATIC
-VOID
-ApplyIfaceDefaults (
-  metal_net_iface_t  *mif,
-  UINT32              idx
-  )
+static void ApplyIfaceDefaults(metal_net_iface_t *mif, uint32_t idx)
 {
-  metal_net_conf_ov_t  *glob;
-  metal_net_conf_ov_t  *loc;
+  metal_net_conf_ov_t *glob;
+  metal_net_conf_ov_t *loc;
 
   glob = &mGlobalConf;
-  loc  = ConfForIfIndex ((INT32)idx);
-  AsciiStrCpyS (mif->ip, sizeof (mif->ip), "10.0.2.15");
-  AsciiStrCpyS (mif->mask, sizeof (mif->mask), "255.255.255.0");
-  AsciiStrCpyS (mif->gw, sizeof (mif->gw), "10.0.2.2");
-  AsciiStrCpyS (mif->dns, sizeof (mif->dns), "10.0.2.3");
+  loc  = ConfForIfIndex((int32_t)idx);
+  snprintf(mif->ip, sizeof(mif->ip), "%s", "10.0.2.15");
+  snprintf(mif->mask, sizeof(mif->mask), "%s", "255.255.255.0");
+  snprintf(mif->gw, sizeof(mif->gw), "%s", "10.0.2.2");
+  snprintf(mif->dns, sizeof(mif->dns), "%s", "10.0.2.3");
   mif->use_dhcp   = (glob->set_dhcp >= 0) ? glob->set_dhcp : 1;
-  mif->dhcp6_mode = (glob->set_dhcp6 >= 0) ? glob->set_dhcp6
-                                           : PM_METAL_NET_DHCP6_STATELESS;
+  mif->dhcp6_mode = (glob->set_dhcp6 >= 0) ? glob->set_dhcp6 : PM_METAL_NET_DHCP6_STATELESS;
 
   if (glob->set_ip) {
-    AsciiStrCpyS (mif->ip, sizeof (mif->ip), glob->ip);
+    snprintf(mif->ip, sizeof(mif->ip), "%s", glob->ip);
     mif->use_dhcp   = 0;
     mif->dhcp6_mode = PM_METAL_NET_DHCP6_OFF;
   }
 
   if (glob->mask[0] != '\0') {
-    AsciiStrCpyS (mif->mask, sizeof (mif->mask), glob->mask);
+    snprintf(mif->mask, sizeof(mif->mask), "%s", glob->mask);
   }
 
   if (glob->gw[0] != '\0') {
-    AsciiStrCpyS (mif->gw, sizeof (mif->gw), glob->gw);
+    snprintf(mif->gw, sizeof(mif->gw), "%s", glob->gw);
   }
 
   if (glob->dns[0] != '\0') {
-    AsciiStrCpyS (mif->dns, sizeof (mif->dns), glob->dns);
+    snprintf(mif->dns, sizeof(mif->dns), "%s", glob->dns);
   }
 
   if (loc == NULL) {
@@ -1156,21 +982,21 @@ ApplyIfaceDefaults (
   }
 
   if (loc->set_ip) {
-    AsciiStrCpyS (mif->ip, sizeof (mif->ip), loc->ip);
+    snprintf(mif->ip, sizeof(mif->ip), "%s", loc->ip);
     mif->use_dhcp   = 0;
     mif->dhcp6_mode = PM_METAL_NET_DHCP6_OFF;
   }
 
   if (loc->mask[0] != '\0') {
-    AsciiStrCpyS (mif->mask, sizeof (mif->mask), loc->mask);
+    snprintf(mif->mask, sizeof(mif->mask), "%s", loc->mask);
   }
 
   if (loc->gw[0] != '\0') {
-    AsciiStrCpyS (mif->gw, sizeof (mif->gw), loc->gw);
+    snprintf(mif->gw, sizeof(mif->gw), "%s", loc->gw);
   }
 
   if (loc->dns[0] != '\0') {
-    AsciiStrCpyS (mif->dns, sizeof (mif->dns), loc->dns);
+    snprintf(mif->dns, sizeof(mif->dns), "%s", loc->dns);
   }
 
   if (loc->set_dhcp >= 0) {
@@ -1182,17 +1008,12 @@ ApplyIfaceDefaults (
   }
 }
 
-STATIC
-VOID
-ParseNetConf (
-  CONST UINT8  *data,
-  UINT32        len
-  )
+static void ParseNetConf(const uint8_t *data, uint32_t len)
 {
-  UINT32  i;
-  UINT32  line_start;
-  CHAR8   line[80];
-  UINT32  li;
+  uint32_t i;
+  uint32_t line_start;
+  char     line[80];
+  uint32_t li;
 
   if (data == NULL || len == 0) {
     return;
@@ -1200,7 +1021,7 @@ ParseNetConf (
 
   line_start = 0;
   for (i = 0; i <= len; i++) {
-    INT32  end;
+    int32_t end;
 
     end = (i == len) || (data[i] == '\n') || (data[i] == '\r');
     if (!end) {
@@ -1208,8 +1029,8 @@ ParseNetConf (
     }
 
     li = 0;
-    while (line_start < i && li + 1 < sizeof (line)) {
-      line[li++] = (CHAR8)data[line_start++];
+    while (line_start < i && li + 1 < sizeof(line)) {
+      line[li++] = (char)data[line_start++];
     }
 
     line[li] = '\0';
@@ -1223,50 +1044,46 @@ ParseNetConf (
     }
 
     {
-      CONST CHAR8           *eq;
-      CHAR8                  key[32];
-      metal_net_conf_ov_t   *ov;
-      CHAR8                 *dot;
-      UINTN                  k;
+      const char          *eq;
+      char                 key[32];
+      metal_net_conf_ov_t *ov;
+      char                *dot;
+      uintptr_t            k;
 
-      eq = AsciiStrStr (line, "=");
+      eq = strstr(line, "=");
       if (eq == NULL) {
         continue;
       }
 
-      k = (UINTN)(eq - line);
-      if (k == 0 || k >= sizeof (key)) {
+      k = (uintptr_t)(eq - line);
+      if (k == 0 || k >= sizeof(key)) {
         continue;
       }
 
-      CopyMem (key, line, k);
+      memcpy(key, line, k);
       key[k] = '\0';
       ov     = &mGlobalConf;
-      dot    = AsciiStrStr (key, ".");
+      dot    = strstr(key, ".");
       if (dot != NULL) {
         *dot = '\0';
-        ov   = ConfForIfIndex (ParseIfIndex (key));
+        ov   = ConfForIfIndex(ParseIfIndex(key));
         if (ov == NULL) {
           ov = &mGlobalConf;
         }
 
-        ApplyConfKey (ov, dot + 1, eq + 1);
+        ApplyConfKey(ov, dot + 1, eq + 1);
       } else {
-        ApplyConfKey (ov, key, eq + 1);
+        ApplyConfKey(ov, key, eq + 1);
       }
     }
   }
 }
 
-STATIC
-VOID
-TryLoadNetConf (
-  VOID
-  )
+static void TryLoadNetConf(void)
 {
-  UINT8   *data;
-  UINT32   len;
-  UINT32   n;
+  uint8_t *data;
+  uint32_t len;
+  uint32_t n;
 
   if (mConfLoaded) {
     return;
@@ -1289,29 +1106,22 @@ TryLoadNetConf (
     mIfConf[n].dns[0]    = '\0';
   }
 
-  if (pm_metal_esp_read_file ("metal/net.conf", &data, &len) == 0) {
-    ParseNetConf (data, len);
-    pm_metal_mem_free (data);
+  if (pm_metal_esp_read_file("metal/net.conf", &data, &len) == 0) {
+    ParseNetConf(data, len);
+    pm_metal_mem_free(data);
   }
 
   mConfLoaded = 1;
 }
 
-STATIC
-err_t
-TcpRecvCb (
-  VOID             *arg,
-  struct tcp_pcb   *tpcb,
-  struct pbuf      *p,
-  err_t             err
-  )
+static err_t TcpRecvCb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
 {
-  msock_t  *s;
+  msock_t *s;
 
   s = (msock_t *)arg;
   if (s == NULL) {
     if (p != NULL) {
-      pbuf_free (p);
+      pbuf_free(p);
     }
 
     return ERR_ARG;
@@ -1319,7 +1129,7 @@ TcpRecvCb (
 
   if (err != ERR_OK || p == NULL) {
     if (p != NULL) {
-      pbuf_free (p);
+      pbuf_free(p);
     }
 
     if (!s->recv_done) {
@@ -1331,50 +1141,39 @@ TcpRecvCb (
   }
 
   if (s->recv_buf != NULL && !s->recv_done) {
-    UINT16  n;
+    uint16_t n;
 
-    n = (UINT16)(s->recv_cap < p->tot_len ? s->recv_cap : p->tot_len);
-    pbuf_copy_partial (p, s->recv_buf, n, 0);
+    n = (uint16_t)(s->recv_cap < p->tot_len ? s->recv_cap : p->tot_len);
+    pbuf_copy_partial(p, s->recv_buf, n, 0);
     s->recv_got  = n;
     s->recv_done = 1;
-    tcp_recved (tpcb, p->tot_len);
-    pbuf_free (p);
+    tcp_recved(tpcb, p->tot_len);
+    pbuf_free(p);
     return ERR_OK;
   }
 
   if (s->rx_q == NULL) {
     s->rx_q = p;
   } else {
-    pbuf_cat (s->rx_q, p);
+    pbuf_cat(s->rx_q, p);
   }
 
   return ERR_OK;
 }
 
-STATIC
-err_t
-TcpSentCb (
-  VOID            *arg,
-  struct tcp_pcb  *tpcb,
-  UINT16           len
-  )
+static err_t TcpSentCb(void *arg, struct tcp_pcb *tpcb, uint16_t len)
 {
-  (VOID)arg;
-  (VOID)tpcb;
-  (VOID)len;
+  (void)arg;
+  (void)tpcb;
+  (void)len;
   return ERR_OK;
 }
 
-STATIC
-VOID
-TcpErrCb (
-  VOID   *arg,
-  err_t   err
-  )
+static void TcpErrCb(void *arg, err_t err)
 {
-  msock_t  *s;
+  msock_t *s;
 
-  (VOID)err;
+  (void)err;
   s = (msock_t *)arg;
   if (s == NULL) {
     return;
@@ -1387,17 +1186,11 @@ TcpErrCb (
   s->recv_done = 1;
 }
 
-STATIC
-err_t
-TcpConnectedCb (
-  VOID            *arg,
-  struct tcp_pcb  *tpcb,
-  err_t            err
-  )
+static err_t TcpConnectedCb(void *arg, struct tcp_pcb *tpcb, err_t err)
 {
-  msock_t  *s;
+  msock_t *s;
 
-  (VOID)tpcb;
+  (void)tpcb;
   s = (msock_t *)arg;
   if (s == NULL) {
     return ERR_ARG;
@@ -1406,34 +1199,28 @@ TcpConnectedCb (
   s->conn_done = 1;
   s->conn_ok   = (err == ERR_OK) ? 1 : 0;
   if (err == ERR_OK) {
-    tcp_recv (tpcb, TcpRecvCb);
-    tcp_sent (tpcb, TcpSentCb);
+    tcp_recv(tpcb, TcpRecvCb);
+    tcp_sent(tpcb, TcpSentCb);
   }
 
   return ERR_OK;
 }
 
-STATIC
-err_t
-TcpAcceptCb (
-  VOID            *arg,
-  struct tcp_pcb  *newpcb,
-  err_t            err
-  )
+static err_t TcpAcceptCb(void *arg, struct tcp_pcb *newpcb, err_t err)
 {
-  msock_t  *s;
+  msock_t *s;
 
   s = (msock_t *)arg;
   if (s == NULL || err != ERR_OK || newpcb == NULL) {
     if (newpcb != NULL) {
-      tcp_abort (newpcb);
+      tcp_abort(newpcb);
     }
 
     return ERR_VAL;
   }
 
   if (s->accept_pcb != NULL) {
-    tcp_abort (newpcb);
+    tcp_abort(newpcb);
     return ERR_MEM;
   }
 
@@ -1441,78 +1228,71 @@ TcpAcceptCb (
   return ERR_OK;
 }
 
-STATIC
-VOID
-UdpRecvCb (
-  VOID            *arg,
-  struct udp_pcb  *pcb,
-  struct pbuf     *p,
-  CONST ip_addr_t *addr,
-  UINT16           port
-  )
+static void UdpRecvCb(
+  void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, uint16_t port)
 {
-  msock_t  *s;
+  msock_t *s;
 
-  (VOID)pcb;
-  (VOID)addr;
-  (VOID)port;
+  (void)pcb;
+  (void)addr;
+  (void)port;
   s = (msock_t *)arg;
   if (s == NULL || p == NULL) {
     if (p != NULL) {
-      pbuf_free (p);
+      pbuf_free(p);
     }
 
     return;
   }
 
   if (s->recv_buf != NULL && !s->recv_done) {
-    UINT16  n;
+    uint16_t n;
 
-    n = (UINT16)(s->recv_cap < p->tot_len ? s->recv_cap : p->tot_len);
-    pbuf_copy_partial (p, s->recv_buf, n, 0);
+    n = (uint16_t)(s->recv_cap < p->tot_len ? s->recv_cap : p->tot_len);
+    pbuf_copy_partial(p, s->recv_buf, n, 0);
     s->recv_got  = n;
     s->recv_done = 1;
-    pbuf_free (p);
+    pbuf_free(p);
     return;
   }
 
   if (s->rx_q == NULL) {
     s->rx_q = p;
   } else {
-    pbuf_cat (s->rx_q, p);
+    pbuf_cat(s->rx_q, p);
   }
 }
 
-STATIC
-pm_metal_status_t
-NetWaitFn (
-  pm_metal_coro_t  *self
-  )
+static pm_metal_status_t NetWaitStep(pm_metal_async_handle_t self_h)
 {
-  net_wait_t  *w;
-  msock_t     *s;
+  net_wait_t *w;
+  msock_t    *s;
 
-  w = (net_wait_t *)self;
+  w = (net_wait_t *)(uintptr_t)pm_metal_async_coro_state(self_h);
+  if (w == NULL) {
+    return PM_METAL_ERROR;
+  }
+
   if (w->kind == WAIT_DNS) {
     /*
      * Do not nest LwipPoll here — shell_poll already pumps net before
      * run_poll. Nested poll during dns_recv/timeouts is unsafe (NO_SYS).
      */
     if (w->dns_done) {
-      w->coro.result = (VOID *)(UINTN)(w->dns_ok ? 1u : 0u);
+      pm_metal_async_set_result_u32(self_h, w->dns_ok ? 1u : 0u);
       return w->dns_ok ? PM_METAL_DONE : PM_METAL_ERROR;
     }
 
-    if (pm_metal_time_mono_us () >= w->deadline) {
+    if (pm_metal_time_mono_us() >= w->deadline) {
       if (mDnsWait == w) {
         mDnsWait = NULL;
       }
 
-      w->coro.result = (VOID *)(UINTN)0u;
+      pm_metal_async_set_result_u32(self_h, 0u);
       return PM_METAL_ERROR;
     }
 
-    return pm_metal_await (self, pm_metal_sleep_us (2000));
+    return pm_metal_async_await(self_h, pm_metal_async_sleep_us(2000));
   }
 
   if (w->h == 0 || w->h > METAL_NET_MAX_SOCKS) {
@@ -1526,7 +1306,7 @@ NetWaitFn (
 
   if (w->kind == WAIT_CONNECT) {
     if (s->conn_done) {
-      w->coro.result = (VOID *)(UINTN)(s->conn_ok ? 1u : 0u);
+      pm_metal_async_set_result_u32(self_h, s->conn_ok ? 1u : 0u);
       return s->conn_ok ? PM_METAL_DONE : PM_METAL_ERROR;
     }
   } else if (w->kind == WAIT_RECV) {
@@ -1535,67 +1315,86 @@ NetWaitFn (
         return PM_METAL_ERROR;
       }
 
-      w->coro.result = (VOID *)(UINTN)s->recv_got;
+      pm_metal_async_set_result_u32(self_h, s->recv_got);
       return PM_METAL_DONE;
     }
 
     if (s->rx_q != NULL && s->recv_buf != NULL) {
-      UINT16  n;
+      uint16_t n;
 
-      n = (UINT16)(s->recv_cap < s->rx_q->tot_len ? s->recv_cap : s->rx_q->tot_len);
-      pbuf_copy_partial (s->rx_q, s->recv_buf, n, 0);
+      n = (uint16_t)(s->recv_cap < s->rx_q->tot_len ? s->recv_cap : s->rx_q->tot_len);
+      pbuf_copy_partial(s->rx_q, s->recv_buf, n, 0);
       s->recv_got = n;
       {
-        struct pbuf  *rest;
+        struct pbuf *rest;
 
-        rest = pbuf_free_header (s->rx_q, n);
+        rest    = pbuf_free_header(s->rx_q, n);
         s->rx_q = rest;
       }
       if (s->tcp != NULL) {
-        tcp_recved (s->tcp, n);
+        tcp_recved(s->tcp, n);
       }
 
       s->recv_done = 1;
-      w->coro.result = (VOID *)(UINTN)s->recv_got;
+      pm_metal_async_set_result_u32(self_h, s->recv_got);
       return PM_METAL_DONE;
     }
   } else if (w->kind == WAIT_ACCEPT) {
     if (w->accept_out != 0) {
-      w->coro.result = (VOID *)(UINTN)w->accept_out;
+      pm_metal_async_set_result_u32(self_h, (uint32_t)w->accept_out);
       return PM_METAL_DONE;
     }
 
-    w->accept_out = PromoteAcceptPcb (s);
+    w->accept_out = PromoteAcceptPcb(s);
     if (w->accept_out != 0) {
-      w->coro.result = (VOID *)(UINTN)w->accept_out;
+      pm_metal_async_set_result_u32(self_h, (uint32_t)w->accept_out);
       return PM_METAL_DONE;
     }
   }
 
-  if (pm_metal_time_mono_us () > w->deadline) {
+  if (pm_metal_time_mono_us() > w->deadline) {
     return PM_METAL_ERROR;
   }
 
-  return pm_metal_await (self, pm_metal_sleep_us (2000));
+  return pm_metal_async_await(self_h, pm_metal_async_sleep_us(2000));
 }
 
-STATIC
-pm_metal_status_t
-NetOkFn (
-  pm_metal_coro_t  *self
-  )
+static pm_metal_status_t NetOkStep(pm_metal_async_handle_t self_h)
 {
-  self->result = (VOID *)(UINTN)1u;
+  net_ok_t *st;
+
+  st = (net_ok_t *)(uintptr_t)pm_metal_async_coro_state(self_h);
+  if (st == NULL) {
+    return PM_METAL_ERROR;
+  }
+
+  pm_metal_async_set_result_u32(self_h, st->result);
   return PM_METAL_DONE;
 }
 
-STATIC
-pm_metal_net_sock_h
-PromoteAcceptPcb (
-  msock_t  *s
-  )
+static pm_metal_async_handle_t NetOkAsync(uint32_t result)
 {
-  UINT32  i;
+  pm_metal_async_handle_t h;
+  net_ok_t               *st;
+
+  h = pm_metal_async_coro_create(NetOkStep, sizeof(*st));
+  if (h == PM_METAL_ASYNC_HANDLE_INVALID) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  st = (net_ok_t *)(uintptr_t)pm_metal_async_coro_state(h);
+  if (st == NULL) {
+    pm_metal_async_coro_close(h);
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  st->result = result;
+  return h;
+}
+
+static pm_metal_net_sock_h PromoteAcceptPcb(msock_t *s)
+{
+  uint32_t i;
 
   if (s == NULL || s->accept_pcb == NULL) {
     return 0;
@@ -1606,27 +1405,23 @@ PromoteAcceptPcb (
       continue;
     }
 
-    SockClear (&mSocks[i]);
+    SockClear(&mSocks[i]);
     mSocks[i].used     = 1;
     mSocks[i].type     = PM_METAL_NET_SOCK_STREAM;
     mSocks[i].tcp      = s->accept_pcb;
     mSocks[i].bound_if = s->bound_if;
     s->accept_pcb      = NULL;
-    tcp_arg (mSocks[i].tcp, &mSocks[i]);
-    tcp_recv (mSocks[i].tcp, TcpRecvCb);
-    tcp_err (mSocks[i].tcp, TcpErrCb);
-    tcp_sent (mSocks[i].tcp, TcpSentCb);
+    tcp_arg(mSocks[i].tcp, &mSocks[i]);
+    tcp_recv(mSocks[i].tcp, TcpRecvCb);
+    tcp_err(mSocks[i].tcp, TcpErrCb);
+    tcp_sent(mSocks[i].tcp, TcpSentCb);
     return (pm_metal_net_sock_h)i;
   }
 
   return 0;
 }
 
-STATIC
-VOID
-DnsRemember (
-  CONST ip_addr_t  *ipaddr
-  )
+static void DnsRemember(const ip_addr_t *ipaddr)
 {
   if (ipaddr == NULL) {
     mLastDnsValid = 0;
@@ -1637,17 +1432,11 @@ DnsRemember (
   mLastDnsValid = 1;
 }
 
-STATIC
-VOID
-DnsFoundCb (
-  CONST CHAR8     *name,
-  CONST ip_addr_t *ipaddr,
-  VOID            *arg
-  )
+static void DnsFoundCb(const char *name, const ip_addr_t *ipaddr, void *arg)
 {
-  net_wait_t  *w;
+  net_wait_t *w;
 
-  (VOID)name;
+  (void)name;
   w = (net_wait_t *)arg;
   if (w == NULL) {
     return;
@@ -1657,7 +1446,7 @@ DnsFoundCb (
   if (ipaddr != NULL) {
     w->dns_addr = *ipaddr;
     w->dns_ok   = 1;
-    DnsRemember (ipaddr);
+    DnsRemember(ipaddr);
   } else {
     w->dns_ok     = 0;
     mLastDnsValid = 0;
@@ -1668,15 +1457,9 @@ DnsFoundCb (
   }
 }
 
-STATIC
-INT32
-StartTcpConnect (
-  msock_t          *s,
-  CONST ip_addr_t  *ip,
-  UINT16            port
-  )
+static int32_t StartTcpConnect(msock_t *s, const ip_addr_t *ip, uint16_t port)
 {
-  err_t  e;
+  err_t e;
 
   if (s->tcp == NULL) {
     return -1;
@@ -1684,23 +1467,17 @@ StartTcpConnect (
 
   s->conn_done = 0;
   s->conn_ok   = 0;
-  tcp_arg (s->tcp, s);
-  tcp_err (s->tcp, TcpErrCb);
-  e = tcp_connect (s->tcp, ip, port, TcpConnectedCb);
+  tcp_arg(s->tcp, s);
+  tcp_err(s->tcp, TcpErrCb);
+  e = tcp_connect(s->tcp, ip, port, TcpConnectedCb);
   return (e == ERR_OK) ? 0 : -1;
 }
 
-STATIC
-VOID
-DnsConnectFound (
-  CONST CHAR8     *name,
-  CONST ip_addr_t *ipaddr,
-  VOID            *arg
-  )
+static void DnsConnectFound(const char *name, const ip_addr_t *ipaddr, void *arg)
 {
-  msock_t  *s;
+  msock_t *s;
 
-  (VOID)name;
+  (void)name;
   s = (msock_t *)arg;
   if (s == NULL || !s->used) {
     return;
@@ -1714,26 +1491,22 @@ DnsConnectFound (
 
   s->remote      = *ipaddr;
   s->have_remote = 1;
-  if (StartTcpConnect (s, ipaddr, s->remote_port) != 0) {
+  if (StartTcpConnect(s, ipaddr, s->remote_port) != 0) {
     s->conn_done = 1;
     s->conn_ok   = 0;
   }
 }
 
-STATIC
-metal_net_iface_t *
-IfaceByName (
-  CONST CHAR8  *name
-  )
+static metal_net_iface_t *IfaceByName(const char *name)
 {
-  UINT32  i;
+  uint32_t i;
 
   if (name == NULL || name[0] == '\0') {
-    return IfaceDefault ();
+    return IfaceDefault();
   }
 
   for (i = 0; i < METAL_NET_MAX_IFACES; i++) {
-    if (mIfaces[i].used && AsciiStrCmp (mIfaces[i].name, name) == 0) {
+    if (mIfaces[i].used && strcmp(mIfaces[i].name, name) == 0) {
       return &mIfaces[i];
     }
   }
@@ -1741,17 +1514,12 @@ IfaceByName (
   return NULL;
 }
 
-STATIC
-metal_net_iface_t *
-IfaceDefault (
-  VOID
-  )
+static metal_net_iface_t *IfaceDefault(void)
 {
-  UINT32  i;
+  uint32_t i;
 
-  if (mDefaultIdx >= 0 && mDefaultIdx < (INT32)METAL_NET_MAX_IFACES
-      && mIfaces[mDefaultIdx].used)
-  {
+  if (mDefaultIdx >= 0 && mDefaultIdx < (int32_t)METAL_NET_MAX_IFACES &&
+      mIfaces[mDefaultIdx].used) {
     return &mIfaces[mDefaultIdx];
   }
 
@@ -1764,117 +1532,97 @@ IfaceDefault (
   return NULL;
 }
 
-STATIC
-INT32
-LwipEnsure (
-  VOID
-  )
+static int32_t LwipEnsure(void)
 {
-  TryLoadNetConf ();
-  TryLoadHosts ();
+  TryLoadNetConf();
+  TryLoadHosts();
   if (!mLwipInited) {
-    lwip_init ();
+    lwip_init();
     mLwipInited = 1;
   }
 
   return 0;
 }
 
-STATIC
-metal_net_iface_t *
-IfaceInitOne (
-  UINT32                   idx,
-  CONST CHAR8             *backend,
-  int                    (*open_fn)(uint8_t mac[6]),
-  const uint8_t *        (*mac_fn)(void),
-  int                    (*tx_fn)(const void *frame, uint32_t len),
-  pm_metal_net_l2_poll_fn   poll_fn
-  )
+static metal_net_iface_t *IfaceInitOne(uint32_t    idx,
+                                       const char *backend,
+                                       int (*open_fn)(uint8_t mac[6]),
+                                       const uint8_t *(*mac_fn)(void),
+                                       int (*tx_fn)(const void *frame, uint32_t len),
+                                       pm_metal_net_l2_poll_fn poll_fn)
 {
-  metal_net_iface_t  *mif;
-  ip4_addr_t          ip;
-  ip4_addr_t          nm;
-  ip4_addr_t          gw;
-  UINT8               hwmac[6];
+  metal_net_iface_t *mif;
+  ip4_addr_t         ip;
+  ip4_addr_t         nm;
+  ip4_addr_t         gw;
+  uint8_t            hwmac[6];
 
   if (idx >= METAL_NET_MAX_IFACES || backend == NULL) {
     return NULL;
   }
 
-  if (LwipEnsure () != 0) {
+  if (LwipEnsure() != 0) {
     return NULL;
   }
 
   mif = &mIfaces[idx];
-  ZeroMem (mif, sizeof (*mif));
-  AsciiSPrint (mif->name, sizeof (mif->name), "eth%u", mEthCount);
-  AsciiStrCpyS (mif->backend, sizeof (mif->backend), backend);
+  memset(mif, 0, sizeof(*mif));
+  snprintf(mif->name, sizeof(mif->name), "eth%u", mEthCount);
+  snprintf(mif->backend, sizeof(mif->backend), "%s", backend);
   mif->l2_open = open_fn;
   mif->l2_mac  = mac_fn;
   mif->l2_tx   = tx_fn;
   mif->l2_poll = poll_fn;
-  ApplyIfaceDefaults (mif, mEthCount);
+  ApplyIfaceDefaults(mif, mEthCount);
 
-  if (mif->l2_open == NULL || mif->l2_open (hwmac) != 0) {
+  if (mif->l2_open == NULL || mif->l2_open(hwmac) != 0) {
     return NULL;
   }
 
   if (mif->use_dhcp) {
-    IP4_ADDR (&ip, 0, 0, 0, 0);
-    IP4_ADDR (&nm, 0, 0, 0, 0);
-    IP4_ADDR (&gw, 0, 0, 0, 0);
-  } else if (ParseIpv4 (mif->ip, &ip) != 0 || ParseIpv4 (mif->mask, &nm) != 0
-             || ParseIpv4 (mif->gw, &gw) != 0)
-  {
+    IP4_ADDR(&ip, 0, 0, 0, 0);
+    IP4_ADDR(&nm, 0, 0, 0, 0);
+    IP4_ADDR(&gw, 0, 0, 0, 0);
+  } else if (ParseIpv4(mif->ip, &ip) != 0 || ParseIpv4(mif->mask, &nm) != 0 ||
+             ParseIpv4(mif->gw, &gw) != 0) {
     return NULL;
   }
 
-  if (netif_add (
-        &mif->netif,
-        &ip,
-        &nm,
-        &gw,
-        mif,
-        MetalNetifInit,
-        ethernet_input
-        ) == NULL)
-  {
+  if (netif_add(&mif->netif, &ip, &nm, &gw, mif, MetalNetifInit, ethernet_input) == NULL) {
     return NULL;
   }
 
   /* Prefer MAC from L2 open — MetalNetifInit also reads l2_mac(). */
-  CopyMem (mif->netif.hwaddr, hwmac, ETH_HWADDR_LEN);
-  netif_set_up (&mif->netif);
-  ApplyNetifHostname (mif);
+  memcpy(mif->netif.hwaddr, hwmac, ETH_HWADDR_LEN);
+  netif_set_up(&mif->netif);
+  ApplyNetifHostname(mif);
   /* First ethN wins default; always displace loopback. */
-  if (mDefaultIdx < 0
-      || (mIfaces[mDefaultIdx].used
-          && AsciiStrCmp (mIfaces[mDefaultIdx].backend, "loopback") == 0))
-  {
-    netif_set_default (&mif->netif);
-    mDefaultIdx = (INT32)idx;
+  if (mDefaultIdx < 0 ||
+      (mIfaces[mDefaultIdx].used && strcmp(mIfaces[mDefaultIdx].backend, "loopback") == 0)) {
+    netif_set_default(&mif->netif);
+    mDefaultIdx = (int32_t)idx;
   }
 
 #if LWIP_IPV6
-  netif_create_ip6_linklocal_address (&mif->netif, 1);
+  netif_create_ip6_linklocal_address(&mif->netif, 1);
 #endif
 #if LWIP_IPV6_DHCP6
   if (mif->dhcp6_mode != PM_METAL_NET_DHCP6_OFF) {
-    if (StartIfaceDhcp6 (mif) != 0) {
+    if (StartIfaceDhcp6(mif) != 0) {
       return NULL;
     }
   }
 #endif
 #if LWIP_DHCP
   if (mif->use_dhcp) {
-    if (dhcp_start (&mif->netif) != ERR_OK) {
+    if (dhcp_start(&mif->netif) != ERR_OK) {
       return NULL;
     }
   } else {
-    ApplyDnsServer (mif);
+    ApplyDnsServer(mif);
   }
 #else
-  ApplyDnsServer (mif);
+  ApplyDnsServer(mif);
 #endif
 
   mif->used = 1;
@@ -1883,24 +1631,16 @@ IfaceInitOne (
   return mif;
 }
 
-STATIC
-int
-LwipInit (
-  VOID
-  )
+static int LwipInit(void)
 {
-  return METAL_NET_READY () ? 0 : -1;
+  return METAL_NET_READY() ? 0 : -1;
 }
 
-STATIC
-VOID
-LwipPoll (
-  VOID
-  )
+static void LwipPoll(void)
 {
-  UINT32  i;
+  uint32_t i;
 
-  if (!METAL_NET_READY ()) {
+  if (!METAL_NET_READY()) {
     return;
   }
 
@@ -1909,35 +1649,30 @@ LwipPoll (
       continue;
     }
 
-    mIfaces[i].l2_poll (MetalOnFrame, &mIfaces[i]);
+    mIfaces[i].l2_poll(MetalOnFrame, &mIfaces[i]);
   }
 
 #if !LWIP_NETIF_LOOPBACK_MULTITHREADING
-  netif_poll_all ();
+  netif_poll_all();
 #endif
-  sys_check_timeouts ();
+  sys_check_timeouts();
   for (i = 0; i < METAL_NET_MAX_IFACES; i++) {
     if (mIfaces[i].used) {
 #if LWIP_IPV6_DHCP6
       if (mIfaces[i].dhcp6_mode == PM_METAL_NET_DHCP6_STATEFUL) {
-        metal_dhcp6_stateful_poll (&mIfaces[i].netif, &mIfaces[i].dhcp6_sf);
+        metal_dhcp6_stateful_poll(&mIfaces[i].netif, &mIfaces[i].dhcp6_sf);
       }
 #endif
-      SyncIfaceCfg (&mIfaces[i]);
+      SyncIfaceCfg(&mIfaces[i]);
     }
   }
 }
 
-STATIC
-pm_metal_net_sock_h
-LwipSocket (
-  UINT32  domain,
-  UINT32  type
-  )
+static pm_metal_net_sock_h LwipSocket(uint32_t domain, uint32_t type)
 {
-  UINT32  i;
+  uint32_t i;
 
-  if (!METAL_NET_READY ()) {
+  if (!METAL_NET_READY()) {
     return PM_METAL_NET_SOCK_INVALID;
   }
 
@@ -1950,32 +1685,30 @@ LwipSocket (
       continue;
     }
 
-    SockClear (&mSocks[i]);
+    SockClear(&mSocks[i]);
     mSocks[i].used   = 1;
     mSocks[i].domain = domain;
     mSocks[i].type   = type;
     if (type == PM_METAL_NET_SOCK_STREAM) {
-      mSocks[i].tcp = tcp_new_ip_type (
-                        domain == PM_METAL_NET_AF_INET6 ? IPADDR_TYPE_V6
-                                                        : IPADDR_TYPE_V4
-                        );
+      mSocks[i].tcp =
+        tcp_new_ip_type(domain == PM_METAL_NET_AF_INET6 ? IPADDR_TYPE_V6 : IPADDR_TYPE_V4);
       if (mSocks[i].tcp == NULL) {
-        SockClear (&mSocks[i]);
+        SockClear(&mSocks[i]);
         return PM_METAL_NET_SOCK_INVALID;
       }
 
-      tcp_arg (mSocks[i].tcp, &mSocks[i]);
-      tcp_err (mSocks[i].tcp, TcpErrCb);
+      tcp_arg(mSocks[i].tcp, &mSocks[i]);
+      tcp_err(mSocks[i].tcp, TcpErrCb);
     } else if (type == PM_METAL_NET_SOCK_DGRAM) {
-      mSocks[i].udp = udp_new ();
+      mSocks[i].udp = udp_new();
       if (mSocks[i].udp == NULL) {
-        SockClear (&mSocks[i]);
+        SockClear(&mSocks[i]);
         return PM_METAL_NET_SOCK_INVALID;
       }
 
-      udp_recv (mSocks[i].udp, UdpRecvCb, &mSocks[i]);
+      udp_recv(mSocks[i].udp, UdpRecvCb, &mSocks[i]);
     } else {
-      SockClear (&mSocks[i]);
+      SockClear(&mSocks[i]);
       return PM_METAL_NET_SOCK_INVALID;
     }
 
@@ -1985,13 +1718,9 @@ LwipSocket (
   return PM_METAL_NET_SOCK_INVALID;
 }
 
-STATIC
-VOID
-LwipClose (
-  pm_metal_net_sock_h  h
-  )
+static void LwipClose(pm_metal_net_sock_h h)
 {
-  msock_t  *s;
+  msock_t *s;
 
   if (h == 0 || h > METAL_NET_MAX_SOCKS) {
     return;
@@ -2003,40 +1732,34 @@ LwipClose (
   }
 
   if (s->tcp != NULL) {
-    tcp_arg (s->tcp, NULL);
-    tcp_recv (s->tcp, NULL);
-    tcp_err (s->tcp, NULL);
-    (VOID)tcp_close (s->tcp);
+    tcp_arg(s->tcp, NULL);
+    tcp_recv(s->tcp, NULL);
+    tcp_err(s->tcp, NULL);
+    (void)tcp_close(s->tcp);
     s->tcp = NULL;
   }
 
   if (s->udp != NULL) {
-    udp_remove (s->udp);
+    udp_remove(s->udp);
     s->udp = NULL;
   }
 
   if (s->accept_pcb != NULL) {
-    tcp_abort (s->accept_pcb);
+    tcp_abort(s->accept_pcb);
     s->accept_pcb = NULL;
   }
 
-  SockClear (s);
+  SockClear(s);
 }
 
-STATIC
-pm_metal_async_handle_t
-LwipConnect (
-  pm_metal_net_sock_h  h,
-  CONST CHAR8         *host,
-  UINT32               port
-  )
+static pm_metal_async_handle_t LwipConnect(pm_metal_net_sock_h h, const char *host, uint32_t port)
 {
-  msock_t      *s;
-  net_wait_t   *w;
-  ip_addr_t     addr;
-  err_t         e;
+  msock_t    *s;
+  net_wait_t *w;
+  ip_addr_t   addr;
+  err_t       e;
 
-  if (h == 0 || h > METAL_NET_MAX_SOCKS || host == NULL || !METAL_NET_READY ()) {
+  if (h == 0 || h > METAL_NET_MAX_SOCKS || host == NULL || !METAL_NET_READY()) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
@@ -2045,25 +1768,16 @@ LwipConnect (
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  s->remote_port = (UINT16)port;
+  s->remote_port = (uint16_t)port;
 
   if (s->type == PM_METAL_NET_SOCK_DGRAM) {
-    if (ParseHostAddr (host, &addr) != 0) {
+    if (ParseHostAddr(host, &addr) != 0) {
       return PM_METAL_ASYNC_HANDLE_INVALID;
     }
 
     s->remote      = addr;
     s->have_remote = 1;
-    {
-      pm_metal_coro_t  *c;
-
-      c = pm_metal_coro (NetOkFn, sizeof (*c));
-      if (c == NULL) {
-        return PM_METAL_ASYNC_HANDLE_INVALID;
-      }
-
-      return pm_metal_async_adopt_host_coro (c);
-    }
+    return NetOkAsync(1u);
   }
 
   if (s->tcp == NULL) {
@@ -2071,20 +1785,20 @@ LwipConnect (
   }
 
   {
-    if (ParseHostAddr (host, &addr) == 0) {
+    if (ParseHostAddr(host, &addr) == 0) {
       s->remote      = addr;
       s->have_remote = 1;
-      if (StartTcpConnect (s, &addr, (UINT16)port) != 0) {
+      if (StartTcpConnect(s, &addr, (uint16_t)port) != 0) {
         return PM_METAL_ASYNC_HANDLE_INVALID;
       }
     } else {
       s->conn_done = 0;
       s->conn_ok   = 0;
-      e = dns_gethostbyname (host, &addr, DnsConnectFound, s);
+      e            = dns_gethostbyname(host, &addr, DnsConnectFound, s);
       if (e == ERR_OK) {
         s->remote      = addr;
         s->have_remote = 1;
-        if (StartTcpConnect (s, &addr, (UINT16)port) != 0) {
+        if (StartTcpConnect(s, &addr, (uint16_t)port) != 0) {
           return PM_METAL_ASYNC_HANDLE_INVALID;
         }
       } else if (e != ERR_INPROGRESS) {
@@ -2093,29 +1807,33 @@ LwipConnect (
     }
   }
 
-  w = (net_wait_t *)pm_metal_coro (NetWaitFn, sizeof (*w));
-  if (w == NULL) {
-    return PM_METAL_ASYNC_HANDLE_INVALID;
-  }
+  {
+    pm_metal_async_handle_t ah;
 
-  w->kind     = WAIT_CONNECT;
-  w->h        = h;
-  w->deadline = pm_metal_time_mono_us () + 10000000ull;
-  return pm_metal_async_adopt_host_coro (&w->coro);
+    ah = pm_metal_async_coro_create(NetWaitStep, sizeof(*w));
+    if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
+      return PM_METAL_ASYNC_HANDLE_INVALID;
+    }
+
+    w = (net_wait_t *)(uintptr_t)pm_metal_async_coro_state(ah);
+    if (w == NULL) {
+      pm_metal_async_coro_close(ah);
+      return PM_METAL_ASYNC_HANDLE_INVALID;
+    }
+
+    w->kind     = WAIT_CONNECT;
+    w->h        = h;
+    w->deadline = pm_metal_time_mono_us() + 10000000ull;
+    return ah;
+  }
 }
 
-STATIC
-pm_metal_async_handle_t
-LwipListen (
-  pm_metal_net_sock_h  h,
-  UINT32               port
-  )
+static pm_metal_async_handle_t LwipListen(pm_metal_net_sock_h h, uint32_t port)
 {
-  msock_t          *s;
-  struct tcp_pcb   *l;
-  pm_metal_coro_t  *c;
+  msock_t        *s;
+  struct tcp_pcb *l;
 
-  if (h == 0 || h > METAL_NET_MAX_SOCKS || !METAL_NET_READY ()) {
+  if (h == 0 || h > METAL_NET_MAX_SOCKS || !METAL_NET_READY()) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
@@ -2124,38 +1842,29 @@ LwipListen (
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  if (tcp_bind (s->tcp, IP_ANY_TYPE, (UINT16)port) != ERR_OK) {
+  if (tcp_bind(s->tcp, IP_ANY_TYPE, (uint16_t)port) != ERR_OK) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  l = tcp_listen (s->tcp);
+  l = tcp_listen(s->tcp);
   if (l == NULL) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
   s->tcp       = l;
   s->listening = 1;
-  tcp_arg (l, s);
-  tcp_accept (l, TcpAcceptCb);
+  tcp_arg(l, s);
+  tcp_accept(l, TcpAcceptCb);
 
-  c = pm_metal_coro (NetOkFn, sizeof (*c));
-  if (c == NULL) {
-    return PM_METAL_ASYNC_HANDLE_INVALID;
-  }
-
-  return pm_metal_async_adopt_host_coro (c);
+  return NetOkAsync(1u);
 }
 
-STATIC
-pm_metal_async_handle_t
-LwipAccept (
-  pm_metal_net_sock_h  h
-  )
+static pm_metal_async_handle_t LwipAccept(pm_metal_net_sock_h h)
 {
-  msock_t          *s;
-  net_wait_t       *w;
-  pm_metal_net_sock_h  nh;
-  pm_metal_coro_t  *c;
+  msock_t                *s;
+  net_wait_t             *w;
+  pm_metal_net_sock_h     nh;
+  pm_metal_async_handle_t ah;
 
   if (h == 0 || h > METAL_NET_MAX_SOCKS) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
@@ -2166,40 +1875,34 @@ LwipAccept (
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  nh = PromoteAcceptPcb (s);
+  nh = PromoteAcceptPcb(s);
   if (nh != 0) {
-    c = pm_metal_coro (NetOkFn, sizeof (*c));
-    if (c == NULL) {
-      return PM_METAL_ASYNC_HANDLE_INVALID;
-    }
-
-    c->result = (VOID *)(UINTN)nh;
-    return pm_metal_async_adopt_host_coro (c);
+    return NetOkAsync((uint32_t)nh);
   }
 
-  w = (net_wait_t *)pm_metal_coro (NetWaitFn, sizeof (*w));
+  ah = pm_metal_async_coro_create(NetWaitStep, sizeof(*w));
+  if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  w = (net_wait_t *)(uintptr_t)pm_metal_async_coro_state(ah);
   if (w == NULL) {
+    pm_metal_async_coro_close(ah);
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
   w->kind       = WAIT_ACCEPT;
   w->h          = h;
   w->accept_out = 0;
-  w->deadline   = pm_metal_time_mono_us () + 30000000ull;
-  return pm_metal_async_adopt_host_coro (&w->coro);
+  w->deadline   = pm_metal_time_mono_us() + 30000000ull;
+  return ah;
 }
 
-STATIC
-UINT32
-LwipSend (
-  pm_metal_net_sock_h  h,
-  CONST VOID          *ptr,
-  UINT32               len
-  )
+static uint32_t LwipSend(pm_metal_net_sock_h h, const void *ptr, uint32_t len)
 {
-  msock_t  *s;
-  err_t     e;
-  UINT16    n;
+  msock_t *s;
+  err_t    e;
+  uint16_t n;
 
   if (h == 0 || h > METAL_NET_MAX_SOCKS || ptr == NULL || len == 0) {
     return 0;
@@ -2215,21 +1918,21 @@ LwipSend (
       return 0;
     }
 
-    n = (UINT16)(len > 0xffffu ? 0xffffu : len);
-    if (tcp_sndbuf (s->tcp) < n) {
-      n = tcp_sndbuf (s->tcp);
+    n = (uint16_t)(len > 0xffffu ? 0xffffu : len);
+    if (tcp_sndbuf(s->tcp) < n) {
+      n = tcp_sndbuf(s->tcp);
     }
 
     if (n == 0) {
       return 0;
     }
 
-    e = tcp_write (s->tcp, ptr, n, TCP_WRITE_FLAG_COPY);
+    e = tcp_write(s->tcp, ptr, n, TCP_WRITE_FLAG_COPY);
     if (e != ERR_OK) {
       return 0;
     }
 
-    (VOID)tcp_output (s->tcp);
+    (void)tcp_output(s->tcp);
     return n;
   }
 
@@ -2238,31 +1941,25 @@ LwipSend (
   }
 
   {
-    struct pbuf  *p;
+    struct pbuf *p;
 
-    n = (UINT16)(len > 0xffffu ? 0xffffu : len);
-    p = pbuf_alloc (PBUF_TRANSPORT, n, PBUF_RAM);
+    n = (uint16_t)(len > 0xffffu ? 0xffffu : len);
+    p = pbuf_alloc(PBUF_TRANSPORT, n, PBUF_RAM);
     if (p == NULL) {
       return 0;
     }
 
-    CopyMem (p->payload, ptr, n);
-    e = udp_sendto (s->udp, p, &s->remote, s->remote_port);
-    pbuf_free (p);
+    memcpy(p->payload, ptr, n);
+    e = udp_sendto(s->udp, p, &s->remote, s->remote_port);
+    pbuf_free(p);
     return (e == ERR_OK) ? n : 0;
   }
 }
 
-STATIC
-pm_metal_async_handle_t
-LwipRecv (
-  pm_metal_net_sock_h  h,
-  VOID                *ptr,
-  UINT32               len
-  )
+static pm_metal_async_handle_t LwipRecv(pm_metal_net_sock_h h, void *ptr, uint32_t len)
 {
-  msock_t     *s;
-  net_wait_t  *w;
+  msock_t    *s;
+  net_wait_t *w;
 
   if (h == 0 || h > METAL_NET_MAX_SOCKS || ptr == NULL || len == 0) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
@@ -2280,107 +1977,102 @@ LwipRecv (
   s->recv_err  = 0;
 
   if (s->rx_q != NULL) {
-    UINT16  n;
+    uint16_t n;
 
-    n = (UINT16)(len < s->rx_q->tot_len ? len : s->rx_q->tot_len);
-    pbuf_copy_partial (s->rx_q, ptr, n, 0);
+    n = (uint16_t)(len < s->rx_q->tot_len ? len : s->rx_q->tot_len);
+    pbuf_copy_partial(s->rx_q, ptr, n, 0);
     s->recv_got  = n;
     s->recv_done = 1;
-    s->rx_q      = pbuf_free_header (s->rx_q, n);
+    s->rx_q      = pbuf_free_header(s->rx_q, n);
     if (s->tcp != NULL) {
-      tcp_recved (s->tcp, n);
+      tcp_recved(s->tcp, n);
     }
   }
 
-  w = (net_wait_t *)pm_metal_coro (NetWaitFn, sizeof (*w));
-  if (w == NULL) {
-    return PM_METAL_ASYNC_HANDLE_INVALID;
-  }
+  {
+    pm_metal_async_handle_t ah;
 
-  w->kind     = WAIT_RECV;
-  w->h        = h;
-  w->deadline = pm_metal_time_mono_us () + 30000000ull;
-  return pm_metal_async_adopt_host_coro (&w->coro);
+    ah = pm_metal_async_coro_create(NetWaitStep, sizeof(*w));
+    if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
+      return PM_METAL_ASYNC_HANDLE_INVALID;
+    }
+
+    w = (net_wait_t *)(uintptr_t)pm_metal_async_coro_state(ah);
+    if (w == NULL) {
+      pm_metal_async_coro_close(ah);
+      return PM_METAL_ASYNC_HANDLE_INVALID;
+    }
+
+    w->kind     = WAIT_RECV;
+    w->h        = h;
+    w->deadline = pm_metal_time_mono_us() + 30000000ull;
+    return ah;
+  }
 }
 
-STATIC
-pm_metal_async_handle_t
-LwipDns (
-  CONST CHAR8  *host
-  )
+static pm_metal_async_handle_t LwipDns(const char *host)
 {
-  net_wait_t  *w;
-  ip_addr_t    addr;
-  err_t        e;
+  net_wait_t             *w;
+  ip_addr_t               addr;
+  err_t                   e;
+  pm_metal_async_handle_t ah;
 
-  if (host == NULL || !METAL_NET_READY ()) {
+  if (host == NULL || !METAL_NET_READY()) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
   {
-    ip_addr_t  local;
+    ip_addr_t local;
 
-    if (ParseHostAddr (host, &local) == 0) {
-      pm_metal_coro_t  *c;
-
-      c = pm_metal_coro (NetOkFn, sizeof (*c));
-      if (c == NULL) {
-        return PM_METAL_ASYNC_HANDLE_INVALID;
-      }
-
-      DnsRemember (&local);
-      return pm_metal_async_adopt_host_coro (c);
+    if (ParseHostAddr(host, &local) == 0) {
+      DnsRemember(&local);
+      return NetOkAsync(1u);
     }
   }
 
-  EnsureDnsServers (IfaceDefault ());
+  EnsureDnsServers(IfaceDefault());
 
-  w = (net_wait_t *)pm_metal_coro (NetWaitFn, sizeof (*w));
+  ah = pm_metal_async_coro_create(NetWaitStep, sizeof(*w));
+  if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  w = (net_wait_t *)(uintptr_t)pm_metal_async_coro_state(ah);
   if (w == NULL) {
+    pm_metal_async_coro_close(ah);
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
   w->kind       = WAIT_DNS;
   w->h          = 0;
-  w->deadline   = pm_metal_time_mono_us () + 8000000ull;
+  w->deadline   = pm_metal_time_mono_us() + 8000000ull;
   w->dns_done   = 0;
   w->dns_ok     = 0;
   mDnsWait      = w;
   mLastDnsValid = 0;
 
   /* IPv4-only: QEMU user-net DNS is IPv4; AAAA-first just burns retries. */
-  e = dns_gethostbyname_addrtype (
-        host,
-        &addr,
-        DnsFoundCb,
-        w,
-        LWIP_DNS_ADDRTYPE_IPV4
-        );
+  e = dns_gethostbyname_addrtype(host, &addr, DnsFoundCb, w, LWIP_DNS_ADDRTYPE_IPV4);
   if (e == ERR_OK) {
     w->dns_done = 1;
     w->dns_ok   = 1;
     w->dns_addr = addr;
     mDnsWait    = NULL;
-    DnsRemember (&addr);
+    DnsRemember(&addr);
   } else if (e != ERR_INPROGRESS) {
     mDnsWait = NULL;
-    pm_metal_coro_close (&w->coro);
+    pm_metal_async_coro_close(ah);
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  return pm_metal_async_adopt_host_coro (&w->coro);
+  return ah;
 }
 
-STATIC
-INT32
-LwipBindIf (
-  pm_metal_net_sock_h  h,
-  CONST CHAR8         *name
-  )
+static int32_t LwipBindIf(pm_metal_net_sock_h h, const char *name)
 {
-  msock_t             *s;
-  metal_net_iface_t   *mif;
-  INT32                idx;
+  msock_t           *s;
+  metal_net_iface_t *mif;
+  int32_t            idx;
 
   if (h == 0 || h > METAL_NET_MAX_SOCKS) {
     return -1;
@@ -2391,85 +2083,64 @@ LwipBindIf (
     return -1;
   }
 
-  mif = IfaceByName (name);
+  mif = IfaceByName(name);
   if (mif == NULL) {
     return -1;
   }
 
-  idx = (INT32)(mif - mIfaces);
+  idx = (int32_t)(mif - mIfaces);
   if (idx < 0 || idx >= METAL_NET_MAX_IFACES) {
     return -1;
   }
 
   s->bound_if = idx;
   if (s->tcp != NULL) {
-    tcp_bind_netif (s->tcp, &mif->netif);
+    tcp_bind_netif(s->tcp, &mif->netif);
   }
 
   if (s->udp != NULL) {
-    udp_bind_netif (s->udp, &mif->netif);
+    udp_bind_netif(s->udp, &mif->netif);
   }
 
   return 0;
 }
 
-STATIC CONST pm_metal_net_ops_t  mLwipOps = {
-  "lwip",
-  LwipInit,
-  LwipPoll,
-  LwipSocket,
-  LwipClose,
-  LwipConnect,
-  LwipListen,
-  LwipAccept,
-  LwipSend,
-  LwipRecv,
-  LwipDns,
-  LwipBindIf
-};
+static const pm_metal_net_ops_t mLwipOps = { "lwip",    LwipInit,    LwipPoll,   LwipSocket,
+                                             LwipClose, LwipConnect, LwipListen, LwipAccept,
+                                             LwipSend,  LwipRecv,    LwipDns,    LwipBindIf };
 
-int
-pm_metal_net_virtio_detect (
-  VOID
-  )
+int pm_metal_net_virtio_detect(void)
 {
-  if (pm_metal_virtio_find (PM_METAL_VIRTIO_DEV_NET) != 0
-      && pm_metal_virtio_find (PM_METAL_VIRTIO_DEV_NET_LEGACY) != 0)
-  {
+  if (pm_metal_virtio_find(PM_METAL_VIRTIO_DEV_NET) != 0 &&
+      pm_metal_virtio_find(PM_METAL_VIRTIO_DEV_NET_LEGACY) != 0) {
     return -1;
   }
 
   {
-    STATIC pm_metal_io_node_t  Node = {
-      .class = PM_METAL_IO_NET,
-      .compat = "lwip+virtio-net",
-      .caps = 1,
-      .bus = PM_METAL_IO_BUS_PCI
+    static pm_metal_io_node_t Node = {
+      .class = PM_METAL_IO_NET, .compat = "lwip+virtio-net", .caps = 1, .bus = PM_METAL_IO_BUS_PCI
     };
 
-    (VOID)pm_metal_io_dt_add (&Node);
+    (void)pm_metal_io_dt_add(&Node);
   }
   return 0;
 }
 
-int
-pm_metal_net_lwip_start_with_l2 (
-  CONST CHAR8                *backend,
-  int (*open_fn)(uint8_t mac_out[6]),
-  const uint8_t *(*mac_fn)(void),
-  int (*tx_fn)(const void *frame, uint32_t len),
-  pm_metal_net_l2_poll_fn     poll_fn
-  )
+int pm_metal_net_lwip_start_with_l2(const char *backend,
+                                    int (*open_fn)(uint8_t mac_out[6]),
+                                    const uint8_t *(*mac_fn)(void),
+                                    int (*tx_fn)(const void *frame, uint32_t len),
+                                    pm_metal_net_l2_poll_fn poll_fn)
 {
-  UINT32              i;
-  metal_net_iface_t  *mif;
+  uint32_t           i;
+  metal_net_iface_t *mif;
 
   if (backend == NULL) {
     return -1;
   }
 
   for (i = 0; i < METAL_NET_MAX_IFACES; i++) {
-    if (mIfaces[i].used && AsciiStrCmp (mIfaces[i].backend, backend) == 0) {
+    if (mIfaces[i].used && strcmp(mIfaces[i].backend, backend) == 0) {
       return 0;
     }
   }
@@ -2484,53 +2155,38 @@ pm_metal_net_lwip_start_with_l2 (
     return -1;
   }
 
-  mif = IfaceInitOne (
-          i,
-          backend,
-          open_fn,
-          mac_fn,
-          tx_fn,
-          poll_fn
-          );
+  mif = IfaceInitOne(i, backend, open_fn, mac_fn, tx_fn, poll_fn);
   if (mif == NULL) {
     return -1;
   }
 
   if (!mOpsRegistered) {
-    pm_metal_net_set_ops (&mLwipOps);
+    pm_metal_net_set_ops(&mLwipOps);
     mOpsRegistered = 1;
   }
 
   return 0;
 }
 
-int
-pm_metal_net_virtio_start (
-  VOID
-  )
+int pm_metal_net_virtio_start(void)
 {
-  return pm_metal_net_lwip_start_with_l2 (
-           "lwip+virtio-net",
-           pm_metal_virtio_netif_open,
-           pm_metal_virtio_netif_mac,
-           pm_metal_virtio_netif_tx,
-           (pm_metal_net_l2_poll_fn)pm_metal_virtio_netif_poll
-           );
+  return pm_metal_net_lwip_start_with_l2("lwip+virtio-net",
+                                         pm_metal_virtio_netif_open,
+                                         pm_metal_virtio_netif_mac,
+                                         pm_metal_virtio_netif_tx,
+                                         (pm_metal_net_l2_poll_fn)pm_metal_virtio_netif_poll);
 }
 
-int
-pm_metal_net_loopback_start (
-  VOID
-  )
+int pm_metal_net_loopback_start(void)
 {
-  UINT32              i;
-  metal_net_iface_t  *mif;
-  ip4_addr_t          ip;
-  ip4_addr_t          nm;
-  ip4_addr_t          gw;
+  uint32_t           i;
+  metal_net_iface_t *mif;
+  ip4_addr_t         ip;
+  ip4_addr_t         nm;
+  ip4_addr_t         gw;
 
   for (i = 0; i < METAL_NET_MAX_IFACES; i++) {
-    if (mIfaces[i].used && AsciiStrCmp (mIfaces[i].name, "lo") == 0) {
+    if (mIfaces[i].used && strcmp(mIfaces[i].name, "lo") == 0) {
       return 0;
     }
   }
@@ -2545,156 +2201,124 @@ pm_metal_net_loopback_start (
     return -1;
   }
 
-  if (LwipEnsure () != 0) {
+  if (LwipEnsure() != 0) {
     return -1;
   }
 
   mif = &mIfaces[i];
-  ZeroMem (mif, sizeof (*mif));
-  AsciiStrCpyS (mif->name, sizeof (mif->name), "lo");
-  AsciiStrCpyS (mif->backend, sizeof (mif->backend), "loopback");
-  AsciiStrCpyS (mif->ip, sizeof (mif->ip), "127.0.0.1");
-  AsciiStrCpyS (mif->mask, sizeof (mif->mask), "255.0.0.0");
-  AsciiStrCpyS (mif->gw, sizeof (mif->gw), "127.0.0.1");
+  memset(mif, 0, sizeof(*mif));
+  snprintf(mif->name, sizeof(mif->name), "%s", "lo");
+  snprintf(mif->backend, sizeof(mif->backend), "%s", "loopback");
+  snprintf(mif->ip, sizeof(mif->ip), "%s", "127.0.0.1");
+  snprintf(mif->mask, sizeof(mif->mask), "%s", "255.0.0.0");
+  snprintf(mif->gw, sizeof(mif->gw), "%s", "127.0.0.1");
   mif->use_dhcp   = 0;
   mif->dhcp6_mode = PM_METAL_NET_DHCP6_OFF;
 
-  IP4_ADDR (&ip, 127, 0, 0, 1);
-  IP4_ADDR (&nm, 255, 0, 0, 0);
-  IP4_ADDR (&gw, 127, 0, 0, 1);
+  IP4_ADDR(&ip, 127, 0, 0, 1);
+  IP4_ADDR(&nm, 255, 0, 0, 0);
+  IP4_ADDR(&gw, 127, 0, 0, 1);
 
-  if (netif_add (
-        &mif->netif,
-        &ip,
-        &nm,
-        &gw,
-        mif,
-        MetalLoopNetifInit,
-        ip_input
-        ) == NULL)
-  {
+  if (netif_add(&mif->netif, &ip, &nm, &gw, mif, MetalLoopNetifInit, ip_input) == NULL) {
     return -1;
   }
 
-  netif_set_link_up (&mif->netif);
-  netif_set_up (&mif->netif);
+  netif_set_link_up(&mif->netif);
+  netif_set_up(&mif->netif);
 #if LWIP_IPV6
-  IP_ADDR6_HOST (mif->netif.ip6_addr, 0, 0, 0, 0x00000001UL);
+  IP_ADDR6_HOST(mif->netif.ip6_addr, 0, 0, 0, 0x00000001UL);
   mif->netif.ip6_addr_state[0] = IP6_ADDR_VALID;
 #endif
 
   if (mDefaultIdx < 0) {
-    netif_set_default (&mif->netif);
-    mDefaultIdx = (INT32)i;
+    netif_set_default(&mif->netif);
+    mDefaultIdx = (int32_t)i;
   }
 
   mif->used = 1;
   mIfaceCount++;
-  SyncIfaceCfg (mif);
+  SyncIfaceCfg(mif);
 
   if (!mOpsRegistered) {
-    pm_metal_net_set_ops (&mLwipOps);
+    pm_metal_net_set_ops(&mLwipOps);
     mOpsRegistered = 1;
   }
 
   return 0;
 }
 
-int
-pm_metal_net_bge_detect (
-  VOID
-  )
+int pm_metal_net_bge_detect(void)
 {
-  if (pm_metal_bge_netif_detect () != 0) {
+  if (pm_metal_bge_netif_detect() != 0) {
     return -1;
   }
 
   {
-    STATIC pm_metal_io_node_t  Node = {
-      .class = PM_METAL_IO_NET,
-      .compat = "lwip+bge",
-      .caps = 1,
-      .bus = PM_METAL_IO_BUS_PCI
+    static pm_metal_io_node_t Node = {
+      .class = PM_METAL_IO_NET, .compat = "lwip+bge", .caps = 1, .bus = PM_METAL_IO_BUS_PCI
     };
 
-    (VOID)pm_metal_io_dt_add (&Node);
+    (void)pm_metal_io_dt_add(&Node);
   }
   return 0;
 }
 
-int
-pm_metal_net_bge_start (
-  VOID
-  )
+int pm_metal_net_bge_start(void)
 {
-  return pm_metal_net_lwip_start_with_l2 (
-           "lwip+bge",
-           pm_metal_bge_netif_open,
-           pm_metal_bge_netif_mac,
-           pm_metal_bge_netif_tx,
-           (pm_metal_net_l2_poll_fn)pm_metal_bge_netif_poll
-           );
+  return pm_metal_net_lwip_start_with_l2("lwip+bge",
+                                         pm_metal_bge_netif_open,
+                                         pm_metal_bge_netif_mac,
+                                         pm_metal_bge_netif_tx,
+                                         (pm_metal_net_l2_poll_fn)pm_metal_bge_netif_poll);
 }
 
-int
-pm_metal_net_virtio_probe (
-  VOID
-  )
+int pm_metal_net_virtio_probe(void)
 {
-  if (pm_metal_net_virtio_detect () != 0) {
+  if (pm_metal_net_virtio_detect() != 0) {
     return -1;
   }
 
-  return pm_metal_net_virtio_start ();
+  return pm_metal_net_virtio_start();
 }
 
-STATIC
-VOID
-FillIfcfg (
-  metal_net_iface_t     *mif,
-  pm_metal_net_ifcfg_t  *out
-  )
+static void FillIfcfg(metal_net_iface_t *mif, pm_metal_net_ifcfg_t *out)
 {
-  CONST UINT8  *mac;
+  const uint8_t *mac;
 
   if (mif == NULL || out == NULL || !mif->used) {
     return;
   }
 
-  SyncIfaceCfg (mif);
-  ZeroMem (out, sizeof (*out));
-  AsciiStrCpyS (out->name, sizeof (out->name), mif->name);
-  AsciiStrCpyS (out->ip, sizeof (out->ip), mif->ip);
-  AsciiStrCpyS (out->mask, sizeof (out->mask), mif->mask);
-  AsciiStrCpyS (out->gw, sizeof (out->gw), mif->gw);
-  AsciiStrCpyS (out->dns, sizeof (out->dns), mif->dns);
-  AsciiStrCpyS (out->ntp, sizeof (out->ntp), mif->ntp);
-  AsciiStrCpyS (out->tftp, sizeof (out->tftp), mif->tftp);
-  AsciiStrCpyS (out->boot_file, sizeof (out->boot_file), mif->boot_file);
+  SyncIfaceCfg(mif);
+  memset(out, 0, sizeof(*out));
+  snprintf(out->name, sizeof(out->name), "%s", mif->name);
+  snprintf(out->ip, sizeof(out->ip), "%s", mif->ip);
+  snprintf(out->mask, sizeof(out->mask), "%s", mif->mask);
+  snprintf(out->gw, sizeof(out->gw), "%s", mif->gw);
+  snprintf(out->dns, sizeof(out->dns), "%s", mif->dns);
+  snprintf(out->ntp, sizeof(out->ntp), "%s", mif->ntp);
+  snprintf(out->tftp, sizeof(out->tftp), "%s", mif->tftp);
+  snprintf(out->boot_file, sizeof(out->boot_file), "%s", mif->boot_file);
   if (mif->l2_mac != NULL) {
-    mac = mif->l2_mac ();
-    CopyMem (out->mac, mac, 6);
-  } else if (AsciiStrCmp (mif->backend, "loopback") == 0) {
-    ZeroMem (out->mac, 6);
+    mac = mif->l2_mac();
+    memcpy(out->mac, mac, 6);
+  } else if (strcmp(mif->backend, "loopback") == 0) {
+    memset(out->mac, 0, 6);
   } else {
-    mac = pm_metal_virtio_netif_mac ();
-    CopyMem (out->mac, mac, 6);
+    mac = pm_metal_virtio_netif_mac();
+    memcpy(out->mac, mac, 6);
   }
 
-  out->link_up = netif_is_link_up (&mif->netif) && netif_is_up (&mif->netif);
+  out->link_up = netif_is_link_up(&mif->netif) && netif_is_up(&mif->netif);
 #if LWIP_DHCP
-  if (mif->use_dhcp && !dhcp_supplied_address (&mif->netif)) {
+  if (mif->use_dhcp && !dhcp_supplied_address(&mif->netif)) {
     out->link_up = 0;
   }
 #endif
   out->backend = mif->backend;
 }
 
-STATIC
-CONST CHAR8 *
-Dhcp6ModeName (
-  INT32  mode
-  )
+static const char *Dhcp6ModeName(int32_t mode)
 {
   switch (mode) {
   case PM_METAL_NET_DHCP6_STATELESS:
@@ -2706,99 +2330,82 @@ Dhcp6ModeName (
   }
 }
 
-STATIC
-INT32
-FormatIfStatusLine (
-  CONST pm_metal_net_ifcfg_t  *cfg,
-  metal_net_iface_t           *mif,
-  CHAR8                       *buf,
-  UINT32                       buf_len
-  )
+static int32_t FormatIfStatusLine(const pm_metal_net_ifcfg_t *cfg,
+                                  metal_net_iface_t          *mif,
+                                  char                       *buf,
+                                  uint32_t                    buf_len)
 {
   if (cfg == NULL || buf == NULL || buf_len == 0) {
     return -1;
   }
 
 #if LWIP_DHCP
-  if (mif != NULL && mif->use_dhcp && AsciiStrCmp (cfg->ip, "0.0.0.0") == 0) {
-    return AsciiSPrint (
-             buf,
-             buf_len,
-             "%a %a  dhcp4 pending  dhcp6 %a  mac %02x:%02x:%02x:%02x:%02x:%02x",
-             cfg->name,
-             cfg->backend,
-             Dhcp6ModeName (mif->dhcp6_mode),
-             cfg->mac[0],
-             cfg->mac[1],
-             cfg->mac[2],
-             cfg->mac[3],
-             cfg->mac[4],
-             cfg->mac[5]
-             );
+  if (mif != NULL && mif->use_dhcp && strcmp(cfg->ip, "0.0.0.0") == 0) {
+    return snprintf(buf,
+                    buf_len,
+                    "%s %s  dhcp4 pending  dhcp6 %s  mac %02x:%02x:%02x:%02x:%02x:%02x",
+                    cfg->name,
+                    cfg->backend,
+                    Dhcp6ModeName(mif->dhcp6_mode),
+                    cfg->mac[0],
+                    cfg->mac[1],
+                    cfg->mac[2],
+                    cfg->mac[3],
+                    cfg->mac[4],
+                    cfg->mac[5]);
   }
 #else
-  (VOID)mif;
+  (void)mif;
 #endif
 
   if (cfg->ntp[0] != '\0') {
-    return AsciiSPrint (
-             buf,
-             buf_len,
-             "%a %a  %a/%a gw %a dns %a ntp %a  mac %02x:%02x:%02x:%02x:%02x:%02x  %a",
-             cfg->name,
-             cfg->backend,
-             cfg->ip,
-             cfg->mask,
-             cfg->gw,
-             cfg->dns,
-             cfg->ntp,
-             cfg->mac[0],
-             cfg->mac[1],
-             cfg->mac[2],
-             cfg->mac[3],
-             cfg->mac[4],
-             cfg->mac[5],
-             cfg->link_up ? "up" : "down"
-             );
+    return snprintf(buf,
+                    buf_len,
+                    "%s %s  %s/%s gw %s dns %s ntp %s  mac %02x:%02x:%02x:%02x:%02x:%02x  %s",
+                    cfg->name,
+                    cfg->backend,
+                    cfg->ip,
+                    cfg->mask,
+                    cfg->gw,
+                    cfg->dns,
+                    cfg->ntp,
+                    cfg->mac[0],
+                    cfg->mac[1],
+                    cfg->mac[2],
+                    cfg->mac[3],
+                    cfg->mac[4],
+                    cfg->mac[5],
+                    cfg->link_up ? "up" : "down");
   }
 
-  return AsciiSPrint (
-           buf,
-           buf_len,
-           "%a %a  %a/%a gw %a dns %a  mac %02x:%02x:%02x:%02x:%02x:%02x  %a",
-           cfg->name,
-           cfg->backend,
-           cfg->ip,
-           cfg->mask,
-           cfg->gw,
-           cfg->dns,
-           cfg->mac[0],
-           cfg->mac[1],
-           cfg->mac[2],
-           cfg->mac[3],
-           cfg->mac[4],
-           cfg->mac[5],
-           cfg->link_up ? "up" : "down"
-           );
+  return snprintf(buf,
+                  buf_len,
+                  "%s %s  %s/%s gw %s dns %s  mac %02x:%02x:%02x:%02x:%02x:%02x  %s",
+                  cfg->name,
+                  cfg->backend,
+                  cfg->ip,
+                  cfg->mask,
+                  cfg->gw,
+                  cfg->dns,
+                  cfg->mac[0],
+                  cfg->mac[1],
+                  cfg->mac[2],
+                  cfg->mac[3],
+                  cfg->mac[4],
+                  cfg->mac[5],
+                  cfg->link_up ? "up" : "down");
 }
 
-unsigned
-pm_metal_net_if_count (
-  VOID
-  )
+unsigned pm_metal_net_if_count(void)
 {
   return mIfaceCount;
 }
 
-int
-pm_metal_net_if_get_index (
-  unsigned              index,
-  pm_metal_net_ifcfg_t  *out
-  )
+int pm_metal_net_if_get_index(unsigned index, pm_metal_net_ifcfg_t *out)
 {
-  UINT32              n;
-  UINT32              i;
-  metal_net_iface_t  *mif;
+  uint32_t           n;
+  uint32_t           i;
+  metal_net_iface_t *mif;
 
   if (out == NULL || index >= mIfaceCount) {
     return -1;
@@ -2812,7 +2419,7 @@ pm_metal_net_if_get_index (
 
     if (n == index) {
       mif = &mIfaces[i];
-      FillIfcfg (mif, out);
+      FillIfcfg(mif, out);
       return 0;
     }
 
@@ -2822,192 +2429,150 @@ pm_metal_net_if_get_index (
   return -1;
 }
 
-int
-pm_metal_net_if_get_named (
-  CONST CHAR8           *name,
-  pm_metal_net_ifcfg_t  *out
-  )
+int pm_metal_net_if_get_named(const char *name, pm_metal_net_ifcfg_t *out)
 {
-  metal_net_iface_t  *mif;
+  metal_net_iface_t *mif;
 
   if (out == NULL) {
     return -1;
   }
 
-  mif = IfaceByName (name);
+  mif = IfaceByName(name);
   if (mif == NULL) {
     return -1;
   }
 
-  FillIfcfg (mif, out);
+  FillIfcfg(mif, out);
   return 0;
 }
 
-int
-pm_metal_net_if_get (
-  pm_metal_net_ifcfg_t  *out
-  )
+int pm_metal_net_if_get(pm_metal_net_ifcfg_t *out)
 {
-  return pm_metal_net_if_get_named (NULL, out);
+  return pm_metal_net_if_get_named(NULL, out);
 }
 
-int
-pm_metal_net_if_set_named (
-  CONST CHAR8  *name,
-  CONST CHAR8  *ip,
-  CONST CHAR8  *mask,
-  CONST CHAR8  *gw,
-  CONST CHAR8  *dns
-  )
+int pm_metal_net_if_set_named(
+  const char *name, const char *ip, const char *mask, const char *gw, const char *dns)
 {
-  metal_net_iface_t  *mif;
-  ip4_addr_t          tip;
-  ip4_addr_t          tnm;
-  ip4_addr_t          tgw;
+  metal_net_iface_t *mif;
+  ip4_addr_t         tip;
+  ip4_addr_t         tnm;
+  ip4_addr_t         tgw;
 
-  if (!METAL_NET_READY () || ip == NULL || mask == NULL || gw == NULL) {
+  if (!METAL_NET_READY() || ip == NULL || mask == NULL || gw == NULL) {
     return -1;
   }
 
-  mif = IfaceByName (name);
+  mif = IfaceByName(name);
   if (mif == NULL) {
     return -1;
   }
 
-  if (ParseIpv4 (ip, &tip) != 0 || ParseIpv4 (mask, &tnm) != 0
-      || ParseIpv4 (gw, &tgw) != 0)
-  {
+  if (ParseIpv4(ip, &tip) != 0 || ParseIpv4(mask, &tnm) != 0 || ParseIpv4(gw, &tgw) != 0) {
     return -1;
   }
 
   if (dns != NULL && dns[0] != '\0') {
-    ip4_addr_t  tdns;
+    ip4_addr_t tdns;
 
-    if (ParseIpv4 (dns, &tdns) != 0) {
+    if (ParseIpv4(dns, &tdns) != 0) {
       return -1;
     }
 
-    AsciiStrCpyS (mif->dns, sizeof (mif->dns), dns);
+    snprintf(mif->dns, sizeof(mif->dns), "%s", dns);
   }
 
-  AsciiStrCpyS (mif->ip, sizeof (mif->ip), ip);
-  AsciiStrCpyS (mif->mask, sizeof (mif->mask), mask);
-  AsciiStrCpyS (mif->gw, sizeof (mif->gw), gw);
-  return ApplyIfaceAddrs (mif);
+  snprintf(mif->ip, sizeof(mif->ip), "%s", ip);
+  snprintf(mif->mask, sizeof(mif->mask), "%s", mask);
+  snprintf(mif->gw, sizeof(mif->gw), "%s", gw);
+  return ApplyIfaceAddrs(mif);
 }
 
-int
-pm_metal_net_if_set (
-  CONST CHAR8  *ip,
-  CONST CHAR8  *mask,
-  CONST CHAR8  *gw,
-  CONST CHAR8  *dns
-  )
+int pm_metal_net_if_set(const char *ip, const char *mask, const char *gw, const char *dns)
 {
-  return pm_metal_net_if_set_named (NULL, ip, mask, gw, dns);
+  return pm_metal_net_if_set_named(NULL, ip, mask, gw, dns);
 }
 
-int
-pm_metal_net_if_set_dhcp_named (
-  CONST CHAR8  *name
-  )
+int pm_metal_net_if_set_dhcp_named(const char *name)
 {
-  metal_net_iface_t  *mif;
+  metal_net_iface_t *mif;
 
-  if (!METAL_NET_READY ()) {
+  if (!METAL_NET_READY()) {
     return -1;
   }
 
-  mif = IfaceByName (name);
+  mif = IfaceByName(name);
   if (mif == NULL) {
     return -1;
   }
 
-  return ApplyIfaceDhcp (mif);
+  return ApplyIfaceDhcp(mif);
 }
 
-int
-pm_metal_net_if_set_dhcp6_named (
-  CONST CHAR8  *name,
-  int           mode
-  )
+int pm_metal_net_if_set_dhcp6_named(const char *name, int mode)
 {
-  metal_net_iface_t  *mif;
+  metal_net_iface_t *mif;
 
-  if (!METAL_NET_READY () || mode < PM_METAL_NET_DHCP6_OFF
-      || mode > PM_METAL_NET_DHCP6_STATEFUL)
-  {
+  if (!METAL_NET_READY() || mode < PM_METAL_NET_DHCP6_OFF || mode > PM_METAL_NET_DHCP6_STATEFUL) {
     return -1;
   }
 
-  mif = IfaceByName (name);
+  mif = IfaceByName(name);
   if (mif == NULL) {
     return -1;
   }
 
-  StopIfaceAutoconf (mif);
+  StopIfaceAutoconf(mif);
   mif->dhcp6_mode = mode;
 #if LWIP_IPV6
-  netif_create_ip6_linklocal_address (&mif->netif, 1);
+  netif_create_ip6_linklocal_address(&mif->netif, 1);
 #endif
 #if LWIP_IPV6_DHCP6
-  if (mode != PM_METAL_NET_DHCP6_OFF && StartIfaceDhcp6 (mif) != 0) {
+  if (mode != PM_METAL_NET_DHCP6_OFF && StartIfaceDhcp6(mif) != 0) {
     return -1;
   }
 #endif
   return 0;
 }
 
-int
-pm_metal_net_if_set_dhcp (
-  VOID
-  )
+int pm_metal_net_if_set_dhcp(void)
 {
-  return pm_metal_net_if_set_dhcp_named (NULL);
+  return pm_metal_net_if_set_dhcp_named(NULL);
 }
 
-int
-pm_metal_net_if_status_named (
-  CONST CHAR8  *name,
-  CHAR8        *buf,
-  UINT32        buf_len
-  )
+int pm_metal_net_if_status_named(const char *name, char *buf, uint32_t buf_len)
 {
-  pm_metal_net_ifcfg_t  cfg;
-  metal_net_iface_t    *mif;
+  pm_metal_net_ifcfg_t cfg;
+  metal_net_iface_t   *mif;
 
   if (buf == NULL || buf_len == 0) {
     return -1;
   }
 
-  mif = IfaceByName (name);
+  mif = IfaceByName(name);
   if (mif == NULL) {
-    AsciiSPrint (buf, buf_len, "net: no interface %a", (name != NULL) ? name : "eth0");
+    snprintf(buf, buf_len, "net: no interface %s", (name != NULL) ? name : "eth0");
     return 0;
   }
 
-  FillIfcfg (mif, &cfg);
-  FormatIfStatusLine (&cfg, mif, buf, buf_len);
+  FillIfcfg(mif, &cfg);
+  FormatIfStatusLine(&cfg, mif, buf, buf_len);
   return 0;
 }
 
-int
-pm_metal_net_if_status (
-  CHAR8    *buf,
-  UINT32    buf_len
-  )
+int pm_metal_net_if_status(char *buf, uint32_t buf_len)
 {
-  CHAR8   line[180];
-  UINT32  off;
-  UINT32  i;
-  UINT32  n;
+  char     line[180];
+  uint32_t off;
+  uint32_t i;
+  uint32_t n;
 
   if (buf == NULL || buf_len == 0) {
     return -1;
   }
 
-  if (!METAL_NET_READY ()) {
-    AsciiSPrint (buf, buf_len, "net: down");
+  if (!METAL_NET_READY()) {
+    snprintf(buf, buf_len, "net: down");
     return 0;
   }
 
@@ -3015,24 +2580,24 @@ pm_metal_net_if_status (
   off    = 0;
   n      = 0;
   for (i = 0; i < METAL_NET_MAX_IFACES; i++) {
-    pm_metal_net_ifcfg_t  cfg;
+    pm_metal_net_ifcfg_t cfg;
 
     if (!mIfaces[i].used) {
       continue;
     }
 
-    FillIfcfg (&mIfaces[i], &cfg);
-    FormatIfStatusLine (&cfg, &mIfaces[i], line, (UINT32)sizeof (line));
+    FillIfcfg(&mIfaces[i], &cfg);
+    FormatIfStatusLine(&cfg, &mIfaces[i], line, (uint32_t)sizeof(line));
     if (n > 0 && off + 1 < buf_len) {
       buf[off++] = '\n';
     }
 
     {
-      UINTN  ll;
-      UINTN  room;
+      uintptr_t ll;
+      uintptr_t room;
 
-      ll   = AsciiStrLen (line);
-      room = (UINTN)buf_len - off;
+      ll   = strlen(line);
+      room = (uintptr_t)buf_len - off;
       if (room <= 1) {
         break;
       }
@@ -3041,9 +2606,9 @@ pm_metal_net_if_status (
         ll = room - 1;
       }
 
-      CopyMem (buf + off, line, ll);
-      off        += (UINT32)ll;
-      buf[off]    = '\0';
+      memcpy(buf + off, line, ll);
+      off += (uint32_t)ll;
+      buf[off] = '\0';
     }
 
     n++;
@@ -3052,31 +2617,27 @@ pm_metal_net_if_status (
   return 0;
 }
 
-int
-pm_metal_net_if_boot_get (
-  CONST CHAR8  *name,
-  CHAR8        *tftp_host,
-  UINT32        tftp_cap,
-  CHAR8        *boot_file,
-  UINT32        boot_cap
-  )
+int pm_metal_net_if_boot_get(
+  const char *name, char *tftp_host, uint32_t tftp_cap, char *boot_file, uint32_t boot_cap)
 {
-  metal_net_iface_t  *mif;
+  metal_net_iface_t *mif;
 
-  mif = IfaceByName (name);
+  mif = IfaceByName(name);
   if (mif == NULL) {
     return -1;
   }
 
-  SyncIfaceCfg (mif);
+  SyncIfaceCfg(mif);
   if (tftp_host != NULL && tftp_cap > 0) {
-    if (AsciiStrCpyS (tftp_host, tftp_cap, mif->tftp) != RETURN_SUCCESS) {
+    int32_t n = snprintf(tftp_host, tftp_cap, "%s", mif->tftp);
+    if (n < 0 || (uint32_t)n >= tftp_cap) {
       return -1;
     }
   }
 
   if (boot_file != NULL && boot_cap > 0) {
-    if (AsciiStrCpyS (boot_file, boot_cap, mif->boot_file) != RETURN_SUCCESS) {
+    int32_t n = snprintf(boot_file, boot_cap, "%s", mif->boot_file);
+    if (n < 0 || (uint32_t)n >= boot_cap) {
       return -1;
     }
   }
@@ -3084,78 +2645,65 @@ pm_metal_net_if_boot_get (
   return 0;
 }
 
-void
-pm_metal_net_on_hostname_changed (
-  VOID
-  )
+void pm_metal_net_on_hostname_changed(void)
 {
-  UINT32  i;
+  uint32_t i;
 
   for (i = 0; i < METAL_NET_MAX_IFACES; i++) {
     if (!mIfaces[i].used) {
       continue;
     }
 
-    if (AsciiStrCmp (mIfaces[i].backend, "loopback") == 0) {
+    if (strcmp(mIfaces[i].backend, "loopback") == 0) {
       continue;
     }
 
-    ApplyNetifHostname (&mIfaces[i]);
+    ApplyNetifHostname(&mIfaces[i]);
 #if LWIP_DHCP
-    if (mIfaces[i].use_dhcp && dhcp_supplied_address (&mIfaces[i].netif)) {
-      (VOID)dhcp_renew (&mIfaces[i].netif);
+    if (mIfaces[i].use_dhcp && dhcp_supplied_address(&mIfaces[i].netif)) {
+      (void)dhcp_renew(&mIfaces[i].netif);
     }
 #endif
   }
 }
 
-int
-pm_metal_net_resolve_ip4 (
-  CONST CHAR8  *host,
-  UINT32       *out_host
-  )
+int pm_metal_net_resolve_ip4(const char *host, uint32_t *out_host)
 {
-  ip_addr_t  addr;
+  ip_addr_t addr;
 
   if (host == NULL || out_host == NULL) {
     return -1;
   }
 
-  TryLoadHosts ();
-  if (ParseHostAddr (host, &addr) == 0 && IP_IS_V4_VAL (addr)) {
-    *out_host = lwip_ntohl (ip4_addr_get_u32 (ip_2_ip4 (&addr)));
+  TryLoadHosts();
+  if (ParseHostAddr(host, &addr) == 0 && IP_IS_V4_VAL(addr)) {
+    *out_host = lwip_ntohl(ip4_addr_get_u32(ip_2_ip4(&addr)));
     return 0;
   }
 
-  if (dns_gethostbyname (host, &addr, NULL, NULL) == ERR_OK
-      && IP_IS_V4_VAL (addr))
-  {
-    *out_host = lwip_ntohl (ip4_addr_get_u32 (ip_2_ip4 (&addr)));
+  if (dns_gethostbyname(host, &addr, NULL, NULL) == ERR_OK && IP_IS_V4_VAL(addr)) {
+    *out_host = lwip_ntohl(ip4_addr_get_u32(ip_2_ip4(&addr)));
     return 0;
   }
 
   return -1;
 }
 
-int
-pm_metal_net_dns_last_ntoa (
-  CHAR8   *out,
-  UINT32   out_cap
-  )
+int pm_metal_net_dns_last_ntoa(char *out, uint32_t out_cap)
 {
   if (out == NULL || out_cap == 0 || !mLastDnsValid) {
     return -1;
   }
 
-  if (IP_IS_V6_VAL (mLastDnsAddr)) {
-    if (ip6addr_ntoa_r (ip_2_ip6 (&mLastDnsAddr), out, (int)out_cap) == NULL) {
+  if (IP_IS_V6_VAL(mLastDnsAddr)) {
+    if (ip6addr_ntoa_r(ip_2_ip6(&mLastDnsAddr), out, (int)out_cap) == NULL) {
       return -1;
     }
 
     return 0;
   }
 
-  if (ip4addr_ntoa_r (ip_2_ip4 (&mLastDnsAddr), out, (int)out_cap) == NULL) {
+  if (ip4addr_ntoa_r(ip_2_ip4(&mLastDnsAddr), out, (int)out_cap) == NULL) {
     return -1;
   }
 

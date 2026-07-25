@@ -11,23 +11,23 @@
 
 int main(void)
 {
-	char buf[64];
-	int fd = open("/scratchB/hello.txt", O_RDONLY);
+  char buf[64];
+  int  fd = open("/scratchB/hello.txt", O_RDONLY);
 
-	if (fd < 0) {
-		printf("t14_tmpfs_read_alt: open failed\n");
-		return 1;
-	}
+  if (fd < 0) {
+    printf("t14_tmpfs_read_alt: open failed\n");
+    return 1;
+  }
 
-	ssize_t n = read(fd, buf, sizeof(buf) - 1);
-	close(fd);
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
 
-	if (n < 0) {
-		printf("t14_tmpfs_read_alt: read failed\n");
-		return 1;
-	}
+  if (n < 0) {
+    printf("t14_tmpfs_read_alt: read failed\n");
+    return 1;
+  }
 
-	buf[n] = '\0';
-	printf("t14_tmpfs_read_alt: %s", buf);
-	return 0;
+  buf[n] = '\0';
+  printf("t14_tmpfs_read_alt: %s", buf);
+  return 0;
 }

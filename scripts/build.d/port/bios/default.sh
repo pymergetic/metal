@@ -57,6 +57,11 @@ mkdir -p "${OBJ}"
 source "${ROOT}/scripts/lib/pki.sh"
 pm_metal_pki_bake
 
+# MicroPython embed (shared); ports only compile/link.
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/micropython.sh"
+pm_metal_upy_generate_embed
+
 # Embed guest wasm into shared guest path.
 if [[ -x "${ROOT}/scripts/build.d/port/efi/embed-mods.sh" ]]; then
 	"${ROOT}/scripts/build.d/port/efi/embed-mods.sh" || true
@@ -98,6 +103,10 @@ INCLUDES=(
 	-I"${ROOT}/external/wamr/core/shared/utils"
 	-I"${ROOT}/external/wamr/core/shared/utils/uncommon"
 	-I"${SHARED_METAL}/bus/pci"
+	-I"${SHARED_METAL}/py/embed"
+	-I"${ROOT}/build/micropython_embed"
+	-I"${ROOT}/build/micropython_embed/port"
+	-I"${ROOT}/build/micropython_embed/genhdr"
 )
 
 CFLAGS=(
@@ -117,9 +126,13 @@ CFLAGS=(
 	-Wno-missing-field-initializers
 	-Wno-format
 	-fno-strict-aliasing
+	-DMICROPY_USE_INTERNAL_ERRNO=1
 	-DBH_PLATFORM_METAL_BIOS
 	-DBH_PLATFORM_METAL_EFI
-	-DBH_PLATFORM_ZEPHYR
+	# Keep config.h vanilla — override embedded defaults without ZEPHYR masquerade.
+	-DAPP_THREAD_STACK_SIZE_DEFAULT=6144
+	-DAPP_THREAD_STACK_SIZE_MIN=4096
+
 	"${BUILD_TARGET}"
 	-U__linux__
 	-Ulinux
@@ -175,26 +188,39 @@ SRCS_C=(
 	"${SHARED_METAL}/util/monocypher_wrap.c"
 	"${SHARED_METAL}/runtime/mem/arena.c"
 	"${SHARED_METAL}/runtime/mem/mem.c"
+	"${SHARED_METAL}/runtime/mem/mem_natives.c"
 	"${SHARED_METAL}/runtime/mem/libc.c"
 	"${SHARED_METAL}/runtime/mem/libc_wamr.c"
 	"${SHARED_METAL}/runtime/mem/tlsf_edk2.c"
 	"${SHARED_METAL}/runtime/run/run.c"
+	"${BIOS_METAL}/runtime/slot/slot_table_port.c"
 	"${SHARED_METAL}/runtime/stack/stack.c"
+	"${BIOS_METAL}/runtime/stack/stack_port.c"
 	"${SHARED_METAL}/runtime/coro/coro.c"
+	"${SHARED_METAL}/runtime/coro/coro_timers.c"
+	"${SHARED_METAL}/runtime/coro/coro_sleep.c"
+	"${SHARED_METAL}/runtime/coro/coro_gather.c"
 	"${SHARED_METAL}/runtime/task/task.c"
 	"${SHARED_METAL}/runtime/time/time.c"
 	"${BIOS_METAL}/runtime/time/time_port.c"
 	"${SHARED_METAL}/runtime/async/async.c"
+	"${SHARED_METAL}/runtime/async/async_ops.c"
+	"${SHARED_METAL}/runtime/async/async_natives.c"
+	"${SHARED_METAL}/runtime/async/async_session.c"
 	"${SHARED_METAL}/bus/io/io.c"
 	"${SHARED_METAL}/bus/pci/pci.c"
 	"${SHARED_METAL}/bus/virtio/virtio_pci.c"
+	"${BIOS_METAL}/bus/virtio/virtio_pci_port.c"
 	"${BIOS_METAL}/boot/run_port.c"
 	"${BIOS_METAL}/boot/bios/boot_init.c"
 	"${SHARED_METAL}/boot/boot_init.c"
+	"${SHARED_METAL}/boot/boot_test.c"
+	"${SHARED_METAL}/boot/boot_python.c"
 	"${SHARED_METAL}/boot/banner.c"
 	"${SHARED_METAL}/boot/boot_harvest.c"
 	"${SHARED_METAL}/boot/boot_shell.c"
 	"${SHARED_METAL}/log/log.c"
+	"${BIOS_METAL}/log/log_port.c"
 	"${SHARED_METAL}/dev/console/virtio_console.c"
 	"${SHARED_METAL}/dev/blk/blk.c"
 	"${SHARED_METAL}/dev/blk/virtio_blk.c"
@@ -209,6 +235,7 @@ SRCS_C=(
 	"${SHARED_METAL}/dev/gfx/scanout_bochs.c"
 	"${SHARED_METAL}/dev/gfx/scanout_lfb_copy.c"
 	"${SHARED_METAL}/dev/gfx/scanout_gop_blt.c"
+	"${BIOS_METAL}/dev/gfx/scanout_gop_blt_port.c"
 	"${SHARED_METAL}/dev/gfx/scanout_virtio_gpu.c"
 	"${SHARED_METAL}/dev/gfx/scanout_radeon_rv370.c"
 	"${SHARED_METAL}/dev/gfx/scanout_i915_855gm.c"
@@ -225,6 +252,7 @@ SRCS_C=(
 	"${SHARED_METAL}/dev/net/virtio_net.c"
 	"${SHARED_METAL}/dev/net/bge/bge_netif.c"
 	"${SHARED_METAL}/dev/net/bge/bge_metal.c"
+	"${BIOS_METAL}/dev/net/bge/bge_metal_port.c"
 	"${SHARED_METAL}/dev/net/net_lwip.c"
 	"${SHARED_METAL}/dev/net/metal_dhcp6_stateful.c"
 	"${SHARED_METAL}/dev/net/lwip_sys.c"
@@ -281,11 +309,20 @@ SRCS_C=(
 	"${SHARED_METAL}/shell/shell/shell.c"
 	"${SHARED_METAL}/shell/shell/shell_cmd.c"
 	"${SHARED_METAL}/shell/shell/shell_core_cmds.c"
+	"${SHARED_METAL}/py/mphalport_metal.c"
+	"${SHARED_METAL}/py/py.c"
+	"${SHARED_METAL}/py/py_bind.c"
+	"${SHARED_METAL}/py/py_aio_mod.c"
+	"${SHARED_METAL}/py/py_shell.c"
+	"${SHARED_METAL}/py/py_zip.c"
+	"${SHARED_METAL}/py/py_guest.c"
+	"${SHARED_METAL}/py/py_port_stubs.c"
 	"${SHARED_METAL}/dev/net/net_shell.c"
 	"${SHARED_METAL}/dev/input/input_shell.c"
 	"${SHARED_METAL}/shell/hwinfo/hwinfo.c"
 	"${SHARED_METAL}/shell/lifecycle/lifecycle.c"
 	"${SHARED_METAL}/guest/process/process.c"
+	"${SHARED_METAL}/guest/mod/mod.c"
 	"${SHARED_METAL}/guest/pkg/pkg.c"
 	"${SHARED_METAL}/guest/pkg/pkg_doom.c"
 	"${SHARED_METAL}/guest/wasm/wasm.c"
@@ -336,6 +373,9 @@ if [[ "${ARCH}" == "i386" ]]; then
 else
 	SRCS_C+=("${ROOT}/external/wamr/core/iwasm/aot/arch/aot_reloc_x86_64.c")
 fi
+
+mapfile -t UPY_SRCS < <(pm_metal_upy_embed_c_sources "${ARCH}" || true)
+SRCS_C+=("${UPY_SRCS[@]}")
 
 mapfile -t MBEDTLS_SRCS < <(
 	grep -E 'external/mbedtls/library/' "${ROOT}/src/efi/MetalPkg/Metal.inf" \
