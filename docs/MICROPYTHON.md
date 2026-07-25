@@ -11,7 +11,7 @@ generic `PM_METAL_PY_BIND` table, `pmcmd.*`/`pymergetic.metal.process`/
 `pymergetic.metal.mod` bindings, guest-visible resolve+call of a bound
 Python function (**sync and async**), isolated/`FRESH` mod instances from
 Python (and dual-ABI guest-to-guest), generated `.pyi` stubs, a signed +
-trust-checked + single-flight-HTTP-fetched `stdlib.zip` with a real ~20-module
+trust-checked + single-flight-HTTP-fetched `stdlib.zip` with a real ~25-module
 "Easy" pack, a persistent interactive **REPL** that's now the system's
 default boot shell, and genuine **task-local GC + true parallel bytecode**
 via opt-in isolated MicroPython contexts (own heap, own state, no shared
@@ -544,12 +544,56 @@ the `PY_PROOF_STDLIB` boot proof, `boot_python.c`):**
 `collections` (+ `collections-defaultdict`), `heapq`, `bisect`, `functools`,
 `itertools`, `contextlib` (+ `ucontextlib`), `copy`, `struct`, `string`,
 `pprint`, `operator`, `types`, `warnings`, `errno`, `keyword`, `abc`,
-`quopri`, `html`, `argparse`. `binascii` rides along as a **C extmod**
+`quopri`, `html`, `argparse`, `stat`, `pickle`, `inspect`, `traceback`,
+`logging`. `binascii` rides along as a **C extmod**
 (`extmod/modbinascii.c` — not part of upstream's embed package, so Metal's
 own build scripts + `py/embed/micropython_embed.mk` compile and qstr-scan it
 explicitly; see the [C-extmod-outside-the-embed-package
 note](#c-extmod-outside-the-embed-package-modbinascii) below), not a packed
 `.py` file — it needed a real build-system fix, not just an "Easy" copy.
+
+Second pass over this list turned out less trivial than the doc's own
+original guesses in a few cases — two more grammar/builtin flags joined
+`SLICE`/`SET`/`ENUMERATE` in `py/embed/mpconfigport.h`, both self-contained
+(no new heap shape, no cross-cutting behavior change) the same way those
+three were:
+
+- `MICROPY_PY_SYS_EXC_INFO` — `sys.exc_info()`, needed by
+  `traceback.print_exc()`/`format_exc()` (and `logging`'s `exception()`).
+  Zero-cost to enable: the backing `MP_STATE_VM(cur_exception)` root
+  pointer (`py/vm.c`) is already set on every caught exception
+  unconditionally, this flag only compiles in the Python-level accessor.
+- `MICROPY_PY_BUILTINS_STR_OP_MODULO` — `"%s" % x`, needed by `logging`'s
+  message formatting. Also quietly fixes a **latent, previously-unexercised
+  gap** in `argparse`'s own error-message paths — `PY_PROOF_STDLIB`'s
+  happy-path parse never took that branch, so the gap shipped silently in
+  the first "Easy" pass.
+
+Three more small **in-place deltas**, all because the module's own upstream
+source assumed a stdlib neighbor this minimal build doesn't have — same
+spirit as the `defaultdict`/`string.translate()` deltas below, not scope
+creep:
+
+- `logging.py` drops `import time` entirely (no wall-clock/RTC source —
+  `LogRecord` never records a timestamp, `Formatter.formatTime()` always
+  returns `None`, no `%(asctime)s` support), drops `import io` (its
+  `exception()` prints straight through `sys.print_exception(tb)` instead
+  of buffering into `io.StringIO` first), and defaults `StreamHandler`'s
+  stream to `None` → `print()` instead of `sys.stderr` (`MICROPY_PY_SYS_STDFILES`
+  is off) — `FileHandler` is dropped too since it needs both.
+- `traceback.py`'s `print_exception()` no longer defaults a missing `file`
+  to `sys.stdout` (`MICROPY_PY_SYS_STDFILES` off) — `sys.print_exception`
+  (`py/modsys.c`) already defaults its own missing 2nd arg to the
+  platform's plat_print stream, so the 1-arg call form is used instead.
+- `pickle.py`'s `dumps()`/`loads()` work on `str` directly instead of
+  round-tripping through `bytes` via `.encode()`/`.decode()`
+  (`MICROPY_CPYTHON_COMPAT` off) — this "pickle" was already just
+  `repr()`+`eval()`, never the real binary protocol, so the bytes step was
+  pure overhead being removed, not a capability loss.
+
+`stat` and `inspect` needed no changes at all — `stat` is pure bit-twiddling
+constants/functions with zero imports, `inspect`'s only import (`sys`) was
+already on.
 
 Two small deltas from the original plan, both **fixes to this run's own
 categorization**, not scope creep:
@@ -583,10 +627,9 @@ table below): `base64`, `fnmatch`, `textwrap`. `hmac` additionally needs
 | `time`, `datetime` | A wall-clock/RTC source — today only `mono_us` |
 | `random` | An entropy source binding (`pm_metal_random` exists on the C side, not yet exposed to Python) |
 | `hashlib` | Native hash primitives — monocypher may already provide some |
-| `logging` | Almost easy — just needs a handler that calls `pm_metal_log`; good candidate for the *next* batch |
 | `pathlib`, `shutil`, `tempfile`, `tarfile` | All transitively need `os` first |
 | `zlib`, `gzip` | Needs a decompressor |
-| `unittest` | Minor `sys.exit` dependency |
+| `unittest` | Turned out heavier than first guessed on closer read: unconditional top-level `import io` (`_capture_exc`'s `io.StringIO`) + `import os` (unused in the file body, but still executed at import time) — not just a "minor `sys.exit`" dependency as originally logged here |
 | `ssl`, `threading` | Need real design — `threading` in particular conflicts conceptually with Metal's own task model and should not be shimmed casually |
 | `base64`, `fnmatch`, `textwrap` | Need `re` (above) |
 | `hmac` | Needs `hashlib` (above) |
@@ -599,20 +642,37 @@ revisit when those subsystems exist:** everything under `micropython/*`
 `requests`, `cbor2`, `pyjwt`, `iperf3`), plus `venv`, `pkgutil`/
 `pkg_resources`, `locale`, `curses.ascii`.
 
-### Reproducible `stdlib.zip` build
+### Reproducible `stdlib.zip` build — baked in, not tracked
 
 `mods/py/stdlib_src/` stages the **Easy** list's `.py` files (flat copy from
 micropython-lib, one directory per module/package, small in-place fixes
 where the minimal build genuinely can't support the upstream line — see the
-deltas noted above; no other build-time transformation) —
-`mods/py/build_stdlib_zip.sh` zips that tree deterministically (sorted
-filenames, fixed mtimes, `ZIP_STORED` via Python's own `zipfile` module — no
-external `zip` binary dependency, no host-path leakage) into
-`mods/py/stdlib.zip`, then `scripts/pki sign-wasm` produces `stdlib.zip.sig`.
-Re-run the script + re-sign any time `stdlib_src/` changes; nothing else in
-the loader/trust/import-order path changes — this is the same artifact
-shape the spike sample already integrated, just with real content instead
-of one demo file.
+deltas noted above; no other build-time transformation) — that's the real,
+git-tracked source of truth. `mods/py/build_stdlib_zip.sh` zips that tree
+deterministically (sorted filenames, fixed mtimes, `ZIP_STORED` via
+Python's own `zipfile` module — no external `zip` binary dependency, no
+host-path leakage) into `mods/py/stdlib.zip`, then `scripts/pki sign-wasm`
+produces `stdlib.zip.sig`.
+
+`mods/py/stdlib.zip` and `stdlib.zip.sig` themselves are **not** tracked in
+git (`.gitignore`) — the `.sig` in particular is never byte-stable across
+re-signs (ECDSA signing is randomized), so committing it would mean
+constant, meaningless diffs on every rebuild. Instead,
+`scripts/build.d/port/efi/embed-stdlib.sh` — run unconditionally by both
+`scripts/build.d/port/{efi,bios}/default.sh`, right alongside
+`embed-mods.sh`'s guest-wasm embed — calls `build_stdlib_zip.sh` and then
+embeds the freshly-built zip and signature bytes as two `static const
+uint8_t[]` arrays in a generated `src/pymergetic/metal/py/py_zip_embed.inc.c`
+(also gitignored, regenerated every build). `py_zip_embed.c` writes those
+bytes out to the real `PM_METAL_PY_STDLIB_ZIP` / `_SIG` filesystem paths
+once, at `pm_metal_py_init()` time, before anything else touches them — so
+`py_zip.c`'s trust-check/import machinery (`ZipVerifyLocal`, below) sees an
+ordinary signed file on "disk" and needs zero special-casing for the
+embedded case. Net effect: a fresh clone + fresh build always has a
+locally-signed `stdlib.zip` ready with no network fetch and nothing
+signature-shaped sitting in git history. Lazy HTTP fetch-on-miss
+(below) remains as a fallback for the (today hypothetical) case where the
+embedded write itself fails.
 
 `PY_PROOF_STDLIB` (`boot_python.c`) imports **every** packed module (not a
 sample) and exercises one real call per module — `defaultdict` increments,
@@ -675,7 +735,10 @@ Stdlib zip is a **Mods-CA** artifact — same PKI / modes as wasm packs
 | Missing `.sig` | Per trust mode (enforce requires it; soft/off as mods) |
 | Keys | Same Mods CA pubs / `./scripts/pki` story as `mods/apps/*` |
 
-Example artifact: `mods/py/stdlib.zip` + `stdlib.zip.sig`.
+Example artifact: `mods/py/stdlib.zip` + `stdlib.zip.sig` (build-time only —
+neither is tracked in git, see "baked in, not tracked" above; the trust
+check itself doesn't know or care that both were written from the embedded
+copy rather than fetched or hand-placed).
 
 ### Lazy fetch (single-flight)
 
@@ -1100,6 +1163,6 @@ overclaimed.
 - [x] **Signed stdlib zip**: `mods/py/stdlib.zip` + `.sig` (signed via `scripts/pki sign-wasm`, which turned out generic enough for an arbitrary blob — no `sign-file` subcommand needed), verified via `pm_metal_trust_accept_mods` against `METAL_TRUST_MODE`; `pm_metal_py_zip_ensure()` is now a coroutine-backed step (`pm_metal_py_zip_step`, its own `PY_STEP_ZIP` ahead of every job's real first step in `py.c`) so it can `await` an HTTP fetch on ESP miss instead of blocking `py_spawn`; single-flight fetch (one leader task awaits `pm_metal_net_http_get` directly, follower tasks poll the shared state via `pm_metal_async_yield()` — `pm_metal_await`'s single-waiter limitation rules out every task awaiting the same handle directly). `pymergetic`/`pymergetic.metal`/`pymergetic.metal.aio` are pre-registered into `mp_loaded_modules_dict` at init, so they're structurally unshadowable by any same-named `.py` — regression-proofed with a decoy `pmcmd.py` written to `/mods/py/` at runtime (`PY_PROOF_SHADOW`, `boot_python.c`) asserting the C module's own attribute wins. Enforced `builtin→frozen→aot→wasm→py` import order across *all* categories is not separately implemented (MicroPython's own `mp_loaded_modules_dict` precedence already covers the one case that matters — C modules over zip `.py` files)
 - [x] Task-local GC spaces + true parallel bytecode — opt-in isolated MicroPython contexts (`py_ctx.c`/`py_ctx.h`, per-CPU `mp_state_ctx` indirection patched into vendored `py/mpstate.h` via `patches/micropython/0001-metal-percpu-state-ctx.patch`): each isolated context owns its own MAP-carved GC heap + its own `mp_state_ctx_t`, no shared run-lock, `gc_collect()` on its own disjoint heap at park; `pm_metal_py_run_str_isolated`/`_run_script_isolated` (`py.h`), `py -x` shell flag, `mem`'s nested `py` line shows isolated-context count/bytes; boot-proofed disjoint-heap + concurrent-execution under `-smp 4` (`PY_PROOF_PARALLEL`). Shared/default context (unopted-in `py -c`/`py <script>`/the REPL) keeps the original run-lock-serialized behavior unchanged — see [Concurrency](#concurrency--same-schematic-as-metal-async)
 - [x] Persistent Python REPL as the system's main interactive shell — see the dedicated [Python REPL as the system's main shell](#python-repl-as-the-systems-main-shell) section; boot spawns it after `BOOT_READY`, C console dispatcher stays reachable via the `console` escape word
-- [x] Real "Easy" stdlib pack (not a 1-file sample) — ~20 pure-Python micropython-lib modules in `mods/py/stdlib_src/` (`collections`+`defaultdict`, `heapq`, `bisect`, `functools`, `itertools`, `contextlib`+`ucontextlib`, `copy`, `struct`, `string`, `pprint`, `operator`, `types`, `warnings`, `errno`, `keyword`, `abc`, `quopri`, `html`, `argparse`) + the `binascii` C extmod (needed its own build-system fix — not part of upstream's embed package at all, see [C extmod outside the embed package](#c-extmod-outside-the-embed-package-modbinascii)); `mods/py/build_stdlib_zip.sh` is a real reproducible build step (Python's own `zipfile`, `ZIP_STORED`, sorted/deterministic); `PY_PROOF_STDLIB` imports and exercises every packed module, not a 3-module sample
+- [x] Real "Easy" stdlib pack (not a 1-file sample) — ~25 pure-Python micropython-lib modules in `mods/py/stdlib_src/` (`collections`+`defaultdict`, `heapq`, `bisect`, `functools`, `itertools`, `contextlib`+`ucontextlib`, `copy`, `struct`, `string`, `pprint`, `operator`, `types`, `warnings`, `errno`, `keyword`, `abc`, `quopri`, `html`, `argparse`, `stat`, `pickle`, `inspect`, `traceback`, `logging`) + the `binascii` C extmod (needed its own build-system fix — not part of upstream's embed package at all, see [C extmod outside the embed package](#c-extmod-outside-the-embed-package-modbinascii)); `mods/py/build_stdlib_zip.sh` is a real reproducible build step (Python's own `zipfile`, `ZIP_STORED`, sorted/deterministic); `PY_PROOF_STDLIB` imports and exercises every packed module, not a 3-module sample. Second pass ([micropython-lib categorization](#micropython-lib-categorization-easy--needs-glue--defer)) needed two more self-contained grammar/builtin flag flips (`MICROPY_PY_SYS_EXC_INFO`, `MICROPY_PY_BUILTINS_STR_OP_MODULO`) plus small in-place deltas to `logging.py`/`traceback.py`/`pickle.py` (drop `time`/`io`/`sys.stderr`/bytes-encode dependencies this build doesn't have) — `unittest`/`random`/`os` turned out to need real glue (`io`+`os`, a `urandom` C extmod, `pm_metal_fs` binding respectively) after closer inspection and stayed in Needs-glue, not moved
 - [x] Isolated-context ergonomics — isolated MicroPython contexts import from `stdlib.zip` too, not just `pymergetic.metal`/`pmcmd`/`mod`: `pm_metal_py_ctx_create` (`py_ctx.c`) now calls `pm_metal_py_zip_init_sys_path()` against the fresh context right after `mp_embed_init`, appending `/mods/py` + `stdlib.zip` to *that context's own* `mp_sys_path` (a genuine per-context root pointer, `MP_STATE_VM(sys_mutable[...])` — unlike `sys.argv`/`sys.modules`, it was never one of the static-initializer globals pinned to the shared context, so each context just needed its own copy of the same append call). `py_job_step`'s `PY_STEP_ZIP` no longer special-cases isolated jobs — `pm_metal_py_zip_step` is pure C (fs/http/trust, no `mp_obj_t` touch) and both context kinds now share the same one-fetch-total `g_zip_state`, so both wait on it the same way. Boot-proofed end to end (`PY_PROOF_ISOLATED_STDLIB`: an isolated task imports and exercises `heapq`)
 - [ ] (later) Fat stdlib zip (remaining Needs-glue modules: `os`, `io`, `re`, `time`, `random`, `hashlib`, `logging`, …) / full `metal.fs`/`net`/… orchestration / native self-register (`import sample`) — not started

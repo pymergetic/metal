@@ -199,6 +199,7 @@ int pm_metal_py_init(void)
   pm_metal_py_pmcmd_install();
   pm_metal_py_mod_install();
   pm_metal_py_c_py_demo_seed();
+  pm_metal_py_zip_embed_install();
   pm_metal_py_zip_init_sys_path();
   g_ready = 1;
   /* Boot tree prints "|   +-- py       ok"; no extra chatty line. */

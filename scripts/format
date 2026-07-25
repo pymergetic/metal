@@ -11,6 +11,11 @@
 #   scripts/format check         dry-run + fail if anything would change (CI)
 #   scripts/format <path>...     format only these files/dirs
 #   scripts/format check <path>...
+#
+# *.inc.c files (embed_mods.inc.c, py_zip_embed.inc.c, ...) are skipped:
+# they're "/* AUTO-GENERATED ... — do not edit */" byte-array dumps, not
+# hand-maintained C, and clang-format's own wrapping of a 12-byte-per-line
+# hex array doesn't reliably converge to a stable "clean" form anyway.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,7 +30,7 @@ usage: scripts/format [check] [<path>...]
 
 Default trees skip src/efi/**, src/bios/**, external/, build/ automatically
 (the first two via their own DisableFormat .clang-format, the rest by not
-being walked at all).
+being walked at all). *.inc.c (auto-generated) files are always skipped.
 EOF
 	exit 1
 }
@@ -39,10 +44,14 @@ collect_files() {
 	local p
 	for p in "$@"; do
 		if [[ -f "${p}" ]]; then
-			printf '%s\n' "${p}"
+			case "${p}" in
+			*.inc.c) ;;
+			*) printf '%s\n' "${p}" ;;
+			esac
 		elif [[ -d "${p}" ]]; then
 			find "${p}" \
 				\( -path '*/build/*' -o -path '*/external/*' -o -path '*/.git/*' \) -prune -o \
+				\( -name '*.inc.c' \) -prune -o \
 				\( -name '*.c' -o -name '*.h' \) -print
 		fi
 	done

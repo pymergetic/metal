@@ -32,6 +32,14 @@ cmake-build-*/
 /*.efi
 /build/efi/
 
+# stdlib.zip + its .sig are rebuilt+resigned from mods/py/stdlib_src/ on
+# every build (scripts/build.d/port/efi/embed-stdlib.sh) and baked into the
+# firmware image as generated C byte arrays — see docs/MICROPYTHON.md. The
+# .sig is never byte-stable across re-signs, so none of this is tracked.
+/mods/py/stdlib.zip
+/mods/py/stdlib.zip.sig
+/src/pymergetic/metal/py/py_zip_embed.inc.c
+
 
 # wamrc temp stack-usage dumps (cwd leftovers)
 wamrc-su-*.su

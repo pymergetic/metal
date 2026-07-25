@@ -71,6 +71,12 @@ if [[ -x "${ROOT}/scripts/build.d/port/efi/embed-mods.sh" ]]; then
 	"${ROOT}/scripts/build.d/port/efi/embed-mods.sh" || true
 fi
 
+# Build+sign+embed stdlib.zip (mods/py/stdlib_src/) — not tracked in git,
+# always freshly baked into the binary, see embed-stdlib.sh. Unlike
+# embed-mods.sh above, this has no wasi-sdk dependency, so it's required
+# here too (not soft-failed) — both ports need a working stdlib.zip.
+"${ROOT}/scripts/build.d/port/efi/embed-stdlib.sh"
+
 # Parked doom package (same wasm as EFI). Opt-in: METAL_DOOM_BUILD=1.
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/doom.sh"
@@ -325,6 +331,7 @@ SRCS_C=(
 	"${SHARED_METAL}/py/py_await.c"
 	"${SHARED_METAL}/py/py_shell.c"
 	"${SHARED_METAL}/py/py_zip.c"
+	"${SHARED_METAL}/py/py_zip_embed.c"
 	"${SHARED_METAL}/py/py_zip_read.c"
 	"${SHARED_METAL}/py/py_guest.c"
 	"${SHARED_METAL}/py/py_port_stubs.c"

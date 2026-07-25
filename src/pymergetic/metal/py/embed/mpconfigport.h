@@ -60,6 +60,16 @@ typedef long      mp_off_t;
 #define MICROPY_PY_BUILTINS_SLICE     (1) /* x[a:b] / x[a:b:c] subscript syntax */
 #define MICROPY_PY_BUILTINS_SET       (1) /* {1, 2, 3} literal + set ops */
 #define MICROPY_PY_BUILTINS_ENUMERATE (1) /* enumerate() — argparse/ uses it */
+#define MICROPY_PY_SYS_EXC_INFO \
+  (1) /* sys.exc_info() — traceback/'s print_exc()/format_exc(); the \
+       * backing MP_STATE_VM(cur_exception) root pointer (py/vm.c) is set \
+       * unconditionally on every caught exception regardless of this \
+       * flag, so enabling it only compiles in the accessor, no new \
+       * runtime cost/behavior elsewhere. */
+#define MICROPY_PY_BUILTINS_STR_OP_MODULO \
+  (1) /* "%s" % x — logging/'s message formatting; also a latent gap in \
+       * argparse/'s own error-message paths (unexercised by \
+       * PY_PROOF_STDLIB's happy-path parse, which never hit them) */
 
 /* ---- Metal provides these — keep µPy copies off ------------------------ */
 #define MICROPY_PY_THREAD         (0) /* Python task = Metal task; no GIL */

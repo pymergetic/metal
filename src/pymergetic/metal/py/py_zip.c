@@ -22,10 +22,7 @@
 
 #include "py_internal.h"
 
-#ifndef PM_METAL_PY_STDLIB_ZIP
-#define PM_METAL_PY_STDLIB_ZIP "/mods/py/stdlib.zip"
-#endif
-#define PM_METAL_PY_STDLIB_ZIP_SIG      PM_METAL_PY_STDLIB_ZIP ".sig"
+/* PM_METAL_PY_STDLIB_ZIP / _SIG: py_internal.h (shared with py_zip_embed.c) */
 #define PM_METAL_PY_STDLIB_ZIP_URL_PATH "py/stdlib.zip"
 #define PY_ZIP_FETCH_CAP                (512u * 1024u)
 #define PY_ZIP_HOST_FALLBACK            0xC0A80A01u /* 192.168.10.1 — mirrors net_life.c's lab default */
