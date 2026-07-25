@@ -17,7 +17,7 @@ static void InputKeybShellCmd(int argc, char **argv)
     name = pm_metal_input_keyb_name(pm_metal_input_keyb_get());
     snprintf(msg,
              sizeof(msg),
-             "keyb: %s  (us|gr — post-EBS PS/2; shell + Doom HID)",
+             "keyb: %s  (us|gr - post-EBS PS/2; shell + Doom HID)",
              (name != NULL) ? name : "?");
     pm_metal_shell_out(msg);
     return;

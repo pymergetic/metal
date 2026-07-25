@@ -41,6 +41,11 @@ set -u
 source "${ROOT}/scripts/lib/pki.sh"
 pm_metal_pki_bake
 
+# Regenerate typings/**.pyi from PM_METAL_PY_BIND / PM_METAL_SHELL_CMD(S) /
+# pm_metal_mod_register_func call sites (Phase 2e) — editor/linter support
+# only, does not affect the firmware build itself.
+python3 "${ROOT}/scripts/gen_py_stubs.py" || true
+
 # MicroPython embed package (port-neutral sources under build/micropython_embed).
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/micropython.sh"

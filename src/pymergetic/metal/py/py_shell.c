@@ -21,8 +21,8 @@ static void PyShellUsage(void)
   pm_metal_shell_out("  py <script.py>                 run a script");
   pm_metal_shell_out("  py -c '<code>'                 run a one-liner");
   pm_metal_shell_out("  py -f <mod.fn> [ints...]       call a bound Python fn");
-  pm_metal_shell_out("    py -f c_py_demo.add 2 3      → prints 5");
-  pm_metal_shell_out("    py -f c_py_demo.blink 50000  → runs until blink finishes");
+  pm_metal_shell_out("    py -f c_py_demo.add 2 3      -> prints 5");
+  pm_metal_shell_out("    py -f c_py_demo.blink 50000  -> runs until blink finishes");
 }
 
 static int32_t PyParseI32(const char *s, int32_t *out)

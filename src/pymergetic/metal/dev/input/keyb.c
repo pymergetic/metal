@@ -1,114 +1,145 @@
 /** @file
-  DOS KEYB-style set-1 → ASCII layouts (US / GR). (impl: common)
+  DOS KEYB-style set-1 → ASCII layouts — registry walk. (impl: common)
+
+  The actual per-language tables live under dev/input/keyb_layout/'s *.c
+  files and self-register into the `.pm_metal_keyb_layouts.*` linker section (see
+  keyb_layout.h) — this file only knows how to walk that section and drive
+  the current selection. Adding a language never touches this file.
 **/
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
 #include <pymergetic/metal/dev/input/input.h>
+#include <pymergetic/metal/dev/input/keyb_layout.h>
 
-static pm_metal_input_keyb_t mKeyb = PM_METAL_INPUT_KEYB_US;
+static const pm_metal_keyb_layout_t *mCurrent;
 
-/* US QWERTY — set-1 make → ASCII */
-static const char mUsUnshift[0x80] = {
-  [0x01] = 0x1b, [0x02] = '1',  [0x03] = '2',  [0x04] = '3',  [0x05] = '4',  [0x06] = '5',
-  [0x07] = '6',  [0x08] = '7',  [0x09] = '8',  [0x0A] = '9',  [0x0B] = '0',  [0x0C] = '-',
-  [0x0D] = '=',  [0x0E] = 0x08, [0x0F] = '\t', [0x10] = 'q',  [0x11] = 'w',  [0x12] = 'e',
-  [0x13] = 'r',  [0x14] = 't',  [0x15] = 'y',  [0x16] = 'u',  [0x17] = 'i',  [0x18] = 'o',
-  [0x19] = 'p',  [0x1A] = '[',  [0x1B] = ']',  [0x1C] = '\r', [0x1E] = 'a',  [0x1F] = 's',
-  [0x20] = 'd',  [0x21] = 'f',  [0x22] = 'g',  [0x23] = 'h',  [0x24] = 'j',  [0x25] = 'k',
-  [0x26] = 'l',  [0x27] = ';',  [0x28] = '\'', [0x29] = '`',  [0x2B] = '\\', [0x2C] = 'z',
-  [0x2D] = 'x',  [0x2E] = 'c',  [0x2F] = 'v',  [0x30] = 'b',  [0x31] = 'n',  [0x32] = 'm',
-  [0x33] = ',',  [0x34] = '.',  [0x35] = '/',  [0x39] = ' ',
-};
+static uint32_t KeybLayoutCount(void)
+{
+  return (uint32_t)(__pm_metal_keyb_layouts_end - __pm_metal_keyb_layouts_start);
+}
 
-static const char mUsShift[0x80] = {
-  [0x02] = '!',  [0x03] = '@',  [0x04] = '#',  [0x05] = '$', [0x06] = '%', [0x07] = '^',
-  [0x08] = '&',  [0x09] = '*',  [0x0A] = '(',  [0x0B] = ')', [0x0C] = '_', [0x0D] = '+',
-  [0x0E] = 0x08, [0x0F] = '\t', [0x10] = 'Q',  [0x11] = 'W', [0x12] = 'E', [0x13] = 'R',
-  [0x14] = 'T',  [0x15] = 'Y',  [0x16] = 'U',  [0x17] = 'I', [0x18] = 'O', [0x19] = 'P',
-  [0x1A] = '{',  [0x1B] = '}',  [0x1C] = '\r', [0x1E] = 'A', [0x1F] = 'S', [0x20] = 'D',
-  [0x21] = 'F',  [0x22] = 'G',  [0x23] = 'H',  [0x24] = 'J', [0x25] = 'K', [0x26] = 'L',
-  [0x27] = ':',  [0x28] = '"',  [0x29] = '~',  [0x2B] = '|', [0x2C] = 'Z', [0x2D] = 'X',
-  [0x2E] = 'C',  [0x2F] = 'V',  [0x30] = 'B',  [0x31] = 'N', [0x32] = 'M', [0x33] = ',',
-  [0x34] = '.',  [0x35] = '?',  [0x39] = ' ',
-};
+static char AsciiLower(char c)
+{
+  return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
 
-/*
- * German QWERTZ (Lat15 / ISO-8859-15 bytes for umlauts — matches VGA font).
- * ß=0xDF ü=0xFC ö=0xF6 ä=0xE4 Ü=0xDC Ö=0xD6 Ä=0xC4 §=0xA7 °=0xB0 ´=0xB4
- */
-static const char mGrUnshift[0x80] = {
-  [0x01] = 0x1b,       [0x02] = '1',        [0x03] = '2',        [0x04] = '3',        [0x05] = '4',
-  [0x06] = '5',        [0x07] = '6',        [0x08] = '7',        [0x09] = '8',        [0x0A] = '9',
-  [0x0B] = '0',        [0x0C] = (char)0xDF, [0x0D] = (char)0xB4, [0x0E] = 0x08,       [0x0F] = '\t',
-  [0x10] = 'q',        [0x11] = 'w',        [0x12] = 'e',        [0x13] = 'r',        [0x14] = 't',
-  [0x15] = 'z',        [0x16] = 'u',        [0x17] = 'i',        [0x18] = 'o',        [0x19] = 'p',
-  [0x1A] = (char)0xFC, [0x1B] = '+',        [0x1C] = '\r',       [0x1E] = 'a',        [0x1F] = 's',
-  [0x20] = 'd',        [0x21] = 'f',        [0x22] = 'g',        [0x23] = 'h',        [0x24] = 'j',
-  [0x25] = 'k',        [0x26] = 'l',        [0x27] = (char)0xF6, [0x28] = (char)0xE4, [0x29] = '^',
-  [0x2B] = '#',        [0x2C] = 'y',        [0x2D] = 'x',        [0x2E] = 'c',        [0x2F] = 'v',
-  [0x30] = 'b',        [0x31] = 'n',        [0x32] = 'm',        [0x33] = ',',        [0x34] = '.',
-  [0x35] = '-',        [0x39] = ' ',        [0x56] = '<',
-};
+/* Case-insensitive, NUL-terminated-vs-bounded compare (no libc strcasecmp
+ * in this freestanding build). */
+static int AsciiEqICaseBounded(const char *id, const char *tok, size_t tok_len)
+{
+  size_t i;
 
-static const char mGrShift[0x80] = {
-  [0x02] = '!', [0x03] = '"',        [0x04] = (char)0xA7, [0x05] = '$',        [0x06] = '%',
-  [0x07] = '&', [0x08] = '/',        [0x09] = '(',        [0x0A] = ')',        [0x0B] = '=',
-  [0x0C] = '?', [0x0D] = '`',        [0x0E] = 0x08,       [0x0F] = '\t',       [0x10] = 'Q',
-  [0x11] = 'W', [0x12] = 'E',        [0x13] = 'R',        [0x14] = 'T',        [0x15] = 'Z',
-  [0x16] = 'U', [0x17] = 'I',        [0x18] = 'O',        [0x19] = 'P',        [0x1A] = (char)0xDC,
-  [0x1B] = '*', [0x1C] = '\r',       [0x1E] = 'A',        [0x1F] = 'S',        [0x20] = 'D',
-  [0x21] = 'F', [0x22] = 'G',        [0x23] = 'H',        [0x24] = 'J',        [0x25] = 'K',
-  [0x26] = 'L', [0x27] = (char)0xD6, [0x28] = (char)0xC4, [0x29] = (char)0xB0, [0x2B] = '\'',
-  [0x2C] = 'Y', [0x2D] = 'X',        [0x2E] = 'C',        [0x2F] = 'V',        [0x30] = 'B',
-  [0x31] = 'N', [0x32] = 'M',        [0x33] = ';',        [0x34] = ':',        [0x35] = '_',
-  [0x39] = ' ', [0x56] = '>',
-};
+  for (i = 0; i < tok_len; i++) {
+    if (id[i] == '\0' || AsciiLower(id[i]) != AsciiLower(tok[i])) {
+      return 0;
+    }
+  }
+
+  return id[tok_len] == '\0';
+}
+
+/* Case-insensitive match of `id` against `name` or a space-separated token
+ * in `aliases` (NULL-safe). */
+static int KeybLayoutMatches(const pm_metal_keyb_layout_t *layout, const char *id)
+{
+  const char *a;
+  const char *tok;
+  size_t      len;
+
+  if (AsciiEqICaseBounded(id, layout->name, strlen(layout->name))) {
+    return 1;
+  }
+
+  a = layout->aliases;
+  while (a != NULL && *a != '\0') {
+    tok = a;
+    while (*a != '\0' && *a != ' ') {
+      a++;
+    }
+
+    len = (size_t)(a - tok);
+    if (AsciiEqICaseBounded(id, tok, len)) {
+      return 1;
+    }
+
+    while (*a == ' ') {
+      a++;
+    }
+  }
+
+  return 0;
+}
+
+/* Lazily default to the first registered "us" (falls back to slot 0 if a
+ * build ever ships without one, so we never dereference NULL). */
+static const pm_metal_keyb_layout_t *KeybLayoutDefault(void)
+{
+  uint32_t i;
+  uint32_t n;
+
+  n = KeybLayoutCount();
+  for (i = 0; i < n; i++) {
+    if (strcmp(__pm_metal_keyb_layouts_start[i].name, "us") == 0) {
+      return &__pm_metal_keyb_layouts_start[i];
+    }
+  }
+
+  return (n != 0) ? &__pm_metal_keyb_layouts_start[0] : NULL;
+}
+
+static const pm_metal_keyb_layout_t *KeybLayoutCurrent(void)
+{
+  if (mCurrent == NULL) {
+    mCurrent = KeybLayoutDefault();
+  }
+
+  return mCurrent;
+}
 
 int pm_metal_input_keyb_set(pm_metal_input_keyb_t layout)
 {
-  if (layout != PM_METAL_INPUT_KEYB_US && layout != PM_METAL_INPUT_KEYB_GR) {
+  if (layout >= KeybLayoutCount()) {
     return -1;
   }
 
-  mKeyb = layout;
+  mCurrent = &__pm_metal_keyb_layouts_start[layout];
   return 0;
 }
 
 pm_metal_input_keyb_t pm_metal_input_keyb_get(void)
 {
-  return mKeyb;
+  const pm_metal_keyb_layout_t *cur;
+
+  cur = KeybLayoutCurrent();
+  return (cur != NULL) ? (pm_metal_input_keyb_t)(cur - __pm_metal_keyb_layouts_start) : 0;
 }
 
 const char *pm_metal_input_keyb_name(pm_metal_input_keyb_t layout)
 {
-  switch (layout) {
-  case PM_METAL_INPUT_KEYB_US:
-    return "us";
-  case PM_METAL_INPUT_KEYB_GR:
-    return "gr";
-  default:
+  if (layout >= KeybLayoutCount()) {
     return NULL;
   }
+
+  return __pm_metal_keyb_layouts_start[layout].name;
 }
 
 int pm_metal_input_keyb_parse(const char *id, pm_metal_input_keyb_t *out)
 {
+  uint32_t i;
+  uint32_t n;
+
   if (id == NULL || out == NULL || id[0] == '\0') {
     return -1;
   }
 
-  if (strcmp(id, "us") == 0 || strcmp(id, "US") == 0) {
-    *out = PM_METAL_INPUT_KEYB_US;
-    return 0;
-  }
-
-  /* DOS KEYB GR; also accept de */
-  if (strcmp(id, "gr") == 0 || strcmp(id, "GR") == 0 || strcmp(id, "de") == 0 ||
-      strcmp(id, "DE") == 0) {
-    *out = PM_METAL_INPUT_KEYB_GR;
-    return 0;
+  n = KeybLayoutCount();
+  for (i = 0; i < n; i++) {
+    if (KeybLayoutMatches(&__pm_metal_keyb_layouts_start[i], id)) {
+      *out = i;
+      return 0;
+    }
   }
 
   return -1;
@@ -116,25 +147,26 @@ int pm_metal_input_keyb_parse(const char *id, pm_metal_input_keyb_t *out)
 
 char pm_metal_input_keyb_ascii(uint8_t set1_make, int32_t shift)
 {
-  uint8_t     sc;
-  const char *map;
+  uint8_t                        sc;
+  const pm_metal_keyb_layout_t  *cur;
 
-  sc = (uint8_t)(set1_make & 0x7Fu);
-  if (mKeyb == PM_METAL_INPUT_KEYB_GR) {
-    map = (shift != 0) ? mGrShift : mGrUnshift;
-  } else {
-    map = (shift != 0) ? mUsShift : mUsUnshift;
+  sc  = (uint8_t)(set1_make & 0x7Fu);
+  cur = KeybLayoutCurrent();
+  if (cur == NULL) {
+    return 0;
   }
 
-  return map[sc];
+  return (shift != 0) ? cur->shift[sc] : cur->unshift[sc];
 }
 
 pm_metal_keycode_t pm_metal_input_keyb_hid(uint8_t set1_make, int32_t ext)
 {
-  uint8_t code;
+  uint8_t                       code;
+  const pm_metal_keyb_layout_t *cur;
 
   code = (uint8_t)(set1_make & 0x7Fu);
   if (ext != 0) {
+    /* E0-prefixed: dedicated nav cluster + right-hand mods + Menu/GUI. */
     switch (code) {
     case 0x4Bu:
       return PM_METAL_KEY_LEFT;
@@ -148,10 +180,28 @@ pm_metal_keycode_t pm_metal_input_keyb_hid(uint8_t set1_make, int32_t ext)
       return PM_METAL_KEY_PAGEUP;
     case 0x51u:
       return PM_METAL_KEY_PAGEDOWN;
+    case 0x47u:
+      return PM_METAL_KEY_HOME;
+    case 0x4Fu:
+      return PM_METAL_KEY_END;
+    case 0x52u:
+      return PM_METAL_KEY_INSERT;
+    case 0x53u:
+      return PM_METAL_KEY_DELETE;
+    case 0x1Cu:
+      return PM_METAL_KEY_KP_ENTER;
+    case 0x35u:
+      return PM_METAL_KEY_KP_SLASH;
     case 0x1Du:
       return PM_METAL_KEY_RCTRL;
     case 0x38u:
       return PM_METAL_KEY_RALT;
+    case 0x5Bu:
+      return PM_METAL_KEY_LGUI;
+    case 0x5Cu:
+      return PM_METAL_KEY_RGUI;
+    case 0x5Du:
+      return PM_METAL_KEY_MENU;
     default:
       return PM_METAL_KEY_NONE;
     }
@@ -224,18 +274,82 @@ pm_metal_keycode_t pm_metal_input_keyb_hid(uint8_t set1_make, int32_t ext)
     return (pm_metal_keycode_t)(PM_METAL_KEY_A + ('w' - 'a'));
   case 0x2Du:
     return (pm_metal_keycode_t)(PM_METAL_KEY_A + ('x' - 'a'));
+  case 0x0Cu:
+    return PM_METAL_KEY_MINUS;
+  case 0x0Du:
+    return PM_METAL_KEY_EQUAL;
+  case 0x1Au:
+    return PM_METAL_KEY_LEFTBRACE;
+  case 0x1Bu:
+    return PM_METAL_KEY_RIGHTBRACE;
+  case 0x2Bu:
+    return PM_METAL_KEY_BACKSLASH;
+  case 0x27u:
+    return PM_METAL_KEY_SEMICOLON;
+  case 0x28u:
+    return PM_METAL_KEY_APOSTROPHE;
+  case 0x29u:
+    return PM_METAL_KEY_GRAVE;
+  case 0x33u:
+    return PM_METAL_KEY_COMMA;
+  case 0x34u:
+    return PM_METAL_KEY_PERIOD;
+  case 0x35u:
+    return PM_METAL_KEY_SLASH;
+  case 0x3Au:
+    return PM_METAL_KEY_CAPSLOCK;
+  case 0x45u:
+    return PM_METAL_KEY_NUMLOCK;
+  case 0x46u:
+    return PM_METAL_KEY_SCROLLLOCK;
+  case 0x56u:
+    return PM_METAL_KEY_NONUSBSLASH;
+  case 0x57u:
+    return PM_METAL_KEY_F11;
+  case 0x58u:
+    return PM_METAL_KEY_F12;
+  case 0x37u:
+    return PM_METAL_KEY_KP_ASTERISK;
+  case 0x47u:
+    return PM_METAL_KEY_KP_7;
+  case 0x48u:
+    return PM_METAL_KEY_KP_8;
+  case 0x49u:
+    return PM_METAL_KEY_KP_9;
+  case 0x4Au:
+    return PM_METAL_KEY_KP_MINUS;
+  case 0x4Bu:
+    return PM_METAL_KEY_KP_4;
+  case 0x4Cu:
+    return PM_METAL_KEY_KP_5;
+  case 0x4Du:
+    return PM_METAL_KEY_KP_6;
+  case 0x4Eu:
+    return PM_METAL_KEY_KP_PLUS;
+  case 0x4Fu:
+    return PM_METAL_KEY_KP_1;
+  case 0x50u:
+    return PM_METAL_KEY_KP_2;
+  case 0x51u:
+    return PM_METAL_KEY_KP_3;
+  case 0x52u:
+    return PM_METAL_KEY_KP_0;
+  case 0x53u:
+    return PM_METAL_KEY_KP_PERIOD;
   /*
      * Letter HID follows keycap / DOS KEYB layout. US: 0x15=Y 0x2C=Z.
      * GR QWERTZ swaps those scancodes (Doom "press Y" vs keycap Y).
      */
   case 0x15u:
-    if (mKeyb == PM_METAL_INPUT_KEYB_GR) {
+    cur = KeybLayoutCurrent();
+    if (cur != NULL && cur->swap_yz != 0) {
       return (pm_metal_keycode_t)(PM_METAL_KEY_A + ('z' - 'a'));
     }
 
     return (pm_metal_keycode_t)(PM_METAL_KEY_A + ('y' - 'a'));
   case 0x2Cu:
-    if (mKeyb == PM_METAL_INPUT_KEYB_GR) {
+    cur = KeybLayoutCurrent();
+    if (cur != NULL && cur->swap_yz != 0) {
       return (pm_metal_keycode_t)(PM_METAL_KEY_A + ('y' - 'a'));
     }
 

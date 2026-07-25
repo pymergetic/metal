@@ -16,6 +16,7 @@
 #include <pymergetic/metal/util/size.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
 #include <pymergetic/metal/runtime/async/async.h>
+#include <pymergetic/metal/py/py.h>
 #include <runtime/run/run.h>
 #include <runtime/stack/stack.h>
 
@@ -165,6 +166,19 @@ static void CoreMemCmd(int32_t argc, char **argv)
            oth,
            pct_map);
   pm_metal_shell_out(line);
+  {
+    /* µPy blob (PM_METAL_PY_BLOB_BYTES, py.c) is one map carve among
+     * several (stacks, virtio/DMA, ...) — break it out here instead of
+     * leaving it invisible inside map_other's aggregate. */
+    uint64_t py_bytes = (uint64_t)pm_metal_py_blob_bytes();
+    char     pyb[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+    char     pct_py[8];
+
+    CoreFmtBytes(pyb, sizeof(pyb), py_bytes);
+    CoreFmtPct1(pct_py, sizeof(pct_py), py_bytes, map_other);
+    snprintf(line, sizeof(line), "  %s |   `-- py      %s   (%s of map)", branch, pyb, pct_py);
+    pm_metal_shell_out(line);
+  }
   snprintf(line,
            sizeof(line),
            "  %s +-- hole    %s   (%s of arena; free to grow map|heap)",

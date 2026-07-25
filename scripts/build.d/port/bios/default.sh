@@ -57,6 +57,10 @@ mkdir -p "${OBJ}"
 source "${ROOT}/scripts/lib/pki.sh"
 pm_metal_pki_bake
 
+# Regenerate typings/**.pyi (Phase 2e) — editor/linter support only, does
+# not affect the firmware build itself.
+python3 "${ROOT}/scripts/gen_py_stubs.py" || true
+
 # MicroPython embed (shared); ports only compile/link.
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/micropython.sh"
@@ -243,6 +247,8 @@ SRCS_C=(
 	"${BIOS_METAL}/dev/gfx/gfx_port.c"
 	"${SHARED_METAL}/dev/input/input.c"
 	"${SHARED_METAL}/dev/input/keyb.c"
+	"${SHARED_METAL}/dev/input/keyb_layout/keyb_layout_us.c"
+	"${SHARED_METAL}/dev/input/keyb_layout/keyb_layout_gr.c"
 	"${SHARED_METAL}/dev/input/virtio_input.c"
 	"${BIOS_METAL}/dev/input/input_port.c"
 	"${SHARED_METAL}/dev/stream/stream.c"

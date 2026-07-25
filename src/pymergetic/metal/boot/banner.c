@@ -94,7 +94,7 @@ void pm_metal_boot_dead(int reboot)
   pm_metal_util_ascii_log_styled(PM_METAL_LOG_STYLE_FAIL, "DEAD");
   pm_metal_log("");
   pm_metal_log(reboot ? " metal: system down - restarting" : " metal: system down");
-  pm_metal_ui_set_status(reboot ? "restarting…" : "system down");
+  pm_metal_ui_set_status(reboot ? "restarting..." : "system down");
   (void)pm_metal_ui_frame();
   (void)pm_metal_gfx_present_surface(PM_METAL_GFX_SURFACE_DEFAULT);
 

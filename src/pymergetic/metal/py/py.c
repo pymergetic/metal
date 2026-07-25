@@ -16,11 +16,13 @@
 #include "py/lexer.h"
 #include "py/runtime.h"
 #include "py/obj.h"
+#include "py/stackctrl.h"
 
 #include "py_internal.h"
 
 enum {
-  PY_STEP_LOAD = 0,
+  PY_STEP_ZIP = 0,
+  PY_STEP_LOAD,
   PY_STEP_EXEC,
   PY_STEP_CALL,
   PY_STEP_RESUME,
@@ -179,6 +181,15 @@ static int py_exec_and_maybe_main(pm_metal_py_job_t *job)
   nlr_buf_t nlr;
   int       rc;
 
+  /*
+   * mp_embed_init() sets the GC stack-scan top once, from whichever CPU
+   * ran boot init — but this coroutine step can be resumed on any of N
+   * SMP runners (no CPU pinning). Re-anchor it to *this* call, on
+   * *this* CPU, right before running bytecode: safe because mPyRunLock
+   * already guarantees only one CPU is ever in here at a time, and the
+   * boundary only needs to hold for this synchronous call.
+   */
+  mp_stack_set_top(&nlr);
   g_current_job = job;
   if (nlr_push(&nlr) == 0) {
     mp_lexer_t *lex = mp_lexer_new_from_str_len(MP_QSTR__lt_stdin_gt_, job->src, job->src_len, 0);
@@ -217,6 +228,8 @@ static int py_call_bound(pm_metal_py_job_t *job)
   if (job->call_fn == MP_OBJ_NULL) {
     return -1;
   }
+  /* Re-anchor GC stack-scan top to this CPU/call — see py_exec_and_maybe_main. */
+  mp_stack_set_top(&nlr);
   g_current_job = job;
   arg           = mp_obj_new_int_from_uint(job->call_arg0);
   if (nlr_push(&nlr) == 0) {
@@ -256,6 +269,8 @@ static pm_metal_status_t py_resume_coro(pm_metal_py_job_t *job)
   mp_vm_return_kind_t kind;
   nlr_buf_t           nlr;
 
+  /* Re-anchor GC stack-scan top to this CPU/call — see py_exec_and_maybe_main. */
+  mp_stack_set_top(&nlr);
   g_current_job   = job;
   job->pending    = 0;
   job->pending_aw = MP_OBJ_NULL;
@@ -320,6 +335,23 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
    * step, never spin the runner.
    */
   switch (job->step) {
+  case PY_STEP_ZIP: {
+    pm_metal_async_handle_t pending = 0;
+    int32_t                 zrc     = pm_metal_py_zip_step(self_h, &pending);
+
+    if (zrc < 0) {
+      job->step = PY_STEP_DONE;
+      return PM_METAL_ERROR;
+    }
+    if (zrc > 0) {
+      return pm_metal_async_await(self_h, pending);
+    }
+    job->step = job->after_zip_step;
+    /* Re-enter through the ready ring instead of falling through here —
+     * job->after_zip_step is a runtime value (LOAD or EXEC depending on
+     * the caller), not something a fallthrough/goto can target cleanly. */
+    return pm_metal_async_await(self_h, pm_metal_async_yield());
+  }
   case PY_STEP_LOAD: {
     char   path[256];
     char  *body     = NULL;
@@ -410,7 +442,6 @@ static pm_metal_async_handle_t py_spawn(char *src, size_t len, uint32_t step)
     }
     return 0;
   }
-  (void)pm_metal_py_zip_ensure();
 
   ch = pm_metal_async_coro_create(py_job_step, sizeof(*job));
   if (ch == PM_METAL_ASYNC_HANDLE_INVALID) {
@@ -427,14 +458,15 @@ static pm_metal_async_handle_t py_spawn(char *src, size_t len, uint32_t step)
     }
     return 0;
   }
-  job->step          = step;
-  job->src           = src;
-  job->src_len       = len;
-  job->py_coro       = MP_OBJ_NULL;
-  job->call_fn       = MP_OBJ_NULL;
-  job->call_arg0     = 0;
-  job->pending       = 0;
-  job->pending_aw    = MP_OBJ_NULL;
+  job->step           = PY_STEP_ZIP;
+  job->after_zip_step = step;
+  job->src            = src;
+  job->src_len        = len;
+  job->py_coro        = MP_OBJ_NULL;
+  job->call_fn        = MP_OBJ_NULL;
+  job->call_arg0      = 0;
+  job->pending        = 0;
+  job->pending_aw     = MP_OBJ_NULL;
   job->exe_exception = 0;
   pm_metal_async_coro_set_release(ch, py_job_release);
 
@@ -596,6 +628,8 @@ int pm_metal_py_call(pm_metal_py_fn_t *fn, int32_t *out_i32, int32_t a, int32_t 
     }
   }
 
+  /* Re-anchor GC stack-scan top to this CPU/call — see py_exec_and_maybe_main. */
+  mp_stack_set_top(&nlr);
   args[0] = mp_obj_new_int(a);
   args[1] = mp_obj_new_int(b);
   if (nlr_push(&nlr) == 0) {

@@ -19,6 +19,7 @@ extern "C" {
 extern void pm_metal_ui_input_clear(void) PM_METAL_UI_IMPORT(pm_metal_ui_input_clear);
 extern int  pm_metal_ui_input_append(char ch) PM_METAL_UI_IMPORT(pm_metal_ui_input_append);
 extern int  pm_metal_ui_input_backspace(void) PM_METAL_UI_IMPORT(pm_metal_ui_input_backspace);
+extern int  pm_metal_ui_input_delete_fwd(void) PM_METAL_UI_IMPORT(pm_metal_ui_input_delete_fwd);
 extern int  pm_metal_ui_input_text(char *out, uint32_t cap)
   PM_METAL_UI_IMPORT(pm_metal_ui_input_text);
 extern int pm_metal_ui_input_set(const char *text) PM_METAL_UI_IMPORT(pm_metal_ui_input_set);
@@ -27,6 +28,8 @@ void pm_metal_ui_input_clear(void);
 /** Insert at cursor (printable or '\\n'). */
 int pm_metal_ui_input_append(char ch);
 int pm_metal_ui_input_backspace(void);
+/** Remove char at cursor (Delete key); 0 = removed, -1 = at end / no line. */
+int pm_metal_ui_input_delete_fwd(void);
 int pm_metal_ui_input_text(char *out, uint32_t cap);
 /** Replace the shared input (history recall). Truncates to INPUT_CHARS-1. */
 int pm_metal_ui_input_set(const char *text);

@@ -71,6 +71,10 @@ build_one async_blk "${ROOT}/mods/tests/t_async_blk/main.c" \
 	-Wl,--export=pm_metal_guest_step
 build_one async_py "${ROOT}/mods/tests/async_py/main.c" \
 	-Wl,--export=pm_metal_guest_step
+build_one fresh_counter "${ROOT}/mods/tests/fresh_counter/main.c" \
+	-Wl,--export=pm_metal_fresh_counter_bump
+build_one fresh_guest "${ROOT}/mods/tests/fresh_guest/main.c" \
+	-Wl,--export=pm_metal_guest_step
 
 # AOT proof embed (same guest as async_sleep) — both host arches, always.
 # Lookup: run async_aot → async_aot.{x86_64,i386} by BUILD_TARGET.
@@ -100,6 +104,8 @@ mods = [
     ("async_audio", out_dir / "async_audio.wasm"),
     ("async_blk", out_dir / "async_blk.wasm"),
     ("async_py", out_dir / "async_py.wasm"),
+    ("fresh_counter", out_dir / "fresh_counter.wasm"),
+    ("fresh_guest", out_dir / "fresh_guest.wasm"),
 ]
 # Whatever pm_metal_aot_compile_all produced (x86_64/i386/aarch64/arm/…).
 for aot in sorted(out_dir.glob("async_aot.*.aot")):

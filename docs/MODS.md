@@ -117,6 +117,34 @@ Plumbing (no new registry, no second table):
   recreate instance 0's `inst`/`exec_env` and rerun `on_load` (no
   refetch/recompile). Same idle guard as `unload()`.
 
+**Standalone fresh trio (not tied to the process table):**
+`pm_metal_mod_fresh_open(mod_name) -> handle` /
+`pm_metal_mod_fresh_resolve(handle, func_name, out)` /
+`pm_metal_mod_fresh_close(handle)` (`mod.c`/`mod.h`) extract the same
+instantiate → lookup → teardown steps used inline by `fn_process(FRESH)`,
+but as their own handle-table-backed API (`mFresh[]`, mirrors `mod.c`'s own
+`ModFnHandleAlloc`/`Get` pattern) usable outside a process invocation.
+Declared **dual-ABI** (`PM_METAL_MOD_IMPORT`) — a wasm guest can open a
+`FRESH` instance of another mod directly (guest-to-guest), which
+`fn_process`'s host-only `FRESH` path never supported. Refuses (returns an
+error) on a `SINGLE`-capability mod, same guard as `ModResolveUseFresh`.
+
+Python surface (`mod_py_bind.c`): a mod-proxy's `.fresh` attribute is a
+callable that opens a fresh scope object whose custom `attr` hook resolves
+both `__aenter__`/`__aexit__` (so `async with` works via MicroPython's
+generic attribute dispatch — no separate context-manager protocol needed)
+and per-function bound calls scoped to that handle:
+
+```python
+async with pymergetic.metal.mod.acme.fresh() as inst:
+    await inst.frobnicate(42)
+```
+
+Boot-proofed against a `MULTI`-cap test mod from Python (two concurrent
+scopes don't share state, `mods/tests/fresh_counter/main.c`) and from a wasm
+guest-to-guest call exercising the dual-ABI trio directly
+(`mods/tests/fresh_guest/main.c`).
+
 ### Process (role on the task tree)
 
 **process = command Extrawurst** (UI/stdio redirect) on a **process-root task**.

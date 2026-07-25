@@ -575,7 +575,7 @@ void pm_metal_boot_shutdown(int reboot)
   for (i = 3; i > 0; i--) {
     char status[48];
 
-    snprintf(status, sizeof(status), reboot ? "reboot in %u…" : "power off in %u…", i);
+    snprintf(status, sizeof(status), reboot ? "reboot in %u..." : "power off in %u...", i);
     pm_metal_ui_set_status(status);
     pm_metal_logf_styled(PM_METAL_LOG_STYLE_WARN,
                          reboot ? "metal-boot: reboot in %u s" : "metal-boot: power off in %u s",

@@ -50,11 +50,19 @@ typedef struct {
   int32_t shell_registered;
 } mod_cmd_t;
 
+typedef struct {
+  int32_t                   used;
+  char                      mod_name[64];
+  pm_metal_wasm_mod_image_t img;
+} mod_fresh_t;
+
 static mod_slot_t           mMods[PM_METAL_MOD_MAX];
 static mod_func_t           mFuncs[PM_METAL_MOD_FUNC_MAX];
 static mod_cmd_t            mCmds[PM_METAL_MOD_CMD_MAX];
 static pm_metal_shell_cmd_t mShellCmds[PM_METAL_MOD_CMD_MAX];
 static mod_slot_t          *mConnecting;
+/* Slot 0 unused so a raw index doubles as the handle (0 = invalid). */
+static mod_fresh_t          mFresh[PM_METAL_MOD_FRESH_MAX + 1];
 
 static mod_slot_t *ModFind(const char *name)
 {
@@ -210,7 +218,7 @@ static int32_t ModRegisterFuncHost(const char *name, const char *export_name)
 
   strncpy(f->export_name, export_name, sizeof(f->export_name) - 1);
   f->fn = fn;
-  pm_metal_logf("metal-mod: func '%s' → export '%s' (%s)", name, export_name, mConnecting->name);
+  pm_metal_logf("metal-mod: func '%s' -> export '%s' (%s)", name, export_name, mConnecting->name);
   return 0;
 }
 
@@ -267,7 +275,7 @@ static int32_t ModRegisterCmdHost(const char *cmd_name, const char *func_name, c
       strncpy(c->help, help, sizeof(c->help) - 1);
     }
 
-    pm_metal_logf("metal-mod: cmd '%s' → func '%s' (%s)", cmd_name, func_name, mConnecting->name);
+    pm_metal_logf("metal-mod: cmd '%s' -> func '%s' (%s)", cmd_name, func_name, mConnecting->name);
     return 0;
   }
 
@@ -276,7 +284,7 @@ static int32_t ModRegisterCmdHost(const char *cmd_name, const char *func_name, c
   }
 
   strncpy(c->func_name, func_name, sizeof(c->func_name) - 1);
-  pm_metal_logf("metal-mod: cmd '%s' → func '%s' (%s)", cmd_name, func_name, mConnecting->name);
+  pm_metal_logf("metal-mod: cmd '%s' -> func '%s' (%s)", cmd_name, func_name, mConnecting->name);
   return 0;
 }
 
@@ -712,6 +720,100 @@ pm_metal_async_handle_t pm_metal_mod_fn_coro(const pm_metal_mod_fn_t *fn)
   return pm_metal_async_coro_create_guest(fn->inst, fn->exec_env, fn->fn, 0u);
 }
 
+static mod_fresh_t *ModFreshGet(pm_metal_mod_fresh_h_t h)
+{
+  if (h == PM_METAL_MOD_FRESH_H_INVALID || h > PM_METAL_MOD_FRESH_MAX) {
+    return NULL;
+  }
+
+  if (!mFresh[h].used) {
+    return NULL;
+  }
+
+  return &mFresh[h];
+}
+
+pm_metal_mod_fresh_h_t pm_metal_mod_fresh_open(const char *mod_name)
+{
+  mod_slot_t *s;
+  uint32_t    i;
+  mod_fresh_t *slot;
+
+  if (mod_name == NULL || mod_name[0] == '\0') {
+    return PM_METAL_MOD_FRESH_H_INVALID;
+  }
+
+  if (pm_metal_mod_load(mod_name) != 0) {
+    return PM_METAL_MOD_FRESH_H_INVALID;
+  }
+
+  s = ModFind(mod_name);
+  if (s == NULL || s->img.module == NULL) {
+    return PM_METAL_MOD_FRESH_H_INVALID;
+  }
+
+  /* Same guard fn_process(FRESH) already applies via ModResolveUseFresh. */
+  if (s->cap == PM_METAL_MOD_CAP_SINGLE) {
+    pm_metal_logf("metal-mod: fresh_open refused for '%s' (capability=single)", s->name);
+    return PM_METAL_MOD_FRESH_H_INVALID;
+  }
+
+  slot = NULL;
+  for (i = 1; i <= PM_METAL_MOD_FRESH_MAX; i++) {
+    if (!mFresh[i].used) {
+      slot = &mFresh[i];
+      break;
+    }
+  }
+
+  if (slot == NULL) {
+    pm_metal_log("metal-mod: fresh_open: handle table full");
+    return PM_METAL_MOD_FRESH_H_INVALID;
+  }
+
+  memset(slot, 0, sizeof(*slot));
+  if (pm_metal_wasm_mod_image_instantiate(s->img.module, s->name, &slot->img) != 0) {
+    pm_metal_logf("metal-mod: fresh_open: instantiate failed for %s", s->name);
+    return PM_METAL_MOD_FRESH_H_INVALID;
+  }
+
+  strncpy(slot->mod_name, s->name, sizeof(slot->mod_name) - 1);
+  slot->used = 1;
+  s->fresh_open++;
+  return (pm_metal_mod_fresh_h_t)(slot - mFresh);
+}
+
+int pm_metal_mod_fresh_resolve(pm_metal_mod_fresh_h_t h, const char *func_name, pm_metal_mod_fn_t *out)
+{
+  mod_fresh_t *slot;
+
+  slot = ModFreshGet(h);
+  if (slot == NULL) {
+    return -1;
+  }
+
+  return pm_metal_mod_func_resolve_on(slot->mod_name, func_name, &slot->img, out);
+}
+
+void pm_metal_mod_fresh_close(pm_metal_mod_fresh_h_t h)
+{
+  mod_fresh_t *slot;
+  mod_slot_t  *s;
+
+  slot = ModFreshGet(h);
+  if (slot == NULL) {
+    return;
+  }
+
+  pm_metal_wasm_mod_image_deinstantiate(&slot->img);
+  s = ModFind(slot->mod_name);
+  if (s != NULL && s->fresh_open != 0) {
+    s->fresh_open--;
+  }
+
+  memset(slot, 0, sizeof(*slot));
+}
+
 int pm_metal_mod_cmd_resolve(const char *cmd_name, pm_metal_mod_cmd_t *out)
 {
   mod_cmd_t  *c;
@@ -1074,6 +1176,47 @@ static uint32_t pm_metal_mod_cmd_resolve_native(wasm_exec_env_t exec_env, const 
   return (uint32_t)ModFnHandleAlloc(&cmd);
 }
 
+static uint32_t pm_metal_mod_fresh_open_native(wasm_exec_env_t exec_env, const char *mod_name)
+{
+  (void)exec_env;
+  return (uint32_t)pm_metal_mod_fresh_open(mod_name);
+}
+
+static uint32_t pm_metal_mod_fresh_resolve_native(wasm_exec_env_t exec_env,
+                                                  uint32_t        fresh_h,
+                                                  const char     *func_name)
+{
+  pm_metal_mod_cmd_t cmd;
+  mod_fresh_t        *slot;
+  mod_func_t          *f;
+
+  (void)exec_env;
+  memset(&cmd, 0, sizeof(cmd));
+  if (pm_metal_mod_fresh_resolve((pm_metal_mod_fresh_h_t)fresh_h, func_name, &cmd.fn) != 0) {
+    return PM_METAL_MOD_FN_H_INVALID;
+  }
+
+  /* Carry mod name + export name, same as pm_metal_mod_func_resolve_native. */
+  slot = ModFreshGet((pm_metal_mod_fresh_h_t)fresh_h);
+  if (slot != NULL) {
+    strncpy(cmd.mod_name, slot->mod_name, sizeof(cmd.mod_name) - 1);
+    strncpy(cmd.name, slot->mod_name, sizeof(cmd.name) - 1);
+    f = FuncFind(slot->mod_name, func_name);
+    if (f != NULL) {
+      strncpy(cmd.export_name, f->export_name, sizeof(cmd.export_name) - 1);
+    }
+  }
+
+  return (uint32_t)ModFnHandleAlloc(&cmd);
+}
+
+static int32_t pm_metal_mod_fresh_close_native(wasm_exec_env_t exec_env, uint32_t fresh_h)
+{
+  (void)exec_env;
+  pm_metal_mod_fresh_close((pm_metal_mod_fresh_h_t)fresh_h);
+  return 0;
+}
+
 static uint32_t pm_metal_mod_fn_coro_native(wasm_exec_env_t exec_env, uint32_t fn_h)
 {
   pm_metal_mod_cmd_t *cmd;
@@ -1146,6 +1289,9 @@ static NativeSymbol g_pm_metal_mod_native_symbols[] = {
   { "pm_metal_mod_cmd_invoke", (void *)pm_metal_mod_cmd_invoke_native, "($iiii)i", NULL },
   { "pm_metal_mod_func_resolve", (void *)pm_metal_mod_func_resolve_native, "($$)i", NULL },
   { "pm_metal_mod_cmd_resolve", (void *)pm_metal_mod_cmd_resolve_native, "($)i", NULL },
+  { "pm_metal_mod_fresh_open", (void *)pm_metal_mod_fresh_open_native, "($)i", NULL },
+  { "pm_metal_mod_fresh_resolve", (void *)pm_metal_mod_fresh_resolve_native, "(i$)i", NULL },
+  { "pm_metal_mod_fresh_close", (void *)pm_metal_mod_fresh_close_native, "(i)i", NULL },
   { "pm_metal_mod_fn_coro", (void *)pm_metal_mod_fn_coro_native, "(i)i", NULL },
   { "pm_metal_mod_fn_process", (void *)pm_metal_mod_fn_process_native, "(i$iiii)i", NULL },
   { "pm_metal_mod_func_exists", (void *)pm_metal_mod_func_exists_native, "($$)i", NULL },

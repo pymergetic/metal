@@ -97,6 +97,7 @@ static const metal_boot_proof_t mProofs[] = {
   { "async_tftp", "metal-async: tftp ok", "metal-async: tftp fail", 15000 },
   { "async_audio", "metal-async: audio ok", "metal-async: audio fail", 15000 },
   { "async_py", "metal-async: py ok", "metal-async: py fail", 10000 },
+  { "fresh_guest", "metal-async: fresh ok", "metal-async: fresh fail", 10000 },
 };
 
 static pm_metal_status_t MetalBootTestStep(pm_metal_async_handle_t self_h)

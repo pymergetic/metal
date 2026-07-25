@@ -22,30 +22,72 @@ extern "C" {
 /* Metal keycodes — USB HID Keyboard/Keypad usage page (subset). */
 typedef uint16_t pm_metal_keycode_t;
 
-#define PM_METAL_KEY_NONE      0u
-#define PM_METAL_KEY_A         0x04u
-#define PM_METAL_KEY_Z         0x1du
-#define PM_METAL_KEY_1         0x1eu
-#define PM_METAL_KEY_0         0x27u
-#define PM_METAL_KEY_ENTER     0x28u
-#define PM_METAL_KEY_ESCAPE    0x29u
-#define PM_METAL_KEY_BACKSPACE 0x2au
-#define PM_METAL_KEY_TAB       0x2bu
-#define PM_METAL_KEY_SPACE     0x2cu
-#define PM_METAL_KEY_F1        0x3au
-#define PM_METAL_KEY_F10       0x43u
-#define PM_METAL_KEY_PAGEUP    0x4bu
-#define PM_METAL_KEY_PAGEDOWN  0x4eu
-#define PM_METAL_KEY_RIGHT     0x4fu
-#define PM_METAL_KEY_LEFT      0x50u
-#define PM_METAL_KEY_DOWN      0x51u
-#define PM_METAL_KEY_UP        0x52u
-#define PM_METAL_KEY_LCTRL     0xe0u
-#define PM_METAL_KEY_LSHIFT    0xe1u
-#define PM_METAL_KEY_LALT      0xe2u
-#define PM_METAL_KEY_RCTRL     0xe4u
-#define PM_METAL_KEY_RSHIFT    0xe5u
-#define PM_METAL_KEY_RALT      0xe6u
+#define PM_METAL_KEY_NONE       0u
+#define PM_METAL_KEY_A          0x04u
+#define PM_METAL_KEY_Z          0x1du
+#define PM_METAL_KEY_1          0x1eu
+#define PM_METAL_KEY_0          0x27u
+#define PM_METAL_KEY_ENTER      0x28u
+#define PM_METAL_KEY_ESCAPE     0x29u
+#define PM_METAL_KEY_BACKSPACE  0x2au
+#define PM_METAL_KEY_TAB        0x2bu
+#define PM_METAL_KEY_SPACE      0x2cu
+#define PM_METAL_KEY_MINUS      0x2du /* '-' / '_' */
+#define PM_METAL_KEY_EQUAL      0x2eu /* '=' / '+' */
+#define PM_METAL_KEY_LEFTBRACE  0x2fu /* '[' / '{' */
+#define PM_METAL_KEY_RIGHTBRACE 0x30u /* ']' / '}' */
+#define PM_METAL_KEY_BACKSLASH  0x31u /* '\' / '|' */
+#define PM_METAL_KEY_SEMICOLON  0x33u /* ';' / ':' */
+#define PM_METAL_KEY_APOSTROPHE 0x34u /* ''' / '"' */
+#define PM_METAL_KEY_GRAVE      0x35u /* '`' / '~' */
+#define PM_METAL_KEY_COMMA      0x36u /* ',' / '<' */
+#define PM_METAL_KEY_PERIOD     0x37u /* '.' / '>' */
+#define PM_METAL_KEY_SLASH      0x38u /* '/' / '?' */
+#define PM_METAL_KEY_CAPSLOCK   0x39u
+#define PM_METAL_KEY_F1         0x3au
+#define PM_METAL_KEY_F10        0x43u
+#define PM_METAL_KEY_F11        0x44u
+#define PM_METAL_KEY_F12        0x45u
+#define PM_METAL_KEY_PRTSCR     0x46u
+#define PM_METAL_KEY_SCROLLLOCK 0x47u
+#define PM_METAL_KEY_PAUSE      0x48u
+#define PM_METAL_KEY_INSERT     0x49u
+#define PM_METAL_KEY_HOME       0x4au
+#define PM_METAL_KEY_PAGEUP     0x4bu
+#define PM_METAL_KEY_DELETE     0x4cu
+#define PM_METAL_KEY_END        0x4du
+#define PM_METAL_KEY_PAGEDOWN   0x4eu
+#define PM_METAL_KEY_RIGHT      0x4fu
+#define PM_METAL_KEY_LEFT       0x50u
+#define PM_METAL_KEY_DOWN       0x51u
+#define PM_METAL_KEY_UP         0x52u
+#define PM_METAL_KEY_NUMLOCK     0x53u
+#define PM_METAL_KEY_KP_SLASH    0x54u
+#define PM_METAL_KEY_KP_ASTERISK 0x55u
+#define PM_METAL_KEY_KP_MINUS    0x56u
+#define PM_METAL_KEY_KP_PLUS     0x57u
+#define PM_METAL_KEY_KP_ENTER    0x58u
+#define PM_METAL_KEY_KP_1        0x59u
+#define PM_METAL_KEY_KP_2        0x5au
+#define PM_METAL_KEY_KP_3        0x5bu
+#define PM_METAL_KEY_KP_4        0x5cu
+#define PM_METAL_KEY_KP_5        0x5du
+#define PM_METAL_KEY_KP_6        0x5eu
+#define PM_METAL_KEY_KP_7        0x5fu
+#define PM_METAL_KEY_KP_8        0x60u
+#define PM_METAL_KEY_KP_9        0x61u
+#define PM_METAL_KEY_KP_0        0x62u
+#define PM_METAL_KEY_KP_PERIOD   0x63u
+#define PM_METAL_KEY_NONUSBSLASH 0x64u /* ISO "102nd key" -- DE '<>|' next to LSHIFT */
+#define PM_METAL_KEY_MENU        0x65u
+#define PM_METAL_KEY_LCTRL       0xe0u
+#define PM_METAL_KEY_LSHIFT      0xe1u
+#define PM_METAL_KEY_LALT        0xe2u
+#define PM_METAL_KEY_LGUI        0xe3u
+#define PM_METAL_KEY_RCTRL       0xe4u
+#define PM_METAL_KEY_RSHIFT      0xe5u
+#define PM_METAL_KEY_RALT        0xe6u
+#define PM_METAL_KEY_RGUI        0xe7u
 
 #define PM_METAL_INPUT_PTR_ABSOLUTE 1u
 #define PM_METAL_INPUT_PTR_RELATIVE 2u
@@ -136,20 +178,21 @@ void pm_metal_input_pointer_sample(int32_t *x, int32_t *y, uint32_t *buttons);
 int pm_metal_input_ps2_init(void);
 
 /**
- * DOS KEYB-style layout for set-1 → shell ASCII (US default, GR = QWERTZ).
+ * DOS KEYB-style layout for set-1 → shell ASCII (US default, GR = QWERTZ,
+ * more languages self-register from dev/input/keyb_layout/'s *.c files).
+ * The value is just an index into that registry — never persisted, never
+ * compared against a named constant outside keyb.c.
  * impl: common — src/pymergetic/metal/dev/input/keyb.c
  */
-typedef enum {
-  PM_METAL_INPUT_KEYB_US = 0,
-  PM_METAL_INPUT_KEYB_GR = 1,
-} pm_metal_input_keyb_t;
+typedef uint32_t pm_metal_input_keyb_t;
 
 int                   pm_metal_input_keyb_set(pm_metal_input_keyb_t layout);
 pm_metal_input_keyb_t pm_metal_input_keyb_get(void);
-/** "us" / "gr"; NULL if unknown. */
+/** Registered layout's short id (e.g. "us" / "gr"); NULL if unknown. */
 const char *pm_metal_input_keyb_name(pm_metal_input_keyb_t layout);
 /**
- * Parse DOS KEYB id ("us", "gr", "de"). Returns 0 and sets *out on ok.
+ * Parse a registered layout id or alias (e.g. "us", "gr", "de"). Returns 0
+ * and sets *out on ok.
  */
 int pm_metal_input_keyb_parse(const char *id, pm_metal_input_keyb_t *out);
 /** Map set-1 make (low 7 bits) + shift → CHAR8; 0 = no glyph. */

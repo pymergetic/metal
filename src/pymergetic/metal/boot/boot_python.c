@@ -2,6 +2,7 @@
   Boot-path MicroPython: always-on blob init + host overlap/yield proofs.
 **/
 #include <pymergetic/metal/boot/boot.h>
+#include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/runtime/async/async.h>
@@ -29,6 +30,10 @@ typedef enum {
   PY_PROOF_PMCMD_WAIT,
   PY_PROOF_MOD,
   PY_PROOF_MOD_WAIT,
+  PY_PROOF_FRESH,
+  PY_PROOF_FRESH_WAIT,
+  PY_PROOF_SHADOW,
+  PY_PROOF_SHADOW_WAIT,
   PY_PROOF_OK,
   PY_PROOF_FAIL
 } metal_boot_py_proof_step_t;
@@ -509,6 +514,125 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
     }
 
     pm_metal_log("metal-py: mod-func ok");
+    t->step = PY_PROOF_FRESH;
+    return PM_METAL_PENDING;
+  }
+
+  case PY_PROOF_FRESH:
+    /*
+     * Phase 2d: pymergetic.metal.mod.<name>.fresh() — two concurrent
+     * "async with" scopes against the same MULTI-cap test mod must not
+     * share state: fresh_counter's g_counter lives in each fresh
+     * instance's own wasm linear memory, so bumping each once must
+     * read back 1 in both, never 1 then 2.
+     */
+    t->a = pm_metal_py_run_str("import pymergetic.metal.mod as mod\n"
+                               "async def main():\n"
+                               "    async with mod.fresh_counter.fresh() as a:\n"
+                               "        async with mod.fresh_counter.fresh() as b:\n"
+                               "            va = await a.bump()\n"
+                               "            vb = await b.bump()\n"
+                               "            assert va == 1 and vb == 1\n");
+    if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
+      pm_metal_log("metal-py: fresh fail (spawn)");
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    t->t0       = pm_metal_time_mono_us();
+    t->deadline = t->t0 + 3000000ull;
+    t->step     = PY_PROOF_FRESH_WAIT;
+    return PM_METAL_PENDING;
+
+  case PY_PROOF_FRESH_WAIT: {
+    int32_t sa;
+
+    pm_metal_run_poll_all();
+    sa = pm_metal_async_task_status(t->a);
+    if (sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) {
+      if (pm_metal_time_mono_us() >= t->deadline) {
+        pm_metal_async_task_cancel(t->a);
+        pm_metal_log("metal-py: fresh fail (timeout)");
+        t->step = PY_PROOF_FAIL;
+        return PM_METAL_PENDING;
+      }
+
+      return pm_metal_async_await(h, pm_metal_async_sleep_us(2000));
+    }
+
+    if (sa != PM_METAL_DONE) {
+      pm_metal_logf("metal-py: fresh fail sa=%d", sa);
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    pm_metal_log("metal-py: fresh ok");
+    t->step = PY_PROOF_SHADOW;
+    return PM_METAL_PENDING;
+  }
+
+  case PY_PROOF_SHADOW: {
+    /*
+     * Phase 3 import-shadow regression: a same-named .py sitting on
+     * sys.path must never shadow a C-registered dotted module.
+     * pm_metal_py_init() populates mp_loaded_modules_dict (binds/pmcmd/
+     * mod install) before any script or zip content is ever imported,
+     * and builtinimport.c's process_import_at_level checks that dict
+     * FIRST — a hit there returns immediately, never touching sys.path
+     * (see external/micropython/py/builtinimport.c ~line 380). Prove it
+     * by planting a decoy right on /mods/py (already on sys.path) under
+     * the exact name of a C module ("pmcmd", the short-name exception —
+     * same dict, same code path a "pymergetic/metal.py" decoy would hit,
+     * chosen here to avoid needing a fresh subdirectory on either ESP
+     * backend) and confirming its sentinel never surfaces.
+     */
+    static const char decoy[] = "SHADOWED = True\n";
+
+    if (pm_metal_fs_write("/mods/py/pmcmd.py", decoy, (uint32_t)(sizeof(decoy) - 1u)) !=
+        (uint32_t)(sizeof(decoy) - 1u)) {
+      pm_metal_log("metal-py: shadow fail (decoy write)");
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    t->a = pm_metal_py_run_str("import pmcmd\n"
+                               "assert not hasattr(pmcmd, 'SHADOWED')\n"
+                               "assert hasattr(pmcmd, 'echo')\n");
+    if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
+      pm_metal_log("metal-py: shadow fail (spawn)");
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    t->t0       = pm_metal_time_mono_us();
+    t->deadline = t->t0 + 3000000ull;
+    t->step     = PY_PROOF_SHADOW_WAIT;
+    return PM_METAL_PENDING;
+  }
+
+  case PY_PROOF_SHADOW_WAIT: {
+    int32_t sa;
+
+    pm_metal_run_poll_all();
+    sa = pm_metal_async_task_status(t->a);
+    if (sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) {
+      if (pm_metal_time_mono_us() >= t->deadline) {
+        pm_metal_async_task_cancel(t->a);
+        pm_metal_log("metal-py: shadow fail (timeout)");
+        t->step = PY_PROOF_FAIL;
+        return PM_METAL_PENDING;
+      }
+
+      return pm_metal_async_await(h, pm_metal_async_sleep_us(2000));
+    }
+
+    if (sa != PM_METAL_DONE) {
+      pm_metal_logf("metal-py: shadow fail sa=%d", sa);
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    pm_metal_log("metal-py: shadow ok");
     t->step = PY_PROOF_OK;
     return PM_METAL_PENDING;
   }

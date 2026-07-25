@@ -83,6 +83,12 @@ static int32_t pm_metal_ui_input_backspace_native(wasm_exec_env_t exec_env)
   return (int32_t)pm_metal_ui_input_backspace();
 }
 
+static int32_t pm_metal_ui_input_delete_fwd_native(wasm_exec_env_t exec_env)
+{
+  (void)exec_env;
+  return (int32_t)pm_metal_ui_input_delete_fwd();
+}
+
 static int32_t pm_metal_ui_input_text_native(wasm_exec_env_t exec_env, char *out, uint32_t cap)
 {
   (void)exec_env;
@@ -116,6 +122,7 @@ static NativeSymbol g_pm_metal_ui_native_symbols[] = {
   { "pm_metal_ui_input_clear", (void *)pm_metal_ui_input_clear_native, "()", NULL },
   { "pm_metal_ui_input_append", (void *)pm_metal_ui_input_append_native, "(i)i", NULL },
   { "pm_metal_ui_input_backspace", (void *)pm_metal_ui_input_backspace_native, "()i", NULL },
+  { "pm_metal_ui_input_delete_fwd", (void *)pm_metal_ui_input_delete_fwd_native, "()i", NULL },
   { "pm_metal_ui_input_text", (void *)pm_metal_ui_input_text_native, "(*~)i", NULL },
   { "pm_metal_ui_input_set", (void *)pm_metal_ui_input_set_native, "($)i", NULL },
 };

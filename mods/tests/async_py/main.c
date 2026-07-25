@@ -1,16 +1,13 @@
 /*
  * Guest async proof — start a py job via pymergetic.metal.py and await it,
- * then (phase 2f) resolve + call a specific already-bound Python function
- * (sync only) from inside this same wasm mod. The async guest-call path
- * (pm_metal_py_fn_call_async) is implemented and structurally identical to
- * the pre-existing bound-pointer path py_shell.c's `py` command already
- * uses, but is not exercised here: a separate, pre-existing bug (see
- * docs/MICROPYTHON.md "Known issue — second nested async task hang")
- * hangs the later OOM-isolation boot proof whenever the boot sequence as a
- * whole spawns a *second* coroutine-backed async task anywhere (not
- * specific to Python, not specific to this mod) — reproduces with two
- * plain pm_metal_py_run_script calls and no phase 2f code at all, so it is
- * not a phase 2f regression.
+ * resolve + call a specific already-bound Python function (sync, phase 2f)
+ * from inside this same wasm mod, spawn a *second*, independent
+ * coroutine-backed script task (the exact shape that used to hang the
+ * later OOM-isolation boot proof — see docs/MICROPYTHON.md's "second
+ * nested async task" writeup; fixed by re-anchoring MicroPython's GC
+ * stack-scan top per call instead of once at boot), then exercise the
+ * guest-visible *async* call path (pm_metal_py_fn_call_async) against
+ * c_py_demo's async `blink()`.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -57,9 +54,34 @@ pm_metal_status_t pm_metal_guest_step(pm_metal_async_handle_t self_h)
       return PM_METAL_ERROR;
     }
 
+    /* Second, independent coroutine-backed script task — the exact repro
+     * shape for the now-fixed async-engine hang (see file header). */
+    s->aw = pm_metal_py_run_script(path);
+    if (s->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
+      return PM_METAL_ERROR;
+    }
+    s->step = 2;
+    return pm_metal_async_await_task(self_h, s->aw);
+  }
+
+  case 2: {
+    pm_metal_py_fn_h_t async_fn;
+
+    async_fn = pm_metal_py_fn_resolve("c_py_demo.blink");
+    if (async_fn == 0) {
+      return PM_METAL_ERROR;
+    }
+    s->aw = pm_metal_py_fn_call_async(async_fn, 1000u);
+    if (s->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
+      return PM_METAL_ERROR;
+    }
+    s->step = 3;
+    return pm_metal_async_await_task(self_h, s->aw);
+  }
+
+  case 3:
     pm_metal_shell_log("metal-async: py ok");
     return PM_METAL_DONE;
-  }
 
   default:
     return PM_METAL_ERROR;

@@ -909,7 +909,7 @@ static int32_t RadoMcAperRelocate(void)
   mScratchMc += delta;
   mMcAper = 1;
 
-  RADO_LOG("metal-gfx: radeon_rv370 mc-aper fb=%x→%x size=%x",
+  RADO_LOG("metal-gfx: radeon_rv370 mc-aper fb=%x->%x size=%x",
            mFwMcFb,
            RadoRead(RADEON_MC_FB_LOCATION),
            mVramSize);

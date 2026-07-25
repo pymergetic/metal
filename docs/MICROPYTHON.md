@@ -8,14 +8,15 @@ engine (not a wasm µPy, not a CPython appliance).
 guest surfaces exercised in `verify`). Cooperative run-lock, dotted-name
 lookup, sync/async mismatch guards, exception/cancel/OOM isolation, a
 generic `PM_METAL_PY_BIND` table, `pmcmd.*`/`pymergetic.metal.process`/
-`pymergetic.metal.mod` bindings, and guest-visible resolve+call of a bound
-Python function are all now real and boot-proofed (see
-[Implementation status](#implementation-status)). Real gaps left: signed/
-HTTP stdlib zip still stubbed, still a global run-lock instead of
-task-local GC, and a **pre-existing async-engine bug** (see
-[Known issue](#known-issue--second-nested-async-task-hangs-oom-isolation))
-means the guest-visible **async** call path is implemented but not yet
-boot-proofed end-to-end.  
+`pymergetic.metal.mod` bindings, guest-visible resolve+call of a bound
+Python function (**sync and async**), isolated/`FRESH` mod instances from
+Python (and dual-ABI guest-to-guest), generated `.pyi` stubs, and a signed +
+trust-checked + single-flight-HTTP-fetched `stdlib.zip` are all now real and
+boot-proofed (see [Implementation status](#implementation-status)). The
+former **async-engine hang** is root-caused and fixed (see
+[Resolved](#resolved--gc-stack-scan-boundary-captured-once-vs-resumed-cross-cpu)).
+Real gap left: still a global run-lock instead of task-local GC (see
+[Implementation status](#implementation-status)).  
 **Product stays:** thin async host + awaitable ABI. µPy is a **face**, not a second kernel.
 
 Related: [`COOP_MEMORY.md`](COOP_MEMORY.md) · [`IO.md`](IO.md) · [`LIBC_ASYNC.md`](LIBC_ASYNC.md) · [`TODO.md`](TODO.md)
@@ -40,6 +41,7 @@ Related: [`COOP_MEMORY.md`](COOP_MEMORY.md) · [`IO.md`](IO.md) · [`LIBC_ASYNC.
 | Scheduler identity | **Python task = Metal task** — FCFS on N equal runners; no private Python loop, no CPU0 pin |
 | Interpreter lifetime | **One always-on µPy blob** — shell/`py` does **not** start a new VM; it spawns a **new task** on that machinery |
 | Ports | Same matrix as the rest of Metal — **spike EFI x64**, then BIOS/i386 like every other feature |
+| Long-term shell | **Python REPL replaces the console as the system's main shell** (boot spawns an interactive REPL task instead of/ahead of the C UI console prompt) — see [Later — Python REPL as the system's main shell](#later--python-repl-as-the-systems-main-shell-replaces-the-console); not spike scope |
 
 Image rollouts already refresh firmware; independent VM packages buy little.
 Scripts remain the updatable unit.
@@ -252,13 +254,12 @@ pointer — WAMR's `*`/`~` marshaling only bounds-checks 1 byte without an
 explicit length arg, so the native wrapper manually validates + writes
 exactly `sizeof(int32_t)` (same pattern as `pm_metal_process_info`).
 
-**Boot-proofed:** resolve + sync call (`c_py_demo.add`), folded into the
-existing `async_py` guest proof (`mods/tests/async_py/main.c`) rather than a
-new mod, to avoid the known async-engine issue below. **Not yet
-boot-proofed:** `pm_metal_py_fn_call_async` end-to-end — implemented and
-structurally identical to the pre-existing `pm_metal_py_fn_call_async_bound`
-path `py -f mod.async_fn` already uses, but exercising it in the boot
-sequence currently triggers the known issue below.
+**Boot-proofed:** both resolve + sync call (`c_py_demo.add`) and resolve +
+**async** call (`pm_metal_py_fn_call_async` against `c_py_demo.blink`),
+folded into the existing `async_py` guest proof
+(`mods/tests/async_py/main.c`) as a second nested task — the configuration
+that used to hang before the [GC stack-scan boundary
+fix](#resolved--gc-stack-scan-boundary-captured-once-vs-resumed-cross-cpu).
 
 ### Loadable extensions (wasm / AOT)
 
@@ -609,7 +610,9 @@ HOLE:  …
 HEAP:  TLSF | WAMR pool | coros | …
 ```
 
-`mem` should eventually show the µPy blob under MAP (not drown in HEAP with Doom).
+`mem`'s `map` row now breaks the µPy blob out as its own nested line (size +
+% of `map`) instead of leaving it invisible inside the aggregate — see the
+[Implementation status](#implementation-status) checklist.
 
 ---
 
@@ -750,9 +753,9 @@ bring-up pattern as the rest of Metal; not blockers for “async integrated.”
 3. ~~Two Python tasks overlapping awaits; equal runners (no CPU0 pin); `yield` fairness path.~~ **done** (boot proofs; run-lock, not true parallel bytecode — see task-local GC)
 4. ~~Guest binding: wasm import that starts a py job + `await` completion (proof mod).~~ **done** (`mods/tests/async_py`)
 5. Task-local spaces (or staged path to them) + cancel/isolation; note blob size vs Doom HEAP. Cancel/isolation now **done** (`PY_PROOF_EXC`/`CANCEL`/`OOM`); task-local GC spaces still **open**.
-6. **Sample zip loader:** tiny signed `stdlib.zip` + frozen `metal.aio`; ESP/HTTP single-flight; import proof + one script. **half-open** — zip exists and mounts on both ports; signing/trust/single-flight/import-order not built
+6. ~~**Sample zip loader:** tiny signed `stdlib.zip` + frozen `metal.aio`; ESP/HTTP single-flight; import proof + one script.~~ **done** — `stdlib.zip` + `.sig`, trust-checked, single-flight HTTP fetch on ESP miss, import-unshadowable regression proof (`PY_PROOF_SHADOW`)
 7. ~~Same bring-up on **BIOS / i386** as any other Metal feature (not a separate product decision).~~ **done** — `py/py.c` links into both `scripts/build.d/port/efi/default.sh` and `.../port/bios/default.sh`; `stdlib.zip` stages into both ESP and PXE trees
-8. ~~Generic bind table (linker-section rows); `pymergetic.metal.*` naming consistently everywhere (guest imports and Python module tree); `pmcmd.*` short-name exception for shell commands; `pymergetic.metal.process`/`pymergetic.metal.mod` bindings; guest-visible resolve+call of a bound Python function (sync).~~ **done** — guest-visible **async** call blocked on the [known async-engine issue](#known-issue--second-nested-async-task-hangs-oom-isolation)
+8. ~~Generic bind table (linker-section rows); `pymergetic.metal.*` naming consistently everywhere (guest imports and Python module tree); `pmcmd.*` short-name exception for shell commands; `pymergetic.metal.process`/`pymergetic.metal.mod` bindings; guest-visible resolve+call of a bound Python function (sync **and async**).~~ **done**
 
 ---
 
@@ -766,6 +769,34 @@ bring-up pattern as the rest of Metal; not blockers for “async integrated.”
 | Later still | Optional C++ ↔ Python bridge (nanobind-shaped helpers) that **emits or wraps** the same bind table — not a parallel ABI |
 
 No C++ in the µPy spike. Don’t invent a second Python↔native calling convention for C++.
+
+---
+
+## Later — Python REPL as the system's main shell (replaces the console)
+
+Long-term direction (not spike scope, tracked for after the rest of the
+spike lands): the interactive surface the user actually types into stops
+being `shell.c`'s own C line-editor dispatching into
+`pm_metal_shell_cmd_dispatch`'s C command table, and becomes a **Python
+REPL task** running on the one always-on µPy blob — same async multicore
+engine, no new VM, no new scheduler, no second interactive loop.
+
+| Stage | What |
+|-------|------|
+| Boot | Instead of (or ahead of) offering today's UI console prompt, boot spawns a Python REPL task directly — the interactive task the [REPL row](#call-surface--host-and-guest) above already designs for (`py` with no script / `py -i`), just made the thing boot actually starts rather than an on-demand shell subcommand |
+| Welcome | REPL startup prints a short banner that introduces the engine — what it is (async, multicore, one shared interpreter across N runners), and that `pymergetic.metal.*` / `pmcmd.*` are already live — not a bare `>>>`. Needs an actual name/identity for "the async multicore Python engine" this banner speaks as; bikeshed the name later, don't block on it now |
+| Compat | `pmcmd.*` (every C shell command already a Python callable, see [Surfaces](#implementation-status)) is the exact bridge this needs — today's line-oriented `help`/`mem`/`keyb`/... commands stay reachable as `pmcmd.help()` etc. from the REPL, nothing lost by switching the primary surface |
+| C console | `shell.c`'s own line editor is not deleted as part of this step — stays available as a fallback/serial-style path (or gets retired in a later, separate decision). REPL becomes **primary**, console stays reachable |
+
+**Real prerequisite, not started:** `py -i` (an actual interactive REPL
+task — persistent globals dict across lines, prompt + continuation-line
+handling, one `mp_lexer_new_from_str_len`/compile/exec per submitted line
+instead of per whole script) doesn't exist yet; the REPL row in the
+Concurrency table is design intent today, not implemented code. Build that
+first as an ordinary boot-proofed interactive task on the existing blob,
+*then* wire boot to spawn it as the default surface — don't try to skip
+straight to "boot replaces the console" without the REPL task itself
+existing and being proven first.
 
 ---
 
@@ -783,61 +814,83 @@ No C++ in the µPy spike. Don’t invent a second Python↔native calling conven
 
 ---
 
-## Known issue — second nested async task hangs OOM-isolation
+## Resolved — GC stack-scan boundary captured once vs. resumed cross-CPU
 
-Discovered while boot-proofing the guest-visible **async** call path
-(`pm_metal_py_fn_call_async`). **Not a Python or Phase 2f bug** — reproduces
-with zero Python-related code, is unrelated to mod count, and is unrelated
-to which mod does it.
+Was tracked as "known issue — second nested async task hangs
+OOM-isolation" while boot-proofing the guest-visible **async** call path
+(`pm_metal_py_fn_call_async`); root-caused and fixed (chat transcript
+`f5dd0bb0-957d-4a63-84f4-0052970d4d99` has the full bisection trace that
+led here). Left in place as a **root-cause writeup**, not a live issue.
 
-**Repro (minimal, confirmed):** in the existing `async_py` boot-proof mod
-(`mods/tests/async_py/main.c`), spawn a **second** coroutine-backed async
-task from that guest's own `pm_metal_guest_step` — literally a second
-`pm_metal_py_run_script(path)` call in a later step, no new function
-involved at all — after the first one (already part of the proof) has been
-spawned and awaited to completion. The boot sequence then hangs completely
-(no further log output at all, not just from Python) a few proofs later,
-specifically right before `PY_PROOF_OOM`'s `metal-py: oom-isolation ok`/
-`fail` would print; QEMU eventually times out at the outer 180 s `verify`
-deadline with no crash, no traceback, no timeout message from the OOM
-proof's own 3 s deadline check.
+**Symptom:** the boot sequence tolerated exactly **one** coroutine-backed
+Python async task spawn total across the whole run; a second one anywhere
+(even a bare repeated `pm_metal_py_run_script`, no new code) hung the boot
+sequence completely — no crash, no traceback, no log output at all, not
+even the OOM proof's own 3 s deadline check — right before `PY_PROOF_OOM`.
+Bisection ruled out the handle table, `py_run_lock`, mod count, which mod,
+and the target script/function; it was specifically "the boot sequence as a
+whole spawns a second coroutine-backed async task, anywhere, ever."
 
-**What was ruled out** (each independently, via bisection — see chat
-transcript `f5dd0bb0-957d-4a63-84f4-0052970d4d99` for the full trace):
+**Root cause:** `mp_embed_init()` (`py.c`'s `pm_metal_py_init`) calls
+`mp_stack_set_top()` **exactly once**, at boot, from whichever CPU happens
+to run boot init. That writes one global field,
+`MP_STATE_THREAD(stack_top)` — confirmed single-global via
+`MICROPY_PY_THREAD == 0` in
+[`py/embed/mpconfigport.h`](../src/pymergetic/metal/py/embed/mpconfigport.h)
+(no per-thread state array). But Metal's scheduler deliberately does **not**
+pin a guest/task to one CPU (`runtime/async/async.c`'s own comments:
+"Guest tasks no longer share a CPU... two call-ins can now genuinely race
+across runners") — `py_run_lock` only serializes *when* Python bytecode
+runs (one CPU at a time), never *which* CPU. So a Python coroutine step
+(`py_job_step`) resumed via the ready-ring's work-stealing can land on a
+different CPU's native stack than the one recorded at boot. Every
+`gc_collect()` then computes its scan range in
+[`shared/runtime/gchelper_generic.c`](../external/micropython/shared/runtime/gchelper_generic.c)'s
+`gc_collect_root` as an **unsigned, unchecked** subtraction:
+`((uintptr_t)MP_STATE_THREAD(stack_top) - (uintptr_t)&regs) / sizeof(uintptr_t)`.
+Once bytecode resumes on the "wrong side" of the one recorded `stack_top`,
+that subtraction wraps to a huge word count, and `gc_collect_root` walks it
+with no yield point and no bounds check — a silent, unbreakable spin. This
+matches every symptom, and explains why it needed **two-plus** tasks (higher
+chance work-stealing resumes on a non-boot CPU at least once) and broke
+specifically at the **OOM proof** (the one script that reliably forces a
+real `gc_collect()` by exhausting the whole 256 KiB blob; lighter scripts
+may never trigger a real collection cycle at all).
 
-- Not `pm_metal_py_fn_resolve`/`_call`/`_call_async` logic — a completely
-  no-op mod body triggers the same hang.
-- Not the new `PyFnHandleAlloc` handle table — bypassing it entirely still
-  hangs.
-- Not `py_run_lock`/cooperative locking — wrapping the resolve call in an
-  explicit `py_run_try_lock`/`unlock` pair doesn't change anything.
-- Not mod *count* (17 vs 18 mods) in isolation — an 18th mod that is
-  embedded but never *invoked* is fine; the *same* 18th mod invoked (even
-  with an empty body) hangs. But adding a second nested task spawn to an
-  *existing*, already-invoked mod (keeping the mod count at 17) reproduces
-  it too — so it's specifically **"the boot sequence as a whole spawns a
-  second coroutine-backed async task, anywhere, ever"**, not a per-mod or
-  per-guest count.
-- Not "two spawns from the same guest coroutine" specifically — moving the
-  second spawn into a *different*, otherwise-zero-nested-spawn mod
-  (`t_async_sleep`) reproduces the same hang.
-- Not the specific target script/function, nor whether it `await`s
-  internally (tested with a trivial non-awaiting async function too).
+**Fix:** `py_run_lock` already guarantees at most one CPU executes Python
+bytecode at any instant, so it's always safe to re-anchor the scan boundary
+to *this* call, on *whichever* CPU currently holds the lock, right before
+running bytecode. Added `#include "py/stackctrl.h"` to `py.c` and a
+`mp_stack_set_top(&nlr)` call at the top of every real bytecode-entry point:
+`py_exec_and_maybe_main`, `py_call_bound`, `py_resume_coro`, and
+`pm_metal_py_call`. No pinning, no locking changes — a ~4-line diff, safe
+because the boundary only needs to be valid for the duration of the one
+synchronous call it guards (GC only ever runs synchronously inside these,
+never after they return).
 
-**Working hypothesis:** something in the async engine's coroutine pool
-(`pm_metal_async_coro_create`/`_close`, `PM_METAL_ASYNC_MAX_HANDLES = 512`
-rules out a simple slot-count overflow) leaves state from the *first*
-coroutine-backed task that corrupts or mis-sizes something touched by the
-OOM proof's GC-heavy string-doubling script specifically — plausible given
-the OOM proof is already a deliberately tight, GC-pressure-sensitive test
-(it exhausts the entire 256 KiB blob heap). Root cause not yet found;
-flagged here rather than blocking Phase 1/2 MicroPython work on it.
+**Verified:** restored the `async_py` guest proof plus a second, independent
+nested-task spawn (`mods/tests/async_py/main.c` now also exercises
+`pm_metal_py_fn_call_async` against `c_py_demo.blink`); `./scripts/verify
+efi`/`bios` under `-smp 4` — `PY_PROOF_EXC`/`CANCEL`/`OOM` and every proof
+after them now print `ok` with no timeout, on both ports.
 
-**Current state:** the sync guest-call proof is boot-proofed (folded into
-`async_py`, one nested task spawn total, matching the known-good
-configuration). The async guest-call path is implemented, code-reviewed
-against the already-proven `py_shell.c` `py -f` bound-pointer pattern, but
-not boot-proofed pending this investigation.
+**NLR / park-resume safety:** unaffected by this bug and unrelated to the
+fix above — `nlr_push`/`nlr_pop` are correctly scoped inside each
+non-parking call (`py_exec_and_maybe_main`, `py_call_bound`,
+`py_resume_coro`), so a Python exception's non-local return never crosses
+an `await` park/resume boundary; the `nlr_buf_t` lives on the C stack of one
+synchronous call and is always popped before that call returns control to
+the scheduler. Nothing park-resumes *through* an active `nlr_push`.
+
+**Blob vs. Doom HEAP:** the µPy blob is a MAP-side carve
+(`PM_METAL_PY_BLOB_BYTES = 256 KiB`, `py.h`); Doom's own allocations go
+through the HEAP-side TLSF pool via wasm/WAMR. Per the dual-span arena
+([`COOP_MEMORY.md`](COOP_MEMORY.md)), MAP grows up from the low side and
+HEAP grows down from the high side of the **same** claimed hole — they
+don't share one allocator, but they do compete for the same underlying
+memory: a larger µPy blob (or heavier concurrent Doom heap use) shrinks the
+same hole both sides are drawing from, so the practical ceiling when both
+run concurrently is `hole_size`, not each side's own nominal budget.
 
 ---
 
@@ -850,7 +903,7 @@ overclaimed.
 ### Runtime integration
 
 - [x] µPy linked in core, on **both EFI and BIOS** (`scripts/build.d/port/{efi,bios}/default.sh` both compile `py/py.c`); MAP-carved blob (`pm_metal_py_init` → `pm_metal_mem_map(PM_METAL_PY_BLOB_BYTES)`)
-- [ ] MAP blob visible in `mem` **with its own line/caps** — `mem` (`shell_core_cmds.c`) only shows aggregate `map`/`heap`/`stacks`/`hole` totals; the µPy blob is counted inside `map` but not broken out. (The doc's own [Memory](#memory) section already flags this as future work — the success box was wrong to check it.)
+- [x] MAP blob visible in `mem` **with its own line/caps** — `pm_metal_py_blob_bytes()` getter (`py.h`/`py.c`) + a nested `py` line under `mem`'s `map` row (`shell_core_cmds.c`'s `CoreMemCmd`) showing the blob's carved size and its % of `map`, instead of only being counted in the aggregate
 - [x] Python task = Metal task; pumped on N equal runners (`pm_metal_async_create_task` over the normal coro/task machinery — no private loop)
 - [x] `await` Metal op from Python without blocking the runner (`py.c`'s `py_job_step`/`py_resume_coro` park via `pm_metal_async_await`, releasing the run-lock first)
 - [x] ≥2 Python tasks with overlapped awaits on multi-CPU — proven at boot (`boot_python.c`'s `PY_PROOF_OVERLAP`: two scripts sleeping 150 ms each finish in <250 ms wall); **run-lock interim** (see task-local GC below)
@@ -858,19 +911,20 @@ overclaimed.
 - [x] Cancel / exception / OOM isolates one task; sync `py_call` cannot park — `pm_metal_py_call` and `py_call_bound` (`py.c`) both explicitly check `mp_obj_is_type(ret, &mp_type_gen_instance)` and hard-error on a sync/async mismatch instead of relying on incidental `.send()` `AttributeError`s; boot-proofed (`boot_python.c`'s `PY_PROOF_EXC`/`PY_PROOF_CANCEL`/`PY_PROOF_OOM` — uncaught exception, task cancel mid-sleep, and blob-exhausting `MemoryError` each isolate to that one task, blob stays live for the next proof)
 - [x] Fairness path: `metal.aio.yield_` proven under load — boot proof `PY_PROOF_YIELD` (`yield_peer.py` vs `yield_sleeper.py`)
 - [x] `.mpy`/µPy version pinned — `scripts/setup.d/deps/micropython.sh` pins `v1.24.1` (single vendored checkout, patches applied on top)
-- [ ] Written note that NLR/exceptions are safe across park/resume — the code *does* use `nlr_push`/`nlr_pop` correctly scoped inside each non-parking call (`py_exec_and_maybe_main`, `py_call_bound`, `py_resume_coro`), but this hasn't been written up or stress-tested, just eyeballed
-- [ ] Spike size/RAM note vs Doom — not written (blob is a flat `PM_METAL_PY_BLOB_BYTES = 256 KiB` define in `py.h`, never compared against Doom's HEAP usage)
+- [x] Written note that NLR/exceptions are safe across park/resume — see the ["NLR / park-resume safety" note](#resolved--gc-stack-scan-boundary-captured-once-vs-resumed-cross-cpu) below; `nlr_push`/`nlr_pop` are correctly scoped inside each non-parking call and never cross an `await` boundary
+- [x] Spike size/RAM note vs Doom — see the ["Blob vs. Doom HEAP" note](#resolved--gc-stack-scan-boundary-captured-once-vs-resumed-cross-cpu) below: MAP (blob) and HEAP (Doom's wasm allocations) grow from opposite ends of the same dual-span hole, so the practical ceiling when both run concurrently is the hole size, not each side's nominal budget
 
 ### Surfaces
 
 - [x] Always-on blob; shell `py <script>` / `py -c` → new task on it; `print` → shell (`py_shell.c`, `mphalport_metal.c`)
 - [x] Guest can start a py job via import and `await` completion — real, exercised end-to-end: `mods/tests/async_py/main.c` imports `pymergetic.metal.py`, awaits `pm_metal_py_run_script`, and is wired into the boot self-test suite (`boot_test.c`'s `async_py` case)
 - [x] **Generic** bind table (rows → install at init, "add a function = add a table row, no new VM glue") — `PM_METAL_PY_BIND` macro (`py.h`) collects rows into a linker section (`.pm_metal_py_binds.*`, same pattern as `PM_METAL_SHELL_CMD`); `pm_metal_py_bind_table()`/`pm_metal_py_binds_install()` (`py_bind.c`) walk it at init and resolve/create the dotted parent module chain automatically. `metal.aio`'s `mono_us`/`sleep_us`/`yield_` (`runtime/async/async_py_bind.c`) are now table rows, not hand-written `mp_obj_dict_store` calls; adding a 4th binding is a one-line macro invocation. `docs/MODS.md`'s checklist item 9 ("µPy binds the same registries") is done.
-- [x] C → Py trampoline: sync `pm_metal_py_call` + async `pm_metal_py_fn_call_async_bound` (await handle) — used by `py -f mod.fn` in the shell and the `c_py_demo` module seeded at init; plus a guest-visible dual-ABI handle trio (`pm_metal_py_fn_resolve`/`_call`/`_call_async`, see [Guest-visible call trampoline](#guest-visible-call-trampoline-dual-abi-handle-trio)) — sync boot-proofed, async implemented but blocked on the [known async-engine issue](#known-issue--second-nested-async-task-hangs-oom-isolation)
+- [x] C → Py trampoline: sync `pm_metal_py_call` + async `pm_metal_py_fn_call_async_bound` (await handle) — used by `py -f mod.fn` in the shell and the `c_py_demo` module seeded at init; plus a guest-visible dual-ABI handle trio (`pm_metal_py_fn_resolve`/`_call`/`_call_async`, see [Guest-visible call trampoline](#guest-visible-call-trampoline-dual-abi-handle-trio)) — **both sync and async boot-proofed** (`mods/tests/async_py/main.c`), the async path now unblocked by the [GC stack-scan boundary fix](#resolved--gc-stack-scan-boundary-captured-once-vs-resumed-cross-cpu)
+- [x] Isolated/`FRESH` mod instances from Python — a mod-proxy's `.fresh` attribute (`mod_py_bind.c`) returns a callable that opens a fresh scope object; `async with mod.<name>.fresh() as inst:` works via MicroPython's generic attribute dispatch resolving `__aenter__`/`__aexit__` (no separate context-manager protocol needed), then per-function bound calls scoped to that handle (`await inst.fn(...)`); refuses (raises) on a `SINGLE`-capability mod. The underlying `pm_metal_mod_fresh_open`/`_resolve`/`_close` trio (`mod.c`, extracted out of `pm_metal_mod_fn_process`) is declared **dual-ABI** in `mod.h`, closing the asymmetry where `FRESH` used to be host-only — a wasm guest can now open a `FRESH` instance of another mod too. Boot-proofed from Python (two concurrent scopes don't share state, `mods/tests/fresh_counter/main.c`) and from a wasm guest-to-guest call (`mods/tests/fresh_guest/main.c`)
 - [x] Public host-only value facade `py_obj.h`/`py_obj.c` (`pm_metal_py_obj_t` + int/str/dict/tuple/error helpers, plus the awaitable bridge `pm_metal_py_new_awaitable`/`_new_awaitable_u32` in `py_await.c`) — lets C code outside `py/` build/read Python values without including MicroPython's own headers. Each `pymergetic.metal.*` bind file now lives next to the subsystem it wraps instead of inside `py/`: `runtime/async/async_py_bind.c` (`aio`), `guest/process/process_py_bind.c` (`process`, fully facade-only — no MicroPython headers at all), `guest/mod/mod_py_bind.c` (`mod` — keeps real MicroPython headers for its lazy-attr custom types, the one part a facade can't cheaply abstract), `shell/shell/shell_py_bind.c` (`pmcmd`). `py/` itself keeps only core VM machinery (`py.c`, `py_bind.c`, `py_obj.c`, `py_await.c`, `py_shell.c`, `py_zip.c`, `py_guest.c`)
 - [x] `metal.*` package mirrors guest areas — `pymergetic.metal.aio` (`mono_us`/`sleep_us`/`yield_`), `pymergetic.metal.process` (`poll`/`active`/`current`/`info`), `pymergetic.metal.mod` (attribute-based, lazy-resolved access to any loaded mod's registered functions — `mod.<name>.<func>(...)`, `AttributeError` on a bad name, awaitable result via `pm_metal_py_new_awaitable_u32`), and the short `pmcmd.<name>(*args)` exception (shell commands as Python callables) — all boot-proofed (`PY_PROOF_PMCMD`, `PY_PROOF_MOD`). Naming is consistently `pymergetic.metal.*` everywhere except `pmcmd.*` (the one deliberate short-name exception); orchestration optional (nothing on the boot path imports it)
 - [x] Multi-level dotted name resolution (`pymergetic.metal.aio.sleep_us`, 3+ segments) — `pm_metal_py_lookup` (`py.c`) walks each dot-separated segment with its own `mp_load_attr`, fixing a bug where only the first segment split correctly; boot-proofed (`PY_PROOF_DOTTED`)
-- [x] `.pyi` type stubs for editor/linter support — `typings/pymergetic/metal/{__init__,aio,process,mod}.pyi` + `typings/pmcmd.pyi` (hand-written today, matching the bind-table surface; build-time generation is still a later step)
-- [ ] **Sample signed zip**: tiny pack + verify; single-flight HTTP; import order builtin→frozen→aot→wasm→py; `metal` unshadowable — **partially staged, not signed**. `mods/py/stdlib.zip` exists (one file, `sample_mod.py`) and is on `sys.path` for both EFI and BIOS builds, but `py_zip.c`'s `pm_metal_py_zip_ensure()` only checks `pm_metal_fs_size(...) > 0` — no `.sig`, no trust-mode check, no HTTP fetch, no enforced import order (unlike Doom's mods, which do carry `.sig` files)
+- [x] `.pyi` type stubs for editor/linter support — **generated**, not hand-written: `scripts/gen_py_stubs.py` parses `PM_METAL_PY_BIND` call sites (→ `typings/pymergetic/metal/**.pyi`), `PM_METAL_SHELL_CMD`/`PM_METAL_SHELL_CMDS` call sites (→ `typings/pmcmd.pyi`, docstring = the row's `help_str`), and `pm_metal_mod_register_func` call sites under `mods/**` (→ one stub class per in-tree mod, best-effort — mods loaded at runtime and absent from `mods/**` at build time get no stub); wired into both `scripts/build.d/port/{efi,bios}/default.sh` so stubs regenerate on every build
+- [x] **Signed stdlib zip**: `mods/py/stdlib.zip` + `.sig` (signed via `scripts/pki sign-wasm`, which turned out generic enough for an arbitrary blob — no `sign-file` subcommand needed), verified via `pm_metal_trust_accept_mods` against `METAL_TRUST_MODE`; `pm_metal_py_zip_ensure()` is now a coroutine-backed step (`pm_metal_py_zip_step`, its own `PY_STEP_ZIP` ahead of every job's real first step in `py.c`) so it can `await` an HTTP fetch on ESP miss instead of blocking `py_spawn`; single-flight fetch (one leader task awaits `pm_metal_net_http_get` directly, follower tasks poll the shared state via `pm_metal_async_yield()` — `pm_metal_await`'s single-waiter limitation rules out every task awaiting the same handle directly). `pymergetic`/`pymergetic.metal`/`pymergetic.metal.aio` are pre-registered into `mp_loaded_modules_dict` at init, so they're structurally unshadowable by any same-named `.py` — regression-proofed with a decoy `pmcmd.py` written to `/mods/py/` at runtime (`PY_PROOF_SHADOW`, `boot_python.c`) asserting the C module's own attribute wins. Enforced `builtin→frozen→aot→wasm→py` import order across *all* categories is not separately implemented (MicroPython's own `mp_loaded_modules_dict` precedence already covers the one case that matters — C modules over zip `.py` files)
 - [ ] (later) Task-local GC spaces + all-parked compact barrier — still the documented interim: one global `py_run_lock`/`py_run_unlock` spinlock in `py.c` serializes all Python bytecode execution across tasks (released only across `await`)
 - [ ] (later) Fat stdlib zip / full `metal.fs`/`net`/… / native self-register (`import sample`) — not started

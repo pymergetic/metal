@@ -1,0 +1,51 @@
+---
+description: Runtime-printed string literals in Metal must be plain ASCII — the boot console is a fixed 256-glyph codepage, not UTF-8
+globs: src/**/*.{c,h}
+alwaysApply: true
+---
+
+# ASCII-only in printed string literals (no UTF-8 decorative chars)
+
+**Why:** the boot console (`font_vga8x16.inc.c`, a fixed 256-glyph codepage
+font) is not UTF-8-aware. Any multi-byte UTF-8 sequence embedded in a string
+literal that reaches `pm_metal_shell_out`/`pm_metal_log*`/`pm_metal_ui_set_status`/
+`snprintf`-into-a-status-buffer/any other runtime-printed path renders as
+mojibake (each byte drawn as its own wrong glyph) — this has reappeared
+multiple times (`→`, `—`, `…` in `py_shell.c`, `mod.c`, `banner.c`,
+`boot_init.c`, `boot_shell.c`, `input_shell.c`, `scanout_radeon_rv370.c`) and
+is always a "looks broken to the user, wastes a debugging round-trip"
+regression, not a style nit.
+
+**Banned inside any string literal that can be printed at runtime** (i.e.
+passed to an output/log/status function, or built via `snprintf` into a
+buffer that is): `→` `—` `–` `…` `‘` `’` `“` `”` `✓` `×` `°` `±`, or any other
+non-ASCII/multi-byte UTF-8 character. Use the plain-ASCII equivalent instead:
+
+| Banned | Use instead |
+|--------|-------------|
+| `→` | `->` |
+| `—` / `–` | `-` or `--` |
+| `…` | `...` |
+| `‘’` `“”` | `'` `"` |
+
+**Comments are exempt** — em-dashes (`—`) are used pervasively in this
+codebase's own comments and are never printed at runtime, so leave existing
+comment style alone. This rule is only about characters inside a string
+literal (`"..."`) that ends up on an output path.
+
+Layout-dependent user-facing glyphs (e.g. German `ß`/`ü`/`ö`/`ä` in
+`keyb.c`'s GR keymap table) are a different, deliberate case — those are
+Latin-15/ISO-8859-15 single-byte values (`(char)0xDF`, not UTF-8), chosen to
+match the VGA font's actual codepage. Don't confuse that pattern with UTF-8
+decorative characters; the keymap case is correct as-is and out of scope
+for this rule.
+
+**Verify after touching any file with printed strings:**
+
+```
+grep -rnP '"([^"\\]|\\.)*[→—–…‘’“”✓×°±]([^"\\]|\\.)*"' src --include=*.c
+```
+
+Must return nothing (a match inside a `/* comment */` that happens to share
+a line with an unrelated quoted string is a false positive — check the
+match is actually inside the quotes before "fixing" it).

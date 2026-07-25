@@ -25,15 +25,26 @@ extern "C" {
 #define PM_METAL_MOD_WASI_MODULE "pymergetic.metal.mod"
 
 #define PM_METAL_MOD_ID_INVALID 0u
-#define PM_METAL_MOD_MAX        32u
+#define PM_METAL_MOD_MAX        128u
 #define PM_METAL_MOD_FUNC_MAX   1024u
-#define PM_METAL_MOD_CMD_MAX    64u
-#define PM_METAL_MOD_FN_H_MAX   64u
+#define PM_METAL_MOD_CMD_MAX    128u
+#define PM_METAL_MOD_FN_H_MAX   1024u
+#define PM_METAL_MOD_FRESH_MAX  128u
 
 typedef uint32_t pm_metal_mod_id_t;
 typedef uint32_t pm_metal_mod_fn_h_t;
 
 #define PM_METAL_MOD_FN_H_INVALID 0u
+
+/**
+ * Opaque handle onto an open FRESH-mode instance scope
+ * (pm_metal_mod_fresh_open) — same "resolve/call by handle, no raw
+ * pointers across the wasm boundary" idiom as pm_metal_mod_fn_h_t.
+ * A guest never sees the underlying pm_metal_wasm_mod_image_t.
+ */
+typedef uint32_t pm_metal_mod_fresh_h_t;
+
+#define PM_METAL_MOD_FRESH_H_INVALID 0u
 
 /**
  * Instancing capability, declared once from on_load via
@@ -168,6 +179,33 @@ extern pm_metal_async_handle_t pm_metal_mod_fn_coro(pm_metal_mod_fn_h_t fn_h)
   PM_METAL_MOD_IMPORT(pm_metal_mod_fn_coro);
 
 /**
+ * Open a private, fresh instance of @a mod_name (refused — 0 — if the
+ * mod declared PM_METAL_MOD_CAP_SINGLE, mirrors fn_process(FRESH)'s
+ * existing guard). Loads the mod first if needed. Call
+ * pm_metal_mod_fresh_resolve one or more times against the returned
+ * handle, then pm_metal_mod_fresh_close it — the guest-side mirror of
+ * pm_metal_mod_fn_process's FRESH path, but usable directly (no
+ * process-table spawn) for "give me a handle, call into it a few
+ * times, then close" — a wasm guest calling *another* mod previously
+ * had no FRESH option at all (only fn_process did, and only host C
+ * could reach it).
+ */
+extern pm_metal_mod_fresh_h_t pm_metal_mod_fresh_open(const char *mod_name)
+  PM_METAL_MOD_IMPORT(pm_metal_mod_fresh_open);
+
+/**
+ * Resolve @a func_name against the fresh instance @a h (not the mod's
+ * shared instance 0) → opaque fn handle (0 = fail), usable with
+ * fn_coro / fn_process exactly like pm_metal_mod_func_resolve's handle.
+ */
+extern pm_metal_mod_fn_h_t pm_metal_mod_fresh_resolve(pm_metal_mod_fresh_h_t h, const char *func_name)
+  PM_METAL_MOD_IMPORT(pm_metal_mod_fresh_resolve);
+
+/** Deinstantiate the fresh instance and release the handle. */
+extern int32_t pm_metal_mod_fresh_close(pm_metal_mod_fresh_h_t h)
+  PM_METAL_MOD_IMPORT(pm_metal_mod_fresh_close);
+
+/**
  * Command Extrawurst: UI/stdio redirect + process root.
  * proc_name empty/NULL → use resolved cmd name from handle.
  * instance_mode/flags: see pm_metal_mod_cmd_invoke.
@@ -267,6 +305,34 @@ int pm_metal_mod_cmd_resolve(const char *cmd_name, pm_metal_mod_cmd_t *out);
 
 /** Spawn guest coro for resolved fn (frame via coro_alloc inside the step). */
 pm_metal_async_handle_t pm_metal_mod_fn_coro(const pm_metal_mod_fn_t *fn);
+
+/**
+ * Open a private, fresh instance of @a mod_name — the standalone
+ * extraction of the instantiate step pm_metal_mod_fn_process's FRESH
+ * path already does internally, usable directly without spawning a
+ * process-table entry: "open a handle, resolve + call into it a few
+ * times, then close it". Loads the mod first if needed. Refused (0)
+ * if the mod declared PM_METAL_MOD_CAP_SINGLE (mirrors fn_process's
+ * existing ModResolveUseFresh guard). 0 = fail.
+ */
+pm_metal_mod_fresh_h_t pm_metal_mod_fresh_open(const char *mod_name);
+
+/**
+ * Resolve @a func_name against the fresh instance @a h (not the mod's
+ * shared instance 0) — same idiom as pm_metal_mod_func_resolve_on,
+ * just keyed by the opaque scope handle instead of a raw image
+ * pointer. 0 ok, -1 fail.
+ */
+int pm_metal_mod_fresh_resolve(pm_metal_mod_fresh_h_t h, const char *func_name, pm_metal_mod_fn_t *out);
+
+/**
+ * Deinstantiate the fresh instance opened by pm_metal_mod_fresh_open
+ * and release the handle. Safe to call on an already-closed/invalid
+ * handle (no-op). Decrements the owning mod's fresh_open count, same
+ * accounting pm_metal_mod_on_fresh_instance_end already keeps for the
+ * process-table FRESH path.
+ */
+void pm_metal_mod_fresh_close(pm_metal_mod_fresh_h_t h);
 
 /**
  * Command Extrawurst: process-root task + UI/stdio redirect.

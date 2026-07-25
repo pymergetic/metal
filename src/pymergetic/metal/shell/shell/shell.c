@@ -864,7 +864,15 @@ static void MetalShellHandleAscii(char ch, char *text, uintptr_t text_sz)
     return;
   }
 
-  if (ch >= 32 && ch < 127) {
+  /*
+   * Printable range: ASCII 32-126 plus the upper Latin-15/ISO-8859-15 half
+   * (0x80-0xFF) that `keyb gr` emits for the umlauts/ss/paragraph/degree/
+   * acute (see keyb.c) -- those bytes are >= 0x80, so comparing the signed
+   * `char` directly against 127 sign-extends them negative and drops every
+   * one of them here before they ever reach the input line. Only DEL (0x7F,
+   * already handled above) is excluded.
+   */
+  if ((uint8_t)ch >= 32 && (uint8_t)ch != 0x7fu) {
     pm_metal_console_com1_write(&ch, 1);
     (void)pm_metal_stream_feed_stdin(&ch, 1);
     (void)pm_metal_ui_input_append(ch);
@@ -1072,6 +1080,17 @@ int pm_metal_shell_poll(void)
       } else if (ke.code == PM_METAL_KEY_RIGHT) {
         (void)pm_metal_ui_input_move_cursor(1);
         MetalShellMarkInput();
+      } else if (ke.code == PM_METAL_KEY_HOME) {
+        /* No per-row Home yet — commands are effectively one logical line. */
+        (void)pm_metal_ui_input_move_cursor(-0x7fffffff);
+        MetalShellMarkInput();
+      } else if (ke.code == PM_METAL_KEY_END) {
+        (void)pm_metal_ui_input_move_cursor(0x7fffffff);
+        MetalShellMarkInput();
+      } else if (ke.code == PM_METAL_KEY_DELETE) {
+        if (pm_metal_ui_input_delete_fwd() == 0) {
+          MetalShellMarkInput();
+        }
       }
     }
   } else if (pm_metal_input_focus() == PM_METAL_INPUT_FOCUS_GUEST) {

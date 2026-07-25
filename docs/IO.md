@@ -121,10 +121,12 @@ Cooked termios / job control: omit until needed (raw PTY first).
 
 ## Input notes
 
-- Product keycodes are **Metal** HID usage IDs (positional USB usage; not KEYB layout).
-- Guest ABI: `pm_metal_input_poll_key_event` (preferred) and convenience `pm_metal_input_poll_key` (pressed + code). Host and wasm imports share the same shapes.
+- Product keycodes are **Metal** HID usage IDs (positional USB usage; not KEYB layout). Full page-0x07 coverage: letters/digits/nav (original) plus punctuation, Caps/Num/Scroll-Lock, F11/F12, Insert/Home/Delete/End, the full numpad, ISO 102nd-key, and L/R GUI + Menu (`include/.../dev/input/input.h`). AT Set-1 → HID table in `keyb.c` cross-checked against 3 independent scancode references; live-verified via scripted QEMU `sendkey` injection (apostrophe/semicolon/comma/period/slash/brackets, Home+Delete line-editing, `keyb gr` umlauts).
+- Guest ABI: `pm_metal_input_poll_key_event` (preferred) and convenience `pm_metal_input_poll_key` (pressed + code). Host and wasm imports share the same shapes. Punctuation/nav/GUI keys now resolve to real HID codes under guest focus too (previously `PM_METAL_KEY_NONE` — silently dropped, not garbled).
+- Home/End/Delete are wired into shell line-editing (`pm_metal_ui_input_move_cursor` clamp + new `pm_metal_ui_input_delete_fwd`); previously these were dropped before reaching the shell (`ext=1` + not in the nav-key allowlist -> `continue`).
 - Tab focus: shell vs guest; only the focused surface drains keys (avoids shell eating guest input).
-- Shell ASCII uses DOS KEYB (`keyb us` / `keyb gr`); guests keep HID under layout changes.
+- Shell ASCII uses DOS KEYB (`keyb us` / `keyb gr`); guests keep HID under layout changes. `keyb gr`'s umlauts/ß/§/°/´ are Latin-15 bytes >= 0x80 — `MetalShellHandleAscii`'s `ch<127` gate used to sign-extend and silently drop every one of them before they reached the input line; fixed to treat the byte as unsigned and only exclude DEL (0x7F).
+- `keyb` is not persistent across reboot (defaults to `us` every boot) — re-run `keyb gr` after each boot if needed; the *physical* "US apostrophe" key position produces German `a-umlaut` under `gr` (real DE keyboard behavior) — `'`/`"` live at Shift+`#`-key / Shift+`2` instead.
 - Pointer lock is surface-scoped (`DEFAULT` or tab); unlock on Escape / lifecycle blur.
 - UI software cursor (save/restore + dirty-rect present) + tab-strip hit-test/hover when unlocked.
 - **Console scrollback:** each tab console holds a 1024×160 ring (`CONSOLE_BYTES_MAX`); `view_off` sticks to bottom unless scrolled. Scrollbar on the right; shell focus handles wheel (`PTR_WHEEL`, `dy` = ticks toward older history), thumb click-drag, track jump, and PageUp/PageDown (`pm_metal_ui_console_scroll_page`).

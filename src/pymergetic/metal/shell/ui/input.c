@@ -454,7 +454,9 @@ int pm_metal_ui_input_append(char ch)
     return -1;
   }
 
-  if (ch != '\n' && (ch < 32 || ch >= 127)) {
+  /* Allow ASCII 32-126 plus Latin-15 0x80-0xFF (`keyb gr` umlauts/ss/etc,
+   * see keyb.c) -- only '\n' and DEL (0x7F) are excluded. */
+  if (ch != '\n' && ((uint8_t)ch < 32 || (uint8_t)ch == 0x7fu)) {
     return -1;
   }
 
@@ -506,6 +508,38 @@ int pm_metal_ui_input_backspace(void)
 
   c->u.console.input_len--;
   c->u.console.input_cursor                  = cur - 1u;
+  c->u.console.input[c->u.console.input_len] = '\0';
+  MetalUiInputEnsureCaretVisible(wrap);
+  MetalUiInputNoteHeight(before);
+  return 0;
+}
+
+int pm_metal_ui_input_delete_fwd(void)
+{
+  metal_ui_widget_t *c;
+  uint32_t           i;
+  uint32_t           cur;
+  uint32_t           wrap;
+  uint32_t           before;
+
+  c = gMetalUiSysConsole;
+  if (c == NULL) {
+    return -1;
+  }
+
+  MetalUiInputSyncCaret();
+  cur = c->u.console.input_cursor;
+  if (cur >= c->u.console.input_len) {
+    return -1;
+  }
+
+  wrap   = MetalUiInputCurrentWrap();
+  before = MetalUiInputVisibleRows(wrap);
+  for (i = cur; i < c->u.console.input_len; i++) {
+    c->u.console.input[i] = c->u.console.input[i + 1u];
+  }
+
+  c->u.console.input_len--;
   c->u.console.input[c->u.console.input_len] = '\0';
   MetalUiInputEnsureCaretVisible(wrap);
   MetalUiInputNoteHeight(before);

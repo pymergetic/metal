@@ -402,7 +402,9 @@ MetalInputI8042Drain (
         || key == PM_METAL_KEY_LALT || key == PM_METAL_KEY_RALT
         || key == PM_METAL_KEY_PAGEUP || key == PM_METAL_KEY_PAGEDOWN
         || key == PM_METAL_KEY_LEFT || key == PM_METAL_KEY_RIGHT
-        || key == PM_METAL_KEY_UP || key == PM_METAL_KEY_DOWN)
+        || key == PM_METAL_KEY_UP || key == PM_METAL_KEY_DOWN
+        || key == PM_METAL_KEY_HOME || key == PM_METAL_KEY_END
+        || key == PM_METAL_KEY_DELETE)
     {
       pm_metal_input_push_key (break_code ? 0 : 1, key);
       continue;
@@ -510,6 +512,21 @@ MetalInputConInDrain (
 
     if (Key.ScanCode == SCAN_RIGHT) {
       pm_metal_input_push_key (1, PM_METAL_KEY_RIGHT);
+      continue;
+    }
+
+    if (Key.ScanCode == SCAN_HOME) {
+      pm_metal_input_push_key (1, PM_METAL_KEY_HOME);
+      continue;
+    }
+
+    if (Key.ScanCode == SCAN_END) {
+      pm_metal_input_push_key (1, PM_METAL_KEY_END);
+      continue;
+    }
+
+    if (Key.ScanCode == SCAN_DELETE) {
+      pm_metal_input_push_key (1, PM_METAL_KEY_DELETE);
       continue;
     }
 

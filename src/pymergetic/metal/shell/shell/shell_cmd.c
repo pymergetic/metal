@@ -72,7 +72,9 @@ static int32_t ShellIsSpace(char c)
 
 /**
  * Split @a line into argv in-place (NUL-terminates tokens in @a buf).
- * Supports "double quotes" and \\ \" escapes inside quotes.
+ * Supports "double quotes" (with \\ \" escapes inside) and 'single quotes'
+ * (fully literal, no escapes — POSIX shell convention: single quotes have
+ * no special character to escape, so a backslash inside them is literal too).
  * Returns argc, or -1 on overflow / unmatched quote.
  */
 static int32_t ShellSplitArgv(char *buf, char **argv, uint32_t argv_max)
@@ -116,6 +118,21 @@ static int32_t ShellSplitArgv(char *buf, char **argv, uint32_t argv_max)
       }
 
       if (*p != '"') {
+        return -1;
+      }
+
+      p++;
+      *out = '\0';
+      continue;
+    }
+
+    if (*p == '\'') {
+      p++;
+      while (*p != '\0' && *p != '\'') {
+        *out++ = *p++;
+      }
+
+      if (*p != '\'') {
         return -1;
       }
 

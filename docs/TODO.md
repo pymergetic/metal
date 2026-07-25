@@ -14,9 +14,10 @@ Living list. Product surfaces are largely in place; what’s left is mostly **ir
 | **Names** | `host` nodename (DHCP opt 12); VFS `/etc/hosts`; resolve = literal → local → hosts → DNS |
 | **TFTP** | Async `pm_metal_net_tftp_get` + DHCP next-server / bootfile; guest proof `async_tftp` (EFI verify + QEMU `tftp=`/`bootfile=`) |
 | **Shell / UI** | Linker-section cmds; tab focus; input lag fixes |
+| **Input / keyboard** | Full USB HID keyboard/keypad page-0x07 coverage (punctuation, locks, F11/F12, Insert/Home/Delete/End, numpad, ISO 102nd-key, GUI/Menu) on both EFI+BIOS PS/2 paths; Home/End/Delete wired into shell line-editing; fixed `MetalShellHandleAscii`'s `ch<127` gate silently dropping `keyb gr`'s Latin-15 umlauts/ß/§/°/´; single-quote support in `ShellSplitArgv`; live-verified via scripted QEMU `sendkey` injection, not just static review; per-language keymaps modularized into self-registering `dev/input/keyb_layout/keyb_layout_{us,gr}.c` (linker-section registry, same idiom as `PM_METAL_SHELL_CMD` — new languages are a new file, no edits to `keyb.c`/`input.h`/linker scripts) |
 | **Audio** | virtio-snd → AC97 → null |
 | **Wasm / FS** | Guest FS ABI + proofs; embed mods |
-| **MicroPython (core)** | Always-on µPy blob on EFI + BIOS; Python task = Metal task; host `py` shell + C↔Py trampolines; guest import + await (`async_py`); generic `PM_METAL_PY_BIND` table; `pymergetic.metal.{aio,process,mod}` + `pmcmd.*`; guest-visible sync fn resolve+call; exception/cancel/OOM isolation; boot-proofed overlap/yield fairness — gaps below |
+| **MicroPython (core)** | Always-on µPy blob on EFI + BIOS; Python task = Metal task; host `py` shell + C↔Py trampolines; guest import + await (`async_py`); generic `PM_METAL_PY_BIND` table; `pymergetic.metal.{aio,process,mod}` + `pmcmd.*`; guest-visible sync **and async** fn resolve+call; exception/cancel/OOM isolation; boot-proofed overlap/yield fairness; `.fresh` isolated/`FRESH` mod instances from Python + dual-ABI guest-to-guest (`pm_metal_mod_fresh_{open,resolve,close}`); generated `.pyi` stubs (`scripts/gen_py_stubs.py`, wired into build); signed `stdlib.zip` + trust check + single-flight HTTP fetch + import-unshadowable regression proof; `mem` blob breakout line — gaps below |
 
 Details: `IO.md`, `LIBC_ASYNC.md`, `MICROPYTHON.md`.
 
@@ -40,27 +41,20 @@ Spike landed (see Shipped table above) — see [`MICROPYTHON.md`](MICROPYTHON.md
 [Implementation status](MICROPYTHON.md#implementation-status) for the
 validated (not aspirational) breakdown. Real gaps left:
 
-- [ ] **Known issue — second nested async task hangs OOM-isolation.**
-      Pre-existing async-engine bug, unrelated to Python content or mod
-      count: the boot sequence tolerates exactly **one** coroutine-backed
-      async task spawn total across the whole run; a second one anywhere
-      (even a bare repeated `pm_metal_py_run_script`, no new code) hangs
-      the boot sequence with no crash/traceback right before the OOM
-      proof. Currently blocks boot-proofing the guest-visible **async**
-      call path (`pm_metal_py_fn_call_async`, implemented but unverified
-      end-to-end). See [`MICROPYTHON.md`](MICROPYTHON.md#known-issue--second-nested-async-task-hangs-oom-isolation)
-      for the full bisection writeup.
-- [ ] **Signed stdlib zip** — `mods/py/stdlib.zip` exists and mounts on both
-      ports, but no `.sig`/trust check, no HTTP single-flight fetch, no
-      enforced `builtin→frozen→aot→wasm→py` import order.
 - [ ] **Task-local GC spaces** — still one global run-lock serializing all
       Python bytecode; no per-task nursery, no all-parked compact barrier.
-- [ ] `mem` shell command doesn't break out the µPy blob as its own line
-      (counted inside aggregate `map`, per the doc's own Memory section).
-- [ ] Write up `.mpy`/NLR park-resume safety note + blob-size-vs-Doom-HEAP note.
-- [ ] Build-time `.pyi` generation — stubs under `typings/pymergetic/metal/`
-      + `typings/pmcmd.pyi` are hand-written today, matching the bind-table
-      surface; generating them from the linker-section rows is a later step.
+      (The former second-nested-async-task hang is resolved — see
+      [`MICROPYTHON.md`](MICROPYTHON.md#resolved--gc-stack-scan-boundary-captured-once-vs-resumed-cross-cpu)
+      — this item is now purely about GC granularity, not a bug.)
+- [ ] **Fat stdlib / native self-register** — `stdlib.zip` is signed, trust-
+      checked, and single-flight HTTP-fetched on ESP miss, but still ships
+      one sample module; no `import sample`-shaped native self-register, no
+      full `metal.fs`/`net`/… stdlib surface.
+- [ ] **Python REPL as the system's main shell** — long-term direction, not
+      started: `py -i` (an actual interactive REPL task) doesn't exist yet;
+      once it does, boot should spawn it as the primary surface instead of
+      today's C `shell.c` console, with its own welcome banner. See
+      [`MICROPYTHON.md`](MICROPYTHON.md#later--python-repl-as-the-systems-main-shell-replaces-the-console).
 
 ## Optional / later
 

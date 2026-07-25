@@ -421,7 +421,9 @@ I8042Drain (
         || key == PM_METAL_KEY_LALT || key == PM_METAL_KEY_RALT
         || key == PM_METAL_KEY_PAGEUP || key == PM_METAL_KEY_PAGEDOWN
         || key == PM_METAL_KEY_LEFT || key == PM_METAL_KEY_RIGHT
-        || key == PM_METAL_KEY_UP || key == PM_METAL_KEY_DOWN)
+        || key == PM_METAL_KEY_UP || key == PM_METAL_KEY_DOWN
+        || key == PM_METAL_KEY_HOME || key == PM_METAL_KEY_END
+        || key == PM_METAL_KEY_DELETE)
     {
       pm_metal_input_push_key (break_code ? 0 : 1, key);
       continue;

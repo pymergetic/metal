@@ -45,7 +45,7 @@ static void BootTestShellCmd(int argc, char **argv)
     return;
   }
 
-  pm_metal_shell_out("test: …");
+  pm_metal_shell_out("test: ...");
 }
 
 PM_METAL_SHELL_CMD(g_pm_metal_shell_cmd_test,
