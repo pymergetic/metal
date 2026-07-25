@@ -17,8 +17,8 @@ t8_multimod_lib_add(int32_t a, int32_t b);
 
 int main(void)
 {
-	int32_t result = t8_multimod_lib_add(3, 4);
+  int32_t result = t8_multimod_lib_add(3, 4);
 
-	printf("t9_multimod_app: t8_multimod_lib_add(3, 4) = %d\n", result);
-	return 0;
+  printf("t9_multimod_app: t8_multimod_lib_add(3, 4) = %d\n", result);
+  return 0;
 }

@@ -2,31 +2,28 @@
   HTTP/HTTPS GET client over pm_metal_net_* (async host coro + guest imports).
   (impl: efi|bios)
 **/
+#include <stdio.h>
+#include <string.h>
+
 #include <pymergetic/metal/dev/net/http.h>
 #include <pymergetic/metal/dev/net/net.h>
 #include <pymergetic/metal/dev/net/net_ops.h>
 #include <pymergetic/metal/dev/net/tls.h>
 #include <pymergetic/metal/runtime/async/async.h>
-#include <runtime/coro/coro.h>
-#include <runtime/mem/mem.h>
+#include <pymergetic/metal/runtime/mem/mem.h>
 #include <runtime/time/time.h>
-
-#include <Uefi.h>
-#include <Library/BaseLib.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/PrintLib.h>
 
 #include "wasm_export.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
-#define HTTP_URL_MAX   384u
-#define HTTP_HOST_MAX  128u
-#define HTTP_PATH_MAX  256u
-#define HTTP_IO_MAX    4096u
-#define HTTP_HDR_MAX   8192u
-#define HTTP_REQ_MAX   512u
+#define HTTP_URL_MAX  384u
+#define HTTP_HOST_MAX 128u
+#define HTTP_PATH_MAX 256u
+#define HTTP_IO_MAX   4096u
+#define HTTP_HDR_MAX  8192u
+#define HTTP_REQ_MAX  512u
 
 typedef enum {
   HTTP_STEP_PARSE = 0,
@@ -53,102 +50,79 @@ typedef enum {
 } chunk_step_t;
 
 typedef struct {
-  pm_metal_coro_t          coro;
-  http_step_t              step;
-  pm_metal_async_handle_t  aw;
-  CHAR8                    url[HTTP_URL_MAX];
-  CHAR8                    host[HTTP_HOST_MAX];
-  CHAR8                    path[HTTP_PATH_MAX];
-  UINT16                   port;
-  INT32                    tls;
-  pm_metal_net_sock_h      sock;
-  VOID                    *body;
-  UINT32                   body_cap;
-  UINT32                   body_len;
-  UINT32                   http_status;
-  CHAR8                    hdr[HTTP_HDR_MAX];
-  UINT32                   hdr_len;
-  INT32                    hdr_done;
-  INT32                    chunked;
-  INT32                    body_until_close;
-  UINT32                   content_len;
-  chunk_step_t             chunk_step;
-  UINT32                   chunk_rem;
-  INT32                    chunk_zero;
-  CHAR8                    chunk_line[16];
-  UINT32                   chunk_line_len;
-  INT32                    chunk_done;
-  CHAR8                    req[HTTP_REQ_MAX];
-  UINT32                   req_len;
-  UINT32                   req_off;
-  pm_metal_tls_wire_t      wire;
-  pm_metal_tls_h           tls_h;
+  http_step_t             step;
+  pm_metal_async_handle_t aw;
+  char                    url[HTTP_URL_MAX];
+  char                    host[HTTP_HOST_MAX];
+  char                    path[HTTP_PATH_MAX];
+  uint16_t                port;
+  int32_t                 tls;
+  pm_metal_net_sock_h     sock;
+  void                   *body;
+  uint32_t                body_cap;
+  uint32_t                body_len;
+  uint32_t                http_status;
+  char                    hdr[HTTP_HDR_MAX];
+  uint32_t                hdr_len;
+  int32_t                 hdr_done;
+  int32_t                 chunked;
+  int32_t                 body_until_close;
+  uint32_t                content_len;
+  chunk_step_t            chunk_step;
+  uint32_t                chunk_rem;
+  int32_t                 chunk_zero;
+  char                    chunk_line[16];
+  uint32_t                chunk_line_len;
+  int32_t                 chunk_done;
+  char                    req[HTTP_REQ_MAX];
+  uint32_t                req_len;
+  uint32_t                req_off;
+  pm_metal_tls_wire_t     wire;
+  pm_metal_tls_h          tls_h;
 } http_get_t;
 
-STATIC wasm_module_inst_t  mHttpInst;
-
-STATIC struct {
-  INT32   valid;
-  UINT32  status;
-  UINT32  body_len;
+static struct {
+  int32_t  valid;
+  uint32_t status;
+  uint32_t body_len;
 } mHttpLastDone;
 
-STATIC pm_metal_status_t
-HttpAwaitAsync (
-  pm_metal_coro_t         *self,
-  pm_metal_async_handle_t  aw_h
-  )
+static pm_metal_status_t HttpAwaitAsync(pm_metal_async_handle_t self_h,
+                                        pm_metal_async_handle_t aw_h)
 {
-  return (pm_metal_status_t)pm_metal_async_await_coro (self, aw_h);
+  return pm_metal_async_await(self_h, aw_h);
 }
 
-STATIC UINT32
-HttpChildResult (
-  pm_metal_coro_t  *self
-  )
-{
-  return (UINT32)(UINTN)self->result;
-}
-
-STATIC VOID
-HttpTlsTeardown (
-  http_get_t  *h
-  )
+static void HttpTlsTeardown(http_get_t *h)
 {
   if (h == NULL) {
     return;
   }
 
   if (h->tls_h != PM_METAL_TLS_INVALID) {
-    pm_metal_net_tls_close (h->tls_h);
+    pm_metal_net_tls_close(h->tls_h);
     h->tls_h = PM_METAL_TLS_INVALID;
   }
 }
 
-STATIC INT32
-HttpHexVal (
-  CHAR8  c
-  )
+static int32_t HttpHexVal(char c)
 {
   if (c >= '0' && c <= '9') {
-    return (INT32)(c - '0');
+    return (int32_t)(c - '0');
   }
 
   if (c >= 'a' && c <= 'f') {
-    return 10 + (INT32)(c - 'a');
+    return 10 + (int32_t)(c - 'a');
   }
 
   if (c >= 'A' && c <= 'F') {
-    return 10 + (INT32)(c - 'A');
+    return 10 + (int32_t)(c - 'A');
   }
 
   return -1;
 }
 
-STATIC INT32
-HttpChunkInit (
-  http_get_t  *h
-  )
+static int32_t HttpChunkInit(http_get_t *h)
 {
   if (h == NULL) {
     return -1;
@@ -162,13 +136,9 @@ HttpChunkInit (
   return 0;
 }
 
-STATIC INT32
-HttpChunkFeedByte (
-  http_get_t  *h,
-  UINT8        b
-  )
+static int32_t HttpChunkFeedByte(http_get_t *h, uint8_t b)
 {
-  INT32  hv;
+  int32_t hv;
 
   if (h == NULL) {
     return -1;
@@ -177,24 +147,24 @@ HttpChunkFeedByte (
   switch (h->chunk_step) {
   case CHUNK_SIZE:
     if (b == '\n') {
-      UINT32  sz;
-      UINT32  i;
+      uint32_t sz;
+      uint32_t i;
 
       sz = 0;
       for (i = 0; i < h->chunk_line_len; i++) {
-        CHAR8  c;
+        char c;
 
         c = h->chunk_line[i];
         if (c == ';') {
           break;
         }
 
-        hv = HttpHexVal (c);
+        hv = HttpHexVal(c);
         if (hv < 0) {
           return -1;
         }
 
-        sz = (sz << 4) + (UINT32)hv;
+        sz = (sz << 4) + (uint32_t)hv;
       }
 
       h->chunk_line_len = 0;
@@ -214,16 +184,16 @@ HttpChunkFeedByte (
       return 0;
     }
 
-    if (h->chunk_line_len + 1 >= sizeof (h->chunk_line)) {
+    if (h->chunk_line_len + 1 >= sizeof(h->chunk_line)) {
       return -1;
     }
 
-    h->chunk_line[h->chunk_line_len++] = (CHAR8)b;
+    h->chunk_line[h->chunk_line_len++] = (char)b;
     return 0;
 
   case CHUNK_DATA:
     if (h->body_len < h->body_cap && h->body != NULL) {
-      ((UINT8 *)h->body)[h->body_len++] = b;
+      ((uint8_t *)h->body)[h->body_len++] = b;
     }
 
     if (h->chunk_rem > 0) {
@@ -262,21 +232,16 @@ HttpChunkFeedByte (
   }
 }
 
-STATIC INT32
-HttpChunkFeed (
-  http_get_t    *h,
-  CONST UINT8   *data,
-  UINT32         len
-  )
+static int32_t HttpChunkFeed(http_get_t *h, const uint8_t *data, uint32_t len)
 {
-  UINT32  i;
+  uint32_t i;
 
   if (h == NULL || data == NULL) {
     return -1;
   }
 
   for (i = 0; i < len; i++) {
-    if (HttpChunkFeedByte (h, data[i]) != 0) {
+    if (HttpChunkFeedByte(h, data[i]) != 0) {
       return -1;
     }
 
@@ -288,30 +253,25 @@ HttpChunkFeed (
   return 0;
 }
 
-STATIC INT32
-HttpBodyFeed (
-  http_get_t    *h,
-  CONST UINT8   *data,
-  UINT32         len
-  )
+static int32_t HttpBodyFeed(http_get_t *h, const uint8_t *data, uint32_t len)
 {
   if (h == NULL || data == NULL || len == 0) {
     return 0;
   }
 
   if (h->chunked) {
-    return HttpChunkFeed (h, data, len);
+    return HttpChunkFeed(h, data, len);
   }
 
   {
-    UINT32  room;
-    UINT32  copy;
+    uint32_t room;
+    uint32_t copy;
 
     room = h->body_cap - h->body_len;
     if (h->body_until_close) {
       copy = len;
     } else {
-      UINT32  need;
+      uint32_t need;
 
       need = h->content_len - h->body_len;
       copy = len < need ? len : need;
@@ -322,7 +282,7 @@ HttpBodyFeed (
     }
 
     if (copy > 0 && h->body != NULL) {
-      CopyMem ((UINT8 *)h->body + h->body_len, data, copy);
+      memcpy((uint8_t *)h->body + h->body_len, data, copy);
       h->body_len += copy;
     }
   }
@@ -330,31 +290,27 @@ HttpBodyFeed (
   return 0;
 }
 
-STATIC INT32
-HttpParseUrl (
-  http_get_t   *h,
-  CONST CHAR8  *url
-  )
+static int32_t HttpParseUrl(http_get_t *h, const char *url)
 {
-  CONST CHAR8  *p;
-  CONST CHAR8  *host0;
-  CONST CHAR8  *path0;
-  UINTN         i;
+  const char *p;
+  const char *host0;
+  const char *path0;
+  uintptr_t   i;
 
   if (h == NULL || url == NULL) {
     return -1;
   }
 
-  AsciiStrCpyS (h->url, sizeof (h->url), url);
-  p = url;
-  h->tls = 0;
+  snprintf(h->url, sizeof(h->url), "%s", url);
+  p       = url;
+  h->tls  = 0;
   h->port = 80;
 
-  if (AsciiStrnCmp (p, "https://", 8) == 0) {
-    h->tls = 1;
+  if (strncmp(p, "https://", 8) == 0) {
+    h->tls  = 1;
     h->port = 443;
     p += 8;
-  } else if (AsciiStrnCmp (p, "http://", 7) == 0) {
+  } else if (strncmp(p, "http://", 7) == 0) {
     p += 7;
   } else {
     return -1;
@@ -372,21 +328,21 @@ HttpParseUrl (
       return -1;
     }
 
-    i = (UINTN)(p - host0);
-    if (i >= sizeof (h->host)) {
+    i = (uintptr_t)(p - host0);
+    if (i >= sizeof(h->host)) {
       return -1;
     }
 
-    CopyMem (h->host, host0, i);
+    memcpy(h->host, host0, i);
     h->host[i] = '\0';
     p++;
     if (*p == ':') {
-      UINT32  port;
+      uint32_t port;
 
       p++;
       port = 0;
       while (*p >= '0' && *p <= '9') {
-        port = port * 10u + (UINT32)(*p - '0');
+        port = port * 10u + (uint32_t)(*p - '0');
         p++;
       }
 
@@ -394,14 +350,14 @@ HttpParseUrl (
         return -1;
       }
 
-      h->port = (UINT16)port;
+      h->port = (uint16_t)port;
     }
 
     path0 = p;
     if (*path0 == '\0') {
-      AsciiStrCpyS (h->path, sizeof (h->path), "/");
+      snprintf(h->path, sizeof(h->path), "%s", "/");
     } else {
-      AsciiStrCpyS (h->path, sizeof (h->path), path0);
+      snprintf(h->path, sizeof(h->path), "%s", path0);
     }
 
     return 0;
@@ -415,21 +371,21 @@ HttpParseUrl (
     return -1;
   }
 
-  i = (UINTN)(p - host0);
-  if (i >= sizeof (h->host)) {
+  i = (uintptr_t)(p - host0);
+  if (i >= sizeof(h->host)) {
     return -1;
   }
 
-  CopyMem (h->host, host0, i);
+  memcpy(h->host, host0, i);
   h->host[i] = '\0';
 
   if (*p == ':') {
-    UINT32  port;
+    uint32_t port;
 
     p++;
     port = 0;
     while (*p >= '0' && *p <= '9') {
-      port = port * 10u + (UINT32)(*p - '0');
+      port = port * 10u + (uint32_t)(*p - '0');
       p++;
     }
 
@@ -437,26 +393,23 @@ HttpParseUrl (
       return -1;
     }
 
-    h->port = (UINT16)port;
+    h->port = (uint16_t)port;
   }
 
   path0 = p;
   if (*path0 == '\0') {
-    AsciiStrCpyS (h->path, sizeof (h->path), "/");
+    snprintf(h->path, sizeof(h->path), "%s", "/");
   } else {
-    AsciiStrCpyS (h->path, sizeof (h->path), path0);
+    snprintf(h->path, sizeof(h->path), "%s", path0);
   }
 
   return 0;
 }
 
-STATIC INT32
-HttpHostIsLiteral (
-  CONST CHAR8  *host
-  )
+static int32_t HttpHostIsLiteral(const char *host)
 {
-  UINT32        dots;
-  CONST CHAR8  *p;
+  uint32_t    dots;
+  const char *p;
 
   dots = 0;
   for (p = host; *p != '\0'; p++) {
@@ -476,40 +429,31 @@ HttpHostIsLiteral (
   return dots == 3;
 }
 
-STATIC INT32
-HttpFindHdrEnd (
-  CONST CHAR8  *buf,
-  UINT32        len
-  )
+static int32_t HttpFindHdrEnd(const char *buf, uint32_t len)
 {
-  UINT32  i;
+  uint32_t i;
 
   for (i = 0; i + 3 < len; i++) {
-    if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r'
-        && buf[i + 3] == '\n')
-    {
-      return (INT32)(i + 4);
+    if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' && buf[i + 3] == '\n') {
+      return (int32_t)(i + 4);
     }
   }
 
   return -1;
 }
 
-STATIC VOID
-HttpParseResponse (
-  http_get_t  *h
-  )
+static void HttpParseResponse(http_get_t *h)
 {
-  CONST CHAR8  *p;
-  CONST CHAR8  *line;
-  UINT32        i;
+  const char *p;
+  const char *line;
+  uint32_t    i;
 
   if (h == NULL || h->hdr_len < 12) {
     return;
   }
 
   h->http_status = 0;
-  if (AsciiStrnCmp (h->hdr, "HTTP/", 5) == 0) {
+  if (strncmp(h->hdr, "HTTP/", 5) == 0) {
     p = h->hdr + 5;
     while (*p != '\0' && *p != ' ') {
       p++;
@@ -521,25 +465,25 @@ HttpParseResponse (
 
     h->http_status = 0;
     while (*p >= '0' && *p <= '9') {
-      h->http_status = h->http_status * 10u + (UINT32)(*p - '0');
+      h->http_status = h->http_status * 10u + (uint32_t)(*p - '0');
       p++;
     }
   }
 
-  h->content_len = 0;
-  h->chunked     = 0;
+  h->content_len      = 0;
+  h->chunked          = 0;
   h->body_until_close = 0;
-  line           = h->hdr;
-  for (i = 0; i < h->hdr_len; ) {
-    UINT32  j;
+  line                = h->hdr;
+  for (i = 0; i < h->hdr_len;) {
+    uint32_t j;
 
     j = i;
     while (j + 1 < h->hdr_len && !(h->hdr[j] == '\r' && h->hdr[j + 1] == '\n')) {
       j++;
     }
 
-    if (AsciiStrnCmp (line, "Content-Length:", 15) == 0) {
-      CONST CHAR8  *v;
+    if (strncmp(line, "Content-Length:", 15) == 0) {
+      const char *v;
 
       v = line + 15;
       while (*v == ' ') {
@@ -548,12 +492,12 @@ HttpParseResponse (
 
       h->content_len = 0;
       while (*v >= '0' && *v <= '9') {
-        h->content_len = h->content_len * 10u + (UINT32)(*v - '0');
+        h->content_len = h->content_len * 10u + (uint32_t)(*v - '0');
         v++;
       }
-    } else if (AsciiStrnCmp (line, "Transfer-Encoding:", 18) == 0) {
-      CONST CHAR8  *v;
-      UINT32        k;
+    } else if (strncmp(line, "Transfer-Encoding:", 18) == 0) {
+      const char *v;
+      uint32_t    k;
 
       v = line + 18;
       while (*v == ' ') {
@@ -561,14 +505,14 @@ HttpParseResponse (
       }
 
       for (k = 0; v[k] != '\0' && v[k] != '\r'; k++) {
-        if ((v[k] | 0x20) == 'c' && AsciiStrnCmp (v + k, "chunked", 7) == 0) {
+        if ((v[k] | 0x20) == 'c' && strncmp(v + k, "chunked", 7) == 0) {
           h->chunked = 1;
           break;
         }
       }
     }
 
-    i = j + 2;
+    i    = j + 2;
     line = h->hdr + i;
   }
 
@@ -577,48 +521,36 @@ HttpParseResponse (
   }
 }
 
-STATIC INT32
-HttpTlsHandshakeStep (
-  http_get_t  *h
-  )
+static int32_t HttpTlsHandshakeStep(http_get_t *h)
 {
   if (h == NULL || h->tls_h == PM_METAL_TLS_INVALID) {
     return -1;
   }
 
-  return pm_metal_net_tls_handshake_step (h->tls_h);
+  return pm_metal_net_tls_handshake_step(h->tls_h);
 }
 
-STATIC pm_metal_status_t
-HttpAfterHeadersParsed (
-  http_get_t         *h,
-  pm_metal_coro_t    *self,
-  INT32               he
-  )
+static int32_t HttpAfterHeadersParsed(http_get_t *h, int32_t he)
 {
   h->body_len = 0;
 
   if (h->chunked) {
-    if (HttpChunkInit (h) != 0) {
+    if (HttpChunkInit(h) != 0) {
       return PM_METAL_ERROR;
     }
 
-    if (he >= 0 && (UINT32)he < h->hdr_len) {
-      if (HttpBodyFeed (h, (CONST UINT8 *)h->hdr + he, h->hdr_len - (UINT32)he)
-          != 0)
-      {
+    if (he >= 0 && (uint32_t)he < h->hdr_len) {
+      if (HttpBodyFeed(h, (const uint8_t *)h->hdr + he, h->hdr_len - (uint32_t)he) != 0) {
         return PM_METAL_ERROR;
       }
     }
 
     if (h->chunk_done) {
       h->step = HTTP_STEP_DONE;
-      (VOID)self;
       return PM_METAL_PENDING;
     }
 
     h->step = HTTP_STEP_RECV_BODY;
-    (VOID)self;
     return PM_METAL_PENDING;
   }
 
@@ -627,11 +559,11 @@ HttpAfterHeadersParsed (
   }
 
   if (h->content_len > 0) {
-    UINT32  body_in_hdr;
+    uint32_t body_in_hdr;
 
-    body_in_hdr = h->hdr_len - (UINT32)he;
+    body_in_hdr = h->hdr_len - (uint32_t)he;
     if (body_in_hdr > 0) {
-      UINT32  copy;
+      uint32_t copy;
 
       copy = body_in_hdr;
       if (copy > h->content_len) {
@@ -639,7 +571,7 @@ HttpAfterHeadersParsed (
       }
 
       if (copy > 0 && h->body != NULL) {
-        CopyMem (h->body, h->hdr + he, copy);
+        memcpy(h->body, h->hdr + he, copy);
       }
 
       h->body_len = copy;
@@ -648,7 +580,6 @@ HttpAfterHeadersParsed (
 
   if (h->body_until_close) {
     h->step = HTTP_STEP_RECV_BODY;
-    (VOID)self;
     return PM_METAL_PENDING;
   }
 
@@ -658,32 +589,31 @@ HttpAfterHeadersParsed (
   }
 
   h->step = HTTP_STEP_RECV_BODY;
-  (VOID)self;
   return PM_METAL_PENDING;
 }
 
-STATIC pm_metal_status_t
-HttpGetCoro (
-  pm_metal_coro_t  *self
-  )
+static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
 {
-  http_get_t  *h;
-  INT32        he;
-  UINT32       n;
+  http_get_t *h;
+  int32_t     he;
+  uint32_t    n;
 
-  h = (http_get_t *)self;
+  h = (http_get_t *)(uintptr_t)pm_metal_async_coro_state(self_h);
+  if (h == NULL) {
+    return PM_METAL_ERROR;
+  }
 
   switch (h->step) {
   case HTTP_STEP_PARSE:
-    if (HttpParseUrl (h, h->url) != 0) {
+    if (HttpParseUrl(h, h->url) != 0) {
       return PM_METAL_ERROR;
     }
 
-    h->sock      = PM_METAL_NET_SOCK_INVALID;
-    h->body_len  = 0;
-    h->http_status = 0;
-    h->hdr_len   = 0;
-    h->hdr_done  = 0;
+    h->sock             = PM_METAL_NET_SOCK_INVALID;
+    h->body_len         = 0;
+    h->http_status      = 0;
+    h->hdr_len          = 0;
+    h->hdr_done         = 0;
     h->body_until_close = 0;
     h->chunked          = 0;
     h->chunk_done       = 0;
@@ -693,7 +623,7 @@ HttpGetCoro (
     h->req_len          = 0;
     h->req_off          = 0;
 
-    if (HttpHostIsLiteral (h->host)) {
+    if (HttpHostIsLiteral(h->host)) {
       h->step = HTTP_STEP_SOCK;
     } else {
       h->step = HTTP_STEP_DNS;
@@ -702,33 +632,32 @@ HttpGetCoro (
     return PM_METAL_PENDING;
 
   case HTTP_STEP_DNS:
-    h->aw = pm_metal_net_dns (h->host);
+    h->aw = pm_metal_net_dns(h->host);
     if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       return PM_METAL_ERROR;
     }
 
     h->step = HTTP_STEP_DNS_AW;
-    return HttpAwaitAsync (self, h->aw);
+    return HttpAwaitAsync(self_h, h->aw);
 
   case HTTP_STEP_DNS_AW:
-    if (HttpChildResult (self) == 0) {
+    if (pm_metal_async_result_u32(self_h) == 0) {
       return PM_METAL_ERROR;
     }
 
     h->step = HTTP_STEP_SOCK;
     return PM_METAL_PENDING;
 
-  case HTTP_STEP_SOCK:
-    {
-      UINT32  domain;
+  case HTTP_STEP_SOCK: {
+    uint32_t domain;
 
-      domain = PM_METAL_NET_AF_INET;
-      if (AsciiStrStr (h->host, ":") != NULL) {
-        domain = PM_METAL_NET_AF_INET6;
-      }
-
-      h->sock = pm_metal_net_socket (domain, PM_METAL_NET_SOCK_STREAM);
+    domain = PM_METAL_NET_AF_INET;
+    if (strstr(h->host, ":") != NULL) {
+      domain = PM_METAL_NET_AF_INET6;
     }
+
+    h->sock = pm_metal_net_socket(domain, PM_METAL_NET_SOCK_STREAM);
+  }
     if (h->sock == PM_METAL_NET_SOCK_INVALID) {
       return PM_METAL_ERROR;
     }
@@ -737,26 +666,26 @@ HttpGetCoro (
     return PM_METAL_PENDING;
 
   case HTTP_STEP_CONNECT:
-    h->aw = pm_metal_net_connect (h->sock, h->host, h->port);
+    h->aw = pm_metal_net_connect(h->sock, h->host, h->port);
     if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       return PM_METAL_ERROR;
     }
 
     h->step = HTTP_STEP_CONNECT_AW;
-    return HttpAwaitAsync (self, h->aw);
+    return HttpAwaitAsync(self_h, h->aw);
 
   case HTTP_STEP_CONNECT_AW:
-    if (HttpChildResult (self) == 0) {
+    if (pm_metal_async_result_u32(self_h) == 0) {
       return PM_METAL_ERROR;
     }
 
     if (h->tls) {
-      h->tls_h = pm_metal_net_tls_open (h->host);
+      h->tls_h = pm_metal_net_tls_open(h->host);
       if (h->tls_h == PM_METAL_TLS_INVALID) {
         return PM_METAL_ERROR;
       }
 
-      if (pm_metal_net_tls_bind (h->tls_h, h->sock, &h->wire) != 0) {
+      if (pm_metal_net_tls_bind(h->tls_h, h->sock, &h->wire) != 0) {
         return PM_METAL_ERROR;
       }
 
@@ -768,7 +697,7 @@ HttpGetCoro (
     return PM_METAL_PENDING;
 
   case HTTP_STEP_TLS:
-    he = HttpTlsHandshakeStep (h);
+    he = HttpTlsHandshakeStep(h);
     if (he == 0) {
       h->step = HTTP_STEP_SEND;
       return PM_METAL_PENDING;
@@ -780,16 +709,16 @@ HttpGetCoro (
 
     h->wire.len = 0;
     h->wire.off = 0;
-    h->aw       = pm_metal_net_recv (h->sock, h->wire.buf, sizeof (h->wire.buf));
+    h->aw       = pm_metal_net_recv(h->sock, h->wire.buf, sizeof(h->wire.buf));
     if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       return PM_METAL_ERROR;
     }
 
     h->step = HTTP_STEP_WIRE_AW;
-    return HttpAwaitAsync (self, h->aw);
+    return HttpAwaitAsync(self_h, h->aw);
 
   case HTTP_STEP_WIRE_AW:
-    n = HttpChildResult (self);
+    n = pm_metal_async_result_u32(self_h);
     if (n == 0) {
       /* Mid-request send may only need a write flush; retry SEND. */
       if (h->req_len > 0 && h->req_off < h->req_len) {
@@ -797,12 +726,12 @@ HttpGetCoro (
         return PM_METAL_PENDING;
       }
 
-      if (pm_metal_net_tls_handshake_done (h->tls_h) && h->hdr_done) {
+      if (pm_metal_net_tls_handshake_done(h->tls_h) && h->hdr_done) {
         h->step = HTTP_STEP_DONE;
         return PM_METAL_PENDING;
       }
 
-      if (!h->tls || pm_metal_net_tls_handshake_done (h->tls_h)) {
+      if (!h->tls || pm_metal_net_tls_handshake_done(h->tls_h)) {
         if (h->body_until_close || h->chunked) {
           h->step = HTTP_STEP_DONE;
           return PM_METAL_PENDING;
@@ -816,7 +745,7 @@ HttpGetCoro (
     h->wire.off = 0;
     if (h->req_len > 0 && h->req_off < h->req_len) {
       h->step = HTTP_STEP_SEND;
-    } else if (h->tls && !pm_metal_net_tls_handshake_done (h->tls_h)) {
+    } else if (h->tls && !pm_metal_net_tls_handshake_done(h->tls_h)) {
       h->step = HTTP_STEP_TLS;
     } else if (!h->hdr_done) {
       h->step = HTTP_STEP_RECV_HDR;
@@ -828,28 +757,24 @@ HttpGetCoro (
 
   case HTTP_STEP_SEND:
     if (h->req_len == 0) {
-      INT32  v6;
+      int32_t v6;
 
-      v6 = (AsciiStrStr (h->host, ":") != NULL) ? 1 : 0;
+      v6 = (strstr(h->host, ":") != NULL) ? 1 : 0;
       if (v6) {
-        AsciiSPrint (
-          h->req,
-          sizeof (h->req),
-          "GET %a HTTP/1.1\r\nHost: [%a]\r\nConnection: close\r\n\r\n",
-          h->path,
-          h->host
-          );
+        snprintf(h->req,
+                 sizeof(h->req),
+                 "GET %s HTTP/1.1\r\nHost: [%s]\r\nConnection: close\r\n\r\n",
+                 h->path,
+                 h->host);
       } else {
-        AsciiSPrint (
-          h->req,
-          sizeof (h->req),
-          "GET %a HTTP/1.1\r\nHost: %a\r\nConnection: close\r\n\r\n",
-          h->path,
-          h->host
-          );
+        snprintf(h->req,
+                 sizeof(h->req),
+                 "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+                 h->path,
+                 h->host);
       }
 
-      h->req_len = (UINT32)AsciiStrLen (h->req);
+      h->req_len = (uint32_t)strlen(h->req);
       h->req_off = 0;
       if (h->req_len == 0) {
         return PM_METAL_ERROR;
@@ -857,15 +782,11 @@ HttpGetCoro (
     }
 
     if (h->tls) {
-      INT32  e;
+      int32_t e;
 
-      e = pm_metal_net_tls_write (
-            h->tls_h,
-            h->req + h->req_off,
-            h->req_len - h->req_off
-            );
+      e = pm_metal_net_tls_write(h->tls_h, h->req + h->req_off, h->req_len - h->req_off);
       if (e > 0) {
-        h->req_off += (UINT32)e;
+        h->req_off += (uint32_t)e;
         if (h->req_off >= h->req_len) {
           h->hdr_len  = 0;
           h->hdr_done = 0;
@@ -876,30 +797,26 @@ HttpGetCoro (
       }
 
       if (e == PM_METAL_TLS_WANT_READ) {
-        h->aw = pm_metal_net_recv (h->sock, h->wire.buf, sizeof (h->wire.buf));
+        h->aw = pm_metal_net_recv(h->sock, h->wire.buf, sizeof(h->wire.buf));
         if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
           return PM_METAL_ERROR;
         }
 
         h->step = HTTP_STEP_WIRE_AW;
-        return HttpAwaitAsync (self, h->aw);
+        return HttpAwaitAsync(self_h, h->aw);
       }
 
       if (e == PM_METAL_TLS_WANT_WRITE) {
-        return pm_metal_await (self, pm_metal_sleep_us (2000));
+        return pm_metal_async_await(self_h, pm_metal_async_sleep_us(2000));
       }
 
       return PM_METAL_ERROR;
     }
 
     {
-      UINT32  nsend;
+      uint32_t nsend;
 
-      nsend = pm_metal_net_send (
-                h->sock,
-                h->req + h->req_off,
-                h->req_len - h->req_off
-                );
+      nsend = pm_metal_net_send(h->sock, h->req + h->req_off, h->req_len - h->req_off);
       if (nsend > 0) {
         h->req_off += nsend;
         if (h->req_off >= h->req_len) {
@@ -913,50 +830,42 @@ HttpGetCoro (
     }
 
     /* TCP send buffer full — cooperative backoff. */
-    return pm_metal_await (self, pm_metal_sleep_us (2000));
+    return pm_metal_async_await(self_h, pm_metal_async_sleep_us(2000));
 
   case HTTP_STEP_RECV_HDR:
     if (h->tls) {
-      INT32  e;
+      int32_t e;
 
-      e = pm_metal_net_tls_read (
-            h->tls_h,
-            h->hdr + h->hdr_len,
-            sizeof (h->hdr) - h->hdr_len - 1
-            );
+      e = pm_metal_net_tls_read(h->tls_h, h->hdr + h->hdr_len, sizeof(h->hdr) - h->hdr_len - 1);
       if (e > 0) {
-        h->hdr_len += (UINT32)e;
+        h->hdr_len += (uint32_t)e;
         h->hdr[h->hdr_len] = '\0';
       } else if (e == 0) {
         return PM_METAL_ERROR;
       } else if (e == PM_METAL_TLS_WANT_READ || e == PM_METAL_TLS_WANT_WRITE) {
-        h->aw = pm_metal_net_recv (h->sock, h->wire.buf, sizeof (h->wire.buf));
+        h->aw = pm_metal_net_recv(h->sock, h->wire.buf, sizeof(h->wire.buf));
         if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
           return PM_METAL_ERROR;
         }
 
         h->step = HTTP_STEP_WIRE_AW;
-        return HttpAwaitAsync (self, h->aw);
+        return HttpAwaitAsync(self_h, h->aw);
       } else {
         return PM_METAL_ERROR;
       }
     } else {
-      h->aw = pm_metal_net_recv (
-                h->sock,
-                h->hdr + h->hdr_len,
-                sizeof (h->hdr) - h->hdr_len - 1
-                );
+      h->aw = pm_metal_net_recv(h->sock, h->hdr + h->hdr_len, sizeof(h->hdr) - h->hdr_len - 1);
       if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
         return PM_METAL_ERROR;
       }
 
       h->step = HTTP_STEP_RECV_HDR_AW;
-      return HttpAwaitAsync (self, h->aw);
+      return HttpAwaitAsync(self_h, h->aw);
     }
 
-    he = HttpFindHdrEnd (h->hdr, h->hdr_len);
+    he = HttpFindHdrEnd(h->hdr, h->hdr_len);
     if (he < 0) {
-      if (h->hdr_len + 256 >= sizeof (h->hdr)) {
+      if (h->hdr_len + 256 >= sizeof(h->hdr)) {
         return PM_METAL_ERROR;
       }
 
@@ -965,111 +874,109 @@ HttpGetCoro (
     }
 
     h->hdr_done = 1;
-    HttpParseResponse (h);
-    return HttpAfterHeadersParsed (h, self, he);
+    HttpParseResponse(h);
+    return HttpAfterHeadersParsed(h, he);
 
   case HTTP_STEP_RECV_HDR_AW:
-    n = HttpChildResult (self);
+    n = pm_metal_async_result_u32(self_h);
     if (n == 0) {
       return PM_METAL_ERROR;
     }
 
     h->hdr_len += n;
     h->hdr[h->hdr_len] = '\0';
-    he = HttpFindHdrEnd (h->hdr, h->hdr_len);
+    he                 = HttpFindHdrEnd(h->hdr, h->hdr_len);
     if (he < 0) {
       h->step = HTTP_STEP_RECV_HDR;
       return PM_METAL_PENDING;
     }
 
     h->hdr_done = 1;
-    HttpParseResponse (h);
-    return HttpAfterHeadersParsed (h, self, he);
+    HttpParseResponse(h);
+    return HttpAfterHeadersParsed(h, he);
 
-  case HTTP_STEP_RECV_BODY:
-    {
-      UINT8   tmp[HTTP_IO_MAX];
-      UINT32  want;
-      INT32   got;
+  case HTTP_STEP_RECV_BODY: {
+    uint8_t  tmp[HTTP_IO_MAX];
+    uint32_t want;
+    int32_t  got;
 
-      if (h->chunked && h->chunk_done) {
-        h->step = HTTP_STEP_DONE;
-        return PM_METAL_PENDING;
-      }
+    if (h->chunked && h->chunk_done) {
+      h->step = HTTP_STEP_DONE;
+      return PM_METAL_PENDING;
+    }
 
-      want = HTTP_IO_MAX;
-      if (!h->chunked) {
-        if (h->body_until_close) {
-          want = h->body_cap - h->body_len;
-        } else {
-          want = h->content_len - h->body_len;
-        }
-      }
-
-      if (want > HTTP_IO_MAX) {
-        want = HTTP_IO_MAX;
-      }
-
-      if (!h->chunked && want == 0) {
-        h->step = HTTP_STEP_DONE;
-        return PM_METAL_PENDING;
-      }
-
-      got = 0;
-      if (h->tls) {
-        INT32  e;
-
-        e = pm_metal_net_tls_read (h->tls_h, tmp, want);
-        if (e > 0) {
-          got = e;
-        } else if (e == 0) {
-          h->step = HTTP_STEP_DONE;
-          return PM_METAL_PENDING;
-        } else if (e == PM_METAL_TLS_WANT_READ || e == PM_METAL_TLS_WANT_WRITE) {
-          h->aw = pm_metal_net_recv (h->sock, h->wire.buf, sizeof (h->wire.buf));
-          if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
-            return PM_METAL_ERROR;
-          }
-
-          h->step = HTTP_STEP_WIRE_AW;
-          return HttpAwaitAsync (self, h->aw);
-        } else {
-          return PM_METAL_ERROR;
-        }
+    want = HTTP_IO_MAX;
+    if (!h->chunked) {
+      if (h->body_until_close) {
+        want = h->body_cap - h->body_len;
       } else {
-        h->aw = pm_metal_net_recv (h->sock, h->wire.buf, want);
+        want = h->content_len - h->body_len;
+      }
+    }
+
+    if (want > HTTP_IO_MAX) {
+      want = HTTP_IO_MAX;
+    }
+
+    if (!h->chunked && want == 0) {
+      h->step = HTTP_STEP_DONE;
+      return PM_METAL_PENDING;
+    }
+
+    got = 0;
+    if (h->tls) {
+      int32_t e;
+
+      e = pm_metal_net_tls_read(h->tls_h, tmp, want);
+      if (e > 0) {
+        got = e;
+      } else if (e == 0) {
+        h->step = HTTP_STEP_DONE;
+        return PM_METAL_PENDING;
+      } else if (e == PM_METAL_TLS_WANT_READ || e == PM_METAL_TLS_WANT_WRITE) {
+        h->aw = pm_metal_net_recv(h->sock, h->wire.buf, sizeof(h->wire.buf));
         if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
           return PM_METAL_ERROR;
         }
 
-        h->step = HTTP_STEP_RECV_BODY_AW;
-        return HttpAwaitAsync (self, h->aw);
+        h->step = HTTP_STEP_WIRE_AW;
+        return HttpAwaitAsync(self_h, h->aw);
+      } else {
+        return PM_METAL_ERROR;
       }
-
-      if (HttpBodyFeed (h, tmp, (UINT32)got) != 0) {
+    } else {
+      h->aw = pm_metal_net_recv(h->sock, h->wire.buf, want);
+      if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
         return PM_METAL_ERROR;
       }
 
-      if (h->chunked) {
-        h->step = h->chunk_done ? HTTP_STEP_DONE : HTTP_STEP_RECV_BODY;
-      } else if (h->body_until_close) {
-        h->step = (h->body_len >= h->body_cap) ? HTTP_STEP_DONE : HTTP_STEP_RECV_BODY;
-      } else {
-        h->step = (h->body_len >= h->content_len) ? HTTP_STEP_DONE
-                                                  : HTTP_STEP_RECV_BODY;
-      }
-
-      return PM_METAL_PENDING;
+      h->step = HTTP_STEP_RECV_BODY_AW;
+      return HttpAwaitAsync(self_h, h->aw);
     }
 
+    if (HttpBodyFeed(h, tmp, (uint32_t)got) != 0) {
+      return PM_METAL_ERROR;
+    }
+
+    if (h->chunked) {
+      h->step = h->chunk_done ? HTTP_STEP_DONE : HTTP_STEP_RECV_BODY;
+    } else if (h->body_until_close) {
+      h->step = (h->body_len >= h->body_cap) ? HTTP_STEP_DONE : HTTP_STEP_RECV_BODY;
+    } else {
+      h->step = (h->body_len >= h->content_len) ? HTTP_STEP_DONE : HTTP_STEP_RECV_BODY;
+    }
+
+    return PM_METAL_PENDING;
+  }
+
   case HTTP_STEP_RECV_BODY_AW:
-    n = HttpChildResult (self);
+    n = pm_metal_async_result_u32(self_h);
     if (n == 0) {
       h->step = HTTP_STEP_DONE;
       return PM_METAL_PENDING;
     }
 
-    if (HttpBodyFeed (h, h->wire.buf, n) != 0) {
+    if (HttpBodyFeed(h, h->wire.buf, n) != 0) {
       return PM_METAL_ERROR;
     }
 
@@ -1091,15 +998,15 @@ HttpGetCoro (
 
   case HTTP_STEP_DONE:
     if (h->sock != PM_METAL_NET_SOCK_INVALID) {
-      pm_metal_net_close (h->sock);
+      pm_metal_net_close(h->sock);
       h->sock = PM_METAL_NET_SOCK_INVALID;
     }
 
-    HttpTlsTeardown (h);
+    HttpTlsTeardown(h);
     mHttpLastDone.valid    = 1;
     mHttpLastDone.status   = h->http_status;
     mHttpLastDone.body_len = h->body_len;
-    self->result = (VOID *)(UINTN)h->body_len;
+    pm_metal_async_set_result_u32(self_h, h->body_len);
     return PM_METAL_DONE;
 
   default:
@@ -1107,66 +1014,58 @@ HttpGetCoro (
   }
 }
 
-STATIC VOID
-HttpGetRelease (
-  pm_metal_coro_t  *self
-  )
+static void HttpGetRelease(void *state)
 {
-  http_get_t  *h;
+  http_get_t *h;
 
-  h = (http_get_t *)self;
+  h = (http_get_t *)state;
   if (h->sock != PM_METAL_NET_SOCK_INVALID) {
-    pm_metal_net_close (h->sock);
+    pm_metal_net_close(h->sock);
     h->sock = PM_METAL_NET_SOCK_INVALID;
   }
 
-  HttpTlsTeardown (h);
+  HttpTlsTeardown(h);
 }
 
-STATIC http_get_t *
-HttpGetFromHandle (
-  pm_metal_async_handle_t  hnd
-  )
+static http_get_t *HttpGetFromHandle(pm_metal_async_handle_t hnd)
 {
-  return (http_get_t *)pm_metal_async_host_coro (hnd);
+  return (http_get_t *)(uintptr_t)pm_metal_async_coro_state(hnd);
 }
 
-pm_metal_async_handle_t
-pm_metal_net_http_get (
-  CONST CHAR8  *url,
-  VOID         *dest,
-  UINT32        dest_cap
-  )
+pm_metal_async_handle_t pm_metal_net_http_get(const char *url, void *dest, uint32_t dest_cap)
 {
-  http_get_t  *h;
+  http_get_t             *h;
+  pm_metal_async_handle_t ah;
 
   if (url == NULL || dest_cap == 0) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  h = (http_get_t *)pm_metal_coro (HttpGetCoro, sizeof (*h));
+  ah = pm_metal_async_coro_create(HttpGetStep, sizeof(*h));
+  if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  h = (http_get_t *)(uintptr_t)pm_metal_async_coro_state(ah);
   if (h == NULL) {
+    pm_metal_async_coro_close(ah);
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
   mHttpLastDone.valid = 0;
-  h->coro.release = HttpGetRelease;
-  h->step         = HTTP_STEP_PARSE;
-  h->body         = dest;
-  h->body_cap     = dest_cap;
-  AsciiStrCpyS (h->url, sizeof (h->url), url);
-
-  return pm_metal_async_adopt_host_coro (&h->coro);
+  h->step             = HTTP_STEP_PARSE;
+  h->body             = dest;
+  h->body_cap         = dest_cap;
+  snprintf(h->url, sizeof(h->url), "%s", url);
+  pm_metal_async_coro_set_release(ah, HttpGetRelease);
+  return ah;
 }
 
-uint32_t
-pm_metal_net_http_status (
-  pm_metal_async_handle_t  hnd
-  )
+uint32_t pm_metal_net_http_status(pm_metal_async_handle_t hnd)
 {
-  http_get_t  *h;
+  http_get_t *h;
 
-  h = HttpGetFromHandle (hnd);
+  h = HttpGetFromHandle(hnd);
   if (h != NULL) {
     return h->http_status;
   }
@@ -1178,19 +1077,12 @@ pm_metal_net_http_status (
   return 0;
 }
 
-uint32_t
-pm_metal_net_http_body_len (
-  pm_metal_async_handle_t  hnd
-  )
+uint32_t pm_metal_net_http_body_len(pm_metal_async_handle_t hnd)
 {
-  http_get_t  *h;
+  http_get_t *h;
 
-  h = HttpGetFromHandle (hnd);
+  h = HttpGetFromHandle(hnd);
   if (h != NULL) {
-    if (h->coro.status == PM_METAL_DONE && h->coro.result != NULL) {
-      return (uint32_t)(UINTN)h->coro.result;
-    }
-
     return h->body_len;
   }
 
@@ -1201,28 +1093,25 @@ pm_metal_net_http_body_len (
   return 0;
 }
 
-STATIC INT32
-HttpGuestCopyUrl (
-  wasm_exec_env_t  exec_env,
-  CONST CHAR8     *url,
-  CHAR8           *out,
-  UINTN            out_sz
-  )
+static int32_t HttpGuestCopyUrl(wasm_exec_env_t exec_env,
+                                const char     *url,
+                                char           *out,
+                                uintptr_t       out_sz)
 {
-  wasm_module_inst_t  inst;
-  UINTN               i;
+  wasm_module_inst_t inst;
+  uintptr_t          i;
 
-  inst = wasm_runtime_get_module_inst (exec_env);
+  inst = wasm_runtime_get_module_inst(exec_env);
   if (inst == NULL || url == NULL || out == NULL || out_sz == 0) {
     return -1;
   }
 
-  if (!wasm_runtime_validate_native_addr (inst, (VOID *)url, 1)) {
+  if (!wasm_runtime_validate_native_addr(inst, (void *)url, 1)) {
     return -1;
   }
 
   for (i = 0; i + 1 < out_sz; i++) {
-    if (!wasm_runtime_validate_native_addr (inst, (VOID *)(url + i), 1)) {
+    if (!wasm_runtime_validate_native_addr(inst, (void *)(url + i), 1)) {
       return -1;
     }
 
@@ -1235,81 +1124,56 @@ HttpGuestCopyUrl (
   return -1;
 }
 
-STATIC UINT32
-pm_metal_net_http_get_native (
-  wasm_exec_env_t  exec_env,
-  CONST CHAR8     *url,
-  UINT32           dest,
-  UINT32           dest_cap
-  )
+static uint32_t pm_metal_net_http_get_native(wasm_exec_env_t exec_env,
+                                             const char     *url,
+                                             uint32_t        dest,
+                                             uint32_t        dest_cap)
 {
-  CHAR8  cleaned[HTTP_URL_MAX];
-  VOID  *native;
+  char  cleaned[HTTP_URL_MAX];
+  void *native;
 
-  if (mHttpInst == NULL || dest_cap == 0) {
+  if (dest_cap == 0) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  if (HttpGuestCopyUrl (exec_env, url, cleaned, sizeof (cleaned)) != 0) {
+  if (HttpGuestCopyUrl(exec_env, url, cleaned, sizeof(cleaned)) != 0) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  if (!wasm_runtime_validate_app_addr (mHttpInst, dest, dest_cap)) {
+  native = pm_metal_async_guest_buf_durable(exec_env, dest, dest_cap);
+  if (native == NULL) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  native = wasm_runtime_addr_app_to_native (mHttpInst, dest);
-  return pm_metal_net_http_get (cleaned, native, dest_cap);
+  return pm_metal_net_http_get(cleaned, native, dest_cap);
 }
 
-STATIC UINT32
-pm_metal_net_http_status_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           hnd
-  )
+static uint32_t pm_metal_net_http_status_native(wasm_exec_env_t exec_env, uint32_t hnd)
 {
-  (VOID)exec_env;
-  return pm_metal_net_http_status (hnd);
+  (void)exec_env;
+  return pm_metal_net_http_status(hnd);
 }
 
-STATIC UINT32
-pm_metal_net_http_body_len_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           hnd
-  )
+static uint32_t pm_metal_net_http_body_len_native(wasm_exec_env_t exec_env, uint32_t hnd)
 {
-  (VOID)exec_env;
-  return pm_metal_net_http_body_len (hnd);
+  (void)exec_env;
+  return pm_metal_net_http_body_len(hnd);
 }
 
-STATIC NativeSymbol g_pm_metal_net_http_native_symbols[] = {
-  { "pm_metal_net_http_get", (VOID *)pm_metal_net_http_get_native, "($ii)i", NULL },
-  { "pm_metal_net_http_status", (VOID *)pm_metal_net_http_status_native, "(i)i", NULL },
-  { "pm_metal_net_http_body_len", (VOID *)pm_metal_net_http_body_len_native, "(i)i", NULL },
+static NativeSymbol g_pm_metal_net_http_native_symbols[] = {
+  { "pm_metal_net_http_get", (void *)pm_metal_net_http_get_native, "($ii)i", NULL },
+  { "pm_metal_net_http_status", (void *)pm_metal_net_http_status_native, "(i)i", NULL },
+  { "pm_metal_net_http_body_len", (void *)pm_metal_net_http_body_len_native, "(i)i", NULL },
 };
 
-int
-pm_metal_net_http_native_register (
-  VOID
-  )
+int pm_metal_net_http_native_register(void)
 {
-  if (!wasm_runtime_register_natives (
-         PM_METAL_NET_HTTP_WASI_MODULE,
-         g_pm_metal_net_http_native_symbols,
-         sizeof (g_pm_metal_net_http_native_symbols)
-           / sizeof (g_pm_metal_net_http_native_symbols[0])
-         ))
-  {
+  if (!wasm_runtime_register_natives(PM_METAL_NET_HTTP_WASI_MODULE,
+                                     g_pm_metal_net_http_native_symbols,
+                                     sizeof(g_pm_metal_net_http_native_symbols) /
+                                       sizeof(g_pm_metal_net_http_native_symbols[0]))) {
     return -1;
   }
 
   return 0;
-}
-
-void
-pm_metal_net_http_bind_inst (
-  VOID  *module_inst
-  )
-{
-  mHttpInst = (wasm_module_inst_t)module_inst;
 }

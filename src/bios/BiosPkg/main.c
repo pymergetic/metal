@@ -6,7 +6,7 @@
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
 #include <pymergetic/metal/fs/esp/esp.h>
-#include <runtime/mem/mem.h>
+#include <pymergetic/metal/runtime/mem/mem.h>
 #include <runtime/stack/stack.h>
 #include <runtime/run/run.h>
 #include <runtime/time/time.h>
@@ -184,8 +184,8 @@ EarlyPuts(CONST CHAR8 *s)
 STATIC INT32
 ClaimBest(UINT64 best_addr, UINT64 best_len, VOID **arena_out, UINTN *bytes_out)
 {
-  /* Keep arena above trampoline (1MiB) + Metal image (4MiB). */
-  CONST UINT64 kMinAddr = 0x800000ull;
+  /* Keep arena above trampoline (1MiB) + Metal image (8MiB load). */
+  CONST UINT64 kMinAddr = 0x1000000ull;
 
   if (best_len < 32ull * 1024 * 1024)
     return -1;

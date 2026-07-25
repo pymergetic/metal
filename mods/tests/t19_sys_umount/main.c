@@ -12,10 +12,10 @@
 
 int main(void)
 {
-	if (umount("/dyn") != 0) {
-		printf("t19_sys_umount: umount failed\n");
-		return 1;
-	}
-	printf("t19_sys_umount: umounted /dyn\n");
-	return 0;
+  if (umount("/dyn") != 0) {
+    printf("t19_sys_umount: umount failed\n");
+    return 1;
+  }
+  printf("t19_sys_umount: umounted /dyn\n");
+  return 0;
 }

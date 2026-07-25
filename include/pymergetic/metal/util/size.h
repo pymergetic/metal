@@ -29,8 +29,7 @@
 #define PM_METAL_UTIL_SIZE_WASI_MODULE "pymergetic.metal.util.size"
 
 #if defined(__wasm__)
-#define PM_METAL_UTIL_SIZE_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_SIZE_WASI_MODULE, name)
+#define PM_METAL_UTIL_SIZE_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_UTIL_SIZE_WASI_MODULE, name)
 #endif
 
 /*
@@ -42,7 +41,7 @@
  */
 #if defined(__wasm__)
 extern int pm_metal_util_size_format(char *out, size_t cap, uint64_t bytes)
-	PM_METAL_UTIL_SIZE_IMPORT(pm_metal_util_size_format);
+  PM_METAL_UTIL_SIZE_IMPORT(pm_metal_util_size_format);
 #else
 int pm_metal_util_size_format(char *out, size_t cap, uint64_t bytes);
 #endif
@@ -56,7 +55,7 @@ int pm_metal_util_size_format(char *out, size_t cap, uint64_t bytes);
  */
 #if defined(__wasm__)
 extern int pm_metal_util_size_format_bytes(char *out, size_t cap, uint64_t bytes)
-	PM_METAL_UTIL_SIZE_IMPORT(pm_metal_util_size_format_bytes);
+  PM_METAL_UTIL_SIZE_IMPORT(pm_metal_util_size_format_bytes);
 #else
 int pm_metal_util_size_format_bytes(char *out, size_t cap, uint64_t bytes);
 #endif

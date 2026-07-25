@@ -138,24 +138,14 @@ Cooked termios / job control: omit until needed (raw PTY first).
 - Sync poll: `pm_metal_lifecycle_poll` / `lifecycle_focused`.
 - Host sets focus on session start; `lifecycle_blur` on session end (unlocks pointer).
 
-## Process (fake WASI process)
+## Process
 
-Host logical anchor for a live wasm guest — not an async task.
+**Target** ([`docs/MODS.md`](MODS.md)): **process = registered shell command runs a function in a task.**  
+Mod load ≠ process. Plain function call-in ≠ process. Commands are special funcs; Shell uses cmds; µPy later can use funcs and cmds.
 
-| Concept | Role |
-|---------|------|
-| **process** | Table entry: id, name, state, optional UI attachment |
-| **async task** | Coro/await unit owned by the process’s root async session |
-| **UI attachment** | Optional: `none` / `tab` / `fullscreen` (DEFAULT surface) |
-| **views** | Shell `ps` today; overlay switcher later |
-
-- API: `include/pymergetic/metal/guest/process/process.h` (`pm_metal_process_*`).
-- Guest WASI module `pymergetic.metal.process`: `self`, `info`, `list`, `ui_kind`, `surface`, `tab`.
-- `run` / `tab` → `pm_metal_process_spawn_mod`; long-lived async guests stay in the table.
-- Sync one-shot mods get a `PID=` for the run then are released (not listed).
-- WASI env `PID=<id>` is also injected at instantiate (`getenv("PID")`).
-- `pm_metal_wasm_session_*` remains as thin wrappers over the process/async live guest.
-- **v1 limit:** one live guest (async session is still global). Multi-process needs per-process async.
+**Today:** `run`/`tab` → `mod_cmd_invoke` (registered cmd → func in a task).
+Still one live call-in/session. API: `guest/mod/mod.h`, `guest/process/process.h`,
+WASI `pymergetic.metal.mod` + `pymergetic.metal.process`, `PID=` env, `ps`.
 
 ---
 
@@ -167,6 +157,6 @@ shell linker-section registry, random/realtime, tab surfaces + clipped present, 
 console scrollback/scrollbar + EFI/BIOS wheel + PageUp/Down,
 Ctrl+Shift+Left/Right tab cycle,
 `shell_log`/WASI stdout → stdio streams, `gfx_set_surface` for tab-clipped guest draw,
-fake process table + `ps` + `PID=` env (single live guest).  
+process/ps/`PID=` still on today’s inverted guest-session path ([`docs/MODS.md`](MODS.md) target).  
 Framebuffer on BIOS i386: Multiboot tag → Bochs → **VESA LFB** (`vesa.c`); x86_64 BIOS still stubs VESA RM. Audio: virtio-snd, else **AC97**, else null. Names/TFTP: hostname + `/etc/hosts` + `pm_metal_net_tftp_get`.  
-Open follow-ups: `docs/TODO.md` (mostly iron smoke); multi-process async; overlay view.
+Open follow-ups: `docs/TODO.md` (mostly iron smoke); mod registry migration; overlay view.

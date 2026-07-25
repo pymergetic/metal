@@ -1,7 +1,9 @@
 /*
  * Boot harvest + seeded init (port-neutral API).
  *
- * impl: common — src/pymergetic/metal/boot/boot_init.c (seed/tree/tests/shutdown)
+ * impl: common — src/pymergetic/metal/boot/boot_init.c (seed/tree/pump/shutdown)
+ * impl: common — src/pymergetic/metal/boot/boot_test.c (bring-up proof suite)
+ * impl: common — src/pymergetic/metal/boot/boot_python.c (µPy init + py proofs)
  * impl: common — src/pymergetic/metal/boot/boot_harvest.c (floor + bus probes)
  * impl: common — src/pymergetic/metal/boot/banner.c (boot/dead art)
  * impl: bind   — src/{bios,efi}/…/boot_init.c (port_floor + port_seed only)
@@ -36,8 +38,7 @@ void pm_metal_boot_port_seed(void);
  * Platform floor deltas for shared harvest (fs/random compat + early input).
  * impl: bind — bios/efi boot_init.c
  */
-void pm_metal_boot_port_floor(const char **fs_compat,
-			      const char **random_compat);
+void pm_metal_boot_port_floor(const char **fs_compat, const char **random_compat);
 
 /**
  * Register baseline DT nodes + bus probes (pre-EBS harvest).
@@ -56,14 +57,31 @@ void pm_metal_boot_harvest_bus_devices(void);
  * Call once after harvest + run_init + gfx harvest.
  * impl: common — src/pymergetic/metal/boot/boot_init.c
  */
-void pm_metal_boot_print_floor_tree(uint64_t claim_mib, uint64_t map_bytes,
-				    uint64_t hole_mib, uint64_t heap_bytes,
-				    uint64_t stack_kib, unsigned n_cpus);
+void pm_metal_boot_print_floor_tree(uint64_t claim_mib,
+                                    uint64_t map_bytes,
+                                    uint64_t hole_mib,
+                                    uint64_t heap_bytes,
+                                    uint64_t stack_kib,
+                                    unsigned n_cpus);
 
 /**
- * Start bring-up suite as an async coro (DHCP wait + wasm proofs).
+ * Always-on µPy MAP blob for the boot tree (`|   +-- py`).
+ * impl: common — src/pymergetic/metal/boot/boot_python.c
+ */
+int pm_metal_boot_py_init(void);
+
+/**
+ * Host py overlap + yield proofs (nested under the bring-up suite).
+ * impl: common — src/pymergetic/metal/boot/boot_python.c
+ */
+pm_metal_async_handle_t pm_metal_boot_py_proofs_start(void);
+/** After await on py_proofs_start: 0 ok, -1 failed. */
+int pm_metal_boot_py_proofs_result(pm_metal_async_handle_t h);
+
+/**
+ * Start bring-up suite as an async coro (DHCP wait + wasm + py proofs).
  * Await the handle; then pm_metal_boot_tests_result().
- * impl: common — src/pymergetic/metal/boot/boot_init.c
+ * impl: common — src/pymergetic/metal/boot/boot_test.c
  */
 pm_metal_async_handle_t pm_metal_boot_tests_start(void);
 /** After await on tests_start: 0 ok, -1 failed. */

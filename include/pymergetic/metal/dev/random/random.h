@@ -17,15 +17,13 @@ extern "C" {
 
 #if defined(__wasm__)
 #include "pymergetic/metal/wasi.h"
-#define PM_METAL_RANDOM_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_RANDOM_WASI_MODULE, name)
+#define PM_METAL_RANDOM_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_RANDOM_WASI_MODULE, name)
 
 /** Fill guest buffer; returns bytes written. */
 extern uint32_t pm_metal_random(uint32_t dest, uint32_t len)
-	PM_METAL_RANDOM_IMPORT(pm_metal_random);
+  PM_METAL_RANDOM_IMPORT(pm_metal_random);
 /** Wall-clock milliseconds since Unix epoch (best effort). */
-extern uint64_t pm_metal_realtime_ms(void)
-	PM_METAL_RANDOM_IMPORT(pm_metal_realtime_ms);
+extern uint64_t pm_metal_realtime_ms(void) PM_METAL_RANDOM_IMPORT(pm_metal_realtime_ms);
 #else
 uint32_t pm_metal_random(void *dest, uint32_t len);
 uint64_t pm_metal_realtime_ms(void);
@@ -37,7 +35,7 @@ uint64_t pm_metal_realtime_ms(void);
 void pm_metal_realtime_set_unix_ms(uint64_t unix_ms);
 
 /** Minutes east of UTC (e.g. +120 for Europe/Berlin summer). */
-void pm_metal_tz_set_minutes(int32_t east_of_utc);
+void    pm_metal_tz_set_minutes(int32_t east_of_utc);
 int32_t pm_metal_tz_minutes(void);
 
 /**
@@ -53,7 +51,6 @@ const char *pm_metal_tz_name(void);
 uint64_t pm_metal_tz_local_ms(void);
 
 int pm_metal_random_native_register(void);
-void pm_metal_random_bind_inst(void *module_inst);
 #endif
 
 #ifdef __cplusplus

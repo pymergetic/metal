@@ -31,26 +31,26 @@ extern "C" {
 
 #if defined(__wasm__)
 #include "pymergetic/metal/wasi.h"
-#define PM_METAL_NET_TFTP_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_NET_TFTP_WASI_MODULE, name)
+#define PM_METAL_NET_TFTP_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_NET_TFTP_WASI_MODULE, name)
 
 extern pm_metal_async_handle_t pm_metal_net_tftp_get(const char *host,
-						     const char *path,
-						     uint32_t dest,
-						     uint32_t dest_cap)
-	PM_METAL_NET_TFTP_IMPORT(pm_metal_net_tftp_get);
+                                                     const char *path,
+                                                     uint32_t    dest,
+                                                     uint32_t    dest_cap)
+  PM_METAL_NET_TFTP_IMPORT(pm_metal_net_tftp_get);
 extern uint32_t pm_metal_net_tftp_status(pm_metal_async_handle_t h)
-	PM_METAL_NET_TFTP_IMPORT(pm_metal_net_tftp_status);
+  PM_METAL_NET_TFTP_IMPORT(pm_metal_net_tftp_status);
 extern uint32_t pm_metal_net_tftp_len(pm_metal_async_handle_t h)
-	PM_METAL_NET_TFTP_IMPORT(pm_metal_net_tftp_len);
+  PM_METAL_NET_TFTP_IMPORT(pm_metal_net_tftp_len);
 #else
-pm_metal_async_handle_t pm_metal_net_tftp_get(const char *host, const char *path,
-					      void *dest, uint32_t dest_cap);
-uint32_t pm_metal_net_tftp_status(pm_metal_async_handle_t h);
-uint32_t pm_metal_net_tftp_len(pm_metal_async_handle_t h);
+pm_metal_async_handle_t pm_metal_net_tftp_get(const char *host,
+                                              const char *path,
+                                              void       *dest,
+                                              uint32_t    dest_cap);
+uint32_t                pm_metal_net_tftp_status(pm_metal_async_handle_t h);
+uint32_t                pm_metal_net_tftp_len(pm_metal_async_handle_t h);
 
 int pm_metal_net_tftp_native_register(void);
-void pm_metal_net_tftp_bind_inst(void *module_inst);
 #endif
 
 #ifdef __cplusplus

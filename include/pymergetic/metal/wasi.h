@@ -10,6 +10,6 @@
 #define PYMERGETIC_METAL_WASI_H_
 
 #define PM_METAL_WASI_IMPORT(module, name) \
-	__attribute__((import_module(module), import_name(#name)))
+  __attribute__((import_module(module), import_name(#name)))
 
 #endif /* PYMERGETIC_METAL_WASI_H_ */

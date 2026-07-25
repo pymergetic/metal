@@ -3,77 +3,45 @@
 **/
 #include <pymergetic/metal/dev/net/net_ops.h>
 #include <pymergetic/metal/runtime/async/async.h>
-#include <runtime/coro/coro.h>
 
-#include <Uefi.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/UefiLib.h>
+#include <stdint.h>
+#include <string.h>
 
 #ifndef PM_METAL_NET_MAX_SOCKS
-#define PM_METAL_NET_MAX_SOCKS  16u
+#define PM_METAL_NET_MAX_SOCKS 16u
 #endif
 
 typedef struct {
-  INT32   used;
-  UINT32  domain;
-  UINT32  type;
+  int32_t  used;
+  uint32_t domain;
+  uint32_t type;
 } null_sock_t;
 
-STATIC null_sock_t  mSocks[PM_METAL_NET_MAX_SOCKS + 1];
-STATIC INT32        mLogged;
+static null_sock_t mSocks[PM_METAL_NET_MAX_SOCKS + 1];
+static int32_t     mLogged;
 
-STATIC
-pm_metal_status_t
-NullFailFn (
-  pm_metal_coro_t  *self
-  )
+static pm_metal_status_t NullFailStep(pm_metal_async_handle_t self_h)
 {
-  (VOID)self;
+  (void)self_h;
   return PM_METAL_ERROR;
 }
 
-STATIC
-pm_metal_async_handle_t
-NullFailAsync (
-  VOID
-  )
+static pm_metal_async_handle_t NullFailAsync(void)
 {
-  pm_metal_coro_t  *c;
-
-  c = pm_metal_coro (NullFailFn, sizeof (*c));
-  if (c == NULL) {
-    return PM_METAL_ASYNC_HANDLE_INVALID;
-  }
-
-  return pm_metal_async_adopt_host_coro (c);
+  return pm_metal_async_coro_create(NullFailStep, 0);
 }
 
-STATIC
-int
-NullInit (
-  VOID
-  )
+static int NullInit(void)
 {
   mLogged = 1;
   return 0;
 }
 
-STATIC
-VOID
-NullPoll (
-  VOID
-  )
-{
-}
+static void NullPoll(void) {}
 
-STATIC
-pm_metal_net_sock_h
-NullSocket (
-  uint32_t  domain,
-  uint32_t  type
-  )
+static pm_metal_net_sock_h NullSocket(uint32_t domain, uint32_t type)
 {
-  UINT32  i;
+  uint32_t i;
 
   if (domain == 0 || type == 0) {
     return PM_METAL_NET_SOCK_INVALID;
@@ -91,137 +59,83 @@ NullSocket (
   return PM_METAL_NET_SOCK_INVALID;
 }
 
-STATIC
-VOID
-NullClose (
-  pm_metal_net_sock_h  h
-  )
+static void NullClose(pm_metal_net_sock_h h)
 {
   if (h == 0 || h > PM_METAL_NET_MAX_SOCKS) {
     return;
   }
 
-  ZeroMem (&mSocks[h], sizeof (mSocks[h]));
+  memset(&mSocks[h], 0, sizeof(mSocks[h]));
 }
 
-STATIC
-pm_metal_async_handle_t
-NullConnect (
-  pm_metal_net_sock_h  h,
-  CONST CHAR8         *host,
-  uint32_t             port
-  )
+static pm_metal_async_handle_t NullConnect(pm_metal_net_sock_h h, const char *host, uint32_t port)
 {
-  (VOID)host;
-  (VOID)port;
+  (void)host;
+  (void)port;
   if (h == 0 || h > PM_METAL_NET_MAX_SOCKS || !mSocks[h].used) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  return NullFailAsync ();
+  return NullFailAsync();
 }
 
-STATIC
-pm_metal_async_handle_t
-NullListen (
-  pm_metal_net_sock_h  h,
-  uint32_t             port
-  )
+static pm_metal_async_handle_t NullListen(pm_metal_net_sock_h h, uint32_t port)
 {
-  (VOID)port;
+  (void)port;
   if (h == 0 || !mSocks[h].used) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  return NullFailAsync ();
+  return NullFailAsync();
 }
 
-STATIC
-pm_metal_async_handle_t
-NullAccept (
-  pm_metal_net_sock_h  h
-  )
+static pm_metal_async_handle_t NullAccept(pm_metal_net_sock_h h)
 {
   if (h == 0 || !mSocks[h].used) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  return NullFailAsync ();
+  return NullFailAsync();
 }
 
-STATIC
-uint32_t
-NullSend (
-  pm_metal_net_sock_h  h,
-  CONST VOID          *ptr,
-  uint32_t             len
-  )
+static uint32_t NullSend(pm_metal_net_sock_h h, const void *ptr, uint32_t len)
 {
-  (VOID)ptr;
-  (VOID)len;
-  (VOID)h;
+  (void)ptr;
+  (void)len;
+  (void)h;
   return 0;
 }
 
-STATIC
-pm_metal_async_handle_t
-NullRecv (
-  pm_metal_net_sock_h  h,
-  VOID                *ptr,
-  uint32_t             len
-  )
+static pm_metal_async_handle_t NullRecv(pm_metal_net_sock_h h, void *ptr, uint32_t len)
 {
-  (VOID)ptr;
-  (VOID)len;
+  (void)ptr;
+  (void)len;
   if (h == 0 || !mSocks[h].used) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  return NullFailAsync ();
+  return NullFailAsync();
 }
 
-STATIC
-pm_metal_async_handle_t
-NullDns (
-  CONST CHAR8  *host
-  )
+static pm_metal_async_handle_t NullDns(const char *host)
 {
-  (VOID)host;
-  return NullFailAsync ();
+  (void)host;
+  return NullFailAsync();
 }
 
-STATIC
-int
-NullBindIf (
-  pm_metal_net_sock_h  h,
-  CONST CHAR8         *ifname
-  )
+static int NullBindIf(pm_metal_net_sock_h h, const char *ifname)
 {
-  (VOID)h;
-  (VOID)ifname;
+  (void)h;
+  (void)ifname;
   return -1;
 }
 
-STATIC CONST pm_metal_net_ops_t  mNullOps = {
-  "null",
-  NullInit,
-  NullPoll,
-  NullSocket,
-  NullClose,
-  NullConnect,
-  NullListen,
-  NullAccept,
-  NullSend,
-  NullRecv,
-  NullDns,
-  NullBindIf
-};
+static const pm_metal_net_ops_t mNullOps = { "null",    NullInit,    NullPoll,   NullSocket,
+                                             NullClose, NullConnect, NullListen, NullAccept,
+                                             NullSend,  NullRecv,    NullDns,    NullBindIf };
 
-void
-pm_metal_net_null_install (
-  VOID
-  )
+void pm_metal_net_null_install(void)
 {
-  pm_metal_net_set_ops (&mNullOps);
-  (VOID)NullInit ();
+  pm_metal_net_set_ops(&mNullOps);
+  (void)NullInit();
 }

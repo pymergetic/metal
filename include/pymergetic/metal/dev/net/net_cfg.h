@@ -16,27 +16,27 @@ extern "C" {
 
 #if !defined(__wasm__)
 
-#define PM_METAL_NET_IFNAME_MAX     8
-#define PM_METAL_NET_MAX_IFS        4
-#define PM_METAL_NET_TFTP_HOST_MAX  64
-#define PM_METAL_NET_BOOT_FILE_MAX  128
+#define PM_METAL_NET_IFNAME_MAX    8
+#define PM_METAL_NET_MAX_IFS       4
+#define PM_METAL_NET_TFTP_HOST_MAX 64
+#define PM_METAL_NET_BOOT_FILE_MAX 128
 
-#define PM_METAL_NET_DHCP6_OFF        0
-#define PM_METAL_NET_DHCP6_STATELESS  1
-#define PM_METAL_NET_DHCP6_STATEFUL   2
+#define PM_METAL_NET_DHCP6_OFF       0
+#define PM_METAL_NET_DHCP6_STATELESS 1
+#define PM_METAL_NET_DHCP6_STATEFUL  2
 
 typedef struct pm_metal_net_ifcfg {
-	char name[PM_METAL_NET_IFNAME_MAX];
-	char ip[16];
-	char mask[16];
-	char gw[16];
-	char dns[16];
-	char ntp[16];
-	char tftp[PM_METAL_NET_TFTP_HOST_MAX];
-	char boot_file[PM_METAL_NET_BOOT_FILE_MAX];
-	unsigned char mac[6];
-	int link_up;
-	const char *backend;
+  char          name[PM_METAL_NET_IFNAME_MAX];
+  char          ip[16];
+  char          mask[16];
+  char          gw[16];
+  char          dns[16];
+  char          ntp[16];
+  char          tftp[PM_METAL_NET_TFTP_HOST_MAX];
+  char          boot_file[PM_METAL_NET_BOOT_FILE_MAX];
+  unsigned char mac[6];
+  int           link_up;
+  const char   *backend;
 } pm_metal_net_ifcfg_t;
 
 /** Number of active interfaces (`lo` + eth0 .. ethN-1). */
@@ -55,13 +55,11 @@ int pm_metal_net_if_get(pm_metal_net_ifcfg_t *out);
  * Apply static IPv4 on named interface. name NULL → default (eth0).
  * dns may be NULL to leave unchanged. Returns 0 on success.
  */
-int pm_metal_net_if_set_named(const char *name, const char *ip,
-			      const char *mask, const char *gw,
-			      const char *dns);
+int pm_metal_net_if_set_named(
+  const char *name, const char *ip, const char *mask, const char *gw, const char *dns);
 
 /** Apply static IPv4 on default interface (eth0). */
-int pm_metal_net_if_set(const char *ip, const char *mask, const char *gw,
-			const char *dns);
+int pm_metal_net_if_set(const char *ip, const char *mask, const char *gw, const char *dns);
 
 /** Switch named interface to DHCPv4 + stateless DHCPv6. name NULL → eth0. */
 int pm_metal_net_if_set_dhcp_named(const char *name);
@@ -83,9 +81,8 @@ int pm_metal_net_if_status_named(const char *name, char *buf, uint32_t buf_len);
  * Fills tftp host (opt 66 or siaddr) and boot file (opt 67 or BOOTP file).
  * Empty strings if unknown. Returns 0, or -1.
  */
-int pm_metal_net_if_boot_get(const char *name, char *tftp_host,
-			     uint32_t tftp_cap, char *boot_file,
-			     uint32_t boot_cap);
+int pm_metal_net_if_boot_get(
+  const char *name, char *tftp_host, uint32_t tftp_cap, char *boot_file, uint32_t boot_cap);
 
 /** Refresh lwIP netif hostname + renew DHCP after nodename change. */
 void pm_metal_net_on_hostname_changed(void);

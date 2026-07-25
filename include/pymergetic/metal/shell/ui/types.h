@@ -20,8 +20,7 @@ typedef uint32_t pm_metal_ui_handle_t;
 
 #if defined(__wasm__)
 #include "pymergetic/metal/wasi.h"
-#define PM_METAL_UI_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_UI_WASI_MODULE, name)
+#define PM_METAL_UI_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_UI_WASI_MODULE, name)
 #endif
 
 #ifdef __cplusplus

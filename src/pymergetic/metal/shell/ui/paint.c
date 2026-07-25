@@ -1,6 +1,11 @@
 /** @file
   UI layout + paint (window chrome, console, status tray/clock).
 **/
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
 #include "priv.h"
 
 #include <pymergetic/metal/dev/net/net_cfg.h>
@@ -12,20 +17,16 @@
 #include <pymergetic/metal/host/host.h>
 #include <pymergetic/metal/util/ip.h>
 
-#include <Library/BaseMemoryLib.h>
-#include <Library/BaseLib.h>
-#include <Library/PrintLib.h>
-
-STATIC UINT32  mStatusClockTod  = 0xffffffffu;
-STATIC UINT32  mStatusNetHealth = 0xffffffffu;
-STATIC UINT32  mStatusIfCount   = 0xffffffffu;
-STATIC UINT32  mStatusNtpBit    = 0xffffffffu;
-STATIC UINT32  mStatusFpsHz     = 0xffffffffu;
+static uint32_t mStatusClockTod  = 0xffffffffu;
+static uint32_t mStatusNetHealth = 0xffffffffu;
+static uint32_t mStatusIfCount   = 0xffffffffu;
+static uint32_t mStatusNtpBit    = 0xffffffffu;
+static uint32_t mStatusFpsHz     = 0xffffffffu;
 
 /* Per-iface tray color: 0=down, 1=partial (IP no DNS), 2=good — packed 2 bits. */
-#define NET_HEALTH_DOWN     0u
-#define NET_HEALTH_PARTIAL  1u
-#define NET_HEALTH_GOOD     2u
+#define NET_HEALTH_DOWN    0u
+#define NET_HEALTH_PARTIAL 1u
+#define NET_HEALTH_GOOD    2u
 
 /**
  * True when a live wasm session draws into this tab's surface (windowed
@@ -33,14 +34,10 @@ STATIC UINT32  mStatusFpsHz     = 0xffffffffu;
  * Fullscreen (`run`) draws DEFAULT — not a tab content owner (and must not
  * keep painting the shared input strip over the game).
  */
-STATIC
-INT32
-MetalUiTabGuestOwnsContent (
-  metal_ui_widget_t  *w
-  )
+static int32_t MetalUiTabGuestOwnsContent(metal_ui_widget_t *w)
 {
-  metal_ui_widget_t       *tab;
-  pm_metal_process_id_t    pid;
+  metal_ui_widget_t    *tab;
+  pm_metal_process_id_t pid;
 
   tab = w;
   while (tab != NULL && tab->kind != METAL_UI_KIND_TAB) {
@@ -51,42 +48,35 @@ MetalUiTabGuestOwnsContent (
     return 0;
   }
 
-  if (!pm_metal_wasm_session_active ()) {
+  if (!pm_metal_process_active()) {
     return 0;
   }
 
-  pid = pm_metal_process_current ();
-  if (pid != PM_METAL_PROCESS_ID_INVALID
-      && pm_metal_process_ui_kind (pid) == PM_METAL_PROC_UI_FULLSCREEN)
-  {
+  pid = pm_metal_process_current();
+  if (pid != PM_METAL_PROCESS_ID_INVALID &&
+      pm_metal_process_ui_kind(pid) == PM_METAL_PROC_UI_FULLSCREEN) {
     return 0;
   }
 
-  return pm_metal_wasm_stdout_tab () == tab->handle;
+  return pm_metal_wasm_stdout_tab() == tab->handle;
 }
 
-STATIC
-VOID
-MetalUiLayoutWindow (
-  metal_ui_widget_t  *win,
-  INT32               sw,
-  INT32               sh
-  )
+static void MetalUiLayoutWindow(metal_ui_widget_t *win, int32_t sw, int32_t sh)
 {
-  metal_ui_widget_t  *tabs;
-  metal_ui_widget_t  *st;
-  metal_ui_widget_t  *tab;
-  metal_ui_widget_t  *frame;
-  metal_ui_widget_t  *con;
-  UINT32              i;
-  INT32               x;
-  INT32               y;
-  INT32               w;
-  INT32               h;
-  INT32               body_y;
-  INT32               body_h;
-  INT32               input_h;
-  UINT32              fh;
+  metal_ui_widget_t *tabs;
+  metal_ui_widget_t *st;
+  metal_ui_widget_t *tab;
+  metal_ui_widget_t *frame;
+  metal_ui_widget_t *con;
+  uint32_t           i;
+  int32_t            x;
+  int32_t            y;
+  int32_t            w;
+  int32_t            h;
+  int32_t            body_y;
+  int32_t            body_h;
+  int32_t            input_h;
+  uint32_t           fh;
 
   x = UI_MARGIN;
   y = UI_MARGIN;
@@ -116,7 +106,7 @@ MetalUiLayoutWindow (
 
   body_y = tabs->y + tabs->h + 2;
   body_h = st->y - body_y - 2;
-  fh     = pm_metal_gfx_font_height ();
+  fh     = pm_metal_gfx_font_height();
 
   for (i = 0; i < tabs->u.tabs.n; i++) {
     tab = tabs->u.tabs.tabs[i];
@@ -147,10 +137,19 @@ MetalUiLayoutWindow (
     /*
      * Shell input is shared on console/idle tabs. A live windowed guest
      * owns the whole frame — no prompt row (doom fills the tab content).
+     * Height grows with wrapped/soft-newline content up to UI_INPUT_ROWS_MAX.
      */
     input_h = 0;
-    if (!MetalUiTabGuestOwnsContent (tab)) {
-      input_h = (INT32)fh * UI_INPUT_ROWS + 4;
+    if (!MetalUiTabGuestOwnsContent(tab)) {
+      uint32_t wrap;
+      uint32_t vis;
+      int32_t  iw;
+
+      iw = frame->w - 2 * UI_FRAME_PAD;
+      wrap =
+        MetalUiInputWrapColsFromWidth(iw - 4 - UI_SCROLL_W > 8 ? iw - 4 - UI_SCROLL_W : iw - 4);
+      vis     = MetalUiInputVisibleRows(wrap);
+      input_h = (int32_t)fh * (int32_t)vis + 4;
     }
 
     con->x = frame->x + UI_FRAME_PAD;
@@ -160,13 +159,7 @@ MetalUiLayoutWindow (
 
     if (tab->surface != PM_METAL_GFX_SURFACE_INVALID) {
       /* Guest = padded frame interior (no prompt strip while playing). */
-      pm_metal_gfx_surface_set_rect (
-        tab->surface,
-        con->x,
-        con->y,
-        con->w,
-        con->h
-        );
+      pm_metal_gfx_surface_set_rect(tab->surface, con->x, con->y, con->w, con->h);
     }
   }
 }
@@ -175,43 +168,36 @@ MetalUiLayoutWindow (
  * Draw text with a minimal CSI SGR subset (same codes log/prompt emit).
  * Advances at most max_cols glyph cells; escape bytes do not consume cells.
  */
-STATIC
-VOID
-MetalUiDrawTextAnsi (
-  INT32                 x,
-  INT32                 y,
-  CONST CHAR8          *text,
-  pm_metal_gfx_color_t  def_fg,
-  UINT32                max_cols
-  )
+static void MetalUiDrawTextAnsi(
+  int32_t x, int32_t y, const char *text, pm_metal_gfx_color_t def_fg, uint32_t max_cols)
 {
-  CONST CHAR8          *p;
-  INT32                 cx;
-  UINT32                cols;
-  UINT32                fw;
-  pm_metal_gfx_color_t  fg;
-  CHAR8                 ch[2];
+  const char          *p;
+  int32_t              cx;
+  uint32_t             cols;
+  uint32_t             fw;
+  pm_metal_gfx_color_t fg;
+  char                 ch[2];
 
   if (text == NULL || max_cols == 0u) {
     return;
   }
 
-  fw = pm_metal_gfx_font_width ();
+  fw = pm_metal_gfx_font_width();
   if (fw == 0u) {
     fw = UI_FONT_W;
   }
 
-  p    = text;
-  cx   = x;
-  cols = 0;
-  fg   = def_fg;
+  p     = text;
+  cx    = x;
+  cols  = 0;
+  fg    = def_fg;
   ch[1] = '\0';
 
   while (*p != '\0' && cols < max_cols) {
     if (p[0] == '\033' && p[1] == '[') {
       p += 2;
       while (*p != '\0' && *p != 'm') {
-        UINT32  v;
+        uint32_t v;
 
         if (*p < '0' || *p > '9') {
           p++;
@@ -220,7 +206,7 @@ MetalUiDrawTextAnsi (
 
         v = 0;
         while (*p >= '0' && *p <= '9') {
-          v = v * 10u + (UINT32)(*p - '0');
+          v = v * 10u + (uint32_t)(*p - '0');
           p++;
         }
 
@@ -253,33 +239,38 @@ MetalUiDrawTextAnsi (
     }
 
     ch[0] = *p;
-    pm_metal_gfx_draw_text (cx, y, ch, fg, COL_CONSOLE_BG, 0);
-    cx += (INT32)fw;
+    pm_metal_gfx_draw_text(cx, y, ch, fg, COL_CONSOLE_BG, 0);
+    cx += (int32_t)fw;
     cols++;
     p++;
   }
 }
 
-INT32
-MetalUiShellInputGeom (
-  INT32  *x,
-  INT32  *y,
-  INT32  *w,
-  INT32  *h
-  )
+int32_t MetalUiShellInputGeom(int32_t *x, int32_t *y, int32_t *w, int32_t *h)
 {
-  metal_ui_widget_t  *con;
-  UINT32              fh;
+  metal_ui_widget_t *con;
+  uint32_t           fh;
+  uint32_t           wrap;
+  uint32_t           vis;
+  int32_t            text_w;
 
-  con = MetalUiActiveConsole ();
+  con = MetalUiActiveConsole();
   if (con == NULL || gMetalUiSysConsole == NULL) {
     return -1;
   }
 
-  fh = pm_metal_gfx_font_height ();
+  fh = pm_metal_gfx_font_height();
   if (fh == 0) {
     return -1;
   }
+
+  text_w = con->w - 4 - UI_SCROLL_W;
+  if (text_w < 8) {
+    text_w = con->w > 4 ? con->w - 4 : con->w;
+  }
+
+  wrap = MetalUiInputWrapColsFromWidth(text_w);
+  vis  = MetalUiInputVisibleRows(wrap);
 
   if (x != NULL) {
     *x = con->x;
@@ -294,26 +285,20 @@ MetalUiShellInputGeom (
   }
 
   if (h != NULL) {
-    *h = (INT32)fh + 2;
+    *h = (int32_t)fh * (int32_t)vis + 2;
   }
 
   return 0;
 }
 
-INT32
-MetalUiStatusGeom (
-  INT32  *x,
-  INT32  *y,
-  INT32  *w,
-  INT32  *h
-  )
+int32_t MetalUiStatusGeom(int32_t *x, int32_t *y, int32_t *w, int32_t *h)
 {
   if (gMetalUiStatus == NULL) {
     return -1;
   }
 
   /* Ensure layout coords match current FB before callers present_rect. */
-  MetalUiLayout ();
+  MetalUiLayout();
   if (x != NULL) {
     *x = gMetalUiStatus->x;
   }
@@ -333,125 +318,184 @@ MetalUiStatusGeom (
   return 0;
 }
 
-VOID
-MetalUiPaintShellInputLine (
-  VOID
-  )
+void MetalUiPaintShellInputLine(void)
 {
-  INT32                    x;
-  INT32                    y;
-  INT32                    w;
-  INT32                    h;
-  INT32                    cx;
-  UINT32                   fw;
-  CONST CHAR8             *host;
-  UINTN                    host_len;
-  CHAR8                    typed[INPUT_CHARS + 2];
-  UINT32                   n;
-  pm_metal_process_id_t    pid;
+  int32_t               x;
+  int32_t               y;
+  int32_t               w;
+  int32_t               h;
+  int32_t               cx;
+  int32_t               ty;
+  uint32_t              fw;
+  uint32_t              fh;
+  uint32_t              wrap;
+  uint32_t              visual;
+  uint32_t              visible;
+  uint32_t              first;
+  uint32_t              r;
+  uint32_t              caret_row;
+  uint32_t              caret_col;
+  const char           *host;
+  uintptr_t             host_len;
+  char                  rowbuf[CONSOLE_COLS];
+  char                  caret[2];
+  pm_metal_process_id_t pid;
 
   /* Live guest (fullscreen or windowed on this tab) — no shell prompt. */
-  pid = pm_metal_process_current ();
+  pid = pm_metal_process_current();
   if (pid != PM_METAL_PROCESS_ID_INVALID) {
-    pm_metal_process_ui_kind_t  kind;
+    pm_metal_process_ui_kind_t kind;
 
-    kind = pm_metal_process_ui_kind (pid);
+    kind = pm_metal_process_ui_kind(pid);
     if (kind == PM_METAL_PROC_UI_FULLSCREEN) {
       return;
     }
 
-    if (kind == PM_METAL_PROC_UI_TAB
-        && pm_metal_process_tab (pid) == pm_metal_ui_tab_active ())
-    {
+    if (kind == PM_METAL_PROC_UI_TAB && pm_metal_process_tab(pid) == pm_metal_ui_tab_active()) {
       return;
     }
   }
 
-  if (MetalUiShellInputGeom (&x, &y, &w, &h) != 0) {
+  if (MetalUiShellInputGeom(&x, &y, &w, &h) != 0) {
     return;
   }
 
-  pm_metal_gfx_set_surface (PM_METAL_GFX_SURFACE_DEFAULT);
-  pm_metal_gfx_fill_rect (x, y, w, h, COL_CONSOLE_BG);
+  pm_metal_gfx_set_surface(PM_METAL_GFX_SURFACE_DEFAULT);
+  pm_metal_gfx_fill_rect(x, y, w, h, COL_CONSOLE_BG);
 
-  host = pm_metal_host_name_cstr ();
+  host = pm_metal_host_name_cstr();
   if (host == NULL || host[0] == '\0') {
     host = "metal";
   }
 
-  host_len = AsciiStrLen (host);
-  fw       = pm_metal_gfx_font_width ();
+  host_len = strlen(host);
+  fw       = pm_metal_gfx_font_width();
+  fh       = pm_metal_gfx_font_height();
   if (fw == 0u) {
     fw = UI_FONT_W;
   }
 
-  cx = x + 2;
-  /* hostname green, :~ blue (ANSI 34), $ green, then a real gap before input */
-  pm_metal_gfx_draw_text (cx, y, host, COL_LOG_OK, COL_CONSOLE_BG, 0);
-  cx += (INT32)(host_len * fw);
-  pm_metal_gfx_draw_text (cx, y, ":~", COL_PROMPT_PATH, COL_CONSOLE_BG, 0);
-  cx += (INT32)(2u * fw);
-  pm_metal_gfx_draw_text (cx, y, "$", COL_LOG_OK, COL_CONSOLE_BG, 0);
-  cx += (INT32)fw;
-  /* blank cell = space between prompt and typed text / cursor */
-  cx += (INT32)fw;
-
-  n = gMetalUiSysConsole->u.console.input_len;
-  if (n >= sizeof (typed)) {
-    n = (UINT32)(sizeof (typed) - 1u);
-  }
-
-  if (n > 0u) {
-    CopyMem (typed, gMetalUiSysConsole->u.console.input, n);
-  }
-
-  if (gMetalUiSysConsole->u.console.cursor_on && n + 1u < sizeof (typed)) {
-    typed[n++] = 0xDB;
-  }
-
-  typed[n] = '\0';
-  if (n > 0u) {
-    pm_metal_gfx_draw_text (cx, y, typed, COL_INPUT_FG, COL_CONSOLE_BG, 0);
-  }
-}
-
-STATIC
-VOID
-MetalUiPaintConsole (
-  metal_ui_widget_t  *con
-  )
-{
-  UINT32  fw;
-  UINT32  fh;
-  UINT32  cols;
-  UINT32  rows;
-  UINT32  visible;
-  UINT32  start;
-  UINT32  i;
-  INT32   ty;
-  INT32   text_w;
-  INT32   trx;
-  INT32   try;
-  INT32   trw;
-  INT32   trh;
-  INT32   thy;
-  INT32   thh;
-
-  fw = pm_metal_gfx_font_width ();
-  fh = pm_metal_gfx_font_height ();
-  if (fw == 0 || fh == 0 || con->w < (INT32)fw || con->h < (INT32)fh) {
+  if (fh == 0u) {
     return;
   }
 
-  pm_metal_gfx_fill_rect (con->x, con->y, con->w, con->h, COL_CONSOLE_BG);
+  wrap    = MetalUiInputCurrentWrap();
+  visual  = MetalUiInputVisualRows(wrap);
+  visible = MetalUiInputVisibleRows(wrap);
+  MetalUiInputClampView(wrap);
+  first = 0;
+  if (visual > visible) {
+    first = visual - visible - gMetalUiSysConsole->u.console.input_view_off;
+  }
+
+  caret_row = 0;
+  caret_col = 0;
+  MetalUiInputCaretCell(wrap, &caret_row, &caret_col);
+
+  for (r = 0; r < visible; r++) {
+    uint32_t vrow;
+
+    vrow = first + r;
+    ty   = y + (int32_t)(r * fh);
+    cx   = x + 2;
+
+    if (vrow == 0u) {
+      /* hostname green, :~ blue, $ green, gap, then buffer row 0 */
+      pm_metal_gfx_draw_text(cx, ty, host, COL_LOG_OK, COL_CONSOLE_BG, 0);
+      cx += (int32_t)(host_len * fw);
+      pm_metal_gfx_draw_text(cx, ty, ":~", COL_PROMPT_PATH, COL_CONSOLE_BG, 0);
+      cx += (int32_t)(2u * fw);
+      pm_metal_gfx_draw_text(cx, ty, "$", COL_LOG_OK, COL_CONSOLE_BG, 0);
+      cx += (int32_t)fw;
+      cx += (int32_t)fw;
+    }
+
+    (void)MetalUiInputVisualRowText(wrap, vrow, rowbuf, sizeof(rowbuf));
+    if (rowbuf[0] != '\0') {
+      pm_metal_gfx_draw_text(cx, ty, rowbuf, COL_INPUT_FG, COL_CONSOLE_BG, 0);
+    }
+
+    if (gMetalUiSysConsole->u.console.cursor_on && caret_row == vrow) {
+      caret[0] = (char)0xDB;
+      caret[1] = '\0';
+      pm_metal_gfx_draw_text(
+        cx + (int32_t)(caret_col * fw), ty, caret, COL_INPUT_FG, COL_CONSOLE_BG, 0);
+    }
+  }
+
+  /* Thin scrollbar when content taller than the strip. */
+  if (visual > visible && w > UI_SCROLL_W) {
+    int32_t  trx;
+    int32_t  try;
+    int32_t  trw;
+    int32_t  trh;
+    int32_t  thy;
+    int32_t  thh;
+    uint32_t max_off;
+    uint32_t off;
+
+    trx = x + w - UI_SCROLL_W;
+    try = y;
+    trw = UI_SCROLL_W;
+    trh = h;
+    pm_metal_gfx_fill_rect(trx, try, trw, trh, COL_SCROLL_TRACK);
+    pm_metal_gfx_fill_rect(trx, try, 1, trh, COL_SCROLL_EDGE);
+
+    max_off = visual - visible;
+    off     = gMetalUiSysConsole->u.console.input_view_off;
+    thh     = (int32_t)((uint64_t)trh * (uint64_t)visible / (uint64_t)visual);
+    if (thh < 8) {
+      thh = 8;
+    }
+
+    if (thh > trh) {
+      thh = trh;
+    }
+
+    if (max_off == 0u) {
+      thy = try;
+    } else {
+      /* view_off 0 = bottom (newest); thumb near bottom */
+      thy = try + trh - thh - (int32_t)((uint64_t)(trh - thh) * (uint64_t)off / (uint64_t)max_off);
+    }
+
+    pm_metal_gfx_fill_rect(trx + 1, thy, trw - 1, thh, COL_SCROLL_THUMB);
+  }
+}
+
+static void MetalUiPaintConsole(metal_ui_widget_t *con)
+{
+  uint32_t fw;
+  uint32_t fh;
+  uint32_t cols;
+  uint32_t rows;
+  uint32_t visible;
+  uint32_t start;
+  uint32_t i;
+  int32_t  ty;
+  int32_t  text_w;
+  int32_t  trx;
+  int32_t  try;
+  int32_t  trw;
+  int32_t  trh;
+  int32_t  thy;
+  int32_t  thh;
+
+  fw = pm_metal_gfx_font_width();
+  fh = pm_metal_gfx_font_height();
+  if (fw == 0 || fh == 0 || con->w < (int32_t)fw || con->h < (int32_t)fh) {
+    return;
+  }
+
+  pm_metal_gfx_fill_rect(con->x, con->y, con->w, con->h, COL_CONSOLE_BG);
 
   text_w = con->w - UI_SCROLL_W;
-  if (text_w < (INT32)fw) {
+  if (text_w < (int32_t)fw) {
     text_w = con->w;
   }
 
-  cols = (UINT32)text_w / fw;
-  rows = (UINT32)con->h / fh;
+  cols = (uint32_t)text_w / fw;
+  rows = (uint32_t)con->h / fh;
   if (cols == 0 || rows == 0) {
     return;
   }
@@ -460,7 +504,7 @@ MetalUiPaintConsole (
     cols = CONSOLE_COLS - 1;
   }
 
-  MetalUiConsoleClampView (con);
+  MetalUiConsoleClampView(con);
 
   visible = con->u.console.count;
   if (visible > rows) {
@@ -475,15 +519,14 @@ MetalUiPaintConsole (
 
   ty = con->y;
   for (i = 0; i < visible; i++) {
-    UINT32                idx;
-    CONST CHAR8          *line;
-    CHAR8                 buf[CONSOLE_COLS];
-    UINT32                len;
-    UINT32                has_ansi;
-    pm_metal_gfx_color_t  fg;
+    uint32_t             idx;
+    const char          *line;
+    char                 buf[CONSOLE_COLS];
+    uint32_t             len;
+    uint32_t             has_ansi;
+    pm_metal_gfx_color_t fg;
 
-    idx = (con->u.console.head + CONSOLE_LINES - con->u.console.count + start + i)
-          % CONSOLE_LINES;
+    idx  = (con->u.console.head + CONSOLE_LINES - con->u.console.count + start + i) % CONSOLE_LINES;
     line = con->u.console.lines[idx];
     len  = 0;
     has_ansi = 0;
@@ -498,78 +541,69 @@ MetalUiPaintConsole (
 
     buf[len] = '\0';
     switch ((pm_metal_log_style_t)con->u.console.styles[idx]) {
-      case PM_METAL_LOG_STYLE_DIM:
-        fg = COL_LOG_DIM;
-        break;
-      case PM_METAL_LOG_STYLE_OK:
-        fg = COL_LOG_OK;
-        break;
-      case PM_METAL_LOG_STYLE_WARN:
-        fg = COL_LOG_WARN;
-        break;
-      case PM_METAL_LOG_STYLE_FAIL:
-        fg = COL_LOG_FAIL;
-        break;
-      case PM_METAL_LOG_STYLE_ACCENT:
-        fg = COL_LOG_ACCENT;
-        break;
-      case PM_METAL_LOG_STYLE_DEFAULT:
-      default:
-        fg = COL_CONSOLE_FG;
-        break;
+    case PM_METAL_LOG_STYLE_DIM:
+      fg = COL_LOG_DIM;
+      break;
+    case PM_METAL_LOG_STYLE_OK:
+      fg = COL_LOG_OK;
+      break;
+    case PM_METAL_LOG_STYLE_WARN:
+      fg = COL_LOG_WARN;
+      break;
+    case PM_METAL_LOG_STYLE_FAIL:
+      fg = COL_LOG_FAIL;
+      break;
+    case PM_METAL_LOG_STYLE_ACCENT:
+      fg = COL_LOG_ACCENT;
+      break;
+    case PM_METAL_LOG_STYLE_DEFAULT:
+    default:
+      fg = COL_CONSOLE_FG;
+      break;
     }
 
     if (has_ansi != 0u) {
-      MetalUiDrawTextAnsi (con->x + 2, ty, buf, fg, cols);
+      MetalUiDrawTextAnsi(con->x + 2, ty, buf, fg, cols);
     } else {
       if (len > cols) {
         buf[cols] = '\0';
       }
 
-      pm_metal_gfx_draw_text (con->x + 2, ty, buf, fg, COL_CONSOLE_BG, 0);
+      pm_metal_gfx_draw_text(con->x + 2, ty, buf, fg, COL_CONSOLE_BG, 0);
     }
 
-    ty += (INT32)fh;
+    ty += (int32_t)fh;
   }
 
-  if (MetalUiConsoleScrollBarGeom (con, &trx, &try, &trw, &trh, &thy, &thh)) {
-    pm_metal_gfx_fill_rect (trx, try, trw, trh, COL_SCROLL_TRACK);
-    pm_metal_gfx_fill_rect (trx, try, 1, trh, COL_SCROLL_EDGE);
-    pm_metal_gfx_fill_rect (trx + 1, thy, trw - 2, thh, COL_SCROLL_THUMB);
+  if (MetalUiConsoleScrollBarGeom(con, &trx, &try, &trw, &trh, &thy, &thh)) {
+    pm_metal_gfx_fill_rect(trx, try, trw, trh, COL_SCROLL_TRACK);
+    pm_metal_gfx_fill_rect(trx, try, 1, trh, COL_SCROLL_EDGE);
+    pm_metal_gfx_fill_rect(trx + 1, thy, trw - 2, thh, COL_SCROLL_THUMB);
   } else if (text_w < con->w) {
-    pm_metal_gfx_fill_rect (
-      con->x + con->w - UI_SCROLL_W,
-      con->y,
-      UI_SCROLL_W,
-      con->h,
-      COL_SCROLL_TRACK
-      );
+    pm_metal_gfx_fill_rect(
+      con->x + con->w - UI_SCROLL_W, con->y, UI_SCROLL_W, con->h, COL_SCROLL_TRACK);
   }
 
-  if (con == MetalUiActiveConsole ()) {
-    MetalUiPaintShellInputLine ();
+  if (con == MetalUiActiveConsole()) {
+    MetalUiPaintShellInputLine();
   }
 }
 
-STATIC
-VOID
-MetalUiPaintTabsStrip (
-  metal_ui_widget_t  *tabs
-  )
+static void MetalUiPaintTabsStrip(metal_ui_widget_t *tabs)
 {
-  UINT32  i;
-  INT32   x;
-  UINT32  fw;
+  uint32_t i;
+  int32_t  x;
+  uint32_t fw;
 
-  pm_metal_gfx_fill_rect (tabs->x, tabs->y, tabs->w, tabs->h, COL_TAB);
-  fw = pm_metal_gfx_font_width ();
+  pm_metal_gfx_fill_rect(tabs->x, tabs->y, tabs->w, tabs->h, COL_TAB);
+  fw = pm_metal_gfx_font_width();
   x  = tabs->x + 2;
 
   for (i = 0; i < tabs->u.tabs.n; i++) {
-    metal_ui_widget_t  *tab;
-    INT32               tw;
-    UINT32              tlen;
-    pm_metal_gfx_color_t  face;
+    metal_ui_widget_t   *tab;
+    int32_t              tw;
+    uint32_t             tlen;
+    pm_metal_gfx_color_t face;
 
     tab = tabs->u.tabs.tabs[i];
     if (tab == NULL) {
@@ -581,7 +615,7 @@ MetalUiPaintTabsStrip (
       tlen++;
     }
 
-    tw = (INT32)((tlen + 2) * fw) + 16;
+    tw = (int32_t)((tlen + 2) * fw) + 16;
     if (tw < 64) {
       tw = 64;
     }
@@ -592,43 +626,30 @@ MetalUiPaintTabsStrip (
 
     if (i == tabs->u.tabs.active) {
       face = COL_TAB_ON;
-    } else if ((INT32)i == tabs->u.tabs.hover) {
+    } else if ((int32_t)i == tabs->u.tabs.hover) {
       face = COL_TAB_HOVER;
     } else {
       face = COL_TAB_OFF;
     }
 
-    pm_metal_gfx_fill_rect (x, tabs->y + 2, tw, tabs->h - 2, face);
-    pm_metal_gfx_bevel_rect (
-      x,
-      tabs->y + 2,
-      tw,
-      tabs->h - 2,
-      (i == tabs->u.tabs.active) ? 1 : 0,
-      COL_BEVEL_HI,
-      COL_BEVEL_LO
-      );
-    pm_metal_gfx_draw_text (
-      x + 8,
-      tabs->y + 6,
-      tab->title,
-      COL_TAB_TXT,
-      face,
-      1
-      );
+    pm_metal_gfx_fill_rect(x, tabs->y + 2, tw, tabs->h - 2, face);
+    pm_metal_gfx_bevel_rect(x,
+                            tabs->y + 2,
+                            tw,
+                            tabs->h - 2,
+                            (i == tabs->u.tabs.active) ? 1 : 0,
+                            COL_BEVEL_HI,
+                            COL_BEVEL_LO);
+    pm_metal_gfx_draw_text(x + 8, tabs->y + 6, tab->title, COL_TAB_TXT, face, 1);
     x += tw + 4;
   }
 }
 
-STATIC
-UINT32
-MetalUiNetIfHealth (
-  CONST pm_metal_net_ifcfg_t  *cfg
-  )
+static uint32_t MetalUiNetIfHealth(const pm_metal_net_ifcfg_t *cfg)
 {
-  UINT32  ip;
-  UINT32  dns;
-  INT32   is_lo;
+  uint32_t ip;
+  uint32_t dns;
+  int32_t  is_lo;
 
   if (cfg == NULL) {
     return NET_HEALTH_DOWN;
@@ -638,32 +659,24 @@ MetalUiNetIfHealth (
    * IPv4 is authoritative (FillIfcfg clears link_up while DHCP is still
    * pending — that must read red/down, not "link up but no DNS").
    */
-  if (pm_metal_util_ip4_parse (cfg->ip, &ip) != 0
-      || pm_metal_util_ip4_is_unspecified (ip))
-  {
+  if (pm_metal_util_ip4_parse(cfg->ip, &ip) != 0 || pm_metal_util_ip4_is_unspecified(ip)) {
     return NET_HEALTH_DOWN;
   }
 
-  is_lo = (AsciiStrCmp (cfg->name, "lo") == 0) ? 1 : 0;
+  is_lo = (strcmp(cfg->name, "lo") == 0) ? 1 : 0;
   if (is_lo != 0) {
     return NET_HEALTH_GOOD;
   }
 
-  if (cfg->dns[0] == '\0'
-      || pm_metal_util_ip4_parse (cfg->dns, &dns) != 0
-      || pm_metal_util_ip4_is_unspecified (dns))
-  {
+  if (cfg->dns[0] == '\0' || pm_metal_util_ip4_parse(cfg->dns, &dns) != 0 ||
+      pm_metal_util_ip4_is_unspecified(dns)) {
     return NET_HEALTH_PARTIAL;
   }
 
   return NET_HEALTH_GOOD;
 }
 
-STATIC
-pm_metal_gfx_color_t
-MetalUiNetHealthColor (
-  UINT32  health
-  )
+static pm_metal_gfx_color_t MetalUiNetHealthColor(uint32_t health)
 {
   if (health == NET_HEALTH_GOOD) {
     return COL_NET_UP;
@@ -676,22 +689,18 @@ MetalUiNetHealthColor (
   return COL_NET_DOWN;
 }
 
-STATIC
-pm_metal_gfx_color_t
-MetalUiFpsColor (
-  UINT32  hz
-  )
+static pm_metal_gfx_color_t MetalUiFpsColor(uint32_t hz)
 {
   if (hz == 0u) {
-    return COL_LOG_DIM;     /* idle — no presents lately */
+    return COL_LOG_DIM; /* idle — no presents lately */
   }
 
   if (hz >= 50u) {
-    return COL_LOG_OK;      /* smooth UI / 60 Hz class */
+    return COL_LOG_OK; /* smooth UI / 60 Hz class */
   }
 
   if (hz >= 30u) {
-    return COL_LOG_ACCENT;  /* Doom TICRATE class */
+    return COL_LOG_ACCENT; /* Doom TICRATE class */
   }
 
   if (hz >= 20u) {
@@ -701,41 +710,37 @@ MetalUiFpsColor (
   return COL_LOG_FAIL;
 }
 
-STATIC
-VOID
-MetalUiStatusSnapshot (
-  UINT32  *clock_tod,
-  UINT32  *net_health,
-  UINT32  *if_count,
-  UINT32  *ntp_bit,
-  UINT32  *fps_hz
-  )
+static void MetalUiStatusSnapshot(uint32_t *clock_tod,
+                                  uint32_t *net_health,
+                                  uint32_t *if_count,
+                                  uint32_t *ntp_bit,
+                                  uint32_t *fps_hz)
 {
-  UINT64               ms;
-  UINT32               tod;
-  UINT32               n;
-  UINT32               i;
-  UINT32               health;
+  uint64_t             ms;
+  uint32_t             tod;
+  uint32_t             n;
+  uint32_t             i;
+  uint32_t             health;
   pm_metal_net_ifcfg_t cfg;
 
-  ms  = pm_metal_tz_local_ms ();
-  tod = (UINT32)((ms / 1000ull) % 86400ull);
+  ms         = pm_metal_tz_local_ms();
+  tod        = (uint32_t)((ms / 1000ull) % 86400ull);
   *clock_tod = (tod / 3600u) * 60u + ((tod % 3600u) / 60u);
-  *fps_hz    = pm_metal_gfx_fps ();
+  *fps_hz    = pm_metal_gfx_fps();
 
-  n      = pm_metal_net_if_count ();
+  n      = pm_metal_net_if_count();
   health = 0;
   if (n > 16u) {
     n = 16u;
   }
 
   for (i = 0; i < n; i++) {
-    UINT32  h;
+    uint32_t h;
 
-    if (pm_metal_net_if_get_index (i, &cfg) != 0) {
+    if (pm_metal_net_if_get_index(i, &cfg) != 0) {
       h = NET_HEALTH_DOWN;
     } else {
-      h = MetalUiNetIfHealth (&cfg);
+      h = MetalUiNetIfHealth(&cfg);
     }
 
     health |= (h & 3u) << (i * 2u);
@@ -743,42 +748,38 @@ MetalUiStatusSnapshot (
 
   *net_health = health;
   *if_count   = n;
-  *ntp_bit    = (pm_metal_net_ntp_last_unix_ms () != 0ull) ? 1u : 0u;
+  *ntp_bit    = (pm_metal_net_ntp_last_unix_ms() != 0ull) ? 1u : 0u;
 }
 
-STATIC
-VOID
-MetalUiPaintStatusBar (
-  metal_ui_widget_t  *w
-  )
+static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
 {
-  INT32                clock_w;
-  INT32                clock_x;
-  INT32                fps_w;
-  INT32                fps_x;
-  INT32                tray_right;
-  INT32                tray_w;
-  INT32                tx;
-  INT32                ty;
-  INT32                left_max;
-  UINT32               n;
-  UINT32               i;
-  UINT32               fps_hz;
-  UINT64               ms;
-  UINT32               tod;
-  UINT32               hour;
-  UINT32               min;
-  CHAR8                clock[8];
-  CHAR8                fps[8];
-  CHAR8                left[STATUS_CHARS];
-  UINTN                left_n;
-  UINTN                fps_chars;
-  UINTN                max_chars;
+  int32_t              clock_w;
+  int32_t              clock_x;
+  int32_t              fps_w;
+  int32_t              fps_x;
+  int32_t              tray_right;
+  int32_t              tray_w;
+  int32_t              tx;
+  int32_t              ty;
+  int32_t              left_max;
+  uint32_t             n;
+  uint32_t             i;
+  uint32_t             fps_hz;
+  uint64_t             ms;
+  uint32_t             tod;
+  uint32_t             hour;
+  uint32_t             min;
+  char                 clock[8];
+  char                 fps[8];
+  char                 left[STATUS_CHARS];
+  uintptr_t            left_n;
+  uintptr_t            fps_chars;
+  uintptr_t            max_chars;
   pm_metal_net_ifcfg_t cfg;
   pm_metal_gfx_color_t fps_fg;
 
-  pm_metal_gfx_fill_rect (w->x, w->y, w->w, w->h, COL_STATUS);
-  pm_metal_gfx_bevel_rect (w->x, w->y, w->w, w->h, 0, COL_BEVEL_HI, COL_BEVEL_LO);
+  pm_metal_gfx_fill_rect(w->x, w->y, w->w, w->h, COL_STATUS);
+  pm_metal_gfx_bevel_rect(w->x, w->y, w->w, w->h, 0, COL_BEVEL_HI, COL_BEVEL_LO);
 
   clock_w = 8 + UI_CLOCK_CHARS * UI_FONT_W + 8;
   fps_w   = 8 + UI_FPS_CHARS * UI_FONT_W + 8;
@@ -797,14 +798,14 @@ MetalUiPaintStatusBar (
   }
 
   /* Systray width: colored bullet + name + pad per iface. */
-  n      = pm_metal_net_if_count ();
+  n      = pm_metal_net_if_count();
   tray_w = 0;
   for (i = 0; i < n; i++) {
-    if (pm_metal_net_if_get_index (i, &cfg) != 0) {
+    if (pm_metal_net_if_get_index(i, &cfg) != 0) {
       continue;
     }
 
-    tray_w += 10 + (INT32)AsciiStrLen (cfg.name) * UI_FONT_W + 6;
+    tray_w += 10 + (int32_t)strlen(cfg.name) * UI_FONT_W + 6;
   }
 
   tray_right = fps_x - 8;
@@ -820,27 +821,20 @@ MetalUiPaintStatusBar (
     left_max = w->x + 8;
   }
 
-  max_chars = (UINTN)((left_max - (w->x + 8)) / UI_FONT_W);
-  left_n    = AsciiStrLen (w->u.status.text);
+  max_chars = (uintptr_t)((left_max - (w->x + 8)) / UI_FONT_W);
+  left_n    = strlen(w->u.status.text);
   if (left_n > max_chars) {
     left_n = max_chars;
   }
 
-  if (left_n >= sizeof (left)) {
-    left_n = sizeof (left) - 1u;
+  if (left_n >= sizeof(left)) {
+    left_n = sizeof(left) - 1u;
   }
 
-  CopyMem (left, w->u.status.text, left_n);
+  memcpy(left, w->u.status.text, left_n);
   left[left_n] = '\0';
   if (left_n > 0) {
-    pm_metal_gfx_draw_text (
-      w->x + 8,
-      w->y + 4,
-      left,
-      COL_STATUS_TXT,
-      COL_STATUS,
-      1
-      );
+    pm_metal_gfx_draw_text(w->x + 8, w->y + 4, left, COL_STATUS_TXT, COL_STATUS, 1);
   }
 
   /* Net systray left of the FPS cell. */
@@ -851,211 +845,169 @@ MetalUiPaintStatusBar (
   }
 
   for (i = 0; i < n; i++) {
-    INT32                 item_w;
-    pm_metal_gfx_color_t  fg;
-    UINTN                 namelen;
-    UINT32                health;
+    int32_t              item_w;
+    pm_metal_gfx_color_t fg;
+    uintptr_t            namelen;
+    uint32_t             health;
 
-    if (pm_metal_net_if_get_index (i, &cfg) != 0) {
+    if (pm_metal_net_if_get_index(i, &cfg) != 0) {
       continue;
     }
 
-    namelen = AsciiStrLen (cfg.name);
-    item_w  = 10 + (INT32)namelen * UI_FONT_W + 6;
+    namelen = strlen(cfg.name);
+    item_w  = 10 + (int32_t)namelen * UI_FONT_W + 6;
     if (tx + item_w > tray_right) {
       break;
     }
 
-    health = MetalUiNetIfHealth (&cfg);
-    fg     = MetalUiNetHealthColor (health);
-    pm_metal_gfx_fill_rect (tx + 2, w->y + 9, 6, 6, fg);
-    pm_metal_gfx_draw_text (tx + 10, ty, cfg.name, fg, COL_STATUS, 1);
+    health = MetalUiNetIfHealth(&cfg);
+    fg     = MetalUiNetHealthColor(health);
+    pm_metal_gfx_fill_rect(tx + 2, w->y + 9, 6, 6, fg);
+    pm_metal_gfx_draw_text(tx + 10, ty, cfg.name, fg, COL_STATUS, 1);
     tx += item_w;
   }
 
   /* Separator tray | fps. */
   if (tray_w > 0) {
-    pm_metal_gfx_fill_rect (fps_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
-    pm_metal_gfx_fill_rect (fps_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
+    pm_metal_gfx_fill_rect(fps_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
+    pm_metal_gfx_fill_rect(fps_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
   }
 
-  fps_hz = pm_metal_gfx_fps ();
-  fps_fg = MetalUiFpsColor (fps_hz);
+  fps_hz = pm_metal_gfx_fps();
+  fps_fg = MetalUiFpsColor(fps_hz);
   if (fps_hz == 0u) {
-    AsciiStrCpyS (fps, sizeof (fps), "-fps");
+    snprintf(fps, sizeof(fps), "%s", "-fps");
   } else {
     if (fps_hz > 999u) {
       fps_hz = 999u;
     }
 
-    AsciiSPrint (fps, sizeof (fps), "%ufps", fps_hz);
+    snprintf(fps, sizeof(fps), "%ufps", fps_hz);
   }
 
-  fps_chars = AsciiStrLen (fps);
+  fps_chars = strlen(fps);
   if (fps_chars > UI_FPS_CHARS) {
-    AsciiSPrint (fps, sizeof (fps), "%u", fps_hz);
-    fps_chars = AsciiStrLen (fps);
+    snprintf(fps, sizeof(fps), "%u", fps_hz);
+    fps_chars = strlen(fps);
   }
 
-  pm_metal_gfx_fill_rect (fps_x, w->y + 2, fps_w, w->h - 4, COL_STATUS_CLK);
-  pm_metal_gfx_bevel_rect (
-    fps_x,
-    w->y + 2,
-    fps_w,
-    w->h - 4,
-    0,
-    COL_BEVEL_LO,
-    COL_BEVEL_HI
-    );
-  pm_metal_gfx_draw_text (
-    fps_x + (fps_w - (INT32)fps_chars * UI_FONT_W) / 2,
-    w->y + 4,
-    fps,
-    fps_fg,
-    COL_STATUS_CLK,
-    1
-    );
+  pm_metal_gfx_fill_rect(fps_x, w->y + 2, fps_w, w->h - 4, COL_STATUS_CLK);
+  pm_metal_gfx_bevel_rect(fps_x, w->y + 2, fps_w, w->h - 4, 0, COL_BEVEL_LO, COL_BEVEL_HI);
+  pm_metal_gfx_draw_text(
+    fps_x + (fps_w - (int32_t)fps_chars * UI_FONT_W) / 2, w->y + 4, fps, fps_fg, COL_STATUS_CLK, 1);
 
   /* Separator fps | clock. */
-  pm_metal_gfx_fill_rect (clock_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
-  pm_metal_gfx_fill_rect (clock_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
+  pm_metal_gfx_fill_rect(clock_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
+  pm_metal_gfx_fill_rect(clock_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
 
   /* Separated clock field (inset). */
-  pm_metal_gfx_fill_rect (clock_x, w->y + 2, clock_w, w->h - 4, COL_STATUS_CLK);
-  pm_metal_gfx_bevel_rect (
-    clock_x,
-    w->y + 2,
-    clock_w,
-    w->h - 4,
-    0,
-    COL_BEVEL_LO,
-    COL_BEVEL_HI
-    );
+  pm_metal_gfx_fill_rect(clock_x, w->y + 2, clock_w, w->h - 4, COL_STATUS_CLK);
+  pm_metal_gfx_bevel_rect(clock_x, w->y + 2, clock_w, w->h - 4, 0, COL_BEVEL_LO, COL_BEVEL_HI);
 
-  ms   = pm_metal_tz_local_ms ();
-  tod  = (UINT32)((ms / 1000ull) % 86400ull);
+  ms   = pm_metal_tz_local_ms();
+  tod  = (uint32_t)((ms / 1000ull) % 86400ull);
   hour = tod / 3600u;
   min  = (tod % 3600u) / 60u;
-  AsciiSPrint (clock, sizeof (clock), "%02u:%02u", hour, min);
-  pm_metal_gfx_draw_text (
-    clock_x + (clock_w - UI_CLOCK_CHARS * UI_FONT_W) / 2,
-    w->y + 4,
-    clock,
-    (pm_metal_net_ntp_last_unix_ms () != 0ull) ? COL_STATUS_TXT : COL_LOG_WARN,
-    COL_STATUS_CLK,
-    1
-    );
+  snprintf(clock, sizeof(clock), "%02u:%02u", hour, min);
+  pm_metal_gfx_draw_text(clock_x + (clock_w - UI_CLOCK_CHARS * UI_FONT_W) / 2,
+                         w->y + 4,
+                         clock,
+                         (pm_metal_net_ntp_last_unix_ms() != 0ull) ? COL_STATUS_TXT : COL_LOG_WARN,
+                         COL_STATUS_CLK,
+                         1);
 
-  MetalUiStatusSnapshot (
-    &mStatusClockTod,
-    &mStatusNetHealth,
-    &mStatusIfCount,
-    &mStatusNtpBit,
-    &mStatusFpsHz
-    );
+  MetalUiStatusSnapshot(
+    &mStatusClockTod, &mStatusNetHealth, &mStatusIfCount, &mStatusNtpBit, &mStatusFpsHz);
 }
 
-VOID
-MetalUiPaintStatusBarOnly (
-  VOID
-  )
+void MetalUiPaintStatusBarOnly(void)
 {
-  pm_metal_gfx_surface_h  prev;
+  pm_metal_gfx_surface_h prev;
 
   if (gMetalUiStatus == NULL) {
     return;
   }
 
-  prev = pm_metal_gfx_draw_surface ();
-  pm_metal_gfx_set_surface (PM_METAL_GFX_SURFACE_DEFAULT);
-  MetalUiLayout ();
-  MetalUiPaintStatusBar (gMetalUiStatus);
-  pm_metal_gfx_set_surface (prev);
+  prev = pm_metal_gfx_draw_surface();
+  pm_metal_gfx_set_surface(PM_METAL_GFX_SURFACE_DEFAULT);
+  MetalUiLayout();
+  MetalUiPaintStatusBar(gMetalUiStatus);
+  pm_metal_gfx_set_surface(prev);
 }
 
-STATIC
-VOID
-MetalUiPaintWidget (
-  metal_ui_widget_t  *w
-  )
+static void MetalUiPaintWidget(metal_ui_widget_t *w)
 {
-  metal_ui_widget_t  *c;
+  metal_ui_widget_t *c;
 
   if (w == NULL) {
     return;
   }
 
   switch (w->kind) {
-    case METAL_UI_KIND_WINDOW:
-      pm_metal_gfx_fill_rect (w->x, w->y, w->w, w->h, COL_WINDOW);
-      pm_metal_gfx_bevel_rect (w->x, w->y, w->w, w->h, 1, COL_BEVEL_HI, COL_BEVEL_LO);
-      pm_metal_gfx_fill_rect (w->x + 4, w->y + 4, w->w - 8, UI_TITLE_H - 4, COL_TITLE);
-      pm_metal_gfx_draw_text (w->x + 12, w->y + 8, w->title, COL_TITLE_TXT, COL_TITLE, 1);
-      break;
+  case METAL_UI_KIND_WINDOW:
+    pm_metal_gfx_fill_rect(w->x, w->y, w->w, w->h, COL_WINDOW);
+    pm_metal_gfx_bevel_rect(w->x, w->y, w->w, w->h, 1, COL_BEVEL_HI, COL_BEVEL_LO);
+    pm_metal_gfx_fill_rect(w->x + 4, w->y + 4, w->w - 8, UI_TITLE_H - 4, COL_TITLE);
+    pm_metal_gfx_draw_text(w->x + 12, w->y + 8, w->title, COL_TITLE_TXT, COL_TITLE, 1);
+    break;
 
-    case METAL_UI_KIND_TABS:
-      MetalUiPaintTabsStrip (w);
-      if (w->u.tabs.n > 0 && w->u.tabs.active < w->u.tabs.n) {
-        MetalUiPaintWidget (w->u.tabs.tabs[w->u.tabs.active]);
-      }
+  case METAL_UI_KIND_TABS:
+    MetalUiPaintTabsStrip(w);
+    if (w->u.tabs.n > 0 && w->u.tabs.active < w->u.tabs.n) {
+      MetalUiPaintWidget(w->u.tabs.tabs[w->u.tabs.active]);
+    }
 
+    return;
+
+  case METAL_UI_KIND_FRAME:
+    if (!MetalUiTabGuestOwnsContent(w)) {
+      pm_metal_gfx_fill_rect(w->x, w->y, w->w, w->h, COL_FRAME_FACE);
+    }
+
+    pm_metal_gfx_bevel_rect(w->x, w->y, w->w, w->h, 0, COL_BEVEL_HI, COL_BEVEL_LO);
+    break;
+
+  case METAL_UI_KIND_CONSOLE:
+    if (MetalUiTabGuestOwnsContent(w)) {
+      /* Windowed guest owns the whole content — no prompt under the game. */
       return;
+    }
 
-    case METAL_UI_KIND_FRAME:
-      if (!MetalUiTabGuestOwnsContent (w)) {
-        pm_metal_gfx_fill_rect (w->x, w->y, w->w, w->h, COL_FRAME_FACE);
-      }
+    MetalUiPaintConsole(w);
+    return;
 
-      pm_metal_gfx_bevel_rect (w->x, w->y, w->w, w->h, 0, COL_BEVEL_HI, COL_BEVEL_LO);
-      break;
+  case METAL_UI_KIND_STATUS_BAR:
+    MetalUiPaintStatusBar(w);
+    return;
 
-    case METAL_UI_KIND_CONSOLE:
-      if (MetalUiTabGuestOwnsContent (w)) {
-        /* Windowed guest owns the whole content — no prompt under the game. */
-        return;
-      }
-
-      MetalUiPaintConsole (w);
-      return;
-
-    case METAL_UI_KIND_STATUS_BAR:
-      MetalUiPaintStatusBar (w);
-      return;
-
-    default:
-      break;
+  default:
+    break;
   }
 
   for (c = w->child; c != NULL; c = c->next) {
     if (w->kind == METAL_UI_KIND_WINDOW && c->kind == METAL_UI_KIND_TABS) {
-      MetalUiPaintWidget (c);
+      MetalUiPaintWidget(c);
     } else if (w->kind == METAL_UI_KIND_WINDOW && c->kind == METAL_UI_KIND_STATUS_BAR) {
-      MetalUiPaintWidget (c);
+      MetalUiPaintWidget(c);
     } else if (w->kind != METAL_UI_KIND_WINDOW) {
-      MetalUiPaintWidget (c);
+      MetalUiPaintWidget(c);
     }
   }
 }
 
-VOID
-MetalUiLayout (
-  VOID
-  )
+void MetalUiLayout(void)
 {
-  pm_metal_gfx_surface_t  *surf;
+  pm_metal_gfx_surface_t *surf;
 
-  surf = pm_metal_gfx_surface ();
+  surf = pm_metal_gfx_surface();
   if (gMetalUiShellRoot == NULL || surf == NULL) {
     return;
   }
 
-  MetalUiLayoutWindow (gMetalUiShellRoot, (INT32)surf->width, (INT32)surf->height);
+  MetalUiLayoutWindow(gMetalUiShellRoot, (int32_t)surf->width, (int32_t)surf->height);
 }
 
-VOID
-MetalUiPaint (
-  VOID
-  )
+void MetalUiPaint(void)
 {
   if (gMetalUiShellRoot == NULL) {
     return;
@@ -1065,41 +1017,25 @@ MetalUiPaint (
    * Full clear wipes windowed guest content. When a tab session owns a
    * surface, skip the desktop clear — chrome widgets redraw themselves.
    */
-  if (!(pm_metal_wasm_session_active ()
-        && pm_metal_wasm_stdout_tab () != PM_METAL_UI_HANDLE_INVALID
-        && pm_metal_ui_tab_surface (pm_metal_wasm_stdout_tab ())
-             != PM_METAL_GFX_SURFACE_INVALID))
-  {
-    pm_metal_gfx_clear (COL_DESKTOP);
+  if (!(pm_metal_process_active() && pm_metal_wasm_stdout_tab() != PM_METAL_UI_HANDLE_INVALID &&
+        pm_metal_ui_tab_surface(pm_metal_wasm_stdout_tab()) != PM_METAL_GFX_SURFACE_INVALID)) {
+    pm_metal_gfx_clear(COL_DESKTOP);
   }
 
-  MetalUiPaintWidget (gMetalUiShellRoot);
+  MetalUiPaintWidget(gMetalUiShellRoot);
 }
 
-INT32
-MetalUiStatusNeedsRefresh (
-  VOID
-  )
+int32_t MetalUiStatusNeedsRefresh(void)
 {
-  UINT32  clock_tod;
-  UINT32  net_health;
-  UINT32  if_count;
-  UINT32  ntp_bit;
-  UINT32  fps_hz;
+  uint32_t clock_tod;
+  uint32_t net_health;
+  uint32_t if_count;
+  uint32_t ntp_bit;
+  uint32_t fps_hz;
 
-  MetalUiStatusSnapshot (
-    &clock_tod,
-    &net_health,
-    &if_count,
-    &ntp_bit,
-    &fps_hz
-    );
-  if (clock_tod != mStatusClockTod
-      || net_health != mStatusNetHealth
-      || if_count != mStatusIfCount
-      || ntp_bit != mStatusNtpBit
-      || fps_hz != mStatusFpsHz)
-  {
+  MetalUiStatusSnapshot(&clock_tod, &net_health, &if_count, &ntp_bit, &fps_hz);
+  if (clock_tod != mStatusClockTod || net_health != mStatusNetHealth ||
+      if_count != mStatusIfCount || ntp_bit != mStatusNtpBit || fps_hz != mStatusFpsHz) {
     return 1;
   }
 

@@ -1,9 +1,6 @@
 /** @file
   Extra freestanding libc bits required to link WAMR under EDK2.
 **/
-#include <Uefi.h>
-#include <Library/BaseLib.h>
-#include <Library/BaseMemoryLib.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -17,138 +14,111 @@
 
 #include <runtime/time/time.h>
 
-void
-assert (
-  int  cond
-  )
+__attribute__((noreturn)) void pm_metal_assert_fail(void)
 {
-  if (!cond) {
-    for (;;) {
-    }
+  for (;;) {
   }
 }
 
-long
-labs (
-  long  x
-  )
+/* Legacy symbol — prefer assert() macro in host_stubs/assert.h. */
+void assert(int cond)
+{
+  if (!cond) {
+    pm_metal_assert_fail();
+  }
+}
+
+long labs(long x)
 {
   return x < 0 ? -x : x;
 }
 
-int
-sched_yield (
-  VOID
-  )
+int sched_yield(void)
 {
   return 0;
 }
 
-int
-clock_nanosleep (
-  clockid_t               clock_id,
-  int                     flags,
-  CONST struct timespec  *request,
-  struct timespec        *remain
-  )
+int clock_nanosleep(clockid_t              clock_id,
+                    int                    flags,
+                    const struct timespec *request,
+                    struct timespec       *remain)
 {
-  (VOID)clock_id;
-  (VOID)flags;
-  (VOID)request;
-  (VOID)remain;
+  (void)clock_id;
+  (void)flags;
+  (void)request;
+  (void)remain;
   errno = ENOSYS;
   return -1;
 }
 
-int
-nanosleep (
-  CONST struct timespec  *req,
-  struct timespec        *rem
-  )
+int nanosleep(const struct timespec *req, struct timespec *rem)
 {
-  (VOID)req;
-  (VOID)rem;
+  (void)req;
+  (void)rem;
   errno = ENOSYS;
   return -1;
 }
 
-int
-poll (
-  struct pollfd  *pfds,
-  nfds_t          nfds,
-  int             timeout
-  )
+int poll(struct pollfd *pfds, nfds_t nfds, int timeout)
 {
-  (VOID)pfds;
-  (VOID)nfds;
-  (VOID)timeout;
+  (void)pfds;
+  (void)nfds;
+  (void)timeout;
   errno = ENOSYS;
   return -1;
 }
 
-int
-pthread_cond_timedwait (
-  pthread_cond_t         *cond,
-  pthread_mutex_t        *mutex,
-  CONST struct timespec  *abstime
-  )
+int pthread_cond_timedwait(pthread_cond_t        *cond,
+                           pthread_mutex_t       *mutex,
+                           const struct timespec *abstime)
 {
-  (VOID)cond;
-  (VOID)mutex;
-  (VOID)abstime;
+  (void)cond;
+  (void)mutex;
+  (void)abstime;
   return -1;
 }
 
-int
-fputs (
-  CONST CHAR8  *s,
-  FILE         *f
-  )
+int fputs(const char *s, FILE *f)
 {
-  (VOID)f;
-  (VOID)s;
+  (void)f;
+  (void)s;
   return 0;
 }
 
-uint16_t
-htons (
-  uint16_t  x
-  )
+static uint16_t MetalSwap16(uint16_t x)
 {
-  return SwapBytes16 (x);
+  return (uint16_t)((x << 8) | (x >> 8));
 }
 
-uint32_t
-htonl (
-  uint32_t  x
-  )
+static uint32_t MetalSwap32(uint32_t x)
 {
-  return SwapBytes32 (x);
+  return ((x & 0x000000fful) << 24) | ((x & 0x0000ff00ul) << 8) | ((x & 0x00ff0000ul) >> 8) |
+         ((x & 0xff000000ul) >> 24);
 }
 
-uint16_t
-ntohs (
-  uint16_t  x
-  )
+uint16_t htons(uint16_t x)
 {
-  return SwapBytes16 (x);
+  return MetalSwap16(x);
 }
 
-uint32_t
-ntohl (
-  uint32_t  x
-  )
+uint32_t htonl(uint32_t x)
 {
-  return SwapBytes32 (x);
+  return MetalSwap32(x);
 }
 
-size_t
-strnlen (
-  CONST CHAR8  *s,
-  size_t        maxlen
-  )
+uint16_t ntohs(uint16_t x)
 {
-  size_t  n;
+  return MetalSwap16(x);
+}
+
+uint32_t ntohl(uint32_t x)
+{
+  return MetalSwap32(x);
+}
+
+size_t strnlen(const char *s, size_t maxlen)
+{
+  size_t n;
 
   if (s == NULL) {
     return 0;
@@ -160,16 +130,12 @@ strnlen (
   return n;
 }
 
-size_t
-strcspn (
-  CONST CHAR8  *s,
-  CONST CHAR8  *reject
-  )
+size_t strcspn(const char *s, const char *reject)
 {
-  size_t  i;
+  size_t i;
 
   for (i = 0; s[i] != '\0'; i++) {
-    CONST CHAR8  *r;
+    const char *r;
 
     for (r = reject; *r != '\0'; r++) {
       if (s[i] == *r) {
@@ -181,17 +147,13 @@ strcspn (
   return i;
 }
 
-size_t
-strspn (
-  CONST CHAR8  *s,
-  CONST CHAR8  *accept
-  )
+size_t strspn(const char *s, const char *accept)
 {
-  size_t  i;
+  size_t i;
 
   for (i = 0; s[i] != '\0'; i++) {
-    CONST CHAR8  *a;
-    INT32         ok;
+    const char *a;
+    int32_t     ok;
 
     ok = 0;
     for (a = accept; *a != '\0'; a++) {
@@ -209,15 +171,11 @@ strspn (
   return i;
 }
 
-CHAR8 *
-strtok (
-  CHAR8        *str,
-  CONST CHAR8  *delim
-  )
+char *strtok(char *str, const char *delim)
 {
-  STATIC CHAR8  *save;
-  CHAR8         *start;
-  CHAR8         *p;
+  static char *save;
+  char        *start;
+  char        *p;
 
   if (str != NULL) {
     save = str;
@@ -227,15 +185,15 @@ strtok (
     return NULL;
   }
 
-  start = save + strspn (save, delim);
+  start = save + strspn(save, delim);
   if (*start == '\0') {
     save = start;
     return NULL;
   }
 
-  p = start + strcspn (start, delim);
+  p = start + strcspn(start, delim);
   if (*p != '\0') {
-    *p = '\0';
+    *p   = '\0';
     save = p + 1;
   } else {
     save = p;
@@ -244,64 +202,49 @@ strtok (
   return start;
 }
 
-STATIC
-INT32
-MetalQsortCmp (
-  CONST VOID  *a,
-  CONST VOID  *b,
-  VOID        *arg
-  )
+static int32_t MetalQsortCmp(const void *a, const void *b, void *arg)
 {
-  INT32  (*cmp)(CONST VOID *, CONST VOID *);
+  int32_t (*cmp)(const void *, const void *);
 
-  cmp = (INT32 (*)(CONST VOID *, CONST VOID *))(UINTN)arg;
-  return cmp (a, b);
+  cmp = (int32_t(*)(const void *, const void *))(uintptr_t)arg;
+  return cmp(a, b);
 }
 
 /* Minimal qsort / bsearch for WAMR symbol tables. */
-VOID
-qsort (
-  VOID    *base,
-  size_t   nmemb,
-  size_t   size,
-  INT32    (*compar)(CONST VOID *, CONST VOID *)
-  )
+void qsort(void *base, size_t nmemb, size_t size, int32_t (*compar)(const void *, const void *))
 {
-  UINT8  *b;
-  UINT8   tmp[256];
-  size_t  i;
-  size_t  j;
+  uint8_t *b;
+  uint8_t  tmp[256];
+  size_t   i;
+  size_t   j;
 
-  if (size == 0 || size > sizeof (tmp)) {
+  if (size == 0 || size > sizeof(tmp)) {
     return;
   }
 
-  b = (UINT8 *)base;
+  b = (uint8_t *)base;
   for (i = 1; i < nmemb; i++) {
-    CopyMem (tmp, b + i * size, size);
+    memcpy(tmp, b + i * size, size);
     j = i;
-    while (j > 0 && compar (tmp, b + (j - 1) * size) < 0) {
-      CopyMem (b + j * size, b + (j - 1) * size, size);
+    while (j > 0 && compar(tmp, b + (j - 1) * size) < 0) {
+      memcpy(b + j * size, b + (j - 1) * size, size);
       j--;
     }
 
-    CopyMem (b + j * size, tmp, size);
+    memcpy(b + j * size, tmp, size);
   }
 
-  (VOID)MetalQsortCmp;
+  (void)MetalQsortCmp;
 }
 
-VOID *
-bsearch (
-  CONST VOID  *key,
-  CONST VOID  *base,
-  size_t       nmemb,
-  size_t       size,
-  INT32        (*compar)(CONST VOID *, CONST VOID *)
-  )
+void *bsearch(const void *key,
+              const void *base,
+              size_t      nmemb,
+              size_t      size,
+              int32_t (*compar)(const void *, const void *))
 {
-  size_t  lo;
-  size_t  hi;
+  size_t lo;
+  size_t hi;
 
   if (size == 0) {
     return NULL;
@@ -310,15 +253,15 @@ bsearch (
   lo = 0;
   hi = nmemb;
   while (lo < hi) {
-    size_t       mid;
-    CONST UINT8  *p;
-    INT32         c;
+    size_t         mid;
+    const uint8_t *p;
+    int32_t        c;
 
     mid = lo + (hi - lo) / 2;
-    p   = (CONST UINT8 *)base + mid * size;
-    c   = compar (key, p);
+    p   = (const uint8_t *)base + mid * size;
+    c   = compar(key, p);
     if (c == 0) {
-      return (VOID *)(UINTN)p;
+      return (void *)(uintptr_t)p;
     }
 
     if (c < 0) {

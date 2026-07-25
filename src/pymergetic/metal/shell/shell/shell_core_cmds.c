@@ -2,29 +2,26 @@
   Core shell commands (help, tabs, exit, …). (impl: efi|bios)
   `test` lives with boot — see boot_shell.c.
 **/
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include <pymergetic/metal/shell/shell_cmd.h>
 #include <pymergetic/metal/shell/shell/shell.h>
 #include <pymergetic/metal/shell/ui/ui.h>
 #include <pymergetic/metal/guest/process/process.h>
 #include <pymergetic/metal/dev/random/random.h>
 #include <pymergetic/metal/util/size.h>
-#include <runtime/mem/mem.h>
+#include <pymergetic/metal/runtime/mem/mem.h>
+#include <pymergetic/metal/runtime/async/async.h>
+#include <runtime/run/run.h>
 #include <runtime/stack/stack.h>
 
-#include <Uefi.h>
-#include <Library/BaseLib.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/PrintLib.h>
-
-STATIC
-VOID
-CoreFmtBytes (
-  CHAR8   *out,
-  UINTN    cap,
-  UINT64   bytes
-  )
+static void CoreFmtBytes(char *out, uintptr_t cap, uint64_t bytes)
 {
-  if (pm_metal_util_size_format (out, (size_t)cap, bytes) < 0) {
+  if (pm_metal_util_size_format(out, (size_t)cap, bytes) < 0) {
     if (cap > 0) {
       out[0] = '?';
       if (cap > 1) {
@@ -35,86 +32,78 @@ CoreFmtBytes (
 }
 
 /** One decimal percent: "0.1%", "31.4%". tenths = round(part*1000/whole). */
-STATIC
-VOID
-CoreFmtPct1 (
-  CHAR8   *out,
-  UINTN    cap,
-  UINT64   part,
-  UINT64   whole
-  )
+static void CoreFmtPct1(char *out, uintptr_t cap, uint64_t part, uint64_t whole)
 {
-  UINT64  tenths;
+  uint64_t tenths;
 
   if (cap == 0) {
     return;
   }
 
   if (whole == 0) {
-    AsciiStrCpyS (out, cap, "?%");
+    snprintf(out, cap, "%s", "?%");
     return;
   }
 
   tenths = (part * 1000ull + whole / 2ull) / whole;
-  AsciiSPrint (
-    out,
-    cap,
-    "%Lu.%Lu%%",
-    tenths / 10ull,
-    tenths % 10ull
-    );
+  snprintf(out, cap, "%llu.%llu%%", tenths / 10ull, tenths % 10ull);
 }
 
-STATIC
-VOID
-CoreMemCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
+static void CoreMemCmd(int32_t argc, char **argv)
 {
-  UINT64  phys;
-  UINT64  arena;
-  UINT64  outside;
-  UINT64  map;
-  UINT64  heap;
-  UINT64  hole;
-  UINT64  stacks;
-  UINT64  map_other;
-  UINT32  n_cpus;
-  CHAR8   pbuf[PM_METAL_UTIL_SIZE_FORMAT_MAX];
-  CHAR8   a[PM_METAL_UTIL_SIZE_FORMAT_MAX];
-  CHAR8   outb[PM_METAL_UTIL_SIZE_FORMAT_MAX];
-  CHAR8   s[PM_METAL_UTIL_SIZE_FORMAT_MAX];
-  CHAR8   one[PM_METAL_UTIL_SIZE_FORMAT_MAX];
-  CHAR8   oth[PM_METAL_UTIL_SIZE_FORMAT_MAX];
-  CHAR8   o[PM_METAL_UTIL_SIZE_FORMAT_MAX];
-  CHAR8   h[PM_METAL_UTIL_SIZE_FORMAT_MAX];
-  CHAR8   pct_metal[8];
-  CHAR8   pct_stacks[8];
-  CHAR8   pct_map[8];
-  CHAR8   pct_hole[8];
-  CHAR8   pct_heap[8];
-  CHAR8   line[128];
+  uint64_t    phys;
+  uint64_t    arena;
+  uint64_t    outside;
+  uint64_t    map;
+  uint64_t    heap;
+  uint64_t    hole;
+  uint64_t    stacks;
+  uint64_t    map_other;
+  uint64_t    heap_used;
+  uint64_t    heap_free;
+  size_t      pool_used;
+  size_t      pool_free;
+  uint32_t    n_cpus;
+  char        pbuf[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  char        a[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  char        outb[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  char        s[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  char        one[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  char        oth[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  char        o[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  char        h[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  char        hu[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+  char        pct_metal[8];
+  char        pct_stacks[8];
+  char        pct_map[8];
+  char        pct_hole[8];
+  char        pct_heap[8];
+  char        pct_heap_free[8];
+  char        line[160];
+  const char *branch;
 
-  (VOID)argc;
-  (VOID)argv;
+  (void)argc;
+  (void)argv;
 
   /*
    * system RAM
    *   +-- metal arena (low → high): stacks | map | hole | heap
    *   `-- other (UEFI / firmware / unclaimed)
+   *
+   * map/heap sizes = carved spans. hole = grow room for either.
+   * heap also reports free-within-TLSF (left in the carved pool).
    */
-  phys   = (UINT64)pm_metal_mem_phys_bytes ();
-  arena  = (UINT64)pm_metal_mem_arena_bytes ();
-  map    = (UINT64)pm_metal_mem_map_bytes ();
-  heap   = (UINT64)pm_metal_mem_heap_bytes ();
-  hole   = (UINT64)pm_metal_mem_hole_bytes ();
-  n_cpus = pm_metal_stack_n_cpus ();
+  phys   = (uint64_t)pm_metal_mem_phys_bytes();
+  arena  = (uint64_t)pm_metal_mem_arena_bytes();
+  map    = (uint64_t)pm_metal_mem_map_bytes();
+  heap   = (uint64_t)pm_metal_mem_heap_bytes();
+  hole   = (uint64_t)pm_metal_mem_hole_bytes();
+  n_cpus = pm_metal_stack_n_cpus();
   if (n_cpus == 0u) {
-    n_cpus = pm_metal_mem_n_cpus ();
+    n_cpus = pm_metal_mem_n_cpus();
   }
 
-  stacks = (UINT64)pm_metal_stack_bytes () * (UINT64)n_cpus;
+  stacks = (uint64_t)pm_metal_stack_bytes() * (uint64_t)n_cpus;
   if (stacks > map) {
     stacks = map;
   }
@@ -125,434 +114,425 @@ CoreMemCmd (
     outside = phys - arena;
   }
 
-  CoreFmtPct1 (pct_metal, sizeof (pct_metal), arena, phys);
-  CoreFmtPct1 (pct_stacks, sizeof (pct_stacks), stacks, arena);
-  CoreFmtPct1 (pct_map, sizeof (pct_map), map_other, arena);
-  CoreFmtPct1 (pct_hole, sizeof (pct_hole), hole, arena);
-  CoreFmtPct1 (pct_heap, sizeof (pct_heap), heap, arena);
+  pool_used = 0;
+  pool_free = 0;
+  pm_metal_mem_heap_pool_bytes(&pool_used, &pool_free);
+  heap_used = (uint64_t)pool_used;
+  heap_free = (uint64_t)pool_free;
 
-  CoreFmtBytes (a, sizeof (a), arena);
-  CoreFmtBytes (s, sizeof (s), stacks);
-  CoreFmtBytes (one, sizeof (one), (UINT64)pm_metal_stack_bytes ());
-  CoreFmtBytes (oth, sizeof (oth), map_other);
-  CoreFmtBytes (o, sizeof (o), hole);
-  CoreFmtBytes (h, sizeof (h), heap);
+  CoreFmtPct1(pct_metal, sizeof(pct_metal), arena, phys);
+  CoreFmtPct1(pct_stacks, sizeof(pct_stacks), stacks, arena);
+  CoreFmtPct1(pct_map, sizeof(pct_map), map_other, arena);
+  CoreFmtPct1(pct_hole, sizeof(pct_hole), hole, arena);
+  CoreFmtPct1(pct_heap, sizeof(pct_heap), heap, arena);
+  CoreFmtPct1(pct_heap_free, sizeof(pct_heap_free), heap_free, heap_used + heap_free);
+
+  CoreFmtBytes(a, sizeof(a), arena);
+  CoreFmtBytes(s, sizeof(s), stacks);
+  CoreFmtBytes(one, sizeof(one), (uint64_t)pm_metal_stack_bytes());
+  CoreFmtBytes(oth, sizeof(oth), map_other);
+  CoreFmtBytes(o, sizeof(o), hole);
+  CoreFmtBytes(h, sizeof(h), heap);
+  CoreFmtBytes(hu, sizeof(hu), heap_used);
+
+  branch = (phys != 0) ? "|  " : "";
 
   if (phys != 0) {
-    CoreFmtBytes (pbuf, sizeof (pbuf), phys);
-    CoreFmtBytes (outb, sizeof (outb), outside);
-    AsciiSPrint (line, sizeof (line), "mem: system %a", pbuf);
-    pm_metal_shell_out (line);
-    AsciiSPrint (
-      line,
-      sizeof (line),
-      "  +-- metal   %a   (%a, claimed arena)",
-      a,
-      pct_metal
-      );
-    pm_metal_shell_out (line);
+    CoreFmtBytes(pbuf, sizeof(pbuf), phys);
+    CoreFmtBytes(outb, sizeof(outb), outside);
+    snprintf(line, sizeof(line), "mem: system %s", pbuf);
+    pm_metal_shell_out(line);
+    snprintf(line, sizeof(line), "  +-- metal   %s   (%s, claimed arena)", a, pct_metal);
+    pm_metal_shell_out(line);
   } else {
-    AsciiSPrint (line, sizeof (line), "mem: metal %a  (arena)", a);
-    pm_metal_shell_out (line);
+    snprintf(line, sizeof(line), "mem: metal %s  (arena)", a);
+    pm_metal_shell_out(line);
   }
 
-  AsciiSPrint (
-    line,
-    sizeof (line),
-    "  %a +-- stacks  %a   (%a of arena, %u x %a)",
-    (phys != 0) ? "|  " : "",
-    s,
-    pct_stacks,
-    n_cpus,
-    one
-    );
-  pm_metal_shell_out (line);
-  AsciiSPrint (
-    line,
-    sizeof (line),
-    "  %a +-- map     %a   (%a of arena, virtio/DMA/...)",
-    (phys != 0) ? "|  " : "",
-    oth,
-    pct_map
-    );
-  pm_metal_shell_out (line);
-  AsciiSPrint (
-    line,
-    sizeof (line),
-    "  %a +-- hole    %a   (%a of arena)",
-    (phys != 0) ? "|  " : "",
-    o,
-    pct_hole
-    );
-  pm_metal_shell_out (line);
-  AsciiSPrint (
-    line,
-    sizeof (line),
-    "  %a `-- heap    %a   (%a of arena, TLSF)",
-    (phys != 0) ? "|  " : "",
-    h,
-    pct_heap
-    );
-  pm_metal_shell_out (line);
+  snprintf(line,
+           sizeof(line),
+           "  %s +-- stacks  %s   (%s of arena, %u x %s)",
+           branch,
+           s,
+           pct_stacks,
+           n_cpus,
+           one);
+  pm_metal_shell_out(line);
+  snprintf(line,
+           sizeof(line),
+           "  %s +-- map     %s   (%s of arena; committed, virtio/DMA/...)",
+           branch,
+           oth,
+           pct_map);
+  pm_metal_shell_out(line);
+  snprintf(line,
+           sizeof(line),
+           "  %s +-- hole    %s   (%s of arena; free to grow map|heap)",
+           branch,
+           o,
+           pct_hole);
+  pm_metal_shell_out(line);
+  snprintf(line,
+           sizeof(line),
+           "  %s `-- heap    %s   (%s of arena; %s used, %s free in TLSF)",
+           branch,
+           h,
+           pct_heap,
+           hu,
+           pct_heap_free);
+  pm_metal_shell_out(line);
 
   if (phys != 0) {
-    AsciiSPrint (
-      line,
-      sizeof (line),
-      "  `-- other   %a   (UEFI/firmware/reserved)",
-      outb
-      );
-    pm_metal_shell_out (line);
+    snprintf(line, sizeof(line), "  `-- other   %s   (UEFI/firmware/reserved)", outb);
+    pm_metal_shell_out(line);
   }
 }
 
-STATIC
-CONST CHAR8 *
-CorePsUiName (
-  pm_metal_process_ui_kind_t  kind
-  )
+static const char *CorePsUiName(pm_metal_process_ui_kind_t kind)
 {
   switch (kind) {
-    case PM_METAL_PROC_UI_TAB:
-      return "tab";
-    case PM_METAL_PROC_UI_FULLSCREEN:
-      return "full";
-    default:
-      return "none";
+  case PM_METAL_PROC_UI_TAB:
+    return "tab";
+  case PM_METAL_PROC_UI_FULLSCREEN:
+    return "full";
+  default:
+    return "none";
   }
 }
 
-STATIC
-VOID
-CorePsCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
+static void CorePsCmd(int32_t argc, char **argv)
 {
-  pm_metal_process_info_t  list[PM_METAL_PROCESS_MAX];
-  UINT32                   n;
-  UINT32                   i;
-  CHAR8                    line[96];
+  pm_metal_process_info_t list[PM_METAL_PROCESS_MAX];
+  uint32_t                n;
+  uint32_t                i;
+  char                    line[96];
 
-  (VOID)argc;
-  (VOID)argv;
-  n = pm_metal_process_list (list, PM_METAL_PROCESS_MAX);
+  (void)argc;
+  (void)argv;
+  n = pm_metal_process_list(list, PM_METAL_PROCESS_MAX);
   if (n == 0) {
-    pm_metal_shell_out ("ps: no processes");
+    pm_metal_shell_out("ps: no processes");
     return;
   }
 
-  AsciiSPrint (line, sizeof (line), "ps: %u", n);
-  pm_metal_shell_out (line);
+  snprintf(line, sizeof(line), "ps: %u", n);
+  pm_metal_shell_out(line);
   for (i = 0; i < n; i++) {
-    AsciiSPrint (
-      line,
-      sizeof (line),
-      "  %u %a ui=%a tab=%u surf=%u%a",
-      (UINT32)list[i].id,
-      list[i].name,
-      CorePsUiName ((pm_metal_process_ui_kind_t)list[i].ui_kind),
-      (UINT32)list[i].tab,
-      list[i].surface,
-      (list[i].id == pm_metal_process_current ()) ? " *" : ""
-      );
-    pm_metal_shell_out (line);
+    snprintf(line,
+             sizeof(line),
+             "  %u %s ui=%s tab=%u surf=%u%s",
+             (uint32_t)list[i].id,
+             list[i].name,
+             CorePsUiName((pm_metal_process_ui_kind_t)list[i].ui_kind),
+             (uint32_t)list[i].tab,
+             list[i].surface,
+             (list[i].id == pm_metal_process_current()) ? " *" : "");
+    pm_metal_shell_out(line);
   }
 }
 
-STATIC
-VOID
-CoreHelpCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
+/**
+ * Per-runner busy % + work-stealing diagnostics (docs/COOP_MEMORY.md:
+ * N CPUs = N equal cooperative runners, lock-free ready rings — no CPU
+ * affinity/pinning). `steals` = how many times another CPU claimed a
+ * slot from this ring instead of its own owner; `retries` = lost claim
+ * CAS races (contention, not correctness). While a guest session is
+ * live, `pm_metal_async_session_cpu` is diagnostic-only: it marks the
+ * runner that began the session, not a scheduling constraint — guest
+ * tasks are free to run on any CPU, so other runners busy% is expected
+ * to be > 0.
+ */
+static void CoreCpuCmd(int32_t argc, char **argv)
 {
-  (VOID)argc;
-  (VOID)argv;
-  pm_metal_shell_cmd_help ();
+  uint32_t n_cpus;
+  uint32_t i;
+  uint32_t session_cpu;
+  int32_t  has_session;
+  char     line[128];
+
+  (void)argc;
+  (void)argv;
+
+  n_cpus = pm_metal_mem_n_cpus();
+  if (n_cpus == 0) {
+    n_cpus = 1;
+  }
+
+  has_session = pm_metal_async_session_active();
+  session_cpu = has_session ? (uint32_t)pm_metal_async_session_cpu() : 0;
+
+  snprintf(line, sizeof(line), "cpu: %u runners", n_cpus);
+  pm_metal_shell_out(line);
+  for (i = 0; i < n_cpus; i++) {
+    snprintf(line,
+             sizeof(line),
+             "  cpu%u  busy=%3u%%  steals=%u  retries=%u%s",
+             i,
+             pm_metal_run_busy_pct(i),
+             pm_metal_run_steal_count(i),
+             pm_metal_run_claim_retries(i),
+             (has_session && i == session_cpu) ? "  <- session began here" : "");
+    pm_metal_shell_out(line);
+  }
 }
 
-STATIC
-VOID
-CoreDateCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
+/**
+ * Diagnostic A/B switch: `presentoffload [on|off]` — forces the legacy
+ * inline present path when off, so the cross-runner offload can be
+ * compared against the old behavior without a rebuild (see async_ops.c).
+ */
+static void CorePresentOffloadCmd(int32_t argc, char **argv)
 {
-  UINT64  ms;
-  UINT32  tod;
-  UINT32  hour;
-  UINT32  min;
-  UINT32  sec;
-  INT32   tz;
-  CHAR8   line[64];
+  char line[64];
 
-  (VOID)argc;
-  (VOID)argv;
-  ms   = pm_metal_tz_local_ms ();
-  tod  = (UINT32)((ms / 1000ull) % 86400ull);
-  hour = tod / 3600u;
-  min  = (tod % 3600u) / 60u;
-  sec  = tod % 60u;
-  tz   = pm_metal_tz_minutes ();
-  AsciiSPrint (
-    line,
-    sizeof (line),
-    "%02u:%02u:%02u %a (UTC%c%02d%02d)",
-    hour,
-    min,
-    sec,
-    pm_metal_tz_name (),
-    (tz < 0) ? '-' : '+',
-    (tz < 0) ? (-tz) / 60 : tz / 60,
-    (tz < 0) ? (-tz) % 60 : tz % 60
-    );
-  pm_metal_shell_out (line);
-}
-
-STATIC
-VOID
-CoreTzCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
-{
-  CHAR8  line[80];
-  INT32  tz;
-
-  if (argc >= 2 && argv[1] != NULL && argv[1][0] != '\0') {
-    if (pm_metal_tz_set (argv[1]) != 0) {
-      pm_metal_shell_out ("tz: unknown (use +HHMM or Europe/Berlin)");
+  if (argc >= 2) {
+    if (strcmp(argv[1], "off") == 0) {
+      pm_metal_async_present_offload_set(0);
+    } else if (strcmp(argv[1], "on") == 0) {
+      pm_metal_async_present_offload_set(1);
+    } else {
+      pm_metal_shell_out("presentoffload: usage: presentoffload [on|off]");
       return;
     }
   }
 
-  tz = pm_metal_tz_minutes ();
-  AsciiSPrint (
-    line,
-    sizeof (line),
-    "tz %a (UTC%c%02d%02d)",
-    pm_metal_tz_name (),
-    (tz < 0) ? '-' : '+',
-    (tz < 0) ? (-tz) / 60 : tz / 60,
-    (tz < 0) ? (-tz) % 60 : tz % 60
-    );
-  pm_metal_shell_out (line);
+  snprintf(
+    line, sizeof(line), "presentoffload: %s", pm_metal_async_present_offload_get() ? "on" : "off");
+  pm_metal_shell_out(line);
 }
 
-STATIC
-VOID
-CoreEchoCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
+static void CoreHelpCmd(int32_t argc, char **argv)
 {
-  CHAR8  line[160];
-  INT32  i;
-  UINTN  off;
-  UINTN  n;
+  (void)argc;
+  (void)argv;
+  pm_metal_shell_cmd_help();
+}
+
+static void CoreDateCmd(int32_t argc, char **argv)
+{
+  uint64_t ms;
+  uint32_t tod;
+  uint32_t hour;
+  uint32_t min;
+  uint32_t sec;
+  int32_t  tz;
+  char     line[64];
+
+  (void)argc;
+  (void)argv;
+  ms   = pm_metal_tz_local_ms();
+  tod  = (uint32_t)((ms / 1000ull) % 86400ull);
+  hour = tod / 3600u;
+  min  = (tod % 3600u) / 60u;
+  sec  = tod % 60u;
+  tz   = pm_metal_tz_minutes();
+  snprintf(line,
+           sizeof(line),
+           "%02u:%02u:%02u %s (UTC%c%02d%02d)",
+           hour,
+           min,
+           sec,
+           pm_metal_tz_name(),
+           (tz < 0) ? '-' : '+',
+           (tz < 0) ? (-tz) / 60 : tz / 60,
+           (tz < 0) ? (-tz) % 60 : tz % 60);
+  pm_metal_shell_out(line);
+}
+
+static void CoreTzCmd(int32_t argc, char **argv)
+{
+  char    line[80];
+  int32_t tz;
+
+  if (argc >= 2 && argv[1] != NULL && argv[1][0] != '\0') {
+    if (pm_metal_tz_set(argv[1]) != 0) {
+      pm_metal_shell_out("tz: unknown (use +HHMM or Europe/Berlin)");
+      return;
+    }
+  }
+
+  tz = pm_metal_tz_minutes();
+  snprintf(line,
+           sizeof(line),
+           "tz %s (UTC%c%02d%02d)",
+           pm_metal_tz_name(),
+           (tz < 0) ? '-' : '+',
+           (tz < 0) ? (-tz) / 60 : tz / 60,
+           (tz < 0) ? (-tz) % 60 : tz % 60);
+  pm_metal_shell_out(line);
+}
+
+static void CoreEchoCmd(int32_t argc, char **argv)
+{
+  char      line[160];
+  int32_t   i;
+  uintptr_t off;
+  uintptr_t n;
 
   if (argc < 2) {
-    pm_metal_shell_out ("");
+    pm_metal_shell_out("");
     return;
   }
 
   off = 0;
   for (i = 1; i < argc; i++) {
-    n = AsciiStrLen (argv[i]);
+    n = strlen(argv[i]);
     if (i > 1) {
-      if (off + 1 >= sizeof (line)) {
+      if (off + 1 >= sizeof(line)) {
         break;
       }
 
       line[off++] = ' ';
     }
 
-    if (off + n >= sizeof (line)) {
-      n = sizeof (line) - 1u - off;
+    if (off + n >= sizeof(line)) {
+      n = sizeof(line) - 1u - off;
     }
 
-    CopyMem (line + off, argv[i], n);
+    memcpy(line + off, argv[i], n);
     off += n;
   }
 
   line[off] = '\0';
-  pm_metal_shell_out (line);
+  pm_metal_shell_out(line);
 }
 
-STATIC
-VOID
-CoreRunCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
+static void CoreRunCmd(int32_t argc, char **argv)
 {
   if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
-    pm_metal_shell_out ("usage: run <mod>");
+    pm_metal_shell_out("usage: run <mod>");
     return;
   }
 
-  (VOID)pm_metal_shell_run (argv[1]);
+  (void)pm_metal_shell_run(argv[1]);
 }
 
-STATIC
-VOID
-CoreTabCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
+static void CoreTabCmd(int32_t argc, char **argv)
 {
   if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
-    pm_metal_shell_out ("usage: tab <mod>");
+    pm_metal_shell_out("usage: tab <mod>");
     return;
   }
 
-  (VOID)pm_metal_shell_tab (argv[1]);
+  (void)pm_metal_shell_tab(argv[1]);
 }
 
-STATIC
-VOID
-CoreTabsCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
+static void CoreTabsCmd(int32_t argc, char **argv)
 {
-  UINT32  n;
-  UINT32  i;
-  UINT32  a;
-  CHAR8   line[80];
+  uint32_t n;
+  uint32_t i;
+  uint32_t a;
+  char     line[80];
 
-  (VOID)argc;
-  (VOID)argv;
-  n = pm_metal_ui_tab_count ();
-  a = pm_metal_ui_tab_active_index ();
-  AsciiSPrint (line, sizeof (line), "tabs: %u  active: %u", n, a);
-  pm_metal_shell_out (line);
+  (void)argc;
+  (void)argv;
+  n = pm_metal_ui_tab_count();
+  a = pm_metal_ui_tab_active_index();
+  snprintf(line, sizeof(line), "tabs: %u  active: %u", n, a);
+  pm_metal_shell_out(line);
   for (i = 0; i < n; i++) {
-    AsciiSPrint (line, sizeof (line), "  %u%a", i, (i == a) ? " *" : "");
-    pm_metal_shell_out (line);
+    snprintf(line, sizeof(line), "  %u%s", i, (i == a) ? " *" : "");
+    pm_metal_shell_out(line);
   }
 }
 
-STATIC
-VOID
-CoreUseCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
+static void CoreUseCmd(int32_t argc, char **argv)
 {
-  UINTN  i;
+  uintptr_t i;
 
   if (argc < 2) {
-    pm_metal_shell_out ("usage: use <n>");
+    pm_metal_shell_out("usage: use <n>");
     return;
   }
 
-  i = AsciiStrDecimalToUintn (argv[1]);
-  if (pm_metal_ui_tab_activate_index ((UINT32)i) != 0) {
-    pm_metal_shell_out ("use: bad index");
+  i = strtoul(argv[1], NULL, 10);
+  if (pm_metal_ui_tab_activate_index((uint32_t)i) != 0) {
+    pm_metal_shell_out("use: bad index");
   } else {
-    CHAR8  msg[40];
+    char msg[40];
 
-    AsciiSPrint (msg, sizeof (msg), "active tab %u", (UINT32)i);
-    pm_metal_ui_set_status (msg);
-    pm_metal_shell_mark_full ();
+    snprintf(msg, sizeof(msg), "active tab %u", (uint32_t)i);
+    pm_metal_ui_set_status(msg);
+    pm_metal_shell_mark_full();
   }
 }
 
-STATIC
-VOID
-CoreCloseCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
+static void CoreCloseCmd(int32_t argc, char **argv)
 {
-  UINT32  idx;
-  UINT32  n;
-  UINT32  a;
+  uint32_t idx;
+  uint32_t n;
+  uint32_t a;
 
-  n = pm_metal_ui_tab_count ();
-  a = pm_metal_ui_tab_active_index ();
+  n = pm_metal_ui_tab_count();
+  a = pm_metal_ui_tab_active_index();
   if (argc >= 2) {
-    idx = (UINT32)AsciiStrDecimalToUintn (argv[1]);
+    idx = (uint32_t)strtoul(argv[1], NULL, 10);
   } else if (a != 0) {
     idx = a;
   } else if (n > 1) {
     idx = n - 1;
   } else {
-    pm_metal_shell_out ("close: no guest tab");
+    pm_metal_shell_out("close: no guest tab");
     return;
   }
 
   if (idx == 0) {
-    pm_metal_shell_out ("close: cannot close console");
-  } else if (pm_metal_ui_tab_activate_index (idx) != 0
-             || pm_metal_ui_tab_close_active () != 0)
-  {
-    pm_metal_shell_out ("close: failed");
+    pm_metal_shell_out("close: cannot close console");
+  } else if (pm_metal_ui_tab_activate_index(idx) != 0 || pm_metal_ui_tab_close_active() != 0) {
+    pm_metal_shell_out("close: failed");
   } else {
-    (VOID)pm_metal_ui_tab_activate_index (0);
-    pm_metal_ui_set_status ("tab closed");
-    pm_metal_shell_out ("tab closed");
-    pm_metal_shell_mark_full ();
+    (void)pm_metal_ui_tab_activate_index(0);
+    pm_metal_ui_set_status("tab closed");
+    pm_metal_shell_out("tab closed");
+    pm_metal_shell_mark_full();
   }
 }
 
-STATIC
-VOID
-CoreExitCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
+static void CoreExitCmd(int32_t argc, char **argv)
 {
-  INT32  reboot;
+  int32_t reboot;
 
   if (argc > 2) {
-    pm_metal_shell_out ("usage: exit [-r]");
+    pm_metal_shell_out("usage: exit [-r]");
     return;
   }
 
-  if (argc == 2 && AsciiStrCmp (argv[1], "-r") != 0) {
-    pm_metal_shell_out ("exit: use -r to reboot");
+  if (argc == 2 && strcmp(argv[1], "-r") != 0) {
+    pm_metal_shell_out("exit: use -r to reboot");
     return;
   }
 
   reboot = (argc == 2) ? 1 : 0;
-  pm_metal_shell_out (reboot ? "reboot requested" : "shutdown requested");
-  pm_metal_shell_cmd_exit (reboot);
+  pm_metal_shell_out(reboot ? "reboot requested" : "shutdown requested");
+  pm_metal_shell_cmd_exit(reboot);
 }
 
-STATIC
-VOID
-CoreHistoryCmd (
-  INT32   argc,
-  CHAR8 **argv
-  )
+static void CoreHistoryCmd(int32_t argc, char **argv)
 {
-  UINT32  n;
-  UINT32  i;
-  CHAR8   entry[128];
-  CHAR8   line[144];
+  uint32_t n;
+  uint32_t i;
+  char     entry[128];
+  char     line[144];
 
-  (VOID)argc;
-  (VOID)argv;
-  n = pm_metal_shell_history_count ();
+  (void)argc;
+  (void)argv;
+  n = pm_metal_shell_history_count();
   if (n == 0u) {
-    pm_metal_shell_out ("history: (empty)");
+    pm_metal_shell_out("history: (empty)");
     return;
   }
 
   for (i = 0; i < n; i++) {
-    if (pm_metal_shell_history_get (i, entry, sizeof (entry)) != 0) {
+    if (pm_metal_shell_history_get(i, entry, sizeof(entry)) != 0) {
       continue;
     }
 
-    AsciiSPrint (line, sizeof (line), "%4u  %a", i + 1u, entry);
-    pm_metal_shell_out (line);
+    snprintf(line, sizeof(line), "%4u  %s", i + 1u, entry);
+    pm_metal_shell_out(line);
   }
 }
 
-PM_METAL_SHELL_CMDS (g_pm_metal_shell_cmds_core) = {
+PM_METAL_SHELL_CMDS(g_pm_metal_shell_cmds_core) = {
   { "help", "this text", CoreHelpCmd },
   { "echo", "echo <text>       print text", CoreEchoCmd },
   { "date", "date              local wall clock", CoreDateCmd },
@@ -561,6 +541,10 @@ PM_METAL_SHELL_CMDS (g_pm_metal_shell_cmds_core) = {
   { "run", "run <mod>         fullscreen in console (guest HID)", CoreRunCmd },
   { "tab", "tab <mod>         windowed in a new tab (guest HID)", CoreTabCmd },
   { "ps", "ps                list fake processes", CorePsCmd },
+  { "cpu", "cpu               per-runner busy % + session pin", CoreCpuCmd },
+  { "presentoffload",
+    "presentoffload [on|off]  A/B: cross-runner present offload",
+    CorePresentOffloadCmd },
   { "mem", "mem               system RAM + arena layout", CoreMemCmd },
   { "tabs", "tabs              list tabs", CoreTabsCmd },
   { "use", "use <n>           activate tab index", CoreUseCmd },
@@ -569,4 +553,4 @@ PM_METAL_SHELL_CMDS (g_pm_metal_shell_cmds_core) = {
   { "quit", "exit|quit [-r]    power off (or reboot with -r)", CoreExitCmd },
   { "shutdown", "exit|quit [-r]    power off (or reboot with -r)", CoreExitCmd },
 };
-PM_METAL_SHELL_CMDS_END (g_pm_metal_shell_cmds_core);
+PM_METAL_SHELL_CMDS_END(g_pm_metal_shell_cmds_core);

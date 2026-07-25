@@ -3,7 +3,7 @@
 **/
 #include <pymergetic/metal/fs/esp/esp.h>
 #include <pymergetic/metal/log/log.h>
-#include <runtime/mem/mem.h>
+#include <pymergetic/metal/runtime/mem/mem.h>
 
 #include <Uefi.h>
 #include <Protocol/LoadedImage.h>

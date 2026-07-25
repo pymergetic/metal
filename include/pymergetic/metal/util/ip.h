@@ -25,8 +25,7 @@
 #define PM_METAL_UTIL_IP_WASI_MODULE "pymergetic.metal.util.ip"
 
 #if defined(__wasm__)
-#define PM_METAL_UTIL_IP_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_IP_WASI_MODULE, name)
+#define PM_METAL_UTIL_IP_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_UTIL_IP_WASI_MODULE, name)
 #endif
 
 #ifdef __cplusplus
@@ -39,7 +38,7 @@ extern "C" {
  */
 #if defined(__wasm__)
 extern int pm_metal_util_ip4_parse(const char *s, uint32_t *out_host)
-	PM_METAL_UTIL_IP_IMPORT(pm_metal_util_ip4_parse);
+  PM_METAL_UTIL_IP_IMPORT(pm_metal_util_ip4_parse);
 #else
 int pm_metal_util_ip4_parse(const char *s, uint32_t *out_host);
 #endif
@@ -51,23 +50,21 @@ int pm_metal_util_ip4_parse(const char *s, uint32_t *out_host);
  */
 #if defined(__wasm__)
 extern int pm_metal_util_ip4_format(uint32_t host, char *out, size_t cap)
-	PM_METAL_UTIL_IP_IMPORT(pm_metal_util_ip4_format);
+  PM_METAL_UTIL_IP_IMPORT(pm_metal_util_ip4_format);
 #else
 int pm_metal_util_ip4_format(uint32_t host, char *out, size_t cap);
 #endif
 
 /** True if host-order address is 0.0.0.0. */
-static inline int
-pm_metal_util_ip4_is_unspecified(uint32_t host)
+static inline int pm_metal_util_ip4_is_unspecified(uint32_t host)
 {
-	return host == 0u;
+  return host == 0u;
 }
 
 /** True if `s` is already a dotted-quad IPv4 literal (no DNS). */
-static inline int
-pm_metal_util_ip4_is_literal(const char *s)
+static inline int pm_metal_util_ip4_is_literal(const char *s)
 {
-	return pm_metal_util_ip4_parse(s, NULL) == 0;
+  return pm_metal_util_ip4_parse(s, NULL) == 0;
 }
 
 #if !defined(__wasm__)

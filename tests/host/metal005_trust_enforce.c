@@ -12,35 +12,33 @@
 #define ENFORCE_CONTINUE 0
 #endif
 
-static int
-boot_return_fail(int mode, int soft_strict)
+static int boot_return_fail(int mode, int soft_strict)
 {
-	if (mode == MODE_ENFORCE) {
+  if (mode == MODE_ENFORCE) {
 #if ENFORCE_CONTINUE
-		return 0;
+    return 0;
 #else
-		(void)soft_strict;
-		return -1;
+    (void)soft_strict;
+    return -1;
 #endif
-	}
-	return soft_strict ? -1 : 0;
+  }
+  return soft_strict ? -1 : 0;
 }
 
-int
-main(void)
+int main(void)
 {
-	if (boot_return_fail(MODE_ENFORCE, 0) != -1) {
-		fprintf(stderr, "metal005: enforce must be fatal\n");
-		return 1;
-	}
-	if (boot_return_fail(MODE_SOFT, 0) != 0) {
-		fprintf(stderr, "metal005: soft must continue\n");
-		return 1;
-	}
-	if (boot_return_fail(MODE_SOFT, 1) != -1) {
-		fprintf(stderr, "metal005: soft+strict must fail\n");
-		return 1;
-	}
-	printf("metal005: ok\n");
-	return 0;
+  if (boot_return_fail(MODE_ENFORCE, 0) != -1) {
+    fprintf(stderr, "metal005: enforce must be fatal\n");
+    return 1;
+  }
+  if (boot_return_fail(MODE_SOFT, 0) != 0) {
+    fprintf(stderr, "metal005: soft must continue\n");
+    return 1;
+  }
+  if (boot_return_fail(MODE_SOFT, 1) != -1) {
+    fprintf(stderr, "metal005: soft+strict must fail\n");
+    return 1;
+  }
+  printf("metal005: ok\n");
+  return 0;
 }

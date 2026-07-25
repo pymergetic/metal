@@ -23,13 +23,13 @@
 /* Blake2b digest length used by hash() below (Monocypher's default). */
 #define PM_METAL_UTIL_CRYPTO_HASH_LEN 64
 /* ChaCha20-Poly1305 key / nonce / mac sizes (Monocypher AEAD). */
-#define PM_METAL_UTIL_CRYPTO_KEY_LEN 32
+#define PM_METAL_UTIL_CRYPTO_KEY_LEN   32
 #define PM_METAL_UTIL_CRYPTO_NONCE_LEN 24
-#define PM_METAL_UTIL_CRYPTO_MAC_LEN 16
+#define PM_METAL_UTIL_CRYPTO_MAC_LEN   16
 
 #if defined(__wasm__)
 #define PM_METAL_UTIL_CRYPTO_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_CRYPTO_WASI_MODULE, name)
+  PM_METAL_WASI_IMPORT(PM_METAL_UTIL_CRYPTO_WASI_MODULE, name)
 #endif
 
 /*
@@ -41,7 +41,7 @@
  */
 #if defined(__wasm__)
 extern int pm_metal_util_crypto_hash(void *hash, size_t hash_len, const void *msg, size_t msg_len)
-	PM_METAL_UTIL_CRYPTO_IMPORT(pm_metal_util_crypto_hash);
+  PM_METAL_UTIL_CRYPTO_IMPORT(pm_metal_util_crypto_hash);
 #else
 int pm_metal_util_crypto_hash(void *hash, size_t hash_len, const void *msg, size_t msg_len);
 #endif
@@ -58,14 +58,32 @@ int pm_metal_util_crypto_hash(void *hash, size_t hash_len, const void *msg, size
  * impl: wasi import — src/pymergetic/metal/util/crypto.c (wasm32 only)
  */
 #if defined(__wasm__)
-extern int pm_metal_util_crypto_aead_lock(void *cipher, size_t cipher_cap, void *mac, size_t mac_cap,
-					   const void *key, size_t key_len, const void *nonce, size_t nonce_len,
-					   const void *ad, size_t ad_len, const void *plain, size_t plain_len)
-	PM_METAL_UTIL_CRYPTO_IMPORT(pm_metal_util_crypto_aead_lock);
+extern int pm_metal_util_crypto_aead_lock(void       *cipher,
+                                          size_t      cipher_cap,
+                                          void       *mac,
+                                          size_t      mac_cap,
+                                          const void *key,
+                                          size_t      key_len,
+                                          const void *nonce,
+                                          size_t      nonce_len,
+                                          const void *ad,
+                                          size_t      ad_len,
+                                          const void *plain,
+                                          size_t      plain_len)
+  PM_METAL_UTIL_CRYPTO_IMPORT(pm_metal_util_crypto_aead_lock);
 #else
-int pm_metal_util_crypto_aead_lock(void *cipher, size_t cipher_cap, void *mac, size_t mac_cap, const void *key,
-				     size_t key_len, const void *nonce, size_t nonce_len, const void *ad,
-				     size_t ad_len, const void *plain, size_t plain_len);
+int pm_metal_util_crypto_aead_lock(void       *cipher,
+                                   size_t      cipher_cap,
+                                   void       *mac,
+                                   size_t      mac_cap,
+                                   const void *key,
+                                   size_t      key_len,
+                                   const void *nonce,
+                                   size_t      nonce_len,
+                                   const void *ad,
+                                   size_t      ad_len,
+                                   const void *plain,
+                                   size_t      plain_len);
 #endif
 
 /*
@@ -76,14 +94,32 @@ int pm_metal_util_crypto_aead_lock(void *cipher, size_t cipher_cap, void *mac, s
  * impl: wasi import — src/pymergetic/metal/util/crypto.c (wasm32 only)
  */
 #if defined(__wasm__)
-extern int pm_metal_util_crypto_aead_unlock(void *plain, size_t plain_cap, const void *key, size_t key_len,
-					     const void *nonce, size_t nonce_len, const void *mac, size_t mac_len,
-					     const void *ad, size_t ad_len, const void *cipher, size_t cipher_len)
-	PM_METAL_UTIL_CRYPTO_IMPORT(pm_metal_util_crypto_aead_unlock);
+extern int pm_metal_util_crypto_aead_unlock(void       *plain,
+                                            size_t      plain_cap,
+                                            const void *key,
+                                            size_t      key_len,
+                                            const void *nonce,
+                                            size_t      nonce_len,
+                                            const void *mac,
+                                            size_t      mac_len,
+                                            const void *ad,
+                                            size_t      ad_len,
+                                            const void *cipher,
+                                            size_t      cipher_len)
+  PM_METAL_UTIL_CRYPTO_IMPORT(pm_metal_util_crypto_aead_unlock);
 #else
-int pm_metal_util_crypto_aead_unlock(void *plain, size_t plain_cap, const void *key, size_t key_len,
-				       const void *nonce, size_t nonce_len, const void *mac, size_t mac_len,
-				       const void *ad, size_t ad_len, const void *cipher, size_t cipher_len);
+int pm_metal_util_crypto_aead_unlock(void       *plain,
+                                     size_t      plain_cap,
+                                     const void *key,
+                                     size_t      key_len,
+                                     const void *nonce,
+                                     size_t      nonce_len,
+                                     const void *mac,
+                                     size_t      mac_len,
+                                     const void *ad,
+                                     size_t      ad_len,
+                                     const void *cipher,
+                                     size_t      cipher_len);
 #endif
 
 #if !defined(__wasm__)

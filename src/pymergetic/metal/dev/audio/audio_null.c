@@ -3,75 +3,51 @@
 **/
 #include <pymergetic/metal/dev/audio/audio_ops.h>
 #include <pymergetic/metal/runtime/async/async.h>
-#include <runtime/coro/coro.h>
+#include <pymergetic/metal/log/log.h>
 
-#include <Uefi.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/UefiLib.h>
+#include <stdint.h>
+#include <string.h>
 
 #ifndef PM_METAL_AUDIO_MAX_STREAMS
-#define PM_METAL_AUDIO_MAX_STREAMS  8u
+#define PM_METAL_AUDIO_MAX_STREAMS 8u
 #endif
 
 typedef struct {
-  INT32   used;
-  UINT32  format;
-  UINT32  frames;
+  int32_t  used;
+  uint32_t format;
+  uint32_t frames;
 } null_stream_t;
 
-STATIC null_stream_t  mStreams[PM_METAL_AUDIO_MAX_STREAMS + 1];
-STATIC INT32          mLogged;
-STATIC INT32          mMuted;
+static null_stream_t mStreams[PM_METAL_AUDIO_MAX_STREAMS + 1];
+static int32_t       mLogged;
+static int32_t       mMuted;
 
-STATIC
-pm_metal_status_t
-NullDrainFn (
-  pm_metal_coro_t  *self
-  )
+static pm_metal_status_t NullDrainStep(pm_metal_async_handle_t self_h)
 {
-  (VOID)self;
+  (void)self_h;
   return PM_METAL_DONE;
 }
 
-STATIC
-int
-NullInit (
-  VOID
-  )
+static int NullInit(void)
 {
   if (!mLogged) {
-    Print (L"metal-audio: null\r\n");
+    pm_metal_log("metal-audio: null");
     mLogged = 1;
   }
 
   return 0;
 }
 
-STATIC
-VOID
-NullPoll (
-  VOID
-  )
-{
-}
+static void NullPoll(void) {}
 
-STATIC
-int32_t
-NullReady (
-  VOID
-  )
+static int32_t NullReady(void)
 {
   return 0;
 }
 
-STATIC
-pm_metal_audio_stream_h
-NullOpen (
-  uint32_t  format,
-  uint32_t  frames
-  )
+static pm_metal_audio_stream_h NullOpen(uint32_t format, uint32_t frames)
 {
-  UINT32  i;
+  uint32_t i;
 
   if (format == 0) {
     return PM_METAL_AUDIO_STREAM_INVALID;
@@ -89,28 +65,18 @@ NullOpen (
   return PM_METAL_AUDIO_STREAM_INVALID;
 }
 
-STATIC
-VOID
-NullClose (
-  pm_metal_audio_stream_h  s
-  )
+static void NullClose(pm_metal_audio_stream_h s)
 {
   if (s == 0 || s > PM_METAL_AUDIO_MAX_STREAMS) {
     return;
   }
 
-  ZeroMem (&mStreams[s], sizeof (mStreams[s]));
+  memset(&mStreams[s], 0, sizeof(mStreams[s]));
 }
 
-STATIC
-uint32_t
-NullQueue (
-  pm_metal_audio_stream_h  s,
-  CONST VOID              *pcm,
-  uint32_t                 nbytes
-  )
+static uint32_t NullQueue(pm_metal_audio_stream_h s, const void *pcm, uint32_t nbytes)
 {
-  (VOID)pcm;
+  (void)pcm;
   if (s == 0 || !mStreams[s].used || mMuted) {
     return 0;
   }
@@ -118,54 +84,26 @@ NullQueue (
   return nbytes;
 }
 
-STATIC
-pm_metal_async_handle_t
-NullDrain (
-  pm_metal_audio_stream_h  s,
-  uint32_t                 nbytes
-  )
+static pm_metal_async_handle_t NullDrain(pm_metal_audio_stream_h s, uint32_t nbytes)
 {
-  pm_metal_coro_t  *c;
-
-  (VOID)nbytes;
+  (void)nbytes;
   if (s == 0 || !mStreams[s].used) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  c = pm_metal_coro (NullDrainFn, sizeof (*c));
-  if (c == NULL) {
-    return PM_METAL_ASYNC_HANDLE_INVALID;
-  }
-
-  return pm_metal_async_adopt_host_coro (c);
+  return pm_metal_async_coro_create(NullDrainStep, 0);
 }
 
-STATIC
-VOID
-NullMute (
-  int  on
-  )
+static void NullMute(int on)
 {
   mMuted = on ? 1 : 0;
 }
 
-STATIC CONST pm_metal_audio_ops_t  mNullOps = {
-  "null",
-  NullInit,
-  NullPoll,
-  NullReady,
-  NullOpen,
-  NullClose,
-  NullQueue,
-  NullDrain,
-  NullMute
-};
+static const pm_metal_audio_ops_t mNullOps = { "null",    NullInit,  NullPoll,  NullReady, NullOpen,
+                                               NullClose, NullQueue, NullDrain, NullMute };
 
-void
-pm_metal_audio_null_install (
-  VOID
-  )
+void pm_metal_audio_null_install(void)
 {
-  pm_metal_audio_set_ops (&mNullOps);
-  (VOID)NullInit ();
+  pm_metal_audio_set_ops(&mNullOps);
+  (void)NullInit();
 }

@@ -415,12 +415,13 @@ I8042Drain (
       continue;
     }
 
-    /* Shell: track mods + nav keys for chrome (scroll / tab cycle). */
+    /* Shell: track mods + nav keys for chrome (scroll / cursor / history). */
     if (key == PM_METAL_KEY_LCTRL || key == PM_METAL_KEY_RCTRL
         || key == PM_METAL_KEY_LSHIFT || key == PM_METAL_KEY_RSHIFT
         || key == PM_METAL_KEY_LALT || key == PM_METAL_KEY_RALT
         || key == PM_METAL_KEY_PAGEUP || key == PM_METAL_KEY_PAGEDOWN
-        || key == PM_METAL_KEY_LEFT || key == PM_METAL_KEY_RIGHT)
+        || key == PM_METAL_KEY_LEFT || key == PM_METAL_KEY_RIGHT
+        || key == PM_METAL_KEY_UP || key == PM_METAL_KEY_DOWN)
     {
       pm_metal_input_push_key (break_code ? 0 : 1, key);
       continue;

@@ -8,25 +8,27 @@
 extern "C" {
 #endif
 
-void abort(void);
+void  abort(void);
 void *malloc(size_t n);
 void *realloc(void *p, size_t n);
-void free(void *p);
+void  free(void *p);
 void *calloc(size_t nmemb, size_t size);
 
-int atoi(const char *s);
-long atol(const char *s);
-long labs(long x);
-long strtol(const char *nptr, char **endptr, int base);
-unsigned long strtoul(const char *nptr, char **endptr, int base);
+int                atoi(const char *s);
+long               atol(const char *s);
+long               labs(long x);
+long               strtol(const char *nptr, char **endptr, int base);
+unsigned long      strtoul(const char *nptr, char **endptr, int base);
 unsigned long long strtoull(const char *nptr, char **endptr, int base);
-double strtod(const char *nptr, char **endptr);
-float strtof(const char *nptr, char **endptr);
-void arc4random_buf(void *buf, size_t nbytes);
-void qsort(void *base, size_t nmemb, size_t size,
-	   int (*compar)(const void *, const void *));
-void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,
-	      int (*compar)(const void *, const void *));
+double             strtod(const char *nptr, char **endptr);
+float              strtof(const char *nptr, char **endptr);
+void               arc4random_buf(void *buf, size_t nbytes);
+void  qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *));
+void *bsearch(const void *key,
+              const void *base,
+              size_t      nmemb,
+              size_t      size,
+              int (*compar)(const void *, const void *));
 
 #ifdef __cplusplus
 }

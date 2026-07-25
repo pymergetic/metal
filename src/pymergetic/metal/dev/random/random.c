@@ -4,10 +4,10 @@
 #include <pymergetic/metal/dev/random/random.h>
 #include <runtime/time/time.h>
 
-#include <Uefi.h>
-#include <Library/BaseLib.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/PrintLib.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "wasm_export.h"
 
@@ -15,23 +15,22 @@
 uint32_t pm_metal_random_fill_port(void *dest, uint32_t len);
 uint64_t pm_metal_random_realtime_ms_port(void);
 
-STATIC wasm_module_inst_t  mRandInst;
-STATIC UINT64              mWeak;
-STATIC INT32               mWeakSeeded;
+static uint64_t mWeak;
+static int32_t  mWeakSeeded;
 
-STATIC INT32               mWallOffsetValid;
-STATIC INT64               mWallOffsetMs;
+static int32_t mWallOffsetValid;
+static int64_t mWallOffsetMs;
 
 /* Default: Europe/Berlin summer (+02:00). No DST engine. */
-STATIC INT32               mTzMin = 120;
-STATIC CHAR8               mTzName[32] = "Europe/Berlin";
+static int32_t mTzMin      = 120;
+static char    mTzName[32] = "Europe/Berlin";
 
 typedef struct {
-  CONST CHAR8  *name;
-  INT32         minutes;
+  const char *name;
+  int32_t     minutes;
 } metal_tz_ent_t;
 
-STATIC CONST metal_tz_ent_t  mTzTable[] = {
+static const metal_tz_ent_t mTzTable[] = {
   { "UTC", 0 },
   { "GMT", 0 },
   { "Europe/Berlin", 120 },
@@ -42,127 +41,93 @@ STATIC CONST metal_tz_ent_t  mTzTable[] = {
   { "Asia/Tokyo", 540 },
 };
 
-void
-pm_metal_random_bind_inst (
-  VOID  *module_inst
-  )
+uint32_t pm_metal_random(void *dest, uint32_t len)
 {
-  mRandInst = (wasm_module_inst_t)module_inst;
-}
-
-uint32_t
-pm_metal_random (
-  VOID      *dest,
-  uint32_t   len
-  )
-{
-  UINT8   *p;
-  UINT32   i;
-  UINT32   n;
+  uint8_t *p;
+  uint32_t i;
+  uint32_t n;
 
   if (dest == NULL || len == 0) {
     return 0;
   }
 
-  n = pm_metal_random_fill_port (dest, len);
+  n = pm_metal_random_fill_port(dest, len);
   if (n == len) {
     return len;
   }
 
   /* Weak fallback: mix mono_us. Documented insecure. */
   if (!mWeakSeeded) {
-    mWeak       = pm_metal_time_mono_us ();
+    mWeak       = pm_metal_time_mono_us();
     mWeakSeeded = 1;
   }
 
-  p = (UINT8 *)dest;
+  p = (uint8_t *)dest;
   for (i = 0; i < len; i++) {
     mWeak = mWeak * 6364136223846793005ULL + 1ULL;
-    p[i]  = (UINT8)(mWeak >> 33);
+    p[i]  = (uint8_t)(mWeak >> 33);
   }
 
   return len;
 }
 
-void
-pm_metal_realtime_set_unix_ms (
-  uint64_t  unix_ms
-  )
+void pm_metal_realtime_set_unix_ms(uint64_t unix_ms)
 {
-  UINT64  mono_ms;
+  uint64_t mono_ms;
 
-  mono_ms         = pm_metal_time_mono_us () / 1000u;
-  mWallOffsetMs   = (INT64)unix_ms - (INT64)mono_ms;
+  mono_ms          = pm_metal_time_mono_us() / 1000u;
+  mWallOffsetMs    = (int64_t)unix_ms - (int64_t)mono_ms;
   mWallOffsetValid = 1;
 }
 
-uint64_t
-pm_metal_realtime_ms (
-  VOID
-  )
+uint64_t pm_metal_realtime_ms(void)
 {
-  UINT64  ms;
+  uint64_t ms;
 
   if (mWallOffsetValid) {
-    return (uint64_t)((INT64)(pm_metal_time_mono_us () / 1000u) + mWallOffsetMs);
+    return (uint64_t)((int64_t)(pm_metal_time_mono_us() / 1000u) + mWallOffsetMs);
   }
 
-  ms = pm_metal_random_realtime_ms_port ();
+  ms = pm_metal_random_realtime_ms_port();
   if (ms != 0) {
     return ms;
   }
 
-  return pm_metal_time_mono_us () / 1000u;
+  return pm_metal_time_mono_us() / 1000u;
 }
 
-void
-pm_metal_tz_set_minutes (
-  int32_t  east_of_utc
-  )
+void pm_metal_tz_set_minutes(int32_t east_of_utc)
 {
   mTzMin = east_of_utc;
   {
-    INT32  abs_m;
+    int32_t abs_m;
 
     abs_m = (east_of_utc < 0) ? -east_of_utc : east_of_utc;
-    AsciiSPrint (
-      mTzName,
-      sizeof (mTzName),
-      "%c%02d%02d",
-      (east_of_utc < 0) ? '-' : '+',
-      abs_m / 60,
-      abs_m % 60
-      );
+    snprintf(mTzName,
+             sizeof(mTzName),
+             "%c%02d%02d",
+             (east_of_utc < 0) ? '-' : '+',
+             abs_m / 60,
+             abs_m % 60);
   }
 }
 
-int32_t
-pm_metal_tz_minutes (
-  VOID
-  )
+int32_t pm_metal_tz_minutes(void)
 {
   return mTzMin;
 }
 
-CONST CHAR8 *
-pm_metal_tz_name (
-  VOID
-  )
+const char *pm_metal_tz_name(void)
 {
   return mTzName;
 }
 
-STATIC
-INT32
-TzParseOffset (
-  CONST CHAR8  *spec,
-  INT32        *out_min
-  )
+static int32_t TzParseOffset(const char *spec, int32_t *out_min)
 {
-  CONST CHAR8  *p;
-  INT32         sign;
-  INT32         hh;
-  INT32         mm;
+  const char *p;
+  int32_t     sign;
+  int32_t     hh;
+  int32_t     mm;
 
   if (spec == NULL || out_min == NULL || spec[0] == '\0') {
     return -1;
@@ -200,28 +165,25 @@ TzParseOffset (
   return 0;
 }
 
-int
-pm_metal_tz_set (
-  CONST CHAR8  *spec
-  )
+int pm_metal_tz_set(const char *spec)
 {
-  UINT32  i;
-  INT32   mins;
+  uint32_t i;
+  int32_t  mins;
 
   if (spec == NULL || spec[0] == '\0') {
     return -1;
   }
 
-  if (TzParseOffset (spec, &mins) == 0) {
+  if (TzParseOffset(spec, &mins) == 0) {
     mTzMin = mins;
-    AsciiStrCpyS (mTzName, sizeof (mTzName), spec);
+    snprintf(mTzName, sizeof(mTzName), "%s", spec);
     return 0;
   }
 
-  for (i = 0; i < sizeof (mTzTable) / sizeof (mTzTable[0]); i++) {
-    if (AsciiStrCmp (spec, mTzTable[i].name) == 0) {
+  for (i = 0; i < sizeof(mTzTable) / sizeof(mTzTable[0]); i++) {
+    if (strcmp(spec, mTzTable[i].name) == 0) {
       mTzMin = mTzTable[i].minutes;
-      AsciiStrCpyS (mTzName, sizeof (mTzName), mTzTable[i].name);
+      snprintf(mTzName, sizeof(mTzName), "%s", mTzTable[i].name);
       return 0;
     }
   }
@@ -229,66 +191,54 @@ pm_metal_tz_set (
   return -1;
 }
 
-uint64_t
-pm_metal_tz_local_ms (
-  VOID
-  )
+uint64_t pm_metal_tz_local_ms(void)
 {
-  return pm_metal_realtime_ms () + (uint64_t)((INT64)mTzMin * 60ll * 1000ll);
+  return pm_metal_realtime_ms() + (uint64_t)((int64_t)mTzMin * 60ll * 1000ll);
 }
 
-STATIC UINT32
-pm_metal_random_native (
-  wasm_exec_env_t  exec_env,
-  UINT32           dest,
-  UINT32           len
-  )
+static uint32_t pm_metal_random_native(wasm_exec_env_t exec_env, uint32_t dest, uint32_t len)
 {
-  VOID  *native;
+  wasm_module_inst_t inst;
+  void              *native;
 
-  (VOID)exec_env;
-  if (mRandInst == NULL || len == 0) {
+  if (len == 0) {
     return 0;
   }
 
-  if (!wasm_runtime_validate_app_addr (mRandInst, dest, len)) {
+  inst = wasm_runtime_get_module_inst(exec_env);
+  if (inst == NULL) {
     return 0;
   }
 
-  native = wasm_runtime_addr_app_to_native (mRandInst, dest);
+  if (!wasm_runtime_validate_app_addr(inst, dest, len)) {
+    return 0;
+  }
+
+  native = wasm_runtime_addr_app_to_native(inst, dest);
   if (native == NULL) {
     return 0;
   }
 
-  return pm_metal_random (native, len);
+  return pm_metal_random(native, len);
 }
 
-STATIC UINT64
-pm_metal_realtime_ms_native (
-  wasm_exec_env_t  exec_env
-  )
+static uint64_t pm_metal_realtime_ms_native(wasm_exec_env_t exec_env)
 {
-  (VOID)exec_env;
-  return pm_metal_realtime_ms ();
+  (void)exec_env;
+  return pm_metal_realtime_ms();
 }
 
-STATIC NativeSymbol g_pm_metal_random_native_symbols[] = {
-  { "pm_metal_random", (VOID *)pm_metal_random_native, "(ii)i", NULL },
-  { "pm_metal_realtime_ms", (VOID *)pm_metal_realtime_ms_native, "()I", NULL },
+static NativeSymbol g_pm_metal_random_native_symbols[] = {
+  { "pm_metal_random", (void *)pm_metal_random_native, "(ii)i", NULL },
+  { "pm_metal_realtime_ms", (void *)pm_metal_realtime_ms_native, "()I", NULL },
 };
 
-int
-pm_metal_random_native_register (
-  VOID
-  )
+int pm_metal_random_native_register(void)
 {
-  if (!wasm_runtime_register_natives (
-         PM_METAL_RANDOM_WASI_MODULE,
-         g_pm_metal_random_native_symbols,
-         sizeof (g_pm_metal_random_native_symbols)
-           / sizeof (g_pm_metal_random_native_symbols[0])
-         ))
-  {
+  if (!wasm_runtime_register_natives(PM_METAL_RANDOM_WASI_MODULE,
+                                     g_pm_metal_random_native_symbols,
+                                     sizeof(g_pm_metal_random_native_symbols) /
+                                       sizeof(g_pm_metal_random_native_symbols[0]))) {
     return -1;
   }
 

@@ -22,55 +22,47 @@ extern "C" {
 #if !defined(__wasm__)
 
 /** Max tokens per line (including argv[0]). */
-#define PM_METAL_SHELL_ARGV_MAX  16u
+#define PM_METAL_SHELL_ARGV_MAX 16u
 
 typedef void (*pm_metal_shell_cmd_fn)(int argc, char **argv);
 
 typedef struct pm_metal_shell_cmd {
-	const char *name;
-	const char *help;
-	pm_metal_shell_cmd_fn fn;
+  const char           *name;
+  const char           *help;
+  pm_metal_shell_cmd_fn fn;
 } pm_metal_shell_cmd_t;
 
 /** One module's command list — always 16 bytes so section walk is LTO-safe. */
 typedef struct pm_metal_shell_cmd_table {
-	const pm_metal_shell_cmd_t *cmds;
-	uint32_t count;
-	uint8_t _pad[16u - sizeof(void *) - sizeof(uint32_t)];
+  const pm_metal_shell_cmd_t *cmds;
+  uint32_t                    count;
+  uint8_t                     _pad[16u - sizeof(void *) - sizeof(uint32_t)];
 } pm_metal_shell_cmd_table_t;
 
-
 /** Max commands gathered from all tables (raise if install truncates). */
-#define PM_METAL_SHELL_CMD_MAX  128u
+#define PM_METAL_SHELL_CMD_MAX 128u
 
 /**
  * Place one command in the auto-register section.
  * `var` must be a unique static identifier in the translation unit.
  */
-#define PM_METAL_SHELL_CMD(var, name_str, help_str, fn_)                    \
-	static const pm_metal_shell_cmd_t var##_cmd = {                     \
-		(name_str), (help_str), (fn_)                               \
-	};                                                                  \
-	static const pm_metal_shell_cmd_table_t var                         \
-		__attribute__((used, section(".pm_metal_shell_cmds.1"),     \
-			       aligned(16))) = { &var##_cmd, 1u }
+#define PM_METAL_SHELL_CMD(var, name_str, help_str, fn_)                                 \
+  static const pm_metal_shell_cmd_t       var##_cmd = { (name_str), (help_str), (fn_) }; \
+  static const pm_metal_shell_cmd_table_t var                                            \
+    __attribute__((used, section(".pm_metal_shell_cmds.1"), aligned(16))) = { &var##_cmd, 1u }
 
 /**
  * Multi-command table. Use with PM_METAL_SHELL_CMDS_END:
  *   PM_METAL_SHELL_CMDS(g_core) = { { "help", "...", fn }, ... };
  *   PM_METAL_SHELL_CMDS_END(g_core);
  */
-#define PM_METAL_SHELL_CMDS(arr)                                            \
-	static const pm_metal_shell_cmd_t arr##_cmds[]
+#define PM_METAL_SHELL_CMDS(arr) static const pm_metal_shell_cmd_t arr##_cmds[]
 
-#define PM_METAL_SHELL_CMDS_END(arr)                                        \
-	static const pm_metal_shell_cmd_table_t arr                         \
-		__attribute__((used, section(".pm_metal_shell_cmds.1"),     \
-			       aligned(16))) = {                            \
-			arr##_cmds,                                         \
-			(unsigned)(sizeof (arr##_cmds) /                    \
-				   sizeof (arr##_cmds[0]))                  \
-		}
+#define PM_METAL_SHELL_CMDS_END(arr)                                          \
+  static const pm_metal_shell_cmd_table_t arr                                 \
+    __attribute__((used, section(".pm_metal_shell_cmds.1"), aligned(16))) = { \
+      arr##_cmds, (unsigned)(sizeof(arr##_cmds) / sizeof(arr##_cmds[0]))      \
+    }
 
 /** Register one top-level command (rarely needed). */
 void pm_metal_shell_cmd_register(const pm_metal_shell_cmd_t *cmd);

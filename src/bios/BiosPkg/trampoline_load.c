@@ -148,7 +148,7 @@ trampoline_load_elf64(void)
 		return 0;
 	/* Prefer 64-bit entry from .bootinfo at Metal paddr ('METL' + ptr). */
 	{
-		u32 *bi = (u32 *)phys_ptr(0x400000u);
+		u32 *bi = (u32 *)phys_ptr(0x800000u);
 		if (bi[0] == 0x4C54454D) {
 			/* Fill Multiboot1 handoff slots for entry64. */
 			bi[4] = mb_magic; /* metal_boot_magic */

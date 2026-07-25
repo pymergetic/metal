@@ -31,4 +31,4 @@ See [docs/COOP_MEMORY.md](../../docs/COOP_MEMORY.md).
 
 ## Related archive
 
-Hosted ports: `archive/multi-host-linux-zephyr-nuttx`.
+Hosted ports: `archive/multi-host`.

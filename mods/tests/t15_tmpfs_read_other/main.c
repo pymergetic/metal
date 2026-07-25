@@ -13,14 +13,14 @@
 
 int main(void)
 {
-	int fd = open("/other/hello.txt", O_RDONLY);
+  int fd = open("/other/hello.txt", O_RDONLY);
 
-	if (fd < 0) {
-		printf("t15_tmpfs_read_other: open failed (expected)\n");
-		return 0;
-	}
+  if (fd < 0) {
+    printf("t15_tmpfs_read_other: open failed (expected)\n");
+    return 0;
+  }
 
-	close(fd);
-	printf("t15_tmpfs_read_other: unexpectedly found a file\n");
-	return 1;
+  close(fd);
+  printf("t15_tmpfs_read_other: unexpectedly found a file\n");
+  return 1;
 }

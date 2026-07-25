@@ -1,6 +1,6 @@
 /* 32-bit Multiboot1 trampoline for QEMU -kernel (ELF32 only).
  *
- * Linked at 1MiB; embeds Metal ELF64 and copies it to 4MiB. Stack at 0x90000.
+ * Linked at 1MiB; embeds Metal ELF64 and copies it to 8MiB. Stack at 0x90000.
  * long_mode is in trampoline64.S (assembled -m64, objcopy→elf32).
  */
 	.section .multiboot, "a"

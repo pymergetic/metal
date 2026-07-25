@@ -33,3 +33,10 @@ InterlockedCompareExchange32(volatile UINT32 *Value, UINT32 CompareValue,
 {
   return __sync_val_compare_and_swap(Value, CompareValue, ExchangeValue);
 }
+
+UINT64
+InterlockedCompareExchange64(volatile UINT64 *Value, UINT64 CompareValue,
+			     UINT64 ExchangeValue)
+{
+  return __sync_val_compare_and_swap(Value, CompareValue, ExchangeValue);
+}

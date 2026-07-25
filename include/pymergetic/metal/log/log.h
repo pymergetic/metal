@@ -48,18 +48,9 @@ void pm_metal_log(const char *line);
 /** Append one line with a semantic style. */
 void pm_metal_log_styled(pm_metal_log_style_t style, const char *line);
 
-/**
- * printf-style append (DEFAULT style).
- * On EFI, EFIAPI so VA_LIST matches PrintLib (ms_abi).
- */
-#if defined(EFIAPI)
-void EFIAPI pm_metal_logf(const char *fmt, ...);
-void EFIAPI pm_metal_logf_styled(pm_metal_log_style_t style, const char *fmt,
-				 ...);
-#else
+/** printf-style append (DEFAULT style). */
 void pm_metal_logf(const char *fmt, ...);
 void pm_metal_logf_styled(pm_metal_log_style_t style, const char *fmt, ...);
-#endif
 
 /**
  * Close UEFI viewport at EBS; remember marker for UART resume.

@@ -1,5 +1,5 @@
 /** @file
-  metal.efi smoke: runloop + coro/task load (docs/COOP_MEMORY.md).
+  metal.efi smoke: runloop + async fiber load (docs/COOP_MEMORY.md).
 **/
 #ifndef METAL_SMOKE_H_
 #define METAL_SMOKE_H_

@@ -37,7 +37,7 @@ Details: `IO.md`, `LIBC_ASYNC.md`.
 
 - [ ] Spike kernel µPy per [`MICROPYTHON.md`](MICROPYTHON.md): Python task =
       Metal task, MAP blob, Metal awaitables, ≥2 overlapping tasks on multi-CPU,
-      no GIL; then bind/`metal.async`, C↔Py trampolines, signed zip (see integration
+      no GIL; then bind/`metal.aio`, C↔Py trampolines, signed zip (see integration
       checklist in that doc)
 
 ## Optional / later

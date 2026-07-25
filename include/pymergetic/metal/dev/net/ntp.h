@@ -26,22 +26,20 @@ extern "C" {
 
 #if defined(__wasm__)
 #include "pymergetic/metal/wasi.h"
-#define PM_METAL_NET_NTP_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_NET_NTP_WASI_MODULE, name)
+#define PM_METAL_NET_NTP_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_NET_NTP_WASI_MODULE, name)
 
 extern pm_metal_async_handle_t pm_metal_net_ntp_sync(const char *host)
-	PM_METAL_NET_NTP_IMPORT(pm_metal_net_ntp_sync);
+  PM_METAL_NET_NTP_IMPORT(pm_metal_net_ntp_sync);
 extern uint32_t pm_metal_net_ntp_status(pm_metal_async_handle_t h)
-	PM_METAL_NET_NTP_IMPORT(pm_metal_net_ntp_status);
+  PM_METAL_NET_NTP_IMPORT(pm_metal_net_ntp_status);
 extern uint64_t pm_metal_net_ntp_last_unix_ms(void)
-	PM_METAL_NET_NTP_IMPORT(pm_metal_net_ntp_last_unix_ms);
+  PM_METAL_NET_NTP_IMPORT(pm_metal_net_ntp_last_unix_ms);
 #else
 pm_metal_async_handle_t pm_metal_net_ntp_sync(const char *host);
-uint32_t pm_metal_net_ntp_status(pm_metal_async_handle_t h);
-uint64_t pm_metal_net_ntp_last_unix_ms(void);
+uint32_t                pm_metal_net_ntp_status(pm_metal_async_handle_t h);
+uint64_t                pm_metal_net_ntp_last_unix_ms(void);
 
 int pm_metal_net_ntp_native_register(void);
-void pm_metal_net_ntp_bind_inst(void *module_inst);
 #endif
 
 #ifdef __cplusplus

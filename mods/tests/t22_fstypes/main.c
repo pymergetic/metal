@@ -8,20 +8,20 @@
 
 int main(void)
 {
-	int n = pm_metal_mount_fstype_count();
-	int i;
-	char name[32];
+  int  n = pm_metal_mount_fstype_count();
+  int  i;
+  char name[32];
 
-	if (n <= 0) {
-		printf("t22_fstypes: count failed\n");
-		return 1;
-	}
-	for (i = 0; i < n; i++) {
-		if (pm_metal_mount_fstype_name((unsigned)i, name, sizeof(name)) != 0) {
-			printf("t22_fstypes: name(%d) failed\n", i);
-			return 1;
-		}
-		printf("%s\n", name);
-	}
-	return 0;
+  if (n <= 0) {
+    printf("t22_fstypes: count failed\n");
+    return 1;
+  }
+  for (i = 0; i < n; i++) {
+    if (pm_metal_mount_fstype_name((unsigned)i, name, sizeof(name)) != 0) {
+      printf("t22_fstypes: name(%d) failed\n", i);
+      return 1;
+    }
+    printf("%s\n", name);
+  }
+  return 0;
 }

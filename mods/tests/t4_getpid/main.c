@@ -10,8 +10,8 @@
 
 int main(void)
 {
-	const char *pid = getenv("PID");
+  const char *pid = getenv("PID");
 
-	printf("t4_getpid: PID=%s\n", pid ? pid : "(unset)");
-	return 0;
+  printf("t4_getpid: PID=%s\n", pid ? pid : "(unset)");
+  return 0;
 }

@@ -3,148 +3,78 @@
 **/
 #include <runtime/task/task.h>
 #include <runtime/run/run.h>
-#include <runtime/mem/mem.h>
+#include <pymergetic/metal/runtime/mem/mem.h>
+#include <runtime/slot/slot_table.h>
+#include <runtime/slot/spin.h>
+#include <runtime/time/cpu.h>
 
-#include <Uefi.h>
-#include <Library/BaseLib.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/CpuLib.h>
-#include <Library/SynchronizationLib.h>
+#include <string.h>
 
-STATIC volatile UINT32  mCreateTaskRr;
-STATIC unsigned         mAffinityCpu;
-STATIC INT32            mAffinityOn;
+static volatile uint32_t mCreateTaskRr;
 
-STATIC
-unsigned
-MetalPickCpu (
-  VOID
-  )
+static unsigned MetalPickCpu(void)
 {
-  unsigned  n;
-  UINT32    ticket;
+  unsigned n;
+  uint32_t ticket;
 
-  if (mAffinityOn) {
-    return mAffinityCpu;
-  }
-
-  n = pm_metal_mem_n_cpus ();
+  n = pm_metal_mem_n_cpus();
   if (n <= 1) {
     return 0;
   }
 
-  ticket = InterlockedIncrement (&mCreateTaskRr);
+  ticket = pm_metal_atomic_inc32(&mCreateTaskRr);
   return (unsigned)((ticket - 1u) % n);
 }
 
-void
-pm_metal_task_affinity_set (
-  unsigned  cpu
-  )
-{
-  unsigned  n;
-
-  n = pm_metal_mem_n_cpus ();
-  if (n == 0) {
-    n = 1;
-  }
-
-  if (cpu >= n) {
-    cpu = 0;
-  }
-
-  mAffinityCpu = cpu;
-  mAffinityOn  = 1;
-}
-
-void
-pm_metal_task_affinity_clear (
-  VOID
-  )
-{
-  mAffinityOn = 0;
-}
-
-int
-pm_metal_task_affinity_get (
-  unsigned  *cpu_out
-  )
-{
-  if (!mAffinityOn) {
-    return 0;
-  }
-
-  if (cpu_out != NULL) {
-    *cpu_out = mAffinityCpu;
-  }
-
-  return 1;
-}
-
-void
-pm_metal_task_ref (
-  pm_metal_task_t  *task
-  )
+void pm_metal_task_ref(pm_metal_task_t *task)
 {
   if (task == NULL) {
     return;
   }
 
-  (VOID)InterlockedIncrement (&task->refs);
+  (void)pm_metal_atomic_inc32(&task->refs);
 }
 
-void
-pm_metal_task_unref (
-  pm_metal_task_t  *task
-  )
+void pm_metal_task_unref(pm_metal_task_t *task)
 {
-  UINT32  prev;
+  uint32_t prev;
 
   if (task == NULL) {
     return;
   }
 
-  prev = InterlockedCompareExchange32 (&task->refs, 0, 0);
+  prev = pm_metal_slot_port_cas32(&task->refs, 0, 0);
   for (;;) {
     if (prev == 0) {
       return;
     }
 
-    if (InterlockedCompareExchange32 (&task->refs, prev, prev - 1) == prev) {
+    if (pm_metal_slot_port_cas32(&task->refs, prev, prev - 1) == prev) {
       return;
     }
 
-    prev = InterlockedCompareExchange32 (&task->refs, 0, 0);
+    prev = pm_metal_slot_port_cas32(&task->refs, 0, 0);
   }
 }
 
-STATIC
-void
-MetalWakeTaskWaiter (
-  pm_metal_task_t  *task
-  )
+static void MetalWakeTaskWaiter(pm_metal_task_t *task)
 {
-  pm_metal_coro_t  *w;
+  pm_metal_coro_t *w;
 
   if (task == NULL) {
     return;
   }
 
-  w = task->waiter;
+  w            = task->waiter;
   task->waiter = NULL;
   if (w == NULL || w->owner == NULL) {
     return;
   }
 
-  (VOID)pm_metal_task_spawn (w->owner, w->owner->cpu);
+  (void)pm_metal_task_spawn(w->owner, w->owner->cpu);
 }
 
-STATIC
-void
-MetalFinishTask (
-  pm_metal_task_t   *task,
-  pm_metal_status_t  st
-  )
+static void MetalFinishTask(pm_metal_task_t *task, pm_metal_status_t st)
 {
   if (task->coro != NULL) {
     task->result = task->coro->result;
@@ -152,46 +82,39 @@ MetalFinishTask (
 
   /* Status before wake — pairs with await_task's waiter-then-recheck. */
   task->status = st;
-  MemoryFence ();
-  MetalWakeTaskWaiter (task);
+  pm_metal_mem_fence();
+  MetalWakeTaskWaiter(task);
 
   if (task->stop_on_done) {
-    unsigned  n;
-    unsigned  i;
+    unsigned n;
+    unsigned i;
 
     /* Drain every looper — workers may have been spawned off cpu0. */
-    n = pm_metal_mem_n_cpus ();
+    n = pm_metal_mem_n_cpus();
     if (n == 0) {
       n = 1;
     }
 
     for (i = 0; i < n; i++) {
-      (VOID)pm_metal_run_post (i, PM_METAL_RUN_MSG_STOP, 0);
+      (void)pm_metal_run_post(i, PM_METAL_RUN_MSG_STOP, 0);
     }
   }
 }
 
-pm_metal_task_t *
-pm_metal_task_new (
-  pm_metal_coro_t  *coro
-  )
+pm_metal_task_t *pm_metal_task_new(pm_metal_coro_t *coro)
 {
-  pm_metal_task_t  *t;
+  pm_metal_task_t *t;
 
   if (coro == NULL) {
     return NULL;
   }
 
-  t = (pm_metal_task_t *)pm_metal_mem_alloc (
-                           sizeof (*t),
-                           PM_METAL_MEM_HEAP,
-                           PM_METAL_MEM_ID_NONE
-                           );
+  t = (pm_metal_task_t *)pm_metal_mem_alloc(sizeof(*t), PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
   if (t == NULL) {
     return NULL;
   }
 
-  ZeroMem (t, sizeof (*t));
+  memset(t, 0, sizeof(*t));
   t->coro     = coro;
   t->status   = PM_METAL_PENDING;
   t->refs     = 1; /* owner hold */
@@ -199,37 +122,31 @@ pm_metal_task_new (
   return t;
 }
 
-pm_metal_task_t *
-pm_metal_create_task (
-  pm_metal_coro_t  *coro
-  )
+pm_metal_task_t *pm_metal_create_task(pm_metal_coro_t *coro)
 {
-  pm_metal_task_t  *t;
-  unsigned          cpu;
+  pm_metal_task_t *t;
+  unsigned         cpu;
 
-  t = pm_metal_task_new (coro);
+  t = pm_metal_task_new(coro);
   if (t == NULL) {
     return NULL;
   }
 
-  cpu = MetalPickCpu ();
-  if (pm_metal_task_spawn (t, cpu) != 0) {
+  cpu = MetalPickCpu();
+  if (pm_metal_task_spawn(t, cpu) != 0) {
     t->coro->owner = NULL;
-    t->coro       = NULL;
-    t->refs       = 0;
-    pm_metal_mem_free (t);
+    t->coro        = NULL;
+    t->refs        = 0;
+    pm_metal_mem_free(t);
     return NULL;
   }
 
   return t;
 }
 
-void
-pm_metal_task_destroy (
-  pm_metal_task_t  *task
-  )
+void pm_metal_task_destroy(pm_metal_task_t *task)
 {
-  UINT32  spins;
+  uint32_t spins;
 
   if (task == NULL) {
     return;
@@ -241,58 +158,54 @@ pm_metal_task_destroy (
    * polling runners while we wait.
    */
   task->cancelled = 1;
-  MemoryFence ();
+  pm_metal_mem_fence();
   if (task->doomed == 0) {
-    (VOID)pm_metal_task_spawn (task, task->cpu);
+    (void)pm_metal_task_spawn(task, task->cpu);
   }
 
   spins = 0;
   while (task->busy != 0) {
-    pm_metal_run_poll_all ();
-    CpuPause ();
+    pm_metal_run_poll_all();
+    pm_metal_cpu_pause();
     if (++spins > 1000000u) {
       break;
     }
   }
 
   task->doomed = 1;
-  MemoryFence ();
+  pm_metal_mem_fence();
 
   spins = 0;
-  while (InterlockedCompareExchange32 (&task->refs, 0, 0) > 1) {
-    pm_metal_run_poll_all ();
-    CpuPause ();
+  while (pm_metal_slot_port_cas32(&task->refs, 0, 0) > 1) {
+    pm_metal_run_poll_all();
+    pm_metal_cpu_pause();
     if (++spins > 1000000u) {
       break;
     }
   }
 
   if (task->coro != NULL) {
-    pm_metal_coro_close (task->coro);
+    pm_metal_coro_close(task->coro);
     task->coro = NULL;
   }
 
   /* Timers dropped by coro_close may have released holds — wait again. */
   spins = 0;
-  while (InterlockedCompareExchange32 (&task->refs, 0, 0) > 1) {
-    pm_metal_run_poll_all ();
-    CpuPause ();
+  while (pm_metal_slot_port_cas32(&task->refs, 0, 0) > 1) {
+    pm_metal_run_poll_all();
+    pm_metal_cpu_pause();
     if (++spins > 1000000u) {
       break;
     }
   }
 
   task->refs = 0;
-  pm_metal_mem_free (task);
+  pm_metal_mem_free(task);
 }
 
-int
-pm_metal_task_spawn (
-  pm_metal_task_t  *task,
-  unsigned          cpu
-  )
+int pm_metal_task_spawn(pm_metal_task_t *task, unsigned cpu)
 {
-  int  rc;
+  int rc;
 
   if (task == NULL) {
     return -1;
@@ -303,64 +216,49 @@ pm_metal_task_spawn (
   }
 
   task->cpu = cpu;
-  if (task->status != PM_METAL_DONE
-      && task->status != PM_METAL_ERROR
-      && task->status != PM_METAL_CANCELLED)
-  {
+  if (task->status != PM_METAL_DONE && task->status != PM_METAL_ERROR &&
+      task->status != PM_METAL_CANCELLED) {
     task->status = PM_METAL_PENDING;
   }
 
-  pm_metal_task_ref (task);
-  rc = pm_metal_run_post_ex (
-         cpu,
-         PM_METAL_RUN_MSG_TASK,
-         0,
-         (uint64_t)(UINTN)(VOID *)task
-         );
+  pm_metal_task_ref(task);
+  rc = pm_metal_run_post_ex(cpu, PM_METAL_RUN_MSG_TASK, 0, (uint64_t)(uintptr_t)(void *)task);
   if (rc != 0) {
-    pm_metal_task_unref (task);
+    pm_metal_task_unref(task);
   }
 
   return rc;
 }
 
-STATIC
-pm_metal_status_t
-MetalTaskStepLocked (
-  pm_metal_task_t  *task
-  )
+static pm_metal_status_t MetalTaskStepLocked(pm_metal_task_t *task)
 {
-  if (task->status == PM_METAL_DONE
-      || task->status == PM_METAL_ERROR
-      || task->status == PM_METAL_CANCELLED)
-  {
+  if (task->status == PM_METAL_DONE || task->status == PM_METAL_ERROR ||
+      task->status == PM_METAL_CANCELLED) {
     return task->status;
   }
 
   if (task->cancelled) {
-    MetalFinishTask (task, PM_METAL_CANCELLED);
+    MetalFinishTask(task, PM_METAL_CANCELLED);
     return PM_METAL_CANCELLED;
   }
 
   for (;;) {
-    pm_metal_coro_t   *leaf;
-    pm_metal_status_t  st;
+    pm_metal_coro_t  *leaf;
+    pm_metal_status_t st;
 
     leaf = task->coro;
     while (leaf->awaiting != NULL) {
       leaf = leaf->awaiting;
     }
 
-    if (leaf->status == PM_METAL_DONE
-        || leaf->status == PM_METAL_ERROR
-        || leaf->status == PM_METAL_CANCELLED)
-    {
-      pm_metal_coro_t  *parent;
-      pm_metal_coro_t  *child;
+    if (leaf->status == PM_METAL_DONE || leaf->status == PM_METAL_ERROR ||
+        leaf->status == PM_METAL_CANCELLED) {
+      pm_metal_coro_t *parent;
+      pm_metal_coro_t *child;
 
       parent = leaf->waiter;
       if (parent == NULL) {
-        MetalFinishTask (task, leaf->status);
+        MetalFinishTask(task, leaf->status);
         return task->status;
       }
 
@@ -374,9 +272,9 @@ MetalTaskStepLocked (
       parent->awaiting = NULL;
       child->waiter    = NULL;
 
-      st = parent->fn (parent);
+      st             = parent->fn(parent);
       parent->status = st;
-      pm_metal_coro_close (child);
+      pm_metal_coro_close(child);
 
       if (st == PM_METAL_WAITING) {
         if (parent->awaiting != NULL) {
@@ -389,22 +287,19 @@ MetalTaskStepLocked (
 
       if (st == PM_METAL_PENDING) {
         task->status = PM_METAL_PENDING;
-        (VOID)pm_metal_task_spawn (task, task->cpu);
+        (void)pm_metal_task_spawn(task, task->cpu);
         return PM_METAL_PENDING;
       }
 
-      if (st == PM_METAL_DONE
-          || st == PM_METAL_ERROR
-          || st == PM_METAL_CANCELLED)
-      {
+      if (st == PM_METAL_DONE || st == PM_METAL_ERROR || st == PM_METAL_CANCELLED) {
         continue;
       }
 
-      MetalFinishTask (task, PM_METAL_ERROR);
+      MetalFinishTask(task, PM_METAL_ERROR);
       return PM_METAL_ERROR;
     }
 
-    st = leaf->fn (leaf);
+    st           = leaf->fn(leaf);
     leaf->status = st;
 
     if (st == PM_METAL_WAITING) {
@@ -418,28 +313,22 @@ MetalTaskStepLocked (
 
     if (st == PM_METAL_PENDING) {
       task->status = PM_METAL_PENDING;
-      (VOID)pm_metal_task_spawn (task, task->cpu);
+      (void)pm_metal_task_spawn(task, task->cpu);
       return PM_METAL_PENDING;
     }
 
-    if (st == PM_METAL_DONE
-        || st == PM_METAL_ERROR
-        || st == PM_METAL_CANCELLED)
-    {
+    if (st == PM_METAL_DONE || st == PM_METAL_ERROR || st == PM_METAL_CANCELLED) {
       continue;
     }
 
-    MetalFinishTask (task, PM_METAL_ERROR);
+    MetalFinishTask(task, PM_METAL_ERROR);
     return PM_METAL_ERROR;
   }
 }
 
-pm_metal_status_t
-pm_metal_task_step (
-  pm_metal_task_t  *task
-  )
+pm_metal_status_t pm_metal_task_step(pm_metal_task_t *task)
 {
-  pm_metal_status_t  st;
+  pm_metal_status_t st;
 
   if (task == NULL || task->coro == NULL) {
     return PM_METAL_ERROR;
@@ -449,44 +338,34 @@ pm_metal_task_step (
     Duplicate inbox posts (migrate, timer+wake) must not step in parallel —
     that races coro/heap state across CPUs.
 
-    EDK2 InterlockedCompareExchange32 (Value, Compare, Exchange).
+    pm_metal_slot_port_cas32(v, cmp, new) — cmp-and-swap, cmp==0 means idle.
   */
-  if (InterlockedCompareExchange32 (&task->busy, 0, 1) != 0) {
-    (VOID)InterlockedCompareExchange32 (&task->pending_wake, 0, 1);
+  if (pm_metal_slot_port_cas32(&task->busy, 0, 1) != 0) {
+    (void)pm_metal_slot_port_cas32(&task->pending_wake, 0, 1);
     return task->status;
   }
 
   do {
-    (VOID)InterlockedCompareExchange32 (&task->pending_wake, 1, 0);
-    st = MetalTaskStepLocked (task);
-    if (st == PM_METAL_DONE
-        || st == PM_METAL_ERROR
-        || st == PM_METAL_CANCELLED)
-    {
+    (void)pm_metal_slot_port_cas32(&task->pending_wake, 1, 0);
+    st = MetalTaskStepLocked(task);
+    if (st == PM_METAL_DONE || st == PM_METAL_ERROR || st == PM_METAL_CANCELLED) {
       break;
     }
   } while (task->pending_wake != 0);
 
-  (VOID)InterlockedCompareExchange32 (&task->busy, 1, 0);
-  if (InterlockedCompareExchange32 (&task->pending_wake, 1, 0) != 0) {
-    if (st != PM_METAL_DONE
-        && st != PM_METAL_ERROR
-        && st != PM_METAL_CANCELLED)
-    {
-      (VOID)pm_metal_task_spawn (task, task->cpu);
+  (void)pm_metal_slot_port_cas32(&task->busy, 1, 0);
+  if (pm_metal_slot_port_cas32(&task->pending_wake, 1, 0) != 0) {
+    if (st != PM_METAL_DONE && st != PM_METAL_ERROR && st != PM_METAL_CANCELLED) {
+      (void)pm_metal_task_spawn(task, task->cpu);
     }
   }
 
   return st;
 }
 
-pm_metal_status_t
-pm_metal_await_task (
-  pm_metal_coro_t  *self,
-  pm_metal_task_t  *task
-  )
+pm_metal_status_t pm_metal_await_task(pm_metal_coro_t *self, pm_metal_task_t *task)
 {
-  pm_metal_coro_t  *prev;
+  pm_metal_coro_t *prev;
 
   if (self == NULL || task == NULL) {
     return PM_METAL_ERROR;
@@ -506,12 +385,10 @@ pm_metal_await_task (
     complete between the check and the publish (lost wakeup → hang).
   */
   task->waiter = self;
-  MemoryFence ();
+  pm_metal_mem_fence();
 
-  if (task->status == PM_METAL_DONE
-      || task->status == PM_METAL_ERROR
-      || task->status == PM_METAL_CANCELLED)
-  {
+  if (task->status == PM_METAL_DONE || task->status == PM_METAL_ERROR ||
+      task->status == PM_METAL_CANCELLED) {
     task->waiter = NULL;
     self->result = task->result;
     return task->status;
@@ -521,63 +398,48 @@ pm_metal_await_task (
   return PM_METAL_WAITING;
 }
 
-pm_metal_status_t
-pm_metal_task_status (
-  pm_metal_task_t  *task
-  )
+pm_metal_status_t pm_metal_task_status(pm_metal_task_t *task)
 {
   return (task != NULL) ? task->status : PM_METAL_ERROR;
 }
 
-void *
-pm_metal_task_result (
-  pm_metal_task_t  *task
-  )
+void *pm_metal_task_result(pm_metal_task_t *task)
 {
   return (task != NULL) ? task->result : NULL;
 }
 
-void
-pm_metal_task_cancel (
-  pm_metal_task_t  *task
-  )
+void pm_metal_task_cancel(pm_metal_task_t *task)
 {
   if (task == NULL) {
     return;
   }
 
   task->cancelled = 1;
-  if (task->status != PM_METAL_DONE
-      && task->status != PM_METAL_ERROR
-      && task->status != PM_METAL_CANCELLED)
-  {
-    (VOID)pm_metal_task_spawn (task, task->cpu);
+  if (task->status != PM_METAL_DONE && task->status != PM_METAL_ERROR &&
+      task->status != PM_METAL_CANCELLED) {
+    (void)pm_metal_task_spawn(task, task->cpu);
   }
 }
 
-int
-pm_metal_task_run (
-  pm_metal_coro_t  *main,
-  unsigned          cpu
-  )
+int pm_metal_task_run(pm_metal_coro_t *main, unsigned cpu)
 {
-  pm_metal_task_t  *t;
+  pm_metal_task_t *t;
 
   if (main == NULL) {
     return -1;
   }
 
-  t = pm_metal_create_task (main);
+  t = pm_metal_create_task(main);
   if (t == NULL) {
     return -1;
   }
 
   t->stop_on_done = 1;
   if (t->cpu != cpu) {
-    (VOID)pm_metal_task_spawn (t, cpu);
+    (void)pm_metal_task_spawn(t, cpu);
   }
 
-  pm_metal_run_enter (cpu);
+  pm_metal_run_enter(cpu);
 
   return (t->status == PM_METAL_DONE) ? 0 : -1;
 }

@@ -13,7 +13,7 @@
 #endif
 
 #define PM_METAL_VIS_RUNTIME 1
-#define PM_METAL_VIS_DEBUG 2
+#define PM_METAL_VIS_DEBUG   2
 
 #define PM_METAL_API(ret, name, args) ret name args
 

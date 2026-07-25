@@ -22,7 +22,7 @@ Do **not** enable LLVM JIT (`WAMR_BUILD_JIT` / `WASM_ENABLE_JIT`) — that pulls
 - Platform: `src/pymergetic/metal/guest/wamr/efi_platform.c` — `os_mmap` = `BH_MALLOC`, `os_mprotect` **stub returns 0** (assumes RAM is executable; AOT already relies on this)
 - EFI flags: `src/efi/MetalPkg/Metal.inf` — `WASM_ENABLE_INTERP=1`, `WASM_ENABLE_FAST_INTERP=1`, `WASM_ENABLE_AOT=1`, **no** `WASM_ENABLE_FAST_JIT`
 - BIOS: `scripts/build.d/port/efi/…` pattern mirrored in `scripts/build.d/port/bios/default.sh` (WAMR sources listed by hand)
-- Doom package: `doom.wasm` + `doom.x86_64.aot` + `doom.i386.aot`; load prefers matching AOT then wasm (`wasm.c` `pm_metal_wasm_run_mod`)
+- Doom package: `doom.wasm` + `doom.x86_64.aot` + `doom.i386.aot`; load prefers matching AOT then wasm (`pm_metal_wasm_mod_fetch`)
 - Offline AOT: `scripts/lib/aot.sh` / `scripts/build.d/port/efi/doom.sh`
 
 ## Goal

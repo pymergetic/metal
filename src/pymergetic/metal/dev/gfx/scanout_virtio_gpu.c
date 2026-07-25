@@ -1,14 +1,15 @@
 /** @file
   virtio-gpu scanout — RESOURCE_FLUSH present (QEMU reference GPU path).
 **/
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
 #include <pymergetic/metal/dev/gfx/scanout.h>
 #include <pymergetic/metal/bus/virtio/virtio.h>
-#include <runtime/mem/mem.h>
+#include <pymergetic/metal/runtime/mem/mem.h>
+#include <runtime/time/cpu.h>
 #include <runtime/time/time.h>
-
-#include <Uefi.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/BaseLib.h>
 
 #define VIRTIO_GPU_CMD_GET_DISPLAY_INFO        0x0100u
 #define VIRTIO_GPU_CMD_RESOURCE_CREATE_2D      0x0101u
@@ -18,187 +19,167 @@
 #define VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D     0x0105u
 #define VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING 0x0106u
 
-#define VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM  2u
-#define VIRTIO_GPU_FLAG_FENCE             (1u << 0)
+#define VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM 2u
+#define VIRTIO_GPU_FLAG_FENCE            (1u << 0)
 
-#pragma pack (1)
+#pragma pack(1)
 typedef struct {
-  UINT32  Type;
-  UINT32  Flags;
-  UINT64  FenceId;
-  UINT32  CtxId;
-  UINT32  Padding;
+  uint32_t Type;
+  uint32_t Flags;
+  uint64_t FenceId;
+  uint32_t CtxId;
+  uint32_t Padding;
 } vgpu_ctrl_hdr_t;
 
 typedef struct {
-  vgpu_ctrl_hdr_t  Hdr;
-  UINT32           ResourceId;
-  UINT32           Format;
-  UINT32           Width;
-  UINT32           Height;
+  vgpu_ctrl_hdr_t Hdr;
+  uint32_t        ResourceId;
+  uint32_t        Format;
+  uint32_t        Width;
+  uint32_t        Height;
 } vgpu_res_create_2d_t;
 
 typedef struct {
-  UINT64  Addr;
-  UINT32  Length;
-  UINT32  Padding;
+  uint64_t Addr;
+  uint32_t Length;
+  uint32_t Padding;
 } vgpu_mem_entry_t;
 
 typedef struct {
-  vgpu_ctrl_hdr_t  Hdr;
-  UINT32           ResourceId;
-  UINT32           NrEntries;
+  vgpu_ctrl_hdr_t Hdr;
+  uint32_t        ResourceId;
+  uint32_t        NrEntries;
 } vgpu_attach_backing_t;
 
 typedef struct {
-  INT32  X;
-  INT32  Y;
-  UINT32 W;
-  UINT32 H;
+  int32_t  X;
+  int32_t  Y;
+  uint32_t W;
+  uint32_t H;
 } vgpu_rect_t;
 
 typedef struct {
-  vgpu_ctrl_hdr_t  Hdr;
-  UINT32           ScanoutId;
-  UINT32           ResourceId;
-  vgpu_rect_t      R;
+  vgpu_ctrl_hdr_t Hdr;
+  uint32_t        ScanoutId;
+  uint32_t        ResourceId;
+  vgpu_rect_t     R;
 } vgpu_set_scanout_t;
 
 typedef struct {
-  vgpu_ctrl_hdr_t  Hdr;
-  vgpu_rect_t      R;
-  UINT64           Offset;
-  UINT32           ResourceId;
-  UINT32           Padding;
+  vgpu_ctrl_hdr_t Hdr;
+  vgpu_rect_t     R;
+  uint64_t        Offset;
+  uint32_t        ResourceId;
+  uint32_t        Padding;
 } vgpu_transfer_to_host_2d_t;
 
 typedef struct {
-  vgpu_ctrl_hdr_t  Hdr;
-  vgpu_rect_t      R;
-  UINT32           ResourceId;
-  UINT32           Padding;
+  vgpu_ctrl_hdr_t Hdr;
+  vgpu_rect_t     R;
+  uint32_t        ResourceId;
+  uint32_t        Padding;
 } vgpu_resource_flush_t;
 
 typedef struct {
-  vgpu_ctrl_hdr_t  Hdr;
+  vgpu_ctrl_hdr_t Hdr;
 } vgpu_resp_t;
-#pragma pack ()
+#pragma pack()
 
 typedef struct {
-  pm_metal_virtio_dev_t  Dev;
-  INT32                  Ready;
-  UINT32                 ResId;
-  UINT32                 W;
-  UINT32                 H;
-  UINT8                 *CmdBuf;
-  UINT8                 *RespBuf;
-  UINT32                 CmdCap;
+  pm_metal_virtio_dev_t Dev;
+  int32_t               Ready;
+  uint32_t              ResId;
+  uint32_t              W;
+  uint32_t              H;
+  uint8_t              *CmdBuf;
+  uint8_t              *RespBuf;
+  uint32_t              CmdCap;
 } vgpu_t;
 
-STATIC vgpu_t  mVg;
+static vgpu_t mVg;
 
-STATIC
-INT32
-VgpuCmd (
-  VOID    *cmd,
-  UINT32   cmd_len
-  )
+static int32_t VgpuCmd(void *cmd, uint32_t cmd_len)
 {
-  pm_metal_virtq_t  *vq;
-  UINT16             head;
-  UINT64             deadline;
-  UINT32             len;
+  pm_metal_virtq_t *vq;
+  uint16_t          head;
+  uint64_t          deadline;
+  uint32_t          len;
 
   if (!mVg.Ready || cmd == NULL || cmd_len == 0 || cmd_len > mVg.CmdCap) {
     return -1;
   }
 
   vq = &mVg.Dev.vqs[0];
-  CopyMem (mVg.CmdBuf, cmd, cmd_len);
-  ZeroMem (mVg.RespBuf, sizeof (vgpu_resp_t));
-  if (pm_metal_virtq_add2 (
-        vq,
-        mVg.CmdBuf,
-        cmd_len,
-        0,
-        mVg.RespBuf,
-        (UINT32)sizeof (vgpu_resp_t),
-        1,
-        &head
-        ) != 0)
-  {
+  memcpy(mVg.CmdBuf, cmd, cmd_len);
+  memset(mVg.RespBuf, 0, sizeof(vgpu_resp_t));
+  if (pm_metal_virtq_add2(
+        vq, mVg.CmdBuf, cmd_len, 0, mVg.RespBuf, (uint32_t)sizeof(vgpu_resp_t), 1, &head) != 0) {
     return -1;
   }
 
-  pm_metal_virtq_kick (&mVg.Dev, vq);
-  deadline = pm_metal_time_mono_us () + 500000u;
-  while (pm_metal_time_mono_us () < deadline) {
-    UINT16  uh;
-    UINT32  ul;
+  pm_metal_virtq_kick(&mVg.Dev, vq);
+  deadline = pm_metal_time_mono_us() + 500000u;
+  while (pm_metal_time_mono_us() < deadline) {
+    uint16_t uh;
+    uint32_t ul;
 
-    if (pm_metal_virtq_get_used (vq, &uh, &ul)) {
-      pm_metal_virtq_free_chain (vq, uh);
+    if (pm_metal_virtq_get_used(vq, &uh, &ul)) {
+      pm_metal_virtq_free_chain(vq, uh);
       len = ((vgpu_resp_t *)mVg.RespBuf)->Hdr.Type;
       /* RESP_OK_NODATA = 0x1100 */
       return (len == 0x1100u || (len & 0xff00u) == 0x1100u) ? 0 : -1;
     }
 
-    CpuPause ();
+    pm_metal_cpu_pause();
   }
 
   return -1;
 }
 
-STATIC
-INT32
-VgpuProbe (
-  CONST pm_metal_scanout_bind_t  *b
-  )
+static int32_t VgpuProbe(const pm_metal_scanout_bind_t *b)
 {
-  vgpu_res_create_2d_t      create;
-  vgpu_attach_backing_t    *attach;
-  vgpu_mem_entry_t         *ent;
-  vgpu_set_scanout_t        scan;
-  UINT32                    attach_bytes;
-  UINT8                    *attach_buf;
-  UINT32                    pages;
-  UINT32                    i;
+  vgpu_res_create_2d_t   create;
+  vgpu_attach_backing_t *attach;
+  vgpu_mem_entry_t      *ent;
+  vgpu_set_scanout_t     scan;
+  uint32_t               attach_bytes;
+  uint8_t               *attach_buf;
+  uint32_t               pages;
+  uint32_t               i;
 
-  ZeroMem (&mVg, sizeof (mVg));
+  memset(&mVg, 0, sizeof(mVg));
   if (b == NULL || b->shadow == NULL || b->mode_w == 0 || b->mode_h == 0) {
     return -1;
   }
 
-  if (pm_metal_virtio_find (PM_METAL_VIRTIO_DEV_GPU) != 0) {
+  if (pm_metal_virtio_find(PM_METAL_VIRTIO_DEV_GPU) != 0) {
     return -1;
   }
 
-  if (pm_metal_virtio_open (PM_METAL_VIRTIO_DEV_GPU, &mVg.Dev) != 0) {
+  if (pm_metal_virtio_open(PM_METAL_VIRTIO_DEV_GPU, &mVg.Dev) != 0) {
     return -1;
   }
 
-  pm_metal_virtio_set_status (&mVg.Dev, PM_METAL_VIRTIO_S_ACK);
-  pm_metal_virtio_set_status (&mVg.Dev, PM_METAL_VIRTIO_S_DRIVER);
-  (VOID)pm_metal_virtio_set_features (
-          &mVg.Dev,
-          pm_metal_virtio_get_features (&mVg.Dev) & PM_METAL_VIRTIO_F_VERSION_1
-          );
-  pm_metal_virtio_set_status (&mVg.Dev, PM_METAL_VIRTIO_S_FEATURES);
-  if (pm_metal_virtio_setup_queue (&mVg.Dev, 0, 64) != 0) {
-    pm_metal_virtio_close (&mVg.Dev);
+  pm_metal_virtio_set_status(&mVg.Dev, PM_METAL_VIRTIO_S_ACK);
+  pm_metal_virtio_set_status(&mVg.Dev, PM_METAL_VIRTIO_S_DRIVER);
+  (void)pm_metal_virtio_set_features(
+    &mVg.Dev, pm_metal_virtio_get_features(&mVg.Dev) & PM_METAL_VIRTIO_F_VERSION_1);
+  pm_metal_virtio_set_status(&mVg.Dev, PM_METAL_VIRTIO_S_FEATURES);
+  if (pm_metal_virtio_setup_queue(&mVg.Dev, 0, 64) != 0) {
+    pm_metal_virtio_close(&mVg.Dev);
     return -1;
   }
 
-  if (pm_metal_virtio_driver_ok (&mVg.Dev) != 0) {
-    pm_metal_virtio_close (&mVg.Dev);
+  if (pm_metal_virtio_driver_ok(&mVg.Dev) != 0) {
+    pm_metal_virtio_close(&mVg.Dev);
     return -1;
   }
 
   mVg.CmdCap  = 4096u;
-  mVg.CmdBuf  = (UINT8 *)pm_metal_virtio_pages_alloc (1);
-  mVg.RespBuf = (UINT8 *)pm_metal_virtio_pages_alloc (1);
+  mVg.CmdBuf  = (uint8_t *)pm_metal_virtio_pages_alloc(1);
+  mVg.RespBuf = (uint8_t *)pm_metal_virtio_pages_alloc(1);
   if (mVg.CmdBuf == NULL || mVg.RespBuf == NULL) {
-    pm_metal_virtio_close (&mVg.Dev);
+    pm_metal_virtio_close(&mVg.Dev);
     return -1;
   }
 
@@ -206,54 +187,50 @@ VgpuProbe (
   mVg.H     = b->mode_h;
   mVg.ResId = 1;
 
-  ZeroMem (&create, sizeof (create));
-  create.Hdr.Type    = VIRTIO_GPU_CMD_RESOURCE_CREATE_2D;
-  create.ResourceId  = mVg.ResId;
-  create.Format      = VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM;
-  create.Width       = mVg.W;
-  create.Height      = mVg.H;
-  if (VgpuCmd (&create, (UINT32)sizeof (create)) != 0) {
+  memset(&create, 0, sizeof(create));
+  create.Hdr.Type   = VIRTIO_GPU_CMD_RESOURCE_CREATE_2D;
+  create.ResourceId = mVg.ResId;
+  create.Format     = VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM;
+  create.Width      = mVg.W;
+  create.Height     = mVg.H;
+  if (VgpuCmd(&create, (uint32_t)sizeof(create)) != 0) {
     goto fail;
   }
 
   pages        = (mVg.W * mVg.H * 4u + 4095u) / 4096u;
-  attach_bytes = (UINT32)(sizeof (*attach) + pages * sizeof (*ent));
-  attach_buf   = (UINT8 *)pm_metal_mem_alloc (
-                            attach_bytes,
-                            PM_METAL_MEM_HEAP,
-                            PM_METAL_MEM_ID_NONE
-                            );
+  attach_bytes = (uint32_t)(sizeof(*attach) + pages * sizeof(*ent));
+  attach_buf = (uint8_t *)pm_metal_mem_alloc(attach_bytes, PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
   if (attach_buf == NULL) {
     goto fail;
   }
 
   attach = (vgpu_attach_backing_t *)attach_buf;
-  ent    = (vgpu_mem_entry_t *)(attach_buf + sizeof (*attach));
-  ZeroMem (attach_buf, attach_bytes);
-  attach->Hdr.Type    = VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING;
-  attach->ResourceId  = mVg.ResId;
-  attach->NrEntries   = pages;
+  ent    = (vgpu_mem_entry_t *)(attach_buf + sizeof(*attach));
+  memset(attach_buf, 0, attach_bytes);
+  attach->Hdr.Type   = VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING;
+  attach->ResourceId = mVg.ResId;
+  attach->NrEntries  = pages;
   for (i = 0; i < pages; i++) {
-    ent[i].Addr   = (UINT64)(UINTN)b->shadow + (UINT64)i * 4096u;
+    ent[i].Addr   = (uint64_t)(uintptr_t)b->shadow + (uint64_t)i * 4096u;
     ent[i].Length = 4096u;
   }
 
-  if (VgpuCmd (attach_buf, attach_bytes) != 0) {
-    pm_metal_mem_free (attach_buf);
+  if (VgpuCmd(attach_buf, attach_bytes) != 0) {
+    pm_metal_mem_free(attach_buf);
     goto fail;
   }
 
-  pm_metal_mem_free (attach_buf);
+  pm_metal_mem_free(attach_buf);
 
-  ZeroMem (&scan, sizeof (scan));
-  scan.Hdr.Type     = VIRTIO_GPU_CMD_SET_SCANOUT;
-  scan.ScanoutId    = 0;
-  scan.ResourceId   = mVg.ResId;
-  scan.R.X          = 0;
-  scan.R.Y          = 0;
-  scan.R.W          = mVg.W;
-  scan.R.H          = mVg.H;
-  if (VgpuCmd (&scan, (UINT32)sizeof (scan)) != 0) {
+  memset(&scan, 0, sizeof(scan));
+  scan.Hdr.Type   = VIRTIO_GPU_CMD_SET_SCANOUT;
+  scan.ScanoutId  = 0;
+  scan.ResourceId = mVg.ResId;
+  scan.R.X        = 0;
+  scan.R.Y        = 0;
+  scan.R.W        = mVg.W;
+  scan.R.H        = mVg.H;
+  if (VgpuCmd(&scan, (uint32_t)sizeof(scan)) != 0) {
     goto fail;
   }
 
@@ -261,107 +238,80 @@ VgpuProbe (
   return 0;
 
 fail:
-  pm_metal_virtio_close (&mVg.Dev);
-  ZeroMem (&mVg, sizeof (mVg));
+  pm_metal_virtio_close(&mVg.Dev);
+  memset(&mVg, 0, sizeof(mVg));
   return -1;
 }
 
-STATIC
-INT32
-VgpuPresentRect (
-  INT32  x,
-  INT32  y,
-  INT32  w,
-  INT32  h
-  )
+static int32_t VgpuPresentRect(int32_t x, int32_t y, int32_t w, int32_t h)
 {
-  vgpu_transfer_to_host_2d_t  xfer;
-  vgpu_resource_flush_t       flush;
-  CONST pm_metal_scanout_bind_t  *b;
+  vgpu_transfer_to_host_2d_t     xfer;
+  vgpu_resource_flush_t          flush;
+  const pm_metal_scanout_bind_t *b;
 
   if (!mVg.Ready) {
     return -1;
   }
 
-  b = pm_metal_scanout_bind_info ();
+  b = pm_metal_scanout_bind_info();
   if (b == NULL) {
     return -1;
   }
 
   if (x < 0) {
     w += x;
-    x  = 0;
+    x = 0;
   }
 
   if (y < 0) {
     h += y;
-    y  = 0;
+    y = 0;
   }
 
   if (w <= 0 || h <= 0) {
     return 0;
   }
 
-  ZeroMem (&xfer, sizeof (xfer));
-  xfer.Hdr.Type     = VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D;
-  xfer.R.X          = x;
-  xfer.R.Y          = y;
-  xfer.R.W          = (UINT32)w;
-  xfer.R.H          = (UINT32)h;
-  xfer.Offset       = ((UINT64)y * b->shadow_pitch + (UINT64)x) * 4u;
-  xfer.ResourceId   = mVg.ResId;
-  if (VgpuCmd (&xfer, (UINT32)sizeof (xfer)) != 0) {
+  memset(&xfer, 0, sizeof(xfer));
+  xfer.Hdr.Type   = VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D;
+  xfer.R.X        = x;
+  xfer.R.Y        = y;
+  xfer.R.W        = (uint32_t)w;
+  xfer.R.H        = (uint32_t)h;
+  xfer.Offset     = ((uint64_t)y * b->shadow_pitch + (uint64_t)x) * 4u;
+  xfer.ResourceId = mVg.ResId;
+  if (VgpuCmd(&xfer, (uint32_t)sizeof(xfer)) != 0) {
     return -1;
   }
 
-  ZeroMem (&flush, sizeof (flush));
-  flush.Hdr.Type    = VIRTIO_GPU_CMD_RESOURCE_FLUSH;
-  flush.R           = xfer.R;
-  flush.ResourceId  = mVg.ResId;
-  return VgpuCmd (&flush, (UINT32)sizeof (flush));
+  memset(&flush, 0, sizeof(flush));
+  flush.Hdr.Type   = VIRTIO_GPU_CMD_RESOURCE_FLUSH;
+  flush.R          = xfer.R;
+  flush.ResourceId = mVg.ResId;
+  return VgpuCmd(&flush, (uint32_t)sizeof(flush));
 }
 
-STATIC
-INT32
-VgpuJobBegin (
-  INT32  x,
-  INT32  y,
-  INT32  w,
-  INT32  h
-  )
+static int32_t VgpuJobBegin(int32_t x, int32_t y, int32_t w, int32_t h)
 {
-  return (VgpuPresentRect (x, y, w, h) == 0) ? 0 : -1;
+  return (VgpuPresentRect(x, y, w, h) == 0) ? 0 : -1;
 }
 
-STATIC
-INT32
-VgpuJobStep (
-  VOID
-  )
+static int32_t VgpuJobStep(void)
 {
   return 0;
 }
 
-STATIC
-UINT32
-VgpuCaps (
-  VOID
-  )
+static uint32_t VgpuCaps(void)
 {
   return PM_METAL_SCANOUT_CAP_TEAR_FREE | PM_METAL_SCANOUT_CAP_DIRECT;
 }
 
-STATIC
-INT32
-VgpuAdoptShadow (
-  UINT32  **pixels,
-  UINT32   *pitch
-  )
+static int32_t VgpuAdoptShadow(uint32_t **pixels, uint32_t *pitch)
 {
-  CONST pm_metal_scanout_bind_t  *b;
+  const pm_metal_scanout_bind_t *b;
 
   /* Backing is already the compositor shadow — nothing to swap. */
-  b = pm_metal_scanout_bind_info ();
+  b = pm_metal_scanout_bind_info();
   if (!mVg.Ready || b == NULL || pixels == NULL) {
     return -1;
   }
@@ -374,35 +324,24 @@ VgpuAdoptShadow (
   return 0;
 }
 
-STATIC
-VOID
-VgpuFini (
-  VOID
-  )
+static void VgpuFini(void)
 {
   if (mVg.CmdBuf != NULL) {
-    pm_metal_virtio_pages_free (mVg.CmdBuf, 1);
+    pm_metal_virtio_pages_free(mVg.CmdBuf, 1);
   }
 
   if (mVg.RespBuf != NULL) {
-    pm_metal_virtio_pages_free (mVg.RespBuf, 1);
+    pm_metal_virtio_pages_free(mVg.RespBuf, 1);
   }
 
   if (mVg.Ready) {
-    pm_metal_virtio_close (&mVg.Dev);
+    pm_metal_virtio_close(&mVg.Dev);
   }
 
-  ZeroMem (&mVg, sizeof (mVg));
+  memset(&mVg, 0, sizeof(mVg));
 }
 
-CONST pm_metal_scanout_ops_t  g_pm_metal_scanout_virtio_gpu = {
-  "virtio_gpu",
-  VgpuProbe,
-  VgpuPresentRect,
-  VgpuJobBegin,
-  VgpuJobStep,
-  VgpuCaps,
-  VgpuAdoptShadow,
-  NULL,
-  VgpuFini
+const pm_metal_scanout_ops_t g_pm_metal_scanout_virtio_gpu = {
+  "virtio_gpu",    VgpuProbe, VgpuPresentRect, VgpuJobBegin, VgpuJobStep, VgpuCaps,
+  VgpuAdoptShadow, NULL,      VgpuFini
 };

@@ -65,10 +65,10 @@ pm_metal_efi_stage_esp "${EFI}" "${ESP}"
 VBLK="$(pm_metal_efi_stage_vblk)"
 
 echo "run-efi: staged ${ESP}/EFI/BOOT/BOOTX64.EFI from ${EFI}" >&2
-if [[ -f "${ESP}/mods/apps/doom/doom.x86_64.aot" ]]; then
-	echo "run-efi: doom AOT on ESP → shell: run doom" >&2
-elif [[ -f "${ESP}/mods/apps/doom/doom.wasm" ]]; then
-	echo "run-efi: doom wasm on ESP → shell: run doom" >&2
+if [[ -f "${ESP}/mods/apps/doom/doom.wasm" ]]; then
+	echo "run-efi: doom on ESP → shell: run doom (AOT preferred, wasm fallback)" >&2
+elif [[ -f "${ESP}/mods/apps/doom/doom.x86_64.aot" ]]; then
+	echo "run-efi: doom AOT on ESP (no wasm) → shell: run doom" >&2
 else
 	echo "run-efi: doom not on ESP (optional: METAL_DOOM_BUILD=1 ./scripts/build efi)" >&2
 fi

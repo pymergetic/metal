@@ -1,4 +1,7 @@
 {
+  "stubPath": "typings",
+  "pythonVersion": "3.12",
+  "reportMissingModuleSource": "none",
   "exclude": [
     "external/**",
     "build/**",

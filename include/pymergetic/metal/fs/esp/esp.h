@@ -16,8 +16,8 @@ extern "C" {
 
 #if !defined(__wasm__)
 
-#define PM_METAL_ESP_TYPE_FILE  1u
-#define PM_METAL_ESP_TYPE_DIR   2u
+#define PM_METAL_ESP_TYPE_FILE 1u
+#define PM_METAL_ESP_TYPE_DIR  2u
 
 /** Bind to the loaded-image device (call once from UefiMain). */
 int pm_metal_esp_init(void *image_handle);
@@ -34,8 +34,7 @@ const char *pm_metal_esp_loaded_path(void);
 int pm_metal_esp_loaded_image(const void **base, uint32_t *size);
 
 /** Port helper: record loaded identity during esp_init_port. */
-void pm_metal_esp_set_loaded_identity(const char *path, const void *base,
-				      uint32_t size);
+void pm_metal_esp_set_loaded_identity(const char *path, const void *base, uint32_t size);
 
 /**
  * Preload an ESP path into RAM so size/read/write work after EBS.
@@ -79,12 +78,12 @@ int pm_metal_esp_write_file(const char *path, const uint8_t *data, uint32_t len)
 int pm_metal_esp_stat(const char *path, uint32_t *size, uint32_t *type);
 
 /** Read up to len bytes at off into buf; sets *nread. Returns 0 or -1. */
-int pm_metal_esp_read_at(const char *path, uint32_t off, uint8_t *buf,
-			 uint32_t len, uint32_t *nread);
+int pm_metal_esp_read_at(
+  const char *path, uint32_t off, uint8_t *buf, uint32_t len, uint32_t *nread);
 
 /** Patch write at off; extends file. truncate!=0 replaces whole file first. */
-int pm_metal_esp_write_at(const char *path, uint32_t off, const uint8_t *data,
-			    uint32_t len, int truncate);
+int pm_metal_esp_write_at(
+  const char *path, uint32_t off, const uint8_t *data, uint32_t len, int truncate);
 
 /** Flush cached file to live volume (no-op when port unavailable). Returns 0 or -1. */
 int pm_metal_esp_fsync(const char *path);
@@ -96,8 +95,7 @@ int pm_metal_esp_rename(const char *old_path, const char *new_path);
 /**
  * Directory iteration: index 0..N-1 fills name; returns 1 if entry, 0 if EOF, -1 error.
  */
-int pm_metal_esp_readdir(const char *path, uint32_t index, char *name,
-			 uint32_t name_cap);
+int pm_metal_esp_readdir(const char *path, uint32_t index, char *name, uint32_t name_cap);
 
 #endif
 

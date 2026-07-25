@@ -9,11 +9,11 @@
  */
 int main(void)
 {
-	volatile long i = 0;
+  volatile long i = 0;
 
-	for (;;) {
-		i++;
-	}
+  for (;;) {
+    i++;
+  }
 
-	return 0;
+  return 0;
 }

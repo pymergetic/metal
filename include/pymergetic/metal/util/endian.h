@@ -30,18 +30,18 @@
 
 #define PM_METAL_UTIL_WIRE_ENDIAN_IS_LE 1
 
-#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) &&                                 \
-	__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
+  __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #define PM_METAL_UTIL_ENDIAN_HOST_IS_LE 1
-#elif defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) &&                                  \
-	__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#elif defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && \
+  __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 #define PM_METAL_UTIL_ENDIAN_HOST_IS_LE 0
-#elif defined(_WIN32) || defined(__LITTLE_ENDIAN__) || defined(__ARMEL__) ||                       \
-	defined(__AARCH64EL__) || defined(__THUMBEL__) || defined(__i386__) ||                       \
-	defined(__x86_64__) || defined(__wasm__)
+#elif defined(_WIN32) || defined(__LITTLE_ENDIAN__) || defined(__ARMEL__) ||                    \
+  defined(__AARCH64EL__) || defined(__THUMBEL__) || defined(__i386__) || defined(__x86_64__) || \
+  defined(__wasm__)
 #define PM_METAL_UTIL_ENDIAN_HOST_IS_LE 1
-#elif defined(__BIG_ENDIAN__) || defined(__ARMEB__) || defined(__AARCH64EB__) ||                   \
-	defined(__THUMBEB__)
+#elif defined(__BIG_ENDIAN__) || defined(__ARMEB__) || defined(__AARCH64EB__) || \
+  defined(__THUMBEB__)
 #define PM_METAL_UTIL_ENDIAN_HOST_IS_LE 0
 #endif
 
@@ -55,53 +55,53 @@ PM_METAL_API(int, pm_metal_util_endian_host_is_le, (void));
 #else
 static inline int pm_metal_util_endian_host_is_le(void)
 {
-	return PM_METAL_UTIL_ENDIAN_HOST_IS_LE;
+  return PM_METAL_UTIL_ENDIAN_HOST_IS_LE;
 }
 #endif
 
 static inline uint16_t pm_metal_util_endian_load_u16_le(const uint8_t src[2])
 {
-	return (uint16_t)((uint16_t)src[0] | ((uint16_t)src[1] << 8));
+  return (uint16_t)((uint16_t)src[0] | ((uint16_t)src[1] << 8));
 }
 
 static inline void pm_metal_util_endian_store_u16_le(uint8_t dst[2], uint16_t v)
 {
-	dst[0] = (uint8_t)(v & 0xFFu);
-	dst[1] = (uint8_t)((v >> 8) & 0xFFu);
+  dst[0] = (uint8_t)(v & 0xFFu);
+  dst[1] = (uint8_t)((v >> 8) & 0xFFu);
 }
 
 static inline uint32_t pm_metal_util_endian_load_u32_le(const uint8_t src[4])
 {
-	return (uint32_t)src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16) |
-	       ((uint32_t)src[3] << 24);
+  return (uint32_t)src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16) |
+         ((uint32_t)src[3] << 24);
 }
 
 static inline void pm_metal_util_endian_store_u32_le(uint8_t dst[4], uint32_t v)
 {
-	dst[0] = (uint8_t)(v & 0xFFu);
-	dst[1] = (uint8_t)((v >> 8) & 0xFFu);
-	dst[2] = (uint8_t)((v >> 16) & 0xFFu);
-	dst[3] = (uint8_t)((v >> 24) & 0xFFu);
+  dst[0] = (uint8_t)(v & 0xFFu);
+  dst[1] = (uint8_t)((v >> 8) & 0xFFu);
+  dst[2] = (uint8_t)((v >> 16) & 0xFFu);
+  dst[3] = (uint8_t)((v >> 24) & 0xFFu);
 }
 
 static inline uint64_t pm_metal_util_endian_load_u64_le(const uint8_t src[8])
 {
-	uint64_t v = 0;
-	int i;
+  uint64_t v = 0;
+  int      i;
 
-	for (i = 0; i < 8; i++) {
-		v |= (uint64_t)src[i] << (8 * i);
-	}
-	return v;
+  for (i = 0; i < 8; i++) {
+    v |= (uint64_t)src[i] << (8 * i);
+  }
+  return v;
 }
 
 static inline void pm_metal_util_endian_store_u64_le(uint8_t dst[8], uint64_t v)
 {
-	int i;
+  int i;
 
-	for (i = 0; i < 8; i++) {
-		dst[i] = (uint8_t)((v >> (8 * i)) & 0xFFu);
-	}
+  for (i = 0; i < 8; i++) {
+    dst[i] = (uint8_t)((v >> (8 * i)) & 0xFFu);
+  }
 }
 
 #ifdef __cplusplus

@@ -23,26 +23,26 @@ extern "C" {
 
 /** One seed/fetch slot (paths are absolute under ESP / HTTP root). */
 typedef struct {
-	const char *esp_path;
-	const char *url_path;
-	uint32_t    cap;
+  const char *esp_path;
+  const char *url_path;
+  uint32_t    cap;
 } pm_metal_pkg_file_t;
 
 /** Extra asset under mods/apps/<pkg>/ (not the guest .aot/.wasm). */
 typedef struct {
-	const char *name; /* e.g. "doom1.wad" */
-	uint32_t    cap;
+  const char *name; /* e.g. "doom1.wad" */
+  uint32_t    cap;
 } pm_metal_pkg_asset_t;
 
 typedef struct pm_metal_pkg {
-	const char                 *name;
-	const pm_metal_pkg_asset_t *assets;
-	uint32_t                    nassets;
-	/**
+  const char                 *name;
+  const pm_metal_pkg_asset_t *assets;
+  uint32_t                    nassets;
+  /**
 	 * 1 if playable from ESP. NULL = guest binary present
 	 * (host .aot or .wasm). Custom ready must include guest + assets.
 	 */
-	int (*ready)(void);
+  int (*ready)(void);
 } pm_metal_pkg_t;
 
 /** wamrc / filename infix for this kernel build (i386, x86_64, …). */

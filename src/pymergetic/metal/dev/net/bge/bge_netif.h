@@ -4,8 +4,7 @@
 
 #include <stdint.h>
 
-typedef void (*pm_metal_bge_netif_rx_fn)(void *ctx, const uint8_t *frame,
-                                         uint32_t len);
+typedef void (*pm_metal_bge_netif_rx_fn)(void *ctx, const uint8_t *frame, uint32_t len);
 
 /** Returns 0 when a supported BCM57xx NIC is present. */
 int pm_metal_bge_netif_detect(void);

@@ -6,7 +6,14 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
+#include "../../../external/doomgeneric/doomgeneric/doomstat.h"
+
 #include "metal_doom.h"
+
+extern boolean demoplayback;
+extern boolean singledemo;
+extern boolean menuactive;
+extern int     messageToPrint;
 
 /*
  * clangd merges global -I host_stubs (freestanding stdlib without exit).
@@ -19,46 +26,61 @@ void __real_I_Quit(void);
 static int s_quit_req;
 static int s_quit_code;
 
-void
-metal_doom_request_quit(int code)
+void metal_doom_request_quit(int code)
 {
-	s_quit_req  = 1;
-	s_quit_code = code;
+  s_quit_req  = 1;
+  s_quit_code = code;
 }
 
-int
-metal_doom_quit_requested(void)
+void metal_doom_clear_quit(void)
 {
-	return s_quit_req;
+  s_quit_req  = 0;
+  s_quit_code = 0;
 }
 
-int
-metal_doom_quit_code(void)
+int metal_doom_quit_requested(void)
 {
-	return s_quit_code;
+  return s_quit_req;
 }
 
-void
-__wrap_I_Quit(void)
+int metal_doom_quit_code(void)
 {
-	__real_I_Quit();
-	metal_doom_request_quit(0);
-	exit(0);
+  return s_quit_code;
 }
 
-void
-__wrap_I_Error(char *error, ...)
+void __wrap_I_Quit(void)
 {
-	va_list argptr;
-	char    msgbuf[256];
+  /*
+	 * Only call sites: M_QuitResponse('y'), G_CheckDemoStatus(singledemo),
+	 * testcontrols Esc. Message handler clears messageToPrint before
+	 * M_QuitResponse runs — so menu=1 msg=0 is the normal Quit+Y path.
+	 */
+  fprintf(stderr,
+          "metal-doom: I_Quit (gamestate=%d demo=%d singledemo=%d "
+          "menu=%d msg=%d)%s\n",
+          (int)gamestate,
+          (int)demoplayback,
+          (int)singledemo,
+          (int)menuactive,
+          messageToPrint,
+          (menuactive && !demoplayback && !singledemo) ? " [menu Quit confirm / M_QuitResponse]"
+                                                       : (singledemo ? " [singledemo]" : ""));
+  __real_I_Quit();
+  metal_doom_request_quit(0);
+  exit(0);
+}
 
-	va_start(argptr, error);
-	vsnprintf(msgbuf, sizeof(msgbuf), error != NULL ? error : "I_Error",
-		  argptr);
-	va_end(argptr);
-	fprintf(stderr, "metal-doom: %s\n", msgbuf);
+void __wrap_I_Error(char *error, ...)
+{
+  va_list argptr;
+  char    msgbuf[256];
 
-	metal_doom_request_quit(1);
-	/* Skip vanilla zenity/system path — exit cleanly for the host. */
-	exit(1);
+  va_start(argptr, error);
+  vsnprintf(msgbuf, sizeof(msgbuf), error != NULL ? error : "I_Error", argptr);
+  va_end(argptr);
+  fprintf(stderr, "metal-doom: I_Error: %s\n", msgbuf);
+
+  metal_doom_request_quit(1);
+  /* Skip vanilla zenity/system path — exit cleanly for the host. */
+  exit(1);
 }

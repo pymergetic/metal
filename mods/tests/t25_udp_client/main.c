@@ -15,85 +15,82 @@
 #include <wasi_socket_ext.h>
 #endif
 
-static void
-retry_pause(void)
+static void retry_pause(void)
 {
 #if defined(__wasi__)
-	int i;
+  int i;
 
-	for (i = 0; i < 64; i++)
-		sched_yield();
+  for (i = 0; i < 64; i++)
+    sched_yield();
 #else
-	struct timespec delay = { .tv_sec = 0, .tv_nsec = 20L * 1000 * 1000 };
+  struct timespec delay = { .tv_sec = 0, .tv_nsec = 20L * 1000 * 1000 };
 
-	nanosleep(&delay, NULL);
+  nanosleep(&delay, NULL);
 #endif
 }
 
 int main(void)
 {
-	struct sockaddr_in addr;
-	memset(&addr, 0, sizeof(addr));
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(9933);
-	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_port        = htons(9933);
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-	const char *msg = "hello udp";
-	size_t msg_len = strlen(msg);
-	char buf[128];
-	int attempt;
+  const char *msg     = "hello udp";
+  size_t      msg_len = strlen(msg);
+  char        buf[128];
+  int         attempt;
 
-	for (attempt = 0; attempt < 100; attempt++) {
-		int fd = socket(AF_INET, SOCK_DGRAM, 0);
-		struct timeval tv;
-		struct sockaddr_in local;
-		struct sockaddr_in peer;
-		socklen_t peer_len;
-		ssize_t n;
+  for (attempt = 0; attempt < 100; attempt++) {
+    int                fd = socket(AF_INET, SOCK_DGRAM, 0);
+    struct timeval     tv;
+    struct sockaddr_in local;
+    struct sockaddr_in peer;
+    socklen_t          peer_len;
+    ssize_t            n;
 
-		if (fd < 0) {
-			printf("t25_udp_client: socket() failed\n");
-			return 1;
-		}
+    if (fd < 0) {
+      printf("t25_udp_client: socket() failed\n");
+      return 1;
+    }
 
-		/* Bound ephemeral local port so peer replies have a stable dest;
+    /* Bound ephemeral local port so peer replies have a stable dest;
 		 * short RCVTIMEO so a lost first datagram cannot hang forever
-		 * (Zephyr loopback + two wasm workers). */
-		memset(&local, 0, sizeof(local));
-		local.sin_family = AF_INET;
-		local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-		local.sin_port = 0;
-		if (bind(fd, (struct sockaddr *)&local, sizeof(local)) != 0) {
-			close(fd);
-			continue;
-		}
-		tv.tv_sec = 0;
-		tv.tv_usec = 100000; /* 100ms */
-		(void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+		 * (loopback + two wasm workers). */
+    memset(&local, 0, sizeof(local));
+    local.sin_family      = AF_INET;
+    local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    local.sin_port        = 0;
+    if (bind(fd, (struct sockaddr *)&local, sizeof(local)) != 0) {
+      close(fd);
+      continue;
+    }
+    tv.tv_sec  = 0;
+    tv.tv_usec = 100000; /* 100ms */
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-		if (sendto(fd, msg, msg_len, 0, (struct sockaddr *)&addr, sizeof(addr))
-		    < 0) {
-			close(fd);
-			retry_pause();
-			continue;
-		}
+    if (sendto(fd, msg, msg_len, 0, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+      close(fd);
+      retry_pause();
+      continue;
+    }
 
-		peer_len = sizeof(peer);
-		n = recvfrom(fd, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&peer,
-			     &peer_len);
-		close(fd);
-		if (n > 0) {
-			buf[n] = '\0';
-			if (strstr(buf, "echo: hello udp") != NULL) {
-				printf("t25_udp_client: got: %s\n", buf);
-				fflush(stdout);
-				return 0;
-			}
-		}
+    peer_len = sizeof(peer);
+    n        = recvfrom(fd, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&peer, &peer_len);
+    close(fd);
+    if (n > 0) {
+      buf[n] = '\0';
+      if (strstr(buf, "echo: hello udp") != NULL) {
+        printf("t25_udp_client: got: %s\n", buf);
+        fflush(stdout);
+        return 0;
+      }
+    }
 
-		retry_pause();
-	}
+    retry_pause();
+  }
 
-	printf("t25_udp_client: sendto/recvfrom never succeeded\n");
-	return 1;
+  printf("t25_udp_client: sendto/recvfrom never succeeded\n");
+  return 1;
 }

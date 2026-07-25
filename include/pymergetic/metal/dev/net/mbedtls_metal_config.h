@@ -52,8 +52,8 @@ int mbedtls_metal_vsnprintf(char *s, size_t n, const char *fmt, va_list ap);
 #define MBEDTLS_PK_C
 #define MBEDTLS_PK_PARSE_C
 #define MBEDTLS_PLATFORM_C
-#define MBEDTLS_PLATFORM_SNPRINTF_MACRO   mbedtls_metal_snprintf
-#define MBEDTLS_PLATFORM_VSNPRINTF_MACRO  mbedtls_metal_vsnprintf
+#define MBEDTLS_PLATFORM_SNPRINTF_MACRO  mbedtls_metal_snprintf
+#define MBEDTLS_PLATFORM_VSNPRINTF_MACRO mbedtls_metal_vsnprintf
 #define MBEDTLS_RSA_C
 #define MBEDTLS_SHA256_C
 #define MBEDTLS_SHA512_C

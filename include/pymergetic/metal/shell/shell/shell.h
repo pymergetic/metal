@@ -20,15 +20,16 @@ extern "C" {
 #define PM_METAL_SHELL_WASI_MODULE "pymergetic.metal.shell"
 
 #if defined(__wasm__)
-#define PM_METAL_SHELL_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_SHELL_WASI_MODULE, name)
+#define PM_METAL_SHELL_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_SHELL_WASI_MODULE, name)
 #endif
 
 #if !defined(__wasm__)
 #include "pymergetic/metal/runtime/async/async.h"
 
 /** Bash-like command history capacity (oldest dropped when full). */
-#define PM_METAL_SHELL_HISTORY_MAX  64u
+#define PM_METAL_SHELL_HISTORY_MAX 64u
+/** Max committed / draft command line (matches UI INPUT_CHARS). */
+#define PM_METAL_SHELL_LINE_MAX 512u
 
 /** Bind to UI shell chrome (must exist). Proofs are pool/init-coro work. */
 int pm_metal_shell_init(void);
@@ -67,22 +68,20 @@ void pm_metal_shell_prompt_dirty(void);
  * kind: "ping" | "nslookup" | "test". detail optional (e.g. hostname).
  * Returns 0 ok. Job poll treats WAITING like PENDING (sleep/DNS park).
  */
-int pm_metal_shell_job_start(const char *kind, pm_metal_async_handle_t task_h,
-			     pm_metal_async_handle_t coro_h, const char *detail,
-			     uint64_t deadline_us);
+int pm_metal_shell_job_start(const char             *kind,
+                             pm_metal_async_handle_t task_h,
+                             pm_metal_async_handle_t coro_h,
+                             const char             *detail,
+                             uint64_t                deadline_us);
 #endif
 
 #if defined(__wasm__)
-extern void pm_metal_shell_log(const char *line)
-	PM_METAL_SHELL_IMPORT(pm_metal_shell_log);
+extern void pm_metal_shell_log(const char *line) PM_METAL_SHELL_IMPORT(pm_metal_shell_log);
 extern void pm_metal_shell_set_status(const char *text)
-	PM_METAL_SHELL_IMPORT(pm_metal_shell_set_status);
-extern void pm_metal_shell_request_exit(void)
-	PM_METAL_SHELL_IMPORT(pm_metal_shell_request_exit);
-extern int pm_metal_shell_run(const char *mod)
-	PM_METAL_SHELL_IMPORT(pm_metal_shell_run);
-extern int pm_metal_shell_tab(const char *mod)
-	PM_METAL_SHELL_IMPORT(pm_metal_shell_tab);
+  PM_METAL_SHELL_IMPORT(pm_metal_shell_set_status);
+extern void pm_metal_shell_request_exit(void) PM_METAL_SHELL_IMPORT(pm_metal_shell_request_exit);
+extern int  pm_metal_shell_run(const char *mod) PM_METAL_SHELL_IMPORT(pm_metal_shell_run);
+extern int  pm_metal_shell_tab(const char *mod) PM_METAL_SHELL_IMPORT(pm_metal_shell_tab);
 #else
 void pm_metal_shell_log(const char *line);
 void pm_metal_shell_set_status(const char *text);

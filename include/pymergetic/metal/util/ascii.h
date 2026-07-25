@@ -22,8 +22,7 @@
 #define PM_METAL_UTIL_ASCII_WASI_MODULE "pymergetic.metal.util.ascii"
 
 #if defined(__wasm__)
-#define PM_METAL_UTIL_ASCII_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_ASCII_WASI_MODULE, name)
+#define PM_METAL_UTIL_ASCII_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_UTIL_ASCII_WASI_MODULE, name)
 #endif
 
 /*
@@ -36,7 +35,7 @@
  */
 #if defined(__wasm__)
 extern size_t pm_metal_util_ascii_bound(size_t text_len)
-	PM_METAL_UTIL_ASCII_IMPORT(pm_metal_util_ascii_bound);
+  PM_METAL_UTIL_ASCII_IMPORT(pm_metal_util_ascii_bound);
 #else
 size_t pm_metal_util_ascii_bound(size_t text_len);
 #endif
@@ -51,12 +50,10 @@ size_t pm_metal_util_ascii_bound(size_t text_len);
  * impl: wasi import — src/pymergetic/metal/util/ascii.c (wasm32 only)
  */
 #if defined(__wasm__)
-extern int pm_metal_util_ascii_render(const char *text, char ink, char *out,
-				      size_t out_cap)
-	PM_METAL_UTIL_ASCII_IMPORT(pm_metal_util_ascii_render);
+extern int pm_metal_util_ascii_render(const char *text, char ink, char *out, size_t out_cap)
+  PM_METAL_UTIL_ASCII_IMPORT(pm_metal_util_ascii_render);
 #else
-int pm_metal_util_ascii_render(const char *text, char ink, char *out,
-			       size_t out_cap);
+int pm_metal_util_ascii_render(const char *text, char ink, char *out, size_t out_cap);
 #endif
 
 /*
@@ -68,13 +65,12 @@ int pm_metal_util_ascii_render(const char *text, char ink, char *out,
  */
 #if defined(__wasm__)
 extern void pm_metal_util_ascii_log(const char *text)
-	PM_METAL_UTIL_ASCII_IMPORT(pm_metal_util_ascii_log);
+  PM_METAL_UTIL_ASCII_IMPORT(pm_metal_util_ascii_log);
 #else
 #include "pymergetic/metal/log/log.h" /* pm_metal_log_style_t */
 void pm_metal_util_ascii_log(const char *text);
 /** Host: FIGlet rows with a log style (UART ANSI + UI FG). */
-void pm_metal_util_ascii_log_styled(pm_metal_log_style_t style,
-				    const char *text);
+void pm_metal_util_ascii_log_styled(pm_metal_log_style_t style, const char *text);
 #endif
 
 #if !defined(__wasm__)

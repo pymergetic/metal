@@ -34,20 +34,20 @@
 #include "pymergetic/metal/wasi.h" /* IWYU pragma: keep */
 
 typedef enum pm_metal_log_level {
-	PM_METAL_LOG_TRACE = 0,
-	PM_METAL_LOG_DEBUG,
-	PM_METAL_LOG_INFO,
-	PM_METAL_LOG_WARN,
-	PM_METAL_LOG_ERROR,
-	PM_METAL_LOG_FATAL,
-	PM_METAL_LOG_LEVEL_COUNT,
+  PM_METAL_LOG_TRACE = 0,
+  PM_METAL_LOG_DEBUG,
+  PM_METAL_LOG_INFO,
+  PM_METAL_LOG_WARN,
+  PM_METAL_LOG_ERROR,
+  PM_METAL_LOG_FATAL,
+  PM_METAL_LOG_LEVEL_COUNT,
 } pm_metal_log_level_t;
 
 /* Which of the *host* process's own streams write()/write_raw() land on —
  * see file header re: no per-guest stream concept exists here. */
 typedef enum pm_metal_log_stream {
-	PM_METAL_LOG_STREAM_STDOUT = 0,
-	PM_METAL_LOG_STREAM_STDERR = 1,
+  PM_METAL_LOG_STREAM_STDOUT = 0,
+  PM_METAL_LOG_STREAM_STDERR = 1,
 } pm_metal_log_stream_t;
 
 /* This module's own import_module name — see log.c's native_register()
@@ -55,8 +55,7 @@ typedef enum pm_metal_log_stream {
 #define PM_METAL_UTIL_LOG_WASI_MODULE "pymergetic.metal.util.log"
 
 #if defined(__wasm__)
-#define PM_METAL_UTIL_LOG_IMPORT(name) \
-	PM_METAL_WASI_IMPORT(PM_METAL_UTIL_LOG_WASI_MODULE, name)
+#define PM_METAL_UTIL_LOG_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_UTIL_LOG_WASI_MODULE, name)
 #endif
 
 /*
@@ -76,11 +75,11 @@ typedef enum pm_metal_log_stream {
  */
 #if defined(__wasm__)
 extern void pm_metal_util_log_set_level(pm_metal_log_level_t level)
-	PM_METAL_UTIL_LOG_IMPORT(pm_metal_util_log_set_level);
+  PM_METAL_UTIL_LOG_IMPORT(pm_metal_util_log_set_level);
 extern pm_metal_log_level_t pm_metal_util_log_get_level(void)
-	PM_METAL_UTIL_LOG_IMPORT(pm_metal_util_log_get_level);
+  PM_METAL_UTIL_LOG_IMPORT(pm_metal_util_log_get_level);
 #else
-void pm_metal_util_log_set_level(pm_metal_log_level_t level);
+void                 pm_metal_util_log_set_level(pm_metal_log_level_t level);
 pm_metal_log_level_t pm_metal_util_log_get_level(void);
 #endif
 
@@ -96,7 +95,7 @@ pm_metal_log_level_t pm_metal_util_log_get_level(void);
  */
 #if defined(__wasm__)
 extern int pm_metal_util_log_level_name(pm_metal_log_level_t level, char *out, size_t cap)
-	PM_METAL_UTIL_LOG_IMPORT(pm_metal_util_log_level_name);
+  PM_METAL_UTIL_LOG_IMPORT(pm_metal_util_log_level_name);
 #else
 int pm_metal_util_log_level_name(pm_metal_log_level_t level, char *out, size_t cap);
 #endif
@@ -110,12 +109,14 @@ int pm_metal_util_log_level_name(pm_metal_log_level_t level, char *out, size_t c
  * impl: wasi import — src/pymergetic/metal/util/log.c (wasm32 only)
  */
 #if defined(__wasm__)
-extern void pm_metal_util_log_write(pm_metal_log_stream_t stream, pm_metal_log_level_t level,
-				     const char *msg)
-	PM_METAL_UTIL_LOG_IMPORT(pm_metal_util_log_write);
+extern void pm_metal_util_log_write(pm_metal_log_stream_t stream,
+                                    pm_metal_log_level_t  level,
+                                    const char           *msg)
+  PM_METAL_UTIL_LOG_IMPORT(pm_metal_util_log_write);
 #else
-void pm_metal_util_log_write(pm_metal_log_stream_t stream, pm_metal_log_level_t level,
-			      const char *msg);
+void pm_metal_util_log_write(pm_metal_log_stream_t stream,
+                             pm_metal_log_level_t  level,
+                             const char           *msg);
 #endif
 
 /*
@@ -130,7 +131,7 @@ void pm_metal_util_log_write(pm_metal_log_stream_t stream, pm_metal_log_level_t 
  */
 #if defined(__wasm__)
 extern void pm_metal_util_log_write_raw(pm_metal_log_stream_t stream, const char *msg)
-	PM_METAL_UTIL_LOG_IMPORT(pm_metal_util_log_write_raw);
+  PM_METAL_UTIL_LOG_IMPORT(pm_metal_util_log_write_raw);
 #else
 void pm_metal_util_log_write_raw(pm_metal_log_stream_t stream, const char *msg);
 #endif
@@ -144,8 +145,10 @@ void pm_metal_util_log_write_raw(pm_metal_log_stream_t stream, const char *msg);
  *
  * impl: common — src/pymergetic/metal/util/log.c
  */
-void pm_metal_util_log_writef(pm_metal_log_stream_t stream, pm_metal_log_level_t level,
-			       const char *fmt, ...);
+void pm_metal_util_log_writef(pm_metal_log_stream_t stream,
+                              pm_metal_log_level_t  level,
+                              const char           *fmt,
+                              ...);
 void pm_metal_util_log_write_rawf(pm_metal_log_stream_t stream, const char *fmt, ...);
 
 /*

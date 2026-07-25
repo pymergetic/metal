@@ -1,41 +1,41 @@
 #ifndef PYMERGETIC_METAL_BUS_PCI_PCI_H_
 #define PYMERGETIC_METAL_BUS_PCI_PCI_H_
 
-#include <Uefi.h>
+#include <stdint.h>
 
-UINT32 pm_bios_pci_read32(UINT8 bus, UINT8 dev, UINT8 func, UINT8 offset);
-UINT16 pm_bios_pci_read16(UINT8 bus, UINT8 dev, UINT8 func, UINT8 offset);
-UINT8 pm_bios_pci_read8(UINT8 bus, UINT8 dev, UINT8 func, UINT8 offset);
-VOID pm_bios_pci_write16(UINT8 bus, UINT8 dev, UINT8 func, UINT8 offset, UINT16 val);
-VOID pm_bios_pci_write32(UINT8 bus, UINT8 dev, UINT8 func, UINT8 offset, UINT32 val);
+uint32_t pm_bios_pci_read32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
+uint16_t pm_bios_pci_read16(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
+uint8_t  pm_bios_pci_read8(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
+void     pm_bios_pci_write16(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint16_t val);
+void     pm_bios_pci_write32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t val);
 
 /** Enable memory space + bus master. */
-VOID pm_bios_pci_enable_mem_bm(UINT8 bus, UINT8 dev, UINT8 func);
+void pm_bios_pci_enable_mem_bm(uint8_t bus, uint8_t dev, uint8_t func);
 
 /** Enable I/O space + bus master (AC97 mixer / NABM). */
-VOID pm_bios_pci_enable_io_bm(UINT8 bus, UINT8 dev, UINT8 func);
+void pm_bios_pci_enable_io_bm(uint8_t bus, uint8_t dev, uint8_t func);
 
 /**
  * Read BAR and return MMIO base (physical = identity). Returns 0 on I/O BAR.
  * For 64-bit BARs consumes bar and bar+1.
  */
-UINT64 pm_bios_pci_bar_mmio(UINT8 bus, UINT8 dev, UINT8 func, UINT8 bar_index,
-			    UINT8 *bars_consumed);
+uint64_t pm_bios_pci_bar_mmio(
+  uint8_t bus, uint8_t dev, uint8_t func, uint8_t bar_index, uint8_t *bars_consumed);
 
 /**
  * Read I/O BAR base (port). Returns 0 if BAR is MMIO / empty.
  */
-UINT16 pm_bios_pci_bar_io(UINT8 bus, UINT8 dev, UINT8 func, UINT8 bar_index);
+uint16_t pm_bios_pci_bar_io(uint8_t bus, uint8_t dev, uint8_t func, uint8_t bar_index);
 
 /** Scan buses 0-7 for ven:did. Returns 0 when found. */
-int pm_bios_pci_find(UINT16 vendor, UINT16 device, UINT8 *bus_out,
-		     UINT8 *dev_out, UINT8 *func_out);
+int pm_bios_pci_find(
+  uint16_t vendor, uint16_t device, uint8_t *bus_out, uint8_t *dev_out, uint8_t *func_out);
 
 /**
  * Scan for PCI class/subclass (e.g. 0x04/0x01 = multimedia audio).
  * Returns 0 when found.
  */
-int pm_bios_pci_find_class(UINT8 base_class, UINT8 subclass, UINT8 *bus_out,
-			   UINT8 *dev_out, UINT8 *func_out);
+int pm_bios_pci_find_class(
+  uint8_t base_class, uint8_t subclass, uint8_t *bus_out, uint8_t *dev_out, uint8_t *func_out);
 
 #endif
