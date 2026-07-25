@@ -38,5 +38,14 @@ UINT64
 InterlockedCompareExchange64(volatile UINT64 *Value, UINT64 CompareValue,
 			     UINT64 ExchangeValue)
 {
-  return __sync_val_compare_and_swap(Value, CompareValue, ExchangeValue);
+  /* i386's default UINT64 alignment is only 4, so clang can't derive the
+   * real 8-byte natural alignment cmpxchg8b atomicity needs from Value's
+   * type alone. Every caller now places its UINT64 on an 8-byte boundary
+   * (aligned(8) at the declaration) to make that guarantee true; assert
+   * it here too so the __sync builtin emits the plain atomic form instead
+   * of a warning. */
+  typedef volatile UINT64 __attribute__((aligned(8))) Aligned8Uint64;
+
+  return __sync_val_compare_and_swap((Aligned8Uint64 *)Value, CompareValue,
+				      ExchangeValue);
 }

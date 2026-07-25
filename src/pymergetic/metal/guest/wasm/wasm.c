@@ -210,12 +210,17 @@ void pm_metal_wasm_live_finish(void)
   }
 
   MetalWasmLiveClear();
-  if (pid != PM_METAL_PROCESS_ID_INVALID) {
-    pm_metal_process_reap(pid);
-  }
-
+  /*
+   * Mod state must flip RUNNING -> READY before reap tears down any
+   * owned fresh instance below — auto-unload (PM_METAL_MOD_FLAG_AUTO_UNLOAD)
+   * checks mod state and would otherwise see a stale RUNNING and refuse.
+   */
   if (mod_name[0] != '\0') {
     pm_metal_mod_on_session_end(mod_name);
+  }
+
+  if (pid != PM_METAL_PROCESS_ID_INVALID) {
+    pm_metal_process_reap(pid);
   }
 
   pm_metal_ui_sync_input_focus();
@@ -531,17 +536,53 @@ int pm_metal_wasm_mod_fetch(const char     *name,
   return (rc < 0) ? -1 : 1;
 }
 
+/*
+ * Shared tail of image_open/image_instantiate: instantiate an already
+ * -loaded module, bind natives, spin up its exec_env. Caller owns
+ * module lifetime (image_open: this image; image_instantiate: someone
+ * else's registry slot) — this helper never loads/unloads/frees bytes.
+ */
+static int32_t MetalWasmInstantiateCommon(wasm_module_t              module,
+                                          const char                *name,
+                                          pm_metal_wasm_mod_image_t *out)
+{
+  wasm_module_inst_t inst;
+  wasm_exec_env_t    exec_env;
+  char               error_buf[128];
+
+  error_buf[0] = '\0';
+  inst         = wasm_runtime_instantiate(
+    module, PM_METAL_WASM_STACK_SIZE, PM_METAL_WASM_HEAP_BYTES, error_buf, sizeof(error_buf));
+  if (inst == NULL) {
+    pm_metal_logf("metal-wasm: instantiate %s failed: %s", name != NULL ? name : "?", error_buf);
+    return -1;
+  }
+
+  MetalWasmBindAll(inst);
+  exec_env = wasm_runtime_create_exec_env(inst, PM_METAL_WASM_STACK_SIZE);
+  if (exec_env == NULL) {
+    wasm_runtime_deinstantiate(inst);
+    MetalWasmRebindLiveIfAny();
+    return -1;
+  }
+
+  out->module   = module;
+  out->inst     = inst;
+  out->exec_env = exec_env;
+  strlcpy_trunc(out->name, sizeof(out->name), name != NULL ? name : "mod");
+  MetalWasmRebindLiveIfAny();
+  return 0;
+}
+
 int pm_metal_wasm_mod_image_open(const char                *name,
                                  const uint8_t             *bytes,
                                  uint32_t                   len,
                                  pm_metal_wasm_mod_image_t *out)
 {
-  wasm_module_t      module;
-  wasm_module_inst_t inst;
-  wasm_exec_env_t    exec_env;
-  char               error_buf[128];
-  uint8_t           *copy;
-  const char        *argv[1];
+  wasm_module_t module;
+  char          error_buf[128];
+  uint8_t      *copy;
+  const char   *argv[1];
 
   if (!mReady || bytes == NULL || len == 0 || out == NULL) {
     return -1;
@@ -565,34 +606,53 @@ int pm_metal_wasm_mod_image_open(const char                *name,
   argv[0] = (name != NULL) ? name : "mod";
   wasm_runtime_set_wasi_args(module, NULL, 0, NULL, 0, NULL, 0, (char **)argv, 1);
 
-  error_buf[0] = '\0';
-  inst         = wasm_runtime_instantiate(
-    module, PM_METAL_WASM_STACK_SIZE, PM_METAL_WASM_HEAP_BYTES, error_buf, sizeof(error_buf));
-  if (inst == NULL) {
-    pm_metal_logf("metal-wasm: instantiate %s failed: %s", name != NULL ? name : "?", error_buf);
+  if (MetalWasmInstantiateCommon(module, name, out) != 0) {
     wasm_runtime_unload(module);
     pm_metal_mem_free(copy);
     return -1;
   }
 
-  MetalWasmBindAll(inst);
-  exec_env = wasm_runtime_create_exec_env(inst, PM_METAL_WASM_STACK_SIZE);
-  if (exec_env == NULL) {
-    wasm_runtime_deinstantiate(inst);
-    wasm_runtime_unload(module);
-    pm_metal_mem_free(copy);
-    MetalWasmRebindLiveIfAny();
-    return -1;
-  }
-
-  out->module   = module;
-  out->inst     = inst;
-  out->exec_env = exec_env;
-  out->copy     = copy;
-  strlcpy_trunc(out->name, sizeof(out->name), name != NULL ? name : "mod");
-  MetalWasmRebindLiveIfAny();
+  out->copy = copy;
   pm_metal_logf("metal-wasm: mod image ready %s", out->name);
   return 0;
+}
+
+int pm_metal_wasm_mod_image_instantiate(void                      *module,
+                                        const char                *name,
+                                        pm_metal_wasm_mod_image_t *out)
+{
+  if (!mReady || module == NULL || out == NULL) {
+    return -1;
+  }
+
+  memset(out, 0, sizeof(*out));
+  if (MetalWasmInstantiateCommon((wasm_module_t)module, name, out) != 0) {
+    return -1;
+  }
+
+  pm_metal_logf("metal-wasm: instance opened %s", out->name);
+  return 0;
+}
+
+void pm_metal_wasm_mod_image_deinstantiate(pm_metal_wasm_mod_image_t *img)
+{
+  if (img == NULL) {
+    return;
+  }
+
+  if (img->exec_env != NULL) {
+    wasm_runtime_destroy_exec_env((wasm_exec_env_t)img->exec_env);
+    img->exec_env = NULL;
+  }
+
+  if (img->inst != NULL) {
+    wasm_runtime_deinstantiate((wasm_module_inst_t)img->inst);
+    img->inst = NULL;
+  }
+
+  /* module/copy are non-owning aliases here — owned by the loader. */
+  img->module  = NULL;
+  img->name[0] = '\0';
 }
 
 void pm_metal_wasm_mod_image_close(pm_metal_wasm_mod_image_t *img)

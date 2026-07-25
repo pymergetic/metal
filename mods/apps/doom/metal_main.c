@@ -431,6 +431,12 @@ pm_metal_status_t doom_run(pm_metal_async_handle_t self_h)
 
 int32_t pm_metal_mod_on_load(void)
 {
+  /* Real static state (zone heap, screen buffer, saves) — every run
+   * needs its own fresh instance, not the shared "instance 0". */
+  if (pm_metal_mod_set_capability(PM_METAL_MOD_CAP_MULTI) != 0) {
+    return -1;
+  }
+
   if (pm_metal_mod_register_func("run", "doom_run") != 0) {
     return -1;
   }

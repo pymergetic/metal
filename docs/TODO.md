@@ -16,8 +16,9 @@ Living list. Product surfaces are largely in place; what’s left is mostly **ir
 | **Shell / UI** | Linker-section cmds; tab focus; input lag fixes |
 | **Audio** | virtio-snd → AC97 → null |
 | **Wasm / FS** | Guest FS ABI + proofs; embed mods |
+| **MicroPython (core)** | Always-on µPy blob on EFI + BIOS; Python task = Metal task; host `py` shell + C↔Py trampolines; guest import + await (`async_py`); boot-proofed overlap/yield fairness — gaps below |
 
-Details: `IO.md`, `LIBC_ASYNC.md`.
+Details: `IO.md`, `LIBC_ASYNC.md`, `MICROPYTHON.md`.
 
 ---
 
@@ -35,10 +36,24 @@ Details: `IO.md`, `LIBC_ASYNC.md`.
 
 ## Next step — MicroPython (core)
 
-- [ ] Spike kernel µPy per [`MICROPYTHON.md`](MICROPYTHON.md): Python task =
-      Metal task, MAP blob, Metal awaitables, ≥2 overlapping tasks on multi-CPU,
-      no GIL; then bind/`metal.aio`, C↔Py trampolines, signed zip (see integration
-      checklist in that doc)
+Spike landed (see Shipped table above) — see [`MICROPYTHON.md`](MICROPYTHON.md)'s
+[Implementation status](MICROPYTHON.md#implementation-status) for the
+validated (not aspirational) breakdown. Real gaps left:
+
+- [ ] **Generic bind table** — `pm_metal_py_bind_table()` is a no-op stub;
+      `metal.aio`'s 3 functions are hand-written, not table rows. Matches
+      `MODS.md` checklist item 9 ("µPy binds the same registries" — next).
+- [ ] **Signed stdlib zip** — `mods/py/stdlib.zip` exists and mounts on both
+      ports, but no `.sig`/trust check, no HTTP single-flight fetch, no
+      enforced `builtin→frozen→aot→wasm→py` import order.
+- [ ] **Task-local GC spaces** — still one global run-lock serializing all
+      Python bytecode; no per-task nursery, no all-parked compact barrier.
+- [ ] **Cancel / exception isolation** — sync `py_call` doesn't reject a
+      callable that tries to park; one task's OOM/exception isolation is
+      unverified.
+- [ ] `mem` shell command doesn't break out the µPy blob as its own line
+      (counted inside aggregate `map`, per the doc's own Memory section).
+- [ ] Write up `.mpy`/NLR park-resume safety note + blob-size-vs-Doom-HEAP note.
 
 ## Optional / later
 

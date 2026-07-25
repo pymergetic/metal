@@ -68,6 +68,25 @@ int pm_metal_wasm_mod_image_open(const char                *name,
 void pm_metal_wasm_mod_image_close(pm_metal_wasm_mod_image_t *img);
 
 /**
+ * Fresh instance + exec_env sharing an already-loaded module (module
+ * "0th instance" stays owned by its loader — e.g. mod.c's registry slot).
+ * Use for a private, isolated per-process WASM heap/globals ("give this
+ * run its own instance") without reloading/recompiling the module.
+ * out->module/copy are non-owning aliases; out->inst/exec_env are owned
+ * by the caller — release with pm_metal_wasm_mod_image_deinstantiate.
+ */
+int pm_metal_wasm_mod_image_instantiate(void                      *module,
+                                        const char                *name,
+                                        pm_metal_wasm_mod_image_t *out);
+
+/**
+ * Tear down a pm_metal_wasm_mod_image_instantiate() result: inst +
+ * exec_env only. Does not unload the module or free copy bytes (owned
+ * by the loader, not this instance).
+ */
+void pm_metal_wasm_mod_image_deinstantiate(pm_metal_wasm_mod_image_t *img);
+
+/**
  * Call guest export `name` with signature ()i. Sets *result_out from return.
  * 0 ok, -1 missing/fail.
  */
