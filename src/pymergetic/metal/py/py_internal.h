@@ -23,9 +23,9 @@ typedef struct pm_metal_py_job {
 pm_metal_py_job_t *pm_metal_py_job_current(void);
 void pm_metal_py_job_set_pending(pm_metal_py_job_t *job, pm_metal_async_handle_t h, mp_obj_t aw);
 
-void     pm_metal_py_aio_mod_init(void);
-void     pm_metal_py_c_py_demo_seed(void);
-mp_obj_t pm_metal_py_new_awaitable(pm_metal_async_handle_t h);
+void pm_metal_py_c_py_demo_seed(void);
+void pm_metal_py_pmcmd_install(void);
+void pm_metal_py_mod_install(void);
 
 void pm_metal_py_zip_init_sys_path(void);
 int  pm_metal_py_zip_ensure(void);

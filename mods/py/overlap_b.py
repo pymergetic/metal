@@ -1,4 +1,4 @@
-import metal.aio as a
+import pymergetic.metal.aio as a
 
 
 async def main():

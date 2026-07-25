@@ -1,5 +1,10 @@
 # Source tree
 
+Before anything below: [`AGENTS.md`](../AGENTS.md)'s "Prime directive" (search
+intensively for an existing helper/pattern before adding a new one) outranks
+every rule in this file. This doc is the *where things live* / *how they're
+spelled* reference once you already know reuse isn't an option.
+
 Maps to [LAYERS.md](LAYERS.md). Stops at wasm interface.
 
 **Active target:** `efi` only. Freestanding Metal modules live under

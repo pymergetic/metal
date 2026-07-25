@@ -39,6 +39,10 @@ SECTIONS
     PROVIDE_HIDDEN (__pm_metal_shell_cmds_start = .);
     KEEP (*(SORT_BY_NAME (.pm_metal_shell_cmds.*)));
     PROVIDE_HIDDEN (__pm_metal_shell_cmds_end = .);
+    . = ALIGN(16);
+    PROVIDE_HIDDEN (__pm_metal_py_binds_start = .);
+    KEEP (*(SORT_BY_NAME (.pm_metal_py_binds.*)));
+    PROVIDE_HIDDEN (__pm_metal_py_binds_end = .);
   } :data
 
   .bss : {

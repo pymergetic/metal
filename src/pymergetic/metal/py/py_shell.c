@@ -111,7 +111,7 @@ static void PyShellCall(int32_t argc, char **argv)
     }
   }
 
-  task_h = pm_metal_py_fn_call_async(&fn, (uint32_t)a);
+  task_h = pm_metal_py_fn_call_async_bound(&fn, (uint32_t)a);
   if (task_h == 0) {
     pm_metal_shell_out("py: call_async failed");
     return;

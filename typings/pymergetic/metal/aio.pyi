@@ -1,11 +1,12 @@
 """
-``metal.aio`` — sync clocks + Metal awaitables.
+``pymergetic.metal.aio`` — sync clocks + Metal awaitables.
 
-Runtime: C module in ``py_aio_mod.c``.
+Runtime: C module in ``runtime/async/async_py_bind.c``, wired via PM_METAL_PY_BIND
+(``py_bind.c``) — real attributes, not string-keyed dispatch.
 ``await`` parks the Python task on a ``pm_metal_async_handle_t``.
 
 Note: named ``aio`` not ``async`` — ``async`` is a Python keyword, so
-``import metal.async`` / ``metal.async.sleep_us`` are SyntaxErrors.
+``import pymergetic.metal.async`` / ``.async.sleep_us`` are SyntaxErrors.
 """
 
 from typing import Any, Generator

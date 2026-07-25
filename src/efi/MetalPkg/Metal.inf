@@ -51,6 +51,7 @@
   ../../pymergetic/metal/runtime/async/async_ops.c
   ../../pymergetic/metal/runtime/async/async_natives.c
   ../../pymergetic/metal/runtime/async/async_session.c
+  ../../pymergetic/metal/runtime/async/async_py_bind.c
   ../../pymergetic/metal/bus/io/io.c
   ../../pymergetic/metal/bus/pci/pci.c
   ../../pymergetic/metal/bus/virtio/virtio_pci.c
@@ -260,12 +261,15 @@
   ../../pymergetic/metal/shell/shell/shell.c
   ../../pymergetic/metal/shell/shell/shell_cmd.c
   ../../pymergetic/metal/shell/shell/shell_core_cmds.c
+  ../../pymergetic/metal/shell/shell/shell_py_bind.c
   ../../pymergetic/metal/dev/net/net_shell.c
   ../../pymergetic/metal/dev/input/input_shell.c
   ../../pymergetic/metal/shell/hwinfo/hwinfo.c
   ../../pymergetic/metal/shell/lifecycle/lifecycle.c
   ../../pymergetic/metal/guest/process/process.c
+  ../../pymergetic/metal/guest/process/process_py_bind.c
   ../../pymergetic/metal/guest/mod/mod.c
+  ../../pymergetic/metal/guest/mod/mod_py_bind.c
   ../../pymergetic/metal/guest/pkg/pkg.c
   ../../pymergetic/metal/guest/pkg/pkg_doom.c
   ../../pymergetic/metal/guest/wasm/wasm.c
@@ -319,7 +323,8 @@
   ../../pymergetic/metal/py/mphalport_metal.c
   ../../pymergetic/metal/py/py.c
   ../../pymergetic/metal/py/py_bind.c
-  ../../pymergetic/metal/py/py_aio_mod.c
+  ../../pymergetic/metal/py/py_obj.c
+  ../../pymergetic/metal/py/py_await.c
   ../../pymergetic/metal/py/py_shell.c
   ../../pymergetic/metal/py/py_zip.c
   ../../pymergetic/metal/py/py_guest.c

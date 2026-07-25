@@ -1,7 +1,9 @@
 # Mods, functions, commands, process (EFI product model)
 
-**Status:** contract locked. Nestable process-on-task-tree landed; µPy bind
-and multi-focus UI still open — see [Today vs target](#today-vs-target).
+**Status:** contract locked. Nestable process-on-task-tree landed; µPy binds
+the same registries (`pymergetic.metal.mod.<name>.<func>(...)`, lazy
+attribute-resolved, see `docs/MICROPYTHON.md`); multi-focus UI still open —
+see [Today vs target](#today-vs-target).
 
 One concept with async/coro: mods register callables; work parks on **normal runners** via [`async.h`](../include/pymergetic/metal/runtime/async/async.h); host ≈ guest.
 
@@ -38,10 +40,10 @@ Steps:
 
 | Registration | What it is | Consumers |
 |--------------|------------|-----------|
-| **Function** | `func_resolve` → `fn_t` → `fn_coro` / task | other mods, host, **µPy later** |
-| **Command** | `cmd_resolve` → `cmd_t` (`fn` first + `name`) → `fn_process` | **Shell** now; **µPy later** too |
+| **Function** | `func_resolve` → `fn_t` → `fn_coro` / task | other mods, host, **µPy** (`pymergetic.metal.mod`) |
+| **Command** | `cmd_resolve` → `cmd_t` (`fn` first + `name`) → `fn_process` | **Shell**; **µPy** (`pmcmd.*`) |
 
-Shell, **other mods**, and µPy later use the **same** registries / load API.
+Shell, **other mods**, and **µPy** use the **same** registries / load API.
 No second py-only table. **No string lookup on the hot path** after resolve.
 
 ### Instances: shared "instance 0" vs fresh per-call
@@ -176,7 +178,7 @@ Relevant: [`guest/mod/`](../include/pymergetic/metal/guest/mod/mod.h), [`wasm.h`
 6. Nestable process on task tree — **done**  
 7. Opt-in fresh instance per process (restart/re-run/concurrent mods) — **done**  
 8. AOT doom `#GP` (parallel) — **open**  
-9. µPy binds the **same** registries — **next**  
+9. µPy binds the **same** registries — **done** (`pymergetic.metal.mod`, `guest/mod/mod_py_bind.c`)  
 
 ---
 
@@ -184,5 +186,5 @@ Relevant: [`guest/mod/`](../include/pymergetic/metal/guest/mod/mod.h), [`wasm.h`
 
 - Async ABI: `include/pymergetic/metal/runtime/async/async.h`, `docs/LIBC_ASYNC.md`  
 - Doom app: `docs/DOOM_ASYNC.md`  
-- µPy: `docs/MICROPYTHON.md` — binds after registries are real  
+- µPy: `docs/MICROPYTHON.md` — binds land in `pymergetic.metal.mod` (`guest/mod/mod_py_bind.c`)  
 - `docs/EFI.md`, `docs/IO.md`  

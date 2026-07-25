@@ -37,17 +37,18 @@ static pm_metal_py_job_t *g_current_job;
  */
 static volatile uint32_t mPyRunLock;
 
-static void py_run_lock(void)
+/*
+ * Non-blocking: single CAS attempt, 0 acquired / -1 busy. Never spins —
+ * the async engine is now a per-CPU work-stealing ring (run.c), so a
+ * blocking spin here would peg a whole runner behind a peer Python task's
+ * bytecode. Callers that run inside an async step (py_job_step) must
+ * park-and-retry on busy (pm_metal_async_await(self_h, pm_metal_async_yield()))
+ * instead of looping; pm_metal_py_call() (outside any step, can't await)
+ * bounds its own retry loop below instead.
+ */
+static int py_run_try_lock(void)
 {
-  uint32_t spins;
-
-  spins = 0;
-  while (pm_metal_slot_port_cas32(&mPyRunLock, 0, 1) != 0) {
-    pm_metal_cpu_pause();
-    if (++spins > 10000000u) {
-      spins = 0;
-    }
-  }
+  return (pm_metal_slot_port_cas32(&mPyRunLock, 0, 1) == 0) ? 0 : -1;
 }
 
 static void py_run_unlock(void)
@@ -81,12 +82,13 @@ size_t pm_metal_py_blob_bytes(void)
 
 void pm_metal_py_c_py_demo_seed(void)
 {
-  static const char src[] = "def add(a, b):\n"
+  static const char src[] = "import pymergetic.metal.aio as _a\n"
+                            "\n"
+                            "def add(a, b):\n"
                             "    return a + b\n"
                             "\n"
                             "async def blink(us):\n"
-                            "    import metal.aio as a\n"
-                            "    await a.sleep_us(us)\n";
+                            "    await _a.sleep_us(us)\n";
   nlr_buf_t         nlr;
   mp_obj_t          mod;
   mp_obj_dict_t    *globals;
@@ -136,7 +138,9 @@ int pm_metal_py_init(void)
   }
   g_blob_bytes = PM_METAL_PY_BLOB_BYTES;
   mp_embed_init(g_blob, g_blob_bytes, &stack_top);
-  pm_metal_py_aio_mod_init();
+  pm_metal_py_binds_install();
+  pm_metal_py_pmcmd_install();
+  pm_metal_py_mod_install();
   pm_metal_py_c_py_demo_seed();
   pm_metal_py_zip_init_sys_path();
   g_ready = 1;
@@ -169,12 +173,12 @@ static int py_read_path(const char *path, char **out, size_t *out_len)
   return 0;
 }
 
+/* Caller (py_job_step) already holds mPyRunLock via py_run_try_lock(). */
 static int py_exec_and_maybe_main(pm_metal_py_job_t *job)
 {
   nlr_buf_t nlr;
   int       rc;
 
-  py_run_lock();
   g_current_job = job;
   if (nlr_push(&nlr) == 0) {
     mp_lexer_t *lex = mp_lexer_new_from_str_len(MP_QSTR__lt_stdin_gt_, job->src, job->src_len, 0);
@@ -202,6 +206,7 @@ static int py_exec_and_maybe_main(pm_metal_py_job_t *job)
   return rc;
 }
 
+/* Caller (py_job_step) already holds mPyRunLock via py_run_try_lock(). */
 static int py_call_bound(pm_metal_py_job_t *job)
 {
   nlr_buf_t nlr;
@@ -212,14 +217,28 @@ static int py_call_bound(pm_metal_py_job_t *job)
   if (job->call_fn == MP_OBJ_NULL) {
     return -1;
   }
-  py_run_lock();
   g_current_job = job;
   arg           = mp_obj_new_int_from_uint(job->call_arg0);
   if (nlr_push(&nlr) == 0) {
-    ret          = mp_call_function_1(job->call_fn, arg);
-    job->py_coro = ret;
+    ret = mp_call_function_1(job->call_fn, arg);
+    /*
+     * Mirror of pm_metal_py_call's sync-into-async guard: this path
+     * (pm_metal_py_fn_call_async) always drives job->py_coro through
+     * py_resume_coro()'s mp_resume() next, which expects a real
+     * generator/coroutine. Binding a plain sync function and calling it
+     * here would otherwise "work" only via mp_resume's incidental
+     * AttributeError on .send() — make the mismatch explicit instead.
+     */
+    if (!mp_obj_is_type(ret, &mp_type_gen_instance)) {
+      pm_metal_log("py: async call target did not return a coroutine");
+      job->exe_exception = 1;
+      job->py_coro        = MP_OBJ_NULL;
+      rc                  = -1;
+    } else {
+      job->py_coro = ret;
+      rc           = 0;
+    }
     nlr_pop();
-    rc = 0;
   } else {
     mp_obj_print_exception(&mp_plat_print, MP_OBJ_FROM_PTR(nlr.ret_val));
     job->exe_exception = 1;
@@ -230,13 +249,13 @@ static int py_call_bound(pm_metal_py_job_t *job)
   return rc;
 }
 
+/* Caller (py_job_step) already holds mPyRunLock via py_run_try_lock(). */
 static pm_metal_status_t py_resume_coro(pm_metal_py_job_t *job)
 {
   mp_obj_t            ret_val = MP_OBJ_NULL;
   mp_vm_return_kind_t kind;
   nlr_buf_t           nlr;
 
-  py_run_lock();
   g_current_job   = job;
   job->pending    = 0;
   job->pending_aw = MP_OBJ_NULL;
@@ -294,6 +313,12 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
     return PM_METAL_ERROR;
   }
 
+  /*
+   * PY_STEP_LOAD does its own fs I/O, no bytecode yet — only EXEC/CALL/
+   * RESUME touch the shared blob, so only those try the lock, right
+   * before the call that needs it. Busy: park-and-retry at the same
+   * step, never spin the runner.
+   */
   switch (job->step) {
   case PY_STEP_LOAD: {
     char   path[256];
@@ -317,6 +342,14 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
   }
     /* fallthrough */
   case PY_STEP_EXEC:
+    /*
+     * py_exec_and_maybe_main() unlocks internally on every path (success,
+     * script exception, or "no main()") before returning — this call site
+     * only needs to gate *entry*, not release.
+     */
+    if (py_run_try_lock() != 0) {
+      return pm_metal_async_await(self_h, pm_metal_async_yield());
+    }
     if (py_exec_and_maybe_main(job) != 0) {
       job->step = PY_STEP_DONE;
       return PM_METAL_ERROR;
@@ -328,6 +361,10 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
     job->step = PY_STEP_RESUME;
     goto py_resume;
   case PY_STEP_CALL:
+    /* py_call_bound() unlocks internally on every path — same as above. */
+    if (py_run_try_lock() != 0) {
+      return pm_metal_async_await(self_h, pm_metal_async_yield());
+    }
     if (py_call_bound(job) != 0) {
       job->step = PY_STEP_DONE;
       return PM_METAL_ERROR;
@@ -339,14 +376,23 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
     job->step = PY_STEP_RESUME;
     /* fallthrough */
   case PY_STEP_RESUME:
-  py_resume: {
-    pm_metal_status_t st = py_resume_coro(job);
-    if (st == PM_METAL_WAITING && job->pending != 0) {
-      return pm_metal_async_await(self_h, job->pending);
+  py_resume:
+    /*
+     * py_resume_coro() itself unlocks right after mp_resume (before
+     * reporting WAITING) so a peer Python task can run while we sleep —
+     * only the entry needs gating here too.
+     */
+    if (py_run_try_lock() != 0) {
+      return pm_metal_async_await(self_h, pm_metal_async_yield());
     }
-    job->step = PY_STEP_DONE;
-    return st;
-  }
+    {
+      pm_metal_status_t st = py_resume_coro(job);
+      if (st == PM_METAL_WAITING && job->pending != 0) {
+        return pm_metal_async_await(self_h, job->pending);
+      }
+      job->step = PY_STEP_DONE;
+      return st;
+    }
   default:
     return PM_METAL_DONE;
   }
@@ -456,6 +502,8 @@ int pm_metal_py_lookup(const char *dotted, pm_metal_py_ref_t *out)
       char           mod[64];
       size_t         ml = (size_t)(dot - dotted);
       mp_map_elem_t *el;
+      const char    *seg;
+
       if (ml >= sizeof(mod)) {
         nlr_pop();
         return -1;
@@ -469,7 +517,36 @@ int pm_metal_py_lookup(const char *dotted, pm_metal_py_ref_t *out)
         nlr_pop();
         return -1;
       }
-      obj = mp_load_attr(el->value, qstr_from_str(dot + 1));
+      obj = el->value;
+
+      /*
+       * Walk each remaining dot-separated segment with its own
+       * mp_load_attr hop instead of treating everything after the first
+       * dot as one literal attribute name. The old single-hop version was
+       * correct by accident for exactly 2 segments ("metal.aio") but
+       * always failed for 3+ ("pymergetic.metal.aio.sleep_us" tried to
+       * load the literal attribute "metal.aio.sleep_us", which never
+       * exists).
+       */
+      seg = dot + 1;
+      for (;;) {
+        const char *next_dot = strchr(seg, '.');
+        char        attr[64];
+        size_t      al = (next_dot != NULL) ? (size_t)(next_dot - seg) : strlen(seg);
+
+        if (al == 0 || al >= sizeof(attr)) {
+          nlr_pop();
+          return -1;
+        }
+        memcpy(attr, seg, al);
+        attr[al] = '\0';
+        obj      = mp_load_attr(obj, qstr_from_str(attr));
+
+        if (next_dot == NULL) {
+          break;
+        }
+        seg = next_dot + 1;
+      }
     }
     out->obj = (void *)obj;
     nlr_pop();
@@ -489,26 +566,57 @@ int pm_metal_py_fn_bind(pm_metal_py_fn_t *fn, const char *dotted_name)
   return pm_metal_py_lookup(dotted_name, &fn->ref);
 }
 
+/*
+ * Max non-blocking try_lock attempts before pm_metal_py_call() fails
+ * closed instead of spinning forever — this runs outside any async step
+ * (direct host C / shell call), so it cannot pm_metal_async_await() like
+ * py_job_step() does on contention; a bounded spin + explicit "busy"
+ * failure is the "no fake sync" answer instead.
+ */
+#define PY_CALL_LOCK_MAX_TRIES 10000000u
+
 int pm_metal_py_call(pm_metal_py_fn_t *fn, int32_t *out_i32, int32_t a, int32_t b)
 {
   nlr_buf_t nlr;
   mp_obj_t  ret;
   mp_obj_t  args[2];
   int       rc;
+  uint32_t  tries;
 
   if (fn == NULL || fn->ref.obj == NULL) {
     return -1;
   }
-  py_run_lock();
+
+  tries = 0;
+  while (py_run_try_lock() != 0) {
+    pm_metal_cpu_pause();
+    if (++tries > PY_CALL_LOCK_MAX_TRIES) {
+      pm_metal_log("py: call busy");
+      return -1;
+    }
+  }
+
   args[0] = mp_obj_new_int(a);
   args[1] = mp_obj_new_int(b);
   if (nlr_push(&nlr) == 0) {
     ret = mp_call_function_n_kw((mp_obj_t)fn->ref.obj, 2, 0, args);
-    if (out_i32 != NULL) {
-      *out_i32 = (int32_t)mp_obj_get_int(ret);
+    /*
+     * Calling an async-def target just returns an inert generator without
+     * running its body — real Python semantics, not a park. A sync
+     * trampoline can't drive that (would need py_resume_coro's machinery),
+     * so fail explicitly instead of relying on mp_obj_get_int()'s
+     * incidental TypeError on a generator object.
+     */
+    if (mp_obj_is_type(ret, &mp_type_gen_instance)) {
+      pm_metal_log("py: sync call cannot park");
+      rc = -1;
+    } else {
+      if (out_i32 != NULL) {
+        *out_i32 = (int32_t)mp_obj_get_int(ret);
+      }
+      rc = 0;
     }
     nlr_pop();
-    rc = 0;
   } else {
     rc = -1;
   }
@@ -516,7 +624,7 @@ int pm_metal_py_call(pm_metal_py_fn_t *fn, int32_t *out_i32, int32_t a, int32_t 
   return rc;
 }
 
-pm_metal_async_handle_t pm_metal_py_fn_call_async(pm_metal_py_fn_t *fn, uint32_t arg0)
+pm_metal_async_handle_t pm_metal_py_fn_call_async_bound(pm_metal_py_fn_t *fn, uint32_t arg0)
 {
   pm_metal_py_job_t      *job;
   pm_metal_async_handle_t ch;
@@ -555,4 +663,66 @@ pm_metal_async_handle_t pm_metal_py_fn_call_async(pm_metal_py_fn_t *fn, uint32_t
     return 0;
   }
   return th;
+}
+
+/*
+ * Handle table for guest-visible pm_metal_py_fn_resolve/_call/_call_async
+ * (py.h) — mirrors mod.c's ModFnHandleAlloc/Get exactly: fixed slots,
+ * index 1..N, a slot is free when its ref.obj field is NULL.
+ */
+static pm_metal_py_fn_t mPyFnHandles[PM_METAL_PY_FN_H_MAX + 1];
+
+static pm_metal_py_fn_h_t PyFnHandleAlloc(const pm_metal_py_fn_t *fn)
+{
+  uint32_t i;
+
+  for (i = 1; i <= PM_METAL_PY_FN_H_MAX; i++) {
+    if (mPyFnHandles[i].ref.obj == NULL) {
+      mPyFnHandles[i] = *fn;
+      return (pm_metal_py_fn_h_t)i;
+    }
+  }
+
+  return PM_METAL_PY_FN_H_INVALID;
+}
+
+static pm_metal_py_fn_t *PyFnHandleGet(pm_metal_py_fn_h_t h)
+{
+  if (h == PM_METAL_PY_FN_H_INVALID || h > PM_METAL_PY_FN_H_MAX) {
+    return NULL;
+  }
+  if (mPyFnHandles[h].ref.obj == NULL) {
+    return NULL;
+  }
+  return &mPyFnHandles[h];
+}
+
+pm_metal_py_fn_h_t pm_metal_py_fn_resolve(const char *dotted_name)
+{
+  pm_metal_py_fn_t fn;
+
+  if (pm_metal_py_fn_bind(&fn, dotted_name) != 0) {
+    return PM_METAL_PY_FN_H_INVALID;
+  }
+  return PyFnHandleAlloc(&fn);
+}
+
+int pm_metal_py_fn_call(pm_metal_py_fn_h_t fn_h, int32_t *out_i32, int32_t a, int32_t b)
+{
+  pm_metal_py_fn_t *fn = PyFnHandleGet(fn_h);
+
+  if (fn == NULL) {
+    return -1;
+  }
+  return pm_metal_py_call(fn, out_i32, a, b);
+}
+
+pm_metal_async_handle_t pm_metal_py_fn_call_async(pm_metal_py_fn_h_t fn_h, uint32_t arg0)
+{
+  pm_metal_py_fn_t *fn = PyFnHandleGet(fn_h);
+
+  if (fn == NULL) {
+    return 0;
+  }
+  return pm_metal_py_fn_call_async_bound(fn, arg0);
 }

@@ -65,7 +65,7 @@ uintptr_t mp_hal_stdio_poll(uintptr_t poll_flags)
 
 void mp_hal_delay_ms(mp_uint_t ms)
 {
-  (void)ms; /* product sleep is async via metal.aio */
+  (void)ms; /* product sleep is async via pymergetic.metal.aio */
 }
 
 void mp_hal_delay_us(mp_uint_t us)
