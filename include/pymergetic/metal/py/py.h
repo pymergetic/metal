@@ -20,6 +20,13 @@ extern "C" {
 #define PM_METAL_PY_BLOB_BYTES (256u * 1024u)
 #endif
 
+/** Default heap for an opt-in isolated context (pm_metal_py_run_*_isolated) —
+ * much smaller than the shared blob since it's one task's own arena, not
+ * everyone's; override per call. */
+#ifndef PM_METAL_PY_ISOLATED_BLOB_BYTES
+#define PM_METAL_PY_ISOLATED_BLOB_BYTES (64u * 1024u)
+#endif
+
 #define PM_METAL_PY_WASI_MODULE "pymergetic.metal.py"
 
 /**
@@ -81,6 +88,43 @@ size_t pm_metal_py_blob_bytes(void);
 pm_metal_async_handle_t pm_metal_py_run_script(const char *path);
 pm_metal_async_handle_t pm_metal_py_run_str(const char *src);
 
+/**
+ * Same, but the task gets its own exclusively-owned MicroPython VM
+ * context (own heap, own module namespace) instead of the shared/
+ * default one — no mPyRunLock contention with any other task, and it
+ * runs bytecode in real parallel with whatever else is going on a
+ * different CPU right now. Trades that isolation for: no stdlib.zip on
+ * sys.path, and the setup cost of re-installing the bind/pmcmd/mod
+ * tables (cheap — see docs/MICROPYTHON.md). @a heap_bytes 0 = default
+ * (PM_METAL_PY_ISOLATED_BLOB_BYTES).
+ */
+pm_metal_async_handle_t pm_metal_py_run_script_isolated(const char *path, size_t heap_bytes);
+pm_metal_async_handle_t pm_metal_py_run_str_isolated(const char *src, size_t heap_bytes);
+
+/** Diagnostics for the `mem` shell breakdown — see shell_core_cmds.c. */
+uint32_t pm_metal_py_isolated_ctx_count(void);
+size_t   pm_metal_py_isolated_ctx_bytes(void);
+
+/**
+ * Persistent Python REPL — one long-lived task on the shared/default
+ * context (never isolated: it needs persistent globals across every
+ * line, exactly the property the shared context already has for free).
+ * Real `mp_compile(..., is_repl=true)` + MICROPY_HELPER_REPL's
+ * mp_repl_continue_with_input for multi-line blocks — not a hand-rolled
+ * approximation. shell.c is the sole producer (one line per Enter);
+ * feed_line fails (-1) if the mailbox still holds an unconsumed line —
+ * that should never happen in practice since the REPL task drains it
+ * well within a human keystroke, but shell.c must treat -1 as "busy,
+ * try again" rather than silently dropping the line.
+ */
+pm_metal_async_handle_t pm_metal_py_repl_start(void);
+void                    pm_metal_py_repl_stop(void);
+int                     pm_metal_py_repl_active(void);
+int                     pm_metal_py_repl_feed_line(const char *line, size_t len);
+/** ">>> " (fresh statement) or "... " (mid multi-line block) — literal,
+ * never NULL. */
+const char *pm_metal_py_repl_prompt(void);
+
 typedef enum {
   PM_METAL_PY_SYNC   = 1,
   PM_METAL_PY_ASYNC  = 2,
@@ -113,8 +157,8 @@ int                     pm_metal_py_lookup(const char *dotted, pm_metal_py_ref_t
  * cross-ABI handles can use pm_metal_py_fn_bind + pm_metal_py_call /
  * pm_metal_py_fn_call_async_bound directly instead.
  */
-pm_metal_py_fn_h_t      pm_metal_py_fn_resolve(const char *dotted_name);
-int                     pm_metal_py_fn_call(pm_metal_py_fn_h_t fn_h, int32_t *out_i32, int32_t a, int32_t b);
+pm_metal_py_fn_h_t pm_metal_py_fn_resolve(const char *dotted_name);
+int pm_metal_py_fn_call(pm_metal_py_fn_h_t fn_h, int32_t *out_i32, int32_t a, int32_t b);
 pm_metal_async_handle_t pm_metal_py_fn_call_async(pm_metal_py_fn_h_t fn_h, uint32_t arg0);
 
 int pm_metal_py_zip_ensure(void);
@@ -139,10 +183,10 @@ int pm_metal_py_bind_table(const pm_metal_py_bind_t *rows, size_t n);
  * call sites do mod.name(...) directly — never a string-keyed dispatch.
  * `var` must be a unique static identifier in the translation unit.
  */
-#define PM_METAL_PY_BIND(var, mod_str, name_str, fn_obj, class_)                          \
-  static const pm_metal_py_bind_t var                                                    \
-    __attribute__((used, section(".pm_metal_py_binds.1"), aligned(16))) = {               \
-      (mod_str), (name_str), (void *)&(fn_obj), (class_)                                  \
+#define PM_METAL_PY_BIND(var, mod_str, name_str, fn_obj, class_)            \
+  static const pm_metal_py_bind_t var                                       \
+    __attribute__((used, section(".pm_metal_py_binds.1"), aligned(16))) = { \
+      (mod_str), (name_str), (void *)&(fn_obj), (class_)                    \
     }
 
 /** Gather linker-section bind rows (called once from pm_metal_py_init). */

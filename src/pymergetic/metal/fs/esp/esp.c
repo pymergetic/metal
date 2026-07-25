@@ -21,7 +21,11 @@ int pm_metal_esp_rename_port(const char *old_path, const char *new_path);
 int pm_metal_esp_fsync_port(const char *path);
 int pm_metal_esp_readdir_port(const char *path, uint32_t index, char *name, uint32_t name_cap);
 
-#define PM_METAL_ESP_CACHE_MAX   32u
+/* mods/apps + mods/py (now incl. stdlib_src/'s ~20 Easy-pack files, see
+ * docs/MICROPYTHON.md) + the 2 individually preloaded mods/tests fixtures
+ * already run ~40 entries before counting any future growth — 128 gives
+ * real headroom instead of silently dropping preload/write slots again. */
+#define PM_METAL_ESP_CACHE_MAX   128u
 #define PM_METAL_ESP_DIR_MAX     16u
 #define PM_METAL_ESP_PATH_MAX    128u
 #define PM_METAL_ESP_READDIR_MAX 32u

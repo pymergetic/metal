@@ -21,6 +21,7 @@
 #include <pymergetic/metal/shell/ui/ui.h>
 #include <pymergetic/metal/shell/shell/shell.h>
 #include <pymergetic/metal/guest/wasm/wasm.h>
+#include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/fs/esp/esp.h>
 #include <pymergetic/metal/trust/trust.h>
 #include <pymergetic/metal/util/ip.h>
@@ -395,12 +396,30 @@ static pm_metal_status_t MetalBootInitStep(pm_metal_async_handle_t self_h)
       pm_metal_log_styled(PM_METAL_LOG_STYLE_OK, "`-- ready        ok");
       pm_metal_log("");
       /*
-         * Embedded ANSI (DEFAULT style): UI MetalUiDrawTextAnsi + UART SGR.
-         * Cyan READY, dim hint — same energy as the shell prompt colors.
-         */
+       * Embedded ANSI (DEFAULT style): UI MetalUiDrawTextAnsi + UART SGR.
+       * Cyan READY, dim hint -- same energy as the shell prompt colors.
+       */
       pm_metal_log("\033[1;36mREADY\033[0m\033[2m  --  type help\033[0m");
       pm_metal_log("metal-boot: ready");
       pm_metal_log("");
+      /*
+       * Python REPL becomes the primary interactive surface (see
+       * docs/MICROPYTHON.md's "Python REPL as the main shell"): the C
+       * command dispatcher stays fully wired and reachable via the
+       * 'console' escape word typed at the >>> prompt -- never removed,
+       * just no longer the default landing surface. Failure here is
+       * non-fatal: fall back to a plain C shell prompt exactly like
+       * before this feature existed.
+       */
+      if (pm_metal_py_repl_start() != 0) {
+        pm_metal_log("\033[1;35mMetal Python\033[0m -- persistent REPL, shared context,"
+                     " globals stick around.");
+        pm_metal_log("Type \033[1m'console'\033[0m at the >>> prompt any time for the C shell"
+                     " (help, ls, py -f ...).");
+        pm_metal_log("");
+      } else {
+        pm_metal_log("metal-boot: repl start failed, falling back to C console");
+      }
       {
         uint32_t ty;
         uint32_t sz;

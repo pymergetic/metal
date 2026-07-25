@@ -153,9 +153,11 @@ extern int32_t pm_metal_mod_set_capability(uint32_t cap)
  * ui_kind: pm_metal_process_ui_kind_t; tab: pm_metal_ui_handle_t (0 = invalid).
  * instance_mode: pm_metal_mod_instance_t. flags: pm_metal_mod_flag_t bits.
  */
-extern int32_t pm_metal_mod_cmd_invoke(
-  const char *cmd_name, uint32_t ui_kind, uint32_t tab, uint32_t instance_mode, uint32_t flags)
-  PM_METAL_MOD_IMPORT(pm_metal_mod_cmd_invoke);
+extern int32_t pm_metal_mod_cmd_invoke(const char *cmd_name,
+                                       uint32_t    ui_kind,
+                                       uint32_t    tab,
+                                       uint32_t    instance_mode,
+                                       uint32_t flags) PM_METAL_MOD_IMPORT(pm_metal_mod_cmd_invoke);
 
 /** 1 if command is registered. */
 extern int32_t pm_metal_mod_cmd_exists(const char *cmd_name)
@@ -198,7 +200,8 @@ extern pm_metal_mod_fresh_h_t pm_metal_mod_fresh_open(const char *mod_name)
  * shared instance 0) → opaque fn handle (0 = fail), usable with
  * fn_coro / fn_process exactly like pm_metal_mod_func_resolve's handle.
  */
-extern pm_metal_mod_fn_h_t pm_metal_mod_fresh_resolve(pm_metal_mod_fresh_h_t h, const char *func_name)
+extern pm_metal_mod_fn_h_t pm_metal_mod_fresh_resolve(pm_metal_mod_fresh_h_t h,
+                                                      const char            *func_name)
   PM_METAL_MOD_IMPORT(pm_metal_mod_fresh_resolve);
 
 /** Deinstantiate the fresh instance and release the handle. */
@@ -215,8 +218,7 @@ extern int32_t pm_metal_mod_fn_process(pm_metal_mod_fn_h_t fn_h,
                                        uint32_t            ui_kind,
                                        uint32_t            tab,
                                        uint32_t            instance_mode,
-                                       uint32_t            flags)
-  PM_METAL_MOD_IMPORT(pm_metal_mod_fn_process);
+                                       uint32_t flags) PM_METAL_MOD_IMPORT(pm_metal_mod_fn_process);
 
 /** 1 if mod has that function registered. */
 extern int32_t pm_metal_mod_func_exists(const char *mod_name, const char *func_name)
@@ -323,7 +325,9 @@ pm_metal_mod_fresh_h_t pm_metal_mod_fresh_open(const char *mod_name);
  * just keyed by the opaque scope handle instead of a raw image
  * pointer. 0 ok, -1 fail.
  */
-int pm_metal_mod_fresh_resolve(pm_metal_mod_fresh_h_t h, const char *func_name, pm_metal_mod_fn_t *out);
+int pm_metal_mod_fresh_resolve(pm_metal_mod_fresh_h_t h,
+                               const char            *func_name,
+                               pm_metal_mod_fn_t     *out);
 
 /**
  * Deinstantiate the fresh instance opened by pm_metal_mod_fresh_open

@@ -23,6 +23,30 @@ static void PyShellUsage(void)
   pm_metal_shell_out("  py -f <mod.fn> [ints...]       call a bound Python fn");
   pm_metal_shell_out("    py -f c_py_demo.add 2 3      -> prints 5");
   pm_metal_shell_out("    py -f c_py_demo.blink 50000  -> runs until blink finishes");
+  pm_metal_shell_out("  py -x <script.py> | -x -c '<code>'");
+  pm_metal_shell_out("    own VM context (own heap, no stdlib.zip) -- runs in");
+  pm_metal_shell_out("    real parallel with the shared context on another CPU");
+  pm_metal_shell_out("  py -i                          start the persistent Python REPL");
+  pm_metal_shell_out("    ('console' at the >>> prompt pauses it, back to this shell)");
+}
+
+static void PyShellRepl(void)
+{
+  pm_metal_async_handle_t task_h;
+
+  if (pm_metal_py_repl_active()) {
+    pm_metal_shell_out("py: repl already running -- type 'console' at >>> to pause it");
+    return;
+  }
+
+  task_h = pm_metal_py_repl_start();
+  if (task_h == 0) {
+    pm_metal_shell_out("py: repl start failed");
+    return;
+  }
+
+  pm_metal_shell_out("Metal Python -- persistent REPL, shared context, globals stick around.");
+  pm_metal_shell_out("Type 'console' at the >>> prompt to pause it and return to this shell.");
 }
 
 static int32_t PyParseI32(const char *s, int32_t *out)
@@ -133,9 +157,16 @@ static void PyShellRun(int32_t argc, char **argv)
   uint64_t                deadline;
   const char             *src_or_path;
   int32_t                 is_cmd;
+  int32_t                 is_isolated;
+  int32_t                 argi;
 
   if (argc >= 2 && argv[1] != NULL && strcmp(argv[1], "-f") == 0) {
     PyShellCall(argc, argv);
+    return;
+  }
+
+  if (argc >= 2 && argv[1] != NULL && strcmp(argv[1], "-i") == 0) {
+    PyShellRepl();
     return;
   }
 
@@ -144,23 +175,31 @@ static void PyShellRun(int32_t argc, char **argv)
     return;
   }
 
-  if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
+  argi        = 1;
+  is_isolated = (argc >= 2 && argv[1] != NULL && strcmp(argv[1], "-x") == 0) ? 1 : 0;
+  if (is_isolated) {
+    argi = 2;
+  }
+
+  if (argc <= argi || argv[argi] == NULL || argv[argi][0] == '\0') {
     PyShellUsage();
     return;
   }
 
-  is_cmd = (strcmp(argv[1], "-c") == 0) ? 1 : 0;
+  is_cmd = (strcmp(argv[argi], "-c") == 0) ? 1 : 0;
   if (is_cmd) {
-    if (argc < 3 || argv[2] == NULL || argv[2][0] == '\0') {
+    if (argc <= argi + 1 || argv[argi + 1] == NULL || argv[argi + 1][0] == '\0') {
       PyShellUsage();
       return;
     }
 
-    src_or_path = argv[2];
-    task_h      = pm_metal_py_run_str(src_or_path);
+    src_or_path = argv[argi + 1];
+    task_h =
+      is_isolated ? pm_metal_py_run_str_isolated(src_or_path, 0) : pm_metal_py_run_str(src_or_path);
   } else {
-    src_or_path = argv[1];
-    task_h      = pm_metal_py_run_script(src_or_path);
+    src_or_path = argv[argi];
+    task_h      = is_isolated ? pm_metal_py_run_script_isolated(src_or_path, 0)
+                              : pm_metal_py_run_script(src_or_path);
   }
 
   if (task_h == 0) {
@@ -180,5 +219,5 @@ static void PyShellRun(int32_t argc, char **argv)
 
 PM_METAL_SHELL_CMD(g_pm_metal_shell_cmd_py,
                    "py",
-                   "py <script> | -c <code> | -f <mod.fn> [args]",
+                   "py [-x] <script>|-c <code> | -f <mod.fn> [args] | -i",
                    PyShellRun);

@@ -71,12 +71,15 @@ while i < len(lines):
             "src/pymergetic/metal/py/mphalport_metal.c",
             "src/pymergetic/metal/py/py.c",
             "src/pymergetic/metal/py/py_bind.c",
+            "src/pymergetic/metal/py/py_ctx.c",
             "src/pymergetic/metal/py/py_obj.c",
             "src/pymergetic/metal/py/py_await.c",
             "src/pymergetic/metal/py/py_shell.c",
             "src/pymergetic/metal/py/py_zip.c",
+            "src/pymergetic/metal/py/py_zip_read.c",
             "src/pymergetic/metal/py/py_guest.c",
             "src/pymergetic/metal/py/py_port_stubs.c",
+            "external/micropython/extmod/modbinascii.c",
         ]
         for g in glue:
             out.append(f"  {os.path.relpath(root / g, inf_dir)}\n")

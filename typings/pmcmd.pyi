@@ -80,7 +80,7 @@ def ps(*args: Any) -> Any:
     ...
 
 def py(*args: Any) -> Any:
-    """py <script> | -c <code> | -f <mod.fn> [args]"""
+    """py [-x] <script>|-c <code> | -f <mod.fn> [args] | -i"""
     ...
 
 def quit(*args: Any) -> Any:

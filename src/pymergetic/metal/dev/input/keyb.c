@@ -147,8 +147,8 @@ int pm_metal_input_keyb_parse(const char *id, pm_metal_input_keyb_t *out)
 
 char pm_metal_input_keyb_ascii(uint8_t set1_make, int32_t shift)
 {
-  uint8_t                        sc;
-  const pm_metal_keyb_layout_t  *cur;
+  uint8_t                       sc;
+  const pm_metal_keyb_layout_t *cur;
 
   sc  = (uint8_t)(set1_make & 0x7Fu);
   cur = KeybLayoutCurrent();

@@ -22,45 +22,45 @@ extern "C" {
 /* Metal keycodes — USB HID Keyboard/Keypad usage page (subset). */
 typedef uint16_t pm_metal_keycode_t;
 
-#define PM_METAL_KEY_NONE       0u
-#define PM_METAL_KEY_A          0x04u
-#define PM_METAL_KEY_Z          0x1du
-#define PM_METAL_KEY_1          0x1eu
-#define PM_METAL_KEY_0          0x27u
-#define PM_METAL_KEY_ENTER      0x28u
-#define PM_METAL_KEY_ESCAPE     0x29u
-#define PM_METAL_KEY_BACKSPACE  0x2au
-#define PM_METAL_KEY_TAB        0x2bu
-#define PM_METAL_KEY_SPACE      0x2cu
-#define PM_METAL_KEY_MINUS      0x2du /* '-' / '_' */
-#define PM_METAL_KEY_EQUAL      0x2eu /* '=' / '+' */
-#define PM_METAL_KEY_LEFTBRACE  0x2fu /* '[' / '{' */
-#define PM_METAL_KEY_RIGHTBRACE 0x30u /* ']' / '}' */
-#define PM_METAL_KEY_BACKSLASH  0x31u /* '\' / '|' */
-#define PM_METAL_KEY_SEMICOLON  0x33u /* ';' / ':' */
-#define PM_METAL_KEY_APOSTROPHE 0x34u /* ''' / '"' */
-#define PM_METAL_KEY_GRAVE      0x35u /* '`' / '~' */
-#define PM_METAL_KEY_COMMA      0x36u /* ',' / '<' */
-#define PM_METAL_KEY_PERIOD     0x37u /* '.' / '>' */
-#define PM_METAL_KEY_SLASH      0x38u /* '/' / '?' */
-#define PM_METAL_KEY_CAPSLOCK   0x39u
-#define PM_METAL_KEY_F1         0x3au
-#define PM_METAL_KEY_F10        0x43u
-#define PM_METAL_KEY_F11        0x44u
-#define PM_METAL_KEY_F12        0x45u
-#define PM_METAL_KEY_PRTSCR     0x46u
-#define PM_METAL_KEY_SCROLLLOCK 0x47u
-#define PM_METAL_KEY_PAUSE      0x48u
-#define PM_METAL_KEY_INSERT     0x49u
-#define PM_METAL_KEY_HOME       0x4au
-#define PM_METAL_KEY_PAGEUP     0x4bu
-#define PM_METAL_KEY_DELETE     0x4cu
-#define PM_METAL_KEY_END        0x4du
-#define PM_METAL_KEY_PAGEDOWN   0x4eu
-#define PM_METAL_KEY_RIGHT      0x4fu
-#define PM_METAL_KEY_LEFT       0x50u
-#define PM_METAL_KEY_DOWN       0x51u
-#define PM_METAL_KEY_UP         0x52u
+#define PM_METAL_KEY_NONE        0u
+#define PM_METAL_KEY_A           0x04u
+#define PM_METAL_KEY_Z           0x1du
+#define PM_METAL_KEY_1           0x1eu
+#define PM_METAL_KEY_0           0x27u
+#define PM_METAL_KEY_ENTER       0x28u
+#define PM_METAL_KEY_ESCAPE      0x29u
+#define PM_METAL_KEY_BACKSPACE   0x2au
+#define PM_METAL_KEY_TAB         0x2bu
+#define PM_METAL_KEY_SPACE       0x2cu
+#define PM_METAL_KEY_MINUS       0x2du /* '-' / '_' */
+#define PM_METAL_KEY_EQUAL       0x2eu /* '=' / '+' */
+#define PM_METAL_KEY_LEFTBRACE   0x2fu /* '[' / '{' */
+#define PM_METAL_KEY_RIGHTBRACE  0x30u /* ']' / '}' */
+#define PM_METAL_KEY_BACKSLASH   0x31u /* '\' / '|' */
+#define PM_METAL_KEY_SEMICOLON   0x33u /* ';' / ':' */
+#define PM_METAL_KEY_APOSTROPHE  0x34u /* ''' / '"' */
+#define PM_METAL_KEY_GRAVE       0x35u /* '`' / '~' */
+#define PM_METAL_KEY_COMMA       0x36u /* ',' / '<' */
+#define PM_METAL_KEY_PERIOD      0x37u /* '.' / '>' */
+#define PM_METAL_KEY_SLASH       0x38u /* '/' / '?' */
+#define PM_METAL_KEY_CAPSLOCK    0x39u
+#define PM_METAL_KEY_F1          0x3au
+#define PM_METAL_KEY_F10         0x43u
+#define PM_METAL_KEY_F11         0x44u
+#define PM_METAL_KEY_F12         0x45u
+#define PM_METAL_KEY_PRTSCR      0x46u
+#define PM_METAL_KEY_SCROLLLOCK  0x47u
+#define PM_METAL_KEY_PAUSE       0x48u
+#define PM_METAL_KEY_INSERT      0x49u
+#define PM_METAL_KEY_HOME        0x4au
+#define PM_METAL_KEY_PAGEUP      0x4bu
+#define PM_METAL_KEY_DELETE      0x4cu
+#define PM_METAL_KEY_END         0x4du
+#define PM_METAL_KEY_PAGEDOWN    0x4eu
+#define PM_METAL_KEY_RIGHT       0x4fu
+#define PM_METAL_KEY_LEFT        0x50u
+#define PM_METAL_KEY_DOWN        0x51u
+#define PM_METAL_KEY_UP          0x52u
 #define PM_METAL_KEY_NUMLOCK     0x53u
 #define PM_METAL_KEY_KP_SLASH    0x54u
 #define PM_METAL_KEY_KP_ASTERISK 0x55u

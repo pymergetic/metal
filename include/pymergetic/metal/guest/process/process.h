@@ -114,8 +114,8 @@ uint32_t pm_metal_process_inherit_id(void);
  * that teardown call — see PM_METAL_MOD_FLAG_AUTO_UNLOAD.
  */
 void pm_metal_process_set_owned_image(pm_metal_process_id_t id,
-                                      const void            *img,
-                                      int32_t                auto_unload);
+                                      const void           *img,
+                                      int32_t               auto_unload);
 
 /**
  * Read-only peek at a process's owned fresh instance image (a

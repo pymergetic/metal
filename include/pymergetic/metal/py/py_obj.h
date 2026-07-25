@@ -44,7 +44,7 @@ pm_metal_py_obj_t pm_metal_py_str_new(const char *s);
 int pm_metal_py_obj_to_str(pm_metal_py_obj_t o, char *buf, size_t cap);
 
 pm_metal_py_obj_t pm_metal_py_dict_new(size_t n_hint);
-void              pm_metal_py_dict_set_str(pm_metal_py_obj_t d, const char *key, pm_metal_py_obj_t val);
+void pm_metal_py_dict_set_str(pm_metal_py_obj_t d, const char *key, pm_metal_py_obj_t val);
 
 pm_metal_py_obj_t pm_metal_py_tuple_new(size_t n, const pm_metal_py_obj_t *items);
 

@@ -24,6 +24,7 @@
 #include <pymergetic/metal/boot/port.h>
 #include <pymergetic/metal/host/host.h>
 #include <pymergetic/metal/log/log.h>
+#include <pymergetic/metal/py/py.h>
 #include <runtime/time/time.h>
 
 #define SHELL_LINE_MAX PM_METAL_SHELL_LINE_MAX
@@ -60,9 +61,10 @@ static struct {
 /* ASCII path: ESC [ A/B from serial/ConIn (VNC/QEMU often skips key events). */
 static uint32_t mEscSeq; /* 0=norm 1=ESC 2=CSI */
 
-static void MetalShellMarkFull(void);
-static void MetalShellMarkInput(void);
-static void MetalShellOfferPrompt(void);
+static void     MetalShellMarkFull(void);
+static void     MetalShellMarkInput(void);
+static uint32_t MetalShellPromptAnsi(char *out, uint32_t cap);
+static void     MetalShellOfferPrompt(void);
 
 /**
  * Full-chrome present — always flips the whole surface, never a guest's
@@ -182,6 +184,34 @@ int pm_metal_shell_history_get(uint32_t idx, char *out, uint32_t cap)
   return 0;
 }
 
+/**
+ * Redraw the *whole* current input line on COM1: erase-line + CR, then
+ * prompt + text. Needed for history recall specifically -- every other
+ * input.c mutation (typing, backspace, cursor move) is echoed byte-by-byte
+ * as it happens, but pm_metal_ui_input_set() (recall's only primitive) only
+ * ever touches the framebuffer UI's input-strip state, so without this a
+ * serial-only session (no framebuffer/VNC in view) would see Up/Down do
+ * nothing at all even though the recalled line is correctly staged and
+ * would submit fine on Enter.
+ */
+static void MetalShellRedrawCom1(void)
+{
+  char     buf[SHELL_LINE_MAX + PM_METAL_HOST_NAME_MAX + 64];
+  uint32_t plen;
+  char     text[SHELL_LINE_MAX];
+
+  if (pm_metal_ui_input_text(text, sizeof(text)) < 0) {
+    text[0] = '\0';
+  }
+
+  plen = MetalShellPromptAnsi(buf, sizeof(buf));
+  pm_metal_console_com1_write("\r\x1b[2K", 5);
+  if (plen > 0u && plen + 1u < sizeof(buf)) {
+    snprintf(&buf[plen], sizeof(buf) - plen, "%s", text);
+    pm_metal_console_com1_write(buf, strlen(buf));
+  }
+}
+
 static void MetalShellHistRecall(int32_t dir)
 {
   if (mHistCount == 0u) {
@@ -213,6 +243,7 @@ static void MetalShellHistRecall(int32_t dir)
       mHistPos = -1;
       (void)pm_metal_ui_input_set(mHistDraft);
       MetalShellMarkInput();
+      MetalShellRedrawCom1();
       return;
     }
   }
@@ -224,6 +255,7 @@ static void MetalShellHistRecall(int32_t dir)
     if (line != NULL) {
       (void)pm_metal_ui_input_set(line);
       MetalShellMarkInput();
+      MetalShellRedrawCom1();
     }
   }
 }
@@ -524,6 +556,11 @@ uint32_t pm_metal_shell_prompt(char *out, uint32_t cap)
     return 0;
   }
 
+  if (pm_metal_py_repl_active()) {
+    n = snprintf(out, cap, "%s", pm_metal_py_repl_prompt());
+    return (n >= cap) ? 0u : (uint32_t)n;
+  }
+
   host = pm_metal_host_name_cstr();
   if (host == NULL || host[0] == '\0') {
     host = "metal";
@@ -551,6 +588,13 @@ static uint32_t MetalShellPromptAnsi(char *out, uint32_t cap)
 
   if (out == NULL || cap < 8u) {
     return 0;
+  }
+
+  if (pm_metal_py_repl_active()) {
+    /* bold magenta ">>> " / "... " — visually distinct from the C shell's
+     * green/blue host prompt so it's unmistakable which mode is live. */
+    n = snprintf(out, cap, "\033[1;35m%s\033[0m", pm_metal_py_repl_prompt());
+    return (n >= cap) ? 0u : (uint32_t)n;
   }
 
   host = pm_metal_host_name_cstr();
@@ -835,20 +879,57 @@ static void MetalShellHandleAscii(char ch, char *text, uintptr_t text_sz)
     }
 
     pm_metal_shell_history_add(text);
-    pm_metal_shell_cmd_dispatch(text);
-    pm_metal_ui_input_clear();
-    mHistPos = -1;
     /*
-     * Fullscreen guest (`run doom`) owns the FB — do not dirty chrome or
-     * re-offer the shell prompt over it. Windowed / idle: normal prompt.
+     * REPL active: committed lines are Python source, not shell commands
+     * -- feed the line queue (py.c's PY_STEP_REPL) instead of the normal
+     * dispatcher. "console" is the one reserved escape word to fall back
+     * to the C command shell (matches docs/MICROPYTHON.md's "C console
+     * stays reachable as fallback", never deleted).
+     *
+     * defer_prompt: feed_line() only *enqueues* the line -- the REPL
+     * coroutine (py.c's PY_STEP_REPL) decides ">>> " vs "... " and runs
+     * any exec on its own next scheduler tick, not synchronously here.
+     * Printing the prompt right now would show last tick's stale value
+     * (e.g. ">>> " right after typing "def f():", before the engine has
+     * had a chance to notice it needs "... "). Set mPromptPending
+     * instead and let the next pm_metal_shell_poll() tick (which runs
+     * after the async engine, not before it) draw the prompt the
+     * feed_line() call actually produced.
      */
-    if (MetalShellGuestFullscreen()) {
-      return;
-    }
+    {
+      int32_t defer_prompt = 0;
 
-    MetalShellMarkFull();
-    /* Next line on COM1 + input strip (after command output). */
-    MetalShellOfferPrompt();
+      if (pm_metal_py_repl_active()) {
+        if (strcmp(text, "console") == 0) {
+          pm_metal_py_repl_stop();
+          pm_metal_shell_out("py: repl paused -- back to console (type 'py -i' to resume)");
+        } else if (pm_metal_py_repl_feed_line(text, strlen(text)) != 0) {
+          pm_metal_shell_out("repl: busy, try again");
+        } else {
+          defer_prompt = 1;
+        }
+      } else {
+        pm_metal_shell_cmd_dispatch(text);
+      }
+
+      pm_metal_ui_input_clear();
+      mHistPos = -1;
+      /*
+       * Fullscreen guest (`run doom`) owns the FB -- do not dirty chrome or
+       * re-offer the shell prompt over it. Windowed / idle: normal prompt.
+       */
+      if (MetalShellGuestFullscreen()) {
+        return;
+      }
+
+      MetalShellMarkFull();
+      if (defer_prompt) {
+        mPromptPending = 1;
+      } else {
+        /* Next line on COM1 + input strip (after command output). */
+        MetalShellOfferPrompt();
+      }
+    }
     return;
   }
 
@@ -861,6 +942,30 @@ static void MetalShellHandleAscii(char ch, char *text, uintptr_t text_sz)
       MetalShellMarkInput();
     }
 
+    return;
+  }
+
+  /*
+   * Tab -> 4 spaces (indent convenience, not completion -- there is no
+   * completion hook on either surface today; see docs/MICROPYTHON.md's
+   * "known limitation" note on mp_hal_stdin_rx_chr). Matters most for the
+   * REPL's multi-line blocks (def/if/for/...), but wiring it into the one
+   * shared line editor benefits the C console too -- Tab was a pure no-op
+   * there before this (fell through every special case, then failed the
+   * printable-range filter below since 0x09 < 32), so there is nothing to
+   * regress.
+   */
+  if (ch == '\t') {
+    static const char spaces[4] = { ' ', ' ', ' ', ' ' };
+    uint32_t          i;
+
+    pm_metal_console_com1_write(spaces, sizeof(spaces));
+    for (i = 0; i < sizeof(spaces); i++) {
+      (void)pm_metal_stream_feed_stdin(&spaces[i], 1);
+      (void)pm_metal_ui_input_append(' ');
+    }
+
+    MetalShellMarkInput();
     return;
   }
 

@@ -71,10 +71,10 @@ typedef struct {
   volatile uint32_t claim_retries; /* diagnostics: lost claim CAS races  */
   /* Rolling busy % (diagnostics only — see pm_metal_run_busy_pct).
    * aligned(8): see pm_metal_ring_slot_t.word above — same i386 CAS need. */
-  volatile uint64_t     busy_win_start_us __attribute__((aligned(8)));
-  volatile uint64_t     busy_us_acc __attribute__((aligned(8)));
-  uint32_t              busy_pct;
-  pm_metal_ring_slot_t  slots[PM_METAL_RUN_INBOX_DEPTH];
+  volatile uint64_t    busy_win_start_us __attribute__((aligned(8)));
+  volatile uint64_t    busy_us_acc __attribute__((aligned(8)));
+  uint32_t             busy_pct;
+  pm_metal_ring_slot_t slots[PM_METAL_RUN_INBOX_DEPTH];
 } pm_metal_run_inbox_t;
 
 /* Rolling window for busy_pct refresh — long enough to smooth spikes. */

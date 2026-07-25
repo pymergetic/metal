@@ -25,8 +25,8 @@ static int32_t py_fn_resolve_native(wasm_exec_env_t env, const char *dotted_name
   wasm_module_inst_t inst;
 
   inst = wasm_runtime_get_module_inst(env);
-  if (dotted_name == NULL || inst == NULL
-      || !wasm_runtime_validate_native_addr(inst, (void *)dotted_name, 1)) {
+  if (dotted_name == NULL || inst == NULL ||
+      !wasm_runtime_validate_native_addr(inst, (void *)dotted_name, 1)) {
     return (int32_t)PM_METAL_PY_FN_H_INVALID;
   }
   return (int32_t)pm_metal_py_fn_resolve(dotted_name);
@@ -39,8 +39,8 @@ static int32_t py_fn_resolve_native(wasm_exec_env_t env, const char *dotted_name
  * an explicit accompanying length arg, so this manually validates + writes
  * exactly sizeof(int32_t), same pattern as pm_metal_process_info_native.
  */
-static int32_t
-py_fn_call_native(wasm_exec_env_t env, uint32_t fn_h, uint32_t out_dest, int32_t a, int32_t b)
+static int32_t py_fn_call_native(
+  wasm_exec_env_t env, uint32_t fn_h, uint32_t out_dest, int32_t a, int32_t b)
 {
   wasm_module_inst_t inst;
   int32_t            out_i32 = 0;

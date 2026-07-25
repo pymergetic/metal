@@ -26,7 +26,7 @@ extern const pm_metal_shell_cmd_table_t __pm_metal_shell_cmds_start[];
 extern const pm_metal_shell_cmd_table_t __pm_metal_shell_cmds_end[];
 
 typedef struct {
-  mp_obj_base_t              base;
+  mp_obj_base_t               base;
   const pm_metal_shell_cmd_t *cmd;
 } pmcmd_proxy_obj_t;
 
@@ -35,10 +35,10 @@ typedef struct {
 static mp_obj_t pmcmd_proxy_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args)
 {
   pmcmd_proxy_obj_t *self = MP_OBJ_TO_PTR(self_in);
-  char                arg_buf[PM_METAL_SHELL_ARGV_MAX][PMCMD_ARG_BUF_LEN];
-  char               *argv[PM_METAL_SHELL_ARGV_MAX];
-  int32_t             argc;
-  size_t              i;
+  char               arg_buf[PM_METAL_SHELL_ARGV_MAX][PMCMD_ARG_BUF_LEN];
+  char              *argv[PM_METAL_SHELL_ARGV_MAX];
+  int32_t            argc;
+  size_t             i;
 
   if (n_kw != 0u) {
     pm_metal_py_raise_type_error("pmcmd: keyword args not supported");

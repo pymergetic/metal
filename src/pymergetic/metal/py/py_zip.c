@@ -25,10 +25,10 @@
 #ifndef PM_METAL_PY_STDLIB_ZIP
 #define PM_METAL_PY_STDLIB_ZIP "/mods/py/stdlib.zip"
 #endif
-#define PM_METAL_PY_STDLIB_ZIP_SIG PM_METAL_PY_STDLIB_ZIP ".sig"
+#define PM_METAL_PY_STDLIB_ZIP_SIG      PM_METAL_PY_STDLIB_ZIP ".sig"
 #define PM_METAL_PY_STDLIB_ZIP_URL_PATH "py/stdlib.zip"
-#define PY_ZIP_FETCH_CAP (512u * 1024u)
-#define PY_ZIP_HOST_FALLBACK 0xC0A80A01u /* 192.168.10.1 — mirrors net_life.c's lab default */
+#define PY_ZIP_FETCH_CAP                (512u * 1024u)
+#define PY_ZIP_HOST_FALLBACK            0xC0A80A01u /* 192.168.10.1 — mirrors net_life.c's lab default */
 
 typedef enum {
   ZIP_UNVERIFIED = 0,
@@ -40,7 +40,7 @@ static py_zip_state_t          g_zip_state;
 static pm_metal_async_handle_t g_zip_fetch_h;      /* in-flight fetch, 0 = none */
 static pm_metal_async_handle_t g_zip_fetch_leader; /* only this self_h may await g_zip_fetch_h */
 static uint8_t                *g_zip_fetch_buf;    /* owned while g_zip_fetch_h != 0 */
-static int                     g_zip_fetch_tried;   /* one attempt total, ever */
+static int                     g_zip_fetch_tried;  /* one attempt total, ever */
 
 void pm_metal_py_zip_init_sys_path(void)
 {

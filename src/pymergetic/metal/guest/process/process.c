@@ -323,8 +323,8 @@ void pm_metal_process_commit_child(pm_metal_process_id_t id, pm_metal_async_hand
 }
 
 void pm_metal_process_set_owned_image(pm_metal_process_id_t id,
-                                      const void            *img,
-                                      int32_t                auto_unload)
+                                      const void           *img,
+                                      int32_t               auto_unload)
 {
   MetalProcessSlot *s;
 

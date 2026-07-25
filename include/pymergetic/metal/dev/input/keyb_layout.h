@@ -40,7 +40,7 @@ typedef struct pm_metal_keyb_layout {
    * scancodes at the keycap/ASCII layer; HID stays positional for
    * everything else (guests keep stable keycodes across `keyb` changes).
    */
-  int32_t     swap_yz;
+  int32_t swap_yz;
 } pm_metal_keyb_layout_t;
 
 /**
@@ -49,8 +49,9 @@ typedef struct pm_metal_keyb_layout {
  * directly by the layout file, not threaded through macro arguments.
  * `var` must be a unique static identifier in the translation unit.
  */
-#define PM_METAL_KEYB_LAYOUT_BEGIN(var) \
-  static const pm_metal_keyb_layout_t var __attribute__((used, section(".pm_metal_keyb_layouts.1"), aligned(16)))
+#define PM_METAL_KEYB_LAYOUT_BEGIN(var)   \
+  static const pm_metal_keyb_layout_t var \
+    __attribute__((used, section(".pm_metal_keyb_layouts.1"), aligned(16)))
 
 /** Section bounds, walked by keyb.c; never dereference outside that file. */
 extern const pm_metal_keyb_layout_t __pm_metal_keyb_layouts_start[];

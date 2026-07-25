@@ -123,8 +123,8 @@ static MP_DEFINE_CONST_OBJ_TYPE(mod_fresh_instant_type,
 static mp_obj_t mod_fresh_instant_new(mp_obj_t value)
 {
   mod_fresh_instant_obj_t *o = m_new_obj(mod_fresh_instant_obj_t);
-  o->base.type                = &mod_fresh_instant_type;
-  o->value                    = value;
+  o->base.type               = &mod_fresh_instant_type;
+  o->value                   = value;
   return MP_OBJ_FROM_PTR(o);
 }
 
@@ -135,8 +135,10 @@ typedef struct {
   pm_metal_mod_fn_t fn;
 } mod_fresh_func_obj_t;
 
-static mp_obj_t
-mod_fresh_func_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args)
+static mp_obj_t mod_fresh_func_call(mp_obj_t        self_in,
+                                    size_t          n_args,
+                                    size_t          n_kw,
+                                    const mp_obj_t *args)
 {
   mod_fresh_func_obj_t   *self = MP_OBJ_TO_PTR(self_in);
   pm_metal_async_handle_t coro;
@@ -160,8 +162,8 @@ static MP_DEFINE_CONST_OBJ_TYPE(
 static mp_obj_t mod_fresh_func_new(const pm_metal_mod_fn_t *fn)
 {
   mod_fresh_func_obj_t *o = m_new_obj(mod_fresh_func_obj_t);
-  o->base.type             = &mod_fresh_func_type;
-  o->fn                    = *fn;
+  o->base.type            = &mod_fresh_func_type;
+  o->fn                   = *fn;
   return MP_OBJ_FROM_PTR(o);
 }
 
@@ -174,8 +176,10 @@ typedef struct {
   int           which; /* 0 = __aenter__, 1 = __aexit__ */
 } mod_fresh_bound_obj_t;
 
-static mp_obj_t
-mod_fresh_bound_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args);
+static mp_obj_t mod_fresh_bound_call(mp_obj_t        self_in,
+                                     size_t          n_args,
+                                     size_t          n_kw,
+                                     const mp_obj_t *args);
 
 static MP_DEFINE_CONST_OBJ_TYPE(
   mod_fresh_bound_type, MP_QSTR_function, MP_TYPE_FLAG_NONE, call, mod_fresh_bound_call);
@@ -183,9 +187,9 @@ static MP_DEFINE_CONST_OBJ_TYPE(
 static mp_obj_t mod_fresh_bound_new(mp_obj_t scope, int which)
 {
   mod_fresh_bound_obj_t *o = m_new_obj(mod_fresh_bound_obj_t);
-  o->base.type              = &mod_fresh_bound_type;
-  o->scope                  = scope;
-  o->which                  = which;
+  o->base.type             = &mod_fresh_bound_type;
+  o->scope                 = scope;
+  o->which                 = which;
   return MP_OBJ_FROM_PTR(o);
 }
 
@@ -195,8 +199,10 @@ typedef struct {
   qstr                   mod_name;
 } mod_fresh_scope_obj_t;
 
-static mp_obj_t
-mod_fresh_bound_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args)
+static mp_obj_t mod_fresh_bound_call(mp_obj_t        self_in,
+                                     size_t          n_args,
+                                     size_t          n_kw,
+                                     const mp_obj_t *args)
 {
   mod_fresh_bound_obj_t *self  = MP_OBJ_TO_PTR(self_in);
   mod_fresh_scope_obj_t *scope = MP_OBJ_TO_PTR(self->scope);
@@ -218,7 +224,7 @@ mod_fresh_bound_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_
 static void mod_fresh_scope_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest)
 {
   mod_fresh_scope_obj_t *self = MP_OBJ_TO_PTR(self_in);
-  pm_metal_mod_fn_t       fn;
+  pm_metal_mod_fn_t      fn;
 
   if (dest[0] != MP_OBJ_NULL) {
     return; /* store/delete unsupported */
@@ -249,9 +255,9 @@ static MP_DEFINE_CONST_OBJ_TYPE(
 static mp_obj_t mod_fresh_scope_new(pm_metal_mod_fresh_h_t h, qstr mod_name)
 {
   mod_fresh_scope_obj_t *o = m_new_obj(mod_fresh_scope_obj_t);
-  o->base.type              = &mod_fresh_scope_type;
-  o->h                      = h;
-  o->mod_name               = mod_name;
+  o->base.type             = &mod_fresh_scope_type;
+  o->h                     = h;
+  o->mod_name              = mod_name;
   return MP_OBJ_FROM_PTR(o);
 }
 
@@ -260,8 +266,10 @@ typedef struct {
   qstr          mod_name;
 } mod_fresh_factory_obj_t;
 
-static mp_obj_t
-mod_fresh_factory_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args)
+static mp_obj_t mod_fresh_factory_call(mp_obj_t        self_in,
+                                       size_t          n_args,
+                                       size_t          n_kw,
+                                       const mp_obj_t *args)
 {
   mod_fresh_factory_obj_t *self = MP_OBJ_TO_PTR(self_in);
   pm_metal_mod_fresh_h_t   h;
@@ -285,8 +293,8 @@ static MP_DEFINE_CONST_OBJ_TYPE(
 static mp_obj_t mod_fresh_factory_new(qstr mod_name)
 {
   mod_fresh_factory_obj_t *o = m_new_obj(mod_fresh_factory_obj_t);
-  o->base.type                = &mod_fresh_factory_type;
-  o->mod_name                 = mod_name;
+  o->base.type               = &mod_fresh_factory_type;
+  o->mod_name                = mod_name;
   return MP_OBJ_FROM_PTR(o);
 }
 
@@ -322,8 +330,8 @@ static MP_DEFINE_CONST_OBJ_TYPE(
 static mp_obj_t mod_name_new(qstr mod_name)
 {
   mod_name_obj_t *o = m_new_obj(mod_name_obj_t);
-  o->base.type       = &mod_name_type;
-  o->mod_name        = mod_name;
+  o->base.type      = &mod_name_type;
+  o->mod_name       = mod_name;
   return MP_OBJ_FROM_PTR(o);
 }
 
@@ -360,9 +368,9 @@ void pm_metal_py_mod_install(void)
       {
         mp_map_t      *modules_map = &MP_STATE_VM(mp_loaded_modules_dict).map;
         mp_map_elem_t *el          = mp_map_lookup(modules_map,
-                                                   MP_OBJ_NEW_QSTR(qstr_from_str("pymergetic.metal.mod")),
-                                                   MP_MAP_LOOKUP_ADD_IF_NOT_FOUND);
-        el->value = MP_OBJ_FROM_PTR(&g_mod_ns_obj);
+                                          MP_OBJ_NEW_QSTR(qstr_from_str("pymergetic.metal.mod")),
+                                          MP_MAP_LOOKUP_ADD_IF_NOT_FOUND);
+        el->value                  = MP_OBJ_FROM_PTR(&g_mod_ns_obj);
       }
     }
     nlr_pop();

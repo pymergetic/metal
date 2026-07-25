@@ -29,7 +29,7 @@ typedef struct {
   pm_metal_wasm_mod_image_t img;
   mod_state_t               state;
   uint32_t                  open_tasks;
-  pm_metal_mod_cap_t        cap;        /* declared via set_capability() from on_load; default SINGLE */
+  pm_metal_mod_cap_t        cap; /* declared via set_capability() from on_load; default SINGLE */
   uint32_t                  fresh_open; /* live FRESH-mode instances of this mod right now */
 } mod_slot_t;
 
@@ -62,7 +62,7 @@ static mod_cmd_t            mCmds[PM_METAL_MOD_CMD_MAX];
 static pm_metal_shell_cmd_t mShellCmds[PM_METAL_MOD_CMD_MAX];
 static mod_slot_t          *mConnecting;
 /* Slot 0 unused so a raw index doubles as the handle (0 = invalid). */
-static mod_fresh_t          mFresh[PM_METAL_MOD_FRESH_MAX + 1];
+static mod_fresh_t mFresh[PM_METAL_MOD_FRESH_MAX + 1];
 
 static mod_slot_t *ModFind(const char *name)
 {
@@ -176,8 +176,9 @@ static int32_t ModSetCapabilityHost(pm_metal_mod_cap_t cap)
   }
 
   mConnecting->cap = cap;
-  pm_metal_logf(
-    "metal-mod: %s capability = %s", mConnecting->name, cap == PM_METAL_MOD_CAP_MULTI ? "multi" : "single");
+  pm_metal_logf("metal-mod: %s capability = %s",
+                mConnecting->name,
+                cap == PM_METAL_MOD_CAP_MULTI ? "multi" : "single");
   return 0;
 }
 
@@ -680,7 +681,7 @@ int pm_metal_mod_func_resolve_on(const char        *mod_name,
 {
   const pm_metal_wasm_mod_image_t *img;
   mod_func_t                      *f;
-  void                             *fn;
+  void                            *fn;
 
   if (img_owner == NULL) {
     return pm_metal_mod_func_resolve(mod_name, func_name, out);
@@ -735,8 +736,8 @@ static mod_fresh_t *ModFreshGet(pm_metal_mod_fresh_h_t h)
 
 pm_metal_mod_fresh_h_t pm_metal_mod_fresh_open(const char *mod_name)
 {
-  mod_slot_t *s;
-  uint32_t    i;
+  mod_slot_t  *s;
+  uint32_t     i;
   mod_fresh_t *slot;
 
   if (mod_name == NULL || mod_name[0] == '\0') {
@@ -783,7 +784,9 @@ pm_metal_mod_fresh_h_t pm_metal_mod_fresh_open(const char *mod_name)
   return (pm_metal_mod_fresh_h_t)(slot - mFresh);
 }
 
-int pm_metal_mod_fresh_resolve(pm_metal_mod_fresh_h_t h, const char *func_name, pm_metal_mod_fn_t *out)
+int pm_metal_mod_fresh_resolve(pm_metal_mod_fresh_h_t h,
+                               const char            *func_name,
+                               pm_metal_mod_fn_t     *out)
 {
   mod_fresh_t *slot;
 
@@ -885,19 +888,19 @@ int pm_metal_mod_fn_process(const pm_metal_mod_cmd_t  *cmd,
                             pm_metal_mod_instance_t    instance_mode,
                             uint32_t                   flags)
 {
-  mod_slot_t                *s;
-  pm_metal_async_handle_t    coro;
-  pm_metal_async_handle_t    task_h;
-  pm_metal_process_id_t      pid;
-  pm_metal_process_id_t      parent;
-  const char                *name;
-  const pm_metal_mod_fn_t   *fn;
-  pm_metal_mod_fn_t          fresh_fn;
-  pm_metal_wasm_mod_image_t  proc_img;
-  int32_t                    have_proc_img;
-  int32_t                    use_fresh;
-  int32_t                    auto_unload;
-  int32_t                    rc;
+  mod_slot_t               *s;
+  pm_metal_async_handle_t   coro;
+  pm_metal_async_handle_t   task_h;
+  pm_metal_process_id_t     pid;
+  pm_metal_process_id_t     parent;
+  const char               *name;
+  const pm_metal_mod_fn_t  *fn;
+  pm_metal_mod_fn_t         fresh_fn;
+  pm_metal_wasm_mod_image_t proc_img;
+  int32_t                   have_proc_img;
+  int32_t                   use_fresh;
+  int32_t                   auto_unload;
+  int32_t                   rc;
 
   if (cmd == NULL) {
     return -1;
@@ -998,10 +1001,10 @@ int pm_metal_mod_fn_process(const pm_metal_mod_cmd_t  *cmd,
     pm_metal_process_commit_child(pid, task_h);
     s->state = MOD_RUNNING;
     pm_metal_logf("metal-mod: subprocess '%s' under %u (mod '%s')%s",
-                 name,
-                 (unsigned)parent,
-                 s->name,
-                 have_proc_img ? " [instance]" : "");
+                  name,
+                  (unsigned)parent,
+                  s->name,
+                  have_proc_img ? " [instance]" : "");
     return 0;
   }
 
@@ -1187,8 +1190,8 @@ static uint32_t pm_metal_mod_fresh_resolve_native(wasm_exec_env_t exec_env,
                                                   const char     *func_name)
 {
   pm_metal_mod_cmd_t cmd;
-  mod_fresh_t        *slot;
-  mod_func_t          *f;
+  mod_fresh_t       *slot;
+  mod_func_t        *f;
 
   (void)exec_env;
   memset(&cmd, 0, sizeof(cmd));
@@ -1231,12 +1234,12 @@ static uint32_t pm_metal_mod_fn_coro_native(wasm_exec_env_t exec_env, uint32_t f
 }
 
 static int32_t pm_metal_mod_fn_process_native(wasm_exec_env_t exec_env,
-                                               uint32_t        fn_h,
-                                               const char     *proc_name,
-                                               uint32_t        ui_kind,
-                                               uint32_t        tab,
-                                               uint32_t        instance_mode,
-                                               uint32_t        flags)
+                                              uint32_t        fn_h,
+                                              const char     *proc_name,
+                                              uint32_t        ui_kind,
+                                              uint32_t        tab,
+                                              uint32_t        instance_mode,
+                                              uint32_t        flags)
 {
   pm_metal_mod_cmd_t *cmd;
 

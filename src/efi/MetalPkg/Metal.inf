@@ -325,12 +325,15 @@
   ../../pymergetic/metal/py/mphalport_metal.c
   ../../pymergetic/metal/py/py.c
   ../../pymergetic/metal/py/py_bind.c
+  ../../pymergetic/metal/py/py_ctx.c
   ../../pymergetic/metal/py/py_obj.c
   ../../pymergetic/metal/py/py_await.c
   ../../pymergetic/metal/py/py_shell.c
   ../../pymergetic/metal/py/py_zip.c
+  ../../pymergetic/metal/py/py_zip_read.c
   ../../pymergetic/metal/py/py_guest.c
   ../../pymergetic/metal/py/py_port_stubs.c
+  ../../../external/micropython/extmod/modbinascii.c
   ../../../build/micropython_embed/py/argcheck.c
   ../../../build/micropython_embed/py/asmbase.c
   ../../../build/micropython_embed/py/asmx64.c

@@ -176,7 +176,33 @@ static void CoreMemCmd(int32_t argc, char **argv)
 
     CoreFmtBytes(pyb, sizeof(pyb), py_bytes);
     CoreFmtPct1(pct_py, sizeof(pct_py), py_bytes, map_other);
-    snprintf(line, sizeof(line), "  %s |   `-- py      %s   (%s of map)", branch, pyb, pct_py);
+    snprintf(line,
+             sizeof(line),
+             "  %s |   +-- py      %s   (%s of map, shared context)",
+             branch,
+             pyb,
+             pct_py);
+    pm_metal_shell_out(line);
+  }
+  {
+    /* Isolated contexts (py -x / pm_metal_py_run_*_isolated, py_ctx.c) are
+     * each their own separate MAP carve, on top of the one shared blob
+     * broken out above — surface the aggregate here too, or task-local
+     * heaps would otherwise be invisible inside map_other. */
+    uint32_t iso_n     = pm_metal_py_isolated_ctx_count();
+    uint64_t iso_bytes = (uint64_t)pm_metal_py_isolated_ctx_bytes();
+    char     iob[PM_METAL_UTIL_SIZE_FORMAT_MAX];
+    char     pct_iso[8];
+
+    CoreFmtBytes(iob, sizeof(iob), iso_bytes);
+    CoreFmtPct1(pct_iso, sizeof(pct_iso), iso_bytes, map_other);
+    snprintf(line,
+             sizeof(line),
+             "  %s |   `-- py iso  %s   (%s of map, %u isolated ctx)",
+             branch,
+             iob,
+             pct_iso,
+             iso_n);
     pm_metal_shell_out(line);
   }
   snprintf(line,
