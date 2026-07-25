@@ -106,6 +106,25 @@ void pm_metal_process_stamp_end(void);
 /** Inherit proc for create_task: stamp, else current process, else 0. */
 uint32_t pm_metal_process_inherit_id(void);
 
+/**
+ * Stash a fresh, private WASM instance (mod.c's fn_process FRESH mode)
+ * on this process slot. reap()/release() deinstantiate it automatically
+ * (via pm_metal_mod_on_fresh_instance_end) — callers must not close it
+ * themselves once handed off here. auto_unload: forwarded verbatim to
+ * that teardown call — see PM_METAL_MOD_FLAG_AUTO_UNLOAD.
+ */
+void pm_metal_process_set_owned_image(pm_metal_process_id_t id,
+                                      const void            *img,
+                                      int32_t                auto_unload);
+
+/**
+ * Read-only peek at a process's owned fresh instance image (a
+ * pm_metal_wasm_mod_image_t*), or NULL if this process has none (shared
+ * "instance 0" invocation, or already reaped). Do not free/deinstantiate
+ * — still owned by the process slot.
+ */
+const void *pm_metal_process_owned_image(pm_metal_process_id_t id);
+
 /** Drop a reserved process that did not stay live (sync exit / startup end). */
 void pm_metal_process_release(pm_metal_process_id_t id);
 
@@ -115,6 +134,9 @@ void pm_metal_process_reap(pm_metal_process_id_t id);
 /**
  * Invoke named command via mod registry (docs/MODS.md).
  * Returns guest exit code, or -1 on host error. Live cmd task → current process.
+ * Uses AUTO instance selection — a real process defers to the mod's own
+ * declared capability (pm_metal_mod_cap_t); MULTI mods get their own
+ * fresh heap/globals like a real exec, SINGLE mods share instance 0.
  */
 int pm_metal_process_spawn_mod(const char                *name,
                                pm_metal_process_ui_kind_t ui_kind,

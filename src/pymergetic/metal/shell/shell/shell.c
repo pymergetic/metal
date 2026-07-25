@@ -64,6 +64,24 @@ static void MetalShellMarkFull(void);
 static void MetalShellMarkInput(void);
 static void MetalShellOfferPrompt(void);
 
+/**
+ * Full-chrome present — always flips the whole surface, never a guest's
+ * left-over blit hint (pm_metal_gfx_present() would replay that instead of
+ * the just-repainted desktop, e.g. a fullscreen guest's last frame rect
+ * lingering after it exits, leaving a stale sliver on real screen).
+ */
+static void MetalShellPresentFull(void)
+{
+  pm_metal_gfx_surface_t *surf;
+
+  surf = pm_metal_gfx_surface();
+  if (surf != NULL) {
+    (void)pm_metal_gfx_present_rect(0, 0, (int32_t)surf->width, (int32_t)surf->height);
+  } else {
+    (void)pm_metal_gfx_present();
+  }
+}
+
 static int32_t mPromptPending = 1; /* show prompt after boot banner */
 
 /**
@@ -704,7 +722,7 @@ int pm_metal_shell_init(void)
   pm_metal_input_set_filter(MetalShellTabChordFilter);
   pm_metal_shell_cmds_install();
   (void)pm_metal_ui_frame();
-  (void)pm_metal_gfx_present();
+  MetalShellPresentFull();
   return 0;
 }
 
@@ -1111,7 +1129,7 @@ int pm_metal_shell_poll(void)
             pm_metal_ui_cursor_paint(px, py);
           }
 
-          (void)pm_metal_gfx_present();
+          MetalShellPresentFull();
         } else if (mDirtyStatus) {
           pm_metal_ui_cursor_hide();
           (void)pm_metal_ui_paint_status();

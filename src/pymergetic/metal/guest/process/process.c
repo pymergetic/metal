@@ -28,6 +28,9 @@ typedef struct {
   pm_metal_ui_handle_t       tab;
   uint32_t                   surface;
   pm_metal_ui_handle_t       saved_stdout_tab;
+  pm_metal_wasm_mod_image_t  owned_img; /* fresh instance (FRESH mode) — ours to tear down */
+  int32_t                    owns_img;
+  int32_t                    owns_img_auto_unload;
 } MetalProcessSlot;
 
 static MetalProcessSlot      mSlots[PM_METAL_PROCESS_MAX];
@@ -319,6 +322,48 @@ void pm_metal_process_commit_child(pm_metal_process_id_t id, pm_metal_async_hand
   pm_metal_logf("metal-process: child live pid=%u parent=%u name=%s", id, s->parent_id, s->name);
 }
 
+void pm_metal_process_set_owned_image(pm_metal_process_id_t id,
+                                      const void            *img,
+                                      int32_t                auto_unload)
+{
+  MetalProcessSlot *s;
+
+  s = MetalProcessFind(id);
+  if (s == NULL || img == NULL) {
+    return;
+  }
+
+  s->owned_img            = *(const pm_metal_wasm_mod_image_t *)img;
+  s->owns_img             = 1;
+  s->owns_img_auto_unload = auto_unload ? 1 : 0;
+}
+
+const void *pm_metal_process_owned_image(pm_metal_process_id_t id)
+{
+  MetalProcessSlot *s;
+
+  s = MetalProcessFind(id);
+  if (s == NULL || !s->owns_img) {
+    return NULL;
+  }
+
+  return &s->owned_img;
+}
+
+static void MetalProcessCloseOwnedImg(MetalProcessSlot *s)
+{
+  if (!s->owns_img) {
+    return;
+  }
+
+  /* Hands teardown to mod.c: decrements the mod's fresh-instance count
+   * and, if this run asked for it, best-effort unloads the whole mod
+   * once nothing else needs it. */
+  pm_metal_mod_on_fresh_instance_end(&s->owned_img, s->owns_img_auto_unload);
+  s->owns_img             = 0;
+  s->owns_img_auto_unload = 0;
+}
+
 void pm_metal_process_release(pm_metal_process_id_t id)
 {
   MetalProcessSlot *s;
@@ -327,6 +372,8 @@ void pm_metal_process_release(pm_metal_process_id_t id)
   if (s == NULL) {
     return;
   }
+
+  MetalProcessCloseOwnedImg(s);
 
   if (mPending == id) {
     mPending = PM_METAL_PROCESS_ID_INVALID;
@@ -349,6 +396,7 @@ void pm_metal_process_reap(pm_metal_process_id_t id)
   }
 
   pm_metal_logf("metal-process: reap pid=%u name=%s", id, s->name);
+  MetalProcessCloseOwnedImg(s);
   if (mCurrent == id) {
     mCurrent = PM_METAL_PROCESS_ID_INVALID;
   }
@@ -366,9 +414,11 @@ int pm_metal_process_spawn_mod(const char                *name,
 {
   /*
 	 * Product path: command invoke (load mod → run func in a task = process).
-	 * See docs/MODS.md. Name is the command (today == mod name).
+	 * See docs/MODS.md. Name is the command (today == mod name). AUTO
+	 * defers to the mod's declared capability (pm_metal_mod_cap_t).
 	 */
-  return pm_metal_mod_cmd_invoke(name, ui_kind, tab);
+  return pm_metal_mod_cmd_invoke(
+    name, ui_kind, tab, PM_METAL_MOD_INSTANCE_AUTO, PM_METAL_MOD_FLAG_NONE);
 }
 
 void pm_metal_process_pump_runners(void)
@@ -414,6 +464,12 @@ int pm_metal_process_poll(int32_t *status_out)
   if (parent != PM_METAL_PROCESS_ID_INVALID) {
     /* Subprocess done — pop redirect; parent keeps running. */
     pm_metal_wasm_set_stdout_tab(s->saved_stdout_tab);
+    /* Mod state RUNNING -> READY before reap tears down any owned fresh
+     * instance (same ordering as pm_metal_wasm_live_finish). */
+    if (s->name[0] != '\0') {
+      pm_metal_mod_on_session_end(s->name);
+    }
+
     pm_metal_process_reap(s->id);
     mCurrent = parent;
     pm_metal_ui_sync_input_focus();

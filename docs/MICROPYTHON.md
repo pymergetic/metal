@@ -4,7 +4,11 @@ Core scripting VM: **one Python blob**, **N equal runners**, same async
 discipline as C Metal. Callable from **host and guest** — still one native
 engine (not a wasm µPy, not a CPython appliance).
 
-**Status:** design lock / pre-spike  
+**Status:** spike **landed** on EFI + BIOS (linked, boot-proofed, shell +
+guest surfaces exercised in `verify`). Real gaps left: no generic bind
+table (hand-written per-module binds today), no signed/HTTP stdlib zip,
+still a global run-lock instead of task-local GC. See
+[Implementation status](#implementation-status) for the validated list.  
 **Product stays:** thin async host + awaitable ABI. µPy is a **face**, not a second kernel.
 
 Related: [`COOP_MEMORY.md`](COOP_MEMORY.md) · [`IO.md`](IO.md) · [`LIBC_ASYNC.md`](LIBC_ASYNC.md) · [`TODO.md`](TODO.md)
@@ -704,14 +708,13 @@ bring-up pattern as the rest of Metal; not blockers for “async integrated.”
 
 ## Spike order
 
-1. Link trimmed µPy into **EFI x64**; MAP-carve always-on GC blob; shell `py` <script> → new task (not new VM); `print` → shell.
-2. Python task = Metal task; one sync + one async bind (`sleep_us`); **C → Py** `call` / `call_async` (`py -f`).
-3. Two Python tasks overlapping awaits; equal runners (no CPU0 pin); `yield` fairness path.
-4. Guest binding: wasm import that starts a py job + `await` completion (proof mod).
-5. Task-local spaces (or staged path to them) + cancel/isolation; note blob size vs Doom HEAP.
-6. **Sample zip loader:** tiny signed `stdlib.zip` + frozen `metal.aio`; ESP/HTTP single-flight; import proof + one script.
-7. Same bring-up on **BIOS / i386** as any other Metal feature (not a separate product decision).
-   Shared `metal/py` + boot `pm_metal_py_init` already linked; smoke is `verify bios` / `py` on the shell — not a second port.
+1. ~~Link trimmed µPy into **EFI x64**; MAP-carve always-on GC blob; shell `py` <script> → new task (not new VM); `print` → shell.~~ **done**
+2. ~~Python task = Metal task; one sync + one async bind (`sleep_us`); **C → Py** `call` / `call_async` (`py -f`).~~ **done**
+3. ~~Two Python tasks overlapping awaits; equal runners (no CPU0 pin); `yield` fairness path.~~ **done** (boot proofs; run-lock, not true parallel bytecode — see task-local GC)
+4. ~~Guest binding: wasm import that starts a py job + `await` completion (proof mod).~~ **done** (`mods/tests/async_py`)
+5. Task-local spaces (or staged path to them) + cancel/isolation; note blob size vs Doom HEAP. **open**
+6. **Sample zip loader:** tiny signed `stdlib.zip` + frozen `metal.aio`; ESP/HTTP single-flight; import proof + one script. **half-open** — zip exists and mounts on both ports; signing/trust/single-flight/import-order not built
+7. ~~Same bring-up on **BIOS / i386** as any other Metal feature (not a separate product decision).~~ **done** — `py/py.c` links into both `scripts/build.d/port/efi/default.sh` and `.../port/bios/default.sh`; `stdlib.zip` stages into both ESP and PXE trees
 
 ---
 
@@ -742,27 +745,33 @@ No C++ in the µPy spike. Don’t invent a second Python↔native calling conven
 
 ---
 
-## Success criteria
+## Implementation status
+
+Validated against the tree on 2026-07-25 (code, not just intent). Checkboxes
+below replace the earlier aspirational pass — see inline notes for what was
+overclaimed.
 
 ### Runtime integration
 
-- [x] µPy linked in core; MAP blob visible in `mem` (with caps)
-- [x] Python task = Metal task; pumped on N equal runners
-- [x] `await` Metal op from Python without blocking the runner
-- [x] ≥2 Python tasks with overlapped awaits on multi-CPU (QEMU `-smp`) — run-lock interim
-- [x] No Python GIL surface; cross-task share only via Metal
-- [ ] Cancel / exception / OOM isolates one task; sync `py_call` cannot park
-- [x] Fairness path: `metal.aio.yield_` (or equiv.) proven under load
-- [ ] `.mpy` ABI pinned; NLR/exceptions safe across park/resume
-- [ ] Spike size/RAM note vs Doom
+- [x] µPy linked in core, on **both EFI and BIOS** (`scripts/build.d/port/{efi,bios}/default.sh` both compile `py/py.c`); MAP-carved blob (`pm_metal_py_init` → `pm_metal_mem_map(PM_METAL_PY_BLOB_BYTES)`)
+- [ ] MAP blob visible in `mem` **with its own line/caps** — `mem` (`shell_core_cmds.c`) only shows aggregate `map`/`heap`/`stacks`/`hole` totals; the µPy blob is counted inside `map` but not broken out. (The doc's own [Memory](#memory) section already flags this as future work — the success box was wrong to check it.)
+- [x] Python task = Metal task; pumped on N equal runners (`pm_metal_async_create_task` over the normal coro/task machinery — no private loop)
+- [x] `await` Metal op from Python without blocking the runner (`py.c`'s `py_job_step`/`py_resume_coro` park via `pm_metal_async_await`, releasing the run-lock first)
+- [x] ≥2 Python tasks with overlapped awaits on multi-CPU — proven at boot (`boot_python.c`'s `PY_PROOF_OVERLAP`: two scripts sleeping 150 ms each finish in <250 ms wall); **run-lock interim** (see task-local GC below)
+- [x] No Python GIL surface added; cross-task sharing goes through Metal handles only — true by absence (nothing new was added), not independently tested/enforced
+- [ ] Cancel / exception / OOM isolates one task; sync `py_call` cannot park — `pm_metal_py_call` (`py.c`) calls straight into `mp_call_function_n_kw` with no check that the callable doesn't hit an `await`/generator; there's no guard that turns "callable parked" into a hard error
+- [x] Fairness path: `metal.aio.yield_` proven under load — boot proof `PY_PROOF_YIELD` (`yield_peer.py` vs `yield_sleeper.py`)
+- [x] `.mpy`/µPy version pinned — `scripts/setup.d/deps/micropython.sh` pins `v1.24.1` (single vendored checkout, patches applied on top)
+- [ ] Written note that NLR/exceptions are safe across park/resume — the code *does* use `nlr_push`/`nlr_pop` correctly scoped inside each non-parking call (`py_exec_and_maybe_main`, `py_call_bound`, `py_resume_coro`), but this hasn't been written up or stress-tested, just eyeballed
+- [ ] Spike size/RAM note vs Doom — not written (blob is a flat `PM_METAL_PY_BLOB_BYTES = 256 KiB` define in `py.h`, never compared against Doom's HEAP usage)
 
 ### Surfaces
 
-- [x] Always-on blob; shell `py` <script> → new task on it; `print` + traceback face
-- [x] Guest can start a py job via import and `await` completion
-- [x] Bind table: sync + async row; third C fn is table-only (no new VM glue)
-- [x] C → Py trampoline: sync `py_call` + async `py_call_async` (await handle)
-- [x] `metal.*` package mirrors guest areas (at least `metal.aio`); orchestration optional
-- [ ] **Sample** signed zip: tiny pack + verify; single-flight HTTP; import order builtin→frozen→aot→wasm→py; `metal` unshadowable
-- [ ] (later) Task-local GC spaces + all-parked compact barrier
-- [ ] (later) Fat stdlib zip / full `metal.fs`/`net`/… / native self-register (`import sample`)
+- [x] Always-on blob; shell `py <script>` / `py -c` → new task on it; `print` → shell (`py_shell.c`, `mphalport_metal.c`)
+- [x] Guest can start a py job via import and `await` completion — real, exercised end-to-end: `mods/tests/async_py/main.c` imports `pymergetic.metal.py`, awaits `pm_metal_py_run_script`, and is wired into the boot self-test suite (`boot_test.c`'s `async_py` case)
+- [ ] **Generic** bind table (rows → install at init, "add a function = add a table row, no new VM glue") — **not built**. `pm_metal_py_bind_table()` (`py_bind.c`) is a literal no-op stub; the 3 live `metal.aio` functions (`mono_us`/`sleep_us`/`yield_`) are hand-written `mp_obj_dict_store` calls in `py_aio_mod.c`. Adding a 4th binding today means editing that C file, not appending a row. `docs/MODS.md`'s own checklist agrees: item 9, "µPy binds the same registries" — **next**, not done.
+- [x] C → Py trampoline: sync `pm_metal_py_call` + async `pm_metal_py_fn_call_async` (await handle) — real, used by `py -f mod.fn` in the shell and the `c_py_demo` module seeded at init
+- [x] `metal.*` package mirrors guest areas, at least `metal.aio` (`mono_us`/`sleep_us`/`yield_`); orchestration optional (nothing on the boot path imports it)
+- [ ] **Sample signed zip**: tiny pack + verify; single-flight HTTP; import order builtin→frozen→aot→wasm→py; `metal` unshadowable — **partially staged, not signed**. `mods/py/stdlib.zip` exists (one file, `sample_mod.py`) and is on `sys.path` for both EFI and BIOS builds, but `py_zip.c`'s `pm_metal_py_zip_ensure()` only checks `pm_metal_fs_size(...) > 0` — no `.sig`, no trust-mode check, no HTTP fetch, no enforced import order (unlike Doom's mods, which do carry `.sig` files)
+- [ ] (later) Task-local GC spaces + all-parked compact barrier — still the documented interim: one global `py_run_lock`/`py_run_unlock` spinlock in `py.c` serializes all Python bytecode execution across tasks (released only across `await`)
+- [ ] (later) Fat stdlib zip / full `metal.fs`/`net`/… / native self-register (`import sample`) — not started

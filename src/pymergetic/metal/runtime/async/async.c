@@ -46,7 +46,9 @@
 #define PM_METAL_SLOT_KIND_SHIFT 48u
 #define PM_METAL_SLOT_KIND_MASK  0x7ull
 
-static volatile uint64_t mSlotWords[PM_METAL_ASYNC_MAX_HANDLES + 1];
+/* aligned(8): i386's default uint64_t alignment is 4, but the CAS below
+ * needs the real 8-byte natural alignment cmpxchg8b atomicity relies on. */
+static volatile uint64_t mSlotWords[PM_METAL_ASYNC_MAX_HANDLES + 1] __attribute__((aligned(8)));
 
 static uint64_t MetalSlotPack(pm_metal_async_slot_kind_t kind, void *ptr)
 {
@@ -325,6 +327,14 @@ static pm_metal_status_t MetalGuestCoroFn(pm_metal_coro_t *self)
      */
     if (exc != NULL && strstr(exc, "wasi proc exit") != NULL) {
       st = (code == 0) ? PM_METAL_DONE : PM_METAL_ERROR;
+      /*
+       * WAMR's wasi_proc_exit sets this exception only to unwind the
+       * call and expects the host to clear it (libc_wasi_wrapper.c).
+       * Left sticky, the *next* call-in into this same instance fails
+       * immediately with the stale exception — matters most for the
+       * shared "instance 0" path, which can be called again.
+       */
+      wasm_runtime_clear_exception(c->inst);
       MetalGuestCoroUnpinState(g);
       mRunningCallin = prev;
       MetalCallinRelease();

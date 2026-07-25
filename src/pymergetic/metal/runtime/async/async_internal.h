@@ -11,7 +11,7 @@
 #include "wasm_export.h"
 
 #ifndef PM_METAL_ASYNC_MAX_HANDLES
-#define PM_METAL_ASYNC_MAX_HANDLES 64u
+#define PM_METAL_ASYNC_MAX_HANDLES 512u
 #endif
 
 #ifndef PM_METAL_ASYNC_ROOT_STATE

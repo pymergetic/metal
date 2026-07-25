@@ -44,6 +44,77 @@ Steps:
 Shell, **other mods**, and µPy later use the **same** registries / load API.
 No second py-only table. **No string lookup on the hot path** after resolve.
 
+### Instances: shared "instance 0" vs fresh per-call
+
+A **mod** is loaded code (`wasm_module_t`) — that part is always shared and
+loaded once. What varies is which **instance** (`wasm_module_inst_t` +
+`wasm_exec_env_t`, i.e. linear memory/globals/stack) a call runs against.
+The mod itself declares which instancing it needs — callers don't have to
+know or hardcode it:
+
+```c
+int32_t pm_metal_mod_on_load(void) {
+  pm_metal_mod_set_capability(PM_METAL_MOD_CAP_MULTI); /* real static state */
+  ...
+}
+```
+
+| Capability | `AUTO` resolves to | Forced `SHARED` | Forced `FRESH` | Pick for |
+|------------|---------------------|------------------|-----------------|----------|
+| `SINGLE` (default — undeclared mods) | `SHARED` | ok | refused | Stateless mods, or fine with shared/reentrant statics (hello, the test mods) |
+| `MULTI` | `FRESH` | ok (e.g. a lightweight library call) | ok | Mods with real static state that must not leak/persist across runs, or that should run several times concurrently (Doom) |
+
+Either way, instance 0 always exists and is what runs `on_load` (func/cmd
+registration) — it just isn't necessarily what a `MULTI` mod's *invocations*
+run against.
+
+| Mode | Linear memory / statics | Who tears it down |
+|------|--------------------------|--------------------|
+| **Shared** (instance 0) | The mod's one persistent instance, kept in the mod slot | `pm_metal_mod_unload()` / `pm_metal_mod_reset()` |
+| **Fresh** | New, private, own heap/globals; module bytes/code still shared | The process that owns it, on exit (`pm_metal_process_reap`/`release`) |
+
+Why fresh instances exist: a mod with real static state (zone heap, screen
+buffer, open files — e.g. Doom) leaves that state dirty after it exits.
+Reusing instance 0 for the next invocation reruns stale/partially-torn-down
+state, and a clean WASI `proc_exit` leaves WAMR's exception flag stuck, so
+the next call on that same instance would bail out immediately. A fresh
+instance sidesteps both: each `run doom` gets its own linear memory and
+exec_env, so `on_load`'s side effects still happen once against the shared
+module, but every process-level invocation starts from a truly cold guest
+state — including running **the same mod concurrently** (e.g. two Doom
+processes at once), since each has its own instance.
+
+Per-call API (`pm_metal_mod_cmd_invoke` / `fn_process`), opt-in via a
+`pm_metal_mod_instance_t instance_mode` (`AUTO`/`SHARED`/`FRESH`, see table
+above) plus a `uint32_t flags` word:
+
+- `PM_METAL_MOD_FLAG_AUTO_UNLOAD` — once this call's fresh instance is torn
+  down, best-effort unload the whole mod too (drop the compiled module +
+  registry rows) instead of leaving it `READY`/resident. Silently refused
+  (mod just stays loaded) if anything else still needs it.
+- `pm_metal_process_spawn_mod()` (real processes) and the shell's bare
+  command path (`ModShellCmdFn`) pass `AUTO` — the mod's own capability
+  decides. Boot self-tests and inter-mod library calls force `SHARED`.
+
+Plumbing (no new registry, no second table):
+
+- `pm_metal_wasm_mod_image_instantiate()` / `_deinstantiate()` (`wasm.h`) —
+  create/destroy an `inst`+`exec_env` pair against an already-loaded
+  `module`, without touching the shared module or its bytes.
+- `pm_metal_mod_cmd_t` carries `mod_name`/`export_name` alongside the
+  resolved shared `fn`, so `fn_process(FRESH)` can re-resolve the export
+  against the fresh instance instead of reusing the shared one.
+- `MetalProcessSlot` (`process.c`) owns the fresh image once created;
+  `pm_metal_process_reap`/`release` hand it to
+  `pm_metal_mod_on_fresh_instance_end()` for teardown (+ the auto-unload
+  check) — callers never close it themselves. `pm_metal_process_owned_image()`
+  is a read-only peek at it (e.g. for `pm_metal_mod_func_resolve_on()` to
+  resolve another export against *this* process's own instance instead of
+  instance 0).
+- `pm_metal_mod_reset(name)` — soft reset: keep the compiled module, just
+  recreate instance 0's `inst`/`exec_env` and rerun `on_load` (no
+  refetch/recompile). Same idle guard as `unload()`.
+
 ### Process (role on the task tree)
 
 **process = command Extrawurst** (UI/stdio redirect) on a **process-root task**.
@@ -87,6 +158,7 @@ proc1 (task) ── taskA ── proc2 (task) ── taskB
 | ~~String `func_invoke` + session Extrawurst~~ **done** | resolve → `fn_t` → `fn_coro` / `fn_process` |
 | ~~One process; no nest~~ **done** | nestable procs on task tree |
 | ~~Create-time root `1024` state~~ **done** | `coro_alloc` in step |
+| ~~One shared instance for everything → can't restart/re-run a mod with static state~~ **done** | mod declares `SINGLE`/`MULTI` capability; per-call fresh instance opt-in |
 | Prefer-wasm policy for AOT faults | AOT first-class; fix faults |
 | Single UI focus / session Extrawurst | multi-focus polish |
 
@@ -102,8 +174,9 @@ Relevant: [`guest/mod/`](../include/pymergetic/metal/guest/mod/mod.h), [`wasm.h`
 4. **Loader** `on_load` / `on_unload` only — **done**  
 5. Resolve-once + `fn_coro` / `fn_process` — **done**  
 6. Nestable process on task tree — **done**  
-7. AOT doom `#GP` (parallel) — **open**  
-8. µPy binds the **same** registries — **next**  
+7. Opt-in fresh instance per process (restart/re-run/concurrent mods) — **done**  
+8. AOT doom `#GP` (parallel) — **open**  
+9. µPy binds the **same** registries — **next**  
 
 ---
 

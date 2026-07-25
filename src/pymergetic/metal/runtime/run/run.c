@@ -54,7 +54,9 @@
 #define PM_METAL_RING_KIND_NOP  4ull /* payload = 0                        */
 
 typedef struct {
-  volatile uint64_t word;
+  /* aligned(8): i386's default uint64_t alignment is 4, but the CAS this
+   * word goes through needs real 8-byte alignment for cmpxchg8b atomicity. */
+  volatile uint64_t word __attribute__((aligned(8)));
   uint8_t           _pad[56]; /* pad the slot to a full cache line */
 } pm_metal_ring_slot_t;
 
@@ -67,11 +69,12 @@ typedef struct {
   volatile uint32_t sum;
   volatile uint32_t steal_count;   /* diagnostics: claims by a non-owner */
   volatile uint32_t claim_retries; /* diagnostics: lost claim CAS races  */
-  /* Rolling busy % (diagnostics only — see pm_metal_run_busy_pct). */
-  volatile uint64_t    busy_win_start_us;
-  volatile uint64_t    busy_us_acc;
-  uint32_t             busy_pct;
-  pm_metal_ring_slot_t slots[PM_METAL_RUN_INBOX_DEPTH];
+  /* Rolling busy % (diagnostics only — see pm_metal_run_busy_pct).
+   * aligned(8): see pm_metal_ring_slot_t.word above — same i386 CAS need. */
+  volatile uint64_t     busy_win_start_us __attribute__((aligned(8)));
+  volatile uint64_t     busy_us_acc __attribute__((aligned(8)));
+  uint32_t              busy_pct;
+  pm_metal_ring_slot_t  slots[PM_METAL_RUN_INBOX_DEPTH];
 } pm_metal_run_inbox_t;
 
 /* Rolling window for busy_pct refresh — long enough to smooth spikes. */
