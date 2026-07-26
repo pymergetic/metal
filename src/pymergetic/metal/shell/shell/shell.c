@@ -64,6 +64,7 @@ static char     mLastNl; /* '\0', or '\r'/'\n' just submitted — CRLF pairing *
 
 static void     MetalShellMarkFull(void);
 static void     MetalShellMarkInput(void);
+static void     MetalShellMarkStatus(void);
 static uint32_t MetalShellPromptAnsi(char *out, uint32_t cap);
 static void     MetalShellOfferPrompt(void);
 
@@ -285,6 +286,47 @@ static int32_t MetalShellTabChordFilter(const pm_metal_input_key_event_t *ev)
   }
 
   return 1;
+}
+
+/**
+ * Ctrl+Alt+Home → cycle the PS/2 keyboard layout (same effect as the
+ * `keyb` shell command, one step forward, wrapping). Home is on the
+ * mods/nav push_key whitelist even under shell focus (see
+ * src/efi|bios/.../dev/input/input_port.c), unlike plain letter keys —
+ * so this chord reaches the filter without any port changes, which is
+ * why Home (not a mnemonic letter) was picked as the trigger key.
+ */
+static int32_t MetalShellKeybChordFilter(const pm_metal_input_key_event_t *ev)
+{
+  pm_metal_input_keyb_t layout;
+  const char           *name;
+  char                  msg[40];
+
+  if (ev == NULL || ev->pressed == 0 || ev->code != PM_METAL_KEY_HOME ||
+      (ev->mods & PM_METAL_INPUT_MOD_CTRL) == 0 || (ev->mods & PM_METAL_INPUT_MOD_ALT) == 0) {
+    return 0;
+  }
+
+  layout = pm_metal_input_keyb_cycle();
+  name   = pm_metal_input_keyb_name(layout);
+  snprintf(msg, sizeof(msg), "keyb: %s", (name != NULL) ? name : "?");
+  pm_metal_ui_set_status(msg);
+  MetalShellMarkStatus();
+  return 1;
+}
+
+/**
+ * pm_metal_input_set_filter() only has one slot — every global chord (tab
+ * cycling, keyb layout cycling, ...) is dispatched from this single entry
+ * point instead of fighting over the registration.
+ */
+static int32_t MetalShellChordFilter(const pm_metal_input_key_event_t *ev)
+{
+  if (MetalShellTabChordFilter(ev) != 0) {
+    return 1;
+  }
+
+  return MetalShellKeybChordFilter(ev);
 }
 
 static void MetalShellJobFinish(int32_t st)
@@ -766,7 +808,7 @@ int pm_metal_shell_init(void)
 
   pm_metal_ui_set_status("shell ready");
   pm_metal_ui_input_clear();
-  pm_metal_input_set_filter(MetalShellTabChordFilter);
+  pm_metal_input_set_filter(MetalShellChordFilter);
   pm_metal_shell_cmds_install();
   (void)pm_metal_ui_frame();
   MetalShellPresentFull();

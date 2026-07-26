@@ -41,6 +41,7 @@
 #define UI_FONT_W      8
 #define UI_CLOCK_CHARS 5
 #define UI_FPS_CHARS   6 /* e.g. "60fps" / "999fps" */
+#define UI_KEYB_CHARS  2 /* layout ids are always 2 letters: "us" / "de" / ... */
 
 #define UI_MARGIN    0 /* shell window fills the scanout */
 #define UI_TITLE_H   28

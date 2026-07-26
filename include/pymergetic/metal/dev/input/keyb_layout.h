@@ -48,6 +48,17 @@ typedef struct pm_metal_keyb_layout {
  * — the large `unshift`/`shift` designated-initializer tables are written
  * directly by the layout file, not threaded through macro arguments.
  * `var` must be a unique static identifier in the translation unit.
+ *
+ * `aligned(16)` (matching PM_METAL_SHELL_CMD / PM_METAL_PY_BIND) is
+ * required here, not cosmetic: dropping it changes this section's link
+ * layout enough to hang EFI boot at ExitBootServices (observed, not
+ * root-caused — some unrelated fixed-address assumption elsewhere is
+ * apparently sensitive to *this* section's size; don't "clean this up").
+ * sizeof(pm_metal_keyb_layout_t) (280: 2 pointers + two 0x80 char tables
+ * + an int32_t, at natural 8-byte alignment) isn't itself a multiple of
+ * 16, so the linker inserts padding between consecutive objects to keep
+ * each one 16-aligned — keyb.c's registry walk knows this and steps by
+ * `(sizeof + 15) & ~15`, not by a naive `arr[i]`.
  */
 #define PM_METAL_KEYB_LAYOUT_BEGIN(var)   \
   static const pm_metal_keyb_layout_t var \

@@ -52,7 +52,7 @@ def hwinfo(*args: Any) -> Any:
     ...
 
 def keyb(*args: Any) -> Any:
-    """keyb [us|gr]      PS/2 layout (default us; de=gr QWERTZ)"""
+    """keyb [us|de]      PS/2 layout (default us; de QWERTZ, alias gr; Ctrl+Alt+Home cycles)"""
     ...
 
 def mem(*args: Any) -> Any:
@@ -77,6 +77,10 @@ def presentoffload(*args: Any) -> Any:
 
 def ps(*args: Any) -> Any:
     """ps                list fake processes"""
+    ...
+
+def ps2trace(*args: Any) -> Any:
+    """ps2trace [on|off] Log raw i8042 keyboard bytes (debug real-HW scancode mismatches)"""
     ...
 
 def py(*args: Any) -> Any:

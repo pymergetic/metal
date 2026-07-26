@@ -57,7 +57,7 @@ Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
 | |
 |:-:|
 | ![Python REPL](screenshots/py-repl.png) |
-| QEMU — boots straight into the Python REPL: boot tree, rainbow ASCII banner + Metal/MicroPython versions + host CPU, live commands (`import pmcmd`, `pmcmd.ping(...)`) — one unified scrollable console, no separate input strip |
+| QEMU — boots straight into the Python REPL: boot tree, rainbow ASCII banner + Metal/MicroPython versions, live commands (`import pmcmd`, `pmcmd.ping(...)`), `quit()` back to the C shell — one unified scrollable console, status bar shows the keyboard-layout indicator (`us`/`de`, `Ctrl+Alt+Home` cycles it) |
 
 More filenames: [`screenshots/README.md`](screenshots/README.md).
 

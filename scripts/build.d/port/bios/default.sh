@@ -255,7 +255,7 @@ SRCS_C=(
 	"${SHARED_METAL}/dev/input/input.c"
 	"${SHARED_METAL}/dev/input/keyb.c"
 	"${SHARED_METAL}/dev/input/keyb_layout/keyb_layout_us.c"
-	"${SHARED_METAL}/dev/input/keyb_layout/keyb_layout_gr.c"
+	"${SHARED_METAL}/dev/input/keyb_layout/keyb_layout_de.c"
 	"${SHARED_METAL}/dev/input/virtio_input.c"
 	"${BIOS_METAL}/dev/input/input_port.c"
 	"${SHARED_METAL}/dev/stream/stream.c"

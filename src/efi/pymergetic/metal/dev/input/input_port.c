@@ -5,6 +5,7 @@
 #include <pymergetic/metal/dev/input/virtio_input.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
 #include <pymergetic/metal/boot/port.h>
+#include <pymergetic/metal/log/log.h>
 #include <runtime/time/time.h>
 
 #include <Uefi.h>
@@ -374,6 +375,12 @@ MetalInputI8042Drain (
       continue;
     }
 
+    if (pm_metal_input_ps2_trace_get () != 0) {
+      /* Raw wire byte, before any E0/break-bit/translate interpretation —
+       * `ps2trace` shell command; see input.h. */
+      pm_metal_logf ("ps2kbd: raw=%02x", sc);
+    }
+
     if (sc == 0xE0u) {
       mPs2Ext = 1;
       continue;
@@ -415,6 +422,11 @@ MetalInputI8042Drain (
     }
 
     ch = pm_metal_input_keyb_ascii (sc, mPs2ShiftDown != 0);
+    if (pm_metal_input_ps2_trace_get () != 0) {
+      pm_metal_logf ("ps2kbd: sc=%02x shift=%d hid=%d ascii=%02x",
+        sc, mPs2ShiftDown != 0, (INT32)key, (UINT32)(UINT8)ch);
+    }
+
     if (ch != 0) {
       pm_metal_input_ascii_push (ch);
     }

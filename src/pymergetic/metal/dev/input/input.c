@@ -31,6 +31,7 @@ static pm_metal_input_key_event_t mQ[PM_METAL_INPUT_Q];
 static uint32_t                   mHead;
 static uint32_t                   mTail;
 static pm_metal_input_focus_t     mFocus;
+static int32_t                    mPs2Trace;
 
 static uint8_t                  mHeld[PM_METAL_HELD_N];
 static uint64_t                 mHeldMs[PM_METAL_HELD_N];
@@ -606,6 +607,16 @@ uint32_t pm_metal_input_ps2_read(char *buf, uint32_t len)
 void pm_metal_input_poll(void)
 {
   pm_metal_input_poll_port();
+}
+
+void pm_metal_input_ps2_trace_set(int32_t on)
+{
+  mPs2Trace = (on != 0) ? 1 : 0;
+}
+
+int32_t pm_metal_input_ps2_trace_get(void)
+{
+  return mPs2Trace;
 }
 
 static int32_t pm_metal_input_poll_key_native(wasm_exec_env_t exec_env,

@@ -6,9 +6,9 @@
 **/
 #include <pymergetic/metal/dev/input/keyb_layout.h>
 
-PM_METAL_KEYB_LAYOUT_BEGIN(g_pm_metal_keyb_layout_gr) = {
-  .name    = "gr",
-  .aliases = "de",
+PM_METAL_KEYB_LAYOUT_BEGIN(g_pm_metal_keyb_layout_de) = {
+  .name    = "de",
+  .aliases = "gr", /* pre-rename id ("gr" for "German") — kept as an alias */
   .swap_yz = 1,
   .unshift = {
     [0x01] = 0x1b,       [0x02] = '1',        [0x03] = '2',        [0x04] = '3',        [0x05] = '4',

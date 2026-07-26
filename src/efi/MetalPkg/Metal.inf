@@ -87,7 +87,7 @@
   ../../pymergetic/metal/dev/input/input.c
   ../../pymergetic/metal/dev/input/keyb.c
   ../../pymergetic/metal/dev/input/keyb_layout/keyb_layout_us.c
-  ../../pymergetic/metal/dev/input/keyb_layout/keyb_layout_gr.c
+  ../../pymergetic/metal/dev/input/keyb_layout/keyb_layout_de.c
   ../../pymergetic/metal/dev/input/virtio_input.c
   ../pymergetic/metal/dev/input/input_port.c
   ../../pymergetic/metal/dev/stream/stream.c

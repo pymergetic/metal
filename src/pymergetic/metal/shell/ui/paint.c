@@ -8,6 +8,7 @@
 
 #include "priv.h"
 
+#include <pymergetic/metal/dev/input/input.h>
 #include <pymergetic/metal/dev/net/net_cfg.h>
 #include <pymergetic/metal/dev/net/ntp.h>
 #include <pymergetic/metal/dev/random/random.h>
@@ -23,6 +24,7 @@ static uint32_t mStatusNetHealth = 0xffffffffu;
 static uint32_t mStatusIfCount   = 0xffffffffu;
 static uint32_t mStatusNtpBit    = 0xffffffffu;
 static uint32_t mStatusFpsHz     = 0xffffffffu;
+static uint32_t mStatusKeyb      = 0xffffffffu;
 
 /* Per-iface tray color: 0=down, 1=partial (IP no DNS), 2=good — packed 2 bits. */
 #define NET_HEALTH_DOWN    0u
@@ -705,7 +707,8 @@ static void MetalUiStatusSnapshot(uint32_t *clock_tod,
                                   uint32_t *net_health,
                                   uint32_t *if_count,
                                   uint32_t *ntp_bit,
-                                  uint32_t *fps_hz)
+                                  uint32_t *fps_hz,
+                                  uint32_t *keyb)
 {
   uint64_t             ms;
   uint32_t             tod;
@@ -718,6 +721,7 @@ static void MetalUiStatusSnapshot(uint32_t *clock_tod,
   tod        = (uint32_t)((ms / 1000ull) % 86400ull);
   *clock_tod = (tod / 3600u) * 60u + ((tod % 3600u) / 60u);
   *fps_hz    = pm_metal_gfx_fps();
+  *keyb      = pm_metal_input_keyb_get();
 
   n      = pm_metal_net_if_count();
   health = 0;
@@ -748,6 +752,8 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
   int32_t              clock_x;
   int32_t              fps_w;
   int32_t              fps_x;
+  int32_t              keyb_w;
+  int32_t              keyb_x;
   int32_t              tray_right;
   int32_t              tray_w;
   int32_t              tx;
@@ -762,9 +768,12 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
   uint32_t             min;
   char                 clock[8];
   char                 fps[8];
+  char                 keyb[4];
+  const char          *keyb_name;
   char                 left[STATUS_CHARS];
   uintptr_t            left_n;
   uintptr_t            fps_chars;
+  uintptr_t            keyb_chars;
   uintptr_t            max_chars;
   pm_metal_net_ifcfg_t cfg;
   pm_metal_gfx_color_t fps_fg;
@@ -774,7 +783,8 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
 
   clock_w = 8 + UI_CLOCK_CHARS * UI_FONT_W + 8;
   fps_w   = 8 + UI_FPS_CHARS * UI_FONT_W + 8;
-  if (clock_w + fps_w + 24 > w->w) {
+  keyb_w  = 8 + UI_KEYB_CHARS * UI_FONT_W + 8;
+  if (clock_w + fps_w + keyb_w + 30 > w->w) {
     fps_w = 8 + 3 * UI_FONT_W + 8; /* fall back to "99" */
   }
 
@@ -788,6 +798,17 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
     clock_x = fps_x + fps_w + 6;
   }
 
+  /* Keyb layout cell (2-letter, e.g. "us"/"de") left of the FPS cell —
+   * same chrome style as fps/clock, cycled by Ctrl+Alt+Home (shell.c). */
+  keyb_x = fps_x - 6 - keyb_w;
+  if (keyb_x < w->x + 4) {
+    keyb_x = w->x + 4;
+  }
+
+  if (fps_x < keyb_x + keyb_w + 6) {
+    fps_x = keyb_x + keyb_w + 6;
+  }
+
   /* Systray width: colored bullet + name + pad per iface. */
   n      = pm_metal_net_if_count();
   tray_w = 0;
@@ -799,7 +820,7 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
     tray_w += 10 + (int32_t)strlen(cfg.name) * UI_FONT_W + 6;
   }
 
-  tray_right = fps_x - 8;
+  tray_right = keyb_x - 8;
   if (tray_w > 0 && tray_right - tray_w < w->x + 8) {
     tray_w = tray_right - (w->x + 8);
     if (tray_w < 0) {
@@ -807,7 +828,7 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
     }
   }
 
-  left_max = (tray_w > 0) ? (tray_right - tray_w - 8) : (fps_x - 8);
+  left_max = (tray_w > 0) ? (tray_right - tray_w - 8) : tray_right;
   if (left_max < w->x + 8) {
     left_max = w->x + 8;
   }
@@ -858,11 +879,28 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
     tx += item_w;
   }
 
-  /* Separator tray | fps. */
+  /* Separator tray | keyb. */
   if (tray_w > 0) {
-    pm_metal_gfx_fill_rect(fps_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
-    pm_metal_gfx_fill_rect(fps_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
+    pm_metal_gfx_fill_rect(keyb_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
+    pm_metal_gfx_fill_rect(keyb_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
   }
+
+  keyb_name = pm_metal_input_keyb_name(pm_metal_input_keyb_get());
+  snprintf(keyb, sizeof(keyb), "%s", (keyb_name != NULL) ? keyb_name : "??");
+  keyb_chars = strlen(keyb);
+
+  pm_metal_gfx_fill_rect(keyb_x, w->y + 2, keyb_w, w->h - 4, COL_STATUS_CLK);
+  pm_metal_gfx_bevel_rect(keyb_x, w->y + 2, keyb_w, w->h - 4, 0, COL_BEVEL_LO, COL_BEVEL_HI);
+  pm_metal_gfx_draw_text(keyb_x + (keyb_w - (int32_t)keyb_chars * UI_FONT_W) / 2,
+                         w->y + 4,
+                         keyb,
+                         COL_STATUS_TXT,
+                         COL_STATUS_CLK,
+                         1);
+
+  /* Separator keyb | fps. */
+  pm_metal_gfx_fill_rect(fps_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
+  pm_metal_gfx_fill_rect(fps_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
 
   fps_hz = pm_metal_gfx_fps();
   fps_fg = MetalUiFpsColor(fps_hz);
@@ -907,8 +945,12 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
                          COL_STATUS_CLK,
                          1);
 
-  MetalUiStatusSnapshot(
-    &mStatusClockTod, &mStatusNetHealth, &mStatusIfCount, &mStatusNtpBit, &mStatusFpsHz);
+  MetalUiStatusSnapshot(&mStatusClockTod,
+                        &mStatusNetHealth,
+                        &mStatusIfCount,
+                        &mStatusNtpBit,
+                        &mStatusFpsHz,
+                        &mStatusKeyb);
 }
 
 void MetalUiPaintStatusBarOnly(void)
@@ -1023,10 +1065,12 @@ int32_t MetalUiStatusNeedsRefresh(void)
   uint32_t if_count;
   uint32_t ntp_bit;
   uint32_t fps_hz;
+  uint32_t keyb;
 
-  MetalUiStatusSnapshot(&clock_tod, &net_health, &if_count, &ntp_bit, &fps_hz);
+  MetalUiStatusSnapshot(&clock_tod, &net_health, &if_count, &ntp_bit, &fps_hz, &keyb);
   if (clock_tod != mStatusClockTod || net_health != mStatusNetHealth ||
-      if_count != mStatusIfCount || ntp_bit != mStatusNtpBit || fps_hz != mStatusFpsHz) {
+      if_count != mStatusIfCount || ntp_bit != mStatusNtpBit || fps_hz != mStatusFpsHz ||
+      keyb != mStatusKeyb) {
     return 1;
   }
 

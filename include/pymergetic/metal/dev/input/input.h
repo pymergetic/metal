@@ -178,6 +178,19 @@ void pm_metal_input_pointer_sample(int32_t *x, int32_t *y, uint32_t *buttons);
 int pm_metal_input_ps2_init(void);
 
 /**
+ * Debug: when on, both ports' i8042 drain logs every raw keyboard-channel
+ * byte (`pm_metal_logf("ps2kbd: ...")`) as it's read off 0x60 — before any
+ * E0/break/translate interpretation. AUX (mouse) bytes are never logged
+ * (TrackPoint motion would drown it out). Off by default; toggle with the
+ * `ps2trace` shell command when chasing a real-hardware scancode mismatch
+ * QEMU doesn't reproduce (see docs/IO.md's "Backspace prints a digit"
+ * note) — a static code read can't tell you what a specific keyboard's EC
+ * actually put on the wire.
+ */
+void    pm_metal_input_ps2_trace_set(int32_t on);
+int32_t pm_metal_input_ps2_trace_get(void);
+
+/**
  * DOS KEYB-style layout for set-1 → shell ASCII (US default, GR = QWERTZ,
  * more languages self-register from dev/input/keyb_layout/'s *.c files).
  * The value is just an index into that registry — never persisted, never
@@ -188,11 +201,20 @@ typedef uint32_t pm_metal_input_keyb_t;
 
 int                   pm_metal_input_keyb_set(pm_metal_input_keyb_t layout);
 pm_metal_input_keyb_t pm_metal_input_keyb_get(void);
-/** Registered layout's short id (e.g. "us" / "gr"); NULL if unknown. */
+/** Registered layout's short id (e.g. "us" / "de"); NULL if unknown. */
 const char *pm_metal_input_keyb_name(pm_metal_input_keyb_t layout);
+/** Number of registered layouts (>=1 in practice; walks the same registry). */
+uint32_t pm_metal_input_keyb_count(void);
 /**
- * Parse a registered layout id or alias (e.g. "us", "gr", "de"). Returns 0
- * and sets *out on ok.
+ * Advance to the next registered layout, wrapping past the last one back
+ * to the first. Returns the new index — same one `pm_metal_input_keyb_get()`
+ * would now return. Used by the status-bar chrome cell's Ctrl+Alt+Home
+ * chord (shell.c) so a cramped/foreign keyboard never needs `keyb <id>`.
+ */
+pm_metal_input_keyb_t pm_metal_input_keyb_cycle(void);
+/**
+ * Parse a registered layout id or alias (e.g. "us", "de", legacy "gr").
+ * Returns 0 and sets *out on ok.
  */
 int pm_metal_input_keyb_parse(const char *id, pm_metal_input_keyb_t *out);
 /** Map set-1 make (low 7 bits) + shift → CHAR8; 0 = no glyph. */
@@ -200,7 +222,7 @@ char pm_metal_input_keyb_ascii(uint8_t set1_make, int shift);
 /**
  * Map set-1 make (+ E0 ext) → USB HID usage. Positional (US key places),
  * independent of KEYB ASCII layout — guests keep stable keycodes under
- * `keyb gr`.
+ * `keyb de`.
  */
 pm_metal_keycode_t pm_metal_input_keyb_hid(uint8_t set1_make, int ext);
 

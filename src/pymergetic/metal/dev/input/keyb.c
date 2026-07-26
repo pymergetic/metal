@@ -15,9 +15,41 @@
 
 static const pm_metal_keyb_layout_t *mCurrent;
 
+/*
+ * Each registered layout object is `aligned(16)` (required — see
+ * PM_METAL_KEYB_LAYOUT_BEGIN) but sizeof(pm_metal_keyb_layout_t) isn't a
+ * multiple of 16, so the linker inserts 0-15 bytes of padding between
+ * consecutive objects to keep every one 16-aligned. A plain
+ * `__pm_metal_keyb_layouts_start[i]` (stride == sizeof) silently reads a
+ * few bytes into that padding for every i > 0 — this walk steps by the
+ * *aligned* stride instead, matching what the linker actually laid out.
+ */
+static uintptr_t KeybLayoutStride(void)
+{
+  return (sizeof(pm_metal_keyb_layout_t) + 15u) & ~(uintptr_t)15u;
+}
+
+static const pm_metal_keyb_layout_t *KeybLayoutAt(uint32_t i)
+{
+  return (const pm_metal_keyb_layout_t *)((uintptr_t)__pm_metal_keyb_layouts_start +
+                                          (uintptr_t)i * KeybLayoutStride());
+}
+
 static uint32_t KeybLayoutCount(void)
 {
-  return (uint32_t)(__pm_metal_keyb_layouts_end - __pm_metal_keyb_layouts_start);
+  uintptr_t addr;
+  uintptr_t end;
+  uint32_t  n;
+
+  addr = (uintptr_t)__pm_metal_keyb_layouts_start;
+  end  = (uintptr_t)__pm_metal_keyb_layouts_end;
+  n    = 0;
+  while (addr < end) {
+    n++;
+    addr += KeybLayoutStride();
+  }
+
+  return n;
 }
 
 static char AsciiLower(char c)
@@ -81,12 +113,12 @@ static const pm_metal_keyb_layout_t *KeybLayoutDefault(void)
 
   n = KeybLayoutCount();
   for (i = 0; i < n; i++) {
-    if (strcmp(__pm_metal_keyb_layouts_start[i].name, "us") == 0) {
-      return &__pm_metal_keyb_layouts_start[i];
+    if (strcmp(KeybLayoutAt(i)->name, "us") == 0) {
+      return KeybLayoutAt(i);
     }
   }
 
-  return (n != 0) ? &__pm_metal_keyb_layouts_start[0] : NULL;
+  return (n != 0) ? KeybLayoutAt(0) : NULL;
 }
 
 static const pm_metal_keyb_layout_t *KeybLayoutCurrent(void)
@@ -104,7 +136,7 @@ int pm_metal_input_keyb_set(pm_metal_input_keyb_t layout)
     return -1;
   }
 
-  mCurrent = &__pm_metal_keyb_layouts_start[layout];
+  mCurrent = KeybLayoutAt(layout);
   return 0;
 }
 
@@ -113,7 +145,15 @@ pm_metal_input_keyb_t pm_metal_input_keyb_get(void)
   const pm_metal_keyb_layout_t *cur;
 
   cur = KeybLayoutCurrent();
-  return (cur != NULL) ? (pm_metal_input_keyb_t)(cur - __pm_metal_keyb_layouts_start) : 0;
+  if (cur == NULL) {
+    return 0;
+  }
+
+  /* `cur` is always some KeybLayoutAt(i); those addresses are exact
+   * multiples of the aligned stride from start, so this division
+   * recovers i exactly (see KeybLayoutStride). */
+  return (pm_metal_input_keyb_t)(((uintptr_t)cur - (uintptr_t)__pm_metal_keyb_layouts_start) /
+                                 KeybLayoutStride());
 }
 
 const char *pm_metal_input_keyb_name(pm_metal_input_keyb_t layout)
@@ -122,7 +162,27 @@ const char *pm_metal_input_keyb_name(pm_metal_input_keyb_t layout)
     return NULL;
   }
 
-  return __pm_metal_keyb_layouts_start[layout].name;
+  return KeybLayoutAt(layout)->name;
+}
+
+uint32_t pm_metal_input_keyb_count(void)
+{
+  return KeybLayoutCount();
+}
+
+pm_metal_input_keyb_t pm_metal_input_keyb_cycle(void)
+{
+  uint32_t              n;
+  pm_metal_input_keyb_t next;
+
+  n = KeybLayoutCount();
+  if (n == 0u) {
+    return 0;
+  }
+
+  next = (pm_metal_input_keyb_get() + 1u) % n;
+  (void)pm_metal_input_keyb_set(next);
+  return next;
 }
 
 int pm_metal_input_keyb_parse(const char *id, pm_metal_input_keyb_t *out)
@@ -136,7 +196,7 @@ int pm_metal_input_keyb_parse(const char *id, pm_metal_input_keyb_t *out)
 
   n = KeybLayoutCount();
   for (i = 0; i < n; i++) {
-    if (KeybLayoutMatches(&__pm_metal_keyb_layouts_start[i], id)) {
+    if (KeybLayoutMatches(KeybLayoutAt(i), id)) {
       *out = i;
       return 0;
     }
