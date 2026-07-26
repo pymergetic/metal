@@ -51,6 +51,9 @@
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/py/py_obj.h>
 #include <pymergetic/metal/runtime/async/async.h>
+#include <pymergetic/metal/runtime/mem/mem.h>
+
+#include <string.h>
 
 #include "py/mpstate.h"
 #include "py/obj.h"
@@ -303,6 +306,52 @@ typedef struct {
   qstr          mod_name;
 } mod_name_obj_t;
 
+/**
+ * {"version": str, "desc": str, "url": str, "authors": [{"name", "email", "role"}, ...]}
+ * — one shot, mirrors pm_metal_mod_about_t field-for-field. Native host
+ * binding, not a wasm import, so unlike the guest ABI's role uint32_t
+ * this can just hand Python a readable role string directly.
+ *
+ * Dict keys are runtime-interned via qstr_from_str() + MP_OBJ_NEW_QSTR(),
+ * not compile-time MP_QSTR_xxx constants — this embed port's qstr table
+ * is pre-generated from a fixed file list (py/embed/micropython_embed.mk's
+ * SRC_QSTR) that does not scan guest/mod/mod_py_bind.c, same reason
+ * mod_ns_attr/mod_name_attr below resolve attribute names ("fresh",
+ * mod names, ...) the same way instead of MP_QSTR_*.
+ */
+static mp_obj_t mod_about_dict(const pm_metal_mod_about_t *about)
+{
+  mp_obj_t d;
+  mp_obj_t authors;
+  uint32_t i;
+
+  authors = mp_obj_new_list(0, NULL);
+  for (i = 0; i < about->author_count; i++) {
+    const pm_metal_mod_author_t *a         = &about->authors[i];
+    const char                  *role_name = pm_metal_mod_author_role_name(a->role);
+    mp_obj_t                     rec       = mp_obj_new_dict(3);
+
+    mp_obj_dict_store(
+      rec, MP_OBJ_NEW_QSTR(qstr_from_str("name")), mp_obj_new_str(a->name, strlen(a->name)));
+    mp_obj_dict_store(
+      rec, MP_OBJ_NEW_QSTR(qstr_from_str("email")), mp_obj_new_str(a->email, strlen(a->email)));
+    mp_obj_dict_store(
+      rec, MP_OBJ_NEW_QSTR(qstr_from_str("role")), mp_obj_new_str(role_name, strlen(role_name)));
+    mp_obj_list_append(authors, rec);
+  }
+
+  d = mp_obj_new_dict(4);
+  mp_obj_dict_store(d,
+                    MP_OBJ_NEW_QSTR(qstr_from_str("version")),
+                    mp_obj_new_str(about->version, strlen(about->version)));
+  mp_obj_dict_store(
+    d, MP_OBJ_NEW_QSTR(qstr_from_str("desc")), mp_obj_new_str(about->desc, strlen(about->desc)));
+  mp_obj_dict_store(
+    d, MP_OBJ_NEW_QSTR(qstr_from_str("url")), mp_obj_new_str(about->url, strlen(about->url)));
+  mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("authors")), authors);
+  return d;
+}
+
 static void mod_name_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest)
 {
   mod_name_obj_t   *self = MP_OBJ_TO_PTR(self_in);
@@ -314,6 +363,26 @@ static void mod_name_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest)
 
   if (attr == qstr_from_str("fresh")) {
     dest[0] = mod_fresh_factory_new(self->mod_name);
+    return;
+  }
+
+  if (attr == qstr_from_str("about")) {
+    /* Heap temp, not a stack local — pm_metal_mod_about_t is ~2.7 KB
+     * (mostly desc), see mod_types.h. */
+    pm_metal_mod_about_t *about = (pm_metal_mod_about_t *)pm_metal_mem_alloc(
+      sizeof(*about), PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
+
+    if (about == NULL) {
+      return; /* OOM — AttributeError via normal "not found" path */
+    }
+
+    if (pm_metal_mod_about_get(qstr_str(self->mod_name), about) != 0) {
+      pm_metal_mem_free(about);
+      return; /* not a known mod — AttributeError via normal "not found" path */
+    }
+
+    dest[0] = mod_about_dict(about);
+    pm_metal_mem_free(about);
     return;
   }
 

@@ -19,6 +19,7 @@
 #include <time.h>
 #include <unistd.h>
 #ifdef __wasi__
+#include <sched.h>
 #include <wasi_socket_ext.h>
 #endif
 

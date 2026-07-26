@@ -229,6 +229,8 @@ SRCS_C=(
 	"${SHARED_METAL}/boot/boot_test.c"
 	"${SHARED_METAL}/boot/boot_python.c"
 	"${SHARED_METAL}/boot/banner.c"
+	"${SHARED_METAL}/boot/authors.c"
+	"${SHARED_METAL}/boot/authors_py_bind.c"
 	"${SHARED_METAL}/boot/boot_harvest.c"
 	"${SHARED_METAL}/boot/boot_shell.c"
 	"${SHARED_METAL}/log/log.c"

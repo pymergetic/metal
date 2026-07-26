@@ -7,6 +7,7 @@
  */
 #include <stdint.h>
 
+#include "pymergetic/metal/boot/authors.h"
 #include "pymergetic/metal/guest/mod/mod.h"
 #include "pymergetic/metal/runtime/async/async.h"
 
@@ -26,6 +27,8 @@ int main(void)
 
 int32_t pm_metal_mod_on_load(void)
 {
+  pm_metal_mod_set_about_kernel();
+
   if (pm_metal_mod_set_capability(PM_METAL_MOD_CAP_MULTI) != 0) {
     return -1;
   }

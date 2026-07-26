@@ -31,6 +31,13 @@ typedef struct {
   uint32_t                  open_tasks;
   pm_metal_mod_cap_t        cap; /* declared via set_capability() from on_load; default SINGLE */
   uint32_t                  fresh_open; /* live FRESH-mode instances of this mod right now */
+  /* declared via set_about() from on_load; NULL (never declared) by
+   * default. Heap, not inline: pm_metal_mod_about_t is ~2.7 KB (mostly
+   * desc) and mMods[] below is a 128-entry static array — inlining it
+   * would cost ~330 KB of BSS most mods never use. Allocated once on
+   * first set_about() for this slot, contents overwritten on later
+   * calls (own memory never freed+reallocated, size is fixed). */
+  pm_metal_mod_about_t *about;
 } mod_slot_t;
 
 typedef struct {
@@ -179,6 +186,94 @@ static int32_t ModSetCapabilityHost(pm_metal_mod_cap_t cap)
   pm_metal_logf("metal-mod: %s capability = %s",
                 mConnecting->name,
                 cap == PM_METAL_MOD_CAP_MULTI ? "multi" : "single");
+  return 0;
+}
+
+const char *pm_metal_mod_author_role_name(pm_metal_mod_author_role_t role)
+{
+  switch (role) {
+  case PM_METAL_MOD_AUTHOR_ROLE_MAINTAINER:
+    return "maintainer";
+  case PM_METAL_MOD_AUTHOR_ROLE_CONTRIBUTOR:
+    return "contributor";
+  default:
+    return "author";
+  }
+}
+
+/** NUL-terminate every fixed buffer in *about — defensive against a
+ * guest that built the struct without terminating each field itself
+ * (memcpy from guest memory copies whatever bytes are there). */
+static void ModAboutSanitize(pm_metal_mod_about_t *about)
+{
+  uint32_t i;
+
+  about->version[sizeof(about->version) - 1] = '\0';
+  about->desc[sizeof(about->desc) - 1]       = '\0';
+  about->url[sizeof(about->url) - 1]         = '\0';
+  if (about->author_count > PM_METAL_MOD_AUTHOR_MAX) {
+    about->author_count = PM_METAL_MOD_AUTHOR_MAX;
+  }
+
+  for (i = 0; i < about->author_count; i++) {
+    about->authors[i].name[sizeof(about->authors[i].name) - 1]   = '\0';
+    about->authors[i].email[sizeof(about->authors[i].email) - 1] = '\0';
+  }
+}
+
+static int32_t ModSetAboutHost(const pm_metal_mod_about_t *about)
+{
+  if (mConnecting == NULL) {
+    pm_metal_log("metal-mod: set_about outside on_load");
+    return -1;
+  }
+
+  if (about == NULL) {
+    return -1;
+  }
+
+  if (mConnecting->about == NULL) {
+    mConnecting->about = (pm_metal_mod_about_t *)pm_metal_mem_alloc(
+      sizeof(*mConnecting->about), PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
+    if (mConnecting->about == NULL) {
+      pm_metal_log("metal-mod: set_about alloc failed");
+      return -1;
+    }
+  }
+
+  *mConnecting->about = *about;
+  ModAboutSanitize(mConnecting->about);
+  pm_metal_logf("metal-mod: %s about = %s (%u authors)",
+                mConnecting->name,
+                mConnecting->about->version,
+                mConnecting->about->author_count);
+  return 0;
+}
+
+int32_t pm_metal_mod_set_about(const pm_metal_mod_about_t *about)
+{
+  return ModSetAboutHost(about);
+}
+
+int32_t pm_metal_mod_about_get(const char *mod_name, pm_metal_mod_about_t *out)
+{
+  mod_slot_t *s;
+
+  if (out == NULL) {
+    return -1;
+  }
+
+  s = ModFind(mod_name);
+  if (s == NULL) {
+    return -1;
+  }
+
+  if (s->about == NULL) {
+    memset(out, 0, sizeof(*out)); /* never declared — same "all-zero" contract as before */
+    return 0;
+  }
+
+  *out = *s->about;
   return 0;
 }
 
@@ -421,7 +516,13 @@ int pm_metal_mod_load(const char *name)
 
   if (ModEnsureReady(s) != 0) {
     if (s->state == MOD_EMPTY && s->img.module == NULL && CmdFind(name) == NULL) {
-      s->used = 0;
+      /* on_load may have gotten as far as set_about() before some later
+       * step in the same connect attempt failed — free it, else this
+       * abandoned slot's heap about record leaks (slot itself is never
+       * reused for a different name, but we still own this allocation). */
+      pm_metal_mem_free(s->about);
+      s->about = NULL;
+      s->used  = 0;
     }
 
     return -1;
@@ -1119,6 +1220,74 @@ static int32_t pm_metal_mod_set_capability_native(wasm_exec_env_t exec_env, uint
   return ModSetCapabilityHost((pm_metal_mod_cap_t)cap);
 }
 
+static int32_t pm_metal_mod_set_about_native(wasm_exec_env_t exec_env, uint32_t about)
+{
+  wasm_module_inst_t    inst;
+  void                 *native;
+  pm_metal_mod_about_t *tmp;
+  int32_t               rc;
+
+  inst = wasm_runtime_get_module_inst(exec_env);
+  if (inst == NULL || !wasm_runtime_validate_app_addr(inst, about, sizeof(*tmp))) {
+    return -1;
+  }
+
+  native = wasm_runtime_addr_app_to_native(inst, about);
+  if (native == NULL) {
+    return -1;
+  }
+
+  /* pm_metal_mod_about_t is ~2.7 KB (mostly desc) — a host heap temp, not
+   * a stack local, same reasoning as coro step frames (see AGENTS.md). */
+  tmp = (pm_metal_mod_about_t *)pm_metal_mem_alloc(
+    sizeof(*tmp), PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
+  if (tmp == NULL) {
+    return -1;
+  }
+
+  memcpy(tmp, native, sizeof(*tmp));
+  rc = ModSetAboutHost(tmp);
+  pm_metal_mem_free(tmp);
+  return rc;
+}
+
+static int32_t pm_metal_mod_about_get_native(wasm_exec_env_t exec_env,
+                                             const char     *mod_name,
+                                             uint32_t        out)
+{
+  wasm_module_inst_t    inst;
+  void                 *native;
+  pm_metal_mod_about_t *tmp;
+  int32_t               rc;
+
+  inst = wasm_runtime_get_module_inst(exec_env);
+  if (inst == NULL || !wasm_runtime_validate_app_addr(inst, out, sizeof(*tmp))) {
+    return -1;
+  }
+
+  tmp = (pm_metal_mod_about_t *)pm_metal_mem_alloc(
+    sizeof(*tmp), PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
+  if (tmp == NULL) {
+    return -1;
+  }
+
+  if (pm_metal_mod_about_get(mod_name, tmp) != 0) {
+    pm_metal_mem_free(tmp);
+    return -1;
+  }
+
+  native = wasm_runtime_addr_app_to_native(inst, out);
+  if (native == NULL) {
+    pm_metal_mem_free(tmp);
+    return -1;
+  }
+
+  memcpy(native, tmp, sizeof(*tmp));
+  rc = 0;
+  pm_metal_mem_free(tmp);
+  return rc;
+}
+
 static int32_t pm_metal_mod_cmd_exists_native(wasm_exec_env_t exec_env, const char *cmd_name)
 {
   (void)exec_env;
@@ -1288,6 +1457,8 @@ static NativeSymbol g_pm_metal_mod_native_symbols[] = {
   { "pm_metal_mod_ready", (void *)pm_metal_mod_ready_native, "($)i", NULL },
   { "pm_metal_mod_reset", (void *)pm_metal_mod_reset_native, "($)i", NULL },
   { "pm_metal_mod_set_capability", (void *)pm_metal_mod_set_capability_native, "(i)i", NULL },
+  { "pm_metal_mod_set_about", (void *)pm_metal_mod_set_about_native, "(i)i", NULL },
+  { "pm_metal_mod_about_get", (void *)pm_metal_mod_about_get_native, "($i)i", NULL },
   { "pm_metal_mod_cmd_exists", (void *)pm_metal_mod_cmd_exists_native, "($)i", NULL },
   { "pm_metal_mod_cmd_invoke", (void *)pm_metal_mod_cmd_invoke_native, "($iiii)i", NULL },
   { "pm_metal_mod_func_resolve", (void *)pm_metal_mod_func_resolve_native, "($$)i", NULL },

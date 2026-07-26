@@ -1,6 +1,7 @@
 /*
  * T0 — hello via Metal shell_log (no WASI stdio).
  */
+#include "pymergetic/metal/boot/authors.h"
 #include "pymergetic/metal/shell/shell/shell.h"
 #include "pymergetic/metal/guest/mod/mod.h"
 #include "pymergetic/metal/runtime/async/async.h"
@@ -14,6 +15,8 @@ pm_metal_status_t hello_run(pm_metal_async_handle_t self_h)
 
 int32_t pm_metal_mod_on_load(void)
 {
+  pm_metal_mod_set_about_kernel();
+
   if (pm_metal_mod_register_func("run", "hello_run") != 0) {
     return -1;
   }

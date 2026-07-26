@@ -3,6 +3,7 @@
 **/
 #include <pymergetic/metal/guest/wasm/wasm.h>
 #include <pymergetic/metal/guest/mod/mod.h> /* native_register + session_end */
+#include <pymergetic/metal/boot/authors.h>
 #include <pymergetic/metal/guest/process/process.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
 #include <pymergetic/metal/shell/ui/ui.h>
@@ -275,7 +276,7 @@ int pm_metal_wasm_init(void)
       pm_metal_util_tar_native_register() != 0 || pm_metal_util_crypto_native_register() != 0 ||
       pm_metal_util_ascii_native_register() != 0 || pm_metal_util_size_native_register() != 0 ||
       pm_metal_util_ip_native_register() != 0 || pm_metal_host_native_register() != 0 ||
-      pm_metal_py_native_register() != 0) {
+      pm_metal_authors_native_register() != 0 || pm_metal_py_native_register() != 0) {
     pm_metal_log("metal-wasm: native_register failed");
     wasm_runtime_destroy();
     pm_metal_mem_free(mPool);

@@ -137,7 +137,7 @@ int                     pm_metal_py_repl_feed_line(const char *line, size_t len)
 const char *pm_metal_py_repl_prompt(void);
 
 /**
- * Rainbow "PYTHON" banner + version/CPU line + welcome text + feature
+ * Rainbow "MetalPython" banner + version/CPU line + welcome text + feature
  * highlights, printed via pm_metal_log() (so it lands identically on
  * COM1 + the UI console). One shared implementation (py_shell.c) for
  * both callers — boot_init.c's cold-boot landing and py_shell.c's own

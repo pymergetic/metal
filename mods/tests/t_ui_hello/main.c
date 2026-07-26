@@ -1,6 +1,7 @@
 /*
  * EFI guest smoke — Metal ui + gfx imports (surface-clipped draw).
  */
+#include "pymergetic/metal/boot/authors.h"
 #include "pymergetic/metal/dev/gfx/gfx.h"
 #include "pymergetic/metal/shell/shell/shell.h"
 #include "pymergetic/metal/shell/ui/ui.h"
@@ -41,6 +42,8 @@ pm_metal_status_t ui_hello_run(pm_metal_async_handle_t self_h)
 
 int32_t pm_metal_mod_on_load(void)
 {
+  pm_metal_mod_set_about_kernel();
+
   if (pm_metal_mod_register_func("run", "ui_hello_run") != 0) {
     return -1;
   }

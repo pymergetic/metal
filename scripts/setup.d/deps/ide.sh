@@ -106,6 +106,32 @@ if wasi_sys.is_dir() and dg_inc.is_dir() and doom_dir.is_dir():
             "file": str(rp),
         })
 
+# mods/tests/*/main.c (wasm32-wasip1-threads) — same target as
+# scripts/build.d/guest/mod.sh, otherwise clangd (no --target) treats these
+# as host C and picks the wrong (host-pointer) side of every wasm/host
+# dual-ABI header split (e.g. fs.h's pm_metal_fs_read_async: uint32_t on
+# the wasm side, void* on the host side).
+tests_dir = root / "mods/tests"
+wamr_socket_inc = root / "external/wamr/core/iwasm/libraries/lib-socket/inc"
+tests_base = (
+    f"/usr/bin/clang -std=c11 --target=wasm32-wasip1-threads --sysroot={wasi_sys} "
+    f"-pthread -I{inc_root} "
+)
+if wasi_sys.is_dir() and tests_dir.is_dir():
+    for mod_dir in sorted(p for p in tests_dir.iterdir() if p.is_dir()):
+        if (mod_dir / "ARCHIVED").is_file():
+            continue
+        fpath = mod_dir / "main.c"
+        if not fpath.is_file():
+            continue
+        extra = f"-I{wamr_socket_inc} " if (mod_dir / "SOCKET").is_file() else ""
+        rp = fpath.resolve()
+        entries.append({
+            "directory": str(root),
+            "command": f"{tests_base}{extra}-c -o /dev/null {rp}",
+            "file": str(rp),
+        })
+
 # Metal BIOS shim — PmBiosUefi.h under src/bios/shim (not EDK2 Uefi.h).
 # Exact per-file CDB entries are required: clangd otherwise reuses the EFI
 # sibling (e.g. efi/.../net/net_lwip.c) and misses PmBiosUefi.h.

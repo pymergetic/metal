@@ -62,6 +62,8 @@
   ../../pymergetic/metal/boot/boot_test.c
   ../../pymergetic/metal/boot/boot_python.c
   ../../pymergetic/metal/boot/banner.c
+  ../../pymergetic/metal/boot/authors.c
+  ../../pymergetic/metal/boot/authors_py_bind.c
   ../../pymergetic/metal/boot/boot_harvest.c
   ../../pymergetic/metal/boot/boot_shell.c
   ../../pymergetic/metal/log/log.c

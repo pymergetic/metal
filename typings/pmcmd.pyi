@@ -15,6 +15,10 @@ named stub.
 
 from typing import Any
 
+def about(*args: Any) -> Any:
+    """about [mod]       version, desc, url, authors (metal or a mod)"""
+    ...
+
 def close(*args: Any) -> Any:
     """close [n]         close tab n, or active/last guest"""
     ...

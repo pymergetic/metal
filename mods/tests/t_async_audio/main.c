@@ -79,10 +79,13 @@ int main(void)
   return 0;
 }
 
+#include "pymergetic/metal/boot/authors.h"
 #include "pymergetic/metal/guest/mod/mod.h"
 
 int32_t pm_metal_mod_on_load(void)
 {
+  pm_metal_mod_set_about_kernel();
+
   if (pm_metal_mod_register_func("run", "pm_metal_guest_step") != 0) {
     return -1;
   }

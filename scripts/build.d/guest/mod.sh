@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Build mods/tests/*/main.c -> build/mods/tests/*.wasm (wasm32-wasip1-threads).
 # Skips when PM_METAL_GUEST_TESTS=0. Rebuilds a mod only when inputs are newer.
+# An empty ARCHIVED marker in a mod dir skips it entirely (still linux-verify
+# leftovers depending on a subsystem parked on archive/multi-host-linux-zephyr-nuttx,
+# e.g. pymergetic/metal/mount/mount.h - not restored on this branch, see
+# docs/EFI.md/SOURCETREE.md; kept in tree to rebuild if/when that lands).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -33,6 +37,7 @@ fi
 mkdir -p "${OUT}"
 built=0
 skipped=0
+archived=0
 
 mod_needs_rebuild() {
 	local out="$1" src="$2" mod_dir="$3"
@@ -51,6 +56,12 @@ for mod_dir in "${ROOT}"/mods/tests/*/; do
 	name="$(basename "${mod_dir}")"
 	src="${mod_dir}main.c"
 	[ -f "${src}" ] || continue
+
+	if [ -f "${mod_dir}ARCHIVED" ]; then
+		echo "mod: ${name} skipped (ARCHIVED - needs a subsystem parked on archive/multi-host-linux-zephyr-nuttx)"
+		archived=$((archived + 1))
+		continue
+	fi
 
 	out="${OUT}/${name}.wasm"
 	if ! mod_needs_rebuild "${out}" "${src}" "${mod_dir}"; then
@@ -97,4 +108,4 @@ for mod_dir in "${ROOT}"/mods/tests/*/; do
 	fi
 done
 
-echo "mods/tests -> ${OUT} (built=${built} skipped=${skipped})"
+echo "mods/tests -> ${OUT} (built=${built} skipped=${skipped} archived=${archived})"

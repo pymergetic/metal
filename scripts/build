@@ -19,8 +19,7 @@ usage: scripts/build <target> [all|i386|x86_64]
   bios      — freestanding Multiboot2 Metal (→ metal.elf)
               optional: bios i386 | bios x86_64 (default)
   mod       — guest wasm tests
-  cpython   — python.wasm
-  all       — mod + cpython + efi + bios
+  all       — mod + efi + bios
 
 Examples:
   scripts/build all
@@ -50,10 +49,10 @@ case "${plat}" in
 -h | --help | help) usage ;;
 all)
 	[[ $# -eq 0 ]] || usage
-	pm_run_steps "${ROOT}/scripts/build" "mod" "cpython" "efi" "bios"
+	pm_run_steps "${ROOT}/scripts/build" "mod" "efi" "bios"
 	exit $?
 	;;
-efi | mod | cpython)
+efi | mod)
 	if [[ $# -ge 1 ]]; then
 		[[ "$1" == "all" && $# -eq 1 ]] || usage
 	fi
@@ -80,6 +79,5 @@ bios)
 	fi
 	;;
 mod) run "${GUEST}/mod.sh" ;;
-cpython) run "${GUEST}/cpython.sh" ;;
 *) usage ;;
 esac

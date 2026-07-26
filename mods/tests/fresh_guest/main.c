@@ -8,6 +8,7 @@
  */
 #include <stdint.h>
 
+#include "pymergetic/metal/boot/authors.h"
 #include "pymergetic/metal/guest/mod/mod.h"
 #include "pymergetic/metal/runtime/async/async.h"
 #include "pymergetic/metal/shell/shell/shell.h"
@@ -88,6 +89,8 @@ int main(void)
 
 int32_t pm_metal_mod_on_load(void)
 {
+  pm_metal_mod_set_about_kernel();
+
   if (pm_metal_mod_register_func("run", "pm_metal_guest_step") != 0) {
     return -1;
   }

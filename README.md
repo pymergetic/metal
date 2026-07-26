@@ -2,10 +2,12 @@
 
 Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
 
-> **Experimental.** Early preview, not a product release. APIs move, drivers
-> are incomplete, docs lag, iron is “works on *my* ThinkPad.” Fun and real —
-> not polished, not supported, not something to bet a deployment on. Bring
-> curiosity; bring patches; don’t bring production expectations.
+> **Experimental / alpha.** Early preview, not a product release. APIs move,
+> drivers are incomplete, docs lag, iron is “works on *my* ThinkPad.” Fun and
+> real — not polished, not supported, not something to bet a deployment on.
+> In the os-sdk monorepo this is the **first bottom-up recomposition** focus
+> after top-down exploration. Bring curiosity; bring patches; don’t bring
+> production expectations.
 
 **Boot → hardware → CPU runners → certified wasm/AOT → go.**
 
@@ -204,9 +206,14 @@ are our take on that spirit, not a TempleOS clone.
 
 ---
 
+## Author
+
+**Rouven Raudzus** — `raudzus@pymergetic.com`
+
 ## License
 
 Metal is **[Apache License 2.0](LICENSE)** unless a file says otherwise.
+Copyright notice: see the appendix in [LICENSE](LICENSE).
 
 Third-party / vendored bits keep their own terms (e.g. FreeBSD **bge**
 BSD-4-Clause under `src/pymergetic/metal/dev/net/bge/freebsd/`; WAMR, Doom,

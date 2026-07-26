@@ -48,7 +48,7 @@ void pm_metal_py_repl_print_banner(void)
 {
   char cpu_brand[64];
 
-  pm_metal_util_ascii_log_rainbow("PYTHON");
+  pm_metal_util_ascii_log_rainbow("MetalPython");
   pm_metal_logf("Metal %s  --  %s", PM_METAL_VERSION, pm_metal_py_version_cstr());
   pm_metal_hwinfo_cpu_brand(cpu_brand, sizeof(cpu_brand));
   if (cpu_brand[0] != '\0') {
