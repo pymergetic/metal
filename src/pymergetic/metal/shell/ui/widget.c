@@ -247,20 +247,31 @@ uint32_t MetalUiConsoleVisibleRows(metal_ui_widget_t *con)
   return (uint32_t)con->h / fh;
 }
 
+uint32_t MetalUiConsoleTotalRows(metal_ui_widget_t *con)
+{
+  if (con == NULL || con->kind != METAL_UI_KIND_CONSOLE) {
+    return 0;
+  }
+
+  return con->u.console.count + MetalUiConsoleLiveInputRows(con);
+}
+
 uint32_t MetalUiConsoleMaxOff(metal_ui_widget_t *con)
 {
   uint32_t rows;
+  uint32_t total;
 
   if (con == NULL || con->kind != METAL_UI_KIND_CONSOLE) {
     return 0;
   }
 
-  rows = MetalUiConsoleVisibleRows(con);
-  if (con->u.console.count <= rows) {
+  rows  = MetalUiConsoleVisibleRows(con);
+  total = MetalUiConsoleTotalRows(con);
+  if (total <= rows) {
     return 0;
   }
 
-  return con->u.console.count - rows;
+  return total - rows;
 }
 
 void MetalUiConsoleClampView(metal_ui_widget_t *con)
@@ -324,7 +335,7 @@ int32_t MetalUiConsoleScrollBarGeom(metal_ui_widget_t *con,
   }
 
   rows    = MetalUiConsoleVisibleRows(con);
-  count   = con->u.console.count;
+  count   = MetalUiConsoleTotalRows(con);
   max_off = MetalUiConsoleMaxOff(con);
   if (track_x != NULL) {
     *track_x = con->x + con->w - UI_SCROLL_W;

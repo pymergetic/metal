@@ -11,3 +11,4 @@
 | `thinkpad-shell.jpg` | ThinkPad T42p — Metal shell on iron (`radeon_rv370`) |
 | `thinkpad-doom.jpg` | ThinkPad T42p — Doom tabbed on iron |
 | `pxe-http-sigs.png` | `upload-pxe` — HTTP mirror with `doom.*.aot` / `.wasm` + `.sig` |
+| `py-repl.png` | QEMU — boot straight into the Python REPL: boot tree ending `ready` → `python`, rainbow ASCII "PYTHON" banner, Metal + MicroPython version, host CPU brand, feature highlight lines (C↔Python, no-GIL tasks, shared async scheduler, isolated contexts, signed wasm natives), then `import pmcmd`/`pmcmd.ping(...)` live at the `>>> ` prompt — one unified scrollable console (no separate input strip) |

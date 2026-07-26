@@ -50,6 +50,34 @@ typedef long      mp_off_t;
 #define MICROPY_PY_HEAPQ                    (1) /* uheapq — heapq/ */
 #define MICROPY_PY_ERRNO                    (1) /* uerrno — errno/ */
 #define MICROPY_PY_STRUCT                   (1) /* ustruct — struct/ (int formats only, no floats) */
+#define MICROPY_PY_RANDOM                   (1) /* extmod/modrandom.c — getrandbits/seed/randrange/randint/choice */
+#define MICROPY_PY_RANDOM_EXTRA_FUNCS \
+  (1) /* randrange/randint/choice (random()/uniform() stay out: MICROPY_PY_BUILTINS_FLOAT is off) */
+#define MICROPY_PY_HASHLIB (1) /* extmod/modhashlib.c */
+#define MICROPY_PY_HASHLIB_SHA256 \
+  (1) /* self-contained lib/crypto-algorithms/sha256.c fallback (no mbedtls/axtls) */
+#define MICROPY_PY_RE \
+  (1) /* extmod/modre.c + lib/re1.5 sources — base64/fnmatch/textwrap/hmac/uu need it */
+#define MICROPY_PY_RE_MATCH_GROUPS (1) /* match.groups() */
+#define MICROPY_PY_RE_SUB          (1) /* re.sub() — fnmatch.translate()-style users need it */
+#define MICROPY_PY_DEFLATE         (1) /* extmod/moddeflate.c — zlib.py/gzip.py's raw DEFLATE engine */
+#define MICROPY_PY_DEFLATE_COMPRESS \
+  (1) /* one-way (decompress-only) would silently break zlib.compress() */
+/* io module: our own mods/py/stdlib_src/io.py occupies the bare "io" name
+ * on sys.path (filesystem import wins over an extensible built-in — see
+ * py/objmodule.c's mp_module_get_builtin), so this only ever surfaces as
+ * `import uio` / `from uio import BytesIO` — the forced-alias path every
+ * extensible built-in gets for free. zlib.py/gzip.py need exactly that:
+ * a BytesIO whose type carries the real MICROPY_PY_IO_BYTESIO stream
+ * protocol (mp_stream_p_t), which moddeflate.c's DeflateIO requires and
+ * no pure-Python class can satisfy. IOBase/BufferedWriter stay off —
+ * nothing here needs them. mp_builtin_open_obj (py/modio.c's ".open",
+ * "should be defined by port") already exists as a stub in
+ * py_port_stubs.c (real code calls our io.py's open(), not uio.open). */
+#define MICROPY_PY_IO                (1)
+#define MICROPY_PY_IO_IOBASE         (0)
+#define MICROPY_PY_IO_BYTESIO        (1)
+#define MICROPY_PY_IO_BUFFEREDWRITER (0)
 
 /* ---- CORE_FEATURES-gated grammar/builtins the Easy pack actually needs -
  * MINIMUM leaves these off by default (py/mpconfig.h gates them at
@@ -60,6 +88,9 @@ typedef long      mp_off_t;
 #define MICROPY_PY_BUILTINS_SLICE     (1) /* x[a:b] / x[a:b:c] subscript syntax */
 #define MICROPY_PY_BUILTINS_SET       (1) /* {1, 2, 3} literal + set ops */
 #define MICROPY_PY_BUILTINS_ENUMERATE (1) /* enumerate() — argparse/ uses it */
+#define MICROPY_PY_BUILTINS_BYTEARRAY (1) /* bytearray() — base64.py's own decode path uses it */
+#define MICROPY_PY_BUILTINS_PROPERTY \
+  (1) /* @property — datetime.py's fields, hmac.py's HMAC.name/digest_size */
 #define MICROPY_PY_SYS_EXC_INFO \
   (1) /* sys.exc_info() — traceback/'s print_exc()/format_exc(); the \
        * backing MP_STATE_VM(cur_exception) root pointer (py/vm.c) is set \
@@ -70,6 +101,24 @@ typedef long      mp_off_t;
   (1) /* "%s" % x — logging/'s message formatting; also a latent gap in \
        * argparse/'s own error-message paths (unexercised by \
        * PY_PROOF_STDLIB's happy-path parse, which never hit them) */
+#define MICROPY_PY_FSTRINGS \
+  (1) /* PEP 498 f-strings — MINIMUM leaves this off (mpconfig.h gates it at \
+       * AT_LEAST_EXTRA_FEATURES); datetime.py/pathlib.py/unittest/ all use \
+       * f"{x:02d}"-style literals pervasively — without this the *lexer* \
+       * has no production for them and every such module fails to parse \
+       * (SyntaxError), same story as MICROPY_PY_BUILTINS_SLICE above. */
+#define MICROPY_PY_ALL_SPECIAL_METHODS \
+  (1) /* __neg__/__pos__/__abs__/__invert__ + __radd__ etc. on plain Python \
+       * classes (py/objtype.c's instance_unary_op/instance_binary_op) — \
+       * MINIMUM leaves these un-dispatched (mpconfig.h gates them at \
+       * AT_LEAST_EXTRA_FEATURES): `-some_timedelta` doesn't even reach \
+       * datetime.py's own __neg__, it TypeErrors straight out of the VM's \
+       * generic unary-op fallback (mp_unary_op_method_name[op] is 0 for \
+       * this op when the table entry is #ifdef'd out, so the error's \
+       * operator name renders empty: "unsupported type for : \
+       * 'timedelta'") — datetime.py's __sub__/__abs__/_fmt/astimezone all \
+       * do a bare `-x` on a timedelta/date instance, so this isn't a \
+       * hypothetical gap. */
 
 /* ---- Metal provides these — keep µPy copies off ------------------------ */
 #define MICROPY_PY_THREAD         (0) /* Python task = Metal task; no GIL */
@@ -85,6 +134,5 @@ typedef long      mp_off_t;
 #define MICROPY_PY_BUILTINS_COMPLEX (0)
 #define MICROPY_PY_MATH             (0)
 #define MICROPY_LONGINT_IMPL        (MICROPY_LONGINT_IMPL_NONE)
-#define MICROPY_PY_IO               (0) /* open stub only; full io later via Metal */
 #define MICROPY_PY_SYS_ARGV         (0)
 #define MICROPY_ERROR_REPORTING     (MICROPY_ERROR_REPORTING_NORMAL)

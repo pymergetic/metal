@@ -545,12 +545,18 @@ the `PY_PROOF_STDLIB` boot proof, `boot_python.c`):**
 `itertools`, `contextlib` (+ `ucontextlib`), `copy`, `struct`, `string`,
 `pprint`, `operator`, `types`, `warnings`, `errno`, `keyword`, `abc`,
 `quopri`, `html`, `argparse`, `stat`, `pickle`, `inspect`, `traceback`,
-`logging`. `binascii` rides along as a **C extmod**
+`logging`, `base64`, `fnmatch`. `binascii` rides along as a **C extmod**
 (`extmod/modbinascii.c` — not part of upstream's embed package, so Metal's
 own build scripts + `py/embed/micropython_embed.mk` compile and qstr-scan it
 explicitly; see the [C-extmod-outside-the-embed-package
 note](#c-extmod-outside-the-embed-package-modbinascii) below), not a packed
 `.py` file — it needed a real build-system fix, not just an "Easy" copy.
+`random`, `hashlib`, `re` are likewise real C extmods
+(`extmod/modrandom.c`/`modhashlib.c`/`modre.c` + `lib/re1.5`), and `os`/`io`
+are Metal's own pure-Python modules written directly against
+`pymergetic.metal.fs` (not packaged upstream `.py` at all) — see [the four
+extmods + os/io section](#random-hashlib-osio-re--three-c-extmods-one-own-pair)
+below for all five.
 
 Second pass over this list turned out less trivial than the doc's own
 original guesses in a few cases — two more grammar/builtin flags joined
@@ -612,28 +618,65 @@ categorization**, not scope creep:
   so `MICROPY_PY_BUILTINS_ENUMERATE (1)` joins the `SLICE`/`SET` overrides
   already in `py/embed/mpconfigport.h`.
 
-**Demoted out of Easy during the pack-and-prove pass** (all shared one
-blocker: they `import re`, and `re` itself needs a design decision — see
-table below): `base64`, `fnmatch`, `textwrap`. `hmac` additionally needs
-`hashlib`; `uu` additionally needs `os`. All four move to Needs-glue.
+**Promoted out of Needs-glue once `re`/`os`/`hashlib` landed** (see the
+[extmods + os/io section](#random-hashlib-osio-re--three-c-extmods-one-own-pair)
+below): `os`, `os-path`, `io`, `re`, `random`, `hashlib`, `base64`,
+`fnmatch` — all now in the Easy list above, all `PY_PROOF_STDLIB`/
+`PY_PROOF_RANDOM`/`PY_PROOF_HASHLIB`/`PY_PROOF_OSIO`/`PY_PROOF_RE`
+boot-proofed, zero source changes needed for `base64`/`fnmatch` themselves
+beyond one more builtin flag (`MICROPY_PY_BUILTINS_BYTEARRAY`, for
+`base64.py`'s own `_translate()`/decode path).
 
-**Needs Metal glue — real module, but needs a binding decision first:**
+**Still Needs-glue after this pass** — each tried and rejected for a
+concrete, specific reason (not just "not attempted"):
+
+- `textwrap` — imported, but `TextWrapper`'s class body fails at
+  `re.compile(...)` with `ValueError: error in regex`; its own pattern
+  needs a regex feature re1.5 (this build's whole `re` engine, see
+  [C extmod outside the embed package](#c-extmod-outside-the-embed-package-modbinascii))
+  doesn't support (likely inline flags/lookahead) — not fixable by a config
+  flag, would need a source-level pattern rewrite.
+- `hmac` — imports `hashlib` fine, but `HMAC.name`'s `@property` needs
+  `MICROPY_PY_BUILTINS_PROPERTY` (also gated at
+  `MICROPY_CONFIG_ROM_LEVEL_MINIMUM`), not yet flipped — untried past the
+  first failure, plausibly Easy too on a follow-up pass.
+- `uu` — `binascii.b2a_uu`/`a2b_uu` don't exist in MicroPython's
+  `extmod/modbinascii.c` at all (checked, not assumed); this is a hard
+  upstream gap, not a Metal config flag.
+
+**Promoted out of Needs-glue in the follow-up pass** — `time`, `datetime`,
+`hmac`, `zlib`, `gzip`, `pathlib`, `shutil`, `tempfile`, `tarfile`,
+`unittest`, `textwrap`, `uu` all now ship. `ssl` shipped too, but as
+`pymergetic.metal.tls` — a Metal-flavored async TCP+TLS client, not a CPython
+`ssl`-module-shaped shim (see below); `threading` is the one deliberate
+permanent skip. See [Second Needs-glue pass — real
+RTC/decompressor/tar/tzinfo/regex work](#second-needs-glue-pass) for what
+each one actually needed and where the real gotchas were (three of them
+weren't in the original guesses at all: no `f"{x:02d}"` support at
+`MICROPY_CONFIG_ROM_LEVEL_MINIMUM`, small-int-only `timedelta.min`/`.max`
+overflowing a tagged 62-bit int, and `str.expandtabs()`/`.translate()` simply
+not existing in this MicroPython's `py/objstr.c` at all — an upstream gap,
+not a config flag).
+
+**`threading` — deliberately not shimmed, permanent, not "later":** Python
+`threading`/`_thread` model real OS threads with a GIL serializing bytecode
+between them. Metal has neither: there is no GIL (an isolated
+`pm_metal_py_ctx_t` already *is* Metal's answer to "run Python bytecode in
+parallel", see [Task-local GC spaces](#task-local-gc-spaces--real-parallel-bytecode)
+above), and a Metal task is a stackless coroutine, not a preemptible OS
+thread — `threading.Lock().acquire()` blocking would have to either busy-spin
+the one CPU running that coroutine (livelock, since nothing else gets a turn
+to release it) or secretly become an `await` point (silently changing
+`threading`'s synchronous contract into something that isn't
+`threading.Lock` anymore). Either shim lies about what the code is actually
+doing. `pymergetic.metal.aio`/isolated contexts/`Task-local GC` are the real,
+honestly-named primitives for "run Python concurrently on Metal" — `import
+threading` staying an `ImportError` is the correct, permanent outcome, not a
+gap to close later.
 
 | Module(s) | Glue needed |
 |-----------|-------------|
-| `os`, `os-path` | `pm_metal_fs` binding |
-| `io` | Thin wrapper over Metal's async FS, not blocking stdio |
-| `re` | Regex engine — MicroPython ships one (`MICROPY_PY_RE`, extmod `modre.c`) but it's not wired into this build yet; blocks `base64`/`fnmatch`/`textwrap` |
-| `time`, `datetime` | A wall-clock/RTC source — today only `mono_us` |
-| `random` | An entropy source binding (`pm_metal_random` exists on the C side, not yet exposed to Python) |
-| `hashlib` | Native hash primitives — monocypher may already provide some |
-| `pathlib`, `shutil`, `tempfile`, `tarfile` | All transitively need `os` first |
-| `zlib`, `gzip` | Needs a decompressor |
-| `unittest` | Turned out heavier than first guessed on closer read: unconditional top-level `import io` (`_capture_exc`'s `io.StringIO`) + `import os` (unused in the file body, but still executed at import time) — not just a "minor `sys.exit`" dependency as originally logged here |
-| `ssl`, `threading` | Need real design — `threading` in particular conflicts conceptually with Metal's own task model and should not be shimmed casually |
-| `base64`, `fnmatch`, `textwrap` | Need `re` (above) |
-| `hmac` | Needs `hashlib` (above) |
-| `uu` | Needs `os` (above) + `binascii` (already have) |
+| `threading`, `_thread` | Not shimmed, ever — see above |
 
 **Defer / not applicable yet — hardware, network, or ecosystem-specific,
 revisit when those subsystems exist:** everything under `micropython/*`
@@ -641,6 +684,112 @@ revisit when those subsystems exist:** everything under `micropython/*`
 `senml`, `aiorepl`, `mip`, ...) and `python-ecosys/*` (`aiohttp`,
 `requests`, `cbor2`, `pyjwt`, `iperf3`), plus `venv`, `pkgutil`/
 `pkg_resources`, `locale`, `curses.ascii`.
+
+### Second Needs-glue pass
+
+Closed every remaining Needs-glue module from the table above except
+`threading` (never — see above), one binding decision at a time:
+
+- **`time`/`datetime`** — new `pymergetic.metal.time` (`dev/random/time_py_bind.c`)
+  exposes `realtime_ms()`/`mono_us()`/`tz_minutes()`/`sleep_ms()`, backed by
+  the *same* wall clock `random.c` already fed to wasm guests (EFI's
+  `gRT->GetTime()`/BIOS's CMOS RTC, refined by SNTP — `dev/net/ntp.c`); there
+  was already a real RTC source, it just hadn't been wired to Python yet.
+  `mods/py/stdlib_src/time.py` is a from-scratch, int-only implementation
+  (`MICROPY_PY_BUILTINS_FLOAT` stays off — no CPython float seconds
+  anywhere) providing `time()`/`gmtime()`/`localtime()`/`mktime()`/
+  `monotonic()`/`sleep()`. `datetime.py` is pulled fresh from
+  micropython-lib on top of it, with two real, non-obvious deltas:
+  1. it uses `f"{h:02d}"`-style f-strings throughout — `MICROPY_PY_FSTRINGS`
+     defaults off at `MICROPY_CONFIG_ROM_LEVEL_MINIMUM` (`py/mpconfig.h`
+     gates it at `AT_LEAST_EXTRA_FEATURES`), so every such module failed to
+     even *parse* (`SyntaxError`, not a runtime gap) until the flag joined
+     `SLICE`/`SET`/`ENUMERATE`/`PROPERTY` in `mpconfigport.h`.
+  2. CPython's real `timedelta.min`/`.max` use `days=±999999999`, which needs
+     a bignum (`MICROPY_LONGINT_IMPL` stays `NONE` in this build — not
+     reopening that decision); worse, MicroPython's "small int" is a
+     *tagged* machine word (one bit reserved for the object-tag), so it's a
+     62-bit magnitude, not the 63/64 a raw `int64` would suggest — half of
+     what the first, wrong fix assumed. Metal's copy clamps both sentinels
+     to `±53375994` days (~146236 years), the largest magnitude that still
+     fits `_us` with room for the trailing h/m/s/µs fields; a correctness
+     non-issue for a sentinel value, verified against the actual `2**62`
+     boundary, not guessed.
+  `PY_PROOF_TIME` (`boot_python.c`) round-trips `mktime(localtime(now)) ==
+  now` (**not** `gmtime` — `mktime` is documented as `localtime`'s inverse,
+  never `gmtime`'s; the first version of this proof asserted the wrong pair
+  and failed by exactly `tz_minutes()`'s offset every time), checks the Unix
+  epoch's known weekday, and HMAC-SHA256s a known test vector through
+  `hmac`+`hashlib`+`time`+`datetime` together.
+- **`hmac`** — `MICROPY_PY_BUILTINS_PROPERTY` flipped on (`HMAC.name`/
+  `.digest_size`); upstream `hmac.py` pulled in unmodified on top of
+  `hashlib`+`time`.
+- **`zlib`/`gzip`** — `extmod/moddeflate.c` wired into both ports' build
+  scripts + `py/embed/micropython_embed.mk`'s qstr scan, `MICROPY_PY_DEFLATE`
+  + `_COMPRESS` flipped on. `DeflateIO` needs a stream object with a real
+  C-level stream protocol (`mp_stream_p_t`) — no pure-Python class can
+  satisfy that — so `MICROPY_PY_IO`/`MICROPY_PY_IO_BYTESIO` were flipped on
+  for the *native* `uio.BytesIO`, re-exported through Metal's own `io.py` as
+  `from uio import BytesIO, StringIO` (the forced-alias path every
+  extensible built-in gets for free — `py/objmodule.c`). `gzip.py` patched
+  `builtins.open` → `io.open` (no `builtins` module here); both modules'
+  `_WBITS`/`_MAX_WBITS = const(15)` became plain `= 15` (`MICROPY_COMP_CONST`
+  off, no runtime `micropython` module either).
+- **`pathlib`/`shutil`/`tempfile`** — `pathlib.py` patched `from micropython
+  import const` away (same `const()` gap) and redirected `open()` through
+  `io.open`; needed `os.getcwd()` (Metal is single-rooted, always returns
+  `"/"`) and `os.ilistdir()` (built from `listdir()`+`stat()` per entry) added
+  to `os/__init__.py`. `shutil.py` upstream has no `copyfile()` at all — added
+  a minimal one (`io.open` + `copyfileobj`). `tempfile.py` upstream only had
+  `mkdtemp()`/`TemporaryDirectory` — added `NamedTemporaryFile`/
+  `TemporaryFile` (auto-delete-on-close wrapper). `io.py`'s `FileIO.__init__`/
+  `open()` accept-and-ignore an `encoding=` kwarg for `pathlib`'s
+  `read_text()`/`write_text()`.
+- **`tarfile`** — bound Metal's *existing* C microtar (`util/tar.c`, already
+  used for mod packaging) directly as a `pymergetic.metal.tar` facade
+  (`util/tar_py_bind.c`, a slot table over `pm_metal_util_tar_iter_t`/
+  `_writer_t`), then `mods/py/stdlib_src/tarfile.py` wraps that in a small
+  CPython-`tarfile`-shaped `TarInfo`/`TarFile`/`TarWriter` surface — not a
+  port of upstream `tarfile.py` (which assumes a full `os`/file-descriptor
+  layer this build doesn't have), a from-scratch facade over an engine Metal
+  already had.
+- **`unittest`** — needed `io.StringIO` (added to `io.py`'s `uio`
+  re-export, same one `zlib`/`gzip` needed) for traceback capture, plus a
+  proof that actually instantiates `unittest.TestSuite()` and
+  `suite.addTest(T)` rather than guessing at the constructor shape.
+- **`textwrap`** — the real blocker was never a config flag: `re.compile()`
+  on `wordsep_re` raises `ValueError: error in regex` because `lib/re1.5`
+  (this build's whole `re` engine) has no lookahead/lookbehind support at
+  all. `TextWrapper._split()` was rewritten as a manual character scanner
+  (`_split_words_metal`) replicating the same word/hyphen-boundary rules
+  without regex; `dedent()` similarly rewritten regex-free
+  (`text.split("\n")` + a `_leading_ws_metal` helper, since `re.MULTILINE`
+  isn't honored either). Two more upstream calls turned out to not exist in
+  this MicroPython **at all**, an upstream gap rather than a config gate:
+  `str.expandtabs()` and `str.translate()` aren't implemented anywhere in
+  `py/objstr.c`, full stop. `_munge_whitespace()` now calls two small
+  from-scratch replacements (`_expandtabs_metal`: column-tracking tab
+  expansion; `_translate_ws_metal`: linear char-remap) instead.
+- **`uu`** — `binascii.b2a_uu`/`a2b_uu` don't exist in MicroPython's
+  `extmod/modbinascii.c`, confirmed hard gap, not a flag. `uu.py` implements
+  `_b2a_uu`/`_a2b_uu` from scratch and `encode()`/`decode()` against
+  file-like objects (`io.BytesIO`); `decode()` requires an explicit
+  `out_file` rather than CPython's guess-a-filename-from-the-header
+  behavior, since there's no filesystem-path convention to guess into here.
+- **`ssl` → `pymergetic.metal.tls`, not a CPython `ssl` shim** — Metal has no
+  socket object with a `.makefile()`/blocking-read shape for a CPython-style
+  `ssl.wrap_socket()` to sit on top of; instead this is a new, honestly
+  Metal-flavored async TCP+TLS client. `dev/net/tls_conn.c` is a slot table
+  (`tls_conn_slot_t`, one socket + mbedTLS context + wire buffers per slot)
+  driving one coroutine step function (`TlsConnOpStep`) through DNS resolve
+  → connect → TLS handshake → read/write, all through the same
+  `pm_metal_async_await` model every other Metal I/O primitive uses.
+  `dev/net/tls_py_bind.c` exposes `pymergetic.metal.tls.{open,connect,write,
+  read,close}` to Python; `read()` needed a new awaitable shape
+  (`pm_metal_py_new_awaitable_bytes`/`pm_metal_py_await_bytes_fn` in
+  `py_obj.h`/`py_await.c`) since the existing awaitable bridge only ever
+  returned ints, not a `bytes` payload sized by however many bytes the TLS
+  layer actually had ready.
 
 ### Reproducible `stdlib.zip` build — baked in, not tracked
 
@@ -683,8 +832,13 @@ and `html.escape` — so a module that imports but is subtly broken (wrong
 builtin alias, missing extmod flag) fails loudly instead of just "not
 raising `ImportError`". Any module that turned out incompatible with
 `MICROPY_CONFIG_ROM_LEVEL_MINIMUM` during this pass either got a small,
-noted in-place fix (see above) or was demoted to Needs-glue (`base64`,
-`fnmatch`, `hmac`, `uu`, `textwrap`) rather than silently breaking the zip.
+noted in-place fix (see above) or was demoted to Needs-glue (`hmac`, `uu`,
+`textwrap` — see [Still Needs-glue after this
+pass](#micropython-lib-categorization-easy--needs-glue--defer) above)
+rather than silently breaking the zip. `base64`/`fnmatch` were demoted here
+too on the first pass, then promoted back once `re` landed — proved
+separately by `PY_PROOF_RE`, not this step, since they were added in the
+later `re` pass, not the original Easy pass.
 
 #### C extmod outside the embed package: `modbinascii.c`
 
@@ -722,6 +876,76 @@ Metal-owned build fixes beyond flipping its config flag:
 Any future Easy module that's genuinely backed by an `extmod/*.c` file
 (rather than a `py/mod*.c` one) needs the same two-part treatment — check
 which directory backs it before assuming the C-ext flag alone is enough.
+
+#### `random`, `hashlib`, `os`/`io`, `re` — three C extmods, one own pair
+
+The four biggest items on the old Needs-glue list, closed in one pass:
+
+- **`random`** — `extmod/modrandom.c`, a complete C extmod (same
+  two-part treatment as `binascii` above: added to both port build
+  scripts' Sources **and** `micropython_embed.mk`'s `SRC_QSTR`).
+  `MICROPY_PY_RANDOM`/`MICROPY_PY_RANDOM_EXTRA_FUNCS` on;
+  `random()`/`uniform()` stay untested (they're float-gated, and
+  `MICROPY_PY_BUILTINS_FLOAT` is off in this build, same reason `time`
+  stays Needs-glue: no wall-clock either). Seeded once at boot from a
+  real `pm_metal_random()` draw — `dev/random/random_py_bind.c`'s
+  `pymergetic.metal.random.seed_u32()`, the one hand-written Python bind
+  this module needed — instead of the extmod's fixed compile-time
+  default seed, so successive boots don't replay the same sequence.
+- **`hashlib`** — `extmod/modhashlib.c` with SHA-256 via the
+  self-contained `lib/crypto-algorithms/sha256.c` fallback (no
+  mbedtls/axtls hookup in this build, so MD5/SHA1 stay off).
+  `#include "lib/crypto-algorithms/sha256.h"` needed `external/micropython`
+  itself (the bare root, not just `extmod/`) added to both ports'
+  include paths — EDK2's `build` tool auto-derives `-I` for each
+  *Sources* file's own directory, but doesn't walk `#include`s to find
+  transitive ones, so this one path had to be added by hand to
+  `Metal.inf`'s `[BuildOptions]` (a fully static, hand-maintained
+  `CC_FLAGS` line — confirmed by reading `scripts/build.d/port/efi/
+  default.sh`'s own Metal.inf-touching code, which only ever splices the
+  `BEGIN_MICROPYTHON`/`END_MICROPYTHON` Sources block, never
+  `[BuildOptions]`) and to the BIOS Makefile-flags array.
+- **`os`/`io`** — not upstream `.py` at all (upstream's versions are
+  `uos`-based; this build has no `MICROPY_VFS`/`uos`, Metal FS is its own
+  async-shaped thing, not a mounted VFS). Metal's own
+  `mods/py/stdlib_src/os/__init__.py` + `os/path.py` + `io.py`, written
+  directly against five new **synchronous** host-only `pm_metal_fs_*`
+  wrappers (`open`/`close`/`fread`/`fwrite`/`readdir`/`stat`/`mkdir`/
+  `unlink`/`rename`, `fs.c`/`fs.h` — reusing the exact same static
+  helpers the `_async` family already uses, ESP ops aren't slow enough to
+  need hiding behind an `await`) exposed to Python one-function-per-op via
+  `fs/fs_py_bind.c` (`pymergetic.metal.fs.*`). Bytes-only throughout
+  (`MICROPY_CPYTHON_COMPAT` is off, so there's no `str.encode()`/
+  `bytes.decode()` to build a text layer on top of).
+  - **Bug found and fixed along the way, not pre-existing-but-known:**
+    `pm_metal_esp_write_at()` (`fs/esp/esp.c`) computed `new_len = off +
+    len` and then unconditionally called `pm_metal_mem_alloc(new_len,
+    ...)`; for a brand-new empty file or any truncate-to-0
+    (`new_len == 0`), `pm_metal_mem_alloc(0, ...)` always returns `NULL`
+    (`mem.c` treats `size == 0` as invalid up front) — read as an
+    allocation failure, so `io.open(path, "wb")` on a **new** path always
+    failed, even though the ESP cache slot had already been created as a
+    side effect (a stat/listdir right after would show the empty file
+    anyway, which is what made this look like a handle-table bug at
+    first, not an alloc-of-zero bug). `pm_metal_esp_write_at()` now
+    special-cases `new_len == 0` before ever calling
+    `pm_metal_mem_alloc`. Every `os`/`io` op — write, read back, `stat`,
+    `listdir`, `mkdir`/`isdir`, `rename`, `unlink` — is boot-proofed
+    end to end (`PY_PROOF_OSIO`).
+- **`re`** — `extmod/modre.c` + `lib/re1.5`'s four sources
+  (`charclass.c`/`compilecode.c`/`dumpcode.c`/`recursiveloop.c`).
+  `MICROPY_PY_RE`/`_MATCH_GROUPS`/`_SUB` on. These four re1.5 files are
+  **not** separate Sources entries — `modre.c` already `#include`s all
+  four directly at its own bottom (with a preceding `#define
+  re1_5_fatal(x) assert(!x)` macro they rely on), the same "glob the .c
+  in" idiom `modhashlib.c` uses for its own sha256.c fallback; compiling
+  them as independent translation units (tried first) double-defines
+  every re1.5 symbol at link time and, standing alone outside `modre.c`'s
+  textual context, also can't see `<stdbool.h>`/`MP_FALLTHROUGH` — both
+  real, reproduced errors, not hypothetical. `re.match`/`.search`/
+  `.split`/`.sub` and `Match.group`/`.groups` all boot-proofed
+  (`PY_PROOF_RE`); `re.escape`/lookahead/inline-flag support don't exist
+  in re1.5, which is exactly why `textwrap` stays Needs-glue (above).
 
 ### Trust (same as mods)
 
@@ -1028,7 +1252,7 @@ not deleted — it's the explicit, always-reachable fallback.
 | Persistent REPL task | `py.c`'s `PY_STEP_REPL` job state, `pm_metal_py_repl_start/_stop/_active/_feed_line/_prompt` (`py.h`) | One long-lived job on the shared/default context (never isolated — needs one persistent `globals` dict across every line, which the shared context already gives for free). Multi-line block detection is real `mp_repl_continue_with_input` (`MICROPY_HELPER_REPL` flipped on in `py/embed/mpconfigport.h`, Metal-owned, no patch needed), not a hand-rolled approximation — see the "join without a trailing newline, check-then-append" note in `py.c` if touching this again; getting that backwards silently breaks every `def`/`if`/`for`/`while`/`with`/`try`/`class` block after line one. Deliberately spawns straight into `PY_STEP_REPL`, bypassing `PY_STEP_ZIP` (same call shape as `pm_metal_py_fn_call_async_bound`) — `stdlib.zip`'s HTTP-fetch-then-cache is a shared-context-global one-time cost with observed multi-second worst case; whichever job resolves it first mutates `sys.path` for every shared-context job after it, REPL included, so the REPL doesn't need to trigger or await it itself. |
 | Line source | `shell.c`'s committed-line path (Enter handler) | Producer/consumer single-slot mailbox (`mReplLineBuf`/`mReplLineReady` in `py.c`) — `pm_metal_py_repl_feed_line()` is the only producer, the REPL job the only consumer; SPSC handoff needs no CAS on this x86/x86_64-only target (plain write-then-flag / read-flag-then-read under TSO). `pm_metal_py_repl_feed_line()` returns -1 ("busy") if the previous line isn't drained yet — practically never hit at human typing speed against the REPL's 2 ms idle-poll, and `shell.c` prints `repl: busy, try again` rather than silently dropping the line if it ever is. |
 | Prompt | `pm_metal_shell_prompt`/`MetalShellPromptAnsi` (`shell.c`) query `pm_metal_py_repl_active()`/`_prompt()` live | `>>> ` fresh statement, `... ` mid multi-line block — magenta, visually distinct from the C shell's green/blue prompt. **Deferred, not synchronous**: `feed_line()` only enqueues; the actual `>>> ` vs `... ` decision is made by the REPL job on its own next scheduler tick, not inside the Enter handler. Printing the prompt synchronously right after `feed_line()` would show the *previous* tick's stale value (e.g. `>>> ` right after typing `def f():`, before the engine noticed it needs `... `) — the Enter handler instead sets `mPromptPending` and lets the next `pm_metal_shell_poll()` tick (which runs after, not before, the async engine gets a turn) draw the prompt the line just produced. |
-| `console` escape | `shell.c`'s Enter handler, one reserved word | Typing `console` at `>>> ` calls `pm_metal_py_repl_stop()` and falls back to the normal C command dispatcher — `help`, `mem`, `py -f ...`, everything, unchanged. `py -i` (see `py_shell.c`) resumes the same persistent REPL job's globals — nothing is lost switching back and forth. |
+| `console()` escape | `shell.c`'s Enter handler, `PyReplIsQuitCall()` | Typing `console()` at `>>> ` calls `pm_metal_py_repl_stop()` and falls back to the normal C command dispatcher — `help`, `mem`, `py -f ...`, everything, unchanged. `quit()`/`exit()` are accepted as aliases — CPython/IPython's "how do I leave this REPL" muscle memory, which would otherwise just `NameError` since MicroPython defines no `quit`/`exit` sentinel objects. Call syntax only (`console()`, not bare `console`) — a bare word is ordinary (buggy) Python source, not a command, and real Python has no bare-word statement that invokes anything, so this doesn't quietly special-case what would otherwise be a `NameError`. `py -i` (see `py_shell.c`) resumes the same persistent REPL job's globals — nothing is lost switching back and forth. |
 | Compat | `pmcmd.*` | Every C shell command is already a Python callable (see [Surfaces](#implementation-status)) — `pmcmd.help()` etc. work identically whether reached from the REPL or the C console. |
 | Boot wiring | `boot_init.c`'s `BOOT_READY` case | After the boot tree + `metal-boot: ready` line, boot calls `pm_metal_py_repl_start()` and prints a short "Metal Python" welcome (non-fatal on failure — falls back to a plain C shell prompt exactly like before this feature existed). |
 | Known limitation | `mphalport_metal.c`'s `mp_hal_stdin_rx_chr` | Stays stubbed — a script's own `input()` builtin is unsupported (REPL lines come from the shell's line queue, not from Python's own stdin read). Out of scope; revisit only if a concrete use case needs it. |
@@ -1162,7 +1386,7 @@ overclaimed.
 - [x] `.pyi` type stubs for editor/linter support — **generated**, not hand-written: `scripts/gen_py_stubs.py` parses `PM_METAL_PY_BIND` call sites (→ `typings/pymergetic/metal/**.pyi`), `PM_METAL_SHELL_CMD`/`PM_METAL_SHELL_CMDS` call sites (→ `typings/pmcmd.pyi`, docstring = the row's `help_str`), and `pm_metal_mod_register_func` call sites under `mods/**` (→ one stub class per in-tree mod, best-effort — mods loaded at runtime and absent from `mods/**` at build time get no stub); wired into both `scripts/build.d/port/{efi,bios}/default.sh` so stubs regenerate on every build
 - [x] **Signed stdlib zip**: `mods/py/stdlib.zip` + `.sig` (signed via `scripts/pki sign-wasm`, which turned out generic enough for an arbitrary blob — no `sign-file` subcommand needed), verified via `pm_metal_trust_accept_mods` against `METAL_TRUST_MODE`; `pm_metal_py_zip_ensure()` is now a coroutine-backed step (`pm_metal_py_zip_step`, its own `PY_STEP_ZIP` ahead of every job's real first step in `py.c`) so it can `await` an HTTP fetch on ESP miss instead of blocking `py_spawn`; single-flight fetch (one leader task awaits `pm_metal_net_http_get` directly, follower tasks poll the shared state via `pm_metal_async_yield()` — `pm_metal_await`'s single-waiter limitation rules out every task awaiting the same handle directly). `pymergetic`/`pymergetic.metal`/`pymergetic.metal.aio` are pre-registered into `mp_loaded_modules_dict` at init, so they're structurally unshadowable by any same-named `.py` — regression-proofed with a decoy `pmcmd.py` written to `/mods/py/` at runtime (`PY_PROOF_SHADOW`, `boot_python.c`) asserting the C module's own attribute wins. Enforced `builtin→frozen→aot→wasm→py` import order across *all* categories is not separately implemented (MicroPython's own `mp_loaded_modules_dict` precedence already covers the one case that matters — C modules over zip `.py` files)
 - [x] Task-local GC spaces + true parallel bytecode — opt-in isolated MicroPython contexts (`py_ctx.c`/`py_ctx.h`, per-CPU `mp_state_ctx` indirection patched into vendored `py/mpstate.h` via `patches/micropython/0001-metal-percpu-state-ctx.patch`): each isolated context owns its own MAP-carved GC heap + its own `mp_state_ctx_t`, no shared run-lock, `gc_collect()` on its own disjoint heap at park; `pm_metal_py_run_str_isolated`/`_run_script_isolated` (`py.h`), `py -x` shell flag, `mem`'s nested `py` line shows isolated-context count/bytes; boot-proofed disjoint-heap + concurrent-execution under `-smp 4` (`PY_PROOF_PARALLEL`). Shared/default context (unopted-in `py -c`/`py <script>`/the REPL) keeps the original run-lock-serialized behavior unchanged — see [Concurrency](#concurrency--same-schematic-as-metal-async)
-- [x] Persistent Python REPL as the system's main interactive shell — see the dedicated [Python REPL as the system's main shell](#python-repl-as-the-systems-main-shell) section; boot spawns it after `BOOT_READY`, C console dispatcher stays reachable via the `console` escape word
-- [x] Real "Easy" stdlib pack (not a 1-file sample) — ~25 pure-Python micropython-lib modules in `mods/py/stdlib_src/` (`collections`+`defaultdict`, `heapq`, `bisect`, `functools`, `itertools`, `contextlib`+`ucontextlib`, `copy`, `struct`, `string`, `pprint`, `operator`, `types`, `warnings`, `errno`, `keyword`, `abc`, `quopri`, `html`, `argparse`, `stat`, `pickle`, `inspect`, `traceback`, `logging`) + the `binascii` C extmod (needed its own build-system fix — not part of upstream's embed package at all, see [C extmod outside the embed package](#c-extmod-outside-the-embed-package-modbinascii)); `mods/py/build_stdlib_zip.sh` is a real reproducible build step (Python's own `zipfile`, `ZIP_STORED`, sorted/deterministic); `PY_PROOF_STDLIB` imports and exercises every packed module, not a 3-module sample. Second pass ([micropython-lib categorization](#micropython-lib-categorization-easy--needs-glue--defer)) needed two more self-contained grammar/builtin flag flips (`MICROPY_PY_SYS_EXC_INFO`, `MICROPY_PY_BUILTINS_STR_OP_MODULO`) plus small in-place deltas to `logging.py`/`traceback.py`/`pickle.py` (drop `time`/`io`/`sys.stderr`/bytes-encode dependencies this build doesn't have) — `unittest`/`random`/`os` turned out to need real glue (`io`+`os`, a `urandom` C extmod, `pm_metal_fs` binding respectively) after closer inspection and stayed in Needs-glue, not moved
+- [x] Persistent Python REPL as the system's main interactive shell — see the dedicated [Python REPL as the system's main shell](#python-repl-as-the-systems-main-shell) section; boot spawns it after `BOOT_READY`, C console dispatcher stays reachable via the `console()` escape call
+- [x] Real "Easy" stdlib pack (not a 1-file sample) — ~27 pure-Python micropython-lib modules in `mods/py/stdlib_src/` (`collections`+`defaultdict`, `heapq`, `bisect`, `functools`, `itertools`, `contextlib`+`ucontextlib`, `copy`, `struct`, `string`, `pprint`, `operator`, `types`, `warnings`, `errno`, `keyword`, `abc`, `quopri`, `html`, `argparse`, `stat`, `pickle`, `inspect`, `traceback`, `logging`, `base64`, `fnmatch`) + Metal's own `os`/`os.path`/`io` (written directly against `pymergetic.metal.fs`, not upstream `.py`) + four C extmods (`binascii`, `random`, `hashlib`, `re` — each needed its own build-system fix, not part of upstream's embed package at all, see [the extmods + os/io section](#random-hashlib-osio-re--three-c-extmods-one-own-pair)); `mods/py/build_stdlib_zip.sh` is a real reproducible build step (Python's own `zipfile`, `ZIP_STORED`, sorted/deterministic); `PY_PROOF_STDLIB`/`PY_PROOF_RANDOM`/`PY_PROOF_HASHLIB`/`PY_PROOF_OSIO`/`PY_PROOF_RE` import and exercise every packed module, not a 3-module sample. Second pass ([micropython-lib categorization](#micropython-lib-categorization-easy--needs-glue--defer)) needed two more self-contained grammar/builtin flag flips (`MICROPY_PY_SYS_EXC_INFO`, `MICROPY_PY_BUILTINS_STR_OP_MODULO`) plus small in-place deltas to `logging.py`/`traceback.py`/`pickle.py` (drop `time`/`io`/`sys.stderr`/bytes-encode dependencies this build doesn't have). Third pass closed `random`/`hashlib`/`os`/`io`/`re` (a `urandom`-seed C bind, a native SHA256 extmod, five new sync `pm_metal_fs` wrappers + two own `.py` files, and `modre.c`+`lib/re1.5` respectively — including a real pre-existing bug fix in `pm_metal_esp_write_at()`, see the extmods section) and, once `re` existed, `base64`/`fnmatch` promoted too with zero source changes (`MICROPY_PY_BUILTINS_BYTEARRAY` for `base64`); `textwrap`/`hmac`/`uu` stayed in Needs-glue, each for a specific, now-documented reason (re1.5 feature gap / `property` builtin / binascii has no uu functions at all)
 - [x] Isolated-context ergonomics — isolated MicroPython contexts import from `stdlib.zip` too, not just `pymergetic.metal`/`pmcmd`/`mod`: `pm_metal_py_ctx_create` (`py_ctx.c`) now calls `pm_metal_py_zip_init_sys_path()` against the fresh context right after `mp_embed_init`, appending `/mods/py` + `stdlib.zip` to *that context's own* `mp_sys_path` (a genuine per-context root pointer, `MP_STATE_VM(sys_mutable[...])` — unlike `sys.argv`/`sys.modules`, it was never one of the static-initializer globals pinned to the shared context, so each context just needed its own copy of the same append call). `py_job_step`'s `PY_STEP_ZIP` no longer special-cases isolated jobs — `pm_metal_py_zip_step` is pure C (fs/http/trust, no `mp_obj_t` touch) and both context kinds now share the same one-fetch-total `g_zip_state`, so both wait on it the same way. Boot-proofed end to end (`PY_PROOF_ISOLATED_STDLIB`: an isolated task imports and exercises `heapq`)
-- [ ] (later) Fat stdlib zip (remaining Needs-glue modules: `os`, `io`, `re`, `time`, `random`, `hashlib`, `logging`, …) / full `metal.fs`/`net`/… orchestration / native self-register (`import sample`) — not started
+- [x] Fatter stdlib zip — `time`/`datetime`/`hmac`/`zlib`/`gzip`/`pathlib`/`shutil`/`tempfile`/`tarfile`/`unittest`/`textwrap`/`uu` all shipped (see [Second Needs-glue pass](#second-needs-glue-pass)); `ssl` shipped too, as a genuinely Metal-flavored `pymergetic.metal.tls` async TCP+TLS client, not a CPython `ssl` shim; `threading`/`_thread` deliberately, permanently not shimmed (see above) — real gaps left: full `metal.fs`/`net`/… stdlib-shaped orchestration, native self-register (`import sample`)

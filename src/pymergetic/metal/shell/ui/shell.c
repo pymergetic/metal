@@ -129,7 +129,8 @@ int pm_metal_ui_paint_shell_input(void)
   }
 
   prev = pm_metal_gfx_draw_surface();
-  MetalUiPaintShellInputLine();
+  pm_metal_gfx_set_surface(PM_METAL_GFX_SURFACE_DEFAULT);
+  MetalUiPaintSysConsole();
   pm_metal_gfx_set_surface(prev);
   return 0;
 }
@@ -146,7 +147,33 @@ int pm_metal_ui_paint_status(void)
 
 int pm_metal_ui_shell_input_rect(int32_t *x, int32_t *y, int32_t *w, int32_t *h)
 {
-  return MetalUiShellInputGeom(x, y, w, h);
+  /*
+   * Named for the old separate input strip; now just the shared console
+   * widget's own rect (the composing line is its trailing row(s), see
+   * MetalUiConsoleTotalRows) -- one dirty-rect present region, no divider.
+   */
+  if (gMetalUiSysConsole == NULL) {
+    return -1;
+  }
+
+  MetalUiLayout(); /* ensure coords current, same as MetalUiStatusGeom */
+  if (x != NULL) {
+    *x = gMetalUiSysConsole->x;
+  }
+
+  if (y != NULL) {
+    *y = gMetalUiSysConsole->y;
+  }
+
+  if (w != NULL) {
+    *w = gMetalUiSysConsole->w;
+  }
+
+  if (h != NULL) {
+    *h = gMetalUiSysConsole->h;
+  }
+
+  return 0;
 }
 
 int pm_metal_ui_status_rect(int32_t *x, int32_t *y, int32_t *w, int32_t *h)

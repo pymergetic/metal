@@ -497,6 +497,88 @@ uint32_t pm_metal_fs_write(const char *path, const void *src, uint32_t src_len)
   return src_len;
 }
 
+pm_metal_fs_h pm_metal_fs_open(const char *path, uint32_t flags)
+{
+  char          cleaned[256];
+  pm_metal_fs_h h;
+
+  if (!pm_metal_esp_ready() || MetalFsCleanPath(path, cleaned, sizeof(cleaned)) != 0) {
+    return PM_METAL_FS_INVALID;
+  }
+
+  if (MetalFsOpenPath(cleaned, flags, &h) != 0) {
+    return PM_METAL_FS_INVALID;
+  }
+
+  return h;
+}
+
+void pm_metal_fs_close(pm_metal_fs_h h)
+{
+  MetalFsHandleFree(h);
+}
+
+uint32_t pm_metal_fs_fread(pm_metal_fs_h h, void *dest, uint32_t len)
+{
+  return MetalFsReadHandle(h, dest, len, 1);
+}
+
+uint32_t pm_metal_fs_fwrite(pm_metal_fs_h h, const void *src, uint32_t len)
+{
+  return MetalFsWriteHandle(h, src, len, 1);
+}
+
+uint32_t pm_metal_fs_readdir(pm_metal_fs_h h, char *name_dest, uint32_t name_cap)
+{
+  return MetalFsReaddirHandle(h, name_dest, name_cap);
+}
+
+int32_t pm_metal_fs_stat(const char *path, pm_metal_fs_stat_t *dest)
+{
+  char cleaned[256];
+
+  if (MetalFsCleanPath(path, cleaned, sizeof(cleaned)) != 0) {
+    return -1;
+  }
+
+  return (MetalFsStatFill(cleaned, dest) != 0) ? 0 : -1;
+}
+
+int32_t pm_metal_fs_mkdir(const char *path)
+{
+  char cleaned[256];
+
+  if (!pm_metal_esp_ready() || MetalFsCleanPath(path, cleaned, sizeof(cleaned)) != 0) {
+    return -1;
+  }
+
+  return (pm_metal_esp_mkdir(cleaned) == 0) ? 0 : -1;
+}
+
+int32_t pm_metal_fs_unlink(const char *path)
+{
+  char cleaned[256];
+
+  if (!pm_metal_esp_ready() || MetalFsCleanPath(path, cleaned, sizeof(cleaned)) != 0) {
+    return -1;
+  }
+
+  return (pm_metal_esp_unlink(cleaned) == 0) ? 0 : -1;
+}
+
+int32_t pm_metal_fs_rename(const char *old_path, const char *new_path)
+{
+  char old_clean[256];
+  char new_clean[256];
+
+  if (!pm_metal_esp_ready() || MetalFsCleanPath(old_path, old_clean, sizeof(old_clean)) != 0 ||
+      MetalFsCleanPath(new_path, new_clean, sizeof(new_clean)) != 0) {
+    return -1;
+  }
+
+  return (pm_metal_esp_rename(old_clean, new_clean) == 0) ? 0 : -1;
+}
+
 int32_t pm_metal_fs_lseek(pm_metal_fs_h h, int32_t off, uint32_t whence)
 {
   metal_fs_handle_t *fh;

@@ -40,8 +40,6 @@ int pm_metal_ui_input_move_cursor(int delta);
  * (caller may history-recall).
  */
 int pm_metal_ui_input_move_visual_row(int delta_rows);
-/** 1 if input strip height changed since last consume (needs full chrome). */
-int pm_metal_ui_input_consume_relayout(void);
 
 /**
  * Route keyboard to shell vs guest from foreground tab + live session.

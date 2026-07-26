@@ -17,7 +17,7 @@ Living list. Product surfaces are largely in place; what’s left is mostly **ir
 | **Input / keyboard** | Full USB HID keyboard/keypad page-0x07 coverage (punctuation, locks, F11/F12, Insert/Home/Delete/End, numpad, ISO 102nd-key, GUI/Menu) on both EFI+BIOS PS/2 paths; Home/End/Delete wired into shell line-editing; fixed `MetalShellHandleAscii`'s `ch<127` gate silently dropping `keyb gr`'s Latin-15 umlauts/ß/§/°/´; single-quote support in `ShellSplitArgv`; live-verified via scripted QEMU `sendkey` injection, not just static review; per-language keymaps modularized into self-registering `dev/input/keyb_layout/keyb_layout_{us,gr}.c` (linker-section registry, same idiom as `PM_METAL_SHELL_CMD` — new languages are a new file, no edits to `keyb.c`/`input.h`/linker scripts) |
 | **Audio** | virtio-snd → AC97 → null |
 | **Wasm / FS** | Guest FS ABI + proofs; embed mods |
-| **MicroPython (core)** | Always-on µPy blob on EFI + BIOS; Python task = Metal task; host `py` shell + C↔Py trampolines; guest import + await (`async_py`); generic `PM_METAL_PY_BIND` table; `pymergetic.metal.{aio,process,mod}` + `pmcmd.*`; guest-visible sync **and async** fn resolve+call; exception/cancel/OOM isolation; boot-proofed overlap/yield fairness; `.fresh` isolated/`FRESH` mod instances from Python + dual-ABI guest-to-guest (`pm_metal_mod_fresh_{open,resolve,close}`); generated `.pyi` stubs (`scripts/gen_py_stubs.py`, wired into build); signed `stdlib.zip` + trust check + single-flight HTTP fetch + import-unshadowable regression proof; `mem` blob breakout line; **task-local GC spaces + true parallel bytecode** via opt-in isolated MicroPython contexts (per-CPU `mp_state_ctx` patch, own heap/own state, `PY_PROOF_PARALLEL`); persistent **Python REPL as the system's main boot shell** (`PY_STEP_REPL`, C console kept as `console`-escape fallback); real ~20-module "Easy" `stdlib.zip` pack + reproducible build script; **isolated contexts can import from `stdlib.zip`** (`pm_metal_py_ctx_create` seeds each context's own `sys.path`, `PY_PROOF_ISOLATED_STDLIB`) — gaps below |
+| **MicroPython (core)** | Always-on µPy blob on EFI + BIOS; Python task = Metal task; host `py` shell + C↔Py trampolines; guest import + await (`async_py`); generic `PM_METAL_PY_BIND` table; `pymergetic.metal.{aio,process,mod}` + `pmcmd.*`; guest-visible sync **and async** fn resolve+call; exception/cancel/OOM isolation; boot-proofed overlap/yield fairness; `.fresh` isolated/`FRESH` mod instances from Python + dual-ABI guest-to-guest (`pm_metal_mod_fresh_{open,resolve,close}`); generated `.pyi` stubs (`scripts/gen_py_stubs.py`, wired into build); signed `stdlib.zip` + trust check + single-flight HTTP fetch + import-unshadowable regression proof; `mem` blob breakout line; **task-local GC spaces + true parallel bytecode** via opt-in isolated MicroPython contexts (per-CPU `mp_state_ctx` patch, own heap/own state, `PY_PROOF_PARALLEL`); persistent **Python REPL as the system's main boot shell** (`PY_STEP_REPL`, C console kept as `console`-escape fallback); real 26-module + 4 C-extmod (`binascii`/`random`/`hashlib`/`re`) + own `os`/`io` "Easy" `stdlib.zip` pack (`collections`, `heapq`, `bisect`, `functools`, `itertools`, `contextlib`, `copy`, `struct`, `string`, `pprint`, `operator`, `types`, `warnings`, `errno`, `keyword`, `abc`, `quopri`, `html`, `argparse`, `stat`, `pickle`, `inspect`, `traceback`, `logging`, `base64`, `fnmatch`, `os`/`os.path`, `io`, …) + reproducible, git-ignored, build-embedded build (`embed-stdlib.sh` → `py_zip_embed.inc.c`, no `stdlib.zip`/`.sig` in git history); **isolated contexts can import from `stdlib.zip`** (`pm_metal_py_ctx_create` seeds each context's own `sys.path`, `PY_PROOF_ISOLATED_STDLIB`); **rest of the Needs-glue tier shipped** — `time`/`datetime` (real RTC via `pymergetic.metal.time`, wired to EFI `gRT->GetTime()`/BIOS CMOS RTC + SNTP), `hmac` (`MICROPY_PY_BUILTINS_PROPERTY`), `zlib`/`gzip` (`extmod/moddeflate.c` + native `BytesIO`), `pathlib`/`shutil`/`tempfile`, `tarfile` (facade over Metal's existing C microtar, `pymergetic.metal.tar`), `unittest`, `textwrap` (regex-free rewrite — `re1.5` has no lookahead/lookbehind), `uu` (from-scratch codec, upstream `binascii` has no `b2a_uu`/`a2b_uu`); `ssl` shipped as `pymergetic.metal.tls` — an honestly Metal-flavored async TCP+TLS client (`dev/net/tls_conn.c` slot table + mbedTLS), not a CPython `ssl` shim; `threading`/`_thread` deliberately, permanently not shimmed (conflicts with Metal's coroutine task model — isolated contexts are the real answer to "run Python in parallel") — gaps below |
 
 Details: `IO.md`, `LIBC_ASYNC.md`, `MICROPYTHON.md`.
 
@@ -43,11 +43,17 @@ validated (not aspirational) breakdown. Task-local GC, the REPL-as-main-shell
 milestone, and a real "Easy" stdlib pack are now all shipped (see Shipped
 table above); real gaps left:
 
-- [ ] **Fat stdlib / native self-register** — `stdlib.zip` now ships a real
-      ~20-module "Easy" pack (not one sample module), but the Needs-glue tier
-      (`os`, `io`, `re`, `time`, `random`, `hashlib`, `logging`, …) is still
-      unstarted, and there's no `import sample`-shaped native self-register
-      yet, no full `metal.fs`/`net`/… stdlib surface.
+- [ ] **Native self-register / full stdlib surface** — `stdlib.zip` now
+      ships every module from the original Easy *and* Needs-glue tiers
+      (`time`/`datetime`, `hmac`, `zlib`/`gzip`, `pathlib`/`shutil`/
+      `tempfile`/`tarfile`, `unittest`, `textwrap`, `uu` — see
+      `MICROPYTHON.md`'s [Second Needs-glue
+      pass](MICROPYTHON.md#second-needs-glue-pass) for what each one
+      actually needed), plus `ssl` as `pymergetic.metal.tls` (async
+      TCP+TLS, not a CPython shim). `threading`/`_thread` is the one
+      deliberate, permanent skip (see `MICROPYTHON.md`). What's left: no
+      `import sample`-shaped native self-register, no full
+      `metal.fs`/`net`/… stdlib-shaped orchestration layer.
 
 ## Optional / later
 

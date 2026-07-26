@@ -13,6 +13,7 @@
 #include <pymergetic/metal/dev/random/random.h>
 #include <pymergetic/metal/guest/wasm/wasm.h>
 #include <pymergetic/metal/guest/process/process.h>
+#include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/shell/shell/shell.h>
 #include <pymergetic/metal/host/host.h>
 #include <pymergetic/metal/util/ip.h>
@@ -75,8 +76,6 @@ static void MetalUiLayoutWindow(metal_ui_widget_t *win, int32_t sw, int32_t sh)
   int32_t            h;
   int32_t            body_y;
   int32_t            body_h;
-  int32_t            input_h;
-  uint32_t           fh;
 
   x = UI_MARGIN;
   y = UI_MARGIN;
@@ -106,7 +105,6 @@ static void MetalUiLayoutWindow(metal_ui_widget_t *win, int32_t sw, int32_t sh)
 
   body_y = tabs->y + tabs->h + 2;
   body_h = st->y - body_y - 2;
-  fh     = pm_metal_gfx_font_height();
 
   for (i = 0; i < tabs->u.tabs.n; i++) {
     tab = tabs->u.tabs.tabs[i];
@@ -135,27 +133,15 @@ static void MetalUiLayoutWindow(metal_ui_widget_t *win, int32_t sw, int32_t sh)
     }
 
     /*
-     * Shell input is shared on console/idle tabs. A live windowed guest
-     * owns the whole frame — no prompt row (doom fills the tab content).
-     * Height grows with wrapped/soft-newline content up to UI_INPUT_ROWS_MAX.
+     * Whole tab is one scrollable console — the composing line is just
+     * its trailing row(s) (MetalUiPaintConsole + MetalUiConsoleTotalRows),
+     * not a separate strip with its own geometry/divider/scrollbar. The
+     * console always gets the full padded frame interior.
      */
-    input_h = 0;
-    if (!MetalUiTabGuestOwnsContent(tab)) {
-      uint32_t wrap;
-      uint32_t vis;
-      int32_t  iw;
-
-      iw = frame->w - 2 * UI_FRAME_PAD;
-      wrap =
-        MetalUiInputWrapColsFromWidth(iw - 4 - UI_SCROLL_W > 8 ? iw - 4 - UI_SCROLL_W : iw - 4);
-      vis     = MetalUiInputVisibleRows(wrap);
-      input_h = (int32_t)fh * (int32_t)vis + 4;
-    }
-
     con->x = frame->x + UI_FRAME_PAD;
     con->y = frame->y + UI_FRAME_PAD;
     con->w = frame->w - 2 * UI_FRAME_PAD;
-    con->h = frame->h - 2 * UI_FRAME_PAD - input_h;
+    con->h = frame->h - 2 * UI_FRAME_PAD;
 
     if (tab->surface != PM_METAL_GFX_SURFACE_INVALID) {
       /* Guest = padded frame interior (no prompt strip while playing). */
@@ -210,7 +196,59 @@ static void MetalUiDrawTextAnsi(
           p++;
         }
 
-        if (v == 0u) {
+        if (v == 38u && *p == ';') {
+          /*
+           * Extended color -- only mode 2 (24-bit truecolor,
+           * "38;2;r;g;bm") is understood; util/ascii.c's
+           * pm_metal_util_ascii_log_rainbow is the only emitter and never
+           * emits anything else. mode + r/g/b are consumed here directly
+           * (not left to the loop's own per-number dispatch below) since
+           * they are one extended-color unit, not four independent SGR
+           * codes.
+           */
+          uint32_t mode;
+          uint32_t rr;
+          uint32_t gg;
+          uint32_t bb;
+
+          p++;
+          mode = 0;
+          while (*p >= '0' && *p <= '9') {
+            mode = mode * 10u + (uint32_t)(*p - '0');
+            p++;
+          }
+
+          rr = 0;
+          gg = 0;
+          bb = 0;
+          if (mode == 2u) {
+            if (*p == ';') {
+              p++;
+              while (*p >= '0' && *p <= '9') {
+                rr = rr * 10u + (uint32_t)(*p - '0');
+                p++;
+              }
+            }
+
+            if (*p == ';') {
+              p++;
+              while (*p >= '0' && *p <= '9') {
+                gg = gg * 10u + (uint32_t)(*p - '0');
+                p++;
+              }
+            }
+
+            if (*p == ';') {
+              p++;
+              while (*p >= '0' && *p <= '9') {
+                bb = bb * 10u + (uint32_t)(*p - '0');
+                p++;
+              }
+            }
+
+            fg = PM_METAL_GFX_RGB((uint8_t)rr, (uint8_t)gg, (uint8_t)bb);
+          }
+        } else if (v == 0u) {
           fg = def_fg;
         } else if (v == 2u) {
           fg = COL_LOG_DIM;
@@ -222,6 +260,8 @@ static void MetalUiDrawTextAnsi(
           fg = COL_LOG_WARN;
         } else if (v == 34u) {
           fg = COL_PROMPT_PATH;
+        } else if (v == 35u) {
+          fg = COL_REPL_PROMPT;
         } else if (v == 36u) {
           fg = COL_LOG_ACCENT;
         }
@@ -244,51 +284,6 @@ static void MetalUiDrawTextAnsi(
     cols++;
     p++;
   }
-}
-
-int32_t MetalUiShellInputGeom(int32_t *x, int32_t *y, int32_t *w, int32_t *h)
-{
-  metal_ui_widget_t *con;
-  uint32_t           fh;
-  uint32_t           wrap;
-  uint32_t           vis;
-  int32_t            text_w;
-
-  con = MetalUiActiveConsole();
-  if (con == NULL || gMetalUiSysConsole == NULL) {
-    return -1;
-  }
-
-  fh = pm_metal_gfx_font_height();
-  if (fh == 0) {
-    return -1;
-  }
-
-  text_w = con->w - 4 - UI_SCROLL_W;
-  if (text_w < 8) {
-    text_w = con->w > 4 ? con->w - 4 : con->w;
-  }
-
-  wrap = MetalUiInputWrapColsFromWidth(text_w);
-  vis  = MetalUiInputVisibleRows(wrap);
-
-  if (x != NULL) {
-    *x = con->x;
-  }
-
-  if (y != NULL) {
-    *y = con->y + con->h + 2;
-  }
-
-  if (w != NULL) {
-    *w = con->w;
-  }
-
-  if (h != NULL) {
-    *h = (int32_t)fh * (int32_t)vis + 2;
-  }
-
-  return 0;
 }
 
 int32_t MetalUiStatusGeom(int32_t *x, int32_t *y, int32_t *w, int32_t *h)
@@ -318,88 +313,86 @@ int32_t MetalUiStatusGeom(int32_t *x, int32_t *y, int32_t *w, int32_t *h)
   return 0;
 }
 
-void MetalUiPaintShellInputLine(void)
+/**
+ * The composing line's row count, folded into the console's own scroll
+ * region as trailing rows (see MetalUiConsoleTotalRows in widget.c) --
+ * 0 when this isn't the one console that ever shows it, or a live guest
+ * (fullscreen, or windowed on this tab) currently owns the screen/tab
+ * content instead. process.h lives here (paint.c), not widget.c, hence
+ * this indirection rather than widget.c reading con->u.console.show_input
+ * and the process state directly.
+ */
+uint32_t MetalUiConsoleLiveInputRows(metal_ui_widget_t *con)
 {
-  int32_t               x;
-  int32_t               y;
-  int32_t               w;
-  int32_t               h;
-  int32_t               cx;
-  int32_t               ty;
-  uint32_t              fw;
-  uint32_t              fh;
-  uint32_t              wrap;
-  uint32_t              visual;
-  uint32_t              visible;
-  uint32_t              first;
-  uint32_t              r;
-  uint32_t              caret_row;
-  uint32_t              caret_col;
-  const char           *host;
-  uintptr_t             host_len;
-  char                  rowbuf[CONSOLE_COLS];
-  char                  caret[2];
   pm_metal_process_id_t pid;
 
-  /* Live guest (fullscreen or windowed on this tab) — no shell prompt. */
+  if (con == NULL || con != gMetalUiSysConsole || con->u.console.show_input == 0) {
+    return 0;
+  }
+
   pid = pm_metal_process_current();
   if (pid != PM_METAL_PROCESS_ID_INVALID) {
     pm_metal_process_ui_kind_t kind;
 
     kind = pm_metal_process_ui_kind(pid);
     if (kind == PM_METAL_PROC_UI_FULLSCREEN) {
-      return;
+      return 0;
     }
 
     if (kind == PM_METAL_PROC_UI_TAB && pm_metal_process_tab(pid) == pm_metal_ui_tab_active()) {
-      return;
+      return 0;
     }
   }
 
-  if (MetalUiShellInputGeom(&x, &y, &w, &h) != 0) {
-    return;
-  }
+  return MetalUiInputVisualRows(MetalUiInputCurrentWrap());
+}
 
-  pm_metal_gfx_set_surface(PM_METAL_GFX_SURFACE_DEFAULT);
-  pm_metal_gfx_fill_rect(x, y, w, h, COL_CONSOLE_BG);
+/**
+ * Draw the composing-line row @a vrow (0-based within the live input,
+ * i.e. combined_idx - con->u.console.count -- see the call site) at
+ * screen row @a ty. vrow==0 also gets the prompt prefix (REPL ">>> "/
+ * "... " or the C-shell "host:~$"); wrapped continuation rows don't.
+ * Split out of MetalUiPaintConsole's row loop purely to keep that loop's
+ * two branches (history row / live row) readable.
+ */
+static void MetalUiPaintConsoleInputRow(metal_ui_widget_t *con,
+                                        uint32_t           vrow,
+                                        int32_t            ty,
+                                        uint32_t           wrap,
+                                        uint32_t           caret_row,
+                                        uint32_t           caret_col)
+{
+  int32_t     cx;
+  uint32_t    fw;
+  char        rowbuf[CONSOLE_COLS];
+  const char *host;
+  uintptr_t   host_len;
 
-  host = pm_metal_host_name_cstr();
-  if (host == NULL || host[0] == '\0') {
-    host = "metal";
-  }
-
-  host_len = strlen(host);
-  fw       = pm_metal_gfx_font_width();
-  fh       = pm_metal_gfx_font_height();
+  fw = pm_metal_gfx_font_width();
   if (fw == 0u) {
     fw = UI_FONT_W;
   }
 
-  if (fh == 0u) {
-    return;
-  }
+  cx = con->x + 2;
 
-  wrap    = MetalUiInputCurrentWrap();
-  visual  = MetalUiInputVisualRows(wrap);
-  visible = MetalUiInputVisibleRows(wrap);
-  MetalUiInputClampView(wrap);
-  first = 0;
-  if (visual > visible) {
-    first = visual - visible - gMetalUiSysConsole->u.console.input_view_off;
-  }
+  if (vrow == 0u) {
+    if (pm_metal_py_repl_active()) {
+      /* REPL live: ">>> " / "... " — same bold-magenta cue as COM1/scrollback
+       * (shell.c's MetalShellPromptAnsi), not the stale C-shell host:~$ this
+       * used to hardcode regardless of REPL state. */
+      const char *prompt = pm_metal_py_repl_prompt();
+      uintptr_t   plen   = strlen(prompt);
 
-  caret_row = 0;
-  caret_col = 0;
-  MetalUiInputCaretCell(wrap, &caret_row, &caret_col);
+      pm_metal_gfx_draw_text(cx, ty, prompt, COL_REPL_PROMPT, COL_CONSOLE_BG, 0);
+      cx += (int32_t)(plen * fw);
+    } else {
+      host = pm_metal_host_name_cstr();
+      if (host == NULL || host[0] == '\0') {
+        host = "metal";
+      }
 
-  for (r = 0; r < visible; r++) {
-    uint32_t vrow;
+      host_len = strlen(host);
 
-    vrow = first + r;
-    ty   = y + (int32_t)(r * fh);
-    cx   = x + 2;
-
-    if (vrow == 0u) {
       /* hostname green, :~ blue, $ green, gap, then buffer row 0 */
       pm_metal_gfx_draw_text(cx, ty, host, COL_LOG_OK, COL_CONSOLE_BG, 0);
       cx += (int32_t)(host_len * fw);
@@ -409,60 +402,29 @@ void MetalUiPaintShellInputLine(void)
       cx += (int32_t)fw;
       cx += (int32_t)fw;
     }
-
-    (void)MetalUiInputVisualRowText(wrap, vrow, rowbuf, sizeof(rowbuf));
-    if (rowbuf[0] != '\0') {
-      pm_metal_gfx_draw_text(cx, ty, rowbuf, COL_INPUT_FG, COL_CONSOLE_BG, 0);
-    }
-
-    if (gMetalUiSysConsole->u.console.cursor_on && caret_row == vrow) {
-      caret[0] = (char)0xDB;
-      caret[1] = '\0';
-      pm_metal_gfx_draw_text(
-        cx + (int32_t)(caret_col * fw), ty, caret, COL_INPUT_FG, COL_CONSOLE_BG, 0);
-    }
   }
 
-  /* Thin scrollbar when content taller than the strip. */
-  if (visual > visible && w > UI_SCROLL_W) {
-    int32_t  trx;
-    int32_t  try;
-    int32_t  trw;
-    int32_t  trh;
-    int32_t  thy;
-    int32_t  thh;
-    uint32_t max_off;
-    uint32_t off;
+  (void)MetalUiInputVisualRowText(wrap, vrow, rowbuf, sizeof(rowbuf));
+  if (rowbuf[0] != '\0') {
+    pm_metal_gfx_draw_text(cx, ty, rowbuf, COL_INPUT_FG, COL_CONSOLE_BG, 0);
+  }
 
-    trx = x + w - UI_SCROLL_W;
-    try = y;
-    trw = UI_SCROLL_W;
-    trh = h;
-    pm_metal_gfx_fill_rect(trx, try, trw, trh, COL_SCROLL_TRACK);
-    pm_metal_gfx_fill_rect(trx, try, 1, trh, COL_SCROLL_EDGE);
+  if (con->u.console.cursor_on && caret_row == vrow) {
+    char caret[2];
 
-    max_off = visual - visible;
-    off     = gMetalUiSysConsole->u.console.input_view_off;
-    thh     = (int32_t)((uint64_t)trh * (uint64_t)visible / (uint64_t)visual);
-    if (thh < 8) {
-      thh = 8;
-    }
-
-    if (thh > trh) {
-      thh = trh;
-    }
-
-    if (max_off == 0u) {
-      thy = try;
-    } else {
-      /* view_off 0 = bottom (newest); thumb near bottom */
-      thy = try + trh - thh - (int32_t)((uint64_t)(trh - thh) * (uint64_t)off / (uint64_t)max_off);
-    }
-
-    pm_metal_gfx_fill_rect(trx + 1, thy, trw - 1, thh, COL_SCROLL_THUMB);
+    caret[0] = (char)0xDB;
+    caret[1] = '\0';
+    pm_metal_gfx_draw_text(
+      cx + (int32_t)(caret_col * fw), ty, caret, COL_INPUT_FG, COL_CONSOLE_BG, 0);
   }
 }
 
+/**
+ * Whole tab is one scrollable console: scrollback history AND the line
+ * you're currently typing share this single widget, its one view_off,
+ * and its one scrollbar (see MetalUiConsoleTotalRows) -- no separate
+ * input strip/divider below it.
+ */
 static void MetalUiPaintConsole(metal_ui_widget_t *con)
 {
   uint32_t fw;
@@ -471,6 +433,11 @@ static void MetalUiPaintConsole(metal_ui_widget_t *con)
   uint32_t rows;
   uint32_t visible;
   uint32_t start;
+  uint32_t total;
+  uint32_t input_rows;
+  uint32_t wrap;
+  uint32_t caret_row;
+  uint32_t caret_col;
   uint32_t i;
   int32_t  ty;
   int32_t  text_w;
@@ -506,70 +473,89 @@ static void MetalUiPaintConsole(metal_ui_widget_t *con)
 
   MetalUiConsoleClampView(con);
 
-  visible = con->u.console.count;
+  input_rows = MetalUiConsoleLiveInputRows(con);
+  total      = con->u.console.count + input_rows;
+
+  visible = total;
   if (visible > rows) {
     visible = rows;
   }
 
-  if (con->u.console.count <= rows) {
+  if (total <= rows) {
     start = 0;
   } else {
-    start = con->u.console.count - rows - con->u.console.view_off;
+    start = total - rows - con->u.console.view_off;
+  }
+
+  wrap      = 0;
+  caret_row = 0;
+  caret_col = 0;
+  if (input_rows > 0u) {
+    wrap = MetalUiInputCurrentWrap();
+    MetalUiInputCaretCell(wrap, &caret_row, &caret_col);
   }
 
   ty = con->y;
   for (i = 0; i < visible; i++) {
-    uint32_t             idx;
-    const char          *line;
-    char                 buf[CONSOLE_COLS];
-    uint32_t             len;
-    uint32_t             has_ansi;
-    pm_metal_gfx_color_t fg;
+    uint32_t combined;
 
-    idx  = (con->u.console.head + CONSOLE_LINES - con->u.console.count + start + i) % CONSOLE_LINES;
-    line = con->u.console.lines[idx];
-    len  = 0;
-    has_ansi = 0;
-    while (line[len] != '\0' && len < CONSOLE_COLS - 1u) {
-      if (line[len] == '\033') {
-        has_ansi = 1;
+    combined = start + i;
+    if (combined < con->u.console.count) {
+      uint32_t             idx;
+      const char          *line;
+      char                 buf[CONSOLE_COLS];
+      uint32_t             len;
+      uint32_t             has_ansi;
+      pm_metal_gfx_color_t fg;
+
+      idx = (con->u.console.head + CONSOLE_LINES - con->u.console.count + combined) % CONSOLE_LINES;
+      line     = con->u.console.lines[idx];
+      len      = 0;
+      has_ansi = 0;
+      while (line[len] != '\0' && len < CONSOLE_COLS - 1u) {
+        if (line[len] == '\033') {
+          has_ansi = 1;
+        }
+
+        buf[len] = line[len];
+        len++;
       }
 
-      buf[len] = line[len];
-      len++;
-    }
+      buf[len] = '\0';
+      switch ((pm_metal_log_style_t)con->u.console.styles[idx]) {
+      case PM_METAL_LOG_STYLE_DIM:
+        fg = COL_LOG_DIM;
+        break;
+      case PM_METAL_LOG_STYLE_OK:
+        fg = COL_LOG_OK;
+        break;
+      case PM_METAL_LOG_STYLE_WARN:
+        fg = COL_LOG_WARN;
+        break;
+      case PM_METAL_LOG_STYLE_FAIL:
+        fg = COL_LOG_FAIL;
+        break;
+      case PM_METAL_LOG_STYLE_ACCENT:
+        fg = COL_LOG_ACCENT;
+        break;
+      case PM_METAL_LOG_STYLE_DEFAULT:
+      default:
+        fg = COL_CONSOLE_FG;
+        break;
+      }
 
-    buf[len] = '\0';
-    switch ((pm_metal_log_style_t)con->u.console.styles[idx]) {
-    case PM_METAL_LOG_STYLE_DIM:
-      fg = COL_LOG_DIM;
-      break;
-    case PM_METAL_LOG_STYLE_OK:
-      fg = COL_LOG_OK;
-      break;
-    case PM_METAL_LOG_STYLE_WARN:
-      fg = COL_LOG_WARN;
-      break;
-    case PM_METAL_LOG_STYLE_FAIL:
-      fg = COL_LOG_FAIL;
-      break;
-    case PM_METAL_LOG_STYLE_ACCENT:
-      fg = COL_LOG_ACCENT;
-      break;
-    case PM_METAL_LOG_STYLE_DEFAULT:
-    default:
-      fg = COL_CONSOLE_FG;
-      break;
-    }
+      if (has_ansi != 0u) {
+        MetalUiDrawTextAnsi(con->x + 2, ty, buf, fg, cols);
+      } else {
+        if (len > cols) {
+          buf[cols] = '\0';
+        }
 
-    if (has_ansi != 0u) {
-      MetalUiDrawTextAnsi(con->x + 2, ty, buf, fg, cols);
+        pm_metal_gfx_draw_text(con->x + 2, ty, buf, fg, COL_CONSOLE_BG, 0);
+      }
     } else {
-      if (len > cols) {
-        buf[cols] = '\0';
-      }
-
-      pm_metal_gfx_draw_text(con->x + 2, ty, buf, fg, COL_CONSOLE_BG, 0);
+      MetalUiPaintConsoleInputRow(
+        con, combined - con->u.console.count, ty, wrap, caret_row, caret_col);
     }
 
     ty += (int32_t)fh;
@@ -583,10 +569,15 @@ static void MetalUiPaintConsole(metal_ui_widget_t *con)
     pm_metal_gfx_fill_rect(
       con->x + con->w - UI_SCROLL_W, con->y, UI_SCROLL_W, con->h, COL_SCROLL_TRACK);
   }
+}
 
-  if (con == MetalUiActiveConsole()) {
-    MetalUiPaintShellInputLine();
+void MetalUiPaintSysConsole(void)
+{
+  if (gMetalUiSysConsole == NULL) {
+    return;
   }
+
+  MetalUiPaintConsole(gMetalUiSysConsole);
 }
 
 static void MetalUiPaintTabsStrip(metal_ui_widget_t *tabs)

@@ -40,6 +40,20 @@ typedef enum {
   PY_PROOF_STDLIB_WAIT,
   PY_PROOF_ISOLATED_STDLIB,
   PY_PROOF_ISOLATED_STDLIB_WAIT,
+  PY_PROOF_RANDOM,
+  PY_PROOF_RANDOM_WAIT,
+  PY_PROOF_HASHLIB,
+  PY_PROOF_HASHLIB_WAIT,
+  PY_PROOF_OSIO,
+  PY_PROOF_OSIO_WAIT,
+  PY_PROOF_RE,
+  PY_PROOF_RE_WAIT,
+  PY_PROOF_TIME,
+  PY_PROOF_TIME_WAIT,
+  PY_PROOF_ARCHIVE,
+  PY_PROOF_ARCHIVE_WAIT,
+  PY_PROOF_FSMOD,
+  PY_PROOF_FSMOD_WAIT,
   PY_PROOF_OK,
   PY_PROOF_FAIL
 } metal_boot_py_proof_step_t;
@@ -880,6 +894,464 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
     }
 
     pm_metal_log("metal-py: isolated-stdlib ok");
+    t->step = PY_PROOF_RANDOM;
+    return PM_METAL_PENDING;
+  }
+
+  case PY_PROOF_RANDOM:
+    /*
+     * extmod/modrandom.c — a real C extmod (not a stdlib.zip .py, see
+     * docs/MICROPYTHON.md), so `import random` works with zero Python
+     * glue. Seeded from one real pm_metal_random draw
+     * (pymergetic.metal.random.seed_u32, dev/random/random_py_bind.c)
+     * instead of the extmod's fixed compile-time default, so successive
+     * boots don't replay the exact same pseudo-random sequence.
+     * random()/uniform() stay untested (float-gated, off in this build).
+     */
+    t->a = pm_metal_py_run_str("import random\n"
+                               "import pymergetic.metal.random as mr\n"
+                               "random.seed(mr.seed_u32())\n"
+                               "assert 0 <= random.getrandbits(8) <= 255\n"
+                               "assert 1 <= random.randint(1, 10) <= 10\n"
+                               "assert 5 <= random.randrange(5, 9) < 9\n"
+                               "assert random.choice([7, 8, 9]) in (7, 8, 9)\n");
+    if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
+      pm_metal_log("metal-py: random fail (spawn)");
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    t->t0       = pm_metal_time_mono_us();
+    t->deadline = t->t0 + 3000000ull;
+    t->step     = PY_PROOF_RANDOM_WAIT;
+    return PM_METAL_PENDING;
+
+  case PY_PROOF_RANDOM_WAIT: {
+    int32_t sa;
+
+    pm_metal_run_poll_all();
+    sa = pm_metal_async_task_status(t->a);
+    if (sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) {
+      if (pm_metal_time_mono_us() >= t->deadline) {
+        pm_metal_async_task_cancel(t->a);
+        pm_metal_log("metal-py: random fail (timeout)");
+        t->step = PY_PROOF_FAIL;
+        return PM_METAL_PENDING;
+      }
+
+      return pm_metal_async_await(h, pm_metal_async_sleep_us(2000));
+    }
+
+    if (sa != PM_METAL_DONE) {
+      pm_metal_logf("metal-py: random fail sa=%d", sa);
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    pm_metal_log("metal-py: random ok");
+    t->step = PY_PROOF_HASHLIB;
+    return PM_METAL_PENDING;
+  }
+
+  case PY_PROOF_HASHLIB:
+    /*
+     * extmod/modhashlib.c, SHA-256 only (extmod/lib/crypto-algorithms/
+     * sha256.c fallback — no mbedtls/axtls in this build, so
+     * MICROPY_PY_HASHLIB_SHA1/_MD5 stay off, see docs/MICROPYTHON.md).
+     * Known vector: sha256("abc").
+     */
+    t->a =
+      pm_metal_py_run_str("import hashlib, binascii\n"
+                          "d = hashlib.sha256(b'abc').digest()\n"
+                          "assert binascii.hexlify(d) == "
+                          "b'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad', "
+                          "binascii.hexlify(d)\n");
+    if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
+      pm_metal_log("metal-py: hashlib fail (spawn)");
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    t->t0       = pm_metal_time_mono_us();
+    t->deadline = t->t0 + 3000000ull;
+    t->step     = PY_PROOF_HASHLIB_WAIT;
+    return PM_METAL_PENDING;
+
+  case PY_PROOF_HASHLIB_WAIT: {
+    int32_t sa;
+
+    pm_metal_run_poll_all();
+    sa = pm_metal_async_task_status(t->a);
+    if (sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) {
+      if (pm_metal_time_mono_us() >= t->deadline) {
+        pm_metal_async_task_cancel(t->a);
+        pm_metal_log("metal-py: hashlib fail (timeout)");
+        t->step = PY_PROOF_FAIL;
+        return PM_METAL_PENDING;
+      }
+
+      return pm_metal_async_await(h, pm_metal_async_sleep_us(2000));
+    }
+
+    if (sa != PM_METAL_DONE) {
+      pm_metal_logf("metal-py: hashlib fail sa=%d", sa);
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    pm_metal_log("metal-py: hashlib ok");
+    t->step = PY_PROOF_OSIO;
+    return PM_METAL_PENDING;
+  }
+
+  case PY_PROOF_OSIO:
+    /*
+     * Metal's own os/io (mods/py/stdlib_src/os/, io.py — pymergetic.metal.fs.*
+     * sync bindings, fs/fs_py_bind.c; not micropython-lib's uos-based
+     * versions, this build has no MICROPY_VFS/uos). Full roundtrip: write,
+     * read back, stat, listdir, mkdir, rename, unlink.
+     */
+    t->a = pm_metal_py_run_str("import os, io\n"
+                               "p = '/mods/py/py_osio_proof.bin'\n"
+                               "f = io.open(p, 'wb')\n"
+                               "f.write(b'hello-metal')\n"
+                               "f.close()\n"
+                               "assert os.path.exists(p)\n"
+                               "assert os.path.isfile(p)\n"
+                               "assert not os.path.isdir(p)\n"
+                               "assert os.stat(p)[6] == len(b'hello-metal')\n"
+                               "f = io.open(p, 'rb')\n"
+                               "assert f.read() == b'hello-metal'\n"
+                               "f.close()\n"
+                               "assert p.rsplit('/', 1)[1] in os.listdir('/mods/py')\n"
+                               "os.mkdir('/mods/py/py_osio_proof_dir')\n"
+                               "assert os.path.isdir('/mods/py/py_osio_proof_dir')\n"
+                               "p2 = '/mods/py/py_osio_proof2.bin'\n"
+                               "os.rename(p, p2)\n"
+                               "assert not os.path.exists(p)\n"
+                               "assert os.path.exists(p2)\n"
+                               "os.unlink(p2)\n"
+                               "assert not os.path.exists(p2)\n");
+    if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
+      pm_metal_log("metal-py: os+io fail (spawn)");
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    t->t0       = pm_metal_time_mono_us();
+    t->deadline = t->t0 + 3000000ull;
+    t->step     = PY_PROOF_OSIO_WAIT;
+    return PM_METAL_PENDING;
+
+  case PY_PROOF_OSIO_WAIT: {
+    int32_t sa;
+
+    pm_metal_run_poll_all();
+    sa = pm_metal_async_task_status(t->a);
+    if (sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) {
+      if (pm_metal_time_mono_us() >= t->deadline) {
+        pm_metal_async_task_cancel(t->a);
+        pm_metal_log("metal-py: os+io fail (timeout)");
+        t->step = PY_PROOF_FAIL;
+        return PM_METAL_PENDING;
+      }
+
+      return pm_metal_async_await(h, pm_metal_async_sleep_us(2000));
+    }
+
+    if (sa != PM_METAL_DONE) {
+      pm_metal_logf("metal-py: os+io fail sa=%d", sa);
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    pm_metal_log("metal-py: os+io ok");
+    t->step = PY_PROOF_RE;
+    return PM_METAL_PENDING;
+  }
+
+  case PY_PROOF_RE:
+    /*
+     * extmod/modre.c + lib/re1.5's sources — a real C extmod (not a
+     * stdlib.zip .py), see docs/MICROPYTHON.md. match/group/groups/sub.
+     * base64/fnmatch ride along here too: both were Needs-glue only
+     * because they `import re`, and now that `re` (+ MICROPY_PY_BUILTINS_
+     * BYTEARRAY for base64's own decode path) exists, both packed cleanly
+     * with zero source changes — promoted to Easy (docs/MICROPYTHON.md).
+     */
+    t->a = pm_metal_py_run_str("import re\n"
+                               "m = re.match(r'(\\d+)-(\\d+)', '123-456')\n"
+                               "assert m is not None\n"
+                               "assert m.group(1) == '123'\n"
+                               "assert m.group(2) == '456'\n"
+                               "assert m.groups() == ('123', '456')\n"
+                               "assert re.sub(r'\\d+', 'N', '1 and 22') == 'N and N'\n"
+                               "assert re.match(r'a.c', 'abc') is not None\n"
+                               "assert re.match(r'a.c', 'axc') is not None\n"
+                               "assert re.match(r'^abc$', 'abc') is not None\n"
+                               "import base64, fnmatch\n"
+                               "assert base64.b64decode(base64.b64encode(b'metal')) == b'metal'\n"
+                               "assert base64.b16encode(b'ab') == b'6162'\n"
+                               "assert fnmatch.fnmatch('boot.py', '*.py')\n"
+                               "assert not fnmatch.fnmatch('boot.py', '*.txt')\n");
+    if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
+      pm_metal_log("metal-py: re fail (spawn)");
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    t->t0       = pm_metal_time_mono_us();
+    t->deadline = t->t0 + 3000000ull;
+    t->step     = PY_PROOF_RE_WAIT;
+    return PM_METAL_PENDING;
+
+  case PY_PROOF_RE_WAIT: {
+    int32_t sa;
+
+    pm_metal_run_poll_all();
+    sa = pm_metal_async_task_status(t->a);
+    if (sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) {
+      if (pm_metal_time_mono_us() >= t->deadline) {
+        pm_metal_async_task_cancel(t->a);
+        pm_metal_log("metal-py: re fail (timeout)");
+        t->step = PY_PROOF_FAIL;
+        return PM_METAL_PENDING;
+      }
+
+      return pm_metal_async_await(h, pm_metal_async_sleep_us(2000));
+    }
+
+    if (sa != PM_METAL_DONE) {
+      pm_metal_logf("metal-py: re fail sa=%d", sa);
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    pm_metal_log("metal-py: re ok");
+    t->step = PY_PROOF_TIME;
+    return PM_METAL_PENDING;
+  }
+
+  case PY_PROOF_TIME:
+    /*
+     * pymergetic.metal.time (dev/random/time_py_bind.c) + mods/py/
+     * stdlib_src/time.py on top — real wall clock (EFI's gRT->GetTime()/
+     * BIOS's CMOS RTC, refined by SNTP — dev/net/ntp.c), no floats
+     * anywhere (MICROPY_PY_BUILTINS_FLOAT is off). datetime.py
+     * (MICROPY_PY_BUILTINS_PROPERTY, flipped for this) and hmac.py
+     * (same flag, HMAC.name/digest_size) ride on top of time+hashlib.
+     */
+    t->a = pm_metal_py_run_str(
+      "import time\n"
+      "now = time.time()\n"
+      "assert now > 1700000000, now\n" /* sometime after 2023 */
+      "lt = time.localtime(now)\n"
+      "assert time.mktime(lt) == now, (time.mktime(lt), now)\n" /* mktime inverts localtime, not gmtime */
+      "assert time.gmtime(0) == (1970, 1, 1, 0, 0, 0, 3, 1, 0)\n"
+      "assert time.gmtime(86400) == (1970, 1, 2, 0, 0, 0, 4, 2, 0)\n"
+      "m0 = time.monotonic_ns()\n"
+      "time.sleep_ms(1)\n"
+      "assert time.monotonic_ns() > m0\n"
+      "import datetime\n"
+      "d = datetime.date(2024, 3, 1)\n"
+      "assert (d - datetime.date(2024, 2, 1)).days == 29, (d - datetime.date(2024, 2, 1)).days\n"
+      "dt = datetime.datetime(2024, 1, 1, 12, 30, 0)\n"
+      "assert dt.hour == 12 and dt.minute == 30\n"
+      "import hmac, hashlib\n"
+      "mac = hmac.new(b'key', b'The quick brown fox jumps over the lazy dog', "
+      "hashlib.sha256).hexdigest()\n"
+      "assert mac == 'f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8', mac\n");
+    if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
+      pm_metal_log("metal-py: time fail (spawn)");
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    t->t0       = pm_metal_time_mono_us();
+    t->deadline = t->t0 + 3000000ull;
+    t->step     = PY_PROOF_TIME_WAIT;
+    return PM_METAL_PENDING;
+
+  case PY_PROOF_TIME_WAIT: {
+    int32_t sa;
+
+    pm_metal_run_poll_all();
+    sa = pm_metal_async_task_status(t->a);
+    if (sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) {
+      if (pm_metal_time_mono_us() >= t->deadline) {
+        pm_metal_async_task_cancel(t->a);
+        pm_metal_log("metal-py: time fail (timeout)");
+        t->step = PY_PROOF_FAIL;
+        return PM_METAL_PENDING;
+      }
+
+      return pm_metal_async_await(h, pm_metal_async_sleep_us(2000));
+    }
+
+    if (sa != PM_METAL_DONE) {
+      pm_metal_logf("metal-py: time fail sa=%d", sa);
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    pm_metal_log("metal-py: time ok");
+    t->step = PY_PROOF_ARCHIVE;
+    return PM_METAL_PENDING;
+  }
+
+  case PY_PROOF_ARCHIVE:
+    /*
+     * tarfile.py (pymergetic.metal.tar.* -> util/tar.c's own ustar
+     * reader/writer, util/tar_py_bind.c) write-then-read roundtrip, plus
+     * zlib/gzip.py (extmod/moddeflate.c's real DEFLATE engine, backed by
+     * io.py's native uio.BytesIO — see mpconfigport.h's MICROPY_PY_DEFLATE
+     * note) compress/decompress roundtrip.
+     */
+    t->a =
+      pm_metal_py_run_str("import tarfile\n"
+                          "w = tarfile.TarWriter()\n"
+                          "w.add_bytes('hello.txt', b'hello-metal-tar')\n"
+                          "w.add_dir('sub')\n"
+                          "data = w.finish()\n"
+                          "tf = tarfile.open_bytes(data)\n"
+                          "names = tf.getnames()\n"
+                          "assert 'hello.txt' in names and 'sub' in names, names\n"
+                          "info = tarfile.TarInfo('hello.txt', len(b'hello-metal-tar'), False)\n"
+                          "assert tf.extractfile(info) == b'hello-metal-tar'\n"
+                          "tf.close()\n"
+                          "import zlib\n"
+                          "c = zlib.compress(b'metal-metal-metal-metal-metal')\n"
+                          "assert zlib.decompress(c) == b'metal-metal-metal-metal-metal'\n"
+                          "import gzip\n"
+                          "gz = gzip.compress(b'gzip-roundtrip-metal')\n"
+                          "assert gzip.decompress(gz) == b'gzip-roundtrip-metal'\n");
+    if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
+      pm_metal_log("metal-py: archive fail (spawn)");
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    t->t0       = pm_metal_time_mono_us();
+    t->deadline = t->t0 + 3000000ull;
+    t->step     = PY_PROOF_ARCHIVE_WAIT;
+    return PM_METAL_PENDING;
+
+  case PY_PROOF_ARCHIVE_WAIT: {
+    int32_t sa;
+
+    pm_metal_run_poll_all();
+    sa = pm_metal_async_task_status(t->a);
+    if (sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) {
+      if (pm_metal_time_mono_us() >= t->deadline) {
+        pm_metal_async_task_cancel(t->a);
+        pm_metal_log("metal-py: archive fail (timeout)");
+        t->step = PY_PROOF_FAIL;
+        return PM_METAL_PENDING;
+      }
+
+      return pm_metal_async_await(h, pm_metal_async_sleep_us(2000));
+    }
+
+    if (sa != PM_METAL_DONE) {
+      pm_metal_logf("metal-py: archive fail sa=%d", sa);
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    pm_metal_log("metal-py: archive ok");
+    t->step = PY_PROOF_FSMOD;
+    return PM_METAL_PENDING;
+  }
+
+  case PY_PROOF_FSMOD:
+    /*
+     * pathlib/shutil/tempfile (packaging-only, os+io backed) + unittest
+     * (simple TestCase run) + textwrap (re-free _split(), see stdlib_src/
+     * textwrap.py's Metal patch note) + uu (pure-Python codec, no
+     * binascii b2a_uu/a2b_uu upstream — stdlib_src/uu.py's own note).
+     */
+    t->a = pm_metal_py_run_str(
+      "import pathlib\n"
+      "p = pathlib.Path('/mods/py/py_pathlib_proof.bin')\n"
+      "p.write_bytes(b'pathlib-metal')\n"
+      "assert p.exists() and p.read_bytes() == b'pathlib-metal'\n"
+      "p.unlink()\n"
+      "assert not p.exists()\n"
+      "import shutil, io, os\n"
+      "src_p = '/mods/py/py_shutil_src.bin'\n"
+      "dst_p = '/mods/py/py_shutil_dst.bin'\n"
+      "f = io.open(src_p, 'wb')\n"
+      "f.write(b'shutil-metal')\n"
+      "f.close()\n"
+      "shutil.copyfile(src_p, dst_p)\n"
+      "assert os.path.exists(dst_p)\n"
+      "f = io.open(dst_p, 'rb')\n"
+      "assert f.read() == b'shutil-metal'\n"
+      "f.close()\n"
+      "os.unlink(src_p)\n"
+      "os.unlink(dst_p)\n"
+      "import tempfile\n"
+      "tf = tempfile.TemporaryFile()\n"
+      "tf.write(b'tmp-metal')\n"
+      "tf.seek(0)\n"
+      "assert tf.read() == b'tmp-metal'\n"
+      "tf.close()\n"
+      "import unittest\n"
+      "class T(unittest.TestCase):\n"
+      "    def test_ok(self):\n"
+      "        self.assertEqual(1 + 1, 2)\n"
+      "r = unittest.TestResult()\n"
+      "suite = unittest.TestSuite()\n"
+      "suite.addTest(T)\n"
+      "suite.run(r)\n"
+      "assert r.errorsNum == 0 and r.failuresNum == 0 and r.testsRun == 1, "
+      "(r.errorsNum, r.failuresNum, r.testsRun)\n"
+      "import textwrap\n"
+      "assert textwrap.wrap('metal metal metal metal metal', 12) == ["
+      "'metal metal', 'metal metal', 'metal']\n"
+      "assert textwrap.dedent('  a\\n  b\\n') == 'a\\nb\\n'\n"
+      "import uu, io\n"
+      "src = io.BytesIO(b'uu-roundtrip-metal-proof')\n"
+      "enc = io.BytesIO()\n"
+      "uu.encode(src, enc, name='proof.bin')\n"
+      "dec_in = io.BytesIO(enc.getvalue())\n"
+      "dec_out = io.BytesIO()\n"
+      "uu.decode(dec_in, dec_out)\n"
+      "assert dec_out.getvalue() == b'uu-roundtrip-metal-proof', dec_out.getvalue()\n");
+    if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
+      pm_metal_log("metal-py: fsmod fail (spawn)");
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    t->t0       = pm_metal_time_mono_us();
+    t->deadline = t->t0 + 3000000ull;
+    t->step     = PY_PROOF_FSMOD_WAIT;
+    return PM_METAL_PENDING;
+
+  case PY_PROOF_FSMOD_WAIT: {
+    int32_t sa;
+
+    pm_metal_run_poll_all();
+    sa = pm_metal_async_task_status(t->a);
+    if (sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) {
+      if (pm_metal_time_mono_us() >= t->deadline) {
+        pm_metal_async_task_cancel(t->a);
+        pm_metal_log("metal-py: fsmod fail (timeout)");
+        t->step = PY_PROOF_FAIL;
+        return PM_METAL_PENDING;
+      }
+
+      return pm_metal_async_await(h, pm_metal_async_sleep_us(2000));
+    }
+
+    if (sa != PM_METAL_DONE) {
+      pm_metal_logf("metal-py: fsmod fail sa=%d", sa);
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    pm_metal_log("metal-py: fsmod ok");
     t->step = PY_PROOF_OK;
     return PM_METAL_PENDING;
   }

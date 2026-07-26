@@ -16,8 +16,14 @@
 extern "C" {
 #endif
 
+/* Bumped from 256 KiB: the shared/default context now imports the whole
+ * "Easy"+"Needs-glue" stdlib tier over its lifetime (time/datetime/hmac,
+ * tarfile, zlib/gzip, pathlib/shutil/tempfile, unittest, textwrap, uu, ...)
+ * and none of those modules or their sys.modules entries are ever unloaded —
+ * 256 KiB was tight even before the first of these landed. 128 MiB HEAP
+ * total makes 1 MiB here noise. */
 #ifndef PM_METAL_PY_BLOB_BYTES
-#define PM_METAL_PY_BLOB_BYTES (256u * 1024u)
+#define PM_METAL_PY_BLOB_BYTES (1024u * 1024u)
 #endif
 
 /** Default heap for an opt-in isolated context (pm_metal_py_run_*_isolated) —
@@ -84,6 +90,11 @@ int    pm_metal_py_init(void);
 int    pm_metal_py_ready(void);
 size_t pm_metal_py_blob_bytes(void);
 
+/** "MicroPython v1.24.1-dirty" (genhdr/mpversion.h's MICROPY_GIT_TAG) —
+ * literal, never NULL. For banners/diagnostics; boot_init.c's REPL banner
+ * is the first caller. */
+const char *pm_metal_py_version_cstr(void);
+
 /** New Metal/Python task on the always-on blob; returns task handle or 0. */
 pm_metal_async_handle_t pm_metal_py_run_script(const char *path);
 pm_metal_async_handle_t pm_metal_py_run_str(const char *src);
@@ -124,6 +135,15 @@ int                     pm_metal_py_repl_feed_line(const char *line, size_t len)
 /** ">>> " (fresh statement) or "... " (mid multi-line block) — literal,
  * never NULL. */
 const char *pm_metal_py_repl_prompt(void);
+
+/**
+ * Rainbow "PYTHON" banner + version/CPU line + welcome text + feature
+ * highlights, printed via pm_metal_log() (so it lands identically on
+ * COM1 + the UI console). One shared implementation (py_shell.c) for
+ * both callers — boot_init.c's cold-boot landing and py_shell.c's own
+ * `py -i` resume — so the two paths can never drift apart.
+ */
+void pm_metal_py_repl_print_banner(void);
 
 typedef enum {
   PM_METAL_PY_SYNC   = 1,

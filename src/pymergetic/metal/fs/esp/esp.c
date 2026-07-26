@@ -695,6 +695,20 @@ int pm_metal_esp_write_at(
     new_len = ent->len;
   }
 
+  /* pm_metal_mem_alloc(0, ...) always returns NULL (mem.c) — a genuinely
+   * empty result (new file, or truncate-to-0) is not an allocation
+   * failure, so it can't go through the copy == NULL error check below. */
+  if (new_len == 0) {
+    if (ent->data != NULL) {
+      pm_metal_mem_free(ent->data);
+    }
+
+    ent->data  = NULL;
+    ent->len   = 0;
+    ent->dirty = 1;
+    return 0;
+  }
+
   copy = (uint8_t *)pm_metal_mem_alloc(new_len, PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
   if (copy == NULL) {
     return -1;

@@ -65,4 +65,14 @@ int32_t pm_metal_py_zip_step(pm_metal_async_handle_t self_h, pm_metal_async_hand
  */
 void pm_metal_py_zip_embed_install(void);
 
+/**
+ * Flush mphalport_metal.c's cross-call stdout accumulator (see that file)
+ * -- hands any buffered text with no trailing '\n' yet to
+ * pm_metal_shell_out() as its own line. Call after a REPL chunk/statement
+ * finishes so output like `print('x', end='')` still shows up before the
+ * next ">>> " prompt instead of waiting indefinitely for a newline that
+ * may never come.
+ */
+void pm_metal_py_stdout_flush(void);
+
 #endif

@@ -36,6 +36,31 @@ pm_metal_py_obj_t pm_metal_py_str_new(const char *s)
   return (pm_metal_py_obj_t)mp_obj_new_str(s, strlen(s));
 }
 
+pm_metal_py_obj_t pm_metal_py_bytes_new(const uint8_t *data, size_t len)
+{
+  return (pm_metal_py_obj_t)mp_obj_new_bytes(data, len);
+}
+
+bool pm_metal_py_buf_get(pm_metal_py_obj_t o, const uint8_t **out, size_t *out_len)
+{
+  mp_buffer_info_t info;
+
+  mp_get_buffer_raise((mp_obj_t)o, &info, MP_BUFFER_READ);
+  *out     = (const uint8_t *)info.buf;
+  *out_len = (size_t)info.len;
+  return true;
+}
+
+pm_metal_py_obj_t pm_metal_py_list_new(void)
+{
+  return (pm_metal_py_obj_t)mp_obj_new_list(0, NULL);
+}
+
+void pm_metal_py_list_append(pm_metal_py_obj_t list, pm_metal_py_obj_t item)
+{
+  mp_obj_list_append((mp_obj_t)list, (mp_obj_t)item);
+}
+
 int pm_metal_py_obj_to_str(pm_metal_py_obj_t o, char *buf, size_t cap)
 {
   mp_obj_t    str_obj = mp_call_function_1(MP_OBJ_FROM_PTR(&mp_type_str), (mp_obj_t)o);

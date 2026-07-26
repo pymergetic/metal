@@ -15,6 +15,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 /* PCI config-space offsets (PCI 2.2 spec; see external/edk2 IndustryStandard/Pci22.h). */
 #define PM_HWINFO_PCI_VENDOR_ID_OFFSET       0x00
@@ -368,6 +370,68 @@ static void HwinfoPrintPci(void)
   if (found == 0) {
     pm_metal_log("  (none found)");
   }
+}
+
+static void HwCpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx)
+{
+  __asm__ volatile("cpuid" : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx) : "a"(leaf), "c"(0));
+}
+
+void pm_metal_hwinfo_cpu_brand(char *out, size_t cap)
+{
+  uint32_t regs[4];
+  uint32_t brand[12];
+  char     text[49];
+  size_t   i;
+  size_t   start;
+  size_t   end;
+
+  if (out == NULL || cap == 0) {
+    return;
+  }
+
+  out[0] = '\0';
+
+  HwCpuid(0x80000000u, &regs[0], &regs[1], &regs[2], &regs[3]);
+  if (regs[0] < 0x80000004u) {
+    /* No brand-string leaf (rare/ancient CPU) -- leaf 0's vendor ID
+     * ("GenuineIntel", "AuthenticAMD", "TCGTCGTCGTCG" under QEMU TCG,
+     * "KVMKVMKVM\0\0\0" under KVM accel) is always present instead. */
+    HwCpuid(0x0u, &regs[0], &regs[1], &regs[2], &regs[3]);
+    memcpy(&text[0], &regs[1], 4);
+    memcpy(&text[4], &regs[3], 4);
+    memcpy(&text[8], &regs[2], 4);
+    text[12] = '\0';
+    snprintf(out, cap, "%s", text);
+    return;
+  }
+
+  for (i = 0; i < 3; i++) {
+    HwCpuid(0x80000002u + (uint32_t)i,
+            &brand[i * 4 + 0],
+            &brand[i * 4 + 1],
+            &brand[i * 4 + 2],
+            &brand[i * 4 + 3]);
+  }
+
+  memcpy(text, brand, 48);
+  text[48] = '\0';
+
+  /* Brand strings are padded with leading/trailing spaces by convention
+   * ("Intel(R) Core(TM) ..." has none, but plenty of virtualized CPUs
+   * do) -- trim both ends before handing it to a one-line banner. */
+  start = 0;
+  while (text[start] == ' ') {
+    start++;
+  }
+
+  end = strlen(text);
+  while (end > start && text[end - 1] == ' ') {
+    end--;
+  }
+
+  text[end] = '\0';
+  snprintf(out, cap, "%s", &text[start]);
 }
 
 void pm_metal_hwinfo_print(void)

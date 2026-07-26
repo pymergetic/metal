@@ -54,6 +54,11 @@ Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
 | ![ThinkPad shell](screenshots/thinkpad-shell.jpg) | ![ThinkPad Doom](screenshots/thinkpad-doom.jpg) |
 | ThinkPad T42p — shell (`radeon_rv370`) | ThinkPad T42p — Doom tabbed |
 
+| |
+|:-:|
+| ![Python REPL](screenshots/py-repl.png) |
+| QEMU — boots straight into the Python REPL: boot tree, rainbow ASCII banner + Metal/MicroPython versions + host CPU, live commands (`import pmcmd`, `pmcmd.ping(...)`) — one unified scrollable console, no separate input strip |
+
 More filenames: [`screenshots/README.md`](screenshots/README.md).
 
 ---
@@ -70,8 +75,13 @@ More filenames: [`screenshots/README.md`](screenshots/README.md).
 - **Net** — `lo` + `eth0`…; virtio-net + Broadcom **bge**; DHCPv4/v6, DNS, NTP, ping, TFTP/HTTP
 - **I/O** — virtio-blk / IDE, virtio-snd → AC97 → null; PS/2 + tablet input
 - **Shell / UI** — tabbed chrome, linker-section commands, serial + framebuffer consoles in parallel
+- **MicroPython in core** — one always-on blob, N equal runners, no GIL; boots
+  straight into a persistent **REPL** (system's default shell, C console one
+  `console()` away); host ↔ guest bidirectional calls; ~25-module signed
+  `stdlib.zip` (`time`/`datetime`, `hashlib`, `re`, `tarfile`, `pymergetic.metal.tls`, …);
+  opt-in isolated contexts for true parallel bytecode (own heap, no shared lock)
 
-Deep dives: [`docs/IO.md`](docs/IO.md) · [`docs/LIBC_ASYNC.md`](docs/LIBC_ASYNC.md) · [`docs/DOOM_ASYNC.md`](docs/DOOM_ASYNC.md)
+Deep dives: [`docs/IO.md`](docs/IO.md) · [`docs/LIBC_ASYNC.md`](docs/LIBC_ASYNC.md) · [`docs/DOOM_ASYNC.md`](docs/DOOM_ASYNC.md) · [`docs/MICROPYTHON.md`](docs/MICROPYTHON.md)
 
 ---
 
@@ -118,7 +128,7 @@ In the shell: `help`, `tab doom`, `run doom`. More: [`docs/EFI.md`](docs/EFI.md)
 | [docs/LIBC_ASYNC.md](docs/LIBC_ASYNC.md) | Guest libc ↔ async ABI |
 | [docs/DOOM_ASYNC.md](docs/DOOM_ASYNC.md) | Doom package, pace, present path |
 | [docs/FAST_JIT.md](docs/FAST_JIT.md) | Fast JIT bring-up brief (not enabled yet) |
-| [docs/MICROPYTHON.md](docs/MICROPYTHON.md) | Kernel µPy — MAP blob, N runners, no GIL |
+| [docs/MICROPYTHON.md](docs/MICROPYTHON.md) | Kernel µPy — one blob, N runners, no GIL, REPL as default shell |
 | [docs/TRUST.md](docs/TRUST.md) | Mod signing / trust modes |
 | [docs/WASI.md](docs/WASI.md) | WASI preview1 surface |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | Load / process model |
@@ -153,12 +163,19 @@ packages/metal/
 paths, and TODOs — see [`docs/TODO.md`](docs/TODO.md). If it runs Doom on your
 box, celebrate; if it doesn’t, that’s still on-brand for this stage.
 
-### Next: Python
+### Python
 
-After Doom: **MicroPython in core** — one always-on MAP blob, N equal runners,
-`await` Metal (no Python GIL); shell `python`/`py` <script> spawns a **task** on
-that blob (not a new VM); host + guest share one engine. Design:
-[`docs/MICROPYTHON.md`](docs/MICROPYTHON.md).
+**Landed, not a spike anymore.** One always-on MicroPython blob, N equal
+runners, `await` Metal (no GIL); boot spawns a persistent, **interactive
+REPL task** on that blob as the system's default shell (`console()` drops back
+to the C command shell, never deleted). `py <script>` / `py -c` spawn more
+**tasks** on the same engine — not a new VM. Host ↔ guest calls are
+bidirectional (`pymergetic.metal.*` → C, and C → Python callables), a signed
++ trust-checked `stdlib.zip` ships ~25 pure-Python modules plus
+`time`/`datetime`/`hashlib`/`re`/`tarfile`/`pymergetic.metal.tls` and friends,
+and opt-in **isolated contexts** give genuine parallel bytecode (own heap,
+own GC nursery, no shared run-lock) alongside the shared/serialized default.
+Design + status: [`docs/MICROPYTHON.md`](docs/MICROPYTHON.md).
 
 ---
 

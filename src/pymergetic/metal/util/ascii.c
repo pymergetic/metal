@@ -8,6 +8,8 @@
  */
 #include "pymergetic/metal/util/ascii.h"
 
+#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "pymergetic/metal/log/log.h"
@@ -175,6 +177,166 @@ void pm_metal_util_ascii_log_styled(pm_metal_log_style_t style, const char *text
 void pm_metal_util_ascii_log(const char *text)
 {
   pm_metal_util_ascii_log_styled(PM_METAL_LOG_STYLE_DEFAULT, text);
+}
+
+/* Hue wheel steps swept across each row's glyph columns; kept small so a
+ * whole banner row's worth of "\033[38;2;r;g;bm" escapes (~19 bytes each,
+ * emitted once per step, not once per char) fits the console's per-line
+ * storage budget with room to spare (see shell/ui/priv.h's CONSOLE_COLS). */
+#define PM_METAL_ASCII_RAINBOW_STEPS  16u
+#define PM_METAL_ASCII_RAINBOW_ROWDEG 40u /* per-row hue phase -- the "diagonal" */
+
+/* Integer HSV(deg, S=255, V=255) -> RGB -- no floats/trig (freestanding
+ * boot code, deg is 0-359). Classic 6-sextant wheel. */
+static void AsciiHueToRgb(uint32_t deg, uint8_t *r, uint8_t *g, uint8_t *b)
+{
+  uint32_t region;
+  uint32_t rem;
+  uint8_t  rising;
+  uint8_t  falling;
+
+  deg     = deg % 360u;
+  region  = deg / 60u;
+  rem     = (deg % 60u) * 255u / 60u;
+  rising  = (uint8_t)rem;
+  falling = (uint8_t)(255u - rem);
+
+  switch (region) {
+  case 0:
+    *r = 255u;
+    *g = rising;
+    *b = 0u;
+    break;
+  case 1:
+    *r = falling;
+    *g = 255u;
+    *b = 0u;
+    break;
+  case 2:
+    *r = 0u;
+    *g = 255u;
+    *b = rising;
+    break;
+  case 3:
+    *r = 0u;
+    *g = falling;
+    *b = 255u;
+    break;
+  case 4:
+    *r = rising;
+    *g = 0u;
+    *b = 255u;
+    break;
+  default:
+    *r = 255u;
+    *g = 0u;
+    *b = falling;
+    break;
+  }
+}
+
+/**
+ * Colorize one already-rendered FIGlet row: a new 24-bit SGR escape is
+ * emitted each time the hue step changes (every ~row_len/STEPS chars, not
+ * every char -- keeps escape overhead bounded regardless of banner width),
+ * spaces pass through uncolored (invisible either way), row ends with a
+ * plain reset. Returns bytes written (excluding NUL), out always NUL
+ * terminated.
+ */
+static size_t AsciiColorizeRow(const char *row, uint32_t phase_deg, char *out, size_t out_cap)
+{
+  size_t  len;
+  size_t  x;
+  size_t  oi;
+  int32_t last_step;
+
+  if (out == NULL || out_cap == 0u) {
+    return 0;
+  }
+
+  len       = strlen(row);
+  oi        = 0;
+  last_step = -1;
+
+  for (x = 0; x < len; x++) {
+    char c = row[x];
+
+    if (c != ' ') {
+      uint32_t step = (uint32_t)(x * PM_METAL_ASCII_RAINBOW_STEPS / (len > 0u ? len : 1u));
+
+      if ((int32_t)step != last_step) {
+        uint32_t deg = (step * 360u / PM_METAL_ASCII_RAINBOW_STEPS + phase_deg) % 360u;
+        uint8_t  r;
+        uint8_t  g;
+        uint8_t  b;
+        int      n;
+
+        AsciiHueToRgb(deg, &r, &g, &b);
+        n = snprintf(out + oi,
+                     (oi < out_cap) ? out_cap - oi : 0u,
+                     "\033[38;2;%u;%u;%um",
+                     (unsigned)r,
+                     (unsigned)g,
+                     (unsigned)b);
+        if (n > 0) {
+          oi += (size_t)n;
+        }
+
+        last_step = (int32_t)step;
+      }
+    }
+
+    if (oi + 1u < out_cap) {
+      out[oi++] = c;
+    }
+  }
+
+  {
+    int n = snprintf(out + oi, (oi < out_cap) ? out_cap - oi : 0u, "\033[0m");
+
+    if (n > 0) {
+      oi += (size_t)n;
+    }
+  }
+
+  if (oi >= out_cap) {
+    oi = out_cap - 1u;
+  }
+
+  out[oi] = '\0';
+  return oi;
+}
+
+void pm_metal_util_ascii_log_rainbow(const char *text)
+{
+  char out[PM_METAL_ASCII_MAX_H * (PM_METAL_ASCII_MAX_W + 1) + 1];
+  char colored[PM_METAL_ASCII_MAX_W * 20 + 8];
+  int  n;
+  int  i;
+  int  start;
+  int  row;
+
+  if (!text) {
+    return;
+  }
+
+  n = pm_metal_util_ascii_render(text, '#', out, sizeof(out));
+  if (n < 0) {
+    return;
+  }
+
+  start = 0;
+  row   = 0;
+  for (i = 0; i <= n; i++) {
+    if (i == n || out[i] == '\n') {
+      out[i] = '\0';
+      AsciiColorizeRow(
+        out + start, (uint32_t)row * PM_METAL_ASCII_RAINBOW_ROWDEG, colored, sizeof(colored));
+      pm_metal_log_styled(PM_METAL_LOG_STYLE_DEFAULT, colored);
+      start = i + 1;
+      row++;
+    }
+  }
 }
 
 #include "wasm_export.h"

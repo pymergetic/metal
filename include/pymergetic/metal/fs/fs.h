@@ -161,8 +161,28 @@ uint32_t                pm_metal_fs_result(pm_metal_async_handle_t self_h);
 uint32_t pm_metal_fs_size(const char *path);
 uint32_t pm_metal_fs_read(const char *path, void *dest, uint32_t dest_len);
 uint32_t pm_metal_fs_write(const char *path, const void *src, uint32_t src_len);
-void     pm_metal_fs_bind_inst(void *module_inst);
-int      pm_metal_fs_native_register(void);
+
+/**
+ * Host-only synchronous fd-shaped ops — same handle table, same
+ * open/stat/mkdir/unlink/rename/readdir mechanism as the _async family
+ * above (MetalFsStep, fs.c), just called directly without the coroutine
+ * wrapper. The underlying ESP ops are not actually slow (no real disk
+ * latency to hide behind an await), so this is not a shortcut around real
+ * async work — see fs_py_bind.c (pymergetic.metal.fs.*), the one caller.
+ */
+pm_metal_fs_h pm_metal_fs_open(const char *path, uint32_t flags);
+void          pm_metal_fs_close(pm_metal_fs_h h);
+uint32_t      pm_metal_fs_fread(pm_metal_fs_h h, void *dest, uint32_t len);
+uint32_t      pm_metal_fs_fwrite(pm_metal_fs_h h, const void *src, uint32_t len);
+uint32_t      pm_metal_fs_readdir(pm_metal_fs_h h, char *name_dest, uint32_t name_cap);
+/** 0 ok (dest filled), -1 missing/not-ESP-ready. */
+int32_t pm_metal_fs_stat(const char *path, pm_metal_fs_stat_t *dest);
+int32_t pm_metal_fs_mkdir(const char *path);
+int32_t pm_metal_fs_unlink(const char *path);
+int32_t pm_metal_fs_rename(const char *old_path, const char *new_path);
+
+void pm_metal_fs_bind_inst(void *module_inst);
+int  pm_metal_fs_native_register(void);
 #endif
 
 #ifdef __cplusplus

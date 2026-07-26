@@ -71,6 +71,15 @@ extern void pm_metal_util_ascii_log(const char *text)
 void pm_metal_util_ascii_log(const char *text);
 /** Host: FIGlet rows with a log style (UART ANSI + UI FG). */
 void pm_metal_util_ascii_log_styled(pm_metal_log_style_t style, const char *text);
+/**
+ * Host: FIGlet rows with a fluid rainbow gradient — one 24-bit truecolor
+ * SGR ("\033[38;2;r;g;bm") per hue step across each row's glyph columns,
+ * plus a per-row phase offset for a diagonal look across the (~5-row)
+ * banner block. Same two sinks as ascii_log_styled: UART (real terminals
+ * decode 24-bit SGR natively) and the UI framebuffer console (whose SGR
+ * parser, MetalUiDrawTextAnsi in shell/ui/paint.c, decodes this form too).
+ */
+void pm_metal_util_ascii_log_rainbow(const char *text);
 #endif
 
 #if !defined(__wasm__)

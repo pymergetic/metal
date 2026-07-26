@@ -35,6 +35,22 @@ pm_metal_py_obj_t pm_metal_py_int_new(int64_t v);
 int64_t           pm_metal_py_int_get(pm_metal_py_obj_t o);
 
 pm_metal_py_obj_t pm_metal_py_str_new(const char *s);
+pm_metal_py_obj_t pm_metal_py_bytes_new(const uint8_t *data, size_t len);
+
+/**
+ * Read-only view onto any object supporting the buffer protocol (bytes,
+ * str, bytearray, memoryview, ...) — for a C bind function accepting
+ * data written by Python (fs writes, hash update, ...). *out points into
+ * the object's own storage (no copy); valid only until the next
+ * GC-triggering allocation, so use it immediately, don't stash it.
+ * Returns false (and raises TypeError itself) if @a o has no buffer.
+ */
+bool pm_metal_py_buf_get(pm_metal_py_obj_t o, const uint8_t **out, size_t *out_len);
+
+/** A plain, mutable Python list — mp_obj_list_append equivalent for growing
+ * it one item at a time (e.g. os.listdir()'s variable-length result). */
+pm_metal_py_obj_t pm_metal_py_list_new(void);
+void              pm_metal_py_list_append(pm_metal_py_obj_t list, pm_metal_py_obj_t item);
 
 /**
  * Stringify any object (int, float, custom __str__, an already-a-str, ...)
@@ -74,9 +90,21 @@ void pm_metal_py_raise_runtime_error(const char *msg);
  *   - pm_metal_py_new_awaitable_u32: resumes with
  *     pm_metal_async_result_u32(h) (pymergetic.metal.mod's per-function
  *     awaitables — the mod's guest-side result payload).
+ *   - pm_metal_py_new_awaitable_bytes: resumes with a fresh bytes object
+ *     copied from wherever @a fn(@a ctx) points once @a h is done
+ *     (pymergetic.metal.tls's read() — the connection's own host-owned
+ *     scratch buffer, filled by the coroutine itself before completion;
+ *     never a pointer into a Python object, see pm_metal_py_buf_get's own
+ *     "don't stash it" warning above). @a fn is called exactly once, at
+ *     resume time, not at await-start.
  */
 pm_metal_py_obj_t pm_metal_py_new_awaitable(pm_metal_async_handle_t h);
 pm_metal_py_obj_t pm_metal_py_new_awaitable_u32(pm_metal_async_handle_t h);
+
+typedef void (*pm_metal_py_await_bytes_fn)(void *ctx, const uint8_t **out_ptr, size_t *out_len);
+pm_metal_py_obj_t pm_metal_py_new_awaitable_bytes(pm_metal_async_handle_t    h,
+                                                  pm_metal_py_await_bytes_fn fn,
+                                                  void                      *ctx);
 
 #ifdef __cplusplus
 }

@@ -46,7 +46,8 @@ collect_files() {
 		if [[ -f "${p}" ]]; then
 			case "${p}" in
 			*.inc.c) ;;
-			*) printf '%s\n' "${p}" ;;
+			*.c | *.h) printf '%s\n' "${p}" ;;
+			*) ;; # not a C source: clang-format has no business touching it
 			esac
 		elif [[ -d "${p}" ]]; then
 			find "${p}" \

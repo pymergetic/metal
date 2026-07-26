@@ -14,7 +14,6 @@ static int32_t  mScrollDrag;
 static int32_t  mScrollGrabDy; /* pointer Y - thumb_y at press */
 static uint32_t mScrollGrabOff;
 static uint32_t mPrevLmb;
-static int32_t  mInputRelayout; /* visible input rows changed — need full chrome */
 
 /* Classic arrow (hotspot 0,0). 0=clear 1=outline 2=fill */
 #define UI_CUR_W 12
@@ -75,8 +74,8 @@ uint32_t MetalUiInputWrapColsFromWidth(int32_t width_px)
 }
 
 /**
- * Wrap columns for the shared input strip (pad + scroll gutter).
- * Uses console width — do not call MetalUiShellInputGeom (avoids recursion).
+ * Wrap columns for the composing line, now just the console's own trailing
+ * row(s) (pad + scroll gutter) -- uses the console's width directly.
  */
 uint32_t MetalUiInputCurrentWrap(void)
 {
@@ -100,23 +99,18 @@ uint32_t MetalUiInputCurrentWrap(void)
   return MetalUiInputWrapColsFromWidth(text_w);
 }
 
-static void MetalUiInputNoteHeight(uint32_t before_vis)
+/**
+ * The composing line is just the tail of the console's own scroll region
+ * now (see MetalUiConsoleTotalRows) -- typing/editing always snaps back to
+ * it, same as a real terminal auto-scrolling to the line you're on. Call
+ * after every edit/cursor-move so the console's shared view_off doesn't
+ * leave the line you're typing scrolled out of view.
+ */
+static void MetalUiInputSnapToBottom(void)
 {
-  uint32_t wrap;
-
-  wrap = MetalUiInputCurrentWrap();
-  if (MetalUiInputVisibleRows(wrap) != before_vis) {
-    mInputRelayout = 1;
+  if (gMetalUiSysConsole != NULL) {
+    gMetalUiSysConsole->u.console.view_off = 0;
   }
-}
-
-int pm_metal_ui_input_consume_relayout(void)
-{
-  int32_t d;
-
-  d              = mInputRelayout;
-  mInputRelayout = 0;
-  return d ? 1 : 0;
 }
 
 /**
@@ -186,22 +180,6 @@ uint32_t MetalUiInputVisualRows(uint32_t wrap_cols)
   return MetalUiInputWalk(wrap_cols, (uint32_t)-1, NULL, NULL);
 }
 
-uint32_t MetalUiInputVisibleRows(uint32_t wrap_cols)
-{
-  uint32_t v;
-
-  v = MetalUiInputVisualRows(wrap_cols);
-  if (v < 1u) {
-    v = 1u;
-  }
-
-  if (v > UI_INPUT_ROWS_MAX) {
-    v = UI_INPUT_ROWS_MAX;
-  }
-
-  return v;
-}
-
 uint32_t MetalUiInputCaretRow(uint32_t wrap_cols)
 {
   uint32_t row;
@@ -221,82 +199,6 @@ void MetalUiInputCaretCell(uint32_t wrap_cols, uint32_t *row, uint32_t *col)
   }
 
   (void)MetalUiInputWalk(wrap_cols, want, row, col);
-}
-
-void MetalUiInputClampView(uint32_t wrap_cols)
-{
-  metal_ui_widget_t *c;
-  uint32_t           visual;
-  uint32_t           visible;
-  uint32_t           max_off;
-
-  c = gMetalUiSysConsole;
-  if (c == NULL) {
-    return;
-  }
-
-  visual  = MetalUiInputVisualRows(wrap_cols);
-  visible = MetalUiInputVisibleRows(wrap_cols);
-  max_off = (visual > visible) ? (visual - visible) : 0u;
-  if (c->u.console.input_view_off > max_off) {
-    c->u.console.input_view_off = max_off;
-  }
-}
-
-void MetalUiInputEnsureCaretVisible(uint32_t wrap_cols)
-{
-  metal_ui_widget_t *c;
-  uint32_t           visual;
-  uint32_t           visible;
-  uint32_t           caret;
-  uint32_t           first;
-  uint32_t           max_off;
-
-  c = gMetalUiSysConsole;
-  if (c == NULL) {
-    return;
-  }
-
-  visual  = MetalUiInputVisualRows(wrap_cols);
-  visible = MetalUiInputVisibleRows(wrap_cols);
-  caret   = MetalUiInputCaretRow(wrap_cols);
-  max_off = (visual > visible) ? (visual - visible) : 0u;
-
-  /* first visible row from top */
-  if (visual <= visible) {
-    c->u.console.input_view_off = 0;
-    return;
-  }
-
-  first = visual - visible - c->u.console.input_view_off;
-  if (caret < first) {
-    c->u.console.input_view_off = visual - visible - caret;
-  } else if (caret >= first + visible) {
-    c->u.console.input_view_off = visual - visible - (caret - visible + 1u);
-  }
-
-  if (c->u.console.input_view_off > max_off) {
-    c->u.console.input_view_off = max_off;
-  }
-}
-
-void MetalUiInputScrollBy(int32_t delta_rows, uint32_t wrap_cols)
-{
-  metal_ui_widget_t *c;
-  int32_t            off;
-
-  c = gMetalUiSysConsole;
-  if (c == NULL || delta_rows == 0) {
-    return;
-  }
-
-  off = (int32_t)c->u.console.input_view_off + delta_rows;
-  if (off < 0) {
-    off = 0;
-  }
-
-  c->u.console.input_view_off = (uint32_t)off;
-  MetalUiInputClampView(wrap_cols);
 }
 
 int32_t MetalUiInputMoveCursor(int32_t delta)
@@ -324,14 +226,11 @@ int32_t MetalUiInputMoveCursor(int32_t delta)
 
 int pm_metal_ui_input_move_cursor(int delta)
 {
-  uint32_t wrap;
-
   if (MetalUiInputMoveCursor(delta) != 0) {
     return -1;
   }
 
-  wrap = MetalUiInputCurrentWrap();
-  MetalUiInputEnsureCaretVisible(wrap);
+  MetalUiInputSnapToBottom();
   return 0;
 }
 
@@ -425,7 +324,7 @@ int32_t MetalUiInputMoveVisualRow(int32_t delta_rows, uint32_t wrap_cols)
   }
 
   c->u.console.input_cursor = MetalUiInputIndexAt(wrap_cols, (uint32_t)dest, col);
-  MetalUiInputEnsureCaretVisible(wrap_cols);
+  MetalUiInputSnapToBottom();
   return 1;
 }
 
@@ -436,9 +335,9 @@ void pm_metal_ui_input_clear(void)
   }
 
   memset(gMetalUiSysConsole->u.console.input, 0, sizeof(gMetalUiSysConsole->u.console.input));
-  gMetalUiSysConsole->u.console.input_len      = 0;
-  gMetalUiSysConsole->u.console.input_cursor   = 0;
-  gMetalUiSysConsole->u.console.input_view_off = 0;
+  gMetalUiSysConsole->u.console.input_len    = 0;
+  gMetalUiSysConsole->u.console.input_cursor = 0;
+  MetalUiInputSnapToBottom();
 }
 
 int pm_metal_ui_input_append(char ch)
@@ -446,8 +345,6 @@ int pm_metal_ui_input_append(char ch)
   metal_ui_widget_t *c;
   uint32_t           i;
   uint32_t           cur;
-  uint32_t           wrap;
-  uint32_t           before;
 
   c = gMetalUiSysConsole;
   if (c == NULL) {
@@ -464,8 +361,6 @@ int pm_metal_ui_input_append(char ch)
     return -1;
   }
 
-  wrap   = MetalUiInputCurrentWrap();
-  before = MetalUiInputVisibleRows(wrap);
   MetalUiInputSyncCaret();
   cur = c->u.console.input_cursor;
   for (i = c->u.console.input_len; i > cur; i--) {
@@ -476,8 +371,7 @@ int pm_metal_ui_input_append(char ch)
   c->u.console.input_len++;
   c->u.console.input_cursor                  = cur + 1u;
   c->u.console.input[c->u.console.input_len] = '\0';
-  MetalUiInputEnsureCaretVisible(wrap);
-  MetalUiInputNoteHeight(before);
+  MetalUiInputSnapToBottom();
   return 0;
 }
 
@@ -486,8 +380,6 @@ int pm_metal_ui_input_backspace(void)
   metal_ui_widget_t *c;
   uint32_t           i;
   uint32_t           cur;
-  uint32_t           wrap;
-  uint32_t           before;
 
   c = gMetalUiSysConsole;
   if (c == NULL) {
@@ -500,8 +392,6 @@ int pm_metal_ui_input_backspace(void)
     return -1;
   }
 
-  wrap   = MetalUiInputCurrentWrap();
-  before = MetalUiInputVisibleRows(wrap);
   for (i = cur - 1u; i < c->u.console.input_len; i++) {
     c->u.console.input[i] = c->u.console.input[i + 1u];
   }
@@ -509,8 +399,7 @@ int pm_metal_ui_input_backspace(void)
   c->u.console.input_len--;
   c->u.console.input_cursor                  = cur - 1u;
   c->u.console.input[c->u.console.input_len] = '\0';
-  MetalUiInputEnsureCaretVisible(wrap);
-  MetalUiInputNoteHeight(before);
+  MetalUiInputSnapToBottom();
   return 0;
 }
 
@@ -519,8 +408,6 @@ int pm_metal_ui_input_delete_fwd(void)
   metal_ui_widget_t *c;
   uint32_t           i;
   uint32_t           cur;
-  uint32_t           wrap;
-  uint32_t           before;
 
   c = gMetalUiSysConsole;
   if (c == NULL) {
@@ -533,16 +420,13 @@ int pm_metal_ui_input_delete_fwd(void)
     return -1;
   }
 
-  wrap   = MetalUiInputCurrentWrap();
-  before = MetalUiInputVisibleRows(wrap);
   for (i = cur; i < c->u.console.input_len; i++) {
     c->u.console.input[i] = c->u.console.input[i + 1u];
   }
 
   c->u.console.input_len--;
   c->u.console.input[c->u.console.input_len] = '\0';
-  MetalUiInputEnsureCaretVisible(wrap);
-  MetalUiInputNoteHeight(before);
+  MetalUiInputSnapToBottom();
   return 0;
 }
 
@@ -595,10 +479,10 @@ int pm_metal_ui_input_set(const char *text)
     gMetalUiSysConsole->u.console.input[i] = text[i];
   }
 
-  gMetalUiSysConsole->u.console.input[n]       = '\0';
-  gMetalUiSysConsole->u.console.input_len      = n;
-  gMetalUiSysConsole->u.console.input_cursor   = n;
-  gMetalUiSysConsole->u.console.input_view_off = 0;
+  gMetalUiSysConsole->u.console.input[n]     = '\0';
+  gMetalUiSysConsole->u.console.input_len    = n;
+  gMetalUiSysConsole->u.console.input_cursor = n;
+  MetalUiInputSnapToBottom();
   return (int)n;
 }
 
@@ -782,21 +666,10 @@ int pm_metal_ui_console_pointer(
   }
 
   if ((flags & PM_METAL_INPUT_PTR_WHEEL) != 0 && wheel != 0) {
-    int32_t  ix;
-    int32_t  iy;
-    int32_t  iw;
-    int32_t  ih;
-    uint32_t wrap;
-
-    /* Wheel over input strip scrolls input; else console history. */
-    if (MetalUiShellInputGeom(&ix, &iy, &iw, &ih) == 0 && x >= ix && x < ix + iw && y >= iy &&
-        y < iy + ih) {
-      wrap = MetalUiInputCurrentWrap();
-      MetalUiInputScrollBy(wheel, wrap);
-    } else {
-      /* Positive wheel → older history. */
-      MetalUiConsoleScrollBy(con, wheel);
-    }
+    /* One scroll region now (history + the line you're typing, see
+     * MetalUiConsoleTotalRows) -- no separate input-strip rect to test
+     * against. Positive wheel → older history. */
+    MetalUiConsoleScrollBy(con, wheel);
 
     dirty = 1;
   }

@@ -8,6 +8,10 @@
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/shell/shell_cmd.h>
 #include <pymergetic/metal/shell/shell/shell.h>
+#include <pymergetic/metal/shell/hwinfo/hwinfo.h>
+#include <pymergetic/metal/util/ascii.h>
+#include <pymergetic/metal/version.h>
+#include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/runtime/async/async.h>
 #include <runtime/time/time.h>
 
@@ -27,7 +31,46 @@ static void PyShellUsage(void)
   pm_metal_shell_out("    own VM context (own heap, no stdlib.zip) -- runs in");
   pm_metal_shell_out("    real parallel with the shared context on another CPU");
   pm_metal_shell_out("  py -i                          start the persistent Python REPL");
-  pm_metal_shell_out("    ('console' at the >>> prompt pauses it, back to this shell)");
+  pm_metal_shell_out("    (console() at the >>> prompt pauses it, back to this shell)");
+}
+
+/*
+ * Shared by both callers -- boot_init.c's cold-boot landing and
+ * PyShellRepl()'s "py -i" resume below -- via pm_metal_log() directly
+ * (the same sink pm_metal_shell_out() mirrors into, see MetalShellEcho
+ * in shell.c) so the two paths render identically and can't drift.
+ * Feature-highlight lines are deliberately short and specific to what
+ * this build actually does (grep the call site before changing a claim
+ * here) -- the point is "what's different from stock Python", not a
+ * generic feature list.
+ */
+void pm_metal_py_repl_print_banner(void)
+{
+  char cpu_brand[64];
+
+  pm_metal_util_ascii_log_rainbow("PYTHON");
+  pm_metal_logf("Metal %s  --  %s", PM_METAL_VERSION, pm_metal_py_version_cstr());
+  pm_metal_hwinfo_cpu_brand(cpu_brand, sizeof(cpu_brand));
+  if (cpu_brand[0] != '\0') {
+    pm_metal_logf("%s", cpu_brand);
+  }
+
+  pm_metal_log("");
+  pm_metal_log(
+    "\033[1;35mMetal Python\033[0m -- persistent REPL, shared context, globals stick around.");
+  pm_metal_log("Type console() at the >>> prompt to pause it and return to this shell.");
+  pm_metal_log("");
+  pm_metal_log("  - pymergetic.metal.* \033[2m<->\033[0m C: Python calls C, C calls back into "
+               "Python -- one bind table, both directions");
+  pm_metal_log(
+    "  - Python task == Metal task: FCFS across every CPU runner, no GIL, no private Python loop");
+  pm_metal_log("  - Real \033[1mawait\033[0m: Python coroutines and C coroutines share one "
+               "scheduler (`await metal.aio.sleep_us(...)`)");
+  pm_metal_log("  - `py -x`: opt-in isolated context, own heap + own GC -- genuine parallel "
+               "bytecode on another core");
+  pm_metal_log(
+    "  - Signed wasm/AOT natives self-register straight into Python: `metal.mod.<name>.<fn>(...)`");
+  pm_metal_log("");
 }
 
 static void PyShellRepl(void)
@@ -35,7 +78,7 @@ static void PyShellRepl(void)
   pm_metal_async_handle_t task_h;
 
   if (pm_metal_py_repl_active()) {
-    pm_metal_shell_out("py: repl already running -- type 'console' at >>> to pause it");
+    pm_metal_shell_out("py: repl already running -- type console() at >>> to pause it");
     return;
   }
 
@@ -45,8 +88,7 @@ static void PyShellRepl(void)
     return;
   }
 
-  pm_metal_shell_out("Metal Python -- persistent REPL, shared context, globals stick around.");
-  pm_metal_shell_out("Type 'console' at the >>> prompt to pause it and return to this shell.");
+  pm_metal_py_repl_print_banner();
 }
 
 static int32_t PyParseI32(const char *s, int32_t *out)

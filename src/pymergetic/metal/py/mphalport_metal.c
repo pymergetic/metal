@@ -8,11 +8,45 @@
 #include "py/mphal.h"
 #include "py/mpconfig.h"
 
+#include "py_internal.h" /* IWYU pragma: keep — declares pm_metal_py_stdout_flush, defined below */
+
+/*
+ * pm_metal_shell_out()/pm_metal_log() are whole-*line* sinks (one call ==
+ * one line on every viewport), but MicroPython's own str/bytes REPR
+ * printer (py/objstr.c's quoting loop, used for bare REPL results like
+ * `sys.version` or a bytes literal) calls mp_hal_stdout_tx_strn() once
+ * PER CHARACTER to do its escaping -- neither call is guaranteed to carry
+ * a trailing '\n'. The accumulator below must therefore survive across
+ * calls (static, not a local reset to empty every time) and must only
+ * hand a line to pm_metal_shell_out() when a real '\n' shows up (or the
+ * buffer is full) -- flushing an incomplete line on every call (as if
+ * "no newline yet" meant "this fragment IS the whole line") is what
+ * turned every multi-call REPR print into one character per output line.
+ * pm_metal_py_stdout_flush() (py.c, end of each REPL chunk) is the
+ * catch-up for text that never gets a trailing '\n' at all (e.g.
+ * `print('x', end='')`) so it still reaches the screen before the next
+ * prompt instead of sitting buffered forever.
+ */
+static char   sStdoutLine[240];
+static size_t sStdoutLen = 0;
+
+static void py_stdout_flush_line(void)
+{
+  if (sStdoutLen > 0u) {
+    sStdoutLine[sStdoutLen] = '\0';
+    pm_metal_shell_out(sStdoutLine);
+    sStdoutLen = 0;
+  }
+}
+
+void pm_metal_py_stdout_flush(void)
+{
+  py_stdout_flush_line();
+}
+
 void mp_hal_stdout_tx_strn_cooked(const char *str, size_t len)
 {
-  char   line[240];
   size_t i = 0;
-  size_t o = 0;
 
   if (str == NULL || len == 0) {
     return;
@@ -22,20 +56,14 @@ void mp_hal_stdout_tx_strn_cooked(const char *str, size_t len)
     if (c == '\r') {
       continue;
     }
-    if (c == '\n' || o + 1 >= sizeof(line)) {
-      line[o] = '\0';
-      pm_metal_shell_out(line);
-      o = 0;
-      if (c != '\n') {
-        line[o++] = c;
-      }
+    if (c == '\n') {
+      py_stdout_flush_line();
       continue;
     }
-    line[o++] = c;
-  }
-  if (o > 0) {
-    line[o] = '\0';
-    pm_metal_shell_out(line);
+    if (sStdoutLen + 1u >= sizeof(sStdoutLine)) {
+      py_stdout_flush_line();
+    }
+    sStdoutLine[sStdoutLen++] = c;
   }
 }
 

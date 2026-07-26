@@ -30,7 +30,7 @@
 #define SHELL_LINE_MAX PM_METAL_SHELL_LINE_MAX
 
 static int32_t  mDirty;       /* full chrome */
-static int32_t  mDirtyInput;  /* shell input line only */
+static int32_t  mDirtyInput;  /* console widget only (scrollback + composing line) */
 static int32_t  mDirtyStatus; /* status tray only (clock/ifaces/FPS) */
 static int32_t  mExitReq;
 static int32_t  mExitReboot;
@@ -60,6 +60,7 @@ static struct {
 
 /* ASCII path: ESC [ A/B from serial/ConIn (VNC/QEMU often skips key events). */
 static uint32_t mEscSeq; /* 0=norm 1=ESC 2=CSI */
+static char     mLastNl; /* '\0', or '\r'/'\n' just submitted — CRLF pairing */
 
 static void     MetalShellMarkFull(void);
 static void     MetalShellMarkInput(void);
@@ -427,11 +428,13 @@ static void MetalShellMarkFull(void)
 
 static void MetalShellMarkInput(void)
 {
-  if (pm_metal_ui_input_consume_relayout()) {
-    MetalShellMarkFull();
-    return;
-  }
-
+  /*
+   * The composing line is just the console's own trailing row(s) now (see
+   * MetalUiConsoleTotalRows) -- typing never resizes the console rect, so
+   * unlike the old separate input strip this never needs to escalate to
+   * MetalShellMarkFull() for a layout change; it always just repaints the
+   * (cheap, console-widget-scoped) dirty rect.
+   */
   if (!mDirty) {
     mDirtyInput = 1;
   }
@@ -770,6 +773,22 @@ int pm_metal_shell_init(void)
   return 0;
 }
 
+/*
+ * Call syntax only -- "console()"/"quit()"/"exit()" -- never the bare
+ * keyword-style word. Real Python has no bare-word statements that call
+ * something, so a bare "console"/"quit"/"exit" reads as a NameError
+ * lookup, not an escape command; only the f() form is accepted so this
+ * doesn't quietly special-case what looks like ordinary (buggy) Python
+ * source. CPython/IPython's own quit()/exit() sentinels are call syntax
+ * too -- this matches that muscle memory instead of MicroPython's
+ * NameError (it defines no quit/exit objects).
+ */
+static int32_t PyReplIsQuitCall(const char *text)
+{
+  return strcmp(text, "console()") == 0 || strcmp(text, "quit()") == 0 ||
+         strcmp(text, "exit()") == 0;
+}
+
 static void MetalShellHandleAscii(char ch, char *text, uintptr_t text_sz)
 {
   /* CSI: ESC [ A/B/C/D — history / ignore arrows (serial & many VNC paths). */
@@ -826,6 +845,7 @@ static void MetalShellHandleAscii(char ch, char *text, uintptr_t text_sz)
 
   if (ch == 0x1b) {
     mEscSeq = 1u;
+    mLastNl = 0;
     return;
   }
 
@@ -834,6 +854,20 @@ static void MetalShellHandleAscii(char ch, char *text, uintptr_t text_sz)
     char crlf[2];
 
     mEscSeq = 0u;
+
+    if (mLastNl != 0 && mLastNl != ch) {
+      /* Second half of a CRLF (or LFCR) pair for the *same* Enter keypress
+       * -- some terminals (raw serial clients in CRLF mode) send both
+       * bytes for one Enter. ch=='\r'||ch=='\n' used to treat each byte
+       * as its own complete Enter with no pairing, so one physical Enter
+       * submitted the real line and then immediately phantom-submitted
+       * again on an now-empty buffer ("repl: busy, try again" or a stray
+       * empty command) -- swallow this half silently instead. */
+      mLastNl = 0;
+      return;
+    }
+
+    mLastNl = ch;
     crlf[0] = '\r';
     crlf[1] = '\n';
 
@@ -882,9 +916,14 @@ static void MetalShellHandleAscii(char ch, char *text, uintptr_t text_sz)
     /*
      * REPL active: committed lines are Python source, not shell commands
      * -- feed the line queue (py.c's PY_STEP_REPL) instead of the normal
-     * dispatcher. "console" is the one reserved escape word to fall back
-     * to the C command shell (matches docs/MICROPYTHON.md's "C console
-     * stays reachable as fallback", never deleted).
+     * dispatcher. "console()" is the reserved escape call to fall back to
+     * the C command shell (matches docs/MICROPYTHON.md's "C console
+     * stays reachable as fallback", never deleted); "quit()"/"exit()" are
+     * accepted as aliases (CPython/IPython muscle memory for "leave this
+     * REPL" -- MicroPython itself defines no quit/exit objects, so these
+     * would otherwise just NameError). Call syntax only, see
+     * PyReplIsQuitCall()'s comment for why the bare keyword-style word is
+     * deliberately not accepted.
      *
      * defer_prompt: feed_line() only *enqueues* the line -- the REPL
      * coroutine (py.c's PY_STEP_REPL) decides ">>> " vs "... " and runs
@@ -900,7 +939,7 @@ static void MetalShellHandleAscii(char ch, char *text, uintptr_t text_sz)
       int32_t defer_prompt = 0;
 
       if (pm_metal_py_repl_active()) {
-        if (strcmp(text, "console") == 0) {
+        if (PyReplIsQuitCall(text)) {
           pm_metal_py_repl_stop();
           pm_metal_shell_out("py: repl paused -- back to console (type 'py -i' to resume)");
         } else if (pm_metal_py_repl_feed_line(text, strlen(text)) != 0) {
@@ -936,6 +975,7 @@ static void MetalShellHandleAscii(char ch, char *text, uintptr_t text_sz)
   if (ch == 0x7f || ch == 0x08) {
     const char bs[3] = { '\b', ' ', '\b' };
 
+    mLastNl = 0;
     /* Empty line: do not erase the prompt on serial. */
     if (pm_metal_ui_input_backspace() == 0) {
       pm_metal_console_com1_write(bs, 3);
@@ -959,6 +999,7 @@ static void MetalShellHandleAscii(char ch, char *text, uintptr_t text_sz)
     static const char spaces[4] = { ' ', ' ', ' ', ' ' };
     uint32_t          i;
 
+    mLastNl = 0;
     pm_metal_console_com1_write(spaces, sizeof(spaces));
     for (i = 0; i < sizeof(spaces); i++) {
       (void)pm_metal_stream_feed_stdin(&spaces[i], 1);
@@ -978,6 +1019,7 @@ static void MetalShellHandleAscii(char ch, char *text, uintptr_t text_sz)
    * already handled above) is excluded.
    */
   if ((uint8_t)ch >= 32 && (uint8_t)ch != 0x7fu) {
+    mLastNl = 0;
     pm_metal_console_com1_write(&ch, 1);
     (void)pm_metal_stream_feed_stdin(&ch, 1);
     (void)pm_metal_ui_input_append(ch);

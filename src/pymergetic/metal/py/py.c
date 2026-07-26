@@ -11,6 +11,7 @@
 #include <runtime/slot/slot_table.h>
 #include <runtime/time/cpu.h>
 
+#include "genhdr/mpversion.h"
 #include "port/micropython_embed.h"
 #include "py/compile.h"
 #include "py/gc.h"
@@ -132,6 +133,11 @@ int pm_metal_py_ready(void)
 size_t pm_metal_py_blob_bytes(void)
 {
   return g_blob_bytes;
+}
+
+const char *pm_metal_py_version_cstr(void)
+{
+  return "MicroPython " MICROPY_GIT_TAG;
 }
 
 void pm_metal_py_c_py_demo_seed(void)
@@ -310,6 +316,7 @@ static void py_repl_exec_chunk(pm_metal_py_job_t *job, const char *src, size_t l
   } else {
     mp_obj_print_exception(&mp_plat_print, MP_OBJ_FROM_PTR(nlr.ret_val));
   }
+  pm_metal_py_stdout_flush();
   g_current_job = NULL;
   pm_metal_py_ctx_leave();
   py_run_unlock();
