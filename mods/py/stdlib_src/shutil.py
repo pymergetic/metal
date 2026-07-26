@@ -1,10 +1,7 @@
 # Reimplement, because CPython3.3 impl is rather bloated
 import os
-from collections import namedtuple
 
 import io
-
-_ntuple_diskusage = namedtuple("usage", ("total", "used", "free"))
 
 
 def copyfile(src, dst):
@@ -30,6 +27,10 @@ def rmtree(d):
 
 def copyfileobj(src, dest, length=512):
     if hasattr(src, "readinto"):
+        # buf[:sz] here is a slice *read* (always available, unlike slice
+        # *assignment* -- see io.py's FileIO.readinto() note on
+        # MICROPY_PY_ARRAY_SLICE_ASSIGN); no memoryview() needed either,
+        # which is gated off the same way at this build's ROM level.
         buf = bytearray(length)
         while True:
             sz = src.readinto(buf)
@@ -38,8 +39,7 @@ def copyfileobj(src, dest, length=512):
             if sz == length:
                 dest.write(buf)
             else:
-                b = memoryview(buf)[:sz]
-                dest.write(b)
+                dest.write(buf[:sz])
     else:
         while True:
             buf = src.read(length)
@@ -48,11 +48,7 @@ def copyfileobj(src, dest, length=512):
             dest.write(buf)
 
 
-def disk_usage(path):
-    bit_tuple = os.statvfs(path)
-    blksize = bit_tuple[0]  # system block size
-    total = bit_tuple[2] * blksize
-    free = bit_tuple[3] * blksize
-    used = total - free
-
-    return _ntuple_diskusage(total, used, free)
+# disk_usage() dropped: upstream micropython-lib's version calls
+# os.statvfs(), which this build's os/__init__.py never implements (no
+# statvfs-shaped facade over pymergetic.metal.fs) -- dead code that would
+# AttributeError on the first real call, not a supported surface.

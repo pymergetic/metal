@@ -86,11 +86,14 @@ while i < len(lines):
                 "src/pymergetic/metal/util/tar_py_bind.c",
                 "src/pymergetic/metal/dev/net/tls_conn.c",
                 "src/pymergetic/metal/dev/net/tls_py_bind.c",
+                "src/pymergetic/metal/dev/net/net_py_bind.c",
+                "src/pymergetic/metal/dev/net/net_http_py_bind.c",
                 "external/micropython/extmod/modbinascii.c",
                 "external/micropython/extmod/modrandom.c",
                 "external/micropython/extmod/modhashlib.c",
                 "external/micropython/extmod/modre.c",
                 "external/micropython/extmod/moddeflate.c",
+                "external/micropython/extmod/modjson.c",
             ]
         for g in glue:
             out.append(f"  {os.path.relpath(root / g, inf_dir)}\n")

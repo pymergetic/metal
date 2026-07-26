@@ -69,6 +69,7 @@ def encode(input, output, quotetabs, header=False):
             output.write(s + lineEnd)
 
     prevline = None
+    stripped = b""
     while 1:
         line = input.readline()
         if not line:

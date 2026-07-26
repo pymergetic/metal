@@ -10,7 +10,7 @@ usage() {
 	cat >&2 <<'EOF'
 usage: scripts/verify efi|bios|all|drift|host|format
 
-  efi    — QEMU+OVMF smoke (boot tree + metal-boot: ready)
+  efi    — QEMU+OVMF smoke (boot tree + ready)
   bios   — QEMU+SeaBIOS Multiboot2 smoke (same markers, handoff)
   all    — format check, drift check, host regressions, then efi, then bios
   drift  — BIOS/EFI dual-tree drift gate (no QEMU)

@@ -44,7 +44,7 @@ ok=0
 while kill -0 "${qpid}" 2>/dev/null; do
 	if [[ -s "${LOG}" ]] \
 		&& grep -q "pymergetic metal" "${LOG}" \
-		&& grep -q "metal-boot: ready" "${LOG}" \
+		&& grep -q "+-- ready        ok" "${LOG}" \
 		&& grep -q "+-- handoff      ok" "${LOG}"
 	then
 		ok=1
@@ -128,12 +128,8 @@ grep -q "|   \`-- shell    ok" "${LOG}" || {
 	echo "verify-bios: missing shell ok" >&2
 	exit 1
 }
-grep -q "\`-- ready        ok" "${LOG}" || {
+grep -q "+-- ready        ok" "${LOG}" || {
 	echo "verify-bios: missing ready ok" >&2
-	exit 1
-}
-grep -q "metal-boot: ready" "${LOG}" || {
-	echo "verify-bios: missing metal-boot: ready" >&2
 	exit 1
 }
 

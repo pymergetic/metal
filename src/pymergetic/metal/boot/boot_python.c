@@ -2,6 +2,7 @@
   Boot-path MicroPython: always-on blob init + host overlap/yield proofs.
 **/
 #include <pymergetic/metal/boot/boot.h>
+#include <pymergetic/metal/dev/net/net_ops.h>
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/py/py.h>
@@ -54,6 +55,8 @@ typedef enum {
   PY_PROOF_ARCHIVE_WAIT,
   PY_PROOF_FSMOD,
   PY_PROOF_FSMOD_WAIT,
+  PY_PROOF_NET,
+  PY_PROOF_NET_WAIT,
   PY_PROOF_OK,
   PY_PROOF_FAIL
 } metal_boot_py_proof_step_t;
@@ -1224,7 +1227,18 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
                           "assert zlib.decompress(c) == b'metal-metal-metal-metal-metal'\n"
                           "import gzip\n"
                           "gz = gzip.compress(b'gzip-roundtrip-metal')\n"
-                          "assert gzip.decompress(gz) == b'gzip-roundtrip-metal'\n");
+                          "assert gzip.decompress(gz) == b'gzip-roundtrip-metal'\n"
+                          /* Checkpoint: gzip.open() wraps a *real* on-disk
+                           * io.FileIO now (not just BytesIO) -- needs
+                           * FileIO subclassing native io.IOBase, see
+                           * io.py's own note on why. */
+                          "gp = '/mods/py/py_gzip_file_proof.gz'\n"
+                          "with gzip.open(gp, 'wb') as f:\n"
+                          "    f.write(b'gzip-on-disk-metal-proof')\n"
+                          "with gzip.open(gp, 'rb') as f:\n"
+                          "    assert f.read() == b'gzip-on-disk-metal-proof'\n"
+                          "import os\n"
+                          "os.unlink(gp)\n");
     if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
       pm_metal_log("metal-py: archive fail (spawn)");
       t->step = PY_PROOF_FAIL;
@@ -1317,7 +1331,10 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
       "dec_in = io.BytesIO(enc.getvalue())\n"
       "dec_out = io.BytesIO()\n"
       "uu.decode(dec_in, dec_out)\n"
-      "assert dec_out.getvalue() == b'uu-roundtrip-metal-proof', dec_out.getvalue()\n");
+      "assert dec_out.getvalue() == b'uu-roundtrip-metal-proof', dec_out.getvalue()\n"
+      "import json\n"
+      "s = json.dumps({'a': 1, 'b': [1, 2, 3], 'c': 'metal'})\n"
+      "assert json.loads(s) == {'a': 1, 'b': [1, 2, 3], 'c': 'metal'}, s\n");
     if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
       pm_metal_log("metal-py: fsmod fail (spawn)");
       t->step = PY_PROOF_FAIL;
@@ -1352,6 +1369,88 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
     }
 
     pm_metal_log("metal-py: fsmod ok");
+    t->step = PY_PROOF_NET;
+    return PM_METAL_PENDING;
+  }
+
+  case PY_PROOF_NET:
+    /*
+     * pymergetic.metal.net (net_py_bind.c) — offline-safe: loopback only,
+     * no real network required (docs/MICROPYTHON.md's net plan explicitly
+     * excludes online proofs). listen()+accept() are exercised here for
+     * the first time in this codebase (every earlier net_lwip.c proof —
+     * ping/ntp/tftp/http fetch — was client-only); by the time accept()
+     * runs, connect() has already completed, so PromoteAcceptPcb's
+     * fast-path in LwipAccept should fire immediately rather than parking
+     * on its own 30s internal deadline — this step's own deadline below
+     * is just a backstop.
+     */
+    t->a =
+      pm_metal_py_run_str("import pymergetic.metal.net as net\n"
+                          "async def main():\n"
+                          "    lsock = net.socket()\n"
+                          "    await net.listen(lsock, 34567)\n"
+                          "    csock = net.socket()\n"
+                          "    ok = await net.connect(csock, '127.0.0.1', 34567)\n"
+                          "    assert ok == 1, ok\n"
+                          "    ssock = await net.accept(lsock)\n"
+                          "    assert ssock != 0, ssock\n"
+                          "    assert net.send(csock, b'ping-metal') == len(b'ping-metal')\n"
+                          "    got = await net.recv(ssock, 64)\n"
+                          "    assert got == b'ping-metal', got\n"
+                          "    assert net.send(ssock, b'pong-metal') == len(b'pong-metal')\n"
+                          "    got2 = await net.recv(csock, 64)\n"
+                          "    assert got2 == b'pong-metal', got2\n"
+                          "    dns_ok = await net.dns('localhost')\n"
+                          "    assert dns_ok == 1, dns_ok\n"
+                          "    assert net.dns_last_ntoa() == '127.0.0.1', net.dns_last_ntoa()\n"
+                          "    net.close(csock)\n"
+                          "    net.close(ssock)\n"
+                          "    net.close(lsock)\n");
+    if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
+      pm_metal_log("metal-py: net fail (spawn)");
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    t->t0       = pm_metal_time_mono_us();
+    t->deadline = t->t0 + 5000000ull;
+    t->step     = PY_PROOF_NET_WAIT;
+    return PM_METAL_PENDING;
+
+  case PY_PROOF_NET_WAIT: {
+    int32_t sa;
+
+    /*
+     * Unlike every other proof step's plain pm_metal_run_poll_all(), this
+     * one actually touches the network stack (listen/connect/accept/recv
+     * on lwIP) — lwIP is NO_SYS and only makes progress (TCP callbacks
+     * firing, loopback packets delivered) when something calls
+     * pm_metal_net_poll(), same as pm_metal_async_session_pump() does for
+     * the normal post-boot shell loop. Boot proofs run before that pump
+     * ever starts, so this step has to drive it itself.
+     */
+    pm_metal_net_poll();
+    pm_metal_run_poll_all();
+    sa = pm_metal_async_task_status(t->a);
+    if (sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) {
+      if (pm_metal_time_mono_us() >= t->deadline) {
+        pm_metal_async_task_cancel(t->a);
+        pm_metal_log("metal-py: net fail (timeout)");
+        t->step = PY_PROOF_FAIL;
+        return PM_METAL_PENDING;
+      }
+
+      return pm_metal_async_await(h, pm_metal_async_sleep_us(2000));
+    }
+
+    if (sa != PM_METAL_DONE) {
+      pm_metal_logf("metal-py: net fail sa=%d", sa);
+      t->step = PY_PROOF_FAIL;
+      return PM_METAL_PENDING;
+    }
+
+    pm_metal_log("metal-py: net ok");
     t->step = PY_PROOF_OK;
     return PM_METAL_PENDING;
   }

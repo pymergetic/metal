@@ -62,20 +62,28 @@ typedef long      mp_off_t;
 #define MICROPY_PY_RE_SUB          (1) /* re.sub() — fnmatch.translate()-style users need it */
 #define MICROPY_PY_DEFLATE         (1) /* extmod/moddeflate.c — zlib.py/gzip.py's raw DEFLATE engine */
 #define MICROPY_PY_DEFLATE_COMPRESS \
-  (1) /* one-way (decompress-only) would silently break zlib.compress() */
+  (1)                       /* one-way (decompress-only) would silently break zlib.compress() */
+#define MICROPY_PY_JSON (1) /* extmod/modjson.c — json.dumps()/loads(), no Python shim needed */
+#define MICROPY_PY_JSON_SEPARATORS \
+  (1) /* json.dumps(..., separators=...) kwarg (upstream default; costs little) */
 /* io module: our own mods/py/stdlib_src/io.py occupies the bare "io" name
  * on sys.path (filesystem import wins over an extensible built-in — see
  * py/objmodule.c's mp_module_get_builtin), so this only ever surfaces as
- * `import uio` / `from uio import BytesIO` — the forced-alias path every
- * extensible built-in gets for free. zlib.py/gzip.py need exactly that:
- * a BytesIO whose type carries the real MICROPY_PY_IO_BYTESIO stream
- * protocol (mp_stream_p_t), which moddeflate.c's DeflateIO requires and
- * no pure-Python class can satisfy. IOBase/BufferedWriter stay off —
- * nothing here needs them. mp_builtin_open_obj (py/modio.c's ".open",
+ * `import uio` / `from uio import BytesIO, IOBase` — the forced-alias path
+ * every extensible built-in gets for free. zlib.py/gzip.py need exactly
+ * that: a BytesIO whose type carries the real MICROPY_PY_IO_BYTESIO stream
+ * protocol (mp_stream_p_t), which moddeflate.c's DeflateIO requires and no
+ * plain pure-Python class can satisfy on its own. IOBase (py/modio.c) is
+ * the one C hook that *lets* a pure-Python class satisfy it anyway — a
+ * subclass's readinto()/write()/ioctl() get wired straight into that same
+ * mp_stream_p_t slot (see iobase_read/_write/_ioctl) — which is exactly
+ * what io.py's FileIO does now, so DeflateIO can wrap a real on-disk file
+ * the same way it already wraps BytesIO. BufferedWriter stays off —
+ * nothing here needs it. mp_builtin_open_obj (py/modio.c's ".open",
  * "should be defined by port") already exists as a stub in
  * py_port_stubs.c (real code calls our io.py's open(), not uio.open). */
 #define MICROPY_PY_IO                (1)
-#define MICROPY_PY_IO_IOBASE         (0)
+#define MICROPY_PY_IO_IOBASE         (1)
 #define MICROPY_PY_IO_BYTESIO        (1)
 #define MICROPY_PY_IO_BUFFEREDWRITER (0)
 

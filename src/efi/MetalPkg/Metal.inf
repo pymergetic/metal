@@ -340,11 +340,14 @@
   ../../pymergetic/metal/util/tar_py_bind.c
   ../../pymergetic/metal/dev/net/tls_conn.c
   ../../pymergetic/metal/dev/net/tls_py_bind.c
+  ../../pymergetic/metal/dev/net/net_py_bind.c
+  ../../pymergetic/metal/dev/net/net_http_py_bind.c
   ../../../external/micropython/extmod/modbinascii.c
   ../../../external/micropython/extmod/modrandom.c
   ../../../external/micropython/extmod/modhashlib.c
   ../../../external/micropython/extmod/modre.c
   ../../../external/micropython/extmod/moddeflate.c
+  ../../../external/micropython/extmod/modjson.c
   ../../../build/micropython_embed/py/argcheck.c
   ../../../build/micropython_embed/py/asmbase.c
   ../../../build/micropython_embed/py/asmx64.c

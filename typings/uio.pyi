@@ -9,13 +9,18 @@ Hand-authored (not scripts/gen_py_stubs.py output) for the same reason as
 typings/deflate.pyi: a real upstream MicroPython builtin, not a
 pymergetic.metal.* PM_METAL_PY_BIND call site, and CPython/typeshed have no
 "uio" module. Members below are gated to match this port's mpconfigport.h
-(MICROPY_PY_IO_IOBASE=0, MICROPY_PY_IO_BYTESIO=1, MICROPY_PY_IO_BUFFEREDWRITER=0)
+(MICROPY_PY_IO_IOBASE=1, MICROPY_PY_IO_BYTESIO=1, MICROPY_PY_IO_BUFFEREDWRITER=0)
 — keep in sync by hand if those flags change.
 """
 
 from typing import Any
 
 def open(name: str, mode: str = ...) -> Any: ...
+
+class IOBase:
+    def readinto(self, buf: Any) -> int | None: ...
+    def write(self, data: Any) -> int | None: ...
+    def ioctl(self, request: int, arg: int) -> int: ...
 
 class StringIO:
     def __init__(self, string: str = ...) -> None: ...

@@ -13,13 +13,14 @@ PACKAGE_DIR ?= ../../../../../../build/micropython_embed
 # Must be set before embed.mk pulls in py/mkrules.mk, whose qstr.i.last rule
 # expands $(SRC_QSTR) as a prerequisite list at parse time (a later += is
 # too late to affect that rule). Same story for modrandom.c/modhashlib.c/
-# modre.c/moddeflate.c — none of extmod/ is part of upstream's embed
-# package (only extmod/modplatform.h is copied), see docs/MICROPYTHON.md's
-# "C extmod outside the embed package" note.
+# modre.c/moddeflate.c/modjson.c — none of extmod/ is part of upstream's
+# embed package (only extmod/modplatform.h is copied), see
+# docs/MICROPYTHON.md's "C extmod outside the embed package" note.
 SRC_QSTR += $(MICROPYTHON_TOP)/extmod/modbinascii.c
 SRC_QSTR += $(MICROPYTHON_TOP)/extmod/modrandom.c
 SRC_QSTR += $(MICROPYTHON_TOP)/extmod/modhashlib.c
 SRC_QSTR += $(MICROPYTHON_TOP)/extmod/modre.c
 SRC_QSTR += $(MICROPYTHON_TOP)/extmod/moddeflate.c
+SRC_QSTR += $(MICROPYTHON_TOP)/extmod/modjson.c
 
 include $(MICROPYTHON_TOP)/ports/embed/embed.mk

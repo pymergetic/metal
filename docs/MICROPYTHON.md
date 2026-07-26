@@ -791,6 +791,79 @@ Closed every remaining Needs-glue module from the table above except
   returned ints, not a `bytes` payload sized by however many bytes the TLS
   layer actually had ready.
 
+### Network + FS/IO polish (`pymergetic.metal.net`, `io.IOBase`, `json`)
+
+Not a Needs-glue-tier module — a separate, explicitly-scoped follow-up: a
+thin async socket facade plus two cheap fs/stdlib polish items.
+
+- **`pymergetic.metal.net`** (`dev/net/net_py_bind.c`) — a thin wrapper over
+  `dev/net/net.h` (the same lwIP-backed primitive every other net path in
+  this codebase already uses), same honest-primitive spirit as
+  `pymergetic.metal.tls`: no CPython `socket`/`select`-shaped shim, no
+  blocking calls. `socket([domain[, type]])`/`bind_if`/`send`/`close` are
+  plain sync calls; `connect`/`listen`/`accept`/`recv`/`dns` are
+  await-bridges over `net.h`'s own async handles — no local state machine
+  needed here (unlike `tls_conn.c`, which needs one because a TLS handshake
+  chains multiple `net.h` ops together; `net.h`'s own primitives are each
+  already a single async op). `recv()` needed a small per-socket scratch
+  buffer table (`NetPyRecvSlotFor`, 8 slots × 4 KiB) since
+  `pm_metal_net_recv(h, ptr, len)` writes into `ptr` for the *entire*
+  operation's lifetime, not just at completion — a fresh
+  `pm_metal_mem_alloc`-per-call buffer freed inside the awaitable's resolve
+  callback would be a use-after-free (the actual bytes copy happens right
+  after that callback returns, still reading the pointer it set). `socket()`
+  takes optional `domain`/`type` args defaulting to `AF_INET`/`SOCK_STREAM`
+  rather than exposing named integer constants — `PM_METAL_PY_BIND` binds
+  callables, not plain values, so sensible defaults were the simpler
+  ergonomic answer.
+- **`pymergetic.metal.net.http`** (`dev/net/net_http_py_bind.c`) — a nested
+  submodule (dotted-path resolution handles the nesting for free, no extra
+  plumbing) exposing `get(url)` (await → `bytes` body, one static
+  lazily-allocated 64 KiB scratch buffer — a REPL-driven one-GET-at-a-time
+  facade, not a connection pool) and `last_status()` (sync, mirrors
+  `net.dns_last_ntoa`'s "await the op, read the separate last-result call"
+  idiom).
+- **`PY_PROOF_NET`** (`boot_python.c`) — offline-safe: loopback-only
+  listen/accept/connect/send/recv plus `dns('localhost')`, no real network
+  required (deliberately no online proof, same policy as every other net
+  path in this codebase). First exercise of `listen()`+`accept()` in the
+  Python binding layer; needed an explicit `pm_metal_net_poll()` call inside
+  the proof's own wait loop — `pm_metal_async_session_pump()` (the shell's
+  main loop) already calls it, but the boot-proof driver only called
+  `pm_metal_run_poll_all()`, so lwIP's stack never progressed and the proof
+  hung until this was added.
+- **`io.IOBase` for real on-disk streams** — `MICROPY_PY_IO_IOBASE` flipped
+  on; `io.py`'s `FileIO` now subclasses the native `uio.IOBase` and
+  implements `readinto()`/`ioctl()`, wiring it into the real C-level stream
+  protocol slot (`mp_stream_p_t`) the same way `uio.BytesIO` already
+  carries it. This is what lets `gzip.open()`/`deflate.DeflateIO` wrap an
+  actual on-disk file, not just a `BytesIO` — checkpointed in
+  `PY_PROOF_ARCHIVE` (`gzip.open()` write-then-read round-trip against a
+  real `/mods/py/...` file, not just the pre-existing `compress`/
+  `decompress` BytesIO round-trip). One real gotcha:
+  `MICROPY_PY_ARRAY_SLICE_ASSIGN` (bytearray `buf[:n] = data`) is gated off
+  at this build's `MICROPY_CONFIG_ROM_LEVEL_MINIMUM` — `FileIO.readinto()`
+  copies byte-by-byte instead (single-index item assignment has no such
+  gate), and `shutil.copyfileobj()`'s `readinto()` fast path (now taken,
+  since `FileIO` didn't have `readinto` before this) had to drop a
+  `memoryview(buf)[:sz]` call for the same reason — a plain `buf[:sz]`
+  slice *read* is unaffected, only slice *assignment* is gated.
+- **`json`** — `MICROPY_PY_JSON` (+`_SEPARATORS`) flipped on;
+  `extmod/modjson.c` wired into both ports' build scripts and
+  `py/embed/micropython_embed.mk`'s qstr scan (same "extmod C file outside
+  the embed package" pattern as `modbinascii.c`/`modrandom.c`/…, see the
+  section above — the qstr scan needs `SRC_QSTR +=` *before*
+  `py/mkrules.mk` is pulled in, a later `+=` is too late for its
+  `qstr.i.last` rule). No floats involved at compile time
+  (`modjson.c` has no unconditional float reference), so this doesn't
+  reopen the `MICROPY_PY_BUILTINS_FLOAT` decision. `dumps()`/`loads()`
+  round-trip checkpointed inside `PY_PROOF_FSMOD`.
+- **Explicitly out of scope** (unchanged from the original net plan): no
+  CPython-shaped `socket`/`select` module, no `ssl.wrap_socket()`-on-a-
+  socket-object (that's what `pymergetic.metal.tls` is for), no
+  `umqtt`/`requests`/`aiohttp` ports, no new VFS/mount table, no
+  per-context CWD, no FS jail.
+
 ### Reproducible `stdlib.zip` build — baked in, not tracked
 
 `mods/py/stdlib_src/` stages the **Easy** list's `.py` files (flat copy from
@@ -1390,3 +1463,4 @@ overclaimed.
 - [x] Real "Easy" stdlib pack (not a 1-file sample) — ~27 pure-Python micropython-lib modules in `mods/py/stdlib_src/` (`collections`+`defaultdict`, `heapq`, `bisect`, `functools`, `itertools`, `contextlib`+`ucontextlib`, `copy`, `struct`, `string`, `pprint`, `operator`, `types`, `warnings`, `errno`, `keyword`, `abc`, `quopri`, `html`, `argparse`, `stat`, `pickle`, `inspect`, `traceback`, `logging`, `base64`, `fnmatch`) + Metal's own `os`/`os.path`/`io` (written directly against `pymergetic.metal.fs`, not upstream `.py`) + four C extmods (`binascii`, `random`, `hashlib`, `re` — each needed its own build-system fix, not part of upstream's embed package at all, see [the extmods + os/io section](#random-hashlib-osio-re--three-c-extmods-one-own-pair)); `mods/py/build_stdlib_zip.sh` is a real reproducible build step (Python's own `zipfile`, `ZIP_STORED`, sorted/deterministic); `PY_PROOF_STDLIB`/`PY_PROOF_RANDOM`/`PY_PROOF_HASHLIB`/`PY_PROOF_OSIO`/`PY_PROOF_RE` import and exercise every packed module, not a 3-module sample. Second pass ([micropython-lib categorization](#micropython-lib-categorization-easy--needs-glue--defer)) needed two more self-contained grammar/builtin flag flips (`MICROPY_PY_SYS_EXC_INFO`, `MICROPY_PY_BUILTINS_STR_OP_MODULO`) plus small in-place deltas to `logging.py`/`traceback.py`/`pickle.py` (drop `time`/`io`/`sys.stderr`/bytes-encode dependencies this build doesn't have). Third pass closed `random`/`hashlib`/`os`/`io`/`re` (a `urandom`-seed C bind, a native SHA256 extmod, five new sync `pm_metal_fs` wrappers + two own `.py` files, and `modre.c`+`lib/re1.5` respectively — including a real pre-existing bug fix in `pm_metal_esp_write_at()`, see the extmods section) and, once `re` existed, `base64`/`fnmatch` promoted too with zero source changes (`MICROPY_PY_BUILTINS_BYTEARRAY` for `base64`); `textwrap`/`hmac`/`uu` stayed in Needs-glue, each for a specific, now-documented reason (re1.5 feature gap / `property` builtin / binascii has no uu functions at all)
 - [x] Isolated-context ergonomics — isolated MicroPython contexts import from `stdlib.zip` too, not just `pymergetic.metal`/`pmcmd`/`mod`: `pm_metal_py_ctx_create` (`py_ctx.c`) now calls `pm_metal_py_zip_init_sys_path()` against the fresh context right after `mp_embed_init`, appending `/mods/py` + `stdlib.zip` to *that context's own* `mp_sys_path` (a genuine per-context root pointer, `MP_STATE_VM(sys_mutable[...])` — unlike `sys.argv`/`sys.modules`, it was never one of the static-initializer globals pinned to the shared context, so each context just needed its own copy of the same append call). `py_job_step`'s `PY_STEP_ZIP` no longer special-cases isolated jobs — `pm_metal_py_zip_step` is pure C (fs/http/trust, no `mp_obj_t` touch) and both context kinds now share the same one-fetch-total `g_zip_state`, so both wait on it the same way. Boot-proofed end to end (`PY_PROOF_ISOLATED_STDLIB`: an isolated task imports and exercises `heapq`)
 - [x] Fatter stdlib zip — `time`/`datetime`/`hmac`/`zlib`/`gzip`/`pathlib`/`shutil`/`tempfile`/`tarfile`/`unittest`/`textwrap`/`uu` all shipped (see [Second Needs-glue pass](#second-needs-glue-pass)); `ssl` shipped too, as a genuinely Metal-flavored `pymergetic.metal.tls` async TCP+TLS client, not a CPython `ssl` shim; `threading`/`_thread` deliberately, permanently not shimmed (see above) — real gaps left: full `metal.fs`/`net`/… stdlib-shaped orchestration, native self-register (`import sample`)
+- [x] `pymergetic.metal.net`/`net.http`, real on-disk `io.IOBase` streams, `json` — see [Network + FS/IO polish](#network--fsio-polish-pymergeticmetalnet-ioiobase-json): offline-safe loopback `PY_PROOF_NET` (listen/accept/connect/send/recv/dns), `gzip.open()` now wraps a real file (checkpointed inside `PY_PROOF_ARCHIVE`), `json.dumps`/`loads` checkpointed inside `PY_PROOF_FSMOD`. Deliberately not shimmed: CPython `socket`/`select`, `umqtt`/`requests`/`aiohttp`, any new VFS/mount table/per-context CWD/FS jail
