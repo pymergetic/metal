@@ -1,0 +1,6 @@
+{% args title, name, path, text %}
+{% include "base_header.html" title %}
+<p class="nav-crumbs"><a href="/iface">iface</a> / <a href="/iface/pkg/{{ name }}">{{ name }}</a> / <code>{{ path }}</code></p>
+<h1>{{ path }}</h1>
+<pre>{{ text }}</pre>
+{% include "base_footer.html" %}

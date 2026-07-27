@@ -199,7 +199,17 @@ typedef struct pm_metal_py_bind {
   const char         *summary;
   const char         *sig;
   const char         *body;
+  /*
+   * sizeof must match the aligned(16) section stride (64). DOC fields
+   * made this 56 bytes; without the pad, (__end - __start) pointer
+   * arithmetic in binds_install mis-walks the section and most binds
+   * never install (same LTO-safe pad idea as pm_metal_shell_cmd_table_t).
+   */
+  uint8_t _pad[8];
 } pm_metal_py_bind_t;
+
+_Static_assert(sizeof(pm_metal_py_bind_t) == 64u,
+               "pm_metal_py_bind_t must match aligned(16) section stride");
 
 int pm_metal_py_bind_table(const pm_metal_py_bind_t *rows, size_t n);
 

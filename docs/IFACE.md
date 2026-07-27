@@ -83,3 +83,21 @@ call) — do not hand-roll a second lz4/ustar pipeline; reuse the one
 build-scraped table — see that file's own header comment for the exact
 format. Only add a line for a symbol that already has a real Part I doc
 entry (shell/py/mod); `iface` is a pointer, not a place to originate text.
+
+## HTTP UI (same catalogs)
+
+When ASGI httpd is up (`mods/etc/httpd.json`, mount `py:microdot`), the
+guest Microdot app `mods/py/metal_asgi_launcher.py` serves:
+
+| Path | What |
+|------|------|
+| `/`, `/docs`, `/docs/{kind}/{key}`, `/docs/key/{doc_key}` | HTML over `pymergetic.metal.doc` (utemplate + `mods/www/doc.css`) |
+| `/iface`, `/iface/pkg/...`, `/iface/sym...` | HTML over `pymergetic.metal.iface` |
+| `/api/doc*`, `/api/iface*` | JSON of the same rows |
+
+Templates live under `mods/py/templates/` (precompiled with
+`mods/py/compile_templates.py`, packed by `mods/py/pack_asgi_zips.sh` into
+`templates.zip` + `utemplate.zip` — ESP `mp_import_stat` has no DIR for
+loose trees). List pages accept `?limit=N` (default 40) because ASGI's
+sync `conn_send` still aborts very large bodies mid-transfer. Live smoke:
+`scripts/verify.d/port/efi/doc-iface-smoke.sh`.

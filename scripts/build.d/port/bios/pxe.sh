@@ -22,9 +22,22 @@ fi
 
 # Same package layout as EFI ESP — HTTP :8080 mirrors TFTP root.
 pm_metal_ext_apps_stage_into "${PXE}"
+# Same curated mods/py stage as scripts/lib/efi-qemu.sh (never microdot_src).
 if [[ -d "${ROOT}/mods/py" ]]; then
+	if [[ -x "${ROOT}/mods/py/pack_asgi_zips.sh" ]]; then
+		"${ROOT}/mods/py/pack_asgi_zips.sh"
+	fi
 	mkdir -p "${PXE}/mods/py"
-	cp -a "${ROOT}/mods/py/." "${PXE}/mods/py/"
+	for f in metal_asgi_launcher.py microdot.zip microdot.zip.sig \
+		stdlib.zip stdlib.zip.sig utemplate.zip templates.zip; do
+		if [[ -f "${ROOT}/mods/py/${f}" ]]; then
+			cp -a "${ROOT}/mods/py/${f}" "${PXE}/mods/py/"
+		fi
+	done
+	if [[ -d "${ROOT}/mods/py/tests" ]]; then
+		mkdir -p "${PXE}/mods/py/tests"
+		cp -a "${ROOT}/mods/py/tests/." "${PXE}/mods/py/tests/"
+	fi
 fi
 if [[ -d "${ROOT}/mods/etc" ]]; then
 	mkdir -p "${PXE}/etc"

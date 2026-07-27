@@ -1,0 +1,22 @@
+{% args title, about %}
+{% include "base_header.html" title %}
+<h1>about</h1>
+<p class="muted">version {{ about["version"] }}</p>
+{% if about["url"] %}
+<p><a href="{{ about["url"] }}">{{ about["url"] }}</a></p>
+{% endif %}
+{% if about["desc"] %}
+<pre>{{ about["desc"] }}</pre>
+{% endif %}
+<h2>authors</h2>
+<table>
+  <tr><th>name</th><th>email</th><th>role</th></tr>
+  {% for a in about["authors"] %}
+  <tr>
+    <td>{{ a["name"] }}</td>
+    <td>{{ a["email"] }}</td>
+    <td>{{ a["role"] }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% include "base_footer.html" %}

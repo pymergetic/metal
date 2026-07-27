@@ -1,0 +1,22 @@
+{% args title, kind, rows %}
+{% include "base_header.html" title %}
+<h1>docs</h1>
+<p class="muted">
+  Filter:
+  <a href="/docs">all</a> |
+  <a href="/docs?kind=shell">shell</a> |
+  <a href="/docs?kind=py">py</a> |
+  <a href="/docs?kind=mod">mod</a>
+  {% if kind %} - showing <code>{{ kind }}</code>{% endif %}
+</p>
+<table>
+  <tr><th>kind</th><th>key</th><th>summary</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td>{{ r["kind"] }}</td>
+    <td><a href="/docs/{{ r["kind"] }}/{{ r["key"] }}"><code>{{ r["key"] }}</code></a></td>
+    <td>{{ r["summary"] }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% include "base_footer.html" %}

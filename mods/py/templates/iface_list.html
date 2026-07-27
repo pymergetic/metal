@@ -1,0 +1,16 @@
+{% args title, pkgs %}
+{% include "base_header.html" title %}
+<h1>iface packages</h1>
+<table>
+  <tr><th>name</th><th>kind</th><th>version</th><th>files</th><th>blob</th></tr>
+  {% for name, info in pkgs %}
+  <tr>
+    <td><a href="/iface/pkg/{{ name }}"><code>{{ name }}</code></a></td>
+    <td>{{ info["kind"] }}</td>
+    <td>{{ info["version"] }}</td>
+    <td>{{ info["nfiles"] }}</td>
+    <td>{{ info["blob_len"] }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% include "base_footer.html" %}

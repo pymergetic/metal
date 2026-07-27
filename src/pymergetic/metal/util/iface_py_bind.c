@@ -128,33 +128,74 @@ PM_METAL_PY_BIND_DOC(g_py_bind_iface_read,
                     "path is exactly what list(pkg) returned (e.g. "
                     "'pymergetic/metal/fs/fs.h'). Raises ValueError if pkg/path is unknown.");
 
-static mp_obj_t py_iface_sym(mp_obj_t module_obj, mp_obj_t name_obj)
+static mp_obj_t SymDict(const pm_metal_iface_sym_t *sym)
 {
-  const char          *module = mp_obj_str_get_str(module_obj);
-  const char          *name   = mp_obj_str_get_str(name_obj);
-  pm_metal_iface_sym_t sym;
-  mp_obj_t             d;
+  mp_obj_t d = pm_metal_py_dict_new(5);
 
-  if (pm_metal_iface_sym_lookup(module, name, &sym) != 0) {
-    return pm_metal_py_obj_none();
-  }
-
-  d = pm_metal_py_dict_new(5);
-  pm_metal_py_dict_set_str(d, "module", pm_metal_py_str_new(sym.module));
-  pm_metal_py_dict_set_str(d, "name", pm_metal_py_str_new(sym.name));
-  pm_metal_py_dict_set_str(d, "sig", pm_metal_py_str_new(sym.sig));
-  pm_metal_py_dict_set_str(d, "class_", pm_metal_py_int_new((int64_t)sym.class_));
-  pm_metal_py_dict_set_str(d, "doc_key", pm_metal_py_str_new(sym.doc_key));
+  pm_metal_py_dict_set_str(d, "module", pm_metal_py_str_new(sym->module));
+  pm_metal_py_dict_set_str(d, "name", pm_metal_py_str_new(sym->name));
+  pm_metal_py_dict_set_str(d, "sig", pm_metal_py_str_new(sym->sig));
+  pm_metal_py_dict_set_str(d, "class_", pm_metal_py_int_new((int64_t)sym->class_));
+  pm_metal_py_dict_set_str(d, "doc_key", pm_metal_py_str_new(sym->doc_key));
   return d;
 }
-static MP_DEFINE_CONST_FUN_OBJ_2(py_iface_sym_obj, py_iface_sym);
+
+/**
+ * sym() -> every row; sym(module) -> rows in that wasi module;
+ * sym(module, name) -> one dict or None (docs/DOC_IFACE_PLAN.md Part II /
+ * Part III HTML /iface/sym listing).
+ */
+static mp_obj_t py_iface_sym(size_t n_args, const mp_obj_t *args)
+{
+  const char *module = NULL;
+  const char *name   = NULL;
+
+  if (n_args >= 1) {
+    module = mp_obj_str_get_str(args[0]);
+  }
+  if (n_args >= 2) {
+    name = mp_obj_str_get_str(args[1]);
+  }
+
+  if (module != NULL && name != NULL) {
+    pm_metal_iface_sym_t sym;
+
+    if (pm_metal_iface_sym_lookup(module, name, &sym) != 0) {
+      return pm_metal_py_obj_none();
+    }
+    return SymDict(&sym);
+  }
+
+  {
+    int32_t  n   = pm_metal_iface_sym_count();
+    int32_t  i;
+    mp_obj_t out = pm_metal_py_list_new();
+
+    for (i = 0; i < n; i++) {
+      pm_metal_iface_sym_t sym;
+
+      if (pm_metal_iface_sym_at((uint32_t)i, &sym) != 0) {
+        continue;
+      }
+      if (module != NULL && strcmp(sym.module, module) != 0) {
+        continue;
+      }
+      pm_metal_py_list_append(out, SymDict(&sym));
+    }
+    return out;
+  }
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(py_iface_sym_obj, 0, 2, py_iface_sym);
 PM_METAL_PY_BIND_DOC(g_py_bind_iface_sym,
                     "pymergetic.metal.iface",
                     "sym",
                     py_iface_sym_obj,
                     PM_METAL_PY_SYNC,
-                    "Direct (module, name) sym-table lookup.",
-                    "sym(module: str, name: str) -> dict | None",
-                    "{module, name, sig, class_, doc_key} -- doc_key is '' unless "
-                    "scripts/iface_doc_keys.txt set one; pass a non-empty doc_key to "
-                    "doc.lookup_key() for the readable text.");
+                    "List or look up scraped NativeSymbol rows.",
+                    "sym(module: str | None = None, name: str | None = None) -> "
+                    "list[dict] | dict | None",
+                    "sym() lists every row; sym(module) filters to one wasi "
+                    "module; sym(module, name) returns one "
+                    "{module, name, sig, class_, doc_key} or None. doc_key is "
+                    "'' unless scripts/iface_doc_keys.txt set one — pass a "
+                    "non-empty doc_key to doc.lookup_key() for the readable text.");

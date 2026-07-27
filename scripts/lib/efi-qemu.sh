@@ -39,10 +39,25 @@ pm_metal_efi_stage_esp() {
 	mkdir -p "${esp}/mods/tests"
 	printf 'metal-async-fs\n' >"${esp}/mods/tests/async_fs.txt"
 
-	# MicroPython scripts + sample zip (spike §2 / §6).
+	# MicroPython guest runtime only — never stage microdot_src/stdlib_src/
+	# trees (hundreds of files blow PM_METAL_ESP_CACHE_MAX=128 and can leave
+	# stdlib.zip uncached / unreadable, breaking `import asyncio` for ASGI).
+	# utemplate/templates must be zips (mp_import_stat has no ESP DIR).
 	if [[ -d "${ROOT}/mods/py" ]]; then
+		if [[ -x "${ROOT}/mods/py/pack_asgi_zips.sh" ]]; then
+			"${ROOT}/mods/py/pack_asgi_zips.sh"
+		fi
 		mkdir -p "${esp}/mods/py"
-		cp -a "${ROOT}/mods/py/." "${esp}/mods/py/"
+		for f in metal_asgi_launcher.py microdot.zip microdot.zip.sig \
+			stdlib.zip stdlib.zip.sig utemplate.zip templates.zip; do
+			if [[ -f "${ROOT}/mods/py/${f}" ]]; then
+				cp -a "${ROOT}/mods/py/${f}" "${esp}/mods/py/"
+			fi
+		done
+		if [[ -d "${ROOT}/mods/py/tests" ]]; then
+			mkdir -p "${esp}/mods/py/tests"
+			cp -a "${ROOT}/mods/py/tests/." "${esp}/mods/py/tests/"
+		fi
 	fi
 
 	# httpd defaults + static root (ASGI). Lab sshd hostkey lives under

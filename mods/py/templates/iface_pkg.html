@@ -1,0 +1,11 @@
+{% args title, name, info, files %}
+{% include "base_header.html" title %}
+<p class="nav-crumbs"><a href="/iface">iface</a> / <code>{{ name }}</code></p>
+<h1>{{ name }}</h1>
+<p class="muted">{{ info["kind"] }} | version {{ info["version"] }} | {{ info["nfiles"] }} files | blob {{ info["blob_len"] }}</p>
+<ul>
+  {% for path in files %}
+  <li><a href="/iface/pkg/{{ name }}/file/{{ path }}"><code>{{ path }}</code></a></li>
+  {% endfor %}
+</ul>
+{% include "base_footer.html" %}
