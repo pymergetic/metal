@@ -44,6 +44,10 @@ pm_metal_efi_stage_esp() {
 	# stdlib.zip uncached / unreadable, breaking `import asyncio` for ASGI).
 	# utemplate/templates must be zips (mp_import_stat has no ESP DIR).
 	if [[ -d "${ROOT}/mods/py" ]]; then
+		# Pack/sign guest zips from source — never rely on committed artifacts.
+		if [[ -x "${ROOT}/mods/py/build_microdot_zip.sh" ]]; then
+			"${ROOT}/mods/py/build_microdot_zip.sh"
+		fi
 		if [[ -x "${ROOT}/mods/py/pack_asgi_zips.sh" ]]; then
 			"${ROOT}/mods/py/pack_asgi_zips.sh"
 		fi

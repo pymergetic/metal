@@ -24,6 +24,10 @@ fi
 pm_metal_ext_apps_stage_into "${PXE}"
 # Same curated mods/py stage as scripts/lib/efi-qemu.sh (never microdot_src).
 if [[ -d "${ROOT}/mods/py" ]]; then
+	# Pack/sign guest zips from source — never rely on committed artifacts.
+	if [[ -x "${ROOT}/mods/py/build_microdot_zip.sh" ]]; then
+		"${ROOT}/mods/py/build_microdot_zip.sh"
+	fi
 	if [[ -x "${ROOT}/mods/py/pack_asgi_zips.sh" ]]; then
 		"${ROOT}/mods/py/pack_asgi_zips.sh"
 	fi
