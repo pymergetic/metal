@@ -591,12 +591,46 @@ static void CoreHistoryCmd(int32_t argc, char **argv)
   }
 }
 
+static void CoreJobsCmd(int argc, char **argv)
+{
+  char line[96];
+
+  (void)argc;
+  (void)argv;
+  if (pm_metal_shell_job_list(line, sizeof(line)) != 0) {
+    return;
+  }
+
+  pm_metal_shell_out(line);
+}
+
+static void CoreFgCmd(int argc, char **argv)
+{
+  (void)argc;
+  (void)argv;
+  if (pm_metal_shell_job_fg() != 0) {
+    pm_metal_shell_out("fg: no job");
+  }
+}
+
+static void CoreBgCmd(int argc, char **argv)
+{
+  (void)argc;
+  (void)argv;
+  if (pm_metal_shell_job_bg() != 0) {
+    pm_metal_shell_out("bg: no job");
+  }
+}
+
 PM_METAL_SHELL_CMDS(g_pm_metal_shell_cmds_core) = {
   { "help", "this text", CoreHelpCmd },
   { "echo", "echo <text>       print text", CoreEchoCmd },
   { "date", "date              local wall clock", CoreDateCmd },
   { "tz", "tz [+HHMM|name]   get/set timezone", CoreTzCmd },
   { "history", "history           list command history", CoreHistoryCmd },
+  { "jobs", "jobs              list shell async job", CoreJobsCmd },
+  { "fg", "fg                resume job in foreground", CoreFgCmd },
+  { "bg", "bg                resume job in background", CoreBgCmd },
   { "run", "run <mod>         fullscreen in console (guest HID)", CoreRunCmd },
   { "tab", "tab <mod>         windowed in a new tab (guest HID)", CoreTabCmd },
   { "ps", "ps                list fake processes", CorePsCmd },

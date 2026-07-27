@@ -51,7 +51,9 @@ static char     mHistDraft[SHELL_LINE_MAX];
 
 static struct {
   int32_t                 live;
-  char                    kind[16]; /* "nslookup" needs 9; keep headroom */
+  int32_t                 suspended; /* Ctrl-Z park: do not poll until fg/bg */
+  int32_t                 fg;        /* 1 = owns prompt until done */
+  char                    kind[16];  /* "nslookup" needs 9; keep headroom */
   char                    detail[64];
   pm_metal_async_handle_t task_h;
   pm_metal_async_handle_t coro_h;
@@ -395,8 +397,8 @@ int pm_metal_shell_job_busy(void)
 
 void pm_metal_shell_prompt_dirty(void)
 {
-  /* Don't steal the line while a job owns the next OfferPrompt. */
-  if (!mJob.live && pm_metal_input_focus() == PM_METAL_INPUT_FOCUS_SHELL) {
+  /* Don't steal the line while a foreground job owns the next OfferPrompt. */
+  if ((!mJob.live || !mJob.fg) && pm_metal_input_focus() == PM_METAL_INPUT_FOCUS_SHELL) {
     mPromptPending = 1;
   }
 }
@@ -423,7 +425,99 @@ int pm_metal_shell_job_start(const char             *kind,
   mJob.coro_h      = coro_h;
   mJob.deadline_us = deadline_us;
   mJob.live        = 1;
+  mJob.suspended   = 0;
+  mJob.fg          = 1;
   mPumpSleepMs     = 1u;
+  return 0;
+}
+
+int pm_metal_shell_job_list(char *out, uint32_t cap)
+{
+  const char *state;
+
+  if (out == NULL || cap == 0u) {
+    return -1;
+  }
+
+  out[0] = '\0';
+  if (!mJob.live) {
+    return -1;
+  }
+
+  if (mJob.suspended) {
+    state = "Stopped";
+  } else if (mJob.fg) {
+    state = "Running";
+  } else {
+    state = "Running";
+  }
+
+  if (mJob.detail[0] != '\0') {
+    snprintf(out, cap, "[1]%c  %s\t%s %s", mJob.fg ? '+' : '-', state, mJob.kind, mJob.detail);
+  } else {
+    snprintf(out, cap, "[1]%c  %s\t%s", mJob.fg ? '+' : '-', state, mJob.kind);
+  }
+
+  return 0;
+}
+
+int pm_metal_shell_job_cancel(void)
+{
+  if (!mJob.live) {
+    return -1;
+  }
+
+  pm_metal_shell_out("^C");
+  pm_metal_async_task_cancel(mJob.task_h);
+  MetalShellJobFinish(PM_METAL_CANCELLED);
+  return 0;
+}
+
+int pm_metal_shell_job_suspend(void)
+{
+  char line[96];
+
+  if (!mJob.live || mJob.suspended) {
+    return -1;
+  }
+
+  mJob.suspended = 1;
+  mJob.fg        = 0;
+  pm_metal_shell_out("^Z");
+  if (mJob.detail[0] != '\0') {
+    snprintf(line, sizeof(line), "[1]+  Stopped\t%s %s", mJob.kind, mJob.detail);
+  } else {
+    snprintf(line, sizeof(line), "[1]+  Stopped\t%s", mJob.kind);
+  }
+
+  pm_metal_shell_out(line);
+  MetalShellMarkFull();
+  MetalShellOfferPrompt();
+  return 0;
+}
+
+int pm_metal_shell_job_fg(void)
+{
+  if (!mJob.live) {
+    return -1;
+  }
+
+  mJob.suspended = 0;
+  mJob.fg        = 1;
+  mPumpSleepMs   = 1u;
+  return 0;
+}
+
+int pm_metal_shell_job_bg(void)
+{
+  if (!mJob.live) {
+    return -1;
+  }
+
+  mJob.suspended = 0;
+  mJob.fg        = 0;
+  mPumpSleepMs   = 1u;
+  MetalShellOfferPrompt();
   return 0;
 }
 
@@ -436,6 +530,15 @@ static void MetalShellJobPoll(void)
   }
 
   st = pm_metal_async_task_status(mJob.task_h);
+  /* Stopped jobs still notice terminal completion (runners keep pumping). */
+  if (mJob.suspended) {
+    if (st != PM_METAL_PENDING && st != PM_METAL_WAITING) {
+      MetalShellJobFinish(st);
+    }
+
+    return;
+  }
+
   /* WAITING = parked on sleep/DNS/I/O — still live (not terminal). */
   if (st == PM_METAL_PENDING || st == PM_METAL_WAITING) {
     if (mJob.deadline_us != 0 && pm_metal_time_mono_us() >= mJob.deadline_us) {
@@ -854,6 +957,30 @@ static int32_t PyReplIsQuitCall(const char *text)
 
 static void MetalShellHandleAscii(char ch, char *text, uintptr_t text_sz)
 {
+  /* Metal job control (shared console / SSH viewport): Ctrl-C cancel, Ctrl-Z stop. */
+  if (ch == 0x03) {
+    mEscSeq = 0u;
+    mLastNl = 0;
+    if (pm_metal_shell_job_busy()) {
+      (void)pm_metal_shell_job_cancel();
+    } else {
+      pm_metal_shell_out("^C");
+      pm_metal_ui_input_clear();
+      mHistPos = -1;
+      MetalShellMarkFull();
+      MetalShellOfferPrompt();
+    }
+
+    return;
+  }
+
+  if (ch == 0x1a) {
+    mEscSeq = 0u;
+    mLastNl = 0;
+    (void)pm_metal_shell_job_suspend();
+    return;
+  }
+
   /* CSI: ESC [ A/B/C/D — history / ignore arrows (serial & many VNC paths). */
   if (mEscSeq == 1u) {
     if (ch == '[') {

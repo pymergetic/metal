@@ -130,8 +130,14 @@ Endpoints: `uart`, `ui_tab`, `pipe`, `pty` (master/slave), later `virtio_console
 
 `sshd` is a Dropbear-backed console service, not a future stream feature. It
 listens on TCP port 22 by default, connects each network session to a PTY
-master, and gives the remote shell the PTY slave as its terminal.
-Cooked termios / job control are deferred; the PTY stays raw for now.
+master, and gives the remote shell the PTY slave as its terminal. SSH is a
+viewport onto the shared Metal console (UART/UI): line editing is the shell
+editor; the PTY pair keeps real termios + winsize (`pm_metal_stream_termios_*`
+/ `pm_metal_stream_winsize_*`, Dropbear `tcgetattr`/`tcsetattr`/`TIOC*WINSZ`).
+
+Metal job control (not POSIX signals): Ctrl-C cancels the foreground shell
+async job, Ctrl-Z stops it; `jobs` / `fg` / `bg` list and resume. POSIX
+`fork`/`kill`/signals stay omitted.
 
 `/etc/sshd.json` configures the port, host-key path, session budget, and
 enabled authentication methods. `passwd`, `pubkey`, and the Metal `sslcert`

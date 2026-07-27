@@ -56,7 +56,7 @@ int pm_metal_shell_exit_reboot(void);
 /** Suggested coop sleep after the last poll (1 ms when busy, else ~16). */
 uint32_t pm_metal_shell_pump_sleep_ms(void);
 
-/** 1 if a background shell job (ping/nslookup/test) is already running. */
+/** 1 if a shell async job slot is occupied (running, bg, or stopped). */
 int pm_metal_shell_job_busy(void);
 /**
  * After a background log line (e.g. metal-net: …) hit the UART mid-prompt,
@@ -66,6 +66,7 @@ void pm_metal_shell_prompt_dirty(void);
 /**
  * Track a host async task; shell_poll pumps it and prints on completion.
  * kind: "ping" | "nslookup" | "test". detail optional (e.g. hostname).
+ * Starts in the foreground (prompt held until done / Ctrl-Z / Ctrl-C).
  * Returns 0 ok. Job poll treats WAITING like PENDING (sleep/DNS park).
  */
 int pm_metal_shell_job_start(const char             *kind,
@@ -73,6 +74,19 @@ int pm_metal_shell_job_start(const char             *kind,
                              pm_metal_async_handle_t coro_h,
                              const char             *detail,
                              uint64_t                deadline_us);
+/** Cancel foreground/background job (Ctrl-C). 0 ok, -1 none. */
+int pm_metal_shell_job_cancel(void);
+/** Suspend live job (Ctrl-Z). 0 ok, -1 none. */
+int pm_metal_shell_job_suspend(void);
+/** Resume stopped job in foreground. 0 ok, -1 none. */
+int pm_metal_shell_job_fg(void);
+/** Resume stopped job in background (or mark running job as bg). 0 ok, -1 none. */
+int pm_metal_shell_job_bg(void);
+/**
+ * Format one jobs(1)-style line into out. Returns 0 if a job exists, -1 if idle.
+ * Example: "[1]+  Running  ping 8.8.8.8"
+ */
+int pm_metal_shell_job_list(char *out, uint32_t cap);
 #endif
 
 #if defined(__wasm__)

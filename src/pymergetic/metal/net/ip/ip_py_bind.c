@@ -2,7 +2,7 @@
   pymergetic.metal.net — thin async TCP/UDP socket facade for Python
   (honest primitive, same spirit as pymergetic.metal.tls — see
   docs/MICROPYTHON.md: no CPython socket/select-shaped shim, no blocking
-  calls). Wraps dev/net/net.h directly; every op here is either a plain
+  calls). Wraps net/ip/ip.h directly; every op here is either a plain
   sync call or an await-bridge over net.h's own async handle — no local
   state machine needed (contrast tls_conn.c, which needs one because a
   handshake is multiple net.h ops chained together; net.h's own

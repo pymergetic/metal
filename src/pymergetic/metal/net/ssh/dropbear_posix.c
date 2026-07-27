@@ -26,6 +26,7 @@
 #include <setjmp.h>
 #include <signal.h>
 #include <termios.h>
+#include <sys/ioctl.h>
 #include <syslog.h>
 #include <netdb.h>
 #include <dirent.h>
@@ -35,6 +36,7 @@
 
 #include <pymergetic/metal/auth/auth.h>
 #include <pymergetic/metal/dev/random/random.h>
+#include <pymergetic/metal/dev/stream/stream.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/runtime/async/async.h>
 
@@ -554,20 +556,184 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
   return 0;
 }
 
+static void metal_tio_from_stream(struct termios *t, const pm_metal_stream_termios_t *s)
+{
+  uint32_t i;
+
+  memset(t, 0, sizeof(*t));
+  t->c_iflag  = (tcflag_t)s->iflag;
+  t->c_oflag  = (tcflag_t)s->oflag;
+  t->c_cflag  = (tcflag_t)s->cflag;
+  t->c_lflag  = (tcflag_t)s->lflag;
+  t->c_ispeed = (speed_t)s->ispeed;
+  t->c_ospeed = (speed_t)s->ospeed;
+  for (i = 0; i < NCCS && i < PM_METAL_STREAM_NCCS; i++) {
+    t->c_cc[i] = (cc_t)s->cc[i];
+  }
+}
+
+static void metal_tio_to_stream(pm_metal_stream_termios_t *s, const struct termios *t)
+{
+  uint32_t i;
+
+  memset(s, 0, sizeof(*s));
+  s->iflag  = (uint32_t)t->c_iflag;
+  s->oflag  = (uint32_t)t->c_oflag;
+  s->cflag  = (uint32_t)t->c_cflag;
+  s->lflag  = (uint32_t)t->c_lflag;
+  s->ispeed = (uint32_t)t->c_ispeed;
+  s->ospeed = (uint32_t)t->c_ospeed;
+  for (i = 0; i < NCCS && i < PM_METAL_STREAM_NCCS; i++) {
+    s->cc[i] = (uint8_t)t->c_cc[i];
+  }
+}
+
 int tcgetattr(int fd, struct termios *t)
 {
-  (void)fd;
-  if (t) {
-    memset(t, 0, sizeof(*t));
+  pm_metal_stream_h         sh;
+  pm_metal_stream_termios_t st;
+
+  if (t == NULL) {
+    errno = EINVAL;
+    return -1;
   }
+
+  sh = metal_db_fd_stream(fd);
+  if (sh == PM_METAL_STREAM_INVALID || pm_metal_stream_termios_get(sh, &st) != 0) {
+    errno = ENOTTY;
+    return -1;
+  }
+
+  metal_tio_from_stream(t, &st);
   return 0;
 }
+
 int tcsetattr(int fd, int act, const struct termios *t)
 {
-  (void)fd;
+  pm_metal_stream_h         sh;
+  pm_metal_stream_termios_t st;
+
   (void)act;
-  (void)t;
+  if (t == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  sh = metal_db_fd_stream(fd);
+  if (sh == PM_METAL_STREAM_INVALID) {
+    errno = ENOTTY;
+    return -1;
+  }
+
+  metal_tio_to_stream(&st, t);
+  if (pm_metal_stream_termios_set(sh, &st) != 0) {
+    errno = ENOTTY;
+    return -1;
+  }
+
   return 0;
+}
+
+speed_t cfgetispeed(const struct termios *t)
+{
+  return (t != NULL) ? t->c_ispeed : 0;
+}
+
+speed_t cfgetospeed(const struct termios *t)
+{
+  return (t != NULL) ? t->c_ospeed : 0;
+}
+
+int cfsetispeed(struct termios *t, speed_t speed)
+{
+  if (t == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  t->c_ispeed = speed;
+  return 0;
+}
+
+int cfsetospeed(struct termios *t, speed_t speed)
+{
+  if (t == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  t->c_ospeed = speed;
+  return 0;
+}
+
+int ioctl(int fd, unsigned long request, ...)
+{
+  va_list                   ap;
+  pm_metal_stream_h         sh;
+  pm_metal_stream_winsize_t mw;
+  struct winsize           *ws;
+  int                      *ip;
+
+  sh = metal_db_fd_stream(fd);
+  va_start(ap, request);
+  if (request == TIOCGWINSZ) {
+    ws = va_arg(ap, struct winsize *);
+    va_end(ap);
+    if (ws == NULL || sh == PM_METAL_STREAM_INVALID ||
+        pm_metal_stream_winsize_get(sh, &mw) != 0) {
+      errno = ENOTTY;
+      return -1;
+    }
+
+    memset(ws, 0, sizeof(*ws));
+    ws->ws_row    = mw.row;
+    ws->ws_col    = mw.col;
+    ws->ws_xpixel = mw.xpixel;
+    ws->ws_ypixel = mw.ypixel;
+    return 0;
+  }
+
+  if (request == TIOCSWINSZ) {
+    ws = va_arg(ap, struct winsize *);
+    va_end(ap);
+    if (ws == NULL || sh == PM_METAL_STREAM_INVALID) {
+      errno = ENOTTY;
+      return -1;
+    }
+
+    memset(&mw, 0, sizeof(mw));
+    mw.row    = ws->ws_row;
+    mw.col    = ws->ws_col;
+    mw.xpixel = ws->ws_xpixel;
+    mw.ypixel = ws->ws_ypixel;
+    if (pm_metal_stream_winsize_set(sh, &mw) != 0) {
+      errno = ENOTTY;
+      return -1;
+    }
+
+    return 0;
+  }
+
+  if (request == TIOCSCTTY) {
+    va_end(ap);
+    return (sh != PM_METAL_STREAM_INVALID) ? 0 : -1;
+  }
+
+  if (request == FIONREAD) {
+    ip = va_arg(ap, int *);
+    va_end(ap);
+    if (ip == NULL) {
+      errno = EINVAL;
+      return -1;
+    }
+
+    *ip = (sh != PM_METAL_STREAM_INVALID) ? (int)pm_metal_stream_pending(sh) : 0;
+    return 0;
+  }
+
+  va_end(ap);
+  errno = ENOTTY;
+  return -1;
 }
 
 void openlog(const char *ident, int option, int facility)
@@ -813,13 +979,40 @@ void endusershell(void)
 int openpty(int *amaster, int *aslave, char *name, const struct termios *termp,
             const struct winsize *winp)
 {
-  extern int metal_dropbear_pty_allocate(int *ptyfd, int *ttyfd, char *namebuf, int namebuflen);
-  (void)termp;
-  (void)winp;
+  extern int                metal_dropbear_pty_allocate(int *ptyfd, int *ttyfd, char *namebuf,
+                                         int namebuflen);
+  pm_metal_stream_h         sh;
+  pm_metal_stream_termios_t st;
+  pm_metal_stream_winsize_t mw;
+
   if (amaster == NULL || aslave == NULL) {
     return -1;
   }
-  return metal_dropbear_pty_allocate(amaster, aslave, name, name ? 64 : 0);
+
+  if (metal_dropbear_pty_allocate(amaster, aslave, name, name ? 64 : 0) != 0) {
+    return -1;
+  }
+
+  sh = metal_db_fd_stream(*aslave);
+  if (sh == PM_METAL_STREAM_INVALID) {
+    sh = metal_db_fd_stream(*amaster);
+  }
+
+  if (termp != NULL && sh != PM_METAL_STREAM_INVALID) {
+    metal_tio_to_stream(&st, termp);
+    (void)pm_metal_stream_termios_set(sh, &st);
+  }
+
+  if (winp != NULL && sh != PM_METAL_STREAM_INVALID) {
+    memset(&mw, 0, sizeof(mw));
+    mw.row    = winp->ws_row;
+    mw.col    = winp->ws_col;
+    mw.xpixel = winp->ws_xpixel;
+    mw.ypixel = winp->ws_ypixel;
+    (void)pm_metal_stream_winsize_set(sh, &mw);
+  }
+
+  return 0;
 }
 pid_t forkpty(int *amaster, char *name, const struct termios *termp, const struct winsize *winp)
 {

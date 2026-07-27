@@ -91,7 +91,7 @@ own sibling repo via `METAL_EXT_APPS`; see that repo's `docs/DOOM_ASYNC.md`.
 | `mmap` / `munmap` | **omit** | |
 | `poll` / `select` / `epoll` | **omit** | |
 | `fcntl` / `ioctl` zoo | **omit** | |
-| pipes / tty / stdio | **stream** class | See `docs/IO.md` — raw PTY first; cooked omit until needed |
+| pipes / tty / stdio | **stream** class | See `docs/IO.md` — PTY termios/winsize sync attrs; Metal job control (Ctrl-C/Z, `jobs`/`fg`/`bg`); POSIX signals omit |
 | `socket` / `connect` / `send` / `recv` | **async** (+ sync façade `send`, `bind_if`) | `pm_metal_net_*`; await → `pm_metal_net_ip_result` |
 | `getaddrinfo` | **async** | `pm_metal_net_ip_dns` → await → `pm_metal_net_ip_result` (1/0) + `pm_metal_net_ip_dns_last_ntoa` (address string) |
 | ICMP ping | **async** | `pm_metal_net_ping` → await → `pm_metal_net_ping_rtt_us` (prefer) / `rtt_ms` / `last_err` |

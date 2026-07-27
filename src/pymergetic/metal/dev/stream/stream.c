@@ -31,14 +31,16 @@ typedef enum {
 } pm_metal_stream_kind_t;
 
 typedef struct {
-  volatile uint32_t      used; /* slot ticket - see slot_table.h; must stay first */
-  pm_metal_stream_kind_t kind;
-  pm_metal_ui_handle_t   tab;
-  uint32_t               peer; /* pipe/pty other end */
-  uint8_t               *ring;
-  uint32_t               rhead;
-  uint32_t               rtail;
-  uint32_t               rcap;
+  volatile uint32_t           used; /* slot ticket - see slot_table.h; must stay first */
+  pm_metal_stream_kind_t      kind;
+  pm_metal_ui_handle_t        tab;
+  uint32_t                    peer; /* pipe/pty other end */
+  uint8_t                    *ring;
+  uint32_t                    rhead;
+  uint32_t                    rtail;
+  uint32_t                    rcap;
+  pm_metal_stream_termios_t   tio; /* PTY only; mirrored on peer */
+  pm_metal_stream_winsize_t   winsz;
 } pm_metal_stream_slot_t;
 
 static pm_metal_stream_slot_t mSlots[PM_METAL_STREAM_MAX + 1];
@@ -151,6 +153,53 @@ static uint32_t MetalStreamRingGet(uint32_t h, uint8_t *data, uint32_t len)
   }
 
   return n;
+}
+
+static void MetalStreamPtyAttrsInit(uint32_t h)
+{
+  pm_metal_stream_termios_t *t;
+  pm_metal_stream_winsize_t *w;
+
+  t = &mSlots[h].tio;
+  w = &mSlots[h].winsz;
+  memset(t, 0, sizeof(*t));
+  memset(w, 0, sizeof(*w));
+  t->iflag = PM_METAL_STREAM_ICRNL | PM_METAL_STREAM_IXON;
+  t->oflag = PM_METAL_STREAM_OPOST | PM_METAL_STREAM_ONLCR;
+  t->cflag = PM_METAL_STREAM_CS8 | PM_METAL_STREAM_CREAD | PM_METAL_STREAM_HUPCL;
+  t->lflag = PM_METAL_STREAM_ISIG | PM_METAL_STREAM_ICANON | PM_METAL_STREAM_ECHO |
+             PM_METAL_STREAM_ECHOE | PM_METAL_STREAM_ECHOK | PM_METAL_STREAM_IEXTEN;
+  t->cc[PM_METAL_STREAM_VINTR]  = 3u;   /* Ctrl-C */
+  t->cc[PM_METAL_STREAM_VQUIT]  = 28u;  /* Ctrl-\ */
+  t->cc[PM_METAL_STREAM_VERASE] = 127u; /* DEL */
+  t->cc[PM_METAL_STREAM_VKILL]  = 21u;  /* Ctrl-U */
+  t->cc[PM_METAL_STREAM_VEOF]   = 4u;   /* Ctrl-D */
+  t->cc[PM_METAL_STREAM_VTIME]  = 0u;
+  t->cc[PM_METAL_STREAM_VMIN]   = 1u;
+  t->cc[PM_METAL_STREAM_VSUSP]  = 26u;  /* Ctrl-Z */
+  w->row = 24u;
+  w->col = 80u;
+}
+
+static int MetalStreamIsPty(uint32_t h)
+{
+  return (h != 0u && h <= PM_METAL_STREAM_MAX && mSlots[h].used &&
+          mSlots[h].kind == PM_METAL_STREAM_KIND_PTY)
+           ? 1
+           : 0;
+}
+
+static void MetalStreamPtySyncPeer(uint32_t h)
+{
+  uint32_t peer;
+
+  peer = mSlots[h].peer;
+  if (!MetalStreamIsPty(peer)) {
+    return;
+  }
+
+  mSlots[peer].tio   = mSlots[h].tio;
+  mSlots[peer].winsz = mSlots[h].winsz;
 }
 
 pm_metal_stream_h pm_metal_stream_open_uart(void)
@@ -271,9 +320,67 @@ int pm_metal_stream_pty(pm_metal_stream_h *master, pm_metal_stream_h *slave)
 
   mSlots[m].peer = s;
   mSlots[s].peer = m;
-  *master        = m;
-  *slave         = s;
+  MetalStreamPtyAttrsInit(m);
+  MetalStreamPtyAttrsInit(s);
+  *master = m;
+  *slave  = s;
   return 0;
+}
+
+int pm_metal_stream_termios_get(pm_metal_stream_h h, pm_metal_stream_termios_t *out)
+{
+  if (!MetalStreamIsPty(h) || out == NULL) {
+    return -1;
+  }
+
+  *out = mSlots[h].tio;
+  return 0;
+}
+
+int pm_metal_stream_termios_set(pm_metal_stream_h h, const pm_metal_stream_termios_t *in)
+{
+  if (!MetalStreamIsPty(h) || in == NULL) {
+    return -1;
+  }
+
+  mSlots[h].tio = *in;
+  MetalStreamPtySyncPeer(h);
+  return 0;
+}
+
+int pm_metal_stream_winsize_get(pm_metal_stream_h h, pm_metal_stream_winsize_t *out)
+{
+  if (!MetalStreamIsPty(h) || out == NULL) {
+    return -1;
+  }
+
+  *out = mSlots[h].winsz;
+  return 0;
+}
+
+int pm_metal_stream_winsize_set(pm_metal_stream_h h, const pm_metal_stream_winsize_t *in)
+{
+  if (!MetalStreamIsPty(h) || in == NULL) {
+    return -1;
+  }
+
+  mSlots[h].winsz = *in;
+  MetalStreamPtySyncPeer(h);
+  return 0;
+}
+
+uint32_t pm_metal_stream_pending(pm_metal_stream_h h)
+{
+  if (h == 0 || h > PM_METAL_STREAM_MAX || !mSlots[h].used) {
+    return 0;
+  }
+
+  if (mSlots[h].kind != PM_METAL_STREAM_KIND_PIPE && mSlots[h].kind != PM_METAL_STREAM_KIND_PTY &&
+      mSlots[h].kind != PM_METAL_STREAM_KIND_UART && mSlots[h].kind != PM_METAL_STREAM_KIND_UI_TAB) {
+    return 0;
+  }
+
+  return MetalStreamRingUsed(h);
 }
 
 void pm_metal_stream_close(pm_metal_stream_h h)

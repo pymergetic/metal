@@ -23,6 +23,10 @@ def audio(*args: Any) -> Any:
     """audio [status|mute|vol N]  backend / mute / volume 0-100"""
     ...
 
+def bg(*args: Any) -> Any:
+    """bg                resume job in background"""
+    ...
+
 def close(*args: Any) -> Any:
     """close [n]         close tab n, or active/last guest"""
     ...
@@ -47,6 +51,10 @@ def externals(*args: Any) -> Any:
     """externals [id]    third-party stack ids + versions"""
     ...
 
+def fg(*args: Any) -> Any:
+    """fg                resume job in foreground"""
+    ...
+
 def help(*args: Any) -> Any:
     """this text"""
     ...
@@ -65,6 +73,10 @@ def httpd(*args: Any) -> Any:
 
 def hwinfo(*args: Any) -> Any:
     """hwinfo            metal devices + PCI net/virtio"""
+    ...
+
+def jobs(*args: Any) -> Any:
+    """jobs              list shell async job"""
     ...
 
 def keyb(*args: Any) -> Any:
