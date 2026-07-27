@@ -184,11 +184,21 @@ pm_metal_async_handle_t pm_metal_py_fn_call_async(pm_metal_py_fn_h_t fn_h, uint3
 int pm_metal_py_zip_ensure(void);
 int pm_metal_py_native_register(void);
 
+/*
+ * summary/sig/body (docs/DOC_IFACE_PLAN.md Part I "base + face") — NULL
+ * unless set via PM_METAL_PY_BIND_DOC; readable via
+ * doc.lookup("py", "<mod>.<name>") and, once installed,
+ * <mod>.<name>.__doc__ itself (see py_bind.c's install for the joined
+ * form — summary alone, or summary+sig[+body] joined "\n\n").
+ */
 typedef struct pm_metal_py_bind {
   const char         *mod;
   const char         *name;
   void               *fn;
   pm_metal_py_class_t class_;
+  const char         *summary;
+  const char         *sig;
+  const char         *body;
 } pm_metal_py_bind_t;
 
 int pm_metal_py_bind_table(const pm_metal_py_bind_t *rows, size_t n);
@@ -206,7 +216,17 @@ int pm_metal_py_bind_table(const pm_metal_py_bind_t *rows, size_t n);
 #define PM_METAL_PY_BIND(var, mod_str, name_str, fn_obj, class_)            \
   static const pm_metal_py_bind_t var                                       \
     __attribute__((used, section(".pm_metal_py_binds.1"), aligned(16))) = { \
-      (mod_str), (name_str), (void *)&(fn_obj), (class_)                    \
+      (mod_str), (name_str), (void *)&(fn_obj), (class_), NULL, NULL, NULL  \
+    }
+
+/**
+ * Like PM_METAL_PY_BIND, plus summary/sig/body (docs/DOC_IFACE_PLAN.md
+ * Part I) — any of the three may be NULL.
+ */
+#define PM_METAL_PY_BIND_DOC(var, mod_str, name_str, fn_obj, class_, summary_str, sig_str, body_str) \
+  static const pm_metal_py_bind_t var                                                                \
+    __attribute__((used, section(".pm_metal_py_binds.1"), aligned(16))) = {                          \
+      (mod_str), (name_str), (void *)&(fn_obj), (class_), (summary_str), (sig_str), (body_str)       \
     }
 
 /** Gather linker-section bind rows (called once from pm_metal_py_init). */

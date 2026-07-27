@@ -8,6 +8,7 @@
   a string-literal dispatch table — because the callable is wired directly
   into the target module's globals dict as a genuine attribute.
 **/
+#include <stdio.h>
 #include <string.h>
 
 #include <pymergetic/metal/py/py.h>
@@ -90,6 +91,47 @@ pm_metal_py_obj_t pm_metal_py_bind_resolve_module(const char *dotted)
   }
 }
 
+/**
+ * Best-effort __doc__ install for one just-wired bind row
+ * (docs/DOC_IFACE_PLAN.md Part I). Joined summary/sig/body, "\n\n"
+ * between non-NULL parts. Native builtin function objects
+ * (MP_DEFINE_CONST_FUN_OBJ_*) have no `attr` slot in this MicroPython
+ * config, so mp_store_attr() on one always raises AttributeError — this
+ * is genuinely a "try": failure here is expected and silent, own
+ * nlr_push so it never aborts the row's real bind (already done by the
+ * caller) or any later row. doc.lookup("py", ...) (util/doc.c) is the
+ * reliable reader of these same three fields regardless of whether this
+ * attempt stuck.
+ */
+static void PyBindTrySetDoc(const pm_metal_py_bind_t *row)
+{
+  nlr_buf_t nlr;
+  char      buf[400];
+  size_t    off;
+
+  if (row->summary == NULL && row->sig == NULL && row->body == NULL) {
+    return;
+  }
+
+  off = 0;
+  if (row->summary != NULL) {
+    off += (size_t)snprintf(buf + off, sizeof(buf) - off, "%s", row->summary);
+  }
+  if (row->sig != NULL) {
+    off += (size_t)snprintf(buf + off, sizeof(buf) - off, "%s%s", off ? "\n\n" : "", row->sig);
+  }
+  if (row->body != NULL) {
+    off += (size_t)snprintf(buf + off, sizeof(buf) - off, "%s%s", off ? "\n\n" : "", row->body);
+  }
+
+  if (nlr_push(&nlr) == 0) {
+    mp_store_attr(
+      (mp_obj_t)row->fn, qstr_from_str("__doc__"), mp_obj_new_str(buf, off));
+    nlr_pop();
+  }
+  /* else: no attr slot on this object's type — expected, ignore. */
+}
+
 int pm_metal_py_bind_table(const pm_metal_py_bind_t *rows, size_t n)
 {
   nlr_buf_t nlr;
@@ -123,6 +165,7 @@ int pm_metal_py_bind_table(const pm_metal_py_bind_t *rows, size_t n)
       }
 
       mp_store_attr(mod_obj, qstr_from_str(rows[i].name), MP_OBJ_FROM_PTR(rows[i].fn));
+      PyBindTrySetDoc(&rows[i]);
     }
     nlr_pop();
     rc = 0;

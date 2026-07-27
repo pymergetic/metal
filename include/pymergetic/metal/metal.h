@@ -37,6 +37,8 @@
 #include "pymergetic/metal/util/ascii.h"                /* IWYU pragma: export */
 #include "pymergetic/metal/util/size.h"                 /* IWYU pragma: export */
 #include "pymergetic/metal/util/ip.h"                   /* IWYU pragma: export */
+#include "pymergetic/metal/util/doc.h"                  /* IWYU pragma: export */
+#include "pymergetic/metal/util/iface.h"                /* IWYU pragma: export */
 #include "pymergetic/metal/host/host.h"                 /* IWYU pragma: export */
 
 #endif /* PYMERGETIC_METAL_METAL_H_ */

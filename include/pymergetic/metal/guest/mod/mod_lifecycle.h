@@ -67,6 +67,20 @@ extern int32_t pm_metal_mod_register_func(const char *name, const char *export_n
   PM_METAL_MOD_IMPORT(pm_metal_mod_register_func);
 
 /**
+ * Like pm_metal_mod_register_func, plus doc catalog fields
+ * (docs/DOC_IFACE_PLAN.md Part I). Pass "" (not NULL — a guest '$'
+ * import always needs a real string) for any field you don't have.
+ * Readable via doc.lookup("mod", "<mod>.<name>") and
+ * pymergetic.metal.mod.<mod>.<name>.__doc__ once resolved.
+ */
+extern int32_t pm_metal_mod_register_func_doc(const char *name,
+                                              const char *export_name,
+                                              const char *summary,
+                                              const char *sig,
+                                              const char *body)
+  PM_METAL_MOD_IMPORT(pm_metal_mod_register_func_doc);
+
+/**
  * Register a shell/µPy command → existing function (invoke = process).
  * Only valid during pm_metal_mod_on_load. help may be NULL / "".
  */
@@ -128,10 +142,53 @@ const char *pm_metal_mod_author_role_name(pm_metal_mod_author_role_t role);
 int32_t pm_metal_mod_register_func(const char *name, const char *export_name);
 
 /**
+ * Like pm_metal_mod_register_func, plus doc catalog fields
+ * (docs/DOC_IFACE_PLAN.md Part I) — summary/sig/body may be NULL/"".
+ * pm_metal_mod_register_func itself just wraps this with NULL docs.
+ */
+int32_t pm_metal_mod_register_func_doc(const char *name,
+                                       const char *export_name,
+                                       const char *summary,
+                                       const char *sig,
+                                       const char *body);
+
+/**
  * Register a shell/µPy command → existing function (invoke = process).
  * Only valid during pm_metal_mod_on_load. help may be NULL / "".
  */
 int32_t pm_metal_mod_register_cmd(const char *cmd_name, const char *func_name, const char *help);
+
+/**
+ * Doc catalog accessor (docs/DOC_IFACE_PLAN.md Part I-D) — host-only,
+ * used by util/doc.c to enumerate mod func docs registered via
+ * pm_metal_mod_register_func_doc. Never crosses the wasm boundary
+ * directly (see doc.h's guest ABI instead).
+ */
+uint32_t pm_metal_mod_func_doc_count(void);
+/**
+ * Fills mod_name/func_name/summary/sig/body (all out-params) with slot i's own
+ * storage (borrowed pointers, valid as long as that mod stays
+ * registered — never NULL, "" if that field was never set). 0 ok, -1 if
+ * i is out of range.
+ */
+int32_t pm_metal_mod_func_doc_at(uint32_t     i,
+                                 const char **mod_name,
+                                 const char **func_name,
+                                 const char **summary,
+                                 const char **sig,
+                                 const char **body);
+
+/**
+ * Direct (mod_name, func_name) doc lookup — same fields as
+ * pm_metal_mod_func_doc_at, for a call site that already has both names
+ * (mod_py_bind.c's <mod>.<func>.__doc__, doc.c's kind=MOD lookup) rather
+ * than an enumeration index. 0 ok, -1 if that function is unknown.
+ */
+int32_t pm_metal_mod_func_doc_get(const char  *mod_name,
+                                  const char  *func_name,
+                                  const char **summary,
+                                  const char **sig,
+                                  const char **body);
 
 #endif /* !__wasm__ */
 

@@ -341,10 +341,47 @@ static void CorePresentOffloadCmd(int32_t argc, char **argv)
   pm_metal_shell_out(line);
 }
 
+/** `help <name>` — full detail (summary/sig/body) for one command, live
+ * table (docs/DOC_IFACE_PLAN.md Part I-B), instead of the plain listing's
+ * one-line summary. Falls back to whatever fields are actually set. */
+static void CoreHelpDetail(const pm_metal_shell_cmd_t *cmd)
+{
+  char line[220];
+
+  if (cmd->help != NULL && cmd->help[0] != '\0') {
+    snprintf(line, sizeof(line), "%s: %s", cmd->name, cmd->help);
+    pm_metal_shell_out(line);
+  } else {
+    pm_metal_shell_out(cmd->name);
+  }
+
+  if (cmd->sig != NULL && cmd->sig[0] != '\0') {
+    snprintf(line, sizeof(line), "  usage: %s", cmd->sig);
+    pm_metal_shell_out(line);
+  }
+
+  if (cmd->body != NULL && cmd->body[0] != '\0') {
+    pm_metal_shell_out_lines(cmd->body);
+  }
+}
+
 static void CoreHelpCmd(int32_t argc, char **argv)
 {
-  (void)argc;
-  (void)argv;
+  if (argc >= 2 && argv[1] != NULL && argv[1][0] != '\0') {
+    const pm_metal_shell_cmd_t *cmd = pm_metal_shell_cmd_find(argv[1]);
+
+    if (cmd == NULL) {
+      char line[64];
+
+      snprintf(line, sizeof(line), "help: no such command '%s'", argv[1]);
+      pm_metal_shell_out(line);
+      return;
+    }
+
+    CoreHelpDetail(cmd);
+    return;
+  }
+
   pm_metal_shell_cmd_help();
 }
 
@@ -623,7 +660,7 @@ static void CoreBgCmd(int argc, char **argv)
 }
 
 PM_METAL_SHELL_CMDS(g_pm_metal_shell_cmds_core) = {
-  { "help", "this text", CoreHelpCmd },
+  { "help", "help [name]       this text, or detail for one command", CoreHelpCmd },
   { "echo", "echo <text>       print text", CoreEchoCmd },
   { "date", "date              local wall clock", CoreDateCmd },
   { "tz", "tz [+HHMM|name]   get/set timezone", CoreTzCmd },
@@ -638,7 +675,14 @@ PM_METAL_SHELL_CMDS(g_pm_metal_shell_cmds_core) = {
   { "presentoffload",
     "presentoffload [on|off]  A/B: cross-runner present offload",
     CorePresentOffloadCmd },
-  { "mem", "mem               system RAM + arena layout", CoreMemCmd },
+  { "mem",
+    "mem               system RAM + arena layout",
+    CoreMemCmd,
+    "mem",
+    "Breaks total system RAM into the metal arena (stacks | map | hole | "
+    "heap, low to high) and, on real hardware, firmware/UEFI-reserved "
+    "space outside that arena. map further breaks out the py (shared "
+    "MicroPython context) and py iso (isolated py -x contexts) carves." },
   { "tabs", "tabs              list tabs", CoreTabsCmd },
   { "use", "use <n>           activate tab index", CoreUseCmd },
   { "close", "close [n]         close tab n, or active/last guest", CoreCloseCmd },

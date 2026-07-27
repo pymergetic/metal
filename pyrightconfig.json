@@ -2,10 +2,16 @@
   "stubPath": "typings",
   "pythonVersion": "3.12",
   "reportMissingModuleSource": "none",
+  "extraPaths": [
+    "mods/py/microdot_src/src",
+    "mods/py/stdlib_src"
+  ],
   "exclude": [
     "external/**",
     "build/**",
-    ".venv/**"
+    ".venv/**",
+    "mods/py/microdot_src/tests/**",
+    "mods/py/microdot_src/examples/**"
   ],
   "executionEnvironments": [
     {

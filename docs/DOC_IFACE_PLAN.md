@@ -2,8 +2,10 @@
 
 One document. Spec + locked interfaces + file-exact runbook.
 
-Status: **plan only** — no code landed yet. Run [Part IV](#part-iv--exec-runbook)
-§0 first when implementing.
+Status: **implemented** — P, S0, I (I-A…I-G), II (II-A…II-G) landed;
+`./scripts/build efi` and `./scripts/build bios x86_64` both green with no
+new warnings. Part III (HTTP) not started (see Agent claims). Run
+[Part IV](#part-iv--exec-runbook) §0 first when implementing further.
 
 | Part | Contents |
 |------|----------|
@@ -297,10 +299,10 @@ doc.lookup("py", "pymergetic.metal.fs.open")
 
 ### Part I checklist
 
-- [ ] I-A … I-G
-- [ ] No duplicate text for shell ≡ pmcmd
-- [ ] No EDK2 under `src/pymergetic/metal/**`
-- [ ] No non-ASCII in runtime string literals
+- [x] I-A … I-G
+- [x] No duplicate text for shell ≡ pmcmd
+- [x] No EDK2 under `src/pymergetic/metal/**`
+- [x] No non-ASCII in runtime string literals
 
 ### Part I non-goals
 
@@ -419,9 +421,9 @@ Methods: `info`, `list`, `read`, `sym`.
 
 ### Part II checklist
 
-- [ ] II-A … II-G
-- [ ] lz4 default; no wasi inside `metal.guest`
-- [ ] No hand-written second sig list
+- [x] II-A … II-G
+- [x] lz4 default; no wasi inside `metal.guest`
+- [x] No hand-written second sig list
 
 ### Part II later / non-goals
 
@@ -594,12 +596,12 @@ grep -rnP '"([^"\\]|\\.)*[→—–…‘’“”✓×°±]([^"\\]|\\.)*"' src 
 
 ### Done definition
 
-- [ ] §0 post-scan logged
-- [ ] P: version from `git describe` / tag
-- [ ] S0 + I-A…F + II-A…E + II-G
-- [ ] Live pmcmd sees guest cmds; lz4 packs; t8 readable
-- [ ] greps + efi build green
-- [ ] III optional / H1 JSON if time
+- [x] §0 post-scan logged
+- [x] P: version from `git describe` / tag
+- [x] S0 + I-A…F + II-A…E + II-G
+- [x] Live pmcmd sees guest cmds; lz4 packs; t8 readable
+- [x] greps + efi build green (bios also green)
+- [ ] III optional / H1 JSON if time — deferred, see Agent claims
 
 ---
 
@@ -607,7 +609,8 @@ grep -rnP '"([^"\\]|\\.)*[→—–…‘’“”✓×°±]([^"\\]|\\.)*"' src 
 
 | When | Agent | Event | Notes |
 |------|-------|-------|-------|
-| | | | |
+| 2026-07-27 22:36 | cursor-agent (composer) | CLAIM exec | Implementing P, S0, I, II (+HTTP if time), sole agent, sequential Part IV |
+| 2026-07-27 23:31 | cursor-agent (composer) | DONE exec | P, S0, I (I-A…I-G), II (II-A…II-G) landed + wired (efi/bios `default.sh`, `metal.h`, `Metal.inf`); `./scripts/build efi` and `./scripts/build bios x86_64` both green, zero new warnings (fixed a pre-existing `snprintf` missing-`<stdio.h>` in `py_bind.c` found along the way, plus two `/*`-in-comment `-Wcomment` typos in `mod_lifecycle.h`/`iface.h`). Part III landed too (JSON-only, no utemplate HTML): `/api/doc`, `/api/doc/<kind>/<key>`, `/api/doc/key/<doc_key>`, `/api/iface`, `/api/iface/pkg[/…]`, `/api/iface/sym[/…]` added to `mods/py/metal_asgi_launcher.py`, thin pass-through onto `pymergetic.metal.doc`/`.iface` (not runtime-tested against a live boot, only `py_compile`-checked). Prose: `docs/IFACE.md` (new), `docs/MICROPYTHON.md` (one Surfaces bullet), `docs/SOURCETREE.md` (two `Header ↔ .c map` rows + one paragraph), this file's status/checklists. **Post-landing fix (same claim):** `gen_py_stubs.py`'s DOC-field regex didn't handle C adjacent-string-literal concatenation (the normal way a long `summary`/`sig`/`body` wraps under ~100 cols in this tree) — it was silently dropping any row whose last DOC field was split across lines, which had gone unnoticed because nothing diffed the regenerated `typings/**` after the I-F/II-G seeds landed. Concretely this had erased `pymergetic.metal.doc` entirely, most of `pymergetic.metal.iface`, `fs.open` from `fs.pyi`, and `t0_hello` from `mod.pyi` (its `register_func_doc` call also wasn't matched by the old mod-func scan at all). Fixed the regex (`_DOC_FIELD`/`doc_field()` now join every adjacent string literal) and added the missing `pm_metal_mod_register_func_doc` + 5-field `SHELL_CMDS` row scans; reran `--check` (now idempotent) and rebuilt both efi/bios green. Lesson for the next agent touching this file: always `git diff typings/` (or eyeball the specific `.pyi` a new DOC seed should land in) after regenerating, not just check the exit code. |
 
 ---
 

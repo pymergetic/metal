@@ -17,7 +17,8 @@ int32_t pm_metal_mod_on_load(void)
 {
   pm_metal_mod_set_about_kernel();
 
-  if (pm_metal_mod_register_func("run", "hello_run") != 0) {
+  if (pm_metal_mod_register_func_doc(
+        "run", "hello_run", "t0_hello entry; log one line and finish", "run() -> Done", "") != 0) {
     return -1;
   }
 

@@ -38,6 +38,8 @@
 #include <pymergetic/metal/util/ascii.h>
 #include <pymergetic/metal/util/size.h>
 #include <pymergetic/metal/util/ip.h>
+#include <pymergetic/metal/util/doc.h>
+#include <pymergetic/metal/util/iface.h>
 #include <pymergetic/metal/host/host.h>
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/log/log.h>
@@ -281,6 +283,7 @@ int pm_metal_wasm_init(void)
       pm_metal_util_ascii_native_register() != 0 || pm_metal_util_size_native_register() != 0 ||
       pm_metal_util_ip_native_register() != 0 || pm_metal_host_native_register() != 0 ||
       pm_metal_authors_native_register() != 0 || pm_metal_externals_native_register() != 0 ||
+      pm_metal_util_doc_native_register() != 0 || pm_metal_util_iface_native_register() != 0 ||
       pm_metal_py_native_register() != 0) {
     pm_metal_log("metal-wasm: native_register failed");
     wasm_runtime_destroy();
@@ -288,6 +291,12 @@ int pm_metal_wasm_init(void)
     mPool = NULL;
     return -1;
   }
+
+  /* "metal.guest" (+ "mod.t8_multimod_lib") header packs — see
+   * util/iface.h's own file header; needs no wasm runtime state, just
+   * needs to happen once before the first `iface`/pymergetic.metal.iface
+   * access, same as pm_metal_pkg_init() above. */
+  pm_metal_iface_embed_install();
 
   mStdoutTab = PM_METAL_UI_HANDLE_INVALID;
   mReady     = 1;

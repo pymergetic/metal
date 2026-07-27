@@ -56,7 +56,7 @@ def fg(*args: Any) -> Any:
     ...
 
 def help(*args: Any) -> Any:
-    """this text"""
+    """help [name]       this text, or detail for one command"""
     ...
 
 def history(*args: Any) -> Any:
@@ -75,6 +75,14 @@ def hwinfo(*args: Any) -> Any:
     """hwinfo            metal devices + PCI net/virtio"""
     ...
 
+def iface(*args: Any) -> Any:
+    """iface [ls|cat|sym ...] header pack + sym table browser
+
+iface | iface ls [pkg] | iface cat <pkg> <path> | iface sym [module [name]]
+
+Browse registered header packs (default metal.guest, see docs/IFACE.md) and the build-scraped native sym table. `iface` alone lists packages; `iface sym` with no args lists every native; doc_key (if set) points into `doc.lookup_key()`."""
+    ...
+
 def jobs(*args: Any) -> Any:
     """jobs              list shell async job"""
     ...
@@ -84,7 +92,11 @@ def keyb(*args: Any) -> Any:
     ...
 
 def mem(*args: Any) -> Any:
-    """mem               system RAM + arena layout"""
+    """mem               system RAM + arena layout
+
+mem
+
+Breaks total system RAM into the metal arena (stacks | map | hole | heap, low to high) and, on real hardware, firmware/UEFI-reserved space outside that arena. map further breaks out the py (shared MicroPython context) and py iso (isolated py -x contexts) carves."""
     ...
 
 def net(*args: Any) -> Any:

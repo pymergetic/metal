@@ -53,6 +53,7 @@
 #include <pymergetic/metal/runtime/async/async.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
 
+#include <stdio.h>
 #include <string.h>
 
 #include "py/mpstate.h"
@@ -88,8 +89,47 @@ static mp_obj_t mod_func_call(mp_obj_t self_in, size_t n_args, size_t n_kw, cons
   return pm_metal_py_new_awaitable_u32(coro);
 }
 
+/**
+ * Load-only __doc__ (docs/DOC_IFACE_PLAN.md Part I "mod: metal.mod.*.__doc__"
+ * reader) — joined summary/sig/body from pm_metal_mod_register_func_doc,
+ * "" (never set) if the mod only called plain register_func. Any other
+ * attribute (store, or a name that isn't __doc__) falls through to the
+ * normal "not found" path.
+ */
+static void mod_func_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest)
+{
+  mod_func_obj_t *self = MP_OBJ_TO_PTR(self_in);
+  const char     *summary;
+  const char     *sig;
+  const char     *body;
+  char            buf[300];
+  size_t          off;
+
+  if (dest[0] != MP_OBJ_NULL || attr != qstr_from_str("__doc__")) {
+    return;
+  }
+
+  if (pm_metal_mod_func_doc_get(qstr_str(self->mod_name), qstr_str(self->func_name), &summary,
+                                &sig, &body) != 0) {
+    return;
+  }
+
+  off = 0;
+  if (summary[0] != '\0') {
+    off += (size_t)snprintf(buf + off, sizeof(buf) - off, "%s", summary);
+  }
+  if (sig[0] != '\0') {
+    off += (size_t)snprintf(buf + off, sizeof(buf) - off, "%s%s", off ? "\n\n" : "", sig);
+  }
+  if (body[0] != '\0') {
+    off += (size_t)snprintf(buf + off, sizeof(buf) - off, "%s%s", off ? "\n\n" : "", body);
+  }
+
+  dest[0] = mp_obj_new_str(buf, off);
+}
+
 static MP_DEFINE_CONST_OBJ_TYPE(
-  mod_func_type, MP_QSTR_function, MP_TYPE_FLAG_NONE, call, mod_func_call);
+  mod_func_type, MP_QSTR_function, MP_TYPE_FLAG_NONE, call, mod_func_call, attr, mod_func_attr);
 
 static mp_obj_t mod_func_new(qstr mod_name, qstr func_name)
 {

@@ -51,8 +51,17 @@ static mp_obj_t py_fs_open(mp_obj_t path_obj, mp_obj_t mode_obj)
   return pm_metal_py_int_new((h == PM_METAL_FS_INVALID) ? -1 : (int64_t)h);
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(py_fs_open_obj, py_fs_open);
-PM_METAL_PY_BIND(
-  g_py_bind_fs_open, "pymergetic.metal.fs", "open", py_fs_open_obj, PM_METAL_PY_SYNC);
+PM_METAL_PY_BIND_DOC(g_py_bind_fs_open,
+                    "pymergetic.metal.fs",
+                    "open",
+                    py_fs_open_obj,
+                    PM_METAL_PY_SYNC,
+                    "Open a Metal FS path, returning a small-int file handle (-1 on failure).",
+                    "open(path: str, mode: str) -> int",
+                    "mode is one of 'r'/'rb', 'w'/'wb', 'a'/'ab', 'r+'/'r+b', 'w+'/'w+b' -- "
+                    "same subset os.py's own open() accepts (io.py wraps this into a "
+                    "file-like object; most callers should use that instead of this "
+                    "directly).");
 
 static mp_obj_t py_fs_close(mp_obj_t h_obj)
 {

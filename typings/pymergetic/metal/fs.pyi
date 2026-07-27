@@ -26,7 +26,11 @@ def mkdir(*args: Any) -> Any:
     ...
 
 def open(*args: Any) -> Any:
-    """C bind: PM_METAL_PY_SYNC."""
+    """Open a Metal FS path, returning a small-int file handle (-1 on failure).
+
+open(path: str, mode: str) -> int
+
+mode is one of 'r'/'rb', 'w'/'wb', 'a'/'ab', 'r+'/'r+b', 'w+'/'w+b' -- same subset os.py's own open() accepts (io.py wraps this into a file-like object; most callers should use that instead of this directly)."""
     ...
 
 def read(*args: Any) -> Any:

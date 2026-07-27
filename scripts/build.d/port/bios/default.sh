@@ -57,9 +57,16 @@ mkdir -p "${OBJ}"
 source "${ROOT}/scripts/lib/pki.sh"
 pm_metal_pki_bake
 
+# Generated PM_METAL_VERSION (docs/DOC_IFACE_PLAN.md Part P) — build/pm_metal_version.inc.h.
+"${ROOT}/scripts/gen_metal_version.sh"
+
 # Regenerate typings/**.pyi (Phase 2e) — editor/linter support only, does
 # not affect the firmware build itself.
 python3 "${ROOT}/scripts/gen_py_stubs.py" || true
+
+# Scrape every NativeSymbol[] table into the iface sym table
+# (docs/DOC_IFACE_PLAN.md Part II-B) — src/pymergetic/metal/util/iface_syms.inc.c.
+python3 "${ROOT}/scripts/gen_iface_syms.py"
 
 # MicroPython embed (shared); ports only compile/link.
 # shellcheck disable=SC1091
@@ -77,8 +84,13 @@ fi
 # here too (not soft-failed) — both ports need a working stdlib.zip.
 "${ROOT}/scripts/build.d/port/efi/embed-stdlib.sh"
 
+# Pack the "metal.guest" (+ "mod.t8_multimod_lib") iface header packs
+# (docs/DOC_IFACE_PLAN.md Part II-C) — util/iface_metal_guest_embed.inc.c.
+"${ROOT}/scripts/build.d/port/efi/embed-iface.sh"
+
 INCLUDES=(
 	-I"$(pm_metal_pki_bake_dir)"
+	-I"${ROOT}/build"
 	-I"${ROOT}"
 	-I"${BIOS}/BiosPkg"
 	-I"${BIOS}/shim"
@@ -186,6 +198,9 @@ SRCS_C=(
 	"${ROOT}/src/pymergetic/metal/util/ascii.c"
 	"${ROOT}/src/pymergetic/metal/util/size.c"
 	"${ROOT}/src/pymergetic/metal/util/ip.c"
+	"${ROOT}/src/pymergetic/metal/util/doc.c"
+	"${ROOT}/src/pymergetic/metal/util/iface.c"
+	"${ROOT}/src/pymergetic/metal/util/iface_embed_install.c"
 	"${ROOT}/src/pymergetic/metal/trust/trust.c"
 	"${ROOT}/src/pymergetic/metal/host/host.c"
 	"${ROOT}/src/pymergetic/metal/port/lock.c"
@@ -341,6 +356,7 @@ SRCS_C=(
 	"${SHARED_METAL}/shell/shell/shell_cmd.c"
 	"${SHARED_METAL}/shell/shell/shell_core_cmds.c"
 	"${SHARED_METAL}/shell/shell/shell_py_bind.c"
+	"${SHARED_METAL}/util/iface_shell.c"
 	"${SHARED_METAL}/py/mphalport_metal.c"
 	"${SHARED_METAL}/py/py.c"
 	"${SHARED_METAL}/py/py_bind.c"
@@ -357,6 +373,8 @@ SRCS_C=(
 "${SHARED_METAL}/dev/random/random_py_bind.c"
 "${SHARED_METAL}/dev/random/time_py_bind.c"
 "${SHARED_METAL}/util/tar_py_bind.c"
+"${SHARED_METAL}/util/doc_py_bind.c"
+"${SHARED_METAL}/util/iface_py_bind.c"
 "${SHARED_METAL}/net/tls/tls_conn.c"
 "${SHARED_METAL}/net/tls/tls_py_bind.c"
 "${SHARED_METAL}/net/ip/ip_py_bind.c"

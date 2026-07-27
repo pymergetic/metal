@@ -32,6 +32,37 @@ void pm_metal_shell_cmd_register(const pm_metal_shell_cmd_t *cmd)
   mCmds[mCmdCount++] = cmd;
 }
 
+uint32_t pm_metal_shell_cmd_count(void)
+{
+  return mCmdCount;
+}
+
+const pm_metal_shell_cmd_t *pm_metal_shell_cmd_at(uint32_t i)
+{
+  if (i >= mCmdCount) {
+    return NULL;
+  }
+
+  return mCmds[i];
+}
+
+const pm_metal_shell_cmd_t *pm_metal_shell_cmd_find(const char *name)
+{
+  uint32_t i;
+
+  if (name == NULL || name[0] == '\0') {
+    return NULL;
+  }
+
+  for (i = 0; i < mCmdCount; i++) {
+    if (strcmp(mCmds[i]->name, name) == 0) {
+      return mCmds[i];
+    }
+  }
+
+  return NULL;
+}
+
 void pm_metal_shell_cmd_help(void)
 {
   uint32_t i;

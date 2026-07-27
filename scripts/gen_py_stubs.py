@@ -69,6 +69,31 @@ PY_BIND_RE = re.compile(
     re.MULTILINE,
 )
 
+# DOC field slot: one-or-more *adjacent* string literals (plain C string
+# concatenation — `"a " "b"` is one string, and every DOC field long
+# enough to wrap a line in this codebase uses exactly that), or NULL, or a
+# C identifier (e.g. a g_foo_summary variable, per
+# docs/DOC_IFACE_PLAN.md's interface preview) — an identifier is not a
+# static-scan-friendly literal, so it degrades to None here same as NULL;
+# doc.c (runtime) still sees the real value either way, this only affects
+# the generated stub's docstring richness.
+_STR_LIT = r'"(?:[^"\\]|\\.)*"'
+_DOC_FIELD = rf'{_STR_LIT}(?:\s*{_STR_LIT})*|NULL|[A-Za-z_]\w*'
+_STR_LIT_RE = re.compile(_STR_LIT)
+
+PY_BIND_DOC_RE = re.compile(
+    r'PM_METAL_PY_BIND_DOC\s*\(\s*'
+    r'(?P<var>[A-Za-z_]\w*)\s*,\s*'
+    r'"(?P<mod>(?:[^"\\]|\\.)*)"\s*,\s*'
+    r'"(?P<name>(?:[^"\\]|\\.)*)"\s*,\s*'
+    r'(?P<fn_obj>[A-Za-z_]\w*)\s*,\s*'
+    r'(?P<class_>PM_METAL_PY_\w+)\s*,\s*'
+    rf'(?P<summary>{_DOC_FIELD})\s*,\s*'
+    rf'(?P<sig>{_DOC_FIELD})\s*,\s*'
+    rf'(?P<body>{_DOC_FIELD})\s*\)',
+    re.MULTILINE,
+)
+
 SHELL_CMD_RE = re.compile(
     r'PM_METAL_SHELL_CMD\s*\(\s*[A-Za-z_]\w*\s*,\s*'
     r'"(?P<name>(?:[^"\\]|\\.)*)"\s*,\s*'
@@ -76,6 +101,38 @@ SHELL_CMD_RE = re.compile(
     r'[A-Za-z_]\w*\s*\)',
     re.MULTILINE,
 )
+
+SHELL_CMD_DOC_RE = re.compile(
+    r'PM_METAL_SHELL_CMD_DOC\s*\(\s*[A-Za-z_]\w*\s*,\s*'
+    r'"(?P<name>(?:[^"\\]|\\.)*)"\s*,\s*'
+    r'"(?P<help>(?:[^"\\]|\\.)*)"\s*,\s*'
+    rf'(?P<sig>{_DOC_FIELD})\s*,\s*'
+    rf'(?P<body>{_DOC_FIELD})\s*,\s*'
+    r'[A-Za-z_]\w*\s*\)',
+    re.MULTILINE,
+)
+
+
+def doc_field(raw: str | None) -> str | None:
+    """A DOC_FIELD match's text -> literal content, or None (NULL / identifier).
+
+    `raw` may hold more than one adjacent string literal (C concatenation,
+    e.g. `"a " "b"` split across lines to stay under ~100 cols) — every
+    piece is unescaped and joined with no separator, same as the C
+    compiler's own string-literal concatenation."""
+    if raw is None or raw == "NULL":
+        return None
+    if raw.startswith('"'):
+        return "".join(unescape(m.group(0)[1:-1]) for m in _STR_LIT_RE.finditer(raw))
+    return None  # C identifier — see _DOC_FIELD's comment above
+
+
+def doc_string_from_parts(parts) -> str | None:
+    """(summary, sig, body) -> joined docstring text, "\\n\\n" between
+    non-None parts (same join util/doc.c / py_bind.c use), or None if all
+    three are None (identifier fields, or a plain PY_BIND with no doc)."""
+    joined = [p.replace('"""', "'''") for p in parts if p]
+    return "\n\n".join(joined) if joined else None
 
 SHELL_CMDS_TABLE_RE = re.compile(
     r'PM_METAL_SHELL_CMDS\s*\(\s*(?P<arr>[A-Za-z_]\w*)\s*\)\s*=\s*\{(?P<body>.*?)\}\s*;\s*'
@@ -87,10 +144,35 @@ SHELL_CMDS_ROW_RE = re.compile(
     r'\{\s*"(?P<name>(?:[^"\\]|\\.)*)"\s*,\s*"(?P<help>(?:[^"\\]|\\.)*)"\s*,\s*[A-Za-z_]\w*\s*\}'
 )
 
+# A PM_METAL_SHELL_CMDS(arr) row may also be a raw 5-field struct literal
+# (name, help, fn, sig, body — shell_cmd.h's own trailing fields, no macro
+# involved since PM_METAL_SHELL_CMD_DOC only covers the single-command
+# form) — e.g. shell_core_cmds.c's own "mem" row.
+SHELL_CMDS_ROW_DOC_RE = re.compile(
+    r'\{\s*"(?P<name>(?:[^"\\]|\\.)*)"\s*,\s*"(?P<help>(?:[^"\\]|\\.)*)"\s*,\s*'
+    r'[A-Za-z_]\w*\s*,\s*'
+    rf'(?P<sig>{_DOC_FIELD})\s*,\s*'
+    rf'(?P<body>{_DOC_FIELD})\s*\}}',
+    re.DOTALL,
+)
+
 MOD_REGISTER_FUNC_RE = re.compile(
     r'pm_metal_mod_register_func\s*\(\s*'
     r'"(?P<name>(?:[^"\\]|\\.)*)"\s*,\s*'
     r'"(?P<export>(?:[^"\\]|\\.)*)"\s*\)'
+)
+
+# pm_metal_mod_register_func_doc(name, export, summary, sig, body) —
+# docs/DOC_IFACE_PLAN.md Part I-D; same (name, export) pair as the plain
+# call above, plus doc fields for the generated stub's docstring.
+MOD_REGISTER_FUNC_DOC_RE = re.compile(
+    r'pm_metal_mod_register_func_doc\s*\(\s*'
+    r'"(?P<name>(?:[^"\\]|\\.)*)"\s*,\s*'
+    r'"(?P<export>(?:[^"\\]|\\.)*)"\s*,\s*'
+    rf'(?P<summary>{_DOC_FIELD})\s*,\s*'
+    rf'(?P<sig>{_DOC_FIELD})\s*,\s*'
+    rf'(?P<body>{_DOC_FIELD})\s*\)',
+    re.DOTALL,
 )
 
 
@@ -119,7 +201,13 @@ def scan_py_binds():
             mod = unescape(m.group("mod"))
             name = unescape(m.group("name"))
             class_ = m.group("class_")
-            by_mod.setdefault(mod, []).append((name, class_, f.relative_to(ROOT)))
+            by_mod.setdefault(mod, []).append((name, class_, f.relative_to(ROOT), None))
+        for m in PY_BIND_DOC_RE.finditer(text):
+            mod = unescape(m.group("mod"))
+            name = unescape(m.group("name"))
+            class_ = m.group("class_")
+            doc = (doc_field(m.group("summary")), doc_field(m.group("sig")), doc_field(m.group("body")))
+            by_mod.setdefault(mod, []).append((name, class_, f.relative_to(ROOT), doc))
     return by_mod
 
 
@@ -173,14 +261,18 @@ def render_py_bind_module(mod: str, rows, child_names=None) -> str:
     lines.append("from typing import Any")
     lines.append("")
     all_names = []
-    for name, class_, _src in sorted(rows, key=lambda r: r[0]):
+    for name, class_, _src, doc in sorted(rows, key=lambda r: r[0]):
         if not is_ident(name.rstrip("_")) and not is_ident(name):
             continue
         # class_ (PM_METAL_PY_SYNC/ASYNC/FACADE) describes the C-side install,
         # not the Python-visible return shape (e.g. a SYNC bind can still
         # return an awaitable object, like aio.sleep_us) — noted, not typed.
         lines.append(f"def {name}(*args: Any) -> Any:")
-        lines.append(f'    """C bind: {class_}."""')
+        docstring = doc_string_from_parts(doc) if doc else None
+        if docstring:
+            lines.append(f'    """{docstring}"""')
+        else:
+            lines.append(f'    """C bind: {class_}."""')
         lines.append("    ...")
         lines.append("")
         all_names.append(name)
@@ -232,10 +324,29 @@ def scan_shell_cmds():
     for f in iter_c_files(SRC_METAL):
         text = f.read_text(errors="replace")
         for m in SHELL_CMD_RE.finditer(text):
-            rows.append((unescape(m.group("name")), unescape(m.group("help"))))
+            rows.append((unescape(m.group("name")), unescape(m.group("help")), None, None))
         for tm in SHELL_CMDS_TABLE_RE.finditer(text):
-            for m in SHELL_CMDS_ROW_RE.finditer(tm.group("body")):
-                rows.append((unescape(m.group("name")), unescape(m.group("help"))))
+            body = tm.group("body")
+            doc_spans = []
+            for m in SHELL_CMDS_ROW_DOC_RE.finditer(body):
+                doc_spans.append(m.span())
+                rows.append((
+                    unescape(m.group("name")),
+                    unescape(m.group("help")),
+                    doc_field(m.group("sig")),
+                    doc_field(m.group("body")),
+                ))
+            for m in SHELL_CMDS_ROW_RE.finditer(body):
+                if any(a <= m.start() < b for a, b in doc_spans):
+                    continue  # already captured (richer) by the 5-field pass above
+                rows.append((unescape(m.group("name")), unescape(m.group("help")), None, None))
+        for m in SHELL_CMD_DOC_RE.finditer(text):
+            rows.append((
+                unescape(m.group("name")),
+                unescape(m.group("help")),
+                doc_field(m.group("sig")),
+                doc_field(m.group("body")),
+            ))
     return rows
 
 
@@ -259,12 +370,12 @@ def render_pmcmd(rows) -> str:
         "",
     ]
     seen = set()
-    for name, help_ in sorted(rows, key=lambda r: r[0]):
+    for name, help_, sig, body in sorted(rows, key=lambda r: r[0]):
         if name in seen or not is_ident(name):
             continue
         seen.add(name)
         lines.append(f"def {name}(*args: Any) -> Any:")
-        doc = help_.replace('"""', "'''") or name
+        doc = doc_string_from_parts((help_, sig, body)) or help_.replace('"""', "'''") or name
         lines.append(f'    """{doc}"""')
         lines.append("    ...")
         lines.append("")
@@ -276,16 +387,31 @@ def render_pmcmd(rows) -> str:
 # --- pymergetic.metal.mod.* (pm_metal_mod_register_func, best-effort) ---
 
 def scan_mod_funcs():
+    """mod_name -> {func_name: doc_or_None}; doc is (summary, sig, body)
+    from a _doc call, else None for a plain pm_metal_mod_register_func."""
     by_mod = {}
     if not MODS_DIR.is_dir():
         return by_mod
     for f in iter_c_files(MODS_DIR):
         text = f.read_text(errors="replace")
-        funcs = [unescape(m.group("name")) for m in MOD_REGISTER_FUNC_RE.finditer(text)]
+        funcs = {}
+        doc_spans = []
+        for m in MOD_REGISTER_FUNC_DOC_RE.finditer(text):
+            doc_spans.append(m.span())
+            doc = (doc_field(m.group("summary")), doc_field(m.group("sig")), doc_field(m.group("body")))
+            funcs[unescape(m.group("name"))] = doc
+        for m in MOD_REGISTER_FUNC_RE.finditer(text):
+            if any(a <= m.start() < b for a, b in doc_spans):
+                continue  # substring can't actually overlap (see _doc's own "_" gap), kept defensive
+            name = unescape(m.group("name"))
+            funcs.setdefault(name, None)
         if not funcs:
             continue
         mod_name = f.parent.name
-        by_mod.setdefault(mod_name, set()).update(funcs)
+        merged = by_mod.setdefault(mod_name, {})
+        for name, doc in funcs.items():
+            if doc is not None or name not in merged:
+                merged[name] = doc
     return by_mod
 
 
@@ -316,6 +442,17 @@ def render_mod_module(by_mod) -> str:
             continue
         scope_cls = f"_ModFresh_{mod_name}"
         mod_cls = f"_Mod_{mod_name}"
+
+        def _method_lines(fn: str, doc) -> list:
+            out = [f"    def {fn}(self, *args: Any) -> Awaitable[Any]:"]
+            docstring = doc_string_from_parts(doc) if doc else None
+            if docstring:
+                out.append(f'        """{docstring}"""')
+                out.append("        ...")
+            else:
+                out[-1] += " ..."
+            return out
+
         lines.append(f"class {scope_cls}:")
         lines.append(f'    """Fresh-instance scope for "{mod_name}" (async with)."""')
         lines.append("")
@@ -323,12 +460,12 @@ def render_mod_module(by_mod) -> str:
         lines.append("    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool: ...")
         for fn in funcs:
             if is_ident(fn):
-                lines.append(f"    def {fn}(self, *args: Any) -> Awaitable[Any]: ...")
+                lines.extend(_method_lines(fn, by_mod[mod_name][fn]))
         lines.append("")
         lines.append(f"class {mod_cls}:")
         for fn in funcs:
             if is_ident(fn):
-                lines.append(f"    def {fn}(self, *args: Any) -> Awaitable[Any]: ...")
+                lines.extend(_method_lines(fn, by_mod[mod_name][fn]))
         lines.append(f"    def fresh(self) -> {scope_cls}: ...")
         lines.append("")
         lines.append(f"{mod_name}: {mod_cls}")

@@ -47,6 +47,11 @@ typedef struct {
   char    mod_name[64];
   char    export_name[64];
   void   *fn; /* wasm_function_inst_t */
+  /* Doc catalog fields (docs/DOC_IFACE_PLAN.md Part I) — set only via
+   * pm_metal_mod_register_func_doc; "" (never NULL) when unset. */
+  char    doc_summary[96];
+  char    doc_sig[64];
+  char    doc_body[128];
 } mod_func_t;
 
 typedef struct {
@@ -349,7 +354,11 @@ int32_t pm_metal_mod_about_get(const char *mod_name, pm_metal_mod_about_t *out)
   return 0;
 }
 
-static int32_t ModRegisterFuncHost(const char *name, const char *export_name)
+static int32_t ModRegisterFuncDocHost(const char *name,
+                                      const char *export_name,
+                                      const char *summary,
+                                      const char *sig,
+                                      const char *body)
 {
   mod_func_t *f;
   void       *fn;
@@ -386,8 +395,22 @@ static int32_t ModRegisterFuncHost(const char *name, const char *export_name)
 
   strncpy(f->export_name, export_name, sizeof(f->export_name) - 1);
   f->fn = fn;
+  if (summary != NULL) {
+    strncpy(f->doc_summary, summary, sizeof(f->doc_summary) - 1);
+  }
+  if (sig != NULL) {
+    strncpy(f->doc_sig, sig, sizeof(f->doc_sig) - 1);
+  }
+  if (body != NULL) {
+    strncpy(f->doc_body, body, sizeof(f->doc_body) - 1);
+  }
   pm_metal_logf("metal-mod: func '%s' -> export '%s' (%s)", name, export_name, mConnecting->name);
   return 0;
+}
+
+static int32_t ModRegisterFuncHost(const char *name, const char *export_name)
+{
+  return ModRegisterFuncDocHost(name, export_name, NULL, NULL, NULL);
 }
 
 static int32_t ModRegisterCmdHost(const char *cmd_name, const char *func_name, const char *help)
@@ -1263,6 +1286,88 @@ int32_t pm_metal_mod_register_func(const char *name, const char *export_name)
   return ModRegisterFuncHost(name, export_name);
 }
 
+int32_t pm_metal_mod_register_func_doc(const char *name,
+                                       const char *export_name,
+                                       const char *summary,
+                                       const char *sig,
+                                       const char *body)
+{
+  return ModRegisterFuncDocHost(name, export_name, summary, sig, body);
+}
+
+uint32_t pm_metal_mod_func_doc_count(void)
+{
+  uint32_t i;
+  uint32_t n;
+
+  n = 0;
+  for (i = 0; i < PM_METAL_MOD_FUNC_MAX; i++) {
+    if (mFuncs[i].used) {
+      n++;
+    }
+  }
+
+  return n;
+}
+
+int32_t pm_metal_mod_func_doc_at(uint32_t     i,
+                                 const char **mod_name,
+                                 const char **func_name,
+                                 const char **summary,
+                                 const char **sig,
+                                 const char **body)
+{
+  uint32_t j;
+  uint32_t seen;
+
+  if (mod_name == NULL || func_name == NULL || summary == NULL || sig == NULL || body == NULL) {
+    return -1;
+  }
+
+  seen = 0;
+  for (j = 0; j < PM_METAL_MOD_FUNC_MAX; j++) {
+    if (!mFuncs[j].used) {
+      continue;
+    }
+
+    if (seen == i) {
+      *mod_name  = mFuncs[j].mod_name;
+      *func_name = mFuncs[j].name;
+      *summary   = mFuncs[j].doc_summary;
+      *sig       = mFuncs[j].doc_sig;
+      *body      = mFuncs[j].doc_body;
+      return 0;
+    }
+
+    seen++;
+  }
+
+  return -1;
+}
+
+int32_t pm_metal_mod_func_doc_get(const char  *mod_name,
+                                  const char  *func_name,
+                                  const char **summary,
+                                  const char **sig,
+                                  const char **body)
+{
+  mod_func_t *f;
+
+  if (summary == NULL || sig == NULL || body == NULL) {
+    return -1;
+  }
+
+  f = FuncFind(mod_name, func_name);
+  if (f == NULL) {
+    return -1;
+  }
+
+  *summary = f->doc_summary;
+  *sig     = f->doc_sig;
+  *body    = f->doc_body;
+  return 0;
+}
+
 int32_t pm_metal_mod_register_cmd(const char *cmd_name, const char *func_name, const char *help)
 {
   return ModRegisterCmdHost(cmd_name, func_name, help);
@@ -1524,6 +1629,17 @@ static int32_t pm_metal_mod_register_func_native(wasm_exec_env_t exec_env,
   return pm_metal_mod_register_func(name, export_name);
 }
 
+static int32_t pm_metal_mod_register_func_doc_native(wasm_exec_env_t exec_env,
+                                                      const char     *name,
+                                                      const char     *export_name,
+                                                      const char     *summary,
+                                                      const char     *sig,
+                                                      const char     *body)
+{
+  (void)exec_env;
+  return pm_metal_mod_register_func_doc(name, export_name, summary, sig, body);
+}
+
 static int32_t pm_metal_mod_register_cmd_native(wasm_exec_env_t exec_env,
                                                 const char     *cmd_name,
                                                 const char     *func_name,
@@ -1552,6 +1668,10 @@ static NativeSymbol g_pm_metal_mod_native_symbols[] = {
   { "pm_metal_mod_fn_process", (void *)pm_metal_mod_fn_process_native, "(i$iiii$)i", NULL },
   { "pm_metal_mod_func_exists", (void *)pm_metal_mod_func_exists_native, "($$)i", NULL },
   { "pm_metal_mod_register_func", (void *)pm_metal_mod_register_func_native, "($$)i", NULL },
+  { "pm_metal_mod_register_func_doc",
+    (void *)pm_metal_mod_register_func_doc_native,
+    "($$$$$)i",
+    NULL },
   { "pm_metal_mod_register_cmd", (void *)pm_metal_mod_register_cmd_native, "($$$)i", NULL },
 };
 

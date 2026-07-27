@@ -41,10 +41,17 @@ set -u
 source "${ROOT}/scripts/lib/pki.sh"
 pm_metal_pki_bake
 
+# Generated PM_METAL_VERSION (docs/DOC_IFACE_PLAN.md Part P) — build/pm_metal_version.inc.h.
+"${ROOT}/scripts/gen_metal_version.sh"
+
 # Regenerate typings/**.pyi from PM_METAL_PY_BIND / PM_METAL_SHELL_CMD(S) /
 # pm_metal_mod_register_func call sites (Phase 2e) — editor/linter support
 # only, does not affect the firmware build itself.
 python3 "${ROOT}/scripts/gen_py_stubs.py" || true
+
+# Scrape every NativeSymbol[] table into the iface sym table
+# (docs/DOC_IFACE_PLAN.md Part II-B) — src/pymergetic/metal/util/iface_syms.inc.c.
+python3 "${ROOT}/scripts/gen_iface_syms.py"
 
 # MicroPython embed package (port-neutral sources under build/micropython_embed).
 # shellcheck disable=SC1091
@@ -85,6 +92,8 @@ while i < len(lines):
                 "src/pymergetic/metal/dev/random/time_py_bind.c",
                 "src/pymergetic/metal/dev/audio/audio_py_bind.c",
                 "src/pymergetic/metal/util/tar_py_bind.c",
+                "src/pymergetic/metal/util/doc_py_bind.c",
+                "src/pymergetic/metal/util/iface_py_bind.c",
                 "src/pymergetic/metal/net/tls/tls_conn.c",
                 "src/pymergetic/metal/net/tls/tls_py_bind.c",
                 "src/pymergetic/metal/net/ip/ip_py_bind.c",
@@ -161,6 +170,9 @@ PY
 # Build+sign+embed stdlib.zip (mods/py/stdlib_src/) — not tracked in git,
 # always freshly baked into the binary, see embed-stdlib.sh.
 "${ROOT}/scripts/build.d/port/efi/embed-stdlib.sh"
+# Pack the "metal.guest" (+ "mod.t8_multimod_lib") iface header packs
+# (docs/DOC_IFACE_PLAN.md Part II-C) — util/iface_metal_guest_embed.inc.c.
+"${ROOT}/scripts/build.d/port/efi/embed-iface.sh"
 # Dropbear static lib (PIC) for Metal.inf DLINK — X64 EFI.
 PM_METAL_DROPBEAR_PIC=1 "${ROOT}/scripts/build.d/lib/dropbear.sh" x86_64
 echo "efi build: MetalPkg (X64 ${TOOL_CHAIN} ${TARGET})"
