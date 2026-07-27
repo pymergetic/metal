@@ -191,6 +191,23 @@ int pm_metal_py_native_register(void);
  * <mod>.<name>.__doc__ itself (see py_bind.c's install for the joined
  * form — summary alone, or summary+sig[+body] joined "\n\n").
  */
+/* Field layout only — used to size the LTO-safe pad below. */
+typedef struct {
+  const char         *mod;
+  const char         *name;
+  void               *fn;
+  pm_metal_py_class_t class_;
+  const char         *summary;
+  const char         *sig;
+  const char         *body;
+} pm_metal_py_bind_fields_t;
+
+/*
+ * sizeof must equal the aligned(16) section stride. Without the pad,
+ * (__end - __start) pointer arithmetic in binds_install mis-walks the
+ * section (same LTO-safe idea as pm_metal_shell_cmd_table_t). Pad length
+ * is ABI-dependent (56->64 on LP64, 28->32 on ILP32).
+ */
 typedef struct pm_metal_py_bind {
   const char         *mod;
   const char         *name;
@@ -199,17 +216,14 @@ typedef struct pm_metal_py_bind {
   const char         *summary;
   const char         *sig;
   const char         *body;
-  /*
-   * sizeof must match the aligned(16) section stride (64). DOC fields
-   * made this 56 bytes; without the pad, (__end - __start) pointer
-   * arithmetic in binds_install mis-walks the section and most binds
-   * never install (same LTO-safe pad idea as pm_metal_shell_cmd_table_t).
-   */
-  uint8_t _pad[8];
+  uint8_t             _pad[(16u - (sizeof(pm_metal_py_bind_fields_t) % 16u)) % 16u];
 } pm_metal_py_bind_t;
 
-_Static_assert(sizeof(pm_metal_py_bind_t) == 64u,
+_Static_assert(sizeof(pm_metal_py_bind_t) % 16u == 0u,
                "pm_metal_py_bind_t must match aligned(16) section stride");
+_Static_assert(sizeof(pm_metal_py_bind_t) ==
+                 ((sizeof(pm_metal_py_bind_fields_t) + 15u) / 16u) * 16u,
+               "pm_metal_py_bind_t pad must round fields up to 16");
 
 int pm_metal_py_bind_table(const pm_metal_py_bind_t *rows, size_t n);
 

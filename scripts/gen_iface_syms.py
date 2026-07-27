@@ -16,9 +16,8 @@ Optional doc_key merge: scripts/iface_doc_keys.txt, one
 allowed) — a pointer into util/doc.c's catalog (Part I), never pasted text.
 
 Output: src/pymergetic/metal/util/iface_syms.inc.c (generated — regenerated
-in place by every build, see that file's own header; committed with a
-0-row placeholder so clangd/one-off compiles work before the first build,
-same pattern as guest/wasm/embed_mods.inc.c).
+in place by every build, gitignored; same pattern as embed_mods.inc.c /
+iface_metal_guest_embed.inc.c / py_zip_embed.inc.c).
 
 Usage: scripts/gen_iface_syms.py
 """
