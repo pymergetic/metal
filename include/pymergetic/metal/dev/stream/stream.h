@@ -53,6 +53,8 @@ int               pm_metal_stream_pipe(pm_metal_stream_h *read_end, pm_metal_str
 int               pm_metal_stream_pty(pm_metal_stream_h *master, pm_metal_stream_h *slave);
 uint32_t          pm_metal_stream_write(pm_metal_stream_h h, const void *ptr, uint32_t len);
 pm_metal_async_handle_t pm_metal_stream_read(pm_metal_stream_h h, void *ptr, uint32_t len);
+/** Host-only non-blocking read from ring (pipe/pty). 0 if empty. */
+uint32_t          pm_metal_stream_try_read(pm_metal_stream_h h, void *ptr, uint32_t len);
 pm_metal_async_handle_t pm_metal_stream_drain(pm_metal_stream_h h);
 void                    pm_metal_stream_close(pm_metal_stream_h h);
 int pm_metal_stdio_attach(pm_metal_stream_h in, pm_metal_stream_h out, pm_metal_stream_h err);

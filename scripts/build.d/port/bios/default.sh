@@ -108,6 +108,7 @@ INCLUDES=(
 	-I"${SHARED_METAL}/bus/pci"
 	-I"${SHARED_METAL}/py/embed"
 	-I"${ROOT}/external/micropython"
+	-I"${ROOT}/external/micropython/lib/libm"
 	-I"${ROOT}/build/micropython_embed"
 	-I"${ROOT}/build/micropython_embed/port"
 	-I"${ROOT}/build/micropython_embed/genhdr"
@@ -224,6 +225,8 @@ SRCS_C=(
 	"${SHARED_METAL}/boot/banner.c"
 	"${SHARED_METAL}/boot/authors.c"
 	"${SHARED_METAL}/boot/authors_py_bind.c"
+	"${SHARED_METAL}/boot/externals.c"
+	"${SHARED_METAL}/boot/externals_py_bind.c"
 	"${SHARED_METAL}/boot/boot_harvest.c"
 	"${SHARED_METAL}/boot/boot_shell.c"
 	"${SHARED_METAL}/log/log.c"
@@ -236,6 +239,8 @@ SRCS_C=(
 	"${SHARED_METAL}/dev/audio/audio_null.c"
 	"${SHARED_METAL}/dev/audio/virtio_snd.c"
 	"${SHARED_METAL}/dev/audio/ac97.c"
+	"${SHARED_METAL}/dev/audio/audio_shell.c"
+	"${SHARED_METAL}/dev/audio/audio_py_bind.c"
 	"${SHARED_METAL}/dev/acpi/acpi_power.c"
 	"${SHARED_METAL}/dev/gfx/gfx.c"
 	"${SHARED_METAL}/dev/gfx/scanout.c"
@@ -269,6 +274,22 @@ SRCS_C=(
 	"${SHARED_METAL}/dev/net/tls.c"
 	"${SHARED_METAL}/dev/net/ping.c"
 	"${SHARED_METAL}/dev/net/http.c"
+	"${SHARED_METAL}/dev/net/http_parse.c"
+	"${SHARED_METAL}/dev/net/asgi_registry.c"
+	"${SHARED_METAL}/dev/net/asgi_apps.c"
+	"${SHARED_METAL}/dev/net/asgi_config.c"
+	"${SHARED_METAL}/dev/net/asgi_ws.c"
+	"${SHARED_METAL}/dev/net/asgi_server.c"
+	"${SHARED_METAL}/dev/net/asgi_shell.c"
+	"${SHARED_METAL}/dev/net/ssh_server.c"
+	"${SHARED_METAL}/dev/net/ssh_shell.c"
+	"${SHARED_METAL}/dev/net/ssh_config.c"
+	"${SHARED_METAL}/dev/net/ssh_py_bind.c"
+	"${SHARED_METAL}/dev/net/ssh_dropbear.c"
+	"${SHARED_METAL}/dev/net/dropbear_fd.c"
+	"${SHARED_METAL}/dev/net/dropbear_posix.c"
+	"${SHARED_METAL}/auth/auth.c"
+	"${SHARED_METAL}/auth/bcrypt_wrap.c"
 	"${SHARED_METAL}/dev/net/tftp.c"
 	"${SHARED_METAL}/dev/net/ntp.c"
 	"${SHARED_METAL}/dev/net/net_life.c"
@@ -339,12 +360,40 @@ SRCS_C=(
 "${SHARED_METAL}/dev/net/tls_py_bind.c"
 "${SHARED_METAL}/dev/net/net_py_bind.c"
 "${SHARED_METAL}/dev/net/net_http_py_bind.c"
+"${SHARED_METAL}/dev/net/asgi_py_bind.c"
 "${ROOT}/external/micropython/extmod/modbinascii.c"
 "${ROOT}/external/micropython/extmod/modrandom.c"
 "${ROOT}/external/micropython/extmod/modhashlib.c"
 "${ROOT}/external/micropython/extmod/modre.c"
 "${ROOT}/external/micropython/extmod/moddeflate.c"
 "${ROOT}/external/micropython/extmod/modjson.c"
+"${SHARED_METAL}/py/py_libm_extra.c"
+"${SHARED_METAL}/py/py_libm_math.c"
+"${ROOT}/external/micropython/lib/libm/acoshf.c"
+"${ROOT}/external/micropython/lib/libm/asinfacosf.c"
+"${ROOT}/external/micropython/lib/libm/asinhf.c"
+"${ROOT}/external/micropython/lib/libm/atan2f.c"
+"${ROOT}/external/micropython/lib/libm/atanf.c"
+"${ROOT}/external/micropython/lib/libm/atanhf.c"
+"${ROOT}/external/micropython/lib/libm/ef_rem_pio2.c"
+"${ROOT}/external/micropython/lib/libm/erf_lgamma.c"
+"${ROOT}/external/micropython/lib/libm/fmodf.c"
+"${ROOT}/external/micropython/lib/libm/kf_cos.c"
+"${ROOT}/external/micropython/lib/libm/kf_rem_pio2.c"
+"${ROOT}/external/micropython/lib/libm/kf_sin.c"
+"${ROOT}/external/micropython/lib/libm/kf_tan.c"
+"${ROOT}/external/micropython/lib/libm/log1pf.c"
+"${ROOT}/external/micropython/lib/libm/nearbyintf.c"
+"${ROOT}/external/micropython/lib/libm/roundf.c"
+"${ROOT}/external/micropython/lib/libm/sf_cos.c"
+"${ROOT}/external/micropython/lib/libm/sf_erf.c"
+"${ROOT}/external/micropython/lib/libm/sf_frexp.c"
+"${ROOT}/external/micropython/lib/libm/sf_ldexp.c"
+"${ROOT}/external/micropython/lib/libm/sf_modf.c"
+"${ROOT}/external/micropython/lib/libm/sf_sin.c"
+"${ROOT}/external/micropython/lib/libm/sf_tan.c"
+"${ROOT}/external/micropython/lib/libm/wf_lgamma.c"
+"${ROOT}/external/micropython/lib/libm/wf_tgamma.c"
 	"${SHARED_METAL}/dev/net/net_shell.c"
 	"${SHARED_METAL}/dev/input/input_shell.c"
 	"${SHARED_METAL}/shell/hwinfo/hwinfo.c"
@@ -430,13 +479,31 @@ else
 	SRCS_C+=("${BIOS}/BiosPkg/vesa_rm_stub.c")
 fi
 
+DROPBEAR_EXTRA_CFLAGS=(
+	-I"${SHARED_METAL}/dev/net/dropbear_metal"
+	-I"${SHARED_METAL}/dev/net/dropbear_stubs"
+	-I"${ROOT}/external/dropbear/src"
+	-DDROPBEAR_METAL=1
+	-DLOCALOPTIONS_H_EXISTS=1
+)
+
 OBJS=()
 echo "bios build (${ARCH}): compiling ($CC ${MFLAG})"
 for src in "${SRCS_C[@]}"; do
 	base="$(basename "${src}" .c)"
 	hash="$(printf '%s' "${src}" | md5sum | cut -c1-8)"
 	obj="${OBJ}/${base}-${hash}.o"
-	"${CC}" "${CFLAGS[@]}" -c "${src}" -o "${obj}"
+	extra=()
+	case "${base}" in
+	dropbear_posix|dropbear_fd|ssh_dropbear)
+		# Stubs must precede host_stubs so arpa/inet.h / netinet win.
+		extra=("${DROPBEAR_EXTRA_CFLAGS[@]}")
+		"${CC}" "${extra[@]}" "${CFLAGS[@]}" -c "${src}" -o "${obj}"
+		;;
+	*)
+		"${CC}" "${CFLAGS[@]}" -c "${src}" -o "${obj}"
+		;;
+	esac
 	OBJS+=("${obj}")
 done
 for src in "${SRCS_S[@]}"; do
@@ -458,9 +525,13 @@ for o in "${OBJS[@]}"; do
 		OTHER_OBJS+=("${o}")
 	fi
 done
+# Dropbear static lib (SSH server crypto/session).
+"${ROOT}/scripts/build.d/lib/dropbear.sh" "${ARCH}"
+DROPBEAR_LIB="${ROOT}/build/dropbear/${ARCH}/libdropbear_metal.a"
+
 LIBGCC="$("${CC}" "${MFLAG}" -print-libgcc-file-name)"
 "${LD}" -m "${LD_EMUL}" -nostdlib -static -z noexecstack -T "${LINK_LD}" -o "${ELF}" \
-	"${CRT0_OBJ}" "${OTHER_OBJS[@]}" "${LIBGCC}"
+	"${CRT0_OBJ}" "${OTHER_OBJS[@]}" "${DROPBEAR_LIB}" "${LIBGCC}"
 
 # Optional Kernel-CA detached signature (host PKI; skipped when mode=off).
 if pm_metal_pki_want_sign && [[ -f "$(pm_metal_pki_dir)/kernel/ca.key" ]]; then

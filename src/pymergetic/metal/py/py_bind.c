@@ -70,14 +70,18 @@ pm_metal_py_obj_t pm_metal_py_bind_resolve_module(const char *dotted)
       return cur;
     }
 
-    /* Non-leaf: mark as a package — matches both the real import system's
-     * own convention (process_import_at_level's __path__ store for
-     * filesystem packages) and today's manual "metal" package setup. */
+    /* Non-leaf: mark as a package. MicroPython's import (builtinimport.c)
+     * treats __path__ as a single STRING directory path and passes it to
+     * mp_obj_str_get_str() — a CPython-style list here TypeErrors with
+     * "can't convert 'list' object to str implicitly" on the next
+     * submodule import (e.g. import pymergetic.metal.net.asgi). Use an
+     * empty string: submodules are already registered in sys.modules by
+     * this walk, so the FS search under "" is never needed. */
     {
       mp_obj_t dest[2];
       mp_load_method_maybe(cur, MP_QSTR___path__, dest);
       if (dest[0] == MP_OBJ_NULL) {
-        mp_store_attr(cur, MP_QSTR___path__, mp_obj_new_list(0, NULL));
+        mp_store_attr(cur, MP_QSTR___path__, MP_OBJ_NEW_QSTR(MP_QSTR_));
       }
     }
 

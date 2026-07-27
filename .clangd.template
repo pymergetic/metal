@@ -1,6 +1,8 @@
 ---
 # Generated to .clangd by scripts/setup ide (@@ROOT@@ → absolute checkout path).
 # EDK2 headers live under external/edk2 (run ./scripts/setup edk2).
+# After regenerating or editing this template: restart clangd
+# (Command Palette → "clangd: Restart language server") or reload the window.
 
 CompileFlags:
   Compiler: /usr/bin/clang
@@ -24,6 +26,8 @@ CompileFlags:
     - -I@@ROOT@@/build/micropython_embed/port
     - -I@@ROOT@@/build/micropython_embed/genhdr
     - -I@@ROOT@@/src/pymergetic/metal/py/embed
+    - -I@@ROOT@@/external/micropython
+    - -I@@ROOT@@/external/micropython/lib/libm
     - -DMICROPY_USE_INTERNAL_ERRNO=1
     # lwIP -I lives in efi/bios PathMatch + CDB only — a global EFI net -I
     # steals bios/.../dev/net (wrong lwipopts.h / PmBiosUefi.h).
@@ -115,6 +119,8 @@ CompileFlags:
     - -I@@ROOT@@/build/micropython_embed/port
     - -I@@ROOT@@/build/micropython_embed/genhdr
     - -I@@ROOT@@/src/pymergetic/metal/py/embed
+    - -I@@ROOT@@/external/micropython
+    - -I@@ROOT@@/external/micropython/lib/libm
     - -DMICROPY_USE_INTERNAL_ERRNO=1
 
 ---
@@ -166,6 +172,72 @@ CompileFlags:
     - -I@@ROOT@@/src/pymergetic/metal
     - -DBH_PLATFORM_METAL_EFI
     - -DBUILD_TARGET_X86_64
+
+---
+# Dropbear glue + freestanding POSIX stubs. Must run after the net fragment
+# so we can Remove host_stubs and re-Add stubs first (same order as
+# DropbearGlue.inf / bios DROPBEAR_EXTRA_CFLAGS).
+If:
+  PathMatch: .*/src/pymergetic/metal/dev/net/(dropbear_stubs/|dropbear_metal/|dropbear_|ssh_dropbear).*
+CompileFlags:
+  CompilationDatabase: "None"
+  Compiler: /usr/bin/clang
+  Remove:
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+  Add:
+    - -DDROPBEAR_METAL=1
+    - -DLOCALOPTIONS_H_EXISTS=1
+    - -DBUNDLED_LIBTOM=1
+    - -DUSE_LTM
+    - -DLTM_DESC
+    - -I@@ROOT@@/src/pymergetic/metal/dev/net/dropbear_metal
+    - -I@@ROOT@@/src/pymergetic/metal/dev/net/dropbear_stubs
+    - -I@@ROOT@@/src/pymergetic/metal
+    - -I@@ROOT@@/src/pymergetic/metal/dev/net
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+    - -I@@ROOT@@/external/dropbear/src
+    - -I@@ROOT@@/external/dropbear/libtomcrypt/src/headers
+    - -I@@ROOT@@/external/dropbear/libtommath
+    - -I@@ROOT@@/external/lwip/src/include
+    - -I@@ROOT@@/external/mbedtls/include
+    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+
+---
+# Vendored Dropbear TUs (external/dropbear/src) — Metal freestanding build,
+# not host autoconf. config.h / localoptions live under dropbear_metal/;
+# POSIX types under dropbear_stubs/. Same flag set as dropbear.sh.
+If:
+  PathMatch: .*/external/dropbear/src/.*\.(c|h)$
+CompileFlags:
+  CompilationDatabase: "None"
+  Compiler: /usr/bin/clang
+  Remove:
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+  Add:
+    - -std=c11
+    - -ffreestanding
+    - -fno-stack-protector
+    - -target
+    - x86_64-unknown-windows
+    - "-DEFIAPI=__attribute__((ms_abi))"
+    - -DDROPBEAR_METAL=1
+    - -DDROPBEAR_SERVER=1
+    - -DLOCALOPTIONS_H_EXISTS=1
+    - -DBUNDLED_LIBTOM=1
+    - -DUSE_LTM
+    - -DLTM_DESC
+    - -I@@ROOT@@/src/pymergetic/metal/dev/net/dropbear_metal
+    - -I@@ROOT@@/src/pymergetic/metal/dev/net/dropbear_stubs
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+    - -I@@ROOT@@/src/pymergetic/metal
+    - -I@@ROOT@@/src/pymergetic/metal/dev/net
+    - -I@@ROOT@@/include
+    - -I@@ROOT@@/external/dropbear/src
+    - -I@@ROOT@@/external/dropbear/libtomcrypt/src/headers
+    - -I@@ROOT@@/external/dropbear/libtommath
+    - -I@@ROOT@@/external/lwip/src/include
+    - -I@@ROOT@@/external/mbedtls/include
+    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
 
 ---
 # Metal BIOS freestanding shim (not EDK2) — Multiboot metal.elf / metal.boot.elf.
@@ -234,3 +306,18 @@ CompileFlags:
     - --sysroot
     - "@@ROOT@@/.tools/wasi-sdk/share/wasi-sysroot"
     - -I@@ROOT@@/include
+
+---
+# Vendored trees stay upstream-vanilla. IncludeCleaner (and friends) must not
+# push "remove unused include" / style fixes into external/ — Metal shims and
+# patches/<dep>/ only. See docs/SOURCETREE.md § Vendoring.
+# PathMatch is relative to this .clangd's directory (clangd project config).
+If:
+  PathMatch: external/.*
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None
+  ClangTidy:
+    Remove: '*'
+Index:
+  Background: Skip

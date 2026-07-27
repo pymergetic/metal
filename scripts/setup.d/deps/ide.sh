@@ -43,13 +43,16 @@ pkg = root / "src/efi/MetalPkg"
 inc_root = root / "include"
 out = root / "build/compile_commands.json"
 efi_net = root / "src/pymergetic/metal/dev/net"
+db_stubs = efi_net / "dropbear_stubs"
+db_metal = efi_net / "dropbear_metal"
+db_src = root / "external/dropbear/src"
 lwip_inc = root / "external/lwip/src/include"
 mbedtls_inc = root / "external/mbedtls/include"
 mbedtls_cfg = (
     "-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>"
 )
-inc = (
-    f"-I{stubs} -I{edk2} -I{edk2_x64} -I{tlsf} -I{inc_root} "
+inc_common = (
+    f"-I{edk2} -I{edk2_x64} -I{tlsf} -I{inc_root} "
     f"-I{metal_src} -I{pkg} -I{efi_mem} -I{efi_net} -I{lwip_inc} "
     f"-I{mbedtls_inc} {mbedtls_cfg} "
     f"-I{efi_wamr} -I{wamr_plat} "
@@ -58,12 +61,32 @@ inc = (
     f"-DAPP_THREAD_STACK_SIZE_DEFAULT=6144 -DAPP_THREAD_STACK_SIZE_MIN=4096 "
     f"-DBUILD_TARGET_X86_64 -DWASM_ENABLE_LIBC_WASI=1 "
 )
-base = (
+# host_stubs first is wrong for Dropbear glue — freestanding POSIX types
+# live under dropbear_stubs (uid_t, struct timeval, …).
+inc = f"-I{stubs} {inc_common}"
+db_ltc = root / "external/dropbear/libtomcrypt/src/headers"
+db_ltm = root / "external/dropbear/libtommath"
+inc_dropbear = (
+    f"-DDROPBEAR_METAL=1 -DDROPBEAR_SERVER=1 -DLOCALOPTIONS_H_EXISTS=1 "
+    f"-DBUNDLED_LIBTOM=1 -DUSE_LTM -DLTM_DESC "
+    f"-I{db_metal} -I{db_stubs} -I{stubs} {inc_common} "
+    f"-I{db_src} -I{db_ltc} -I{db_ltm} "
+)
+clang_efi = (
     "/usr/bin/clang -std=c11 -ffreestanding -fno-stack-protector "
     "-target x86_64-unknown-windows "
     "'-DEFIAPI=__attribute__((ms_abi))' "
-    f"{inc} "
 )
+base = f"{clang_efi}{inc} "
+base_dropbear = f"{clang_efi}{inc_dropbear} "
+
+def is_dropbear_glue(fpath: Path) -> bool:
+    parts = fpath.parts
+    if "dropbear_stubs" in parts or "dropbear_metal" in parts:
+        return True
+    name = fpath.name
+    return name.startswith("dropbear_") or name.startswith("ssh_dropbear")
+
 entries = []
 # Exact per-file CDB for all Metal EFI sources — otherwise clangd infers from
 # a BIOS sibling (PmBiosUefi.h) or skips EDK2 -I and reports missing Uefi.h.
@@ -79,11 +102,22 @@ if edk2.is_dir():
     for fpath in efi_files:
         if fpath.is_file():
             rp = fpath.resolve()
+            cmd_base = base_dropbear if is_dropbear_glue(fpath) else base
             entries.append({
                 "directory": str(root),
-                "command": f"{base}-c -o /dev/null {rp}",
+                "command": f"{cmd_base}-c -o /dev/null {rp}",
                 "file": str(rp),
             })
+
+# Vendored Dropbear sources — Metal config.h/stubs, not host autoconf.
+if db_src.is_dir():
+    for fpath in sorted(db_src.glob("*.c")):
+        rp = fpath.resolve()
+        entries.append({
+            "directory": str(root),
+            "command": f"{base_dropbear}-c -o /dev/null {rp}",
+            "file": str(rp),
+        })
 
 # External apps (e.g. ../metal-doom) live in a sibling repo now — no
 # in-tree source for clangd to index here.
@@ -245,3 +279,5 @@ if [[ -f "${EDK2_INC}/Uefi.h" && -f "${MAIN}" ]]; then
 else
 	echo "ide: skip syntax check (edk2 or main.c missing)"
 fi
+
+echo "ide: done — restart clangd (or reload the window) so the IDE picks up .clangd"

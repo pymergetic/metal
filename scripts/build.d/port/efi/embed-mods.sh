@@ -49,6 +49,9 @@ build_one hello "${ROOT}/mods/tests/t0_hello/main.c" \
 	-Wl,--export=hello_run
 build_one ui_hello "${ROOT}/mods/tests/t_ui_hello/main.c" \
 	-Wl,--export=ui_hello_run
+build_one asgi_hello "${ROOT}/mods/tests/t_asgi_hello/main.c" \
+	-Wl,--export=asgi_hello_run \
+	-Wl,--export=asgi_hello_app
 build_one async_sleep "${ROOT}/mods/tests/t_async_sleep/main.c" \
 	-Wl,--export=pm_metal_guest_step
 build_one async_fs "${ROOT}/mods/tests/t_async_fs/main.c" \
@@ -93,6 +96,7 @@ inc_out = pathlib.Path(sys.argv[2])
 mods = [
     ("hello", out_dir / "hello.wasm"),
     ("ui_hello", out_dir / "ui_hello.wasm"),
+    ("asgi_hello", out_dir / "asgi_hello.wasm"),
     ("async_sleep", out_dir / "async_sleep.wasm"),
     ("async_fs", out_dir / "async_fs.wasm"),
     ("async_fs_fd", out_dir / "async_fs_fd.wasm"),

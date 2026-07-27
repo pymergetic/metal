@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <pymergetic/metal/boot/externals.h>
 #include <pymergetic/metal/dev/net/net.h>
 #include <pymergetic/metal/dev/net/net_ops.h>
 #include <pymergetic/metal/bus/virtio/virtio.h>
@@ -98,6 +99,16 @@ typedef enum {
   WAIT_DNS
 } wait_kind_t;
 
+#ifndef METAL_UDP_RX_MAX
+#define METAL_UDP_RX_MAX 32u
+#endif
+
+typedef struct {
+  struct pbuf *p;
+  ip_addr_t    addr;
+  uint16_t     port;
+} metal_udp_rx_t;
+
 typedef struct {
   int32_t         used;
   uint32_t        domain;
@@ -109,15 +120,23 @@ typedef struct {
   int32_t         have_remote;
   int32_t         conn_done;
   int32_t         conn_ok;
-  int32_t         listening;
-  struct tcp_pcb *accept_pcb;
-  void           *recv_buf;
+  int32_t               listening;
+  struct tcp_pcb       *accept_pcb;
+  pm_metal_net_sock_h   accept_h; /* promoted accept waiting for pm_metal_net_accept */
+  void                 *recv_buf;
   uint32_t        recv_cap;
   uint32_t        recv_got;
   int32_t         recv_done;
   int32_t         recv_err;
   struct pbuf    *rx_q;
   int32_t         bound_if;
+  /* Datagram RX ring (packet boundaries + peer). TCP still uses rx_q. */
+  metal_udp_rx_t  udp_rx[METAL_UDP_RX_MAX];
+  uint16_t        udp_rx_head;
+  uint16_t        udp_rx_n;
+  ip_addr_t       last_peer;
+  uint16_t        last_peer_port;
+  int32_t         have_last_peer;
 } msock_t;
 
 typedef struct {
@@ -135,6 +154,7 @@ typedef struct {
 } net_ok_t;
 
 static pm_metal_net_sock_h PromoteAcceptPcb(msock_t *s);
+static void                StoreIp4Ascii(char *dst, uintptr_t dst_len, const ip4_addr_t *addr);
 static metal_net_iface_t  *IfaceInitOne(uint32_t    idx,
                                         const char *backend,
                                         int (*open_fn)(uint8_t mac[6]),
@@ -422,12 +442,99 @@ static int32_t ParseHostAddr(const char *host, ip_addr_t *out)
   return -1;
 }
 
+static void UdpRxClear(msock_t *s)
+{
+  uint16_t i;
+
+  if (s == NULL) {
+    return;
+  }
+  for (i = 0; i < s->udp_rx_n; i++) {
+    uint16_t idx;
+
+    idx = (uint16_t)((s->udp_rx_head + i) % METAL_UDP_RX_MAX);
+    if (s->udp_rx[idx].p != NULL) {
+      pbuf_free(s->udp_rx[idx].p);
+      s->udp_rx[idx].p = NULL;
+    }
+  }
+  s->udp_rx_head = 0;
+  s->udp_rx_n    = 0;
+}
+
+static int32_t UdpRxPush(msock_t *s, struct pbuf *p, const ip_addr_t *addr, uint16_t port)
+{
+  uint16_t idx;
+
+  if (s == NULL || p == NULL) {
+    return -1;
+  }
+  if (s->udp_rx_n >= METAL_UDP_RX_MAX) {
+    /* Drop oldest. */
+    idx = s->udp_rx_head;
+    if (s->udp_rx[idx].p != NULL) {
+      pbuf_free(s->udp_rx[idx].p);
+    }
+    s->udp_rx_head = (uint16_t)((s->udp_rx_head + 1u) % METAL_UDP_RX_MAX);
+    s->udp_rx_n--;
+  }
+  idx = (uint16_t)((s->udp_rx_head + s->udp_rx_n) % METAL_UDP_RX_MAX);
+  s->udp_rx[idx].p = p;
+  if (addr != NULL) {
+    ip_addr_copy(s->udp_rx[idx].addr, *addr);
+  } else {
+    ip_addr_set_zero(&s->udp_rx[idx].addr);
+  }
+  s->udp_rx[idx].port = port;
+  s->udp_rx_n++;
+  return 0;
+}
+
+static uint32_t UdpRxPop(msock_t *s, void *ptr, uint32_t len, char *peer_host, uint32_t peer_cap,
+                         uint32_t *peer_port)
+{
+  metal_udp_rx_t *ent;
+  uint16_t        n;
+
+  if (s == NULL || s->udp_rx_n == 0) {
+    return 0;
+  }
+  ent = &s->udp_rx[s->udp_rx_head];
+  if (ent->p == NULL) {
+    s->udp_rx_head = (uint16_t)((s->udp_rx_head + 1u) % METAL_UDP_RX_MAX);
+    s->udp_rx_n--;
+    return 0;
+  }
+  n = (uint16_t)(len < ent->p->tot_len ? len : ent->p->tot_len);
+  if (ptr != NULL && n > 0) {
+    pbuf_copy_partial(ent->p, ptr, n, 0);
+  }
+  ip_addr_copy(s->last_peer, ent->addr);
+  s->last_peer_port = ent->port;
+  s->have_last_peer = 1;
+  if (peer_port != NULL) {
+    *peer_port = ent->port;
+  }
+  if (peer_host != NULL && peer_cap > 0) {
+    peer_host[0] = '\0';
+    if (IP_IS_V4_VAL(ent->addr)) {
+      StoreIp4Ascii(peer_host, peer_cap, ip_2_ip4(&ent->addr));
+    }
+  }
+  pbuf_free(ent->p);
+  ent->p           = NULL;
+  s->udp_rx_head   = (uint16_t)((s->udp_rx_head + 1u) % METAL_UDP_RX_MAX);
+  s->udp_rx_n--;
+  return n;
+}
+
 static void SockClear(msock_t *s)
 {
   if (s->rx_q != NULL) {
     pbuf_free(s->rx_q);
     s->rx_q = NULL;
   }
+  UdpRxClear(s);
 
   memset(s, 0, sizeof(*s));
   s->bound_if = -1;
@@ -1208,7 +1315,8 @@ static err_t TcpConnectedCb(void *arg, struct tcp_pcb *tpcb, err_t err)
 
 static err_t TcpAcceptCb(void *arg, struct tcp_pcb *newpcb, err_t err)
 {
-  msock_t *s;
+  msock_t             *s;
+  pm_metal_net_sock_h  nh;
 
   s = (msock_t *)arg;
   if (s == NULL || err != ERR_OK || newpcb == NULL) {
@@ -1219,12 +1327,26 @@ static err_t TcpAcceptCb(void *arg, struct tcp_pcb *newpcb, err_t err)
     return ERR_VAL;
   }
 
-  if (s->accept_pcb != NULL) {
+  /* One pending accept at a time (pcb or already-promoted handle). */
+  if (s->accept_pcb != NULL || s->accept_h != PM_METAL_NET_SOCK_INVALID) {
     tcp_abort(newpcb);
     return ERR_MEM;
   }
 
+  /*
+   * Promote immediately and install tcp_recv before returning — otherwise
+   * client payload that races the accept waiter is dropped (no recv cb).
+   */
   s->accept_pcb = newpcb;
+  nh            = PromoteAcceptPcb(s);
+  if (nh == PM_METAL_NET_SOCK_INVALID) {
+    if (s->accept_pcb != NULL) {
+      tcp_abort(s->accept_pcb);
+      s->accept_pcb = NULL;
+    }
+    return ERR_MEM;
+  }
+  s->accept_h = nh;
   return ERR_OK;
 }
 
@@ -1234,8 +1356,6 @@ static void UdpRecvCb(
   msock_t *s;
 
   (void)pcb;
-  (void)addr;
-  (void)port;
   s = (msock_t *)arg;
   if (s == NULL || p == NULL) {
     if (p != NULL) {
@@ -1243,6 +1363,12 @@ static void UdpRecvCb(
     }
 
     return;
+  }
+
+  if (addr != NULL) {
+    ip_addr_copy(s->last_peer, *addr);
+    s->last_peer_port = port;
+    s->have_last_peer = 1;
   }
 
   if (s->recv_buf != NULL && !s->recv_done) {
@@ -1256,10 +1382,8 @@ static void UdpRecvCb(
     return;
   }
 
-  if (s->rx_q == NULL) {
-    s->rx_q = p;
-  } else {
-    pbuf_cat(s->rx_q, p);
+  if (UdpRxPush(s, p, addr, port) != 0) {
+    pbuf_free(p);
   }
 }
 
@@ -1319,6 +1443,13 @@ static pm_metal_status_t NetWaitStep(pm_metal_async_handle_t self_h)
       return PM_METAL_DONE;
     }
 
+    if (s->type == PM_METAL_NET_SOCK_DGRAM && s->udp_rx_n > 0 && s->recv_buf != NULL) {
+      s->recv_got  = UdpRxPop(s, s->recv_buf, s->recv_cap, NULL, 0, NULL);
+      s->recv_done = 1;
+      pm_metal_async_set_result_u32(self_h, s->recv_got);
+      return PM_METAL_DONE;
+    }
+
     if (s->rx_q != NULL && s->recv_buf != NULL) {
       uint16_t n;
 
@@ -1341,6 +1472,13 @@ static pm_metal_status_t NetWaitStep(pm_metal_async_handle_t self_h)
     }
   } else if (w->kind == WAIT_ACCEPT) {
     if (w->accept_out != 0) {
+      pm_metal_async_set_result_u32(self_h, (uint32_t)w->accept_out);
+      return PM_METAL_DONE;
+    }
+
+    if (s->accept_h != PM_METAL_NET_SOCK_INVALID) {
+      w->accept_out = s->accept_h;
+      s->accept_h   = PM_METAL_NET_SOCK_INVALID;
       pm_metal_async_set_result_u32(self_h, (uint32_t)w->accept_out);
       return PM_METAL_DONE;
     }
@@ -1749,6 +1887,15 @@ static void LwipClose(pm_metal_net_sock_h h)
     s->accept_pcb = NULL;
   }
 
+  if (s->accept_h != PM_METAL_NET_SOCK_INVALID) {
+    pm_metal_net_sock_h ah;
+
+    ah          = s->accept_h;
+    s->accept_h = PM_METAL_NET_SOCK_INVALID;
+    /* Recurse once into the pending accepted child. */
+    LwipClose(ah);
+  }
+
   SockClear(s);
 }
 
@@ -1828,6 +1975,32 @@ static pm_metal_async_handle_t LwipConnect(pm_metal_net_sock_h h, const char *ho
   }
 }
 
+static int LwipBind(pm_metal_net_sock_h h, uint32_t port)
+{
+  msock_t *s;
+
+  if (h == 0 || h > METAL_NET_MAX_SOCKS || !METAL_NET_READY()) {
+    return -1;
+  }
+  s = &mSocks[h];
+  if (!s->used) {
+    return -1;
+  }
+  if (s->type == PM_METAL_NET_SOCK_STREAM) {
+    if (s->tcp == NULL) {
+      return -1;
+    }
+    return (tcp_bind(s->tcp, IP_ANY_TYPE, (uint16_t)port) == ERR_OK) ? 0 : -1;
+  }
+  if (s->type == PM_METAL_NET_SOCK_DGRAM) {
+    if (s->udp == NULL) {
+      return -1;
+    }
+    return (udp_bind(s->udp, IP_ANY_TYPE, (uint16_t)port) == ERR_OK) ? 0 : -1;
+  }
+  return -1;
+}
+
 static pm_metal_async_handle_t LwipListen(pm_metal_net_sock_h h, uint32_t port)
 {
   msock_t        *s;
@@ -1838,7 +2011,20 @@ static pm_metal_async_handle_t LwipListen(pm_metal_net_sock_h h, uint32_t port)
   }
 
   s = &mSocks[h];
-  if (!s->used || s->tcp == NULL) {
+  if (!s->used) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  /* UDP: listen == bind to port (Chocolate Doom server path). */
+  if (s->type == PM_METAL_NET_SOCK_DGRAM) {
+    if (LwipBind(h, port) != 0) {
+      return PM_METAL_ASYNC_HANDLE_INVALID;
+    }
+    s->listening = 1;
+    return NetOkAsync(1u);
+  }
+
+  if (s->tcp == NULL) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
@@ -1873,6 +2059,12 @@ static pm_metal_async_handle_t LwipAccept(pm_metal_net_sock_h h)
   s = &mSocks[h];
   if (!s->used || !s->listening) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  if (s->accept_h != PM_METAL_NET_SOCK_INVALID) {
+    nh          = s->accept_h;
+    s->accept_h = PM_METAL_NET_SOCK_INVALID;
+    return NetOkAsync((uint32_t)nh);
   }
 
   nh = PromoteAcceptPcb(s);
@@ -1956,6 +2148,89 @@ static uint32_t LwipSend(pm_metal_net_sock_h h, const void *ptr, uint32_t len)
   }
 }
 
+static uint32_t LwipSendto(pm_metal_net_sock_h h, const void *ptr, uint32_t len, const char *host,
+                           uint32_t port)
+{
+  msock_t   *s;
+  ip_addr_t  addr;
+  struct pbuf *p;
+  uint16_t   n;
+  err_t      e;
+
+  if (h == 0 || h > METAL_NET_MAX_SOCKS || ptr == NULL || len == 0 || host == NULL) {
+    return 0;
+  }
+  s = &mSocks[h];
+  if (!s->used || s->udp == NULL) {
+    return 0;
+  }
+  if (ParseHostAddr(host, &addr) != 0) {
+    return 0;
+  }
+  n = (uint16_t)(len > 0xffffu ? 0xffffu : len);
+  p = pbuf_alloc(PBUF_TRANSPORT, n, PBUF_RAM);
+  if (p == NULL) {
+    return 0;
+  }
+  memcpy(p->payload, ptr, n);
+  e = udp_sendto(s->udp, p, &addr, (uint16_t)port);
+  pbuf_free(p);
+  return (e == ERR_OK) ? n : 0;
+}
+
+static uint32_t LwipTryRecv(pm_metal_net_sock_h h, void *ptr, uint32_t len)
+{
+  msock_t *s;
+  uint16_t n;
+
+  if (h == 0 || h > METAL_NET_MAX_SOCKS || ptr == NULL || len == 0) {
+    return 0;
+  }
+
+  s = &mSocks[h];
+  if (!s->used) {
+    return (uint32_t)-1;
+  }
+
+  if (s->type == PM_METAL_NET_SOCK_DGRAM) {
+    return UdpRxPop(s, ptr, len, NULL, 0, NULL);
+  }
+
+  if (s->recv_err || (s->type == PM_METAL_NET_SOCK_STREAM && s->tcp == NULL && s->rx_q == NULL)) {
+    return (uint32_t)-1;
+  }
+
+  if (s->rx_q == NULL) {
+    return 0;
+  }
+
+  n = (uint16_t)(len < s->rx_q->tot_len ? len : s->rx_q->tot_len);
+  pbuf_copy_partial(s->rx_q, ptr, n, 0);
+  s->rx_q = pbuf_free_header(s->rx_q, n);
+  if (s->tcp != NULL) {
+    tcp_recved(s->tcp, n);
+  }
+  return n;
+}
+
+static uint32_t LwipTryRecvfrom(pm_metal_net_sock_h h, void *ptr, uint32_t len, char *peer_host,
+                                uint32_t peer_cap, uint32_t *peer_port)
+{
+  msock_t *s;
+
+  if (h == 0 || h > METAL_NET_MAX_SOCKS || ptr == NULL || len == 0) {
+    return 0;
+  }
+  s = &mSocks[h];
+  if (!s->used) {
+    return (uint32_t)-1;
+  }
+  if (s->type != PM_METAL_NET_SOCK_DGRAM) {
+    return LwipTryRecv(h, ptr, len);
+  }
+  return UdpRxPop(s, ptr, len, peer_host, peer_cap, peer_port);
+}
+
 static pm_metal_async_handle_t LwipRecv(pm_metal_net_sock_h h, void *ptr, uint32_t len)
 {
   msock_t    *s;
@@ -1976,7 +2251,10 @@ static pm_metal_async_handle_t LwipRecv(pm_metal_net_sock_h h, void *ptr, uint32
   s->recv_done = 0;
   s->recv_err  = 0;
 
-  if (s->rx_q != NULL) {
+  if (s->type == PM_METAL_NET_SOCK_DGRAM && s->udp_rx_n > 0) {
+    s->recv_got  = UdpRxPop(s, ptr, len, NULL, 0, NULL);
+    s->recv_done = 1;
+  } else if (s->rx_q != NULL) {
     uint16_t n;
 
     n = (uint16_t)(len < s->rx_q->tot_len ? len : s->rx_q->tot_len);
@@ -2105,9 +2383,11 @@ static int32_t LwipBindIf(pm_metal_net_sock_h h, const char *name)
   return 0;
 }
 
-static const pm_metal_net_ops_t mLwipOps = { "lwip",    LwipInit,    LwipPoll,   LwipSocket,
-                                             LwipClose, LwipConnect, LwipListen, LwipAccept,
-                                             LwipSend,  LwipRecv,    LwipDns,    LwipBindIf };
+static const pm_metal_net_ops_t mLwipOps = {
+  "lwip",     LwipInit,   LwipPoll,  LwipSocket, LwipClose,      LwipConnect,
+  LwipListen, LwipAccept, LwipSend,  LwipRecv,   LwipDns,        LwipBindIf,
+  LwipTryRecv, LwipBind,  LwipSendto, LwipTryRecvfrom
+};
 
 int pm_metal_net_virtio_detect(void)
 {
@@ -2709,3 +2989,9 @@ int pm_metal_net_dns_last_ntoa(char *out, uint32_t out_cap)
 
   return 0;
 }
+
+PM_METAL_EXTERNAL(g_pm_metal_ext_lwip,
+                  lwip,
+                  LWIP_VERSION_STRING,
+                  "https://savannah.nongnu.org/projects/lwip/",
+                  "TCP/IP stack (NO_SYS)");

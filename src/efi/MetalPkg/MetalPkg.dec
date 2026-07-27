@@ -11,11 +11,10 @@
 [Includes]
 
 [LibraryClasses]
+  DropbearGlueLib
 
 [Guids]
 
 [Ppis]
 
 [Protocols]
-
-[Pcds]

@@ -17,6 +17,8 @@
 #include "pymergetic/metal/dev/net/net.h"         /* IWYU pragma: export */
 #include "pymergetic/metal/dev/net/ping.h"        /* IWYU pragma: export */
 #include "pymergetic/metal/dev/net/http.h"        /* IWYU pragma: export */
+#include "pymergetic/metal/dev/net/asgi.h"        /* IWYU pragma: export */
+#include "pymergetic/metal/dev/net/ssh.h"         /* IWYU pragma: export */
 #include "pymergetic/metal/dev/net/tftp.h"        /* IWYU pragma: export */
 #include "pymergetic/metal/dev/net/ntp.h"         /* IWYU pragma: export */
 #if !defined(__wasm__)

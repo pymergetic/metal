@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <pymergetic/metal/boot/externals.h>
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/shell/shell_cmd.h>
 #include <pymergetic/metal/shell/shell/shell.h>
@@ -46,13 +47,31 @@ static void PyShellUsage(void)
  */
 void pm_metal_py_repl_print_banner(void)
 {
-  char cpu_brand[64];
+  char                cpu_brand[64];
+  char                line[128];
+  pm_metal_external_t ext;
+  uint32_t            i;
+  uint32_t            n;
 
   pm_metal_util_ascii_log_rainbow("MetalPython");
-  pm_metal_logf("Metal %s  --  %s", PM_METAL_VERSION, pm_metal_py_version_cstr());
   pm_metal_hwinfo_cpu_brand(cpu_brand, sizeof(cpu_brand));
   if (cpu_brand[0] != '\0') {
-    pm_metal_logf("%s", cpu_brand);
+    pm_metal_logf("Metal %s  @  %s", PM_METAL_VERSION, cpu_brand);
+  } else {
+    pm_metal_logf("Metal %s", PM_METAL_VERSION);
+  }
+
+  n = pm_metal_external_count();
+  for (i = 0u; i < n; i++) {
+    if (pm_metal_external_get(i, &ext) != 0 || ext.id == NULL) {
+      continue;
+    }
+    if (ext.version != NULL && ext.version[0] != '\0') {
+      snprintf(line, sizeof(line), "  - %s %s", ext.id, ext.version);
+    } else {
+      snprintf(line, sizeof(line), "  - %s", ext.id);
+    }
+    pm_metal_logf("%s", line);
   }
 
   pm_metal_log("");

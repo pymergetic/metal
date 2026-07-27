@@ -27,7 +27,30 @@ Mods use **wasi-sdk sysroot** + `-I include/`. Start with `#include <pymergetic/
 
 **Exception — dual WASI-import headers:** small utilities under `util/` (and product APIs below) use one host body + wasm import declarations. A mod including such a header gets a *different* declaration on wasm32 than the runtime does on native: a real wasm import (`PM_METAL_WASI_IMPORT` from `metal/wasi.h`) with **no local body** — resolved by that module's `wasm_runtime_register_natives()` (or the freestanding guest runner's central register). `metal/wasi.h` only unifies the attribute *shape*; each header picks its own `import_module` string. Pointer args are addresses in the *calling* module's linear memory.
 
-On the active **efi** / **bios** targets the dual-header pattern applies to product surface APIs under `include/pymergetic/metal/dev/{gfx,input,audio,stream,net,random,blk}.h`, `shell/{ui,shell,lifecycle}.h`, `runtime/async/async.h`, `fs/fs.h`, `util/` (incl. ascii), and related helpers (see `docs/IO.md`; also exported via `metal.h`). Guests import dual ABIs; host bodies + `*_native_register()` live under `src/pymergetic/metal/…` and `src/{efi,bios}/pymergetic/metal/…`, with guest natives centralized in `src/pymergetic/metal/guest/wasm/wasm.c`. **UI/shell/async/input/stream/net/blk guest ABIs are handle-based**. Host-only helpers stay `#if !__wasm__` (`dev/net/net_ops.h` / `dev/audio/audio_ops.h` / `dev/blk/blk_ops.h` / `bus/virtio/virtio.h`). Pluggable backends: `dev/net/{net,net_null,net_lwip,virtio_net}.c`, `dev/audio/{audio,audio_null,virtio_snd}.c`, `dev/blk/{virtio_blk,ide_ata}.c`, shared `bus/virtio/virtio_pci.c`.
+**Guest buffer / out-struct args (`*_IO_PTR`):** on wasm the prototype takes
+`uint32_t` (linear offset); on host it takes `T *` / `const void *`. **Never**
+call with a bare `(uint32_t)(uintptr_t)p` — that type-checks only under
+`__wasm__` and breaks host builds and clangd. Each dual-ABI header that has
+a buffer or out-struct arg exposes a matching macro (same shape as
+`PM_METAL_FS_IO_PTR` / `PM_METAL_NET_IO_PTR`):
+
+```c
+#if defined(__wasm__)
+#define PM_METAL_FOO_IO_PTR(p) ((uint32_t)(uintptr_t)(p))
+#else
+#define PM_METAL_FOO_IO_PTR(p) (p)
+#endif
+```
+
+Call sites always write `pm_metal_foo(..., PM_METAL_FOO_IO_PTR(buf), ...)`.
+When you add a new dual-ABI API with a buffer/struct pointer arg, add the
+`*_IO_PTR` macro in that header next to the prototypes — do not invent a
+per-call `#if defined(__wasm__)` at the use site. Existing macros:
+`PM_METAL_FS_IO_PTR`, `PM_METAL_NET_IO_PTR`, `PM_METAL_NET_HTTP_IO_PTR`,
+`PM_METAL_NET_TFTP_IO_PTR`, `PM_METAL_BLK_IO_PTR`, `PM_METAL_AUDIO_IO_PTR`,
+`PM_METAL_INPUT_IO_PTR`, `PM_METAL_PROCESS_IO_PTR`.
+
+On the active **efi** / **bios** targets the dual-header pattern applies to product surface APIs under `include/pymergetic/metal/dev/{gfx,input,audio,stream,net,random,blk}.h`, `shell/{ui,shell,lifecycle}.h`, `runtime/async/async.h`, `fs/fs.h`, `guest/process/process.h`, `util/` (incl. ascii), and related helpers (see `docs/IO.md`; also exported via `metal.h`). Guests import dual ABIs; host bodies + `*_native_register()` live under `src/pymergetic/metal/…` and `src/{efi,bios}/pymergetic/metal/…`, with guest natives centralized in `src/pymergetic/metal/guest/wasm/wasm.c`. **UI/shell/async/input/stream/net/blk guest ABIs are handle-based**. Host-only helpers stay `#if !__wasm__` (`dev/net/net_ops.h` / `dev/audio/audio_ops.h` / `dev/blk/blk_ops.h` / `bus/virtio/virtio.h`). Pluggable backends: `dev/net/{net,net_null,net_lwip,virtio_net}.c`, `dev/audio/{audio,audio_null,virtio_snd}.c`, `dev/blk/{virtio_blk,ide_ata}.c`, shared `bus/virtio/virtio_pci.c`.
 
 **Mods / process / async (product model):** see [`docs/MODS.md`](MODS.md) — mod = load→connect→ready (registers functions + optional commands); **process = command runs a function in a task**; async work on normal runners. External apps (e.g. `packages/metal-doom`) build + sign themselves in their own sibling repo and stage in via `METAL_EXT_APPS` (see `scripts/lib/ext-apps.sh`); Metal carries no app-specific code.
 
@@ -482,14 +505,41 @@ Per-function `impl:` tags in each header are authoritative — not the directory
 | `src/common/` | contract `.h` + `impl: common` `.c` |
 | `src/<plat>/` | `impl: bind` + plat-private; OS `#include`s only here |
 | Public symbols | `pm_metal_<module_path>_` |
-| `external/` + `.tools/` | never hand-edited in place — pin + `patches/` only (below) |
+| `external/` + `.tools/` | **always vanilla** — pin + tracked `patches/<dep>/` only (below); never leave untracked drift in a checkout |
+| Externals registry | third-party stack identity via `PM_METAL_EXTERNAL` / `.pm_metal_externals.*` (`boot/externals.h`) — not mods, not Metal `authors`/`about`; see docs/IO.md |
 | Artifacts | `build/` — gitignored |
 
-Adapt WAMR, hosted, wasi-sdk, etc. from `src/` (CMake flags, shims, wrappers) first — never hand-edit a vendored tree directly (it's gitignored, so an in-place edit is invisible to git and vanishes on the next re-vendor). Patch upstream only if unavoidable (a real upstream bug with no `src/`-side workaround, e.g. a genuine data race) — see "Vendoring" below for the actual mechanism.
+**Always keep externals vanilla.** A checkout under `external/<dep>` must be
+exactly the pinned tag/commit, plus every hunk from `patches/<dep>/NNNN-*.patch`
+and nothing else — no stray untracked files, no "just this once" edits that are
+not folded into a patch. `git -C external/<dep> apply --check --reverse
+patches/<dep>/*.patch` must succeed; a fresh `rm -rf external/<dep> &&
+./scripts/setup <dep>` must reproduce the same tree. Adapt WAMR, hosted,
+wasi-sdk, Dropbear, etc. from `src/` (CMake flags, shims, wrappers) first —
+never hand-edit a vendored tree directly (it's gitignored, so an in-place edit
+is invisible to git and vanishes on the next re-vendor). Patch upstream only if
+unavoidable (a real upstream bug with no `src/`-side workaround, e.g. a genuine
+data race) — see "Vendoring" below for the actual mechanism. **IDE noise is not
+a reason to edit `external/`:** clangd IncludeCleaner / tidy on umbrella headers
+like Dropbear's `includes.h` is suppressed for `external/**` in
+`.clangd.template` — fix Metal glue or the clangd config, never "clean up"
+upstream includes to silence the editor. After `./scripts/setup ide` or any
+`.clangd` / include-path change: **restart clangd** (or reload the window) so
+Problems is not stale — see `.cursor/rules/metal-ide-lint.mdc`.
 
 ### Vendoring
 
-`external/wamr` (and any future `external/<dep>`) is a plain upstream checkout pinned to one tag/commit, reproduced by `scripts/setup-<dep>.sh` (e.g. `scripts/setup wamr`) — never committed itself (gitignored), so re-running that script after `rm -rf external/<dep>` always gets back to the exact same tree. When a fix genuinely can't be done from `src/`'s side (see above), the script also applies this repo's own `patches/<dep>/NNNN-*.patch` files (in order, via `git apply`, against the pinned checkout) — those *are* tracked (plain diffs, reviewable in a normal PR), so the fix survives a fresh re-vendor without ever hand-editing the checked-out tree itself. Each patch file's own leading comment (before its `diff --git`) says which upstream bug it works around and why `src/` alone couldn't. Bump the pin + patches together, in the same change, if upstream ever fixes the same bug differently.
+`external/<dep>` is a plain upstream checkout pinned to one tag/commit,
+reproduced by `scripts/setup <dep>` — never committed itself (gitignored), so
+re-running that script after `rm -rf external/<dep>` always gets back to the
+exact same tree. **Invariant: always vanilla** — the working tree equals pin +
+`patches/<dep>/*.patch` only. When a fix genuinely can't be done from `src/`'s
+side (see above), add or update a tracked `patches/<dep>/NNNN-*.patch` (plain
+diffs, reviewable in a normal PR) and re-apply via setup — never leave an
+untracked new file or an unpatched hunk in the checkout. Each patch file's own
+leading comment (before its `diff --git`) says which upstream bug it works
+around and why `src/` alone couldn't. Bump the pin + patches together, in the
+same change, if upstream ever fixes the same bug differently.
 
 ---
 
@@ -513,7 +563,7 @@ Also gitignored: `.tools/`, `external/`, `.cache/`, `.venv/`.
 | Artifact | Inputs | Output |
 |----------|--------|--------|
 | **runtime binary** | `src/common/pymergetic/metal/` + `src/<plat>/` + WAMR + LZ4 + microtar | `build/<plat>/…` |
-| **mod `.wasm`** | `mods/tests/` + wasi-sdk `wasm32-wasip1-threads` + `-I include/` | `build/mods/tests/` then packaged to `build/guest-package/mods/tests/` — guest path `/mods/tests/<name>.wasm` on every platform (`scripts/lib/guest-package.sh`; knob `PM_METAL_GUEST_TESTS`). Threads/shared-memory default; `REACTOR` / `SOCKET` / `MOUNT` empty markers under `mods/tests/<name>/` as before. External apps (built in their own sibling repo, e.g. `packages/metal-doom`) stage under `/mods/apps/` via `METAL_EXT_APPS`. Kernel µPy samples: `mods/py/`. |
+| **mod `.wasm`** | `mods/tests/` + wasi-sdk `wasm32-wasip1-threads` + `-I include/` | `build/mods/tests/` then packaged to `build/guest-package/mods/tests/` — guest path `/mods/tests/<name>.wasm` on every platform (`scripts/lib/guest-package.sh`; knob `PM_METAL_GUEST_TESTS`). Threads/shared-memory default; `REACTOR` / `SOCKET` / `MOUNT` empty markers under `mods/tests/<name>/` as before. External apps (built in their own sibling repo, e.g. `packages/metal-doom`) stage under `/mods/apps/` via `METAL_EXT_APPS`. Kernel µPy boot-proof/demo scripts: `mods/py/tests/` (product: launcher + zips under `mods/py/`). |
 
 ---
 

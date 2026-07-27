@@ -243,7 +243,7 @@ static int32_t Ac97ProbeHw(void)
 
 static void Ac97EnsureRun(void)
 {
-  if (mRunning || mMuted) {
+  if (mRunning) {
     return;
   }
 
@@ -309,7 +309,7 @@ static uint32_t Ac97Queue(pm_metal_audio_stream_h s, const void *pcm, uint32_t n
   uint32_t       left;
   uint32_t       accepted;
 
-  if (s != 1 || !mStreams[1].used || pcm == NULL || nbytes == 0 || mMuted) {
+  if (s != 1 || !mStreams[1].used || pcm == NULL || nbytes == 0) {
     return 0;
   }
 
@@ -325,7 +325,7 @@ static uint32_t Ac97Queue(pm_metal_audio_stream_h s, const void *pcm, uint32_t n
 
     civ   = pm_metal_io_in8(mNabm + AC97_PO_CIV);
     ahead = (mWriteIdx - (uint32_t)civ) & (AC97_NBUF - 1u);
-    /* keep ≥2 periods of headroom so DMA never hits the write cursor */
+    /* keep >=2 periods of headroom so DMA never hits the write cursor */
     if (ahead >= AC97_NBUF - 2u) {
       break;
     }
@@ -335,9 +335,14 @@ static uint32_t Ac97Queue(pm_metal_audio_stream_h s, const void *pcm, uint32_t n
       chunk = AC97_PERIOD;
     }
 
-    memcpy(mPeriods[mWriteIdx], src, chunk);
-    if (chunk < AC97_PERIOD) {
-      memset(mPeriods[mWriteIdx] + chunk, 0, AC97_PERIOD - chunk);
+    /* Mute: silence periods but keep the ring paced for caller accounting. */
+    if (mMuted) {
+      memset(mPeriods[mWriteIdx], 0, AC97_PERIOD);
+    } else {
+      memcpy(mPeriods[mWriteIdx], src, chunk);
+      if (chunk < AC97_PERIOD) {
+        memset(mPeriods[mWriteIdx] + chunk, 0, AC97_PERIOD - chunk);
+      }
     }
 
     mWriteIdx = (mWriteIdx + 1u) & (AC97_NBUF - 1u);
@@ -401,25 +406,54 @@ static pm_metal_async_handle_t Ac97Drain(pm_metal_audio_stream_h s, uint32_t nby
   return h;
 }
 
-static void Ac97Mute(int on)
+static uint32_t mHwVolume = 100u;
+
+static void Ac97ApplyMasterVol(void)
 {
-  mMuted = on ? 1 : 0;
+  uint16_t atten;
+  uint16_t reg;
+
   if (!mReady) {
     return;
   }
 
-  if (on) {
-    pm_metal_io_out8(mNabm + AC97_PO_CR, 0);
-    mRunning = 0;
+  if (mMuted || mHwVolume == 0u) {
     pm_metal_io_out16(mNam + AC97_MASTER_VOL, 0x8000);
-  } else {
-    pm_metal_io_out16(mNam + AC97_MASTER_VOL, 0x0000);
-    Ac97EnsureRun();
+    return;
   }
+
+  /* AC97 MASTER: 0 = 0 dB, steps of 1.5 dB, 5-bit per channel. */
+  atten = (uint16_t)(((100u - mHwVolume) * 31u) / 100u);
+  reg   = (uint16_t)((atten << 8) | atten);
+  pm_metal_io_out16(mNam + AC97_MASTER_VOL, reg);
 }
 
-static const pm_metal_audio_ops_t mAc97Ops = { "ac97",    Ac97Init,  Ac97Poll,  Ac97Ready, Ac97Open,
-                                               Ac97Close, Ac97Queue, Ac97Drain, Ac97Mute };
+static void Ac97Mute(int on)
+{
+  mMuted = on ? 1 : 0;
+  /* Keep PCM Out running; mute is master-volume + silenced periods. */
+  Ac97ApplyMasterVol();
+}
+
+static void Ac97VolumeSet(uint32_t pct)
+{
+  if (pct > 100u) {
+    pct = 100u;
+  }
+
+  mHwVolume = pct;
+  Ac97ApplyMasterVol();
+}
+
+static uint32_t Ac97VolumeGet(void)
+{
+  return mHwVolume;
+}
+
+static const pm_metal_audio_ops_t mAc97Ops = {
+  "ac97",    Ac97Init,  Ac97Poll,      Ac97Ready,     Ac97Open,  Ac97Close,
+  Ac97Queue, Ac97Drain, Ac97Mute,      Ac97VolumeSet, Ac97VolumeGet
+};
 
 int pm_metal_audio_ac97_probe(void)
 {

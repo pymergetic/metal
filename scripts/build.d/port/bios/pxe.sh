@@ -26,6 +26,14 @@ if [[ -d "${ROOT}/mods/py" ]]; then
 	mkdir -p "${PXE}/mods/py"
 	cp -a "${ROOT}/mods/py/." "${PXE}/mods/py/"
 fi
+if [[ -d "${ROOT}/mods/etc" ]]; then
+	mkdir -p "${PXE}/etc"
+	cp -a "${ROOT}/mods/etc/." "${PXE}/etc/"
+fi
+if [[ -d "${ROOT}/mods/www" ]]; then
+	mkdir -p "${PXE}/mods/www"
+	cp -a "${ROOT}/mods/www/." "${PXE}/mods/www/"
+fi
 
 # iPXE script — DHCP filename must be undionly.kpxe (small), NOT metal.elf.
 # metal.elf is ~1.2MiB and will fail with "NBP is too big for base memory".

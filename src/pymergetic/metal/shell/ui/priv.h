@@ -206,7 +206,12 @@ void MetalUiPaintStatusBarOnly(void);
  */
 uint32_t MetalUiConsoleLiveInputRows(metal_ui_widget_t *con);
 int32_t  MetalUiStatusGeom(int32_t *x, int32_t *y, int32_t *w, int32_t *h);
-/** 1 if clock/systray/FPS content differs from last paint. */
+/** 1 if clock/systray/FPS/audio content differs from last paint. */
 int32_t MetalUiStatusNeedsRefresh(void);
+/**
+ * Status-bar audio chrome hit-test (mute toggle + volume slider drag).
+ * Returns 1 if the event was handled (caller should dirty status).
+ */
+int32_t MetalUiStatusAudioPointer(int32_t x, int32_t y, uint32_t buttons);
 
 #endif /* PYMERGETIC_METAL_SHELL_UI_PRIV_H_ */

@@ -48,7 +48,7 @@ uint32_t pm_metal_net_http_status(pm_metal_async_handle_t h);
 /** After await: response body bytes written to dest. */
 uint32_t pm_metal_net_http_body_len(pm_metal_async_handle_t h);
 
-int pm_metal_net_http_native_register(void);
+int32_t pm_metal_net_http_native_register(void);
 #endif
 
 #ifdef __cplusplus

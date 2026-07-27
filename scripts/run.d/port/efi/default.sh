@@ -87,7 +87,7 @@ args=(
 	-smp 4
 	-m 512
 	-audiodev none,id=a0
-	-netdev user,id=n0
+	-netdev user,id=n0,hostfwd=tcp::2222-:22,hostfwd=tcp::8000-:8000,hostfwd=tcp::8443-:8443
 	-device virtio-net-pci,netdev=n0
 	-device virtio-sound-pci,audiodev=a0
 	-drive if=none,id=vd0,format=raw,file="${VBLK}"
@@ -136,4 +136,5 @@ gtk | sdl)
 	;;
 esac
 
+echo "run-efi: hostfwd ssh :2222->guest:22  http :8000->:8000  https :8443->:8443" >&2
 exec "${args[@]}"

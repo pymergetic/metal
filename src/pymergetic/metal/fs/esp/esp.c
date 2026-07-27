@@ -120,6 +120,21 @@ static metal_esp_cache_t *MetalEspCacheSlot(const char *path)
     }
   }
 
+  /* Cache full: reuse a clean slot so hostkey/config writes are not stuck. */
+  for (i = 0; i < PM_METAL_ESP_CACHE_MAX; i++) {
+    if (mCache[i].used && !mCache[i].dirty) {
+      if (mCache[i].data != NULL) {
+        pm_metal_mem_free(mCache[i].data);
+      }
+      snprintf(
+        mCache[i].path, sizeof(mCache[i].path), "%.*s", (int)(sizeof(mCache[i].path) - 1), path);
+      mCache[i].data  = NULL;
+      mCache[i].len   = 0;
+      mCache[i].dirty = 0;
+      return &mCache[i];
+    }
+  }
+
   return NULL;
 }
 

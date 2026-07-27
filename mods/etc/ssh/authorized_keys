@@ -1,0 +1,6 @@
+# Metal SSH authorized_keys (OpenSSH format).
+# Add a line for user test, e.g.:
+#   ssh-ed25519 AAAA... comment
+# Or bind another account:
+#   user=alice ssh-ed25519 AAAA... comment
+# Per-user files: /etc/ssh/authorized_keys.d/<user>

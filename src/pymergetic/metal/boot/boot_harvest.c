@@ -9,6 +9,7 @@
 #include <pymergetic/metal/dev/console/console.h>
 #include <pymergetic/metal/dev/input/virtio_input.h>
 #include <pymergetic/metal/dev/blk/blk.h>
+#include <pymergetic/metal/log/log.h>
 #include "../bus/pci/pci.h"
 
 #include <stdint.h>
@@ -67,6 +68,7 @@ void pm_metal_boot_harvest_bus_devices(void)
 
       (void)pm_metal_io_dt_add(&AudioNode);
     }
+    pm_metal_log("metal-audio: no virtio-snd/ac97 -- null (silent)");
   }
 
   (void)pm_metal_console_virtio_probe();

@@ -83,6 +83,7 @@ while i < len(lines):
                 "src/pymergetic/metal/fs/fs_py_bind.c",
                 "src/pymergetic/metal/dev/random/random_py_bind.c",
                 "src/pymergetic/metal/dev/random/time_py_bind.c",
+                "src/pymergetic/metal/dev/audio/audio_py_bind.c",
                 "src/pymergetic/metal/util/tar_py_bind.c",
                 "src/pymergetic/metal/dev/net/tls_conn.c",
                 "src/pymergetic/metal/dev/net/tls_py_bind.c",
@@ -94,6 +95,36 @@ while i < len(lines):
                 "external/micropython/extmod/modre.c",
                 "external/micropython/extmod/moddeflate.c",
                 "external/micropython/extmod/modjson.c",
+                # Freestanding single-precision libm (µPy SRC_LIB_LIBM_C shape).
+                # sqrtf/floorf/ceilf/truncf: WAMR. math.c via py_libm_math.c
+                # (renames those three). Skip ef_sqrt / thumb_vfp_sqrtf.
+                "src/pymergetic/metal/py/py_libm_extra.c",
+                "src/pymergetic/metal/py/py_libm_math.c",
+                "external/micropython/lib/libm/acoshf.c",
+                "external/micropython/lib/libm/asinfacosf.c",
+                "external/micropython/lib/libm/asinhf.c",
+                "external/micropython/lib/libm/atan2f.c",
+                "external/micropython/lib/libm/atanf.c",
+                "external/micropython/lib/libm/atanhf.c",
+                "external/micropython/lib/libm/ef_rem_pio2.c",
+                "external/micropython/lib/libm/erf_lgamma.c",
+                "external/micropython/lib/libm/fmodf.c",
+                "external/micropython/lib/libm/kf_cos.c",
+                "external/micropython/lib/libm/kf_rem_pio2.c",
+                "external/micropython/lib/libm/kf_sin.c",
+                "external/micropython/lib/libm/kf_tan.c",
+                "external/micropython/lib/libm/log1pf.c",
+                "external/micropython/lib/libm/nearbyintf.c",
+                "external/micropython/lib/libm/roundf.c",
+                "external/micropython/lib/libm/sf_cos.c",
+                "external/micropython/lib/libm/sf_erf.c",
+                "external/micropython/lib/libm/sf_frexp.c",
+                "external/micropython/lib/libm/sf_ldexp.c",
+                "external/micropython/lib/libm/sf_modf.c",
+                "external/micropython/lib/libm/sf_sin.c",
+                "external/micropython/lib/libm/sf_tan.c",
+                "external/micropython/lib/libm/wf_lgamma.c",
+                "external/micropython/lib/libm/wf_tgamma.c",
             ]
         for g in glue:
             out.append(f"  {os.path.relpath(root / g, inf_dir)}\n")
@@ -130,6 +161,8 @@ PY
 # Build+sign+embed stdlib.zip (mods/py/stdlib_src/) — not tracked in git,
 # always freshly baked into the binary, see embed-stdlib.sh.
 "${ROOT}/scripts/build.d/port/efi/embed-stdlib.sh"
+# Dropbear static lib (PIC) for Metal.inf DLINK — X64 EFI.
+PM_METAL_DROPBEAR_PIC=1 "${ROOT}/scripts/build.d/lib/dropbear.sh" x86_64
 echo "efi build: MetalPkg (X64 ${TOOL_CHAIN} ${TARGET})"
 build \
 	-p MetalPkg/MetalPkg.dsc \

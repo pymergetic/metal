@@ -43,6 +43,8 @@ void pm_metal_py_zip_init_sys_path(void)
 {
   mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/py")));
   mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str(PM_METAL_PY_STDLIB_ZIP)));
+  /* Microdot (ASGI) — signed zip beside stdlib; optional if absent. */
+  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/py/microdot.zip")));
 }
 
 /* 0 present+trusted, 1 absent (optional), -1 present but rejected. */

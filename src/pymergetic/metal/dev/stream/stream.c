@@ -223,6 +223,23 @@ int pm_metal_stream_pipe(pm_metal_stream_h *read_end, pm_metal_stream_h *write_e
   return 0;
 }
 
+uint32_t pm_metal_stream_try_read(pm_metal_stream_h h, void *ptr, uint32_t len)
+{
+  if (h == 0 || h > PM_METAL_STREAM_MAX || !mSlots[h].used || ptr == NULL || len == 0) {
+    return 0;
+  }
+
+  if (mSlots[h].kind != PM_METAL_STREAM_KIND_PIPE && mSlots[h].kind != PM_METAL_STREAM_KIND_PTY) {
+    return 0;
+  }
+
+  if (MetalStreamRingUsed(h) == 0) {
+    return 0;
+  }
+
+  return MetalStreamRingGet(h, (uint8_t *)ptr, len);
+}
+
 int pm_metal_stream_pty(pm_metal_stream_h *master, pm_metal_stream_h *slave)
 {
   uint32_t m;

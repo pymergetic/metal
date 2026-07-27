@@ -99,6 +99,44 @@ pm_metal_async_handle_t pm_metal_net_recv(pm_metal_net_sock_h h, void *ptr, uint
   return mOps->recv(h, ptr, len);
 }
 
+uint32_t pm_metal_net_try_recv(pm_metal_net_sock_h h, void *ptr, uint32_t len)
+{
+  if (mOps == NULL || mOps->try_recv == NULL) {
+    return 0;
+  }
+
+  return mOps->try_recv(h, ptr, len);
+}
+
+int32_t pm_metal_net_bind(pm_metal_net_sock_h h, uint32_t port)
+{
+  if (mOps == NULL || mOps->bind == NULL) {
+    return -1;
+  }
+
+  return mOps->bind(h, port);
+}
+
+uint32_t pm_metal_net_sendto(pm_metal_net_sock_h h, const void *ptr, uint32_t len, const char *host,
+                             uint32_t port)
+{
+  if (mOps == NULL || mOps->sendto == NULL) {
+    return 0;
+  }
+
+  return mOps->sendto(h, ptr, len, host, port);
+}
+
+uint32_t pm_metal_net_try_recvfrom(pm_metal_net_sock_h h, void *ptr, uint32_t len, char *peer_host,
+                                   uint32_t peer_cap, uint32_t *peer_port)
+{
+  if (mOps == NULL || mOps->try_recvfrom == NULL) {
+    return 0;
+  }
+
+  return mOps->try_recvfrom(h, ptr, len, peer_host, peer_cap, peer_port);
+}
+
 pm_metal_async_handle_t pm_metal_net_dns(const char *host)
 {
   if (mOps == NULL || mOps->dns == NULL) {
@@ -291,6 +329,83 @@ static int32_t pm_metal_net_bind_if_native(wasm_exec_env_t exec_env, uint32_t h,
   return pm_metal_net_bind_if(h, cleaned);
 }
 
+static int32_t pm_metal_net_bind_native(wasm_exec_env_t exec_env, uint32_t h, uint32_t port)
+{
+  (void)exec_env;
+  return pm_metal_net_bind(h, port);
+}
+
+static uint32_t pm_metal_net_sendto_native(wasm_exec_env_t exec_env, uint32_t h, uint32_t ptr,
+                                           uint32_t len, const char *host, uint32_t port)
+{
+  void *native;
+  char  cleaned[256];
+
+  if (len == 0) {
+    return 0;
+  }
+  native = pm_metal_async_guest_buf_durable(exec_env, ptr, len);
+  if (native == NULL) {
+    return 0;
+  }
+  if (MetalNetGuestHost(exec_env, host, cleaned, sizeof(cleaned)) != 0) {
+    return 0;
+  }
+  return pm_metal_net_sendto(h, native, len, cleaned, port);
+}
+
+static uint32_t pm_metal_net_try_recv_native(wasm_exec_env_t exec_env, uint32_t h, uint32_t ptr,
+                                             uint32_t len)
+{
+  void *native;
+
+  if (len == 0) {
+    return 0;
+  }
+  native = pm_metal_async_guest_buf_durable(exec_env, ptr, len);
+  if (native == NULL) {
+    return (uint32_t)-1;
+  }
+  return pm_metal_net_try_recv(h, native, len);
+}
+
+static uint32_t pm_metal_net_try_recvfrom_native(wasm_exec_env_t exec_env, uint32_t h, uint32_t ptr,
+                                                 uint32_t len, uint32_t peer_host, uint32_t peer_cap,
+                                                 uint32_t peer_port_ptr)
+{
+  wasm_module_inst_t inst;
+  void              *native;
+  char              *peer;
+  uint32_t          *pport;
+  uint32_t           n;
+  uint32_t           port;
+
+  if (len == 0) {
+    return 0;
+  }
+  native = pm_metal_async_guest_buf_durable(exec_env, ptr, len);
+  if (native == NULL) {
+    return (uint32_t)-1;
+  }
+  inst  = wasm_runtime_get_module_inst(exec_env);
+  peer  = NULL;
+  pport = NULL;
+  if (peer_host != 0 && peer_cap > 0 && inst != NULL &&
+      wasm_runtime_validate_app_addr(inst, peer_host, peer_cap)) {
+    peer = (char *)wasm_runtime_addr_app_to_native(inst, peer_host);
+  }
+  if (peer_port_ptr != 0 && inst != NULL &&
+      wasm_runtime_validate_app_addr(inst, peer_port_ptr, sizeof(uint32_t))) {
+    pport = (uint32_t *)wasm_runtime_addr_app_to_native(inst, peer_port_ptr);
+  }
+  port = 0;
+  n    = pm_metal_net_try_recvfrom(h, native, len, peer, peer_cap, &port);
+  if (pport != NULL && n > 0 && n != (uint32_t)-1) {
+    *pport = port;
+  }
+  return n;
+}
+
 static NativeSymbol g_pm_metal_net_native_symbols[] = {
   { "pm_metal_net_socket", (void *)pm_metal_net_socket_native, "(ii)i", NULL },
   { "pm_metal_net_connect", (void *)pm_metal_net_connect_native, "(i$i)i", NULL },
@@ -303,6 +418,10 @@ static NativeSymbol g_pm_metal_net_native_symbols[] = {
   { "pm_metal_net_seed_host", (void *)pm_metal_net_seed_host_native, "(ii)i", NULL },
   { "pm_metal_net_close", (void *)pm_metal_net_close_native, "(i)", NULL },
   { "pm_metal_net_bind_if", (void *)pm_metal_net_bind_if_native, "(i$)i", NULL },
+  { "pm_metal_net_bind", (void *)pm_metal_net_bind_native, "(ii)i", NULL },
+  { "pm_metal_net_sendto", (void *)pm_metal_net_sendto_native, "(iii$i)i", NULL },
+  { "pm_metal_net_try_recv", (void *)pm_metal_net_try_recv_native, "(iii)i", NULL },
+  { "pm_metal_net_try_recvfrom", (void *)pm_metal_net_try_recvfrom_native, "(iiiiii)i", NULL },
 };
 
 int pm_metal_net_native_register(void)

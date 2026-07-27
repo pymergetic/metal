@@ -19,6 +19,10 @@ def about(*args: Any) -> Any:
     """about [mod]       version, desc, url, authors (metal or a mod)"""
     ...
 
+def audio(*args: Any) -> Any:
+    """audio [status|mute|vol N]  backend / mute / volume 0-100"""
+    ...
+
 def close(*args: Any) -> Any:
     """close [n]         close tab n, or active/last guest"""
     ...
@@ -39,6 +43,10 @@ def exit(*args: Any) -> Any:
     """exit|quit [-r]    power off (or reboot with -r)"""
     ...
 
+def externals(*args: Any) -> Any:
+    """externals [id]    third-party stack ids + versions"""
+    ...
+
 def help(*args: Any) -> Any:
     """this text"""
     ...
@@ -49,6 +57,10 @@ def history(*args: Any) -> Any:
 
 def hostname(*args: Any) -> Any:
     """hostname [name]   get/set local nodename (not DNS)"""
+    ...
+
+def httpd(*args: Any) -> Any:
+    """httpd autoload|listen [port]|close <srv>"""
     ...
 
 def hwinfo(*args: Any) -> Any:
@@ -103,6 +115,10 @@ def shutdown(*args: Any) -> Any:
     """exit|quit [-r]    power off (or reboot with -r)"""
     ...
 
+def sshd(*args: Any) -> Any:
+    """sshd autoload|listen [port]|close <srv>|status"""
+    ...
+
 def tab(*args: Any) -> Any:
     """tab <mod>         windowed in a new tab (guest HID)"""
     ...
@@ -121,6 +137,10 @@ def tz(*args: Any) -> Any:
 
 def use(*args: Any) -> Any:
     """use <n>           activate tab index"""
+    ...
+
+def vol(*args: Any) -> Any:
+    """vol [0-100]         alias for audio vol"""
     ...
 
 def __getattr__(name: str) -> Any: ...

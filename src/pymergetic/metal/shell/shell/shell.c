@@ -507,6 +507,17 @@ static void MetalShellPollGuestKeys(uint64_t now_ms)
 
 static void MetalShellEcho(const char *line)
 {
+  pm_metal_stream_h out;
+
+  /*
+   * When stdio is redirected (SSH PTY/PIPE, wasm guest), command output
+   * must reach that stream — shell_out is the common sink for handlers.
+   */
+  out = pm_metal_stdio_out();
+  if (out != PM_METAL_STREAM_INVALID) {
+    (void)pm_metal_stream_write_line(out, line);
+  }
+
   /*
    * Unified log owns sinks (UEFI/UART/UI viewports). Still mirror into
    * the active guest tab when not in guest focus.
@@ -1174,6 +1185,10 @@ int pm_metal_shell_poll(void)
         mPrevPtrY     = py;
         mPrevPtrValid = 1;
         pm_metal_ui_cursor_move(px, py);
+      }
+
+      if (pm_metal_ui_status_audio_pointer(px, py, buttons)) {
+        mDirtyStatus = 1;
       }
 
       if ((buttons & 1u) != 0 && (mPrevPtrButtons & 1u) == 0) {

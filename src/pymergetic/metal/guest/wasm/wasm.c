@@ -4,6 +4,7 @@
 #include <pymergetic/metal/guest/wasm/wasm.h>
 #include <pymergetic/metal/guest/mod/mod.h> /* native_register + session_end */
 #include <pymergetic/metal/boot/authors.h>
+#include <pymergetic/metal/boot/externals.h>
 #include <pymergetic/metal/guest/process/process.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
 #include <pymergetic/metal/shell/ui/ui.h>
@@ -24,6 +25,8 @@
 #include <pymergetic/metal/dev/net/ping.h>
 #include <pymergetic/metal/dev/net/ntp.h>
 #include <pymergetic/metal/dev/net/http.h>
+#include <pymergetic/metal/dev/net/asgi.h>
+#include <pymergetic/metal/dev/net/ssh.h>
 #include <pymergetic/metal/dev/net/tftp.h>
 #include <pymergetic/metal/guest/pkg/pkg.h>
 #include <pymergetic/metal/dev/random/random.h>
@@ -270,13 +273,15 @@ int pm_metal_wasm_init(void)
       pm_metal_audio_native_register() != 0 || pm_metal_stream_native_register() != 0 ||
       pm_metal_net_native_register() != 0 || pm_metal_net_tls_native_register() != 0 ||
       pm_metal_net_ping_native_register() != 0 || pm_metal_net_http_native_register() != 0 ||
+      pm_metal_net_asgi_native_register() != 0 || pm_metal_net_ssh_native_register() != 0 ||
       pm_metal_net_tftp_native_register() != 0 || pm_metal_net_ntp_native_register() != 0 ||
       pm_metal_random_native_register() != 0 || pm_metal_util_arena_native_register() != 0 ||
       pm_metal_util_log_native_register() != 0 || pm_metal_util_lz4_native_register() != 0 ||
       pm_metal_util_tar_native_register() != 0 || pm_metal_util_crypto_native_register() != 0 ||
       pm_metal_util_ascii_native_register() != 0 || pm_metal_util_size_native_register() != 0 ||
       pm_metal_util_ip_native_register() != 0 || pm_metal_host_native_register() != 0 ||
-      pm_metal_authors_native_register() != 0 || pm_metal_py_native_register() != 0) {
+      pm_metal_authors_native_register() != 0 || pm_metal_externals_native_register() != 0 ||
+      pm_metal_py_native_register() != 0) {
     pm_metal_log("metal-wasm: native_register failed");
     wasm_runtime_destroy();
     pm_metal_mem_free(mPool);
@@ -727,3 +732,10 @@ int pm_metal_wasm_mod_image_call0(pm_metal_wasm_mod_image_t *img,
   MetalWasmRebindLiveIfAny();
   return 0;
 }
+
+/* Hand-bumped with scripts/setup.d/deps/wamr.sh WAMR_REF (strip WAMR- prefix). */
+PM_METAL_EXTERNAL(g_pm_metal_ext_wamr,
+                  wamr,
+                  "2.4.5",
+                  "https://github.com/bytecodealliance/wasm-micro-runtime",
+                  "wasm interpreter / AOT guest runner");

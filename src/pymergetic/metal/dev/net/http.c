@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include <pymergetic/metal/dev/net/http.h>
+#include <pymergetic/metal/dev/net/http_parse.h>
 #include <pymergetic/metal/dev/net/net.h>
 #include <pymergetic/metal/dev/net/net_ops.h>
 #include <pymergetic/metal/dev/net/tls.h>
@@ -42,13 +43,6 @@ typedef enum {
   HTTP_STEP_DONE
 } http_step_t;
 
-typedef enum {
-  CHUNK_SIZE = 0,
-  CHUNK_DATA,
-  CHUNK_AFTER_DATA,
-  CHUNK_DONE
-} chunk_step_t;
-
 typedef struct {
   http_step_t             step;
   pm_metal_async_handle_t aw;
@@ -68,12 +62,7 @@ typedef struct {
   int32_t                 chunked;
   int32_t                 body_until_close;
   uint32_t                content_len;
-  chunk_step_t            chunk_step;
-  uint32_t                chunk_rem;
-  int32_t                 chunk_zero;
-  char                    chunk_line[16];
-  uint32_t                chunk_line_len;
-  int32_t                 chunk_done;
+  pm_metal_http_chunk_dec_t chunk;
   char                    req[HTTP_REQ_MAX];
   uint32_t                req_len;
   uint32_t                req_off;
@@ -105,154 +94,6 @@ static void HttpTlsTeardown(http_get_t *h)
   }
 }
 
-static int32_t HttpHexVal(char c)
-{
-  if (c >= '0' && c <= '9') {
-    return (int32_t)(c - '0');
-  }
-
-  if (c >= 'a' && c <= 'f') {
-    return 10 + (int32_t)(c - 'a');
-  }
-
-  if (c >= 'A' && c <= 'F') {
-    return 10 + (int32_t)(c - 'A');
-  }
-
-  return -1;
-}
-
-static int32_t HttpChunkInit(http_get_t *h)
-{
-  if (h == NULL) {
-    return -1;
-  }
-
-  h->chunk_step     = CHUNK_SIZE;
-  h->chunk_rem      = 0;
-  h->chunk_zero     = 0;
-  h->chunk_line_len = 0;
-  h->chunk_done     = 0;
-  return 0;
-}
-
-static int32_t HttpChunkFeedByte(http_get_t *h, uint8_t b)
-{
-  int32_t hv;
-
-  if (h == NULL) {
-    return -1;
-  }
-
-  switch (h->chunk_step) {
-  case CHUNK_SIZE:
-    if (b == '\n') {
-      uint32_t sz;
-      uint32_t i;
-
-      sz = 0;
-      for (i = 0; i < h->chunk_line_len; i++) {
-        char c;
-
-        c = h->chunk_line[i];
-        if (c == ';') {
-          break;
-        }
-
-        hv = HttpHexVal(c);
-        if (hv < 0) {
-          return -1;
-        }
-
-        sz = (sz << 4) + (uint32_t)hv;
-      }
-
-      h->chunk_line_len = 0;
-      h->chunk_zero     = (sz == 0) ? 1 : 0;
-      if (sz == 0) {
-        h->chunk_rem  = 2;
-        h->chunk_step = CHUNK_AFTER_DATA;
-      } else {
-        h->chunk_rem  = sz;
-        h->chunk_step = CHUNK_DATA;
-      }
-
-      return 0;
-    }
-
-    if (b == '\r') {
-      return 0;
-    }
-
-    if (h->chunk_line_len + 1 >= sizeof(h->chunk_line)) {
-      return -1;
-    }
-
-    h->chunk_line[h->chunk_line_len++] = (char)b;
-    return 0;
-
-  case CHUNK_DATA:
-    if (h->body_len < h->body_cap && h->body != NULL) {
-      ((uint8_t *)h->body)[h->body_len++] = b;
-    }
-
-    if (h->chunk_rem > 0) {
-      h->chunk_rem--;
-    }
-
-    if (h->chunk_rem == 0) {
-      h->chunk_rem  = 2;
-      h->chunk_step = CHUNK_AFTER_DATA;
-    }
-
-    return 0;
-
-  case CHUNK_AFTER_DATA:
-    if (b != '\r' && b != '\n') {
-      return -1;
-    }
-
-    if (h->chunk_rem > 0) {
-      h->chunk_rem--;
-    }
-
-    if (h->chunk_rem == 0) {
-      if (h->chunk_zero) {
-        h->chunk_done = 1;
-        h->chunk_step = CHUNK_DONE;
-      } else {
-        h->chunk_step = CHUNK_SIZE;
-      }
-    }
-
-    return 0;
-
-  default:
-    return 0;
-  }
-}
-
-static int32_t HttpChunkFeed(http_get_t *h, const uint8_t *data, uint32_t len)
-{
-  uint32_t i;
-
-  if (h == NULL || data == NULL) {
-    return -1;
-  }
-
-  for (i = 0; i < len; i++) {
-    if (HttpChunkFeedByte(h, data[i]) != 0) {
-      return -1;
-    }
-
-    if (h->chunk_done) {
-      break;
-    }
-  }
-
-  return 0;
-}
-
 static int32_t HttpBodyFeed(http_get_t *h, const uint8_t *data, uint32_t len)
 {
   if (h == NULL || data == NULL || len == 0) {
@@ -260,7 +101,8 @@ static int32_t HttpBodyFeed(http_get_t *h, const uint8_t *data, uint32_t len)
   }
 
   if (h->chunked) {
-    return HttpChunkFeed(h, data, len);
+    return pm_metal_http_chunk_dec_feed(
+      &h->chunk, data, len, h->body, h->body_cap, &h->body_len);
   }
 
   {
@@ -429,96 +271,19 @@ static int32_t HttpHostIsLiteral(const char *host)
   return dots == 3;
 }
 
-static int32_t HttpFindHdrEnd(const char *buf, uint32_t len)
-{
-  uint32_t i;
-
-  for (i = 0; i + 3 < len; i++) {
-    if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' && buf[i + 3] == '\n') {
-      return (int32_t)(i + 4);
-    }
-  }
-
-  return -1;
-}
-
 static void HttpParseResponse(http_get_t *h)
 {
-  const char *p;
-  const char *line;
-  uint32_t    i;
+  pm_metal_http_body_mode_t mode;
 
-  if (h == NULL || h->hdr_len < 12) {
+  if (h == NULL) {
     return;
   }
 
-  h->http_status = 0;
-  if (strncmp(h->hdr, "HTTP/", 5) == 0) {
-    p = h->hdr + 5;
-    while (*p != '\0' && *p != ' ') {
-      p++;
-    }
-
-    while (*p == ' ') {
-      p++;
-    }
-
-    h->http_status = 0;
-    while (*p >= '0' && *p <= '9') {
-      h->http_status = h->http_status * 10u + (uint32_t)(*p - '0');
-      p++;
-    }
-  }
-
-  h->content_len      = 0;
-  h->chunked          = 0;
-  h->body_until_close = 0;
-  line                = h->hdr;
-  for (i = 0; i < h->hdr_len;) {
-    uint32_t j;
-
-    j = i;
-    while (j + 1 < h->hdr_len && !(h->hdr[j] == '\r' && h->hdr[j + 1] == '\n')) {
-      j++;
-    }
-
-    if (strncmp(line, "Content-Length:", 15) == 0) {
-      const char *v;
-
-      v = line + 15;
-      while (*v == ' ') {
-        v++;
-      }
-
-      h->content_len = 0;
-      while (*v >= '0' && *v <= '9') {
-        h->content_len = h->content_len * 10u + (uint32_t)(*v - '0');
-        v++;
-      }
-    } else if (strncmp(line, "Transfer-Encoding:", 18) == 0) {
-      const char *v;
-      uint32_t    k;
-
-      v = line + 18;
-      while (*v == ' ') {
-        v++;
-      }
-
-      for (k = 0; v[k] != '\0' && v[k] != '\r'; k++) {
-        if ((v[k] | 0x20) == 'c' && strncmp(v + k, "chunked", 7) == 0) {
-          h->chunked = 1;
-          break;
-        }
-      }
-    }
-
-    i    = j + 2;
-    line = h->hdr + i;
-  }
-
-  if (h->content_len == 0 && !h->chunked) {
-    h->body_until_close = 1;
-  }
+  h->http_status = pm_metal_http_parse_status(h->hdr, h->hdr_len);
+  pm_metal_http_scan_body_mode(h->hdr, h->hdr_len, &mode);
+  h->content_len      = mode.content_len;
+  h->chunked          = mode.chunked;
+  h->body_until_close = mode.body_until_close;
 }
 
 static int32_t HttpTlsHandshakeStep(http_get_t *h)
@@ -535,9 +300,7 @@ static int32_t HttpAfterHeadersParsed(http_get_t *h, int32_t he)
   h->body_len = 0;
 
   if (h->chunked) {
-    if (HttpChunkInit(h) != 0) {
-      return PM_METAL_ERROR;
-    }
+    pm_metal_http_chunk_dec_init(&h->chunk);
 
     if (he >= 0 && (uint32_t)he < h->hdr_len) {
       if (HttpBodyFeed(h, (const uint8_t *)h->hdr + he, h->hdr_len - (uint32_t)he) != 0) {
@@ -545,7 +308,7 @@ static int32_t HttpAfterHeadersParsed(http_get_t *h, int32_t he)
       }
     }
 
-    if (h->chunk_done) {
+    if (h->chunk.done) {
       h->step = HTTP_STEP_DONE;
       return PM_METAL_PENDING;
     }
@@ -616,7 +379,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
     h->hdr_done         = 0;
     h->body_until_close = 0;
     h->chunked          = 0;
-    h->chunk_done       = 0;
+    pm_metal_http_chunk_dec_init(&h->chunk);
     h->wire.len         = 0;
     h->wire.off         = 0;
     h->tls_h            = PM_METAL_TLS_INVALID;
@@ -863,7 +626,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
       return HttpAwaitAsync(self_h, h->aw);
     }
 
-    he = HttpFindHdrEnd(h->hdr, h->hdr_len);
+    he = pm_metal_http_find_hdr_end(h->hdr, h->hdr_len);
     if (he < 0) {
       if (h->hdr_len + 256 >= sizeof(h->hdr)) {
         return PM_METAL_ERROR;
@@ -885,7 +648,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
 
     h->hdr_len += n;
     h->hdr[h->hdr_len] = '\0';
-    he                 = HttpFindHdrEnd(h->hdr, h->hdr_len);
+    he                 = pm_metal_http_find_hdr_end(h->hdr, h->hdr_len);
     if (he < 0) {
       h->step = HTTP_STEP_RECV_HDR;
       return PM_METAL_PENDING;
@@ -900,7 +663,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
     uint32_t want;
     int32_t  got;
 
-    if (h->chunked && h->chunk_done) {
+    if (h->chunked && h->chunk.done) {
       h->step = HTTP_STEP_DONE;
       return PM_METAL_PENDING;
     }
@@ -959,7 +722,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
     }
 
     if (h->chunked) {
-      h->step = h->chunk_done ? HTTP_STEP_DONE : HTTP_STEP_RECV_BODY;
+      h->step = h->chunk.done ? HTTP_STEP_DONE : HTTP_STEP_RECV_BODY;
     } else if (h->body_until_close) {
       h->step = (h->body_len >= h->body_cap) ? HTTP_STEP_DONE : HTTP_STEP_RECV_BODY;
     } else {
@@ -981,7 +744,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
     }
 
     if (h->chunked) {
-      h->step = h->chunk_done ? HTTP_STEP_DONE : HTTP_STEP_RECV_BODY;
+      h->step = h->chunk.done ? HTTP_STEP_DONE : HTTP_STEP_RECV_BODY;
     } else if (h->body_until_close) {
       if (h->body_len >= h->body_cap) {
         h->step = HTTP_STEP_DONE;
@@ -1166,7 +929,7 @@ static NativeSymbol g_pm_metal_net_http_native_symbols[] = {
   { "pm_metal_net_http_body_len", (void *)pm_metal_net_http_body_len_native, "(i)i", NULL },
 };
 
-int pm_metal_net_http_native_register(void)
+int32_t pm_metal_net_http_native_register(void)
 {
   if (!wasm_runtime_register_natives(PM_METAL_NET_HTTP_WASI_MODULE,
                                      g_pm_metal_net_http_native_symbols,

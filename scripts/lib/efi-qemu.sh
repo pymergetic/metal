@@ -45,6 +45,16 @@ pm_metal_efi_stage_esp() {
 		cp -a "${ROOT}/mods/py/." "${esp}/mods/py/"
 	fi
 
+	# httpd defaults + static root (ASGI).
+	if [[ -d "${ROOT}/mods/etc" ]]; then
+		mkdir -p "${esp}/etc"
+		cp -a "${ROOT}/mods/etc/." "${esp}/etc/"
+	fi
+	if [[ -d "${ROOT}/mods/www" ]]; then
+		mkdir -p "${esp}/mods/www"
+		cp -a "${ROOT}/mods/www/." "${esp}/mods/www/"
+	fi
+
 	# shellcheck disable=SC1091
 	source "${ROOT}/scripts/lib/ext-apps.sh"
 	pm_metal_ext_apps_stage_into "${esp}"

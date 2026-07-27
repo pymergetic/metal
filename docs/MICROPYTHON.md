@@ -26,7 +26,9 @@ system shell; isolated contexts are the opt-in escape hatch for genuine
 parallelism.  
 **Product stays:** thin async host + awaitable ABI. µPy is a **face**, not a second kernel.
 
-Related: [`COOP_MEMORY.md`](COOP_MEMORY.md) · [`IO.md`](IO.md) · [`LIBC_ASYNC.md`](LIBC_ASYNC.md) · [`TODO.md`](TODO.md)
+Related: [`COOP_MEMORY.md`](COOP_MEMORY.md) · [`IO.md`](IO.md) (including
+the ASGI `httpd` and Microdot surface) · [`LIBC_ASYNC.md`](LIBC_ASYNC.md) ·
+[`TODO.md`](TODO.md)
 
 ---
 
@@ -500,7 +502,7 @@ files/zips, not the stdlib package.
 | Verify / pack mount | Path that checks `.sig` and mounts the zip — stays in firmware / frozen |
 | Builtins / core VM | `micropython`, `gc`, `sys`, `errno`, `struct`, `array` (C builtins; not on `sys.path`) |
 | Tiny types | `collections` (minimal), `memoryview` / `array` as shipped by port |
-| Async kernel | Metal-shaped awaitables (not full CPython `asyncio` / stock `uasyncio` until wired) |
+| Async kernel | Metal-shaped awaitables (`await` → Metal handles); zip `asyncio` is a name shim only |
 | `json` | Config / small RPC — cheap and always useful |
 | `binascii`, `hashlib` (if small) | Trust / hex / digests for scripts touching `.sig` paths |
 
@@ -519,7 +521,7 @@ micropython-lib pack.
 | Module / surface | Notes |
 |------------------|--------|
 | Sample stub(s) | Minimal non-frozen module(s) for import proof |
-| `uasyncio` / richer async helpers | If not in frozen Metal await layer |
+| `asyncio` (Metal shim) | `stdlib_src/asyncio/` — `sleep`/`Event`/`gather`/`create_task` over `pymergetic.metal.aio`; not a second event loop |
 | `ure` / `re` | Regex — optional for many scripts |
 | `io`, `os` / `uos` façades | Thin; real FS is `metal` async |
 | `time` façades | Clocks sync; sleep → Metal async only |
@@ -695,9 +697,10 @@ Closed every remaining Needs-glue module from the table above except
   the *same* wall clock `random.c` already fed to wasm guests (EFI's
   `gRT->GetTime()`/BIOS's CMOS RTC, refined by SNTP — `dev/net/ntp.c`); there
   was already a real RTC source, it just hadn't been wired to Python yet.
-  `mods/py/stdlib_src/time.py` is a from-scratch, int-only implementation
-  (`MICROPY_PY_BUILTINS_FLOAT` stays off — no CPython float seconds
-  anywhere) providing `time()`/`gmtime()`/`localtime()`/`mktime()`/
+  `mods/py/stdlib_src/time.py` is a from-scratch, int-primary implementation
+  (float seconds work once `MICROPY_PY_BUILTINS_FLOAT` is on; wall path
+  still prefers ms/us ints from `pymergetic.metal.time`) providing
+  `time()`/`gmtime()`/`localtime()`/`mktime()`/
   `monotonic()`/`sleep()`. `datetime.py` is pulled fresh from
   micropython-lib on top of it, with two real, non-obvious deltas:
   1. it uses `f"{h:02d}"`-style f-strings throughout — `MICROPY_PY_FSTRINGS`
@@ -706,8 +709,8 @@ Closed every remaining Needs-glue module from the table above except
      even *parse* (`SyntaxError`, not a runtime gap) until the flag joined
      `SLICE`/`SET`/`ENUMERATE`/`PROPERTY` in `mpconfigport.h`.
   2. CPython's real `timedelta.min`/`.max` use `days=±999999999`, which needs
-     a bignum (`MICROPY_LONGINT_IMPL` stays `NONE` in this build — not
-     reopening that decision); worse, MicroPython's "small int" is a
+     a bignum (now `MICROPY_LONGINT_IMPL_MPZ`; the clamp below was from the
+     earlier `NONE` era and can be revisited); worse, MicroPython's "small int" is a
      *tagged* machine word (one bit reserved for the object-tag), so it's a
      62-bit magnitude, not the 63/64 a raw `int64` would suggest — half of
      what the first, wrong fix assumed. Metal's copy clamps both sentinels
@@ -958,9 +961,8 @@ The four biggest items on the old Needs-glue list, closed in one pass:
   two-part treatment as `binascii` above: added to both port build
   scripts' Sources **and** `micropython_embed.mk`'s `SRC_QSTR`).
   `MICROPY_PY_RANDOM`/`MICROPY_PY_RANDOM_EXTRA_FUNCS` on;
-  `random()`/`uniform()` stay untested (they're float-gated, and
-  `MICROPY_PY_BUILTINS_FLOAT` is off in this build, same reason `time`
-  stays Needs-glue: no wall-clock either). Seeded once at boot from a
+  `random()`/`uniform()` are available once floats are on
+  (`MICROPY_PY_BUILTINS_FLOAT=1`). Seeded once at boot from a
   real `pm_metal_random()` draw — `dev/random/random_py_bind.c`'s
   `pymergetic.metal.random.seed_u32()`, the one hand-written Python bind
   this module needed — instead of the extmod's fixed compile-time
@@ -1061,7 +1063,7 @@ Failure after retries → normal `ImportError` (no half-mounted zip).
 |------------------|-----|
 | `threading` / `_thread` | Metal tasks/coros only |
 | `multiprocessing`, `subprocess` | No |
-| Full CPython `asyncio` | Wrong shape; Metal await + thin helpers |
+| Full CPython / CircuitPython `uasyncio` as scheduler | Wrong shape; Metal runners own CPUs; zip `asyncio` is a thin name shim |
 | `socket` blocking stdlib as product | Same as retiring WASI blocking I/O |
 | `ctypes`, `mmap`, `signal`, `select` | Preemptive-OS surface |
 | pip / arbitrary PyPI | Explicit packages only (zip/http allowlist) |

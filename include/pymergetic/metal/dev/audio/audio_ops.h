@@ -28,12 +28,14 @@ typedef struct pm_metal_audio_ops {
   uint32_t (*queue)(pm_metal_audio_stream_h s, const void *pcm, uint32_t n);
   pm_metal_async_handle_t (*drain)(pm_metal_audio_stream_h s, uint32_t n);
   void (*mute)(int on);
+  /** Optional: hardware volume 0..100. NULL => facade software gain only. */
+  void (*volume_set)(uint32_t pct);
+  uint32_t (*volume_get)(void);
 } pm_metal_audio_ops_t;
 
 void                        pm_metal_audio_set_ops(const pm_metal_audio_ops_t *ops);
 const pm_metal_audio_ops_t *pm_metal_audio_get_ops(void);
 void                        pm_metal_audio_poll(void);
-void                        pm_metal_audio_mute(int on);
 
 int  pm_metal_audio_virtio_probe(void);
 int  pm_metal_audio_ac97_probe(void);

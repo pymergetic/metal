@@ -31,7 +31,9 @@ static pm_metal_virtio_dev_t mDev;
 static int32_t               mReady;
 static uint8_t               mMac[6];
 static uint8_t              *mRxBufs[VNET_RX_BUFS];
-static uint8_t               mTxScratch[VNET_MTU + sizeof(vnet_hdr_t)];
+/* Alternating TX scratches so DATA+FIN in one step cannot overwrite in-flight DMA. */
+static uint8_t               mTxScratch[2][VNET_MTU + sizeof(vnet_hdr_t)];
+static uint32_t              mTxScratchIdx;
 
 int pm_metal_virtio_netif_open(uint8_t mac_out[6])
 {
@@ -126,6 +128,7 @@ const uint8_t *pm_metal_virtio_netif_mac(void)
 int pm_metal_virtio_netif_tx(const void *frame, uint32_t len)
 {
   vnet_hdr_t *hdr;
+  uint8_t    *scratch;
   uint8_t    *pkt;
   uint16_t    head;
   uint32_t    ulen;
@@ -134,21 +137,23 @@ int pm_metal_virtio_netif_tx(const void *frame, uint32_t len)
     return -1;
   }
 
-  hdr = (vnet_hdr_t *)mTxScratch;
-  memset(hdr, 0, sizeof(*hdr));
-  pkt = mTxScratch + sizeof(*hdr);
-  memcpy(pkt, frame, len);
-
-  if (pm_metal_virtq_add(&mDev.vqs[VNET_TX], mTxScratch, sizeof(*hdr) + len, 0, &head) != 0) {
-    return -1;
-  }
-
-  pm_metal_virtq_kick(&mDev, &mDev.vqs[VNET_TX]);
   while (pm_metal_virtq_get_used(&mDev.vqs[VNET_TX], &head, &ulen)) {
     pm_metal_virtq_free_chain(&mDev.vqs[VNET_TX], head);
     (void)ulen;
   }
 
+  scratch = mTxScratch[mTxScratchIdx & 1u];
+  mTxScratchIdx++;
+  hdr = (vnet_hdr_t *)scratch;
+  memset(hdr, 0, sizeof(*hdr));
+  pkt = scratch + sizeof(*hdr);
+  memcpy(pkt, frame, len);
+
+  if (pm_metal_virtq_add(&mDev.vqs[VNET_TX], scratch, sizeof(*hdr) + len, 0, &head) != 0) {
+    return -1;
+  }
+
+  pm_metal_virtq_kick(&mDev, &mDev.vqs[VNET_TX]);
   return 0;
 }
 

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <pymergetic/metal/boot/externals.h>
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/log/log.h>
@@ -1192,3 +1193,9 @@ pm_metal_async_handle_t pm_metal_py_fn_call_async(pm_metal_py_fn_h_t fn_h, uint3
   }
   return pm_metal_py_fn_call_async_bound(fn, arg0);
 }
+
+PM_METAL_EXTERNAL(g_pm_metal_ext_micropython,
+                  micropython,
+                  MICROPY_GIT_TAG,
+                  "https://github.com/micropython/micropython",
+                  "embedded Python REPL + binds");

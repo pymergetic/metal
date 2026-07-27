@@ -22,6 +22,13 @@ extern "C" {
 
 #define PM_METAL_PROCESS_WASI_MODULE "pymergetic.metal.process"
 
+/** Guest linear offset (wasm) or host pointer — for info/list out buffers. */
+#if defined(__wasm__)
+#define PM_METAL_PROCESS_IO_PTR(p) ((uint32_t)(uintptr_t)(p))
+#else
+#define PM_METAL_PROCESS_IO_PTR(p) (p)
+#endif
+
 typedef uint32_t pm_metal_process_id_t;
 
 #define PM_METAL_PROCESS_ID_INVALID 0u

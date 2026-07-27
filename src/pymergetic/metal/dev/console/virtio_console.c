@@ -18,13 +18,15 @@
 #define VCON_BUFS 16
 #define VCON_MTU  512
 
-static pm_metal_virtio_dev_t mDev;
-static int32_t               mReady;
-static uint8_t              *mRxBufs[VCON_BUFS];
-static uint8_t               mTxScratch[VCON_MTU];
-static uint8_t               mRxRing[4096];
-static uint32_t              mRxHead;
-static uint32_t              mRxTail;
+static pm_metal_virtio_dev_t       mDev;
+static int32_t                     mReady;
+static uint8_t                    *mRxBufs[VCON_BUFS];
+static uint8_t                     mTxScratch[VCON_MTU];
+static uint8_t                     mRxRing[4096];
+static uint32_t                    mRxHead;
+static uint32_t                    mRxTail;
+static pm_metal_console_mirror_fn  mMirrorFn;
+static void                       *mMirrorCtx;
 
 static uint32_t RxUsed(void)
 {
@@ -127,6 +129,12 @@ int pm_metal_console_ready(void)
   return mReady ? 1 : 0;
 }
 
+void pm_metal_console_set_mirror(pm_metal_console_mirror_fn fn, void *ctx)
+{
+  mMirrorFn  = fn;
+  mMirrorCtx = ctx;
+}
+
 void pm_metal_console_com1_write(const void *ptr, uint32_t len)
 {
   const uint8_t *p;
@@ -147,6 +155,11 @@ void pm_metal_console_com1_write(const void *ptr, uint32_t len)
     }
 
     pm_metal_io_out8(0x3F8, p[i]);
+  }
+
+  /* SSH (etc.): same console bytes as UART, not a second shell. */
+  if (mMirrorFn != NULL) {
+    mMirrorFn(ptr, len, mMirrorCtx);
   }
 }
 
@@ -223,6 +236,21 @@ void pm_metal_console_poll(void)
     pm_metal_virtq_free_chain(&mDev.vqs[VCON_TX], head);
     (void)len;
   }
+}
+
+uint32_t pm_metal_console_inject_rx(const void *ptr, uint32_t len)
+{
+  uint32_t before;
+  uint32_t after;
+
+  if (ptr == NULL || len == 0) {
+    return 0;
+  }
+
+  before = RxUsed();
+  RxPut((const uint8_t *)ptr, len);
+  after = RxUsed();
+  return after - before;
 }
 
 uint32_t pm_metal_console_read(void *ptr, uint32_t len)

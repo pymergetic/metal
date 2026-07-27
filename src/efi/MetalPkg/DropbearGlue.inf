@@ -1,0 +1,28 @@
+## @file
+# Dropbear Metal glue — dropbear_stubs -I must precede host_stubs.
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = DropbearGlue
+  FILE_GUID                      = A7C3E91D-4B2F-4E8A-9C1D-6F5E4A3B2C10
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = DropbearGlueLib
+
+[Sources]
+  ../../pymergetic/metal/dev/net/ssh_dropbear.c
+  ../../pymergetic/metal/dev/net/dropbear_fd.c
+  ../../pymergetic/metal/dev/net/dropbear_posix.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MetalPkg/MetalPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+
+[BuildOptions]
+  GCC:*_*_*_CC_FLAGS = -DDROPBEAR_METAL=1 -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal/dev/net/dropbear_metal -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal/dev/net/dropbear_stubs -I/home/ladmin/Devel/os-sdk/packages/metal/external/dropbear/src -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal/dev/net -I/home/ladmin/Devel/os-sdk/packages/metal/include -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal/runtime/mem/host_stubs -I/home/ladmin/Devel/os-sdk/packages/metal/external/lwip/src/include -I/home/ladmin/Devel/os-sdk/packages/metal/external/wamr/core/iwasm/include -Wno-error -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-format -fno-strict-aliasing

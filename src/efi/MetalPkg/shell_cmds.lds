@@ -17,6 +17,10 @@ SECTIONS
     PROVIDE_HIDDEN (__pm_metal_keyb_layouts_start = .);
     KEEP (*(SORT_BY_NAME (.pm_metal_keyb_layouts.*)));
     PROVIDE_HIDDEN (__pm_metal_keyb_layouts_end = .);
+    . = ALIGN(16);
+    PROVIDE_HIDDEN (__pm_metal_externals_start = .);
+    KEEP (*(SORT_BY_NAME (.pm_metal_externals.*)));
+    PROVIDE_HIDDEN (__pm_metal_externals_end = .);
   }
 }
 INSERT AFTER .data;

@@ -1,0 +1,36 @@
+{
+  "port": 8000,
+  "tls_port": 8443,
+  "ifaces": [],
+  "tls": {
+    "cert": "/etc/httpd-cert.pem",
+    "key": "/etc/httpd-key.pem",
+    "client_ca": "",
+    "client_auth": "none"
+  },
+  "budget_pct": 10,
+  "keepalive_s": 30,
+  "auth": {
+    "default": "off",
+    "type": "basic",
+    "realm": "metal",
+    "hash": "argon2id",
+    "users": [
+      {
+        "user": "test",
+        "pass_hash": "$argon2id$v=19$m=1024,t=2,p=1$AQIDBAUGBwgJCgsMDQ4PEA==$LBzI9SPuUEmMhImURHurnrHHKsJQDcpQI3n7HZ702SY="
+      },
+      {
+        "user": "testbcrypt",
+        "pass_hash": "$2b$04$05mgiRuks.3l02Sjz2KwgegyoxT7e6GeuuuUyJbYCcW.DIdlPvdbW"
+      }
+    ],
+    "public": ["/health", "/static"]
+  },
+  "mounts": [
+    { "path": "/health", "app": "c:health" },
+    { "path": "/static", "app": "c:static", "root": "/mods/www" },
+    { "path": "/", "app": "py:microdot" },
+    { "path": "/secure", "app": "c:health", "auth": "basic" }
+  ]
+}

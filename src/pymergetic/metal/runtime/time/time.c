@@ -6,6 +6,7 @@
 
 /* Port: bios|efi runtime/time/time_port.c */
 uint64_t pm_metal_time_tsc_per_us_port(void);
+void     pm_metal_time_tsc_port_invalidate(void);
 
 static uint64_t mTscPerUs;
 
@@ -78,9 +79,19 @@ uint64_t pm_metal_time_mono_us(void)
 
 void pm_metal_time_recalibrate(void)
 {
+  uint64_t neu;
+
   /*
-   * TSC ticks/us does not change across ExitBootServices. Re-running the
-   * EFI port calibrator post-EBS only had a bogus CpuPause loop that
-   * inflated pm_metal_time_msleep() under emulation.
+   * Drop the shared + port caches and re-sample. EFI post-EBS cannot
+   * Stall; the port then returns its last cached multi-sample (or the
+   * ~2 GHz fallback) — never a busy-loop fake calibrate.
    */
+  pm_metal_time_tsc_port_invalidate();
+  mTscPerUs = 0;
+  neu       = pm_metal_time_tsc_per_us_port();
+  if (neu == 0) {
+    neu = 2000;
+  }
+
+  mTscPerUs = neu;
 }

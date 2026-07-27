@@ -11,8 +11,10 @@
 #include <pymergetic/metal/dev/net/net_life.h>
 #include <pymergetic/metal/dev/net/net_ops.h>
 #include <pymergetic/metal/dev/net/net_cfg.h>
+#include <pymergetic/metal/dev/net/asgi.h>
 #include <pymergetic/metal/dev/net/http.h>
 #include <pymergetic/metal/dev/net/ntp.h>
+#include <pymergetic/metal/dev/net/ssh.h>
 #include <pymergetic/metal/guest/pkg/pkg.h>
 #include <pymergetic/metal/fs/esp/esp.h>
 #include <pymergetic/metal/log/log.h>
@@ -222,6 +224,8 @@ static pm_metal_status_t LifeStep(pm_metal_async_handle_t self_h)
         /* Quiet success — tray/tree show lease; avoid clobbering the prompt. */
         s->logged_up   = 1;
         s->lease_up_us = pm_metal_time_mono_us();
+        (void)pm_metal_net_asgi_autoload();
+        (void)pm_metal_net_ssh_autoload();
       }
 
       s->step = LIFE_UP;

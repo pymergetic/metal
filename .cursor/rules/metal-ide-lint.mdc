@@ -1,0 +1,36 @@
+---
+description: Lint from the user's IDE view; fix real clangd noise; restart clangd after config changes
+alwaysApply: true
+---
+
+# IDE lint = user cost (clangd / diagnostics)
+
+The owner reads the editor's Problems / squiggles as the ground truth while
+working. Spurious or stale clangd errors burn more time than most "real"
+bugs. Treat IDE diagnostics as part of the deliverable, not optional polish.
+
+## Before you finish a change that touches C/C++ (or build/include paths)
+
+1. **See what the user sees** — after edits, check diagnostics on the files
+   you touched (and neighbors that include them). Do not assume "it builds
+   in the script so the IDE is fine."
+2. **Prefer fixing the cause of the squiggle** (missing `-I`, wrong TU
+   PathMatch, stale `.clangd`, header not on the compile path) over
+   silencing with casts/pragmas — unless the diagnostic is a known clangd
+   false positive documented in `docs/SOURCETREE.md`.
+3. **Restart clangd when config or include graphs changed** — any edit to
+   `.clangd` / `.clangd.template`, `scripts/setup.d/deps/ide.sh`, new
+   `-I` flags, new generated embed headers, or "I fixed includes but the
+   IDE still lies" → regenerate if needed (`./scripts/setup ide`) **and
+   tell the user to restart clangd** (Command Palette: `clangd: Restart
+   language server`, or reload the window). Do not leave them debugging
+   ghost errors from a stale language server.
+4. **Do not "fix" IDE noise by editing `external/`** — see
+   `docs/SOURCETREE.md` (IncludeCleaner / vendored trees). Fix Metal-side
+   compile flags or `.clangd` PathMatch instead.
+5. **Python guest code** — editor stubs live under `typings/`; after adding
+   `PM_METAL_PY_BIND` rows, regenerate (`scripts/gen_py_stubs.py` / next
+   `./scripts/build efi`) so the IDE matches the bind table.
+
+If you changed `.clangd.template` or ide setup in this session, end with an
+explicit one-liner: restart clangd / reload window.

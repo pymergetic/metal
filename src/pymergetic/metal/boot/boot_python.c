@@ -103,8 +103,8 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
       return PM_METAL_PENDING;
     }
 
-    t->a = pm_metal_py_run_script("/mods/py/overlap_a.py");
-    t->b = pm_metal_py_run_script("/mods/py/overlap_b.py");
+    t->a = pm_metal_py_run_script("/mods/py/tests/overlap_a.py");
+    t->b = pm_metal_py_run_script("/mods/py/tests/overlap_b.py");
     if (t->a == PM_METAL_ASYNC_HANDLE_INVALID || t->b == PM_METAL_ASYNC_HANDLE_INVALID) {
       pm_metal_log("metal-py: overlap fail");
       t->step = PY_PROOF_FAIL;
@@ -156,8 +156,8 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
   }
 
   case PY_PROOF_YIELD:
-    t->a = pm_metal_py_run_script("/mods/py/yield_peer.py");
-    t->b = pm_metal_py_run_script("/mods/py/yield_sleeper.py");
+    t->a = pm_metal_py_run_script("/mods/py/tests/yield_peer.py");
+    t->b = pm_metal_py_run_script("/mods/py/tests/yield_sleeper.py");
     if (t->a == PM_METAL_ASYNC_HANDLE_INVALID || t->b == PM_METAL_ASYNC_HANDLE_INVALID) {
       pm_metal_log("metal-py: yield fail");
       t->step = PY_PROOF_FAIL;

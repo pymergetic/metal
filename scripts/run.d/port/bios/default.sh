@@ -39,13 +39,14 @@ else
 	extra+=(-display none)
 fi
 
+echo "run-bios: hostfwd ssh :2222->guest:22  http :8000->:8000  https :8443->:8443" >&2
 exec qemu-system-x86_64 \
 	-machine q35,accel=kvm:tcg \
 	-smp 4 \
 	-m 512 \
 	"${extra[@]}" \
 	-audiodev none,id=a0 \
-	-netdev user,id=n0 \
+	-netdev user,id=n0,hostfwd=tcp::2222-:22,hostfwd=tcp::8000-:8000,hostfwd=tcp::8443-:8443 \
 	-device virtio-net-pci,netdev=n0 \
 	-device virtio-sound-pci,audiodev=a0 \
 	-drive if=none,id=vd0,format=raw,file="${VBLK}" \

@@ -69,6 +69,19 @@ class _Mod_t0_hello:
 
 t0_hello: _Mod_t0_hello
 
+class _ModFresh_t_asgi_hello:
+    """Fresh-instance scope for "t_asgi_hello" (async with)."""
+
+    async def __aenter__(self) -> "_ModFresh_t_asgi_hello": ...
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool: ...
+    def run(self, *args: Any) -> Awaitable[Any]: ...
+
+class _Mod_t_asgi_hello:
+    def run(self, *args: Any) -> Awaitable[Any]: ...
+    def fresh(self) -> _ModFresh_t_asgi_hello: ...
+
+t_asgi_hello: _Mod_t_asgi_hello
+
 class _ModFresh_t_async_audio:
     """Fresh-instance scope for "t_async_audio" (async with)."""
 

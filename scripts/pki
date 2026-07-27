@@ -7,6 +7,7 @@
 #   ./scripts/pki bake
 #   ./scripts/pki sign-wasm <path/to/foo.wasm> [--realm=<id>]
 #   ./scripts/pki sign-elf  <path/to/metal.elf> [--realm=<id>]
+#   ./scripts/pki issue-httpd [dns-name]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,6 +26,10 @@ usage: scripts/pki <cmd>
   bake                      write build/trust/metal_trust_bake.inc.c (all pubs)
   sign-wasm <file>          Mods CA → <file>.sig  [--realm=<id>]
   sign-elf  <file>          Kernel CA → <file>.sig [--realm=<id>]
+  issue-httpd [dns-name]    create TLS CA + httpd server leaf
+                            under ${PKI}/httpd (default DNS: metal-httpd)
+                            stage server-chain.crt as /etc/httpd-cert.pem
+                            and server.key as /etc/httpd-key.pem
 
 Env:
   METAL_PKI_DIR          default: ${HOME}/.local/share/metal/pki
@@ -188,6 +193,44 @@ cmd_sign_elf() {
 	pm_metal_pki_sign_file "${key}" "${FILE}" "${FILE}.sig"
 }
 
+cmd_issue_httpd() {
+	local name="${1:-metal-httpd}"
+	local dir="${PKI}/httpd"
+	local ext
+
+	if [[ $# -gt 1 || "${name}" == *$'\n'* || "${name}" == *"/"* ]]; then
+		usage
+	fi
+
+	mkdir -p "${dir}"
+	if [[ ! -f "${dir}/ca.key" || ! -f "${dir}/ca.crt" ]]; then
+		openssl ecparam -name prime256v1 -genkey -noout -out "${dir}/ca.key"
+		chmod 600 "${dir}/ca.key"
+		openssl req -new -x509 -key "${dir}/ca.key" -sha256 -days 3650 \
+			-subj "/CN=Metal httpd TLS CA" -out "${dir}/ca.crt" \
+			-addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+			-addext "keyUsage=critical,keyCertSign,cRLSign"
+		echo "pki: created ${dir}/ca.crt" >&2
+	fi
+
+	if [[ ! -f "${dir}/server.key" || ! -f "${dir}/server.crt" ]]; then
+		openssl ecparam -name prime256v1 -genkey -noout -out "${dir}/server.key"
+		chmod 600 "${dir}/server.key"
+		openssl req -new -key "${dir}/server.key" -subj "/CN=${name}" -out "${dir}/server.csr"
+		ext=$'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:'"${name}"
+		openssl x509 -req -in "${dir}/server.csr" \
+			-CA "${dir}/ca.crt" -CAkey "${dir}/ca.key" -CAcreateserial \
+			-sha256 -days 825 -out "${dir}/server.crt" -extfile <(printf '%s\n' "${ext}")
+		rm -f "${dir}/server.csr"
+		cat "${dir}/server.crt" "${dir}/ca.crt" >"${dir}/server-chain.crt"
+		echo "pki: created ${dir}/server.crt (DNS:${name})" >&2
+	fi
+
+	openssl verify -CAfile "${dir}/ca.crt" "${dir}/server.crt" >/dev/null
+	echo "pki: stage ${dir}/server-chain.crt -> /etc/httpd-cert.pem" >&2
+	echo "pki: stage ${dir}/server.key -> /etc/httpd-key.pem" >&2
+}
+
 [[ $# -ge 1 ]] || usage
 cmd="$1"
 shift
@@ -199,5 +242,6 @@ init-realm) cmd_init_realm "$@" ;;
 bake) pm_metal_pki_bake ;;
 sign-wasm) cmd_sign_wasm "$@" ;;
 sign-elf) cmd_sign_elf "$@" ;;
+issue-httpd) cmd_issue_httpd "$@" ;;
 *) usage ;;
 esac

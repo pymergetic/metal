@@ -9,6 +9,8 @@
 #include <limits.h>
 #include <string.h>
 
+#include <pymergetic/metal/boot/externals.h>
+
 #include "external/microtar/src/microtar.h"
 
 #define PM_METAL_UTIL_TAR_MAX_SLOTS 32
@@ -540,3 +542,10 @@ int pm_metal_util_tar_native_register(void)
   }
   return 0;
 }
+
+/* Hand-bumped with scripts/setup.d/deps/microtar.sh MICROTAR_REF. */
+PM_METAL_EXTERNAL(g_pm_metal_ext_microtar,
+                  microtar,
+                  "v0.1.0-2-g27076e1",
+                  "https://github.com/rxi/microtar",
+                  "ustar reader/writer");

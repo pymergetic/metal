@@ -31,6 +31,16 @@ typedef struct pm_metal_net_ops {
   pm_metal_async_handle_t (*recv)(pm_metal_net_sock_h h, void *ptr, uint32_t len);
   pm_metal_async_handle_t (*dns)(const char *host);
   int (*bind_if)(pm_metal_net_sock_h h, const char *ifname);
+  /** Non-blocking recv: bytes, 0=empty, (uint32_t)-1=EOF/error. Optional. */
+  uint32_t (*try_recv)(pm_metal_net_sock_h h, void *ptr, uint32_t len);
+  /** Bind local port (TCP/UDP). Optional; returns 0 or -1. */
+  int (*bind)(pm_metal_net_sock_h h, uint32_t port);
+  /** UDP sendto. Optional. */
+  uint32_t (*sendto)(pm_metal_net_sock_h h, const void *ptr, uint32_t len, const char *host,
+                     uint32_t port);
+  /** UDP recvfrom with peer. Optional. */
+  uint32_t (*try_recvfrom)(pm_metal_net_sock_h h, void *ptr, uint32_t len, char *peer_host,
+                           uint32_t peer_cap, uint32_t *peer_port);
 } pm_metal_net_ops_t;
 
 void                      pm_metal_net_set_ops(const pm_metal_net_ops_t *ops);

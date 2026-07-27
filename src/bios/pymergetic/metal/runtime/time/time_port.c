@@ -1,5 +1,5 @@
 /** @file
-  BIOS TSC calibrate via PIT channel 2.
+  BIOS TSC calibrate via PIT channel 2 (multi-sample average).
 **/
 
 #include <stdint.h>
@@ -7,6 +7,8 @@
 #include <Library/BaseLib.h>
 #include <Library/CpuLib.h>
 #include <Library/IoLib.h>
+
+#define TSC_CAL_SAMPLES 8u
 
 STATIC VOID
 PitDelayMs (
@@ -40,20 +42,41 @@ PitDelayMs (
   }
 }
 
+void
+pm_metal_time_tsc_port_invalidate (
+  VOID
+  )
+{
+  /* BIOS path has no sticky cache — PIT can always remeasure. */
+}
+
 uint64_t
 pm_metal_time_tsc_per_us_port (
   VOID
   )
 {
-  UINT64  a;
-  UINT64  b;
+  UINT64  sum;
+  UINT32  i;
+  UINT32  ok;
 
-  a = AsmReadTsc ();
-  PitDelayMs (1);
-  b = AsmReadTsc ();
-  if (b > a) {
-    return (b - a) / 1000u;
+  sum = 0;
+  ok  = 0;
+  for (i = 0; i < TSC_CAL_SAMPLES; i++) {
+    UINT64  a;
+    UINT64  b;
+
+    a = AsmReadTsc ();
+    PitDelayMs (1);
+    b = AsmReadTsc ();
+    if (b > a) {
+      sum += (b - a) / 1000u;
+      ok++;
+    }
   }
 
-  return 0;
+  if (ok == 0) {
+    return 0;
+  }
+
+  return sum / ok;
 }

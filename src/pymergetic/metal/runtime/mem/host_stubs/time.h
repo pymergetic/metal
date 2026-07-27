@@ -6,6 +6,7 @@
 #define __timespec_defined 1
 #define _STRUCT_TIMESPEC
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -14,6 +15,7 @@ extern "C" {
 
 typedef int  clockid_t;
 typedef long time_t;
+typedef long clock_t;
 
 #ifndef CLOCK_REALTIME
 #define CLOCK_REALTIME 0
@@ -27,6 +29,18 @@ struct timespec {
   long   tv_nsec;
 };
 
+struct tm {
+  int tm_sec;
+  int tm_min;
+  int tm_hour;
+  int tm_mday;
+  int tm_mon;
+  int tm_year;
+  int tm_wday;
+  int tm_yday;
+  int tm_isdst;
+};
+
 #ifndef TIMER_ABSTIME
 #define TIMER_ABSTIME 1
 #endif
@@ -38,6 +52,11 @@ int clock_nanosleep(clockid_t              clock_id,
                     struct timespec       *remain);
 int nanosleep(const struct timespec *req, struct timespec *rem);
 int sched_yield(void);
+clock_t clock(void);
+time_t time(time_t *t);
+struct tm *gmtime(const time_t *timer);
+struct tm *localtime(const time_t *timer);
+size_t strftime(char *s, size_t max, const char *format, const struct tm *tm);
 
 #ifdef __cplusplus
 }

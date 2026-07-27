@@ -389,6 +389,20 @@ void *memset(void *dst, int c, size_t n)
   return dst;
 }
 
+void *memchr(const void *s, int c, size_t n)
+{
+  const uint8_t *p;
+  size_t         i;
+
+  p = (const uint8_t *)s;
+  for (i = 0; i < n; i++) {
+    if (p[i] == (uint8_t)c) {
+      return (void *)(p + i);
+    }
+  }
+  return NULL;
+}
+
 int memcmp(const void *a, const void *b, size_t n)
 {
   const uint8_t *pa = (const uint8_t *)a;

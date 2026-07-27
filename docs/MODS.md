@@ -221,6 +221,8 @@ Relevant: [`guest/mod/`](../include/pymergetic/metal/guest/mod/mod.h), [`wasm.h`
 ## Related
 
 - Async ABI: `include/pymergetic/metal/runtime/async/async.h`, `docs/LIBC_ASYNC.md`
+- ASGI HTTP apps: `docs/IO.md` — C, MicroPython, and wasm leaves share the
+  `httpd` route registry.
 - External app example: `packages/metal-doom` (`docs/DOOM_ASYNC.md` in that repo)
 - µPy: `docs/MICROPYTHON.md` — binds land in `pymergetic.metal.mod` (`guest/mod/mod_py_bind.c`)
 - `docs/EFI.md`, `docs/IO.md`  

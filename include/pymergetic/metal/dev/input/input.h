@@ -19,6 +19,13 @@ extern "C" {
 
 #define PM_METAL_INPUT_WASI_MODULE "pymergetic.metal.input"
 
+/** Guest linear offset (wasm) or host pointer — for poll out-structs. */
+#if defined(__wasm__)
+#define PM_METAL_INPUT_IO_PTR(p) ((uint32_t)(uintptr_t)(p))
+#else
+#define PM_METAL_INPUT_IO_PTR(p) (p)
+#endif
+
 /* Metal keycodes — USB HID Keyboard/Keypad usage page (subset). */
 typedef uint16_t pm_metal_keycode_t;
 

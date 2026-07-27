@@ -2,6 +2,7 @@
   mbedTLS platform hooks for Metal EFI (no libc explicit_bzero).
   (impl: efi|bios)
 **/
+#include <pymergetic/metal/boot/externals.h>
 #include <pymergetic/metal/dev/net/mbedtls_metal_config.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
 
@@ -81,3 +82,9 @@ int mbedtls_metal_vsnprintf(char *s, size_t n, const char *fmt, va_list ap)
   /* C %s semantics — not EDK2 AsciiVSPrint (CHAR16* %s, ms_abi va_list). */
   return vsnprintf(s, n, fmt, ap);
 }
+
+PM_METAL_EXTERNAL(g_pm_metal_ext_mbedtls,
+                  mbedtls,
+                  MBEDTLS_VERSION_STRING,
+                  "https://github.com/Mbed-TLS/mbedtls",
+                  "TLS / crypto");

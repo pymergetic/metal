@@ -42,7 +42,7 @@ Wait on the world → **async**. CPU work → **sync**. Same classes on host and
 |-------|-----------------|-------------|-------------|---------------------|
 | **time** | `mono_us`, wall clock | — | `sleep_us`, `sleep_until_us` | TSC |
 | **gfx** | size/origin | clear/fill/blit + sync `present` | `async_present` (fence) | compositor shadow → **scanout backend** (`virtio_gpu` / `bochs_flip` / `radeon_rv370` / `i915_855gm` sample / `gop_blt` / `lfb_copy`); harvest: Multiboot / Bochs / VESA / EFI GOP |
-| **audio** | `ready` | `queue` | `drain` | virtio-snd (probe), else **AC97** (ICH / QEMU `-device AC97`), else null |
+| **audio** | `ready`, `muted`, `volume_get`, `backend` | `queue`, `mute`, `volume_set` | `drain` | virtio-snd (probe), else **AC97** (ICH / QEMU `-device AC97`), else null; shell `audio`/`vol` + status-bar slider |
 | **input** | `poll_key` / `poll_key_event`, `poll_pointer` | — | omit v1 | virtio-tablet (absolute, QEMU/VNC) when present; else efi ConIn+i8042 / bios i8042; tab focus gates guest vs shell |
 | **fs** | transitional sync size/read | — | open/close/read/write + sync `lseek`; stat/readdir/mkdir/unlink/rename/fsync | ESP cache (+ SimpleFileSystem pre-EBS) |
 | **blk** | `count`/`at`/`ready`/`capacity` | — | `read_async`/`write_async` | virtio-blk, ide-ata (multi-device) |
@@ -105,6 +105,17 @@ Blk detectors: `pm_metal_blk_virtio_detect`, `pm_metal_blk_ide_detect` (legacy I
 
 Topic modules place commands with `PM_METAL_SHELL_CMD` / `PM_METAL_SHELL_CMDS` into linker section `.pm_metal_shell_cmds.*`. `pm_metal_shell_cmds_install()` walks `__pm_metal_shell_cmds_{start,end}` (cap `PM_METAL_SHELL_CMD_MAX` = 128). No manual `register_*` list.
 
+### Externals registry
+
+Third-party stack identity (MicroPython, WAMR, lwIP, Dropbear, mbedTLS,
+microtar, …) self-registers with `PM_METAL_EXTERNAL` into
+`.pm_metal_externals.*` — same linker-section idiom as shell cmds / keyb
+layouts. This is **not** the mod registry and **not** Metal's own
+`authors` / `about` record. Surfaces: shell `externals`, Python
+`pymergetic.metal.externals`, WASI `pymergetic.metal.externals`, and the
+MetalPython boot banner (`Metal <ver> @ <cpu>` plus `  - <id> <version>`
+bullets).
+
 API: `pm_metal_io_dt_add` / `get` / `count` / `by_class` / `foreach` / `lookup` (first of class). Guest `io_query` optional later.  
 Tree: `bus/` (DT + virtio PCI) · `dev/<class>/` (detectors + backends).
 
@@ -113,9 +124,52 @@ Tree: `bus/` (DT + virtio PCI) · `dev/<class>/` (detectors + backends).
 ## Stream plumbing (stdio / TTY / pipes)
 
 Endpoints: `uart`, `ui_tab`, `pipe`, `pty` (master/slave), later `virtio_console`.  
-`stdio_attach(in,out,err)` binds a session. Dropbear later: net ↔ pty master; slave as remote TTY.
+`stdio_attach(in,out,err)` binds a session.
+
+### SSH console
+
+`sshd` is a Dropbear-backed console service, not a future stream feature. It
+listens on TCP port 22 by default, connects each network session to a PTY
+master, and gives the remote shell the PTY slave as its terminal.
+
+`/etc/sshd.json` configures the port, host-key path, session budget, and
+enabled authentication methods. `passwd`, `pubkey`, and the Metal `sslcert`
+extension are available; password users come from the passwd database,
+public keys come from the configured user records, and `sslcert` uses
+`auth.client_ca`. The default image enables `passwd` and `pubkey`. Use the
+`sshd` shell command to inspect or control the service.
 
 Cooked termios / job control: omit until needed (raw PTY first).
+
+### SSH sslcert auth
+
+`/etc/sshd.json` may add `"sslcert"` to `auth.methods` and set
+`auth.client_ca` to the PEM or DER client CA. The client sends a DER leaf
+certificate whose subject is exactly `CN=<local-user>`; Metal verifies its
+chain and verifies the request signature with that leaf's public key before
+accepting the mapped user.
+
+This is the Metal `sslcert` SSH userauth extension, not an OpenSSH-standard
+method. Its payload is `boolean true`, certificate DER, and a DER signature
+over `string(session_id) || SSH_MSG_USERAUTH_REQUEST` through the certificate
+field. A client must implement that extension; ordinary OpenSSH clients can
+continue to use `passwd` or `pubkey`.
+
+### ASGI httpd
+
+The ASGI HTTP service is configured by `/etc/httpd.json` and controlled from
+the `httpd` shell command. Its route registry accepts native C, MicroPython,
+and wasm ASGI leaves, so one listener can mount applications from each
+runtime. TLS and WebSocket upgrades are handled by the server rather than by
+individual applications. Microdot is the small Python-friendly layer on top
+of the same ASGI registry; it is not a second HTTP server.
+
+Wasm proof mod `asgi_hello` (embedded): shell `asgi_hello` registers a wasm
+ASGI leaf, listens on port 18080, mounts `/hello`, and replies
+`asgi-hello` via `pm_metal_net_asgi_send_simple`.
+
+See also [MODS.md](MODS.md) for wasm registration and
+[MICROPYTHON.md](MICROPYTHON.md) for Python ASGI applications.
 
 ---
 

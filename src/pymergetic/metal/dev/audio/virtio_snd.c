@@ -281,7 +281,7 @@ static uint32_t VsndQueue(pm_metal_audio_stream_h s, const void *pcm, uint32_t n
   uint32_t n;
   uint32_t placed;
 
-  if (s != 1 || !mStreams[1].used || pcm == NULL || nbytes == 0 || mMuted) {
+  if (s != 1 || !mStreams[1].used || pcm == NULL || nbytes == 0) {
     return 0;
   }
 
@@ -308,7 +308,13 @@ static uint32_t VsndQueue(pm_metal_audio_stream_h s, const void *pcm, uint32_t n
 
       x           = (vsnd_pcm_xfer_t *)mTxBufs[i];
       x->StreamId = 0;
-      memcpy(mTxBufs[i] + sizeof(*x), (const uint8_t *)pcm + placed, n);
+      /* Mute: keep TX paced with silence so callers' queued-frame math holds. */
+      if (mMuted) {
+        memset(mTxBufs[i] + sizeof(*x), 0, n);
+      } else {
+        memcpy(mTxBufs[i] + sizeof(*x), (const uint8_t *)pcm + placed, n);
+      }
+
       mTxLens[i] = sizeof(*x) + n;
       if (pm_metal_virtq_add(&mDev.vqs[VSND_TX], mTxBufs[i], mTxLens[i], 0, NULL) != 0) {
         break;
@@ -381,25 +387,19 @@ static pm_metal_async_handle_t VsndDrain(pm_metal_audio_stream_h s, uint32_t nby
 
 static void VsndMute(int on)
 {
-  vsnd_pcm_hdr_t ph;
-  vsnd_hdr_t     resp;
-
+  /*
+   * Soft mute only — keep PCM started so TX buffers still complete and
+   * callers' queued/consumed accounting (Doom lead/catchup) stays honest.
+   * Queue path writes silence while mMuted.
+   */
   mMuted = on ? 1 : 0;
-  if (!mReady) {
-    return;
-  }
-
-  memset(&ph, 0, sizeof(ph));
-  ph.Hdr.Code = on ? VIRTIO_SND_R_PCM_STOP : VIRTIO_SND_R_PCM_START;
-  ph.StreamId = 0;
-  memset(&resp, 0, sizeof(resp));
-  (void)VsndCtrl(&ph, sizeof(ph), &resp, sizeof(resp));
-  mStarted = on ? 0 : 1;
+  (void)mStarted;
 }
 
-static const pm_metal_audio_ops_t mVirtioOps = { "virtio-snd", VsndInit,  VsndPoll,
-                                                 VsndReady,    VsndOpen,  VsndClose,
-                                                 VsndQueue,    VsndDrain, VsndMute };
+static const pm_metal_audio_ops_t mVirtioOps = {
+  "virtio-snd", VsndInit, VsndPoll, VsndReady, VsndOpen,  VsndClose,
+  VsndQueue,    VsndDrain, VsndMute, NULL,     NULL
+};
 
 int pm_metal_audio_virtio_probe(void)
 {

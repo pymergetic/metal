@@ -1,5 +1,5 @@
 /*
- * mbedTLS profile for Metal EFI HTTP/TLS client (TLS 1.2+, SNI, verify optional).
+ * mbedTLS profile for Metal HTTP/TLS client and server (TLS 1.2+, SNI).
  */
 #ifndef PYMERGETIC_METAL_DEV_NET_MBEDTLS_METAL_CONFIG_H_
 #define PYMERGETIC_METAL_DEV_NET_MBEDTLS_METAL_CONFIG_H_
@@ -25,9 +25,11 @@ int mbedtls_metal_vsnprintf(char *s, size_t n, const char *fmt, va_list ap);
 #endif
 
 #define MBEDTLS_SSL_CLI_C
+#define MBEDTLS_SSL_SRV_C
 #define MBEDTLS_SSL_TLS_C
 #define MBEDTLS_SSL_PROTO_TLS1_2
 #define MBEDTLS_SSL_SERVER_NAME_INDICATION
+#define MBEDTLS_SSL_ALPN
 
 #define MBEDTLS_KEY_EXCHANGE_ECDHE_RSA_ENABLED
 #define MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
@@ -35,6 +37,7 @@ int mbedtls_metal_vsnprintf(char *s, size_t n, const char *fmt, va_list ap);
 #define MBEDTLS_AES_C
 #define MBEDTLS_ASN1_PARSE_C
 #define MBEDTLS_ASN1_WRITE_C
+#define MBEDTLS_BASE64_C
 #define MBEDTLS_BIGNUM_C
 #define MBEDTLS_CIPHER_C
 #define MBEDTLS_CIPHER_MODE_CBC
@@ -51,10 +54,12 @@ int mbedtls_metal_vsnprintf(char *s, size_t n, const char *fmt, va_list ap);
 #define MBEDTLS_PKCS1_V15
 #define MBEDTLS_PK_C
 #define MBEDTLS_PK_PARSE_C
+#define MBEDTLS_PEM_PARSE_C
 #define MBEDTLS_PLATFORM_C
 #define MBEDTLS_PLATFORM_SNPRINTF_MACRO  mbedtls_metal_snprintf
 #define MBEDTLS_PLATFORM_VSNPRINTF_MACRO mbedtls_metal_vsnprintf
 #define MBEDTLS_RSA_C
+#define MBEDTLS_SHA1_C
 #define MBEDTLS_SHA256_C
 #define MBEDTLS_SHA512_C
 #define MBEDTLS_SSL_CIPHERSUITES_C

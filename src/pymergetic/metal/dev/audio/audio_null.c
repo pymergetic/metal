@@ -77,7 +77,8 @@ static void NullClose(pm_metal_audio_stream_h s)
 static uint32_t NullQueue(pm_metal_audio_stream_h s, const void *pcm, uint32_t nbytes)
 {
   (void)pcm;
-  if (s == 0 || !mStreams[s].used || mMuted) {
+  (void)mMuted; /* facade may zero PCM; still report acceptance for pacing */
+  if (s == 0 || !mStreams[s].used) {
     return 0;
   }
 
@@ -99,8 +100,10 @@ static void NullMute(int on)
   mMuted = on ? 1 : 0;
 }
 
-static const pm_metal_audio_ops_t mNullOps = { "null",    NullInit,  NullPoll,  NullReady, NullOpen,
-                                               NullClose, NullQueue, NullDrain, NullMute };
+static const pm_metal_audio_ops_t mNullOps = {
+  "null", NullInit, NullPoll, NullReady, NullOpen, NullClose, NullQueue, NullDrain, NullMute, NULL,
+  NULL
+};
 
 void pm_metal_audio_null_install(void)
 {

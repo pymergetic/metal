@@ -31,6 +31,11 @@ utility is a **worse** change than one that reuses something imperfect.
 Read [`docs/SOURCETREE.md`](docs/SOURCETREE.md) before touching anything under
 `src/` or `include/` — it defines the tree layout and the C dialect rule.
 
+**Dual-ABI buffer args:** guest prototypes take `uint32_t` linear offsets;
+host takes pointers. Call sites must use the header's `PM_METAL_*_IO_PTR(p)`
+macro (never a bare `(uint32_t)(uintptr_t)p`). See SOURCETREE § dual
+WASI-import headers.
+
 ## The other rule you must not relitigate
 
 `src/pymergetic/metal/**` is uniform ISO C / `stdint.h` — **one spelling per
@@ -55,3 +60,11 @@ grep -rlE '#include\s*<(Uefi\.h|Library/|Protocol/|IndustryStandard/)' src/pymer
 ```
 
 It must return nothing.
+
+## IDE diagnostics (clangd) are part of the job
+
+The owner works from editor squiggles. After C/include/`.clangd` changes,
+check diagnostics on touched files, regenerate `./scripts/setup ide` when
+the template changed, and **tell them to restart clangd** (or reload the
+window) so they are not chasing stale errors. See
+`.cursor/rules/metal-ide-lint.mdc` and `docs/SOURCETREE.md` (clangd).

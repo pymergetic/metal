@@ -9,6 +9,7 @@
 #include "priv.h"
 
 #include <pymergetic/metal/dev/input/input.h>
+#include <pymergetic/metal/dev/audio/audio.h>
 #include <pymergetic/metal/dev/net/net_cfg.h>
 #include <pymergetic/metal/dev/net/ntp.h>
 #include <pymergetic/metal/dev/random/random.h>
@@ -25,6 +26,18 @@ static uint32_t mStatusIfCount   = 0xffffffffu;
 static uint32_t mStatusNtpBit    = 0xffffffffu;
 static uint32_t mStatusFpsHz     = 0xffffffffu;
 static uint32_t mStatusKeyb      = 0xffffffffu;
+static uint32_t mStatusAudPacked = 0xffffffffu; /* ready:1 mute:1 vol:8 */
+
+#define UI_AUD_SLIDER_W 40
+
+/* Hit regions for MetalUiStatusAudioPointer (updated each status paint). */
+static int32_t mAudValid;
+static int32_t mAudY;
+static int32_t mAudH;
+static int32_t mAudMuteX;
+static int32_t mAudMuteW;
+static int32_t mAudSlideX;
+static int32_t mAudSlideW;
 
 /* Per-iface tray color: 0=down, 1=partial (IP no DNS), 2=good — packed 2 bits. */
 #define NET_HEALTH_DOWN    0u
@@ -703,12 +716,25 @@ static pm_metal_gfx_color_t MetalUiFpsColor(uint32_t hz)
   return COL_LOG_FAIL;
 }
 
+static uint32_t MetalUiAudioPacked(void)
+{
+  uint32_t vol;
+
+  vol = pm_metal_audio_volume_get();
+  if (vol > 100u) {
+    vol = 100u;
+  }
+
+  return ((pm_metal_audio_ready() ? 1u : 0u) << 9) | ((pm_metal_audio_muted() ? 1u : 0u) << 8) | vol;
+}
+
 static void MetalUiStatusSnapshot(uint32_t *clock_tod,
                                   uint32_t *net_health,
                                   uint32_t *if_count,
                                   uint32_t *ntp_bit,
                                   uint32_t *fps_hz,
-                                  uint32_t *keyb)
+                                  uint32_t *keyb,
+                                  uint32_t *aud_packed)
 {
   uint64_t             ms;
   uint32_t             tod;
@@ -722,6 +748,7 @@ static void MetalUiStatusSnapshot(uint32_t *clock_tod,
   *clock_tod = (tod / 3600u) * 60u + ((tod % 3600u) / 60u);
   *fps_hz    = pm_metal_gfx_fps();
   *keyb      = pm_metal_input_keyb_get();
+  *aud_packed = MetalUiAudioPacked();
 
   n      = pm_metal_net_if_count();
   health = 0;
@@ -754,14 +781,18 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
   int32_t              fps_x;
   int32_t              keyb_w;
   int32_t              keyb_x;
+  int32_t              aud_w;
+  int32_t              aud_x;
   int32_t              tray_right;
   int32_t              tray_w;
   int32_t              tx;
   int32_t              ty;
   int32_t              left_max;
+  int32_t              fill_w;
   uint32_t             n;
   uint32_t             i;
   uint32_t             fps_hz;
+  uint32_t             vol;
   uint64_t             ms;
   uint32_t             tod;
   uint32_t             hour;
@@ -770,6 +801,7 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
   char                 fps[8];
   char                 keyb[4];
   const char          *keyb_name;
+  const char          *mute_lbl;
   char                 left[STATUS_CHARS];
   uintptr_t            left_n;
   uintptr_t            fps_chars;
@@ -777,6 +809,7 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
   uintptr_t            max_chars;
   pm_metal_net_ifcfg_t cfg;
   pm_metal_gfx_color_t fps_fg;
+  pm_metal_gfx_color_t rdy_fg;
 
   pm_metal_gfx_fill_rect(w->x, w->y, w->w, w->h, COL_STATUS);
   pm_metal_gfx_bevel_rect(w->x, w->y, w->w, w->h, 0, COL_BEVEL_HI, COL_BEVEL_LO);
@@ -784,7 +817,9 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
   clock_w = 8 + UI_CLOCK_CHARS * UI_FONT_W + 8;
   fps_w   = 8 + UI_FPS_CHARS * UI_FONT_W + 8;
   keyb_w  = 8 + UI_KEYB_CHARS * UI_FONT_W + 8;
-  if (clock_w + fps_w + keyb_w + 30 > w->w) {
+  /* ready bullet + mute letter + slider */
+  aud_w = 8 + 6 + 4 + UI_FONT_W + 4 + UI_AUD_SLIDER_W + 8;
+  if (clock_w + fps_w + keyb_w + aud_w + 40 > w->w) {
     fps_w = 8 + 3 * UI_FONT_W + 8; /* fall back to "99" */
   }
 
@@ -809,6 +844,15 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
     fps_x = keyb_x + keyb_w + 6;
   }
 
+  aud_x = keyb_x - 6 - aud_w;
+  if (aud_x < w->x + 4) {
+    aud_x = w->x + 4;
+    aud_w = keyb_x - 6 - aud_x;
+    if (aud_w < 40) {
+      aud_w = 0;
+    }
+  }
+
   /* Systray width: colored bullet + name + pad per iface. */
   n      = pm_metal_net_if_count();
   tray_w = 0;
@@ -820,7 +864,7 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
     tray_w += 10 + (int32_t)strlen(cfg.name) * UI_FONT_W + 6;
   }
 
-  tray_right = keyb_x - 8;
+  tray_right = (aud_w > 0) ? (aud_x - 8) : (keyb_x - 8);
   if (tray_w > 0 && tray_right - tray_w < w->x + 8) {
     tray_w = tray_right - (w->x + 8);
     if (tray_w < 0) {
@@ -849,7 +893,7 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
     pm_metal_gfx_draw_text(w->x + 8, w->y + 4, left, COL_STATUS_TXT, COL_STATUS, 1);
   }
 
-  /* Net systray left of the FPS cell. */
+  /* Net systray left of the audio/keyb cells. */
   tx = tray_right - tray_w;
   ty = w->y + 4;
   if (tx < w->x + 8) {
@@ -879,8 +923,62 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
     tx += item_w;
   }
 
-  /* Separator tray | keyb. */
-  if (tray_w > 0) {
+  mAudValid = 0;
+  if (aud_w > 0) {
+    /* Separator tray | audio. */
+    if (tray_w > 0) {
+      pm_metal_gfx_fill_rect(aud_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
+      pm_metal_gfx_fill_rect(aud_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
+    }
+
+    pm_metal_gfx_fill_rect(aud_x, w->y + 2, aud_w, w->h - 4, COL_STATUS_CLK);
+    pm_metal_gfx_bevel_rect(aud_x, w->y + 2, aud_w, w->h - 4, 0, COL_BEVEL_LO, COL_BEVEL_HI);
+
+    rdy_fg = pm_metal_audio_ready() ? COL_LOG_OK : COL_LOG_FAIL;
+    pm_metal_gfx_fill_rect(aud_x + 4, w->y + 9, 6, 6, rdy_fg);
+
+    mute_lbl = pm_metal_audio_muted() ? "M" : "A";
+    mAudMuteX = aud_x + 4 + 6 + 4;
+    mAudMuteW = UI_FONT_W + 4;
+    pm_metal_gfx_draw_text(mAudMuteX,
+                           w->y + 4,
+                           mute_lbl,
+                           pm_metal_audio_muted() ? COL_LOG_WARN : COL_STATUS_TXT,
+                           COL_STATUS_CLK,
+                           1);
+
+    mAudSlideX = mAudMuteX + mAudMuteW;
+    mAudSlideW = UI_AUD_SLIDER_W;
+    if (mAudSlideX + mAudSlideW > aud_x + aud_w - 4) {
+      mAudSlideW = aud_x + aud_w - 4 - mAudSlideX;
+    }
+
+    if (mAudSlideW > 4) {
+      vol = pm_metal_audio_volume_get();
+      if (vol > 100u) {
+        vol = 100u;
+      }
+
+      if (pm_metal_audio_muted()) {
+        vol = 0u;
+      }
+
+      pm_metal_gfx_fill_rect(mAudSlideX, w->y + 10, mAudSlideW, 4, COL_BEVEL_LO);
+      fill_w = (int32_t)((vol * (uint32_t)mAudSlideW) / 100u);
+      if (fill_w > 0) {
+        pm_metal_gfx_fill_rect(mAudSlideX, w->y + 10, fill_w, 4, COL_LOG_OK);
+      }
+    }
+
+    mAudY     = w->y;
+    mAudH     = w->h;
+    mAudValid = 1;
+
+    /* Separator audio | keyb. */
+    pm_metal_gfx_fill_rect(keyb_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
+    pm_metal_gfx_fill_rect(keyb_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
+  } else if (tray_w > 0) {
+    /* Separator tray | keyb (no audio cell). */
     pm_metal_gfx_fill_rect(keyb_x - 5, w->y + 5, 1, w->h - 10, COL_BEVEL_LO);
     pm_metal_gfx_fill_rect(keyb_x - 4, w->y + 5, 1, w->h - 10, COL_BEVEL_HI);
   }
@@ -950,7 +1048,8 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
                         &mStatusIfCount,
                         &mStatusNtpBit,
                         &mStatusFpsHz,
-                        &mStatusKeyb);
+                        &mStatusKeyb,
+                        &mStatusAudPacked);
 }
 
 void MetalUiPaintStatusBarOnly(void)
@@ -1066,13 +1165,58 @@ int32_t MetalUiStatusNeedsRefresh(void)
   uint32_t ntp_bit;
   uint32_t fps_hz;
   uint32_t keyb;
+  uint32_t aud;
 
-  MetalUiStatusSnapshot(&clock_tod, &net_health, &if_count, &ntp_bit, &fps_hz, &keyb);
+  MetalUiStatusSnapshot(&clock_tod, &net_health, &if_count, &ntp_bit, &fps_hz, &keyb, &aud);
   if (clock_tod != mStatusClockTod || net_health != mStatusNetHealth ||
       if_count != mStatusIfCount || ntp_bit != mStatusNtpBit || fps_hz != mStatusFpsHz ||
-      keyb != mStatusKeyb) {
+      keyb != mStatusKeyb || aud != mStatusAudPacked) {
     return 1;
   }
 
   return 0;
+}
+
+int32_t MetalUiStatusAudioPointer(int32_t x, int32_t y, uint32_t buttons)
+{
+  static uint32_t prev_buttons;
+  int32_t         edge;
+  int32_t         held;
+  int32_t         handled;
+  uint32_t        vol;
+
+  edge         = ((buttons & 1u) != 0u && (prev_buttons & 1u) == 0u) ? 1 : 0;
+  held         = ((buttons & 1u) != 0u) ? 1 : 0;
+  handled      = 0;
+  prev_buttons = buttons;
+
+  if (!mAudValid || y < mAudY || y >= mAudY + mAudH) {
+    return 0;
+  }
+
+  if (edge && x >= mAudMuteX && x < mAudMuteX + mAudMuteW) {
+    pm_metal_audio_mute(pm_metal_audio_muted() ? 0 : 1);
+    return 1;
+  }
+
+  if ((edge || held) && mAudSlideW > 0 && x >= mAudSlideX && x < mAudSlideX + mAudSlideW) {
+    vol = (uint32_t)(((x - mAudSlideX) * 100) / mAudSlideW);
+    if (vol > 100u) {
+      vol = 100u;
+    }
+
+    if (pm_metal_audio_muted() && vol > 0u) {
+      pm_metal_audio_mute(0);
+    }
+
+    pm_metal_audio_volume_set(vol);
+    handled = 1;
+  }
+
+  return handled;
+}
+
+int pm_metal_ui_status_audio_pointer(int32_t x, int32_t y, uint32_t buttons)
+{
+  return MetalUiStatusAudioPointer(x, y, buttons);
 }

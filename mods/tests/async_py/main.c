@@ -24,7 +24,7 @@ typedef struct {
 pm_metal_status_t pm_metal_guest_step(pm_metal_async_handle_t self_h)
 {
   guest_state_t    *s;
-  static const char path[] = "/mods/py/sleep_demo.py";
+  static const char path[] = "/mods/py/tests/sleep_demo.py";
 
   s = pm_metal_async_coro_frame(self_h, (uint32_t)sizeof(*s));
 
