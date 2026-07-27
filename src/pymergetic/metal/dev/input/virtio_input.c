@@ -14,7 +14,7 @@
 #define VINPUT_EVENTQ  0
 #define VINPUT_STATUSQ 1
 #define VINPUT_QSZ     64
-#define VINPUT_BUFS    32
+#define VINPUT_BUFS    64
 
 #define VIRTIO_INPUT_CFG_EV_BITS  0x11u
 #define VIRTIO_INPUT_CFG_ABS_INFO 0x12u

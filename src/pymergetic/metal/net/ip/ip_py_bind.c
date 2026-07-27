@@ -12,9 +12,12 @@
   (1/2 each — no named constants exposed yet, see socket()'s own comment);
   socket() defaults to AF_INET+SOCK_STREAM when omitted, the common case.
 **/
+#include <stdio.h>
 #include <string.h>
 
+#include <pymergetic/metal/net/io_budget.h>
 #include <pymergetic/metal/net/ip/ip.h>
+#include <pymergetic/metal/net/ip/ip_cfg.h>
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/py/py_obj.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
@@ -40,7 +43,7 @@
  * recv() scratch buffer at once.
  */
 #define NET_PY_RECV_SLOTS 8u
-#define NET_PY_RECV_CAP   4096u
+#define NET_PY_RECV_CAP   PM_METAL_IO_WIRE_MAX
 
 typedef struct {
   pm_metal_net_ip_sock_h sock;
@@ -273,3 +276,96 @@ PM_METAL_PY_BIND(g_py_bind_net_dns_last_ntoa,
                  "dns_last_ntoa",
                  py_net_dns_last_ntoa_obj,
                  PM_METAL_PY_SYNC);
+
+static pm_metal_py_obj_t py_net_iface_dict(const pm_metal_net_ip_ifcfg_t *cfg)
+{
+  pm_metal_py_obj_t d;
+  char              mac[18];
+
+  d = pm_metal_py_dict_new(10);
+  if (cfg == NULL) {
+    return d;
+  }
+  pm_metal_py_dict_set_str(d, "name", pm_metal_py_str_new(cfg->name));
+  pm_metal_py_dict_set_str(d, "ip", pm_metal_py_str_new(cfg->ip));
+  pm_metal_py_dict_set_str(d, "mask", pm_metal_py_str_new(cfg->mask));
+  pm_metal_py_dict_set_str(d, "gw", pm_metal_py_str_new(cfg->gw));
+  pm_metal_py_dict_set_str(d, "dns", pm_metal_py_str_new(cfg->dns));
+  pm_metal_py_dict_set_str(d, "ntp", pm_metal_py_str_new(cfg->ntp));
+  pm_metal_py_dict_set_str(d, "backend", pm_metal_py_str_new(cfg->backend != NULL ? cfg->backend : ""));
+  pm_metal_py_dict_set_str(d, "link_up", pm_metal_py_int_new(cfg->link_up ? 1 : 0));
+  snprintf(mac,
+           sizeof(mac),
+           "%02x:%02x:%02x:%02x:%02x:%02x",
+           cfg->mac[0],
+           cfg->mac[1],
+           cfg->mac[2],
+           cfg->mac[3],
+           cfg->mac[4],
+           cfg->mac[5]);
+  pm_metal_py_dict_set_str(d, "mac", pm_metal_py_str_new(mac));
+  return d;
+}
+
+static mp_obj_t py_net_ifaces(void)
+{
+  pm_metal_py_obj_t       list;
+  unsigned                n;
+  unsigned                i;
+  pm_metal_net_ip_ifcfg_t cfg;
+
+  list = pm_metal_py_list_new();
+  n    = pm_metal_net_ip_if_count();
+  for (i = 0; i < n; i++) {
+    if (pm_metal_net_ip_if_get_index(i, &cfg) != 0) {
+      continue;
+    }
+    pm_metal_py_list_append(list, py_net_iface_dict(&cfg));
+  }
+  return list;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(py_net_ifaces_obj, py_net_ifaces);
+PM_METAL_PY_BIND(
+  g_py_bind_net_ifaces, "pymergetic.metal.net.ip", "ifaces", py_net_ifaces_obj, PM_METAL_PY_SYNC);
+
+static mp_obj_t py_net_iface(size_t n_args, const mp_obj_t *args)
+{
+  pm_metal_net_ip_ifcfg_t cfg;
+  const char             *name;
+
+  name = NULL;
+  if (n_args >= 1 && args[0] != mp_const_none) {
+    name = mp_obj_str_get_str(args[0]);
+  }
+  if (pm_metal_net_ip_if_get_named(name, &cfg) != 0) {
+    return pm_metal_py_obj_none();
+  }
+  return py_net_iface_dict(&cfg);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(py_net_iface_obj, 0, 1, py_net_iface);
+PM_METAL_PY_BIND(
+  g_py_bind_net_iface, "pymergetic.metal.net.ip", "iface", py_net_iface_obj, PM_METAL_PY_SYNC);
+
+static mp_obj_t py_net_if_gen(void)
+{
+  return pm_metal_py_int_new((int64_t)pm_metal_net_ip_if_gen());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(py_net_if_gen_obj, py_net_if_gen);
+PM_METAL_PY_BIND(
+  g_py_bind_net_if_gen, "pymergetic.metal.net.ip", "if_gen", py_net_if_gen_obj, PM_METAL_PY_SYNC);
+
+static mp_obj_t py_net_if_wait(mp_obj_t since_obj)
+{
+  uint32_t                since;
+  pm_metal_async_handle_t ah;
+
+  since = (uint32_t)mp_obj_get_int(since_obj);
+  ah    = pm_metal_net_ip_if_wait(since);
+  if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
+    pm_metal_py_raise_value_error("net: if_wait failed to start");
+  }
+  return pm_metal_py_new_awaitable_u32(ah);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(py_net_if_wait_obj, py_net_if_wait);
+PM_METAL_PY_BIND(
+  g_py_bind_net_if_wait, "pymergetic.metal.net.ip", "if_wait", py_net_if_wait_obj, PM_METAL_PY_SYNC);

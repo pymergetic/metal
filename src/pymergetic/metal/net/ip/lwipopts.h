@@ -10,15 +10,16 @@
 #define SYS_LIGHTWEIGHT_PROT 0
 
 #define MEM_ALIGNMENT 8
-#define MEM_SIZE      (96 * 1024)
+/* ~1 MiB class net budget with virtio TX/RX rings (see virtio_net.c). */
+#define MEM_SIZE (512 * 1024)
 
-#define MEMP_NUM_PBUF           32
+#define MEMP_NUM_PBUF           64
 #define MEMP_NUM_UDP_PCB        8
-#define MEMP_NUM_TCP_PCB        8
+#define MEMP_NUM_TCP_PCB        16
 #define MEMP_NUM_TCP_PCB_LISTEN 4
-#define MEMP_NUM_TCP_SEG        32
+#define MEMP_NUM_TCP_SEG        128
 #define MEMP_NUM_RAW_PCB        4
-#define PBUF_POOL_SIZE          32
+#define PBUF_POOL_SIZE          256
 #define PBUF_POOL_BUFSIZE       1600
 
 #define LWIP_ARP                   1
@@ -43,13 +44,14 @@
 #define LWIP_NETIF_API             0
 
 #define TCP_MSS          1460
-#define TCP_WND          (4 * TCP_MSS)
-#define TCP_SND_BUF      (4 * TCP_MSS)
-#define TCP_SND_QUEUELEN 8
+#define TCP_WND          (32 * TCP_MSS)
+#define TCP_SND_BUF      (32 * TCP_MSS)
+#define TCP_SND_QUEUELEN 64
 
-#define LWIP_NETIF_HOSTNAME        1
-#define LWIP_NETIF_STATUS_CALLBACK 0
-#define LWIP_NETIF_LINK_CALLBACK   0
+#define LWIP_NETIF_HOSTNAME            1
+#define LWIP_NETIF_STATUS_CALLBACK     1
+#define LWIP_NETIF_LINK_CALLBACK       1
+#define LWIP_NETIF_EXT_STATUS_CALLBACK 1
 
 /* Capture BOOTP siaddr + file; Metal hook also keeps DHCP opts 66/67. */
 #define LWIP_DHCP_BOOTP_FILE 1

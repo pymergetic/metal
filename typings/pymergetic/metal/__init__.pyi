@@ -13,6 +13,7 @@ from . import doc as doc
 from . import externals as externals
 from . import fs as fs
 from . import iface as iface
+from . import mem as mem
 from . import mod as mod
 from . import net as net
 from . import process as process
@@ -20,7 +21,7 @@ from . import random as random
 from . import tar as tar
 from . import time as time
 
-__all__ = ['aio', 'audio', 'authors', 'doc', 'externals', 'fs', 'iface', 'mod', 'net', 'process', 'random', 'tar', 'time']
+__all__ = ['aio', 'audio', 'authors', 'doc', 'externals', 'fs', 'iface', 'mem', 'mod', 'net', 'process', 'random', 'tar', 'time']
 __path__: list[str]
 
 def __getattr__(name: str) -> Any: ...

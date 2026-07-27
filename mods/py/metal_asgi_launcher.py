@@ -90,6 +90,17 @@ def _ext_esc(row):
   }
 
 
+def _lim_esc(row):
+  return {
+      "id": _esc(row.get("id", "")),
+      "module": _esc(row.get("module", "")),
+      "name": _esc(row.get("name", "")),
+      "value": row.get("value", 0),
+      "unit": _esc(row.get("unit", "")),
+      "note": _esc(row.get("note", "")),
+  }
+
+
 def _metal_version():
   try:
     import pymergetic.metal.authors as authors
@@ -142,6 +153,7 @@ async def index(request):
   import pymergetic.metal.doc as doc
   import pymergetic.metal.externals as externals
   import pymergetic.metal.iface as iface
+  import pymergetic.metal.mem.limit as mem_limit
 
   _ = request
   docs = doc.list()
@@ -155,6 +167,7 @@ async def index(request):
       n_pkgs=len(pkgs),
       n_syms=len(syms),
       n_ext=len(externals.list()),
+      n_lim=len(mem_limit.list()),
   )
 
 
@@ -331,6 +344,28 @@ async def externals_detail(request, ext_id):
   return _html("externals_detail.html", title=er["id"], row=er)
 
 
+@app.get("/limits")
+async def limits_home(request):
+  import pymergetic.metal.mem.limit as mem_limit
+
+  rows, _truncated = _limit_rows(
+      [_lim_esc(r) for r in mem_limit.list()], request, default=80
+  )
+  return _html("limits_list.html", title="limits", rows=rows)
+
+
+@app.get("/limits/<lim_id>")
+async def limits_detail(request, lim_id):
+  import pymergetic.metal.mem.limit as mem_limit
+
+  _ = request
+  row = mem_limit.get(lim_id)
+  if row is None:
+    return _json_response({"error": "not found"}, 404)
+  er = _lim_esc(row)
+  return _html("limits_detail.html", title=er["id"], row=er)
+
+
 # --- JSON (Part III-H1) ----------------------------------------------------
 
 
@@ -471,6 +506,25 @@ async def api_externals_one(request, ext_id):
 
   _ = request
   row = externals.get(ext_id)
+  if row is None:
+    return _json_response({"error": "not found"}, 404)
+  return _json_response(row)
+
+
+@app.get("/api/limits")
+async def api_limits_list(request):
+  import pymergetic.metal.mem.limit as mem_limit
+
+  rows, _truncated = _limit_rows(mem_limit.list(), request, default=80)
+  return _json_response(rows)
+
+
+@app.get("/api/limits/<lim_id>")
+async def api_limits_one(request, lim_id):
+  import pymergetic.metal.mem.limit as mem_limit
+
+  _ = request
+  row = mem_limit.get(lim_id)
   if row is None:
     return _json_response({"error": "not found"}, 404)
   return _json_response(row)

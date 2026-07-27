@@ -1,4 +1,4 @@
-{% args title, version, n_docs, n_pkgs, n_syms, n_ext %}
+{% args title, version, n_docs, n_pkgs, n_syms, n_ext, n_lim %}
 {% include "base_header.html" title %}
 <h1>metal</h1>
 <p class="muted">version {{ version }}</p>
@@ -9,5 +9,6 @@
   <li><a href="/iface">iface packages</a> - {{ n_pkgs }} packs</li>
   <li><a href="/iface/sym">native symbols</a> - {{ n_syms }} rows</li>
   <li><a href="/externals">externals</a> - {{ n_ext }} third-party records</li>
+  <li><a href="/limits">limits</a> - {{ n_lim }} compile-time budgets</li>
 </ul>
 {% include "base_footer.html" %}

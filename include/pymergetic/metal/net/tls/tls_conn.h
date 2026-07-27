@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 
+#include "pymergetic/metal/net/io_budget.h"
 #include "pymergetic/metal/runtime/async/async.h"
 
 #ifdef __cplusplus
@@ -28,7 +29,7 @@ typedef uint32_t pm_metal_net_tls_conn_h;
 /** Largest single read()/write() this connection type will move in one
  * coroutine step — bigger requests are chunked by the Python-facing bind
  * (tls_py_bind.c), matching the wire buffer's own PM_METAL_TLS_WIRE_MAX. */
-#define PM_METAL_TLS_CONN_IO_MAX 4096u
+#define PM_METAL_TLS_CONN_IO_MAX PM_METAL_IO_WIRE_MAX
 
 /** Claim a connection slot. PM_METAL_TLS_CONN_INVALID if none free. */
 pm_metal_net_tls_conn_h pm_metal_net_tls_conn_open(void);

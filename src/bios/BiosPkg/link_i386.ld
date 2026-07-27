@@ -51,6 +51,10 @@ SECTIONS
     PROVIDE_HIDDEN (__pm_metal_externals_start = .);
     KEEP (*(SORT_BY_NAME (.pm_metal_externals.*)));
     PROVIDE_HIDDEN (__pm_metal_externals_end = .);
+    . = ALIGN(16);
+    PROVIDE_HIDDEN (__pm_metal_mem_limits_start = .);
+    KEEP (*(SORT_BY_NAME (.pm_metal_mem_limits.*)));
+    PROVIDE_HIDDEN (__pm_metal_mem_limits_end = .);
   } :data
 
   .bss : {

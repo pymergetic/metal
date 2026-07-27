@@ -34,6 +34,10 @@
   ../../pymergetic/metal/util/monocypher_wrap.c
   ../../pymergetic/metal/runtime/mem/arena.c
   ../../pymergetic/metal/runtime/mem/mem.c
+  ../../pymergetic/metal/runtime/mem/limit.c
+  ../../pymergetic/metal/runtime/mem/limit_py_bind.c
+  ../../pymergetic/metal/runtime/mem/limit_seed.c
+  ../../pymergetic/metal/runtime/mem/limit_lwip.c
   ../../pymergetic/metal/runtime/mem/mem_natives.c
   ../../pymergetic/metal/runtime/mem/libc.c
   ../../pymergetic/metal/runtime/mem/libc_wamr.c

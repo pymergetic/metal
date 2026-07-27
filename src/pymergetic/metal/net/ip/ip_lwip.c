@@ -22,6 +22,7 @@
 #include <pymergetic/metal/dev/random/random.h>
 #include <runtime/time/time.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
+#include <pymergetic/metal/log/log.h>
 
 #include "virtio_netif.h"
 #include "bge/bge_netif.h"
@@ -96,7 +97,8 @@ typedef enum {
   WAIT_CONNECT = 0,
   WAIT_RECV,
   WAIT_ACCEPT,
-  WAIT_DNS
+  WAIT_DNS,
+  WAIT_IF_GEN
 } wait_kind_t;
 
 #ifndef METAL_UDP_RX_MAX
@@ -147,6 +149,7 @@ typedef struct {
   int32_t             dns_done;
   int32_t             dns_ok;
   ip_addr_t           dns_addr;
+  uint32_t            since_gen;
 } net_wait_t;
 
 typedef struct {
@@ -184,6 +187,76 @@ static metal_net_conf_ov_t mIfConf[METAL_NET_MAX_IFACES];
 static net_wait_t         *mDnsWait;
 static ip_addr_t           mLastDnsAddr;
 static int32_t             mLastDnsValid;
+static uint32_t            mIfGen;
+
+#if LWIP_NETIF_EXT_STATUS_CALLBACK
+static void MetalNetifExtCb(struct netif *netif, netif_nsc_reason_t reason,
+                            const netif_ext_callback_args_t *args);
+
+NETIF_DECLARE_EXT_CALLBACK(mMetalNetifExtCb);
+#endif
+
+static void MetalIfBump(const char *why, struct netif *netif)
+{
+  /* Bump only — DHCP/link churn used to spam the console
+   * ("net: iface eth0 addr/admin-up gen=N"). Waiters use if_gen(). */
+  (void)why;
+  (void)netif;
+  mIfGen++;
+  if (mIfGen == 0u) {
+    mIfGen = 1u;
+  }
+}
+
+#if LWIP_NETIF_STATUS_CALLBACK
+static void MetalNetifStatusCb(struct netif *netif)
+{
+  MetalIfBump(netif_is_up(netif) ? "admin-up" : "admin-down", netif);
+}
+#endif
+
+#if LWIP_NETIF_LINK_CALLBACK
+static void MetalNetifLinkCb(struct netif *netif)
+{
+  MetalIfBump(netif_is_link_up(netif) ? "link-up" : "link-down", netif);
+}
+#endif
+
+#if LWIP_NETIF_EXT_STATUS_CALLBACK
+static void MetalNetifExtCb(struct netif *netif, netif_nsc_reason_t reason,
+                            const netif_ext_callback_args_t *args)
+{
+  (void)args;
+  if ((reason & (LWIP_NSC_IPV4_ADDRESS_CHANGED | LWIP_NSC_IPV4_GATEWAY_CHANGED |
+                 LWIP_NSC_IPV4_NETMASK_CHANGED | LWIP_NSC_IPV4_SETTINGS_CHANGED |
+                 LWIP_NSC_IPV6_SET | LWIP_NSC_IPV6_ADDR_STATE_CHANGED)) != 0) {
+    MetalIfBump("addr", netif);
+  }
+}
+#endif
+
+static void MetalNetifInstallCbs(struct netif *netif)
+{
+  if (netif == NULL) {
+    return;
+  }
+#if LWIP_NETIF_STATUS_CALLBACK
+  netif_set_status_callback(netif, MetalNetifStatusCb);
+#endif
+#if LWIP_NETIF_LINK_CALLBACK
+  netif_set_link_callback(netif, MetalNetifLinkCb);
+#endif
+#if LWIP_NETIF_EXT_STATUS_CALLBACK
+  {
+    static int32_t ext_added;
+
+    if (!ext_added) {
+      netif_add_ext_callback(&mMetalNetifExtCb, MetalNetifExtCb);
+      ext_added = 1;
+    }
+  }
+#endif
+}
 
 #define METAL_NET_READY() (mIfaceCount > 0)
 
@@ -1397,6 +1470,18 @@ static pm_metal_status_t NetWaitStep(pm_metal_async_handle_t self_h)
     return PM_METAL_ERROR;
   }
 
+  if (w->kind == WAIT_IF_GEN) {
+    if (mIfGen != w->since_gen) {
+      pm_metal_async_set_result_u32(self_h, mIfGen);
+      return PM_METAL_DONE;
+    }
+    if (pm_metal_time_mono_us() >= w->deadline) {
+      pm_metal_async_set_result_u32(self_h, mIfGen);
+      return PM_METAL_DONE;
+    }
+    return pm_metal_async_await(self_h, pm_metal_async_sleep_us(2000));
+  }
+
   if (w->kind == WAIT_DNS) {
     /*
      * Do not nest LwipPoll here — shell_poll already pumps net before
@@ -1732,6 +1817,7 @@ static metal_net_iface_t *IfaceInitOne(uint32_t    idx,
 
   /* Prefer MAC from L2 open — MetalNetifInit also reads l2_mac(). */
   memcpy(mif->netif.hwaddr, hwmac, ETH_HWADDR_LEN);
+  MetalNetifInstallCbs(&mif->netif);
   netif_set_up(&mif->netif);
   ApplyNetifHostname(mif);
   /* First ethN wins default; always displace loopback. */
@@ -2503,6 +2589,7 @@ int pm_metal_net_ip_loopback_start(void)
     return -1;
   }
 
+  MetalNetifInstallCbs(&mif->netif);
   netif_set_link_up(&mif->netif);
   netif_set_up(&mif->netif);
 #if LWIP_IPV6
@@ -2679,6 +2766,71 @@ static int32_t FormatIfStatusLine(const pm_metal_net_ip_ifcfg_t *cfg,
 unsigned pm_metal_net_ip_if_count(void)
 {
   return mIfaceCount;
+}
+
+uint32_t pm_metal_net_ip_if_gen(void)
+{
+  return mIfGen;
+}
+
+pm_metal_async_handle_t pm_metal_net_ip_if_wait(uint32_t since_gen)
+{
+  pm_metal_async_handle_t ah;
+  net_wait_t             *w;
+
+  if (mIfGen != since_gen) {
+    return NetOkAsync(mIfGen);
+  }
+
+  ah = pm_metal_async_coro_create(NetWaitStep, sizeof(*w));
+  if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  w = (net_wait_t *)(uintptr_t)pm_metal_async_coro_state(ah);
+  if (w == NULL) {
+    pm_metal_async_coro_close(ah);
+    return PM_METAL_ASYNC_HANDLE_INVALID;
+  }
+
+  memset(w, 0, sizeof(*w));
+  w->kind      = WAIT_IF_GEN;
+  w->since_gen = since_gen;
+  w->deadline  = pm_metal_time_mono_us() + 300000000ull; /* 300s */
+  return ah;
+}
+
+int32_t pm_metal_net_ip_if_status_index(uint32_t index, char *dest, uint32_t dest_cap)
+{
+  pm_metal_net_ip_ifcfg_t cfg;
+  metal_net_iface_t      *mif;
+  uint32_t                n;
+  uint32_t                i;
+
+  if (dest == NULL || dest_cap == 0 || index >= mIfaceCount) {
+    return -1;
+  }
+
+  n = 0;
+  mif = NULL;
+  for (i = 0; i < METAL_NET_MAX_IFACES; i++) {
+    if (!mIfaces[i].used) {
+      continue;
+    }
+    if (n == index) {
+      mif = &mIfaces[i];
+      break;
+    }
+    n++;
+  }
+  if (mif == NULL) {
+    return -1;
+  }
+  FillIfcfg(mif, &cfg);
+  if (FormatIfStatusLine(&cfg, mif, dest, dest_cap) < 0) {
+    return -1;
+  }
+  return 0;
 }
 
 int pm_metal_net_ip_if_get_index(unsigned index, pm_metal_net_ip_ifcfg_t *out)

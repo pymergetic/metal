@@ -15,7 +15,7 @@
 #define VCON_RX   0
 #define VCON_TX   1
 #define VCON_QSZ  64
-#define VCON_BUFS 16
+#define VCON_BUFS 64
 #define VCON_MTU  512
 
 static pm_metal_virtio_dev_t       mDev;

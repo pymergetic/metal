@@ -48,7 +48,7 @@ static const char g_httpd_json_default[] =
   "        \"pass_hash\": \"$2b$04$05mgiRuks.3l02Sjz2KwgegyoxT7e6GeuuuUyJbYCcW.DIdlPvdbW\"\n"
   "      }\n"
   "    ],\n"
-  "    \"public\": [\"/health\", \"/static\", \"/docs\", \"/iface\", \"/about\", \"/externals\", \"/api\"]\n"
+  "    \"public\": [\"/health\", \"/static\", \"/docs\", \"/iface\", \"/about\", \"/externals\", \"/limits\", \"/api\"]\n"
   "  },\n"
   "  \"mounts\": [\n"
   "    { \"path\": \"/health\", \"app\": \"c:health\" },\n"

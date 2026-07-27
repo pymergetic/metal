@@ -5,16 +5,18 @@
 
 #include <pymergetic/metal/auth/auth.h>
 #include <pymergetic/metal/net/asgi/asgi.h>
+#include <pymergetic/metal/net/io_budget.h>
 #include <pymergetic/metal/net/ip/ip.h>
 #include <pymergetic/metal/net/tls/tls.h>
 #include <pymergetic/metal/runtime/async/async.h>
 
 #define ASGI_PATH_MAX  256u
-#define ASGI_MOUNT_MAX 16u
-#define ASGI_SRV_MAX   4u
+#define ASGI_MOUNT_MAX 64u
+#define ASGI_SRV_MAX   16u
 #define ASGI_HDR_MAX   8192u
-#define ASGI_IO_MAX    4096u
-#define ASGI_CONN_SLOT_EST (32u * 1024u)
+#define ASGI_IO_MAX    PM_METAL_ASGI_IO_MAX
+#define ASGI_APP_SLOTS 128u
+#define ASGI_CONN_SLOT_EST PM_METAL_ASGI_IO_MAX
 
 typedef struct {
   int32_t                         used;

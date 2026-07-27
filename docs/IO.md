@@ -83,6 +83,8 @@ Blk detectors: `pm_metal_blk_virtio_detect`, `pm_metal_blk_ide_detect` (legacy I
 ### Net (multi-if + DHCPv6)
 
 - Host ifs: always `lo` (127.0.0.1/8, ::1) plus `eth0`… (`PM_METAL_NET_IP_MAX_IFS`). Default route prefers ethN when present. Shell: `net status [lo|ethN]`, `net set [ethN] …`, `net set [ethN] dhcp`, `net set [ethN] dhcp6 off|stateless|stateful`.
+- **Iface events:** lwIP status/link/ext callbacks bump `pm_metal_net_ip_if_gen()`. Poll gen or `await pm_metal_net_ip_if_wait(since)` / Python `ip.if_gen()` + `await ip.if_wait(g)`. Snapshots: `ip.ifaces()` / `ip.iface([name])`. Guest WASI: `if_count`, `if_gen`, `if_wait`, `if_status_index`. Config `if_set*` stays host/shell.
+- **I/O budget:** wire chunk `PM_METAL_IO_WIRE_MAX` (32 KiB) for TLS/HTTP-client/py-recv; ASGI server iobuf `PM_METAL_ASGI_IO_MAX` (4 MiB). See `include/pymergetic/metal/net/io_budget.h`.
 - DHCPv6: **stateless** via lwIP; **stateful** via Metal client (`metal_dhcp6_stateful_*`) — lwIP `dhcp6_enable_stateful()` remains a stub.
 - Guest sockets: `pm_metal_net_ip_bind_if(h, "lo"|"eth0")` before connect/listen (NULL → default).
 - **Name layers:** `util/ip` = IPv4 literals only (`ip4_parse` / `ip4_is_literal`). Local nodename = sync `pm_metal_host_name_get/set` (default `metal`; shell `hostname`; optional `hostname=` in `metal/net.conf`; sent as DHCPv4 option 12). Resolve order for connect/dns: literal → `localhost`/nodename → VFS `/etc/hosts` (ESP `etc/hosts`) → async DNS. After successful `pm_metal_net_ip_dns` await: `pm_metal_net_ip_dns_last_ntoa` (guest/host). Shell: `nslookup <host>`.
@@ -115,6 +117,16 @@ layouts. This is **not** the mod registry and **not** Metal's own
 `pymergetic.metal.externals`, WASI `pymergetic.metal.externals`, and the
 MetalPython boot banner (`Metal <ver> @ <cpu>` plus `  - <id> <version>`
 bullets).
+
+### Mem limit catalog
+
+Compile-time memory/buffer budgets (wire chunks, ASGI iobuf, lwIP opts,
+virtio-net rings, µPy/WAMR heaps, …) self-register with
+`PM_METAL_MEM_LIMIT` into `.pm_metal_mem_limits.*` — same linker-section
+idiom as externals. Lookup id is `module.name` (e.g. `net.asgi.ASGI_IO_MAX`).
+Surfaces: shell `limits`, Python `pymergetic.metal.mem.limit`, WASI
+`pymergetic.metal.mem.limit`, and HTML/JSON at `/limits` + `/api/limits`.
+Header: `include/pymergetic/metal/runtime/mem/limit.h`.
 
 API: `pm_metal_io_dt_add` / `get` / `count` / `by_class` / `foreach` / `lookup` (first of class). Guest `io_query` optional later.  
 Tree: `bus/` (DT + virtio PCI) · `dev/<class>/` (detectors + backends).

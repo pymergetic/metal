@@ -5,8 +5,6 @@
 
 #include <string.h>
 
-#define ASGI_APP_SLOTS 32u
-
 static asgi_app_slot_t g_apps[ASGI_APP_SLOTS];
 
 asgi_app_slot_t *pm_metal_net_asgi_app_slot(pm_metal_net_asgi_app_h h)

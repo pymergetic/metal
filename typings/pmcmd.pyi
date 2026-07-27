@@ -91,6 +91,10 @@ def keyb(*args: Any) -> Any:
     """keyb [us|de]      PS/2 layout (default us; de QWERTZ, alias gr; Ctrl+Alt+Home cycles)"""
     ...
 
+def limits(*args: Any) -> Any:
+    """limits [id|module|test]  mem/buffer budgets (test=C+py smoke)"""
+    ...
+
 def mem(*args: Any) -> Any:
     """mem               system RAM + arena layout
 

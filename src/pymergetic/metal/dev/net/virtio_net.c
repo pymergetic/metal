@@ -8,12 +8,15 @@
 
 #include "virtio_netif.h"
 #include <pymergetic/metal/bus/virtio/virtio.h>
+#include <pymergetic/metal/runtime/mem/limit.h>
 
 #define VNET_RX      0
 #define VNET_TX      1
 #define VNET_QSZ     64
 #define VNET_MTU     1514
-#define VNET_RX_BUFS 32
+/* Match queue depth: one DMA buffer per in-flight TX/RX descriptor. */
+#define VNET_RX_BUFS 64
+#define VNET_TX_BUFS 64
 
 #pragma pack(1)
 typedef struct {
@@ -27,13 +30,73 @@ typedef struct {
 } vnet_hdr_t;
 #pragma pack()
 
+#define VNET_FRAME (VNET_MTU + (uint32_t)sizeof(vnet_hdr_t))
+
+typedef struct {
+  uint64_t Addr;
+  uint32_t Len;
+  uint16_t Flags;
+  uint16_t Next;
+} vnet_desc_t;
+
 static pm_metal_virtio_dev_t mDev;
 static int32_t               mReady;
 static uint8_t               mMac[6];
 static uint8_t              *mRxBufs[VNET_RX_BUFS];
-/* Alternating TX scratches so DATA+FIN in one step cannot overwrite in-flight DMA. */
-static uint8_t               mTxScratch[2][VNET_MTU + sizeof(vnet_hdr_t)];
-static uint32_t              mTxScratchIdx;
+/*
+ * One scratch per possible in-flight TX. Busy bits prevent reuse before the
+ * device retires the descriptor (the old 2-buffer ping-pong caused ~RTO stalls
+ * when ASGI emitted hdr + multi-MSS body in one burst).
+ */
+static uint8_t  mTxScratch[VNET_TX_BUFS][VNET_MTU + sizeof(vnet_hdr_t)];
+static uint8_t  mTxBusy[VNET_TX_BUFS];
+static uint32_t mTxFreeCount;
+
+static void vnet_tx_reap(void)
+{
+  uint16_t head;
+  uint32_t ulen;
+
+  while (pm_metal_virtq_get_used(&mDev.vqs[VNET_TX], &head, &ulen)) {
+    vnet_desc_t *desc;
+    uint8_t     *buf;
+    uint32_t     i;
+
+    (void)ulen;
+    desc = (vnet_desc_t *)mDev.vqs[VNET_TX].desc;
+    buf  = (uint8_t *)(uintptr_t)desc[head].Addr;
+    if (buf >= mTxScratch[0] && buf < mTxScratch[0] + (VNET_TX_BUFS * VNET_FRAME)) {
+      i = (uint32_t)((buf - mTxScratch[0]) / VNET_FRAME);
+      if (i < VNET_TX_BUFS && mTxBusy[i]) {
+        mTxBusy[i] = 0;
+        mTxFreeCount++;
+      }
+    }
+    pm_metal_virtq_free_chain(&mDev.vqs[VNET_TX], head);
+  }
+}
+
+static int32_t vnet_tx_alloc(uint32_t *idx_out)
+{
+  uint32_t i;
+
+  if (idx_out == NULL) {
+    return -1;
+  }
+  vnet_tx_reap();
+  if (mTxFreeCount == 0) {
+    return -1;
+  }
+  for (i = 0; i < VNET_TX_BUFS; i++) {
+    if (!mTxBusy[i]) {
+      mTxBusy[i] = 1;
+      mTxFreeCount--;
+      *idx_out = i;
+      return 0;
+    }
+  }
+  return -1;
+}
 
 int pm_metal_virtio_netif_open(uint8_t mac_out[6])
 {
@@ -105,6 +168,9 @@ int pm_metal_virtio_netif_open(uint8_t mac_out[6])
       &mDev.vqs[VNET_RX], mRxBufs[i], sizeof(vnet_hdr_t) + VNET_MTU, 1, NULL);
   }
 
+  memset(mTxBusy, 0, sizeof(mTxBusy));
+  mTxFreeCount = VNET_TX_BUFS;
+
   pm_metal_virtq_kick(&mDev, &mDev.vqs[VNET_RX]);
   (void)pm_metal_virtio_driver_ok(&mDev);
   mReady = 1;
@@ -131,25 +197,25 @@ int pm_metal_virtio_netif_tx(const void *frame, uint32_t len)
   uint8_t    *scratch;
   uint8_t    *pkt;
   uint16_t    head;
-  uint32_t    ulen;
+  uint32_t    idx;
 
   if (!mReady || frame == NULL || len == 0 || len > VNET_MTU) {
     return -1;
   }
 
-  while (pm_metal_virtq_get_used(&mDev.vqs[VNET_TX], &head, &ulen)) {
-    pm_metal_virtq_free_chain(&mDev.vqs[VNET_TX], head);
-    (void)ulen;
+  if (vnet_tx_alloc(&idx) != 0) {
+    return -1;
   }
 
-  scratch = mTxScratch[mTxScratchIdx & 1u];
-  mTxScratchIdx++;
-  hdr = (vnet_hdr_t *)scratch;
+  scratch = mTxScratch[idx];
+  hdr     = (vnet_hdr_t *)scratch;
   memset(hdr, 0, sizeof(*hdr));
   pkt = scratch + sizeof(*hdr);
   memcpy(pkt, frame, len);
 
   if (pm_metal_virtq_add(&mDev.vqs[VNET_TX], scratch, sizeof(*hdr) + len, 0, &head) != 0) {
+    mTxBusy[idx] = 0;
+    mTxFreeCount++;
     return -1;
   }
 
@@ -168,16 +234,9 @@ void pm_metal_virtio_netif_poll(pm_metal_virtio_netif_rx_fn on_frame, void *ctx)
   }
 
   while (pm_metal_virtq_get_used(&mDev.vqs[VNET_RX], &head, &len)) {
-    typedef struct {
-      uint64_t Addr;
-      uint32_t Len;
-      uint16_t Flags;
-      uint16_t Next;
-    } desc_t;
+    vnet_desc_t *desc;
 
-    desc_t *desc;
-
-    desc = (desc_t *)mDev.vqs[VNET_RX].desc;
+    desc = (vnet_desc_t *)mDev.vqs[VNET_RX].desc;
     buf  = (uint8_t *)(uintptr_t)desc[head].Addr;
     if (on_frame != NULL && len > sizeof(vnet_hdr_t)) {
       on_frame(ctx, buf + sizeof(vnet_hdr_t), len - (uint32_t)sizeof(vnet_hdr_t));
@@ -188,9 +247,26 @@ void pm_metal_virtio_netif_poll(pm_metal_virtio_netif_rx_fn on_frame, void *ctx)
   }
 
   pm_metal_virtq_kick(&mDev, &mDev.vqs[VNET_RX]);
-
-  while (pm_metal_virtq_get_used(&mDev.vqs[VNET_TX], &head, &len)) {
-    pm_metal_virtq_free_chain(&mDev.vqs[VNET_TX], head);
-    (void)len;
-  }
+  vnet_tx_reap();
 }
+
+PM_METAL_MEM_LIMIT(g_pm_metal_lim_dev_net_VNET_TX_BUFS,
+                   "dev.net",
+                   "VNET_TX_BUFS",
+                   VNET_TX_BUFS,
+                   "count",
+                   "virtio-net TX DMA scratch slots");
+
+PM_METAL_MEM_LIMIT(g_pm_metal_lim_dev_net_VNET_RX_BUFS,
+                   "dev.net",
+                   "VNET_RX_BUFS",
+                   VNET_RX_BUFS,
+                   "count",
+                   "virtio-net RX DMA buffer slots");
+
+PM_METAL_MEM_LIMIT(g_pm_metal_lim_dev_net_VNET_QSZ,
+                   "dev.net",
+                   "VNET_QSZ",
+                   VNET_QSZ,
+                   "count",
+                   "virtio-net virtqueue size");

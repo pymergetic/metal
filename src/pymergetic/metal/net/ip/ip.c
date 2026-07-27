@@ -406,6 +406,46 @@ static uint32_t pm_metal_net_ip_try_recvfrom_native(wasm_exec_env_t exec_env, ui
   return n;
 }
 
+static uint32_t pm_metal_net_ip_if_count_native(wasm_exec_env_t exec_env)
+{
+  (void)exec_env;
+  return (uint32_t)pm_metal_net_ip_if_count();
+}
+
+static uint32_t pm_metal_net_ip_if_gen_native(wasm_exec_env_t exec_env)
+{
+  (void)exec_env;
+  return pm_metal_net_ip_if_gen();
+}
+
+static uint32_t pm_metal_net_ip_if_wait_native(wasm_exec_env_t exec_env, uint32_t since_gen)
+{
+  (void)exec_env;
+  return pm_metal_net_ip_if_wait(since_gen);
+}
+
+static int32_t pm_metal_net_ip_if_status_index_native(wasm_exec_env_t exec_env,
+                                                     uint32_t        index,
+                                                     uint32_t        dest,
+                                                     uint32_t        dest_cap)
+{
+  wasm_module_inst_t inst;
+  void              *native;
+
+  if (dest_cap == 0) {
+    return -1;
+  }
+  inst = wasm_runtime_get_module_inst(exec_env);
+  if (inst == NULL || !wasm_runtime_validate_app_addr(inst, dest, dest_cap)) {
+    return -1;
+  }
+  native = wasm_runtime_addr_app_to_native(inst, dest);
+  if (native == NULL) {
+    return -1;
+  }
+  return pm_metal_net_ip_if_status_index(index, (char *)native, dest_cap);
+}
+
 static NativeSymbol g_pm_metal_net_native_symbols[] = {
   { "pm_metal_net_ip_socket", (void *)pm_metal_net_ip_socket_native, "(ii)i", NULL },
   { "pm_metal_net_ip_connect", (void *)pm_metal_net_ip_connect_native, "(i$i)i", NULL },
@@ -422,6 +462,10 @@ static NativeSymbol g_pm_metal_net_native_symbols[] = {
   { "pm_metal_net_ip_sendto", (void *)pm_metal_net_ip_sendto_native, "(iii$i)i", NULL },
   { "pm_metal_net_ip_try_recv", (void *)pm_metal_net_ip_try_recv_native, "(iii)i", NULL },
   { "pm_metal_net_ip_try_recvfrom", (void *)pm_metal_net_ip_try_recvfrom_native, "(iiiiii)i", NULL },
+  { "pm_metal_net_ip_if_count", (void *)pm_metal_net_ip_if_count_native, "()i", NULL },
+  { "pm_metal_net_ip_if_gen", (void *)pm_metal_net_ip_if_gen_native, "()i", NULL },
+  { "pm_metal_net_ip_if_wait", (void *)pm_metal_net_ip_if_wait_native, "(i)i", NULL },
+  { "pm_metal_net_ip_if_status_index", (void *)pm_metal_net_ip_if_status_index_native, "(iii)i", NULL },
 };
 
 int pm_metal_net_ip_native_register(void)

@@ -23,7 +23,7 @@ extern "C" {
  * 256 KiB was tight even before the first of these landed. 128 MiB HEAP
  * total makes 1 MiB here noise. */
 #ifndef PM_METAL_PY_BLOB_BYTES
-#define PM_METAL_PY_BLOB_BYTES (1024u * 1024u)
+#define PM_METAL_PY_BLOB_BYTES (16u * 1024u * 1024u)
 #endif
 
 /** Default heap for an opt-in isolated context (pm_metal_py_run_*_isolated) —

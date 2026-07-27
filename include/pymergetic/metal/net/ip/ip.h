@@ -94,6 +94,12 @@ extern uint32_t pm_metal_net_ip_try_recvfrom(pm_metal_net_ip_sock_h h, uint32_t 
                                           uint32_t peer_host, uint32_t peer_cap,
                                           uint32_t peer_port_ptr)
   PM_METAL_NET_IP_IMPORT(pm_metal_net_ip_try_recvfrom);
+extern uint32_t pm_metal_net_ip_if_count(void) PM_METAL_NET_IP_IMPORT(pm_metal_net_ip_if_count);
+extern uint32_t pm_metal_net_ip_if_gen(void) PM_METAL_NET_IP_IMPORT(pm_metal_net_ip_if_gen);
+extern pm_metal_async_handle_t pm_metal_net_ip_if_wait(uint32_t since_gen)
+  PM_METAL_NET_IP_IMPORT(pm_metal_net_ip_if_wait);
+extern int32_t pm_metal_net_ip_if_status_index(uint32_t index, uint32_t dest, uint32_t dest_cap)
+  PM_METAL_NET_IP_IMPORT(pm_metal_net_ip_if_status_index);
 
 /** After await on connect/recv/accept/dns: bytes, new sock handle, or 1/0. */
 static inline uint32_t pm_metal_net_ip_result(pm_metal_async_handle_t self_h)
@@ -130,6 +136,11 @@ void pm_metal_net_ip_close(pm_metal_net_ip_sock_h h);
 int32_t pm_metal_net_ip_bind_if(pm_metal_net_ip_sock_h h, const char *ifname);
 /** Bind local port (TCP or UDP). port 0 = ephemeral. Returns 0 or -1. */
 int32_t pm_metal_net_ip_bind(pm_metal_net_ip_sock_h h, uint32_t port);
+
+/* if_count / if_get* live in ip_cfg.h (host). Gen/wait/status_index here too. */
+uint32_t                pm_metal_net_ip_if_gen(void);
+pm_metal_async_handle_t pm_metal_net_ip_if_wait(uint32_t since_gen);
+int32_t                 pm_metal_net_ip_if_status_index(uint32_t index, char *dest, uint32_t dest_cap);
 
 static inline uint32_t pm_metal_net_ip_result(pm_metal_async_handle_t self_h)
 {

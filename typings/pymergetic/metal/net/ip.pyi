@@ -33,6 +33,22 @@ def dns_last_ntoa(*args: Any) -> Any:
     """C bind: PM_METAL_PY_SYNC."""
     ...
 
+def if_gen(*args: Any) -> Any:
+    """C bind: PM_METAL_PY_SYNC."""
+    ...
+
+def if_wait(*args: Any) -> Any:
+    """C bind: PM_METAL_PY_SYNC."""
+    ...
+
+def iface(*args: Any) -> Any:
+    """C bind: PM_METAL_PY_SYNC."""
+    ...
+
+def ifaces(*args: Any) -> Any:
+    """C bind: PM_METAL_PY_SYNC."""
+    ...
+
 def listen(*args: Any) -> Any:
     """C bind: PM_METAL_PY_SYNC."""
     ...

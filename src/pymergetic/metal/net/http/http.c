@@ -19,10 +19,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <pymergetic/metal/net/io_budget.h>
+
 #define HTTP_URL_MAX  384u
 #define HTTP_HOST_MAX 128u
 #define HTTP_PATH_MAX 256u
-#define HTTP_IO_MAX   4096u
+#define HTTP_IO_MAX   PM_METAL_IO_WIRE_MAX
 #define HTTP_HDR_MAX  8192u
 #define HTTP_REQ_MAX  512u
 
@@ -68,6 +70,7 @@ typedef struct {
   uint32_t                req_off;
   pm_metal_net_tls_wire_t     wire;
   pm_metal_net_tls_h          tls_h;
+  uint8_t                     io[HTTP_IO_MAX];
 } http_get_t;
 
 static struct {
@@ -659,10 +662,11 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
     return HttpAfterHeadersParsed(h, he);
 
   case HTTP_STEP_RECV_BODY: {
-    uint8_t  tmp[HTTP_IO_MAX];
+    uint8_t *tmp;
     uint32_t want;
     int32_t  got;
 
+    tmp = h->io;
     if (h->chunked && h->chunk.done) {
       h->step = HTTP_STEP_DONE;
       return PM_METAL_PENDING;

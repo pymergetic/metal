@@ -1,6 +1,7 @@
 # Metal
 
-Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
+Blank metal. Async wasm + MicroPython. High-speed awaitable APIs — almost
+nothing in the way.
 
 > **Experimental / alpha.** Early preview, not a product release. APIs move,
 > drivers are incomplete, docs lag, iron is “works on *my* ThinkPad.” Fun and
@@ -9,18 +10,24 @@ Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
 > after top-down exploration. Bring curiosity; bring patches; don’t bring
 > production expectations.
 
-**Boot → hardware → CPU runners → certified wasm/AOT → go.**
+**Boot → hardware → CPU runners → certified guests → go.**
 
-![Metal boot UI](screenshots/ui-boot.png)
+![Metal Python REPL — limits + externals introspection](screenshots/py-introspect.png)
 
-- **Apps = `wasm32` mods** — `on_load` registers funcs/cmds; `await` Metal APIs
-  via WASI-style imports ([`docs/MODS.md`](docs/MODS.md))
+- **Guests = `wasm32` mods + MicroPython** — mods `await` Metal via WASI-style
+  imports ([`docs/MODS.md`](docs/MODS.md)); Python is in-core (REPL default,
+  host↔guest binds) — [`docs/MICROPYTHON.md`](docs/MICROPYTHON.md)
 - **Host = thin async runtime** — UEFI or BIOS/PXE; **one runner per CPU**;
   exchangeable drivers; WAMR interp / AOT / (soon) JIT
 - **Not** a hosted OS, **not** sync syscalls on a kernel
-- Shell / tabs prove the machine is alive — they are **not** “the OS”
-- **Doom** is here because it’s the classic “you’re an OS” proof (gfx, input,
-  timing, packages) — not because Metal is a game console
+- Shell / tabs / HTTP / SSH prove the machine is alive — they are **not**
+  “the OS”
+- **Introspection is live** — compile-time budgets (`limits` /
+  `pymergetic.metal.mem.limit`), third-party stack ids (`externals`), kernel
+  `about`, plus DOC/IFACE catalogs over HTTP (`/limits`, `/externals`,
+  `/docs`, `/iface`, `/api/...`)
+- **Proofs, not the product:** Doom (gfx/input/timing/packages), ASGI doc UI,
+  Dropbear SSH — classic “you’re an OS” demos on a blank-metal awaitable ABI
 
 **Blank metal → pull apps over the wire**
 
@@ -35,7 +42,7 @@ Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
 ![PXE/HTTP seed with .sig](screenshots/pxe-http-sigs.png)
 
 - **Who:** not normal desktop users — *almost nothing* in the way; product is
-  the high-speed awaitable ABI to wasm
+  the high-speed awaitable ABI (wasm + Python faces)
 - **Where:** virtual Metal (QEMU/KVM) first → **virtio**; old ThinkPad
   **T42p**/T43 as the fun path that keeps driver ops swappable
 
@@ -45,8 +52,10 @@ Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
 
 | | |
 |:-:|:-:|
-| ![Boot UI](screenshots/ui-boot.png) | ![Shell help](screenshots/ui-shell.png) |
-| QEMU — boot / device tree | QEMU — `help` |
+| ![REPL introspection](screenshots/py-introspect.png) | ![Boot UI](screenshots/ui-boot.png) |
+| QEMU — REPL: `mem.limit` + `externals` | QEMU — boot / device tree |
+| ![Shell help](screenshots/ui-shell.png) | ![Python REPL](screenshots/py-repl.png) |
+| QEMU — `help` | QEMU — REPL banner + `pmcmd.ping` |
 | ![Doom tab](screenshots/doom-tab.png) | ![UI after Doom](screenshots/ui-after-doom.png) |
 | QEMU — `tab doom` (~35 fps) | UI console after Doom |
 | ![UART after Doom](screenshots/uart-after-doom.png) | ![UART create](screenshots/uart-doom-create.png) |
@@ -56,11 +65,6 @@ Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
 |:-:|:-:|
 | ![ThinkPad shell](screenshots/thinkpad-shell.jpg) | ![ThinkPad Doom](screenshots/thinkpad-doom.jpg) |
 | ThinkPad T42p — shell (`radeon_rv370`) | ThinkPad T42p — Doom tabbed |
-
-| |
-|:-:|
-| ![Python REPL](screenshots/py-repl.png) |
-| QEMU — boots straight into the Python REPL: boot tree, rainbow ASCII banner + Metal/MicroPython versions, live commands (`import pmcmd`, `pmcmd.ping(...)`), `quit()` back to the C shell — one unified scrollable console, status bar shows the keyboard-layout indicator (`us`/`de`, `Ctrl+Alt+Home` cycles it) |
 
 More filenames: [`screenshots/README.md`](screenshots/README.md).
 
@@ -83,8 +87,14 @@ More filenames: [`screenshots/README.md`](screenshots/README.md).
   `console()` away); host ↔ guest bidirectional calls; ~25-module signed
   `stdlib.zip` (`time`/`datetime`, `hashlib`, `re`, `tarfile`, `pymergetic.metal.tls`, …);
   opt-in isolated contexts for true parallel bytecode (own heap, no shared lock)
+- **Net services** — ASGI/microdot HTTP (doc + iface + limits/externals/about
+  HTML/JSON), Dropbear SSH as another viewport on the shared console
+- **Catalogs** — DOC/IFACE (callable help + WASI syms), **externals** (vendored
+  stack identity), **mem limits** (compile-time buffer budgets) — shell, Python,
+  WASI, and `/api/...` share one authority each ([`docs/IFACE.md`](docs/IFACE.md),
+  [`docs/IO.md`](docs/IO.md))
 
-Deep dives: [`docs/IO.md`](docs/IO.md) · [`docs/LIBC_ASYNC.md`](docs/LIBC_ASYNC.md) · [`metal-doom/docs/DOOM_ASYNC.md`](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md) · [`docs/MICROPYTHON.md`](docs/MICROPYTHON.md)
+Deep dives: [`docs/IO.md`](docs/IO.md) · [`docs/LIBC_ASYNC.md`](docs/LIBC_ASYNC.md) · [`metal-doom/docs/DOOM_ASYNC.md`](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md) · [`docs/MICROPYTHON.md`](docs/MICROPYTHON.md) · [`docs/IFACE.md`](docs/IFACE.md)
 
 ---
 
@@ -131,7 +141,9 @@ then whichever of build/upload/run you ask for, on efi/bios/both — see
 ./scripts/ext-app doom=../metal-doom -er --no-build -- --bench  # run efi only, headless
 ```
 
-In the shell: `help`, `tab doom`, `run doom`. More: [`docs/EFI.md`](docs/EFI.md), [`metal-doom/docs/DOOM_ASYNC.md`](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md).
+In the shell: `help`, `limits`, `externals`, `about`, `tab doom`, `run doom`.
+REPL: `import pymergetic.metal.mem.limit as L` then `L.get('net.asgi.ASGI_IO_MAX')`.
+More: [`docs/EFI.md`](docs/EFI.md), [`metal-doom/docs/DOOM_ASYNC.md`](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md).
 
 ---
 
@@ -144,6 +156,7 @@ In the shell: `help`, `tab doom`, `run doom`. More: [`docs/EFI.md`](docs/EFI.md)
 | [metal-doom/docs/DOOM_ASYNC.md](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md) | Doom package (external app), pace, present path |
 | [docs/FAST_JIT.md](docs/FAST_JIT.md) | Fast JIT bring-up brief (not enabled yet) |
 | [docs/MICROPYTHON.md](docs/MICROPYTHON.md) | Kernel µPy — one blob, N runners, no GIL, REPL as default shell |
+| [docs/IFACE.md](docs/IFACE.md) | DOC/IFACE catalogs + HTTP UI |
 | [docs/TRUST.md](docs/TRUST.md) | Mod signing / trust modes |
 | [docs/WASI.md](docs/WASI.md) | WASI preview1 surface |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | Load / process model |

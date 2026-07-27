@@ -124,6 +124,10 @@ check "/api/about" '"version"'
 check "/api/externals?limit=5" '"id"'
 check "/about" "<h1>about</h1>"
 check "/externals?limit=5" "<h1>externals</h1>"
+check "/api/limits?limit=5" '"id"'
+check "/api/limits/net.asgi.ASGI_IO_MAX" "ASGI_IO_MAX"
+check "/limits?limit=5" "<h1>limits</h1>"
+check "/limits/net.asgi.ASGI_IO_MAX" "ASGI_IO_MAX"
 
 if [[ "${fail}" -ne 0 ]]; then
 	echo "doc-iface-smoke: FAILED" >&2

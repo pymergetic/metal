@@ -1,7 +1,7 @@
 /*
  * Host network interface config (multi-if eth0..ethN). See docs/IO.md.
  *
- * Host-only (shell / boot): guests use pm_metal_net_* async I/O, not ifconfig.
+ * Config set* stays host/shell. Read + if_gen/if_wait also on guest/py (ip.h).
  *
  * impl: common — src/pymergetic/metal/net/ip/ip_lwip.c
  */
@@ -9,6 +9,8 @@
 #define PYMERGETIC_METAL_NET_IP_CFG_H_
 
 #include <stdint.h>
+
+#include "pymergetic/metal/runtime/async/async.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,8 +44,20 @@ typedef struct pm_metal_net_ip_ifcfg {
 /** Number of active interfaces (`lo` + eth0 .. ethN-1). */
 unsigned pm_metal_net_ip_if_count(void);
 
+/**
+ * Monotonic generation: bumps on link/status/address netif callbacks.
+ * Poll or await pm_metal_net_ip_if_wait(since).
+ */
+uint32_t pm_metal_net_ip_if_gen(void);
+
+/** Completes when if_gen != since_gen; result u32 is the new generation. */
+pm_metal_async_handle_t pm_metal_net_ip_if_wait(uint32_t since_gen);
+
 /** Fill config for interface index [0, count). Returns 0, or -1. */
 int pm_metal_net_ip_if_get_index(unsigned index, pm_metal_net_ip_ifcfg_t *out);
+
+/** One status line for interface index (same format as if_status_named). */
+int32_t pm_metal_net_ip_if_status_index(uint32_t index, char *buf, uint32_t buf_len);
 
 /** Fill config for named interface ("eth0"). Returns 0, or -1. */
 int pm_metal_net_ip_if_get_named(const char *name, pm_metal_net_ip_ifcfg_t *out);

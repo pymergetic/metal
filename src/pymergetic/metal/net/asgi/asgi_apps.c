@@ -26,6 +26,15 @@ typedef struct {
 
 static asgi_conn_t g_conn;
 static int32_t     g_budget_conns;
+static uint8_t    *g_static_io;
+
+static uint8_t *static_io_buf(void)
+{
+  if (g_static_io == NULL) {
+    g_static_io = (uint8_t *)pm_metal_mem_map(ASGI_IO_MAX);
+  }
+  return g_static_io;
+}
 
 void pm_metal_net_asgi_conn_begin(pm_metal_net_ip_sock_h sock,
                                   pm_metal_net_tls_h      tls,
@@ -305,7 +314,7 @@ static int32_t static_fn(void *ctx, uint32_t conn_id)
   const char        *root;
   pm_metal_fs_stat_t st;
   pm_metal_fs_h      fh;
-  uint8_t            buf[ASGI_IO_MAX];
+  uint8_t           *buf;
   uint32_t           n;
   uint32_t           left;
   char               hdr[512];
@@ -314,6 +323,10 @@ static int32_t static_fn(void *ctx, uint32_t conn_id)
 
   (void)ctx;
   (void)conn_id;
+  buf = static_io_buf();
+  if (buf == NULL) {
+    return pm_metal_net_asgi_send_simple(500, "Error", "text/plain", "oom\n");
+  }
   root = g_conn.static_root;
   if (root == NULL || root[0] == '\0') {
     return pm_metal_net_asgi_send_simple(404, "Not Found", "text/plain", "no static root\n");

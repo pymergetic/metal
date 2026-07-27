@@ -50,7 +50,7 @@ typedef struct {
   int32_t                 http_ver; /* minor: 0 or 1 */
   char                    hdr[ASGI_HDR_MAX];
   uint32_t                hdr_len;
-  uint8_t                 iobuf[ASGI_IO_MAX];
+  uint8_t                *iobuf; /* ASGI_IO_MAX via pm_metal_mem_map */
   pm_metal_py_fn_h_t      py_fn;
   asgi_app_slot_t        *py_slot;
   pm_metal_mod_fn_t       wasm_fn;
@@ -58,6 +58,16 @@ typedef struct {
 
 static pm_metal_py_fn_h_t g_microdot_fn;
 static int32_t            g_microdot_importing;
+/* WS echo out + wasm send_simple body — not on C stack (ASGI_IO_MAX is 4 MiB). */
+static uint8_t           *g_asgi_scratch;
+
+static uint8_t *asgi_scratch(void)
+{
+  if (g_asgi_scratch == NULL) {
+    g_asgi_scratch = (uint8_t *)pm_metal_mem_map(ASGI_IO_MAX);
+  }
+  return g_asgi_scratch;
+}
 
 static asgi_srv_t g_srvs[ASGI_SRV_MAX];
 
@@ -472,7 +482,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
         st->step = ASGI_ST_ACCEPT;
         break;
       }
-      st->aw   = pm_metal_net_ip_recv(st->csock, st->iobuf, sizeof(st->iobuf));
+      st->aw   = pm_metal_net_ip_recv(st->csock, st->iobuf, ASGI_IO_MAX);
       st->step = ASGI_ST_CONN_RECV_AW;
       return pm_metal_async_await(self_h, st->aw);
 
@@ -610,13 +620,19 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
       if (st->use_tls) {
         int32_t e;
 
-        e = pm_metal_net_tls_read(st->tls_h, st->iobuf, sizeof(st->iobuf));
+        e = pm_metal_net_tls_read(st->tls_h, st->iobuf, ASGI_IO_MAX);
         if (e > 0) {
-          uint8_t  out[ASGI_IO_MAX];
+          uint8_t *out;
           uint32_t olen;
           int32_t  er;
 
-          er = pm_metal_net_asgi_ws_echo_frame(st->iobuf, (uint32_t)e, out, sizeof(out), &olen);
+          out = asgi_scratch();
+          if (out == NULL) {
+            conn_cleanup(st);
+            st->step = ASGI_ST_ACCEPT;
+            break;
+          }
+          er = pm_metal_net_asgi_ws_echo_frame(st->iobuf, (uint32_t)e, out, ASGI_IO_MAX, &olen);
           if (er < 0) {
             conn_cleanup(st);
             st->step = ASGI_ST_ACCEPT;
@@ -641,7 +657,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
         st->step = ASGI_ST_ACCEPT;
         break;
       }
-      st->aw   = pm_metal_net_ip_recv(st->csock, st->iobuf, sizeof(st->iobuf));
+      st->aw   = pm_metal_net_ip_recv(st->csock, st->iobuf, ASGI_IO_MAX);
       st->step = ASGI_ST_WS_RECV_AW;
       return pm_metal_async_await(self_h, st->aw);
 
@@ -659,11 +675,17 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
         break;
       }
       {
-        uint8_t  out[ASGI_IO_MAX];
+        uint8_t *out;
         uint32_t olen;
         int32_t  er;
 
-        er = pm_metal_net_asgi_ws_echo_frame(st->iobuf, r, out, sizeof(out), &olen);
+        out = asgi_scratch();
+        if (out == NULL) {
+          conn_cleanup(st);
+          st->step = ASGI_ST_ACCEPT;
+          break;
+        }
+        er = pm_metal_net_asgi_ws_echo_frame(st->iobuf, r, out, ASGI_IO_MAX, &olen);
         if (er < 0) {
           conn_cleanup(st);
           st->step = ASGI_ST_ACCEPT;
@@ -750,12 +772,19 @@ pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t             port,
   }
   st = (asgi_listen_t *)pm_metal_async_coro_state(srv->coro);
   memset(st, 0, sizeof(*st));
+  st->iobuf = (uint8_t *)pm_metal_mem_map(ASGI_IO_MAX);
+  if (st->iobuf == NULL) {
+    pm_metal_net_ip_close(srv->listen_sock);
+    srv->used = 0;
+    return PM_METAL_NET_ASGI_SRV_INVALID;
+  }
   st->step  = ASGI_ST_LISTEN;
   st->srv_h = h;
   st->csock = PM_METAL_NET_IP_SOCK_INVALID;
   st->tls_h = PM_METAL_TLS_INVALID;
   srv->task = pm_metal_async_create_task(srv->coro);
   if (srv->task == PM_METAL_ASYNC_HANDLE_INVALID) {
+    (void)pm_metal_mem_unmap(st->iobuf, ASGI_IO_MAX);
     pm_metal_net_ip_close(srv->listen_sock);
     srv->used = 0;
     return PM_METAL_NET_ASGI_SRV_INVALID;
@@ -811,11 +840,19 @@ int32_t pm_metal_net_asgi_unmount(pm_metal_net_asgi_srv_h s, const char *path)
 
 void pm_metal_net_asgi_close(pm_metal_net_asgi_srv_h s)
 {
-  asgi_srv_t *srv;
+  asgi_srv_t    *srv;
+  asgi_listen_t *st;
 
   srv = pm_metal_net_asgi_srv_slot(s);
   if (srv == NULL) {
     return;
+  }
+  if (srv->coro != PM_METAL_ASYNC_HANDLE_INVALID) {
+    st = (asgi_listen_t *)pm_metal_async_coro_state(srv->coro);
+    if (st != NULL && st->iobuf != NULL) {
+      (void)pm_metal_mem_unmap(st->iobuf, ASGI_IO_MAX);
+      st->iobuf = NULL;
+    }
   }
   if (srv->listen_sock != PM_METAL_NET_IP_SOCK_INVALID) {
     pm_metal_net_ip_close(srv->listen_sock);
@@ -1055,16 +1092,20 @@ static int32_t asgi_send_simple_native(wasm_exec_env_t exec_env,
                                        const char     *ctype,
                                        const char     *body)
 {
-  char r[64];
-  char c[64];
-  char b[ASGI_IO_MAX];
+  char     r[64];
+  char     c[64];
+  uint8_t *b;
 
-  if (asgi_guest_copy(exec_env, reason, r, sizeof(r)) != 0 ||
-      asgi_guest_copy(exec_env, ctype, c, sizeof(c)) != 0 ||
-      asgi_guest_copy(exec_env, body, b, sizeof(b)) != 0) {
+  b = asgi_scratch();
+  if (b == NULL) {
     return -1;
   }
-  return pm_metal_net_asgi_send_simple(code, r, c, b);
+  if (asgi_guest_copy(exec_env, reason, r, sizeof(r)) != 0 ||
+      asgi_guest_copy(exec_env, ctype, c, sizeof(c)) != 0 ||
+      asgi_guest_copy(exec_env, body, (char *)b, ASGI_IO_MAX) != 0) {
+    return -1;
+  }
+  return pm_metal_net_asgi_send_simple(code, r, c, (const char *)b);
 }
 
 static NativeSymbol g_pm_metal_net_asgi_native_symbols[] = {

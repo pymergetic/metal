@@ -85,4 +85,8 @@
 #define MAX_AUTH_TRIES 6
 #define UNAUTH_CLOSE_DELAY 0
 
+#define DEFAULT_RECV_WINDOW    (64 * 1024)
+#define TRANS_MAX_PAYLOAD_LEN  (32 * 1024)
+#define RECV_MAX_PAYLOAD_LEN   (32 * 1024)
+
 #endif

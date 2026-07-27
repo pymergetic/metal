@@ -5,6 +5,7 @@
 #include <pymergetic/metal/guest/mod/mod.h> /* native_register + session_end */
 #include <pymergetic/metal/boot/authors.h>
 #include <pymergetic/metal/boot/externals.h>
+#include <pymergetic/metal/runtime/mem/limit.h>
 #include <pymergetic/metal/guest/process/process.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
 #include <pymergetic/metal/shell/ui/ui.h>
@@ -283,6 +284,7 @@ int pm_metal_wasm_init(void)
       pm_metal_util_ascii_native_register() != 0 || pm_metal_util_size_native_register() != 0 ||
       pm_metal_util_ip_native_register() != 0 || pm_metal_host_native_register() != 0 ||
       pm_metal_authors_native_register() != 0 || pm_metal_externals_native_register() != 0 ||
+      pm_metal_mem_limit_native_register() != 0 ||
       pm_metal_util_doc_native_register() != 0 || pm_metal_util_iface_native_register() != 0 ||
       pm_metal_py_native_register() != 0) {
     pm_metal_log("metal-wasm: native_register failed");
@@ -748,3 +750,24 @@ PM_METAL_EXTERNAL(g_pm_metal_ext_wamr,
                   "2.4.5",
                   "https://github.com/bytecodealliance/wasm-micro-runtime",
                   "wasm interpreter / AOT guest runner");
+
+PM_METAL_MEM_LIMIT(g_pm_metal_lim_guest_wasm_HEAP_SIZE,
+                   "guest.wasm",
+                   "PM_METAL_WASM_HEAP_SIZE",
+                   PM_METAL_WASM_HEAP_SIZE,
+                   "bytes",
+                   "WAMR runtime memory pool");
+
+PM_METAL_MEM_LIMIT(g_pm_metal_lim_guest_wasm_STACK_SIZE,
+                   "guest.wasm",
+                   "PM_METAL_WASM_STACK_SIZE",
+                   PM_METAL_WASM_STACK_SIZE,
+                   "bytes",
+                   "WAMR exec env / module stack");
+
+PM_METAL_MEM_LIMIT(g_pm_metal_lim_guest_wasm_HEAP_BYTES,
+                   "guest.wasm",
+                   "PM_METAL_WASM_HEAP_BYTES",
+                   PM_METAL_WASM_HEAP_BYTES,
+                   "bytes",
+                   "WAMR module_malloc heap (async coro)");

@@ -18,7 +18,7 @@
 #define VSND_EVENT   1
 #define VSND_TX      2
 #define VSND_QSZ     64
-#define VSND_TX_BUFS 16
+#define VSND_TX_BUFS 64
 #define VSND_PERIOD  2048 /* bytes per TX period */
 
 #define VIRTIO_SND_R_PCM_SET_PARAMS 0x0101u
@@ -71,7 +71,7 @@ static int32_t               mStarted;
 static vsnd_stream_t         mStreams[4];
 static uint8_t              *mTxBufs[VSND_TX_BUFS];
 static uint32_t              mTxLens[VSND_TX_BUFS];
-static uint32_t              mTxFree; /* bitmap */
+static uint64_t              mTxFree; /* bitmap (VSND_TX_BUFS <= 64) */
 static uint8_t               mCtrlReq[64];
 static uint8_t               mCtrlResp[64];
 
@@ -145,7 +145,7 @@ static void VsndPollTx(void)
             mStreams[1].consumed += mTxLens[i] - sizeof(vsnd_pcm_xfer_t);
           }
 
-          mTxFree |= (1u << i);
+          mTxFree |= (1ull << i);
           mTxLens[i] = 0;
           break;
         }
@@ -222,7 +222,7 @@ static int VsndInit(void)
     return -1;
   }
 
-  mTxFree = (1u << VSND_TX_BUFS) - 1u;
+  mTxFree = (VSND_TX_BUFS >= 64) ? ~0ull : ((1ull << VSND_TX_BUFS) - 1ull);
   for (i = 0; i < VSND_TX_BUFS; i++) {
     mTxBufs[i] = pm_metal_virtio_pages_alloc(
       PM_METAL_VIRTIO_SIZE_TO_PAGES(sizeof(vsnd_pcm_xfer_t) + VSND_PERIOD));
@@ -289,7 +289,7 @@ static uint32_t VsndQueue(pm_metal_audio_stream_h s, const void *pcm, uint32_t n
   while (placed < nbytes) {
     VsndPollTx();
     for (i = 0; i < VSND_TX_BUFS; i++) {
-      if ((mTxFree & (1u << i)) != 0) {
+      if ((mTxFree & (1ull << i)) != 0) {
         break;
       }
     }
@@ -320,7 +320,7 @@ static uint32_t VsndQueue(pm_metal_audio_stream_h s, const void *pcm, uint32_t n
         break;
       }
 
-      mTxFree &= ~(1u << i);
+      mTxFree &= ~(1ull << i);
       placed += n;
       mStreams[1].queued += n;
     }
