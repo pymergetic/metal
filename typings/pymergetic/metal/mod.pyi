@@ -30,19 +30,6 @@ class _Mod_async_py:
 
 async_py: _Mod_async_py
 
-class _ModFresh_doom:
-    """Fresh-instance scope for "doom" (async with)."""
-
-    async def __aenter__(self) -> "_ModFresh_doom": ...
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool: ...
-    def run(self, *args: Any) -> Awaitable[Any]: ...
-
-class _Mod_doom:
-    def run(self, *args: Any) -> Awaitable[Any]: ...
-    def fresh(self) -> _ModFresh_doom: ...
-
-doom: _Mod_doom
-
 class _ModFresh_fresh_counter:
     """Fresh-instance scope for "fresh_counter" (async with)."""
 

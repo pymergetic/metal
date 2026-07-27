@@ -12,6 +12,7 @@
 #include "efi_wamr_internal.h"
 
 #include <pymergetic/metal/runtime/mem/mem.h>
+#include <runtime/stack/stack.h>
 #include <runtime/time/time.h>
 
 #include <stdarg.h>
@@ -99,7 +100,17 @@ korp_tid os_self_thread(void)
 
 uint8 *os_thread_get_stack_boundary(void)
 {
-  return NULL;
+  /*
+   * WAMR calls this on the stack it wants bounded (fresh every AOT/interp
+   * call, see aot_call_function/wasm_runtime.c) -- never cache the result.
+   * Returning NULL (the old behavior) silently disabled WAMR's native
+   * stack overflow guard on every runner, so a deep guest recursion (e.g.
+   * doom's BSP walk under the AOT backend, which uses real native call
+   * frames unlike the interpreter) corrupted whatever heap memory sat
+   * below the runner's stack instead of taking a clean trap -- surfacing
+   * later as an unrelated-looking #GP.
+   */
+  return (uint8 *)pm_metal_stack_base(pm_metal_mem_cpu());
 }
 
 void os_thread_jit_write_protect_np(bool enabled)
@@ -111,7 +122,7 @@ int os_mutex_init(korp_mutex *mutex)
 {
   if (mutex == NULL)
     return BHT_ERROR;
-  *mutex = 0;
+  pm_metal_spin_init(mutex);
   return BHT_OK;
 }
 
@@ -123,19 +134,25 @@ int os_mutex_destroy(korp_mutex *mutex)
 
 int os_mutex_lock(korp_mutex *mutex)
 {
-  (void)mutex;
+  if (mutex == NULL)
+    return BHT_ERROR;
+  pm_metal_spin_lock(mutex);
   return BHT_OK;
 }
 
 int os_mutex_unlock(korp_mutex *mutex)
 {
-  (void)mutex;
+  if (mutex == NULL)
+    return BHT_ERROR;
+  pm_metal_spin_unlock(mutex);
   return BHT_OK;
 }
 
 void *os_mmap(void *hint, size_t size, int prot, int flags, os_file_handle file)
 {
-  void *addr;
+  uint8_t  *raw;
+  uintptr_t aligned;
+  size_t    total;
 
   (void)hint;
   (void)prot;
@@ -145,10 +162,30 @@ void *os_mmap(void *hint, size_t size, int prot, int flags, os_file_handle file)
   if (size == 0 || size >= UINT32_MAX)
     return NULL;
 
-  addr = BH_MALLOC((unsigned)size);
-  if (addr != NULL)
-    memset(addr, 0, (uintptr_t)size);
-  return addr;
+  /*
+   * The AOT loader treats this like real POSIX mmap(2): it lays out
+   * .rodata.cst16 etc. at page-aligned offsets from the returned base,
+   * then loads 16-byte SSE constants out of that buffer with *aligned*
+   * instructions (movaps) that #GP -- not #PF -- on a misaligned address.
+   * A plain heap allocation only guarantees a small fixed alignment, and
+   * an unlucky TLSF layout (far likelier once multiple APs allocate
+   * concurrently under -smp>1) handed back a base that wasn't 16-byte
+   * aligned, so this surfaced as a "random" #GP deep in unrelated-looking
+   * AOT code. Over-allocate and round up to a page boundary instead, and
+   * stash the real heap pointer just before the aligned one so os_munmap
+   * can free it back regardless of allocation/free order.
+   */
+  total = size + PM_METAL_MEM_PAGE_SIZE + sizeof(void *);
+  raw   = (uint8_t *)pm_metal_mem_alloc(total, PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
+  if (raw == NULL)
+    return NULL;
+
+  aligned = ((uintptr_t)raw + sizeof(void *) + PM_METAL_MEM_PAGE_SIZE - 1)
+            & ~(uintptr_t)(PM_METAL_MEM_PAGE_SIZE - 1);
+  ((void **)aligned)[-1] = raw;
+
+  memset((void *)aligned, 0, size);
+  return (void *)aligned;
 }
 
 void *os_mremap(void *old_addr, size_t old_size, size_t new_size)
@@ -159,7 +196,9 @@ void *os_mremap(void *old_addr, size_t old_size, size_t new_size)
 void os_munmap(void *addr, size_t size)
 {
   (void)size;
-  BH_FREE(addr);
+  if (addr == NULL)
+    return;
+  pm_metal_mem_free(((void **)addr)[-1]);
 }
 
 int os_mprotect(void *addr, size_t size, int prot)

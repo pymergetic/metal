@@ -27,6 +27,7 @@
 #include "../../runtime/mem/host_stubs/pthread.h"   /* IWYU pragma: export */
 #include "../../runtime/mem/host_stubs/assert.h"    /* IWYU pragma: export */
 #include "../../runtime/mem/host_stubs/sys/ioctl.h" /* IWYU pragma: export */
+#include "../../runtime/slot/spin.h"
 
 #ifndef FIONREAD
 #define FIONREAD 0x541B
@@ -38,11 +39,15 @@
 #define BH_THREAD_DEFAULT_PRIORITY 7
 
 /* Single-thread stub types */
-typedef int            korp_tid;
-typedef int            korp_mutex;
-typedef unsigned int   korp_sem;
-typedef int            korp_thread;
-typedef pthread_cond_t korp_cond;
+typedef int             korp_tid;
+/* Real cross-AP lock (StartupAllAPs runs genuine parallel cores) -- WAMR's
+ * shared globals (loading_module_list_lock, registered_module_list_lock,
+ * etc.) rely on os_mutex_* actually excluding, not the single-thread stub
+ * it looks like at a glance. */
+typedef pm_metal_spin_t korp_mutex;
+typedef unsigned int    korp_sem;
+typedef int             korp_thread;
+typedef pthread_cond_t  korp_cond;
 
 typedef struct {
   int dummy;

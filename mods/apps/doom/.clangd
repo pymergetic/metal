@@ -1,8 +1,0 @@
-# Prefer wasi libc over repo-global freestanding host_stubs.
-CompileFlags:
-  Remove:
-    - -I**/runtime/mem/host_stubs
-    - -I**/guest/wamr
-  Add:
-    - -I.
-    - -Iide_stubs

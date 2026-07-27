@@ -169,13 +169,15 @@ static pm_metal_status_t MetalBootTestStep(pm_metal_async_handle_t self_h)
                                     PM_METAL_PROC_UI_NONE,
                                     pm_metal_ui_console_handle(),
                                     PM_METAL_MOD_INSTANCE_SHARED,
-                                    PM_METAL_MOD_FLAG_NONE);
+                                    PM_METAL_MOD_FLAG_NONE,
+                                    NULL);
     if (t->rc == 0) {
       t->rc = pm_metal_mod_cmd_invoke("hello",
                                       PM_METAL_PROC_UI_NONE,
                                       pm_metal_ui_console_handle(),
                                       PM_METAL_MOD_INSTANCE_SHARED,
-                                      PM_METAL_MOD_FLAG_NONE);
+                                      PM_METAL_MOD_FLAG_NONE,
+                                      NULL);
     }
 
     /* Resolve once at callsite; await coro like host sleep (no process). */
@@ -231,7 +233,8 @@ static pm_metal_status_t MetalBootTestStep(pm_metal_async_handle_t self_h)
                                     PM_METAL_PROC_UI_NONE,
                                     pm_metal_ui_console_handle(),
                                     PM_METAL_MOD_INSTANCE_SHARED,
-                                    PM_METAL_MOD_FLAG_NONE);
+                                    PM_METAL_MOD_FLAG_NONE,
+                                    NULL);
     if (t->rc != 0) {
       pm_metal_log(mProofs[t->proof_i].fail);
       t->step = TEST_FAIL;

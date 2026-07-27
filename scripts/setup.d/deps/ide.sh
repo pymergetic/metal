@@ -85,26 +85,9 @@ if edk2.is_dir():
                 "file": str(rp),
             })
 
-# doomgeneric Metal guests (wasm) — so editors resolve doomgeneric.h / wasi.
+# External apps (e.g. ../metal-doom) live in a sibling repo now — no
+# in-tree source for clangd to index here.
 wasi_sys = root / ".tools/wasi-sdk/share/wasi-sysroot"
-dg_inc = root / "external/doomgeneric/doomgeneric"
-doom_dir = root / "mods/apps/doom"
-doom_stubs = doom_dir / "ide_stubs"
-doom_base = (
-    f"/usr/bin/clang -std=c11 --target=wasm32-wasip1 --sysroot={wasi_sys} "
-    f"-I{inc_root} -I{dg_inc} -I{doom_dir} -I{doom_stubs} "
-    f"-DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L "
-    f"-DFEATURE_SOUND "
-    f"-DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 "
-)
-if wasi_sys.is_dir() and dg_inc.is_dir() and doom_dir.is_dir():
-    for fpath in sorted(doom_dir.glob("*.c")):
-        rp = fpath.resolve()
-        entries.append({
-            "directory": str(root),
-            "command": f"{doom_base}-c -o /dev/null {rp}",
-            "file": str(rp),
-        })
 
 # mods/tests/*/main.c (wasm32-wasip1-threads) — same target as
 # scripts/build.d/guest/mod.sh, otherwise clangd (no --target) treats these

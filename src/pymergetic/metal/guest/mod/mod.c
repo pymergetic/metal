@@ -11,6 +11,7 @@
 #include <pymergetic/metal/log/log.h>
 
 #include <pymergetic/metal/runtime/mem/mem.h>
+#include <runtime/slot/spin.h>
 
 #include <stdint.h>
 #include <string.h>
@@ -64,6 +65,15 @@ typedef struct {
 } mod_fresh_t;
 
 static mod_slot_t           mMods[PM_METAL_MOD_MAX];
+/*
+ * Guards find-or-claim on mMods[] only (short, no await inside). Runners
+ * are genuine parallel APs (StartupAllAPs) and MetalPickCpu round-robins
+ * task creation across all of them (no more single-session-CPU affinity)
+ * -- two mod loads landing on different APs at once used to race on which
+ * free slot to claim, or read a slot mid-memset, corrupting a name/image
+ * and eventually jumping through a garbage function pointer much later.
+ */
+static pm_metal_spin_t      mModsLock;
 static mod_func_t           mFuncs[PM_METAL_MOD_FUNC_MAX];
 static mod_cmd_t            mCmds[PM_METAL_MOD_CMD_MAX];
 static pm_metal_shell_cmd_t mShellCmds[PM_METAL_MOD_CMD_MAX];
@@ -73,19 +83,24 @@ static mod_fresh_t mFresh[PM_METAL_MOD_FRESH_MAX + 1];
 
 static mod_slot_t *ModFind(const char *name)
 {
-  uint32_t i;
+  uint32_t    i;
+  mod_slot_t *found;
 
   if (name == NULL || name[0] == '\0') {
     return NULL;
   }
 
+  found = NULL;
+  pm_metal_spin_lock(&mModsLock);
   for (i = 0; i < PM_METAL_MOD_MAX; i++) {
     if (mMods[i].used && strcmp(mMods[i].name, name) == 0) {
-      return &mMods[i];
+      found = &mMods[i];
+      break;
     }
   }
+  pm_metal_spin_unlock(&mModsLock);
 
-  return NULL;
+  return found;
 }
 
 static mod_slot_t *ModAlloc(const char *name)
@@ -93,22 +108,39 @@ static mod_slot_t *ModAlloc(const char *name)
   uint32_t    i;
   mod_slot_t *s;
 
-  s = ModFind(name);
-  if (s != NULL) {
-    return s;
+  if (name == NULL || name[0] == '\0') {
+    return NULL;
   }
 
+  /* Single critical section for find-then-claim -- two separate
+   * lock/unlock pairs (find, then re-scan-and-claim) would leave a gap
+   * where two APs both see "not found" and both claim a slot for the
+   * same name. */
+  pm_metal_spin_lock(&mModsLock);
+
+  s = NULL;
   for (i = 0; i < PM_METAL_MOD_MAX; i++) {
-    if (!mMods[i].used) {
-      memset(&mMods[i], 0, sizeof(mMods[i]));
-      mMods[i].used = 1;
-      strncpy(mMods[i].name, name, sizeof(mMods[i].name) - 1);
-      mMods[i].state = MOD_EMPTY;
-      return &mMods[i];
+    if (mMods[i].used && strcmp(mMods[i].name, name) == 0) {
+      s = &mMods[i];
+      break;
     }
   }
 
-  return NULL;
+  if (s == NULL) {
+    for (i = 0; i < PM_METAL_MOD_MAX; i++) {
+      if (!mMods[i].used) {
+        memset(&mMods[i], 0, sizeof(mMods[i]));
+        mMods[i].used = 1;
+        strncpy(mMods[i].name, name, sizeof(mMods[i].name) - 1);
+        mMods[i].state = MOD_EMPTY;
+        s = &mMods[i];
+        break;
+      }
+    }
+  }
+
+  pm_metal_spin_unlock(&mModsLock);
+  return s;
 }
 
 static mod_func_t *FuncFind(const char *mod_name, const char *name)
@@ -157,22 +189,62 @@ static void ModClearFuncs(const char *mod_name)
   }
 }
 
+/** Space-join argv[start..argc-1] into out (truncated to out_sz), or leave
+ * out empty if there is nothing to join. Shared by ModShellCmdFn's bare
+ * "<mod> args..." and the CoreRunCmd/CoreTabCmd "run/tab <mod> args..."
+ * shell forms (that one lives in shell_core_cmds.c, a different mod --
+ * same small loop, not worth a shared header for six lines). */
+static void ModJoinArgs(char *out, uint32_t out_sz, int argc, char **argv, int start)
+{
+  uint32_t off;
+  uint32_t n;
+  int      i;
+
+  if (out == NULL || out_sz == 0) {
+    return;
+  }
+
+  off    = 0;
+  out[0] = '\0';
+  for (i = start; i < argc && argv[i] != NULL; i++) {
+    n = strlen(argv[i]);
+    if (off != 0) {
+      if (off + 1 >= out_sz) {
+        break;
+      }
+
+      out[off++] = ' ';
+    }
+
+    if (off + n >= out_sz) {
+      n = out_sz - 1u - off;
+    }
+
+    memcpy(out + off, argv[i], n);
+    off += n;
+  }
+
+  out[off] = '\0';
+}
+
 static void ModShellCmdFn(int argc, char **argv)
 {
   const char *cmd;
+  char        args[128];
 
-  (void)argc;
   if (argv == NULL || argv[0] == NULL) {
     return;
   }
 
   cmd = argv[0];
+  ModJoinArgs(args, (uint32_t)sizeof(args), argc, argv, 1);
   /* Bare "doom" from the shell == "run doom" — same AUTO instance choice as run/tab. */
   (void)pm_metal_mod_cmd_invoke(cmd,
                                 PM_METAL_PROC_UI_FULLSCREEN,
                                 pm_metal_ui_tab_active(),
                                 PM_METAL_MOD_INSTANCE_AUTO,
-                                PM_METAL_MOD_FLAG_NONE);
+                                PM_METAL_MOD_FLAG_NONE,
+                                args[0] != '\0' ? args : NULL);
 }
 
 static int32_t ModSetCapabilityHost(pm_metal_mod_cap_t cap)
@@ -671,19 +743,23 @@ int pm_metal_mod_cmd_exists(const char *cmd_name)
 
 static mod_slot_t *ModFindByInst(void *inst)
 {
-  uint32_t i;
+  uint32_t    i;
+  mod_slot_t *found;
 
   if (inst == NULL) {
     return NULL;
   }
 
+  found = NULL;
+  pm_metal_spin_lock(&mModsLock);
   for (i = 0; i < PM_METAL_MOD_MAX; i++) {
     if (mMods[i].used && mMods[i].img.inst == inst) {
-      return &mMods[i];
+      found = &mMods[i];
+      break;
     }
   }
-
-  return NULL;
+  pm_metal_spin_unlock(&mModsLock);
+  return found;
 }
 
 void pm_metal_mod_on_guest_coro_begin(void *module_inst)
@@ -987,7 +1063,8 @@ int pm_metal_mod_fn_process(const pm_metal_mod_cmd_t  *cmd,
                             pm_metal_process_ui_kind_t ui_kind,
                             pm_metal_ui_handle_t       tab,
                             pm_metal_mod_instance_t    instance_mode,
-                            uint32_t                   flags)
+                            uint32_t                   flags,
+                            const char                *args)
 {
   mod_slot_t               *s;
   pm_metal_async_handle_t   coro;
@@ -1066,7 +1143,7 @@ int pm_metal_mod_fn_process(const pm_metal_mod_cmd_t  *cmd,
 
   parent = pm_metal_process_current();
   pm_metal_process_set_spawn_hint(ui_kind, tab);
-  pid = pm_metal_process_reserve(name, ui_kind, tab);
+  pid = pm_metal_process_reserve(name, ui_kind, tab, args);
   pm_metal_process_clear_spawn_hint();
   if (pid == PM_METAL_PROCESS_ID_INVALID) {
     if (have_proc_img) {
@@ -1169,7 +1246,8 @@ int pm_metal_mod_cmd_invoke(const char                *cmd_name,
                             pm_metal_process_ui_kind_t ui_kind,
                             pm_metal_ui_handle_t       tab,
                             pm_metal_mod_instance_t    instance_mode,
-                            uint32_t                   flags)
+                            uint32_t                   flags,
+                            const char                *args)
 {
   pm_metal_mod_cmd_t cmd;
 
@@ -1177,7 +1255,7 @@ int pm_metal_mod_cmd_invoke(const char                *cmd_name,
     return -1;
   }
 
-  return pm_metal_mod_fn_process(&cmd, NULL, ui_kind, tab, instance_mode, flags);
+  return pm_metal_mod_fn_process(&cmd, NULL, ui_kind, tab, instance_mode, flags, args);
 }
 
 int32_t pm_metal_mod_register_func(const char *name, const char *export_name)
@@ -1299,14 +1377,16 @@ static int32_t pm_metal_mod_cmd_invoke_native(wasm_exec_env_t exec_env,
                                               uint32_t        ui_kind,
                                               uint32_t        tab,
                                               uint32_t        instance_mode,
-                                              uint32_t        flags)
+                                              uint32_t        flags,
+                                              const char     *args)
 {
   (void)exec_env;
   return (int32_t)pm_metal_mod_cmd_invoke(cmd_name,
                                           (pm_metal_process_ui_kind_t)ui_kind,
                                           (pm_metal_ui_handle_t)tab,
                                           (pm_metal_mod_instance_t)instance_mode,
-                                          flags);
+                                          flags,
+                                          args);
 }
 
 static uint32_t pm_metal_mod_func_resolve_native(wasm_exec_env_t exec_env,
@@ -1408,7 +1488,8 @@ static int32_t pm_metal_mod_fn_process_native(wasm_exec_env_t exec_env,
                                               uint32_t        ui_kind,
                                               uint32_t        tab,
                                               uint32_t        instance_mode,
-                                              uint32_t        flags)
+                                              uint32_t        flags,
+                                              const char     *args)
 {
   pm_metal_mod_cmd_t *cmd;
 
@@ -1423,7 +1504,8 @@ static int32_t pm_metal_mod_fn_process_native(wasm_exec_env_t exec_env,
                                           (pm_metal_process_ui_kind_t)ui_kind,
                                           (pm_metal_ui_handle_t)tab,
                                           (pm_metal_mod_instance_t)instance_mode,
-                                          flags);
+                                          flags,
+                                          args);
 }
 
 static int32_t pm_metal_mod_func_exists_native(wasm_exec_env_t exec_env,
@@ -1460,14 +1542,14 @@ static NativeSymbol g_pm_metal_mod_native_symbols[] = {
   { "pm_metal_mod_set_about", (void *)pm_metal_mod_set_about_native, "(i)i", NULL },
   { "pm_metal_mod_about_get", (void *)pm_metal_mod_about_get_native, "($i)i", NULL },
   { "pm_metal_mod_cmd_exists", (void *)pm_metal_mod_cmd_exists_native, "($)i", NULL },
-  { "pm_metal_mod_cmd_invoke", (void *)pm_metal_mod_cmd_invoke_native, "($iiii)i", NULL },
+  { "pm_metal_mod_cmd_invoke", (void *)pm_metal_mod_cmd_invoke_native, "($iiii$)i", NULL },
   { "pm_metal_mod_func_resolve", (void *)pm_metal_mod_func_resolve_native, "($$)i", NULL },
   { "pm_metal_mod_cmd_resolve", (void *)pm_metal_mod_cmd_resolve_native, "($)i", NULL },
   { "pm_metal_mod_fresh_open", (void *)pm_metal_mod_fresh_open_native, "($)i", NULL },
   { "pm_metal_mod_fresh_resolve", (void *)pm_metal_mod_fresh_resolve_native, "(i$)i", NULL },
   { "pm_metal_mod_fresh_close", (void *)pm_metal_mod_fresh_close_native, "(i)i", NULL },
   { "pm_metal_mod_fn_coro", (void *)pm_metal_mod_fn_coro_native, "(i)i", NULL },
-  { "pm_metal_mod_fn_process", (void *)pm_metal_mod_fn_process_native, "(i$iiii)i", NULL },
+  { "pm_metal_mod_fn_process", (void *)pm_metal_mod_fn_process_native, "(i$iiii$)i", NULL },
   { "pm_metal_mod_func_exists", (void *)pm_metal_mod_func_exists_native, "($$)i", NULL },
   { "pm_metal_mod_register_func", (void *)pm_metal_mod_register_func_native, "($$)i", NULL },
   { "pm_metal_mod_register_cmd", (void *)pm_metal_mod_register_cmd_native, "($$$)i", NULL },

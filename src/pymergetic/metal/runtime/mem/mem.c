@@ -76,9 +76,23 @@ static void *MetalHeapMalloc(size_t size)
   pm_metal_spin_lock(&mHeapLock);
   p = tlsf_malloc(mTlsf, size);
   if (p == NULL) {
+    /*
+     * TLSF is segregated-fit: a request of `size` searches the free-list
+     * bucket for a *rounded-up* threshold (next second-level-index slot,
+     * ~size/32 above `size`), never the bucket `size` itself would land
+     * in on insert -- that bucket may hold blocks smaller than `size`.
+     * A pool grown to `size` plus a small flat pad (previously 64 KiB)
+     * produces a single free block whose insert bucket is *below* that
+     * search threshold once size is above a few MiB (bucket width scales
+     * with size, e.g. 512 KiB at the 16-32 MiB class) -- tlsf_malloc then
+     * finds nothing and fails even though the block is big enough.
+     * size/8 comfortably clears the largest possible bucket width
+     * (size/32) at any scale, so the grown block always lands at or above
+     * the search bucket.
+     */
     grow = PM_METAL_HEAP_GROW_BYTES;
-    if (grow < size + 64 * 1024) {
-      grow = size + 64 * 1024;
+    if (grow < size + size / 8 + 64 * 1024) {
+      grow = size + size / 8 + 64 * 1024;
     }
 
     chunk = pm_metal_arena_heap_grow(grow);

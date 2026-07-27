@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 # shellcheck disable=SC1091
-source "${ROOT}/scripts/lib/doom.sh"
+source "${ROOT}/scripts/lib/ext-apps.sh"
 ELF="${1:-${ROOT}/build/bios/i386/metal.elf}"
 PXE="${ROOT}/build/bios/pxe"
 
@@ -21,7 +21,7 @@ if [[ -f "${ELF}.sig" ]]; then
 fi
 
 # Same package layout as EFI ESP — HTTP :8080 mirrors TFTP root.
-pm_metal_doom_stage_into "${PXE}" || true
+pm_metal_ext_apps_stage_into "${PXE}"
 if [[ -d "${ROOT}/mods/py" ]]; then
 	mkdir -p "${PXE}/mods/py"
 	cp -a "${ROOT}/mods/py/." "${PXE}/mods/py/"
@@ -63,7 +63,8 @@ TFTP root files:
 - `undionly.kpxe` (or your usual iPXE NBP — small)
 - `metal.ipxe` (this drop)
 - `metal.elf` (this drop)
-- optional: `mods/apps/doom/{doom.x86_64.aot,doom.i386.aot,doom.wasm,doom1.wad}` (+ `.sig`) when `METAL_DOOM_BUILD=1`
+- optional: `mods/apps/<name>/...` for any external app staged via
+  `METAL_EXT_APPS=<name>=<dir> ./scripts/build bios i386` (e.g. `packages/metal-doom`)
   (BIOS seeds these into the ESP RAM cache via HTTP :8080 after DHCP)
 
 dnsmasq / luci DHCP:

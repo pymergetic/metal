@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Upload Metal's EFI ESP to a remote host over scp — e.g. to grab
+# build/efi/esp/ from another machine and dd/rsync it onto a real USB ESP,
+# or just to publish it over HTTP. Same host/creds as scripts/upload-pxe
+# (OpenWrt: no rsync/sftp-server → legacy scp + tar|ssh), different
+# destination subdir so it doesn't collide with the BIOS/PXE drop.
+# Usage: scripts/upload-efi [--build]
+#
+# Defaults (override with env):
+#   METAL_PXE_HOST=192.168.10.1   (shared with upload-pxe)
+#   METAL_PXE_USER=root
+#   METAL_EFI_PATH=${METAL_PXE_PATH:-/storage/tftp}/efi
+#   METAL_PXE_SSH_OPTS=
+#   METAL_EXT_APPS=       # with --build: also stage external apps, e.g.
+#                         #   name=dir[:name2=dir2...] (see scripts/lib/ext-apps.sh)
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/efi-qemu.sh"
+
+EFI="${ROOT}/build/efi/metal.efi"
+ESP="${ROOT}/build/efi/esp"
+HOST="${METAL_PXE_HOST:-192.168.10.1}"
+USER="${METAL_PXE_USER:-root}"
+DEST="${METAL_EFI_PATH:-${METAL_PXE_PATH:-/storage/tftp}/efi}"
+SSH_EXTRA="${METAL_PXE_SSH_OPTS:-}"
+BUILD=0
+
+usage() {
+	cat >&2 <<'EOF'
+usage: scripts/upload-efi [--build]
+
+  Stage build/efi/esp/ (EFI/BOOT/BOOTX64.EFI + mods/, same layout scripts/run
+  efi boots from) and copy the whole tree to USER@HOST:DEST — e.g. to fetch
+  onto another machine and image a real USB ESP, or serve over HTTP.
+
+  --build   run ./scripts/build efi first
+            (set METAL_EXT_APPS=name=dir to include an external app under
+            mods/apps/<name>/, e.g. METAL_EXT_APPS=doom=../metal-doom/build/doom)
+
+Env:
+  METAL_PXE_HOST      default 192.168.10.1 (shared with upload-pxe)
+  METAL_PXE_USER      default root
+  METAL_EFI_PATH      default ${METAL_PXE_PATH:-/storage/tftp}/efi
+  METAL_PXE_SSH_OPTS  extra ssh/scp options (e.g. -i ~/.ssh/openwrt)
+  METAL_EXT_APPS      name=dir[:name2=dir2...] external apps to stage
+EOF
+	exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	-h | --help | help) usage ;;
+	--build) BUILD=1 ;;
+	*) usage ;;
+	esac
+	shift
+done
+
+if [[ "${BUILD}" -eq 1 ]]; then
+	"${ROOT}/scripts/build" efi
+fi
+
+if [[ ! -f "${EFI}" ]]; then
+	echo "upload-efi: missing ${EFI} — run: ./scripts/build efi" >&2
+	exit 1
+fi
+
+pm_metal_efi_stage_esp "${EFI}" "${ESP}"
+
+TARGET="${USER}@${HOST}:${DEST}/"
+HTTP="http://${HOST}:8080/efi/"
+echo "upload-efi: ${ESP}/ → ${TARGET}" >&2
+echo "upload-efi: HTTP mirror (OpenWrt already exports TFTP dir): ${HTTP}" >&2
+
+# shellcheck disable=SC2086
+ssh ${SSH_EXTRA} "${USER}@${HOST}" "mkdir -p '${DEST}'"
+# OpenSSH scp rejects trailing "/." ; tar|ssh is reliable on OpenWrt (no rsync/sftp).
+# shellcheck disable=SC2086
+tar -C "${ESP}" -cf - . | ssh ${SSH_EXTRA} "${USER}@${HOST}" \
+	"tar -C '${DEST}' -xf -"
+
+# shellcheck disable=SC2086
+ssh ${SSH_EXTRA} "${USER}@${HOST}" \
+	"ls -la '${DEST}/EFI/BOOT'; \
+	 if [ -d '${DEST}/mods/apps' ]; then ls -la '${DEST}/mods/apps'; fi"
+
+echo "upload-efi: ok — verify ${HTTP}EFI/BOOT/BOOTX64.EFI" >&2
+if [[ -d "${ESP}/mods/apps" ]]; then
+	shopt -s nullglob
+	for app_dir in "${ESP}"/mods/apps/*/; do
+		app_name="$(basename "${app_dir}")"
+		for f in "${app_dir}"*; do
+			[[ -f "${f}" ]] || continue
+			echo "upload-efi: ${app_name} -> ${HTTP}mods/apps/${app_name}/$(basename "${f}")" >&2
+		done
+	done
+	shopt -u nullglob
+fi

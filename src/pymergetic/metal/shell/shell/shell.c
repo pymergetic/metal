@@ -697,6 +697,11 @@ void pm_metal_shell_cmd_exit(int32_t reboot)
 
 int pm_metal_shell_run(const char *mod)
 {
+  return pm_metal_shell_run_args(mod, NULL);
+}
+
+int pm_metal_shell_run_args(const char *mod, const char *args)
+{
   int32_t              rc;
   char                 msg[96];
   pm_metal_ui_handle_t tab;
@@ -718,13 +723,13 @@ int pm_metal_shell_run(const char *mod)
 
   tab   = pm_metal_ui_tab_active();
   mNest = 1;
-  rc    = pm_metal_process_spawn_mod(mod, PM_METAL_PROC_UI_FULLSCREEN, tab);
+  rc    = pm_metal_process_spawn_mod_args(mod, PM_METAL_PROC_UI_FULLSCREEN, tab, args);
   mNest = 0;
 
   if (rc < 0) {
     /*
-     * Common miss: ESP package not preloaded (rebuild/restage with
-     * METAL_DOOM_BUILD=1). Detailed reason already on the log ring.
+     * Common miss: ESP package not preloaded (stage an external app with
+     * METAL_EXT_APPS=<name>=<dir>). Detailed reason already on the log ring.
      */
     snprintf(msg, sizeof(msg), "run '%s': not found / load failed", mod);
   } else if (pm_metal_process_active()) {
@@ -746,6 +751,11 @@ int pm_metal_shell_run(const char *mod)
 }
 
 int pm_metal_shell_tab(const char *mod)
+{
+  return pm_metal_shell_tab_args(mod, NULL);
+}
+
+int pm_metal_shell_tab_args(const char *mod, const char *args)
 {
   pm_metal_ui_handle_t tab;
   int32_t              rc;
@@ -773,7 +783,7 @@ int pm_metal_shell_tab(const char *mod)
   }
 
   mNest = 1;
-  rc    = pm_metal_process_spawn_mod(mod, PM_METAL_PROC_UI_TAB, tab);
+  rc    = pm_metal_process_spawn_mod_args(mod, PM_METAL_PROC_UI_TAB, tab, args);
   mNest = 0;
 
   if (rc < 0) {

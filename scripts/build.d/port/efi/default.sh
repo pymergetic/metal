@@ -130,13 +130,6 @@ PY
 # Build+sign+embed stdlib.zip (mods/py/stdlib_src/) — not tracked in git,
 # always freshly baked into the binary, see embed-stdlib.sh.
 "${ROOT}/scripts/build.d/port/efi/embed-stdlib.sh"
-# Doom parked. Opt-in: METAL_DOOM_BUILD=1 → build/doom/ (EFI+BIOS/PXE).
-# shellcheck disable=SC1091
-source "${ROOT}/scripts/lib/doom.sh"
-if [[ "${METAL_DOOM_BUILD:-0}" == "1" ]]; then
-	pm_metal_doom_build
-fi
-
 echo "efi build: MetalPkg (X64 ${TOOL_CHAIN} ${TARGET})"
 build \
 	-p MetalPkg/MetalPkg.dsc \

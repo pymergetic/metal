@@ -402,59 +402,78 @@ static void CoreTzCmd(int32_t argc, char **argv)
   pm_metal_shell_out(line);
 }
 
-static void CoreEchoCmd(int32_t argc, char **argv)
+/** Space-join argv[start..argc-1] into out (truncated to out_sz - 1), empty
+ * string if there's nothing to join. Shared by echo (whole line) and
+ * run/tab (trailing args after the mod name -> pm_metal_process_info_t.cmdline). */
+static void CoreJoinArgs(char *out, uintptr_t out_sz, int32_t argc, char **argv, int32_t start)
 {
-  char      line[160];
   int32_t   i;
   uintptr_t off;
   uintptr_t n;
+
+  if (out == NULL || out_sz == 0) {
+    return;
+  }
+
+  off = 0;
+  for (i = start; i < argc && argv[i] != NULL; i++) {
+    n = strlen(argv[i]);
+    if (off != 0) {
+      if (off + 1 >= out_sz) {
+        break;
+      }
+
+      out[off++] = ' ';
+    }
+
+    if (off + n >= out_sz) {
+      n = out_sz - 1u - off;
+    }
+
+    memcpy(out + off, argv[i], n);
+    off += n;
+  }
+
+  out[off] = '\0';
+}
+
+static void CoreEchoCmd(int32_t argc, char **argv)
+{
+  char line[160];
 
   if (argc < 2) {
     pm_metal_shell_out("");
     return;
   }
 
-  off = 0;
-  for (i = 1; i < argc; i++) {
-    n = strlen(argv[i]);
-    if (i > 1) {
-      if (off + 1 >= sizeof(line)) {
-        break;
-      }
-
-      line[off++] = ' ';
-    }
-
-    if (off + n >= sizeof(line)) {
-      n = sizeof(line) - 1u - off;
-    }
-
-    memcpy(line + off, argv[i], n);
-    off += n;
-  }
-
-  line[off] = '\0';
+  CoreJoinArgs(line, sizeof(line), argc, argv, 1);
   pm_metal_shell_out(line);
 }
 
 static void CoreRunCmd(int32_t argc, char **argv)
 {
+  char args[128];
+
   if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
-    pm_metal_shell_out("usage: run <mod>");
+    pm_metal_shell_out("usage: run <mod> [args...]");
     return;
   }
 
-  (void)pm_metal_shell_run(argv[1]);
+  CoreJoinArgs(args, sizeof(args), argc, argv, 2);
+  (void)pm_metal_shell_run_args(argv[1], args[0] != '\0' ? args : NULL);
 }
 
 static void CoreTabCmd(int32_t argc, char **argv)
 {
+  char args[128];
+
   if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
-    pm_metal_shell_out("usage: tab <mod>");
+    pm_metal_shell_out("usage: tab <mod> [args...]");
     return;
   }
 
-  (void)pm_metal_shell_tab(argv[1]);
+  CoreJoinArgs(args, sizeof(args), argc, argv, 2);
+  (void)pm_metal_shell_tab_args(argv[1], args[0] != '\0' ? args : NULL);
 }
 
 static void CoreTabsCmd(int32_t argc, char **argv)

@@ -65,12 +65,20 @@ pm_metal_efi_stage_esp "${EFI}" "${ESP}"
 VBLK="$(pm_metal_efi_stage_vblk)"
 
 echo "run-efi: staged ${ESP}/EFI/BOOT/BOOTX64.EFI from ${EFI}" >&2
-if [[ -f "${ESP}/mods/apps/doom/doom.wasm" ]]; then
-	echo "run-efi: doom on ESP → shell: run doom (AOT preferred, wasm fallback)" >&2
-elif [[ -f "${ESP}/mods/apps/doom/doom.x86_64.aot" ]]; then
-	echo "run-efi: doom AOT on ESP (no wasm) → shell: run doom" >&2
+if [[ -d "${ESP}/mods/apps" ]]; then
+	shopt -s nullglob
+	apps=("${ESP}"/mods/apps/*/)
+	shopt -u nullglob
+	if [[ "${#apps[@]}" -gt 0 ]]; then
+		for app_dir in "${apps[@]}"; do
+			app_name="$(basename "${app_dir}")"
+			if compgen -G "${app_dir}${app_name}.*.aot" >/dev/null || [[ -f "${app_dir}${app_name}.wasm" ]]; then
+				echo "run-efi: ${app_name} on ESP -> shell: run ${app_name} (AOT preferred, wasm fallback)" >&2
+			fi
+		done
+	fi
 else
-	echo "run-efi: doom not on ESP (optional: METAL_DOOM_BUILD=1 ./scripts/build efi)" >&2
+	echo "run-efi: no external apps on ESP (stage one via METAL_EXT_APPS=<name>=<dir> ./scripts/build efi)" >&2
 fi
 
 args=(

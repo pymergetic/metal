@@ -44,6 +44,10 @@ typedef struct {
   uint32_t              ui_kind; /* pm_metal_process_ui_kind_t */
   pm_metal_ui_handle_t  tab;
   uint32_t              surface;
+  /* Raw trailing shell args ("run <mod> ARGS..." / bare "<mod> ARGS...."),
+   * space-joined, empty if none. A mod reads its own via
+   * pm_metal_process_info(pm_metal_process_self(), &info). */
+  char cmdline[128];
 } pm_metal_process_info_t;
 
 #if defined(__wasm__)
@@ -78,11 +82,14 @@ pm_metal_process_id_t pm_metal_process_self(void);
 
 /**
  * Reserve a process id before instantiate (for PID= env). UI derived from
- * tab / kind. Returns id or INVALID.
+ * tab / kind. cmdline (may be NULL) is the raw trailing shell args, stashed
+ * verbatim on the slot for the guest to read back via pm_metal_process_info().
+ * Returns id or INVALID.
  */
 pm_metal_process_id_t pm_metal_process_reserve(const char                *name,
                                                pm_metal_process_ui_kind_t ui_kind,
-                                               pm_metal_ui_handle_t       tab);
+                                               pm_metal_ui_handle_t       tab,
+                                               const char                *cmdline);
 
 /** Keep reserved process as the live current guest (async stayed up). */
 void pm_metal_process_commit_live(pm_metal_process_id_t id);
@@ -141,6 +148,13 @@ void pm_metal_process_reap(pm_metal_process_id_t id);
 int pm_metal_process_spawn_mod(const char                *name,
                                pm_metal_process_ui_kind_t ui_kind,
                                pm_metal_ui_handle_t       tab);
+
+/** Same as pm_metal_process_spawn_mod, plus raw trailing args (may be NULL)
+ * stashed on the process slot's cmdline (see pm_metal_process_info_t). */
+int pm_metal_process_spawn_mod_args(const char                *name,
+                                    pm_metal_process_ui_kind_t ui_kind,
+                                    pm_metal_ui_handle_t       tab,
+                                    const char                *args);
 
 /** Pump current live process; 1 done ok, -1 error, 0 still running / none. */
 int pm_metal_process_poll(int32_t *status_out);

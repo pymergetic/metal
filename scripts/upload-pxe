@@ -7,7 +7,8 @@
 #   METAL_PXE_USER=root
 #   METAL_PXE_PATH=/storage/tftp
 #   METAL_PXE_SSH_OPTS=   # e.g. -i ~/.ssh/openwrt
-#   METAL_DOOM_BUILD=1    # with --build: also build/stage doom package
+#   METAL_EXT_APPS=       # with --build: also stage external apps, e.g.
+#                         #   name=dir[:name2=dir2...] (see scripts/lib/ext-apps.sh)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,14 +26,15 @@ usage: scripts/upload-pxe [--build]
   Copy build/bios/pxe/{metal.elf,metal.ipxe[,mods/]} → USER@HOST:DEST
 
   --build   run ./scripts/build bios i386 first
-            (set METAL_DOOM_BUILD=1 to include doom under mods/apps/doom/)
+            (set METAL_EXT_APPS=name=dir to include an external app under
+            mods/apps/<name>/, e.g. METAL_EXT_APPS=doom=../metal-doom/build/doom)
 
 Env:
   METAL_PXE_HOST      default 192.168.10.1
   METAL_PXE_USER      default root
   METAL_PXE_PATH      default /storage/tftp
   METAL_PXE_SSH_OPTS  extra ssh/scp options (e.g. -i ~/.ssh/openwrt)
-  METAL_DOOM_BUILD=1  build+stage doom for PXE HTTP seed
+  METAL_EXT_APPS      name=dir[:name2=dir2...] external apps to stage for PXE HTTP seed
 EOF
 	exit 1
 }
@@ -76,21 +78,23 @@ if [[ -d "${PXE}/mods" ]]; then
 		"mkdir -p '${DEST}' && tar -C '${DEST}' -xf -"
 fi
 
-# Drop legacy un-infixed AOT left from older uploads (tar does not delete).
-# shellcheck disable=SC2086
-ssh ${SSH_EXTRA} "${USER}@${HOST}" \
-	"rm -f '${DEST}/mods/apps/doom/doom.aot' '${DEST}/mods/apps/doom/doom.aot.sig'"
-
 # shellcheck disable=SC2086
 ssh ${SSH_EXTRA} "${USER}@${HOST}" \
 	"ls -la '${DEST}/metal.elf' '${DEST}/metal.ipxe'; \
-	 if [ -d '${DEST}/mods/apps/doom' ]; then ls -la '${DEST}/mods/apps/doom'; fi"
+	 if [ -d '${DEST}/mods/apps' ]; then ls -la '${DEST}/mods/apps'; fi"
 
 echo "upload-pxe: ok — verify ${HTTP}metal.elf"
-if [[ -f "${PXE}/mods/apps/doom/doom.i386.aot" ]]; then
-	echo "upload-pxe: doom → ${HTTP}mods/apps/doom/doom.i386.aot" >&2
-elif [[ -f "${PXE}/mods/apps/doom/doom.x86_64.aot" ]]; then
-	echo "upload-pxe: doom → ${HTTP}mods/apps/doom/doom.x86_64.aot" >&2
-elif [[ -f "${PXE}/mods/apps/doom/doom.wasm" ]]; then
-	echo "upload-pxe: doom → ${HTTP}mods/apps/doom/doom.wasm" >&2
+if [[ -d "${PXE}/mods/apps" ]]; then
+	shopt -s nullglob
+	for app_dir in "${PXE}"/mods/apps/*/; do
+		app_name="$(basename "${app_dir}")"
+		# Report every staged file (wasm/aot/sig/wad/assets.list/...), not
+		# just a couple of extensions — the tar upload ships all of them
+		# regardless, this loop is only the human-readable confirmation.
+		for f in "${app_dir}"*; do
+			[[ -f "${f}" ]] || continue
+			echo "upload-pxe: ${app_name} -> ${HTTP}mods/apps/${app_name}/$(basename "${f}")" >&2
+		done
+	done
+	shopt -u nullglob
 fi

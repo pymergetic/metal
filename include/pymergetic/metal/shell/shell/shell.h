@@ -90,6 +90,12 @@ void pm_metal_shell_request_exit(void);
 int pm_metal_shell_run(const char *mod);
 /** Open a tab named after mod, run there, leave tab open. */
 int pm_metal_shell_tab(const char *mod);
+/** Same as pm_metal_shell_run, plus raw trailing shell args (may be NULL) --
+ * see pm_metal_process_info_t.cmdline. Host-only: no wasm guest needs to
+ * forward a shell command line, so this isn't exported over WASI. */
+int pm_metal_shell_run_args(const char *mod, const char *args);
+/** Same as pm_metal_shell_tab, plus args -- see pm_metal_shell_run_args. */
+int pm_metal_shell_tab_args(const char *mod, const char *args);
 
 /**
  * UART-only log (no ConOut/GOP). Prefer this while a guest owns the FB.

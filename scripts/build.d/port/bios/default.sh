@@ -77,13 +77,6 @@ fi
 # here too (not soft-failed) — both ports need a working stdlib.zip.
 "${ROOT}/scripts/build.d/port/efi/embed-stdlib.sh"
 
-# Parked doom package (same wasm as EFI). Opt-in: METAL_DOOM_BUILD=1.
-# shellcheck disable=SC1091
-source "${ROOT}/scripts/lib/doom.sh"
-if [[ "${METAL_DOOM_BUILD:-0}" == "1" ]]; then
-	pm_metal_doom_build
-fi
-
 INCLUDES=(
 	-I"$(pm_metal_pki_bake_dir)"
 	-I"${ROOT}"
@@ -361,7 +354,6 @@ SRCS_C=(
 	"${SHARED_METAL}/guest/mod/mod.c"
 	"${SHARED_METAL}/guest/mod/mod_py_bind.c"
 	"${SHARED_METAL}/guest/pkg/pkg.c"
-	"${SHARED_METAL}/guest/pkg/pkg_doom.c"
 	"${SHARED_METAL}/guest/wasm/wasm.c"
 	"${SHARED_METAL}/guest/wamr/efi_platform.c"
 	"${SHARED_METAL}/guest/wamr/efi_thread.c"

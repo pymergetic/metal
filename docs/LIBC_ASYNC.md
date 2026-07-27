@@ -14,7 +14,8 @@ Goal: one **Metal ABI** (host ↔ guest symmetric), not WASI and not “async ev
 Stackless rule: anything that waits on the world is **async**.  
 CPU work stays **sync**. Preemptive-OS machinery is **omit**.
 
-Doom app staging is **opt-in** (`METAL_DOOM_BUILD=1`); see `docs/DOOM_ASYNC.md`.  
+External apps (e.g. `packages/metal-doom`) build + stage themselves in their
+own sibling repo via `METAL_EXT_APPS`; see that repo's `docs/DOOM_ASYNC.md`.
 **Mods / process / async product model:** [`docs/MODS.md`](MODS.md) (mod ≠ process; process = command → func in a task).
 
 ---

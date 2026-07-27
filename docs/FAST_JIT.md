@@ -22,8 +22,8 @@ Do **not** enable LLVM JIT (`WAMR_BUILD_JIT` / `WASM_ENABLE_JIT`) — that pulls
 - Platform: `src/pymergetic/metal/guest/wamr/efi_platform.c` — `os_mmap` = `BH_MALLOC`, `os_mprotect` **stub returns 0** (assumes RAM is executable; AOT already relies on this)
 - EFI flags: `src/efi/MetalPkg/Metal.inf` — `WASM_ENABLE_INTERP=1`, `WASM_ENABLE_FAST_INTERP=1`, `WASM_ENABLE_AOT=1`, **no** `WASM_ENABLE_FAST_JIT`
 - BIOS: `scripts/build.d/port/efi/…` pattern mirrored in `scripts/build.d/port/bios/default.sh` (WAMR sources listed by hand)
-- Doom package: `doom.wasm` + `doom.x86_64.aot` + `doom.i386.aot`; load prefers matching AOT then wasm (`pm_metal_wasm_mod_fetch`)
-- Offline AOT: `scripts/lib/aot.sh` / `scripts/build.d/port/efi/doom.sh`
+- Doom package (external app, `packages/metal-doom`): `doom.wasm` + `doom.x86_64.aot` + `doom.i386.aot`; load prefers matching AOT then wasm (`pm_metal_wasm_mod_fetch`)
+- Offline AOT: `scripts/lib/aot.sh` (also used by `packages/metal-doom/scripts/build.sh`)
 
 ## Goal
 
@@ -31,7 +31,7 @@ Do **not** enable LLVM JIT (`WAMR_BUILD_JIT` / `WASM_ENABLE_JIT`) — that pulls
 2. At init, set running mode so **`.wasm` loads use Fast JIT** (not only interp).
 3. Keep AOT load path working (optional); wasm path should not require `.aot`.
 4. Smoke: QEMU EFI `run doom` → `metal-doom: create done`, playable; compare rough frame cost vs AOT if easy.
-5. Document flag / size delta in this file or `docs/DOOM_ASYNC.md` one-liner.
+5. Document flag / size delta in this file or `packages/metal-doom/docs/DOOM_ASYNC.md` one-liner.
 
 ## Work items
 
@@ -102,9 +102,12 @@ After Fast JIT works on EFI x64:
 ## Validation
 
 ```bash
+# from packages/metal-doom (sibling repo — build + sign the external app)
+./scripts/setup-doomgeneric.sh && ./scripts/build.sh
+
 # from packages/metal
-METAL_DOOM_BUILD=1 ./scripts/build efi
-./scripts/run efi --bench
+./scripts/build efi
+METAL_EXT_APPS=doom=../metal-doom/build/doom ./scripts/run efi --bench
 # shell: run doom
 # expect: load doom.wasm (or aot), metal-doom: create done
 ```
@@ -132,8 +135,8 @@ Also compare:
 | `scripts/build.d/port/bios/default.sh` | BIOS WAMR source list / `BUILD_TARGET_*` |
 | `src/pymergetic/metal/guest/wasm/wasm.c` | init + mod load |
 | `src/pymergetic/metal/guest/wamr/efi_platform.c` | mmap / mprotect |
-| `scripts/lib/aot.sh`, `scripts/build.d/port/efi/doom.sh` | offline AOT (keep until JIT proven) |
-| `docs/DOOM_ASYNC.md` | Doom guest notes |
+| `scripts/lib/aot.sh` | offline AOT (keep until JIT proven; also used by `packages/metal-doom/scripts/build.sh`) |
+| `packages/metal-doom/docs/DOOM_ASYNC.md` | Doom guest notes (external repo) |
 
 ## Success criteria
 

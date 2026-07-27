@@ -98,6 +98,14 @@ above) plus a `uint32_t flags` word:
   command path (`ModShellCmdFn`) pass `AUTO` — the mod's own capability
   decides. Boot self-tests and inter-mod library calls force `SHARED`.
 
+Both also take a trailing `const char *args` — the raw text after the mod
+name (`run <mod> ARGS...` / `tab <mod> ARGS...` / bare `<mod> ARGS...`),
+space-joined, may be NULL. It's stashed verbatim on the process slot's
+`cmdline[128]` (`pm_metal_process_info_t`) and needs no new import to read
+back: a mod calls `pm_metal_process_info(pm_metal_process_self(), &info)`
+on itself once at startup. See `metal-doom`'s `metal_doom_iwad_resolve()`
+for an example (`run doom freedoom2.wad` picks the IWAD at runtime).
+
 Plumbing (no new registry, no second table):
 
 - `pm_metal_wasm_mod_image_instantiate()` / `_deinstantiate()` (`wasm.h`) —
@@ -212,7 +220,7 @@ Relevant: [`guest/mod/`](../include/pymergetic/metal/guest/mod/mod.h), [`wasm.h`
 
 ## Related
 
-- Async ABI: `include/pymergetic/metal/runtime/async/async.h`, `docs/LIBC_ASYNC.md`  
-- Doom app: `docs/DOOM_ASYNC.md`  
-- µPy: `docs/MICROPYTHON.md` — binds land in `pymergetic.metal.mod` (`guest/mod/mod_py_bind.c`)  
+- Async ABI: `include/pymergetic/metal/runtime/async/async.h`, `docs/LIBC_ASYNC.md`
+- External app example: `packages/metal-doom` (`docs/DOOM_ASYNC.md` in that repo)
+- µPy: `docs/MICROPYTHON.md` — binds land in `pymergetic.metal.mod` (`guest/mod/mod_py_bind.c`)
 - `docs/EFI.md`, `docs/IO.md`  

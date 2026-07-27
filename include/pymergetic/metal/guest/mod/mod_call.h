@@ -26,12 +26,16 @@ extern "C" {
  * Convenience: cmd_resolve + fn_process (shell/µPy entry).
  * ui_kind: pm_metal_process_ui_kind_t; tab: pm_metal_ui_handle_t (0 = invalid).
  * instance_mode: pm_metal_mod_instance_t. flags: pm_metal_mod_flag_t bits.
+ * args: raw trailing cmdline (may be NULL), stashed on the process slot --
+ * see pm_metal_process_info_t.cmdline.
  */
 extern int32_t pm_metal_mod_cmd_invoke(const char *cmd_name,
                                        uint32_t    ui_kind,
                                        uint32_t    tab,
                                        uint32_t    instance_mode,
-                                       uint32_t flags) PM_METAL_MOD_IMPORT(pm_metal_mod_cmd_invoke);
+                                       uint32_t    flags,
+                                       const char *args)
+  PM_METAL_MOD_IMPORT(pm_metal_mod_cmd_invoke);
 
 /** 1 if command is registered. */
 extern int32_t pm_metal_mod_cmd_exists(const char *cmd_name)
@@ -57,14 +61,17 @@ extern pm_metal_async_handle_t pm_metal_mod_fn_coro(pm_metal_mod_fn_h_t fn_h)
 /**
  * Command Extrawurst: UI/stdio redirect + process root.
  * proc_name empty/NULL → use resolved cmd name from handle.
- * instance_mode/flags: see pm_metal_mod_cmd_invoke.
+ * instance_mode/flags: see pm_metal_mod_cmd_invoke. args: see
+ * pm_metal_mod_cmd_invoke.
  */
 extern int32_t pm_metal_mod_fn_process(pm_metal_mod_fn_h_t fn_h,
                                        const char         *proc_name,
                                        uint32_t            ui_kind,
                                        uint32_t            tab,
                                        uint32_t            instance_mode,
-                                       uint32_t flags) PM_METAL_MOD_IMPORT(pm_metal_mod_fn_process);
+                                       uint32_t            flags,
+                                       const char         *args)
+  PM_METAL_MOD_IMPORT(pm_metal_mod_fn_process);
 
 /** 1 if mod has that function registered. */
 extern int32_t pm_metal_mod_func_exists(const char *mod_name, const char *func_name)
@@ -78,12 +85,14 @@ extern int32_t pm_metal_mod_func_exists(const char *mod_name, const char *func_n
  * SINGLE → shared "instance 0", today's original behavior); forced
  * SHARED/FRESH override it (FRESH refused if the mod declared SINGLE).
  * flags: PM_METAL_MOD_FLAG_* bits, e.g. AUTO_UNLOAD.
+ * args: raw trailing cmdline (may be NULL) -- see pm_metal_process_info_t.cmdline.
  */
 int pm_metal_mod_cmd_invoke(const char                *cmd_name,
                             pm_metal_process_ui_kind_t ui_kind,
                             pm_metal_ui_handle_t       tab,
                             pm_metal_mod_instance_t    instance_mode,
-                            uint32_t                   flags);
+                            uint32_t                   flags,
+                            const char                *args);
 
 int pm_metal_mod_cmd_exists(const char *cmd_name);
 
@@ -120,14 +129,15 @@ pm_metal_async_handle_t pm_metal_mod_fn_coro(const pm_metal_mod_fn_t *fn);
  * proc_name NULL or "" → use cmd->name.
  * instance_mode/flags: see pm_metal_mod_cmd_invoke. FRESH (forced or
  * via AUTO) requires cmd->mod_name/cmd->export_name to be set
- * (pm_metal_mod_cmd_resolve fills these).
+ * (pm_metal_mod_cmd_resolve fills these). args: see pm_metal_mod_cmd_invoke.
  */
 int pm_metal_mod_fn_process(const pm_metal_mod_cmd_t  *cmd,
                             const char                *proc_name,
                             pm_metal_process_ui_kind_t ui_kind,
                             pm_metal_ui_handle_t       tab,
                             pm_metal_mod_instance_t    instance_mode,
-                            uint32_t                   flags);
+                            uint32_t                   flags,
+                            const char                *args);
 
 /** 1 if mod has that function registered. */
 int pm_metal_mod_func_exists(const char *mod_name, const char *func_name);

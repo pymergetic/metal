@@ -204,8 +204,9 @@ MOUNT / WASI).
 - **v1 threading model:** one native thread = WAMR runloop (cooperative / no preemptive Metal scheduler yet).
 - **Interpreter + AOT:** host builds with `WASM_ENABLE_INTERP` + `WASM_ENABLE_AOT`
   (+ `QUICK_AOT_ENTRY`). Guests may ship `.wasm` (interp) or `.aot` (offline
-  `wamrc`); ESP load prefers `mods/apps/<n>/<n>.aot` then `.wasm`. Doom and the
-  embed proof `async_aot` use AOT; other embeds stay wasm. Tool: `./scripts/setup wamrc`.
+  `wamrc`); ESP load prefers `mods/apps/<n>/<n>.aot` then `.wasm`. External apps
+  (e.g. `packages/metal-doom`) and the embed proof `async_aot` use AOT; other
+  embeds stay wasm. Tool: `./scripts/setup wamrc`.
   Product ABI direction: Metal async + freestanding libc (see `docs/LIBC_ASYNC.md`);
   WASI is scaffolding to retire.
 - Platform code lives under `src/efi/` (WAMR platform + Metal binds), sharing `src/common/` runtime.
@@ -244,9 +245,11 @@ Primary bring-up machine: **QEMU + OVMF**, virt-class device set as we adopt vir
   **`async_blk`**.
   Verify greps `metal-wasm: t0_hello ok`, `metal-async: sleep|fs|time|net|audio|blk ok`,
   plus `metal-net: virtio-net` / `metal-audio: virtio-snd` when QEMU attaches devices.
-- **`doom` parked** (`mods/apps/doom` kept; not built/staged by default).
-  Opt-in: `METAL_DOOM_BUILD=1` → `build/doom/`; EFI stages onto ESP,
-  BIOS/PXE stages under `build/bios/pxe/mods/apps/doom/` and seeds via HTTP.
+- **External apps** (e.g. `packages/metal-doom`) build + sign themselves in
+  their own sibling repo, then stage into `mods/apps/<name>/` via
+  `METAL_EXT_APPS=<name>=<dir>` (see `scripts/lib/ext-apps.sh`) — EFI stages
+  onto ESP, BIOS/PXE stages under `build/bios/pxe/mods/apps/<name>/` and
+  seeds via HTTP.
 - virtio-blk / full package mounts remain later; ESP is the interim package root.
 
 ### Cut line — v1 must

@@ -23,6 +23,7 @@ typedef struct {
   pm_metal_process_id_t      parent_id;
   pm_metal_async_handle_t    root_task_h;
   char                       name[64];
+  char                       cmdline[128]; /* raw trailing shell args, see process.h */
   uint32_t                   state;
   pm_metal_process_ui_kind_t ui_kind;
   pm_metal_ui_handle_t       tab;
@@ -179,7 +180,8 @@ void pm_metal_process_ui_from_tab(pm_metal_ui_handle_t        tab,
 
 pm_metal_process_id_t pm_metal_process_reserve(const char                *name,
                                                pm_metal_process_ui_kind_t ui_kind,
-                                               pm_metal_ui_handle_t       tab)
+                                               pm_metal_ui_handle_t       tab,
+                                               const char                *cmdline)
 {
   MetalProcessSlot          *s;
   pm_metal_process_ui_kind_t kind;
@@ -206,6 +208,7 @@ pm_metal_process_id_t pm_metal_process_reserve(const char                *name,
   s->root_task_h      = PM_METAL_ASYNC_HANDLE_INVALID;
   s->saved_stdout_tab = PM_METAL_UI_HANDLE_INVALID;
   strlcpy_trunc(s->name, sizeof(s->name), name != NULL ? name : "mod");
+  strlcpy_trunc(s->cmdline, sizeof(s->cmdline), cmdline);
   s->state = PM_METAL_PROC_STATE_RUNNING;
   s->tab   = tab;
 
@@ -412,13 +415,21 @@ int pm_metal_process_spawn_mod(const char                *name,
                                pm_metal_process_ui_kind_t ui_kind,
                                pm_metal_ui_handle_t       tab)
 {
+  return pm_metal_process_spawn_mod_args(name, ui_kind, tab, NULL);
+}
+
+int pm_metal_process_spawn_mod_args(const char                *name,
+                                    pm_metal_process_ui_kind_t ui_kind,
+                                    pm_metal_ui_handle_t       tab,
+                                    const char                *args)
+{
   /*
 	 * Product path: command invoke (load mod → run func in a task = process).
 	 * See docs/MODS.md. Name is the command (today == mod name). AUTO
 	 * defers to the mod's declared capability (pm_metal_mod_cap_t).
 	 */
   return pm_metal_mod_cmd_invoke(
-    name, ui_kind, tab, PM_METAL_MOD_INSTANCE_AUTO, PM_METAL_MOD_FLAG_NONE);
+    name, ui_kind, tab, PM_METAL_MOD_INSTANCE_AUTO, PM_METAL_MOD_FLAG_NONE, args);
 }
 
 void pm_metal_process_pump_runners(void)
@@ -531,6 +542,7 @@ int pm_metal_process_info(pm_metal_process_id_t id, pm_metal_process_info_t *out
   out->tab     = s->tab;
   out->surface = s->surface;
   strlcpy_trunc(out->name, sizeof(out->name), s->name);
+  strlcpy_trunc(out->cmdline, sizeof(out->cmdline), s->cmdline);
   return 0;
 }
 

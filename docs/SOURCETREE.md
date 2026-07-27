@@ -29,7 +29,7 @@ Mods use **wasi-sdk sysroot** + `-I include/`. Start with `#include <pymergetic/
 
 On the active **efi** / **bios** targets the dual-header pattern applies to product surface APIs under `include/pymergetic/metal/dev/{gfx,input,audio,stream,net,random,blk}.h`, `shell/{ui,shell,lifecycle}.h`, `runtime/async/async.h`, `fs/fs.h`, `util/` (incl. ascii), and related helpers (see `docs/IO.md`; also exported via `metal.h`). Guests import dual ABIs; host bodies + `*_native_register()` live under `src/pymergetic/metal/…` and `src/{efi,bios}/pymergetic/metal/…`, with guest natives centralized in `src/pymergetic/metal/guest/wasm/wasm.c`. **UI/shell/async/input/stream/net/blk guest ABIs are handle-based**. Host-only helpers stay `#if !__wasm__` (`dev/net/net_ops.h` / `dev/audio/audio_ops.h` / `dev/blk/blk_ops.h` / `bus/virtio/virtio.h`). Pluggable backends: `dev/net/{net,net_null,net_lwip,virtio_net}.c`, `dev/audio/{audio,audio_null,virtio_snd}.c`, `dev/blk/{virtio_blk,ide_ata}.c`, shared `bus/virtio/virtio_pci.c`.
 
-**Mods / process / async (product model):** see [`docs/MODS.md`](MODS.md) — mod = load→connect→ready (registers functions + optional commands); **process = command runs a function in a task**; async work on normal runners. Doom app is opt-in (`METAL_DOOM_BUILD=1`, `docs/DOOM_ASYNC.md`); default builds may still park staging.
+**Mods / process / async (product model):** see [`docs/MODS.md`](MODS.md) — mod = load→connect→ready (registers functions + optional commands); **process = command runs a function in a task**; async work on normal runners. External apps (e.g. `packages/metal-doom`) build + sign themselves in their own sibling repo and stage in via `METAL_EXT_APPS` (see `scripts/lib/ext-apps.sh`); Metal carries no app-specific code.
 
 ---
 
@@ -374,8 +374,8 @@ packages/metal/
 │   │   ├── t3_util_native/main.c  # util/{size,arena,log,lz4,tar}.h imports
 │   │   ├── t4_getpid/ … t31_crypto/  # process/pipe/socket/tmpfs/mount/proc/crypto/…
 │   │   └── t8_multimod_lib/ + t9_multimod_app/  # multi-module (REACTOR on t8)
-│   ├── apps/
-│   │   └── doom/                  # parked (METAL_DOOM_BUILD=1); .wasm.sig via METAL_PKI_DIR
+│   ├── apps/                      # external apps staged here at build time (METAL_EXT_APPS=<name>=<dir>);
+│   │                              # empty in a fresh checkout — e.g. packages/metal-doom
 │   └── py/                        # kernel µPy samples (shell python <script>)
 │
 ├── build/                         # gitignored
@@ -513,7 +513,7 @@ Also gitignored: `.tools/`, `external/`, `.cache/`, `.venv/`.
 | Artifact | Inputs | Output |
 |----------|--------|--------|
 | **runtime binary** | `src/common/pymergetic/metal/` + `src/<plat>/` + WAMR + LZ4 + microtar | `build/<plat>/…` |
-| **mod `.wasm`** | `mods/tests/` + wasi-sdk `wasm32-wasip1-threads` + `-I include/` | `build/mods/tests/` then packaged to `build/guest-package/mods/tests/` — guest path `/mods/tests/<name>.wasm` on every platform (`scripts/lib/guest-package.sh`; knob `PM_METAL_GUEST_TESTS`). Threads/shared-memory default; `REACTOR` / `SOCKET` / `MOUNT` empty markers under `mods/tests/<name>/` as before. Opt-in apps (e.g. doom) under `/mods/apps/`. Kernel µPy samples: `mods/py/`. |
+| **mod `.wasm`** | `mods/tests/` + wasi-sdk `wasm32-wasip1-threads` + `-I include/` | `build/mods/tests/` then packaged to `build/guest-package/mods/tests/` — guest path `/mods/tests/<name>.wasm` on every platform (`scripts/lib/guest-package.sh`; knob `PM_METAL_GUEST_TESTS`). Threads/shared-memory default; `REACTOR` / `SOCKET` / `MOUNT` empty markers under `mods/tests/<name>/` as before. External apps (built in their own sibling repo, e.g. `packages/metal-doom`) stage under `/mods/apps/` via `METAL_EXT_APPS`. Kernel µPy samples: `mods/py/`. |
 
 ---
 

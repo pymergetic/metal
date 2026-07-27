@@ -18,7 +18,7 @@ pm_metal_efi_ovmf() {
 }
 
 # Wipe + restage ESP from metal.efi. Always — never reuse a QEMU-dirtied tree.
-# Stages doom into mods/apps/doom/ when METAL_DOOM_BUILD=1 output (or METAL_DOOM_DIR) exists.
+# Stages external apps (METAL_EXT_APPS="name=dir[:...]") into mods/apps/<name>/.
 pm_metal_efi_stage_esp() {
 	local efi="$1"
 	local esp="$2"
@@ -46,12 +46,8 @@ pm_metal_efi_stage_esp() {
 	fi
 
 	# shellcheck disable=SC1091
-	source "${ROOT}/scripts/lib/doom.sh"
-	if [[ -n "${3:-}" ]]; then
-		METAL_DOOM_DIR="$3" pm_metal_doom_stage_into "${esp}" || true
-	else
-		pm_metal_doom_stage_into "${esp}" || true
-	fi
+	source "${ROOT}/scripts/lib/ext-apps.sh"
+	pm_metal_ext_apps_stage_into "${esp}"
 }
 
 # Raw virtio-blk image with LBA0 magic "METALBLK1".

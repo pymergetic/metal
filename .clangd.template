@@ -224,7 +224,6 @@ CompileFlags:
 
 ---
 # Guest test mods (wasm) — optional; needs ./scripts/setup tools for wasi-sysroot.
-# apps/doom has its own fragment (doomgeneric -I + CDB).
 If:
   PathMatch: .*/mods/tests/.*\.c
 CompileFlags:
@@ -235,30 +234,3 @@ CompileFlags:
     - --sysroot
     - "@@ROOT@@/.tools/wasi-sdk/share/wasi-sysroot"
     - -I@@ROOT@@/include
-
----
-# doomgeneric Metal port — wasi sysroot (not freestanding host_stubs).
-# Exact -I paths: clangd Remove globs are unreliable vs absolute global Adds.
-If:
-  PathMatch: .*/mods/apps/doom/.*\.(c|h)$
-CompileFlags:
-  CompilationDatabase: "None"
-  Compiler: /usr/bin/clang
-  Remove:
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/external/wamr/core/shared/platform/include
-  Add:
-    - --target=wasm32-wasip1
-    - --sysroot=@@ROOT@@/.tools/wasi-sdk/share/wasi-sysroot
-    - -I@@ROOT@@/include
-    - -I@@ROOT@@/external/doomgeneric/doomgeneric
-    - -I@@ROOT@@/mods/apps/doom
-    - -I@@ROOT@@/mods/apps/doom/ide_stubs
-    - -DNORMALUNIX
-    - -DLINUX
-    - -D_DEFAULT_SOURCE
-    - -D_POSIX_C_SOURCE=200809L
-    - -DFEATURE_SOUND
-    - -DDOOMGENERIC_RESX=320
-    - -DDOOMGENERIC_RESY=200

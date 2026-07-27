@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <pymergetic/metal/guest/pkg/pkg.h>
@@ -30,6 +31,14 @@
 #define PM_METAL_PKG_SIG_CAP 512u
 #endif
 
+#ifndef PM_METAL_PKG_ASSET_MAX
+#define PM_METAL_PKG_ASSET_MAX 8u
+#endif
+
+#ifndef PM_METAL_PKG_MANIFEST_CAP
+#define PM_METAL_PKG_MANIFEST_CAP 512u
+#endif
+
 static const pm_metal_pkg_t *mPkgs[PM_METAL_PKG_MAX];
 static uint32_t              mPkgN;
 static uint8_t               mInited;
@@ -39,7 +48,13 @@ static char                mSeedPath[PM_METAL_PKG_SEED_MAX][96];
 static pm_metal_pkg_file_t mSeed[PM_METAL_PKG_SEED_MAX];
 static uint32_t            mSeedN;
 
-void pm_metal_pkg_doom_register(void);
+/* Scratch for a package synthesized on the fly from an ESP assets.list
+ * manifest (external app, no compiled-in pm_metal_pkg_register() call). */
+static pm_metal_pkg_t       mSynthPkg;
+static char                 mSynthName[64];
+static pm_metal_pkg_asset_t mSynthAssets[PM_METAL_PKG_ASSET_MAX];
+static char                 mSynthAssetName[PM_METAL_PKG_ASSET_MAX][64];
+static char                 mManifestBuf[PM_METAL_PKG_MANIFEST_CAP];
 
 const char *pm_metal_host_aot_arch(void)
 {
@@ -148,7 +163,6 @@ void pm_metal_pkg_init(void)
 
   mInited = 1;
   mPkgN   = 0;
-  pm_metal_pkg_doom_register();
 }
 
 int32_t pm_metal_pkg_register(const pm_metal_pkg_t *pkg)
@@ -175,6 +189,103 @@ int32_t pm_metal_pkg_register(const pm_metal_pkg_t *pkg)
   return 0;
 }
 
+static void PkgManifestPath(char *out, uintptr_t cap, const char *name)
+{
+  snprintf(out, cap, "mods/apps/%s/assets.list", name);
+}
+
+/*
+ * Parse a raw "<filename> <cap_bytes>" per-line manifest buffer (blank
+ * lines and '#' comments skipped) into asset slots. Mutates buf in place
+ * (splits lines/fields with NUL).
+ */
+static uint32_t PkgManifestParse(
+  char *buf, pm_metal_pkg_asset_t *out, char out_name[][64], uint32_t cap)
+{
+  uint32_t n;
+  char    *p;
+
+  n = 0;
+  p = buf;
+  while (*p != '\0' && n < cap) {
+    char *line;
+    char *nl;
+    char *sp;
+    char *rest;
+
+    line = p;
+    nl   = strchr(p, '\n');
+    if (nl != NULL) {
+      *nl = '\0';
+      p   = nl + 1;
+    } else {
+      p += strlen(p);
+    }
+
+    while (*line == ' ' || *line == '\t') {
+      line++;
+    }
+
+    if (line[0] == '\0' || line[0] == '#') {
+      continue;
+    }
+
+    sp = strchr(line, ' ');
+    if (sp == NULL) {
+      continue;
+    }
+
+    *sp  = '\0';
+    rest = sp + 1;
+    while (*rest == ' ' || *rest == '\t') {
+      rest++;
+    }
+
+    snprintf(out_name[n], sizeof(out_name[0]), "%s", line);
+    out[n].name = out_name[n];
+    out[n].cap  = (uint32_t)strtoul(rest, NULL, 10);
+    n++;
+  }
+
+  return n;
+}
+
+/*
+ * Fallback for external apps (built + signed outside this repo, e.g.
+ * metal-doom) that have no compiled-in pm_metal_pkg_register() call:
+ * synthesize a package on the fly from an optional ESP
+ * "mods/apps/<name>/assets.list" manifest. Only returns non-NULL when the
+ * name actually has a footprint on ESP (a manifest or a guest binary) —
+ * an arbitrary/unknown name still misses, same as before.
+ */
+static const pm_metal_pkg_t *PkgSynthFromManifest(const char *name)
+{
+  char     path[96];
+  uint32_t nread;
+  int32_t  have_manifest;
+
+  PkgManifestPath(path, sizeof(path), name);
+  have_manifest =
+    (pm_metal_esp_read_at(path, 0, (uint8_t *)mManifestBuf, sizeof(mManifestBuf) - 1, &nread) == 0)
+      ? 1
+      : 0;
+
+  if (!have_manifest && !pm_metal_pkg_guest_ready(name)) {
+    return NULL;
+  }
+
+  mManifestBuf[nread] = '\0';
+  mSynthPkg.nassets =
+    have_manifest ? PkgManifestParse(mManifestBuf, mSynthAssets, mSynthAssetName, PM_METAL_PKG_ASSET_MAX)
+                  : 0u;
+
+  snprintf(mSynthName, sizeof(mSynthName), "%s", name);
+  mSynthPkg.name   = mSynthName;
+  mSynthPkg.assets = mSynthAssets;
+  mSynthPkg.ready  = NULL;
+  return &mSynthPkg;
+}
+
 const pm_metal_pkg_t *pm_metal_pkg_lookup(const char *name)
 {
   uint32_t i;
@@ -191,12 +302,14 @@ const pm_metal_pkg_t *pm_metal_pkg_lookup(const char *name)
     }
   }
 
-  return NULL;
+  return PkgSynthFromManifest(name);
 }
 
 int32_t pm_metal_pkg_ready(const char *name)
 {
   const pm_metal_pkg_t *pkg;
+  uint32_t              i;
+  char                  path[96];
 
   pkg = pm_metal_pkg_lookup(name);
   if (pkg == NULL) {
@@ -207,7 +320,25 @@ int32_t pm_metal_pkg_ready(const char *name)
     return pkg->ready() ? 1 : 0;
   }
 
-  return pm_metal_pkg_guest_ready(name);
+  if (!pm_metal_pkg_guest_ready(name)) {
+    return 0;
+  }
+
+  /* Default readiness: guest binary present AND every declared asset
+   * present — falls out for free for both compiled-in and manifest-
+   * synthesized packages (no more per-package custom ready() needed). */
+  for (i = 0; i < pkg->nassets; i++) {
+    if (pkg->assets[i].name == NULL || pkg->assets[i].name[0] == '\0') {
+      continue;
+    }
+
+    snprintf(path, sizeof(path), "mods/apps/%s/%s", name, pkg->assets[i].name);
+    if (!PkgEspExists(path)) {
+      return 0;
+    }
+  }
+
+  return 1;
 }
 
 const pm_metal_pkg_file_t *pm_metal_pkg_files(const char *name, uint32_t *out_n)

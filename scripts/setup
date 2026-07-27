@@ -22,7 +22,6 @@ Deps (setup.d/deps/):
   lwip lz4 microtar monocypher mbedtls
   net          — monocypher + mbedtls (lwIP TLS stack)
   micropython  — core scripting VM (shared metal/py; EFI/BIOS link)
-  doomgeneric  — Doom app source (METAL_DOOM_BUILD=1)
   ide          — clangd / compile_flags refresh
 
 Platform:

@@ -28,8 +28,9 @@ Blank metal. Async wasm. High-speed APIs — almost nothing in the way.
 - **HTTP-fetch** signed `.wasm` / `.aot` (+ payload) from boot server
   (`next-server` / `:8080`)
 - Detached ECDSA **`.sig`** (Mods CA; soft or enforce) → certified guests
-- Iron can stay almost empty and still run Doom today  
-  → [`TRUST.md`](docs/TRUST.md) · [`DOOM_ASYNC.md`](docs/DOOM_ASYNC.md)
+- Iron can stay almost empty and still run Doom today (external app,
+  [`packages/metal-doom`](https://github.com/pymergetic/metal-doom))
+  → [`TRUST.md`](docs/TRUST.md) · [`metal-doom/docs/DOOM_ASYNC.md`](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md)
 
 ![PXE/HTTP seed with .sig](screenshots/pxe-http-sigs.png)
 
@@ -83,7 +84,7 @@ More filenames: [`screenshots/README.md`](screenshots/README.md).
   `stdlib.zip` (`time`/`datetime`, `hashlib`, `re`, `tarfile`, `pymergetic.metal.tls`, …);
   opt-in isolated contexts for true parallel bytecode (own heap, no shared lock)
 
-Deep dives: [`docs/IO.md`](docs/IO.md) · [`docs/LIBC_ASYNC.md`](docs/LIBC_ASYNC.md) · [`docs/DOOM_ASYNC.md`](docs/DOOM_ASYNC.md) · [`docs/MICROPYTHON.md`](docs/MICROPYTHON.md)
+Deep dives: [`docs/IO.md`](docs/IO.md) · [`docs/LIBC_ASYNC.md`](docs/LIBC_ASYNC.md) · [`metal-doom/docs/DOOM_ASYNC.md`](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md) · [`docs/MICROPYTHON.md`](docs/MICROPYTHON.md)
 
 ---
 
@@ -92,7 +93,7 @@ Deep dives: [`docs/IO.md`](docs/IO.md) · [`docs/LIBC_ASYNC.md`](docs/LIBC_ASYNC
 | Mode | Status | Notes |
 |------|--------|--------|
 | **Interpreter** | Shipped | WAMR classic / fast interp — always available fallback |
-| **AOT** | Shipped | Offline `wamrc` → `.x86_64.aot` / `.i386.aot`; preferred when present (Doom ships both) |
+| **AOT** | Shipped | Offline `wamrc` → `.x86_64.aot` / `.i386.aot`; preferred when present (`packages/metal-doom` ships both) |
 | **Fast JIT** | Gap → coming | WAMR Fast JIT (x86-64 only); needs asmjit + freestanding C++ link — see [`docs/FAST_JIT.md`](docs/FAST_JIT.md) |
 
 Load order today: matching **AOT** for the host arch, else **`.wasm`** (interp).
@@ -114,11 +115,23 @@ BIOS / PXE (i386 iron, e.g. ThinkPad):
 
 ```bash
 ./scripts/build bios i386
-# optional Doom package on the PXE tree:
-METAL_DOOM_BUILD=1 ./scripts/upload-pxe --build
+# optional external app on the PXE tree (e.g. packages/metal-doom):
+METAL_EXT_APPS=doom=../metal-doom/build/doom ./scripts/upload-pxe --build
 ```
 
-In the shell: `help`, `tab doom`, `run doom`. More: [`docs/EFI.md`](docs/EFI.md), [`docs/DOOM_ASYNC.md`](docs/DOOM_ASYNC.md).
+External app one-shot round-trip (runs the app's own `scripts/build.sh`,
+then whichever of build/upload/run you ask for, on efi/bios/both — see
+`scripts/ext-app --help`; short flags stack, e.g. `-bur` == `-b -u -r`):
+
+```bash
+./scripts/ext-app doom=../metal-doom -ber          # build + run efi
+./scripts/ext-app doom=../metal-doom -beu          # build + upload efi (ESP, scripts/upload-efi)
+./scripts/ext-app doom=../metal-doom -biu          # build + upload bios (PXE, scripts/upload-pxe)
+./scripts/ext-app doom=../metal-doom -sa           # build+upload+run, efi+bios
+./scripts/ext-app doom=../metal-doom -er --no-build -- --bench  # run efi only, headless
+```
+
+In the shell: `help`, `tab doom`, `run doom`. More: [`docs/EFI.md`](docs/EFI.md), [`metal-doom/docs/DOOM_ASYNC.md`](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md).
 
 ---
 
@@ -128,7 +141,7 @@ In the shell: `help`, `tab doom`, `run doom`. More: [`docs/EFI.md`](docs/EFI.md)
 |-----|------|
 | [docs/IO.md](docs/IO.md) | Async I/O classes, device table, runners |
 | [docs/LIBC_ASYNC.md](docs/LIBC_ASYNC.md) | Guest libc ↔ async ABI |
-| [docs/DOOM_ASYNC.md](docs/DOOM_ASYNC.md) | Doom package, pace, present path |
+| [metal-doom/docs/DOOM_ASYNC.md](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md) | Doom package (external app), pace, present path |
 | [docs/FAST_JIT.md](docs/FAST_JIT.md) | Fast JIT bring-up brief (not enabled yet) |
 | [docs/MICROPYTHON.md](docs/MICROPYTHON.md) | Kernel µPy — one blob, N runners, no GIL, REPL as default shell |
 | [docs/TRUST.md](docs/TRUST.md) | Mod signing / trust modes |
@@ -150,10 +163,10 @@ packages/metal/
 ├── src/pymergetic/metal/      host: boot, bus, dev, guest/wasm, shell, runtime
 ├── src/efi/                   UEFI MetalPkg
 ├── mods/tests/                harness .wasm guests
-├── mods/apps/                 apps (doom, …)
+├── mods/apps/                 external apps staged here at build time (empty in a fresh checkout)
 ├── screenshots/               UI / UART / Doom / iron photos
 ├── docs/                      design + bring-up notes
-└── scripts/                   setup | build | verify | run | upload-pxe
+└── scripts/                   setup | build | verify | run | upload-pxe | upload-efi | ext-app
 ```
 
 ---
@@ -216,5 +229,7 @@ Metal is **[Apache License 2.0](LICENSE)** unless a file says otherwise.
 Copyright notice: see the appendix in [LICENSE](LICENSE).
 
 Third-party / vendored bits keep their own terms (e.g. FreeBSD **bge**
-BSD-4-Clause under `src/pymergetic/metal/dev/net/bge/freebsd/`; WAMR, Doom,
-EDK2, etc. under `external/` or their upstream licenses).
+BSD-4-Clause under `src/pymergetic/metal/dev/net/bge/freebsd/`; WAMR,
+EDK2, etc. under `external/` or their upstream licenses). Doom
+(`packages/metal-doom`, GPL-2.0-or-later `doomgeneric`) is a separate
+sibling repo — no Doom/GPL material lives in this tree.

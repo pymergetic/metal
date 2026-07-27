@@ -8,6 +8,11 @@
  * *this* host's AOT (or wasm) — never a baked multi-arch table.
  *
  * Packages register only their extra assets (e.g. doom1.wad) + optional ready().
+ * An external app with no compiled-in pm_metal_pkg_register() call (built +
+ * signed outside this repo) can instead drop a "mods/apps/<name>/assets.list"
+ * manifest next to its guest binary — one "<filename> <cap_bytes>" pair per
+ * line, '#' comments allowed — and pm_metal_pkg_lookup() synthesizes the
+ * package from that manifest on the fly.
  * Host-only.
  */
 #ifndef PYMERGETIC_METAL_GUEST_PKG_PKG_H_
@@ -55,6 +60,11 @@ void pm_metal_pkg_init(void);
 
 int pm_metal_pkg_register(const pm_metal_pkg_t *pkg);
 
+/**
+ * Look up a compiled-in package, else synthesize one from an ESP
+ * "mods/apps/<name>/assets.list" manifest. NULL if <name> has no
+ * registration and no manifest/guest binary on ESP.
+ */
 const pm_metal_pkg_t *pm_metal_pkg_lookup(const char *name);
 
 int pm_metal_pkg_ready(const char *name);
