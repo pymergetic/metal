@@ -244,6 +244,32 @@ static int32_t pm_metal_net_dns_last_ntoa_native(wasm_exec_env_t exec_env,
   return pm_metal_net_dns_last_ntoa((char *)native, dest_cap);
 }
 
+static int32_t pm_metal_net_seed_host_native(wasm_exec_env_t exec_env, uint32_t dest, uint32_t dest_cap)
+{
+  wasm_module_inst_t inst;
+  void               *native;
+
+  if (dest_cap == 0) {
+    return -1;
+  }
+
+  inst = wasm_runtime_get_module_inst(exec_env);
+  if (inst == NULL) {
+    return -1;
+  }
+
+  if (!wasm_runtime_validate_app_addr(inst, dest, dest_cap)) {
+    return -1;
+  }
+
+  native = wasm_runtime_addr_app_to_native(inst, dest);
+  if (native == NULL) {
+    return -1;
+  }
+
+  return pm_metal_net_seed_host((char *)native, dest_cap);
+}
+
 static void pm_metal_net_close_native(wasm_exec_env_t exec_env, uint32_t h)
 {
   (void)exec_env;
@@ -274,6 +300,7 @@ static NativeSymbol g_pm_metal_net_native_symbols[] = {
   { "pm_metal_net_recv", (void *)pm_metal_net_recv_native, "(iii)i", NULL },
   { "pm_metal_net_dns", (void *)pm_metal_net_dns_native, "($)i", NULL },
   { "pm_metal_net_dns_last_ntoa", (void *)pm_metal_net_dns_last_ntoa_native, "(ii)i", NULL },
+  { "pm_metal_net_seed_host", (void *)pm_metal_net_seed_host_native, "(ii)i", NULL },
   { "pm_metal_net_close", (void *)pm_metal_net_close_native, "(i)", NULL },
   { "pm_metal_net_bind_if", (void *)pm_metal_net_bind_if_native, "(i$)i", NULL },
 };

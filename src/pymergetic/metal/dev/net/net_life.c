@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <pymergetic/metal/dev/net/net.h>
 #include <pymergetic/metal/dev/net/net_life.h>
 #include <pymergetic/metal/dev/net/net_ops.h>
 #include <pymergetic/metal/dev/net/net_cfg.h>
@@ -140,30 +141,42 @@ static int32_t LifeBuildHttpUrl(char *out, uintptr_t cap, const char *host, cons
   return (int32_t)i;
 }
 
-static void LifeResolvePkgHost(life_t *s)
+/*
+ * Shared with the public pm_metal_net_seed_host() guest/host accessor
+ * (net.h) -- keep the resolution in one place so a diagnostic caller and
+ * the actual HTTP seed fetch below always agree on "the host".
+ */
+int32_t pm_metal_net_seed_host(char *out, uint32_t out_cap)
 {
   char                 boot[PM_METAL_NET_BOOT_FILE_MAX];
   uint32_t             pkg_ip;
   uint32_t             gw;
   pm_metal_net_ifcfg_t cfg;
 
-  s->pkg_host[0] = '\0';
+  if (out == NULL || out_cap == 0u) {
+    return -1;
+  }
+
+  out[0] = '\0';
   /* 1) DHCP next-server / siaddr (PXE HTTP mirror). */
-  if (pm_metal_net_if_boot_get(NULL, s->pkg_host, sizeof(s->pkg_host), boot, sizeof(boot)) == 0 &&
-      s->pkg_host[0] != '\0' && pm_metal_util_ip4_parse(s->pkg_host, &pkg_ip) == 0 &&
-      !pm_metal_util_ip4_is_unspecified(pkg_ip)) {
-    return;
+  if (pm_metal_net_if_boot_get(NULL, out, out_cap, boot, sizeof(boot)) == 0 && out[0] != '\0' &&
+      pm_metal_util_ip4_parse(out, &pkg_ip) == 0 && !pm_metal_util_ip4_is_unspecified(pkg_ip)) {
+    return 0;
   }
 
   /* 2) Default gateway — common when next-server unset but :8080 is the router/dev box. */
   if (pm_metal_net_if_get(&cfg) == 0 && pm_metal_util_ip4_parse(cfg.gw, &gw) == 0 &&
-      !pm_metal_util_ip4_is_unspecified(gw) &&
-      pm_metal_util_ip4_format(gw, s->pkg_host, sizeof(s->pkg_host)) > 0) {
-    return;
+      !pm_metal_util_ip4_is_unspecified(gw) && pm_metal_util_ip4_format(gw, out, out_cap) > 0) {
+    return 0;
   }
 
   /* 3) Lab default. */
-  (void)pm_metal_util_ip4_format(LIFE_PKG_HOST_FALLBACK, s->pkg_host, sizeof(s->pkg_host));
+  return (pm_metal_util_ip4_format(LIFE_PKG_HOST_FALLBACK, out, out_cap) > 0) ? 0 : -1;
+}
+
+static void LifeResolvePkgHost(life_t *s)
+{
+  (void)pm_metal_net_seed_host(s->pkg_host, sizeof(s->pkg_host));
 }
 
 static void LifeFreePkgBuf(life_t *s)
@@ -441,7 +454,14 @@ int pm_metal_net_life_seed_ensure(const char *name)
   }
 
   snprintf(mLife->pkg_name, sizeof(mLife->pkg_name), "%s", name);
-  LifeLog("metal-net: pkg ensure (run/tab)");
+  {
+    char host[PM_METAL_NET_TFTP_HOST_MAX];
+    char msg[128];
+
+    (void)pm_metal_net_seed_host(host, sizeof(host));
+    snprintf(msg, sizeof(msg), "metal-net: pkg ensure '%s' -> http://%s:8080/ (run/tab)", name, host);
+    LifeLog(msg);
+  }
   mLife->pkg_want = 1;
   mLife->pkg_done = 0;
   deadline        = pm_metal_time_mono_us() + LIFE_PKG_ENSURE_US;
