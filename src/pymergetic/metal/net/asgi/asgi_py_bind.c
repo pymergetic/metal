@@ -6,7 +6,7 @@
 
 #include "asgi_internal.h"
 
-#include <pymergetic/metal/dev/net/asgi.h>
+#include <pymergetic/metal/net/asgi/asgi.h>
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/py/py_obj.h>
 
@@ -15,13 +15,13 @@
 static mp_obj_t py_asgi_listen(size_t n_args, const mp_obj_t *args)
 {
   uint32_t              port;
-  pm_metal_tls_creds_h  creds;
+  pm_metal_net_tls_creds_h  creds;
   pm_metal_net_asgi_srv_h srv;
 
   port  = (uint32_t)mp_obj_get_int(args[0]);
   creds = PM_METAL_TLS_CREDS_INVALID;
   if (n_args >= 2) {
-    creds = (pm_metal_tls_creds_h)mp_obj_get_int(args[1]);
+    creds = (pm_metal_net_tls_creds_h)mp_obj_get_int(args[1]);
   }
   srv = pm_metal_net_asgi_listen(port, NULL, 0, creds);
   if (srv == PM_METAL_NET_ASGI_SRV_INVALID) {

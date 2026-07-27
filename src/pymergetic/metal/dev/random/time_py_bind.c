@@ -3,7 +3,7 @@
   time.py (mods/py/stdlib_src/time.py). Backed by the same wall clock
   random.c already exposes to wasm guests (pm_metal_realtime_ms, fed by
   EFI's gRT->GetTime()/BIOS's CMOS RTC, refined by SNTP on success — see
-  dev/net/ntp.c) plus the monotonic TSC clock (runtime/time/time.h). No
+  net/ntp/ntp.c) plus the monotonic TSC clock (runtime/time/time.h). No
   MICROPY_PY_BUILTINS_FLOAT in this build, so every value here is an
   integer (ms/us), never CPython's float seconds — time.py does the
   int-only arithmetic on top.

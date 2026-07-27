@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #include <pymergetic/metal/trust/trust.h>
-#include <pymergetic/metal/dev/net/mbedtls_metal_config.h>
+#include <pymergetic/metal/net/tls/mbedtls_metal_config.h>
 #include <pymergetic/metal/fs/esp/esp.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
@@ -96,7 +96,7 @@ static int32_t TrustEnsure(void)
   mModsN     = 0;
 
   /* PLATFORM_MEMORY defaults to a null calloc until this hook runs. */
-  pm_metal_mbedtls_runtime_init();
+  pm_metal_net_tls_mbedtls_runtime_init();
 
   if (TrustParseList(mRoots,
                      PM_METAL_TRUST_MAX_CAS,

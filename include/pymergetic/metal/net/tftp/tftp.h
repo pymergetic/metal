@@ -8,10 +8,10 @@
  * host may be a hostname, dotted IPv4, or NULL to use DHCP next-server /
  * option 66 from the default interface (when present).
  *
- * impl: common — src/pymergetic/metal/dev/net/tftp.c
+ * impl: common — src/pymergetic/metal/net/tftp/tftp.c
  */
-#ifndef PYMERGETIC_METAL_DEV_NET_TFTP_H_
-#define PYMERGETIC_METAL_DEV_NET_TFTP_H_
+#ifndef PYMERGETIC_METAL_NET_TFTP_H_
+#define PYMERGETIC_METAL_NET_TFTP_H_
 
 #include <stdint.h>
 
@@ -57,4 +57,4 @@ int pm_metal_net_tftp_native_register(void);
 }
 #endif
 
-#endif /* PYMERGETIC_METAL_DEV_NET_TFTP_H_ */
+#endif /* PYMERGETIC_METAL_NET_TFTP_H_ */

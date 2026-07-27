@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "pymergetic/metal/runtime/async/async.h"
-#include "pymergetic/metal/dev/net/net.h"
+#include "pymergetic/metal/net/ip/ip.h"
 #include "pymergetic/metal/shell/shell/shell.h"
 
 #define NET_ECHO_HOST "10.0.2.2"
@@ -37,7 +37,7 @@ pm_metal_status_t pm_metal_guest_step(pm_metal_async_handle_t self_h)
 
   switch (s->step) {
   case 0:
-    s->aw = pm_metal_net_dns(NET_ECHO_HOST);
+    s->aw = pm_metal_net_ip_dns(NET_ECHO_HOST);
     if (s->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       return PM_METAL_ERROR;
     }
@@ -48,11 +48,11 @@ pm_metal_status_t pm_metal_guest_step(pm_metal_async_handle_t self_h)
     if (net_result(self_h) == 0) {
       return PM_METAL_ERROR;
     }
-    s->sock = pm_metal_net_socket(PM_METAL_NET_AF_INET, PM_METAL_NET_SOCK_STREAM);
-    if (s->sock == PM_METAL_NET_SOCK_INVALID) {
+    s->sock = pm_metal_net_ip_socket(PM_METAL_NET_IP_AF_INET, PM_METAL_NET_IP_SOCK_STREAM);
+    if (s->sock == PM_METAL_NET_IP_SOCK_INVALID) {
       return PM_METAL_ERROR;
     }
-    s->aw = pm_metal_net_connect(s->sock, NET_ECHO_HOST, NET_ECHO_PORT);
+    s->aw = pm_metal_net_ip_connect(s->sock, NET_ECHO_HOST, NET_ECHO_PORT);
     if (s->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       return PM_METAL_ERROR;
     }
@@ -67,11 +67,11 @@ pm_metal_status_t pm_metal_guest_step(pm_metal_async_handle_t self_h)
     s->buf[1] = 'I';
     s->buf[2] = 'N';
     s->buf[3] = '\n';
-    n         = pm_metal_net_send(s->sock, PM_METAL_NET_IO_PTR(s->buf), 4);
+    n         = pm_metal_net_ip_send(s->sock, PM_METAL_NET_IP_IO_PTR(s->buf), 4);
     if (n != 4) {
       return PM_METAL_ERROR;
     }
-    s->aw = pm_metal_net_recv(s->sock, PM_METAL_NET_IO_PTR(s->buf), sizeof(s->buf));
+    s->aw = pm_metal_net_ip_recv(s->sock, PM_METAL_NET_IP_IO_PTR(s->buf), sizeof(s->buf));
     if (s->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       return PM_METAL_ERROR;
     }
@@ -86,7 +86,7 @@ pm_metal_status_t pm_metal_guest_step(pm_metal_async_handle_t self_h)
     if (s->buf[0] != 'P' || s->buf[1] != 'I' || s->buf[2] != 'N') {
       return PM_METAL_ERROR;
     }
-    pm_metal_net_close(s->sock);
+    pm_metal_net_ip_close(s->sock);
     pm_metal_shell_log("metal-async: net ok");
     return PM_METAL_DONE;
 

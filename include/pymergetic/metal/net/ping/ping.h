@@ -1,10 +1,10 @@
 /*
  * ICMP echo (ping) over pm_metal_net_* — IPv4/IPv6 targets via DNS or literal.
  *
- * impl: common — src/pymergetic/metal/dev/net/ping.c
+ * impl: common — src/pymergetic/metal/net/ping/ping.c
  */
-#ifndef PYMERGETIC_METAL_DEV_NET_PING_H_
-#define PYMERGETIC_METAL_DEV_NET_PING_H_
+#ifndef PYMERGETIC_METAL_NET_PING_H_
+#define PYMERGETIC_METAL_NET_PING_H_
 
 #include <stdint.h>
 
@@ -54,4 +54,4 @@ int pm_metal_net_ping_native_register(void);
 }
 #endif
 
-#endif /* PYMERGETIC_METAL_DEV_NET_PING_H_ */
+#endif /* PYMERGETIC_METAL_NET_PING_H_ */

@@ -8,8 +8,8 @@
 #include <string.h>
 
 #include <pymergetic/metal/auth/auth.h>
-#include <pymergetic/metal/dev/net/http_parse.h>
-#include <pymergetic/metal/dev/net/tls.h>
+#include <pymergetic/metal/net/http/http_parse.h>
+#include <pymergetic/metal/net/tls/tls.h>
 #include <pymergetic/metal/guest/mod/mod.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/py/py.h>
@@ -41,9 +41,9 @@ typedef struct {
   asgi_step_t             step;
   pm_metal_net_asgi_srv_h srv_h;
   pm_metal_async_handle_t aw;
-  pm_metal_net_sock_h     csock;
-  pm_metal_tls_h          tls_h;
-  pm_metal_tls_wire_t     wire;
+  pm_metal_net_ip_sock_h     csock;
+  pm_metal_net_tls_h          tls_h;
+  pm_metal_net_tls_wire_t     wire;
   int32_t                 use_tls;
   int32_t                 in_budget;
   int32_t                 keepalive;
@@ -123,9 +123,9 @@ static void conn_cleanup(asgi_listen_t *st)
     pm_metal_net_tls_close(st->tls_h);
     st->tls_h = PM_METAL_TLS_INVALID;
   }
-  if (st->csock != PM_METAL_NET_SOCK_INVALID) {
-    pm_metal_net_close(st->csock);
-    st->csock = PM_METAL_NET_SOCK_INVALID;
+  if (st->csock != PM_METAL_NET_IP_SOCK_INVALID) {
+    pm_metal_net_ip_close(st->csock);
+    st->csock = PM_METAL_NET_IP_SOCK_INVALID;
   }
   if (st->in_budget) {
     pm_metal_net_asgi_budget_leave();
@@ -342,7 +342,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
   for (;;) {
     switch (st->step) {
     case ASGI_ST_LISTEN:
-      st->aw   = pm_metal_net_listen(srv->listen_sock, srv->port);
+      st->aw   = pm_metal_net_ip_listen(srv->listen_sock, srv->port);
       st->step = ASGI_ST_LISTEN_AW;
       return pm_metal_async_await(self_h, st->aw);
 
@@ -359,7 +359,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
       break;
 
     case ASGI_ST_ACCEPT:
-      st->aw = pm_metal_net_accept(srv->listen_sock);
+      st->aw = pm_metal_net_ip_accept(srv->listen_sock);
       if (st->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
         pm_metal_logf("asgi: accept start failed sock=%u", (unsigned)srv->listen_sock);
         return PM_METAL_ERROR;
@@ -368,8 +368,8 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
       return pm_metal_async_await(self_h, st->aw);
 
     case ASGI_ST_ACCEPT_AW:
-      st->csock = (pm_metal_net_sock_h)pm_metal_async_result_u32(self_h);
-      if (st->csock == PM_METAL_NET_SOCK_INVALID) {
+      st->csock = (pm_metal_net_ip_sock_h)pm_metal_async_result_u32(self_h);
+      if (st->csock == PM_METAL_NET_IP_SOCK_INVALID) {
         st->step = ASGI_ST_ACCEPT;
         break;
       }
@@ -378,8 +378,8 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
         pm_metal_net_asgi_conn_set_keepalive(0);
         (void)pm_metal_net_asgi_send_simple(
           503, "Unavailable", "text/plain", "budget\n");
-        pm_metal_net_close(st->csock);
-        st->csock = PM_METAL_NET_SOCK_INVALID;
+        pm_metal_net_ip_close(st->csock);
+        st->csock = PM_METAL_NET_IP_SOCK_INVALID;
         st->step  = ASGI_ST_ACCEPT;
         break;
       }
@@ -417,7 +417,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
       }
       st->wire.len = 0;
       st->wire.off = 0;
-      st->aw       = pm_metal_net_recv(st->csock, st->wire.buf, sizeof(st->wire.buf));
+      st->aw       = pm_metal_net_ip_recv(st->csock, st->wire.buf, sizeof(st->wire.buf));
       st->step     = ASGI_ST_TLS_WIRE_AW;
       return pm_metal_async_await(self_h, st->aw);
     }
@@ -464,7 +464,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
         if (e == PM_METAL_TLS_WANT_READ || e == PM_METAL_TLS_WANT_WRITE) {
           st->wire.len = 0;
           st->wire.off = 0;
-          st->aw       = pm_metal_net_recv(st->csock, st->wire.buf, sizeof(st->wire.buf));
+          st->aw       = pm_metal_net_ip_recv(st->csock, st->wire.buf, sizeof(st->wire.buf));
           st->step     = ASGI_ST_CONN_RECV_AW;
           return pm_metal_async_await(self_h, st->aw);
         }
@@ -472,7 +472,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
         st->step = ASGI_ST_ACCEPT;
         break;
       }
-      st->aw   = pm_metal_net_recv(st->csock, st->iobuf, sizeof(st->iobuf));
+      st->aw   = pm_metal_net_ip_recv(st->csock, st->iobuf, sizeof(st->iobuf));
       st->step = ASGI_ST_CONN_RECV_AW;
       return pm_metal_async_await(self_h, st->aw);
 
@@ -633,7 +633,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
         if (e == PM_METAL_TLS_WANT_READ || e == PM_METAL_TLS_WANT_WRITE) {
           st->wire.len = 0;
           st->wire.off = 0;
-          st->aw       = pm_metal_net_recv(st->csock, st->wire.buf, sizeof(st->wire.buf));
+          st->aw       = pm_metal_net_ip_recv(st->csock, st->wire.buf, sizeof(st->wire.buf));
           st->step     = ASGI_ST_WS_RECV_AW;
           return pm_metal_async_await(self_h, st->aw);
         }
@@ -641,7 +641,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
         st->step = ASGI_ST_ACCEPT;
         break;
       }
-      st->aw   = pm_metal_net_recv(st->csock, st->iobuf, sizeof(st->iobuf));
+      st->aw   = pm_metal_net_ip_recv(st->csock, st->iobuf, sizeof(st->iobuf));
       st->step = ASGI_ST_WS_RECV_AW;
       return pm_metal_async_await(self_h, st->aw);
 
@@ -713,7 +713,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
 pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t             port,
                                                  const char *const   *ifnames,
                                                  uint32_t             nif,
-                                                 pm_metal_tls_creds_h creds)
+                                                 pm_metal_net_tls_creds_h creds)
 {
   pm_metal_net_asgi_srv_h h;
   asgi_srv_t             *srv;
@@ -732,19 +732,19 @@ pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t             port,
     srv->keepalive_s = pm_metal_net_asgi_cfg()->keepalive_s;
     srv->budget_pct  = pm_metal_net_asgi_cfg()->budget_pct;
   }
-  srv->listen_sock = pm_metal_net_socket(PM_METAL_NET_AF_INET, PM_METAL_NET_SOCK_STREAM);
-  if (srv->listen_sock == PM_METAL_NET_SOCK_INVALID) {
+  srv->listen_sock = pm_metal_net_ip_socket(PM_METAL_NET_IP_AF_INET, PM_METAL_NET_IP_SOCK_STREAM);
+  if (srv->listen_sock == PM_METAL_NET_IP_SOCK_INVALID) {
     srv->used = 0;
     return PM_METAL_NET_ASGI_SRV_INVALID;
   }
   if (nif > 0 && ifnames != NULL && ifnames[0] != NULL) {
     strncpy(srv->ifname, ifnames[0], sizeof(srv->ifname) - 1u);
-    (void)pm_metal_net_bind_if(srv->listen_sock, srv->ifname);
+    (void)pm_metal_net_ip_bind_if(srv->listen_sock, srv->ifname);
   }
 
   srv->coro = pm_metal_async_coro_create(AsgiListenStep, sizeof(asgi_listen_t));
   if (srv->coro == PM_METAL_ASYNC_HANDLE_INVALID) {
-    pm_metal_net_close(srv->listen_sock);
+    pm_metal_net_ip_close(srv->listen_sock);
     srv->used = 0;
     return PM_METAL_NET_ASGI_SRV_INVALID;
   }
@@ -752,11 +752,11 @@ pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t             port,
   memset(st, 0, sizeof(*st));
   st->step  = ASGI_ST_LISTEN;
   st->srv_h = h;
-  st->csock = PM_METAL_NET_SOCK_INVALID;
+  st->csock = PM_METAL_NET_IP_SOCK_INVALID;
   st->tls_h = PM_METAL_TLS_INVALID;
   srv->task = pm_metal_async_create_task(srv->coro);
   if (srv->task == PM_METAL_ASYNC_HANDLE_INVALID) {
-    pm_metal_net_close(srv->listen_sock);
+    pm_metal_net_ip_close(srv->listen_sock);
     srv->used = 0;
     return PM_METAL_NET_ASGI_SRV_INVALID;
   }
@@ -817,14 +817,14 @@ void pm_metal_net_asgi_close(pm_metal_net_asgi_srv_h s)
   if (srv == NULL) {
     return;
   }
-  if (srv->listen_sock != PM_METAL_NET_SOCK_INVALID) {
-    pm_metal_net_close(srv->listen_sock);
+  if (srv->listen_sock != PM_METAL_NET_IP_SOCK_INVALID) {
+    pm_metal_net_ip_close(srv->listen_sock);
   }
   memset(srv, 0, sizeof(*srv));
 }
 
 static int32_t              g_asgi_autoloaded;
-static pm_metal_tls_creds_h g_httpd_tls_creds = PM_METAL_TLS_CREDS_INVALID;
+static pm_metal_net_tls_creds_h g_httpd_tls_creds = PM_METAL_TLS_CREDS_INVALID;
 static pm_metal_net_asgi_srv_h g_autoload_srvs[ASGI_SRV_MAX];
 static uint32_t                g_autoload_n;
 
@@ -860,9 +860,9 @@ static void asgi_apply_mounts(pm_metal_net_asgi_srv_h srv, const asgi_httpd_cfg_
   }
 }
 
-static pm_metal_tls_creds_h asgi_load_httpd_creds(const asgi_httpd_cfg_t *cfg)
+static pm_metal_net_tls_creds_h asgi_load_httpd_creds(const asgi_httpd_cfg_t *cfg)
 {
-  pm_metal_tls_creds_h h;
+  pm_metal_net_tls_creds_h h;
   const char          *ca;
 
   if (g_httpd_tls_creds != PM_METAL_TLS_CREDS_INVALID) {
@@ -906,7 +906,7 @@ int32_t pm_metal_net_asgi_autoload(void)
 {
   asgi_httpd_cfg_t       *cfg;
   pm_metal_net_asgi_srv_h srv;
-  pm_metal_tls_creds_h    creds;
+  pm_metal_net_tls_creds_h    creds;
   pm_metal_net_asgi_srv_h tls_srv;
 
   if (g_asgi_autoloaded) {
@@ -991,7 +991,7 @@ static uint32_t asgi_listen_native(
   (void)exec_env;
   (void)ifnames_ptr;
   (void)nif;
-  return pm_metal_net_asgi_listen(port, NULL, 0, (pm_metal_tls_creds_h)creds);
+  return pm_metal_net_asgi_listen(port, NULL, 0, (pm_metal_net_tls_creds_h)creds);
 }
 
 static int32_t asgi_mount_native(wasm_exec_env_t exec_env,

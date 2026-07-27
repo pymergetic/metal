@@ -2,10 +2,10 @@
  * Metal sshd control plane (Dropbear session glue).
  * Guest/host dual ABI for listen/autoload; session is host-only.
  *
- * impl: common — src/pymergetic/metal/dev/net/ssh_server.c
+ * impl: common — src/pymergetic/metal/net/ssh/ssh_server.c
  */
-#ifndef PYMERGETIC_METAL_DEV_NET_SSH_H_
-#define PYMERGETIC_METAL_DEV_NET_SSH_H_
+#ifndef PYMERGETIC_METAL_NET_SSH_H_
+#define PYMERGETIC_METAL_NET_SSH_H_
 
 #include <stdint.h>
 
@@ -43,4 +43,4 @@ int                    pm_metal_net_ssh_native_register(void);
 }
 #endif
 
-#endif /* PYMERGETIC_METAL_DEV_NET_SSH_H_ */
+#endif /* PYMERGETIC_METAL_NET_SSH_H_ */

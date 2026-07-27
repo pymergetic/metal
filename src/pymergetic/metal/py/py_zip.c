@@ -12,8 +12,8 @@
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/shell/shell_cmd.h>
 #include <pymergetic/metal/trust/trust.h>
-#include <pymergetic/metal/dev/net/http.h>
-#include <pymergetic/metal/dev/net/net_cfg.h>
+#include <pymergetic/metal/net/http/http.h>
+#include <pymergetic/metal/net/ip/ip_cfg.h>
 #include <pymergetic/metal/util/ip.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
 #include <pymergetic/metal/runtime/async/async.h>
@@ -95,14 +95,14 @@ static int32_t ZipVerifyLocal(void)
  * seed server), else the same lab fallback net_life.c uses for pkg seeding. */
 static int32_t ZipResolveHost(char *out, size_t cap)
 {
-  pm_metal_net_ifcfg_t cfg;
+  pm_metal_net_ip_ifcfg_t cfg;
   uint32_t             gw;
 
   if (out == NULL || cap == 0) {
     return -1;
   }
   out[0] = '\0';
-  if (pm_metal_net_if_get(&cfg) == 0 && pm_metal_util_ip4_parse(cfg.gw, &gw) == 0 &&
+  if (pm_metal_net_ip_if_get(&cfg) == 0 && pm_metal_util_ip4_parse(cfg.gw, &gw) == 0 &&
       !pm_metal_util_ip4_is_unspecified(gw) && pm_metal_util_ip4_format(gw, out, cap) > 0) {
     return 0;
   }

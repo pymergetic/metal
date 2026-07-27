@@ -2,4 +2,4 @@
 -I../../../../../external/mbedtls/include
 -I../../../../../external/lwip/src/include
 -I.
--DMBEDTLS_CONFIG_FILE="<pymergetic/metal/dev/net/mbedtls_metal_config.h>"
+-DMBEDTLS_CONFIG_FILE="<pymergetic/metal/net/tls/mbedtls_metal_config.h>"

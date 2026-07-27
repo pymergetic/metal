@@ -1,7 +1,7 @@
 /*
  * Shared HTTP/1.1 framing — client + ASGI server.
  */
-#include <pymergetic/metal/dev/net/http_parse.h>
+#include <pymergetic/metal/net/http/http_parse.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -89,7 +89,7 @@ uint32_t pm_metal_http_parse_status(const char *hdr, uint32_t hdr_len)
   return st;
 }
 
-void pm_metal_http_scan_body_mode(const char *hdr, uint32_t hdr_len, pm_metal_http_body_mode_t *out)
+void pm_metal_net_http_scan_body_mode(const char *hdr, uint32_t hdr_len, pm_metal_net_http_body_mode_t *out)
 {
   const char *line;
   uint32_t    i;

@@ -5,10 +5,10 @@
 #include <stddef.h>
 #include <stdio.h>
 
-#include <pymergetic/metal/dev/net/ping.h>
-#include <pymergetic/metal/dev/net/net.h>
-#include <pymergetic/metal/dev/net/net_cfg.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
+#include <pymergetic/metal/net/ping/ping.h>
+#include <pymergetic/metal/net/ip/ip.h>
+#include <pymergetic/metal/net/ip/ip_cfg.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
 #include <pymergetic/metal/runtime/async/async.h>
 #include <pymergetic/metal/shell/shell_cmd.h>
 #include <pymergetic/metal/shell/shell/shell.h>
@@ -374,8 +374,8 @@ static pm_metal_status_t PingStep(pm_metal_async_handle_t self_h)
       return PM_METAL_PENDING;
     }
 
-    /* Async DNS (literals/hosts/cache handled inside pm_metal_net_dns). */
-    p->aw = pm_metal_net_dns(p->host);
+    /* Async DNS (literals/hosts/cache handled inside pm_metal_net_ip_dns). */
+    p->aw = pm_metal_net_ip_dns(p->host);
     if (p->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       mPingLastErr = PM_METAL_NET_PING_ERR_RESOLVE;
       return PM_METAL_ERROR;
@@ -393,7 +393,7 @@ static pm_metal_status_t PingStep(pm_metal_async_handle_t self_h)
     {
       char ipstr[64];
 
-      if (pm_metal_net_dns_last_ntoa(ipstr, sizeof(ipstr)) != 0 ||
+      if (pm_metal_net_ip_dns_last_ntoa(ipstr, sizeof(ipstr)) != 0 ||
           PingHostIsLiteral(ipstr, &p->target, &p->target_v6) != 0) {
         mPingLastErr = PM_METAL_NET_PING_ERR_RESOLVE;
         return PM_METAL_ERROR;
@@ -433,7 +433,7 @@ static pm_metal_status_t PingStep(pm_metal_async_handle_t self_h)
   }
 
   case PING_STEP_SEND:
-    pm_metal_net_poll();
+    pm_metal_net_ip_poll();
     p->last_err = PingSend(p);
     if (p->last_err == ERR_OK) {
       p->deadline = pm_metal_time_mono_us() + ((uint64_t)p->timeout_ms * 1000ull);
@@ -454,7 +454,7 @@ static pm_metal_status_t PingStep(pm_metal_async_handle_t self_h)
     return PM_METAL_ERROR;
 
   case PING_STEP_WAIT:
-    pm_metal_net_poll();
+    pm_metal_net_ip_poll();
     if (p->ok) {
       p->step = PING_STEP_DONE;
       return PM_METAL_PENDING;

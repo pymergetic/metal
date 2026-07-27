@@ -2,15 +2,15 @@
  * Metal ASGI httpd — C server + app registry (C | Py | Wasm).
  * Guest/host dual ABI. See plan: C owns wire; apps are app_h leaves.
  *
- * impl: common — src/pymergetic/metal/dev/net/asgi_*.c
+ * impl: common — src/pymergetic/metal/net/asgi/asgi_*.c
  */
-#ifndef PYMERGETIC_METAL_DEV_NET_ASGI_H_
-#define PYMERGETIC_METAL_DEV_NET_ASGI_H_
+#ifndef PYMERGETIC_METAL_NET_ASGI_H_
+#define PYMERGETIC_METAL_NET_ASGI_H_
 
 #include <stdint.h>
 
 #if !defined(__wasm__)
-#include "pymergetic/metal/dev/net/tls.h"
+#include "pymergetic/metal/net/tls/tls.h"
 #endif
 
 #ifdef __cplusplus
@@ -22,7 +22,7 @@ extern "C" {
 typedef uint32_t pm_metal_net_asgi_app_h;
 typedef uint32_t pm_metal_net_asgi_srv_h;
 #if defined(__wasm__)
-typedef uint32_t pm_metal_tls_creds_h;
+typedef uint32_t pm_metal_net_tls_creds_h;
 #define PM_METAL_TLS_CREDS_INVALID 0u
 #endif
 
@@ -45,7 +45,7 @@ typedef int32_t (*pm_metal_net_asgi_c_fn)(void *ctx, uint32_t conn_id);
 extern pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t             port,
                                                         uint32_t             ifnames_ptr,
                                                         uint32_t             nif,
-                                                        pm_metal_tls_creds_h creds)
+                                                        pm_metal_net_tls_creds_h creds)
   PM_METAL_NET_ASGI_IMPORT(pm_metal_net_asgi_listen);
 extern int32_t pm_metal_net_asgi_mount(pm_metal_net_asgi_srv_h s,
                                        const char             *path,
@@ -80,7 +80,7 @@ void                    pm_metal_net_asgi_unregister(pm_metal_net_asgi_app_h app
 pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t             port,
                                                  const char *const   *ifnames,
                                                  uint32_t             nif,
-                                                 pm_metal_tls_creds_h creds);
+                                                 pm_metal_net_tls_creds_h creds);
 int32_t                 pm_metal_net_asgi_mount(pm_metal_net_asgi_srv_h s,
                                                 const char             *path,
                                                 pm_metal_net_asgi_app_h app);
@@ -110,4 +110,4 @@ pm_metal_net_asgi_app_h pm_metal_net_asgi_app_microdot(void);
 }
 #endif
 
-#endif /* PYMERGETIC_METAL_DEV_NET_ASGI_H_ */
+#endif /* PYMERGETIC_METAL_NET_ASGI_H_ */

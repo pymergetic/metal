@@ -4,7 +4,7 @@
 ``pymergetic.metal.net.http`` — generated from PM_METAL_PY_BIND call sites.
 
 Sources:
-  src/pymergetic/metal/dev/net/net_http_py_bind.c
+  src/pymergetic/metal/net/http/http_py_bind.c
 """
 
 from typing import Any

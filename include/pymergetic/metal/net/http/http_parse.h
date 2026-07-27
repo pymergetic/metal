@@ -2,10 +2,10 @@
  * Shared HTTP/1.1 framing helpers (client GET + ASGI server).
  * Host-only; no dual ABI.
  *
- * impl: common — src/pymergetic/metal/dev/net/http_parse.c
+ * impl: common — src/pymergetic/metal/net/http/http_parse.c
  */
-#ifndef PYMERGETIC_METAL_DEV_NET_HTTP_PARSE_H_
-#define PYMERGETIC_METAL_DEV_NET_HTTP_PARSE_H_
+#ifndef PYMERGETIC_METAL_NET_HTTP_PARSE_H_
+#define PYMERGETIC_METAL_NET_HTTP_PARSE_H_
 
 #include <stdint.h>
 
@@ -23,10 +23,10 @@ typedef struct {
   uint32_t content_len;
   int32_t  chunked;
   int32_t  body_until_close;
-} pm_metal_http_body_mode_t;
+} pm_metal_net_http_body_mode_t;
 
 /** Scan headers for Content-Length / Transfer-Encoding: chunked. */
-void pm_metal_http_scan_body_mode(const char *hdr, uint32_t hdr_len, pm_metal_http_body_mode_t *out);
+void pm_metal_net_http_scan_body_mode(const char *hdr, uint32_t hdr_len, pm_metal_net_http_body_mode_t *out);
 
 typedef enum {
   PM_METAL_HTTP_CHUNK_SIZE = 0,
@@ -75,4 +75,4 @@ int32_t pm_metal_http_chunk_encode(char *dest, uint32_t dest_cap, const uint8_t 
 }
 #endif
 
-#endif /* PYMERGETIC_METAL_DEV_NET_HTTP_PARSE_H_ */
+#endif /* PYMERGETIC_METAL_NET_HTTP_PARSE_H_ */

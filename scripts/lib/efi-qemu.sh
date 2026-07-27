@@ -45,10 +45,19 @@ pm_metal_efi_stage_esp() {
 		cp -a "${ROOT}/mods/py/." "${esp}/mods/py/"
 	fi
 
-	# httpd defaults + static root (ASGI).
+	# httpd defaults + static root (ASGI). Lab sshd hostkey lives under
+	# mods/etc/ssh/; METAL_SSHD_HOSTKEY overrides that file on the ESP.
 	if [[ -d "${ROOT}/mods/etc" ]]; then
 		mkdir -p "${esp}/etc"
 		cp -a "${ROOT}/mods/etc/." "${esp}/etc/"
+	fi
+	if [[ -n "${METAL_SSHD_HOSTKEY:-}" ]]; then
+		if [[ ! -f "${METAL_SSHD_HOSTKEY}" ]]; then
+			echo "efi-qemu: METAL_SSHD_HOSTKEY not a file: ${METAL_SSHD_HOSTKEY}" >&2
+			return 1
+		fi
+		mkdir -p "${esp}/etc/ssh"
+		cp -f "${METAL_SSHD_HOSTKEY}" "${esp}/etc/ssh/dropbear_ed25519_host_key"
 	fi
 	if [[ -d "${ROOT}/mods/www" ]]; then
 		mkdir -p "${esp}/mods/www"

@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include <pymergetic/metal/auth/auth.h>
-#include <pymergetic/metal/dev/net/ssh_config.h>
+#include <pymergetic/metal/net/ssh/ssh_config.h>
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/runtime/mem/mem.h>

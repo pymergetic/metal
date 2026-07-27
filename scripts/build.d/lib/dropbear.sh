@@ -15,8 +15,8 @@ esac
 
 DB="${ROOT}/external/dropbear"
 SRC="${DB}/src"
-METAL_DB="${ROOT}/src/pymergetic/metal/dev/net/dropbear_metal"
-STUBS="${ROOT}/src/pymergetic/metal/dev/net/dropbear_stubs"
+METAL_DB="${ROOT}/src/pymergetic/metal/net/ssh/dropbear_metal"
+STUBS="${ROOT}/src/pymergetic/metal/net/ssh/dropbear_stubs"
 # EFI X64 needs PIC; BIOS freestanding uses no-pic. Keep separate OUT dirs.
 PIC_TAG=""
 if [[ "${PM_METAL_DROPBEAR_PIC:-0}" == "1" ]]; then

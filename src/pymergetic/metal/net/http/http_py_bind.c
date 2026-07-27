@@ -10,7 +10,7 @@
 **/
 #include <string.h>
 
-#include <pymergetic/metal/dev/net/http.h>
+#include <pymergetic/metal/net/http/http.h>
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/py/py_obj.h>
 #include <pymergetic/metal/runtime/mem/mem.h>

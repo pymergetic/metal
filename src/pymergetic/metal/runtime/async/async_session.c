@@ -10,7 +10,7 @@
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/dev/input/input.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
 #include <pymergetic/metal/dev/audio/audio_ops.h>
 #include <pymergetic/metal/boot/port.h>
 #include <runtime/run/run.h>
@@ -271,7 +271,7 @@ void pm_metal_async_session_pump(void)
   }
 
   t0 = pm_metal_time_mono_us();
-  pm_metal_net_poll();
+  pm_metal_net_ip_poll();
   pm_metal_audio_poll();
   /* Guest tasks can land on any runner now (no session pinning) — drain
      every CPU's inbox, not just mSessionCpu. */

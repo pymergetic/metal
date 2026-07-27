@@ -3,8 +3,8 @@
 **/
 #include <pymergetic/metal/boot/boot.h>
 #include <pymergetic/metal/log/log.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
-#include <pymergetic/metal/dev/net/net_cfg.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
+#include <pymergetic/metal/net/ip/ip_cfg.h>
 #include <pymergetic/metal/shell/ui/ui.h>
 #include <pymergetic/metal/guest/wasm/wasm.h>
 #include <pymergetic/metal/guest/mod/mod.h>
@@ -134,17 +134,17 @@ static pm_metal_status_t MetalBootTestStep(pm_metal_async_handle_t self_h)
     return PM_METAL_PENDING;
 
   case TEST_DHCP: {
-    pm_metal_net_ifcfg_t cfg;
+    pm_metal_net_ip_ifcfg_t cfg;
     uint32_t             ip;
 
-    pm_metal_net_poll();
-    if (pm_metal_net_if_get(&cfg) == 0 && pm_metal_util_ip4_parse(cfg.ip, &ip) == 0 &&
+    pm_metal_net_ip_poll();
+    if (pm_metal_net_ip_if_get(&cfg) == 0 && pm_metal_util_ip4_parse(cfg.ip, &ip) == 0 &&
         !pm_metal_util_ip4_is_unspecified(ip)) {
       char tftp[PM_METAL_NET_TFTP_HOST_MAX];
-      char boot[PM_METAL_NET_BOOT_FILE_MAX];
+      char boot[PM_METAL_NET_IP_BOOT_FILE_MAX];
 
       pm_metal_logf("metal-test: net %s/%s up", cfg.ip, cfg.backend);
-      if (pm_metal_net_if_boot_get(NULL, tftp, sizeof(tftp), boot, sizeof(boot)) == 0) {
+      if (pm_metal_net_ip_if_boot_get(NULL, tftp, sizeof(tftp), boot, sizeof(boot)) == 0) {
         pm_metal_logf("metal-test: dhcp-boot tftp=%s file=%s",
                       tftp[0] != '\0' ? tftp : "-",
                       boot[0] != '\0' ? boot : "-");
@@ -155,7 +155,7 @@ static pm_metal_status_t MetalBootTestStep(pm_metal_async_handle_t self_h)
     }
 
     if (pm_metal_time_mono_us() >= t->deadline) {
-      pm_metal_logf("metal-test: net wait timeout (ifs=%u)", pm_metal_net_if_count());
+      pm_metal_logf("metal-test: net wait timeout (ifs=%u)", pm_metal_net_ip_if_count());
       t->step = TEST_HELLO;
       return PM_METAL_PENDING;
     }

@@ -58,9 +58,10 @@ CompileFlags:
     - -I@@ROOT@@/src/efi/MetalPkg
     - -I@@ROOT@@/src/efi/pymergetic/metal/mem
     - -I@@ROOT@@/src/pymergetic/metal/dev/net
+    - -I@@ROOT@@/src/pymergetic/metal/net/ip
     - -I@@ROOT@@/external/lwip/src/include
     - -I@@ROOT@@/external/mbedtls/include
-    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
     - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
     - -I@@ROOT@@/external/wamr/core/shared/platform/include
     - -I@@ROOT@@/external/wamr/core/shared/utils
@@ -95,9 +96,10 @@ CompileFlags:
     - -I@@ROOT@@/src/pymergetic/metal
     - -I@@ROOT@@/src/efi/pymergetic/metal/mem
     - -I@@ROOT@@/src/pymergetic/metal/dev/net
+    - -I@@ROOT@@/src/pymergetic/metal/net/ip
     - -I@@ROOT@@/external/lwip/src/include
     - -I@@ROOT@@/external/mbedtls/include
-    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
     - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
     - -I@@ROOT@@/external/wamr/core/shared/platform/include
     - -I@@ROOT@@/external/wamr/core/shared/utils
@@ -164,9 +166,10 @@ CompileFlags:
     - -I@@ROOT@@/external/edk2/MdePkg/Include
     - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
     - -I@@ROOT@@/src/pymergetic/metal/dev/net
+    - -I@@ROOT@@/src/pymergetic/metal/net/ip
     - -I@@ROOT@@/external/lwip/src/include
     - -I@@ROOT@@/external/mbedtls/include
-    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
     - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
     - -I@@ROOT@@/include
     - -I@@ROOT@@/src/pymergetic/metal
@@ -190,17 +193,18 @@ CompileFlags:
     - -DBUNDLED_LIBTOM=1
     - -DUSE_LTM
     - -DLTM_DESC
-    - -I@@ROOT@@/src/pymergetic/metal/dev/net/dropbear_metal
-    - -I@@ROOT@@/src/pymergetic/metal/dev/net/dropbear_stubs
+    - -I@@ROOT@@/src/pymergetic/metal/net/ssh/dropbear_metal
+    - -I@@ROOT@@/src/pymergetic/metal/net/ssh/dropbear_stubs
     - -I@@ROOT@@/src/pymergetic/metal
     - -I@@ROOT@@/src/pymergetic/metal/dev/net
+    - -I@@ROOT@@/src/pymergetic/metal/net/ip
     - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
     - -I@@ROOT@@/external/dropbear/src
     - -I@@ROOT@@/external/dropbear/libtomcrypt/src/headers
     - -I@@ROOT@@/external/dropbear/libtommath
     - -I@@ROOT@@/external/lwip/src/include
     - -I@@ROOT@@/external/mbedtls/include
-    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
 
 ---
 # Vendored Dropbear TUs (external/dropbear/src) — Metal freestanding build,
@@ -226,18 +230,19 @@ CompileFlags:
     - -DBUNDLED_LIBTOM=1
     - -DUSE_LTM
     - -DLTM_DESC
-    - -I@@ROOT@@/src/pymergetic/metal/dev/net/dropbear_metal
-    - -I@@ROOT@@/src/pymergetic/metal/dev/net/dropbear_stubs
+    - -I@@ROOT@@/src/pymergetic/metal/net/ssh/dropbear_metal
+    - -I@@ROOT@@/src/pymergetic/metal/net/ssh/dropbear_stubs
     - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
     - -I@@ROOT@@/src/pymergetic/metal
     - -I@@ROOT@@/src/pymergetic/metal/dev/net
+    - -I@@ROOT@@/src/pymergetic/metal/net/ip
     - -I@@ROOT@@/include
     - -I@@ROOT@@/external/dropbear/src
     - -I@@ROOT@@/external/dropbear/libtomcrypt/src/headers
     - -I@@ROOT@@/external/dropbear/libtommath
     - -I@@ROOT@@/external/lwip/src/include
     - -I@@ROOT@@/external/mbedtls/include
-    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
 
 ---
 # Metal BIOS freestanding shim (not EDK2) — Multiboot metal.elf / metal.boot.elf.
@@ -257,9 +262,10 @@ CompileFlags:
     - -I@@ROOT@@/include
     - -I@@ROOT@@/src/pymergetic/metal
     - -I@@ROOT@@/src/pymergetic/metal/dev/net
+    - -I@@ROOT@@/src/pymergetic/metal/net/ip
     - -I@@ROOT@@/external/lwip/src/include
     - -I@@ROOT@@/external/mbedtls/include
-    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+    - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
     - -I@@ROOT@@/src/bios/pymergetic/metal/guest/wamr
     - -I@@ROOT@@/src/bios/pymergetic/metal/runtime/mem/host_stubs
     - -I@@ROOT@@/external/wamr/core/iwasm/include

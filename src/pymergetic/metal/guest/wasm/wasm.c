@@ -20,14 +20,14 @@
 #include <pymergetic/metal/dev/blk/blk.h>
 #include <pymergetic/metal/dev/audio/audio.h>
 #include <pymergetic/metal/dev/stream/stream.h>
-#include <pymergetic/metal/dev/net/net.h>
-#include <pymergetic/metal/dev/net/tls.h>
-#include <pymergetic/metal/dev/net/ping.h>
-#include <pymergetic/metal/dev/net/ntp.h>
-#include <pymergetic/metal/dev/net/http.h>
-#include <pymergetic/metal/dev/net/asgi.h>
-#include <pymergetic/metal/dev/net/ssh.h>
-#include <pymergetic/metal/dev/net/tftp.h>
+#include <pymergetic/metal/net/ip/ip.h>
+#include <pymergetic/metal/net/tls/tls.h>
+#include <pymergetic/metal/net/ping/ping.h>
+#include <pymergetic/metal/net/ntp/ntp.h>
+#include <pymergetic/metal/net/http/http.h>
+#include <pymergetic/metal/net/asgi/asgi.h>
+#include <pymergetic/metal/net/ssh/ssh.h>
+#include <pymergetic/metal/net/tftp/tftp.h>
 #include <pymergetic/metal/guest/pkg/pkg.h>
 #include <pymergetic/metal/dev/random/random.h>
 #include <pymergetic/metal/util/arena.h>
@@ -271,7 +271,7 @@ int pm_metal_wasm_init(void)
       pm_metal_mod_native_register() != 0 || pm_metal_hwinfo_native_register() != 0 ||
       pm_metal_fs_native_register() != 0 || pm_metal_blk_native_register() != 0 ||
       pm_metal_audio_native_register() != 0 || pm_metal_stream_native_register() != 0 ||
-      pm_metal_net_native_register() != 0 || pm_metal_net_tls_native_register() != 0 ||
+      pm_metal_net_ip_native_register() != 0 || pm_metal_net_tls_native_register() != 0 ||
       pm_metal_net_ping_native_register() != 0 || pm_metal_net_http_native_register() != 0 ||
       pm_metal_net_asgi_native_register() != 0 || pm_metal_net_ssh_native_register() != 0 ||
       pm_metal_net_tftp_native_register() != 0 || pm_metal_net_ntp_native_register() != 0 ||

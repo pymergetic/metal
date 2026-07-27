@@ -4,7 +4,7 @@
 **/
 #include <pymergetic/metal/boot/boot.h>
 #include <pymergetic/metal/bus/io/io.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
 #include <pymergetic/metal/dev/audio/audio_ops.h>
 #include <pymergetic/metal/dev/console/console.h>
 #include <pymergetic/metal/dev/input/virtio_input.h>
@@ -55,8 +55,8 @@ void pm_metal_boot_harvest_bus_devices(void)
                                                .bus    = PM_METAL_IO_BUS_PLATFORM };
 
     (void)pm_metal_io_dt_add(&LoNode);
-    (void)pm_metal_net_virtio_detect();
-    (void)pm_metal_net_bge_detect();
+    (void)pm_metal_net_ip_virtio_detect();
+    (void)pm_metal_net_ip_bge_detect();
   }
 
   if (pm_metal_audio_virtio_probe() != 0 && pm_metal_audio_ac97_probe() != 0) {

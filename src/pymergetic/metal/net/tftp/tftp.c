@@ -6,10 +6,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <pymergetic/metal/dev/net/tftp.h>
-#include <pymergetic/metal/dev/net/net.h>
-#include <pymergetic/metal/dev/net/net_cfg.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
+#include <pymergetic/metal/net/tftp/tftp.h>
+#include <pymergetic/metal/net/ip/ip.h>
+#include <pymergetic/metal/net/ip/ip_cfg.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
 #include <pymergetic/metal/runtime/async/async.h>
 #include <pymergetic/metal/util/ip.h>
 #include <runtime/time/time.h>
@@ -253,9 +253,9 @@ static pm_metal_status_t TftpStep(pm_metal_async_handle_t self_h)
     t->server_port  = TFTP_PORT;
 
     if (t->host[0] == '\0') {
-      char boot[PM_METAL_NET_BOOT_FILE_MAX];
+      char boot[PM_METAL_NET_IP_BOOT_FILE_MAX];
 
-      if (pm_metal_net_if_boot_get(NULL, t->host, sizeof(t->host), boot, sizeof(boot)) != 0 ||
+      if (pm_metal_net_ip_if_boot_get(NULL, t->host, sizeof(t->host), boot, sizeof(boot)) != 0 ||
           t->host[0] == '\0') {
         t->status = 2;
         t->step   = TFTP_STEP_DONE;
@@ -276,7 +276,7 @@ static pm_metal_status_t TftpStep(pm_metal_async_handle_t self_h)
     {
       uint32_t hip;
 
-      if (pm_metal_net_resolve_ip4(t->host, &hip) == 0) {
+      if (pm_metal_net_ip_resolve_ip4(t->host, &hip) == 0) {
         IP_ADDR4(
           &t->server, (hip >> 24) & 0xffu, (hip >> 16) & 0xffu, (hip >> 8) & 0xffu, hip & 0xffu);
         t->step = TFTP_STEP_OPEN;
@@ -284,7 +284,7 @@ static pm_metal_status_t TftpStep(pm_metal_async_handle_t self_h)
       }
     }
 
-    t->aw = pm_metal_net_dns(t->host);
+    t->aw = pm_metal_net_ip_dns(t->host);
     if (t->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       t->status = 4;
       t->step   = TFTP_STEP_DONE;
@@ -305,7 +305,7 @@ static pm_metal_status_t TftpStep(pm_metal_async_handle_t self_h)
       char       ipstr[64];
       ip4_addr_t a4;
 
-      if (pm_metal_net_dns_last_ntoa(ipstr, sizeof(ipstr)) != 0 || ip4addr_aton(ipstr, &a4) == 0) {
+      if (pm_metal_net_ip_dns_last_ntoa(ipstr, sizeof(ipstr)) != 0 || ip4addr_aton(ipstr, &a4) == 0) {
         t->status = 4;
         t->step   = TFTP_STEP_DONE;
         break;
@@ -350,7 +350,7 @@ static pm_metal_status_t TftpStep(pm_metal_async_handle_t self_h)
     break;
 
   case TFTP_STEP_WAIT:
-    pm_metal_net_poll();
+    pm_metal_net_ip_poll();
     if (t->have_pkt) {
       t->have_pkt = 0;
       if (TftpHandlePkt(t) != 0) {

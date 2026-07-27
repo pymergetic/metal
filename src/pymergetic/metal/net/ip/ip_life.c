@@ -7,14 +7,14 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <pymergetic/metal/dev/net/net.h>
-#include <pymergetic/metal/dev/net/net_life.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
-#include <pymergetic/metal/dev/net/net_cfg.h>
-#include <pymergetic/metal/dev/net/asgi.h>
-#include <pymergetic/metal/dev/net/http.h>
-#include <pymergetic/metal/dev/net/ntp.h>
-#include <pymergetic/metal/dev/net/ssh.h>
+#include <pymergetic/metal/net/ip/ip.h>
+#include <pymergetic/metal/net/ip/ip_life.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
+#include <pymergetic/metal/net/ip/ip_cfg.h>
+#include <pymergetic/metal/net/asgi/asgi.h>
+#include <pymergetic/metal/net/http/http.h>
+#include <pymergetic/metal/net/ntp/ntp.h>
+#include <pymergetic/metal/net/ssh/ssh.h>
 #include <pymergetic/metal/guest/pkg/pkg.h>
 #include <pymergetic/metal/fs/esp/esp.h>
 #include <pymergetic/metal/log/log.h>
@@ -74,12 +74,12 @@ static int32_t LifeHasLease(void)
 {
   uint32_t             n;
   uint32_t             i;
-  pm_metal_net_ifcfg_t cfg;
+  pm_metal_net_ip_ifcfg_t cfg;
   uint32_t             ip;
 
-  n = pm_metal_net_if_count();
+  n = pm_metal_net_ip_if_count();
   for (i = 0; i < n; i++) {
-    if (pm_metal_net_if_get_index(i, &cfg) != 0) {
+    if (pm_metal_net_ip_if_get_index(i, &cfg) != 0) {
       continue;
     }
 
@@ -144,16 +144,16 @@ static int32_t LifeBuildHttpUrl(char *out, uintptr_t cap, const char *host, cons
 }
 
 /*
- * Shared with the public pm_metal_net_seed_host() guest/host accessor
+ * Shared with the public pm_metal_net_ip_seed_host() guest/host accessor
  * (net.h) -- keep the resolution in one place so a diagnostic caller and
  * the actual HTTP seed fetch below always agree on "the host".
  */
-int32_t pm_metal_net_seed_host(char *out, uint32_t out_cap)
+int32_t pm_metal_net_ip_seed_host(char *out, uint32_t out_cap)
 {
-  char                 boot[PM_METAL_NET_BOOT_FILE_MAX];
+  char                 boot[PM_METAL_NET_IP_BOOT_FILE_MAX];
   uint32_t             pkg_ip;
   uint32_t             gw;
-  pm_metal_net_ifcfg_t cfg;
+  pm_metal_net_ip_ifcfg_t cfg;
 
   if (out == NULL || out_cap == 0u) {
     return -1;
@@ -161,13 +161,13 @@ int32_t pm_metal_net_seed_host(char *out, uint32_t out_cap)
 
   out[0] = '\0';
   /* 1) DHCP next-server / siaddr (PXE HTTP mirror). */
-  if (pm_metal_net_if_boot_get(NULL, out, out_cap, boot, sizeof(boot)) == 0 && out[0] != '\0' &&
+  if (pm_metal_net_ip_if_boot_get(NULL, out, out_cap, boot, sizeof(boot)) == 0 && out[0] != '\0' &&
       pm_metal_util_ip4_parse(out, &pkg_ip) == 0 && !pm_metal_util_ip4_is_unspecified(pkg_ip)) {
     return 0;
   }
 
   /* 2) Default gateway — common when next-server unset but :8080 is the router/dev box. */
-  if (pm_metal_net_if_get(&cfg) == 0 && pm_metal_util_ip4_parse(cfg.gw, &gw) == 0 &&
+  if (pm_metal_net_ip_if_get(&cfg) == 0 && pm_metal_util_ip4_parse(cfg.gw, &gw) == 0 &&
       !pm_metal_util_ip4_is_unspecified(gw) && pm_metal_util_ip4_format(gw, out, out_cap) > 0) {
     return 0;
   }
@@ -178,7 +178,7 @@ int32_t pm_metal_net_seed_host(char *out, uint32_t out_cap)
 
 static void LifeResolvePkgHost(life_t *s)
 {
-  (void)pm_metal_net_seed_host(s->pkg_host, sizeof(s->pkg_host));
+  (void)pm_metal_net_ip_seed_host(s->pkg_host, sizeof(s->pkg_host));
 }
 
 static void LifeFreePkgBuf(life_t *s)
@@ -213,7 +213,7 @@ static pm_metal_status_t LifeStep(pm_metal_async_handle_t self_h)
   for (;;) {
     switch (s->step) {
     case LIFE_DOWN:
-      pm_metal_net_poll();
+      pm_metal_net_ip_poll();
       if (!LifeHasLease()) {
         s->logged_up   = 0;
         s->lease_up_us = 0;
@@ -335,9 +335,9 @@ static pm_metal_status_t LifeStep(pm_metal_async_handle_t self_h)
 
       s->ntp_host[0] = '\0';
       if (s->ntp_i == 0u) {
-        pm_metal_net_ifcfg_t cfg;
+        pm_metal_net_ip_ifcfg_t cfg;
 
-        if (pm_metal_net_if_get(&cfg) == 0 && cfg.ntp[0] != '\0') {
+        if (pm_metal_net_ip_if_get(&cfg) == 0 && cfg.ntp[0] != '\0') {
           snprintf(s->ntp_host, sizeof(s->ntp_host), "%s", cfg.ntp);
         }
       } else {
@@ -396,7 +396,7 @@ static pm_metal_status_t LifeStep(pm_metal_async_handle_t self_h)
       uint64_t now;
       uint64_t period;
 
-      pm_metal_net_poll();
+      pm_metal_net_ip_poll();
       if (!LifeHasLease()) {
         s->step = LIFE_DOWN;
         continue;
@@ -432,7 +432,7 @@ static pm_metal_status_t LifeStep(pm_metal_async_handle_t self_h)
   }
 }
 
-int pm_metal_net_life_seed_ensure(const char *name)
+int pm_metal_net_ip_life_seed_ensure(const char *name)
 {
   uint64_t deadline;
 
@@ -462,7 +462,7 @@ int pm_metal_net_life_seed_ensure(const char *name)
     char host[PM_METAL_NET_TFTP_HOST_MAX];
     char msg[128];
 
-    (void)pm_metal_net_seed_host(host, sizeof(host));
+    (void)pm_metal_net_ip_seed_host(host, sizeof(host));
     snprintf(msg, sizeof(msg), "metal-net: pkg ensure '%s' -> http://%s:8080/ (run/tab)", name, host);
     LifeLog(msg);
   }
@@ -480,7 +480,7 @@ int pm_metal_net_life_seed_ensure(const char *name)
       break;
     }
 
-    pm_metal_net_poll();
+    pm_metal_net_ip_poll();
     pm_metal_run_poll_all();
   }
 
@@ -488,7 +488,7 @@ int pm_metal_net_life_seed_ensure(const char *name)
   return pm_metal_pkg_ready(name) ? 0 : -1;
 }
 
-int pm_metal_net_life_start(void)
+int pm_metal_net_ip_life_start(void)
 {
   pm_metal_async_handle_t h;
   pm_metal_async_handle_t th;

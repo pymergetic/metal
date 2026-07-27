@@ -8,7 +8,7 @@
 #include <mbedtls/base64.h>
 #include <mbedtls/sha1.h>
 
-#include <pymergetic/metal/dev/net/http_parse.h>
+#include <pymergetic/metal/net/http/http_parse.h>
 
 static const char kWsGuid[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 

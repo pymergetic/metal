@@ -10,9 +10,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <pymergetic/metal/dev/net/net.h>
-#include <pymergetic/metal/dev/net/tls.h>
-#include <pymergetic/metal/dev/net/tls_conn.h>
+#include <pymergetic/metal/net/ip/ip.h>
+#include <pymergetic/metal/net/tls/tls.h>
+#include <pymergetic/metal/net/tls/tls_conn.h>
 #include <pymergetic/metal/runtime/async/async.h>
 
 #include <stddef.h>
@@ -23,10 +23,10 @@
 
 typedef struct {
   int32_t             used;
-  pm_metal_net_sock_h sock;
-  pm_metal_tls_h      tls_h;
+  pm_metal_net_ip_sock_h sock;
+  pm_metal_net_tls_h      tls_h;
   int32_t             use_tls;
-  pm_metal_tls_wire_t wire;
+  pm_metal_net_tls_wire_t wire;
   uint8_t             rbuf[PM_METAL_TLS_CONN_IO_MAX];
   uint32_t            rbuf_len;
   uint8_t             wbuf[PM_METAL_TLS_CONN_IO_MAX];
@@ -67,7 +67,7 @@ typedef struct {
   uint32_t                want;
 } tls_conn_op_t;
 
-static tls_conn_slot_t *TlsConnSlotFromHandle(pm_metal_tls_conn_h ch)
+static tls_conn_slot_t *TlsConnSlotFromHandle(pm_metal_net_tls_conn_h ch)
 {
   uint32_t idx;
 
@@ -90,13 +90,13 @@ static void TlsConnTeardownSlot(tls_conn_slot_t *s)
     s->tls_h = PM_METAL_TLS_INVALID;
   }
 
-  if (s->sock != PM_METAL_NET_SOCK_INVALID) {
-    pm_metal_net_close(s->sock);
-    s->sock = PM_METAL_NET_SOCK_INVALID;
+  if (s->sock != PM_METAL_NET_IP_SOCK_INVALID) {
+    pm_metal_net_ip_close(s->sock);
+    s->sock = PM_METAL_NET_IP_SOCK_INVALID;
   }
 }
 
-pm_metal_tls_conn_h pm_metal_tls_conn_open(void)
+pm_metal_net_tls_conn_h pm_metal_net_tls_conn_open(void)
 {
   uint32_t i;
 
@@ -104,16 +104,16 @@ pm_metal_tls_conn_h pm_metal_tls_conn_open(void)
     if (!mTlsConnSlots[i].used) {
       memset(&mTlsConnSlots[i], 0, sizeof(mTlsConnSlots[i]));
       mTlsConnSlots[i].used  = 1;
-      mTlsConnSlots[i].sock  = PM_METAL_NET_SOCK_INVALID;
+      mTlsConnSlots[i].sock  = PM_METAL_NET_IP_SOCK_INVALID;
       mTlsConnSlots[i].tls_h = PM_METAL_TLS_INVALID;
-      return (pm_metal_tls_conn_h)(i + 1u);
+      return (pm_metal_net_tls_conn_h)(i + 1u);
     }
   }
 
   return PM_METAL_TLS_CONN_INVALID;
 }
 
-void pm_metal_tls_conn_close(pm_metal_tls_conn_h ch)
+void pm_metal_net_tls_conn_close(pm_metal_net_tls_conn_h ch)
 {
   tls_conn_slot_t *s = TlsConnSlotFromHandle(ch);
 
@@ -125,7 +125,7 @@ void pm_metal_tls_conn_close(pm_metal_tls_conn_h ch)
   memset(s, 0, sizeof(*s));
 }
 
-const uint8_t *pm_metal_tls_conn_read_buf(pm_metal_tls_conn_h ch)
+const uint8_t *pm_metal_net_tls_conn_read_buf(pm_metal_net_tls_conn_h ch)
 {
   tls_conn_slot_t *s = TlsConnSlotFromHandle(ch);
 
@@ -181,7 +181,7 @@ static pm_metal_status_t TlsConnOpStep(pm_metal_async_handle_t self_h)
     return PM_METAL_PENDING;
 
   case TLS_CONN_ST_DNS:
-    op->aw = pm_metal_net_dns(op->host);
+    op->aw = pm_metal_net_ip_dns(op->host);
     if (op->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       op->step = TLS_CONN_ST_FAIL;
       return PM_METAL_PENDING;
@@ -201,10 +201,10 @@ static pm_metal_status_t TlsConnOpStep(pm_metal_async_handle_t self_h)
 
   case TLS_CONN_ST_SOCK: {
     uint32_t domain =
-      (strstr(op->host, ":") != NULL) ? PM_METAL_NET_AF_INET6 : PM_METAL_NET_AF_INET;
+      (strstr(op->host, ":") != NULL) ? PM_METAL_NET_IP_AF_INET6 : PM_METAL_NET_IP_AF_INET;
 
-    s->sock = pm_metal_net_socket(domain, PM_METAL_NET_SOCK_STREAM);
-    if (s->sock == PM_METAL_NET_SOCK_INVALID) {
+    s->sock = pm_metal_net_ip_socket(domain, PM_METAL_NET_IP_SOCK_STREAM);
+    if (s->sock == PM_METAL_NET_IP_SOCK_INVALID) {
       op->step = TLS_CONN_ST_FAIL;
       return PM_METAL_PENDING;
     }
@@ -214,7 +214,7 @@ static pm_metal_status_t TlsConnOpStep(pm_metal_async_handle_t self_h)
   }
 
   case TLS_CONN_ST_CONNECT:
-    op->aw = pm_metal_net_connect(s->sock, op->host, op->port);
+    op->aw = pm_metal_net_ip_connect(s->sock, op->host, op->port);
     if (op->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       op->step = TLS_CONN_ST_FAIL;
       return PM_METAL_PENDING;
@@ -258,8 +258,8 @@ static pm_metal_status_t TlsConnOpStep(pm_metal_async_handle_t self_h)
 
     /* WANT_READ or WANT_WRITE: same wire-pump either way, matching http.c's
      * own HTTP_STEP_TLS (the send side of a handshake is a direct blocking
-     * pm_metal_net_send from tls.c's bio callback, never awaited here). */
-    op->aw = pm_metal_net_recv(s->sock, s->wire.buf, sizeof(s->wire.buf));
+     * pm_metal_net_ip_send from tls.c's bio callback, never awaited here). */
+    op->aw = pm_metal_net_ip_recv(s->sock, s->wire.buf, sizeof(s->wire.buf));
     if (op->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       op->step = TLS_CONN_ST_FAIL;
       return PM_METAL_PENDING;
@@ -298,7 +298,7 @@ static pm_metal_status_t TlsConnOpStep(pm_metal_async_handle_t self_h)
         }
 
         if (e == PM_METAL_TLS_WANT_READ) {
-          op->aw = pm_metal_net_recv(s->sock, s->wire.buf, sizeof(s->wire.buf));
+          op->aw = pm_metal_net_ip_recv(s->sock, s->wire.buf, sizeof(s->wire.buf));
           if (op->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
             op->step = TLS_CONN_ST_FAIL;
             return PM_METAL_PENDING;
@@ -318,7 +318,7 @@ static pm_metal_status_t TlsConnOpStep(pm_metal_async_handle_t self_h)
 
       {
         uint32_t nsend =
-          pm_metal_net_send(s->sock, s->wbuf + s->wbuf_off, s->wbuf_len - s->wbuf_off);
+          pm_metal_net_ip_send(s->sock, s->wbuf + s->wbuf_off, s->wbuf_len - s->wbuf_off);
 
         if (nsend > 0) {
           s->wbuf_off += nsend;
@@ -347,7 +347,7 @@ static pm_metal_status_t TlsConnOpStep(pm_metal_async_handle_t self_h)
       }
 
       if (e == PM_METAL_TLS_WANT_READ || e == PM_METAL_TLS_WANT_WRITE) {
-        op->aw = pm_metal_net_recv(s->sock, s->wire.buf, sizeof(s->wire.buf));
+        op->aw = pm_metal_net_ip_recv(s->sock, s->wire.buf, sizeof(s->wire.buf));
         if (op->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
           op->step = TLS_CONN_ST_FAIL;
           return PM_METAL_PENDING;
@@ -361,7 +361,7 @@ static pm_metal_status_t TlsConnOpStep(pm_metal_async_handle_t self_h)
       return PM_METAL_PENDING;
     }
 
-    op->aw = pm_metal_net_recv(s->sock, s->rbuf, op->want);
+    op->aw = pm_metal_net_ip_recv(s->sock, s->rbuf, op->want);
     if (op->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       op->step = TLS_CONN_ST_FAIL;
       return PM_METAL_PENDING;
@@ -422,7 +422,7 @@ static pm_metal_async_handle_t TlsConnOpStart(tls_conn_slot_t *s, tls_conn_op_ki
   return ah;
 }
 
-pm_metal_async_handle_t pm_metal_tls_conn_connect(pm_metal_tls_conn_h ch,
+pm_metal_async_handle_t pm_metal_net_tls_conn_connect(pm_metal_net_tls_conn_h ch,
                                                   const char         *host,
                                                   uint16_t            port,
                                                   int32_t             use_tls)
@@ -447,7 +447,7 @@ pm_metal_async_handle_t pm_metal_tls_conn_connect(pm_metal_tls_conn_h ch,
   return ah;
 }
 
-pm_metal_async_handle_t pm_metal_tls_conn_write(pm_metal_tls_conn_h ch,
+pm_metal_async_handle_t pm_metal_net_tls_conn_write(pm_metal_net_tls_conn_h ch,
                                                 const void         *data,
                                                 uint32_t            len)
 {
@@ -470,7 +470,7 @@ pm_metal_async_handle_t pm_metal_tls_conn_write(pm_metal_tls_conn_h ch,
   return ah;
 }
 
-pm_metal_async_handle_t pm_metal_tls_conn_read(pm_metal_tls_conn_h ch, uint32_t want)
+pm_metal_async_handle_t pm_metal_net_tls_conn_read(pm_metal_net_tls_conn_h ch, uint32_t want)
 {
   tls_conn_slot_t        *s = TlsConnSlotFromHandle(ch);
   tls_conn_op_t          *op;

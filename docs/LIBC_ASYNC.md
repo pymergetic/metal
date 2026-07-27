@@ -38,7 +38,7 @@ own sibling repo via `METAL_EXT_APPS`; see that repo's `docs/DOOM_ASYNC.md`.
 | WASI as product ABI | **retire** | Scaffold only; no new guest deps on wasi-libc I/O |
 | Input | **sync poll** v1 (`poll_key` / `poll_key_event`) | Optional async “wait for key” later, not required now |
 | Gfx / UI / shell log | **sync** | Device kick + CPU; `gfx_present` sync. Optional `async_present` is an eager fence |
-| Net bind-if | **sync** | `pm_metal_net_bind_if` before connect/listen |
+| Net bind-if | **sync** | `pm_metal_net_ip_bind_if` before connect/listen |
 | DHCPv6 | host config | Stateless (lwIP) + Metal stateful client; not a guest libc surface |
 
 ---
@@ -53,7 +53,7 @@ own sibling repo via `METAL_EXT_APPS`; see that repo's `docs/DOOM_ASYNC.md`.
 | `pm_metal_input_poll_key` / `pm_metal_input_poll_key_event` | **sync poll** | Metal HID keycodes; guest focus via tab |
 | `pm_metal_gfx_*` | **sync** | |
 | `pm_metal_shell_*` / `pm_metal_ui_*` | **sync** | Host shell cmds via linker-section registry (`PM_METAL_SHELL_CMD*`) |
-| `pm_metal_net_bind_if` | **sync** | Bind sock to `ethN` before connect/listen |
+| `pm_metal_net_ip_bind_if` | **sync** | Bind sock to `ethN` before connect/listen |
 | host TLSF / `malloc` / `memcpy` / `snprintf` | **sync** | Freestanding kit |
 
 ---
@@ -92,8 +92,8 @@ own sibling repo via `METAL_EXT_APPS`; see that repo's `docs/DOOM_ASYNC.md`.
 | `poll` / `select` / `epoll` | **omit** | |
 | `fcntl` / `ioctl` zoo | **omit** | |
 | pipes / tty / stdio | **stream** class | See `docs/IO.md` — raw PTY first; cooked omit until needed |
-| `socket` / `connect` / `send` / `recv` | **async** (+ sync façade `send`, `bind_if`) | `pm_metal_net_*`; await → `pm_metal_net_result` |
-| `getaddrinfo` | **async** | `pm_metal_net_dns` → await → `pm_metal_net_result` (1/0) + `pm_metal_net_dns_last_ntoa` (address string) |
+| `socket` / `connect` / `send` / `recv` | **async** (+ sync façade `send`, `bind_if`) | `pm_metal_net_*`; await → `pm_metal_net_ip_result` |
+| `getaddrinfo` | **async** | `pm_metal_net_ip_dns` → await → `pm_metal_net_ip_result` (1/0) + `pm_metal_net_ip_dns_last_ntoa` (address string) |
 | ICMP ping | **async** | `pm_metal_net_ping` → await → `pm_metal_net_ping_rtt_us` (prefer) / `rtt_ms` / `last_err` |
 | SNTP | **async** | `pm_metal_net_ntp_sync` → await → `pm_metal_net_ntp_status` / `pm_metal_net_ntp_last_unix_ms` (sets wall on success) |
 | `http get` (HTTP/HTTPS) | **async** | `pm_metal_net_http_get` → await → `pm_metal_net_http_status` / `pm_metal_net_http_body_len` (TLS host-only under http) |

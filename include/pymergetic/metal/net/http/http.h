@@ -5,10 +5,10 @@
  *   pm_metal_net_http_status(h)   — HTTP status (200, …), 0 on transport fail
  *   pm_metal_net_http_body_len(h) — response body bytes written to dest
  *
- * impl: common — src/pymergetic/metal/dev/net/http.c
+ * impl: common — src/pymergetic/metal/net/http/http.c
  */
-#ifndef PYMERGETIC_METAL_DEV_NET_HTTP_H_
-#define PYMERGETIC_METAL_DEV_NET_HTTP_H_
+#ifndef PYMERGETIC_METAL_NET_HTTP_H_
+#define PYMERGETIC_METAL_NET_HTTP_H_
 
 #include <stdint.h>
 
@@ -55,4 +55,4 @@ int32_t pm_metal_net_http_native_register(void);
 }
 #endif
 
-#endif /* PYMERGETIC_METAL_DEV_NET_HTTP_H_ */
+#endif /* PYMERGETIC_METAL_NET_HTTP_H_ */

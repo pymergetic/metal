@@ -15,9 +15,9 @@
 #include <pymergetic/metal/dev/input/input.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
 #include <pymergetic/metal/dev/stream/stream.h>
-#include <pymergetic/metal/dev/net/net.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
-#include <pymergetic/metal/dev/net/ping.h>
+#include <pymergetic/metal/net/ip/ip.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
+#include <pymergetic/metal/net/ping/ping.h>
 #include <pymergetic/metal/dev/audio/audio_ops.h>
 #include <pymergetic/metal/dev/console/console.h>
 #include <pymergetic/metal/boot/boot.h>
@@ -368,7 +368,7 @@ static void MetalShellJobFinish(int32_t st)
     } else {
       char ip[64];
 
-      if (pm_metal_net_dns_last_ntoa(ip, sizeof(ip)) != 0) {
+      if (pm_metal_net_ip_dns_last_ntoa(ip, sizeof(ip)) != 0) {
         pm_metal_shell_out("nslookup: no address");
       } else {
         snprintf(msg, sizeof(msg), "%s -> %s", mJob.detail, ip);
@@ -1114,7 +1114,7 @@ int pm_metal_shell_poll(void)
   /* Drain HW into rings before shell/async consumers (port-owned). */
   pm_metal_input_poll();
 
-  pm_metal_net_poll();
+  pm_metal_net_ip_poll();
   pm_metal_audio_poll();
   pm_metal_console_poll();
 

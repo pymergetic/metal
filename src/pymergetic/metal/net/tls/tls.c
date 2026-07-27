@@ -5,10 +5,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <pymergetic/metal/dev/net/tls.h>
-#include <pymergetic/metal/dev/net/net.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
-#include <pymergetic/metal/dev/net/mbedtls_metal_config.h>
+#include <pymergetic/metal/net/tls/tls.h>
+#include <pymergetic/metal/net/ip/ip.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
+#include <pymergetic/metal/net/tls/mbedtls_metal_config.h>
 #include <pymergetic/metal/dev/random/random.h>
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
@@ -33,7 +33,7 @@ typedef struct {
   int32_t                    valid;
   int32_t                    loaded;
   uint32_t                   refs;
-  pm_metal_tls_client_auth_t client_auth;
+  pm_metal_net_tls_client_auth_t client_auth;
   mbedtls_x509_crt           cert;
   mbedtls_x509_crt           client_ca;
   mbedtls_pk_context         key;
@@ -43,10 +43,10 @@ typedef struct {
   int32_t              valid;
   int32_t              server;
   int32_t              initialized;
-  pm_metal_net_sock_h  sock;
-  pm_metal_tls_wire_t *wire;
+  pm_metal_net_ip_sock_h  sock;
+  pm_metal_net_tls_wire_t *wire;
   char                 sni[TLS_SNI_MAX];
-  pm_metal_tls_creds_h creds_h;
+  pm_metal_net_tls_creds_h creds_h;
   mbedtls_ssl_context  ssl;
   mbedtls_ssl_config   conf;
   int32_t              ready;
@@ -81,7 +81,7 @@ static int32_t TlsGlobalInit(void)
     return 0;
   }
 
-  pm_metal_mbedtls_runtime_init();
+  pm_metal_net_tls_mbedtls_runtime_init();
   mbedtls_entropy_init(&mEntropy);
   mbedtls_ctr_drbg_init(&mCtrDrbg);
   e =
@@ -110,7 +110,7 @@ static int32_t TlsSockSend(void *ctx, const uint8_t *buf, size_t len)
     return MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
   }
 
-  n = pm_metal_net_send(t->sock, buf, (uint32_t)len);
+  n = pm_metal_net_ip_send(t->sock, buf, (uint32_t)len);
   if (n == 0) {
     return MBEDTLS_ERR_SSL_WANT_WRITE;
   }
@@ -146,7 +146,7 @@ static int32_t TlsSockRecv(void *ctx, uint8_t *buf, size_t len)
   return MBEDTLS_ERR_SSL_WANT_READ;
 }
 
-static tls_sess_t *TlsFromHandle(pm_metal_tls_h h)
+static tls_sess_t *TlsFromHandle(pm_metal_net_tls_h h)
 {
   if (h == 0 || h > TLS_SESS_MAX) {
     return NULL;
@@ -159,7 +159,7 @@ static tls_sess_t *TlsFromHandle(pm_metal_tls_h h)
   return &mTls[h];
 }
 
-static tls_creds_t *TlsCredsFromHandle(pm_metal_tls_creds_h h)
+static tls_creds_t *TlsCredsFromHandle(pm_metal_net_tls_creds_h h)
 {
   if (h == PM_METAL_TLS_CREDS_INVALID || h > TLS_CREDS_MAX || !mTlsCreds[h].valid) {
     return NULL;
@@ -245,7 +245,7 @@ static void TlsCredsReset(tls_creds_t *creds)
   creds->client_auth = PM_METAL_TLS_CLIENT_AUTH_NONE;
 }
 
-void pm_metal_net_tls_wire_reset(pm_metal_tls_wire_t *wire)
+void pm_metal_net_tls_wire_reset(pm_metal_net_tls_wire_t *wire)
 {
   if (wire != NULL) {
     wire->len = 0;
@@ -253,7 +253,7 @@ void pm_metal_net_tls_wire_reset(pm_metal_tls_wire_t *wire)
   }
 }
 
-void pm_metal_net_tls_wire_feed(pm_metal_tls_wire_t *wire, const void *data, uint32_t len)
+void pm_metal_net_tls_wire_feed(pm_metal_net_tls_wire_t *wire, const void *data, uint32_t len)
 {
   if (wire == NULL || data == NULL || len == 0) {
     return;
@@ -270,7 +270,7 @@ void pm_metal_net_tls_wire_feed(pm_metal_tls_wire_t *wire, const void *data, uin
   wire->off = 0;
 }
 
-pm_metal_tls_creds_h pm_metal_net_tls_creds_open(void)
+pm_metal_net_tls_creds_h pm_metal_net_tls_creds_open(void)
 {
   uint32_t i;
 
@@ -288,20 +288,20 @@ pm_metal_tls_creds_h pm_metal_net_tls_creds_open(void)
     mbedtls_x509_crt_init(&mTlsCreds[i].client_ca);
     mbedtls_pk_init(&mTlsCreds[i].key);
     mTlsCreds[i].valid = 1;
-    return (pm_metal_tls_creds_h)i;
+    return (pm_metal_net_tls_creds_h)i;
   }
 
   return PM_METAL_TLS_CREDS_INVALID;
 }
 
-int32_t pm_metal_net_tls_creds_load_buffers(pm_metal_tls_creds_h       h,
+int32_t pm_metal_net_tls_creds_load_buffers(pm_metal_net_tls_creds_h       h,
                                             const void                *cert,
                                             uint32_t                   cert_len,
                                             const void                *key,
                                             uint32_t                   key_len,
                                             const void                *client_ca,
                                             uint32_t                   client_ca_len,
-                                            pm_metal_tls_client_auth_t client_auth)
+                                            pm_metal_net_tls_client_auth_t client_auth)
 {
   tls_creds_t *creds;
 
@@ -347,11 +347,11 @@ static int32_t TlsReadFile(const char *path, uint8_t **out, uint32_t *out_len)
   return 0;
 }
 
-int32_t pm_metal_net_tls_creds_load_paths(pm_metal_tls_creds_h       h,
+int32_t pm_metal_net_tls_creds_load_paths(pm_metal_net_tls_creds_h       h,
                                           const char                *cert_path,
                                           const char                *key_path,
                                           const char                *client_ca_path,
-                                          pm_metal_tls_client_auth_t client_auth)
+                                          pm_metal_net_tls_client_auth_t client_auth)
 {
   uint8_t *cert;
   uint8_t *key;
@@ -384,7 +384,7 @@ int32_t pm_metal_net_tls_creds_load_paths(pm_metal_tls_creds_h       h,
   return rc;
 }
 
-int32_t pm_metal_net_tls_creds_close(pm_metal_tls_creds_h h)
+int32_t pm_metal_net_tls_creds_close(pm_metal_net_tls_creds_h h)
 {
   tls_creds_t *creds;
 
@@ -398,7 +398,7 @@ int32_t pm_metal_net_tls_creds_close(pm_metal_tls_creds_h h)
   return 0;
 }
 
-pm_metal_tls_h pm_metal_net_tls_open(const char *sni_host)
+pm_metal_net_tls_h pm_metal_net_tls_open(const char *sni_host)
 {
   uint32_t i;
 
@@ -417,15 +417,15 @@ pm_metal_tls_h pm_metal_net_tls_open(const char *sni_host)
 
     memset(&mTls[i], 0, sizeof(mTls[i]));
     mTls[i].valid = 1;
-    mTls[i].sock  = PM_METAL_NET_SOCK_INVALID;
+    mTls[i].sock  = PM_METAL_NET_IP_SOCK_INVALID;
     snprintf(mTls[i].sni, sizeof(mTls[i].sni), "%s", sni_host);
-    return (pm_metal_tls_h)i;
+    return (pm_metal_net_tls_h)i;
   }
 
   return PM_METAL_TLS_INVALID;
 }
 
-pm_metal_tls_h pm_metal_net_tls_open_server(pm_metal_tls_creds_h creds_h)
+pm_metal_net_tls_h pm_metal_net_tls_open_server(pm_metal_net_tls_creds_h creds_h)
 {
   tls_creds_t *creds;
   uint32_t     i;
@@ -443,10 +443,10 @@ pm_metal_tls_h pm_metal_net_tls_open_server(pm_metal_tls_creds_h creds_h)
     memset(&mTls[i], 0, sizeof(mTls[i]));
     mTls[i].valid   = 1;
     mTls[i].server  = 1;
-    mTls[i].sock    = PM_METAL_NET_SOCK_INVALID;
+    mTls[i].sock    = PM_METAL_NET_IP_SOCK_INVALID;
     mTls[i].creds_h = creds_h;
     creds->refs++;
-    return (pm_metal_tls_h)i;
+    return (pm_metal_net_tls_h)i;
   }
 
   return PM_METAL_TLS_INVALID;
@@ -467,7 +467,7 @@ static void TlsTeardown(tls_sess_t *t)
 
   t->done = 0;
   t->wire = NULL;
-  t->sock = PM_METAL_NET_SOCK_INVALID;
+  t->sock = PM_METAL_NET_IP_SOCK_INVALID;
 }
 
 static void TlsReleaseCreds(tls_sess_t *t)
@@ -486,7 +486,7 @@ static void TlsReleaseCreds(tls_sess_t *t)
   t->creds_h = PM_METAL_TLS_CREDS_INVALID;
 }
 
-void pm_metal_net_tls_close(pm_metal_tls_h h)
+void pm_metal_net_tls_close(pm_metal_net_tls_h h)
 {
   tls_sess_t *t;
 
@@ -500,14 +500,14 @@ void pm_metal_net_tls_close(pm_metal_tls_h h)
   t->valid = 0;
 }
 
-static int32_t TlsBind(pm_metal_tls_h h, pm_metal_net_sock_h sock, pm_metal_tls_wire_t *wire)
+static int32_t TlsBind(pm_metal_net_tls_h h, pm_metal_net_ip_sock_h sock, pm_metal_net_tls_wire_t *wire)
 {
   tls_sess_t  *t;
   tls_creds_t *creds;
   int32_t      e;
 
   t = TlsFromHandle(h);
-  if (t == NULL || sock == PM_METAL_NET_SOCK_INVALID || wire == NULL) {
+  if (t == NULL || sock == PM_METAL_NET_IP_SOCK_INVALID || wire == NULL) {
     return -1;
   }
 
@@ -578,23 +578,23 @@ static int32_t TlsBind(pm_metal_tls_h h, pm_metal_net_sock_h sock, pm_metal_tls_
   return 0;
 }
 
-int32_t pm_metal_net_tls_bind(pm_metal_tls_h h, pm_metal_net_sock_h sock, pm_metal_tls_wire_t *wire)
+int32_t pm_metal_net_tls_bind(pm_metal_net_tls_h h, pm_metal_net_ip_sock_h sock, pm_metal_net_tls_wire_t *wire)
 {
   tls_sess_t *t = TlsFromHandle(h);
 
   return t == NULL || t->server ? -1 : TlsBind(h, sock, wire);
 }
 
-int32_t pm_metal_net_tls_bind_server(pm_metal_tls_h       h,
-                                     pm_metal_net_sock_h  sock,
-                                     pm_metal_tls_wire_t *wire)
+int32_t pm_metal_net_tls_bind_server(pm_metal_net_tls_h       h,
+                                     pm_metal_net_ip_sock_h  sock,
+                                     pm_metal_net_tls_wire_t *wire)
 {
   tls_sess_t *t = TlsFromHandle(h);
 
   return t == NULL || !t->server ? -1 : TlsBind(h, sock, wire);
 }
 
-int32_t pm_metal_net_tls_handshake_step(pm_metal_tls_h h)
+int32_t pm_metal_net_tls_handshake_step(pm_metal_net_tls_h h)
 {
   tls_sess_t *t;
   int32_t     e;
@@ -617,7 +617,7 @@ int32_t pm_metal_net_tls_handshake_step(pm_metal_tls_h h)
   return -1;
 }
 
-int32_t pm_metal_net_tls_handshake_done(pm_metal_tls_h h)
+int32_t pm_metal_net_tls_handshake_done(pm_metal_net_tls_h h)
 {
   tls_sess_t *t;
 
@@ -629,7 +629,7 @@ int32_t pm_metal_net_tls_handshake_done(pm_metal_tls_h h)
   return t->done;
 }
 
-int32_t pm_metal_net_tls_read(pm_metal_tls_h h, void *buf, uint32_t cap)
+int32_t pm_metal_net_tls_read(pm_metal_net_tls_h h, void *buf, uint32_t cap)
 {
   tls_sess_t *t;
 
@@ -641,7 +641,7 @@ int32_t pm_metal_net_tls_read(pm_metal_tls_h h, void *buf, uint32_t cap)
   return mbedtls_ssl_read(&t->ssl, buf, cap);
 }
 
-int32_t pm_metal_net_tls_write(pm_metal_tls_h h, const void *buf, uint32_t len)
+int32_t pm_metal_net_tls_write(pm_metal_net_tls_h h, const void *buf, uint32_t len)
 {
   tls_sess_t *t;
   int32_t     e;
@@ -667,7 +667,7 @@ int32_t pm_metal_net_tls_write(pm_metal_tls_h h, const void *buf, uint32_t len)
   return -1;
 }
 
-uint32_t pm_metal_net_tls_peer_cert_der(pm_metal_tls_h h, void *dest, uint32_t cap)
+uint32_t pm_metal_net_tls_peer_cert_der(pm_metal_net_tls_h h, void *dest, uint32_t cap)
 {
   tls_sess_t             *t;
   const mbedtls_x509_crt *cert;

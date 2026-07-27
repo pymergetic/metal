@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <pymergetic/metal/dev/net/metal_dhcp6_stateful.h>
+#include <pymergetic/metal/net/ip/metal_dhcp6_stateful.h>
 
 #include <lwip/def.h>
 #include <lwip/ip6_addr.h>

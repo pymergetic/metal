@@ -6,10 +6,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <pymergetic/metal/dev/net/ntp.h>
-#include <pymergetic/metal/dev/net/net.h>
-#include <pymergetic/metal/dev/net/net_cfg.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
+#include <pymergetic/metal/net/ntp/ntp.h>
+#include <pymergetic/metal/net/ip/ip.h>
+#include <pymergetic/metal/net/ip/ip_cfg.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
 #include <pymergetic/metal/dev/random/random.h>
 #include <pymergetic/metal/runtime/async/async.h>
 #include <pymergetic/metal/util/ip.h>
@@ -183,9 +183,9 @@ static pm_metal_status_t NtpStep(pm_metal_async_handle_t self_h)
       t->aw       = PM_METAL_ASYNC_HANDLE_INVALID;
 
       if (t->host[0] == '\0') {
-        pm_metal_net_ifcfg_t cfg;
+        pm_metal_net_ip_ifcfg_t cfg;
 
-        if (pm_metal_net_if_get(&cfg) == 0 && cfg.ntp[0] != '\0') {
+        if (pm_metal_net_ip_if_get(&cfg) == 0 && cfg.ntp[0] != '\0') {
           snprintf(t->host, sizeof(t->host), "%s", cfg.ntp);
         }
       }
@@ -199,7 +199,7 @@ static pm_metal_status_t NtpStep(pm_metal_async_handle_t self_h)
       {
         uint32_t hip;
 
-        if (pm_metal_net_resolve_ip4(t->host, &hip) == 0) {
+        if (pm_metal_net_ip_resolve_ip4(t->host, &hip) == 0) {
           IP_ADDR4(
             &t->server, (hip >> 24) & 0xffu, (hip >> 16) & 0xffu, (hip >> 8) & 0xffu, hip & 0xffu);
           t->step = NTP_STEP_OPEN;
@@ -207,7 +207,7 @@ static pm_metal_status_t NtpStep(pm_metal_async_handle_t self_h)
         }
       }
 
-      t->aw = pm_metal_net_dns(t->host);
+      t->aw = pm_metal_net_ip_dns(t->host);
       if (t->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
         t->status = 3;
         t->step   = NTP_STEP_DONE;
@@ -228,7 +228,7 @@ static pm_metal_status_t NtpStep(pm_metal_async_handle_t self_h)
         char       ipstr[64];
         ip4_addr_t a4;
 
-        if (pm_metal_net_dns_last_ntoa(ipstr, sizeof(ipstr)) != 0 ||
+        if (pm_metal_net_ip_dns_last_ntoa(ipstr, sizeof(ipstr)) != 0 ||
             ip4addr_aton(ipstr, &a4) == 0) {
           t->status = 3;
           t->step   = NTP_STEP_DONE;
@@ -274,7 +274,7 @@ static pm_metal_status_t NtpStep(pm_metal_async_handle_t self_h)
       break;
 
     case NTP_STEP_WAIT:
-      pm_metal_net_poll();
+      pm_metal_net_ip_poll();
       if (t->have_pkt) {
         if (NtpParseReply(t->rx, &t->unix_ms) != 0) {
           NtpTeardown(t);

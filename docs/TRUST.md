@@ -94,7 +94,7 @@ READY
 ```
 
 Floor uses `pm_metal_trust_mode_str()`. Parse / verify run under `-- init` after
-mbedTLS heap hooks are installed (`pm_metal_mbedtls_runtime_init`).
+mbedTLS heap hooks are installed (`pm_metal_net_tls_mbedtls_runtime_init`).
 
 Trust / ok / WARN / FAIL / READY stay on the tree line (styled); no FIGlet
 interrupt for WARN/FAIL.

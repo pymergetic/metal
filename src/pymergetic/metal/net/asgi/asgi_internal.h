@@ -4,9 +4,9 @@
 #include <stdint.h>
 
 #include <pymergetic/metal/auth/auth.h>
-#include <pymergetic/metal/dev/net/asgi.h>
-#include <pymergetic/metal/dev/net/net.h>
-#include <pymergetic/metal/dev/net/tls.h>
+#include <pymergetic/metal/net/asgi/asgi.h>
+#include <pymergetic/metal/net/ip/ip.h>
+#include <pymergetic/metal/net/tls/tls.h>
 #include <pymergetic/metal/runtime/async/async.h>
 
 #define ASGI_PATH_MAX  256u
@@ -36,8 +36,8 @@ typedef struct {
 typedef struct {
   int32_t                 used;
   uint32_t                port;
-  pm_metal_tls_creds_h    creds; /* owned by autoload; not closed per listen */
-  pm_metal_net_sock_h     listen_sock;
+  pm_metal_net_tls_creds_h    creds; /* owned by autoload; not closed per listen */
+  pm_metal_net_ip_sock_h     listen_sock;
   pm_metal_async_handle_t coro;
   pm_metal_async_handle_t task;
   asgi_mount_t            mounts[ASGI_MOUNT_MAX];
@@ -62,7 +62,7 @@ typedef struct {
   char                 tls_cert[ASGI_PATH_MAX];
   char                 tls_key[ASGI_PATH_MAX];
   char                 tls_client_ca[ASGI_PATH_MAX];
-  pm_metal_tls_client_auth_t client_auth;
+  pm_metal_net_tls_client_auth_t client_auth;
   char                 realm[64];
   pm_metal_auth_user_t users[PM_METAL_AUTH_USERS_MAX];
   uint32_t             n_users;
@@ -80,8 +80,8 @@ int32_t pm_metal_net_asgi_dispatch_c(asgi_app_slot_t *slot,
                                      const char      *hdr,
                                      uint32_t         hdr_len);
 
-void pm_metal_net_asgi_conn_begin(pm_metal_net_sock_h sock,
-                                  pm_metal_tls_h      tls,
+void pm_metal_net_asgi_conn_begin(pm_metal_net_ip_sock_h sock,
+                                  pm_metal_net_tls_h      tls,
                                   const char         *method,
                                   const char         *target,
                                   const char         *mount_prefix,

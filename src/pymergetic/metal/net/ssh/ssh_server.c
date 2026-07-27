@@ -8,9 +8,9 @@
 
 #include "ssh_dropbear.h"
 
-#include <pymergetic/metal/dev/net/net.h>
-#include <pymergetic/metal/dev/net/ssh.h>
-#include <pymergetic/metal/dev/net/ssh_config.h>
+#include <pymergetic/metal/net/ip/ip.h>
+#include <pymergetic/metal/net/ssh/ssh.h>
+#include <pymergetic/metal/net/ssh/ssh_config.h>
 #include <pymergetic/metal/dev/stream/stream.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/runtime/async/async.h>
@@ -31,7 +31,7 @@ typedef enum {
 typedef struct {
   int32_t                 used;
   uint32_t                port;
-  pm_metal_net_sock_h     listen_sock;
+  pm_metal_net_ip_sock_h     listen_sock;
   pm_metal_async_handle_t coro;
   pm_metal_async_handle_t task;
 } ssh_srv_t;
@@ -40,7 +40,7 @@ typedef struct {
   ssh_step_t              step;
   pm_metal_net_ssh_srv_h  srv_h;
   pm_metal_async_handle_t aw;
-  pm_metal_net_sock_h     csock;
+  pm_metal_net_ip_sock_h     csock;
   pm_metal_stream_h       pty_m;
   pm_metal_stream_h       pty_s;
   uint32_t                sess;
@@ -85,9 +85,9 @@ static void ssh_conn_cleanup(ssh_listen_t *st)
     pm_metal_stream_close(st->pty_s);
     st->pty_s = PM_METAL_STREAM_INVALID;
   }
-  if (st->csock != PM_METAL_NET_SOCK_INVALID) {
-    pm_metal_net_close(st->csock);
-    st->csock = PM_METAL_NET_SOCK_INVALID;
+  if (st->csock != PM_METAL_NET_IP_SOCK_INVALID) {
+    pm_metal_net_ip_close(st->csock);
+    st->csock = PM_METAL_NET_IP_SOCK_INVALID;
   }
 }
 
@@ -109,7 +109,7 @@ static pm_metal_status_t SshListenStep(pm_metal_async_handle_t self_h)
   for (;;) {
     switch (st->step) {
     case SSH_ST_LISTEN:
-      st->aw   = pm_metal_net_listen(srv->listen_sock, srv->port);
+      st->aw   = pm_metal_net_ip_listen(srv->listen_sock, srv->port);
       st->step = SSH_ST_LISTEN_AW;
       return pm_metal_async_await(self_h, st->aw);
 
@@ -125,7 +125,7 @@ static pm_metal_status_t SshListenStep(pm_metal_async_handle_t self_h)
       break;
 
     case SSH_ST_ACCEPT:
-      st->aw = pm_metal_net_accept(srv->listen_sock);
+      st->aw = pm_metal_net_ip_accept(srv->listen_sock);
       if (st->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
         return PM_METAL_ERROR;
       }
@@ -133,8 +133,8 @@ static pm_metal_status_t SshListenStep(pm_metal_async_handle_t self_h)
       return pm_metal_async_await(self_h, st->aw);
 
     case SSH_ST_ACCEPT_AW:
-      st->csock = (pm_metal_net_sock_h)pm_metal_async_result_u32(self_h);
-      if (st->csock == PM_METAL_NET_SOCK_INVALID) {
+      st->csock = (pm_metal_net_ip_sock_h)pm_metal_async_result_u32(self_h);
+      if (st->csock == PM_METAL_NET_IP_SOCK_INVALID) {
         st->step = SSH_ST_ACCEPT;
         break;
       }
@@ -185,14 +185,14 @@ pm_metal_net_ssh_srv_h pm_metal_net_ssh_listen(uint32_t port)
   }
   srv              = &g_ssh[h];
   srv->port        = (port != 0u) ? port : 22u;
-  srv->listen_sock = pm_metal_net_socket(PM_METAL_NET_AF_INET, PM_METAL_NET_SOCK_STREAM);
-  if (srv->listen_sock == PM_METAL_NET_SOCK_INVALID) {
+  srv->listen_sock = pm_metal_net_ip_socket(PM_METAL_NET_IP_AF_INET, PM_METAL_NET_IP_SOCK_STREAM);
+  if (srv->listen_sock == PM_METAL_NET_IP_SOCK_INVALID) {
     srv->used = 0;
     return PM_METAL_NET_SSH_SRV_INVALID;
   }
   srv->coro = pm_metal_async_coro_create(SshListenStep, sizeof(ssh_listen_t));
   if (srv->coro == PM_METAL_ASYNC_HANDLE_INVALID) {
-    pm_metal_net_close(srv->listen_sock);
+    pm_metal_net_ip_close(srv->listen_sock);
     srv->used = 0;
     return PM_METAL_NET_SSH_SRV_INVALID;
   }
@@ -200,13 +200,13 @@ pm_metal_net_ssh_srv_h pm_metal_net_ssh_listen(uint32_t port)
   memset(st, 0, sizeof(*st));
   st->step  = SSH_ST_LISTEN;
   st->srv_h = h;
-  st->csock = PM_METAL_NET_SOCK_INVALID;
+  st->csock = PM_METAL_NET_IP_SOCK_INVALID;
   st->pty_m = PM_METAL_STREAM_INVALID;
   st->pty_s = PM_METAL_STREAM_INVALID;
   st->sess  = 0;
   srv->task = pm_metal_async_create_task(srv->coro);
   if (srv->task == PM_METAL_ASYNC_HANDLE_INVALID) {
-    pm_metal_net_close(srv->listen_sock);
+    pm_metal_net_ip_close(srv->listen_sock);
     srv->used = 0;
     return PM_METAL_NET_SSH_SRV_INVALID;
   }
@@ -221,8 +221,8 @@ void pm_metal_net_ssh_close(pm_metal_net_ssh_srv_h s)
   if (srv == NULL) {
     return;
   }
-  if (srv->listen_sock != PM_METAL_NET_SOCK_INVALID) {
-    pm_metal_net_close(srv->listen_sock);
+  if (srv->listen_sock != PM_METAL_NET_IP_SOCK_INVALID) {
+    pm_metal_net_ip_close(srv->listen_sock);
   }
   memset(srv, 0, sizeof(*srv));
 }

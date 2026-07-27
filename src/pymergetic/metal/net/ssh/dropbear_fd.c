@@ -10,7 +10,7 @@
 /* Relative: clangd often lacks dropbear_stubs on -I for this TU. */
 #include "dropbear_stubs/sys/time.h"
 
-#include <pymergetic/metal/dev/net/net_ops.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
@@ -52,7 +52,7 @@ typedef enum {
 
 typedef struct {
   db_fd_kind_t        kind;
-  pm_metal_net_sock_h sock;
+  pm_metal_net_ip_sock_h sock;
   pm_metal_stream_h   stream;
   int32_t             peer; /* pipe peer fd */
   int32_t             closed;
@@ -83,11 +83,11 @@ static int fd_alloc(db_fd_kind_t kind)
   return -1;
 }
 
-int metal_db_fd_register_sock(pm_metal_net_sock_h sock)
+int metal_db_fd_register_sock(pm_metal_net_ip_sock_h sock)
 {
   int fd;
 
-  if (sock == PM_METAL_NET_SOCK_INVALID) {
+  if (sock == PM_METAL_NET_IP_SOCK_INVALID) {
     return -1;
   }
   fd = fd_alloc(DB_FD_SOCK);
@@ -225,10 +225,10 @@ int metal_db_open_path(const char *path, int flags)
   return fd;
 }
 
-pm_metal_net_sock_h metal_db_fd_sock(int fd)
+pm_metal_net_ip_sock_h metal_db_fd_sock(int fd)
 {
   if (fd < 0 || fd >= METAL_DB_FD_MAX || g_fds[fd].kind != DB_FD_SOCK) {
-    return PM_METAL_NET_SOCK_INVALID;
+    return PM_METAL_NET_IP_SOCK_INVALID;
   }
   return g_fds[fd].sock;
 }
@@ -291,7 +291,7 @@ static int sock_has_data(int fd)
   if (g_push_valid[fd]) {
     return 1;
   }
-  n = pm_metal_net_try_recv(g_fds[fd].sock, tmp, 1);
+  n = pm_metal_net_ip_try_recv(g_fds[fd].sock, tmp, 1);
   if (n == (uint32_t)-1) {
     g_fds[fd].closed = 1;
     return 1;
@@ -352,7 +352,7 @@ ssize_t metal_db_read(int fd, void *buf, size_t count)
   }
 
   if (g_fds[fd].kind == DB_FD_SOCK) {
-    n = pm_metal_net_try_recv(g_fds[fd].sock, p, (uint32_t)count);
+    n = pm_metal_net_ip_try_recv(g_fds[fd].sock, p, (uint32_t)count);
     if (n == (uint32_t)-1) {
       g_fds[fd].closed = 1;
       return (got > 0) ? (int)got : 0;
@@ -407,8 +407,8 @@ ssize_t metal_db_write(int fd, const void *buf, size_t count)
   }
 
   if (g_fds[fd].kind == DB_FD_SOCK) {
-    pm_metal_net_poll();
-    n = pm_metal_net_send(g_fds[fd].sock, buf, (uint32_t)count);
+    pm_metal_net_ip_poll();
+    n = pm_metal_net_ip_send(g_fds[fd].sock, buf, (uint32_t)count);
     if (n == 0) {
       errno = EAGAIN;
       return -1;
@@ -565,7 +565,7 @@ int metal_db_select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, struct t
   (void)tv;
   (void)nfds;
 
-  pm_metal_net_poll();
+  pm_metal_net_ip_poll();
 
   if (rfds != NULL) {
     in_r = *rfds;

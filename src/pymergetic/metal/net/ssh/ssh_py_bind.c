@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <pymergetic/metal/dev/net/ssh.h>
+#include <pymergetic/metal/net/ssh/ssh.h>
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/py/py_obj.h>
 

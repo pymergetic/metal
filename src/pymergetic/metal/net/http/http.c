@@ -5,11 +5,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <pymergetic/metal/dev/net/http.h>
-#include <pymergetic/metal/dev/net/http_parse.h>
-#include <pymergetic/metal/dev/net/net.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
-#include <pymergetic/metal/dev/net/tls.h>
+#include <pymergetic/metal/net/http/http.h>
+#include <pymergetic/metal/net/http/http_parse.h>
+#include <pymergetic/metal/net/ip/ip.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
+#include <pymergetic/metal/net/tls/tls.h>
 #include <pymergetic/metal/runtime/async/async.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
 #include <runtime/time/time.h>
@@ -51,7 +51,7 @@ typedef struct {
   char                    path[HTTP_PATH_MAX];
   uint16_t                port;
   int32_t                 tls;
-  pm_metal_net_sock_h     sock;
+  pm_metal_net_ip_sock_h     sock;
   void                   *body;
   uint32_t                body_cap;
   uint32_t                body_len;
@@ -66,8 +66,8 @@ typedef struct {
   char                    req[HTTP_REQ_MAX];
   uint32_t                req_len;
   uint32_t                req_off;
-  pm_metal_tls_wire_t     wire;
-  pm_metal_tls_h          tls_h;
+  pm_metal_net_tls_wire_t     wire;
+  pm_metal_net_tls_h          tls_h;
 } http_get_t;
 
 static struct {
@@ -273,14 +273,14 @@ static int32_t HttpHostIsLiteral(const char *host)
 
 static void HttpParseResponse(http_get_t *h)
 {
-  pm_metal_http_body_mode_t mode;
+  pm_metal_net_http_body_mode_t mode;
 
   if (h == NULL) {
     return;
   }
 
   h->http_status = pm_metal_http_parse_status(h->hdr, h->hdr_len);
-  pm_metal_http_scan_body_mode(h->hdr, h->hdr_len, &mode);
+  pm_metal_net_http_scan_body_mode(h->hdr, h->hdr_len, &mode);
   h->content_len      = mode.content_len;
   h->chunked          = mode.chunked;
   h->body_until_close = mode.body_until_close;
@@ -372,7 +372,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
       return PM_METAL_ERROR;
     }
 
-    h->sock             = PM_METAL_NET_SOCK_INVALID;
+    h->sock             = PM_METAL_NET_IP_SOCK_INVALID;
     h->body_len         = 0;
     h->http_status      = 0;
     h->hdr_len          = 0;
@@ -395,7 +395,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
     return PM_METAL_PENDING;
 
   case HTTP_STEP_DNS:
-    h->aw = pm_metal_net_dns(h->host);
+    h->aw = pm_metal_net_ip_dns(h->host);
     if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       return PM_METAL_ERROR;
     }
@@ -414,14 +414,14 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
   case HTTP_STEP_SOCK: {
     uint32_t domain;
 
-    domain = PM_METAL_NET_AF_INET;
+    domain = PM_METAL_NET_IP_AF_INET;
     if (strstr(h->host, ":") != NULL) {
-      domain = PM_METAL_NET_AF_INET6;
+      domain = PM_METAL_NET_IP_AF_INET6;
     }
 
-    h->sock = pm_metal_net_socket(domain, PM_METAL_NET_SOCK_STREAM);
+    h->sock = pm_metal_net_ip_socket(domain, PM_METAL_NET_IP_SOCK_STREAM);
   }
-    if (h->sock == PM_METAL_NET_SOCK_INVALID) {
+    if (h->sock == PM_METAL_NET_IP_SOCK_INVALID) {
       return PM_METAL_ERROR;
     }
 
@@ -429,7 +429,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
     return PM_METAL_PENDING;
 
   case HTTP_STEP_CONNECT:
-    h->aw = pm_metal_net_connect(h->sock, h->host, h->port);
+    h->aw = pm_metal_net_ip_connect(h->sock, h->host, h->port);
     if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       return PM_METAL_ERROR;
     }
@@ -472,7 +472,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
 
     h->wire.len = 0;
     h->wire.off = 0;
-    h->aw       = pm_metal_net_recv(h->sock, h->wire.buf, sizeof(h->wire.buf));
+    h->aw       = pm_metal_net_ip_recv(h->sock, h->wire.buf, sizeof(h->wire.buf));
     if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       return PM_METAL_ERROR;
     }
@@ -560,7 +560,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
       }
 
       if (e == PM_METAL_TLS_WANT_READ) {
-        h->aw = pm_metal_net_recv(h->sock, h->wire.buf, sizeof(h->wire.buf));
+        h->aw = pm_metal_net_ip_recv(h->sock, h->wire.buf, sizeof(h->wire.buf));
         if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
           return PM_METAL_ERROR;
         }
@@ -579,7 +579,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
     {
       uint32_t nsend;
 
-      nsend = pm_metal_net_send(h->sock, h->req + h->req_off, h->req_len - h->req_off);
+      nsend = pm_metal_net_ip_send(h->sock, h->req + h->req_off, h->req_len - h->req_off);
       if (nsend > 0) {
         h->req_off += nsend;
         if (h->req_off >= h->req_len) {
@@ -606,7 +606,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
       } else if (e == 0) {
         return PM_METAL_ERROR;
       } else if (e == PM_METAL_TLS_WANT_READ || e == PM_METAL_TLS_WANT_WRITE) {
-        h->aw = pm_metal_net_recv(h->sock, h->wire.buf, sizeof(h->wire.buf));
+        h->aw = pm_metal_net_ip_recv(h->sock, h->wire.buf, sizeof(h->wire.buf));
         if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
           return PM_METAL_ERROR;
         }
@@ -617,7 +617,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
         return PM_METAL_ERROR;
       }
     } else {
-      h->aw = pm_metal_net_recv(h->sock, h->hdr + h->hdr_len, sizeof(h->hdr) - h->hdr_len - 1);
+      h->aw = pm_metal_net_ip_recv(h->sock, h->hdr + h->hdr_len, sizeof(h->hdr) - h->hdr_len - 1);
       if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
         return PM_METAL_ERROR;
       }
@@ -697,7 +697,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
         h->step = HTTP_STEP_DONE;
         return PM_METAL_PENDING;
       } else if (e == PM_METAL_TLS_WANT_READ || e == PM_METAL_TLS_WANT_WRITE) {
-        h->aw = pm_metal_net_recv(h->sock, h->wire.buf, sizeof(h->wire.buf));
+        h->aw = pm_metal_net_ip_recv(h->sock, h->wire.buf, sizeof(h->wire.buf));
         if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
           return PM_METAL_ERROR;
         }
@@ -708,7 +708,7 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
         return PM_METAL_ERROR;
       }
     } else {
-      h->aw = pm_metal_net_recv(h->sock, h->wire.buf, want);
+      h->aw = pm_metal_net_ip_recv(h->sock, h->wire.buf, want);
       if (h->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
         return PM_METAL_ERROR;
       }
@@ -760,9 +760,9 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
     return PM_METAL_PENDING;
 
   case HTTP_STEP_DONE:
-    if (h->sock != PM_METAL_NET_SOCK_INVALID) {
-      pm_metal_net_close(h->sock);
-      h->sock = PM_METAL_NET_SOCK_INVALID;
+    if (h->sock != PM_METAL_NET_IP_SOCK_INVALID) {
+      pm_metal_net_ip_close(h->sock);
+      h->sock = PM_METAL_NET_IP_SOCK_INVALID;
     }
 
     HttpTlsTeardown(h);
@@ -782,9 +782,9 @@ static void HttpGetRelease(void *state)
   http_get_t *h;
 
   h = (http_get_t *)state;
-  if (h->sock != PM_METAL_NET_SOCK_INVALID) {
-    pm_metal_net_close(h->sock);
-    h->sock = PM_METAL_NET_SOCK_INVALID;
+  if (h->sock != PM_METAL_NET_IP_SOCK_INVALID) {
+    pm_metal_net_ip_close(h->sock);
+    h->sock = PM_METAL_NET_IP_SOCK_INVALID;
   }
 
   HttpTlsTeardown(h);

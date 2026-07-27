@@ -1,9 +1,9 @@
 /*
  * Metal stateful DHCPv6 client (lwIP stateless DHCPv6 stays in dhcp6.c).
- * impl: common — src/pymergetic/metal/dev/net/metal_dhcp6_stateful.c
+ * impl: common — src/pymergetic/metal/net/ip/metal_dhcp6_stateful.c
  */
-#ifndef PYMERGETIC_METAL_DEV_NET_METAL_DHCP6_STATEFUL_H_
-#define PYMERGETIC_METAL_DEV_NET_METAL_DHCP6_STATEFUL_H_
+#ifndef PYMERGETIC_METAL_NET_IP_METAL_DHCP6_STATEFUL_H_
+#define PYMERGETIC_METAL_NET_IP_METAL_DHCP6_STATEFUL_H_
 
 #include "lwip/err.h"
 #include "lwip/netif.h"
@@ -32,4 +32,4 @@ void  metal_dhcp6_stateful_poll(struct netif *netif, metal_dhcp6_stateful_t *st)
 }
 #endif
 
-#endif /* PYMERGETIC_METAL_DEV_NET_METAL_DHCP6_STATEFUL_H_ */
+#endif /* PYMERGETIC_METAL_NET_IP_METAL_DHCP6_STATEFUL_H_ */

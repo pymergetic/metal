@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "pymergetic/metal/runtime/async/async.h"
-#include "pymergetic/metal/dev/net/ping.h"
+#include "pymergetic/metal/net/ping/ping.h"
 #include "pymergetic/metal/shell/shell/shell.h"
 
 #define PING_HOST    "10.0.2.2"

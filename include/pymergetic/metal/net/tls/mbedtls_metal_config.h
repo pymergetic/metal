@@ -1,8 +1,8 @@
 /*
  * mbedTLS profile for Metal HTTP/TLS client and server (TLS 1.2+, SNI).
  */
-#ifndef PYMERGETIC_METAL_DEV_NET_MBEDTLS_METAL_CONFIG_H_
-#define PYMERGETIC_METAL_DEV_NET_MBEDTLS_METAL_CONFIG_H_
+#ifndef PYMERGETIC_METAL_NET_TLS_MBEDTLS_METAL_CONFIG_H_
+#define PYMERGETIC_METAL_NET_TLS_MBEDTLS_METAL_CONFIG_H_
 
 #include <stddef.h>
 #include <stdarg.h>
@@ -74,10 +74,10 @@ extern "C" {
  * Hook mbedTLS PLATFORM_MEMORY calloc/free to the Metal heap.
  * Must run before any x509/pk parse (trust) or TLS — idempotent.
  */
-void pm_metal_mbedtls_runtime_init(void);
+void pm_metal_net_tls_mbedtls_runtime_init(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* PYMERGETIC_METAL_DEV_NET_MBEDTLS_METAL_CONFIG_H_ */
+#endif /* PYMERGETIC_METAL_NET_TLS_MBEDTLS_METAL_CONFIG_H_ */

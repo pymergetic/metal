@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "pymergetic/metal/boot/authors.h"
-#include "pymergetic/metal/dev/net/asgi.h"
+#include "pymergetic/metal/net/asgi/asgi.h"
 #include "pymergetic/metal/guest/mod/mod.h"
 #include "pymergetic/metal/runtime/async/async.h"
 #include "pymergetic/metal/shell/shell/shell.h"

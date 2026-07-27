@@ -3,12 +3,20 @@
 Generate typings/**.pyi from the C source of truth instead of hand-editing
 stubs that drift — Phase 2e (docs/MICROPYTHON.md, docs/TODO.md).
 
-Three sources, three outputs:
+Three sources, generated outputs:
 
   pymergetic.metal.*  <- PM_METAL_PY_BIND(var, "mod.str", "name_str", fn_obj,
                           class_) call sites across src/pymergetic/metal/**.
                           One nested .pyi per dotted module, one
-                          "def name(*args) -> ...:" per row.
+                          "def name(*args) -> ...:" per row. When a module
+                          also has child modules (e.g. net + net.ssh), it is
+                          emitted as a package ``…/net/__init__.pyi`` (not a
+                          sibling ``net.pyi``).
+
+  Package __init__.pyi  <- derived from the same bind set (+ always
+                          ``pymergetic.metal.mod``): re-exports every direct
+                          child so ``from pymergetic.metal import net`` etc.
+                          type-check. No hand-maintained package stubs.
 
   pmcmd.*             <- PM_METAL_SHELL_CMD(var, name_str, help_str, fn_) and
                           PM_METAL_SHELL_CMDS(arr) = { {name, help, fn}, ... }
@@ -30,6 +38,9 @@ Three sources, three outputs:
 Every generated file keeps a `def __getattr__(name) -> Any: ...` (or a
 class-level equivalent) fallback so anything this static scan missed still
 type-checks as Any instead of erroring.
+
+Hand-authored (not this script): typings/{os,uio,deflate}.pyi — port/stdlib
+or upstream MicroPython modules with no PM_METAL_PY_BIND rows.
 
 Usage: scripts/gen_py_stubs.py [--check]
   --check   Exit 1 if regenerating would change any file (CI/pre-commit use;
@@ -112,12 +123,47 @@ def scan_py_binds():
     return by_mod
 
 
-def mod_dotted_to_path(mod: str) -> Path:
+def module_names(by_mod_binds) -> set:
+    """All pymergetic.* modules that should appear in the stub tree."""
+    names = set(by_mod_binds)
+    names.add("pymergetic.metal.mod")  # custom attr proxy, not PM_METAL_PY_BIND
+    return names
+
+
+def package_names(modules: set) -> set:
+    """Proper prefixes of every module — those must be packages with __init__.pyi."""
+    pkgs = set()
+    for mod in modules:
+        parts = mod.split(".")
+        for i in range(1, len(parts)):
+            pkgs.add(".".join(parts[:i]))
+    return pkgs
+
+
+def mod_dotted_to_path(mod: str, packages: set) -> Path:
     parts = mod.split(".")
-    return TYPINGS.joinpath(*parts).with_suffix(".pyi") if parts[-1] != "" else TYPINGS
+    base = TYPINGS.joinpath(*parts)
+    if mod in packages:
+        return base / "__init__.pyi"
+    return base.with_suffix(".pyi")
 
 
-def render_py_bind_module(mod: str, rows) -> str:
+def direct_children(parent: str, modules: set, packages: set) -> list:
+    """Immediate child names under parent (modules or nested packages)."""
+    prefix = parent + "."
+    kids = set()
+    for name in modules | packages:
+        if not name.startswith(prefix):
+            continue
+        rest = name[len(prefix) :]
+        if "." in rest:
+            continue
+        if is_ident(rest):
+            kids.add(rest)
+    return sorted(kids)
+
+
+def render_py_bind_module(mod: str, rows, child_names=None) -> str:
     lines = [HEADER, '"""', f"``{mod}`` — generated from PM_METAL_PY_BIND call sites.", "", "Sources:"]
     seen_files = sorted({str(r[2]) for r in rows})
     for sf in seen_files:
@@ -126,6 +172,7 @@ def render_py_bind_module(mod: str, rows) -> str:
     lines.append("")
     lines.append("from typing import Any")
     lines.append("")
+    all_names = []
     for name, class_, _src in sorted(rows, key=lambda r: r[0]):
         if not is_ident(name.rstrip("_")) and not is_ident(name):
             continue
@@ -136,9 +183,46 @@ def render_py_bind_module(mod: str, rows) -> str:
         lines.append(f'    """C bind: {class_}."""')
         lines.append("    ...")
         lines.append("")
+        all_names.append(name)
+    if child_names:
+        for child in child_names:
+            lines.append(f"from . import {child} as {child}")
+        lines.append("")
+        all_names.extend(child_names)
+        lines.append(f"__all__ = {all_names!r}")
+        lines.append("__path__: list[str]")
+        lines.append("")
     lines.append("def __getattr__(name: str) -> Any: ...")
     lines.append("")
     return "\n".join(lines)
+
+
+def render_package_init(mod: str, child_names: list) -> str:
+    """Package with no bind rows of its own — re-export children only."""
+    lines = [
+        HEADER,
+        '"""',
+        f"``{mod}`` — generated package re-exports (scripts/gen_py_stubs.py).",
+        '"""',
+        "",
+        "from typing import Any",
+        "",
+    ]
+    for child in child_names:
+        lines.append(f"from . import {child} as {child}")
+    lines.append("")
+    lines.append(f"__all__ = {child_names!r}")
+    lines.append("__path__: list[str]")
+    lines.append("")
+    lines.append("def __getattr__(name: str) -> Any: ...")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def remove_if_exists(path: Path, removed: list) -> None:
+    if path.is_file():
+        path.unlink()
+        removed.append(path)
 
 
 # --- pmcmd.* (PM_METAL_SHELL_CMD / PM_METAL_SHELL_CMDS) ---
@@ -269,11 +353,27 @@ def main() -> int:
     args = ap.parse_args()
 
     changed = []
+    removed = []
 
     by_mod_binds = scan_py_binds()
+    modules = module_names(by_mod_binds)
+    packages = package_names(modules)
+
     for mod, rows in by_mod_binds.items():
-        out = mod_dotted_to_path(mod)
-        if write_if_changed(out, render_py_bind_module(mod, rows)):
+        kids = direct_children(mod, modules, packages) if mod in packages else []
+        out = mod_dotted_to_path(mod, packages)
+        if write_if_changed(out, render_py_bind_module(mod, rows, kids or None)):
+            changed.append(out)
+        # Migrating module.pyi -> package/__init__.pyi: drop the old sibling.
+        if mod in packages:
+            remove_if_exists(TYPINGS.joinpath(*mod.split(".")).with_suffix(".pyi"), removed)
+
+    for pkg in sorted(packages):
+        if pkg in by_mod_binds:
+            continue  # already written with bind defs + child re-exports
+        kids = direct_children(pkg, modules, packages)
+        out = mod_dotted_to_path(pkg, packages)
+        if write_if_changed(out, render_package_init(pkg, kids)):
             changed.append(out)
 
     cmd_rows = scan_shell_cmds()
@@ -289,12 +389,15 @@ def main() -> int:
     n_binds = sum(len(v) for v in by_mod_binds.values())
     print(
         f"gen_py_stubs: {len(by_mod_binds)} py-bind modules ({n_binds} rows), "
-        f"{len(cmd_rows)} shell cmds, {len(mod_funcs)} mods with registered funcs"
+        f"{len(packages)} packages, {len(cmd_rows)} shell cmds, "
+        f"{len(mod_funcs)} mods with registered funcs"
     )
     for c in changed:
         print(f"gen_py_stubs: wrote {c.relative_to(ROOT)}")
+    for c in removed:
+        print(f"gen_py_stubs: removed {c.relative_to(ROOT)}")
 
-    if args.check and changed:
+    if args.check and (changed or removed):
         print("gen_py_stubs: --check found stale stubs (regenerated above)", file=sys.stderr)
         return 1
     return 0

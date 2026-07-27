@@ -8,7 +8,7 @@
 #include <string.h>
 
 #include <pymergetic/metal/guest/pkg/pkg.h>
-#include <pymergetic/metal/dev/net/net_life.h>
+#include <pymergetic/metal/net/ip/ip_life.h>
 #include <pymergetic/metal/fs/esp/esp.h>
 
 #ifndef PM_METAL_PKG_MAX
@@ -392,5 +392,5 @@ int32_t pm_metal_pkg_ensure(const char *name)
     return 0;
   }
 
-  return pm_metal_net_life_seed_ensure(name);
+  return pm_metal_net_ip_life_seed_ensure(name);
 }

@@ -3,7 +3,7 @@
 **/
 #include <pymergetic/metal/host/host.h>
 #include <pymergetic/metal/shell/shell_cmd.h>
-#include <pymergetic/metal/dev/net/net_cfg.h>
+#include <pymergetic/metal/net/ip/ip_cfg.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -77,7 +77,7 @@ int pm_metal_host_name_set(const char *name)
     return -1;
   }
 
-  pm_metal_net_on_hostname_changed();
+  pm_metal_net_ip_on_hostname_changed();
   return 0;
 }
 

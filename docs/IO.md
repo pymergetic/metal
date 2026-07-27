@@ -82,12 +82,12 @@ Blk detectors: `pm_metal_blk_virtio_detect`, `pm_metal_blk_ide_detect` (legacy I
 
 ### Net (multi-if + DHCPv6)
 
-- Host ifs: always `lo` (127.0.0.1/8, ::1) plus `eth0`… (`PM_METAL_NET_MAX_IFS`). Default route prefers ethN when present. Shell: `net status [lo|ethN]`, `net set [ethN] …`, `net set [ethN] dhcp`, `net set [ethN] dhcp6 off|stateless|stateful`.
+- Host ifs: always `lo` (127.0.0.1/8, ::1) plus `eth0`… (`PM_METAL_NET_IP_MAX_IFS`). Default route prefers ethN when present. Shell: `net status [lo|ethN]`, `net set [ethN] …`, `net set [ethN] dhcp`, `net set [ethN] dhcp6 off|stateless|stateful`.
 - DHCPv6: **stateless** via lwIP; **stateful** via Metal client (`metal_dhcp6_stateful_*`) — lwIP `dhcp6_enable_stateful()` remains a stub.
-- Guest sockets: `pm_metal_net_bind_if(h, "lo"|"eth0")` before connect/listen (NULL → default).
-- **Name layers:** `util/ip` = IPv4 literals only (`ip4_parse` / `ip4_is_literal`). Local nodename = sync `pm_metal_host_name_get/set` (default `metal`; shell `hostname`; optional `hostname=` in `metal/net.conf`; sent as DHCPv4 option 12). Resolve order for connect/dns: literal → `localhost`/nodename → VFS `/etc/hosts` (ESP `etc/hosts`) → async DNS. After successful `pm_metal_net_dns` await: `pm_metal_net_dns_last_ntoa` (guest/host). Shell: `nslookup <host>`.
-- **DHCP boot/TFTP:** lease exposes next-server (`siaddr` / opt 66) + boot file (BOOTP file / opt 67) via `pm_metal_net_if_boot_get` / `ifcfg.tftp`+`boot_file`. Generic async client: `pm_metal_net_tftp_get(host, path, dest, cap)` (host/path empty → DHCP next-server + bootfile). Guest proof: `async_tftp` (EFI verify uses QEMU `-netdev user,tftp=…,bootfile=…`).
-- **Net life:** background coro (`pm_metal_net_life_start`) — fast poll while no lease, slow while up; HTTP doom seed (~2s after lease, before NTP; host = DHCP next-server, else gw, else `192.168.10.1`:8080); NTP after. DHCP/NTP success quiet; HTTP pkg fail logs status+URL. `run doom` waits ~30s for IWAD seed if wasm was already on ESP.
+- Guest sockets: `pm_metal_net_ip_bind_if(h, "lo"|"eth0")` before connect/listen (NULL → default).
+- **Name layers:** `util/ip` = IPv4 literals only (`ip4_parse` / `ip4_is_literal`). Local nodename = sync `pm_metal_host_name_get/set` (default `metal`; shell `hostname`; optional `hostname=` in `metal/net.conf`; sent as DHCPv4 option 12). Resolve order for connect/dns: literal → `localhost`/nodename → VFS `/etc/hosts` (ESP `etc/hosts`) → async DNS. After successful `pm_metal_net_ip_dns` await: `pm_metal_net_ip_dns_last_ntoa` (guest/host). Shell: `nslookup <host>`.
+- **DHCP boot/TFTP:** lease exposes next-server (`siaddr` / opt 66) + boot file (BOOTP file / opt 67) via `pm_metal_net_ip_if_boot_get` / `ifcfg.tftp`+`boot_file`. Generic async client: `pm_metal_net_tftp_get(host, path, dest, cap)` (host/path empty → DHCP next-server + bootfile). Guest proof: `async_tftp` (EFI verify uses QEMU `-netdev user,tftp=…,bootfile=…`).
+- **Net life:** background coro (`pm_metal_net_ip_life_start`) — fast poll while no lease, slow while up; HTTP doom seed (~2s after lease, before NTP; host = DHCP next-server, else gw, else `192.168.10.1`:8080); NTP after. DHCP/NTP success quiet; HTTP pkg fail logs status+URL. `run doom` waits ~30s for IWAD seed if wasm was already on ESP.
 - **Tray colors:** red = no IPv4; amber = IPv4 but no DNS string; green = IPv4 + DNS (slot 0 or backup slot 1).
 - **Fullscreen guest (`run`):** shell skips chrome/prompt paint and status dirty; host pump sleeps 1 ms while a process is live. `blit_bgra` writes the logical surface; one `async_present` fence per guest frame. Apps never select a scanout backend.
 - **Scanout backends** (`include/.../gfx/scanout.h`, probe at gfx bind): compositor stays in `gfx.c`; present goes through `pm_metal_scanout_ops`.
@@ -131,6 +131,7 @@ Endpoints: `uart`, `ui_tab`, `pipe`, `pty` (master/slave), later `virtio_console
 `sshd` is a Dropbear-backed console service, not a future stream feature. It
 listens on TCP port 22 by default, connects each network session to a PTY
 master, and gives the remote shell the PTY slave as its terminal.
+Cooked termios / job control are deferred; the PTY stays raw for now.
 
 `/etc/sshd.json` configures the port, host-key path, session budget, and
 enabled authentication methods. `passwd`, `pubkey`, and the Metal `sslcert`
@@ -139,7 +140,12 @@ public keys come from the configured user records, and `sslcert` uses
 `auth.client_ca`. The default image enables `passwd` and `pubkey`. Use the
 `sshd` shell command to inspect or control the service.
 
-Cooked termios / job control: omit until needed (raw PTY first).
+A checked-in lab Dropbear ed25519 host key ships in
+`mods/etc/ssh/dropbear_ed25519_host_key` and is staged/preloaded as
+`/etc/ssh/dropbear_ed25519_host_key` so the host fingerprint is stable
+across boots. Override at ESP/PXE stage with `METAL_SSHD_HOSTKEY=/path`,
+or at runtime via `sshd.json` `"host_key"`. Do not use the lab key outside
+dev.
 
 ### SSH sslcert auth
 

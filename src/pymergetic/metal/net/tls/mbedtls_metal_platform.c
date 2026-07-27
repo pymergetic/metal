@@ -3,7 +3,7 @@
   (impl: efi|bios)
 **/
 #include <pymergetic/metal/boot/externals.h>
-#include <pymergetic/metal/dev/net/mbedtls_metal_config.h>
+#include <pymergetic/metal/net/tls/mbedtls_metal_config.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
 
 #include <mbedtls/build_info.h>
@@ -41,7 +41,7 @@ static void MetalMbedtlsFree(void *p)
   pm_metal_mem_free(p);
 }
 
-void pm_metal_mbedtls_runtime_init(void)
+void pm_metal_net_tls_mbedtls_runtime_init(void)
 {
   if (mMbedtlsMemReady) {
     return;

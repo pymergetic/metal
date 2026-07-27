@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #include "pymergetic/metal/runtime/async/async.h"
-#include "pymergetic/metal/dev/net/tftp.h"
+#include "pymergetic/metal/net/tftp/tftp.h"
 #include "pymergetic/metal/shell/shell/shell.h"
 
 #define TFTP_MARK "metal-async-tftp"

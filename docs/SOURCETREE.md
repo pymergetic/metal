@@ -32,7 +32,7 @@ Mods use **wasi-sdk sysroot** + `-I include/`. Start with `#include <pymergetic/
 call with a bare `(uint32_t)(uintptr_t)p` — that type-checks only under
 `__wasm__` and breaks host builds and clangd. Each dual-ABI header that has
 a buffer or out-struct arg exposes a matching macro (same shape as
-`PM_METAL_FS_IO_PTR` / `PM_METAL_NET_IO_PTR`):
+`PM_METAL_FS_IO_PTR` / `PM_METAL_NET_IP_IO_PTR`):
 
 ```c
 #if defined(__wasm__)
@@ -46,7 +46,7 @@ Call sites always write `pm_metal_foo(..., PM_METAL_FOO_IO_PTR(buf), ...)`.
 When you add a new dual-ABI API with a buffer/struct pointer arg, add the
 `*_IO_PTR` macro in that header next to the prototypes — do not invent a
 per-call `#if defined(__wasm__)` at the use site. Existing macros:
-`PM_METAL_FS_IO_PTR`, `PM_METAL_NET_IO_PTR`, `PM_METAL_NET_HTTP_IO_PTR`,
+`PM_METAL_FS_IO_PTR`, `PM_METAL_NET_IP_IO_PTR`, `PM_METAL_NET_HTTP_IO_PTR`,
 `PM_METAL_NET_TFTP_IO_PTR`, `PM_METAL_BLK_IO_PTR`, `PM_METAL_AUDIO_IO_PTR`,
 `PM_METAL_INPUT_IO_PTR`, `PM_METAL_PROCESS_IO_PTR`.
 
@@ -272,8 +272,8 @@ pymergetic/metal/<module>/…/<stem>.h  →  pm_metal_<module>_…_<stem>_
 | `util/lz4.h` | `pm_metal_util_lz4_` | `pm_metal_util_lz4_compress()` |
 | `util/tar.h` | `pm_metal_util_tar_` | `pm_metal_util_tar_iter_next()` |
 | `util/crypto.h` | `pm_metal_util_crypto_` | `pm_metal_util_crypto_hash()` |
-| `dev/net/net.h` | `pm_metal_net_` | async sockets (efi\|bios) |
-| `dev/net/http.h` | `pm_metal_net_http_` | async HTTP/HTTPS GET (efi\|bios) |
+| `net/ip/ip.h` | `pm_metal_net_ip_` | async sockets / IP stack (efi\|bios) |
+| `net/http/http.h` | `pm_metal_net_http_` | async HTTP/HTTPS GET (efi\|bios) |
 
 Private `src/<plat>/` symbols: `static` or plat-local.
 
@@ -457,9 +457,11 @@ packages/metal/
 | `port/udp` | `src/common/…/port/udp.h` | OS UDP open/sendto/recv/close — `impl: bind` |
 | `port/tcp` | `src/common/…/port/tcp.h` | OS TCP open/bind/listen/accept/connect/send/recv — `impl: bind` |
 | `port/tls` | `src/common/…/port/tls.h` | OS CA bundle path (embed PEM later) — `impl: bind` |
-| `dev/net` | `include/…/dev/net/net.h` | product dual-ABI sockets (lwIP + virtio / null) |
-| `dev/net/http` | `include/…/dev/net/http.h` | HTTP/HTTPS GET client on `pm_metal_net_*` |
-| `dev/net/ops` | `include/…/dev/net/net_ops.h` | host pluggable backend ops |
+| `dev/net` | NIC drivers (`virtio_net`, `bge`) |
+| `net/ip` | `include/…/net/ip/ip.h` | IP stack + sockets (lwIP / null) |
+| `net/<proto>` | `include/…/net/{http,asgi,ssh,tls,ping,ntp,tftp}/` | app protocols on sockets |
+| `net/http` | `include/…/net/http/http.h` | HTTP/HTTPS GET client on `pm_metal_net_ip_*` |
+| `net/ip/ops` | `include/…/net/ip/ip_ops.h` | host pluggable IP backend ops |
 
 ---
 

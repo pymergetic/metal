@@ -6,15 +6,15 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <pymergetic/metal/dev/net/http_parse.h>
+#include <pymergetic/metal/net/http/http_parse.h>
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
 #include <pymergetic/metal/shell/hwinfo/hwinfo.h>
 #include <pymergetic/metal/version.h>
 
 typedef struct {
-  pm_metal_net_sock_h sock;
-  pm_metal_tls_h      tls;
+  pm_metal_net_ip_sock_h sock;
+  pm_metal_net_tls_h      tls;
   char                method[16];
   char                target[ASGI_PATH_MAX];
   char                mount_prefix[ASGI_PATH_MAX];
@@ -27,8 +27,8 @@ typedef struct {
 static asgi_conn_t g_conn;
 static int32_t     g_budget_conns;
 
-void pm_metal_net_asgi_conn_begin(pm_metal_net_sock_h sock,
-                                  pm_metal_tls_h      tls,
+void pm_metal_net_asgi_conn_begin(pm_metal_net_ip_sock_h sock,
+                                  pm_metal_net_tls_h      tls,
                                   const char         *method,
                                   const char         *target,
                                   const char         *mount_prefix,
@@ -150,7 +150,7 @@ int32_t pm_metal_net_asgi_conn_send(const void *buf, uint32_t len)
     } else {
       uint32_t n;
 
-      n = pm_metal_net_send(g_conn.sock, p + off, len - off);
+      n = pm_metal_net_ip_send(g_conn.sock, p + off, len - off);
       if (n == 0) {
         return -1;
       }

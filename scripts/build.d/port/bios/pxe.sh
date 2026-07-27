@@ -30,6 +30,15 @@ if [[ -d "${ROOT}/mods/etc" ]]; then
 	mkdir -p "${PXE}/etc"
 	cp -a "${ROOT}/mods/etc/." "${PXE}/etc/"
 fi
+# Optional override of the checked-in lab Dropbear hostkey.
+if [[ -n "${METAL_SSHD_HOSTKEY:-}" ]]; then
+	if [[ ! -f "${METAL_SSHD_HOSTKEY}" ]]; then
+		echo "pxe: METAL_SSHD_HOSTKEY not a file: ${METAL_SSHD_HOSTKEY}" >&2
+		exit 1
+	fi
+	mkdir -p "${PXE}/etc/ssh"
+	cp -f "${METAL_SSHD_HOSTKEY}" "${PXE}/etc/ssh/dropbear_ed25519_host_key"
+fi
 if [[ -d "${ROOT}/mods/www" ]]; then
 	mkdir -p "${PXE}/mods/www"
 	cp -a "${ROOT}/mods/www/." "${PXE}/mods/www/"

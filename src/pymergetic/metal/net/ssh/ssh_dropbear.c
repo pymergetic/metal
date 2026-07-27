@@ -14,8 +14,8 @@
 #include <pymergetic/metal/auth/auth.h>
 #include <pymergetic/metal/boot/externals.h>
 #include <pymergetic/metal/dev/console/console.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
-#include <pymergetic/metal/dev/net/ssh_config.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
+#include <pymergetic/metal/net/ssh/ssh_config.h>
 #include <pymergetic/metal/dev/stream/stream.h>
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/log/log.h>
@@ -48,7 +48,7 @@ extern void svr_getopts(int argc, char **argv);
 typedef struct {
   int32_t             used;
   int                 sock_fd;
-  pm_metal_net_sock_h sock;
+  pm_metal_net_ip_sock_h sock;
   pm_metal_stream_h   pty_m;
   pm_metal_stream_h   pty_s;
   int                 pty_m_fd;
@@ -101,17 +101,22 @@ static void db_once_init(void)
 
 int32_t metal_dropbear_ensure_hostkeys(void)
 {
-  uint32_t sz;
+  pm_metal_sshd_cfg_t *cfg;
+  const char          *path;
+  uint32_t             sz;
 
   (void)pm_metal_fs_mkdir("/etc");
   (void)pm_metal_fs_mkdir("/etc/ssh");
-  sz = pm_metal_fs_size(HOSTKEY_PATH);
+  cfg = pm_metal_net_ssh_cfg();
+  path = (cfg != NULL && cfg->host_key[0] != '\0') ? cfg->host_key : HOSTKEY_PATH;
+  sz = pm_metal_fs_size(path);
   if (sz > 0u && sz != (uint32_t)-1) {
+    pm_metal_logf("sshd: hostkey ready (%s)", path);
     return 0;
   }
   /* Generated on first KEX via dropbear -R (DELAY_HOSTKEY). Keep that off the
    * listen-coro stack — eager gensignkey reboot-looped the guest. */
-  pm_metal_logf("sshd: hostkey will be generated on first KEX (%s)", HOSTKEY_PATH);
+  pm_metal_logf("sshd: hostkey will be generated on first KEX (%s)", path);
   return 0;
 }
 
@@ -317,7 +322,7 @@ static void shell_pump(ssh_sess_t *s)
   }
 }
 
-uint32_t metal_dropbear_session_start(pm_metal_net_sock_h sock, pm_metal_stream_h pty_master,
+uint32_t metal_dropbear_session_start(pm_metal_net_ip_sock_h sock, pm_metal_stream_h pty_master,
                                       pm_metal_stream_h pty_slave)
 {
   uint32_t    id;
@@ -388,7 +393,7 @@ int32_t metal_dropbear_session_poll(uint32_t sess)
     return -1;
   }
 
-  pm_metal_net_poll();
+  pm_metal_net_ip_poll();
   if (metal_db_fd_is_closed(s->sock_fd)) {
     metal_dropbear_jmp_ready = 0;
     g_active_sess            = 0;

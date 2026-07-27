@@ -49,7 +49,7 @@ db_src = root / "external/dropbear/src"
 lwip_inc = root / "external/lwip/src/include"
 mbedtls_inc = root / "external/mbedtls/include"
 mbedtls_cfg = (
-    "-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>"
+    "-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>"
 )
 inc_common = (
     f"-I{edk2} -I{edk2_x64} -I{tlsf} -I{inc_root} "
@@ -236,9 +236,10 @@ CLANG_EFI=(
 	-I"${METAL_PKG}"
 	-I"${METAL_EFI_MEM}"
 	-I"${ROOT}/src/pymergetic/metal/dev/net"
+	-I"${ROOT}/src/pymergetic/metal/net/ip"
 	-I"${ROOT}/external/lwip/src/include"
 	-I"${ROOT}/external/mbedtls/include"
-	'-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/dev/net/mbedtls_metal_config.h>'
+	'-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
 	-I"${METAL_EFI_WAMR}"
 	-I"${WAMR_PLAT_INC}"
 	-I"${ROOT}/external/wamr/core/shared/utils"
@@ -258,7 +259,7 @@ if [[ -f "${EDK2_INC}/Uefi.h" && -f "${MAIN}" ]]; then
 		"${CLANG_EFI[@]}" "${TLSF_C}"
 		echo "ide: clang -fsyntax-only ok (${TLSF_C})"
 	fi
-	LWIP_SYS="${ROOT}/src/pymergetic/metal/dev/net/lwip_sys.c"
+	LWIP_SYS="${ROOT}/src/pymergetic/metal/net/ip/lwip_sys.c"
 	if [[ -f "${LWIP_SYS}" && -f "${ROOT}/external/lwip/src/include/lwip/sys.h" ]]; then
 		"${CLANG_EFI[@]}" "${LWIP_SYS}"
 		echo "ide: clang -fsyntax-only ok (${LWIP_SYS})"

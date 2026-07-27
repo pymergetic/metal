@@ -10,7 +10,7 @@
 /* Relative so clangd / TUs without dropbear_stubs -I still resolve ssize_t. */
 #include "dropbear_stubs/sys/types.h"
 
-#include <pymergetic/metal/dev/net/net.h>
+#include <pymergetic/metal/net/ip/ip.h>
 #include <pymergetic/metal/dev/stream/stream.h>
 
 #ifdef __cplusplus
@@ -19,14 +19,14 @@ extern "C" {
 
 #define METAL_DB_FD_MAX 64
 
-int  metal_db_fd_register_sock(pm_metal_net_sock_h sock);
+int  metal_db_fd_register_sock(pm_metal_net_ip_sock_h sock);
 int  metal_db_fd_register_stream(pm_metal_stream_h stream);
 /** Path-backed hostkey/etc file via pm_metal_fs_* (Dropbear open()). */
 int  metal_db_open_path(const char *path, int flags);
 void metal_db_fd_release(int fd);
 void metal_db_fd_release_all(void);
 
-pm_metal_net_sock_h metal_db_fd_sock(int fd);
+pm_metal_net_ip_sock_h metal_db_fd_sock(int fd);
 pm_metal_stream_h   metal_db_fd_stream(int fd);
 
 /* Declared for Dropbear TU macros; also used from glue. */

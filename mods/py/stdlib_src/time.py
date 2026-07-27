@@ -2,7 +2,7 @@
 # MICROPY_PY_BUILTINS_FLOAT is off, see mpconfigport.h -- every value here
 # is an int: ms/us/whole seconds, never a fractional second). Backed by
 # pymergetic.metal.time.* -> the real wall clock (EFI's gRT->GetTime() /
-# BIOS's CMOS RTC, refined by SNTP -- dev/net/ntp.c, dev/random/random.c)
+# BIOS's CMOS RTC, refined by SNTP -- net/ntp/ntp.c, dev/random/random.c)
 # and the monotonic TSC clock. This is the whole surface datetime.py (and
 # anything else importing time) is written against.
 

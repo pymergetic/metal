@@ -287,6 +287,7 @@ UefiMain (
     (VOID)pm_metal_esp_preload ("etc/httpd.json");
     (VOID)pm_metal_esp_preload ("etc/sshd.json");
     (VOID)pm_metal_esp_preload ("etc/ssh/authorized_keys");
+    (VOID)pm_metal_esp_preload ("etc/ssh/dropbear_ed25519_host_key");
     (VOID)pm_metal_esp_preload ("etc/httpd-cert.pem");
     (VOID)pm_metal_esp_preload ("etc/httpd-key.pem");
     if (pm_metal_esp_preload_tree ("mods/www") == 0) {

@@ -2,7 +2,7 @@
   Boot-path MicroPython: always-on blob init + host overlap/yield proofs.
 **/
 #include <pymergetic/metal/boot/boot.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/py/py.h>
@@ -1139,7 +1139,7 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
     /*
      * pymergetic.metal.time (dev/random/time_py_bind.c) + mods/py/
      * stdlib_src/time.py on top — real wall clock (EFI's gRT->GetTime()/
-     * BIOS's CMOS RTC, refined by SNTP — dev/net/ntp.c), no floats
+     * BIOS's CMOS RTC, refined by SNTP — net/ntp/ntp.c), no floats
      * anywhere (MICROPY_PY_BUILTINS_FLOAT is off). datetime.py
      * (MICROPY_PY_BUILTINS_PROPERTY, flipped for this) and hmac.py
      * (same flag, HMAC.name/digest_size) ride on top of time+hashlib.
@@ -1426,11 +1426,11 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
      * one actually touches the network stack (listen/connect/accept/recv
      * on lwIP) — lwIP is NO_SYS and only makes progress (TCP callbacks
      * firing, loopback packets delivered) when something calls
-     * pm_metal_net_poll(), same as pm_metal_async_session_pump() does for
+     * pm_metal_net_ip_poll(), same as pm_metal_async_session_pump() does for
      * the normal post-boot shell loop. Boot proofs run before that pump
      * ever starts, so this step has to drive it itself.
      */
-    pm_metal_net_poll();
+    pm_metal_net_ip_poll();
     pm_metal_run_poll_all();
     sa = pm_metal_async_task_status(t->a);
     if (sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) {

@@ -695,7 +695,7 @@ Closed every remaining Needs-glue module from the table above except
 - **`time`/`datetime`** — new `pymergetic.metal.time` (`dev/random/time_py_bind.c`)
   exposes `realtime_ms()`/`mono_us()`/`tz_minutes()`/`sleep_ms()`, backed by
   the *same* wall clock `random.c` already fed to wasm guests (EFI's
-  `gRT->GetTime()`/BIOS's CMOS RTC, refined by SNTP — `dev/net/ntp.c`); there
+  `gRT->GetTime()`/BIOS's CMOS RTC, refined by SNTP — `net/ntp/ntp.c`); there
   was already a real RTC source, it just hadn't been wired to Python yet.
   `mods/py/stdlib_src/time.py` is a from-scratch, int-primary implementation
   (float seconds work once `MICROPY_PY_BUILTINS_FLOAT` is on; wall path
@@ -782,12 +782,12 @@ Closed every remaining Needs-glue module from the table above except
 - **`ssl` → `pymergetic.metal.tls`, not a CPython `ssl` shim** — Metal has no
   socket object with a `.makefile()`/blocking-read shape for a CPython-style
   `ssl.wrap_socket()` to sit on top of; instead this is a new, honestly
-  Metal-flavored async TCP+TLS client. `dev/net/tls_conn.c` is a slot table
+  Metal-flavored async TCP+TLS client. `net/tls/tls_conn.c` is a slot table
   (`tls_conn_slot_t`, one socket + mbedTLS context + wire buffers per slot)
   driving one coroutine step function (`TlsConnOpStep`) through DNS resolve
   → connect → TLS handshake → read/write, all through the same
   `pm_metal_async_await` model every other Metal I/O primitive uses.
-  `dev/net/tls_py_bind.c` exposes `pymergetic.metal.tls.{open,connect,write,
+  `net/tls/tls_py_bind.c` exposes `pymergetic.metal.tls.{open,connect,write,
   read,close}` to Python; `read()` needed a new awaitable shape
   (`pm_metal_py_new_awaitable_bytes`/`pm_metal_py_await_bytes_fn` in
   `py_obj.h`/`py_await.c`) since the existing awaitable bridge only ever
@@ -799,7 +799,7 @@ Closed every remaining Needs-glue module from the table above except
 Not a Needs-glue-tier module — a separate, explicitly-scoped follow-up: a
 thin async socket facade plus two cheap fs/stdlib polish items.
 
-- **`pymergetic.metal.net`** (`dev/net/net_py_bind.c`) — a thin wrapper over
+- **`pymergetic.metal.net`** (`net/ip/ip_py_bind.c`) — a thin wrapper over
   `dev/net/net.h` (the same lwIP-backed primitive every other net path in
   this codebase already uses), same honest-primitive spirit as
   `pymergetic.metal.tls`: no CPython `socket`/`select`-shaped shim, no
@@ -810,7 +810,7 @@ thin async socket facade plus two cheap fs/stdlib polish items.
   chains multiple `net.h` ops together; `net.h`'s own primitives are each
   already a single async op). `recv()` needed a small per-socket scratch
   buffer table (`NetPyRecvSlotFor`, 8 slots × 4 KiB) since
-  `pm_metal_net_recv(h, ptr, len)` writes into `ptr` for the *entire*
+  `pm_metal_net_ip_recv(h, ptr, len)` writes into `ptr` for the *entire*
   operation's lifetime, not just at completion — a fresh
   `pm_metal_mem_alloc`-per-call buffer freed inside the awaitable's resolve
   callback would be a use-after-free (the actual bytes copy happens right
@@ -819,7 +819,7 @@ thin async socket facade plus two cheap fs/stdlib polish items.
   rather than exposing named integer constants — `PM_METAL_PY_BIND` binds
   callables, not plain values, so sensible defaults were the simpler
   ergonomic answer.
-- **`pymergetic.metal.net.http`** (`dev/net/net_http_py_bind.c`) — a nested
+- **`pymergetic.metal.net.http`** (`net/http/http_py_bind.c`) — a nested
   submodule (dotted-path resolution handles the nesting for free, no extra
   plumbing) exposing `get(url)` (await → `bytes` body, one static
   lazily-allocated 64 KiB scratch buffer — a REPL-driven one-GET-at-a-time
@@ -830,7 +830,7 @@ thin async socket facade plus two cheap fs/stdlib polish items.
   listen/accept/connect/send/recv plus `dns('localhost')`, no real network
   required (deliberately no online proof, same policy as every other net
   path in this codebase). First exercise of `listen()`+`accept()` in the
-  Python binding layer; needed an explicit `pm_metal_net_poll()` call inside
+  Python binding layer; needed an explicit `pm_metal_net_ip_poll()` call inside
   the proof's own wait loop — `pm_metal_async_session_pump()` (the shell's
   main loop) already calls it, but the boot-proof driver only called
   `pm_metal_run_poll_all()`, so lwIP's stack never progressed and the proof

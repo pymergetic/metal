@@ -6,8 +6,8 @@
 #include <string.h>
 
 #include "pymergetic/metal/runtime/async/async.h"
-#include "pymergetic/metal/dev/net/http.h"
-#include "pymergetic/metal/dev/net/net.h"
+#include "pymergetic/metal/net/http/http.h"
+#include "pymergetic/metal/net/ip/ip.h"
 #include "pymergetic/metal/shell/shell/shell.h"
 
 #define HTTP_TEST_URL "https://example.com/"
@@ -35,7 +35,7 @@ pm_metal_status_t pm_metal_guest_step(pm_metal_async_handle_t self_h)
   case 0:
     memset(s->body, 0, sizeof(s->body));
     s->aw = pm_metal_net_http_get(
-      HTTP_TEST_URL, PM_METAL_NET_IO_PTR(s->body), (uint32_t)(sizeof(s->body) - 1));
+      HTTP_TEST_URL, PM_METAL_NET_IP_IO_PTR(s->body), (uint32_t)(sizeof(s->body) - 1));
     if (s->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
       return PM_METAL_ERROR;
     }

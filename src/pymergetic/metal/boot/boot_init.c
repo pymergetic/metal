@@ -12,10 +12,10 @@
 #include <pymergetic/metal/boot/port.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/bus/io/io.h>
-#include <pymergetic/metal/dev/net/net_ops.h>
-#include <pymergetic/metal/dev/net/net_cfg.h>
-#include <pymergetic/metal/dev/net/net_life.h>
-#include <pymergetic/metal/dev/net/ntp.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
+#include <pymergetic/metal/net/ip/ip_cfg.h>
+#include <pymergetic/metal/net/ip/ip_life.h>
+#include <pymergetic/metal/net/ntp/ntp.h>
 #include <pymergetic/metal/dev/blk/blk.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
 #include <pymergetic/metal/shell/ui/ui.h>
@@ -148,12 +148,12 @@ static void MetalBootLogNetBranch(int32_t dhcp_ok, const char *pkg_note, const c
   uint32_t seen;
   uint32_t trail;
 
-  n   = pm_metal_net_if_count();
+  n   = pm_metal_net_ip_if_count();
   nif = 0;
   for (i = 0; i < n; i++) {
-    pm_metal_net_ifcfg_t cfg;
+    pm_metal_net_ip_ifcfg_t cfg;
 
-    if (pm_metal_net_if_get_index(i, &cfg) == 0) {
+    if (pm_metal_net_ip_if_get_index(i, &cfg) == 0) {
       nif++;
     }
   }
@@ -175,12 +175,12 @@ static void MetalBootLogNetBranch(int32_t dhcp_ok, const char *pkg_note, const c
 
   seen = 0;
   for (i = 0; i < n; i++) {
-    pm_metal_net_ifcfg_t cfg;
+    pm_metal_net_ip_ifcfg_t cfg;
     uint32_t             ip;
     const char          *pref;
     const char          *addr;
 
-    if (pm_metal_net_if_get_index(i, &cfg) != 0) {
+    if (pm_metal_net_ip_if_get_index(i, &cfg) != 0) {
       continue;
     }
 
@@ -229,12 +229,12 @@ static int32_t MetalBootHasLease(void)
 {
   uint32_t             n;
   uint32_t             i;
-  pm_metal_net_ifcfg_t cfg;
+  pm_metal_net_ip_ifcfg_t cfg;
   uint32_t             ip;
 
-  n = pm_metal_net_if_count();
+  n = pm_metal_net_ip_if_count();
   for (i = 0; i < n; i++) {
-    if (pm_metal_net_if_get_index(i, &cfg) != 0) {
+    if (pm_metal_net_ip_if_get_index(i, &cfg) != 0) {
       continue;
     }
 
@@ -333,13 +333,13 @@ static pm_metal_status_t MetalBootInitStep(pm_metal_async_handle_t self_h)
       const char *ntp_note;
       int32_t     dhcp_ok;
 
-      (void)pm_metal_net_bge_start();
-      (void)pm_metal_net_virtio_start();
-      (void)pm_metal_net_loopback_start();
-      (void)pm_metal_net_life_start();
+      (void)pm_metal_net_ip_bge_start();
+      (void)pm_metal_net_ip_virtio_start();
+      (void)pm_metal_net_ip_loopback_start();
+      (void)pm_metal_net_ip_life_start();
 
       /* Brief peek for the init tree; life coro finishes late work. */
-      pm_metal_net_poll();
+      pm_metal_net_ip_poll();
       dhcp_ok = MetalBootHasLease();
       /* Guest packages are modular — no per-app notes in the boot tree. */
       pkg_note = NULL;

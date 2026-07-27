@@ -8,7 +8,7 @@
 
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
-#include <pymergetic/metal/dev/net/mbedtls_metal_config.h>
+#include <pymergetic/metal/net/tls/mbedtls_metal_config.h>
 
 #include "external/monocypher/src/monocypher.h"
 #include "external/crypt_blowfish/ow-crypt.h"
@@ -653,7 +653,7 @@ int32_t pm_metal_auth_sslcert_check(const uint8_t *cert_der, uint32_t cert_len,
     return 0;
   }
 
-  pm_metal_mbedtls_runtime_init();
+  pm_metal_net_tls_mbedtls_runtime_init();
   mbedtls_x509_crt_init(&cert);
   mbedtls_x509_crt_init(&ca);
   ok = 0;
@@ -681,7 +681,7 @@ int32_t pm_metal_auth_sslcert_verify(const uint8_t *cert_der, uint32_t cert_len,
       signed_data == NULL || signed_len == 0u || signature == NULL || signature_len == 0u) {
     return 0;
   }
-  pm_metal_mbedtls_runtime_init();
+  pm_metal_net_tls_mbedtls_runtime_init();
   mbedtls_x509_crt_init(&cert);
   ok = 0;
   if (mbedtls_x509_crt_parse_der(&cert, cert_der, cert_len) == 0 &&

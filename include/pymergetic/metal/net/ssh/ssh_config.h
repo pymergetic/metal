@@ -1,9 +1,9 @@
 /*
  * /etc/sshd.json — schema-specific loader (no general JSON library).
- * impl: common — src/pymergetic/metal/dev/net/ssh_config.c
+ * impl: common — src/pymergetic/metal/net/ssh/ssh_config.c
  */
-#ifndef PYMERGETIC_METAL_DEV_NET_SSH_CONFIG_H_
-#define PYMERGETIC_METAL_DEV_NET_SSH_CONFIG_H_
+#ifndef PYMERGETIC_METAL_NET_SSH_CONFIG_H_
+#define PYMERGETIC_METAL_NET_SSH_CONFIG_H_
 
 #include <stdint.h>
 
@@ -29,4 +29,4 @@ int32_t              pm_metal_net_ssh_cfg_load(void);
 }
 #endif
 
-#endif /* PYMERGETIC_METAL_DEV_NET_SSH_CONFIG_H_ */
+#endif /* PYMERGETIC_METAL_NET_SSH_CONFIG_H_ */

@@ -4,7 +4,7 @@
 ``pymergetic.metal.net.asgi`` — generated from PM_METAL_PY_BIND call sites.
 
 Sources:
-  src/pymergetic/metal/dev/net/asgi_py_bind.c
+  src/pymergetic/metal/net/asgi/asgi_py_bind.c
 """
 
 from typing import Any

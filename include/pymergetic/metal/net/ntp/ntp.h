@@ -9,10 +9,10 @@
  * host may be a hostname, dotted IPv4, or NULL to use DHCP option 42 from the
  * default interface when present.
  *
- * impl: common — src/pymergetic/metal/dev/net/ntp.c
+ * impl: common — src/pymergetic/metal/net/ntp/ntp.c
  */
-#ifndef PYMERGETIC_METAL_DEV_NET_NTP_H_
-#define PYMERGETIC_METAL_DEV_NET_NTP_H_
+#ifndef PYMERGETIC_METAL_NET_NTP_H_
+#define PYMERGETIC_METAL_NET_NTP_H_
 
 #include <stdint.h>
 
@@ -46,4 +46,4 @@ int pm_metal_net_ntp_native_register(void);
 }
 #endif
 
-#endif /* PYMERGETIC_METAL_DEV_NET_NTP_H_ */
+#endif /* PYMERGETIC_METAL_NET_NTP_H_ */

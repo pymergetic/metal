@@ -7,8 +7,8 @@
 #include <pymergetic/metal/bus/io/io.h>
 #include <pymergetic/metal/bus/virtio/virtio.h>
 #include "../../bus/pci/pci.h"
-#include <pymergetic/metal/dev/net/net_ops.h>
-#include <pymergetic/metal/dev/net/net_cfg.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
+#include <pymergetic/metal/net/ip/ip_cfg.h>
 #include <pymergetic/metal/dev/audio/audio_ops.h>
 #include <pymergetic/metal/dev/blk/blk.h>
 #include <pymergetic/metal/log/log.h>
@@ -437,7 +437,7 @@ void pm_metal_hwinfo_cpu_brand(char *out, size_t cap)
 void pm_metal_hwinfo_print(void)
 {
   char                        net_line[640];
-  const pm_metal_net_ops_t   *net_ops;
+  const pm_metal_net_ip_ops_t   *net_ops;
   const pm_metal_audio_ops_t *aud_ops;
   uint32_t                    i;
   uint32_t                    nblk;
@@ -458,9 +458,9 @@ void pm_metal_hwinfo_print(void)
   }
 
   pm_metal_log("hwinfo: backends");
-  net_ops = pm_metal_net_get_ops();
+  net_ops = pm_metal_net_ip_get_ops();
   pm_metal_logf("  net ops: %s", (net_ops != NULL && net_ops->name != NULL) ? net_ops->name : "?");
-  if (pm_metal_net_if_status(net_line, (uint32_t)sizeof(net_line)) == 0) {
+  if (pm_metal_net_ip_if_status(net_line, (uint32_t)sizeof(net_line)) == 0) {
     pm_metal_logf("  net cfg: %s", net_line);
   }
 

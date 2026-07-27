@@ -1,7 +1,7 @@
 /*
  * Local host identity (nodename) — not DNS.
  *
- * Remote name→IP stays async pm_metal_net_dns(). This API is sync kernel
+ * Remote name→IP stays async pm_metal_net_ip_dns(). This API is sync kernel
  * state: who we are, default "metal", optional metal/net.conf hostname=.
  *
  * impl: common — src/pymergetic/metal/host/host.c

@@ -10,8 +10,8 @@
 
 #include <pymergetic/metal/dev/input/input.h>
 #include <pymergetic/metal/dev/audio/audio.h>
-#include <pymergetic/metal/dev/net/net_cfg.h>
-#include <pymergetic/metal/dev/net/ntp.h>
+#include <pymergetic/metal/net/ip/ip_cfg.h>
+#include <pymergetic/metal/net/ntp/ntp.h>
 #include <pymergetic/metal/dev/random/random.h>
 #include <pymergetic/metal/guest/wasm/wasm.h>
 #include <pymergetic/metal/guest/process/process.h>
@@ -651,7 +651,7 @@ static void MetalUiPaintTabsStrip(metal_ui_widget_t *tabs)
   }
 }
 
-static uint32_t MetalUiNetIfHealth(const pm_metal_net_ifcfg_t *cfg)
+static uint32_t MetalUiNetIfHealth(const pm_metal_net_ip_ifcfg_t *cfg)
 {
   uint32_t ip;
   uint32_t dns;
@@ -741,7 +741,7 @@ static void MetalUiStatusSnapshot(uint32_t *clock_tod,
   uint32_t             n;
   uint32_t             i;
   uint32_t             health;
-  pm_metal_net_ifcfg_t cfg;
+  pm_metal_net_ip_ifcfg_t cfg;
 
   ms         = pm_metal_tz_local_ms();
   tod        = (uint32_t)((ms / 1000ull) % 86400ull);
@@ -750,7 +750,7 @@ static void MetalUiStatusSnapshot(uint32_t *clock_tod,
   *keyb      = pm_metal_input_keyb_get();
   *aud_packed = MetalUiAudioPacked();
 
-  n      = pm_metal_net_if_count();
+  n      = pm_metal_net_ip_if_count();
   health = 0;
   if (n > 16u) {
     n = 16u;
@@ -759,7 +759,7 @@ static void MetalUiStatusSnapshot(uint32_t *clock_tod,
   for (i = 0; i < n; i++) {
     uint32_t h;
 
-    if (pm_metal_net_if_get_index(i, &cfg) != 0) {
+    if (pm_metal_net_ip_if_get_index(i, &cfg) != 0) {
       h = NET_HEALTH_DOWN;
     } else {
       h = MetalUiNetIfHealth(&cfg);
@@ -807,7 +807,7 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
   uintptr_t            fps_chars;
   uintptr_t            keyb_chars;
   uintptr_t            max_chars;
-  pm_metal_net_ifcfg_t cfg;
+  pm_metal_net_ip_ifcfg_t cfg;
   pm_metal_gfx_color_t fps_fg;
   pm_metal_gfx_color_t rdy_fg;
 
@@ -854,10 +854,10 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
   }
 
   /* Systray width: colored bullet + name + pad per iface. */
-  n      = pm_metal_net_if_count();
+  n      = pm_metal_net_ip_if_count();
   tray_w = 0;
   for (i = 0; i < n; i++) {
-    if (pm_metal_net_if_get_index(i, &cfg) != 0) {
+    if (pm_metal_net_ip_if_get_index(i, &cfg) != 0) {
       continue;
     }
 
@@ -906,7 +906,7 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
     uintptr_t            namelen;
     uint32_t             health;
 
-    if (pm_metal_net_if_get_index(i, &cfg) != 0) {
+    if (pm_metal_net_ip_if_get_index(i, &cfg) != 0) {
       continue;
     }
 
