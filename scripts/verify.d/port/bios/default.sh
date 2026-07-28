@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# QEMU + SeaBIOS: boot metal.elf (Multiboot2), expect boot tree + ready.
+# QEMU + SeaBIOS: boot metal.qemu.elf (Multiboot2 trampoline → ELF64), expect ready.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/bios-qemu.sh"
 
-ELF="${ROOT}/build/bios/metal.boot.elf"
-LOG="${ROOT}/build/bios/qemu-verify.log"
-VBLK="$(pm_metal_bios_stage_vblk "${ROOT}/build/bios/vblk-verify.img")"
+ELF="${ROOT}/build/x86_64_bios/metal.qemu.elf"
+LOG="${ROOT}/build/x86_64_bios/qemu-verify.log"
+VBLK="$(pm_metal_bios_stage_vblk "${ROOT}/build/x86_64_bios/vblk-verify.img")"
 
 if [[ ! -f "${ELF}" ]]; then
 	echo "verify-bios: missing ${ELF} — run ./scripts/build bios" >&2

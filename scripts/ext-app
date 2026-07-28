@@ -10,7 +10,7 @@
 #                   selected platform(s). With no platform selected, just
 #                   builds the app and stops.
 #   -u / --upload   efi: stage the ESP + scp it to your host (scripts/upload-efi).
-#                   bios: scp build/bios/pxe/ to your PXE/TFTP host
+#                   bios: scp i386_bios + build/pxe/ to your PXE/TFTP host
 #                   (scripts/upload-pxe).
 #   -r / --run      launch interactively in QEMU (scripts/run efi|bios).
 #   -s / --all-steps  shorthand for -bur (all 3 steps).

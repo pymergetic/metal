@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""Precompile mods/py/templates/*.html to *_html.py for utemplate.compiled.Loader.
-
-Guest FAT is awkward for on-the-fly compile (source.Loader writes .py next to
-the template). Run this on the host whenever a .html template changes; the
-launcher uses compiled.Loader only.
-"""
+"""Precompile mods/api/templates/*.html to *_html.py for utemplate.compiled.Loader."""
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+METAL = ROOT.parent.parent
 TPL_DIR = ROOT / "templates"
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "microdot_src" / "libs" / "common"))
+# Host checkout: external/utemplate/*.py (gitignored). Guest: utemplate.zip.
+sys.path.insert(0, str(METAL / "external"))
 
 from utemplate.source import Compiler  # noqa: E402
 

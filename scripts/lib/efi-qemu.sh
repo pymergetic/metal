@@ -39,30 +39,11 @@ pm_metal_efi_stage_esp() {
 	mkdir -p "${esp}/mods/tests"
 	printf 'metal-async-fs\n' >"${esp}/mods/tests/async_fs.txt"
 
-	# MicroPython guest runtime only — never stage microdot_src/stdlib_src/
-	# trees (hundreds of files blow PM_METAL_ESP_CACHE_MAX=128 and can leave
-	# stdlib.zip uncached / unreadable, breaking `import asyncio` for ASGI).
-	# utemplate/templates must be zips (mp_import_stat has no ESP DIR).
-	if [[ -d "${ROOT}/mods/py" ]]; then
-		# Pack/sign guest zips from source — never rely on committed artifacts.
-		if [[ -x "${ROOT}/mods/py/build_microdot_zip.sh" ]]; then
-			"${ROOT}/mods/py/build_microdot_zip.sh"
-		fi
-		if [[ -x "${ROOT}/mods/py/pack_asgi_zips.sh" ]]; then
-			"${ROOT}/mods/py/pack_asgi_zips.sh"
-		fi
-		mkdir -p "${esp}/mods/py"
-		for f in metal_asgi_launcher.py microdot.zip microdot.zip.sig \
-			stdlib.zip stdlib.zip.sig utemplate.zip templates.zip; do
-			if [[ -f "${ROOT}/mods/py/${f}" ]]; then
-				cp -a "${ROOT}/mods/py/${f}" "${esp}/mods/py/"
-			fi
-		done
-		if [[ -d "${ROOT}/mods/py/tests" ]]; then
-			mkdir -p "${esp}/mods/py/tests"
-			cp -a "${ROOT}/mods/py/tests/." "${esp}/mods/py/tests/"
-		fi
-	fi
+	# MicroPython guest runtime + httpd/api — never stage external/ source
+	# trees (blow ESP cache). Packages are zip-only (mp_import_stat has no DIR).
+	# shellcheck disable=SC1091
+	source "${ROOT}/scripts/lib/stage-py-httpd.sh"
+	pm_metal_stage_py_httpd_into "${esp}"
 
 	# httpd defaults + static root (ASGI). Lab sshd hostkey lives under
 	# mods/etc/ssh/; METAL_SSHD_HOSTKEY overrides that file on the ESP.
@@ -90,7 +71,7 @@ pm_metal_efi_stage_esp() {
 
 # Raw virtio-blk image with LBA0 magic "METALBLK1".
 pm_metal_efi_stage_vblk() {
-	local img="${1:-${ROOT}/build/efi/vblk.img}"
+	local img="${1:-${ROOT}/build/x86_64_efi/vblk.img}"
 	mkdir -p "$(dirname "${img}")"
 	dd if=/dev/zero of="${img}" bs=1M count=8 status=none
 	printf 'METALBLK1' | dd of="${img}" bs=1 seek=0 conv=notrunc status=none

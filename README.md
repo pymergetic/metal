@@ -99,7 +99,7 @@ More filenames: [`screenshots/README.md`](screenshots/README.md).
 C owns the wire; mounts point at opaque `app_h` leaves. Longest-prefix match,
 then dispatch by runner kind (`C` / `PY` / `WASM`). Host and guest both call
 `pm_metal_net_asgi_mount`; wasm apps self-register (`register_wasm`) before
-mounting. Builtins for `/etc/httpd.json`: `c:health`, `c:static`, `py:microdot`
+mounting. Builtins for `/etc/httpd.json`: `c:health`, `c:static`, `py:httpd`
 — see [`docs/IO.md`](docs/IO.md).
 
 | Dispatch | Config |
@@ -144,7 +144,7 @@ interp/AOT (no upstream Fast JIT backend).
 ```bash
 ./scripts/setup edk2         # once — EDK2 + nasm + BaseTools
 ./scripts/menuconfig         # optional — budgets / iface / default target (docs/KCONFIG.md)
-./scripts/build efi          # → build/efi/metal.efi  (argv overrides Kconfig for this call)
+./scripts/build efi          # → build/x86_64_efi/metal.efi  (argv overrides Kconfig for this call)
 ./scripts/verify efi         # QEMU + OVMF smoke
 ./scripts/run efi --gtk      # interactive (optional)
 ```
@@ -302,9 +302,18 @@ packages/metal/
 ├── src/efi/                   UEFI MetalPkg
 ├── mods/tests/                harness .wasm guests
 ├── mods/apps/                 external apps staged here at build time (empty in a fresh checkout)
+├── mods/py/                   MicroPython stdlib + py tests
+├── mods/httpd/                ASGI bridge (httpd.py) + Microdot/utemplate zips
+├── mods/api/                  catalog routes + templates (docs/iface/…)
+├── external/                  vendored trees (micropython, microdot, utemplate, …)
 ├── screenshots/               UI / UART / Doom / iron photos
 ├── docs/                      design + bring-up notes
-└── scripts/                   setup | build | verify | run | upload-pxe | upload-efi | ext-app
+├── scripts/                   setup | build | verify | run | upload-pxe | upload-efi | ext-app
+└── build/                     (gitignored) arch_port product dirs:
+      x86_64_efi/metal.efi
+      x86_64_bios/{metal.elf,metal.qemu.elf}
+      i386_bios/metal.elf
+      pxe/                     iPXE + mods staging (kernel from i386_bios)
 ```
 
 ---

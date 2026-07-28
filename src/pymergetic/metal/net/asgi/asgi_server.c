@@ -56,8 +56,8 @@ typedef struct {
   pm_metal_mod_fn_t       wasm_fn;
 } asgi_listen_t;
 
-static pm_metal_py_fn_h_t g_microdot_fn;
-static int32_t            g_microdot_importing;
+static pm_metal_py_fn_h_t g_httpd_fn;
+static int32_t            g_httpd_importing;
 /* WS echo out + wasm send_simple body — not on C stack (ASGI_IO_MAX is 4 MiB). */
 static uint8_t           *g_asgi_scratch;
 
@@ -311,9 +311,9 @@ static int32_t handle_conn(asgi_srv_t *srv, asgi_listen_t *st)
       st->py_fn = (pm_metal_py_fn_h_t)slot->py_cookie;
       return 2;
     }
-    if (g_microdot_fn != PM_METAL_PY_FN_H_INVALID) {
-      st->py_fn       = g_microdot_fn;
-      slot->py_cookie = (uint32_t)g_microdot_fn;
+    if (g_httpd_fn != PM_METAL_PY_FN_H_INVALID) {
+      st->py_fn       = g_httpd_fn;
+      slot->py_cookie = (uint32_t)g_httpd_fn;
       return 2;
     }
     if (!pm_metal_py_ready()) {
@@ -529,16 +529,16 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
       }
       hr = handle_conn(srv, st);
       if (hr == 1) {
-        if (g_microdot_importing) {
+        if (g_httpd_importing) {
           st->aw   = pm_metal_async_sleep_us(2000);
           st->step = ASGI_ST_PY_WAIT_IMPORT;
           return pm_metal_async_await(self_h, st->aw);
         }
-        g_microdot_importing = 1;
-        pm_metal_logf("asgi: py import metal_asgi_launcher");
-        st->aw = pm_metal_py_run_str("import metal_asgi_launcher\n");
+        g_httpd_importing = 1;
+        pm_metal_logf("asgi: py import httpd");
+        st->aw = pm_metal_py_run_str("import httpd\n");
         if (st->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
-          g_microdot_importing = 0;
+          g_httpd_importing = 0;
           (void)pm_metal_net_asgi_send_simple(
             500, "Error", "text/plain", "py import fail\n");
           conn_cleanup(st);
@@ -584,11 +584,11 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
     }
 
     case ASGI_ST_PY_IMPORT_AW:
-      g_microdot_importing = 0;
+      g_httpd_importing = 0;
       pm_metal_logf("asgi: py import done");
-      g_microdot_fn = pm_metal_py_fn_resolve("metal_asgi_launcher.handle");
-      if (g_microdot_fn == PM_METAL_PY_FN_H_INVALID) {
-        pm_metal_logf("asgi: py resolve fail (metal_asgi_launcher.handle)");
+      g_httpd_fn = pm_metal_py_fn_resolve("httpd.handle");
+      if (g_httpd_fn == PM_METAL_PY_FN_H_INVALID) {
+        pm_metal_logf("asgi: py resolve fail (httpd.handle)");
         (void)pm_metal_net_asgi_send_simple(
           500, "Error", "text/plain", "py resolve fail\n");
         conn_cleanup(st);
@@ -596,9 +596,9 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
         break;
       }
       if (st->py_slot != NULL) {
-        st->py_slot->py_cookie = (uint32_t)g_microdot_fn;
+        st->py_slot->py_cookie = (uint32_t)g_httpd_fn;
       }
-      st->py_fn = g_microdot_fn;
+      st->py_fn = g_httpd_fn;
       st->aw    = pm_metal_py_fn_call_async(st->py_fn, 0);
       if (st->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
         (void)pm_metal_net_asgi_send_simple(500, "Error", "text/plain", "py call fail\n");
@@ -702,11 +702,11 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
       break;
 
     case ASGI_ST_PY_WAIT_IMPORT:
-      if (g_microdot_fn != PM_METAL_PY_FN_H_INVALID) {
+      if (g_httpd_fn != PM_METAL_PY_FN_H_INVALID) {
         if (st->py_slot != NULL) {
-          st->py_slot->py_cookie = (uint32_t)g_microdot_fn;
+          st->py_slot->py_cookie = (uint32_t)g_httpd_fn;
         }
-        st->py_fn = g_microdot_fn;
+        st->py_fn = g_httpd_fn;
         st->aw    = pm_metal_py_fn_call_async(st->py_fn, 0);
         if (st->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
           (void)pm_metal_net_asgi_send_simple(500, "Error", "text/plain", "py call fail\n");
@@ -717,7 +717,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
         st->step = ASGI_ST_PY_CALL_AW;
         return pm_metal_async_await_task(self_h, st->aw);
       }
-      if (g_microdot_importing) {
+      if (g_httpd_importing) {
         st->aw = pm_metal_async_sleep_us(2000);
         return pm_metal_async_await(self_h, st->aw);
       }
@@ -990,8 +990,8 @@ int32_t pm_metal_net_asgi_reload(void)
 {
   asgi_autoload_close_all();
   g_asgi_autoloaded    = 0;
-  g_microdot_fn        = PM_METAL_PY_FN_H_INVALID;
-  g_microdot_importing = 0;
+  g_httpd_fn        = PM_METAL_PY_FN_H_INVALID;
+  g_httpd_importing = 0;
   return pm_metal_net_asgi_autoload();
 }
 

@@ -80,3 +80,14 @@ footer {
   font-size: 0.9rem;
 }
 .nav-crumbs { margin-bottom: 0.75rem; font-size: 0.95rem; }
+.pager {
+  margin: 0.75rem 0 1rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.pager p { margin: 0.25rem 0; }
+.pager-links a,
+.pager-links span {
+  margin-right: 0.85rem;
+}

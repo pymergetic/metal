@@ -3,22 +3,25 @@
   "pythonVersion": "3.12",
   "reportMissingModuleSource": "none",
   "extraPaths": [
-    "mods/py/microdot_src/src",
-    "mods/py/stdlib_src"
+    "external/microdot/src",
+    "external",
+    "mods/py/stdlib",
+    "mods/httpd",
+    "mods/api"
   ],
   "exclude": [
     "external/**",
     "build/**",
     ".venv/**",
-    "mods/py/microdot_src/tests/**",
-    "mods/py/microdot_src/examples/**"
+    "external/microdot/tests/**",
+    "external/microdot/examples/**"
   ],
   "executionEnvironments": [
     {
-      "root": "mods/py/stdlib_src",
+      "root": "mods/py/stdlib",
       "pythonVersion": "3.12",
       "extraPaths": [
-        "mods/py/stdlib_src"
+        "mods/py/stdlib"
       ]
     }
   ]

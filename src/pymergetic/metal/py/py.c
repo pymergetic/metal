@@ -102,12 +102,12 @@ static volatile uint32_t mPyRunLock;
  * instead of looping; pm_metal_py_call() (outside any step, can't await)
  * bounds its own retry loop below instead.
  */
-static int py_run_try_lock(void)
+int pm_metal_py_run_try_lock(void)
 {
   return (pm_metal_slot_port_cas32(&mPyRunLock, 0, 1) == 0) ? 0 : -1;
 }
 
-static void py_run_unlock(void)
+void pm_metal_py_run_unlock(void)
 {
   (void)pm_metal_slot_port_cas32(&mPyRunLock, 1, 0);
 }
@@ -238,7 +238,7 @@ static int py_read_path(const char *path, char **out, size_t *out_len)
   return 0;
 }
 
-/* Caller (py_job_step) already holds mPyRunLock via py_run_try_lock(). */
+/* Caller (py_job_step) already holds mPyRunLock via pm_metal_py_run_try_lock(). */
 static int py_exec_and_maybe_main(pm_metal_py_job_t *job)
 {
   nlr_buf_t nlr;
@@ -286,7 +286,7 @@ static int py_exec_and_maybe_main(pm_metal_py_job_t *job)
   /* Isolated jobs never took mPyRunLock (py_job_step skips it — see
    * PY_STEP_EXEC) — nothing to release. */
   if (job->ctx == NULL) {
-    py_run_unlock();
+    pm_metal_py_run_unlock();
   }
   return rc;
 }
@@ -298,7 +298,7 @@ static int py_exec_and_maybe_main(pm_metal_py_job_t *job)
  * `def main(): ...` should not have it silently invoked), and an
  * uncaught exception is printed and swallowed rather than killing the
  * job — a real REPL keeps prompting after a traceback, it doesn't exit.
- * Caller (py_job_step) already holds mPyRunLock via py_run_try_lock().
+ * Caller (py_job_step) already holds mPyRunLock via pm_metal_py_run_try_lock().
  */
 static void py_repl_exec_chunk(pm_metal_py_job_t *job, const char *src, size_t len)
 {
@@ -320,10 +320,10 @@ static void py_repl_exec_chunk(pm_metal_py_job_t *job, const char *src, size_t l
   pm_metal_py_stdout_flush();
   g_current_job = NULL;
   pm_metal_py_ctx_leave();
-  py_run_unlock();
+  pm_metal_py_run_unlock();
 }
 
-/* Caller (py_job_step) already holds mPyRunLock via py_run_try_lock(). */
+/* Caller (py_job_step) already holds mPyRunLock via pm_metal_py_run_try_lock(). */
 static int py_call_bound(pm_metal_py_job_t *job)
 {
   nlr_buf_t nlr;
@@ -368,12 +368,12 @@ static int py_call_bound(pm_metal_py_job_t *job)
   g_current_job = NULL;
   pm_metal_py_ctx_leave();
   if (job->ctx == NULL) {
-    py_run_unlock();
+    pm_metal_py_run_unlock();
   }
   return rc;
 }
 
-/* Caller (py_job_step) already holds mPyRunLock via py_run_try_lock()
+/* Caller (py_job_step) already holds mPyRunLock via pm_metal_py_run_try_lock()
  * (shared context only — isolated contexts, job->ctx != NULL, skip the
  * lock entirely, see PY_STEP_RESUME below). */
 static pm_metal_status_t py_resume_coro(pm_metal_py_job_t *job)
@@ -399,7 +399,7 @@ static pm_metal_status_t py_resume_coro(pm_metal_py_job_t *job)
     g_current_job      = NULL;
     pm_metal_py_ctx_leave();
     if (job->ctx == NULL) {
-      py_run_unlock();
+      pm_metal_py_run_unlock();
     }
     return PM_METAL_ERROR;
   }
@@ -420,7 +420,7 @@ static pm_metal_status_t py_resume_coro(pm_metal_py_job_t *job)
   /* Unlock before park so another py task can run while we sleep
    * (shared context only — isolated contexts never took the lock). */
   if (job->ctx == NULL) {
-    py_run_unlock();
+    pm_metal_py_run_unlock();
   }
 
   if (kind == MP_VM_RETURN_NORMAL) {
@@ -510,6 +510,10 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
     if (zrc > 0) {
       return pm_metal_async_await(self_h, pending);
     }
+    /* Shared context: run mods/.../autoload.py once before real work. */
+    if (job->ctx == NULL && !pm_metal_py_autoload_done()) {
+      pm_metal_py_autoload_run_once();
+    }
     job->step = job->after_zip_step;
     /* Re-enter through the ready ring instead of falling through here —
      * job->after_zip_step is a runtime value (LOAD or EXEC depending on
@@ -549,7 +553,7 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
      * whatever the shared context (or another isolated context) is
      * doing on a different CPU right now.
      */
-    if (job->ctx == NULL && py_run_try_lock() != 0) {
+    if (job->ctx == NULL && pm_metal_py_run_try_lock() != 0) {
       return pm_metal_async_await(self_h, pm_metal_async_yield());
     }
     if (py_exec_and_maybe_main(job) != 0) {
@@ -565,7 +569,7 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
   case PY_STEP_CALL:
     /* py_call_bound() unlocks internally on every path — same as above,
      * same isolated-context skip as PY_STEP_EXEC. */
-    if (job->ctx == NULL && py_run_try_lock() != 0) {
+    if (job->ctx == NULL && pm_metal_py_run_try_lock() != 0) {
       return pm_metal_async_await(self_h, pm_metal_async_yield());
     }
     if (py_call_bound(job) != 0) {
@@ -586,7 +590,7 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
      * only the entry needs gating here too, same isolated-context skip
      * as PY_STEP_EXEC/CALL.
      */
-    if (job->ctx == NULL && py_run_try_lock() != 0) {
+    if (job->ctx == NULL && pm_metal_py_run_try_lock() != 0) {
       return pm_metal_async_await(self_h, pm_metal_async_yield());
     }
     {
@@ -606,7 +610,7 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
      * a busy-lock retry can never silently drop input.
      */
     if (job->src != NULL && mReplContinuation == 0u) {
-      if (job->ctx == NULL && py_run_try_lock() != 0) {
+      if (job->ctx == NULL && pm_metal_py_run_try_lock() != 0) {
         return pm_metal_async_await(self_h, pm_metal_async_yield());
       }
       py_repl_exec_chunk(job, job->src, job->src_len);
@@ -1046,7 +1050,7 @@ int pm_metal_py_call(pm_metal_py_fn_t *fn, int32_t *out_i32, int32_t a, int32_t 
   }
 
   tries = 0;
-  while (py_run_try_lock() != 0) {
+  while (pm_metal_py_run_try_lock() != 0) {
     pm_metal_cpu_pause();
     if (++tries > PY_CALL_LOCK_MAX_TRIES) {
       pm_metal_log("py: call busy");
@@ -1086,7 +1090,7 @@ int pm_metal_py_call(pm_metal_py_fn_t *fn, int32_t *out_i32, int32_t a, int32_t 
     rc = -1;
   }
   pm_metal_py_ctx_leave();
-  py_run_unlock();
+  pm_metal_py_run_unlock();
   return rc;
 }
 
@@ -1199,3 +1203,6 @@ PM_METAL_EXTERNAL(g_pm_metal_ext_micropython,
                   MICROPY_GIT_TAG,
                   "https://github.com/micropython/micropython",
                   "embedded Python REPL + binds");
+
+/* Guest stacks (microdot / utemplate): mods/httpd/autoload.py via
+ * pymergetic.metal.externals.register — not PM_METAL_EXTERNAL. */

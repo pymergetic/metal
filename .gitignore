@@ -31,9 +31,8 @@ cmake-build-*/
 # Generated from .clangd.template by scripts/setup ide
 /.clangd
 
-# EFI artifacts
+# EFI artifacts (legacy flat name; images live under /build/)
 /*.efi
-/build/efi/
 
 # Generated from src/efi/MetalPkg/*.inf.tpl (@METAL_ROOT@ → checkout root)
 /src/efi/MetalPkg/Metal.inf
@@ -41,18 +40,16 @@ cmake-build-*/
 
 
 # Guest Python zips + sigs — rebuilt from source on every ESP/PXE stage
-# (embed-stdlib.sh / build_microdot_zip.sh / pack_asgi_zips.sh). .sig is
-# never byte-stable across re-signs. Track sources only (stdlib_src/,
-# microdot_src submodule, templates/*.html, utemplate/*.py).
 /mods/py/stdlib.zip
 /mods/py/stdlib.zip.sig
-/mods/py/microdot.zip
-/mods/py/microdot.zip.sig
-/mods/py/templates.zip
-/mods/py/utemplate.zip
+/mods/httpd/microdot.zip
+/mods/httpd/microdot.zip.sig
+/mods/httpd/utemplate.zip
+/mods/api/api.zip
+/mods/api/templates.zip
 
 # utemplate compile_templates.py output (from templates/*.html)
-/mods/py/templates/*_html.py
+/mods/api/templates/*_html.py
 
 # Python bytecode
 **/__pycache__/

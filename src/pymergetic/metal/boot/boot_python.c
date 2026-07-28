@@ -1009,7 +1009,7 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
 
   case PY_PROOF_OSIO:
     /*
-     * Metal's own os/io (mods/py/stdlib_src/os/, io.py — pymergetic.metal.fs.*
+     * Metal's own os/io (mods/py/stdlib/os/, io.py — pymergetic.metal.fs.*
      * sync bindings, fs/fs_py_bind.c; not micropython-lib's uos-based
      * versions, this build has no MICROPY_VFS/uos). Full roundtrip: write,
      * read back, stat, listdir, mkdir, rename, unlink.
@@ -1138,7 +1138,7 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
   case PY_PROOF_TIME:
     /*
      * pymergetic.metal.time (dev/random/time_py_bind.c) + mods/py/
-     * stdlib_src/time.py on top — real wall clock (EFI's gRT->GetTime()/
+     * stdlib/time.py on top — real wall clock (EFI's gRT->GetTime()/
      * BIOS's CMOS RTC, refined by SNTP — net/ntp/ntp.c), no floats
      * anywhere (MICROPY_PY_BUILTINS_FLOAT is off). datetime.py
      * (MICROPY_PY_BUILTINS_PROPERTY, flipped for this) and hmac.py
@@ -1280,9 +1280,9 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
   case PY_PROOF_FSMOD:
     /*
      * pathlib/shutil/tempfile (packaging-only, os+io backed) + unittest
-     * (simple TestCase run) + textwrap (re-free _split(), see stdlib_src/
+     * (simple TestCase run) + textwrap (re-free _split(), see stdlib/
      * textwrap.py's Metal patch note) + uu (pure-Python codec, no
-     * binascii b2a_uu/a2b_uu upstream — stdlib_src/uu.py's own note).
+     * binascii b2a_uu/a2b_uu upstream — stdlib/uu.py's own note).
      */
     t->a = pm_metal_py_run_str(
       "import pathlib\n"

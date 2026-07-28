@@ -1,6 +1,6 @@
 /** @file
   pymergetic.metal.tar — sync ustar reader/writer for Python (backs
-  mods/py/stdlib_src/tarfile.py). Wraps util/tar.h's own iter_t/writer_t
+  mods/py/stdlib/tarfile.py). Wraps util/tar.h's own iter_t/writer_t
   (host-only, buffer in/buffer out, no filesystem) — Metal's own facade,
   not micropython-lib's upstream `tarfile` package (that one needs
   uctypes, which this build doesn't carry; see docs/MICROPYTHON.md).

@@ -5,7 +5,7 @@
 # compiles a self-contained stdlib.zip straight into the firmware image.
 #
 # Neither mods/py/stdlib.zip nor its .sig is tracked in git (both are
-# regenerated from mods/py/stdlib_src/ on every build, and the .sig is
+# regenerated from mods/py/stdlib/ on every build, and the .sig is
 # never byte-stable across re-signs) — see docs/MICROPYTHON.md. This
 # script, run unconditionally by both port builds, is what replaces
 # "committed to git" with "always freshly baked into the binary".

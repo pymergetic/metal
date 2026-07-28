@@ -6,11 +6,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/efi-qemu.sh"
 
-EFI="${ROOT}/build/efi/metal.efi"
-# Separate from interactive ./scripts/run efi (build/efi/esp) — two QEMUs on the
+EFI="${ROOT}/build/x86_64_efi/metal.efi"
+# Separate from interactive ./scripts/run efi (build/x86_64_efi/esp) — two QEMUs on the
 # same fat:rw directory deadlock / stall with no serial output.
-ESP="${ROOT}/build/efi/esp-verify"
-LOG="${ROOT}/build/efi/qemu-verify.log"
+ESP="${ROOT}/build/x86_64_efi/esp-verify"
+LOG="${ROOT}/build/x86_64_efi/qemu-verify.log"
 
 OVMF="$(pm_metal_efi_ovmf)" || {
 	echo "verify-efi: OVMF firmware not found (apt: ovmf)" >&2
@@ -19,12 +19,12 @@ OVMF="$(pm_metal_efi_ovmf)" || {
 
 pm_metal_efi_stage_esp "${EFI}" "${ESP}"
 : >"${ESP}/mods/tests/autotest"
-# Separate from interactive ./scripts/run efi (build/efi/vblk.img) — shared
+# Separate from interactive ./scripts/run efi (build/x86_64_efi/vblk.img) — shared
 # raw images lock under QEMU.
-VBLK="$(pm_metal_efi_stage_vblk "${ROOT}/build/efi/vblk-verify.img")"
+VBLK="$(pm_metal_efi_stage_vblk "${ROOT}/build/x86_64_efi/vblk-verify.img")"
 
 # async_tftp: QEMU slirp built-in TFTP + DHCP next-server / bootfile.
-TFTP_DIR="${ROOT}/build/efi/tftp-verify"
+TFTP_DIR="${ROOT}/build/x86_64_efi/tftp-verify"
 mkdir -p "${TFTP_DIR}"
 printf 'metal-async-tftp\n' >"${TFTP_DIR}/metal-tftp-proof.txt"
 

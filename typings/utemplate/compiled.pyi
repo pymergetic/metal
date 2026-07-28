@@ -1,0 +1,6 @@
+from typing import Any, Callable
+
+
+class Loader:
+    def __init__(self, pkg: str | None, dir: str) -> None: ...
+    def load(self, name: str) -> Callable[..., Any]: ...

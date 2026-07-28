@@ -41,14 +41,16 @@ static int                     g_zip_fetch_tried;  /* one attempt total, ever */
 
 void pm_metal_py_zip_init_sys_path(void)
 {
+  /* Runtime stdlib + py tests. */
   mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/py")));
   mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str(PM_METAL_PY_STDLIB_ZIP)));
-  /* Microdot + utemplate + compiled templates (ASGI HTML UI) — zip-only:
-   * mp_import_stat() has no DIR for plain ESP paths (size>0 FILE only), so
-   * loose package trees under /mods/py never import; see pack_asgi_zips.sh. */
-  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/py/microdot.zip")));
-  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/py/utemplate.zip")));
-  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/py/templates.zip")));
+  /* httpd glue (httpd.py / util.py / highlight.py as FILE) + Microdot/utemplate zips. */
+  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/httpd")));
+  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/httpd/microdot.zip")));
+  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/httpd/utemplate.zip")));
+  /* api package + templates — zip-only (mp_import_stat has no ESP DIR). */
+  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/api/api.zip")));
+  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/api/templates.zip")));
 }
 
 /* 0 present+trusted, 1 absent (optional), -1 present but rejected. */

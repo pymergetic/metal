@@ -112,10 +112,13 @@ Topic modules place commands with `PM_METAL_SHELL_CMD` / `PM_METAL_SHELL_CMDS` i
 Third-party stack identity (MicroPython, WAMR, lwIP, Dropbear, mbedTLS,
 microtar, …) self-registers with `PM_METAL_EXTERNAL` into
 `.pm_metal_externals.*` — same linker-section idiom as shell cmds / keyb
-layouts. This is **not** the mod registry and **not** Metal's own
+layouts. Guest-only stacks (Microdot, utemplate, …) register at runtime via
+`pymergetic.metal.externals.register` from `/mods/<name>/autoload.py`
+(path-exec once on the shared µPy context — REPL banner and post-`stdlib.zip`
+ready). This is **not** the mod registry and **not** Metal's own
 `authors` / `about` record. Surfaces: shell `externals`, Python
-`pymergetic.metal.externals`, WASI `pymergetic.metal.externals`, HTML/JSON
-`/externals` + `/api/externals` (see
+`pymergetic.metal.externals` (`list` / `get` / `register`), WASI
+`pymergetic.metal.externals`, HTML/JSON `/externals` + `/api/externals` (see
 [`screenshots/externals.png`](../screenshots/externals.png)), and the
 MetalPython boot banner (`Metal <ver> @ <cpu>` plus `  - <id> <version>`
 bullets).
@@ -195,7 +198,7 @@ Longest-prefix `mount_find` picks the route; the leaf's runner kind selects
 the backend. Host and guest both use `pm_metal_net_asgi_mount`; wasm apps
 self-register (`pm_metal_net_asgi_register_wasm`) so the kernel need not know
 them ahead of time. Builtins for config: `c:health`, `c:static`,
-`py:microdot`.
+`py:httpd`.
 
 | Dispatch | Config |
 |:---:|:---:|

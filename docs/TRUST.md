@@ -108,8 +108,8 @@ export METAL_PKI_DIR=~/.local/share/metal/pki   # default if unset
 ./scripts/pki bake                 # refresh build/trust/metal_trust_bake.inc.c + mode
 ./scripts/pki sign-wasm build/doom/doom.wasm
 ./scripts/pki sign-wasm path/team.wasm --realm=acme
-./scripts/pki sign-elf  build/bios/i386/metal.elf
-./scripts/pki sign-elf  build/efi/metal.efi
+./scripts/pki sign-elf  build/i386_bios/metal.elf
+./scripts/pki sign-elf  build/x86_64_efi/metal.efi
 
 # Dev: no trust
 METAL_TRUST_MODE=off ./scripts/build efi

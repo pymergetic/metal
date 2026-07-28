@@ -53,7 +53,7 @@ static const char g_httpd_json_default[] =
   "  \"mounts\": [\n"
   "    { \"path\": \"/health\", \"app\": \"c:health\" },\n"
   "    { \"path\": \"/static\", \"app\": \"c:static\", \"root\": \"/mods/www\" },\n"
-  "    { \"path\": \"/\", \"app\": \"py:microdot\" },\n"
+  "    { \"path\": \"/\", \"app\": \"py:httpd\" },\n"
   "    { \"path\": \"/secure\", \"app\": \"c:health\", \"auth\": \"basic\" }\n"
   "  ]\n"
   "}\n";
@@ -493,8 +493,8 @@ pm_metal_net_asgi_app_h pm_metal_net_asgi_resolve_app(const char *app, const cha
   if (strcmp(app, "c:sysinfo") == 0) {
     return pm_metal_net_asgi_app_sysinfo();
   }
-  if (strcmp(app, "py:microdot") == 0) {
-    return pm_metal_net_asgi_app_microdot();
+  if (strcmp(app, "py:httpd") == 0) {
+    return pm_metal_net_asgi_app_httpd();
   }
   return PM_METAL_NET_ASGI_APP_INVALID;
 }

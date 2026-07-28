@@ -34,7 +34,7 @@ typedef long      mp_off_t;
   (1) /* mp_repl_continue_with_input — REPL's multi-line block detection */
 
 /* ---- small, self-contained C extmods the "Easy" stdlib.zip pack needs -- */
-/* Each backs a pure-Python micropython-lib shim under mods/py/stdlib_src/
+/* Each backs a pure-Python micropython-lib shim under mods/py/stdlib/
  * that re-exports/wraps it via the "import ufoo forces builtin foo" alias
  * (py/objmodule.c:193-206) — see docs/MICROPYTHON.md's stdlib categorization.
  * struct 'f'/'d' format chars need MICROPY_PY_BUILTINS_FLOAT (on below). */
@@ -58,7 +58,7 @@ typedef long      mp_off_t;
 #define MICROPY_PY_DEFLATE_COMPRESS         (1) /* one-way (decompress-only) would silently break zlib.compress() */
 #define MICROPY_PY_JSON                     (1) /* extmod/modjson.c — json.dumps()/loads(), no Python shim needed */
 #define MICROPY_PY_JSON_SEPARATORS          (1) /* json.dumps(..., separators=...) kwarg (upstream default; costs little) */
-/* io module: our own mods/py/stdlib_src/io.py occupies the bare "io" name
+/* io module: our own mods/py/stdlib/io.py occupies the bare "io" name
  * on sys.path (filesystem import wins over an extensible built-in — see
  * py/objmodule.c's mp_module_get_builtin), so this only ever surfaces as
  * `import uio` / `from uio import BytesIO, IOBase` — the forced-alias path

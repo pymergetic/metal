@@ -30,7 +30,7 @@
   "mounts": [
     { "path": "/health", "app": "c:health" },
     { "path": "/static", "app": "c:static", "root": "/mods/www" },
-    { "path": "/", "app": "py:microdot" },
+    { "path": "/", "app": "py:httpd" },
     { "path": "/secure", "app": "c:health", "auth": "basic" }
   ]
 }

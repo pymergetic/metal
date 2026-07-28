@@ -34,8 +34,8 @@ def stage_esp() -> tuple[Path, Path, Path]:
 set -euo pipefail
 ROOT="{ROOT}"
 source "{ROOT}/scripts/lib/efi-qemu.sh"
-EFI="{ROOT}/build/efi/metal.efi"
-ESP="{ROOT}/build/efi/esp-readme-shot"
+EFI="{ROOT}/build/x86_64_efi/metal.efi"
+ESP="{ROOT}/build/x86_64_efi/esp-readme-shot"
 pm_metal_efi_stage_esp "$EFI" "$ESP"
 VBLK="$(pm_metal_efi_stage_vblk)"
 OVMF="$(pm_metal_efi_ovmf)"
@@ -129,8 +129,8 @@ class SerialSession:
         raise TimeoutError(f"no REPL completion after: {line!r} (expect={expect!r})")
 
 def main() -> int:
-    if not (ROOT / "build/efi/metal.efi").is_file():
-        print("missing build/efi/metal.efi — run ./scripts/build efi", file=sys.stderr)
+    if not (ROOT / "build/x86_64_efi/metal.efi").is_file():
+        print("missing build/x86_64_efi/metal.efi — run ./scripts/build efi", file=sys.stderr)
         return 1
 
     if SER_SOCK.exists():

@@ -1,6 +1,6 @@
 /** @file
   pymergetic.metal.tls — low-level async TCP+TLS connections for Python
-  (backs mods/py/stdlib_src/... nothing yet: per docs/MICROPYTHON.md this
+  (backs mods/py/stdlib/... nothing yet: per docs/MICROPYTHON.md this
   is deliberately not a CPython ssl-module shim, just the real primitive a
   future pure-Python wrapper would sit on top of). Wraps
   dev/net/tls_conn.h's own connection-slot state machine — one open()'d

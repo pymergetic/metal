@@ -1,6 +1,6 @@
 /** @file
   pymergetic.metal.time — real-time-clock primitives for Python's own
-  time.py (mods/py/stdlib_src/time.py). Backed by the same wall clock
+  time.py (mods/py/stdlib/time.py). Backed by the same wall clock
   random.c already exposes to wasm guests (pm_metal_realtime_ms, fed by
   EFI's gRT->GetTime()/BIOS's CMOS RTC, refined by SNTP on success — see
   net/ntp/ntp.c) plus the monotonic TSC clock (runtime/time/time.h). No

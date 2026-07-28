@@ -127,7 +127,7 @@ int32_t pm_metal_net_asgi_conn_send(const void *buf, uint32_t len);
 int32_t                 pm_metal_net_asgi_cfg_load(void);
 asgi_httpd_cfg_t       *pm_metal_net_asgi_cfg(void);
 pm_metal_net_asgi_app_h pm_metal_net_asgi_resolve_app(const char *app, const char *root);
-pm_metal_net_asgi_app_h pm_metal_net_asgi_app_microdot(void);
+pm_metal_net_asgi_app_h pm_metal_net_asgi_app_httpd(void);
 
 int32_t pm_metal_net_asgi_budget_try_enter(uint32_t budget_pct);
 void    pm_metal_net_asgi_budget_leave(void);

@@ -1,20 +1,10 @@
 #!/usr/bin/env bash
-# Reproducible mods/py/stdlib.zip build: pack mods/py/stdlib_src/ (Easy
-# pure-Python stdlib modules, see docs/MICROPYTHON.md) into a STORED-only
-# (uncompressed) zip, then re-sign it with the Mods CA.
-#
-# STORED-only is not a style choice: py_zip_read.c's in-place archive
-# reader (src/pymergetic/metal/py/py_zip_read.c) only understands
-# compression method 0 — there is no DEFLATE decompressor in Metal. The
-# packer below (plain Python zipfile, ZIP_STORED) enforces this at build
-# time instead of failing silently at import time on-device, and avoids a
-# hard dependency on the external `zip` CLI.
-#
-# Usage: ./mods/py/build_stdlib_zip.sh
+# Reproducible mods/py/stdlib.zip build: pack mods/py/stdlib/ into a STORED-only
+# zip, then re-sign with the Mods CA. See docs/MICROPYTHON.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SRC_DIR="${ROOT}/mods/py/stdlib_src"
+SRC_DIR="${ROOT}/mods/py/stdlib"
 OUT_ZIP="${ROOT}/mods/py/stdlib.zip"
 OUT_SIG="${OUT_ZIP}.sig"
 
@@ -53,13 +43,6 @@ print(f"build_stdlib_zip: packed {len(entries)} files")
 PYEOF
 
 echo "build_stdlib_zip: wrote ${OUT_ZIP}" >&2
-python3 -c "
-import zipfile
-with zipfile.ZipFile('${OUT_ZIP}') as zf:
-    for info in zf.infolist():
-        print(f'  {info.compress_type:>2} {info.file_size:>7}  {info.filename}')
-"
-
 if [[ -x "${ROOT}/scripts/pki" ]]; then
 	rm -f "${OUT_SIG}"
 	"${ROOT}/scripts/pki" sign-wasm "${OUT_ZIP}"

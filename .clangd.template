@@ -244,7 +244,7 @@ CompileFlags:
     - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
 
 ---
-# Metal BIOS freestanding shim (not EDK2) — Multiboot metal.elf / metal.boot.elf.
+# Metal BIOS freestanding shim (not EDK2) — Multiboot metal.elf / metal.qemu.elf.
 # CompilationDatabase None: clangd otherwise fuzzy-matches same basenames
 # (net_lwip.c, virtio_blk.c, …) to the EFI CDB entry and drops PmBiosUefi.h.
 If:

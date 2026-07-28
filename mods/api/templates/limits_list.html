@@ -1,7 +1,8 @@
-{% args title, rows %}
+{% args title, rows, pager %}
 {% include "base_header.html" title %}
 <h1>limits</h1>
 <p class="muted">Compile-time memory/buffer budgets from <code>pymergetic.metal.mem.limit</code>.</p>
+{% include "pager.html" pager %}
 <table>
   <tr><th>id</th><th>value</th><th>unit</th><th>note</th></tr>
   {% for r in rows %}
@@ -13,4 +14,5 @@
   </tr>
   {% endfor %}
 </table>
+{% include "pager.html" pager %}
 {% include "base_footer.html" %}

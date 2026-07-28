@@ -12,6 +12,19 @@
 
 #if !defined(__wasm__)
 
+/* Guest-registered rows (Python autoload / register) — host-owned copies. */
+#define PM_METAL_EXTERNAL_DYN_MAX 64u
+
+typedef struct {
+  char id[32];
+  char version[48];
+  char url[96];
+  char note[96];
+} pm_metal_external_dyn_t;
+
+static pm_metal_external_dyn_t g_ext_dyn[PM_METAL_EXTERNAL_DYN_MAX];
+static uint32_t                g_ext_dyn_n;
+
 static uint32_t ExtTableCount(void)
 {
   uintptr_t addr;
@@ -34,7 +47,24 @@ static const pm_metal_external_table_t *ExtTableAt(uint32_t i)
                                              (uintptr_t)i * sizeof(pm_metal_external_table_t));
 }
 
-static int32_t ExtCopyAt(uint32_t flat_idx, pm_metal_external_t *out)
+static uint32_t ExtStaticFlatCount(void)
+{
+  uint32_t t_i;
+  uint32_t n;
+
+  n = 0u;
+  for (t_i = 0u; t_i < ExtTableCount(); t_i++) {
+    const pm_metal_external_table_t *t = ExtTableAt(t_i);
+
+    if (t->exts == NULL || t->count == 0u) {
+      continue;
+    }
+    n += t->count;
+  }
+  return n;
+}
+
+static int32_t ExtCopyStaticAt(uint32_t flat_idx, pm_metal_external_t *out)
 {
   uint32_t t_i;
   uint32_t seen;
@@ -62,21 +92,32 @@ static int32_t ExtCopyAt(uint32_t flat_idx, pm_metal_external_t *out)
   return -1;
 }
 
+static int32_t ExtCopyAt(uint32_t flat_idx, pm_metal_external_t *out)
+{
+  uint32_t static_n;
+
+  if (out == NULL) {
+    return -1;
+  }
+
+  static_n = ExtStaticFlatCount();
+  if (flat_idx < static_n) {
+    return ExtCopyStaticAt(flat_idx, out);
+  }
+  flat_idx -= static_n;
+  if (flat_idx >= g_ext_dyn_n) {
+    return -1;
+  }
+  out->id      = g_ext_dyn[flat_idx].id;
+  out->version = g_ext_dyn[flat_idx].version;
+  out->url     = g_ext_dyn[flat_idx].url;
+  out->note    = g_ext_dyn[flat_idx].note;
+  return 0;
+}
+
 uint32_t pm_metal_external_count(void)
 {
-  uint32_t t_i;
-  uint32_t n;
-
-  n = 0u;
-  for (t_i = 0u; t_i < ExtTableCount(); t_i++) {
-    const pm_metal_external_table_t *t = ExtTableAt(t_i);
-
-    if (t->exts == NULL || t->count == 0u) {
-      continue;
-    }
-    n += t->count;
-  }
-  return n;
+  return ExtStaticFlatCount() + g_ext_dyn_n;
 }
 
 int32_t pm_metal_external_get(uint32_t idx, pm_metal_external_t *out)
@@ -93,11 +134,22 @@ int32_t pm_metal_external_find(const char *id, pm_metal_external_t *out)
     return -1;
   }
 
-  n = pm_metal_external_count();
+  /* Dyn last-wins for the same id: scan dyn first, then static. */
+  for (i = 0u; i < g_ext_dyn_n; i++) {
+    if (strcmp(g_ext_dyn[i].id, id) == 0) {
+      out->id      = g_ext_dyn[i].id;
+      out->version = g_ext_dyn[i].version;
+      out->url     = g_ext_dyn[i].url;
+      out->note    = g_ext_dyn[i].note;
+      return 0;
+    }
+  }
+
+  n = ExtStaticFlatCount();
   for (i = 0u; i < n; i++) {
     pm_metal_external_t e;
 
-    if (ExtCopyAt(i, &e) != 0) {
+    if (ExtCopyStaticAt(i, &e) != 0) {
       return -1;
     }
     if (e.id != NULL && strcmp(e.id, id) == 0) {
@@ -106,6 +158,50 @@ int32_t pm_metal_external_find(const char *id, pm_metal_external_t *out)
     }
   }
   return -1;
+}
+
+int32_t pm_metal_external_register(const char *id,
+                                   const char *version,
+                                   const char *url,
+                                   const char *note)
+{
+  uint32_t i;
+  pm_metal_external_dyn_t *slot;
+
+  if (id == NULL || id[0] == '\0') {
+    return -1;
+  }
+  if (version == NULL) {
+    version = "";
+  }
+  if (url == NULL) {
+    url = "";
+  }
+  if (note == NULL) {
+    note = "";
+  }
+
+  slot = NULL;
+  for (i = 0u; i < g_ext_dyn_n; i++) {
+    if (strcmp(g_ext_dyn[i].id, id) == 0) {
+      slot = &g_ext_dyn[i];
+      break;
+    }
+  }
+  if (slot == NULL) {
+    if (g_ext_dyn_n >= PM_METAL_EXTERNAL_DYN_MAX) {
+      return -1;
+    }
+    slot = &g_ext_dyn[g_ext_dyn_n];
+    g_ext_dyn_n++;
+  }
+
+  memset(slot, 0, sizeof(*slot));
+  snprintf(slot->id, sizeof(slot->id), "%s", id);
+  snprintf(slot->version, sizeof(slot->version), "%s", version);
+  snprintf(slot->url, sizeof(slot->url), "%s", url);
+  snprintf(slot->note, sizeof(slot->note), "%s", note);
+  return 0;
 }
 
 static void ExtPrintOne(const pm_metal_external_t *e, int detail)

@@ -103,7 +103,7 @@ int32_t pm_metal_net_asgi_native_register(void);
 pm_metal_net_asgi_app_h pm_metal_net_asgi_app_health(void);
 pm_metal_net_asgi_app_h pm_metal_net_asgi_app_sysinfo(void);
 pm_metal_net_asgi_app_h pm_metal_net_asgi_app_static(const char *root);
-pm_metal_net_asgi_app_h pm_metal_net_asgi_app_microdot(void);
+pm_metal_net_asgi_app_h pm_metal_net_asgi_app_httpd(void);
 #endif
 
 #ifdef __cplusplus

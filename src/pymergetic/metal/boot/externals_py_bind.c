@@ -65,3 +65,38 @@ PM_METAL_PY_BIND(g_py_bind_externals_get,
                  "get",
                  py_externals_get_obj,
                  PM_METAL_PY_SYNC);
+
+/* register(id, version, url="", note="") — host copies strings (GC-safe). */
+static mp_obj_t py_externals_register(size_t n_args, const mp_obj_t *args)
+{
+  const char *id;
+  const char *version;
+  const char *url;
+  const char *note;
+
+  id      = mp_obj_str_get_str(args[0]);
+  version = mp_obj_str_get_str(args[1]);
+  url     = "";
+  note    = "";
+  if (n_args >= 3 && args[2] != mp_const_none) {
+    url = mp_obj_str_get_str(args[2]);
+  }
+  if (n_args >= 4 && args[3] != mp_const_none) {
+    note = mp_obj_str_get_str(args[3]);
+  }
+  if (pm_metal_external_register(id, version, url, note) != 0) {
+    return mp_const_false;
+  }
+  return mp_const_true;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(py_externals_register_obj, 2, 4, py_externals_register);
+PM_METAL_PY_BIND_DOC(g_py_bind_externals_register,
+                     "pymergetic.metal.externals",
+                     "register",
+                     py_externals_register_obj,
+                     PM_METAL_PY_SYNC,
+                     "Register or update a third-party stack id at runtime.",
+                     "register(id: str, version: str, url: str = '', note: str = '') -> bool",
+                     "Used by mods/*/autoload.py (and any guest code). Strings are copied "
+                     "into the host dyn table; same id updates in place. False if the table "
+                     "is full or id is empty.");

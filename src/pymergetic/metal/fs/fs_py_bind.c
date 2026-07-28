@@ -1,6 +1,6 @@
 /** @file
   pymergetic.metal.fs — sync fd-shaped file I/O for Python (backs
-  mods/py/stdlib_src/os/ + io.py; see docs/MICROPYTHON.md). This build has
+  mods/py/stdlib/os/ + io.py; see docs/MICROPYTHON.md). This build has
   no MICROPY_VFS/uos (Metal FS is its own async-shaped thing, not a mounted
   VFS), so os.py/io.py are Metal's own, not micropython-lib's uos-based
   ones — this is the whole surface they're written against, one real C

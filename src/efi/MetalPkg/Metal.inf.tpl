@@ -359,6 +359,7 @@
   ../../pymergetic/metal/py/py_obj.c
   ../../pymergetic/metal/py/py_await.c
   ../../pymergetic/metal/py/py_shell.c
+  ../../pymergetic/metal/py/py_autoload.c
   ../../pymergetic/metal/py/py_zip.c
   ../../pymergetic/metal/py/py_zip_embed.c
   ../../pymergetic/metal/py/py_zip_read.c

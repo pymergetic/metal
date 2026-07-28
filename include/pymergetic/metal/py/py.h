@@ -158,6 +158,13 @@ const char *pm_metal_py_repl_prompt(void);
  */
 void pm_metal_py_repl_print_banner(void);
 
+/**
+ * Run every /mods/<name>/autoload.py once on the shared context (idempotent).
+ * Path-exec, not import. Called from the REPL banner and after stdlib.zip
+ * becomes ready for shared jobs.
+ */
+void pm_metal_py_autoload_run_once(void);
+
 typedef enum {
   PM_METAL_PY_SYNC   = 1,
   PM_METAL_PY_ASYNC  = 2,

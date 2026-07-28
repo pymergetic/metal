@@ -463,14 +463,14 @@ pm_metal_net_asgi_app_h pm_metal_net_asgi_app_static(const char *root)
   return h;
 }
 
-pm_metal_net_asgi_app_h pm_metal_net_asgi_app_microdot(void)
+pm_metal_net_asgi_app_h pm_metal_net_asgi_app_httpd(void)
 {
   static pm_metal_net_asgi_app_h h;
 
   if (h != PM_METAL_NET_ASGI_APP_INVALID) {
     return h;
   }
-  /* Cookie 0: server resolves metal_asgi_launcher.handle on first use. */
+  /* Cookie 0: server resolves httpd.handle on first use. */
   h = pm_metal_net_asgi_register_py(0);
   if (h == PM_METAL_NET_ASGI_APP_INVALID) {
     return pm_metal_net_asgi_app_sysinfo();

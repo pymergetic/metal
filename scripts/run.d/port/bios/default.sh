@@ -6,8 +6,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/bios-qemu.sh"
 
-ELF="${ROOT}/build/bios/metal.boot.elf"
-VBLK="$(pm_metal_bios_stage_vblk "${ROOT}/build/bios/vblk.img")"
+ELF="${ROOT}/build/x86_64_bios/metal.qemu.elf"
+VBLK="$(pm_metal_bios_stage_vblk "${ROOT}/build/x86_64_bios/vblk.img")"
 VNC=1
 VNC_DISPLAY=1
 

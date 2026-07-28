@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 WASI_SDK="${ROOT}/.tools/wasi-sdk"
 CLANG="${WASI_SDK}/bin/clang"
 SYSROOT="${WASI_SDK}/share/wasi-sysroot"
-OUT_DIR="${ROOT}/build/efi/embed"
+OUT_DIR="${ROOT}/build/x86_64_efi/embed"
 INC_OUT="${ROOT}/src/pymergetic/metal/guest/wasm/embed_mods.inc.c"
 # Classic wasip1 — no thread imports (EFI WAMR has no wasi-threads).
 TARGET=wasm32-wasip1

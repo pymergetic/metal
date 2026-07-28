@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
-# Pack Miguel Grinberg's Microdot (all µPy extensions) into STORED-only
-# mods/py/microdot.zip and sign with the Mods CA. Source is cloned into
-# mods/py/microdot_src/ (optional; re-clone if missing).
+# Pack Microdot (external/microdot) into STORED mods/httpd/microdot.zip + Mods CA sig.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SRC_DIR="${ROOT}/mods/py/microdot_src"
-OUT_ZIP="${ROOT}/mods/py/microdot.zip"
-URL="${PM_METAL_MICRODOT_URL:-https://github.com/miguelgrinberg/microdot.git}"
+SRC_DIR="${ROOT}/external/microdot"
+OUT_ZIP="${ROOT}/mods/httpd/microdot.zip"
 
 if [[ ! -d "${SRC_DIR}/src/microdot" ]]; then
-	rm -rf "${SRC_DIR}"
-	git clone --depth 1 "${URL}" "${SRC_DIR}"
+	echo "build_microdot_zip: missing ${SRC_DIR} — run ./scripts/setup microdot" >&2
+	exit 1
 fi
 
 rm -f "${OUT_ZIP}"

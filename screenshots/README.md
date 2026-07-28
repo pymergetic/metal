@@ -20,7 +20,7 @@
 | `iface-source-view.png` | QEMU HTTP — highlighted source view (`lz4.c` in `metal.guest.sources`) |
 | `iface-syms.png` | QEMU HTTP — `/iface/sym` (scraped NativeSymbol table) |
 | `asgi-dispatch.png` | Source — ASGI `asgi_server.c` mount → runner kind (`C` / `PY` / `WASM`) |
-| `asgi-httpd-mounts.png` | Source — `mods/etc/httpd.json` mounts (`c:health` / `c:static` / `py:microdot`) |
+| `asgi-httpd-mounts.png` | Source — `mods/etc/httpd.json` mounts (`c:health` / `c:static` / `py:httpd`) |
 | `http-home.png` | QEMU HTTP — `/` catalog home (docs / iface / syms / externals / limits counts) |
 | `externals.png` | QEMU HTTP — `/externals` (Dropbear / lwIP / mbedTLS / µPy / microtar / WAMR) |
 | `limits.png` | QEMU HTTP — `/limits` (compile-time mem/buffer budgets from `mem.limit`) |

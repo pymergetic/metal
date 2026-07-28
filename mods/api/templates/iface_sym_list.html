@@ -1,9 +1,10 @@
-{% args title, module, rows %}
+{% args title, module, rows, pager %}
 {% include "base_header.html" title %}
 <h1>native symbols</h1>
 <p class="muted">
   {% if module %}module <code>{{ module }}</code> - <a href="/iface/sym">all</a>{% else %}every scraped NativeSymbol row{% endif %}
 </p>
+{% include "pager.html" pager %}
 <table>
   <tr><th>module</th><th>name</th><th>sig</th><th>doc_key</th></tr>
   {% for r in rows %}
@@ -15,4 +16,5 @@
   </tr>
   {% endfor %}
 </table>
+{% include "pager.html" pager %}
 {% include "base_footer.html" %}

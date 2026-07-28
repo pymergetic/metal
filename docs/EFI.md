@@ -248,7 +248,7 @@ Primary bring-up machine: **QEMU + OVMF**, virt-class device set as we adopt vir
 - **External apps** (e.g. `packages/metal-doom`) build + sign themselves in
   their own sibling repo, then stage into `mods/apps/<name>/` via
   `METAL_EXT_APPS=<name>=<dir>` (see `scripts/lib/ext-apps.sh`) — EFI stages
-  onto ESP, BIOS/PXE stages under `build/bios/pxe/mods/apps/<name>/` and
+  onto ESP, BIOS/PXE stages under `build/pxe/mods/apps/<name>/` and
   seeds via HTTP.
 - virtio-blk / full package mounts remain later; ESP is the interim package root.
 

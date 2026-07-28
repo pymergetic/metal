@@ -2,7 +2,7 @@
 ``uio`` — the forced-built-in-import alias for upstream MicroPython's native
 ``io`` module (external/micropython/py/modio.c). Every MP_REGISTER_EXTENSIBLE_MODULE
 module gets this ``u``-prefixed alias for free (py/objmodule.c): once Metal's
-own mods/py/stdlib_src/io.py occupies the bare "io" name, `import io` resolves
+own mods/py/stdlib/io.py occupies the bare "io" name, `import io` resolves
 to that pure-Python file, and only `import uio` still reaches the native type.
 
 Hand-authored (not scripts/gen_py_stubs.py output) for the same reason as

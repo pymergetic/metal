@@ -7,11 +7,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/efi-qemu.sh"
 
-EFI="${ROOT}/build/efi/metal.efi"
-ESP="${ROOT}/build/efi/esp-doc-iface"
-LOG="${ROOT}/build/efi/qemu-doc-iface.log"
+EFI="${ROOT}/build/x86_64_efi/metal.efi"
+ESP="${ROOT}/build/x86_64_efi/esp-doc-iface"
+LOG="${ROOT}/build/x86_64_efi/qemu-doc-iface.log"
 HTTP_PORT="${PM_METAL_DOC_IFACE_HTTP_PORT:-18000}"
-VBLK="${ROOT}/build/efi/vblk-doc-iface.img"
+VBLK="${ROOT}/build/x86_64_efi/vblk-doc-iface.img"
 
 OVMF="$(pm_metal_efi_ovmf)" || {
 	echo "doc-iface-smoke: OVMF firmware not found (apt: ovmf)" >&2
@@ -113,8 +113,11 @@ check "/api/iface/sym?limit=5" '"module"'
 check "/api/iface/sym?module=pymergetic.metal.fs&name=pm_metal_fs_open_async" "doc_key"
 check "/" "<title>home - metal</title>"
 check "/docs?limit=5" "<h1>docs</h1>"
+check "/docs?limit=5" "showing 1-"
+check "/docs?limit=5" "pager-links"
 check "/iface" "metal.guest"
 check "/iface/sym?module=pymergetic.metal.fs&limit=10" "pm_metal_fs"
+check "/iface/sym?limit=5" "pager-links"
 check "/static/doc.css" "doc/iface HTTP UI"
 
 # Shell-catalog proof via Python face over HTTP (same tables help/pmcmd use).

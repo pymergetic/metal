@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Freestanding Multiboot2 Metal BIOS.
 # Usage: default.sh [i386|x86_64]
-#   x86_64 (default) → build/bios/metal.elf + metal.boot.elf
-#   i386             → build/bios/i386/metal.elf (+ pxe drop)
+#   x86_64 (default) → build/x86_64_bios/metal.elf + metal.qemu.elf
+#   i386             → build/i386_bios/metal.elf (+ build/pxe/ drop)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -25,7 +25,7 @@ i386|x86_64) ;;
 esac
 
 if [[ "${ARCH}" == "i386" ]]; then
-	OUT="${ROOT}/build/bios/i386"
+	OUT="${ROOT}/build/i386_bios"
 	ELF="${OUT}/metal.elf"
 	CRT0="${BIOS}/BiosPkg/crt0_i386.S"
 	LINK_LD="${BIOS}/BiosPkg/link_i386.ld"
@@ -37,7 +37,7 @@ if [[ "${ARCH}" == "i386" ]]; then
 	BUILD_TARGET="-DBUILD_TARGET_X86_32"
 	EXTRA_CFLAGS=()
 else
-	OUT="${ROOT}/build/bios"
+	OUT="${ROOT}/build/x86_64_bios"
 	ELF="${OUT}/metal.elf"
 	CRT0="${BIOS}/BiosPkg/crt0.S"
 	LINK_LD="${BIOS}/BiosPkg/link.ld"
@@ -82,7 +82,7 @@ if [[ -x "${ROOT}/scripts/build.d/port/efi/embed-mods.sh" ]]; then
 	"${ROOT}/scripts/build.d/port/efi/embed-mods.sh" || true
 fi
 
-# Build+sign+embed stdlib.zip (mods/py/stdlib_src/) — not tracked in git,
+# Build+sign+embed stdlib.zip (mods/py/stdlib/) — not tracked in git,
 # always freshly baked into the binary, see embed-stdlib.sh. Unlike
 # embed-mods.sh above, this has no wasi-sdk dependency, so it's required
 # here too (not soft-failed) — both ports need a working stdlib.zip.
@@ -373,6 +373,7 @@ SRCS_C=(
 	"${SHARED_METAL}/py/py_obj.c"
 	"${SHARED_METAL}/py/py_await.c"
 	"${SHARED_METAL}/py/py_shell.c"
+	"${SHARED_METAL}/py/py_autoload.c"
 	"${SHARED_METAL}/py/py_zip.c"
 	"${SHARED_METAL}/py/py_zip_embed.c"
 	"${SHARED_METAL}/py/py_zip_read.c"
@@ -568,7 +569,7 @@ fi
 
 if [[ "${ARCH}" == "x86_64" ]]; then
 	# ELF32 Multiboot trampoline embeds metal.elf — QEMU -kernel cannot load ELF64.
-	TRAMP_ELF="${OUT}/metal.boot.elf"
+	TRAMP_ELF="${OUT}/metal.qemu.elf"
 	"${CC}" -m32 -ffreestanding -fno-pic -fno-stack-protector -c \
 		"${BIOS}/BiosPkg/trampoline_load.c" -o "${OBJ}/trampoline_load.o"
 	"${CC}" -m32 -c "${BIOS}/BiosPkg/trampoline32.S" -o "${OBJ}/trampoline32.o"

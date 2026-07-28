@@ -59,6 +59,16 @@ uint32_t pm_metal_external_count(void);
 int32_t  pm_metal_external_get(uint32_t idx, pm_metal_external_t *out);
 int32_t  pm_metal_external_find(const char *id, pm_metal_external_t *out);
 
+/**
+ * Runtime (guest Python / host) registration — copies strings into a small
+ * dyn table appended after the linker-section rows. Same id updates in place.
+ * url/note may be NULL or "". Returns 0 ok, -1 full/invalid.
+ */
+int32_t pm_metal_external_register(const char *id,
+                                   const char *version,
+                                   const char *url,
+                                   const char *note);
+
 int pm_metal_externals_native_register(void);
 
 #else /* __wasm__ */

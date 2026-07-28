@@ -25,7 +25,7 @@ See [docs/COOP_MEMORY.md](../../docs/COOP_MEMORY.md).
 
 ```bash
 ./scripts/setup edk2    # once — external/edk2 + .tools/nasm + BaseTools
-./scripts/build efi     # → build/efi/metal.efi
+./scripts/build efi     # → build/x86_64_efi/metal.efi
 ./scripts/verify efi    # QEMU + OVMF; greps banner / Total memory / ok
 ```
 

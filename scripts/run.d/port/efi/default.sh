@@ -7,8 +7,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/efi-qemu.sh"
 
-EFI="${ROOT}/build/efi/metal.efi"
-ESP="${ROOT}/build/efi/esp"
+EFI="${ROOT}/build/x86_64_efi/metal.efi"
+ESP="${ROOT}/build/x86_64_efi/esp"
 VNC=":1"
 DISPLAY_BACKEND="vnc" # vnc | gtk | sdl | none
 

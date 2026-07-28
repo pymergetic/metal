@@ -17,4 +17,12 @@ def list(*args: Any) -> Any:
     """C bind: PM_METAL_PY_SYNC."""
     ...
 
+def register(*args: Any) -> Any:
+    """Register or update a third-party stack id at runtime.
+
+register(id: str, version: str, url: str = '', note: str = '') -> bool
+
+Used by mods/*/autoload.py (and any guest code). Strings are copied into the host dyn table; same id updates in place. False if the table is full or id is empty."""
+    ...
+
 def __getattr__(name: str) -> Any: ...

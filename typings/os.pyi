@@ -1,5 +1,5 @@
 """
-``os`` — Metal's own module (mods/py/stdlib_src/os/__init__.py), not
+``os`` — Metal's own module (mods/py/stdlib/os/__init__.py), not
 CPython's. Bytes-only (see that file's own note: MICROPY_CPYTHON_COMPAT is
 off, no str.encode()/bytes.decode() to build a text layer on top of), no
 VFS/mount tree (flat single-root FS backed directly by pymergetic.metal.fs),
@@ -8,7 +8,7 @@ prefers over any same-named project file, real stdlib name or not) with the
 much smaller surface this build actually implements.
 
 Hand-authored, same reason as typings/uio.pyi and typings/deflate.pyi — keep
-in sync by hand with mods/py/stdlib_src/os/__init__.py and os/path.py.
+in sync by hand with mods/py/stdlib/os/__init__.py and os/path.py.
 """
 
 from typing import Any

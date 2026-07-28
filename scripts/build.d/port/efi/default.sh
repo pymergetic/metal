@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build Metal.efi via EDK2 → build/efi/metal.efi
+# Build Metal.efi via EDK2 → build/x86_64_efi/metal.efi
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 EDK2="${ROOT}/external/edk2"
 NASM_BIN="${ROOT}/.tools/nasm/bin"
-OUT_DIR="${ROOT}/build/efi"
+OUT_DIR="${ROOT}/build/x86_64_efi"
 TOOL_CHAIN="${PM_METAL_EDK2_TOOL_CHAIN:-GCC}"
 TARGET="${PM_METAL_EDK2_TARGET:-RELEASE}"
 
@@ -91,6 +91,7 @@ while i < len(lines):
             "src/pymergetic/metal/py/py_obj.c",
             "src/pymergetic/metal/py/py_await.c",
             "src/pymergetic/metal/py/py_shell.c",
+            "src/pymergetic/metal/py/py_autoload.c",
             "src/pymergetic/metal/py/py_zip.c",
             "src/pymergetic/metal/py/py_zip_embed.c",
             "src/pymergetic/metal/py/py_zip_read.c",
@@ -176,7 +177,7 @@ PY
 
 # Embed guest wasm (hello / ui_hello / async_sleep) before EDK2 compile.
 "${ROOT}/scripts/build.d/port/efi/embed-mods.sh"
-# Build+sign+embed stdlib.zip (mods/py/stdlib_src/) — not tracked in git,
+# Build+sign+embed stdlib.zip (mods/py/stdlib/) — not tracked in git,
 # always freshly baked into the binary, see embed-stdlib.sh.
 "${ROOT}/scripts/build.d/port/efi/embed-stdlib.sh"
 # Pack the "metal.guest" (+ "mod.t8_multimod_lib") iface header packs
