@@ -1,7 +1,7 @@
 /*
- * Background net life — lease watch + NTP + generic HTTP seed transport.
+ * Background net life — lease watch + NTP + ASGI/SSH autoload.
  *
- * Package *catalog* (which files, ready?) lives in guest/pkg — not here.
+ * Package HTTP seed lives in guest/pkg (pkg_ensure / pkg_ensure_assets).
  * Host-only. impl: common — src/pymergetic/metal/net/ip/ip_life.c
  */
 #ifndef PYMERGETIC_METAL_NET_IP_LIFE_H_
@@ -18,13 +18,6 @@ extern "C" {
  * Safe to call after NICs are started; does not block boot.
  */
 int pm_metal_net_ip_life_start(void);
-
-/**
- * On-demand HTTP seed for a registered guest package (by name).
- * No-op if already ready or unknown. Call from run/tab — never boot/lease.
- * Returns 0 if ready after, -1 if miss / no lease / timeout.
- */
-int pm_metal_net_ip_life_seed_ensure(const char *name);
 
 #endif
 

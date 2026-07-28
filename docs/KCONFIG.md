@@ -11,6 +11,7 @@ Build                          # efi/bios/mod + bios x86_64/i386 + post checkbox
 pymergetic.metal
   net
     io                         # PM_METAL_IO_WIRE_MAX
+    ip                         # PM_METAL_NET_PKG_SEED_HOST
     asgi                       # ASGI_* budgets
     tls                        # PM_METAL_TLS_WIRE_MAX
   py                           # heap blob sizes

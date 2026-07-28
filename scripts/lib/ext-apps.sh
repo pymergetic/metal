@@ -37,6 +37,8 @@ pm_metal_ext_apps_stage_into() {
 		rm -rf "${dest}"
 		mkdir -p "${dest}"
 		cp -a "${src}/." "${dest}/"
-		echo "ext-apps: staged ${name} from ${src} -> ${dest}" >&2
+		if [[ "${PM_METAL_STAGE_QUIET:-}" != "1" ]]; then
+			echo "ext-apps: staged ${name} from ${src} -> ${dest}" >&2
+		fi
 	done
 }

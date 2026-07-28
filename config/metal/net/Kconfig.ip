@@ -1,0 +1,12 @@
+menu "ip"
+
+config PM_METAL_NET_PKG_SEED_HOST
+	string "HTTP package seed host (optional)"
+	default ""
+	help
+	  Optional last-resort host for guest/pkg HTTP seed when DHCP
+	  next-server and the default gateway are unavailable. IPv4 literal
+	  or hostname. Empty string means no compile-time host — seed then
+	  requires next-server or gateway from the lease.
+
+endmenu

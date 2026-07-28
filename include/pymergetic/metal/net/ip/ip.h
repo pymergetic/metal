@@ -67,10 +67,10 @@ extern int32_t pm_metal_net_ip_dns_last_ntoa(uint32_t dest, uint32_t dest_cap)
   PM_METAL_NET_IP_IMPORT(pm_metal_net_ip_dns_last_ntoa);
 /**
  * Best-effort LAN host for on-demand package/asset seeding (DHCP
- * next-server, else default gateway, else a lab fallback) as ASCII
- * "a.b.c.d" into guest buffer. Same resolution net_life.c uses for its own
- * HTTP seed fetches -- diagnostic only, does not imply a fetch was tried.
- * Returns 0, or -1 if it doesn't fit dest_cap.
+ * next-server, else default gateway, else optional
+ * CONFIG_PM_METAL_NET_PKG_SEED_HOST) as ASCII into guest buffer.
+ * Diagnostic only — does not imply a fetch was tried.
+ * Returns 0, or -1 if unresolved / doesn't fit dest_cap.
  */
 extern int32_t pm_metal_net_ip_seed_host(uint32_t dest, uint32_t dest_cap)
   PM_METAL_NET_IP_IMPORT(pm_metal_net_ip_seed_host);
@@ -138,7 +138,7 @@ pm_metal_async_handle_t pm_metal_net_ip_dns(const char *host);
  * (IPv4 or IPv6). Returns 0, or -1 if none.
  */
 int pm_metal_net_ip_dns_last_ntoa(char *out, uint32_t out_cap);
-/** Same resolution net_life.c uses for HTTP package seeding — see wasm decl above. */
+/** Same resolution pkg_seed uses for HTTP package seeding — see wasm decl above. */
 int32_t pm_metal_net_ip_seed_host(char *out, uint32_t out_cap);
 void    pm_metal_net_ip_close(pm_metal_net_ip_sock_h h);
 /** Bind socket to named interface (eth0..). ifname NULL → default. Returns 0 or -1. */

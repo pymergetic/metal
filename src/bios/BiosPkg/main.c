@@ -181,11 +181,16 @@ EarlyPuts(CONST CHAR8 *s)
   }
 }
 
+/* End of loaded Metal image (linker); arena must not overlap .data/.bss. */
+extern char __pm_metal_image_end[];
+
 STATIC INT32
 ClaimBest(UINT64 best_addr, UINT64 best_len, VOID **arena_out, UINTN *bytes_out)
 {
-  /* Keep arena above trampoline (1MiB) + Metal image (8MiB load). */
-  CONST UINT64 kMinAddr = 0x1000000ull;
+  /* Floor: page-align past the ELF image. Old 16MiB constant was below
+   * native i386 BSS (~32MiB) so TLSF clobbered wasm mReady after init. */
+  CONST UINT64 kImgEnd = ((UINT64)(UINTN)__pm_metal_image_end + 0xfffull) & ~0xfffull;
+  CONST UINT64 kMinAddr = (kImgEnd > 0x1000000ull) ? kImgEnd : 0x1000000ull;
 
   if (best_len < 32ull * 1024 * 1024)
     return -1;

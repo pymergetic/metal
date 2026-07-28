@@ -20,6 +20,10 @@
 #define IFACE_ESP_BLOB_MAX 96u
 #define IFACE_ESP_PATH_MAX 160u
 
+/* Non-zero: fold success into guest boot tree under `|   +-- iface`. */
+static int32_t s_iface_esp_boot_tree;
+static int32_t s_iface_esp_boot_tree_n;
+
 static int32_t KindParse(const char *s, pm_metal_iface_pkg_kind_t *out)
 {
   if (s == NULL || out == NULL) {
@@ -207,8 +211,10 @@ static void InstallListForApp(const char *app)
                     &uncompressed_len,
                     blob,
                     sizeof(blob)) != 0) {
-        snprintf(msg, sizeof(msg), "iface-esp: skip bad line in %s", list_path);
-        pm_metal_log(msg);
+        if (s_iface_esp_boot_tree == 0) {
+          snprintf(msg, sizeof(msg), "iface-esp: skip bad line in %s", list_path);
+          pm_metal_log(msg);
+        }
         continue;
       }
     }
@@ -236,15 +242,29 @@ static void InstallListForApp(const char *app)
     snprintf(blob_path, sizeof(blob_path), "mods/apps/%s/%s", app, blob);
     if (pm_metal_esp_read_file(blob_path, &blob_data, &blob_len) != 0 || blob_data == NULL ||
         blob_len == 0u) {
-      snprintf(msg, sizeof(msg), "iface-esp: missing blob %s", blob_path);
-      pm_metal_log(msg);
+      if (s_iface_esp_boot_tree == 0) {
+        snprintf(msg, sizeof(msg), "iface-esp: missing blob %s", blob_path);
+        pm_metal_log(msg);
+      } else {
+        snprintf(msg, sizeof(msg), "|   |   +-- %s  missing", name);
+        pm_metal_log(msg);
+      }
       continue;
     }
 
     if (pm_metal_iface_pkg_register(
           name, kind, version, "", blob_data, blob_len, uncompressed_len) != 0) {
-      snprintf(msg, sizeof(msg), "iface-esp: register failed %s", name);
+      if (s_iface_esp_boot_tree == 0) {
+        snprintf(msg, sizeof(msg), "iface-esp: register failed %s", name);
+        pm_metal_log(msg);
+      } else {
+        snprintf(msg, sizeof(msg), "|   |   +-- %s  FAIL", name);
+        pm_metal_log(msg);
+      }
+    } else if (s_iface_esp_boot_tree != 0) {
+      snprintf(msg, sizeof(msg), "|   |   +-- %s", name);
       pm_metal_log(msg);
+      s_iface_esp_boot_tree_n++;
     } else {
       snprintf(msg, sizeof(msg), "iface-esp: registered %s", name);
       pm_metal_log(msg);
@@ -255,7 +275,7 @@ static void InstallListForApp(const char *app)
   pm_metal_mem_free(list_buf);
 }
 
-void pm_metal_iface_esp_install(void)
+static void IfaceEspInstallScan(void)
 {
   char     name[IFACE_ESP_NAME_MAX];
   uint32_t idx;
@@ -283,4 +303,20 @@ void pm_metal_iface_esp_install(void)
     }
     InstallListForApp(name);
   }
+}
+
+void pm_metal_iface_esp_install(void)
+{
+  s_iface_esp_boot_tree   = 0;
+  s_iface_esp_boot_tree_n = 0;
+  IfaceEspInstallScan();
+}
+
+int32_t pm_metal_iface_esp_install_boot_tree(void)
+{
+  s_iface_esp_boot_tree   = 1;
+  s_iface_esp_boot_tree_n = 0;
+  IfaceEspInstallScan();
+  s_iface_esp_boot_tree = 0;
+  return s_iface_esp_boot_tree_n;
 }

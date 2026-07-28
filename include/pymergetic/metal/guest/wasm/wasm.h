@@ -56,6 +56,12 @@ int pm_metal_wasm_mod_fetch(const char     *name,
                             uint32_t       *len,
                             uint8_t       **esp_owned);
 
+/** Like fetch, but only the .wasm ESP slot (AOT open/mmap fallback). */
+int pm_metal_wasm_mod_fetch_wasm(const char     *name,
+                                 const uint8_t **bytes,
+                                 uint32_t       *len,
+                                 uint8_t       **esp_owned);
+
 /**
  * Load+instantiate+bind+exec_env. No magic export lookup.
  * Does not call on_load or reserve a process.

@@ -15,6 +15,8 @@ from utemplate.source import Compiler  # noqa: E402
 
 
 def main() -> int:
+    # Host CPython env — typings/os.pyi is Metal's guest os (no environ).
+    quiet = getattr(__import__("os"), "environ", {}).get("PM_METAL_STAGE_QUIET") == "1"
     names = sorted(p.name for p in TPL_DIR.glob("*.html"))
     if not names:
         print("compile_templates: no .html under", TPL_DIR, file=sys.stderr)
@@ -32,7 +34,8 @@ def main() -> int:
             out_path, "w", encoding="utf-8"
         ) as fout:
             Compiler(fin, fout, loader=loader).compile()
-        print("compile_templates:", name, "->", out_name)
+        if not quiet:
+            print("compile_templates:", name, "->", out_name)
     return 0
 
 

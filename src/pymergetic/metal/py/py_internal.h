@@ -46,11 +46,13 @@ void pm_metal_py_mod_install(void);
 void pm_metal_py_init_sys_path(void);
 
 /**
- * Ensure loose stdlib files exist under PM_METAL_PY_STDLIB_DIR. No-op when
- * ESP/PXE already staged them; otherwise materialize from iface pack
- * py@metal.stdlib (must be registered — wasm_init before py_init).
+ * Ensure loose stdlib under PM_METAL_PY_STDLIB_DIR. No-op when ESP/PXE
+ * already staged them; else materialize from iface pack py@metal.stdlib.
  */
 void pm_metal_py_stdlib_ensure(void);
+
+/** Materialize py@metal.guest -> /mods (httpd/api/…) if ESP/PXE tree missing. */
+void pm_metal_py_guest_ensure(void);
 
 /** Shared-context bytecode lock — see py.c (also used by py_autoload.c). */
 int  pm_metal_py_run_try_lock(void);

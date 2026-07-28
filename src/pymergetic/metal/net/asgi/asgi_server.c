@@ -58,6 +58,7 @@ typedef struct {
 
 static pm_metal_py_fn_h_t g_httpd_fn;
 static int32_t            g_httpd_importing;
+static int32_t            g_httpd_import_logged;
 /* WS echo out + wasm send_simple body — not on C stack (ASGI_IO_MAX is 4 MiB). */
 static uint8_t *g_asgi_scratch;
 
@@ -534,11 +535,10 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
           return pm_metal_async_await(self_h, st->aw);
         }
         g_httpd_importing = 1;
-        pm_metal_logf("asgi: py import httpd");
-        st->aw = pm_metal_py_run_str("import httpd\n");
+        st->aw            = pm_metal_py_run_str("import httpd\n");
         if (st->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
           g_httpd_importing = 0;
-          (void)pm_metal_net_asgi_send_simple(500, "Error", "text/plain", "py import fail\n");
+          (void)pm_metal_net_asgi_send_simple(503, "Unavailable", "text/plain", "httpd unavailable\n");
           conn_cleanup(st);
           st->step = ASGI_ST_ACCEPT;
           break;
@@ -583,15 +583,28 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
 
     case ASGI_ST_PY_IMPORT_AW:
       g_httpd_importing = 0;
-      pm_metal_logf("asgi: py import done");
-      g_httpd_fn = pm_metal_py_fn_resolve("httpd.handle");
-      if (g_httpd_fn == PM_METAL_PY_FN_H_INVALID) {
-        pm_metal_logf("asgi: py resolve fail (httpd.handle)");
-        (void)pm_metal_net_asgi_send_simple(500, "Error", "text/plain", "py resolve fail\n");
+      if (pm_metal_async_task_status(st->aw) == PM_METAL_ERROR) {
+        if (!g_httpd_import_logged) {
+          g_httpd_import_logged = 1;
+          pm_metal_logf("asgi: import httpd failed (503 until available)");
+        }
+        (void)pm_metal_net_asgi_send_simple(503, "Unavailable", "text/plain", "httpd unavailable\n");
         conn_cleanup(st);
         st->step = ASGI_ST_ACCEPT;
         break;
       }
+      g_httpd_fn = pm_metal_py_fn_resolve("httpd.handle");
+      if (g_httpd_fn == PM_METAL_PY_FN_H_INVALID) {
+        if (!g_httpd_import_logged) {
+          g_httpd_import_logged = 1;
+          pm_metal_logf("asgi: httpd.handle missing (503 until available)");
+        }
+        (void)pm_metal_net_asgi_send_simple(503, "Unavailable", "text/plain", "httpd unavailable\n");
+        conn_cleanup(st);
+        st->step = ASGI_ST_ACCEPT;
+        break;
+      }
+      g_httpd_import_logged = 0;
       if (st->py_slot != NULL) {
         st->py_slot->py_cookie = (uint32_t)g_httpd_fn;
       }
@@ -718,7 +731,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
         st->aw = pm_metal_async_sleep_us(2000);
         return pm_metal_async_await(self_h, st->aw);
       }
-      (void)pm_metal_net_asgi_send_simple(500, "Error", "text/plain", "py import fail\n");
+      (void)pm_metal_net_asgi_send_simple(503, "Unavailable", "text/plain", "httpd unavailable\n");
       conn_cleanup(st);
       st->step = ASGI_ST_ACCEPT;
       break;
@@ -986,9 +999,10 @@ int32_t pm_metal_net_asgi_autoload(void)
 int32_t pm_metal_net_asgi_reload(void)
 {
   asgi_autoload_close_all();
-  g_asgi_autoloaded = 0;
-  g_httpd_fn        = PM_METAL_PY_FN_H_INVALID;
-  g_httpd_importing = 0;
+  g_asgi_autoloaded     = 0;
+  g_httpd_fn            = PM_METAL_PY_FN_H_INVALID;
+  g_httpd_importing     = 0;
+  g_httpd_import_logged = 0;
   return pm_metal_net_asgi_autoload();
 }
 

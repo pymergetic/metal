@@ -543,10 +543,32 @@ int pm_metal_wasm_mod_fetch(const char     *name,
     return 0;
   }
 
-  if (rc < 0) {
+  /* Trust fail on AOT: still try wasm. Missing AOT (rc>0): try wasm. */
+  rc = MetalWasmReadEspPackage(name, "wasm", esp_owned, len);
+  if (rc == 0) {
+    *bytes = *esp_owned;
+    return 0;
+  }
+
+  return (rc < 0) ? -1 : 1;
+}
+
+int pm_metal_wasm_mod_fetch_wasm(const char     *name,
+                                 const uint8_t **bytes,
+                                 uint32_t       *len,
+                                 uint8_t       **esp_owned)
+{
+  int32_t rc;
+
+  if (name == NULL || bytes == NULL || len == NULL || esp_owned == NULL) {
     return -1;
   }
 
+  *bytes     = NULL;
+  *len       = 0;
+  *esp_owned = NULL;
+
+  (void)pm_metal_pkg_ensure(name);
   rc = MetalWasmReadEspPackage(name, "wasm", esp_owned, len);
   if (rc == 0) {
     *bytes = *esp_owned;

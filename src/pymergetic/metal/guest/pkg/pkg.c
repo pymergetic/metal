@@ -8,7 +8,6 @@
 #include <string.h>
 
 #include <pymergetic/metal/guest/pkg/pkg.h>
-#include <pymergetic/metal/net/ip/ip_life.h>
 #include <pymergetic/metal/fs/esp/esp.h>
 
 #ifndef PM_METAL_PKG_MAX
@@ -104,6 +103,11 @@ int32_t pm_metal_pkg_guest_ready(const char *name)
   return PkgEspExists(path);
 }
 
+static void PkgManifestPath(char *out, uintptr_t cap, const char *name)
+{
+  snprintf(out, cap, "mods/apps/%s/assets.list", name);
+}
+
 static void PkgSeedAdd(const char *path, uint32_t cap)
 {
   uint32_t i;
@@ -134,14 +138,26 @@ static void PkgSeedBuild(const pm_metal_pkg_t *pkg)
 
   arch = pm_metal_host_aot_arch();
 
-  /* Standard guest entry: this host's AOT, then wasm. No other arches. */
-  snprintf(path, sizeof(path), "mods/apps/%s/%s.%s.aot", pkg->name, pkg->name, arch);
-  PkgSeedAdd(path, PM_METAL_PKG_AOT_CAP);
+  /*
+   * Manifest first — cold BIOS/PXE has an empty RAM ESP, so assets are
+   * unknown until assets.list is fetched. The seed coro re-calls pkg_files()
+   * after each put; once the list is cached, the WAD rows appear below.
+   */
+  PkgManifestPath(path, sizeof(path), pkg->name);
+  PkgSeedAdd(path, PM_METAL_PKG_MANIFEST_CAP);
+
+  /*
+   * Wasm before AOT so cold PXE always has an interpreter fallback even if
+   * the GUEST ensure pass is interrupted after the first binary lands.
+   * Fetch still prefers AOT when both are cached.
+   */
+  PkgPathGuest(path, sizeof(path), pkg->name, "wasm");
+  PkgSeedAdd(path, PM_METAL_PKG_WASM_CAP);
   snprintf(sig, sizeof(sig), "%s.sig", path);
   PkgSeedAdd(sig, PM_METAL_PKG_SIG_CAP);
 
-  PkgPathGuest(path, sizeof(path), pkg->name, "wasm");
-  PkgSeedAdd(path, PM_METAL_PKG_WASM_CAP);
+  snprintf(path, sizeof(path), "mods/apps/%s/%s.%s.aot", pkg->name, pkg->name, arch);
+  PkgSeedAdd(path, PM_METAL_PKG_AOT_CAP);
   snprintf(sig, sizeof(sig), "%s.sig", path);
   PkgSeedAdd(sig, PM_METAL_PKG_SIG_CAP);
 
@@ -187,11 +203,6 @@ int32_t pm_metal_pkg_register(const pm_metal_pkg_t *pkg)
 
   mPkgs[mPkgN++] = pkg;
   return 0;
-}
-
-static void PkgManifestPath(char *out, uintptr_t cap, const char *name)
-{
-  snprintf(out, cap, "mods/apps/%s/assets.list", name);
 }
 
 /*
@@ -254,11 +265,12 @@ static uint32_t PkgManifestParse(char                 *buf,
 
 /*
  * Fallback for external apps (built + signed outside this repo, e.g.
- * metal-doom) that have no compiled-in pm_metal_pkg_register() call:
- * synthesize a package on the fly from an optional ESP
- * "mods/apps/<name>/assets.list" manifest. Only returns non-NULL when the
- * name actually has a footprint on ESP (a manifest or a guest binary) —
- * an arbitrary/unknown name still misses, same as before.
+ * metal-doom) with no compiled-in pm_metal_pkg_register() call.
+ *
+ * Always synthesize by name so cold BIOS/PXE (empty RAM ESP) can still
+ * HTTP-seed via pkg_ensure — requiring a local assets.list/wasm first was
+ * a chicken-egg that skipped seed entirely. Unknown names 404 on :8080.
+ * When assets.list is already cached, parse it for WAD/asset rows.
  */
 static const pm_metal_pkg_t *PkgSynthFromManifest(const char *name)
 {
@@ -266,17 +278,20 @@ static const pm_metal_pkg_t *PkgSynthFromManifest(const char *name)
   uint32_t nread;
   int32_t  have_manifest;
 
+  nread = 0;
   PkgManifestPath(path, sizeof(path), name);
   have_manifest =
     (pm_metal_esp_read_at(path, 0, (uint8_t *)mManifestBuf, sizeof(mManifestBuf) - 1, &nread) == 0)
       ? 1
       : 0;
 
-  if (!have_manifest && !pm_metal_pkg_guest_ready(name)) {
-    return NULL;
+  if (!have_manifest) {
+    nread           = 0;
+    mManifestBuf[0] = '\0';
+  } else {
+    mManifestBuf[nread] = '\0';
   }
 
-  mManifestBuf[nread] = '\0';
   mSynthPkg.nassets =
     have_manifest
       ? PkgManifestParse(mManifestBuf, mSynthAssets, mSynthAssetName, PM_METAL_PKG_ASSET_MAX)
@@ -327,21 +342,28 @@ int32_t pm_metal_pkg_ready(const char *name)
     return 0;
   }
 
-  /* Default readiness: guest binary present AND every declared asset
-   * present — falls out for free for both compiled-in and manifest-
-   * synthesized packages (no more per-package custom ready() needed). */
+  /*
+   * Guest binary plus at least one declared asset (when any). Requiring
+   * every IWAD blocked PXE doom: two ~28MiB Freedoom WADs timed out / OOM'd
+   * before load. Extra assets stay optional seed rows; seed stops once
+   * ready() is true.
+   */
+  if (pkg->nassets == 0u) {
+    return 1;
+  }
+
   for (i = 0; i < pkg->nassets; i++) {
     if (pkg->assets[i].name == NULL || pkg->assets[i].name[0] == '\0') {
       continue;
     }
 
     snprintf(path, sizeof(path), "mods/apps/%s/%s", name, pkg->assets[i].name);
-    if (!PkgEspExists(path)) {
-      return 0;
+    if (PkgEspExists(path)) {
+      return 1;
     }
   }
 
-  return 1;
+  return 0;
 }
 
 const pm_metal_pkg_file_t *pm_metal_pkg_files(const char *name, uint32_t *out_n)
@@ -372,28 +394,12 @@ int32_t pm_metal_pkg_file_optional(const char *name, const pm_metal_pkg_file_t *
     return 0;
   }
 
-  /* Sigs never block readiness. */
+  (void)name;
+
+  /* Sigs never block readiness. Per-path existence is handled by the seed coro. */
   if (strstr(f->esp_path, ".sig") != NULL) {
     return 1;
   }
 
-  /* Guest slots: skip once host AOT or wasm is already cached. */
-  if (strstr(f->esp_path, ".aot") != NULL || strstr(f->esp_path, ".wasm") != NULL) {
-    return pm_metal_pkg_guest_ready(name);
-  }
-
   return 0;
-}
-
-int32_t pm_metal_pkg_ensure(const char *name)
-{
-  if (pm_metal_pkg_lookup(name) == NULL) {
-    return 0;
-  }
-
-  if (pm_metal_pkg_ready(name)) {
-    return 0;
-  }
-
-  return pm_metal_net_ip_life_seed_ensure(name);
 }

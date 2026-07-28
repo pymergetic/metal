@@ -850,10 +850,10 @@ int pm_metal_shell_run_args(const char *mod, const char *args)
 
   if (rc < 0) {
     /*
-     * Common miss: ESP package not preloaded (stage an external app with
-     * METAL_EXT_APPS=<name>=<dir>). Detailed reason already on the log ring.
+     * Common miss: cold BIOS/PXE needs HTTP seed (metal-pkg: ensure / oom /
+     * http / timeout on the log). QEMU usually has METAL_EXT_APPS on ESP.
      */
-    snprintf(msg, sizeof(msg), "run '%s': not found / load failed", mod);
+    snprintf(msg, sizeof(msg), "run '%s': load failed (see metal-pkg:)", mod);
   } else if (pm_metal_process_active()) {
     snprintf(
       msg, sizeof(msg), "run '%s': process %u live", mod, (uint32_t)pm_metal_process_current());
@@ -1245,6 +1245,11 @@ int pm_metal_shell_poll(void)
   /* After boot banner: first live prompt on serial + input strip. */
   if (mPromptPending && pm_metal_input_focus() == PM_METAL_INPUT_FOCUS_SHELL) {
     MetalShellOfferPrompt();
+  }
+
+  /* Heal focus before drain — fullscreen guests must own HID every tick. */
+  if (pm_metal_process_active()) {
+    pm_metal_ui_sync_input_focus();
   }
 
   /* Drain HW into rings before shell/async consumers (port-owned). */

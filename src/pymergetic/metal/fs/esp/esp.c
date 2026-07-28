@@ -427,6 +427,33 @@ int pm_metal_esp_cache_put(const char *path, const uint8_t *data, uint32_t len)
   return MetalEspCacheStore(path, data, len, 0);
 }
 
+int pm_metal_esp_cache_take(const char *path, uint8_t *data, uint32_t len)
+{
+  metal_esp_cache_t *ent;
+
+  if (!mReady || path == NULL) {
+    return -1;
+  }
+
+  if (len > 0u && data == NULL) {
+    return -1;
+  }
+
+  ent = MetalEspCacheSlot(path);
+  if (ent == NULL) {
+    return -1;
+  }
+
+  if (ent->data != NULL) {
+    pm_metal_mem_free(ent->data);
+  }
+
+  ent->data  = data;
+  ent->len   = len;
+  ent->dirty = 0;
+  return 0;
+}
+
 int pm_metal_esp_preload(const char *path)
 {
   uint8_t *buf;

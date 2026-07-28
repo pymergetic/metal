@@ -519,6 +519,13 @@ int32_t pm_metal_input_poll_key(int32_t *pressed, pm_metal_keycode_t *code)
 
 int32_t pm_metal_input_poll_key_event(pm_metal_input_key_event_t *out)
 {
+  /*
+   * Drain HW here — guests call this from session_pump / frame steps where
+   * shell_poll (the other input_poll site) may not have run yet. Without
+   * this, i8042 bytes sit unread while doom's I_GetEvent sees an empty ring.
+   */
+  pm_metal_input_poll_port();
+
   if (out == NULL || mHead == mTail) {
     return 0;
   }
@@ -530,6 +537,8 @@ int32_t pm_metal_input_poll_key_event(pm_metal_input_key_event_t *out)
 
 int32_t pm_metal_input_poll_pointer(pm_metal_input_pointer_t *out)
 {
+  pm_metal_input_poll_port();
+
   if (out == NULL || mPtrHead == mPtrTail) {
     return 0;
   }

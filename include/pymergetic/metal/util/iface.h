@@ -164,6 +164,13 @@ void pm_metal_iface_embed_install(void);
  */
 void pm_metal_iface_esp_install(void);
 
+/*
+ * Same as pm_metal_iface_esp_install(), but success lines fold into the
+ * guest boot tree under `|   +-- iface` (`|   |   +-- <pack>`). Returns
+ * how many packs were registered this call (0 if none / not ready).
+ */
+int32_t pm_metal_iface_esp_install_boot_tree(void);
+
 #else /* __wasm__ */
 
 /* Buffer-out guest ABI (see file header re: host-only storage). cap 0

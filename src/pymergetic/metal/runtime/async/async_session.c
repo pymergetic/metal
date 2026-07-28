@@ -271,6 +271,7 @@ void pm_metal_async_session_pump(void)
   }
 
   t0 = pm_metal_time_mono_us();
+  pm_metal_input_poll();
   pm_metal_net_ip_poll();
   pm_metal_audio_poll();
   /* Guest tasks can land on any runner now (no session pinning) — drain

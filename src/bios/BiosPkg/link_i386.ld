@@ -62,6 +62,9 @@ SECTIONS
     *(COMMON)
   } :data
 
+  . = ALIGN(4096);
+  PROVIDE_HIDDEN (__pm_metal_image_end = .);
+
   /DISCARD/ : {
     *(.note*)
     *(.comment*)

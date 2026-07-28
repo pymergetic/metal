@@ -3,8 +3,10 @@
   See docs/MODS.md.
 **/
 #include <pymergetic/metal/guest/mod/mod.h>
+#include <pymergetic/metal/guest/pkg/pkg.h>
 #include <pymergetic/metal/guest/wasm/wasm.h>
 #include <pymergetic/metal/guest/process/process.h>
+#include <pymergetic/metal/fs/esp/esp.h>
 #include <pymergetic/metal/shell/shell_cmd.h>
 #include <pymergetic/metal/shell/ui/tab.h>
 #include <pymergetic/metal/runtime/async/async.h>
@@ -15,6 +17,7 @@
 #include <runtime/slot/spin.h>
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "wasm_export.h"
@@ -562,9 +565,44 @@ static int ModEnsureReady(mod_slot_t *s)
   rc = pm_metal_wasm_mod_image_open(s->name, bytes, len, &s->img);
   if (esp_owned != NULL) {
     pm_metal_mem_free(esp_owned);
+    esp_owned = NULL;
   }
 
   if (rc != 0) {
+    char aot_path[96];
+
+    /* AOT often needs a large host mmap — fall back to wasm on ESP. */
+    pm_metal_logf("metal-mod: image_open %s failed, try wasm", s->name);
+    snprintf(aot_path,
+             sizeof(aot_path),
+             "mods/apps/%s/%s.%s.aot",
+             s->name,
+             s->name,
+             pm_metal_host_aot_arch());
+    (void)pm_metal_esp_unlink(aot_path);
+
+    rc = pm_metal_wasm_mod_fetch_wasm(s->name, &bytes, &len, &esp_owned);
+    if (rc != 0) {
+      s->state = MOD_EMPTY;
+      return -1;
+    }
+
+    rc = pm_metal_wasm_mod_image_open(s->name, bytes, len, &s->img);
+    if (esp_owned != NULL) {
+      pm_metal_mem_free(esp_owned);
+      esp_owned = NULL;
+    }
+
+    if (rc != 0) {
+      s->state = MOD_EMPTY;
+      return -1;
+    }
+  }
+
+  /* IWAD/assets after guest is mapped — avoids 28MiB + AOT heap collision. */
+  if (pm_metal_pkg_ensure_assets(s->name) != 0) {
+    pm_metal_logf("metal-mod: assets missing for %s", s->name);
+    pm_metal_wasm_mod_image_close(&s->img);
     s->state = MOD_EMPTY;
     return -1;
   }

@@ -304,6 +304,7 @@
   ../../pymergetic/metal/guest/mod/mod.c
   ../../pymergetic/metal/guest/mod/mod_py_bind.c
   ../../pymergetic/metal/guest/pkg/pkg.c
+  ../../pymergetic/metal/guest/pkg/pkg_seed.c
   ../../pymergetic/metal/guest/wasm/wasm.c
   ../../pymergetic/metal/guest/wamr/efi_platform.c
   ../../pymergetic/metal/guest/wamr/efi_thread.c

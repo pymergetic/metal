@@ -14,14 +14,11 @@
 | `thinkpad-doom.jpg` | ThinkPad T42p — Doom tabbed on iron |
 | `pxe-http-sigs.png` | `upload-pxe` — HTTP mirror with `doom.*.aot` / `.wasm` + `.sig` |
 | `menuconfig.png` | Host — `./scripts/menuconfig` (Build + `pymergetic.metal` menus) |
-| `iface-packages.png` | QEMU HTTP — `/iface` pack catalog (`metal.guest*` @ `v0.1.0`, ESP `mod.doom*`, `mod.t8_multimod_lib`) |
 | `iface-packages.png` | QEMU HTTP — `/iface` pack catalog (`h@metal.guest`, ESP `h@mod.doom`, …) |
 | `iface-headers.png` | QEMU HTTP — `/iface/pkg/h@metal.guest` (headers pack file list) |
 | `iface-sources.png` | QEMU HTTP — `/iface/pkg/c@metal.guest` (Kconfig on) |
 | `iface-source-view.png` | QEMU HTTP — highlighted source view (`lz4.c` in `c@metal.guest`) |
 | `iface-syms.png` | QEMU HTTP — `/iface/sym` (scraped NativeSymbol table) |
-| `asgi-dispatch.png` | Source — ASGI `asgi_server.c` mount → runner kind (`C` / `PY` / `WASM`) |
-| `asgi-httpd-mounts.png` | Source — `mods/etc/httpd.json` mounts (`c:health` / `c:static` / `py:httpd`) |
 | `asgi-dispatch.png` | Source — ASGI `asgi_server.c` mount → runner kind (`C` / `PY` / `WASM`) |
 | `asgi-httpd-mounts.png` | Source — `mods/etc/httpd.json` mounts (`c:health` / `c:static` / `py:httpd`) |
 | `http-home.png` | QEMU HTTP — `/` catalog home (docs / iface / syms / externals / limits counts) |

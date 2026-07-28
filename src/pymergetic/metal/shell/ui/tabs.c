@@ -19,21 +19,27 @@ pm_metal_ui_handle_t pm_metal_ui_console_handle(void)
 
 void pm_metal_ui_sync_input_focus(void)
 {
-  metal_ui_widget_t     *tab;
-  pm_metal_input_focus_t want;
+  metal_ui_widget_t       *tab;
+  pm_metal_input_focus_t   want;
+  pm_metal_process_id_t    pid;
 
   /*
-   * Live wasm session owns HID while its stdout tab is foreground:
-   *   run <mod>  → console tab + fullscreen FB → guest keys
-   *   tab <mod>  → app tab + tab surface       → guest keys
+   * Live wasm session owns HID while focused:
+   *   run <mod>  → FULLSCREEN → guest keys (always; do not depend on tab match)
+   *   tab <mod>  → guest keys only while that tab is foreground
    * Switch away (use 0 / close) → shell again.
    */
   want = PM_METAL_INPUT_FOCUS_SHELL;
-  if (pm_metal_process_active() && gMetalUiTabs != NULL && gMetalUiTabs->u.tabs.n > 0 &&
-      gMetalUiTabs->u.tabs.active < gMetalUiTabs->u.tabs.n) {
-    tab = gMetalUiTabs->u.tabs.tabs[gMetalUiTabs->u.tabs.active];
-    if (tab != NULL && tab->handle == pm_metal_wasm_stdout_tab()) {
+  if (pm_metal_process_active()) {
+    pid = pm_metal_process_current();
+    if (pm_metal_process_ui_kind(pid) == PM_METAL_PROC_UI_FULLSCREEN) {
       want = PM_METAL_INPUT_FOCUS_GUEST;
+    } else if (gMetalUiTabs != NULL && gMetalUiTabs->u.tabs.n > 0 &&
+               gMetalUiTabs->u.tabs.active < gMetalUiTabs->u.tabs.n) {
+      tab = gMetalUiTabs->u.tabs.tabs[gMetalUiTabs->u.tabs.active];
+      if (tab != NULL && tab->handle == pm_metal_wasm_stdout_tab()) {
+        want = PM_METAL_INPUT_FOCUS_GUEST;
+      }
     }
   }
 

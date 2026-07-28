@@ -52,8 +52,16 @@ int pm_metal_esp_preload_tree(const char *dir);
 /**
  * Seed/replace a RAM-cache entry (works after EBS).
  * Used when the file is known/embedded and ESP is gone.
+ * Copies data — prefer cache_take for multi-MiB HTTP seed buffers.
  */
 int pm_metal_esp_cache_put(const char *path, const uint8_t *data, uint32_t len);
+
+/**
+ * Like cache_put, but adopts ownership of data (no second heap copy).
+ * data must be from pm_metal_mem_alloc (or NULL when len==0). On success
+ * the caller must not free data; on failure ownership stays with caller.
+ */
+int pm_metal_esp_cache_take(const char *path, uint8_t *data, uint32_t len);
 
 /**
  * ESP-relative path size in bytes (GetInfo only — no data read).

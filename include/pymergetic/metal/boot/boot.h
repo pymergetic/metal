@@ -53,6 +53,13 @@ int pm_metal_boot_harvest_devices(void);
 void pm_metal_boot_harvest_bus_devices(void);
 
 /**
+ * Print METAL banner + `+-- pymergetic metal` header early (before ESP
+ * preload chat). Idempotent — floor tree skips the header if already done.
+ * impl: common — src/pymergetic/metal/boot/boot_init.c
+ */
+void pm_metal_boot_print_header(void);
+
+/**
  * Print the floor boot tree (mem + cpu + devices + runners).
  * Call once after harvest + run_init + gfx harvest.
  * impl: common — src/pymergetic/metal/boot/boot_init.c

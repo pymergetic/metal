@@ -279,8 +279,16 @@ UefiMain (
     return EFI_OUT_OF_RESOURCES;
   }
 
+  /*
+   * Guest tree header before ESP RAM-cache so preload/iface lines fold
+   * under `+-- esp` instead of sitting as raw chat before the banner.
+   */
+  pm_metal_boot_print_header ();
+
   /* RAM-cache while ESP/SimpleFileSystem still live (gone after EBS). */
   if (pm_metal_esp_ready ()) {
+    INT32  iface_n;
+
     (VOID)pm_metal_esp_preload ("mods/tests/async_fs.txt");
     (VOID)pm_metal_esp_preload ("mods/tests/autotest");
     (VOID)pm_metal_esp_preload ("metal/net.conf");
@@ -291,18 +299,12 @@ UefiMain (
     (VOID)pm_metal_esp_preload ("etc/ssh/dropbear_ed25519_host_key");
     (VOID)pm_metal_esp_preload ("etc/httpd-cert.pem");
     (VOID)pm_metal_esp_preload ("etc/httpd-key.pem");
+
+    pm_metal_log ("+-- esp");
     if (pm_metal_esp_preload_tree ("mods/www") == 0) {
-      pm_metal_log ("metal-esp: mods/www cached");
+      pm_metal_log ("|   +-- www        ok");
     }
-    (VOID)pm_metal_esp_preload ("etc/httpd.json");
-    (VOID)pm_metal_esp_preload ("etc/sshd.json");
-    (VOID)pm_metal_esp_preload ("etc/ssh/authorized_keys");
-    (VOID)pm_metal_esp_preload ("etc/ssh/dropbear_ed25519_host_key");
-    (VOID)pm_metal_esp_preload ("etc/httpd-cert.pem");
-    (VOID)pm_metal_esp_preload ("etc/httpd-key.pem");
-    if (pm_metal_esp_preload_tree ("mods/www") == 0) {
-      pm_metal_log ("metal-esp: mods/www cached");
-    }
+
     /* Kernel image + sig for the executing artifact only (METAL-006). */
     {
       CONST CHAR8  *loaded;
@@ -329,32 +331,38 @@ UefiMain (
     }
     /* Optional guest packages staged under mods/apps/<name>/ — no app names here. */
     if (pm_metal_esp_preload_tree ("mods/apps") == 0) {
-      pm_metal_log ("metal-esp: mods/apps cached");
+      pm_metal_log ("|   +-- apps       ok");
     }
     /* Iface ESP sidecars must register while SimpleFileSystem is still
      * live — after EBS only the RAM cache remains, and readdir of
      * mods/apps cannot invent directory names from nested cache paths.
      * wasm.c also calls this (BIOS / idempotent soft-fail). */
-    pm_metal_iface_esp_install ();
+    pm_metal_log ("|   +-- iface");
+    iface_n = pm_metal_iface_esp_install_boot_tree ();
+    if (iface_n <= 0) {
+      pm_metal_log ("|   |   `-- (none)");
+    }
+
     if (pm_metal_esp_preload_tree ("mods/py") == 0) {
-      pm_metal_log ("metal-esp: mods/py cached");
+      pm_metal_log ("|   +-- py         ok");
     }
     /* Product Python import roots (loose trees — same post-EBS cache rule). */
     if (pm_metal_esp_preload_tree ("mods/httpd") == 0) {
-      pm_metal_log ("metal-esp: mods/httpd cached");
+      pm_metal_log ("|   +-- httpd      ok");
     }
     if (pm_metal_esp_preload_tree ("mods/api") == 0) {
-      pm_metal_log ("metal-esp: mods/api cached");
+      pm_metal_log ("|   +-- api        ok");
     }
     if (pm_metal_esp_preload_tree ("mods/templates") == 0) {
-      pm_metal_log ("metal-esp: mods/templates cached");
+      pm_metal_log ("|   +-- templates  ok");
     }
     if (pm_metal_esp_preload_tree ("mods/microdot") == 0) {
-      pm_metal_log ("metal-esp: mods/microdot cached");
+      pm_metal_log ("|   +-- microdot   ok");
     }
     if (pm_metal_esp_preload_tree ("mods/utemplate") == 0) {
-      pm_metal_log ("metal-esp: mods/utemplate cached");
+      pm_metal_log ("|   `-- utemplate  ok");
     }
+    pm_metal_log ("|");
   }
 
   pm_metal_boot_print_floor_tree (

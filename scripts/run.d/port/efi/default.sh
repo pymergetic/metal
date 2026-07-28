@@ -6,6 +6,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/efi-qemu.sh"
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/run-tree.sh"
 
 EFI="${ROOT}/build/x86_64_efi/metal.efi"
 ESP="${ROOT}/build/x86_64_efi/esp"
@@ -43,7 +45,7 @@ while [[ $# -gt 0 ]]; do
 		;;
 	-h | --help)
 		echo "usage: scripts/run efi [--vnc N | --gtk | --sdl | --bench]" >&2
-		echo "  --vnc N   headless + VNC on display N (default :1 → port 5901)" >&2
+		echo "  --vnc N   headless + VNC on display N (default :1 -> port 5901)" >&2
 		echo "  --gtk     QEMU window via GTK (needs DISPLAY)" >&2
 		echo "  --sdl     QEMU window via SDL (needs DISPLAY)" >&2
 		echo "  --bench   -display none (serial only)" >&2
@@ -61,25 +63,100 @@ OVMF="$(pm_metal_efi_ovmf)" || {
 	exit 1
 }
 
+pm_metal_run_tree_begin "pymergetic metal run"
+# Everything under here is the FAT ESP (not baked into metal.efi).
+pm_metal_run_tree "+-- esp"
+
+# Quiet per-file compile_templates / ext-apps chatter; tree summarizes.
+export PM_METAL_STAGE_QUIET=1
 pm_metal_efi_stage_esp "${EFI}" "${ESP}"
 VBLK="$(pm_metal_efi_stage_vblk)"
 
-echo "run-efi: staged ${ESP}/EFI/BOOT/BOOTX64.EFI from ${EFI}" >&2
+n_tpl=0
+if [[ -d "${ROOT}/mods/api/templates" ]]; then
+	n_tpl="$(find "${ROOT}/mods/api/templates" -maxdepth 1 -type f -name '*.html' | wc -l | tr -d ' ')"
+fi
+pm_metal_run_tree "|   +-- templates  ok  ${n_tpl} html"
+
+mods_bits=()
+for d in py httpd api templates microdot utemplate www; do
+	if [[ -d "${ESP}/mods/${d}" ]]; then
+		mods_bits+=("${d}")
+	fi
+done
+if [[ "${#mods_bits[@]}" -gt 0 ]]; then
+	pm_metal_run_tree "|   +-- mods       ok  ${mods_bits[*]}"
+else
+	pm_metal_run_tree "|   +-- mods       -"
+fi
+
+app_bits=()
+app_hints=()
 if [[ -d "${ESP}/mods/apps" ]]; then
 	shopt -s nullglob
-	apps=("${ESP}"/mods/apps/*/)
+	for app_dir in "${ESP}"/mods/apps/*/; do
+		app_name="$(basename "${app_dir}")"
+		app_bits+=("${app_name}")
+		if compgen -G "${app_dir}${app_name}.*.aot" >/dev/null || [[ -f "${app_dir}${app_name}.wasm" ]]; then
+			app_hints+=("${app_name}")
+		fi
+	done
 	shopt -u nullglob
-	if [[ "${#apps[@]}" -gt 0 ]]; then
-		for app_dir in "${apps[@]}"; do
-			app_name="$(basename "${app_dir}")"
-			if compgen -G "${app_dir}${app_name}.*.aot" >/dev/null || [[ -f "${app_dir}${app_name}.wasm" ]]; then
-				echo "run-efi: ${app_name} on ESP -> shell: run ${app_name} (AOT preferred, wasm fallback)" >&2
+fi
+if [[ "${#app_bits[@]}" -gt 0 ]]; then
+	pm_metal_run_tree "|   +-- apps       ok  ${app_bits[*]}  (ESP sidecar, not in efi)"
+	if [[ "${#app_hints[@]}" -gt 0 ]]; then
+		local_i=0
+		local_n="${#app_hints[@]}"
+		for app_name in "${app_hints[@]}"; do
+			local_i=$((local_i + 1))
+			if [[ "${local_i}" -lt "${local_n}" ]]; then
+				pm_metal_run_tree "|   |   +-- ${app_name}     run ${app_name} (aot/wasm)"
+			else
+				pm_metal_run_tree "|   |   \`-- ${app_name}     run ${app_name} (aot/wasm)"
 			fi
 		done
 	fi
 else
-	echo "run-efi: no external apps on ESP (stage one via METAL_EXT_APPS=<name>=<dir> ./scripts/build efi)" >&2
+	pm_metal_run_tree "|   +-- apps       -    (METAL_EXT_APPS=name=dir -> ESP)"
 fi
+
+pm_metal_run_tree "|   \`-- BOOTX64    ok  metal.efi -> ESP"
+
+# Display / hostfwd / scanout for the qemu group.
+display_note=""
+scanout_note="stdvga"
+case "${DISPLAY_BACKEND}" in
+none)
+	display_note="none (serial only)"
+	;;
+gtk | sdl)
+	if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+		echo "run-efi: ${DISPLAY_BACKEND} needs DISPLAY/WAYLAND_DISPLAY (this shell has neither)." >&2
+		echo "run-efi: use a local desktop, ssh -X/-Y, or omit --${DISPLAY_BACKEND} for VNC." >&2
+		exit 1
+	fi
+	display_note="${DISPLAY_BACKEND}"
+	;;
+*)
+	vnc_port=$((5900 + ${VNC#:}))
+	if ss -lnt 2>/dev/null | grep -qE ":${vnc_port}\\b"; then
+		echo "run-efi: port ${vnc_port} already in use -- kill the other QEMU or: --vnc 2" >&2
+		exit 1
+	fi
+	display_note="vnc *:${vnc_port}"
+	;;
+esac
+
+if [[ "${METAL_SCANOUT_VIRTIO_GPU:-0}" == "1" ]]; then
+	scanout_note="virtio-vga"
+fi
+
+pm_metal_run_tree "+-- qemu"
+pm_metal_run_tree "|   +-- display    ${display_note}"
+pm_metal_run_tree "|   +-- hostfwd    ssh :2222  http :8000  https :8443"
+pm_metal_run_tree "|   \`-- scanout    ${scanout_note}"
+pm_metal_run_tree_handover
 
 args=(
 	qemu-system-x86_64
@@ -102,39 +179,22 @@ args=(
 	-boot order=d
 )
 
-# Scanout: default Bochs stdvga flip; METAL_SCANOUT_VIRTIO_GPU=1 → virtio-vga.
 if [[ "${METAL_SCANOUT_VIRTIO_GPU:-0}" == "1" ]]; then
 	args+=(-vga none -device virtio-vga)
-	echo "run-efi: scanout virtio-vga (metal virtio_gpu backend)" >&2
 else
-	# stdvga: VGA IS1 vblank + Bochs VBE page-flip; 64 MiB for 2× hi-res pages
 	args+=(-vga std -global VGA.vgamem_mb=64)
 fi
 
 case "${DISPLAY_BACKEND}" in
 none)
 	args+=(-display none)
-	echo "run-efi: display none (serial only)" >&2
 	;;
 gtk | sdl)
-	if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
-		echo "run-efi: ${DISPLAY_BACKEND} needs DISPLAY/WAYLAND_DISPLAY (this shell has neither)." >&2
-		echo "run-efi: use a local desktop, ssh -X/-Y, or omit --${DISPLAY_BACKEND} for VNC." >&2
-		exit 1
-	fi
 	args+=(-display "${DISPLAY_BACKEND}")
-	echo "run-efi: display ${DISPLAY_BACKEND}" >&2
 	;;
 *)
-	vnc_port=$((5900 + ${VNC#:}))
-	if ss -lnt 2>/dev/null | grep -qE ":${vnc_port}\\b"; then
-		echo "run-efi: port ${vnc_port} already in use — kill the other QEMU or: --vnc 2" >&2
-		exit 1
-	fi
 	args+=(-display none -vnc "0.0.0.0${VNC}")
-	echo "run-efi: VNC on *:${vnc_port}  → TightVNC to this host:${vnc_port} (keep this QEMU running)" >&2
 	;;
 esac
 
-echo "run-efi: hostfwd ssh :2222->guest:22  http :8000->:8000  https :8443->:8443" >&2
 exec "${args[@]}"

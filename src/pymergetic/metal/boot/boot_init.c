@@ -477,6 +477,19 @@ static pm_metal_status_t MetalBootInitStep(pm_metal_async_handle_t self_h)
   }
 }
 
+static int s_boot_header_printed;
+
+void pm_metal_boot_print_header(void)
+{
+  if (s_boot_header_printed) {
+    return;
+  }
+  s_boot_header_printed = 1;
+  pm_metal_boot_banner();
+  pm_metal_log_styled(PM_METAL_LOG_STYLE_ACCENT, "+-- pymergetic metal");
+  pm_metal_log_styled(PM_METAL_LOG_STYLE_DIM, "|");
+}
+
 void pm_metal_boot_print_floor_tree(uint64_t claim_mib,
                                     uint64_t map_bytes,
                                     uint64_t hole_mib,
@@ -486,9 +499,7 @@ void pm_metal_boot_print_floor_tree(uint64_t claim_mib,
 {
   uintptr_t i;
 
-  pm_metal_boot_banner();
-  pm_metal_log_styled(PM_METAL_LOG_STYLE_ACCENT, "+-- pymergetic metal");
-  pm_metal_log_styled(PM_METAL_LOG_STYLE_DIM, "|");
+  pm_metal_boot_print_header();
   pm_metal_logf_styled(PM_METAL_LOG_STYLE_DIM, "+-- mem          %llu MiB claimed", claim_mib);
   if (map_bytes < 1024 * 1024) {
     pm_metal_logf_styled(PM_METAL_LOG_STYLE_DIM, "|   +-- MAP      %llu KiB", map_bytes / 1024);

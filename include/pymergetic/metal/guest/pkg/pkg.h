@@ -26,6 +26,11 @@ extern "C" {
 
 #if !defined(__wasm__)
 
+/** Seed guest .aot/.wasm (+ assets.list) only — not multi-MiB IWADs. */
+#define PM_METAL_PKG_SEED_GUEST 0u
+/** Seed package assets (IWADs, etc.) after the guest binary is loaded. */
+#define PM_METAL_PKG_SEED_ASSETS 1u
+
 /** One seed/fetch slot (paths are absolute under ESP / HTTP root). */
 typedef struct {
   const char *esp_path;
@@ -78,7 +83,14 @@ const pm_metal_pkg_file_t *pm_metal_pkg_files(const char *name, uint32_t *out_n)
 /** 1 if seed slot may be skipped (wrong/optional / already satisfied). */
 int pm_metal_pkg_file_optional(const char *name, const pm_metal_pkg_file_t *f);
 
+/**
+ * Ensure guest .aot/.wasm is on ESP (HTTP seed if needed). Does not wait
+ * for multi-MiB assets — call ensure_assets after the module is image_open'd.
+ */
 int pm_metal_pkg_ensure(const char *name);
+
+/** Ensure declared assets (e.g. IWAD) are on ESP. No-op if none / already ready. */
+int pm_metal_pkg_ensure_assets(const char *name);
 
 #endif
 

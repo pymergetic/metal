@@ -166,6 +166,9 @@ void pm_metal_py_repl_print_banner(void);
  */
 int pm_metal_py_autoload_run_once(void);
 
+/** Non-zero after pm_metal_py_autoload_run_once() has completed (ok or empty). */
+int pm_metal_py_autoload_done(void);
+
 /**
  * Run /mods/<name>/autoload.py for one mod (idempotent per name). Used from
  * pm_metal_mod_load so late-loaded packs still get their Python hooks.
