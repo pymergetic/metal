@@ -14,7 +14,7 @@
 | `thinkpad-doom.jpg` | ThinkPad T42p — Doom tabbed on iron |
 | `pxe-http-sigs.png` | `upload-pxe` — HTTP mirror with `doom.*.aot` / `.wasm` + `.sig` |
 | `menuconfig.png` | Host — `./scripts/menuconfig` (Build + `pymergetic.metal` menus) |
-| `iface-packages.png` | QEMU HTTP — `/iface` pack catalog (`metal.guest` + ESP sidecars + `mod.t8_multimod_lib`) |
+| `iface-packages.png` | QEMU HTTP — `/iface` pack catalog (`metal.guest*` @ `v0.1.0`, ESP `mod.doom*`, `mod.t8_multimod_lib`) |
 | `iface-headers.png` | QEMU HTTP — `/iface/pkg/metal.guest` (headers pack file list) |
 | `iface-sources.png` | QEMU HTTP — `/iface/pkg/metal.guest.sources` (sources pack; Kconfig on) |
 | `iface-source-view.png` | QEMU HTTP — highlighted source view (`lz4.c` in `metal.guest.sources`) |
