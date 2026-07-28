@@ -11,6 +11,7 @@
 #include <pymergetic/metal/shell/shell_cmd.h>
 #include <pymergetic/metal/shell/shell/shell.h>
 #include <pymergetic/metal/shell/ui/ui.h>
+#include <pymergetic/metal/guest/mod/mod.h>
 #include <pymergetic/metal/guest/process/process.h>
 #include <pymergetic/metal/dev/random/random.h>
 #include <pymergetic/metal/util/size.h>
@@ -513,6 +514,69 @@ static void CoreTabCmd(int32_t argc, char **argv)
   (void)pm_metal_shell_tab_args(argv[1], args[0] != '\0' ? args : NULL);
 }
 
+/* Load-only: on_load on shared instance 0, no process / game loop. */
+static void CoreLoadCmd(int32_t argc, char **argv)
+{
+  if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
+    pm_metal_shell_out("usage: load <mod>");
+    return;
+  }
+  if (pm_metal_mod_load(argv[1]) != 0) {
+    pm_metal_shell_out("load: failed");
+    return;
+  }
+  pm_metal_shell_out("load: ready");
+}
+
+static void CoreUnloadCmd(int32_t argc, char **argv)
+{
+  if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
+    pm_metal_shell_out("usage: unload <mod>");
+    return;
+  }
+  if (pm_metal_mod_unload(argv[1]) != 0) {
+    pm_metal_shell_out("unload: refused (busy/missing)");
+    return;
+  }
+  pm_metal_shell_out("unload: ok");
+}
+
+static void CoreModsCmd(int32_t argc, char **argv)
+{
+  uint32_t n;
+  uint32_t i;
+  char     line[96];
+
+  (void)argc;
+  (void)argv;
+  n = pm_metal_mod_count();
+  if (n == 0u) {
+    pm_metal_shell_out("mods: (none loaded)");
+    return;
+  }
+  snprintf(line, sizeof(line), "mods: %u", (unsigned)n);
+  pm_metal_shell_out(line);
+  for (i = 0; i < n; i++) {
+    pm_metal_mod_info_t info;
+    const char         *cap;
+
+    if (pm_metal_mod_at(i, &info) != 0) {
+      continue;
+    }
+    cap = (info.cap == (uint32_t)PM_METAL_MOD_CAP_MULTI) ? "MULTI" : "SINGLE";
+    snprintf(line,
+             sizeof(line),
+             "  %-16s  %s  %s  tasks=%u fresh=%u%s",
+             info.name,
+             info.ready ? "ready" : "empty",
+             cap,
+             (unsigned)info.open_tasks,
+             (unsigned)info.fresh_open,
+             info.has_about ? "  about" : "");
+    pm_metal_shell_out(line);
+  }
+}
+
 static void CoreTabsCmd(int32_t argc, char **argv)
 {
   uint32_t n;
@@ -586,21 +650,37 @@ static void CoreCloseCmd(int32_t argc, char **argv)
 
 static void CoreExitCmd(int32_t argc, char **argv)
 {
-  int32_t reboot;
+  int32_t reboot = 0;
+  int32_t fast   = 0;
+  int32_t i;
 
-  if (argc > 2) {
-    pm_metal_shell_out("usage: exit [-r]");
-    return;
+  for (i = 1; i < argc; i++) {
+    if (argv[i] == NULL) {
+      continue;
+    }
+    if (strcmp(argv[i], "-r") == 0) {
+      reboot = 1;
+    } else if (strcmp(argv[i], "-f") == 0) {
+      fast = 1;
+    } else if (strcmp(argv[i], "-rf") == 0 || strcmp(argv[i], "-fr") == 0) {
+      reboot = 1;
+      fast   = 1;
+    } else {
+      pm_metal_shell_out("usage: exit [-r] [-f]");
+      return;
+    }
   }
 
-  if (argc == 2 && strcmp(argv[1], "-r") != 0) {
-    pm_metal_shell_out("exit: use -r to reboot");
-    return;
+  if (reboot && fast) {
+    pm_metal_shell_out("reboot requested (fast)");
+  } else if (reboot) {
+    pm_metal_shell_out("reboot requested");
+  } else if (fast) {
+    pm_metal_shell_out("shutdown requested (fast)");
+  } else {
+    pm_metal_shell_out("shutdown requested");
   }
-
-  reboot = (argc == 2) ? 1 : 0;
-  pm_metal_shell_out(reboot ? "reboot requested" : "shutdown requested");
-  pm_metal_shell_cmd_exit(reboot);
+  pm_metal_shell_cmd_exit(reboot, fast);
 }
 
 static void CoreHistoryCmd(int32_t argc, char **argv)
@@ -670,6 +750,18 @@ PM_METAL_SHELL_CMDS(g_pm_metal_shell_cmds_core) = {
   { "bg", "bg                resume job in background", CoreBgCmd },
   { "run", "run <mod>         fullscreen in console (guest HID)", CoreRunCmd },
   { "tab", "tab <mod>         windowed in a new tab (guest HID)", CoreTabCmd },
+  { "load",
+    "load <mod>        fetch + on_load (instance 0; no process)",
+    CoreLoadCmd,
+    "load <mod>",
+    "Loads the package and runs on_load on shared instance 0 so cmds/docs/"
+    "about register. Does not start a process - use run/tab for that." },
+  { "unload",
+    "unload <mod>      drop idle mod (refused if busy)",
+    CoreUnloadCmd },
+  { "mods",
+    "mods              list loaded mod registry slots",
+    CoreModsCmd },
   { "ps", "ps                list fake processes", CorePsCmd },
   { "cpu", "cpu               per-runner busy % + session pin", CoreCpuCmd },
   { "presentoffload",
@@ -686,8 +778,14 @@ PM_METAL_SHELL_CMDS(g_pm_metal_shell_cmds_core) = {
   { "tabs", "tabs              list tabs", CoreTabsCmd },
   { "use", "use <n>           activate tab index", CoreUseCmd },
   { "close", "close [n]         close tab n, or active/last guest", CoreCloseCmd },
-  { "exit", "exit|quit [-r]    power off (or reboot with -r)", CoreExitCmd },
-  { "quit", "exit|quit [-r]    power off (or reboot with -r)", CoreExitCmd },
-  { "shutdown", "exit|quit [-r]    power off (or reboot with -r)", CoreExitCmd },
+  { "exit",
+    "exit|quit [-r] [-f]  power off (-r reboot, -f skip sleeps)",
+    CoreExitCmd },
+  { "quit",
+    "exit|quit [-r] [-f]  power off (-r reboot, -f skip sleeps)",
+    CoreExitCmd },
+  { "shutdown",
+    "exit|quit [-r] [-f]  power off (-r reboot, -f skip sleeps)",
+    CoreExitCmd },
 };
 PM_METAL_SHELL_CMDS_END(g_pm_metal_shell_cmds_core);

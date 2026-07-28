@@ -118,7 +118,7 @@ static void AboutShellCmd(int argc, char **argv)
 
 PM_METAL_SHELL_CMD(g_pm_metal_shell_cmd_about,
                    "about",
-                   "about [mod]       version, desc, url, authors (metal or a mod)",
+                   "about [mod]       version, desc, url, authors (metal or loaded mod)",
                    AboutShellCmd);
 
 static int32_t pm_metal_about_get_native(wasm_exec_env_t exec_env, const char *name, uint32_t out)

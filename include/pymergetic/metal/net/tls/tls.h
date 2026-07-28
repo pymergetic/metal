@@ -20,7 +20,10 @@ extern "C" {
 #include "pymergetic/metal/net/io_budget.h"
 #include "pymergetic/metal/net/ip/ip.h"
 
-#define PM_METAL_TLS_WIRE_MAX PM_METAL_IO_WIRE_MAX
+#ifndef CONFIG_PM_METAL_TLS_WIRE_MAX
+#define CONFIG_PM_METAL_TLS_WIRE_MAX CONFIG_PM_METAL_IO_WIRE_MAX
+#endif
+#define PM_METAL_TLS_WIRE_MAX ((uint32_t)CONFIG_PM_METAL_TLS_WIRE_MAX)
 
 typedef struct pm_metal_net_tls_wire {
   uint8_t  buf[PM_METAL_TLS_WIRE_MAX];

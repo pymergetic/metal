@@ -45,6 +45,146 @@ def _esc(s):
   )
 
 
+def _url_query_val(s):
+  """Encode a path for ?path= (keep / and .)."""
+  if s is None:
+    return ""
+  out = []
+  for c in str(s):
+    o = ord(c)
+    if (
+        (48 <= o <= 57)
+        or (65 <= o <= 90)
+        or (97 <= o <= 122)
+        or c in "-_./~"
+    ):
+      out.append(c)
+    else:
+      out.append("%%%02X" % o)
+  return "".join(out)
+
+
+def _iface_norm_path(p):
+  if not isinstance(p, str):
+    try:
+      p = p.decode()
+    except Exception:
+      p = str(p)
+  while p.startswith("./"):
+    p = p[2:]
+  while p.startswith("/"):
+    p = p[1:]
+  return p
+
+
+_C_KW = (
+    "auto break case char const continue default do double else enum extern "
+    "float for goto if inline int long register restrict return short signed "
+    "sizeof static struct switch typedef union unsigned void volatile while "
+    "bool true false NULL uint8_t uint16_t uint32_t uint64_t int8_t int16_t "
+    "int32_t int64_t size_t ssize_t uintptr_t intptr_t"
+).split()
+
+
+def _c_is_digit(c):
+  # MicroPython str has no isdigit/isalnum/isalpha — use ord (same as _url_query_val).
+  o = ord(c)
+  return 48 <= o <= 57
+
+
+def _c_is_alpha(c):
+  o = ord(c)
+  return (65 <= o <= 90) or (97 <= o <= 122)
+
+
+def _c_is_alnum(c):
+  return _c_is_digit(c) or _c_is_alpha(c)
+
+
+def _highlight_c(src):
+  """Tiny C/header highlighter -> HTML (text nodes escaped)."""
+  if src is None:
+    return ""
+  if not isinstance(src, str):
+    try:
+      src = src.decode()
+    except Exception:
+      src = str(src)
+  kw = {}
+  for w in _C_KW:
+    kw[w] = 1
+  out = []
+  i = 0
+  n = len(src)
+
+  def emit(cls, text):
+    if not text:
+      return
+    if cls:
+      out.append('<span class="%s">' % cls)
+      out.append(_esc(text))
+      out.append("</span>")
+    else:
+      out.append(_esc(text))
+
+  while i < n:
+    c = src[i]
+    if c == "/" and i + 1 < n and src[i + 1] == "/":
+      j = i
+      while j < n and src[j] != "\n":
+        j += 1
+      emit("cm", src[i:j])
+      i = j
+      continue
+    if c == "/" and i + 1 < n and src[i + 1] == "*":
+      j = i + 2
+      while j + 1 < n and not (src[j] == "*" and src[j + 1] == "/"):
+        j += 1
+      j = j + 2 if j + 1 < n else n
+      emit("cm", src[i:j])
+      i = j
+      continue
+    if c == "#":
+      j = i
+      while j < n and src[j] != "\n":
+        j += 1
+      emit("pp", src[i:j])
+      i = j
+      continue
+    if c == '"' or c == "'":
+      q = c
+      j = i + 1
+      while j < n:
+        if src[j] == "\\":
+          j += 2
+          continue
+        if src[j] == q:
+          j += 1
+          break
+        j += 1
+      emit("str", src[i:j])
+      i = j
+      continue
+    if _c_is_digit(c):
+      j = i
+      while j < n and (_c_is_alnum(src[j]) or src[j] in "xX.uUlL"):
+        j += 1
+      emit("num", src[i:j])
+      i = j
+      continue
+    if _c_is_alpha(c) or c == "_":
+      j = i
+      while j < n and (_c_is_alnum(src[j]) or src[j] == "_"):
+        j += 1
+      word = src[i:j]
+      emit("kw" if word in kw else None, word)
+      i = j
+      continue
+    emit(None, c)
+    i += 1
+  return "".join(out)
+
+
 def _doc_row_esc(row):
   return {
       "kind": _esc(row.get("kind", "")),
@@ -52,6 +192,15 @@ def _doc_row_esc(row):
       "summary": _esc(row.get("summary", "")),
       "sig": _esc(row.get("sig", "")),
       "body": _esc(row.get("body", "")),
+  }
+
+
+def _doc_list_row_esc(row):
+  """List view only needs kind/key/summary — skip sig/body escape cost."""
+  return {
+      "kind": _esc(row.get("kind", "")),
+      "key": _esc(row.get("key", "")),
+      "summary": _esc(row.get("summary", "")),
   }
 
 
@@ -122,7 +271,7 @@ def _metal_version():
 
 
 def _limit_rows(rows, request, default=40):
-  """Cap list payloads — asgi conn_send is sync and aborts large bodies mid-way."""
+  """Cap list payloads for HTML/JSON list views (override with ?limit=, max 500)."""
   lim = default
   raw = request.args.get("limit") if request is not None else None
   if raw is not None:
@@ -175,14 +324,17 @@ async def index(request):
 async def docs_list(request):
   import pymergetic.metal.doc as doc
 
+  # Default 500: catalog is shell-first (~37) then py (~90); the old
+  # default of 40 looked like "3 py then cut off" with shell filling the rest.
   kind = request.args.get("kind")
-  rows, truncated = _limit_rows([_doc_row_esc(r) for r in doc.list(kind)], request)
-  _ = truncated
+  raw, truncated = _limit_rows(doc.list(kind), request, default=500)
+  rows = [_doc_list_row_esc(r) for r in raw]
   return _html(
       "docs_list.html",
       title="docs",
       kind=_esc(kind) if kind else "",
       rows=rows,
+      truncated=truncated,
   )
 
 
@@ -235,7 +387,13 @@ async def iface_pkg(request, name):
   info = iface.info()
   if name not in info:
     return _json_response({"error": "unknown package"}, 404)
-  files = [_esc(p) for p in iface.list(name)]
+  files = []
+  for p in iface.list(name):
+    np = _iface_norm_path(p)
+    files.append({
+        "path": _esc(np),
+        "href": "/iface/pkg/" + name + "/view?path=" + _url_query_val(np),
+    })
   meta = info[name]
   return _html(
       "iface_pkg.html",
@@ -251,11 +409,23 @@ async def iface_pkg(request, name):
   )
 
 
-@app.get("/iface/pkg/<name>/file/<path:path>")
-async def iface_file(request, name, path):
+def _iface_is_prose_path(path):
+  """LICENSE / *.md — plain escape, not C keyword coloring."""
+  if path is None:
+    return False
+  p = str(path)
+  if p == "LICENSE" or p.endswith("/LICENSE"):
+    return True
+  base = p.rsplit("/", 1)[-1]
+  return base.endswith(".md")
+
+
+async def _iface_file_page(name, path):
   import pymergetic.metal.iface as iface
 
-  _ = request
+  path = _iface_norm_path(path)
+  if not path:
+    return _json_response({"error": "not found"}, 404)
   try:
     body = iface.read(name, path)
   except ValueError:
@@ -264,13 +434,31 @@ async def iface_file(request, name, path):
     text = body.decode()
   except Exception:
     text = ""
+  if _iface_is_prose_path(path):
+    body_html = _esc(text)
+  else:
+    body_html = _highlight_c(text)
   return _html(
       "iface_file.html",
       title=_esc(path),
       name=_esc(name),
       path=_esc(path),
-      text=_esc(text),
+      body_html=body_html,
   )
+
+
+@app.get("/iface/pkg/<name>/view")
+async def iface_file_view(request, name):
+  path = request.args.get("path") if request is not None else None
+  if path is None:
+    return _json_response({"error": "missing path"}, 400)
+  return await _iface_file_page(name, path)
+
+
+@app.get("/iface/pkg/<name>/file/<path:path>")
+async def iface_file(request, name, path):
+  _ = request
+  return await _iface_file_page(name, path)
 
 
 @app.get("/iface/sym")
@@ -374,7 +562,7 @@ async def api_doc_list(request):
   import pymergetic.metal.doc as doc
 
   kind = request.args.get("kind")
-  rows, _truncated = _limit_rows(doc.list(kind), request, default=40)
+  rows, _truncated = _limit_rows(doc.list(kind), request, default=500)
   return _json_response(rows)
 
 
@@ -438,11 +626,14 @@ async def api_iface_pkg_files(request, name):
     return _json_response({"error": "unknown package"}, 404)
 
 
-@app.get("/api/iface/pkg/<name>/file/<path:path>")
-async def api_iface_pkg_file(request, name, path):
+@app.get("/api/iface/pkg/<name>/file")
+async def api_iface_pkg_file_q(request, name):
   import pymergetic.metal.iface as iface
 
-  _ = request
+  path = request.args.get("path") if request is not None else None
+  if path is None:
+    return _json_response({"error": "missing path"}, 400)
+  path = _iface_norm_path(path)
   try:
     body = iface.read(name, path)
   except ValueError:
@@ -451,7 +642,24 @@ async def api_iface_pkg_file(request, name, path):
     text = body.decode()
   except Exception:
     return body, 200, {"Content-Type": "application/octet-stream"}
-  return text, 200, {"Content-Type": "text/plain"}
+  return text, 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+@app.get("/api/iface/pkg/<name>/file/<path:path>")
+async def api_iface_pkg_file(request, name, path):
+  import pymergetic.metal.iface as iface
+
+  _ = request
+  path = _iface_norm_path(path)
+  try:
+    body = iface.read(name, path)
+  except ValueError:
+    return _json_response({"error": "not found"}, 404)
+  try:
+    text = body.decode()
+  except Exception:
+    return body, 200, {"Content-Type": "application/octet-stream"}
+  return text, 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.get("/api/iface/sym")
@@ -466,8 +674,10 @@ async def api_iface_sym_query(request):
       return _json_response({"error": "not found"}, 404)
     return _json_response(row)
   if module:
-    return _json_response(iface.sym(module))
-  return _json_response(iface.sym())
+    rows, _truncated = _limit_rows(iface.sym(module), request, default=40)
+    return _json_response(rows)
+  rows, _truncated = _limit_rows(iface.sym(), request, default=40)
+  return _json_response(rows)
 
 
 @app.get("/api/iface/sym/<module>/<name>")

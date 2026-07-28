@@ -46,6 +46,10 @@
   Both use mod_fresh_instant, a trivial "already resolved" awaitable —
   distinct from py_await.c's metal_aw_type since there's no real async
   handle to park on here.
+
+  Lifecycle (sync, shared instance 0 — not a process):
+    mod.doom.load() / .unload() / .ready()
+  MULTI gameplay still needs fresh() or pmcmd / shell run|tab.
 **/
 #include <pymergetic/metal/guest/mod/mod.h>
 #include <pymergetic/metal/py/py.h>
@@ -341,6 +345,56 @@ static mp_obj_t mod_fresh_factory_new(qstr mod_name)
   return MP_OBJ_FROM_PTR(o);
 }
 
+/* load / unload / ready — sync lifecycle on shared instance 0. */
+typedef enum {
+  MOD_LIFE_LOAD = 0,
+  MOD_LIFE_UNLOAD,
+  MOD_LIFE_READY
+} mod_life_op_t;
+
+typedef struct {
+  mp_obj_base_t base;
+  qstr          mod_name;
+  mod_life_op_t op;
+} mod_life_obj_t;
+
+static mp_obj_t mod_life_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args)
+{
+  mod_life_obj_t *self = MP_OBJ_TO_PTR(self_in);
+  const char     *name = qstr_str(self->mod_name);
+
+  (void)args;
+  if (n_args != 0u || n_kw != 0u) {
+    mp_raise_TypeError(MP_ERROR_TEXT("mod lifecycle takes no arguments"));
+  }
+
+  if (self->op == MOD_LIFE_READY) {
+    return mp_obj_new_bool(pm_metal_mod_ready(name) != 0);
+  }
+  if (self->op == MOD_LIFE_LOAD) {
+    if (pm_metal_mod_load(name) != 0) {
+      mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("mod.load failed"));
+    }
+    return mp_const_none;
+  }
+  if (pm_metal_mod_unload(name) != 0) {
+    mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("mod.unload refused"));
+  }
+  return mp_const_none;
+}
+
+static MP_DEFINE_CONST_OBJ_TYPE(
+  mod_life_type, MP_QSTR_function, MP_TYPE_FLAG_NONE, call, mod_life_call);
+
+static mp_obj_t mod_life_new(qstr mod_name, mod_life_op_t op)
+{
+  mod_life_obj_t *o = m_new_obj(mod_life_obj_t);
+  o->base.type      = &mod_life_type;
+  o->mod_name       = mod_name;
+  o->op             = op;
+  return MP_OBJ_FROM_PTR(o);
+}
+
 typedef struct {
   mp_obj_base_t base;
   qstr          mod_name;
@@ -403,6 +457,19 @@ static void mod_name_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest)
 
   if (attr == qstr_from_str("fresh")) {
     dest[0] = mod_fresh_factory_new(self->mod_name);
+    return;
+  }
+
+  if (attr == qstr_from_str("load")) {
+    dest[0] = mod_life_new(self->mod_name, MOD_LIFE_LOAD);
+    return;
+  }
+  if (attr == qstr_from_str("unload")) {
+    dest[0] = mod_life_new(self->mod_name, MOD_LIFE_UNLOAD);
+    return;
+  }
+  if (attr == qstr_from_str("ready")) {
+    dest[0] = mod_life_new(self->mod_name, MOD_LIFE_READY);
     return;
   }
 

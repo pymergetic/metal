@@ -18,11 +18,11 @@ Tries the shell face first (name typically a command), else scans the whole cata
     ...
 
 def list(*args: Any) -> Any:
-    """Enumerate the whole catalog, optionally filtered to one kind.
+    """Enumerate the catalog; kind='py' also includes pmcmd.* aliases.
 
 list(kind: str | None = None) -> list[dict]
 
-kind is positional, not a keyword arg. Each item has the same shape as lookup()'s return value."""
+kind is positional. kind='py' = pymergetic.metal.* binds plus pmcmd.<cmd> (same text as kind='shell'). kind=None is each home once (shell rows stay under shell, not duplicated as pmcmd)."""
     ...
 
 def lookup(*args: Any) -> Any:
@@ -30,7 +30,7 @@ def lookup(*args: Any) -> Any:
 
 lookup(kind: str, key: str) -> dict | None
 
-kind is 'shell'/'py'/'mod'; key is a shell command name, a dotted py bind path (e.g. 'pymergetic.metal.fs.open'), or 'modname.funcname'. Returns None if unknown, else {kind, key, summary, sig, body} (sig/body are '' when that face never set them)."""
+kind is 'shell'/'py'/'mod'; key is a shell command name, a dotted py bind path (e.g. 'pymergetic.metal.fs.open'), 'pmcmd.<cmd>' when kind='py', or 'modname.funcname'. Returns None if unknown, else {kind, key, summary, sig, body} (sig/body are '' when unset)."""
     ...
 
 def lookup_key(*args: Any) -> Any:

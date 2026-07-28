@@ -57,6 +57,24 @@ static mp_obj_t DocViewDict(const pm_metal_doc_view_t *view)
   return d;
 }
 
+/**
+ * Shell row surfaced under kind=py as pmcmd.<name> — copies the same
+ * summary/sig/body pointers' text into Python strings (still one C home).
+ */
+static mp_obj_t DocPmcmdAliasDict(const pm_metal_doc_view_t *shell_view)
+{
+  char     key[96];
+  mp_obj_t d = pm_metal_py_dict_new(5);
+
+  snprintf(key, sizeof(key), "pmcmd.%s", shell_view->key != NULL ? shell_view->key : "");
+  pm_metal_py_dict_set_str(d, "kind", pm_metal_py_str_new("py"));
+  pm_metal_py_dict_set_str(d, "key", pm_metal_py_str_new(key));
+  pm_metal_py_dict_set_str(d, "summary", pm_metal_py_str_new(shell_view->summary));
+  pm_metal_py_dict_set_str(d, "sig", pm_metal_py_str_new(shell_view->sig));
+  pm_metal_py_dict_set_str(d, "body", pm_metal_py_str_new(shell_view->body));
+  return d;
+}
+
 static mp_obj_t py_doc_lookup(mp_obj_t kind_obj, mp_obj_t key_obj)
 {
   const char          *kind_str = mp_obj_str_get_str(kind_obj);
@@ -83,9 +101,9 @@ PM_METAL_PY_BIND_DOC(g_py_bind_doc_lookup,
                     "Direct (kind, key) catalog lookup.",
                     "lookup(kind: str, key: str) -> dict | None",
                     "kind is 'shell'/'py'/'mod'; key is a shell command name, a dotted "
-                    "py bind path (e.g. 'pymergetic.metal.fs.open'), or 'modname.funcname'. "
-                    "Returns None if unknown, else {kind, key, summary, sig, body} (sig/body "
-                    "are '' when that face never set them).");
+                    "py bind path (e.g. 'pymergetic.metal.fs.open'), 'pmcmd.<cmd>' when "
+                    "kind='py', or 'modname.funcname'. Returns None if unknown, else "
+                    "{kind, key, summary, sig, body} (sig/body are '' when unset).");
 
 static mp_obj_t py_doc_lookup_key(mp_obj_t doc_key_obj)
 {
@@ -142,6 +160,24 @@ static mp_obj_t py_doc_list(size_t n_args, const mp_obj_t *args)
     pm_metal_py_list_append(out, DocViewDict(&view));
   }
 
+  /*
+   * kind=py also lists shell cmds as pmcmd.<name> (Python face of the
+   * same home). kind=all keeps a single shell row — no duplicate.
+   */
+  if (kind == PM_METAL_DOC_PY) {
+    for (i = 0; i < total; i++) {
+      pm_metal_doc_view_t view;
+
+      if (pm_metal_doc_at((uint32_t)i, &view) != 0) {
+        continue;
+      }
+      if (view.kind != PM_METAL_DOC_SHELL) {
+        continue;
+      }
+      pm_metal_py_list_append(out, DocPmcmdAliasDict(&view));
+    }
+  }
+
   return out;
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(py_doc_list_obj, 0, 1, py_doc_list);
@@ -150,10 +186,11 @@ PM_METAL_PY_BIND_DOC(g_py_bind_doc_list,
                     "list",
                     py_doc_list_obj,
                     PM_METAL_PY_SYNC,
-                    "Enumerate the whole catalog, optionally filtered to one kind.",
+                    "Enumerate the catalog; kind='py' also includes pmcmd.* aliases.",
                     "list(kind: str | None = None) -> list[dict]",
-                    "kind is positional, not a keyword arg. Each item has the same shape "
-                    "as lookup()'s return value.");
+                    "kind is positional. kind='py' = pymergetic.metal.* binds plus "
+                    "pmcmd.<cmd> (same text as kind='shell'). kind=None is each home "
+                    "once (shell rows stay under shell, not duplicated as pmcmd).");
 
 /**
  * Best-effort "help by bare name" (docs/DOC_IFACE_PLAN.md preview's

@@ -18,6 +18,7 @@
 #include <pymergetic/metal/boot/boot.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/util/fourcc.h>
+#include <pymergetic/metal/util/iface.h>
 
 #define PM_METAL_BS_RESERVE_PAGES  ((UINTN)(16 * 1024 * 1024 / EFI_PAGE_SIZE))
 #define PM_METAL_SMOKE_ID          PM_METAL_UTIL_FOURCC ('s', 'm', 'o', 'k')
@@ -321,6 +322,11 @@ UefiMain (
     if (pm_metal_esp_preload_tree ("mods/apps") == 0) {
       pm_metal_log ("metal-esp: mods/apps cached");
     }
+    /* Iface ESP sidecars must register while SimpleFileSystem is still
+     * live — after EBS only the RAM cache remains, and readdir of
+     * mods/apps cannot invent directory names from nested cache paths.
+     * wasm.c also calls this (BIOS / idempotent soft-fail). */
+    pm_metal_iface_esp_install ();
     if (pm_metal_esp_preload_tree ("mods/py") == 0) {
       pm_metal_log ("metal-esp: mods/py cached");
     }

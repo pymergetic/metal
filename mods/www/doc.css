@@ -59,6 +59,21 @@ pre {
   overflow: auto;
   border: 1px solid var(--border);
 }
+pre.source {
+  line-height: 1.4;
+  tab-size: 4;
+}
+pre.source code {
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+  display: block;
+}
+.source .kw { color: #0b4f6c; font-weight: 700; }
+.source .cm { color: #6a6a6a; font-style: italic; }
+.source .str { color: #8b4513; }
+.source .pp { color: #5a2d82; }
+.source .num { color: #a33; }
 footer {
   border-top: 1px solid var(--border);
   color: var(--muted);

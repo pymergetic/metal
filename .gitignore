@@ -1,6 +1,10 @@
 # Build outputs
 /build/
 
+# Local Kconfig selections (defaults: config/defconfig)
+/config/.config
+/config/.config.old
+
 # Legacy layout leftovers
 host/**/build/
 host/**/images/

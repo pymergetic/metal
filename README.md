@@ -87,14 +87,41 @@ More filenames: [`screenshots/README.md`](screenshots/README.md).
   `console()` away); host ↔ guest bidirectional calls; ~25-module signed
   `stdlib.zip` (`time`/`datetime`, `hashlib`, `re`, `tarfile`, `pymergetic.metal.tls`, …);
   opt-in isolated contexts for true parallel bytecode (own heap, no shared lock)
-- **Net services** — ASGI/microdot HTTP (doc + iface + limits/externals/about
-  HTML/JSON), Dropbear SSH as another viewport on the shared console
+- **Net services** — ASGI HTTP (C / MicroPython / wasm leaves on one listener),
+  Dropbear SSH as another viewport on the shared console
 - **Catalogs** — DOC/IFACE (callable help + WASI syms), **externals** (vendored
   stack identity), **mem limits** (compile-time buffer budgets) — shell, Python,
   WASI, and `/api/...` share one authority each ([`docs/IFACE.md`](docs/IFACE.md),
   [`docs/IO.md`](docs/IO.md))
 
-Deep dives: [`docs/IO.md`](docs/IO.md) · [`docs/LIBC_ASYNC.md`](docs/LIBC_ASYNC.md) · [`metal-doom/docs/DOOM_ASYNC.md`](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md) · [`docs/MICROPYTHON.md`](docs/MICROPYTHON.md) · [`docs/IFACE.md`](docs/IFACE.md)
+### ASGI httpd — one listener, many backends
+
+C owns the wire; mounts point at opaque `app_h` leaves. Longest-prefix match,
+then dispatch by runner kind (`C` / `PY` / `WASM`). Host and guest both call
+`pm_metal_net_asgi_mount`; wasm apps self-register (`register_wasm`) before
+mounting. Builtins for `/etc/httpd.json`: `c:health`, `c:static`, `py:microdot`
+— see [`docs/IO.md`](docs/IO.md).
+
+| Dispatch | Config |
+|:---:|:---:|
+| ![ASGI runner dispatch](screenshots/asgi-dispatch.png) | ![httpd.json mounts](screenshots/asgi-httpd-mounts.png) |
+| `asgi_server.c` — mount → C / Py / wasm | `mods/etc/httpd.json` — path → app |
+
+![HTTP catalog home](screenshots/http-home.png)
+
+ASGI/microdot home (`/`) — live counts for docs, iface packs, native syms,
+externals, and limits. Same authority as the shell/Python/WASI faces.
+
+| Externals | Limits |
+|:---:|:---:|
+| ![Externals catalog](screenshots/externals.png) | ![Mem limits catalog](screenshots/limits.png) |
+| `/externals` — vendored stack ids | `/limits` — compile-time buffer budgets |
+
+Same registries as shell `externals` / `limits` and
+`pymergetic.metal.externals` / `pymergetic.metal.mem.limit` (see
+[`docs/IO.md`](docs/IO.md)).
+
+Deep dives: [`docs/KCONFIG.md`](docs/KCONFIG.md) · [`docs/IO.md`](docs/IO.md) · [`docs/LIBC_ASYNC.md`](docs/LIBC_ASYNC.md) · [`metal-doom/docs/DOOM_ASYNC.md`](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md) · [`docs/MICROPYTHON.md`](docs/MICROPYTHON.md) · [`docs/IFACE.md`](docs/IFACE.md)
 
 ---
 
@@ -116,7 +143,8 @@ interp/AOT (no upstream Fast JIT backend).
 
 ```bash
 ./scripts/setup edk2         # once — EDK2 + nasm + BaseTools
-./scripts/build efi          # → build/efi/metal.efi
+./scripts/menuconfig         # optional — budgets / iface / default target (docs/KCONFIG.md)
+./scripts/build efi          # → build/efi/metal.efi  (argv overrides Kconfig for this call)
 ./scripts/verify efi         # QEMU + OVMF smoke
 ./scripts/run efi --gtk      # interactive (optional)
 ```
@@ -147,16 +175,113 @@ More: [`docs/EFI.md`](docs/EFI.md), [`metal-doom/docs/DOOM_ASYNC.md`](https://gi
 
 ---
 
+## Kconfig
+
+Compile-time budgets, iface embed toggles, and default build/upload/run live
+in a small menuconfig tree under `config/` (mirrors `pymergetic.metal`
+modules). Day to day:
+
+```bash
+./scripts/menuconfig   # TUI -> config/.config (+ confgen)
+./scripts/build efi    # argv/env still override .config for one call
+```
+
+![Metal menuconfig — Build + pymergetic.metal](screenshots/menuconfig.png)
+
+Sizes in the menu are KiB/MiB; `build/autoconf.h` gets byte `CONFIG_*` for C.
+`oldconfig` only after you edit `Kconfig` files themselves. Details:
+[`docs/KCONFIG.md`](docs/KCONFIG.md).
+
+---
+
+## Headers + sources (iface packs)
+
+Build embeds named **`lz4(ustar)`** packs the guest can browse at runtime
+(`pymergetic.metal.iface` / shell `iface` / HTTP `/iface` + `/api/iface`).
+Toggle under menuconfig → **pymergetic.metal → util → iface**:
+
+| Pack | Kconfig (default) | What |
+|------|-------------------|------|
+| `metal.guest` | `IFACE_EMBED_HEADERS` **y** | Public ABI headers (`metal.h` allowlist + `wasi.h` / `version.h` / `guest/mod/*.h`) |
+| `metal.guest.meta` | with headers | `LICENSE` + `README.md` (kind `meta`) |
+| `metal.guest.docs` | with headers | `docs/*.md` (kind `meta`) |
+| `metal.guest.sources` | `IFACE_EMBED_SOURCES` **n** | Full rebuild tree (`.c`/`.S`/`.s`/`.h` under metal + EFI/BIOS ports + include; no generated `*.inc.c`) for later JIT |
+| `mod.t8_multimod_lib` | with headers | Small proof that a *mod* can ship its own header pack |
+
+```text
+# shell
+iface                         # list packs (kind = headers | sources | meta)
+iface ls metal.guest
+iface cat metal.guest pymergetic/metal/fs/fs.h
+iface ls metal.guest.meta
+iface cat metal.guest.docs IFACE.md
+iface sym                     # WASI NativeSymbol table (+ doc_key -> /docs)
+```
+
+```python
+import pymergetic.metal.iface as iface
+iface.info()                  # name -> {kind, version, nfiles, ...}
+iface.list("metal.guest")     # paths inside one pack
+iface.read("metal.guest", "pymergetic/metal/fs/fs.h")
+```
+
+HTTP HTML: `/iface`, `/iface/pkg/...` (highlighted source view) — JSON:
+`/api/iface*`. Callable docs are separate (`/docs`, `pymergetic.metal.doc`).
+Full detail: [`docs/IFACE.md`](docs/IFACE.md).
+
+![iface packages catalog](screenshots/iface-packages.png)
+
+`/iface` — registered packs (`metal.guest` headers/docs/meta/sources, ESP
+sidecars like `mod.doom`, proof `mod.t8_multimod_lib`). Same rows as shell
+`iface` / `iface.info()`.
+
+| Headers pack | Sources pack |
+|:---:|:---:|
+| ![metal.guest headers](screenshots/iface-headers.png) | ![metal.guest.sources](screenshots/iface-sources.png) |
+| `metal.guest` — public ABI headers | `metal.guest.sources` — rebuild tree (opt-in) |
+
+![Highlighted source view — lz4.c from metal.guest.sources](screenshots/iface-source-view.png)
+
+Open a pack file at `/iface/pkg/<name>/view?path=...` for in-browser C/header
+introspection (syntax-colored; same bytes as `iface.read` / `iface cat`).
+
+![Native symbols — scraped WASI NativeSymbol table](screenshots/iface-syms.png)
+
+`/iface/sym` (shell `iface sym` / `iface.sym()`) lists every harvested
+`NativeSymbol` row — module, name, WAMR `sig`, optional `doc_key` into `/docs`.
+
+### Callable docs (`/docs`)
+
+![docs kind=shell](screenshots/docs-shell.png)
+
+`/docs?kind=shell` — console cmds (same text as `pmcmd.*`). Filter also has
+`py` (`pymergetic.metal.*` + `pmcmd.*` aliases) and `mod` (guest
+`register_func_doc`).
+
+### Live mod docs (`/docs?kind=mod`)
+
+`kind=mod` stays empty until a package loads and calls
+`register_func_doc` (`load` / `pmcmd.load` — or implicitly via `run`/`tab`).
+Stage an external app first (`METAL_EXT_APPS=doom=../metal-doom/build/doom`).
+
+| Before | Load | After |
+|:---:|:---:|:---:|
+| ![docs mod empty](screenshots/docs-mod-empty.png) | ![pmcmd.load doom](screenshots/docs-mod-load.png) | ![docs mod doom.run](screenshots/docs-mod-doom.png) |
+| `/docs?kind=mod` — no guests yet | `pmcmd.load("doom")` → ready | `doom.run` appears in the catalog |
+
+---
+
 ## Documentation
 
 | Doc | What |
 |-----|------|
+| [docs/KCONFIG.md](docs/KCONFIG.md) | menuconfig — budgets, iface packs, build defaults |
+| [docs/IFACE.md](docs/IFACE.md) | DOC/IFACE catalogs, header/sources packs, HTTP UI |
 | [docs/IO.md](docs/IO.md) | Async I/O classes, device table, runners |
 | [docs/LIBC_ASYNC.md](docs/LIBC_ASYNC.md) | Guest libc ↔ async ABI |
 | [metal-doom/docs/DOOM_ASYNC.md](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md) | Doom package (external app), pace, present path |
 | [docs/FAST_JIT.md](docs/FAST_JIT.md) | Fast JIT bring-up brief (not enabled yet) |
 | [docs/MICROPYTHON.md](docs/MICROPYTHON.md) | Kernel µPy — one blob, N runners, no GIL, REPL as default shell |
-| [docs/IFACE.md](docs/IFACE.md) | DOC/IFACE catalogs + HTTP UI |
 | [docs/TRUST.md](docs/TRUST.md) | Mod signing / trust modes |
 | [docs/WASI.md](docs/WASI.md) | WASI preview1 surface |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | Load / process model |

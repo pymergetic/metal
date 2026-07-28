@@ -1,0 +1,60 @@
+menu "Build"
+
+choice PM_METAL_BUILD_TARGET
+	prompt "Build target"
+	default PM_METAL_BUILD_EFI
+	help
+	  Default target for scripts/build when no argv is given.
+	  Argv (efi|bios|mod|all) overrides for that invocation only.
+
+config PM_METAL_BUILD_EFI
+	bool "efi (UEFI metal.efi)"
+
+config PM_METAL_BUILD_BIOS
+	bool "bios (Multiboot2 metal.elf)"
+
+config PM_METAL_BUILD_MOD
+	bool "mod (guest wasm tests)"
+
+config PM_METAL_BUILD_ALL
+	bool "all (mod + efi + bios)"
+
+endchoice
+
+choice PM_METAL_BIOS_ARCH
+	prompt "BIOS arch"
+	depends on PM_METAL_BUILD_BIOS || PM_METAL_BUILD_ALL
+	default PM_METAL_BIOS_X86_64
+	help
+	  Used when building bios (or all). Override with: scripts/build bios i386
+
+config PM_METAL_BIOS_X86_64
+	bool "x86_64"
+
+config PM_METAL_BIOS_I386
+	bool "i386 (PXE-friendly)"
+
+endchoice
+
+choice PM_METAL_POST_ACTION
+	prompt "After successful build"
+	default PM_METAL_POST_NONE
+	help
+	  Optional follow-up after scripts/build finishes.
+	  Env/argv on upload-* / run still work when those scripts are invoked directly.
+
+config PM_METAL_POST_NONE
+	bool "none"
+
+config PM_METAL_POST_RUN
+	bool "run (scripts/run for efi/bios target)"
+
+config PM_METAL_POST_UPLOAD_EFI
+	bool "upload-efi"
+
+config PM_METAL_POST_UPLOAD_PXE
+	bool "upload-pxe"
+
+endchoice
+
+endmenu

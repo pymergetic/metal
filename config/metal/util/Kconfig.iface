@@ -1,0 +1,21 @@
+menu "iface"
+
+config PM_METAL_IFACE_EMBED_HEADERS
+	bool "Embed iface header packs (metal.guest, ...)"
+	default y
+	help
+	  Bake lz4(ustar) packs via embed-iface.sh: metal.guest (HEADERS),
+	  metal.guest.meta + metal.guest.docs (META: LICENSE/README + docs/*.md),
+	  and mod.t8_multimod_lib.
+
+config PM_METAL_IFACE_EMBED_SOURCES
+	bool "Embed full metal C/asm/h sources pack (JIT / rebuild)"
+	default n
+	depends on PM_METAL_IFACE_EMBED_HEADERS
+	help
+	  Bake metal.guest.sources (PM_METAL_IFACE_PKG_SOURCES): all .c/.S/.s/.h under
+	  src/pymergetic/metal, src/{efi,bios}/pymergetic/metal, and
+	  include/pymergetic/metal. Skips *.inc.c (generated embeds). Off by default.
+	  Depends on headers.
+
+endmenu

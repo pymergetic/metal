@@ -129,6 +129,20 @@ static int32_t LookupPy(const char *key, pm_metal_doc_view_t *out)
   uint32_t n = PyBindCount();
   uint32_t i;
 
+  /*
+   * pmcmd.<cmd> — Python face of the shell row (same string home as
+   * kind=shell / console help; not a second bind). Listed by
+   * doc.list("py") so the py filter shows every Python-callable surface.
+   */
+  if (key != NULL && strncmp(key, "pmcmd.", 6) == 0 && key[6] != '\0') {
+    if (LookupShell(key + 6, out) != 0) {
+      return -1;
+    }
+    out->kind = PM_METAL_DOC_PY;
+    out->key  = DocKeyJoin("pmcmd", key + 6);
+    return 0;
+  }
+
   for (i = 0; i < n; i++) {
     const pm_metal_py_bind_t *row = &__pm_metal_py_binds_start[i];
 

@@ -53,6 +53,8 @@ int pm_metal_shell_history_get(uint32_t idx, char *out, uint32_t cap);
 int pm_metal_shell_poll(void);
 /** 1 if last exit requested reboot (`exit -r`), else 0 (power-off). */
 int pm_metal_shell_exit_reboot(void);
+/** 1 if last exit requested fast shutdown (`exit -f`), else 0. */
+int pm_metal_shell_exit_fast(void);
 /** Suggested coop sleep after the last poll (1 ms when busy, else ~16). */
 uint32_t pm_metal_shell_pump_sleep_ms(void);
 

@@ -88,7 +88,7 @@ static void MetalBootFadeToBlack(uint32_t total_ms)
   (void)pm_metal_gfx_present_surface(PM_METAL_GFX_SURFACE_DEFAULT);
 }
 
-void pm_metal_boot_dead(int reboot)
+void pm_metal_boot_dead(int reboot, int fast)
 {
   pm_metal_log("");
   pm_metal_util_ascii_log_styled(PM_METAL_LOG_STYLE_FAIL, "DEAD");
@@ -98,6 +98,10 @@ void pm_metal_boot_dead(int reboot)
   (void)pm_metal_ui_frame();
   (void)pm_metal_gfx_present_surface(PM_METAL_GFX_SURFACE_DEFAULT);
 
+  if (fast) {
+    return;
+  }
+
   /* Let the banner land on-screen before the fade. */
   pm_metal_time_msleep(METAL_BOOT_DEAD_HOLD_MS);
 
@@ -106,5 +110,4 @@ void pm_metal_boot_dead(int reboot)
    * so power-off does not feel like an instant black cut.
    */
   MetalBootFadeToBlack(METAL_BOOT_FADE_MS);
-  (void)reboot;
 }

@@ -1,6 +1,6 @@
-{% args title, name, path, text %}
+{% args title, name, path, body_html %}
 {% include "base_header.html" title %}
 <p class="nav-crumbs"><a href="/iface">iface</a> / <a href="/iface/pkg/{{ name }}">{{ name }}</a> / <code>{{ path }}</code></p>
 <h1>{{ path }}</h1>
-<pre>{{ text }}</pre>
+<pre class="source"><code>{{ body_html }}</code></pre>
 {% include "base_footer.html" %}

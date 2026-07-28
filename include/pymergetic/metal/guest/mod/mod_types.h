@@ -167,6 +167,20 @@ typedef struct pm_metal_mod_about {
   pm_metal_mod_author_t authors[PM_METAL_MOD_AUTHOR_MAX];
 } pm_metal_mod_about_t;
 
+/**
+ * Host-side registry row for shell `mods` / Python listing — not a wasm
+ * ABI type (guests use load/ready/unload by name).
+ */
+typedef struct pm_metal_mod_info {
+  char     name[64];
+  int32_t  ready;      /* 1 if READY or RUNNING */
+  int32_t  running;    /* 1 if MOD_RUNNING (process stem active on slot) */
+  uint32_t cap;        /* pm_metal_mod_cap_t */
+  uint32_t open_tasks;
+  uint32_t fresh_open;
+  int32_t  has_about;  /* 1 if set_about was called */
+} pm_metal_mod_info_t;
+
 #ifdef __cplusplus
 }
 #endif

@@ -26,8 +26,8 @@
 #include <pymergetic/metal/util/lz4.h>
 #include <pymergetic/metal/util/tar.h>
 
-#define PM_METAL_IFACE_PKG_MAX         8u
-#define PM_METAL_IFACE_FILE_CACHE_MAX  48u
+#define PM_METAL_IFACE_PKG_MAX         64u
+#define PM_METAL_IFACE_FILE_CACHE_MAX  256u
 #define PM_METAL_IFACE_STR_MAX         64u
 
 typedef struct {
@@ -55,6 +55,24 @@ static iface_pkg_t g_pkgs[PM_METAL_IFACE_PKG_MAX];
 static uint32_t    g_pkg_count;
 
 #include "iface_syms.inc.c"
+
+/*
+ * Tar from `tar -C dir .` stores "./foo"; HTTP clients collapse "/./" in
+ * URLs so list/read must agree on a ./ -stripped form.
+ */
+static const char *PathSkipDotSlash(const char *path)
+{
+  if (path == NULL) {
+    return "";
+  }
+  while (path[0] == '.' && path[1] == '/') {
+    path += 2;
+  }
+  while (path[0] == '/') {
+    path++;
+  }
+  return path;
+}
 
 static void StrCopy(char *dst, size_t cap, const char *src)
 {
@@ -217,10 +235,15 @@ int32_t pm_metal_iface_file_at(const char *pkg, uint32_t i, char *out, uint32_t 
       continue;
     }
     if (seen == i) {
-      int n = pm_metal_util_tar_iter_name(&it, out, cap);
+      char name[PM_METAL_IFACE_PATH_MAX];
+      int  n = pm_metal_util_tar_iter_name(&it, name, sizeof(name));
 
       pm_metal_util_tar_iter_close(&it);
-      return (n >= 0) ? 0 : -1;
+      if (n < 0) {
+        return -1;
+      }
+      StrCopy(out, (size_t)cap, PathSkipDotSlash(name));
+      return 0;
     }
     seen++;
   }
@@ -250,6 +273,7 @@ static iface_file_cache_t *FileCacheLoad(iface_pkg_t *pkg, const char *path)
     return NULL;
   }
 
+  path = PathSkipDotSlash(path);
   pm_metal_util_tar_iter_init(&it, pkg->ustar, pkg->ustar_len);
   while ((rc = pm_metal_util_tar_iter_next(&it)) == 1) {
     char name[PM_METAL_IFACE_PATH_MAX];
@@ -257,7 +281,8 @@ static iface_file_cache_t *FileCacheLoad(iface_pkg_t *pkg, const char *path)
     if (pm_metal_util_tar_iter_is_dir(&it) != 0) {
       continue;
     }
-    if (pm_metal_util_tar_iter_name(&it, name, sizeof(name)) < 0 || strcmp(name, path) != 0) {
+    if (pm_metal_util_tar_iter_name(&it, name, sizeof(name)) < 0 ||
+        strcmp(PathSkipDotSlash(name), path) != 0) {
       continue;
     }
 
@@ -310,6 +335,7 @@ int32_t pm_metal_iface_file_open(const char *pkg, const char *path, const uint8_
     return -1;
   }
 
+  path = PathSkipDotSlash(path);
   slot = FileCacheFind(p, path);
   if (slot == NULL) {
     slot = FileCacheLoad(p, path);

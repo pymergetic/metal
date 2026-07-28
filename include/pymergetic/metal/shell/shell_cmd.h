@@ -119,8 +119,11 @@ void pm_metal_shell_out(const char *line);
 void pm_metal_shell_out_lines(const char *text);
 void pm_metal_shell_mark_full(void);
 
-/** Request host exit; reboot=1 for `exit -r`. */
-void pm_metal_shell_cmd_exit(int reboot);
+/**
+ * Request host exit. reboot=1 for `exit -r`; fast=1 for `exit -f`
+ * (skip countdown / fade sleeps in pm_metal_boot_shutdown).
+ */
+void pm_metal_shell_cmd_exit(int reboot, int fast);
 
 #endif /* !__wasm__ */
 

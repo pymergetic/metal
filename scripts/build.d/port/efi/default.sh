@@ -9,6 +9,10 @@ OUT_DIR="${ROOT}/build/efi"
 TOOL_CHAIN="${PM_METAL_EDK2_TOOL_CHAIN:-GCC}"
 TARGET="${PM_METAL_EDK2_TARGET:-RELEASE}"
 
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/kconfig.sh"
+pm_metal_kconfig_ensure
+
 if [[ ! -d "${EDK2}/.git" ]] || [[ ! -x "${NASM_BIN}/nasm" ]]; then
 	echo "efi build: run ./scripts/setup edk2 first" >&2
 	exit 1

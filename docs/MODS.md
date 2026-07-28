@@ -137,11 +137,32 @@ Declared **dual-ABI** (`PM_METAL_MOD_IMPORT`) — a wasm guest can open a
 `fn_process`'s host-only `FRESH` path never supported. Refuses (returns an
 error) on a `SINGLE`-capability mod, same guard as `ModResolveUseFresh`.
 
+**Shell lifecycle (no process):**
+
+| Cmd | Effect |
+|-----|--------|
+| `load <mod>` | `pm_metal_mod_load` — fetch + `on_load` on instance 0, READY |
+| `unload <mod>` | drop if idle |
+| `mods` | list registry slots (ready/cap/about) |
+
+`run` / `tab` still load implicitly, then start a process. Prefer `load`
+when you only want about/doc/cmds registered (e.g. `load doom` then
+`about doom` / `/docs?kind=mod`).
+
 Python surface (`mod_py_bind.c`): a mod-proxy's `.fresh` attribute is a
 callable that opens a fresh scope object whose custom `attr` hook resolves
 both `__aenter__`/`__aexit__` (so `async with` works via MicroPython's
 generic attribute dispatch — no separate context-manager protocol needed)
-and per-function bound calls scoped to that handle:
+and per-function bound calls scoped to that handle. Sync lifecycle:
+
+```python
+import pymergetic.metal.mod as mod
+mod.doom.load()                 # instance 0 on_load; about/doc appear
+print(mod.doom.about)
+async with mod.doom.fresh() as inst:
+    await inst.run()            # MULTI gameplay — not bare mod.doom.run()
+# or: pmcmd.doom(...) / shell run|tab
+```
 
 ```python
 async with pymergetic.metal.mod.acme.fresh() as inst:

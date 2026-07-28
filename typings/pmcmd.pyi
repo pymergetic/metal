@@ -16,7 +16,7 @@ named stub.
 from typing import Any
 
 def about(*args: Any) -> Any:
-    """about [mod]       version, desc, url, authors (metal or a mod)"""
+    """about [mod]       version, desc, url, authors (metal or loaded mod)"""
     ...
 
 def audio(*args: Any) -> Any:
@@ -44,7 +44,7 @@ def echo(*args: Any) -> Any:
     ...
 
 def exit(*args: Any) -> Any:
-    """exit|quit [-r]    power off (or reboot with -r)"""
+    """exit|quit [-r] [-f]  power off (-r reboot, -f skip sleeps)"""
     ...
 
 def externals(*args: Any) -> Any:
@@ -95,12 +95,24 @@ def limits(*args: Any) -> Any:
     """limits [id|module|test]  mem/buffer budgets (test=C+py smoke)"""
     ...
 
+def load(*args: Any) -> Any:
+    """load <mod>        fetch + on_load (instance 0; no process)
+
+load <mod>
+
+Loads the package and runs on_load on shared instance 0 so cmds/docs/about register. Does not start a process - use run/tab for that."""
+    ...
+
 def mem(*args: Any) -> Any:
     """mem               system RAM + arena layout
 
 mem
 
 Breaks total system RAM into the metal arena (stacks | map | hole | heap, low to high) and, on real hardware, firmware/UEFI-reserved space outside that arena. map further breaks out the py (shared MicroPython context) and py iso (isolated py -x contexts) carves."""
+    ...
+
+def mods(*args: Any) -> Any:
+    """mods              list loaded mod registry slots"""
     ...
 
 def net(*args: Any) -> Any:
@@ -132,7 +144,7 @@ def py(*args: Any) -> Any:
     ...
 
 def quit(*args: Any) -> Any:
-    """exit|quit [-r]    power off (or reboot with -r)"""
+    """exit|quit [-r] [-f]  power off (-r reboot, -f skip sleeps)"""
     ...
 
 def run(*args: Any) -> Any:
@@ -140,7 +152,7 @@ def run(*args: Any) -> Any:
     ...
 
 def shutdown(*args: Any) -> Any:
-    """exit|quit [-r]    power off (or reboot with -r)"""
+    """exit|quit [-r] [-f]  power off (-r reboot, -f skip sleeps)"""
     ...
 
 def sshd(*args: Any) -> Any:
@@ -161,6 +173,10 @@ def test(*args: Any) -> Any:
 
 def tz(*args: Any) -> Any:
     """tz [+HHMM|name]   get/set timezone"""
+    ...
+
+def unload(*args: Any) -> Any:
+    """unload <mod>      drop idle mod (refused if busy)"""
     ...
 
 def use(*args: Any) -> Any:

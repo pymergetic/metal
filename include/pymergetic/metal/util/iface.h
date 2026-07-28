@@ -39,12 +39,32 @@
 #endif
 
 /* ustar name field width (see util/tar.h's own PM_METAL_UTIL_TAR_NAME_MAX). */
-#define PM_METAL_IFACE_PATH_MAX 100U
+#define PM_METAL_IFACE_PATH_MAX 160U
 
 typedef enum {
   PM_METAL_IFACE_PKG_HEADERS = 1, /* lz4(ustar) of public .h files */
-  PM_METAL_IFACE_PKG_SYSROOT = 2  /* reserved — never inside metal.guest, see file header */
+  PM_METAL_IFACE_PKG_SYSROOT = 2, /* reserved — never inside metal.guest, see file header */
+  PM_METAL_IFACE_PKG_SOURCES = 3, /* lz4(ustar) of curated matching .c (Kconfig) */
+  PM_METAL_IFACE_PKG_META    = 4  /* lz4(ustar) of project prose (LICENSE, README, markdown under docs/) */
 } pm_metal_iface_pkg_kind_t;
+
+/** "headers" / "sysroot" / "sources" / "meta" / "unknown" — static literal. */
+static inline const char *pm_metal_iface_pkg_kind_str(pm_metal_iface_pkg_kind_t kind)
+{
+  if (kind == PM_METAL_IFACE_PKG_HEADERS) {
+    return "headers";
+  }
+  if (kind == PM_METAL_IFACE_PKG_SYSROOT) {
+    return "sysroot";
+  }
+  if (kind == PM_METAL_IFACE_PKG_SOURCES) {
+    return "sources";
+  }
+  if (kind == PM_METAL_IFACE_PKG_META) {
+    return "meta";
+  }
+  return "unknown";
+}
 
 #if !defined(__wasm__)
 
@@ -123,6 +143,16 @@ int pm_metal_util_iface_native_register(void);
  * pm_metal_py_zip_embed_install()).
  */
 void pm_metal_iface_embed_install(void);
+
+/*
+ * Registers optional ESP sidecar packs: for each mods/apps/<app>/iface.list,
+ * load the named lz4(ustar) blobs and call pm_metal_iface_pkg_register().
+ * Soft-fail (log + skip) on missing/malformed rows — never fatal.
+ * EFI: call while SimpleFileSystem is still live (MetalPkg/main.c, after
+ * mods/apps preload) — post-EBS readdir cannot see app dirs from cache
+ * alone. Also invoked from wasm.c (BIOS / idempotent if already done).
+ */
+void pm_metal_iface_esp_install(void);
 
 #else /* __wasm__ */
 

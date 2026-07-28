@@ -1,0 +1,47 @@
+menu "asgi"
+
+config PM_METAL_ASGI_IO_MAX_MIB
+	int "ASGI_IO_MAX (MiB)"
+	default 4
+	range 1 16
+	help
+	  ASGI server/conn iobuf (pm_metal_mem_map). Catalog: net.asgi.ASGI_IO_MAX.
+	  confgen emits CONFIG_PM_METAL_ASGI_IO_MAX in bytes.
+
+config PM_METAL_ASGI_MOUNT_MAX
+	int "ASGI_MOUNT_MAX (count)"
+	default 512
+	range 4 2048
+	help
+	  Max path mounts per ASGI server.
+
+config PM_METAL_ASGI_SRV_MAX
+	int "ASGI_SRV_MAX (count)"
+	default 16
+	range 2 64
+	help
+	  Max concurrent ASGI listen servers.
+
+config PM_METAL_ASGI_HDR_MAX_KIB
+	int "ASGI_HDR_MAX (KiB)"
+	default 256
+	range 1 1024
+	help
+	  HTTP request header parse buffer.
+	  confgen emits CONFIG_PM_METAL_ASGI_HDR_MAX in bytes.
+
+config PM_METAL_ASGI_APP_SLOTS
+	int "ASGI_APP_SLOTS (count)"
+	default 128
+	range 16 512
+	help
+	  ASGI app_h registry slots.
+
+config PM_METAL_ASGI_PATH_MAX
+	int "ASGI_PATH_MAX (bytes)"
+	default 256
+	range 64 1024
+	help
+	  Max request path / mount prefix length.
+
+endmenu

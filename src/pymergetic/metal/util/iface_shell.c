@@ -25,7 +25,7 @@ static void IfacePrintPkg(const pm_metal_iface_pkg_info_t *info)
            sizeof(line),
            "  %-16s %-8s files=%-4u blob=%-8u %s",
            info->name,
-           info->kind == PM_METAL_IFACE_PKG_HEADERS ? "headers" : "sysroot",
+           pm_metal_iface_pkg_kind_str(info->kind),
            info->nfiles,
            info->blob_len,
            info->version[0] != '\0' ? info->version : "-");

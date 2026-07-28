@@ -11,6 +11,10 @@ EFI_METAL="${ROOT}/src/efi/pymergetic/metal"
 BIOS_METAL="${BIOS}/pymergetic/metal"
 SHARED_METAL="${ROOT}/src/pymergetic/metal"
 
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/kconfig.sh"
+pm_metal_kconfig_ensure
+
 ARCH="${1:-x86_64}"
 case "${ARCH}" in
 i386|x86_64) ;;
@@ -128,6 +132,8 @@ INCLUDES=(
 )
 
 CFLAGS=(
+	-include "${ROOT}/build/autoconf.h"
+	-I"${ROOT}/build"
 	-std=gnu11
 	-ffreestanding
 	-fno-stack-protector
@@ -201,6 +207,7 @@ SRCS_C=(
 	"${ROOT}/src/pymergetic/metal/util/doc.c"
 	"${ROOT}/src/pymergetic/metal/util/iface.c"
 	"${ROOT}/src/pymergetic/metal/util/iface_embed_install.c"
+	"${ROOT}/src/pymergetic/metal/util/iface_esp_install.c"
 	"${ROOT}/src/pymergetic/metal/trust/trust.c"
 	"${ROOT}/src/pymergetic/metal/host/host.c"
 	"${ROOT}/src/pymergetic/metal/port/lock.c"

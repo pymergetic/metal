@@ -297,8 +297,11 @@ int pm_metal_wasm_init(void)
   /* "metal.guest" (+ "mod.t8_multimod_lib") header packs — see
    * util/iface.h's own file header; needs no wasm runtime state, just
    * needs to happen once before the first `iface`/pymergetic.metal.iface
-   * access, same as pm_metal_pkg_init() above. */
+   * access, same as pm_metal_pkg_init() above. ESP sidecars
+   * (mods/apps/<app>/iface.list) register next so external apps can publish
+   * packs without baking into metal.efi. */
   pm_metal_iface_embed_install();
+  pm_metal_iface_esp_install();
 
   mStdoutTab = PM_METAL_UI_HANDLE_INVALID;
   mReady     = 1;

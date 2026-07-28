@@ -10,12 +10,34 @@
 #include <pymergetic/metal/net/tls/tls.h>
 #include <pymergetic/metal/runtime/async/async.h>
 
-#define ASGI_PATH_MAX  256u
-#define ASGI_MOUNT_MAX 64u
-#define ASGI_SRV_MAX   16u
-#define ASGI_HDR_MAX   8192u
+#if defined(__has_include)
+#if __has_include("autoconf.h")
+#include "autoconf.h"
+#endif
+#endif
+
+#ifndef CONFIG_PM_METAL_ASGI_PATH_MAX
+#define CONFIG_PM_METAL_ASGI_PATH_MAX 256
+#endif
+#ifndef CONFIG_PM_METAL_ASGI_MOUNT_MAX
+#define CONFIG_PM_METAL_ASGI_MOUNT_MAX 512
+#endif
+#ifndef CONFIG_PM_METAL_ASGI_SRV_MAX
+#define CONFIG_PM_METAL_ASGI_SRV_MAX 16
+#endif
+#ifndef CONFIG_PM_METAL_ASGI_HDR_MAX
+#define CONFIG_PM_METAL_ASGI_HDR_MAX (256u * 1024u)
+#endif
+#ifndef CONFIG_PM_METAL_ASGI_APP_SLOTS
+#define CONFIG_PM_METAL_ASGI_APP_SLOTS 128
+#endif
+
+#define ASGI_PATH_MAX  ((uint32_t)CONFIG_PM_METAL_ASGI_PATH_MAX)
+#define ASGI_MOUNT_MAX ((uint32_t)CONFIG_PM_METAL_ASGI_MOUNT_MAX)
+#define ASGI_SRV_MAX   ((uint32_t)CONFIG_PM_METAL_ASGI_SRV_MAX)
+#define ASGI_HDR_MAX   ((uint32_t)CONFIG_PM_METAL_ASGI_HDR_MAX)
 #define ASGI_IO_MAX    PM_METAL_ASGI_IO_MAX
-#define ASGI_APP_SLOTS 128u
+#define ASGI_APP_SLOTS ((uint32_t)CONFIG_PM_METAL_ASGI_APP_SLOTS)
 #define ASGI_CONN_SLOT_EST PM_METAL_ASGI_IO_MAX
 
 typedef struct {

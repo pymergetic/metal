@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Build interface — EFI freestanding Metal + guest artifacts.
-# Usage: scripts/build <target> [all]
+# Defaults from Kconfig (config/.config); argv/env override for this call only.
+# Usage: scripts/build [<target> [all|i386|x86_64]]
 #        scripts/build all
+#        scripts/build          # uses CONFIG_PM_METAL_BUILD_*
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,75 +11,163 @@ PORT="${ROOT}/scripts/build.d/port"
 GUEST="${ROOT}/scripts/build.d/guest"
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/run-steps.sh"
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/kconfig.sh"
 
 usage() {
 	cat >&2 <<'EOF'
-usage: scripts/build <target> [all|i386|x86_64]
+usage: scripts/build [<target> [all|i386|x86_64]]
        scripts/build all
+
+  With no args, uses Kconfig defaults (scripts/menuconfig → config/.config).
 
   efi       — freestanding UEFI Metal (scaffold → metal.efi)
   bios      — freestanding Multiboot2 Metal (→ metal.elf)
-              optional: bios i386 | bios x86_64 (default)
+              optional: bios i386 | bios x86_64 (default from Kconfig)
   mod       — guest wasm tests
   all       — mod + efi + bios
 
 Examples:
+  scripts/build
   scripts/build all
   scripts/build efi
   scripts/build bios
   scripts/build bios i386
   scripts/build mod
+
+See docs/KCONFIG.md for menuconfig / override order.
 EOF
 	exit 1
 }
 
-run() {
+run_script() {
 	local script="$1"
 	shift
 	if [[ ! -f "${script}" ]]; then
 		echo "missing ${script}" >&2
 		exit 1
 	fi
-	exec "${script}" "$@"
+	"${script}" "$@"
 }
 
-[[ $# -ge 1 ]] || usage
-plat="$1"
-shift
+pm_metal_kconfig_load
+
+# --- resolve target: argv > env > .config ---
+plat=""
+bios_arch=""
+
+if [[ $# -ge 1 ]]; then
+	case "$1" in
+	-h | --help | help) usage ;;
+	efi | bios | mod | all)
+		plat="$1"
+		shift
+		;;
+	*) usage ;;
+	esac
+fi
+
+if [[ -z "${plat}" ]]; then
+	if [[ "${PM_METAL_BUILD_TARGET:-}" != "" ]]; then
+		plat="${PM_METAL_BUILD_TARGET}"
+	elif [[ "${CONFIG_PM_METAL_BUILD_ALL:-n}" == "y" ]]; then
+		plat="all"
+	elif [[ "${CONFIG_PM_METAL_BUILD_BIOS:-n}" == "y" ]]; then
+		plat="bios"
+	elif [[ "${CONFIG_PM_METAL_BUILD_MOD:-n}" == "y" ]]; then
+		plat="mod"
+	else
+		plat="efi"
+	fi
+fi
 
 case "${plat}" in
--h | --help | help) usage ;;
-all)
-	[[ $# -eq 0 ]] || usage
-	pm_run_steps "${ROOT}/scripts/build" "mod" "efi" "bios"
-	exit $?
-	;;
 efi | mod)
 	if [[ $# -ge 1 ]]; then
 		[[ "$1" == "all" && $# -eq 1 ]] || usage
+		shift
 	fi
 	;;
 bios)
 	if [[ $# -ge 1 ]]; then
 		case "$1" in
-		all) [[ $# -eq 1 ]] || usage ;;
-		i386|x86_64) [[ $# -eq 1 ]] || usage ;;
+		all) [[ $# -eq 1 ]] || usage; shift ;;
+		i386 | x86_64) bios_arch="$1"; shift; [[ $# -eq 0 ]] || usage ;;
 		*) usage ;;
 		esac
 	fi
 	;;
+all)
+	[[ $# -eq 0 ]] || usage
+	;;
 *) usage ;;
 esac
 
-case "${plat}" in
-efi) run "${PORT}/efi/default.sh" ;;
-bios)
-	if [[ $# -ge 1 && "$1" != "all" ]]; then
-		run "${PORT}/bios/default.sh" "$1"
-	else
-		run "${PORT}/bios/default.sh"
+if [[ "${plat}" == "bios" || "${plat}" == "all" ]]; then
+	if [[ -z "${bios_arch}" ]]; then
+		if [[ "${PM_METAL_BIOS_ARCH:-}" != "" ]]; then
+			bios_arch="${PM_METAL_BIOS_ARCH}"
+		elif [[ "${CONFIG_PM_METAL_BIOS_I386:-n}" == "y" ]]; then
+			bios_arch="i386"
+		else
+			bios_arch="x86_64"
+		fi
 	fi
+fi
+
+do_build() {
+	case "${plat}" in
+	all)
+		# Child steps must not re-run POST_* actions.
+		PM_METAL_POST_ACTION=none pm_run_steps "${ROOT}/scripts/build" \
+			"mod" "efi" "bios ${bios_arch}"
+		;;
+	efi)
+		run_script "${PORT}/efi/default.sh"
+		;;
+	bios)
+		run_script "${PORT}/bios/default.sh" "${bios_arch}"
+		;;
+	mod)
+		run_script "${GUEST}/mod.sh"
+		;;
+	esac
+}
+
+do_build
+
+# Post-action from Kconfig (skipped when argv forced a one-shot target? No —
+# plan: honor POST_* after successful build unless env PM_METAL_POST_ACTION=none)
+post="${PM_METAL_POST_ACTION:-}"
+if [[ -z "${post}" ]]; then
+	if [[ "${CONFIG_PM_METAL_POST_RUN:-n}" == "y" ]]; then
+		post="run"
+	elif [[ "${CONFIG_PM_METAL_POST_UPLOAD_EFI:-n}" == "y" ]]; then
+		post="upload-efi"
+	elif [[ "${CONFIG_PM_METAL_POST_UPLOAD_PXE:-n}" == "y" ]]; then
+		post="upload-pxe"
+	else
+		post="none"
+	fi
+fi
+
+case "${post}" in
+none | "") ;;
+run)
+	case "${plat}" in
+	efi | bios) exec "${ROOT}/scripts/run" "${plat}" ;;
+	all) exec "${ROOT}/scripts/run" efi ;;
+	*) echo "build: post run skipped for target=${plat}" >&2 ;;
+	esac
 	;;
-mod) run "${GUEST}/mod.sh" ;;
-*) usage ;;
+upload-efi)
+	exec "${ROOT}/scripts/upload-efi"
+	;;
+upload-pxe)
+	exec "${ROOT}/scripts/upload-pxe"
+	;;
+*)
+	echo "build: unknown post action '${post}'" >&2
+	exit 1
+	;;
 esac

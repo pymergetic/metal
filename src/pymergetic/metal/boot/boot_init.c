@@ -457,7 +457,7 @@ static pm_metal_status_t MetalBootInitStep(pm_metal_async_handle_t self_h)
       continue;
 
     case BOOT_SHUTDOWN:
-      pm_metal_boot_shutdown(pm_metal_shell_exit_reboot());
+      pm_metal_boot_shutdown(pm_metal_shell_exit_reboot(), pm_metal_shell_exit_fast());
       return PM_METAL_DONE;
 
     default:
@@ -567,7 +567,7 @@ int pm_metal_boot_seed_init(void)
   return 0;
 }
 
-void pm_metal_boot_shutdown(int reboot)
+void pm_metal_boot_shutdown(int reboot, int fast)
 {
   uint32_t i;
 
@@ -575,6 +575,7 @@ void pm_metal_boot_shutdown(int reboot)
    * Reverse of pool init: shell (stop pump) → wasm → ui → gfx.
    * Keep UI/gfx up through the countdown so the halt tree is visible
    * on real hardware (no serial), then power off or reboot.
+   * fast (`exit -f`): skip countdown sleeps + DEAD hold/fade.
    */
   pm_metal_log("");
   pm_metal_log_styled(PM_METAL_LOG_STYLE_WARN,
@@ -587,24 +588,32 @@ void pm_metal_boot_shutdown(int reboot)
   pm_metal_log_styled(PM_METAL_LOG_STYLE_OK, "|   +-- ui       ok");
   pm_metal_log_styled(PM_METAL_LOG_STYLE_OK, "|   `-- gfx      ok");
 
-  /*
-   * Real 1 s ticks — iron has no serial, so the UI banner must stay up
-   * long enough to read (was 250 ms/tick and vanished).
-   */
-  for (i = 3; i > 0; i--) {
-    char status[48];
-
-    snprintf(status, sizeof(status), reboot ? "reboot in %u..." : "power off in %u...", i);
-    pm_metal_ui_set_status(status);
-    pm_metal_logf_styled(PM_METAL_LOG_STYLE_WARN,
-                         reboot ? "metal-boot: reboot in %u s" : "metal-boot: power off in %u s",
-                         i);
+  if (fast) {
+    pm_metal_ui_set_status(reboot ? "reboot..." : "power off...");
+    pm_metal_log_styled(PM_METAL_LOG_STYLE_WARN,
+                        reboot ? "metal-boot: reboot (fast)" : "metal-boot: power off (fast)");
     (void)pm_metal_ui_frame();
     (void)pm_metal_gfx_present_surface(PM_METAL_GFX_SURFACE_DEFAULT);
-    pm_metal_time_msleep(1000u);
+  } else {
+    /*
+     * Real 1 s ticks — iron has no serial, so the UI banner must stay up
+     * long enough to read (was 250 ms/tick and vanished).
+     */
+    for (i = 3; i > 0; i--) {
+      char status[48];
+
+      snprintf(status, sizeof(status), reboot ? "reboot in %u..." : "power off in %u...", i);
+      pm_metal_ui_set_status(status);
+      pm_metal_logf_styled(PM_METAL_LOG_STYLE_WARN,
+                           reboot ? "metal-boot: reboot in %u s" : "metal-boot: power off in %u s",
+                           i);
+      (void)pm_metal_ui_frame();
+      (void)pm_metal_gfx_present_surface(PM_METAL_GFX_SURFACE_DEFAULT);
+      pm_metal_time_msleep(1000u);
+    }
   }
 
-  pm_metal_boot_dead(reboot);
+  pm_metal_boot_dead(reboot, fast);
 
   pm_metal_ui_shutdown();
   pm_metal_gfx_fini();

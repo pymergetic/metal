@@ -114,7 +114,9 @@ microtar, …) self-registers with `PM_METAL_EXTERNAL` into
 `.pm_metal_externals.*` — same linker-section idiom as shell cmds / keyb
 layouts. This is **not** the mod registry and **not** Metal's own
 `authors` / `about` record. Surfaces: shell `externals`, Python
-`pymergetic.metal.externals`, WASI `pymergetic.metal.externals`, and the
+`pymergetic.metal.externals`, WASI `pymergetic.metal.externals`, HTML/JSON
+`/externals` + `/api/externals` (see
+[`screenshots/externals.png`](../screenshots/externals.png)), and the
 MetalPython boot banner (`Metal <ver> @ <cpu>` plus `  - <id> <version>`
 bullets).
 
@@ -125,7 +127,8 @@ virtio-net rings, µPy/WAMR heaps, …) self-register with
 `PM_METAL_MEM_LIMIT` into `.pm_metal_mem_limits.*` — same linker-section
 idiom as externals. Lookup id is `module.name` (e.g. `net.asgi.ASGI_IO_MAX`).
 Surfaces: shell `limits`, Python `pymergetic.metal.mem.limit`, WASI
-`pymergetic.metal.mem.limit`, and HTML/JSON at `/limits` + `/api/limits`.
+`pymergetic.metal.mem.limit`, and HTML/JSON at `/limits` + `/api/limits`
+(see [`screenshots/limits.png`](../screenshots/limits.png)).
 Header: `include/pymergetic/metal/runtime/mem/limit.h`.
 
 API: `pm_metal_io_dt_add` / `get` / `count` / `by_class` / `foreach` / `lookup` (first of class). Guest `io_query` optional later.  
@@ -187,6 +190,17 @@ and wasm ASGI leaves, so one listener can mount applications from each
 runtime. TLS and WebSocket upgrades are handled by the server rather than by
 individual applications. Microdot is the small Python-friendly layer on top
 of the same ASGI registry; it is not a second HTTP server.
+
+Longest-prefix `mount_find` picks the route; the leaf's runner kind selects
+the backend. Host and guest both use `pm_metal_net_asgi_mount`; wasm apps
+self-register (`pm_metal_net_asgi_register_wasm`) so the kernel need not know
+them ahead of time. Builtins for config: `c:health`, `c:static`,
+`py:microdot`.
+
+| Dispatch | Config |
+|:---:|:---:|
+| ![ASGI runner dispatch](../screenshots/asgi-dispatch.png) | ![httpd.json mounts](../screenshots/asgi-httpd-mounts.png) |
+| `asgi_server.c` — mount → C / Py / wasm | `mods/etc/httpd.json` — path → app |
 
 Wasm proof mod `asgi_hello` (embedded): shell `asgi_hello` registers a wasm
 ASGI leaf, listens on port 18080, mounts `/hello`, and replies

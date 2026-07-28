@@ -17,6 +17,11 @@ MERGED="${ROOT}/build/compile_commands.json"
 
 mkdir -p "${ROOT}/build"
 
+# Kconfig → build/autoconf.h (limits / iface toggles) for clangd -include.
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/kconfig.sh"
+pm_metal_kconfig_ensure || true
+
 # Ensure build/trust/metal_trust_bake.inc.c exists for trust.c / clangd.
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/pki.sh"

@@ -1,0 +1,7 @@
+menu "net"
+
+source "metal/net/Kconfig.io"
+source "metal/net/Kconfig.asgi"
+source "metal/net/Kconfig.tls"
+
+endmenu

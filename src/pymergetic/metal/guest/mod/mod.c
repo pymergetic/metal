@@ -759,6 +759,62 @@ int pm_metal_mod_ready(const char *name)
   return (s != NULL && (s->state == MOD_READY || s->state == MOD_RUNNING)) ? 1 : 0;
 }
 
+uint32_t pm_metal_mod_count(void)
+{
+  uint32_t i;
+  uint32_t n;
+
+  n = 0u;
+  pm_metal_spin_lock(&mModsLock);
+  for (i = 0; i < PM_METAL_MOD_MAX; i++) {
+    if (mMods[i].used) {
+      n++;
+    }
+  }
+  pm_metal_spin_unlock(&mModsLock);
+  return n;
+}
+
+int32_t pm_metal_mod_at(uint32_t i, pm_metal_mod_info_t *out)
+{
+  uint32_t    seen;
+  uint32_t    k;
+  mod_slot_t *s;
+
+  if (out == NULL) {
+    return -1;
+  }
+
+  seen = 0u;
+  s    = NULL;
+  pm_metal_spin_lock(&mModsLock);
+  for (k = 0; k < PM_METAL_MOD_MAX; k++) {
+    if (!mMods[k].used) {
+      continue;
+    }
+    if (seen == i) {
+      s = &mMods[k];
+      break;
+    }
+    seen++;
+  }
+  if (s == NULL) {
+    pm_metal_spin_unlock(&mModsLock);
+    return -1;
+  }
+
+  memset(out, 0, sizeof(*out));
+  strncpy(out->name, s->name, sizeof(out->name) - 1u);
+  out->ready      = (s->state == MOD_READY || s->state == MOD_RUNNING) ? 1 : 0;
+  out->running    = (s->state == MOD_RUNNING) ? 1 : 0;
+  out->cap        = (uint32_t)s->cap;
+  out->open_tasks = s->open_tasks;
+  out->fresh_open = s->fresh_open;
+  out->has_about  = (s->about != NULL) ? 1 : 0;
+  pm_metal_spin_unlock(&mModsLock);
+  return 0;
+}
+
 int pm_metal_mod_cmd_exists(const char *cmd_name)
 {
   return CmdFind(cmd_name) != NULL ? 1 : 0;

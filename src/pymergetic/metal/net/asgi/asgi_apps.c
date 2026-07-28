@@ -7,10 +7,16 @@
 #include <string.h>
 
 #include <pymergetic/metal/net/http/http_parse.h>
+#include <pymergetic/metal/net/ip/ip_ops.h>
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
 #include <pymergetic/metal/shell/hwinfo/hwinfo.h>
 #include <pymergetic/metal/version.h>
+#include <runtime/time/time.h>
+
+/* Sync reply path: when tcp_sndbuf is empty, poll lwIP and retry instead of
+ * aborting mid-body (browser hangs on /docs, /iface/sym, large /api/...). */
+#define ASGI_SEND_STALL_US 30000000ull
 
 typedef struct {
   pm_metal_net_ip_sock_h sock;
@@ -141,29 +147,44 @@ int32_t pm_metal_net_asgi_conn_send(const void *buf, uint32_t len)
 {
   const uint8_t *p;
   uint32_t       off;
+  uint64_t       deadline;
 
   if (buf == NULL || len == 0) {
     return 0;
   }
-  p   = (const uint8_t *)buf;
-  off = 0;
+  p        = (const uint8_t *)buf;
+  off      = 0;
+  deadline = pm_metal_time_mono_us() + ASGI_SEND_STALL_US;
   while (off < len) {
     if (g_conn.tls != PM_METAL_TLS_INVALID) {
       int32_t n;
 
       n = pm_metal_net_tls_write(g_conn.tls, p + off, len - off);
+      if (n == PM_METAL_TLS_WANT_READ || n == PM_METAL_TLS_WANT_WRITE) {
+        if (pm_metal_time_mono_us() >= deadline) {
+          return -1;
+        }
+        pm_metal_net_ip_poll();
+        continue;
+      }
       if (n <= 0) {
         return -1;
       }
       off += (uint32_t)n;
+      deadline = pm_metal_time_mono_us() + ASGI_SEND_STALL_US;
     } else {
       uint32_t n;
 
       n = pm_metal_net_ip_send(g_conn.sock, p + off, len - off);
       if (n == 0) {
-        return -1;
+        if (pm_metal_time_mono_us() >= deadline) {
+          return -1;
+        }
+        pm_metal_net_ip_poll();
+        continue;
       }
       off += n;
+      deadline = pm_metal_time_mono_us() + ASGI_SEND_STALL_US;
     }
   }
   return 0;

@@ -1,0 +1,10 @@
+# Metal root Kconfig — menus mirror pymergetic.metal modules.
+# See docs/KCONFIG.md.
+
+mainmenu "Metal Configuration"
+
+comment "Build / upload / run (scripts/build defaults)"
+source "Kconfig.build"
+
+comment "Runtime modules (pymergetic.metal.*)"
+source "metal/Kconfig"

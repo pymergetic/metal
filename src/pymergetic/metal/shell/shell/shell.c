@@ -34,6 +34,7 @@ static int32_t  mDirtyInput;  /* console widget only (scrollback + composing lin
 static int32_t  mDirtyStatus; /* status tray only (clock/ifaces/FPS) */
 static int32_t  mExitReq;
 static int32_t  mExitReboot;
+static int32_t  mExitFast;
 static uint32_t mPrevPtrButtons;
 static int32_t  mPrevPtrX;
 static int32_t  mPrevPtrY;
@@ -671,11 +672,17 @@ void pm_metal_shell_request_exit(void)
 {
   mExitReq    = 1;
   mExitReboot = 0;
+  mExitFast   = 0;
 }
 
 int pm_metal_shell_exit_reboot(void)
 {
   return mExitReboot ? 1 : 0;
+}
+
+int pm_metal_shell_exit_fast(void)
+{
+  return mExitFast ? 1 : 0;
 }
 
 static void MetalShellEchoLines(const char *text)
@@ -803,9 +810,10 @@ void pm_metal_shell_mark_full(void)
   MetalShellMarkFull();
 }
 
-void pm_metal_shell_cmd_exit(int32_t reboot)
+void pm_metal_shell_cmd_exit(int32_t reboot, int32_t fast)
 {
   mExitReboot = reboot ? 1 : 0;
+  mExitFast   = fast ? 1 : 0;
   mExitReq    = 1;
 }
 
@@ -923,6 +931,7 @@ int pm_metal_shell_init(void)
   mDirtyStatus    = 0;
   mExitReq        = 0;
   mExitReboot     = 0;
+  mExitFast       = 0;
   mLastFrameMs    = 0;
   mNest           = 0;
   mPumpSleepMs    = 1u;

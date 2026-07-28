@@ -89,10 +89,11 @@ int pm_metal_boot_tests_result(pm_metal_async_handle_t h);
 
 /**
  * Reverse of init: stop shell work, then wasm → ui → gfx, countdown, reset.
- * reboot: 0 power-off, non-zero restart. Does not return on success.
+ * reboot: 0 power-off, non-zero restart. fast: non-zero skips the 3 s
+ * countdown and DEAD hold/fade sleeps. Does not return on success.
  * impl: common — src/pymergetic/metal/boot/boot_init.c
  */
-void pm_metal_boot_shutdown(int reboot);
+void pm_metal_boot_shutdown(int reboot, int fast);
 
 /**
  * Startup METAL ASCII banner (log only). Floor tree follows with
@@ -102,11 +103,12 @@ void pm_metal_boot_shutdown(int reboot);
 void pm_metal_boot_banner(void);
 
 /**
- * Big "DEAD" banner after the shutdown countdown, short hold, then ~2.5 s
- * fade-to-black before fini/reset (readable on iron with no serial).
+ * Big "DEAD" banner after the shutdown countdown. Default: short hold,
+ * then ~2.5 s fade-to-black before fini/reset (readable on iron with no
+ * serial). fast: non-zero prints once and returns immediately.
  * impl: common — src/pymergetic/metal/boot/banner.c
  */
-void pm_metal_boot_dead(int reboot);
+void pm_metal_boot_dead(int reboot, int fast);
 
 #endif
 

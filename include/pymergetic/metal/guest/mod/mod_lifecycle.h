@@ -99,6 +99,15 @@ int pm_metal_mod_unload(const char *name);
 
 int pm_metal_mod_ready(const char *name);
 
+/** Number of claimed mod slots (any state). Host-only. */
+uint32_t pm_metal_mod_count(void);
+
+/**
+ * Fill *out for used-slot index i (0 .. pm_metal_mod_count()-1), in
+ * registry order. 0 ok, -1 if i is out of range. Host-only.
+ */
+int32_t pm_metal_mod_at(uint32_t i, pm_metal_mod_info_t *out);
+
 /**
  * Soft reset: keep the compiled module, tear down + recreate instance
  * 0's inst/exec_env and rerun on_load against it (no refetch/recompile

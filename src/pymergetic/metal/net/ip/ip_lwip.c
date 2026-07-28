@@ -50,6 +50,10 @@ typedef void (*pm_metal_net_ip_l2_poll_fn)(pm_metal_net_ip_l2_rx_fn fn, void *ct
 
 #define METAL_NET_MAX_IFACES PM_METAL_NET_IP_MAX_IFS
 #define METAL_NET_MAX_SOCKS  16u
+/* Pending accepts while the listen coro is busy (browser HTML+CSS, parallel curl). */
+#ifndef METAL_NET_ACCEPT_Q
+#define METAL_NET_ACCEPT_Q 8u
+#endif
 #define METAL_NET_TX_MAX     1514u
 #define METAL_HOSTS_MAX      64u
 #define METAL_HOSTS_NAME_MAX 64u
@@ -122,10 +126,12 @@ typedef struct {
   int32_t         have_remote;
   int32_t         conn_done;
   int32_t         conn_ok;
-  int32_t               listening;
-  struct tcp_pcb       *accept_pcb;
-  pm_metal_net_ip_sock_h   accept_h; /* promoted accept waiting for pm_metal_net_ip_accept */
-  void                 *recv_buf;
+  int32_t                    listening;
+  struct tcp_pcb            *accept_pcb;
+  pm_metal_net_ip_sock_h     accept_q[METAL_NET_ACCEPT_Q];
+  uint8_t                    accept_q_r;
+  uint8_t                    accept_q_n;
+  void                      *recv_buf;
   uint32_t        recv_cap;
   uint32_t        recv_got;
   int32_t         recv_done;
@@ -157,6 +163,10 @@ typedef struct {
 } net_ok_t;
 
 static pm_metal_net_ip_sock_h PromoteAcceptPcb(msock_t *s);
+static int32_t                AcceptQPush(msock_t *s, pm_metal_net_ip_sock_h nh);
+static pm_metal_net_ip_sock_h AcceptQPop(msock_t *s);
+static void                   AcceptQDrainClose(msock_t *s);
+static void                   LwipClose(pm_metal_net_ip_sock_h h);
 static void                StoreIp4Ascii(char *dst, uintptr_t dst_len, const ip4_addr_t *addr);
 static metal_net_iface_t  *IfaceInitOne(uint32_t    idx,
                                         const char *backend,
@@ -1395,15 +1405,17 @@ static err_t TcpAcceptCb(void *arg, struct tcp_pcb *newpcb, err_t err)
   if (s == NULL || err != ERR_OK || newpcb == NULL) {
     if (newpcb != NULL) {
       tcp_abort(newpcb);
+      return ERR_ABRT;
     }
 
     return ERR_VAL;
   }
 
-  /* One pending accept at a time (pcb or already-promoted handle). */
-  if (s->accept_pcb != NULL || s->accept_h != PM_METAL_NET_IP_SOCK_INVALID) {
+  /* Queue pending accepts while the listen coro is busy serving another conn.
+   * Must return ERR_ABRT after tcp_abort — ERR_MEM makes lwIP abort again. */
+  if (s->accept_q_n >= METAL_NET_ACCEPT_Q || s->accept_pcb != NULL) {
     tcp_abort(newpcb);
-    return ERR_MEM;
+    return ERR_ABRT;
   }
 
   /*
@@ -1417,9 +1429,12 @@ static err_t TcpAcceptCb(void *arg, struct tcp_pcb *newpcb, err_t err)
       tcp_abort(s->accept_pcb);
       s->accept_pcb = NULL;
     }
-    return ERR_MEM;
+    return ERR_ABRT;
   }
-  s->accept_h = nh;
+  if (AcceptQPush(s, nh) != 0) {
+    LwipClose(nh);
+    return ERR_ABRT;
+  }
   return ERR_OK;
 }
 
@@ -1561,9 +1576,8 @@ static pm_metal_status_t NetWaitStep(pm_metal_async_handle_t self_h)
       return PM_METAL_DONE;
     }
 
-    if (s->accept_h != PM_METAL_NET_IP_SOCK_INVALID) {
-      w->accept_out = s->accept_h;
-      s->accept_h   = PM_METAL_NET_IP_SOCK_INVALID;
+    w->accept_out = AcceptQPop(s);
+    if (w->accept_out != 0) {
       pm_metal_async_set_result_u32(self_h, (uint32_t)w->accept_out);
       return PM_METAL_DONE;
     }
@@ -1642,6 +1656,48 @@ static pm_metal_net_ip_sock_h PromoteAcceptPcb(msock_t *s)
   }
 
   return 0;
+}
+
+static int32_t AcceptQPush(msock_t *s, pm_metal_net_ip_sock_h nh)
+{
+  uint8_t i;
+
+  if (s == NULL || nh == PM_METAL_NET_IP_SOCK_INVALID || s->accept_q_n >= METAL_NET_ACCEPT_Q) {
+    return -1;
+  }
+  i                   = (uint8_t)((s->accept_q_r + s->accept_q_n) % METAL_NET_ACCEPT_Q);
+  s->accept_q[i]      = nh;
+  s->accept_q_n       = (uint8_t)(s->accept_q_n + 1u);
+  return 0;
+}
+
+static pm_metal_net_ip_sock_h AcceptQPop(msock_t *s)
+{
+  pm_metal_net_ip_sock_h nh;
+
+  if (s == NULL || s->accept_q_n == 0u) {
+    return PM_METAL_NET_IP_SOCK_INVALID;
+  }
+  nh              = s->accept_q[s->accept_q_r];
+  s->accept_q[s->accept_q_r] = PM_METAL_NET_IP_SOCK_INVALID;
+  s->accept_q_r   = (uint8_t)((s->accept_q_r + 1u) % METAL_NET_ACCEPT_Q);
+  s->accept_q_n   = (uint8_t)(s->accept_q_n - 1u);
+  return nh;
+}
+
+static void AcceptQDrainClose(msock_t *s)
+{
+  pm_metal_net_ip_sock_h nh;
+
+  if (s == NULL) {
+    return;
+  }
+  while (s->accept_q_n > 0u) {
+    nh = AcceptQPop(s);
+    if (nh != PM_METAL_NET_IP_SOCK_INVALID) {
+      LwipClose(nh);
+    }
+  }
 }
 
 static void DnsRemember(const ip_addr_t *ipaddr)
@@ -1973,14 +2029,7 @@ static void LwipClose(pm_metal_net_ip_sock_h h)
     s->accept_pcb = NULL;
   }
 
-  if (s->accept_h != PM_METAL_NET_IP_SOCK_INVALID) {
-    pm_metal_net_ip_sock_h ah;
-
-    ah          = s->accept_h;
-    s->accept_h = PM_METAL_NET_IP_SOCK_INVALID;
-    /* Recurse once into the pending accepted child. */
-    LwipClose(ah);
-  }
+  AcceptQDrainClose(s);
 
   SockClear(s);
 }
@@ -2147,9 +2196,8 @@ static pm_metal_async_handle_t LwipAccept(pm_metal_net_ip_sock_h h)
     return PM_METAL_ASYNC_HANDLE_INVALID;
   }
 
-  if (s->accept_h != PM_METAL_NET_IP_SOCK_INVALID) {
-    nh          = s->accept_h;
-    s->accept_h = PM_METAL_NET_IP_SOCK_INVALID;
+  nh = AcceptQPop(s);
+  if (nh != PM_METAL_NET_IP_SOCK_INVALID) {
     return NetOkAsync((uint32_t)nh);
   }
 

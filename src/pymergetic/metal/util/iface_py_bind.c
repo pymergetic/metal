@@ -15,8 +15,7 @@ static mp_obj_t PkgInfoDict(const pm_metal_iface_pkg_info_t *info)
   mp_obj_t d = pm_metal_py_dict_new(6);
 
   pm_metal_py_dict_set_str(d, "name", pm_metal_py_str_new(info->name));
-  pm_metal_py_dict_set_str(
-    d, "kind", pm_metal_py_str_new(info->kind == PM_METAL_IFACE_PKG_HEADERS ? "headers" : "sysroot"));
+  pm_metal_py_dict_set_str(d, "kind", pm_metal_py_str_new(pm_metal_iface_pkg_kind_str(info->kind)));
   pm_metal_py_dict_set_str(d, "version", pm_metal_py_str_new(info->version));
   pm_metal_py_dict_set_str(d, "abi_hash", pm_metal_py_str_new(info->abi_hash));
   pm_metal_py_dict_set_str(d, "nfiles", pm_metal_py_int_new((int64_t)info->nfiles));

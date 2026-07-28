@@ -231,6 +231,24 @@ void pm_metal_shell_cmd_dispatch(const char *line)
   }
 }
 
+/* Insertion sort — table is small (PM_METAL_SHELL_CMD_MAX); keeps docs/help
+ * listings alphabetical without relying on host qsort. */
+static void SortCmdsByName(void)
+{
+  uint32_t i;
+
+  for (i = 1u; i < mCmdCount; i++) {
+    const pm_metal_shell_cmd_t *key = mCmds[i];
+    uint32_t                    j   = i;
+
+    while (j > 0u && strcmp(mCmds[j - 1u]->name, key->name) > 0) {
+      mCmds[j] = mCmds[j - 1u];
+      j--;
+    }
+    mCmds[j] = key;
+  }
+}
+
 void pm_metal_shell_cmds_install(void)
 {
   const pm_metal_shell_cmd_table_t *t;
@@ -247,4 +265,5 @@ void pm_metal_shell_cmds_install(void)
       pm_metal_shell_cmd_register(&t->cmds[i]);
     }
   }
+  SortCmdsByName();
 }

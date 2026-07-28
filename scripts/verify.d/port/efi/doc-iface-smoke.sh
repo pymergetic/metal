@@ -109,6 +109,7 @@ check "/health" "ok"
 check "/api/doc?limit=5" '"kind"'
 check "/api/iface" "metal.guest"
 check "/api/iface/pkg" "metal.guest"
+check "/api/iface/sym?limit=5" '"module"'
 check "/api/iface/sym?module=pymergetic.metal.fs&name=pm_metal_fs_open_async" "doc_key"
 check "/" "<title>home - metal</title>"
 check "/docs?limit=5" "<h1>docs</h1>"
