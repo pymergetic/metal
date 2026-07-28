@@ -41,16 +41,16 @@ static int                     g_zip_fetch_tried;  /* one attempt total, ever */
 
 void pm_metal_py_zip_init_sys_path(void)
 {
-  /* Runtime stdlib + py tests. */
-  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/py")));
+  /* Package roots under /mods (httpd/ as DIR + __init__.py). Zips stay on
+   * path because their payload is archive-internal, not ESP dirs. */
+  /* /mods for packages (httpd/). Zips live as files under /mods — not
+   * mods/api/ (that DIR would shadow import api ahead of api.zip). */
+  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods")));
   mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str(PM_METAL_PY_STDLIB_ZIP)));
-  /* httpd glue (httpd.py / util.py / highlight.py as FILE) + Microdot/utemplate zips. */
-  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/httpd")));
   mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/httpd/microdot.zip")));
   mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/httpd/utemplate.zip")));
-  /* api package + templates — zip-only (mp_import_stat has no ESP DIR). */
-  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/api/api.zip")));
-  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/api/templates.zip")));
+  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/api.zip")));
+  mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(qstr_from_str("/mods/templates.zip")));
 }
 
 /* 0 present+trusted, 1 absent (optional), -1 present but rejected. */

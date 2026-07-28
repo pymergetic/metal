@@ -21,7 +21,7 @@ pm_metal_stage_py_httpd_into() {
 		"${ROOT}/mods/py/build_stdlib_zip.sh" || true
 	fi
 
-	mkdir -p "${dest}/mods/py" "${dest}/mods/httpd" "${dest}/mods/api"
+	mkdir -p "${dest}/mods/py" "${dest}/mods/httpd"
 
 	for f in stdlib.zip stdlib.zip.sig; do
 		if [[ -f "${ROOT}/mods/py/${f}" ]]; then
@@ -33,15 +33,17 @@ pm_metal_stage_py_httpd_into() {
 		cp -a "${ROOT}/mods/py/tests/." "${dest}/mods/py/tests/"
 	fi
 
-	for f in autoload.py httpd.py util.py highlight.py microdot.zip microdot.zip.sig utemplate.zip; do
+	for f in __init__.py autoload.py util.py highlight.py microdot.zip microdot.zip.sig utemplate.zip; do
 		if [[ -f "${ROOT}/mods/httpd/${f}" ]]; then
 			cp -a "${ROOT}/mods/httpd/${f}" "${dest}/mods/httpd/"
 		fi
 	done
 
-	for f in api.zip templates.zip; do
-		if [[ -f "${ROOT}/mods/api/${f}" ]]; then
-			cp -a "${ROOT}/mods/api/${f}" "${dest}/mods/api/"
-		fi
-	done
+	# Zips at /mods/*.zip — not mods/api/ (DIR would shadow `import api`).
+	if [[ -f "${ROOT}/mods/api/api.zip" ]]; then
+		cp -a "${ROOT}/mods/api/api.zip" "${dest}/mods/api.zip"
+	fi
+	if [[ -f "${ROOT}/mods/api/templates.zip" ]]; then
+		cp -a "${ROOT}/mods/api/templates.zip" "${dest}/mods/templates.zip"
+	fi
 }

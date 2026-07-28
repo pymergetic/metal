@@ -53,9 +53,9 @@ void pm_metal_py_repl_print_banner(void)
   uint32_t            i;
   uint32_t            n;
 
-  /* REPL bypasses PY_STEP_ZIP — still want mods/.../autoload.py before the
-   * externals bullets (guest register for microdot/utemplate, etc.). */
-  pm_metal_py_autoload_run_once();
+  /* Boot already ran autoload under the python tree leaf; py -i may be the
+   * first caller if REPL start failed earlier — silent idempotent. */
+  (void)pm_metal_py_autoload_run_once();
 
   pm_metal_util_ascii_log_rainbow("MetalPython");
   pm_metal_hwinfo_cpu_brand(cpu_brand, sizeof(cpu_brand));

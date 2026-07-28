@@ -144,10 +144,10 @@ entry (shell/py/mod); `iface` is a pointer, not a place to originate text.
 ## HTTP UI (same catalogs)
 
 When ASGI httpd is up (`mods/etc/httpd.json`, mount `py:httpd`), the
-guest app `mods/httpd/httpd.py` (+ `mods/api/` routes) serves. Guest
-stacks declare themselves from `mods/httpd/autoload.py` via
+guest package `mods/httpd/` (`import httpd`, + `mods/api/` routes) serves.
+Guest stacks declare themselves from `mods/httpd/autoload.py` via
 `pymergetic.metal.externals.register` (run once with other
-`/mods/*/autoload.py` at REPL banner / after stdlib.zip ready):
+mods/<name>/autoload.py at REPL banner / after stdlib.zip ready):
 
 | Path | What |
 |------|------|
@@ -158,8 +158,9 @@ stacks declare themselves from `mods/httpd/autoload.py` via
 
 Templates live under `mods/api/templates/` (precompiled with
 `mods/api/compile_templates.py`, packed by `mods/httpd/pack_zips.sh` into
-`templates.zip` + `utemplate.zip` — ESP `mp_import_stat` has no DIR for
-loose trees). List pages (HTML + matching `/api/*` lists) paginate with
+`/mods/templates.zip` + `/mods/httpd/utemplate.zip` on the ESP — staged as
+files under `/mods`, not a `mods/api/` DIR, so `import api` hits `api.zip`).
+List pages (HTML + matching `/api/*` lists) paginate with
 `?page=N&limit=N` (default 50/page, max 500). HTML shows first/prev/next/last;
 JSON lists are `{ "items": [...], "total", "page", "pages", "limit" }`.
 Live smoke: `scripts/verify.d/port/efi/doc-iface-smoke.sh`. Package `kind`

@@ -6,7 +6,7 @@
     "external/microdot/src",
     "external",
     "mods/py/stdlib",
-    "mods/httpd",
+    "mods",
     "mods/api"
   ],
   "exclude": [

@@ -435,7 +435,7 @@ Non-goals: C compiler in image; parse headers for sigs; DOC catalog (Part I).
 ## Part III — HTTP JSON + HTML UI
 
 Starts after **I-E** and **II-D**. Same catalogs — no second store. Prefer
-extend `mods/api/` routes (or `mods/httpd/httpd.py`); re-read
+extend `mods/api/` routes (or `mods/httpd/`); re-read
 ASGI APIs after post-scan (parallel work moves them).
 
 ### Stack (locked)

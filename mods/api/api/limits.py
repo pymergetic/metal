@@ -1,4 +1,4 @@
-from util import html, json_page, json_response, lim_esc, paginate
+from httpd.util import html, json_page, json_response, lim_esc, paginate
 
 
 def register(app):

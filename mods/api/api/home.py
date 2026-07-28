@@ -1,4 +1,4 @@
-from util import about_esc, esc, html, json_response, metal_version
+from httpd.util import about_esc, esc, html, json_response, metal_version
 
 
 def register(app):

@@ -7,14 +7,14 @@
 #include "py/lexer.h"
 #include "py/mperrno.h"
 #include "py/obj.h"
-#include "py/reader.h"
 #include "py/runtime.h"
 
 #include "py_zip_read.h"
 
 mp_import_stat_t mp_import_stat(const char *path)
 {
-  uint32_t size;
+  uint32_t           size;
+  pm_metal_fs_stat_t st;
 
   if (path == NULL) {
     return MP_IMPORT_STAT_NO_EXIST;
@@ -23,7 +23,7 @@ mp_import_stat_t mp_import_stat(const char *path)
   if (strstr(path, ".zip/") != NULL) {
     /* Path crosses an archive boundary — real fs has nothing there either
      * way, so every outcome below (including error) is final, never a
-     * fallthrough to the plain pm_metal_fs_size() check. */
+     * fallthrough to the plain ESP stat. */
     switch (PyZipStatPath(path, &size)) {
     case PY_ZIP_STAT_FILE:
       return MP_IMPORT_STAT_FILE;
@@ -34,8 +34,14 @@ mp_import_stat_t mp_import_stat(const char *path)
     }
   }
 
-  if (pm_metal_fs_size(path) > 0) {
-    return MP_IMPORT_STAT_FILE;
+  /* DIR matters: sys.path=/mods + package dirs (httpd/__init__.py). */
+  if (pm_metal_fs_stat(path, &st) == 0) {
+    if (st.type == PM_METAL_FS_TYPE_DIR) {
+      return MP_IMPORT_STAT_DIR;
+    }
+    if (st.type == PM_METAL_FS_TYPE_FILE) {
+      return MP_IMPORT_STAT_FILE;
+    }
   }
   return MP_IMPORT_STAT_NO_EXIST;
 }

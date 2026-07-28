@@ -1,5 +1,5 @@
-from highlight import highlight_c
-from util import (
+from httpd.highlight import highlight_c
+from httpd.util import (
     doc_row_esc,
     esc,
     html,

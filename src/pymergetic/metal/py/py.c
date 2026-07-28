@@ -512,7 +512,7 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
     }
     /* Shared context: run mods/.../autoload.py once before real work. */
     if (job->ctx == NULL && !pm_metal_py_autoload_done()) {
-      pm_metal_py_autoload_run_once();
+      (void)pm_metal_py_autoload_run_once();
     }
     job->step = job->after_zip_step;
     /* Re-enter through the ready ring instead of falling through here —

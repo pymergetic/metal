@@ -1,6 +1,6 @@
 # Tiny C/header highlighter -> HTML (text nodes escaped).
 
-from util import esc
+from .util import esc
 
 _C_KW = (
     "auto break case char const continue default do double else enum extern "

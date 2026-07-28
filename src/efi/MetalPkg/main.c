@@ -330,6 +330,18 @@ UefiMain (
     if (pm_metal_esp_preload_tree ("mods/py") == 0) {
       pm_metal_log ("metal-esp: mods/py cached");
     }
+    /* Guest httpd package + api/templates zips — same post-EBS rule: if it
+     * is not in the RAM cache, import/fs_size cannot see it after the
+     * SimpleFileSystem is gone (py:httpd ImportError). */
+    if (pm_metal_esp_preload_tree ("mods/httpd") == 0) {
+      pm_metal_log ("metal-esp: mods/httpd cached");
+    }
+    if (pm_metal_esp_preload ("mods/api.zip") == 0) {
+      pm_metal_log ("metal-esp: mods/api.zip cached");
+    }
+    if (pm_metal_esp_preload ("mods/templates.zip") == 0) {
+      pm_metal_log ("metal-esp: mods/templates.zip cached");
+    }
   }
 
   pm_metal_boot_print_floor_tree (

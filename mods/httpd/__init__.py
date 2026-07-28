@@ -1,7 +1,7 @@
-# Metal ASGI <-> Microdot bridge (guest Python).
+# Metal ASGI <-> Microdot bridge (guest package httpd/).
 #
+# sys.path has /mods so `import httpd` loads this __init__.py.
 # C ASGI owns sockets; handle() is the Py runner leaf for py:httpd mounts.
-# asyncio is Metal's cooperative shim (stdlib.zip) over pymergetic.metal.aio.
 # Domain routes live under mods/api/ (imported as package api).
 
 from microdot import Microdot

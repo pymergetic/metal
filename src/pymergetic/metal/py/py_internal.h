@@ -57,8 +57,8 @@ int32_t pm_metal_py_zip_step(pm_metal_async_handle_t self_h, pm_metal_async_hand
 int  pm_metal_py_run_try_lock(void);
 void pm_metal_py_run_unlock(void);
 
-/** Run each mods/<name>/autoload.py once (idempotent). */
-void pm_metal_py_autoload_run_once(void);
+/** Run each mods/<name>/autoload.py once (idempotent). See py.h. */
+int  pm_metal_py_autoload_run_once(void);
 int  pm_metal_py_autoload_done(void);
 
 /**

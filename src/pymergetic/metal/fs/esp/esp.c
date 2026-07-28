@@ -21,14 +21,13 @@ int pm_metal_esp_rename_port(const char *old_path, const char *new_path);
 int pm_metal_esp_fsync_port(const char *path);
 int pm_metal_esp_readdir_port(const char *path, uint32_t index, char *name, uint32_t name_cap);
 
-/* mods/apps + mods/py (now incl. stdlib/'s ~20 Easy-pack files, see
- * docs/MICROPYTHON.md) + the 2 individually preloaded mods/tests fixtures
- * already run ~40 entries before counting any future growth — 128 gives
- * real headroom instead of silently dropping preload/write slots again. */
-#define PM_METAL_ESP_CACHE_MAX   128u
-#define PM_METAL_ESP_DIR_MAX     16u
-#define PM_METAL_ESP_PATH_MAX    128u
-#define PM_METAL_ESP_READDIR_MAX 32u
+/* mods/apps + mods/py + mods/httpd + top-level mods zips (+ www, etc fixtures).
+ * Sized for doom sidecars + httpd/api zips; post-EBS only this RAM cache
+ * remains. Bumped x2 from the prior 128/32/128/32 set. */
+#define PM_METAL_ESP_CACHE_MAX   256u
+#define PM_METAL_ESP_DIR_MAX     64u
+#define PM_METAL_ESP_PATH_MAX    256u
+#define PM_METAL_ESP_READDIR_MAX 64u
 
 typedef struct {
   int32_t  used;
@@ -474,6 +473,10 @@ int pm_metal_esp_preload_tree(const char *dir)
   if (pm_metal_esp_stat(dir, &sz, &ty) != 0 || ty != PM_METAL_ESP_TYPE_DIR) {
     return -1;
   }
+
+  /* Remember the dir itself so post-EBS stat(/mods/httpd) still sees DIR
+   * (HasChildren also works once files are cached; DirAdd is belt+braces). */
+  (void)MetalEspDirAdd(dir);
 
   n = 0;
   for (idx = 0;; idx++) {

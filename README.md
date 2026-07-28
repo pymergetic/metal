@@ -303,7 +303,7 @@ packages/metal/
 ├── mods/tests/                harness .wasm guests
 ├── mods/apps/                 external apps staged here at build time (empty in a fresh checkout)
 ├── mods/py/                   MicroPython stdlib + py tests
-├── mods/httpd/                ASGI bridge (httpd.py) + Microdot/utemplate zips
+├── mods/httpd/                ASGI package (import httpd) + Microdot/utemplate zips
 ├── mods/api/                  catalog routes + templates (docs/iface/…)
 ├── external/                  vendored trees (micropython, microdot, utemplate, …)
 ├── screenshots/               UI / UART / Doom / iron photos

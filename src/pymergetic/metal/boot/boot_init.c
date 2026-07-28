@@ -414,7 +414,17 @@ static pm_metal_status_t MetalBootInitStep(pm_metal_async_handle_t self_h)
        * before this feature existed.
        */
       if (pm_metal_py_repl_start() != 0) {
+        int al;
+
         pm_metal_log_styled(PM_METAL_LOG_STYLE_OK, "`-- python       ok");
+        al = pm_metal_py_autoload_run_once();
+        if (al > 0) {
+          pm_metal_log_styled(PM_METAL_LOG_STYLE_OK, "    `-- autoload ok");
+        } else if (al == 0) {
+          pm_metal_log_styled(PM_METAL_LOG_STYLE_DIM, "    `-- autoload -");
+        } else {
+          pm_metal_log_styled(PM_METAL_LOG_STYLE_WARN, "    `-- autoload FAIL");
+        }
         pm_metal_log("");
         pm_metal_py_repl_print_banner();
       } else {
