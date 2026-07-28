@@ -7,7 +7,7 @@ toggles, and default build/upload actions live in one place.
 Menu layout mirrors `pymergetic.metal` modules:
 
 ```text
-Build                          # target / bios arch / post-action
+Build                          # efi/bios/mod + bios x86_64/i386 + post checkboxes
 pymergetic.metal
   net
     io                         # PM_METAL_IO_WIRE_MAX
@@ -38,9 +38,21 @@ For a single `scripts/build` invocation (highest wins):
 2. Env: `PM_METAL_BUILD_TARGET`, `PM_METAL_BIOS_ARCH`, `PM_METAL_POST_ACTION`
 3. Argv: `scripts/build efi`, `scripts/build bios i386`, …
 
-Post-actions from Kconfig (`run` / `upload-efi` / `upload-pxe`) run after
-a successful build. Set `PM_METAL_POST_ACTION=none` to skip for one call.
-`scripts/build all` forces `none` on child steps so upload/run runs once.
+Build targets in menuconfig are **independent checkboxes** (`efi` / `bios` /
+`mod`) — any combination. BIOS arch is two more checkboxes (`x86_64` /
+`i386`); enabling both builds both metal.elf variants. With no argv,
+`scripts/build` builds every enabled target (order: mod, efi, then each
+selected BIOS arch). `scripts/build all` means mod + efi + bios for every
+enabled BIOS arch. `scripts/build bios i386` still forces a single arch.
+
+Post-actions are also independent checkboxes; menuconfig only offers them
+when the matching targets are on: `upload-efi` needs `efi`, `upload-pxe`
+needs `bios` plus at least one BIOS arch, `run` needs any build target.
+`scripts/build` enforces the same gates against **what this invocation
+built** (argv/env cannot upload-efi after a bios-only build, etc.).
+Enabled posts run in upload-efi → upload-pxe → run order. Set
+`PM_METAL_POST_ACTION=none` to skip for one call (multi-step child builds
+do this automatically so posts run once at the top level).
 
 ## Memory size units
 
