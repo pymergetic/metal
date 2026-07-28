@@ -35,6 +35,11 @@ cmake-build-*/
 /*.efi
 /build/efi/
 
+# Generated from src/efi/MetalPkg/*.inf.tpl (@METAL_ROOT@ → checkout root)
+/src/efi/MetalPkg/Metal.inf
+/src/efi/MetalPkg/DropbearGlue.inf
+
+
 # Guest Python zips + sigs — rebuilt from source on every ESP/PXE stage
 # (embed-stdlib.sh / build_microdot_zip.sh / pack_asgi_zips.sh). .sig is
 # never byte-stable across re-signs. Track sources only (stdlib_src/,

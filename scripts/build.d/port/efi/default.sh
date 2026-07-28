@@ -57,6 +57,11 @@ python3 "${ROOT}/scripts/gen_py_stubs.py" || true
 # (docs/DOC_IFACE_PLAN.md Part II-B) — src/pymergetic/metal/util/iface_syms.inc.c.
 python3 "${ROOT}/scripts/gen_iface_syms.py"
 
+# Metal.inf / DropbearGlue.inf from *.inf.tpl (gitignored; abs ROOT baked in).
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/efi_inf.sh"
+pm_metal_efi_inf_generate "${ROOT}"
+
 # MicroPython embed package (port-neutral sources under build/micropython_embed).
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/micropython.sh"
@@ -179,34 +184,6 @@ PY
 "${ROOT}/scripts/build.d/port/efi/embed-iface.sh"
 # Dropbear static lib (PIC) for Metal.inf DLINK — X64 EFI.
 PM_METAL_DROPBEAR_PIC=1 "${ROOT}/scripts/build.d/lib/dropbear.sh" x86_64
-
-# EDK2 pulls -I out of INF BuildOptions only when the path exists() as a
-# literal string, and response-file macro expand uses WORKSPACE-relative
-# MODULE_DIR ("MetalPkg") — so $(MODULE_DIR)/../../.. breaks for Metal.
-# Checked-in INFs use @METAL_ROOT@; expand to $ROOT for the build only.
-METAL_INF_PATH_FILES=(
-	"${ROOT}/src/efi/MetalPkg/Metal.inf"
-	"${ROOT}/src/efi/MetalPkg/DropbearGlue.inf"
-)
-pm_metal_efi_inf_paths_restore() {
-	local f
-	for f in "${METAL_INF_PATH_FILES[@]}"; do
-		[[ -f "${f}" ]] || continue
-		# Only touch lines that still carry the expanded root.
-		grep -qF "${ROOT}" "${f}" || continue
-		sed -i "s|${ROOT}|@METAL_ROOT@|g" "${f}"
-	done
-}
-pm_metal_efi_inf_paths_apply() {
-	local f
-	for f in "${METAL_INF_PATH_FILES[@]}"; do
-		[[ -f "${f}" ]] || continue
-		grep -qF '@METAL_ROOT@' "${f}" || continue
-		sed -i "s|@METAL_ROOT@|${ROOT}|g" "${f}"
-	done
-}
-trap pm_metal_efi_inf_paths_restore EXIT
-pm_metal_efi_inf_paths_apply
 
 echo "efi build: MetalPkg (X64 ${TOOL_CHAIN} ${TARGET})"
 build \

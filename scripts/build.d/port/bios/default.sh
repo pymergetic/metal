@@ -484,7 +484,7 @@ mapfile -t UPY_SRCS < <(pm_metal_upy_embed_c_sources "${ARCH}" || true)
 SRCS_C+=("${UPY_SRCS[@]}")
 
 mapfile -t MBEDTLS_SRCS < <(
-	grep -E 'external/mbedtls/library/' "${ROOT}/src/efi/MetalPkg/Metal.inf" \
+	grep -E 'external/mbedtls/library/' "${ROOT}/src/efi/MetalPkg/Metal.inf.tpl" \
 		| sed -E "s@^[[:space:]]+\.\./\.\./\.\./@${ROOT}/@"
 )
 SRCS_C+=("${MBEDTLS_SRCS[@]}")

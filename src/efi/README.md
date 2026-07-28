@@ -15,7 +15,7 @@ src/efi/
   pymergetic/metal/       EFI binds (UEFI / EDK2 impl)
     arena/  mem/  task/  run/  stack/
   MetalPkg/               EDK2 package (PACKAGES_PATH)
-    MetalPkg.dec / .dsc / Metal.inf
+    MetalPkg.dec / .dsc / Metal.inf.tpl  (→ generated Metal.inf)
     main.c                UefiMain: banner + claim RAM + smoke
 ```
 
