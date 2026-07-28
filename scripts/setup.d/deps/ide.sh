@@ -47,18 +47,19 @@ stubs = efi_mem / "host_stubs"
 pkg = root / "src/efi/MetalPkg"
 inc_root = root / "include"
 out = root / "build/compile_commands.json"
-efi_net = root / "src/pymergetic/metal/dev/net"
-db_stubs = efi_net / "dropbear_stubs"
-db_metal = efi_net / "dropbear_metal"
+ssh_dir = metal_src / "net/ssh"
+db_stubs = ssh_dir / "dropbear_stubs"
+db_metal = ssh_dir / "dropbear_metal"
 db_src = root / "external/dropbear/src"
 lwip_inc = root / "external/lwip/src/include"
+net_ip = metal_src / "net/ip"
 mbedtls_inc = root / "external/mbedtls/include"
 mbedtls_cfg = (
     "-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>"
 )
 inc_common = (
     f"-I{edk2} -I{edk2_x64} -I{tlsf} -I{inc_root} "
-    f"-I{metal_src} -I{pkg} -I{efi_mem} -I{efi_net} -I{lwip_inc} "
+    f"-I{metal_src} -I{pkg} -I{efi_mem} -I{net_ip} -I{lwip_inc} "
     f"-I{mbedtls_inc} {mbedtls_cfg} "
     f"-I{efi_wamr} -I{wamr_plat} "
     f"-I{wamr_utils} -I{wamr_iwasm} -I{wamr_wasi} "
@@ -100,7 +101,7 @@ if edk2.is_dir():
     for base_dir in (
         root / "src/efi/MetalPkg",
         root / "src/efi/pymergetic/metal",
-        efi_net,
+        metal_src,
     ):
         if base_dir.is_dir():
             efi_files.extend(sorted(base_dir.rglob("*.c")))
@@ -159,10 +160,9 @@ if wasi_sys.is_dir() and tests_dir.is_dir():
 # sibling (e.g. efi/.../net/net_lwip.c) and misses PmBiosUefi.h.
 bios_shim = root / "src/bios/shim"
 bios_metal = root / "src/bios/pymergetic/metal"
-bios_net = root / "src/pymergetic/metal/dev/net"
 bios_inc = (
     f"-I{bios_shim} -I{inc_root} -I{metal_src} "
-    f"-I{bios_net} -I{lwip_inc} -I{mbedtls_inc} {mbedtls_cfg} "
+    f"-I{net_ip} -I{lwip_inc} -I{mbedtls_inc} {mbedtls_cfg} "
     f"-I{bios_metal / 'guest/wamr'} "
     f"-I{bios_metal / 'runtime/mem/host_stubs'} "
     f"-I{wamr_iwasm} -I{wamr_plat} -I{wamr_utils} "
@@ -240,7 +240,6 @@ CLANG_EFI=(
 	-I"${METAL_SRC}"
 	-I"${METAL_PKG}"
 	-I"${METAL_EFI_MEM}"
-	-I"${ROOT}/src/pymergetic/metal/dev/net"
 	-I"${ROOT}/src/pymergetic/metal/net/ip"
 	-I"${ROOT}/external/lwip/src/include"
 	-I"${ROOT}/external/mbedtls/include"

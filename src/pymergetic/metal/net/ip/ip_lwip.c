@@ -24,8 +24,8 @@
 #include <pymergetic/metal/runtime/mem/mem.h>
 #include <pymergetic/metal/log/log.h>
 
-#include "virtio_netif.h"
-#include "bge/bge_netif.h"
+#include "dev/net/virtio_netif.h"
+#include "dev/net/bge/bge_netif.h"
 
 #include "lwipopts.h" /* IWYU pragma: keep */
 #include <lwip/init.h>

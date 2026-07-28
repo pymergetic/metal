@@ -1,5 +1,5 @@
 -Iinclude
--Isrc/pymergetic/metal/dev/net
+-Isrc/pymergetic/metal
 -Iexternal/tlsf
 -Iexternal/mbedtls/include
 -Iexternal/lwip/src/include

@@ -99,8 +99,6 @@ INCLUDES=(
 	-I"${BIOS}/BiosPkg"
 	-I"${BIOS}/shim"
 	-I"${SHARED_METAL}/dev/gfx"
-	-I"${SHARED_METAL}/dev/net"
-	-I"${SHARED_METAL}/dev/net/bge"
 	-I"${SHARED_METAL}/net/ip"
 	-I"${ROOT}/external/lwip/src/include"
 	-I"${ROOT}/external/mbedtls/include"

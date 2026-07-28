@@ -1,5 +1,7 @@
 ## @file
 # Dropbear Metal glue — dropbear_stubs -I must precede host_stubs.
+# @METAL_ROOT@ in BuildOptions is expanded by scripts/build.d/port/efi/default.sh
+# (EDK2 cannot use a portable $(MODULE_DIR)/../../.. here — see that script).
 ##
 
 [Defines]
@@ -25,4 +27,4 @@
   DebugLib
 
 [BuildOptions]
-  GCC:*_*_*_CC_FLAGS = -DDROPBEAR_METAL=1 -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal/net/ssh/dropbear_metal -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal/net/ssh/dropbear_stubs -I/home/ladmin/Devel/os-sdk/packages/metal/external/dropbear/src -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal/dev/net -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal/net/ip -I/home/ladmin/Devel/os-sdk/packages/metal/include -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal -I/home/ladmin/Devel/os-sdk/packages/metal/src/pymergetic/metal/runtime/mem/host_stubs -I/home/ladmin/Devel/os-sdk/packages/metal/external/lwip/src/include -I/home/ladmin/Devel/os-sdk/packages/metal/external/wamr/core/iwasm/include -Wno-error -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-format -fno-strict-aliasing
+  GCC:*_*_*_CC_FLAGS = -DDROPBEAR_METAL=1 -I@METAL_ROOT@/src/pymergetic/metal/net/ssh/dropbear_metal -I@METAL_ROOT@/src/pymergetic/metal/net/ssh/dropbear_stubs -I@METAL_ROOT@/external/dropbear/src -I@METAL_ROOT@/src/pymergetic/metal/net/ip -I@METAL_ROOT@/include -I@METAL_ROOT@/src/pymergetic/metal -I@METAL_ROOT@/src/pymergetic/metal/runtime/mem/host_stubs -I@METAL_ROOT@/external/lwip/src/include -I@METAL_ROOT@/external/wamr/core/iwasm/include -Wno-error -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-format -fno-strict-aliasing

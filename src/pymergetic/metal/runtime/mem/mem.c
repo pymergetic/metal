@@ -3,6 +3,7 @@
 **/
 #include <pymergetic/metal/runtime/mem/mem.h>
 #include <pymergetic/metal/runtime/mem/limit.h>
+#include <pymergetic/metal/boot/externals.h>
 #include <runtime/mem/arena.h>
 #include <runtime/stack/stack.h>
 #include <runtime/slot/spin.h>
@@ -564,3 +565,10 @@ PM_METAL_MEM_LIMIT(g_pm_metal_lim_runtime_mem_HEAP_GROW_BYTES,
                    PM_METAL_HEAP_GROW_BYTES,
                    "bytes",
                    "TLSF host heap grow quantum");
+
+/* Vendored under external/tlsf — host heap (see tlsf.h banner: version 3.1). */
+PM_METAL_EXTERNAL(g_pm_metal_ext_tlsf,
+                  tlsf,
+                  "3.1",
+                  "http://tlsf.baisoku.org",
+                  "Two-Level Segregated Fit host heap");

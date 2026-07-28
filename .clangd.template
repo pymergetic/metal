@@ -10,6 +10,10 @@ CompileFlags:
     - -std=c11
     - -I@@ROOT@@
     - -I@@ROOT@@/include
+    # Shared contracts (<runtime/...>, <boot/...>) — keep global so monorepo
+    # clangd still resolves them if a PathMatch / CDB fragment is skipped.
+    - -I@@ROOT@@/src/pymergetic/metal
+    - -I@@ROOT@@/external/tlsf
     # Baked CA pubs for trust.c (#include "metal_trust_bake.inc.c")
     - -I@@ROOT@@/build/trust
     # Always visible: Metal WAMR platform + freestanding libc stubs.
@@ -57,7 +61,6 @@ CompileFlags:
     - -I@@ROOT@@/src/pymergetic/metal
     - -I@@ROOT@@/src/efi/MetalPkg
     - -I@@ROOT@@/src/efi/pymergetic/metal/mem
-    - -I@@ROOT@@/src/pymergetic/metal/dev/net
     - -I@@ROOT@@/src/pymergetic/metal/net/ip
     - -I@@ROOT@@/external/lwip/src/include
     - -I@@ROOT@@/external/mbedtls/include
@@ -95,7 +98,6 @@ CompileFlags:
     - -I@@ROOT@@/include
     - -I@@ROOT@@/src/pymergetic/metal
     - -I@@ROOT@@/src/efi/pymergetic/metal/mem
-    - -I@@ROOT@@/src/pymergetic/metal/dev/net
     - -I@@ROOT@@/src/pymergetic/metal/net/ip
     - -I@@ROOT@@/external/lwip/src/include
     - -I@@ROOT@@/external/mbedtls/include
@@ -165,7 +167,6 @@ CompileFlags:
     - "-DEFIAPI=__attribute__((ms_abi))"
     - -I@@ROOT@@/external/edk2/MdePkg/Include
     - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
-    - -I@@ROOT@@/src/pymergetic/metal/dev/net
     - -I@@ROOT@@/src/pymergetic/metal/net/ip
     - -I@@ROOT@@/external/lwip/src/include
     - -I@@ROOT@@/external/mbedtls/include
@@ -181,7 +182,7 @@ CompileFlags:
 # so we can Remove host_stubs and re-Add stubs first (same order as
 # DropbearGlue.inf / bios DROPBEAR_EXTRA_CFLAGS).
 If:
-  PathMatch: .*/src/pymergetic/metal/dev/net/(dropbear_stubs/|dropbear_metal/|dropbear_|ssh_dropbear).*
+  PathMatch: .*/src/pymergetic/metal/net/ssh/(dropbear_stubs/|dropbear_metal/|dropbear_|ssh_dropbear).*
 CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
@@ -196,7 +197,6 @@ CompileFlags:
     - -I@@ROOT@@/src/pymergetic/metal/net/ssh/dropbear_metal
     - -I@@ROOT@@/src/pymergetic/metal/net/ssh/dropbear_stubs
     - -I@@ROOT@@/src/pymergetic/metal
-    - -I@@ROOT@@/src/pymergetic/metal/dev/net
     - -I@@ROOT@@/src/pymergetic/metal/net/ip
     - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
     - -I@@ROOT@@/external/dropbear/src
@@ -234,7 +234,6 @@ CompileFlags:
     - -I@@ROOT@@/src/pymergetic/metal/net/ssh/dropbear_stubs
     - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
     - -I@@ROOT@@/src/pymergetic/metal
-    - -I@@ROOT@@/src/pymergetic/metal/dev/net
     - -I@@ROOT@@/src/pymergetic/metal/net/ip
     - -I@@ROOT@@/include
     - -I@@ROOT@@/external/dropbear/src
@@ -261,7 +260,6 @@ CompileFlags:
     - -I@@ROOT@@/src/bios/shim
     - -I@@ROOT@@/include
     - -I@@ROOT@@/src/pymergetic/metal
-    - -I@@ROOT@@/src/pymergetic/metal/dev/net
     - -I@@ROOT@@/src/pymergetic/metal/net/ip
     - -I@@ROOT@@/external/lwip/src/include
     - -I@@ROOT@@/external/mbedtls/include
