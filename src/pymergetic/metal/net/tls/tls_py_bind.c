@@ -15,7 +15,7 @@
 #include "py/obj.h"
 
 typedef struct {
-  pm_metal_net_tls_conn_h     ch;
+  pm_metal_net_tls_conn_h ch;
   pm_metal_async_handle_t ah;
 } tls_read_ctx_t;
 
@@ -38,7 +38,7 @@ PM_METAL_PY_BIND(
 
 static mp_obj_t py_tls_connect(size_t n_args, const mp_obj_t *args)
 {
-  pm_metal_net_tls_conn_h     ch      = (pm_metal_net_tls_conn_h)pm_metal_py_int_get(args[0]);
+  pm_metal_net_tls_conn_h ch      = (pm_metal_net_tls_conn_h)pm_metal_py_int_get(args[0]);
   const char             *host    = mp_obj_str_get_str(args[1]);
   uint16_t                port    = (uint16_t)pm_metal_py_int_get(args[2]);
   int32_t                 use_tls = (int32_t)pm_metal_py_int_get(args[3]);
@@ -52,12 +52,15 @@ static mp_obj_t py_tls_connect(size_t n_args, const mp_obj_t *args)
   return pm_metal_py_new_awaitable_u32(ah);
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(py_tls_connect_obj, 4, 4, py_tls_connect);
-PM_METAL_PY_BIND(
-  g_py_bind_tls_connect, "pymergetic.metal.net.tls", "connect", py_tls_connect_obj, PM_METAL_PY_SYNC);
+PM_METAL_PY_BIND(g_py_bind_tls_connect,
+                 "pymergetic.metal.net.tls",
+                 "connect",
+                 py_tls_connect_obj,
+                 PM_METAL_PY_SYNC);
 
 static mp_obj_t py_tls_write(mp_obj_t h_obj, mp_obj_t data_obj)
 {
-  pm_metal_net_tls_conn_h     ch = (pm_metal_net_tls_conn_h)pm_metal_py_int_get(h_obj);
+  pm_metal_net_tls_conn_h ch = (pm_metal_net_tls_conn_h)pm_metal_py_int_get(h_obj);
   const uint8_t          *data;
   size_t                  len;
   pm_metal_async_handle_t ah;
@@ -76,7 +79,7 @@ PM_METAL_PY_BIND(
 
 static mp_obj_t py_tls_read(mp_obj_t h_obj, mp_obj_t n_obj)
 {
-  pm_metal_net_tls_conn_h     ch   = (pm_metal_net_tls_conn_h)pm_metal_py_int_get(h_obj);
+  pm_metal_net_tls_conn_h ch   = (pm_metal_net_tls_conn_h)pm_metal_py_int_get(h_obj);
   uint32_t                want = (uint32_t)pm_metal_py_int_get(n_obj);
   pm_metal_async_handle_t ah;
   tls_read_ctx_t         *ctx;

@@ -46,31 +46,31 @@ typedef enum {
 } http_step_t;
 
 typedef struct {
-  http_step_t             step;
-  pm_metal_async_handle_t aw;
-  char                    url[HTTP_URL_MAX];
-  char                    host[HTTP_HOST_MAX];
-  char                    path[HTTP_PATH_MAX];
-  uint16_t                port;
-  int32_t                 tls;
-  pm_metal_net_ip_sock_h     sock;
-  void                   *body;
-  uint32_t                body_cap;
-  uint32_t                body_len;
-  uint32_t                http_status;
-  char                    hdr[HTTP_HDR_MAX];
-  uint32_t                hdr_len;
-  int32_t                 hdr_done;
-  int32_t                 chunked;
-  int32_t                 body_until_close;
-  uint32_t                content_len;
+  http_step_t               step;
+  pm_metal_async_handle_t   aw;
+  char                      url[HTTP_URL_MAX];
+  char                      host[HTTP_HOST_MAX];
+  char                      path[HTTP_PATH_MAX];
+  uint16_t                  port;
+  int32_t                   tls;
+  pm_metal_net_ip_sock_h    sock;
+  void                     *body;
+  uint32_t                  body_cap;
+  uint32_t                  body_len;
+  uint32_t                  http_status;
+  char                      hdr[HTTP_HDR_MAX];
+  uint32_t                  hdr_len;
+  int32_t                   hdr_done;
+  int32_t                   chunked;
+  int32_t                   body_until_close;
+  uint32_t                  content_len;
   pm_metal_http_chunk_dec_t chunk;
-  char                    req[HTTP_REQ_MAX];
-  uint32_t                req_len;
-  uint32_t                req_off;
-  pm_metal_net_tls_wire_t     wire;
-  pm_metal_net_tls_h          tls_h;
-  uint8_t                     io[HTTP_IO_MAX];
+  char                      req[HTTP_REQ_MAX];
+  uint32_t                  req_len;
+  uint32_t                  req_off;
+  pm_metal_net_tls_wire_t   wire;
+  pm_metal_net_tls_h        tls_h;
+  uint8_t                   io[HTTP_IO_MAX];
 } http_get_t;
 
 static struct {
@@ -104,8 +104,7 @@ static int32_t HttpBodyFeed(http_get_t *h, const uint8_t *data, uint32_t len)
   }
 
   if (h->chunked) {
-    return pm_metal_http_chunk_dec_feed(
-      &h->chunk, data, len, h->body, h->body_cap, &h->body_len);
+    return pm_metal_http_chunk_dec_feed(&h->chunk, data, len, h->body, h->body_cap, &h->body_len);
   }
 
   {
@@ -383,11 +382,11 @@ static pm_metal_status_t HttpGetStep(pm_metal_async_handle_t self_h)
     h->body_until_close = 0;
     h->chunked          = 0;
     pm_metal_http_chunk_dec_init(&h->chunk);
-    h->wire.len         = 0;
-    h->wire.off         = 0;
-    h->tls_h            = PM_METAL_TLS_INVALID;
-    h->req_len          = 0;
-    h->req_off          = 0;
+    h->wire.len = 0;
+    h->wire.off = 0;
+    h->tls_h    = PM_METAL_TLS_INVALID;
+    h->req_len  = 0;
+    h->req_off  = 0;
 
     if (HttpHostIsLiteral(h->host)) {
       h->step = HTTP_STEP_SOCK;

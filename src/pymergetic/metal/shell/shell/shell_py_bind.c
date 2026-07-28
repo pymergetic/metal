@@ -80,7 +80,8 @@ static void pmcmd_proxy_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest)
     off += (size_t)snprintf(buf + off, sizeof(buf) - off, "%s", self->cmd->help);
   }
   if (self->cmd->sig != NULL) {
-    off += (size_t)snprintf(buf + off, sizeof(buf) - off, "%s%s", off ? "\n\n" : "", self->cmd->sig);
+    off +=
+      (size_t)snprintf(buf + off, sizeof(buf) - off, "%s%s", off ? "\n\n" : "", self->cmd->sig);
   }
   if (self->cmd->body != NULL) {
     off +=
@@ -137,7 +138,8 @@ static void pmcmd_ns_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest)
   dest[0] = pmcmd_proxy_new(cmd);
 }
 
-static MP_DEFINE_CONST_OBJ_TYPE(pmcmd_ns_type, MP_QSTR_object, MP_TYPE_FLAG_NONE, attr, pmcmd_ns_attr);
+static MP_DEFINE_CONST_OBJ_TYPE(
+  pmcmd_ns_type, MP_QSTR_object, MP_TYPE_FLAG_NONE, attr, pmcmd_ns_attr);
 
 static const mp_obj_base_t g_pmcmd_ns_obj = { &pmcmd_ns_type };
 
@@ -153,9 +155,9 @@ void pm_metal_py_pmcmd_install(void)
 
   if (nlr_push(&nlr) == 0) {
     mp_map_t      *modules_map = &MP_STATE_VM(mp_loaded_modules_dict).map;
-    mp_map_elem_t *el          = mp_map_lookup(modules_map, MP_OBJ_NEW_QSTR(qstr_from_str("pmcmd")),
-                                      MP_MAP_LOOKUP_ADD_IF_NOT_FOUND);
-    el->value                  = MP_OBJ_FROM_PTR(&g_pmcmd_ns_obj);
+    mp_map_elem_t *el          = mp_map_lookup(
+      modules_map, MP_OBJ_NEW_QSTR(qstr_from_str("pmcmd")), MP_MAP_LOOKUP_ADD_IF_NOT_FOUND);
+    el->value = MP_OBJ_FROM_PTR(&g_pmcmd_ns_obj);
     nlr_pop();
   }
 }

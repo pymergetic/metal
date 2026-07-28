@@ -113,8 +113,8 @@ static void mod_func_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest)
     return;
   }
 
-  if (pm_metal_mod_func_doc_get(qstr_str(self->mod_name), qstr_str(self->func_name), &summary,
-                                &sig, &body) != 0) {
+  if (pm_metal_mod_func_doc_get(
+        qstr_str(self->mod_name), qstr_str(self->func_name), &summary, &sig, &body) != 0) {
     return;
   }
 

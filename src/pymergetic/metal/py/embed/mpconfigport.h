@@ -33,7 +33,7 @@ typedef long      mp_off_t;
 #define MICROPY_HELPER_REPL \
   (1) /* mp_repl_continue_with_input — REPL's multi-line block detection */
 
-/* ---- small, self-contained C extmods the "Easy" stdlib.zip pack needs -- */
+/* ---- small, self-contained C extmods the Easy stdlib pack needs ------ */
 /* Each backs a pure-Python micropython-lib shim under mods/py/stdlib/
  * that re-exports/wraps it via the "import ufoo forces builtin foo" alias
  * (py/objmodule.c:193-206) — see docs/MICROPYTHON.md's stdlib categorization.
@@ -48,16 +48,21 @@ typedef long      mp_off_t;
 #define MICROPY_PY_ERRNO                    (1) /* uerrno — errno/ */
 #define MICROPY_PY_STRUCT                   (1) /* ustruct — struct/ (int formats only, no floats) */
 #define MICROPY_PY_RANDOM                   (1) /* extmod/modrandom.c — getrandbits/seed/randrange/randint/choice */
-#define MICROPY_PY_RANDOM_EXTRA_FUNCS       (1) /* randrange/randint/choice (+ random()/uniform() once floats are on) */
-#define MICROPY_PY_HASHLIB                  (1) /* extmod/modhashlib.c */
-#define MICROPY_PY_HASHLIB_SHA256           (1) /* self-contained lib/crypto-algorithms/sha256.c fallback (no mbedtls/axtls) */
-#define MICROPY_PY_RE                       (1) /* extmod/modre.c + lib/re1.5 sources — base64/fnmatch/textwrap/hmac/uu need it */
-#define MICROPY_PY_RE_MATCH_GROUPS          (1) /* match.groups() */
-#define MICROPY_PY_RE_SUB                   (1) /* re.sub() — fnmatch.translate()-style users need it */
-#define MICROPY_PY_DEFLATE                  (1) /* extmod/moddeflate.c — zlib.py/gzip.py's raw DEFLATE engine */
-#define MICROPY_PY_DEFLATE_COMPRESS         (1) /* one-way (decompress-only) would silently break zlib.compress() */
-#define MICROPY_PY_JSON                     (1) /* extmod/modjson.c — json.dumps()/loads(), no Python shim needed */
-#define MICROPY_PY_JSON_SEPARATORS          (1) /* json.dumps(..., separators=...) kwarg (upstream default; costs little) */
+#define MICROPY_PY_RANDOM_EXTRA_FUNCS \
+  (1) /* randrange/randint/choice (+ random()/uniform() once floats are on) */
+#define MICROPY_PY_HASHLIB (1) /* extmod/modhashlib.c */
+#define MICROPY_PY_HASHLIB_SHA256 \
+  (1) /* self-contained lib/crypto-algorithms/sha256.c fallback (no mbedtls/axtls) */
+#define MICROPY_PY_RE \
+  (1) /* extmod/modre.c + lib/re1.5 sources — base64/fnmatch/textwrap/hmac/uu need it */
+#define MICROPY_PY_RE_MATCH_GROUPS (1) /* match.groups() */
+#define MICROPY_PY_RE_SUB          (1) /* re.sub() — fnmatch.translate()-style users need it */
+#define MICROPY_PY_DEFLATE         (1) /* extmod/moddeflate.c — zlib.py/gzip.py's raw DEFLATE engine */
+#define MICROPY_PY_DEFLATE_COMPRESS \
+  (1)                       /* one-way (decompress-only) would silently break zlib.compress() */
+#define MICROPY_PY_JSON (1) /* extmod/modjson.c — json.dumps()/loads(), no Python shim needed */
+#define MICROPY_PY_JSON_SEPARATORS \
+  (1) /* json.dumps(..., separators=...) kwarg (upstream default; costs little) */
 /* io module: our own mods/py/stdlib/io.py occupies the bare "io" name
  * on sys.path (filesystem import wins over an extensible built-in — see
  * py/objmodule.c's mp_module_get_builtin), so this only ever surfaces as
@@ -132,19 +137,19 @@ typedef long      mp_off_t;
  * Soft/freestanding libm = µPy lib/libm (via py_libm_math.c so floorf/ceilf/
  * truncf stay WAMR's) + py_libm_extra — see Metal.inf / bios default.sh.
  */
-#define MICROPY_FLOAT_IMPL             (MICROPY_FLOAT_IMPL_FLOAT)
-#define MICROPY_PY_BUILTINS_FLOAT      (1)
+#define MICROPY_FLOAT_IMPL        (MICROPY_FLOAT_IMPL_FLOAT)
+#define MICROPY_PY_BUILTINS_FLOAT (1)
 /* No freestanding _Float16 runtime helpers on EFI — use µPy software half. */
-#define MICROPY_FLOAT_USE_NATIVE_FLT16 (0)
-#define MICROPY_PY_BUILTINS_COMPLEX    (1)
-#define MICROPY_PY_MATH                (1)
+#define MICROPY_FLOAT_USE_NATIVE_FLT16    (0)
+#define MICROPY_PY_BUILTINS_COMPLEX       (1)
+#define MICROPY_PY_MATH                   (1)
 #define MICROPY_PY_MATH_SPECIAL_FUNCTIONS (1)
-#define MICROPY_PY_CMATH               (1)
+#define MICROPY_PY_CMATH                  (1)
 /* log2f not in our libm set — synthesize from logf in modmath.c. */
-#define MP_NEED_LOG2                   (1)
+#define MP_NEED_LOG2 (1)
 /* MINIMUM leaves CPYTHON_COMPAT off — stock libs (microdot Response) call
  * str.encode() / bytes.decode(); without this those methods are missing. */
-#define MICROPY_CPYTHON_COMPAT         (1)
-#define MICROPY_LONGINT_IMPL           (MICROPY_LONGINT_IMPL_MPZ)
-#define MICROPY_PY_SYS_ARGV            (0)
-#define MICROPY_ERROR_REPORTING        (MICROPY_ERROR_REPORTING_NORMAL)
+#define MICROPY_CPYTHON_COMPAT  (1)
+#define MICROPY_LONGINT_IMPL    (MICROPY_LONGINT_IMPL_MPZ)
+#define MICROPY_PY_SYS_ARGV     (0)
+#define MICROPY_ERROR_REPORTING (MICROPY_ERROR_REPORTING_NORMAL)

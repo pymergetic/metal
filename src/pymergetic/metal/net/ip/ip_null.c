@@ -68,7 +68,9 @@ static void NullClose(pm_metal_net_ip_sock_h h)
   memset(&mSocks[h], 0, sizeof(mSocks[h]));
 }
 
-static pm_metal_async_handle_t NullConnect(pm_metal_net_ip_sock_h h, const char *host, uint32_t port)
+static pm_metal_async_handle_t NullConnect(pm_metal_net_ip_sock_h h,
+                                           const char            *host,
+                                           uint32_t               port)
 {
   (void)host;
   (void)port;
@@ -137,8 +139,8 @@ static int NullBind(pm_metal_net_ip_sock_h h, uint32_t port)
   return -1;
 }
 
-static uint32_t NullSendto(pm_metal_net_ip_sock_h h, const void *ptr, uint32_t len, const char *host,
-                           uint32_t port)
+static uint32_t NullSendto(
+  pm_metal_net_ip_sock_h h, const void *ptr, uint32_t len, const char *host, uint32_t port)
 {
   (void)h;
   (void)ptr;
@@ -148,8 +150,12 @@ static uint32_t NullSendto(pm_metal_net_ip_sock_h h, const void *ptr, uint32_t l
   return 0;
 }
 
-static uint32_t NullTryRecvfrom(pm_metal_net_ip_sock_h h, void *ptr, uint32_t len, char *peer_host,
-                                uint32_t peer_cap, uint32_t *peer_port)
+static uint32_t NullTryRecvfrom(pm_metal_net_ip_sock_h h,
+                                void                  *ptr,
+                                uint32_t               len,
+                                char                  *peer_host,
+                                uint32_t               peer_cap,
+                                uint32_t              *peer_port)
 {
   (void)h;
   (void)ptr;
@@ -161,8 +167,8 @@ static uint32_t NullTryRecvfrom(pm_metal_net_ip_sock_h h, void *ptr, uint32_t le
 }
 
 static const pm_metal_net_ip_ops_t mNullOps = {
-  "null",    NullInit,   NullPoll,  NullSocket, NullClose, NullConnect, NullListen, NullAccept,
-  NullSend,  NullRecv,   NullDns,   NullBindIf, NULL,      NullBind,    NullSendto, NullTryRecvfrom
+  "null",   NullInit, NullPoll, NullSocket, NullClose, NullConnect, NullListen, NullAccept,
+  NullSend, NullRecv, NullDns,  NullBindIf, NULL,      NullBind,    NullSendto, NullTryRecvfrom
 };
 
 void pm_metal_net_ip_null_install(void)

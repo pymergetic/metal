@@ -30,27 +30,27 @@
 #define TLS_SNI_MAX   128u
 
 typedef struct {
-  int32_t                    valid;
-  int32_t                    loaded;
-  uint32_t                   refs;
+  int32_t                        valid;
+  int32_t                        loaded;
+  uint32_t                       refs;
   pm_metal_net_tls_client_auth_t client_auth;
-  mbedtls_x509_crt           cert;
-  mbedtls_x509_crt           client_ca;
-  mbedtls_pk_context         key;
+  mbedtls_x509_crt               cert;
+  mbedtls_x509_crt               client_ca;
+  mbedtls_pk_context             key;
 } tls_creds_t;
 
 typedef struct {
-  int32_t              valid;
-  int32_t              server;
-  int32_t              initialized;
-  pm_metal_net_ip_sock_h  sock;
+  int32_t                  valid;
+  int32_t                  server;
+  int32_t                  initialized;
+  pm_metal_net_ip_sock_h   sock;
   pm_metal_net_tls_wire_t *wire;
-  char                 sni[TLS_SNI_MAX];
+  char                     sni[TLS_SNI_MAX];
   pm_metal_net_tls_creds_h creds_h;
-  mbedtls_ssl_context  ssl;
-  mbedtls_ssl_config   conf;
-  int32_t              ready;
-  int32_t              done;
+  mbedtls_ssl_context      ssl;
+  mbedtls_ssl_config       conf;
+  int32_t                  ready;
+  int32_t                  done;
 } tls_sess_t;
 
 static tls_sess_t               mTls[TLS_SESS_MAX + 1];
@@ -295,12 +295,12 @@ pm_metal_net_tls_creds_h pm_metal_net_tls_creds_open(void)
 }
 
 int32_t pm_metal_net_tls_creds_load_buffers(pm_metal_net_tls_creds_h       h,
-                                            const void                *cert,
-                                            uint32_t                   cert_len,
-                                            const void                *key,
-                                            uint32_t                   key_len,
-                                            const void                *client_ca,
-                                            uint32_t                   client_ca_len,
+                                            const void                    *cert,
+                                            uint32_t                       cert_len,
+                                            const void                    *key,
+                                            uint32_t                       key_len,
+                                            const void                    *client_ca,
+                                            uint32_t                       client_ca_len,
                                             pm_metal_net_tls_client_auth_t client_auth)
 {
   tls_creds_t *creds;
@@ -348,9 +348,9 @@ static int32_t TlsReadFile(const char *path, uint8_t **out, uint32_t *out_len)
 }
 
 int32_t pm_metal_net_tls_creds_load_paths(pm_metal_net_tls_creds_h       h,
-                                          const char                *cert_path,
-                                          const char                *key_path,
-                                          const char                *client_ca_path,
+                                          const char                    *cert_path,
+                                          const char                    *key_path,
+                                          const char                    *client_ca_path,
                                           pm_metal_net_tls_client_auth_t client_auth)
 {
   uint8_t *cert;
@@ -500,7 +500,9 @@ void pm_metal_net_tls_close(pm_metal_net_tls_h h)
   t->valid = 0;
 }
 
-static int32_t TlsBind(pm_metal_net_tls_h h, pm_metal_net_ip_sock_h sock, pm_metal_net_tls_wire_t *wire)
+static int32_t TlsBind(pm_metal_net_tls_h       h,
+                       pm_metal_net_ip_sock_h   sock,
+                       pm_metal_net_tls_wire_t *wire)
 {
   tls_sess_t  *t;
   tls_creds_t *creds;
@@ -578,7 +580,9 @@ static int32_t TlsBind(pm_metal_net_tls_h h, pm_metal_net_ip_sock_h sock, pm_met
   return 0;
 }
 
-int32_t pm_metal_net_tls_bind(pm_metal_net_tls_h h, pm_metal_net_ip_sock_h sock, pm_metal_net_tls_wire_t *wire)
+int32_t pm_metal_net_tls_bind(pm_metal_net_tls_h       h,
+                              pm_metal_net_ip_sock_h   sock,
+                              pm_metal_net_tls_wire_t *wire)
 {
   tls_sess_t *t = TlsFromHandle(h);
 
@@ -586,7 +590,7 @@ int32_t pm_metal_net_tls_bind(pm_metal_net_tls_h h, pm_metal_net_ip_sock_h sock,
 }
 
 int32_t pm_metal_net_tls_bind_server(pm_metal_net_tls_h       h,
-                                     pm_metal_net_ip_sock_h  sock,
+                                     pm_metal_net_ip_sock_h   sock,
                                      pm_metal_net_tls_wire_t *wire)
 {
   tls_sess_t *t = TlsFromHandle(h);

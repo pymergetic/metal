@@ -599,19 +599,15 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
      * Phase 3 import-shadow regression: a same-named .py sitting on
      * sys.path must never shadow a C-registered dotted module.
      * pm_metal_py_init() populates mp_loaded_modules_dict (binds/pmcmd/
-     * mod install) before any script or zip content is ever imported,
-     * and builtinimport.c's process_import_at_level checks that dict
-     * FIRST — a hit there returns immediately, never touching sys.path
-     * (see external/micropython/py/builtinimport.c ~line 380). Prove it
-     * by planting a decoy right on /mods/py (already on sys.path) under
-     * the exact name of a C module ("pmcmd", the short-name exception —
-     * same dict, same code path a "pymergetic/metal.py" decoy would hit,
-     * chosen here to avoid needing a fresh subdirectory on either ESP
-     * backend) and confirming its sentinel never surfaces.
+     * mod install) before any script content is ever imported, and
+     * builtinimport.c's process_import_at_level checks that dict FIRST —
+     * a hit there returns immediately, never touching sys.path. Prove it
+     * by planting a decoy on /mods (on sys.path) as pmcmd.py and
+     * confirming its sentinel never surfaces.
      */
     static const char decoy[] = "SHADOWED = True\n";
 
-    if (pm_metal_fs_write("/mods/py/pmcmd.py", decoy, (uint32_t)(sizeof(decoy) - 1u)) !=
+    if (pm_metal_fs_write("/mods/pmcmd.py", decoy, (uint32_t)(sizeof(decoy) - 1u)) !=
         (uint32_t)(sizeof(decoy) - 1u)) {
       pm_metal_log("metal-py: shadow fail (decoy write)");
       t->step = PY_PROOF_FAIL;
@@ -750,8 +746,8 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
 
   case PY_PROOF_STDLIB: {
     /*
-     * mods/py/stdlib.zip's "Easy" pure-Python pack (docs/MICROPYTHON.md),
-     * read straight out of the STORED-zip via py_zip_read.c's in-place
+     * /mods/py/stdlib Easy pack (docs/MICROPYTHON.md),
+     * imported as loose .py from sys.path
      * archive reader (no extraction to loose files) — imports every packed
      * module and exercises one real call per module, so a module that
      * imports but is subtly broken (wrong builtin alias, missing extmod
@@ -849,12 +845,12 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
     /*
      * docs/TODO.md "Isolated-context ergonomics": an isolated context
      * (its own disjoint heap, see PY_PROOF_PARALLEL above) must be able
-     * to import from stdlib.zip too, not just pymergetic.metal / pmcmd /
-     * mod — pm_metal_py_ctx_create() now seeds this context's own
+     * to import from /mods/py/stdlib too, not just pymergetic.metal /
+     * pmcmd / mod — pm_metal_py_ctx_create() seeds this context's own
      * sys.path the same way pm_metal_py_init() seeds the shared one's.
-     * heapq is an arbitrary pick from the "Easy" pack; the point is
-     * proving the import machinery (sys.path + py_zip_read.c's in-place
-     * archive reader) works against this context's own state, not the
+     * heapq is an arbitrary pick from the Easy pack; the point is
+     * proving the import machinery (loose sys.path) works against this
+     * context's own state, not the
      * shared one's.
      */
     t->a = pm_metal_py_run_str_isolated("import heapq\n"
@@ -903,7 +899,7 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
 
   case PY_PROOF_RANDOM:
     /*
-     * extmod/modrandom.c — a real C extmod (not a stdlib.zip .py, see
+     * extmod/modrandom.c — a real C extmod (not a stdlib .py, see
      * docs/MICROPYTHON.md), so `import random` works with zero Python
      * glue. Seeded from one real pm_metal_random draw
      * (pymergetic.metal.random.seed_u32, dev/random/random_py_bind.c)
@@ -1076,7 +1072,7 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
   case PY_PROOF_RE:
     /*
      * extmod/modre.c + lib/re1.5's sources — a real C extmod (not a
-     * stdlib.zip .py), see docs/MICROPYTHON.md. match/group/groups/sub.
+     * stdlib .py), see docs/MICROPYTHON.md. match/group/groups/sub.
      * base64/fnmatch ride along here too: both were Needs-glue only
      * because they `import re`, and now that `re` (+ MICROPY_PY_BUILTINS_
      * BYTEARRAY for base64's own decode path) exists, both packed cleanly

@@ -7,6 +7,7 @@
 #define _STRUCT_TIMESPEC
 
 #include <stddef.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -45,18 +46,23 @@ struct tm {
 #define TIMER_ABSTIME 1
 #endif
 
-int clock_gettime(clockid_t clock_id, struct timespec *tp);
-int clock_nanosleep(clockid_t              clock_id,
-                    int                    flags,
-                    const struct timespec *request,
-                    struct timespec       *remain);
-int nanosleep(const struct timespec *req, struct timespec *rem);
-int sched_yield(void);
-clock_t clock(void);
-time_t time(time_t *t);
+int        clock_gettime(clockid_t clock_id, struct timespec *tp);
+int        clock_nanosleep(clockid_t              clock_id,
+                           int                    flags,
+                           const struct timespec *request,
+                           struct timespec       *remain);
+int        nanosleep(const struct timespec *req, struct timespec *rem);
+int        sched_yield(void);
+clock_t    clock(void);
+time_t     time(time_t *t);
 struct tm *gmtime(const time_t *timer);
 struct tm *localtime(const time_t *timer);
-size_t strftime(char *s, size_t max, const char *format, const struct tm *tm);
+size_t     strftime(char *s, size_t max, const char *format, const struct tm *tm);
+clock_t    clock(void);
+time_t     time(time_t *t);
+struct tm *gmtime(const time_t *timer);
+struct tm *localtime(const time_t *timer);
+size_t     strftime(char *s, size_t max, const char *format, const struct tm *tm);
 
 #ifdef __cplusplus
 }

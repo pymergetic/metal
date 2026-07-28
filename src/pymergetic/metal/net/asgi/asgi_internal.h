@@ -32,12 +32,12 @@
 #define CONFIG_PM_METAL_ASGI_APP_SLOTS 128
 #endif
 
-#define ASGI_PATH_MAX  ((uint32_t)CONFIG_PM_METAL_ASGI_PATH_MAX)
-#define ASGI_MOUNT_MAX ((uint32_t)CONFIG_PM_METAL_ASGI_MOUNT_MAX)
-#define ASGI_SRV_MAX   ((uint32_t)CONFIG_PM_METAL_ASGI_SRV_MAX)
-#define ASGI_HDR_MAX   ((uint32_t)CONFIG_PM_METAL_ASGI_HDR_MAX)
-#define ASGI_IO_MAX    PM_METAL_ASGI_IO_MAX
-#define ASGI_APP_SLOTS ((uint32_t)CONFIG_PM_METAL_ASGI_APP_SLOTS)
+#define ASGI_PATH_MAX      ((uint32_t)CONFIG_PM_METAL_ASGI_PATH_MAX)
+#define ASGI_MOUNT_MAX     ((uint32_t)CONFIG_PM_METAL_ASGI_MOUNT_MAX)
+#define ASGI_SRV_MAX       ((uint32_t)CONFIG_PM_METAL_ASGI_SRV_MAX)
+#define ASGI_HDR_MAX       ((uint32_t)CONFIG_PM_METAL_ASGI_HDR_MAX)
+#define ASGI_IO_MAX        PM_METAL_ASGI_IO_MAX
+#define ASGI_APP_SLOTS     ((uint32_t)CONFIG_PM_METAL_ASGI_APP_SLOTS)
 #define ASGI_CONN_SLOT_EST PM_METAL_ASGI_IO_MAX
 
 typedef struct {
@@ -58,16 +58,16 @@ typedef struct {
 } asgi_mount_t;
 
 typedef struct {
-  int32_t                 used;
-  uint32_t                port;
-  pm_metal_net_tls_creds_h    creds; /* owned by autoload; not closed per listen */
-  pm_metal_net_ip_sock_h     listen_sock;
-  pm_metal_async_handle_t coro;
-  pm_metal_async_handle_t task;
-  asgi_mount_t            mounts[ASGI_MOUNT_MAX];
-  char                    ifname[16]; /* empty = all */
-  uint32_t                keepalive_s;
-  uint32_t                budget_pct;
+  int32_t                  used;
+  uint32_t                 port;
+  pm_metal_net_tls_creds_h creds; /* owned by autoload; not closed per listen */
+  pm_metal_net_ip_sock_h   listen_sock;
+  pm_metal_async_handle_t  coro;
+  pm_metal_async_handle_t  task;
+  asgi_mount_t             mounts[ASGI_MOUNT_MAX];
+  char                     ifname[16]; /* empty = all */
+  uint32_t                 keepalive_s;
+  uint32_t                 budget_pct;
 } asgi_srv_t;
 
 typedef struct {
@@ -78,20 +78,20 @@ typedef struct {
 } asgi_cfg_mount_t;
 
 typedef struct {
-  int32_t              loaded;
-  uint32_t             port;
-  uint32_t             tls_port;
-  uint32_t             budget_pct;
-  uint32_t             keepalive_s;
-  char                 tls_cert[ASGI_PATH_MAX];
-  char                 tls_key[ASGI_PATH_MAX];
-  char                 tls_client_ca[ASGI_PATH_MAX];
+  int32_t                        loaded;
+  uint32_t                       port;
+  uint32_t                       tls_port;
+  uint32_t                       budget_pct;
+  uint32_t                       keepalive_s;
+  char                           tls_cert[ASGI_PATH_MAX];
+  char                           tls_key[ASGI_PATH_MAX];
+  char                           tls_client_ca[ASGI_PATH_MAX];
   pm_metal_net_tls_client_auth_t client_auth;
-  char                 realm[64];
-  pm_metal_auth_user_t users[PM_METAL_AUTH_USERS_MAX];
-  uint32_t             n_users;
-  asgi_cfg_mount_t     mounts[ASGI_MOUNT_MAX];
-  uint32_t             n_mounts;
+  char                           realm[64];
+  pm_metal_auth_user_t           users[PM_METAL_AUTH_USERS_MAX];
+  uint32_t                       n_users;
+  asgi_cfg_mount_t               mounts[ASGI_MOUNT_MAX];
+  uint32_t                       n_mounts;
 } asgi_httpd_cfg_t;
 
 asgi_app_slot_t *pm_metal_net_asgi_app_slot(pm_metal_net_asgi_app_h h);
@@ -105,13 +105,13 @@ int32_t pm_metal_net_asgi_dispatch_c(asgi_app_slot_t *slot,
                                      uint32_t         hdr_len);
 
 void pm_metal_net_asgi_conn_begin(pm_metal_net_ip_sock_h sock,
-                                  pm_metal_net_tls_h      tls,
-                                  const char         *method,
-                                  const char         *target,
-                                  const char         *mount_prefix,
-                                  const char         *static_root);
+                                  pm_metal_net_tls_h     tls,
+                                  const char            *method,
+                                  const char            *target,
+                                  const char            *mount_prefix,
+                                  const char            *static_root);
 
-void pm_metal_net_asgi_conn_set_keepalive(int32_t on);
+void    pm_metal_net_asgi_conn_set_keepalive(int32_t on);
 int32_t pm_metal_net_asgi_conn_keepalive(void);
 
 /** Active request header block for Py runner (NUL-terminated). */
@@ -134,7 +134,7 @@ void    pm_metal_net_asgi_budget_leave(void);
 
 int32_t pm_metal_net_asgi_ws_wanted(const char *hdr, uint32_t hdr_len);
 int32_t pm_metal_net_asgi_ws_handshake(const char *hdr, uint32_t hdr_len);
-int32_t pm_metal_net_asgi_ws_echo_frame(const uint8_t *in, uint32_t in_len, uint8_t *out,
-                                        uint32_t out_cap, uint32_t *out_len);
+int32_t pm_metal_net_asgi_ws_echo_frame(
+  const uint8_t *in, uint32_t in_len, uint8_t *out, uint32_t out_cap, uint32_t *out_len);
 
 #endif

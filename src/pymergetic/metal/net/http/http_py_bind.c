@@ -4,9 +4,9 @@
   and py_bind.c's dotted-path resolver — no extra plumbing needed for the
   nesting). Mirrors dns_last_ntoa's "await the op, then a separate sync
   call reads the last result" idiom: pm_metal_net_http_get's dest buffer
-  is one persistent lazily-allocated scratch buffer here (like py_zip.c's
-  own HTTP fetch buffer) — one GET in flight at a time is the intended
-  usage shape for a REPL-driven facade, not a connection pool.
+  is one persistent lazily-allocated scratch buffer — one GET in flight
+  at a time is the intended usage shape for a REPL-driven facade, not a
+  connection pool.
 **/
 #include <string.h>
 

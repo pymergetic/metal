@@ -17,7 +17,7 @@ allowed) — a pointer into util/doc.c's catalog (Part I), never pasted text.
 
 Output: src/pymergetic/metal/util/iface_syms.inc.c (generated — regenerated
 in place by every build, gitignored; same pattern as embed_mods.inc.c /
-iface_metal_guest_embed.inc.c / py_zip_embed.inc.c).
+iface_metal_guest_embed.inc.c).
 
 Usage: scripts/gen_iface_syms.py
 """

@@ -25,27 +25,27 @@ typedef uint32_t pm_metal_stream_h;
 /** PTY attrs (sync surface). Flag values match Linux termios for Dropbear. */
 #define PM_METAL_STREAM_NCCS 32u
 
-#define PM_METAL_STREAM_VINTR 0u
-#define PM_METAL_STREAM_VQUIT 1u
+#define PM_METAL_STREAM_VINTR  0u
+#define PM_METAL_STREAM_VQUIT  1u
 #define PM_METAL_STREAM_VERASE 2u
-#define PM_METAL_STREAM_VKILL 3u
-#define PM_METAL_STREAM_VEOF 4u
-#define PM_METAL_STREAM_VTIME 5u
-#define PM_METAL_STREAM_VMIN 6u
-#define PM_METAL_STREAM_VSUSP 10u
+#define PM_METAL_STREAM_VKILL  3u
+#define PM_METAL_STREAM_VEOF   4u
+#define PM_METAL_STREAM_VTIME  5u
+#define PM_METAL_STREAM_VMIN   6u
+#define PM_METAL_STREAM_VSUSP  10u
 
-#define PM_METAL_STREAM_ICRNL 0000400u
-#define PM_METAL_STREAM_IXON 0002000u
-#define PM_METAL_STREAM_OPOST 0000001u
-#define PM_METAL_STREAM_ONLCR 0000004u
-#define PM_METAL_STREAM_CS8 0000060u
-#define PM_METAL_STREAM_CREAD 0000200u
-#define PM_METAL_STREAM_HUPCL 0002000u
-#define PM_METAL_STREAM_ISIG 0000001u
+#define PM_METAL_STREAM_ICRNL  0000400u
+#define PM_METAL_STREAM_IXON   0002000u
+#define PM_METAL_STREAM_OPOST  0000001u
+#define PM_METAL_STREAM_ONLCR  0000004u
+#define PM_METAL_STREAM_CS8    0000060u
+#define PM_METAL_STREAM_CREAD  0000200u
+#define PM_METAL_STREAM_HUPCL  0002000u
+#define PM_METAL_STREAM_ISIG   0000001u
 #define PM_METAL_STREAM_ICANON 0000002u
-#define PM_METAL_STREAM_ECHO 0000010u
-#define PM_METAL_STREAM_ECHOE 0000020u
-#define PM_METAL_STREAM_ECHOK 0000040u
+#define PM_METAL_STREAM_ECHO   0000010u
+#define PM_METAL_STREAM_ECHOE  0000020u
+#define PM_METAL_STREAM_ECHOK  0000040u
 #define PM_METAL_STREAM_IEXTEN 0100000u
 
 typedef struct {
@@ -97,10 +97,18 @@ int               pm_metal_stream_pty(pm_metal_stream_h *master, pm_metal_stream
 uint32_t          pm_metal_stream_write(pm_metal_stream_h h, const void *ptr, uint32_t len);
 pm_metal_async_handle_t pm_metal_stream_read(pm_metal_stream_h h, void *ptr, uint32_t len);
 /** Host-only non-blocking read from ring (pipe/pty). 0 if empty. */
-uint32_t          pm_metal_stream_try_read(pm_metal_stream_h h, void *ptr, uint32_t len);
+uint32_t                pm_metal_stream_try_read(pm_metal_stream_h h, void *ptr, uint32_t len);
 pm_metal_async_handle_t pm_metal_stream_drain(pm_metal_stream_h h);
 void                    pm_metal_stream_close(pm_metal_stream_h h);
 int pm_metal_stdio_attach(pm_metal_stream_h in, pm_metal_stream_h out, pm_metal_stream_h err);
+
+/** PTY termios/winsize (shared by master+slave). 0 ok, -1 if not a PTY. */
+int pm_metal_stream_termios_get(pm_metal_stream_h h, pm_metal_stream_termios_t *out);
+int pm_metal_stream_termios_set(pm_metal_stream_h h, const pm_metal_stream_termios_t *in);
+int pm_metal_stream_winsize_get(pm_metal_stream_h h, pm_metal_stream_winsize_t *out);
+int pm_metal_stream_winsize_set(pm_metal_stream_h h, const pm_metal_stream_winsize_t *in);
+/** Bytes waiting in the stream's own RX ring (pipe/pty/uart). */
+uint32_t pm_metal_stream_pending(pm_metal_stream_h h);
 
 /** PTY termios/winsize (shared by master+slave). 0 ok, -1 if not a PTY. */
 int pm_metal_stream_termios_get(pm_metal_stream_h h, pm_metal_stream_termios_t *out);

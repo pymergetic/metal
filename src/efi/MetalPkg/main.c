@@ -294,6 +294,15 @@ UefiMain (
     if (pm_metal_esp_preload_tree ("mods/www") == 0) {
       pm_metal_log ("metal-esp: mods/www cached");
     }
+    (VOID)pm_metal_esp_preload ("etc/httpd.json");
+    (VOID)pm_metal_esp_preload ("etc/sshd.json");
+    (VOID)pm_metal_esp_preload ("etc/ssh/authorized_keys");
+    (VOID)pm_metal_esp_preload ("etc/ssh/dropbear_ed25519_host_key");
+    (VOID)pm_metal_esp_preload ("etc/httpd-cert.pem");
+    (VOID)pm_metal_esp_preload ("etc/httpd-key.pem");
+    if (pm_metal_esp_preload_tree ("mods/www") == 0) {
+      pm_metal_log ("metal-esp: mods/www cached");
+    }
     /* Kernel image + sig for the executing artifact only (METAL-006). */
     {
       CONST CHAR8  *loaded;
@@ -330,17 +339,21 @@ UefiMain (
     if (pm_metal_esp_preload_tree ("mods/py") == 0) {
       pm_metal_log ("metal-esp: mods/py cached");
     }
-    /* Guest httpd package + api/templates zips — same post-EBS rule: if it
-     * is not in the RAM cache, import/fs_size cannot see it after the
-     * SimpleFileSystem is gone (py:httpd ImportError). */
+    /* Product Python import roots (loose trees — same post-EBS cache rule). */
     if (pm_metal_esp_preload_tree ("mods/httpd") == 0) {
       pm_metal_log ("metal-esp: mods/httpd cached");
     }
-    if (pm_metal_esp_preload ("mods/api.zip") == 0) {
-      pm_metal_log ("metal-esp: mods/api.zip cached");
+    if (pm_metal_esp_preload_tree ("mods/api") == 0) {
+      pm_metal_log ("metal-esp: mods/api cached");
     }
-    if (pm_metal_esp_preload ("mods/templates.zip") == 0) {
-      pm_metal_log ("metal-esp: mods/templates.zip cached");
+    if (pm_metal_esp_preload_tree ("mods/templates") == 0) {
+      pm_metal_log ("metal-esp: mods/templates cached");
+    }
+    if (pm_metal_esp_preload_tree ("mods/microdot") == 0) {
+      pm_metal_log ("metal-esp: mods/microdot cached");
+    }
+    if (pm_metal_esp_preload_tree ("mods/utemplate") == 0) {
+      pm_metal_log ("metal-esp: mods/utemplate cached");
     }
   }
 

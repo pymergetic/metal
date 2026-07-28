@@ -167,10 +167,7 @@ uint32_t pm_metal_audio_queue(pm_metal_audio_stream_h s, const void *pcm, uint32
     if (vol == 0u) {
       memset(mVolScratch, 0, chunk);
     } else {
-      AudioScaleS16((const int16_t *)(src + placed),
-                    (int16_t *)mVolScratch,
-                    chunk / 2u,
-                    vol);
+      AudioScaleS16((const int16_t *)(src + placed), (int16_t *)mVolScratch, chunk / 2u, vol);
     }
 
     got = mOps->queue(s, mVolScratch, chunk);

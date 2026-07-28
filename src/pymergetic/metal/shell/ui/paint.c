@@ -725,7 +725,8 @@ static uint32_t MetalUiAudioPacked(void)
     vol = 100u;
   }
 
-  return ((pm_metal_audio_ready() ? 1u : 0u) << 9) | ((pm_metal_audio_muted() ? 1u : 0u) << 8) | vol;
+  return ((pm_metal_audio_ready() ? 1u : 0u) << 9) | ((pm_metal_audio_muted() ? 1u : 0u) << 8) |
+         vol;
 }
 
 static void MetalUiStatusSnapshot(uint32_t *clock_tod,
@@ -736,18 +737,18 @@ static void MetalUiStatusSnapshot(uint32_t *clock_tod,
                                   uint32_t *keyb,
                                   uint32_t *aud_packed)
 {
-  uint64_t             ms;
-  uint32_t             tod;
-  uint32_t             n;
-  uint32_t             i;
-  uint32_t             health;
+  uint64_t                ms;
+  uint32_t                tod;
+  uint32_t                n;
+  uint32_t                i;
+  uint32_t                health;
   pm_metal_net_ip_ifcfg_t cfg;
 
-  ms         = pm_metal_tz_local_ms();
-  tod        = (uint32_t)((ms / 1000ull) % 86400ull);
-  *clock_tod = (tod / 3600u) * 60u + ((tod % 3600u) / 60u);
-  *fps_hz    = pm_metal_gfx_fps();
-  *keyb      = pm_metal_input_keyb_get();
+  ms          = pm_metal_tz_local_ms();
+  tod         = (uint32_t)((ms / 1000ull) % 86400ull);
+  *clock_tod  = (tod / 3600u) * 60u + ((tod % 3600u) / 60u);
+  *fps_hz     = pm_metal_gfx_fps();
+  *keyb       = pm_metal_input_keyb_get();
   *aud_packed = MetalUiAudioPacked();
 
   n      = pm_metal_net_ip_if_count();
@@ -775,41 +776,41 @@ static void MetalUiStatusSnapshot(uint32_t *clock_tod,
 
 static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
 {
-  int32_t              clock_w;
-  int32_t              clock_x;
-  int32_t              fps_w;
-  int32_t              fps_x;
-  int32_t              keyb_w;
-  int32_t              keyb_x;
-  int32_t              aud_w;
-  int32_t              aud_x;
-  int32_t              tray_right;
-  int32_t              tray_w;
-  int32_t              tx;
-  int32_t              ty;
-  int32_t              left_max;
-  int32_t              fill_w;
-  uint32_t             n;
-  uint32_t             i;
-  uint32_t             fps_hz;
-  uint32_t             vol;
-  uint64_t             ms;
-  uint32_t             tod;
-  uint32_t             hour;
-  uint32_t             min;
-  char                 clock[8];
-  char                 fps[8];
-  char                 keyb[4];
-  const char          *keyb_name;
-  const char          *mute_lbl;
-  char                 left[STATUS_CHARS];
-  uintptr_t            left_n;
-  uintptr_t            fps_chars;
-  uintptr_t            keyb_chars;
-  uintptr_t            max_chars;
+  int32_t                 clock_w;
+  int32_t                 clock_x;
+  int32_t                 fps_w;
+  int32_t                 fps_x;
+  int32_t                 keyb_w;
+  int32_t                 keyb_x;
+  int32_t                 aud_w;
+  int32_t                 aud_x;
+  int32_t                 tray_right;
+  int32_t                 tray_w;
+  int32_t                 tx;
+  int32_t                 ty;
+  int32_t                 left_max;
+  int32_t                 fill_w;
+  uint32_t                n;
+  uint32_t                i;
+  uint32_t                fps_hz;
+  uint32_t                vol;
+  uint64_t                ms;
+  uint32_t                tod;
+  uint32_t                hour;
+  uint32_t                min;
+  char                    clock[8];
+  char                    fps[8];
+  char                    keyb[4];
+  const char             *keyb_name;
+  const char             *mute_lbl;
+  char                    left[STATUS_CHARS];
+  uintptr_t               left_n;
+  uintptr_t               fps_chars;
+  uintptr_t               keyb_chars;
+  uintptr_t               max_chars;
   pm_metal_net_ip_ifcfg_t cfg;
-  pm_metal_gfx_color_t fps_fg;
-  pm_metal_gfx_color_t rdy_fg;
+  pm_metal_gfx_color_t    fps_fg;
+  pm_metal_gfx_color_t    rdy_fg;
 
   pm_metal_gfx_fill_rect(w->x, w->y, w->w, w->h, COL_STATUS);
   pm_metal_gfx_bevel_rect(w->x, w->y, w->w, w->h, 0, COL_BEVEL_HI, COL_BEVEL_LO);
@@ -937,7 +938,7 @@ static void MetalUiPaintStatusBar(metal_ui_widget_t *w)
     rdy_fg = pm_metal_audio_ready() ? COL_LOG_OK : COL_LOG_FAIL;
     pm_metal_gfx_fill_rect(aud_x + 4, w->y + 9, 6, 6, rdy_fg);
 
-    mute_lbl = pm_metal_audio_muted() ? "M" : "A";
+    mute_lbl  = pm_metal_audio_muted() ? "M" : "A";
     mAudMuteX = aud_x + 4 + 6 + 4;
     mAudMuteW = UI_FONT_W + 4;
     pm_metal_gfx_draw_text(mAudMuteX,

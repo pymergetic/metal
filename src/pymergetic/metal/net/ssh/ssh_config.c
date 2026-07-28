@@ -11,21 +11,20 @@
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
 
-#define SSHD_JSON_PATH "/etc/sshd.json"
-#define SSHD_JSON_MAX  (4u * 1024u)
+#define SSHD_JSON_PATH    "/etc/sshd.json"
+#define SSHD_JSON_MAX     (4u * 1024u)
 #define SSH_AUTHKEYS_PATH PM_METAL_AUTH_PUBKEY_PATH
 
 /* Mirrors mods/etc/sshd.json (keep in sync). */
-static const char g_sshd_json_default[] =
-  "{\n"
-  "  \"port\": 22,\n"
-  "  \"budget_pct\": 10,\n"
-  "  \"auth\": {\n"
-  "    \"methods\": [\"passwd\", \"pubkey\"],\n"
-  "    \"client_ca\": \"\"\n"
-  "  },\n"
-  "  \"host_key\": \"/etc/ssh/dropbear_ed25519_host_key\"\n"
-  "}\n";
+static const char g_sshd_json_default[] = "{\n"
+                                          "  \"port\": 22,\n"
+                                          "  \"budget_pct\": 10,\n"
+                                          "  \"auth\": {\n"
+                                          "    \"methods\": [\"passwd\", \"pubkey\"],\n"
+                                          "    \"client_ca\": \"\"\n"
+                                          "  },\n"
+                                          "  \"host_key\": \"/etc/ssh/dropbear_ed25519_host_key\"\n"
+                                          "}\n";
 
 static pm_metal_sshd_cfg_t g_cfg;
 
@@ -37,10 +36,10 @@ pm_metal_sshd_cfg_t *pm_metal_net_ssh_cfg(void)
 static void cfg_defaults(void)
 {
   memset(&g_cfg, 0, sizeof(g_cfg));
-  g_cfg.port        = 22u;
-  g_cfg.budget_pct  = 10u;
-  g_cfg.auth_passwd = 1;
-  g_cfg.auth_pubkey = 1;
+  g_cfg.port         = 22u;
+  g_cfg.budget_pct   = 10u;
+  g_cfg.auth_passwd  = 1;
+  g_cfg.auth_pubkey  = 1;
   g_cfg.auth_sslcert = 0;
   snprintf(g_cfg.host_key, sizeof(g_cfg.host_key), "%s", "/etc/ssh/dropbear_ed25519_host_key");
 }
@@ -70,7 +69,7 @@ static const char *find_key(const char *json, const char *key)
   memcpy(pat + 1, key, klen);
   pat[1u + klen] = '"';
   pat[2u + klen] = '\0';
-  p = strstr(json, pat);
+  p              = strstr(json, pat);
   if (p == NULL) {
     return NULL;
   }
@@ -155,13 +154,12 @@ static void parse_json(const char *json)
 
 static int32_t ensure_authorized_keys_file(void)
 {
-  static const char seed[] =
-    "# Metal SSH authorized_keys (OpenSSH format).\n"
-    "# Add: ssh-ed25519 AAAA... comment\n"
-    "# Or:  user=alice ssh-ed25519 AAAA... comment\n"
-    "# Per-user: /etc/ssh/authorized_keys.d/<user>\n";
-  uint32_t sz;
-  uint32_t want;
+  static const char seed[] = "# Metal SSH authorized_keys (OpenSSH format).\n"
+                             "# Add: ssh-ed25519 AAAA... comment\n"
+                             "# Or:  user=alice ssh-ed25519 AAAA... comment\n"
+                             "# Per-user: /etc/ssh/authorized_keys.d/<user>\n";
+  uint32_t          sz;
+  uint32_t          want;
 
   (void)pm_metal_fs_mkdir("/etc");
   (void)pm_metal_fs_mkdir("/etc/ssh");
@@ -226,8 +224,11 @@ int32_t pm_metal_net_ssh_cfg_load(void)
   parse_json((const char *)buf);
   pm_metal_mem_free(buf);
   (void)pm_metal_auth_pubkey_reload();
-  pm_metal_logf("sshd: loaded %s port=%u passwd=%d pubkey=%d sslcert=%d", SSHD_JSON_PATH,
-                (unsigned)g_cfg.port, (int)g_cfg.auth_passwd, (int)g_cfg.auth_pubkey,
+  pm_metal_logf("sshd: loaded %s port=%u passwd=%d pubkey=%d sslcert=%d",
+                SSHD_JSON_PATH,
+                (unsigned)g_cfg.port,
+                (int)g_cfg.auth_passwd,
+                (int)g_cfg.auth_pubkey,
                 (int)g_cfg.auth_sslcert);
   return 0;
 }

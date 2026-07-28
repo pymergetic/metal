@@ -39,7 +39,7 @@
 #define BH_THREAD_DEFAULT_PRIORITY 7
 
 /* Single-thread stub types */
-typedef int             korp_tid;
+typedef int korp_tid;
 /* Real cross-AP lock (StartupAllAPs runs genuine parallel cores) -- WAMR's
  * shared globals (loading_module_list_lock, registered_module_list_lock,
  * etc.) rely on os_mutex_* actually excluding, not the single-thread stub

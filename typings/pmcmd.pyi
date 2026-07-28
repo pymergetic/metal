@@ -80,7 +80,7 @@ def iface(*args: Any) -> Any:
 
 iface | iface ls [pkg] | iface cat <pkg> <path> | iface sym [module [name]]
 
-Browse registered header packs (default metal.guest, see docs/IFACE.md) and the build-scraped native sym table. `iface` alone lists packages; `iface sym` with no args lists every native; doc_key (if set) points into `doc.lookup_key()`."""
+Browse registered packs (e.g. h@metal.guest, see docs/IFACE.md) and the build-scraped native sym table. `iface` alone lists packages; `iface sym` with no args lists every native; doc_key (if set) points into `doc.lookup_key()`."""
     ...
 
 def jobs(*args: Any) -> Any:

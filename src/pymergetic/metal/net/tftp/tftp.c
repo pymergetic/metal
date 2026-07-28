@@ -305,7 +305,8 @@ static pm_metal_status_t TftpStep(pm_metal_async_handle_t self_h)
       char       ipstr[64];
       ip4_addr_t a4;
 
-      if (pm_metal_net_ip_dns_last_ntoa(ipstr, sizeof(ipstr)) != 0 || ip4addr_aton(ipstr, &a4) == 0) {
+      if (pm_metal_net_ip_dns_last_ntoa(ipstr, sizeof(ipstr)) != 0 ||
+          ip4addr_aton(ipstr, &a4) == 0) {
         t->status = 4;
         t->step   = TFTP_STEP_DONE;
         break;

@@ -5,6 +5,7 @@
 #include <pymergetic/metal/guest/mod/mod.h> /* native_register + session_end */
 #include <pymergetic/metal/boot/authors.h>
 #include <pymergetic/metal/boot/externals.h>
+#include <pymergetic/metal/boot/externals.h>
 #include <pymergetic/metal/runtime/mem/limit.h>
 #include <pymergetic/metal/guest/process/process.h>
 #include <pymergetic/metal/dev/gfx/gfx.h>
@@ -284,9 +285,8 @@ int pm_metal_wasm_init(void)
       pm_metal_util_ascii_native_register() != 0 || pm_metal_util_size_native_register() != 0 ||
       pm_metal_util_ip_native_register() != 0 || pm_metal_host_native_register() != 0 ||
       pm_metal_authors_native_register() != 0 || pm_metal_externals_native_register() != 0 ||
-      pm_metal_mem_limit_native_register() != 0 ||
-      pm_metal_util_doc_native_register() != 0 || pm_metal_util_iface_native_register() != 0 ||
-      pm_metal_py_native_register() != 0) {
+      pm_metal_mem_limit_native_register() != 0 || pm_metal_util_doc_native_register() != 0 ||
+      pm_metal_util_iface_native_register() != 0 || pm_metal_py_native_register() != 0) {
     pm_metal_log("metal-wasm: native_register failed");
     wasm_runtime_destroy();
     pm_metal_mem_free(mPool);
@@ -294,7 +294,7 @@ int pm_metal_wasm_init(void)
     return -1;
   }
 
-  /* "metal.guest" (+ "mod.t8_multimod_lib") header packs — see
+  /* "h@metal.guest" (+ "h@mod.t8_multimod_lib") packs — see
    * util/iface.h's own file header; needs no wasm runtime state, just
    * needs to happen once before the first `iface`/pymergetic.metal.iface
    * access, same as pm_metal_pkg_init() above. ESP sidecars

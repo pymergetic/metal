@@ -10,13 +10,14 @@ lookup, sync/async mismatch guards, exception/cancel/OOM isolation, a
 generic `PM_METAL_PY_BIND` table, `pmcmd.*`/`pymergetic.metal.process`/
 `pymergetic.metal.mod` bindings, guest-visible resolve+call of a bound
 Python function (**sync and async**), isolated/`FRESH` mod instances from
-Python (and dual-ABI guest-to-guest), generated `.pyi` stubs, a signed +
-trust-checked + single-flight-HTTP-fetched `stdlib.zip` with a real ~25-module
-"Easy" pack, a persistent interactive **REPL** that's now the system's
-default boot shell, and genuine **task-local GC + true parallel bytecode**
-via opt-in isolated MicroPython contexts (own heap, own state, no shared
-lock) are all now real and boot-proofed (see [Implementation
-status](#implementation-status)). The former **async-engine hang** is
+Python (and dual-ABI guest-to-guest), generated `.pyi` stubs, a mandatory
+loose Easy stdlib under `/mods/py/stdlib` (ESP/PXE stage + iface pack
+`py@metal.stdlib`; no `stdlib.zip`), a persistent interactive **REPL**
+that's now the system's default boot shell, and genuine **task-local GC +
+true parallel bytecode** via opt-in isolated MicroPython contexts (own
+heap, own state, no shared lock) are all now real and boot-proofed (see
+[Implementation status](#implementation-status)). The former **async-engine
+hang** is
 root-caused and fixed (see
 [Resolved](#resolved--gc-stack-scan-boundary-captured-once-vs-resumed-cross-cpu)).
 The shared/default context (REPL, `py -c`, `py <script>` without `-x`) still
@@ -43,9 +44,9 @@ the ASGI `httpd` and Microdot surface) · [`LIBC_ASYNC.md`](LIBC_ASYNC.md) ·
 | Python ↔ Metal | **Both directions:** `metal.*` → C (bind table) and **C → Python** (call trampoline); same sync/async classes |
 | OS orchestration | Guest dual-ABI surface mirrored as a **nice `metal.*` package** — optional anytime, never required for boot |
 | Loadable natives | **Signed wasm/AOT**; self-register declares import name (no `metal.ext` ghetto); deny-list reserved — not `.so` / `dlopen` |
-| Modules | **frozen** minimal core; **signed zip+HTTP** stdlib pack; see below |
-| Import order | **builtin → frozen → aot → wasm → py** (same name); zip/ESP only supply aot/wasm/py — never beat builtin/frozen; **`metal` + verify stay frozen** |
-| Trust | Same story as mods ([`TRUST.md`](TRUST.md)): verify `.sig` **before** zip on `sys.path`; **fail closed** on bad/missing when enforce |
+| Modules | **frozen** minimal core; **loose** Easy stdlib on `/mods/py/stdlib` (+ iface `py@metal.stdlib`); see below |
+| Import order | **builtin → frozen → aot → wasm → py** (same name); ESP loose trees supply aot/wasm/py — never beat builtin/frozen; **`metal` stays frozen** |
+| Trust | Kernel + mods signing ([`TRUST.md`](TRUST.md)); stdlib rides that (no separate `stdlib.zip.sig`) |
 | Dual “kernel + wasm” Python engines | **No** — one blob, many callers |
 | Scheduler identity | **Python task = Metal task** — FCFS on N equal runners; no private Python loop, no CPU0 pin |
 | Interpreter lifetime | **One always-on µPy blob** — shell/`py` does **not** start a new VM; it spawns a **new task** on that machinery |
@@ -85,7 +86,7 @@ Host shell and C do the same without the import trampoline.
 ### Shell: `py`
 
 The interpreter blob is **brought up with the OS** (or on first use) and **stays
-up** — same MAP machinery, binds, zip mount, GC spaces.
+up** — same MAP machinery, binds, loose stdlib on `sys.path`, GC spaces.
 
 ```text
 py myscript.py                     # script path
@@ -299,7 +300,7 @@ mods/py/native/<pkg>/   (.py tree + .aot|.wasm +.sig)   # mixed package OK
 
 Firmware `pm_metal_*` binds stay in the image. Wasm/AOT natives are for **optional /
 updatable** surfaces (codecs, app glue, demos) that still want a C ABI and Python
-face. Pure-Python stays in the stdlib zip; heavy native work → loadable aot/wasm.
+face. Pure-Python stays in the Easy stdlib tree; heavy native work → loadable aot/wasm.
 
 **vs guest py jobs:** a normal guest *starts* Python in the core VM.
 A **native** *adds* callables *to* that VM. Same loader family, different role.
@@ -472,12 +473,12 @@ await metal.aio.sleep_us(…)
 - One **C → Py** natural fn (`PM_METAL_PY_FN` + sync/async call) over the trampoline.
 - Prove a third C function is “add a table row” — not new VM glue.
 - Package root **`metal.aio` only** for the sample — shaped like the tree; not a flat dump and not full `fs`/`net` yet.
-- **Sample zip** (tiny + `.sig`) so the loader integrates; fat pack later.
+- Easy stdlib on `/mods/py/stdlib` (mandatory; see below).
 - Later: one tiny signed native that self-registers as e.g. `sample` (not under `metal.ext`).
 
 ---
 
-## Modules — freeze vs zip vs HTTP
+## Modules — freeze vs loose ESP vs omit
 
 Three tiers (like libc async classes). Changing a row = rebuild policy, not a
 drive-by `require()`.
@@ -485,24 +486,23 @@ drive-by `require()`.
 | Tier | Meaning |
 |------|---------|
 | **frozen** | Baked into firmware (`manifest.py`). Fallback + non-overrideable core. |
-| **zip** | On ESP as a package (zipimport / `.mpy` tree). Update without flash. |
-| **http** | Same bytes as zip; seed from `:8080` / next-server when missing (+ `.sig` per trust mode). |
+| **loose** | `.py` trees on ESP/PXE under `/mods/...` (product + Easy stdlib). Update without flash. |
 | **omit** | Not in Metal v1 — no fake CPython stdlib. |
 
 **Rule:** freeze only what first `py` needs with empty ESP and no net, plus the
-trust/bridge surface that must not be replaceable from the pack. Everything else
-is **one stdlib zip** (ESP cache + HTTP fill). User scripts are separate
-files/zips, not the stdlib package.
+bridge surface that must not be replaceable from the pack. Easy stdlib is
+**mandatory** loose tree `mods/py/stdlib/` → guest `/mods/py/stdlib` on
+`sys.path` (also iface pack `py@metal.stdlib` for browse + BIOS materialize).
+Product Python is the same shape (`/mods/{httpd,api,...}`). No `stdlib.zip`.
 
 ### frozen (core)
 
 | Module / surface | Notes |
 |------------------|--------|
-| `metal` | Frozen package tree → guest dual-ABI / `pm_metal_*` — **never shadowed by zip**; orchestration face |
-| Verify / pack mount | Path that checks `.sig` and mounts the zip — stays in firmware / frozen |
+| `metal` | Frozen package tree → guest dual-ABI / `pm_metal_*` — **never shadowed by loose `.py`**; orchestration face |
 | Builtins / core VM | `micropython`, `gc`, `sys`, `errno`, `struct`, `array` (C builtins; not on `sys.path`) |
 | Tiny types | `collections` (minimal), `memoryview` / `array` as shipped by port |
-| Async kernel | Metal-shaped awaitables (`await` → Metal handles); zip `asyncio` is a name shim only |
+| Async kernel | Metal-shaped awaitables (`await` → Metal handles); loose `asyncio` is a name shim only |
 | `json` | Config / small RPC — cheap and always useful |
 | `binascii`, `hashlib` (if small) | Trust / hex / digests for scripts touching `.sig` paths |
 
@@ -510,29 +510,27 @@ Keep this list **short**. Prefer C extmod already in the µPy port over freezing
 large pure-Python. Anything frozen **wins** over aot/wasm/py of the same name —
 freeze only what must not be field-updated.
 
-### zip (+ http seed) — stdlib / libs package
+### loose — Easy stdlib (+ product trees)
 
-Served/staged like mods, e.g. `mods/py/stdlib.zip` (+ `.sig`).
-
-**Spike sample:** ship a **tiny** zip (one/two modules) so loader + trust +
-import order integrate; grow contents later. Do not block the spike on a fat
-micropython-lib pack.
+Staged like other mods: `mods/py/stdlib/` → `/mods/py/stdlib` (and
+`py@metal.stdlib` via `embed-iface.sh`). Product trees:
+`/mods/{httpd,api,templates,microdot,utemplate}/`.
 
 | Module / surface | Notes |
 |------------------|--------|
-| Sample stub(s) | Minimal non-frozen module(s) for import proof |
+| Easy pack | Full `mods/py/stdlib/` tree (see categorization below) |
 | `asyncio` (Metal shim) | `stdlib/asyncio/` — `sleep`/`Event`/`gather`/`create_task` over `pymergetic.metal.aio`; not a second event loop |
-| `ure` / `re` | Regex — optional for many scripts |
+| `ure` / `re` | Regex — C extmod + loose helpers |
 | `io`, `os` / `uos` façades | Thin; real FS is `metal` async |
 | `time` façades | Clocks sync; sleep → Metal async only |
 | `socket` façade | Must not block — wrap Metal net or omit until ready |
-| `ssl` / `requests`-like | Prefer Metal `http`/`net`; zip only if thin helpers |
+| `ssl` / `requests`-like | Prefer Metal `http`/`net`; loose helpers only if thin |
 | `logging`, `argparse`, `pathlib`-lite | Nice for apps; not boot-critical |
 | `unittest` / test helpers | Dev image / HTTP only |
 | Third-party micropython-lib | Explicit allowlist in package manifest |
 
-HTTP = same zip when ESP miss (blank metal). No second “online-only” module set
-unless a row says **http-only** below.
+ESP/PXE stage carries the loose tree (same as product Python). No second
+"online-only" module set unless a row says **http-only** below.
 
 ### micropython-lib categorization (Easy / Needs-glue / Defer)
 
@@ -867,37 +865,30 @@ thin async socket facade plus two cheap fs/stdlib polish items.
   `umqtt`/`requests`/`aiohttp` ports, no new VFS/mount table, no
   per-context CWD, no FS jail.
 
-### Reproducible `stdlib.zip` build — baked in, not tracked
+### Loose Easy stdlib — mandatory, no zip
 
-`mods/py/stdlib/` stages the **Easy** list's `.py` files (flat copy from
+`mods/py/stdlib/` holds the **Easy** list's `.py` files (flat copy from
 micropython-lib, one directory per module/package, small in-place fixes
 where the minimal build genuinely can't support the upstream line — see the
-deltas noted above; no other build-time transformation) — that's the real,
-git-tracked source of truth. `mods/py/build_stdlib_zip.sh` zips that tree
-deterministically (sorted filenames, fixed mtimes, `ZIP_STORED` via
-Python's own `zipfile` module — no external `zip` binary dependency, no
-host-path leakage) into `mods/py/stdlib.zip`, then `scripts/pki sign-wasm`
-produces `stdlib.zip.sig`.
+deltas noted above). That tree is the git-tracked source of truth.
 
-`mods/py/stdlib.zip` and `stdlib.zip.sig` themselves are **not** tracked in
-git (`.gitignore`) — the `.sig` in particular is never byte-stable across
-re-signs (ECDSA signing is randomized), so committing it would mean
-constant, meaningless diffs on every rebuild. Instead,
-`scripts/build.d/port/efi/embed-stdlib.sh` — run unconditionally by both
-`scripts/build.d/port/{efi,bios}/default.sh`, right alongside
-`embed-mods.sh`'s guest-wasm embed — calls `build_stdlib_zip.sh` and then
-embeds the freshly-built zip and signature bytes as two `static const
-uint8_t[]` arrays in a generated `src/pymergetic/metal/py/py_zip_embed.inc.c`
-(also gitignored, regenerated every build). `py_zip_embed.c` writes those
-bytes out to the real `PM_METAL_PY_STDLIB_ZIP` / `_SIG` filesystem paths
-once, at `pm_metal_py_init()` time, before anything else touches them — so
-`py_zip.c`'s trust-check/import machinery (`ZipVerifyLocal`, below) sees an
-ordinary signed file on "disk" and needs zero special-casing for the
-embedded case. Net effect: a fresh clone + fresh build always has a
-locally-signed `stdlib.zip` ready with no network fetch and nothing
-signature-shaped sitting in git history. Lazy HTTP fetch-on-miss
-(below) remains as a fallback for the (today hypothetical) case where the
-embedded write itself fails.
+Delivery (same shape as product Python; MicroPython is dysfunctional without
+it, so none of this is optional when iface C headers are on):
+
+1. **ESP/PXE stage** — `scripts/lib/stage-py-httpd.sh` copies the tree to
+   `mods/py/stdlib/` on the drop; EFI `preload_tree("mods/py")` caches it
+   before EBS.
+2. **Iface pack** — `embed-iface.sh` always bakes `py@metal.stdlib`
+   (lz4(ustar)) into `iface_metal_guest_embed.inc.c` for browse + BIOS
+   materialize.
+3. **`sys.path`** — `pm_metal_py_init_sys_path()` (`py_stdlib.c`) appends
+   `/mods` + `/mods/py/stdlib`. If the probe file is missing at
+   `pm_metal_py_init()`, `pm_metal_py_stdlib_ensure()` materializes files
+   from the iface pack (no separate `.sig`, no zip importer, no
+   `PY_STEP_ZIP` / HTTP fetch).
+
+Trust rides the signed kernel image and signed mods staging
+([`TRUST.md`](TRUST.md)) — not a dedicated `stdlib.zip.sig`.
 
 `PY_PROOF_STDLIB` (`boot_python.c`) imports **every** packed module (not a
 sample) and exercises one real call per module — `defaultdict` increments,
@@ -1022,33 +1013,17 @@ The four biggest items on the old Needs-glue list, closed in one pass:
   (`PY_PROOF_RE`); `re.escape`/lookahead/inline-flag support don't exist
   in re1.5, which is exactly why `textwrap` stays Needs-glue (above).
 
-### Trust (same as mods)
+### Trust
 
-Stdlib zip is a **Mods-CA** artifact — same PKI / modes as wasm packs
-([`TRUST.md`](TRUST.md)): `off` / `soft` / `enforce`.
+No separate stdlib signature path. Content is covered by:
 
-| Rule | Lock |
-|------|------|
-| When | Verify **before** the zip is put on `sys.path` |
-| Bad signature | **Fail closed** — do not mount; import fails |
-| Missing `.sig` | Per trust mode (enforce requires it; soft/off as mods) |
-| Keys | Same Mods CA pubs / `./scripts/pki` story as `mods/apps/*` |
+| Delivery | Trust |
+|----------|-------|
+| Baked into firmware (`py@metal.stdlib` via embed-iface) | Kernel / image signing |
+| Staged on ESP/PXE under `mods/py/stdlib/` | Same mods staging story as other loose trees ([`TRUST.md`](TRUST.md)) |
 
-Example artifact: `mods/py/stdlib.zip` + `stdlib.zip.sig` (build-time only —
-neither is tracked in git, see "baked in, not tracked" above; the trust
-check itself doesn't know or care that both were written from the embedded
-copy rather than fetched or hand-placed).
-
-### Lazy fetch (single-flight)
-
-On first miss (no usable ESP zip):
-
-1. One Metal task **fetches** stdlib zip (+ `.sig`) over HTTP (timeout + retry).
-2. Concurrent importers **async-wait** on that same handle — not N parallel downloads.
-3. Verify → cache to ESP → mount on `sys.path` → waiters resume import.
-4. Other Metal work keeps running while waiters are parked (same as any await).
-
-Failure after retries → normal `ImportError` (no half-mounted zip).
+Missing tree at runtime → import fails (`ImportError`); there is no HTTP
+zip fetch fallback.
 
 ### http-only (optional later)
 
@@ -1078,15 +1053,15 @@ For a given dotted name, always:
 2. frozen      firmware freeze / immortal
 3. aot         verified .aot native → self-register
 4. wasm        verified .wasm native → self-register
-5. py          .py / .mpy on ESP, zip, or script paths
+5. py          .py / .mpy on ESP loose trees or script paths
 6. fail
 ```
 
-Signed zip / `mods/py/native/` / HTTP seed only **provide** candidates for steps
-3–5. They do **not** outrank builtin or frozen. Mount zip only after trust check.
+ESP loose trees / `mods/py/native/` only **provide** candidates for steps 3–5.
+They do **not** outrank builtin or frozen.
 
-**`metal` + verify** stay frozen (or builtin-side) so packs cannot replace them.
-To make a module updatable without flash, **don’t freeze it** — ship aot/wasm/py
+**`metal`** stays frozen (or builtin-side) so packs cannot replace it.
+To make a module updatable without flash, **don't freeze it** — ship aot/wasm/py
 instead.
 
 ---
@@ -1167,7 +1142,7 @@ sidestep it by giving each task its **own** heap instead of sharing one.
 | Cross-task | No borrowed Python refs across tasks (shared↔isolated or isolated↔isolated); Metal handles / copies only |
 | Nursery GC | Isolated: `gc_collect()` on park, own heap only, invisible to the script. Shared: same synchronous-on-park behavior as before isolation existed |
 | "Compact" | **Dropped as a concept** — stock `gc.c` is mark-sweep; no cross-task barrier exists because no context shares a heap with another |
-| Bind reinstall | Opening an isolated context re-runs `pm_metal_py_binds_install()`/`pm_metal_py_pmcmd_install()`/`pm_metal_py_mod_install()`/`pm_metal_py_zip_init_sys_path()` against it (cheap — a linker-section walk, a few dozen `mp_store_attr`/`mp_obj_list_append` calls) — an isolated task gets `metal.*`/`pmcmd.*`/`mod.*` **and** its own `/mods/py` + `stdlib.zip` on `sys.path`, same as the shared context (`PY_PROOF_ISOLATED_STDLIB`); only `c_py_demo`'s one-off demo module stays shared-context-only (it is not stdlib, just a boot-proof fixture) |
+| Bind reinstall | Opening an isolated context re-runs `pm_metal_py_binds_install()`/`pm_metal_py_pmcmd_install()`/`pm_metal_py_mod_install()`/`pm_metal_py_init_sys_path()` against it (cheap — a linker-section walk, a few dozen `mp_store_attr`/`mp_obj_list_append` calls) — an isolated task gets `metal.*`/`pmcmd.*`/`mod.*` **and** its own `/mods` + `/mods/py/stdlib` on `sys.path`, same as the shared context (`PY_PROOF_ISOLATED_STDLIB`); only `c_py_demo`'s one-off demo module stays shared-context-only (it is not stdlib, just a boot-proof fixture) |
 | Caps | `pm_metal_py_isolated_ctx_count()`/`_bytes()` (`py.h`) — live count + total bytes of active isolated contexts, surfaced in the `mem` shell command's nested `py` line |
 
 Proven at boot by `PY_PROOF_PARALLEL` (`boot_python.c`): two isolated tasks,
@@ -1265,26 +1240,17 @@ breadth; this table is the **runtime core**.
 | Host tests | Link µPy + await proofs without full EFI where practical |
 | Hot replace | Zip remount / ext unload while tasks live — reject or barrier+drain |
 
-### Sample (enough to integrate the zip loader)
+### Sample (historical — zip loader era)
 
-Integration does **not** wait on full `metal.fs` / `net` / … coverage. Need a
-**thin sample** so the signed-zip path is real end-to-end:
-
-| Piece | Sample (spike) |
-|-------|----------------|
-| Binds | `metal.aio` only — e.g. `mono_us` (sync) + `sleep_us` / `yield_` (async) |
-| Stdlib zip | Tiny pack (one or two non-frozen modules, e.g. a stub `logging` or `ure`) + `.sig` |
-| Loader | ESP hit → mount (trust); miss → single-flight HTTP → verify → cache → mount; import order still builtin→frozen→aot→wasm→py |
-| Import proof | sample name from zip (py or native); `import metal` still frozen / unshadowable |
-| Scripts | One ESP `.py` that awaits `sleep_us` and imports the sample zip module |
-
-That is enough to lock trust, `sys.path` order, and single-flight. Rich zip and
-full orchestration tree come after.
+Integration spike originally used a tiny signed zip + HTTP fetch. That path
+is **gone**; current contract is mandatory loose `/mods/py/stdlib` (see
+[Loose Easy stdlib](#loose-easy-stdlib--mandatory-no-zip)). Remaining breadth
+work is orchestration surface / native self-register, not packaging.
 
 ### Breadth (after sample + core)
 
-Full `metal.fs` / `net` / …, fat stdlib zip, loadable exts, BIOS/i386 — same
-bring-up pattern as the rest of Metal; not blockers for “async integrated.”
+Full `metal.fs` / `net` / …, loadable exts, BIOS/i386 — same bring-up pattern
+as the rest of Metal; not blockers for "async integrated."
 
 ---
 
@@ -1295,8 +1261,8 @@ bring-up pattern as the rest of Metal; not blockers for “async integrated.”
 3. ~~Two Python tasks overlapping awaits; equal runners (no CPU0 pin); `yield` fairness path.~~ **done** (boot proofs; run-lock, not true parallel bytecode — see task-local GC)
 4. ~~Guest binding: wasm import that starts a py job + `await` completion (proof mod).~~ **done** (`mods/tests/async_py`)
 5. ~~Task-local spaces (or staged path to them) + cancel/isolation; note blob size vs Doom HEAP.~~ **done** — cancel/isolation (`PY_PROOF_EXC`/`CANCEL`/`OOM`) plus genuine task-local GC spaces via opt-in isolated MicroPython contexts (`py_ctx.c`, `PY_PROOF_PARALLEL`); see [Concurrency](#concurrency--same-schematic-as-metal-async).
-6. ~~**Sample zip loader:** tiny signed `stdlib.zip` + frozen `metal.aio`; ESP/HTTP single-flight; import proof + one script.~~ **done** — `stdlib.zip` + `.sig`, trust-checked, single-flight HTTP fetch on ESP miss, import-unshadowable regression proof (`PY_PROOF_SHADOW`)
-7. ~~Same bring-up on **BIOS / i386** as any other Metal feature (not a separate product decision).~~ **done** — `py/py.c` links into both `scripts/build.d/port/efi/default.sh` and `.../port/bios/default.sh`; `stdlib.zip` stages into both ESP and PXE trees
+6. ~~**Stdlib on sys.path:** signed zip loader, then streamlined to loose tree.~~ **done** — mandatory `/mods/py/stdlib` + iface `py@metal.stdlib`; import-unshadowable regression proof (`PY_PROOF_SHADOW`); no zip importer
+7. ~~Same bring-up on **BIOS / i386** as any other Metal feature (not a separate product decision).~~ **done** — `py/py.c` links into both `scripts/build.d/port/efi/default.sh` and `.../port/bios/default.sh`; loose stdlib stages into both ESP and PXE trees
 8. ~~Generic bind table (linker-section rows); `pymergetic.metal.*` naming consistently everywhere (guest imports and Python module tree); `pmcmd.*` short-name exception for shell commands; `pymergetic.metal.process`/`pymergetic.metal.mod` bindings; guest-visible resolve+call of a bound Python function (sync **and async**).~~ **done**
 
 ---
@@ -1324,7 +1290,7 @@ not deleted — it's the explicit, always-reachable fallback.
 
 | Piece | Where | What |
 |-------|-------|------|
-| Persistent REPL task | `py.c`'s `PY_STEP_REPL` job state, `pm_metal_py_repl_start/_stop/_active/_feed_line/_prompt` (`py.h`) | One long-lived job on the shared/default context (never isolated — needs one persistent `globals` dict across every line, which the shared context already gives for free). Multi-line block detection is real `mp_repl_continue_with_input` (`MICROPY_HELPER_REPL` flipped on in `py/embed/mpconfigport.h`, Metal-owned, no patch needed), not a hand-rolled approximation — see the "join without a trailing newline, check-then-append" note in `py.c` if touching this again; getting that backwards silently breaks every `def`/`if`/`for`/`while`/`with`/`try`/`class` block after line one. Deliberately spawns straight into `PY_STEP_REPL`, bypassing `PY_STEP_ZIP` (same call shape as `pm_metal_py_fn_call_async_bound`) — `stdlib.zip`'s HTTP-fetch-then-cache is a shared-context-global one-time cost with observed multi-second worst case; whichever job resolves it first mutates `sys.path` for every shared-context job after it, REPL included, so the REPL doesn't need to trigger or await it itself. |
+| Persistent REPL task | `py.c`'s `PY_STEP_REPL` job state, `pm_metal_py_repl_start/_stop/_active/_feed_line/_prompt` (`py.h`) | One long-lived job on the shared/default context (never isolated — needs one persistent `globals` dict across every line, which the shared context already gives for free). Multi-line block detection is real `mp_repl_continue_with_input` (`MICROPY_HELPER_REPL` flipped on in `py/embed/mpconfigport.h`, Metal-owned, no patch needed), not a hand-rolled approximation — see the "join without a trailing newline, check-then-append" note in `py.c` if touching this again; getting that backwards silently breaks every `def`/`if`/`for`/`while`/`with`/`try`/`class` block after line one. Deliberately spawns straight into `PY_STEP_REPL`, bypassing `PY_STEP_BOOT` autoload (same call shape as `pm_metal_py_fn_call_async_bound`) — stdlib is already on `sys.path` from `pm_metal_py_init()`. |
 | Line source | `shell.c`'s committed-line path (Enter handler) | Producer/consumer single-slot mailbox (`mReplLineBuf`/`mReplLineReady` in `py.c`) — `pm_metal_py_repl_feed_line()` is the only producer, the REPL job the only consumer; SPSC handoff needs no CAS on this x86/x86_64-only target (plain write-then-flag / read-flag-then-read under TSO). `pm_metal_py_repl_feed_line()` returns -1 ("busy") if the previous line isn't drained yet — practically never hit at human typing speed against the REPL's 2 ms idle-poll, and `shell.c` prints `repl: busy, try again` rather than silently dropping the line if it ever is. |
 | Prompt | `pm_metal_shell_prompt`/`MetalShellPromptAnsi` (`shell.c`) query `pm_metal_py_repl_active()`/`_prompt()` live | `>>> ` fresh statement, `... ` mid multi-line block — magenta, visually distinct from the C shell's green/blue prompt. **Deferred, not synchronous**: `feed_line()` only enqueues; the actual `>>> ` vs `... ` decision is made by the REPL job on its own next scheduler tick, not inside the Enter handler. Printing the prompt synchronously right after `feed_line()` would show the *previous* tick's stale value (e.g. `>>> ` right after typing `def f():`, before the engine noticed it needs `... `) — the Enter handler instead sets `mPromptPending` and lets the next `pm_metal_shell_poll()` tick (which runs after, not before, the async engine gets a turn) draw the prompt the line just produced. |
 | `console()` escape | `shell.c`'s Enter handler, `PyReplIsQuitCall()` | Typing `console()` at `>>> ` calls `pm_metal_py_repl_stop()` and falls back to the normal C command dispatcher — `help`, `mem`, `py -f ...`, everything, unchanged. `quit()`/`exit()` are accepted as aliases — CPython/IPython's "how do I leave this REPL" muscle memory, which would otherwise just `NameError` since MicroPython defines no `quit`/`exit` sentinel objects. Call syntax only (`console()`, not bare `console`) — a bare word is ordinary (buggy) Python source, not a command, and real Python has no bare-word statement that invokes anything, so this doesn't quietly special-case what would otherwise be a `NameError`. `py -i` (see `py_shell.c`) resumes the same persistent REPL job's globals — nothing is lost switching back and forth. |
@@ -1456,16 +1422,16 @@ overclaimed.
 - [x] C → Py trampoline: sync `pm_metal_py_call` + async `pm_metal_py_fn_call_async_bound` (await handle) — used by `py -f mod.fn` in the shell and the `c_py_demo` module seeded at init; plus a guest-visible dual-ABI handle trio (`pm_metal_py_fn_resolve`/`_call`/`_call_async`, see [Guest-visible call trampoline](#guest-visible-call-trampoline-dual-abi-handle-trio)) — **both sync and async boot-proofed** (`mods/tests/async_py/main.c`), the async path now unblocked by the [GC stack-scan boundary fix](#resolved--gc-stack-scan-boundary-captured-once-vs-resumed-cross-cpu)
 - [x] Isolated/`FRESH` mod instances from Python — a mod-proxy's `.fresh` attribute (`mod_py_bind.c`) returns a callable that opens a fresh scope object; `async with mod.<name>.fresh() as inst:` works via MicroPython's generic attribute dispatch resolving `__aenter__`/`__aexit__` (no separate context-manager protocol needed), then per-function bound calls scoped to that handle (`await inst.fn(...)`); refuses (raises) on a `SINGLE`-capability mod. The underlying `pm_metal_mod_fresh_open`/`_resolve`/`_close` trio (`mod.c`, extracted out of `pm_metal_mod_fn_process`) is declared **dual-ABI** in `mod.h`, closing the asymmetry where `FRESH` used to be host-only — a wasm guest can now open a `FRESH` instance of another mod too. Boot-proofed from Python (two concurrent scopes don't share state, `mods/tests/fresh_counter/main.c`) and from a wasm guest-to-guest call (`mods/tests/fresh_guest/main.c`)
 - [x] Mod lifecycle from Python — `mod.<name>.load()` / `.unload()` / `.ready()` map to `pm_metal_mod_load`/`unload`/`ready` (shared instance 0, no process). Shell mirrors: `load` / `unload` / `mods`. MULTI apps (e.g. Doom): play via `fresh()` or `pmcmd` / `run`|`tab`, not bare `await mod.doom.run()` on instance 0.
-- [x] Public host-only value facade `py_obj.h`/`py_obj.c` (`pm_metal_py_obj_t` + int/str/dict/tuple/error helpers, plus the awaitable bridge `pm_metal_py_new_awaitable`/`_new_awaitable_u32` in `py_await.c`) — lets C code outside `py/` build/read Python values without including MicroPython's own headers. Each `pymergetic.metal.*` bind file now lives next to the subsystem it wraps instead of inside `py/`: `runtime/async/async_py_bind.c` (`aio`), `guest/process/process_py_bind.c` (`process`, fully facade-only — no MicroPython headers at all), `guest/mod/mod_py_bind.c` (`mod` — keeps real MicroPython headers for its lazy-attr custom types, the one part a facade can't cheaply abstract), `shell/shell/shell_py_bind.c` (`pmcmd`). `py/` itself keeps only core VM machinery (`py.c`, `py_bind.c`, `py_obj.c`, `py_await.c`, `py_shell.c`, `py_zip.c`, `py_guest.c`)
+- [x] Public host-only value facade `py_obj.h`/`py_obj.c` (`pm_metal_py_obj_t` + int/str/dict/tuple/error helpers, plus the awaitable bridge `pm_metal_py_new_awaitable`/`_new_awaitable_u32` in `py_await.c`) — lets C code outside `py/` build/read Python values without including MicroPython's own headers. Each `pymergetic.metal.*` bind file now lives next to the subsystem it wraps instead of inside `py/`: `runtime/async/async_py_bind.c` (`aio`), `guest/process/process_py_bind.c` (`process`, fully facade-only — no MicroPython headers at all), `guest/mod/mod_py_bind.c` (`mod` — keeps real MicroPython headers for its lazy-attr custom types, the one part a facade can't cheaply abstract), `shell/shell/shell_py_bind.c` (`pmcmd`). `py/` itself keeps only core VM machinery (`py.c`, `py_bind.c`, `py_obj.c`, `py_await.c`, `py_shell.c`, `py_stdlib.c`, `py_guest.c`)
 - [x] `metal.*` package mirrors guest areas — `pymergetic.metal.aio` (`mono_us`/`sleep_us`/`yield_`), `pymergetic.metal.process` (`poll`/`active`/`current`/`info`), `pymergetic.metal.mod` (attribute-based, lazy-resolved access to any loaded mod's registered functions — `mod.<name>.<func>(...)`, `AttributeError` on a bad name, awaitable result via `pm_metal_py_new_awaitable_u32`), and the short `pmcmd.<name>(*args)` exception (shell commands as Python callables) — all boot-proofed (`PY_PROOF_PMCMD`, `PY_PROOF_MOD`). Naming is consistently `pymergetic.metal.*` everywhere except `pmcmd.*` (the one deliberate short-name exception); orchestration optional (nothing on the boot path imports it)
 - [x] Multi-level dotted name resolution (`pymergetic.metal.aio.sleep_us`, 3+ segments) — `pm_metal_py_lookup` (`py.c`) walks each dot-separated segment with its own `mp_load_attr`, fixing a bug where only the first segment split correctly; boot-proofed (`PY_PROOF_DOTTED`)
 - [x] `.pyi` type stubs for editor/linter support — **generated**, not hand-written: `scripts/gen_py_stubs.py` parses `PM_METAL_PY_BIND` call sites (→ `typings/pymergetic/metal/**.pyi`), `PM_METAL_SHELL_CMD`/`PM_METAL_SHELL_CMDS` call sites (→ `typings/pmcmd.pyi`, docstring = the row's `help_str`), and `pm_metal_mod_register_func` call sites under `mods/**` (→ one stub class per in-tree mod, best-effort — mods loaded at runtime and absent from `mods/**` at build time get no stub); wired into both `scripts/build.d/port/{efi,bios}/default.sh` so stubs regenerate on every build
-- [x] **Signed stdlib zip**: `mods/py/stdlib.zip` + `.sig` (signed via `scripts/pki sign-wasm`, which turned out generic enough for an arbitrary blob — no `sign-file` subcommand needed), verified via `pm_metal_trust_accept_mods` against `METAL_TRUST_MODE`; `pm_metal_py_zip_ensure()` is now a coroutine-backed step (`pm_metal_py_zip_step`, its own `PY_STEP_ZIP` ahead of every job's real first step in `py.c`) so it can `await` an HTTP fetch on ESP miss instead of blocking `py_spawn`; single-flight fetch (one leader task awaits `pm_metal_net_http_get` directly, follower tasks poll the shared state via `pm_metal_async_yield()` — `pm_metal_await`'s single-waiter limitation rules out every task awaiting the same handle directly). `pymergetic`/`pymergetic.metal`/`pymergetic.metal.aio` are pre-registered into `mp_loaded_modules_dict` at init, so they're structurally unshadowable by any same-named `.py` — regression-proofed with a decoy `pmcmd.py` written to `/mods/py/` at runtime (`PY_PROOF_SHADOW`, `boot_python.c`) asserting the C module's own attribute wins. Enforced `builtin→frozen→aot→wasm→py` import order across *all* categories is not separately implemented (MicroPython's own `mp_loaded_modules_dict` precedence already covers the one case that matters — C modules over zip `.py` files)
+- [x] **Mandatory loose Easy stdlib** — `mods/py/stdlib/` staged to `/mods/py/stdlib` on `sys.path` (`py_stdlib.c`); iface pack `py@metal.stdlib` always baked with embed-iface (materialize on BIOS/miss); no `stdlib.zip` / zip importer / HTTP fetch. `pymergetic`/`pymergetic.metal`/`pymergetic.metal.aio` are pre-registered into `mp_loaded_modules_dict` at init, so they're structurally unshadowable by any same-named `.py` — regression-proofed with a decoy `/mods/pmcmd.py` (`PY_PROOF_SHADOW`, `boot_python.c`). MicroPython's `mp_loaded_modules_dict` precedence covers C modules over loose `.py`
 - [x] Task-local GC spaces + true parallel bytecode — opt-in isolated MicroPython contexts (`py_ctx.c`/`py_ctx.h`, per-CPU `mp_state_ctx` indirection patched into vendored `py/mpstate.h` via `patches/micropython/0001-metal-percpu-state-ctx.patch`): each isolated context owns its own MAP-carved GC heap + its own `mp_state_ctx_t`, no shared run-lock, `gc_collect()` on its own disjoint heap at park; `pm_metal_py_run_str_isolated`/`_run_script_isolated` (`py.h`), `py -x` shell flag, `mem`'s nested `py` line shows isolated-context count/bytes; boot-proofed disjoint-heap + concurrent-execution under `-smp 4` (`PY_PROOF_PARALLEL`). Shared/default context (unopted-in `py -c`/`py <script>`/the REPL) keeps the original run-lock-serialized behavior unchanged — see [Concurrency](#concurrency--same-schematic-as-metal-async)
 - [x] Persistent Python REPL as the system's main interactive shell — see the dedicated [Python REPL as the system's main shell](#python-repl-as-the-systems-main-shell) section; boot spawns it after `BOOT_READY`, C console dispatcher stays reachable via the `console()` escape call
-- [x] Real "Easy" stdlib pack (not a 1-file sample) — ~27 pure-Python micropython-lib modules in `mods/py/stdlib/` (`collections`+`defaultdict`, `heapq`, `bisect`, `functools`, `itertools`, `contextlib`+`ucontextlib`, `copy`, `struct`, `string`, `pprint`, `operator`, `types`, `warnings`, `errno`, `keyword`, `abc`, `quopri`, `html`, `argparse`, `stat`, `pickle`, `inspect`, `traceback`, `logging`, `base64`, `fnmatch`) + Metal's own `os`/`os.path`/`io` (written directly against `pymergetic.metal.fs`, not upstream `.py`) + four C extmods (`binascii`, `random`, `hashlib`, `re` — each needed its own build-system fix, not part of upstream's embed package at all, see [the extmods + os/io section](#random-hashlib-osio-re--three-c-extmods-one-own-pair)); `mods/py/build_stdlib_zip.sh` is a real reproducible build step (Python's own `zipfile`, `ZIP_STORED`, sorted/deterministic); `PY_PROOF_STDLIB`/`PY_PROOF_RANDOM`/`PY_PROOF_HASHLIB`/`PY_PROOF_OSIO`/`PY_PROOF_RE` import and exercise every packed module, not a 3-module sample. Second pass ([micropython-lib categorization](#micropython-lib-categorization-easy--needs-glue--defer)) needed two more self-contained grammar/builtin flag flips (`MICROPY_PY_SYS_EXC_INFO`, `MICROPY_PY_BUILTINS_STR_OP_MODULO`) plus small in-place deltas to `logging.py`/`traceback.py`/`pickle.py` (drop `time`/`io`/`sys.stderr`/bytes-encode dependencies this build doesn't have). Third pass closed `random`/`hashlib`/`os`/`io`/`re` (a `urandom`-seed C bind, a native SHA256 extmod, five new sync `pm_metal_fs` wrappers + two own `.py` files, and `modre.c`+`lib/re1.5` respectively — including a real pre-existing bug fix in `pm_metal_esp_write_at()`, see the extmods section) and, once `re` existed, `base64`/`fnmatch` promoted too with zero source changes (`MICROPY_PY_BUILTINS_BYTEARRAY` for `base64`); `textwrap`/`hmac`/`uu` stayed in Needs-glue, each for a specific, now-documented reason (re1.5 feature gap / `property` builtin / binascii has no uu functions at all)
-- [x] Isolated-context ergonomics — isolated MicroPython contexts import from `stdlib.zip` too, not just `pymergetic.metal`/`pmcmd`/`mod`: `pm_metal_py_ctx_create` (`py_ctx.c`) now calls `pm_metal_py_zip_init_sys_path()` against the fresh context right after `mp_embed_init`, appending `/mods/py` + `stdlib.zip` to *that context's own* `mp_sys_path` (a genuine per-context root pointer, `MP_STATE_VM(sys_mutable[...])` — unlike `sys.argv`/`sys.modules`, it was never one of the static-initializer globals pinned to the shared context, so each context just needed its own copy of the same append call). `py_job_step`'s `PY_STEP_ZIP` no longer special-cases isolated jobs — `pm_metal_py_zip_step` is pure C (fs/http/trust, no `mp_obj_t` touch) and both context kinds now share the same one-fetch-total `g_zip_state`, so both wait on it the same way. Boot-proofed end to end (`PY_PROOF_ISOLATED_STDLIB`: an isolated task imports and exercises `heapq`)
-- [x] Fatter stdlib zip — `time`/`datetime`/`hmac`/`zlib`/`gzip`/`pathlib`/`shutil`/`tempfile`/`tarfile`/`unittest`/`textwrap`/`uu` all shipped (see [Second Needs-glue pass](#second-needs-glue-pass)); `ssl` shipped too, as a genuinely Metal-flavored `pymergetic.metal.tls` async TCP+TLS client, not a CPython `ssl` shim; `threading`/`_thread` deliberately, permanently not shimmed (see above) — real gaps left: full `metal.fs`/`net`/… stdlib-shaped orchestration, native self-register (`import sample`)
-- [x] `pymergetic.metal.doc`/`pymergetic.metal.iface` — read-only catalogs, not new stores: `doc.lookup`/`lookup_key`/`list`/`help` walk the shell live table + `PY_BIND`/`PY_BIND_DOC` linker section + mod `register_func_doc` records (same `summary`/`sig`/`body` fields `pmcmd.<name>.__doc__` and `fs.open.__doc__` already surface); `iface.info`/`list`/`read`/`sym` walk the lz4(ustar) header packs (`metal.guest`, `mod.t8_multimod_lib`) and the build-scraped `NativeSymbol[]` sym table, so a guest can browse its own ABI surface from Python without a second hand-written sig list — see docs/DOC_IFACE_PLAN.md and docs/IFACE.md
+- [x] Real "Easy" stdlib pack (not a 1-file sample) — ~27 pure-Python micropython-lib modules in `mods/py/stdlib/` (`collections`+`defaultdict`, `heapq`, `bisect`, `functools`, `itertools`, `contextlib`+`ucontextlib`, `copy`, `struct`, `string`, `pprint`, `operator`, `types`, `warnings`, `errno`, `keyword`, `abc`, `quopri`, `html`, `argparse`, `stat`, `pickle`, `inspect`, `traceback`, `logging`, `base64`, `fnmatch`) + Metal's own `os`/`os.path`/`io` (written directly against `pymergetic.metal.fs`, not upstream `.py`) + four C extmods (`binascii`, `random`, `hashlib`, `re` — each needed its own build-system fix, not part of upstream's embed package at all, see [the extmods + os/io section](#random-hashlib-osio-re--three-c-extmods-one-own-pair)); staged loose + iface `py@metal.stdlib`; `PY_PROOF_STDLIB`/`PY_PROOF_RANDOM`/`PY_PROOF_HASHLIB`/`PY_PROOF_OSIO`/`PY_PROOF_RE` import and exercise every packed module, not a 3-module sample. Second pass ([micropython-lib categorization](#micropython-lib-categorization-easy--needs-glue--defer)) needed two more self-contained grammar/builtin flag flips (`MICROPY_PY_SYS_EXC_INFO`, `MICROPY_PY_BUILTINS_STR_OP_MODULO`) plus small in-place deltas to `logging.py`/`traceback.py`/`pickle.py` (drop `time`/`io`/`sys.stderr`/bytes-encode dependencies this build doesn't have). Third pass closed `random`/`hashlib`/`os`/`io`/`re` (a `urandom`-seed C bind, a native SHA256 extmod, five new sync `pm_metal_fs` wrappers + two own `.py` files, and `modre.c`+`lib/re1.5` respectively — including a real pre-existing bug fix in `pm_metal_esp_write_at()`, see the extmods section) and, once `re` existed, `base64`/`fnmatch` promoted too with zero source changes (`MICROPY_PY_BUILTINS_BYTEARRAY` for `base64`); `textwrap`/`hmac`/`uu` stayed in Needs-glue, each for a specific, now-documented reason (re1.5 feature gap / `property` builtin / binascii has no uu functions at all)
+- [x] Isolated-context ergonomics — isolated MicroPython contexts import from `/mods/py/stdlib` too, not just `pymergetic.metal`/`pmcmd`/`mod`: `pm_metal_py_ctx_create` (`py_ctx.c`) calls `pm_metal_py_init_sys_path()` against the fresh context right after `mp_embed_init`, appending `/mods` + `/mods/py/stdlib` to *that context's own* `mp_sys_path`. Boot-proofed end to end (`PY_PROOF_ISOLATED_STDLIB`: an isolated task imports and exercises `heapq`)
+- [x] Fatter Easy stdlib — `time`/`datetime`/`hmac`/`zlib`/`gzip`/`pathlib`/`shutil`/`tempfile`/`tarfile`/`unittest`/`textwrap`/`uu` all shipped (see [Second Needs-glue pass](#second-needs-glue-pass)); `ssl` shipped too, as a genuinely Metal-flavored `pymergetic.metal.tls` async TCP+TLS client, not a CPython `ssl` shim; `threading`/`_thread` deliberately, permanently not shimmed (see above) — real gaps left: full `metal.fs`/`net`/… stdlib-shaped orchestration, native self-register (`import sample`)
+- [x] `pymergetic.metal.doc`/`pymergetic.metal.iface` — read-only catalogs, not new stores: `doc.lookup`/`lookup_key`/`list`/`help` walk the shell live table + `PY_BIND`/`PY_BIND_DOC` linker section + mod `register_func_doc` records (same `summary`/`sig`/`body` fields `pmcmd.<name>.__doc__` and `fs.open.__doc__` already surface); `iface.info`/`list`/`read`/`sym` walk the lz4(ustar) packs (`h@metal.guest`, `h@mod.t8_multimod_lib`, …) and the build-scraped `NativeSymbol[]` sym table, so a guest can browse its own ABI surface from Python without a second hand-written sig list — see docs/DOC_IFACE_PLAN.md and docs/IFACE.md
 - [x] HTTP UI over those catalogs — `mods/httpd/` package (`import httpd`, Microdot + utemplate) serves HTML at `/`, `/docs…`, `/iface…` and JSON at `/api/doc*`, `/api/iface*` (CSS: `mods/www/doc.css`); live smoke `scripts/verify.d/port/efi/doc-iface-smoke.sh`
 - [x] `pymergetic.metal.net`/`net.http`, real on-disk `io.IOBase` streams, `json` — see [Network + FS/IO polish](#network--fsio-polish-pymergeticmetalnet-ioiobase-json): offline-safe loopback `PY_PROOF_NET` (listen/accept/connect/send/recv/dns), `gzip.open()` now wraps a real file (checkpointed inside `PY_PROOF_ARCHIVE`), `json.dumps`/`loads` checkpointed inside `PY_PROOF_FSMOD`. Deliberately not shimmed: CPython `socket`/`select`, `umqtt`/`requests`/`aiohttp`, any new VFS/mount table/per-context CWD/FS jail

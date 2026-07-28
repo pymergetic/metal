@@ -91,3 +91,36 @@ footer {
 .pager-links span {
   margin-right: 0.85rem;
 }
+details.iface-mod {
+  margin: 0.35rem 0;
+  border: 1px solid var(--border);
+  background: #fffef9;
+}
+details.iface-mod > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.45rem 0.65rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+details.iface-mod > summary::-webkit-details-marker { display: none; }
+details.iface-mod > summary::before {
+  content: "+";
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--muted);
+  width: 1rem;
+}
+details.iface-mod[open] > summary::before { content: "-"; }
+details.iface-mod > summary code {
+  font-size: 0.95rem;
+}
+details.iface-mod .iface-packs {
+  margin: 0;
+  border-top: 1px solid var(--border);
+}
+details.iface-mod .iface-packs th {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 600;
+}

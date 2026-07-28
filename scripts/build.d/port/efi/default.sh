@@ -62,6 +62,11 @@ python3 "${ROOT}/scripts/gen_iface_syms.py"
 source "${ROOT}/scripts/lib/efi_inf.sh"
 pm_metal_efi_inf_generate "${ROOT}"
 
+# Metal.inf / DropbearGlue.inf from *.inf.tpl (gitignored; abs ROOT baked in).
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/efi_inf.sh"
+pm_metal_efi_inf_generate "${ROOT}"
+
 # MicroPython embed package (port-neutral sources under build/micropython_embed).
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/micropython.sh"
@@ -92,9 +97,7 @@ while i < len(lines):
             "src/pymergetic/metal/py/py_await.c",
             "src/pymergetic/metal/py/py_shell.c",
             "src/pymergetic/metal/py/py_autoload.c",
-            "src/pymergetic/metal/py/py_zip.c",
-            "src/pymergetic/metal/py/py_zip_embed.c",
-            "src/pymergetic/metal/py/py_zip_read.c",
+            "src/pymergetic/metal/py/py_stdlib.c",
             "src/pymergetic/metal/py/py_guest.c",
             "src/pymergetic/metal/py/py_port_stubs.c",
                 "src/pymergetic/metal/fs/fs_py_bind.c",
@@ -177,10 +180,8 @@ PY
 
 # Embed guest wasm (hello / ui_hello / async_sleep) before EDK2 compile.
 "${ROOT}/scripts/build.d/port/efi/embed-mods.sh"
-# Build+sign+embed stdlib.zip (mods/py/stdlib/) — not tracked in git,
-# always freshly baked into the binary, see embed-stdlib.sh.
-"${ROOT}/scripts/build.d/port/efi/embed-stdlib.sh"
-# Pack the "metal.guest" (+ "mod.t8_multimod_lib") iface header packs
+# Loose stdlib: staged to ESP/PXE + iface pack py@metal.stdlib (embed-iface).
+# Pack iface packs (h@metal.guest, h@mod.t8_multimod_lib, ...)
 # (docs/DOC_IFACE_PLAN.md Part II-C) — util/iface_metal_guest_embed.inc.c.
 "${ROOT}/scripts/build.d/port/efi/embed-iface.sh"
 # Dropbear static lib (PIC) for Metal.inf DLINK — X64 EFI.

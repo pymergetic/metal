@@ -36,6 +36,11 @@ host takes pointers. Call sites must use the header's `PM_METAL_*_IO_PTR(p)`
 macro (never a bare `(uint32_t)(uintptr_t)p`). See SOURCETREE § dual
 WASI-import headers.
 
+**Dual-ABI buffer args:** guest prototypes take `uint32_t` linear offsets;
+host takes pointers. Call sites must use the header's `PM_METAL_*_IO_PTR(p)`
+macro (never a bare `(uint32_t)(uintptr_t)p`). See SOURCETREE § dual
+WASI-import headers.
+
 ## The other rule you must not relitigate
 
 `src/pymergetic/metal/**` is uniform ISO C / `stdint.h` — **one spelling per
@@ -68,3 +73,4 @@ check diagnostics on touched files, regenerate `./scripts/setup ide` when
 the template changed, and **tell them to restart clangd** (or reload the
 window) so they are not chasing stale errors. See
 `.cursor/rules/metal-ide-lint.mdc` and `docs/SOURCETREE.md` (clangd).
+

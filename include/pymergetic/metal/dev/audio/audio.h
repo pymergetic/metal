@@ -47,12 +47,11 @@ extern uint32_t pm_metal_audio_queue(pm_metal_audio_stream_h s, uint32_t pcm, ui
   PM_METAL_AUDIO_IMPORT(pm_metal_audio_queue);
 extern pm_metal_async_handle_t pm_metal_audio_drain(pm_metal_audio_stream_h s, uint32_t nbytes)
   PM_METAL_AUDIO_IMPORT(pm_metal_audio_drain);
-extern void pm_metal_audio_mute(int32_t on) PM_METAL_AUDIO_IMPORT(pm_metal_audio_mute);
+extern void    pm_metal_audio_mute(int32_t on) PM_METAL_AUDIO_IMPORT(pm_metal_audio_mute);
 extern int32_t pm_metal_audio_muted(void) PM_METAL_AUDIO_IMPORT(pm_metal_audio_muted);
-extern void pm_metal_audio_volume_set(uint32_t pct)
+extern void    pm_metal_audio_volume_set(uint32_t pct)
   PM_METAL_AUDIO_IMPORT(pm_metal_audio_volume_set);
-extern uint32_t pm_metal_audio_volume_get(void)
-  PM_METAL_AUDIO_IMPORT(pm_metal_audio_volume_get);
+extern uint32_t pm_metal_audio_volume_get(void) PM_METAL_AUDIO_IMPORT(pm_metal_audio_volume_get);
 /** Backend name into guest buffer ("virtio-snd" / "ac97" / "null"). 0 ok, -1. */
 extern int32_t pm_metal_audio_backend(uint32_t dest, uint32_t dest_cap)
   PM_METAL_AUDIO_IMPORT(pm_metal_audio_backend);

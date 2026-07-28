@@ -396,10 +396,9 @@ static void VsndMute(int on)
   (void)mStarted;
 }
 
-static const pm_metal_audio_ops_t mVirtioOps = {
-  "virtio-snd", VsndInit, VsndPoll, VsndReady, VsndOpen,  VsndClose,
-  VsndQueue,    VsndDrain, VsndMute, NULL,     NULL
-};
+static const pm_metal_audio_ops_t mVirtioOps = { "virtio-snd", VsndInit,  VsndPoll,  VsndReady,
+                                                 VsndOpen,     VsndClose, VsndQueue, VsndDrain,
+                                                 VsndMute,     NULL,      NULL };
 
 int pm_metal_audio_virtio_probe(void)
 {

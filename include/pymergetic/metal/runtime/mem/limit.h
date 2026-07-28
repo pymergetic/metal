@@ -44,14 +44,11 @@ typedef struct pm_metal_mem_limit_table {
  * `module` and `name` must be string literals; id becomes module "." name.
  * `var` should be `g_pm_metal_lim_<...>`.
  */
-#define PM_METAL_MEM_LIMIT(var, module, name, value, unit, note)               \
-  static const pm_metal_mem_limit_t var##_row = {                              \
-    module "." name, (module), (name), (uint64_t)(value), (unit), (note)     \
-  };                                                                           \
-  static const pm_metal_mem_limit_table_t var                                  \
-    __attribute__((used, section(".pm_metal_mem_limits." #var), aligned(16))) = { \
-      &var##_row, 1u                                                           \
-    }
+#define PM_METAL_MEM_LIMIT(var, module, name, value, unit, note)                               \
+  static const pm_metal_mem_limit_t       var##_row = { module "." name,   (module), (name),   \
+                                                        (uint64_t)(value), (unit),   (note) }; \
+  static const pm_metal_mem_limit_table_t var                                                  \
+    __attribute__((used, section(".pm_metal_mem_limits." #var), aligned(16))) = { &var##_row, 1u }
 
 extern const pm_metal_mem_limit_table_t __pm_metal_mem_limits_start[];
 extern const pm_metal_mem_limit_table_t __pm_metal_mem_limits_end[];
@@ -59,8 +56,7 @@ extern const pm_metal_mem_limit_table_t __pm_metal_mem_limits_end[];
 uint32_t pm_metal_mem_limit_count(void);
 int32_t  pm_metal_mem_limit_get(uint32_t idx, pm_metal_mem_limit_t *out);
 int32_t  pm_metal_mem_limit_find(const char *id, pm_metal_mem_limit_t *out);
-int32_t  pm_metal_mem_limit_find_mn(const char *module, const char *name,
-                                    pm_metal_mem_limit_t *out);
+int32_t pm_metal_mem_limit_find_mn(const char *module, const char *name, pm_metal_mem_limit_t *out);
 
 int pm_metal_mem_limit_native_register(void);
 
@@ -68,8 +64,7 @@ int pm_metal_mem_limit_native_register(void);
 
 #include "pymergetic/metal/wasi.h"
 
-#define PM_METAL_MEM_LIMIT_IMPORT(name) \
-  PM_METAL_WASI_IMPORT(PM_METAL_MEM_LIMIT_WASI_MODULE, name)
+#define PM_METAL_MEM_LIMIT_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_MEM_LIMIT_WASI_MODULE, name)
 
 typedef struct pm_metal_mem_limit_info {
   char     id[64];

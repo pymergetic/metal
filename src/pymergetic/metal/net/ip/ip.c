@@ -54,7 +54,9 @@ int32_t pm_metal_net_ip_bind_if(pm_metal_net_ip_sock_h h, const char *ifname)
   return mOps->bind_if(h, ifname);
 }
 
-pm_metal_async_handle_t pm_metal_net_ip_connect(pm_metal_net_ip_sock_h h, const char *host, uint32_t port)
+pm_metal_async_handle_t pm_metal_net_ip_connect(pm_metal_net_ip_sock_h h,
+                                                const char            *host,
+                                                uint32_t               port)
 {
   if (mOps == NULL || mOps->connect == NULL) {
     return PM_METAL_ASYNC_HANDLE_INVALID;
@@ -117,8 +119,8 @@ int32_t pm_metal_net_ip_bind(pm_metal_net_ip_sock_h h, uint32_t port)
   return mOps->bind(h, port);
 }
 
-uint32_t pm_metal_net_ip_sendto(pm_metal_net_ip_sock_h h, const void *ptr, uint32_t len, const char *host,
-                             uint32_t port)
+uint32_t pm_metal_net_ip_sendto(
+  pm_metal_net_ip_sock_h h, const void *ptr, uint32_t len, const char *host, uint32_t port)
 {
   if (mOps == NULL || mOps->sendto == NULL) {
     return 0;
@@ -127,8 +129,12 @@ uint32_t pm_metal_net_ip_sendto(pm_metal_net_ip_sock_h h, const void *ptr, uint3
   return mOps->sendto(h, ptr, len, host, port);
 }
 
-uint32_t pm_metal_net_ip_try_recvfrom(pm_metal_net_ip_sock_h h, void *ptr, uint32_t len, char *peer_host,
-                                   uint32_t peer_cap, uint32_t *peer_port)
+uint32_t pm_metal_net_ip_try_recvfrom(pm_metal_net_ip_sock_h h,
+                                      void                  *ptr,
+                                      uint32_t               len,
+                                      char                  *peer_host,
+                                      uint32_t               peer_cap,
+                                      uint32_t              *peer_port)
 {
   if (mOps == NULL || mOps->try_recvfrom == NULL) {
     return 0;
@@ -177,16 +183,18 @@ static int32_t MetalNetGuestHost(wasm_exec_env_t exec_env,
   return -1;
 }
 
-static uint32_t pm_metal_net_ip_socket_native(wasm_exec_env_t exec_env, uint32_t domain, uint32_t type)
+static uint32_t pm_metal_net_ip_socket_native(wasm_exec_env_t exec_env,
+                                              uint32_t        domain,
+                                              uint32_t        type)
 {
   (void)exec_env;
   return pm_metal_net_ip_socket(domain, type);
 }
 
 static uint32_t pm_metal_net_ip_connect_native(wasm_exec_env_t exec_env,
-                                            uint32_t        h,
-                                            const char     *host,
-                                            uint32_t        port)
+                                               uint32_t        h,
+                                               const char     *host,
+                                               uint32_t        port)
 {
   char cleaned[256];
 
@@ -210,9 +218,9 @@ static uint32_t pm_metal_net_ip_accept_native(wasm_exec_env_t exec_env, uint32_t
 }
 
 static uint32_t pm_metal_net_ip_send_native(wasm_exec_env_t exec_env,
-                                         uint32_t        h,
-                                         uint32_t        ptr,
-                                         uint32_t        len)
+                                            uint32_t        h,
+                                            uint32_t        ptr,
+                                            uint32_t        len)
 {
   void *native;
 
@@ -229,9 +237,9 @@ static uint32_t pm_metal_net_ip_send_native(wasm_exec_env_t exec_env,
 }
 
 static uint32_t pm_metal_net_ip_recv_native(wasm_exec_env_t exec_env,
-                                         uint32_t        h,
-                                         uint32_t        ptr,
-                                         uint32_t        len)
+                                            uint32_t        h,
+                                            uint32_t        ptr,
+                                            uint32_t        len)
 {
   void *native;
 
@@ -255,8 +263,8 @@ static uint32_t pm_metal_net_ip_dns_native(wasm_exec_env_t exec_env, const char 
 }
 
 static int32_t pm_metal_net_ip_dns_last_ntoa_native(wasm_exec_env_t exec_env,
-                                                 uint32_t        dest,
-                                                 uint32_t        dest_cap)
+                                                    uint32_t        dest,
+                                                    uint32_t        dest_cap)
 {
   wasm_module_inst_t inst;
   void              *native;
@@ -282,10 +290,12 @@ static int32_t pm_metal_net_ip_dns_last_ntoa_native(wasm_exec_env_t exec_env,
   return pm_metal_net_ip_dns_last_ntoa((char *)native, dest_cap);
 }
 
-static int32_t pm_metal_net_ip_seed_host_native(wasm_exec_env_t exec_env, uint32_t dest, uint32_t dest_cap)
+static int32_t pm_metal_net_ip_seed_host_native(wasm_exec_env_t exec_env,
+                                                uint32_t        dest,
+                                                uint32_t        dest_cap)
 {
   wasm_module_inst_t inst;
-  void               *native;
+  void              *native;
 
   if (dest_cap == 0) {
     return -1;
@@ -314,7 +324,9 @@ static void pm_metal_net_ip_close_native(wasm_exec_env_t exec_env, uint32_t h)
   pm_metal_net_ip_close(h);
 }
 
-static int32_t pm_metal_net_ip_bind_if_native(wasm_exec_env_t exec_env, uint32_t h, const char *ifname)
+static int32_t pm_metal_net_ip_bind_if_native(wasm_exec_env_t exec_env,
+                                              uint32_t        h,
+                                              const char     *ifname)
 {
   char cleaned[PM_METAL_NET_IP_IFNAME_MAX];
 
@@ -335,8 +347,8 @@ static int32_t pm_metal_net_ip_bind_native(wasm_exec_env_t exec_env, uint32_t h,
   return pm_metal_net_ip_bind(h, port);
 }
 
-static uint32_t pm_metal_net_ip_sendto_native(wasm_exec_env_t exec_env, uint32_t h, uint32_t ptr,
-                                           uint32_t len, const char *host, uint32_t port)
+static uint32_t pm_metal_net_ip_sendto_native(
+  wasm_exec_env_t exec_env, uint32_t h, uint32_t ptr, uint32_t len, const char *host, uint32_t port)
 {
   void *native;
   char  cleaned[256];
@@ -354,8 +366,10 @@ static uint32_t pm_metal_net_ip_sendto_native(wasm_exec_env_t exec_env, uint32_t
   return pm_metal_net_ip_sendto(h, native, len, cleaned, port);
 }
 
-static uint32_t pm_metal_net_ip_try_recv_native(wasm_exec_env_t exec_env, uint32_t h, uint32_t ptr,
-                                             uint32_t len)
+static uint32_t pm_metal_net_ip_try_recv_native(wasm_exec_env_t exec_env,
+                                                uint32_t        h,
+                                                uint32_t        ptr,
+                                                uint32_t        len)
 {
   void *native;
 
@@ -369,9 +383,13 @@ static uint32_t pm_metal_net_ip_try_recv_native(wasm_exec_env_t exec_env, uint32
   return pm_metal_net_ip_try_recv(h, native, len);
 }
 
-static uint32_t pm_metal_net_ip_try_recvfrom_native(wasm_exec_env_t exec_env, uint32_t h, uint32_t ptr,
-                                                 uint32_t len, uint32_t peer_host, uint32_t peer_cap,
-                                                 uint32_t peer_port_ptr)
+static uint32_t pm_metal_net_ip_try_recvfrom_native(wasm_exec_env_t exec_env,
+                                                    uint32_t        h,
+                                                    uint32_t        ptr,
+                                                    uint32_t        len,
+                                                    uint32_t        peer_host,
+                                                    uint32_t        peer_cap,
+                                                    uint32_t        peer_port_ptr)
 {
   wasm_module_inst_t inst;
   void              *native;
@@ -425,9 +443,9 @@ static uint32_t pm_metal_net_ip_if_wait_native(wasm_exec_env_t exec_env, uint32_
 }
 
 static int32_t pm_metal_net_ip_if_status_index_native(wasm_exec_env_t exec_env,
-                                                     uint32_t        index,
-                                                     uint32_t        dest,
-                                                     uint32_t        dest_cap)
+                                                      uint32_t        index,
+                                                      uint32_t        dest,
+                                                      uint32_t        dest_cap)
 {
   wasm_module_inst_t inst;
   void              *native;
@@ -461,11 +479,17 @@ static NativeSymbol g_pm_metal_net_native_symbols[] = {
   { "pm_metal_net_ip_bind", (void *)pm_metal_net_ip_bind_native, "(ii)i", NULL },
   { "pm_metal_net_ip_sendto", (void *)pm_metal_net_ip_sendto_native, "(iii$i)i", NULL },
   { "pm_metal_net_ip_try_recv", (void *)pm_metal_net_ip_try_recv_native, "(iii)i", NULL },
-  { "pm_metal_net_ip_try_recvfrom", (void *)pm_metal_net_ip_try_recvfrom_native, "(iiiiii)i", NULL },
+  { "pm_metal_net_ip_try_recvfrom",
+    (void *)pm_metal_net_ip_try_recvfrom_native,
+    "(iiiiii)i",
+    NULL },
   { "pm_metal_net_ip_if_count", (void *)pm_metal_net_ip_if_count_native, "()i", NULL },
   { "pm_metal_net_ip_if_gen", (void *)pm_metal_net_ip_if_gen_native, "()i", NULL },
   { "pm_metal_net_ip_if_wait", (void *)pm_metal_net_ip_if_wait_native, "(i)i", NULL },
-  { "pm_metal_net_ip_if_status_index", (void *)pm_metal_net_ip_if_status_index_native, "(iii)i", NULL },
+  { "pm_metal_net_ip_if_status_index",
+    (void *)pm_metal_net_ip_if_status_index_native,
+    "(iii)i",
+    NULL },
 };
 
 int pm_metal_net_ip_native_register(void)

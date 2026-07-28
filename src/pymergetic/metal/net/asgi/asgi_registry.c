@@ -75,7 +75,7 @@ pm_metal_net_asgi_app_h pm_metal_net_asgi_register_wasm(const char *mod, const c
   if (h == PM_METAL_NET_ASGI_APP_INVALID) {
     return h;
   }
-  s = &g_apps[h];
+  s       = &g_apps[h];
   s->kind = PM_METAL_NET_ASGI_RUNNER_WASM;
   strncpy(s->wasm_mod, mod, sizeof(s->wasm_mod) - 1u);
   strncpy(s->wasm_func, func, sizeof(s->wasm_func) - 1u);

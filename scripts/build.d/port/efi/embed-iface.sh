@@ -1,20 +1,13 @@
 #!/usr/bin/env bash
-# Pack iface header (+ optional sources) + meta packs into
+# Pack iface kinds h / c / pyi / py / meta into
 # src/pymergetic/metal/util/iface_metal_guest_embed.inc.c — lz4(ustar).
 #
 # Kconfig (config/metal/util/Kconfig.iface):
-#   CONFIG_PM_METAL_IFACE_EMBED_HEADERS — metal.guest + meta/docs + mod.t8
-#   CONFIG_PM_METAL_IFACE_EMBED_SOURCES — metal.guest.sources (depends on headers)
-#
-#   metal.guest          — metal.h's own #include list + wasi.h +
-#                          guest/mod/*.h + version.h (curated allowlist)
-#   metal.guest.sources  — full rebuild tree for later JIT / in-guest rebuild:
-#                          src/pymergetic/metal + src/{efi,bios}/pymergetic/metal
-#                          + include/pymergetic/metal  (.c / .S / .s / .h).
-#                          Skips *.inc.c (AUTO-GENERATED embeds, fonts, fw, syms).
-#   metal.guest.meta     — LICENSE + README.md (kind meta)
-#   metal.guest.docs     — docs/*.md (kind meta)
-#   mod.t8_multimod_lib  — mods/tests/t8_multimod_lib/include/*.h
+#   CONFIG_PM_METAL_IFACE_EMBED_C_HEADERS
+#   CONFIG_PM_METAL_IFACE_EMBED_C_IMPL
+#   CONFIG_PM_METAL_IFACE_EMBED_PYTHON_HEADERS
+#   CONFIG_PM_METAL_IFACE_EMBED_PYTHON_IMPL
+# py@metal.stdlib is always baked when C headers are on (mandatory for µPy).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -22,9 +15,10 @@ INCLUDE_METAL="${ROOT}/include/pymergetic/metal"
 METAL_H="${INCLUDE_METAL}/metal.h"
 DOCS_DIR="${ROOT}/docs"
 T8_INCLUDE="${ROOT}/mods/tests/t8_multimod_lib/include"
+TYPINGS_DIR="${ROOT}/typings"
+STDLIB_DIR="${ROOT}/mods/py/stdlib"
 INC_OUT="${ROOT}/src/pymergetic/metal/util/iface_metal_guest_embed.inc.c"
-# Paths relative to ROOT staged into metal.guest.sources.
-SOURCES_TREES=(
+C_IMPL_TREES=(
 	"src/pymergetic/metal"
 	"src/efi/pymergetic/metal"
 	"src/bios/pymergetic/metal"
@@ -35,8 +29,13 @@ SOURCES_TREES=(
 source "${ROOT}/scripts/lib/kconfig.sh"
 pm_metal_kconfig_load
 
-EMBED_HEADERS="${CONFIG_PM_METAL_IFACE_EMBED_HEADERS:-y}"
-EMBED_SOURCES="${CONFIG_PM_METAL_IFACE_EMBED_SOURCES:-n}"
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/stage-py-trees.sh"
+
+EMBED_C_HEADERS="${CONFIG_PM_METAL_IFACE_EMBED_C_HEADERS:-y}"
+EMBED_C_IMPL="${CONFIG_PM_METAL_IFACE_EMBED_C_IMPL:-n}"
+EMBED_PY_HEADERS="${CONFIG_PM_METAL_IFACE_EMBED_PYTHON_HEADERS:-y}"
+EMBED_PY_IMPL="${CONFIG_PM_METAL_IFACE_EMBED_PYTHON_IMPL:-y}"
 
 write_empty_install() {
 	cat >"${INC_OUT}" <<'EOF'
@@ -47,10 +46,10 @@ write_empty_install() {
 void pm_metal_iface_embed_install(void);
 void pm_metal_iface_embed_install(void) {}
 EOF
-	echo "embed-iface: headers disabled — empty install -> ${INC_OUT}" >&2
+	echo "embed-iface: h packs disabled — empty install -> ${INC_OUT}" >&2
 }
 
-if [[ "${EMBED_HEADERS}" != "y" ]]; then
+if [[ "${EMBED_C_HEADERS}" != "y" ]]; then
 	write_empty_install
 	exit 0
 fi
@@ -108,34 +107,31 @@ for rel in "${GUEST_HEADERS[@]}"; do
 	cp -f "${src}" "${dst}"
 done
 
-STAGE_SOURCES=""
-if [[ "${EMBED_SOURCES}" == "y" ]]; then
-	STAGE_SOURCES="${TMP}/stage_sources"
-	mkdir -p "${STAGE_SOURCES}"
+STAGE_C_IMPL=""
+if [[ "${EMBED_C_IMPL}" == "y" ]]; then
+	STAGE_C_IMPL="${TMP}/stage_c_impl"
+	mkdir -p "${STAGE_C_IMPL}"
 	src_n=0
-	for tree in "${SOURCES_TREES[@]}"; do
+	for tree in "${C_IMPL_TREES[@]}"; do
 		abs="${ROOT}/${tree}"
 		if [[ ! -d "${abs}" ]]; then
-			echo "embed-iface: sources tree missing, skip ${tree}" >&2
+			echo "embed-iface: c_impl tree missing, skip ${tree}" >&2
 			continue
 		fi
 		while IFS= read -r -d '' src; do
 			rel="${src#"${ROOT}"/}"
-			dst="${STAGE_SOURCES}/${rel}"
+			dst="${STAGE_C_IMPL}/${rel}"
 			mkdir -p "$(dirname "${dst}")"
 			cp -f "${src}" "${dst}"
 			src_n=$((src_n + 1))
 		done < <(
-			# No *.inc.c — those are generated embeds / binary-as-C (mods zip,
-			# py zip, iface packs, fonts, fw, sym tables), not JIT inputs.
 			find "${abs}" -type f \( -name '*.c' -o -name '*.S' -o -name '*.s' -o -name '*.h' \) \
 				! -name '*.inc.c' -print0
 		)
 	done
-	echo "embed-iface: sources pack staged ${src_n} files (c/S/s/h, no *.inc.c)" >&2
+	echo "embed-iface: c_impl staged ${src_n} files" >&2
 	if [[ "${src_n}" -eq 0 ]]; then
-		echo "embed-iface: warning — no sources staged; skipping sources pack" >&2
-		STAGE_SOURCES=""
+		STAGE_C_IMPL=""
 	fi
 fi
 
@@ -147,11 +143,10 @@ for f in LICENSE README.md; do
 		cp -f "${ROOT}/${f}" "${STAGE_META}/${f}"
 		meta_n=$((meta_n + 1))
 	else
-		echo "embed-iface: missing ${f}, skipped for metal.guest.meta" >&2
+		echo "embed-iface: missing ${f}, skipped for meta@metal.guest" >&2
 	fi
 done
 if [[ "${meta_n}" -eq 0 ]]; then
-	echo "embed-iface: warning — no meta files staged; skipping metal.guest.meta" >&2
 	STAGE_META=""
 fi
 
@@ -165,13 +160,40 @@ if [[ -d "${DOCS_DIR}" ]]; then
 		cp -f "${src}" "${STAGE_DOCS}/${base}"
 		docs_n=$((docs_n + 1))
 	done < <(find "${DOCS_DIR}" -maxdepth 1 -type f -name '*.md' -print0 | sort -z)
-	echo "embed-iface: docs pack staged ${docs_n} files (docs/*.md)" >&2
 	if [[ "${docs_n}" -eq 0 ]]; then
-		echo "embed-iface: warning — no docs/*.md staged; skipping metal.guest.docs" >&2
 		STAGE_DOCS=""
 	fi
-else
-	echo "embed-iface: ${DOCS_DIR} missing, metal.guest.docs pack skipped" >&2
+fi
+
+STAGE_PYI=""
+if [[ "${EMBED_PY_HEADERS}" == "y" && -d "${TYPINGS_DIR}" ]]; then
+	STAGE_PYI="${TMP}/stage_pyi"
+	pm_metal_stage_py_typings_into "${STAGE_PYI}"
+	if [[ -z "$(find "${STAGE_PYI}" -type f -name '*.pyi' 2>/dev/null | head -n 1)" ]]; then
+		STAGE_PYI=""
+	fi
+fi
+
+STAGE_PY_IMPL=""
+if [[ "${EMBED_PY_IMPL}" == "y" ]]; then
+	STAGE_PY_IMPL="${TMP}/stage_py_impl"
+	pm_metal_stage_py_import_tree_into "${STAGE_PY_IMPL}"
+	if [[ -z "$(find "${STAGE_PY_IMPL}" -type f -name '*.py' 2>/dev/null | head -n 1)" ]]; then
+		echo "embed-iface: warning — python_impl empty; skip" >&2
+		STAGE_PY_IMPL=""
+	fi
+fi
+
+# Mandatory: MicroPython has no usable stdlib without this pack + ESP stage.
+if [[ ! -d "${STDLIB_DIR}" ]]; then
+	echo "embed-iface: missing mandatory ${STDLIB_DIR}" >&2
+	exit 1
+fi
+STAGE_PY_STDLIB="${TMP}/stage_py_stdlib"
+pm_metal_stage_py_copy_py_tree "${STDLIB_DIR}" "${STAGE_PY_STDLIB}"
+if [[ -z "$(find "${STAGE_PY_STDLIB}" -type f -name '*.py' 2>/dev/null | head -n 1)" ]]; then
+	echo "embed-iface: mandatory stdlib stage empty (${STDLIB_DIR})" >&2
+	exit 1
 fi
 
 METAL_VERSION="$(git -C "${ROOT}" describe --tags --dirty --always 2>/dev/null || echo "0.0.0-unknown")"
@@ -181,25 +203,36 @@ METAL_VERSION="$(git -C "${ROOT}" describe --tags --dirty --always 2>/dev/null |
 	echo "#include <stdint.h>"
 	echo "#include <pymergetic/metal/util/iface.h>"
 	echo ""
-	pack_one "${STAGE_GUEST}" "metal.guest" "metal_guest" "${METAL_VERSION}" "PM_METAL_IFACE_PKG_HEADERS"
+	# Pack names: <kind>@<base> (e.g. h@metal.guest).
+	pack_one "${STAGE_GUEST}" "h@metal.guest" "h_metal_guest" "${METAL_VERSION}" "PM_METAL_IFACE_PKG_H"
 
-	if [[ -n "${STAGE_SOURCES}" ]]; then
-		pack_one "${STAGE_SOURCES}" "metal.guest.sources" "metal_guest_sources" "${METAL_VERSION}" "PM_METAL_IFACE_PKG_SOURCES"
+	if [[ -n "${STAGE_C_IMPL}" ]]; then
+		pack_one "${STAGE_C_IMPL}" "c@metal.guest" "c_metal_guest" "${METAL_VERSION}" "PM_METAL_IFACE_PKG_C"
 	fi
 
 	if [[ -n "${STAGE_META}" ]]; then
-		pack_one "${STAGE_META}" "metal.guest.meta" "metal_guest_meta" "${METAL_VERSION}" "PM_METAL_IFACE_PKG_META"
+		pack_one "${STAGE_META}" "meta@metal.guest" "meta_metal_guest" "${METAL_VERSION}" "PM_METAL_IFACE_PKG_META"
 	fi
 
 	if [[ -n "${STAGE_DOCS}" ]]; then
-		pack_one "${STAGE_DOCS}" "metal.guest.docs" "metal_guest_docs" "${METAL_VERSION}" "PM_METAL_IFACE_PKG_META"
+		pack_one "${STAGE_DOCS}" "meta@metal.guest.docs" "meta_metal_guest_docs" "${METAL_VERSION}" "PM_METAL_IFACE_PKG_META"
 	fi
 
 	if [[ -d "${T8_INCLUDE}" ]]; then
-		pack_one "${T8_INCLUDE}" "mod.t8_multimod_lib" "mod_t8_multimod_lib" "" "PM_METAL_IFACE_PKG_HEADERS"
+		pack_one "${T8_INCLUDE}" "h@mod.t8_multimod_lib" "h_mod_t8_multimod_lib" "" "PM_METAL_IFACE_PKG_H"
 	else
-		echo "embed-iface: ${T8_INCLUDE} missing, mod.t8_multimod_lib pack skipped" >&2
+		echo "embed-iface: ${T8_INCLUDE} missing, h@mod.t8_multimod_lib pack skipped" >&2
 	fi
+
+	if [[ -n "${STAGE_PYI}" ]]; then
+		pack_one "${STAGE_PYI}" "pyi@metal.guest" "pyi_metal_guest" "${METAL_VERSION}" "PM_METAL_IFACE_PKG_PYI"
+	fi
+
+	if [[ -n "${STAGE_PY_IMPL}" ]]; then
+		pack_one "${STAGE_PY_IMPL}" "py@metal.guest" "py_metal_guest" "${METAL_VERSION}" "PM_METAL_IFACE_PKG_PY"
+	fi
+
+	pack_one "${STAGE_PY_STDLIB}" "py@metal.stdlib" "py_metal_stdlib" "${METAL_VERSION}" "PM_METAL_IFACE_PKG_PY"
 
 	echo "void pm_metal_iface_embed_install(void);"
 	echo "void pm_metal_iface_embed_install(void)"

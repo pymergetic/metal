@@ -51,19 +51,19 @@ typedef enum {
 } db_fd_kind_t;
 
 typedef struct {
-  db_fd_kind_t        kind;
+  db_fd_kind_t           kind;
   pm_metal_net_ip_sock_h sock;
-  pm_metal_stream_h   stream;
-  int32_t             peer; /* pipe peer fd */
-  int32_t             closed;
+  pm_metal_stream_h      stream;
+  int32_t                peer; /* pipe peer fd */
+  int32_t                closed;
   /* DB_FD_FILE */
-  char               *path;
-  uint8_t            *data;
-  uint32_t            data_len;
-  uint32_t            data_cap;
-  uint32_t            pos;
-  int32_t             writable;
-  int32_t             dirty;
+  char    *path;
+  uint8_t *data;
+  uint32_t data_len;
+  uint32_t data_cap;
+  uint32_t pos;
+  int32_t  writable;
+  int32_t  dirty;
 } db_fd_t;
 
 static db_fd_t g_fds[METAL_DB_FD_MAX];
@@ -140,12 +140,12 @@ void metal_db_fd_release_all(void)
 
 int metal_db_open_path(const char *path, int flags)
 {
-  int       fd;
-  uint32_t  sz;
-  size_t    plen;
-  char     *pcopy;
-  uint8_t  *buf;
-  int32_t   writing;
+  int      fd;
+  uint32_t sz;
+  size_t   plen;
+  char    *pcopy;
+  uint8_t *buf;
+  int32_t  writing;
 
   if (path == NULL || path[0] == '\0') {
     errno = EINVAL;
@@ -157,9 +157,9 @@ int metal_db_open_path(const char *path, int flags)
     return -1;
   }
 
-  writing = ((flags & O_WRONLY) == O_WRONLY) || ((flags & O_RDWR) == O_RDWR) ||
-            ((flags & O_CREAT) != 0);
-  sz      = pm_metal_fs_size(path);
+  writing =
+    ((flags & O_WRONLY) == O_WRONLY) || ((flags & O_RDWR) == O_RDWR) || ((flags & O_CREAT) != 0);
+  sz = pm_metal_fs_size(path);
   if (sz == (uint32_t)-1) {
     sz = 0;
   }
@@ -216,12 +216,12 @@ int metal_db_open_path(const char *path, int flags)
     g_fds[fd].data_len = 0;
   }
 
-  g_fds[fd].path      = pcopy;
-  g_fds[fd].data      = buf;
-  g_fds[fd].data_cap  = DB_FILE_MAX;
-  g_fds[fd].pos       = 0;
-  g_fds[fd].writable  = writing ? 1 : 0;
-  g_fds[fd].dirty     = 0;
+  g_fds[fd].path     = pcopy;
+  g_fds[fd].data     = buf;
+  g_fds[fd].data_cap = DB_FILE_MAX;
+  g_fds[fd].pos      = 0;
+  g_fds[fd].writable = writing ? 1 : 0;
+  g_fds[fd].dirty    = 0;
   return fd;
 }
 
@@ -556,10 +556,10 @@ int metal_db_pipe(int fds[2])
 
 int metal_db_select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, struct timeval *tv)
 {
-  fd_set   in_r;
-  fd_set   in_w;
-  int32_t  fd;
-  int32_t  nready;
+  fd_set  in_r;
+  fd_set  in_w;
+  int32_t fd;
+  int32_t nready;
 
   (void)efds;
   (void)tv;

@@ -25,20 +25,28 @@ static int32_t KindParse(const char *s, pm_metal_iface_pkg_kind_t *out)
   if (s == NULL || out == NULL) {
     return -1;
   }
-  if (strcmp(s, "headers") == 0) {
-    *out = PM_METAL_IFACE_PKG_HEADERS;
+  if (strcmp(s, "h") == 0) {
+    *out = PM_METAL_IFACE_PKG_H;
     return 0;
   }
   if (strcmp(s, "sysroot") == 0) {
     *out = PM_METAL_IFACE_PKG_SYSROOT;
     return 0;
   }
-  if (strcmp(s, "sources") == 0) {
-    *out = PM_METAL_IFACE_PKG_SOURCES;
+  if (strcmp(s, "c") == 0) {
+    *out = PM_METAL_IFACE_PKG_C;
     return 0;
   }
   if (strcmp(s, "meta") == 0) {
     *out = PM_METAL_IFACE_PKG_META;
+    return 0;
+  }
+  if (strcmp(s, "pyi") == 0) {
+    *out = PM_METAL_IFACE_PKG_PYI;
+    return 0;
+  }
+  if (strcmp(s, "py") == 0) {
+    *out = PM_METAL_IFACE_PKG_PY;
     return 0;
   }
   return -1;
@@ -64,15 +72,15 @@ static int32_t BlobNameOk(const char *blob)
  *   name kind version uncompressed_len blob_filename
  * Mutates line in place (NUL-splits fields). Returns 0 on success.
  */
-static int32_t ParseLine(char                     *line,
-                         char                     *name,
-                         uint32_t                  name_cap,
+static int32_t ParseLine(char                      *line,
+                         char                      *name,
+                         uint32_t                   name_cap,
                          pm_metal_iface_pkg_kind_t *kind,
-                         char                     *version,
-                         uint32_t                  version_cap,
-                         uint32_t                 *uncompressed_len,
-                         char                     *blob,
-                         uint32_t                  blob_cap)
+                         char                      *version,
+                         uint32_t                   version_cap,
+                         uint32_t                  *uncompressed_len,
+                         char                      *blob,
+                         uint32_t                   blob_cap)
 {
   char    *fields[5];
   char    *p;
@@ -119,12 +127,12 @@ static int32_t ParseLine(char                     *line,
 
 static void InstallListForApp(const char *app)
 {
-  char      list_path[IFACE_ESP_PATH_MAX];
-  char      blob_path[IFACE_ESP_PATH_MAX];
-  uint8_t  *list_buf = NULL;
-  uint32_t  list_len = 0u;
-  char     *p;
-  char      msg[192];
+  char     list_path[IFACE_ESP_PATH_MAX];
+  char     blob_path[IFACE_ESP_PATH_MAX];
+  uint8_t *list_buf = NULL;
+  uint32_t list_len = 0u;
+  char    *p;
+  char     msg[192];
 
   snprintf(list_path, sizeof(list_path), "mods/apps/%s/iface.list", app);
   if (pm_metal_esp_read_file(list_path, &list_buf, &list_len) != 0) {
@@ -151,16 +159,16 @@ static void InstallListForApp(const char *app)
 
   p = (char *)list_buf;
   while (*p != '\0') {
-    char                     line[IFACE_ESP_LINE_MAX];
-    char                     name[IFACE_ESP_NAME_MAX];
-    char                     version[IFACE_ESP_VER_MAX];
-    char                     blob[IFACE_ESP_BLOB_MAX];
+    char                      line[IFACE_ESP_LINE_MAX];
+    char                      name[IFACE_ESP_NAME_MAX];
+    char                      version[IFACE_ESP_VER_MAX];
+    char                      blob[IFACE_ESP_BLOB_MAX];
     pm_metal_iface_pkg_kind_t kind;
-    uint32_t                 uncompressed_len;
-    uint8_t                 *blob_data = NULL;
-    uint32_t                 blob_len  = 0u;
-    char                    *nl;
-    size_t                   linelen;
+    uint32_t                  uncompressed_len;
+    uint8_t                  *blob_data = NULL;
+    uint32_t                  blob_len  = 0u;
+    char                     *nl;
+    size_t                    linelen;
 
     nl = strchr(p, '\n');
     if (nl != NULL) {
@@ -190,7 +198,14 @@ static void InstallListForApp(const char *app)
       if (s[0] == '\0' || s[0] == '#') {
         continue;
       }
-      if (ParseLine(s, name, sizeof(name), &kind, version, sizeof(version), &uncompressed_len, blob,
+      if (ParseLine(s,
+                    name,
+                    sizeof(name),
+                    &kind,
+                    version,
+                    sizeof(version),
+                    &uncompressed_len,
+                    blob,
                     sizeof(blob)) != 0) {
         snprintf(msg, sizeof(msg), "iface-esp: skip bad line in %s", list_path);
         pm_metal_log(msg);
@@ -200,10 +215,10 @@ static void InstallListForApp(const char *app)
 
     /* Idempotent: EFI main installs pre-EBS; wasm.c may call again. */
     {
-      uint32_t                 i;
-      uint32_t                 npkg;
+      uint32_t                  i;
+      uint32_t                  npkg;
       pm_metal_iface_pkg_info_t info;
-      int32_t                  already = 0;
+      int32_t                   already = 0;
 
       npkg = (uint32_t)pm_metal_iface_pkg_count();
       for (i = 0u; i < npkg; i++) {
@@ -226,8 +241,8 @@ static void InstallListForApp(const char *app)
       continue;
     }
 
-    if (pm_metal_iface_pkg_register(name, kind, version, "", blob_data, blob_len, uncompressed_len) !=
-        0) {
+    if (pm_metal_iface_pkg_register(
+          name, kind, version, "", blob_data, blob_len, uncompressed_len) != 0) {
       snprintf(msg, sizeof(msg), "iface-esp: register failed %s", name);
       pm_metal_log(msg);
     } else {

@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 METAL = ROOT.parent.parent
 TPL_DIR = ROOT / "templates"
-# Host checkout: external/utemplate/*.py (gitignored). Guest: utemplate.zip.
+# Host checkout: external/utemplate/*.py (gitignored). Guest: /mods/utemplate/.
 sys.path.insert(0, str(METAL / "external"))
 
 from utemplate.source import Compiler  # noqa: E402

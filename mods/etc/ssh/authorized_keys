@@ -3,4 +3,4 @@
 #   ssh-ed25519 AAAA... comment
 # Or bind another account:
 #   user=alice ssh-ed25519 AAAA... comment
-# Per-user files: /etc/ssh/authorized_keys.d/<user>
+# Then: ssh -i <key> test@<host>

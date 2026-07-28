@@ -38,7 +38,7 @@ def sym(*args: Any) -> Any:
 
 sym(module: str | None = None, name: str | None = None) -> list[dict] | dict | None
 
-sym() lists every row; sym(module) filters to one wasi module; sym(module, name) returns one {module, name, sig, class_, doc_key} or None. doc_key is '' unless scripts/iface_doc_keys.txt set one — pass a non-empty doc_key to doc.lookup_key() for the readable text."""
+sym() lists every row; sym(module) filters to one wasi module; sym(module, name) returns one {module, name, sig, class_, doc_key} or None. doc_key is '' unless scripts/iface_doc_keys.txt set one - pass a non-empty doc_key to doc.lookup_key() for the readable text."""
     ...
 
 def __getattr__(name: str) -> Any: ...

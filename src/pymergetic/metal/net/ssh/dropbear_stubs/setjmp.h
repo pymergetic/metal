@@ -16,6 +16,6 @@ typedef jmp_buf sigjmp_buf;
 
 int  setjmp(jmp_buf env);
 void longjmp(jmp_buf env, int val) __attribute__((noreturn));
-#define sigsetjmp(env, sav) setjmp(env)
+#define sigsetjmp(env, sav)  setjmp(env)
 #define siglongjmp(env, val) longjmp((env), (val))
 #endif

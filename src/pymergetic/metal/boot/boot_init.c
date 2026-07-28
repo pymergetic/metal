@@ -177,9 +177,9 @@ static void MetalBootLogNetBranch(int32_t dhcp_ok, const char *pkg_note, const c
   seen = 0;
   for (i = 0; i < n; i++) {
     pm_metal_net_ip_ifcfg_t cfg;
-    uint32_t             ip;
-    const char          *pref;
-    const char          *addr;
+    uint32_t                ip;
+    const char             *pref;
+    const char             *addr;
 
     if (pm_metal_net_ip_if_get_index(i, &cfg) != 0) {
       continue;
@@ -228,10 +228,10 @@ static void MetalBootLogNetBranch(int32_t dhcp_ok, const char *pkg_note, const c
 
 static int32_t MetalBootHasLease(void)
 {
-  uint32_t             n;
-  uint32_t             i;
+  uint32_t                n;
+  uint32_t                i;
   pm_metal_net_ip_ifcfg_t cfg;
-  uint32_t             ip;
+  uint32_t                ip;
 
   n = pm_metal_net_ip_if_count();
   for (i = 0; i < n; i++) {
@@ -637,4 +637,3 @@ PM_METAL_EXTERNAL(g_pm_metal_ext_edk2,
                   "edk2-stable202502",
                   "https://github.com/tianocore/edk2",
                   "UEFI build SDK (Tianocore)");
-

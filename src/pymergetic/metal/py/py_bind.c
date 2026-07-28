@@ -125,8 +125,7 @@ static void PyBindTrySetDoc(const pm_metal_py_bind_t *row)
   }
 
   if (nlr_push(&nlr) == 0) {
-    mp_store_attr(
-      (mp_obj_t)row->fn, qstr_from_str("__doc__"), mp_obj_new_str(buf, off));
+    mp_store_attr((mp_obj_t)row->fn, qstr_from_str("__doc__"), mp_obj_new_str(buf, off));
     nlr_pop();
   }
   /* else: no attr slot on this object's type — expected, ignore. */

@@ -67,5 +67,7 @@ static void HttpdShellCmd(int32_t argc, char **argv)
   pm_metal_shell_out("httpd: unknown subcommand\n");
 }
 
-PM_METAL_SHELL_CMD(g_pm_metal_shell_cmd_httpd, "httpd", "httpd autoload|listen [port]|close <srv>",
+PM_METAL_SHELL_CMD(g_pm_metal_shell_cmd_httpd,
+                   "httpd",
+                   "httpd autoload|listen [port]|close <srv>",
                    HttpdShellCmd);

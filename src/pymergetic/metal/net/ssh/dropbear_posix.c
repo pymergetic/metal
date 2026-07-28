@@ -130,7 +130,6 @@ char *strdup(const char *s)
   return p;
 }
 
-
 int gettimeofday(struct timeval *tv, void *tz)
 {
   uint64_t us;
@@ -145,19 +144,68 @@ int gettimeofday(struct timeval *tv, void *tz)
   return 0;
 }
 
-pid_t getpid(void) { return 1; }
-pid_t getppid(void) { return 0; }
-uid_t getuid(void) { return 0; }
-uid_t geteuid(void) { return 0; }
-gid_t getgid(void) { return 0; }
-gid_t getegid(void) { return 0; }
-int setuid(uid_t uid) { (void)uid; return 0; }
-int setgid(gid_t gid) { (void)gid; return 0; }
-int seteuid(uid_t uid) { (void)uid; return 0; }
-int setegid(gid_t gid) { (void)gid; return 0; }
-int setreuid(uid_t r, uid_t e) { (void)r; (void)e; return 0; }
-int setregid(gid_t r, gid_t e) { (void)r; (void)e; return 0; }
-int initgroups(const char *user, gid_t group) { (void)user; (void)group; return 0; }
+pid_t getpid(void)
+{
+  return 1;
+}
+pid_t getppid(void)
+{
+  return 0;
+}
+uid_t getuid(void)
+{
+  return 0;
+}
+uid_t geteuid(void)
+{
+  return 0;
+}
+gid_t getgid(void)
+{
+  return 0;
+}
+gid_t getegid(void)
+{
+  return 0;
+}
+int setuid(uid_t uid)
+{
+  (void)uid;
+  return 0;
+}
+int setgid(gid_t gid)
+{
+  (void)gid;
+  return 0;
+}
+int seteuid(uid_t uid)
+{
+  (void)uid;
+  return 0;
+}
+int setegid(gid_t gid)
+{
+  (void)gid;
+  return 0;
+}
+int setreuid(uid_t r, uid_t e)
+{
+  (void)r;
+  (void)e;
+  return 0;
+}
+int setregid(gid_t r, gid_t e)
+{
+  (void)r;
+  (void)e;
+  return 0;
+}
+int initgroups(const char *user, gid_t group)
+{
+  (void)user;
+  (void)group;
+  return 0;
+}
 int getgroups(int size, gid_t list[])
 {
   (void)size;
@@ -166,9 +214,21 @@ int getgroups(int size, gid_t list[])
   return -1;
 }
 
-unsigned int sleep(unsigned int seconds) { (void)seconds; return 0; }
-int usleep(useconds_t usec) { (void)usec; return 0; }
-int chdir(const char *path) { (void)path; return 0; }
+unsigned int sleep(unsigned int seconds)
+{
+  (void)seconds;
+  return 0;
+}
+int usleep(useconds_t usec)
+{
+  (void)usec;
+  return 0;
+}
+int chdir(const char *path)
+{
+  (void)path;
+  return 0;
+}
 char *getcwd(char *buf, size_t size)
 {
   if (buf == NULL || size < 2) {
@@ -185,8 +245,17 @@ int access(const char *pathname, int mode)
   errno = ENOENT;
   return -1;
 }
-int isatty(int fd) { (void)fd; return 1; }
-int daemon(int n, int m) { (void)n; (void)m; return -1; }
+int isatty(int fd)
+{
+  (void)fd;
+  return 1;
+}
+int daemon(int n, int m)
+{
+  (void)n;
+  (void)m;
+  return -1;
+}
 void _exit(int status)
 {
   if (metal_dropbear_jmp_ready) {
@@ -196,7 +265,10 @@ void _exit(int status)
   for (;;) {
   }
 }
-void exit(int status) { _exit(status); }
+void exit(int status)
+{
+  _exit(status);
+}
 
 ssize_t getrandom(void *buf, size_t buflen, unsigned int flags)
 {
@@ -218,7 +290,10 @@ pid_t fork(void)
   errno = ENOSYS;
   return -1;
 }
-pid_t vfork(void) { return fork(); }
+pid_t vfork(void)
+{
+  return fork();
+}
 char *getenv(const char *name)
 {
   (void)name;
@@ -244,7 +319,11 @@ int execve(const char *path, char *const argv[], char *const envp[])
   errno = ENOENT;
   return -1;
 }
-int dup2(int oldfd, int newfd) { (void)oldfd; return newfd; }
+int dup2(int oldfd, int newfd)
+{
+  (void)oldfd;
+  return newfd;
+}
 int open(const char *pathname, int flags, ...)
 {
   if (pathname == NULL) {
@@ -253,8 +332,17 @@ int open(const char *pathname, int flags, ...)
   }
   return metal_db_open_path(pathname, flags);
 }
-int fcntl(int fd, int cmd, ...) { (void)fd; (void)cmd; return 0; }
-int fsync(int fd) { (void)fd; return 0; }
+int fcntl(int fd, int cmd, ...)
+{
+  (void)fd;
+  (void)cmd;
+  return 0;
+}
+int fsync(int fd)
+{
+  (void)fd;
+  return 0;
+}
 int link(const char *oldpath, const char *newpath)
 {
   /* Force gensignkey.c non-atomic write fallback (EPERM/EACCES). */
@@ -299,8 +387,16 @@ int fstat(int fd, struct stat *buf)
   errno = EBADF;
   return -1;
 }
-int lstat(const char *path, struct stat *buf) { return stat(path, buf); }
-int chmod(const char *path, mode_t mode) { (void)path; (void)mode; return 0; }
+int lstat(const char *path, struct stat *buf)
+{
+  return stat(path, buf);
+}
+int chmod(const char *path, mode_t mode)
+{
+  (void)path;
+  (void)mode;
+  return 0;
+}
 int mkdir(const char *path, mode_t mode)
 {
   (void)path;
@@ -474,7 +570,10 @@ int getsockname(int s, struct sockaddr *a, socklen_t *n)
   *n             = sizeof(*in);
   return 0;
 }
-int getpeername(int s, struct sockaddr *a, socklen_t *n) { return getsockname(s, a, n); }
+int getpeername(int s, struct sockaddr *a, socklen_t *n)
+{
+  return getsockname(s, a, n);
+}
 ssize_t send(int s, const void *b, size_t l, int f)
 {
   (void)s;
@@ -679,8 +778,7 @@ int ioctl(int fd, unsigned long request, ...)
   if (request == TIOCGWINSZ) {
     ws = va_arg(ap, struct winsize *);
     va_end(ap);
-    if (ws == NULL || sh == PM_METAL_STREAM_INVALID ||
-        pm_metal_stream_winsize_get(sh, &mw) != 0) {
+    if (ws == NULL || sh == PM_METAL_STREAM_INVALID || pm_metal_stream_winsize_get(sh, &mw) != 0) {
       errno = ENOTTY;
       return -1;
     }
@@ -755,8 +853,10 @@ void syslog(int priority, const char *format, ...)
   pm_metal_logf("sshd: %s", buf);
 }
 
-int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints,
-                struct addrinfo **res)
+int getaddrinfo(const char            *node,
+                const char            *service,
+                const struct addrinfo *hints,
+                struct addrinfo      **res)
 {
   (void)node;
   (void)service;
@@ -766,9 +866,17 @@ int getaddrinfo(const char *node, const char *service, const struct addrinfo *hi
   }
   return EAI_NONAME;
 }
-void freeaddrinfo(struct addrinfo *res) { (void)res; }
-int getnameinfo(const struct sockaddr *sa, socklen_t salen, char *host, socklen_t hostlen,
-                char *serv, socklen_t servlen, int flags)
+void freeaddrinfo(struct addrinfo *res)
+{
+  (void)res;
+}
+int getnameinfo(const struct sockaddr *sa,
+                socklen_t              salen,
+                char                  *host,
+                socklen_t              hostlen,
+                char                  *serv,
+                socklen_t              servlen,
+                int                    flags)
 {
   (void)sa;
   (void)salen;
@@ -793,8 +901,8 @@ const char *inet_ntop(int af, const void *src, char *dst, socklen_t size)
   }
   if (af == AF_INET) {
     b = (const uint8_t *)src;
-    snprintf(dst, size, "%u.%u.%u.%u", (unsigned)b[0], (unsigned)b[1], (unsigned)b[2],
-             (unsigned)b[3]);
+    snprintf(
+      dst, size, "%u.%u.%u.%u", (unsigned)b[0], (unsigned)b[1], (unsigned)b[2], (unsigned)b[3]);
     return dst;
   }
   strncpy(dst, "::", size - 1);
@@ -820,7 +928,12 @@ char *inet_ntoa(struct in_addr in)
   static char    buf[16];
   const uint8_t *b = (const uint8_t *)&in.s_addr;
 
-  snprintf(buf, sizeof(buf), "%u.%u.%u.%u", (unsigned)b[0], (unsigned)b[1], (unsigned)b[2],
+  snprintf(buf,
+           sizeof(buf),
+           "%u.%u.%u.%u",
+           (unsigned)b[0],
+           (unsigned)b[1],
+           (unsigned)b[2],
            (unsigned)b[3]);
   return buf;
 }
@@ -904,7 +1017,10 @@ void explicit_bzero(void *s, size_t n)
   }
 }
 
-clock_t clock(void) { return 0; }
+clock_t clock(void)
+{
+  return 0;
+}
 time_t time(time_t *t)
 {
   time_t now = (time_t)(pm_metal_async_mono_us() / 1000000ull);
@@ -914,19 +1030,24 @@ time_t time(time_t *t)
   return now;
 }
 
-
 int fgetc(FILE *f)
 {
   (void)f;
   return EOF;
 }
-int getc(FILE *f) { return fgetc(f); }
+int getc(FILE *f)
+{
+  return fgetc(f);
+}
 int fputc(int c, FILE *f)
 {
   (void)f;
   return c;
 }
-int putchar(int c) { return fputc(c, stdout); }
+int putchar(int c)
+{
+  return fputc(c, stdout);
+}
 char *fgets(char *s, int size, FILE *f)
 {
   (void)f;
@@ -941,7 +1062,10 @@ int fileno(FILE *f)
   (void)f;
   return -1;
 }
-void clearerr(FILE *f) { (void)f; }
+void clearerr(FILE *f)
+{
+  (void)f;
+}
 int feof(FILE *f)
 {
   (void)f;
@@ -976,11 +1100,10 @@ void endusershell(void)
   g_usershell_i = 0;
 }
 
-int openpty(int *amaster, int *aslave, char *name, const struct termios *termp,
-            const struct winsize *winp)
+int openpty(
+  int *amaster, int *aslave, char *name, const struct termios *termp, const struct winsize *winp)
 {
-  extern int                metal_dropbear_pty_allocate(int *ptyfd, int *ttyfd, char *namebuf,
-                                         int namebuflen);
+  extern int metal_dropbear_pty_allocate(int *ptyfd, int *ttyfd, char *namebuf, int namebuflen);
   pm_metal_stream_h         sh;
   pm_metal_stream_termios_t st;
   pm_metal_stream_winsize_t mw;
@@ -1038,7 +1161,10 @@ int fchown(int fd, uid_t owner, gid_t group)
   (void)group;
   return 0;
 }
-pid_t setsid(void) { return 1; }
+pid_t setsid(void)
+{
+  return 1;
+}
 pid_t getsid(pid_t pid)
 {
   (void)pid;
@@ -1067,7 +1193,10 @@ size_t strftime(char *s, size_t max, const char *format, const struct tm *tm)
   return 0;
 }
 
-int clearenv(void) { return 0; }
+int clearenv(void)
+{
+  return 0;
+}
 
 size_t strlcpy(char *dst, const char *src, size_t siz)
 {
@@ -1104,7 +1233,10 @@ struct tm *localtime(const time_t *timer)
   memset(&t, 0, sizeof(t));
   return &t;
 }
-struct tm *gmtime(const time_t *timer) { return localtime(timer); }
+struct tm *gmtime(const time_t *timer)
+{
+  return localtime(timer);
+}
 int putenv(char *string)
 {
   (void)string;

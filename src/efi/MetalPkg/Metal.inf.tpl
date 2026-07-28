@@ -360,9 +360,7 @@
   ../../pymergetic/metal/py/py_await.c
   ../../pymergetic/metal/py/py_shell.c
   ../../pymergetic/metal/py/py_autoload.c
-  ../../pymergetic/metal/py/py_zip.c
-  ../../pymergetic/metal/py/py_zip_embed.c
-  ../../pymergetic/metal/py/py_zip_read.c
+  ../../pymergetic/metal/py/py_stdlib.c
   ../../pymergetic/metal/py/py_guest.c
   ../../pymergetic/metal/py/py_port_stubs.c
   ../../pymergetic/metal/fs/fs_py_bind.c

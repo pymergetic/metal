@@ -54,8 +54,8 @@ int32_t pm_metal_auth_hash_verify(const char *encoded, const char *pass);
  * Decode HTTP Basic Authorization value (after "Basic ") into user/pass.
  * Returns 0 ok, -1 bad.
  */
-int32_t pm_metal_auth_basic_decode(const char *b64, char *user, uint32_t user_cap, char *pass,
-                                   uint32_t pass_cap);
+int32_t pm_metal_auth_basic_decode(
+  const char *b64, char *user, uint32_t user_cap, char *pass, uint32_t pass_cap);
 
 /** Clear authorized public keys. */
 void pm_metal_auth_pubkeys_clear(void);
@@ -64,8 +64,10 @@ void pm_metal_auth_pubkeys_clear(void);
  * Append one authorized key (raw SSH wire blob + algo name).
  * Returns 0 ok, -1 bad/full.
  */
-int32_t pm_metal_auth_pubkey_add(const char *user, const char *algo, const uint8_t *blob,
-                                 uint32_t blob_len);
+int32_t pm_metal_auth_pubkey_add(const char    *user,
+                                 const char    *algo,
+                                 const uint8_t *blob,
+                                 uint32_t       blob_len);
 
 /**
  * Parse one OpenSSH authorized_keys line for user (ssh-ed25519 AAAA... [comment]).
@@ -84,8 +86,10 @@ int32_t pm_metal_auth_pubkey_load_text(const char *user, const char *text, uint3
  * algo may be NULL (match any) or e.g. "ssh-ed25519".
  * Returns 1 match, 0 no.
  */
-int32_t pm_metal_auth_pubkey_check(const char *user, const char *algo, const uint8_t *key_blob,
-                                   uint32_t key_len);
+int32_t pm_metal_auth_pubkey_check(const char    *user,
+                                   const char    *algo,
+                                   const uint8_t *key_blob,
+                                   uint32_t       key_len);
 
 /**
  * Load /etc/ssh/authorized_keys (shared; optional user= prefix per line)
@@ -99,17 +103,23 @@ int32_t pm_metal_auth_pubkey_reload(void);
  * subject CN to a local user. user receives the CN on success.
  * Returns 1 match, 0 no.
  */
-int32_t pm_metal_auth_sslcert_check(const uint8_t *cert_der, uint32_t cert_len,
-                                    const char *client_ca_path, char *user, uint32_t user_cap);
+int32_t pm_metal_auth_sslcert_check(const uint8_t *cert_der,
+                                    uint32_t       cert_len,
+                                    const char    *client_ca_path,
+                                    char          *user,
+                                    uint32_t       user_cap);
 
 /**
  * Verify a SHA-256 signature over signed_data with the DER certificate's
  * public key. The caller owns the protocol-specific proof-of-possession data.
  * Returns 1 match, 0 no.
  */
-int32_t pm_metal_auth_sslcert_verify(const uint8_t *cert_der, uint32_t cert_len,
-                                     const uint8_t *signed_data, uint32_t signed_len,
-                                     const uint8_t *signature, uint32_t signature_len);
+int32_t pm_metal_auth_sslcert_verify(const uint8_t *cert_der,
+                                     uint32_t       cert_len,
+                                     const uint8_t *signed_data,
+                                     uint32_t       signed_len,
+                                     const uint8_t *signature,
+                                     uint32_t       signature_len);
 
 #ifdef __cplusplus
 }

@@ -199,8 +199,10 @@ static void PkgManifestPath(char *out, uintptr_t cap, const char *name)
  * lines and '#' comments skipped) into asset slots. Mutates buf in place
  * (splits lines/fields with NUL).
  */
-static uint32_t PkgManifestParse(
-  char *buf, pm_metal_pkg_asset_t *out, char out_name[][64], uint32_t cap)
+static uint32_t PkgManifestParse(char                 *buf,
+                                 pm_metal_pkg_asset_t *out,
+                                 char                  out_name[][64],
+                                 uint32_t              cap)
 {
   uint32_t n;
   char    *p;
@@ -276,8 +278,9 @@ static const pm_metal_pkg_t *PkgSynthFromManifest(const char *name)
 
   mManifestBuf[nread] = '\0';
   mSynthPkg.nassets =
-    have_manifest ? PkgManifestParse(mManifestBuf, mSynthAssets, mSynthAssetName, PM_METAL_PKG_ASSET_MAX)
-                  : 0u;
+    have_manifest
+      ? PkgManifestParse(mManifestBuf, mSynthAssets, mSynthAssetName, PM_METAL_PKG_ASSET_MAX)
+      : 0u;
 
   snprintf(mSynthName, sizeof(mSynthName), "%s", name);
   mSynthPkg.name   = mSynthName;

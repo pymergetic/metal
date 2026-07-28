@@ -1,7 +1,7 @@
 /*
  * Iface packages + symbol table (docs/DOC_IFACE_PLAN.md Part II) — a
- * small registry of build-time header packs (default lz4(ustar), see
- * PM_METAL_IFACE_PKG_HEADERS) plus a plain C array of every registered
+ * small registry of build-time language packs (lz4(ustar); kinds
+ * h / c / pyi / py / meta) plus a plain C array of every registered
  * NativeSymbol, scraped at build time (scripts/gen_iface_syms.py) — not
  * a second hand-written signature list. This is a *reflection* surface
  * (browse what a package or an import table contains); it is not the
@@ -42,26 +42,34 @@
 #define PM_METAL_IFACE_PATH_MAX 160U
 
 typedef enum {
-  PM_METAL_IFACE_PKG_HEADERS = 1, /* lz4(ustar) of public .h files */
-  PM_METAL_IFACE_PKG_SYSROOT = 2, /* reserved — never inside metal.guest, see file header */
-  PM_METAL_IFACE_PKG_SOURCES = 3, /* lz4(ustar) of curated matching .c (Kconfig) */
-  PM_METAL_IFACE_PKG_META    = 4  /* lz4(ustar) of project prose (LICENSE, README, markdown under docs/) */
+  PM_METAL_IFACE_PKG_H       = 1, /* public .h */
+  PM_METAL_IFACE_PKG_SYSROOT = 2, /* reserved — never inside metal.guest */
+  PM_METAL_IFACE_PKG_C       = 3, /* .c / .S / .s (+ matching .h) impl tree */
+  PM_METAL_IFACE_PKG_META    = 4, /* LICENSE, README, docs markdown */
+  PM_METAL_IFACE_PKG_PYI     = 5, /* .pyi stubs under typings/ */
+  PM_METAL_IFACE_PKG_PY      = 6  /* .py trees (product / stdlib browse / mods) */
 } pm_metal_iface_pkg_kind_t;
 
-/** "headers" / "sysroot" / "sources" / "meta" / "unknown" — static literal. */
+/** "h" / "c" / "pyi" / "py" / "meta" / "sysroot" / "unknown". */
 static inline const char *pm_metal_iface_pkg_kind_str(pm_metal_iface_pkg_kind_t kind)
 {
-  if (kind == PM_METAL_IFACE_PKG_HEADERS) {
-    return "headers";
+  if (kind == PM_METAL_IFACE_PKG_H) {
+    return "h";
   }
   if (kind == PM_METAL_IFACE_PKG_SYSROOT) {
     return "sysroot";
   }
-  if (kind == PM_METAL_IFACE_PKG_SOURCES) {
-    return "sources";
+  if (kind == PM_METAL_IFACE_PKG_C) {
+    return "c";
   }
   if (kind == PM_METAL_IFACE_PKG_META) {
     return "meta";
+  }
+  if (kind == PM_METAL_IFACE_PKG_PYI) {
+    return "pyi";
+  }
+  if (kind == PM_METAL_IFACE_PKG_PY) {
+    return "py";
   }
   return "unknown";
 }
@@ -72,12 +80,12 @@ static inline const char *pm_metal_iface_pkg_kind_str(pm_metal_iface_pkg_kind_t 
  * the registry's own storage, valid for the package's whole lifetime
  * (packages are never unregistered in v1). */
 typedef struct {
-  const char                *name;
-  pm_metal_iface_pkg_kind_t  kind;
-  const char                *version;  /* never NULL; "" if unset */
-  const char                *abi_hash; /* never NULL; "" if unset */
-  uint32_t                   nfiles;
-  uint32_t                   blob_len; /* compressed size, as registered */
+  const char               *name;
+  pm_metal_iface_pkg_kind_t kind;
+  const char               *version;  /* never NULL; "" if unset */
+  const char               *abi_hash; /* never NULL; "" if unset */
+  uint32_t                  nfiles;
+  uint32_t                  blob_len; /* compressed size, as registered */
 } pm_metal_iface_pkg_info_t;
 
 /* One NativeSymbol row (scripts/gen_iface_syms.py's own harvest — see
@@ -103,13 +111,13 @@ int32_t pm_metal_iface_pkg_info(const char *name, pm_metal_iface_pkg_info_t *out
  * full (PM_METAL_IFACE_PKG_MAX, iface.c), the name is already taken, or
  * decompression/ustar-walk failed.
  */
-int32_t pm_metal_iface_pkg_register(const char                *name,
-                                    pm_metal_iface_pkg_kind_t  kind,
-                                    const char                *version,
-                                    const char                *abi_hash,
-                                    const uint8_t              *blob,
-                                    uint32_t                    blob_len,
-                                    uint32_t                    uncompressed_len);
+int32_t pm_metal_iface_pkg_register(const char               *name,
+                                    pm_metal_iface_pkg_kind_t kind,
+                                    const char               *version,
+                                    const char               *abi_hash,
+                                    const uint8_t            *blob,
+                                    uint32_t                  blob_len,
+                                    uint32_t                  uncompressed_len);
 
 int32_t pm_metal_iface_file_count(const char *pkg);
 /* NUL-terminated path into out/cap — same convention as util/tar.h's
@@ -118,7 +126,10 @@ int32_t pm_metal_iface_file_at(const char *pkg, uint32_t i, char *out, uint32_t 
 /* data/len (out-params) borrow directly into the package's own inflated
  * ustar buffer — valid for the package's whole lifetime, never freed by
  * the caller. -1 if pkg or path is unknown. */
-int32_t pm_metal_iface_file_open(const char *pkg, const char *path, const uint8_t **data, uint32_t *len);
+int32_t pm_metal_iface_file_open(const char     *pkg,
+                                 const char     *path,
+                                 const uint8_t **data,
+                                 uint32_t       *len);
 
 int32_t pm_metal_iface_sym_count(void);
 int32_t pm_metal_iface_sym_at(uint32_t i, pm_metal_iface_sym_t *out);
@@ -135,12 +146,11 @@ int32_t pm_metal_iface_sym_lookup(const char *module, const char *name, pm_metal
 int pm_metal_util_iface_native_register(void);
 
 /*
- * Registers the "metal.guest" (+ "mod.t8_multimod_lib") header packs
+ * Registers "h@metal.guest" (+ "h@mod.t8_multimod_lib") and sibling packs
  * (scripts/build.d/port/efi/embed-iface.sh generated
  * util/iface_metal_guest_embed.inc.c) — call once at boot, before any
  * shell/py access to `iface`/`pymergetic.metal.iface` (guest/wasm/wasm.c's
- * pm_metal_wasm_init() is the caller, mirrors py_zip_embed.c's own
- * pm_metal_py_zip_embed_install()).
+ * pm_metal_wasm_init() is the caller).
  */
 void pm_metal_iface_embed_install(void);
 
@@ -161,7 +171,7 @@ void pm_metal_iface_esp_install(void);
 
 extern int32_t pm_metal_iface_pkg_count(void) PM_METAL_UTIL_IFACE_IMPORT(pm_metal_iface_pkg_count);
 
-extern int32_t pm_metal_iface_pkg_at(uint32_t i,
+extern int32_t pm_metal_iface_pkg_at(uint32_t  i,
                                      char     *name,
                                      uint32_t  name_cap,
                                      uint32_t *out_kind,
@@ -192,7 +202,7 @@ extern int32_t pm_metal_iface_file_read(const char *pkg,
 
 extern int32_t pm_metal_iface_sym_count(void) PM_METAL_UTIL_IFACE_IMPORT(pm_metal_iface_sym_count);
 
-extern int32_t pm_metal_iface_sym_at(uint32_t i,
+extern int32_t pm_metal_iface_sym_at(uint32_t  i,
                                      char     *module,
                                      uint32_t  module_cap,
                                      char     *name,
@@ -201,7 +211,8 @@ extern int32_t pm_metal_iface_sym_at(uint32_t i,
                                      uint32_t  sig_cap,
                                      uint32_t *out_class,
                                      char     *doc_key,
-                                     uint32_t  doc_key_cap) PM_METAL_UTIL_IFACE_IMPORT(pm_metal_iface_sym_at);
+                                     uint32_t  doc_key_cap)
+  PM_METAL_UTIL_IFACE_IMPORT(pm_metal_iface_sym_at);
 
 extern int32_t pm_metal_iface_sym_lookup(const char *module,
                                          const char *name,

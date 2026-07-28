@@ -6,7 +6,7 @@
 #include "../sys/types.h"
 
 #define GRND_NONBLOCK 1
-#define GRND_RANDOM 2
+#define GRND_RANDOM   2
 
 ssize_t getrandom(void *buf, size_t buflen, unsigned int flags);
 

@@ -450,10 +450,9 @@ static uint32_t Ac97VolumeGet(void)
   return mHwVolume;
 }
 
-static const pm_metal_audio_ops_t mAc97Ops = {
-  "ac97",    Ac97Init,  Ac97Poll,      Ac97Ready,     Ac97Open,  Ac97Close,
-  Ac97Queue, Ac97Drain, Ac97Mute,      Ac97VolumeSet, Ac97VolumeGet
-};
+static const pm_metal_audio_ops_t mAc97Ops = { "ac97",   Ac97Init,      Ac97Poll,     Ac97Ready,
+                                               Ac97Open, Ac97Close,     Ac97Queue,    Ac97Drain,
+                                               Ac97Mute, Ac97VolumeSet, Ac97VolumeGet };
 
 int pm_metal_audio_ac97_probe(void)
 {

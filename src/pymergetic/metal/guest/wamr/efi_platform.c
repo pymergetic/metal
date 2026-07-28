@@ -180,8 +180,8 @@ void *os_mmap(void *hint, size_t size, int prot, int flags, os_file_handle file)
   if (raw == NULL)
     return NULL;
 
-  aligned = ((uintptr_t)raw + sizeof(void *) + PM_METAL_MEM_PAGE_SIZE - 1)
-            & ~(uintptr_t)(PM_METAL_MEM_PAGE_SIZE - 1);
+  aligned = ((uintptr_t)raw + sizeof(void *) + PM_METAL_MEM_PAGE_SIZE - 1) &
+            ~(uintptr_t)(PM_METAL_MEM_PAGE_SIZE - 1);
   ((void **)aligned)[-1] = raw;
 
   memset((void *)aligned, 0, size);

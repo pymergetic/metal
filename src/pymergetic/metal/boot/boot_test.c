@@ -135,7 +135,7 @@ static pm_metal_status_t MetalBootTestStep(pm_metal_async_handle_t self_h)
 
   case TEST_DHCP: {
     pm_metal_net_ip_ifcfg_t cfg;
-    uint32_t             ip;
+    uint32_t                ip;
 
     pm_metal_net_ip_poll();
     if (pm_metal_net_ip_if_get(&cfg) == 0 && pm_metal_util_ip4_parse(cfg.ip, &ip) == 0 &&

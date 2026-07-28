@@ -96,8 +96,8 @@ int32_t pm_metal_net_asgi_ws_handshake(const char *hdr, uint32_t hdr_len)
 }
 
 /* Masked client frame -> unmasked payload echo as server text/binary. */
-int32_t pm_metal_net_asgi_ws_echo_frame(const uint8_t *in, uint32_t in_len, uint8_t *out,
-                                        uint32_t out_cap, uint32_t *out_len)
+int32_t pm_metal_net_asgi_ws_echo_frame(
+  const uint8_t *in, uint32_t in_len, uint8_t *out, uint32_t out_cap, uint32_t *out_len)
 {
   uint8_t  opcode;
   uint8_t  masked;
@@ -135,9 +135,9 @@ int32_t pm_metal_net_asgi_ws_echo_frame(const uint8_t *in, uint32_t in_len, uint
     if (out_cap < 2u) {
       return -1;
     }
-    out[0]    = 0x88u;
-    out[1]    = 0u;
-    *out_len  = 2u;
+    out[0]   = 0x88u;
+    out[1]   = 0u;
+    *out_len = 2u;
     return 1; /* signal close */
   }
   if (out_cap < 2u + (uint32_t)plen) {

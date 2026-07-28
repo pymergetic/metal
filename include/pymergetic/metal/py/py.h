@@ -117,9 +117,10 @@ pm_metal_async_handle_t pm_metal_py_run_str(const char *src);
  * context (own heap, own module namespace) instead of the shared/
  * default one — no mPyRunLock contention with any other task, and it
  * runs bytecode in real parallel with whatever else is going on a
- * different CPU right now. Trades that isolation for: no stdlib.zip on
- * sys.path, and the setup cost of re-installing the bind/pmcmd/mod
- * tables (cheap — see docs/MICROPYTHON.md). @a heap_bytes 0 = default
+ * different CPU right now. Trades that isolation for the setup cost of
+ * re-installing the bind/pmcmd/mod tables (cheap — see
+ * docs/MICROPYTHON.md). Isolated contexts still get /mods +
+ * /mods/py/stdlib on sys.path. @a heap_bytes 0 = default
  * (PM_METAL_PY_ISOLATED_BLOB_BYTES).
  */
 pm_metal_async_handle_t pm_metal_py_run_script_isolated(const char *path, size_t heap_bytes);
@@ -165,6 +166,13 @@ void pm_metal_py_repl_print_banner(void);
  */
 int pm_metal_py_autoload_run_once(void);
 
+/**
+ * Run /mods/<name>/autoload.py for one mod (idempotent per name). Used from
+ * pm_metal_mod_load so late-loaded packs still get their Python hooks.
+ * Returns 1 if run, 0 if skipped/missing, -1 if py init failed.
+ */
+int pm_metal_py_autoload_for_mod(const char *name);
+
 typedef enum {
   PM_METAL_PY_SYNC   = 1,
   PM_METAL_PY_ASYNC  = 2,
@@ -201,7 +209,6 @@ pm_metal_py_fn_h_t pm_metal_py_fn_resolve(const char *dotted_name);
 int pm_metal_py_fn_call(pm_metal_py_fn_h_t fn_h, int32_t *out_i32, int32_t a, int32_t b);
 pm_metal_async_handle_t pm_metal_py_fn_call_async(pm_metal_py_fn_h_t fn_h, uint32_t arg0);
 
-int pm_metal_py_zip_ensure(void);
 int pm_metal_py_native_register(void);
 
 /*
@@ -267,10 +274,11 @@ int pm_metal_py_bind_table(const pm_metal_py_bind_t *rows, size_t n);
  * Like PM_METAL_PY_BIND, plus summary/sig/body (docs/DOC_IFACE_PLAN.md
  * Part I) — any of the three may be NULL.
  */
-#define PM_METAL_PY_BIND_DOC(var, mod_str, name_str, fn_obj, class_, summary_str, sig_str, body_str) \
-  static const pm_metal_py_bind_t var                                                                \
-    __attribute__((used, section(".pm_metal_py_binds.1"), aligned(16))) = {                          \
-      (mod_str), (name_str), (void *)&(fn_obj), (class_), (summary_str), (sig_str), (body_str)       \
+#define PM_METAL_PY_BIND_DOC(                                                                  \
+  var, mod_str, name_str, fn_obj, class_, summary_str, sig_str, body_str)                      \
+  static const pm_metal_py_bind_t var                                                          \
+    __attribute__((used, section(".pm_metal_py_binds.1"), aligned(16))) = {                    \
+      (mod_str), (name_str), (void *)&(fn_obj), (class_), (summary_str), (sig_str), (body_str) \
     }
 
 /** Gather linker-section bind rows (called once from pm_metal_py_init). */

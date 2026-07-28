@@ -14,12 +14,12 @@
 #include "pymergetic/metal/fs/fs.h"               /* IWYU pragma: export */
 #include "pymergetic/metal/dev/blk/blk.h"         /* IWYU pragma: export */
 #include "pymergetic/metal/dev/audio/audio.h"     /* IWYU pragma: export */
-#include "pymergetic/metal/net/ip/ip.h"         /* IWYU pragma: export */
-#include "pymergetic/metal/net/ping/ping.h"        /* IWYU pragma: export */
-#include "pymergetic/metal/net/http/http.h"        /* IWYU pragma: export */
-#include "pymergetic/metal/net/asgi/asgi.h"        /* IWYU pragma: export */
+#include "pymergetic/metal/net/ip/ip.h"           /* IWYU pragma: export */
+#include "pymergetic/metal/net/ping/ping.h"       /* IWYU pragma: export */
+#include "pymergetic/metal/net/http/http.h"       /* IWYU pragma: export */
+#include "pymergetic/metal/net/asgi/asgi.h"       /* IWYU pragma: export */
 #include "pymergetic/metal/net/ssh/ssh.h"         /* IWYU pragma: export */
-#include "pymergetic/metal/net/tftp/tftp.h"        /* IWYU pragma: export */
+#include "pymergetic/metal/net/tftp/tftp.h"       /* IWYU pragma: export */
 #include "pymergetic/metal/net/ntp/ntp.h"         /* IWYU pragma: export */
 #if !defined(__wasm__)
 #include "pymergetic/metal/net/tls/tls.h" /* IWYU pragma: export */

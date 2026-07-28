@@ -9,19 +9,19 @@
 #include <stdint.h>
 #include <stddef.h>
 
-typedef int32_t  pid_t;
-typedef uint32_t uid_t;
-typedef uint32_t gid_t;
-typedef int32_t  ssize_t;
-typedef uint32_t mode_t;
-typedef int64_t  off_t;
-typedef uint32_t useconds_t;
-typedef int32_t  suseconds_t;
-typedef unsigned long sigset_t;
-typedef uint32_t socklen_t;
-typedef uint8_t  u_int8_t;
-typedef uint16_t u_int16_t;
-typedef uint32_t u_int32_t;
+typedef int32_t        pid_t;
+typedef uint32_t       uid_t;
+typedef uint32_t       gid_t;
+typedef int32_t        ssize_t;
+typedef uint32_t       mode_t;
+typedef int64_t        off_t;
+typedef uint32_t       useconds_t;
+typedef int32_t        suseconds_t;
+typedef unsigned long  sigset_t;
+typedef uint32_t       socklen_t;
+typedef uint8_t        u_int8_t;
+typedef uint16_t       u_int16_t;
+typedef uint32_t       u_int32_t;
 typedef unsigned char  u_char;
 typedef unsigned short u_short;
 typedef unsigned int   u_int;

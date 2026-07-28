@@ -72,10 +72,10 @@ static life_t *mLife;
 
 static int32_t LifeHasLease(void)
 {
-  uint32_t             n;
-  uint32_t             i;
+  uint32_t                n;
+  uint32_t                i;
   pm_metal_net_ip_ifcfg_t cfg;
-  uint32_t             ip;
+  uint32_t                ip;
 
   n = pm_metal_net_ip_if_count();
   for (i = 0; i < n; i++) {
@@ -150,9 +150,9 @@ static int32_t LifeBuildHttpUrl(char *out, uintptr_t cap, const char *host, cons
  */
 int32_t pm_metal_net_ip_seed_host(char *out, uint32_t out_cap)
 {
-  char                 boot[PM_METAL_NET_IP_BOOT_FILE_MAX];
-  uint32_t             pkg_ip;
-  uint32_t             gw;
+  char                    boot[PM_METAL_NET_IP_BOOT_FILE_MAX];
+  uint32_t                pkg_ip;
+  uint32_t                gw;
   pm_metal_net_ip_ifcfg_t cfg;
 
   if (out == NULL || out_cap == 0u) {
@@ -463,7 +463,8 @@ int pm_metal_net_ip_life_seed_ensure(const char *name)
     char msg[128];
 
     (void)pm_metal_net_ip_seed_host(host, sizeof(host));
-    snprintf(msg, sizeof(msg), "metal-net: pkg ensure '%s' -> http://%s:8080/ (run/tab)", name, host);
+    snprintf(
+      msg, sizeof(msg), "metal-net: pkg ensure '%s' -> http://%s:8080/ (run/tab)", name, host);
     LifeLog(msg);
   }
   mLife->pkg_want = 1;

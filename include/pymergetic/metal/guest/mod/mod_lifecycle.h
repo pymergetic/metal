@@ -73,11 +73,8 @@ extern int32_t pm_metal_mod_register_func(const char *name, const char *export_n
  * Readable via doc.lookup("mod", "<mod>.<name>") and
  * pymergetic.metal.mod.<mod>.<name>.__doc__ once resolved.
  */
-extern int32_t pm_metal_mod_register_func_doc(const char *name,
-                                              const char *export_name,
-                                              const char *summary,
-                                              const char *sig,
-                                              const char *body)
+extern int32_t pm_metal_mod_register_func_doc(
+  const char *name, const char *export_name, const char *summary, const char *sig, const char *body)
   PM_METAL_MOD_IMPORT(pm_metal_mod_register_func_doc);
 
 /**

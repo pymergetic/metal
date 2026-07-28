@@ -20,7 +20,7 @@ extern "C" {
 
 #define PM_METAL_NET_IP_IFNAME_MAX    8
 #define PM_METAL_NET_IP_MAX_IFS       4
-#define PM_METAL_NET_TFTP_HOST_MAX 64
+#define PM_METAL_NET_TFTP_HOST_MAX    64
 #define PM_METAL_NET_IP_BOOT_FILE_MAX 128
 
 #define PM_METAL_NET_IP_DHCP6_OFF       0

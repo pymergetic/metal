@@ -21,8 +21,8 @@ static mp_obj_t py_ssh_listen(mp_obj_t port_obj)
   return pm_metal_py_int_new((int64_t)srv);
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(py_ssh_listen_obj, py_ssh_listen);
-PM_METAL_PY_BIND(g_py_bind_ssh_listen, "pymergetic.metal.net.ssh", "listen", py_ssh_listen_obj,
-                 PM_METAL_PY_SYNC);
+PM_METAL_PY_BIND(
+  g_py_bind_ssh_listen, "pymergetic.metal.net.ssh", "listen", py_ssh_listen_obj, PM_METAL_PY_SYNC);
 
 static mp_obj_t py_ssh_close(mp_obj_t srv_obj)
 {
@@ -30,8 +30,8 @@ static mp_obj_t py_ssh_close(mp_obj_t srv_obj)
   return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(py_ssh_close_obj, py_ssh_close);
-PM_METAL_PY_BIND(g_py_bind_ssh_close, "pymergetic.metal.net.ssh", "close", py_ssh_close_obj,
-                 PM_METAL_PY_SYNC);
+PM_METAL_PY_BIND(
+  g_py_bind_ssh_close, "pymergetic.metal.net.ssh", "close", py_ssh_close_obj, PM_METAL_PY_SYNC);
 
 static mp_obj_t py_ssh_autoload(void)
 {
@@ -41,8 +41,11 @@ static mp_obj_t py_ssh_autoload(void)
   return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(py_ssh_autoload_obj, py_ssh_autoload);
-PM_METAL_PY_BIND(g_py_bind_ssh_autoload, "pymergetic.metal.net.ssh", "autoload",
-                 py_ssh_autoload_obj, PM_METAL_PY_SYNC);
+PM_METAL_PY_BIND(g_py_bind_ssh_autoload,
+                 "pymergetic.metal.net.ssh",
+                 "autoload",
+                 py_ssh_autoload_obj,
+                 PM_METAL_PY_SYNC);
 
 static mp_obj_t py_ssh_status(void)
 {
@@ -54,5 +57,5 @@ static mp_obj_t py_ssh_status(void)
   return mp_obj_new_str(line, (size_t)strlen(line));
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(py_ssh_status_obj, py_ssh_status);
-PM_METAL_PY_BIND(g_py_bind_ssh_status, "pymergetic.metal.net.ssh", "status", py_ssh_status_obj,
-                 PM_METAL_PY_SYNC);
+PM_METAL_PY_BIND(
+  g_py_bind_ssh_status, "pymergetic.metal.net.ssh", "status", py_ssh_status_obj, PM_METAL_PY_SYNC);

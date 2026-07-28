@@ -20,14 +20,14 @@
 
 typedef struct {
   pm_metal_net_ip_sock_h sock;
-  pm_metal_net_tls_h      tls;
-  char                method[16];
-  char                target[ASGI_PATH_MAX];
-  char                mount_prefix[ASGI_PATH_MAX];
-  const char         *static_root;
-  int32_t             keepalive;
-  char                hdr[ASGI_HDR_MAX];
-  uint32_t            hdr_len;
+  pm_metal_net_tls_h     tls;
+  char                   method[16];
+  char                   target[ASGI_PATH_MAX];
+  char                   mount_prefix[ASGI_PATH_MAX];
+  const char            *static_root;
+  int32_t                keepalive;
+  char                   hdr[ASGI_HDR_MAX];
+  uint32_t               hdr_len;
 } asgi_conn_t;
 
 static asgi_conn_t g_conn;
@@ -43,11 +43,11 @@ static uint8_t *static_io_buf(void)
 }
 
 void pm_metal_net_asgi_conn_begin(pm_metal_net_ip_sock_h sock,
-                                  pm_metal_net_tls_h      tls,
-                                  const char         *method,
-                                  const char         *target,
-                                  const char         *mount_prefix,
-                                  const char         *static_root)
+                                  pm_metal_net_tls_h     tls,
+                                  const char            *method,
+                                  const char            *target,
+                                  const char            *mount_prefix,
+                                  const char            *static_root)
 {
   int32_t ka;
 
@@ -220,11 +220,8 @@ int32_t pm_metal_net_asgi_send_simple(uint32_t    code,
   if (n < 0) {
     return -1;
   }
-  n = pm_metal_http_hdr_append(hdr,
-                               sizeof(hdr),
-                               (uint32_t)n,
-                               "Connection",
-                               g_conn.keepalive ? "keep-alive" : "close");
+  n = pm_metal_http_hdr_append(
+    hdr, sizeof(hdr), (uint32_t)n, "Connection", g_conn.keepalive ? "keep-alive" : "close");
   if (n < 0) {
     return -1;
   }
@@ -258,8 +255,10 @@ static int32_t sysinfo_fn(void *ctx, uint32_t conn_id)
   cpu[0] = '\0';
   pm_metal_hwinfo_cpu_brand(cpu, sizeof(cpu));
   /* Keep this free of Python locks -- runs inside the accept coro. */
-  snprintf(body, sizeof(body),
-           "{\"runtime\":\"metal\",\"version\":\"%s\",\"cpu\":\"%s\"}\n", PM_METAL_VERSION,
+  snprintf(body,
+           sizeof(body),
+           "{\"runtime\":\"metal\",\"version\":\"%s\",\"cpu\":\"%s\"}\n",
+           PM_METAL_VERSION,
            cpu[0] != '\0' ? cpu : "unknown");
   return pm_metal_net_asgi_send_simple(200, "OK", "application/json", body);
 }
@@ -386,11 +385,8 @@ static int32_t static_fn(void *ctx, uint32_t conn_id)
   if (hn < 0) {
     return -1;
   }
-  hn = pm_metal_http_hdr_append(hdr,
-                                sizeof(hdr),
-                                (uint32_t)hn,
-                                "Connection",
-                                g_conn.keepalive ? "keep-alive" : "close");
+  hn = pm_metal_http_hdr_append(
+    hdr, sizeof(hdr), (uint32_t)hn, "Connection", g_conn.keepalive ? "keep-alive" : "close");
   if (hn < 0) {
     return -1;
   }

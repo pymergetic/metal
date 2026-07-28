@@ -42,18 +42,18 @@ static mp_obj_t py_iface_info(void)
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(py_iface_info_obj, py_iface_info);
 PM_METAL_PY_BIND_DOC(g_py_bind_iface_info,
-                    "pymergetic.metal.iface",
-                    "info",
-                    py_iface_info_obj,
-                    PM_METAL_PY_SYNC,
-                    "Every registered header pack, keyed by package name.",
-                    "info() -> dict[str, dict]",
-                    "Each value has the same shape as one list(pkg) row's own package "
-                    "context: {name, kind, version, abi_hash, nfiles, blob_len}.");
+                     "pymergetic.metal.iface",
+                     "info",
+                     py_iface_info_obj,
+                     PM_METAL_PY_SYNC,
+                     "Every registered header pack, keyed by package name.",
+                     "info() -> dict[str, dict]",
+                     "Each value has the same shape as one list(pkg) row's own package "
+                     "context: {name, kind, version, abi_hash, nfiles, blob_len}.");
 
 /**
  * list() -> package names; list(pkg) -> file paths inside that package
- * (docs/DOC_IFACE_PLAN.md preview: `iface.list(); iface.list("metal.guest")`).
+ * (docs/DOC_IFACE_PLAN.md preview: `iface.list(); iface.list("h@metal.guest")`).
  */
 static mp_obj_t py_iface_list(size_t n_args, const mp_obj_t *args)
 {
@@ -95,13 +95,13 @@ static mp_obj_t py_iface_list(size_t n_args, const mp_obj_t *args)
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(py_iface_list_obj, 0, 1, py_iface_list);
 PM_METAL_PY_BIND_DOC(g_py_bind_iface_list,
-                    "pymergetic.metal.iface",
-                    "list",
-                    py_iface_list_obj,
-                    PM_METAL_PY_SYNC,
-                    "Package names, or one package's own file paths.",
-                    "list(pkg: str | None = None) -> list[str]",
-                    "pkg is positional. Raises ValueError for an unknown package name.");
+                     "pymergetic.metal.iface",
+                     "list",
+                     py_iface_list_obj,
+                     PM_METAL_PY_SYNC,
+                     "Package names, or one package's own file paths.",
+                     "list(pkg: str | None = None) -> list[str]",
+                     "pkg is positional. Raises ValueError for an unknown package name.");
 
 static mp_obj_t py_iface_read(mp_obj_t pkg_obj, mp_obj_t path_obj)
 {
@@ -118,14 +118,14 @@ static mp_obj_t py_iface_read(mp_obj_t pkg_obj, mp_obj_t path_obj)
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(py_iface_read_obj, py_iface_read);
 PM_METAL_PY_BIND_DOC(g_py_bind_iface_read,
-                    "pymergetic.metal.iface",
-                    "read",
-                    py_iface_read_obj,
-                    PM_METAL_PY_SYNC,
-                    "Whole file contents from a registered header pack.",
-                    "read(pkg: str, path: str) -> bytes",
-                    "path is exactly what list(pkg) returned (e.g. "
-                    "'pymergetic/metal/fs/fs.h'). Raises ValueError if pkg/path is unknown.");
+                     "pymergetic.metal.iface",
+                     "read",
+                     py_iface_read_obj,
+                     PM_METAL_PY_SYNC,
+                     "Whole file contents from a registered header pack.",
+                     "read(pkg: str, path: str) -> bytes",
+                     "path is exactly what list(pkg) returned (e.g. "
+                     "'pymergetic/metal/fs/fs.h'). Raises ValueError if pkg/path is unknown.");
 
 static mp_obj_t SymDict(const pm_metal_iface_sym_t *sym)
 {
@@ -166,7 +166,7 @@ static mp_obj_t py_iface_sym(size_t n_args, const mp_obj_t *args)
   }
 
   {
-    int32_t  n   = pm_metal_iface_sym_count();
+    int32_t  n = pm_metal_iface_sym_count();
     int32_t  i;
     mp_obj_t out = pm_metal_py_list_new();
 
@@ -186,15 +186,15 @@ static mp_obj_t py_iface_sym(size_t n_args, const mp_obj_t *args)
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(py_iface_sym_obj, 0, 2, py_iface_sym);
 PM_METAL_PY_BIND_DOC(g_py_bind_iface_sym,
-                    "pymergetic.metal.iface",
-                    "sym",
-                    py_iface_sym_obj,
-                    PM_METAL_PY_SYNC,
-                    "List or look up scraped NativeSymbol rows.",
-                    "sym(module: str | None = None, name: str | None = None) -> "
-                    "list[dict] | dict | None",
-                    "sym() lists every row; sym(module) filters to one wasi "
-                    "module; sym(module, name) returns one "
-                    "{module, name, sig, class_, doc_key} or None. doc_key is "
-                    "'' unless scripts/iface_doc_keys.txt set one — pass a "
-                    "non-empty doc_key to doc.lookup_key() for the readable text.");
+                     "pymergetic.metal.iface",
+                     "sym",
+                     py_iface_sym_obj,
+                     PM_METAL_PY_SYNC,
+                     "List or look up scraped NativeSymbol rows.",
+                     "sym(module: str | None = None, name: str | None = None) -> "
+                     "list[dict] | dict | None",
+                     "sym() lists every row; sym(module) filters to one wasi "
+                     "module; sym(module, name) returns one "
+                     "{module, name, sig, class_, doc_key} or None. doc_key is "
+                     "'' unless scripts/iface_doc_keys.txt set one - pass a "
+                     "non-empty doc_key to doc.lookup_key() for the readable text.");

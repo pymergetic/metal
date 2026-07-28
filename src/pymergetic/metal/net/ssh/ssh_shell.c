@@ -73,5 +73,7 @@ static void SshdShellCmd(int32_t argc, char **argv)
   pm_metal_shell_out("sshd: unknown subcommand\n");
 }
 
-PM_METAL_SHELL_CMD(g_pm_metal_shell_cmd_sshd, "sshd",
-                   "sshd autoload|listen [port]|close <srv>|status", SshdShellCmd);
+PM_METAL_SHELL_CMD(g_pm_metal_shell_cmd_sshd,
+                   "sshd",
+                   "sshd autoload|listen [port]|close <srv>|status",
+                   SshdShellCmd);

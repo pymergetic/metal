@@ -98,17 +98,11 @@ pm_metal_py_ctx_t *pm_metal_py_ctx_create(size_t heap_bytes)
   pm_metal_py_pmcmd_install();
   pm_metal_py_mod_install();
   /*
-   * mp_sys_path (py/runtime.h: MP_STATE_VM(sys_mutable[...])) is a real
-   * per-context root pointer, not one of the handful of static-initializer
-   * globals patches/micropython/0001-metal-percpu-state-ctx.patch had to
-   * pin to the shared context (sys.argv/sys.modules/__main__.dict_main) —
-   * mp_embed_init's mp_init() just gave this context a fresh, empty-of-
-   * stdlib list. Append the same two entries pm_metal_py_init() puts on
-   * the shared context's so this context's own imports can see
-   * /mods/py and stdlib.zip too (docs/TODO.md "Isolated-context
-   * ergonomics" — this was the missing half).
+   * mp_sys_path is a real per-context root pointer — append the same
+   * /mods + /mods/py/stdlib entries as pm_metal_py_init() on the shared
+   * context (isolated-context ergonomics).
    */
-  pm_metal_py_zip_init_sys_path();
+  pm_metal_py_init_sys_path();
   pm_metal_py_ctx_leave();
 
   return ctx;

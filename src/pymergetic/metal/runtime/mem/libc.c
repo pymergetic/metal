@@ -828,7 +828,9 @@ int sscanf(const char *str, const char *fmt, ...)
 }
 
 /* Weak: DropbearGlue provides a strong ioctl that handles TTY winsize. */
-__attribute__((weak)) int ioctl(int fd, unsigned long request, ...)
+__attribute__((weak)) /* Weak: DropbearGlue provides a strong ioctl that handles TTY winsize. */
+__attribute__((weak)) int
+ioctl(int fd, unsigned long request, ...)
 {
   (void)fd;
   (void)request;

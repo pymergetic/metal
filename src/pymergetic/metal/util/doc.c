@@ -192,14 +192,14 @@ int32_t pm_metal_doc_lookup(pm_metal_doc_kind_t kind, const char *key, pm_metal_
   }
 
   switch (kind) {
-    case PM_METAL_DOC_SHELL:
-      return LookupShell(key, out);
-    case PM_METAL_DOC_PY:
-      return LookupPy(key, out);
-    case PM_METAL_DOC_MOD:
-      return LookupMod(key, out);
-    default:
-      return -1;
+  case PM_METAL_DOC_SHELL:
+    return LookupShell(key, out);
+  case PM_METAL_DOC_PY:
+    return LookupPy(key, out);
+  case PM_METAL_DOC_MOD:
+    return LookupMod(key, out);
+  default:
+    return -1;
   }
 }
 
@@ -244,7 +244,7 @@ int32_t pm_metal_doc_lookup_key(const char *doc_key, pm_metal_doc_view_t *out)
 void pm_metal_doc_print(pm_metal_doc_kind_t kind, const char *key)
 {
   pm_metal_doc_view_t view;
-  char                 line[PM_METAL_DOC_LINE_MAX];
+  char                line[PM_METAL_DOC_LINE_MAX];
 
   if (pm_metal_doc_lookup(kind, key, &view) != 0) {
     snprintf(line, sizeof(line), "no such doc: %s", key != NULL ? key : "(null)");

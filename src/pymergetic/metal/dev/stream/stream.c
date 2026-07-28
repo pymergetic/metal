@@ -31,16 +31,16 @@ typedef enum {
 } pm_metal_stream_kind_t;
 
 typedef struct {
-  volatile uint32_t           used; /* slot ticket - see slot_table.h; must stay first */
-  pm_metal_stream_kind_t      kind;
-  pm_metal_ui_handle_t        tab;
-  uint32_t                    peer; /* pipe/pty other end */
-  uint8_t                    *ring;
-  uint32_t                    rhead;
-  uint32_t                    rtail;
-  uint32_t                    rcap;
-  pm_metal_stream_termios_t   tio; /* PTY only; mirrored on peer */
-  pm_metal_stream_winsize_t   winsz;
+  volatile uint32_t         used; /* slot ticket - see slot_table.h; must stay first */
+  pm_metal_stream_kind_t    kind;
+  pm_metal_ui_handle_t      tab;
+  uint32_t                  peer; /* pipe/pty other end */
+  uint8_t                  *ring;
+  uint32_t                  rhead;
+  uint32_t                  rtail;
+  uint32_t                  rcap;
+  pm_metal_stream_termios_t tio; /* PTY only; mirrored on peer */
+  pm_metal_stream_winsize_t winsz;
 } pm_metal_stream_slot_t;
 
 static pm_metal_stream_slot_t mSlots[PM_METAL_STREAM_MAX + 1];
@@ -176,9 +176,9 @@ static void MetalStreamPtyAttrsInit(uint32_t h)
   t->cc[PM_METAL_STREAM_VEOF]   = 4u;   /* Ctrl-D */
   t->cc[PM_METAL_STREAM_VTIME]  = 0u;
   t->cc[PM_METAL_STREAM_VMIN]   = 1u;
-  t->cc[PM_METAL_STREAM_VSUSP]  = 26u;  /* Ctrl-Z */
-  w->row = 24u;
-  w->col = 80u;
+  t->cc[PM_METAL_STREAM_VSUSP]  = 26u; /* Ctrl-Z */
+  w->row                        = 24u;
+  w->col                        = 80u;
 }
 
 static int MetalStreamIsPty(uint32_t h)
@@ -201,6 +201,7 @@ static void MetalStreamPtySyncPeer(uint32_t h)
   mSlots[peer].tio   = mSlots[h].tio;
   mSlots[peer].winsz = mSlots[h].winsz;
 }
+
 
 pm_metal_stream_h pm_metal_stream_open_uart(void)
 {
@@ -376,7 +377,8 @@ uint32_t pm_metal_stream_pending(pm_metal_stream_h h)
   }
 
   if (mSlots[h].kind != PM_METAL_STREAM_KIND_PIPE && mSlots[h].kind != PM_METAL_STREAM_KIND_PTY &&
-      mSlots[h].kind != PM_METAL_STREAM_KIND_UART && mSlots[h].kind != PM_METAL_STREAM_KIND_UI_TAB) {
+      mSlots[h].kind != PM_METAL_STREAM_KIND_UART &&
+      mSlots[h].kind != PM_METAL_STREAM_KIND_UI_TAB) {
     return 0;
   }
 

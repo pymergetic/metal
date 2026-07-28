@@ -26,7 +26,7 @@ static int32_t                g_pubkeys_loaded;
 
 static int32_t ct_eq(const uint8_t *a, const uint8_t *b, uint32_t n)
 {
-  uint8_t d;
+  uint8_t  d;
   uint32_t i;
 
   d = 0;
@@ -68,7 +68,7 @@ static int32_t b64_decode(const char *in, uint8_t *out, uint32_t out_cap, uint32
   len = (uint32_t)strlen(in);
   o   = 0;
   for (i = 0; i + 3 < len; i += 4) {
-    int32_t a, b, c, d;
+    int32_t  a, b, c, d;
     uint32_t v;
     uint32_t nout;
 
@@ -77,8 +77,8 @@ static int32_t b64_decode(const char *in, uint8_t *out, uint32_t out_cap, uint32
     if (a < 0 || b < 0) {
       return -1;
     }
-    c    = (in[i + 2] == '=') ? 0 : b64_val(in[i + 2]);
-    d    = (in[i + 3] == '=') ? 0 : b64_val(in[i + 3]);
+    c = (in[i + 2] == '=') ? 0 : b64_val(in[i + 2]);
+    d = (in[i + 3] == '=') ? 0 : b64_val(in[i + 3]);
     if (c < 0 || d < 0) {
       return -1;
     }
@@ -133,20 +133,20 @@ static int32_t parse_u32(const char *s, const char *end, uint32_t *out)
 
 static int32_t verify_argon2id(const char *encoded, const char *pass)
 {
-  const char *p;
-  const char *m_s;
-  const char *t_s;
-  const char *p_s;
-  const char *salt_b64;
-  const char *hash_b64;
-  const char *comma;
-  uint32_t    m, t, lanes;
-  uint8_t     salt[64];
-  uint8_t     expect[64];
-  uint8_t     got[64];
-  uint32_t    salt_len;
-  uint32_t    hash_len;
-  void       *work;
+  const char          *p;
+  const char          *m_s;
+  const char          *t_s;
+  const char          *p_s;
+  const char          *salt_b64;
+  const char          *hash_b64;
+  const char          *comma;
+  uint32_t             m, t, lanes;
+  uint8_t              salt[64];
+  uint8_t              expect[64];
+  uint8_t              got[64];
+  uint32_t             salt_len;
+  uint32_t             hash_len;
+  void                *work;
   crypto_argon2_config cfg;
   crypto_argon2_inputs in;
 
@@ -191,8 +191,8 @@ static int32_t verify_argon2id(const char *encoded, const char *pass)
     return 0;
   }
   {
-    char salt_tmp[96];
-    char hash_tmp[96];
+    char     salt_tmp[96];
+    char     hash_tmp[96];
     uint32_t sl, hl;
 
     sl = (uint32_t)(hash_b64 - salt_b64 - 1u);
@@ -278,7 +278,7 @@ void pm_metal_auth_users_set(const pm_metal_auth_user_t *users, uint32_t n)
     n = PM_METAL_AUTH_USERS_MAX;
   }
   for (i = 0; i < n; i++) {
-    g_users[i] = users[i];
+    g_users[i]      = users[i];
     g_users[i].used = 1;
   }
 }
@@ -302,8 +302,8 @@ int32_t pm_metal_auth_user_check(const char *user, const char *pass)
   return 0;
 }
 
-int32_t pm_metal_auth_basic_decode(const char *b64, char *user, uint32_t user_cap, char *pass,
-                                   uint32_t pass_cap)
+int32_t pm_metal_auth_basic_decode(
+  const char *b64, char *user, uint32_t user_cap, char *pass, uint32_t pass_cap)
 {
   uint8_t  raw[128];
   uint32_t raw_len;
@@ -320,7 +320,7 @@ int32_t pm_metal_auth_basic_decode(const char *b64, char *user, uint32_t user_ca
     return -1;
   }
   raw[raw_len] = 0;
-  colon = strchr((char *)raw, ':');
+  colon        = strchr((char *)raw, ':');
   if (colon == NULL) {
     return -1;
   }
@@ -342,8 +342,10 @@ void pm_metal_auth_pubkeys_clear(void)
   memset(g_pubkeys, 0, sizeof(g_pubkeys));
 }
 
-int32_t pm_metal_auth_pubkey_add(const char *user, const char *algo, const uint8_t *blob,
-                                 uint32_t blob_len)
+int32_t pm_metal_auth_pubkey_add(const char    *user,
+                                 const char    *algo,
+                                 const uint8_t *blob,
+                                 uint32_t       blob_len)
 {
   uint32_t i;
 
@@ -475,11 +477,11 @@ int32_t pm_metal_auth_pubkey_add_line(const char *user, const char *line)
 
 int32_t pm_metal_auth_pubkey_load_text(const char *user, const char *text, uint32_t text_len)
 {
-  uint32_t    i;
-  uint32_t    start;
-  int32_t     added;
-  char        line[4200];
-  uint32_t    llen;
+  uint32_t i;
+  uint32_t start;
+  int32_t  added;
+  char     line[4200];
+  uint32_t llen;
 
   if (user == NULL || text == NULL) {
     return 0;
@@ -557,8 +559,10 @@ int32_t pm_metal_auth_pubkey_reload(void)
   return 0;
 }
 
-int32_t pm_metal_auth_pubkey_check(const char *user, const char *algo, const uint8_t *key_blob,
-                                   uint32_t key_len)
+int32_t pm_metal_auth_pubkey_check(const char    *user,
+                                   const char    *algo,
+                                   const uint8_t *key_blob,
+                                   uint32_t       key_len)
 {
   uint32_t i;
 
@@ -613,7 +617,7 @@ static int32_t sslcert_parse_ca(mbedtls_x509_crt *ca, const uint8_t *data, uint3
 
 static int32_t sslcert_subject_user(const mbedtls_x509_crt *cert, char *user, uint32_t user_cap)
 {
-  char identity[PM_METAL_AUTH_USER_MAX + 4u];
+  char    identity[PM_METAL_AUTH_USER_MAX + 4u];
   int32_t n;
 
   if (cert == NULL || user == NULL || user_cap == 0u) {
@@ -629,8 +633,11 @@ static int32_t sslcert_subject_user(const mbedtls_x509_crt *cert, char *user, ui
   return 1;
 }
 
-int32_t pm_metal_auth_sslcert_check(const uint8_t *cert_der, uint32_t cert_len,
-                                    const char *client_ca_path, char *user, uint32_t user_cap)
+int32_t pm_metal_auth_sslcert_check(const uint8_t *cert_der,
+                                    uint32_t       cert_len,
+                                    const char    *client_ca_path,
+                                    char          *user,
+                                    uint32_t       user_cap)
 {
   mbedtls_x509_crt cert;
   mbedtls_x509_crt ca;
@@ -669,9 +676,12 @@ int32_t pm_metal_auth_sslcert_check(const uint8_t *cert_der, uint32_t cert_len,
   return ok;
 }
 
-int32_t pm_metal_auth_sslcert_verify(const uint8_t *cert_der, uint32_t cert_len,
-                                     const uint8_t *signed_data, uint32_t signed_len,
-                                     const uint8_t *signature, uint32_t signature_len)
+int32_t pm_metal_auth_sslcert_verify(const uint8_t *cert_der,
+                                     uint32_t       cert_len,
+                                     const uint8_t *signed_data,
+                                     uint32_t       signed_len,
+                                     const uint8_t *signature,
+                                     uint32_t       signature_len)
 {
   mbedtls_x509_crt cert;
   uint8_t          hash[32];
@@ -686,8 +696,8 @@ int32_t pm_metal_auth_sslcert_verify(const uint8_t *cert_der, uint32_t cert_len,
   ok = 0;
   if (mbedtls_x509_crt_parse_der(&cert, cert_der, cert_len) == 0 &&
       mbedtls_sha256(signed_data, signed_len, hash, 0) == 0 &&
-      mbedtls_pk_verify(&cert.pk, MBEDTLS_MD_SHA256, hash, sizeof(hash), signature, signature_len) ==
-        0) {
+      mbedtls_pk_verify(
+        &cert.pk, MBEDTLS_MD_SHA256, hash, sizeof(hash), signature, signature_len) == 0) {
     ok = 1;
   }
   mbedtls_x509_crt_free(&cert);

@@ -13,6 +13,7 @@
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/runtime/mem/mem.h>
 #include <runtime/slot/slot_table.h>
+#include <runtime/slot/spin.h>
 #include <runtime/time/cpu.h>
 
 #include "py/compile.h"
@@ -25,9 +26,15 @@
 #define PY_AUTOLOAD_NAME       "autoload.py"
 #define PY_AUTOLOAD_MAX_BYTES  (64u * 1024u)
 #define PY_AUTOLOAD_LOCK_TRIES 100000u
+#define PY_AUTOLOAD_MOD_MAX    64u
 
 static volatile uint32_t g_autoload_done;
 static int32_t           g_autoload_n; /* scripts run on first pass; -1 = init fail */
+
+/* Per-mod once table — mutable from mod.load on any CPU; spin covers it. */
+static pm_metal_spin_t g_mod_autoload_lock;
+static char            g_mod_autoload_done[PY_AUTOLOAD_MOD_MAX][64];
+static uint32_t        g_mod_autoload_n;
 
 int pm_metal_py_autoload_done(void)
 {
@@ -135,9 +142,9 @@ static int32_t AutoloadTryDir(const char *dir)
 
 int pm_metal_py_autoload_run_once(void)
 {
-  pm_metal_fs_h dh;
-  char          name[64];
-  char          child[192];
+  pm_metal_fs_h            dh;
+  char                     name[64];
+  char                     child[192];
   static const char *const k_fixed[] = {
     "/mods/httpd",
     "/mods/py",
@@ -193,4 +200,70 @@ int pm_metal_py_autoload_run_once(void)
 
   g_autoload_n = n;
   return (int)n;
+}
+
+/* Caller holds g_mod_autoload_lock. */
+static int32_t ModAutoloadAlready(const char *name)
+{
+  uint32_t i;
+
+  for (i = 0u; i < g_mod_autoload_n; i++) {
+    if (strcmp(g_mod_autoload_done[i], name) == 0) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/* Claim name under lock (0 ok, -1 full / bad). Prevents double-run races. */
+static int32_t ModAutoloadClaim(const char *name)
+{
+  size_t n;
+
+  if (name == NULL || g_mod_autoload_n >= PY_AUTOLOAD_MOD_MAX) {
+    return -1;
+  }
+  n = strlen(name);
+  if (n == 0u || n >= sizeof(g_mod_autoload_done[0])) {
+    return -1;
+  }
+  if (ModAutoloadAlready(name) != 0) {
+    return -1;
+  }
+  memcpy(g_mod_autoload_done[g_mod_autoload_n], name, n + 1u);
+  g_mod_autoload_n++;
+  return 0;
+}
+
+int pm_metal_py_autoload_for_mod(const char *name)
+{
+  char path[192];
+  int  n;
+  int  ran;
+
+  if (name == NULL || name[0] == '\0') {
+    return 0;
+  }
+  if (pm_metal_py_init() != 0) {
+    return -1;
+  }
+
+  /* Claim under spin before path-exec so two CPUs cannot both run. */
+  pm_metal_spin_lock(&g_mod_autoload_lock);
+  if (ModAutoloadClaim(name) != 0) {
+    pm_metal_spin_unlock(&g_mod_autoload_lock);
+    return 0;
+  }
+  pm_metal_spin_unlock(&g_mod_autoload_lock);
+
+  ran = 0;
+  n   = snprintf(path, sizeof(path), "/mods/%s", name);
+  if (n > 0 && (size_t)n < sizeof(path) && AutoloadTryDir(path) == 0) {
+    ran = 1;
+  }
+  n = snprintf(path, sizeof(path), "/mods/apps/%s", name);
+  if (n > 0 && (size_t)n < sizeof(path) && AutoloadTryDir(path) == 0) {
+    ran = 1;
+  }
+  return ran;
 }

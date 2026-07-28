@@ -21,9 +21,9 @@ int pm_metal_esp_rename_port(const char *old_path, const char *new_path);
 int pm_metal_esp_fsync_port(const char *path);
 int pm_metal_esp_readdir_port(const char *path, uint32_t index, char *name, uint32_t name_cap);
 
-/* mods/apps + mods/py + mods/httpd + top-level mods zips (+ www, etc fixtures).
- * Sized for doom sidecars + httpd/api zips; post-EBS only this RAM cache
- * remains. Bumped x2 from the prior 128/32/128/32 set. */
+/* mods/apps + mods/py/stdlib + product /mods trees (+ www, etc fixtures).
+ * Sized for doom sidecars + loose Python trees; post-EBS only this RAM
+ * cache remains. Bumped x2 from the prior 128/32/128/32 set. */
 #define PM_METAL_ESP_CACHE_MAX   256u
 #define PM_METAL_ESP_DIR_MAX     64u
 #define PM_METAL_ESP_PATH_MAX    256u

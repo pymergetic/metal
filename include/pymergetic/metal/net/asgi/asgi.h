@@ -42,9 +42,9 @@ typedef int32_t (*pm_metal_net_asgi_c_fn)(void *ctx, uint32_t conn_id);
 #include "pymergetic/metal/wasi.h"
 #define PM_METAL_NET_ASGI_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_NET_ASGI_WASI_MODULE, name)
 
-extern pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t             port,
-                                                        uint32_t             ifnames_ptr,
-                                                        uint32_t             nif,
+extern pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t                 port,
+                                                        uint32_t                 ifnames_ptr,
+                                                        uint32_t                 nif,
                                                         pm_metal_net_tls_creds_h creds)
   PM_METAL_NET_ASGI_IMPORT(pm_metal_net_asgi_listen);
 extern int32_t pm_metal_net_asgi_mount(pm_metal_net_asgi_srv_h s,
@@ -63,9 +63,9 @@ extern int32_t pm_metal_net_asgi_autoload(void)
   PM_METAL_NET_ASGI_IMPORT(pm_metal_net_asgi_autoload);
 /** Reply on the active ASGI connection (set up by the host before wasm coro). */
 extern int32_t pm_metal_net_asgi_send_simple(uint32_t    code,
-                                            const char *reason,
-                                            const char *ctype,
-                                            const char *body)
+                                             const char *reason,
+                                             const char *ctype,
+                                             const char *body)
   PM_METAL_NET_ASGI_IMPORT(pm_metal_net_asgi_send_simple);
 #else
 pm_metal_net_asgi_app_h pm_metal_net_asgi_register_c(pm_metal_net_asgi_c_fn fn, void *ctx);
@@ -77,9 +77,9 @@ void                    pm_metal_net_asgi_unregister(pm_metal_net_asgi_app_h app
  * Listen on port. ifnames NULL or nif==0 => all interfaces.
  * creds 0 => cleartext; else TLS (when TLS server ready).
  */
-pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t             port,
-                                                 const char *const   *ifnames,
-                                                 uint32_t             nif,
+pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t                 port,
+                                                 const char *const       *ifnames,
+                                                 uint32_t                 nif,
                                                  pm_metal_net_tls_creds_h creds);
 int32_t                 pm_metal_net_asgi_mount(pm_metal_net_asgi_srv_h s,
                                                 const char             *path,

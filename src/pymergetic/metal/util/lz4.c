@@ -16,7 +16,8 @@
 
 #include <pymergetic/metal/boot/externals.h>
 
-#include "external/lz4/lib/lz4.h" /* vendored — full path from this package's own root (see CMakeLists.txt's PM_METAL_ROOT include dir), not a bare "lz4.h" */
+/* Vendored lz4; full path from package root (PM_METAL_ROOT), not bare lz4.h. */
+#include "external/lz4/lib/lz4.h"
 
 size_t pm_metal_util_lz4_compress_bound(size_t src_len)
 {

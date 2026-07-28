@@ -36,16 +36,20 @@ typedef struct pm_metal_net_ip_ops {
   /** Bind local port (TCP/UDP). Optional; returns 0 or -1. */
   int (*bind)(pm_metal_net_ip_sock_h h, uint32_t port);
   /** UDP sendto. Optional. */
-  uint32_t (*sendto)(pm_metal_net_ip_sock_h h, const void *ptr, uint32_t len, const char *host,
-                     uint32_t port);
+  uint32_t (*sendto)(
+    pm_metal_net_ip_sock_h h, const void *ptr, uint32_t len, const char *host, uint32_t port);
   /** UDP recvfrom with peer. Optional. */
-  uint32_t (*try_recvfrom)(pm_metal_net_ip_sock_h h, void *ptr, uint32_t len, char *peer_host,
-                           uint32_t peer_cap, uint32_t *peer_port);
+  uint32_t (*try_recvfrom)(pm_metal_net_ip_sock_h h,
+                           void                  *ptr,
+                           uint32_t               len,
+                           char                  *peer_host,
+                           uint32_t               peer_cap,
+                           uint32_t              *peer_port);
 } pm_metal_net_ip_ops_t;
 
-void                      pm_metal_net_ip_set_ops(const pm_metal_net_ip_ops_t *ops);
+void                         pm_metal_net_ip_set_ops(const pm_metal_net_ip_ops_t *ops);
 const pm_metal_net_ip_ops_t *pm_metal_net_ip_get_ops(void);
-void                      pm_metal_net_ip_poll(void);
+void                         pm_metal_net_ip_poll(void);
 
 /**
  * Probe virtio-net; on success registers DT only (open deferred until post-EBS).

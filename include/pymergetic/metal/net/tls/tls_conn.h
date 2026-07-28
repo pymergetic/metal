@@ -43,9 +43,9 @@ void pm_metal_net_tls_conn_close(pm_metal_net_tls_conn_h ch);
  * success, 0 on any failure (DNS/connect/handshake).
  */
 pm_metal_async_handle_t pm_metal_net_tls_conn_connect(pm_metal_net_tls_conn_h ch,
-                                                  const char         *host,
-                                                  uint16_t            port,
-                                                  int32_t             use_tls);
+                                                      const char             *host,
+                                                      uint16_t                port,
+                                                      int32_t                 use_tls);
 
 /**
  * Write up to @a len bytes (capped to PM_METAL_TLS_CONN_IO_MAX — caller
@@ -56,8 +56,8 @@ pm_metal_async_handle_t pm_metal_net_tls_conn_connect(pm_metal_net_tls_conn_h ch
  * written (may be less than @a len only on error, which also yields 0).
  */
 pm_metal_async_handle_t pm_metal_net_tls_conn_write(pm_metal_net_tls_conn_h ch,
-                                                const void         *data,
-                                                uint32_t            len);
+                                                    const void             *data,
+                                                    uint32_t                len);
 
 /**
  * Read up to @a want bytes (capped to PM_METAL_TLS_CONN_IO_MAX) into this

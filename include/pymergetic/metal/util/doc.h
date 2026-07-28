@@ -118,7 +118,7 @@ int pm_metal_util_doc_native_register(void);
 
 extern int32_t pm_metal_doc_count(void) PM_METAL_UTIL_DOC_IMPORT(pm_metal_doc_count);
 
-extern int32_t pm_metal_doc_at(uint32_t i,
+extern int32_t pm_metal_doc_at(uint32_t  i,
                                uint32_t *out_kind,
                                char     *key,
                                uint32_t  key_cap,
@@ -136,7 +136,7 @@ extern int32_t pm_metal_doc_lookup(uint32_t    kind,
                                    char       *sig,
                                    uint32_t    sig_cap,
                                    char       *body,
-                                   uint32_t    body_cap) PM_METAL_UTIL_DOC_IMPORT(pm_metal_doc_lookup);
+                                   uint32_t body_cap) PM_METAL_UTIL_DOC_IMPORT(pm_metal_doc_lookup);
 
 extern int32_t pm_metal_doc_lookup_key(const char *doc_key,
                                        uint32_t   *out_kind,
@@ -153,7 +153,8 @@ extern int32_t pm_metal_doc_lookup_key(const char *doc_key,
 extern void pm_metal_doc_print(uint32_t kind, const char *key)
   PM_METAL_UTIL_DOC_IMPORT(pm_metal_doc_print);
 
-extern void pm_metal_doc_print_index(uint32_t kind) PM_METAL_UTIL_DOC_IMPORT(pm_metal_doc_print_index);
+extern void pm_metal_doc_print_index(uint32_t kind)
+  PM_METAL_UTIL_DOC_IMPORT(pm_metal_doc_print_index);
 
 #endif /* __wasm__ */
 

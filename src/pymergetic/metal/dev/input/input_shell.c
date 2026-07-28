@@ -70,7 +70,7 @@ static void InputPs2TraceShellCmd(int argc, char **argv)
   }
 
   pm_metal_input_ps2_trace_set(on);
-  pm_metal_shell_out(on ? "ps2trace: on  (watch the log — press the offending key)"
+  pm_metal_shell_out(on ? "ps2trace: on  (watch the log - press the offending key)"
                         : "ps2trace: off");
 }
 

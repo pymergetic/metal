@@ -15,7 +15,7 @@ pymergetic.metal
     tls                        # PM_METAL_TLS_WIRE_MAX
   py                           # heap blob sizes
   util
-    iface                      # embed headers / sources
+    iface                      # embed h / c / pyi / py packs
 ```
 
 ## Commands
@@ -80,8 +80,11 @@ in-guest face of the build config.
 
 | Symbol | Default | Pack |
 |--------|---------|------|
-| `PM_METAL_IFACE_EMBED_HEADERS` | y | `metal.guest` (`HEADERS`), `metal.guest.meta` + `metal.guest.docs` (`META`), `mod.t8_multimod_lib` |
-| `PM_METAL_IFACE_EMBED_SOURCES` | n | `metal.guest.sources` (`SOURCES`), depends on headers |
+| `PM_METAL_IFACE_EMBED_C_HEADERS` | y | `h@metal.guest`, meta packs, `h@mod.t8_multimod_lib` |
+| `PM_METAL_IFACE_EMBED_C_IMPL` | n | `c@metal.guest`, depends on C headers |
+| `PM_METAL_IFACE_EMBED_PYTHON_HEADERS` | y | `pyi@metal.guest` |
+| `PM_METAL_IFACE_EMBED_PYTHON_IMPL` | y | `py@metal.guest` |
+| (always with C headers) | — | `py@metal.stdlib` mandatory for µPy |
 
 Sources (when enabled) are the full metal rebuild tree — shared + EFI/BIOS
 port `.c`/`.S`/`.s`/`.h` plus `include/pymergetic/metal`, excluding

@@ -82,13 +82,9 @@ if [[ -x "${ROOT}/scripts/build.d/port/efi/embed-mods.sh" ]]; then
 	"${ROOT}/scripts/build.d/port/efi/embed-mods.sh" || true
 fi
 
-# Build+sign+embed stdlib.zip (mods/py/stdlib/) — not tracked in git,
-# always freshly baked into the binary, see embed-stdlib.sh. Unlike
-# embed-mods.sh above, this has no wasi-sdk dependency, so it's required
-# here too (not soft-failed) — both ports need a working stdlib.zip.
-"${ROOT}/scripts/build.d/port/efi/embed-stdlib.sh"
+# Loose stdlib: PXE stage + iface pack py@metal.stdlib (embed-iface).
 
-# Pack the "metal.guest" (+ "mod.t8_multimod_lib") iface header packs
+# Pack iface packs (h@metal.guest, h@mod.t8_multimod_lib, ...)
 # (docs/DOC_IFACE_PLAN.md Part II-C) — util/iface_metal_guest_embed.inc.c.
 "${ROOT}/scripts/build.d/port/efi/embed-iface.sh"
 
@@ -252,6 +248,8 @@ SRCS_C=(
 	"${SHARED_METAL}/boot/authors_py_bind.c"
 	"${SHARED_METAL}/boot/externals.c"
 	"${SHARED_METAL}/boot/externals_py_bind.c"
+	"${SHARED_METAL}/boot/externals.c"
+	"${SHARED_METAL}/boot/externals_py_bind.c"
 	"${SHARED_METAL}/boot/boot_harvest.c"
 	"${SHARED_METAL}/boot/boot_shell.c"
 	"${SHARED_METAL}/log/log.c"
@@ -374,9 +372,7 @@ SRCS_C=(
 	"${SHARED_METAL}/py/py_await.c"
 	"${SHARED_METAL}/py/py_shell.c"
 	"${SHARED_METAL}/py/py_autoload.c"
-	"${SHARED_METAL}/py/py_zip.c"
-	"${SHARED_METAL}/py/py_zip_embed.c"
-	"${SHARED_METAL}/py/py_zip_read.c"
+	"${SHARED_METAL}/py/py_stdlib.c"
 	"${SHARED_METAL}/py/py_guest.c"
 	"${SHARED_METAL}/py/py_port_stubs.c"
 "${SHARED_METAL}/fs/fs_py_bind.c"
@@ -396,6 +392,33 @@ SRCS_C=(
 "${ROOT}/external/micropython/extmod/modre.c"
 "${ROOT}/external/micropython/extmod/moddeflate.c"
 "${ROOT}/external/micropython/extmod/modjson.c"
+"${SHARED_METAL}/py/py_libm_extra.c"
+"${SHARED_METAL}/py/py_libm_math.c"
+"${ROOT}/external/micropython/lib/libm/acoshf.c"
+"${ROOT}/external/micropython/lib/libm/asinfacosf.c"
+"${ROOT}/external/micropython/lib/libm/asinhf.c"
+"${ROOT}/external/micropython/lib/libm/atan2f.c"
+"${ROOT}/external/micropython/lib/libm/atanf.c"
+"${ROOT}/external/micropython/lib/libm/atanhf.c"
+"${ROOT}/external/micropython/lib/libm/ef_rem_pio2.c"
+"${ROOT}/external/micropython/lib/libm/erf_lgamma.c"
+"${ROOT}/external/micropython/lib/libm/fmodf.c"
+"${ROOT}/external/micropython/lib/libm/kf_cos.c"
+"${ROOT}/external/micropython/lib/libm/kf_rem_pio2.c"
+"${ROOT}/external/micropython/lib/libm/kf_sin.c"
+"${ROOT}/external/micropython/lib/libm/kf_tan.c"
+"${ROOT}/external/micropython/lib/libm/log1pf.c"
+"${ROOT}/external/micropython/lib/libm/nearbyintf.c"
+"${ROOT}/external/micropython/lib/libm/roundf.c"
+"${ROOT}/external/micropython/lib/libm/sf_cos.c"
+"${ROOT}/external/micropython/lib/libm/sf_erf.c"
+"${ROOT}/external/micropython/lib/libm/sf_frexp.c"
+"${ROOT}/external/micropython/lib/libm/sf_ldexp.c"
+"${ROOT}/external/micropython/lib/libm/sf_modf.c"
+"${ROOT}/external/micropython/lib/libm/sf_sin.c"
+"${ROOT}/external/micropython/lib/libm/sf_tan.c"
+"${ROOT}/external/micropython/lib/libm/wf_lgamma.c"
+"${ROOT}/external/micropython/lib/libm/wf_tgamma.c"
 "${SHARED_METAL}/py/py_libm_extra.c"
 "${SHARED_METAL}/py/py_libm_math.c"
 "${ROOT}/external/micropython/lib/libm/acoshf.c"

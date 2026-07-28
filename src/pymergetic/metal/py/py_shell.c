@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include <pymergetic/metal/boot/externals.h>
+#include <pymergetic/metal/boot/externals.h>
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/shell/shell_cmd.h>
 #include <pymergetic/metal/shell/shell/shell.h>
@@ -29,7 +30,7 @@ static void PyShellUsage(void)
   pm_metal_shell_out("    py -f c_py_demo.add 2 3      -> prints 5");
   pm_metal_shell_out("    py -f c_py_demo.blink 50000  -> runs until blink finishes");
   pm_metal_shell_out("  py -x <script.py> | -x -c '<code>'");
-  pm_metal_shell_out("    own VM context (own heap, no stdlib.zip) -- runs in");
+  pm_metal_shell_out("    own VM context (own heap) -- runs in");
   pm_metal_shell_out("    real parallel with the shared context on another CPU");
   pm_metal_shell_out("  py -i                          start the persistent Python REPL");
   pm_metal_shell_out("    (console() at the >>> prompt pauses it, back to this shell)");

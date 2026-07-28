@@ -9,6 +9,8 @@
 
 #include <pymergetic/metal/boot/externals.h>
 
+#include <pymergetic/metal/boot/externals.h>
+
 #define __SKIP_GNU 1
 #if defined(__i386__)
 #undef __i386__

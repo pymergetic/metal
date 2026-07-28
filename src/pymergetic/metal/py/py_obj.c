@@ -1,6 +1,6 @@
 /** @file
   Host-only value facade (py_obj.h) — the only translation unit besides
-  py.c/py_bind.c/py_shell.c/py_zip.c/py_guest.c/py_await.c allowed to include
+  py.c/py_bind.c/py_shell.c/py_stdlib.c/py_guest.c/py_await.c allowed to include
   MicroPython's own headers; everything under runtime/async, guest/process,
   guest/mod, shell/shell's *_py_bind.c files goes through this instead.
 **/

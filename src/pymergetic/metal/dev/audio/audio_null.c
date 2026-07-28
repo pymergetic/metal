@@ -100,10 +100,9 @@ static void NullMute(int on)
   mMuted = on ? 1 : 0;
 }
 
-static const pm_metal_audio_ops_t mNullOps = {
-  "null", NullInit, NullPoll, NullReady, NullOpen, NullClose, NullQueue, NullDrain, NullMute, NULL,
-  NULL
-};
+static const pm_metal_audio_ops_t mNullOps = { "null",   NullInit,  NullPoll,  NullReady,
+                                               NullOpen, NullClose, NullQueue, NullDrain,
+                                               NullMute, NULL,      NULL };
 
 void pm_metal_audio_null_install(void)
 {

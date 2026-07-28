@@ -14,8 +14,11 @@ static mp_obj_t metal_audio_ready(void)
   return pm_metal_py_int_new((int64_t)pm_metal_audio_ready());
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(metal_audio_ready_obj, metal_audio_ready);
-PM_METAL_PY_BIND(
-  g_py_bind_audio_ready, "pymergetic.metal.audio", "ready", metal_audio_ready_obj, PM_METAL_PY_SYNC);
+PM_METAL_PY_BIND(g_py_bind_audio_ready,
+                 "pymergetic.metal.audio",
+                 "ready",
+                 metal_audio_ready_obj,
+                 PM_METAL_PY_SYNC);
 
 static mp_obj_t metal_audio_mute(mp_obj_t on_obj)
 {
@@ -31,8 +34,11 @@ static mp_obj_t metal_audio_muted(void)
   return pm_metal_py_int_new((int64_t)pm_metal_audio_muted());
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(metal_audio_muted_obj, metal_audio_muted);
-PM_METAL_PY_BIND(
-  g_py_bind_audio_muted, "pymergetic.metal.audio", "muted", metal_audio_muted_obj, PM_METAL_PY_SYNC);
+PM_METAL_PY_BIND(g_py_bind_audio_muted,
+                 "pymergetic.metal.audio",
+                 "muted",
+                 metal_audio_muted_obj,
+                 PM_METAL_PY_SYNC);
 
 static mp_obj_t metal_audio_volume_set(mp_obj_t pct_obj)
 {

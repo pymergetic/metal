@@ -18,15 +18,15 @@
 #define VCON_BUFS 64
 #define VCON_MTU  512
 
-static pm_metal_virtio_dev_t       mDev;
-static int32_t                     mReady;
-static uint8_t                    *mRxBufs[VCON_BUFS];
-static uint8_t                     mTxScratch[VCON_MTU];
-static uint8_t                     mRxRing[4096];
-static uint32_t                    mRxHead;
-static uint32_t                    mRxTail;
-static pm_metal_console_mirror_fn  mMirrorFn;
-static void                       *mMirrorCtx;
+static pm_metal_virtio_dev_t      mDev;
+static int32_t                    mReady;
+static uint8_t                   *mRxBufs[VCON_BUFS];
+static uint8_t                    mTxScratch[VCON_MTU];
+static uint8_t                    mRxRing[4096];
+static uint32_t                   mRxHead;
+static uint32_t                   mRxTail;
+static pm_metal_console_mirror_fn mMirrorFn;
+static void                      *mMirrorCtx;
 
 static uint32_t RxUsed(void)
 {
@@ -252,6 +252,7 @@ uint32_t pm_metal_console_inject_rx(const void *ptr, uint32_t len)
   after = RxUsed();
   return after - before;
 }
+
 
 uint32_t pm_metal_console_read(void *ptr, uint32_t len)
 {

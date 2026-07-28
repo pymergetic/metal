@@ -583,7 +583,7 @@ see [`KCONFIG.md`](KCONFIG.md). `scripts/confgen` emits
 | Artifact | Inputs | Output |
 |----------|--------|--------|
 | **runtime binary** | `src/common/pymergetic/metal/` + `src/<plat>/` + WAMR + LZ4 + microtar | `build/<plat>/…` |
-| **mod `.wasm`** | `mods/tests/` + wasi-sdk `wasm32-wasip1-threads` + `-I include/` | `build/mods/tests/` then packaged to `build/guest-package/mods/tests/` — guest path `/mods/tests/<name>.wasm` on every platform (`scripts/lib/guest-package.sh`; knob `PM_METAL_GUEST_TESTS`). Threads/shared-memory default; `REACTOR` / `SOCKET` / `MOUNT` empty markers under `mods/tests/<name>/` as before. External apps (built in their own sibling repo, e.g. `packages/metal-doom`) stage under `/mods/apps/` via `METAL_EXT_APPS`. Kernel µPy boot-proof/demo scripts: `mods/py/tests/` (product: `mods/httpd/` + `mods/api/` zips; stdlib under `mods/py/`). |
+| **mod `.wasm`** | `mods/tests/` + wasi-sdk `wasm32-wasip1-threads` + `-I include/` | `build/mods/tests/` then packaged to `build/guest-package/mods/tests/` — guest path `/mods/tests/<name>.wasm` on every platform (`scripts/lib/guest-package.sh`; knob `PM_METAL_GUEST_TESTS`). Threads/shared-memory default; `REACTOR` / `SOCKET` / `MOUNT` empty markers under `mods/tests/<name>/` as before. External apps (built in their own sibling repo, e.g. `packages/metal-doom`) stage under `/mods/apps/` via `METAL_EXT_APPS`. Kernel µPy boot-proof/demo scripts: `mods/py/tests/` (product: loose `/mods/{httpd,api,templates,microdot,utemplate}/` + iface packs kind `py`/`pyi`; loose stdlib under `/mods/py/stdlib`). |
 
 ---
 

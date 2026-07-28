@@ -3,6 +3,8 @@
 # EDK2 headers live under external/edk2 (run ./scripts/setup edk2).
 # After regenerating or editing this template: restart clangd
 # (Command Palette → "clangd: Restart language server") or reload the window.
+# After regenerating or editing this template: restart clangd
+# (Command Palette → "clangd: Restart language server") or reload the window.
 
 CompileFlags:
   Compiler: /usr/bin/clang
@@ -310,6 +312,21 @@ CompileFlags:
     - --sysroot
     - "@@ROOT@@/.tools/wasi-sdk/share/wasi-sysroot"
     - -I@@ROOT@@/include
+
+---
+# Vendored trees stay upstream-vanilla. IncludeCleaner (and friends) must not
+# push "remove unused include" / style fixes into external/ — Metal shims and
+# patches/<dep>/ only. See docs/SOURCETREE.md § Vendoring.
+# PathMatch is relative to this .clangd's directory (clangd project config).
+If:
+  PathMatch: external/.*
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None
+  ClangTidy:
+    Remove: '*'
+Index:
+  Background: Skip
 
 ---
 # Vendored trees stay upstream-vanilla. IncludeCleaner (and friends) must not

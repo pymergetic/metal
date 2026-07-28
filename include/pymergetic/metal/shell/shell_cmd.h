@@ -42,7 +42,6 @@ typedef struct pm_metal_shell_cmd {
   const char           *body; /* optional: longer detail, this face */
 } pm_metal_shell_cmd_t;
 
-
 /** One module's command list — always 16 bytes so section walk is LTO-safe. */
 typedef struct pm_metal_shell_cmd_table {
   const pm_metal_shell_cmd_t *cmds;
@@ -68,11 +67,11 @@ typedef struct pm_metal_shell_cmd_table {
  * doc.lookup("shell", name), never shown by the plain `help` listing.
  * `sig`/`body` may be NULL.
  */
-#define PM_METAL_SHELL_CMD_DOC(var, name_str, help_str, sig_str, body_str, fn_)      \
-  static const pm_metal_shell_cmd_t var##_cmd = {                                    \
-    (name_str), (help_str), (fn_), (sig_str), (body_str)                             \
-  };                                                                                  \
-  static const pm_metal_shell_cmd_table_t var                                        \
+#define PM_METAL_SHELL_CMD_DOC(var, name_str, help_str, sig_str, body_str, fn_) \
+  static const pm_metal_shell_cmd_t var##_cmd = {                               \
+    (name_str), (help_str), (fn_), (sig_str), (body_str)                        \
+  };                                                                            \
+  static const pm_metal_shell_cmd_table_t var                                   \
     __attribute__((used, section(".pm_metal_shell_cmds.1"), aligned(16))) = { &var##_cmd, 1u }
 
 /**
@@ -105,7 +104,7 @@ void pm_metal_shell_cmds_install(void);
  * (shell_py_bind.c) must read through these, never the linker section
  * directly, or a guest-registered command stays invisible to both.
  */
-uint32_t                    pm_metal_shell_cmd_count(void);
+uint32_t pm_metal_shell_cmd_count(void);
 /** NULL if i >= pm_metal_shell_cmd_count(). */
 const pm_metal_shell_cmd_t *pm_metal_shell_cmd_at(uint32_t i);
 /** NULL if no such command is registered. */

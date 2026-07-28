@@ -57,8 +57,8 @@ static void IfaceCmdLs(int32_t argc, char **argv)
   }
 
   {
-    const char *pkg   = argv[2];
-    int32_t     n     = pm_metal_iface_file_count(pkg);
+    const char *pkg = argv[2];
+    int32_t     n   = pm_metal_iface_file_count(pkg);
     int32_t     i;
     char        line[PM_METAL_IFACE_PATH_MAX + 4u];
 
@@ -103,8 +103,8 @@ static void IfaceCmdCat(int32_t argc, char **argv)
 static void IfaceCmdSym(int32_t argc, char **argv)
 {
   const char *module = (argc >= 3) ? argv[2] : NULL;
-  const char *name    = (argc >= 4) ? argv[3] : NULL;
-  int32_t     n       = pm_metal_iface_sym_count();
+  const char *name   = (argc >= 4) ? argv[3] : NULL;
+  int32_t     n      = pm_metal_iface_sym_count();
   int32_t     i;
   char        line[200];
 
@@ -163,12 +163,13 @@ static void IfaceShellCmd(int32_t argc, char **argv)
   IfaceUsage();
 }
 
-PM_METAL_SHELL_CMD_DOC(g_pm_metal_shell_cmd_iface,
-                      "iface",
-                      "iface [ls|cat|sym ...] header pack + sym table browser",
-                      "iface | iface ls [pkg] | iface cat <pkg> <path> | iface sym [module [name]]",
-                      "Browse registered header packs (default metal.guest, see docs/IFACE.md) "
-                      "and the build-scraped native sym table. `iface` alone lists packages; "
-                      "`iface sym` with no args lists every native; doc_key (if set) points "
-                      "into `doc.lookup_key()`.",
-                      IfaceShellCmd);
+PM_METAL_SHELL_CMD_DOC(
+  g_pm_metal_shell_cmd_iface,
+  "iface",
+  "iface [ls|cat|sym ...] header pack + sym table browser",
+  "iface | iface ls [pkg] | iface cat <pkg> <path> | iface sym [module [name]]",
+  "Browse registered packs (e.g. h@metal.guest, see docs/IFACE.md) "
+  "and the build-scraped native sym table. `iface` alone lists packages; "
+  "`iface sym` with no args lists every native; doc_key (if set) points "
+  "into `doc.lookup_key()`.",
+  IfaceShellCmd);

@@ -35,8 +35,8 @@ pm_metal_net_ssh_srv_h pm_metal_net_ssh_listen(uint32_t port);
 void                   pm_metal_net_ssh_close(pm_metal_net_ssh_srv_h s);
 int32_t                pm_metal_net_ssh_autoload(void);
 /** Fill buf with one-line status; returns bytes written (excl NUL) or -1. */
-int32_t                pm_metal_net_ssh_status(char *buf, uint32_t buf_len);
-int                    pm_metal_net_ssh_native_register(void);
+int32_t pm_metal_net_ssh_status(char *buf, uint32_t buf_len);
+int     pm_metal_net_ssh_native_register(void);
 #endif
 
 #ifdef __cplusplus

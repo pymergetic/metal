@@ -56,13 +56,13 @@ pm_metal_net_tls_h pm_metal_net_tls_open(const char *sni_host);
  * until pm_metal_net_tls_creds_close() succeeds.
  */
 pm_metal_net_tls_h pm_metal_net_tls_open_server(pm_metal_net_tls_creds_h creds);
-void           pm_metal_net_tls_close(pm_metal_net_tls_h h);
+void               pm_metal_net_tls_close(pm_metal_net_tls_h h);
 
 int32_t pm_metal_net_tls_bind(pm_metal_net_tls_h       h,
-                              pm_metal_net_ip_sock_h  sock,
+                              pm_metal_net_ip_sock_h   sock,
                               pm_metal_net_tls_wire_t *wire);
 int32_t pm_metal_net_tls_bind_server(pm_metal_net_tls_h       h,
-                                     pm_metal_net_ip_sock_h  sock,
+                                     pm_metal_net_ip_sock_h   sock,
                                      pm_metal_net_tls_wire_t *wire);
 
 /**
@@ -71,22 +71,22 @@ int32_t pm_metal_net_tls_bind_server(pm_metal_net_tls_h       h,
  * only with PM_METAL_TLS_CLIENT_AUTH_NONE.
  */
 pm_metal_net_tls_creds_h pm_metal_net_tls_creds_open(void);
-int32_t              pm_metal_net_tls_creds_load_buffers(pm_metal_net_tls_creds_h       h,
-                                                         const void                *cert,
-                                                         uint32_t                   cert_len,
-                                                         const void                *key,
-                                                         uint32_t                   key_len,
-                                                         const void                *client_ca,
-                                                         uint32_t                   client_ca_len,
-                                                         pm_metal_net_tls_client_auth_t client_auth);
+int32_t                  pm_metal_net_tls_creds_load_buffers(pm_metal_net_tls_creds_h       h,
+                                                             const void                    *cert,
+                                                             uint32_t                       cert_len,
+                                                             const void                    *key,
+                                                             uint32_t                       key_len,
+                                                             const void                    *client_ca,
+                                                             uint32_t                       client_ca_len,
+                                                             pm_metal_net_tls_client_auth_t client_auth);
 /**
  * Load the same material from ESP/VFS paths. The client CA path may be NULL
  * only with PM_METAL_TLS_CLIENT_AUTH_NONE.
  */
 int32_t pm_metal_net_tls_creds_load_paths(pm_metal_net_tls_creds_h       h,
-                                          const char                *cert_path,
-                                          const char                *key_path,
-                                          const char                *client_ca_path,
+                                          const char                    *cert_path,
+                                          const char                    *key_path,
+                                          const char                    *client_ca_path,
                                           pm_metal_net_tls_client_auth_t client_auth);
 /** Returns 0, or -1 while a bound server session still uses h. */
 int32_t pm_metal_net_tls_creds_close(pm_metal_net_tls_creds_h h);

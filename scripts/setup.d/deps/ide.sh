@@ -286,3 +286,4 @@ else
 fi
 
 echo "ide: done — restart clangd (or reload the window) so the IDE picks up .clangd"
+

@@ -4,7 +4,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 DIR="${ROOT}/external/crypt_blowfish"
-REF="${PM_METAL_CRYPT_BLOWFISH_REF:-master}"
+# Upstream is a single-branch repo (no "master"); optional REF pins a commit/tag.
+REF="${PM_METAL_CRYPT_BLOWFISH_REF:-}"
 URL="${PM_METAL_CRYPT_BLOWFISH_URL:-https://github.com/openwall/crypt_blowfish.git}"
 
 if [[ -d "${DIR}/.git" ]]; then
@@ -13,5 +14,10 @@ if [[ -d "${DIR}/.git" ]]; then
 fi
 
 mkdir -p "${ROOT}/external"
-git clone --depth 1 --branch "${REF}" "${URL}" "${DIR}"
-echo "external/crypt_blowfish -> ${REF}"
+if [[ -n "${REF}" ]]; then
+	git clone --depth 1 --branch "${REF}" "${URL}" "${DIR}"
+	echo "external/crypt_blowfish -> ${REF}"
+else
+	git clone --depth 1 "${URL}" "${DIR}"
+	echo "external/crypt_blowfish -> $(git -C "${DIR}" rev-parse --short HEAD)"
+fi

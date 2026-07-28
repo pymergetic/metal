@@ -173,12 +173,12 @@ typedef struct pm_metal_mod_about {
  */
 typedef struct pm_metal_mod_info {
   char     name[64];
-  int32_t  ready;      /* 1 if READY or RUNNING */
-  int32_t  running;    /* 1 if MOD_RUNNING (process stem active on slot) */
-  uint32_t cap;        /* pm_metal_mod_cap_t */
+  int32_t  ready;   /* 1 if READY or RUNNING */
+  int32_t  running; /* 1 if MOD_RUNNING (process stem active on slot) */
+  uint32_t cap;     /* pm_metal_mod_cap_t */
   uint32_t open_tasks;
   uint32_t fresh_open;
-  int32_t  has_about;  /* 1 if set_about was called */
+  int32_t  has_about; /* 1 if set_about was called */
 } pm_metal_mod_info_t;
 
 #ifdef __cplusplus

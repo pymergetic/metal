@@ -12,7 +12,7 @@
 #   scripts/format <path>...     format only these files/dirs
 #   scripts/format check <path>...
 #
-# *.inc.c files (embed_mods.inc.c, py_zip_embed.inc.c, ...) are skipped:
+# *.inc.c files (embed_mods.inc.c, iface_*_embed.inc.c, ...) are skipped:
 # they're "/* AUTO-GENERATED ... — do not edit */" byte-array dumps, not
 # hand-maintained C, and clang-format's own wrapping of a 12-byte-per-line
 # hex array doesn't reliably converge to a stable "clean" form anyway.

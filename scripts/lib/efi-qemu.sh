@@ -39,9 +39,9 @@ pm_metal_efi_stage_esp() {
 	mkdir -p "${esp}/mods/tests"
 	printf 'metal-async-fs\n' >"${esp}/mods/tests/async_fs.txt"
 
-	# MicroPython guest runtime + httpd/api — never stage external/ source
-	# trees (blow ESP cache). Loose packages under /mods (DIR + __init__.py);
-	# archive-only packs stay zip on sys.path (microdot/api/templates/…).
+	# MicroPython guest runtime + product Python — never stage full
+	# external/ checkout trees beyond the import roots (see stage-py-trees).
+	# Loose packages under /mods (+ /mods/py/stdlib); no zip on sys.path.
 	# shellcheck disable=SC1091
 	source "${ROOT}/scripts/lib/stage-py-httpd.sh"
 	pm_metal_stage_py_httpd_into "${esp}"

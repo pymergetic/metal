@@ -23,7 +23,7 @@ typedef struct {
 
 pm_metal_sshd_cfg_t *pm_metal_net_ssh_cfg(void);
 /** Load /etc/sshd.json + authorized_keys (or seed default). Returns 0. */
-int32_t              pm_metal_net_ssh_cfg_load(void);
+int32_t pm_metal_net_ssh_cfg_load(void);
 
 #ifdef __cplusplus
 }

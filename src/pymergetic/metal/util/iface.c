@@ -26,9 +26,9 @@
 #include <pymergetic/metal/util/lz4.h>
 #include <pymergetic/metal/util/tar.h>
 
-#define PM_METAL_IFACE_PKG_MAX         64u
-#define PM_METAL_IFACE_FILE_CACHE_MAX  256u
-#define PM_METAL_IFACE_STR_MAX         64u
+#define PM_METAL_IFACE_PKG_MAX        64u
+#define PM_METAL_IFACE_FILE_CACHE_MAX 256u
+#define PM_METAL_IFACE_STR_MAX        64u
 
 typedef struct {
   int      used;
@@ -38,17 +38,17 @@ typedef struct {
 } iface_file_cache_t;
 
 typedef struct {
-  int                        used;
-  char                       name[PM_METAL_IFACE_STR_MAX];
-  pm_metal_iface_pkg_kind_t  kind;
-  char                       version[PM_METAL_IFACE_STR_MAX];
-  char                       abi_hash[PM_METAL_IFACE_STR_MAX];
-  uint32_t                   blob_len;
-  uint8_t                   *ustar;
-  uint32_t                   ustar_len;
-  uint32_t                   nfiles;
-  iface_file_cache_t         cache[PM_METAL_IFACE_FILE_CACHE_MAX];
-  uint32_t                   cache_count;
+  int                       used;
+  char                      name[PM_METAL_IFACE_STR_MAX];
+  pm_metal_iface_pkg_kind_t kind;
+  char                      version[PM_METAL_IFACE_STR_MAX];
+  char                      abi_hash[PM_METAL_IFACE_STR_MAX];
+  uint32_t                  blob_len;
+  uint8_t                  *ustar;
+  uint32_t                  ustar_len;
+  uint32_t                  nfiles;
+  iface_file_cache_t        cache[PM_METAL_IFACE_FILE_CACHE_MAX];
+  uint32_t                  cache_count;
 } iface_pkg_t;
 
 static iface_pkg_t g_pkgs[PM_METAL_IFACE_PKG_MAX];
@@ -98,7 +98,7 @@ static uint32_t PkgCountFiles(const uint8_t *ustar, size_t len)
 {
   pm_metal_util_tar_iter_t it;
   uint32_t                 n = 0;
-  int                       rc;
+  int                      rc;
 
   pm_metal_util_tar_iter_init(&it, ustar, len);
   while ((rc = pm_metal_util_tar_iter_next(&it)) == 1) {
@@ -110,13 +110,13 @@ static uint32_t PkgCountFiles(const uint8_t *ustar, size_t len)
   return n;
 }
 
-int32_t pm_metal_iface_pkg_register(const char                *name,
-                                    pm_metal_iface_pkg_kind_t  kind,
-                                    const char                *version,
-                                    const char                *abi_hash,
-                                    const uint8_t              *blob,
-                                    uint32_t                    blob_len,
-                                    uint32_t                    uncompressed_len)
+int32_t pm_metal_iface_pkg_register(const char               *name,
+                                    pm_metal_iface_pkg_kind_t kind,
+                                    const char               *version,
+                                    const char               *abi_hash,
+                                    const uint8_t            *blob,
+                                    uint32_t                  blob_len,
+                                    uint32_t                  uncompressed_len)
 {
   iface_pkg_t *pkg;
   uint32_t     idx;
@@ -158,9 +158,9 @@ int32_t pm_metal_iface_pkg_register(const char                *name,
     }
   }
 
-  pkg->used     = 1;
+  pkg->used = 1;
   StrCopy(pkg->name, sizeof(pkg->name), name);
-  pkg->kind      = kind;
+  pkg->kind = kind;
   StrCopy(pkg->version, sizeof(pkg->version), version);
   StrCopy(pkg->abi_hash, sizeof(pkg->abi_hash), abi_hash);
   pkg->blob_len  = blob_len;
@@ -223,7 +223,7 @@ int32_t pm_metal_iface_file_at(const char *pkg, uint32_t i, char *out, uint32_t 
   iface_pkg_t             *p = PkgFind(pkg);
   pm_metal_util_tar_iter_t it;
   uint32_t                 seen = 0;
-  int                       rc;
+  int                      rc;
 
   if (p == NULL || out == NULL) {
     return -1;
@@ -266,8 +266,8 @@ static iface_file_cache_t *FileCacheFind(iface_pkg_t *pkg, const char *path)
 static iface_file_cache_t *FileCacheLoad(iface_pkg_t *pkg, const char *path)
 {
   pm_metal_util_tar_iter_t it;
-  int                       rc;
-  iface_file_cache_t       *slot = NULL;
+  int                      rc;
+  iface_file_cache_t      *slot = NULL;
 
   if (pkg->cache_count >= PM_METAL_IFACE_FILE_CACHE_MAX) {
     return NULL;
@@ -290,8 +290,7 @@ static iface_file_cache_t *FileCacheLoad(iface_pkg_t *pkg, const char *path)
       uint64_t size = pm_metal_util_tar_iter_size(&it);
       uint8_t *data;
 
-      data =
-        (uint8_t *)pm_metal_mem_alloc((uint32_t)size, PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
+      data = (uint8_t *)pm_metal_mem_alloc((uint32_t)size, PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
       if (data == NULL) {
         break;
       }
@@ -314,7 +313,7 @@ static iface_file_cache_t *FileCacheLoad(iface_pkg_t *pkg, const char *path)
         break;
       }
 
-      slot = &pkg->cache[pkg->cache_count++];
+      slot       = &pkg->cache[pkg->cache_count++];
       slot->used = 1;
       StrCopy(slot->path, sizeof(slot->path), path);
       slot->data = data;
@@ -326,10 +325,13 @@ static iface_file_cache_t *FileCacheLoad(iface_pkg_t *pkg, const char *path)
   return slot;
 }
 
-int32_t pm_metal_iface_file_open(const char *pkg, const char *path, const uint8_t **data, uint32_t *len)
+int32_t pm_metal_iface_file_open(const char     *pkg,
+                                 const char     *path,
+                                 const uint8_t **data,
+                                 uint32_t       *len)
 {
-  iface_pkg_t         *p = PkgFind(pkg);
-  iface_file_cache_t   *slot;
+  iface_pkg_t        *p = PkgFind(pkg);
+  iface_file_cache_t *slot;
 
   if (p == NULL || path == NULL || data == NULL || len == NULL) {
     return -1;
@@ -436,8 +438,8 @@ static int32_t pm_metal_iface_file_count_native(wasm_exec_env_t exec_env, const 
   return pm_metal_iface_file_count(pkg);
 }
 
-static int32_t
-pm_metal_iface_file_at_native(wasm_exec_env_t exec_env, const char *pkg, uint32_t i, char *out, uint32_t cap)
+static int32_t pm_metal_iface_file_at_native(
+  wasm_exec_env_t exec_env, const char *pkg, uint32_t i, char *out, uint32_t cap)
 {
   (void)exec_env;
   return pm_metal_iface_file_at(pkg, i, out, cap);

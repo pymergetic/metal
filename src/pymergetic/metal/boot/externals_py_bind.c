@@ -18,8 +18,7 @@ static pm_metal_py_obj_t ExtToDict(const pm_metal_external_t *e)
 
   d = pm_metal_py_dict_new(4);
   pm_metal_py_dict_set_str(d, "id", pm_metal_py_str_new(e->id != NULL ? e->id : ""));
-  pm_metal_py_dict_set_str(d, "version",
-                           pm_metal_py_str_new(e->version != NULL ? e->version : ""));
+  pm_metal_py_dict_set_str(d, "version", pm_metal_py_str_new(e->version != NULL ? e->version : ""));
   pm_metal_py_dict_set_str(d, "url", pm_metal_py_str_new(url));
   pm_metal_py_dict_set_str(d, "note", pm_metal_py_str_new(note));
   return d;

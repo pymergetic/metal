@@ -1,25 +1,17 @@
-from httpd.highlight import highlight_c
+from httpd.highlight import highlight_file
 from httpd.util import (
     doc_row_esc,
     esc,
     html,
     iface_norm_path,
+    iface_pkg_groups,
     json_page,
     json_response,
     paginate,
     sym_row_esc,
+    url_pkg_name,
     url_query_val,
 )
-
-
-def _iface_is_prose_path(path):
-  if path is None:
-    return False
-  p = str(path)
-  if p == "LICENSE" or p.endswith("/LICENSE"):
-    return True
-  base = p.rsplit("/", 1)[-1]
-  return base.endswith(".md")
 
 
 async def _iface_file_page(name, path):
@@ -36,16 +28,13 @@ async def _iface_file_page(name, path):
     text = body.decode()
   except Exception:
     text = ""
-  if _iface_is_prose_path(path):
-    body_html = esc(text)
-  else:
-    body_html = highlight_c(text)
   return html(
       "iface_file.html",
       title=esc(path),
       name=esc(name),
+      pkg_href="/iface/pkg/" + url_pkg_name(name),
       path=esc(path),
-      body_html=body_html,
+      body_html=highlight_file(path, text),
   )
 
 
@@ -55,16 +44,11 @@ def register(app):
     import pymergetic.metal.iface as iface
 
     _ = request
-    info = iface.info()
-    pkgs = []
-    for name in sorted(info.keys()):
-      pkgs.append((esc(name), {
-          "kind": esc(info[name].get("kind", "")),
-          "version": esc(info[name].get("version", "")),
-          "nfiles": info[name].get("nfiles", 0),
-          "blob_len": info[name].get("blob_len", 0),
-      }))
-    return html("iface_list.html", title="iface", pkgs=pkgs)
+    return html(
+        "iface_list.html",
+        title="iface",
+        groups=iface_pkg_groups(iface.info()),
+    )
 
   @app.get("/iface/pkg/<name>")
   async def iface_pkg(request, name):
@@ -79,13 +63,14 @@ def register(app):
       np = iface_norm_path(p)
       files.append({
           "path": esc(np),
-          "href": "/iface/pkg/" + name + "/view?path=" + url_query_val(np),
+          "href": "/iface/pkg/" + url_pkg_name(name) + "/view?path=" + url_query_val(np),
       })
     meta = info[name]
     return html(
         "iface_pkg.html",
         title=esc(name),
         name=esc(name),
+        pkg_href="/iface/pkg/" + url_pkg_name(name),
         info={
             "kind": esc(meta.get("kind", "")),
             "version": esc(meta.get("version", "")),

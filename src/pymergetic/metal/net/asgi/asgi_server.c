@@ -41,9 +41,9 @@ typedef struct {
   asgi_step_t             step;
   pm_metal_net_asgi_srv_h srv_h;
   pm_metal_async_handle_t aw;
-  pm_metal_net_ip_sock_h     csock;
-  pm_metal_net_tls_h          tls_h;
-  pm_metal_net_tls_wire_t     wire;
+  pm_metal_net_ip_sock_h  csock;
+  pm_metal_net_tls_h      tls_h;
+  pm_metal_net_tls_wire_t wire;
   int32_t                 use_tls;
   int32_t                 in_budget;
   int32_t                 keepalive;
@@ -59,7 +59,7 @@ typedef struct {
 static pm_metal_py_fn_h_t g_httpd_fn;
 static int32_t            g_httpd_importing;
 /* WS echo out + wasm send_simple body — not on C stack (ASGI_IO_MAX is 4 MiB). */
-static uint8_t           *g_asgi_scratch;
+static uint8_t *g_asgi_scratch;
 
 static uint8_t *asgi_scratch(void)
 {
@@ -386,8 +386,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
       if (pm_metal_net_asgi_budget_try_enter(srv->budget_pct) != 0) {
         pm_metal_net_asgi_conn_begin(st->csock, PM_METAL_TLS_INVALID, NULL, NULL, NULL, NULL);
         pm_metal_net_asgi_conn_set_keepalive(0);
-        (void)pm_metal_net_asgi_send_simple(
-          503, "Unavailable", "text/plain", "budget\n");
+        (void)pm_metal_net_asgi_send_simple(503, "Unavailable", "text/plain", "budget\n");
         pm_metal_net_ip_close(st->csock);
         st->csock = PM_METAL_NET_IP_SOCK_INVALID;
         st->step  = ASGI_ST_ACCEPT;
@@ -539,8 +538,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
         st->aw = pm_metal_py_run_str("import httpd\n");
         if (st->aw == PM_METAL_ASYNC_HANDLE_INVALID) {
           g_httpd_importing = 0;
-          (void)pm_metal_net_asgi_send_simple(
-            500, "Error", "text/plain", "py import fail\n");
+          (void)pm_metal_net_asgi_send_simple(500, "Error", "text/plain", "py import fail\n");
           conn_cleanup(st);
           st->step = ASGI_ST_ACCEPT;
           break;
@@ -589,8 +587,7 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
       g_httpd_fn = pm_metal_py_fn_resolve("httpd.handle");
       if (g_httpd_fn == PM_METAL_PY_FN_H_INVALID) {
         pm_metal_logf("asgi: py resolve fail (httpd.handle)");
-        (void)pm_metal_net_asgi_send_simple(
-          500, "Error", "text/plain", "py resolve fail\n");
+        (void)pm_metal_net_asgi_send_simple(500, "Error", "text/plain", "py resolve fail\n");
         conn_cleanup(st);
         st->step = ASGI_ST_ACCEPT;
         break;
@@ -732,9 +729,9 @@ static pm_metal_status_t AsgiListenStep(pm_metal_async_handle_t self_h)
   }
 }
 
-pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t             port,
-                                                 const char *const   *ifnames,
-                                                 uint32_t             nif,
+pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t                 port,
+                                                 const char *const       *ifnames,
+                                                 uint32_t                 nif,
                                                  pm_metal_net_tls_creds_h creds)
 {
   pm_metal_net_asgi_srv_h h;
@@ -745,11 +742,11 @@ pm_metal_net_asgi_srv_h pm_metal_net_asgi_listen(uint32_t             port,
   if (h == PM_METAL_NET_ASGI_SRV_INVALID) {
     return h;
   }
-  srv                = &g_srvs[h];
-  srv->port          = port;
-  srv->creds         = creds;
-  srv->keepalive_s   = 30;
-  srv->budget_pct    = 10;
+  srv              = &g_srvs[h];
+  srv->port        = port;
+  srv->creds       = creds;
+  srv->keepalive_s = 30;
+  srv->budget_pct  = 10;
   if (pm_metal_net_asgi_cfg()->loaded) {
     srv->keepalive_s = pm_metal_net_asgi_cfg()->keepalive_s;
     srv->budget_pct  = pm_metal_net_asgi_cfg()->budget_pct;
@@ -860,10 +857,10 @@ void pm_metal_net_asgi_close(pm_metal_net_asgi_srv_h s)
   memset(srv, 0, sizeof(*srv));
 }
 
-static int32_t              g_asgi_autoloaded;
+static int32_t                  g_asgi_autoloaded;
 static pm_metal_net_tls_creds_h g_httpd_tls_creds = PM_METAL_TLS_CREDS_INVALID;
-static pm_metal_net_asgi_srv_h g_autoload_srvs[ASGI_SRV_MAX];
-static uint32_t                g_autoload_n;
+static pm_metal_net_asgi_srv_h  g_autoload_srvs[ASGI_SRV_MAX];
+static uint32_t                 g_autoload_n;
 
 static void asgi_apply_mounts(pm_metal_net_asgi_srv_h srv, const asgi_httpd_cfg_t *cfg)
 {
@@ -900,7 +897,7 @@ static void asgi_apply_mounts(pm_metal_net_asgi_srv_h srv, const asgi_httpd_cfg_
 static pm_metal_net_tls_creds_h asgi_load_httpd_creds(const asgi_httpd_cfg_t *cfg)
 {
   pm_metal_net_tls_creds_h h;
-  const char          *ca;
+  const char              *ca;
 
   if (g_httpd_tls_creds != PM_METAL_TLS_CREDS_INVALID) {
     return g_httpd_tls_creds;
@@ -913,8 +910,8 @@ static pm_metal_net_tls_creds_h asgi_load_httpd_creds(const asgi_httpd_cfg_t *cf
     return h;
   }
   ca = (cfg->tls_client_ca[0] != '\0') ? cfg->tls_client_ca : NULL;
-  if (pm_metal_net_tls_creds_load_paths(
-        h, cfg->tls_cert, cfg->tls_key, ca, cfg->client_auth) != 0) {
+  if (pm_metal_net_tls_creds_load_paths(h, cfg->tls_cert, cfg->tls_key, ca, cfg->client_auth) !=
+      0) {
     (void)pm_metal_net_tls_creds_close(h);
     return PM_METAL_TLS_CREDS_INVALID;
   }
@@ -941,10 +938,10 @@ static void asgi_autoload_close_all(void)
 
 int32_t pm_metal_net_asgi_autoload(void)
 {
-  asgi_httpd_cfg_t       *cfg;
-  pm_metal_net_asgi_srv_h srv;
-  pm_metal_net_tls_creds_h    creds;
-  pm_metal_net_asgi_srv_h tls_srv;
+  asgi_httpd_cfg_t        *cfg;
+  pm_metal_net_asgi_srv_h  srv;
+  pm_metal_net_tls_creds_h creds;
+  pm_metal_net_asgi_srv_h  tls_srv;
 
   if (g_asgi_autoloaded) {
     return 0;
@@ -989,7 +986,7 @@ int32_t pm_metal_net_asgi_autoload(void)
 int32_t pm_metal_net_asgi_reload(void)
 {
   asgi_autoload_close_all();
-  g_asgi_autoloaded    = 0;
+  g_asgi_autoloaded = 0;
   g_httpd_fn        = PM_METAL_PY_FN_H_INVALID;
   g_httpd_importing = 0;
   return pm_metal_net_asgi_autoload();
@@ -1086,11 +1083,8 @@ static int32_t asgi_autoload_native(wasm_exec_env_t exec_env)
   return pm_metal_net_asgi_autoload();
 }
 
-static int32_t asgi_send_simple_native(wasm_exec_env_t exec_env,
-                                       uint32_t        code,
-                                       const char     *reason,
-                                       const char     *ctype,
-                                       const char     *body)
+static int32_t asgi_send_simple_native(
+  wasm_exec_env_t exec_env, uint32_t code, const char *reason, const char *ctype, const char *body)
 {
   char     r[64];
   char     c[64];

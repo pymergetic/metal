@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Stage mods/py + mods/httpd + mods/api guest artifacts into an ESP/PXE root.
+# Stage mods/py + product Python (import layout) into an ESP/PXE root.
 # shellcheck shell=bash
-# Requires ROOT. Packs/signs zips from source every call.
+# Requires ROOT.
 
 pm_metal_stage_py_httpd_into() {
 	local dest="$1"
@@ -10,40 +10,27 @@ pm_metal_stage_py_httpd_into() {
 		return 0
 	fi
 
-	if [[ -x "${ROOT}/mods/httpd/build_microdot_zip.sh" ]]; then
-		"${ROOT}/mods/httpd/build_microdot_zip.sh"
+	# shellcheck disable=SC1091
+	source "${ROOT}/scripts/lib/stage-py-trees.sh"
+
+	mkdir -p "${dest}/mods/py"
+
+	# Loose Easy stdlib -> /mods/py/stdlib (sys.path); mandatory for µPy.
+	if [[ ! -d "${ROOT}/mods/py/stdlib" ]]; then
+		echo "stage-py-httpd: missing mandatory ${ROOT}/mods/py/stdlib" >&2
+		return 1
 	fi
-	if [[ -x "${ROOT}/mods/httpd/pack_zips.sh" ]]; then
-		"${ROOT}/mods/httpd/pack_zips.sh"
-	fi
-	if [[ -x "${ROOT}/mods/py/build_stdlib_zip.sh" ]]; then
-		# stdlib.zip also embedded at firmware build; refresh for ESP copy.
-		"${ROOT}/mods/py/build_stdlib_zip.sh" || true
+	pm_metal_stage_py_copy_py_tree "${ROOT}/mods/py/stdlib" "${dest}/mods/py/stdlib"
+	if [[ -z "$(find "${dest}/mods/py/stdlib" -type f -name '*.py' 2>/dev/null | head -n 1)" ]]; then
+		echo "stage-py-httpd: mandatory stdlib stage empty" >&2
+		return 1
 	fi
 
-	mkdir -p "${dest}/mods/py" "${dest}/mods/httpd"
-
-	for f in stdlib.zip stdlib.zip.sig; do
-		if [[ -f "${ROOT}/mods/py/${f}" ]]; then
-			cp -a "${ROOT}/mods/py/${f}" "${dest}/mods/py/"
-		fi
-	done
 	if [[ -d "${ROOT}/mods/py/tests" ]]; then
 		mkdir -p "${dest}/mods/py/tests"
 		cp -a "${ROOT}/mods/py/tests/." "${dest}/mods/py/tests/"
 	fi
 
-	for f in __init__.py autoload.py util.py highlight.py microdot.zip microdot.zip.sig utemplate.zip; do
-		if [[ -f "${ROOT}/mods/httpd/${f}" ]]; then
-			cp -a "${ROOT}/mods/httpd/${f}" "${dest}/mods/httpd/"
-		fi
-	done
-
-	# Zips at /mods/*.zip — not mods/api/ (DIR would shadow `import api`).
-	if [[ -f "${ROOT}/mods/api/api.zip" ]]; then
-		cp -a "${ROOT}/mods/api/api.zip" "${dest}/mods/api.zip"
-	fi
-	if [[ -f "${ROOT}/mods/api/templates.zip" ]]; then
-		cp -a "${ROOT}/mods/api/templates.zip" "${dest}/mods/templates.zip"
-	fi
+	# Import layout under /mods (httpd/, api/, …).
+	pm_metal_stage_py_import_tree_into "${dest}/mods"
 }

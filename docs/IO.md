@@ -112,10 +112,21 @@ Topic modules place commands with `PM_METAL_SHELL_CMD` / `PM_METAL_SHELL_CMDS` i
 Third-party stack identity (MicroPython, WAMR, lwIP, Dropbear, mbedTLS,
 microtar, …) self-registers with `PM_METAL_EXTERNAL` into
 `.pm_metal_externals.*` — same linker-section idiom as shell cmds / keyb
+layouts. This is **not** the mod registry and **not** Metal's own
+`authors` / `about` record. Surfaces: shell `externals`, Python
+`pymergetic.metal.externals`, WASI `pymergetic.metal.externals`, and the
+MetalPython boot banner (`Metal <ver> @ <cpu>` plus `  - <id> <version>`
+bullets).
+
+### Externals registry
+
+Third-party stack identity (MicroPython, WAMR, lwIP, Dropbear, mbedTLS,
+microtar, …) self-registers with `PM_METAL_EXTERNAL` into
+`.pm_metal_externals.*` — same linker-section idiom as shell cmds / keyb
 layouts. Guest-only stacks (Microdot, utemplate, …) register at runtime via
 `pymergetic.metal.externals.register` from `/mods/<name>/autoload.py`
-(path-exec once on the shared µPy context — REPL banner and post-`stdlib.zip`
-ready). This is **not** the mod registry and **not** Metal's own
+(path-exec once on the shared µPy context — REPL banner and after stdlib is
+on `sys.path`). This is **not** the mod registry and **not** Metal's own
 `authors` / `about` record. Surfaces: shell `externals`, Python
 `pymergetic.metal.externals` (`list` / `get` / `register`), WASI
 `pymergetic.metal.externals`, HTML/JSON `/externals` + `/api/externals` (see
@@ -171,6 +182,13 @@ across boots. Override at ESP/PXE stage with `METAL_SSHD_HOSTKEY=/path`,
 or at runtime via `sshd.json` `"host_key"`. Do not use the lab key outside
 dev.
 
+A checked-in lab Dropbear ed25519 host key ships in
+`mods/etc/ssh/dropbear_ed25519_host_key` and is staged/preloaded as
+`/etc/ssh/dropbear_ed25519_host_key` so the host fingerprint is stable
+across boots. Override at ESP/PXE stage with `METAL_SSHD_HOSTKEY=/path`,
+or at runtime via `sshd.json` `"host_key"`. Do not use the lab key outside
+dev.
+
 ### SSH sslcert auth
 
 `/etc/sshd.json` may add `"sslcert"` to `auth.methods` and set
@@ -204,6 +222,10 @@ them ahead of time. Builtins for config: `c:health`, `c:static`,
 |:---:|:---:|
 | ![ASGI runner dispatch](../screenshots/asgi-dispatch.png) | ![httpd.json mounts](../screenshots/asgi-httpd-mounts.png) |
 | `asgi_server.c` — mount → C / Py / wasm | `mods/etc/httpd.json` — path → app |
+
+Wasm proof mod `asgi_hello` (embedded): shell `asgi_hello` registers a wasm
+ASGI leaf, listens on port 18080, mounts `/hello`, and replies
+`asgi-hello` via `pm_metal_net_asgi_send_simple`.
 
 Wasm proof mod `asgi_hello` (embedded): shell `asgi_hello` registers a wasm
 ASGI leaf, listens on port 18080, mounts `/hello`, and replies

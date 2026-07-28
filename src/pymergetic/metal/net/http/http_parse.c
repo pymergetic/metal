@@ -89,7 +89,9 @@ uint32_t pm_metal_http_parse_status(const char *hdr, uint32_t hdr_len)
   return st;
 }
 
-void pm_metal_net_http_scan_body_mode(const char *hdr, uint32_t hdr_len, pm_metal_net_http_body_mode_t *out)
+void pm_metal_net_http_scan_body_mode(const char                    *hdr,
+                                      uint32_t                       hdr_len,
+                                      pm_metal_net_http_body_mode_t *out)
 {
   const char *line;
   uint32_t    i;
@@ -159,8 +161,8 @@ void pm_metal_http_chunk_dec_init(pm_metal_http_chunk_dec_t *d)
   d->step = PM_METAL_HTTP_CHUNK_SIZE;
 }
 
-static int32_t chunk_feed_byte(pm_metal_http_chunk_dec_t *d, uint8_t b, uint8_t *body,
-                               uint32_t body_cap, uint32_t *body_len)
+static int32_t chunk_feed_byte(
+  pm_metal_http_chunk_dec_t *d, uint8_t b, uint8_t *body, uint32_t body_cap, uint32_t *body_len)
 {
   int32_t hv;
 
@@ -239,8 +241,12 @@ static int32_t chunk_feed_byte(pm_metal_http_chunk_dec_t *d, uint8_t b, uint8_t 
   }
 }
 
-int32_t pm_metal_http_chunk_dec_feed(pm_metal_http_chunk_dec_t *d, const uint8_t *data, uint32_t len,
-                                     uint8_t *body, uint32_t body_cap, uint32_t *body_len)
+int32_t pm_metal_http_chunk_dec_feed(pm_metal_http_chunk_dec_t *d,
+                                     const uint8_t             *data,
+                                     uint32_t                   len,
+                                     uint8_t                   *body,
+                                     uint32_t                   body_cap,
+                                     uint32_t                  *body_len)
 {
   uint32_t i;
 
@@ -258,9 +264,13 @@ int32_t pm_metal_http_chunk_dec_feed(pm_metal_http_chunk_dec_t *d, const uint8_t
   return 0;
 }
 
-int32_t pm_metal_http_parse_request_line(const char *hdr, uint32_t hdr_len, char *method,
-                                         uint32_t method_cap, char *target, uint32_t target_cap,
-                                         uint32_t *ver_minor)
+int32_t pm_metal_http_parse_request_line(const char *hdr,
+                                         uint32_t    hdr_len,
+                                         char       *method,
+                                         uint32_t    method_cap,
+                                         char       *target,
+                                         uint32_t    target_cap,
+                                         uint32_t   *ver_minor)
 {
   uint32_t i;
   uint32_t m0;
@@ -315,11 +325,11 @@ int32_t pm_metal_http_parse_request_line(const char *hdr, uint32_t hdr_len, char
   return 0;
 }
 
-int32_t pm_metal_http_hdr_get(const char *hdr, uint32_t hdr_len, const char *name, char *out,
-                              uint32_t out_cap)
+int32_t pm_metal_http_hdr_get(
+  const char *hdr, uint32_t hdr_len, const char *name, char *out, uint32_t out_cap)
 {
-  uint32_t nlen;
-  uint32_t i;
+  uint32_t    nlen;
+  uint32_t    i;
   const char *line;
 
   if (hdr == NULL || name == NULL || out == NULL || out_cap == 0) {
@@ -372,8 +382,8 @@ int32_t pm_metal_http_fmt_status(char *dest, uint32_t dest_cap, uint32_t code, c
   return n;
 }
 
-int32_t pm_metal_http_hdr_append(char *dest, uint32_t dest_cap, uint32_t dest_len, const char *name,
-                                 const char *value)
+int32_t pm_metal_http_hdr_append(
+  char *dest, uint32_t dest_cap, uint32_t dest_len, const char *name, const char *value)
 {
   int32_t n;
 
@@ -400,8 +410,10 @@ int32_t pm_metal_http_hdr_end(char *dest, uint32_t dest_cap, uint32_t dest_len)
   return (int32_t)dest_len;
 }
 
-int32_t pm_metal_http_chunk_encode(char *dest, uint32_t dest_cap, const uint8_t *data,
-                                   uint32_t data_len)
+int32_t pm_metal_http_chunk_encode(char          *dest,
+                                   uint32_t       dest_cap,
+                                   const uint8_t *data,
+                                   uint32_t       data_len)
 {
   int32_t n;
 

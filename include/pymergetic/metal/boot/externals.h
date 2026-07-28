@@ -43,13 +43,10 @@ typedef struct pm_metal_external_table {
  * alphabetical by id). `var` should be `g_pm_metal_ext_<id>`; `id` is an
  * unquoted token (becomes both the string key and the section suffix).
  */
-#define PM_METAL_EXTERNAL(var, id, version, url, note)                         \
-  static const pm_metal_external_t var##_row = { #id, (version), (url),        \
-                                                 (note) };                     \
-  static const pm_metal_external_table_t var                                   \
-    __attribute__((used, section(".pm_metal_externals." #id), aligned(16))) = { \
-      &var##_row, 1u                                                           \
-    }
+#define PM_METAL_EXTERNAL(var, id, version, url, note)                                  \
+  static const pm_metal_external_t       var##_row = { #id, (version), (url), (note) }; \
+  static const pm_metal_external_table_t var                                            \
+    __attribute__((used, section(".pm_metal_externals." #id), aligned(16))) = { &var##_row, 1u }
 
 /** Section bounds — walked only by externals.c. */
 extern const pm_metal_external_table_t __pm_metal_externals_start[];
@@ -75,8 +72,7 @@ int pm_metal_externals_native_register(void);
 
 #include "pymergetic/metal/wasi.h"
 
-#define PM_METAL_EXTERNALS_IMPORT(name) \
-  PM_METAL_WASI_IMPORT(PM_METAL_EXTERNALS_WASI_MODULE, name)
+#define PM_METAL_EXTERNALS_IMPORT(name) PM_METAL_WASI_IMPORT(PM_METAL_EXTERNALS_WASI_MODULE, name)
 
 /**
  * Guest out-buffer for get/find — string fields copied from host statics

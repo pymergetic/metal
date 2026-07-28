@@ -48,7 +48,8 @@ static const char g_httpd_json_default[] =
   "        \"pass_hash\": \"$2b$04$05mgiRuks.3l02Sjz2KwgegyoxT7e6GeuuuUyJbYCcW.DIdlPvdbW\"\n"
   "      }\n"
   "    ],\n"
-  "    \"public\": [\"/health\", \"/static\", \"/docs\", \"/iface\", \"/about\", \"/externals\", \"/limits\", \"/api\"]\n"
+  "    \"public\": [\"/health\", \"/static\", \"/docs\", \"/iface\", \"/about\", \"/externals\", "
+  "\"/limits\", \"/api\"]\n"
   "  },\n"
   "  \"mounts\": [\n"
   "    { \"path\": \"/health\", \"app\": \"c:health\" },\n"
@@ -116,7 +117,7 @@ static const char *find_key(const char *json, const char *key)
 
 static int32_t parse_u32(const char *p, uint32_t *out)
 {
-  char *end;
+  char         *end;
   unsigned long v;
 
   if (p == NULL || out == NULL) {
@@ -259,7 +260,7 @@ static void parse_users(const char *json, asgi_httpd_cfg_t *cfg)
     }
     user[0] = '\0';
     hash[0] = '\0';
-    v = find_key_range(obj, end, "user");
+    v       = find_key_range(obj, end, "user");
     if (v != NULL) {
       (void)parse_string(v, user, sizeof(user));
     }
@@ -310,7 +311,7 @@ static void parse_mounts(const char *json, asgi_httpd_cfg_t *cfg)
     app[0]  = '\0';
     root[0] = '\0';
     auth[0] = '\0';
-    v = find_key_range(obj, end, "path");
+    v       = find_key_range(obj, end, "path");
     if (v != NULL) {
       (void)parse_string(v, path, sizeof(path));
     }
@@ -416,9 +417,8 @@ static int32_t ensure_httpd_json_file(void)
   if (sz > 0) {
     return 0;
   }
-  if (pm_metal_fs_write(HTTPD_JSON_PATH,
-                        g_httpd_json_default,
-                        (uint32_t)(sizeof(g_httpd_json_default) - 1u)) !=
+  if (pm_metal_fs_write(
+        HTTPD_JSON_PATH, g_httpd_json_default, (uint32_t)(sizeof(g_httpd_json_default) - 1u)) !=
       (uint32_t)(sizeof(g_httpd_json_default) - 1u)) {
     pm_metal_logf("asgi: seed %s failed", HTTPD_JSON_PATH);
     return -1;
@@ -435,8 +435,7 @@ static void ensure_www_index(void)
   if (sz > 0) {
     return;
   }
-  (void)pm_metal_fs_write(
-    path, g_www_index_default, (uint32_t)(sizeof(g_www_index_default) - 1u));
+  (void)pm_metal_fs_write(path, g_www_index_default, (uint32_t)(sizeof(g_www_index_default) - 1u));
 }
 
 int32_t pm_metal_net_asgi_cfg_load(void)

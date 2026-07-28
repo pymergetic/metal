@@ -436,11 +436,11 @@ void pm_metal_hwinfo_cpu_brand(char *out, size_t cap)
 
 void pm_metal_hwinfo_print(void)
 {
-  char                        net_line[640];
-  const pm_metal_net_ip_ops_t   *net_ops;
-  const pm_metal_audio_ops_t *aud_ops;
-  uint32_t                    i;
-  uint32_t                    nblk;
+  char                         net_line[640];
+  const pm_metal_net_ip_ops_t *net_ops;
+  const pm_metal_audio_ops_t  *aud_ops;
+  uint32_t                     i;
+  uint32_t                     nblk;
 
   {
     char hostname[PM_METAL_HOST_NAME_MAX];

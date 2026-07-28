@@ -9,6 +9,7 @@
 #include <pymergetic/metal/shell/ui/tab.h>
 #include <pymergetic/metal/runtime/async/async.h>
 #include <pymergetic/metal/log/log.h>
+#include <pymergetic/metal/py/py.h>
 
 #include <pymergetic/metal/runtime/mem/mem.h>
 #include <runtime/slot/spin.h>
@@ -49,9 +50,9 @@ typedef struct {
   void   *fn; /* wasm_function_inst_t */
   /* Doc catalog fields (docs/DOC_IFACE_PLAN.md Part I) — set only via
    * pm_metal_mod_register_func_doc; "" (never NULL) when unset. */
-  char    doc_summary[96];
-  char    doc_sig[64];
-  char    doc_body[128];
+  char doc_summary[96];
+  char doc_sig[64];
+  char doc_body[128];
 } mod_func_t;
 
 typedef struct {
@@ -69,7 +70,7 @@ typedef struct {
   pm_metal_wasm_mod_image_t img;
 } mod_fresh_t;
 
-static mod_slot_t           mMods[PM_METAL_MOD_MAX];
+static mod_slot_t mMods[PM_METAL_MOD_MAX];
 /*
  * Guards find-or-claim on mMods[] only (short, no await inside). Runners
  * are genuine parallel APs (StartupAllAPs) and MetalPickCpu round-robins
@@ -138,7 +139,7 @@ static mod_slot_t *ModAlloc(const char *name)
         mMods[i].used = 1;
         strncpy(mMods[i].name, name, sizeof(mMods[i].name) - 1);
         mMods[i].state = MOD_EMPTY;
-        s = &mMods[i];
+        s              = &mMods[i];
         break;
       }
     }
@@ -354,11 +355,8 @@ int32_t pm_metal_mod_about_get(const char *mod_name, pm_metal_mod_about_t *out)
   return 0;
 }
 
-static int32_t ModRegisterFuncDocHost(const char *name,
-                                      const char *export_name,
-                                      const char *summary,
-                                      const char *sig,
-                                      const char *body)
+static int32_t ModRegisterFuncDocHost(
+  const char *name, const char *export_name, const char *summary, const char *sig, const char *body)
 {
   mod_func_t *f;
   void       *fn;
@@ -596,10 +594,12 @@ int pm_metal_mod_load(const char *name)
 
   s = ModFind(name);
   if (s != NULL && s->state == MOD_RUNNING) {
+    (void)pm_metal_py_autoload_for_mod(name);
     return 0;
   }
 
   if (s != NULL && s->state == MOD_READY && s->img.module != NULL) {
+    (void)pm_metal_py_autoload_for_mod(name);
     return 0;
   }
 
@@ -624,6 +624,7 @@ int pm_metal_mod_load(const char *name)
   }
 
   pm_metal_logf("metal-mod: ready %s", name);
+  (void)pm_metal_py_autoload_for_mod(name);
   return 0;
 }
 
@@ -1342,11 +1343,8 @@ int32_t pm_metal_mod_register_func(const char *name, const char *export_name)
   return ModRegisterFuncHost(name, export_name);
 }
 
-int32_t pm_metal_mod_register_func_doc(const char *name,
-                                       const char *export_name,
-                                       const char *summary,
-                                       const char *sig,
-                                       const char *body)
+int32_t pm_metal_mod_register_func_doc(
+  const char *name, const char *export_name, const char *summary, const char *sig, const char *body)
 {
   return ModRegisterFuncDocHost(name, export_name, summary, sig, body);
 }
@@ -1686,11 +1684,11 @@ static int32_t pm_metal_mod_register_func_native(wasm_exec_env_t exec_env,
 }
 
 static int32_t pm_metal_mod_register_func_doc_native(wasm_exec_env_t exec_env,
-                                                      const char     *name,
-                                                      const char     *export_name,
-                                                      const char     *summary,
-                                                      const char     *sig,
-                                                      const char     *body)
+                                                     const char     *name,
+                                                     const char     *export_name,
+                                                     const char     *summary,
+                                                     const char     *sig,
+                                                     const char     *body)
 {
   (void)exec_env;
   return pm_metal_mod_register_func_doc(name, export_name, summary, sig, body);

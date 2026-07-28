@@ -31,7 +31,7 @@ typedef enum {
 typedef struct {
   int32_t                 used;
   uint32_t                port;
-  pm_metal_net_ip_sock_h     listen_sock;
+  pm_metal_net_ip_sock_h  listen_sock;
   pm_metal_async_handle_t coro;
   pm_metal_async_handle_t task;
 } ssh_srv_t;
@@ -40,7 +40,7 @@ typedef struct {
   ssh_step_t              step;
   pm_metal_net_ssh_srv_h  srv_h;
   pm_metal_async_handle_t aw;
-  pm_metal_net_ip_sock_h     csock;
+  pm_metal_net_ip_sock_h  csock;
   pm_metal_stream_h       pty_m;
   pm_metal_stream_h       pty_s;
   uint32_t                sess;
@@ -196,7 +196,7 @@ pm_metal_net_ssh_srv_h pm_metal_net_ssh_listen(uint32_t port)
     srv->used = 0;
     return PM_METAL_NET_SSH_SRV_INVALID;
   }
-  st        = (ssh_listen_t *)pm_metal_async_coro_state(srv->coro);
+  st = (ssh_listen_t *)pm_metal_async_coro_state(srv->coro);
   memset(st, 0, sizeof(*st));
   st->step  = SSH_ST_LISTEN;
   st->srv_h = h;
@@ -264,9 +264,14 @@ int32_t pm_metal_net_ssh_status(char *buf, uint32_t buf_len)
       nlisten++;
     }
   }
-  n = snprintf(buf, buf_len, "sshd listen=%u port=%u passwd=%d pubkey=%d sslcert=%d autoload=%d",
-               (unsigned)nlisten, (unsigned)port, cfg != NULL ? (int)cfg->auth_passwd : 0,
-               cfg != NULL ? (int)cfg->auth_pubkey : 0, cfg != NULL ? (int)cfg->auth_sslcert : 0,
+  n = snprintf(buf,
+               buf_len,
+               "sshd listen=%u port=%u passwd=%d pubkey=%d sslcert=%d autoload=%d",
+               (unsigned)nlisten,
+               (unsigned)port,
+               cfg != NULL ? (int)cfg->auth_passwd : 0,
+               cfg != NULL ? (int)cfg->auth_pubkey : 0,
+               cfg != NULL ? (int)cfg->auth_sslcert : 0,
                (int)g_ssh_autoloaded);
   if (n < 0 || (uint32_t)n >= buf_len) {
     return -1;
@@ -318,7 +323,8 @@ static NativeSymbol g_pm_metal_net_ssh_native_symbols[] = {
 
 int pm_metal_net_ssh_native_register(void)
 {
-  if (!wasm_runtime_register_natives(PM_METAL_NET_SSH_WASI_MODULE, g_pm_metal_net_ssh_native_symbols,
+  if (!wasm_runtime_register_natives(PM_METAL_NET_SSH_WASI_MODULE,
+                                     g_pm_metal_net_ssh_native_symbols,
                                      sizeof(g_pm_metal_net_ssh_native_symbols) /
                                        sizeof(g_pm_metal_net_ssh_native_symbols[0]))) {
     return -1;

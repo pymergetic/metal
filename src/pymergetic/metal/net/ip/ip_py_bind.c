@@ -47,7 +47,7 @@
 
 typedef struct {
   pm_metal_net_ip_sock_h sock;
-  uint8_t             buf[NET_PY_RECV_CAP];
+  uint8_t                buf[NET_PY_RECV_CAP];
 } net_py_recv_slot_t;
 
 static net_py_recv_slot_t mRecvSlots[NET_PY_RECV_SLOTS];
@@ -106,8 +106,10 @@ static void NetRecvBytesFn(void *ctx, const uint8_t **out_ptr, size_t *out_len)
  * form yet. */
 static mp_obj_t py_net_socket(size_t n_args, const mp_obj_t *args)
 {
-  uint32_t domain = (n_args >= 1) ? (uint32_t)pm_metal_py_int_get(args[0]) : PM_METAL_NET_IP_AF_INET;
-  uint32_t type = (n_args >= 2) ? (uint32_t)pm_metal_py_int_get(args[1]) : PM_METAL_NET_IP_SOCK_STREAM;
+  uint32_t domain =
+    (n_args >= 1) ? (uint32_t)pm_metal_py_int_get(args[0]) : PM_METAL_NET_IP_AF_INET;
+  uint32_t type =
+    (n_args >= 2) ? (uint32_t)pm_metal_py_int_get(args[1]) : PM_METAL_NET_IP_SOCK_STREAM;
 
   return pm_metal_py_int_new((int64_t)pm_metal_net_ip_socket(domain, type));
 }
@@ -119,22 +121,25 @@ PM_METAL_PY_BIND(
 static mp_obj_t py_net_bind_if(size_t n_args, const mp_obj_t *args)
 {
   pm_metal_net_ip_sock_h h = (pm_metal_net_ip_sock_h)pm_metal_py_int_get(args[0]);
-  const char         *ifname;
+  const char            *ifname;
 
   ifname = (n_args >= 2 && args[1] != mp_const_none) ? mp_obj_str_get_str(args[1]) : NULL;
   return pm_metal_py_int_new(pm_metal_net_ip_bind_if(h, ifname));
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(py_net_bind_if_obj, 1, 2, py_net_bind_if);
-PM_METAL_PY_BIND(
-  g_py_bind_net_bind_if, "pymergetic.metal.net.ip", "bind_if", py_net_bind_if_obj, PM_METAL_PY_SYNC);
+PM_METAL_PY_BIND(g_py_bind_net_bind_if,
+                 "pymergetic.metal.net.ip",
+                 "bind_if",
+                 py_net_bind_if_obj,
+                 PM_METAL_PY_SYNC);
 
 /** send(h, data) -> int bytes sent (0 if no space / no remote yet — sync
  * façade, never awaits; see net.h's own doc comment). */
 static mp_obj_t py_net_send(mp_obj_t h_obj, mp_obj_t data_obj)
 {
   pm_metal_net_ip_sock_h h = (pm_metal_net_ip_sock_h)pm_metal_py_int_get(h_obj);
-  const uint8_t      *buf;
-  size_t              len;
+  const uint8_t         *buf;
+  size_t                 len;
 
   (void)pm_metal_py_buf_get(data_obj, &buf, &len);
   return pm_metal_py_int_new((int64_t)pm_metal_net_ip_send(h, buf, (uint32_t)len));
@@ -159,9 +164,10 @@ PM_METAL_PY_BIND(
  * net.h's own coroutine when host isn't a literal. */
 static mp_obj_t py_net_connect(mp_obj_t h_obj, mp_obj_t host_obj, mp_obj_t port_obj)
 {
-  pm_metal_async_handle_t ah = pm_metal_net_ip_connect((pm_metal_net_ip_sock_h)pm_metal_py_int_get(h_obj),
-                                                    mp_obj_str_get_str(host_obj),
-                                                    (uint32_t)pm_metal_py_int_get(port_obj));
+  pm_metal_async_handle_t ah =
+    pm_metal_net_ip_connect((pm_metal_net_ip_sock_h)pm_metal_py_int_get(h_obj),
+                            mp_obj_str_get_str(host_obj),
+                            (uint32_t)pm_metal_py_int_get(port_obj));
 
   if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
     pm_metal_py_raise_value_error("net: connect failed to start");
@@ -170,14 +176,17 @@ static mp_obj_t py_net_connect(mp_obj_t h_obj, mp_obj_t host_obj, mp_obj_t port_
   return pm_metal_py_new_awaitable_u32(ah);
 }
 static MP_DEFINE_CONST_FUN_OBJ_3(py_net_connect_obj, py_net_connect);
-PM_METAL_PY_BIND(
-  g_py_bind_net_connect, "pymergetic.metal.net.ip", "connect", py_net_connect_obj, PM_METAL_PY_SYNC);
+PM_METAL_PY_BIND(g_py_bind_net_connect,
+                 "pymergetic.metal.net.ip",
+                 "connect",
+                 py_net_connect_obj,
+                 PM_METAL_PY_SYNC);
 
 /** await listen(h, port) -> u32 1 ok / 0 fail. TCP only (net.h/net_lwip.c). */
 static mp_obj_t py_net_listen(mp_obj_t h_obj, mp_obj_t port_obj)
 {
-  pm_metal_async_handle_t ah = pm_metal_net_ip_listen((pm_metal_net_ip_sock_h)pm_metal_py_int_get(h_obj),
-                                                   (uint32_t)pm_metal_py_int_get(port_obj));
+  pm_metal_async_handle_t ah = pm_metal_net_ip_listen(
+    (pm_metal_net_ip_sock_h)pm_metal_py_int_get(h_obj), (uint32_t)pm_metal_py_int_get(port_obj));
 
   if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
     pm_metal_py_raise_value_error("net: listen failed to start");
@@ -192,7 +201,8 @@ PM_METAL_PY_BIND(
 /** await accept(h) -> u32 new socket handle (0 on failure). */
 static mp_obj_t py_net_accept(mp_obj_t h_obj)
 {
-  pm_metal_async_handle_t ah = pm_metal_net_ip_accept((pm_metal_net_ip_sock_h)pm_metal_py_int_get(h_obj));
+  pm_metal_async_handle_t ah =
+    pm_metal_net_ip_accept((pm_metal_net_ip_sock_h)pm_metal_py_int_get(h_obj));
 
   if (ah == PM_METAL_ASYNC_HANDLE_INVALID) {
     pm_metal_py_raise_value_error("net: accept failed to start");
@@ -208,7 +218,7 @@ PM_METAL_PY_BIND(
  * clean EOF/error — see net.h/net_lwip.c). */
 static mp_obj_t py_net_recv(mp_obj_t h_obj, mp_obj_t n_obj)
 {
-  pm_metal_net_ip_sock_h     h    = (pm_metal_net_ip_sock_h)pm_metal_py_int_get(h_obj);
+  pm_metal_net_ip_sock_h  h    = (pm_metal_net_ip_sock_h)pm_metal_py_int_get(h_obj);
   uint32_t                want = (uint32_t)pm_metal_py_int_get(n_obj);
   net_py_recv_slot_t     *slot;
   pm_metal_async_handle_t ah;
@@ -292,7 +302,8 @@ static pm_metal_py_obj_t py_net_iface_dict(const pm_metal_net_ip_ifcfg_t *cfg)
   pm_metal_py_dict_set_str(d, "gw", pm_metal_py_str_new(cfg->gw));
   pm_metal_py_dict_set_str(d, "dns", pm_metal_py_str_new(cfg->dns));
   pm_metal_py_dict_set_str(d, "ntp", pm_metal_py_str_new(cfg->ntp));
-  pm_metal_py_dict_set_str(d, "backend", pm_metal_py_str_new(cfg->backend != NULL ? cfg->backend : ""));
+  pm_metal_py_dict_set_str(
+    d, "backend", pm_metal_py_str_new(cfg->backend != NULL ? cfg->backend : ""));
   pm_metal_py_dict_set_str(d, "link_up", pm_metal_py_int_new(cfg->link_up ? 1 : 0));
   snprintf(mac,
            sizeof(mac),
@@ -367,5 +378,8 @@ static mp_obj_t py_net_if_wait(mp_obj_t since_obj)
   return pm_metal_py_new_awaitable_u32(ah);
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(py_net_if_wait_obj, py_net_if_wait);
-PM_METAL_PY_BIND(
-  g_py_bind_net_if_wait, "pymergetic.metal.net.ip", "if_wait", py_net_if_wait_obj, PM_METAL_PY_SYNC);
+PM_METAL_PY_BIND(g_py_bind_net_if_wait,
+                 "pymergetic.metal.net.ip",
+                 "if_wait",
+                 py_net_if_wait_obj,
+                 PM_METAL_PY_SYNC);

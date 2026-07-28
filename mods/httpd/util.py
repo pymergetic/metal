@@ -48,6 +48,92 @@ def url_query_val(s):
   return "".join(out)
 
 
+def url_pkg_name(s):
+  """Encode an iface pack name for /iface/pkg/<name>.
+
+  Keeps '@' literal (valid in path; microdot <name> is [^/]+ and does not
+  percent-decode).
+  """
+  if s is None:
+    return ""
+  out = []
+  for c in str(s):
+    o = ord(c)
+    if (
+        (48 <= o <= 57)
+        or (65 <= o <= 90)
+        or (97 <= o <= 122)
+        or c in "-_.~@"
+    ):
+      out.append(c)
+    else:
+      out.append("%%%02X" % o)
+  return "".join(out)
+
+
+_IFACE_KIND_ORDER = {
+    "h": 0,
+    "c": 1,
+    "pyi": 2,
+    "py": 3,
+    "meta": 4,
+    "sysroot": 5,
+}
+
+
+def iface_pkg_base(name):
+  """Split <kind>@<base> -> base; else whole name."""
+  if name is None:
+    return ""
+  s = str(name)
+  i = s.find("@")
+  if i <= 0:
+    return s
+  return s[i + 1 :]
+
+
+def iface_pkg_group_key(name):
+  """Module key for /iface tree: <kind>@<base> -> base, strip trailing .docs."""
+  base = iface_pkg_base(name)
+  if base.endswith(".docs"):
+    return base[:-5]
+  return base
+
+
+def iface_pkg_groups(info):
+  """Group iface.info() by module, packs sorted by kind then name.
+
+  Returns list of (base, npacks, [{name, href, kind, version, nfiles, blob_len}, ...]).
+  Packs named meta@foo.docs nest under foo with the other foo packs.
+  """
+  if not info:
+    return []
+  buckets = {}
+  for name in info.keys():
+    key = iface_pkg_group_key(name)
+    meta = info[name]
+    kind = meta.get("kind", "") or ""
+    buckets.setdefault(key, []).append({
+        "name": esc(name),
+        "href": "/iface/pkg/" + url_pkg_name(name),
+        "kind": esc(kind),
+        "version": esc(meta.get("version", "")),
+        "nfiles": meta.get("nfiles", 0),
+        "blob_len": meta.get("blob_len", 0),
+        "_kind_ord": _IFACE_KIND_ORDER.get(kind, 50),
+        "_name": name,
+    })
+  groups = []
+  for key in sorted(buckets.keys()):
+    packs = buckets[key]
+    packs.sort(key=lambda p: (p["_kind_ord"], p["_name"]))
+    for p in packs:
+      del p["_kind_ord"]
+      del p["_name"]
+    groups.append((esc(key), len(packs), packs))
+  return groups
+
+
 def iface_norm_path(p):
   if not isinstance(p, str):
     try:
@@ -207,8 +293,8 @@ def metal_version():
     import pymergetic.metal.iface as iface
 
     info = iface.info()
-    if "metal.guest" in info and info["metal.guest"].get("version"):
-      return str(info["metal.guest"]["version"])
+    if "h@metal.guest" in info and info["h@metal.guest"].get("version"):
+      return str(info["h@metal.guest"]["version"])
   except Exception:
     pass
   return "metal"

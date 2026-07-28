@@ -17,14 +17,14 @@
 static const char *KindName(pm_metal_doc_kind_t kind)
 {
   switch (kind) {
-    case PM_METAL_DOC_SHELL:
-      return "shell";
-    case PM_METAL_DOC_PY:
-      return "py";
-    case PM_METAL_DOC_MOD:
-      return "mod";
-    default:
-      return "";
+  case PM_METAL_DOC_SHELL:
+    return "shell";
+  case PM_METAL_DOC_PY:
+    return "py";
+  case PM_METAL_DOC_MOD:
+    return "mod";
+  default:
+    return "";
   }
 }
 
@@ -77,10 +77,10 @@ static mp_obj_t DocPmcmdAliasDict(const pm_metal_doc_view_t *shell_view)
 
 static mp_obj_t py_doc_lookup(mp_obj_t kind_obj, mp_obj_t key_obj)
 {
-  const char          *kind_str = mp_obj_str_get_str(kind_obj);
-  const char          *key      = mp_obj_str_get_str(key_obj);
-  int32_t              kind     = KindFromStr(kind_str);
-  pm_metal_doc_view_t  view;
+  const char         *kind_str = mp_obj_str_get_str(kind_obj);
+  const char         *key      = mp_obj_str_get_str(key_obj);
+  int32_t             kind     = KindFromStr(kind_str);
+  pm_metal_doc_view_t view;
 
   if (kind < 0) {
     pm_metal_py_raise_value_error("doc: kind must be 'shell'/'py'/'mod'");
@@ -94,21 +94,21 @@ static mp_obj_t py_doc_lookup(mp_obj_t kind_obj, mp_obj_t key_obj)
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(py_doc_lookup_obj, py_doc_lookup);
 PM_METAL_PY_BIND_DOC(g_py_bind_doc_lookup,
-                    "pymergetic.metal.doc",
-                    "lookup",
-                    py_doc_lookup_obj,
-                    PM_METAL_PY_SYNC,
-                    "Direct (kind, key) catalog lookup.",
-                    "lookup(kind: str, key: str) -> dict | None",
-                    "kind is 'shell'/'py'/'mod'; key is a shell command name, a dotted "
-                    "py bind path (e.g. 'pymergetic.metal.fs.open'), 'pmcmd.<cmd>' when "
-                    "kind='py', or 'modname.funcname'. Returns None if unknown, else "
-                    "{kind, key, summary, sig, body} (sig/body are '' when unset).");
+                     "pymergetic.metal.doc",
+                     "lookup",
+                     py_doc_lookup_obj,
+                     PM_METAL_PY_SYNC,
+                     "Direct (kind, key) catalog lookup.",
+                     "lookup(kind: str, key: str) -> dict | None",
+                     "kind is 'shell'/'py'/'mod'; key is a shell command name, a dotted "
+                     "py bind path (e.g. 'pymergetic.metal.fs.open'), 'pmcmd.<cmd>' when "
+                     "kind='py', or 'modname.funcname'. Returns None if unknown, else "
+                     "{kind, key, summary, sig, body} (sig/body are '' when unset).");
 
 static mp_obj_t py_doc_lookup_key(mp_obj_t doc_key_obj)
 {
-  const char          *doc_key = mp_obj_str_get_str(doc_key_obj);
-  pm_metal_doc_view_t  view;
+  const char         *doc_key = mp_obj_str_get_str(doc_key_obj);
+  pm_metal_doc_view_t view;
 
   if (pm_metal_doc_lookup_key(doc_key, &view) != 0) {
     return pm_metal_py_obj_none();
@@ -118,14 +118,14 @@ static mp_obj_t py_doc_lookup_key(mp_obj_t doc_key_obj)
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(py_doc_lookup_key_obj, py_doc_lookup_key);
 PM_METAL_PY_BIND_DOC(g_py_bind_doc_lookup_key,
-                    "pymergetic.metal.doc",
-                    "lookup_key",
-                    py_doc_lookup_key_obj,
-                    PM_METAL_PY_SYNC,
-                    "Catalog lookup by one packed \"<kind>:<key>\" doc_key string.",
-                    "lookup_key(doc_key: str) -> dict | None",
-                    "Same result shape as lookup(); doc_key is what an iface sym table's "
-                    "own doc_key column points at (see pymergetic.metal.iface.sym()).");
+                     "pymergetic.metal.doc",
+                     "lookup_key",
+                     py_doc_lookup_key_obj,
+                     PM_METAL_PY_SYNC,
+                     "Catalog lookup by one packed \"<kind>:<key>\" doc_key string.",
+                     "lookup_key(doc_key: str) -> dict | None",
+                     "Same result shape as lookup(); doc_key is what an iface sym table's "
+                     "own doc_key column points at (see pymergetic.metal.iface.sym()).");
 
 /*
  * Positional-only kind (not a `kind=` keyword) — this embed port's qstr
@@ -138,7 +138,7 @@ static mp_obj_t py_doc_list(size_t n_args, const mp_obj_t *args)
   int32_t  kind  = -1;
   int32_t  total = pm_metal_doc_count();
   int32_t  i;
-  mp_obj_t out   = pm_metal_py_list_new();
+  mp_obj_t out = pm_metal_py_list_new();
 
   if (n_args >= 1 && !pm_metal_py_obj_is_none((pm_metal_py_obj_t)args[0])) {
     kind = KindFromStr(mp_obj_str_get_str(args[0]));
@@ -182,15 +182,15 @@ static mp_obj_t py_doc_list(size_t n_args, const mp_obj_t *args)
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(py_doc_list_obj, 0, 1, py_doc_list);
 PM_METAL_PY_BIND_DOC(g_py_bind_doc_list,
-                    "pymergetic.metal.doc",
-                    "list",
-                    py_doc_list_obj,
-                    PM_METAL_PY_SYNC,
-                    "Enumerate the catalog; kind='py' also includes pmcmd.* aliases.",
-                    "list(kind: str | None = None) -> list[dict]",
-                    "kind is positional. kind='py' = pymergetic.metal.* binds plus "
-                    "pmcmd.<cmd> (same text as kind='shell'). kind=None is each home "
-                    "once (shell rows stay under shell, not duplicated as pmcmd).");
+                     "pymergetic.metal.doc",
+                     "list",
+                     py_doc_list_obj,
+                     PM_METAL_PY_SYNC,
+                     "Enumerate the catalog; kind='py' also includes pmcmd.* aliases.",
+                     "list(kind: str | None = None) -> list[dict]",
+                     "kind is positional. kind='py' = pymergetic.metal.* binds plus "
+                     "pmcmd.<cmd> (same text as kind='shell'). kind=None is each home "
+                     "once (shell rows stay under shell, not duplicated as pmcmd).");
 
 /**
  * Best-effort "help by bare name" (docs/DOC_IFACE_PLAN.md preview's
@@ -204,11 +204,11 @@ PM_METAL_PY_BIND_DOC(g_py_bind_doc_list,
  */
 static mp_obj_t py_doc_help(mp_obj_t name_obj)
 {
-  const char          *name = mp_obj_str_get_str(name_obj);
-  pm_metal_doc_view_t  view;
-  char                 buf[400];
-  size_t               off;
-  int32_t              found = 0;
+  const char         *name = mp_obj_str_get_str(name_obj);
+  pm_metal_doc_view_t view;
+  char                buf[400];
+  size_t              off;
+  int32_t             found = 0;
 
   if (pm_metal_doc_lookup(PM_METAL_DOC_SHELL, name, &view) == 0) {
     found = 1;
@@ -243,11 +243,11 @@ static mp_obj_t py_doc_help(mp_obj_t name_obj)
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(py_doc_help_obj, py_doc_help);
 PM_METAL_PY_BIND_DOC(g_py_bind_doc_help,
-                    "pymergetic.metal.doc",
-                    "help",
-                    py_doc_help_obj,
-                    PM_METAL_PY_SYNC,
-                    "Joined summary/sig/body text for one bare name, any kind.",
-                    "help(name: str) -> str | None",
-                    "Tries the shell face first (name typically a command), else scans the "
-                    "whole catalog for an exact key match. None if nothing matches.");
+                     "pymergetic.metal.doc",
+                     "help",
+                     py_doc_help_obj,
+                     PM_METAL_PY_SYNC,
+                     "Joined summary/sig/body text for one bare name, any kind.",
+                     "help(name: str) -> str | None",
+                     "Tries the shell face first (name typically a command), else scans the "
+                     "whole catalog for an exact key match. None if nothing matches.");

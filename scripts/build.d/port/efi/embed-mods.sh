@@ -52,6 +52,9 @@ build_one ui_hello "${ROOT}/mods/tests/t_ui_hello/main.c" \
 build_one asgi_hello "${ROOT}/mods/tests/t_asgi_hello/main.c" \
 	-Wl,--export=asgi_hello_run \
 	-Wl,--export=asgi_hello_app
+build_one asgi_hello "${ROOT}/mods/tests/t_asgi_hello/main.c" \
+	-Wl,--export=asgi_hello_run \
+	-Wl,--export=asgi_hello_app
 build_one async_sleep "${ROOT}/mods/tests/t_async_sleep/main.c" \
 	-Wl,--export=pm_metal_guest_step
 build_one async_fs "${ROOT}/mods/tests/t_async_fs/main.c" \

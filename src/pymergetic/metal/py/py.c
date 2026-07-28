@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include <pymergetic/metal/boot/externals.h>
+#include <pymergetic/metal/boot/externals.h>
 #include <pymergetic/metal/py/py.h>
 #include <pymergetic/metal/fs/fs.h>
 #include <pymergetic/metal/log/log.h>
@@ -25,7 +26,7 @@
 #include "py_internal.h"
 
 enum {
-  PY_STEP_ZIP = 0,
+  PY_STEP_BOOT = 0, /* autoload once, then after_boot_step */
   PY_STEP_LOAD,
   PY_STEP_EXEC,
   PY_STEP_CALL,
@@ -206,8 +207,8 @@ int pm_metal_py_init(void)
   pm_metal_py_pmcmd_install();
   pm_metal_py_mod_install();
   pm_metal_py_c_py_demo_seed();
-  pm_metal_py_zip_embed_install();
-  pm_metal_py_zip_init_sys_path();
+  pm_metal_py_stdlib_ensure();
+  pm_metal_py_init_sys_path();
   g_ready = 1;
   /* Boot tree prints "|   +-- py       ok"; no extra chatty line. */
   return 0;
@@ -487,37 +488,13 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
    * step, never spin the runner.
    */
   switch (job->step) {
-  case PY_STEP_ZIP: {
-    pm_metal_async_handle_t pending = 0;
-    int32_t                 zrc;
-
-    /*
-     * pm_metal_py_zip_step() (py_zip.c) is pure C — fs/http/trust calls
-     * only, never an mp_obj_t/MP_STATE_* touch — so it's exactly as
-     * safe to run for an isolated job (job->ctx != NULL) as for the
-     * shared one, with no ctx slot needing to be claimed first. Both
-     * kinds of job now carry the same two-entry sys.path (see
-     * pm_metal_py_ctx_create's pm_metal_py_zip_init_sys_path call), so
-     * both need to wait on the same one-fetch-total g_zip_state the
-     * same way — isolated jobs used to skip this step entirely, back
-     * when their sys.path had no zip entry to race against.
-     */
-    zrc = pm_metal_py_zip_step(self_h, &pending);
-    if (zrc < 0) {
-      job->step = PY_STEP_DONE;
-      return PM_METAL_ERROR;
-    }
-    if (zrc > 0) {
-      return pm_metal_async_await(self_h, pending);
-    }
+  case PY_STEP_BOOT: {
     /* Shared context: run mods/.../autoload.py once before real work. */
     if (job->ctx == NULL && !pm_metal_py_autoload_done()) {
       (void)pm_metal_py_autoload_run_once();
     }
-    job->step = job->after_zip_step;
-    /* Re-enter through the ready ring instead of falling through here —
-     * job->after_zip_step is a runtime value (LOAD or EXEC depending on
-     * the caller), not something a fallthrough/goto can target cleanly. */
+    job->step = job->after_boot_step;
+    /* Re-enter through the ready ring — after_boot_step is LOAD or EXEC. */
     return pm_metal_async_await(self_h, pm_metal_async_yield());
   }
   case PY_STEP_LOAD: {
@@ -683,7 +660,7 @@ static pm_metal_status_t py_job_step(pm_metal_async_handle_t self_h)
  * isolated_heap_bytes == 0: today's shared/default context (job->ctx
  * stays NULL, mPyRunLock-serialized). != 0: carve a fresh, exclusively-
  * owned pm_metal_py_ctx_t of that size first — see py_ctx.h + the
- * PY_STEP_ZIP skip above.
+ * PY_STEP_BOOT / REPL bypass notes above.
  */
 static pm_metal_async_handle_t py_spawn(char    *src,
                                         size_t   len,
@@ -735,17 +712,17 @@ static pm_metal_async_handle_t py_spawn(char    *src,
     }
     return 0;
   }
-  job->step           = PY_STEP_ZIP;
-  job->after_zip_step = step;
-  job->src            = src;
-  job->src_len        = len;
-  job->py_coro        = MP_OBJ_NULL;
-  job->call_fn        = MP_OBJ_NULL;
-  job->call_arg0      = 0;
-  job->pending        = 0;
-  job->pending_aw     = MP_OBJ_NULL;
-  job->exe_exception  = 0;
-  job->ctx            = ctx;
+  job->step            = PY_STEP_BOOT;
+  job->after_boot_step = step;
+  job->src             = src;
+  job->src_len         = len;
+  job->py_coro         = MP_OBJ_NULL;
+  job->call_fn         = MP_OBJ_NULL;
+  job->call_arg0       = 0;
+  job->pending         = 0;
+  job->pending_aw      = MP_OBJ_NULL;
+  job->exe_exception   = 0;
+  job->ctx             = ctx;
   pm_metal_async_coro_set_release(ch, py_job_release);
 
   th = pm_metal_async_create_task(ch);
@@ -854,18 +831,10 @@ pm_metal_async_handle_t pm_metal_py_repl_start(void)
   }
 
   /*
-   * Deliberately bypasses PY_STEP_ZIP — same call shape as
+   * Deliberately bypasses PY_STEP_BOOT (autoload) — same call shape as
    * pm_metal_py_fn_call_async_bound (job->step = PY_STEP_CALL directly).
-   * stdlib.zip's mount is a network-fetch-then-cache global
-   * (py_zip.c's g_zip_state/g_zip_fetch_tried, shared by every job on
-   * this context) with observed multi-second worst-case latency the
-   * first time anything triggers it — the REPL becoming interactive
-   * should never be held hostage to that. Whichever job resolves it
-   * first (isolated jobs never do; the boot proofs' shared-context jobs
-   * usually already have by the time a human reaches BOOT_READY)
-   * mutates sys.path for every shared-context job after it, REPL
-   * included — this only skips the REPL *triggering or awaiting* that
-   * fetch itself, not the eventual sys.path effect.
+   * Boot proofs' shared-context jobs usually already ran autoload by
+   * BOOT_READY; REPL should not re-enter that path.
    */
   ch = pm_metal_async_coro_create(py_job_step, sizeof(*job));
   if (ch == PM_METAL_ASYNC_HANDLE_INVALID) {
@@ -876,17 +845,17 @@ pm_metal_async_handle_t pm_metal_py_repl_start(void)
     pm_metal_async_coro_close(ch);
     return 0;
   }
-  job->step           = PY_STEP_REPL;
-  job->after_zip_step = PY_STEP_REPL;
-  job->src            = NULL; /* PY_STEP_REPL's "no pending input yet" invariant */
-  job->src_len        = 0;
-  job->py_coro        = MP_OBJ_NULL;
-  job->call_fn        = MP_OBJ_NULL;
-  job->call_arg0      = 0;
-  job->pending        = 0;
-  job->pending_aw     = MP_OBJ_NULL;
-  job->exe_exception  = 0;
-  job->ctx            = NULL; /* always shared/default — persistent globals across lines */
+  job->step            = PY_STEP_REPL;
+  job->after_boot_step = PY_STEP_REPL;
+  job->src             = NULL; /* PY_STEP_REPL's "no pending input yet" invariant */
+  job->src_len         = 0;
+  job->py_coro         = MP_OBJ_NULL;
+  job->call_fn         = MP_OBJ_NULL;
+  job->call_arg0       = 0;
+  job->pending         = 0;
+  job->pending_aw      = MP_OBJ_NULL;
+  job->exe_exception   = 0;
+  job->ctx             = NULL; /* always shared/default — persistent globals across lines */
   pm_metal_async_coro_set_release(ch, py_job_release);
 
   th = pm_metal_async_create_task(ch);

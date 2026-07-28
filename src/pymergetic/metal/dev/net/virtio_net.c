@@ -10,10 +10,10 @@
 #include <pymergetic/metal/bus/virtio/virtio.h>
 #include <pymergetic/metal/runtime/mem/limit.h>
 
-#define VNET_RX      0
-#define VNET_TX      1
-#define VNET_QSZ     64
-#define VNET_MTU     1514
+#define VNET_RX  0
+#define VNET_TX  1
+#define VNET_QSZ 64
+#define VNET_MTU 1514
 /* Match queue depth: one DMA buffer per in-flight TX/RX descriptor. */
 #define VNET_RX_BUFS 64
 #define VNET_TX_BUFS 64

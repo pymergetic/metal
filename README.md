@@ -84,8 +84,8 @@ More filenames: [`screenshots/README.md`](screenshots/README.md).
 - **Shell / UI** — tabbed chrome, linker-section commands, serial + framebuffer consoles in parallel
 - **MicroPython in core** — one always-on blob, N equal runners, no GIL; boots
   straight into a persistent **REPL** (system's default shell, C console one
-  `console()` away); host ↔ guest bidirectional calls; ~25-module signed
-  `stdlib.zip` (`time`/`datetime`, `hashlib`, `re`, `tarfile`, `pymergetic.metal.tls`, …);
+  `console()` away); host ↔ guest bidirectional calls; ~25-module Easy
+  stdlib under `/mods/py/stdlib` (`time`/`datetime`, `hashlib`, `re`, …);
   opt-in isolated contexts for true parallel bytecode (own heap, no shared lock)
 - **Net services** — ASGI HTTP (C / MicroPython / wasm leaves on one listener),
   Dropbear SSH as another viewport on the shared console
@@ -200,50 +200,42 @@ Build embeds named **`lz4(ustar)`** packs the guest can browse at runtime
 (`pymergetic.metal.iface` / shell `iface` / HTTP `/iface` + `/api/iface`).
 Toggle under menuconfig → **pymergetic.metal → util → iface**:
 
-| Pack | Kconfig (default) | What |
+| Pack | Kconfig (default) | Kind |
 |------|-------------------|------|
-| `metal.guest` | `IFACE_EMBED_HEADERS` **y** | Public ABI headers (`metal.h` allowlist + `wasi.h` / `version.h` / `guest/mod/*.h`) |
-| `metal.guest.meta` | with headers | `LICENSE` + `README.md` (kind `meta`) |
-| `metal.guest.docs` | with headers | `docs/*.md` (kind `meta`) |
-| `metal.guest.sources` | `IFACE_EMBED_SOURCES` **n** | Full rebuild tree (`.c`/`.S`/`.s`/`.h` under metal + EFI/BIOS ports + include; no generated `*.inc.c`) for later JIT |
-| `mod.t8_multimod_lib` | with headers | Small proof that a *mod* can ship its own header pack |
+| `h@metal.guest` | `EMBED_C_HEADERS` **y** | `h` — public ABI `.h` |
+| `meta@metal.guest` / `meta@metal.guest.docs` | with C headers | `meta` |
+| `c@metal.guest` | `EMBED_C_IMPL` **n** | `c` — full C/asm/h tree |
+| `pyi@metal.guest` | `EMBED_PYTHON_HEADERS` **y** | `pyi` |
+| `py@metal.guest` | `EMBED_PYTHON_IMPL` **y** | `py` — product `.py` |
+| `py@metal.stdlib` | always (with C headers) | `py` — Easy stdlib, mandatory for µPy |
+| `h@mod.t8_multimod_lib` | with C headers | `h` |
 
 ```text
 # shell
-iface                         # list packs (kind = headers | sources | meta)
-iface ls metal.guest
-iface cat metal.guest pymergetic/metal/fs/fs.h
-iface ls metal.guest.meta
-iface cat metal.guest.docs IFACE.md
+iface                         # pack names: <kind>@<base>
+iface ls h@metal.guest
+iface cat py@metal.guest httpd/__init__.py
+iface cat pyi@metal.guest pymergetic/metal/fs.pyi
 iface sym                     # WASI NativeSymbol table (+ doc_key -> /docs)
 ```
 
 ```python
 import pymergetic.metal.iface as iface
 iface.info()                  # name -> {kind, version, nfiles, ...}
-iface.list("metal.guest")     # paths inside one pack
-iface.read("metal.guest", "pymergetic/metal/fs/fs.h")
+iface.read("py@metal.guest", "api/iface.py")
 ```
 
-HTTP HTML: `/iface`, `/iface/pkg/...` (highlighted source view) — JSON:
-`/api/iface*`. Callable docs are separate (`/docs`, `pymergetic.metal.doc`).
-Full detail: [`docs/IFACE.md`](docs/IFACE.md).
+HTTP HTML: `/iface`, `/iface/pkg/...` (highlight by extension) — JSON:
+`/api/iface*`. Full detail: [`docs/IFACE.md`](docs/IFACE.md).
 
 ![iface packages catalog](screenshots/iface-packages.png)
 
-`/iface` — registered packs (`metal.guest` headers/docs/meta/sources, ESP
-sidecars like `mod.doom`, proof `mod.t8_multimod_lib`). Same rows as shell
-`iface` / `iface.info()`.
-
-| Headers pack | Sources pack |
+| C headers | C impl (opt-in) |
 |:---:|:---:|
-| ![metal.guest headers](screenshots/iface-headers.png) | ![metal.guest.sources](screenshots/iface-sources.png) |
-| `metal.guest` — public ABI headers | `metal.guest.sources` — rebuild tree (opt-in) |
+| ![h@metal.guest](screenshots/iface-headers.png) | ![c@metal.guest](screenshots/iface-sources.png) |
+| `h@metal.guest` | `c@metal.guest` |
 
-![Highlighted source view — lz4.c from metal.guest.sources](screenshots/iface-source-view.png)
-
-Open a pack file at `/iface/pkg/<name>/view?path=...` for in-browser C/header
-introspection (syntax-colored; same bytes as `iface.read` / `iface cat`).
+![Highlighted source view — lz4.c from c@metal.guest](screenshots/iface-source-view.png)
 
 ![Native symbols — scraped WASI NativeSymbol table](screenshots/iface-syms.png)
 
@@ -332,8 +324,8 @@ runners, `await` Metal (no GIL); boot spawns a persistent, **interactive
 REPL task** on that blob as the system's default shell (`console()` drops back
 to the C command shell, never deleted). `py <script>` / `py -c` spawn more
 **tasks** on the same engine — not a new VM. Host ↔ guest calls are
-bidirectional (`pymergetic.metal.*` → C, and C → Python callables), a signed
-+ trust-checked `stdlib.zip` ships ~25 pure-Python modules plus
+bidirectional (`pymergetic.metal.*` → C, and C → Python callables), loose
+`/mods/py/stdlib` (iface `py@metal.stdlib`) ships ~25 pure-Python modules plus
 `time`/`datetime`/`hashlib`/`re`/`tarfile`/`pymergetic.metal.tls` and friends,
 and opt-in **isolated contexts** give genuine parallel bytecode (own heap,
 own GC nursery, no shared run-lock) alongside the shared/serialized default.

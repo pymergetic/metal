@@ -69,16 +69,16 @@ typedef struct {
   const uint8_t *(*l2_mac)(void);
   int (*l2_tx)(const void *frame, uint32_t len);
   pm_metal_net_ip_l2_poll_fn l2_poll;
-  char                    ip[16];
-  char                    mask[16];
-  char                    gw[16];
-  char                    dns[16];
-  char                    ntp[16];
-  char                    tftp[PM_METAL_NET_TFTP_HOST_MAX];
-  char                    boot_file[PM_METAL_NET_IP_BOOT_FILE_MAX];
-  int32_t                 use_dhcp;
-  int32_t                 dhcp6_mode;
-  metal_dhcp6_stateful_t  dhcp6_sf;
+  char                       ip[16];
+  char                       mask[16];
+  char                       gw[16];
+  char                       dns[16];
+  char                       ntp[16];
+  char                       tftp[PM_METAL_NET_TFTP_HOST_MAX];
+  char                       boot_file[PM_METAL_NET_IP_BOOT_FILE_MAX];
+  int32_t                    use_dhcp;
+  int32_t                    dhcp6_mode;
+  metal_dhcp6_stateful_t     dhcp6_sf;
 } metal_net_iface_t;
 
 typedef struct {
@@ -116,46 +116,46 @@ typedef struct {
 } metal_udp_rx_t;
 
 typedef struct {
-  int32_t         used;
-  uint32_t        domain;
-  uint32_t        type;
-  struct tcp_pcb *tcp;
-  struct udp_pcb *udp;
-  ip_addr_t       remote;
-  uint16_t        remote_port;
-  int32_t         have_remote;
-  int32_t         conn_done;
-  int32_t         conn_ok;
-  int32_t                    listening;
-  struct tcp_pcb            *accept_pcb;
-  pm_metal_net_ip_sock_h     accept_q[METAL_NET_ACCEPT_Q];
-  uint8_t                    accept_q_r;
-  uint8_t                    accept_q_n;
-  void                      *recv_buf;
-  uint32_t        recv_cap;
-  uint32_t        recv_got;
-  int32_t         recv_done;
-  int32_t         recv_err;
-  struct pbuf    *rx_q;
-  int32_t         bound_if;
+  int32_t                used;
+  uint32_t               domain;
+  uint32_t               type;
+  struct tcp_pcb        *tcp;
+  struct udp_pcb        *udp;
+  ip_addr_t              remote;
+  uint16_t               remote_port;
+  int32_t                have_remote;
+  int32_t                conn_done;
+  int32_t                conn_ok;
+  int32_t                listening;
+  struct tcp_pcb        *accept_pcb;
+  pm_metal_net_ip_sock_h accept_q[METAL_NET_ACCEPT_Q];
+  uint8_t                accept_q_r;
+  uint8_t                accept_q_n;
+  void                  *recv_buf;
+  uint32_t               recv_cap;
+  uint32_t               recv_got;
+  int32_t                recv_done;
+  int32_t                recv_err;
+  struct pbuf           *rx_q;
+  int32_t                bound_if;
   /* Datagram RX ring (packet boundaries + peer). TCP still uses rx_q. */
-  metal_udp_rx_t  udp_rx[METAL_UDP_RX_MAX];
-  uint16_t        udp_rx_head;
-  uint16_t        udp_rx_n;
-  ip_addr_t       last_peer;
-  uint16_t        last_peer_port;
-  int32_t         have_last_peer;
+  metal_udp_rx_t udp_rx[METAL_UDP_RX_MAX];
+  uint16_t       udp_rx_head;
+  uint16_t       udp_rx_n;
+  ip_addr_t      last_peer;
+  uint16_t       last_peer_port;
+  int32_t        have_last_peer;
 } msock_t;
 
 typedef struct {
-  wait_kind_t         kind;
+  wait_kind_t            kind;
   pm_metal_net_ip_sock_h h;
   pm_metal_net_ip_sock_h accept_out;
-  uint64_t            deadline;
-  int32_t             dns_done;
-  int32_t             dns_ok;
-  ip_addr_t           dns_addr;
-  uint32_t            since_gen;
+  uint64_t               deadline;
+  int32_t                dns_done;
+  int32_t                dns_ok;
+  ip_addr_t              dns_addr;
+  uint32_t               since_gen;
 } net_wait_t;
 
 typedef struct {
@@ -167,18 +167,18 @@ static int32_t                AcceptQPush(msock_t *s, pm_metal_net_ip_sock_h nh)
 static pm_metal_net_ip_sock_h AcceptQPop(msock_t *s);
 static void                   AcceptQDrainClose(msock_t *s);
 static void                   LwipClose(pm_metal_net_ip_sock_h h);
-static void                StoreIp4Ascii(char *dst, uintptr_t dst_len, const ip4_addr_t *addr);
-static metal_net_iface_t  *IfaceInitOne(uint32_t    idx,
-                                        const char *backend,
-                                        int (*open_fn)(uint8_t mac[6]),
-                                        const uint8_t *(*mac_fn)(void),
-                                        int (*tx_fn)(const void *frame, uint32_t len),
-                                        pm_metal_net_ip_l2_poll_fn poll_fn);
-static metal_net_iface_t  *IfaceByName(const char *name);
-static metal_net_iface_t  *IfaceDefault(void);
-static void                SyncIfaceCfg(metal_net_iface_t *mif);
-static void                EnsureDnsServers(metal_net_iface_t *mif);
-static int32_t             ParseIfIndex(const char *name);
+static void                   StoreIp4Ascii(char *dst, uintptr_t dst_len, const ip4_addr_t *addr);
+static metal_net_iface_t     *IfaceInitOne(uint32_t    idx,
+                                           const char *backend,
+                                           int (*open_fn)(uint8_t mac[6]),
+                                           const uint8_t *(*mac_fn)(void),
+                                           int (*tx_fn)(const void *frame, uint32_t len),
+                                           pm_metal_net_ip_l2_poll_fn poll_fn);
+static metal_net_iface_t     *IfaceByName(const char *name);
+static metal_net_iface_t     *IfaceDefault(void);
+static void                   SyncIfaceCfg(metal_net_iface_t *mif);
+static void                   EnsureDnsServers(metal_net_iface_t *mif);
+static int32_t                ParseIfIndex(const char *name);
 
 static metal_net_iface_t   mIfaces[METAL_NET_MAX_IFACES];
 static uint32_t            mIfaceCount;
@@ -200,7 +200,8 @@ static int32_t             mLastDnsValid;
 static uint32_t            mIfGen;
 
 #if LWIP_NETIF_EXT_STATUS_CALLBACK
-static void MetalNetifExtCb(struct netif *netif, netif_nsc_reason_t reason,
+static void MetalNetifExtCb(struct netif                    *netif,
+                            netif_nsc_reason_t               reason,
                             const netif_ext_callback_args_t *args);
 
 NETIF_DECLARE_EXT_CALLBACK(mMetalNetifExtCb);
@@ -233,7 +234,8 @@ static void MetalNetifLinkCb(struct netif *netif)
 #endif
 
 #if LWIP_NETIF_EXT_STATUS_CALLBACK
-static void MetalNetifExtCb(struct netif *netif, netif_nsc_reason_t reason,
+static void MetalNetifExtCb(struct netif                    *netif,
+                            netif_nsc_reason_t               reason,
                             const netif_ext_callback_args_t *args)
 {
   (void)args;
@@ -561,7 +563,7 @@ static int32_t UdpRxPush(msock_t *s, struct pbuf *p, const ip_addr_t *addr, uint
     s->udp_rx_head = (uint16_t)((s->udp_rx_head + 1u) % METAL_UDP_RX_MAX);
     s->udp_rx_n--;
   }
-  idx = (uint16_t)((s->udp_rx_head + s->udp_rx_n) % METAL_UDP_RX_MAX);
+  idx              = (uint16_t)((s->udp_rx_head + s->udp_rx_n) % METAL_UDP_RX_MAX);
   s->udp_rx[idx].p = p;
   if (addr != NULL) {
     ip_addr_copy(s->udp_rx[idx].addr, *addr);
@@ -573,8 +575,8 @@ static int32_t UdpRxPush(msock_t *s, struct pbuf *p, const ip_addr_t *addr, uint
   return 0;
 }
 
-static uint32_t UdpRxPop(msock_t *s, void *ptr, uint32_t len, char *peer_host, uint32_t peer_cap,
-                         uint32_t *peer_port)
+static uint32_t UdpRxPop(
+  msock_t *s, void *ptr, uint32_t len, char *peer_host, uint32_t peer_cap, uint32_t *peer_port)
 {
   metal_udp_rx_t *ent;
   uint16_t        n;
@@ -605,8 +607,8 @@ static uint32_t UdpRxPop(msock_t *s, void *ptr, uint32_t len, char *peer_host, u
     }
   }
   pbuf_free(ent->p);
-  ent->p           = NULL;
-  s->udp_rx_head   = (uint16_t)((s->udp_rx_head + 1u) % METAL_UDP_RX_MAX);
+  ent->p         = NULL;
+  s->udp_rx_head = (uint16_t)((s->udp_rx_head + 1u) % METAL_UDP_RX_MAX);
   s->udp_rx_n--;
   return n;
 }
@@ -1398,8 +1400,8 @@ static err_t TcpConnectedCb(void *arg, struct tcp_pcb *tpcb, err_t err)
 
 static err_t TcpAcceptCb(void *arg, struct tcp_pcb *newpcb, err_t err)
 {
-  msock_t             *s;
-  pm_metal_net_ip_sock_h  nh;
+  msock_t               *s;
+  pm_metal_net_ip_sock_h nh;
 
   s = (msock_t *)arg;
   if (s == NULL || err != ERR_OK || newpcb == NULL) {
@@ -1665,9 +1667,9 @@ static int32_t AcceptQPush(msock_t *s, pm_metal_net_ip_sock_h nh)
   if (s == NULL || nh == PM_METAL_NET_IP_SOCK_INVALID || s->accept_q_n >= METAL_NET_ACCEPT_Q) {
     return -1;
   }
-  i                   = (uint8_t)((s->accept_q_r + s->accept_q_n) % METAL_NET_ACCEPT_Q);
-  s->accept_q[i]      = nh;
-  s->accept_q_n       = (uint8_t)(s->accept_q_n + 1u);
+  i              = (uint8_t)((s->accept_q_r + s->accept_q_n) % METAL_NET_ACCEPT_Q);
+  s->accept_q[i] = nh;
+  s->accept_q_n  = (uint8_t)(s->accept_q_n + 1u);
   return 0;
 }
 
@@ -1678,10 +1680,10 @@ static pm_metal_net_ip_sock_h AcceptQPop(msock_t *s)
   if (s == NULL || s->accept_q_n == 0u) {
     return PM_METAL_NET_IP_SOCK_INVALID;
   }
-  nh              = s->accept_q[s->accept_q_r];
+  nh                         = s->accept_q[s->accept_q_r];
   s->accept_q[s->accept_q_r] = PM_METAL_NET_IP_SOCK_INVALID;
-  s->accept_q_r   = (uint8_t)((s->accept_q_r + 1u) % METAL_NET_ACCEPT_Q);
-  s->accept_q_n   = (uint8_t)(s->accept_q_n - 1u);
+  s->accept_q_r              = (uint8_t)((s->accept_q_r + 1u) % METAL_NET_ACCEPT_Q);
+  s->accept_q_n              = (uint8_t)(s->accept_q_n - 1u);
   return nh;
 }
 
@@ -2034,7 +2036,9 @@ static void LwipClose(pm_metal_net_ip_sock_h h)
   SockClear(s);
 }
 
-static pm_metal_async_handle_t LwipConnect(pm_metal_net_ip_sock_h h, const char *host, uint32_t port)
+static pm_metal_async_handle_t LwipConnect(pm_metal_net_ip_sock_h h,
+                                           const char            *host,
+                                           uint32_t               port)
 {
   msock_t    *s;
   net_wait_t *w;
@@ -2184,7 +2188,7 @@ static pm_metal_async_handle_t LwipAccept(pm_metal_net_ip_sock_h h)
 {
   msock_t                *s;
   net_wait_t             *w;
-  pm_metal_net_ip_sock_h     nh;
+  pm_metal_net_ip_sock_h  nh;
   pm_metal_async_handle_t ah;
 
   if (h == 0 || h > METAL_NET_MAX_SOCKS) {
@@ -2282,14 +2286,14 @@ static uint32_t LwipSend(pm_metal_net_ip_sock_h h, const void *ptr, uint32_t len
   }
 }
 
-static uint32_t LwipSendto(pm_metal_net_ip_sock_h h, const void *ptr, uint32_t len, const char *host,
-                           uint32_t port)
+static uint32_t LwipSendto(
+  pm_metal_net_ip_sock_h h, const void *ptr, uint32_t len, const char *host, uint32_t port)
 {
-  msock_t   *s;
-  ip_addr_t  addr;
+  msock_t     *s;
+  ip_addr_t    addr;
   struct pbuf *p;
-  uint16_t   n;
-  err_t      e;
+  uint16_t     n;
+  err_t        e;
 
   if (h == 0 || h > METAL_NET_MAX_SOCKS || ptr == NULL || len == 0 || host == NULL) {
     return 0;
@@ -2330,7 +2334,8 @@ static uint32_t LwipTryRecv(pm_metal_net_ip_sock_h h, void *ptr, uint32_t len)
     return UdpRxPop(s, ptr, len, NULL, 0, NULL);
   }
 
-  if (s->recv_err || (s->type == PM_METAL_NET_IP_SOCK_STREAM && s->tcp == NULL && s->rx_q == NULL)) {
+  if (s->recv_err ||
+      (s->type == PM_METAL_NET_IP_SOCK_STREAM && s->tcp == NULL && s->rx_q == NULL)) {
     return (uint32_t)-1;
   }
 
@@ -2347,8 +2352,12 @@ static uint32_t LwipTryRecv(pm_metal_net_ip_sock_h h, void *ptr, uint32_t len)
   return n;
 }
 
-static uint32_t LwipTryRecvfrom(pm_metal_net_ip_sock_h h, void *ptr, uint32_t len, char *peer_host,
-                                uint32_t peer_cap, uint32_t *peer_port)
+static uint32_t LwipTryRecvfrom(pm_metal_net_ip_sock_h h,
+                                void                  *ptr,
+                                uint32_t               len,
+                                char                  *peer_host,
+                                uint32_t               peer_cap,
+                                uint32_t              *peer_port)
 {
   msock_t *s;
 
@@ -2518,9 +2527,8 @@ static int32_t LwipBindIf(pm_metal_net_ip_sock_h h, const char *name)
 }
 
 static const pm_metal_net_ip_ops_t mLwipOps = {
-  "lwip",     LwipInit,   LwipPoll,  LwipSocket, LwipClose,      LwipConnect,
-  LwipListen, LwipAccept, LwipSend,  LwipRecv,   LwipDns,        LwipBindIf,
-  LwipTryRecv, LwipBind,  LwipSendto, LwipTryRecvfrom
+  "lwip",   LwipInit, LwipPoll, LwipSocket, LwipClose,   LwipConnect, LwipListen, LwipAccept,
+  LwipSend, LwipRecv, LwipDns,  LwipBindIf, LwipTryRecv, LwipBind,    LwipSendto, LwipTryRecvfrom
 };
 
 int pm_metal_net_ip_virtio_detect(void)
@@ -2541,10 +2549,10 @@ int pm_metal_net_ip_virtio_detect(void)
 }
 
 int pm_metal_net_ip_lwip_start_with_l2(const char *backend,
-                                    int (*open_fn)(uint8_t mac_out[6]),
-                                    const uint8_t *(*mac_fn)(void),
-                                    int (*tx_fn)(const void *frame, uint32_t len),
-                                    pm_metal_net_ip_l2_poll_fn poll_fn)
+                                       int (*open_fn)(uint8_t mac_out[6]),
+                                       const uint8_t *(*mac_fn)(void),
+                                       int (*tx_fn)(const void *frame, uint32_t len),
+                                       pm_metal_net_ip_l2_poll_fn poll_fn)
 {
   uint32_t           i;
   metal_net_iface_t *mif;
@@ -2585,10 +2593,10 @@ int pm_metal_net_ip_lwip_start_with_l2(const char *backend,
 int pm_metal_net_ip_virtio_start(void)
 {
   return pm_metal_net_ip_lwip_start_with_l2("lwip+virtio-net",
-                                         pm_metal_virtio_netif_open,
-                                         pm_metal_virtio_netif_mac,
-                                         pm_metal_virtio_netif_tx,
-                                         (pm_metal_net_ip_l2_poll_fn)pm_metal_virtio_netif_poll);
+                                            pm_metal_virtio_netif_open,
+                                            pm_metal_virtio_netif_mac,
+                                            pm_metal_virtio_netif_tx,
+                                            (pm_metal_net_ip_l2_poll_fn)pm_metal_virtio_netif_poll);
 }
 
 int pm_metal_net_ip_loopback_start(void)
@@ -2681,10 +2689,10 @@ int pm_metal_net_ip_bge_detect(void)
 int pm_metal_net_ip_bge_start(void)
 {
   return pm_metal_net_ip_lwip_start_with_l2("lwip+bge",
-                                         pm_metal_bge_netif_open,
-                                         pm_metal_bge_netif_mac,
-                                         pm_metal_bge_netif_tx,
-                                         (pm_metal_net_ip_l2_poll_fn)pm_metal_bge_netif_poll);
+                                            pm_metal_bge_netif_open,
+                                            pm_metal_bge_netif_mac,
+                                            pm_metal_bge_netif_tx,
+                                            (pm_metal_net_ip_l2_poll_fn)pm_metal_bge_netif_poll);
 }
 
 int pm_metal_net_ip_virtio_probe(void)
@@ -2746,9 +2754,9 @@ static const char *Dhcp6ModeName(int32_t mode)
 }
 
 static int32_t FormatIfStatusLine(const pm_metal_net_ip_ifcfg_t *cfg,
-                                  metal_net_iface_t          *mif,
-                                  char                       *buf,
-                                  uint32_t                    buf_len)
+                                  metal_net_iface_t             *mif,
+                                  char                          *buf,
+                                  uint32_t                       buf_len)
 {
   if (cfg == NULL || buf == NULL || buf_len == 0) {
     return -1;
@@ -2859,7 +2867,7 @@ int32_t pm_metal_net_ip_if_status_index(uint32_t index, char *dest, uint32_t des
     return -1;
   }
 
-  n = 0;
+  n   = 0;
   mif = NULL;
   for (i = 0; i < METAL_NET_MAX_IFACES; i++) {
     if (!mIfaces[i].used) {
@@ -2993,7 +3001,8 @@ int pm_metal_net_ip_if_set_dhcp6_named(const char *name, int mode)
 {
   metal_net_iface_t *mif;
 
-  if (!METAL_NET_READY() || mode < PM_METAL_NET_IP_DHCP6_OFF || mode > PM_METAL_NET_IP_DHCP6_STATEFUL) {
+  if (!METAL_NET_READY() || mode < PM_METAL_NET_IP_DHCP6_OFF ||
+      mode > PM_METAL_NET_IP_DHCP6_STATEFUL) {
     return -1;
   }
 
@@ -3023,7 +3032,7 @@ int pm_metal_net_ip_if_set_dhcp(void)
 int pm_metal_net_ip_if_status_named(const char *name, char *buf, uint32_t buf_len)
 {
   pm_metal_net_ip_ifcfg_t cfg;
-  metal_net_iface_t   *mif;
+  metal_net_iface_t      *mif;
 
   if (buf == NULL || buf_len == 0) {
     return -1;

@@ -37,7 +37,7 @@ double atan(double x);
 double atan2(double y, double x);
 double pow(double x, double y);
 double scalbn(double x, int n);
-float scalbnf(float x, int n);
+float  scalbnf(float x, int n);
 double fmod(double x, double y);
 double copysign(double x, double y);
 double log(double x);

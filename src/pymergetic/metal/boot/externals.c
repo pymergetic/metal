@@ -165,7 +165,7 @@ int32_t pm_metal_external_register(const char *id,
                                    const char *url,
                                    const char *note)
 {
-  uint32_t i;
+  uint32_t                 i;
   pm_metal_external_dyn_t *slot;
 
   if (id == NULL || id[0] == '\0') {
@@ -316,10 +316,10 @@ static uint32_t pm_metal_external_count_native(wasm_exec_env_t exec_env)
 
 static int32_t pm_metal_external_get_native(wasm_exec_env_t exec_env, uint32_t idx, uint32_t out)
 {
-  wasm_module_inst_t             inst;
-  void                          *native;
-  pm_metal_external_t            e;
-  pm_metal_external_info_host_t  info;
+  wasm_module_inst_t            inst;
+  void                         *native;
+  pm_metal_external_t           e;
+  pm_metal_external_info_host_t info;
 
   inst = wasm_runtime_get_module_inst(exec_env);
   if (inst == NULL || !wasm_runtime_validate_app_addr(inst, out, sizeof(info))) {
@@ -339,10 +339,10 @@ static int32_t pm_metal_external_get_native(wasm_exec_env_t exec_env, uint32_t i
 
 static int32_t pm_metal_external_find_native(wasm_exec_env_t exec_env, const char *id, uint32_t out)
 {
-  wasm_module_inst_t             inst;
-  void                          *native;
-  pm_metal_external_t            e;
-  pm_metal_external_info_host_t  info;
+  wasm_module_inst_t            inst;
+  void                         *native;
+  pm_metal_external_t           e;
+  pm_metal_external_info_host_t info;
 
   inst = wasm_runtime_get_module_inst(exec_env);
   if (inst == NULL || !wasm_runtime_validate_app_addr(inst, out, sizeof(info))) {

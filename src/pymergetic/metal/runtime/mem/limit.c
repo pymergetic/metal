@@ -233,19 +233,18 @@ static void LimitsTest(void)
     "runtime.mem.PM_METAL_HEAP_SEED_BYTES",
     "dev.net.VNET_TX_BUFS",
   };
-  static const char *const k_py =
-    "import pymergetic.metal.mem.limit as L\n"
-    "rows = L.list()\n"
-    "assert isinstance(rows, list) and len(rows) > 0\n"
-    "r0 = rows[0]\n"
-    "got = L.get(r0['id'])\n"
-    "assert got is not None and got['id'] == r0['id']\n"
-    "assert L.get('__no_such_limit__') is None\n"
-    "mod = L.module(r0['module'])\n"
-    "assert any(x['id'] == r0['id'] for x in mod)\n"
-    "assert L.get('net.asgi.ASGI_IO_MAX') is not None\n"
-    "assert L.module('net')\n"
-    "print('limits py: PASS n=%d' % len(rows))\n";
+  static const char *const k_py = "import pymergetic.metal.mem.limit as L\n"
+                                  "rows = L.list()\n"
+                                  "assert isinstance(rows, list) and len(rows) > 0\n"
+                                  "r0 = rows[0]\n"
+                                  "got = L.get(r0['id'])\n"
+                                  "assert got is not None and got['id'] == r0['id']\n"
+                                  "assert L.get('__no_such_limit__') is None\n"
+                                  "mod = L.module(r0['module'])\n"
+                                  "assert any(x['id'] == r0['id'] for x in mod)\n"
+                                  "assert L.get('net.asgi.ASGI_IO_MAX') is not None\n"
+                                  "assert L.module('net')\n"
+                                  "print('limits py: PASS n=%d' % len(rows))\n";
 
   pm_metal_mem_limit_t    e;
   pm_metal_mem_limit_t    e2;
@@ -264,11 +263,11 @@ static void LimitsTest(void)
   (void)LimCheck("count>0", n > 0u, &fail);
   (void)LimCheck("get(0)", n > 0u && pm_metal_mem_limit_get(0u, &e) == 0 && e.id != NULL, &fail);
   if (n > 0u && e.id != NULL) {
-    (void)LimCheck("find(id)", pm_metal_mem_limit_find(e.id, &e2) == 0 && e2.value == e.value, &fail);
+    (void)LimCheck(
+      "find(id)", pm_metal_mem_limit_find(e.id, &e2) == 0 && e2.value == e.value, &fail);
     (void)LimCheck("find_mn",
                    e.module != NULL && e.name != NULL &&
-                     pm_metal_mem_limit_find_mn(e.module, e.name, &e2) == 0 &&
-                     e2.value == e.value,
+                     pm_metal_mem_limit_find_mn(e.module, e.name, &e2) == 0 && e2.value == e.value,
                    &fail);
   }
   (void)LimCheck("find(miss)", pm_metal_mem_limit_find("__no_such_limit__", &e2) != 0, &fail);
@@ -391,10 +390,10 @@ static uint32_t pm_metal_mem_limit_count_native(wasm_exec_env_t exec_env)
 
 static int32_t pm_metal_mem_limit_get_native(wasm_exec_env_t exec_env, uint32_t idx, uint32_t out)
 {
-  wasm_module_inst_t              inst;
-  void                           *native;
-  pm_metal_mem_limit_t            e;
-  pm_metal_mem_limit_info_host_t  info;
+  wasm_module_inst_t             inst;
+  void                          *native;
+  pm_metal_mem_limit_t           e;
+  pm_metal_mem_limit_info_host_t info;
 
   inst = wasm_runtime_get_module_inst(exec_env);
   if (inst == NULL || !wasm_runtime_validate_app_addr(inst, out, sizeof(info))) {
@@ -412,12 +411,14 @@ static int32_t pm_metal_mem_limit_get_native(wasm_exec_env_t exec_env, uint32_t 
   return 0;
 }
 
-static int32_t pm_metal_mem_limit_find_native(wasm_exec_env_t exec_env, const char *id, uint32_t out)
+static int32_t pm_metal_mem_limit_find_native(wasm_exec_env_t exec_env,
+                                              const char     *id,
+                                              uint32_t        out)
 {
-  wasm_module_inst_t              inst;
-  void                           *native;
-  pm_metal_mem_limit_t            e;
-  pm_metal_mem_limit_info_host_t  info;
+  wasm_module_inst_t             inst;
+  void                          *native;
+  pm_metal_mem_limit_t           e;
+  pm_metal_mem_limit_info_host_t info;
 
   inst = wasm_runtime_get_module_inst(exec_env);
   if (inst == NULL || !wasm_runtime_validate_app_addr(inst, out, sizeof(info))) {
@@ -436,14 +437,14 @@ static int32_t pm_metal_mem_limit_find_native(wasm_exec_env_t exec_env, const ch
 }
 
 static int32_t pm_metal_mem_limit_find_mn_native(wasm_exec_env_t exec_env,
-                                                const char     *module,
-                                                const char     *name,
-                                                uint32_t        out)
+                                                 const char     *module,
+                                                 const char     *name,
+                                                 uint32_t        out)
 {
-  wasm_module_inst_t              inst;
-  void                           *native;
-  pm_metal_mem_limit_t            e;
-  pm_metal_mem_limit_info_host_t  info;
+  wasm_module_inst_t             inst;
+  void                          *native;
+  pm_metal_mem_limit_t           e;
+  pm_metal_mem_limit_info_host_t info;
 
   inst = wasm_runtime_get_module_inst(exec_env);
   if (inst == NULL || !wasm_runtime_validate_app_addr(inst, out, sizeof(info))) {

@@ -20,8 +20,9 @@ int32_t metal_dropbear_ensure_hostkeys(void);
  * Start a Dropbear server session on an accepted TCP sock.
  * Returns opaque cookie, or 0 on failure. PTY slave used for shell after auth.
  */
-uint32_t metal_dropbear_session_start(pm_metal_net_ip_sock_h sock, pm_metal_stream_h pty_master,
-                                      pm_metal_stream_h pty_slave);
+uint32_t metal_dropbear_session_start(pm_metal_net_ip_sock_h sock,
+                                      pm_metal_stream_h      pty_master,
+                                      pm_metal_stream_h      pty_slave);
 
 /** One coop step: poll Dropbear once. Returns 0 continue, -1 session ended. */
 int32_t metal_dropbear_session_poll(uint32_t sess);

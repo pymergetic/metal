@@ -324,10 +324,10 @@ Sphinx; doc every bind; Doxygen all headers; `PY_BIND` as universal export.
 
 | Package | Kind | Who |
 |---------|------|-----|
-| `metal.guest` | headers | kernel v1 |
+| `h@metal.guest` | h | kernel v1 |
 | `wasi.sysroot` | sysroot | later — never inside `metal.guest` |
 | `mod.<name>` | headers | optional |
-| `mod.t8_multimod_lib` | headers | **v1 seed** (not Doom) |
+| `h@mod.t8_multimod_lib` | h | **v1 seed** (not Doom) |
 
 No first-file tar INDEX in v1 — small packs; optional RAM map after inflate.
 Sym table = plain C array (not tar).
@@ -383,14 +383,14 @@ Dual-ABI required. Reuse `util/tar` + `util/lz4`.
 
 ```text
 iface / iface ls / iface ls metal.guest
-iface cat metal.guest pymergetic/metal/fs/fs.h
+iface cat h@metal.guest fs/fs.h
 iface sym [module [name]]
 ```
 
 ```python
 import pymergetic.metal.iface as iface
-iface.info(); iface.list(); iface.list("metal.guest")
-iface.read("metal.guest", "pymergetic/metal/fs/fs.h")
+iface.info(); iface.list(); iface.list("h@metal.guest")
+iface.read("h@metal.guest", "fs/fs.h")
 s = iface.sym("pymergetic.metal.fs", "pm_metal_fs_open")
 doc.lookup_key(s["doc_key"])  # when set
 ```
@@ -415,7 +415,7 @@ Methods: `info`, `list`, `read`, `sym`.
 **II-B** — scrape NativeSymbol → `iface_syms.inc.c`; wire efi/bios.  
 **II-C** — allowlist from `metal.h` + extras; ustar→lz4→embed.  
 **II-D** — shell `iface` + `pymergetic.metal.iface`.  
-**II-E** — `t8_multimod_lib.h` → `mod.t8_multimod_lib` (not Doom).  
+**II-E** — `t8_multimod_lib.h` → `h@mod.t8_multimod_lib` (not Doom).  
 **II-F** — prose + verify.  
 **II-G** — seed `doc_key` e.g. fs open → `py:pymergetic.metal.fs.open`.
 

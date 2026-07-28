@@ -22,16 +22,16 @@
 #define TLS_CONN_HOST_MAX 128u
 
 typedef struct {
-  int32_t             used;
-  pm_metal_net_ip_sock_h sock;
+  int32_t                 used;
+  pm_metal_net_ip_sock_h  sock;
   pm_metal_net_tls_h      tls_h;
-  int32_t             use_tls;
+  int32_t                 use_tls;
   pm_metal_net_tls_wire_t wire;
-  uint8_t             rbuf[PM_METAL_TLS_CONN_IO_MAX];
-  uint32_t            rbuf_len;
-  uint8_t             wbuf[PM_METAL_TLS_CONN_IO_MAX];
-  uint32_t            wbuf_len;
-  uint32_t            wbuf_off;
+  uint8_t                 rbuf[PM_METAL_TLS_CONN_IO_MAX];
+  uint32_t                rbuf_len;
+  uint8_t                 wbuf[PM_METAL_TLS_CONN_IO_MAX];
+  uint32_t                wbuf_len;
+  uint32_t                wbuf_off;
 } tls_conn_slot_t;
 
 static tls_conn_slot_t mTlsConnSlots[TLS_CONN_MAX];
@@ -423,9 +423,9 @@ static pm_metal_async_handle_t TlsConnOpStart(tls_conn_slot_t *s, tls_conn_op_ki
 }
 
 pm_metal_async_handle_t pm_metal_net_tls_conn_connect(pm_metal_net_tls_conn_h ch,
-                                                  const char         *host,
-                                                  uint16_t            port,
-                                                  int32_t             use_tls)
+                                                      const char             *host,
+                                                      uint16_t                port,
+                                                      int32_t                 use_tls)
 {
   tls_conn_slot_t        *s = TlsConnSlotFromHandle(ch);
   pm_metal_async_handle_t ah;
@@ -448,8 +448,8 @@ pm_metal_async_handle_t pm_metal_net_tls_conn_connect(pm_metal_net_tls_conn_h ch
 }
 
 pm_metal_async_handle_t pm_metal_net_tls_conn_write(pm_metal_net_tls_conn_h ch,
-                                                const void         *data,
-                                                uint32_t            len)
+                                                    const void             *data,
+                                                    uint32_t                len)
 {
   tls_conn_slot_t        *s = TlsConnSlotFromHandle(ch);
   pm_metal_async_handle_t ah;

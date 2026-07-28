@@ -37,7 +37,7 @@ void pm_metal_py_ctx_table_init(void);
 /**
  * Carve a fresh MAP heap + mp_state_ctx_t, mp_embed_init() it, install
  * the bind/pmcmd/mod tables against it (cheap — a few dozen
- * mp_store_attr calls, see py_bind.c), and append /mods/py + stdlib.zip
+ * mp_store_attr calls, see py_bind.c), and append /mods + /mods/py/stdlib
  * to its own sys.path (mirrors pm_metal_py_init() on the shared
  * context — mp_sys_path is a genuine per-context root pointer, so each
  * isolated context needs its own copy of this call, not just the

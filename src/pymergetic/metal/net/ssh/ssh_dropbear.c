@@ -46,14 +46,14 @@ extern void svr_getopts(int argc, char **argv);
 #define HOSTKEY_PATH "/etc/ssh/dropbear_ed25519_host_key"
 
 typedef struct {
-  int32_t             used;
-  int                 sock_fd;
+  int32_t                used;
+  int                    sock_fd;
   pm_metal_net_ip_sock_h sock;
-  pm_metal_stream_h   pty_m;
-  pm_metal_stream_h   pty_s;
-  int                 pty_m_fd;
-  int                 pty_s_fd;
-  int32_t             shell_on; /* COM1 mirror + RX inject (same console as UART/UI) */
+  pm_metal_stream_h      pty_m;
+  pm_metal_stream_h      pty_s;
+  int                    pty_m_fd;
+  int                    pty_s_fd;
+  int32_t                shell_on; /* COM1 mirror + RX inject (same console as UART/UI) */
 } ssh_sess_t;
 
 static ssh_sess_t g_sess[SSH_SESS_MAX];
@@ -107,9 +107,9 @@ int32_t metal_dropbear_ensure_hostkeys(void)
 
   (void)pm_metal_fs_mkdir("/etc");
   (void)pm_metal_fs_mkdir("/etc/ssh");
-  cfg = pm_metal_net_ssh_cfg();
+  cfg  = pm_metal_net_ssh_cfg();
   path = (cfg != NULL && cfg->host_key[0] != '\0') ? cfg->host_key : HOSTKEY_PATH;
-  sz = pm_metal_fs_size(path);
+  sz   = pm_metal_fs_size(path);
   if (sz > 0u && sz != (uint32_t)-1) {
     pm_metal_logf("sshd: hostkey ready (%s)", path);
     return 0;
@@ -152,8 +152,11 @@ int metal_dropbear_auth_password(const char *user, const char *pass)
   return pm_metal_auth_user_check(user, pass) ? 1 : 0;
 }
 
-int metal_dropbear_auth_pubkey(const char *user, const char *keyalgo, unsigned int keyalgolen,
-                               const unsigned char *keyblob, unsigned int keybloblen)
+int metal_dropbear_auth_pubkey(const char          *user,
+                               const char          *keyalgo,
+                               unsigned int         keyalgolen,
+                               const unsigned char *keyblob,
+                               unsigned int         keybloblen)
 {
   char algo[PM_METAL_AUTH_ALGO_MAX];
 
@@ -169,10 +172,13 @@ int metal_dropbear_auth_pubkey(const char *user, const char *keyalgo, unsigned i
   return pm_metal_auth_pubkey_check(user, NULL, keyblob, keybloblen) ? 1 : 0;
 }
 
-int metal_dropbear_auth_sslcert(const char *requested_user, const unsigned char *cert_der,
-                                unsigned int cert_len, const unsigned char *signed_data,
-                                unsigned int signed_len, const unsigned char *signature,
-                                unsigned int signature_len)
+int metal_dropbear_auth_sslcert(const char          *requested_user,
+                                const unsigned char *cert_der,
+                                unsigned int         cert_len,
+                                const unsigned char *signed_data,
+                                unsigned int         signed_len,
+                                const unsigned char *signature,
+                                unsigned int         signature_len)
 {
   pm_metal_sshd_cfg_t *cfg;
   char                 mapped_user[PM_METAL_AUTH_USER_MAX];
@@ -183,13 +189,13 @@ int metal_dropbear_auth_sslcert(const char *requested_user, const unsigned char 
   }
   cfg = pm_metal_net_ssh_cfg();
   if (cfg == NULL ||
-      !pm_metal_auth_sslcert_check(cert_der, cert_len, cfg->client_ca, mapped_user,
-                                   sizeof(mapped_user)) ||
+      !pm_metal_auth_sslcert_check(
+        cert_der, cert_len, cfg->client_ca, mapped_user, sizeof(mapped_user)) ||
       strcmp(requested_user, mapped_user) != 0) {
     return 0;
   }
-  return pm_metal_auth_sslcert_verify(cert_der, cert_len, signed_data, signed_len, signature,
-                                      signature_len)
+  return pm_metal_auth_sslcert_verify(
+           cert_der, cert_len, signed_data, signed_len, signature, signature_len)
            ? 1
            : 0;
 }
@@ -214,8 +220,12 @@ int metal_dropbear_pty_allocate(int *ptyfd, int *ttyfd, char *namebuf, int nameb
   return 1;
 }
 
-int metal_dropbear_spawn_command(void (*exec_fn)(const void *), const void *exec_data, int *ret_writefd,
-                                 int *ret_readfd, int *ret_errfd, int *ret_pid)
+int metal_dropbear_spawn_command(void (*exec_fn)(const void *),
+                                 const void *exec_data,
+                                 int        *ret_writefd,
+                                 int        *ret_readfd,
+                                 int        *ret_errfd,
+                                 int        *ret_pid)
 {
   /* Unused — noptycommand uses metal_dropbear_run_cmd on Metal. */
   (void)exec_fn;
@@ -294,7 +304,7 @@ int metal_dropbear_shell_attach(int slave_fd, int master_fd)
   if (g_active_sess == 0 || g_active_sess >= SSH_SESS_MAX) {
     return -1;
   }
-  s = &g_sess[g_active_sess];
+  s           = &g_sess[g_active_sess];
   s->shell_on = 1;
   /* Same console as UART/UI: mirror COM1 TX, inject RX into console ring. */
   ssh_console_mirror_clear(g_mirror_sess);
@@ -322,8 +332,9 @@ static void shell_pump(ssh_sess_t *s)
   }
 }
 
-uint32_t metal_dropbear_session_start(pm_metal_net_ip_sock_h sock, pm_metal_stream_h pty_master,
-                                      pm_metal_stream_h pty_slave)
+uint32_t metal_dropbear_session_start(pm_metal_net_ip_sock_h sock,
+                                      pm_metal_stream_h      pty_master,
+                                      pm_metal_stream_h      pty_slave)
 {
   uint32_t    id;
   ssh_sess_t *s;
@@ -340,15 +351,15 @@ uint32_t metal_dropbear_session_start(pm_metal_net_ip_sock_h sock, pm_metal_stre
 
   s = &g_sess[id];
   memset(s, 0, sizeof(*s));
-  s->used       = 1;
-  s->sock       = sock;
-  s->pty_m      = pty_master;
-  s->pty_s      = pty_slave;
-  s->pty_m_fd   = -1;
-  s->pty_s_fd   = -1;
-  sfd           = metal_db_fd_register_sock(sock);
-  s->pty_m_fd   = metal_db_fd_register_stream(pty_master);
-  s->pty_s_fd   = metal_db_fd_register_stream(pty_slave);
+  s->used     = 1;
+  s->sock     = sock;
+  s->pty_m    = pty_master;
+  s->pty_s    = pty_slave;
+  s->pty_m_fd = -1;
+  s->pty_s_fd = -1;
+  sfd         = metal_db_fd_register_sock(sock);
+  s->pty_m_fd = metal_db_fd_register_stream(pty_master);
+  s->pty_s_fd = metal_db_fd_register_stream(pty_slave);
   if (sfd < 0 || s->pty_m_fd < 0 || s->pty_s_fd < 0) {
     metal_dropbear_session_close(id);
     return 0;
@@ -382,10 +393,10 @@ int32_t metal_dropbear_session_poll(uint32_t sess)
   if (sess == 0 || sess >= SSH_SESS_MAX || !g_sess[sess].used) {
     return -1;
   }
-  s                      = &g_sess[sess];
-  g_active_sess          = sess;
+  s                        = &g_sess[sess];
+  g_active_sess            = sess;
   metal_dropbear_jmp_ready = 1;
-  jc                     = sigsetjmp(metal_dropbear_jmp, 1);
+  jc                       = sigsetjmp(metal_dropbear_jmp, 1);
   if (jc != 0) {
     metal_dropbear_jmp_ready = 0;
     g_active_sess            = 0;
