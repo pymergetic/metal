@@ -4,6 +4,8 @@
  */
 #include "pymergetic/metal/util/crypto.h"
 
+#include <pymergetic/metal/boot/externals.h>
+
 #include "external/monocypher/src/monocypher.h"
 
 int pm_metal_util_crypto_hash(void *hash, size_t hash_len, const void *msg, size_t msg_len)
@@ -169,3 +171,10 @@ int pm_metal_util_crypto_native_register(void)
   }
   return 0;
 }
+
+/* Hand-bumped with scripts/setup.d/deps/monocypher.sh REF. */
+PM_METAL_EXTERNAL(g_pm_metal_ext_monocypher,
+                  monocypher,
+                  "4.0.2",
+                  "https://github.com/LoupVaillant/Monocypher",
+                  "Blake2b / ChaCha20-Poly1305");

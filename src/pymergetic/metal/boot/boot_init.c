@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include <pymergetic/metal/boot/boot.h>
+#include <pymergetic/metal/boot/externals.h>
 #include <pymergetic/metal/boot/port.h>
 #include <pymergetic/metal/log/log.h>
 #include <pymergetic/metal/bus/io/io.h>
@@ -619,3 +620,11 @@ void pm_metal_boot_shutdown(int reboot, int fast)
   pm_metal_gfx_fini();
   pm_metal_port_reset(reboot);
 }
+
+/* Hand-bumped with scripts/setup.d/deps/edk2.sh EDK2_REF. */
+PM_METAL_EXTERNAL(g_pm_metal_ext_edk2,
+                  edk2,
+                  "edk2-stable202502",
+                  "https://github.com/tianocore/edk2",
+                  "UEFI build SDK (Tianocore)");
+

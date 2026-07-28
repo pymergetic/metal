@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <pymergetic/metal/boot/externals.h>
+
 #define __SKIP_GNU 1
 #if defined(__i386__)
 #undef __i386__
@@ -35,3 +37,10 @@ static char *metal_bf_strdup(const char *s)
 #include "../../../../external/crypt_blowfish/crypt_blowfish.c"
 #include "../../../../external/crypt_blowfish/crypt_gensalt.c"
 #include "../../../../external/crypt_blowfish/wrapper.c"
+
+/* Hand-bumped with external/crypt_blowfish tag (CRYPT_BLOWFISH_1_3). */
+PM_METAL_EXTERNAL(g_pm_metal_ext_crypt_blowfish,
+                  crypt_blowfish,
+                  "1.3",
+                  "https://github.com/openwall/crypt_blowfish",
+                  "bcrypt password hashes");

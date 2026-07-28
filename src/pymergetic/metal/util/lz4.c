@@ -14,6 +14,8 @@
 
 #include <limits.h>
 
+#include <pymergetic/metal/boot/externals.h>
+
 #include "external/lz4/lib/lz4.h" /* vendored — full path from this package's own root (see CMakeLists.txt's PM_METAL_ROOT include dir), not a bare "lz4.h" */
 
 size_t pm_metal_util_lz4_compress_bound(size_t src_len)
@@ -98,3 +100,10 @@ int pm_metal_util_lz4_native_register(void)
   }
   return 0;
 }
+
+/* Hand-bumped with scripts/setup.d/deps/lz4.sh LZ4_REF (LZ4_VERSION_STRING). */
+PM_METAL_EXTERNAL(g_pm_metal_ext_lz4,
+                  lz4,
+                  LZ4_VERSION_STRING,
+                  "https://github.com/lz4/lz4",
+                  "block compression (packs)");
