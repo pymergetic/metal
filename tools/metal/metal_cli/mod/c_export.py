@@ -70,6 +70,10 @@ def _parse_c_arg(part: str, idx: int) -> Arg:
     m = re.match(r"^(.+?)\s*\(\s*\*\s*(\w+)\s*\)\s*\((.*)\)$", part)
     if m:
         return Arg(name=m.group(2), ty=f"{m.group(1).strip()} (*)({m.group(3).strip()})")
+    # array arg: const uint8_t src[4]
+    m = re.match(r"^(.+?)\s+(\w+)\[(\d+)\]$", part)
+    if m:
+        return Arg(name=m.group(2), ty=f"{m.group(1).strip()}[{m.group(3)}]")
     tokens = part.replace("*", " * ").split()
     if not tokens:
         return Arg(name=f"a{idx}", ty="void")
@@ -179,8 +183,25 @@ def catalog_from_c(path: Path) -> Catalog:
         else:
             cat.typedefs.append(Typedef(name=m.group(2), ty="uint32_t"))
 
-    # Top-level function declarations (line-based; skip fn-ptr fields / static inline).
+    # Header-only ``static inline`` definitions (signature + '{') — catalog border.
     seen_fns: set[str] = set()
+    for m in re.finditer(
+        r"static\s+inline\s+(.+?)\b(\w+)\s*\((.*?)\)\s*\{",
+        raw,
+        flags=re.DOTALL,
+    ):
+        ret = " ".join(m.group(1).split())
+        fname = m.group(2)
+        if not ret or fname in seen_fns:
+            continue
+        if "(" in ret or ")" in ret:
+            continue
+        seen_fns.add(fname)
+        args = _split_c_args(" ".join(m.group(3).split()))
+        cat.fns.append(Fn(name=fname, ret=ret, args=args, inline=True))
+
+    # Top-level function declarations (line-based; skip fn-ptr fields).
+    # ``static inline`` prototypes (`;`) also count as inline border.
     for line in raw.splitlines():
         line = line.strip()
         if not line.endswith(";"):
@@ -189,12 +210,17 @@ def catalog_from_c(path: Path) -> Catalog:
             continue
         head = line.split("(", 1)[0]
         toks = head.replace("*", " * ").split()
-        if any(t in toks for t in ("static", "inline", "typedef", "else", "return")):
+        is_inline = "static" in toks and "inline" in toks
+        if not is_inline and any(
+            t in toks for t in ("static", "inline", "typedef", "else", "return")
+        ):
             continue
         m = re.match(r"^(.+?)\b(\w+)\s*\((.*)\)\s*;$", line)
         if not m:
             continue
         ret = " ".join(m.group(1).split())
+        if is_inline:
+            ret = " ".join(t for t in ret.split() if t not in ("static", "inline"))
         fname = m.group(2)
         if not ret or fname in seen_fns:
             continue
@@ -205,6 +231,6 @@ def catalog_from_c(path: Path) -> Catalog:
             continue
         seen_fns.add(fname)
         args = _split_c_args(m.group(3))
-        cat.fns.append(Fn(name=fname, ret=ret, args=args))
+        cat.fns.append(Fn(name=fname, ret=ret, args=args, inline=is_inline))
 
     return cat

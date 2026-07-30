@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "pymergetic.metal.dev.blk",
-  "impl": "rs",
+  "impl": "c",
   "version": "0.1.0",
-  "comment": "Block probe (IDE) -> DT BLK. Virtio-blk via PCI class."
+  "comment": "Block I/O + IDE detect. Virtio-blk backend private."
 }

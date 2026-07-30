@@ -1,0 +1,8 @@
+# BEGIN metal-generated
+.target/
+target/
+.generated/
+__init__.pyi
+print.h
+print.pyi
+# END metal-generated

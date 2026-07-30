@@ -1,0 +1,16 @@
+-xc
+-std=c11
+--target=x86_64-unknown-windows
+-ffreestanding
+-nostdinc
+-fshort-wchar
+-mno-red-zone
+-Wno-macro-redefined
+-DPM_METAL_BOOT_TARGET_EFI=1
+-I../../../libc
+-I../../../../../
+-I.
+-Iedk2_inc
+-Iedk2_inc/X64
+-Iedk2_inc/Protocol
+-Iedk2_inc/Guid

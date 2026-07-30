@@ -55,6 +55,8 @@ class Fn:
     name: str
     ret: str
     args: list[Arg] = field(default_factory=list)
+    # True for C static inline border (ported Rust face, not extern FFI).
+    inline: bool = False
 
 
 @dataclass
@@ -103,7 +105,12 @@ def load_catalog(path: Path) -> Catalog:
             for a in _as_list(raw.get("args"))
         ]
         cat.fns.append(
-            Fn(name=str(raw["name"]), ret=str(raw.get("ret", "void")), args=args)
+            Fn(
+                name=str(raw["name"]),
+                ret=str(raw.get("ret", "void")),
+                args=args,
+                inline=bool(raw.get("inline", False)),
+            )
         )
     return cat
 
@@ -133,14 +140,17 @@ def _c_args(fn: Fn) -> str:
 
 _PRIM = {
     "void": "()",
+    "int": "i32",
+    "int8_t": "i8",
+    "uint8_t": "u8",
+    "int16_t": "i16",
+    "uint16_t": "u16",
     "int32_t": "i32",
     "uint32_t": "u32",
     "int64_t": "i64",
     "uint64_t": "u64",
     "size_t": "usize",
     "uintptr_t": "usize",
-    "uint8_t": "u8",
-    "int8_t": "i8",
     "char": "core::ffi::c_char",
 }
 
@@ -350,8 +360,40 @@ def _opaque_struct_names(cat: Catalog) -> list[str]:
     return sorted(found)
 
 
+# Sibling C includes for faces that name types owned by another stem in the
+# same package. Keyed by (package, stem). Keep small — prefer catalog-local
+# types when adding new APIs.
+_SIBLING_C_INCLUDES: dict[tuple[str, str], list[str]] = {
+    ("pymergetic.metal.async", "await"): [
+        "#include <pymergetic/metal/async/handle.h>",
+    ],
+    ("pymergetic.metal.async", "phase"): [
+        "#include <pymergetic/metal/async/handle.h>",
+    ],
+    ("pymergetic.metal.async", "task"): [
+        "#include <pymergetic/metal/async/coro.h>",
+    ],
+    ("pymergetic.metal.async", "process"): [
+        "#include <pymergetic/metal/async/handle.h>",
+    ],
+}
+
+# Extra typedefs when rust `pub type Alias = u32` is not exported as a catalog
+# typedef (only Option<fn> aliases are today).
+_SIBLING_C_TYPEDEFS: dict[tuple[str, str], list[str]] = {
+    ("pymergetic.metal.async", "process"): [
+        "typedef uint32_t pm_metal_async_pid_t;",
+    ],
+}
+
+
 def emit_c_header(module_name: str, base: str, cat: Catalog, human: str) -> str:
     guard = "PM_METAL_" + module_name.upper().replace(".", "_").replace("-", "_") + "_H_"
+    # Package for sibling lookup: strip trailing .<stem> when base is not entry.
+    pkg = module_name
+    if base != "__init__" and pkg.endswith("." + base):
+        pkg = pkg[: -(len(base) + 1)]
+    sib_key = (pkg, base)
     lines = [
         *generated_banner("c", human, f"{base}.h"),
         "",
@@ -360,12 +402,19 @@ def emit_c_header(module_name: str, base: str, cat: Catalog, human: str) -> str:
         "",
         "#include <stddef.h>",
         "#include <stdint.h>",
+    ]
+    for inc in _SIBLING_C_INCLUDES.get(sib_key, []):
+        lines.append(inc)
+    lines += [
         "",
         "#ifdef __cplusplus",
         'extern "C" {',
         "#endif",
         "",
     ]
+    for td in _SIBLING_C_TYPEDEFS.get(sib_key, []):
+        lines.append(td)
+        lines.append("")
     # Forward decls so typedefs (fn-pointer aliases) may name structs.
     fwd = sorted({st.name for st in cat.structs} | set(_opaque_struct_names(cat)))
     for name in fwd:
@@ -401,6 +450,92 @@ def emit_c_header(module_name: str, base: str, cat: Catalog, human: str) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def _rs_inline_arg_ty(ty: str) -> str:
+    """Map C inline-arg types (incl. ``uint8_t[N]``) to Rust pointer form."""
+    t = " ".join(ty.split())
+    m = re.match(r"^(const\s+)?uint8_t\[(\d+)\]$", t)
+    if m:
+        return "*const u8" if m.group(1) else "*mut u8"
+    return _rs_ty(t)
+
+
+def _emit_rs_inline_twin(fn: Fn) -> list[str]:
+    """Ported Rust body for a C ``static inline`` border fn (not extern FFI)."""
+    name = fn.name
+    lines: list[str] = ["#[inline]"]
+
+    if name.endswith("host_is_le"):
+        lines += [f"pub fn {name}() -> i32 {{", "    1", "}", ""]
+        return lines
+
+    m_load = re.search(r"load_u(\d+)_le$", name)
+    if m_load and len(fn.args) == 1:
+        bits = int(m_load.group(1))
+        nbytes = bits // 8
+        src = _rs_ident(fn.args[0].name)
+        ret = _rs_ty(fn.ret)
+        lines.append(f"pub unsafe fn {name}({src}: *const u8) -> {ret} {{")
+        if bits == 64:
+            lines += [
+                f"    let mut v: {ret} = 0;",
+                "    let mut i = 0usize;",
+                "    while i < 8 {",
+                f"        v |= (*{src}.add(i) as {ret}) << (8 * i);",
+                "        i += 1;",
+                "    }",
+                "    v",
+            ]
+        else:
+            parts = [
+                f"(*{src}.add({i}) as {ret}) << {8 * i}" for i in range(nbytes)
+            ]
+            lines.append("    " + " | ".join(parts))
+        lines += ["}", ""]
+        return lines
+
+    m_store = re.search(r"store_u(\d+)_le$", name)
+    if m_store and len(fn.args) == 2:
+        bits = int(m_store.group(1))
+        nbytes = bits // 8
+        dst = _rs_ident(fn.args[0].name)
+        val = _rs_ident(fn.args[1].name)
+        vty = _rs_ty(fn.args[1].ty)
+        lines.append(
+            f"pub unsafe fn {name}({dst}: *mut u8, {val}: {vty}) {{"
+        )
+        if bits == 64:
+            lines += [
+                "    let mut i = 0usize;",
+                "    while i < 8 {",
+                f"        *{dst}.add(i) = (({val} >> (8 * i)) & 0xff) as u8;",
+                "        i += 1;",
+                "    }",
+            ]
+        else:
+            for i in range(nbytes):
+                lines.append(
+                    f"    *{dst}.add({i}) = (({val} >> {8 * i}) & 0xff) as u8;"
+                )
+        lines += ["}", ""]
+        return lines
+
+    # Fallback: signature-only stub (should not hit for endian).
+    args = ", ".join(
+        f"{_rs_ident(a.name)}: {_rs_inline_arg_ty(a.ty)}" for a in fn.args
+    )
+    ret = _rs_ty(fn.ret)
+    if ret == "()":
+        lines += [f"pub unsafe fn {name}({args}) {{", "}", ""]
+    else:
+        lines += [
+            f"pub unsafe fn {name}({args}) -> {ret} {{",
+            "    core::unimplemented!()",
+            "}",
+            "",
+        ]
+    return lines
 
 
 def emit_rs_bindings(module_name: str, base: str, cat: Catalog, human: str) -> str:
@@ -443,17 +578,24 @@ def emit_rs_bindings(module_name: str, base: str, cat: Catalog, human: str) -> s
             return t
         return _rs_ty(t)
 
-    lines.append('extern "C" {')
-    for fn in cat.fns:
-        args = ", ".join(f"{_rs_ident(a.name)}: {arg_ty(a.ty)}" for a in fn.args)
-        ret = arg_ty(fn.ret) if fn.ret.strip() in typedef_names else _rs_ty(fn.ret)
-        if ret == "()":
-            lines.append(f"    pub fn {fn.name}({args});")
-        else:
-            lines.append(f"    pub fn {fn.name}({args}) -> {ret};")
-    if not cat.fns:
-        lines.append(f"    // module {module_name}: empty catalog")
-    lines += ["}", ""]
+    inline_fns = [fn for fn in cat.fns if fn.inline]
+    extern_fns = [fn for fn in cat.fns if not fn.inline]
+
+    for fn in inline_fns:
+        lines.extend(_emit_rs_inline_twin(fn))
+
+    if extern_fns or not cat.fns:
+        lines.append('extern "C" {')
+        for fn in extern_fns:
+            args = ", ".join(f"{_rs_ident(a.name)}: {arg_ty(a.ty)}" for a in fn.args)
+            ret = arg_ty(fn.ret) if fn.ret.strip() in typedef_names else _rs_ty(fn.ret)
+            if ret == "()":
+                lines.append(f"    pub fn {fn.name}({args});")
+            else:
+                lines.append(f"    pub fn {fn.name}({args}) -> {ret};")
+        if not cat.fns:
+            lines.append(f"    // module {module_name}: empty catalog")
+        lines += ["}", ""]
     return "\n".join(lines)
 
 

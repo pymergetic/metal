@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.boot.tree",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Registered boot tree (+-- / styled ok|WARN|FAIL). Nested under boot."
+}

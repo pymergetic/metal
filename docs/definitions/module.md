@@ -262,14 +262,33 @@ dirs with their own `.module` + `__init__.{ext}` (e.g.
 **Sibling sources** in the same dir are extra stems sync may codegen
 when they carry a pool border. Prefer nested dirs with their own
 `.module` + `__init__.{ext}` for real subpackages (`mem/arena/`,
-`mem/tlsf/`). Skip `_*.{ext}` (private). Vendored C stays external
-(FFI/shim).
+`mem/tlsf/`). Vendored C stays external (FFI/shim).
+
+**Private `_*.{ext}` stems:** faceless helpers wired only via `#[path]` /
+same-TU include. They must not appear as sync stems and must not get
+pool faces. Name them with a leading underscore (`_line.rs`,
+`_registry.rs`, `_stack.c`).
+
+**No umbrella re-exports:** a package-marker `__init__` (empty catalog,
+sync `§ - ~`) must not re-export sibling C borders as its own ABI.
+External consumers always hit the concrete stem (`print`, `spin`,
+`endian`). Rust `pub use` inside a crate for internal wiring is fine.
+
+**Header-only `static inline`:** a real public border. Catalog those
+prototypes/definitions (`inline=true`); emit a ported Rust face
+(`#[inline] pub fn`, not `extern "C"` — cannot link to another TU’s
+`static inline`) and a normal `.pyi`. Sync row is still `§ * * -`.
+C human source may stay header-only (no `.c` body).
 
 **Empty catalogs:** a stem with no exported fns does **not** get `.h` /
 consumer `.rs` faces. Exception: package entry still gets `__init__.pyi`
 (even if empty) as a typing/package marker when the py slot is emitted.
 Never auto-generate `__init__.py` — that is only human source when
 `impl=py`. Sibling stems without a border stay faceless.
+
+**Non-goal (for now):** automatic cross-lang include→import graph.
+Prefer explicit stem imports + `_`-private helpers over a project-local
+resolver that duplicates Cargo/link deps.
 
 ### Fixed v2 schema files (private)
 

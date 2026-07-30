@@ -95,3 +95,8 @@ the template changed, and **tell them to restart clangd** (or reload the
 window) so they are not chasing stale errors. See
 `.cursor/rules/metal-ide-lint.mdc` and `docs/SOURCETREE.md` (clangd).
 
+**Never absolute paths** in generated IDE/build metadata
+(`compile_commands.json`, emitted `.clangd` path bits, etc.). Use package-
+relative paths only (`src/...`, `directory` = package root). No
+`/home/...`, no `$PWD` absolutes — see `.cursor/rules/metal-ide-lint.mdc`.
+

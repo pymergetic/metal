@@ -237,20 +237,18 @@ target entry (bios|efi)
   -> banner (buffered on ring)
   -> dt.reset
   -> dt.seed_mem (lowmem/highmem + bound heap) # class MEM — partitioning intel only
-  -> dt.seed_bound_uart (COM1 / EFI serial)   # CAP_BOUND bookkeeping
-  -> dump_mem (walk DT MEM -> console/log)
+  -> dt.seed_bound_uart (via uart floor ops)  # CAP_BOUND bookkeeping
   -> dev/serial up (platform uart half)
-  -> console.attach(serial)                   # ring drains
+  -> console.attach(serial)                   # ring drains; log via console
   -> handoff.leave_firmware                   # NOT async start
   -> boot_harvest: each linked *_detect()     # skip CAP_BOUND
        # detectors live in drivers (bus/*, dev/*);
        # harvest only calls them — no central hardware table
-       bus/pci, time, acpi, random, input, blk, gfx, ...
-  -> hwtree print (from DT [+ ACPI RSDP if found])
-  -> ... more sync bring-up ok here ...
-  ---------- async start (runners) ----------
-  -> async.start(n) + proof (sleep await)     # metal/async
-  -> awaitable blk/input/gfx/net/...          # next
+       bus/pci, bus/virtio, time, acpi, random, input, blk, gfx, ...
+  -> open/bind drivers (blk, net L2+DHCP, ...)
+  -> async.start(n)                           # metal/async (no proofs here)
+  -> boot tree print
+  # proofs + ping/http/ntp: ./exp2/scripts/stress only
 ```
 
 **Harvest rule:** each driver exports `pm_metal_*_detect()` that probe /

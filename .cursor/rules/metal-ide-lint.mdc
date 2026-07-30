@@ -34,3 +34,23 @@ bugs. Treat IDE diagnostics as part of the deliverable, not optional polish.
 
 If you changed `.clangd.template` or ide setup in this session, end with an
 explicit one-liner: restart clangd / reload window.
+
+## Never absolute paths in generated IDE / build metadata
+
+Product IDE metadata comes from `./scripts/setup ide` (`.clangd.template` →
+`.clangd` with `@@ROOT@@` checkout paths, and `build/compile_commands.json`
+with absolute file/directory entries). That is intentional: clangd indexes
+CDB file keys as `directory/file` **without** making a relative `directory`
+absolute, so a relative-directory CDB never matches absolute editor paths
+and falls back to Generic (cwd = source dir) — which breaks `-Iexp2/...`
+and `-nostdinc`/`metal/libc` (mass `stdint.h`/`stddef.h` squiggles).
+
+**exp2:** exact TUs belong in `build/compile_commands.json` via
+`./scripts/setup ide` (absolute `directory`/`file`, freestanding flags,
+`metal/libc`, `-Ilwip`). Also symlink `.vscode/compile_commands.json` ->
+`../build/compile_commands.json` — metal/Zephyr IDE settings force
+`clangd --compile-commands-dir=${workspaceFolder}/.vscode`; without that
+symlink clangd finds no CDB and drops `-Ilwip` (mass `lwip/*.h` squiggles).
+Do **not** set `CompilationDatabase: "None"` on exp2 PathMatch once those
+entries exist. After template/ide.sh edits: run `./scripts/setup ide`, then
+restart clangd.

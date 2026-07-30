@@ -1,5 +1,5 @@
 //! FIGlet "small" ASCII art render — rows delivered via a write callback.
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(dead_code, non_camel_case_types)]
 
 use pymergetic_metal_rt as _;

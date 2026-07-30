@@ -1,5 +1,5 @@
 //! Random probe — RDRAND -> DT RANDOM compat "rdrand".
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 
 use pymergetic_metal_dt::{
     pm_metal_dt_add, pm_metal_dt_bus_t, pm_metal_dt_cap_t, pm_metal_dt_class_t, pm_metal_dt_count,

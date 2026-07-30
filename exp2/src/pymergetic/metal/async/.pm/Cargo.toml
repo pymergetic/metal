@@ -11,6 +11,7 @@ crate-type = ["staticlib", "rlib"]
 pymergetic_metal_rt = { path = "../../rt/.pm" }
 pymergetic_metal_mem = { path = "../../mem/.pm" }
 
+
 [profile.release]
 panic = "abort"
 lto = true

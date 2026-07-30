@@ -5,7 +5,7 @@
 //! - arena embedded spin: map / unmap / heap_grow / size queries
 //! - [`HEAP`].heap_lock: TLSF malloc / free / pool grow / free_bytes walk
 //! Lock order when both needed: heap_lock then arena.
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 
 use pymergetic_metal_rt as _;
 

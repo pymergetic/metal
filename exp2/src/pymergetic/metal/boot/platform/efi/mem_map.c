@@ -6,28 +6,146 @@
 #error "PM_METAL_BOOT_TARGET_* is not defined"
 #endif
 
-/*
- * EFI mem_map — stub until GetMemoryMap is wired via EDK2.
- * get() fails; image_end returns 0. Not linked into the BIOS image.
- */
+#include <Uefi.h>
+#include <Protocol/LoadedImage.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
 #include <pymergetic/metal/boot/platform/mem_map.h>
 
+#include "efi_ctx.h"
+
+#define MAX_REGIONS 128u
+
+/* EFI_LOADED_IMAGE_PROTOCOL_GUID — avoid depending on EDK2 GUID .obj */
+static EFI_GUID g_loaded_image_guid = {
+  0x5B1B31A1, 0x9562, 0x11d2, { 0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B }
+};
+
+static pm_metal_boot_mem_region_t g_regions[MAX_REGIONS];
+static uint32_t g_n_regions;
+static uintptr_t g_image_end;
+static int g_cached;
+
+static uint32_t map_efi_type(UINT32 t)
+{
+  if (t == EfiConventionalMemory || t == EfiBootServicesCode || t == EfiBootServicesData
+      || t == EfiLoaderCode || t == EfiLoaderData) {
+    return (uint32_t)PM_METAL_BOOT_MEM_AVAILABLE;
+  }
+  if (t == EfiACPIReclaimMemory) {
+    return (uint32_t)PM_METAL_BOOT_MEM_ACPI_RECLAIM;
+  }
+  if (t == EfiACPIMemoryNVS) {
+    return (uint32_t)PM_METAL_BOOT_MEM_ACPI_NVS;
+  }
+  if (t == EfiReservedMemoryType || t == EfiRuntimeServicesCode || t == EfiRuntimeServicesData
+      || t == EfiMemoryMappedIO || t == EfiMemoryMappedIOPortSpace || t == EfiPalCode
+      || t == EfiUnusableMemory) {
+    return (uint32_t)PM_METAL_BOOT_MEM_RESERVED;
+  }
+  return (uint32_t)PM_METAL_BOOT_MEM_OTHER;
+}
+
+static int32_t cache_from_bs(void)
+{
+  EFI_STATUS st;
+  UINTN map_size;
+  UINTN map_key;
+  UINTN desc_size;
+  UINT32 desc_ver;
+  EFI_MEMORY_DESCRIPTOR *map;
+  UINTN i;
+  UINTN n;
+
+  if (g_pm_efi_st == NULL || g_pm_efi_st->BootServices == NULL || !g_pm_efi_bs_alive) {
+    return -1;
+  }
+
+  map_size = 0;
+  st = g_pm_efi_st->BootServices->GetMemoryMap(&map_size, NULL, &map_key, &desc_size, &desc_ver);
+  if (st != EFI_BUFFER_TOO_SMALL || map_size == 0) {
+    return -1;
+  }
+  map_size += 2u * desc_size;
+  st = g_pm_efi_st->BootServices->AllocatePool(EfiLoaderData, map_size, (VOID **)&map);
+  if (EFI_ERROR(st) || map == NULL) {
+    return -1;
+  }
+  st = g_pm_efi_st->BootServices->GetMemoryMap(&map_size, map, &map_key, &desc_size, &desc_ver);
+  if (EFI_ERROR(st)) {
+    (void)g_pm_efi_st->BootServices->FreePool(map);
+    return -1;
+  }
+
+  g_n_regions = 0;
+  n = map_size / desc_size;
+  for (i = 0; i < n && g_n_regions < MAX_REGIONS; i++) {
+    EFI_MEMORY_DESCRIPTOR *d;
+    uint64_t bytes;
+
+    d = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)map + i * desc_size);
+    bytes = (uint64_t)d->NumberOfPages * 4096ull;
+    if (bytes == 0) {
+      continue;
+    }
+    g_regions[g_n_regions].addr = (uint64_t)d->PhysicalStart;
+    g_regions[g_n_regions].len = bytes;
+    g_regions[g_n_regions].type = map_efi_type(d->Type);
+    g_regions[g_n_regions].reserved = 0;
+    g_n_regions++;
+  }
+  (void)g_pm_efi_st->BootServices->FreePool(map);
+
+  /* Image end via LoadedImage when possible. */
+  g_image_end = 0;
+  if (g_pm_efi_image != NULL) {
+    EFI_LOADED_IMAGE_PROTOCOL *li;
+
+    st = g_pm_efi_st->BootServices->HandleProtocol(
+        g_pm_efi_image, &g_loaded_image_guid, (VOID **)&li);
+    if (!EFI_ERROR(st) && li != NULL && li->ImageBase != NULL) {
+      g_image_end = (uintptr_t)li->ImageBase + (uintptr_t)li->ImageSize;
+    }
+  }
+  g_cached = 1;
+  return (g_n_regions > 0u) ? 0 : -1;
+}
+
 static int32_t efi_mem_map_get(pm_metal_boot_mem_region_t *out, uint32_t max, uint32_t *n_out)
 {
-  (void)out;
-  (void)max;
-  if (n_out != NULL) {
-    *n_out = 0;
+  uint32_t i;
+  uint32_t n;
+
+  if (!g_cached) {
+    if (cache_from_bs() != 0) {
+      if (n_out != NULL) {
+        *n_out = 0;
+      }
+      return -1;
+    }
   }
-  return -1;
+  if (out == NULL || n_out == NULL) {
+    return -1;
+  }
+  n = g_n_regions;
+  if (n > max) {
+    n = max;
+  }
+  for (i = 0; i < n; i++) {
+    out[i] = g_regions[i];
+  }
+  *n_out = n;
+  return 0;
 }
 
 static uintptr_t efi_image_end(void)
 {
-  return 0;
+  if (!g_cached) {
+    (void)cache_from_bs();
+  }
+  return g_image_end;
 }
 
 static const pm_metal_boot_mem_map_ops_t g_ops = {

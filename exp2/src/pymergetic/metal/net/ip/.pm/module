@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.net.ip",
+  "impl": "c",
+  "version": "0.1.0",
+  "comment": "IPv4 + DHCP + DNS over pluggable L2 (lwIP NO_SYS)."
+}

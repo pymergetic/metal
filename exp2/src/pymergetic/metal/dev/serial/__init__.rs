@@ -1,6 +1,6 @@
 //! Serial hardware — unified access over `boot/platform` uart lower half.
 //! Not a console. Becoming a viewport requires a manual `console.attach`.
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 
 use pymergetic_metal_rt as _;
 
@@ -9,12 +9,12 @@ struct UartOps {
     write: Option<unsafe extern "C" fn(*const u8, usize)>,
 }
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", target_os = "uefi"))]
 extern "C" {
     fn pm_metal_boot_uart_ops() -> *const UartOps;
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(not(any(target_os = "none", target_os = "uefi")))]
 fn pm_metal_boot_uart_ops() -> *const UartOps {
     core::ptr::null()
 }

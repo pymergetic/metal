@@ -1,0 +1,9 @@
+# Prefer package-root .clangd (from .clangd.template via ./scripts/setup ide).
+# That config uses absolute -I@@ROOT@@/exp2/... paths and CompilationDatabase:
+# None. Do not add relative -Isrc here — clangd Generic fallback uses the
+# source file's directory as cwd, so -Isrc misses exp2/src and -nostdinc
+# cannot find metal/libc.
+---
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None

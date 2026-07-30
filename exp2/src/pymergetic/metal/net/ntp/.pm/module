@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.net.ntp",
+  "impl": "c",
+  "version": "0.1.0",
+  "comment": "SNTP client awaitable on net.ip."
+}

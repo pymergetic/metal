@@ -27,35 +27,4 @@ __attribute__((noreturn)) void pm_metal_mem_tlsf_assert_fail(void)
 #endif
 }
 
-#ifdef PM_METAL_TLSF_FREESTANDING
-int printf(const char *fmt, ...)
-{
-  (void)fmt;
-  return 0;
-}
-
-void *memcpy(void *dst, const void *src, size_t n)
-{
-  unsigned char       *d = (unsigned char *)dst;
-  const unsigned char *s = (const unsigned char *)src;
-  size_t               i;
-
-  for (i = 0; i < n; i++) {
-    d[i] = s[i];
-  }
-  return dst;
-}
-
-void *memset(void *dst, int c, size_t n)
-{
-  unsigned char *d = (unsigned char *)dst;
-  size_t         i;
-
-  for (i = 0; i < n; i++) {
-    d[i] = (unsigned char)c;
-  }
-  return dst;
-}
-#endif
-
 #include "tlsf.c"

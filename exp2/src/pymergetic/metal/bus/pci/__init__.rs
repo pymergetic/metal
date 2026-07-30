@@ -1,6 +1,6 @@
 //! PCI config-space enumeration via boot platform IO ops -> DT.
 //! Detect / identify only (no BAR program, no driver bind).
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 
 use pymergetic_metal_dt::{
     pm_metal_dt_add, pm_metal_dt_bus_t, pm_metal_dt_class_t, pm_metal_dt_count, pm_metal_dt_get,
@@ -24,12 +24,12 @@ struct IoOps {
     in32: Option<unsafe extern "C" fn(u16) -> u32>,
 }
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", target_os = "uefi"))]
 extern "C" {
     fn pm_metal_boot_io_ops() -> *const IoOps;
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(not(any(target_os = "none", target_os = "uefi")))]
 fn pm_metal_boot_io_ops() -> *const IoOps {
     core::ptr::null()
 }
@@ -92,6 +92,10 @@ pub unsafe extern "C" fn pm_metal_bus_pci_detect() -> i32 {
                     if func == 0 {
                         break;
                     }
+                    continue;
+                }
+                /* Red Hat virtio — owned by bus/virtio (typed compat strings). */
+                if vendor == 0x1AF4 {
                     continue;
                 }
                 if already_listed(bus, dev, func) {

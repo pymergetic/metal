@@ -15,8 +15,6 @@ pymergetic_metal_console = { path = "../../console/.pm" }
 pymergetic_metal_dev_serial = { path = "../../dev/serial/.pm" }
 pymergetic_metal_log = { path = "../../log/.pm" }
 pymergetic_metal_util_ascii = { path = "../../util/ascii/.pm" }
-pymergetic_metal_util_fourcc = { path = "../../util/fourcc/.pm" }
-pymergetic_metal_util_eightcc = { path = "../../util/eightcc/.pm" }
 pymergetic_metal_util_tar = { path = "../../util/tar/.pm" }
 pymergetic_metal_util_lz4 = { path = "../../util/lz4/.pm" }
 pymergetic_metal_bus_pci = { path = "../../bus/pci/.pm" }
@@ -24,10 +22,10 @@ pymergetic_metal_dev_time = { path = "../../dev/time/.pm" }
 pymergetic_metal_dev_acpi = { path = "../../dev/acpi/.pm" }
 pymergetic_metal_dev_random = { path = "../../dev/random/.pm" }
 pymergetic_metal_dev_input = { path = "../../dev/input/.pm" }
-pymergetic_metal_dev_blk = { path = "../../dev/blk/.pm" }
 pymergetic_metal_dev_gfx = { path = "../../dev/gfx/.pm" }
 pymergetic_metal_hwtree = { path = "../../hwtree/.pm" }
 pymergetic_metal_async = { path = "../../async/.pm" }
+
 
 [profile.release]
 panic = "abort"

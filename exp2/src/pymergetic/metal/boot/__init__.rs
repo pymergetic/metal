@@ -8,7 +8,6 @@ use pymergetic_metal_async as _;
 use pymergetic_metal_bus_pci as _;
 use pymergetic_metal_console as _;
 use pymergetic_metal_dev_acpi as _;
-use pymergetic_metal_dev_blk as _;
 use pymergetic_metal_dev_gfx as _;
 use pymergetic_metal_dev_input as _;
 use pymergetic_metal_dev_random as _;
@@ -20,15 +19,17 @@ use pymergetic_metal_log as _;
 use pymergetic_metal_mem as _;
 use pymergetic_metal_rt as _;
 use pymergetic_metal_util_ascii as _;
-use pymergetic_metal_util_eightcc as _;
-use pymergetic_metal_util_fourcc as _;
 use pymergetic_metal_util_lz4 as _;
 use pymergetic_metal_util_tar as _;
 
 #[path = "banner.rs"]
 mod banner;
 
+#[path = "tree/__init__.rs"]
+mod tree;
+
 extern "C" {
+    fn pm_metal_bus_virtio_detect() -> i32;
     fn pm_metal_bus_pci_detect() -> i32;
     fn pm_metal_dev_time_detect() -> i32;
     fn pm_metal_dev_acpi_detect() -> i32;
@@ -42,10 +43,12 @@ extern "C" {
 /// already-listed / CAP_BOUND identities. Returns 0.
 #[no_mangle]
 pub extern "C" fn pm_metal_boot_harvest() -> i32 {
-    /* Touch banner so the sibling TU stays in the staticlib under LTO. */
+    /* Touch stems so sibling TUs stay in the staticlib under LTO. */
     let _banner = banner::pm_metal_boot_banner as unsafe extern "C" fn();
-    let _ = _banner;
+    let _tree = tree::pm_metal_boot_tree_print as unsafe extern "C" fn() -> i32;
+    let _ = (_banner, _tree);
     unsafe {
+        let _ = pm_metal_bus_virtio_detect();
         let _ = pm_metal_bus_pci_detect();
         let _ = pm_metal_dev_time_detect();
         let _ = pm_metal_dev_acpi_detect();

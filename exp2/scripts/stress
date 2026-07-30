@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Opt-in BIOS+EFI QEMU stress. EXP2_STRESS is a build-time firmware gate;
+# this script restores normal (non-stress) images before it exits.
+set -euo pipefail
+
+EXP2="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "${EXP2}/.." && pwd)"
+METAL="${ROOT}/tools/metal/metal"
+LOGDIR="${EXP2}/build/stress"
+RESTORE=0
+HTTP_PID=""
+NTP_PID=""
+
+restore_normal() {
+	if [[ "${RESTORE}" == "1" ]]; then
+		echo "exp2/scripts/stress: restoring normal images" >&2
+		EXP2_STRESS=0 "${EXP2}/scripts/build" all >/dev/null
+	fi
+}
+
+cleanup_helpers() {
+	local pid
+	for pid in "${HTTP_PID}" "${NTP_PID}"; do
+		if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+			kill "${pid}" 2>/dev/null || true
+			wait "${pid}" 2>/dev/null || true
+		fi
+	done
+}
+
+trap 'cleanup_helpers; restore_normal' EXIT
+
+mkdir -p "${LOGDIR}"
+HTTP_ROOT="${LOGDIR}/http_root"
+mkdir -p "${HTTP_ROOT}"
+printf 'exp2 stress\n' >"${HTTP_ROOT}/index.html"
+
+echo "exp2/scripts/stress: building opt-in stress images" >&2
+EXP2_STRESS=1 "${EXP2}/scripts/build" all
+RESTORE=1
+
+# Guest reaches host via SLIRP gateway 10.0.2.2.
+python3 -m http.server 18080 --bind 127.0.0.1 --directory "${HTTP_ROOT}" \
+	>"${LOGDIR}/http.server.log" 2>&1 &
+HTTP_PID=$!
+
+# Minimal NTP server on UDP 18123 (matches -DPM_METAL_NET_NTP_PORT under EXP2_STRESS).
+python3 - "${LOGDIR}/ntp.server.log" <<'PY' &
+import socket, struct, sys, time
+log = open(sys.argv[1], "w", encoding="utf-8")
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.bind(("127.0.0.1", 18123))
+log.write("ntp mock listening 127.0.0.1:18123\n")
+log.flush()
+while True:
+    data, addr = sock.recvfrom(512)
+    if len(data) < 48:
+        continue
+    # LI=0 VN=4 mode=4 (server); stratum=1; transmit timestamp ~= now.
+    unix = int(time.time())
+    ntp = unix + 2208988800
+    pkt = bytearray(48)
+    pkt[0] = 0x24
+    pkt[1] = 1
+    pkt[2] = 4
+    pkt[3] = 0xEC
+    struct.pack_into("!I", pkt, 40, ntp)
+    struct.pack_into("!I", pkt, 44, 0)
+    sock.sendto(pkt, addr)
+    log.write(f"reply {addr}\n")
+    log.flush()
+PY
+NTP_PID=$!
+
+sleep 0.3
+if ! kill -0 "${HTTP_PID}" 2>/dev/null; then
+	echo "exp2/scripts/stress: failed to start host http.server on :18080" >&2
+	exit 1
+fi
+if ! kill -0 "${NTP_PID}" 2>/dev/null; then
+	echo "exp2/scripts/stress: failed to start host ntp mock on :18123" >&2
+	exit 1
+fi
+
+echo "exp2/scripts/stress: host mem smoke" >&2
+if ! "${METAL}" mod test pymergetic/metal/mem; then
+	echo "exp2/scripts/stress: host mem smoke FAIL" >&2
+	exit 1
+fi
+
+run_target() {
+	local target="$1"
+	local timeout_s="$2"
+	local log="${LOGDIR}/${target}.serial.log"
+	local ec
+
+	echo "exp2/scripts/stress: running ${target}" >&2
+	set +e
+	timeout --signal=KILL "${timeout_s}s" \
+		"${EXP2}/scripts/run" "${target}" >"${log}" 2>&1
+	ec=$?
+	set -e
+
+	if grep -Fq "stress FAIL" "${log}"; then
+		echo "exp2/scripts/stress: ${target} reported stress FAIL" >&2
+		grep -F "stress FAIL" "${log}" >&2 || true
+		return 1
+	fi
+	if ! grep -Fq "ready        ok" "${log}"; then
+		echo "exp2/scripts/stress: ${target} missing ready ok (qemu ec ${ec})" >&2
+		return 1
+	fi
+	if ! grep -Fq "net: eth0 dhcp ok" "${log}"; then
+		echo "exp2/scripts/stress: ${target} missing DHCP success" >&2
+		return 1
+	fi
+	if ! grep -Fq "stress ok" "${log}"; then
+		echo "exp2/scripts/stress: ${target} missing stress ok (qemu ec ${ec})" >&2
+		return 1
+	fi
+	echo "exp2/scripts/stress: ${target} PASS" >&2
+	grep -F "net: eth0 dhcp ok" "${log}"
+	grep -F "stress ok" "${log}"
+}
+
+run_target bios 45
+run_target efi 45
+
+echo "exp2/scripts/stress: PASS bios+efi" >&2

@@ -1,6 +1,6 @@
 //! Process = task crowned with an orchestration id (same activation).
 
-use crate::engine::{self, Handle};
+use crate::engine;
 use crate::handle::pm_metal_async_status_t;
 
 /// Stable process id (0 = none / failure).
@@ -8,13 +8,13 @@ pub type pm_metal_async_pid_t = u32;
 
 /// Crown a scheduled task as a process root. Returns pid or 0.
 #[no_mangle]
-pub extern "C" fn pm_metal_async_process_crown(task_h: Handle) -> pm_metal_async_pid_t {
+pub extern "C" fn pm_metal_async_process_crown(task_h: u32) -> pm_metal_async_pid_t {
     engine::process_crown(task_h)
 }
 
 /// Task handle for `pid`, or 0.
 #[no_mangle]
-pub extern "C" fn pm_metal_async_process_handle(pid: pm_metal_async_pid_t) -> Handle {
+pub extern "C" fn pm_metal_async_process_handle(pid: pm_metal_async_pid_t) -> u32 {
     engine::process_handle(pid)
 }
 
@@ -27,7 +27,7 @@ pub extern "C" fn pm_metal_async_process_kill(pid: pm_metal_async_pid_t) -> i32 
 /// Await the process task (same as await on its handle).
 #[no_mangle]
 pub extern "C" fn pm_metal_async_process_wait(
-    self_h: Handle,
+    self_h: u32,
     pid: pm_metal_async_pid_t,
 ) -> pm_metal_async_status_t {
     let h = engine::process_handle(pid);

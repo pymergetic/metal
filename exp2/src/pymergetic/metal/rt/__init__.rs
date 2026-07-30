@@ -2,22 +2,22 @@
 //!
 //! Panic / halt are one path for Rust + C (Py later via generated face).
 //! Output goes through the console ring when ready (viewports drain it).
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 
 use core::fmt::Write;
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", target_os = "uefi"))]
 extern "C" {
     fn pm_metal_console_ready() -> i32;
     fn pm_metal_console_write(id: u32, s: *const u8, n: usize);
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(not(any(target_os = "none", target_os = "uefi")))]
 fn pm_metal_console_ready() -> i32 {
     0
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(not(any(target_os = "none", target_os = "uefi")))]
 fn pm_metal_console_write(_id: u32, _s: *const u8, _n: usize) {}
 
 struct BufWriter {
@@ -58,13 +58,13 @@ fn emergency_write(bytes: &[u8]) {
         return;
     }
     /* Pre-console: silent (no hardware bypass). */
-    #[cfg(target_os = "none")]
+    #[cfg(any(target_os = "none", target_os = "uefi"))]
     unsafe {
         if pm_metal_console_ready() != 0 {
             pm_metal_console_write(0, bytes.as_ptr(), bytes.len());
         }
     }
-    #[cfg(not(target_os = "none"))]
+    #[cfg(not(any(target_os = "none", target_os = "uefi")))]
     if pm_metal_console_ready() != 0 {
         pm_metal_console_write(0, bytes.as_ptr(), bytes.len());
     }
@@ -148,7 +148,7 @@ pub unsafe extern "C" fn pm_metal_rt_panic_at(
     halt_forever()
 }
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", target_os = "uefi"))]
 #[panic_handler]
 fn rust_panic(info: &core::panic::PanicInfo) -> ! {
     let mut w = BufWriter::new();

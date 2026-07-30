@@ -1,10 +1,14 @@
-# Closest config for BIOS ports (clangd merges ancestor .clangd files).
+# BIOS ports — match exp2/scripts/build bios CFLAGS (metal/libc -nostdinc).
 CompileFlags:
   CompilationDatabase: None
   Add:
     - -xc
     - -std=c11
     - -ffreestanding
+    - -nostdinc
+    - -m64
+    - -mno-red-zone
     - -DPM_METAL_BOOT_TARGET_BIOS=1
-    - -I../../../..
-    - -I../../../../pymergetic/metal
+    - -I../../../libc
+    - -I../../../../../
+    - -I.

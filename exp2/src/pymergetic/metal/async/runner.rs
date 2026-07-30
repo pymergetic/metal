@@ -18,6 +18,12 @@ pub extern "C" fn pm_metal_async_ready() -> i32 {
     }
 }
 
+/// Runner count after start (0 if not started).
+#[no_mangle]
+pub extern "C" fn pm_metal_async_n_runners() -> u32 {
+    engine::n_runners()
+}
+
 /// Tune drain weights (defaults 4/2/1). Zero args become 1.
 #[no_mangle]
 pub extern "C" fn pm_metal_async_set_weights(high: u32, med: u32, low: u32) {

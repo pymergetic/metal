@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.bus.virtio",
+  "impl": "c",
+  "version": "0.1.0",
+  "comment": "Virtio-pci transport + DT detect (inventory)."
+}

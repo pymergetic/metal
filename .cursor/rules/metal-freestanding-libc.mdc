@@ -1,0 +1,52 @@
+---
+description: Firmware C must use metal/libc under -nostdinc; never host compiler ISO C headers
+globs: exp2/src/pymergetic/metal/**/*.{c,h},src/pymergetic/metal/**/*.{c,h}
+alwaysApply: false
+---
+
+# Freestanding metal/libc (no host compiler stddef/stdint/...)
+
+Firmware / shared Metal C is built with `-nostdinc` and
+`-I.../pymergetic/metal/libc`. Angled includes like `<stddef.h>`, `<stdint.h>`,
+`<string.h>`, `<stdio.h>`, `<stdlib.h>`, `<stdarg.h>`, `<stdbool.h>`,
+`<limits.h>`, `<assert.h>` must resolve to **that** tree — never the host
+toolchain's `/usr/lib/clang/.../include` or `/usr/include`.
+
+**Why:** host `stddef.h` / `stdint.h` disagree with freestanding Metal on
+`size_t` / LLP64 vs LP64 / `NULL`, and clangd without `-nostdinc` silently
+pulls the wrong headers (extra cognitive load + wrong types in the IDE).
+
+## Required compile / IDE flags
+
+Every TU under `exp2/src/pymergetic/metal/**` (and product `src/pymergetic/metal/**`
+when freestanding) must see:
+
+```text
+-ffreestanding -nostdinc -I<metal>/libc -I<src root>
+```
+
+- Build: `exp2/scripts/build` already does this for bios/efi.
+- clangd: root `.clangd` → `CompilationDatabase: exp2`; `exp2/.clangd` PathMatch
+  forces `-nostdinc` + `-Isrc/pymergetic/metal/libc` for all metal C/H.
+- After changing `.clangd` / compile DB: restart clangd.
+
+## Source rules
+
+- Prefer `#include <string.h>` / `<stdio.h>` / … (metal/libc) over local
+  `memcpy` / `strlen` prototypes or private copies.
+- One `.c` per libc header that needs bodies (`string.c`, `stdio.c`, `stdlib.c`);
+  header-only: `stddef`, `stdint`, `stdbool`, `stdarg`, `limits`, `assert`.
+- Do **not** add a second `stddef.h` elsewhere, and do not `#include_next` the
+  compiler header.
+- EDK2 headers stay only under `boot/platform/efi/**` (see metal-c-dialect).
+
+## Verify
+
+```bash
+# IDE/build must not resolve stddef to the host clang resource dir:
+clang -ffreestanding -nostdinc -Isrc/pymergetic/metal/libc -Isrc -E \
+  - <<<'#include <stddef.h>' | head -5
+# expect: # 1 "src/pymergetic/metal/libc/stddef.h"
+```
+
+From `exp2/`. If you see a path under `/usr/...` or `lib/clang/...`, flags are wrong.

@@ -1,7 +1,7 @@
 //! Virtual console — ring buffer + viewport attach (concept, not hardware).
 //! All I/O drains through manually attached viewports. History from `seq_begin`
 //! is replayed when a viewport joins.
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(non_camel_case_types)]
 
 use core::ptr::{addr_of, addr_of_mut, null_mut};

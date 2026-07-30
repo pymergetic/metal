@@ -1,27 +1,35 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <pymergetic/metal/async/proof.h>
+#include <pymergetic/metal/async/handle.h>
+#include <pymergetic/metal/async/runner.h>
+#include <pymergetic/metal/async/time.h>
 #include <pymergetic/metal/boot/banner.h>
 #include <pymergetic/metal/boot/__init__.h>
 #include <pymergetic/metal/boot/platform/handoff.h>
 #include <pymergetic/metal/boot/platform/mem_map.h>
 #include <pymergetic/metal/boot/platform/private/bringup.h>
-#include <pymergetic/metal/boot/platform/private/dump_mem.h>
+#include <pymergetic/metal/boot/platform/uart.h>
+#if defined(EXP2_STRESS) && EXP2_STRESS
+int32_t pm_metal_exp2_stress(void);
+#endif
+#include <pymergetic/metal/boot/tree/print.h>
 #include <pymergetic/metal/console/__init__.h>
+#include <pymergetic/metal/dev/acpi/__init__.h>
+#include <pymergetic/metal/dev/blk/__init__.h>
 #include <pymergetic/metal/dev/serial/__init__.h>
+#include <pymergetic/metal/dev/net/__init__.h>
+#include <pymergetic/metal/log/__init__.h>
+#include <pymergetic/metal/net/ip/__init__.h>
 #include <pymergetic/metal/dt/__init__.h>
-#include <pymergetic/metal/hwtree/__init__.h>
 #include <pymergetic/metal/mem/__init__.h>
 
 void *memset(void *dst, int c, size_t n);
 
-#define COM1_IOBASE 0x3F8u
 #define MIN_CLAIM_BYTES (2u * 1024u * 1024u)
 #define PAGE_SIZE 4096ull
 
 /* Lifetime: static .rodata — DT stores the pointer. */
-static const uint8_t k_com1_compat[] = "com1";
 /* AVAILABLE below 1MiB vs above — classic PC lowmem / highmem split. */
 static const uint8_t k_lowmem_compat[] = "lowmem";
 static const uint8_t k_highmem_compat[] = "highmem";
@@ -41,11 +49,6 @@ static size_t cstrlen(const char *s)
   return n;
 }
 
-static void puts_console(const char *s)
-{
-  pm_metal_console_write(0u, (const uint8_t *)s, cstrlen(s));
-}
-
 static void serial_viewport_write(uint8_t *ctx, const uint8_t *s, size_t n)
 {
   (void)ctx;
@@ -58,8 +61,13 @@ static const pm_metal_console_viewport_ops_t g_serial_vp = {
 
 static int32_t fail(const char *msg)
 {
-  if (msg != NULL && pm_metal_console_ready() != 0) {
-    puts_console(msg);
+  if (msg != NULL) {
+    if (pm_metal_log_ready() != 0) {
+      pm_metal_log((const uint8_t *)msg);
+    } else {
+      /* Pre-attach: platform uart ops only (no COM1 constants here). */
+      pm_metal_boot_uart_write(msg, cstrlen(msg));
+    }
   }
   return -1;
 }
@@ -163,126 +171,114 @@ static int32_t seed_mem_partition(uint8_t *arena, size_t bytes)
   return 0;
 }
 
-static int32_t dt_smoke(uint8_t *arena, size_t bytes)
+
+static void log_virtio_net_mac(const uint8_t mac[6])
 {
-  const DtNode *n;
-  uint32_t i;
-  uint32_t mem_n;
-  int saw_heap = 0;
+  static const char hex[] = "0123456789abcdef";
+  char              buf[48];
+  size_t            p = 0;
+  size_t            i;
+  const char       *prefix = "virtio-net: mac=";
+  const char       *suffix = " open ok\n";
 
-  if (pm_metal_dt_count_class(PM_METAL_DT_CLASS_STREAM) != 1u) {
-    return -1;
+  for (i = 0; prefix[i] != '\0'; i++) {
+    buf[p++] = prefix[i];
   }
-  if (pm_metal_dt_uart_bound(COM1_IOBASE) != 1) {
-    return -1;
-  }
-  n = pm_metal_dt_lookup(PM_METAL_DT_CLASS_STREAM);
-  if (n == NULL) {
-    return -1;
-  }
-  if ((n->caps & (uint32_t)PM_METAL_DT_CAP_BOUND) == 0u) {
-    return -1;
-  }
-  if (n->bus != PM_METAL_DT_BUS_ISA || n->loc[0] != COM1_IOBASE) {
-    return -1;
-  }
-
-  mem_n = pm_metal_dt_count_class(PM_METAL_DT_CLASS_MEM);
-  if (mem_n < 1u) {
-    return -1;
-  }
-  for (i = 0; i < mem_n; i++) {
-    uint64_t base;
-    uint64_t size;
-
-    n = pm_metal_dt_by_class(PM_METAL_DT_CLASS_MEM, i);
-    if (n == NULL || n->bus != PM_METAL_DT_BUS_PLATFORM) {
-      return -1;
+  for (i = 0; i < 6; i++) {
+    if (i > 0) {
+      buf[p++] = ':';
     }
-    base = ((uint64_t)n->loc[1] << 32) | (uint64_t)n->loc[0];
-    size = ((uint64_t)n->loc[3] << 32) | (uint64_t)n->loc[2];
-    if (size == 0u) {
-      return -1;
-    }
-    if ((n->caps & (uint32_t)PM_METAL_DT_CAP_BOUND) != 0u && compat_eq(n->compat, "heap")) {
-      if (base != (uint64_t)(uintptr_t)arena || size != (uint64_t)bytes) {
-        return -1;
-      }
-      saw_heap = 1;
-    }
+    buf[p++] = hex[(mac[i] >> 4) & 0x0fu];
+    buf[p++] = hex[mac[i] & 0x0fu];
   }
-  if (!saw_heap) {
-    return -1;
+  for (i = 0; suffix[i] != '\0'; i++) {
+    buf[p++] = suffix[i];
   }
-  return 0;
+  buf[p] = '\0';
+  if (pm_metal_log_ready() != 0) {
+    pm_metal_log((const uint8_t *)buf);
+  } else {
+    pm_metal_boot_uart_write(buf, p);
+  }
 }
 
-static int32_t mem_smoke(void)
+static void log_net_dhcp(int32_t ok, const char *ip)
 {
-  uint8_t *a;
-  uint8_t *b;
-  uint8_t *r;
-  uint8_t *p0;
-  uint8_t *p1;
-  int i;
-  int n_ok;
+  char buf[64];
+  size_t p = 0;
+  size_t i;
+  const char *prefix;
+  const char *suffix;
 
-  a = pm_metal_mem_alloc(64);
-  b = pm_metal_mem_alloc(128);
-  if (a == NULL || b == NULL) {
-    return -1;
-  }
-  pm_metal_mem_free(b);
-  pm_metal_mem_free(a);
-
-  r = pm_metal_mem_alloc(32);
-  if (r == NULL) {
-    return -1;
-  }
-  memset(r, 0xA5, 32);
-  r = pm_metal_mem_realloc(r, 256);
-  if (r == NULL || r[0] != (uint8_t)0xA5) {
-    return -1;
-  }
-  r = pm_metal_mem_realloc(r, 0);
-  if (r != NULL) {
-    return -1;
-  }
-
-  r = pm_metal_mem_memalign(64, 100);
-  if (r == NULL || ((uintptr_t)r % 64u) != 0u) {
-    return -1;
-  }
-  pm_metal_mem_free(r);
-  if (pm_metal_mem_memalign(3, 16) != NULL) {
-    return -1;
-  }
-
-  p0 = pm_metal_mem_map(4096);
-  p1 = pm_metal_mem_map(4096);
-  if (p0 == NULL || p1 == NULL) {
-    return -1;
-  }
-  if (pm_metal_mem_unmap(p0, 4096) != -1) {
-    return -1;
-  }
-  if (pm_metal_mem_unmap(p1, 4096) != 0 || pm_metal_mem_unmap(p0, 4096) != 0) {
-    return -1;
-  }
-
-  n_ok = 0;
-  for (i = 0; i < 64; i++) {
-    a = pm_metal_mem_alloc(8 * 1024);
-    if (a == NULL) {
-      break;
+  if (ok != 0 && ip != NULL) {
+    prefix = "net: eth0 dhcp ok ";
+    suffix = "\n";
+    for (i = 0; prefix[i] != '\0'; i++) {
+      buf[p++] = prefix[i];
     }
-    n_ok++;
+    for (i = 0; ip[i] != '\0' && p + 2 < sizeof(buf); i++) {
+      buf[p++] = ip[i];
+    }
+  } else {
+    prefix = "net: eth0 dhcp FAIL\n";
+    for (i = 0; prefix[i] != '\0'; i++) {
+      buf[p++] = prefix[i];
+    }
+    suffix = "";
   }
-  if (n_ok < 4) {
+  for (i = 0; suffix[i] != '\0'; i++) {
+    buf[p++] = suffix[i];
+  }
+  buf[p] = '\0';
+  if (pm_metal_log_ready() != 0) {
+    pm_metal_log((const uint8_t *)buf);
+  } else {
+    pm_metal_boot_uart_write(buf, p);
+  }
+}
+
+static int32_t net_dhcp_bringup(void)
+{
+  static const pm_metal_net_ip_l2_ops_t virtio_l2 = {
+    .open = pm_metal_dev_net_virtio_open,
+    .mac  = pm_metal_dev_net_virtio_mac,
+    .tx   = pm_metal_dev_net_virtio_tx,
+    .poll = (pm_metal_net_ip_l2_poll_fn)pm_metal_dev_net_virtio_poll,
+  };
+  char     ip[16];
+  uint64_t start;
+  uint64_t deadline;
+  int32_t  r;
+
+  /* Composition: L2 driver lives in dev/net; IP only sees ops. */
+  if (pm_metal_net_ip_l2_start("lwip+virtio-net", &virtio_l2) != 0) {
+    log_net_dhcp(0, NULL);
     return -1;
   }
-  return 0;
+  (void)pm_metal_net_ip_loopback_start();
+
+  ip[0]    = '\0';
+  start    = pm_metal_time_mono_us();
+  deadline = start + 10000000ull; /* 10s */
+  for (;;) {
+    pm_metal_net_ip_poll();
+    (void)pm_metal_async_run_poll_all();
+    r = pm_metal_net_ip_if_dhcp_ready("eth0", ip, sizeof(ip));
+    if (r == 1) {
+      log_net_dhcp(1, ip);
+      return 0;
+    }
+    if (r < 0) {
+      log_net_dhcp(0, NULL);
+      return -1;
+    }
+    if (pm_metal_time_mono_us() >= deadline) {
+      log_net_dhcp(0, NULL);
+      return -1;
+    }
+  }
 }
+
 
 int32_t pm_metal_boot_bringup(void)
 {
@@ -291,14 +287,14 @@ int32_t pm_metal_boot_bringup(void)
   int32_t uart_id;
 
   if (claim_arena(&arena, &bytes) != 0) {
-    return fail(NULL);
+    return fail("exp2: claim_arena failed\n");
   }
   if (pm_metal_mem_init(arena, bytes) != 0) {
-    return fail(NULL);
+    return fail("exp2: mem_init failed\n");
   }
 
   if (pm_metal_console_init0(0) != 0) {
-    return fail(NULL);
+    return fail("exp2: console_init0 failed\n");
   }
 
   /* log default = console 0 (log facade writes there when ready). */
@@ -308,12 +304,17 @@ int32_t pm_metal_boot_bringup(void)
   if (seed_mem_partition(arena, bytes) != 0) {
     return fail("exp2: dt mem seed failed\n");
   }
-  uart_id = pm_metal_dt_seed_bound_uart(k_com1_compat, PM_METAL_DT_BUS_ISA, COM1_IOBASE);
-  if (uart_id < 0 || dt_smoke(arena, bytes) != 0) {
-    return fail("exp2: dt seed failed\n");
+  {
+    const uint8_t *compat = pm_metal_boot_uart_floor_compat();
+    uint32_t iobase = pm_metal_boot_uart_floor_iobase();
+    if (compat == NULL || iobase == 0u) {
+      return fail("exp2: uart floor missing\n");
+    }
+    uart_id = pm_metal_dt_seed_bound_uart(compat, PM_METAL_DT_BUS_ISA, iobase);
+    if (uart_id < 0) {
+      return fail("exp2: dt uart seed failed\n");
+    }
   }
-
-  pm_metal_boot_dump_mem();
 
   if (pm_metal_dev_serial_init() != 0) {
     return fail("exp2: serial init failed\n");
@@ -322,25 +323,81 @@ int32_t pm_metal_boot_bringup(void)
     return fail("exp2: console attach failed\n");
   }
 
+  /* TSC calibrate needs EFI Stall — before ExitBootServices. */
+  pm_metal_time_init();
+
   if (pm_metal_boot_leave_firmware() != 0) {
     return fail("exp2: handoff failed\n");
   }
 
+  /* Sticky port cache on EFI; PIT remeasure on BIOS. */
+  pm_metal_time_recalibrate();
+
   if (pm_metal_boot_harvest() != 0) {
     return fail("exp2: harvest failed\n");
   }
-  (void)pm_metal_hwtree_print();
 
-  if (mem_smoke() != 0) {
-    return fail("exp2: mem smoke failed\n");
+
+  {
+    uint32_t bi;
+    uint32_t nblk;
+
+    /* Open + bind only; LBA0 hammer lives under ./exp2/scripts/stress. */
+    if (pm_metal_dev_blk_open() != 0) {
+      return fail("exp2: virtio-blk open failed\n");
+    }
+    nblk = pm_metal_dt_count_class(PM_METAL_DT_CLASS_BLK);
+    for (bi = 0u; bi < nblk; bi++) {
+      const DtNode *n = pm_metal_dt_by_class(PM_METAL_DT_CLASS_BLK, bi);
+      if (n != NULL && n->compat != NULL && compat_eq(n->compat, "virtio-blk")) {
+        (void)pm_metal_dt_or_caps(PM_METAL_DT_CLASS_BLK, bi, (uint32_t)PM_METAL_DT_CAP_BOUND);
+        break;
+      }
+    }
   }
 
-  puts_console("mem: PASS\n");
-
-  /* ---------- async start (runners) ---------- */
-  if (pm_metal_async_boot_proof() != 0) {
-    return fail("exp2: async proof failed\n");
+  /* Runners only — opt-in harness lives under ./exp2/scripts/stress. */
+  {
+    uint32_t n_cpus = pm_metal_dev_acpi_cpu_count();
+    if (n_cpus == 0u) {
+      n_cpus = 1u;
+    }
+    if (pm_metal_async_start(n_cpus) != 0) {
+      return fail("exp2: async start failed\n");
+    }
   }
+
+  if (net_dhcp_bringup() != 0) {
+    return fail("exp2: net dhcp failed\n");
+  }
+  {
+    const uint8_t *mac;
+    uint32_t ni;
+    uint32_t nnet;
+
+    mac = pm_metal_dev_net_virtio_mac();
+    if (mac != NULL) {
+      log_virtio_net_mac(mac);
+    }
+    nnet = pm_metal_dt_count_class(PM_METAL_DT_CLASS_NET);
+    for (ni = 0; ni < nnet; ni++) {
+      const DtNode *n = pm_metal_dt_by_class(PM_METAL_DT_CLASS_NET, ni);
+      if (n != NULL && n->compat != NULL && compat_eq(n->compat, "virtio-net")) {
+        (void)pm_metal_dt_or_caps(PM_METAL_DT_CLASS_NET, ni, (uint32_t)PM_METAL_DT_CAP_BOUND);
+        break;
+      }
+    }
+  }
+
+  if (pm_metal_boot_tree_print() != 0) {
+    return fail("exp2: boot tree failed\n");
+  }
+
+#if defined(EXP2_STRESS) && EXP2_STRESS
+  if (pm_metal_exp2_stress() != 0) {
+    return -1;
+  }
+#endif
 
   return 0;
 }

@@ -1,35 +1,47 @@
 #!/usr/bin/env bash
-# Build exp2 BIOS firmware: Multiboot ELF64 + QEMU ELF32 trampoline.
-# Sources: exp2/src only (+ Rust mem crate / Conte TLSF via metal mod build).
-# Default target: bios. `exp2/scripts/build efi` is a stub (ports exist, not linked).
+# Build exp2 firmware for bios and/or efi (peers).
+#   ./exp2/scripts/build          -> both
+#   ./exp2/scripts/build bios
+#   ./exp2/scripts/build efi
 set -euo pipefail
 
 EXP2="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="$(cd "${EXP2}/.." && pwd)"
 METAL="${ROOT}/tools/metal/metal"
 BIOS="${EXP2}/src/pymergetic/metal/boot/platform/bios"
+EFI="${EXP2}/src/pymergetic/metal/boot/platform/efi"
 PRIVATE="${EXP2}/src/pymergetic/metal/boot/platform/private"
+LIBC="${EXP2}/src/pymergetic/metal/libc"
+UTIL="${EXP2}/src/pymergetic/metal/util"
+BUS="${EXP2}/src/pymergetic/metal/bus"
+PCI="${BUS}/pci"
+VIRTIO="${BUS}/virtio"
+DEV_NET="${EXP2}/src/pymergetic/metal/dev/net"
+DEV_BLK="${EXP2}/src/pymergetic/metal/dev/blk"
+NETIP="${EXP2}/src/pymergetic/metal/net/ip"
+NETPING="${EXP2}/src/pymergetic/metal/net/ping"
+NETNTP="${EXP2}/src/pymergetic/metal/net/ntp"
+NETHTTP="${EXP2}/src/pymergetic/metal/net/http"
+STRESS_SRC="${EXP2}/stress"
+LWIP="${ROOT}/external/lwip"
 SRC="${EXP2}/src"
-OUT="${EXP2}/build/x86_64_bios"
-OBJ="${OUT}/obj"
-TARGET="${1:-bios}"
-ARCH="x86_64"
-
-if [[ "${TARGET}" == "efi" ]]; then
-	echo "exp2/scripts/build: efi image not linked yet (ports under boot/platform/efi/)." >&2
-	echo "  Default target remains bios. Pass nothing or 'bios' / 'x86_64'." >&2
-	exit 1
-fi
-
-if [[ "${TARGET}" == "x86_64" || "${TARGET}" == "bios" ]]; then
-	ARCH="x86_64"
-elif [[ "${TARGET}" != "x86_64" && "${TARGET}" != "bios" ]]; then
-	echo "exp2/scripts/build: unsupported target ${TARGET} (bios|x86_64|efi)" >&2
-	exit 1
+EDK2_INC="${ROOT}/external/edk2/MdePkg/Include"
+TARGET="${1:-all}"
+EXP2_STRESS_ON=0
+STRESS_CFLAGS=()
+if [[ "${EXP2_STRESS:-0}" == "1" ]]; then
+	EXP2_STRESS_ON=1
+	# NTP port 18123: host mock in scripts/stress (unprivileged UDP bind).
+	STRESS_CFLAGS=(-DEXP2_STRESS=1 -DPM_METAL_NET_NTP_PORT=18123)
 fi
 
 if [[ ! -x "${METAL}" ]]; then
 	echo "exp2/scripts/build: missing ${METAL}" >&2
+	exit 1
+fi
+
+if [[ ! -d "${LWIP}/src/include" ]]; then
+	echo "exp2/scripts/build: missing ${LWIP} - run ./scripts/setup lwip" >&2
 	exit 1
 fi
 
@@ -42,100 +54,349 @@ if ! command -v "${LD}" >/dev/null 2>&1; then
 	LD=ld
 fi
 
-mkdir -p "${OBJ}"
-rm -f "${OUT}/metal.elf" "${OUT}/metal.qemu.elf"
-
-echo "exp2 build: metal mod sync + build boot (pulls rt/mem/dt/detectors)"
-"${METAL}" mod sync
-"${METAL}" mod build boot
-BOOT_A="${EXP2}/src/pymergetic/metal/boot/.target/x86_64-unknown-none/release/libpymergetic_metal_boot.a"
-if [[ ! -f "${BOOT_A}" ]]; then
-	echo "exp2/scripts/build: missing ${BOOT_A}" >&2
-	exit 1
+LLD_LINK="$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld/lld-link"
+if [[ ! -x "${LLD_LINK}" ]]; then
+	LLD_LINK=""
 fi
 
-CFLAGS=(
-	-std=c11
-	-ffreestanding
-	-fno-stack-protector
-	-fno-pic
-	-fno-pie
-	-m64
-	-mno-red-zone
-	-Wall
-	-Wextra
-	-Wno-unused-parameter
-	-O2
-	-DPM_METAL_BOOT_TARGET_BIOS=1
-	-I"${SRC}"
-	-I"${BIOS}"
+LWIP_CORE=(
+	"${LWIP}/src/core/init.c"
+	"${LWIP}/src/core/def.c"
+	"${LWIP}/src/core/inet_chksum.c"
+	"${LWIP}/src/core/ip.c"
+	"${LWIP}/src/core/mem.c"
+	"${LWIP}/src/core/memp.c"
+	"${LWIP}/src/core/netif.c"
+	"${LWIP}/src/core/pbuf.c"
+	"${LWIP}/src/core/stats.c"
+	"${LWIP}/src/core/sys.c"
+	"${LWIP}/src/core/timeouts.c"
+	"${LWIP}/src/core/udp.c"
+	"${LWIP}/src/core/tcp.c"
+	"${LWIP}/src/core/tcp_in.c"
+	"${LWIP}/src/core/tcp_out.c"
+	"${LWIP}/src/core/dns.c"
+	"${LWIP}/src/core/raw.c"
+	"${LWIP}/src/core/ipv4/etharp.c"
+	"${LWIP}/src/core/ipv4/icmp.c"
+	"${LWIP}/src/core/ipv4/ip4.c"
+	"${LWIP}/src/core/ipv4/ip4_addr.c"
+	"${LWIP}/src/core/ipv4/ip4_frag.c"
+	"${LWIP}/src/core/ipv4/dhcp.c"
+	"${LWIP}/src/netif/ethernet.c"
 )
 
-compile_c() {
-	local src="$1"
+compile_lwip_and_net() {
+	local out_ext="$1"
+	local compile_fn="$2"
+	local f
 	local base
-	base="$(basename "${src}" .c)"
-	echo "  cc  ${base}.c"
-	"${CC}" "${CFLAGS[@]}" -c "${src}" -o "${OBJ}/${base}.o"
+
+	for f in "${LWIP_CORE[@]}"; do
+		base="lwip_$(basename "${f}" .c)"
+		if [[ "${base}" == "lwip_sys" ]]; then
+			base="lwip_core_sys"
+		fi
+		"${compile_fn}" "${f}" "${base}"
+	done
+	"${compile_fn}" "${NETIP}/_lwip_sys.c" metal_lwip_sys
+	"${compile_fn}" "${NETIP}/_stack.c" ip_bringup
+	"${compile_fn}" "${NETIP}/_dns.c" ip_dns
+	# ping/http/ntp: only the opt-in stress harness calls them today.
+	if [[ "${EXP2_STRESS_ON}" == "1" ]]; then
+		"${compile_fn}" "${NETPING}/__init__.c" ping
+		"${compile_fn}" "${NETNTP}/__init__.c" ntp
+		"${compile_fn}" "${NETHTTP}/__init__.c" http
+	fi
 }
 
-compile_S() {
-	local src="$1"
+lwip_link_objs() {
+	local objdir="$1"
+	local ext="$2"
+	local f
 	local base
-	base="$(basename "${src}" .S)"
-	echo "  as  ${base}.S"
-	"${CC}" "${CFLAGS[@]}" -c "${src}" -o "${OBJ}/${base}.o"
+
+	for f in "${LWIP_CORE[@]}"; do
+		base="lwip_$(basename "${f}" .c)"
+		if [[ "${base}" == "lwip_sys" ]]; then
+			base="lwip_core_sys"
+		fi
+		printf '%s/%s.%s ' "${objdir}" "${base}" "${ext}"
+	done
+	printf '%s/metal_lwip_sys.%s %s/ip_bringup.%s %s/ip_dns.%s' \
+		"${objdir}" "${ext}" "${objdir}" "${ext}" "${objdir}" "${ext}"
+	if [[ "${EXP2_STRESS_ON}" == "1" ]]; then
+		printf ' %s/ping.%s %s/ntp.%s %s/http.%s' \
+			"${objdir}" "${ext}" "${objdir}" "${ext}" "${objdir}" "${ext}"
+	fi
 }
 
-# memset/memcpy come from mem/tlsf/_port.c (inside libmetal_mem.a).
-for f in uart io_port mem_map power handoff main; do
-	compile_c "${BIOS}/${f}.c"
-done
-compile_c "${PRIVATE}/bringup.c"
-compile_c "${PRIVATE}/dump_mem.c"
-compile_S "${BIOS}/crt0.S"
+sync_and_build_rust() {
+	local rust_target="$1"
+	echo "exp2 build: metal mod sync + cargo boot (${rust_target})"
+	if ! "${METAL}" mod sync; then
+		echo "exp2/scripts/build: metal mod sync failed" >&2
+		exit 1
+	fi
+	(
+		cd "${EXP2}/src/pymergetic/metal/boot"
+		CARGO_TARGET_DIR="${EXP2}/src/pymergetic/metal/boot/.target" \
+			cargo build --manifest-path .pm/Cargo.toml --lib --release --target "${rust_target}"
+	)
+}
 
-ELF="${OUT}/metal.elf"
-echo "exp2 build: link ${ELF}"
-"${LD}" -m elf_x86_64 -nostdlib -static -z noexecstack \
-	-T "${BIOS}/link.ld" \
-	-o "${ELF}" \
-	"${OBJ}/crt0.o" \
-	"${OBJ}/uart.o" \
-	"${OBJ}/io_port.o" \
-	"${OBJ}/mem_map.o" \
-	"${OBJ}/power.o" \
-	"${OBJ}/handoff.o" \
-	"${OBJ}/bringup.o" \
-	"${OBJ}/dump_mem.o" \
-	"${OBJ}/main.o" \
-	"${BOOT_A}"
+build_bios() {
+	local OUT="${EXP2}/build/x86_64_bios"
+	local OBJ="${OUT}/obj"
+	local BOOT_A="${EXP2}/src/pymergetic/metal/boot/.target/x86_64-unknown-none/release/libpymergetic_metal_boot.a"
+	# -nostdinc: only metal/libc for ISO C (same root as tlsf / future lwIP).
+	local CFLAGS=(
+		-std=c11 -ffreestanding -nostdinc -fno-stack-protector -fno-pic -fno-pie
+		-m64 -mno-red-zone -Wall -Wextra -Wno-unused-parameter -Wno-macro-redefined -O2
+		-DPM_METAL_BOOT_TARGET_BIOS=1
+		"${STRESS_CFLAGS[@]}"
+		-I"${LIBC}" -I"${SRC}" -I"${BIOS}" -I"${NETIP}" -I"${NETIP}/cfg" -I"${LWIP}/src/include"
+	)
 
-# QEMU -kernel cannot load ELF64 — Multiboot1 ELF32 trampoline embeds metal.elf.
-TRAMP_ELF="${OUT}/metal.qemu.elf"
-echo "exp2 build: trampoline ${TRAMP_ELF}"
-"${CC}" -m32 -ffreestanding -fno-pic -fno-stack-protector -Wall -O2 \
-	-c "${BIOS}/trampoline_load.c" -o "${OBJ}/trampoline_load.o"
-"${CC}" -m32 -c "${BIOS}/trampoline32.S" -o "${OBJ}/trampoline32.o"
-"${CC}" -m64 -c "${BIOS}/trampoline64.S" -o "${OBJ}/trampoline64_64.o"
-objcopy -O elf32-i386 "${OBJ}/trampoline64_64.o" "${OBJ}/trampoline64.o"
-"${LD}" -m elf_i386 -r -b binary -o "${OBJ}/metal_bin.o" "${ELF}"
-BIN_START="$(nm "${OBJ}/metal_bin.o" | awk '/_start$/{print $3; exit}')"
-BIN_END="$(nm "${OBJ}/metal_bin.o" | awk '/_end$/{print $3; exit}')"
-if [[ -z "${BIN_START}" || -z "${BIN_END}" ]]; then
-	echo "exp2/scripts/build: failed to find binary blob symbols" >&2
-	nm "${OBJ}/metal_bin.o" >&2 || true
+	sync_and_build_rust x86_64-unknown-none
+	if [[ ! -f "${BOOT_A}" ]]; then
+		echo "exp2/scripts/build: missing ${BOOT_A}" >&2
+		exit 1
+	fi
+
+	mkdir -p "${OBJ}"
+	rm -f "${OUT}/metal.elf" "${OUT}/metal.qemu.elf"
+
+	compile_c() {
+		local src="$1"
+		local base="${2:-}"
+		if [[ -z "${base}" ]]; then
+			base="$(basename "${src}" .c)"
+		fi
+		echo "  cc  ${base}.c"
+		"${CC}" "${CFLAGS[@]}" -c "${src}" -o "${OBJ}/${base}.o"
+	}
+	compile_S() {
+		local src="$1"
+		local base
+		base="$(basename "${src}" .S)"
+		echo "  as  ${base}.S"
+		"${CC}" "${CFLAGS[@]}" -c "${src}" -o "${OBJ}/${base}.o"
+	}
+
+	for f in uart io_port mem_map power handoff time main; do
+		compile_c "${BIOS}/${f}.c"
+	done
+	compile_c "${PRIVATE}/bringup.c"
+	if [[ "${EXP2_STRESS_ON}" == "1" ]]; then
+		compile_c "${STRESS_SRC}/stress.c" stress
+	fi
+	compile_c "${UTIL}/fourcc/__init__.c" fourcc
+	compile_c "${UTIL}/eightcc/__init__.c" eightcc
+	compile_c "${PCI}/_cfg.c" cfg
+	compile_c "${VIRTIO}/_detect.c" virtio_detect
+	compile_c "${VIRTIO}/_pci.c" virtio_pci
+	compile_c "${BIOS}/virtio_pages.c" virtio_pages
+	compile_c "${DEV_NET}/_virtio_net.c" virtio_net
+	compile_c "${DEV_BLK}/_detect.c" blk_detect
+	compile_c "${DEV_BLK}/_virtio_blk.c" virtio_blk
+	compile_c "${LIBC}/string.c" string
+	compile_c "${LIBC}/stdlib.c" stdlib
+	compile_c "${LIBC}/stdio.c" stdio
+	compile_lwip_and_net o compile_c
+	compile_S "${BIOS}/crt0.S"
+
+	local ELF="${OUT}/metal.elf"
+	local STRESS_OBJ=()
+	if [[ "${EXP2_STRESS_ON}" == "1" ]]; then
+		STRESS_OBJ=("${OBJ}/stress.o")
+	fi
+	echo "exp2 build: link ${ELF}"
+	"${LD}" -m elf_x86_64 -nostdlib -static -z noexecstack \
+		-T "${BIOS}/link.ld" \
+		-o "${ELF}" \
+		"${OBJ}/crt0.o" "${OBJ}/uart.o" "${OBJ}/io_port.o" "${OBJ}/mem_map.o" \
+		"${OBJ}/power.o" "${OBJ}/handoff.o" "${OBJ}/time.o" "${OBJ}/bringup.o" \
+		"${STRESS_OBJ[@]}" \
+		"${OBJ}/fourcc.o" "${OBJ}/eightcc.o" \
+		"${OBJ}/cfg.o" "${OBJ}/virtio_detect.o" "${OBJ}/virtio_pci.o" "${OBJ}/virtio_pages.o" "${OBJ}/virtio_net.o" \
+		"${OBJ}/blk_detect.o" "${OBJ}/virtio_blk.o" \
+		"${OBJ}/string.o" "${OBJ}/stdlib.o" "${OBJ}/stdio.o" \
+		$(lwip_link_objs "${OBJ}" o) \
+		"${OBJ}/main.o" "${BOOT_A}"
+
+	local TRAMP_ELF="${OUT}/metal.qemu.elf"
+	echo "exp2 build: trampoline ${TRAMP_ELF}"
+	"${CC}" -m32 -ffreestanding -fno-pic -fno-stack-protector -Wall -O2 \
+		-c "${BIOS}/trampoline_load.c" -o "${OBJ}/trampoline_load.o"
+	"${CC}" -m32 -c "${BIOS}/trampoline32.S" -o "${OBJ}/trampoline32.o"
+	"${CC}" -m64 -c "${BIOS}/trampoline64.S" -o "${OBJ}/trampoline64_64.o"
+	objcopy -O elf32-i386 "${OBJ}/trampoline64_64.o" "${OBJ}/trampoline64.o"
+	"${LD}" -m elf_i386 -r -b binary -o "${OBJ}/metal_bin.o" "${ELF}"
+	local BIN_START BIN_END
+	BIN_START="$(nm "${OBJ}/metal_bin.o" | awk '/_start$/{print $3; exit}')"
+	BIN_END="$(nm "${OBJ}/metal_bin.o" | awk '/_end$/{print $3; exit}')"
+	if [[ -z "${BIN_START}" || -z "${BIN_END}" ]]; then
+		echo "exp2/scripts/build: failed to find binary blob symbols" >&2
+		exit 1
+	fi
+	objcopy \
+		--redefine-sym "${BIN_START}=_binary_metal_elf_start" \
+		--redefine-sym "${BIN_END}=_binary_metal_elf_end" \
+		"${OBJ}/metal_bin.o" "${OBJ}/metal_bin_named.o"
+	"${LD}" -m elf_i386 -nostdlib -static -z noexecstack \
+		-T "${BIOS}/link32.ld" \
+		-o "${TRAMP_ELF}" \
+		"${OBJ}/trampoline32.o" "${OBJ}/trampoline64.o" \
+		"${OBJ}/trampoline_load.o" "${OBJ}/metal_bin_named.o"
+
+	echo "exp2 build: ok bios -> ${ELF} + ${TRAMP_ELF}"
+	ls -la "${ELF}" "${TRAMP_ELF}"
+}
+
+build_efi() {
+	local OUT="${EXP2}/build/x86_64_efi"
+	local OBJ="${OUT}/obj"
+	local BOOT_A="${EXP2}/src/pymergetic/metal/boot/.target/x86_64-unknown-uefi/release/libpymergetic_metal_boot.a"
+
+	if [[ ! -f "${EDK2_INC}/Uefi.h" ]]; then
+		echo "exp2/scripts/build: missing ${EDK2_INC}/Uefi.h — run ./scripts/setup edk2" >&2
+		exit 1
+	fi
+	if [[ -z "${LLD_LINK}" || ! -x "${LLD_LINK}" ]]; then
+		echo "exp2/scripts/build: missing lld-link (rustup toolchain)" >&2
+		exit 1
+	fi
+
+	sync_and_build_rust x86_64-unknown-uefi
+	if [[ ! -f "${BOOT_A}" ]]; then
+		echo "exp2/scripts/build: missing ${BOOT_A}" >&2
+		exit 1
+	fi
+
+	mkdir -p "${OBJ}"
+	rm -f "${OUT}/metal.efi"
+
+	# -nostdinc: metal/libc first; EDK2 types only from MdePkg includes.
+	local CFLAGS=(
+		-std=c11
+		--target=x86_64-unknown-windows
+		-ffreestanding
+		-nostdinc
+		-fno-stack-protector
+		-fno-pic
+		-fshort-wchar
+		-mno-red-zone
+		-Wall -Wextra -Wno-unused-parameter -Wno-macro-redefined
+		-O2
+		-DPM_METAL_BOOT_TARGET_EFI=1
+		"${STRESS_CFLAGS[@]}"
+		-I"${LIBC}"
+		-I"${SRC}"
+		-I"${EFI}"
+		-I"${NETIP}"
+		-I"${NETIP}/cfg"
+		-I"${LWIP}/src/include"
+		-I"${EFI}/edk2_inc"
+		-I"${EFI}/edk2_inc/X64"
+		-I"${EFI}/edk2_inc/Protocol"
+		-I"${EFI}/edk2_inc/Guid"
+	)
+	# Keep IDE/clangd symlink fresh (edk2_inc -> MdePkg/Include).
+	ln -sfn ../../../../../../../external/edk2/MdePkg/Include "${EFI}/edk2_inc"
+
+	compile_c() {
+		local src="$1"
+		local base="${2:-}"
+		if [[ -z "${base}" ]]; then
+			base="$(basename "${src}" .c)"
+		fi
+		echo "  cc  ${base}.c (efi)"
+		"${CC}" "${CFLAGS[@]}" -c "${src}" -o "${OBJ}/${base}.obj"
+	}
+
+	for f in efi_ctx uart io_port mem_map power handoff time acpi_rsdp main; do
+		compile_c "${EFI}/${f}.c"
+	done
+	compile_c "${PRIVATE}/bringup.c"
+	if [[ "${EXP2_STRESS_ON}" == "1" ]]; then
+		compile_c "${STRESS_SRC}/stress.c" stress
+	fi
+	compile_c "${UTIL}/fourcc/__init__.c" fourcc
+	compile_c "${UTIL}/eightcc/__init__.c" eightcc
+	compile_c "${PCI}/_cfg.c" cfg
+	compile_c "${VIRTIO}/_detect.c" virtio_detect
+	compile_c "${VIRTIO}/_pci.c" virtio_pci
+	compile_c "${EFI}/virtio_pages.c" virtio_pages
+	compile_c "${DEV_NET}/_virtio_net.c" virtio_net
+	compile_c "${DEV_BLK}/_detect.c" blk_detect
+	compile_c "${DEV_BLK}/_virtio_blk.c" virtio_blk
+	compile_c "${LIBC}/string.c" string
+	compile_c "${LIBC}/stdlib.c" stdlib
+	compile_c "${LIBC}/stdio.c" stdio
+	compile_lwip_and_net obj compile_c
+
+	# Do NOT write package-root compile_commands.json here.
+	# Relative-directory CDBs do not match clangd's absolute file keys, so a
+	# hand-rolled DB here caused Generic fallback + mass stdint.h squiggles.
+	# exp2 IDE flags live in .clangd.template (CompilationDatabase: None).
+	# Product CDB remains build/compile_commands.json via ./scripts/setup ide.
+
+	local EFI_IMG="${OUT}/metal.efi"
+	local STRESS_OBJ=()
+	if [[ "${EXP2_STRESS_ON}" == "1" ]]; then
+		STRESS_OBJ=("${OBJ}/stress.obj")
+	fi
+	echo "exp2 build: link ${EFI_IMG}"
+	# Match EDK2/product PE shape: base 0, relocatable, no Windows DLL flags.
+	"${LLD_LINK}" \
+		-subsystem:efi_application \
+		-entry:UefiMain \
+		-base:0 \
+		-dynamicbase:no \
+		-highentropyva:no \
+		-nxcompat:no \
+		-tsaware:no \
+		-out:"${EFI_IMG}" \
+		"${OBJ}/efi_ctx.obj" \
+		"${OBJ}/uart.obj" \
+		"${OBJ}/io_port.obj" \
+		"${OBJ}/mem_map.obj" \
+		"${OBJ}/power.obj" \
+		"${OBJ}/handoff.obj" \
+		"${OBJ}/time.obj" \
+		"${OBJ}/acpi_rsdp.obj" \
+		"${OBJ}/bringup.obj" \
+		"${STRESS_OBJ[@]}" \
+		"${OBJ}/fourcc.obj" \
+		"${OBJ}/eightcc.obj" \
+		"${OBJ}/cfg.obj" \
+		"${OBJ}/virtio_detect.obj" "${OBJ}/virtio_pci.obj" \
+		"${OBJ}/virtio_pages.obj" \
+		"${OBJ}/virtio_net.obj" \
+		"${OBJ}/blk_detect.obj" "${OBJ}/virtio_blk.obj" \
+		"${OBJ}/string.obj" "${OBJ}/stdlib.obj" "${OBJ}/stdio.obj" \
+		$(lwip_link_objs "${OBJ}" obj) \
+		"${OBJ}/main.obj" \
+		"${BOOT_A}"
+
+	echo "exp2 build: ok efi -> ${EFI_IMG}"
+	ls -la "${EFI_IMG}"
+}
+
+case "${TARGET}" in
+bios | x86_64)
+	build_bios
+	;;
+efi)
+	build_efi
+	;;
+all | both)
+	build_bios
+	build_efi
+	;;
+*)
+	echo "exp2/scripts/build: unsupported target ${TARGET} (bios|efi|all)" >&2
 	exit 1
-fi
-objcopy \
-	--redefine-sym "${BIN_START}=_binary_metal_elf_start" \
-	--redefine-sym "${BIN_END}=_binary_metal_elf_end" \
-	"${OBJ}/metal_bin.o" "${OBJ}/metal_bin_named.o"
-"${LD}" -m elf_i386 -nostdlib -static -z noexecstack \
-	-T "${BIOS}/link32.ld" \
-	-o "${TRAMP_ELF}" \
-	"${OBJ}/trampoline32.o" "${OBJ}/trampoline64.o" \
-	"${OBJ}/trampoline_load.o" "${OBJ}/metal_bin_named.o"
-
-echo "exp2 build: ok → ${ELF} + ${TRAMP_ELF}"
-ls -la "${ELF}" "${TRAMP_ELF}"
+	;;
+esac

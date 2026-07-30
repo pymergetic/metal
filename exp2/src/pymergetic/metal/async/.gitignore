@@ -12,8 +12,6 @@ phase.h
 phase.pyi
 process.h
 process.pyi
-proof.h
-proof.pyi
 runner.h
 runner.pyi
 task.h

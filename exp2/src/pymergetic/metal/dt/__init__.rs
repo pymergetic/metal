@@ -1,6 +1,6 @@
 //! Metal DT — Rust impl, C ABI export (`pm_metal_dt_*`).
 //! Not Linux FDT. Class numbers match product `pm_metal_io_class_t` / IO.md.
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(non_camel_case_types)]
 
 use pymergetic_metal_rt as _;
@@ -156,6 +156,27 @@ pub unsafe extern "C" fn pm_metal_dt_set_compat(
     -1
 }
 
+/// OR bits into `caps` for the indexed node of `class`. Returns 0 or -1.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_dt_or_caps(
+    class: pm_metal_dt_class_t,
+    index: u32,
+    caps: u32,
+) -> i32 {
+    let mut n = 0u32;
+    for i in 0..COUNT as usize {
+        if NODES[i].class != class {
+            continue;
+        }
+        if n == index {
+            NODES[i].caps |= caps;
+            return 0;
+        }
+        n += 1;
+    }
+    -1
+}
+
 pub type DtIterFn = Option<unsafe extern "C" fn(node: *const DtNode, ctx: *mut core::ffi::c_void) -> i32>;
 
 #[no_mangle]
@@ -208,7 +229,7 @@ pub unsafe extern "C" fn pm_metal_dt_seed_mem(
 /// Call after `pm_metal_dt_reset` (and typically after mem seed).
 /// Harvest must skip re-init when `caps & CAP_BOUND` and same bus/loc match.
 /// `compat` is NUL-terminated ASCII (e.g. "com1") that outlives the table.
-/// `iobase` is ISA I/O base (COM1 = 0x3F8); stored in `loc[0]`.
+/// `iobase` is ISA I/O base from platform uart floor ops; stored in `loc[0]`.
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_dt_seed_bound_uart(
     compat: *const u8,

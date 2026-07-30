@@ -1,4 +1,4 @@
-//! `pymergetic.metal` — kernel module namespace (exp2).
+//! Package marker for `pymergetic.metal` — namespace root, no C ABI.
 //! Real modules are nested dirs with their own `.module` (`boot`, `dt`,
-//! `mem`, `rt`, …). This entry is the package root marker.
-#![cfg_attr(target_os = "none", no_std)]
+//! `mem`, `rt`, …). Do not umbrella-re-export sibling borders here.
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]

@@ -6,11 +6,10 @@
 //!   -1        SAME (park / waiting, pc unchanged)
 //!   -2        FAIL -> table.fail, then ERROR
 
-use crate::engine::Handle;
 use crate::handle::pm_metal_async_status_t;
 
 /// Phase body function (returns next pc / sentinel).
-pub type pm_metal_async_phase_fn_t = Option<unsafe extern "C" fn(Handle) -> i32>;
+pub type pm_metal_async_phase_fn_t = Option<unsafe extern "C" fn(u32) -> i32>;
 
 /// Standardized phase script.
 #[repr(C)]
@@ -27,7 +26,7 @@ const PHASE_FAIL: i32 = -2;
 /// Run one phase tick for `*pc`. Updates `*pc` on goto/done/fail.
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_async_phase_step(
-    self_h: Handle,
+    self_h: u32,
     table: *const pm_metal_async_phase_table_t,
     pc: *mut i32,
 ) -> pm_metal_async_status_t {

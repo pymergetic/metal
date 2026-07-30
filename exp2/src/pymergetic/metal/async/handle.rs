@@ -1,8 +1,8 @@
 //! Async handles + status codes (C ABI).
 
-use crate::engine::{self, Handle, Status};
+use crate::engine::{self, Status};
 
-/// Invalid / unset handle.
+/// Invalid / unset handle (C: uint32_t).
 pub const PM_METAL_ASYNC_HANDLE_INVALID: u32 = 0;
 
 /// Cooperative step / await result codes.
@@ -30,6 +30,18 @@ impl From<Status> for pm_metal_async_status_t {
 
 /// Current status of handle `h` (ERROR if invalid).
 #[no_mangle]
-pub extern "C" fn pm_metal_async_status(h: Handle) -> pm_metal_async_status_t {
+pub extern "C" fn pm_metal_async_status(h: u32) -> pm_metal_async_status_t {
     engine::status_of(h).into()
+}
+
+/// Store a u32 completion value on handle `h` (net/connect/recv/dns, …).
+#[no_mangle]
+pub extern "C" fn pm_metal_async_set_result_u32(h: u32, v: u32) {
+    engine::set_result_u32(h, v);
+}
+
+/// Read the u32 completion value (0 if bad handle).
+#[no_mangle]
+pub extern "C" fn pm_metal_async_result_u32(h: u32) -> u32 {
+    engine::result_u32(h)
 }

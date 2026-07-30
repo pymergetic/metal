@@ -3,7 +3,7 @@
 //! Async extract (streaming file bodies to a sink across await points) is
 //! intentionally not here; call sites that need it should compose a later
 //! async helper on top of this sync foreach. No fake await.
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(dead_code, non_camel_case_types)]
 
 use pymergetic_metal_rt as _;

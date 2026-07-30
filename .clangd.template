@@ -18,7 +18,11 @@ CompileFlags:
     # clangd still resolves them if a PathMatch / CDB fragment is skipped.
     - -I@@ROOT@@/src/pymergetic/metal
     - -I@@ROOT@@/exp2/src
-    - -I@@ROOT@@/exp2/src/pymergetic/metal
+    # Always visible so Generic-fallback TUs under -nostdinc still find stdint.h
+    # (exp2 PathMatch also adds this; duplicate -I is harmless).
+    # Do NOT add -Iexp2/src/pymergetic/metal here — that short path collides with
+    # product -Isrc/pymergetic/metal for <async/...> style includes.
+    - -I@@ROOT@@/exp2/src/pymergetic/metal/libc
     - -I@@ROOT@@/external/tlsf
     # Baked CA pubs for trust.c (#include "metal_trust_bake.inc.c")
     - -I@@ROOT@@/build/trust
@@ -49,7 +53,7 @@ CompileFlags:
 # PathMatch is unanchored so it matches absolute URIs/paths too.
 If:
   # Prefer metal/src/… so exp2/src/… does not steal this fragment.
-  PathMatch: .*/metal/src/efi/.*\.(c|h)$
+  PathMatch: '.*/metal/src/efi/.*\.(c|h)$'
 CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
@@ -84,42 +88,97 @@ CompileFlags:
     - -DWASM_ENABLE_LIBC_WASI=1
 
 ---
-# exp2 — freestanding ISO C; not in product CDB. Force -xc for .h (see global note).
+# exp2 — freestanding ISO C. Exact entries live in build/compile_commands.json
+# (./scripts/setup ide). Do NOT set CompilationDatabase: None here: when the
+# config is trusted, None ignores those entries and Generic-fallback misses
+# -Ilwip / metal/libc. PathMatch only strips product -I and reinforces flags.
+# Split .c/.h — avoid `|` in PathMatch (YAML/clangd footgun).
 If:
-  PathMatch: .*/exp2/src/.*\.(c|h)$
+  PathMatch: .*/exp2/src/.*\.c$
 CompileFlags:
-  CompilationDatabase: "None"
   Compiler: /usr/bin/clang
+  Remove:
+    - -I@@ROOT@@/src/pymergetic/metal
+    - -I@@ROOT@@/exp2/src/pymergetic/metal
+    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+    - -I@@ROOT@@/src/pymergetic/metal/py/embed
   Add:
     - -xc
     - -std=c11
     - -ffreestanding
+    - -nostdinc
     - -fno-stack-protector
+    - -m64
+    - -mno-red-zone
+    - -I@@ROOT@@/exp2/src/pymergetic/metal/libc
     - -I@@ROOT@@/exp2/src
-    - -I@@ROOT@@/exp2/src/pymergetic/metal
+    - -I@@ROOT@@/exp2/src/pymergetic/metal/net/ip
+    - -I@@ROOT@@/exp2/src/pymergetic/metal/net/ip/cfg
+    - -I@@ROOT@@/external/lwip/src/include
 
 ---
-# exp2 BIOS ports — also mirrored by boot/bios/.clangd (closest wins for IDE).
 If:
-  PathMatch: .*/exp2/src/pymergetic/metal/boot/bios/.*\.(c|h)$
+  PathMatch: .*/exp2/src/.*\.h$
 CompileFlags:
-  CompilationDatabase: "None"
+  Compiler: /usr/bin/clang
+  Remove:
+    - -I@@ROOT@@/src/pymergetic/metal
+    - -I@@ROOT@@/exp2/src/pymergetic/metal
+    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
+    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+    - -I@@ROOT@@/src/pymergetic/metal/py/embed
+  Add:
+    - -xc
+    - -std=c11
+    - -ffreestanding
+    - -nostdinc
+    - -fno-stack-protector
+    - -m64
+    - -mno-red-zone
+    - -I@@ROOT@@/exp2/src/pymergetic/metal/libc
+    - -I@@ROOT@@/exp2/src
+    - -I@@ROOT@@/exp2/src/pymergetic/metal/net/ip
+    - -I@@ROOT@@/exp2/src/pymergetic/metal/net/ip/cfg
+    - -I@@ROOT@@/external/lwip/src/include
+
+---
+# exp2 BIOS / private bringup (platform layout).
+If:
+  PathMatch: .*/exp2/src/pymergetic/metal/boot/platform/bios/
+CompileFlags:
   Add:
     - -DPM_METAL_BOOT_TARGET_BIOS=1
+    - -I@@ROOT@@/exp2/src/pymergetic/metal/boot/platform/bios
 
 ---
-# exp2 EFI ports — also mirrored by boot/efi/.clangd
 If:
-  PathMatch: .*/exp2/src/pymergetic/metal/boot/efi/.*\.(c|h)$
+  PathMatch: .*/exp2/src/pymergetic/metal/boot/platform/private/
 CompileFlags:
-  CompilationDatabase: "None"
   Add:
+    - -DPM_METAL_BOOT_TARGET_BIOS=1
+    - -I@@ROOT@@/exp2/src/pymergetic/metal/boot/platform/bios
+
+---
+# exp2 EFI ports.
+If:
+  PathMatch: .*/exp2/src/pymergetic/metal/boot/platform/efi/
+CompileFlags:
+  Add:
+    - --target=x86_64-unknown-windows
+    - -fshort-wchar
+    - -Wno-macro-redefined
     - -DPM_METAL_BOOT_TARGET_EFI=1
+    - -I@@ROOT@@/exp2/src/pymergetic/metal/boot/platform/efi
+    - -I@@ROOT@@/external/edk2/MdePkg/Include
+    - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
+    - -I@@ROOT@@/external/edk2/MdePkg/Include/Protocol
+    - -I@@ROOT@@/external/edk2/MdePkg/Include/Guid
 
 ---
 # Metal contracts + EFI binds (product tree only — not exp2/src/…)
 If:
-  PathMatch: .*/metal/src/(pymergetic|efi/pymergetic)/metal/.*\.(c|h)$
+  PathMatch: '.*/metal/src/(pymergetic|efi/pymergetic)/metal/.*\.(c|h)$'
 CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
@@ -157,7 +216,7 @@ CompileFlags:
 ---
 # MicroPython glue — embed package (py/*.h, genhdr, port, mpconfigport).
 If:
-  PathMatch: .*/metal/src/pymergetic/metal/py/.*\.(c|h)$
+  PathMatch: '.*/metal/src/pymergetic/metal/py/.*\.(c|h)$'
 CompileFlags:
   Add:
     - -I@@ROOT@@/build/micropython_embed
@@ -171,7 +230,7 @@ CompileFlags:
 ---
 # EFI WAMR platform .c — full EDK2 -I (never BIOS sibling CDB).
 If:
-  PathMatch: .*/metal/src/pymergetic/metal/guest/wamr/.*\.(c|h)$
+  PathMatch: '.*/metal/src/pymergetic/metal/guest/wamr/.*\.(c|h)$'
 CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
@@ -195,7 +254,7 @@ CompileFlags:
 ---
 # EFI net / lwIP + mbedTLS — full EDK2 -I (never BIOS sibling CDB).
 If:
-  PathMatch: .*/metal/src/pymergetic/metal/dev/net/.*\.(c|h)$
+  PathMatch: '.*/metal/src/pymergetic/metal/dev/net/.*\.(c|h)$'
 CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
@@ -223,7 +282,7 @@ CompileFlags:
 # so we can Remove host_stubs and re-Add stubs first (same order as
 # DropbearGlue.inf / bios DROPBEAR_EXTRA_CFLAGS).
 If:
-  PathMatch: .*/metal/src/pymergetic/metal/net/ssh/(dropbear_stubs/|dropbear_metal/|dropbear_|ssh_dropbear).*
+  PathMatch: '.*/metal/src/pymergetic/metal/net/ssh/(dropbear_stubs/|dropbear_metal/|dropbear_|ssh_dropbear).*'
 CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
@@ -252,7 +311,7 @@ CompileFlags:
 # not host autoconf. config.h / localoptions live under dropbear_metal/;
 # POSIX types under dropbear_stubs/. Same flag set as dropbear.sh.
 If:
-  PathMatch: .*/external/dropbear/src/.*\.(c|h)$
+  PathMatch: '.*/external/dropbear/src/.*\.(c|h)$'
 CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
@@ -289,7 +348,7 @@ CompileFlags:
 # CompilationDatabase None: clangd otherwise fuzzy-matches same basenames
 # (net_lwip.c, virtio_blk.c, …) to the EFI CDB entry and drops PmBiosUefi.h.
 If:
-  PathMatch: .*/metal/src/bios/.*\.(c|h|S)$
+  PathMatch: '.*/metal/src/bios/.*\.(c|h|S)$'
 CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
@@ -322,7 +381,7 @@ CompileFlags:
 # Also mirrored in tests/host/.clangd (closer config; PathMatch alone was
 # insufficient against CDB fuzzy-match to wasm).
 If:
-  PathMatch: [/.]tests/host/.*\.(c|h)$
+  PathMatch: '[/.]tests/host/.*\.(c|h)$'
 CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang

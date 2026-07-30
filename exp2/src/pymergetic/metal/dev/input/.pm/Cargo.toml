@@ -10,6 +10,7 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 pymergetic_metal_rt = { path = "../../../rt/.pm" }
 pymergetic_metal_dt = { path = "../../../dt/.pm" }
+pymergetic_metal_async = { path = "../../../async/.pm" }
 
 [profile.release]
 panic = "abort"

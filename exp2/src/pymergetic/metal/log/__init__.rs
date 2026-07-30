@@ -1,22 +1,22 @@
 //! Sync log facade -> console #0 (default). Styled lines use ASCII SGR.
 //! No ring of its own — console owns history / viewports.
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(non_camel_case_types)]
 
 use pymergetic_metal_rt as _;
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", target_os = "uefi"))]
 extern "C" {
     fn pm_metal_console_ready() -> i32;
     fn pm_metal_console_write(id: u32, s: *const u8, n: usize);
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(not(any(target_os = "none", target_os = "uefi")))]
 fn pm_metal_console_ready() -> i32 {
     0
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(not(any(target_os = "none", target_os = "uefi")))]
 fn pm_metal_console_write(_id: u32, _s: *const u8, _n: usize) {}
 
 /// Semantic log styles (ANSI SGR when a viewport understands them).

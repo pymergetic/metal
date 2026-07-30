@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.dev.net",
+  "impl": "c",
+  "version": "0.1.0",
+  "comment": "NIC L2 drivers (virtio-net; bge TBD). Frames only."
+}

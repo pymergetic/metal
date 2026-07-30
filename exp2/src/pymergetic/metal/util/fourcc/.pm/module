@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "pymergetic.metal.util.fourcc",
-  "impl": "rs",
+  "impl": "c",
   "version": "0.1.0",
-  "comment": "FourCC tags (BE semantic / LE wire)."
+  "comment": "FourCC tags (BE semantic / LE wire) + PM_METAL_UTIL_FOURCC macros."
 }

@@ -50,6 +50,8 @@ struct Slot {
     pid: u32,
     /// In a ready queue (avoid double-enqueue).
     queued: bool,
+    /// Opaque u32 result (net awaitables, etc.).
+    result_u32: u32,
 }
 
 impl Slot {
@@ -67,6 +69,7 @@ impl Slot {
             runner: 0,
             pid: 0,
             queued: false,
+            result_u32: 0,
         }
     }
 }
@@ -326,8 +329,27 @@ pub fn coro_create(step: StepFn, state_bytes: u32) -> Handle {
             runner: 0,
             pid: 0,
             queued: false,
+            result_u32: 0,
         };
         h
+    })
+}
+
+pub fn set_result_u32(h: Handle, v: u32) {
+    with_lock(|e| {
+        if slot_ok(e, h) {
+            e.slots[h as usize].result_u32 = v;
+        }
+    });
+}
+
+pub fn result_u32(h: Handle) -> u32 {
+    with_lock(|e| {
+        if !slot_ok(e, h) {
+            0
+        } else {
+            e.slots[h as usize].result_u32
+        }
     })
 }
 

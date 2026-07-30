@@ -34,7 +34,6 @@ dependencies = [
  "pymergetic_metal_bus_pci",
  "pymergetic_metal_console",
  "pymergetic_metal_dev_acpi",
- "pymergetic_metal_dev_blk",
  "pymergetic_metal_dev_gfx",
  "pymergetic_metal_dev_input",
  "pymergetic_metal_dev_random",
@@ -46,8 +45,6 @@ dependencies = [
  "pymergetic_metal_mem",
  "pymergetic_metal_rt",
  "pymergetic_metal_util_ascii",
- "pymergetic_metal_util_eightcc",
- "pymergetic_metal_util_fourcc",
  "pymergetic_metal_util_lz4",
  "pymergetic_metal_util_tar",
 ]
@@ -77,14 +74,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pymergetic_metal_dev_blk"
-version = "0.1.0"
-dependencies = [
- "pymergetic_metal_dt",
- "pymergetic_metal_rt",
-]
-
-[[package]]
 name = "pymergetic_metal_dev_gfx"
 version = "0.1.0"
 dependencies = [
@@ -96,6 +85,7 @@ dependencies = [
 name = "pymergetic_metal_dev_input"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_async",
  "pymergetic_metal_dt",
  "pymergetic_metal_rt",
 ]
@@ -160,20 +150,6 @@ version = "0.1.0"
 
 [[package]]
 name = "pymergetic_metal_util_ascii"
-version = "0.1.0"
-dependencies = [
- "pymergetic_metal_rt",
-]
-
-[[package]]
-name = "pymergetic_metal_util_eightcc"
-version = "0.1.0"
-dependencies = [
- "pymergetic_metal_rt",
-]
-
-[[package]]
-name = "pymergetic_metal_util_fourcc"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_rt",

@@ -65,8 +65,22 @@ static void bios_uart_write(const char *s, size_t n)
   }
 }
 
+static const uint8_t g_floor_compat[] = "com1";
+
+static uint32_t bios_uart_floor_iobase(void)
+{
+  return COM1_BASE;
+}
+
+static const uint8_t *bios_uart_floor_compat(void)
+{
+  return g_floor_compat;
+}
+
 static const pm_metal_boot_uart_ops_t g_ops = {
   .write = bios_uart_write,
+  .floor_iobase = bios_uart_floor_iobase,
+  .floor_compat = bios_uart_floor_compat,
 };
 
 const pm_metal_boot_uart_ops_t *pm_metal_boot_uart_ops(void)

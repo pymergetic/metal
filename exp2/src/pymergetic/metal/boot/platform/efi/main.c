@@ -6,20 +6,22 @@
 #error "PM_METAL_BOOT_TARGET_* is not defined"
 #endif
 
-/*
- * Thin EFI entry shape — same bringup as BIOS once mem_map is real.
- * Not linked yet (see exp2/scripts/build efi).
- */
-#include <stdint.h>
+#include <Uefi.h>
 
 #include <pymergetic/metal/boot/platform/power.h>
 #include <pymergetic/metal/boot/platform/private/bringup.h>
 
-int32_t pm_metal_efi_main(void)
+#include "efi_ctx.h"
+
+void pm_metal_efi_acpi_seed(void);
+
+EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 {
+  pm_metal_efi_ctx_set(image, st);
+  pm_metal_efi_acpi_seed();
   if (pm_metal_boot_bringup() != 0) {
     pm_metal_boot_halt();
   }
   pm_metal_boot_halt();
-  return 0;
+  return EFI_SUCCESS;
 }

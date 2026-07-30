@@ -10,6 +10,8 @@ mem_map.pyi
 mem_map.rs
 power.pyi
 power.rs
+time.pyi
+time.rs
 uart.pyi
 uart.rs
 # END metal-generated

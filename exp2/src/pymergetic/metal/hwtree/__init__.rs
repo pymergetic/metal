@@ -1,5 +1,5 @@
 //! Hardware tree print — walk DT, log class/compat/bus/loc (+ ACPI RSDP).
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 
 use core::fmt::Write;
 
@@ -9,12 +9,12 @@ use pymergetic_metal_dt::{
 use pymergetic_metal_log::{pm_metal_log, pm_metal_log_style_t, pm_metal_log_styled};
 use pymergetic_metal_rt as _;
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", target_os = "uefi"))]
 extern "C" {
     fn pm_metal_dev_acpi_rsdp() -> u64;
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(not(any(target_os = "none", target_os = "uefi")))]
 fn pm_metal_dev_acpi_rsdp() -> u64 {
     0
 }

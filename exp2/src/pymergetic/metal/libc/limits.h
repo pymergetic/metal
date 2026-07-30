@@ -1,0 +1,8 @@
+#ifndef PM_METAL_LIBC_LIMITS_H_
+#define PM_METAL_LIBC_LIMITS_H_
+
+#define CHAR_BIT 8
+#define INT_MAX  2147483647
+#define INT_MIN  (-2147483647 - 1)
+
+#endif /* PM_METAL_LIBC_LIMITS_H_ */
