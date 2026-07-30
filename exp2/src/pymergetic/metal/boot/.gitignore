@@ -4,4 +4,6 @@ target/
 .generated/
 __init__.h
 __init__.pyi
+banner.h
+banner.pyi
 # END metal-generated

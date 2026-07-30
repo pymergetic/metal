@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.util.tar",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Sync ustar archive walk."
+}

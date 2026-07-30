@@ -1,0 +1,17 @@
+[package]
+name = "pymergetic_metal_dev_input"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "../__init__.rs"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+pymergetic_metal_rt = { path = "../../../rt/.pm" }
+pymergetic_metal_dt = { path = "../../../dt/.pm" }
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

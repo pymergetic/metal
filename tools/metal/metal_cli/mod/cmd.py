@@ -70,7 +70,7 @@ def _rmtree(path: Path) -> None:
 
 # ASCII table signs for pool-face status (clean / sync)
 _STATUS_SIGN = {
-    "original": "O",
+    "original": "§",
     "cleaned": "X",
     "emitted": "*",
     "marker": "~",  # empty __init__.pyi package marker (no symbols)
@@ -927,7 +927,7 @@ async def cmd_mod_clean() -> int:
     print(
         _format_pool_table(
             rows,
-            legend="O=original  X=cleaned  -=noop",
+            legend="§=original  X=cleaned  -=noop",
         )
     )
     print(
@@ -975,7 +975,7 @@ async def cmd_mod_sync(*, extra_emit: frozenset[str] | None = None) -> int:
         print(
             _format_pool_table(
                 rows,
-                legend="O=original  *=emitted  ~=marker  x=pruned  -=noop",
+                legend="§=original  *=emitted  ~=marker  x=pruned  -=noop",
             )
         )
     if errors:

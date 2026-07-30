@@ -1,12 +1,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <pymergetic/metal/boot/banner.h>
+#include <pymergetic/metal/boot/__init__.h>
 #include <pymergetic/metal/boot/platform/handoff.h>
 #include <pymergetic/metal/boot/platform/mem_map.h>
 #include <pymergetic/metal/boot/platform/private/bringup.h>
+#include <pymergetic/metal/boot/platform/private/dump_mem.h>
 #include <pymergetic/metal/console/__init__.h>
 #include <pymergetic/metal/dev/serial/__init__.h>
 #include <pymergetic/metal/dt/__init__.h>
+#include <pymergetic/metal/hwtree/__init__.h>
 #include <pymergetic/metal/mem/__init__.h>
 
 void *memset(void *dst, int c, size_t n);
@@ -290,9 +294,8 @@ int32_t pm_metal_boot_bringup(void)
     return fail(NULL);
   }
 
-  puts_console("exp2: hello\n");
-  puts_console("mem: arena ready\n");
-  puts_console("console: #0 ready\n");
+  /* log default = console 0 (log facade writes there when ready). */
+  pm_metal_boot_banner();
 
   pm_metal_dt_reset();
   if (seed_mem_partition(arena, bytes) != 0) {
@@ -302,6 +305,8 @@ int32_t pm_metal_boot_bringup(void)
   if (uart_id < 0 || dt_smoke(arena, bytes) != 0) {
     return fail("exp2: dt seed failed\n");
   }
+
+  pm_metal_boot_dump_mem();
 
   if (pm_metal_dev_serial_init() != 0) {
     return fail("exp2: serial init failed\n");
@@ -313,6 +318,11 @@ int32_t pm_metal_boot_bringup(void)
   if (pm_metal_boot_leave_firmware() != 0) {
     return fail("exp2: handoff failed\n");
   }
+
+  if (pm_metal_boot_harvest() != 0) {
+    return fail("exp2: harvest failed\n");
+  }
+  (void)pm_metal_hwtree_print();
 
   if (mem_smoke() != 0) {
     return fail("exp2: mem smoke failed\n");

@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.util.lz4",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "LZ4 block decompress (sync)."
+}

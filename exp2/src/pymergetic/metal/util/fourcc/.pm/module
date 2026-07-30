@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.util.fourcc",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "FourCC tags (BE semantic / LE wire)."
+}

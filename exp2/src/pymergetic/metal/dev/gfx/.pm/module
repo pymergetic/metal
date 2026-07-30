@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.dev.gfx",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Gfx probe stub; PCI display class lands via bus/pci."
+}

@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.dev.time",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Time device probe (TSC) -> DT TIME."
+}

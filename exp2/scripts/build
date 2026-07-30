@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build exp2 BIOS firmware: Multiboot ELF64 + QEMU ELF32 trampoline.
 # Sources: exp2/src only (+ Rust mem crate / Conte TLSF via metal mod build).
+# Default target: bios. `exp2/scripts/build efi` is a stub (ports exist, not linked).
 set -euo pipefail
 
 EXP2="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,10 +12,19 @@ PRIVATE="${EXP2}/src/pymergetic/metal/boot/platform/private"
 SRC="${EXP2}/src"
 OUT="${EXP2}/build/x86_64_bios"
 OBJ="${OUT}/obj"
-ARCH="${1:-x86_64}"
+TARGET="${1:-bios}"
+ARCH="x86_64"
 
-if [[ "${ARCH}" != "x86_64" ]]; then
-	echo "exp2/scripts/build: only x86_64 supported (got ${ARCH})" >&2
+if [[ "${TARGET}" == "efi" ]]; then
+	echo "exp2/scripts/build: efi image not linked yet (ports under boot/platform/efi/)." >&2
+	echo "  Default target remains bios. Pass nothing or 'bios' / 'x86_64'." >&2
+	exit 1
+fi
+
+if [[ "${TARGET}" == "x86_64" || "${TARGET}" == "bios" ]]; then
+	ARCH="x86_64"
+elif [[ "${TARGET}" != "x86_64" && "${TARGET}" != "bios" ]]; then
+	echo "exp2/scripts/build: unsupported target ${TARGET} (bios|x86_64|efi)" >&2
 	exit 1
 fi
 
@@ -35,7 +45,7 @@ fi
 mkdir -p "${OBJ}"
 rm -f "${OUT}/metal.elf" "${OUT}/metal.qemu.elf"
 
-echo "exp2 build: metal mod sync + build boot (pulls rt/mem/dt)"
+echo "exp2 build: metal mod sync + build boot (pulls rt/mem/dt/detectors)"
 "${METAL}" mod sync
 "${METAL}" mod build boot
 BOOT_A="${EXP2}/src/pymergetic/metal/boot/.target/x86_64-unknown-none/release/libpymergetic_metal_boot.a"
@@ -78,10 +88,11 @@ compile_S() {
 }
 
 # memset/memcpy come from mem/tlsf/_port.c (inside libmetal_mem.a).
-for f in uart mem_map power handoff main; do
+for f in uart io_port mem_map power handoff main; do
 	compile_c "${BIOS}/${f}.c"
 done
 compile_c "${PRIVATE}/bringup.c"
+compile_c "${PRIVATE}/dump_mem.c"
 compile_S "${BIOS}/crt0.S"
 
 ELF="${OUT}/metal.elf"
@@ -91,10 +102,12 @@ echo "exp2 build: link ${ELF}"
 	-o "${ELF}" \
 	"${OBJ}/crt0.o" \
 	"${OBJ}/uart.o" \
+	"${OBJ}/io_port.o" \
 	"${OBJ}/mem_map.o" \
 	"${OBJ}/power.o" \
 	"${OBJ}/handoff.o" \
 	"${OBJ}/bringup.o" \
+	"${OBJ}/dump_mem.o" \
 	"${OBJ}/main.o" \
 	"${BOOT_A}"
 

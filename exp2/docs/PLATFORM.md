@@ -117,6 +117,7 @@ Port contracts live under `boot/platform/` (human C module; sync emits
 `.rs` / `.pyi`):
 
 - `uart.h` — **lower half only** (target poke: COM1 outb / EFI SerialIO, …)
+- `io.h` — port I/O (`inb`/`outb`/`in32`/`out32`) for PCI cfg / ISA probes
 - `mem_map.h`, `power.h`, `handoff.h`
   (no `sync`/CAS ops — locks use language/core atomics directly;
   do not reintroduce a boot CAS table unless callers actually use it)
@@ -132,9 +133,11 @@ I/O or memory map.
 
 | Group | Slots |
 |-------|--------|
-| uart (platform) | lower half: `write` / `read` bytes — ASCII on the wire |
+| uart (platform) | lower half: `write` bytes — ASCII on the wire |
+| io (platform) | `outb` / `inb` / `out32` / `in32` |
 | mem_map | `get(regions, max, *n)`, `image_end() -> uintptr_t` |
 | power | `halt()`, `reset(int32_t reboot)` |
+| handoff | `leave_firmware()` |
 
 ## Boot vs DT
 
@@ -223,38 +226,47 @@ before console #0 exists.
 
 See [`docs/IO.md`](../../docs/IO.md) (sync vs async).
 
-Floor path:
+Floor path (sync until async start):
 
 ```text
-target entry
-  -> mem_map (+ power)                  # target floor (minimal)
-  ---------- agnostic (heap available after this) ----------
-  -> mem claim + init                   # alloc ready FIRST
-  -> console #0 create (ring from heap; 0 viewports ok)
-  -> console #0 init
-  -> logs -> console #0                 # early stuff accepted (buffered):
-  |    welcome banner
-  |    mem / RAM discovery (claim size, regions, ...)
-  |    console #0 hello (create/init ok)
+target entry (bios|efi)
+  -> mem_map ingest (+ power ops available)
+  -> mem claim + init                         # heap
+  -> console #0 create/init (ring, 0 viewports)
+  -> log default -> console 0
+  -> banner (buffered on ring)
   -> dt.reset
-  -> dt.seed_mem sysmem regions + bound heap   # class MEM — partitioning intel only
-  -> dt.seed_bound_uart(...)                   # CAP_BOUND bookkeeping
-  -> dev/serial up (via platform uart half)
-  -> attach serial as viewport on #0    # ring drains -> banner + early logs visible
-  -> handoff.leave_firmware
-  -> full dt harvest / discovery        # skip already-bound UART
-  -> further viewports / everything else on heap
+  -> dt.seed_mem (sysmem + bound heap)        # class MEM — partitioning intel only
+  -> dt.seed_bound_uart (COM1 / EFI serial)   # CAP_BOUND bookkeeping
+  -> dump_mem (walk DT MEM -> console/log)
+  -> dev/serial up (platform uart half)
+  -> console.attach(serial)                   # ring drains
+  -> handoff.leave_firmware                   # NOT async start
+  -> boot_harvest: each linked *_detect()     # skip CAP_BOUND
+       # detectors live in drivers (bus/*, dev/*);
+       # harvest only calls them — no central hardware table
+       bus/pci, time, acpi, random, input, blk, gfx, ...
+  -> hwtree print (from DT [+ ACPI RSDP if found])
+  -> ... more sync bring-up ok here ...
+  ---------- async start (runners) ----------  # STOP sync-only tranche
+  -> awaitable blk/input/gfx/net/...
 ```
 
+**Harvest rule:** each driver exports `pm_metal_*_detect()` that probe /
+identify and `dt_add` only (no blocking I/O). Already-`CAP_BOUND` nodes
+(e.g. floor UART, bound heap) are skipped — not re-inited.
+
 **Why this order:** heap → console ring (logs before serial exists) →
-banner / RAM / console hello buffer → serial up + attach viewport →
-coherent drain → handoff → full DT harvest.
+banner buffered → DT seed + mem dump → serial viewport drain → handoff →
+driver detect harvest → hwtree. Sync work may continue after handoff up to
+the async-start gate.
 
 Path of a post-mem write: **caller → console ring → viewports**.
 Never “console = COM1.”
 
-Landed shape: `platform/uart.*`, `console/`, `dev/serial/`; `main` follows
-the floor path (manual serial viewport attach).
+Landed shape: `platform/uart.*` / `io.*`, `console/`, `dev/serial/`,
+`bus/pci/`, `hwtree/`; `main` follows the floor path (manual serial
+viewport attach).
 
 ## Polyglot (`.module` / flat root)
 

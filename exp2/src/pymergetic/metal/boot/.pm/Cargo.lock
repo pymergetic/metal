@@ -22,10 +22,32 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 name = "pymergetic_metal_boot"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_bus_pci",
  "pymergetic_metal_console",
+ "pymergetic_metal_dev_acpi",
+ "pymergetic_metal_dev_blk",
+ "pymergetic_metal_dev_gfx",
+ "pymergetic_metal_dev_input",
+ "pymergetic_metal_dev_random",
  "pymergetic_metal_dev_serial",
+ "pymergetic_metal_dev_time",
  "pymergetic_metal_dt",
+ "pymergetic_metal_hwtree",
+ "pymergetic_metal_log",
  "pymergetic_metal_mem",
+ "pymergetic_metal_rt",
+ "pymergetic_metal_util_ascii",
+ "pymergetic_metal_util_eightcc",
+ "pymergetic_metal_util_fourcc",
+ "pymergetic_metal_util_lz4",
+ "pymergetic_metal_util_tar",
+]
+
+[[package]]
+name = "pymergetic_metal_bus_pci"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_dt",
  "pymergetic_metal_rt",
 ]
 
@@ -38,6 +60,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "pymergetic_metal_dev_acpi"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_log",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_dev_blk"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_dt",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_dev_gfx"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_dt",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_dev_input"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_dt",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_dev_random"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_dt",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
 name = "pymergetic_metal_dev_serial"
 version = "0.1.0"
 dependencies = [
@@ -45,7 +107,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "pymergetic_metal_dev_time"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_dt",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
 name = "pymergetic_metal_dt"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_hwtree"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_dt",
+ "pymergetic_metal_log",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_log"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_rt",
@@ -62,6 +148,41 @@ dependencies = [
 [[package]]
 name = "pymergetic_metal_rt"
 version = "0.1.0"
+
+[[package]]
+name = "pymergetic_metal_util_ascii"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_util_eightcc"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_util_fourcc"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_util_lz4"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_util_tar"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
 
 [[package]]
 name = "shlex"

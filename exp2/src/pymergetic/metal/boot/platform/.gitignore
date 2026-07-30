@@ -4,6 +4,8 @@ target/
 .generated/
 handoff.pyi
 handoff.rs
+io.pyi
+io.rs
 mem_map.pyi
 mem_map.rs
 power.pyi
