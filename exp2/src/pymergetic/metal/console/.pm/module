@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.console",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Virtual console ring + viewport attach (concept, not hardware)."
+}

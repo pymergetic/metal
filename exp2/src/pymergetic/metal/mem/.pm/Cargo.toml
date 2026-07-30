@@ -1,0 +1,26 @@
+[package]
+name = "pymergetic_metal_mem"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[lib]
+path = "../__init__.rs"
+# staticlib+rlib for firmware / C link. Host Python smoke builds cdylib via
+# `cargo rustc -- --crate-type cdylib` (cdylib is unsupported on none).
+crate-type = ["staticlib", "rlib"]
+
+[[bin]]
+name = "smoke"
+path = "smoke.rs"
+
+[dependencies]
+pymergetic_metal_rt = { path = "../../rt/.pm" }
+
+[build-dependencies]
+cc = "1"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

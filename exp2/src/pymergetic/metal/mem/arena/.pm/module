@@ -1,0 +1,6 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.mem.arena",
+  "impl": "rs",
+  "version": "0.1.0"
+}

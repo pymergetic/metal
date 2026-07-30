@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.boot.platform",
+  "impl": "c",
+  "version": "0.1.0",
+  "comment": "Sealed boot ops headers; bios/efi bodies are hidden."
+}

@@ -1,5 +1,6 @@
 # Build outputs
 /build/
+/exp2/build/
 
 # Local Kconfig selections (defaults: config/defconfig)
 /config/.config

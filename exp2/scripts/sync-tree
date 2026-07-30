@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Recreate empty directory layout under exp2/src from product src/, plus
+# package skeleton. Place .gitkeep in empty folders so git tracks the layout.
+# Does not delete or overwrite real files already present in exp2.
+# Standalone: no product overlay — dirs only, not a compile-time fallthrough.
+# No include/ mirror — public headers will live beside modules under src/
+# (see docs/definitions/module.md).
+set -euo pipefail
+
+EXP2="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+METAL="$(cd "${EXP2}/.." && pwd)"
+
+# Paths that must not appear in the exp2 mirror (wrong concern / noise).
+# No product-style runtime/ tree — mem (and later peers) live flat under metal/.
+EXCLUDE_SRC_REGEX='(^|/)\.cache(/|$)|(^|/)host_stubs(/|$)|(^|/)pymergetic/metal/runtime(/|$)'
+
+src_excluded() {
+	[[ "$1" =~ ${EXCLUDE_SRC_REGEX} ]]
+}
+
+while IFS= read -r d; do
+	src_excluded "${d}" && continue
+	mkdir -p "${EXP2}/src/${d}"
+done < <(find "${METAL}/src" -type d ! -path '*/.cache*' -printf '%P\n' | sort)
+
+# Drop excluded / retired trees
+rm -rf "${EXP2}/src/pymergetic/metal/runtime"
+rm -rf "${EXP2}/include"
+
+# --- package-level skeleton (same roles as product root) ---
+mkdir -p \
+	"${EXP2}/scripts/build.d/port/bios" \
+	"${EXP2}/scripts/build.d/port/efi" \
+	"${EXP2}/scripts/build.d/guest" \
+	"${EXP2}/scripts/build.d/lib" \
+	"${EXP2}/scripts/run.d/port/bios" \
+	"${EXP2}/scripts/run.d/port/efi" \
+	"${EXP2}/scripts/verify.d/port/bios" \
+	"${EXP2}/scripts/lib" \
+	"${EXP2}/scripts/setup.d" \
+	"${EXP2}/config/metal" \
+	"${EXP2}/docs/definitions" \
+	"${EXP2}/apps" \
+	"${EXP2}/mods" \
+	"${EXP2}/tests" \
+	"${EXP2}/typings"
+
+rm -f "${EXP2}/src/.mirror"
+
+gitkeep_sync() {
+	local root="$1"
+	local dir keeps other
+
+	[[ -d "${root}" ]] || return 0
+	while IFS= read -r -d '' dir; do
+		keeps=0
+		other=0
+		shopt -s nullglob dotglob
+		for f in "${dir}"/* "${dir}"/.[!.]* "${dir}"/..?*; do
+			[[ -e "$f" ]] || continue
+			base="$(basename "$f")"
+			if [[ "${base}" == ".gitkeep" ]]; then
+				keeps=1
+			else
+				other=1
+			fi
+		done
+		shopt -u nullglob dotglob
+		if [[ "${other}" -eq 0 ]]; then
+			if [[ "${keeps}" -eq 0 ]]; then
+				: > "${dir}/.gitkeep"
+			fi
+		else
+			rm -f "${dir}/.gitkeep"
+		fi
+	done < <(find "${root}" -type d -print0)
+}
+
+gitkeep_sync "${EXP2}/src"
+gitkeep_sync "${EXP2}/scripts"
+gitkeep_sync "${EXP2}/config"
+gitkeep_sync "${EXP2}/docs"
+gitkeep_sync "${EXP2}/apps"
+gitkeep_sync "${EXP2}/mods"
+gitkeep_sync "${EXP2}/tests"
+gitkeep_sync "${EXP2}/typings"
+
+n_keep="$(find "${EXP2}" -name .gitkeep ! -path '*/build/*' | wc -l)"
+echo "exp2 sync-tree: src=$(find "${EXP2}/src" -type d | wc -l) dirs, gitkeep=${n_keep}"

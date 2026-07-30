@@ -1,0 +1,13 @@
+# BEGIN metal-generated
+.target/
+target/
+.generated/
+handoff.pyi
+handoff.rs
+mem_map.pyi
+mem_map.rs
+power.pyi
+power.rs
+uart.pyi
+uart.rs
+# END metal-generated

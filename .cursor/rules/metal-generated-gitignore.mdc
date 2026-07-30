@@ -1,0 +1,40 @@
+---
+description: Codegen outputs stay out of git via module-local .gitignore maintained by metal mod sync
+globs: "**/.module,**/.gitignore,tools/metal/metal_cli/mod/**/*.py"
+alwaysApply: false
+---
+
+# Generated files are gitignored (dir-local)
+
+Full layout: [`docs/definitions/module.md`](../../docs/definitions/module.md).
+
+**Package entry:** human `__init__.{impl_ext}`; generated = other
+extensions of that stem only (`__init__.h`, `__init__.pyi`, …). Never
+ignore/generate the human original’s own extension. Sibling stems
+(`spin.rs`) get their own faces the same way.
+
+**Ownership:** generated faces carry an in-file banner
+(`DO NOT HAND-EDIT THIS FILE.`). That line is the write gate — sync
+refuses to overwrite a file that exists without it. No `.generated/`
+shadow tree.
+
+**Rule:** anything `metal mod sync` writes must **not** be committed. Sync
+maintains a **module-local** `.gitignore` managed block:
+
+```gitignore
+# BEGIN metal-generated
+.target/
+target/
+__init__.h
+__init__.pyi
+__init__.toml
+# END metal-generated
+```
+
+(Example for `impl=rs` with `--emit toml` — no `__init__.rs` line; that
+file is human. `{stem}.toml` is listed only when that face was emitted.)
+
+- The module `.gitignore` itself **is** committed.
+- Do **not** hand-edit the managed block.
+- Human `__init__.{ext}`, `.module`, ports stay tracked.
+- Never ignore `Cargo.toml` via a blanket `*.toml` — only the stem face.

@@ -1,0 +1,20 @@
+[package]
+name = "pymergetic_metal_boot"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "../__init__.rs"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+pymergetic_metal_rt = { path = "../../rt/.pm" }
+pymergetic_metal_mem = { path = "../../mem/.pm" }
+pymergetic_metal_dt = { path = "../../dt/.pm" }
+pymergetic_metal_console = { path = "../../console/.pm" }
+pymergetic_metal_dev_serial = { path = "../../dev/serial/.pm" }
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

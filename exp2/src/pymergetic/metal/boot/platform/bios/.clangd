@@ -1,0 +1,10 @@
+# Closest config for BIOS ports (clangd merges ancestor .clangd files).
+CompileFlags:
+  CompilationDatabase: None
+  Add:
+    - -xc
+    - -std=c11
+    - -ffreestanding
+    - -DPM_METAL_BOOT_TARGET_BIOS=1
+    - -I../../../..
+    - -I../../../../pymergetic/metal

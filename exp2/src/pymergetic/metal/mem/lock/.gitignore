@@ -1,0 +1,10 @@
+# BEGIN metal-generated
+.target/
+target/
+.generated/
+__init__.pyi
+mutex.h
+mutex.pyi
+spin.h
+spin.pyi
+# END metal-generated

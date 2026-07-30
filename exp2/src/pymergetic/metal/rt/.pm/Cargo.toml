@@ -1,0 +1,11 @@
+[package]
+name = "pymergetic_metal_rt"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "../__init__.rs"
+crate-type = ["rlib"]
+
+[profile.release]
+panic = "abort"

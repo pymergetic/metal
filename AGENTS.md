@@ -1,5 +1,26 @@
 # Agent notes for this repo
 
+## Finished quality only
+
+Do **not** ship fake, placeholder, or half-done code (rebranded
+primitives, spin-as-park, panic-as-API, empty “generated” hubs). Omit
+what is not finished; keep only what is real. Full rule:
+[`.cursor/rules/metal-finished-quality.mdc`](.cursor/rules/metal-finished-quality.mdc).
+
+**One mechanism per job:** do not keep a second unused path (e.g. boot
+`cas32` ops while locks already use `core::sync::atomic`). Prefer the
+fast direct path; ops indirection only when a real caller uses it now.
+No “used by X” comments/smokes unless `grep` proves it.
+
+## Foreign modules: use generated faces
+
+Do **not** hand-duplicate another module’s ABI (`extern "C"`, `#[repr(C)]`
+twins, private re-headers). Consume the provider’s lang-pool face for
+your language (generated `{base}.h` / `{base}.rs` / `{base}.pyi`, or the
+human `.h` when the provider is `impl=c`). Full rule:
+[`.cursor/rules/metal-c-abi-hub.mdc`](.cursor/rules/metal-c-abi-hub.mdc)
+§ "Consume generated faces".
+
 ## Prime directive: reading outranks writing
 
 Before you write a single line, find out what's already there. This sits

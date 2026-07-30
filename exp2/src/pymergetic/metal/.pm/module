@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Namespace package \u2014 Metal kernel modules (boot, dt, mem, rt, \u2026)."
+}

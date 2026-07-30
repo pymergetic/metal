@@ -161,3 +161,9 @@ inc_out.write_text("\n".join(lines) + "\n")
 nbytes = sum(p.stat().st_size for _, p in mods)
 print(f"embed-mods: wrote {inc_out} ({nbytes} guest bytes, {len(mods)} mods)")
 PY
+
+# Phase-5 hook: refresh name table for `metal pack` artifacts (docs/TOOLING.md).
+# Does not yet byte-embed those packages into embed_mods.inc.c.
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/lib/metal-packages.sh"
+pm_metal_packages_write_embed_inc || true

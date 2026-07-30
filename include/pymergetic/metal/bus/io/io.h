@@ -23,6 +23,7 @@ typedef enum {
   PM_METAL_IO_NET,
   PM_METAL_IO_RANDOM,
   PM_METAL_IO_BLK,
+  PM_METAL_IO_MEM, /* partitioning intel only — not an access path */
   PM_METAL_IO_CLASS_COUNT
 } pm_metal_io_class_t;
 

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Stub: exp2 has no firmware image until a real build exists.
+# See exp2/README.md.
+set -euo pipefail
+
+EXP2="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ELF="${EXP2}/build/x86_64_bios/metal.qemu.elf"
+
+if [[ ! -f "${ELF}" ]]; then
+	echo "exp2/scripts/run: no image at ${ELF}" >&2
+	echo "  exp2 is a blank shell — build is stubbed until sources exist." >&2
+	echo "  See ${EXP2}/README.md" >&2
+	exit 1
+fi
+
+echo "exp2/scripts/run: ${ELF}" >&2
+set +e
+qemu-system-x86_64 \
+	-machine q35,accel=kvm:tcg \
+	-smp 1 \
+	-m 512 \
+	-display none \
+	-device isa-debug-exit,iobase=0x501,iosize=0x02 \
+	-serial stdio \
+	-kernel "${ELF}"
+ec=$?
+set -e
+if [[ "${ec}" -eq 1 ]]; then
+	exit 0
+fi
+exit "${ec}"

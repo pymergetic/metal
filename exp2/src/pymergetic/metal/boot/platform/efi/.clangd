@@ -1,0 +1,10 @@
+# Closest config for EFI ports.
+CompileFlags:
+  CompilationDatabase: None
+  Add:
+    - -xc
+    - -std=c11
+    - -ffreestanding
+    - -DPM_METAL_BOOT_TARGET_EFI=1
+    - -I../../../..
+    - -I../../../../pymergetic/metal

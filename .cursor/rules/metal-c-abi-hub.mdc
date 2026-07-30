@@ -1,0 +1,104 @@
+---
+description: Lang pool codegen — one impl in, emit other pool faces; cpp under c; toml output-only not default
+alwaysApply: true
+---
+
+# Lang pool (polyglot codegen)
+
+Full write-up: [`docs/definitions/module.md`](../../docs/definitions/module.md)
+§ "Lang pool".
+
+**Shape:**
+
+```text
+impl (one of: rs | c | cpp | py)
+        --export-->  in-memory catalog
+        --emit---->  other pool faces
+
+Pool slots:  c  |  rs  |  py  |  toml
+Default emit: c, rs, py  (minus the impl's slot)
+toml: output-only face {base}.toml; not written unless --emit toml
+cpp: same pool slot as c (human may be .cpp; face is still {base}.h)
+```
+
+- **Never** regenerate human `__init__.{impl_ext}`.
+- **Never** invent Py↔Rust shortcuts that skip the C runtime border
+  (`__init__.h` when the `c` slot is emitted).
+- One sync run keeps the catalog in memory for every emit.
+- Prefer **Python + almost no libs** (`re`, tiny parsers). No cbindgen/libclang.
+- **Async tooling:** `metal_cli` commands are `async def`; only the CLI
+  entrypoint runs the event loop.
+
+`metal mod sync` keeps the in-file banner write gate and module-local
+`.gitignore` for every generated face.
+
+## Consume generated faces — never duplicate foreign ABI
+
+When module A calls module B and B’s impl language is **not** A’s:
+
+| B `impl` | A is C/C++ | A is Rust | A is Python |
+|----------|------------|-----------|-------------|
+| `rs` / `py` | `#include` B’s generated `{base}.h` | generated `{base}.rs` (`#[path]` / re-export) | generated `{base}.pyi` |
+| `c` / `cpp` | `#include` B’s **human** `{base}.h` | generated `{base}.rs` | generated `{base}.pyi` |
+
+**Banned:** hand-rolled `extern "C"` blocks, copy-pasted `#[repr(C)]`
+structs, or private twin headers that restate another module’s border.
+That duplication drifts from `metal mod sync` and wastes reading effort.
+
+Thin safe wrappers in the consumer (`boot::api::…`) are fine — they must
+call through the provider’s face, not redeclare it.
+
+Edit the provider’s human impl, then `metal mod sync`. Do not “fix” a
+generated face by hand (banner write gate).
+
+## Fixed v2 module schema (private files)
+
+Under `.pm/` (see `docs/definitions/module.md`):
+
+| File | Role |
+|------|------|
+| `.pm/module` | JSON metadata (`type`, `name`, `impl`, …) |
+| `.pm/Cargo.toml` | Rust crate when `impl=rs` |
+| `.pm/build.{ext}` | Build hook |
+| `.pm/smoke.{ext}` | Host smoke — `metal mod test` |
+
+Package entry remains `__init__.{ext}` at the module root.
+
+## C ABI symbol names (full module prefix)
+
+Canonical: [`docs/SOURCETREE.md`](../../docs/SOURCETREE.md) (contract naming).
+
+Every `#[no_mangle] extern "C"` / public C export under
+`pymergetic/metal/<module>/…` uses the **full path prefix**, not a
+stem-only short name:
+
+```text
+pm_metal_<module>[_<subdir>…][_<sibling_stem>]_<verb…>
+```
+
+- Include every directory segment after `pymergetic/metal/`.
+- Package entry is always `__init__.{ext}` — **never** put `__init__`
+  in the symbol prefix (`mem/__init__.rs` → `pm_metal_mem_*`).
+- Sibling stems in the same dir keep their name (`mem/arena.rs` →
+  `pm_metal_mem_arena_*`). Nested modules use their dir name
+  (`mem/tlsf/__init__.rs` → `pm_metal_mem_tlsf_*`).
+
+| Source | Prefix | Example |
+|--------|--------|---------|
+| `mem/__init__.rs` | `pm_metal_mem_` | `pm_metal_mem_alloc` |
+| `mem/arena/__init__.rs` | `pm_metal_mem_arena_` | `pm_metal_mem_arena_map` |
+| `mem/tlsf/__init__.rs` | `pm_metal_mem_tlsf_` | `pm_metal_mem_tlsf_malloc` |
+| `util/lz4.h` | `pm_metal_util_lz4_` | `pm_metal_util_lz4_compress` |
+
+**Banned:** `pm_metal_tlsf_*`, `pm_metal_arena_*` (missing `mem_`), or any
+export that drops a path segment so two modules can collide.
+After renaming exports, run `metal mod sync` so faces match.
+
+## External libs stay external
+
+Do **not** rewrite a vendored upstream (e.g. Conte TLSF in
+`external/tlsf`) in Rust “because the module is Rust” — EFI/BIOS already
+compile that C. Wire it (`.pm/build.rs` / port shim / FFI) and put Metal
+prefixes only on the thin border (`pm_metal_mem_tlsf_*` → `tlsf_*`).
+Reimplement only with a concrete reason (measured perf, missing freestanding
+portability, API gap you must own). Default: use the external.

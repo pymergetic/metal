@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# Build exp2 BIOS firmware: Multiboot ELF64 + QEMU ELF32 trampoline.
+# Sources: exp2/src only (+ Rust mem crate / Conte TLSF via metal mod build).
+set -euo pipefail
+
+EXP2="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "${EXP2}/.." && pwd)"
+METAL="${ROOT}/tools/metal/metal"
+BIOS="${EXP2}/src/pymergetic/metal/boot/platform/bios"
+PRIVATE="${EXP2}/src/pymergetic/metal/boot/platform/private"
+SRC="${EXP2}/src"
+OUT="${EXP2}/build/x86_64_bios"
+OBJ="${OUT}/obj"
+ARCH="${1:-x86_64}"
+
+if [[ "${ARCH}" != "x86_64" ]]; then
+	echo "exp2/scripts/build: only x86_64 supported (got ${ARCH})" >&2
+	exit 1
+fi
+
+if [[ ! -x "${METAL}" ]]; then
+	echo "exp2/scripts/build: missing ${METAL}" >&2
+	exit 1
+fi
+
+CC="${CC:-clang}"
+LD="${LD:-ld.lld}"
+if ! command -v "${CC}" >/dev/null 2>&1; then
+	CC=gcc
+fi
+if ! command -v "${LD}" >/dev/null 2>&1; then
+	LD=ld
+fi
+
+mkdir -p "${OBJ}"
+rm -f "${OUT}/metal.elf" "${OUT}/metal.qemu.elf"
+
+echo "exp2 build: metal mod sync + build boot (pulls rt/mem/dt)"
+"${METAL}" mod sync
+"${METAL}" mod build boot
+BOOT_A="${EXP2}/src/pymergetic/metal/boot/.target/x86_64-unknown-none/release/libpymergetic_metal_boot.a"
+if [[ ! -f "${BOOT_A}" ]]; then
+	echo "exp2/scripts/build: missing ${BOOT_A}" >&2
+	exit 1
+fi
+
+CFLAGS=(
+	-std=c11
+	-ffreestanding
+	-fno-stack-protector
+	-fno-pic
+	-fno-pie
+	-m64
+	-mno-red-zone
+	-Wall
+	-Wextra
+	-Wno-unused-parameter
+	-O2
+	-DPM_METAL_BOOT_TARGET_BIOS=1
+	-I"${SRC}"
+	-I"${BIOS}"
+)
+
+compile_c() {
+	local src="$1"
+	local base
+	base="$(basename "${src}" .c)"
+	echo "  cc  ${base}.c"
+	"${CC}" "${CFLAGS[@]}" -c "${src}" -o "${OBJ}/${base}.o"
+}
+
+compile_S() {
+	local src="$1"
+	local base
+	base="$(basename "${src}" .S)"
+	echo "  as  ${base}.S"
+	"${CC}" "${CFLAGS[@]}" -c "${src}" -o "${OBJ}/${base}.o"
+}
+
+# memset/memcpy come from mem/tlsf/_port.c (inside libmetal_mem.a).
+for f in uart mem_map power handoff main; do
+	compile_c "${BIOS}/${f}.c"
+done
+compile_c "${PRIVATE}/bringup.c"
+compile_S "${BIOS}/crt0.S"
+
+ELF="${OUT}/metal.elf"
+echo "exp2 build: link ${ELF}"
+"${LD}" -m elf_x86_64 -nostdlib -static -z noexecstack \
+	-T "${BIOS}/link.ld" \
+	-o "${ELF}" \
+	"${OBJ}/crt0.o" \
+	"${OBJ}/uart.o" \
+	"${OBJ}/mem_map.o" \
+	"${OBJ}/power.o" \
+	"${OBJ}/handoff.o" \
+	"${OBJ}/bringup.o" \
+	"${OBJ}/main.o" \
+	"${BOOT_A}"
+
+# QEMU -kernel cannot load ELF64 — Multiboot1 ELF32 trampoline embeds metal.elf.
+TRAMP_ELF="${OUT}/metal.qemu.elf"
+echo "exp2 build: trampoline ${TRAMP_ELF}"
+"${CC}" -m32 -ffreestanding -fno-pic -fno-stack-protector -Wall -O2 \
+	-c "${BIOS}/trampoline_load.c" -o "${OBJ}/trampoline_load.o"
+"${CC}" -m32 -c "${BIOS}/trampoline32.S" -o "${OBJ}/trampoline32.o"
+"${CC}" -m64 -c "${BIOS}/trampoline64.S" -o "${OBJ}/trampoline64_64.o"
+objcopy -O elf32-i386 "${OBJ}/trampoline64_64.o" "${OBJ}/trampoline64.o"
+"${LD}" -m elf_i386 -r -b binary -o "${OBJ}/metal_bin.o" "${ELF}"
+BIN_START="$(nm "${OBJ}/metal_bin.o" | awk '/_start$/{print $3; exit}')"
+BIN_END="$(nm "${OBJ}/metal_bin.o" | awk '/_end$/{print $3; exit}')"
+if [[ -z "${BIN_START}" || -z "${BIN_END}" ]]; then
+	echo "exp2/scripts/build: failed to find binary blob symbols" >&2
+	nm "${OBJ}/metal_bin.o" >&2 || true
+	exit 1
+fi
+objcopy \
+	--redefine-sym "${BIN_START}=_binary_metal_elf_start" \
+	--redefine-sym "${BIN_END}=_binary_metal_elf_end" \
+	"${OBJ}/metal_bin.o" "${OBJ}/metal_bin_named.o"
+"${LD}" -m elf_i386 -nostdlib -static -z noexecstack \
+	-T "${BIOS}/link32.ld" \
+	-o "${TRAMP_ELF}" \
+	"${OBJ}/trampoline32.o" "${OBJ}/trampoline64.o" \
+	"${OBJ}/trampoline_load.o" "${OBJ}/metal_bin_named.o"
+
+echo "exp2 build: ok → ${ELF} + ${TRAMP_ELF}"
+ls -la "${ELF}" "${TRAMP_ELF}"
