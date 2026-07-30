@@ -11,11 +11,20 @@ source integration. Module layout rules:
 ./tools/metal/metal br exp2          # build then run (default target: exp2)
 ./tools/metal/metal kernel build exp2
 ./tools/metal/metal kernel run exp2
+./tools/forge mod check              # Rust forge (solo); see below
 ```
 
 The CLI is a thin Python package under [`tools/metal/`](../tools/metal/).
 It **facades** existing `scripts/build.d/…` for kernel work and grows new
 commands (`mod`, `pack`, `integrate`) beside them.
+
+**Forge (Rust, experimental):** [`exp2/src/pymergetic/metal/forge/`](../exp2/src/pymergetic/metal/forge/)
+is a normal `.pm` module (codegen core + minimal `_port/{solo,metal}` shims).
+The dumb Linux **app** lives outside that tree:
+[`tools/forge-cli/`](../tools/forge-cli/) (launcher [`tools/forge`](../tools/forge)).
+Inside later: same core + `metal` port (process + console, may `Pending`).
+**`metal mod *` stays the authority** until forge is confirmed safe — do
+not facade yet. Zero crates.io deps on the forge lib.
 
 **Async shape:** command entrypoints are `async def`; only
 `tools/metal/metal` / `metal_cli.cli.main` runs `asyncio.run(...)`.

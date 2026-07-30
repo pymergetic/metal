@@ -290,6 +290,26 @@ Never auto-generate `__init__.py` — that is only human source when
 Prefer explicit stem imports + `_`-private helpers over a project-local
 resolver that duplicates Cargo/link deps.
 
+### Forge (codegen engine module)
+
+[`exp2/src/pymergetic/metal/forge/`](../../exp2/src/pymergetic/metal/forge/)
+is a normal Metal module (`impl=rs`, lang-pool faces on `__init__`) that
+*implements* module sync/check. Per pool language: `_import_{c,rs,py,toml}`
+(source → catalog) and `_export_{c,rs,py,toml}` (catalog → face); stubs
+allowed until wired. `_gitignore` owns the managed ignore block.
+`_port/{solo,metal}` implement **`ForgeStore`** / **`ForgeSession`**.
+Ops return **`ForgePoll`** (`Ready` / `Pending`); solo is always-Ready.
+
+| Face | Port | Hosting |
+|------|------|---------|
+| Outside | `_port/solo` shim only | App [`tools/forge-cli/`](../../tools/forge-cli/) (launcher [`tools/forge`](../../tools/forge)) |
+| Inside (later) | `_port/metal` | Metal command → `fn_process` + console attach |
+
+Prebuild faces with solo (or today’s Python `metal mod sync`); later the
+binary can keep human stems only and emit other pool faces on demand.
+Forge is **not** linked into EFI by default. Python `tools/metal` remains
+authoritative until forge is confirmed.
+
 ### Fixed v2 schema files (private)
 
 All under `.pm/` (never codegen targets):

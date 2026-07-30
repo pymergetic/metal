@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Outside face: solo Linux app (tools/forge-cli) over pymergetic.metal.forge.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+MANIFEST="$ROOT/tools/forge-cli/Cargo.toml"
+export CARGO_TARGET_DIR="$ROOT/tools/forge-cli/.target"
+exec cargo run --manifest-path "$MANIFEST" --release -- "$@"

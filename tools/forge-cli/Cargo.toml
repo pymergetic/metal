@@ -1,0 +1,18 @@
+[package]
+name = "forge"
+version = "0.1.0"
+edition = "2021"
+# Outside solo app — not part of the Metal module tree.
+# Depends on pymergetic.metal.forge with the solo FS/stdio port only.
+
+[[bin]]
+name = "forge"
+path = "main.rs"
+
+[dependencies]
+pymergetic_metal_forge = { path = "../../exp2/src/pymergetic/metal/forge/.pm", features = ["solo"] }
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

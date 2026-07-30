@@ -2,6 +2,10 @@
 /build/
 /exp2/build/
 
+# Cargo outs (host tools + module crates; modules also list these locally)
+**/.target/
+**/target/
+
 # Local Kconfig selections (defaults: config/defconfig)
 /config/.config
 /config/.config.old
