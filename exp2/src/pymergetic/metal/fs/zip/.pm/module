@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.fs.zip",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "RO store-method ZIP pack FS + pack builder."
+}

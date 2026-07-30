@@ -19,7 +19,7 @@ extern "C" {
 }
 
 #[cfg(not(any(target_os = "none", target_os = "uefi")))]
-fn pm_metal_boot_time_ops() -> *const BootTimeOps {
+unsafe fn pm_metal_boot_time_ops() -> *const BootTimeOps {
     core::ptr::null()
 }
 

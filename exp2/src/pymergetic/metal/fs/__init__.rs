@@ -1,0 +1,226 @@
+//! Async-first fd API — resolve via vfs, dispatch through public [`ops`].
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
+#![allow(dead_code, non_camel_case_types)]
+
+use core::ffi::c_void;
+
+use pymergetic_metal_async as _;
+use pymergetic_metal_rt as _;
+use pymergetic_metal_vfs as vfs;
+
+#[path = "ops.rs"]
+mod ops;
+
+pub use ops::*;
+
+extern "C" {
+    fn pm_metal_async_completed_u32(v: u32) -> u32;
+    fn pm_metal_async_result_u32(h: u32) -> u32;
+}
+
+pub type pm_metal_fs_h = u32;
+pub const PM_METAL_FS_INVALID: u32 = 0xffff_ffff;
+
+pub const PM_METAL_FS_O_RDONLY: u32 = 1;
+pub const PM_METAL_FS_O_WRONLY: u32 = 2;
+pub const PM_METAL_FS_O_RDWR: u32 = 3;
+pub const PM_METAL_FS_O_CREAT: u32 = 4;
+pub const PM_METAL_FS_O_TRUNC: u32 = 8;
+pub const PM_METAL_FS_O_APPEND: u32 = 16;
+pub const PM_METAL_FS_O_DIRECTORY: u32 = 32;
+
+pub const PM_METAL_FS_SEEK_SET: u32 = 0;
+pub const PM_METAL_FS_SEEK_CUR: u32 = 1;
+pub const PM_METAL_FS_SEEK_END: u32 = 2;
+
+pub const PM_METAL_FS_TYPE_FILE: u32 = 1;
+pub const PM_METAL_FS_TYPE_DIR: u32 = 2;
+
+#[repr(C)]
+pub struct pm_metal_fs_stat_t {
+    pub size: u32,
+    pub type_: u32,
+}
+
+fn done(v: u32) -> u32 {
+    unsafe { pm_metal_async_completed_u32(v) }
+}
+
+fn err() -> u32 {
+    done(PM_METAL_FS_INVALID)
+}
+
+unsafe fn resolve_ops(
+    path: *const u8,
+) -> Option<(&'static pm_metal_fs_ops_t, *mut c_void, *const u8)> {
+    let mut r = vfs::pm_metal_vfs_resolve_t {
+        ops: core::ptr::null(),
+        ctx: core::ptr::null_mut(),
+        rel: core::ptr::null(),
+        mount: 0,
+    };
+    if vfs::pm_metal_vfs_resolve(path, &mut r) != 0 || r.ops.is_null() {
+        return None;
+    }
+    let ops = &*(r.ops as *const pm_metal_fs_ops_t);
+    Some((ops, r.ctx, r.rel))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_open_async(path: *const u8, flags: u32) -> u32 {
+    let Some((ops, ctx, rel)) = resolve_ops(path) else {
+        return err();
+    };
+    let Some(f) = ops.open else {
+        return err();
+    };
+    f(ctx, rel, flags)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_close_async(h: pm_metal_fs_h) -> u32 {
+    /* close needs mount ctx — drivers encode mount in high bits or track globally.
+     * v1: drivers ignore ctx on close and look up h in their table. */
+    let _ = h;
+    done(0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_fread_async(
+    h: pm_metal_fs_h,
+    dest: *mut u8,
+    len: u32,
+) -> u32 {
+    /* Driver-global fd table: try each registered ops.fread until one accepts.
+     * Simpler v1: require open to return handle with driver id — for now call
+     * through a thread-local last ops from open. */
+    LAST_OPS.map(|ops| {
+        let f = ops.fread?;
+        Some(f(LAST_CTX, h, dest, len))
+    })
+    .flatten()
+    .unwrap_or_else(err)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_fwrite_async(
+    h: pm_metal_fs_h,
+    src: *const u8,
+    len: u32,
+) -> u32 {
+    LAST_OPS
+        .and_then(|ops| ops.fwrite.map(|f| f(LAST_CTX, h, src, len)))
+        .unwrap_or_else(err)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_fpread_async(
+    h: pm_metal_fs_h,
+    off: u32,
+    dest: *mut u8,
+    len: u32,
+) -> u32 {
+    LAST_OPS
+        .and_then(|ops| ops.fpread.map(|f| f(LAST_CTX, h, off, dest, len)))
+        .unwrap_or_else(err)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_fpwrite_async(
+    h: pm_metal_fs_h,
+    off: u32,
+    src: *const u8,
+    len: u32,
+) -> u32 {
+    match LAST_OPS.and_then(|ops| ops.fpwrite) {
+        Some(f) => f(LAST_CTX, h, off, src, len),
+        None => err(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_lseek(h: pm_metal_fs_h, off: i32, whence: u32) -> i32 {
+    LAST_OPS
+        .and_then(|ops| ops.lseek.map(|f| f(LAST_CTX, h, off, whence)))
+        .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_stat_async(path: *const u8, dest: *mut u8) -> u32 {
+    let Some((ops, ctx, rel)) = resolve_ops(path) else {
+        return err();
+    };
+    let Some(f) = ops.stat else {
+        return err();
+    };
+    f(ctx, rel, dest)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_readdir_async(
+    h: pm_metal_fs_h,
+    name_dest: *mut u8,
+    name_cap: u32,
+) -> u32 {
+    LAST_OPS
+        .and_then(|ops| ops.readdir.map(|f| f(LAST_CTX, h, name_dest, name_cap)))
+        .unwrap_or_else(err)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_mkdir_async(path: *const u8) -> u32 {
+    let Some((ops, ctx, rel)) = resolve_ops(path) else {
+        return err();
+    };
+    let Some(f) = ops.mkdir else {
+        return err();
+    };
+    f(ctx, rel)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_unlink_async(path: *const u8) -> u32 {
+    let Some((ops, ctx, rel)) = resolve_ops(path) else {
+        return err();
+    };
+    let Some(f) = ops.unlink else {
+        return err();
+    };
+    f(ctx, rel)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_rename_async(old: *const u8, new: *const u8) -> u32 {
+    let Some((ops, ctx, rel)) = resolve_ops(old) else {
+        return err();
+    };
+    let Some(f) = ops.rename else {
+        return err();
+    };
+    /* new path: resolve for same mount rel — pass full new for driver */
+    f(ctx, rel, new)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_result(h: u32) -> u32 {
+    pm_metal_async_result_u32(h)
+}
+
+/// Remember ops/ctx from last successful open (v1 fd routing).
+pub static mut LAST_OPS: Option<&'static pm_metal_fs_ops_t> = None;
+pub static mut LAST_CTX: *mut c_void = core::ptr::null_mut();
+
+/// Called by drivers after open succeeds.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_set_active_ops(
+    ops: *const pm_metal_fs_ops_t,
+    ctx: *mut c_void,
+) {
+    if ops.is_null() {
+        LAST_OPS = None;
+        LAST_CTX = core::ptr::null_mut();
+    } else {
+        LAST_OPS = Some(&*ops);
+        LAST_CTX = ctx;
+    }
+}

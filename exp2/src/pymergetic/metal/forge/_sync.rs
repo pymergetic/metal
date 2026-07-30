@@ -90,18 +90,13 @@ fn impl_sources<S: ForgeStore>(store: &mut S, mod_dir: &str, impl_lang: &str) ->
         })
         .collect();
     files.sort();
-    // prefer __init__ first; for c prefer .h over .c for same stem
+    // prefer __init__ first; then stem name (C/C++ sources are headers only)
     files.sort_by(|a, b| {
-        let sa = a.rsplit('.').nth(1).unwrap_or(a);
-        let sb = b.rsplit('.').nth(1).unwrap_or(b);
-        // stem is before last .
-        let stem_a = a.rsplit_once('.').map(|(s, _)| s).unwrap_or(a);
-        let stem_b = b.rsplit_once('.').map(|(s, _)| s).unwrap_or(b);
+        let stem_a = a.rsplit_once('.').map(|(s, _)| s).unwrap_or(a.as_str());
+        let stem_b = b.rsplit_once('.').map(|(s, _)| s).unwrap_or(b.as_str());
         let ka = if stem_a == ENTRY_STEM { 0 } else { 1 };
         let kb = if stem_b == ENTRY_STEM { 0 } else { 1 };
-        ka.cmp(&kb)
-            .then(stem_a.cmp(stem_b))
-            .then(ext_rank(sa).cmp(&ext_rank(sb)))
+        ka.cmp(&kb).then(stem_a.cmp(stem_b))
     });
     for name in files {
         let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(&name);
@@ -124,14 +119,6 @@ fn impl_sources<S: ForgeStore>(store: &mut S, mod_dir: &str, impl_lang: &str) ->
         }
     }
     out
-}
-
-fn ext_rank(ext: &str) -> u8 {
-    match ext {
-        "h" | "hpp" => 0,
-        "c" | "cpp" | "rs" | "py" => 1,
-        _ => 2,
-    }
 }
 
 fn remove_marked<S: ForgeStore>(store: &mut S, mod_dir: &str, rel: &str) -> bool {

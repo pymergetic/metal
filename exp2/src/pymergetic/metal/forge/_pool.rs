@@ -71,8 +71,9 @@ pub fn impl_ext(impl_lang: &str) -> Option<&'static str> {
 
 pub fn impl_source_exts(impl_lang: &str) -> &'static [&'static str] {
     match impl_lang {
-        "c" => &["h", "c"],
-        "cpp" => &["hpp", "h", "cpp"],
+        /* C border lives in headers — never scrape .c bodies for binds. */
+        "c" => &["h"],
+        "cpp" => &["hpp", "h"],
         "rs" => &["rs"],
         "py" => &["py"],
         _ => &[],

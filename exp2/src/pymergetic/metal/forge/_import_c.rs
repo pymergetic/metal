@@ -137,10 +137,110 @@ fn parse_c_arg(part: &str, idx: usize) -> Option<Arg> {
     })
 }
 
+/// Join newlines that sit inside `(...)` so multi-line prototypes parse as one decl.
+fn flatten_paren_newlines(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut depth = 0i32;
+    for ch in raw.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                out.push(ch);
+            }
+            ')' => {
+                depth -= 1;
+                out.push(ch);
+            }
+            '\n' | '\r' if depth > 0 => out.push(' '),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn is_call_site_ret(ret: &str) -> bool {
+    matches!(
+        ret,
+        "return" | "if" | "for" | "while" | "switch" | "sizeof" | "case" | "else"
+    )
+}
+
+fn import_typedefs(raw: &str, cat: &mut Catalog) {
+    /* typedef uint8_t name_t[N]; */
+    for line in raw.split('\n') {
+        let line = line.trim();
+        if !line.starts_with("typedef ") || !line.ends_with(';') {
+            continue;
+        }
+        let body = line["typedef ".len()..line.len() - 1].trim();
+        if body.starts_with("union") || body.starts_with("struct") || body.starts_with("enum") {
+            continue;
+        }
+        if let Some(br) = body.rfind('[') {
+            if body.ends_with(']') {
+                let head = body[..br].trim();
+                if let Some(sp) = head.rfind(' ') {
+                    let ty = head[..sp].trim();
+                    let name = head[sp + 1..].trim();
+                    let n = &body[br + 1..body.len() - 1];
+                    cat.typedefs.push(crate::_catalog::Typedef {
+                        name: String::from(name),
+                        ty: alloc::format!("{}[{}]", ty, n),
+                    });
+                }
+            }
+        }
+    }
+    /* typedef union tag { fields } name_t; */
+    let mut search = 0;
+    while let Some(rel) = raw[search..].find("typedef union ") {
+        let at = search + rel;
+        let after = &raw[at + "typedef union ".len()..];
+        if let Some(brace) = after.find('{') {
+            if let Some(close_rel) = after[brace..].find('}') {
+                let end = brace + close_rel;
+                let tail = after[brace + 1..end].trim();
+                let after_brace = after[end + 1..].trim_start();
+                let name = after_brace
+                    .split(|c: char| c == ';' || c.is_whitespace())
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !name.is_empty() {
+                    let mut fields = Vec::new();
+                    for part in tail.split(';') {
+                        let part = collapse_ws(part);
+                        if part.is_empty() {
+                            continue;
+                        }
+                        if let Some(a) = parse_c_arg(&part, fields.len()) {
+                            fields.push(crate::_catalog::Field {
+                                name: a.name,
+                                ty: a.ty,
+                            });
+                        }
+                    }
+                    if !fields.is_empty() {
+                        cat.structs.push(crate::_catalog::Struct {
+                            name: String::from(name),
+                            fields,
+                            is_union: true,
+                        });
+                    }
+                }
+                search = at + end + 1;
+                continue;
+            }
+        }
+        search = at + 1;
+    }
+}
+
 pub fn import(text: &str) -> Catalog {
-    let raw = strip_c_noise(text);
+    let raw = flatten_paren_newlines(&strip_c_noise(text));
     let mut cat = Catalog::default();
     let mut seen: Vec<String> = Vec::new();
+    import_typedefs(&raw, &mut cat);
 
     // static inline RET NAME(ARGS) {
     let mut search = 0;
@@ -171,7 +271,7 @@ pub fn import(text: &str) -> Catalog {
         search = at + 1;
     }
 
-    // Top-level decls ending in ;
+    // Top-level decls ending in ; (headers + rare .c prototypes).
     for line in raw.split('\n') {
         let line = line.trim();
         if !line.ends_with(';') || line.contains("(*") || line.contains("->") {
@@ -212,7 +312,11 @@ pub fn import(text: &str) -> Catalog {
                 continue;
             }
             let ret = parts[..parts.len() - 1].join(" ");
-            if ret.contains('(') || ret.contains(')') {
+            if ret.contains('(') || ret.contains(')') || is_call_site_ret(&ret) {
+                continue;
+            }
+            /* Skip body call-sites / statements mistaken for decls. */
+            if fname.starts_with('&') || fname.starts_with('*') {
                 continue;
             }
             let args_s = &line[paren + 1..paren + close];

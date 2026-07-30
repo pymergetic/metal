@@ -343,6 +343,27 @@ pub fn set_result_u32(h: Handle, v: u32) {
     });
 }
 
+/// Create a handle that is already `Done` with `result_u32 = v` (no runner step).
+/// For RAM/sync backends behind an async API — awaiters see DONE immediately.
+pub fn completed_u32(v: u32) -> Handle {
+    unsafe extern "C" fn noop_step(_h: Handle) -> u32 {
+        Status::Done as u32
+    }
+    let h = coro_create(noop_step, 0);
+    if h == INVALID {
+        return INVALID;
+    }
+    with_lock(|e| {
+        if slot_ok(e, h) {
+            e.slots[h as usize].status = Status::Done;
+            e.slots[h as usize].result_u32 = v;
+            e.slots[h as usize].is_task = true;
+            e.slots[h as usize].queued = false;
+        }
+    });
+    h
+}
+
 pub fn result_u32(h: Handle) -> u32 {
     with_lock(|e| {
         if !slot_ok(e, h) {

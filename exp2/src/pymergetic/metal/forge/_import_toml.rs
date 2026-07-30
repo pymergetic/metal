@@ -271,6 +271,7 @@ pub fn import(text: &str) -> Result<Catalog, ()> {
             cur_struct = Some(Struct {
                 name: String::new(),
                 fields: Vec::new(),
+                is_union: false,
             });
             i += "[[struct]]".len();
             continue;

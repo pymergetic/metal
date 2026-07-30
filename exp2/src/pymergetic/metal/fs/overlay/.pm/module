@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.fs.overlay",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Union mount: RO lower + RW upper (Linux-like overlay)."
+}

@@ -213,6 +213,7 @@ pub fn import(text: &str) -> Catalog {
                         cat.structs.push(Struct {
                             name: String::from(name),
                             fields,
+                            is_union: false,
                         });
                     }
                 }

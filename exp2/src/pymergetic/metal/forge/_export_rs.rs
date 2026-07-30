@@ -19,11 +19,62 @@ fn rs_ident(name: &str) -> String {
     }
 }
 
+fn rs_typedef_ty(c_ty: &str) -> String {
+    let t = collapse_ws(c_ty);
+    if let Some(br) = t.rfind('[') {
+        if t.ends_with(']') {
+            let head = t[..br].trim();
+            let n = t[br + 1..t.len() - 1].trim();
+            let elem = rs_ty(head);
+            /* Known macro lengths used by fourcc/eightcc headers. */
+            let nlit = match n {
+                "PM_METAL_UTIL_FOURCC_LEN" | "4" => "4",
+                "PM_METAL_UTIL_EIGHTCC_LEN" | "8" => "8",
+                other => other,
+            };
+            return alloc::format!("[{}; {}]", elem, nlit);
+        }
+    }
+    rs_ty(&t)
+}
+
 fn rs_ty(c_ty: &str) -> String {
     let t = collapse_ws(c_ty);
+    /* C array params decay to pointers: char out[N] -> *mut c_char */
+    if let Some(br) = t.rfind('[') {
+        if t.ends_with(']') {
+            let head = t[..br].trim();
+            let const_arr = head.split_whitespace().any(|x| x == "const");
+            let base: String = head
+                .split_whitespace()
+                .filter(|x| *x != "const")
+                .collect::<Vec<_>>()
+                .join(" ");
+            let elem = rs_ty(&base);
+            return if const_arr {
+                alloc::format!("*const {}", elem)
+            } else {
+                alloc::format!("*mut {}", elem)
+            };
+        }
+    }
     let stars = t.chars().filter(|c| *c == '*').count();
     if stars == 0 {
-        return match t.as_str() {
+        let is_const = t.split_whitespace().any(|x| x == "const");
+        let base: String = t
+            .split_whitespace()
+            .filter(|x| *x != "const")
+            .collect::<Vec<_>>()
+            .join(" ");
+        /* Array typedefs as params decay to pointers (const|mut). */
+        if base.ends_with("_wire_t") {
+            return if is_const {
+                String::from("*const u8")
+            } else {
+                String::from("*mut u8")
+            };
+        }
+        return match base.as_str() {
             "void" => String::from("()"),
             "int" => String::from("i32"),
             "int8_t" => String::from("i8"),
@@ -36,7 +87,7 @@ fn rs_ty(c_ty: &str) -> String {
             "uint64_t" => String::from("u64"),
             "size_t" | "uintptr_t" => String::from("usize"),
             "char" => String::from("core::ffi::c_char"),
-            _ => t,
+            _ => base,
         };
     }
     let head = t.split('*').next().unwrap_or("void");
@@ -213,19 +264,35 @@ pub fn export(
     for st in &cat.structs {
         lines.push(String::from("#[repr(C)]"));
         lines.push(String::from("#[derive(Clone, Copy)]"));
-        lines.push(alloc::format!("pub struct {} {{", st.name));
+        let kind = if st.is_union { "union" } else { "struct" };
+        lines.push(alloc::format!("pub {} {} {{", kind, st.name));
         for f in &st.fields {
+            let fty = {
+                let t = collapse_ws(&f.ty);
+                let base: String = t
+                    .split_whitespace()
+                    .filter(|x| *x != "const")
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                /* Struct/union fields keep array typedef names (not param decay). */
+                if base.ends_with("_wire_t") {
+                    base
+                } else {
+                    rs_ty(&f.ty)
+                }
+            };
             lines.push(alloc::format!(
                 "    pub {}: {},",
                 rs_ident(&f.name),
-                rs_ty(&f.ty)
+                fty
             ));
         }
         lines.push(String::from("}"));
         lines.push(String::new());
     }
     for td in &cat.typedefs {
-        lines.push(alloc::format!("pub type {} = {};", td.name, rs_ty(&td.ty)));
+        let rs = rs_typedef_ty(&td.ty);
+        lines.push(alloc::format!("pub type {} = {};", td.name, rs));
     }
     if !cat.typedefs.is_empty() {
         lines.push(String::new());

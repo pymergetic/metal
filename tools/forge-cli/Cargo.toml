@@ -10,7 +10,7 @@ name = "forge"
 path = "main.rs"
 
 [dependencies]
-pymergetic_metal_forge = { path = "../../exp2/src/pymergetic/metal/forge/.pm", features = ["solo"] }
+pymergetic_metal_forge = { path = "../../exp2/src/pymergetic/metal/forge/.pm", features = ["solo", "builders"] }
 
 [profile.release]
 panic = "abort"

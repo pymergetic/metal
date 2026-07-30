@@ -34,9 +34,9 @@ fn has_flag(sess: &dyn ForgeSession, name: &str) -> bool {
     false
 }
 
-fn usage_lines() -> [&'static str; 10] {
+fn usage_lines() -> [&'static str; 11] {
     [
-        "forge - Metal module codegen (solo host tool)",
+        "forge - Metal module codegen + image builders (solo host tool)",
         "",
         "Usage:",
         "  forge mod sync [--emit toml] [--force] [--metal-root DIR]",
@@ -44,6 +44,7 @@ fn usage_lines() -> [&'static str; 10] {
         "  forge mod clean [--metal-root DIR]",
         "  forge mod ls [--metal-root DIR]",
         "  forge convert SRC DST [--force]",
+        "  forge img mtar|fat|zip|embed|nest ...   (see forge img -h)",
         "  forge version | --version | -V",
         "",
     ]
@@ -89,9 +90,23 @@ pub fn run<S: ForgeStore, Sess: ForgeSession>(
         }
         return cmd_convert(store, sess, &src, &dst, force);
     }
+    if a0 == "img" {
+        #[cfg(feature = "builders")]
+        {
+            return crate::_img::run_img(store, sess);
+        }
+        #[cfg(not(feature = "builders"))]
+        {
+            let _ = crate::_port::block_on(|| {
+                sess.err_line("forge img: rebuild forge-cli with feature builders")
+            });
+            sess.set_exit(2);
+            return 2;
+        }
+    }
     if a0 != "mod" {
         let _ = crate::_port::block_on(|| {
-            sess.err_line("forge: expected 'mod' or 'convert' (see forge --help)")
+            sess.err_line("forge: expected 'mod', 'convert', or 'img' (see forge --help)")
         });
         sess.set_exit(2);
         return 2;

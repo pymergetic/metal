@@ -13,6 +13,7 @@ pub struct Field {
 pub struct Struct {
     pub name: String,
     pub fields: Vec<Field>,
+    pub is_union: bool,
 }
 
 #[derive(Clone, Debug)]

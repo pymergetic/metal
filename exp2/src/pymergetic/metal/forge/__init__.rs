@@ -30,6 +30,9 @@ mod _export_toml;
 mod _gitignore;
 #[path = "_hash.rs"]
 mod _hash;
+#[cfg(feature = "builders")]
+#[path = "_img.rs"]
+mod _img;
 #[path = "_import_c.rs"]
 mod _import_c;
 #[path = "_import_py.rs"]

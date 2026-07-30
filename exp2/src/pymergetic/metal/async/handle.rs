@@ -45,3 +45,9 @@ pub extern "C" fn pm_metal_async_set_result_u32(h: u32, v: u32) {
 pub extern "C" fn pm_metal_async_result_u32(h: u32) -> u32 {
     engine::result_u32(h)
 }
+
+/// Already-complete handle (`DONE`) carrying `v` — for sync backends on async APIs.
+#[no_mangle]
+pub extern "C" fn pm_metal_async_completed_u32(v: u32) -> u32 {
+    engine::completed_u32(v)
+}

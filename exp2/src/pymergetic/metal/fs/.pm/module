@@ -1,0 +1,7 @@
+{
+  "type": "package",
+  "name": "pymergetic.metal.fs",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Async-first VFS fd API + public fstype ops; drivers in fs/mtar, fs/fat."
+}
