@@ -102,3 +102,62 @@ size_t strlen(const char *s)
   }
   return n;
 }
+
+char *strcpy(char *dst, const char *src)
+{
+  size_t i;
+
+  for (i = 0; src[i] != '\0'; i++) {
+    dst[i] = src[i];
+  }
+  dst[i] = '\0';
+  return dst;
+}
+
+char *strchr(const char *s, int c)
+{
+  char ch = (char)c;
+
+  for (;;) {
+    if (*s == ch) {
+      return (char *)s;
+    }
+    if (*s == '\0') {
+      return (char *)0;
+    }
+    s++;
+  }
+}
+
+size_t strspn(const char *s, const char *accept)
+{
+  size_t n = 0;
+  size_t i;
+
+  for (; s[n] != '\0'; n++) {
+    for (i = 0; accept[i] != '\0'; i++) {
+      if (s[n] == accept[i]) {
+        break;
+      }
+    }
+    if (accept[i] == '\0') {
+      break;
+    }
+  }
+  return n;
+}
+
+size_t strcspn(const char *s, const char *reject)
+{
+  size_t n = 0;
+  size_t i;
+
+  for (; s[n] != '\0'; n++) {
+    for (i = 0; reject[i] != '\0'; i++) {
+      if (s[n] == reject[i]) {
+        return n;
+      }
+    }
+  }
+  return n;
+}

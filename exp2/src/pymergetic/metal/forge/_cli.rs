@@ -34,17 +34,19 @@ fn has_flag(sess: &dyn ForgeSession, name: &str) -> bool {
     false
 }
 
-fn usage_lines() -> [&'static str; 11] {
+fn usage_lines() -> [&'static str; 13] {
     [
-        "forge - Metal module codegen + image builders (solo host tool)",
+        "forge - Metal module codegen + image builders + exp2 build (solo host tool)",
         "",
         "Usage:",
         "  forge mod sync [--emit toml] [--force] [--metal-root DIR]",
-        "  forge mod check [--metal-root DIR]",
-        "  forge mod clean [--metal-root DIR]",
-        "  forge mod ls [--metal-root DIR]",
+        "  forge mod check|clean|ls [--metal-root DIR]",
         "  forge convert SRC DST [--force]",
-        "  forge img mtar|fat|zip|embed|nest ...   (see forge img -h)",
+        "  forge img mtar|fat|zip|embed|nest|rootfs|littlefs ...",
+        "  forge config edit|gen|old [--metal-root DIR]",
+        "  forge build [bios|efi|all] [--stress] [--metal-root DIR]",
+        "  forge run   [bios|efi|all] [--metal-root DIR]",
+        "  forge stress [--metal-root DIR]",
         "  forge version | --version | -V",
         "",
     ]
@@ -90,10 +92,58 @@ pub fn run<S: ForgeStore, Sess: ForgeSession>(
         }
         return cmd_convert(store, sess, &src, &dst, force);
     }
+    if a0 == "config" {
+        #[cfg(feature = "solo")]
+        {
+            return crate::_config::run_config(sess, &metal_root);
+        }
+        #[cfg(not(feature = "solo"))]
+        {
+            let _ = crate::_port::block_on(|| sess.err_line("forge config: need solo feature"));
+            sess.set_exit(2);
+            return 2;
+        }
+    }
+    if a0 == "build" {
+        #[cfg(feature = "solo")]
+        {
+            return crate::_build::run_build(sess, &metal_root);
+        }
+        #[cfg(not(feature = "solo"))]
+        {
+            let _ = crate::_port::block_on(|| sess.err_line("forge build: need solo feature"));
+            sess.set_exit(2);
+            return 2;
+        }
+    }
+    if a0 == "run" {
+        #[cfg(feature = "solo")]
+        {
+            return crate::_run::run_qemu(sess, &metal_root);
+        }
+        #[cfg(not(feature = "solo"))]
+        {
+            let _ = crate::_port::block_on(|| sess.err_line("forge run: need solo feature"));
+            sess.set_exit(2);
+            return 2;
+        }
+    }
+    if a0 == "stress" {
+        #[cfg(feature = "solo")]
+        {
+            return crate::_run::run_stress(sess, &metal_root);
+        }
+        #[cfg(not(feature = "solo"))]
+        {
+            let _ = crate::_port::block_on(|| sess.err_line("forge stress: need solo feature"));
+            sess.set_exit(2);
+            return 2;
+        }
+    }
     if a0 == "img" {
         #[cfg(feature = "builders")]
         {
-            return crate::_img::run_img(store, sess);
+            return crate::_img::run_img(store, sess, &metal_root);
         }
         #[cfg(not(feature = "builders"))]
         {
@@ -106,7 +156,9 @@ pub fn run<S: ForgeStore, Sess: ForgeSession>(
     }
     if a0 != "mod" {
         let _ = crate::_port::block_on(|| {
-            sess.err_line("forge: expected 'mod', 'convert', or 'img' (see forge --help)")
+            sess.err_line(
+                "forge: expected mod|convert|img|config|build|run|stress (see forge --help)",
+            )
         });
         sess.set_exit(2);
         return 2;

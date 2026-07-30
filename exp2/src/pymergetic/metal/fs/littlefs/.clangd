@@ -1,0 +1,8 @@
+# vendor/ is on -I for clang build.rs; expose the same path to clangd.
+CompileFlags:
+  Add:
+    - -I
+    - vendor
+    - -I
+    - .
+    - -DLFS_CONFIG=lfs_config.h

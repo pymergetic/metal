@@ -18,6 +18,7 @@ builders = [
   "dep:pymergetic_metal_fs_fat",
   "dep:pymergetic_metal_fs_zip",
   "dep:pymergetic_metal_fs_embed",
+  "dep:pymergetic_metal_fs_littlefs",
   "dep:pymergetic_metal_dev_blk_ram",
   "dep:pymergetic_metal_async",
   "dep:pymergetic_metal_util_lz4",
@@ -34,6 +35,7 @@ pymergetic_metal_fs_mtar = { path = "../../fs/mtar/.pm", optional = true }
 pymergetic_metal_fs_fat = { path = "../../fs/fat/.pm", optional = true }
 pymergetic_metal_fs_zip = { path = "../../fs/zip/.pm", optional = true }
 pymergetic_metal_fs_embed = { path = "../../fs/embed/.pm", optional = true }
+pymergetic_metal_fs_littlefs = { path = "../../fs/littlefs/.pm", optional = true }
 pymergetic_metal_dev_blk_ram = { path = "../../dev/blk/ram/.pm", optional = true }
 pymergetic_metal_async = { path = "../../async/.pm", optional = true }
 pymergetic_metal_util_lz4 = { path = "../../util/lz4/.pm", optional = true }

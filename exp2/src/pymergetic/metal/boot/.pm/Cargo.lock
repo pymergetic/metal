@@ -34,12 +34,18 @@ dependencies = [
  "pymergetic_metal_bus_pci",
  "pymergetic_metal_console",
  "pymergetic_metal_dev_acpi",
+ "pymergetic_metal_dev_blk_ram",
  "pymergetic_metal_dev_gfx",
  "pymergetic_metal_dev_input",
  "pymergetic_metal_dev_random",
  "pymergetic_metal_dev_serial",
  "pymergetic_metal_dev_time",
  "pymergetic_metal_dt",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_fs_fat",
+ "pymergetic_metal_fs_littlefs",
+ "pymergetic_metal_fs_mtar",
+ "pymergetic_metal_fs_tmpfs",
  "pymergetic_metal_hwtree",
  "pymergetic_metal_log",
  "pymergetic_metal_mem",
@@ -47,6 +53,7 @@ dependencies = [
  "pymergetic_metal_util_ascii",
  "pymergetic_metal_util_lz4",
  "pymergetic_metal_util_tar",
+ "pymergetic_metal_vfs",
 ]
 
 [[package]]
@@ -70,6 +77,14 @@ name = "pymergetic_metal_dev_acpi"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_log",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_dev_blk_ram"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
  "pymergetic_metal_rt",
 ]
 
@@ -121,6 +136,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "pymergetic_metal_fs"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_rt",
+ "pymergetic_metal_vfs",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_fat"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_rt",
+ "pymergetic_metal_vfs",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_littlefs"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_rt",
+ "pymergetic_metal_vfs",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_mtar"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_rt",
+ "pymergetic_metal_util_lz4",
+ "pymergetic_metal_util_tar",
+ "pymergetic_metal_vfs",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_tmpfs"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_rt",
+ "pymergetic_metal_vfs",
+]
+
+[[package]]
 name = "pymergetic_metal_hwtree"
 version = "0.1.0"
 dependencies = [
@@ -164,6 +230,13 @@ dependencies = [
 
 [[package]]
 name = "pymergetic_metal_util_tar"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_vfs"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_rt",

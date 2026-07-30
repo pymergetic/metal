@@ -2,7 +2,6 @@
 //! DO NOT HAND-EDIT THIS FILE.
 //! This file is:  __init__.rs
 //! Edit instead:  __init__.h
-//! Source-sha: 57643b28a14248e4
 //! Regenerate:    metal mod sync
 //! Owned by:      metal mod sync (banner = write gate)
 

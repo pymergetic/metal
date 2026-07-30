@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.boot.modload",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Mount/umount /mods/<id> and /src/<id> packs for wasm mods."
+}

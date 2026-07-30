@@ -3,5 +3,5 @@
   "name": "pymergetic.metal.fs.mtar",
   "impl": "rs",
   "version": "0.1.0",
-  "comment": "RO lz4-in-ustar pack FS + zero-dep pack builder."
+  "comment": "mtar RO + RW owned blob (fwrite/mkdir/unlink via rebuild)."
 }

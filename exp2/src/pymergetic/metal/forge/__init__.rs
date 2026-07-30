@@ -14,10 +14,22 @@ mod _banner;
 mod _catalog;
 #[path = "_cli.rs"]
 mod _cli;
+#[cfg(feature = "solo")]
+#[path = "_config.rs"]
+mod _config;
 #[path = "_comment.rs"]
 mod _comment;
 #[path = "_convert.rs"]
 mod _convert;
+#[cfg(feature = "solo")]
+#[path = "_host.rs"]
+mod _host;
+#[cfg(feature = "solo")]
+#[path = "_build.rs"]
+mod _build;
+#[cfg(feature = "solo")]
+#[path = "_run.rs"]
+mod _run;
 #[path = "_export_c.rs"]
 mod _export_c;
 #[path = "_export_py.rs"]

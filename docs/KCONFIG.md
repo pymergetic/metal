@@ -4,6 +4,24 @@ Metal uses a small [Kconfiglib](https://github.com/ulfalizer/Kconfiglib)
 tree under [`config/`](../config/) so compile-time budgets, iface embed
 toggles, and default build/upload actions live in one place.
 
+## exp2
+
+exp2 has its own tree under [`exp2/config/`](../exp2/config/) (nested
+module fragments in `.pm/Kconfig`). Sole host entry after deps:
+[`tools/forge`](../tools/forge).
+
+| Command | Effect |
+|---------|--------|
+| `tools/forge config edit` | TUI → `exp2/config/.config` + gen |
+| `tools/forge config old` | Refresh after Kconfig edits |
+| `tools/forge config gen` | Emit `exp2/build/autoconf.h` + `config.sh` |
+| `tools/forge build [bios\|efi\|all]` | gen → img rootfs → mod sync → link |
+| `tools/forge run [bios\|efi\|all]` | QEMU |
+| `tools/forge img rootfs` | Pack Stage-A blobs |
+
+Defaults: 4 MiB root FAT, kernel `/mods` + `/src` with **human only**
+source mode. Mount contract: [`definitions/fs.md`](definitions/fs.md).
+
 Menu layout mirrors `pymergetic.metal` modules:
 
 ```text

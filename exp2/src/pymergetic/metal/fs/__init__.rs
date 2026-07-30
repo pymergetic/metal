@@ -79,10 +79,9 @@ pub unsafe extern "C" fn pm_metal_fs_open_async(path: *const u8, flags: u32) -> 
 
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_fs_close_async(h: pm_metal_fs_h) -> u32 {
-    /* close needs mount ctx — drivers encode mount in high bits or track globally.
-     * v1: drivers ignore ctx on close and look up h in their table. */
-    let _ = h;
-    done(0)
+    LAST_OPS
+        .and_then(|ops| ops.close.map(|f| f(LAST_CTX, h)))
+        .unwrap_or_else(|| done(0))
 }
 
 #[no_mangle]
@@ -199,6 +198,84 @@ pub unsafe extern "C" fn pm_metal_fs_rename_async(old: *const u8, new: *const u8
     };
     /* new path: resolve for same mount rel — pass full new for driver */
     f(ctx, rel, new)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_fsync_async(h: pm_metal_fs_h) -> u32 {
+    LAST_OPS
+        .and_then(|ops| ops.fsync.map(|f| f(LAST_CTX, h)))
+        .unwrap_or_else(|| done(0))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_fstat_async(h: pm_metal_fs_h, dest: *mut u8) -> u32 {
+    if dest.is_null() {
+        return err();
+    }
+    let end = pm_metal_fs_lseek(h, 0, PM_METAL_FS_SEEK_END);
+    if end < 0 {
+        return err();
+    }
+    let _ = pm_metal_fs_lseek(h, 0, PM_METAL_FS_SEEK_SET);
+    let st = dest as *mut pm_metal_fs_stat_t;
+    (*st).size = end as u32;
+    (*st).type_ = PM_METAL_FS_TYPE_FILE;
+    done(0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_size_async(path: *const u8) -> u32 {
+    let mut st = pm_metal_fs_stat_t {
+        size: 0,
+        type_: 0,
+    };
+    let h = pm_metal_fs_stat_async(path, &mut st as *mut _ as *mut u8);
+    let rc = pm_metal_async_result_u32(h);
+    if rc == PM_METAL_FS_INVALID {
+        return err();
+    }
+    done(st.size)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_read_async(
+    path: *const u8,
+    dest: *mut u8,
+    dest_len: u32,
+) -> u32 {
+    if dest.is_null() || dest_len == 0 {
+        return done(0);
+    }
+    let oh = pm_metal_fs_open_async(path, PM_METAL_FS_O_RDONLY);
+    let fd = pm_metal_async_result_u32(oh);
+    if fd == PM_METAL_FS_INVALID {
+        return err();
+    }
+    let rh = pm_metal_fs_fread_async(fd, dest, dest_len);
+    let n = pm_metal_async_result_u32(rh);
+    let _ = pm_metal_fs_close_async(fd);
+    done(n)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_write_async(
+    path: *const u8,
+    src: *const u8,
+    src_len: u32,
+) -> u32 {
+    if src.is_null() {
+        return err();
+    }
+    let flags = PM_METAL_FS_O_WRONLY | PM_METAL_FS_O_CREAT | PM_METAL_FS_O_TRUNC;
+    let oh = pm_metal_fs_open_async(path, flags);
+    let fd = pm_metal_async_result_u32(oh);
+    if fd == PM_METAL_FS_INVALID {
+        return err();
+    }
+    let wh = pm_metal_fs_fwrite_async(fd, src, src_len);
+    let n = pm_metal_async_result_u32(wh);
+    let _ = pm_metal_fs_close_async(fd);
+    done(n)
 }
 
 #[no_mangle]

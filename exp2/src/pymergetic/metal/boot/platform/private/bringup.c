@@ -24,6 +24,8 @@ int32_t pm_metal_exp2_stress(void);
 #include <pymergetic/metal/dt/__init__.h>
 #include <pymergetic/metal/mem/__init__.h>
 
+int32_t pm_metal_boot_rootfs_mount_all(void);
+
 void *memset(void *dst, int c, size_t n);
 
 #define MIN_CLAIM_BYTES (2u * 1024u * 1024u)
@@ -321,6 +323,11 @@ int32_t pm_metal_boot_bringup(void)
   }
   if (pm_metal_console_attach(0u, &g_serial_vp, NULL) != 0) {
     return fail("exp2: console attach failed\n");
+  }
+
+  /* Stage A rootfs + kernel /mods|/src mounts (needs heap + console). */
+  if (pm_metal_boot_rootfs_mount_all() != 0) {
+    return fail("exp2: rootfs mount failed\n");
   }
 
   /* TSC calibrate needs EFI Stall — before ExitBootServices. */

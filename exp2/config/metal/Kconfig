@@ -1,0 +1,8 @@
+menu "pymergetic.metal"
+
+# Nested module fragments (paths relative to exp2/config via srctree).
+# Module Kconfig files live next to .pm/ under src/pymergetic/metal/.
+source "../src/pymergetic/metal/fs/.pm/Kconfig"
+source "../src/pymergetic/metal/boot/rootfs/.pm/Kconfig"
+
+endmenu

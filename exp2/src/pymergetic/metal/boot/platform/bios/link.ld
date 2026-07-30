@@ -1,9 +1,9 @@
-/* exp2 BIOS Multiboot ELF64 — load at 8MiB (trampoline ELF32 embeds + copies). */
+/* exp2 BIOS Multiboot ELF64 — load at 16MiB (trampoline ELF32 embeds + copies). */
 ENTRY(_start)
 
 SECTIONS
 {
-  . = 8M;
+  . = 16M;
 
   .bootinfo : {
     KEEP(*(.bootinfo))

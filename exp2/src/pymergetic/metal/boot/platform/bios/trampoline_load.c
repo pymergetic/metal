@@ -1,7 +1,7 @@
 /* Load embedded ELF64 Metal image (linked as binary blob). Freestanding i386.
  *
  * Multiboot1 info + mmap often sit at/above 1MiB. Copy them to low RAM before
- * overlaying Metal at 8MiB (load window starts at image paddr).
+ * overlaying Metal at 16MiB (load window starts at image paddr).
  */
 #include <stdint.h>
 
@@ -149,7 +149,7 @@ uint32_t trampoline_load_elf64(void)
     return 0;
   }
   {
-    uint32_t *bi = (uint32_t *)phys_ptr(0x800000u);
+    uint32_t *bi = (uint32_t *)phys_ptr(0x1000000u);
 
     if (bi[0] == 0x4C54454Du) {
       bi[4] = mb_magic;

@@ -25,7 +25,13 @@ pymergetic_metal_dev_input = { path = "../../dev/input/.pm" }
 pymergetic_metal_dev_gfx = { path = "../../dev/gfx/.pm" }
 pymergetic_metal_hwtree = { path = "../../hwtree/.pm" }
 pymergetic_metal_async = { path = "../../async/.pm" }
-
+pymergetic_metal_vfs = { path = "../../vfs/.pm" }
+pymergetic_metal_fs = { path = "../../fs/.pm" }
+pymergetic_metal_fs_fat = { path = "../../fs/fat/.pm" }
+pymergetic_metal_fs_mtar = { path = "../../fs/mtar/.pm" }
+pymergetic_metal_fs_littlefs = { path = "../../fs/littlefs/.pm" }
+pymergetic_metal_fs_tmpfs = { path = "../../fs/tmpfs/.pm" }
+pymergetic_metal_dev_blk_ram = { path = "../../dev/blk/ram/.pm" }
 
 [profile.release]
 panic = "abort"

@@ -50,6 +50,7 @@ dependencies = [
  "pymergetic_metal_fs",
  "pymergetic_metal_fs_embed",
  "pymergetic_metal_fs_fat",
+ "pymergetic_metal_fs_littlefs",
  "pymergetic_metal_fs_mtar",
  "pymergetic_metal_fs_zip",
  "pymergetic_metal_util_lz4",
@@ -75,6 +76,16 @@ dependencies = [
 
 [[package]]
 name = "pymergetic_metal_fs_fat"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_rt",
+ "pymergetic_metal_vfs",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_littlefs"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",

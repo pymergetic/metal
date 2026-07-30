@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Vendors MicroPython into external/micropython (gitignored — see
-# docs/SOURCETREE.md "Vendoring"). Metal glue lives under
-# src/pymergetic/metal/py/ (port-neutral); EFI/BIOS only link it.
+# Vendors vanilla MicroPython into external/micropython (gitignored —
+# pin + patches/micropython/ only; see docs/SOURCETREE.md "Vendoring").
+# No forks. Metal glue lives under src/pymergetic/metal/py/.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"

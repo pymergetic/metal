@@ -1,0 +1,362 @@
+//! Stage-A rootfs: mount `/` (FAT), then kernel `/mods/<id>` + `/src/<id>` (mtar).
+//! Stage B: apply `/etc/fstab` (tmpfs / fat / mtar / littlefs).
+//! Root FAT lives in writable C `.data` (`_root_fat.c`); mtars in `_blobs.rs`.
+
+extern crate alloc;
+
+use alloc::vec::Vec;
+use core::ptr;
+
+#[allow(dead_code)]
+mod blobs {
+    include!("_blobs.rs");
+}
+
+extern "C" {
+    static mut pm_metal_boot_root_fat: u8;
+    static pm_metal_boot_root_fat_len: u64;
+    fn pm_metal_fs_fat_mount(target: *const u8, buf: *mut u8, len: usize) -> i32;
+    fn pm_metal_fs_mtar_mount(target: *const u8, blob: *const u8, len: usize) -> i32;
+    fn pm_metal_fs_littlefs_mount(target: *const u8, buf: *mut u8, len: usize) -> i32;
+    fn pm_metal_fs_tmpfs_mount(target: *const u8) -> i32;
+    fn pm_metal_log(line: *const u8);
+    fn pm_metal_fs_open_async(path: *const u8, flags: u32) -> u32;
+    fn pm_metal_fs_fread_async(h: u32, dest: *mut u8, len: u32) -> u32;
+    fn pm_metal_fs_close_async(h: u32) -> u32;
+    fn pm_metal_fs_result(h: u32) -> u32;
+    fn pm_metal_fs_stat_async(path: *const u8, dest: *mut u8) -> u32;
+    fn pm_metal_mem_alloc(size: usize) -> *mut u8;
+    fn pm_metal_mem_free(ptr: *mut u8);
+}
+
+const PM_METAL_FS_O_RDONLY: u32 = 1;
+const PM_METAL_FS_INVALID: u32 = 0xffff_ffff;
+
+fn log_line(s: &[u8]) {
+    if !blobs::LOG_BOOT_MOUNTS {
+        return;
+    }
+    let mut buf = [0u8; 160];
+    let n = if s.len() + 1 < buf.len() { s.len() } else { buf.len() - 1 };
+    buf[..n].copy_from_slice(&s[..n]);
+    buf[n] = 0;
+    unsafe {
+        pm_metal_log(buf.as_ptr());
+    }
+}
+
+/// Build `/mods/<id>` or `/src/<id>` into `out` (NUL-terminated). Returns len or 0.
+fn module_mount_path(out: &mut [u8], kind: &[u8], id: &[u8]) -> usize {
+    if kind.len() + id.len() + 1 >= out.len() {
+        return 0;
+    }
+    out[..kind.len()].copy_from_slice(kind);
+    out[kind.len()..kind.len() + id.len()].copy_from_slice(id);
+    let n = kind.len() + id.len();
+    out[n] = 0;
+    n
+}
+
+fn id_bytes(id: *const u8) -> ([u8; 96], usize) {
+    let mut id_buf = [0u8; 96];
+    let mut i = 0usize;
+    if id.is_null() {
+        return (id_buf, 0);
+    }
+    unsafe {
+        while i + 1 < id_buf.len() {
+            let c = *id.add(i);
+            if c == 0 {
+                break;
+            }
+            id_buf[i] = c;
+            i += 1;
+        }
+    }
+    (id_buf, i)
+}
+
+fn log_mounted(prefix: &[u8], path: &[u8]) {
+    let mut buf = [0u8; 160];
+    let mut n = 0usize;
+    for &b in prefix {
+        if n + 2 >= buf.len() {
+            break;
+        }
+        buf[n] = b;
+        n += 1;
+    }
+    for &b in path {
+        if n + 2 >= buf.len() {
+            break;
+        }
+        buf[n] = b;
+        n += 1;
+    }
+    if n + 1 < buf.len() {
+        buf[n] = b'\n';
+        n += 1;
+    }
+    log_line(&buf[..n]);
+}
+
+/// Mount RO mtar packs for one module id under `/mods/<id>` and optional `/src/<id>`.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_boot_rootfs_mount_module(
+    id: *const u8,
+    mods: *const u8,
+    mods_len: usize,
+    src: *const u8,
+    src_len: usize,
+) -> i32 {
+    let (id_buf, id_len) = id_bytes(id);
+    if id_len == 0 {
+        return -1;
+    }
+    let id_slice = &id_buf[..id_len];
+    let mut path = [0u8; 128];
+
+    if !mods.is_null() && mods_len > 0 {
+        let plen = module_mount_path(&mut path, b"/mods/", id_slice);
+        if plen == 0 {
+            return -1;
+        }
+        if pm_metal_fs_mtar_mount(path.as_ptr(), mods, mods_len) != 0 {
+            log_mounted(b"exp2: mount failed ", &path[..plen]);
+            return -1;
+        }
+        log_mounted(b"exp2: mounted ", &path[..plen]);
+    }
+    if !src.is_null() && src_len > 0 {
+        let plen = module_mount_path(&mut path, b"/src/", id_slice);
+        if plen == 0 {
+            return -1;
+        }
+        if pm_metal_fs_mtar_mount(path.as_ptr(), src, src_len) != 0 {
+            log_mounted(b"exp2: mount failed ", &path[..plen]);
+            return -1;
+        }
+        log_mounted(b"exp2: mounted ", &path[..plen]);
+    }
+    0
+}
+
+fn read_vfs_file(path: &[u8], max: usize) -> Option<Vec<u8>> {
+    unsafe {
+        let oh = pm_metal_fs_open_async(path.as_ptr(), PM_METAL_FS_O_RDONLY);
+        let fd = pm_metal_fs_result(oh);
+        if fd == PM_METAL_FS_INVALID {
+            return None;
+        }
+        let mut out = Vec::new();
+        let mut chunk = [0u8; 512];
+        loop {
+            if out.len() >= max {
+                break;
+            }
+            let rh = pm_metal_fs_fread_async(fd, chunk.as_mut_ptr(), chunk.len() as u32);
+            let n = pm_metal_fs_result(rh) as usize;
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&chunk[..n]);
+        }
+        let _ = pm_metal_fs_result(pm_metal_fs_close_async(fd));
+        Some(out)
+    }
+}
+
+#[repr(C)]
+struct StatBuf {
+    size: u32,
+    type_: u32,
+}
+
+fn load_image_file(source: &str) -> Option<(*mut u8, usize)> {
+    if source.is_empty() || source == "none" {
+        return None;
+    }
+    let mut path = [0u8; 256];
+    let b = source.as_bytes();
+    if b.len() + 1 >= path.len() {
+        return None;
+    }
+    path[..b.len()].copy_from_slice(b);
+    path[b.len()] = 0;
+    let mut st = StatBuf { size: 0, type_: 0 };
+    unsafe {
+        let sh = pm_metal_fs_stat_async(path.as_ptr(), &mut st as *mut _ as *mut u8);
+        if pm_metal_fs_result(sh) == PM_METAL_FS_INVALID || st.size == 0 {
+            return None;
+        }
+        let len = st.size as usize;
+        let buf = pm_metal_mem_alloc(len);
+        if buf.is_null() {
+            return None;
+        }
+        let oh = pm_metal_fs_open_async(path.as_ptr(), PM_METAL_FS_O_RDONLY);
+        let fd = pm_metal_fs_result(oh);
+        if fd == PM_METAL_FS_INVALID {
+            pm_metal_mem_free(buf);
+            return None;
+        }
+        let mut off = 0usize;
+        while off < len {
+            let rh = pm_metal_fs_fread_async(fd, buf.add(off), (len - off) as u32);
+            let n = pm_metal_fs_result(rh) as usize;
+            if n == 0 {
+                break;
+            }
+            off += n;
+        }
+        let _ = pm_metal_fs_result(pm_metal_fs_close_async(fd));
+        if off != len {
+            pm_metal_mem_free(buf);
+            return None;
+        }
+        Some((buf, len))
+    }
+}
+
+fn mount_fstab_line(source: &str, target: &str, fstype: &str) -> i32 {
+    let mut tgt = [0u8; 128];
+    let tb = target.as_bytes();
+    if tb.len() + 1 >= tgt.len() {
+        return -1;
+    }
+    tgt[..tb.len()].copy_from_slice(tb);
+    tgt[tb.len()] = 0;
+    unsafe {
+        match fstype {
+            "tmpfs" => pm_metal_fs_tmpfs_mount(tgt.as_ptr()),
+            "fat" => {
+                let Some((buf, len)) = load_image_file(source) else {
+                    return -1;
+                };
+                let rc = pm_metal_fs_fat_mount(tgt.as_ptr(), buf, len);
+                if rc != 0 {
+                    pm_metal_mem_free(buf);
+                }
+                /* buf stays owned by fat vol on success */
+                rc
+            }
+            "littlefs" => {
+                let Some((buf, len)) = load_image_file(source) else {
+                    return -1;
+                };
+                let rc = pm_metal_fs_littlefs_mount(tgt.as_ptr(), buf, len);
+                if rc != 0 {
+                    pm_metal_mem_free(buf);
+                }
+                rc
+            }
+            "mtar" => {
+                let Some((buf, len)) = load_image_file(source) else {
+                    return -1;
+                };
+                let rc = pm_metal_fs_mtar_mount(tgt.as_ptr(), buf, len);
+                if rc != 0 {
+                    pm_metal_mem_free(buf);
+                }
+                rc
+            }
+            _ => -1,
+        }
+    }
+}
+
+/// Stage B: read fstab at `path` (source target fstype ...) and mount.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_boot_rootfs_fstab_apply(path: *const u8) -> i32 {
+    if path.is_null() {
+        return -1;
+    }
+    let mut pbuf = [0u8; 128];
+    let mut i = 0usize;
+    while i + 1 < pbuf.len() {
+        let c = *path.add(i);
+        if c == 0 {
+            break;
+        }
+        pbuf[i] = c;
+        i += 1;
+    }
+    pbuf[i] = 0;
+    let Some(data) = read_vfs_file(&pbuf[..i + 1], 16 * 1024) else {
+        log_line(b"exp2: fstab missing\n");
+        return -1;
+    };
+    let text = core::str::from_utf8(&data).unwrap_or("");
+    let mut ok = 0i32;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(source) = parts.next() else {
+            continue;
+        };
+        let Some(target) = parts.next() else {
+            continue;
+        };
+        let Some(fstype) = parts.next() else {
+            continue;
+        };
+        if mount_fstab_line(source, target, fstype) != 0 {
+            log_mounted(b"exp2: fstab mount failed ", target.as_bytes());
+            ok = -1;
+        } else {
+            log_mounted(b"exp2: fstab mounted ", target.as_bytes());
+        }
+    }
+    ok
+}
+
+/// Stage A: mount writable embedded root FAT at `/`, then kernel module packs.
+/// Stage B: apply `/etc/fstab`.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_boot_rootfs_mount_all() -> i32 {
+    let len = pm_metal_boot_root_fat_len as usize;
+    if len == 0 {
+        log_line(b"exp2: rootfs blob empty\n");
+        return -1;
+    }
+    let buf = ptr::addr_of_mut!(pm_metal_boot_root_fat);
+    let slash = b"/\0";
+    if pm_metal_fs_fat_mount(slash.as_ptr(), buf, len) != 0 {
+        log_line(b"exp2: mount / failed\n");
+        return -1;
+    }
+    log_line(b"exp2: mounted /\n");
+
+    let id = blobs::KERNEL_MODULE_ID.as_bytes();
+    let mut idz = [0u8; 96];
+    let n = if id.len() + 1 < idz.len() {
+        id.len()
+    } else {
+        idz.len() - 1
+    };
+    idz[..n].copy_from_slice(&id[..n]);
+
+    let mods = if blobs::HAVE_MODS {
+        (blobs::MODS_MTAR.as_ptr(), blobs::MODS_MTAR.len())
+    } else {
+        (ptr::null(), 0usize)
+    };
+    let src = if blobs::HAVE_SRC {
+        (blobs::SRC_MTAR.as_ptr(), blobs::SRC_MTAR.len())
+    } else {
+        (ptr::null(), 0usize)
+    };
+    if pm_metal_boot_rootfs_mount_module(idz.as_ptr(), mods.0, mods.1, src.0, src.1) != 0 {
+        return -1;
+    }
+
+    let fstab = b"/etc/fstab\0";
+    if pm_metal_boot_rootfs_fstab_apply(fstab.as_ptr()) != 0 {
+        log_line(b"exp2: stage B fstab apply failed\n");
+        /* non-fatal if fstab absent was already logged as -1; keep Stage A */
+    }
+    0
+}

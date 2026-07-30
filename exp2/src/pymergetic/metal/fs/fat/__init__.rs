@@ -152,7 +152,7 @@ fn put32(b: *mut u8, v: u32) {
 }
 
 fn norm_path(path: &str) -> String {
-    let mut s = path.trim().trim_start_matches('/').to_string();
+    let mut s = String::from(path.trim().trim_start_matches('/'));
     while s.ends_with('/') {
         s.pop();
     }

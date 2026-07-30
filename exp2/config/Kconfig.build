@@ -1,0 +1,26 @@
+menu "Build"
+
+comment "Firmware targets — build with: tools/forge build [efi|bios|all]"
+
+config PM_METAL_BUILD_EFI
+	bool "efi (UEFI metal.efi)"
+	default y
+	help
+	  Build freestanding UEFI Metal (metal.efi) via tools/forge build efi.
+
+config PM_METAL_BUILD_BIOS
+	bool "bios (Multiboot2 metal.elf)"
+	default y
+	help
+	  Build freestanding Multiboot2 Metal via tools/forge build bios.
+
+comment "Follow-ups — run with: tools/forge run [efi|bios|all]"
+
+config PM_METAL_POST_RUN
+	bool "run (tools/forge run after build)"
+	depends on PM_METAL_BUILD_EFI || PM_METAL_BUILD_BIOS
+	default n
+	help
+	  Hint only for now; invoke tools/forge run yourself after build.
+
+endmenu

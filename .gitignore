@@ -21,11 +21,9 @@ mods/build/
 # Toolchain (local download)
 .tools/
 
-# Vendored / generated trees (most deps are setup-cloned + ignored)
+# Vendored / generated trees (setup-cloned + ignored — always vanilla +
+# patches/<dep>/; see docs/SOURCETREE.md "Vendoring". No engine forks.)
 /external/*
-# Engine fork — tracked (submodule or worktree); not vanilla micropython
-!/external/metal-python/
-!/external/metal-python/**
 
 # IDE / tooling
 .vscode/

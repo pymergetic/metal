@@ -170,3 +170,38 @@ fn rust_panic(info: &core::panic::PanicInfo) -> ! {
 
     unsafe { pm_metal_rt_panic_at(file_ptr, line, msg.as_ptr()) }
 }
+
+/// Rust `alloc` → `pm_metal_mem_*` (implemented in mem; after `pm_metal_mem_init`).
+#[cfg(any(target_os = "none", target_os = "uefi"))]
+mod rust_alloc {
+    use core::alloc::{GlobalAlloc, Layout};
+
+    extern "C" {
+        fn pm_metal_mem_memalign(align: usize, size: usize) -> *mut u8;
+        fn pm_metal_mem_free(ptr: *mut u8);
+        fn pm_metal_mem_realloc(ptr: *mut u8, size: usize) -> *mut u8;
+    }
+
+    struct MetalGlobalAlloc;
+
+    unsafe impl GlobalAlloc for MetalGlobalAlloc {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if layout.size() == 0 {
+                return core::ptr::null_mut();
+            }
+            pm_metal_mem_memalign(layout.align().max(1), layout.size())
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+            pm_metal_mem_free(ptr);
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let _ = layout;
+            pm_metal_mem_realloc(ptr, new_size)
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: MetalGlobalAlloc = MetalGlobalAlloc;
+}

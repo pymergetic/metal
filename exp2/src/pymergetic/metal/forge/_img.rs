@@ -13,6 +13,7 @@ use pymergetic_metal_dev_blk_ram as _;
 use pymergetic_metal_fs as _;
 use pymergetic_metal_fs_embed as _;
 use pymergetic_metal_fs_fat as _;
+use pymergetic_metal_fs_littlefs as _;
 use pymergetic_metal_fs_mtar as _;
 use pymergetic_metal_fs_zip as _;
 use pymergetic_metal_util_lz4 as _;
@@ -319,9 +320,9 @@ fn embed_bytes(style: &str, name: &str, data: &[u8]) -> Result<Vec<u8>, String> 
     Err(String::from("embed failed"))
 }
 
-fn usage() -> [&'static str; 16] {
+fn usage() -> [&'static str; 13] {
     [
-        "forge img - build mtar / fat ramdisk / zip images (same shape)",
+        "forge img - build mtar / fat ramdisk / zip / rootfs images",
         "",
         "  forge img mtar pack DIR -o OUT.mtar",
         "  forge img mtar empty -o OUT.mtar",
@@ -330,20 +331,331 @@ fn usage() -> [&'static str; 16] {
         "  forge img zip pack DIR -o OUT.zip",
         "  forge img zip empty -o OUT.zip",
         "  forge img embed FILE --name SYM [-o OUT.inc.c|--rs]",
-        "  forge img nest fat-in-mtar --fat FILE.img -o OUT.mtar",
-        "  forge img nest mtar-in-fat --mtar FILE.mtar --size SIZE -o OUT.img",
-        "  forge img nest zip-in-mtar --zip FILE.zip -o OUT.mtar",
-        "  forge img nest mtar-in-zip --mtar FILE.mtar -o OUT.zip",
-        "  forge img nest fat-in-zip --fat FILE.img -o OUT.zip",
-        "  forge img nest zip-in-fat --zip FILE.zip --size SIZE -o OUT.img",
+        "  forge img nest fat-in-mtar|mtar-in-fat|... (see prior help)",
+        "  forge img rootfs [--metal-root DIR]   # pack boot Stage-A blobs",
+        "  forge img littlefs create --size SIZE [--seed DIR] -o OUT.img",
         "",
     ]
+}
+
+fn cfg_y(config_sh: &str, key: &str) -> bool {
+    let needle = alloc::format!("export {}=y", key);
+    config_sh.lines().any(|l| l.trim() == needle)
+}
+
+fn cfg_str(config_sh: &str, key: &str, default: &str) -> String {
+    let prefix = alloc::format!("export {}=", key);
+    for line in config_sh.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix(&prefix) {
+            let v = rest.trim().trim_matches('"');
+            return String::from(v);
+        }
+    }
+    String::from(default)
+}
+
+fn cfg_u32(config_sh: &str, key: &str, default: u32) -> u32 {
+    let s = cfg_str(config_sh, key, "");
+    if s.is_empty() {
+        return default;
+    }
+    s.parse().unwrap_or(default)
+}
+
+fn file_has_banner(path: &Path, hint: &str) -> bool {
+    match std::fs::read_to_string(path) {
+        Ok(s) => s.contains(hint),
+        Err(_) => false,
+    }
+}
+
+fn should_skip_src_path(rel: &str) -> bool {
+    rel.contains("/.pm/target/")
+        || rel.contains("/.target/")
+        || rel.contains("/target/")
+        || rel.ends_with("Cargo.lock")
+        || rel.ends_with(".inc.c")
+        || rel.ends_with("_blobs.rs")
+        || rel.ends_with(".o")
+        || rel.ends_with(".a")
+}
+
+/// Pack kernel root FAT + mods/src mtars; emit `_blobs.rs` + writable `_root_fat.c`.
+pub fn embed_rootfs(metal_root: &str) -> Result<String, String> {
+    let exp2 = Path::new(metal_root).join("exp2");
+    let config_sh_path = exp2.join("build/config.sh");
+    if !config_sh_path.is_file() {
+        let rc = crate::_config::config_gen(metal_root);
+        if rc != 0 {
+            return Err(String::from("forge config gen failed"));
+        }
+    }
+    let config_sh = std::fs::read_to_string(&config_sh_path)
+        .map_err(|_| String::from("read config.sh"))?;
+
+    let mod_id = cfg_str(&config_sh, "CONFIG_PM_METAL_FS_KERNEL_MODULE_ID", "pymergetic.metal");
+    let root_mib = cfg_u32(&config_sh, "CONFIG_PM_METAL_FS_ROOT_SIZE_MIB", 4);
+    let log_mounts = cfg_y(&config_sh, "CONFIG_PM_METAL_LOG_BOOT_MOUNTS");
+    let mount_mods = cfg_y(&config_sh, "CONFIG_PM_METAL_FS_MOUNT_KERNEL_MODS");
+    let mount_src = cfg_y(&config_sh, "CONFIG_PM_METAL_FS_MOUNT_KERNEL_SRC");
+    let src_none = cfg_y(&config_sh, "CONFIG_PM_METAL_FS_SRC_MODE_NONE");
+    let src_all = cfg_y(&config_sh, "CONFIG_PM_METAL_FS_SRC_MODE_ALL");
+    let mods_seed = cfg_str(&config_sh, "CONFIG_PM_METAL_FS_KERNEL_MODS_SEED", "");
+
+    let rf_out = exp2.join("build/rootfs");
+    let seed_root = rf_out.join("seed_root");
+    for sub in ["etc", "tmp", "mods", "src"] {
+        std::fs::create_dir_all(seed_root.join(sub)).map_err(|_| String::from("mkdir seed"))?;
+        let keep = seed_root.join(sub).join(".keep");
+        if !keep.is_file() {
+            std::fs::write(&keep, b"").map_err(|_| String::from("write keep"))?;
+        }
+    }
+    // Stage B fstab seed (tmpfs at /tmp).
+    let fstab = seed_root.join("etc/fstab");
+    if !fstab.is_file() {
+        std::fs::write(
+            &fstab,
+            b"# Stage B mounts (exp2)\nnone /tmp tmpfs defaults 0 0\n",
+        )
+        .map_err(|_| String::from("write fstab"))?;
+    }
+
+    let root_size = (root_mib as usize) * 1024 * 1024;
+    eprintln!("forge img rootfs: root FAT {}MiB", root_mib);
+    let seed_files = walk_files(&seed_root)?;
+    let root_img = pack_fat(root_size, &seed_files)?;
+    let root_img_path = rf_out.join("root.img");
+    write_out(root_img_path.to_str().unwrap(), &root_img)?;
+
+    let mods_mtar_path = rf_out.join("mods.mtar");
+    let have_mods = if mount_mods {
+        let seed_dir = if !mods_seed.is_empty() {
+            let p = exp2.join(&mods_seed);
+            if p.is_dir() {
+                Some(p)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let bytes = if let Some(d) = seed_dir {
+            eprintln!("forge img rootfs: mods mtar from {}", mods_seed);
+            let files = walk_files(&d)?;
+            pack_mtar(&files)?
+        } else {
+            eprintln!("forge img rootfs: mods mtar (empty)");
+            empty_mtar()?
+        };
+        write_out(mods_mtar_path.to_str().unwrap(), &bytes)?;
+        true
+    } else {
+        write_out(mods_mtar_path.to_str().unwrap(), b"")?;
+        false
+    };
+
+    let src_mtar_path = rf_out.join("src.mtar");
+    let have_src = if !src_none && mount_src {
+        let src_tree = exp2.join("src/pymergetic/metal");
+        let stage = rf_out.join("stage_src");
+        let _ = std::fs::remove_dir_all(&stage);
+        std::fs::create_dir_all(&stage).map_err(|_| String::from("mkdir stage_src"))?;
+        let mode_all = src_all;
+        let banner = "DO NOT HAND-EDIT THIS FILE.";
+        eprintln!(
+            "forge img rootfs: staging src ({})",
+            if mode_all { "all" } else { "human" }
+        );
+        let mut stack = vec![src_tree.clone()];
+        while let Some(dir) = stack.pop() {
+            let rd = match std::fs::read_dir(&dir) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            for ent in rd.flatten() {
+                let p = ent.path();
+                if p.is_dir() {
+                    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                    if name == "target" || name == ".target" || name == ".pm" {
+                        // still descend into .pm for module sources, but skip target dirs
+                        if name == "target" || name == ".target" {
+                            continue;
+                        }
+                    }
+                    if p.ends_with(".pm/target") {
+                        continue;
+                    }
+                    stack.push(p);
+                    continue;
+                }
+                if !p.is_file() {
+                    continue;
+                }
+                let rel = match p.strip_prefix(&src_tree) {
+                    Ok(r) => r.to_string_lossy().replace('\\', "/"),
+                    Err(_) => continue,
+                };
+                if should_skip_src_path(&rel) {
+                    continue;
+                }
+                if !mode_all && file_has_banner(&p, banner) {
+                    continue;
+                }
+                let dest = stage.join(&rel);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent).map_err(|_| String::from("mkdir dest"))?;
+                }
+                std::fs::copy(&p, &dest).map_err(|_| alloc::format!("copy {}", rel))?;
+            }
+        }
+        let staged = walk_files(&stage)?;
+        let bytes = if staged.is_empty() {
+            eprintln!("forge img rootfs: warning: staged src empty; packing empty mtar");
+            empty_mtar()?
+        } else {
+            pack_mtar(&staged)?
+        };
+        write_out(src_mtar_path.to_str().unwrap(), &bytes)?;
+        true
+    } else {
+        write_out(src_mtar_path.to_str().unwrap(), b"")?;
+        false
+    };
+
+    let root_c = exp2.join("src/pymergetic/metal/boot/rootfs/_root_fat.c");
+    let embed_tmp = rf_out.join("root_fat.embed.c");
+    let emb = embed_bytes("c", "pm_metal_boot_root_fat", &root_img)?;
+    write_out(embed_tmp.to_str().unwrap(), &emb)?;
+    let emb_txt = std::fs::read_to_string(&embed_tmp).map_err(|_| String::from("read embed"))?;
+    let mut out_c = String::from(
+        "/* AUTO-GENERATED by forge img rootfs — do not edit */\n#include <stdint.h>\n",
+    );
+    for line in emb_txt.lines() {
+        if line.starts_with("/* generated by pm_metal_fs_embed_c") {
+            continue;
+        }
+        let mut l = line.to_string();
+        if l.starts_with("static const uint8_t ") {
+            l = l.replacen("static const uint8_t ", "uint8_t ", 1);
+        }
+        if l.starts_with("static const unsigned long ") {
+            l = l.replacen("static const unsigned long ", "unsigned long long ", 1);
+        }
+        out_c.push_str(&l);
+        out_c.push('\n');
+    }
+    write_out(root_c.to_str().unwrap(), out_c.as_bytes())?;
+
+    let blobs_rs = exp2.join("src/pymergetic/metal/boot/rootfs/_blobs.rs");
+    let rel_mods = "../../../../../build/rootfs/mods.mtar";
+    let rel_src = "../../../../../build/rootfs/src.mtar";
+    let mut blobs = String::from("// AUTO-GENERATED by forge img rootfs — do not edit\n\n");
+    blobs.push_str(&alloc::format!("pub const KERNEL_MODULE_ID: &str = \"{}\";\n", mod_id));
+    blobs.push_str(&alloc::format!(
+        "pub const LOG_BOOT_MOUNTS: bool = {};\n",
+        if log_mounts { "true" } else { "false" }
+    ));
+    blobs.push_str(&alloc::format!(
+        "pub const HAVE_MODS: bool = {};\n",
+        if have_mods { "true" } else { "false" }
+    ));
+    blobs.push_str(&alloc::format!(
+        "pub const HAVE_SRC: bool = {};\n\n",
+        if have_src { "true" } else { "false" }
+    ));
+    if have_mods {
+        blobs.push_str(&alloc::format!(
+            "pub static MODS_MTAR: &[u8] = include_bytes!(\"{}\");\n",
+            rel_mods
+        ));
+    } else {
+        blobs.push_str("pub static MODS_MTAR: &[u8] = &[];\n");
+    }
+    if have_src {
+        blobs.push_str(&alloc::format!(
+            "pub static SRC_MTAR: &[u8] = include_bytes!(\"{}\");\n",
+            rel_src
+        ));
+    } else {
+        blobs.push_str("pub static SRC_MTAR: &[u8] = &[];\n");
+    }
+    write_out(blobs_rs.to_str().unwrap(), blobs.as_bytes())?;
+
+    Ok(alloc::format!(
+        "forge img rootfs: wrote {} + {}",
+        blobs_rs.display(),
+        root_c.display()
+    ))
+}
+
+fn cmd_rootfs(metal_root: &str) -> Result<String, String> {
+    embed_rootfs(metal_root)
+}
+
+fn cmd_littlefs(sess: &dyn ForgeSession) -> Result<String, String> {
+    let verb = String::from(sess.arg(2).unwrap_or(""));
+    let out = flag(sess, "-o").ok_or_else(|| String::from("need -o OUT"))?;
+    let size_s = flag(sess, "--size").ok_or_else(|| String::from("need --size"))?;
+    let size = parse_size(&size_s).ok_or_else(|| String::from("bad --size"))?;
+    if verb != "create" && verb != "empty" {
+        return Err(String::from("littlefs: create|empty --size SIZE -o OUT [--seed DIR]"));
+    }
+    extern "C" {
+        fn pm_metal_fs_littlefs_format_buf(buf: *mut u8, len: usize) -> i32;
+        fn pm_metal_fs_littlefs_seed_simple(
+            buf: *mut u8,
+            len: usize,
+            names: *const *const u8,
+            datas: *const *const u8,
+            lens: *const u32,
+            count: u32,
+        ) -> i32;
+    }
+    if size < 64 * 1024 {
+        return Err(String::from("littlefs size too small (need >= 64K)"));
+    }
+    let mut buf = alloc::vec![0u8; size];
+    if unsafe { pm_metal_fs_littlefs_format_buf(buf.as_mut_ptr(), buf.len()) } != 0 {
+        return Err(String::from("littlefs format failed"));
+    }
+    let seed = flag(sess, "--seed");
+    let files = if let Some(d) = seed {
+        walk_files(Path::new(&d))?
+    } else {
+        Vec::new()
+    };
+    if !files.is_empty() {
+        let (names, datas, lens) = pack_ptrs(&files);
+        let rc = unsafe {
+            pm_metal_fs_littlefs_seed_simple(
+                buf.as_mut_ptr(),
+                buf.len(),
+                names.as_ptr(),
+                datas.as_ptr(),
+                lens.as_ptr(),
+                files.len() as u32,
+            )
+        };
+        if rc != 0 {
+            return Err(String::from("littlefs seed failed"));
+        }
+    }
+    write_out(&out, &buf)?;
+    Ok(alloc::format!(
+        "wrote {} (littlefs, {} files, {} bytes)",
+        out,
+        files.len(),
+        buf.len()
+    ))
 }
 
 /// Dispatch `forge img ...`. Returns process exit code.
 pub fn run_img<S: ForgeStore, Sess: ForgeSession>(
     _store: &mut S,
     sess: &mut Sess,
+    metal_root: &str,
 ) -> i32 {
     let kind = String::from(sess.arg(1).unwrap_or(""));
     if kind.is_empty() || kind == "-h" || kind == "--help" {
@@ -363,6 +675,8 @@ pub fn run_img<S: ForgeStore, Sess: ForgeSession>(
         "zip" => cmd_zip(sess),
         "embed" => cmd_embed(sess),
         "nest" => cmd_nest(sess),
+        "rootfs" => cmd_rootfs(metal_root),
+        "littlefs" => cmd_littlefs(sess),
         _ => Err(alloc::format!("forge img: unknown kind {:?}", kind)),
     };
     match result {
