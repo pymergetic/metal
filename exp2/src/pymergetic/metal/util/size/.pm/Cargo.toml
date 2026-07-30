@@ -1,5 +1,5 @@
 [package]
-name = "pymergetic_metal_dev_acpi"
+name = "pymergetic_metal_util_size"
 version = "0.1.0"
 edition = "2021"
 

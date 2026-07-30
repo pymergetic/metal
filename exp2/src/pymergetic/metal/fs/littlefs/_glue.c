@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#include "lfs.h"
+#include "vendor/lfs.h"
 
 #define PM_LFS_MAX_VOL 8u
 #define PM_LFS_BLOCK 4096u
@@ -266,6 +266,14 @@ int32_t pm_metal_fs_littlefs_close_vol(uint32_t vol) {
   (void)lfs_unmount(&g_vols[vol].lfs);
   free_vol(vol);
   return 0;
+}
+
+/* Backing buffer size for mounted volume; 0 if bad id. */
+size_t pm_metal_fs_littlefs_vol_bytes(uint32_t vol) {
+  if (vol == 0u || vol >= PM_LFS_MAX_VOL || !g_vols[vol].used) {
+    return 0u;
+  }
+  return g_vols[vol].bd.len;
 }
 
 lfs_t *pm_metal_fs_littlefs_lfs(uint32_t vol) {

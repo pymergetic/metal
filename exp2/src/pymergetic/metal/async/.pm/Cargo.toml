@@ -7,6 +7,10 @@ edition = "2021"
 path = "../_crate.rs"
 crate-type = ["staticlib", "rlib"]
 
+[[bin]]
+name = "smoke"
+path = "smoke.rs"
+
 [dependencies]
 pymergetic_metal_rt = { path = "../../rt/.pm" }
 pymergetic_metal_mem = { path = "../../mem/.pm" }

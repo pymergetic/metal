@@ -269,6 +269,24 @@ pub unsafe extern "C" fn pm_metal_mem_heap_bytes() -> usize {
     (*addr_of!(HEAP)).arena.bytes()
 }
 
+/// Bytes claimed by the upward map span (LIFO pages).
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_mem_map_used() -> usize {
+    (*addr_of!(HEAP)).arena.map_used()
+}
+
+/// Bytes claimed by the downward TLSF pool span.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_mem_tlsf_used() -> usize {
+    (*addr_of!(HEAP)).arena.heap_used()
+}
+
+/// Unclaimed gap between map brk and TLSF brk.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_mem_hole() -> usize {
+    (*addr_of!(HEAP)).arena.hole()
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_mem_free_bytes() -> usize {
     let heap = &*addr_of!(HEAP);

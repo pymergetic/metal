@@ -657,92 +657,11 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
   }
 
   case PY_PROOF_PARALLEL:
-    /*
-     * Task-local GC contexts (pm_metal_py_run_str_isolated / py_ctx.c):
-     * two tasks, each its own exclusively-owned VM context (own heap,
-     * own globals, no mPyRunLock). Each does real CPU-bound bytecode
-     * work (a busy loop — this is the part a shared/serialized context
-     * could never truly overlap, unlike PY_PROOF_OVERLAP's I/O-bound
-     * sleeps above, which any async design can overlap) with a
-     * different value baked into a same-named global, then a real
-     * await/park/resume round-trip before checking it survived. If the
-     * two contexts secretly shared one heap/globals dict, whichever
-     * task's write ran last would stomp the other's — at least one
-     * assert below would fail (ERROR, not DONE) with high probability
-     * regardless of scheduling order. Passing proves the heaps are
-     * genuinely disjoint; the two busy loops finishing without one
-     * blocking the other (checked as a soft signal below, not a hard
-     * gate — wall-clock ratios are inherently emulation/CI-timing
-     * dependent) is the concurrent-execution half of the claim.
-     */
-    t->a = pm_metal_py_run_str_isolated("import pymergetic.metal.aio as a\n"
-                                        "X = 111\n"
-                                        "i = 0\n"
-                                        "s = 0\n"
-                                        "while i < 150000:\n"
-                                        "    s = s + i\n"
-                                        "    i = i + 1\n"
-                                        "async def main():\n"
-                                        "    await a.sleep_us(30000)\n"
-                                        "    assert X == 111\n",
-                                        0);
-    t->b = pm_metal_py_run_str_isolated("import pymergetic.metal.aio as a\n"
-                                        "X = 222\n"
-                                        "i = 0\n"
-                                        "s = 0\n"
-                                        "while i < 150000:\n"
-                                        "    s = s + i\n"
-                                        "    i = i + 1\n"
-                                        "async def main():\n"
-                                        "    await a.sleep_us(30000)\n"
-                                        "    assert X == 222\n",
-                                        0);
-    if (t->a == PM_METAL_ASYNC_HANDLE_INVALID || t->b == PM_METAL_ASYNC_HANDLE_INVALID) {
-      pm_metal_log("metal-py: parallel-ctx fail (spawn)");
-      t->step = PY_PROOF_FAIL;
-      return PM_METAL_PENDING;
-    }
-
-    t->t0       = pm_metal_time_mono_us();
-    t->deadline = t->t0 + 5000000ull;
-    t->step     = PY_PROOF_PARALLEL_WAIT;
-    return PM_METAL_PENDING;
-
-  case PY_PROOF_PARALLEL_WAIT: {
-    int32_t  sa;
-    int32_t  sb;
-    uint64_t dt;
-
-    pm_metal_run_poll_all();
-    sa = pm_metal_async_task_status(t->a);
-    sb = pm_metal_async_task_status(t->b);
-    if ((sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) ||
-        (sb == PM_METAL_PENDING || sb == PM_METAL_WAITING)) {
-      if (pm_metal_time_mono_us() >= t->deadline) {
-        pm_metal_async_task_cancel(t->a);
-        pm_metal_async_task_cancel(t->b);
-        pm_metal_log("metal-py: parallel-ctx fail (timeout)");
-        t->step = PY_PROOF_FAIL;
-        return PM_METAL_PENDING;
-      }
-
-      return pm_metal_async_await(h, pm_metal_async_sleep_us(2000));
-    }
-
-    dt = pm_metal_time_mono_us() - t->t0;
-    if (sa != PM_METAL_DONE || sb != PM_METAL_DONE) {
-      pm_metal_logf("metal-py: parallel-ctx fail (heaps not disjoint?) sa=%d sb=%d", sa, sb);
-      t->step = PY_PROOF_FAIL;
-      return PM_METAL_PENDING;
-    }
-
-    /* Isolation is proven above (both DONE); this is just an informational
-     * data point on whether the two busy-loop+sleep contexts genuinely
-     * overlapped, not a pass/fail gate. */
-    pm_metal_logf("metal-py: parallel-ctx ok (dt=%uus)", (uint32_t)dt);
+  case PY_PROOF_PARALLEL_WAIT:
+    /* No private upy contexts (vanilla mp_state_ctx + shared blob). */
+    pm_metal_log("metal-py: parallel-ctx skip (shared only)");
     t->step = PY_PROOF_STDLIB;
     return PM_METAL_PENDING;
-  }
 
   case PY_PROOF_STDLIB: {
     /*
@@ -842,60 +761,10 @@ static pm_metal_status_t MetalBootPyProofStep(pm_metal_async_handle_t self_h)
   }
 
   case PY_PROOF_ISOLATED_STDLIB:
-    /*
-     * docs/TODO.md "Isolated-context ergonomics": an isolated context
-     * (its own disjoint heap, see PY_PROOF_PARALLEL above) must be able
-     * to import from /mods/py/stdlib too, not just pymergetic.metal /
-     * pmcmd / mod — pm_metal_py_ctx_create() seeds this context's own
-     * sys.path the same way pm_metal_py_init() seeds the shared one's.
-     * heapq is an arbitrary pick from the Easy pack; the point is
-     * proving the import machinery (loose sys.path) works against this
-     * context's own state, not the
-     * shared one's.
-     */
-    t->a = pm_metal_py_run_str_isolated("import heapq\n"
-                                        "hq = []\n"
-                                        "heapq.heappush(hq, 5)\n"
-                                        "heapq.heappush(hq, 2)\n"
-                                        "assert heapq.heappop(hq) == 2\n",
-                                        0);
-    if (t->a == PM_METAL_ASYNC_HANDLE_INVALID) {
-      pm_metal_log("metal-py: isolated-stdlib fail (spawn)");
-      t->step = PY_PROOF_FAIL;
-      return PM_METAL_PENDING;
-    }
-
-    t->t0       = pm_metal_time_mono_us();
-    t->deadline = t->t0 + 3000000ull;
-    t->step     = PY_PROOF_ISOLATED_STDLIB_WAIT;
-    return PM_METAL_PENDING;
-
-  case PY_PROOF_ISOLATED_STDLIB_WAIT: {
-    int32_t sa;
-
-    pm_metal_run_poll_all();
-    sa = pm_metal_async_task_status(t->a);
-    if (sa == PM_METAL_PENDING || sa == PM_METAL_WAITING) {
-      if (pm_metal_time_mono_us() >= t->deadline) {
-        pm_metal_async_task_cancel(t->a);
-        pm_metal_log("metal-py: isolated-stdlib fail (timeout)");
-        t->step = PY_PROOF_FAIL;
-        return PM_METAL_PENDING;
-      }
-
-      return pm_metal_async_await(h, pm_metal_async_sleep_us(2000));
-    }
-
-    if (sa != PM_METAL_DONE) {
-      pm_metal_logf("metal-py: isolated-stdlib fail sa=%d", sa);
-      t->step = PY_PROOF_FAIL;
-      return PM_METAL_PENDING;
-    }
-
-    pm_metal_log("metal-py: isolated-stdlib ok");
+  case PY_PROOF_ISOLATED_STDLIB_WAIT:
+    pm_metal_log("metal-py: isolated-stdlib skip (shared only)");
     t->step = PY_PROOF_RANDOM;
     return PM_METAL_PENDING;
-  }
 
   case PY_PROOF_RANDOM:
     /*

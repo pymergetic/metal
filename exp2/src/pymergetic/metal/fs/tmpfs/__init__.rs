@@ -11,9 +11,10 @@ use core::ptr::{addr_of, addr_of_mut};
 
 use pymergetic_metal_fs::{
     pm_metal_fs_ops_register, pm_metal_fs_ops_t, pm_metal_fs_set_active_ops, pm_metal_fs_stat_t,
-    PM_METAL_FS_INVALID, PM_METAL_FS_O_CREAT, PM_METAL_FS_O_DIRECTORY, PM_METAL_FS_O_RDONLY,
-    PM_METAL_FS_O_RDWR, PM_METAL_FS_O_TRUNC, PM_METAL_FS_O_WRONLY, PM_METAL_FS_SEEK_CUR,
-    PM_METAL_FS_SEEK_END, PM_METAL_FS_SEEK_SET, PM_METAL_FS_TYPE_DIR, PM_METAL_FS_TYPE_FILE,
+    pm_metal_fs_statfs_t, PM_METAL_FS_INVALID, PM_METAL_FS_O_CREAT, PM_METAL_FS_O_DIRECTORY,
+    PM_METAL_FS_O_RDONLY, PM_METAL_FS_O_RDWR, PM_METAL_FS_O_TRUNC, PM_METAL_FS_O_WRONLY,
+    PM_METAL_FS_SEEK_CUR, PM_METAL_FS_SEEK_END, PM_METAL_FS_SEEK_SET, PM_METAL_FS_TYPE_DIR,
+    PM_METAL_FS_TYPE_FILE,
 };
 use pymergetic_metal_rt as _;
 use pymergetic_metal_vfs as vfs;
@@ -65,6 +66,7 @@ static TMPFS_OPS: pm_metal_fs_ops_t = pm_metal_fs_ops_t {
     unlink: Some(op_unlink),
     rename: None,
     fsync: None,
+    statfs: Some(op_statfs),
 };
 
 fn done(v: u32) -> u32 {
@@ -373,6 +375,22 @@ unsafe extern "C" fn op_stat(ctx: *mut c_void, path: *const u8, st_out: *mut u8)
         };
     }
     done(0)
+}
+
+unsafe extern "C" fn op_statfs(ctx: *mut c_void, out: *mut pm_metal_fs_statfs_t) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    let fss = &*addr_of!(FSS);
+    let Some(fs) = fss.get(ctx as usize).and_then(|f| f.as_ref()) else {
+        return -1;
+    };
+    let used = fs.nodes.iter().map(|n| n.data.len() as u64).sum::<u64>();
+    /* Unbounded heap-backed; report resident data bytes. */
+    (*out).total = used;
+    (*out).used = used;
+    (*out).flags = 0;
+    0
 }
 
 unsafe extern "C" fn op_readdir(

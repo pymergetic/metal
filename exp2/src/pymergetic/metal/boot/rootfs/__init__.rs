@@ -1,6 +1,9 @@
 //! Stage-A rootfs: mount `/` (FAT), then kernel `/mods/<id>` + `/src/<id>` (mtar).
 //! Stage B: apply `/etc/fstab` (tmpfs / fat / mtar / littlefs).
 //! Root FAT lives in writable C `.data` (`_root_fat.c`); mtars in `_blobs.rs`.
+//!
+//! Success is silent — boot tree `fs` section lists mounts. Failures return -1
+//! (bringup prints via `fail(...)`).
 
 extern crate alloc;
 
@@ -19,7 +22,6 @@ extern "C" {
     fn pm_metal_fs_mtar_mount(target: *const u8, blob: *const u8, len: usize) -> i32;
     fn pm_metal_fs_littlefs_mount(target: *const u8, buf: *mut u8, len: usize) -> i32;
     fn pm_metal_fs_tmpfs_mount(target: *const u8) -> i32;
-    fn pm_metal_log(line: *const u8);
     fn pm_metal_fs_open_async(path: *const u8, flags: u32) -> u32;
     fn pm_metal_fs_fread_async(h: u32, dest: *mut u8, len: u32) -> u32;
     fn pm_metal_fs_close_async(h: u32) -> u32;
@@ -31,19 +33,6 @@ extern "C" {
 
 const PM_METAL_FS_O_RDONLY: u32 = 1;
 const PM_METAL_FS_INVALID: u32 = 0xffff_ffff;
-
-fn log_line(s: &[u8]) {
-    if !blobs::LOG_BOOT_MOUNTS {
-        return;
-    }
-    let mut buf = [0u8; 160];
-    let n = if s.len() + 1 < buf.len() { s.len() } else { buf.len() - 1 };
-    buf[..n].copy_from_slice(&s[..n]);
-    buf[n] = 0;
-    unsafe {
-        pm_metal_log(buf.as_ptr());
-    }
-}
 
 /// Build `/mods/<id>` or `/src/<id>` into `out` (NUL-terminated). Returns len or 0.
 fn module_mount_path(out: &mut [u8], kind: &[u8], id: &[u8]) -> usize {
@@ -76,30 +65,6 @@ fn id_bytes(id: *const u8) -> ([u8; 96], usize) {
     (id_buf, i)
 }
 
-fn log_mounted(prefix: &[u8], path: &[u8]) {
-    let mut buf = [0u8; 160];
-    let mut n = 0usize;
-    for &b in prefix {
-        if n + 2 >= buf.len() {
-            break;
-        }
-        buf[n] = b;
-        n += 1;
-    }
-    for &b in path {
-        if n + 2 >= buf.len() {
-            break;
-        }
-        buf[n] = b;
-        n += 1;
-    }
-    if n + 1 < buf.len() {
-        buf[n] = b'\n';
-        n += 1;
-    }
-    log_line(&buf[..n]);
-}
-
 /// Mount RO mtar packs for one module id under `/mods/<id>` and optional `/src/<id>`.
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_boot_rootfs_mount_module(
@@ -122,10 +87,8 @@ pub unsafe extern "C" fn pm_metal_boot_rootfs_mount_module(
             return -1;
         }
         if pm_metal_fs_mtar_mount(path.as_ptr(), mods, mods_len) != 0 {
-            log_mounted(b"exp2: mount failed ", &path[..plen]);
             return -1;
         }
-        log_mounted(b"exp2: mounted ", &path[..plen]);
     }
     if !src.is_null() && src_len > 0 {
         let plen = module_mount_path(&mut path, b"/src/", id_slice);
@@ -133,10 +96,8 @@ pub unsafe extern "C" fn pm_metal_boot_rootfs_mount_module(
             return -1;
         }
         if pm_metal_fs_mtar_mount(path.as_ptr(), src, src_len) != 0 {
-            log_mounted(b"exp2: mount failed ", &path[..plen]);
             return -1;
         }
-        log_mounted(b"exp2: mounted ", &path[..plen]);
     }
     0
 }
@@ -283,7 +244,6 @@ pub unsafe extern "C" fn pm_metal_boot_rootfs_fstab_apply(path: *const u8) -> i3
     }
     pbuf[i] = 0;
     let Some(data) = read_vfs_file(&pbuf[..i + 1], 16 * 1024) else {
-        log_line(b"exp2: fstab missing\n");
         return -1;
     };
     let text = core::str::from_utf8(&data).unwrap_or("");
@@ -304,10 +264,7 @@ pub unsafe extern "C" fn pm_metal_boot_rootfs_fstab_apply(path: *const u8) -> i3
             continue;
         };
         if mount_fstab_line(source, target, fstype) != 0 {
-            log_mounted(b"exp2: fstab mount failed ", target.as_bytes());
             ok = -1;
-        } else {
-            log_mounted(b"exp2: fstab mounted ", target.as_bytes());
         }
     }
     ok
@@ -319,16 +276,13 @@ pub unsafe extern "C" fn pm_metal_boot_rootfs_fstab_apply(path: *const u8) -> i3
 pub unsafe extern "C" fn pm_metal_boot_rootfs_mount_all() -> i32 {
     let len = pm_metal_boot_root_fat_len as usize;
     if len == 0 {
-        log_line(b"exp2: rootfs blob empty\n");
         return -1;
     }
     let buf = ptr::addr_of_mut!(pm_metal_boot_root_fat);
     let slash = b"/\0";
     if pm_metal_fs_fat_mount(slash.as_ptr(), buf, len) != 0 {
-        log_line(b"exp2: mount / failed\n");
         return -1;
     }
-    log_line(b"exp2: mounted /\n");
 
     let id = blobs::KERNEL_MODULE_ID.as_bytes();
     let mut idz = [0u8; 96];
@@ -354,9 +308,7 @@ pub unsafe extern "C" fn pm_metal_boot_rootfs_mount_all() -> i32 {
     }
 
     let fstab = b"/etc/fstab\0";
-    if pm_metal_boot_rootfs_fstab_apply(fstab.as_ptr()) != 0 {
-        log_line(b"exp2: stage B fstab apply failed\n");
-        /* non-fatal if fstab absent was already logged as -1; keep Stage A */
-    }
+    let _ = pm_metal_boot_rootfs_fstab_apply(fstab.as_ptr());
+    /* fstab absent / line fail is non-fatal; tree fs section shows what mounted. */
     0
 }

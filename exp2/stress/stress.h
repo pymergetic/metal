@@ -1,5 +1,5 @@
 /*
- * Opt-in QEMU stress harness (./exp2/scripts/stress). Not part of normal firmware.
+ * Opt-in QEMU stress harness (forge stress). Not part of normal firmware.
  */
 #ifndef EXP2_STRESS_H_
 #define EXP2_STRESS_H_

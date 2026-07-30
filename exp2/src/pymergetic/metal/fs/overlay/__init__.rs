@@ -6,8 +6,8 @@ use core::ffi::c_void;
 
 use pymergetic_metal_fs::{
     pm_metal_fs_ops_register, pm_metal_fs_ops_t, pm_metal_fs_set_active_ops, pm_metal_fs_stat_t,
-    PM_METAL_FS_INVALID, PM_METAL_FS_O_CREAT, PM_METAL_FS_O_DIRECTORY, PM_METAL_FS_O_RDWR,
-    PM_METAL_FS_O_WRONLY, PM_METAL_FS_TYPE_DIR,
+    pm_metal_fs_statfs_t, PM_METAL_FS_INVALID, PM_METAL_FS_O_CREAT, PM_METAL_FS_O_DIRECTORY,
+    PM_METAL_FS_O_RDWR, PM_METAL_FS_O_WRONLY, PM_METAL_FS_TYPE_DIR,
 };
 use pymergetic_metal_rt as _;
 use pymergetic_metal_vfs as vfs;
@@ -67,6 +67,7 @@ static OV_OPS: pm_metal_fs_ops_t = pm_metal_fs_ops_t {
     unlink: Some(op_unlink),
     rename: None,
     fsync: None,
+    statfs: Some(op_statfs),
 };
 
 fn done(v: u32) -> u32 {
@@ -287,6 +288,32 @@ unsafe extern "C" fn op_stat(ctx: *mut c_void, path: *const u8, st_out: *mut u8)
         return s(ov.lower_ctx, path, st_out);
     }
     done(PM_METAL_FS_INVALID)
+}
+
+unsafe extern "C" fn op_statfs(ctx: *mut c_void, out: *mut pm_metal_fs_statfs_t) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    let Some(ov) = ov_get(ctx) else {
+        return -1;
+    };
+    /* Prefer upper capacity; fall back to lower. Overlay itself is RW. */
+    if let Some(f) = (*ov.upper_ops).statfs {
+        if f(ov.upper_ctx, out) == 0 {
+            (*out).flags = 0;
+            return 0;
+        }
+    }
+    if let Some(f) = (*ov.lower_ops).statfs {
+        if f(ov.lower_ctx, out) == 0 {
+            (*out).flags = 0;
+            return 0;
+        }
+    }
+    (*out).total = 0;
+    (*out).used = 0;
+    (*out).flags = 0;
+    0
 }
 
 unsafe extern "C" fn op_readdir(ctx: *mut c_void, h: u32, name_out: *mut u8, name_cap: u32) -> u32 {

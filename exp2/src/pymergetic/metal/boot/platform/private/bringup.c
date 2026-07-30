@@ -33,9 +33,10 @@ void *memset(void *dst, int c, size_t n);
 
 /* Lifetime: static .rodata — DT stores the pointer. */
 /* AVAILABLE below 1MiB vs above — classic PC lowmem / highmem split. */
+static const uint8_t k_kernel_compat[] = "kernel";
 static const uint8_t k_lowmem_compat[] = "lowmem";
 static const uint8_t k_highmem_compat[] = "highmem";
-static const uint8_t k_heap_compat[] = "heap";
+static const uint8_t k_area_compat[] = "area";
 #define HIGHMEM_FLOOR 0x100000ull
 
 static size_t cstrlen(const char *s)
@@ -150,10 +151,23 @@ static int32_t seed_mem_partition(uint8_t *arena, size_t bytes)
   pm_metal_boot_mem_region_t regs[64];
   uint32_t n = 0;
   uint32_t i;
+  uintptr_t img_base;
+  uintptr_t img_end;
 
   if (pm_metal_boot_mem_map_get(regs, 64u, &n) != 0) {
     return -1;
   }
+
+  img_base = pm_metal_boot_mem_map_image_base();
+  img_end = pm_metal_boot_mem_map_image_end();
+  if (img_base != 0u && img_end > img_base) {
+    if (pm_metal_dt_seed_mem(k_kernel_compat, (uint32_t)PM_METAL_DT_CAP_BOUND,
+                             (uint64_t)img_base, (uint64_t)(img_end - img_base))
+        < 0) {
+      return -1;
+    }
+  }
+
   for (i = 0; i < n; i++) {
     const uint8_t *compat;
 
@@ -165,7 +179,7 @@ static int32_t seed_mem_partition(uint8_t *arena, size_t bytes)
       return -1;
     }
   }
-  if (pm_metal_dt_seed_mem(k_heap_compat, (uint32_t)PM_METAL_DT_CAP_BOUND,
+  if (pm_metal_dt_seed_mem(k_area_compat, (uint32_t)PM_METAL_DT_CAP_BOUND,
                            (uint64_t)(uintptr_t)arena, (uint64_t)bytes)
       < 0) {
     return -1;
@@ -173,71 +187,6 @@ static int32_t seed_mem_partition(uint8_t *arena, size_t bytes)
   return 0;
 }
 
-
-static void log_virtio_net_mac(const uint8_t mac[6])
-{
-  static const char hex[] = "0123456789abcdef";
-  char              buf[48];
-  size_t            p = 0;
-  size_t            i;
-  const char       *prefix = "virtio-net: mac=";
-  const char       *suffix = " open ok\n";
-
-  for (i = 0; prefix[i] != '\0'; i++) {
-    buf[p++] = prefix[i];
-  }
-  for (i = 0; i < 6; i++) {
-    if (i > 0) {
-      buf[p++] = ':';
-    }
-    buf[p++] = hex[(mac[i] >> 4) & 0x0fu];
-    buf[p++] = hex[mac[i] & 0x0fu];
-  }
-  for (i = 0; suffix[i] != '\0'; i++) {
-    buf[p++] = suffix[i];
-  }
-  buf[p] = '\0';
-  if (pm_metal_log_ready() != 0) {
-    pm_metal_log((const uint8_t *)buf);
-  } else {
-    pm_metal_boot_uart_write(buf, p);
-  }
-}
-
-static void log_net_dhcp(int32_t ok, const char *ip)
-{
-  char buf[64];
-  size_t p = 0;
-  size_t i;
-  const char *prefix;
-  const char *suffix;
-
-  if (ok != 0 && ip != NULL) {
-    prefix = "net: eth0 dhcp ok ";
-    suffix = "\n";
-    for (i = 0; prefix[i] != '\0'; i++) {
-      buf[p++] = prefix[i];
-    }
-    for (i = 0; ip[i] != '\0' && p + 2 < sizeof(buf); i++) {
-      buf[p++] = ip[i];
-    }
-  } else {
-    prefix = "net: eth0 dhcp FAIL\n";
-    for (i = 0; prefix[i] != '\0'; i++) {
-      buf[p++] = prefix[i];
-    }
-    suffix = "";
-  }
-  for (i = 0; suffix[i] != '\0'; i++) {
-    buf[p++] = suffix[i];
-  }
-  buf[p] = '\0';
-  if (pm_metal_log_ready() != 0) {
-    pm_metal_log((const uint8_t *)buf);
-  } else {
-    pm_metal_boot_uart_write(buf, p);
-  }
-}
 
 static int32_t net_dhcp_bringup(void)
 {
@@ -254,7 +203,6 @@ static int32_t net_dhcp_bringup(void)
 
   /* Composition: L2 driver lives in dev/net; IP only sees ops. */
   if (pm_metal_net_ip_l2_start("lwip+virtio-net", &virtio_l2) != 0) {
-    log_net_dhcp(0, NULL);
     return -1;
   }
   (void)pm_metal_net_ip_loopback_start();
@@ -267,15 +215,12 @@ static int32_t net_dhcp_bringup(void)
     (void)pm_metal_async_run_poll_all();
     r = pm_metal_net_ip_if_dhcp_ready("eth0", ip, sizeof(ip));
     if (r == 1) {
-      log_net_dhcp(1, ip);
       return 0;
     }
     if (r < 0) {
-      log_net_dhcp(0, NULL);
       return -1;
     }
     if (pm_metal_time_mono_us() >= deadline) {
-      log_net_dhcp(0, NULL);
       return -1;
     }
   }
@@ -325,11 +270,6 @@ int32_t pm_metal_boot_bringup(void)
     return fail("exp2: console attach failed\n");
   }
 
-  /* Stage A rootfs + kernel /mods|/src mounts (needs heap + console). */
-  if (pm_metal_boot_rootfs_mount_all() != 0) {
-    return fail("exp2: rootfs mount failed\n");
-  }
-
   /* TSC calibrate needs EFI Stall — before ExitBootServices. */
   pm_metal_time_init();
 
@@ -344,12 +284,11 @@ int32_t pm_metal_boot_bringup(void)
     return fail("exp2: harvest failed\n");
   }
 
-
   {
     uint32_t bi;
     uint32_t nblk;
 
-    /* Open + bind only; LBA0 hammer lives under ./exp2/scripts/stress. */
+    /* Open + bind only; LBA0 hammer lives under forge stress. */
     if (pm_metal_dev_blk_open() != 0) {
       return fail("exp2: virtio-blk open failed\n");
     }
@@ -363,7 +302,7 @@ int32_t pm_metal_boot_bringup(void)
     }
   }
 
-  /* Runners only — opt-in harness lives under ./exp2/scripts/stress. */
+  /* Runners only — opt-in harness lives under forge stress. */
   {
     uint32_t n_cpus = pm_metal_dev_acpi_cpu_count();
     if (n_cpus == 0u) {
@@ -378,14 +317,9 @@ int32_t pm_metal_boot_bringup(void)
     return fail("exp2: net dhcp failed\n");
   }
   {
-    const uint8_t *mac;
     uint32_t ni;
     uint32_t nnet;
 
-    mac = pm_metal_dev_net_virtio_mac();
-    if (mac != NULL) {
-      log_virtio_net_mac(mac);
-    }
     nnet = pm_metal_dt_count_class(PM_METAL_DT_CLASS_NET);
     for (ni = 0; ni < nnet; ni++) {
       const DtNode *n = pm_metal_dt_by_class(PM_METAL_DT_CLASS_NET, ni);
@@ -394,6 +328,11 @@ int32_t pm_metal_boot_bringup(void)
         break;
       }
     }
+  }
+
+  /* Stage A/B rootfs after harvest/net so tree fs/net match reality. */
+  if (pm_metal_boot_rootfs_mount_all() != 0) {
+    return fail("exp2: rootfs mount failed\n");
   }
 
   if (pm_metal_boot_tree_print() != 0) {

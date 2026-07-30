@@ -1,0 +1,43 @@
+---
+description: Never put checkout-absolute paths in any .clangd / .clangd.template
+alwaysApply: true
+---
+
+# No absolute paths in `.clangd*`
+
+**Hard rule.** `.clangd`, `.clangd.template`, and every nested
+`**/.clangd` must use **repo-relative** (or file-relative) `-I` / `--sysroot`
+paths only. Never `/home/...`, `/Users/...`, drive letters, or
+`@@ROOT@@` → absolute expansion.
+
+## Why
+
+Checkout-absolute paths make the IDE config machine-specific, dirty diffs,
+and fight the owner's reading/search. Relative paths resolve against the
+directory of the `.clangd` file that contains them (clangd).
+
+## How
+
+| File | Paths relative to |
+|------|-------------------|
+| package-root `.clangd` / `.clangd.template` | package root (`-Iexp2/...`, `-Isrc/...`, `-I.`) |
+| nested module `.clangd` (e.g. `fs/littlefs/`, `net/`, `boot/.../bios/`) | that file's directory (`-I.`, `-Ivendor`, `-I../../libc`) |
+
+`scripts/setup.d/deps/ide.sh` **copies** templates; it must not `sed` in
+`${ROOT}` / absolute `-I`.
+
+## Allowed absolute paths (not `.clangd`)
+
+`build/compile_commands.json` may still use absolute `directory` / `file`
+entries — that is a separate CDB indexing constraint. Do not "fix" that
+by putting abs `-I` into `.clangd`.
+
+## Verify after edits
+
+```
+rg -n '/home/|/Users/|[A-Za-z]:\\\\|@@ROOT@@' .clangd .clangd.template \
+  tests/host/.clangd tests/host/.clangd.template \
+  exp2 -g '*.clangd'
+```
+
+Must return nothing.

@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 UPY_DIR="${ROOT}/external/micropython"
 UPY_REPO="https://github.com/micropython/micropython"
-UPY_REF="v1.24.1"
+UPY_REF="v1.28.0"
 
 if [ ! -d "${UPY_DIR}/.git" ]; then
 	git clone --depth 1 --branch "${UPY_REF}" "${UPY_REPO}" "${UPY_DIR}" || {

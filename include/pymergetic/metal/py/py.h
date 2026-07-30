@@ -39,9 +39,8 @@ extern "C" {
 #define PM_METAL_PY_BLOB_BYTES ((size_t)CONFIG_PM_METAL_PY_BLOB_BYTES)
 #endif
 
-/** Default heap for an opt-in isolated context (pm_metal_py_run_*_isolated) —
- * much smaller than the shared blob since it's one task's own arena, not
- * everyone's; override per call. */
+/** Legacy Kconfig size; isolated contexts are not implemented (shared
+ * embed blob only). Kept so old CONFIG_* rows still compile. */
 #ifndef PM_METAL_PY_ISOLATED_BLOB_BYTES
 #define PM_METAL_PY_ISOLATED_BLOB_BYTES ((size_t)CONFIG_PM_METAL_PY_ISOLATED_BLOB_BYTES)
 #endif
@@ -103,7 +102,7 @@ int    pm_metal_py_init(void);
 int    pm_metal_py_ready(void);
 size_t pm_metal_py_blob_bytes(void);
 
-/** "MicroPython v1.24.1-dirty" (genhdr/mpversion.h's MICROPY_GIT_TAG) —
+/** MICROPY_GIT_TAG from genhdr/mpversion.h (e.g. "MicroPython v1.28.0-dirty") —
  * literal, never NULL. For banners/diagnostics; boot_init.c's REPL banner
  * is the first caller. */
 const char *pm_metal_py_version_cstr(void);
@@ -113,27 +112,19 @@ pm_metal_async_handle_t pm_metal_py_run_script(const char *path);
 pm_metal_async_handle_t pm_metal_py_run_str(const char *src);
 
 /**
- * Same, but the task gets its own exclusively-owned MicroPython VM
- * context (own heap, own module namespace) instead of the shared/
- * default one — no mPyRunLock contention with any other task, and it
- * runs bytecode in real parallel with whatever else is going on a
- * different CPU right now. Trades that isolation for the setup cost of
- * re-installing the bind/pmcmd/mod tables (cheap — see
- * docs/MICROPYTHON.md). Isolated contexts still get /mods +
- * /mods/py/stdlib on sys.path. @a heap_bytes 0 = default
- * (PM_METAL_PY_ISOLATED_BLOB_BYTES).
+ * Unavailable: always returns 0. Vanilla MicroPython has one global
+ * mp_state_ctx; Metal does not patch it for private heaps. Use
+ * pm_metal_py_run_str / _run_script (shared blob + run-lock).
  */
 pm_metal_async_handle_t pm_metal_py_run_script_isolated(const char *path, size_t heap_bytes);
 pm_metal_async_handle_t pm_metal_py_run_str_isolated(const char *src, size_t heap_bytes);
 
-/** Diagnostics for the `mem` shell breakdown — see shell_core_cmds.c. */
+/** Always 0 — no private upy contexts. */
 uint32_t pm_metal_py_isolated_ctx_count(void);
 size_t   pm_metal_py_isolated_ctx_bytes(void);
 
 /**
- * Persistent Python REPL — one long-lived task on the shared/default
- * context (never isolated: it needs persistent globals across every
- * line, exactly the property the shared context already has for free).
+ * Persistent Python REPL on the shared embed blob.
  * Real `mp_compile(..., is_repl=true)` + MICROPY_HELPER_REPL's
  * mp_repl_continue_with_input for multi-line blocks — not a hand-rolled
  * approximation. shell.c is the sole producer (one line per Enter);

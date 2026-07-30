@@ -25,6 +25,7 @@ static EFI_GUID g_loaded_image_guid = {
 
 static pm_metal_boot_mem_region_t g_regions[MAX_REGIONS];
 static uint32_t g_n_regions;
+static uintptr_t g_image_base;
 static uintptr_t g_image_end;
 static int g_cached;
 
@@ -98,7 +99,8 @@ static int32_t cache_from_bs(void)
   }
   (void)g_pm_efi_st->BootServices->FreePool(map);
 
-  /* Image end via LoadedImage when possible. */
+  /* Image span via LoadedImage when possible. */
+  g_image_base = 0;
   g_image_end = 0;
   if (g_pm_efi_image != NULL) {
     EFI_LOADED_IMAGE_PROTOCOL *li;
@@ -106,7 +108,8 @@ static int32_t cache_from_bs(void)
     st = g_pm_efi_st->BootServices->HandleProtocol(
         g_pm_efi_image, &g_loaded_image_guid, (VOID **)&li);
     if (!EFI_ERROR(st) && li != NULL && li->ImageBase != NULL) {
-      g_image_end = (uintptr_t)li->ImageBase + (uintptr_t)li->ImageSize;
+      g_image_base = (uintptr_t)li->ImageBase;
+      g_image_end = g_image_base + (uintptr_t)li->ImageSize;
     }
   }
   g_cached = 1;
@@ -140,6 +143,14 @@ static int32_t efi_mem_map_get(pm_metal_boot_mem_region_t *out, uint32_t max, ui
   return 0;
 }
 
+static uintptr_t efi_image_base(void)
+{
+  if (!g_cached) {
+    (void)cache_from_bs();
+  }
+  return g_image_base;
+}
+
 static uintptr_t efi_image_end(void)
 {
   if (!g_cached) {
@@ -150,6 +161,7 @@ static uintptr_t efi_image_end(void)
 
 static const pm_metal_boot_mem_map_ops_t g_ops = {
   .get = efi_mem_map_get,
+  .image_base = efi_image_base,
   .image_end = efi_image_end,
 };
 

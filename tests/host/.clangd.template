@@ -4,15 +4,15 @@
 CompileFlags:
   Compiler: /usr/bin/clang
   Remove:
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/external/wamr/core/shared/platform/include
-    - -I@@ROOT@@/external/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
+    - -Isrc/pymergetic/metal/guest/wamr
+    - -Iexternal/wamr/core/shared/platform/include
+    - -Iexternal/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
     - --target=wasm32-wasip1
-    - --sysroot=@@ROOT@@/.tools/wasi-sdk/share/wasi-sysroot
+    - --sysroot=.tools/wasi-sdk/share/wasi-sysroot
   Add:
     - --target=x86_64-linux-gnu
     - -std=c11
     - -D_GNU_SOURCE
-    - -I@@ROOT@@/external/tlsf
-    - -I@@ROOT@@/include
+    - -Iexternal/tlsf
+    - -Iinclude

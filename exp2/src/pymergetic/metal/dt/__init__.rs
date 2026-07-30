@@ -201,7 +201,7 @@ fn loc_u64(base: u64, size: u64) -> [u32; 4] {
 }
 
 /// Memory partitioning node (intel only — no driver / no access path).
-/// `compat` outlives the table (`"lowmem"`, `"highmem"`, `"heap"`, …).
+/// `compat` outlives the table (`"lowmem"`, `"highmem"`, `"area"`, …).
 /// `loc` = `[base_lo, base_hi, size_lo, size_hi]`.
 /// Heap claim uses `caps | CAP_BOUND` after `mem_init` (alloc already up).
 #[no_mangle]

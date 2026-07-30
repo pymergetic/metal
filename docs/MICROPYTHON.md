@@ -1410,7 +1410,7 @@ overclaimed.
 - [x] No Python GIL surface added; cross-task sharing goes through Metal handles only — true by absence (nothing new was added), not independently tested/enforced
 - [x] Cancel / exception / OOM isolates one task; sync `py_call` cannot park — `pm_metal_py_call` and `py_call_bound` (`py.c`) both explicitly check `mp_obj_is_type(ret, &mp_type_gen_instance)` and hard-error on a sync/async mismatch instead of relying on incidental `.send()` `AttributeError`s; boot-proofed (`boot_python.c`'s `PY_PROOF_EXC`/`PY_PROOF_CANCEL`/`PY_PROOF_OOM` — uncaught exception, task cancel mid-sleep, and blob-exhausting `MemoryError` each isolate to that one task, blob stays live for the next proof)
 - [x] Fairness path: `metal.aio.yield_` proven under load — boot proof `PY_PROOF_YIELD` (`yield_peer.py` vs `yield_sleeper.py`)
-- [x] `.mpy`/µPy version pinned — `scripts/setup.d/deps/micropython.sh` pins `v1.24.1` (single vendored checkout, patches applied on top)
+- [x] `.mpy`/µPy version pinned — `scripts/setup.d/deps/micropython.sh` pins `v1.28.0` (single vendored checkout, patches applied on top)
 - [x] Written note that NLR/exceptions are safe across park/resume — see the ["NLR / park-resume safety" note](#resolved--gc-stack-scan-boundary-captured-once-vs-resumed-cross-cpu) below; `nlr_push`/`nlr_pop` are correctly scoped inside each non-parking call and never cross an `await` boundary
 - [x] Spike size/RAM note vs Doom — see the ["Blob vs. Doom HEAP" note](#resolved--gc-stack-scan-boundary-captured-once-vs-resumed-cross-cpu) below: MAP (blob) and HEAP (Doom's wasm allocations) grow from opposite ends of the same dual-span hole, so the practical ceiling when both run concurrently is the hole size, not each side's nominal budget
 

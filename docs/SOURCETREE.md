@@ -548,10 +548,12 @@ reproduced by `scripts/setup <dep>` — never committed itself (gitignored), so
 re-running that script after `rm -rf external/<dep>` always gets back to the
 exact same tree. **Invariant: always vanilla** — the working tree equals pin +
 `patches/<dep>/*.patch` only. That includes MicroPython: `external/micropython`
-is upstream (`scripts/setup micropython`, currently `v1.24.1`) plus
-`patches/micropython/` — not a Metal fork submodule. Port/glue and any
-rewrite live under `src/` (e.g. `pymergetic/metal/py/`), never as a second
-engine tree under `external/`. When a fix genuinely can't be done from `src/`'s
+is upstream (`scripts/setup micropython`, currently `v1.28.0`) plus
+any `patches/micropython/` hunks that are genuine upstream bugs with no
+`src/` workaround — not a Metal fork, and not Metal features (per-CPU
+`mp_state_ctx`, private heaps, …) smuggled in via patch. Port/glue lives
+under `src/` (e.g. `pymergetic/metal/py/`); Python uses the shared embed
+blob and normal Metal alloc. When a fix genuinely can't be done from `src/`'s
 side (see above), add or update a tracked `patches/<dep>/NNNN-*.patch` (plain
 diffs, reviewable in a normal PR) and re-apply via setup — never leave an
 untracked new file or an unpatched hunk in the checkout. Each patch file's own

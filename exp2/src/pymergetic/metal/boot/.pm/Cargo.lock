@@ -52,6 +52,7 @@ dependencies = [
  "pymergetic_metal_rt",
  "pymergetic_metal_util_ascii",
  "pymergetic_metal_util_lz4",
+ "pymergetic_metal_util_size",
  "pymergetic_metal_util_tar",
  "pymergetic_metal_vfs",
 ]
@@ -76,7 +77,6 @@ dependencies = [
 name = "pymergetic_metal_dev_acpi"
 version = "0.1.0"
 dependencies = [
- "pymergetic_metal_log",
  "pymergetic_metal_rt",
 ]
 
@@ -223,6 +223,13 @@ dependencies = [
 
 [[package]]
 name = "pymergetic_metal_util_lz4"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_util_size"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_rt",

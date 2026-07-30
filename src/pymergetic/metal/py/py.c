@@ -770,42 +770,16 @@ pm_metal_async_handle_t pm_metal_py_run_script(const char *path)
 
 pm_metal_async_handle_t pm_metal_py_run_str_isolated(const char *src, size_t heap_bytes)
 {
-  size_t n;
-  char  *copy;
-
-  if (src == NULL) {
-    return 0;
-  }
-  if (heap_bytes == 0u) {
-    heap_bytes = PM_METAL_PY_ISOLATED_BLOB_BYTES;
-  }
-  n    = strlen(src);
-  copy = (char *)pm_metal_mem_alloc(n + 1u, PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
-  if (copy == NULL) {
-    return 0;
-  }
-  memcpy(copy, src, n + 1u);
-  return py_spawn(copy, n, PY_STEP_EXEC, heap_bytes);
+  (void)src;
+  (void)heap_bytes;
+  return 0;
 }
 
 pm_metal_async_handle_t pm_metal_py_run_script_isolated(const char *path, size_t heap_bytes)
 {
-  size_t n;
-  char  *copy;
-
-  if (path == NULL) {
-    return 0;
-  }
-  if (heap_bytes == 0u) {
-    heap_bytes = PM_METAL_PY_ISOLATED_BLOB_BYTES;
-  }
-  n    = strlen(path);
-  copy = (char *)pm_metal_mem_alloc(n + 1u, PM_METAL_MEM_HEAP, PM_METAL_MEM_ID_NONE);
-  if (copy == NULL) {
-    return 0;
-  }
-  memcpy(copy, path, n + 1u);
-  return py_spawn(copy, n, PY_STEP_LOAD, heap_bytes);
+  (void)path;
+  (void)heap_bytes;
+  return 0;
 }
 
 uint32_t pm_metal_py_isolated_ctx_count(void)

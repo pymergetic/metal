@@ -15,6 +15,7 @@
 #define MB2_BOOTLOADER_MAGIC 0x36D76289u
 #define MAX_REGIONS 128u
 
+extern char __pm_metal_image_base[];
 extern char __pm_metal_image_end[];
 
 typedef struct {
@@ -205,6 +206,11 @@ static int32_t bios_mem_map_get(pm_metal_boot_mem_region_t *out, uint32_t max, u
   return 0;
 }
 
+static uintptr_t bios_mem_map_image_base(void)
+{
+  return (uintptr_t)__pm_metal_image_base;
+}
+
 static uintptr_t bios_mem_map_image_end(void)
 {
   return (uintptr_t)__pm_metal_image_end;
@@ -212,6 +218,7 @@ static uintptr_t bios_mem_map_image_end(void)
 
 static const pm_metal_boot_mem_map_ops_t g_ops = {
   .get = bios_mem_map_get,
+  .image_base = bios_mem_map_image_base,
   .image_end = bios_mem_map_image_end,
 };
 

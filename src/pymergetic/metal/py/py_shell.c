@@ -29,9 +29,6 @@ static void PyShellUsage(void)
   pm_metal_shell_out("  py -f <mod.fn> [ints...]       call a bound Python fn");
   pm_metal_shell_out("    py -f c_py_demo.add 2 3      -> prints 5");
   pm_metal_shell_out("    py -f c_py_demo.blink 50000  -> runs until blink finishes");
-  pm_metal_shell_out("  py -x <script.py> | -x -c '<code>'");
-  pm_metal_shell_out("    own VM context (own heap) -- runs in");
-  pm_metal_shell_out("    real parallel with the shared context on another CPU");
   pm_metal_shell_out("  py -i                          start the persistent Python REPL");
   pm_metal_shell_out("    (console() at the >>> prompt pauses it, back to this shell)");
 }
@@ -81,17 +78,14 @@ void pm_metal_py_repl_print_banner(void)
 
   pm_metal_log("");
   pm_metal_log(
-    "\033[1;35mMetal Python\033[0m -- persistent REPL, shared context, globals stick around.");
+    "\033[1;35mMetal Python\033[0m -- persistent REPL, shared blob, globals stick around.");
   pm_metal_log("Type console() at the >>> prompt to pause it and return to this shell.");
   pm_metal_log("");
   pm_metal_log("  - pymergetic.metal.* \033[2m<->\033[0m C: Python calls C, C calls back into "
                "Python -- one bind table, both directions");
-  pm_metal_log(
-    "  - Python task == Metal task: FCFS across every CPU runner, no GIL, no private Python loop");
+  pm_metal_log("  - Python task == Metal task: FCFS across runners, shared mp_state_ctx + run-lock");
   pm_metal_log("  - Real \033[1mawait\033[0m: Python coroutines and C coroutines share one "
                "scheduler (`await metal.aio.sleep_us(...)`)");
-  pm_metal_log("  - `py -x`: opt-in isolated context, own heap + own GC -- genuine parallel "
-               "bytecode on another core");
   pm_metal_log(
     "  - Signed wasm/AOT natives self-register straight into Python: `metal.mod.<name>.<fn>(...)`");
   pm_metal_log("");
@@ -223,7 +217,6 @@ static void PyShellRun(int32_t argc, char **argv)
   uint64_t                deadline;
   const char             *src_or_path;
   int32_t                 is_cmd;
-  int32_t                 is_isolated;
   int32_t                 argi;
 
   if (argc >= 2 && argv[1] != NULL && strcmp(argv[1], "-f") == 0) {
@@ -241,10 +234,10 @@ static void PyShellRun(int32_t argc, char **argv)
     return;
   }
 
-  argi        = 1;
-  is_isolated = (argc >= 2 && argv[1] != NULL && strcmp(argv[1], "-x") == 0) ? 1 : 0;
-  if (is_isolated) {
-    argi = 2;
+  argi = 1;
+  if (argc >= 2 && argv[1] != NULL && strcmp(argv[1], "-x") == 0) {
+    pm_metal_shell_out("py: -x gone (shared blob only, no private upy heap)");
+    return;
   }
 
   if (argc <= argi || argv[argi] == NULL || argv[argi][0] == '\0') {
@@ -260,12 +253,10 @@ static void PyShellRun(int32_t argc, char **argv)
     }
 
     src_or_path = argv[argi + 1];
-    task_h =
-      is_isolated ? pm_metal_py_run_str_isolated(src_or_path, 0) : pm_metal_py_run_str(src_or_path);
+    task_h      = pm_metal_py_run_str(src_or_path);
   } else {
     src_or_path = argv[argi];
-    task_h      = is_isolated ? pm_metal_py_run_script_isolated(src_or_path, 0)
-                              : pm_metal_py_run_script(src_or_path);
+    task_h      = pm_metal_py_run_script(src_or_path);
   }
 
   if (task_h == 0) {
@@ -285,5 +276,5 @@ static void PyShellRun(int32_t argc, char **argv)
 
 PM_METAL_SHELL_CMD(g_pm_metal_shell_cmd_py,
                    "py",
-                   "py [-x] <script>|-c <code> | -f <mod.fn> [args] | -i",
+                   "py <script>|-c <code> | -f <mod.fn> [args] | -i",
                    PyShellRun);

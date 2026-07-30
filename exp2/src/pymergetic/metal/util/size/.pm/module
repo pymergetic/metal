@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.util.size",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Byte-count formatting (KiB/MiB/GiB/TiB)."
+}

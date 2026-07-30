@@ -299,6 +299,31 @@ pub fn started() -> bool {
     with_lock(|e| e.started)
 }
 
+/// Address of runner `i` control block (for intel / tree). 0 if bad index.
+pub fn runner_addr(i: u32) -> usize {
+    with_lock(|e| {
+        if !e.started || i >= e.n_runners {
+            return 0;
+        }
+        let p: *const Runner = &e.runners[i as usize];
+        p as usize
+    })
+}
+
+/// Queue depths HIGH/MED/LOW for runner `i`. Returns -1 if bad index.
+pub fn runner_qlen(i: u32, high: &mut u32, med: &mut u32, low: &mut u32) -> i32 {
+    with_lock(|e| {
+        if !e.started || i >= e.n_runners {
+            return -1;
+        }
+        let r = &e.runners[i as usize];
+        *high = r.q[0].len() as u32;
+        *med = r.q[1].len() as u32;
+        *low = r.q[2].len() as u32;
+        0
+    })
+}
+
 pub fn coro_create(step: StepFn, state_bytes: u32) -> Handle {
     let frame = alloc_frame(state_bytes);
     if state_bytes != 0 && frame.is_null() {

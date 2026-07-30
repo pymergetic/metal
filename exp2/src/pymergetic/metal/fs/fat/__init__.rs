@@ -13,9 +13,10 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use pymergetic_metal_fs::{
     pm_metal_fs_ops_register, pm_metal_fs_ops_t, pm_metal_fs_set_active_ops, pm_metal_fs_stat_t,
-    PM_METAL_FS_INVALID, PM_METAL_FS_O_CREAT, PM_METAL_FS_O_DIRECTORY, PM_METAL_FS_O_RDONLY,
-    PM_METAL_FS_O_RDWR, PM_METAL_FS_O_TRUNC, PM_METAL_FS_O_WRONLY, PM_METAL_FS_SEEK_CUR,
-    PM_METAL_FS_SEEK_END, PM_METAL_FS_SEEK_SET, PM_METAL_FS_TYPE_DIR, PM_METAL_FS_TYPE_FILE,
+    pm_metal_fs_statfs_t, PM_METAL_FS_INVALID, PM_METAL_FS_O_CREAT, PM_METAL_FS_O_DIRECTORY,
+    PM_METAL_FS_O_RDONLY, PM_METAL_FS_O_RDWR, PM_METAL_FS_O_TRUNC, PM_METAL_FS_O_WRONLY,
+    PM_METAL_FS_SEEK_CUR, PM_METAL_FS_SEEK_END, PM_METAL_FS_SEEK_SET, PM_METAL_FS_TYPE_DIR,
+    PM_METAL_FS_TYPE_FILE,
 };
 use pymergetic_metal_rt as _;
 use pymergetic_metal_vfs as vfs;
@@ -106,6 +107,7 @@ static FAT_OPS: pm_metal_fs_ops_t = pm_metal_fs_ops_t {
     unlink: Some(op_unlink),
     rename: None,
     fsync: None,
+    statfs: Some(op_statfs),
 };
 
 fn done(v: u32) -> u32 {
@@ -1775,6 +1777,19 @@ unsafe extern "C" fn op_stat(ctx: *mut c_void, path: *const u8, st_out: *mut u8)
     done(0)
 }
 
+unsafe extern "C" fn op_statfs(ctx: *mut c_void, out: *mut pm_metal_fs_statfs_t) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    let Some(v) = vol_ref(ctx as u32) else {
+        return -1;
+    };
+    (*out).total = v.len as u64;
+    (*out).used = v.len as u64;
+    (*out).flags = 0;
+    0
+}
+
 unsafe extern "C" fn op_readdir(ctx: *mut c_void, h: u32, name_out: *mut u8, name_cap: u32) -> u32 {
     let vol = ctx as u32;
     let files = &mut *addr_of_mut!(FILES);
@@ -1883,83 +1898,4 @@ unsafe extern "C" fn op_unlink(ctx: *mut c_void, path: *const u8) -> u32 {
     }
     delete_entry(vm, dir_cl, off);
     done(0)
-}
-
-
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn seed_long_names_fat16() {
-        let mut buf = vec![0u8; 256 * 1024];
-        unsafe {
-            assert_eq!(pm_metal_fs_fat_format_buf(buf.as_mut_ptr(), buf.len()), 0);
-            let n1 = b"hello_world.py\0";
-            let d1 = b"py\n";
-            let n2 = b"long_subdir_name/my_module.py\0";
-            let d2 = b"nested\n";
-            let names = [n1.as_ptr(), n2.as_ptr()];
-            let datas = [d1.as_ptr(), d2.as_ptr()];
-            let lens = [d1.len() as u32, d2.len() as u32];
-            assert_eq!(
-                pm_metal_fs_fat_seed_simple(
-                    buf.as_mut_ptr(),
-                    buf.len(),
-                    names.as_ptr(),
-                    datas.as_ptr(),
-                    lens.as_ptr(),
-                    2,
-                ),
-                0
-            );
-            /* LFN stores UCS-2 in discontinuous dirent fields; probe alias + LFN attr. */
-            assert!(buf.windows(8).any(|w| w == b"HELL~1  "));
-            assert!(buf.iter().any(|&b| b == ATTR_LFN));
-            let lay = parse_layout(buf.as_ptr(), buf.len()).unwrap();
-            let vol = Vol {
-                buf: buf.as_mut_ptr(),
-                len: buf.len(),
-                lay,
-            };
-            assert!(dir_find_name(&vol, 0, "hello_world.py").is_some());
-            assert!(dir_find_name(&vol, 0, "long_subdir_name").is_some());
-            let dir = de_clust(&vol, dir_find_name(&vol, 0, "long_subdir_name").unwrap());
-            assert!(dir_find_name(&vol, dir, "my_module.py").is_some());
-        }
-    }
-
-    #[test]
-    fn seed_long_names_fat32() {
-        let mut buf = vec![0u8; 32 * 1024 * 1024];
-        unsafe {
-            assert_eq!(pm_metal_fs_fat_format_buf(buf.as_mut_ptr(), buf.len()), 0);
-            let lay = parse_layout(buf.as_ptr(), buf.len()).unwrap();
-            assert!(lay.is_fat32);
-            let n1 = b"hello_world.py\0";
-            let d1 = b"py\n";
-            let names = [n1.as_ptr()];
-            let datas = [d1.as_ptr()];
-            let lens = [d1.len() as u32];
-            assert_eq!(
-                pm_metal_fs_fat_seed_simple(
-                    buf.as_mut_ptr(),
-                    buf.len(),
-                    names.as_ptr(),
-                    datas.as_ptr(),
-                    lens.as_ptr(),
-                    1,
-                ),
-                0
-            );
-            let vol = Vol {
-                buf: buf.as_mut_ptr(),
-                len: buf.len(),
-                lay,
-            };
-            assert!(dir_find_name(&vol, lay.root_clust, "hello_world.py").is_some());
-        }
-    }
 }

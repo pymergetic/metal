@@ -12,8 +12,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use pymergetic_metal_fs::{
     pm_metal_fs_ops_register, pm_metal_fs_ops_t, pm_metal_fs_set_active_ops, pm_metal_fs_stat_t,
-    PM_METAL_FS_INVALID, PM_METAL_FS_O_DIRECTORY, PM_METAL_FS_O_RDONLY, PM_METAL_FS_SEEK_CUR,
-    PM_METAL_FS_SEEK_END, PM_METAL_FS_SEEK_SET, PM_METAL_FS_TYPE_DIR, PM_METAL_FS_TYPE_FILE,
+    pm_metal_fs_statfs_t, PM_METAL_FS_INVALID, PM_METAL_FS_O_DIRECTORY, PM_METAL_FS_O_RDONLY,
+    PM_METAL_FS_SEEK_CUR, PM_METAL_FS_SEEK_END, PM_METAL_FS_SEEK_SET, PM_METAL_FS_ST_RDONLY,
+    PM_METAL_FS_TYPE_DIR, PM_METAL_FS_TYPE_FILE,
 };
 use pymergetic_metal_rt as _;
 use pymergetic_metal_vfs as vfs;
@@ -305,6 +306,7 @@ static ZIP_OPS: pm_metal_fs_ops_t = pm_metal_fs_ops_t {
     unlink: None,
     rename: None,
     fsync: None,
+    statfs: Some(op_statfs),
 };
 
 unsafe fn ensure_ops_registered() {
@@ -484,6 +486,20 @@ unsafe extern "C" fn op_stat(ctx: *mut c_void, path: *const u8, st_out: *mut u8)
         }
     }
     done(PM_METAL_FS_INVALID)
+}
+
+unsafe extern "C" fn op_statfs(ctx: *mut c_void, out: *mut pm_metal_fs_statfs_t) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    let arches = &*addr_of!(ARCHES);
+    let Some(arch) = arches.get(ctx as usize).and_then(|a| a.as_ref()) else {
+        return -1;
+    };
+    (*out).total = arch.len as u64;
+    (*out).used = arch.len as u64;
+    (*out).flags = PM_METAL_FS_ST_RDONLY;
+    0
 }
 
 unsafe extern "C" fn op_readdir(

@@ -283,6 +283,39 @@ pub unsafe extern "C" fn pm_metal_fs_result(h: u32) -> u32 {
     pm_metal_async_result_u32(h)
 }
 
+/// Volume stats for mount at dense vfs index. Returns 0 ok, -1 missing/bad.
+/// When `ops.statfs` is absent, fills `flags` from `fwrite == None` and leaves sizes 0.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_mount_statfs(
+    index: u32,
+    out: *mut pm_metal_fs_statfs_t,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    let mut ops_p: *const c_void = core::ptr::null();
+    let mut ctx: *mut c_void = core::ptr::null_mut();
+    if vfs::pm_metal_vfs_mount_get(index, &mut ops_p, &mut ctx) != 0 || ops_p.is_null() {
+        return -1;
+    }
+    let ops = &*(ops_p as *const pm_metal_fs_ops_t);
+    *out = pm_metal_fs_statfs_t {
+        total: 0,
+        used: 0,
+        flags: if ops.fwrite.is_none() {
+            PM_METAL_FS_ST_RDONLY
+        } else {
+            0
+        },
+    };
+    if let Some(f) = ops.statfs {
+        if f(ctx, out) != 0 {
+            return -1;
+        }
+    }
+    0
+}
+
 /// Remember ops/ctx from last successful open (v1 fd routing).
 pub static mut LAST_OPS: Option<&'static pm_metal_fs_ops_t> = None;
 pub static mut LAST_CTX: *mut c_void = core::ptr::null_mut();

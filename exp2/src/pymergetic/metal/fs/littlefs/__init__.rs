@@ -6,7 +6,8 @@ use core::ffi::c_void;
 use core::ptr::{addr_of, addr_of_mut};
 
 use pymergetic_metal_fs::{
-    pm_metal_fs_ops_register, pm_metal_fs_ops_t, pm_metal_fs_set_active_ops, PM_METAL_FS_INVALID,
+    pm_metal_fs_ops_register, pm_metal_fs_ops_t, pm_metal_fs_set_active_ops, pm_metal_fs_statfs_t,
+    PM_METAL_FS_INVALID,
 };
 use pymergetic_metal_rt as _;
 use pymergetic_metal_vfs as vfs;
@@ -15,6 +16,7 @@ extern "C" {
     fn pm_metal_async_completed_u32(v: u32) -> u32;
     fn pm_metal_fs_littlefs_open_buf(buf: *mut u8, len: usize) -> u32;
     fn pm_metal_fs_littlefs_close_vol(vol: u32) -> i32;
+    fn pm_metal_fs_littlefs_vol_bytes(vol: u32) -> usize;
     fn pm_metal_fs_littlefs_op_open(vol: u32, path: *const u8, flags: u32) -> u32;
     fn pm_metal_fs_littlefs_op_close(h: u32) -> u32;
     fn pm_metal_fs_littlefs_op_fread(h: u32, dest: *mut u8, len: u32) -> u32;
@@ -47,6 +49,7 @@ static LFS_OPS: pm_metal_fs_ops_t = pm_metal_fs_ops_t {
     unlink: Some(op_unlink),
     rename: None,
     fsync: Some(op_fsync),
+    statfs: Some(op_statfs),
 };
 
 fn done(v: u32) -> u32 {
@@ -127,6 +130,20 @@ unsafe extern "C" fn op_lseek(_ctx: *mut c_void, h: u32, off: i32, whence: u32) 
 
 unsafe extern "C" fn op_stat(ctx: *mut c_void, path: *const u8, st_out: *mut u8) -> u32 {
     done(pm_metal_fs_littlefs_op_stat(ctx as u32, path, st_out))
+}
+
+unsafe extern "C" fn op_statfs(ctx: *mut c_void, out: *mut pm_metal_fs_statfs_t) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    let n = pm_metal_fs_littlefs_vol_bytes(ctx as u32);
+    if n == 0 {
+        return -1;
+    }
+    (*out).total = n as u64;
+    (*out).used = n as u64;
+    (*out).flags = 0;
+    0
 }
 
 unsafe extern "C" fn op_readdir(

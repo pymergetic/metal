@@ -26,6 +26,7 @@ use pymergetic_metal_mem as _;
 use pymergetic_metal_rt as _;
 use pymergetic_metal_util_ascii as _;
 use pymergetic_metal_util_lz4 as _;
+use pymergetic_metal_util_size as _;
 use pymergetic_metal_util_tar as _;
 use pymergetic_metal_vfs as _;
 

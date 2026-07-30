@@ -172,7 +172,7 @@ fn log_has(path: &Path, needle: &str) -> bool {
     std::fs::read_to_string(path).map(|s| s.contains(needle)).unwrap_or(false)
 }
 
-const STRESS_NEEDLES: &[&str] = &["ready        ok", "net: eth0 dhcp ok", "stress ok"];
+const STRESS_NEEDLES: &[&str] = &["ready        ok", "+-- net          ok", "stress ok"];
 
 pub fn run_stress(sess: &mut dyn ForgeSession, metal_root: &str) -> i32 {
     let exp2 = PathBuf::from(metal_root).join("exp2");

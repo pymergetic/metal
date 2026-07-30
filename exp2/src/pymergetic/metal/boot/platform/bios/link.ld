@@ -4,6 +4,7 @@ ENTRY(_start)
 SECTIONS
 {
   . = 16M;
+  PROVIDE_HIDDEN (__pm_metal_image_base = .);
 
   .bootinfo : {
     KEEP(*(.bootinfo))

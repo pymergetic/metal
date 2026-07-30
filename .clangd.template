@@ -1,5 +1,5 @@
 ---
-# Generated to .clangd by scripts/setup ide (@@ROOT@@ → absolute checkout path).
+# Copied to .clangd by scripts/setup ide. Paths are repo-relative (no abs).
 # EDK2 headers live under external/edk2 (run ./scripts/setup edk2).
 # After regenerating or editing this template: restart clangd
 # (Command Palette → "clangd: Restart language server") or reload the window.
@@ -12,36 +12,36 @@ CompileFlags:
     # Force C: bare .h is often inferred as ObjC/ObjC++; -std=c11 then errors.
     - -xc
     - -std=c11
-    - -I@@ROOT@@
-    - -I@@ROOT@@/include
+    - -I.
+    - -Iinclude
     # Shared contracts (<runtime/...>, <boot/...>) — keep global so monorepo
     # clangd still resolves them if a PathMatch / CDB fragment is skipped.
-    - -I@@ROOT@@/src/pymergetic/metal
-    - -I@@ROOT@@/exp2/src
+    - -Isrc/pymergetic/metal
+    - -Iexp2/src
     # Always visible so Generic-fallback TUs under -nostdinc still find stdint.h
     # (exp2 PathMatch also adds this; duplicate -I is harmless).
     # Do NOT add -Iexp2/src/pymergetic/metal here — that short path collides with
     # product -Isrc/pymergetic/metal for <async/...> style includes.
-    - -I@@ROOT@@/exp2/src/pymergetic/metal/libc
-    - -I@@ROOT@@/external/tlsf
+    - -Iexp2/src/pymergetic/metal/libc
+    - -Iexternal/tlsf
     # Baked CA pubs for trust.c (#include "metal_trust_bake.inc.c")
-    - -I@@ROOT@@/build/trust
+    - -Ibuild/trust
     # Always visible: Metal WAMR platform + freestanding libc stubs.
-    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/external/wamr/core/shared/platform/include
+    - -Isrc/pymergetic/metal/guest/wamr
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
+    - -Iexternal/wamr/core/shared/platform/include
     # Always visible so quoted WAMR platform includes resolve even if a
     # PathMatch fragment is skipped (clangd matches absolute paths).
-    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/external/wamr/core/shared/platform/include
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+    - -Isrc/pymergetic/metal/guest/wamr
+    - -Iexternal/wamr/core/shared/platform/include
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
     # MicroPython embed (metal/py glue); PathMatch alone is easy to miss.
-    - -I@@ROOT@@/build/micropython_embed
-    - -I@@ROOT@@/build/micropython_embed/port
-    - -I@@ROOT@@/build/micropython_embed/genhdr
-    - -I@@ROOT@@/src/pymergetic/metal/py/embed
-    - -I@@ROOT@@/external/micropython
-    - -I@@ROOT@@/external/micropython/lib/libm
+    - -Ibuild/micropython_embed
+    - -Ibuild/micropython_embed/port
+    - -Ibuild/micropython_embed/genhdr
+    - -Isrc/pymergetic/metal/py/embed
+    - -Iexternal/micropython
+    - -Iexternal/micropython/lib/libm
     - -DMICROPY_USE_INTERNAL_ERRNO=1
     # lwIP -I lives in efi/bios PathMatch + CDB only — a global EFI net -I
     # steals bios/.../dev/net (wrong lwipopts.h / PmBiosUefi.h).
@@ -64,23 +64,23 @@ CompileFlags:
     - -target
     - x86_64-unknown-windows
     - "-DEFIAPI=__attribute__((ms_abi))"
-    - -I@@ROOT@@/external/edk2/MdePkg/Include
-    - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/external/tlsf
-    - -I@@ROOT@@/include
-    - -I@@ROOT@@/src/pymergetic/metal
-    - -I@@ROOT@@/src/efi/MetalPkg
-    - -I@@ROOT@@/src/efi/pymergetic/metal/mem
-    - -I@@ROOT@@/src/pymergetic/metal/net/ip
-    - -I@@ROOT@@/external/lwip/src/include
-    - -I@@ROOT@@/external/mbedtls/include
+    - -Iexternal/edk2/MdePkg/Include
+    - -Iexternal/edk2/MdePkg/Include/X64
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
+    - -Iexternal/tlsf
+    - -Iinclude
+    - -Isrc/pymergetic/metal
+    - -Isrc/efi/MetalPkg
+    - -Isrc/efi/pymergetic/metal/mem
+    - -Isrc/pymergetic/metal/net/ip
+    - -Iexternal/lwip/src/include
+    - -Iexternal/mbedtls/include
     - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
-    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/external/wamr/core/shared/platform/include
-    - -I@@ROOT@@/external/wamr/core/shared/utils
-    - -I@@ROOT@@/external/wamr/core/iwasm/include
-    - -I@@ROOT@@/external/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+    - -Isrc/pymergetic/metal/guest/wamr
+    - -Iexternal/wamr/core/shared/platform/include
+    - -Iexternal/wamr/core/shared/utils
+    - -Iexternal/wamr/core/iwasm/include
+    - -Iexternal/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
     - -DBH_PLATFORM_METAL_EFI
     - -DAPP_THREAD_STACK_SIZE_DEFAULT=6144
     - -DAPP_THREAD_STACK_SIZE_MIN=4096
@@ -98,11 +98,11 @@ If:
 CompileFlags:
   Compiler: /usr/bin/clang
   Remove:
-    - -I@@ROOT@@/src/pymergetic/metal
-    - -I@@ROOT@@/exp2/src/pymergetic/metal
-    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/src/pymergetic/metal/py/embed
+    - -Isrc/pymergetic/metal
+    - -Iexp2/src/pymergetic/metal
+    - -Isrc/pymergetic/metal/guest/wamr
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
+    - -Isrc/pymergetic/metal/py/embed
   Add:
     - -xc
     - -std=c11
@@ -111,11 +111,11 @@ CompileFlags:
     - -fno-stack-protector
     - -m64
     - -mno-red-zone
-    - -I@@ROOT@@/exp2/src/pymergetic/metal/libc
-    - -I@@ROOT@@/exp2/src
-    - -I@@ROOT@@/exp2/src/pymergetic/metal/net/ip
-    - -I@@ROOT@@/exp2/src/pymergetic/metal/net/ip/cfg
-    - -I@@ROOT@@/external/lwip/src/include
+    - -Iexp2/src/pymergetic/metal/libc
+    - -Iexp2/src
+    - -Iexp2/src/pymergetic/metal/net/ip
+    - -Iexp2/src/pymergetic/metal/net/ip/cfg
+    - -Iexternal/lwip/src/include
 
 ---
 If:
@@ -123,11 +123,11 @@ If:
 CompileFlags:
   Compiler: /usr/bin/clang
   Remove:
-    - -I@@ROOT@@/src/pymergetic/metal
-    - -I@@ROOT@@/exp2/src/pymergetic/metal
-    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/src/pymergetic/metal/py/embed
+    - -Isrc/pymergetic/metal
+    - -Iexp2/src/pymergetic/metal
+    - -Isrc/pymergetic/metal/guest/wamr
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
+    - -Isrc/pymergetic/metal/py/embed
   Add:
     - -xc
     - -std=c11
@@ -136,11 +136,22 @@ CompileFlags:
     - -fno-stack-protector
     - -m64
     - -mno-red-zone
-    - -I@@ROOT@@/exp2/src/pymergetic/metal/libc
-    - -I@@ROOT@@/exp2/src
-    - -I@@ROOT@@/exp2/src/pymergetic/metal/net/ip
-    - -I@@ROOT@@/exp2/src/pymergetic/metal/net/ip/cfg
-    - -I@@ROOT@@/external/lwip/src/include
+    - -Iexp2/src/pymergetic/metal/libc
+    - -Iexp2/src
+    - -Iexp2/src/pymergetic/metal/net/ip
+    - -Iexp2/src/pymergetic/metal/net/ip/cfg
+    - -Iexternal/lwip/src/include
+
+---
+# exp2 littlefs glue — LFS_CONFIG + vendor (repo-relative -I).
+If:
+  PathMatch: .*/exp2/src/pymergetic/metal/fs/littlefs/
+CompileFlags:
+  Add:
+    - -Iexp2/src/pymergetic/metal/fs/littlefs
+    - -Iexp2/src/pymergetic/metal/fs/littlefs/vendor
+    - -DLFS_CONFIG=lfs_config.h
+    - -DPM_METAL_LFS_FREESTANDING
 
 ---
 # exp2 BIOS / private bringup (platform layout).
@@ -149,7 +160,7 @@ If:
 CompileFlags:
   Add:
     - -DPM_METAL_BOOT_TARGET_BIOS=1
-    - -I@@ROOT@@/exp2/src/pymergetic/metal/boot/platform/bios
+    - -Iexp2/src/pymergetic/metal/boot/platform/bios
 
 ---
 If:
@@ -157,7 +168,7 @@ If:
 CompileFlags:
   Add:
     - -DPM_METAL_BOOT_TARGET_BIOS=1
-    - -I@@ROOT@@/exp2/src/pymergetic/metal/boot/platform/bios
+    - -Iexp2/src/pymergetic/metal/boot/platform/bios
 
 ---
 # exp2 EFI ports.
@@ -169,11 +180,11 @@ CompileFlags:
     - -fshort-wchar
     - -Wno-macro-redefined
     - -DPM_METAL_BOOT_TARGET_EFI=1
-    - -I@@ROOT@@/exp2/src/pymergetic/metal/boot/platform/efi
-    - -I@@ROOT@@/external/edk2/MdePkg/Include
-    - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
-    - -I@@ROOT@@/external/edk2/MdePkg/Include/Protocol
-    - -I@@ROOT@@/external/edk2/MdePkg/Include/Guid
+    - -Iexp2/src/pymergetic/metal/boot/platform/efi
+    - -Iexternal/edk2/MdePkg/Include
+    - -Iexternal/edk2/MdePkg/Include/X64
+    - -Iexternal/edk2/MdePkg/Include/Protocol
+    - -Iexternal/edk2/MdePkg/Include/Guid
 
 ---
 # Metal contracts + EFI binds (product tree only — not exp2/src/…)
@@ -190,23 +201,23 @@ CompileFlags:
     - -target
     - x86_64-unknown-windows
     - "-DEFIAPI=__attribute__((ms_abi))"
-    - -I@@ROOT@@/build/trust
-    - -I@@ROOT@@/external/edk2/MdePkg/Include
-    - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/external/tlsf
-    - -I@@ROOT@@/include
-    - -I@@ROOT@@/src/pymergetic/metal
-    - -I@@ROOT@@/src/efi/pymergetic/metal/mem
-    - -I@@ROOT@@/src/pymergetic/metal/net/ip
-    - -I@@ROOT@@/external/lwip/src/include
-    - -I@@ROOT@@/external/mbedtls/include
+    - -Ibuild/trust
+    - -Iexternal/edk2/MdePkg/Include
+    - -Iexternal/edk2/MdePkg/Include/X64
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
+    - -Iexternal/tlsf
+    - -Iinclude
+    - -Isrc/pymergetic/metal
+    - -Isrc/efi/pymergetic/metal/mem
+    - -Isrc/pymergetic/metal/net/ip
+    - -Iexternal/lwip/src/include
+    - -Iexternal/mbedtls/include
     - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
-    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/external/wamr/core/shared/platform/include
-    - -I@@ROOT@@/external/wamr/core/shared/utils
-    - -I@@ROOT@@/external/wamr/core/iwasm/include
-    - -I@@ROOT@@/external/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+    - -Isrc/pymergetic/metal/guest/wamr
+    - -Iexternal/wamr/core/shared/platform/include
+    - -Iexternal/wamr/core/shared/utils
+    - -Iexternal/wamr/core/iwasm/include
+    - -Iexternal/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
     - -DBH_PLATFORM_METAL_EFI
     - -DAPP_THREAD_STACK_SIZE_DEFAULT=6144
     - -DAPP_THREAD_STACK_SIZE_MIN=4096
@@ -219,12 +230,12 @@ If:
   PathMatch: '.*/metal/src/pymergetic/metal/py/.*\.(c|h)$'
 CompileFlags:
   Add:
-    - -I@@ROOT@@/build/micropython_embed
-    - -I@@ROOT@@/build/micropython_embed/port
-    - -I@@ROOT@@/build/micropython_embed/genhdr
-    - -I@@ROOT@@/src/pymergetic/metal/py/embed
-    - -I@@ROOT@@/external/micropython
-    - -I@@ROOT@@/external/micropython/lib/libm
+    - -Ibuild/micropython_embed
+    - -Ibuild/micropython_embed/port
+    - -Ibuild/micropython_embed/genhdr
+    - -Isrc/pymergetic/metal/py/embed
+    - -Iexternal/micropython
+    - -Iexternal/micropython/lib/libm
     - -DMICROPY_USE_INTERNAL_ERRNO=1
 
 ---
@@ -235,16 +246,16 @@ CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
   Add:
-    - -I@@ROOT@@/external/edk2/MdePkg/Include
-    - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
-    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/external/wamr/core/shared/platform/include
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/external/wamr/core/shared/utils
-    - -I@@ROOT@@/external/wamr/core/iwasm/include
-    - -I@@ROOT@@/external/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
-    - -I@@ROOT@@/include
-    - -I@@ROOT@@/src/pymergetic/metal
+    - -Iexternal/edk2/MdePkg/Include
+    - -Iexternal/edk2/MdePkg/Include/X64
+    - -Isrc/pymergetic/metal/guest/wamr
+    - -Iexternal/wamr/core/shared/platform/include
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
+    - -Iexternal/wamr/core/shared/utils
+    - -Iexternal/wamr/core/iwasm/include
+    - -Iexternal/wamr/core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/include
+    - -Iinclude
+    - -Isrc/pymergetic/metal
     - -DBH_PLATFORM_METAL_EFI
     - -DAPP_THREAD_STACK_SIZE_DEFAULT=6144
     - -DAPP_THREAD_STACK_SIZE_MIN=4096
@@ -265,15 +276,15 @@ CompileFlags:
     - -target
     - x86_64-unknown-windows
     - "-DEFIAPI=__attribute__((ms_abi))"
-    - -I@@ROOT@@/external/edk2/MdePkg/Include
-    - -I@@ROOT@@/external/edk2/MdePkg/Include/X64
-    - -I@@ROOT@@/src/pymergetic/metal/net/ip
-    - -I@@ROOT@@/external/lwip/src/include
-    - -I@@ROOT@@/external/mbedtls/include
+    - -Iexternal/edk2/MdePkg/Include
+    - -Iexternal/edk2/MdePkg/Include/X64
+    - -Isrc/pymergetic/metal/net/ip
+    - -Iexternal/lwip/src/include
+    - -Iexternal/mbedtls/include
     - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/include
-    - -I@@ROOT@@/src/pymergetic/metal
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
+    - -Iinclude
+    - -Isrc/pymergetic/metal
     - -DBH_PLATFORM_METAL_EFI
     - -DBUILD_TARGET_X86_64
 
@@ -287,23 +298,23 @@ CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
   Remove:
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
   Add:
     - -DDROPBEAR_METAL=1
     - -DLOCALOPTIONS_H_EXISTS=1
     - -DBUNDLED_LIBTOM=1
     - -DUSE_LTM
     - -DLTM_DESC
-    - -I@@ROOT@@/src/pymergetic/metal/net/ssh/dropbear_metal
-    - -I@@ROOT@@/src/pymergetic/metal/net/ssh/dropbear_stubs
-    - -I@@ROOT@@/src/pymergetic/metal
-    - -I@@ROOT@@/src/pymergetic/metal/net/ip
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/external/dropbear/src
-    - -I@@ROOT@@/external/dropbear/libtomcrypt/src/headers
-    - -I@@ROOT@@/external/dropbear/libtommath
-    - -I@@ROOT@@/external/lwip/src/include
-    - -I@@ROOT@@/external/mbedtls/include
+    - -Isrc/pymergetic/metal/net/ssh/dropbear_metal
+    - -Isrc/pymergetic/metal/net/ssh/dropbear_stubs
+    - -Isrc/pymergetic/metal
+    - -Isrc/pymergetic/metal/net/ip
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
+    - -Iexternal/dropbear/src
+    - -Iexternal/dropbear/libtomcrypt/src/headers
+    - -Iexternal/dropbear/libtommath
+    - -Iexternal/lwip/src/include
+    - -Iexternal/mbedtls/include
     - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
 
 ---
@@ -316,7 +327,7 @@ CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
   Remove:
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
   Add:
     - -std=c11
     - -ffreestanding
@@ -330,17 +341,17 @@ CompileFlags:
     - -DBUNDLED_LIBTOM=1
     - -DUSE_LTM
     - -DLTM_DESC
-    - -I@@ROOT@@/src/pymergetic/metal/net/ssh/dropbear_metal
-    - -I@@ROOT@@/src/pymergetic/metal/net/ssh/dropbear_stubs
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/src/pymergetic/metal
-    - -I@@ROOT@@/src/pymergetic/metal/net/ip
-    - -I@@ROOT@@/include
-    - -I@@ROOT@@/external/dropbear/src
-    - -I@@ROOT@@/external/dropbear/libtomcrypt/src/headers
-    - -I@@ROOT@@/external/dropbear/libtommath
-    - -I@@ROOT@@/external/lwip/src/include
-    - -I@@ROOT@@/external/mbedtls/include
+    - -Isrc/pymergetic/metal/net/ssh/dropbear_metal
+    - -Isrc/pymergetic/metal/net/ssh/dropbear_stubs
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
+    - -Isrc/pymergetic/metal
+    - -Isrc/pymergetic/metal/net/ip
+    - -Iinclude
+    - -Iexternal/dropbear/src
+    - -Iexternal/dropbear/libtomcrypt/src/headers
+    - -Iexternal/dropbear/libtommath
+    - -Iexternal/lwip/src/include
+    - -Iexternal/mbedtls/include
     - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
 
 ---
@@ -357,18 +368,18 @@ CompileFlags:
     - -ffreestanding
     - -fno-stack-protector
     - -m64
-    - -I@@ROOT@@/src/bios/shim
-    - -I@@ROOT@@/include
-    - -I@@ROOT@@/src/pymergetic/metal
-    - -I@@ROOT@@/src/pymergetic/metal/net/ip
-    - -I@@ROOT@@/external/lwip/src/include
-    - -I@@ROOT@@/external/mbedtls/include
+    - -Isrc/bios/shim
+    - -Iinclude
+    - -Isrc/pymergetic/metal
+    - -Isrc/pymergetic/metal/net/ip
+    - -Iexternal/lwip/src/include
+    - -Iexternal/mbedtls/include
     - '-DMBEDTLS_CONFIG_FILE=<pymergetic/metal/net/tls/mbedtls_metal_config.h>'
-    - -I@@ROOT@@/src/bios/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/src/bios/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/external/wamr/core/iwasm/include
-    - -I@@ROOT@@/external/wamr/core/shared/platform/include
-    - -I@@ROOT@@/external/wamr/core/shared/utils
+    - -Isrc/bios/pymergetic/metal/guest/wamr
+    - -Isrc/bios/pymergetic/metal/runtime/mem/host_stubs
+    - -Iexternal/wamr/core/iwasm/include
+    - -Iexternal/wamr/core/shared/platform/include
+    - -Iexternal/wamr/core/shared/utils
     - -DBH_PLATFORM_METAL_BIOS
     - -DBH_PLATFORM_METAL_EFI
     - -DAPP_THREAD_STACK_SIZE_DEFAULT=6144
@@ -386,17 +397,17 @@ CompileFlags:
   CompilationDatabase: "None"
   Compiler: /usr/bin/clang
   Remove:
-    - -I@@ROOT@@/src/pymergetic/metal/runtime/mem/host_stubs
-    - -I@@ROOT@@/src/pymergetic/metal/guest/wamr
-    - -I@@ROOT@@/external/wamr/core/shared/platform/include
+    - -Isrc/pymergetic/metal/runtime/mem/host_stubs
+    - -Isrc/pymergetic/metal/guest/wamr
+    - -Iexternal/wamr/core/shared/platform/include
     - --target=*
     - --sysroot=*
   Add:
     - --target=x86_64-linux-gnu
     - -std=c11
     - -D_GNU_SOURCE
-    - -I@@ROOT@@/external/tlsf
-    - -I@@ROOT@@/include
+    - -Iexternal/tlsf
+    - -Iinclude
 
 ---
 # Guest test mods (wasm) — optional; needs ./scripts/setup tools for wasi-sysroot.
@@ -408,8 +419,8 @@ CompileFlags:
   Add:
     - --target=wasm32-wasip1
     - --sysroot
-    - "@@ROOT@@/.tools/wasi-sdk/share/wasi-sysroot"
-    - -I@@ROOT@@/include
+    - ".tools/wasi-sdk/share/wasi-sysroot"
+    - -Iinclude
 
 ---
 # Vendored trees stay upstream-vanilla. IncludeCleaner (and friends) must not

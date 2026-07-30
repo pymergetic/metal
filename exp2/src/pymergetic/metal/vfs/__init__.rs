@@ -115,6 +115,103 @@ pub unsafe extern "C" fn pm_metal_vfs_umount(target: *const u8) -> i32 {
     -1
 }
 
+/// Number of active mounts.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_vfs_mount_count() -> u32 {
+    let mounts = &*addr_of!(MOUNTS);
+    let mut n = 0u32;
+    for i in 0..MAX_MOUNTS {
+        if mounts[i].used {
+            n = n.wrapping_add(1);
+        }
+    }
+    n
+}
+
+fn mount_slot(index: u32) -> Option<usize> {
+    unsafe {
+        let mounts = &*addr_of!(MOUNTS);
+        let mut seen = 0u32;
+        for i in 0..MAX_MOUNTS {
+            if !mounts[i].used {
+                continue;
+            }
+            if seen == index {
+                return Some(i);
+            }
+            seen = seen.wrapping_add(1);
+        }
+        None
+    }
+}
+
+/// Mount at dense `index` (0 .. count-1): NUL `target_out`, optional fstype from ops.name.
+/// Returns 0 ok, -1 bad index / buffer.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_vfs_mount_info(
+    index: u32,
+    target_out: *mut u8,
+    target_cap: u32,
+    fstype_out: *mut u8,
+    fstype_cap: u32,
+) -> i32 {
+    if target_out.is_null() || target_cap == 0 {
+        return -1;
+    }
+    let Some(i) = mount_slot(index) else {
+        return -1;
+    };
+    let mounts = &*addr_of!(MOUNTS);
+    let t = target_str(&mounts[i]);
+    let tb = t.as_bytes();
+    if (tb.len() as u32) + 1 > target_cap {
+        return -1;
+    }
+    core::ptr::copy_nonoverlapping(tb.as_ptr(), target_out, tb.len());
+    *target_out.add(tb.len()) = 0;
+
+    if !fstype_out.is_null() && fstype_cap > 0 {
+        /* fs ops vtable: first field is `name: *const u8`. */
+        let name_ptr = if mounts[i].ops.is_null() {
+            core::ptr::null()
+        } else {
+            *(mounts[i].ops as *const *const u8)
+        };
+        let name = if name_ptr.is_null() {
+            "-"
+        } else {
+            cstr(name_ptr)
+        };
+        let nb = name.as_bytes();
+        if (nb.len() as u32) + 1 > fstype_cap {
+            return -1;
+        }
+        core::ptr::copy_nonoverlapping(nb.as_ptr(), fstype_out, nb.len());
+        *fstype_out.add(nb.len()) = 0;
+    }
+    0
+}
+
+/// Ops + ctx for mount at dense `index`. Returns 0 ok, -1 bad index.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_vfs_mount_get(
+    index: u32,
+    ops_out: *mut *const c_void,
+    ctx_out: *mut *mut c_void,
+) -> i32 {
+    let Some(i) = mount_slot(index) else {
+        return -1;
+    };
+    let mounts = &*addr_of!(MOUNTS);
+    if !ops_out.is_null() {
+        *ops_out = mounts[i].ops;
+    }
+    if !ctx_out.is_null() {
+        *ctx_out = mounts[i].ctx;
+    }
+    0
+}
+
 /// Longest-prefix resolve. On success fills `out` (`rel` points at static buf).
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_vfs_resolve(

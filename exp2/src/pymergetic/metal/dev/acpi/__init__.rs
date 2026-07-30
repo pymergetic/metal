@@ -1,21 +1,12 @@
 //! ACPI RSDP discovery + MADT CPU count.
-//! No DT class fits ACPI yet — store a static pointer for hwtree; log the find.
+//! No DT class fits ACPI yet — store a static pointer for hwtree.
 #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use pymergetic_metal_log as _;
 use pymergetic_metal_rt as _;
 
 static RSDP: AtomicUsize = AtomicUsize::new(0);
-
-#[cfg(any(target_os = "none", target_os = "uefi"))]
-extern "C" {
-    fn pm_metal_log(line: *const u8);
-}
-
-#[cfg(not(any(target_os = "none", target_os = "uefi")))]
-fn pm_metal_log(_line: *const u8) {}
 
 fn sig_ok(p: *const u8) -> bool {
     const SIG: &[u8] = b"RSD PTR ";
@@ -165,11 +156,11 @@ unsafe fn walk_xsdt(xsdt: usize, want: &[u8; 4]) -> Option<*const u8> {
     None
 }
 
-/// Count enabled local APICs in MADT (types 0 and 9). 0 if MADT missing.
-unsafe fn madt_cpu_count(madt: *const u8) -> u32 {
+/// Walk enabled local APICs (types 0 and 9). `want` = None counts; Some(i) returns that APIC id.
+unsafe fn madt_cpu_walk(madt: *const u8, want: Option<u32>) -> Option<u32> {
     let len = read_u32(madt, 4) as usize;
     if len < 44 || !sdt_sig_is(madt, b"APIC") {
-        return 0;
+        return None;
     }
     let mut off = 44usize;
     let mut n = 0u32;
@@ -179,30 +170,43 @@ unsafe fn madt_cpu_count(madt: *const u8) -> u32 {
         if elen < 2 || off + elen > len {
             break;
         }
-        match typ {
+        let apic = match typ {
             0 => {
-                /* Processor Local APIC: flags at +4, bit0 = enabled. */
-                if elen >= 8 {
-                    let flags = read_u32(madt, off + 4);
-                    if (flags & 1) != 0 {
-                        n = n.saturating_add(1);
-                    }
+                /* Processor Local APIC: id at +3, flags at +4 bit0 = enabled. */
+                if elen >= 8 && (read_u32(madt, off + 4) & 1) != 0 {
+                    Some(*madt.add(off + 3) as u32)
+                } else {
+                    None
                 }
             }
             9 => {
-                /* Processor Local x2APIC: flags at +8. */
-                if elen >= 16 {
-                    let flags = read_u32(madt, off + 8);
-                    if (flags & 1) != 0 {
-                        n = n.saturating_add(1);
-                    }
+                /* Processor Local x2APIC: id at +4, flags at +8. */
+                if elen >= 16 && (read_u32(madt, off + 8) & 1) != 0 {
+                    Some(read_u32(madt, off + 4))
+                } else {
+                    None
                 }
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(id) = apic {
+            match want {
+                None => n = n.saturating_add(1),
+                Some(i) if i == n => return Some(id),
+                Some(_) => n = n.saturating_add(1),
+            }
         }
         off += elen;
     }
-    n
+    if want.is_none() {
+        Some(n)
+    } else {
+        None
+    }
+}
+
+unsafe fn madt_cpu_count(madt: *const u8) -> u32 {
+    madt_cpu_walk(madt, None).unwrap_or(0)
 }
 
 /// Inject RSDP from firmware (EFI config table). No-op if addr is 0.
@@ -216,14 +220,7 @@ pub extern "C" fn pm_metal_dev_acpi_set_rsdp(addr: u64) {
     if !sig_ok(p) {
         return;
     }
-    if RSDP
-        .compare_exchange(0, a, Ordering::Relaxed, Ordering::Relaxed)
-        .is_ok()
-    {
-        unsafe {
-            pm_metal_log(b"acpi: rsdp seeded (efi)\0".as_ptr());
-        }
-    }
+    let _ = RSDP.compare_exchange(0, a, Ordering::Relaxed, Ordering::Relaxed);
 }
 
 /// Find RSDP; log and stash pointer. Returns 1 if found, 0 otherwise.
@@ -244,13 +241,11 @@ pub unsafe extern "C" fn pm_metal_dev_acpi_detect() -> i32 {
         if ebda != 0 {
             if let Some(a) = scan_range(ebda, 1024) {
                 RSDP.store(a, Ordering::Relaxed);
-                pm_metal_log(b"acpi: rsdp found (ebda)\0".as_ptr());
                 return 1;
             }
         }
         if let Some(a) = scan_range(0xE0000, 0x20000) {
             RSDP.store(a, Ordering::Relaxed);
-            pm_metal_log(b"acpi: rsdp found (bios)\0".as_ptr());
             return 1;
         }
         0
@@ -263,24 +258,38 @@ pub extern "C" fn pm_metal_dev_acpi_rsdp() -> u64 {
     RSDP.load(Ordering::Relaxed) as u64
 }
 
-/// Enabled CPU count from MADT; 0 if RSDP/MADT unavailable (caller falls back).
-#[no_mangle]
-pub extern "C" fn pm_metal_dev_acpi_cpu_count() -> u32 {
+unsafe fn with_madt<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(*const u8) -> R,
+{
     #[cfg(not(target_arch = "x86_64"))]
     {
-        return 0;
+        let _ = f;
+        None
     }
     #[cfg(target_arch = "x86_64")]
     {
-        unsafe {
-            if RSDP.load(Ordering::Relaxed) == 0 {
-                let _ = pm_metal_dev_acpi_detect();
-            }
-            let rsdp = RSDP.load(Ordering::Relaxed);
-            match find_table(rsdp, b"APIC") {
-                Some(madt) => madt_cpu_count(madt),
-                None => 0,
-            }
+        if RSDP.load(Ordering::Relaxed) == 0 {
+            let _ = pm_metal_dev_acpi_detect();
+        }
+        let rsdp = RSDP.load(Ordering::Relaxed);
+        find_table(rsdp, b"APIC").map(f)
+    }
+}
+
+/// Enabled CPU count from MADT; 0 if RSDP/MADT unavailable (caller falls back).
+#[no_mangle]
+pub extern "C" fn pm_metal_dev_acpi_cpu_count() -> u32 {
+    unsafe { with_madt(|madt| madt_cpu_count(madt)).unwrap_or(0) }
+}
+
+/// APIC id for enabled CPU `index` (0 .. cpu_count-1). Returns -1 if missing.
+#[no_mangle]
+pub extern "C" fn pm_metal_dev_acpi_cpu_apic_id(index: u32) -> i32 {
+    unsafe {
+        match with_madt(|madt| madt_cpu_walk(madt, Some(index))) {
+            Some(Some(id)) => id as i32,
+            _ => -1,
         }
     }
 }

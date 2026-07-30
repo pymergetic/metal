@@ -5,6 +5,17 @@
 
 use core::ffi::c_void;
 
+/// Mount is read-only (`fwrite`/`mkdir`/`unlink` absent or refuse writes).
+pub const PM_METAL_FS_ST_RDONLY: u32 = 1;
+
+/// Volume capacity / usage for tree and tooling.
+#[repr(C)]
+pub struct pm_metal_fs_statfs_t {
+    pub total: u64,
+    pub used: u64,
+    pub flags: u32,
+}
+
 /// Async open → handle; result_u32 is `pm_metal_fs_h` or error code.
 pub type pm_metal_fs_op_open_fn = Option<
     unsafe extern "C" fn(ctx: *mut c_void, path: *const u8, flags: u32) -> u32,
@@ -35,6 +46,9 @@ pub type pm_metal_fs_op_rename_fn = Option<
 >;
 pub type pm_metal_fs_op_lseek_fn =
     Option<unsafe extern "C" fn(ctx: *mut c_void, h: u32, off: i32, whence: u32) -> i32>;
+pub type pm_metal_fs_op_statfs_fn = Option<
+    unsafe extern "C" fn(ctx: *mut c_void, out: *mut pm_metal_fs_statfs_t) -> i32,
+>;
 
 /// Fstype driver vtable (async handles unless noted).
 #[repr(C)]
@@ -53,6 +67,7 @@ pub struct pm_metal_fs_ops_t {
     pub unlink: pm_metal_fs_op_path_fn,
     pub rename: pm_metal_fs_op_rename_fn,
     pub fsync: pm_metal_fs_op_h_fn,
+    pub statfs: pm_metal_fs_op_statfs_fn,
 }
 
 /* C vtable: raw pointers; single-threaded Metal host / firmware. */
