@@ -1,3 +1,0 @@
-[submodule "external/metal-python"]
-	path = external/metal-python
-	url = https://github.com/pymergetic/metal-python.git
