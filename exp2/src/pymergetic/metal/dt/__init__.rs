@@ -20,7 +20,7 @@ pub enum pm_metal_dt_class_t {
     PM_METAL_DT_CLASS_NET = 6,
     PM_METAL_DT_CLASS_RANDOM = 7,
     PM_METAL_DT_CLASS_BLK = 8,
-    /// Memory partitioning intel only (sysmem / heap spans) — not an access path.
+    /// Memory partitioning intel only (lowmem / highmem / heap) — not an access path.
     PM_METAL_DT_CLASS_MEM = 9,
     PM_METAL_DT_CLASS_COUNT = 10,
 }
@@ -180,7 +180,7 @@ fn loc_u64(base: u64, size: u64) -> [u32; 4] {
 }
 
 /// Memory partitioning node (intel only — no driver / no access path).
-/// `compat` outlives the table (`"sysmem"`, `"heap"`, …).
+/// `compat` outlives the table (`"lowmem"`, `"highmem"`, `"heap"`, …).
 /// `loc` = `[base_lo, base_hi, size_lo, size_hi]`.
 /// Heap claim uses `caps | CAP_BOUND` after `mem_init` (alloc already up).
 #[no_mangle]

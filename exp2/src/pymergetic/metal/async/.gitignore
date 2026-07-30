@@ -1,0 +1,23 @@
+# BEGIN metal-generated
+.target/
+target/
+.generated/
+await.h
+await.pyi
+coro.h
+coro.pyi
+handle.h
+handle.pyi
+phase.h
+phase.pyi
+process.h
+process.pyi
+proof.h
+proof.pyi
+runner.h
+runner.pyi
+task.h
+task.pyi
+time.h
+time.pyi
+# END metal-generated

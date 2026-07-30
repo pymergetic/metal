@@ -1,5 +1,5 @@
 /*
- * Dump DT MEM partition nodes (sysmem / heap) to log or console #0.
+ * Dump DT MEM partition nodes (lowmem / highmem / heap) to log or console #0.
  */
 #ifndef PYMERGETIC_METAL_BOOT_PLATFORM_PRIVATE_DUMP_MEM_H_
 #define PYMERGETIC_METAL_BOOT_PLATFORM_PRIVATE_DUMP_MEM_H_

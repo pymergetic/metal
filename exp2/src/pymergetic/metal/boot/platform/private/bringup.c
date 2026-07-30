@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <pymergetic/metal/async/proof.h>
 #include <pymergetic/metal/boot/banner.h>
 #include <pymergetic/metal/boot/__init__.h>
 #include <pymergetic/metal/boot/platform/handoff.h>
@@ -21,8 +22,11 @@ void *memset(void *dst, int c, size_t n);
 
 /* Lifetime: static .rodata — DT stores the pointer. */
 static const uint8_t k_com1_compat[] = "com1";
-static const uint8_t k_sysmem_compat[] = "sysmem";
+/* AVAILABLE below 1MiB vs above — classic PC lowmem / highmem split. */
+static const uint8_t k_lowmem_compat[] = "lowmem";
+static const uint8_t k_highmem_compat[] = "highmem";
 static const uint8_t k_heap_compat[] = "heap";
+#define HIGHMEM_FLOOR 0x100000ull
 
 static size_t cstrlen(const char *s)
 {
@@ -141,10 +145,13 @@ static int32_t seed_mem_partition(uint8_t *arena, size_t bytes)
     return -1;
   }
   for (i = 0; i < n; i++) {
+    const uint8_t *compat;
+
     if (regs[i].type != (uint32_t)PM_METAL_BOOT_MEM_AVAILABLE || regs[i].len == 0u) {
       continue;
     }
-    if (pm_metal_dt_seed_mem(k_sysmem_compat, 0u, regs[i].addr, regs[i].len) < 0) {
+    compat = (regs[i].addr < HIGHMEM_FLOOR) ? k_lowmem_compat : k_highmem_compat;
+    if (pm_metal_dt_seed_mem(compat, 0u, regs[i].addr, regs[i].len) < 0) {
       return -1;
     }
   }
@@ -329,5 +336,11 @@ int32_t pm_metal_boot_bringup(void)
   }
 
   puts_console("mem: PASS\n");
+
+  /* ---------- async start (runners) ---------- */
+  if (pm_metal_async_boot_proof() != 0) {
+    return fail("exp2: async proof failed\n");
+  }
+
   return 0;
 }

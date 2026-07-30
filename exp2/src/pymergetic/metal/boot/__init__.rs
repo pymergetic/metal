@@ -4,6 +4,7 @@
 //! Firmware image links this staticlib (pulls rt/mem/dt/console/serial + detectors).
 #![no_std]
 
+use pymergetic_metal_async as _;
 use pymergetic_metal_bus_pci as _;
 use pymergetic_metal_console as _;
 use pymergetic_metal_dev_acpi as _;

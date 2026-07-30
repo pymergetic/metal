@@ -116,8 +116,10 @@ void pm_metal_boot_dump_mem(void)
     size = ((uint64_t)node->loc[3] << 32) | (uint64_t)node->loc[2];
     if (compat_eq(node->compat, "heap")) {
       kind = "heap";
-    } else if (compat_eq(node->compat, "sysmem")) {
-      kind = "sysmem";
+    } else if (compat_eq(node->compat, "lowmem")) {
+      kind = "lowmem";
+    } else if (compat_eq(node->compat, "highmem")) {
+      kind = "highmem";
     } else {
       kind = "mem";
     }

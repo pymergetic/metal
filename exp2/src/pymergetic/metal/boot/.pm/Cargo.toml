@@ -27,6 +27,7 @@ pymergetic_metal_dev_input = { path = "../../dev/input/.pm" }
 pymergetic_metal_dev_blk = { path = "../../dev/blk/.pm" }
 pymergetic_metal_dev_gfx = { path = "../../dev/gfx/.pm" }
 pymergetic_metal_hwtree = { path = "../../hwtree/.pm" }
+pymergetic_metal_async = { path = "../../async/.pm" }
 
 [profile.release]
 panic = "abort"

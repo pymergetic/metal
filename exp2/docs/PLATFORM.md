@@ -236,7 +236,7 @@ target entry (bios|efi)
   -> log default -> console 0
   -> banner (buffered on ring)
   -> dt.reset
-  -> dt.seed_mem (sysmem + bound heap)        # class MEM — partitioning intel only
+  -> dt.seed_mem (lowmem/highmem + bound heap) # class MEM — partitioning intel only
   -> dt.seed_bound_uart (COM1 / EFI serial)   # CAP_BOUND bookkeeping
   -> dump_mem (walk DT MEM -> console/log)
   -> dev/serial up (platform uart half)
@@ -248,8 +248,9 @@ target entry (bios|efi)
        bus/pci, time, acpi, random, input, blk, gfx, ...
   -> hwtree print (from DT [+ ACPI RSDP if found])
   -> ... more sync bring-up ok here ...
-  ---------- async start (runners) ----------  # STOP sync-only tranche
-  -> awaitable blk/input/gfx/net/...
+  ---------- async start (runners) ----------
+  -> async.start(n) + proof (sleep await)     # metal/async
+  -> awaitable blk/input/gfx/net/...          # next
 ```
 
 **Harvest rule:** each driver exports `pm_metal_*_detect()` that probe /

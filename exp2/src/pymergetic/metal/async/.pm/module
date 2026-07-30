@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.async",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Stackless coro/task/process, N runners x 3 prio queues, phase PC helper."
+}
