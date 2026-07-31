@@ -2,6 +2,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -15,7 +16,7 @@ const OVMF_CANDIDATES: &[&str] = &[
     "/usr/share/OVMF/OVMF_CODE_4M.fd",
 ];
 
-const QEMU_COMMON: &[&str] = &[
+const QEMU_MACHINE: &[&str] = &[
     "-machine",
     "q35,accel=kvm:tcg",
     "-m",
@@ -24,8 +25,6 @@ const QEMU_COMMON: &[&str] = &[
     "none",
     "-device",
     "isa-debug-exit,iobase=0x501,iosize=0x02",
-    "-serial",
-    "stdio",
 ];
 
 const VIRTIO: &[&str] = &[
@@ -66,14 +65,18 @@ fn ensure_vblk(tree: &Path) -> Result<PathBuf, String> {
     Ok(vblk)
 }
 
-fn virtio_drive(tree: &Path) -> Result<Vec<String>, String> {
+/// `bootindex`: None = omit (BIOS -kernel); Some(n) for EFI disk order.
+fn virtio_drive(tree: &Path, bootindex: Option<u32>) -> Result<Vec<String>, String> {
     let vblk = ensure_vblk(tree)?;
     let mut a: Vec<String> = VIRTIO.iter().map(|s| String::from(*s)).collect();
     a.extend([
         String::from("-drive"),
         alloc::format!("if=none,id=vd0,format=raw,file={}", vblk.display()),
         String::from("-device"),
-        String::from("virtio-blk-pci,drive=vd0"),
+        match bootindex {
+            Some(i) => alloc::format!("virtio-blk-pci,drive=vd0,bootindex={i}"),
+            None => String::from("virtio-blk-pci,drive=vd0"),
+        },
     ]);
     Ok(a)
 }
@@ -86,14 +89,120 @@ fn qemu_ec(ec: i32) -> i32 {
     }
 }
 
+/// True when `b` can still grow into a filtered CSI (clear / mode / cursor home).
+fn csi_prefix_hold(b: &[u8]) -> bool {
+    if b.is_empty() {
+        return false;
+    }
+    if b[0] != 0x1b {
+        return false;
+    }
+    if b.len() == 1 {
+        return true;
+    }
+    if b[1] != b'[' {
+        return false;
+    }
+    let rest = &b[2..];
+    if rest.is_empty() {
+        return true;
+    }
+    if b"2J".starts_with(rest) || b"=3h".starts_with(rest) || b"H".starts_with(rest) {
+        return true;
+    }
+    /* ESC [ digits/';  then maybe H — hold while still in the param run */
+    let mut j = 0usize;
+    while j < rest.len() && (rest[j].is_ascii_digit() || rest[j] == b';') {
+        j += 1;
+    }
+    j > 0 && j == rest.len()
+}
+
+/// Drop OVMF ConOut clears that wipe the host TTY (same UART Metal uses).
+/// Incomplete CSI at the end of `chunk` is left in `hold` for the next call.
+fn write_serial_filtered(out: &mut dyn Write, hold: &mut Vec<u8>, chunk: &[u8]) -> std::io::Result<()> {
+    hold.extend_from_slice(chunk);
+    let mut i = 0usize;
+    while i < hold.len() {
+        if hold[i] == 0x1b {
+            let avail = &hold[i..];
+            if csi_prefix_hold(avail) {
+                /* Need more bytes — keep tail in hold. */
+                hold.drain(..i);
+                return out.flush();
+            }
+            if avail.len() >= 2 && avail[1] == b'[' {
+                let rest = &avail[2..];
+                if rest.starts_with(b"2J") {
+                    i += 4;
+                    continue;
+                }
+                if rest.starts_with(b"=3h") {
+                    i += 5;
+                    continue;
+                }
+                if rest.starts_with(b"H") {
+                    i += 3;
+                    continue;
+                }
+                let mut j = 0usize;
+                while j < rest.len() && (rest[j].is_ascii_digit() || rest[j] == b';') {
+                    j += 1;
+                }
+                if j > 0 && j < rest.len() && rest[j] == b'H' {
+                    i += 2 + j + 1;
+                    continue;
+                }
+            }
+        }
+        out.write_all(&hold[i..i + 1])?;
+        i += 1;
+    }
+    hold.clear();
+    out.flush()
+}
+
+fn pump_serial_filtered(mut r: impl Read, log_path: &Path) -> Result<(), String> {
+    let mut raw = Vec::new();
+    let mut hold = Vec::new();
+    let mut buf = [0u8; 4096];
+    let mut stdout = std::io::stdout();
+    loop {
+        let n = r.read(&mut buf).map_err(|_| String::from("serial read failed"))?;
+        if n == 0 {
+            break;
+        }
+        raw.extend_from_slice(&buf[..n]);
+        write_serial_filtered(&mut stdout, &mut hold, &buf[..n])
+            .map_err(|_| String::from("serial write failed"))?;
+    }
+    /* Flush a trailing incomplete ESC as literal (should be rare). */
+    if !hold.is_empty() {
+        stdout
+            .write_all(&hold)
+            .map_err(|_| String::from("serial write failed"))?;
+        let _ = stdout.flush();
+    }
+    if let Some(parent) = log_path.parent() {
+        let _ = ensure_dir(parent);
+    }
+    let _ = std::fs::write(log_path, &raw);
+    Ok(())
+}
+
 fn run_bios(tree: &Path) -> Result<(), String> {
     let elf = tree.join("build/x86_64_bios/metal.qemu.elf");
     ensure_file(&elf, "forge build bios")?;
-    let vio = virtio_drive(tree)?;
+    let vio = virtio_drive(tree, None)?;
     let smp = smp();
     eprintln!("forge run: bios {}", elf.display());
     let mut cmd = Command::new("qemu-system-x86_64");
-    cmd.args(QEMU_COMMON).args(["-smp", &smp]).args(&vio).arg("-kernel").arg(&elf);
+    cmd.args(QEMU_MACHINE)
+        .args(["-serial", "stdio"])
+        .args(["-smp", &smp])
+        .args(&vio)
+        .arg("-kernel")
+        .arg(&elf);
     let status = cmd.status().map_err(|_| String::from("qemu spawn failed"))?;
     let code = qemu_ec(status.code().unwrap_or(1));
     if code == 0 {
@@ -108,31 +217,44 @@ fn run_efi(tree: &Path) -> Result<(), String> {
     ensure_file(&efi_img, "forge build efi")?;
     let ovmf = find_ovmf().ok_or_else(|| String::from("OVMF not found (apt: ovmf)"))?;
     let esp = tree.join("build/x86_64_efi/esp");
+    let serial_log = tree.join("build/x86_64_efi/last-serial.log");
     let _ = std::fs::remove_dir_all(&esp);
     ensure_dir(&esp.join("EFI/BOOT"))?;
     std::fs::copy(&efi_img, esp.join("EFI/BOOT/BOOTX64.EFI")).map_err(|_| String::from("copy efi"))?;
-    let vio = virtio_drive(tree)?;
+    /* ESP boots first; virtio-blk rootfs is not an EFI system partition. */
+    let vio = virtio_drive(tree, Some(1))?;
     let smp = smp();
     eprintln!("forge run: efi {} (OVMF {})", efi_img.display(), ovmf.display());
-    let mut cmd = Command::new("timeout");
-    cmd.args(["--signal=KILL", "25s", "qemu-system-x86_64"])
-        .args(QEMU_COMMON)
+    /* stdout is a pipe for the CSI filter — force unbuffered or QEMU's stdio
+     * block-buffers (~4K) and the host TTY looks hung until the child exits. */
+    let mut cmd = Command::new("stdbuf");
+    cmd.args(["-o0", "-e0", "qemu-system-x86_64"])
+        .args(QEMU_MACHINE)
+        .args(["-serial", "stdio"])
         .args(["-smp", &smp])
         .args(&vio)
         .args([
             "-drive",
             &alloc::format!("if=pflash,format=raw,readonly=on,file={}", ovmf.display()),
             "-drive",
-            &alloc::format!("format=raw,file=fat:rw:{}", esp.display()),
-            "-boot",
-            "order=d",
-        ]);
-    let status = cmd.status().map_err(|_| String::from("qemu spawn failed"))?;
-    let ec = status.code().unwrap_or(1);
-    if ec == 124 || ec == 137 {
-        return Err(String::from("efi qemu timed out"));
-    }
-    let code = qemu_ec(ec);
+            &alloc::format!("if=none,id=esp,format=raw,file=fat:rw:{}", esp.display()),
+            "-device",
+            "ide-hd,drive=esp,bootindex=0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    let mut child = cmd.spawn().map_err(|_| String::from("qemu spawn failed"))?;
+    let pump = if let Some(out) = child.stdout.take() {
+        pump_serial_filtered(out, &serial_log)
+    } else {
+        Ok(())
+    };
+    /* Ctrl+C / early return must not leave QEMU behind. */
+    let _ = child.kill();
+    let status = child.wait().map_err(|_| String::from("qemu wait failed"))?;
+    pump?;
+    eprintln!("forge run: serial log {}", serial_log.display());
+    let code = qemu_ec(status.code().unwrap_or(1));
     if code == 0 {
         Ok(())
     } else {

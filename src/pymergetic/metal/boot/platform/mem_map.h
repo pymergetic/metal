@@ -42,25 +42,37 @@ typedef struct pm_metal_boot_mem_map_ops {
   uintptr_t (*image_base)(void);
   /** First byte past the loaded image (linker floor). */
   uintptr_t (*image_end)(void);
+  /**
+   * Claim durable host-heap pages for TLSF.
+   * EFI: AllocatePages (must not just pick ConventionalMemory — BS still owns it).
+   * BIOS: largest AVAILABLE span past the image.
+   */
+  int32_t (*claim_arena)(uint8_t **base_out, size_t *bytes_out);
 } pm_metal_boot_mem_map_ops_t;
 
 const pm_metal_boot_mem_map_ops_t *pm_metal_boot_mem_map_ops(void);
 
-static inline int32_t pm_metal_boot_mem_map_get(pm_metal_boot_mem_region_t *out,
-                                               uint32_t max,
-                                               uint32_t *n_out)
+/* unused: port .c TUs include this header for types/ops only. */
+static inline int32_t __attribute__((unused))
+pm_metal_boot_mem_map_get(pm_metal_boot_mem_region_t *out, uint32_t max, uint32_t *n_out)
 {
   return pm_metal_boot_mem_map_ops()->get(out, max, n_out);
 }
 
-static inline uintptr_t pm_metal_boot_mem_map_image_base(void)
+static inline uintptr_t __attribute__((unused)) pm_metal_boot_mem_map_image_base(void)
 {
   return pm_metal_boot_mem_map_ops()->image_base();
 }
 
-static inline uintptr_t pm_metal_boot_mem_map_image_end(void)
+static inline uintptr_t __attribute__((unused)) pm_metal_boot_mem_map_image_end(void)
 {
   return pm_metal_boot_mem_map_ops()->image_end();
+}
+
+static inline int32_t __attribute__((unused))
+pm_metal_boot_mem_map_claim_arena(uint8_t **base_out, size_t *bytes_out)
+{
+  return pm_metal_boot_mem_map_ops()->claim_arena(base_out, bytes_out);
 }
 
 #endif

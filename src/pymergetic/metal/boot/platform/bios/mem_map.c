@@ -216,10 +216,70 @@ static uintptr_t bios_mem_map_image_end(void)
   return (uintptr_t)__pm_metal_image_end;
 }
 
+#define BIOS_CLAIM_MIN_BYTES (2u * 1024u * 1024u)
+#define BIOS_PAGE 4096ull
+
+static int32_t bios_claim_arena(uint8_t **base_out, size_t *bytes_out)
+{
+  pm_metal_boot_mem_region_t regs[MAX_REGIONS];
+  uint32_t n = 0;
+  uint32_t i;
+  uint64_t img_end;
+  uint64_t best_addr = 0;
+  uint64_t best_len = 0;
+
+  if (base_out == NULL || bytes_out == NULL) {
+    return -1;
+  }
+  if (bios_mem_map_get(regs, MAX_REGIONS, &n) != 0 || n == 0u) {
+    return -1;
+  }
+  img_end = ((uint64_t)bios_mem_map_image_end() + (BIOS_PAGE - 1ull)) & ~(BIOS_PAGE - 1ull);
+
+  for (i = 0; i < n; i++) {
+    uint64_t start;
+    uint64_t end;
+    uint64_t len;
+
+    if (regs[i].type != (uint32_t)PM_METAL_BOOT_MEM_AVAILABLE || regs[i].len == 0u) {
+      continue;
+    }
+    end = regs[i].addr + regs[i].len;
+    start = regs[i].addr;
+    if (start < img_end) {
+      start = img_end;
+    }
+    start = (start + (BIOS_PAGE - 1ull)) & ~(BIOS_PAGE - 1ull);
+    if (start >= end) {
+      continue;
+    }
+    len = end - start;
+    len &= ~(BIOS_PAGE - 1ull);
+    if (len < (uint64_t)BIOS_CLAIM_MIN_BYTES) {
+      continue;
+    }
+    if (len > best_len) {
+      best_addr = start;
+      best_len = len;
+    }
+  }
+  if (best_len < (uint64_t)BIOS_CLAIM_MIN_BYTES || best_addr > (uint64_t)UINTPTR_MAX) {
+    return -1;
+  }
+  if (best_len > (uint64_t)SIZE_MAX) {
+    best_len = (uint64_t)SIZE_MAX;
+    best_len &= ~(BIOS_PAGE - 1ull);
+  }
+  *base_out = (uint8_t *)(uintptr_t)best_addr;
+  *bytes_out = (size_t)best_len;
+  return 0;
+}
+
 static const pm_metal_boot_mem_map_ops_t g_ops = {
   .get = bios_mem_map_get,
   .image_base = bios_mem_map_image_base,
   .image_end = bios_mem_map_image_end,
+  .claim_arena = bios_claim_arena,
 };
 
 const pm_metal_boot_mem_map_ops_t *pm_metal_boot_mem_map_ops(void)

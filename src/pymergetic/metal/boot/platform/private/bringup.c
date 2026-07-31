@@ -28,9 +28,6 @@ int32_t pm_metal_boot_rootfs_mount_all(void);
 
 void *memset(void *dst, int c, size_t n);
 
-#define MIN_CLAIM_BYTES (2u * 1024u * 1024u)
-#define PAGE_SIZE 4096ull
-
 /* Lifetime: static .rodata — DT stores the pointer. */
 /* AVAILABLE below 1MiB vs above — classic PC lowmem / highmem split. */
 static const uint8_t k_kernel_compat[] = "kernel";
@@ -75,62 +72,6 @@ static int32_t fail(const char *msg)
   return -1;
 }
 
-static int32_t claim_arena(uint8_t **base_out, size_t *bytes_out)
-{
-  pm_metal_boot_mem_region_t regs[64];
-  uint32_t n = 0;
-  uint32_t i;
-  uint64_t img_end;
-  uint64_t best_addr = 0;
-  uint64_t best_len = 0;
-
-  if (pm_metal_boot_mem_map_get(regs, 64u, &n) != 0 || n == 0u) {
-    return -1;
-  }
-  img_end = ((uint64_t)pm_metal_boot_mem_map_image_end() + (PAGE_SIZE - 1ull)) & ~(PAGE_SIZE - 1ull);
-
-  for (i = 0; i < n; i++) {
-    uint64_t start;
-    uint64_t end;
-    uint64_t len;
-
-    if (regs[i].type != (uint32_t)PM_METAL_BOOT_MEM_AVAILABLE) {
-      continue;
-    }
-    if (regs[i].len == 0u) {
-      continue;
-    }
-    end = regs[i].addr + regs[i].len;
-    start = regs[i].addr;
-    if (start < img_end) {
-      start = img_end;
-    }
-    start = (start + (PAGE_SIZE - 1ull)) & ~(PAGE_SIZE - 1ull);
-    if (start >= end) {
-      continue;
-    }
-    len = end - start;
-    len &= ~(PAGE_SIZE - 1ull);
-    if (len < (uint64_t)MIN_CLAIM_BYTES) {
-      continue;
-    }
-    if (len > best_len) {
-      best_addr = start;
-      best_len = len;
-    }
-  }
-  if (best_len < (uint64_t)MIN_CLAIM_BYTES || best_addr > (uint64_t)UINTPTR_MAX) {
-    return -1;
-  }
-  if (best_len > (uint64_t)SIZE_MAX) {
-    best_len = (uint64_t)SIZE_MAX;
-    best_len &= ~(PAGE_SIZE - 1ull);
-  }
-  *base_out = (uint8_t *)(uintptr_t)best_addr;
-  *bytes_out = (size_t)best_len;
-  return 0;
-}
-
 static int compat_eq(const uint8_t *a, const char *b)
 {
   size_t i;
@@ -146,13 +87,32 @@ static int compat_eq(const uint8_t *a, const char *b)
   return a[i] == 0;
 }
 
+static int ranges_overlap(uint64_t a, uint64_t alen, uint64_t b, uint64_t blen)
+{
+  uint64_t aend;
+  uint64_t bend;
+
+  if (alen == 0u || blen == 0u) {
+    return 0;
+  }
+  aend = a + alen;
+  bend = b + blen;
+  return (a < bend && b < aend) ? 1 : 0;
+}
+
+/* Coalesce AVAILABLE into a few lowmem/highmem rows (BIOS-like tree). */
 static int32_t seed_mem_partition(uint8_t *arena, size_t bytes)
 {
   pm_metal_boot_mem_region_t regs[64];
+  pm_metal_boot_mem_region_t free_regs[64];
   uint32_t n = 0;
+  uint32_t nfree = 0;
   uint32_t i;
+  uint32_t j;
   uintptr_t img_base;
   uintptr_t img_end;
+  uint64_t arena_base;
+  uint64_t arena_len;
 
   if (pm_metal_boot_mem_map_get(regs, 64u, &n) != 0) {
     return -1;
@@ -160,6 +120,9 @@ static int32_t seed_mem_partition(uint8_t *arena, size_t bytes)
 
   img_base = pm_metal_boot_mem_map_image_base();
   img_end = pm_metal_boot_mem_map_image_end();
+  arena_base = (uint64_t)(uintptr_t)arena;
+  arena_len = (uint64_t)bytes;
+
   if (img_base != 0u && img_end > img_base) {
     if (pm_metal_dt_seed_mem(k_kernel_compat, (uint32_t)PM_METAL_DT_CAP_BOUND,
                              (uint64_t)img_base, (uint64_t)(img_end - img_base))
@@ -169,18 +132,77 @@ static int32_t seed_mem_partition(uint8_t *arena, size_t bytes)
   }
 
   for (i = 0; i < n; i++) {
-    const uint8_t *compat;
-
     if (regs[i].type != (uint32_t)PM_METAL_BOOT_MEM_AVAILABLE || regs[i].len == 0u) {
       continue;
     }
-    compat = (regs[i].addr < HIGHMEM_FLOOR) ? k_lowmem_compat : k_highmem_compat;
-    if (pm_metal_dt_seed_mem(compat, 0u, regs[i].addr, regs[i].len) < 0) {
+    if (img_end > img_base
+        && ranges_overlap(regs[i].addr, regs[i].len, (uint64_t)img_base,
+                          (uint64_t)(img_end - img_base))) {
+      continue;
+    }
+    if (arena_len != 0u
+        && ranges_overlap(regs[i].addr, regs[i].len, arena_base, arena_len)) {
+      continue;
+    }
+    /* Drop EFI hole crumbs from the tree (keep all lowmem). */
+    if (regs[i].addr >= HIGHMEM_FLOOR && regs[i].len < (1024ull * 1024ull)) {
+      continue;
+    }
+    if (nfree >= 64u) {
+      break;
+    }
+    free_regs[nfree] = regs[i];
+    nfree++;
+  }
+
+  /* Sort by addr (insertion). */
+  for (i = 1; i < nfree; i++) {
+    pm_metal_boot_mem_region_t tmp = free_regs[i];
+    j = i;
+    while (j > 0u && free_regs[j - 1u].addr > tmp.addr) {
+      free_regs[j] = free_regs[j - 1u];
+      j--;
+    }
+    free_regs[j] = tmp;
+  }
+
+  /* Merge abutting / overlapping spans. */
+  j = 0;
+  for (i = 0; i < nfree; i++) {
+    uint64_t a;
+    uint64_t alen;
+    uint64_t aend;
+    uint64_t b;
+    uint64_t bend;
+
+    if (j == 0u) {
+      free_regs[j++] = free_regs[i];
+      continue;
+    }
+    a = free_regs[j - 1u].addr;
+    alen = free_regs[j - 1u].len;
+    aend = a + alen;
+    b = free_regs[i].addr;
+    bend = b + free_regs[i].len;
+    if (b <= aend) {
+      if (bend > aend) {
+        free_regs[j - 1u].len = bend - a;
+      }
+    } else {
+      free_regs[j++] = free_regs[i];
+    }
+  }
+  nfree = j;
+
+  for (i = 0; i < nfree; i++) {
+    const uint8_t *compat;
+
+    compat = (free_regs[i].addr < HIGHMEM_FLOOR) ? k_lowmem_compat : k_highmem_compat;
+    if (pm_metal_dt_seed_mem(compat, 0u, free_regs[i].addr, free_regs[i].len) < 0) {
       return -1;
     }
   }
-  if (pm_metal_dt_seed_mem(k_area_compat, (uint32_t)PM_METAL_DT_CAP_BOUND,
-                           (uint64_t)(uintptr_t)arena, (uint64_t)bytes)
+  if (pm_metal_dt_seed_mem(k_area_compat, (uint32_t)PM_METAL_DT_CAP_BOUND, arena_base, arena_len)
       < 0) {
     return -1;
   }
@@ -233,7 +255,7 @@ int32_t pm_metal_boot_bringup(void)
   size_t bytes;
   int32_t uart_id;
 
-  if (claim_arena(&arena, &bytes) != 0) {
+  if (pm_metal_boot_mem_map_claim_arena(&arena, &bytes) != 0) {
     return fail("exp2: claim_arena failed\n");
   }
   if (pm_metal_mem_init(arena, bytes) != 0) {

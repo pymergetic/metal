@@ -31,8 +31,14 @@ static int g_cached;
 
 static uint32_t map_efi_type(UINT32 t)
 {
-  if (t == EfiConventionalMemory || t == EfiBootServicesCode || t == EfiBootServicesData
-      || t == EfiLoaderCode || t == EfiLoaderData) {
+  /*
+   * Free RAM for the boot tree / OS view:
+   *   Conventional + BootServices* (reclaimable after ExitBootServices).
+   * Not free: Loader* (image + our AllocatePages arena), Runtime*, ACPI*, …
+   * Mapping Loader* as AVAILABLE made the tree dump dozens of tiny highmem
+   * chips and duplicate kernel/area.
+   */
+  if (t == EfiConventionalMemory || t == EfiBootServicesCode || t == EfiBootServicesData) {
     return (uint32_t)PM_METAL_BOOT_MEM_AVAILABLE;
   }
   if (t == EfiACPIReclaimMemory) {
@@ -43,7 +49,7 @@ static uint32_t map_efi_type(UINT32 t)
   }
   if (t == EfiReservedMemoryType || t == EfiRuntimeServicesCode || t == EfiRuntimeServicesData
       || t == EfiMemoryMappedIO || t == EfiMemoryMappedIOPortSpace || t == EfiPalCode
-      || t == EfiUnusableMemory) {
+      || t == EfiUnusableMemory || t == EfiLoaderCode || t == EfiLoaderData) {
     return (uint32_t)PM_METAL_BOOT_MEM_RESERVED;
   }
   return (uint32_t)PM_METAL_BOOT_MEM_OTHER;
@@ -159,10 +165,54 @@ static uintptr_t efi_image_end(void)
   return g_image_end;
 }
 
+/*
+ * TLSF must own pages while Boot Services are still live. Picking a
+ * ConventionalMemory span from GetMemoryMap without AllocatePages lets BS
+ * (and freed-pool 0xAF poison) stomp the heap -> #GP right after banner.
+ */
+#define EFI_CLAIM_MIN_BYTES (2u * 1024u * 1024u)
+#define EFI_CLAIM_TARGET_BYTES (32u * 1024u * 1024u)
+#define EFI_PAGE 4096ull
+
+static int32_t efi_claim_arena(uint8_t **base_out, size_t *bytes_out)
+{
+  EFI_STATUS st;
+  EFI_PHYSICAL_ADDRESS phys;
+  UINTN pages;
+  UINTN try_pages;
+  size_t want;
+
+  if (base_out == NULL || bytes_out == NULL) {
+    return -1;
+  }
+  if (g_pm_efi_st == NULL || g_pm_efi_st->BootServices == NULL || !g_pm_efi_bs_alive) {
+    return -1;
+  }
+
+  want = (size_t)EFI_CLAIM_TARGET_BYTES;
+  try_pages = (UINTN)(want / (size_t)EFI_PAGE);
+  while (try_pages >= (UINTN)(EFI_CLAIM_MIN_BYTES / (size_t)EFI_PAGE)) {
+    phys = 0;
+    pages = try_pages;
+    st = g_pm_efi_st->BootServices->AllocatePages(
+        AllocateAnyPages, EfiLoaderData, pages, &phys);
+    if (!EFI_ERROR(st) && phys != 0) {
+      /* Map cache is stale once we own pages. */
+      g_cached = 0;
+      *base_out = (uint8_t *)(uintptr_t)phys;
+      *bytes_out = (size_t)pages * (size_t)EFI_PAGE;
+      return 0;
+    }
+    try_pages /= 2u;
+  }
+  return -1;
+}
+
 static const pm_metal_boot_mem_map_ops_t g_ops = {
   .get = efi_mem_map_get,
   .image_base = efi_image_base,
   .image_end = efi_image_end,
+  .claim_arena = efi_claim_arena,
 };
 
 const pm_metal_boot_mem_map_ops_t *pm_metal_boot_mem_map_ops(void)

@@ -99,6 +99,13 @@ fn main() {
         build.flag("--target=x86_64-unknown-windows-gnu");
         build.flag("-fshort-wchar");
         build.flag("-mno-red-zone");
+        /* UEFI clang defines _WIN32/__MINGW32__; mbedtls then pulls
+         * windows.h and win32 snprintf shims. Freestanding Metal — no CRT. */
+        build.flag("-U_WIN32");
+        build.flag("-UWIN32");
+        build.flag("-U__MINGW32__");
+        build.flag("-U__MINGW64__");
+        build.define("EFIX64", None);
     }
     build.compile("metal_net_ip_ssl");
 

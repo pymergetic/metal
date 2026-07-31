@@ -267,6 +267,22 @@ impl Tree {
         ]
     }
 
+    fn cdb_includes_efi(&self) -> Vec<&'static str> {
+        alloc::vec![
+            "build",
+            "src/pymergetic/metal/libc",
+            "src",
+            "src/pymergetic/metal/net/ip",
+            "src/pymergetic/metal/net/ip/cfg",
+            "external/lwip/src/include",
+            "src/pymergetic/metal/boot/platform/efi",
+            "external/edk2/MdePkg/Include",
+            "external/edk2/MdePkg/Include/X64",
+            "external/edk2/MdePkg/Include/Protocol",
+            "external/edk2/MdePkg/Include/Guid",
+        ]
+    }
+
     fn unit_pkg_rel(rel: &str) -> String {
         if let Some(rest) = rel.strip_prefix("../external/") {
             alloc::format!("external/{rest}")
@@ -277,13 +293,56 @@ impl Tree {
         }
     }
 
+    fn cdb_push_unit(
+        body: &mut String,
+        first: &mut bool,
+        dir_s: &str,
+        file: &str,
+        cflags: &[&str],
+        extra_cflags: &[&str],
+        incs: &[&str],
+        include_autoconf: bool,
+    ) {
+        if !*first {
+            body.push_str(",\n");
+        }
+        *first = false;
+        body.push_str("  {\n");
+        body.push_str("    \"directory\": \"");
+        body.push_str(dir_s);
+        body.push_str("\",\n");
+        body.push_str("    \"arguments\": [\n");
+        body.push_str("      \"clang\"");
+        for fl in cflags {
+            body.push_str(",\n      \"");
+            body.push_str(fl);
+            body.push('"');
+        }
+        for fl in extra_cflags {
+            body.push_str(",\n      \"");
+            body.push_str(fl);
+            body.push('"');
+        }
+        if include_autoconf {
+            body.push_str(",\n      \"-include\",\n      \"build/autoconf.h\"");
+        }
+        for inc in incs {
+            body.push_str(",\n      \"-I");
+            body.push_str(inc);
+            body.push('"');
+        }
+        body.push_str(",\n      \"-c\",\n      \"-o\",\n      \"/dev/null\",\n      \"");
+        body.push_str(file);
+        body.push_str("\"\n    ],\n");
+        body.push_str("    \"file\": \"");
+        body.push_str(file);
+        body.push_str("\"\n  }");
+    }
+
     fn write_compile_commands(&self) -> Result<(), String> {
         ensure_dir(&self.root.join("build"))?;
-        let mut units: Vec<&[Unit]> = alloc::vec![BIOS_PLAT, COMMON, LWIP];
-        if self.stress {
-            units.push(STRESS);
-        }
-        let incs = self.cdb_includes_bios();
+        let bios_incs = self.cdb_includes_bios();
+        let efi_incs = self.cdb_includes_efi();
         let dir = self
             .root
             .canonicalize()
@@ -291,70 +350,66 @@ impl Tree {
         let dir_s = dir.to_str().ok_or_else(|| String::from("cdb directory utf8"))?;
         let mut body = String::from("[\n");
         let mut first = true;
-        for group in units {
+        let stress_extra: &[&str] = if self.stress { STRESS_CFLAGS } else { &[] };
+
+        let mut bios_units: Vec<&[Unit]> = alloc::vec![BIOS_PLAT, COMMON, LWIP];
+        if self.stress {
+            bios_units.push(STRESS);
+        }
+        for group in bios_units {
             for &(rel, _) in group {
                 let file = Self::unit_pkg_rel(rel);
-                if !first {
-                    body.push_str(",\n");
-                }
-                first = false;
-                body.push_str("  {\n");
-                body.push_str("    \"directory\": \"");
-                body.push_str(dir_s);
-                body.push_str("\",\n");
-                body.push_str("    \"arguments\": [\n");
-                body.push_str("      \"clang\"");
-                for fl in BIOS_CFLAGS {
-                    body.push_str(",\n      \"");
-                    body.push_str(fl);
-                    body.push('"');
-                }
-                if self.stress {
-                    for fl in STRESS_CFLAGS {
-                        body.push_str(",\n      \"");
-                        body.push_str(fl);
-                        body.push('"');
-                    }
-                }
-                body.push_str(",\n      \"-include\",\n      \"build/autoconf.h\"");
-                for inc in &incs {
-                    body.push_str(",\n      \"-I");
-                    body.push_str(inc);
-                    body.push('"');
-                }
-                body.push_str(",\n      \"-c\",\n      \"-o\",\n      \"/dev/null\",\n      \"");
-                body.push_str(&file);
-                body.push_str("\"\n    ],\n");
-                body.push_str("    \"file\": \"");
-                body.push_str(&file);
-                body.push_str("\"\n  }");
+                Self::cdb_push_unit(
+                    &mut body,
+                    &mut first,
+                    dir_s,
+                    &file,
+                    BIOS_CFLAGS,
+                    stress_extra,
+                    &bios_incs,
+                    true,
+                );
             }
         }
+
+        // EFI ports need their own CDB rows or clangd falls back without Uefi.h
+        // (UINT32 / EFI_* look unknown under boot/platform/efi/).
+        for &(rel, _) in EFI_PLAT {
+            let file = Self::unit_pkg_rel(rel);
+            Self::cdb_push_unit(
+                &mut body,
+                &mut first,
+                dir_s,
+                &file,
+                EFI_CFLAGS,
+                &[],
+                &efi_incs,
+                true,
+            );
+        }
+
         let extras = [
             "src/pymergetic/metal/libc/stdint.h",
             "src/pymergetic/metal/net/ip/__init__.h",
         ];
         for file in extras {
-            if !first {
-                body.push_str(",\n");
-            }
-            first = false;
-            body.push_str("  {\n    \"directory\": \"");
-            body.push_str(dir_s);
-            body.push_str("\",\n    \"arguments\": [\n");
-            body.push_str("      \"clang\",\n      \"-std=c11\",\n      \"-ffreestanding\",\n");
-            body.push_str("      \"-nostdinc\",\n      \"-fno-stack-protector\",\n");
-            body.push_str("      \"-m64\",\n      \"-mno-red-zone\"");
-            for inc in &incs {
-                body.push_str(",\n      \"-I");
-                body.push_str(inc);
-                body.push('"');
-            }
-            body.push_str(",\n      \"-c\",\n      \"-o\",\n      \"/dev/null\",\n      \"");
-            body.push_str(file);
-            body.push_str("\"\n    ],\n    \"file\": \"");
-            body.push_str(file);
-            body.push_str("\"\n  }");
+            Self::cdb_push_unit(
+                &mut body,
+                &mut first,
+                dir_s,
+                file,
+                &[
+                    "-std=c11",
+                    "-ffreestanding",
+                    "-nostdinc",
+                    "-fno-stack-protector",
+                    "-m64",
+                    "-mno-red-zone",
+                ],
+                &[],
+                &bios_incs,
+                false,
+            );
         }
         body.push_str("\n]\n");
         /* Package-root CDB + build/ mirror; directory = abs package root. */
