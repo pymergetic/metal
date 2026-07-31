@@ -403,6 +403,142 @@ pub fn cmd_convert<S: ForgeStore, Sess: ForgeSession>(
     }
 }
 
+fn is_border_fn_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+
+fn catalog_fn_names(cat: &crate::_catalog::Catalog) -> Vec<String> {
+    // Drop C-import noise (e.g. `=`, `|=`, `*foo` from macros / fn-ptr types).
+    let mut v: Vec<String> = cat
+        .fns
+        .iter()
+        .filter(|f| is_border_fn_name(&f.name))
+        .map(|f| f.name.clone())
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// Every public border fn on the human stem must appear on each emitted
+/// lang-pool face (c / rs / py). Missing faces or name skew = fail.
+///
+/// `human_path` is the absolute path from [`impl_sources`] (same as sync).
+fn check_face_symmetry<S: ForgeStore, Sess: ForgeSession>(
+    store: &mut S,
+    sess: &mut Sess,
+    mod_dir: &str,
+    mod_rel: &str,
+    human_path: &str,
+    meta: &ModuleMeta,
+) -> u32 {
+    let impl_slot = match pool_slot(&meta.impl_lang) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let human_name = human_path.rsplit('/').next().unwrap_or(human_path);
+    let text = match read_text(store, human_path) {
+        Ok(t) => t,
+        Err(_) => {
+            err_line(
+                sess,
+                &alloc::format!("  bad  {}  (read {})", mod_rel, human_name),
+            );
+            return 1;
+        }
+    };
+    let cat = match import_catalog(impl_slot, &text) {
+        Ok(c) => c,
+        Err(_) => {
+            err_line(
+                sess,
+                &alloc::format!("  bad  {}  (parse {})", mod_rel, human_name),
+            );
+            return 1;
+        }
+    };
+    if !cat.has_border() {
+        return 0;
+    }
+    let want = catalog_fn_names(&cat);
+    let stem = human_name
+        .rsplit_once('.')
+        .map(|(s, _)| s)
+        .unwrap_or(human_name);
+    let mut errors = 0u32;
+    for slot in emit_slots(&meta.impl_lang, false) {
+        let face = face_rel(slot, stem);
+        let fpath = join_path(mod_dir, &face);
+        if !block_on(|| store.is_file(&fpath)) {
+            err_line(
+                sess,
+                &alloc::format!(
+                    "  bad  {}  missing {} face for {} ({} fns)",
+                    mod_rel,
+                    slot,
+                    human_name,
+                    want.len()
+                ),
+            );
+            errors += 1;
+            continue;
+        }
+        let ftext = match read_text(store, &fpath) {
+            Ok(t) => t,
+            Err(_) => {
+                err_line(sess, &alloc::format!("  bad  {}  (read {})", mod_rel, face));
+                errors += 1;
+                continue;
+            }
+        };
+        let fcat = match import_catalog(slot, &ftext) {
+            Ok(c) => c,
+            Err(_) => {
+                err_line(
+                    sess,
+                    &alloc::format!("  bad  {}  (parse face {})", mod_rel, face),
+                );
+                errors += 1;
+                continue;
+            }
+        };
+        let got = catalog_fn_names(&fcat);
+        if got != want {
+            let mut missing = Vec::new();
+            let mut extra = Vec::new();
+            for n in &want {
+                if !got.iter().any(|g| g == n) {
+                    missing.push(n.clone());
+                }
+            }
+            for n in &got {
+                if !want.iter().any(|w| w == n) {
+                    extra.push(n.clone());
+                }
+            }
+            err_line(
+                sess,
+                &alloc::format!(
+                    "  bad  {}  {} vs {} (stem {}): missing {:?} extra {:?}",
+                    mod_rel,
+                    slot,
+                    impl_slot,
+                    stem,
+                    missing,
+                    extra
+                ),
+            );
+            errors += 1;
+        }
+    }
+    errors
+}
+
 pub fn cmd_check<S: ForgeStore, Sess: ForgeSession>(
     store: &mut S,
     sess: &mut Sess,
@@ -431,15 +567,34 @@ pub fn cmd_check<S: ForgeStore, Sess: ForgeSession>(
                     errors += 1;
                     continue;
                 }
-                out_line(
-                    sess,
-                    &alloc::format!(
-                        "  ok  {}  impl={}  stems={}",
-                        mod_dir_rel(mod_dir, &roots),
-                        meta.impl_lang,
-                        sources.len()
-                    ),
-                );
+                let rel_mod = mod_dir_rel(mod_dir, &roots);
+                let mut face_errs = 0u32;
+                for rel in &sources {
+                    face_errs +=
+                        check_face_symmetry(store, sess, mod_dir, &rel_mod, rel, &meta);
+                }
+                errors += face_errs as i32;
+                if face_errs == 0 {
+                    out_line(
+                        sess,
+                        &alloc::format!(
+                            "  ok  {}  impl={}  stems={}  faces=c/rs/py",
+                            rel_mod,
+                            meta.impl_lang,
+                            sources.len()
+                        ),
+                    );
+                } else {
+                    err_line(
+                        sess,
+                        &alloc::format!(
+                            "  bad  {}  impl={}  face symmetry ({} error(s))",
+                            rel_mod,
+                            meta.impl_lang,
+                            face_errs
+                        ),
+                    );
+                }
             }
             Err(_) => {
                 err_line(sess, &alloc::format!("  bad  {}  (meta)", mod_dir));

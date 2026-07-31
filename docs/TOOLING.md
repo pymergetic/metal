@@ -46,7 +46,7 @@ packages/metal/
 
 | Command | Role |
 |---------|------|
-| `forge mod sync\|check\|clean\|ls` | Lang-pool faces (banner gate) |
+| `forge mod sync\|check\|clean\|ls` | Lang-pool faces (banner gate); `check` also verifies c/rs/py fn symmetry |
 | `forge convert SRC DST` | One-shot face convert |
 | `forge config edit\|gen\|old` | exp2-style Kconfig under `config/` |
 | `forge build [bios\|efi\|all]` | config gen → rootfs img → mod sync → link |

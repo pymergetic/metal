@@ -195,7 +195,7 @@ One JSON file per directory: `.pm/module`. The former root files
 | `type` | Role |
 |---------------|------|
 | `module` | **Kernel module** — sync/codegen; firmware link when applicable. |
-| `package` | **Package** — WASI / `metal pack` candidate; not in the kernel link by default. |
+| `package` | **Wasm package** — pack to `.wasm`; **not** in the kernel link. Loaded by the host `wasm/` tier; exports register under the full module name (see [`ORCHESTRATION.md`](../ORCHESTRATION.md)). First proofs live under package-root `tests/`, not inside firmware. |
 | `hidden` | **Forbid** — plain port or namespace shell; tools refuse codegen. |
 
 ```json

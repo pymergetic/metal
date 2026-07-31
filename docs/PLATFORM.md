@@ -328,7 +328,10 @@ boot/
    (`boot/platform/*.rs`, `dt` / `mem` generated faces) — do not re-export
    platform ops through `boot` (keeps Rust aligned with `boot/__init__.h`).
 4. **`mem`** — arena + TLSF in Rust (done; no `tlsf_edk2` / host_stubs).
-5. **upy** — register/reexport at interpreter startup (attach-only).
+5. **Orchestration (three tiers)** — `reg` → `wasm` → `py`: cross-language
+   registry (full module names + ptr bind), wasm as code delivery (Metal
+   alloc, no instance cages), µPy as OS orchestration (py async = Metal
+   async, no stock GC). See [`ORCHESTRATION.md`](ORCHESTRATION.md).
 
 ## Rejected
 

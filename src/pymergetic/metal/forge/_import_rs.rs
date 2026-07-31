@@ -3,6 +3,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::_banner::content_has_banner;
 use crate::_catalog::{Arg, Catalog, EnumDef, EnumVariant, Field, Fn, Struct, Typedef};
 
 fn strip_rs_noise(text: &str) -> String {
@@ -155,6 +156,8 @@ fn find_all<'a>(hay: &'a str, needle: &str) -> Vec<usize> {
 }
 
 pub fn import(text: &str) -> Catalog {
+    // Banner check on raw text: `//!` lines are stripped as comments below.
+    let generated_face = content_has_banner(text);
     let raw = strip_rs_noise(text);
     let mut cat = Catalog::default();
 
@@ -302,7 +305,167 @@ pub fn import(text: &str) -> Catalog {
         }
     }
 
+    // Generated C->rs faces: `extern "C" { pub fn ... }` and `#[inline] pub
+    // [unsafe] fn ...` twins. Human Rust uses `extern "C" { }` for *foreign*
+    // imports — never treat those as this module's border.
+    if !generated_face {
+        return cat;
+    }
+    for at in find_all(&raw, "extern \"C\"") {
+        let rest = &raw[at + "extern \"C\"".len()..];
+        let rest = rest.trim_start();
+        if rest.starts_with("fn ") {
+            continue; // handled via #[no_mangle] path above
+        }
+        if !rest.starts_with('{') {
+            continue;
+        }
+        let Some(close) = matching_brace(rest) else {
+            continue;
+        };
+        let body = &rest[1..close];
+        let mut bi = 0;
+        let bb = body.as_bytes();
+        while bi < bb.len() {
+            while bi < bb.len() && (bb[bi] as char).is_whitespace() {
+                bi += 1;
+            }
+            if body[bi..].starts_with("pub") {
+                let after = bi + 3;
+                if after < bb.len() && (bb[after] as char).is_whitespace() {
+                    bi = after;
+                    while bi < bb.len() && (bb[bi] as char).is_whitespace() {
+                        bi += 1;
+                    }
+                }
+            }
+            if !body[bi..].starts_with("fn ") {
+                while bi < bb.len() && bb[bi] != b'\n' && bb[bi] != b';' {
+                    bi += 1;
+                }
+                if bi < bb.len() {
+                    bi += 1;
+                }
+                continue;
+            }
+            bi += 3;
+            while bi < bb.len() && (bb[bi] as char).is_whitespace() {
+                bi += 1;
+            }
+            let name_start = bi;
+            while bi < bb.len() {
+                let c = bb[bi] as char;
+                if c == '_' || c.is_ascii_alphanumeric() {
+                    bi += 1;
+                } else {
+                    break;
+                }
+            }
+            if bi == name_start {
+                continue;
+            }
+            let fname = &body[name_start..bi];
+            while bi < bb.len() && (bb[bi] as char).is_whitespace() {
+                bi += 1;
+            }
+            if bi >= bb.len() || bb[bi] != b'(' {
+                continue;
+            }
+            let Some(pclose) = matching_paren(&body[bi..]) else {
+                break;
+            };
+            let args_s = &body[bi + 1..bi + pclose];
+            bi += pclose + 1;
+            let after_args = body[bi..].trim_start();
+            let ret = if let Some(r) = after_args.strip_prefix("->") {
+                let r = r.trim();
+                let end = r
+                    .find(|c: char| c == ';' || c == '{')
+                    .unwrap_or(r.len());
+                rs_type_to_c(r[..end].trim())
+            } else {
+                String::from("void")
+            };
+            cat.fns.push(Fn {
+                name: String::from(fname),
+                ret,
+                args: split_args(args_s),
+                inline: false,
+            });
+            while bi < bb.len() && bb[bi] != b';' && bb[bi] != b'\n' {
+                bi += 1;
+            }
+            if bi < bb.len() {
+                bi += 1;
+            }
+        }
+    }
+
+    // Inline twins: `#[inline] pub [unsafe] fn name(...) { ... }`
+    let mut si = 0;
+    while si < raw.len() {
+        let rest = &raw[si..];
+        let rel = match rest.find("pub ") {
+            Some(r) => r,
+            None => break,
+        };
+        si += rel + 4;
+        let after_pub = raw[si..].trim_start();
+        let after_pub = after_pub
+            .strip_prefix("unsafe")
+            .map(|s| s.trim_start())
+            .unwrap_or(after_pub);
+        if !after_pub.starts_with("fn ") {
+            continue;
+        }
+        let fn_body = after_pub["fn ".len()..].trim_start();
+        let name_end = fn_body
+            .find(|c: char| !(c == '_' || c.is_ascii_alphanumeric()))
+            .unwrap_or(0);
+        if name_end == 0 {
+            continue;
+        }
+        let fname = &fn_body[..name_end];
+        if !is_border_fn_name_local(fname) {
+            continue;
+        }
+        let after_name = fn_body[name_end..].trim_start();
+        if !after_name.starts_with('(') {
+            continue;
+        }
+        let Some(pclose) = matching_paren(after_name) else {
+            continue;
+        };
+        let args_s = &after_name[1..pclose];
+        let after_args = after_name[pclose + 1..].trim_start();
+        let ret = if let Some(r) = after_args.strip_prefix("->") {
+            let r = r.trim();
+            let end = r.find('{').unwrap_or(r.len());
+            rs_type_to_c(r[..end].trim())
+        } else {
+            String::from("void")
+        };
+        if cat.fns.iter().any(|f| f.name == fname) {
+            continue;
+        }
+        cat.fns.push(Fn {
+            name: String::from(fname),
+            ret,
+            args: split_args(args_s),
+            inline: true,
+        });
+    }
+
     cat
+}
+
+fn is_border_fn_name_local(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
 fn matching_paren(s: &str) -> Option<usize> {

@@ -48,7 +48,8 @@ serial in `dev/serial`; ring in `console/`. Locks use core atomics.
 - Fake UEFI under BIOS (`PmBiosUefi.h`, `UINT*`, shim `Library/*`)
 - Shared TUs including anything from `boot/<target>/`
 - Product overlay / `bios/default.sh` full SRCS
-- Wasm, net, shell, gfx, upy (upy register/reexport comes after Rust layer)
+- Wasm, net, shell, gfx, upy (see [`ORCHESTRATION.md`](ORCHESTRATION.md) —
+  `reg` / `wasm` / `py` after Metal muscles)
 - Growing product `boot/port.h` for early console/mmap
 - Forking any module outside `boot/<target>/`
 

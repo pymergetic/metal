@@ -1,9 +1,12 @@
 # Mods, functions, commands, process (EFI product model)
 
-**Status:** contract locked (product-era). Live tree has the async/task floor
-under [`src/.../async/`](../src/pymergetic/metal/async/); guest mod loader /
-µPy registries are not on the forge-cli path yet — see
-[`definitions/async/`](definitions/async/) and archived
+**Status:** product-era / archive-shaped. **Live host orchestration** is the
+three-tier plan in [`ORCHESTRATION.md`](ORCHESTRATION.md) (`reg` / `wasm` /
+`py`) — full module names, no FRESH instance cages, Metal alloc only.
+This file keeps the old mod/process vocabulary for reference.
+
+Live async/task floor: [`src/.../async/`](../src/pymergetic/metal/async/).
+Also [`definitions/async/`](definitions/async/),
 [`_old/docs/MICROPYTHON.md`](../_old/docs/MICROPYTHON.md).
 
 One concept with async/coro: mods register callables; work parks on **normal
