@@ -5,7 +5,9 @@ packaging, `guest/mod` FRESH/SHARED instance cages, and private µPy/wasm
 heaps. Archive: [`_old/docs/MICROPYTHON.md`](../_old/docs/MICROPYTHON.md),
 [`MODS.md`](MODS.md).
 
-**Python is the OS. Metal is muscles. Wasm delivers code. `reg` is the bus.**
+**Python is the OS. Metal is muscles. Wasm delivers code. `reg` is the bus.**  
+**Async-first OS** — Metal runners / await / park are the default concurrency
+model everywhere (py, wasm, net, ssh, http/ASGI). Sync is the exception.
 
 ---
 
@@ -19,7 +21,7 @@ These are load-bearing. Agents and future-you: treat as settled.
 | 2 | **Full module names** everywhere (`pymergetic.metal.fs.open`, never `fs.open`). |
 | 3 | **One memory for all** — Metal TLSF / coro frames. Upy and wasm **do not** get private heaps, linear-memory cages, FRESH/SHARED instance tables, or percpu `mp_state` fuckaround. |
 | 4 | **No isolation** — wasm is code delivery; py is orchestration; concurrency = Metal runners + task id. |
-| 5 | **Py async = Metal async** — every core a runner; await = park/resume; GC ripped out (manual/handles). |
+| 5 | **Async-first OS** — every core a runner; await = park/resume. **Py async = Metal async.** Design APIs (net, ssh, http/ASGI/microdot, fs, …) as coro/async first; do not ship a sync-primary path and bolt await on later. GC ripped out (manual/handles). |
 | 6 | **`reg`:** register/export all langs; convenience by name + **ptr bind** for speed. |
 | 7 | **`type=package` → `.wasm` pack** (not kernel-linked). Compiles dir + non-wasm subs; mounts `.py`. Kernel stays `type=module`. |
 | 8 | **When wasm works: forge must compile Rust (and C) packs to wasm** — same `type=package` path; `impl=rs` is a first-class pack language, not host-only. |
@@ -77,8 +79,10 @@ lookup / call by name               # convenience
 
 ---
 
-## One memory / async (all blocks)
+## One memory / async-first (all blocks)
 
+- **Async-first OS:** primary APIs park on Metal await; every core a runner.
+  Sync wrappers only when forced (bring-up, tiny helpers) — never the design.
 - **One heap:** `pm_metal_mem_*` / coro frames for kernel, upy, and wasm.
 - **No** wasm linear-memory-as-private-heap, no upy blob heap, no instance cages.
 - Stackless across `await`; N equal runners; process ≈ task id.
@@ -262,6 +266,8 @@ Kernel stays `type=module`. First packs under `tests/`, not firmware.
 | **C′. packs** | `tests/` `type=package`: forge pack **C and Rust** → `.wasm` (+ subs / `.py` mount); load/call. **Gate:** bios + efi. |
 | **D. Wire** | Kernel faces auto-register; importlib resolve; class/static bars in `reg` |
 | **E. Later** | Custom mem tracking for all languages; REPL as shell |
+| **F. Dropbear** | After orchestration waves: finish `net/ssh/` (dirs exist); AUTORUN W8 |
+| **G. `net/http` complete** | After Dropbear: finish ASGI in `http/server` + Microdot runner under `http/microdot/`; AUTORUN W9 |
 
 Do **not** rebuild `_old` FRESH/SHARED instance machinery or a linux twin as the primary path.
 
@@ -308,6 +314,8 @@ after `forge mod sync` when faces change.
 | Doc | Role |
 |-----|------|
 | **This file** | Live plan — **Locked** table is the short form |
+| [`ORCHESTRATION_AUTORUN.md`](ORCHESTRATION_AUTORUN.md) | Unattended continue runbook (no user prompts) |
+| [`ORCHESTRATION_PROGRESS.md`](ORCHESTRATION_PROGRESS.md) | Chunk checklist / handoff between continues |
 | [`ORCHESTRATION_UPY_MIRROR.md`](ORCHESTRATION_UPY_MIRROR.md) | Full upy→Rust file inventory |
 | [`PLATFORM.md`](PLATFORM.md) | Firmware ladder |
 | [`MODS.md`](MODS.md) | Archive mod/process model |
