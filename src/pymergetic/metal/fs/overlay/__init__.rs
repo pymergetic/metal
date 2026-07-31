@@ -3,6 +3,7 @@
 #![allow(dead_code, non_camel_case_types)]
 
 use core::ffi::c_void;
+use core::ptr::{self, addr_of, addr_of_mut};
 
 use pymergetic_metal_fs::{
     pm_metal_fs_ops_register, pm_metal_fs_ops_t, pm_metal_fs_set_active_ops, pm_metal_fs_stat_t,
@@ -10,7 +11,7 @@ use pymergetic_metal_fs::{
     PM_METAL_FS_O_RDWR, PM_METAL_FS_O_WRONLY, PM_METAL_FS_TYPE_DIR,
 };
 use pymergetic_metal_rt as _;
-use pymergetic_metal_vfs as vfs;
+use pymergetic_metal_fs_vfs as vfs;
 
 extern "C" {
     fn pm_metal_async_completed_u32(v: u32) -> u32;
@@ -75,9 +76,9 @@ fn done(v: u32) -> u32 {
 }
 
 unsafe fn ensure_ops() {
-    if !OPS_READY {
+    if !*addr_of!(OPS_READY) {
         let _ = pm_metal_fs_ops_register(&OV_OPS);
-        OPS_READY = true;
+        *addr_of_mut!(OPS_READY) = true;
     }
 }
 
@@ -96,7 +97,7 @@ pub unsafe extern "C" fn pm_metal_fs_overlay_mount(
     ensure_ops();
     let mut id = 1usize;
     while id < MAX_OV {
-        if !OVS[id].used {
+        if !ov_slot(id).used {
             break;
         }
         id += 1;
@@ -104,27 +105,52 @@ pub unsafe extern "C" fn pm_metal_fs_overlay_mount(
     if id >= MAX_OV {
         return -1;
     }
-    OVS[id] = Ov {
-        lower_ops,
-        lower_ctx,
-        upper_ops,
-        upper_ctx,
-        used: true,
-    };
+    ov_slot_set(
+        id,
+        Ov {
+            lower_ops,
+            lower_ctx,
+            upper_ops,
+            upper_ctx,
+            used: true,
+        },
+    );
     let ctx = id as *mut c_void;
-    if vfs::pm_metal_vfs_mount(target, &OV_OPS as *const _ as *const c_void, ctx) == 0 {
-        OVS[id].used = false;
+    if vfs::pm_metal_fs_vfs_mount(target, &OV_OPS as *const _ as *const c_void, ctx) == 0 {
+        let mut o = ov_slot(id);
+        o.used = false;
+        ov_slot_set(id, o);
         return -1;
     }
     0
 }
 
-unsafe fn ov_get(ctx: *mut c_void) -> Option<&'static Ov> {
+unsafe fn ov_slot(id: usize) -> Ov {
+    ptr::read(addr_of!(OVS).cast::<Ov>().add(id))
+}
+
+unsafe fn ov_slot_set(id: usize, v: Ov) {
+    ptr::write(addr_of_mut!(OVS).cast::<Ov>().add(id), v);
+}
+
+unsafe fn file_slot(id: usize) -> OpenH {
+    ptr::read(addr_of!(FILES).cast::<OpenH>().add(id))
+}
+
+unsafe fn file_slot_set(id: usize, v: OpenH) {
+    ptr::write(addr_of_mut!(FILES).cast::<OpenH>().add(id), v);
+}
+
+unsafe fn ov_get(ctx: *mut c_void) -> Option<Ov> {
     let id = ctx as usize;
-    if id == 0 || id >= MAX_OV || !OVS[id].used {
-        None
+    if id == 0 || id >= MAX_OV {
+        return None;
+    }
+    let ov = ov_slot(id);
+    if ov.used {
+        Some(ov)
     } else {
-        Some(&OVS[id])
+        None
     }
 }
 
@@ -172,7 +198,7 @@ unsafe extern "C" fn op_open(ctx: *mut c_void, path: *const u8, flags: u32) -> u
     }
     let mut slot = None;
     for i in 0..MAX_OPEN {
-        if !FILES[i].used {
+        if !file_slot(i).used {
             slot = Some(i);
             break;
         }
@@ -180,14 +206,16 @@ unsafe extern "C" fn op_open(ctx: *mut c_void, path: *const u8, flags: u32) -> u
     let Some(fi) = slot else {
         return done(PM_METAL_FS_INVALID);
     };
-    FILES[fi] = OpenH {
-        ov: ctx as usize,
-        on_upper,
-        inner,
-        used: true,
-    };
-    pm_metal_fs_set_active_ops(&OV_OPS, ctx);
-    /* Activate underlying ops for fread dispatch through LAST_OPS — re-set to overlay. */
+    file_slot_set(
+        fi,
+        OpenH {
+            ov: ctx as usize,
+            on_upper,
+            inner,
+            used: true,
+        },
+    );
+    /* Active ops for fread dispatch through LAST_OPS. */
     pm_metal_fs_set_active_ops(&OV_OPS, ctx);
     let _ = PM_METAL_FS_O_DIRECTORY;
     let _ = PM_METAL_FS_TYPE_DIR;
@@ -195,7 +223,11 @@ unsafe extern "C" fn op_open(ctx: *mut c_void, path: *const u8, flags: u32) -> u
 }
 
 unsafe fn with_inner(h: u32) -> Option<(bool, *const pm_metal_fs_ops_t, *mut c_void, u32)> {
-    let f = FILES.get(h as usize)?;
+    let i = h as usize;
+    if i >= MAX_OPEN {
+        return None;
+    }
+    let f = file_slot(i);
     if !f.used {
         return None;
     }
@@ -213,8 +245,11 @@ unsafe extern "C" fn op_close(_ctx: *mut c_void, h: u32) -> u32 {
             let _ = c(ctx, inner);
         }
     }
-    if (h as usize) < MAX_OPEN {
-        FILES[h as usize].used = false;
+    let i = h as usize;
+    if i < MAX_OPEN {
+        let mut f = file_slot(i);
+        f.used = false;
+        file_slot_set(i, f);
     }
     done(0)
 }

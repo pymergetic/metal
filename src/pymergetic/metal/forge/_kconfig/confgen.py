@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""Generate exp2/build/autoconf.h + config.sh (forge-private; forge config gen)."""
+"""Generate build/autoconf.h + config.sh (forge-private; forge config gen)."""
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-from _util import enter_exp2_config, metal_root
+from _util import enter_config, metal_root
 
 
 def main() -> int:
     root = metal_root(Path(__file__))
-    exp2 = root / "exp2"
-    klib = root / "scripts" / "lib" / "kconfig"
+    klib = Path(__file__).resolve().parent
     sys.path.insert(0, str(klib))
 
     import kconfiglib  # noqa: E402
 
-    config_dir = exp2 / "config"
+    config_dir = root / "config"
     dotconfig = config_dir / ".config"
     defconfig = config_dir / "defconfig"
-    out_dir = exp2 / "build"
+    out_dir = root / "build"
     autoconf = out_dir / "autoconf.h"
     config_sh = out_dir / "config.sh"
 
@@ -27,7 +26,7 @@ def main() -> int:
         "PM_METAL_FS_ROOT_SIZE_MIB": ("PM_METAL_FS_ROOT_SIZE", 1024 * 1024),
     }
 
-    enter_exp2_config(config_dir)
+    enter_config(config_dir)
     kconf = kconfiglib.Kconfig("Kconfig", warn_to_stderr=True)
     if dotconfig.is_file():
         kconf.load_config(str(dotconfig))

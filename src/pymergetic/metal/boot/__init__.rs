@@ -23,12 +23,21 @@ use pymergetic_metal_fs_tmpfs as _;
 use pymergetic_metal_hwtree as _;
 use pymergetic_metal_log as _;
 use pymergetic_metal_mem as _;
+use pymergetic_metal_net_dns as _;
+use pymergetic_metal_net_ftp as _;
+use pymergetic_metal_net_http as _;
+use pymergetic_metal_net_ip as _;
+use pymergetic_metal_net_ntp as _;
+use pymergetic_metal_net_ip_icmp as _;
+use pymergetic_metal_net_ip_tcp as _;
+use pymergetic_metal_net_tftp as _;
+use pymergetic_metal_net_ip_udp as _;
 use pymergetic_metal_rt as _;
 use pymergetic_metal_util_ascii as _;
 use pymergetic_metal_util_lz4 as _;
 use pymergetic_metal_util_size as _;
 use pymergetic_metal_util_tar as _;
-use pymergetic_metal_vfs as _;
+use pymergetic_metal_fs_vfs as _;
 
 #[path = "banner.rs"]
 mod banner;

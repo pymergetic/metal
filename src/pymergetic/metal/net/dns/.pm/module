@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.net.dns",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "DNS resolve awaitable on net.ip (lwIP dns)."
+}

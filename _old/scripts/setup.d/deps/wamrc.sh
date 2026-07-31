@@ -3,7 +3,7 @@
 # Avoids building LLVM on the host. Output: .tools/wamrc/wamrc
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 WAMR_REF="WAMR-2.4.5"
 VER="${WAMR_REF#WAMR-}"
 OUT_DIR="${ROOT}/.tools/wamrc"

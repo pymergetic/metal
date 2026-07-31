@@ -1,0 +1,18 @@
+# Generic fallback cwd is this directory. Keep -I relative to here so
+# stddef/stdint resolve via metal/libc when the package CDB does not match.
+CompileFlags:
+  Add:
+    - -xc
+    - -std=c11
+    - -ffreestanding
+    - -nostdinc
+    - -m64
+    - -mno-red-zone
+    - -I../../libc
+    - -I../../../../
+    - -I.
+    - -Icfg
+    - -I../../../../../external/lwip/src/include
+    - -I../../../../../build
+    - -include
+    - ../../../../../build/autoconf.h

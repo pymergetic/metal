@@ -1,0 +1,19 @@
+[package]
+name = "pymergetic_metal_net_tftp"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "../__init__.rs"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+pymergetic_metal_rt = { path = "../../../rt/.pm" }
+pymergetic_metal_async = { path = "../../../async/.pm" }
+pymergetic_metal_net_ip = { path = "../../ip/.pm" }
+pymergetic_metal_net_dns = { path = "../../dns/.pm" }
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

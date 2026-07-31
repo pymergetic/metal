@@ -1,14 +1,16 @@
 # Build outputs
 /build/
-/exp2/build/
+/_old/build/
 
 # Cargo outs (host tools + module crates; modules also list these locally)
 **/.target/
 **/target/
 
-# Local Kconfig selections (defaults: config/defconfig)
+# Local Kconfig selections (defaults: config/defconfig; archived under _old/)
 /config/.config
 /config/.config.old
+/_old/config/.config
+/_old/config/.config.old
 
 # Legacy layout leftovers
 host/**/build/
@@ -21,9 +23,7 @@ mods/build/
 # Toolchain (local download)
 .tools/
 
-# Vendored / generated trees (setup-cloned + ignored — always vanilla +
-# patches/<dep>/; see docs/SOURCETREE.md "Vendoring". No engine forks.)
-/external/*
+# external/ holds git submodules (see .gitmodules). Do not gitignore them.
 
 # IDE / tooling
 .vscode/

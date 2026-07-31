@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.vfs",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "Mount table + longest-prefix path resolve (no file I/O)."
-}

@@ -5,7 +5,7 @@
 # re-run this script (or `rm -rf external/wamr` then setup).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 WAMR_DIR="${ROOT}/external/wamr"
 WAMR_REPO="https://github.com/bytecodealliance/wasm-micro-runtime"
 WAMR_REF="WAMR-2.4.5"

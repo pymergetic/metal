@@ -114,6 +114,45 @@ char *strcpy(char *dst, const char *src)
   return dst;
 }
 
+char *strncpy(char *dst, const char *src, size_t n)
+{
+  size_t i;
+
+  for (i = 0; i < n && src[i] != '\0'; i++) {
+    dst[i] = src[i];
+  }
+  for (; i < n; i++) {
+    dst[i] = '\0';
+  }
+  return dst;
+}
+
+char *strstr(const char *haystack, const char *needle)
+{
+  size_t nlen;
+  size_t i;
+
+  if (haystack == NULL || needle == NULL) {
+    return (char *)0;
+  }
+  if (needle[0] == '\0') {
+    return (char *)haystack;
+  }
+  nlen = strlen(needle);
+  for (i = 0; haystack[i] != '\0'; i++) {
+    size_t j;
+    for (j = 0; j < nlen; j++) {
+      if (haystack[i + j] != needle[j]) {
+        break;
+      }
+    }
+    if (j == nlen) {
+      return (char *)(haystack + i);
+    }
+  }
+  return (char *)0;
+}
+
 char *strchr(const char *s, int c)
 {
   char ch = (char)c;

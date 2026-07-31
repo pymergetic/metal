@@ -36,7 +36,7 @@ fn has_flag(sess: &dyn ForgeSession, name: &str) -> bool {
 
 fn usage_lines() -> [&'static str; 13] {
     [
-        "forge - Metal module codegen + image builders + exp2 build (solo host tool)",
+        "forge - Metal module codegen + image builders + firmware build (solo host tool)",
         "",
         "Usage:",
         "  forge mod sync [--emit toml] [--force] [--metal-root DIR]",

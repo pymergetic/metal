@@ -1,10 +1,14 @@
 # EFI Metal — design
 
 Living design for the freestanding UEFI target. Grown in micro-slices:
-boot → init → library → WAMR host surface → machine → cut line.
+boot -> init -> library -> WAMR host surface -> machine -> cut line.
 
-See [LAYERS.md](LAYERS.md) · [src/efi/README.md](../src/efi/README.md).
-Hosted ports live only on `archive/multi-host`.
+**Live tree:** [`.../boot/platform/efi`](../src/pymergetic/metal/boot/platform/efi/)
+via `./forge-cli build|run efi`. Product-era `scripts/*` / `src/efi` paths in
+this doc mean [`_old/`](../_old/) unless noted.
+
+See [_old/docs/LAYERS.md](../_old/docs/LAYERS.md) ·
+[`_old/src/efi/`](../_old/src/efi/).
 
 **Constraint (every runtime slice):** after handover, the hot path never
 touches UEFI Boot Services. Allocate, print, time, and I/O go through
@@ -151,13 +155,16 @@ headers-only or gnu-efi path.
 
 ### Vendoring / setup (when coded)
 
-- Pin a known EDK2 (and edk2-platforms only if required) via `scripts/setup`
+- Pin a known EDK2 (and edk2-platforms only if required) as `external/edk2`
+  submodule (see [`TOOLING.md`](TOOLING.md)); archived clone recipe under
+  `_old/scripts/setup.d/deps/edk2.sh`
   into `external/` (or documented workspace path), same vendoring discipline as
   other externals ([SOURCETREE.md](SOURCETREE.md)).
 - Metal package sources stay in-tree under `src/efi/` (and/or an EDK2 package
   dir that points at those sources); `./scripts/build efi` drives `build` /
   `stuart` / edk2 `build` as we wire it.
-- Patches to EDK2, if any, go under a revived `patches/edk2/` (none yet).
+- EDK2 stays vanilla submodule/checkout; no live `patches/edk2/` (product-era
+  patches live under `_old/patches/` if ever needed as reference).
 
 ### Rejected
 

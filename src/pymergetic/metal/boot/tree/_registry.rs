@@ -21,8 +21,8 @@ extern "C" {
     fn pm_metal_mem_hole() -> usize;
     fn pm_metal_net_ip_if_count() -> u32;
     fn pm_metal_net_ip_if_status_index(index: u32, dest: *mut u8, dest_cap: u32) -> i32;
-    fn pm_metal_vfs_mount_count() -> u32;
-    fn pm_metal_vfs_mount_info(
+    fn pm_metal_fs_vfs_mount_count() -> u32;
+    fn pm_metal_fs_vfs_mount_info(
         index: u32,
         target_out: *mut u8,
         target_cap: u32,
@@ -279,7 +279,7 @@ unsafe fn emit_devices() -> i32 {
 }
 
 unsafe fn emit_fs() -> i32 {
-    let count = pm_metal_vfs_mount_count();
+    let count = pm_metal_fs_vfs_mount_count();
     let mut line = LineBuf::new();
     if count == 0 {
         let _ = write!(line, "+-- fs           FAIL");
@@ -291,7 +291,7 @@ unsafe fn emit_fs() -> i32 {
     for index in 0..count {
         let mut target = [0u8; 128];
         let mut fstype = [0u8; 32];
-        if pm_metal_vfs_mount_info(
+        if pm_metal_fs_vfs_mount_info(
             index,
             target.as_mut_ptr(),
             target.len() as u32,

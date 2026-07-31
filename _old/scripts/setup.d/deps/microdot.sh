@@ -2,7 +2,7 @@
 # Vendors Miguel Grinberg's Microdot into external/microdot (gitignored).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 DIR="${ROOT}/external/microdot"
 REPO="${PM_METAL_MICRODOT_URL:-https://github.com/miguelgrinberg/microdot.git}"
 REF="${PM_METAL_MICRODOT_REF:-v2.6.2}"

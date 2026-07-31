@@ -33,6 +33,14 @@ fn strip_rs_noise(text: &str) -> String {
 
 fn rs_type_to_c(ty: &str) -> String {
     let t = collapse_ws(ty);
+    // [T; N] -> CType[N] (export_c rewrites "T name[N]")
+    if t.starts_with('[') && t.ends_with(']') {
+        if let Some(inner) = t.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            if let Some((elem, n)) = inner.rsplit_once(';') {
+                return alloc::format!("{}[{}]", rs_type_to_c(elem.trim()), n.trim());
+            }
+        }
+    }
     if let Some(rest) = t.strip_prefix("*const ") {
         return alloc::format!("const {} *", rs_type_to_c(rest));
     }
@@ -54,6 +62,7 @@ fn rs_type_to_c(ty: &str) -> String {
         "f32" => String::from("float"),
         "f64" => String::from("double"),
         "c_void" | "core::ffi::c_void" => String::from("void"),
+        "c_char" | "core::ffi::c_char" => String::from("char"),
         "!" => String::from("_Noreturn void"),
         _ => {
             if let Some(tail) = t.rsplit("::").next() {
@@ -195,10 +204,10 @@ pub fn import(text: &str) -> Catalog {
                 .unwrap_or(after.len());
             let name = after[..name_end].trim();
             if let Some(brace) = after.find('{') {
-                if let Some(end) = after[brace..].find('}') {
+                if let Some(end) = matching_brace(&after[brace..]) {
                     let body = &after[brace + 1..brace + end];
                     let mut fields = Vec::new();
-                    for line in body.split(',') {
+                    for line in split_top_level(body, ',') {
                         let line = line.trim();
                         if let Some(rest) = line.strip_prefix("pub ") {
                             if let Some((n, t)) = rest.split_once(':') {
@@ -297,16 +306,30 @@ pub fn import(text: &str) -> Catalog {
 }
 
 fn matching_paren(s: &str) -> Option<usize> {
-    // s starts with '('
+    matching_delim(s, b'(', b')')
+}
+
+fn matching_brace(s: &str) -> Option<usize> {
+    matching_delim(s, b'{', b'}')
+}
+
+fn matching_delim(s: &str, open: u8, close: u8) -> Option<usize> {
     let b = s.as_bytes();
-    if b.first() != Some(&b'(') {
+    if b.first() != Some(&open) {
         return None;
     }
     let mut depth = 0i32;
+    let mut angle = 0i32;
     for (i, &c) in b.iter().enumerate() {
         match c {
-            b'(' => depth += 1,
-            b')' => {
+            b'<' => angle += 1,
+            b'>' => {
+                if angle > 0 {
+                    angle -= 1;
+                }
+            }
+            _ if c == open && angle == 0 => depth += 1,
+            _ if c == close && angle == 0 => {
                 depth -= 1;
                 if depth == 0 {
                     return Some(i);
@@ -316,6 +339,35 @@ fn matching_paren(s: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// Split `s` on `sep` at top level (paren / angle / brace depth 0).
+fn split_top_level(s: &str, sep: char) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut paren = 0i32;
+    let mut angle = 0i32;
+    let mut brace = 0i32;
+    for c in s.chars() {
+        match c {
+            '(' => paren += 1,
+            ')' => paren -= 1,
+            '<' => angle += 1,
+            '>' => angle -= 1,
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            _ if c == sep && paren == 0 && angle == 0 && brace == 0 => {
+                out.push(core::mem::take(&mut cur));
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(c);
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 fn parse_int(s: &str) -> Result<i64, ()> {

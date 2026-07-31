@@ -37,8 +37,11 @@ pub fn export(
     lines.push(alloc::format!("#ifndef {}", guard));
     lines.push(alloc::format!("#define {}", guard));
     lines.push(String::new());
-    lines.push(String::from("#include <stddef.h>"));
-    lines.push(String::from("#include <stdint.h>"));
+    /* Keep: clangd IncludeCleaner often flags these as unused in a face that
+     * only uses typedefs/macros that look ambient; they are the freestanding
+     * type floor for every generated C border. */
+    lines.push(String::from("#include <stddef.h> /* IWYU pragma: keep */"));
+    lines.push(String::from("#include <stdint.h> /* IWYU pragma: keep */"));
     lines.push(String::new());
     lines.push(String::from("#ifdef __cplusplus"));
     lines.push(String::from("extern \"C\" {"));

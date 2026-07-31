@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "pymergetic.metal.net.http",
-  "impl": "c",
+  "impl": "rs",
   "version": "0.1.0",
-  "comment": "Minimal HTTP/1.0 GET awaitable on net.ip."
+  "comment": "HTTP client (GET) + server (C mounts / health) on net.ip.tcp."
 }

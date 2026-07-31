@@ -17,7 +17,7 @@ pm_metal_upy_ensure_external() {
 	local root
 	root="$(pm_metal_upy_root)"
 	if [[ ! -d "${root}/external/micropython/py" ]]; then
-		"${root}/scripts/setup" micropython
+		"${root}/_old/scripts/setup" micropython
 	fi
 }
 

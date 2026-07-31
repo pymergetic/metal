@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.net.tftp",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "TFTP read-request client awaitable on net.ip."
+}

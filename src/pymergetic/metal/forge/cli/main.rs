@@ -1,6 +1,6 @@
-//! Dumb Linux forge app (outside the Metal module tree).
-//! Wires solo FS/stdio port + checkout root discovery; all codegen lives in
-//! `pymergetic_metal_forge`.
+//! Linux solo forge binary (hidden module `forge/cli`).
+//! Wires solo FS/stdio port + checkout root discovery; codegen lives in
+//! `pymergetic_metal_forge`. Launched via package-root `./forge-cli`.
 
 use pymergetic_metal_forge::{run_cli, SoloSession, SoloStore};
 use std::path::PathBuf;
@@ -28,8 +28,9 @@ fn guess_metal_root() -> String {
 }
 
 fn walk_for_root(mut p: PathBuf) -> Option<String> {
-    for _ in 0..12 {
-        if p.join("tools/metal").is_dir() && p.join("exp2").is_dir() {
+    for _ in 0..16 {
+        let launcher = p.join("forge-cli");
+        if p.join("src/pymergetic/metal").is_dir() && launcher.is_file() {
             return Some(p.to_string_lossy().into_owned());
         }
         if !p.pop() {

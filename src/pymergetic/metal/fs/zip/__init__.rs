@@ -17,7 +17,7 @@ use pymergetic_metal_fs::{
     PM_METAL_FS_TYPE_DIR, PM_METAL_FS_TYPE_FILE,
 };
 use pymergetic_metal_rt as _;
-use pymergetic_metal_vfs as vfs;
+use pymergetic_metal_fs_vfs as vfs;
 
 extern "C" {
     fn pm_metal_async_completed_u32(v: u32) -> u32;
@@ -282,7 +282,7 @@ pub unsafe extern "C" fn pm_metal_fs_zip_mount(
     }
     ensure_ops_registered();
     let ctx = id as usize as *mut c_void;
-    if vfs::pm_metal_vfs_mount(target, &ZIP_OPS as *const _ as *const c_void, ctx) == 0 {
+    if vfs::pm_metal_fs_vfs_mount(target, &ZIP_OPS as *const _ as *const c_void, ctx) == 0 {
         return -1;
     }
     0

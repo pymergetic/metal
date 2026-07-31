@@ -31,8 +31,15 @@ name = "pymergetic_metal_fs"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",
+ "pymergetic_metal_fs_vfs",
  "pymergetic_metal_rt",
- "pymergetic_metal_vfs",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_vfs"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
 ]
 
 [[package]]
@@ -41,8 +48,8 @@ version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_fs",
+ "pymergetic_metal_fs_vfs",
  "pymergetic_metal_rt",
- "pymergetic_metal_vfs",
 ]
 
 [[package]]
@@ -56,13 +63,6 @@ dependencies = [
 [[package]]
 name = "pymergetic_metal_rt"
 version = "0.1.0"
-
-[[package]]
-name = "pymergetic_metal_vfs"
-version = "0.1.0"
-dependencies = [
- "pymergetic_metal_rt",
-]
 
 [[package]]
 name = "shlex"

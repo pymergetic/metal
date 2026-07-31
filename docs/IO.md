@@ -1,7 +1,11 @@
 # Metal IO classes + device table
 
-Companion to [`LIBC_ASYNC.md`](LIBC_ASYNC.md) and [`COOP_MEMORY.md`](COOP_MEMORY.md).  
+Companion to [`LIBC_ASYNC.md`](LIBC_ASYNC.md) and [`COOP_MEMORY.md`](COOP_MEMORY.md).
 **Product IO is Metal ABI + host backends**, not WASI.
+
+Live floor: [`PLATFORM.md`](PLATFORM.md) +
+`src/pymergetic/metal/{dt,dev,net,fs}/`. `./scripts/run` examples below are
+archived under [`_old/scripts/`](../_old/scripts/).
 
 ---
 
@@ -233,7 +237,7 @@ ASGI leaf, listens on port 18080, mounts `/hello`, and replies
 `asgi-hello` via `pm_metal_net_asgi_send_simple`.
 
 See also [MODS.md](MODS.md) for wasm registration and
-[MICROPYTHON.md](MICROPYTHON.md) for Python ASGI applications.
+[`_old/docs/MICROPYTHON.md`](../_old/docs/MICROPYTHON.md) for Python ASGI applications.
 
 ---
 

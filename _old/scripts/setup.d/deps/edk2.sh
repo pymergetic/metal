@@ -3,7 +3,7 @@
 # Pin: edk2-stable202502 (docs/EFI.md Slice C).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 EDK2_DIR="${ROOT}/external/edk2"
 EDK2_REPO="https://github.com/tianocore/edk2.git"
 EDK2_REF="edk2-stable202502"

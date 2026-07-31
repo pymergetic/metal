@@ -7,6 +7,10 @@ edition = "2021"
 path = "../__init__.rs"
 crate-type = ["staticlib", "rlib"]
 
+[features]
+# forge build --stress: point net.ntp at the host mock port.
+exp2_stress = ["pymergetic_metal_net_ntp/exp2_stress"]
+
 [dependencies]
 pymergetic_metal_rt = { path = "../../rt/.pm" }
 pymergetic_metal_mem = { path = "../../mem/.pm" }
@@ -26,13 +30,22 @@ pymergetic_metal_dev_input = { path = "../../dev/input/.pm" }
 pymergetic_metal_dev_gfx = { path = "../../dev/gfx/.pm" }
 pymergetic_metal_hwtree = { path = "../../hwtree/.pm" }
 pymergetic_metal_async = { path = "../../async/.pm" }
-pymergetic_metal_vfs = { path = "../../vfs/.pm" }
+pymergetic_metal_fs_vfs = { path = "../../fs/vfs/.pm" }
 pymergetic_metal_fs = { path = "../../fs/.pm" }
 pymergetic_metal_fs_fat = { path = "../../fs/fat/.pm" }
 pymergetic_metal_fs_mtar = { path = "../../fs/mtar/.pm" }
 pymergetic_metal_fs_littlefs = { path = "../../fs/littlefs/.pm" }
 pymergetic_metal_fs_tmpfs = { path = "../../fs/tmpfs/.pm" }
 pymergetic_metal_dev_blk_ram = { path = "../../dev/blk/ram/.pm" }
+pymergetic_metal_net_ip = { path = "../../net/ip/.pm" }
+pymergetic_metal_net_dns = { path = "../../net/dns/.pm" }
+pymergetic_metal_net_ip_tcp = { path = "../../net/ip/tcp/.pm" }
+pymergetic_metal_net_ip_udp = { path = "../../net/ip/udp/.pm" }
+pymergetic_metal_net_ip_icmp = { path = "../../net/ip/icmp/.pm" }
+pymergetic_metal_net_ntp = { path = "../../net/ntp/.pm" }
+pymergetic_metal_net_http = { path = "../../net/http/.pm" }
+pymergetic_metal_net_tftp = { path = "../../net/tftp/.pm" }
+pymergetic_metal_net_ftp = { path = "../../net/ftp/.pm" }
 
 [profile.release]
 panic = "abort"

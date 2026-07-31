@@ -4,11 +4,12 @@
 # See docs/SOURCETREE.md "Vendoring".
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 
-"${ROOT}/scripts/setup.d/deps/monocypher.sh"
-"${ROOT}/scripts/setup.d/deps/mbedtls.sh"
-"${ROOT}/scripts/setup.d/deps/crypt_blowfish.sh"
-"${ROOT}/scripts/setup.d/deps/dropbear.sh"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"${HERE}/monocypher.sh"
+"${HERE}/mbedtls.sh"
+"${HERE}/crypt_blowfish.sh"
+"${HERE}/dropbear.sh"
 
 echo "setup-net: OK (monocypher + mbedtls + crypt_blowfish + dropbear)"

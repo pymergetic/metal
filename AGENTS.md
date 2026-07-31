@@ -64,12 +64,14 @@ WASI-import headers.
 
 ## The other rule you must not relitigate
 
-`src/pymergetic/metal/**` is uniform ISO C / `stdint.h` — **one spelling per
-type, everywhere**: `uint32_t` not `UINT32`, `void` not `VOID`, `static` not
-`STATIC`, `bool` not `BOOLEAN`. EDK2 headers/types (`Uefi.h`, `Library/*.h`,
-`UINT32`, ...) are only allowed physically under `src/efi/**` / `src/bios/**`
-— never by filename convention (no `*_port.c` exception), never "just this
-once", never behind a compat `#define`.
+`src/pymergetic/metal/**` is uniform ISO C / `stdint.h` — **one spelling
+per type, everywhere**: `uint32_t` not `UINT32`, `void` not `VOID`, `static`
+not `STATIC`, `bool` not `BOOLEAN`. EDK2 headers/types (`Uefi.h`,
+`Library/*.h`, `UINT32`, ...) are only allowed physically under
+`.../boot/platform/efi/**` / `.../bios/**` (and archived
+`_old/src/efi/**` / `_old/src/bios/**`) — never by filename convention
+(no `*_port.c` exception), never "just this once", never behind a compat
+`#define`.
 
 This is strict because the project owner is autistic and a type that can
 appear under two different spellings (even when typedef-identical) costs
@@ -90,13 +92,13 @@ It must return nothing.
 ## IDE diagnostics (clangd) are part of the job
 
 The owner works from editor squiggles. After C/include/`.clangd` changes,
-check diagnostics on touched files, regenerate `./scripts/setup ide` when
+check diagnostics on touched files; refresh `.clangd` from `.clangd.template` when
 the template changed, and **tell them to restart clangd** (or reload the
 window) so they are not chasing stale errors. See
 `.cursor/rules/metal-ide-lint.mdc` and `docs/SOURCETREE.md` (clangd).
 
-**Never absolute paths** in generated IDE/build metadata
-(`compile_commands.json`, emitted `.clangd` path bits, etc.). Use package-
-relative paths only (`src/...`, `directory` = package root). No
-`/home/...`, no `$PWD` absolutes — see `.cursor/rules/metal-ide-lint.mdc`.
+**No absolute `-I` / `"file"` in IDE metadata** — `.clangd*` and CDB
+command lines stay package-relative. CDB `"directory"` is the absolute
+package root (clangd cannot match `"."` + relative file). See
+`.cursor/rules/metal-clangd-no-abs-paths.mdc`.
 

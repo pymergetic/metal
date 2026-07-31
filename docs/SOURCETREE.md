@@ -5,18 +5,34 @@ intensively for an existing helper/pattern before adding a new one) outranks
 every rule in this file. This doc is the *where things live* / *how they're
 spelled* reference once you already know reuse isn't an option.
 
-Maps to [LAYERS.md](LAYERS.md). Stops at wasm interface.
+**Live product:** [`src/pymergetic/metal/`](../src/pymergetic/metal/) —
+build with [`./forge-cli`](../forge-cli). Dialect rules for
+`src/pymergetic/metal/**` include `boot/platform/{bios,efi}` ports.
+Vendors: git submodules under `external/` (see [TOOLING.md](TOOLING.md)).
 
-**Active target:** `efi` only. Freestanding Metal modules live under
-`src/pymergetic/metal/` (contracts, `pm_metal_<module>_*`) with EFI bodies in
-`src/efi/pymergetic/metal/` and EDK2 entry in `src/efi/MetalPkg/`. Hosted
-hosted trees and the old `src/common/…` host stack are on
-`archive/multi-host`. Examples below may still describe that
-archived layout.
+**Archived product:** former package-root trees live under [`_old/`](../_old/)
+with the same relative paths. Large sections below still describe that
+pre-flat / MicroPython product — treat them as archive notes unless a path
+exists under live `src/pymergetic/metal/`.
+
+Maps to archived [LAYERS.md](../_old/docs/LAYERS.md) where still useful.
+
+### Live package root (current)
+
+```text
+forge-cli
+src/pymergetic/metal/          # firmware + forge
+config/                        # Kconfig
+build/                         # gitignored forge outs
+external/{lwip,tlsf}/          # git submodules
+stress/
+docs/
+_old/                          # archived product / scripts / patches
+```
 
 ---
 
-## Two trees (plus one narrow exception)
+## Two trees (plus one narrow exception) — archived product note
 
 | Tree | Who compiles against it |
 |------|-------------------------|
@@ -412,10 +428,9 @@ packages/metal/
 ├── scripts/                       # setup|build|verify dispatchers
 │                                  # *.d/{expect,suite,…} = agnostic; *.d/port/<plat>/ = per-host
 │                                  # build.d/guest/ = wasm artifacts; setup.d/deps/; lib/
-│   # patches/ — on archive branch (freestanding-efi has none)
 ├── docs/
-├── external/                      # gitignored — plain upstream checkouts via scripts/setup
-└── west-manifest/
+├── external/{lwip,tlsf,monocypher,mbedtls}/  # git submodules — see .gitmodules
+└── _old/                          # archived product, scripts, patches
 ```
 
 ---
@@ -518,48 +533,24 @@ Per-function `impl:` tags in each header are authoritative — not the directory
 | `src/common/` | contract `.h` + `impl: common` `.c` |
 | `src/<plat>/` | `impl: bind` + plat-private; OS `#include`s only here |
 | Public symbols | `pm_metal_<module_path>_` |
-| `external/` + `.tools/` | **always vanilla** — pin + tracked `patches/<dep>/` only (below); never leave untracked drift in a checkout |
+| `external/` + `.tools/` | **always vanilla** — submodule pin only; never leave untracked drift in a checkout |
 | Externals registry | third-party stack identity via `PM_METAL_EXTERNAL` / `.pm_metal_externals.*` (`boot/externals.h`) — not mods, not Metal `authors`/`about`; see docs/IO.md |
 | Mem limit catalog | compile-time buffer budgets via `PM_METAL_MEM_LIMIT` / `.pm_metal_mem_limits.*` (`runtime/mem/limit.h`) — shell `limits` / `pymergetic.metal.mem.limit` / `/limits`; see docs/IO.md |
 | Artifacts | `build/` — gitignored |
 
-**Always keep externals vanilla.** A checkout under `external/<dep>` must be
-exactly the pinned tag/commit, plus every hunk from `patches/<dep>/NNNN-*.patch`
-and nothing else — no stray untracked files, no "just this once" edits that are
-not folded into a patch. `git -C external/<dep> apply --check --reverse
-patches/<dep>/*.patch` must succeed; a fresh `rm -rf external/<dep> &&
-./scripts/setup <dep>` must reproduce the same tree. Adapt WAMR, hosted,
-wasi-sdk, Dropbear, etc. from `src/` (CMake flags, shims, wrappers) first —
-never hand-edit a vendored tree directly (it's gitignored, so an in-place edit
-is invisible to git and vanishes on the next re-vendor). Patch upstream only if
-unavoidable (a real upstream bug with no `src/`-side workaround, e.g. a genuine
-data race) — see "Vendoring" below for the actual mechanism. **IDE noise is not
-a reason to edit `external/`:** clangd IncludeCleaner / tidy on umbrella headers
-like Dropbear's `includes.h` is suppressed for `external/**` in
-`.clangd.template` — fix Metal glue or the clangd config, never "clean up"
-upstream includes to silence the editor. After `./scripts/setup ide` or any
-`.clangd` / include-path change: **restart clangd** (or reload the window) so
-Problems is not stale — see `.cursor/rules/metal-ide-lint.mdc`.
+**Always keep externals vanilla.** A checkout under `external/<dep>` must match
+the submodule pin exactly — no stray edits. Adapt behavior from `src/` first.
+Product-era vendor patches are archived under `_old/patches/` (not applied by
+live forge). **IDE noise is not a reason to edit `external/`:** suppress tidy
+for `external/**` in `.clangd.template`; fix Metal glue or clangd config instead.
+After any `.clangd` change: **restart clangd** — see
+`.cursor/rules/metal-ide-lint.mdc`.
 
 ### Vendoring
 
-`external/<dep>` is a plain upstream checkout pinned to one tag/commit,
-reproduced by `scripts/setup <dep>` — never committed itself (gitignored), so
-re-running that script after `rm -rf external/<dep>` always gets back to the
-exact same tree. **Invariant: always vanilla** — the working tree equals pin +
-`patches/<dep>/*.patch` only. That includes MicroPython: `external/micropython`
-is upstream (`scripts/setup micropython`, currently `v1.28.0`) plus
-any `patches/micropython/` hunks that are genuine upstream bugs with no
-`src/` workaround — not a Metal fork, and not Metal features (per-CPU
-`mp_state_ctx`, private heaps, …) smuggled in via patch. Port/glue lives
-under `src/` (e.g. `pymergetic/metal/py/`); Python uses the shared embed
-blob and normal Metal alloc. When a fix genuinely can't be done from `src/`'s
-side (see above), add or update a tracked `patches/<dep>/NNNN-*.patch` (plain
-diffs, reviewable in a normal PR) and re-apply via setup — never leave an
-untracked new file or an unpatched hunk in the checkout. Each patch file's own
-leading comment (before its `diff --git`) says which upstream bug it works
-around and why `src/` alone couldn't. Bump the pin + patches together, in the
-same change, if upstream ever fixes the same bug differently.
+`external/<dep>` is a **git submodule** pinned to one tag/commit (see
+`.gitmodules`). `git submodule update --init` restores the tree. Optional /
+product-era deps: `_old/scripts/setup <dep>` / `_old/patches/` (reference only).
 
 ---
 
@@ -574,7 +565,7 @@ same change, if upstream ever fixes the same bug differently.
 | `build/micropython_embed/` | generated µPy embed sources |
 | `build/ide/` | merged `compile_commands.json` |
 
-Also gitignored: `.tools/`, `external/`, `.cache/`, `.venv/`.
+Also gitignored: `.tools/`, `.cache/`, `.venv/` (`external/` is submodules).
 
 ---
 

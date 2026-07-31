@@ -15,7 +15,7 @@ path = "smoke.rs"
 pymergetic_metal_rt = { path = "../../../rt/.pm" }
 pymergetic_metal_async = { path = "../../../async/.pm" }
 pymergetic_metal_fs = { path = "../../.pm" }
-pymergetic_metal_vfs = { path = "../../../vfs/.pm" }
+pymergetic_metal_fs_vfs = { path = "../../vfs/.pm" }
 
 [profile.release]
 panic = "abort"

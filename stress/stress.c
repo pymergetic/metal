@@ -14,10 +14,11 @@
 #include <pymergetic/metal/dev/blk/__init__.h>
 #include <pymergetic/metal/dev/input/__init__.h>
 #include <pymergetic/metal/mem/__init__.h>
+#include <pymergetic/metal/net/dns/__init__.h>
 #include <pymergetic/metal/net/http/__init__.h>
 #include <pymergetic/metal/net/ip/__init__.h>
 #include <pymergetic/metal/net/ntp/__init__.h>
-#include <pymergetic/metal/net/ping/__init__.h>
+#include <pymergetic/metal/net/ip/icmp/__init__.h>
 
 void *memset(void *dst, int c, size_t n);
 
@@ -32,7 +33,7 @@ int32_t pm_metal_fs_littlefs_seed_simple(uint8_t *buf, size_t len, const uint8_t
                                          const uint8_t *const *datas, const uint32_t *lens,
                                          uint32_t count);
 int32_t pm_metal_fs_littlefs_mount(const uint8_t *target, uint8_t *buf, size_t len);
-int32_t pm_metal_vfs_umount(const uint8_t *target);
+int32_t pm_metal_fs_vfs_umount(const uint8_t *target);
 
 #define STRESS_TIMEOUT_US 8000000ull
 #define ASYNC_BENCH_WAVE 32u
@@ -371,7 +372,7 @@ static int32_t fs_smoke(void)
   }
   /* open_owned copies into a Vec; seed buffer is ours again. */
   pm_metal_mem_free(owned);
-  (void)pm_metal_vfs_umount(path_mtar);
+  (void)pm_metal_fs_vfs_umount(path_mtar);
 
   names[0] = lfs_name;
   datas[0] = lfs_data;
@@ -386,7 +387,7 @@ static int32_t fs_smoke(void)
   if (pm_metal_fs_littlefs_mount(path_lfs, lfs_buf, sizeof(lfs_buf)) != 0) {
     return -1;
   }
-  (void)pm_metal_vfs_umount(path_lfs);
+  (void)pm_metal_fs_vfs_umount(path_lfs);
   return 0;
 }
 
@@ -434,7 +435,7 @@ int32_t pm_metal_exp2_stress(void)
     return stress_fail("tree");
   }
 
-  h = pm_metal_net_ping("10.0.2.2", 3000u);
+  h = pm_metal_net_ip_icmp_ping("10.0.2.2", 3000u);
   if (h == 0u || pm_metal_async_create_task(h) == 0u || wait_handle(h, STRESS_TIMEOUT_US) != 0) {
     if (h != 0u) {
       pm_metal_async_coro_close(h);
@@ -444,7 +445,7 @@ int32_t pm_metal_exp2_stress(void)
   pm_metal_async_coro_close(h);
 
   /* Literal short-circuit. */
-  h = pm_metal_net_ip_dns("10.0.2.2");
+  h = pm_metal_net_dns("10.0.2.2");
   if (h == 0u || pm_metal_async_create_task(h) == 0u || wait_handle(h, STRESS_TIMEOUT_US) != 0 ||
       pm_metal_async_result_u32(h) != 1u) {
     if (h != 0u) {
@@ -455,7 +456,7 @@ int32_t pm_metal_exp2_stress(void)
   pm_metal_async_coro_close(h);
 
   /* Real UDP DNS via SLIRP (10.0.2.3) - resolve the HTTP stress hostname. */
-  h = pm_metal_net_ip_dns("dns.google");
+  h = pm_metal_net_dns("dns.google");
   if (h == 0u || pm_metal_async_create_task(h) == 0u || wait_handle(h, STRESS_TIMEOUT_US) != 0 ||
       pm_metal_async_result_u32(h) != 1u) {
     if (h != 0u) {
@@ -483,7 +484,7 @@ int32_t pm_metal_exp2_stress(void)
     pm_metal_async_coro_close(h);
   }
 
-  /* Host NTP mock on 10.0.2.2:18123 (PM_METAL_NET_NTP_PORT under EXP2_STRESS). */
+  /* Host NTP mock on 10.0.2.2:18123 (net.ntp cargo feature exp2_stress). */
   h = pm_metal_net_ntp_sync("10.0.2.2");
   if (h == 0u || pm_metal_async_create_task(h) == 0u || wait_handle(h, STRESS_TIMEOUT_US) != 0 ||
       pm_metal_net_ntp_status(h) != 0u || pm_metal_net_ntp_last_unix_ms() == 0ull) {

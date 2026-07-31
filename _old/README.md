@@ -265,22 +265,24 @@ Stage an external app first (`METAL_EXT_APPS=doom=../metal-doom/build/doom`).
 
 ## Documentation
 
+Restored to live package [`../docs/`](../docs/) when still useful for exp2;
+product-only papers stay in [`docs/`](docs/) here.
+
 | Doc | What |
 |-----|------|
-| [docs/KCONFIG.md](docs/KCONFIG.md) | menuconfig — budgets, iface packs, build defaults |
-| [docs/IFACE.md](docs/IFACE.md) | DOC/IFACE catalogs, header/sources packs, HTTP UI |
-| [docs/IO.md](docs/IO.md) | Async I/O classes, device table, runners |
-| [docs/LIBC_ASYNC.md](docs/LIBC_ASYNC.md) | Guest libc ↔ async ABI |
-| [metal-doom/docs/DOOM_ASYNC.md](https://github.com/pymergetic/metal-doom/blob/main/docs/DOOM_ASYNC.md) | Doom package (external app), pace, present path |
-| [docs/FAST_JIT.md](docs/FAST_JIT.md) | Fast JIT bring-up brief (not enabled yet) |
-| [docs/MICROPYTHON.md](docs/MICROPYTHON.md) | Kernel µPy — one blob, N runners, no GIL, REPL as default shell |
-| [docs/TRUST.md](docs/TRUST.md) | Mod signing / trust modes |
-| [docs/WASI.md](docs/WASI.md) | WASI preview1 surface |
-| [docs/RUNTIME.md](docs/RUNTIME.md) | Load / process model |
-| [docs/COOP_MEMORY.md](docs/COOP_MEMORY.md) | Per-CPU TLSF + SHARED typed alloc |
-| [docs/LAYERS.md](docs/LAYERS.md) | Stack sketch (some hosted-era notes remain) |
-| [docs/SOURCETREE.md](docs/SOURCETREE.md) | Tree layout |
-| [docs/TODO.md](docs/TODO.md) | Living follow-ups / iron smoke |
+| [../docs/KCONFIG.md](../docs/KCONFIG.md) | Kconfig / forge config (live) |
+| [../docs/IO.md](../docs/IO.md) | Async I/O classes, device table |
+| [../docs/LIBC_ASYNC.md](../docs/LIBC_ASYNC.md) | Guest libc <-> async ABI |
+| [../docs/EFI.md](../docs/EFI.md) | UEFI owned-phase design |
+| [../docs/COOP_MEMORY.md](../docs/COOP_MEMORY.md) | Per-CPU TLSF + SHARED typed alloc |
+| [../docs/MEMORY.md](../docs/MEMORY.md) | Host/guest memory pools |
+| [../docs/MODS.md](../docs/MODS.md) | Mod/command/process contract |
+| [../docs/SOURCETREE.md](../docs/SOURCETREE.md) | Tree layout (live) |
+| [docs/IFACE.md](docs/IFACE.md) | DOC/IFACE catalogs (archived product) |
+| [docs/MICROPYTHON.md](docs/MICROPYTHON.md) | Kernel µPy (archived product) |
+| [docs/MOUNT.md](docs/MOUNT.md) / [docs/RUNTIME.md](docs/RUNTIME.md) | Hosted-era plans |
+| [docs/WASI.md](docs/WASI.md) / [docs/TRUST.md](docs/TRUST.md) / [docs/FAST_JIT.md](docs/FAST_JIT.md) | Product surfaces |
+| [docs/LAYERS.md](docs/LAYERS.md) / [docs/TODO.md](docs/TODO.md) | Stack sketch / follow-ups |
 | [src/efi/README.md](src/efi/README.md) | EFI package entrypoints |
 
 ---

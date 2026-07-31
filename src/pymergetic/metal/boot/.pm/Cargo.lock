@@ -46,15 +46,24 @@ dependencies = [
  "pymergetic_metal_fs_littlefs",
  "pymergetic_metal_fs_mtar",
  "pymergetic_metal_fs_tmpfs",
+ "pymergetic_metal_fs_vfs",
  "pymergetic_metal_hwtree",
  "pymergetic_metal_log",
  "pymergetic_metal_mem",
+ "pymergetic_metal_net_dns",
+ "pymergetic_metal_net_ftp",
+ "pymergetic_metal_net_http",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_net_ip_icmp",
+ "pymergetic_metal_net_ip_tcp",
+ "pymergetic_metal_net_ip_udp",
+ "pymergetic_metal_net_ntp",
+ "pymergetic_metal_net_tftp",
  "pymergetic_metal_rt",
  "pymergetic_metal_util_ascii",
  "pymergetic_metal_util_lz4",
  "pymergetic_metal_util_size",
  "pymergetic_metal_util_tar",
- "pymergetic_metal_vfs",
 ]
 
 [[package]]
@@ -140,8 +149,8 @@ name = "pymergetic_metal_fs"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",
+ "pymergetic_metal_fs_vfs",
  "pymergetic_metal_rt",
- "pymergetic_metal_vfs",
 ]
 
 [[package]]
@@ -150,8 +159,8 @@ version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_fs",
+ "pymergetic_metal_fs_vfs",
  "pymergetic_metal_rt",
- "pymergetic_metal_vfs",
 ]
 
 [[package]]
@@ -160,8 +169,8 @@ version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_fs",
+ "pymergetic_metal_fs_vfs",
  "pymergetic_metal_rt",
- "pymergetic_metal_vfs",
 ]
 
 [[package]]
@@ -170,10 +179,10 @@ version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_fs",
+ "pymergetic_metal_fs_vfs",
  "pymergetic_metal_rt",
  "pymergetic_metal_util_lz4",
  "pymergetic_metal_util_tar",
- "pymergetic_metal_vfs",
 ]
 
 [[package]]
@@ -182,8 +191,15 @@ version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_fs",
+ "pymergetic_metal_fs_vfs",
  "pymergetic_metal_rt",
- "pymergetic_metal_vfs",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_vfs"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
 ]
 
 [[package]]
@@ -207,6 +223,95 @@ name = "pymergetic_metal_mem"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_dns"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ftp"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_dns",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_net_ip_tcp",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_http"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_net_ip_tcp",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ip"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "pymergetic_metal_async",
+ "pymergetic_metal_mem",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ip_icmp"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_dns",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ip_tcp"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_dns",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ip_udp"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ntp"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_dns",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_tftp"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_dns",
+ "pymergetic_metal_net_ip",
  "pymergetic_metal_rt",
 ]
 
@@ -237,13 +342,6 @@ dependencies = [
 
 [[package]]
 name = "pymergetic_metal_util_tar"
-version = "0.1.0"
-dependencies = [
- "pymergetic_metal_rt",
-]
-
-[[package]]
-name = "pymergetic_metal_vfs"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_rt",

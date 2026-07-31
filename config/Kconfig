@@ -1,9 +1,9 @@
-# exp2 root Kconfig — menus mirror pymergetic.metal modules.
-# See docs/definitions/fs.md and docs/KCONFIG.md (exp2 section).
+# Root Kconfig — menus mirror pymergetic.metal modules.
+# See docs/definitions/fs.md and docs/KCONFIG.md.
 
-mainmenu "Metal exp2 Configuration"
+mainmenu "Metal Configuration"
 
-comment "Build / run (exp2/scripts/build defaults)"
+comment "Build / run (./forge-cli build defaults)"
 source "Kconfig.build"
 
 comment "Runtime modules (pymergetic.metal.*)"

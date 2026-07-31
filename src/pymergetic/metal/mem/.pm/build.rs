@@ -7,16 +7,16 @@ fn main() {
     let mod_dir = manifest.join("..").canonicalize().expect("mem module dir");
     // mem/ -> metal/
     let metal_dir = mod_dir.join("..").canonicalize().expect("metal dir");
-    // metal/ -> pymergetic/ -> src/ -> exp2/ -> packages/metal
+    // metal/ -> pymergetic/ -> src/ -> packages/metal
     let metal_root = mod_dir
-        .join("../../../../..")
+        .join("../../../..")
         .canonicalize()
         .expect("metal root");
     let tlsf_dir = metal_root.join("external/tlsf");
     let tlsf_h = tlsf_dir.join("tlsf.h");
     if !tlsf_h.is_file() {
         panic!(
-            "missing {}: run scripts/setup for tlsf (external/tlsf)",
+            "missing {}: git submodule update --init external/tlsf (external/tlsf)",
             tlsf_h.display()
         );
     }

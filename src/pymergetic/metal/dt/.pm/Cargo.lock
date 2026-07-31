@@ -3,12 +3,12 @@
 version = 4
 
 [[package]]
-name = "metal_dt"
+name = "pymergetic_metal_dt"
 version = "0.1.0"
 dependencies = [
- "metal_rt",
+ "pymergetic_metal_rt",
 ]
 
 [[package]]
-name = "metal_rt"
+name = "pymergetic_metal_rt"
 version = "0.1.0"

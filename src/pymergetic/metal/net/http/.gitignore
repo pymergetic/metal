@@ -2,6 +2,8 @@
 .target/
 target/
 .generated/
+__init__.h
 __init__.pyi
-__init__.rs
+server.h
+server.pyi
 # END metal-generated

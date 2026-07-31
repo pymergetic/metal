@@ -3,7 +3,9 @@
 Freestanding Metal (EFI first). Dual-span arena + stackless coro/task
 (asyncio-shaped). See [EFI.md](EFI.md).
 
-**Tree:** contracts in `src/pymergetic/metal/`; EFI binds in `src/efi/pymergetic/metal/`.
+**Live tree:** [`src/.../mem/`](../src/pymergetic/metal/mem/) +
+[`async/`](../src/pymergetic/metal/async/). Product-era `src/efi/...`
+paths mean [`_old/src/efi/...`](../_old/src/efi/) unless noted.
 
 ---
 

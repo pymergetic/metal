@@ -2,7 +2,7 @@
 //!
 //! Public C border: version / capability probes + convert / sync entry
 //! points. Per-language faces stay private (`_import_*` / `_export_*`).
-//! Ports: `_port/solo` / `_port/metal`. Linux app: `tools/forge-cli/`.
+//! Ports: `_port/solo` / `_port/metal`. Linux app: hidden `cli/` + `./forge-cli` launcher.
 #![cfg_attr(not(feature = "solo"), no_std)]
 #![allow(dead_code, non_camel_case_types)]
 
@@ -114,7 +114,7 @@ pub extern "C" fn pm_metal_forge_has_metal() -> i32 {
     }
 }
 
-/// Solo port types for the outside app (`tools/forge-cli`).
+/// Solo port types for the outside app (`./forge-cli`).
 #[cfg(feature = "solo")]
 pub use _port::solo::{SoloSession, SoloStore};
 

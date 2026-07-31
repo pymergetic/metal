@@ -2,9 +2,9 @@
 
 Upstream: https://github.com/ulfalizer/Kconfiglib (ISC license).
 
-Files pulled for Metal's `scripts/menuconfig` / `scripts/confgen` /
-`scripts/oldconfig` (see [`docs/KCONFIG.md`](../../../docs/KCONFIG.md)):
+Used by forge-private wrappers in this directory (`menuconfig.py`,
+`confgen.py`, `oldconfig.py`) via `forge config edit|gen|old`:
 
 - `kconfiglib.py`
-- `menuconfig.py`
-- `genconfig.py` (reference; Metal uses `scripts/confgen`)
+- `_menuconfig_ui.py` (upstream `menuconfig.py`)
+- `genconfig.py` (reference; Metal uses `confgen.py`)

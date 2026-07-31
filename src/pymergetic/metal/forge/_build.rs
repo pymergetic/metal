@@ -60,17 +60,11 @@ const COMMON: &[Unit] = &[
     ("libc/string.c", "string"),
     ("libc/stdlib.c", "stdlib"),
     ("libc/stdio.c", "stdio"),
-    ("net/ip/_lwip_sys.c", "metal_lwip_sys"),
-    ("net/ip/_stack.c", "ip_bringup"),
-    ("net/ip/_dns.c", "ip_dns"),
 ];
 
-const STRESS: &[Unit] = &[
-    ("../../stress/stress.c", "stress"),
-    ("net/ping/__init__.c", "ping"),
-    ("net/ntp/__init__.c", "ntp"),
-    ("net/http/__init__.c", "http"),
-];
+/// The net protocol clients are Rust now and always live in boot.a; only the
+/// harness itself is stress-only.
+const STRESS: &[Unit] = &[("../../stress/stress.c", "stress")];
 
 const BIOS_PLAT: &[Unit] = &[
     ("boot/platform/bios/uart.c", "uart"),
@@ -130,7 +124,8 @@ const EFI_CFLAGS: &[&str] = &[
     "-DPM_METAL_BOOT_TARGET_EFI=1",
 ];
 
-const STRESS_CFLAGS: &[&str] = &["-DEXP2_STRESS=1", "-DPM_METAL_NET_NTP_PORT=18123"];
+/// The NTP mock port moved to the `exp2_stress` cargo feature with net.ntp.
+const STRESS_CFLAGS: &[&str] = &["-DEXP2_STRESS=1"];
 
 // ---------------------------------------------------------------------------
 // Tree
@@ -138,7 +133,6 @@ const STRESS_CFLAGS: &[&str] = &["-DEXP2_STRESS=1", "-DPM_METAL_NET_NTP_PORT=181
 
 struct Tree {
     root: PathBuf,
-    exp2: PathBuf,
     metal: PathBuf,
     cc: PathBuf,
     ld: PathBuf,
@@ -149,11 +143,11 @@ struct Tree {
 impl Tree {
     fn open(metal_root: &str, stress: bool) -> Result<Self, String> {
         let root = PathBuf::from(metal_root);
-        let exp2 = root.join("exp2");
-        let metal = exp2.join("src/pymergetic/metal");
-        ensure_file(&root.join("tools/metal/metal"), "tools/metal/metal")?;
+        let metal = root.join("src/pymergetic/metal");
         if !root.join("external/lwip/src/include").is_dir() {
-            return Err(String::from("missing external/lwip — ./scripts/setup lwip"));
+            return Err(String::from(
+                "missing external/lwip - git submodule update --init external/lwip",
+            ));
         }
         let cc = which("clang")
             .or_else(|| which("gcc"))
@@ -173,7 +167,6 @@ impl Tree {
         });
         Ok(Self {
             root,
-            exp2,
             metal,
             cc,
             ld,
@@ -186,7 +179,7 @@ impl Tree {
         if let Some(rest) = rel.strip_prefix("../external/") {
             self.root.join("external").join(rest)
         } else if let Some(rest) = rel.strip_prefix("../../stress/") {
-            self.exp2.join("stress").join(rest)
+            self.root.join("stress").join(rest)
         } else {
             self.metal.join(rel)
         }
@@ -205,13 +198,20 @@ impl Tree {
         {
             return Err(String::from("forge build needs feature builders"));
         }
-        run(Command::new(self.root.join("tools/metal/metal")).args(["mod", "sync"]))
+        let mut store = crate::SoloStore::new();
+        let mut sess = crate::SoloSession::from_args(alloc::vec::Vec::new());
+        let rc = crate::_sync::cmd_sync(&mut store, &mut sess, root, false, false);
+        if rc != 0 {
+            return Err(String::from("forge mod sync failed"));
+        }
+        Ok(())
     }
 
     fn cargo_boot(&self, target: &str) -> Result<(), String> {
         let boot = self.metal.join("boot");
         eprintln!("forge build: cargo boot ({target})");
-        run(Command::new("cargo")
+        let mut cargo = Command::new("cargo");
+        cargo
             .current_dir(&boot)
             .env("CARGO_TARGET_DIR", boot.join(".target"))
             .args([
@@ -222,7 +222,12 @@ impl Tree {
                 "--release",
                 "--target",
                 target,
-            ]))
+            ]);
+        if self.stress {
+            /* Mirrors STRESS_CFLAGS for the Rust half (net.ntp host mock port). */
+            cargo.args(["--features", "exp2_stress"]);
+        }
+        run(&mut cargo)
     }
 
     fn cflags(&self, base: &[&str], plat_includes: &[PathBuf]) -> Vec<String> {
@@ -232,11 +237,11 @@ impl Tree {
             push_flags(&mut f, STRESS_CFLAGS);
         }
         f.push(String::from("-include"));
-        f.push(self.exp2.join("build/autoconf.h").display().to_string());
-        f.push(alloc::format!("-I{}", self.exp2.join("build").display()));
+        f.push(self.root.join("build/autoconf.h").display().to_string());
+        f.push(alloc::format!("-I{}", self.root.join("build").display()));
         let mut incs = vec![
             self.metal.join("libc"),
-            self.exp2.join("src"),
+            self.root.join("src"),
             self.metal.join("net/ip"),
             self.metal.join("net/ip/cfg"),
             self.root.join("external/lwip/src/include"),
@@ -244,6 +249,123 @@ impl Tree {
         incs.extend_from_slice(plat_includes);
         push_includes(&mut f, &incs);
         f
+    }
+
+    /// Package-relative `-I` / `file`. `directory` is the absolute package
+    /// root — clangd 22 does not match `"directory": "."` + relative `file`
+    /// (falls back to Generic with cwd = source dir, so `-Isrc/...` misses
+    /// metal/libc and `-nostdinc` surfaces as `'stddef.h' file not found`).
+    fn cdb_includes_bios(&self) -> Vec<&'static str> {
+        alloc::vec![
+            "build",
+            "src/pymergetic/metal/libc",
+            "src",
+            "src/pymergetic/metal/net/ip",
+            "src/pymergetic/metal/net/ip/cfg",
+            "external/lwip/src/include",
+            "src/pymergetic/metal/boot/platform/bios",
+        ]
+    }
+
+    fn unit_pkg_rel(rel: &str) -> String {
+        if let Some(rest) = rel.strip_prefix("../external/") {
+            alloc::format!("external/{rest}")
+        } else if let Some(rest) = rel.strip_prefix("../../stress/") {
+            alloc::format!("stress/{rest}")
+        } else {
+            alloc::format!("src/pymergetic/metal/{rel}")
+        }
+    }
+
+    fn write_compile_commands(&self) -> Result<(), String> {
+        ensure_dir(&self.root.join("build"))?;
+        let mut units: Vec<&[Unit]> = alloc::vec![BIOS_PLAT, COMMON, LWIP];
+        if self.stress {
+            units.push(STRESS);
+        }
+        let incs = self.cdb_includes_bios();
+        let dir = self
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.clone());
+        let dir_s = dir.to_str().ok_or_else(|| String::from("cdb directory utf8"))?;
+        let mut body = String::from("[\n");
+        let mut first = true;
+        for group in units {
+            for &(rel, _) in group {
+                let file = Self::unit_pkg_rel(rel);
+                if !first {
+                    body.push_str(",\n");
+                }
+                first = false;
+                body.push_str("  {\n");
+                body.push_str("    \"directory\": \"");
+                body.push_str(dir_s);
+                body.push_str("\",\n");
+                body.push_str("    \"arguments\": [\n");
+                body.push_str("      \"clang\"");
+                for fl in BIOS_CFLAGS {
+                    body.push_str(",\n      \"");
+                    body.push_str(fl);
+                    body.push('"');
+                }
+                if self.stress {
+                    for fl in STRESS_CFLAGS {
+                        body.push_str(",\n      \"");
+                        body.push_str(fl);
+                        body.push('"');
+                    }
+                }
+                body.push_str(",\n      \"-include\",\n      \"build/autoconf.h\"");
+                for inc in &incs {
+                    body.push_str(",\n      \"-I");
+                    body.push_str(inc);
+                    body.push('"');
+                }
+                body.push_str(",\n      \"-c\",\n      \"-o\",\n      \"/dev/null\",\n      \"");
+                body.push_str(&file);
+                body.push_str("\"\n    ],\n");
+                body.push_str("    \"file\": \"");
+                body.push_str(&file);
+                body.push_str("\"\n  }");
+            }
+        }
+        let extras = [
+            "src/pymergetic/metal/libc/stdint.h",
+            "src/pymergetic/metal/net/ip/__init__.h",
+        ];
+        for file in extras {
+            if !first {
+                body.push_str(",\n");
+            }
+            first = false;
+            body.push_str("  {\n    \"directory\": \"");
+            body.push_str(dir_s);
+            body.push_str("\",\n    \"arguments\": [\n");
+            body.push_str("      \"clang\",\n      \"-std=c11\",\n      \"-ffreestanding\",\n");
+            body.push_str("      \"-nostdinc\",\n      \"-fno-stack-protector\",\n");
+            body.push_str("      \"-m64\",\n      \"-mno-red-zone\"");
+            for inc in &incs {
+                body.push_str(",\n      \"-I");
+                body.push_str(inc);
+                body.push('"');
+            }
+            body.push_str(",\n      \"-c\",\n      \"-o\",\n      \"/dev/null\",\n      \"");
+            body.push_str(file);
+            body.push_str("\"\n    ],\n    \"file\": \"");
+            body.push_str(file);
+            body.push_str("\"\n  }");
+        }
+        body.push_str("\n]\n");
+        /* Package-root CDB + build/ mirror; directory = abs package root. */
+        let root_cdb = self.root.join("compile_commands.json");
+        let build_cdb = self.root.join("build/compile_commands.json");
+        std::fs::write(&root_cdb, body.as_bytes())
+            .map_err(|_| String::from("write compile_commands.json"))?;
+        std::fs::write(&build_cdb, body.as_bytes())
+            .map_err(|_| String::from("write build/compile_commands.json"))?;
+        eprintln!("forge build: compile_commands.json (directory=abs package root)");
+        Ok(())
     }
 
     fn compile_units(
@@ -281,7 +403,7 @@ impl Tree {
             "boot/.target/x86_64-unknown-none/release/libpymergetic_metal_boot.a",
         );
         ensure_file(&boot_a, "cargo boot")?;
-        let out = self.exp2.join("build/x86_64_bios");
+        let out = self.root.join("build/x86_64_bios");
         let obj = out.join("obj");
         ensure_dir(&obj)?;
         let _ = std::fs::remove_file(out.join("metal.elf"));
@@ -405,7 +527,7 @@ impl Tree {
     fn build_efi(&self) -> Result<(), String> {
         ensure_file(
             &self.root.join("external/edk2/MdePkg/Include/Uefi.h"),
-            "./scripts/setup edk2",
+            "missing external/edk2 (EFI headers). Add submodule:\n  git submodule update --init --recursive external/edk2\n(or: git clone --depth 1 --branch edk2-stable202502 https://github.com/tianocore/edk2.git external/edk2 && git -C external/edk2 submodule update --init --depth 1 --recursive)",
         )?;
         let lld = self
             .lld_link
@@ -416,7 +538,7 @@ impl Tree {
             "boot/.target/x86_64-unknown-uefi/release/libpymergetic_metal_boot.a",
         );
         ensure_file(&boot_a, "cargo boot")?;
-        let out = self.exp2.join("build/x86_64_efi");
+        let out = self.root.join("build/x86_64_efi");
         let obj = out.join("obj");
         ensure_dir(&obj)?;
         let _ = std::fs::remove_file(out.join("metal.efi"));
@@ -425,7 +547,7 @@ impl Tree {
         let edk2_inc = efi.join("edk2_inc");
         let _ = std::fs::remove_file(&edk2_inc);
         let _ = std::os::unix::fs::symlink(
-            "../../../../../../../external/edk2/MdePkg/Include",
+            "../../../../../../external/edk2/MdePkg/Include",
             &edk2_inc,
         );
 
@@ -473,14 +595,15 @@ pub fn build_targets(metal_root: &str, target: &str, stress: bool) -> Result<(),
     let tree = Tree::open(metal_root, stress)?;
     tree.prep()?;
     match target {
-        "bios" | "x86_64" => tree.build_bios(),
-        "efi" => tree.build_efi(),
+        "bios" | "x86_64" => tree.build_bios()?,
+        "efi" => tree.build_efi()?,
         "all" | "both" => {
             tree.build_bios()?;
-            tree.build_efi()
+            tree.build_efi()?;
         }
-        other => Err(alloc::format!("unsupported target {other} (bios|efi|all)")),
+        other => return Err(alloc::format!("unsupported target {other} (bios|efi|all)")),
     }
+    tree.write_compile_commands()
 }
 
 pub fn run_build(sess: &mut dyn ForgeSession, metal_root: &str) -> i32 {

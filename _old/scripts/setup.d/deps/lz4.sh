@@ -6,7 +6,7 @@
 # to get back to (pin + patches), including after `rm -rf external/lz4`.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 LZ4_DIR="${ROOT}/external/lz4"
 LZ4_REPO="https://github.com/lz4/lz4"
 LZ4_REF="v1.10.0"

@@ -20,7 +20,7 @@ use pymergetic_metal_fs::{
 use pymergetic_metal_rt as _;
 use pymergetic_metal_util_lz4 as _;
 use pymergetic_metal_util_tar as _;
-use pymergetic_metal_vfs as vfs;
+use pymergetic_metal_fs_vfs as vfs;
 
 extern "C" {
     fn pm_metal_async_completed_u32(v: u32) -> u32;
@@ -297,7 +297,7 @@ pub unsafe extern "C" fn pm_metal_fs_mtar_mount(target: *const u8, blob: *const 
     }
     ensure_ops_registered();
     let ctx = id as usize as *mut c_void;
-    if vfs::pm_metal_vfs_mount(target, &MTAR_OPS as *const _ as *const c_void, ctx) == 0 {
+    if vfs::pm_metal_fs_vfs_mount(target, &MTAR_OPS as *const _ as *const c_void, ctx) == 0 {
         return -1;
     }
     0
@@ -317,7 +317,7 @@ pub unsafe extern "C" fn pm_metal_fs_mtar_mount_rw(
     }
     ensure_ops_registered();
     let ctx = id as usize as *mut c_void;
-    if vfs::pm_metal_vfs_mount(target, &MTAR_RW_OPS as *const _ as *const c_void, ctx) == 0 {
+    if vfs::pm_metal_fs_vfs_mount(target, &MTAR_RW_OPS as *const _ as *const c_void, ctx) == 0 {
         (*addr_of_mut!(ARCHES))[id as usize] = None;
         return -1;
     }

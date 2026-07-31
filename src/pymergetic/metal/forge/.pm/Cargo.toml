@@ -9,7 +9,7 @@ crate-type = ["rlib"]
 
 [features]
 default = []
-# Linux FS/stdio port shim (always-Ready). App is tools/forge-cli, not this crate.
+# Linux FS/stdio port shim (always-Ready). App is ./forge-cli, not this crate.
 solo = []
 # Image builders (mtar/fat/zip/embed) — pulls Metal FS crates. Host tool only.
 builders = [
@@ -24,7 +24,7 @@ builders = [
   "dep:pymergetic_metal_util_lz4",
   "dep:pymergetic_metal_util_tar",
   "dep:pymergetic_metal_fs",
-  "dep:pymergetic_metal_vfs",
+  "dep:pymergetic_metal_fs_vfs",
 ]
 # Later: Metal process + console session (may Pending). Not linked into EFI yet.
 metal = []
@@ -41,7 +41,7 @@ pymergetic_metal_async = { path = "../../async/.pm", optional = true }
 pymergetic_metal_util_lz4 = { path = "../../util/lz4/.pm", optional = true }
 pymergetic_metal_util_tar = { path = "../../util/tar/.pm", optional = true }
 pymergetic_metal_fs = { path = "../../fs/.pm", optional = true }
-pymergetic_metal_vfs = { path = "../../vfs/.pm", optional = true }
+pymergetic_metal_fs_vfs = { path = "../../fs/vfs/.pm", optional = true }
 
 [profile.release]
 panic = "abort"

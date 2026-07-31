@@ -12,7 +12,7 @@
 # explicitly instead of implying a newer tag might one day exist.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 MICROTAR_DIR="${ROOT}/external/microtar"
 MICROTAR_REPO="https://github.com/rxi/microtar"
 MICROTAR_REF="27076e1b9290e9c7842bb7890a54fcf172406c84"

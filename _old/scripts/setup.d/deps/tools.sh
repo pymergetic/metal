@@ -2,7 +2,7 @@
 # Fetch wasmtime CLI + wasi-sdk into .tools/ (gitignored).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 TOOLS="${ROOT}/.tools"
 WASMTIME_VER="${WASMTIME_VER:-v24.0.0}"
 WASI_SDK_TAG="${WASI_SDK_TAG:-24}"

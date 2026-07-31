@@ -8,7 +8,8 @@ pm_metal_efi_inf_generate() {
 		echo "pm_metal_efi_inf_generate: ROOT unset" >&2
 		return 1
 	fi
-	pkg="${root}/src/efi/MetalPkg"
+	# Archived product package (live firmware is exp2 / forge).
+	pkg="${root}/_old/src/efi/MetalPkg"
 	for tpl in "${pkg}/Metal.inf.tpl" "${pkg}/DropbearGlue.inf.tpl"; do
 		if [[ ! -f "${tpl}" ]]; then
 			echo "pm_metal_efi_inf_generate: missing ${tpl}" >&2

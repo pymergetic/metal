@@ -6,7 +6,7 @@ use core::ffi::c_void;
 
 use pymergetic_metal_async as _;
 use pymergetic_metal_rt as _;
-use pymergetic_metal_vfs as vfs;
+use pymergetic_metal_fs_vfs as vfs;
 
 #[path = "ops.rs"]
 mod ops;
@@ -53,13 +53,13 @@ fn err() -> u32 {
 unsafe fn resolve_ops(
     path: *const u8,
 ) -> Option<(&'static pm_metal_fs_ops_t, *mut c_void, *const u8)> {
-    let mut r = vfs::pm_metal_vfs_resolve_t {
+    let mut r = vfs::pm_metal_fs_vfs_resolve_t {
         ops: core::ptr::null(),
         ctx: core::ptr::null_mut(),
         rel: core::ptr::null(),
         mount: 0,
     };
-    if vfs::pm_metal_vfs_resolve(path, &mut r) != 0 || r.ops.is_null() {
+    if vfs::pm_metal_fs_vfs_resolve(path, &mut r) != 0 || r.ops.is_null() {
         return None;
     }
     let ops = &*(r.ops as *const pm_metal_fs_ops_t);
@@ -295,7 +295,7 @@ pub unsafe extern "C" fn pm_metal_fs_mount_statfs(
     }
     let mut ops_p: *const c_void = core::ptr::null();
     let mut ctx: *mut c_void = core::ptr::null_mut();
-    if vfs::pm_metal_vfs_mount_get(index, &mut ops_p, &mut ctx) != 0 || ops_p.is_null() {
+    if vfs::pm_metal_fs_vfs_mount_get(index, &mut ops_p, &mut ctx) != 0 || ops_p.is_null() {
         return -1;
     }
     let ops = &*(ops_p as *const pm_metal_fs_ops_t);

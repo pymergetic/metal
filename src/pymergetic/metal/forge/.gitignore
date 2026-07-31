@@ -5,3 +5,7 @@ target/
 __init__.h
 __init__.pyi
 # END metal-generated
+
+# Host Python (forge config *.py)
+__pycache__/
+*.py[cod]

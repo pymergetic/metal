@@ -4,7 +4,7 @@
 # LTS 3.6.x — curl requires >= 3.2.0.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 DIR="${ROOT}/external/mbedtls"
 REPO="https://github.com/Mbed-TLS/mbedtls"
 REF="v3.6.3"

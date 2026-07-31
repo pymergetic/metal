@@ -1,6 +1,6 @@
-# Definitions — filesystem / VFS (exp2)
+# Definitions — filesystem / VFS
 
-Async-first path I/O for Metal firmware under `exp2/`. Public names align
+Async-first path I/O for Metal firmware under ``. Public names align
 with product [`include/.../fs/fs.h`](../../include/pymergetic/metal/fs/fs.h);
 exp2 backs them with vfs + fstype ops (not ESP).
 
@@ -96,7 +96,7 @@ pm_metal_boot_mod_unload(id)   # umount /mods/<id> and /src/<id>
 
 ## Source pack modes (Kconfig)
 
-Under `tools/forge config edit` → **pymergetic.metal → fs**:
+Under `./forge-cli config edit` -> **pymergetic.metal -> fs**:
 
 | Mode | Meaning |
 |------|---------|
@@ -104,7 +104,7 @@ Under `tools/forge config edit` → **pymergetic.metal → fs**:
 | `human only` | Pack forge originals only (no banner faces) |
 | `human + generated` | Human + forge-generated faces |
 
-Build pipeline: `tools/forge build` → `forge config gen` →
+Build pipeline: `./forge-cli build` -> `forge config gen` ->
 `forge img rootfs` → `metal mod sync` → compile/link.
 
 Default root size is **4 MiB** (`PM_METAL_FS_ROOT_SIZE_MIB`).

@@ -1,32 +1,28 @@
 #!/usr/bin/env bash
-# Setup — EFI/BIOS freestanding deps (hosted ports archived).
-# Usage: scripts/setup <name>
-#        scripts/setup all
+# Archived vendor setup (reference only — not the live front door).
+# Usage: _old/scripts/setup <name>
+#        _old/scripts/setup all
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEPS="${ROOT}/scripts/setup.d/deps"
-PORT="${ROOT}/scripts/setup.d/port"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPS="${HERE}/setup.d/deps"
+PORT="${HERE}/setup.d/port"
 # shellcheck disable=SC1091
-source "${ROOT}/scripts/lib/run-steps.sh"
+source "${HERE}/lib/run-steps.sh"
 
 usage() {
 	cat >&2 <<'EOF'
-usage: scripts/setup <name>
-       scripts/setup all
+usage: _old/scripts/setup <name>
+       _old/scripts/setup all
 
-Deps (setup.d/deps/):
-  edk2         — Tianocore EDK2 + local nasm (required for metal.efi)
-  tools        — wasi-sdk + wasmtime into .tools/ (guest mod builds)
-  wamr wamrc   — runtime + optional AOT compiler (.tools/wamrc)
-  lwip lz4 microtar monocypher mbedtls
-  net          — monocypher + mbedtls (lwIP TLS stack)
-  micropython  — core scripting VM (shared metal/py; EFI/BIOS link)
-  ide          — clangd / compile_flags refresh
+Archived deps (setup.d/deps/):
+  edk2 tools wamr wamrc lwip lz4 microtar monocypher mbedtls
+  net micropython ide microdot utemplate crypt_blowfish dropbear
 
 Platform:
-  efi   — OVMF / toolchain notes
-  all   — edk2 + efi
+  efi   - OVMF / toolchain notes
+  all   - edk2 + efi
 EOF
 	exit 1
 }
@@ -39,7 +35,7 @@ case "${name}" in
 -h | --help | help) usage ;;
 all)
 	[[ $# -eq 0 ]] || usage
-	pm_run_steps "${ROOT}/scripts/setup" \
+	pm_run_steps "${HERE}/setup" \
 		"edk2" \
 		"efi"
 	exit $?

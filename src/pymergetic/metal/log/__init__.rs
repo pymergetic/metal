@@ -55,21 +55,37 @@ fn cstr_len(p: *const u8) -> usize {
     n
 }
 
+#[cfg(any(target_os = "none", target_os = "uefi"))]
+unsafe fn emit(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    if pm_metal_console_ready() != 0 {
+        pm_metal_console_write(0, bytes.as_ptr(), bytes.len());
+    }
+}
+
+#[cfg(not(any(target_os = "none", target_os = "uefi")))]
 fn emit(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    unsafe {
-        if pm_metal_console_ready() != 0 {
-            pm_metal_console_write(0, bytes.as_ptr(), bytes.len());
-        }
+    if pm_metal_console_ready() != 0 {
+        pm_metal_console_write(0, bytes.as_ptr(), bytes.len());
     }
 }
 
 /// 1 if console #0 is ready to accept log lines.
+#[cfg(any(target_os = "none", target_os = "uefi"))]
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_log_ready() -> i32 {
+    pm_metal_console_ready()
+}
+
+#[cfg(not(any(target_os = "none", target_os = "uefi")))]
 #[no_mangle]
 pub extern "C" fn pm_metal_log_ready() -> i32 {
-    unsafe { pm_metal_console_ready() }
+    pm_metal_console_ready()
 }
 
 /// Append one ASCII line (NUL-terminated; newline added if missing).
@@ -88,10 +104,10 @@ pub unsafe extern "C" fn pm_metal_log_styled(style: pm_metal_log_style_t, line: 
     if n > 0 {
         emit(core::slice::from_raw_parts(line, n));
     }
-    if let Some(_) = style_prefix(style) {
+    if style_prefix(style).is_some() {
         emit(b"\x1b[0m");
     }
-    let needs_nl = n == 0 || unsafe { *line.add(n - 1) } != b'\n';
+    let needs_nl = n == 0 || *line.add(n - 1) != b'\n';
     if needs_nl {
         emit(b"\n");
     }

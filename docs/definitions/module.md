@@ -2,7 +2,7 @@
 
 How a Metal **module** is laid out so any of C / C++ / Rust / Python can
 be the implementation language, while every language consumes one
-unified public surface. Experimentation lives under `exp2/`; product
+unified public surface. Experimentation lives under ``; product
 `src/` / `include/` migrate toward this over time.
 
 **Tooling / CLI workflow:** [`docs/TOOLING.md`](../TOOLING.md) (`metal`
@@ -292,7 +292,7 @@ resolver that duplicates Cargo/link deps.
 
 ### Forge (codegen engine module)
 
-[`exp2/src/pymergetic/metal/forge/`](../../exp2/src/pymergetic/metal/forge/)
+[`src/pymergetic/metal/forge/`](../../src/pymergetic/metal/forge/)
 is a normal Metal module (`impl=rs`, lang-pool faces on `__init__`) that
 *implements* module sync/check. Per pool language: `_import_{c,rs,py,toml}`
 (source → catalog) and `_export_{c,rs,py,toml}` (catalog → face); stubs
@@ -302,13 +302,12 @@ Ops return **`ForgePoll`** (`Ready` / `Pending`); solo is always-Ready.
 
 | Face | Port | Hosting |
 |------|------|---------|
-| Outside | `_port/solo` shim only | App [`tools/forge-cli/`](../../tools/forge-cli/) (launcher [`tools/forge`](../../tools/forge)) |
+| Outside | `_port/solo` shim only | Hidden [`forge/cli/`](../../src/pymergetic/metal/forge/cli/) + [`./forge-cli`](../../forge-cli) launcher |
 | Inside (later) | `_port/metal` | Metal command → `fn_process` + console attach |
 
-Prebuild faces with solo (or today’s Python `metal mod sync`); later the
-binary can keep human stems only and emit other pool faces on demand.
-Forge is **not** linked into EFI by default. Python `tools/metal` remains
-authoritative until forge is confirmed.
+Prebuild faces with solo forge; later the binary can keep human stems only
+and emit other pool faces on demand. Forge is **not** linked into EFI by
+default. Archived Python metal lives under `_old/tools/metal`.
 
 ### Fixed v2 schema files (private)
 
@@ -444,7 +443,7 @@ for bring-up; `.pyi` + register-time C→Python bind for non-Python impls.
 | `include/pymergetic/metal/**/*.h` handwritten | Become generated next to modules; retire dual tree |
 | `runtime/mem/{mem,arena,tlsf*}.c` | Move into flat module sources (lang TBD); libc/limits **out** of mem |
 | `runtime/mem/host_stubs`, `libc*.c`, `limit*` | Wrong concern — not part of the mem module |
-| `exp2/` | First place to adopt `.module` + `__init__` entry + lang pool |
+| `` | First place to adopt `.module` + `__init__` entry + lang pool |
 
 Product `scripts/` / EDK2 ports under `src/bios` / `src/efi` stay
 dialect- and port-shaped until a module is migrated.

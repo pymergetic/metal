@@ -8,7 +8,7 @@ extern "C" {
         src: *const u8,
         src_len: usize,
     ) -> i32;
-    fn pm_metal_vfs_umount(target: *const u8) -> i32;
+    fn pm_metal_fs_vfs_umount(target: *const u8) -> i32;
 }
 
 fn module_mount_path(out: &mut [u8], kind: &[u8], id: &[u8]) -> usize {
@@ -67,11 +67,11 @@ pub unsafe extern "C" fn pm_metal_boot_mod_unload(id: *const u8) -> i32 {
     if plen == 0 {
         return -1;
     }
-    let _ = pm_metal_vfs_umount(path.as_ptr());
+    let _ = pm_metal_fs_vfs_umount(path.as_ptr());
     let plen = module_mount_path(&mut path, b"/src/", id_slice);
     if plen == 0 {
         return -1;
     }
-    let _ = pm_metal_vfs_umount(path.as_ptr());
+    let _ = pm_metal_fs_vfs_umount(path.as_ptr());
     0
 }

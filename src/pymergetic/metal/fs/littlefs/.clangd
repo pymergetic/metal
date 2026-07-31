@@ -13,8 +13,6 @@ CompileFlags:
     - -Ivendor
     - -DLFS_CONFIG=lfs_config.h
     - -DPM_METAL_LFS_FREESTANDING
-  Remove:
-    - -Isrc/pymergetic/metal
 Diagnostics:
   UnusedIncludes: None
   MissingIncludes: None

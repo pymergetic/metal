@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Autobuild + run the hidden forge/cli Linux binary.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+MANIFEST="$ROOT/src/pymergetic/metal/forge/cli/.pm/Cargo.toml"
+TARGET_DIR="$ROOT/src/pymergetic/metal/forge/cli/.target"
+BIN="$TARGET_DIR/release/forge"
+
+fresh=0
+args=()
+for a in "$@"; do
+  if [[ "$a" == "--fresh" ]]; then
+    fresh=1
+  else
+    args+=("$a")
+  fi
+done
+if [[ "${FORGE_FRESH:-0}" == "1" ]]; then
+  fresh=1
+fi
+
+export CARGO_TARGET_DIR="$TARGET_DIR"
+if [[ "$fresh" -eq 1 ]]; then
+  cargo clean --manifest-path "$MANIFEST" --release 2>/dev/null || true
+fi
+cargo build --manifest-path "$MANIFEST" --release
+exec "$BIN" "${args[@]}"

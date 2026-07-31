@@ -1,11 +1,14 @@
 # Mods, functions, commands, process (EFI product model)
 
-**Status:** contract locked. Nestable process-on-task-tree landed; µPy binds
-the same registries (`pymergetic.metal.mod.<name>.<func>(...)`, lazy
-attribute-resolved, see `docs/MICROPYTHON.md`); multi-focus UI still open —
-see [Today vs target](#today-vs-target).
+**Status:** contract locked (product-era). Live tree has the async/task floor
+under [`src/.../async/`](../src/pymergetic/metal/async/); guest mod loader /
+µPy registries are not on the forge-cli path yet — see
+[`definitions/async/`](definitions/async/) and archived
+[`_old/docs/MICROPYTHON.md`](../_old/docs/MICROPYTHON.md).
 
-One concept with async/coro: mods register callables; work parks on **normal runners** via [`async.h`](../include/pymergetic/metal/runtime/async/async.h); host ≈ guest.
+One concept with async/coro: mods register callables; work parks on **normal
+runners**. Product header paths below map to `_old/include/...` or the live
+`src/pymergetic/metal/async/` equivalents.
 
 ---
 

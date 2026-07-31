@@ -1,0 +1,22 @@
+[package]
+name = "pymergetic_metal_net_ip"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[lib]
+path = "../__init__.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+pymergetic_metal_rt = { path = "../../../rt/.pm" }
+pymergetic_metal_async = { path = "../../../async/.pm" }
+pymergetic_metal_mem = { path = "../../../mem/.pm" }
+
+[build-dependencies]
+cc = "1"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

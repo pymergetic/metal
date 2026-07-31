@@ -3,7 +3,7 @@
 # over patches; apply patches/dropbear/*.patch when present.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 DIR="${ROOT}/external/dropbear"
 # DROPBEAR_2024.85 is a known stable tag; override with PM_METAL_DROPBEAR_REF.
 REF="${PM_METAL_DROPBEAR_REF:-DROPBEAR_2024.85}"

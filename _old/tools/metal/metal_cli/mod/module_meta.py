@@ -5,7 +5,7 @@ import json
 from enum import Enum
 from pathlib import Path
 
-from metal_cli.paths import exp2_root, metal_root
+from metal_cli.paths import exp2_root
 
 PM_DIR = ".pm"
 PM_MODULE_FILE = "module"
@@ -23,7 +23,8 @@ class ModuleType(str, Enum):
 
 
 def src_roots() -> list[Path]:
-    return [metal_root() / "src", exp2_root() / "src"]
+    """Live modules live under exp2 only (old product archived under ``_old/``)."""
+    return [exp2_root() / "src"]
 
 
 def pm_dir(mod_dir: Path) -> Path:

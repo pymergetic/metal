@@ -263,12 +263,9 @@ fn err_line<Sess: ForgeSession>(sess: &mut Sess, s: &str) {
     let _ = block_on(|| sess.err_line(s));
 }
 
-/// Resolve metal checkout roots: `<metal>/src` and `<metal>/exp2/src`.
+/// Resolve metal checkout roots: `<metal>/src` only (old product under `_old/`).
 pub fn default_src_roots(metal_root: &str) -> Vec<String> {
-    vec![
-        join_path(metal_root, "src"),
-        join_path(metal_root, "exp2/src"),
-    ]
+    vec![join_path(metal_root, "src")]
 }
 
 pub fn cmd_sync<S: ForgeStore, Sess: ForgeSession>(

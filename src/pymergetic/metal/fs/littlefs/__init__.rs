@@ -10,7 +10,7 @@ use pymergetic_metal_fs::{
     PM_METAL_FS_INVALID,
 };
 use pymergetic_metal_rt as _;
-use pymergetic_metal_vfs as vfs;
+use pymergetic_metal_fs_vfs as vfs;
 
 extern "C" {
     fn pm_metal_async_completed_u32(v: u32) -> u32;
@@ -76,7 +76,7 @@ pub unsafe extern "C" fn pm_metal_fs_littlefs_mount(
     }
     ensure_ops();
     let ctx = id as usize as *mut c_void;
-    if vfs::pm_metal_vfs_mount(target, &LFS_OPS as *const _ as *const c_void, ctx) == 0 {
+    if vfs::pm_metal_fs_vfs_mount(target, &LFS_OPS as *const _ as *const c_void, ctx) == 0 {
         let _ = pm_metal_fs_littlefs_close_vol(id);
         return -1;
     }

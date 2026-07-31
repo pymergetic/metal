@@ -3,7 +3,7 @@
 # docs/SOURCETREE.md "Vendoring") — same pin+checkout shape as setup-lz4.sh.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 DIR="${ROOT}/external/monocypher"
 REPO="https://github.com/LoupVaillant/Monocypher"
 REF="4.0.2"

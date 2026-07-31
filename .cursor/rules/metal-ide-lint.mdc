@@ -35,16 +35,11 @@ bugs. Treat IDE diagnostics as part of the deliverable, not optional polish.
 If you changed `.clangd.template` or ide setup in this session, end with an
 explicit one-liner: restart clangd / reload window.
 
-## `.clangd*` = repo-relative only (no abs `-I`)
+## Paths in IDE / CDB metadata
 
-See also `metal-clangd-no-abs-paths.mdc`. Never write checkout-absolute
-paths into `.clangd` / `.clangd.template` / nested `**/.clangd`. Use paths
-relative to the `.clangd` file's directory. `./scripts/setup ide` copies
-templates; it must not expand `${ROOT}` into them.
-
-**CDB is different:** `build/compile_commands.json` may use absolute
-`directory`/`file` keys (clangd indexes `directory/file` without making a
-relative `directory` absolute). Symlink `.vscode/compile_commands.json` ->
-`../build/compile_commands.json`. Do **not** set
-`CompilationDatabase: "None"` on exp2 PathMatch once those entries exist.
-After template/ide.sh edits: run `./scripts/setup ide`, then restart clangd.
+See `metal-clangd-no-abs-paths.mdc`. `.clangd*` `-I` and CDB `"file"` /
+command `-I` stay package-relative. CDB `"directory"` is the **absolute
+package root** (clangd cannot match `directory: "."` + relative file).
+CDB at package-root `compile_commands.json` (mirrored under `build/`).
+`--compile-commands-dir=${workspaceFolder}`. After template/ide/CDB
+edits: regenerate if needed, then **restart clangd**.

@@ -54,10 +54,9 @@ static int append_hex2(char *dst, size_t cap, size_t *pos, unsigned v)
   return append_char(dst, cap, pos, hex[v & 0x0fu]);
 }
 
-int snprintf(char *dst, size_t dst_cap, const char *fmt, ...)
+int vsnprintf(char *dst, size_t dst_cap, const char *fmt, va_list ap)
 {
-  va_list ap;
-  size_t  pos = 0;
+  size_t pos = 0;
 
   if (dst == NULL || dst_cap == 0) {
     return -1;
@@ -67,11 +66,9 @@ int snprintf(char *dst, size_t dst_cap, const char *fmt, ...)
     return 0;
   }
 
-  va_start(ap, fmt);
   for (; *fmt != '\0'; fmt++) {
     if (*fmt != '%') {
       if (append_char(dst, dst_cap, &pos, *fmt) != 0) {
-        va_end(ap);
         return (int)pos;
       }
       continue;
@@ -79,7 +76,6 @@ int snprintf(char *dst, size_t dst_cap, const char *fmt, ...)
     fmt++;
     if (*fmt == '%') {
       if (append_char(dst, dst_cap, &pos, '%') != 0) {
-        va_end(ap);
         return (int)pos;
       }
       continue;
@@ -87,7 +83,6 @@ int snprintf(char *dst, size_t dst_cap, const char *fmt, ...)
     if (*fmt == '0' && fmt[1] == '2' && fmt[2] == 'x') {
       fmt += 2;
       if (append_hex2(dst, dst_cap, &pos, (unsigned)va_arg(ap, unsigned)) != 0) {
-        va_end(ap);
         return (int)pos;
       }
       continue;
@@ -101,7 +96,6 @@ int snprintf(char *dst, size_t dst_cap, const char *fmt, ...)
       }
       for (i = 0; s[i] != '\0'; i++) {
         if (append_char(dst, dst_cap, &pos, s[i]) != 0) {
-          va_end(ap);
           return (int)pos;
         }
       }
@@ -109,7 +103,6 @@ int snprintf(char *dst, size_t dst_cap, const char *fmt, ...)
     }
     if (*fmt == 'u') {
       if (append_u32(dst, dst_cap, &pos, va_arg(ap, uint32_t)) != 0) {
-        va_end(ap);
         return (int)pos;
       }
       continue;
@@ -118,18 +111,26 @@ int snprintf(char *dst, size_t dst_cap, const char *fmt, ...)
       int32_t v = va_arg(ap, int32_t);
       if (v < 0) {
         if (append_char(dst, dst_cap, &pos, '-') != 0) {
-          va_end(ap);
           return (int)pos;
         }
         v = -v;
       }
       if (append_u32(dst, dst_cap, &pos, (uint32_t)v) != 0) {
-        va_end(ap);
         return (int)pos;
       }
       continue;
     }
   }
-  va_end(ap);
   return (int)pos;
+}
+
+int snprintf(char *dst, size_t dst_cap, const char *fmt, ...)
+{
+  va_list ap;
+  int     n;
+
+  va_start(ap, fmt);
+  n = vsnprintf(dst, dst_cap, fmt, ap);
+  va_end(ap);
+  return n;
 }

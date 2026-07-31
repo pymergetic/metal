@@ -4,7 +4,7 @@
 # No forks. Metal glue lives under src/pymergetic/metal/py/.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 UPY_DIR="${ROOT}/external/micropython"
 UPY_REPO="https://github.com/micropython/micropython"
 UPY_REF="v1.28.0"
@@ -37,5 +37,5 @@ echo "external/micropython -> ${UPY_REF}"
 
 # Generate port-neutral embed package for Metal link (EFI/BIOS).
 # shellcheck disable=SC1091
-source "${ROOT}/scripts/lib/micropython.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib" && pwd)/micropython.sh"
 ROOT="${ROOT}" pm_metal_upy_generate_embed

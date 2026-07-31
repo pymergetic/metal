@@ -1,43 +1,50 @@
 ---
-description: Never put checkout-absolute paths in any .clangd / .clangd.template
+description: No absolute paths in IDE/build metadata — except CDB directory (clangd match)
 alwaysApply: true
 ---
 
-# No absolute paths in `.clangd*`
+# No absolute paths in IDE / build metadata
 
-**Hard rule.** `.clangd`, `.clangd.template`, and every nested
-`**/.clangd` must use **repo-relative** (or file-relative) `-I` / `--sysroot`
-paths only. Never `/home/...`, `/Users/...`, drive letters, or
-`@@ROOT@@` → absolute expansion.
+Never write checkout-absolute or machine-absolute paths into generated or
+checked-in IDE/build metadata **except** `compile_commands.json`
+`"directory"` (see below). That includes:
 
-## Why
+- `.clangd` / `.clangd.template` / nested `**/.clangd` (`-I` stays relative)
+- CDB `"file"` and command `-I` / `--sysroot` (package-relative only)
+- emitted path bits in setup/ide scripts that land in those files
 
-Checkout-absolute paths make the IDE config machine-specific, dirty diffs,
-and fight the owner's reading/search. Relative paths resolve against the
-directory of the `.clangd` file that contains them (clangd).
+**Banned elsewhere:** `/home/...`, `/Users/...`, drive letters, `$PWD`
+expansions, `@@ROOT@@` → absolute, absolute `-I` / `--sysroot` / `"file"`.
+Tool binaries in CDB commands are bare names (`clang`), not `/usr/bin/clang`.
 
-## How
+## CDB `directory` is the one exception
 
-| File | Paths relative to |
-|------|-------------------|
-| package-root `.clangd` / `.clangd.template` | package root (`-Iexp2/...`, `-Isrc/...`, `-I.`) |
-| nested module `.clangd` (e.g. `fs/littlefs/`, `net/`, `boot/.../bios/`) | that file's directory (`-I.`, `-Ivendor`, `-I../../libc`) |
+clangd 22 does **not** match entries with `"directory": "."` + a relative
+`"file"` — it falls back to Generic (cwd = source file dir). With
+`-nostdinc`, package-relative `-Isrc/pymergetic/metal/libc` then misses and
+the editor reports `'stddef.h' file not found`.
 
-`scripts/setup.d/deps/ide.sh` **copies** templates; it must not `sed` in
-`${ROOT}` / absolute `-I`.
+| Artifact | Form |
+|----------|------|
+| package-root `.clangd*` | package-relative (`-Isrc/...`, `-Ibuild`, `-I.`) |
+| nested module `.clangd` | relative to the **source file's directory** (Generic cwd), or to that `.clangd` file when using `CompilationDatabase: None` (bios ports) |
+| `compile_commands.json` | `"directory":` **absolute package root** (forge writes canonicalize); `"file"` / `-I` package-relative (`src/...`) |
 
-## Allowed absolute paths (not `.clangd`)
+`scripts/setup.d/deps/ide.sh` (or forge) **must not** `sed` / expand
+`${ROOT}` into `.clangd*` files.
 
-`build/compile_commands.json` may still use absolute `directory` / `file`
-entries — that is a separate CDB indexing constraint. Do not "fix" that
-by putting abs `-I` into `.clangd`.
-
-## Verify after edits
+## Verify after any touch
 
 ```
 rg -n '/home/|/Users/|[A-Za-z]:\\\\|@@ROOT@@' .clangd .clangd.template \
   tests/host/.clangd tests/host/.clangd.template \
-  exp2 -g '*.clangd'
+  src -g '*.clangd' 2>/dev/null
 ```
 
-Must return nothing.
+Must return nothing (skip missing files). CDB `directory` abs is expected:
+
+```
+rg -n '"file":\s*"/|-I/|--sysroot\s*/' compile_commands.json
+```
+
+Must return nothing (`"directory": "/..."` is OK).

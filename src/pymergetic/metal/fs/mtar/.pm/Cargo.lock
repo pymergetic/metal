@@ -31,8 +31,8 @@ name = "pymergetic_metal_fs"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",
+ "pymergetic_metal_fs_vfs",
  "pymergetic_metal_rt",
- "pymergetic_metal_vfs",
 ]
 
 [[package]]
@@ -41,10 +41,17 @@ version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_fs",
+ "pymergetic_metal_fs_vfs",
  "pymergetic_metal_rt",
  "pymergetic_metal_util_lz4",
  "pymergetic_metal_util_tar",
- "pymergetic_metal_vfs",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_vfs"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
 ]
 
 [[package]]
@@ -68,13 +75,6 @@ dependencies = [
 
 [[package]]
 name = "pymergetic_metal_util_tar"
-version = "0.1.0"
-dependencies = [
- "pymergetic_metal_rt",
-]
-
-[[package]]
-name = "pymergetic_metal_vfs"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_rt",

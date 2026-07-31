@@ -4,7 +4,7 @@
 # No src/efi symlink — Metal.inf / -I point at external/lwip directly.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 LWIP_DIR="${ROOT}/external/lwip"
 LWIP_REPO="https://github.com/lwip-tcpip/lwip.git"
 LWIP_REF="STABLE-2_2_1_RELEASE"
@@ -25,6 +25,6 @@ done
 shopt -u nullglob
 
 # Drop legacy symlink if present (older setup created src/efi/lwip).
-rm -f "${ROOT}/src/efi/lwip"
+rm -f "${ROOT}/src/efi/lwip" "${ROOT}/_old/src/efi/lwip"
 
 echo "external/lwip -> ${LWIP_REF}"

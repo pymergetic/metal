@@ -51,8 +51,8 @@ fn find_ovmf() -> Option<PathBuf> {
     OVMF_CANDIDATES.iter().map(PathBuf::from).find(|p| p.is_file())
 }
 
-fn ensure_vblk(exp2: &Path) -> Result<PathBuf, String> {
-    let vblk = exp2.join("build/vblk.img");
+fn ensure_vblk(tree: &Path) -> Result<PathBuf, String> {
+    let vblk = tree.join("build/vblk.img");
     ensure_dir(vblk.parent().unwrap())?;
     if !vblk.is_file() {
         run(Command::new("dd").args([
@@ -66,8 +66,8 @@ fn ensure_vblk(exp2: &Path) -> Result<PathBuf, String> {
     Ok(vblk)
 }
 
-fn virtio_drive(exp2: &Path) -> Result<Vec<String>, String> {
-    let vblk = ensure_vblk(exp2)?;
+fn virtio_drive(tree: &Path) -> Result<Vec<String>, String> {
+    let vblk = ensure_vblk(tree)?;
     let mut a: Vec<String> = VIRTIO.iter().map(|s| String::from(*s)).collect();
     a.extend([
         String::from("-drive"),
@@ -86,10 +86,10 @@ fn qemu_ec(ec: i32) -> i32 {
     }
 }
 
-fn run_bios(exp2: &Path) -> Result<(), String> {
-    let elf = exp2.join("build/x86_64_bios/metal.qemu.elf");
+fn run_bios(tree: &Path) -> Result<(), String> {
+    let elf = tree.join("build/x86_64_bios/metal.qemu.elf");
     ensure_file(&elf, "forge build bios")?;
-    let vio = virtio_drive(exp2)?;
+    let vio = virtio_drive(tree)?;
     let smp = smp();
     eprintln!("forge run: bios {}", elf.display());
     let mut cmd = Command::new("qemu-system-x86_64");
@@ -103,15 +103,15 @@ fn run_bios(exp2: &Path) -> Result<(), String> {
     }
 }
 
-fn run_efi(exp2: &Path) -> Result<(), String> {
-    let efi_img = exp2.join("build/x86_64_efi/metal.efi");
+fn run_efi(tree: &Path) -> Result<(), String> {
+    let efi_img = tree.join("build/x86_64_efi/metal.efi");
     ensure_file(&efi_img, "forge build efi")?;
     let ovmf = find_ovmf().ok_or_else(|| String::from("OVMF not found (apt: ovmf)"))?;
-    let esp = exp2.join("build/x86_64_efi/esp");
+    let esp = tree.join("build/x86_64_efi/esp");
     let _ = std::fs::remove_dir_all(&esp);
     ensure_dir(&esp.join("EFI/BOOT"))?;
     std::fs::copy(&efi_img, esp.join("EFI/BOOT/BOOTX64.EFI")).map_err(|_| String::from("copy efi"))?;
-    let vio = virtio_drive(exp2)?;
+    let vio = virtio_drive(tree)?;
     let smp = smp();
     eprintln!("forge run: efi {} (OVMF {})", efi_img.display(), ovmf.display());
     let mut cmd = Command::new("timeout");
@@ -140,22 +140,22 @@ fn run_efi(exp2: &Path) -> Result<(), String> {
     }
 }
 
-fn run_target(exp2: &Path, target: &str) -> Result<(), String> {
+fn run_target(tree: &Path, target: &str) -> Result<(), String> {
     match target {
-        "bios" | "x86_64" => run_bios(exp2),
-        "efi" => run_efi(exp2),
+        "bios" | "x86_64" => run_bios(tree),
+        "efi" => run_efi(tree),
         "all" | "both" => {
-            run_bios(exp2)?;
-            run_efi(exp2)
+            run_bios(tree)?;
+            run_efi(tree)
         }
         other => Err(alloc::format!("unsupported target {other} (bios|efi|all)")),
     }
 }
 
 pub fn run_qemu(sess: &mut dyn ForgeSession, metal_root: &str) -> i32 {
-    let exp2 = PathBuf::from(metal_root).join("exp2");
+    let tree = PathBuf::from(metal_root);
     let target = sess_positional(sess, 1, "all");
-    match run_target(&exp2, &target) {
+    match run_target(&tree, &target) {
         Ok(()) => {
             sess.set_exit(0);
             0
@@ -175,11 +175,11 @@ fn log_has(path: &Path, needle: &str) -> bool {
 const STRESS_NEEDLES: &[&str] = &["ready        ok", "+-- net          ok", "stress ok"];
 
 pub fn run_stress(sess: &mut dyn ForgeSession, metal_root: &str) -> i32 {
-    let exp2 = PathBuf::from(metal_root).join("exp2");
-    let logdir = exp2.join("build/stress");
+    let tree = PathBuf::from(metal_root);
+    let logdir = tree.join("build/stress");
     let http_root = logdir.join("http_root");
     let _ = ensure_dir(&http_root);
-    let _ = std::fs::write(http_root.join("index.html"), b"exp2 stress\n");
+    let _ = std::fs::write(http_root.join("index.html"), b"metal stress\n");
 
     eprintln!("forge stress: building opt-in stress images");
     if let Err(e) = crate::_build::build_targets(metal_root, "all", true) {
@@ -242,23 +242,8 @@ while True:
     };
 
     std::thread::sleep(Duration::from_millis(300));
-    let metal = PathBuf::from(metal_root).join("tools/metal/metal");
-    eprintln!("forge stress: host mem smoke");
-    if !Command::new(&metal)
-        .args(["mod", "test", "pymergetic/metal/mem"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
-        let _ = http.kill();
-        let _ = ntp_child.kill();
-        let _ = crate::_build::build_targets(metal_root, "all", false);
-        let _ = block_on(|| sess.err_line("host mem smoke FAIL"));
-        sess.set_exit(1);
-        return 1;
-    }
 
-    let forge = PathBuf::from(metal_root).join("tools/forge");
+    let forge = PathBuf::from(metal_root).join("forge-cli");
     let mut failed = false;
     for (target, secs) in [("bios", "45"), ("efi", "45")] {
         let log = logdir.join(alloc::format!("{target}.serial.log"));

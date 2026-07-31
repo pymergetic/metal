@@ -2,7 +2,7 @@
 # Vendors Openwall crypt_blowfish into external/crypt_blowfish (gitignored).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 DIR="${ROOT}/external/crypt_blowfish"
 # Upstream is a single-branch repo (no "master"); optional REF pins a commit/tag.
 REF="${PM_METAL_CRYPT_BLOWFISH_REF:-}"

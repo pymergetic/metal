@@ -1,6 +1,6 @@
 ---
 description: Firmware C must use metal/libc under -nostdinc; never host compiler ISO C headers
-globs: exp2/src/pymergetic/metal/**/*.{c,h},src/pymergetic/metal/**/*.{c,h}
+globs: src/pymergetic/metal/**/*.{c,h}
 alwaysApply: false
 ---
 
@@ -18,16 +18,15 @@ pulls the wrong headers (extra cognitive load + wrong types in the IDE).
 
 ## Required compile / IDE flags
 
-Every TU under `exp2/src/pymergetic/metal/**` (and product `src/pymergetic/metal/**`
-when freestanding) must see:
+Every TU under `src/pymergetic/metal/**` must see:
 
 ```text
--ffreestanding -nostdinc -I<metal>/libc -I<src root>
+-ffreestanding -nostdinc -Isrc/pymergetic/metal/libc -Isrc
 ```
 
-- Build: `exp2/scripts/build` already does this for bios/efi.
-- clangd: root `.clangd` → `CompilationDatabase: exp2`; `exp2/.clangd` PathMatch
-  forces `-nostdinc` + `-Isrc/pymergetic/metal/libc` for all metal C/H.
+- Build: `./tools/forge build` (bios/efi).
+- clangd: package-root `.clangd` PathMatch for `src` forces freestanding
+  flags + metal/libc.
 - After changing `.clangd` / compile DB: restart clangd.
 
 ## Source rules
@@ -43,10 +42,10 @@ when freestanding) must see:
 ## Verify
 
 ```bash
-# IDE/build must not resolve stddef to the host clang resource dir:
-clang -ffreestanding -nostdinc -Isrc/pymergetic/metal/libc -Isrc -E \
+clang -ffreestanding -nostdinc \
+  -Isrc/pymergetic/metal/libc -Isrc -E \
   - <<<'#include <stddef.h>' | head -5
-# expect: # 1 "src/pymergetic/metal/libc/stddef.h"
+# expect a path under src/pymergetic/metal/libc/stddef.h
 ```
 
-From `exp2/`. If you see a path under `/usr/...` or `lib/clang/...`, flags are wrong.
+If you see a path under `/usr/...` or `lib/clang/...`, flags are wrong.

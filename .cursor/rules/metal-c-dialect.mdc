@@ -1,10 +1,10 @@
 ---
-description: Metal core uses one uniform C type spelling everywhere; EDK2 types/headers are physically confined to src/efi/** and src/bios/**
-globs: src/pymergetic/metal/**/*.{c,h},include/pymergetic/metal/**/*.h
+description: Metal core uses one uniform C type spelling everywhere; EDK2 types/headers are physically confined to boot platform ports
+globs: src/pymergetic/metal/**/*.{c,h}
 alwaysApply: true
 ---
 
-# Metal C dialect (no UEFI types outside src/efi/**, src/bios/**)
+# Metal C dialect (no UEFI types outside boot/platform/{efi,bios}/**)
 
 Full rule + rationale: [`docs/SOURCETREE.md`](../../docs/SOURCETREE.md) → "C dialect".
 
@@ -22,7 +22,8 @@ relaxing it.
 - Linkage: `static`, not `STATIC`
 - Unused: `(void)x`, not `(VOID)x`
 
-**Banned anywhere in `src/pymergetic/metal/**`, no filename-based exception:**
+**Banned anywhere in `src/pymergetic/metal/**` outside platform ports,
+no filename-based exception:**
 
 - `#include <Uefi.h>`, `#include <Library/*.h>`, `#include <Protocol/*.h>`, `#include <IndustryStandard/*.h>`
 - `INT32` / `UINT32` / `UINTN` / `VOID` / `STATIC` / `CONST` / `CHAR8` / `BOOLEAN`
@@ -30,20 +31,18 @@ relaxing it.
 
 A file does **not** get to include EDK2 headers just because it's named
 `*_port.c`/`*_port.h`. The **only** thing that makes EDK2 OK is physical
-location: `src/efi/**` or `src/bios/**` (incl. `src/bios/shim/**`). If Metal
+location under `src/.../boot/platform/efi/**` or `.../bios/**`. If Metal
 logic genuinely needs one EDK2 primitive, declare a plain stdint-typed
-prototype in the shared file (no body) and put the implementation in a
-same-named `.c` physically under `src/efi/pymergetic/metal/<path>/foo_port.c`
-**and** `src/bios/pymergetic/metal/<path>/foo_port.c` — see `runtime/slot/slot_table.h`
-+ its two port bodies for the pattern.
+prototype in the shared file (no body) and put the implementation in the
+matching platform port body.
 
-**Verify:** `grep -rlE '#include\s*<(Uefi\.h|Library/|Protocol/|IndustryStandard/)' src/pymergetic/metal --include=*.c --include=*.h` must return **nothing**. Run after touching any file here.
+**Verify:** `grep -rlE '#include\s*<(Uefi\.h|Library/|Protocol/|IndustryStandard/)' src/pymergetic/metal --include=*.c --include=*.h` must return **nothing** outside `boot/platform/{efi,bios}/**`. Run after touching any file here.
 
 Do not add a compat header that `#define UINT32 uint32_t` — convert call sites.
 
 Prefer Metal/libc APIs (`pm_metal_log`, `memset`/`memcpy`/`memcmp`/`strcmp`/`strlen`, `snprintf`)
 over `Print` / `ZeroMem` / `CopyMem` / `AsciiStrCmp` / `AsciiSPrint` in converted files —
-a pure-C `snprintf`/`vsnprintf` already exists in `runtime/mem/libc.c`, so EDK2's
+a pure-C `snprintf`/`vsnprintf` already exists in the freestanding libc, so EDK2's
 `AsciiSPrint` (`%a` for strings) is never required; translate the format string to
 plain C (`%s`) at the call site.
 
@@ -59,12 +58,12 @@ Async steps (`status(self_h)`) must not park durable state on the C/wasm call
 stack across `await`. Allocate from the **Metal host heap**:
 
 - Host / guest: `pm_metal_mem_alloc` / `pm_metal_mem_free` (same names; guest
-  cookies are opaque — do not dereference in wasm)
+ cookies are opaque — do not dereference in wasm)
 - Guest step frames: `pm_metal_async_coro_alloc` (host TLSF + step-scoped
-  linear alias for a normal `T*` during the step)
+ linear alias for a normal `T*` during the step)
 - Guest buffers passed into async I/O that outlive the step must sit in the
-  coro frame (or another host-durable buffer); natives resolve via
-  `pm_metal_async_guest_buf_durable`
+ coro frame (or another host-durable buffer); natives resolve via
+ `pm_metal_async_guest_buf_durable`
 
 Wasm linear memory is for statics and short in-step stack only — not a second
 long-lived heap for coro frames.

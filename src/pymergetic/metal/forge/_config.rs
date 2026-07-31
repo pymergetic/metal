@@ -8,7 +8,7 @@ use crate::_port::{block_on, ForgeSession};
 
 fn script(metal_root: &str, name: &str) -> PathBuf {
     PathBuf::from(metal_root)
-        .join("exp2/src/pymergetic/metal/forge/_kconfig")
+        .join("src/pymergetic/metal/forge/_kconfig")
         .join(name)
 }
 
@@ -37,7 +37,7 @@ pub fn run_config(sess: &mut dyn ForgeSession, metal_root: &str) -> i32 {
     let a1 = String::from(sess.arg(1).unwrap_or(""));
     if a1.is_empty() || a1 == "-h" || a1 == "--help" {
         for line in [
-            "forge config - exp2 Kconfig",
+            "forge config - Kconfig",
             "  forge config edit|gen|old [--metal-root DIR]",
         ] {
             let _ = block_on(|| sess.out_line(line));
