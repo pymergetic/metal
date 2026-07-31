@@ -195,7 +195,7 @@ One JSON file per directory: `.pm/module`. The former root files
 | `type` | Role |
 |---------------|------|
 | `module` | **Kernel module** — sync/codegen; firmware link when applicable. |
-| `package` | **Wasm package** — pack to `.wasm`; **not** in the kernel link. Loaded by the host `wasm/` tier; exports register under the full module name (see [`ORCHESTRATION.md`](../ORCHESTRATION.md)). First proofs live under package-root `tests/`, not inside firmware. |
+| `package` | **Wasm pack** — forge → `.wasm` from **C or Rust**; not kernel-linked. Loaded by `wasm/`; **one Metal memory**. See [`ORCHESTRATION.md`](../ORCHESTRATION.md) Locked #7–#8. First proofs under package-root `tests/`. |
 | `hidden` | **Forbid** — plain port or namespace shell; tools refuse codegen. |
 
 ```json
@@ -255,14 +255,26 @@ language. No per-module stem alias (`mem.rs` / `dt.rs` are wrong).
 Generated faces = other extensions of that stem (`__init__.h`,
 `__init__.pyi`, …). Sync must not overwrite without the ownership banner.
 
-**Directory = Metal module** (`.module`). Nested packages are nested
+**Directory = Metal module** (`.pm/module`). Nested packages are nested
 dirs with their own `.module` + `__init__.{ext}` (e.g.
-`mem/tlsf/__init__.rs`).
+`mem/tlsf/__init__.rs`). **Only directories are modules** — a lone source
+file is never a module; it is a **sibling stem** inside a module dir.
 
 **Sibling sources** in the same dir are extra stems sync may codegen
 when they carry a pool border. Prefer nested dirs with their own
 `.module` + `__init__.{ext}` for real subpackages (`mem/arena/`,
 `mem/tlsf/`). Vendored C stays external (FFI/shim).
+
+`forge mod sync` table uses **Python-style dotted names** and a `kind`
+column:
+
+| kind | Meaning |
+|------|---------|
+| `d` | Package entry (`__init__`) of a module directory |
+| `f` | Sibling stem in that directory (e.g. `await`, `mutex`) |
+
+Example: `pymergetic.metal.async` (`d`) vs
+`pymergetic.metal.async.await` (`f`).
 
 **Private `_*.{ext}` stems:** faceless helpers wired only via `#[path]` /
 same-TU include. They must not appear as sync stems and must not get

@@ -1,52 +1,64 @@
-# Orchestration — three host tiers (`reg` / `wasm` / `py`)
+# Orchestration — three big blocks (`reg` / `py` / `wasm`)
 
 Live Metal plan for **host** orchestration. Supersedes in-tree `mods/`
 packaging, `guest/mod` FRESH/SHARED instance cages, and private µPy/wasm
-heaps for the direction below. Historical product detail remains in
-[`_old/docs/MICROPYTHON.md`](../_old/docs/MICROPYTHON.md) and
-[`MODS.md`](MODS.md) (archive-shaped; do not treat FRESH cages as the
-live target).
+heaps. Archive: [`_old/docs/MICROPYTHON.md`](../_old/docs/MICROPYTHON.md),
+[`MODS.md`](MODS.md).
 
-**Python is the OS orchestration layer. Metal is muscles.** Wasm delivers
-code. **`reg`** is the cross-language call bus.
+**Python is the OS. Metal is muscles. Wasm delivers code. `reg` is the bus.**
 
 ---
 
-## Three tiers
+## Locked (do not re-argue)
+
+These are load-bearing. Agents and future-you: treat as settled.
+
+| # | Lock |
+|---|------|
+| 1 | **Three blocks only:** `reg` → `py` → `wasm` (build order: reg floor, **upy first**, wasm after). |
+| 2 | **Full module names** everywhere (`pymergetic.metal.fs.open`, never `fs.open`). |
+| 3 | **One memory for all** — Metal TLSF / coro frames. Upy and wasm **do not** get private heaps, linear-memory cages, FRESH/SHARED instance tables, or percpu `mp_state` fuckaround. |
+| 4 | **No isolation** — wasm is code delivery; py is orchestration; concurrency = Metal runners + task id. |
+| 5 | **Py async = Metal async** — every core a runner; await = park/resume; GC ripped out (manual/handles). |
+| 6 | **`reg`:** register/export all langs; convenience by name + **ptr bind** for speed. |
+| 7 | **`type=package` → `.wasm` pack** (not kernel-linked). Compiles dir + non-wasm subs; mounts `.py`. Kernel stays `type=module`. |
+| 8 | **When wasm works: forge must compile Rust (and C) packs to wasm** — same `type=package` path; `impl=rs` is a first-class pack language, not host-only. |
+| 9 | **Upy VM = Rust mirror** of `py/`+`extmod/`+`shared/` — see [`ORCHESTRATION_UPY_MIRROR.md`](ORCHESTRATION_UPY_MIRROR.md). No hollow stubs. |
+| 10 | **Gates after big steps:** `mod check` + correctness + **bios and efi** + light perf. |
+
+---
+
+## Three big blocks
 
 ```text
-                    +------------------+
-                    |  py/  (upy)      |  orchestration; py async == Metal async
-                    +--------+---------+
-                             | lookup / bind on import
-                    +--------v---------+
-                    |  reg/            |  full module name + func (+ later class/vars)
-                    |  name + ptr bind |  register/export all languages
-                    +--------+---------+
-                             ^
-              register       |       register
-           (kernel/host)     |    (wasm load)
-                    +--------v---------+
-                    |  wasm/           |  load code only; Metal alloc; no cages
-                    +------------------+
-
-Metal mem / async / fs / …   <--- all durable alloc and park/resume
+  +------------------+
+  | 1. reg/          |  cross-lang bus (full name + ptr bind)
+  +--------+---------+
+           ^
+           | publish / lookup
+  +--------+---------+     +------------------+
+  | 2. py/  (upy)    |     | 3. wasm/         |
+  | orchestration    |     | code delivery    |
+  | Rust VM mirror   |     | load .wasm packs |
+  +------------------+     +------------------+
+           |                        |
+           +-----------+------------+
+                       v
+              Metal mem / async / fs / …
+              ONE allocator — all languages
 ```
 
-| Tier | Module | Job |
-|------|--------|-----|
-| **1. `reg`** | `src/pymergetic/metal/reg/` | Flat registry: **full** module name + func (later class / statics). Register from **any** language; export to **any** language. Convenience (by name) + **ptr bind** (resolve once, hot call). |
-| **2. `wasm`** | `src/pymergetic/metal/wasm/` | Host engine border. Loads images that **deliver code** (C/rs/py payloads; optional in-image sources like the old kernel pack — when finished). **No** instance isolation / private linear heaps / FRESH cages. Durable memory = `pm_metal_mem_*` / coro frames. Async rules = Metal rules (no naked statics across await; shared state needs real sync). |
-| **3. `py`** | `src/pymergetic/metal/py/` | µPy attach as main internal orchestration. Every core is a runner; **Python `await` = Metal park/resume**. Stock GC **ripped out** — manual / scope / handles (C-ish Python). Normal Metal alloc only — no upy blob heap / percpu `mp_state` fuckaround. On import: query `reg`, expose into Python. |
+| Block | Dir | Criteria |
+|-------|-----|----------|
+| **1. `reg`** | `src/.../reg/` | Full module name + func (+ later class/vars). Register from any lang; export to any lang. Name call + ptr bind. One table for kernel and loaded code. |
+| **2. `py`** | `src/.../py/` | Upy-first. Rust-rebuild VM/builtins ([inventory](ORCHESTRATION_UPY_MIRROR.md)). Py await = Metal async. GC out. **Same Metal alloc.** |
+| **3. `wasm`** | `src/.../wasm/` | Load packs → register into `reg`. **Same Metal alloc — one memory, no wasm isolation.** Packs from C **and Rust** (`impl=rs` → `.wasm`). Subs + mounted `.py` in the pack. Importlib resolve later. |
 
-Engines stay **vanilla** under `external/` (`micropython`, `wamr`, …). Ports are thin. Package-root **`mods/`** is **not** a live Metal concept (external repos / staging elsewhere).
+Engines under `external/` are reference/link inputs (`micropython`, `wamr`). No in-package `mods/` orchestration.
 
 ---
 
 ## Naming (locked)
-
-Registry keys always use the **full module path** (same discipline as
-`pm_metal_<module>_…` ABI prefixes):
 
 ```text
 pymergetic.metal.fs.open     # yes
@@ -59,52 +71,158 @@ fs.open                      # no
 
 ```text
 register(full_module, func, face)   # host link-time or wasm load
-bind(full_module, func) -> ptr      # hot path; no string walk later
-lookup / call by name               # convenience (import, REPL, glue)
+bind(full_module, func) -> ptr      # hot path
+lookup / call by name               # convenience
 ```
 
-- One table for kernel and loaded code — no shadow “py binds” vs “wasm natives”.
-- Forge may later auto-emit register rows from module exports (C/rs/py/wasm symmetry).
-- Python import = `reg` lookup (flat map is fine until measured otherwise) then bind into the Python namespace.
+---
+
+## One memory / async (all blocks)
+
+- **One heap:** `pm_metal_mem_*` / coro frames for kernel, upy, and wasm.
+- **No** wasm linear-memory-as-private-heap, no upy blob heap, no instance cages.
+- Stackless across `await`; N equal runners; process ≈ task id.
+- Shared state across await/cores: real sync (mutex/spin / Meyers) — project-wide rule.
+- Ownership/handles — not GC finalizers.
 
 ---
 
-## Async / memory (all three)
+## Full host tree — upy rebuilt in Rust
 
-- Stackless: nothing durable on C/wasm/upy call stack across `await`.
-- Alloc: Metal TLSF / coro frames only.
-- Runners: N equal cores; process ≈ task id; no GIL story, no upy-private parallel heaps.
-- Wasm/Python coding style: ownership and handles; no relying on GC finalizers.
+**Rule:** `external/micropython/{py,extmod,shared}` is **reference only**.
+The running VM is Rust under `src/pymergetic/metal/py/upy/`.
 
----
+| Rule | Detail |
+|------|--------|
+| Header mirror | Every upstream `.h` → `upy/**/foo.rs` (types/API) |
+| Body rewrite | Every needed `.c` → Rust (not eternal C wrappers) |
+| Builtins | All `mod*` / `builtin*` / `obj*` **and** pure-Python core (asyncio) → Rust. No VM-core `.py` builtins |
+| GC / threads / upy scheduler | `DEAD` — Metal alloc + Metal runners |
+| Arch | x86_64 only (`asmx64`, `nlrx64`, `emitnx64`); other asm/nlr/emit = `OMIT_ARCH` |
+| HW / upy-net / upy-fat-lfs | `OMIT_HW` — Metal owns devices/FS/net |
+| No hollow files | Do **not** land empty stub `.rs`. Finish a row or leave it undone in the inventory |
+| No cages | No `py_ctx` isolation / private heaps |
 
-## Proposed tree (host only)
+**Complete per-file inventory (356 rows):**  
+[`ORCHESTRATION_UPY_MIRROR.md`](ORCHESTRATION_UPY_MIRROR.md) — every upstream
+file tagged `MIRROR` / `REWRITE` / `DEAD` / `OMIT_*` / `TOOL` / `SHARED_OPT`.
+**197** rows are `MIRROR`+`REWRITE` work. That file is the checklist; this
+section is the layout.
 
 ```text
 external/
-  micropython/                 # vanilla submodule
-  wamr/                        # vanilla submodule
+  micropython/                      # REFERENCE submodule (py/ extmod/ shared/)
+  wamr/                             # phase C
 
 src/pymergetic/metal/
   reg/
-    .pm/module
-    __init__.rs                # pm_metal_reg_*  register / lookup / bind
-  wasm/
-    .pm/module
-    __init__.rs                # pm_metal_wasm_* load / find export / call
+    .pm/{module,Cargo.toml,smoke.rs}
+    __init__.rs                     # pm_metal_reg_*
+    table.rs
+    bind.rs
+    publish.rs
+
+  wasm/                             # phase C
+    .pm/{module,Cargo.toml,smoke.rs}
+    __init__.rs                     # pm_metal_wasm_*
     step.rs
-    port/                      # runtime glue; Metal alloc
-  py/
+    load.rs
+    port/{runtime.c,runtime.h}
+
+  py/                               # phase B — impl=rs
+    .pm/{module,Cargo.toml,build.rs,smoke.rs}
+    __init__.rs                     # pm_metal_py_* border
+    loop.rs                         # rebuilt main loop (Metal runners)
+    async_bridge.rs
+    step.rs
+    bind.rs                         # -> reg (full module names)
+    handle.rs
+    alloc.rs                        # -> pm_metal_mem_*
+    gc_off.rs
+    libc_policy.rs
+    shell.rs
+    port/                           # thin C edge only
+      mpconfigport.h
+      mphalport.h
+      mphalport.c
+      stubs.c
+    upy/
+      py/                           # ALL py/*.h + non-obj/mod .c  (see inventory)
+        builtin/                    # ALL py/mod*.c + builtin*.c
+        objects/                    # ALL py/obj*.c
+      extmod/                       # MIRROR subset + asyncio/ REWRITE
+      shared/                       # SHARED_OPT when needed (libc/runtime/…)
+
+tests/
+  wasm_hello/                       # phase C′ type=package
     .pm/module
-    __init__.rs                # pm_metal_py_*  init / step / call
-    bind.rs                    # import path -> reg
-    step.rs                    # bytecode slice + Metal await
-    port/                      # mphal, mpconfig -> pm_metal_*
-    embed/                     # build-owned qstr/frozen glue
+    __init__.rs
+  py_smoke/                         # bios+efi proofs (app .py OK here)
+    hello.py
 
 build/
-  micropython_embed/           # generated link inputs
+  py/                               # qstr / module-defs (TOOL replacements)
+  tests/                            # packed .wasm
 ```
+
+**Layout map**
+
+| Upstream | Live path | Notes |
+|----------|-----------|-------|
+| `py/*.h` | `upy/py/*.rs` | 66 headers; see inventory tags |
+| `py/*.c` (vm/runtime/…) | `upy/py/*.rs` | |
+| `py/mod*.c`, `builtin*.c` | `upy/py/builtin/*.rs` | |
+| `py/obj*.c` | `upy/py/objects/*.rs` | |
+| `py/make*.py` | forge/`build/py/` | `TOOL` — not runtime |
+| `extmod/*` keep-list | `upy/extmod/*.rs` | json/os/time/re/… + thin vfs |
+| `extmod/asyncio/*.py` | `upy/extmod/asyncio/*.rs` | `REWRITE` → Metal async |
+| `extmod` HW/lwip/fat/lfs/… | — | `OMIT_HW` |
+| `shared/libc|runtime|…` | `upy/shared/…` | `SHARED_OPT` / `DEAD` gchelper |
+
+**Shim map (Metal edge)**
+
+| Concern | Lives in | Talks to |
+|---------|----------|----------|
+| Public C ABI | `py/__init__.rs` | boot / shell / tests |
+| Main loop | `py/loop.rs` | `async/` runners |
+| VM step | `upy/py/vm.rs` + `py/step.rs` | runners |
+| Await | `py/async_bridge.rs` | `pm_metal_async_*` |
+| Alloc | `py/alloc.rs` + `upy/py/malloc.rs` | `pm_metal_mem_*` |
+| No GC | `py/gc_off.rs` | stock GC `DEAD` |
+| Binds | `py/bind.rs` | `reg/` |
+| Builtins | `upy/py/builtin/*` | `reg` / Metal faces |
+| Objects | `upy/py/objects/*` | VM |
+| Console | `port/mphalport.c` | `console` / `serial` |
+| Libc | `libc_policy.rs` | Metal and/or `upy/shared/libc` |
+
+---
+
+## Gates — correctness, performance, BIOS + UEFI
+
+After every **big step** (reg smoke, upy loop/alloc/GC-off, await bridge,
+wasm load, package pack):
+
+1. **Correctness**
+   - `./forge-cli mod check` (face symmetry c/rs/py)
+   - Host smoke for the tier touched (`.pm/smoke.rs` / `forge mod test` when wired)
+   - Boot proof script or serial expect where the feature is visible
+2. **Both firmware paths**
+   - `./forge-cli build bios && ./forge-cli run bios` (or stress subset)
+   - `./forge-cli build efi && ./forge-cli run efi`
+   - Same gate on both — do not ship “EFI-only” or “BIOS-only” for orchestration work
+3. **Performance (light, honest)**
+   - After loop + alloc + await bridge: measure a tight Python step / await
+     round-trip vs a native Metal coro (serial or host smoke counters)
+   - After wasm load: load + `reg.bind` + call latency vs native ptr bind
+   - No fake benches; one real number, regress if it blows a recorded budget
+4. **Alloc discipline**
+   - Grep / smoke: upy and wasm paths must not grow a private heap or
+     re-enable stock GC “just for bring-up”
+5. **Upy mirror discipline** (phase B+)
+   - Track [`ORCHESTRATION_UPY_MIRROR.md`](ORCHESTRATION_UPY_MIRROR.md):
+     every `MIRROR`/`REWRITE` claimed done has finished `.rs` (no hollow stubs)
+   - Diff inventory vs `external/micropython/{py,extmod,shared}` after vendor
+   - No core builtin left only as `.py` or stock `mod*.c`
 
 ---
 
@@ -116,34 +234,34 @@ Documented in [`definitions/module.md`](definitions/module.md)
 | `type` | Role |
 |--------|------|
 | `module` | **Kernel / firmware-resident** — linked into the image; faces sync; registers into `reg` at bring-up. This is everything under `src/pymergetic/metal/**` today. |
-| `package` | **Wasm delivery unit** — build to a `.wasm` (pack), **not** in the kernel link. Load via `wasm/`, exports land in `reg` under the **full** module name. Same lang-pool faces (`c`/`rs`/`py`); payload is code delivery, Metal alloc. |
+| `package` | **Wasm pack** — forge compiles the dir to `.wasm` (**C and Rust** `impl`); **not** kernel-linked. Load via `wasm/`; exports → `reg` (full names). **Same Metal memory** as everything else. |
 | `hidden` | Port / namespace shell — no codegen. |
 
-Kernel stays `type: module` on purpose: residents are muscles, not
-loadable packs. First real `type: package` belongs under package-root
-`tests/` (e.g. `tests/wasm_hello/`) once phase **B** can load an image —
-not inside the firmware tree.
+**Pack contents:** directory → image: native/rs/c **and nested subs** (unless
+sub is its own `type=package`). Loose `.py` **mounted**.  
+**Rust → wasm:** once the wasm host works, `impl=rs` packages must pack
+through the same forge path as C (no “Rust host-only” ghetto).  
+Importlib resolve = after wasm works.
 
 ```text
-tests/wasm_hello/
-  .pm/module                 # type=package, name=tests.wasm_hello, impl=rs|c
-  __init__.rs                # tiny border -> reg on load
-  # forge pack -> build/tests/wasm_hello.wasm
-  # boot/smoke: wasm load -> reg.bind("tests.wasm_hello", ...) -> call
+tests/wasm_hello/            # type=package, impl=rs  →  .wasm via forge
+tests/wasm_hello_c/          # type=package, impl=c   →  same pipeline
 ```
+
+Kernel stays `type=module`. First packs under `tests/`, not firmware.
 
 ---
 
-## Phased delivery
+## Phased delivery (**upy first**)
 
 | Phase | Deliver |
 |-------|---------|
-| **A. `reg`** | Register + lookup + ptr bind; host modules can publish rows; smoke from C/rs |
-| **B. `wasm`** | Load image, register exports into `reg`, call via ptr bind; Metal alloc; no cages |
-| **B′. package test** | First `type=package` under `tests/` packed to `.wasm` and loaded (not kernel-linked) |
-| **C. `py`** | Link vanilla upy; step + serial out; import uses `reg`; GC off / manual style |
-| **D. Wire** | Kernel faces auto-register; py async proofs; optional in-wasm sources (old “nice” pack) |
-| **E. Later** | Custom mem GC/tracking for all languages; class/static bars in `reg`; REPL as shell |
+| **A. `reg`** | Register + lookup + ptr bind (needed so py/wasm have one bus) |
+| **B. `py` / upy** | Vendor µPy as **reference**; execute [`ORCHESTRATION_UPY_MIRROR.md`](ORCHESTRATION_UPY_MIRROR.md) (`MIRROR`+`REWRITE` ≈197 rows — finished Rust only, no hollow stubs); Metal loop/alloc; **rip GC**; thin C port; libc policy. **Gate:** inventory + mod check + bios + efi + light perf. |
+| **C. `wasm`** | Host load → `reg`; **one Metal memory, no isolation**. **Gate:** bios + efi. |
+| **C′. packs** | `tests/` `type=package`: forge pack **C and Rust** → `.wasm` (+ subs / `.py` mount); load/call. **Gate:** bios + efi. |
+| **D. Wire** | Kernel faces auto-register; importlib resolve; class/static bars in `reg` |
+| **E. Later** | Custom mem tracking for all languages; REPL as shell |
 
 Do **not** rebuild `_old` FRESH/SHARED instance machinery or a linux twin as the primary path.
 
@@ -176,20 +294,21 @@ after `forge mod sync` when faces change.
 
 ## Explicitly rejected (live)
 
-- In-package `mods/` orchestration framework  
-- Wasm/upy private heaps or percpu interpreter ctx tables  
-- Short registry names (`fs` instead of `pymergetic.metal.fs`)  
-- Separate bind tables per language  
-- Claiming isolation/parallel µPy heaps without a real Metal-wide GC design  
+- Wasm / upy **isolation**, private heaps, linear-memory cages, FRESH/SHARED  
+- “Wasm can’t do Rust packs” / Rust host-only while C packs exist  
+- Short registry names; per-language bind tables  
+- In-package `mods/` orchestration; core builtins left as `.py` / stock `mod*.c`  
+- Hollow stub `.rs`; orphan headers with no inventory row  
+- Re-litigating the **Locked** table above without an explicit plan change  
 
 ---
 
 ## Doc map
 
-| Doc | Role after this plan |
-|-----|----------------------|
-| **This file** | Live host orchestration plan |
-| [`PLATFORM.md`](PLATFORM.md) | Firmware ladder; points here for py/wasm/reg |
-| [`MODS.md`](MODS.md) | Historical mod/process/instance model — reference only for live host |
-| [`_old/docs/MICROPYTHON.md`](../_old/docs/MICROPYTHON.md) | Archive spike detail |
-| [`MEMORY.md`](MEMORY.md) / [`COOP_MEMORY.md`](COOP_MEMORY.md) | Alloc / stackless rules (still load-bearing) |
+| Doc | Role |
+|-----|------|
+| **This file** | Live plan — **Locked** table is the short form |
+| [`ORCHESTRATION_UPY_MIRROR.md`](ORCHESTRATION_UPY_MIRROR.md) | Full upy→Rust file inventory |
+| [`PLATFORM.md`](PLATFORM.md) | Firmware ladder |
+| [`MODS.md`](MODS.md) | Archive mod/process model |
+| [`MEMORY.md`](MEMORY.md) / [`COOP_MEMORY.md`](COOP_MEMORY.md) | Alloc / stackless |

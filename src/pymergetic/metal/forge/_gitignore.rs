@@ -97,25 +97,9 @@ pub fn update<S: ForgeStore>(store: &mut S, mod_dir: &str) {
     let _ = write_text(store, &gi, &text);
 }
 
-/// Remove the managed block; delete `.gitignore` if empty afterward.
+/// Remove generated face names from the managed block, keep base patterns
+/// (`.target/`, `target/`, `.generated/`). Never deletes `.gitignore`.
 pub fn clear<S: ForgeStore>(store: &mut S, mod_dir: &str) {
-    let gi = join_path(mod_dir, ".gitignore");
-    if !block_on(|| store.is_file(&gi)) {
-        return;
-    }
-    let Ok(text) = read_text(store, &gi) else {
-        return;
-    };
-    if !text.contains(BEGIN) || !text.contains(END) {
-        return;
-    }
-    let pre = text.split(BEGIN).next().unwrap_or("");
-    let post = text.split(END).nth(1).unwrap_or("");
-    let post = post.strip_prefix('\n').unwrap_or(post);
-    let new_text = alloc::format!("{}{}", pre, post);
-    if new_text.trim().is_empty() {
-        let _ = block_on(|| store.remove_file(&gi));
-    } else {
-        let _ = write_text(store, &gi, &new_text);
-    }
+    // Same as update with no banner faces on disk — always retain the file.
+    update(store, mod_dir);
 }

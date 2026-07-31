@@ -15,7 +15,8 @@ use crate::_meta::{
     discover_pm_dirs_under, join_path, parse_module_json, ModuleMeta, ModuleType,
 };
 use crate::_pool::{
-    emit_slots, face_rel, impl_ext, impl_source_exts, pool_slot, ENTRY_STEM, POOL,
+    emit_slots, face_rel, impl_ext, impl_source_exts, pool_slot, slot_from_path, ENTRY_STEM,
+    POOL,
 };
 use crate::_port::{block_on, ForgeSession, ForgeStore};
 
@@ -53,14 +54,30 @@ fn mod_dir_rel(mod_dir: &str, roots: &[String]) -> String {
     String::from(mod_dir.rsplit('/').next().unwrap_or(mod_dir))
 }
 
+fn path_to_py_name(rel: &str) -> String {
+    // Python-style module path: pymergetic.metal.async.await
+    rel.replace('/', ".")
+}
+
+fn stem_kind(stem: &str) -> &'static str {
+    // Only directories are Metal modules (.pm/module). Rows are stems:
+    // __init__ = package entry (d); other public stems = sibling files (f).
+    if stem == ENTRY_STEM {
+        "d"
+    } else {
+        "f"
+    }
+}
+
 fn stem_id(mod_dir: &str, stem: &str, roots: &[String]) -> String {
     let rel = mod_dir_rel(mod_dir, roots);
+    let base = path_to_py_name(&rel);
     if stem == ENTRY_STEM {
-        rel
-    } else if rel.is_empty() {
+        base
+    } else if base.is_empty() {
         String::from(stem)
     } else {
-        alloc::format!("{}/{}", rel, stem)
+        alloc::format!("{}.{}", base, stem)
     }
 }
 
@@ -142,7 +159,7 @@ fn sync_stem<S: ForgeStore>(
     slots: &[&str],
     roots: &[String],
     force: bool,
-) -> Result<(String, BTreeMap<String, String>), String> {
+) -> Result<(String, String, BTreeMap<String, String>), String> {
     let human_name = human_path.rsplit('/').next().unwrap_or(human_path);
     let stem = human_name
         .rsplit_once('.')
@@ -213,22 +230,37 @@ fn sync_stem<S: ForgeStore>(
         };
         status.insert(String::from(slot), String::from(st));
     }
-    Ok((stem_id(mod_dir, stem, roots), status))
+    Ok((
+        stem_id(mod_dir, stem, roots),
+        String::from(stem_kind(stem)),
+        status,
+    ))
 }
 
-fn format_pool_table(rows: &[(String, BTreeMap<String, String>)], legend: &str) -> String {
+fn format_pool_table(
+    rows: &[(String, String, BTreeMap<String, String>)],
+    legend: &str,
+) -> String {
     if rows.is_empty() {
         return String::new();
     }
-    let mod_w = rows.iter().map(|(m, _)| m.len()).max().unwrap_or(6).max(6);
+    let mod_w = rows
+        .iter()
+        .map(|(m, _, _)| m.len())
+        .max()
+        .unwrap_or(6)
+        .max(6);
+    let kind_w = 4usize; // "d" | "f"
     let slot_w = 4usize;
     let mut head = alloc::format!("{:width$}", "module", width = mod_w);
+    head.push_str(&alloc::format!("  {:^width$}", "kind", width = kind_w));
     for s in POOL {
         head.push_str(&alloc::format!("  {:^width$}", s, width = slot_w));
     }
     let mut lines = vec![head.clone(), "-".repeat(head.len())];
-    for (mid, st) in rows {
+    for (mid, kind, st) in rows {
         let mut row = alloc::format!("{:width$}", mid, width = mod_w);
+        row.push_str(&alloc::format!("  {:^width$}", kind, width = kind_w));
         for s in POOL {
             let sign = status_sign(st.get(s).map(|x| x.as_str()).unwrap_or("noop"));
             row.push_str(&alloc::format!("  {:^width$}", sign, width = slot_w));
@@ -283,7 +315,7 @@ pub fn cmd_sync<S: ForgeStore, Sess: ForgeSession>(
         return 1;
     }
     let mut errors = 0;
-    let mut rows: Vec<(String, BTreeMap<String, String>)> = Vec::new();
+    let mut rows: Vec<(String, String, BTreeMap<String, String>)> = Vec::new();
     let mut synced = 0;
     for mod_dir in &mods {
         let meta = match load_meta(store, mod_dir) {
@@ -354,7 +386,7 @@ pub fn cmd_sync<S: ForgeStore, Sess: ForgeSession>(
             sess,
             &format_pool_table(
                 &rows,
-                "§=original  *=emitted  .=fresh  ~=marker  x=pruned  -=noop",
+                "kind=d|f (d=__init__ package entry; f=sibling stem)  §=original  *=emitted  .=fresh  ~=marker  x=pruned  -=noop",
             ),
         );
     }
@@ -567,7 +599,7 @@ pub fn cmd_check<S: ForgeStore, Sess: ForgeSession>(
                     errors += 1;
                     continue;
                 }
-                let rel_mod = mod_dir_rel(mod_dir, &roots);
+                let rel_mod = path_to_py_name(&mod_dir_rel(mod_dir, &roots));
                 let mut face_errs = 0u32;
                 for rel in &sources {
                     face_errs +=
@@ -619,13 +651,39 @@ pub fn cmd_clean<S: ForgeStore, Sess: ForgeSession>(
     let roots = default_src_roots(metal_root);
     let mods = discover_modules(store, &roots);
     let mut n = 0;
+    // stem_id -> (kind, slot -> status)
+    let mut by_stem: BTreeMap<String, (String, BTreeMap<String, String>)> = BTreeMap::new();
     for mod_dir in &mods {
         for rel in _gitignore::list_generated_rels(store, mod_dir) {
-            if remove_marked(store, mod_dir, &rel) {
-                n += 1;
+            if !remove_marked(store, mod_dir, &rel) {
+                continue;
             }
+            n += 1;
+            let stem = rel.rsplit_once('.').map(|(s, _)| s).unwrap_or(rel.as_str());
+            let Some(slot) = slot_from_path(&rel) else {
+                continue;
+            };
+            let id = stem_id(mod_dir, stem, &roots);
+            let kind = String::from(stem_kind(stem));
+            let entry = by_stem
+                .entry(id)
+                .or_insert_with(|| (kind, BTreeMap::new()));
+            entry.1.insert(String::from(slot), String::from("pruned"));
         }
-        _gitignore::clear(store, mod_dir);
+        // Do not touch .gitignore — sync owns that; clean only removes faces.
+    }
+    let rows: Vec<(String, String, BTreeMap<String, String>)> = by_stem
+        .into_iter()
+        .map(|(id, (kind, st))| (id, kind, st))
+        .collect();
+    if !rows.is_empty() {
+        out_line(
+            sess,
+            &format_pool_table(
+                &rows,
+                "kind=d|f (d=__init__; f=sibling)  x=removed  -=noop  §=original  *=emitted  .=fresh  ~=marker",
+            ),
+        );
     }
     out_line(
         sess,
@@ -647,7 +705,10 @@ pub fn cmd_ls<S: ForgeStore, Sess: ForgeSession>(
     let roots = default_src_roots(metal_root);
     let mods = discover_modules(store, &roots);
     for mod_dir in &mods {
-        out_line(sess, &alloc::format!("{}/", mod_dir_rel(mod_dir, &roots)));
+        out_line(
+            sess,
+            &alloc::format!("{}/", path_to_py_name(&mod_dir_rel(mod_dir, &roots))),
+        );
         if let Ok(names) = block_on(|| store.list_dir(mod_dir)) {
             let mut names = names;
             names.sort();
