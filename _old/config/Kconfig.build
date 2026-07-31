@@ -1,0 +1,66 @@
+menu "Build"
+
+comment "Default targets for scripts/build when no argv is given"
+comment "Argv (efi|bios|mod|all) overrides for that invocation only"
+
+config PM_METAL_BUILD_EFI
+	bool "efi (UEFI metal.efi)"
+	default y
+	help
+	  Build freestanding UEFI Metal (metal.efi).
+
+config PM_METAL_BUILD_BIOS
+	bool "bios (Multiboot2 metal.elf)"
+	default n
+	help
+	  Build freestanding Multiboot2 Metal (metal.elf).
+
+config PM_METAL_BUILD_MOD
+	bool "mod (guest wasm tests)"
+	default n
+	help
+	  Build guest wasm test modules.
+
+comment "BIOS arch (any combination; used when bios is enabled)"
+
+config PM_METAL_BIOS_X86_64
+	bool "bios x86_64"
+	depends on PM_METAL_BUILD_BIOS
+	default y
+	help
+	  Build Multiboot2 metal.elf for x86_64.
+	  Override with: scripts/build bios x86_64
+
+config PM_METAL_BIOS_I386
+	bool "bios i386 (PXE-friendly)"
+	depends on PM_METAL_BUILD_BIOS
+	default n
+	help
+	  Build Multiboot2 metal.elf for i386.
+	  Override with: scripts/build bios i386
+
+comment "Follow-ups after a successful scripts/build (any combination)"
+comment "Env PM_METAL_POST_ACTION=none skips all for one call"
+
+config PM_METAL_POST_RUN
+	bool "run (scripts/run)"
+	depends on PM_METAL_BUILD_EFI || PM_METAL_BUILD_BIOS || PM_METAL_BUILD_MOD
+	default n
+	help
+	  After build, invoke scripts/run (efi or bios when those were built).
+
+config PM_METAL_POST_UPLOAD_EFI
+	bool "upload-efi"
+	depends on PM_METAL_BUILD_EFI
+	default n
+	help
+	  After build, run scripts/upload-efi (needs efi target).
+
+config PM_METAL_POST_UPLOAD_PXE
+	bool "upload-pxe"
+	depends on PM_METAL_BUILD_BIOS && (PM_METAL_BIOS_X86_64 || PM_METAL_BIOS_I386)
+	default n
+	help
+	  After build, run scripts/upload-pxe (needs bios + at least one arch).
+
+endmenu

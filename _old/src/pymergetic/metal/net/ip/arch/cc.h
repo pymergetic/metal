@@ -1,5 +1,5 @@
 /*
- * lwIP arch/cc.h — Metal exp2 freestanding port.
+ * lwIP arch/cc.h — Metal EFI freestanding port.
  */
 #ifndef METAL_LWIP_ARCH_CC_H_
 #define METAL_LWIP_ARCH_CC_H_
@@ -17,6 +17,7 @@ typedef uintptr_t mem_ptr_t;
 
 #define BYTE_ORDER LITTLE_ENDIAN
 
+/* No hosted inttypes.h under freestanding clangd / EDK2. */
 #define LWIP_NO_INTTYPES_H 1
 #define LWIP_NO_CTYPE_H    1
 #define X8_F               "02x"

@@ -1,0 +1,7 @@
+menu "pymergetic.metal"
+
+source "metal/net/Kconfig"
+source "metal/py/Kconfig"
+source "metal/util/Kconfig"
+
+endmenu
