@@ -1,13 +1,16 @@
-//! Static section table — emitters only read DT/async state.
+//! Static section table — emitters add content via the tree builder API only.
 
 use core::fmt::Write;
 
 use pymergetic_metal_dt::{
     pm_metal_dt_bus_t, pm_metal_dt_class_t, pm_metal_dt_count_class, pm_metal_dt_foreach, DtNode,
 };
-use pymergetic_metal_log::pm_metal_log_style_t;
 
-use super::line::{emit, emit_str, LineBuf};
+use super::api::{
+    item_name, item_str, pm_metal_boot_tree_blank, pm_metal_boot_tree_enter,
+    pm_metal_boot_tree_leave, pm_metal_boot_tree_spacer, pm_metal_boot_tree_status_t,
+};
+use super::line::LineBuf;
 
 extern "C" {
     fn pm_metal_async_ready() -> i32;
@@ -21,6 +24,9 @@ extern "C" {
     fn pm_metal_mem_hole() -> usize;
     fn pm_metal_net_ip_if_count() -> u32;
     fn pm_metal_net_ip_if_status_index(index: u32, dest: *mut u8, dest_cap: u32) -> i32;
+    fn pm_metal_net_ssh_listen_port() -> u32;
+    fn pm_metal_net_ssh_hostkey_label(buf: *mut u8, buf_len: u32) -> i32;
+    fn pm_metal_net_http_autoload_port() -> u16;
     fn pm_metal_fs_vfs_mount_count() -> u32;
     fn pm_metal_fs_vfs_mount_info(
         index: u32,
@@ -42,6 +48,11 @@ struct pm_metal_fs_statfs_t {
 
 const PM_METAL_FS_ST_RDONLY: u32 = 1;
 
+use pm_metal_boot_tree_status_t::{
+    PM_METAL_BOOT_TREE_ACCENT, PM_METAL_BOOT_TREE_DIM, PM_METAL_BOOT_TREE_FAIL,
+    PM_METAL_BOOT_TREE_OK, PM_METAL_BOOT_TREE_WARN,
+};
+
 fn fmt_size(bytes: u64) -> ([u8; 16], usize) {
     let mut buf = [0u8; 16];
     let n = unsafe { pm_metal_util_size_format(buf.as_mut_ptr(), buf.len(), bytes) };
@@ -50,6 +61,15 @@ fn fmt_size(bytes: u64) -> ([u8; 16], usize) {
         return (buf, 1);
     }
     (buf, n as usize)
+}
+
+fn detail_buf() -> LineBuf {
+    LineBuf::new()
+}
+
+fn as_str(buf: &LineBuf) -> &str {
+    let n = buf.pos_len();
+    core::str::from_utf8(buf.bytes(n)).unwrap_or("")
 }
 
 pub type EmitFn = unsafe fn() -> i32;
@@ -101,91 +121,61 @@ fn compat_str(p: *const u8) -> &'static str {
 const METAL_VERSION: &str = "0.1.0";
 
 unsafe fn emit_root() -> i32 {
-    /* Blank row between banner and tree root. */
-    emit_str(pm_metal_log_style_t::PM_METAL_LOG_STYLE_DEFAULT, "");
-    let mut line = LineBuf::new();
-    let _ = write!(line, "+-- pymergetic metal {}", METAL_VERSION);
-    emit(
-        pm_metal_log_style_t::PM_METAL_LOG_STYLE_ACCENT,
-        &mut line,
-    );
-    /* Spacer under the root label (keeps the trunk `|`). */
-    emit_str(pm_metal_log_style_t::PM_METAL_LOG_STYLE_DIM, "|");
+    pm_metal_boot_tree_blank();
+    item_str(PM_METAL_BOOT_TREE_ACCENT, "pymergetic metal", METAL_VERSION);
+    pm_metal_boot_tree_spacer();
     0
 }
 
-struct MemCtx {
-    line: LineBuf,
-    n: u32,
-    i: u32,
-}
-
-unsafe fn emit_area_breakdown(line: &mut LineBuf) {
-    /* Dual-span arena: map grows up, TLSF heap grows down, hole between. */
+unsafe fn emit_area_breakdown() {
     let map = pm_metal_mem_map_used() as u64;
     let hole = pm_metal_mem_hole() as u64;
     let tlsf = pm_metal_mem_tlsf_used() as u64;
     let rows: [(&str, u64); 3] = [("map", map), ("hole", hole), ("tlsf (heap)", tlsf)];
-    for (i, &(name, bytes)) in rows.iter().enumerate() {
+    pm_metal_boot_tree_enter();
+    for &(name, bytes) in &rows {
         let (sz, szn) = fmt_size(bytes);
         let human = core::str::from_utf8(&sz[..szn]).unwrap_or("?");
-        let branch = if i + 1 == rows.len() { "`--" } else { "+--" };
-        line.clear();
-        let _ = write!(line, "|       {} {}  {}", branch, name, human);
-        emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_DIM, line);
+        item_str(PM_METAL_BOOT_TREE_DIM, name, human);
     }
+    pm_metal_boot_tree_leave();
 }
 
-unsafe extern "C" fn on_mem(node: *const DtNode, ctx: *mut core::ffi::c_void) -> i32 {
-    if node.is_null() || ctx.is_null() {
+unsafe extern "C" fn on_mem(node: *const DtNode, _ctx: *mut core::ffi::c_void) -> i32 {
+    if node.is_null() {
         return 0;
     }
     let n = &*node;
     if n.class != pm_metal_dt_class_t::PM_METAL_DT_CLASS_MEM {
         return 0;
     }
-    let c = &mut *(ctx as *mut MemCtx);
-    c.i = c.i.wrapping_add(1);
     let base = ((n.loc[1] as u64) << 32) | (n.loc[0] as u64);
     let size = ((n.loc[3] as u64) << 32) | (n.loc[2] as u64);
     let name = compat_str(n.compat);
     let is_area = name == "area";
-    let last = c.i >= c.n;
-    let branch = if last { "`--" } else { "+--" };
     let (sz, szn) = fmt_size(size);
     let human = core::str::from_utf8(&sz[..szn]).unwrap_or("?");
-    c.line.clear();
-    let _ = write!(
-        c.line,
-        "|   {} {}  base=0x{:016x} size={}",
-        branch, name, base, human
-    );
-    emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_DIM, &mut c.line);
+    let mut d = detail_buf();
+    let _ = write!(d, "base=0x{:016x} size={}", base, human);
+    item_str(PM_METAL_BOOT_TREE_DIM, name, as_str(&d));
     if is_area {
-        emit_area_breakdown(&mut c.line);
+        emit_area_breakdown();
     }
     0
 }
 
 unsafe fn emit_mem() -> i32 {
     let n = pm_metal_dt_count_class(pm_metal_dt_class_t::PM_METAL_DT_CLASS_MEM);
-    let mut line = LineBuf::new();
     if n == 0 {
-        let _ = write!(line, "+-- mem          FAIL");
-        emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_FAIL, &mut line);
+        item_str(PM_METAL_BOOT_TREE_FAIL, "mem", "FAIL");
         return -1;
     }
-    let _ = write!(line, "+-- mem          {} region(s)", n);
-    emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_OK, &mut line);
-    let mut ctx = MemCtx {
-        line: LineBuf::new(),
-        n,
-        i: 0,
-    };
-    pm_metal_dt_foreach(
-        Some(on_mem),
-        &mut ctx as *mut MemCtx as *mut core::ffi::c_void,
-    );
+    let mut d = detail_buf();
+    let _ = write!(d, "{} region(s)", n);
+    item_str(PM_METAL_BOOT_TREE_OK, "mem", as_str(&d));
+    pm_metal_boot_tree_enter();
+    pm_metal_dt_foreach(Some(on_mem), core::ptr::null_mut());
+    pm_metal_boot_tree_leave();
     0
 }
 
@@ -194,52 +184,45 @@ unsafe fn emit_cpu() -> i32 {
     if n == 0 {
         n = 1;
     }
-    let mhz = pm_metal_time_tsc_per_us(); /* cycles/us ~= MHz */
-    let mut line = LineBuf::new();
-    let _ = write!(line, "+-- cpu          {}  tsc ~{} MHz", n, mhz);
-    emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_OK, &mut line);
+    let mhz = pm_metal_time_tsc_per_us();
+    let mut d = detail_buf();
+    let _ = write!(d, "{}  tsc ~{} MHz", n, mhz);
+    item_str(PM_METAL_BOOT_TREE_OK, "cpu", as_str(&d));
+    pm_metal_boot_tree_enter();
     for i in 0..n {
-        line.clear();
-        let branch = if i + 1 == n { "`--" } else { "+--" };
+        let mut name = detail_buf();
+        let _ = write!(name, "cpu{}", i);
         let apic = pm_metal_dev_acpi_cpu_apic_id(i);
         if apic >= 0 {
-            let _ = write!(line, "|   {} cpu{}  apic={}", branch, i, apic);
+            let mut det = detail_buf();
+            let _ = write!(det, "apic={}", apic);
+            item_str(PM_METAL_BOOT_TREE_DIM, as_str(&name), as_str(&det));
         } else {
-            let _ = write!(line, "|   {} cpu{}", branch, i);
+            item_name(PM_METAL_BOOT_TREE_DIM, as_str(&name));
         }
-        emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_DIM, &mut line);
     }
+    pm_metal_boot_tree_leave();
     0
 }
 
-struct DevCtx {
-    line: LineBuf,
-    n: u32,
-    i: u32,
-}
-
-unsafe extern "C" fn on_dev(node: *const DtNode, ctx: *mut core::ffi::c_void) -> i32 {
-    if node.is_null() || ctx.is_null() {
+unsafe extern "C" fn on_dev(node: *const DtNode, _ctx: *mut core::ffi::c_void) -> i32 {
+    if node.is_null() {
         return 0;
     }
     let n = &*node;
     if n.class == pm_metal_dt_class_t::PM_METAL_DT_CLASS_MEM {
         return 0;
     }
-    let c = &mut *(ctx as *mut DevCtx);
-    c.i = c.i.wrapping_add(1);
-    let last = c.i >= c.n;
-    let branch = if last { "`--" } else { "+--" };
-    c.line.clear();
+    let mut name = detail_buf();
     let _ = write!(
-        c.line,
-        "|   {} {}/{}  bus={}",
-        branch,
+        name,
+        "{}/{}",
         class_name(n.class),
-        compat_str(n.compat),
-        bus_name(n.bus)
+        compat_str(n.compat)
     );
-    emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_DIM, &mut c.line);
+    let mut det = detail_buf();
+    let _ = write!(det, "bus={}", bus_name(n.bus));
+    item_str(PM_METAL_BOOT_TREE_DIM, as_str(&name), as_str(&det));
     0
 }
 
@@ -260,34 +243,28 @@ unsafe fn emit_devices() -> i32 {
         Some(count_non_mem),
         &mut total as *mut u32 as *mut core::ffi::c_void,
     );
-    let mut line = LineBuf::new();
-    let _ = write!(line, "+-- devices      {} node(s)", total);
-    emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_OK, &mut line);
+    let mut d = detail_buf();
+    let _ = write!(d, "{} node(s)", total);
+    item_str(PM_METAL_BOOT_TREE_OK, "devices", as_str(&d));
     if total == 0 {
         return 0;
     }
-    let mut ctx = DevCtx {
-        line: LineBuf::new(),
-        n: total,
-        i: 0,
-    };
-    pm_metal_dt_foreach(
-        Some(on_dev),
-        &mut ctx as *mut DevCtx as *mut core::ffi::c_void,
-    );
+    pm_metal_boot_tree_enter();
+    pm_metal_dt_foreach(Some(on_dev), core::ptr::null_mut());
+    pm_metal_boot_tree_leave();
     0
 }
 
 unsafe fn emit_fs() -> i32 {
     let count = pm_metal_fs_vfs_mount_count();
-    let mut line = LineBuf::new();
     if count == 0 {
-        let _ = write!(line, "+-- fs           FAIL");
-        emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_FAIL, &mut line);
+        item_str(PM_METAL_BOOT_TREE_FAIL, "fs", "FAIL");
         return -1;
     }
-    let _ = write!(line, "+-- fs           {} mount(s)", count);
-    emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_OK, &mut line);
+    let mut d = detail_buf();
+    let _ = write!(d, "{} mount(s)", count);
+    item_str(PM_METAL_BOOT_TREE_OK, "fs", as_str(&d));
+    pm_metal_boot_tree_enter();
     for index in 0..count {
         let mut target = [0u8; 128];
         let mut fstype = [0u8; 32];
@@ -318,74 +295,108 @@ unsafe fn emit_fs() -> i32 {
         };
         let (sz, szn) = fmt_size(st.total);
         let human = core::str::from_utf8(&sz[..szn]).unwrap_or("?");
-        line.clear();
-        let branch = if index + 1 == count { "`--" } else { "+--" };
-        let _ = write!(line, "|   {} {:<12} {:<8} {}  {}", branch, t, f, human, mode);
-        emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_DIM, &mut line);
+        let mut name = detail_buf();
+        let _ = write!(name, "{:<12}", t);
+        let mut det = detail_buf();
+        let _ = write!(det, "{:<8} {}  {}", f, human, mode);
+        item_str(PM_METAL_BOOT_TREE_DIM, as_str(&name), as_str(&det));
     }
+    pm_metal_boot_tree_leave();
     0
 }
 
 unsafe fn emit_net() -> i32 {
     let count = pm_metal_net_ip_if_count();
-    let mut line = LineBuf::new();
-    if count == 0 {
-        let _ = write!(line, "+-- net          WARN");
-        emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_WARN, &mut line);
+    let ssh_port = pm_metal_net_ssh_listen_port();
+    let http_port = pm_metal_net_http_autoload_port() as u32;
+    if count == 0 && ssh_port == 0 && http_port == 0 {
+        item_str(PM_METAL_BOOT_TREE_WARN, "net", "WARN");
         return 0;
     }
 
-    let _ = write!(line, "+-- net          ok");
-    emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_OK, &mut line);
+    item_str(PM_METAL_BOOT_TREE_OK, "net", "ok");
+    pm_metal_boot_tree_enter();
+
     for index in 0..count {
-        let mut status = [0u8; 192];
-        if pm_metal_net_ip_if_status_index(index, status.as_mut_ptr(), status.len() as u32) < 0 {
+        let mut slot = [0u8; 192];
+        if pm_metal_net_ip_if_status_index(index, slot.as_mut_ptr(), slot.len() as u32) < 0 {
             continue;
         }
-        let len = status.iter().position(|&b| b == 0).unwrap_or(status.len());
-        let text = core::str::from_utf8_unchecked(&status[..len]);
-        line.clear();
-        let branch = if index + 1 == count { "`--" } else { "+--" };
-        let _ = write!(line, "|   {} {}", branch, text);
-        emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_DIM, &mut line);
+        let len = slot.iter().position(|&b| b == 0).unwrap_or(slot.len());
+        let text = core::str::from_utf8_unchecked(&slot[..len]);
+        item_name(PM_METAL_BOOT_TREE_DIM, text);
     }
+    if ssh_port != 0 {
+        let mut hk = [0u8; 32];
+        let _ = pm_metal_net_ssh_hostkey_label(hk.as_mut_ptr(), hk.len() as u32);
+        let hlen = hk.iter().position(|&b| b == 0).unwrap_or(0);
+        let hks = if hlen > 0 {
+            core::str::from_utf8_unchecked(&hk[..hlen])
+        } else {
+            "delay"
+        };
+        let mut line = detail_buf();
+        let _ = write!(
+            line,
+            "sshd :{} (dropbear, hostkey={})",
+            ssh_port, hks
+        );
+        item_name(PM_METAL_BOOT_TREE_DIM, as_str(&line));
+    }
+    if http_port != 0 {
+        let mut line = detail_buf();
+        if super::notes::http_ok() {
+            let _ = write!(line, "httpd :{} (health ok)", http_port);
+        } else {
+            let _ = write!(line, "httpd :{}", http_port);
+        }
+        item_name(PM_METAL_BOOT_TREE_DIM, as_str(&line));
+    }
+    pm_metal_boot_tree_leave();
     0
 }
 
 unsafe fn emit_async() -> i32 {
-    let mut line = LineBuf::new();
     if pm_metal_async_ready() == 0 {
-        let _ = write!(line, "+-- async        FAIL");
-        emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_FAIL, &mut line);
+        item_str(PM_METAL_BOOT_TREE_FAIL, "async", "FAIL");
         return -1;
     }
     let n = pm_metal_async_n_runners();
-    /* Stackless runners: control-block addr + H/M/L queue depths. */
-    let _ = write!(line, "+-- async        ok ({} runners)", n);
-    emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_OK, &mut line);
+    let show_await = super::notes::await_ok();
+    let mut d = detail_buf();
+    let _ = write!(d, "ok ({} runners)", n);
+    item_str(PM_METAL_BOOT_TREE_OK, "async", as_str(&d));
+    pm_metal_boot_tree_enter();
     for i in 0..n {
         let addr = pm_metal_async_runner_addr(i);
         let mut high = 0u32;
         let mut med = 0u32;
         let mut low = 0u32;
         let _ = pm_metal_async_runner_qlen(i, &mut high, &mut med, &mut low);
-        line.clear();
-        let branch = if i + 1 == n { "`--" } else { "+--" };
-        let _ = write!(
-            line,
-            "|   {} r{}  @0x{:x}  q={}/{}/{}",
-            branch, i, addr, high, med, low
-        );
-        emit(pm_metal_log_style_t::PM_METAL_LOG_STYLE_DIM, &mut line);
+        let mut name = detail_buf();
+        let _ = write!(name, "r{}", i);
+        let mut det = detail_buf();
+        let _ = write!(det, "@0x{:x}  q={}/{}/{}", addr, high, med, low);
+        item_str(PM_METAL_BOOT_TREE_DIM, as_str(&name), as_str(&det));
+    }
+    if show_await {
+        item_name(PM_METAL_BOOT_TREE_DIM, "await ok");
+    }
+    pm_metal_boot_tree_leave();
+    0
+}
+
+unsafe fn emit_wasm() -> i32 {
+    if super::notes::wasm_ok() {
+        item_str(PM_METAL_BOOT_TREE_OK, "wasm", "ok");
+    } else {
+        item_str(PM_METAL_BOOT_TREE_DIM, "wasm", "-");
     }
     0
 }
 
 unsafe fn emit_ready() -> i32 {
-    emit_str(
-        pm_metal_log_style_t::PM_METAL_LOG_STYLE_OK,
-        "`-- ready        ok",
-    );
+    item_str(PM_METAL_BOOT_TREE_OK, "ready", "ok");
     0
 }
 
@@ -417,6 +428,10 @@ pub static SECTIONS: &[Section] = &[
     Section {
         id: "async",
         emit: emit_async,
+    },
+    Section {
+        id: "wasm",
+        emit: emit_wasm,
     },
     Section {
         id: "ready",

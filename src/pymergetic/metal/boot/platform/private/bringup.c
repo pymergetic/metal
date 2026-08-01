@@ -14,6 +14,7 @@
 int32_t pm_metal_exp2_stress(void);
 #endif
 #include <pymergetic/metal/boot/tree/print.h>
+#include <pymergetic/metal/boot/tree/notes.h>
 #include <pymergetic/metal/console/__init__.h>
 #include <pymergetic/metal/dev/acpi/__init__.h>
 #include <pymergetic/metal/dev/blk/__init__.h>
@@ -21,8 +22,14 @@ int32_t pm_metal_exp2_stress(void);
 #include <pymergetic/metal/dev/net/__init__.h>
 #include <pymergetic/metal/log/__init__.h>
 #include <pymergetic/metal/net/ip/__init__.h>
+#include <pymergetic/metal/net/ssh/__init__.h>
+#include <pymergetic/metal/net/http/server.h>
+#include <pymergetic/metal/net/http/__init__.h>
 #include <pymergetic/metal/dt/__init__.h>
 #include <pymergetic/metal/mem/__init__.h>
+#include <pymergetic/metal/py/__init__.h>
+#include <pymergetic/metal/reg/__init__.h>
+#include <pymergetic/metal/wasm/__init__.h>
 
 int32_t pm_metal_boot_rootfs_mount_all(void);
 
@@ -194,6 +201,32 @@ static int32_t seed_mem_partition(uint8_t *arena, size_t bytes)
   }
   nfree = j;
 
+  /* EFI leaves non-adjacent Conventional chips; one highmem row for the tree. */
+  {
+    uint64_t hi_base = 0;
+    uint64_t hi_len = 0;
+    uint32_t w = 0;
+
+    for (i = 0; i < nfree; i++) {
+      if (free_regs[i].addr < HIGHMEM_FLOOR) {
+        free_regs[w++] = free_regs[i];
+        continue;
+      }
+      if (hi_len == 0u) {
+        hi_base = free_regs[i].addr;
+      }
+      hi_len += free_regs[i].len;
+    }
+    if (hi_len != 0u) {
+      free_regs[w].addr = hi_base;
+      free_regs[w].len = hi_len;
+      free_regs[w].type = (uint32_t)PM_METAL_BOOT_MEM_AVAILABLE;
+      free_regs[w].reserved = 0;
+      w++;
+    }
+    nfree = w;
+  }
+
   for (i = 0; i < nfree; i++) {
     const uint8_t *compat;
 
@@ -266,9 +299,6 @@ int32_t pm_metal_boot_bringup(void)
     return fail("exp2: console_init0 failed\n");
   }
 
-  /* log default = console 0 (log facade writes there when ready). */
-  pm_metal_boot_banner();
-
   pm_metal_dt_reset();
   if (seed_mem_partition(arena, bytes) != 0) {
     return fail("exp2: dt mem seed failed\n");
@@ -291,6 +321,9 @@ int32_t pm_metal_boot_bringup(void)
   if (pm_metal_console_attach(0u, &g_serial_vp, NULL) != 0) {
     return fail("exp2: console attach failed\n");
   }
+
+  /* Banner after viewport so ACCENT SGR hits the live serial path. */
+  pm_metal_boot_banner();
 
   /* TSC calibrate needs EFI Stall — before ExitBootServices. */
   pm_metal_time_init();
@@ -338,6 +371,12 @@ int32_t pm_metal_boot_bringup(void)
   if (net_dhcp_bringup() != 0) {
     return fail("exp2: net dhcp failed\n");
   }
+  if (pm_metal_net_ssh_autoload() != 0) {
+    return fail("exp2: sshd autoload failed\n");
+  }
+  if (pm_metal_net_http_autoload() != 0) {
+    return fail("exp2: httpd autoload failed\n");
+  }
   {
     uint32_t ni;
     uint32_t nnet;
@@ -357,6 +396,35 @@ int32_t pm_metal_boot_bringup(void)
     return fail("exp2: rootfs mount failed\n");
   }
 
+  /* Proofs before tree so emitters can show await / wasm / http health. */
+  if (pm_metal_reg_publish_kernel() != 0) {
+    return fail("exp2: reg publish_kernel failed\n");
+  }
+  {
+    int32_t ok;
+
+    ok = (pm_metal_net_http_proof_health() == 0) ? 1 : 0;
+    pm_metal_boot_tree_note_http(ok);
+    if (ok == 0) {
+      return fail("exp2: httpd health proof failed\n");
+    }
+    ok = (pm_metal_py_proof_print() == 0) ? 1 : 0;
+    pm_metal_boot_tree_note_py(ok);
+    if (ok == 0) {
+      return fail("exp2: py proof_print failed\n");
+    }
+    ok = (pm_metal_py_proof_await() == 0) ? 1 : 0;
+    pm_metal_boot_tree_note_await(ok);
+    if (ok == 0) {
+      return fail("exp2: py proof_await failed\n");
+    }
+    ok = (pm_metal_wasm_proof() == 0) ? 1 : 0;
+    pm_metal_boot_tree_note_wasm(ok);
+    if (ok == 0) {
+      return fail("exp2: wasm proof failed\n");
+    }
+  }
+
   if (pm_metal_boot_tree_print() != 0) {
     return fail("exp2: boot tree failed\n");
   }
@@ -367,5 +435,6 @@ int32_t pm_metal_boot_bringup(void)
   }
 #endif
 
-  return 0;
+  /* Stay alive: runners keep ssh/http pumping. Forge stops on ready needle. */
+  pm_metal_async_run_loop();
 }

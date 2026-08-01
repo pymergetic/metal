@@ -53,17 +53,22 @@ dependencies = [
  "pymergetic_metal_net_dns",
  "pymergetic_metal_net_ftp",
  "pymergetic_metal_net_http",
+ "pymergetic_metal_net_http_microdot",
  "pymergetic_metal_net_ip",
  "pymergetic_metal_net_ip_icmp",
  "pymergetic_metal_net_ip_tcp",
  "pymergetic_metal_net_ip_udp",
  "pymergetic_metal_net_ntp",
+ "pymergetic_metal_net_ssh",
  "pymergetic_metal_net_tftp",
+ "pymergetic_metal_py",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
  "pymergetic_metal_util_ascii",
  "pymergetic_metal_util_lz4",
  "pymergetic_metal_util_size",
  "pymergetic_metal_util_tar",
+ "pymergetic_metal_wasm",
 ]
 
 [[package]]
@@ -79,6 +84,7 @@ name = "pymergetic_metal_console"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_mem",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -215,6 +221,7 @@ dependencies = [
 name = "pymergetic_metal_log"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -253,6 +260,13 @@ dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_net_ip",
  "pymergetic_metal_net_ip_tcp",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_http_microdot"
+version = "0.1.0"
+dependencies = [
  "pymergetic_metal_rt",
 ]
 
@@ -306,12 +320,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "pymergetic_metal_net_ssh"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
 name = "pymergetic_metal_net_tftp"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_net_dns",
  "pymergetic_metal_net_ip",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_py"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_log",
+ "pymergetic_metal_mem",
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_reg"
+version = "0.1.0"
+dependencies = [
  "pymergetic_metal_rt",
 ]
 
@@ -344,6 +385,18 @@ dependencies = [
 name = "pymergetic_metal_util_tar"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_wasm"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "pymergetic_metal_async",
+ "pymergetic_metal_log",
+ "pymergetic_metal_mem",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 

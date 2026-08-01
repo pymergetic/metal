@@ -5,4 +5,11 @@
 
 int atoi(const char *s);
 
+/* WAMR bh_assert — halt firmware rather than libc abort. */
+_Noreturn void abort(void);
+
+void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *));
+void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,
+              int (*compar)(const void *, const void *));
+
 #endif /* PM_METAL_LIBC_STDLIB_H_ */

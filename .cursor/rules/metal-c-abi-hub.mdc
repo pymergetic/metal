@@ -32,6 +32,22 @@ cpp: same pool slot as c (human may be .cpp; face is still {base}.h)
 `metal mod sync` keeps the in-file banner write gate and module-local
 `.gitignore` for every generated face.
 
+**`type=module` only (kernel border).** Sync discovers `.pm/module` with
+`type=module`. `type=package` is for wasm packs under `tests/` (`forge pack`)
+and is **not** face-synced — a kernel-linked `impl=rs` tree mistyped as
+`package` silently gets **no** `__init__.h` / sibling `.h`. Underscore stems
+(`_foo.rs`) are also skipped; public C ABI belongs on `__init__.rs` or a
+non-`_` sibling stem (`ops.rs`, `ready.rs`, …).
+
+**Face completeness check** (after adding `#[no_mangle] extern "C"`):
+
+```bash
+# every pm_metal_* no_mangle should appear in some generated/human .h
+```
+
+If a new export is missing from `.h`, fix the stem/`type` then
+`./forge-cli mod sync` (use `--force` after forge converter fixes).
+
 ## Consume generated faces — never duplicate foreign ABI
 
 When module A calls module B and B’s impl language is **not** A’s:

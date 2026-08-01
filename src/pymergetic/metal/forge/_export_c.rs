@@ -71,6 +71,11 @@ pub fn export(
         }
         lines.push(String::new());
     }
+    /* Forward-declare sibling / foreign pm_metal_*_t names used in signatures. */
+    for name in foreign_type_names(cat) {
+        lines.push(alloc::format!("typedef struct {} {};", name, name));
+        lines.push(String::new());
+    }
     for st in &cat.structs {
         lines.push(alloc::format!("struct {} {{", st.name));
         for f in &st.fields {
@@ -107,5 +112,42 @@ pub fn export(
     lines.push(alloc::format!("#endif /* {} */", guard));
     lines.push(String::new());
     lines.join("\n")
+}
+
+fn known_type_name(cat: &Catalog, name: &str) -> bool {
+    cat.structs.iter().any(|s| s.name == name)
+        || cat.enums.iter().any(|e| e.name == name)
+        || cat.typedefs.iter().any(|t| t.name == name)
+}
+
+fn foreign_type_names(cat: &Catalog) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push = |raw: &str| {
+        for tok in raw.split(|c: char| {
+            c.is_whitespace() || c == '*' || c == ',' || c == '(' || c == ')' || c == '[' || c == ']'
+        }) {
+            let t = tok.trim();
+            if t.starts_with("pm_metal_") && t.ends_with("_t") && !known_type_name(cat, t) {
+                if !out.iter().any(|x| x == t) {
+                    out.push(String::from(t));
+                }
+            }
+        }
+    };
+    for fn_ in &cat.fns {
+        push(&fn_.ret);
+        for a in &fn_.args {
+            push(&a.ty);
+        }
+    }
+    for st in &cat.structs {
+        for f in &st.fields {
+            push(&f.ty);
+        }
+    }
+    for td in &cat.typedefs {
+        push(&td.ty);
+    }
+    out
 }
 

@@ -3,5 +3,5 @@
   "name": "pymergetic.metal.net.http",
   "impl": "rs",
   "version": "0.1.0",
-  "comment": "HTTP client (GET) + server (C mounts / health) on net.ip.tcp."
+  "comment": "HTTP client (GET) + ASGI server (C mounts, conn_*, autoload) on net.ip.tcp."
 }

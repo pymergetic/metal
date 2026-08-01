@@ -1,0 +1,2 @@
+# type=package — no lang-pool faces. Pack artefacts under build/packs/.
+.pm/.target/

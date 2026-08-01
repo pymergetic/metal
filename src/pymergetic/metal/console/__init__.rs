@@ -7,8 +7,11 @@
 use core::ptr::{addr_of, addr_of_mut, null_mut};
 
 use pymergetic_metal_mem as mem;
+use pymergetic_metal_reg as _;
 use pymergetic_metal_rt as _;
 
+#[path = "_bind.rs"]
+mod bind;
 #[path = "_style.rs"]
 mod style;
 
@@ -245,4 +248,10 @@ pub unsafe extern "C" fn pm_metal_console_attach(
     c.vp_n += 1;
     drain_vp(c, vi);
     0
+}
+
+/// Publish console symbols onto `reg` (`pymergetic.metal.console.*`).
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_console_bind_reg() -> i32 {
+    bind::publish()
 }

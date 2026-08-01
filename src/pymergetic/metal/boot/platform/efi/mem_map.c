@@ -166,21 +166,28 @@ static uintptr_t efi_image_end(void)
 }
 
 /*
- * TLSF must own pages while Boot Services are still live. Picking a
- * ConventionalMemory span from GetMemoryMap without AllocatePages lets BS
- * (and freed-pool 0xAF poison) stomp the heap -> #GP right after banner.
+ * Claim the largest ConventionalMemory span (BIOS-like): own it as LoaderData
+ * so BS cannot reuse it. A fixed AllocateAnyPages@32MiB left the rest as
+ * scattered highmem chips in the boot tree.
  */
 #define EFI_CLAIM_MIN_BYTES (2u * 1024u * 1024u)
-#define EFI_CLAIM_TARGET_BYTES (32u * 1024u * 1024u)
 #define EFI_PAGE 4096ull
 
 static int32_t efi_claim_arena(uint8_t **base_out, size_t *bytes_out)
 {
   EFI_STATUS st;
+  UINTN map_size;
+  UINTN map_key;
+  UINTN desc_size;
+  UINT32 desc_ver;
+  EFI_MEMORY_DESCRIPTOR *map;
+  UINTN i;
+  UINTN n;
+  uint64_t img_end;
+  uint64_t best_addr = 0;
+  uint64_t best_len = 0;
   EFI_PHYSICAL_ADDRESS phys;
   UINTN pages;
-  UINTN try_pages;
-  size_t want;
 
   if (base_out == NULL || bytes_out == NULL) {
     return -1;
@@ -189,21 +196,131 @@ static int32_t efi_claim_arena(uint8_t **base_out, size_t *bytes_out)
     return -1;
   }
 
-  want = (size_t)EFI_CLAIM_TARGET_BYTES;
-  try_pages = (UINTN)(want / (size_t)EFI_PAGE);
-  while (try_pages >= (UINTN)(EFI_CLAIM_MIN_BYTES / (size_t)EFI_PAGE)) {
+  if (!g_cached) {
+    (void)cache_from_bs();
+  }
+  img_end = (uint64_t)g_image_end;
+  if (img_end == 0u) {
+    img_end = 0x100000ull;
+  }
+  img_end = (img_end + (EFI_PAGE - 1ull)) & ~(EFI_PAGE - 1ull);
+
+  map_size = 0;
+  st = g_pm_efi_st->BootServices->GetMemoryMap(&map_size, NULL, &map_key, &desc_size, &desc_ver);
+  if (st != EFI_BUFFER_TOO_SMALL || map_size == 0) {
+    return -1;
+  }
+  map_size += 4u * desc_size;
+  st = g_pm_efi_st->BootServices->AllocatePool(EfiLoaderData, map_size, (VOID **)&map);
+  if (EFI_ERROR(st) || map == NULL) {
+    return -1;
+  }
+  st = g_pm_efi_st->BootServices->GetMemoryMap(&map_size, map, &map_key, &desc_size, &desc_ver);
+  if (EFI_ERROR(st)) {
+    (void)g_pm_efi_st->BootServices->FreePool(map);
+    return -1;
+  }
+
+  n = map_size / desc_size;
+  for (i = 0; i < n; i++) {
+    EFI_MEMORY_DESCRIPTOR *d;
+    uint64_t start;
+    uint64_t end;
+    uint64_t img_base;
+    uint64_t left_len;
+    uint64_t right_len;
+    uint64_t cand_addr;
+    uint64_t cand_len;
+
+    d = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)map + i * desc_size);
+    if (d->Type != EfiConventionalMemory || d->NumberOfPages == 0) {
+      continue;
+    }
+    start = (uint64_t)d->PhysicalStart;
+    end = start + (uint64_t)d->NumberOfPages * EFI_PAGE;
+    img_base = (uint64_t)g_image_base;
+    if (img_base == 0u) {
+      img_base = img_end;
+    }
+
+    /*
+     * Image often loads high under OVMF; the large Conventional span sits
+     * below it. Only carve when this descriptor actually overlaps the image.
+     */
+    left_len = 0;
+    right_len = 0;
+    cand_addr = 0;
+    cand_len = 0;
+    if (img_end > img_base && start < img_end && end > img_base) {
+      if (start < img_base) {
+        uint64_t l0 = (start + (EFI_PAGE - 1ull)) & ~(EFI_PAGE - 1ull);
+        uint64_t l1 = img_base & ~(EFI_PAGE - 1ull);
+        if (l1 > l0) {
+          left_len = l1 - l0;
+          cand_addr = l0;
+          cand_len = left_len;
+        }
+      }
+      if (end > img_end) {
+        uint64_t r0 = (img_end + (EFI_PAGE - 1ull)) & ~(EFI_PAGE - 1ull);
+        uint64_t r1 = end & ~(EFI_PAGE - 1ull);
+        if (r1 > r0) {
+          right_len = r1 - r0;
+          if (right_len > cand_len) {
+            cand_addr = r0;
+            cand_len = right_len;
+          }
+        }
+      }
+    } else {
+      uint64_t a = (start + (EFI_PAGE - 1ull)) & ~(EFI_PAGE - 1ull);
+      uint64_t b = end & ~(EFI_PAGE - 1ull);
+      if (b > a) {
+        cand_addr = a;
+        cand_len = b - a;
+      }
+    }
+
+    if (cand_len < (uint64_t)EFI_CLAIM_MIN_BYTES) {
+      continue;
+    }
+    if (cand_len > best_len) {
+      best_addr = cand_addr;
+      best_len = cand_len;
+    }
+  }
+  (void)g_pm_efi_st->BootServices->FreePool(map);
+
+  if (best_len < (uint64_t)EFI_CLAIM_MIN_BYTES || best_addr == 0u) {
+    return -1;
+  }
+  if (best_len > (uint64_t)SIZE_MAX) {
+    best_len = (uint64_t)SIZE_MAX & ~(EFI_PAGE - 1ull);
+  }
+
+  pages = (UINTN)(best_len / EFI_PAGE);
+  phys = (EFI_PHYSICAL_ADDRESS)best_addr;
+  st = g_pm_efi_st->BootServices->AllocatePages(
+      AllocateAddress, EfiLoaderData, pages, &phys);
+  if (!EFI_ERROR(st) && phys == (EFI_PHYSICAL_ADDRESS)best_addr) {
+    g_cached = 0;
+    *base_out = (uint8_t *)(uintptr_t)phys;
+    *bytes_out = (size_t)pages * (size_t)EFI_PAGE;
+    return 0;
+  }
+
+  /* Prefer one large claim (BIOS-like). Shrink only via AllocateAnyPages. */
+  while (pages >= (UINTN)(EFI_CLAIM_MIN_BYTES / (size_t)EFI_PAGE)) {
     phys = 0;
-    pages = try_pages;
     st = g_pm_efi_st->BootServices->AllocatePages(
         AllocateAnyPages, EfiLoaderData, pages, &phys);
     if (!EFI_ERROR(st) && phys != 0) {
-      /* Map cache is stale once we own pages. */
       g_cached = 0;
       *base_out = (uint8_t *)(uintptr_t)phys;
       *bytes_out = (size_t)pages * (size_t)EFI_PAGE;
       return 0;
     }
-    try_pages /= 2u;
+    pages /= 2u;
   }
   return -1;
 }

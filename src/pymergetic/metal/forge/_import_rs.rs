@@ -234,6 +234,7 @@ pub fn import(text: &str) -> Catalog {
     }
 
     // pub type Foo = Option<unsafe extern "C" fn(...) -> T>;
+    // pub type Foo = u32;  (and other primitive / path aliases)
     for at in find_all(&raw, "pub type ") {
         let after = &raw[at + "pub type ".len()..];
         let name_end = after.find('=').unwrap_or(0);
@@ -241,39 +242,68 @@ pub fn import(text: &str) -> Catalog {
             continue;
         }
         let tname = after[..name_end].trim();
-        let rhs = after[name_end + 1..].trim();
-        if !rhs.starts_with("Option<") {
+        if tname.contains('<') || tname.contains('(') {
             continue;
         }
-        if let Some(fn_at) = rhs.find("extern \"C\" fn") {
-            let sig = &rhs[fn_at + "extern \"C\" fn".len()..];
-            if let Some(paren) = sig.find('(') {
-                if let Some(close) = matching_paren(&sig[paren..]) {
-                    let args_s = &sig[paren + 1..paren + close];
-                    let after_args = sig[paren + close + 1..].trim();
-                    let ret = if let Some(r) = after_args.strip_prefix("->") {
-                        let r = r.trim();
-                        let r = r.split('>').next().unwrap_or(r).trim();
-                        rs_type_to_c(r.trim_end_matches(|c: char| c == ';' || c == ' '))
-                    } else {
-                        String::from("void")
-                    };
-                    let mut args_c = Vec::new();
-                    for a in split_args(args_s) {
-                        args_c.push(alloc::format!("{} {}", a.ty, a.name));
+        let rhs = after[name_end + 1..].trim();
+        if rhs.starts_with("Option<") {
+            if let Some(fn_at) = rhs.find("extern \"C\" fn") {
+                let sig = &rhs[fn_at + "extern \"C\" fn".len()..];
+                if let Some(paren) = sig.find('(') {
+                    if let Some(close) = matching_paren(&sig[paren..]) {
+                        let args_s = &sig[paren + 1..paren + close];
+                        let after_args = sig[paren + close + 1..].trim();
+                        let ret = if let Some(r) = after_args.strip_prefix("->") {
+                            let r = r.trim();
+                            /* Multiline Option aliases often end `-> u32,` before `>`. */
+                            let r = r
+                                .trim_end_matches(|c: char| {
+                                    c == ';' || c == ',' || c == '>' || c.is_whitespace()
+                                })
+                                .split('>')
+                                .next()
+                                .unwrap_or(r)
+                                .trim()
+                                .trim_end_matches(|c: char| c == ',' || c.is_whitespace());
+                            rs_type_to_c(r)
+                        } else {
+                            String::from("void")
+                        };
+                        let mut args_c = Vec::new();
+                        for a in split_args(args_s) {
+                            args_c.push(alloc::format!("{} {}", a.ty, a.name));
+                        }
+                        let arg_s = if args_c.is_empty() {
+                            String::from("void")
+                        } else {
+                            args_c.join(", ")
+                        };
+                        cat.typedefs.push(Typedef {
+                            name: String::from(tname),
+                            ty: alloc::format!("{} (*)({})", ret, arg_s),
+                        });
                     }
-                    let arg_s = if args_c.is_empty() {
-                        String::from("void")
-                    } else {
-                        args_c.join(", ")
-                    };
-                    cat.typedefs.push(Typedef {
-                        name: String::from(tname),
-                        ty: alloc::format!("{} (*)({})", ret, arg_s),
-                    });
                 }
             }
+            continue;
         }
+        /* Simple alias: pub type pm_metal_fs_h = u32; */
+        let alias_end = rhs
+            .find(|c: char| c == ';' || c == '\n' || c == '{')
+            .unwrap_or(rhs.len());
+        let alias = rhs[..alias_end].trim();
+        if alias.is_empty() || alias.starts_with("fn ") || alias.contains('(') {
+            continue;
+        }
+        let cty = rs_type_to_c(alias);
+        if cty == alias && !alias.starts_with("pm_metal_") {
+            /* Unknown non-primitive — skip rather than emit garbage. */
+            continue;
+        }
+        cat.typedefs.push(Typedef {
+            name: String::from(tname),
+            ty: cty,
+        });
     }
 
     for at in find_all(&raw, "#[no_mangle]") {

@@ -23,6 +23,7 @@ name = "pymergetic_metal_console"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_mem",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -31,6 +32,13 @@ name = "pymergetic_metal_mem"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_reg"
+version = "0.1.0"
+dependencies = [
  "pymergetic_metal_rt",
 ]
 

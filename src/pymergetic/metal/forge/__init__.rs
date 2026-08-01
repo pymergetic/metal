@@ -28,6 +28,9 @@ mod _host;
 #[path = "_build.rs"]
 mod _build;
 #[cfg(feature = "solo")]
+#[path = "_pack.rs"]
+mod _pack;
+#[cfg(feature = "solo")]
 #[path = "_run.rs"]
 mod _run;
 #[path = "_export_c.rs"]

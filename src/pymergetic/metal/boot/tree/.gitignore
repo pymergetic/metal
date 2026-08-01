@@ -3,6 +3,12 @@
 target/
 .generated/
 __init__.pyi
+api.h
+api.pyi
+notes.h
+notes.pyi
 print.h
 print.pyi
+ready.h
+ready.pyi
 # END metal-generated

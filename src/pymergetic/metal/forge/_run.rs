@@ -121,13 +121,28 @@ fn csi_prefix_hold(b: &[u8]) -> bool {
 /// Drop OVMF ConOut clears that wipe the host TTY (same UART Metal uses).
 /// Incomplete CSI at the end of `chunk` is left in `hold` for the next call.
 fn write_serial_filtered(out: &mut dyn Write, hold: &mut Vec<u8>, chunk: &[u8]) -> std::io::Result<()> {
+    /* Drop machine ready mark from the host TTY (still kept in raw log). */
+    const READY: &[u8] = b"#pm-metal/boot-tree/ready"; /* = boot/tree/ready.rs READY_MARK */
     hold.extend_from_slice(chunk);
+    while let Some(pos) = hold.windows(READY.len()).position(|w| w == READY) {
+        hold.drain(pos..pos + READY.len());
+    }
+    /* Keep a proper prefix of READY so a split mark is not partially printed. */
+    let mut keep = 0usize;
+    let max_keep = READY.len().saturating_sub(1).min(hold.len());
+    for n in (1..=max_keep).rev() {
+        if READY.starts_with(&hold[hold.len() - n..]) {
+            keep = n;
+            break;
+        }
+    }
+    let limit = hold.len() - keep;
     let mut i = 0usize;
-    while i < hold.len() {
+    while i < limit {
         if hold[i] == 0x1b {
-            let avail = &hold[i..];
+            let avail = &hold[i..limit];
             if csi_prefix_hold(avail) {
-                /* Need more bytes — keep tail in hold. */
+                /* Incomplete CSI — keep from i through the READY prefix tail. */
                 hold.drain(..i);
                 return out.flush();
             }
@@ -158,7 +173,7 @@ fn write_serial_filtered(out: &mut dyn Write, hold: &mut Vec<u8>, chunk: &[u8]) 
         out.write_all(&hold[i..i + 1])?;
         i += 1;
     }
-    hold.clear();
+    hold.drain(..limit);
     out.flush()
 }
 
@@ -167,6 +182,8 @@ fn pump_serial_filtered(mut r: impl Read, log_path: &Path) -> Result<(), String>
     let mut hold = Vec::new();
     let mut buf = [0u8; 4096];
     let mut stdout = std::io::stdout();
+    /* Same bytes as boot/tree/ready.rs READY_MARK — do not scrape human tree text. */
+    const READY: &[u8] = b"#pm-metal/boot-tree/ready"; /* = boot/tree/ready.rs READY_MARK */
     loop {
         let n = r.read(&mut buf).map_err(|_| String::from("serial read failed"))?;
         if n == 0 {
@@ -175,6 +192,9 @@ fn pump_serial_filtered(mut r: impl Read, log_path: &Path) -> Result<(), String>
         raw.extend_from_slice(&buf[..n]);
         write_serial_filtered(&mut stdout, &mut hold, &buf[..n])
             .map_err(|_| String::from("serial write failed"))?;
+        if memchr_slice(&raw, READY) {
+            break;
+        }
     }
     /* Flush a trailing incomplete ESC as literal (should be rare). */
     if !hold.is_empty() {
@@ -190,26 +210,42 @@ fn pump_serial_filtered(mut r: impl Read, log_path: &Path) -> Result<(), String>
     Ok(())
 }
 
+fn memchr_slice(hay: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || hay.len() < needle.len() {
+        return false;
+    }
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
 fn run_bios(tree: &Path) -> Result<(), String> {
     let elf = tree.join("build/x86_64_bios/metal.qemu.elf");
     ensure_file(&elf, "forge build bios")?;
     let vio = virtio_drive(tree, None)?;
     let smp = smp();
+    let serial_log = tree.join("build/x86_64_bios/last-serial.log");
     eprintln!("forge run: bios {}", elf.display());
-    let mut cmd = Command::new("qemu-system-x86_64");
-    cmd.args(QEMU_MACHINE)
+    let mut cmd = Command::new("stdbuf");
+    cmd.args(["-o0", "-e0", "qemu-system-x86_64"])
+        .args(QEMU_MACHINE)
         .args(["-serial", "stdio"])
         .args(["-smp", &smp])
         .args(&vio)
         .arg("-kernel")
-        .arg(&elf);
-    let status = cmd.status().map_err(|_| String::from("qemu spawn failed"))?;
-    let code = qemu_ec(status.code().unwrap_or(1));
-    if code == 0 {
-        Ok(())
+        .arg(&elf)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    let mut child = cmd.spawn().map_err(|_| String::from("qemu spawn failed"))?;
+    let pump = if let Some(out) = child.stdout.take() {
+        pump_serial_filtered(out, &serial_log)
     } else {
-        Err(alloc::format!("qemu bios exit {code}"))
-    }
+        Ok(())
+    };
+    let _ = child.kill();
+    let _ = child.wait();
+    pump?;
+    eprintln!();
+    eprintln!("forge run: serial log {}", serial_log.display());
+    Ok(())
 }
 
 fn run_efi(tree: &Path) -> Result<(), String> {
@@ -251,15 +287,11 @@ fn run_efi(tree: &Path) -> Result<(), String> {
     };
     /* Ctrl+C / early return must not leave QEMU behind. */
     let _ = child.kill();
-    let status = child.wait().map_err(|_| String::from("qemu wait failed"))?;
+    let _ = child.wait();
     pump?;
+    eprintln!();
     eprintln!("forge run: serial log {}", serial_log.display());
-    let code = qemu_ec(status.code().unwrap_or(1));
-    if code == 0 {
-        Ok(())
-    } else {
-        Err(alloc::format!("qemu efi exit {code}"))
-    }
+    Ok(())
 }
 
 fn run_target(tree: &Path, target: &str) -> Result<(), String> {

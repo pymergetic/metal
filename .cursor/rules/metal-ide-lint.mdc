@@ -1,45 +1,54 @@
 ---
-description: Lint from the user's IDE view; fix real clangd noise; restart clangd after config changes
+description: Lint always from the IDE/user view; warnings count as errors; build-clean is not enough
 alwaysApply: true
 ---
 
-# IDE lint = user cost (clangd / diagnostics)
+# IDE lint = user interface (always)
 
-The owner reads the editor's Problems / squiggles as the ground truth while
-working. Spurious or stale clangd errors burn more time than most "real"
-bugs. Treat IDE diagnostics as part of the deliverable, not optional polish.
+The owner is not connected to the code the way an agent is. **The IDE is
+their interface** — Problems / squiggles are what they see first and trust.
+A change that "builds" but leaves red or yellow underlines is unfinished.
 
-## Before you finish a change that touches C/C++ (or build/include paths)
+## Hard rule
 
-1. **See what the user sees** — after edits, check diagnostics on the files
-   you touched (and neighbors that include them). Do not assume "it builds
-   in the script so the IDE is fine."
-2. **Prefer fixing the cause of the squiggle** (missing `-I`, wrong TU
-   PathMatch, stale `.clangd`, header not on the compile path) over
-   silencing with casts/pragmas — unless the diagnostic is a known clangd
-   false positive documented in `docs/SOURCETREE.md`.
-3. **Restart clangd when config or include graphs changed** — any edit to
-   `.clangd` / `.clangd.template`, `scripts/setup.d/deps/ide.sh`, new
-   `-I` flags, new generated embed headers, or "I fixed includes but the
-   IDE still lies" → regenerate if needed (`./scripts/setup ide`) **and
-   tell the user to restart clangd** (Command Palette: `clangd: Restart
-   language server`, or reload the window). Do not leave them debugging
-   ghost errors from a stale language server.
-4. **Do not "fix" IDE noise by editing `external/`** — see
-   `docs/SOURCETREE.md` (IncludeCleaner / vendored trees). Fix Metal-side
-   compile flags or `.clangd` PathMatch instead.
-5. **Python guest code** — editor stubs live under `typings/`; after adding
-   `PM_METAL_PY_BIND` rows, regenerate (`scripts/gen_py_stubs.py` / next
-   `./scripts/build efi`) so the IDE matches the bind table.
+**Linting is always from the IDE / user perspective.**
 
-If you changed `.clangd.template` or ide setup in this session, end with an
-explicit one-liner: restart clangd / reload window.
+**IDE warnings count as errors.** A yellow squiggle is unfinished work —
+same bar as a red error. Do not leave Unused / IncludeCleaner / sign-compare
+noise in Metal-owned files because "it's only a warning."
+
+1. **Ground truth = editor diagnostics** on the files you touched (and
+   neighbors that include them) — use the IDE diagnostics tool
+   (`ReadLints`), not only `clang`/`cargo`/`forge` exit codes. Treat
+   every diagnostic severity the user sees (Error **and** Warning) as
+   must-fix unless `docs/SOURCETREE.md` documents a known false positive.
+2. **"Builds clean" is not "IDE clean."** Freestanding TUs often compile
+   via `build.rs` `-I` while clangd still lacks PathMatch / CDB rows
+   (`errno.h`, `platform_api_vmcore.h`, …). Fix the IDE path
+   (`.clangd.template`, local `.clangd`, forge `compile_commands`) —
+   do not call it done because the firmware linked.
+3. **Do not claim fixed until diagnostics agree** (or you edited clangd /
+   CDB and told them to **restart clangd** / reload so stale ASTs clear).
+4. Prefer fixing the **cause** of the squiggle (missing `-I`, wrong
+   PathMatch, stale `.clangd`, missing CDB TU, unused dead API) over
+   casts/pragmas / `(void)` silencing — unless documented as a known
+   clangd false positive in `docs/SOURCETREE.md`.
+5. **Do not "fix" IDE noise by editing `external/`** — fix Metal-side
+   flags / PathMatch instead. Vendored trees may suppress tidy in
+   `.clangd`; Metal-owned code may not.
+6. **Python guest** — stubs under `typings/`; regenerate after
+   `PM_METAL_PY_BIND` changes so the IDE matches the bind table.
+
+## After `.clangd` / CDB / include-graph edits
+
+Sync `.clangd` from `.clangd.template` when the template changed. End with:
+**restart clangd** (Command Palette → `clangd: Restart language server`,
+or reload the window).
 
 ## Paths in IDE / CDB metadata
 
 See `metal-clangd-no-abs-paths.mdc`. `.clangd*` `-I` and CDB `"file"` /
 command `-I` stay package-relative. CDB `"directory"` is the **absolute
-package root** (clangd cannot match `directory: "."` + relative file).
-CDB at package-root `compile_commands.json` (mirrored under `build/`).
-`--compile-commands-dir=${workspaceFolder}`. After template/ide/CDB
-edits: regenerate if needed, then **restart clangd**.
+package root**. CDB at package-root `compile_commands.json` (mirrored
+under `build/`). After template/CDB edits: regenerate if needed, then
+**restart clangd**.

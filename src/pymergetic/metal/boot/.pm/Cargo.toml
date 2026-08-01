@@ -44,8 +44,13 @@ pymergetic_metal_net_ip_udp = { path = "../../net/ip/udp/.pm" }
 pymergetic_metal_net_ip_icmp = { path = "../../net/ip/icmp/.pm" }
 pymergetic_metal_net_ntp = { path = "../../net/ntp/.pm" }
 pymergetic_metal_net_http = { path = "../../net/http/.pm" }
+pymergetic_metal_net_http_microdot = { path = "../../net/http/microdot/.pm" }
 pymergetic_metal_net_tftp = { path = "../../net/tftp/.pm" }
 pymergetic_metal_net_ftp = { path = "../../net/ftp/.pm" }
+pymergetic_metal_net_ssh = { path = "../../net/ssh/.pm" }
+pymergetic_metal_reg = { path = "../../reg/.pm" }
+pymergetic_metal_py = { path = "../../py/.pm" }
+pymergetic_metal_wasm = { path = "../../wasm/.pm" }
 
 [profile.release]
 panic = "abort"

@@ -3,6 +3,7 @@
 //! them here (would diverge from generated `boot/__init__.h`).
 //! Firmware image links this staticlib (pulls rt/mem/dt/console/serial + detectors).
 #![no_std]
+#![allow(non_camel_case_types)]
 
 use pymergetic_metal_async as _;
 use pymergetic_metal_bus_pci as _;
@@ -26,13 +27,18 @@ use pymergetic_metal_mem as _;
 use pymergetic_metal_net_dns as _;
 use pymergetic_metal_net_ftp as _;
 use pymergetic_metal_net_http as _;
+use pymergetic_metal_net_http_microdot as _;
 use pymergetic_metal_net_ip as _;
 use pymergetic_metal_net_ntp as _;
 use pymergetic_metal_net_ip_icmp as _;
 use pymergetic_metal_net_ip_tcp as _;
 use pymergetic_metal_net_tftp as _;
 use pymergetic_metal_net_ip_udp as _;
+use pymergetic_metal_net_ssh as _;
+use pymergetic_metal_py as _;
+use pymergetic_metal_reg as _;
 use pymergetic_metal_rt as _;
+use pymergetic_metal_wasm as _;
 use pymergetic_metal_util_ascii as _;
 use pymergetic_metal_util_lz4 as _;
 use pymergetic_metal_util_size as _;
@@ -69,11 +75,29 @@ pub extern "C" fn pm_metal_boot_harvest() -> i32 {
     /* Touch stems so sibling TUs stay in the staticlib under LTO. */
     let _banner = banner::pm_metal_boot_banner as unsafe extern "C" fn();
     let _tree = tree::pm_metal_boot_tree_print as unsafe extern "C" fn() -> i32;
+    let _tree_api = (
+        tree::pm_metal_boot_tree_reset as unsafe extern "C" fn(),
+        tree::pm_metal_boot_tree_blank as unsafe extern "C" fn(),
+        tree::pm_metal_boot_tree_spacer as unsafe extern "C" fn(),
+        tree::pm_metal_boot_tree_enter as unsafe extern "C" fn(),
+        tree::pm_metal_boot_tree_leave as unsafe extern "C" fn(),
+        tree::pm_metal_boot_tree_flush as unsafe extern "C" fn(),
+        tree::pm_metal_boot_tree_item
+            as unsafe extern "C" fn(tree::pm_metal_boot_tree_status_t, *const u8, *const u8),
+        tree::pm_metal_boot_tree_notify_ready as unsafe extern "C" fn(),
+        tree::pm_metal_boot_tree_ready_mark as unsafe extern "C" fn() -> *const u8,
+    );
+    let _notes = (
+        tree::pm_metal_boot_tree_note_await as unsafe extern "C" fn(i32),
+        tree::pm_metal_boot_tree_note_wasm as unsafe extern "C" fn(i32),
+        tree::pm_metal_boot_tree_note_http as unsafe extern "C" fn(i32),
+        tree::pm_metal_boot_tree_note_py as unsafe extern "C" fn(i32),
+    );
     let _rootfs = rootfs::pm_metal_boot_rootfs_mount_all as unsafe extern "C" fn() -> i32;
     let _mod_load = modload::pm_metal_boot_mod_load
         as unsafe extern "C" fn(*const u8, *const u8, usize, *const u8, usize) -> i32;
     let _mod_unload = modload::pm_metal_boot_mod_unload as unsafe extern "C" fn(*const u8) -> i32;
-    let _ = (_banner, _tree, _rootfs, _mod_load, _mod_unload);
+    let _ = (_banner, _tree, _tree_api, _notes, _rootfs, _mod_load, _mod_unload);
     unsafe {
         let _ = pm_metal_bus_virtio_detect();
         let _ = pm_metal_bus_pci_detect();

@@ -1,0 +1,20 @@
+[package]
+name = "pymergetic_metal_reg"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "../__init__.rs"
+crate-type = ["staticlib", "rlib"]
+
+[[bin]]
+name = "smoke"
+path = "smoke.rs"
+
+[dependencies]
+pymergetic_metal_rt = { path = "../../rt/.pm" }
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

@@ -1,0 +1,7 @@
+{
+  "type": "package",
+  "name": "tests.wasm_hello",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Minimal wasm pack: export ready() -> i32 { 0 }. Not kernel-linked."
+}

@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.py",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "Python orchestration edge: Metal alloc, GC off, async=Metal async, reg bind."
+}

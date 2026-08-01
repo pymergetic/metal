@@ -544,3 +544,54 @@ pub unsafe extern "C" fn pm_metal_net_http_body_len(h: u32) -> u32 {
         0
     }
 }
+
+/// Loopback GET /health after httpd autoload. Logs `httpd: health ok`. Returns 0 ok.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_http_proof_health() -> i32 {
+    extern "C" {
+        fn pm_metal_async_status(h: u32) -> u32;
+        fn pm_metal_async_create_task(h: u32) -> u32;
+        fn pm_metal_async_run_poll_all() -> i32;
+        fn pm_metal_net_ip_poll();
+        fn pm_metal_time_mono_us() -> u64;
+    }
+    const ASYNC_DONE: u32 = 2;
+    const ASYNC_ERROR: u32 = 4;
+    const ASYNC_CANCELLED: u32 = 3;
+    let mut body = [0u8; 64];
+    let h = pm_metal_net_http_get(
+        b"http://127.0.0.1/health\0".as_ptr() as *const c_char,
+        body.as_mut_ptr() as *mut c_void,
+        body.len() as u32,
+    );
+    if h == 0 {
+        return -1;
+    }
+    if pm_metal_async_create_task(h) == 0 {
+        coro::pm_metal_async_coro_close(h);
+        return -1;
+    }
+    let deadline = pm_metal_time_mono_us() + 10_000_000;
+    loop {
+        let _ = pm_metal_async_run_poll_all();
+        pm_metal_net_ip_poll();
+        match pm_metal_async_status(h) {
+            ASYNC_DONE => break,
+            ASYNC_ERROR | ASYNC_CANCELLED => return -1,
+            _ => {
+                if pm_metal_time_mono_us() >= deadline {
+                    return -1;
+                }
+            }
+        }
+    }
+    let st = pm_metal_net_http_status(0);
+    let blen = pm_metal_net_http_body_len(0);
+    if st != 200 || blen < 2 {
+        return -1;
+    }
+    if body[0] != b'o' || body[1] != b'k' {
+        return -1;
+    }
+    0
+}

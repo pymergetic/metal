@@ -57,6 +57,9 @@ const COMMON: &[Unit] = &[
     ("dev/net/_virtio_net.c", "virtio_net"),
     ("dev/blk/_detect.c", "blk_detect"),
     ("dev/blk/_virtio_blk.c", "virtio_blk"),
+    ("dev/stream/__init__.c", "stream"),
+    ("auth/__init__.c", "auth"),
+    ("../external/monocypher/src/monocypher.c", "monocypher"),
     ("libc/string.c", "string"),
     ("libc/stdlib.c", "stdlib"),
     ("libc/stdio.c", "stdio"),
@@ -204,6 +207,11 @@ impl Tree {
         if rc != 0 {
             return Err(String::from("forge mod sync failed"));
         }
+        /* Wasm packs must exist before cargo boot (include_bytes in wasm proof). */
+        match crate::_pack::pack_all(root) {
+            Ok(n) => eprintln!("forge build: packed {n} wasm package(s)"),
+            Err(e) => return Err(alloc::format!("forge pack: {e}")),
+        }
         Ok(())
     }
 
@@ -245,6 +253,7 @@ impl Tree {
             self.metal.join("net/ip"),
             self.metal.join("net/ip/cfg"),
             self.root.join("external/lwip/src/include"),
+            self.root.join("external/monocypher/src"),
         ];
         incs.extend_from_slice(plat_includes);
         push_includes(&mut f, &incs);
@@ -263,6 +272,7 @@ impl Tree {
             "src/pymergetic/metal/net/ip",
             "src/pymergetic/metal/net/ip/cfg",
             "external/lwip/src/include",
+            "external/monocypher/src",
             "src/pymergetic/metal/boot/platform/bios",
         ]
     }
@@ -275,11 +285,46 @@ impl Tree {
             "src/pymergetic/metal/net/ip",
             "src/pymergetic/metal/net/ip/cfg",
             "external/lwip/src/include",
+            "external/monocypher/src",
             "src/pymergetic/metal/boot/platform/efi",
             "external/edk2/MdePkg/Include",
             "external/edk2/MdePkg/Include/X64",
             "external/edk2/MdePkg/Include/Protocol",
             "external/edk2/MdePkg/Include/Guid",
+        ]
+    }
+
+    /// Dropbear glue: stubs before metal/libc (matches net/ssh/.pm/build.rs).
+    fn cdb_includes_ssh(&self) -> Vec<&'static str> {
+        alloc::vec![
+            "src/pymergetic/metal/net/ssh/dropbear_stubs",
+            "src/pymergetic/metal/libc",
+            "src/pymergetic/metal/net/ssh",
+            "src/pymergetic/metal/net/ssh/dropbear_metal",
+            "external/dropbear/src",
+            "src",
+            "src/pymergetic/metal",
+            "src/pymergetic/metal/net/ip",
+            "src/pymergetic/metal/net/ip/cfg",
+            "external/lwip/src/include",
+        ]
+    }
+
+    /// WAMR Metal port glue (matches wasm/.pm/build.rs freestanding includes).
+    fn cdb_includes_wasm(&self) -> Vec<&'static str> {
+        alloc::vec![
+            "src/pymergetic/metal/wasm/port/platform",
+            "src/pymergetic/metal/wasm/port",
+            "src/pymergetic/metal/libc",
+            "src",
+            "external/wamr/core/iwasm/include",
+            "external/wamr/core/iwasm/interpreter",
+            "external/wamr/core/iwasm/common",
+            "external/wamr/core/shared/platform/include",
+            "external/wamr/core/shared/mem-alloc",
+            "external/wamr/core/shared/utils",
+            "external/wamr/core/shared/utils/uncommon",
+            "external/wamr/core",
         ]
     }
 
@@ -408,6 +453,93 @@ impl Tree {
                 ],
                 &[],
                 &bios_incs,
+                false,
+            );
+        }
+
+        let ssh_incs = self.cdb_includes_ssh();
+        let ssh_cflags: &[&str] = &[
+            "-std=gnu11",
+            "-ffreestanding",
+            "-nostdinc",
+            "-fno-stack-protector",
+            "-m64",
+            "-mno-red-zone",
+            "-DDROPBEAR_SERVER=1",
+            "-DDROPBEAR_CLIENT=0",
+            "-DDROPBEAR_METAL=1",
+            "-DLOCALOPTIONS_H_EXISTS=1",
+            "-DBUNDLED_LIBTOM=1",
+            "-DUSE_LTM",
+            "-DLTM_DESC",
+            "-U__linux__",
+            "-Ulinux",
+            "-U__gnu_linux__",
+        ];
+        let ssh_glue = [
+            "src/pymergetic/metal/net/ssh/dropbear_posix.c",
+            "src/pymergetic/metal/net/ssh/dropbear_fd.c",
+            "src/pymergetic/metal/net/ssh/dropbear_crt.c",
+            "src/pymergetic/metal/net/ssh/ssh_dropbear.c",
+            "src/pymergetic/metal/net/ssh/ssh_config.c",
+            "src/pymergetic/metal/net/ssh/ssh_server.c",
+        ];
+        for file in ssh_glue {
+            Self::cdb_push_unit(
+                &mut body,
+                &mut first,
+                dir_s,
+                file,
+                ssh_cflags,
+                &[],
+                &ssh_incs,
+                false,
+            );
+        }
+
+        let wasm_incs = self.cdb_includes_wasm();
+        let wasm_cflags: &[&str] = &[
+            "-std=c11",
+            "-ffreestanding",
+            "-nostdinc",
+            "-fno-stack-protector",
+            "-m64",
+            "-mno-red-zone",
+            "-DBH_PLATFORM_METAL",
+            "-DBUILD_TARGET_X86_64",
+            "-DWASM_ENABLE_INTERP=1",
+            "-DWASM_ENABLE_FAST_INTERP=1",
+            "-DWASM_ENABLE_AOT=0",
+            "-DWASM_ENABLE_JIT=0",
+            "-DWASM_ENABLE_FAST_JIT=0",
+            "-DWASM_ENABLE_LIBC_BUILTIN=0",
+            "-DWASM_ENABLE_LIBC_WASI=0",
+            "-DWASM_ENABLE_SIMD=0",
+            "-DWASM_ENABLE_MULTI_MODULE=0",
+            "-DWASM_ENABLE_SHARED_MEMORY=0",
+            "-DWASM_ENABLE_MINI_LOADER=0",
+            "-DWASM_DISABLE_HW_BOUND_CHECK=1",
+            "-DWASM_DISABLE_STACK_HW_BOUND_CHECK=1",
+            "-DWASM_ENABLE_BULK_MEMORY=1",
+            "-DBH_MALLOC=wasm_runtime_malloc",
+            "-DBH_FREE=wasm_runtime_free",
+            "-U__linux__",
+            "-Ulinux",
+            "-U__gnu_linux__",
+        ];
+        let wasm_glue = [
+            "src/pymergetic/metal/wasm/port/platform/metal_platform.c",
+            "src/pymergetic/metal/wasm/port/runtime_host.c",
+        ];
+        for file in wasm_glue {
+            Self::cdb_push_unit(
+                &mut body,
+                &mut first,
+                dir_s,
+                file,
+                wasm_cflags,
+                &[],
+                &wasm_incs,
                 false,
             );
         }

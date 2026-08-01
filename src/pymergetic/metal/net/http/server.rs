@@ -4,7 +4,7 @@
 //! response. Cleartext or TLS via `tcp_accept(..., creds_h)`.
 
 use core::ffi::{c_char, c_void};
-use core::ptr;
+use core::ptr::{self, addr_of};
 
 use pymergetic_metal_async as _;
 use pymergetic_metal_net_ip as ip;
@@ -20,10 +20,6 @@ const HDR_MAX: usize = 8192;
 const RESP_HDR_MAX: usize = 512;
 const IO_CHUNK: usize = 1024;
 const IO_US: u64 = 30_000_000;
-
-const ASYNC_DONE: u32 = 2;
-const ASYNC_ERROR: u32 = 4;
-const ASYNC_CANCELLED: u32 = 3;
 
 const PHASE_ACCEPT: u32 = 0;
 const PHASE_ACCEPT_WAIT: u32 = 1;
@@ -90,11 +86,13 @@ static mut SERVERS: [Server; SRV_MAX] = [Server {
 }; SRV_MAX];
 static mut CURRENT_CONN: u32 = 0;
 static mut HEALTH_APP: u32 = 0;
+static mut AUTO_SRV: u32 = 0;
+static mut CONN_METHOD: [u8; 16] = [0; 16];
+static mut CONN_TARGET: [u8; PATH_MAX] = [0; PATH_MAX];
+static mut CONN_HDR: [u8; HDR_MAX] = [0; HDR_MAX];
+static mut CONN_HDR_LEN: u32 = 0;
 
 extern "C" {
-    fn pm_metal_async_status(h: u32) -> u32;
-    fn pm_metal_async_result_u32(h: u32) -> u32;
-    fn pm_metal_async_run_poll() -> i32;
     fn pm_metal_async_create_task(h: u32) -> u32;
 }
 
@@ -297,48 +295,24 @@ impl<'a> Writer<'a> {
     }
 }
 
-unsafe fn sync_io_child(child_h: u32) -> Option<u32> {
-    let deadline = coro::pm_metal_time_mono_us() + IO_US;
-    loop {
-        let _ = pm_metal_async_run_poll();
-        ip::pm_metal_net_ip_poll();
-        match pm_metal_async_status(child_h) {
-            ASYNC_DONE => {
-                let n = pm_metal_async_result_u32(child_h);
-                coro::pm_metal_async_coro_close(child_h);
-                return Some(n);
-            }
-            ASYNC_ERROR | ASYNC_CANCELLED => {
-                coro::pm_metal_async_coro_close(child_h);
-                return None;
-            }
-            _ => {
-                if coro::pm_metal_time_mono_us() >= deadline {
-                    coro::pm_metal_async_coro_close(child_h);
-                    return None;
-                }
-            }
-        }
-    }
-}
-
 unsafe fn sync_tcp_write(conn_h: u32, buf: *const u8, len: u32) -> bool {
     if conn_h == 0 || buf.is_null() || len == 0 {
         return false;
     }
     let mut off = 0u32;
+    let mut deadline = coro::pm_metal_time_mono_us() + IO_US;
     while off < len {
-        let wh = tcp::pm_metal_net_ip_tcp_write(conn_h, buf.add(off as usize), len - off);
-        if wh == 0 {
+        /* try_write: no nested async poll (listen handler may already be in poll_all). */
+        let n = tcp::pm_metal_net_ip_tcp_try_write(conn_h, buf.add(off as usize), len - off);
+        if n > 0 {
+            off += n;
+            deadline = coro::pm_metal_time_mono_us() + IO_US;
+            continue;
+        }
+        if coro::pm_metal_time_mono_us() >= deadline {
             return false;
         }
-        let Some(n) = sync_io_child(wh) else {
-            return false;
-        };
-        if n == 0 {
-            return false;
-        }
-        off += n;
+        ip::pm_metal_net_ip_poll();
     }
     true
 }
@@ -407,11 +381,41 @@ unsafe extern "C" fn health_app_fn(_ctx: *mut c_void, _conn_id: u32) -> i32 {
     )
 }
 
-unsafe fn handle_conn(srv_h: u32, conn_h: u32, hdr: &[u8]) {
+unsafe fn conn_clear() {
+    CURRENT_CONN = 0;
+    CONN_METHOD = [0; 16];
+    CONN_TARGET = [0; PATH_MAX];
+    CONN_HDR = [0; HDR_MAX];
+    CONN_HDR_LEN = 0;
+}
+
+unsafe fn conn_begin(conn_h: u32, hdr: &[u8], method: &[u8], target: &[u8]) {
     CURRENT_CONN = conn_h;
+    CONN_METHOD = [0; 16];
+    CONN_TARGET = [0; PATH_MAX];
+    CONN_HDR = [0; HDR_MAX];
+    let mlen = method
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(method.len())
+        .min(15);
+    CONN_METHOD[..mlen].copy_from_slice(&method[..mlen]);
+    let tlen = target
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(target.len())
+        .min(PATH_MAX - 1);
+    CONN_TARGET[..tlen].copy_from_slice(&target[..tlen]);
+    let hlen = hdr.len().min(HDR_MAX - 1);
+    CONN_HDR[..hlen].copy_from_slice(&hdr[..hlen]);
+    CONN_HDR_LEN = hlen as u32;
+}
+
+unsafe fn handle_conn(srv_h: u32, conn_h: u32, hdr: &[u8]) {
     let mut method = [0u8; 16];
     let mut target = [0u8; PATH_MAX];
     if !parse_request_line(hdr, &mut method, &mut target) {
+        CURRENT_CONN = conn_h;
         let _ = send_simple_on_conn(
             conn_h,
             400,
@@ -419,14 +423,15 @@ unsafe fn handle_conn(srv_h: u32, conn_h: u32, hdr: &[u8]) {
             b"text/plain\0".as_ptr() as *const c_char,
             b"bad request\n\0".as_ptr() as *const c_char,
         );
-        CURRENT_CONN = 0;
+        conn_clear();
         return;
     }
+    conn_begin(conn_h, hdr, &method, &target);
     let tlen = target.iter().position(|&b| b == 0).unwrap_or(PATH_MAX);
     let target_path = &target[..tlen];
     let srv = srv_slot(srv_h);
     if srv.is_null() {
-        CURRENT_CONN = 0;
+        conn_clear();
         return;
     }
     let m = mount_find(srv, target_path);
@@ -438,7 +443,7 @@ unsafe fn handle_conn(srv_h: u32, conn_h: u32, hdr: &[u8]) {
             b"text/plain\0".as_ptr() as *const c_char,
             b"no routes\n\0".as_ptr() as *const c_char,
         );
-        CURRENT_CONN = 0;
+        conn_clear();
         return;
     }
     let app_h = (*m).app_h;
@@ -451,7 +456,7 @@ unsafe fn handle_conn(srv_h: u32, conn_h: u32, hdr: &[u8]) {
             b"text/plain\0".as_ptr() as *const c_char,
             b"bad app\n\0".as_ptr() as *const c_char,
         );
-        CURRENT_CONN = 0;
+        conn_clear();
         return;
     }
     let Some(func) = (*slot).func else {
@@ -462,7 +467,7 @@ unsafe fn handle_conn(srv_h: u32, conn_h: u32, hdr: &[u8]) {
             b"text/plain\0".as_ptr() as *const c_char,
             b"bad app\n\0".as_ptr() as *const c_char,
         );
-        CURRENT_CONN = 0;
+        conn_clear();
         return;
     };
     let rc = func((*slot).ctx, conn_h);
@@ -475,7 +480,7 @@ unsafe fn handle_conn(srv_h: u32, conn_h: u32, hdr: &[u8]) {
             b"app fail\n\0".as_ptr() as *const c_char,
         );
     }
-    CURRENT_CONN = 0;
+    conn_clear();
 }
 
 unsafe extern "C" fn listen_step(self_h: u32) -> u32 {
@@ -736,4 +741,128 @@ pub unsafe extern "C" fn pm_metal_net_http_health_register() -> u32 {
     }
     HEALTH_APP = pm_metal_net_http_register_c(Some(health_app_fn), ptr::null_mut());
     HEALTH_APP
+}
+
+/// Active request method (NUL-terminated), or null if no conn.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_http_conn_method() -> *const u8 {
+    if CURRENT_CONN == 0 {
+        return ptr::null();
+    }
+    addr_of!(CONN_METHOD).cast::<u8>()
+}
+
+/// Active request path (NUL-terminated), or null if no conn.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_http_conn_target() -> *const u8 {
+    if CURRENT_CONN == 0 {
+        return ptr::null();
+    }
+    addr_of!(CONN_TARGET).cast::<u8>()
+}
+
+/// Active raw request headers (may lack trailing NUL past hdr_len).
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_http_conn_hdr() -> *const u8 {
+    if CURRENT_CONN == 0 {
+        return ptr::null();
+    }
+    addr_of!(CONN_HDR).cast::<u8>()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_http_conn_hdr_len() -> u32 {
+    if CURRENT_CONN == 0 {
+        return 0;
+    }
+    *addr_of!(CONN_HDR_LEN)
+}
+
+/// Write raw bytes on the active connection. Returns 0 ok, -1 fail.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_http_conn_send(buf: *const u8, len: u32) -> i32 {
+    if CURRENT_CONN == 0 || buf.is_null() {
+        return -1;
+    }
+    if len == 0 {
+        return 0;
+    }
+    if sync_tcp_write(CURRENT_CONN, buf, len) {
+        0
+    } else {
+        -1
+    }
+}
+
+/// In-memory defaults: listen :80, /health + Microdot `/`. Returns 0 ok, -1 fail.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_http_autoload() -> i32 {
+    if AUTO_SRV != 0 {
+        return 0;
+    }
+    let health = pm_metal_net_http_health_register();
+    if health == 0 {
+        return -1;
+    }
+    let srv = pm_metal_net_http_listen(80, 0);
+    if srv == 0 {
+        return -1;
+    }
+    if pm_metal_net_http_mount(srv, b"/health\0".as_ptr() as *const c_char, health) != 0 {
+        pm_metal_net_http_close(srv);
+        return -1;
+    }
+    /* Optional Microdot root — linked by boot; skip if symbol absent is N/A. */
+    extern "C" {
+        fn pm_metal_net_http_microdot_register() -> u32;
+    }
+    let md = pm_metal_net_http_microdot_register();
+    if md != 0 {
+        let _ = pm_metal_net_http_mount(srv, b"/\0".as_ptr() as *const c_char, md);
+    }
+    AUTO_SRV = srv;
+    0
+}
+
+/// Autoload listen port, or 0 if httpd is not listening.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_http_autoload_port() -> u16 {
+    if AUTO_SRV == 0 {
+        return 0;
+    }
+    let srv = srv_slot(AUTO_SRV);
+    if srv.is_null() || !(*srv).used {
+        return 0;
+    }
+    (*srv).port
+}
+
+/// Publish server border onto `reg` (`pymergetic.metal.net.http.server.*`).
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_http_server_bind_reg() -> i32 {
+    use core::ffi::c_void;
+    extern "C" {
+        fn pm_metal_reg_register(module: *const u8, name: *const u8, ptr: *const c_void) -> i32;
+    }
+    let mod_name = b"pymergetic.metal.net.http.server\0";
+    let rows: [(&[u8], *const c_void); 12] = [
+        (b"register_c\0", pm_metal_net_http_register_c as *const c_void),
+        (b"unregister\0", pm_metal_net_http_unregister as *const c_void),
+        (b"listen\0", pm_metal_net_http_listen as *const c_void),
+        (b"mount\0", pm_metal_net_http_mount as *const c_void),
+        (b"unmount\0", pm_metal_net_http_unmount as *const c_void),
+        (b"close\0", pm_metal_net_http_close as *const c_void),
+        (b"send_simple\0", pm_metal_net_http_send_simple as *const c_void),
+        (b"health_register\0", pm_metal_net_http_health_register as *const c_void),
+        (b"autoload\0", pm_metal_net_http_autoload as *const c_void),
+        (b"conn_method\0", pm_metal_net_http_conn_method as *const c_void),
+        (b"conn_target\0", pm_metal_net_http_conn_target as *const c_void),
+        (b"conn_send\0", pm_metal_net_http_conn_send as *const c_void),
+    ];
+    for (name, ptr) in rows {
+        if pm_metal_reg_register(mod_name.as_ptr(), name.as_ptr(), ptr) != 0 {
+            return -1;
+        }
+    }
+    0
 }

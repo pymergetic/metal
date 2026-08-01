@@ -1,0 +1,18 @@
+[package]
+name = "pymergetic_metal_net_ssh"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[lib]
+path = "../__init__.rs"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+pymergetic_metal_rt = { path = "../../../rt/.pm" }
+pymergetic_metal_reg = { path = "../../../reg/.pm" }
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

@@ -17,17 +17,21 @@ impl LineBuf {
         }
     }
 
-    pub fn clear(&mut self) {
-        self.pos = 0;
-        self.buf[0] = 0;
-    }
-
     pub fn as_cstr(&mut self) -> *const u8 {
         if self.pos >= self.buf.len() {
             self.pos = self.buf.len() - 1;
         }
         self.buf[self.pos] = 0;
         self.buf.as_ptr()
+    }
+
+    pub fn pos_len(&self) -> usize {
+        self.pos
+    }
+
+    pub fn bytes(&self, n: usize) -> &[u8] {
+        let n = if n > self.pos { self.pos } else { n };
+        &self.buf[..n]
     }
 }
 

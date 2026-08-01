@@ -7,6 +7,10 @@ primitives, spin-as-park, panic-as-API, empty “generated” hubs). Omit
 what is not finished; keep only what is real. Full rule:
 [`.cursor/rules/metal-finished-quality.mdc`](.cursor/rules/metal-finished-quality.mdc).
 
+**Cleanup after yourself:** delete superseded files, rename twins, and
+scratch sidecars when you finish (no plumber debris). Full rule:
+[`.cursor/rules/metal-cleanup-debris.mdc`](.cursor/rules/metal-cleanup-debris.mdc).
+
 **One mechanism per job:** do not keep a second unused path (e.g. boot
 `cas32` ops while locks already use `core::sync::atomic`). Prefer the
 fast direct path; ops indirection only when a real caller uses it now.
@@ -89,13 +93,16 @@ grep -rlE '#include\s*<(Uefi\.h|Library/|Protocol/|IndustryStandard/)' src/pymer
 
 It must return nothing.
 
-## IDE diagnostics (clangd) are part of the job
+## IDE diagnostics are the lint ground truth
 
-The owner works from editor squiggles. After C/include/`.clangd` changes,
-check diagnostics on touched files; refresh `.clangd` from `.clangd.template` when
-the template changed, and **tell them to restart clangd** (or reload the
-window) so they are not chasing stale errors. See
-`.cursor/rules/metal-ide-lint.mdc` and `docs/SOURCETREE.md` (clangd).
+The IDE is the owner's interface — Problems / squiggles outrank "it
+built." After edits, check **editor diagnostics** on touched files
+(`ReadLints`); do not treat forge/cargo exit codes as IDE-clean.
+**Warnings count as errors** in Metal-owned code. Missing clangd `-I` /
+CDB rows while `build.rs` compiles is unfinished. Refresh `.clangd` from
+`.clangd.template` when the template changed, and **tell them to restart
+clangd** (or reload the window) after config/CDB changes. Full rule:
+`.cursor/rules/metal-ide-lint.mdc`.
 
 **No absolute `-I` / `"file"` in IDE metadata** — `.clangd*` and CDB
 command lines stay package-relative. CDB `"directory"` is the absolute

@@ -34,7 +34,7 @@ fn has_flag(sess: &dyn ForgeSession, name: &str) -> bool {
     false
 }
 
-fn usage_lines() -> [&'static str; 13] {
+fn usage_lines() -> [&'static str; 14] {
     [
         "forge - Metal module codegen + image builders + firmware build (solo host tool)",
         "",
@@ -44,6 +44,7 @@ fn usage_lines() -> [&'static str; 13] {
         "  forge convert SRC DST [--force]",
         "  forge img mtar|fat|zip|embed|nest|rootfs|littlefs ...",
         "  forge config edit|gen|old [--metal-root DIR]",
+        "  forge pack DIR|NAME|all [-o OUT.wasm] [--metal-root DIR]",
         "  forge build [bios|efi|all] [--stress] [--metal-root DIR]",
         "  forge run   [bios|efi|all] [--metal-root DIR]",
         "  forge stress [--metal-root DIR]",
@@ -104,6 +105,18 @@ pub fn run<S: ForgeStore, Sess: ForgeSession>(
             return 2;
         }
     }
+    if a0 == "pack" {
+        #[cfg(feature = "solo")]
+        {
+            return crate::_pack::run_pack(sess, &metal_root);
+        }
+        #[cfg(not(feature = "solo"))]
+        {
+            let _ = crate::_port::block_on(|| sess.err_line("forge pack: need solo feature"));
+            sess.set_exit(2);
+            return 2;
+        }
+    }
     if a0 == "build" {
         #[cfg(feature = "solo")]
         {
@@ -157,7 +170,7 @@ pub fn run<S: ForgeStore, Sess: ForgeSession>(
     if a0 != "mod" {
         let _ = crate::_port::block_on(|| {
             sess.err_line(
-                "forge: expected mod|convert|img|config|build|run|stress (see forge --help)",
+                "forge: expected mod|convert|img|config|pack|build|run|stress (see forge --help)",
             )
         });
         sess.set_exit(2);

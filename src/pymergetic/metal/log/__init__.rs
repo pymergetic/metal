@@ -3,7 +3,11 @@
 #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(non_camel_case_types)]
 
+use pymergetic_metal_reg as _;
 use pymergetic_metal_rt as _;
+
+#[path = "_bind.rs"]
+mod bind;
 
 #[cfg(any(target_os = "none", target_os = "uefi"))]
 extern "C" {
@@ -111,4 +115,10 @@ pub unsafe extern "C" fn pm_metal_log_styled(style: pm_metal_log_style_t, line: 
     if needs_nl {
         emit(b"\n");
     }
+}
+
+/// Publish log symbols onto `reg` (`pymergetic.metal.log.*`).
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_log_bind_reg() -> i32 {
+    bind::publish()
 }

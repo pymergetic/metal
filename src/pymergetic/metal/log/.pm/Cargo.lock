@@ -6,6 +6,14 @@ version = 4
 name = "pymergetic_metal_log"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_reg"
+version = "0.1.0"
+dependencies = [
  "pymergetic_metal_rt",
 ]
 

@@ -6,4 +6,8 @@
 #define assert(expr) ((void)0)
 #endif
 
+#ifndef static_assert
+#define static_assert _Static_assert
+#endif
+
 #endif /* PM_METAL_LIBC_ASSERT_H_ */

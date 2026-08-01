@@ -1,0 +1,4 @@
+# Generated faces are not emitted for type=package (wasm packs).
+# Cargo build artefacts stay under .pm/.target via forge pack.
+.pm/.target/
+.pm/Cargo.lock

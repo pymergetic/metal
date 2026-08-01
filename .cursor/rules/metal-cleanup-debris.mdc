@@ -1,0 +1,41 @@
+---
+description: Leave no plumbing debris — delete superseded files, dual paths, and scratch artifacts when finishing a change
+alwaysApply: true
+---
+
+# Cleanup after yourself (no plumber debris)
+
+**Why:** half-finished plumbing (sidecar files, renamed twins, scrape needles,
+scratch markers) stays in the tree and burns the next read. If you would not
+want a tradesperson to leave their trash, do not leave yours.
+
+## When finishing any change
+
+1. **Delete what you replaced.** Renamed `foo` → `bar`? Remove `foo`. Inlined a
+   const that lived in a sidecar file? Delete the sidecar. Moved logic into an
+   API? Grep for the old call sites / strings and remove them.
+2. **One path per job.** No parallel “old scrape + new mark”, no `_notes.rs`
+   beside `notes.rs`, no `include_bytes!("…/ready_mark")` after the mark lives
+   in a `const`. Prefer one source; if host and firmware cannot share a crate,
+   one canonical const plus a one-line “keep identical” comment beats a junk
+   file used only as a byte ferry.
+3. **No scratch left tracked.** Temp logs, `*.bak`, experiment stems, empty
+   stubs, and “just for this debug session” files must be gone before you stop
+   (or never added under `src/`).
+4. **Grep the old name.** After a rename/inline/API swap, search the old
+   symbol, path, and distinctive string. Zero hits outside intentional history
+   comments.
+
+## Banned leftovers (concrete)
+
+- Sidecar data files whose only job was `include_str!` / `include_bytes!` of a
+  short constant (put the bytes in the owning `.rs` / `.c`)
+- Duplicate stems after a move (`_notes.rs` + `notes.rs`)
+- Host scrapers still matching human UX text after a machine mark exists
+- Commented-out old bodies “in case we need them”
+
+## Verify
+
+Before claiming done: `git status` / directory listing of touched folders looks
+intentional — only the real API and its callers, not the scaffolding you used
+to get there.

@@ -6,6 +6,9 @@
 //! **I/O** (do not care what wrapped the link): [`pm_metal_net_ip_tcp_read`] /
 //! [`pm_metal_net_ip_tcp_write`] / [`pm_metal_net_ip_tcp_close`]. Clear or SSL
 //! is attached at open; callers never branch on TLS for byte I/O.
+//!
+//! **Sync poll** (Dropbear): [`pm_metal_net_ip_tcp_try_read`] /
+//! [`pm_metal_net_ip_tcp_try_write`].
 #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(non_camel_case_types)]
 
@@ -867,6 +870,87 @@ pub unsafe extern "C" fn pm_metal_net_ip_tcp_write(stream_h: u32, buf: *const u8
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_net_ip_tcp_close(stream_h: u32) {
     conn_free(stream_h);
+}
+
+/// Sync non-blocking read for Dropbear select/atomicio.
+/// Returns bytes copied, `0` if empty (EAGAIN), or `u32::MAX` if closed/error.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_ip_tcp_try_read(stream_h: u32, buf: *mut u8, cap: u32) -> u32 {
+    if buf.is_null() || cap == 0 {
+        return 0;
+    }
+    ip::pm_metal_net_ip_poll();
+    let c = conn_slot(stream_h);
+    if c.is_null() || (*c).err {
+        return u32::MAX;
+    }
+    if (*c).ssl_h != 0 {
+        let n = ssl::read((*c).ssl_h, buf, cap);
+        if n == ssl::PM_METAL_NET_IP_SSL_WANT_READ || n == ssl::PM_METAL_NET_IP_SSL_WANT_WRITE {
+            if (*c).remote_closed {
+                return u32::MAX;
+            }
+            return 0;
+        }
+        if n < 0 {
+            return u32::MAX;
+        }
+        if n == 0 {
+            return u32::MAX;
+        }
+        return n as u32;
+    }
+    if (*c).rx_off < (*c).rx_len {
+        let n = core::cmp::min(((*c).rx_len - (*c).rx_off) as u32, cap);
+        ptr::copy_nonoverlapping(
+            (*c).rx.as_ptr().add((*c).rx_off as usize),
+            buf,
+            n as usize,
+        );
+        (*c).rx_off += n;
+        if (*c).rx_off >= (*c).rx_len {
+            (*c).rx_off = 0;
+            (*c).rx_len = 0;
+        }
+        return n;
+    }
+    if (*c).remote_closed {
+        return u32::MAX;
+    }
+    0
+}
+
+/// Sync non-blocking write for Dropbear select/atomicio.
+/// Returns bytes sent, or `0` if would-block / error.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_ip_tcp_try_write(
+    stream_h: u32,
+    buf: *const u8,
+    len: u32,
+) -> u32 {
+    if buf.is_null() || len == 0 {
+        return 0;
+    }
+    ip::pm_metal_net_ip_poll();
+    let c = conn_slot(stream_h);
+    if c.is_null() || (*c).err {
+        return 0;
+    }
+    if (*c).ssl_h != 0 {
+        let n = ssl::write((*c).ssl_h, buf as *mut u8, len);
+        if n == ssl::PM_METAL_NET_IP_SSL_WANT_READ || n == ssl::PM_METAL_NET_IP_SSL_WANT_WRITE {
+            return 0;
+        }
+        if n <= 0 {
+            return 0;
+        }
+        return n as u32;
+    }
+    let r = raw_send(c, buf, len);
+    if r == ssl::PM_METAL_NET_IP_SSL_WANT_WRITE || r <= 0 {
+        return 0;
+    }
+    r as u32
 }
 
 #[no_mangle]
