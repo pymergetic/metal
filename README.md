@@ -22,6 +22,14 @@ Tooling detail + roadmap: [`docs/TOOLING.md`](docs/TOOLING.md).
 | `docs/` | Live design + tooling docs |
 | `_old/` | Archived product tree, scripts, patches, Python metal |
 
+## Modules
+
+Lang-pool inventory from `./forge-cli mod sync`
+(`§` original, `*` emitted, `~` marker, `-` noop; `d`/`f` = package entry / sibling).
+Details: [`docs/definitions/module.md`](docs/definitions/module.md).
+
+![forge mod sync — module / lang-pool faces](screenshots/mod-sync.png)
+
 ## Docs
 
 | Doc | Role |
