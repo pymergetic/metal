@@ -15,3 +15,9 @@
 	path = external/edk2
 	url = https://github.com/tianocore/edk2.git
 	branch = edk2-stable202502
+[submodule "external/micropython"]
+	path = external/micropython
+	url = https://github.com/micropython/micropython.git
+[submodule "external/wamr"]
+	path = external/wamr
+	url = https://github.com/bytecodealliance/wasm-micro-runtime.git
