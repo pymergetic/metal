@@ -1,6 +1,0 @@
-# BEGIN metal-generated
-.target/
-target/
-.generated/
-__init__.pyi
-# END metal-generated

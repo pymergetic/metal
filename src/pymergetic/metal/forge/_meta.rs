@@ -15,6 +15,12 @@ pub struct ModuleMeta {
     pub ty: ModuleType,
     pub name: String,
     pub impl_lang: String,
+    /// Can this provider be reloaded/unloaded without the consumer's Cargo
+    /// graph changing? Defaults by `type` (`module` -> false, always
+    /// kernel-linked; `package` -> true, a wasm pack) and may be overridden
+    /// explicitly (a `package` may set `"unloadable": false` to opt into the
+    /// permanent-module fast path -- the "sticky" case).
+    pub unloadable: bool,
 }
 
 fn skip_ws(s: &str, mut i: usize) -> usize {
@@ -74,6 +80,30 @@ fn find_string_field(json: &str, key: &str) -> Option<String> {
     None
 }
 
+/// Extract bool value for a top-level `"key": true|false` (flat object only).
+fn find_bool_field(json: &str, key: &str) -> Option<bool> {
+    let pat = alloc::format!("\"{}\"", key);
+    let mut search_from = 0;
+    while let Some(rel) = json[search_from..].find(&pat) {
+        let start = search_from + rel + pat.len();
+        let mut i = skip_ws(json, start);
+        let b = json.as_bytes();
+        if i >= b.len() || b[i] != b':' {
+            search_from = start;
+            continue;
+        }
+        i = skip_ws(json, i + 1);
+        if json[i..].starts_with("true") {
+            return Some(true);
+        }
+        if json[i..].starts_with("false") {
+            return Some(false);
+        }
+        search_from = start;
+    }
+    None
+}
+
 pub fn parse_module_json(text: &str) -> Result<ModuleMeta, ()> {
     let ty_s = find_string_field(text, "type").ok_or(())?;
     let ty = match ty_s.as_str() {
@@ -84,10 +114,13 @@ pub fn parse_module_json(text: &str) -> Result<ModuleMeta, ()> {
     };
     let name = find_string_field(text, "name").unwrap_or_default();
     let impl_lang = find_string_field(text, "impl").unwrap_or_default();
+    let default_unloadable = matches!(ty, ModuleType::Package);
+    let unloadable = find_bool_field(text, "unloadable").unwrap_or(default_unloadable);
     Ok(ModuleMeta {
         ty,
         name,
         impl_lang,
+        unloadable,
     })
 }
 

@@ -1,8 +1,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <pymergetic/metal/async/handle.h>
-#include <pymergetic/metal/async/runner.h>
 #include <pymergetic/metal/async/time.h>
 #include <pymergetic/metal/boot/banner.h>
 #include <pymergetic/metal/boot/__init__.h>
@@ -10,28 +8,19 @@
 #include <pymergetic/metal/boot/platform/mem_map.h>
 #include <pymergetic/metal/boot/platform/private/bringup.h>
 #include <pymergetic/metal/boot/platform/uart.h>
-#if defined(EXP2_STRESS) && EXP2_STRESS
-int32_t pm_metal_exp2_stress(void);
-#endif
-#include <pymergetic/metal/boot/tree/print.h>
-#include <pymergetic/metal/boot/tree/notes.h>
 #include <pymergetic/metal/console/__init__.h>
-#include <pymergetic/metal/dev/acpi/__init__.h>
-#include <pymergetic/metal/dev/blk/__init__.h>
 #include <pymergetic/metal/dev/serial/__init__.h>
-#include <pymergetic/metal/dev/net/__init__.h>
 #include <pymergetic/metal/log/__init__.h>
-#include <pymergetic/metal/net/ip/__init__.h>
-#include <pymergetic/metal/net/ssh/__init__.h>
-#include <pymergetic/metal/net/http/server.h>
-#include <pymergetic/metal/net/http/__init__.h>
 #include <pymergetic/metal/dt/__init__.h>
 #include <pymergetic/metal/mem/__init__.h>
-#include <pymergetic/metal/py/__init__.h>
-#include <pymergetic/metal/reg/__init__.h>
-#include <pymergetic/metal/wasm/__init__.h>
 
-int32_t pm_metal_boot_rootfs_mount_all(void);
+/*
+ * Empty-boot skeleton (`registration_rethink` plan, Phase A): floor only —
+ * mem/console/dt/serial/banner/time/handoff/harvest, then return. Net/ssh/
+ * http/rootfs/reg-publish/py/wasm proofs, boot tree print, and the async
+ * stay-alive loop are disabled here (not deleted) until their modules are
+ * revived under `_impl/` in later phases.
+ */
 
 void *memset(void *dst, int c, size_t n);
 
@@ -77,21 +66,6 @@ static int32_t fail(const char *msg)
     }
   }
   return -1;
-}
-
-static int compat_eq(const uint8_t *a, const char *b)
-{
-  size_t i;
-
-  if (a == NULL || b == NULL) {
-    return 0;
-  }
-  for (i = 0; b[i] != '\0'; i++) {
-    if (a[i] != (uint8_t)b[i]) {
-      return 0;
-    }
-  }
-  return a[i] == 0;
 }
 
 static int ranges_overlap(uint64_t a, uint64_t alen, uint64_t b, uint64_t blen)
@@ -243,50 +217,22 @@ static int32_t seed_mem_partition(uint8_t *arena, size_t bytes)
 }
 
 
-static int32_t net_dhcp_bringup(void)
-{
-  static const pm_metal_net_ip_l2_ops_t virtio_l2 = {
-    .open = pm_metal_dev_net_virtio_open,
-    .mac  = pm_metal_dev_net_virtio_mac,
-    .tx   = pm_metal_dev_net_virtio_tx,
-    .poll = (pm_metal_net_ip_l2_poll_fn)pm_metal_dev_net_virtio_poll,
-  };
-  char     ip[16];
-  uint64_t start;
-  uint64_t deadline;
-  int32_t  r;
-
-  /* Composition: L2 driver lives in dev/net; IP only sees ops. */
-  if (pm_metal_net_ip_l2_start("lwip+virtio-net", &virtio_l2) != 0) {
-    return -1;
-  }
-  (void)pm_metal_net_ip_loopback_start();
-
-  ip[0]    = '\0';
-  start    = pm_metal_time_mono_us();
-  deadline = start + 10000000ull; /* 10s */
-  for (;;) {
-    pm_metal_net_ip_poll();
-    (void)pm_metal_async_run_poll_all();
-    r = pm_metal_net_ip_if_dhcp_ready("eth0", ip, sizeof(ip));
-    if (r == 1) {
-      return 0;
-    }
-    if (r < 0) {
-      return -1;
-    }
-    if (pm_metal_time_mono_us() >= deadline) {
-      return -1;
-    }
-  }
-}
-
-
 int32_t pm_metal_boot_bringup(void)
 {
   uint8_t *arena;
   size_t bytes;
   int32_t uart_id;
+
+  /*
+   * Registry bootstrap (`registration_rethink` plan, Phase B step 4): every
+   * floor module's register_symbols(), then every module's connect_symbols()
+   * — wires function pointers only (no hardware touched yet), so it runs
+   * first. Replaces the pilot's hand-written console/log register+connect
+   * sequence and `reg/_publish.rs`'s old fixed `publish_kernel()` list.
+   */
+  if (pm_metal_boot_reg_bootstrap() != 0) {
+    return fail("exp2: reg bootstrap failed\n");
+  }
 
   if (pm_metal_boot_mem_map_claim_arena(&arena, &bytes) != 0) {
     return fail("exp2: claim_arena failed\n");
@@ -339,102 +285,8 @@ int32_t pm_metal_boot_bringup(void)
     return fail("exp2: harvest failed\n");
   }
 
-  {
-    uint32_t bi;
-    uint32_t nblk;
-
-    /* Open + bind only; LBA0 hammer lives under forge stress. */
-    if (pm_metal_dev_blk_open() != 0) {
-      return fail("exp2: virtio-blk open failed\n");
-    }
-    nblk = pm_metal_dt_count_class(PM_METAL_DT_CLASS_BLK);
-    for (bi = 0u; bi < nblk; bi++) {
-      const DtNode *n = pm_metal_dt_by_class(PM_METAL_DT_CLASS_BLK, bi);
-      if (n != NULL && n->compat != NULL && compat_eq(n->compat, "virtio-blk")) {
-        (void)pm_metal_dt_or_caps(PM_METAL_DT_CLASS_BLK, bi, (uint32_t)PM_METAL_DT_CAP_BOUND);
-        break;
-      }
-    }
-  }
-
-  /* Runners only — opt-in harness lives under forge stress. */
-  {
-    uint32_t n_cpus = pm_metal_dev_acpi_cpu_count();
-    if (n_cpus == 0u) {
-      n_cpus = 1u;
-    }
-    if (pm_metal_async_start(n_cpus) != 0) {
-      return fail("exp2: async start failed\n");
-    }
-  }
-
-  if (net_dhcp_bringup() != 0) {
-    return fail("exp2: net dhcp failed\n");
-  }
-  if (pm_metal_net_ssh_autoload() != 0) {
-    return fail("exp2: sshd autoload failed\n");
-  }
-  if (pm_metal_net_http_autoload() != 0) {
-    return fail("exp2: httpd autoload failed\n");
-  }
-  {
-    uint32_t ni;
-    uint32_t nnet;
-
-    nnet = pm_metal_dt_count_class(PM_METAL_DT_CLASS_NET);
-    for (ni = 0; ni < nnet; ni++) {
-      const DtNode *n = pm_metal_dt_by_class(PM_METAL_DT_CLASS_NET, ni);
-      if (n != NULL && n->compat != NULL && compat_eq(n->compat, "virtio-net")) {
-        (void)pm_metal_dt_or_caps(PM_METAL_DT_CLASS_NET, ni, (uint32_t)PM_METAL_DT_CAP_BOUND);
-        break;
-      }
-    }
-  }
-
-  /* Stage A/B rootfs after harvest/net so tree fs/net match reality. */
-  if (pm_metal_boot_rootfs_mount_all() != 0) {
-    return fail("exp2: rootfs mount failed\n");
-  }
-
-  /* Proofs before tree so emitters can show await / wasm / http health. */
-  if (pm_metal_reg_publish_kernel() != 0) {
-    return fail("exp2: reg publish_kernel failed\n");
-  }
-  {
-    int32_t ok;
-
-    ok = (pm_metal_net_http_proof_health() == 0) ? 1 : 0;
-    pm_metal_boot_tree_note_http(ok);
-    if (ok == 0) {
-      return fail("exp2: httpd health proof failed\n");
-    }
-    ok = (pm_metal_py_proof_print() == 0) ? 1 : 0;
-    pm_metal_boot_tree_note_py(ok);
-    if (ok == 0) {
-      return fail("exp2: py proof_print failed\n");
-    }
-    ok = (pm_metal_py_proof_await() == 0) ? 1 : 0;
-    pm_metal_boot_tree_note_await(ok);
-    if (ok == 0) {
-      return fail("exp2: py proof_await failed\n");
-    }
-    ok = (pm_metal_wasm_proof() == 0) ? 1 : 0;
-    pm_metal_boot_tree_note_wasm(ok);
-    if (ok == 0) {
-      return fail("exp2: wasm proof failed\n");
-    }
-  }
-
-  if (pm_metal_boot_tree_print() != 0) {
-    return fail("exp2: boot tree failed\n");
-  }
-
-#if defined(EXP2_STRESS) && EXP2_STRESS
-  if (pm_metal_exp2_stress() != 0) {
-    return -1;
-  }
-#endif
-
-  /* Stay alive: runners keep ssh/http pumping. Forge stops on ready needle. */
-  pm_metal_async_run_loop();
+  /* Floor stops here. Net/ssh/http/rootfs/reg-publish/py/wasm proofs, boot
+   * tree print, and stress live under forge PRODUCT_COMMON / disabled Cargo
+   * deps until revived (Phase B/E). */
+  return 0;
 }

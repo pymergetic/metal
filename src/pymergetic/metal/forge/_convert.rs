@@ -7,7 +7,6 @@ use alloc::string::String;
 
 use crate::_banner::{content_has_banner, face_matches_source_sha, generated_hint};
 use crate::_catalog::Catalog;
-use crate::_gitignore;
 use crate::_hash::source_sha_hex;
 use crate::_meta::{join_path, parse_module_json, ModuleMeta};
 use crate::_pool::{face_rel, pool_slot, slot_from_path, ENTRY_STEM};
@@ -42,6 +41,115 @@ pub fn import_catalog(src_slot: &str, text: &str) -> Result<Catalog, ()> {
     }
 }
 
+fn known_type_name(cat: &Catalog, name: &str) -> bool {
+    cat.structs.iter().any(|s| s.name == name)
+        || cat.enums.iter().any(|e| e.name == name)
+        || cat.typedefs.iter().any(|t| t.name == name)
+}
+
+/// Foreign `pm_metal_*_t` identifiers referenced by this catalog's own
+/// functions but not defined in it -- mirrors `_export_c.rs`'s own
+/// `foreign_type_names` tokenizing.
+fn foreign_type_names(cat: &Catalog) -> alloc::vec::Vec<String> {
+    let mut out: alloc::vec::Vec<String> = alloc::vec::Vec::new();
+    let mut push = |raw: &str| {
+        for tok in raw.split(|c: char| {
+            c.is_whitespace() || c == '*' || c == ',' || c == '(' || c == ')' || c == '[' || c == ']'
+        }) {
+            let t = tok.trim();
+            if t.starts_with("pm_metal_")
+                && t.ends_with("_t")
+                && !known_type_name(cat, t)
+                && !out.iter().any(|x| x == t)
+            {
+                out.push(String::from(t));
+            }
+        }
+    };
+    for f in &cat.fns {
+        push(&f.ret);
+        for a in &f.args {
+            push(&a.ty);
+        }
+    }
+    out
+}
+
+/// Sibling stems in the same module directory sometimes own a typedef
+/// this stem's own function signatures reference by name (e.g. an
+/// `async/task.rs` spawn fn taking `async/coro.rs`'s step-fn typedef) --
+/// each generated Rust face must stay a self-contained translation unit,
+/// so pull in any such foreign typedef/struct/enum definition by name
+/// before exporting. `_export_c.rs`'s equivalent instead forward-declares
+/// an opaque struct, which is not viable here: Rust cannot make a
+/// by-value function-pointer typedef opaque, so the real definition is
+/// required.
+fn resolve_foreign_types<S: ForgeStore>(
+    store: &mut S,
+    mod_dir: &str,
+    src_slot: &str,
+    human_path: &str,
+    cat: &mut Catalog,
+) {
+    let missing = foreign_type_names(cat);
+    if missing.is_empty() {
+        return;
+    }
+    let impl_dir = join_path(mod_dir, "_impl");
+    let src_dir = if block_on(|| store.is_dir(&impl_dir)) {
+        impl_dir
+    } else {
+        String::from(mod_dir)
+    };
+    let names = match block_on(|| store.list_dir(&src_dir)) {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    for name in names {
+        if missing.iter().all(|n| known_type_name(cat, n)) {
+            break;
+        }
+        let path = join_path(&src_dir, &name);
+        if path == human_path || !block_on(|| store.is_file(&path)) {
+            continue;
+        }
+        let Ok(text) = read_text(store, &path) else {
+            continue;
+        };
+        let Ok(sib_cat) = import_catalog(src_slot, &text) else {
+            continue;
+        };
+        for want in &missing {
+            if known_type_name(cat, want) {
+                continue;
+            }
+            if let Some(td) = sib_cat.typedefs.iter().find(|t| &t.name == want) {
+                cat.typedefs.push(td.clone());
+            } else if let Some(st) = sib_cat.structs.iter().find(|s| &s.name == want) {
+                cat.structs.push(st.clone());
+            } else if let Some(en) = sib_cat.enums.iter().find(|e| &e.name == want) {
+                cat.enums.push(en.clone());
+            }
+        }
+    }
+}
+
+/// Emit the face for `dst_slot`. `provider_unloadable` forks the `rs`
+/// slot only, between the two shapes in docs/definitions/module.md
+/// "Two face shapes: fast-path vs registry-proxy":
+///
+/// - `false` (permanent module, or a sticky package): [`crate::_export_rs::export`]
+///   -- plain `extern "C"` declarations, resolved at link time.
+/// - `true` (genuinely unloadable -- wasm, Python): [`crate::_export_rs::export_proxy`]
+///   -- cached [`pymergetic_metal_reg::ImportRow`][row] + refcounted call.
+///
+/// `c`/`py` do not fork on this yet: no unloadable provider exists in the
+/// tree today for either consumer language to prove the shape against
+/// end-to-end (deferred to the wasm/Python revival in
+/// `registration_rethink_scope`'s Phase E, per metal-finished-quality --
+/// omit rather than ship an unexercised guess at the shape).
+///
+/// [row]: pymergetic_metal_reg::ImportRow
 pub fn export_face(
     dst_slot: &str,
     name: &str,
@@ -49,10 +157,15 @@ pub fn export_face(
     cat: &Catalog,
     human: &str,
     source_sha: &str,
+    provider_unloadable: bool,
 ) -> Option<String> {
     match dst_slot {
         "c" => Some(crate::_export_c::export(name, stem, cat, human, source_sha)),
-        "rs" => Some(crate::_export_rs::export(name, stem, cat, human, source_sha)),
+        "rs" => Some(if provider_unloadable {
+            crate::_export_rs::export_proxy(name, stem, cat, human, source_sha)
+        } else {
+            crate::_export_rs::export(name, stem, cat, human, source_sha)
+        }),
         "py" => Some(crate::_export_py::export(name, stem, cat, human, source_sha)),
         "toml" => {
             let s = crate::_export_toml::export(name, stem, cat, human, source_sha);
@@ -66,17 +179,19 @@ pub fn export_face(
     }
 }
 
-/// Write banner-owned `rel` under `mod_dir`, or refuse human / private paths.
+/// Write banner-owned `rel` under `out_dir` (a module's mirrored
+/// `include/pymergetic/metal/<mod>/` directory, never the module's own
+/// `src/` directory), or refuse human / private paths.
 pub fn write_generated<S: ForgeStore>(
     store: &mut S,
-    mod_dir: &str,
+    out_dir: &str,
     rel: &str,
     content: &str,
 ) -> Result<(), String> {
     if !content.contains(generated_hint()) {
         return Err(alloc::format!("codegen refuses content without banner: {}", rel));
     }
-    let path = join_path(mod_dir, rel);
+    let path = join_path(out_dir, rel);
     let base = rel.rsplit('/').next().unwrap_or(rel);
     let stem = base.rsplit_once('.').map(|(s, _)| s).unwrap_or(base);
     // Package entry `__init__` is public; other `_*.*` stems stay private.
@@ -106,20 +221,29 @@ pub fn path_is_fresh<S: ForgeStore>(store: &mut S, path: &str, want: &str) -> bo
     }
 }
 
-/// Convert human impl at `human_path` into one pool face under `mod_dir`.
+/// Convert human impl at `human_path` into one pool face under `out_dir`
+/// (the module's mirrored `include/pymergetic/metal/<mod>/` directory).
+/// `mod_dir` (the module's own `src/` directory) is only used for the
+/// package-name fallback when `.pm/module`'s `name` is empty.
 ///
 /// When `force` is false and the face's `Source-sha` already matches the
 /// human source fingerprint, skip the write (`FaceAction::Fresh`).
 pub fn convert_stem_slot<S: ForgeStore>(
     store: &mut S,
     mod_dir: &str,
+    out_dir: &str,
     meta: &ModuleMeta,
     human_path: &str,
     dst_slot: &str,
     force: bool,
 ) -> Result<FaceAction, String> {
     let own = pool_slot(&meta.impl_lang).unwrap_or("");
-    if dst_slot == own {
+    // `rs` is always generated even when `own == "rs"` (Rust-to-Rust goes
+    // through a generated face too, see `emit_slots`); `c`/`py` own-slot
+    // calls should never reach here since `emit_slots` already excludes
+    // them, but skip defensively rather than emitting a same-language
+    // mirror of the human source.
+    if dst_slot == own && dst_slot != "rs" {
         return Ok(FaceAction::Empty);
     }
     let human_name = human_path.rsplit('/').next().unwrap_or(human_path);
@@ -141,18 +265,23 @@ pub fn convert_stem_slot<S: ForgeStore>(
     let text = read_text(store, human_path).map_err(|_| alloc::format!("read {}", human_path))?;
     let source_sha = source_sha_hex(text.as_bytes());
     let rel = face_rel(dst_slot, stem);
-    let dst_path = join_path(mod_dir, &rel);
+    let dst_path = join_path(out_dir, &rel);
     if !force && path_is_fresh(store, &dst_path, &source_sha) {
         return Ok(FaceAction::Fresh);
     }
 
     let src_slot = pool_slot(&meta.impl_lang).unwrap_or("");
-    let cat = import_catalog(src_slot, &text)
+    let mut cat = import_catalog(src_slot, &text)
         .map_err(|_| alloc::format!("import {}", human_path))?;
-    let Some(content) = export_face(dst_slot, &name, stem, &cat, human_name, &source_sha) else {
+    if dst_slot == "rs" {
+        resolve_foreign_types(store, mod_dir, src_slot, human_path, &mut cat);
+    }
+    let Some(content) =
+        export_face(dst_slot, &name, stem, &cat, human_name, &source_sha, meta.unloadable)
+    else {
         return Ok(FaceAction::Empty);
     };
-    write_generated(store, mod_dir, &rel, &content)?;
+    write_generated(store, out_dir, &rel, &content)?;
     Ok(FaceAction::Written)
 }
 
@@ -243,9 +372,14 @@ pub fn convert_paths<S: ForgeStore>(
         alloc::format!("{}.{}", pkg, stem)
     };
 
-    let cat = import_catalog(src_slot, &text)
+    let mut cat = import_catalog(src_slot, &text)
         .map_err(|_| alloc::format!("convert: import {}", src))?;
-    let Some(content) = export_face(dst_slot, &name, stem, &cat, human_name, &source_sha) else {
+    if dst_slot == "rs" {
+        resolve_foreign_types(store, &mod_dir, src_slot, src, &mut cat);
+    }
+    let Some(content) =
+        export_face(dst_slot, &name, stem, &cat, human_name, &source_sha, meta.unloadable)
+    else {
         return Ok(FaceAction::Empty);
     };
 
@@ -260,6 +394,5 @@ pub fn convert_paths<S: ForgeStore>(
         face_rel(dst_slot, stem)
     };
     write_generated(store, &mod_dir, &rel, &content)?;
-    _gitignore::update(store, &mod_dir);
     Ok(FaceAction::Written)
 }

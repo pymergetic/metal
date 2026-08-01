@@ -8,13 +8,66 @@ unified public surface. Experimentation lives under ``; product
 **Tooling / CLI workflow:** [`docs/TOOLING.md`](../TOOLING.md) (`metal`
 under `tools/metal/`).
 
+**Status — corrected twice; this is the final shape.** The registry
+(`register_symbols`/`connect_symbols`, cached fn pointer per import slot,
+refcount) is for **unloadable** modules only — a provider that can be
+reloaded/unloaded without the consumer's Cargo graph changing (wasm guest
+modules, Python attach; see `reg`'s static per-module layer, and the real
+callers in `wasm/__init__.rs` and `py/upy/py/builtin/builtinimport.rs`).
+
+An earlier pass applied the *runtime* registry to **every** compile-time-
+known floor module unconditionally, including ones that are never
+unloaded (`console`, `mem`, `log`, `async`, `boot`, the detector modules,
+...). That overreach was correctly walked back — but the walk-back
+overshot too: it deleted the generated `include/` face tree entirely and
+fell back to raw Cargo-dependency direct calls for everything, including
+same-language Rust-to-Rust. That is **also** wrong. The actual rule has
+two independent axes:
+
+1. **Every module's public surface is always auto-generated** into
+   `include/pymergetic/metal/<mod>/...` (mirrored from `_impl/`, the
+   `_impl` segment and leading underscores stripped) for every consumer
+   language, Rust-to-Rust included. A module's own `src/` directory holds
+   only human input (`_impl/`, `.pm/`) — never a generated face. The only
+   exception is the **spine**: `mem` and `reg` are foundational/bootstrap-
+   critical enough that a direct `_impl` Cargo dependency on them is
+   tolerated everywhere (matching "Call path: proxies everywhere except
+   spine" in the registration_rethink design).
+2. **Which shape that generated face takes** depends on whether the
+   *provider* is unloadable (`.pm/module`'s `unloadable` field, below):
+   a permanently-linked provider (or a `package` marked non-unloadable,
+   i.e. "sticky") gets a **fast-path face** — a plain `extern "C"`
+   declaration resolved at link time, no cache slot, no runtime connect,
+   no refcount. A genuinely unloadable provider gets a **registry-proxy
+   face** — cached slot, populated by `connect_symbols`, refcounted on
+   call, torn down on unload.
+
+So: no module hand-writes a `_reg.rs` sidecar or a raw `extern "C"`
+forward declaration for a peer it isn't Cargo-cycled with — the face is
+always generated, into `include/`, for every module. Same-module-internal
+calls (between a module's own `_impl/*.rs` files) stay direct, unaffected
+by any of this. A genuine Cargo cycle (e.g. `rt` <-> `console`/`mem`, both
+of which depend on `rt`) still resolves via a raw `extern "C"` forward
+declaration since `rt` cannot Cargo-depend on either — this is the same
+fast-path shape a generated face would produce, just currently
+hand-written (see `rt/_impl/_ffi.rs`).
+
+**Kernel is a module too.** The `pymergetic.metal` namespace root
+(`src/pymergetic/metal/.pm/module`) is the first module in boot order,
+permanently `unloadable = false`, and follows the exact same
+register/connect/lifecycle shape as every other module — not a bare
+marker with zero ABI. See "Module lifecycle" below.
+
 ---
 
 ## Goals
 
-- **One module folder** under `src/…` — no parallel handwritten `include/`
-  twin for new modules (`include/` collapses into `src`; `-I src`).
-- **Any language may implement**; any language may consume.
+- **One module folder** under `src/…`, human-only: `_impl/` (real
+  sources) + `.pm/` (metadata) — nothing else. Every generated face for
+  that module mirrors out to `include/pymergetic/metal/<mod>/…`, never
+  colocated with the human source.
+- **Any language may implement**; any language may consume, always
+  through the generated `include/` face (spine exception: `mem`, `reg`).
 - **Lang pool** — one impl in; emit the other pool faces (see below).
   `cpp` shares the `c` slot; `toml` is output-only and not default.
 - **Runtime border is C** — generated `__init__.h` (or sibling-stem
@@ -31,73 +84,74 @@ under `tools/metal/`).
 
 ```text
 <path/to/module>/                 # e.g. src/pymergetic/metal/dt/
-  __init__.rs                     # HUMAN — package entry when impl=rs
-  …                               # other HUMAN sibling stems (same lang)
-  __init__.h                      # GENERATED — C pool face (when impl slot != c)
-  __init__.pyi                    # GENERATED — py pool face (when impl != py)
+  _impl/                          # HUMAN — the whole implementation
+    __init__.rs                   # package entry when impl=rs
+    …                             # other HUMAN sibling stems (same lang)
   .pm/
     module                        # HUMAN — JSON metadata (required)
     Cargo.toml                    # HUMAN — Rust crate (when impl=rs)
     build.rs / smoke.*            # optional schema
   nested/                         # optional nested Metal module
     .pm/module
-    __init__.rs
+    _impl/__init__.rs
   platform/                       # example: nested C module (boot ops)
     .pm/module                    # impl=c
-    *.h                           # HUMAN C stems
+    _impl/*.h                     # HUMAN C stems
     bios/ efi/                    # hidden ports (.pm/module type=hidden)
+
+include/pymergetic/metal/<mod>/   # GENERATED ONLY — every pool face for
+  __init__.h __init__.pyi …       # every module lands here, mirrored from
+                                   # _impl/ (that path segment dropped)
 ```
 
 | Path | Who writes it |
 |------|----------------|
 | `.pm/module` | human (JSON) |
 | `.pm/Cargo.toml`, `.pm/build.*`, `.pm/smoke.*` | human |
-| `__init__.{impl_ext}` and other impl sources | human |
+| `_impl/__init__.{impl_ext}` and other impl sources | human |
 | `type=hidden` trees | human — never codegen |
-| pool faces (`*.h` / `*.rs` / `*.pyi` / optional `*.toml`) | **codegen** (banner-owned) |
+| `include/pymergetic/metal/<mod>/*` (`*.h` / `*.rs` / `*.pyi` / optional `*.toml`) | **codegen** (banner-owned) |
 
-Human and generated files share the module root (except schema under
-`.pm/`). Ownership is the in-file banner, not a separate `_impl/` tree.
+**A module's own directory under `src/` holds only `_impl/` and `.pm/` —
+nothing else.** Every generated face, for every pool language including
+the module's own consumers, lives under the separate `include/` tree,
+never colocated with human source. This is what keeps `_impl/` "safe to
+touch" — it is never itself a build/include root for anyone outside the
+module, so renames/refactors inside it can never break a foreign caller
+by accident; the only contract a foreign caller sees is the generated
+face.
 
 ### Banner write gate (hard)
 
-Before writing output `REL` (path relative to the module root):
+Before writing output `REL` (path relative to `include/pymergetic/metal/`):
 
-1. Module has `.pm/module` with `type` `module` or `package`.
-2. `REL` is not under `.pm/` and not under any `type=hidden` subtree.
-3. If `mod/REL` **exists** and does **not** contain
-   `DO NOT HAND-EDIT THIS FILE.` → **refuse** (human-owned).
+1. The module at the mirrored `src/` location has `.pm/module` with
+   `type` `module` or `package`.
+2. `REL`'s mirrored `_impl/` source is not under `.pm/` and not under any
+   `type=hidden` subtree.
+3. If `include/pymergetic/metal/REL` **exists** and does **not** contain
+   `DO NOT HAND-EDIT THIS FILE.` → **refuse** (treat as human-owned; this
+   should never actually happen since nothing hand-writes into `include/`).
 4. Otherwise write `REL` (content must include that banner line).
 
 **Entry symmetry:** package entry is usually `__init__` + `impl` extension
-(for `impl=c`, prefer `__init__.h` then `__init__.c`). Sibling-only modules
-are allowed when every public stem is a sibling (e.g. `boot/platform/` with
-`uart.h`, `mem_map.h`, … and no umbrella `__init__.h`). Generated faces
-are the **other** pool extensions of each stem. Sync never emits the impl’s
-own slot (no second `uart.h` when `impl=c`).
+(for `impl=c`, prefer `_impl/__init__.h` then `_impl/__init__.c`).
+Sibling-only modules are allowed when every public stem is a sibling
+(e.g. `boot/platform/` with `uart.h`, `mem_map.h`, … and no umbrella
+`__init__.h`). Generated faces are the **other** pool extensions of each
+stem, plus (per "Module lifecycle" below) either a fast-path `extern "C"`
+declaration or a registry-proxy, depending on the provider's
+`unloadable` flag. Sync never emits the impl's own slot (no second
+`uart.h` when `impl=c`).
 
-### Module-local `.gitignore` (generated outputs)
+### `include/` is wholesale-generated (no per-file bookkeeping)
 
-`metal mod sync` also updates a **dir-local** `.gitignore` in the module
-root. It rewrites a managed block so clones ignore projections without a
-repo-wide allowlist:
-
-```gitignore
-# BEGIN metal-generated
-.target/
-target/
-__init__.h
-__init__.pyi
-__init__.toml
-# END metal-generated
-```
-
-`__init__.toml` appears in the ignore block when emitted (`--emit toml`).
-`metal mod clean` removes it with every other banner-owned face.
-
-The `.gitignore` file itself is committed. Do not hand-edit the managed
-block; do not commit generated faces. Human sources (`__init__.{ext}`,
-`.pm/module`, …) stay tracked.
+The entire `include/` tree is generated and gitignored with a single
+root-level `/include/` line — there is no per-module `.gitignore`
+management for generated faces anymore (a module's own directory never
+contains anything generated to ignore). `metal mod clean` wipes and lets
+the next `mod sync` regenerate the whole tree; there is no partial/stale
+state to reconcile file-by-file.
 
 Port contracts for multi-target firmware belong in a nested C module
 (e.g. `boot/platform/*.h`) with `bios/` / `efi/` as **hidden** children —
@@ -151,18 +205,51 @@ templates, etc.
 
 ### Consume foreign modules (no ABI twins)
 
-Call another module through **its** lang-pool face for your language.
-Do not redeclare its structs / `extern "C"` / private twin headers.
+Call another module through **its** generated `include/pymergetic/metal/<mod>/`
+face for your language — always, including Rust-to-Rust. Do not
+redeclare its structs / `extern "C"` / private twin headers, and do not
+Cargo-depend on a peer's `_impl` crate just to call it directly (that
+skips the generated face and re-creates exactly the "hand-duplicated
+ABI" this rule exists to prevent). The two exceptions:
+
+- **Spine:** `mem` and `reg` are foundational/bootstrap-critical enough
+  that every consumer takes a direct `_impl` Cargo dependency on them and
+  calls straight through — no generated face, no indirection at all
+  (matches "Call path: proxies everywhere except spine" in the
+  `registration_rethink` design).
+- **A genuine Cargo cycle** (e.g. `rt` <-> `console`/`mem`, both of which
+  depend on `rt`): a raw `extern "C"` forward declaration, hand-written,
+  since neither side can Cargo-depend on the other. This is the same
+  shape a generated fast-path face would produce; it's just hand-written
+  here because generating it would require the provider to depend on the
+  consumer to know its own name, which is what the cycle forbids.
 
 | Provider `impl` | C consumer | Rust consumer |
 |-----------------|------------|---------------|
 | `rs` / `py` | generated `{base}.h` | generated `{base}.rs` |
 | `c` / `cpp` | human `{base}.h` | generated `{base}.rs` |
 
-Example: `boot` (Rust) uses `#[path = "platform/uart.rs"]` (generated
-from human `uart.h`). BIOS C includes human `platform/*.h` and
-generated `mem/__init__.h` / `dt/__init__.h`. Safe wrappers may wrap the
+Example: `boot`'s Rust bring-up code consumes `boot/platform`'s (impl=c)
+UART ops via `#[path = "../../../../../include/pymergetic/metal/boot/platform/__init__.rs"]`
+(generated from human `uart.h`) — never a colocated `platform/uart.rs`
+twin, per "One module folder" above. BIOS C includes human
+`platform/*.h` and generated `include/pymergetic/metal/mem/__init__.h` /
+`include/pymergetic/metal/dt/__init__.h`. Safe wrappers may wrap the
 face; they must not copy it.
+
+### Two face shapes: fast-path vs registry-proxy
+
+What a generated face actually contains depends on the **provider's**
+`unloadable` flag (see Markers below), not the consumer:
+
+| Provider `unloadable` | Face shape | Runtime cost |
+|------------------------|-----------|---------------|
+| `false` (permanently linked, or a `package` marked sticky) | Fast path: plain `extern "C"` declaration | Link-time resolution only — no cache slot, no `connect_symbols` participation, no refcount |
+| `true` (genuinely reloadable/unloadable — wasm, Python) | Registry proxy: cached slot populated by `connect_symbols`, refcounted on call | One indirect load + a refcount inc/dec per call |
+
+This is the only place unloadability matters. Whether a face exists at
+all is unconditional (every module, every consumer language); which
+shape it takes is conditional on the provider.
 
 ### Practical tool map (incremental)
 
@@ -203,9 +290,20 @@ One JSON file per directory: `.pm/module`. The former root files
   "type": "module",
   "name": "pymergetic.metal.dt",
   "impl": "rs",
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "unloadable": false
 }
 ```
+
+**`unloadable` (bool, optional):** can this provider be reloaded/unloaded
+without every consumer's Cargo graph changing? Defaults from `type` when
+omitted: `module` -> always `false` (kernel-linked, permanent); `package`
+-> `true` (a wasm pack, assumed reloadable). A `package` may set
+`"unloadable": false` explicitly to opt into the fast-path face despite
+being wasm — the "sticky" case (e.g. a pack that's always resident once
+loaded and never actually unloaded in practice). `module` may not set
+`"unloadable": true` — a kernel-linked module cannot be unloaded, full
+stop. See "Two face shapes" above and "Module lifecycle" below.
 
 `hidden` may be only `{ "type": "hidden" }`. Rust crates also keep
 `Cargo.toml` (and optional `build` / `smoke`) under `.pm/`.
@@ -221,6 +319,39 @@ hand-written without the ownership banner. `{base}.toml` is optional
    a `hidden` subtree).
 3. Prefer known pool face basenames (`{base}.h`, `{base}.rs`,
    `{base}.pyi`, optional `{base}.toml`).
+
+---
+
+## Module lifecycle
+
+Every module — including the kernel namespace root itself — follows the
+same six-hook shape (full design/rationale:
+[`registration_rethink_scope_5d2d2f59.plan.md`](../../.cursor/plans/registration_rethink_scope_5d2d2f59.plan.md)
+"Bootstrap (refined)"):
+
+| Hook | Who calls it | Does |
+|------|--------------|------|
+| `on_load` | loader (boot, or a wasm/py loader later) | one-time setup before registering exports |
+| `register_symbols` | loading module | publish this module's exports |
+| `connect_symbols` | every loaded module, after any load/unload | resolve this module's imports against currently-registered exports |
+| `on_registrations_updated` | every loaded module | optional extra hook; default just calls `connect_symbols` again |
+| `deregister_symbols` | unloading module | withdraw this module's exports before teardown |
+| `on_unload` | unloading module | release resources; **cascades to child module substructure first** (a package's children are unloaded before the package itself finishes unloading) |
+
+**Kernel = first module.** `pymergetic.metal`'s own `_impl/__init__.rs`
+runs `on_load` -> `register_symbols` -> `connect_symbols` first, before
+any other module, and is permanently `unloadable = false` — it never runs
+`deregister_symbols`/`on_unload` in practice, but it carries the same
+hook shape as everything else ("kernel is kernel": permanent and first,
+not architecturally special).
+
+**Refcount only crosses an unloadable boundary.** A cross-module call
+where *either* side is `unloadable = true` goes through a refcounted
+handle (increment on acquire, decrement on release, entry stays live
+until refs hit zero even if unload is requested mid-call). When *both*
+sides are permanent (`unloadable = false`, including a sticky package),
+the fast-path face applies and no refcount/lock exists on that path at
+all — see "Two face shapes" above.
 
 ---
 
@@ -380,37 +511,41 @@ Only **ready** symbols appear on the C hub and thus on consumer faces:
 Same module path, language = suffix — all meaning “bind the hub `.h`”:
 
 ```text
-…/mem/__init__.rs       # HUMAN when impl=rs
-…/mem/__init__.h        # GENERATED C hub
-…/mem/.pm/module        # JSON metadata
-…/mem/.pm/Cargo.toml    # Rust crate
-…/mem/.pm/build.rs      # schema: cargo/native build hook
-…/mem/.pm/smoke.rs      # schema: host smoke (metal mod test)
-…/mem/arena/__init__.rs # nested module
-…/mem/tlsf/__init__.rs  # nested module
+…/mem/_impl/__init__.rs               # HUMAN when impl=rs
+…/mem/.pm/module                      # JSON metadata
+…/mem/.pm/Cargo.toml                  # Rust crate
+…/mem/.pm/build.rs                    # schema: cargo/native build hook
+…/mem/.pm/smoke.rs                    # schema: host smoke (metal mod test)
+…/mem/arena/_impl/__init__.rs         # nested module
+…/mem/tlsf/_impl/__init__.rs          # nested module
+
+include/pymergetic/metal/mem/__init__.h   # GENERATED C hub (mirrors mem/_impl/__init__.rs)
 ```
 
 Same `__init__` stem throughout. When `impl=rs`, there is no generated
-`__init__.rs`.
+`__init__.rs` face for that module's *own* consumers of other languages,
+but foreign Rust consumers still get a generated `include/.../__init__.rs`
+face (see "Two face shapes").
 
 ---
 
 ## Build / consume sketch
 
 ```text
-.module + __init__.{ext}
+.pm/module + _impl/__init__.{ext}
         │
         ├─ metal mod sync
-        │     1) EXPORT  impl → __init__.h  (+ C glue if needed)
-        │     2) IMPORT  __init__.h → missing faces (.rs / .pyi / …)
-        │        (+ ownership banner, module .gitignore)
+        │     1) EXPORT  impl → include/…/__init__.h  (+ C glue if needed)
+        │     2) IMPORT  include/…/__init__.h → missing faces (.rs / .pyi / …)
+        │        (+ ownership banner; include/ is wholesale-gitignored)
         │
-        └─ compile human sources (+ any generated C glue) → link
+        └─ compile human sources (+ any generated C glue), each consumer
+           `#include`/imports the peer's `include/pymergetic/metal/<mod>/`
+           face → link
 ```
 
-Guest / mod builds: `-I src` (or the package root that contains these
-module paths). No separate handwritten `include/pymergetic/…` for modules
-that have adopted this layout.
+Guest / mod builds: `-I include -I src` (source for the module's own
+`_impl/`, `include` for every foreign face it consumes).
 
 ---
 
@@ -452,7 +587,7 @@ for bring-up; `.pyi` + register-time C→Python bind for non-Python impls.
 
 | Today | Direction |
 |-------|-----------|
-| `include/pymergetic/metal/**/*.h` handwritten | Become generated next to modules; retire dual tree |
+| `include/pymergetic/metal/**/*.h` handwritten | Retired as a *handwritten* tree; revived as a **fully generated** one (see Layout) — every module's faces (own pool faces + foreign-consumer faces, fast-path or registry-proxy per the provider's `unloadable` flag) land under `include/pymergetic/metal/<mod>/`, never hand-written, never colocated with `_impl/`. |
 | `runtime/mem/{mem,arena,tlsf*}.c` | Move into flat module sources (lang TBD); libc/limits **out** of mem |
 | `runtime/mem/host_stubs`, `libc*.c`, `limit*` | Wrong concern — not part of the mem module |
 | `` | First place to adopt `.module` + `__init__` entry + lang pool |
@@ -464,14 +599,17 @@ dialect- and port-shaped until a module is migrated.
 
 ## Checklist (new module)
 
-1. Create directory + `.pm/module` JSON (`type`, `impl`, …).
-2. Add `__init__.{impl_ext}` (e.g. `__init__.rs`) and sibling sources.
+1. Create directory + `.pm/module` JSON (`type`, `impl`, `unloadable`, …).
+2. Add `_impl/__init__.{impl_ext}` (e.g. `_impl/__init__.rs`) and sibling
+   sources — nothing else at the module root besides `_impl/` and `.pm/`.
 3. Optional schema: `.pm/Cargo.toml`, `.pm/build.{ext}`, `.pm/smoke.{ext}`.
 4. Expose a C-shaped border in that source (`extern "C"` / prototypes)
    so export can fill the in-memory catalog.
-5. Run `metal mod sync` → other pool faces + module `.gitignore`
-   (optional: `--emit toml`).
-6. Wire build to compile human sources (+ C glue if any) and `-I src`.
+5. Run `metal mod sync` → own pool faces + foreign-consumer faces land
+   under `include/pymergetic/metal/<mod>/` (optional: `--emit toml`).
+6. Wire build to compile `_impl/` sources (+ C glue if any); `-I include`
+   for anything this module consumes from a peer, `-I src` for its own
+   `_impl/`.
 7. Confirm sync refuses to overwrite human files (no ownership banner).
 8. Do not emit faces from source while skipping the catalog object; do
-   not regenerate human `__init__.{ext}`.
+   not regenerate human `_impl/__init__.{ext}`.

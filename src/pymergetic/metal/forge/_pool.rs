@@ -39,6 +39,21 @@ pub fn slot_from_path(path: &str) -> Option<&'static str> {
     }
 }
 
+/// Which pool faces to generate for a module implemented in `impl_lang`.
+///
+/// `c` and `py` are skipped when they equal the impl's own slot -- a
+/// same-language C-to-C or Python-to-Python consumer uses the human
+/// source directly (a C consumer `#include`s the human `.h`; Python
+/// imports the human `.py` module), so a generated mirror of the impl's
+/// own language would be pointless there.
+///
+/// `rs` is the one exception: every consumer language always gets a
+/// generated `include/pymergetic/metal/<mod>/` face, Rust-to-Rust
+/// included -- a Rust consumer of an `impl=rs` provider does not get a
+/// free pass to Cargo-depend on the provider's `_impl` crate directly
+/// (see docs/definitions/module.md "Consume foreign modules"; `mem`/
+/// `reg` are the only spine exception, handled outside this pool
+/// machinery entirely).
 pub fn emit_slots(impl_lang: &str, extra_toml: bool) -> Vec<&'static str> {
     let own = match pool_slot(impl_lang) {
         Some(s) => s,
@@ -46,15 +61,13 @@ pub fn emit_slots(impl_lang: &str, extra_toml: bool) -> Vec<&'static str> {
     };
     let mut out = Vec::new();
     for s in POOL {
-        if s == own {
+        if s == own && s != "rs" {
             continue;
         }
         if s == "toml" && !extra_toml {
             continue;
         }
-        if s == "toml" || s == "c" || s == "rs" || s == "py" {
-            out.push(s);
-        }
+        out.push(s);
     }
     out
 }

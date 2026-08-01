@@ -18,6 +18,8 @@ use crate::_port::{block_on, ForgeSession};
 
 type Unit = (&'static str, &'static str);
 
+/// Disabled from the empty-boot skeleton (net stack is product, Phase E).
+#[allow(dead_code)]
 const LWIP: &[Unit] = &[
     ("../external/lwip/src/core/init.c", "lwip_init"),
     ("../external/lwip/src/core/def.c", "lwip_def"),
@@ -45,28 +47,40 @@ const LWIP: &[Unit] = &[
     ("../external/lwip/src/netif/ethernet.c", "lwip_ethernet"),
 ];
 
-/// Shared after platform-specific files (order matches link).
-const COMMON: &[Unit] = &[
+/// Floor units — shared after platform-specific files (order matches link).
+/// Empty-boot skeleton (see `registration_rethink` plan, Phase A): only what
+/// `bringup.c`'s slimmed floor + harvest detectors need. `PRODUCT_COMMON` /
+/// `LWIP` hold the rest, disabled from default build (not deleted — revive
+/// module by module in later phases).
+const FLOOR_COMMON: &[Unit] = &[
     ("boot/platform/private/bringup.c", "bringup"),
-    ("boot/rootfs/_root_fat.c", "root_fat"),
     ("util/fourcc/__init__.c", "fourcc"),
     ("util/eightcc/__init__.c", "eightcc"),
     ("bus/pci/_cfg.c", "cfg"),
     ("bus/virtio/_detect.c", "virtio_detect"),
     ("bus/virtio/_pci.c", "virtio_pci"),
-    ("dev/net/_virtio_net.c", "virtio_net"),
     ("dev/blk/_detect.c", "blk_detect"),
-    ("dev/blk/_virtio_blk.c", "virtio_blk"),
-    ("dev/stream/__init__.c", "stream"),
-    ("auth/__init__.c", "auth"),
-    ("../external/monocypher/src/monocypher.c", "monocypher"),
     ("libc/string.c", "string"),
     ("libc/stdlib.c", "stdlib"),
     ("libc/stdio.c", "stdio"),
 ];
 
+/// Product units — disabled from the empty-boot skeleton; revive per module
+/// (Phase B/E) once their Rust faces + Cargo deps are back.
+#[allow(dead_code)]
+const PRODUCT_COMMON: &[Unit] = &[
+    ("boot/rootfs/_root_fat.c", "root_fat"),
+    ("dev/net/_virtio_net.c", "virtio_net"),
+    ("dev/blk/_virtio_blk.c", "virtio_blk"),
+    ("dev/stream/__init__.c", "stream"),
+    ("auth/__init__.c", "auth"),
+    ("../external/monocypher/src/monocypher.c", "monocypher"),
+];
+
 /// The net protocol clients are Rust now and always live in boot.a; only the
-/// harness itself is stress-only.
+/// harness itself is stress-only. Disabled from default build (empty-boot
+/// skeleton) alongside `PRODUCT_COMMON` / `LWIP`.
+#[allow(dead_code)]
 const STRESS: &[Unit] = &[("../../stress/stress.c", "stress")];
 
 const BIOS_PLAT: &[Unit] = &[
@@ -250,6 +264,10 @@ impl Tree {
         let mut incs = vec![
             self.metal.join("libc"),
             self.root.join("src"),
+            // Generated cross-module faces (`metal mod sync`) -- every
+            // `<pymergetic/metal/<mod>/...>` include that isn't a human C
+            // header colocated under `src/` resolves here instead.
+            self.root.join("include"),
             self.metal.join("net/ip"),
             self.metal.join("net/ip/cfg"),
             self.root.join("external/lwip/src/include"),
@@ -269,6 +287,7 @@ impl Tree {
             "build",
             "src/pymergetic/metal/libc",
             "src",
+            "include",
             "src/pymergetic/metal/net/ip",
             "src/pymergetic/metal/net/ip/cfg",
             "external/lwip/src/include",
@@ -282,6 +301,7 @@ impl Tree {
             "build",
             "src/pymergetic/metal/libc",
             "src",
+            "include",
             "src/pymergetic/metal/net/ip",
             "src/pymergetic/metal/net/ip/cfg",
             "external/lwip/src/include",
@@ -303,6 +323,7 @@ impl Tree {
             "src/pymergetic/metal/net/ssh/dropbear_metal",
             "external/dropbear/src",
             "src",
+            "include",
             "src/pymergetic/metal",
             "src/pymergetic/metal/net/ip",
             "src/pymergetic/metal/net/ip/cfg",
@@ -317,6 +338,7 @@ impl Tree {
             "src/pymergetic/metal/wasm/port",
             "src/pymergetic/metal/libc",
             "src",
+            "include",
             "external/wamr/core/iwasm/include",
             "external/wamr/core/iwasm/interpreter",
             "external/wamr/core/iwasm/common",
@@ -397,10 +419,10 @@ impl Tree {
         let mut first = true;
         let stress_extra: &[&str] = if self.stress { STRESS_CFLAGS } else { &[] };
 
-        let mut bios_units: Vec<&[Unit]> = alloc::vec![BIOS_PLAT, COMMON, LWIP];
-        if self.stress {
-            bios_units.push(STRESS);
-        }
+        // Empty-boot skeleton: only floor units in the CDB (product/LWIP/
+        // stress stay disabled + out of clangd until revived — see
+        // `registration_rethink` plan Phase A/B).
+        let bios_units: Vec<&[Unit]> = alloc::vec![BIOS_PLAT, FLOOR_COMMON];
         for group in bios_units {
             for &(rel, _) in group {
                 let file = Self::unit_pkg_rel(rel);
@@ -562,10 +584,8 @@ impl Tree {
         ext: &str,
         cflags: &[String],
     ) -> Result<Vec<String>, String> {
-        let mut groups: Vec<&[Unit]> = alloc::vec![plat, COMMON, LWIP];
-        if self.stress {
-            groups.push(STRESS);
-        }
+        // Empty-boot skeleton: floor only (product/LWIP/stress disabled).
+        let groups: Vec<&[Unit]> = alloc::vec![plat, FLOOR_COMMON];
         let mut stems = Vec::new();
         for group in groups {
             for &(rel, stem) in group {

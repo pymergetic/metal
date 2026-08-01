@@ -10,6 +10,7 @@ CompileFlags:
     - -std=c11
     - -I.
     - -Isrc
+    - -Iinclude
     - -Isrc/pymergetic/metal/libc
     - -Iexternal/tlsf
     - -Iexternal/lwip/src/include
@@ -33,6 +34,7 @@ CompileFlags:
     - -mno-red-zone
     - -Isrc/pymergetic/metal/libc
     - -Isrc
+    - -Iinclude
     - -Isrc/pymergetic/metal/net/ip
     - -Isrc/pymergetic/metal/net/ip/cfg
     - -Iexternal/lwip/src/include
@@ -56,6 +58,7 @@ CompileFlags:
     - -Ibuild
     - -Isrc/pymergetic/metal/libc
     - -Isrc
+    - -Iinclude
     - -Isrc/pymergetic/metal/net/ip
     - -Isrc/pymergetic/metal/net/ip/cfg
     - -Iexternal/lwip/src/include
@@ -78,6 +81,7 @@ CompileFlags:
     - -mno-red-zone
     - -Isrc/pymergetic/metal/libc
     - -Isrc
+    - -Iinclude
     - -Isrc/pymergetic/metal/net/ip
     - -Isrc/pymergetic/metal/net/ip/cfg
     - -Iexternal/lwip/src/include
@@ -107,6 +111,7 @@ CompileFlags:
     - -Isrc/pymergetic/metal/net/ssh
     - -Isrc/pymergetic/metal/net/ssh/dropbear_metal
     - -Iexternal/dropbear/src
+    - -Iinclude
     - -Isrc/pymergetic/metal
     - -DDROPBEAR_SERVER=1
     - -DDROPBEAR_CLIENT=0
@@ -127,6 +132,7 @@ CompileFlags:
   Add:
     - -Isrc/pymergetic/metal/wasm/port/platform
     - -Isrc/pymergetic/metal/wasm/port
+    - -Iinclude
     - -Iexternal/wamr/core/iwasm/include
     - -Iexternal/wamr/core/iwasm/interpreter
     - -Iexternal/wamr/core/iwasm/common

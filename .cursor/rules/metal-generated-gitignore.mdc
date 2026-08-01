@@ -1,40 +1,35 @@
 ---
-description: Codegen outputs stay out of git via module-local .gitignore maintained by metal mod sync
-globs: "**/.module,**/.gitignore,tools/metal/metal_cli/mod/**/*.py"
+description: Codegen outputs live under a single wholesale-gitignored include/ tree, never beside human source
+globs: "**/.pm/module,include/**"
 alwaysApply: false
 ---
 
-# Generated files are gitignored (dir-local)
+# Generated files are gitignored (wholesale, under `include/`)
 
 Full layout: [`docs/definitions/module.md`](../../docs/definitions/module.md).
 
-**Package entry:** human `__init__.{impl_ext}`; generated = other
-extensions of that stem only (`__init__.h`, `__init__.pyi`, …). Never
-ignore/generate the human original’s own extension. Sibling stems
-(`spin.rs`) get their own faces the same way.
+**A module's own directory under `src/` holds only `_impl/` (human
+sources) and `.pm/` (metadata) — never a generated face, never a
+per-module `.gitignore` managed block.** All codegen for every module,
+own-language pool faces and foreign-consumer faces alike, lands under
+`include/pymergetic/metal/<mod>/...`, mirrored from `_impl/` with that
+segment and any leading underscores stripped.
 
 **Ownership:** generated faces carry an in-file banner
 (`DO NOT HAND-EDIT THIS FILE.`). That line is the write gate — sync
-refuses to overwrite a file that exists without it. No `.generated/`
-shadow tree.
+refuses to overwrite a file that exists without it (this should never
+actually trigger since nothing hand-writes into `include/`).
 
-**Rule:** anything `metal mod sync` writes must **not** be committed. Sync
-maintains a **module-local** `.gitignore` managed block:
+**Rule:** the entire `include/` tree is generated and gitignored with a
+single root-level line — no per-file or per-module bookkeeping:
 
 ```gitignore
-# BEGIN metal-generated
-.target/
-target/
-__init__.h
-__init__.pyi
-__init__.toml
-# END metal-generated
+/include/
 ```
 
-(Example for `impl=rs` with `--emit toml` — no `__init__.rs` line; that
-file is human. `{stem}.toml` is listed only when that face was emitted.)
-
-- The module `.gitignore` itself **is** committed.
-- Do **not** hand-edit the managed block.
-- Human `__init__.{ext}`, `.module`, ports stay tracked.
-- Never ignore `Cargo.toml` via a blanket `*.toml` — only the stem face.
+- `metal mod clean` wipes generated faces; `metal mod sync` regenerates
+  the whole tree — there is no partial/stale state to reconcile
+  file-by-file.
+- Human `_impl/__init__.{ext}`, `.pm/module`, `.pm/Cargo.toml`, ports
+  stay tracked as normal — none of them ever live under `include/`.
+- Never ignore `.pm/Cargo.toml` or any other human schema file.

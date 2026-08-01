@@ -41,8 +41,6 @@ mod _export_py;
 mod _export_rs;
 #[path = "_export_toml.rs"]
 mod _export_toml;
-#[path = "_gitignore.rs"]
-mod _gitignore;
 #[path = "_hash.rs"]
 mod _hash;
 #[cfg(feature = "builders")]

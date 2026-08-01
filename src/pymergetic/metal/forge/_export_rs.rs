@@ -19,8 +19,58 @@ fn rs_ident(name: &str) -> String {
     }
 }
 
+/// C function-pointer typedef RHS (`RET (*)(ARGS)`) -> Rust `Option<unsafe
+/// extern "C" fn(ARGS) -> RET>`. The typedef importer only ever produces
+/// this C shape from a Rust `Option<unsafe extern "C" fn ...>` source (see
+/// `_import_rs::import`'s `pub type` handling), so round-tripping back to
+/// `Option<...>` here is lossless.
+fn rs_fn_ptr_ty(c_ty: &str) -> Option<String> {
+    let t = collapse_ws(c_ty);
+    let star_at = t.find("(*)")?;
+    let ret_part = t[..star_at].trim();
+    let rest = t[star_at + 3..].trim_start();
+    let rest = rest.strip_prefix('(')?;
+    let close = rest.rfind(')')?;
+    let args_part = &rest[..close];
+    let ret = rs_ty(ret_part);
+    let args_s = if args_part.trim().is_empty() || args_part.trim() == "void" {
+        String::new()
+    } else {
+        args_part
+            .split(',')
+            .map(|a| {
+                let a = a.trim();
+                let (ty_part, name) = match a.rsplit_once(' ') {
+                    Some((t, n))
+                        if !n.is_empty()
+                            && n.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()) =>
+                    {
+                        (t, n)
+                    }
+                    _ => (a, "a"),
+                };
+                alloc::format!("{}: {}", rs_ident(name), rs_ty(ty_part))
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if ret == "()" {
+        Some(alloc::format!("Option<unsafe extern \"C\" fn({})>", args_s))
+    } else {
+        Some(alloc::format!(
+            "Option<unsafe extern \"C\" fn({}) -> {}>",
+            args_s, ret
+        ))
+    }
+}
+
 fn rs_typedef_ty(c_ty: &str) -> String {
     let t = collapse_ws(c_ty);
+    if t.contains("(*)") {
+        if let Some(fp) = rs_fn_ptr_ty(&t) {
+            return fp;
+        }
+    }
     if let Some(br) = t.rfind('[') {
         if t.ends_with(']') {
             let head = t[..br].trim();
@@ -237,19 +287,11 @@ fn emit_rs_inline_twin(fn_: &Fn) -> Vec<String> {
     lines
 }
 
-pub fn export(
-    module_name: &str,
-    base: &str,
-    cat: &Catalog,
-    human: &str,
-    source_sha: &str,
-) -> String {
-    let mut lines =
-        generated_banner("rs", human, &alloc::format!("{}.rs", base), source_sha);
-    lines.push(String::new());
-    lines.push(String::from("#![allow(dead_code, non_camel_case_types)]"));
-    lines.push(String::new());
-
+/// Enums/structs/typedefs: identical ABI shape regardless of whether the
+/// provider is `unloadable` -- only how the functions below them resolve
+/// differs (see [`export`] vs [`export_proxy`]).
+fn emit_types(cat: &Catalog) -> Vec<String> {
+    let mut lines = Vec::new();
     for en in &cat.enums {
         lines.push(String::from("#[repr(u32)]"));
         lines.push(String::from("#[derive(Clone, Copy)]"));
@@ -297,6 +339,33 @@ pub fn export(
     if !cat.typedefs.is_empty() {
         lines.push(String::new());
     }
+    lines
+}
+
+fn rs_args(fn_: &Fn) -> String {
+    fn_.args
+        .iter()
+        .map(|a| alloc::format!("{}: {}", rs_ident(&a.name), rs_ty(&a.ty)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Fast-path face (provider `unloadable == false`, the permanent-module
+/// case): plain `extern "C"` declarations resolved at link time -- no
+/// cache slot, no runtime connect step, no refcount.
+pub fn export(
+    module_name: &str,
+    base: &str,
+    cat: &Catalog,
+    human: &str,
+    source_sha: &str,
+) -> String {
+    let mut lines =
+        generated_banner("rs", human, &alloc::format!("{}.rs", base), source_sha);
+    lines.push(String::new());
+    lines.push(String::from("#![allow(dead_code, non_camel_case_types)]"));
+    lines.push(String::new());
+    lines.extend(emit_types(cat));
 
     let inline_fns: Vec<&Fn> = cat.fns.iter().filter(|f| f.inline).collect();
     let extern_fns: Vec<&Fn> = cat.fns.iter().filter(|f| !f.inline).collect();
@@ -306,12 +375,7 @@ pub fn export(
     if !extern_fns.is_empty() || cat.fns.is_empty() {
         lines.push(String::from("extern \"C\" {"));
         for fn_ in &extern_fns {
-            let args = fn_
-                .args
-                .iter()
-                .map(|a| alloc::format!("{}: {}", rs_ident(&a.name), rs_ty(&a.ty)))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let args = rs_args(fn_);
             let ret = rs_ty(&fn_.ret);
             if ret == "()" {
                 lines.push(alloc::format!("    pub fn {}({});", fn_.name, args));
@@ -328,6 +392,106 @@ pub fn export(
                 module_name
             ));
         }
+        lines.push(String::from("}"));
+        lines.push(String::new());
+    }
+    lines.join("\n")
+}
+
+/// Registry-proxy face (provider `unloadable == true`): each non-inline
+/// export gets a cached [`pymergetic_metal_reg::ImportRow`][row], filled
+/// in by the kernel's connect pass, and a safe-signature wrapper that
+/// resolves through [`pymergetic_metal_reg::acquire`]/[`::release`]
+/// (refcounted, so the provider cannot unload mid-call) instead of a
+/// link-time symbol. `pymergetic_metal_reg` is the registry spine, so
+/// depending on it directly here is the one Cargo-dependency exception
+/// (see docs/definitions/module.md "Consume foreign modules").
+///
+/// Calling a wrapper before the provider has loaded/connected is a
+/// documented misuse (same contract as calling through a null function
+/// pointer) and is reported by an `assert!`, not a synthesized fake
+/// return value -- there is no type-generic "half-open" result to invent
+/// for an arbitrary return type.
+///
+/// [row]: pymergetic_metal_reg::ImportRow
+pub fn export_proxy(
+    module_name: &str,
+    base: &str,
+    cat: &Catalog,
+    human: &str,
+    source_sha: &str,
+) -> String {
+    let mut lines =
+        generated_banner("rs", human, &alloc::format!("{}.rs", base), source_sha);
+    lines.push(String::new());
+    lines.push(String::from("#![allow(dead_code, non_camel_case_types)]"));
+    lines.push(String::new());
+    lines.extend(emit_types(cat));
+
+    let inline_fns: Vec<&Fn> = cat.fns.iter().filter(|f| f.inline).collect();
+    let extern_fns: Vec<&Fn> = cat.fns.iter().filter(|f| !f.inline).collect();
+    for fn_ in inline_fns {
+        lines.extend(emit_rs_inline_twin(fn_));
+    }
+
+    if extern_fns.is_empty() {
+        lines.push(alloc::format!("// module {}: empty catalog", module_name));
+        return lines.join("\n");
+    }
+
+    for fn_ in &extern_fns {
+        lines.push(alloc::format!(
+            "static __PM_METAL_IMPORT_{}: pymergetic_metal_reg::ImportRow = pymergetic_metal_reg::ImportRow::new(\"{}\", \"{}\");",
+            fn_.name, module_name, fn_.name
+        ));
+    }
+    lines.push(String::new());
+
+    for fn_ in &extern_fns {
+        let args = rs_args(fn_);
+        let ret = rs_ty(&fn_.ret);
+        let arg_tys = fn_
+            .args
+            .iter()
+            .map(|a| rs_ty(&a.ty))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let call_args = fn_
+            .args
+            .iter()
+            .map(|a| rs_ident(&a.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let row = alloc::format!("__PM_METAL_IMPORT_{}", fn_.name);
+        let sig_ret = if ret == "()" {
+            String::new()
+        } else {
+            alloc::format!(" -> {}", ret)
+        };
+        lines.push(alloc::format!("pub unsafe fn {}({}){} {{", fn_.name, args, sig_ret));
+        lines.push(alloc::format!(
+            "    let __p = pymergetic_metal_reg::acquire(&{});",
+            row
+        ));
+        lines.push(alloc::format!(
+            "    assert!(!__p.is_null(), \"{}: provider {} not connected\");",
+            fn_.name, module_name
+        ));
+        let fn_ty_ret = if ret == "()" {
+            String::new()
+        } else {
+            alloc::format!(" -> {}", ret)
+        };
+        lines.push(alloc::format!(
+            "    let __f: unsafe extern \"C\" fn({}){} = core::mem::transmute(__p);",
+            arg_tys, fn_ty_ret
+        ));
+        lines.push(alloc::format!("    let __r = __f({});", call_args));
+        lines.push(alloc::format!(
+            "    pymergetic_metal_reg::release(&{});",
+            row
+        ));
+        lines.push(String::from("    __r"));
         lines.push(String::from("}"));
         lines.push(String::new());
     }

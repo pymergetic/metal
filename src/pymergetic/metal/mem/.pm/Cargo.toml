@@ -5,7 +5,7 @@ edition = "2021"
 build = "build.rs"
 
 [lib]
-path = "../__init__.rs"
+path = "../_impl/__init__.rs"
 # staticlib+rlib for firmware / C link. Host Python smoke builds cdylib via
 # `cargo rustc -- --crate-type cdylib` (cdylib is unsupported on none).
 crate-type = ["staticlib", "rlib"]

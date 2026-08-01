@@ -2,6 +2,10 @@
 /build/
 /_old/build/
 
+# Generated module faces (metal mod sync); mirrors src/pymergetic/metal/**
+# with the _impl/ segment stripped -- see docs/definitions/module.md
+/include/
+
 # Cargo outs (host tools + module crates; modules also list these locally)
 **/.target/
 **/target/

@@ -1,9 +1,0 @@
-Cargo.lock
-
-# BEGIN metal-generated
-.target/
-target/
-.generated/
-__init__.h
-__init__.pyi
-# END metal-generated

@@ -4,12 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-path = "../__init__.rs"
+path = "../_impl/__init__.rs"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 pymergetic_metal_rt = { path = "../../rt/.pm" }
-pymergetic_metal_reg = { path = "../../reg/.pm" }
+# `console`'s object code is not a dependency here: `log` calls it
+# through the generated fast-path face (see `_impl/__init__.rs`), and the
+# final link unit (`boot`) already Cargo-depends on `console` directly.
 
 [profile.release]
 panic = "abort"

@@ -122,7 +122,7 @@ fn csi_prefix_hold(b: &[u8]) -> bool {
 /// Incomplete CSI at the end of `chunk` is left in `hold` for the next call.
 fn write_serial_filtered(out: &mut dyn Write, hold: &mut Vec<u8>, chunk: &[u8]) -> std::io::Result<()> {
     /* Drop machine ready mark from the host TTY (still kept in raw log). */
-    const READY: &[u8] = b"#pm-metal/boot-tree/ready"; /* = boot/tree/ready.rs READY_MARK */
+    const READY: &[u8] = b"#pm-metal/boot-tree/ready"; /* = boot/tree/_impl/ready.rs READY_MARK */
     hold.extend_from_slice(chunk);
     while let Some(pos) = hold.windows(READY.len()).position(|w| w == READY) {
         hold.drain(pos..pos + READY.len());
@@ -182,8 +182,8 @@ fn pump_serial_filtered(mut r: impl Read, log_path: &Path) -> Result<(), String>
     let mut hold = Vec::new();
     let mut buf = [0u8; 4096];
     let mut stdout = std::io::stdout();
-    /* Same bytes as boot/tree/ready.rs READY_MARK — do not scrape human tree text. */
-    const READY: &[u8] = b"#pm-metal/boot-tree/ready"; /* = boot/tree/ready.rs READY_MARK */
+    /* Same bytes as boot/tree/_impl/ready.rs READY_MARK — do not scrape human tree text. */
+    const READY: &[u8] = b"#pm-metal/boot-tree/ready"; /* = boot/tree/_impl/ready.rs READY_MARK */
     loop {
         let n = r.read(&mut buf).map_err(|_| String::from("serial read failed"))?;
         if n == 0 {
