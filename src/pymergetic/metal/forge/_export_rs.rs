@@ -179,7 +179,20 @@ fn collapse_ws(s: &str) -> String {
     out
 }
 
-fn emit_rs_inline_twin(fn_: &Fn) -> Vec<String> {
+/// Reproduce a `static inline` C border function as a real Rust twin --
+/// only for the handful of concrete, hand-verified patterns below. A
+/// `static inline` function has no externally-linkable definition (it is
+/// inlined per translation unit in C, same as `#[inline]` in Rust), so a
+/// foreign-language consumer's generated face cannot resolve it via
+/// `extern "C"` the way a real border function can; the only honest way
+/// to give another language a working twin is to actually reproduce its
+/// body. Anything not covered here returns `None` -- the caller omits it
+/// entirely rather than emit a same-named function whose body would have
+/// to be a lie (a fake `unimplemented!()`/no-op stands in for working
+/// code, which is exactly what's banned; see `metal-finished-quality`).
+/// The module's own real (non-inline) border functions, and same-language
+/// callers who `#include`/`use` the human source directly, are unaffected.
+fn emit_rs_inline_twin(fn_: &Fn) -> Option<Vec<String>> {
     let name = &fn_.name;
     let mut lines = vec![String::from("#[inline]")];
     if name.ends_with("host_is_le") {
@@ -187,7 +200,7 @@ fn emit_rs_inline_twin(fn_: &Fn) -> Vec<String> {
         lines.push(String::from("    1"));
         lines.push(String::from("}"));
         lines.push(String::new());
-        return lines;
+        return Some(lines);
     }
     if let Some(idx) = name.find("load_u") {
         if let Some(bits_s) = name[idx + "load_u".len()..].strip_suffix("_le") {
@@ -221,7 +234,7 @@ fn emit_rs_inline_twin(fn_: &Fn) -> Vec<String> {
                 }
                 lines.push(String::from("}"));
                 lines.push(String::new());
-                return lines;
+                return Some(lines);
             }
         }
         }
@@ -260,31 +273,12 @@ fn emit_rs_inline_twin(fn_: &Fn) -> Vec<String> {
                     }
                     lines.push(String::from("}"));
                     lines.push(String::new());
-                    return lines;
+                    return Some(lines);
                 }
             }
         }
     }
-    let args = fn_
-        .args
-        .iter()
-        .map(|a| alloc::format!("{}: {}", rs_ident(&a.name), rs_ty(&a.ty)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let ret = rs_ty(&fn_.ret);
-    if ret == "()" {
-        lines.push(alloc::format!("pub unsafe fn {}({}) {{", name, args));
-        lines.push(String::from("}"));
-    } else {
-        lines.push(alloc::format!(
-            "pub unsafe fn {}({}) -> {} {{",
-            name, args, ret
-        ));
-        lines.push(String::from("    core::unimplemented!()"));
-        lines.push(String::from("}"));
-    }
-    lines.push(String::new());
-    lines
+    None
 }
 
 /// Enums/structs/typedefs: identical ABI shape regardless of whether the
@@ -370,7 +364,9 @@ pub fn export(
     let inline_fns: Vec<&Fn> = cat.fns.iter().filter(|f| f.inline).collect();
     let extern_fns: Vec<&Fn> = cat.fns.iter().filter(|f| !f.inline).collect();
     for fn_ in inline_fns {
-        lines.extend(emit_rs_inline_twin(fn_));
+        if let Some(twin) = emit_rs_inline_twin(fn_) {
+            lines.extend(twin);
+        }
     }
     if !extern_fns.is_empty() || cat.fns.is_empty() {
         lines.push(String::from("extern \"C\" {"));
@@ -431,7 +427,9 @@ pub fn export_proxy(
     let inline_fns: Vec<&Fn> = cat.fns.iter().filter(|f| f.inline).collect();
     let extern_fns: Vec<&Fn> = cat.fns.iter().filter(|f| !f.inline).collect();
     for fn_ in inline_fns {
-        lines.extend(emit_rs_inline_twin(fn_));
+        if let Some(twin) = emit_rs_inline_twin(fn_) {
+            lines.extend(twin);
+        }
     }
 
     if extern_fns.is_empty() {

@@ -266,7 +266,7 @@ fn sync_stem<S: ForgeStore>(
 
     let mut status = BTreeMap::new();
     for slot in POOL {
-        let st = if slot == own && slot != "rs" {
+        let st = if slot == own {
             "original"
         } else if marker_slots.iter().any(|s| *s == slot) {
             match actions.get(slot) {
@@ -360,7 +360,6 @@ pub fn cmd_sync<S: ForgeStore, Sess: ForgeSession>(
     store: &mut S,
     sess: &mut Sess,
     metal_root: &str,
-    extra_toml: bool,
     force: bool,
 ) -> i32 {
     let roots = default_src_roots(metal_root);
@@ -401,7 +400,7 @@ pub fn cmd_sync<S: ForgeStore, Sess: ForgeSession>(
             errors += 1;
             continue;
         }
-        let slots = emit_slots(&meta.impl_lang, extra_toml);
+        let slots = emit_slots(&meta.impl_lang);
         let out_dir = out_dir_for(mod_dir, &roots, metal_root);
         let mut ok = true;
         for human in &sources {
@@ -502,12 +501,21 @@ fn is_border_fn_name(name: &str) -> bool {
     chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
+/// Required cross-language "must match on every face" fn-name set.
+///
+/// `static inline` functions are excluded: they have no externally-
+/// linkable definition (inlined per translation unit), so a foreign face
+/// cannot resolve them via `extern "C"` the way it does a real border
+/// function -- some faces reproduce a hand-verified subset faithfully as
+/// a bonus (see `_export_rs.rs`'s `emit_rs_inline_twin`), but none are
+/// required to, and none may fake one they can't (banned: a same-named
+/// stub that panics/no-ops instead of doing the real thing).
 fn catalog_fn_names(cat: &crate::_catalog::Catalog) -> Vec<String> {
     // Drop C-import noise (e.g. `=`, `|=`, `*foo` from macros / fn-ptr types).
     let mut v: Vec<String> = cat
         .fns
         .iter()
-        .filter(|f| is_border_fn_name(&f.name))
+        .filter(|f| !f.inline && is_border_fn_name(&f.name))
         .map(|f| f.name.clone())
         .collect();
     v.sort();
@@ -561,7 +569,10 @@ fn check_face_symmetry<S: ForgeStore, Sess: ForgeSession>(
         .map(|(s, _)| s)
         .unwrap_or(human_name);
     let mut errors = 0u32;
-    for slot in emit_slots(&meta.impl_lang, false) {
+    // `toml` is a full catalog dump (deliberately includes `inline` fns
+    // too, for debugging) and is never compared to the border-only `want`
+    // set the other faces are held to.
+    for slot in emit_slots(&meta.impl_lang).into_iter().filter(|s| *s != "toml") {
         let face = face_rel(slot, stem);
         let fpath = join_path(out_dir, &face);
         if !block_on(|| store.is_file(&fpath)) {

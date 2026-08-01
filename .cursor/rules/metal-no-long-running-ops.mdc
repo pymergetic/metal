@@ -1,0 +1,44 @@
+---
+description: No long-running non-yielding operation anywhere in Metal (not just wasm/async guest code) — the check is cheap, blocking everyone else is not
+globs: src/pymergetic/metal/**/*.{c,h,rs,py}
+alwaysApply: true
+---
+
+# No long-running non-yielding operations, anywhere
+
+**Not guest-specific.** This applies to host code, kernel code, wasm guests,
+async tasks — everywhere in Metal, not a special wasm/async-only rule.
+
+## The actual test
+
+It's an economic comparison, not a blanket "always yield": **schedule/check
+cost vs. the cost of not checking.** Measured on this project's own hardware
+(see `registration_rethink_scope`'s quiesce/safepoint design): a periodic
+liveness/safepoint check (an uncontended atomic flag load + not-taken branch)
+costs **~0.3% overhead even done on every single call**, the pessimistic
+upper bound — done at the coarser granularity it's actually meant for (once
+per task step, not once per call), it's unmeasurable. The cost of *not*
+checking — stalling every other runner's fairness, and stalling any
+load/unload quiesce that depends on every runner reaching a checkpoint
+within bounded time — is unbounded by comparison. That asymmetry means the
+bar for "this is short enough to skip a yield/check point" is very high:
+only genuinely tiny, provably-bounded-time operations get a pass. Anything
+whose duration is unpredictable or non-trivial must be broken into steps
+that yield/check periodically.
+
+## Concrete rule
+
+Any loop or operation whose duration is not providably tiny and bounded
+must incorporate a periodic yield/check point. When choosing how often to
+check, default to checking **more** often, not less — per the measurement
+above, the check itself is close to free; the failure mode of checking too
+rarely (stalling fairness, stalling a quiesce) is not.
+
+## Why this is load-bearing for two things, not one
+
+1. **Scheduler fairness** — a step that never yields already breaks
+   cooperative scheduling today, independent of the registry design.
+2. **The registry's quiesce/safepoint mechanism** (load/unload of an
+   unloadable module) depends on every runner reaching a checkpoint within
+   bounded time to ever complete — a violation here doesn't just cost that
+   one task's fairness, it can stall a load/unload indefinitely.

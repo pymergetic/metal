@@ -41,35 +41,27 @@ pub fn slot_from_path(path: &str) -> Option<&'static str> {
 
 /// Which pool faces to generate for a module implemented in `impl_lang`.
 ///
-/// `c` and `py` are skipped when they equal the impl's own slot -- a
-/// same-language C-to-C or Python-to-Python consumer uses the human
-/// source directly (a C consumer `#include`s the human `.h`; Python
-/// imports the human `.py` module), so a generated mirror of the impl's
-/// own language would be pointless there.
-///
-/// `rs` is the one exception: every consumer language always gets a
-/// generated `include/pymergetic/metal/<mod>/` face, Rust-to-Rust
-/// included -- a Rust consumer of an `impl=rs` provider does not get a
-/// free pass to Cargo-depend on the provider's `_impl` crate directly
-/// (see docs/definitions/module.md "Consume foreign modules"; `mem`/
+/// Fully language-agnostic: every consumer language (`c`/`rs`/`py`) always
+/// gets a generated `include/pymergetic/metal/<mod>/` face, including a
+/// mirror in the impl's *own* language (a C-impl module still gets a
+/// generated `.h` under `include/`, not just its hand-authored one in
+/// `src/`; a Rust-impl module gets a generated `.rs` connector even for
+/// Rust-to-Rust). No consumer -- same-language included -- gets a free
+/// pass to reach into `src/**/_impl/` (or a module root) directly; every
+/// cross-module call, in every language, goes through `include/` (`mem`/
 /// `reg` are the only spine exception, handled outside this pool
-/// machinery entirely).
-pub fn emit_slots(impl_lang: &str, extra_toml: bool) -> Vec<&'static str> {
-    let own = match pool_slot(impl_lang) {
-        Some(s) => s,
-        None => return Vec::new(),
-    };
-    let mut out = Vec::new();
-    for s in POOL {
-        if s == own && s != "rs" {
-            continue;
-        }
-        if s == "toml" && !extra_toml {
-            continue;
-        }
-        out.push(s);
+/// machinery entirely). This keeps the rule uniform: "input in language
+/// X, output in all languages."
+///
+/// `toml` is always emitted too: a raw catalog dump (fns/structs/enums/
+/// typedefs) landing in the same generated `include/` tree costs nothing
+/// and doubles as a debug hint -- if a face looks wrong, the `.toml` next
+/// to it shows exactly what the importer actually detected.
+pub fn emit_slots(impl_lang: &str) -> Vec<&'static str> {
+    if pool_slot(impl_lang).is_none() {
+        return Vec::new();
     }
-    out
+    POOL.to_vec()
 }
 
 pub fn impl_ext(impl_lang: &str) -> Option<&'static str> {

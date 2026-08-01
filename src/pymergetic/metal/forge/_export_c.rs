@@ -95,7 +95,13 @@ pub fn export(
         lines.push(String::from("};"));
         lines.push(String::new());
     }
-    for fn_ in &cat.fns {
+    // `static inline` border functions have no externally-linkable
+    // definition (inlined per translation unit); declaring them `extern`
+    // here would be a link-time lie for any consumer of this generated
+    // face. Only the module's real (non-inline) border functions get a
+    // connector declaration -- same-language callers still see the real
+    // inline definition by including the human header directly.
+    for fn_ in cat.fns.iter().filter(|f| !f.inline) {
         lines.push(alloc::format!("{} {}({});", fn_.ret, fn_.name, c_args(fn_)));
     }
     if cat.is_empty() {

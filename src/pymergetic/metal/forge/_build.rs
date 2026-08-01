@@ -217,7 +217,7 @@ impl Tree {
         }
         let mut store = crate::SoloStore::new();
         let mut sess = crate::SoloSession::from_args(alloc::vec::Vec::new());
-        let rc = crate::_sync::cmd_sync(&mut store, &mut sess, root, false, false);
+        let rc = crate::_sync::cmd_sync(&mut store, &mut sess, root, false);
         if rc != 0 {
             return Err(String::from("forge mod sync failed"));
         }

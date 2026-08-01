@@ -39,7 +39,7 @@ fn usage_lines() -> [&'static str; 14] {
         "forge - Metal module codegen + image builders + firmware build (solo host tool)",
         "",
         "Usage:",
-        "  forge mod sync [--emit toml] [--force] [--metal-root DIR]",
+        "  forge mod sync [--force] [--metal-root DIR]",
         "  forge mod check|clean|ls [--metal-root DIR]",
         "  forge convert SRC DST [--force]",
         "  forge img mtar|fat|zip|embed|nest|rootfs|littlefs ...",
@@ -177,18 +177,8 @@ pub fn run<S: ForgeStore, Sess: ForgeSession>(
         return 2;
     }
     let a1 = String::from(sess.arg(1).unwrap_or(""));
-    let mut extra_toml = false;
-    let n = sess.arg_count();
-    for i in 2..n {
-        if sess.arg(i) == Some("--emit") && sess.arg(i + 1) == Some("toml") {
-            extra_toml = true;
-        }
-        if matches!(sess.arg(i), Some(a) if a == "--emit=toml") {
-            extra_toml = true;
-        }
-    }
     match a1.as_str() {
-        "sync" => cmd_sync(store, sess, &metal_root, extra_toml, force),
+        "sync" => cmd_sync(store, sess, &metal_root, force),
         "check" => cmd_check(store, sess, &metal_root),
         "clean" => cmd_clean(store, sess, &metal_root),
         "ls" => cmd_ls(store, sess, &metal_root),

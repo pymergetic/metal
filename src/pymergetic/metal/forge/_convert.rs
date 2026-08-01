@@ -237,15 +237,6 @@ pub fn convert_stem_slot<S: ForgeStore>(
     dst_slot: &str,
     force: bool,
 ) -> Result<FaceAction, String> {
-    let own = pool_slot(&meta.impl_lang).unwrap_or("");
-    // `rs` is always generated even when `own == "rs"` (Rust-to-Rust goes
-    // through a generated face too, see `emit_slots`); `c`/`py` own-slot
-    // calls should never reach here since `emit_slots` already excludes
-    // them, but skip defensively rather than emitting a same-language
-    // mirror of the human source.
-    if dst_slot == own && dst_slot != "rs" {
-        return Ok(FaceAction::Empty);
-    }
     let human_name = human_path.rsplit('/').next().unwrap_or(human_path);
     let stem = human_name
         .rsplit_once('.')

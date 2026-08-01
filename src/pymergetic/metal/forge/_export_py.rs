@@ -18,7 +18,13 @@ pub fn export(
     lines.push(String::new());
     lines.push(alloc::format!("\"\"\"Stubs for {}.\"\"\"", module_name));
     lines.push(String::new());
-    for fn_ in &cat.fns {
+    // `static inline` border functions have no externally-linkable
+    // definition, so there is nothing for Python's FFI/registry bind to
+    // resolve -- stubbing one here would claim a call path that does not
+    // exist. Only the module's real (non-inline) border functions are
+    // reachable from Python.
+    let border_fns: Vec<&crate::_catalog::Fn> = cat.fns.iter().filter(|f| !f.inline).collect();
+    for fn_ in &border_fns {
         let args = fn_
             .args
             .iter()
@@ -27,7 +33,7 @@ pub fn export(
             .join(", ");
         lines.push(alloc::format!("def {}({}) -> int: ...", fn_.name, args));
     }
-    if cat.fns.is_empty() {
+    if border_fns.is_empty() {
         lines.push(String::from("# package marker (no exported symbols)"));
     }
     lines.push(String::new());

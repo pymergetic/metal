@@ -8,49 +8,66 @@ unified public surface. Experimentation lives under ``; product
 **Tooling / CLI workflow:** [`docs/TOOLING.md`](../TOOLING.md) (`metal`
 under `tools/metal/`).
 
-**Status — corrected twice; this is the final shape.** The registry
-(`register_symbols`/`connect_symbols`, cached fn pointer per import slot,
-refcount) is for **unloadable** modules only — a provider that can be
-reloaded/unloaded without the consumer's Cargo graph changing (wasm guest
-modules, Python attach; see `reg`'s static per-module layer, and the real
-callers in `wasm/__init__.rs` and `py/upy/py/builtin/builtinimport.rs`).
+**Status — corrected three times; see the `registration_rethink_scope`
+plan's "Phase C/D re-correction" section for the full history and the
+canonical boot order.** Two prior passes each overcorrected the other's
+mistake:
 
-An earlier pass applied the *runtime* registry to **every** compile-time-
-known floor module unconditionally, including ones that are never
-unloaded (`console`, `mem`, `log`, `async`, `boot`, the detector modules,
-...). That overreach was correctly walked back — but the walk-back
-overshot too: it deleted the generated `include/` face tree entirely and
-fell back to raw Cargo-dependency direct calls for everything, including
-same-language Rust-to-Rust. That is **also** wrong. The actual rule has
-two independent axes:
+1. Pass 1 applied the runtime registry (cached fn pointer, refcount) to
+   **every** compile-time-known floor module unconditionally, including
+   ones never unloaded (`console`, `mem`, `log`, `async`, `boot`, the
+   detector modules, ...).
+2. Pass 2 "fixed" that by reading "unloadable vs. fixed needs different
+   ref handling, so we have a fast path" as license to drop the
+   proxy/cache **entirely** for fixed modules, down to plain Cargo-
+   dependency direct calls — no cache slot, no runtime connect, nothing
+   going through the registry at all for a fixed peer.
+3. This session repeated pass 2's mistake in the other direction: it
+   restored a real registry-proxy (cached slot, `connect_symbols`,
+   refcount) for **unloadable** providers, but *still* left fixed
+   providers on pass 2's plain-`extern "C"`-link-time shape instead of
+   giving them a proxy too.
 
-1. **Every module's public surface is always auto-generated** into
-   `include/pymergetic/metal/<mod>/...` (mirrored from `_impl/`, the
-   `_impl` segment and leading underscores stripped) for every consumer
-   language, Rust-to-Rust included. A module's own `src/` directory holds
-   only human input (`_impl/`, `.pm/`) — never a generated face. The only
-   exception is the **spine**: `mem` and `reg` are foundational/bootstrap-
-   critical enough that a direct `_impl` Cargo dependency on them is
-   tolerated everywhere (matching "Call path: proxies everywhere except
-   spine" in the registration_rethink design).
-2. **Which shape that generated face takes** depends on whether the
-   *provider* is unloadable (`.pm/module`'s `unloadable` field, below):
-   a permanently-linked provider (or a `package` marked non-unloadable,
-   i.e. "sticky") gets a **fast-path face** — a plain `extern "C"`
-   declaration resolved at link time, no cache slot, no runtime connect,
-   no refcount. A genuinely unloadable provider gets a **registry-proxy
-   face** — cached slot, populated by `connect_symbols`, refcounted on
-   call, torn down on unload.
+**The actual rule (locked in the registration_rethink design's own
+"Registry design verdict" table, which none of the three passes above
+actually contradicted — they just didn't read it): every cross-module
+call, fixed or unloadable provider alike, goes through a proxy that
+loads a cached pointer and calls through it — "Proxies even for
+mod-internal calls -> Yes -- only mem + reg are direct spine." Refcount
+is the *only* thing that forks on unloadable vs. fixed, not whether a
+proxy/cache exists at all:**
 
-So: no module hand-writes a `_reg.rs` sidecar or a raw `extern "C"`
-forward declaration for a peer it isn't Cargo-cycled with — the face is
-always generated, into `include/`, for every module. Same-module-internal
-calls (between a module's own `_impl/*.rs` files) stay direct, unaffected
-by any of this. A genuine Cargo cycle (e.g. `rt` <-> `console`/`mem`, both
-of which depend on `rt`) still resolves via a raw `extern "C"` forward
-declaration since `rt` cannot Cargo-depend on either — this is the same
-fast-path shape a generated face would produce, just currently
-hand-written (see `rt/_impl/_ffi.rs`).
+- **Every module's public surface is always auto-generated** into
+  `include/pymergetic/metal/<mod>/...` (mirrored from `_impl/`, the
+  `_impl` segment and leading underscores stripped) for every consumer
+  language, Rust-to-Rust included. A module's own `src/` directory holds
+  only human input (`_impl/`, `.pm/`) — never a generated face. The only
+  exception is the **spine**: `mem` and `reg` are foundational/bootstrap-
+  critical enough that a direct `_impl` Cargo dependency on them is
+  tolerated everywhere.
+- **Every generated face is a proxy**, resolved once by `connect_symbols`
+  (proactively, right after any load/unload — not a lazy per-call check,
+  so the hot path is a pure "load slot, call," no branch): a fixed
+  provider's slot is written once and never touched again (no lock, no
+  refcount needed because it cannot disappear); an unloadable provider's
+  slot is refcounted/handled so it can't be called through mid-unload,
+  and unload has to disconnect every connected importer via a two-sided
+  handshake (either side may initiate; the other side accepts) rather
+  than being reached into from outside.
+- A genuine Cargo cycle (e.g. `rt` <-> `console`/`mem`, both of which
+  depend on `rt`) still resolves via a raw `extern "C"` forward
+  declaration since `rt` cannot Cargo-depend on either — this remains
+  the one deliberate exception (`rt/_impl/_ffi.rs`), not a template for
+  every fixed provider.
+
+**Not yet implemented as of this correction** (tracked in the plan's
+"Phase C/D re-correction" open items): the always-proxy shape for fixed
+providers (today's tree still has pass 2/3's plain-Cargo/fast-path faces
+for the 14 migrated floor modules), the two-sided disconnect handshake,
+and re-pointing `wasm`'s loader at the same `RegMod`/`RegEntry`
+mechanism instead of `reg`'s separate dynamic `_table.rs`. Same-module-
+internal calls (between a module's own `_impl/*.rs` files) stay direct
+either way, unaffected by any of this.
 
 **Kernel is a module too.** The `pymergetic.metal` namespace root
 (`src/pymergetic/metal/.pm/module`) is the first module in boot order,
@@ -172,17 +189,15 @@ the catalog object.
               EXPORT  (source → in-memory catalog)
                          │
                          ▼
-              EMIT each other pool slot
+              EMIT every pool slot, own included
                          │
          ┌───────┬───────┼───────┐
          ▼       ▼       ▼       ▼
-        c       rs      py     toml*
+        c       rs      py     toml
       *.h    *.rs    *.pyi  *.toml
 
-  * toml is output-only (never an impl) and NOT emitted by default
-    (opt in: metal mod sync --emit toml)
-
-  Never: any face → human {base}.{impl_ext}
+  Never: any face written back over the human {base}.{impl_ext} itself
+  (own-slot output always lands in include/, never src/).
 ```
 
 | Pool slot | Default emit | Can be impl? | Face |
@@ -190,11 +205,21 @@ the catalog object.
 | `c` | yes | yes (`impl=c` or `impl=cpp`) | `{base}.h` |
 | `rs` | yes | yes | `{base}.rs` |
 | `py` | yes | yes | `{base}.pyi` |
-| `toml` | **no** | **no** | `{base}.toml` |
+| `toml` | yes | **no** | `{base}.toml` |
 
-Own slot is skipped: `impl=rs` → emit `c`+`py`; `impl=c`/`cpp` → emit
-`rs`+`py`; etc. Stale marker-owned faces not in this run’s emit set are
-pruned (e.g. leftover `{base}.toml` after a default sync).
+**Every** pool slot is emitted, including the impl's own language:
+`impl=rs` → emit `c`+`rs`+`py`(+`toml`); `impl=c`/`cpp` → emit
+`c`+`rs`+`py`(+`toml`); etc. "Input in language X, output in all
+languages" — no exceptions, no same-language free pass. The own-slot
+output is a real generated mirror under `include/`, distinct from the
+human source under `src/`; a same-language consumer still goes through
+that generated mirror like everyone else (see "Consume foreign modules"
+below), not a shortcut back to `_impl/`. `toml` is a full catalog dump
+(structs/enums/typedefs/fns, `inline` included) useful as a debug hint —
+"what did the importer actually detect" — when a face looks off; it is
+never an impl and is not compared to the other faces' border-only name
+set (`metal mod check` excludes it from symmetry). Stale marker-owned
+faces not in this run's emit set are pruned.
 
 ### Border vs interior
 
@@ -226,8 +251,13 @@ ABI" this rule exists to prevent). The two exceptions:
 
 | Provider `impl` | C consumer | Rust consumer |
 |-----------------|------------|---------------|
-| `rs` / `py` | generated `{base}.h` | generated `{base}.rs` |
-| `c` / `cpp` | human `{base}.h` | generated `{base}.rs` |
+| `rs` / `py` | generated `{base}.h` | generated `{base}.rs` (Rust-to-Rust included) |
+| `c` / `cpp` | generated `{base}.h` (own-language mirror) | generated `{base}.rs` |
+
+The provider's own human source (`{base}.h` for `impl=c`/`cpp`, `{base}.rs`
+for `impl=rs`) is never the thing another module includes/uses — every
+consumer, same-language or not, goes through the generated `include/`
+face.
 
 Example: `boot`'s Rust bring-up code consumes `boot/platform`'s (impl=c)
 UART ops via `#[path = "../../../../../include/pymergetic/metal/boot/platform/__init__.rs"]`
@@ -264,10 +294,10 @@ cbindgen, libclang, PyPI parsers in `metal_cli/mod/**`.
 
 | Emit (catalog →) | When |
 |------------------|------|
-| `{base}.h` | pool slot `c` and impl slot ≠ `c` |
-| `{base}.rs` | pool slot `rs` and impl ≠ `rs` |
-| `{base}.pyi` | pool slot `py` and impl ≠ `py` |
-| `{base}.toml` | only with `--emit toml` |
+| `{base}.h` | always |
+| `{base}.rs` | always |
+| `{base}.pyi` | always |
+| `{base}.toml` | always (debug dump; excluded from `mod check` symmetry) |
 | Python runtime bind | later — register/attach C→Python when `impl != py` |
 
 **Dep budget:** `re`, basic containers, tiny hand parsers.
@@ -309,8 +339,8 @@ stop. See "Two face shapes" above and "Module lifecycle" below.
 `Cargo.toml` (and optional `build` / `smoke`) under `.pm/`.
 
 Public pool faces are emitted from the in-memory catalog — never
-hand-written without the ownership banner. `{base}.toml` is optional
-(`--emit toml`), not required for sync.
+hand-written without the ownership banner. `{base}.toml` is emitted on
+every sync too (debug dump of the catalog).
 
 **Tool checks before writing into `DIR`:**
 
@@ -318,7 +348,7 @@ hand-written without the ownership banner. `{base}.toml` is optional
 2. Output path passes the banner write gate above (never under `.pm/` or
    a `hidden` subtree).
 3. Prefer known pool face basenames (`{base}.h`, `{base}.rs`,
-   `{base}.pyi`, optional `{base}.toml`).
+   `{base}.pyi`, `{base}.toml`).
 
 ---
 
@@ -605,8 +635,8 @@ dialect- and port-shaped until a module is migrated.
 3. Optional schema: `.pm/Cargo.toml`, `.pm/build.{ext}`, `.pm/smoke.{ext}`.
 4. Expose a C-shaped border in that source (`extern "C"` / prototypes)
    so export can fill the in-memory catalog.
-5. Run `metal mod sync` → own pool faces + foreign-consumer faces land
-   under `include/pymergetic/metal/<mod>/` (optional: `--emit toml`).
+5. Run `metal mod sync` → every pool face (own language included, plus
+   `{base}.toml`) lands under `include/pymergetic/metal/<mod>/`.
 6. Wire build to compile `_impl/` sources (+ C glue if any); `-I include`
    for anything this module consumes from a peer, `-I src` for its own
    `_impl/`.

@@ -158,6 +158,23 @@ fn flatten_paren_newlines(raw: &str) -> String {
     out
 }
 
+/// `ret_type *fn_name(...)` with no space before the name -- common C
+/// style -- leaves the leading `*`(s) glued to the last whitespace-split
+/// token. Move them back onto the return type so the catalog holds a
+/// clean function name (a name still starting with `*` produced either a
+/// corrupted export -- `pub unsafe fn *foo(...)` is invalid Rust -- or,
+/// worse, got silently dropped by callers that skip anything star-led as
+/// a call-site false match, which for a bare `.h` prototype it never is).
+fn split_leading_stars(tok: &str) -> (usize, &str) {
+    let mut n = 0usize;
+    let mut s = tok;
+    while let Some(rest) = s.strip_prefix('*') {
+        n += 1;
+        s = rest;
+    }
+    (n, s)
+}
+
 fn is_call_site_ret(ret: &str) -> bool {
     matches!(
         ret,
@@ -251,12 +268,19 @@ pub fn import(text: &str) -> Catalog {
             let head = collapse_ws(&after[..paren]);
             let parts: Vec<&str> = head.split_whitespace().collect();
             if parts.len() >= 2 {
-                let fname = String::from(*parts.last().unwrap());
-                let ret = parts[..parts.len() - 1].join(" ");
+                let (stars, bare) = split_leading_stars(parts.last().unwrap());
+                let fname = String::from(bare);
+                let mut ret = parts[..parts.len() - 1].join(" ");
+                if stars > 0 {
+                    ret = alloc::format!("{} {}", ret, "*".repeat(stars));
+                }
                 if let Some(close) = matching_paren(&after[paren..]) {
                     let args_s = &after[paren + 1..paren + close];
                     let after_args = after[paren + close + 1..].trim_start();
-                    if after_args.starts_with('{') && !seen.iter().any(|s| s == &fname) {
+                    if !fname.is_empty()
+                        && after_args.starts_with('{')
+                        && !seen.iter().any(|s| s == &fname)
+                    {
                         seen.push(fname.clone());
                         cat.fns.push(Fn {
                             name: fname,
@@ -272,8 +296,41 @@ pub fn import(text: &str) -> Catalog {
     }
 
     // Top-level decls ending in ; (headers + rare .c prototypes).
+    //
+    // Brace-depth tracked across lines: a `static inline` (or struct/union)
+    // body can contain its own semicolon-terminated statements (e.g.
+    // `dst[i] = (v >> (8 * i)) & 0xff;`) that are not decls at all -- only
+    // a line seen while depth == 0 (outside any real `{ }` body) is a real
+    // candidate. Without this, an assignment/compound-expression statement
+    // gets misread as a prototype named after its own operator token
+    // (`= ` / `|= `), producing an invalid extern decl in every generated
+    // face (`pub fn =(...)`) instead of being silently and correctly
+    // ignored as inline-body-only code.
+    //
+    // `extern "C" { ... }` linkage-spec wrappers are *transparent* scope
+    // (every real C header wraps its whole border in one): a `{` whose
+    // preceding text on the line is exactly `extern "C"` pushes a
+    // transparent marker instead of a real one, so declarations inside
+    // still count as top-level.
+    let mut scope_stack: Vec<bool> = Vec::new();
     for line in raw.split('\n') {
         let line = line.trim();
+        let at_top = scope_stack.iter().all(|transparent| *transparent);
+        for (i, ch) in line.char_indices() {
+            match ch {
+                '{' => {
+                    let transparent = line[..i].trim_end().ends_with("extern \"C\"");
+                    scope_stack.push(transparent);
+                }
+                '}' => {
+                    scope_stack.pop();
+                }
+                _ => {}
+            }
+        }
+        if !at_top {
+            continue;
+        }
         if !line.ends_with(';') || line.contains("(*") || line.contains("->") {
             continue;
         }
@@ -301,23 +358,29 @@ pub fn import(text: &str) -> Catalog {
             if parts.len() < 2 {
                 continue;
             }
-            let fname = String::from(*parts.last().unwrap());
-            if matches!(
-                fname.as_str(),
-                "if" | "for" | "while" | "switch" | "return" | "sizeof"
-            ) {
+            /* Skip body call-sites / statements mistaken for decls. */
+            if parts.last().unwrap().starts_with('&') {
+                continue;
+            }
+            let (stars, bare) = split_leading_stars(parts.last().unwrap());
+            let fname = String::from(bare);
+            if fname.is_empty()
+                || matches!(
+                    fname.as_str(),
+                    "if" | "for" | "while" | "switch" | "return" | "sizeof"
+                )
+            {
                 continue;
             }
             if seen.iter().any(|s| s == &fname) {
                 continue;
             }
-            let ret = parts[..parts.len() - 1].join(" ");
+            let mut ret = parts[..parts.len() - 1].join(" ");
             if ret.contains('(') || ret.contains(')') || is_call_site_ret(&ret) {
                 continue;
             }
-            /* Skip body call-sites / statements mistaken for decls. */
-            if fname.starts_with('&') || fname.starts_with('*') {
-                continue;
+            if stars > 0 {
+                ret = alloc::format!("{} {}", ret, "*".repeat(stars));
             }
             let args_s = &line[paren + 1..paren + close];
             seen.push(fname.clone());
