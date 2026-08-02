@@ -55,23 +55,31 @@ pub trait ForgeSession {
     fn exit_code(&self) -> i32;
 }
 
-/// Run a Ready-or-Pending op to completion. Solo: Pending is a hard bug.
+/// Run a Ready-or-Pending op to completion. Solo: `Pending` is a hard bug
+/// (the solo port is always-Ready), so this polls exactly once -- a
+/// `loop` here would just be dead code pretending to retry an op that
+/// can never become Ready under solo.
+#[cfg(feature = "solo")]
+pub fn block_on<T, F>(mut f: F) -> T
+where
+    F: FnMut() -> ForgePoll<T>,
+{
+    match f() {
+        ForgePoll::Ready(v) => v,
+        ForgePoll::Pending => panic!("forge solo: ForgePoll::Pending (port must be always-Ready)"),
+    }
+}
+
+/// Metal later: caller should park; block_on is host-only, so this
+/// re-polls until Ready (no yielding op exists in this port yet).
+#[cfg(not(feature = "solo"))]
 pub fn block_on<T, F>(mut f: F) -> T
 where
     F: FnMut() -> ForgePoll<T>,
 {
     loop {
-        match f() {
-            ForgePoll::Ready(v) => return v,
-            ForgePoll::Pending => {
-                #[cfg(feature = "solo")]
-                panic!("forge solo: ForgePoll::Pending (port must be always-Ready)");
-                #[cfg(not(feature = "solo"))]
-                {
-                    // Metal later: caller should park; block_on is host-only.
-                    continue;
-                }
-            }
+        if let ForgePoll::Ready(v) = f() {
+            return v;
         }
     }
 }

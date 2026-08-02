@@ -143,11 +143,16 @@ fn resolve_foreign_types<S: ForgeStore>(
 /// - `true` (genuinely unloadable -- wasm, Python): [`crate::_export_rs::export_proxy`]
 ///   -- cached [`pymergetic_metal_reg::ImportRow`][row] + refcounted call.
 ///
-/// `c`/`py` do not fork on this yet: no unloadable provider exists in the
-/// tree today for either consumer language to prove the shape against
-/// end-to-end (deferred to the wasm/Python revival in
-/// `registration_rethink_scope`'s Phase E, per metal-finished-quality --
-/// omit rather than ship an unexercised guess at the shape).
+/// `py` does not fork on either axis yet: no unloadable provider exists
+/// in the tree today to prove the shape against end-to-end (deferred to
+/// the wasm/Python revival in `registration_rethink_scope`'s Phase E,
+/// per metal-finished-quality -- omit rather than ship an unexercised
+/// guess at the shape). `c` forks separately on `guest_surface`
+/// (independent of `provider_unloadable`): a module whose export border
+/// crosses a package boundary that forge cannot scan across (wasm guest
+/// <-> host or guest <-> guest) needs the dual-branch declaration from
+/// [`crate::_export_c::export_guest_surface`]; same-package C consumers
+/// get the plain [`crate::_export_c::export`].
 ///
 /// [row]: pymergetic_metal_reg::ImportRow
 pub fn export_face(
@@ -158,9 +163,14 @@ pub fn export_face(
     human: &str,
     source_sha: &str,
     provider_unloadable: bool,
+    guest_surface: bool,
 ) -> Option<String> {
     match dst_slot {
-        "c" => Some(crate::_export_c::export(name, stem, cat, human, source_sha)),
+        "c" => Some(if guest_surface {
+            crate::_export_c::export_guest_surface(name, stem, cat, human, source_sha)
+        } else {
+            crate::_export_c::export(name, stem, cat, human, source_sha)
+        }),
         "rs" => Some(if provider_unloadable {
             crate::_export_rs::export_proxy(name, stem, cat, human, source_sha)
         } else {
@@ -267,9 +277,16 @@ pub fn convert_stem_slot<S: ForgeStore>(
     if dst_slot == "rs" {
         resolve_foreign_types(store, mod_dir, src_slot, human_path, &mut cat);
     }
-    let Some(content) =
-        export_face(dst_slot, &name, stem, &cat, human_name, &source_sha, meta.unloadable)
-    else {
+    let Some(content) = export_face(
+        dst_slot,
+        &name,
+        stem,
+        &cat,
+        human_name,
+        &source_sha,
+        meta.unloadable,
+        meta.guest_surface,
+    ) else {
         return Ok(FaceAction::Empty);
     };
     write_generated(store, out_dir, &rel, &content)?;
@@ -368,9 +385,16 @@ pub fn convert_paths<S: ForgeStore>(
     if dst_slot == "rs" {
         resolve_foreign_types(store, &mod_dir, src_slot, src, &mut cat);
     }
-    let Some(content) =
-        export_face(dst_slot, &name, stem, &cat, human_name, &source_sha, meta.unloadable)
-    else {
+    let Some(content) = export_face(
+        dst_slot,
+        &name,
+        stem,
+        &cat,
+        human_name,
+        &source_sha,
+        meta.unloadable,
+        meta.guest_surface,
+    ) else {
         return Ok(FaceAction::Empty);
     };
 

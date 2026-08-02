@@ -57,17 +57,30 @@ fn load_meta_path(mod_dir: &Path) -> Result<ModuleMeta, String> {
     parse_module_json(&text).map_err(|_| alloc::format!("bad .pm/module in {}", mod_dir.display()))
 }
 
+/// Every top-level dir that may hold `type=package` trees: `tests/` (the
+/// original proof location) and `sample/` (external-project-shaped
+/// demos, may nest packages inside packages -- see
+/// docs/definitions/module.md "Package vs module").
+const PACK_ROOTS: [&str; 2] = ["tests", "sample"];
+
 fn discover_packages(metal_root: &str) -> Result<Vec<PathBuf>, String> {
-    let tests = PathBuf::from(metal_root).join("tests");
-    if !tests.is_dir() {
-        return Ok(Vec::new());
-    }
     let mut out = Vec::new();
-    walk_packages(&tests, &mut out)?;
+    for root_name in PACK_ROOTS {
+        let root = PathBuf::from(metal_root).join(root_name);
+        if root.is_dir() {
+            walk_packages(&root, &mut out)?;
+        }
+    }
     out.sort();
     Ok(out)
 }
 
+/// Walk for every `type=package` dir, at any nesting depth: a package
+/// may itself contain a nested package (its own separate `.wasm`, a
+/// deliberate "split into a new wasm here" point) alongside plain
+/// source-level submodules (no `.pm/module` of their own, compiled into
+/// the parent's own crate/TU) -- so finding one package does not stop
+/// the walk from continuing into its own subtree for more.
 fn walk_packages(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = fs::read_dir(dir).map_err(|e| alloc::format!("read_dir {}: {e}", dir.display()))?;
     for ent in entries {
@@ -84,7 +97,10 @@ fn walk_packages(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
         let module = path.join(".pm/module");
         if module.is_file() {
             match load_meta_path(&path) {
-                Ok(m) if m.ty == ModuleType::Package => out.push(path),
+                Ok(m) if m.ty == ModuleType::Package => {
+                    out.push(path.clone());
+                    walk_packages(&path, out)?;
+                }
                 Ok(_) => {}
                 Err(e) => return Err(e),
             }
@@ -97,11 +113,10 @@ fn walk_packages(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 
 fn resolve_package(metal_root: &str, spec: &str) -> Result<PathBuf, String> {
     let as_path = PathBuf::from(spec);
-    let candidates = [
-        as_path.clone(),
-        PathBuf::from(metal_root).join(spec),
-        PathBuf::from(metal_root).join("tests").join(spec),
-    ];
+    let mut candidates = alloc::vec![as_path.clone(), PathBuf::from(metal_root).join(spec)];
+    for root_name in PACK_ROOTS {
+        candidates.push(PathBuf::from(metal_root).join(root_name).join(spec));
+    }
     for c in &candidates {
         if c.join(".pm/module").is_file() {
             let meta = load_meta_path(c)?;
@@ -135,7 +150,7 @@ fn crate_name_from_manifest(manifest: &Path) -> Result<String, String> {
             if rest.starts_with('"') {
                 let v = rest.trim_matches('"');
                 if !v.is_empty() {
-                    return Ok(String::from(v.replace('-', "_")));
+                    return Ok(v.replace('-', "_"));
                 }
             }
         }
@@ -246,7 +261,10 @@ fn pack_c(metal_root: &str, mod_dir: &Path, out: &Path) -> Result<(), String> {
         "--target=wasm32",
         "-nostdlib",
         "-Wl,--no-entry",
-        "-Wl,--export=ready",
+        /* Export every non-static symbol, not one hardcoded name -- a
+         * package may export more than a single `ready`. */
+        "-Wl,--export-all",
+        "-Wl,--no-gc-sections",
         "-Wl,--allow-undefined",
     ]);
     link.arg(alloc::format!("-fuse-ld={}", wasm_ld.display()));
@@ -276,18 +294,26 @@ fn pack_one(metal_root: &str, mod_dir: &Path, out_opt: Option<&Path>) -> Result<
             return Err(alloc::format!("forge pack: unsupported impl={other}"));
         }
     }
+    /* Embed this package's own declared imports as a custom wasm
+     * section (see `_wasm_import_section`) so the host loader can
+     * register the right forwarding natives from the artifact alone,
+     * at load time -- no whole-tree aggregation needed here anymore. */
+    crate::_wasm_import_section::append(&out, &meta.imports)?;
     Ok(out)
 }
 
-/// Pack every `type=package` under tests/. Returns count.
+/// Pack every `type=package` under `tests/`/`sample/` (any nesting
+/// depth). Each package's own `imports` are embedded into its own
+/// `.wasm` by `pack_one` -- no separate cross-tree registration pass
+/// needed. Returns pack count.
 pub fn pack_all(metal_root: &str) -> Result<usize, String> {
     let pkgs = discover_packages(metal_root)?;
     if pkgs.is_empty() {
         return Ok(0);
     }
     let mut n = 0;
-    for p in pkgs {
-        let out = pack_one(metal_root, &p, None)?;
+    for p in &pkgs {
+        let out = pack_one(metal_root, p, None)?;
         eprintln!("forge pack: {} -> {}", p.display(), out.display());
         n += 1;
     }

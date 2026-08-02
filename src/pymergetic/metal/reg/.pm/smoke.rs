@@ -1,13 +1,14 @@
 //! Host smoke — dynamic layer (register/lookup/bind/call0) + static
-//! per-module lifecycle (load/connect/refcount/cascading unload).
+//! per-module lifecycle (load/connect/quiesce/cascading unload).
+use std::cell::Cell;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use pymergetic_metal_reg::{
-    acquire, pm_metal_reg_bind, pm_metal_reg_call0, pm_metal_reg_count,
-    pm_metal_reg_lookup, pm_metal_reg_mod_connect_all, pm_metal_reg_mod_count,
-    pm_metal_reg_mod_load, pm_metal_reg_mod_unload, pm_metal_reg_register, register_rows_bytes,
-    release, ImportRow, RegEntry, RegMod, RegModStatic,
+    pm_metal_reg_bind, pm_metal_reg_call0, pm_metal_reg_count, pm_metal_reg_lookup,
+    pm_metal_reg_mod_connect_all, pm_metal_reg_mod_count, pm_metal_reg_mod_load,
+    pm_metal_reg_mod_unload, pm_metal_reg_register, register_rows_bytes, ImportRow, RegEntry,
+    RegMod, RegModStatic,
 };
 
 extern "C" fn smoke_forty_two() -> i32 {
@@ -162,6 +163,8 @@ static PARENT_MOD: RegMod = RegMod {
     on_unload: Some(parent_on_unload),
     entries: &PARENT_ENTRIES.entries,
     imports: &[],
+    raw_next: Cell::new(std::ptr::null()),
+    raw_prev: Cell::new(std::ptr::null()),
 };
 
 static CHILD_MOD: RegMod = RegMod {
@@ -177,6 +180,8 @@ static CHILD_MOD: RegMod = RegMod {
     on_unload: Some(child_on_unload),
     entries: &CHILD_ENTRIES.entries,
     imports: &[],
+    raw_next: Cell::new(std::ptr::null()),
+    raw_prev: Cell::new(std::ptr::null()),
 };
 
 static IMPORTER_MOD: RegMod = RegMod {
@@ -192,14 +197,17 @@ static IMPORTER_MOD: RegMod = RegMod {
     on_unload: None,
     entries: &[],
     imports: &IMPORTER_IMPORTS.imports,
+    raw_next: Cell::new(std::ptr::null()),
+    raw_prev: Cell::new(std::ptr::null()),
 };
 
 /// Full cycle: `on_load` -> `register_symbols` -> global connect -> a
-/// refcounted cross-module call -> refuse-to-unload-while-live -> release
-/// -> cascading unload (child first) -> reconnect drops the importer's
-/// slot back to noop -> the (`unloadable: false`) importer itself refuses
-/// unload. Exercises every lifecycle hook plus the refcount interlock for
-/// real, not just scaffolding that compiles.
+/// cross-module call through the resolved import slot -> cascading
+/// unload (child first, quiesced -- no async engine is running in this
+/// host smoke, so the quiesce wait resolves immediately, same as before
+/// quiesce existed) -> reconnect drops the importer's slot back to noop
+/// -> the (`unloadable: false`) importer itself refuses unload. Exercises
+/// every lifecycle hook for real, not just scaffolding that compiles.
 fn lifecycle_smoke() {
     unsafe {
         assert_eq!(pm_metal_reg_mod_load(&PARENT_MOD), 0);
@@ -214,19 +222,14 @@ fn lifecycle_smoke() {
         // Importer's import slot resolved against the parent's published
         // entry purely via connect (never a direct Cargo dependency).
         let row = &IMPORTER_IMPORTS.imports[0];
-        let ptr = acquire(row);
+        let ptr = row.entry().map(|e| e.get()).unwrap_or(std::ptr::null());
         assert!(!ptr.is_null());
         let f: extern "C" fn() -> i32 = std::mem::transmute(ptr);
         assert_eq!(f(), 42);
 
-        // A live acquire()/release() pair keeps the provider (and its
-        // child) alive: unload must refuse while `ptr` is still held.
+        // Unload cascades into the child first, quiesced (no per-call
+        // refcount gate anymore -- see docs/definitions/module.md).
         let parent_name = b"pymergetic.metal.reg.smoke.lifecycle.parent\0";
-        assert_eq!(pm_metal_reg_mod_unload(parent_name.as_ptr()), -1);
-
-        release(row);
-
-        // Now unload succeeds and cascades into the child first.
         assert_eq!(pm_metal_reg_mod_unload(parent_name.as_ptr()), 0);
         assert_eq!(CHILD_UNLOADED.load(Ordering::SeqCst), 1);
         assert_eq!(PARENT_DEREGISTERED.load(Ordering::SeqCst), 1);
@@ -236,9 +239,10 @@ fn lifecycle_smoke() {
 
         // The unload's own reconnect pass already dropped the importer's
         // slot back to noop; a redundant explicit pass must agree.
-        assert!(acquire(row).is_null());
+        let resolved = |r: &ImportRow| r.entry().map(|e| e.get()).unwrap_or(std::ptr::null());
+        assert!(resolved(row).is_null());
         pm_metal_reg_mod_connect_all();
-        assert!(acquire(row).is_null());
+        assert!(resolved(row).is_null());
         assert_eq!(pm_metal_reg_mod_count(), 1); // importer only
 
         // The importer is `unloadable: false` (a permanently-linked

@@ -6,13 +6,33 @@
 //! same way; permanently-linked modules never call `load`/`unload` at
 //! all -- they use a generated fast-path face instead (see
 //! `docs/definitions/module.md`).
+//!
+//! Storage is decentralized: each loaded [`RegMod`] carries its own raw-
+//! tape link (`raw_next`/`raw_prev`, a circular doubly-linked ring), not
+//! a fixed-size central array -- so the number of concurrently loaded
+//! modules has no compile-time cap. [`KernelTable::snapshot`] still walks
+//! that ring into a bounded stack buffer (`SNAPSHOT_MAX`, generous, not a
+//! storage limit) so callers can run hooks without holding the lock
+//! across a call that might itself re-enter `load`/`find_mod` -- same
+//! safety property the original fixed-array version had, just backed by
+//! a real ring instead of a preallocated slot table.
+//!
+//! The sorted tape (`sorted_head`, global `(module, func)` ordering for
+//! O(log n) bisection) from the design is deliberately not built yet:
+//! nothing today needs anything but "find by exact name" (a handful of
+//! dozens of modules, linear-scan-cheap), and building it before a real
+//! caller needs sorted enumeration would be exactly the kind of
+//! speculative machinery this tree's own rules warn against.
 
-use core::cell::UnsafeCell;
+use core::cell::Cell;
 use core::ffi::c_void;
 
 use crate::declare::ImportRow;
 use crate::entry::RegEntry;
 use crate::spin::Spin;
+
+#[path = "../../../../../include/pymergetic/metal/async/quiesce.rs"]
+mod async_quiesce;
 
 pub type HookFn = extern "C" fn(*mut c_void) -> i32;
 
@@ -37,18 +57,33 @@ pub struct RegMod {
     pub on_unload: Option<HookFn>,
     pub entries: &'static [RegEntry],
     pub imports: &'static [ImportRow],
+    /// Raw-tape link (insertion-order circular ring) -- mutated only
+    /// under [`KernelTable`]'s lock by `insert`/`remove`. Null (self,
+    /// really -- see `insert`) until this node is actually spliced in.
+    pub raw_next: Cell<*const RegMod>,
+    pub raw_prev: Cell<*const RegMod>,
 }
 
-// Safety: `RegMod` itself is plain data once built (hooks are function
-// pointers, `entries`/`imports` are `'static` slices of `Sync` types);
-// `ctx` is only ever dereferenced inside the owning module's own hooks.
+// Safety: `RegMod`'s non-`Cell` fields are plain data once built (hooks
+// are function pointers, `entries`/`imports` are `'static` slices of
+// `Sync` types); `ctx` is only ever dereferenced inside the owning
+// module's own hooks. `raw_next`/`raw_prev` are `Cell`s (not `Sync` on
+// their own) but are only ever touched while holding the owning
+// `KernelTable`'s lock, same external-synchronization contract the
+// original fixed-array table already relied on.
 unsafe impl Sync for RegMod {}
 
-pub const KERNEL_MAX: usize = 32;
+/// Generous cap on one non-locked walk of the raw ring, **not** a
+/// storage limit -- the ring itself can hold any number of modules;
+/// this only bounds how many a single [`KernelTable::snapshot`] call
+/// can report before a caller would need to re-snapshot.
+pub const SNAPSHOT_MAX: usize = 256;
 
 struct KernelTable {
     lock: Spin,
-    mods: UnsafeCell<[Option<&'static RegMod>; KERNEL_MAX]>,
+    /// Any node currently on the ring, or null if empty. Raw order is
+    /// just insertion order -- where you start doesn't matter.
+    ring: Cell<*const RegMod>,
 }
 
 unsafe impl Sync for KernelTable {}
@@ -57,43 +92,91 @@ impl KernelTable {
     const fn new() -> Self {
         Self {
             lock: Spin::new(),
-            mods: UnsafeCell::new([None; KERNEL_MAX]),
+            ring: Cell::new(core::ptr::null()),
         }
     }
 
-    /// Point-in-time copy of the occupied-slot array. `RegMod` refs are
-    /// `'static` and `Copy`, so this is cheap and lets callers walk the
-    /// table (including running hooks that may themselves call back into
-    /// `load`/`find_*`) without holding the lock across a hook call.
-    fn snapshot(&self) -> [Option<&'static RegMod>; KERNEL_MAX] {
+    /// Point-in-time copy of every loaded module into a caller-owned
+    /// stack buffer. `RegMod` refs are `'static` and `Copy`, so this is
+    /// cheap and lets callers walk the table (including running hooks
+    /// that may themselves call back into `load`/`find_*`) without
+    /// holding the lock across a hook call.
+    fn snapshot(&self) -> [Option<&'static RegMod>; SNAPSHOT_MAX] {
         self.lock.lock();
-        let s = unsafe { *self.mods.get() };
+        let mut buf: [Option<&'static RegMod>; SNAPSHOT_MAX] = [None; SNAPSHOT_MAX];
+        let start = self.ring.get();
+        if !start.is_null() {
+            let mut cur = start;
+            let mut n = 0usize;
+            loop {
+                if n >= SNAPSHOT_MAX {
+                    break;
+                }
+                // Safety: every node reachable from `ring` was inserted
+                // via `insert` and only ever removed (never freed) via
+                // `remove`, both under this same lock.
+                let node = unsafe { &*cur };
+                buf[n] = Some(node);
+                n += 1;
+                cur = node.raw_next.get();
+                if cur == start {
+                    break;
+                }
+            }
+        }
         self.lock.unlock();
-        s
+        buf
     }
 
     fn insert(&self, m: &'static RegMod) -> bool {
         self.lock.lock();
-        let slots = unsafe { &mut *self.mods.get() };
-        let mut ok = false;
-        for slot in slots.iter_mut() {
-            if slot.is_none() {
-                *slot = Some(m);
-                ok = true;
-                break;
-            }
+        let head = self.ring.get();
+        let m_ptr = m as *const RegMod;
+        if head.is_null() {
+            m.raw_next.set(m_ptr);
+            m.raw_prev.set(m_ptr);
+            self.ring.set(m_ptr);
+        } else {
+            // Safety: `head` is either null (handled above) or a live
+            // node inserted the same way.
+            let tail = unsafe { &*head }.raw_prev.get();
+            unsafe { &*tail }.raw_next.set(m_ptr);
+            m.raw_prev.set(tail);
+            m.raw_next.set(head);
+            unsafe { &*head }.raw_prev.set(m_ptr);
         }
         self.lock.unlock();
-        ok
+        true
     }
 
     fn remove(&self, name: &str) {
         self.lock.lock();
-        let slots = unsafe { &mut *self.mods.get() };
-        for slot in slots.iter_mut() {
-            if slot.map(|m| m.name == name).unwrap_or(false) {
-                *slot = None;
-                break;
+        let start = self.ring.get();
+        if !start.is_null() {
+            let mut cur = start;
+            loop {
+                // Safety: see `snapshot`.
+                let node = unsafe { &*cur };
+                if node.name == name {
+                    let next = node.raw_next.get();
+                    let prev = node.raw_prev.get();
+                    if next == cur {
+                        self.ring.set(core::ptr::null());
+                    } else {
+                        unsafe { &*prev }.raw_next.set(next);
+                        unsafe { &*next }.raw_prev.set(prev);
+                        if self.ring.get() == cur {
+                            self.ring.set(next);
+                        }
+                    }
+                    node.raw_next.set(core::ptr::null());
+                    node.raw_prev.set(core::ptr::null());
+                    break;
+                }
+                cur = node.raw_next.get();
+                if cur == start {
+                    break;
+                }
             }
         }
         self.lock.unlock();
@@ -135,9 +218,9 @@ pub fn connect_all() {
 }
 
 /// `on_load` -> `register_symbols` -> global connect pass. `0` on
-/// success; `-1` if the name is already loaded, the table is full, or a
-/// hook reports failure (in which case the module is rolled back out of
-/// the table before returning).
+/// success; `-1` if the name is already loaded or a hook reports
+/// failure (in which case the module is rolled back out of the table
+/// before returning).
 pub fn load(m: &'static RegMod) -> i32 {
     if find_mod(m.name).is_some() {
         return -1;
@@ -153,21 +236,43 @@ pub fn load(m: &'static RegMod) -> i32 {
     0
 }
 
+/// Spin until every runner has parked, run `f` with the registry
+/// guaranteed to have zero concurrent callers anywhere in it, then
+/// resume every runner. If async was never started (`n_runners == 0`,
+/// e.g. a host smoke test with no engine running), `all_parked` is
+/// vacuously true immediately -- no wait, no behavior change from
+/// before quiesce existed.
+fn with_quiesce<R>(f: impl FnOnce() -> R) -> R {
+    unsafe {
+        async_quiesce::pm_metal_async_quiesce_request();
+        while async_quiesce::pm_metal_async_quiesce_all_parked() == 0 {
+            core::hint::spin_loop();
+        }
+        let r = f();
+        async_quiesce::pm_metal_async_quiesce_release();
+        r
+    }
+}
+
 /// Cascading unload: every currently-loaded module naming `name` as
 /// parent is unloaded first (depth-first), then `name` itself --
 /// `deregister_symbols` (withdrawing every entry), `on_unload`, removal
 /// from the kernel table, and a final reconnect pass so every other
 /// module's import slots that pointed here drop back to null.
 ///
-/// Refuses (`-1`, no side effect) if:
-/// - `m.unloadable` is `false` -- a permanently-linked module (or a
-///   sticky package), most notably the kernel namespace root itself,
-///   cannot be unloaded, full stop (see `docs/definitions/module.md`
-///   "Kernel is a module too").
-/// - any entry still has a live [`crate::acquire`]/[`crate::release`]
-///   pair outstanding (`refs != 0`) on this module or on any child it
-///   would cascade into -- a live caller keeps its provider (and the
-///   provider's own children) alive.
+/// Refuses (`-1`, no side effect) if `m.unloadable` is `false` -- a
+/// permanently-linked module (or a sticky package), most notably the
+/// kernel namespace root itself, cannot be unloaded, full stop (see
+/// `docs/definitions/module.md` "Kernel is a module too").
+///
+/// The mutation itself (`deregister_symbols` through the reconnect
+/// pass) runs inside a global quiesce: every async runner is parked at
+/// its own next dispatch checkpoint first, so there is no concurrent
+/// caller anywhere in the system that could be mid-call through an
+/// entry this unload is about to withdraw. That replaces the old
+/// per-entry refcount interlock (`acquire`/`release`) entirely -- a
+/// provider's entries no longer need a live-caller count to be safe to
+/// withdraw, because nothing can be calling at all during the withdraw.
 pub fn unload(name: &str) -> i32 {
     let Some(m) = find_mod(name) else {
         return -1;
@@ -176,22 +281,19 @@ pub fn unload(name: &str) -> i32 {
         return -1;
     }
     for child in KERNEL.snapshot().into_iter().flatten() {
-        if child.parent == Some(name) {
-            if unload(child.name) != 0 {
-                return -1;
-            }
+        if child.parent == Some(name) && unload(child.name) != 0 {
+            return -1;
         }
     }
-    if m.entries.iter().any(|e| e.refs() != 0) {
-        return -1;
-    }
-    let _ = run_hook(m, m.deregister_symbols);
-    for e in m.entries {
-        e.withdraw();
-    }
-    let _ = run_hook(m, m.on_unload);
-    KERNEL.remove(name);
-    connect_all();
+    with_quiesce(|| {
+        let _ = run_hook(m, m.deregister_symbols);
+        for e in m.entries {
+            e.withdraw();
+        }
+        let _ = run_hook(m, m.on_unload);
+        KERNEL.remove(name);
+        connect_all();
+    });
     0
 }
 

@@ -8,12 +8,16 @@
 //! Python) publish through the static per-module lifecycle instead
 //! (`_entry.rs` / `_declare.rs` / `_kernel.rs`), which keys each module's
 //! own small fixed entry array by name rather than sharing one fat slot
-//! array across unrelated modules. This table remains for callers that
-//! genuinely do not know their (module, func) pairs until runtime — Python
-//! attach, future wasm-mod registration (see `pm_metal_reg_register`'s
-//! still-real callers in `wasm/`, `py/`, `net/ssh`, `net/http/*`) — so
-//! `SLOT_MAX` only needs to cover that late-registration tier, not the
-//! entire floor's symbol count; shrunk from 512 accordingly.
+//! array across unrelated modules. `wasm`'s own module registration
+//! already moved to that static tier (`wasm/__init__.rs`'s
+//! `pm_metal_wasm_register` builds a `RegMod` and calls
+//! `pm_metal_reg_mod_load`, same as any compile-time module); this table
+//! remains only for callers that genuinely do not know their (module,
+//! func) pairs until runtime and have no per-load `RegMod` shape of
+//! their own — Python attach (see `pm_metal_reg_register`'s still-real
+//! callers in `py/`, `net/ssh`, `net/http/*`) — so `SLOT_MAX` only needs
+//! to cover that late-registration tier, not the entire floor's symbol
+//! count; shrunk from 512 accordingly.
 
 use core::cell::UnsafeCell;
 use core::ffi::c_void;

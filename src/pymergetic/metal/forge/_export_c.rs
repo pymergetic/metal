@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 
 use crate::_banner::generated_banner;
 use crate::_catalog::{Catalog, Fn};
+use crate::_template::{self, Value};
 
 fn c_args(fn_: &Fn) -> String {
     if fn_.args.is_empty() {
@@ -17,108 +18,20 @@ fn c_args(fn_: &Fn) -> String {
         .join(", ")
 }
 
-pub fn export(
-    module_name: &str,
-    base: &str,
-    cat: &Catalog,
-    human: &str,
-    source_sha: &str,
-) -> String {
-    let guard = alloc::format!(
+fn header_guard(module_name: &str) -> String {
+    alloc::format!(
         "PM_METAL_{}_H_",
-        module_name
-            .to_uppercase()
-            .replace('.', "_")
-            .replace('-', "_")
-    );
-    let mut lines =
-        generated_banner("c", human, &alloc::format!("{}.h", base), source_sha);
-    lines.push(String::new());
-    lines.push(alloc::format!("#ifndef {}", guard));
-    lines.push(alloc::format!("#define {}", guard));
-    lines.push(String::new());
-    /* Keep: clangd IncludeCleaner often flags these as unused in a face that
-     * only uses typedefs/macros that look ambient; they are the freestanding
-     * type floor for every generated C border. */
-    lines.push(String::from("#include <stddef.h> /* IWYU pragma: keep */"));
-    lines.push(String::from("#include <stdint.h> /* IWYU pragma: keep */"));
-    lines.push(String::new());
-    lines.push(String::from("#ifdef __cplusplus"));
-    lines.push(String::from("extern \"C\" {"));
-    lines.push(String::from("#endif"));
-    lines.push(String::new());
-    for st in &cat.structs {
-        lines.push(alloc::format!("typedef struct {} {};", st.name, st.name));
-        lines.push(String::new());
-    }
-    for en in &cat.enums {
-        lines.push(String::from("typedef enum {"));
-        for (i, v) in en.variants.iter().enumerate() {
-            let comma = if i + 1 < en.variants.len() { "," } else { "" };
-            lines.push(alloc::format!("  {} = {}{}", v.name, v.value, comma));
-        }
-        lines.push(alloc::format!("}} {};", en.name));
-        lines.push(String::new());
-    }
-    for td in &cat.typedefs {
-        if td.ty.contains("(*)") {
-            lines.push(alloc::format!(
-                "typedef {};",
-                td.ty.replacen("(*)", &alloc::format!("(*{})", td.name), 1)
-            ));
-        } else {
-            lines.push(alloc::format!("typedef {} {};", td.ty, td.name));
-        }
-        lines.push(String::new());
-    }
-    /* Forward-declare sibling / foreign pm_metal_*_t names used in signatures. */
-    for name in foreign_type_names(cat) {
-        lines.push(alloc::format!("typedef struct {} {};", name, name));
-        lines.push(String::new());
-    }
-    for st in &cat.structs {
-        lines.push(alloc::format!("struct {} {{", st.name));
-        for f in &st.fields {
-            if f.ty.contains('[') && f.ty.ends_with(']') {
-                if let Some((base, n)) = f.ty.rsplit_once('[') {
-                    lines.push(alloc::format!(
-                        "  {} {}[{}];",
-                        base.trim(),
-                        f.name,
-                        n.trim_end_matches(']')
-                    ));
-                }
-            } else {
-                lines.push(alloc::format!("  {} {};", f.ty, f.name));
-            }
-        }
-        lines.push(String::from("};"));
-        lines.push(String::new());
-    }
-    // `static inline` border functions have no externally-linkable
-    // definition (inlined per translation unit); declaring them `extern`
-    // here would be a link-time lie for any consumer of this generated
-    // face. Only the module's real (non-inline) border functions get a
-    // connector declaration -- same-language callers still see the real
-    // inline definition by including the human header directly.
-    for fn_ in cat.fns.iter().filter(|f| !f.inline) {
-        lines.push(alloc::format!("{} {}({});", fn_.ret, fn_.name, c_args(fn_)));
-    }
-    if cat.is_empty() {
-        lines.push(alloc::format!(
-            "/* module {}: empty catalog */",
-            module_name
-        ));
-    }
-    lines.push(String::new());
-    lines.push(String::from("#ifdef __cplusplus"));
-    lines.push(String::from("}"));
-    lines.push(String::from("#endif"));
-    lines.push(String::new());
-    lines.push(alloc::format!("#endif /* {} */", guard));
-    lines.push(String::new());
-    lines.join("\n")
+        module_name.to_uppercase().replace(['.', '-'], "_")
+    )
 }
+
+/// Single face for a module's `.h`: types (struct forward decls, enums,
+/// typedefs, foreign forward decls, struct bodies) are byte-identical
+/// regardless of `guest_surface`; only the function-declaration shape
+/// forks on it -- a same-package consumer gets a plain prototype either
+/// way, a `guest_surface` provider's declaration additionally carries the
+/// `__wasm__` import branch (see [`export`] vs [`export_guest_surface`]).
+const TEMPLATE: &str = include_str!("templates/export_c.tpl");
 
 fn known_type_name(cat: &Catalog, name: &str) -> bool {
     cat.structs.iter().any(|s| s.name == name)
@@ -133,10 +46,8 @@ fn foreign_type_names(cat: &Catalog) -> Vec<String> {
             c.is_whitespace() || c == '*' || c == ',' || c == '(' || c == ')' || c == '[' || c == ']'
         }) {
             let t = tok.trim();
-            if t.starts_with("pm_metal_") && t.ends_with("_t") && !known_type_name(cat, t) {
-                if !out.iter().any(|x| x == t) {
-                    out.push(String::from(t));
-                }
+            if t.starts_with("pm_metal_") && t.ends_with("_t") && !known_type_name(cat, t) && !out.iter().any(|x| x == t) {
+                out.push(String::from(t));
             }
         }
     };
@@ -157,3 +68,128 @@ fn foreign_type_names(cat: &Catalog) -> Vec<String> {
     out
 }
 
+/// `struct`/union field declaration RHS (no leading indent, no trailing
+/// `;`) -- array fields (`char name[N]`) split the array suffix off the
+/// element type; everything else is `{ty} {name}`.
+fn field_line(ty: &str, name: &str) -> String {
+    if ty.contains('[') && ty.ends_with(']') {
+        if let Some((base, n)) = ty.rsplit_once('[') {
+            return alloc::format!("{} {}[{}]", base.trim(), name, n.trim_end_matches(']'));
+        }
+    }
+    alloc::format!("{} {}", ty, name)
+}
+
+/// `typedef` RHS (no leading `typedef `, no trailing `;`) -- function
+/// pointers splice the name into the `(*)` slot; everything else is
+/// `{ty} {name}`.
+fn typedef_line(ty: &str, name: &str) -> String {
+    if ty.contains("(*)") {
+        return ty.replacen("(*)", &alloc::format!("(*{})", name), 1);
+    }
+    alloc::format!("{} {}", ty, name)
+}
+
+/// Build the `structs` / `enums` / `typedefs` / `foreign_types` context
+/// entries shared by [`export`] and [`export_guest_surface`].
+fn types_ctx(cat: &Catalog) -> Vec<(&'static str, Value)> {
+    let structs = Value::list_map(&cat.structs, |st| {
+        let fields = Value::list_map(&st.fields, |f| {
+            Value::map(alloc::vec![("line", Value::str(field_line(&f.ty, &f.name)))])
+        });
+        Value::map(alloc::vec![("name", Value::str(st.name.clone())), ("fields", fields)])
+    });
+    let enums = Value::list_map(&cat.enums, |en| {
+        let n = en.variants.len();
+        let variants = Value::list(
+            en.variants
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let comma = if i + 1 < n { "," } else { "" };
+                    Value::map(alloc::vec![
+                        ("name", Value::str(v.name.clone())),
+                        ("value", Value::str(alloc::format!("{}", v.value))),
+                        ("comma", Value::str(comma)),
+                    ])
+                })
+                .collect(),
+        );
+        Value::map(alloc::vec![("name", Value::str(en.name.clone())), ("variants", variants)])
+    });
+    let typedefs = Value::list_map(&cat.typedefs, |td| {
+        Value::map(alloc::vec![("line", Value::str(typedef_line(&td.ty, &td.name)))])
+    });
+    let foreign_types = Value::list_map(&foreign_type_names(cat), |name| Value::str(name.clone()));
+    alloc::vec![
+        ("structs", structs),
+        ("enums", enums),
+        ("typedefs", typedefs),
+        ("foreign_types", foreign_types),
+    ]
+}
+
+fn fns_ctx(cat: &Catalog) -> Value {
+    let extern_fns: Vec<&Fn> = cat.fns.iter().filter(|f| !f.inline).collect();
+    Value::list_map(&extern_fns, |f| {
+        Value::map(alloc::vec![
+            ("ret", Value::str(f.ret.clone())),
+            ("name", Value::str(f.name.clone())),
+            ("args", Value::str(c_args(f))),
+        ])
+    })
+}
+
+fn render(
+    module_name: &str,
+    base: &str,
+    cat: &Catalog,
+    human: &str,
+    source_sha: &str,
+    guest_surface: bool,
+) -> String {
+    let guard = header_guard(module_name);
+    let mut ctx_fields = types_ctx(cat);
+    ctx_fields.push(("fns", fns_ctx(cat)));
+    ctx_fields.push(("empty", Value::Bool(cat.is_empty())));
+    ctx_fields.push(("module_name", Value::str(module_name)));
+    ctx_fields.push(("guard", Value::str(guard)));
+    ctx_fields.push(("guest_surface", Value::Bool(guest_surface)));
+    let ctx = Value::map(ctx_fields);
+
+    let mut out = String::new();
+    for line in generated_banner("c", human, &alloc::format!("{}.h", base), source_sha) {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(&_template::render_str(TEMPLATE, ctx).expect("c template"));
+    if out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+pub fn export(module_name: &str, base: &str, cat: &Catalog, human: &str, source_sha: &str) -> String {
+    render(module_name, base, cat, human, source_sha, false)
+}
+
+/// Dual-branch face for a module marked `"guest_surface": true` in
+/// `.pm/module`: every non-inline export gets a real wasm import
+/// declaration on `__wasm__` (`PM_METAL_PKG_IMPORT`, see
+/// `include/pymergetic/metal/pkg_import.h`) and an ordinary prototype
+/// on the native side -- same shape a same-package consumer's plain
+/// [`export`] face already gives it (resolved once by `connect_symbols`
+/// through the registry, not a link-time symbol), just declared under
+/// `#else` instead of unconditionally. Only the function declarations
+/// fork; types/structs/enums are identical on both sides of the
+/// boundary (plain data has no ABI difference at a wasm import).
+pub fn export_guest_surface(
+    module_name: &str,
+    base: &str,
+    cat: &Catalog,
+    human: &str,
+    source_sha: &str,
+) -> String {
+    render(module_name, base, cat, human, source_sha, true)
+}

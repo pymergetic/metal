@@ -29,6 +29,16 @@ int atoi(const char *s)
   return neg ? -v : v;
 }
 
+int abs(int j)
+{
+  return j < 0 ? -j : j;
+}
+
+long labs(long j)
+{
+  return j < 0 ? -j : j;
+}
+
 _Noreturn void abort(void)
 {
   pm_metal_rt_halt();

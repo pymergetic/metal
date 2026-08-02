@@ -143,6 +143,17 @@ struct Engine {
     pids: [Handle; MAX_PIDS + 1],
     next_pid: u32,
     current_runner: u32,
+    /// Global safepoint request (registry load/unload wants exclusive
+    /// access). Checked by every runner at its existing per-dispatch
+    /// checkpoint in [`take_ready`] -- no extra lock, reuses the one
+    /// `take_ready` already takes on every single task dispatch.
+    quiesce_requested: bool,
+    /// One flag per runner: has it parked (reached `take_ready` and seen
+    /// `quiesce_requested`) since the last request? A runner mid-step
+    /// (between the two `with_lock` calls in [`step_one`]) is not parked
+    /// yet -- bounded by how long one step is allowed to run (see
+    /// `metal-no-long-running-ops`).
+    parked: [bool; MAX_RUNNERS],
 }
 
 impl Engine {
@@ -158,6 +169,8 @@ impl Engine {
             pids: [INVALID; MAX_PIDS + 1],
             next_pid: 1,
             current_runner: 0,
+            quiesce_requested: false,
+            parked: [false; MAX_RUNNERS],
         }
     }
 }
@@ -576,20 +589,63 @@ fn balance_pull(e: &mut Engine, me: usize) {
     }
 }
 
+enum TakeOutcome {
+    Bad,
+    Parked,
+    Handle(Handle),
+}
+
 fn take_ready(runner: u32) -> Handle {
+    loop {
+        let outcome = with_lock(|e| {
+            if !e.started || runner >= e.n_runners {
+                return TakeOutcome::Bad;
+            }
+            let me = runner as usize;
+            if e.quiesce_requested {
+                e.parked[me] = true;
+                return TakeOutcome::Parked;
+            }
+            e.parked[me] = false;
+            e.current_runner = runner;
+            balance_pull(e, me);
+            let mut h = pop_weighted(e, me);
+            if h == INVALID {
+                h = steal(e, me);
+            }
+            TakeOutcome::Handle(h)
+        });
+        match outcome {
+            TakeOutcome::Bad => return INVALID,
+            TakeOutcome::Parked => {
+                core::hint::spin_loop();
+                continue;
+            }
+            TakeOutcome::Handle(h) => return h,
+        }
+    }
+}
+
+/// Ask every runner to park at its next dispatch checkpoint. Idempotent.
+/// Pair with [`all_parked`] (poll until true) then the caller's exclusive
+/// work, then [`release_quiesce`].
+pub fn request_quiesce() {
+    with_lock(|e| e.quiesce_requested = true);
+}
+
+/// `true` once every started runner has parked since the last request.
+pub fn all_parked() -> bool {
+    with_lock(|e| (0..e.n_runners as usize).all(|r| e.parked[r]))
+}
+
+/// Resume every parked runner.
+pub fn release_quiesce() {
     with_lock(|e| {
-        if !e.started || runner >= e.n_runners {
-            return INVALID;
+        e.quiesce_requested = false;
+        for p in e.parked.iter_mut() {
+            *p = false;
         }
-        e.current_runner = runner;
-        let me = runner as usize;
-        balance_pull(e, me);
-        let mut h = pop_weighted(e, me);
-        if h == INVALID {
-            h = steal(e, me);
-        }
-        h
-    })
+    });
 }
 
 fn finish_step(h: Handle, raw: u32) {

@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 
 use crate::_banner::generated_banner;
 use crate::_catalog::{Catalog, Fn};
+use crate::_template::{self, Value};
 
 fn rs_ident(name: &str) -> String {
     match name {
@@ -281,59 +282,76 @@ fn emit_rs_inline_twin(fn_: &Fn) -> Option<Vec<String>> {
     None
 }
 
+/// Append `lines`, each followed by its own newline -- the uniform
+/// convention every template render in this file also follows (see
+/// [`export`]'s doc comment), so hand-built segments (like
+/// [`emit_rs_inline_twin`]'s synthesized bodies) splice into a
+/// template-rendered one without a seam.
+fn push_lines(out: &mut String, lines: &[String]) {
+    for l in lines {
+        out.push_str(l);
+        out.push('\n');
+    }
+}
+
+/// Struct/union field type: array typedef names stay as their typedef
+/// (not param-decayed to a pointer -- that decay only applies to
+/// function parameters, see [`rs_ty`]); everything else goes through the
+/// normal C-to-Rust type mapping.
+fn field_rs_ty(ty: &str) -> String {
+    let t = collapse_ws(ty);
+    let base: String = t
+        .split_whitespace()
+        .filter(|x| *x != "const")
+        .collect::<Vec<_>>()
+        .join(" ");
+    if base.ends_with("_wire_t") {
+        base
+    } else {
+        rs_ty(ty)
+    }
+}
+
 /// Enums/structs/typedefs: identical ABI shape regardless of whether the
 /// provider is `unloadable` -- only how the functions below them resolve
-/// differs (see [`export`] vs [`export_proxy`]).
-fn emit_types(cat: &Catalog) -> Vec<String> {
-    let mut lines = Vec::new();
-    for en in &cat.enums {
-        lines.push(String::from("#[repr(u32)]"));
-        lines.push(String::from("#[derive(Clone, Copy)]"));
-        lines.push(String::from("#[allow(non_camel_case_types)]"));
-        lines.push(alloc::format!("pub enum {} {{", en.name));
-        for v in &en.variants {
-            lines.push(alloc::format!("    {} = {},", v.name, v.value));
-        }
-        lines.push(String::from("}"));
-        lines.push(String::new());
-    }
-    for st in &cat.structs {
-        lines.push(String::from("#[repr(C)]"));
-        lines.push(String::from("#[derive(Clone, Copy)]"));
+/// differs (see [`export`] vs [`export_proxy`]). Structural assembly
+/// (the loops/braces below) is templated; per-item type-string
+/// computation (`rs_ty`/`field_rs_ty`/`rs_typedef_ty`) stays ordinary
+/// Rust -- a template has nothing to offer an algorithm, only a shape.
+const TYPES_TEMPLATE: &str = include_str!("templates/export_rs_types.tpl");
+
+fn emit_types(cat: &Catalog) -> String {
+    let enums = Value::list_map(&cat.enums, |en| {
+        let variants = Value::list_map(&en.variants, |v| {
+            Value::map(alloc::vec![
+                ("name", Value::str(v.name.clone())),
+                ("value", Value::str(alloc::format!("{}", v.value))),
+            ])
+        });
+        Value::map(alloc::vec![("name", Value::str(en.name.clone())), ("variants", variants)])
+    });
+    let structs = Value::list_map(&cat.structs, |st| {
         let kind = if st.is_union { "union" } else { "struct" };
-        lines.push(alloc::format!("pub {} {} {{", kind, st.name));
-        for f in &st.fields {
-            let fty = {
-                let t = collapse_ws(&f.ty);
-                let base: String = t
-                    .split_whitespace()
-                    .filter(|x| *x != "const")
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                /* Struct/union fields keep array typedef names (not param decay). */
-                if base.ends_with("_wire_t") {
-                    base
-                } else {
-                    rs_ty(&f.ty)
-                }
-            };
-            lines.push(alloc::format!(
-                "    pub {}: {},",
-                rs_ident(&f.name),
-                fty
-            ));
-        }
-        lines.push(String::from("}"));
-        lines.push(String::new());
-    }
-    for td in &cat.typedefs {
-        let rs = rs_typedef_ty(&td.ty);
-        lines.push(alloc::format!("pub type {} = {};", td.name, rs));
-    }
-    if !cat.typedefs.is_empty() {
-        lines.push(String::new());
-    }
-    lines
+        let fields = Value::list_map(&st.fields, |f| {
+            Value::map(alloc::vec![
+                ("name", Value::str(rs_ident(&f.name))),
+                ("ty", Value::str(field_rs_ty(&f.ty))),
+            ])
+        });
+        Value::map(alloc::vec![
+            ("kind", Value::str(kind)),
+            ("name", Value::str(st.name.clone())),
+            ("fields", fields),
+        ])
+    });
+    let typedefs = Value::list_map(&cat.typedefs, |td| {
+        Value::map(alloc::vec![
+            ("name", Value::str(td.name.clone())),
+            ("rs", Value::str(rs_typedef_ty(&td.ty))),
+        ])
+    });
+    let ctx = Value::map(alloc::vec![("enums", enums), ("structs", structs), ("typedefs", typedefs)]);
+    _template::render_str(TYPES_TEMPLATE, ctx).expect("rs types template")
 }
 
 fn rs_args(fn_: &Fn) -> String {
@@ -344,9 +362,30 @@ fn rs_args(fn_: &Fn) -> String {
         .join(", ")
 }
 
+/// `extern "C" { ... }` block shared by [`export`]'s `if` branch --
+/// `fns` is `extern_fns` pre-rendered as `pub fn NAME(ARGS);` /
+/// `pub fn NAME(ARGS) -> RET;` per [`rs_ty`]'s `()`-means-no-return-type
+/// convention.
+const EXTERN_BLOCK_TEMPLATE: &str = include_str!("templates/export_rs_extern.tpl");
+
+fn fn_decl(fn_: &Fn, args: &str, ret: &str) -> String {
+    if ret == "()" {
+        alloc::format!("pub fn {}({});", fn_.name, args)
+    } else {
+        alloc::format!("pub fn {}({}) -> {};", fn_.name, args, ret)
+    }
+}
+
 /// Fast-path face (provider `unloadable == false`, the permanent-module
 /// case): plain `extern "C"` declarations resolved at link time -- no
 /// cache slot, no runtime connect step, no refcount.
+///
+/// Every segment below (hand-built [`emit_rs_inline_twin`] bodies and
+/// template-rendered blocks alike) is built to always end in its own
+/// trailing newline, then the *whole* concatenation has exactly one
+/// trailing newline stripped at the very end -- the same "N lines, N-1
+/// separators" shape `Vec<String>::join("\n")` gives for free, without
+/// needing every template to special-case "is this the last line".
 pub fn export(
     module_name: &str,
     base: &str,
@@ -354,54 +393,52 @@ pub fn export(
     human: &str,
     source_sha: &str,
 ) -> String {
-    let mut lines =
-        generated_banner("rs", human, &alloc::format!("{}.rs", base), source_sha);
-    lines.push(String::new());
-    lines.push(String::from("#![allow(dead_code, non_camel_case_types)]"));
-    lines.push(String::new());
-    lines.extend(emit_types(cat));
+    let mut out = String::new();
+    for line in generated_banner("rs", human, &alloc::format!("{}.rs", base), source_sha) {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str("#![allow(dead_code, non_camel_case_types)]\n");
+    out.push('\n');
+    out.push_str(&emit_types(cat));
 
     let inline_fns: Vec<&Fn> = cat.fns.iter().filter(|f| f.inline).collect();
     let extern_fns: Vec<&Fn> = cat.fns.iter().filter(|f| !f.inline).collect();
     for fn_ in inline_fns {
         if let Some(twin) = emit_rs_inline_twin(fn_) {
-            lines.extend(twin);
+            push_lines(&mut out, &twin);
         }
     }
     if !extern_fns.is_empty() || cat.fns.is_empty() {
-        lines.push(String::from("extern \"C\" {"));
-        for fn_ in &extern_fns {
-            let args = rs_args(fn_);
-            let ret = rs_ty(&fn_.ret);
-            if ret == "()" {
-                lines.push(alloc::format!("    pub fn {}({});", fn_.name, args));
-            } else {
-                lines.push(alloc::format!(
-                    "    pub fn {}({}) -> {};",
-                    fn_.name, args, ret
-                ));
-            }
-        }
-        if cat.fns.is_empty() {
-            lines.push(alloc::format!(
-                "    // module {}: empty catalog",
-                module_name
-            ));
-        }
-        lines.push(String::from("}"));
-        lines.push(String::new());
+        let fns = Value::list_map(&extern_fns, |f| {
+            let args = rs_args(f);
+            let ret = rs_ty(&f.ret);
+            Value::map(alloc::vec![("decl", Value::str(fn_decl(f, &args, &ret)))])
+        });
+        let ctx = Value::map(alloc::vec![
+            ("fns", fns),
+            ("module_empty", Value::Bool(cat.fns.is_empty())),
+            ("module_name", Value::str(module_name)),
+        ]);
+        out.push_str(&_template::render_str(EXTERN_BLOCK_TEMPLATE, ctx).expect("rs extern block"));
     }
-    lines.join("\n")
+    if out.ends_with('\n') {
+        out.pop();
+    }
+    out
 }
 
 /// Registry-proxy face (provider `unloadable == true`): each non-inline
 /// export gets a cached [`pymergetic_metal_reg::ImportRow`][row], filled
 /// in by the kernel's connect pass, and a safe-signature wrapper that
-/// resolves through [`pymergetic_metal_reg::acquire`]/[`::release`]
-/// (refcounted, so the provider cannot unload mid-call) instead of a
-/// link-time symbol. `pymergetic_metal_reg` is the registry spine, so
-/// depending on it directly here is the one Cargo-dependency exception
-/// (see docs/definitions/module.md "Consume foreign modules").
+/// resolves through it and calls straight through the cached pointer --
+/// no refcount, no lock: `unload` quiesces every async runner before
+/// withdrawing anything (see `pymergetic_metal_reg::kernel::unload`), so
+/// there is no concurrent caller to race against. `pymergetic_metal_reg`
+/// is the registry spine, so depending on it directly here is the one
+/// Cargo-dependency exception (see docs/definitions/module.md "Consume
+/// foreign modules").
 ///
 /// Calling a wrapper before the provider has loaded/connected is a
 /// documented misuse (same contract as calling through a null function
@@ -410,6 +447,10 @@ pub fn export(
 /// for an arbitrary return type.
 ///
 /// [row]: pymergetic_metal_reg::ImportRow
+const IMPORT_ROWS_TEMPLATE: &str = include_str!("templates/export_rs_import_rows.tpl");
+
+const PROXY_FNS_TEMPLATE: &str = include_str!("templates/export_rs_proxy_fns.tpl");
+
 pub fn export_proxy(
     module_name: &str,
     base: &str,
@@ -417,82 +458,60 @@ pub fn export_proxy(
     human: &str,
     source_sha: &str,
 ) -> String {
-    let mut lines =
-        generated_banner("rs", human, &alloc::format!("{}.rs", base), source_sha);
-    lines.push(String::new());
-    lines.push(String::from("#![allow(dead_code, non_camel_case_types)]"));
-    lines.push(String::new());
-    lines.extend(emit_types(cat));
+    let mut out = String::new();
+    for line in generated_banner("rs", human, &alloc::format!("{}.rs", base), source_sha) {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str("#![allow(dead_code, non_camel_case_types)]\n");
+    out.push('\n');
+    out.push_str(&emit_types(cat));
 
     let inline_fns: Vec<&Fn> = cat.fns.iter().filter(|f| f.inline).collect();
     let extern_fns: Vec<&Fn> = cat.fns.iter().filter(|f| !f.inline).collect();
     for fn_ in inline_fns {
         if let Some(twin) = emit_rs_inline_twin(fn_) {
-            lines.extend(twin);
+            push_lines(&mut out, &twin);
         }
     }
 
     if extern_fns.is_empty() {
-        lines.push(alloc::format!("// module {}: empty catalog", module_name));
-        return lines.join("\n");
+        out.push_str(&alloc::format!("// module {}: empty catalog", module_name));
+        return out;
     }
 
-    for fn_ in &extern_fns {
-        lines.push(alloc::format!(
-            "static __PM_METAL_IMPORT_{}: pymergetic_metal_reg::ImportRow = pymergetic_metal_reg::ImportRow::new(\"{}\", \"{}\");",
-            fn_.name, module_name, fn_.name
-        ));
-    }
-    lines.push(String::new());
-
-    for fn_ in &extern_fns {
-        let args = rs_args(fn_);
-        let ret = rs_ty(&fn_.ret);
-        let arg_tys = fn_
-            .args
-            .iter()
-            .map(|a| rs_ty(&a.ty))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let call_args = fn_
+    let fns = Value::list_map(&extern_fns, |f| {
+        let args = rs_args(f);
+        let ret = rs_ty(&f.ret);
+        let arg_tys = f.args.iter().map(|a| rs_ty(&a.ty)).collect::<Vec<_>>().join(", ");
+        let call_args = f
             .args
             .iter()
             .map(|a| rs_ident(&a.name))
             .collect::<Vec<_>>()
             .join(", ");
-        let row = alloc::format!("__PM_METAL_IMPORT_{}", fn_.name);
         let sig_ret = if ret == "()" {
             String::new()
         } else {
             alloc::format!(" -> {}", ret)
         };
-        lines.push(alloc::format!("pub unsafe fn {}({}){} {{", fn_.name, args, sig_ret));
-        lines.push(alloc::format!(
-            "    let __p = pymergetic_metal_reg::acquire(&{});",
-            row
-        ));
-        lines.push(alloc::format!(
-            "    assert!(!__p.is_null(), \"{}: provider {} not connected\");",
-            fn_.name, module_name
-        ));
-        let fn_ty_ret = if ret == "()" {
-            String::new()
-        } else {
-            alloc::format!(" -> {}", ret)
-        };
-        lines.push(alloc::format!(
-            "    let __f: unsafe extern \"C\" fn({}){} = core::mem::transmute(__p);",
-            arg_tys, fn_ty_ret
-        ));
-        lines.push(alloc::format!("    let __r = __f({});", call_args));
-        lines.push(alloc::format!(
-            "    pymergetic_metal_reg::release(&{});",
-            row
-        ));
-        lines.push(String::from("    __r"));
-        lines.push(String::from("}"));
-        lines.push(String::new());
+        let fn_ty_ret = sig_ret.clone();
+        Value::map(alloc::vec![
+            ("name", Value::str(f.name.clone())),
+            ("args", Value::str(args)),
+            ("sig_ret", Value::str(sig_ret)),
+            ("arg_tys", Value::str(arg_tys)),
+            ("fn_ty_ret", Value::str(fn_ty_ret)),
+            ("call_args", Value::str(call_args)),
+        ])
+    });
+    let ctx = Value::map(alloc::vec![("fns", fns), ("module_name", Value::str(module_name))]);
+    out.push_str(&_template::render_str(IMPORT_ROWS_TEMPLATE, ctx.clone()).expect("rs import rows"));
+    out.push_str(&_template::render_str(PROXY_FNS_TEMPLATE, ctx).expect("rs proxy fns"));
+    if out.ends_with('\n') {
+        out.pop();
     }
-    lines.join("\n")
+    out
 }
 

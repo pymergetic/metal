@@ -22,6 +22,7 @@ fn main() {
     let plat = port.join("platform");
     let libc = metal_dir.join("libc");
     let src_root = package_root.join("src");
+    let include_root = package_root.join("include");
 
     println!("cargo:rerun-if-changed={}", port.join("runtime.h").display());
     println!(
@@ -41,9 +42,7 @@ fn main() {
         if !wamr.join("core/iwasm/include/wasm_export.h").is_file() {
             panic!("external/wamr missing; run W5.1 vendor first");
         }
-        build_freestanding_wamr(
-            &wamr, &port, &plat, &libc, &src_root, &out_dir, uefi,
-        );
+        build_freestanding_wamr(&wamr, &port, &plat, &libc, &src_root, &include_root, uefi);
         return;
     }
 
@@ -53,9 +52,15 @@ fn main() {
 
     let wamr_build = out_dir.join("wamr-build");
     let libiwasm = wamr_build.join("libiwasm.a");
-    if !libiwasm.is_file() {
-        build_wamr_host(&wamr, &wamr_build);
-    }
+    /* Always reconfigure + build, never gate on "libiwasm.a already
+     * exists": cmake's own dependency tracking already skips
+     * unnecessary recompiles on repeat calls, but skipping the
+     * *configure* step entirely once the .a is present means a `-D`
+     * flag added here later (e.g. WAMR_DISABLE_HW_BOUND_CHECK) never
+     * reaches an OUT_DIR whose cmake cache predates it -- silently
+     * keeping the old flags forever until someone notices and manually
+     * clears the build dir. */
+    build_wamr_host(&wamr, &wamr_build);
     assert!(libiwasm.is_file(), "libiwasm.a missing after cmake");
 
     compile_c_host(
@@ -65,6 +70,7 @@ fn main() {
             &port,
             &wamr.join("core/iwasm/include"),
             &src_root,
+            &include_root,
         ],
     );
     archive(
@@ -87,7 +93,7 @@ fn build_freestanding_wamr(
     plat: &Path,
     libc: &Path,
     src_root: &Path,
-    _out_dir: &Path,
+    include_root: &Path,
     uefi: bool,
 ) {
     let core = wamr.join("core");
@@ -188,6 +194,7 @@ fn build_freestanding_wamr(
     build.include(port);
     build.include(libc);
     build.include(src_root);
+    build.include(include_root);
     build.include(iwasm.join("include"));
     build.include(iwasm.join("interpreter"));
     build.include(iwasm.join("common"));
@@ -206,6 +213,9 @@ fn build_freestanding_wamr(
         build.flag("--target=x86_64-unknown-windows-gnu");
         build.flag("-fshort-wchar");
         build.flag("-mno-red-zone");
+        /* Windows x64 ABI passes the first integer arg in RCX, not RDI
+         * (SysV) -- see runtime_host.c's stamp_tramp/TRAMP_MOVABS_OPCODE. */
+        build.define("PM_METAL_WASM_TRAMP_WIN64", None);
     } else {
         build.flag("--target=x86_64-unknown-none-elf");
     }
@@ -230,6 +240,18 @@ fn build_wamr_host(wamr: &Path, build_dir: &Path) {
             "-DWAMR_BUILD_LIBC_WASI=0",
             "-DWAMR_BUILD_SIMD=0",
             "-DWAMR_BUILD_MULTI_MODULE=0",
+            /* Matches the freestanding build's WASM_DISABLE_HW_BOUND_CHECK=1
+             * below. Required, not just an optimization: with HW bound
+             * check on, `wasm_call_function` refuses to run a second
+             * exec_env on this thread while another is already "current"
+             * (see wasm_runtime.c's call_wasm_with_hw_bound_check ->
+             * "invalid exec env") -- which is exactly what a guest-to-guest
+             * forward (a cross-package-import native calling into a
+             * *different* module instance's exec_env from within a native
+             * invoked by another instance's own wasm_runtime_call_wasm)
+             * does. Without this, cross-package imports trap on host even
+             * though the same call works fine freestanding. */
+            "-DWAMR_DISABLE_HW_BOUND_CHECK=1",
         ])
         .status()
         .expect("cmake configure wamr");

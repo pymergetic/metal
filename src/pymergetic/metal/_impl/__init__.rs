@@ -14,6 +14,8 @@
 #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(dead_code, non_camel_case_types)]
 
+use core::cell::Cell;
+
 use pymergetic_metal_reg::RegMod;
 
 static KERNEL_MOD: RegMod = RegMod {
@@ -29,6 +31,8 @@ static KERNEL_MOD: RegMod = RegMod {
     on_unload: None,
     entries: &[],
     imports: &[],
+    raw_next: Cell::new(core::ptr::null()),
+    raw_prev: Cell::new(core::ptr::null()),
 };
 
 /// Load the kernel module: first call in boot order, before any other

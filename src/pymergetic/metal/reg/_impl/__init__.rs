@@ -2,13 +2,20 @@
 //! like `pymergetic.metal.fs.open` (Locked #2).
 //!
 //! - **Dynamic/late** (`_table.rs`): a small flat linear-scan table for
-//!   callers that only know their (module, func) pair at runtime --
-//!   Python attach, wasm-mod registration (see `pm_metal_reg_register`'s
-//!   real callers in `wasm/`, `py/`).
+//!   callers that only know their (module, func) pair at runtime and
+//!   have no per-load `RegMod` of their own -- Python attach (see
+//!   `pm_metal_reg_register`'s real callers in `py/`). `wasm`'s own
+//!   module registration uses the static tier below instead (each
+//!   loaded pack gets its own `RegMod`, same shape as a compile-time
+//!   module).
 //! - **Static per-module lifecycle** (`_entry.rs` / `_declare.rs` /
 //!   `_kernel.rs`): `on_load` -> `register_symbols` -> `connect_symbols`
-//!   -> ... -> `deregister_symbols` -> `on_unload`, with a refcounted
-//!   cross-module handle. Only genuinely `unloadable` providers (wasm,
+//!   -> ... -> `deregister_symbols` -> `on_unload`. No per-entry
+//!   refcount: `unload` quiesces every async runner (parks every
+//!   dispatch loop at its own next checkpoint, see
+//!   `pymergetic_metal_async::quiesce`) before withdrawing anything, so
+//!   there is no concurrent caller to protect against, fixed provider or
+//!   unloadable one alike. Only genuinely `unloadable` providers (wasm,
 //!   Python) publish through here; `pymergetic.metal` itself is the
 //!   first module loaded this way (kernel is kernel: permanent, first in
 //!   boot order, but architecturally just another module).
@@ -38,6 +45,7 @@ mod table;
 
 use core::ffi::c_void;
 
+use pymergetic_metal_async as _;
 use pymergetic_metal_rt as _;
 
 use bind::bind as bind_key;
@@ -133,9 +141,11 @@ pub unsafe extern "C" fn pm_metal_reg_mod_load(m: *const RegMod) -> i32 {
 }
 
 /// Cascading unload by full module name: children first, then this
-/// module's own `deregister_symbols`/`on_unload`, then a reconnect pass.
-/// `-1` if not loaded, or if any entry (this module's or a cascaded
-/// child's) still has an outstanding [`acquire`]/[`release`] pair.
+/// module's own `deregister_symbols`/`on_unload`, then a reconnect
+/// pass. `-1` if not loaded, or if `unloadable` is `false` (a
+/// permanently-linked module, or a sticky package). The actual withdraw
+/// runs inside a global quiesce (every async runner parked first), so
+/// there is no live-caller check needed -- see `kernel::unload`.
 ///
 /// # Safety
 /// `name` must be null or point to a valid NUL-terminated string.
@@ -161,28 +171,6 @@ pub extern "C" fn pm_metal_reg_mod_connect_all() {
 #[no_mangle]
 pub extern "C" fn pm_metal_reg_mod_count() -> u32 {
     kernel::count() as u32
-}
-
-/// Resolve a cross-module call target for a generated registry-proxy
-/// face: bumps the provider's refcount and returns its current pointer
-/// (null if the import never resolved -- provider not loaded, or the
-/// function name is not one of its published entries). Pair with
-/// [`release`] once the call through the resolved pointer returns; do
-/// not hold the pointer across an `await`/yield without a durable copy,
-/// since the provider may otherwise unload mid-call if `release` is
-/// skipped.
-pub fn acquire(row: &ImportRow) -> *const c_void {
-    match row.entry() {
-        Some(e) => e.acquire(),
-        None => core::ptr::null(),
-    }
-}
-
-/// Pair with [`acquire`].
-pub fn release(row: &ImportRow) {
-    if let Some(e) = row.entry() {
-        e.release();
-    }
 }
 
 fn cstr_str<'a>(p: *const u8, max: usize) -> Option<&'a str> {

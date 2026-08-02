@@ -8,10 +8,11 @@ unified public surface. Experimentation lives under ``; product
 **Tooling / CLI workflow:** [`docs/TOOLING.md`](../TOOLING.md) (`metal`
 under `tools/metal/`).
 
-**Status — corrected three times; see the `registration_rethink_scope`
-plan's "Phase C/D re-correction" section for the full history and the
-canonical boot order.** Two prior passes each overcorrected the other's
-mistake:
+**Status — corrected three times, then landed on a quiesce-based design
+that is simpler than any of the three corrections; see the
+`registration_rethink_scope` plan's "Phase C/D re-correction" section
+for the full history and the canonical boot order.** Two early passes
+each overcorrected the other's mistake:
 
 1. Pass 1 applied the runtime registry (cached fn pointer, refcount) to
    **every** compile-time-known floor module unconditionally, including
@@ -22,20 +23,32 @@ mistake:
    proxy/cache **entirely** for fixed modules, down to plain Cargo-
    dependency direct calls — no cache slot, no runtime connect, nothing
    going through the registry at all for a fixed peer.
-3. This session repeated pass 2's mistake in the other direction: it
-   restored a real registry-proxy (cached slot, `connect_symbols`,
-   refcount) for **unloadable** providers, but *still* left fixed
-   providers on pass 2's plain-`extern "C"`-link-time shape instead of
-   giving them a proxy too.
+3. A later pass repeated pass 2's mistake in the other direction: it
+   restored a registry-proxy for **unloadable** providers, but modeled
+   its safety as a **per-entry refcount + a two-sided disconnect
+   handshake** (increment on acquire, decrement on release, unload waits
+   for `refs == 0`) — real machinery, but never actually built, and more
+   than the design needs.
 
-**The actual rule (locked in the registration_rethink design's own
-"Registry design verdict" table, which none of the three passes above
-actually contradicted — they just didn't read it): every cross-module
-call, fixed or unloadable provider alike, goes through a proxy that
-loads a cached pointer and calls through it — "Proxies even for
-mod-internal calls -> Yes -- only mem + reg are direct spine." Refcount
-is the *only* thing that forks on unloadable vs. fixed, not whether a
-proxy/cache exists at all:**
+**What's actually built and locked in:** unloadable providers (wasm
+packs today; Python later) publish into the *same* kernel-owned
+`RegMod`/`RegEntry` structure fixed modules would use, via
+`reg/_impl/_kernel.rs`/`_entry.rs`/`_declare.rs`. **There is no per-entry
+refcount and no two-sided handshake** — `RegEntry` (see
+`reg/_impl/_entry.rs`) is a bare `AtomicPtr` with `publish`/`withdraw`/
+`get`, nothing else. Safety instead comes from a **global quiesce**
+(`pymergetic_metal_async::quiesce`, "stop the world between async
+steps"): unloading a module first asks every async runner to park at its
+next step-dispatch checkpoint, waits until all have parked, *then*
+withdraws every `RegEntry` the module published — there is no concurrent
+caller anywhere in the system while that withdraw happens, fixed
+provider or unloadable one alike, so there is nothing left for a
+per-call refcount to protect against. See
+[`metal-no-pointer-across-await.mdc`](../../.cursor/rules/metal-no-pointer-across-await.mdc):
+the one obligation this design places on callers is that a resolved
+`RegEntry`/import pointer must be used within the same step it was
+resolved in, never carried across an `.await` — quiesce's guarantee is
+*between* steps, not within one that spans several.
 
 - **Every module's public surface is always auto-generated** into
   `include/pymergetic/metal/<mod>/...` (mirrored from `_impl/`, the
@@ -45,29 +58,117 @@ proxy/cache exists at all:**
   exception is the **spine**: `mem` and `reg` are foundational/bootstrap-
   critical enough that a direct `_impl` Cargo dependency on them is
   tolerated everywhere.
-- **Every generated face is a proxy**, resolved once by `connect_symbols`
-  (proactively, right after any load/unload — not a lazy per-call check,
-  so the hot path is a pure "load slot, call," no branch): a fixed
-  provider's slot is written once and never touched again (no lock, no
-  refcount needed because it cannot disappear); an unloadable provider's
-  slot is refcounted/handled so it can't be called through mid-unload,
-  and unload has to disconnect every connected importer via a two-sided
-  handshake (either side may initiate; the other side accepts) rather
-  than being reached into from outside.
 - A genuine Cargo cycle (e.g. `rt` <-> `console`/`mem`, both of which
   depend on `rt`) still resolves via a raw `extern "C"` forward
   declaration since `rt` cannot Cargo-depend on either — this remains
   the one deliberate exception (`rt/_impl/_ffi.rs`), not a template for
   every fixed provider.
 
-**Not yet implemented as of this correction** (tracked in the plan's
-"Phase C/D re-correction" open items): the always-proxy shape for fixed
-providers (today's tree still has pass 2/3's plain-Cargo/fast-path faces
-for the 14 migrated floor modules), the two-sided disconnect handshake,
-and re-pointing `wasm`'s loader at the same `RegMod`/`RegEntry`
-mechanism instead of `reg`'s separate dynamic `_table.rs`. Same-module-
-internal calls (between a module's own `_impl/*.rs` files) stay direct
-either way, unaffected by any of this.
+**Not yet implemented:** the always-proxy shape for fixed, never-unloaded
+floor modules (today's tree still has plain-Cargo/fast-path faces for
+those, per "Two face shapes" below) — quiesce makes this cheap enough to
+build once there's a real reason to unify the two shapes, but nothing
+forces it yet. **Already implemented, contrary to earlier notes in this
+doc's history:** `wasm`'s loader publishes into the real
+`RegMod`/`RegEntry` mechanism (`wasm/__init__.rs`'s
+`pm_metal_wasm_register`), not a separate dynamic table — see "Wasm
+export addresses: the dynamic-trampoline mechanism" below for how a
+guest export becomes a `RegEntry`-publishable address at all. Same-
+module-internal calls (between a module's own `_impl/*.rs` files) stay
+direct either way, unaffected by any of this.
+
+### Cross-package imports (guest importing another guest, not the registry)
+
+A **package** (`.pm/module` `type: package`) may declare `imports` — a
+list of `{module, func}` pairs naming another package's export it wants
+to call directly:
+
+```json
+{
+  "type": "package",
+  "name": "sample.announcer",
+  "impl": "rs",
+  "imports": [
+    {"module": "sample.greeter", "func": "hello"},
+    {"module": "sample.greeter", "func": "lucky"}
+  ]
+}
+```
+
+This is a **different mechanism from the registry above, not a special
+case of it** — a guest-to-guest (or guest-to-host-service) import is
+resolved once by the wasm runtime at instantiate time (a `(module,
+name)` string pair, the same mechanism WASI itself uses, applied here to
+Metal's own package names instead of a `wasi_snapshot_preview1`-style
+fixed namespace — hence a Metal-agnostic macro name, not a
+WASI-branded one). It never touches a `RegEntry`, never goes through
+`connect_symbols`, and has no refcount of its own.
+
+**Fully dynamic, no build-time table anywhere:** `forge pack` embeds a
+package's own `imports` array directly into its own `.wasm`, as a
+custom wasm section named `pm_metal_imports` (`_wasm_import_section.rs`
+appends it after the compiler/linker step — a plain byte-append, legal
+anywhere in a wasm binary per spec). There is no forge-generated,
+kernel-compiled shim table (`pkg_imports.gen.rs` existed for one design
+iteration and was retired): the host loader
+(`wasm/port/runtime_host.c`'s `pm_metal_wasm_port_load`) reads that
+section straight back out of whichever bytes it is handed, for *every*
+load, and registers one native forwarding function per `(module, func)`
+pair it finds, before instantiating. Each forwarding native
+(`fwd_native`) resolves the target instance by name once and caches the
+slot pointer on its own `fwd_reg_t` (same resolve-once-cache pattern as
+this file's own trampolines, `tramp_t.slot`, and the registry's
+`RegEntry`) — `free_slot` invalidates that cache the instant the target
+unloads, so a stale pointer never survives into a later, unrelated
+instance reusing the same freed address. If the target is unloaded (or
+was never loaded yet), the call degrades to a sentinel failure return
+rather than crashing, the same "guest went away" behavior an ordinary
+quiesced unload has anywhere else.
+
+Because resolution reads the artifact's own bytes rather than any
+whole-tree, build-time table, this works identically whether the
+`.wasm` was compiled in at kernel-build time (`build/packs/*.wasm`,
+`include_bytes!`'d into the kernel) or loaded from disk/network into an
+already-running kernel that never knew this particular package existed
+at its own build time — a package that only forge's `tests/`/`sample/`
+pack roots ever discover today, but the loader side already imposes no
+such constraint.
+
+The consumer's own source declares the import with its language's
+native syntax — Rust: `#[link(wasm_import_module = "...")] extern "C"
+{ ... }`; C: `PM_METAL_PKG_IMPORT("module.name", func)` (a thin,
+runtime-agnostic macro — not `PM_METAL_WASI_IMPORT`; this mechanism
+applies equally to a kernel-linked consumer and a wasm guest one, so a
+WASI-specific name would be actively misleading). See
+`sample/greeter`/`sample/announcer` for a working nested-package example
+end-to-end (`wasm/.pm/smoke.rs`'s cross-package-import smoke).
+
+### Wasm export addresses: the dynamic-trampoline mechanism
+
+A fixed module's `RegEntry.fn` is just the real function's address —
+free. A **wasm guest's** export has no address at all until something
+bridges "WAMR interpreter dispatch for this instance's export N" to "one
+bare `() -> i32` C function pointer," because that's the only shape
+`RegEntry`/the registry-proxy call site understands (uniform with every
+other module, by design — the registry cannot special-case "this
+address means call through WAMR instead").
+
+The bridge is a **heap-allocated, self-stamped ring of small executable
+code nodes** (`wasm/port/runtime_host.c`'s `tramp_t`/`stamp_tramp`/
+`alloc_tramp`): each node's `code[]` is machine code, written once when
+the node is minted, that loads the node's own address into the calling
+convention's first-argument register then tail-jumps into a fixed
+dispatcher (`tramp_dispatch`); the *data* fields on the same node
+(`slot`, `func`) are ordinary memory, rewritten on every claim/release
+cycle. `pm_metal_wasm_port_claim_trampoline(module, func)` claims one
+node, points it at a loaded instance's export, and returns `t->code`
+directly — that address *is* a real `() -> i32` function, publishable to
+`RegEntry::publish` exactly like a fixed module's address, so the
+registry never has to know it's talking to a trampoline instead of real
+code. No fixed cap: the ring grows one arena at a time when the free
+list is empty, and `free_slot` (unload) returns every trampoline bound
+to that instance to the free list rather than leaking a node per
+claim/release cycle.
 
 **Kernel is a module too.** The `pymergetic.metal` namespace root
 (`src/pymergetic/metal/.pm/module`) is the first module in boot order,
@@ -274,8 +375,8 @@ What a generated face actually contains depends on the **provider's**
 
 | Provider `unloadable` | Face shape | Runtime cost |
 |------------------------|-----------|---------------|
-| `false` (permanently linked, or a `package` marked sticky) | Fast path: plain `extern "C"` declaration | Link-time resolution only — no cache slot, no `connect_symbols` participation, no refcount |
-| `true` (genuinely reloadable/unloadable — wasm, Python) | Registry proxy: cached slot populated by `connect_symbols`, refcounted on call | One indirect load + a refcount inc/dec per call |
+| `false` (permanently linked, or a `package` marked sticky) | Fast path: plain `extern "C"` declaration | Link-time resolution only — no cache slot, no `connect_symbols` participation |
+| `true` (genuinely reloadable/unloadable — wasm, Python) | Registry proxy: `RegEntry` slot populated by `connect_symbols`/`publish` | One indirect load per call — **no refcount, no per-call lock**. Unload is safe because it runs inside a global quiesce (every async runner parked first), not because of anything the call site does; see "Status" above |
 
 This is the only place unloadability matters. Whether a face exists at
 all is unconditional (every module, every consumer language); which
@@ -375,13 +476,19 @@ any other module, and is permanently `unloadable = false` — it never runs
 hook shape as everything else ("kernel is kernel": permanent and first,
 not architecturally special).
 
-**Refcount only crosses an unloadable boundary.** A cross-module call
-where *either* side is `unloadable = true` goes through a refcounted
-handle (increment on acquire, decrement on release, entry stays live
-until refs hit zero even if unload is requested mid-call). When *both*
-sides are permanent (`unloadable = false`, including a sticky package),
-the fast-path face applies and no refcount/lock exists on that path at
-all — see "Two face shapes" above.
+**No per-call refcount, ever — quiesce is the only safety mechanism.**
+Earlier drafts of this design gave an unloadable provider's call path a
+refcounted handle (increment on acquire, decrement on release, entry
+stays live until refs hit zero). That was never built, and isn't needed:
+`pm_metal_reg_mod_unload` quiesces every async runner (parks each one at
+its next step-dispatch checkpoint, see
+`pymergetic_metal_async::quiesce`) *before* withdrawing any `RegEntry`,
+so there is provably no concurrent caller in flight at withdraw time —
+fixed provider or unloadable one alike. A fixed provider's slot is
+written once at connect and never touched again; an unloadable
+provider's slot is written the same way and can later be withdrawn, but
+in both cases the call site is identical: load slot, call — see "Two
+face shapes" above.
 
 ---
 

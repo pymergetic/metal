@@ -143,6 +143,7 @@ dependencies = [
 name = "pymergetic_metal_reg"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_async",
  "pymergetic_metal_rt",
 ]
 

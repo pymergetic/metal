@@ -4,6 +4,8 @@
 #include <stddef.h>
 
 int atoi(const char *s);
+int abs(int j);
+long labs(long j);
 
 /* WAMR bh_assert — halt firmware rather than libc abort. */
 _Noreturn void abort(void);

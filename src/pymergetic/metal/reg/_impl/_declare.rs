@@ -9,11 +9,11 @@ use crate::entry::RegEntry;
 /// against the kernel table, and reset to null whenever the peer was
 /// never found or has since been unloaded.
 ///
-/// A generated registry-proxy face (consumer of an `unloadable` provider)
-/// calls through [`crate::acquire`]/[`crate::release`] against the cached
-/// entry here, never a raw function pointer directly -- that is what
-/// keeps the provider-side refcount in [`RegEntry`] correct across
-/// concurrent connect/unload.
+/// A generated registry-proxy face reads [`ImportRow::entry`] and calls
+/// through the resolved [`RegEntry`]'s pointer directly -- no refcount,
+/// no lock: `_kernel::unload` quiesces every async runner before
+/// touching any entry, so there is no concurrent caller to race against
+/// while a slot is being withdrawn.
 pub struct ImportRow {
     pub module: &'static str,
     pub func: &'static str,

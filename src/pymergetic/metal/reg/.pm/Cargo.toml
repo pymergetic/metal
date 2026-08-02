@@ -13,6 +13,12 @@ path = "smoke.rs"
 
 [dependencies]
 pymergetic_metal_rt = { path = "../../rt/.pm" }
+# Not a bare Cargo call: `_kernel.rs` still only calls through the
+# generated fast-path face (`#[path]`, see docs/definitions/module.md
+# "Consume foreign modules"). This entry exists purely so `reg`'s own
+# standalone smoke binary links `async`'s object code -- `boot`'s real
+# link already pulls it in for the firmware build regardless.
+pymergetic_metal_async = { path = "../../async/.pm" }
 
 [profile.release]
 panic = "abort"

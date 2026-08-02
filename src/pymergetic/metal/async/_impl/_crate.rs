@@ -13,6 +13,7 @@ mod r#await;
 mod coro;
 mod phase;
 mod process;
+mod quiesce;
 mod runner;
 mod task;
 mod time;

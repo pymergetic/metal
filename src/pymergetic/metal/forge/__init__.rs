@@ -31,6 +31,9 @@ mod _build;
 #[path = "_pack.rs"]
 mod _pack;
 #[cfg(feature = "solo")]
+#[path = "_wasm_import_section.rs"]
+mod _wasm_import_section;
+#[cfg(feature = "solo")]
 #[path = "_run.rs"]
 mod _run;
 #[path = "_export_c.rs"]
@@ -62,6 +65,8 @@ mod _pool;
 mod _port;
 #[path = "_sync.rs"]
 mod _sync;
+#[path = "_template.rs"]
+mod _template;
 
 const FORGE_VERSION: &str = "0.1.0";
 
