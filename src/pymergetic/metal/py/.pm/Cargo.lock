@@ -27,6 +27,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pymergetic_metal_console"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_mem",
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_dev_serial"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
 name = "pymergetic_metal_fs"
 version = "0.1.0"
 dependencies = [
@@ -62,24 +78,37 @@ dependencies = [
 name = "pymergetic_metal_py"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "pymergetic_metal_async",
+ "pymergetic_metal_console",
+ "pymergetic_metal_dev_serial",
  "pymergetic_metal_fs",
  "pymergetic_metal_log",
  "pymergetic_metal_mem",
  "pymergetic_metal_reg",
  "pymergetic_metal_rt",
+ "pymergetic_metal_util_ascii",
 ]
 
 [[package]]
 name = "pymergetic_metal_reg"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_async",
  "pymergetic_metal_rt",
 ]
 
 [[package]]
 name = "pymergetic_metal_rt"
 version = "0.1.0"
+
+[[package]]
+name = "pymergetic_metal_util_ascii"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+]
 
 [[package]]
 name = "shlex"

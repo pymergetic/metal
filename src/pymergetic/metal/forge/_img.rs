@@ -142,6 +142,63 @@ fn walk_files(root: &Path) -> Result<Vec<FileEntry>, String> {
     Ok(out)
 }
 
+/// Stage `METAL_EXT_APPS=name=dir[:…]` as `apps/<name>/…` under `stage_root`.
+/// Returns total bytes copied (0 if unset).
+fn stage_ext_apps_into_apps_prefix(stage_root: &Path) -> Result<usize, String> {
+    let Ok(raw) = std::env::var("METAL_EXT_APPS") else {
+        return Ok(0);
+    };
+    if raw.is_empty() {
+        return Ok(0);
+    }
+    let mut total = 0usize;
+    for entry in raw.split(':') {
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((name, src)) = entry.split_once('=') else {
+            eprintln!("ext-apps: skip malformed entry '{entry}'");
+            continue;
+        };
+        if name.is_empty() || src.is_empty() {
+            continue;
+        }
+        let src_p = PathBuf::from(src);
+        if !src_p.is_dir() {
+            eprintln!("ext-apps: skip {name} -- missing dir {src}");
+            continue;
+        }
+        let dest = stage_root.join("apps").join(name);
+        let _ = std::fs::remove_dir_all(&dest);
+        std::fs::create_dir_all(&dest).map_err(|_| String::from("mkdir apps"))?;
+        let mut stack = vec![src_p.clone()];
+        while let Some(dir) = stack.pop() {
+            let rd = std::fs::read_dir(&dir).map_err(|_| alloc::format!("read {}", dir.display()))?;
+            for ent in rd.flatten() {
+                let p = ent.path();
+                let rel = p
+                    .strip_prefix(&src_p)
+                    .map_err(|_| String::from("strip"))?
+                    .to_path_buf();
+                let out = dest.join(&rel);
+                if p.is_dir() {
+                    std::fs::create_dir_all(&out).map_err(|_| String::from("mkdir"))?;
+                    stack.push(p);
+                } else if p.is_file() {
+                    if let Some(parent) = out.parent() {
+                        std::fs::create_dir_all(parent).map_err(|_| String::from("mkdir"))?;
+                    }
+                    let data = std::fs::read(&p).map_err(|_| alloc::format!("read {}", p.display()))?;
+                    total = total.saturating_add(data.len());
+                    std::fs::write(&out, &data).map_err(|_| String::from("write app file"))?;
+                }
+            }
+        }
+        eprintln!("ext-apps: staged {name} from {src} -> apps/{name}/ (mods mtar)");
+    }
+    Ok(total)
+}
+
 fn pack_ptrs(files: &[FileEntry]) -> (Vec<*const u8>, Vec<*const u8>, Vec<u32>) {
     let names: Vec<*const u8> = files.iter().map(|f| f.name_z.as_ptr()).collect();
     let datas: Vec<*const u8> = files.iter().map(|f| f.data.as_ptr()).collect();
@@ -422,6 +479,15 @@ pub fn embed_rootfs(metal_root: &str) -> Result<String, String> {
         .map_err(|_| String::from("write fstab"))?;
     }
 
+    /*
+     * METAL_EXT_APPS=name=dir[:…] -> mods mtar as apps/<name>/…
+     * (FAT seed cannot hold ~28MiB WADs reliably; mtar can.)
+     * Guest path: /mods/<KERNEL_MODULE_ID>/apps/<name>/…
+     */
+    let ext_stage = rf_out.join("ext_apps_stage");
+    let _ = std::fs::remove_dir_all(&ext_stage);
+    let ext_bytes = stage_ext_apps_into_apps_prefix(&ext_stage)?;
+
     let root_size = (root_mib as usize) * 1024 * 1024;
     eprintln!("forge img rootfs: root FAT {}MiB", root_mib);
     let seed_files = walk_files(&seed_root)?;
@@ -431,23 +497,24 @@ pub fn embed_rootfs(metal_root: &str) -> Result<String, String> {
 
     let mods_mtar_path = rf_out.join("mods.mtar");
     let have_mods = if mount_mods {
-        let seed_dir = if !mods_seed.is_empty() {
+        let mut files: Vec<FileEntry> = Vec::new();
+        if !mods_seed.is_empty() {
             let p = tree.join(&mods_seed);
             if p.is_dir() {
-                Some(p)
-            } else {
-                None
+                eprintln!("forge img rootfs: mods mtar seed {}", mods_seed);
+                files.extend(walk_files(&p)?);
             }
-        } else {
-            None
-        };
-        let bytes = if let Some(d) = seed_dir {
-            eprintln!("forge img rootfs: mods mtar from {}", mods_seed);
-            let files = walk_files(&d)?;
-            pack_mtar(&files)?
-        } else {
+        }
+        if ext_bytes > 0 && ext_stage.is_dir() {
+            eprintln!("forge img rootfs: mods mtar + METAL_EXT_APPS ({} bytes staged)", ext_bytes);
+            files.extend(walk_files(&ext_stage)?);
+        }
+        let bytes = if files.is_empty() {
             eprintln!("forge img rootfs: mods mtar (empty)");
             empty_mtar()?
+        } else {
+            files.sort_by(|a, b| a.name.cmp(&b.name));
+            pack_mtar(&files)?
         };
         write_out(mods_mtar_path.to_str().unwrap(), &bytes)?;
         true

@@ -3,5 +3,6 @@
   "name": "pymergetic.metal.dev.gfx",
   "impl": "rs",
   "version": "0.1.0",
-  "comment": "Gfx probe stub; PCI display class lands via bus/pci."
+  "guest_surface": true,
+  "comment": "Shadow compositor + scanout; guest_surface: width/height/blit/present via host_natives."
 }

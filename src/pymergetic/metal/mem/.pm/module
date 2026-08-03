@@ -3,5 +3,6 @@
   "name": "pymergetic.metal.mem",
   "impl": "rs",
   "version": "0.1.0",
-  "comment": "Host heap (arena/ + tlsf/ + lock/). Schema: .pm/build + .pm/smoke."
+  "guest_surface": true,
+  "comment": "Host heap; guest_surface: wasm cookies via host_natives (not raw host pointers)."
 }

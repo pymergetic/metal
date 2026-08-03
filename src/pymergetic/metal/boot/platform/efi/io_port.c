@@ -24,6 +24,19 @@ static uint8_t efi_inb(uint16_t port)
   return val;
 }
 
+static void efi_out16(uint16_t port, uint16_t val)
+{
+  __asm__ volatile("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static uint16_t efi_in16(uint16_t port)
+{
+  uint16_t val;
+
+  __asm__ volatile("inw %1, %0" : "=a"(val) : "Nd"(port));
+  return val;
+}
+
 static void efi_out32(uint16_t port, uint32_t val)
 {
   __asm__ volatile("outl %0, %1" : : "a"(val), "Nd"(port));
@@ -40,6 +53,8 @@ static uint32_t efi_in32(uint16_t port)
 static const pm_metal_boot_io_ops_t g_ops = {
   .outb = efi_outb,
   .inb = efi_inb,
+  .out16 = efi_out16,
+  .in16 = efi_in16,
   .out32 = efi_out32,
   .in32 = efi_in32,
 };

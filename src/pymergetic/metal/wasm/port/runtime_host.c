@@ -5,11 +5,13 @@
 
 #include <pymergetic/metal/mem/__init__.h>
 
+#include "guest_coro.h"
 #include "wasm_export.h"
 
-#define POOL_BYTES (512u * 1024u)
-#define STACK_BYTES (32u * 1024u)
-#define HEAP_BYTES (64u * 1024u)
+/* Pool must fit large guests (multi-MiB wasm + linear memory). */
+#define POOL_BYTES (32u * 1024u * 1024u)
+#define STACK_BYTES (64u * 1024u)
+#define HEAP_BYTES (256u * 1024u)
 #define NAME_MAX 96
 
 /* Host build has libc (mmap for W^X pages); freestanding (BIOS/EFI,
@@ -51,6 +53,7 @@ typedef struct slot_s {
                  * (WAMR may reference it internally until
                  * wasm_runtime_unload), so it is owned by the slot, not
                  * freed right after the load call. */
+  uint32_t buf_len;
   struct slot_s *next;
 } slot_t;
 
@@ -382,6 +385,10 @@ static int32_t fwd_native(wasm_exec_env_t exec_env)
 static void register_one_import(const char *module, const char *func)
 {
   fwd_reg_t *r;
+  /* Kernel modules are host natives (host_natives.c), not wasm fwd. */
+  if (module != NULL && strncmp(module, "pymergetic.metal.", 17) == 0) {
+    return;
+  }
   for (r = g_fwd_regs; r != NULL; r = r->next) {
     if (strcmp(r->module, module) == 0 && strcmp(r->func, func) == 0) {
       return;
@@ -545,6 +552,24 @@ int32_t pm_metal_wasm_port_ready(void)
   return g_ready ? 1 : 0;
 }
 
+uint32_t pm_metal_wasm_port_guest_coro_create(const uint8_t *full_module, uint32_t state_bytes)
+{
+  char name[NAME_MAX];
+  slot_t *s;
+
+  if (!g_ready || full_module == NULL) {
+    return 0u;
+  }
+  if (cstr_copy(name, sizeof(name), full_module) != 0) {
+    return 0u;
+  }
+  s = find_slot(name);
+  if (s == NULL || s->inst == NULL) {
+    return 0u;
+  }
+  return pm_metal_wasm_guest_coro_create_inst(s->inst, state_bytes);
+}
+
 int32_t pm_metal_wasm_port_init(void)
 {
   RuntimeInitArgs args;
@@ -561,6 +586,13 @@ int32_t pm_metal_wasm_port_init(void)
   args.mem_alloc_option.pool.heap_buf = g_pool;
   args.mem_alloc_option.pool.heap_size = (unsigned)POOL_BYTES;
   if (!wasm_runtime_full_init(&args)) {
+    pm_metal_mem_free(g_pool);
+    g_pool = NULL;
+    return -1;
+  }
+  /* Kernel guest_surface imports (log, …) — before any pack instantiate. */
+  if (pm_metal_wasm_port_register_host_natives() != 0) {
+    wasm_runtime_destroy();
     pm_metal_mem_free(g_pool);
     g_pool = NULL;
     return -1;
@@ -645,6 +677,7 @@ int32_t pm_metal_wasm_port_load(const uint8_t *full_module, const uint8_t *bytes
     return -1;
   }
   memcpy(s->buf, bytes, len);
+  s->buf_len = len;
   memset(err, 0, sizeof(err));
   s->module = wasm_runtime_load(s->buf, len, err, (uint32_t)sizeof(err));
   if (s->module == NULL) {
@@ -814,4 +847,22 @@ void *pm_metal_wasm_port_claim_trampoline(const uint8_t *full_module, const uint
   t->slot = s;
   memcpy(t->func, fname, sizeof(t->func));
   return (void *)t->code;
+}
+
+int32_t pm_metal_wasm_port_image(const uint8_t *full_module, const uint8_t **out_bytes,
+                                 uint32_t *out_len)
+{
+  char name[NAME_MAX];
+  slot_t *s;
+  if (out_bytes == NULL || out_len == NULL || full_module == NULL
+      || cstr_copy(name, sizeof(name), full_module) != 0) {
+    return -1;
+  }
+  s = find_slot(name);
+  if (s == NULL || s->buf == NULL || s->buf_len == 0) {
+    return -1;
+  }
+  *out_bytes = s->buf;
+  *out_len = s->buf_len;
+  return 0;
 }

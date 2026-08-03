@@ -5,10 +5,8 @@
 
 use pymergetic_metal_rt as _;
 
-// `console` is `unloadable = false` (permanently linked): consume its
-// generated fast-path face, never a direct Cargo dependency (see
-// docs/definitions/module.md "Consume foreign modules"). The final link
-// unit (`boot`) already Cargo-depends on `console` for the object code.
+// `console` via always-proxy face (see docs/definitions/module.md
+// "Two face shapes"). Final link unit (`boot`) Cargo-depends on console.
 #[path = "../../../../../include/pymergetic/metal/console/__init__.rs"]
 mod console_face;
 
@@ -86,4 +84,53 @@ pub unsafe extern "C" fn pm_metal_log_styled(style: pm_metal_log_style_t, line: 
     if needs_nl {
         emit(b"\n");
     }
+}
+
+/* Floor RegMod: publish exports for always-proxy faces (W10.1). */
+use core::cell::Cell;
+use core::ffi::c_void;
+use pymergetic_metal_reg::{
+    pm_metal_reg_mod_load, publish_entries, RegEntry, RegMod, RegModStatic,
+};
+
+static FLOOR_ENTRIES: RegModStatic<3, 0> = RegModStatic::new(
+    [
+        RegEntry::new("pm_metal_log_ready"),
+        RegEntry::new("pm_metal_log"),
+        RegEntry::new("pm_metal_log_styled"),
+    ],
+    [],
+);
+
+extern "C" fn floor_register_symbols(_ctx: *mut c_void) -> i32 {
+    publish_entries(
+        &FLOOR_ENTRIES.entries,
+        &[
+            pm_metal_log_ready as *const c_void,
+            pm_metal_log as *const c_void,
+            pm_metal_log_styled as *const c_void,
+        ],
+    )
+}
+
+static FLOOR_MOD: RegMod = RegMod {
+    name: "pymergetic.metal.log",
+    unloadable: false,
+    parent: None,
+    ctx: core::ptr::null_mut(),
+    on_load: None,
+    register_symbols: Some(floor_register_symbols),
+    connect_symbols: None,
+    on_registrations_updated: None,
+    deregister_symbols: None,
+    on_unload: None,
+    entries: &FLOOR_ENTRIES.entries,
+    imports: &[],
+    raw_next: Cell::new(core::ptr::null()),
+    raw_prev: Cell::new(core::ptr::null()),
+};
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_log_mod_load() -> i32 {
+    pm_metal_reg_mod_load(&FLOOR_MOD)
 }

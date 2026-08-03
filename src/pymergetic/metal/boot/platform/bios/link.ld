@@ -1,9 +1,10 @@
-/* exp2 BIOS Multiboot ELF64 — load at 16MiB (trampoline ELF32 embeds + copies). */
+/* exp2 BIOS Multiboot ELF64 — load at 64MiB (trampoline ELF32 embeds + copies).
+ * 16MiB was too tight once mods.mtar stages large apps (e.g. doom IWAD). */
 ENTRY(_start)
 
 SECTIONS
 {
-  . = 16M;
+  . = 64M;
   PROVIDE_HIDDEN (__pm_metal_image_base = .);
 
   .bootinfo : {

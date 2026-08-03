@@ -26,6 +26,12 @@ pub extern "C" fn pm_metal_async_coro_state(h: u32) -> *mut u8 {
     engine::coro_state(h)
 }
 
+/// Ensure a durable host frame of at least `n` bytes. Returns host ptr or null.
+#[no_mangle]
+pub extern "C" fn pm_metal_async_coro_alloc(h: u32, n: u32) -> *mut u8 {
+    engine::coro_alloc(h, n)
+}
+
 /// Release handle + frame. Do not use `h` afterward.
 #[no_mangle]
 pub extern "C" fn pm_metal_async_coro_close(h: u32) {

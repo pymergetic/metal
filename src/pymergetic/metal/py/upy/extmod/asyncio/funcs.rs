@@ -65,7 +65,8 @@ pub unsafe fn gather(handles: &[u32]) -> bool {
 }
 
 pub unsafe fn gather_tasks(tasks: &[Task]) -> bool {
-    let mut hs = [0u32; 8];
+    /* Cap matches async MAX_HANDLES headroom for concurrent waves (W11.5). */
+    let mut hs = [0u32; 64];
     if tasks.len() > hs.len() {
         return false;
     }

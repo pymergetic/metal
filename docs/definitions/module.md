@@ -64,18 +64,18 @@ resolved in, never carried across an `.await` — quiesce's guarantee is
   the one deliberate exception (`rt/_impl/_ffi.rs`), not a template for
   every fixed provider.
 
-**Not yet implemented:** the always-proxy shape for fixed, never-unloaded
-floor modules (today's tree still has plain-Cargo/fast-path faces for
-those, per "Two face shapes" below) — quiesce makes this cheap enough to
-build once there's a real reason to unify the two shapes, but nothing
-forces it yet. **Already implemented, contrary to earlier notes in this
-doc's history:** `wasm`'s loader publishes into the real
+**Always-proxy for floor modules (W10.1):** fixed, never-unloaded floor
+modules use the same cached-`ImportRow` face shape as unloadable ones
+(quiesce made the call sites identical). Spine exception only:
+`pymergetic.metal` (kernel load before any registry entry exists),
+`mem`/`reg` (bootstrap circularity), and `async` (reg path-includes the
+quiesce face and cannot name `pymergetic_metal_reg::` from inside itself).
+**Already implemented:** `wasm`'s loader publishes into the real
 `RegMod`/`RegEntry` mechanism (`wasm/__init__.rs`'s
 `pm_metal_wasm_register`), not a separate dynamic table — see "Wasm
-export addresses: the dynamic-trampoline mechanism" below for how a
-guest export becomes a `RegEntry`-publishable address at all. Same-
+export addresses: the dynamic-trampoline mechanism" below. Same-
 module-internal calls (between a module's own `_impl/*.rs` files) stay
-direct either way, unaffected by any of this.
+direct either way.
 
 ### Cross-package imports (guest importing another guest, not the registry)
 
@@ -368,19 +368,19 @@ twin, per "One module folder" above. BIOS C includes human
 `include/pymergetic/metal/dt/__init__.h`. Safe wrappers may wrap the
 face; they must not copy it.
 
-### Two face shapes: fast-path vs registry-proxy
+### Two face shapes: always-proxy vs spine fast-path
 
-What a generated face actually contains depends on the **provider's**
-`unloadable` flag (see Markers below), not the consumer:
+What a generated Rust face contains depends on whether the provider is
+**spine**, not on `unloadable`:
 
-| Provider `unloadable` | Face shape | Runtime cost |
-|------------------------|-----------|---------------|
-| `false` (permanently linked, or a `package` marked sticky) | Fast path: plain `extern "C"` declaration | Link-time resolution only — no cache slot, no `connect_symbols` participation |
-| `true` (genuinely reloadable/unloadable — wasm, Python) | Registry proxy: `RegEntry` slot populated by `connect_symbols`/`publish` | One indirect load per call — **no refcount, no per-call lock**. Unload is safe because it runs inside a global quiesce (every async runner parked first), not because of anything the call site does; see "Status" above |
+| Provider | Face shape | Runtime cost |
+|----------|-----------|---------------|
+| Spine: `pymergetic.metal`, `mem*`, `reg*`, `async*` | Fast path: plain `extern "C"` | Link-time only |
+| Everyone else (fixed floor **or** unloadable wasm/Python) | Registry proxy: cached `ImportRow` + resolve | One indirect load per call after connect/`resolve_import` — **no refcount, no per-call lock**. Unload safety is global quiesce; see "Status" above |
 
-This is the only place unloadability matters. Whether a face exists at
-all is unconditional (every module, every consumer language); which
-shape it takes is conditional on the provider.
+`unloadable` still matters for lifecycle (may this module be unloaded /
+does `pm_metal_reg_mod_unload` refuse it) — not for the call-site shape.
+C faces still fork only on `guest_surface` (wasm import branch).
 
 ### Practical tool map (incremental)
 

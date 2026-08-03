@@ -1,7 +1,35 @@
-# Default exp2 config. menuconfig / oldconfig write config/.config.
+
+#
+# Build / run (exp2/scripts/build defaults)
+#
+
+#
+# Build
+#
+
+#
+# Default targets for exp2/scripts/build when no argv is given
+#
 CONFIG_PM_METAL_BUILD_EFI=y
 CONFIG_PM_METAL_BUILD_BIOS=y
+
+#
+# Follow-ups after a successful exp2/scripts/build
+#
 # CONFIG_PM_METAL_POST_RUN is not set
+# end of Build
+
+#
+# Runtime modules (pymergetic.metal.*)
+#
+
+#
+# pymergetic.metal
+#
+
+#
+# fs
+#
 CONFIG_PM_METAL_FS_ROOT_SIZE_MIB=4
 # CONFIG_PM_METAL_FS_SRC_MODE_NONE is not set
 CONFIG_PM_METAL_FS_SRC_MODE_HUMAN=y
@@ -10,4 +38,17 @@ CONFIG_PM_METAL_FS_KERNEL_MODULE_ID="pymergetic.metal"
 CONFIG_PM_METAL_FS_MOUNT_KERNEL_MODS=y
 CONFIG_PM_METAL_FS_MOUNT_KERNEL_SRC=y
 CONFIG_PM_METAL_FS_KERNEL_MODS_SEED=""
+# end of fs
+
+#
+# boot.rootfs
+#
 CONFIG_PM_METAL_LOG_BOOT_MOUNTS=y
+# end of boot.rootfs
+
+#
+# py
+#
+CONFIG_PM_METAL_PY_ENABLE_REPL_SHELL=y
+# end of py
+# end of pymergetic.metal

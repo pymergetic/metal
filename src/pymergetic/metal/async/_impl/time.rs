@@ -159,3 +159,21 @@ pub extern "C" fn pm_metal_async_sleep_us(us: u64) -> u32 {
     let now = pm_metal_async_mono_us();
     pm_metal_async_sleep_until_us(now.saturating_add(us))
 }
+
+/// Guest/product alias: sleep milliseconds (awaitable handle).
+#[no_mangle]
+pub extern "C" fn pm_metal_async_sleep(ms: u32) -> u32 {
+    pm_metal_async_sleep_us((ms as u64).saturating_mul(1000))
+}
+
+/// Guest/product alias: yield one coop slice (sleep 0).
+#[no_mangle]
+pub extern "C" fn pm_metal_async_yield() -> u32 {
+    pm_metal_async_sleep_us(0)
+}
+
+/// Monotonic milliseconds (mono_us / 1000).
+#[no_mangle]
+pub extern "C" fn pm_metal_async_mono_ms() -> u64 {
+    pm_metal_async_mono_us() / 1000
+}

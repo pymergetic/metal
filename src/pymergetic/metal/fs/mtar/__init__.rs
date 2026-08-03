@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use pymergetic_metal_fs::{
     pm_metal_fs_ops_register, pm_metal_fs_ops_t, pm_metal_fs_set_active_ops, pm_metal_fs_stat_t,
     pm_metal_fs_statfs_t, PM_METAL_FS_INVALID, PM_METAL_FS_O_CREAT, PM_METAL_FS_O_DIRECTORY,
-    PM_METAL_FS_O_RDONLY, PM_METAL_FS_O_RDWR, PM_METAL_FS_O_TRUNC, PM_METAL_FS_O_WRONLY,
+    PM_METAL_FS_O_RDWR, PM_METAL_FS_O_TRUNC, PM_METAL_FS_O_WRONLY,
     PM_METAL_FS_SEEK_CUR, PM_METAL_FS_SEEK_END, PM_METAL_FS_SEEK_SET, PM_METAL_FS_ST_RDONLY,
     PM_METAL_FS_TYPE_DIR, PM_METAL_FS_TYPE_FILE,
 };
@@ -67,7 +67,8 @@ extern "C" {
 }
 
 const TOC_NAME: &[u8] = b"__metal_toc__\0";
-const MAX_FILES: usize = 256;
+/* Kernel src.mtar stages ~1k+ human sources; 256 silently truncated browse. */
+const MAX_FILES: usize = 2048;
 const MAX_OPEN: usize = 32;
 const NAME_MAX: usize = 100;
 
@@ -388,12 +389,10 @@ unsafe extern "C" fn op_open(ctx: *mut c_void, path: *const u8, flags: u32) -> u
             break;
         }
     }
-    let Some(ti) = found else {
+    /* Root + intermediate prefixes are synthetic dirs (pack lists files only). */
+    let synthetic_dir = found.is_none() && path_is_dir_prefix(arch, path);
+    if found.is_none() && !synthetic_dir {
         return done(PM_METAL_FS_INVALID);
-    };
-    let e = &arch.toc[ti];
-    if e.is_dir && (flags & PM_METAL_FS_O_DIRECTORY) == 0 && flags != PM_METAL_FS_O_RDONLY {
-        /* allow dir open for readdir with O_RDONLY|O_DIRECTORY or plain */
     }
     let mut slot = None;
     for i in 0..MAX_OPEN {
@@ -406,30 +405,38 @@ unsafe extern "C" fn op_open(ctx: *mut c_void, path: *const u8, flags: u32) -> u
         return done(PM_METAL_FS_INVALID);
     };
     let mut cache = Vec::new();
-    if !e.is_dir && e.uncomp_len > 0 {
-        cache.resize(e.uncomp_len as usize, 0);
-        let src = arch.blob.add(e.payload_off as usize);
-        let mut out_len = 0usize;
-        let rc = pm_metal_util_lz4_decompress_safe(
-            src,
-            e.comp_len as usize,
-            cache.as_mut_ptr(),
-            cache.len(),
-            &mut out_len,
-        );
-        if rc != 0 {
-            if (e.comp_len as usize) <= cache.len() {
-                for i in 0..(e.comp_len as usize) {
-                    cache[i] = *src.add(i);
+    let _ = flags;
+    let (ti, path_owned) = if synthetic_dir {
+        (usize::MAX, String::from(path))
+    } else {
+        let ti = found.unwrap();
+        let e = &arch.toc[ti];
+        if !e.is_dir && e.uncomp_len > 0 {
+            cache.resize(e.uncomp_len as usize, 0);
+            let src = arch.blob.add(e.payload_off as usize);
+            let mut out_len = 0usize;
+            let rc = pm_metal_util_lz4_decompress_safe(
+                src,
+                e.comp_len as usize,
+                cache.as_mut_ptr(),
+                cache.len(),
+                &mut out_len,
+            );
+            if rc != 0 {
+                if (e.comp_len as usize) <= cache.len() {
+                    for i in 0..(e.comp_len as usize) {
+                        cache[i] = *src.add(i);
+                    }
+                    cache.truncate(e.comp_len as usize);
+                } else {
+                    return done(PM_METAL_FS_INVALID);
                 }
-                cache.truncate(e.comp_len as usize);
             } else {
-                return done(PM_METAL_FS_INVALID);
+                cache.truncate(out_len);
             }
-        } else {
-            cache.truncate(out_len);
         }
-    }
+        (ti, e.path.clone())
+    };
     files[fi] = Some(File {
         used: true,
         arch: arch_id,
@@ -438,7 +445,7 @@ unsafe extern "C" fn op_open(ctx: *mut c_void, path: *const u8, flags: u32) -> u
         cache,
         writable: false,
         dirty: false,
-        path: e.path.clone(),
+        path: path_owned,
     });
     pm_metal_fs_set_active_ops(&MTAR_OPS, ctx);
     done(fi as u32)
@@ -660,6 +667,14 @@ unsafe extern "C" fn op_stat(ctx: *mut c_void, path: *const u8, st_out: *mut u8)
             return done(0);
         }
     }
+    if path_is_dir_prefix(arch, path) {
+        if !st_out.is_null() {
+            let st = st_out as *mut pm_metal_fs_stat_t;
+            (*st).size = 0;
+            (*st).type_ = PM_METAL_FS_TYPE_DIR;
+        }
+        return done(0);
+    }
     done(PM_METAL_FS_INVALID)
 }
 
@@ -707,39 +722,21 @@ unsafe extern "C" fn op_readdir(
     let Some(arch) = arches.get(arch_id).and_then(|a| a.as_ref()) else {
         return done(0);
     };
-    let dir = if !f.path.is_empty() || f.toc_i == usize::MAX || arch.toc.is_empty() {
-        f.path.as_str()
-    } else if f.toc_i < arch.toc.len() {
-        arch.toc[f.toc_i].path.as_str()
-    } else {
-        ""
-    };
+    let dir = f.path.as_str();
     let idx = f.pos as usize;
-    let mut n = 0usize;
-    for e in &arch.toc {
-        let parent = parent_of(&e.path);
-        if parent != dir && !(dir.is_empty() && parent.is_empty()) {
-            continue;
-        }
-        if e.path == dir {
-            continue;
-        }
-        if n == idx {
-            let base = e.path.rsplit('/').next().unwrap_or(&e.path);
-            let b = base.as_bytes();
-            let copy = core::cmp::min(b.len(), name_cap as usize - 1);
-            for i in 0..copy {
-                *name_out.add(i) = b[i];
-            }
-            *name_out.add(copy) = 0;
-            if let Some(fm) = files[h as usize].as_mut() {
-                fm.pos = idx as u32 + 1;
-            }
-            return done(1);
-        }
-        n += 1;
+    let Some(base) = nth_unique_child(arch, dir, idx) else {
+        return done(0);
+    };
+    let b = base.as_bytes();
+    let copy = core::cmp::min(b.len(), name_cap as usize - 1);
+    for i in 0..copy {
+        *name_out.add(i) = b[i];
     }
-    done(0)
+    *name_out.add(copy) = 0;
+    if let Some(fm) = files[h as usize].as_mut() {
+        fm.pos = idx as u32 + 1;
+    }
+    done(1)
 }
 
 unsafe extern "C" fn op_fwrite(ctx: *mut c_void, h: u32, src: *const u8, len: u32) -> u32 {
@@ -1161,11 +1158,69 @@ unsafe fn pack_simple_with_dirs(
     0
 }
 
-fn parent_of(path: &str) -> &str {
-    match path.rfind('/') {
-        Some(i) => &path[..i],
-        None => "",
+/// Root or any path prefix that has packed members beneath it.
+fn path_is_dir_prefix(arch: &Arch, path: &str) -> bool {
+    if path.is_empty() {
+        return !arch.toc.is_empty();
     }
+    for e in &arch.toc {
+        if e.path == path && e.is_dir {
+            return true;
+        }
+        if e.path.len() > path.len()
+            && e.path.as_bytes().get(path.len()) == Some(&b'/')
+            && e.path.as_bytes().starts_with(path.as_bytes())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Next path component of `path` under `dir`, if `path` lives under `dir`.
+fn child_name_of<'a>(path: &'a str, dir: &str) -> Option<&'a str> {
+    let rest = if dir.is_empty() {
+        path
+    } else if path.len() > dir.len()
+        && path.as_bytes().starts_with(dir.as_bytes())
+        && path.as_bytes().get(dir.len()) == Some(&b'/')
+    {
+        &path[dir.len() + 1..]
+    } else {
+        return None;
+    };
+    if rest.is_empty() {
+        return None;
+    }
+    match rest.find('/') {
+        Some(i) => Some(&rest[..i]),
+        None => Some(rest),
+    }
+}
+
+/// Unique immediate children under `dir`, ordered by first TOC appearance.
+fn nth_unique_child<'a>(arch: &'a Arch, dir: &str, index: usize) -> Option<&'a str> {
+    let mut n = 0usize;
+    for (i, e) in arch.toc.iter().enumerate() {
+        let Some(child) = child_name_of(&e.path, dir) else {
+            continue;
+        };
+        let mut first = true;
+        for prev in arch.toc.iter().take(i) {
+            if child_name_of(&prev.path, dir) == Some(child) {
+                first = false;
+                break;
+            }
+        }
+        if !first {
+            continue;
+        }
+        if n == index {
+            return Some(child);
+        }
+        n += 1;
+    }
+    None
 }
 
 fn cstr<'a>(p: *const u8) -> &'a str {

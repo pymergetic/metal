@@ -46,7 +46,7 @@ fn usage_lines() -> [&'static str; 14] {
         "  forge config edit|gen|old [--metal-root DIR]",
         "  forge pack DIR|NAME|all [-o OUT.wasm] [--metal-root DIR]",
         "  forge build [bios|efi|all] [--stress] [--metal-root DIR]",
-        "  forge run   [bios|efi|all] [--metal-root DIR]",
+        "  forge run   [bios|efi|all] [--interactive|-i] [--metal-root DIR]",
         "  forge stress [--metal-root DIR]",
         "  forge version | --version | -V",
         "",

@@ -15,6 +15,18 @@ int32_t pm_metal_wasm_port_ready(void);
 /* Init WAMR over a Metal-allocated pool. 0 ok, -1 fail. */
 int32_t pm_metal_wasm_port_init(void);
 
+/* Register kernel guest_surface natives. Called from init. */
+int32_t pm_metal_wasm_port_register_host_natives(void);
+
+/* Guest coro call-in: export name looked up on create (default "step"). */
+void pm_metal_wasm_guest_callin_set_step(const char *name);
+
+/*
+ * Host: create a guest coro for a loaded module using the current callin
+ * step name. Returns coro handle, or 0 on fail.
+ */
+uint32_t pm_metal_wasm_port_guest_coro_create(const uint8_t *full_module, uint32_t state_bytes);
+
 void pm_metal_wasm_port_shutdown(void);
 
 /*
@@ -56,6 +68,13 @@ int32_t pm_metal_wasm_port_export_name(const uint8_t *full_module, int32_t idx, 
  * automatically (all at once) when `full_module` unloads.
  */
 void *pm_metal_wasm_port_claim_trampoline(const uint8_t *full_module, const uint8_t *func);
+
+/*
+ * Borrow the loaded image bytes for `full_module` (still owned by the
+ * slot). Writes pointer+len on success. 0 ok, -1 if not loaded.
+ */
+int32_t pm_metal_wasm_port_image(const uint8_t *full_module, const uint8_t **out_bytes,
+                                 uint32_t *out_len);
 
 #ifdef __cplusplus
 }

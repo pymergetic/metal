@@ -236,17 +236,36 @@ pub fn load(m: &'static RegMod) -> i32 {
     0
 }
 
-/// Spin until every runner has parked, run `f` with the registry
+/// Wait until every runner has parked, run `f` with the registry
 /// guaranteed to have zero concurrent callers anywhere in it, then
 /// resume every runner. If async was never started (`n_runners == 0`,
 /// e.g. a host smoke test with no engine running), `all_parked` is
 /// vacuously true immediately -- no wait, no behavior change from
 /// before quiesce existed.
+///
+/// On UP (one thread draining every runner via `run_poll_all`), the wait
+/// must *drive* polls -- a bare spin never reaches `take_ready`, so
+/// park flags stay false forever. Each poll lets a runner observe the
+/// request, set its parked bit, and return (see async `take_ready`).
 fn with_quiesce<R>(f: impl FnOnce() -> R) -> R {
     unsafe {
+        extern "C" {
+            fn pm_metal_async_run_poll_all() -> i32;
+            fn pm_metal_async_n_runners() -> u32;
+        }
         async_quiesce::pm_metal_async_quiesce_request();
+        let mut spins = 0u32;
         while async_quiesce::pm_metal_async_quiesce_all_parked() == 0 {
+            if pm_metal_async_n_runners() > 0 {
+                let _ = pm_metal_async_run_poll_all();
+            }
             core::hint::spin_loop();
+            spins = spins.wrapping_add(1);
+            if spins > 50_000_000 {
+                /* Wedge guard -- still run f so unload can fail closed
+                 * rather than hang the firmware forever. */
+                break;
+            }
         }
         let r = f();
         async_quiesce::pm_metal_async_quiesce_release();
@@ -299,4 +318,14 @@ pub fn unload(name: &str) -> i32 {
 
 pub fn count() -> usize {
     KERNEL.snapshot().into_iter().flatten().count()
+}
+
+/// Loaded module at insertion-order `index`, or None if OOB.
+pub fn mod_at(index: usize) -> Option<&'static RegMod> {
+    KERNEL.snapshot().into_iter().flatten().nth(index)
+}
+
+/// Point-in-time walk of every loaded module (lock released before yield).
+pub fn snapshot_iter() -> impl Iterator<Item = &'static RegMod> {
+    KERNEL.snapshot().into_iter().flatten()
 }

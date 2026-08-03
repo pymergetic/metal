@@ -73,9 +73,44 @@ fn main() {
             &include_root,
         ],
     );
+    compile_c_host(
+        &port.join("host_natives.c"),
+        &out_dir.join("host_natives.o"),
+        &[
+            &port,
+            &wamr.join("core/iwasm/include"),
+            &src_root,
+            &include_root,
+        ],
+    );
+    compile_c_host(
+        &port.join("guest_coro.c"),
+        &out_dir.join("guest_coro.o"),
+        &[
+            &port,
+            &wamr.join("core/iwasm/include"),
+            &src_root,
+            &include_root,
+        ],
+    );
+    compile_c_host(
+        &port.join("wasi_stubs.c"),
+        &out_dir.join("wasi_stubs.o"),
+        &[
+            &port,
+            &wamr.join("core/iwasm/include"),
+            &src_root,
+            &include_root,
+        ],
+    );
     archive(
         &out_dir.join("libpm_metal_wasm_port.a"),
-        &[&out_dir.join("runtime_host.o")],
+        &[
+            &out_dir.join("runtime_host.o"),
+            &out_dir.join("host_natives.o"),
+            &out_dir.join("guest_coro.o"),
+            &out_dir.join("wasi_stubs.o"),
+        ],
     );
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
@@ -102,6 +137,9 @@ fn build_freestanding_wamr(
 
     let mut sources: Vec<PathBuf> = Vec::new();
     sources.push(port.join("runtime_host.c"));
+    sources.push(port.join("host_natives.c"));
+    sources.push(port.join("guest_coro.c"));
+    sources.push(port.join("wasi_stubs.c"));
     sources.push(plat.join("metal_platform.c"));
     sources.push(shared.join("platform/common/math/math.c"));
 

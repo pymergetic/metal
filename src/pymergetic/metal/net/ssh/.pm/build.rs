@@ -369,6 +369,8 @@ fn compile(src: &Path, obj: &Path, kind: CompileKind, ctx: CompileCtx<'_>) {
             cmd.arg("-I").arg(ctx.mod_dir);
             cmd.arg("-I").arg(ctx.metal_db);
             cmd.arg("-I").arg(ctx.src);
+            /* Generated faces (`metal mod sync`) — glue includes peer .h mirrors. */
+            cmd.arg("-I").arg(ctx.pkg_root.join("include"));
             cmd.arg("-I").arg(ctx.pkg_root.join("src"));
             cmd.arg("-I").arg(ctx.metal_dir);
         }

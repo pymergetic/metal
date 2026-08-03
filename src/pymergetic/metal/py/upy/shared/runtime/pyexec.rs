@@ -19,7 +19,7 @@ pub unsafe fn execute_bytecode(code: &[u8]) -> ExecResult {
         runtime::init();
     }
     let mut st = vm::CodeState::new();
-    match vm::execute(code, &mut st) {
+    match vm::execute(code, &[], &mut st) {
         VmReturnKind::Normal => ExecResult::Ok(st.result),
         VmReturnKind::Exception => ExecResult::Exception,
         VmReturnKind::Yield => ExecResult::Incomplete,

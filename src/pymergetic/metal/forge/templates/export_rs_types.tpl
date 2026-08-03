@@ -1,4 +1,6 @@
-{% for en in enums %}#[repr(u32)]
+{% for d in defines %}{{ d.line }}
+{% endfor %}{% if defines %}
+{% endif %}{% for en in enums %}#[repr(u32)]
 #[derive(Clone, Copy)]
 #[allow(non_camel_case_types)]
 pub enum {{ en.name }} {

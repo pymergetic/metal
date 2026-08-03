@@ -231,13 +231,13 @@ unsafe fn parse_request_line(hdr: &[u8], method: &mut [u8], target: &mut [u8]) -
     }
     method[..meth.len()].copy_from_slice(meth);
     method[meth.len()] = 0;
-    let path_end = req_target.iter().position(|&b| b == b'?').unwrap_or(req_target.len());
-    let path = &req_target[..path_end];
-    if path.is_empty() {
+    /* Keep query string in conn_target so apps can read ?path=...;
+     * mount_find strips it separately. */
+    if req_target.is_empty() {
         return false;
     }
-    target[..path.len()].copy_from_slice(path);
-    target[path.len()] = 0;
+    target[..req_target.len()].copy_from_slice(req_target);
+    target[req_target.len()] = 0;
     true
 }
 
@@ -321,14 +321,9 @@ unsafe fn build_simple_response(
     code: u32,
     reason: *const c_char,
     ctype: *const c_char,
-    body: *const c_char,
+    blen: u32,
     out: &mut [u8],
 ) -> Option<usize> {
-    let blen = if body.is_null() {
-        0
-    } else {
-        cstr_len(body, 1_048_576)
-    };
     let mut w = Writer::new(out);
     w.bytes(b"HTTP/1.1 ");
     w.dec(code);
@@ -341,9 +336,33 @@ unsafe fn build_simple_response(
         w.bytes(b"\r\n");
     }
     w.bytes(b"Content-Length: ");
-    w.dec(blen as u32);
+    w.dec(blen);
     w.bytes(b"\r\nConnection: close\r\n\r\n");
     w.finish()
+}
+
+unsafe fn send_bytes_on_conn(
+    conn_h: u32,
+    code: u32,
+    reason: *const c_char,
+    ctype: *const c_char,
+    body: *const u8,
+    blen: u32,
+) -> i32 {
+    if conn_h == 0 {
+        return -1;
+    }
+    let mut hdr = [0u8; RESP_HDR_MAX];
+    let Some(hlen) = build_simple_response(code, reason, ctype, blen, &mut hdr) else {
+        return -1;
+    };
+    if !sync_tcp_write(conn_h, hdr.as_ptr(), hlen as u32) {
+        return -1;
+    }
+    if blen > 0 && !body.is_null() && !sync_tcp_write(conn_h, body, blen) {
+        return -1;
+    }
+    0
 }
 
 unsafe fn send_simple_on_conn(
@@ -353,23 +372,12 @@ unsafe fn send_simple_on_conn(
     ctype: *const c_char,
     body: *const c_char,
 ) -> i32 {
-    if conn_h == 0 {
-        return -1;
-    }
-    let mut hdr = [0u8; RESP_HDR_MAX];
-    let Some(hlen) = build_simple_response(code, reason, ctype, body, &mut hdr) else {
-        return -1;
+    let blen = if body.is_null() {
+        0
+    } else {
+        cstr_len(body, 1_048_576) as u32
     };
-    if !sync_tcp_write(conn_h, hdr.as_ptr(), hlen as u32) {
-        return -1;
-    }
-    if !body.is_null() {
-        let blen = cstr_len(body, 1_048_576);
-        if blen > 0 && !sync_tcp_write(conn_h, body as *const u8, blen as u32) {
-            return -1;
-        }
-    }
-    0
+    send_bytes_on_conn(conn_h, code, reason, ctype, body as *const u8, blen)
 }
 
 unsafe extern "C" fn health_app_fn(_ctx: *mut c_void, _conn_id: u32) -> i32 {
@@ -428,7 +436,12 @@ unsafe fn handle_conn(srv_h: u32, conn_h: u32, hdr: &[u8]) {
     }
     conn_begin(conn_h, hdr, &method, &target);
     let tlen = target.iter().position(|&b| b == 0).unwrap_or(PATH_MAX);
-    let target_path = &target[..tlen];
+    let target_full = &target[..tlen];
+    let path_end = target_full
+        .iter()
+        .position(|&b| b == b'?')
+        .unwrap_or(tlen);
+    let target_path = &target_full[..path_end];
     let srv = srv_slot(srv_h);
     if srv.is_null() {
         conn_clear();
@@ -731,6 +744,18 @@ pub unsafe extern "C" fn pm_metal_net_http_send_simple(
     body: *const c_char,
 ) -> i32 {
     send_simple_on_conn(CURRENT_CONN, code, reason, ctype, body)
+}
+
+/// Binary-safe reply (Content-Length = `body_len`; body may contain NUL).
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_http_send_bytes(
+    code: u32,
+    reason: *const c_char,
+    ctype: *const c_char,
+    body: *const u8,
+    body_len: u32,
+) -> i32 {
+    send_bytes_on_conn(CURRENT_CONN, code, reason, ctype, body, body_len)
 }
 
 /// Built-in GET /health app (200 ok). Register once; returns app handle.

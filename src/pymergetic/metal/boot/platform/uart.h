@@ -19,6 +19,8 @@ extern "C" {
 typedef struct pm_metal_boot_uart_ops {
   /** Write n ASCII bytes from s. Must not be NULL. */
   void (*write)(const char *s, size_t n);
+  /** Non-blocking single-byte read. -1 if none available, else 0..255. */
+  int32_t (*try_getc)(void);
   /** Floor UART I/O base for DT seed (ISA). 0 if none. */
   uint32_t (*floor_iobase)(void);
   /** Static NUL-terminated DT compat for the floor UART. */

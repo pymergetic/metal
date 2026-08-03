@@ -1,4 +1,4 @@
-/* ELF32 Multiboot trampoline at 1MiB; embeds metal.elf and copies it to 16MiB. */
+/* ELF32 Multiboot trampoline at 1MiB; embeds metal.elf and copies it to 64MiB. */
 ENTRY(_start)
 
 PHDRS
@@ -31,8 +31,8 @@ SECTIONS
     *(COMMON)
   } :data
 
-  ASSERT(. <= 0x1000000, "trampoline image overlaps Metal load address (16MiB)")
-  ASSERT(_binary_metal_elf_end <= 0x1000000, "embedded metal.elf extends into 16MiB load window")
+  ASSERT(. <= 0x4000000, "trampoline image overlaps Metal load address (64MiB)")
+  ASSERT(_binary_metal_elf_end <= 0x4000000, "embedded metal.elf extends into 64MiB load window")
 
   /DISCARD/ : {
     *(.note*)

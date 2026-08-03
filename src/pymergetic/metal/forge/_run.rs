@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::_host::{ensure_dir, ensure_file, null_stdio, run, sess_positional};
+use crate::_host::{ensure_dir, ensure_file, null_stdio, run, sess_flag, sess_positional};
 use crate::_port::{block_on, ForgeSession};
 
 const OVMF_CANDIDATES: &[&str] = &[
@@ -16,16 +16,35 @@ const OVMF_CANDIDATES: &[&str] = &[
     "/usr/share/OVMF/OVMF_CODE_4M.fd",
 ];
 
-const QEMU_MACHINE: &[&str] = &[
+/// Machine args without `-display` (display chosen per interactive/CI).
+const QEMU_MACHINE_BASE: &[&str] = &[
     "-machine",
     "q35,accel=kvm:tcg",
     "-m",
     "512",
-    "-display",
-    "none",
+    /* stdvga (Bochs DISPI) for gfx scanout. */
+    "-vga",
+    "std",
     "-device",
     "isa-debug-exit,iobase=0x501,iosize=0x02",
 ];
+
+/// `-display` for QEMU. Interactive: VNC so SSH hosts can view GOP.
+/// Non-interactive / CI: `none`. Override with `METAL_QEMU_VNC=host:N`
+/// (N is the VNC display number; TCP port = 5900+N). Default `127.0.0.1:0`.
+fn qemu_display_args(interactive: bool) -> Vec<String> {
+    if !interactive {
+        return alloc::vec![String::from("-display"), String::from("none")];
+    }
+    let spec = std::env::var("METAL_QEMU_VNC").unwrap_or_else(|_| String::from("127.0.0.1:0"));
+    let port = spec
+        .rsplit_once(':')
+        .and_then(|(_, n)| n.parse::<u16>().ok())
+        .map(|n| 5900u16.saturating_add(n))
+        .unwrap_or(5900);
+    eprintln!("forge run: vnc {spec} (tcp 127.0.0.1:{port})");
+    alloc::vec![String::from("-display"), alloc::format!("vnc={spec}")]
+}
 
 const VIRTIO: &[&str] = &[
     "-netdev",
@@ -41,6 +60,20 @@ const VIRTIO: &[&str] = &[
     "-device",
     "virtio-tablet-pci",
 ];
+
+/// Opt-in virtio-gpu PCI device (`METAL_SCANOUT_VIRTIO_GPU=1`).
+/// Keeps `-vga std` so harvest still gets Bochs mode dims; probe prefers virtio_gpu.
+fn virtio_gpu_args() -> Vec<String> {
+    match std::env::var("METAL_SCANOUT_VIRTIO_GPU") {
+        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes") => {
+            alloc::vec![
+                String::from("-device"),
+                String::from("virtio-gpu-pci"),
+            ]
+        }
+        _ => Vec::new(),
+    }
+}
 
 fn smp() -> String {
     std::env::var("EXP2_SMP").unwrap_or_else(|_| String::from("4"))
@@ -122,16 +155,15 @@ fn csi_prefix_hold(b: &[u8]) -> bool {
 /// Incomplete CSI at the end of `chunk` is left in `hold` for the next call.
 fn write_serial_filtered(out: &mut dyn Write, hold: &mut Vec<u8>, chunk: &[u8]) -> std::io::Result<()> {
     /* Drop machine ready mark from the host TTY (still kept in raw log). */
-    const READY: &[u8] = b"#pm-metal/boot-tree/ready"; /* = boot/tree/_impl/ready.rs READY_MARK */
     hold.extend_from_slice(chunk);
-    while let Some(pos) = hold.windows(READY.len()).position(|w| w == READY) {
-        hold.drain(pos..pos + READY.len());
+    while let Some(pos) = hold.windows(READY_MARK.len()).position(|w| w == READY_MARK) {
+        hold.drain(pos..pos + READY_MARK.len());
     }
     /* Keep a proper prefix of READY so a split mark is not partially printed. */
     let mut keep = 0usize;
-    let max_keep = READY.len().saturating_sub(1).min(hold.len());
+    let max_keep = READY_MARK.len().saturating_sub(1).min(hold.len());
     for n in (1..=max_keep).rev() {
-        if READY.starts_with(&hold[hold.len() - n..]) {
+        if READY_MARK.starts_with(&hold[hold.len() - n..]) {
             keep = n;
             break;
         }
@@ -177,13 +209,46 @@ fn write_serial_filtered(out: &mut dyn Write, hold: &mut Vec<u8>, chunk: &[u8]) 
     out.flush()
 }
 
-fn pump_serial_filtered(mut r: impl Read, log_path: &Path) -> Result<(), String> {
+/// Same bytes as boot/tree/_impl/ready.rs READY_MARK — do not scrape human tree text.
+const READY_MARK: &[u8] = b"#pm-metal/boot-tree/ready";
+
+/// QEMU `-serial stdio` leaves the host TTY raw; reset after every run.
+fn restore_host_tty() {
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b"\x1b[0m\x1b[?25h\r\n");
+    let _ = out.flush();
+    let _ = Command::new("stty")
+        .arg("sane")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+struct TtyGuard;
+impl Drop for TtyGuard {
+    fn drop(&mut self) {
+        restore_host_tty();
+    }
+}
+
+struct QemuChild(std::process::Child);
+impl Drop for QemuChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn pump_serial_filtered(
+    mut r: impl Read,
+    log_path: &Path,
+    until_ready: bool,
+) -> Result<(), String> {
     let mut raw = Vec::new();
     let mut hold = Vec::new();
     let mut buf = [0u8; 4096];
     let mut stdout = std::io::stdout();
-    /* Same bytes as boot/tree/_impl/ready.rs READY_MARK — do not scrape human tree text. */
-    const READY: &[u8] = b"#pm-metal/boot-tree/ready"; /* = boot/tree/_impl/ready.rs READY_MARK */
     loop {
         let n = r.read(&mut buf).map_err(|_| String::from("serial read failed"))?;
         if n == 0 {
@@ -192,12 +257,15 @@ fn pump_serial_filtered(mut r: impl Read, log_path: &Path) -> Result<(), String>
         raw.extend_from_slice(&buf[..n]);
         write_serial_filtered(&mut stdout, &mut hold, &buf[..n])
             .map_err(|_| String::from("serial write failed"))?;
-        if memchr_slice(&raw, READY) {
+        if until_ready && memchr_slice(&raw, READY_MARK) {
             break;
         }
     }
-    /* Flush a trailing incomplete ESC as literal (should be rare). */
-    if !hold.is_empty() {
+    /* Never dump a truncated ESC / READY prefix onto the host TTY. */
+    if !hold.is_empty()
+        && !csi_prefix_hold(&hold)
+        && !READY_MARK.starts_with(hold.as_slice())
+    {
         stdout
             .write_all(&hold)
             .map_err(|_| String::from("serial write failed"))?;
@@ -217,38 +285,54 @@ fn memchr_slice(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
 }
 
-fn run_bios(tree: &Path) -> Result<(), String> {
+fn run_interactive(sess: &dyn ForgeSession) -> bool {
+    sess_flag(sess, "--interactive")
+        || sess_flag(sess, "-i")
+        || std::env::var("METAL_RUN_INTERACTIVE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
+            .unwrap_or(false)
+}
+
+fn run_bios(tree: &Path, interactive: bool) -> Result<(), String> {
+    let _tty = TtyGuard;
     let elf = tree.join("build/x86_64_bios/metal.qemu.elf");
     ensure_file(&elf, "forge build bios")?;
     let vio = virtio_drive(tree, None)?;
+    let vgpu = virtio_gpu_args();
     let smp = smp();
     let serial_log = tree.join("build/x86_64_bios/last-serial.log");
     eprintln!("forge run: bios {}", elf.display());
+    if interactive {
+        eprintln!("forge run: interactive (Ctrl+C to stop)");
+    }
+    let disp = qemu_display_args(interactive);
     let mut cmd = Command::new("stdbuf");
     cmd.args(["-o0", "-e0", "qemu-system-x86_64"])
-        .args(QEMU_MACHINE)
+        .args(QEMU_MACHINE_BASE)
+        .args(&disp)
         .args(["-serial", "stdio"])
         .args(["-smp", &smp])
         .args(&vio)
+        .args(&vgpu)
         .arg("-kernel")
         .arg(&elf)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
-    let mut child = cmd.spawn().map_err(|_| String::from("qemu spawn failed"))?;
-    let pump = if let Some(out) = child.stdout.take() {
-        pump_serial_filtered(out, &serial_log)
+    let mut child = QemuChild(cmd.spawn().map_err(|_| String::from("qemu spawn failed"))?);
+    let pump = if let Some(out) = child.0.stdout.take() {
+        pump_serial_filtered(out, &serial_log, !interactive)
     } else {
         Ok(())
     };
-    let _ = child.kill();
-    let _ = child.wait();
+    drop(child); /* kill + wait */
     pump?;
     eprintln!();
     eprintln!("forge run: serial log {}", serial_log.display());
     Ok(())
 }
 
-fn run_efi(tree: &Path) -> Result<(), String> {
+fn run_efi(tree: &Path, interactive: bool) -> Result<(), String> {
+    let _tty = TtyGuard;
     let efi_img = tree.join("build/x86_64_efi/metal.efi");
     ensure_file(&efi_img, "forge build efi")?;
     let ovmf = find_ovmf().ok_or_else(|| String::from("OVMF not found (apt: ovmf)"))?;
@@ -259,16 +343,23 @@ fn run_efi(tree: &Path) -> Result<(), String> {
     std::fs::copy(&efi_img, esp.join("EFI/BOOT/BOOTX64.EFI")).map_err(|_| String::from("copy efi"))?;
     /* ESP boots first; virtio-blk rootfs is not an EFI system partition. */
     let vio = virtio_drive(tree, Some(1))?;
+    let vgpu = virtio_gpu_args();
     let smp = smp();
     eprintln!("forge run: efi {} (OVMF {})", efi_img.display(), ovmf.display());
+    if interactive {
+        eprintln!("forge run: interactive (Ctrl+C to stop)");
+    }
     /* stdout is a pipe for the CSI filter — force unbuffered or QEMU's stdio
      * block-buffers (~4K) and the host TTY looks hung until the child exits. */
+    let disp = qemu_display_args(interactive);
     let mut cmd = Command::new("stdbuf");
     cmd.args(["-o0", "-e0", "qemu-system-x86_64"])
-        .args(QEMU_MACHINE)
+        .args(QEMU_MACHINE_BASE)
+        .args(&disp)
         .args(["-serial", "stdio"])
         .args(["-smp", &smp])
         .args(&vio)
+        .args(&vgpu)
         .args([
             "-drive",
             &alloc::format!("if=pflash,format=raw,readonly=on,file={}", ovmf.display()),
@@ -279,28 +370,26 @@ fn run_efi(tree: &Path) -> Result<(), String> {
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
-    let mut child = cmd.spawn().map_err(|_| String::from("qemu spawn failed"))?;
-    let pump = if let Some(out) = child.stdout.take() {
-        pump_serial_filtered(out, &serial_log)
+    let mut child = QemuChild(cmd.spawn().map_err(|_| String::from("qemu spawn failed"))?);
+    let pump = if let Some(out) = child.0.stdout.take() {
+        pump_serial_filtered(out, &serial_log, !interactive)
     } else {
         Ok(())
     };
-    /* Ctrl+C / early return must not leave QEMU behind. */
-    let _ = child.kill();
-    let _ = child.wait();
+    drop(child);
     pump?;
     eprintln!();
     eprintln!("forge run: serial log {}", serial_log.display());
     Ok(())
 }
 
-fn run_target(tree: &Path, target: &str) -> Result<(), String> {
+fn run_target(tree: &Path, target: &str, interactive: bool) -> Result<(), String> {
     match target {
-        "bios" | "x86_64" => run_bios(tree),
-        "efi" => run_efi(tree),
+        "bios" | "x86_64" => run_bios(tree, interactive),
+        "efi" => run_efi(tree, interactive),
         "all" | "both" => {
-            run_bios(tree)?;
-            run_efi(tree)
+            run_bios(tree, interactive)?;
+            run_efi(tree, interactive)
         }
         other => Err(alloc::format!("unsupported target {other} (bios|efi|all)")),
     }
@@ -309,7 +398,8 @@ fn run_target(tree: &Path, target: &str) -> Result<(), String> {
 pub fn run_qemu(sess: &mut dyn ForgeSession, metal_root: &str) -> i32 {
     let tree = PathBuf::from(metal_root);
     let target = sess_positional(sess, 1, "all");
-    match run_target(&tree, &target) {
+    let interactive = run_interactive(sess);
+    match run_target(&tree, &target, interactive) {
         Ok(()) => {
             sess.set_exit(0);
             0

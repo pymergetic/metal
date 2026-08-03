@@ -20,6 +20,8 @@ static COMPAT_PCI: &[u8] = b"pci\0";
 struct IoOps {
     outb: Option<unsafe extern "C" fn(u16, u8)>,
     inb: Option<unsafe extern "C" fn(u16) -> u8>,
+    out16: Option<unsafe extern "C" fn(u16, u16)>,
+    in16: Option<unsafe extern "C" fn(u16) -> u16>,
     out32: Option<unsafe extern "C" fn(u16, u32)>,
     in32: Option<unsafe extern "C" fn(u16) -> u32>,
 }
@@ -130,4 +132,44 @@ pub unsafe extern "C" fn pm_metal_bus_pci_detect() -> i32 {
         }
     }
     0
+}
+
+/* Floor RegMod: publish exports for always-proxy faces (W10.1). */
+use core::cell::Cell;
+use core::ffi::c_void;
+use pymergetic_metal_reg::{
+    pm_metal_reg_mod_load, publish_entries, RegEntry, RegMod, RegModStatic,
+};
+
+static FLOOR_ENTRIES: RegModStatic<1, 0> =
+    RegModStatic::new([RegEntry::new("pm_metal_bus_pci_detect")], []);
+
+extern "C" fn floor_register_symbols(_ctx: *mut c_void) -> i32 {
+    publish_entries(
+        &FLOOR_ENTRIES.entries,
+        &[pm_metal_bus_pci_detect as *const c_void],
+    )
+}
+
+static FLOOR_MOD: RegMod = RegMod {
+    name: "pymergetic.metal.bus.pci",
+    unloadable: false,
+    parent: None,
+    ctx: core::ptr::null_mut(),
+    on_load: None,
+    register_symbols: Some(floor_register_symbols),
+    connect_symbols: None,
+    on_registrations_updated: None,
+    deregister_symbols: None,
+    on_unload: None,
+    entries: &FLOOR_ENTRIES.entries,
+    imports: &[],
+    raw_next: Cell::new(core::ptr::null()),
+    raw_prev: Cell::new(core::ptr::null()),
+};
+
+/// Load this floor module into the registry (idempotent fail if already loaded).
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_bus_pci_mod_load() -> i32 {
+    pm_metal_reg_mod_load(&FLOOR_MOD)
 }

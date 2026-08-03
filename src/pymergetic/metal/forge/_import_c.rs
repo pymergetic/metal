@@ -182,8 +182,99 @@ fn is_call_site_ret(ret: &str) -> bool {
     )
 }
 
+/// Object-like `#define NAME value` from the human header (before `#` strip).
+/// Function-like macros (`#define FOO(x)`) are skipped.
+fn import_defines(text: &str, cat: &mut Catalog) {
+    for line in text.split('\n') {
+        let line = line.trim();
+        let rest = match line.strip_prefix("#define ") {
+            Some(r) => r.trim_start(),
+            None => continue,
+        };
+        let mut name = String::new();
+        let mut chars = rest.chars().peekable();
+        while let Some(&c) = chars.peek() {
+            if c == '_' || c.is_ascii_alphanumeric() {
+                name.push(c);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        if name.is_empty() {
+            continue;
+        }
+        /* Function-like: NAME( */
+        if matches!(chars.peek(), Some('(')) {
+            continue;
+        }
+        let value_raw = chars.collect::<String>();
+        let value = String::from(value_raw.trim());
+        if value.is_empty() {
+            continue;
+        }
+        if cat.defines.iter().any(|d| d.name == name) {
+            continue;
+        }
+        cat.defines.push(crate::_catalog::Define { name, value });
+    }
+}
+
+/// Replace `[MACRO]` array sizes with the define's integer RHS when known
+/// (`uint8_t[PM_METAL_STREAM_NCCS]` -> `uint8_t[32]`). Keeps C call-site
+/// macros available via emitted `#define`s; makes Rust faces sized arrays.
+fn expand_define_array_sizes(cat: &mut Catalog) {
+    let rewrite = |ty: &str, defs: &[crate::_catalog::Define]| -> String {
+        let Some(br) = ty.rfind('[') else {
+            return String::from(ty);
+        };
+        if !ty.ends_with(']') {
+            return String::from(ty);
+        }
+        let inner = ty[br + 1..ty.len() - 1].trim();
+        if inner.is_empty()
+            || inner.chars().all(|c| c.is_ascii_digit())
+            || !inner.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
+        {
+            return String::from(ty);
+        }
+        let Some(d) = defs.iter().find(|d| d.name == inner) else {
+            return String::from(ty);
+        };
+        /* Strip C integer suffixes (u/ul/ull/U...). */
+        let mut v = d.value.as_str();
+        while let Some(c) = v.chars().last() {
+            if matches!(c, 'u' | 'U' | 'l' | 'L') {
+                v = &v[..v.len() - c.len_utf8()];
+            } else {
+                break;
+            }
+        }
+        let v = v.trim();
+        if v.is_empty() || !v.chars().all(|c| c.is_ascii_digit()) {
+            return String::from(ty);
+        }
+        alloc::format!("{}[{}]", &ty[..br], v)
+    };
+    let defs = cat.defines.clone();
+    for st in &mut cat.structs {
+        for f in &mut st.fields {
+            f.ty = rewrite(&f.ty, &defs);
+        }
+    }
+    for td in &mut cat.typedefs {
+        td.ty = rewrite(&td.ty, &defs);
+    }
+    for fn_ in &mut cat.fns {
+        fn_.ret = rewrite(&fn_.ret, &defs);
+        for a in &mut fn_.args {
+            a.ty = rewrite(&a.ty, &defs);
+        }
+    }
+}
+
 fn import_typedefs(raw: &str, cat: &mut Catalog) {
-    /* typedef uint8_t name_t[N]; */
+    /* typedef uint8_t name_t[N];  /  typedef uint32_t name_t; */
     for line in raw.split('\n') {
         let line = line.trim();
         if !line.starts_with("typedef ") || !line.ends_with(';') {
@@ -205,57 +296,75 @@ fn import_typedefs(raw: &str, cat: &mut Catalog) {
                         ty: alloc::format!("{}[{}]", ty, n),
                     });
                 }
-            }
-        }
-    }
-    /* typedef union tag { fields } name_t; */
-    let mut search = 0;
-    while let Some(rel) = raw[search..].find("typedef union ") {
-        let at = search + rel;
-        let after = &raw[at + "typedef union ".len()..];
-        if let Some(brace) = after.find('{') {
-            if let Some(close_rel) = after[brace..].find('}') {
-                let end = brace + close_rel;
-                let tail = after[brace + 1..end].trim();
-                let after_brace = after[end + 1..].trim_start();
-                let name = after_brace
-                    .split(|c: char| c == ';' || c.is_whitespace())
-                    .next()
-                    .unwrap_or("")
-                    .trim();
-                if !name.is_empty() {
-                    let mut fields = Vec::new();
-                    for part in tail.split(';') {
-                        let part = collapse_ws(part);
-                        if part.is_empty() {
-                            continue;
-                        }
-                        if let Some(a) = parse_c_arg(&part, fields.len()) {
-                            fields.push(crate::_catalog::Field {
-                                name: a.name,
-                                ty: a.ty,
-                            });
-                        }
-                    }
-                    if !fields.is_empty() {
-                        cat.structs.push(crate::_catalog::Struct {
-                            name: String::from(name),
-                            fields,
-                            is_union: true,
-                        });
-                    }
-                }
-                search = at + end + 1;
                 continue;
             }
         }
-        search = at + 1;
+        /* Plain `typedef <type...> <name>;` (e.g. `typedef uint32_t pm_metal_stream_h`). */
+        if let Some(sp) = body.rfind(' ') {
+            let ty = body[..sp].trim();
+            let name = body[sp + 1..].trim();
+            if !ty.is_empty()
+                && !name.is_empty()
+                && name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
+            {
+                cat.typedefs.push(crate::_catalog::Typedef {
+                    name: String::from(name),
+                    ty: String::from(ty),
+                });
+            }
+        }
+    }
+    /* typedef {struct|union} [tag] { fields } name_t; */
+    for (kw, is_union) in [("typedef struct ", false), ("typedef union ", true)] {
+        let mut search = 0;
+        while let Some(rel) = raw[search..].find(kw) {
+            let at = search + rel;
+            let after = &raw[at + kw.len()..];
+            if let Some(brace) = after.find('{') {
+                if let Some(close_rel) = after[brace..].find('}') {
+                    let end = brace + close_rel;
+                    let tail = after[brace + 1..end].trim();
+                    let after_brace = after[end + 1..].trim_start();
+                    let name = after_brace
+                        .split(|c: char| c == ';' || c.is_whitespace())
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    if !name.is_empty() {
+                        let mut fields = Vec::new();
+                        for part in tail.split(';') {
+                            let part = collapse_ws(part);
+                            if part.is_empty() {
+                                continue;
+                            }
+                            if let Some(a) = parse_c_arg(&part, fields.len()) {
+                                fields.push(crate::_catalog::Field {
+                                    name: a.name,
+                                    ty: a.ty,
+                                });
+                            }
+                        }
+                        if !fields.is_empty() {
+                            cat.structs.push(crate::_catalog::Struct {
+                                name: String::from(name),
+                                fields,
+                                is_union,
+                            });
+                        }
+                    }
+                    search = at + end + 1;
+                    continue;
+                }
+            }
+            search = at + 1;
+        }
     }
 }
 
 pub fn import(text: &str) -> Catalog {
-    let raw = flatten_paren_newlines(&strip_c_noise(text));
     let mut cat = Catalog::default();
+    import_defines(text, &mut cat);
+    let raw = flatten_paren_newlines(&strip_c_noise(text));
     let mut seen: Vec<String> = Vec::new();
     import_typedefs(&raw, &mut cat);
 
@@ -393,6 +502,7 @@ pub fn import(text: &str) -> Catalog {
         }
     }
 
+    expand_define_array_sizes(&mut cat);
     cat
 }
 

@@ -1,0 +1,7 @@
+{
+  "type": "package",
+  "name": "tests.wasm_guest_surfaces",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "W16.3a: fs mem-cookie I/O + gfx blit/present via host natives."
+}

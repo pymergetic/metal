@@ -2,30 +2,12 @@
 
 use crate::upy::py::malloc;
 use crate::upy::py::obj::{self, MpObj, MpObjBase};
-use crate::upy::py::objects::{objstr, TypeDesc, TYPE_DICT};
-use crate::upy::py::qstr;
+use crate::upy::py::objects::{obj_eq, TypeDesc, TYPE_DICT};
 
 const EMPTY: MpObj = obj::OBJ_NULL;
 
-unsafe fn key_bytes(o: MpObj) -> Option<&'static [u8]> {
-    if obj::is_qstr(o) {
-        Some(qstr::str(obj::qstr_value(o)))
-    } else {
-        objstr::as_bytes(o)
-    }
-}
-
 unsafe fn key_eq(a: MpObj, b: MpObj) -> bool {
-    if a == b {
-        return true;
-    }
-    if obj::is_small_int(a) && obj::is_small_int(b) {
-        return obj::small_int_value(a) == obj::small_int_value(b);
-    }
-    match (key_bytes(a), key_bytes(b)) {
-        (Some(x), Some(y)) => x == y,
-        _ => false,
-    }
+    obj_eq(a, b)
 }
 
 #[repr(C)]

@@ -268,8 +268,16 @@ Kernel stays `type=module`. First packs under `tests/`, not firmware.
 | **E. Later** | Custom mem tracking for all languages; REPL as shell |
 | **F. Dropbear** | After orchestration waves: finish `net/ssh/` (dirs exist); AUTORUN W8 |
 | **G. `net/http` complete** | After Dropbear: finish ASGI in `http/server` + Microdot runner under `http/microdot/`; AUTORUN W9 |
+| **H. Registry unify + reconnect** | Always-proxy cached-slot faces for floor modules; reconnect `py`/`wasm`/`net`/`fs` to boot; AUTORUN W10 |
+| **I. REPL as shell + upy finish** | Finish upy VM (lexer/compile/emit/repl); REPL replaces shell; async concurrency metrics + cross-lang/wasm stress; AUTORUN W11 |
+| **J. gfx + drivers** | Rust `dev/gfx` dispatch + QEMU backends + HW ports; minimal UI consumer; AUTORUN W12 |
+| **K. Doc-browser** | VFS source browse + forge in-kernel render + Rust Microdot rewrite + self-serve binary download; AUTORUN W13 |
+| **L. Signed pkg fetch** | `trust/` verify + HTTP fetch-on-miss for wasm/AOT; AUTORUN W14 |
+| **M. metal-doom validation** | Separate repo `packages/metal-doom` on a **new branch** (never its `main`); AUTORUN W15 |
+| **N. Guest dual-ABI** | `guest_surface` faces + host WAMR natives for kernel modules doom needs; AUTORUN W16 (unblocks W15.2) |
 
 Do **not** rebuild `_old` FRESH/SHARED instance machinery or a linux twin as the primary path.
+**Shape rule for H–N:** current module/call paradigm (`.pm/module`, generated faces, always-proxy cached-slot, quiesce, `guest_surface`/`PM_METAL_PKG_IMPORT`) outranks every `_old`/`main` reference — those are behavior only.
 
 ---
 

@@ -9,8 +9,9 @@ use pymergetic_metal_reg::{
     pm_metal_reg_mod_connect_all, pm_metal_reg_mod_load, ImportRow, RegMod, RegModStatic,
 };
 use pymergetic_metal_wasm::{
-    pm_metal_wasm_call0, pm_metal_wasm_init, pm_metal_wasm_load_register, pm_metal_wasm_ready,
-    pm_metal_wasm_shutdown, pm_metal_wasm_unload,
+    pm_metal_wasm_call0, pm_metal_wasm_init, pm_metal_wasm_load_register,
+    pm_metal_wasm_proof_stress, pm_metal_wasm_ready, pm_metal_wasm_shutdown,
+    pm_metal_wasm_unload,
 };
 
 /* A real cross-module consumer never calls `pm_metal_wasm_*` directly --
@@ -52,12 +53,29 @@ fn resolved(row: &ImportRow) -> *const c_void {
 static SAMPLE_GREETER: &[u8] = include_bytes!("../../../../../build/packs/sample.greeter.wasm");
 static SAMPLE_ANNOUNCER: &[u8] = include_bytes!("../../../../../build/packs/sample.announcer.wasm");
 
+fn floor_log_ready() {
+    /* Always-proxy log needs console's RegMod + init (same as py smoke). */
+    use pymergetic_metal_console as _;
+    extern "C" {
+        fn pm_metal_console_mod_load() -> i32;
+        fn pm_metal_log_mod_load() -> i32;
+        fn pm_metal_console_init0(ring_bytes: usize) -> i32;
+    }
+    unsafe {
+        assert_eq!(pm_metal_console_mod_load(), 0);
+        assert_eq!(pm_metal_log_mod_load(), 0);
+        assert_eq!(pm_metal_console_init0(0), 0);
+    }
+}
+
 fn main() {
     const N: usize = 8 * 1024 * 1024;
     let layout = Layout::from_size_align(N, 4096).unwrap();
     let base = unsafe { alloc(layout) };
     assert!(!base.is_null());
     assert_eq!(mem::init(base, N), 0);
+
+    floor_log_ready();
 
     assert_eq!(pm_metal_wasm_init(), 0);
     assert_eq!(pm_metal_wasm_ready(), 1);
@@ -194,6 +212,13 @@ fn main() {
         );
         assert_eq!(pm_metal_wasm_unload(greeter_name.as_ptr()), 0);
         assert_eq!(pm_metal_wasm_unload(announcer_name.as_ptr()), 0);
+
+        // W11.6: concurrent call stress + unload/reload under traffic.
+        assert_eq!(
+            pm_metal_wasm_proof_stress(),
+            0,
+            "wasm proof_stress failed"
+        );
     }
 
     pm_metal_wasm_shutdown();

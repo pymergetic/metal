@@ -431,7 +431,10 @@ pub fn import(text: &str) -> Catalog {
         }
     }
 
-    // Inline twins: `#[inline] pub [unsafe] fn name(...) { ... }`
+    // Face wrappers: `#[inline] pub [unsafe] fn ...` (C static-inline twins)
+    // and plain `pub unsafe fn ...` (always-proxy faces). Only the former
+    // is catalogued as `inline: true` (excluded from face-symmetry); proxy
+    // wrappers must count as real border fns.
     let mut si = 0;
     while si < raw.len() {
         let rest = &raw[si..];
@@ -439,7 +442,10 @@ pub fn import(text: &str) -> Catalog {
             Some(r) => r,
             None => break,
         };
-        si += rel + 4;
+        let pub_at = si + rel;
+        let before = raw[..pub_at].trim_end();
+        let is_inline_attr = before.ends_with("#[inline]");
+        si = pub_at + 4;
         let after_pub = raw[si..].trim_start();
         let after_pub = after_pub
             .strip_prefix("unsafe")
@@ -482,7 +488,7 @@ pub fn import(text: &str) -> Catalog {
             name: String::from(fname),
             ret,
             args: split_args(args_s),
-            inline: true,
+            inline: is_inline_attr,
         });
     }
 

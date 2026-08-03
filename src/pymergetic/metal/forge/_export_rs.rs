@@ -350,8 +350,44 @@ fn emit_types(cat: &Catalog) -> String {
             ("rs", Value::str(rs_typedef_ty(&td.ty))),
         ])
     });
-    let ctx = Value::map(alloc::vec![("enums", enums), ("structs", structs), ("typedefs", typedefs)]);
+    let defines = Value::list(
+        cat.defines
+            .iter()
+            .filter_map(|d| rs_define_line(&d.name, &d.value))
+            .map(|line| Value::map(alloc::vec![("line", Value::str(line))]))
+            .collect(),
+    );
+    let ctx = Value::map(alloc::vec![
+        ("enums", enums),
+        ("structs", structs),
+        ("typedefs", typedefs),
+        ("defines", defines),
+    ]);
     _template::render_str(TYPES_TEMPLATE, ctx).expect("rs types template")
+}
+
+/// `pub const` for object-like C defines that have a clear Rust shape.
+fn rs_define_line(name: &str, value: &str) -> Option<String> {
+    let v = value.trim();
+    if v.starts_with('"') && v.ends_with('"') && v.len() >= 2 {
+        return Some(alloc::format!("pub const {}: &str = {};", name, v));
+    }
+    let mut num = v;
+    while let Some(c) = num.chars().last() {
+        if matches!(c, 'u' | 'U' | 'l' | 'L') {
+            num = &num[..num.len() - c.len_utf8()];
+        } else {
+            break;
+        }
+    }
+    let num = num.trim();
+    /* Decimal only (octal C literals stay C-face-only). */
+    if !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()) && !num.starts_with('0')
+        || num == "0"
+    {
+        return Some(alloc::format!("pub const {}: u32 = {};", name, num));
+    }
+    None
 }
 
 fn rs_args(fn_: &Fn) -> String {
@@ -429,22 +465,17 @@ pub fn export(
     out
 }
 
-/// Registry-proxy face (provider `unloadable == true`): each non-inline
-/// export gets a cached [`pymergetic_metal_reg::ImportRow`][row], filled
-/// in by the kernel's connect pass, and a safe-signature wrapper that
-/// resolves through it and calls straight through the cached pointer --
-/// no refcount, no lock: `unload` quiesces every async runner before
-/// withdrawing anything (see `pymergetic_metal_reg::kernel::unload`), so
-/// there is no concurrent caller to race against. `pymergetic_metal_reg`
-/// is the registry spine, so depending on it directly here is the one
-/// Cargo-dependency exception (see docs/definitions/module.md "Consume
-/// foreign modules").
+/// Registry-proxy face (default for every non-spine provider): each
+/// non-inline export gets a cached [`pymergetic_metal_reg::ImportRow`][row]
+/// and a wrapper that resolves through it (connect_all when the row is
+/// on a `RegMod.imports` slice; otherwise `resolve_import` on first use)
+/// then calls the cached pointer -- no refcount, no lock: `unload`
+/// quiesces every async runner before withdrawing anything. Spine faces
+/// (`mem`/`reg`/`async`/kernel root) stay plain `extern "C"` via
+/// [`export`]; see docs/definitions/module.md "Two face shapes".
 ///
-/// Calling a wrapper before the provider has loaded/connected is a
-/// documented misuse (same contract as calling through a null function
-/// pointer) and is reported by an `assert!`, not a synthesized fake
-/// return value -- there is no type-generic "half-open" result to invent
-/// for an arbitrary return type.
+/// Calling a wrapper before the provider has published is a documented
+/// misuse and is reported by an `assert!`, not a synthesized fake return.
 ///
 /// [row]: pymergetic_metal_reg::ImportRow
 const IMPORT_ROWS_TEMPLATE: &str = include_str!("templates/export_rs_import_rows.tpl");
@@ -497,8 +528,10 @@ pub fn export_proxy(
             alloc::format!(" -> {}", ret)
         };
         let fn_ty_ret = sig_ret.clone();
+        let name_upper = f.name.to_ascii_uppercase();
         Value::map(alloc::vec![
             ("name", Value::str(f.name.clone())),
+            ("name_upper", Value::str(name_upper)),
             ("args", Value::str(args)),
             ("sig_ret", Value::str(sig_ret)),
             ("arg_tys", Value::str(arg_tys)),

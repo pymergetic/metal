@@ -1,0 +1,17 @@
+# Generic fallback when CDB misses this TU (mphalport.c compiles via
+# py/.pm/build.rs, not a forge Unit table row). -I relative to this dir.
+CompileFlags:
+  Add:
+    - -xc
+    - -std=c11
+    - -ffreestanding
+    - -nostdinc
+    - -m64
+    - -mno-red-zone
+    - -I.
+    - -I../../libc
+    - -I../../../../
+    - -I../../../../../include
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None

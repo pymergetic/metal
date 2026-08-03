@@ -5,10 +5,11 @@ use std::os::raw::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use pymergetic_metal_reg::{
-    pm_metal_reg_bind, pm_metal_reg_call0, pm_metal_reg_count, pm_metal_reg_lookup,
-    pm_metal_reg_mod_connect_all, pm_metal_reg_mod_count, pm_metal_reg_mod_load,
-    pm_metal_reg_mod_unload, pm_metal_reg_register, register_rows_bytes, ImportRow, RegEntry,
-    RegMod, RegModStatic,
+    pm_metal_reg_bind, pm_metal_reg_call0, pm_metal_reg_count, pm_metal_reg_dyn_at,
+    pm_metal_reg_lookup, pm_metal_reg_mod_at, pm_metal_reg_mod_connect_all,
+    pm_metal_reg_mod_count, pm_metal_reg_mod_entry_at, pm_metal_reg_mod_entry_count,
+    pm_metal_reg_mod_load, pm_metal_reg_mod_unload, pm_metal_reg_proof_reflect,
+    pm_metal_reg_register, register_rows_bytes, ImportRow, RegEntry, RegMod, RegModStatic,
 };
 
 extern "C" fn smoke_forty_two() -> i32 {
@@ -87,10 +88,54 @@ fn main() {
         );
         assert_eq!(pm_metal_reg_call0(bulk_mod.as_ptr(), b"a\0".as_ptr()), 42);
         assert_eq!(pm_metal_reg_call0(bulk_mod.as_ptr(), b"b\0".as_ptr()), 7);
+
+        /* W13.1: late-table reflection */
+        let mut m = [0u8; 128];
+        let mut f = [0u8; 64];
+        let mut p: *const c_void = std::ptr::null();
+        assert_eq!(
+            pm_metal_reg_dyn_at(0, m.as_mut_ptr(), 128, f.as_mut_ptr(), 64, &mut p),
+            0
+        );
+        assert!(!p.is_null());
     }
 
     eprintln!("reg smoke ok");
     lifecycle_smoke();
+    reflect_smoke();
+}
+
+fn reflect_smoke() {
+    unsafe {
+        assert_eq!(pm_metal_reg_mod_load(&PARENT_MOD), 0);
+        assert_eq!(pm_metal_reg_mod_load(&CHILD_MOD), 0);
+        let n = pm_metal_reg_mod_count();
+        assert!(n >= 2);
+        let mut name = [0u8; 128];
+        let mut saw_parent = false;
+        for i in 0..n {
+            assert_eq!(pm_metal_reg_mod_at(i, name.as_mut_ptr(), 128), 0);
+            let s = std::ffi::CStr::from_ptr(name.as_ptr() as *const i8)
+                .to_str()
+                .unwrap();
+            if s == "pymergetic.metal.reg.smoke.lifecycle.parent" {
+                saw_parent = true;
+                assert_eq!(pm_metal_reg_mod_entry_count(name.as_ptr()), 1);
+                let mut en = [0u8; 64];
+                let mut ptr: *const c_void = std::ptr::null();
+                assert_eq!(
+                    pm_metal_reg_mod_entry_at(name.as_ptr(), 0, en.as_mut_ptr(), 64, &mut ptr),
+                    0
+                );
+                assert!(!ptr.is_null());
+            }
+        }
+        assert!(saw_parent);
+        assert_eq!(pm_metal_reg_proof_reflect(), 0);
+        let _ = pm_metal_reg_mod_unload(b"pymergetic.metal.reg.smoke.lifecycle.child\0".as_ptr());
+        let _ = pm_metal_reg_mod_unload(b"pymergetic.metal.reg.smoke.lifecycle.parent\0".as_ptr());
+    }
+    eprintln!("reg reflect smoke ok");
 }
 
 // --- Static per-module lifecycle: synthetic unloadable module + child --

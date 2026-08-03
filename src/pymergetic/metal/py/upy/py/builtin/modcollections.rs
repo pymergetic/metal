@@ -8,6 +8,9 @@ use crate::upy::py::qstrdefs;
 /// Deque type lives under collections for B4 (not a core TypeKind slot reuse).
 pub static TYPE_DEQUE: TypeDesc = TypeDesc {
     kind: TypeKind::Deque,
+    is_user: false,
+    _pad: 0,
+    magic: 0,
     name: qstrdefs::QSTR_DEQUE,
 };
 

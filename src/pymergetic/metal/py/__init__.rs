@@ -15,16 +15,24 @@ mod bind;
 mod gc_off;
 #[path = "_libc_policy.rs"]
 mod libc_policy;
+#[path = "_loop.rs"]
+mod repl_loop;
+#[path = "_proof.rs"]
+mod proof;
+#[path = "_shell.rs"]
+mod shell;
 
 #[path = "upy/mod.rs"]
 pub mod upy;
 
 use pymergetic_metal_async as _;
+use pymergetic_metal_dev_serial as _;
 use pymergetic_metal_fs as _;
 use pymergetic_metal_log as _;
 use pymergetic_metal_mem as _;
 use pymergetic_metal_reg as _;
 use pymergetic_metal_rt as _;
+use pymergetic_metal_util_ascii as _;
 
 /// Edge + B0 upy faces ready (VM loop still omitted).
 #[no_mangle]
@@ -82,10 +90,66 @@ pub extern "C" fn pm_metal_py_sleep_us(us: u64) -> u32 {
     async_bridge::sleep_us(us)
 }
 
+/// One short, non-blocking REPL tick. Drains available input (own feed
+/// ring, then the mphal port's real stdin) into the session line buffer;
+/// once a submitted line closes with `\n`, lexes/parses/compiles/runs the
+/// accumulated buffer. Returns:
+/// - `0` -- idle or progressed (nothing to run yet, or a line ran to
+///   completion / auto-printed a value)
+/// - `1` -- the submission is incomplete (PS2 continuation -- caller
+///   should keep feeding lines)
+/// - `-1` -- a line buffer overflow, or the submission raised/failed to
+///   parse/compile (session line buffer is cleared either way)
+#[no_mangle]
+pub extern "C" fn pm_metal_py_loop_step() -> i32 {
+    repl_loop::step()
+}
+
+/// Inject bytes for the loop to read on later `step()` calls (tests /
+/// non-stream hosts). Returns the number of bytes queued, or `-1` for a
+/// null `ptr`.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_py_loop_feed(ptr: *const u8, len: usize) -> i32 {
+    repl_loop::feed(ptr, len)
+}
+
+/// Clear the loop's line buffer, feed ring, and session globals. Always 0.
+#[no_mangle]
+pub extern "C" fn pm_metal_py_loop_reset() -> i32 {
+    repl_loop::reset()
+}
+
+/// Last auto-printed expression's small-int value -- only meaningful
+/// when [`pm_metal_py_loop_last_result_valid`] returns nonzero.
+#[no_mangle]
+pub extern "C" fn pm_metal_py_loop_last_result_i32() -> i32 {
+    repl_loop::last_result_i32()
+}
+
+/// `1` iff the last executed submission was an auto-printed small-int
+/// value (i.e. `pm_metal_py_loop_last_result_i32` holds a real result).
+#[no_mangle]
+pub extern "C" fn pm_metal_py_loop_last_result_valid() -> i32 {
+    repl_loop::last_result_valid()
+}
+
 /// Publish edge symbols onto `reg` (`pymergetic.metal.py.*`).
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_py_bind_reg() -> i32 {
     bind::publish()
+}
+
+/// Spawn the REPL-as-boot-shell async task (see `_shell.rs` doc). `0` on
+/// success; `-1` if already running or the spawn failed.
+#[no_mangle]
+pub extern "C" fn pm_metal_py_shell_start() -> i32 {
+    shell::start()
+}
+
+/// `1` iff the boot shell task is running, else `0`.
+#[no_mangle]
+pub extern "C" fn pm_metal_py_shell_running() -> i32 {
+    shell::running()
 }
 
 /// W4.1 proof: py ready (print path exercised by await note / tree). Silent.
@@ -101,22 +165,12 @@ pub unsafe extern "C" fn pm_metal_py_proof_print() -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_py_proof_await() -> i32 {
     let _ = pm_metal_py_ready();
-    let Some(t) = upy::extmod::asyncio::sleep_ms(1) else {
-        return -1;
-    };
-    let st0 = upy::extmod::asyncio::core::status(t.handle);
-    if st0 == upy::extmod::asyncio::core::STATUS_ERROR {
-        t.cancel();
-        return -1;
-    }
-    if !upy::extmod::asyncio::run_until(t.handle) {
-        t.cancel();
-        return -1;
-    }
-    if upy::extmod::asyncio::core::status(t.handle) != upy::extmod::asyncio::core::STATUS_DONE {
-        t.cancel();
-        return -1;
-    }
-    t.cancel();
-    0
+    proof::proof_await()
+}
+
+/// W11.5 proof: concurrent asyncio tasks across runners; logs metrics on UART.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_py_proof_concurrency() -> i32 {
+    let _ = pm_metal_py_ready();
+    proof::proof_concurrency()
 }

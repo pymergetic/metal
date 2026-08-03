@@ -37,6 +37,17 @@ extern "C" {
     ) -> i32;
     fn pm_metal_fs_mount_statfs(index: u32, out: *mut pm_metal_fs_statfs_t) -> i32;
     fn pm_metal_util_size_format(out: *mut u8, cap: usize, bytes: u64) -> i32;
+    fn pm_metal_wasm_ready() -> i32;
+    fn pm_metal_external_count() -> u32;
+    fn pm_metal_external_get(idx: u32, out: *mut pm_metal_external_t) -> i32;
+}
+
+#[repr(C)]
+struct pm_metal_external_t {
+    id: *const u8,
+    version: *const u8,
+    url: *const u8,
+    note: *const u8,
 }
 
 #[repr(C)]
@@ -363,6 +374,7 @@ unsafe fn emit_async() -> i32 {
     }
     let n = pm_metal_async_n_runners();
     let show_await = super::notes::await_ok();
+    let show_concurrency = super::notes::concurrency_ok();
     let mut d = detail_buf();
     let _ = write!(d, "ok ({} runners)", n);
     item_str(PM_METAL_BOOT_TREE_OK, "async", as_str(&d));
@@ -382,16 +394,56 @@ unsafe fn emit_async() -> i32 {
     if show_await {
         item_name(PM_METAL_BOOT_TREE_DIM, "await ok");
     }
+    if show_concurrency {
+        item_name(PM_METAL_BOOT_TREE_DIM, "concurrency ok");
+    }
     pm_metal_boot_tree_leave();
     0
 }
 
 unsafe fn emit_wasm() -> i32 {
-    if super::notes::wasm_ok() {
+    /* Runtime ready (product init) or stress proof note. */
+    if pm_metal_wasm_ready() != 0 || super::notes::wasm_ok() {
         item_str(PM_METAL_BOOT_TREE_OK, "wasm", "ok");
     } else {
         item_str(PM_METAL_BOOT_TREE_DIM, "wasm", "-");
     }
+    0
+}
+
+unsafe fn emit_externals() -> i32 {
+    let n = pm_metal_external_count();
+    if n == 0 {
+        item_str(PM_METAL_BOOT_TREE_DIM, "externals", "-");
+        return 0;
+    }
+    let mut d = detail_buf();
+    let _ = write!(d, "{}", n);
+    item_str(PM_METAL_BOOT_TREE_OK, "externals", as_str(&d));
+    pm_metal_boot_tree_enter();
+    for i in 0..n {
+        let mut e = pm_metal_external_t {
+            id: core::ptr::null(),
+            version: core::ptr::null(),
+            url: core::ptr::null(),
+            note: core::ptr::null(),
+        };
+        if pm_metal_external_get(i, &mut e) != 0 || e.id.is_null() {
+            continue;
+        }
+        let id = compat_str(e.id);
+        let ver = if e.version.is_null() {
+            ""
+        } else {
+            compat_str(e.version)
+        };
+        if ver.is_empty() {
+            item_name(PM_METAL_BOOT_TREE_DIM, id);
+        } else {
+            item_str(PM_METAL_BOOT_TREE_DIM, id, ver);
+        }
+    }
+    pm_metal_boot_tree_leave();
     0
 }
 
@@ -432,6 +484,10 @@ pub static SECTIONS: &[Section] = &[
     Section {
         id: "wasm",
         emit: emit_wasm,
+    },
+    Section {
+        id: "externals",
+        emit: emit_externals,
     },
     Section {
         id: "ready",

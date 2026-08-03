@@ -42,17 +42,44 @@ dependencies = [
  "pymergetic_metal_bus_pci",
  "pymergetic_metal_console",
  "pymergetic_metal_dev_acpi",
+ "pymergetic_metal_dev_audio",
+ "pymergetic_metal_dev_blk_ram",
  "pymergetic_metal_dev_gfx",
  "pymergetic_metal_dev_input",
  "pymergetic_metal_dev_random",
  "pymergetic_metal_dev_serial",
  "pymergetic_metal_dev_time",
  "pymergetic_metal_dt",
+ "pymergetic_metal_forge",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_fs_fat",
+ "pymergetic_metal_fs_littlefs",
+ "pymergetic_metal_fs_mtar",
+ "pymergetic_metal_fs_tmpfs",
+ "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_hwtree",
  "pymergetic_metal_log",
  "pymergetic_metal_mem",
+ "pymergetic_metal_net_dns",
+ "pymergetic_metal_net_ftp",
+ "pymergetic_metal_net_http",
+ "pymergetic_metal_net_http_microdot",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_net_ip_icmp",
+ "pymergetic_metal_net_ip_tcp",
+ "pymergetic_metal_net_ip_udp",
+ "pymergetic_metal_net_ntp",
+ "pymergetic_metal_net_ssh",
+ "pymergetic_metal_net_tftp",
+ "pymergetic_metal_py",
  "pymergetic_metal_reg",
  "pymergetic_metal_rt",
+ "pymergetic_metal_shell",
  "pymergetic_metal_util_ascii",
+ "pymergetic_metal_util_lz4",
+ "pymergetic_metal_util_size",
+ "pymergetic_metal_util_tar",
+ "pymergetic_metal_wasm",
 ]
 
 [[package]]
@@ -60,6 +87,7 @@ name = "pymergetic_metal_bus_pci"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_dt",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -68,6 +96,7 @@ name = "pymergetic_metal_console"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_mem",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -75,6 +104,23 @@ dependencies = [
 name = "pymergetic_metal_dev_acpi"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_dev_audio"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_dev_blk_ram"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
  "pymergetic_metal_rt",
 ]
 
@@ -82,7 +128,12 @@ dependencies = [
 name = "pymergetic_metal_dev_gfx"
 version = "0.1.0"
 dependencies = [
+ "cc",
+ "pymergetic_metal_async",
  "pymergetic_metal_dt",
+ "pymergetic_metal_log",
+ "pymergetic_metal_mem",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -91,6 +142,7 @@ name = "pymergetic_metal_dev_input"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_dt",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -99,6 +151,7 @@ name = "pymergetic_metal_dev_random"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_dt",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -114,6 +167,7 @@ name = "pymergetic_metal_dev_time"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_dt",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -125,9 +179,81 @@ dependencies = [
 ]
 
 [[package]]
+name = "pymergetic_metal_forge"
+version = "0.1.0"
+
+[[package]]
+name = "pymergetic_metal_fs"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_fat"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_littlefs"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_mtar"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_rt",
+ "pymergetic_metal_util_lz4",
+ "pymergetic_metal_util_tar",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_tmpfs"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_fs_vfs"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_hwtree"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_dt",
+ "pymergetic_metal_log",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
 name = "pymergetic_metal_log"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -137,6 +263,126 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_dns"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ftp"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_dns",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_net_ip_tcp",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_http"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_net_ip_tcp",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_http_microdot"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ip"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "pymergetic_metal_async",
+ "pymergetic_metal_mem",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ip_icmp"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_dns",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ip_tcp"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_dns",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ip_udp"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ntp"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_dns",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ssh"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_tftp"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_net_dns",
+ "pymergetic_metal_net_ip",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_py"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "pymergetic_metal_async",
+ "pymergetic_metal_console",
+ "pymergetic_metal_dev_serial",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_log",
+ "pymergetic_metal_mem",
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+ "pymergetic_metal_util_ascii",
 ]
 
 [[package]]
@@ -152,9 +398,52 @@ name = "pymergetic_metal_rt"
 version = "0.1.0"
 
 [[package]]
+name = "pymergetic_metal_shell"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
 name = "pymergetic_metal_util_ascii"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_util_lz4"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_util_size"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_util_tar"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_wasm"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "pymergetic_metal_async",
+ "pymergetic_metal_console",
+ "pymergetic_metal_log",
+ "pymergetic_metal_mem",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 

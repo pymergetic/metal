@@ -3,5 +3,6 @@
   "name": "pymergetic.metal.log",
   "impl": "rs",
   "version": "0.1.0",
-  "comment": "Sync log facade onto console #0 (default)."
+  "guest_surface": true,
+  "comment": "Sync log facade onto console #0 (default). guest_surface: wasm packs may PM_METAL_PKG_IMPORT."
 }

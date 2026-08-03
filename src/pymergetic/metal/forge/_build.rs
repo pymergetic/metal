@@ -18,8 +18,7 @@ use crate::_port::{block_on, ForgeSession};
 
 type Unit = (&'static str, &'static str);
 
-/// Disabled from the empty-boot skeleton (net stack is product, Phase E).
-#[allow(dead_code)]
+/// lwIP core — linked with the product net stack (W10.2).
 const LWIP: &[Unit] = &[
     ("../external/lwip/src/core/init.c", "lwip_init"),
     ("../external/lwip/src/core/def.c", "lwip_def"),
@@ -54,6 +53,7 @@ const LWIP: &[Unit] = &[
 /// module by module in later phases).
 const FLOOR_COMMON: &[Unit] = &[
     ("boot/platform/private/bringup.c", "bringup"),
+    ("boot/platform/io.c", "io"),
     ("util/fourcc/__init__.c", "fourcc"),
     ("util/eightcc/__init__.c", "eightcc"),
     ("bus/pci/_cfg.c", "cfg"),
@@ -65,15 +65,14 @@ const FLOOR_COMMON: &[Unit] = &[
     ("libc/stdio.c", "stdio"),
 ];
 
-/// Product units — disabled from the empty-boot skeleton; revive per module
-/// (Phase B/E) once their Rust faces + Cargo deps are back.
-#[allow(dead_code)]
+/// Product C units (virtio-net/blk, root FAT blob, stream/auth, crypto).
 const PRODUCT_COMMON: &[Unit] = &[
     ("boot/rootfs/_root_fat.c", "root_fat"),
     ("dev/net/_virtio_net.c", "virtio_net"),
     ("dev/blk/_virtio_blk.c", "virtio_blk"),
     ("dev/stream/__init__.c", "stream"),
     ("auth/__init__.c", "auth"),
+    ("trust/__init__.c", "trust"),
     ("../external/monocypher/src/monocypher.c", "monocypher"),
 ];
 
@@ -91,6 +90,8 @@ const BIOS_PLAT: &[Unit] = &[
     ("boot/platform/bios/handoff.c", "handoff"),
     ("boot/platform/bios/time.c", "time"),
     ("boot/platform/bios/virtio_pages.c", "virtio_pages"),
+    ("boot/platform/bios/gop_stash.c", "gop_stash"),
+    ("boot/platform/bios/gop_blt_port.c", "gop_blt_port"),
     ("boot/platform/bios/main.c", "main"),
 ];
 
@@ -104,6 +105,8 @@ const EFI_PLAT: &[Unit] = &[
     ("boot/platform/efi/time.c", "time"),
     ("boot/platform/efi/acpi_rsdp.c", "acpi_rsdp"),
     ("boot/platform/efi/virtio_pages.c", "virtio_pages"),
+    ("boot/platform/efi/gop_stash.c", "gop_stash"),
+    ("boot/platform/efi/gop_blt_port.c", "gop_blt_port"),
     ("boot/platform/efi/main.c", "main"),
 ];
 
@@ -419,10 +422,8 @@ impl Tree {
         let mut first = true;
         let stress_extra: &[&str] = if self.stress { STRESS_CFLAGS } else { &[] };
 
-        // Empty-boot skeleton: only floor units in the CDB (product/LWIP/
-        // stress stay disabled + out of clangd until revived — see
-        // `registration_rethink` plan Phase A/B).
-        let bios_units: Vec<&[Unit]> = alloc::vec![BIOS_PLAT, FLOOR_COMMON];
+        // Floor + product + LWIP (W10.2). Stress stays opt-in via --stress.
+        let bios_units: Vec<&[Unit]> = alloc::vec![BIOS_PLAT, FLOOR_COMMON, PRODUCT_COMMON, LWIP];
         for group in bios_units {
             for &(rel, _) in group {
                 let file = Self::unit_pkg_rel(rel);
@@ -519,6 +520,42 @@ impl Tree {
             );
         }
 
+        /* gfx HW scanout C ports (linked via crate build.rs, CDB for clangd). */
+        let gfx_incs = alloc::vec![
+            "src/pymergetic/metal/libc",
+            "src/pymergetic/metal/dev/gfx/_impl",
+            "src",
+            "include",
+        ];
+        let gfx_cflags: &[&str] = &[
+            "-std=c11",
+            "-ffreestanding",
+            "-nostdinc",
+            "-fno-stack-protector",
+            "-m64",
+            "-mno-red-zone",
+            "-Wall",
+            "-Wextra",
+            "-Wno-unused-parameter",
+            "-DPM_METAL_GFX_HW_SCANOUT=1",
+        ];
+        let gfx_hw = [
+            "src/pymergetic/metal/dev/gfx/_impl/scanout_i915_855gm.c",
+            "src/pymergetic/metal/dev/gfx/_impl/scanout_radeon_rv370.c",
+        ];
+        for file in gfx_hw {
+            Self::cdb_push_unit(
+                &mut body,
+                &mut first,
+                dir_s,
+                file,
+                gfx_cflags,
+                &[],
+                &gfx_incs,
+                false,
+            );
+        }
+
         let wasm_incs = self.cdb_includes_wasm();
         let wasm_cflags: &[&str] = &[
             "-std=c11",
@@ -552,6 +589,8 @@ impl Tree {
         let wasm_glue = [
             "src/pymergetic/metal/wasm/port/platform/metal_platform.c",
             "src/pymergetic/metal/wasm/port/runtime_host.c",
+            "src/pymergetic/metal/wasm/port/host_natives.c",
+            "src/pymergetic/metal/wasm/port/guest_coro.c",
         ];
         for file in wasm_glue {
             Self::cdb_push_unit(
@@ -584,8 +623,8 @@ impl Tree {
         ext: &str,
         cflags: &[String],
     ) -> Result<Vec<String>, String> {
-        // Empty-boot skeleton: floor only (product/LWIP/stress disabled).
-        let groups: Vec<&[Unit]> = alloc::vec![plat, FLOOR_COMMON];
+        // Floor + product + LWIP (W10.2 reconnect).
+        let groups: Vec<&[Unit]> = alloc::vec![plat, FLOOR_COMMON, PRODUCT_COMMON, LWIP];
         let mut stems = Vec::new();
         for group in groups {
             for &(rel, stem) in group {

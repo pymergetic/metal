@@ -1,0 +1,8 @@
+{
+  "type": "module",
+  "name": "pymergetic.metal.shell",
+  "impl": "rs",
+  "version": "0.1.0",
+  "guest_surface": true,
+  "comment": "Shell guest surface; shell_log -> kernel log (expand later)."
+}

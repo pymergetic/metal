@@ -6,9 +6,14 @@
 #![allow(non_camel_case_types)]
 
 use core::ffi::{c_char, c_void};
-use core::ptr;
+use core::ptr::{self, addr_of_mut};
 
 use pymergetic_metal_rt as _;
+
+#[path = "_pages.rs"]
+mod pages;
+#[path = "_download.rs"]
+mod download;
 
 const ROUTE_MAX: usize = 32;
 const PATH_MAX: usize = 128;
@@ -114,8 +119,9 @@ unsafe extern "C" fn leaf_handle(_ctx: *mut c_void, conn_id: u32) -> i32 {
         );
         return -1;
     }
+    let routes = &*addr_of_mut!(ROUTES);
     for i in 0..ROUTE_MAX {
-        let r = &ROUTES[i];
+        let r = &routes[i];
         if !r.used {
             continue;
         }
@@ -140,15 +146,6 @@ unsafe extern "C" fn leaf_handle(_ctx: *mut c_void, conn_id: u32) -> i32 {
     0
 }
 
-unsafe extern "C" fn root_handler(_conn_id: u32) -> i32 {
-    pm_metal_net_http_send_simple(
-        200,
-        b"OK\0".as_ptr() as *const c_char,
-        b"text/plain\0".as_ptr() as *const c_char,
-        b"metal\n\0".as_ptr() as *const c_char,
-    )
-}
-
 /// Ensure the Microdot C leaf is registered; returns app handle (0 fail).
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_net_http_microdot_register() -> u32 {
@@ -157,9 +154,20 @@ pub unsafe extern "C" fn pm_metal_net_http_microdot_register() -> u32 {
     }
     APP_H = pm_metal_net_http_register_c(Some(leaf_handle), ptr::null_mut());
     if APP_H != 0 && !ROOT_SET {
+        let _ = pm_metal_net_http_microdot_get(b"/\0".as_ptr(), Some(pages::home_handler));
+        let _ = pm_metal_net_http_microdot_get(b"/symbols\0".as_ptr(), Some(pages::symbols_handler));
+        let _ = pm_metal_net_http_microdot_get(b"/src\0".as_ptr(), Some(pages::src_handler));
         let _ = pm_metal_net_http_microdot_get(
-            b"/\0".as_ptr(),
-            Some(root_handler),
+            b"/download/kernel\0".as_ptr(),
+            Some(download::kernel_handler),
+        );
+        let _ = pm_metal_net_http_microdot_get(
+            b"/download/wasm\0".as_ptr(),
+            Some(download::wasm_handler),
+        );
+        let _ = pm_metal_net_http_microdot_get(
+            b"/pkg/tests.wasm_hello.wasm\0".as_ptr(),
+            Some(download::pkg_hello_handler),
         );
         ROOT_SET = true;
     }
@@ -188,8 +196,9 @@ pub unsafe extern "C" fn pm_metal_net_http_microdot_route(
     if *path != b'/' {
         return -1;
     }
+    let routes = &mut *addr_of_mut!(ROUTES);
     for i in 0..ROUTE_MAX {
-        let r = &mut ROUTES[i];
+        let r = &mut routes[i];
         if r.used {
             continue;
         }
@@ -225,5 +234,106 @@ pub unsafe extern "C" fn pm_metal_net_http_microdot_bind_reg() -> i32 {
             return -1;
         }
     }
+    0
+}
+
+/// Loopback GET /symbols + /src after httpd autoload. Logs `doc browse ok`.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_net_http_microdot_proof_browse() -> i32 {
+    extern "C" {
+        fn pm_metal_net_http_get(url: *const c_char, body: *mut c_void, cap: u32) -> u32;
+        fn pm_metal_net_http_status(h: u32) -> u32;
+        fn pm_metal_net_http_body_len(h: u32) -> u32;
+        fn pm_metal_async_status(h: u32) -> u32;
+        fn pm_metal_async_create_task(h: u32) -> u32;
+        fn pm_metal_async_run_poll_all() -> i32;
+        fn pm_metal_async_coro_close(h: u32);
+        fn pm_metal_net_ip_poll();
+        fn pm_metal_time_mono_us() -> u64;
+        fn pm_metal_log(line: *const u8);
+    }
+    const ASYNC_DONE: u32 = 2;
+    const ASYNC_ERROR: u32 = 4;
+    const ASYNC_CANCELLED: u32 = 3;
+
+    unsafe fn once(url: &[u8], needle: &[u8]) -> i32 {
+        let mut body = [0u8; 2048];
+        let h = pm_metal_net_http_get(
+            url.as_ptr() as *const c_char,
+            body.as_mut_ptr() as *mut c_void,
+            body.len() as u32,
+        );
+        if h == 0 {
+            return -1;
+        }
+        if pm_metal_async_create_task(h) == 0 {
+            pm_metal_async_coro_close(h);
+            return -1;
+        }
+        let deadline = pm_metal_time_mono_us() + 10_000_000;
+        let mut rc = -1i32;
+        loop {
+            let _ = pm_metal_async_run_poll_all();
+            pm_metal_net_ip_poll();
+            match pm_metal_async_status(h) {
+                ASYNC_DONE => {
+                    rc = 0;
+                    break;
+                }
+                ASYNC_ERROR | ASYNC_CANCELLED => break,
+                _ => {
+                    if pm_metal_time_mono_us() >= deadline {
+                        break;
+                    }
+                }
+            }
+        }
+        let st = pm_metal_net_http_status(0);
+        let blen = pm_metal_net_http_body_len(0) as usize;
+        pm_metal_async_coro_close(h);
+        if rc != 0 || st != 200 || blen < needle.len() {
+            return -1;
+        }
+        let hay = &body[..blen.min(body.len())];
+        let mut i = 0usize;
+        while i + needle.len() <= hay.len() {
+            if &hay[i..i + needle.len()] == needle {
+                return 0;
+            }
+            i += 1;
+        }
+        -1
+    }
+
+    if once(b"http://127.0.0.1/symbols\0", b"reg symbols") != 0 {
+        pm_metal_log(b"doc browse: symbols\0".as_ptr());
+        return -1;
+    }
+    if once(b"http://127.0.0.1/src\0", b"src /") != 0 {
+        pm_metal_log(b"doc browse: src\0".as_ptr());
+        return -1;
+    }
+    if once(
+        b"http://127.0.0.1/src?path=reg/_impl/__init__.rs\0",
+        b"Cross-lang registry",
+    ) != 0
+    {
+        pm_metal_log(b"doc browse: cat\0".as_ptr());
+        return -1;
+    }
+    /* Loaded image head: METL (.bootinfo bios), MZ (PE efi), or ELF if mapped. */
+    if once(b"http://127.0.0.1/download/kernel\0", b"METL") != 0
+        && once(b"http://127.0.0.1/download/kernel\0", b"MZ") != 0
+        && once(b"http://127.0.0.1/download/kernel\0", b"\x7fELF") != 0
+    {
+        pm_metal_log(b"doc browse: kernel\0".as_ptr());
+        return -1;
+    }
+    /* Loaded by wasm_proof before this proof runs. Magic is \\0asm. */
+    if once(b"http://127.0.0.1/download/wasm?name=tests.wasm_hello\0", b"asm") != 0 {
+        pm_metal_log(b"doc browse: wasm\0".as_ptr());
+        return -1;
+    }
+    pm_metal_log(b"doc browse ok\0".as_ptr());
     0
 }

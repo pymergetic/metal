@@ -25,6 +25,18 @@ pub const fn new_small_int(v: isize) -> MpObj {
     ((v as usize) << 1) | 1
 }
 
+/// `Some(value)` iff `o` is a small int, else `None` (used by `vm.rs`'s
+/// unary/binary op dispatch to reject non-int operands honestly instead
+/// of reinterpreting their bits).
+#[inline]
+pub const fn small_int_value_checked(o: MpConstObj) -> Option<isize> {
+    if is_small_int(o) {
+        Some(small_int_value(o))
+    } else {
+        None
+    }
+}
+
 #[inline]
 pub const fn is_qstr(o: MpConstObj) -> bool {
     (o & 7) == 2

@@ -11,6 +11,7 @@ mod engine;
 mod handle; /* first — C ABI handle typedef for sibling stems */
 mod r#await;
 mod coro;
+mod metric;
 mod phase;
 mod process;
 mod quiesce;

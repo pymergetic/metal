@@ -1,0 +1,4 @@
+# ripgrep / ignore-crate tools: allow reading generated lang-pool faces.
+# Git still ignores /include/ via .gitignore (see docs/definitions/module.md).
+!include/
+!include/**

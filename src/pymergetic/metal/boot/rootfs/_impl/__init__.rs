@@ -27,14 +27,17 @@ extern "C" {
     fn pm_metal_fs_tmpfs_mount(target: *const u8) -> i32;
     fn pm_metal_fs_open_async(path: *const u8, flags: u32) -> u32;
     fn pm_metal_fs_fread_async(h: u32, dest: *mut u8, len: u32) -> u32;
+    fn pm_metal_fs_readdir_async(h: u32, name_dest: *mut u8, name_cap: u32) -> u32;
     fn pm_metal_fs_close_async(h: u32) -> u32;
     fn pm_metal_fs_result(h: u32) -> u32;
     fn pm_metal_fs_stat_async(path: *const u8, dest: *mut u8) -> u32;
     fn pm_metal_mem_alloc(size: usize) -> *mut u8;
     fn pm_metal_mem_free(ptr: *mut u8);
+    fn pm_metal_log(line: *const u8);
 }
 
 const PM_METAL_FS_O_RDONLY: u32 = 1;
+const PM_METAL_FS_O_DIRECTORY: u32 = 32;
 const PM_METAL_FS_INVALID: u32 = 0xffff_ffff;
 
 /// Build `/mods/<id>` or `/src/<id>` into `out` (NUL-terminated). Returns len or 0.
@@ -313,5 +316,76 @@ pub unsafe extern "C" fn pm_metal_boot_rootfs_mount_all() -> i32 {
     let fstab = b"/etc/fstab\0";
     let _ = pm_metal_boot_rootfs_fstab_apply(fstab.as_ptr());
     /* fstab absent / line fail is non-fatal; tree fs section shows what mounted. */
+    0
+}
+
+/// Prove `/src/<kernel-id>` is browsable: readdir finds `reg`, then read a
+/// known source file. Logs `src browse ok` on success. Returns 0 or -1.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_boot_rootfs_proof_src_browse() -> i32 {
+    if !blobs::HAVE_SRC {
+        return -1;
+    }
+    let id = blobs::KERNEL_MODULE_ID.as_bytes();
+    let mut dir = [0u8; 160];
+    let prefix = b"/src/";
+    if prefix.len() + id.len() + 2 >= dir.len() {
+        return -1;
+    }
+    dir[..prefix.len()].copy_from_slice(prefix);
+    dir[prefix.len()..prefix.len() + id.len()].copy_from_slice(id);
+    let dlen = prefix.len() + id.len();
+    dir[dlen] = b'/';
+    dir[dlen + 1] = 0;
+
+    let oh = pm_metal_fs_open_async(dir.as_ptr(), PM_METAL_FS_O_RDONLY | PM_METAL_FS_O_DIRECTORY);
+    let fd = pm_metal_fs_result(oh);
+    if fd == PM_METAL_FS_INVALID {
+        return -1;
+    }
+    let mut saw_reg = false;
+    let mut name = [0u8; 96];
+    loop {
+        name.fill(0);
+        let rh = pm_metal_fs_readdir_async(fd, name.as_mut_ptr(), name.len() as u32);
+        let n = pm_metal_fs_result(rh);
+        if n == 0 || n == PM_METAL_FS_INVALID {
+            break;
+        }
+        let mut len = 0usize;
+        while len < name.len() && name[len] != 0 {
+            len += 1;
+        }
+        if len == 3 && &name[..3] == b"reg" {
+            saw_reg = true;
+            break;
+        }
+    }
+    let _ = pm_metal_fs_result(pm_metal_fs_close_async(fd));
+    if !saw_reg {
+        return -1;
+    }
+
+    /* Read a deep source that would be past the old 256-file TOC truncate. */
+    let file = b"/src/pymergetic.metal/reg/_impl/__init__.rs\0";
+    let Some(data) = read_vfs_file(file, 512) else {
+        return -1;
+    };
+    let needle = b"Cross-lang registry";
+    let mut hit = false;
+    if data.len() >= needle.len() {
+        let mut i = 0usize;
+        while i + needle.len() <= data.len() {
+            if &data[i..i + needle.len()] == needle {
+                hit = true;
+                break;
+            }
+            i += 1;
+        }
+    }
+    if !hit {
+        return -1;
+    }
+    pm_metal_log(b"src browse ok\0".as_ptr());
     0
 }

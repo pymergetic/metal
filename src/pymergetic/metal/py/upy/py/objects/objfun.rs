@@ -1,5 +1,7 @@
-//! objfun — bytecode function object (code ptr + prelude sizes).
+//! objfun — bytecode function object (code ptr + prelude sizes + const
+//! object table for nested `LOAD_CONST_OBJ` inside the function body).
 
+use crate::upy::py::emitcommon::MAX_CONST_OBJS;
 use crate::upy::py::malloc;
 use crate::upy::py::obj::{self, MpObj, MpObjBase};
 use crate::upy::py::objects::{TypeDesc, TYPE_FUN};
@@ -10,9 +12,11 @@ pub struct FunBc {
     pub bytecode: *const u8,
     pub bytecode_len: usize,
     pub n_state: usize,
+    pub consts: [MpObj; MAX_CONST_OBJS],
+    pub n_consts: usize,
 }
 
-pub unsafe fn new(code: &[u8], n_state: usize) -> MpObj {
+pub unsafe fn new(code: &[u8], n_state: usize, consts: &[MpObj]) -> MpObj {
     let p = malloc::m_malloc(core::mem::size_of::<FunBc>()) as *mut FunBc;
     if p.is_null() {
         return obj::OBJ_NULL;
@@ -27,6 +31,12 @@ pub unsafe fn new(code: &[u8], n_state: usize) -> MpObj {
     (*p).bytecode = buf;
     (*p).bytecode_len = code.len();
     (*p).n_state = n_state;
+    (*p).consts = [obj::OBJ_NULL; MAX_CONST_OBJS];
+    let n = core::cmp::min(consts.len(), MAX_CONST_OBJS);
+    if n > 0 {
+        core::ptr::copy_nonoverlapping(consts.as_ptr(), (*p).consts.as_mut_ptr(), n);
+    }
+    (*p).n_consts = n;
     p as MpObj
 }
 
@@ -37,6 +47,18 @@ pub unsafe fn code(o: MpObj) -> Option<&'static [u8]> {
 
 pub unsafe fn n_state(o: MpObj) -> Option<usize> {
     as_ref(o).map(|p| (*p).n_state)
+}
+
+pub unsafe fn consts(o: MpObj) -> Option<&'static [MpObj]> {
+    let p = as_ref(o)?;
+    Some(core::slice::from_raw_parts(
+        (*p).consts.as_ptr(),
+        (*p).n_consts,
+    ))
+}
+
+pub unsafe fn is_fun_bc(o: MpObj) -> bool {
+    as_ref(o).is_some()
 }
 
 unsafe fn as_ref(o: MpObj) -> Option<*const FunBc> {

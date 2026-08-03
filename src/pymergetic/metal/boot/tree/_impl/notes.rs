@@ -7,6 +7,7 @@ const OK: i8 = 1;
 const FAIL: i8 = -1;
 
 static NOTE_AWAIT: AtomicI8 = AtomicI8::new(UNSET);
+static NOTE_CONCURRENCY: AtomicI8 = AtomicI8::new(UNSET);
 static NOTE_WASM: AtomicI8 = AtomicI8::new(UNSET);
 static NOTE_HTTP: AtomicI8 = AtomicI8::new(UNSET);
 static NOTE_PY: AtomicI8 = AtomicI8::new(UNSET);
@@ -22,6 +23,11 @@ fn is_ok(slot: &AtomicI8) -> bool {
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_boot_tree_note_await(ok: i32) {
     store(&NOTE_AWAIT, ok);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_boot_tree_note_concurrency(ok: i32) {
+    store(&NOTE_CONCURRENCY, ok);
 }
 
 #[no_mangle]
@@ -41,6 +47,10 @@ pub unsafe extern "C" fn pm_metal_boot_tree_note_py(ok: i32) {
 
 pub fn await_ok() -> bool {
     is_ok(&NOTE_AWAIT)
+}
+
+pub fn concurrency_ok() -> bool {
+    is_ok(&NOTE_CONCURRENCY)
 }
 
 pub fn wasm_ok() -> bool {

@@ -1,5 +1,7 @@
 //! Input probe — PS/2 controller at 0x64 -> DT INPUT compat "ps2".
+//! Poll rings (HID key events + pointer) for guest_surface.
 #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
+#![allow(non_camel_case_types)]
 
 use pymergetic_metal_dt::{
     pm_metal_dt_add, pm_metal_dt_bus_t, pm_metal_dt_cap_t, pm_metal_dt_class_t, pm_metal_dt_count,
@@ -7,29 +9,49 @@ use pymergetic_metal_dt::{
 };
 use pymergetic_metal_rt as _;
 
-// `async` is `unloadable = false` (permanently linked): consume its
-// generated fast-path faces (spawn/coro/result/time are sibling stems --
-// `task`/`coro`/`handle`/`time`), never a direct Cargo dependency (see
-// docs/definitions/module.md "Consume foreign modules"). The final link
-// unit (`boot`) already Cargo-depends on `async` for the object code.
-#[path = "../../../../../../include/pymergetic/metal/async/task.rs"]
-mod async_task_face;
-#[path = "../../../../../../include/pymergetic/metal/async/coro.rs"]
-mod async_coro_face;
-#[path = "../../../../../../include/pymergetic/metal/async/handle.rs"]
-mod async_handle_face;
-#[path = "../../../../../../include/pymergetic/metal/async/time.rs"]
-mod async_time_face;
+// `async` is permanently linked: consume its generated fast-path faces
+// (never a Cargo dep on async's _impl — see module.md "Consume foreign
+// modules"). Faces live under gitignored `include/`; build.rs stages
+// copies into OUT_DIR and emits #[path] mods (RA skips gitignored
+// #[path] targets). Boot already links async's object code.
+include!(concat!(env!("OUT_DIR"), "/async_face_mods.rs"));
+
+#[path = "_poll.rs"]
+mod poll;
 
 use async_coro_face::pm_metal_async_coro_state;
 use async_handle_face::{pm_metal_async_result_u32, pm_metal_async_set_result_u32};
 use async_task_face::{pm_metal_async_spawn, pm_metal_async_prio_t};
 use async_time_face::pm_metal_time_mono_us;
 
-const KBC_DATA: u16 = 0x60;
-const KBC_STATUS: u16 = 0x64;
-const KBC_OUTPUT_FULL: u8 = 1;
-const KBC_AUX_DATA: u8 = 1 << 5;
+pub(crate) const KBC_DATA: u16 = 0x60;
+pub(crate) const KBC_STATUS: u16 = 0x64;
+pub(crate) const KBC_OUTPUT_FULL: u8 = 1;
+pub(crate) const KBC_AUX_DATA: u8 = 1 << 5;
+
+/// HID key event (USB usage id + press + mods).
+#[repr(C)]
+#[derive(Clone, Copy)]
+#[allow(non_camel_case_types)]
+pub struct pm_metal_dev_input_key_event_t {
+    pub code: u16,
+    pub pressed: u8,
+    pub mods: u8,
+}
+
+/// Pointer sample (absolute/relative + buttons).
+#[repr(C)]
+#[derive(Clone, Copy)]
+#[allow(non_camel_case_types)]
+pub struct pm_metal_dev_input_pointer_t {
+    pub x: i32,
+    pub y: i32,
+    pub dx: i32,
+    pub dy: i32,
+    pub buttons: u32,
+    pub flags: u32,
+}
+
 const ASYNC_PENDING: u32 = 0;
 const ASYNC_DONE: u32 = 2;
 const ASYNC_ERROR: u32 = 4;
@@ -37,20 +59,22 @@ const ASYNC_ERROR: u32 = 4;
 static COMPAT_PS2: &[u8] = b"ps2\0";
 
 #[repr(C)]
-struct IoOps {
+pub(crate) struct IoOps {
     outb: Option<unsafe extern "C" fn(u16, u8)>,
     inb: Option<unsafe extern "C" fn(u16) -> u8>,
+    out16: Option<unsafe extern "C" fn(u16, u16)>,
+    in16: Option<unsafe extern "C" fn(u16) -> u16>,
     out32: Option<unsafe extern "C" fn(u16, u32)>,
     in32: Option<unsafe extern "C" fn(u16) -> u32>,
 }
 
 #[cfg(any(target_os = "none", target_os = "uefi"))]
 extern "C" {
-    fn pm_metal_boot_io_ops() -> *const IoOps;
+    pub(crate) fn pm_metal_boot_io_ops() -> *const IoOps;
 }
 
 #[cfg(not(any(target_os = "none", target_os = "uefi")))]
-fn pm_metal_boot_io_ops() -> *const IoOps {
+pub(crate) fn pm_metal_boot_io_ops() -> *const IoOps {
     core::ptr::null()
 }
 
@@ -168,4 +192,117 @@ pub unsafe extern "C" fn pm_metal_dev_input_wait_key_async(timeout_ms: u32) -> u
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_dev_input_wait_key_result(h: u32) -> u32 {
     pm_metal_async_result_u32(h)
+}
+
+/// Drain i8042 into rings (also called from poll_*).
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_dev_input_poll() {
+    poll::poll_port();
+}
+
+/// Pop one HID key event; 1=ok, 0=empty.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_dev_input_poll_key_event(
+    out: *mut pm_metal_dev_input_key_event_t,
+) -> i32 {
+    poll::poll_key_event(out)
+}
+
+/// Pop one pointer sample; 1=ok, 0=empty.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_dev_input_poll_pointer(
+    out: *mut pm_metal_dev_input_pointer_t,
+) -> i32 {
+    poll::poll_pointer(out)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_dev_input_pointer_lock(surface: u32) -> i32 {
+    poll::pointer_lock(surface)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_dev_input_pointer_unlock() {
+    poll::pointer_unlock();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_dev_input_pointer_locked() -> i32 {
+    poll::pointer_locked()
+}
+
+/// Host/test inject — enqueue a HID key event without HW.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_dev_input_push_key(pressed: i32, code: u16) {
+    poll::push_key(pressed, code);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_dev_input_pointer_enqueue(
+    ev: *const pm_metal_dev_input_pointer_t,
+) {
+    poll::pointer_enqueue(ev);
+}
+
+/* Floor RegMod: publish exports for always-proxy faces (W10.1). */
+use core::cell::Cell;
+use core::ffi::c_void;
+use pymergetic_metal_reg::{
+    pm_metal_reg_mod_load, publish_entries, RegEntry, RegMod, RegModStatic,
+};
+
+static FLOOR_ENTRIES: RegModStatic<10, 0> = RegModStatic::new(
+    [
+        RegEntry::new("pm_metal_dev_input_detect"),
+        RegEntry::new("pm_metal_dev_input_wait_key_async"),
+        RegEntry::new("pm_metal_dev_input_wait_key_result"),
+        RegEntry::new("pm_metal_dev_input_poll"),
+        RegEntry::new("pm_metal_dev_input_poll_key_event"),
+        RegEntry::new("pm_metal_dev_input_poll_pointer"),
+        RegEntry::new("pm_metal_dev_input_pointer_lock"),
+        RegEntry::new("pm_metal_dev_input_pointer_unlock"),
+        RegEntry::new("pm_metal_dev_input_pointer_locked"),
+        RegEntry::new("pm_metal_dev_input_push_key"),
+    ],
+    [],
+);
+
+extern "C" fn floor_register_symbols(_ctx: *mut c_void) -> i32 {
+    publish_entries(
+        &FLOOR_ENTRIES.entries,
+        &[
+            pm_metal_dev_input_detect as *const c_void,
+            pm_metal_dev_input_wait_key_async as *const c_void,
+            pm_metal_dev_input_wait_key_result as *const c_void,
+            pm_metal_dev_input_poll as *const c_void,
+            pm_metal_dev_input_poll_key_event as *const c_void,
+            pm_metal_dev_input_poll_pointer as *const c_void,
+            pm_metal_dev_input_pointer_lock as *const c_void,
+            pm_metal_dev_input_pointer_unlock as *const c_void,
+            pm_metal_dev_input_pointer_locked as *const c_void,
+            pm_metal_dev_input_push_key as *const c_void,
+        ],
+    )
+}
+
+static FLOOR_MOD: RegMod = RegMod {
+    name: "pymergetic.metal.dev.input",
+    unloadable: false,
+    parent: None,
+    ctx: core::ptr::null_mut(),
+    on_load: None,
+    register_symbols: Some(floor_register_symbols),
+    connect_symbols: None,
+    on_registrations_updated: None,
+    deregister_symbols: None,
+    on_unload: None,
+    entries: &FLOOR_ENTRIES.entries,
+    imports: &[],
+    raw_next: Cell::new(core::ptr::null()),
+    raw_prev: Cell::new(core::ptr::null()),
+};
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_dev_input_mod_load() -> i32 {
+    pm_metal_reg_mod_load(&FLOOR_MOD)
 }

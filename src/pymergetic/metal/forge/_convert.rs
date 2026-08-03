@@ -45,6 +45,7 @@ fn known_type_name(cat: &Catalog, name: &str) -> bool {
     cat.structs.iter().any(|s| s.name == name)
         || cat.enums.iter().any(|e| e.name == name)
         || cat.typedefs.iter().any(|t| t.name == name)
+        || cat.sibling_types.iter().any(|t| t == name)
 }
 
 /// Foreign `pm_metal_*_t` identifiers referenced by this catalog's own
@@ -57,8 +58,29 @@ fn foreign_type_names(cat: &Catalog) -> alloc::vec::Vec<String> {
             c.is_whitespace() || c == '*' || c == ',' || c == '(' || c == ')' || c == '[' || c == ']'
         }) {
             let t = tok.trim();
-            if t.starts_with("pm_metal_")
-                && t.ends_with("_t")
+            /* Mirror `_export_c::looks_like_foreign_type` (keep in sync). */
+            let first_ok = t.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false);
+            let pm_t = t.starts_with("pm_metal_") && t.ends_with("_t");
+            let builtin = matches!(
+                t,
+                "void"
+                    | "char"
+                    | "int"
+                    | "long"
+                    | "float"
+                    | "double"
+                    | "bool"
+                    | "size_t"
+                    | "intptr_t"
+                    | "uintptr_t"
+                    | "const"
+                    | "struct"
+                    | "enum"
+                    | "union"
+            ) || ((t.starts_with("uint") || t.starts_with("int")) && t.ends_with("_t"));
+            if (pm_t || first_ok)
+                && !builtin
+                && t.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
                 && !known_type_name(cat, t)
                 && !out.iter().any(|x| x == t)
             {
@@ -77,19 +99,22 @@ fn foreign_type_names(cat: &Catalog) -> alloc::vec::Vec<String> {
 
 /// Sibling stems in the same module directory sometimes own a typedef
 /// this stem's own function signatures reference by name (e.g. an
-/// `async/task.rs` spawn fn taking `async/coro.rs`'s step-fn typedef) --
-/// each generated Rust face must stay a self-contained translation unit,
-/// so pull in any such foreign typedef/struct/enum definition by name
-/// before exporting. `_export_c.rs`'s equivalent instead forward-declares
-/// an opaque struct, which is not viable here: Rust cannot make a
-/// by-value function-pointer typedef opaque, so the real definition is
-/// required.
+/// `async/task.rs` spawn fn taking `async/coro.rs`'s step-fn typedef).
+///
+/// - **Rust faces:** pull the real typedef/struct/enum into this catalog
+///   (a Rust face must be a self-contained TU; opaque is not viable for
+///   by-value fn-pointer typedefs).
+/// - **C faces:** record a sibling `#include` instead of inlining or
+///   inventing `typedef struct X X` -- co-including the owning face would
+///   otherwise redefine enums/typedefs (ssh includes handle+await+coro+task).
 fn resolve_foreign_types<S: ForgeStore>(
     store: &mut S,
     mod_dir: &str,
     src_slot: &str,
     human_path: &str,
     cat: &mut Catalog,
+    pkg_name: &str,
+    for_c_face: bool,
 ) {
     let missing = foreign_type_names(cat);
     if missing.is_empty() {
@@ -105,6 +130,7 @@ fn resolve_foreign_types<S: ForgeStore>(
         Ok(n) => n,
         Err(_) => return,
     };
+    let pkg_slash = pkg_name.replace('.', "/");
     for name in names {
         if missing.iter().all(|n| known_type_name(cat, n)) {
             break;
@@ -119,11 +145,30 @@ fn resolve_foreign_types<S: ForgeStore>(
         let Ok(sib_cat) = import_catalog(src_slot, &text) else {
             continue;
         };
+        let sib_stem = name
+            .rsplit_once('.')
+            .map(|(s, _)| s)
+            .unwrap_or(name.as_str());
+        if sib_stem.starts_with('_') {
+            continue;
+        }
+        let mut used_sibling = false;
         for want in &missing {
             if known_type_name(cat, want) {
                 continue;
             }
-            if let Some(td) = sib_cat.typedefs.iter().find(|t| &t.name == want) {
+            let hit = sib_cat.typedefs.iter().any(|t| &t.name == want)
+                || sib_cat.structs.iter().any(|s| &s.name == want)
+                || sib_cat.enums.iter().any(|e| &e.name == want);
+            if !hit {
+                continue;
+            }
+            if for_c_face {
+                used_sibling = true;
+                if !cat.sibling_types.iter().any(|t| t == want) {
+                    cat.sibling_types.push((*want).clone());
+                }
+            } else if let Some(td) = sib_cat.typedefs.iter().find(|t| &t.name == want) {
                 cat.typedefs.push(td.clone());
             } else if let Some(st) = sib_cat.structs.iter().find(|s| &s.name == want) {
                 cat.structs.push(st.clone());
@@ -131,28 +176,43 @@ fn resolve_foreign_types<S: ForgeStore>(
                 cat.enums.push(en.clone());
             }
         }
+        if for_c_face && used_sibling {
+            let face = if sib_stem == ENTRY_STEM {
+                alloc::format!("{}/__init__.h", pkg_slash)
+            } else {
+                alloc::format!("{}/{}.h", pkg_slash, sib_stem)
+            };
+            if !cat.includes.iter().any(|i| i == &face) {
+                cat.includes.push(face);
+            }
+        }
     }
 }
 
-/// Emit the face for `dst_slot`. `provider_unloadable` forks the `rs`
-/// slot only, between the two shapes in docs/definitions/module.md
-/// "Two face shapes: fast-path vs registry-proxy":
+/// Spine modules keep a plain link-time Rust face: `mem`/`reg` (bootstrap
+/// circularity), the kernel root (`pymergetic.metal` -- `pm_metal_kernel_load`
+/// must be callable before any registry entry exists), and `async` (reg's
+/// unload path path-includes the quiesce face; a proxy face would need
+/// `pymergetic_metal_reg::` from *inside* the reg crate).
+fn rs_face_is_spine(module_name: &str) -> bool {
+    module_name == "pymergetic.metal"
+        || module_name == "pymergetic.metal.mem"
+        || module_name.starts_with("pymergetic.metal.mem.")
+        || module_name == "pymergetic.metal.reg"
+        || module_name.starts_with("pymergetic.metal.reg.")
+        || module_name == "pymergetic.metal.async"
+        || module_name.starts_with("pymergetic.metal.async.")
+}
+
+/// Emit the face for `dst_slot`.
 ///
-/// - `false` (permanent module, or a sticky package): [`crate::_export_rs::export`]
-///   -- plain `extern "C"` declarations, resolved at link time.
-/// - `true` (genuinely unloadable -- wasm, Python): [`crate::_export_rs::export_proxy`]
-///   -- cached [`pymergetic_metal_reg::ImportRow`][row] + refcounted call.
+/// Rust faces are **always-proxy** (cached [`ImportRow`][row], load slot,
+/// call) except the spine -- see docs/definitions/module.md "Two face
+/// shapes". `provider_unloadable` no longer forks the Rust shape; quiesce
+/// made fixed and unloadable call sites identical.
 ///
-/// `py` does not fork on either axis yet: no unloadable provider exists
-/// in the tree today to prove the shape against end-to-end (deferred to
-/// the wasm/Python revival in `registration_rethink_scope`'s Phase E,
-/// per metal-finished-quality -- omit rather than ship an unexercised
-/// guess at the shape). `c` forks separately on `guest_surface`
-/// (independent of `provider_unloadable`): a module whose export border
-/// crosses a package boundary that forge cannot scan across (wasm guest
-/// <-> host or guest <-> guest) needs the dual-branch declaration from
-/// [`crate::_export_c::export_guest_surface`]; same-package C consumers
-/// get the plain [`crate::_export_c::export`].
+/// `c` still forks on `guest_surface` only (wasm import branch vs plain
+/// prototype). `py` is unchanged (typing face).
 ///
 /// [row]: pymergetic_metal_reg::ImportRow
 pub fn export_face(
@@ -162,7 +222,7 @@ pub fn export_face(
     cat: &Catalog,
     human: &str,
     source_sha: &str,
-    provider_unloadable: bool,
+    _provider_unloadable: bool,
     guest_surface: bool,
 ) -> Option<String> {
     match dst_slot {
@@ -171,10 +231,10 @@ pub fn export_face(
         } else {
             crate::_export_c::export(name, stem, cat, human, source_sha)
         }),
-        "rs" => Some(if provider_unloadable {
-            crate::_export_rs::export_proxy(name, stem, cat, human, source_sha)
-        } else {
+        "rs" => Some(if rs_face_is_spine(name) {
             crate::_export_rs::export(name, stem, cat, human, source_sha)
+        } else {
+            crate::_export_rs::export_proxy(name, stem, cat, human, source_sha)
         }),
         "py" => Some(crate::_export_py::export(name, stem, cat, human, source_sha)),
         "toml" => {
@@ -274,8 +334,16 @@ pub fn convert_stem_slot<S: ForgeStore>(
     let src_slot = pool_slot(&meta.impl_lang).unwrap_or("");
     let mut cat = import_catalog(src_slot, &text)
         .map_err(|_| alloc::format!("import {}", human_path))?;
-    if dst_slot == "rs" {
-        resolve_foreign_types(store, mod_dir, src_slot, human_path, &mut cat);
+    if dst_slot == "rs" || dst_slot == "c" {
+        resolve_foreign_types(
+            store,
+            mod_dir,
+            src_slot,
+            human_path,
+            &mut cat,
+            pkg,
+            dst_slot == "c",
+        );
     }
     let Some(content) = export_face(
         dst_slot,
@@ -382,8 +450,16 @@ pub fn convert_paths<S: ForgeStore>(
 
     let mut cat = import_catalog(src_slot, &text)
         .map_err(|_| alloc::format!("convert: import {}", src))?;
-    if dst_slot == "rs" {
-        resolve_foreign_types(store, &mod_dir, src_slot, src, &mut cat);
+    if dst_slot == "rs" || dst_slot == "c" {
+        resolve_foreign_types(
+            store,
+            &mod_dir,
+            src_slot,
+            src,
+            &mut cat,
+            pkg,
+            dst_slot == "c",
+        );
     }
     let Some(content) = export_face(
         dst_slot,

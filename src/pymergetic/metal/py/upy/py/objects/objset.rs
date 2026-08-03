@@ -2,7 +2,7 @@
 
 use crate::upy::py::malloc;
 use crate::upy::py::obj::{self, MpObj, MpObjBase};
-use crate::upy::py::objects::{TypeDesc, TYPE_SET};
+use crate::upy::py::objects::{obj_eq, TypeDesc, TYPE_SET};
 
 #[repr(C)]
 pub struct Set {
@@ -51,7 +51,7 @@ pub unsafe fn contains(o: MpObj, item: MpObj) -> bool {
     };
     for i in 0..(*p).alloc {
         let v = *(*p).items.add(i);
-        if v != obj::OBJ_NULL && v == item {
+        if v != obj::OBJ_NULL && obj_eq(v, item) {
             return true;
         }
     }

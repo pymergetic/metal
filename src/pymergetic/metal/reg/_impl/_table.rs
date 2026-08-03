@@ -136,6 +136,42 @@ impl Table {
         self.lock.unlock();
         n
     }
+
+    /// Used-slot at `index` (0..count), under lock. Returns false if OOB.
+    pub fn at(
+        &self,
+        index: usize,
+        module_out: &mut [u8],
+        func_out: &mut [u8],
+        ptr_out: &mut *const c_void,
+    ) -> bool {
+        self.lock.lock();
+        let slots = unsafe { &*self.slots.get() };
+        let mut n = 0usize;
+        let mut ok = false;
+        for i in 0..SLOT_MAX {
+            let s = &slots[i];
+            if !s.used {
+                continue;
+            }
+            if n == index {
+                let ml = s.module_len as usize;
+                let fl = s.func_len as usize;
+                if ml < module_out.len() && fl < func_out.len() {
+                    module_out[..ml].copy_from_slice(&s.module[..ml]);
+                    module_out[ml] = 0;
+                    func_out[..fl].copy_from_slice(&s.func[..fl]);
+                    func_out[fl] = 0;
+                    *ptr_out = s.ptr;
+                    ok = true;
+                }
+                break;
+            }
+            n += 1;
+        }
+        self.lock.unlock();
+        ok
+    }
 }
 
 pub fn cstr_bytes<'a>(p: *const u8, max: usize) -> Option<&'a [u8]> {

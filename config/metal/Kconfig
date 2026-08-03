@@ -4,5 +4,8 @@ menu "pymergetic.metal"
 # Module Kconfig files live next to .pm/ under src/pymergetic/metal/.
 source "../src/pymergetic/metal/fs/.pm/Kconfig"
 source "../src/pymergetic/metal/boot/rootfs/.pm/Kconfig"
+source "../src/pymergetic/metal/py/.pm/Kconfig"
+source "../src/pymergetic/metal/dev/gfx/.pm/Kconfig"
+source "../src/pymergetic/metal/trust/.pm/Kconfig"
 
 endmenu

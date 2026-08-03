@@ -1,0 +1,7 @@
+{
+  "type": "package",
+  "name": "tests.wasm_guest_async",
+  "impl": "rs",
+  "version": "0.1.0",
+  "comment": "W16.2: kernel async yield/sleep/mono + mem cookie round-trip via host natives."
+}

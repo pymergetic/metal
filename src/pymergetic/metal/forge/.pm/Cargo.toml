@@ -26,7 +26,7 @@ builders = [
   "dep:pymergetic_metal_fs",
   "dep:pymergetic_metal_fs_vfs",
 ]
-# Later: Metal process + console session (may Pending). Not linked into EFI yet.
+# Metal process/console port stubs + in-kernel render (linked via boot).
 metal = []
 
 # Zero crates.io deps — Metal path deps only under `builders`.

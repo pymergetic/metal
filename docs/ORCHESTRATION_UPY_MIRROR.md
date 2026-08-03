@@ -19,6 +19,7 @@ Parent plan: [`ORCHESTRATION.md`](ORCHESTRATION.md).
 | `REWRITE` | Was pure Python — rewrite in Rust (no VM-core `.py`) |
 | `DEAD` | GC / upy threads / upy scheduler / gchelper — gone |
 | `OMIT_ARCH` | Non-x86_64 asm/nlr/emit/semihost |
+| `OMIT_DEFERRED` | Real gap, deliberately not built yet — reason given inline, no hollow face |
 | `OMIT_HW` | HW/bluetooth/upy-lwip/upy-fat-lfs — Metal owns devices/FS/net |
 | `TOOL` | Build-time only |
 | `SKIP_VENDOR` | Nested third-party trees — do not mirror |
@@ -68,10 +69,10 @@ src/pymergetic/metal/py/
 | `py/emit.h` | `upy/py/emit.rs` | `MIRROR` |
 | `py/emitglue.h` | `upy/py/emitglue.rs` | `MIRROR` |
 | `py/formatfloat.h` | `upy/py/formatfloat.rs` | `MIRROR` |
-| `py/frozenmod.h` | `upy/py/frozenmod.rs` | `MIRROR` |
+| `py/frozenmod.h` | `upy/py/frozenmod.rs` | `MIRROR` done (string-only) |
 | `py/gc.h` | `upy/py/gc.rs` | `DEAD` |
-| `py/grammar.h` | `upy/py/grammar.rs` | `MIRROR` |
-| `py/lexer.h` | `upy/py/lexer.rs` | `MIRROR` |
+| `py/grammar.h` | `upy/py/grammar.rs` | `MIRROR` done (gen_grammar.py) |
+| `py/lexer.h` | `upy/py/lexer.rs` | `MIRROR` done (no f-string) |
 | `py/misc.h` | `upy/py/misc.rs` | `MIRROR` |
 | `py/mpconfig.h` | `upy/py/mpconfig.rs` | `MIRROR` |
 | `py/mperrno.h` | `upy/py/mperrno.rs` | `MIRROR` |
@@ -98,16 +99,16 @@ src/pymergetic/metal/py/
 | `py/objtuple.h` | `upy/py/objtuple.rs` | `MIRROR` |
 | `py/objtype.h` | `upy/py/objtype.rs` | `MIRROR` |
 | `py/pairheap.h` | `upy/py/pairheap.rs` | `MIRROR` |
-| `py/parse.h` | `upy/py/parse.rs` | `MIRROR` |
-| `py/parsenum.h` | `upy/py/parsenum.rs` | `MIRROR` |
-| `py/parsenumbase.h` | `upy/py/parsenumbase.rs` | `MIRROR` |
+| `py/parse.h` | `upy/py/parse.rs` | `MIRROR` done |
+| `py/parsenum.h` | `upy/py/parsenum.rs` | `MIRROR` done (no bigint) |
+| `py/parsenumbase.h` | `upy/py/parsenumbase.rs` | `MIRROR` done |
 | `py/persistentcode.h` | `upy/py/persistentcode.rs` | `MIRROR` |
 | `py/profile.h` | `upy/py/profile.rs` | `MIRROR` |
 | `py/pystack.h` | `upy/py/pystack.rs` | `MIRROR` |
 | `py/qstr.h` | `upy/py/qstr.rs` | `MIRROR` |
 | `py/qstrdefs.h` | `upy/py/qstrdefs.rs` | `MIRROR` |
-| `py/reader.h` | `upy/py/reader.rs` | `MIRROR` |
-| `py/repl.h` | `upy/py/repl.rs` | `MIRROR` |
+| `py/reader.h` | `upy/py/reader.rs` | `MIRROR` done (mem only) |
+| `py/repl.h` | `upy/py/repl.rs` | `MIRROR` done (`continue_with_input`; no autocomplete/PS1-PS2 -- console, W11.2/W11.3) |
 | `py/ringbuf.h` | `upy/py/ringbuf.rs` | `MIRROR` |
 | `py/runtime.h` | `upy/py/runtime.rs` | `MIRROR` |
 | `py/runtime0.h` | `upy/py/runtime0.rs` | `MIRROR` |
@@ -144,18 +145,18 @@ src/pymergetic/metal/py/
 | `py/emitinlinethumb.c` | `upy/py/emitinlinethumb.rs` | `OMIT_ARCH` |
 | `py/emitinlinextensa.c` | `upy/py/emitinlinextensa.rs` | `OMIT_ARCH` |
 | `py/emitnarm.c` | `upy/py/emitnarm.rs` | `OMIT_ARCH` |
-| `py/emitnative.c` | `upy/py/emitnative.rs` | `MIRROR` |
+| `py/emitnative.c` | -- | `OMIT_DEFERRED` -- bytecode VM owns execution for W11; native emit deferred until measured need (3122+ LOC; no hollow face) |
 | `py/emitndebug.c` | `upy/py/emitndebug.rs` | `MIRROR` |
 | `py/emitnrv32.c` | `upy/py/emitnrv32.rs` | `OMIT_ARCH` |
 | `py/emitnthumb.c` | `upy/py/emitnthumb.rs` | `OMIT_ARCH` |
-| `py/emitnx64.c` | `upy/py/emitnx64.rs` | `MIRROR` |
+| `py/emitnx64.c` | -- | `OMIT_DEFERRED` -- bytecode VM owns execution for W11; native emit deferred until measured need (3122+ LOC; no hollow face) |
 | `py/emitnx86.c` | `upy/py/emitnx86.rs` | `OMIT_ARCH` |
 | `py/emitnxtensa.c` | `upy/py/emitnxtensa.rs` | `OMIT_ARCH` |
 | `py/emitnxtensawin.c` | `upy/py/emitnxtensawin.rs` | `OMIT_ARCH` |
 | `py/formatfloat.c` | `upy/py/formatfloat.rs` | `MIRROR` |
-| `py/frozenmod.c` | `upy/py/frozenmod.rs` | `MIRROR` |
+| `py/frozenmod.c` | `upy/py/frozenmod.rs` | `MIRROR` done (string-only; no `.mpy` kind -- no loader exists, see `persistentcode.rs`) |
 | `py/gc.c` | `upy/py/gc.rs` | `DEAD` |
-| `py/lexer.c` | `upy/py/lexer.rs` | `MIRROR` |
+| `py/lexer.c` | `upy/py/lexer.rs` | `MIRROR` done (no f-string) |
 | `py/malloc.c` | `upy/py/malloc.rs` | `MIRROR` |
 | `py/map.c` | `upy/py/map.rs` | `MIRROR` |
 | `py/modarray.c` | `upy/py/builtin/modarray.rs` | `MIRROR` |
@@ -232,15 +233,15 @@ src/pymergetic/metal/py/
 | `py/objzip.c` | `upy/py/objects/objzip.rs` | `MIRROR` |
 | `py/opmethods.c` | `upy/py/opmethods.rs` | `MIRROR` |
 | `py/pairheap.c` | `upy/py/pairheap.rs` | `MIRROR` |
-| `py/parse.c` | `upy/py/parse.rs` | `MIRROR` |
-| `py/parsenum.c` | `upy/py/parsenum.rs` | `MIRROR` |
-| `py/parsenumbase.c` | `upy/py/parsenumbase.rs` | `MIRROR` |
+| `py/parse.c` | `upy/py/parse.rs` | `MIRROR` done |
+| `py/parsenum.c` | `upy/py/parsenum.rs` | `MIRROR` done (no bigint) |
+| `py/parsenumbase.c` | `upy/py/parsenumbase.rs` | `MIRROR` done |
 | `py/persistentcode.c` | `upy/py/persistentcode.rs` | `MIRROR` |
 | `py/profile.c` | `upy/py/profile.rs` | `MIRROR` |
 | `py/pystack.c` | `upy/py/pystack.rs` | `MIRROR` |
 | `py/qstr.c` | `upy/py/qstr.rs` | `MIRROR` |
-| `py/reader.c` | `upy/py/reader.rs` | `MIRROR` |
-| `py/repl.c` | `upy/py/repl.rs` | `MIRROR` |
+| `py/reader.c` | `upy/py/reader.rs` | `MIRROR` done (mem only) |
+| `py/repl.c` | `upy/py/repl.rs` | `MIRROR` done (`continue_with_input`; `exec_line` is a Metal-only lex/parse/compile/vm glue addition, not upstream; autocomplete + PS1/PS2 -- console, W11.2/W11.3) |
 | `py/ringbuf.c` | `upy/py/ringbuf.rs` | `MIRROR` |
 | `py/runtime.c` | `upy/py/runtime.rs` | `MIRROR` |
 | `py/runtime_utils.c` | `upy/py/runtime_utils.rs` | `MIRROR` |
@@ -447,7 +448,7 @@ src/pymergetic/metal/py/
 
 | Tag | Rows |
 |-----|------|
-| `MIRROR` | 189 |
+| `MIRROR` | 187 |
 | `OMIT_HW` | 76 |
 | `OMIT_ARCH` | 37 |
 | `SHARED_OPT` | 18 |
@@ -455,6 +456,7 @@ src/pymergetic/metal/py/
 | `DEAD` | 9 |
 | `SKIP_VENDOR` | 9 |
 | `REWRITE` | 8 |
+| `OMIT_DEFERRED` | 2 |
 
 Total inventory rows: **356**.
 

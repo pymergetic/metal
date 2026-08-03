@@ -37,6 +37,48 @@ fn known_type_name(cat: &Catalog, name: &str) -> bool {
     cat.structs.iter().any(|s| s.name == name)
         || cat.enums.iter().any(|e| e.name == name)
         || cat.typedefs.iter().any(|t| t.name == name)
+        || cat.sibling_types.iter().any(|t| t == name)
+}
+
+fn is_c_builtin_type(t: &str) -> bool {
+    matches!(
+        t,
+        "void"
+            | "char"
+            | "short"
+            | "int"
+            | "long"
+            | "float"
+            | "double"
+            | "signed"
+            | "unsigned"
+            | "const"
+            | "volatile"
+            | "struct"
+            | "enum"
+            | "union"
+            | "bool"
+            | "size_t"
+            | "intptr_t"
+            | "uintptr_t"
+            | "ptrdiff_t"
+            | "_Noreturn"
+    ) || ((t.starts_with("uint") || t.starts_with("int")) && t.ends_with("_t"))
+}
+
+/// User type names that need a forward decl (or sibling include) when the
+/// defining body is not in this catalog. Covers `pm_metal_*_t` and opaque
+/// Rust structs exposed only as pointers on the C border (`RegMod`).
+fn looks_like_foreign_type(t: &str) -> bool {
+    if t.is_empty() || is_c_builtin_type(t) {
+        return false;
+    }
+    if !t.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    let first = t.chars().next().unwrap();
+    (t.starts_with("pm_metal_") && t.ends_with("_t"))
+        || first.is_ascii_uppercase()
 }
 
 fn foreign_type_names(cat: &Catalog) -> Vec<String> {
@@ -46,7 +88,8 @@ fn foreign_type_names(cat: &Catalog) -> Vec<String> {
             c.is_whitespace() || c == '*' || c == ',' || c == '(' || c == ')' || c == '[' || c == ']'
         }) {
             let t = tok.trim();
-            if t.starts_with("pm_metal_") && t.ends_with("_t") && !known_type_name(cat, t) && !out.iter().any(|x| x == t) {
+            if looks_like_foreign_type(t) && !known_type_name(cat, t) && !out.iter().any(|x| x == t)
+            {
                 out.push(String::from(t));
             }
         }
@@ -120,11 +163,20 @@ fn types_ctx(cat: &Catalog) -> Vec<(&'static str, Value)> {
     let typedefs = Value::list_map(&cat.typedefs, |td| {
         Value::map(alloc::vec![("line", Value::str(typedef_line(&td.ty, &td.name)))])
     });
+    let defines = Value::list_map(&cat.defines, |d| {
+        Value::map(alloc::vec![
+            ("name", Value::str(d.name.clone())),
+            ("value", Value::str(d.value.clone())),
+        ])
+    });
+    let includes = Value::list_map(&cat.includes, |p| Value::str(p.clone()));
     let foreign_types = Value::list_map(&foreign_type_names(cat), |name| Value::str(name.clone()));
     alloc::vec![
         ("structs", structs),
         ("enums", enums),
         ("typedefs", typedefs),
+        ("defines", defines),
+        ("includes", includes),
         ("foreign_types", foreign_types),
     ]
 }

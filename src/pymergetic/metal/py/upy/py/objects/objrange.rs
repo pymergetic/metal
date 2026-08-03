@@ -45,6 +45,20 @@ pub unsafe fn len(o: MpObj) -> Option<usize> {
     }
 }
 
+/// `v in range(...)` -- arithmetic membership, no element-by-element
+/// iteration (upstream `range_binary_op`'s `MP_BINARY_OP_IN` handler).
+pub unsafe fn contains(o: MpObj, v: isize) -> Option<bool> {
+    let p = as_ref(o)?;
+    let start = (*p).start;
+    let stop = (*p).stop;
+    let step = (*p).step;
+    Some(if step > 0 {
+        v >= start && v < stop && (v - start) % step == 0
+    } else {
+        v <= start && v > stop && (v - start) % step == 0
+    })
+}
+
 pub unsafe fn get(o: MpObj, i: usize) -> Option<isize> {
     let p = as_ref(o)?;
     let n = len(o)?;

@@ -9,6 +9,7 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 pymergetic_metal_rt = { path = "../../../../rt/.pm" }
+# Doc-browser pages call through C ABI (reg/fs); path deps keep link order.
 
 [profile.release]
 panic = "abort"

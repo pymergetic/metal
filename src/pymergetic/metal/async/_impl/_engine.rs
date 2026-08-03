@@ -6,7 +6,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 pub type Handle = u32;
 pub const INVALID: Handle = 0;
 
-pub const MAX_HANDLES: usize = 128;
+/* Doom + http + proofs park many completed_u32 / sleep handles. */
+pub const MAX_HANDLES: usize = 512;
 pub const MAX_RUNNERS: usize = 8;
 pub const QUEUE_CAP: usize = 64;
 pub const MAX_PIDS: usize = 64;
@@ -154,6 +155,12 @@ struct Engine {
     /// yet -- bounded by how long one step is allowed to run (see
     /// `metal-no-long-running-ops`).
     parked: [bool; MAX_RUNNERS],
+    /// W11.5 concurrency metrics (reset via [`metric_reset`]).
+    metric_spawns: u64,
+    metric_awaits: u64,
+    metric_steps: [u64; MAX_RUNNERS],
+    metric_last_step_us: [u64; MAX_RUNNERS],
+    metric_starve_max_us: u64,
 }
 
 impl Engine {
@@ -171,6 +178,11 @@ impl Engine {
             current_runner: 0,
             quiesce_requested: false,
             parked: [false; MAX_RUNNERS],
+            metric_spawns: 0,
+            metric_awaits: 0,
+            metric_steps: [0; MAX_RUNNERS],
+            metric_last_step_us: [0; MAX_RUNNERS],
+            metric_starve_max_us: 0,
         }
     }
 }
@@ -256,6 +268,7 @@ fn wake_waiter_locked(e: &mut Engine, done_h: Handle) {
         return;
     }
     let waiter = e.slots[done_h as usize].waiter;
+    let child_result = e.slots[done_h as usize].result_u32;
     e.slots[done_h as usize].waiter = INVALID;
     if !slot_ok(e, waiter) {
         return;
@@ -263,6 +276,8 @@ fn wake_waiter_locked(e: &mut Engine, done_h: Handle) {
     let w = &mut e.slots[waiter as usize];
     if w.awaiting == done_h {
         w.awaiting = INVALID;
+        /* Parent reads pm_metal_*_result(self_h) after resume. */
+        w.result_u32 = child_result;
         if w.status == Status::Waiting {
             w.status = Status::Pending;
         }
@@ -416,6 +431,61 @@ pub fn coro_state(h: Handle) -> *mut u8 {
     })
 }
 
+/// Ensure durable frame of at least `n` bytes. Returns host pointer or null.
+/// If a frame already exists, returns it unchanged (size not grown).
+pub fn coro_alloc(h: Handle, n: u32) -> *mut u8 {
+    if n == 0 || h == INVALID {
+        return core::ptr::null_mut();
+    }
+    let existing = with_lock(|e| {
+        if !slot_ok(e, h) {
+            return Err(());
+        }
+        let s = &e.slots[h as usize];
+        if !s.frame.is_null() && s.frame_len >= n {
+            Ok(Some(s.frame))
+        } else if !s.frame.is_null() {
+            /* Already sized differently — keep existing (guest pin path). */
+            Ok(Some(s.frame))
+        } else {
+            Ok(None)
+        }
+    });
+    match existing {
+        Err(()) => core::ptr::null_mut(),
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            let frame = alloc_frame(n);
+            if frame.is_null() {
+                return core::ptr::null_mut();
+            }
+            let ok = with_lock(|e| {
+                if !slot_ok(e, h) || !e.slots[h as usize].frame.is_null() {
+                    return false;
+                }
+                e.slots[h as usize].frame = frame;
+                e.slots[h as usize].frame_len = n;
+                true
+            });
+            if !ok {
+                free_frame(frame);
+                return coro_state(h);
+            }
+            frame
+        }
+    }
+}
+
+pub fn coro_frame_len(h: Handle) -> u32 {
+    with_lock(|e| {
+        if !slot_ok(e, h) {
+            0
+        } else {
+            e.slots[h as usize].frame_len
+        }
+    })
+}
+
 pub fn coro_close(h: Handle) {
     let frame = with_lock(|e| {
         if !slot_ok(e, h) {
@@ -477,6 +547,9 @@ pub fn spawn(step: StepFn, state_bytes: u32, prio: Prio) -> Handle {
         coro_close(h);
         return INVALID;
     }
+    with_lock(|e| {
+        e.metric_spawns = e.metric_spawns.wrapping_add(1);
+    });
     h
 }
 
@@ -485,9 +558,14 @@ pub fn await_child(self_h: Handle, child_h: Handle) -> Status {
         if !slot_ok(e, self_h) || !slot_ok(e, child_h) {
             return Status::Error;
         }
+        e.metric_awaits = e.metric_awaits.wrapping_add(1);
         let st = e.slots[child_h as usize].status;
         if st == Status::Done || st == Status::Cancelled || st == Status::Error {
+            /* Eager child: return terminal status (finish_child / leaf stems).
+             * Also copy result onto parent for pm_metal_*_result(self_h). */
+            let child_result = e.slots[child_h as usize].result_u32;
             e.slots[self_h as usize].awaiting = INVALID;
+            e.slots[self_h as usize].result_u32 = child_result;
             return st;
         }
         /* Nest: promote child onto the parent's runner if not yet a task. */
@@ -617,10 +695,12 @@ fn take_ready(runner: u32) -> Handle {
         });
         match outcome {
             TakeOutcome::Bad => return INVALID,
-            TakeOutcome::Parked => {
-                core::hint::spin_loop();
-                continue;
-            }
+            /* Return so UP `run_poll_all` can advance every runner to its
+             * park flag. Spinning here deadlocks single-threaded quiesce
+             * (unloader waits for all_parked while this call never
+             * returns to poll the other runners). SMP run_loop just sees
+             * 0 steps and spins at the top level until release. */
+            TakeOutcome::Parked => return INVALID,
             TakeOutcome::Handle(h) => return h,
         }
     }
@@ -690,6 +770,64 @@ fn step_one(h: Handle) {
     finish_step(h, raw);
 }
 
+fn mono_us() -> u64 {
+    extern "C" {
+        fn pm_metal_async_mono_us() -> u64;
+    }
+    unsafe { pm_metal_async_mono_us() }
+}
+
+fn note_runner_step(runner: u32) {
+    let now = mono_us();
+    with_lock(|e| {
+        if runner >= e.n_runners {
+            return;
+        }
+        let ri = runner as usize;
+        e.metric_steps[ri] = e.metric_steps[ri].wrapping_add(1);
+        let last = e.metric_last_step_us[ri];
+        if last != 0 && now >= last {
+            let gap = now - last;
+            if gap > e.metric_starve_max_us {
+                e.metric_starve_max_us = gap;
+            }
+        }
+        e.metric_last_step_us[ri] = now;
+    });
+}
+
+pub fn metric_reset() {
+    with_lock(|e| {
+        e.metric_spawns = 0;
+        e.metric_awaits = 0;
+        e.metric_steps = [0; MAX_RUNNERS];
+        e.metric_last_step_us = [0; MAX_RUNNERS];
+        e.metric_starve_max_us = 0;
+    });
+}
+
+pub fn metric_spawns() -> u64 {
+    with_lock(|e| e.metric_spawns)
+}
+
+pub fn metric_awaits() -> u64 {
+    with_lock(|e| e.metric_awaits)
+}
+
+pub fn metric_steps(runner: u32) -> u64 {
+    with_lock(|e| {
+        if runner >= e.n_runners {
+            0
+        } else {
+            e.metric_steps[runner as usize]
+        }
+    })
+}
+
+pub fn metric_starve_max_us() -> u64 {
+    with_lock(|e| e.metric_starve_max_us)
+}
+
 pub fn run_poll_runner(runner: u32) -> i32 {
     if !started() || runner >= n_runners() {
         return -1;
@@ -701,6 +839,7 @@ pub fn run_poll_runner(runner: u32) -> i32 {
             break;
         }
         step_one(h);
+        note_runner_step(runner);
         ran += 1;
     }
     ran

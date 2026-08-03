@@ -8,6 +8,7 @@ path = "../_impl/__init__.rs"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+pymergetic_metal_reg = { path = "../../../reg/.pm" }
 pymergetic_metal_rt = { path = "../../../rt/.pm" }
 
 [profile.release]

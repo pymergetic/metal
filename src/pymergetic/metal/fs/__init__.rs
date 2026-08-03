@@ -16,6 +16,9 @@ pub use ops::*;
 extern "C" {
     fn pm_metal_async_completed_u32(v: u32) -> u32;
     fn pm_metal_async_result_u32(h: u32) -> u32;
+    fn pm_metal_async_coro_close(h: u32);
+    fn pm_metal_mem_guest_ptr(cookie: u32) -> *mut u8;
+    fn pm_metal_mem_guest_size(cookie: u32) -> u32;
 }
 
 pub type pm_metal_fs_h = u32;
@@ -231,10 +234,13 @@ pub unsafe extern "C" fn pm_metal_fs_size_async(path: *const u8) -> u32 {
     };
     let h = pm_metal_fs_stat_async(path, &mut st as *mut _ as *mut u8);
     let rc = pm_metal_async_result_u32(h);
+    let sz = st.size;
+    /* Free the stat handle; callers await the size handle we return. */
+    pm_metal_async_coro_close(h);
     if rc == PM_METAL_FS_INVALID {
         return err();
     }
-    done(st.size)
+    done(sz)
 }
 
 #[no_mangle]
@@ -263,7 +269,7 @@ pub unsafe extern "C" fn pm_metal_fs_write_async(
     src: *const u8,
     src_len: u32,
 ) -> u32 {
-    if src.is_null() {
+    if src_len > 0 && src.is_null() {
         return err();
     }
     let flags = PM_METAL_FS_O_WRONLY | PM_METAL_FS_O_CREAT | PM_METAL_FS_O_TRUNC;
@@ -276,6 +282,39 @@ pub unsafe extern "C" fn pm_metal_fs_write_async(
     let n = pm_metal_async_result_u32(wh);
     let _ = pm_metal_fs_close_async(fd);
     done(n)
+}
+
+/// Awaitable read into a mem guest cookie (survives coro unpin).
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_read_mem_async(
+    path: *const u8,
+    dest_cookie: u32,
+    dest_len: u32,
+) -> u32 {
+    let native = pm_metal_mem_guest_ptr(dest_cookie);
+    let cap = pm_metal_mem_guest_size(dest_cookie);
+    if native.is_null() || dest_len == 0 || dest_len > cap {
+        return err();
+    }
+    pm_metal_fs_read_async(path, native, dest_len)
+}
+
+/// Awaitable write from a mem guest cookie.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_fs_write_mem_async(
+    path: *const u8,
+    src_cookie: u32,
+    src_len: u32,
+) -> u32 {
+    if src_len == 0 {
+        return pm_metal_fs_write_async(path, core::ptr::null(), 0);
+    }
+    let native = pm_metal_mem_guest_ptr(src_cookie);
+    let cap = pm_metal_mem_guest_size(src_cookie);
+    if native.is_null() || src_len > cap {
+        return err();
+    }
+    pm_metal_fs_write_async(path, native, src_len)
 }
 
 #[no_mangle]

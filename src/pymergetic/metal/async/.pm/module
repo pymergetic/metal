@@ -3,5 +3,6 @@
   "name": "pymergetic.metal.async",
   "impl": "rs",
   "version": "0.1.0",
-  "comment": "Stackless coro/task/process, N runners x 3 prio queues, phase PC helper."
+  "guest_surface": true,
+  "comment": "Stackless coro/task/process; guest_surface for wasm packs (host_natives)."
 }

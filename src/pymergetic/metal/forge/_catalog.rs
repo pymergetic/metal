@@ -1,4 +1,4 @@
-//! In-memory module catalog (fns / structs / enums / typedefs).
+//! In-memory module catalog (fns / structs / enums / typedefs / defines).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -20,6 +20,13 @@ pub struct Struct {
 pub struct Typedef {
     pub name: String,
     pub ty: String,
+}
+
+/// Object-like `#define NAME value` (C face). `value` is the raw RHS text.
+#[derive(Clone, Debug)]
+pub struct Define {
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Clone, Debug)]
@@ -53,6 +60,13 @@ pub struct Catalog {
     pub structs: Vec<Struct>,
     pub typedefs: Vec<Typedef>,
     pub enums: Vec<EnumDef>,
+    pub defines: Vec<Define>,
+    /// Sibling C faces to `#include` for types owned elsewhere in the module
+    /// (e.g. `async/await.h` needs `async/handle.h` for `pm_metal_async_status_t`).
+    /// Paths are package-relative inside angle brackets (`pymergetic/metal/...`).
+    pub includes: Vec<String>,
+    /// Type names satisfied by [`includes`] (suppresses opaque foreign `struct` decls).
+    pub sibling_types: Vec<String>,
     pub fns: Vec<Fn>,
 }
 
@@ -61,6 +75,7 @@ impl Catalog {
         self.structs.is_empty()
             && self.typedefs.is_empty()
             && self.enums.is_empty()
+            && self.defines.is_empty()
             && self.fns.is_empty()
     }
 

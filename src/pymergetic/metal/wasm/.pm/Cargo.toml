@@ -18,6 +18,8 @@ pymergetic_metal_mem = { path = "../../mem/.pm" }
 pymergetic_metal_reg = { path = "../../reg/.pm" }
 pymergetic_metal_log = { path = "../../log/.pm" }
 pymergetic_metal_async = { path = "../../async/.pm" }
+# Host smoke connects always-proxy log (same pattern as py/.pm/smoke).
+pymergetic_metal_console = { path = "../../console/.pm" }
 
 [build-dependencies]
 cc = "1"

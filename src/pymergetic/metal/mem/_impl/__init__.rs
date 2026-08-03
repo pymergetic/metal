@@ -299,6 +299,112 @@ pub unsafe extern "C" fn pm_metal_mem_free_bytes() -> usize {
     tlsf_free.saturating_add(heap.arena.hole())
 }
 
+/* ---- Guest cookies (host TLSF behind opaque u32; wasm host_natives) ---- */
+
+const GUEST_MAX: usize = 256;
+
+#[derive(Clone, Copy)]
+struct GuestSlot {
+    used: i32,
+    ptr: *mut u8,
+    bytes: u32,
+}
+
+static mut GUEST_SLOTS: [GuestSlot; GUEST_MAX + 1] = [GuestSlot {
+    used: 0,
+    ptr: core::ptr::null_mut(),
+    bytes: 0,
+}; GUEST_MAX + 1];
+static GUEST_LOCK: Spin = Spin::new();
+
+unsafe fn guest_slot_get(h: u32) -> Option<*mut GuestSlot> {
+    if h == 0 || (h as usize) > GUEST_MAX {
+        return None;
+    }
+    let s = addr_of_mut!(GUEST_SLOTS[h as usize]);
+    if (*s).used == 0 || (*s).ptr.is_null() {
+        return None;
+    }
+    Some(s)
+}
+
+/// Allocate a guest cookie (host heap). 0 = fail / full table.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_mem_guest_alloc(size: u32) -> u32 {
+    if size == 0 {
+        return 0;
+    }
+    GUEST_LOCK.lock();
+    let mut h = 0u32;
+    let mut i = 1usize;
+    while i <= GUEST_MAX {
+        if GUEST_SLOTS[i].used == 0 {
+            GUEST_SLOTS[i].used = 1;
+            GUEST_SLOTS[i].ptr = core::ptr::null_mut();
+            GUEST_SLOTS[i].bytes = 0;
+            h = i as u32;
+            break;
+        }
+        i += 1;
+    }
+    if h == 0 {
+        GUEST_LOCK.unlock();
+        return 0;
+    }
+    GUEST_LOCK.unlock();
+    let p = pm_metal_mem_alloc(size as usize);
+    if p.is_null() {
+        GUEST_LOCK.lock();
+        GUEST_SLOTS[h as usize].used = 0;
+        GUEST_LOCK.unlock();
+        return 0;
+    }
+    core::ptr::write_bytes(p, 0, size as usize);
+    GUEST_LOCK.lock();
+    GUEST_SLOTS[h as usize].ptr = p;
+    GUEST_SLOTS[h as usize].bytes = size;
+    GUEST_LOCK.unlock();
+    h
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_mem_guest_free(cookie: u32) {
+    GUEST_LOCK.lock();
+    let Some(s) = guest_slot_get(cookie) else {
+        GUEST_LOCK.unlock();
+        return;
+    };
+    let p = (*s).ptr;
+    (*s).used = 0;
+    (*s).ptr = core::ptr::null_mut();
+    (*s).bytes = 0;
+    GUEST_LOCK.unlock();
+    pm_metal_mem_free(p);
+}
+
+/// Host-only: resolve cookie to TLSF pointer. Null if invalid.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_mem_guest_ptr(cookie: u32) -> *mut u8 {
+    GUEST_LOCK.lock();
+    let p = match guest_slot_get(cookie) {
+        Some(s) => (*s).ptr,
+        None => core::ptr::null_mut(),
+    };
+    GUEST_LOCK.unlock();
+    p
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_mem_guest_size(cookie: u32) -> u32 {
+    GUEST_LOCK.lock();
+    let n = match guest_slot_get(cookie) {
+        Some(s) => (*s).bytes,
+        None => 0,
+    };
+    GUEST_LOCK.unlock();
+    n
+}
+
 /// Rust-side helpers.
 pub mod api {
     pub fn init(base: *mut u8, bytes: usize) -> i32 {

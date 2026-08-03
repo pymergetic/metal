@@ -27,6 +27,7 @@ pub const QSTR_SLICE: Qstr = 21;
 pub const QSTR_CELL: Qstr = 22;
 pub const QSTR_BYTEARRAY: Qstr = 23;
 pub const QSTR_DEQUE: Qstr = 24;
+pub const QSTR_ITER: Qstr = 25;
 
 pub static STATIC_STRS: &[&[u8]] = &[
     b"",
@@ -54,6 +55,7 @@ pub static STATIC_STRS: &[&[u8]] = &[
     b"cell",
     b"bytearray",
     b"deque",
+    b"iterator",
 ];
 
 pub fn static_count() -> usize {

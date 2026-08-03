@@ -1,12 +1,19 @@
 //! builtinimport — resolve modules via sys.modules, builtins, or Metal `reg`.
+//!
+//! Metal `reg` modules become real Python module objects with typed native
+//! callables ([`objfun_native`] + [`bindcatalog`]), not string markers.
+//! Dotted imports (`import a.b.c`) create every parent package and wire
+//! `parent.child` attributes so `a.b.c.ready()` attribute chains work; the
+//! value returned to `IMPORT_NAME` is the top-level package (`a`), matching
+//! CPython. Extmod keep-list modules expose FunNative wrappers over the
+//! real Rust bodies in `upy/extmod/`.
 
 use core::ffi::c_void;
 
-use crate::upy::extmod::{
-    modbinascii, modheapq, modjson, modos, modplatform, modrandom, modre, modtime, modvfs,
-};
+use crate::upy::py::bindcatalog;
 use crate::upy::py::builtin::{modbuiltins, moderrno, modsys};
 use crate::upy::py::obj::{self, MpObj};
+use crate::upy::py::objects::objfun_native;
 use crate::upy::py::objects::objmodule;
 use crate::upy::py::objects::objstr;
 use crate::upy::py::qstr;
@@ -18,6 +25,23 @@ extern "C" {
         full_module: *const u8,
         func: *const u8,
         ptr: *const c_void,
+    ) -> i32;
+    fn pm_metal_reg_mod_entry_count(full_module: *const u8) -> u32;
+    fn pm_metal_reg_mod_entry_at(
+        full_module: *const u8,
+        index: u32,
+        name_out: *mut u8,
+        name_cap: u32,
+        out_ptr: *mut *const c_void,
+    ) -> i32;
+    fn pm_metal_reg_count() -> u32;
+    fn pm_metal_reg_dyn_at(
+        index: u32,
+        module_out: *mut u8,
+        module_cap: u32,
+        func_out: *mut u8,
+        func_cap: u32,
+        out_ptr: *mut *const c_void,
     ) -> i32;
 }
 
@@ -48,38 +72,112 @@ impl alloc_buf {
 
 fn reg_module_present(full_name: &str) -> bool {
     let mod_c = cstr(full_name);
+    if unsafe { pm_metal_reg_mod_entry_count(mod_c.as_ptr()) } > 0 {
+        return true;
+    }
     for probe in REG_PROBES {
         let p = unsafe { pm_metal_reg_bind(mod_c.as_ptr(), probe.as_ptr()) };
         if !p.is_null() {
             return true;
         }
     }
+    let n = unsafe { pm_metal_reg_count() };
+    let mut mod_buf = [0u8; 160];
+    let mut fn_buf = [0u8; 64];
+    for i in 0..n {
+        let mut ptr: *const c_void = core::ptr::null();
+        if unsafe {
+            pm_metal_reg_dyn_at(
+                i,
+                mod_buf.as_mut_ptr(),
+                mod_buf.len() as u32,
+                fn_buf.as_mut_ptr(),
+                fn_buf.len() as u32,
+                &mut ptr,
+            )
+        } != 0
+        {
+            continue;
+        }
+        let mlen = mod_buf.iter().position(|&b| b == 0).unwrap_or(mod_buf.len());
+        if mlen == full_name.len() && &mod_buf[..mlen] == full_name.as_bytes() {
+            return true;
+        }
+    }
     false
 }
 
-/// Attach `reg`-bound callables we can discover onto the module as raw ptr objs.
-/// B3 stores the pointer as a small-int of the address truncated — host smoke
-/// checks presence via `reg_attr_bound` instead. Here we store a str marker.
-unsafe fn attach_reg_markers(mod_obj: MpObj, full_name: &str) {
+/// Attach every published `reg` entry for `full_name` as a typed native.
+unsafe fn attach_reg_callables(mod_obj: MpObj, full_name: &str) {
     let mod_c = cstr(full_name);
-    for probe in REG_PROBES {
-        let p = pm_metal_reg_bind(mod_c.as_ptr(), probe.as_ptr());
-        if p.is_null() {
-            continue;
+    let n = pm_metal_reg_mod_entry_count(mod_c.as_ptr());
+    if n > 0 {
+        let mut name_buf = [0u8; 64];
+        for i in 0..n {
+            let mut ptr: *const c_void = core::ptr::null();
+            if pm_metal_reg_mod_entry_at(
+                mod_c.as_ptr(),
+                i,
+                name_buf.as_mut_ptr(),
+                name_buf.len() as u32,
+                &mut ptr,
+            ) != 0
+            {
+                continue;
+            }
+            let nlen = name_buf.iter().position(|&b| b == 0).unwrap_or(0);
+            if nlen == 0 {
+                continue;
+            }
+            if let Ok(name) = core::str::from_utf8(&name_buf[..nlen]) {
+                bindcatalog::store_bound(mod_obj, full_name, name, ptr);
+            }
         }
-        let name = core::str::from_utf8(&probe[..probe.len() - 1]).unwrap_or("sym");
-        let key = obj::new_qstr(qstr::from_str(name));
-        let marker = objstr::new(b"reg");
-        let _ = objmodule::store_attr(mod_obj, key, marker);
+    } else {
+        let dyn_n = pm_metal_reg_count();
+        let mut mod_buf = [0u8; 160];
+        let mut fn_buf = [0u8; 64];
+        let mut any = false;
+        for i in 0..dyn_n {
+            let mut ptr: *const c_void = core::ptr::null();
+            if pm_metal_reg_dyn_at(
+                i,
+                mod_buf.as_mut_ptr(),
+                mod_buf.len() as u32,
+                fn_buf.as_mut_ptr(),
+                fn_buf.len() as u32,
+                &mut ptr,
+            ) != 0
+            {
+                continue;
+            }
+            let mlen = mod_buf.iter().position(|&b| b == 0).unwrap_or(0);
+            if mlen != full_name.len() || &mod_buf[..mlen] != full_name.as_bytes() {
+                continue;
+            }
+            let nlen = fn_buf.iter().position(|&b| b == 0).unwrap_or(0);
+            if nlen == 0 {
+                continue;
+            }
+            if let Ok(name) = core::str::from_utf8(&fn_buf[..nlen]) {
+                bindcatalog::store_bound(mod_obj, full_name, name, ptr);
+                any = true;
+            }
+        }
+        if !any {
+            for probe in REG_PROBES {
+                let p = pm_metal_reg_bind(mod_c.as_ptr(), probe.as_ptr());
+                if p.is_null() {
+                    continue;
+                }
+                let name = core::str::from_utf8(&probe[..probe.len() - 1]).unwrap_or("sym");
+                bindcatalog::store_bound(mod_obj, full_name, name, p);
+            }
+        }
     }
-}
-
-unsafe fn store_marker(m: MpObj, name: &str, val: &[u8]) {
-    let _ = objmodule::store_attr(
-        m,
-        obj::new_qstr(qstr::from_str(name)),
-        objstr::new(val),
-    );
+    for &(name, f, n_args) in bindcatalog::extras(full_name) {
+        bindcatalog::store_obj_fn(mod_obj, name, f, n_args);
+    }
 }
 
 unsafe fn make_named(name: &str) -> Option<MpObj> {
@@ -95,89 +193,144 @@ unsafe fn make_named(name: &str) -> Option<MpObj> {
     Some(m)
 }
 
+unsafe fn get_or_create_pkg(path: &str) -> Option<MpObj> {
+    if let Some(m) = modsys::modules_get_str(path) {
+        return Some(m);
+    }
+    let m = make_named(path)?;
+    let _ = objmodule::store_attr(
+        m,
+        obj::new_qstr(qstr::from_str("__path__")),
+        objstr::new(b""),
+    );
+    let _ = modsys::modules_set_str(path, m);
+    Some(m)
+}
+
+/// Import a dotted Metal reg module; return the top-level package object.
+unsafe fn import_reg_dotted(full: &str) -> Option<MpObj> {
+    if !reg_module_present(full) {
+        return None;
+    }
+    let mut path_buf = [0u8; 160];
+    let mut path_len = 0usize;
+    let mut parent = obj::OBJ_NULL;
+    let mut top = obj::OBJ_NULL;
+    let bytes = full.as_bytes();
+    let mut seg_start = 0usize;
+    for i in 0..=bytes.len() {
+        let end = i == bytes.len();
+        if !end && bytes[i] != b'.' {
+            continue;
+        }
+        let seg = &bytes[seg_start..i];
+        if seg.is_empty() {
+            return None;
+        }
+        if path_len > 0 {
+            if path_len + 1 + seg.len() >= path_buf.len() {
+                return None;
+            }
+            path_buf[path_len] = b'.';
+            path_len += 1;
+        } else if seg.len() >= path_buf.len() {
+            return None;
+        }
+        path_buf[path_len..path_len + seg.len()].copy_from_slice(seg);
+        path_len += seg.len();
+        let path = core::str::from_utf8(&path_buf[..path_len]).ok()?;
+        let is_leaf = end;
+        let m = if is_leaf {
+            if let Some(existing) = modsys::modules_get_str(path) {
+                existing
+            } else {
+                let m = make_named(path)?;
+                attach_reg_callables(m, path);
+                let _ = modsys::modules_set_str(path, m);
+                m
+            }
+        } else {
+            get_or_create_pkg(path)?
+        };
+        if parent != obj::OBJ_NULL {
+            if let Ok(seg_s) = core::str::from_utf8(seg) {
+                let key = obj::new_qstr(qstr::from_str(seg_s));
+                let _ = objmodule::store_attr(parent, key, m);
+            }
+        } else {
+            top = m;
+        }
+        parent = m;
+        seg_start = i + 1;
+    }
+    if top == obj::OBJ_NULL {
+        None
+    } else {
+        Some(top)
+    }
+}
+
 unsafe fn import_extmod(name: &str) -> Option<MpObj> {
-    let m = match name {
+    let m = make_named(name)?;
+    match name {
         "json" | "ujson" => {
-            let m = make_named(name)?;
-            store_marker(m, "dumps", b"fn");
-            store_marker(m, "loads", b"fn");
-            let _ = modjson::dumps;
-            m
+            bindcatalog::store_obj_fn(m, "dumps", bindcatalog::json_dumps, 1);
+            bindcatalog::store_obj_fn(m, "loads", bindcatalog::json_loads, 1);
         }
         "binascii" | "ubinascii" => {
-            let m = make_named(name)?;
-            store_marker(m, "hexlify", b"fn");
-            store_marker(m, "unhexlify", b"fn");
-            let _ = modbinascii::hexlify;
-            m
+            bindcatalog::store_obj_fn(m, "hexlify", bindcatalog::binascii_hexlify, 1);
+            bindcatalog::store_obj_fn(m, "unhexlify", bindcatalog::binascii_unhexlify, 1);
         }
         "heapq" | "uheapq" => {
-            let m = make_named(name)?;
-            store_marker(m, "heappush", b"fn");
-            store_marker(m, "heappop", b"fn");
-            let _ = modheapq::heappush;
-            m
+            bindcatalog::store_obj_fn(m, "heappush", bindcatalog::heapq_heappush, 2);
+            bindcatalog::store_obj_fn(m, "heappop", bindcatalog::heapq_heappop, 1);
         }
         "random" | "urandom" => {
-            let m = make_named(name)?;
-            store_marker(m, "getrandbits", b"fn");
-            let _ = modrandom::getrandbits;
-            m
+            bindcatalog::store_obj_fn(m, "getrandbits", bindcatalog::random_getrandbits, 1);
         }
         "time" | "utime" => {
-            let m = make_named(name)?;
-            store_marker(m, "ticks_us", b"fn");
-            store_marker(m, "ticks_ms", b"fn");
-            let _ = modtime::ticks_us;
-            m
+            bindcatalog::store_obj_fn(m, "ticks_us", bindcatalog::time_ticks_us, 0);
+            bindcatalog::store_obj_fn(m, "ticks_ms", bindcatalog::time_ticks_ms, 0);
         }
         "platform" => {
-            let m = make_named(name)?;
-            store_marker(m, "platform", b"fn");
-            let _ = modplatform::platform;
-            m
+            bindcatalog::store_obj_fn(m, "platform", bindcatalog::platform_platform, 0);
         }
         "os" | "uos" => {
-            let m = make_named(name)?;
-            store_marker(m, "uname", b"fn");
-            store_marker(m, "listdir", b"fn");
-            let _ = modos::uname;
-            m
+            bindcatalog::store_obj_fn(m, "uname", bindcatalog::os_uname, 0);
+            bindcatalog::store_obj_fn(m, "listdir", bindcatalog::os_listdir, 1);
         }
         "re" | "ure" => {
-            let m = make_named(name)?;
-            store_marker(m, "compile", b"fn");
-            store_marker(m, "match", b"fn");
-            let _ = modre::compile;
-            m
+            bindcatalog::store_obj_fn(m, "compile", bindcatalog::re_compile, 1);
+            bindcatalog::store_obj_fn(m, "match", bindcatalog::re_match, 2);
         }
         "vfs" => {
-            let m = make_named(name)?;
-            store_marker(m, "open", b"fn");
-            store_marker(m, "listdir", b"fn");
-            let _ = modvfs::open;
-            m
+            bindcatalog::store_obj_fn(m, "open", bindcatalog::vfs_open, 1);
+            bindcatalog::store_obj_fn(m, "listdir", bindcatalog::vfs_listdir, 1);
         }
         "asyncio" | "uasyncio" => {
-            let m = make_named(name)?;
-            store_marker(m, "sleep_ms", b"fn");
-            store_marker(m, "run", b"fn");
-            store_marker(m, "Event", b"type");
-            store_marker(m, "Lock", b"type");
-            let _ = crate::upy::extmod::asyncio::sleep_ms;
-            m
+            // Event/Lock are Rust types without a finished Python ctor -- omit.
+            bindcatalog::store_obj_fn(m, "sleep_ms", bindcatalog::asyncio_sleep_ms, 1);
+            bindcatalog::store_obj_fn(m, "run", bindcatalog::asyncio_run, 1);
         }
         _ => return None,
-    };
+    }
     let _ = modsys::modules_set_str(name, m);
     Some(m)
 }
 
-/// Import by name. Builtins: `sys`, `errno`, `builtins`. Extmod keep-list (B5).
+/// Import by name. Builtins: `sys`, `errno`, `builtins`. Extmod keep-list.
 /// Metal: any full module name that has at least one symbol on `reg`.
+/// Dotted Metal names return the **top-level package** (CPython `import a.b.c`).
 pub unsafe fn import_module(name: &str) -> Option<MpObj> {
     modsys::init();
     if let Some(m) = modsys::modules_get_str(name) {
+        if name.contains('.') {
+            if let Some(top) = name.split('.').next() {
+                if let Some(t) = modsys::modules_get_str(top) {
+                    return Some(t);
+                }
+            }
+        }
         return Some(m);
     }
 
@@ -202,19 +355,13 @@ pub unsafe fn import_module(name: &str) -> Option<MpObj> {
         _ => {
             if let Some(m) = import_extmod(name) {
                 m
+            } else if name.contains('.') {
+                return import_reg_dotted(name);
             } else if !reg_module_present(name) {
                 return None;
             } else {
-                let m = objmodule::new(qstr::from_str(name));
-                if m == obj::OBJ_NULL {
-                    return None;
-                }
-                let _ = objmodule::store_attr(
-                    m,
-                    obj::new_qstr(qstrdefs::QSTR_NAME),
-                    objstr::new(name.as_bytes()),
-                );
-                attach_reg_markers(m, name);
+                let m = make_named(name)?;
+                attach_reg_callables(m, name);
                 let _ = modsys::modules_set_str(name, m);
                 m
             }
@@ -223,11 +370,11 @@ pub unsafe fn import_module(name: &str) -> Option<MpObj> {
     Some(m)
 }
 
-/// True if `attr` on an imported Metal module was filled from `reg`.
+/// True if `attr` on an imported Metal module is a native callable.
 pub unsafe fn has_reg_marker(mod_obj: MpObj, attr: &str) -> bool {
     let key = obj::new_qstr(qstr::from_str(attr));
     match objmodule::load_attr(mod_obj, key) {
-        Some(v) => matches!(objstr::as_bytes(v), Some(b"reg")),
+        Some(v) => objfun_native::is_fun_native(v),
         None => false,
     }
 }

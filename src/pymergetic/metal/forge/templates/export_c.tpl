@@ -4,12 +4,15 @@
 #include <stddef.h> /* IWYU pragma: keep */
 #include <stdint.h> /* IWYU pragma: keep */
 {% if guest_surface %}#include <pymergetic/metal/pkg_import.h> /* IWYU pragma: keep */
-{% endif %}
+{% endif %}{% for inc in includes %}#include <{{ inc }}> /* IWYU pragma: keep */
+{% endfor %}
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-{% for st in structs %}typedef struct {{ st.name }} {{ st.name }};
+{% for d in defines %}#define {{ d.name }} {{ d.value }}
+{% endfor %}{% if defines %}
+{% endif %}{% for st in structs %}typedef struct {{ st.name }} {{ st.name }};
 
 {% endfor %}{% for en in enums %}typedef enum {
 {% for v in en.variants %}  {{ v.name }} = {{ v.value }}{{ v.comma }}

@@ -1,0 +1,24 @@
+menu "trust"
+
+choice PM_METAL_TRUST_MODE
+	prompt "Code trust policy for signed artifacts"
+	default PM_METAL_TRUST_MODE_SOFT
+	help
+	  Policy for pm_metal_trust_accept_mods (and later kernel/pkg fetch):
+
+	  off     -- never verify (dev)
+	  soft    -- verify when a signature is present; unsigned OK
+	  enforce -- signature required and must verify
+
+config PM_METAL_TRUST_MODE_OFF
+	bool "off (never verify)"
+
+config PM_METAL_TRUST_MODE_SOFT
+	bool "soft (verify when .sig present)"
+
+config PM_METAL_TRUST_MODE_ENFORCE
+	bool "enforce (signature required)"
+
+endchoice
+
+endmenu

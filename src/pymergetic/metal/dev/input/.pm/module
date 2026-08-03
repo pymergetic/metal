@@ -3,5 +3,6 @@
   "name": "pymergetic.metal.dev.input",
   "impl": "rs",
   "version": "0.1.0",
-  "comment": "Input probe (PS/2) -> DT INPUT."
+  "guest_surface": true,
+  "comment": "PS/2 probe + HID key/pointer poll rings; guest_surface for doom."
 }

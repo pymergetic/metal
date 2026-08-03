@@ -45,6 +45,18 @@ static void com1_putc(char c)
   pm_metal_bios_outb(COM1_BASE, (uint8_t)c);
 }
 
+/* LSR bit 0 (data-ready) -- non-blocking, single poll, no spin. */
+static int32_t bios_uart_try_getc(void)
+{
+  if (!g_com1_ready) {
+    com1_init();
+  }
+  if ((pm_metal_bios_inb(COM1_BASE + 5u) & 0x01u) == 0u) {
+    return -1;
+  }
+  return (int32_t)pm_metal_bios_inb(COM1_BASE);
+}
+
 static void bios_uart_write(const char *s, size_t n)
 {
   size_t i;
@@ -79,6 +91,7 @@ static const uint8_t *bios_uart_floor_compat(void)
 
 static const pm_metal_boot_uart_ops_t g_ops = {
   .write = bios_uart_write,
+  .try_getc = bios_uart_try_getc,
   .floor_iobase = bios_uart_floor_iobase,
   .floor_compat = bios_uart_floor_compat,
 };

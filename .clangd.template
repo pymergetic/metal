@@ -38,6 +38,7 @@ CompileFlags:
     - -Isrc/pymergetic/metal/net/ip
     - -Isrc/pymergetic/metal/net/ip/cfg
     - -Iexternal/lwip/src/include
+    - -Iexternal/monocypher/src
 
 ---
 # Package-root stress harness (same -I set as forge --stress).
@@ -62,6 +63,7 @@ CompileFlags:
     - -Isrc/pymergetic/metal/net/ip
     - -Isrc/pymergetic/metal/net/ip/cfg
     - -Iexternal/lwip/src/include
+    - -Iexternal/monocypher/src
     - -Isrc/pymergetic/metal/boot/platform/bios
 
 ---
@@ -85,6 +87,7 @@ CompileFlags:
     - -Isrc/pymergetic/metal/net/ip
     - -Isrc/pymergetic/metal/net/ip/cfg
     - -Iexternal/lwip/src/include
+    - -Iexternal/monocypher/src
 
 ---
 # littlefs glue — LFS_CONFIG + vendor (repo-relative -I).

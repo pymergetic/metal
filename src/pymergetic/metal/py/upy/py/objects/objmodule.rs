@@ -14,7 +14,9 @@ pub struct Module {
 }
 
 pub unsafe fn new(name: Qstr) -> MpObj {
-    let globals = objdict::new(8);
+    // Builtins / Metal modules store many attrs; 8 was too small for
+    // `builtins` once real callables were added beside type names.
+    let globals = objdict::new(32);
     if globals == obj::OBJ_NULL {
         return obj::OBJ_NULL;
     }

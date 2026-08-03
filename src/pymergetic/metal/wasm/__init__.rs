@@ -17,6 +17,11 @@ use core::ffi::c_void;
 
 #[path = "_load.rs"]
 mod load;
+#[path = "_stress.rs"]
+mod stress;
+#[cfg(any(target_os = "none", target_os = "uefi"))]
+#[path = "_fetch.rs"]
+mod fetch;
 
 use pymergetic_metal_async as _;
 use pymergetic_metal_log as _;
@@ -39,6 +44,21 @@ extern "C" {
         buf_n: u32,
     ) -> i32;
     fn pm_metal_wasm_port_claim_trampoline(full_module: *const u8, func: *const u8) -> *const c_void;
+    fn pm_metal_wasm_port_image(
+        full_module: *const u8,
+        out_bytes: *mut *const u8,
+        out_len: *mut u32,
+    ) -> i32;
+    fn pm_metal_wasm_port_guest_coro_create(full_module: *const u8, state_bytes: u32) -> u32;
+}
+
+/// Host: create guest coro for a loaded module under the current callin step.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_wasm_guest_coro_create_for(
+    full_module: *const u8,
+    state_bytes: u32,
+) -> u32 {
+    pm_metal_wasm_port_guest_coro_create(full_module, state_bytes)
 }
 
 const NAME_BUF_MAX: usize = 96;
@@ -105,6 +125,19 @@ pub unsafe extern "C" fn pm_metal_wasm_load(
     len: u32,
 ) -> i32 {
     load::load(full_module, bytes, len)
+}
+
+/// Borrow loaded wasm image bytes (still owned by the port slot).
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_wasm_image(
+    full_module: *const u8,
+    out_bytes: *mut *const u8,
+    out_len: *mut u32,
+) -> i32 {
+    if out_bytes.is_null() || out_len.is_null() {
+        return -1;
+    }
+    pm_metal_wasm_port_image(full_module, out_bytes, out_len)
 }
 
 extern "C" fn wasm_on_unload(ctx: *mut c_void) -> i32 {
@@ -196,6 +229,39 @@ pub unsafe extern "C" fn pm_metal_wasm_load_register(
     pm_metal_wasm_register(full_module)
 }
 
+/// Trust policy gate (`pm_metal_trust_accept_mods`), then load+register.
+/// `sig` may be null / `sig_len` 0 (soft/off accept unsigned).
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_wasm_load_verified(
+    full_module: *const u8,
+    bytes: *const u8,
+    len: u32,
+    sig: *const u8,
+    sig_len: u32,
+) -> i32 {
+    extern "C" {
+        fn pm_metal_trust_accept_mods(
+            data: *const c_void,
+            data_len: u32,
+            sig: *const c_void,
+            sig_len: u32,
+        ) -> i32;
+    }
+    if bytes.is_null() || len == 0 {
+        return -1;
+    }
+    if pm_metal_trust_accept_mods(
+        bytes as *const c_void,
+        len,
+        sig as *const c_void,
+        sig_len,
+    ) != 0
+    {
+        return -1;
+    }
+    pm_metal_wasm_load_register(full_module, bytes, len)
+}
+
 /// Cascading, quiesced unload through the registry -- withdraws every
 /// published `RegEntry` first (no concurrent caller anywhere in the
 /// system while that happens, see `pymergetic_metal_reg::kernel::unload`),
@@ -218,19 +284,44 @@ pub unsafe extern "C" fn pm_metal_wasm_call0(full_module: *const u8, func: *cons
     pm_metal_wasm_port_call0(full_module, func)
 }
 
+/// W11.6: cross-lang/wasm stress (body in `_stress.rs`).
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_wasm_proof_stress() -> i32 {
+    stress::proof_stress()
+}
+
 /// W6.3 proof: load forge-packed `tests.wasm_hello` + `_c`, call via
-/// host + the registry.
+/// host + the registry. W16.1: also `tests.wasm_guest_log` (kernel log import).
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_wasm_proof() -> i32 {
     extern "C" {
         fn pm_metal_reg_call0(full_module: *const u8, func: *const u8) -> i32;
+        fn pm_metal_log(line: *const u8);
     }
 
     /* Produced by `forge pack` (forge build runs pack all in prep). */
     static WASM_RS: &[u8] = include_bytes!("../../../../build/packs/tests.wasm_hello.wasm");
     static WASM_C: &[u8] = include_bytes!("../../../../build/packs/tests.wasm_hello_c.wasm");
+    static WASM_GUEST_LOG: &[u8] =
+        include_bytes!("../../../../build/packs/tests.wasm_guest_log.wasm");
+    static WASM_GUEST_ASYNC: &[u8] =
+        include_bytes!("../../../../build/packs/tests.wasm_guest_async.wasm");
+    static WASM_GUEST_SURFACES: &[u8] =
+        include_bytes!("../../../../build/packs/tests.wasm_guest_surfaces.wasm");
+    static WASM_GUEST_INPUT: &[u8] =
+        include_bytes!("../../../../build/packs/tests.wasm_guest_input.wasm");
+    static WASM_GUEST_CORO: &[u8] =
+        include_bytes!("../../../../build/packs/tests.wasm_guest_coro.wasm");
+    static WASM_GUEST_AUDIO: &[u8] =
+        include_bytes!("../../../../build/packs/tests.wasm_guest_audio.wasm");
     static MOD_RS: [u8; 17] = *b"tests.wasm_hello\0";
     static MOD_C: [u8; 19] = *b"tests.wasm_hello_c\0";
+    static MOD_GUEST_LOG: [u8; 21] = *b"tests.wasm_guest_log\0";
+    static MOD_GUEST_ASYNC: [u8; 23] = *b"tests.wasm_guest_async\0";
+    static MOD_GUEST_SURFACES: [u8; 26] = *b"tests.wasm_guest_surfaces\0";
+    static MOD_GUEST_INPUT: [u8; 23] = *b"tests.wasm_guest_input\0";
+    static MOD_GUEST_CORO: [u8; 22] = *b"tests.wasm_guest_coro\0";
+    static MOD_GUEST_AUDIO: [u8; 23] = *b"tests.wasm_guest_audio\0";
 
     if pm_metal_wasm_init() != 0 {
         return -1;
@@ -247,5 +338,73 @@ pub unsafe extern "C" fn pm_metal_wasm_proof() -> i32 {
             return -1;
         }
     }
+    /* Guest -> kernel guest_surface (host natives), not guest-to-guest fwd. */
+    let n = pm_metal_wasm_load_register(
+        MOD_GUEST_LOG.as_ptr(),
+        WASM_GUEST_LOG.as_ptr(),
+        WASM_GUEST_LOG.len() as u32,
+    );
+    if n < 1 {
+        return -1;
+    }
+    if pm_metal_wasm_call0(MOD_GUEST_LOG.as_ptr(), b"ready\0".as_ptr()) != 0 {
+        return -1;
+    }
+    let n = pm_metal_wasm_load_register(
+        MOD_GUEST_ASYNC.as_ptr(),
+        WASM_GUEST_ASYNC.as_ptr(),
+        WASM_GUEST_ASYNC.len() as u32,
+    );
+    if n < 1 {
+        return -1;
+    }
+    if pm_metal_wasm_call0(MOD_GUEST_ASYNC.as_ptr(), b"ready\0".as_ptr()) != 0 {
+        return -1;
+    }
+    let n = pm_metal_wasm_load_register(
+        MOD_GUEST_SURFACES.as_ptr(),
+        WASM_GUEST_SURFACES.as_ptr(),
+        WASM_GUEST_SURFACES.len() as u32,
+    );
+    if n < 1 {
+        return -1;
+    }
+    if pm_metal_wasm_call0(MOD_GUEST_SURFACES.as_ptr(), b"ready\0".as_ptr()) != 0 {
+        return -1;
+    }
+    let n = pm_metal_wasm_load_register(
+        MOD_GUEST_INPUT.as_ptr(),
+        WASM_GUEST_INPUT.as_ptr(),
+        WASM_GUEST_INPUT.len() as u32,
+    );
+    if n < 1 {
+        return -1;
+    }
+    if pm_metal_wasm_call0(MOD_GUEST_INPUT.as_ptr(), b"ready\0".as_ptr()) != 0 {
+        return -1;
+    }
+    let n = pm_metal_wasm_load_register(
+        MOD_GUEST_CORO.as_ptr(),
+        WASM_GUEST_CORO.as_ptr(),
+        WASM_GUEST_CORO.len() as u32,
+    );
+    if n < 1 {
+        return -1;
+    }
+    if pm_metal_wasm_call0(MOD_GUEST_CORO.as_ptr(), b"ready\0".as_ptr()) != 0 {
+        return -1;
+    }
+    let n = pm_metal_wasm_load_register(
+        MOD_GUEST_AUDIO.as_ptr(),
+        WASM_GUEST_AUDIO.as_ptr(),
+        WASM_GUEST_AUDIO.len() as u32,
+    );
+    if n < 1 {
+        return -1;
+    }
+    if pm_metal_wasm_call0(MOD_GUEST_AUDIO.as_ptr(), b"ready\0".as_ptr()) != 0 {
+        return -1;
+    }
+    pm_metal_log(b"guest surface ok\0".as_ptr());
     0
 }

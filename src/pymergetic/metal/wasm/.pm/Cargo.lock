@@ -27,9 +27,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pymergetic_metal_console"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_mem",
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
 name = "pymergetic_metal_log"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -59,6 +69,7 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "pymergetic_metal_async",
+ "pymergetic_metal_console",
  "pymergetic_metal_log",
  "pymergetic_metal_mem",
  "pymergetic_metal_reg",

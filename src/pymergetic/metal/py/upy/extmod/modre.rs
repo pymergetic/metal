@@ -7,6 +7,9 @@ use crate::upy::py::qstrdefs;
 
 static TYPE_RE: TypeDesc = TypeDesc {
     kind: TypeKind::Object, // reuse Object kind; identity via type_ptr
+    is_user: false,
+    _pad: 0,
+    magic: 0,
     name: qstrdefs::QSTR_OBJECT,
 };
 

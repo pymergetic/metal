@@ -162,3 +162,106 @@ pub extern "C" fn pm_metal_forge_convert(
         Err(_) => pm_metal_forge_convert_t::PM_METAL_FORGE_CONVERT_ERR,
     }
 }
+
+fn cstr_opt<'a>(p: *const u8) -> Option<&'a str> {
+    if p.is_null() {
+        return None;
+    }
+    let mut n = 0usize;
+    unsafe {
+        while *p.add(n) != 0 {
+            n += 1;
+            if n > 256 {
+                return None;
+            }
+        }
+        core::str::from_utf8(core::slice::from_raw_parts(p, n)).ok()
+    }
+}
+
+/// In-memory face render: parse `source` as `src_slot`, emit `dst_slot`.
+/// Writes NUL-terminated face text into `out`. Returns byte length
+/// (excluding NUL) or -1. No pre-baked face blob; real import→catalog→export.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_forge_render(
+    src_slot: *const u8,
+    dst_slot: *const u8,
+    module_name: *const u8,
+    stem: *const u8,
+    source: *const u8,
+    source_len: u32,
+    out: *mut u8,
+    out_cap: u32,
+) -> i32 {
+    if source.is_null() || out.is_null() || out_cap == 0 {
+        return -1;
+    }
+    let Some(src_slot) = cstr_opt(src_slot) else {
+        return -1;
+    };
+    let Some(dst_slot) = cstr_opt(dst_slot) else {
+        return -1;
+    };
+    let module_name = cstr_opt(module_name).unwrap_or("pymergetic.metal.forge.render");
+    let stem = cstr_opt(stem).unwrap_or("__init__");
+    let text = match core::str::from_utf8(core::slice::from_raw_parts(source, source_len as usize))
+    {
+        Ok(t) => t,
+        Err(_) => return -1,
+    };
+    let Ok(cat) = _convert::import_catalog(src_slot, text) else {
+        return -1;
+    };
+    let sha = _hash::source_sha_hex(text.as_bytes());
+    let human = alloc::format!("{}.{}", stem, src_slot);
+    let Some(face) = _convert::export_face(
+        dst_slot,
+        module_name,
+        stem,
+        &cat,
+        &human,
+        &sha,
+        false,
+        false,
+    ) else {
+        return -1;
+    };
+    let need = face.len() + 1;
+    if need > out_cap as usize {
+        return -1;
+    }
+    core::ptr::copy_nonoverlapping(face.as_ptr(), out, face.len());
+    *out.add(face.len()) = 0;
+    face.len() as i32
+}
+
+/// Boot/smoke proof: render a tiny Rust export to a C face and check
+/// the symbol appears. Caller logs `forge render ok`.
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_forge_proof_render() -> i32 {
+    const SRC: &[u8] = b"#[no_mangle]\npub unsafe extern \"C\" fn pm_metal_forge_smoke_ready() -> i32 { 0 }\n";
+    let mut out = [0u8; 4096];
+    let n = pm_metal_forge_render(
+        b"rs\0".as_ptr(),
+        b"c\0".as_ptr(),
+        b"pymergetic.metal.forge.smoke\0".as_ptr(),
+        b"__init__\0".as_ptr(),
+        SRC.as_ptr(),
+        SRC.len() as u32,
+        out.as_mut_ptr(),
+        out.len() as u32,
+    );
+    if n <= 0 {
+        return -1;
+    }
+    let needle = b"pm_metal_forge_smoke_ready";
+    let hay = &out[..n as usize];
+    let mut i = 0usize;
+    while i + needle.len() <= hay.len() {
+        if &hay[i..i + needle.len()] == needle {
+            return 0;
+        }
+        i += 1;
+    }
+    -1
+}

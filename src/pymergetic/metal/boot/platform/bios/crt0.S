@@ -1,6 +1,6 @@
 /* Multiboot2 ELF64 entry + IA-32e bring-up for exp2 BIOS.
  * QEMU -kernel uses the ELF32 trampoline (trampoline32.S), which jumps to
- * pm_metal_bios_entry64 via .bootinfo after copying this image to 16MiB.
+ * pm_metal_bios_entry64 via .bootinfo after copying this image to 64MiB.
  */
 	.section .bootinfo, "a"
 	.align 8

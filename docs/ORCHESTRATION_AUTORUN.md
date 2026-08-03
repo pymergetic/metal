@@ -43,7 +43,12 @@ not sync-primary + async later.
 13. When W8 is `DONE`, **immediately** start **W9** — finish `net/http`
     (ASGI server + Microdot runner under the same module tree). Do not stop
     for a new plan.
-14. Stop only when Progress has no more `TODO` (W0–W9), or the continue
+14. When W9 is `DONE`, **immediately** start **W10** (registry unify +
+    reconnect boot). Then W11→W15 in order. Do not stop for a new plan.
+15. **Paradigm first:** new module/call style wins over `_old`/`main` shape.
+    Zero human prompts; skip or script around interactive steps; log choices
+    in Progress. No commits/pushes unless the owner asked.
+16. Stop only when Progress has no more `TODO` (W0–W15), or the continue
     budget is exhausted mid-chunk (leave Progress honest).
 
 ---
@@ -62,9 +67,16 @@ not sync-primary + async later.
 | **W7** | Wire | Kernel auto-register into `reg`; face check still green |
 | **W8** | Dropbear SSH | Finish `net/ssh/` (dirs exist); port from `_old`; bios+efi proof |
 | **W9** | `net/http` complete | Finish ASGI under `http` + Microdot runner there; faces/`reg`; proof |
+| **W10** | Registry unify + reconnect | Always-proxy faces for floor; reconnect py/wasm/net/fs to boot |
+| **W11** | upy finish + REPL shell | VM leftover rows; REPL-as-shell; async metrics + cross-lang/wasm stress |
+| **W12** | gfx + drivers (Rust) | Dispatch + QEMU backends + HW ports; minimal UI; Kconfig |
+| **W13** | Doc-browser | VFS source + forge render + Rust Microdot rewrite + self-serve download |
+| **W14** | Signed pkg fetch | trust/ + HTTP fetch-on-miss for wasm/AOT |
+| **W15** | metal-doom (sep. repo) | New branch off metal-doom `main`; adapt guest; never commit that `main` |
+| **W16** | Guest dual-ABI | `guest_surface` + host WAMR natives; unblocks W15.2 (may run before finishing doom) |
 
 This is huge. Continues grind **chunk by chunk**. Do not skip waves.
-W8 after W7, W9 after W8 — same autorun, no new briefing.
+W8→W9→…→W15; if W15.2 blocked on guest ABI, do **W16** then resume W15.
 
 ---
 
@@ -317,6 +329,120 @@ Do not treat "zip microdot onto ESP" as W9 DONE.
 
 ---
 
+## W10 — Registry unify + reconnect boot (after W9 DONE)
+
+**Paradigm fixed point:** always-proxy cached-slot faces + quiesce.
+`_old`/`main` = behavior only.
+
+1. **W10.1** Unify fixed/never-unloaded floor module faces to the
+   always-proxy cached-slot shape (`docs/definitions/module.md` "Two face
+   shapes"). Call-compatible with existing consumers.
+2. **W10.2** Reconnect `py`, `wasm`, `net`, `fs` as real deps in
+   `boot/.pm/Cargo.toml`; each registers via `RegMod` /
+   `pm_metal_reg_mod_load` at bring-up (same as live `dev/gfx`/`bus/pci`).
+3. **W10.3** Gate: `mod check`; bios+efi build+boot; host smokes; ReadLints;
+   main-branch inventory recheck → log gaps in Progress (do not expand scope).
+
+---
+
+## W11 — upy finish + REPL as boot shell (after W10 DONE)
+
+Reference behavior: `_old/.../py/**`, `ORCHESTRATION_UPY_MIRROR.md` remaining
+`MIRROR` rows. Shape: current `py/` / `upy/` Rust rewrite — **not** C revive.
+
+1. **W11.1** Remaining VM: `upy/py/{lexer,parse,compile,emitbc,emitnative,emitnx64,frozenmod,repl}.rs` (finished only).
+2. **W11.2** `py/loop.rs` + console/`mphalport` wiring.
+3. **W11.3** REPL-as-boot-shell (shared/default context only; **no**
+   `pmcmd` / command-registration shell — REPL is the only interactive
+   surface; reg later via the Python module tree).
+4. **W11.4** `py/.pm/Kconfig` (heap/stack/features).
+5. **W11.5** Async concurrency test + metrics: many Python async tasks;
+   prove **1 runner/core**; log tasks/awaits/per-runner progress/starve gaps.
+6. **W11.6** Cross-language call stress under load: C/RS/PY/wasm all
+   directions (incl. wasm↔wasm via dynamic imports, host↔guest) through
+   real proxy/`fwd_native`/trampoline paths; unload/reload under traffic
+   where safe; fail on wrong results/hangs/quiesce stalls.
+7. Gate: bios+efi REPL prompt; proofs + stress metrics in Progress;
+   `mod check`; lints; main recheck log.
+
+---
+
+## W12 — gfx + drivers Rust (after W11 DONE)
+
+Reference behavior: `_old/.../dev/gfx/**`. Shape: Rust `dev/gfx` module style.
+
+1. **W12.1** Port dispatch (`gfx` compositor/surfaces/present, `scanout`
+   probe order) — replace stub detect.
+2. **W12.2** QEMU backends: bochs, virtio_gpu, gop_blt, lfb_copy.
+3. **W12.3** HW ports i915_855gm / radeon_rv370 (unverified; flag in Progress).
+4. **W12.4** Minimal new Rust UI/console consumer (not full `_old/shell/ui`
+   revival) + `.pm/Kconfig` per backend.
+5. Gate: bios+efi present on QEMU display; `mod check`; lints; main recheck.
+
+---
+
+## W13 — Doc-browser + Rust Microdot rewrite (after W12 DONE)
+
+1. **W13.1** Extend `/src` VFS for source browse; live `reg` symbol reflection.
+2. **W13.2** Forge `metal`-port in-memory render (`pm_metal_forge_render` or
+   equiv) — templates + src input; no pre-baked face blob required.
+3. **W13.3** Rust rewrite of the Microdot **pattern** (route table, method+path
+   dispatch, request/response) under `net/http/microdot`; page set as
+   consumers (home/docs/iface/symbols/externals/limits). Not Python httpd.
+4. **W13.4** Self-serve download: running kernel image bytes + loaded wasm
+   module bytes as `application/octet-stream`.
+5. Gate: loopback GET browse + symbols + both downloads; `mod check`; lints;
+   main recheck.
+
+---
+
+## W14 — Signed wasm/AOT package fetch (after W13 DONE)
+
+Reference behavior: `main` `guest/pkg` + `trust/`. Shape: new modules.
+
+1. **W14.1** `trust/` verify-only (reuse already-vendored crypto; no second
+   lib). Policy `off`/`soft`/`enforce` via Kconfig.
+2. **W14.2** Package fetch-on-miss over `net/http` client into wasm load
+   path (lazy; never auto-fetch at boot); verify before WAMR.
+3. Non-interactive test keys only for smoke.
+4. Gate: host smoke fetch→verify→load→call; bios+efi; lints; main recheck.
+
+---
+
+## W15 — metal-doom validation (after W14 DONE; separate repo)
+
+Repo: `packages/metal-doom` (sibling checkout). **Hard:** create a **new
+branch off its `main`** before any edit; never commit that `main`; no push
+unless owner asks; never fold sources into `packages/metal`.
+
+1. Diff glue vs new gfx/input/sound/net guest ABI; adapt on the new branch.
+2. Rebuild via its `./scripts/build.sh` against sibling `../metal`.
+3. Verify tab/present/pace; use existing `DOOM_ASYNC.md` / `DOOM_PERF.md`
+   if regressions — do not rediscover.
+4. If `setup-doomgeneric.sh` prompts with no non-interactive path → skip
+   wave, log why in Progress.
+5. If guest dual-ABI headers/natives missing → **W16 first**, then resume.
+
+---
+
+## W16 — Guest dual-ABI (unblocks W15.2)
+
+Paradigm: `.pm/module` `"guest_surface": true` → C face forks
+`PM_METAL_PKG_IMPORT`; host registers WAMR natives at
+`pm_metal_wasm_port_init` (`wasm/port/host_natives.c`). Kernel imports are
+**not** `pm_metal_imports` fwd (that path is guest↔guest only).
+
+1. **W16.1** `log` guest_surface + host native + `tests.wasm_guest_log`
+   pack; boot mark `guest surface ok`.
+2. **W16.2** async time/sleep/yield/await + mem cookie dual-ABI as needed.
+3. **W16.3a** fs + gfx (`read_mem`/`write_mem`/`blit`/`present_async`)
+4. **W16.3b** shell_log + input poll/lock
+5. **W16.3c** guest coro pin/step + process crown
+6. **W16.3d** audio (null backend finished; optional virtio)
+7. Gate each slice: pack + bios+efi; then resume W15.2.
+
+---
+
 ## Continue protocol
 
 Each user `continue` message means:
@@ -336,5 +462,5 @@ Each user `continue` message means:
    chunk id, DONE/BLOCKED, lint OK, next TODO  
 
 Owner may enqueue many continues; Progress is the only handoff.  
-After W7 DONE → W8; after W8 DONE → W9 — no new briefing required.  
+After W7 DONE → W8; …; after W9 DONE → W10 → … → W15 — no new briefing.  
 Never skip the “last part tidy” recheck between continues.
