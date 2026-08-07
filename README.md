@@ -6,34 +6,34 @@ Muscles for the MetalPython constellation (drivers, NIC, floor, net, …).
 ```bash
 # from packages/metalpython
 make -C ports/metal BOARD=X86_64_BIOS ENGINE=mp run
-make -C ports/metal BOARD=X86_64_BIOS ENGINE=mp REPL=1 run   # see ports/metal/README
 make -C ports/metal BOARD=X86_64_BIOS ENGINE=mp live-ssh
 make -C ports/metal BOARD=X86_64_UEFI ENGINE=mp run
 ```
 
-Port forward + smoke markers: [`../../ports/metal/README.md`](../../ports/metal/README.md)
+Port forward + smoke: [`../../ports/metal/README.md`](../../ports/metal/README.md)
 (or [`port/README.md`](port/README.md)).
 
-## Layout
+## Layout (wasmmod principles)
 
 | Path | Role |
 |------|------|
-| `port/` | BIOS/UEFI µPy board port (`ENGINE=mp\|upy\|mpwm`) |
-| `net/`, `async/`, `mem/`, … | C muscles used by the port (tcp/http mini-stack, …) |
-| `src/pymergetic/metal/` | Hybrid modules: `__init__.{c,rs,pyi,h}` (one impl, other faces) |
-| `include/pymergetic/metal/` | Port muscle headers (`net/tcp.h`, …); module faces live under `src/` |
-| `external/` | Submodules (lwip, tlsf, mbedtls, …) |
-| `docs/` | Design notes |
+| [`include/pymergetic/metal/`](include/README.md) | **Public** C faces — enough to build against |
+| `src/pymergetic/metal/` | Hybrid impl + RS/Py export faces (`__init__.{c,rs,pyi}`) |
+| `port/` | BIOS/UEFI µPy boards (`ENGINE=mp\|upy\|mpwm`); `-I include` |
+| `external/` | Vendors (lwip, tlsf, mbedtls, …) |
+| `_tmp/` | Quarantine for old parallel trees — **not** product |
+| `docs/HYBRID.md` | Layout rules |
 
-**Removed:** `forge-cli`, `src/.../forge/`, forge mod-sync autogen faces,
-`.pm/` module crates, `_old/` archive. Do not resurrect.
+**Do not** grow package-root `net/` / `async/` / `mem/` / … twins. Migrate into
+`src/` + `include/` or quarantine under `_tmp/`.
+
+**Removed:** `forge-cli`, forge mod-sync, `.pm/` crates, `_old/`. Do not resurrect.
 
 ## Docs
 
 | Doc | Role |
 |-----|------|
-| [`docs/SOURCETREE.md`](docs/SOURCETREE.md) | Tree + C dialect |
-| [`docs/PLATFORM.md`](docs/PLATFORM.md) | BIOS/EFI ops floor |
-| [`docs/IO.md`](docs/IO.md) | IO classes |
-| [`docs/EFI.md`](docs/EFI.md) | EFI notes |
+| [`docs/HYBRID.md`](docs/HYBRID.md) | include + hybrid C/RS/Py |
+| [`docs/IO.md`](docs/IO.md) | IO classes + N runners |
+| [`docs/SOURCETREE.md`](docs/SOURCETREE.md) | Tree + C dialect (may lag; HYBRID wins) |
 | [`port/README.md`](port/README.md) | Board smoke / live surfaces |

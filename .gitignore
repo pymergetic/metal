@@ -2,9 +2,8 @@
 /build/
 /_old/build/
 
-# Generated module faces (metal mod sync); mirrors src/pymergetic/metal/**
-# with the _impl/ segment stripped -- see docs/definitions/module.md
-/include/
+# Public faces live under include/ and are TRACKED (wasmmod-style).
+# Do not wholesale-ignore include/. Forge mod-sync is gone.
 
 # Cargo outs (host tools + module crates; modules also list these locally)
 **/.target/

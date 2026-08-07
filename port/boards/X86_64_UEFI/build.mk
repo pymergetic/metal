@@ -166,7 +166,7 @@ $(BUILD)/metal_kbd.o: $(METAL)/dev/input/kbd.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_async.o: $(METAL)/async/async.c | $(BUILD)
+$(BUILD)/metal_async.o: $(METAL)/src/pymergetic/metal/async/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
