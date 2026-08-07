@@ -1,6 +1,7 @@
 #include <Uefi.h>
 
 #include "main_upy.h"
+#include "product_bringup.h"
 #include "console_smoke.h"
 #include "floor_smoke.h"
 #include "net_smoke.h"
@@ -35,47 +36,33 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     uart_init();
     uart_puts("metal X86_64_UEFI\n");
 
-    if (pm_metal_console_smoke() != 0) {
+#if METAL_UPY_SMOKE
+    if (pm_metal_console_smoke() != 0 ||
+        pm_metal_floor_smoke() != 0 ||
+        pm_metal_net_smoke() != 0 ||
+        pm_metal_net_ip_smoke() != 0 ||
+        pm_metal_draw_smoke() != 0 ||
+        pm_metal_vt_smoke() != 0 ||
+        pm_metal_tui_smoke() != 0 ||
+        pm_metal_kbd_smoke() != 0) {
         return EFI_DEVICE_ERROR;
     }
-
-    if (pm_metal_floor_smoke() != 0) {
-        return EFI_DEVICE_ERROR;
-    }
-
-    if (pm_metal_net_smoke() != 0) {
-        return EFI_DEVICE_ERROR;
-    }
-
-    if (pm_metal_net_ip_smoke() != 0) {
-        return EFI_DEVICE_ERROR;
-    }
-
-    if (pm_metal_draw_smoke() != 0) {
-        return EFI_DEVICE_ERROR;
-    }
-
-    if (pm_metal_vt_smoke() != 0) {
-        return EFI_DEVICE_ERROR;
-    }
-
-    if (pm_metal_tui_smoke() != 0) {
-        return EFI_DEVICE_ERROR;
-    }
-
-    if (pm_metal_kbd_smoke() != 0) {
-        return EFI_DEVICE_ERROR;
-    }
-
 #if defined(METAL_LINK_WAMR) && METAL_LINK_WAMR
     if (pm_metal_wamr_smoke() != 0) {
+        return EFI_DEVICE_ERROR;
+    }
+#endif
+#else
+    if (pm_metal_product_bringup() != 0) {
         return EFI_DEVICE_ERROR;
     }
 #endif
 
     mp_metal_upy_run(METAL_UPY_SMOKE);
 
+#if METAL_UPY_SMOKE
     uart_puts("ovmf ok\n");
+#endif
 
 #if METAL_LIVE_SSH
     pm_metal_live_ssh();

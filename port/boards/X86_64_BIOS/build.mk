@@ -104,6 +104,7 @@ SRC_C = \
 	boards/X86_64_BIOS/uart.c \
 	common/mphalport.c \
 	common/main_upy.c \
+	common/product_bringup.c \
 	common/metal_board_time.c \
 	common/floor_smoke.c \
 	common/net_smoke.c \
@@ -310,6 +311,30 @@ $(BUILD)/metal.qemu.elf: $(BUILD)/trampoline32.o $(BUILD)/trampoline64.o \
 	$(Q)$(LD) -m elf_i386 -nostdlib -T boards/X86_64_BIOS/link32.ld -o $@ \
 		$(BUILD)/trampoline32.o $(BUILD)/trampoline64.o \
 		$(BUILD)/trampoline_load.o $(BUILD)/metal_elf.o
+
+# Product REPL: lean bring-up + friendly µPy on COM1 (not the smoke battery).
+# Stdin feeder waits for DHCP, then sends print(1+1); expect `metal repl` + result.
+repl: $(BUILD)/metal.qemu.elf
+	@test "$(REPL)" = "1" || { echo "repl requires REPL=1"; exit 1; }
+	@set +e; \
+	rm -f $(BUILD)/serial.log; \
+	timeout 25s bash -c '\
+	  ( sleep 6; printf "print(1+1)\r\n"; sleep 2; printf "\x04"; sleep 1; ) \
+	  | $(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
+		-netdev $(NETDEV_USER) -device virtio-net-pci,netdev=n0 \
+		-display none -serial stdio -monitor none \
+		-kernel $(BUILD)/metal.qemu.elf \
+		>$(BUILD)/serial.log 2>&1'; \
+	ec=$$?; \
+	echo "----- serial -----"; \
+	grep -a -E "metal |bringup|repl|>>>|MicroPython|^2$$|print|Traceback" $(BUILD)/serial.log 2>/dev/null | tail -50 || true; \
+	if grep -a -q "metal repl" $(BUILD)/serial.log \
+	  && tr -d '\r' <$(BUILD)/serial.log | grep -qx "2"; then \
+	  echo "X86_64_BIOS_REPL_OK ENGINE=$(ENGINE)"; exit 0; \
+	fi; \
+	echo "X86_64_BIOS_REPL_FAIL ENGINE=$(ENGINE) qemu_ec=$$ec"; \
+	tail -c 2500 $(BUILD)/serial.log 2>/dev/null || true; \
+	exit 1
 
 run: $(BUILD)/metal.qemu.elf
 	@set +e; \

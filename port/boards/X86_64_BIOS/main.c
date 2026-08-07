@@ -1,8 +1,9 @@
-/* Freestanding BIOS entry — console → floor → draw → vt → wamr → µPy. */
+/* Freestanding BIOS entry — smoke battery OR lean product REPL. */
 #include <stdint.h>
 
 #include "io.h"
 #include "main_upy.h"
+#include "product_bringup.h"
 #include "console_smoke.h"
 #include "floor_smoke.h"
 #include "net_smoke.h"
@@ -30,6 +31,14 @@ void uart_puts(const char *s);
 #define METAL_LIVE_SSH 0
 #endif
 
+static void bios_halt_fail(void)
+{
+    outw(0x501u, 1u);
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
 void pm_metal_bios_main(uint32_t magic, void *mb_info)
 {
     (void)magic;
@@ -38,68 +47,25 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
     uart_init();
     uart_puts("metal X86_64_BIOS\n");
 
-    if (pm_metal_console_smoke() != 0) {
-        outw(0x501u, 1u);
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+#if METAL_UPY_SMOKE
+    if (pm_metal_console_smoke() != 0 ||
+        pm_metal_floor_smoke() != 0 ||
+        pm_metal_net_smoke() != 0 ||
+        pm_metal_net_ip_smoke() != 0 ||
+        pm_metal_draw_smoke() != 0 ||
+        pm_metal_vt_smoke() != 0 ||
+        pm_metal_tui_smoke() != 0 ||
+        pm_metal_kbd_smoke() != 0) {
+        bios_halt_fail();
     }
-
-    if (pm_metal_floor_smoke() != 0) {
-        outw(0x501u, 1u);
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-
-    if (pm_metal_net_smoke() != 0) {
-        outw(0x501u, 1u);
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-
-    if (pm_metal_net_ip_smoke() != 0) {
-        outw(0x501u, 1u);
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-
-    if (pm_metal_draw_smoke() != 0) {
-        outw(0x501u, 1u);
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-
-    if (pm_metal_vt_smoke() != 0) {
-        outw(0x501u, 1u);
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-
-    if (pm_metal_tui_smoke() != 0) {
-        outw(0x501u, 1u);
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-
-    if (pm_metal_kbd_smoke() != 0) {
-        outw(0x501u, 1u);
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-
 #if defined(METAL_LINK_WAMR) && METAL_LINK_WAMR
     if (pm_metal_wamr_smoke() != 0) {
-        outw(0x501u, 1u);
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        bios_halt_fail();
+    }
+#endif
+#else
+    if (pm_metal_product_bringup() != 0) {
+        bios_halt_fail();
     }
 #endif
 
@@ -111,7 +77,6 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
     pm_metal_live_http();
 #else
     outw(0x501u, 0u);
-
     for (;;) {
         __asm__ volatile("hlt");
     }
