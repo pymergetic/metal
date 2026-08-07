@@ -81,7 +81,7 @@ static int sock_poll_budget(mod_network_socket_obj_t *socket)
 
     if (socket == NULL || socket->timeout < 0) {
         /* UEFI virtio path needs a larger busy-wait than BIOS. */
-        return 80000;
+        return 160000;
     }
     if (socket->timeout == 0) {
         return 1;
@@ -111,6 +111,7 @@ static void metal_close(mod_network_socket_obj_t *socket)
     if (socket != NULL) {
         socket->_private = NULL;
     }
+    pm_metal_tcp_abort();
 }
 
 static int metal_bind(mod_network_socket_obj_t *socket, byte *ip, mp_uint_t port, int *_errno)

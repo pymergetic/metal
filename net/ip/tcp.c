@@ -177,15 +177,25 @@ static void tcp_on_rx(const uint8_t *ip_pkt, uint32_t ip_len, uint32_t ihl)
 
     if (g_sock.state == TCP_ESTABLISHED && src_ip == g_sock.remote_ip &&
         src_port == g_sock.remote_port) {
+        if ((flags & TCP_FLAG_RST) != 0u) {
+            memset(&g_sock, 0, sizeof(g_sock));
+            g_sock.state = TCP_CLOSED;
+            return;
+        }
         payload_len = ip_len - (ihl + tcp_hdr_len);
         if (payload_len > 0u && seq == g_sock.rcv_nxt) {
             tcp_queue_rx(ip_pkt + ihl + tcp_hdr_len, payload_len);
             g_sock.rcv_nxt += payload_len;
+            seq += payload_len;
+            (void)tcp_tx(src_ip, g_sock.local_port, src_port, g_sock.snd_nxt, g_sock.rcv_nxt,
+                         TCP_FLAG_ACK, NULL, 0);
+        }
+        if ((flags & TCP_FLAG_FIN) != 0u && seq == g_sock.rcv_nxt) {
+            g_sock.rcv_nxt += 1u;
             (void)tcp_tx(src_ip, g_sock.local_port, src_port, g_sock.snd_nxt, g_sock.rcv_nxt,
                          TCP_FLAG_ACK, NULL, 0);
         }
         (void)ack;
-        (void)flags;
         return;
     }
 }
@@ -209,6 +219,14 @@ int32_t pm_metal_tcp_listen(uint16_t local_port)
     return 0;
 }
 
+void pm_metal_tcp_abort(void)
+{
+    /* Drop local state without RST for now — RST TX was suspect for wedging
+     * the virtio TX ring before a subsequent active open. */
+    memset(&g_sock, 0, sizeof(g_sock));
+    g_sock.state = TCP_CLOSED;
+}
+
 int32_t pm_metal_tcp_connect(uint32_t dst_ip, uint16_t dst_port)
 {
     int32_t rc;
@@ -217,7 +235,7 @@ int32_t pm_metal_tcp_connect(uint32_t dst_ip, uint16_t dst_port)
         return -1;
     }
     tcp_register_once();
-    memset(&g_sock, 0, sizeof(g_sock));
+    pm_metal_tcp_abort();
     g_isn_seq += 0x1111u;
     g_sock.state = TCP_SYN_SENT;
     g_sock.local_port = (uint16_t)(49152u + (g_isn_seq & 0x0fffu));

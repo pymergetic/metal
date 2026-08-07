@@ -80,6 +80,7 @@ int32_t pm_metal_http_client_get(const char *host, uint16_t port, const char *pa
     uint32_t chunk;
     int i;
     int32_t rc;
+    int32_t out = -1;
     size_t rlen;
     size_t o;
 
@@ -97,19 +98,20 @@ int32_t pm_metal_http_client_get(const char *host, uint16_t port, const char *pa
             break;
         }
         if (rc != -2) {
-            return -1;
+            goto done;
         }
         pm_metal_ip_poll();
     }
     if (rc != 0) {
-        return -1;
+        goto done;
     }
 
-    for (i = 0; i < 8000 && !pm_metal_tcp_established(); i++) {
+    for (i = 0; i < 20000 && !pm_metal_tcp_established(); i++) {
         pm_metal_ip_poll();
     }
     if (!pm_metal_tcp_established()) {
-        return -2;
+        out = -3; /* connect handshake timeout */
+        goto done;
     }
 
     /* GET path HTTP/1.0\r\nHost: host\r\nConnection: close\r\n\r\n */
@@ -127,7 +129,7 @@ int32_t pm_metal_http_client_get(const char *host, uint16_t port, const char *pa
     memcpy(req + o, "\r\nConnection: close\r\n\r\n", 24);
     o += 24;
     if (o >= sizeof(req)) {
-        return -1;
+        goto done;
     }
 
     for (i = 0; i < 32; i++) {
@@ -136,15 +138,15 @@ int32_t pm_metal_http_client_get(const char *host, uint16_t port, const char *pa
             break;
         }
         if (rc != -2) {
-            return -1;
+            goto done;
         }
         pm_metal_ip_poll();
     }
     if (rc != 0) {
-        return -1;
+        goto done;
     }
 
-    for (i = 0; i < 12000; i++) {
+    for (i = 0; i < 20000; i++) {
         pm_metal_ip_poll();
         chunk = 0;
         rc = pm_metal_tcp_recv(buf + got, cap - got, &chunk);
@@ -152,7 +154,8 @@ int32_t pm_metal_http_client_get(const char *host, uint16_t port, const char *pa
             got += chunk;
             if (str_has_http(buf, got)) {
                 *len_out = got;
-                return 0;
+                out = 0;
+                goto done;
             }
             if (got >= cap) {
                 break;
@@ -161,7 +164,12 @@ int32_t pm_metal_http_client_get(const char *host, uint16_t port, const char *pa
     }
     if (str_has_http(buf, got)) {
         *len_out = got;
-        return 0;
+        out = 0;
+    } else {
+        out = -2;
     }
-    return -2;
+
+done:
+    pm_metal_tcp_abort();
+    return out;
 }

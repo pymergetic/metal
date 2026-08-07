@@ -7,7 +7,7 @@
 
 #include "pymergetic/metal/dev/net.h"
 
-#define ARP_CACHE_SIZE 4u
+#define ARP_CACHE_SIZE 16u
 #define IP_PROTO_ICMP 1u
 #define IP_PROTO_TCP  6u
 #define IP_PROTO_UDP  17u
@@ -127,6 +127,9 @@ void pm_metal_ip_arp_cache_put(uint32_t ip, const uint8_t mac[6])
     uint32_t i;
     uint32_t slot = ARP_CACHE_SIZE;
 
+    if (mac == NULL || ip == 0u) {
+        return;
+    }
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
         if (g_arp_cache[i].valid && g_arp_cache[i].ip == ip) {
             slot = i;
@@ -137,7 +140,14 @@ void pm_metal_ip_arp_cache_put(uint32_t ip, const uint8_t mac[6])
         }
     }
     if (slot == ARP_CACHE_SIZE) {
+        /* Evict a non-gateway entry; never drop the default route L2 mapping. */
         slot = 0;
+        for (i = 0; i < ARP_CACHE_SIZE; i++) {
+            if (!g_arp_cache[i].valid || g_arp_cache[i].ip != g_gw) {
+                slot = i;
+                break;
+            }
+        }
     }
     g_arp_cache[slot].ip = ip;
     memcpy(g_arp_cache[slot].mac, mac, 6);

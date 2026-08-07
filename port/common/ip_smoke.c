@@ -9,6 +9,7 @@
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/ip_internal.h"
+#include "pymergetic/metal/net/ntp.h"
 #include "pymergetic/metal/net/ssh.h"
 #include "pymergetic/metal/net/tcp.h"
 #include "pymergetic/metal/net/udp.h"
@@ -179,11 +180,38 @@ static int http_client_smoke(void)
     int32_t rc;
 
     rc = pm_metal_http_client_get("example.com", 80, "/", buf, sizeof(buf), &n);
+    if (rc == -3) {
+        uart_puts("http client syn fail\n");
+        return -1;
+    }
+    if (rc == -2) {
+        uart_puts("http client timeout\n");
+        return -1;
+    }
     if (rc != 0 || n < 12u) {
         uart_puts("http client fail\n");
         return -1;
     }
     uart_puts("http client ok\n");
+    return 0;
+}
+
+static int ntp_smoke(void)
+{
+    uint32_t secs = 0;
+    int32_t rc;
+
+    rc = pm_metal_ntp_query_host("time.google.com", &secs);
+    if (rc != 0) {
+        uart_puts("ntp query fail\n");
+        return -1;
+    }
+    /* Rough sanity: 2023-11 .. 2033-05 */
+    if (secs < 1700000000u || secs > 2000000000u) {
+        uart_puts("ntp range fail\n");
+        return -1;
+    }
+    uart_puts("ntp ok\n");
     return 0;
 }
 
@@ -280,6 +308,9 @@ int pm_metal_ip_smoke(void)
         return -1;
     }
     if (http_client_smoke() != 0) {
+        return -1;
+    }
+    if (ntp_smoke() != 0) {
         return -1;
     }
 
