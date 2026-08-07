@@ -14,6 +14,7 @@
 #define VNET_TX_BUFS 4
 
 #pragma pack(1)
+/* With VIRTIO_NET_F_MRG_RXBUF negotiated — 12-byte hdr. */
 typedef struct {
     uint8_t flags;
     uint8_t gso_type;
@@ -93,7 +94,8 @@ static int vnet_negotiate_features(uint64_t *feats_out)
     uint64_t feats;
 
     feats = pm_metal_virtio_get_features(&m_dev);
-    feats &= PM_METAL_VIRTIO_F_VERSION_1 | PM_METAL_VIRTIO_F_MAC;
+    feats &= PM_METAL_VIRTIO_F_VERSION_1 | PM_METAL_VIRTIO_F_MAC |
+             PM_METAL_VIRTIO_NET_F_MRG_RXBUF;
     if (pm_metal_virtio_set_features(&m_dev, feats) != 0) {
         pm_metal_virtio_set_status(&m_dev, 0);
         pm_metal_virtio_set_status(&m_dev,
@@ -282,6 +284,7 @@ int pm_metal_dev_net_virtio_tx(const void *frame, uint32_t len)
     scratch = m_tx_scratch[idx];
     hdr = (vnet_hdr_t *)scratch;
     memset(hdr, 0, sizeof(*hdr));
+    hdr->num_buffers = 1;
     pkt = scratch + sizeof(*hdr);
     memcpy(pkt, frame, len);
 

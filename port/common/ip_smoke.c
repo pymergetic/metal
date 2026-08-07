@@ -2,10 +2,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/ip_internal.h"
+#include "pymergetic/metal/net/ssh.h"
 #include "pymergetic/metal/net/tcp.h"
 #include "pymergetic/metal/net/udp.h"
 
@@ -73,6 +75,67 @@ static int udp_smoke(void)
     return 0;
 }
 
+static int dns_smoke(void)
+{
+    /* Transaction id 0xA1B2; standard query A for example.com */
+    static const uint8_t q[] = {
+        0xa1, 0xb2, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
+        0x00, 0x01, 0x00, 0x01,
+    };
+    uint8_t rx[512];
+    uint32_t rx_len;
+    uint32_t src_ip;
+    uint16_t src_port;
+    int i;
+    int32_t rc;
+    int got = 0;
+
+    if (pm_metal_udp_bind(49501) != 0) {
+        uart_puts("dns bind fail\n");
+        return -1;
+    }
+    if (arp_wait(PM_METAL_IP_DEFAULT_DNS, 256) != 0) {
+        /* Fall back through gateway ARP if DNS not on-link resolved yet. */
+        if (arp_wait(PM_METAL_IP_DEFAULT_GW, 256) != 0) {
+            uart_puts("dns arp fail\n");
+            return -1;
+        }
+    }
+
+    for (i = 0; i < 16; i++) {
+        rc = pm_metal_udp_sendto(PM_METAL_IP_DEFAULT_DNS, 53, q, sizeof(q));
+        if (rc == 0) {
+            break;
+        }
+        if (rc != -2) {
+            uart_puts("dns tx fail\n");
+            return -1;
+        }
+        pm_metal_ip_poll();
+    }
+    if (rc != 0) {
+        uart_puts("dns tx fail\n");
+        return -1;
+    }
+
+    for (i = 0; i < 4000; i++) {
+        pm_metal_ip_poll();
+        if (pm_metal_udp_recv(&src_ip, &src_port, rx, sizeof(rx), &rx_len) == 1) {
+            if (rx_len >= 12u && rx[0] == 0xa1u && rx[1] == 0xb2u && src_port == 53u) {
+                got = 1;
+                break;
+            }
+        }
+    }
+    if (!got) {
+        uart_puts("dns reply fail\n");
+        return -1;
+    }
+    uart_puts("dns ok\n");
+    return 0;
+}
+
 static int tcp_smoke(void)
 {
     if (pm_metal_tcp_listen(8080) != 0) {
@@ -126,6 +189,28 @@ static int http_smoke(void)
     return 0;
 }
 
+static int ssh_smoke(void)
+{
+    if (pm_metal_tcp_listen(22) != 0) {
+        uart_puts("ssh listen fail\n");
+        return -1;
+    }
+    if (pm_metal_tcp_smoke_syn_ack() != 0) {
+        uart_puts("ssh syn fail\n");
+        return -1;
+    }
+    if (pm_metal_ssh_banner_send() != 0) {
+        uart_puts("ssh banner fail\n");
+        return -1;
+    }
+    if (!pm_metal_ssh_banner_sent()) {
+        uart_puts("ssh sent fail\n");
+        return -1;
+    }
+    uart_puts("ssh ok\n");
+    return 0;
+}
+
 int pm_metal_ip_smoke(void)
 {
     int i;
@@ -150,10 +235,16 @@ int pm_metal_ip_smoke(void)
     if (udp_smoke() != 0) {
         return -1;
     }
+    if (dns_smoke() != 0) {
+        return -1;
+    }
     if (tcp_smoke() != 0) {
         return -1;
     }
     if (http_smoke() != 0) {
+        return -1;
+    }
+    if (ssh_smoke() != 0) {
         return -1;
     }
 

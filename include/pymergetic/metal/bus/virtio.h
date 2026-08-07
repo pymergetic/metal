@@ -22,6 +22,7 @@ extern "C" {
 
 #define PM_METAL_VIRTIO_F_VERSION_1        (1ull << 32)
 #define PM_METAL_VIRTIO_F_MAC              (1ull << 5)
+#define PM_METAL_VIRTIO_NET_F_MRG_RXBUF    (1ull << 15)
 
 typedef struct pm_metal_virtio_dev pm_metal_virtio_dev_t;
 typedef struct pm_metal_virtq pm_metal_virtq_t;

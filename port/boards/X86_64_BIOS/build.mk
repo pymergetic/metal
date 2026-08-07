@@ -119,7 +119,7 @@ OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
-OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o
+OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -184,6 +184,10 @@ $(BUILD)/metal_tcp.o: $(METAL)/net/ip/tcp.c | $(BUILD)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_http.o: $(METAL)/net/http/http.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_ssh.o: $(METAL)/net/ssh/ssh_banner.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -269,8 +273,10 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "net ok" $(BUILD)/serial.log \
 	  && grep -q "ip ok" $(BUILD)/serial.log \
 	  && grep -q "udp ok" $(BUILD)/serial.log \
+	  && grep -q "dns ok" $(BUILD)/serial.log \
 	  && grep -q "tcp ok" $(BUILD)/serial.log \
 	  && grep -q "http ok" $(BUILD)/serial.log \
+	  && grep -q "ssh ok" $(BUILD)/serial.log \
 	  && grep -q "draw ok" $(BUILD)/serial.log \
 	  && grep -q "vt ok" $(BUILD)/serial.log \
 	  && grep -q "tui ok" $(BUILD)/serial.log \

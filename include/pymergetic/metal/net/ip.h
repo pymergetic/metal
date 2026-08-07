@@ -17,6 +17,9 @@ extern "C" {
 #ifndef PM_METAL_IP_DEFAULT_GW
 #define PM_METAL_IP_DEFAULT_GW 0x0a000202u /* 10.0.2.2 */
 #endif
+#ifndef PM_METAL_IP_DEFAULT_DNS
+#define PM_METAL_IP_DEFAULT_DNS 0x0a000203u /* 10.0.2.3 QEMU user DNS */
+#endif
 
 int32_t pm_metal_ip_init(uint32_t addr_be, uint32_t mask_be, uint32_t gw_be);
 int32_t pm_metal_ip_ready(void);
