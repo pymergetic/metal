@@ -17,7 +17,8 @@ CompileFlags:
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/common
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/boards/X86_64_BIOS
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/boards/X86_64_UEFI
-    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/build-X86_64_BIOS
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/build-X86_64_BIOS-mp
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/build-X86_64_UEFI-mp
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/libc
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/wasm/port/platform
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/_tmp/external/edk2/MdePkg/Include

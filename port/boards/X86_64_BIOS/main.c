@@ -1,10 +1,12 @@
-/* Freestanding BIOS entry — console → floor → wamr → µPy. */
+/* Freestanding BIOS entry — console → floor → draw → vt → wamr → µPy. */
 #include <stdint.h>
 
 #include "io.h"
 #include "main_upy.h"
 #include "console_smoke.h"
 #include "floor_smoke.h"
+#include "draw_smoke.h"
+#include "vt_smoke.h"
 #include "wamr_smoke.h"
 
 void uart_init(void);
@@ -30,6 +32,20 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
     }
 
     if (pm_metal_floor_smoke() != 0) {
+        outw(0x501u, 1u);
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
+    if (pm_metal_draw_smoke() != 0) {
+        outw(0x501u, 1u);
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
+    if (pm_metal_vt_smoke() != 0) {
         outw(0x501u, 1u);
         for (;;) {
             __asm__ volatile("hlt");

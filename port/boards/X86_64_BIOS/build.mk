@@ -8,7 +8,7 @@ BOARD_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 PORT_DIR := $(CURDIR)
 COMMON := $(PORT_DIR)/common
 METAL := $(abspath $(PORT_DIR)/..)
-BUILD ?= build-X86_64_BIOS
+BUILD ?= build-X86_64_BIOS-$(ENGINE)
 
 ENGINE ?= mp
 PACKAGES := $(abspath $(PORT_DIR)/../../../..)
@@ -90,6 +90,8 @@ SRC_C = \
 	common/metal_board_time.c \
 	common/floor_smoke.c \
 	common/console_smoke.c \
+	common/draw_smoke.c \
+	common/vt_smoke.c \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
 	shared/runtime/stdout_helpers.c \
@@ -109,6 +111,7 @@ SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c
 OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_console.o
+OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -129,6 +132,14 @@ $(BUILD)/metal_async.o: $(METAL)/async/async.c | $(BUILD)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_console.o: $(METAL)/console/console.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_draw.o: $(METAL)/draw/draw.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_vt.o: $(METAL)/shell/vt/vt.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -210,6 +221,8 @@ run: $(BUILD)/metal.qemu.elf
 	cat $(BUILD)/serial.log; \
 	if grep -q "console ok" $(BUILD)/serial.log \
 	  && grep -q "floor ok" $(BUILD)/serial.log \
+	  && grep -q "draw ok" $(BUILD)/serial.log \
+	  && grep -q "vt ok" $(BUILD)/serial.log \
 	  && { [ "$(LINK_WAMR)" != "1" ] || grep -q "wamr ok" $(BUILD)/serial.log; } \
 	  && grep -q "upy ok" $(BUILD)/serial.log \
 	  && grep -q "qemu ok" $(BUILD)/serial.log; then \

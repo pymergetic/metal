@@ -3,6 +3,8 @@
 #include "main_upy.h"
 #include "console_smoke.h"
 #include "floor_smoke.h"
+#include "draw_smoke.h"
+#include "vt_smoke.h"
 #include "wamr_smoke.h"
 
 void uart_init(void);
@@ -24,6 +26,14 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     }
 
     if (pm_metal_floor_smoke() != 0) {
+        return EFI_DEVICE_ERROR;
+    }
+
+    if (pm_metal_draw_smoke() != 0) {
+        return EFI_DEVICE_ERROR;
+    }
+
+    if (pm_metal_vt_smoke() != 0) {
         return EFI_DEVICE_ERROR;
     }
 
