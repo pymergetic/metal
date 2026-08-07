@@ -37,8 +37,7 @@ merge later. **Do not** resurrect package-root `net/`.
 
 | Path | Why still there |
 |------|-----------------|
-| `libc/*.h` | Freestanding `-I$(METAL)/libc` for port TUs; `.c` lives under `src/.../libc/port/` |
-| `wasm/port/platform/*.h` | Platform include path for WAMR; `.c` under `src/.../wasm/port/platform/` |
-| `_tmp/package-root/` | Quarantined old async/ and leftovers |
+| `libc` → `include/pymergetic/metal/libc` | Symlink so `-I$(METAL)/libc` keeps working; headers live under `include/` |
+| `_tmp/package-root/` | Quarantined old trees |
 
-No package-root `net/` `async/` `mem/` `bus/` `console/` `draw/` `shell/` `dev/` product `.c` trees.
+No package-root `net/` `async/` `mem/` `bus/` `console/` `draw/` `shell/` `dev/` `wasm/` product trees.

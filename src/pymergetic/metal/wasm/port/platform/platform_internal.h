@@ -48,6 +48,19 @@ typedef struct {
 typedef int os_file_handle;
 typedef void *os_dir_stream;
 typedef int os_raw_file_handle;
+/* Declared by platform_api_extension.h (WASI off — stubs only if linked). */
+typedef int os_poll_file_handle;
+typedef unsigned int os_nfds_t;
+
+/* WAMR freestanding math.c exports *_float / *_double; match riot/zephyr. */
+int isnan_float(float x);
+int isnan_double(double x);
+int signbit_float(float x);
+int signbit_double(double x);
+#define isnan(x) \
+  (sizeof(x) == sizeof(double) ? isnan_double((double)(x)) : isnan_float((float)(x)))
+#define signbit(x) \
+  (sizeof(x) == sizeof(double) ? signbit_double((double)(x)) : signbit_float((float)(x)))
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096

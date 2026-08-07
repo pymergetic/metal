@@ -86,7 +86,7 @@ endif
 
 ifeq ($(LINK_WAMR),1)
 INC += -I$(WASMMOD)/third_party/wamr/core/iwasm/include \
-	-I$(METAL)/wasm/port/platform \
+	-I$(METAL)/src/pymergetic/metal/wasm/port/platform \
 	-I$(METAL)/libc
 CFLAGS_METAL += -DBH_PLATFORM_METAL
 endif
@@ -263,8 +263,8 @@ $(WAMR_LIB): $(WASMMOD)/ports/metal/wamr_freestanding.mk
 	$(Q)$(MAKE) -f $(WASMMOD)/ports/metal/wamr_freestanding.mk \
 		OUT_DIR=$(BUILD)/wamr-fs \
 		WAMR_DIR=$(WASMMOD)/third_party/wamr \
-		METAL_PLAT_INC=$(METAL)/wasm/port/platform \
-		METAL_PORT_INC=$(METAL)/wasm/port \
+		METAL_PLAT_INC=$(METAL)/src/pymergetic/metal/wasm/port/platform \
+		METAL_PORT_INC=$(METAL)/src/pymergetic/metal/wasm/port \
 		METAL_LIBC_INC=$(METAL)/libc \
 		METAL_SRC_INC=$(METAL) \
 		METAL_INCLUDE_INC=$(METAL)/include \
