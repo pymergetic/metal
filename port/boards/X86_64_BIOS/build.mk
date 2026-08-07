@@ -138,7 +138,7 @@ OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
 OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
-OBJ += $(BUILD)/metal_upy_nic.o
+OBJ += $(BUILD)/metal_dns.o $(BUILD)/metal_upy_nic.o
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -211,6 +211,10 @@ $(BUILD)/metal_ssh.o: $(METAL)/net/ssh/ssh_banner.c | $(BUILD)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_dhcp.o: $(METAL)/net/ip/dhcp.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_dns.o: $(METAL)/net/ip/dns.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -314,6 +318,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "upy ok" $(BUILD)/serial.log \
 	  && grep -q "framebuf ok" $(BUILD)/serial.log \
 	  && grep -q "network ok" $(BUILD)/serial.log \
+	  && grep -q "dns py ok" $(BUILD)/serial.log \
 	  && grep -q "qemu ok" $(BUILD)/serial.log; then \
 	  echo "X86_64_BIOS_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	  exit 0; \

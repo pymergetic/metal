@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "pymergetic/metal/net/dhcp.h"
+#include "pymergetic/metal/net/dns.h"
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/ip_internal.h"
@@ -78,61 +79,18 @@ static int udp_smoke(void)
 
 static int dns_smoke(void)
 {
-    /* Transaction id 0xA1B2; standard query A for example.com */
-    static const uint8_t q[] = {
-        0xa1, 0xb2, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
-        0x00, 0x01, 0x00, 0x01,
-    };
-    uint8_t rx[512];
-    uint32_t rx_len;
-    uint32_t src_ip;
-    uint16_t src_port;
-    int attempt;
-    int i;
+    uint32_t addr = 0;
     int32_t rc;
-    int got = 0;
 
-    if (pm_metal_udp_bind(49501) != 0) {
-        uart_puts("dns bind fail\n");
+    rc = pm_metal_dns_resolve("example.com", &addr);
+    if (rc != 0 || addr == 0u) {
+        uart_puts("dns resolve fail\n");
         return -1;
     }
-    if (arp_wait(PM_METAL_IP_DEFAULT_DNS, 256) != 0) {
-        if (arp_wait(PM_METAL_IP_DEFAULT_GW, 256) != 0) {
-            uart_puts("dns arp fail\n");
-            return -1;
-        }
-    }
-
-    for (attempt = 0; attempt < 4 && !got; attempt++) {
-        for (i = 0; i < 16; i++) {
-            rc = pm_metal_udp_sendto(PM_METAL_IP_DEFAULT_DNS, 53, q, sizeof(q));
-            if (rc == 0) {
-                break;
-            }
-            if (rc != -2) {
-                uart_puts("dns tx fail\n");
-                return -1;
-            }
-            pm_metal_ip_poll();
-        }
-        if (rc != 0) {
-            uart_puts("dns tx fail\n");
-            return -1;
-        }
-
-        for (i = 0; i < 6000; i++) {
-            pm_metal_ip_poll();
-            if (pm_metal_udp_recv(&src_ip, &src_port, rx, sizeof(rx), &rx_len) == 1) {
-                if (rx_len >= 12u && rx[0] == 0xa1u && rx[1] == 0xb2u && src_port == 53u) {
-                    got = 1;
-                    break;
-                }
-            }
-        }
-    }
-    if (!got) {
-        uart_puts("dns reply fail\n");
+    /* Literal short-circuit */
+    addr = 0;
+    if (pm_metal_dns_resolve("10.0.2.2", &addr) != 0 || addr != PM_METAL_IP_DEFAULT_GW) {
+        uart_puts("dns literal fail\n");
         return -1;
     }
     uart_puts("dns ok\n");

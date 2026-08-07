@@ -76,7 +76,11 @@ void mp_metal_upy_run(int smoke) {
             "assert n.isconnected()\n"
             "c=n.ifconfig()\n"
             "assert c[0]!='0.0.0.0'\n"
-            "print('network ok')\n",
+            "print('network ok')\n"
+            "assert n.resolve('10.0.2.2')=='10.0.2.2'\n"
+            "a=n.resolve('example.com')\n"
+            "assert a and a!='0.0.0.0'\n"
+            "print('dns py ok')\n",
             MP_PARSE_FILE_INPUT);
 #endif
         do_str("print('upy ok')", MP_PARSE_SINGLE_INPUT);

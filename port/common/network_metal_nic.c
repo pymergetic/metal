@@ -11,10 +11,12 @@
 #include "extmod/modnetwork.h"
 #include "shared/netutils/netutils.h"
 
+#include "pymergetic/metal/net/dns.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/upy_nic.h"
 
 #include <stdint.h>
+#include <string.h>
 
 typedef struct _metal_nic_obj_t {
     mp_obj_base_t base;
@@ -38,11 +40,28 @@ static void ipv4_to_octets(uint32_t be, uint8_t out[4])
 
 static int metal_gethostbyname(mp_obj_t nic, const char *name, mp_uint_t len, uint8_t *ip_out)
 {
+    char host[256];
+    uint32_t addr = 0;
+    int32_t rc;
+
     (void)nic;
-    (void)name;
-    (void)len;
-    (void)ip_out;
-    return MP_EOPNOTSUPP;
+    if (name == NULL || ip_out == NULL || len == 0 || len >= sizeof(host)) {
+        return MP_EINVAL;
+    }
+    memcpy(host, name, (size_t)len);
+    host[len] = '\0';
+    rc = pm_metal_dns_resolve(host, &addr);
+    if (rc == -2) {
+        return MP_ETIMEDOUT;
+    }
+    if (rc != 0 || addr == 0u) {
+        return MP_ENOENT;
+    }
+    ip_out[0] = (uint8_t)(addr >> 24);
+    ip_out[1] = (uint8_t)(addr >> 16);
+    ip_out[2] = (uint8_t)(addr >> 8);
+    ip_out[3] = (uint8_t)addr;
+    return 0;
 }
 
 static void metal_deinit(void)
@@ -245,11 +264,29 @@ static mp_obj_t metal_nic_status(mp_obj_t self_in)
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(metal_nic_status_obj, metal_nic_status);
 
+static mp_obj_t metal_nic_resolve(mp_obj_t self_in, mp_obj_t name_in)
+{
+    const char *name;
+    size_t len;
+    uint8_t ip[4];
+    int err;
+
+    (void)self_in;
+    name = mp_obj_str_get_data(name_in, &len);
+    err = metal_gethostbyname(MP_OBJ_FROM_PTR(&metal_nic_singleton), name, (mp_uint_t)len, ip);
+    if (err != 0) {
+        mp_raise_OSError(err);
+    }
+    return netutils_format_ipv4_addr(ip, NETUTILS_BIG);
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(metal_nic_resolve_obj, metal_nic_resolve);
+
 static const mp_rom_map_elem_t metal_nic_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_active), MP_ROM_PTR(&metal_nic_active_obj) },
     { MP_ROM_QSTR(MP_QSTR_isconnected), MP_ROM_PTR(&metal_nic_isconnected_obj) },
     { MP_ROM_QSTR(MP_QSTR_ifconfig), MP_ROM_PTR(&metal_nic_ifconfig_obj) },
     { MP_ROM_QSTR(MP_QSTR_status), MP_ROM_PTR(&metal_nic_status_obj) },
+    { MP_ROM_QSTR(MP_QSTR_resolve), MP_ROM_PTR(&metal_nic_resolve_obj) },
 };
 static MP_DEFINE_CONST_DICT(metal_nic_locals_dict, metal_nic_locals_dict_table);
 
