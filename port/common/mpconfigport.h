@@ -56,6 +56,14 @@
 #define MICROPY_PY_STRUCT                 (0)
 #define MICROPY_PY_FRAMEBUF               (1)
 
+#define MICROPY_PY_NETWORK                (1)
+#define MICROPY_PY_LWIP                   (0)
+#define MICROPY_PY_SOCKET                 (0)
+#define MICROPY_PY_NETWORK_HOSTNAME_DEFAULT "metal"
+extern const struct _mp_obj_type_t mp_network_metal_nic_type;
+#define MICROPY_PORT_NETWORK_INTERFACES \
+    { MP_ROM_QSTR(MP_QSTR_LAN), MP_ROM_PTR(&mp_network_metal_nic_type) },
+
 #ifndef MICROPY_HEAP_SIZE
 #define MICROPY_HEAP_SIZE                 (128 * 1024)
 #endif

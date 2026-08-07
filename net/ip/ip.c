@@ -22,6 +22,7 @@ static int32_t g_ready;
 static uint32_t g_addr;
 static uint32_t g_mask;
 static uint32_t g_gw;
+static uint32_t g_dns;
 static uint8_t g_mac[6];
 static arp_entry_t g_arp_cache[ARP_CACHE_SIZE];
 static pm_metal_ip_l4_rx_fn g_udp_rx;
@@ -439,6 +440,7 @@ int32_t pm_metal_ip_init(uint32_t addr_be, uint32_t mask_be, uint32_t gw_be)
     g_addr = addr_be;
     g_mask = mask_be;
     g_gw = gw_be;
+    g_dns = PM_METAL_IP_DEFAULT_DNS;
     memset(g_arp_cache, 0, sizeof(g_arp_cache));
     g_udp_rx = NULL;
     g_tcp_rx = NULL;
@@ -478,6 +480,20 @@ int32_t pm_metal_ip_set_addrs(uint32_t addr, uint32_t mask, uint32_t gw)
     g_mask = mask;
     g_gw = gw;
     return 0;
+}
+
+int32_t pm_metal_ip_set_dns(uint32_t dns)
+{
+    if (!g_ready) {
+        return -1;
+    }
+    g_dns = dns != 0u ? dns : PM_METAL_IP_DEFAULT_DNS;
+    return 0;
+}
+
+uint32_t pm_metal_ip_dns(void)
+{
+    return g_dns != 0u ? g_dns : PM_METAL_IP_DEFAULT_DNS;
 }
 
 int32_t pm_metal_ip_announce(void)

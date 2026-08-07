@@ -274,6 +274,10 @@ int pm_metal_ip_smoke(void)
         uart_puts("dhcp apply fail\n");
         return -1;
     }
+    if (pm_metal_ip_set_dns(lease.dns != 0u ? lease.dns : PM_METAL_IP_DEFAULT_DNS) != 0) {
+        uart_puts("dhcp dns fail\n");
+        return -1;
+    }
     uart_puts("dhcp ok\n");
 
     if (pm_metal_ip_announce() != 0) {

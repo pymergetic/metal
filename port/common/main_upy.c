@@ -15,6 +15,11 @@
 
 #include "mphalport.h"
 
+#if MICROPY_PY_NETWORK
+#include "extmod/modnetwork.h"
+#include "pymergetic/metal/net/upy_nic.h"
+#endif
+
 #if MICROPY_ENABLE_GC
 static char heap[MICROPY_HEAP_SIZE] __attribute__((aligned(16)));
 #endif
@@ -46,6 +51,11 @@ void mp_metal_upy_run(int smoke) {
 #endif
     mp_init();
 
+#if MICROPY_PY_NETWORK
+    mod_network_init();
+    (void)pm_metal_net_upy_nic_attach_upy();
+#endif
+
     if (smoke) {
 #if MICROPY_ENABLE_COMPILER
 #if MICROPY_PY_FRAMEBUF
@@ -56,6 +66,17 @@ void mp_metal_upy_run(int smoke) {
             "f.fill(1)\n"
             "f.pixel(0,0,0)\n"
             "print('framebuf ok')\n",
+            MP_PARSE_FILE_INPUT);
+#endif
+#if MICROPY_PY_NETWORK
+        do_str(
+            "import network\n"
+            "n=network.LAN()\n"
+            "assert n.active()\n"
+            "assert n.isconnected()\n"
+            "c=n.ifconfig()\n"
+            "assert c[0]!='0.0.0.0'\n"
+            "print('network ok')\n",
             MP_PARSE_FILE_INPUT);
 #endif
         do_str("print('upy ok')", MP_PARSE_SINGLE_INPUT);

@@ -5,8 +5,21 @@
 #include <string.h>
 
 #include "pymergetic/metal/dev/net.h"
+#include "pymergetic/metal/net/upy_nic.h"
 
 void uart_puts(const char *s);
+
+static void nic_l2_poll(void)
+{
+    pm_metal_dev_net_virtio_poll(NULL, NULL);
+}
+
+static const pm_metal_net_upy_l2_ops_t g_virtio_l2_ops = {
+    .open = pm_metal_dev_net_virtio_open,
+    .mac = pm_metal_dev_net_virtio_mac,
+    .tx = pm_metal_dev_net_virtio_tx,
+    .poll = nic_l2_poll,
+};
 
 static int mac_nonzero(const uint8_t mac[6])
 {
@@ -106,6 +119,12 @@ int pm_metal_net_smoke(void)
     }
 
     (void)tx_done;
+
+    if (pm_metal_net_upy_nic_register("virtio-net", &g_virtio_l2_ops) != 0) {
+        uart_puts("net nic register fail\n");
+        return -1;
+    }
+
     uart_puts("net ok\n");
     return 0;
 }

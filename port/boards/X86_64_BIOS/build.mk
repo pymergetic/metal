@@ -111,11 +111,14 @@ SRC_C = \
 	common/kbd_smoke.c \
 	common/live_http.c \
 	common/live_ssh.c \
+	common/network_metal_nic.c \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
 	shared/runtime/stdout_helpers.c \
 	shared/libc/printf.c \
-	extmod/modframebuf.c
+	shared/netutils/netutils.c \
+	extmod/modframebuf.c \
+	extmod/modnetwork.c
 
 ifeq ($(LINK_WAMR),1)
 SRC_C += \
@@ -126,7 +129,8 @@ else
 SRC_C += shared/libc/string0.c
 endif
 
-SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebuf.c
+SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebuf.c \
+	extmod/modnetwork.c common/network_metal_nic.c
 
 OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
@@ -134,6 +138,7 @@ OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
 OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
+OBJ += $(BUILD)/metal_upy_nic.o
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -206,6 +211,10 @@ $(BUILD)/metal_ssh.o: $(METAL)/net/ssh/ssh_banner.c | $(BUILD)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_dhcp.o: $(METAL)/net/ip/dhcp.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_upy_nic.o: $(METAL)/net/upy_nic/upy_nic.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -304,6 +313,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && { [ "$(LINK_WAMR)" != "1" ] || grep -q "wamr ok" $(BUILD)/serial.log; } \
 	  && grep -q "upy ok" $(BUILD)/serial.log \
 	  && grep -q "framebuf ok" $(BUILD)/serial.log \
+	  && grep -q "network ok" $(BUILD)/serial.log \
 	  && grep -q "qemu ok" $(BUILD)/serial.log; then \
 	  echo "X86_64_BIOS_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	  exit 0; \
