@@ -26,6 +26,9 @@ static uint8_t g_mac[6];
 static arp_entry_t g_arp_cache[ARP_CACHE_SIZE];
 static pm_metal_ip_l4_rx_fn g_udp_rx;
 static pm_metal_ip_l4_rx_fn g_tcp_rx;
+static uint16_t g_ping_id;
+static uint16_t g_ping_seq;
+static uint32_t g_ping_replies;
 
 static uint16_t put_u16(uint8_t *p, uint16_t v)
 {
@@ -350,6 +353,7 @@ static void on_frame(void *ctx, const uint8_t *frame, uint32_t len)
         uint32_t ihl;
         uint8_t proto;
         uint32_t dst;
+        uint32_t src;
         uint32_t ip_len;
 
         if (len < 34u) {
@@ -367,12 +371,26 @@ static void on_frame(void *ctx, const uint8_t *frame, uint32_t len)
             ip_len = len - 14u;
         }
         proto = frame[14 + 9];
+        src = get_u32(frame + 14 + 12);
         dst = get_u32(frame + 14 + 16);
+        /* Learn L2 mapping from the frame that just arrived. */
+        pm_metal_ip_arp_cache_put(src, frame + 6);
         if (dst != g_addr) {
             return;
         }
-        if (proto == IP_PROTO_ICMP && frame[14 + ihl] == 8u) {
-            (void)tx_icmp_echo_reply(frame, len);
+        if (proto == IP_PROTO_ICMP) {
+            uint8_t icmp_type = frame[14 + ihl];
+            if (icmp_type == 8u) {
+                (void)tx_icmp_echo_reply(frame, len);
+                return;
+            }
+            if (icmp_type == 0u && ip_len >= ihl + 8u) {
+                uint16_t id = get_u16(frame + 14 + ihl + 4);
+                uint16_t seq = get_u16(frame + 14 + ihl + 6);
+                if (id == g_ping_id && seq == g_ping_seq) {
+                    g_ping_replies++;
+                }
+            }
             return;
         }
         if (proto == IP_PROTO_UDP && g_udp_rx != NULL) {
@@ -403,6 +421,9 @@ int32_t pm_metal_ip_init(uint32_t addr_be, uint32_t mask_be, uint32_t gw_be)
     memset(g_arp_cache, 0, sizeof(g_arp_cache));
     g_udp_rx = NULL;
     g_tcp_rx = NULL;
+    g_ping_id = 0;
+    g_ping_seq = 0;
+    g_ping_replies = 0;
     g_ready = 1;
     return 0;
 }
@@ -459,4 +480,28 @@ void pm_metal_ip_poll(void)
     }
     pm_metal_dev_net_virtio_poll(on_frame, NULL);
     (void)pm_metal_dev_net_virtio_reap_tx();
+}
+
+int32_t pm_metal_ip_ping(uint32_t dst_ip, uint16_t id, uint16_t seq)
+{
+    uint8_t icmp[16];
+
+    if (!g_ready) {
+        return -1;
+    }
+    g_ping_id = id;
+    g_ping_seq = seq;
+    icmp[0] = 8; /* echo request */
+    icmp[1] = 0;
+    put_u16(icmp + 2, 0);
+    put_u16(icmp + 4, id);
+    put_u16(icmp + 6, seq);
+    memset(icmp + 8, 0x5a, 8);
+    put_u16(icmp + 2, pm_metal_ip_checksum(icmp, sizeof(icmp)));
+    return pm_metal_ip_tx_l4(dst_ip, IP_PROTO_ICMP, icmp, sizeof(icmp));
+}
+
+uint32_t pm_metal_ip_ping_replies(void)
+{
+    return g_ping_replies;
 }

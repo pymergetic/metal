@@ -87,6 +87,7 @@ static int dns_smoke(void)
     uint32_t rx_len;
     uint32_t src_ip;
     uint16_t src_port;
+    int attempt;
     int i;
     int32_t rc;
     int got = 0;
@@ -96,35 +97,36 @@ static int dns_smoke(void)
         return -1;
     }
     if (arp_wait(PM_METAL_IP_DEFAULT_DNS, 256) != 0) {
-        /* Fall back through gateway ARP if DNS not on-link resolved yet. */
         if (arp_wait(PM_METAL_IP_DEFAULT_GW, 256) != 0) {
             uart_puts("dns arp fail\n");
             return -1;
         }
     }
 
-    for (i = 0; i < 16; i++) {
-        rc = pm_metal_udp_sendto(PM_METAL_IP_DEFAULT_DNS, 53, q, sizeof(q));
-        if (rc == 0) {
-            break;
+    for (attempt = 0; attempt < 4 && !got; attempt++) {
+        for (i = 0; i < 16; i++) {
+            rc = pm_metal_udp_sendto(PM_METAL_IP_DEFAULT_DNS, 53, q, sizeof(q));
+            if (rc == 0) {
+                break;
+            }
+            if (rc != -2) {
+                uart_puts("dns tx fail\n");
+                return -1;
+            }
+            pm_metal_ip_poll();
         }
-        if (rc != -2) {
+        if (rc != 0) {
             uart_puts("dns tx fail\n");
             return -1;
         }
-        pm_metal_ip_poll();
-    }
-    if (rc != 0) {
-        uart_puts("dns tx fail\n");
-        return -1;
-    }
 
-    for (i = 0; i < 4000; i++) {
-        pm_metal_ip_poll();
-        if (pm_metal_udp_recv(&src_ip, &src_port, rx, sizeof(rx), &rx_len) == 1) {
-            if (rx_len >= 12u && rx[0] == 0xa1u && rx[1] == 0xb2u && src_port == 53u) {
-                got = 1;
-                break;
+        for (i = 0; i < 6000; i++) {
+            pm_metal_ip_poll();
+            if (pm_metal_udp_recv(&src_ip, &src_port, rx, sizeof(rx), &rx_len) == 1) {
+                if (rx_len >= 12u && rx[0] == 0xa1u && rx[1] == 0xb2u && src_port == 53u) {
+                    got = 1;
+                    break;
+                }
             }
         }
     }
@@ -211,6 +213,43 @@ static int ssh_smoke(void)
     return 0;
 }
 
+static int ping_smoke(void)
+{
+    int i;
+    int32_t rc;
+    uint32_t before;
+
+    if (arp_wait(PM_METAL_IP_DEFAULT_GW, 256) != 0) {
+        uart_puts("ping arp fail\n");
+        return -1;
+    }
+    before = pm_metal_ip_ping_replies();
+    for (i = 0; i < 16; i++) {
+        rc = pm_metal_ip_ping(PM_METAL_IP_DEFAULT_GW, 0x4d45u, 1u);
+        if (rc == 0) {
+            break;
+        }
+        if (rc != -2) {
+            uart_puts("ping tx fail\n");
+            return -1;
+        }
+        pm_metal_ip_poll();
+    }
+    if (rc != 0) {
+        uart_puts("ping tx fail\n");
+        return -1;
+    }
+    for (i = 0; i < 4000; i++) {
+        pm_metal_ip_poll();
+        if (pm_metal_ip_ping_replies() > before) {
+            uart_puts("ping ok\n");
+            return 0;
+        }
+    }
+    uart_puts("ping reply fail\n");
+    return -1;
+}
+
 int pm_metal_ip_smoke(void)
 {
     int i;
@@ -232,6 +271,9 @@ int pm_metal_ip_smoke(void)
         pm_metal_ip_poll();
     }
 
+    if (ping_smoke() != 0) {
+        return -1;
+    }
     if (udp_smoke() != 0) {
         return -1;
     }

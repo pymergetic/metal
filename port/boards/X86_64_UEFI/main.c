@@ -10,12 +10,17 @@
 #include "tui_smoke.h"
 #include "kbd_smoke.h"
 #include "wamr_smoke.h"
+#include "live_http.h"
 
 void uart_init(void);
 void uart_puts(const char *s);
 
 #ifndef METAL_UPY_SMOKE
 #define METAL_UPY_SMOKE 1
+#endif
+
+#ifndef METAL_LIVE
+#define METAL_LIVE 0
 #endif
 
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
@@ -67,8 +72,13 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 
     uart_puts("ovmf ok\n");
 
+#if METAL_LIVE
+    pm_metal_live_http();
+    return EFI_SUCCESS;
+#else
     if (SystemTable != NULL && SystemTable->BootServices != NULL) {
         SystemTable->BootServices->Stall(200000);
     }
     return EFI_SUCCESS;
+#endif
 }

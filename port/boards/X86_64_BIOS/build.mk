@@ -68,6 +68,14 @@ else
 CFLAGS_METAL += -DMETAL_UPY_SMOKE=1
 endif
 
+# LIVE=1 → after smoke stay up serving HTTP on :80 (needs hostfwd)
+LIVE ?= 0
+ifeq ($(LIVE),1)
+CFLAGS_METAL += -DMETAL_LIVE=1
+else
+CFLAGS_METAL += -DMETAL_LIVE=0
+endif
+
 ifeq ($(LINK_WAMR),1)
 INC += -I$(WASMMOD)/third_party/wamr/core/iwasm/include \
 	-I$(METAL)/wasm/port/platform \
@@ -97,6 +105,7 @@ SRC_C = \
 	common/vt_smoke.c \
 	common/tui_smoke.c \
 	common/kbd_smoke.c \
+	common/live_http.c \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
 	shared/runtime/stdout_helpers.c \
@@ -271,6 +280,7 @@ run: $(BUILD)/metal.qemu.elf
 	if grep -q "console ok" $(BUILD)/serial.log \
 	  && grep -q "floor ok" $(BUILD)/serial.log \
 	  && grep -q "net ok" $(BUILD)/serial.log \
+	  && grep -q "ping ok" $(BUILD)/serial.log \
 	  && grep -q "ip ok" $(BUILD)/serial.log \
 	  && grep -q "udp ok" $(BUILD)/serial.log \
 	  && grep -q "dns ok" $(BUILD)/serial.log \
@@ -289,6 +299,42 @@ run: $(BUILD)/metal.qemu.elf
 	  exit 0; \
 	fi; \
 	echo "X86_64_BIOS_FAIL (qemu ec=$$ec) ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
+	exit 1
+
+# LIVE=1 image + hostfwd; curl guest :80 via host :18080.
+live-http: $(BUILD)/metal.qemu.elf
+	@test "$(LIVE)" = "1" || { echo "live-http requires LIVE=1"; exit 1; }
+	@set +e; \
+	rm -f $(BUILD)/serial.log; \
+	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
+		-netdev user,id=n0,hostfwd=tcp::18080-:80 \
+		-device virtio-net-pci,netdev=n0 \
+		-display none -serial file:$(BUILD)/serial.log \
+		-kernel $(BUILD)/metal.qemu.elf & \
+	qpid=$$!; \
+	ok=0; \
+	for i in $$(seq 1 200); do \
+	  if grep -a -q "live http" $(BUILD)/serial.log 2>/dev/null; then ok=1; break; fi; \
+	  if ! kill -0 $$qpid 2>/dev/null; then break; fi; \
+	  sleep 0.1; \
+	done; \
+	if [ $$ok -ne 1 ]; then \
+	  kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	  echo "live-http: guest never reached live http"; \
+	  tail -c 2000 $(BUILD)/serial.log 2>/dev/null || true; \
+	  exit 1; \
+	fi; \
+	body=$$(curl -fsS --max-time 3 http://127.0.0.1:18080/ 2>/dev/null); \
+	ec=$$?; \
+	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	echo "----- serial (tail) -----"; \
+	grep -a -E "ok|live http|fail" $(BUILD)/serial.log 2>/dev/null | tail -30 || true; \
+	echo "curl body=[$$body] ec=$$ec"; \
+	if [ $$ec -eq 0 ] && echo "$$body" | grep -q "metal ok"; then \
+	  echo "X86_64_BIOS_LIVE_HTTP_OK ENGINE=$(ENGINE)"; \
+	  exit 0; \
+	fi; \
+	echo "X86_64_BIOS_LIVE_HTTP_FAIL ENGINE=$(ENGINE)"; \
 	exit 1
 
 clean:

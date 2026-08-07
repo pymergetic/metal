@@ -33,6 +33,11 @@ int32_t pm_metal_ip_announce(void);
 /* Poll virtio-net; handle ARP requests + ICMP echo; reap TX. */
 void pm_metal_ip_poll(void);
 
+/* ICMP echo request; matches replies via id/seq. Returns 0 TX ok, -2 ARP pending. */
+int32_t pm_metal_ip_ping(uint32_t dst_ip, uint16_t id, uint16_t seq);
+/* Number of matching echo replies observed since init. */
+uint32_t pm_metal_ip_ping_replies(void);
+
 #ifdef __cplusplus
 }
 #endif

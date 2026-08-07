@@ -65,6 +65,13 @@ else
 CFLAGS_METAL += -DMETAL_UPY_SMOKE=1
 endif
 
+LIVE ?= 0
+ifeq ($(LIVE),1)
+CFLAGS_METAL += -DMETAL_LIVE=1
+else
+CFLAGS_METAL += -DMETAL_LIVE=0
+endif
+
 ifeq ($(LINK_WAMR),1)
 INC += -I$(WASMMOD)/third_party/wamr/core/iwasm/include \
 	-I$(METAL)/wasm/port/platform \
@@ -89,6 +96,7 @@ SRC_C = \
 	common/vt_smoke.c \
 	common/tui_smoke.c \
 	common/kbd_smoke.c \
+	common/live_http.c \
 	common/fsys/chkstk.c \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
@@ -258,6 +266,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	  if grep -a -q "console ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "floor ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "net ok" $(BUILD)/serial.log 2>/dev/null \
+	     && grep -a -q "ping ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "ip ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "udp ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "dns ok" $(BUILD)/serial.log 2>/dev/null \
@@ -277,7 +286,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	done; \
 	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	echo "----- serial (trimmed) -----"; \
-	grep -a -E "metal |console ok|floor ok|net ok|ip ok|udp ok|dns ok|tcp ok|http ok|ssh ok|draw ok|vt ok|tui ok|kbd ok|wamr ok|framebuf ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
+	grep -a -E "metal |console ok|floor ok|net ok|ping ok|ip ok|udp ok|dns ok|tcp ok|http ok|ssh ok|draw ok|vt ok|tui ok|kbd ok|wamr ok|framebuf ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
 	if [ $$ok -eq 1 ]; then echo "X86_64_UEFI_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR) LLD=$(LLD_LINK)"; exit 0; fi; \
 	echo "X86_64_UEFI_FAIL ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	tail -c 1600 $(BUILD)/serial.log 2>/dev/null || true; \

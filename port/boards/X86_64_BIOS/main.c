@@ -12,12 +12,17 @@
 #include "tui_smoke.h"
 #include "kbd_smoke.h"
 #include "wamr_smoke.h"
+#include "live_http.h"
 
 void uart_init(void);
 void uart_puts(const char *s);
 
 #ifndef METAL_UPY_SMOKE
 #define METAL_UPY_SMOKE 1
+#endif
+
+#ifndef METAL_LIVE
+#define METAL_LIVE 0
 #endif
 
 void pm_metal_bios_main(uint32_t magic, void *mb_info)
@@ -95,9 +100,13 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
 
     mp_metal_upy_run(METAL_UPY_SMOKE);
 
+#if METAL_LIVE
+    pm_metal_live_http();
+#else
     outw(0x501u, 0u);
 
     for (;;) {
         __asm__ volatile("hlt");
     }
+#endif
 }
