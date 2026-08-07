@@ -10,8 +10,13 @@
 #define TCP_SYN_RECV    2u
 #define TCP_ESTABLISHED 3u
 
+#define TCP_FLAG_FIN 0x01u
 #define TCP_FLAG_SYN 0x02u
+#define TCP_FLAG_RST 0x04u
+#define TCP_FLAG_PSH 0x08u
 #define TCP_FLAG_ACK 0x10u
+
+#define TCP_RX_CAP 512u
 
 typedef struct {
     uint8_t state;
@@ -23,6 +28,8 @@ typedef struct {
     uint32_t snd_nxt;
     int32_t syn_acked;
     int32_t established;
+    uint8_t rx[TCP_RX_CAP];
+    uint32_t rx_len;
 } tcp_sock_t;
 
 static tcp_sock_t g_sock;
@@ -79,6 +86,23 @@ static int32_t tcp_tx(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port,
     return pm_metal_ip_tx_l4(dst_ip, 6, seg, seg_len);
 }
 
+static void tcp_queue_rx(const uint8_t *data, uint32_t len)
+{
+    uint32_t space;
+    uint32_t take;
+
+    if (data == NULL || len == 0u) {
+        return;
+    }
+    space = TCP_RX_CAP - g_sock.rx_len;
+    take = len < space ? len : space;
+    if (take == 0u) {
+        return;
+    }
+    memcpy(g_sock.rx + g_sock.rx_len, data, take);
+    g_sock.rx_len += take;
+}
+
 static void tcp_on_rx(const uint8_t *ip_pkt, uint32_t ip_len, uint32_t ihl)
 {
     uint32_t tcp_off;
@@ -89,6 +113,7 @@ static void tcp_on_rx(const uint8_t *ip_pkt, uint32_t ip_len, uint32_t ihl)
     uint32_t ack;
     uint8_t flags;
     uint32_t tcp_hdr_len;
+    uint32_t payload_len;
 
     if (g_sock.state == TCP_CLOSED || ip_pkt == NULL || ip_len < ihl + 20u) {
         return;
@@ -137,8 +162,16 @@ static void tcp_on_rx(const uint8_t *ip_pkt, uint32_t ip_len, uint32_t ihl)
 
     if (g_sock.state == TCP_ESTABLISHED && src_ip == g_sock.remote_ip &&
         src_port == g_sock.remote_port) {
-        (void)seq;
+        payload_len = ip_len - (ihl + tcp_hdr_len);
+        if (payload_len > 0u && seq == g_sock.rcv_nxt) {
+            tcp_queue_rx(ip_pkt + ihl + tcp_hdr_len, payload_len);
+            g_sock.rcv_nxt += payload_len;
+            (void)tcp_tx(src_ip, g_sock.local_port, src_port, g_sock.snd_nxt, g_sock.rcv_nxt,
+                         TCP_FLAG_ACK, NULL, 0);
+        }
         (void)ack;
+        (void)flags;
+        return;
     }
 }
 
@@ -159,6 +192,47 @@ int32_t pm_metal_tcp_listen(uint16_t local_port)
     g_sock.state = TCP_LISTEN;
     g_sock.local_port = local_port;
     return 0;
+}
+
+int32_t pm_metal_tcp_established(void)
+{
+    return g_sock.established ? 1 : 0;
+}
+
+int32_t pm_metal_tcp_send(const void *data, uint32_t len)
+{
+    int32_t rc;
+
+    if (!g_sock.established || data == NULL || len == 0u) {
+        return -1;
+    }
+    rc = tcp_tx(g_sock.remote_ip, g_sock.local_port, g_sock.remote_port, g_sock.snd_nxt,
+                g_sock.rcv_nxt, (uint8_t)(TCP_FLAG_PSH | TCP_FLAG_ACK), (const uint8_t *)data, len);
+    if (rc == 0) {
+        g_sock.snd_nxt += len;
+    }
+    return rc;
+}
+
+int32_t pm_metal_tcp_recv(uint8_t *buf, uint32_t cap, uint32_t *len_out)
+{
+    uint32_t n;
+
+    if (buf == NULL || len_out == NULL || cap == 0u) {
+        return -1;
+    }
+    if (g_sock.rx_len == 0u) {
+        *len_out = 0;
+        return 0;
+    }
+    n = g_sock.rx_len < cap ? g_sock.rx_len : cap;
+    memcpy(buf, g_sock.rx, n);
+    if (n < g_sock.rx_len) {
+        memmove(g_sock.rx, g_sock.rx + n, g_sock.rx_len - n);
+    }
+    g_sock.rx_len -= n;
+    *len_out = n;
+    return 1;
 }
 
 static void tcp_inject(const uint8_t *ip_pkt, uint32_t ip_len)
@@ -206,4 +280,31 @@ int32_t pm_metal_tcp_smoke_syn_ack(void)
     tcp_inject(ip_pkt, 40);
 
     return g_sock.established ? 0 : -1;
+}
+
+int32_t pm_metal_tcp_smoke_inject_payload(const void *data, uint32_t len)
+{
+    uint8_t ip_pkt[20 + 20 + 512];
+    uint32_t total;
+    uint32_t peer_ip = 0x0a000202u;
+
+    if (!g_sock.established || data == NULL || len == 0u || len > 512u) {
+        return -1;
+    }
+    total = 40u + len;
+    memset(ip_pkt, 0, total);
+    ip_pkt[0] = 0x45;
+    ip_pkt[9] = 6;
+    put_u16(ip_pkt + 2, (uint16_t)total);
+    put_u32(ip_pkt + 12, peer_ip);
+    put_u32(ip_pkt + 16, pm_metal_ip_addr_host());
+    put_u16(ip_pkt + 20, 40000);
+    put_u16(ip_pkt + 22, g_sock.local_port);
+    put_u32(ip_pkt + 24, g_sock.rcv_nxt);
+    put_u32(ip_pkt + 28, g_sock.snd_nxt);
+    ip_pkt[32] = 0x50;
+    ip_pkt[33] = (uint8_t)(TCP_FLAG_PSH | TCP_FLAG_ACK);
+    memcpy(ip_pkt + 40, data, len);
+    tcp_inject(ip_pkt, total);
+    return 0;
 }

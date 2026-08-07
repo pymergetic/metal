@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/ip_internal.h"
 #include "pymergetic/metal/net/tcp.h"
@@ -86,6 +87,45 @@ static int tcp_smoke(void)
     return 0;
 }
 
+static int http_smoke(void)
+{
+    static const char get_req[] = "GET / HTTP/1.0\r\nHost: metal\r\n\r\n";
+    int i;
+
+    if (pm_metal_tcp_listen(80) != 0) {
+        uart_puts("http listen fail\n");
+        return -1;
+    }
+    if (pm_metal_tcp_smoke_syn_ack() != 0) {
+        uart_puts("http syn fail\n");
+        return -1;
+    }
+    if (pm_metal_http_init() != 0) {
+        uart_puts("http init fail\n");
+        return -1;
+    }
+    if (pm_metal_tcp_smoke_inject_payload(get_req, (uint32_t)(sizeof(get_req) - 1u)) != 0) {
+        uart_puts("http inject fail\n");
+        return -1;
+    }
+    for (i = 0; i < 8; i++) {
+        if (pm_metal_http_poll() < 0) {
+            uart_puts("http poll fail\n");
+            return -1;
+        }
+        if (pm_metal_http_served()) {
+            break;
+        }
+        pm_metal_ip_poll();
+    }
+    if (!pm_metal_http_served()) {
+        uart_puts("http serve fail\n");
+        return -1;
+    }
+    uart_puts("http ok\n");
+    return 0;
+}
+
 int pm_metal_ip_smoke(void)
 {
     int i;
@@ -111,6 +151,9 @@ int pm_metal_ip_smoke(void)
         return -1;
     }
     if (tcp_smoke() != 0) {
+        return -1;
+    }
+    if (http_smoke() != 0) {
         return -1;
     }
 
