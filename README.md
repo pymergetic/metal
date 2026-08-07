@@ -18,16 +18,17 @@ Port forward + smoke: [`../../ports/metal/README.md`](../../ports/metal/README.m
 | Path | Role |
 |------|------|
 | [`include/pymergetic/metal/`](include/README.md) | **Public** C faces — enough to build against |
-| `src/pymergetic/metal/` | Hybrid impl + RS/Py export faces (`__init__.{c,rs,pyi}`) |
-| `port/` | BIOS/UEFI µPy boards (`ENGINE=mp\|upy\|mpwm`); `-I include` |
-| `external/` | Vendors (lwip, tlsf, mbedtls, …) |
-| `_tmp/` | Quarantine for old parallel trees — **not** product |
-| `docs/HYBRID.md` | Layout rules |
+| `src/pymergetic/metal/` | Hybrid impl + RS/Py export faces |
+| `port/` | BIOS/UEFI µPy boards; `-I include` (+ transitional `-I libc`) |
+| `libc/*.h` | Transitional freestanding headers for `-I` (`.c` under `src/.../libc/port/`) |
+| `wasm/port/platform/*.h` | Transitional WAMR platform headers (`.c` under `src/`) |
+| `external/` | Vendors |
+| `_tmp/` | Quarantine — **not** product |
+| [`docs/HYBRID.md`](docs/HYBRID.md) | Rules |
 
-**Do not** grow package-root `net/` / `async/` / `mem/` / … twins. Migrate into
-`src/` + `include/` or quarantine under `_tmp/`.
+**Gone from package root:** `net/` `async/` `mem/` `bus/` `console/` `draw/` `shell/` `dev/` product `.c` trees.
 
-**Removed:** `forge-cli`, forge mod-sync, `.pm/` crates, `_old/`. Do not resurrect.
+**Still open:** short-prefix mini-IP (`net/minip` + flat `include/.../net/tcp.h`) vs RS `net/ip`; full prefix rename; libc/wasm header relocate into `include/`.
 
 ## Docs
 
@@ -35,5 +36,4 @@ Port forward + smoke: [`../../ports/metal/README.md`](../../ports/metal/README.m
 |-----|------|
 | [`docs/HYBRID.md`](docs/HYBRID.md) | include + hybrid C/RS/Py |
 | [`docs/IO.md`](docs/IO.md) | IO classes + N runners |
-| [`docs/SOURCETREE.md`](docs/SOURCETREE.md) | Tree + C dialect (may lag; HYBRID wins) |
 | [`port/README.md`](port/README.md) | Board smoke / live surfaces |
