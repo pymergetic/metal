@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "pymergetic/metal/draw.h"
 #include "pymergetic/metal/mem.h"
@@ -10,9 +11,30 @@
 
 void uart_puts(const char *s);
 
+static int row_has(const char *row, const char *needle)
+{
+    size_t n;
+    size_t i;
+
+    if (row == NULL || needle == NULL) {
+        return 0;
+    }
+    n = strlen(needle);
+    if (n == 0u || n > (size_t)PM_METAL_VT_COLS) {
+        return 0;
+    }
+    for (i = 0; i + n <= (size_t)PM_METAL_VT_COLS; i++) {
+        if (memcmp(row + i, needle, n) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int pm_metal_tui_smoke(void)
 {
     pm_metal_draw_surface_t ds;
+    pm_metal_vt_t *vt;
     uint8_t *fb;
     uint32_t need;
     uint32_t sum;
@@ -57,6 +79,13 @@ int pm_metal_tui_smoke(void)
     sum = pm_metal_draw_checksum(&ds);
     if (sum == 0u) {
         uart_puts("tui checksum fail\n");
+        pm_metal_mem_free(fb);
+        return -1;
+    }
+
+    vt = pm_metal_vt_get(PM_METAL_TUI_VT_INDEX);
+    if (vt == NULL || !row_has(vt->cells[13], "ip ") || !row_has(vt->cells[13], "dhcp")) {
+        uart_puts("tui net pane fail\n");
         pm_metal_mem_free(fb);
         return -1;
     }

@@ -8,6 +8,7 @@
 #include "pymergetic/metal/dev/net.h"
 #include "pymergetic/metal/draw.h"
 #include "pymergetic/metal/mem.h"
+#include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/vt.h"
 
 #ifndef METAL_ENGINE
@@ -171,18 +172,60 @@ static void build_system_line(char *out, size_t cap)
     str_append(out, cap, METAL_ENGINE);
 }
 
+static void append_u8_dec(char *out, size_t cap, uint8_t v)
+{
+    char tmp[4];
+    unsigned n = 0;
+    unsigned x = v;
+
+    if (x >= 100u) {
+        tmp[n++] = (char)('0' + x / 100u);
+        x %= 100u;
+        tmp[n++] = (char)('0' + x / 10u);
+        x %= 10u;
+        tmp[n++] = (char)('0' + x);
+    } else if (x >= 10u) {
+        tmp[n++] = (char)('0' + x / 10u);
+        x %= 10u;
+        tmp[n++] = (char)('0' + x);
+    } else {
+        tmp[n++] = (char)('0' + x);
+    }
+    tmp[n] = '\0';
+    str_append(out, cap, tmp);
+}
+
+static void append_ipv4(char *out, size_t cap, uint32_t be)
+{
+    append_u8_dec(out, cap, (uint8_t)(be >> 24));
+    str_append(out, cap, ".");
+    append_u8_dec(out, cap, (uint8_t)(be >> 16));
+    str_append(out, cap, ".");
+    append_u8_dec(out, cap, (uint8_t)(be >> 8));
+    str_append(out, cap, ".");
+    append_u8_dec(out, cap, (uint8_t)be);
+}
+
 static void build_network_line(char *out, size_t cap)
 {
     const uint8_t *mac;
     static const char hex[] = "0123456789abcdef";
     size_t i;
     size_t pos;
+    uint32_t addr;
 
     if (out == NULL || cap < 16u) {
         return;
     }
     if (!pm_metal_dev_net_virtio_ready()) {
         str_copy(out, cap, "net: down");
+        return;
+    }
+    addr = pm_metal_ip_ready() ? pm_metal_ip_addr() : 0u;
+    if (addr != 0u) {
+        str_copy(out, cap, "ip ");
+        append_ipv4(out, cap, addr);
+        str_append(out, cap, " dhcp");
         return;
     }
     mac = pm_metal_dev_net_virtio_mac();
