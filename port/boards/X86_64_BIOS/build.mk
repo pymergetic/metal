@@ -42,6 +42,7 @@ CXX := $(CLANG)
 LD ?= ld
 OBJCOPY ?= objcopy
 QEMU ?= qemu-system-x86_64
+TFTP_ROOT := $(COMMON)/tftp-root
 
 QSTR_DEFS = $(COMMON)/qstrdefsport.h
 MICROPY_ROM_TEXT_COMPRESSION ?= 0
@@ -139,7 +140,7 @@ OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
 OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
-OBJ += $(BUILD)/metal_dns.o $(BUILD)/metal_ntp.o $(BUILD)/metal_faces.o $(BUILD)/metal_upy_nic.o
+OBJ += $(BUILD)/metal_dns.o $(BUILD)/metal_ntp.o $(BUILD)/metal_tftp.o $(BUILD)/metal_faces.o $(BUILD)/metal_upy_nic.o
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -223,6 +224,10 @@ $(BUILD)/metal_ntp.o: $(METAL)/net/ntp/ntp.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
+$(BUILD)/metal_tftp.o: $(METAL)/net/tftp/tftp.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
 $(BUILD)/metal_faces.o: $(METAL)/net/faces/faces.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
@@ -302,7 +307,7 @@ run: $(BUILD)/metal.qemu.elf
 	@set +e; \
 	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
 		-device isa-debug-exit,iobase=0x501,iosize=0x02 \
-		-netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+		-netdev user,id=n0,tftp=$(TFTP_ROOT) -device virtio-net-pci,netdev=n0 \
 		-display none -serial file:$(BUILD)/serial.log \
 		-kernel $(BUILD)/metal.qemu.elf; \
 	ec=$$?; \
@@ -321,6 +326,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "ssh ok" $(BUILD)/serial.log \
 	  && grep -q "http client ok" $(BUILD)/serial.log \
 	  && grep -q "ntp ok" $(BUILD)/serial.log \
+	  && grep -q "tftp ok" $(BUILD)/serial.log \
 	  && grep -q "draw ok" $(BUILD)/serial.log \
 	  && grep -q "vt ok" $(BUILD)/serial.log \
 	  && grep -q "tui ok" $(BUILD)/serial.log \
@@ -344,7 +350,7 @@ live-http: $(BUILD)/metal.qemu.elf
 	@set +e; \
 	rm -f $(BUILD)/serial.log; \
 	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
-		-netdev user,id=n0,hostfwd=tcp::18080-:80 \
+		-netdev user,id=n0,tftp=$(TFTP_ROOT),hostfwd=tcp::18080-:80 \
 		-device virtio-net-pci,netdev=n0 \
 		-display none -serial file:$(BUILD)/serial.log \
 		-kernel $(BUILD)/metal.qemu.elf & \
@@ -380,7 +386,7 @@ live-ssh: $(BUILD)/metal.qemu.elf
 	@set +e; \
 	rm -f $(BUILD)/serial.log; \
 	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
-		-netdev user,id=n0,hostfwd=tcp::22022-:22 \
+		-netdev user,id=n0,tftp=$(TFTP_ROOT),hostfwd=tcp::22022-:22 \
 		-device virtio-net-pci,netdev=n0 \
 		-display none -serial file:$(BUILD)/serial.log \
 		-kernel $(BUILD)/metal.qemu.elf & \

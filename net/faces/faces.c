@@ -52,6 +52,9 @@ void pm_metal_net_face_format(char *out, uint32_t cap)
     if ((g_faces & PM_METAL_NET_FACE_NTP) != 0u) {
         append(out, cap, "ntp");
     }
+    if ((g_faces & PM_METAL_NET_FACE_TFTP) != 0u) {
+        append(out, cap, "tftp");
+    }
     if (out[0] == '\0') {
         append(out, cap, "faces:none");
     }

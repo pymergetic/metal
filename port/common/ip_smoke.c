@@ -13,6 +13,7 @@
 #include "pymergetic/metal/net/ntp.h"
 #include "pymergetic/metal/net/ssh.h"
 #include "pymergetic/metal/net/tcp.h"
+#include "pymergetic/metal/net/tftp.h"
 #include "pymergetic/metal/net/udp.h"
 
 void uart_puts(const char *s);
@@ -220,6 +221,27 @@ static int ntp_smoke(void)
     return 0;
 }
 
+static int tftp_smoke(void)
+{
+    uint8_t buf[128];
+    uint32_t n = 0;
+    int32_t rc;
+
+    rc = pm_metal_tftp_get(PM_METAL_IP_DEFAULT_GW, "metal.txt", buf, sizeof(buf) - 1u, &n);
+    if (rc != 0 || n < 8u) {
+        uart_puts("tftp get fail\n");
+        return -1;
+    }
+    buf[n] = '\0';
+    if (buf[0] != 'm' || buf[1] != 'e' || buf[2] != 't' || buf[3] != 'a' || buf[4] != 'l') {
+        uart_puts("tftp body fail\n");
+        return -1;
+    }
+    uart_puts("tftp ok\n");
+    pm_metal_net_face_mark(PM_METAL_NET_FACE_TFTP);
+    return 0;
+}
+
 static int ping_smoke(void)
 {
     int i;
@@ -317,6 +339,9 @@ int pm_metal_ip_smoke(void)
         return -1;
     }
     if (ntp_smoke() != 0) {
+        return -1;
+    }
+    if (tftp_smoke() != 0) {
         return -1;
     }
 
