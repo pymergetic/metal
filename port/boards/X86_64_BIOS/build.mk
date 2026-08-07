@@ -152,7 +152,7 @@ WAMR_LIB := $(BUILD)/wamr-fs/libwasmmod_wamr_freestanding.a
 OBJ += $(BUILD)/metal_platform.o $(BUILD)/metal_libc_stdlib.o $(BUILD)/metal_libc_string.o
 endif
 
-$(BUILD)/metal_mem.o: $(METAL)/mem/mem.c | $(BUILD)
+$(BUILD)/metal_mem.o: $(METAL)/src/pymergetic/metal/mem/port/mem.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -164,35 +164,35 @@ $(BUILD)/metal_async.o: $(METAL)/src/pymergetic/metal/async/__init__.c | $(BUILD
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_console.o: $(METAL)/console/console.c | $(BUILD)
+$(BUILD)/metal_console.o: $(METAL)/src/pymergetic/metal/console/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_draw.o: $(METAL)/draw/draw.c | $(BUILD)
+$(BUILD)/metal_draw.o: $(METAL)/src/pymergetic/metal/draw/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_vt.o: $(METAL)/shell/vt/vt.c | $(BUILD)
+$(BUILD)/metal_vt.o: $(METAL)/src/pymergetic/metal/shell/vt/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_tui.o: $(METAL)/shell/tui/tui.c | $(BUILD)
+$(BUILD)/metal_tui.o: $(METAL)/src/pymergetic/metal/shell/tui/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_kbd.o: $(METAL)/dev/input/kbd.c | $(BUILD)
+$(BUILD)/metal_kbd.o: $(METAL)/src/pymergetic/metal/dev/input/kbd.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_pci.o: $(METAL)/bus/pci/pci.c | $(BUILD)
+$(BUILD)/metal_pci.o: $(METAL)/src/pymergetic/metal/bus/pci/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_virtio_pci.o: $(METAL)/bus/virtio/virtio_pci.c | $(BUILD)
+$(BUILD)/metal_virtio_pci.o: $(METAL)/src/pymergetic/metal/bus/virtio/virtio_pci.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_virtio_net.o: $(METAL)/dev/net/virtio_net.c | $(BUILD)
+$(BUILD)/metal_virtio_net.o: $(METAL)/src/pymergetic/metal/dev/net/virtio_net.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -241,20 +241,20 @@ $(BUILD)/metal_upy_nic.o: $(METAL)/src/pymergetic/metal/net/upy_nic/__init__.c |
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 ifeq ($(LINK_WAMR),1)
-$(BUILD)/metal_platform.o: $(METAL)/wasm/port/platform/metal_platform.c | $(BUILD)
+$(BUILD)/metal_platform.o: $(METAL)/src/pymergetic/metal/wasm/port/platform/metal_platform.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -I$(WASMMOD)/third_party/wamr/core/shared/platform/include \
 		-c -o $@ $<
 
-$(BUILD)/metal_libc_stdlib.o: $(METAL)/libc/stdlib.c | $(BUILD)
+$(BUILD)/metal_libc_stdlib.o: $(METAL)/src/pymergetic/metal/libc/port/stdlib.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/libc -c -o $@ $<
 
-$(BUILD)/metal_libc_stdio.o: $(METAL)/libc/stdio.c | $(BUILD)
+$(BUILD)/metal_libc_stdio.o: $(METAL)/src/pymergetic/metal/libc/port/stdio.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/libc -c -o $@ $<
 
-$(BUILD)/metal_libc_string.o: $(METAL)/libc/string.c | $(BUILD)
+$(BUILD)/metal_libc_string.o: $(METAL)/src/pymergetic/metal/libc/port/string.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/libc -c -o $@ $<
 

@@ -32,3 +32,13 @@ Port still links the freestanding mini-IP stack at
 `src/pymergetic/metal/net/minip/` (`pm_metal_tcp_*` short names in
 `include/.../net/tcp.h`). RS `src/.../net/ip/` (lwIP) is a twin — demote or
 merge later. **Do not** resurrect package-root `net/`.
+
+## Transitional leftovers at package root
+
+| Path | Why still there |
+|------|-----------------|
+| `libc/*.h` | Freestanding `-I$(METAL)/libc` for port TUs; `.c` lives under `src/.../libc/port/` |
+| `wasm/port/platform/*.h` | Platform include path for WAMR; `.c` under `src/.../wasm/port/platform/` |
+| `_tmp/package-root/` | Quarantined old async/ and leftovers |
+
+No package-root `net/` `async/` `mem/` `bus/` `console/` `draw/` `shell/` `dev/` product `.c` trees.

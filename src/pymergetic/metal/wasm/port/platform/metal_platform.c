@@ -9,13 +9,15 @@
 #include "platform_internal.h"
 #include "platform_api_vmcore.h"
 
-#include <pymergetic/metal/async/time.h>
-#include <pymergetic/metal/log/__init__.h>
-#include <pymergetic/metal/mem/__init__.h>
+#include "pymergetic/metal/async/time.h"
+#include "pymergetic/metal/log.h"
+#include "pymergetic/metal/mem.h"
 
 #define PAGE_SIZE 4096u
 
 int errno;
+
+void os_munmap(void *addr, size_t size);
 
 int bh_platform_init(void)
 {
