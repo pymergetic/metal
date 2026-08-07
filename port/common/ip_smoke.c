@@ -256,6 +256,12 @@ static int ssh_client_smoke(void)
         if (rc == 0 && n >= 7u) {
             uart_puts("ssh client ok\n");
             pm_metal_net_face_mark(PM_METAL_NET_FACE_SSH_CLI);
+            /* Listen PCB must survive the outbound client PCB. */
+            if (!pm_metal_tcp_passive_listening()) {
+                uart_puts("tcp dual fail\n");
+                return -1;
+            }
+            uart_puts("tcp dual ok\n");
             return 0;
         }
     }
@@ -371,6 +377,11 @@ int pm_metal_ip_smoke(void)
         return -1;
     }
     if (tftp_smoke() != 0) {
+        return -1;
+    }
+    /* Re-arm LISTEN so outbound client proves the server PCB is independent. */
+    if (pm_metal_tcp_listen(22) != 0) {
+        uart_puts("tcp dual listen fail\n");
         return -1;
     }
     if (ssh_client_smoke() != 0) {

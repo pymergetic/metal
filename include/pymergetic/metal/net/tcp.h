@@ -12,10 +12,19 @@ int32_t pm_metal_tcp_listen(uint16_t local_port);
 /* Active open; returns 0 SYN sent, -2 ARP pending, -1 error. Poll until established. */
 int32_t pm_metal_tcp_connect(uint32_t dst_ip, uint16_t dst_port);
 
-/* Abort any connection (sends RST if established) and return to CLOSED. */
+/*
+ * Abort the focused PCB (listen or connect). Client abort leaves the
+ * passive/server PCB intact (dual-slot stack).
+ */
 void pm_metal_tcp_abort(void);
 
 int32_t pm_metal_tcp_established(void);
+
+/* 1 if the passive/server PCB (listen slot) is ESTABLISHED. */
+int32_t pm_metal_tcp_passive_established(void);
+
+/* 1 if the passive/server PCB is still in LISTEN. */
+int32_t pm_metal_tcp_passive_listening(void);
 
 /* Send on the established connection. Returns 0 on success, -2 ARP pending. */
 int32_t pm_metal_tcp_send(const void *data, uint32_t len);

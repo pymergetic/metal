@@ -335,6 +335,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "ntp ok" $(BUILD)/serial.log \
 	  && grep -q "tftp ok" $(BUILD)/serial.log \
 	  && grep -q "ssh client ok" $(BUILD)/serial.log \
+	  && grep -q "tcp dual ok" $(BUILD)/serial.log \
 	  && grep -q "draw ok" $(BUILD)/serial.log \
 	  && grep -q "vt ok" $(BUILD)/serial.log \
 	  && grep -q "tui ok" $(BUILD)/serial.log \
