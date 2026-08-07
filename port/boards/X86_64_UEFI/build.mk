@@ -110,7 +110,8 @@ OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o
-OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o $(BUILD)/metal_ip.o
+OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
+OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -159,6 +160,14 @@ $(BUILD)/metal_virtio_net.o: $(METAL)/dev/net/virtio_net.c | $(BUILD)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_ip.o: $(METAL)/net/ip/ip.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_udp.o: $(METAL)/net/ip/udp.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_tcp.o: $(METAL)/net/ip/tcp.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -237,6 +246,8 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	     && grep -a -q "floor ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "net ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "ip ok" $(BUILD)/serial.log 2>/dev/null \
+	     && grep -a -q "udp ok" $(BUILD)/serial.log 2>/dev/null \
+	     && grep -a -q "tcp ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "draw ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "vt ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "tui ok" $(BUILD)/serial.log 2>/dev/null \
@@ -249,7 +260,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	done; \
 	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	echo "----- serial (trimmed) -----"; \
-	grep -a -E "metal |console ok|floor ok|net ok|ip ok|draw ok|vt ok|tui ok|wamr ok|framebuf ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
+	grep -a -E "metal |console ok|floor ok|net ok|ip ok|udp ok|tcp ok|draw ok|vt ok|tui ok|wamr ok|framebuf ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
 	if [ $$ok -eq 1 ]; then echo "X86_64_UEFI_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR) LLD=$(LLD_LINK)"; exit 0; fi; \
 	echo "X86_64_UEFI_FAIL ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	tail -c 1600 $(BUILD)/serial.log 2>/dev/null || true; \

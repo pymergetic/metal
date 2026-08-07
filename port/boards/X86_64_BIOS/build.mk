@@ -117,7 +117,8 @@ OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o
-OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o $(BUILD)/metal_ip.o
+OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
+OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -166,6 +167,14 @@ $(BUILD)/metal_virtio_net.o: $(METAL)/dev/net/virtio_net.c | $(BUILD)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_ip.o: $(METAL)/net/ip/ip.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_udp.o: $(METAL)/net/ip/udp.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_tcp.o: $(METAL)/net/ip/tcp.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -250,6 +259,8 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "floor ok" $(BUILD)/serial.log \
 	  && grep -q "net ok" $(BUILD)/serial.log \
 	  && grep -q "ip ok" $(BUILD)/serial.log \
+	  && grep -q "udp ok" $(BUILD)/serial.log \
+	  && grep -q "tcp ok" $(BUILD)/serial.log \
 	  && grep -q "draw ok" $(BUILD)/serial.log \
 	  && grep -q "vt ok" $(BUILD)/serial.log \
 	  && grep -q "tui ok" $(BUILD)/serial.log \
