@@ -25,3 +25,10 @@ Mirror of wasmmod: `include/` + `glue/`/`crates/pm` + Python faces
 ## Exemplar
 
 `src/pymergetic/metal/async/` + `include/pymergetic/metal/async/` — N-runner floor, hybrid faces.
+
+## Transitional: C mini-IP (`net/minip`)
+
+Port still links the freestanding mini-IP stack at
+`src/pymergetic/metal/net/minip/` (`pm_metal_tcp_*` short names in
+`include/.../net/tcp.h`). RS `src/.../net/ip/` (lwIP) is a twin — demote or
+merge later. **Do not** resurrect package-root `net/`.

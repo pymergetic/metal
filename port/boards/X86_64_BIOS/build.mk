@@ -196,19 +196,19 @@ $(BUILD)/metal_virtio_net.o: $(METAL)/dev/net/virtio_net.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_ip.o: $(METAL)/net/ip/ip.c | $(BUILD)
+$(BUILD)/metal_ip.o: $(METAL)/src/pymergetic/metal/net/minip/ip.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_udp.o: $(METAL)/net/ip/udp.c | $(BUILD)
+$(BUILD)/metal_udp.o: $(METAL)/src/pymergetic/metal/net/minip/udp.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_tcp.o: $(METAL)/net/ip/tcp.c | $(BUILD)
+$(BUILD)/metal_tcp.o: $(METAL)/src/pymergetic/metal/net/minip/tcp.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_http.o: $(METAL)/net/http/http.c | $(BUILD)
+$(BUILD)/metal_http.o: $(METAL)/src/pymergetic/metal/net/http/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -216,27 +216,27 @@ $(BUILD)/metal_ssh.o: $(METAL)/src/pymergetic/metal/net/ssh/__init__.c | $(BUILD
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_dhcp.o: $(METAL)/net/ip/dhcp.c | $(BUILD)
+$(BUILD)/metal_dhcp.o: $(METAL)/src/pymergetic/metal/net/minip/dhcp.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_dns.o: $(METAL)/net/ip/dns.c | $(BUILD)
+$(BUILD)/metal_dns.o: $(METAL)/src/pymergetic/metal/net/minip/dns.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_ntp.o: $(METAL)/net/ntp/ntp.c | $(BUILD)
+$(BUILD)/metal_ntp.o: $(METAL)/src/pymergetic/metal/net/ntp/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_tftp.o: $(METAL)/net/tftp/tftp.c | $(BUILD)
+$(BUILD)/metal_tftp.o: $(METAL)/src/pymergetic/metal/net/tftp/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_faces.o: $(METAL)/net/faces/faces.c | $(BUILD)
+$(BUILD)/metal_faces.o: $(METAL)/src/pymergetic/metal/net/faces/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_upy_nic.o: $(METAL)/net/upy_nic/upy_nic.c | $(BUILD)
+$(BUILD)/metal_upy_nic.o: $(METAL)/src/pymergetic/metal/net/upy_nic/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
