@@ -172,6 +172,21 @@ static int ssh_smoke(void)
     return 0;
 }
 
+static int http_client_smoke(void)
+{
+    uint8_t buf[512];
+    uint32_t n = 0;
+    int32_t rc;
+
+    rc = pm_metal_http_client_get("example.com", 80, "/", buf, sizeof(buf), &n);
+    if (rc != 0 || n < 12u) {
+        uart_puts("http client fail\n");
+        return -1;
+    }
+    uart_puts("http client ok\n");
+    return 0;
+}
+
 static int ping_smoke(void)
 {
     int i;
@@ -262,6 +277,9 @@ int pm_metal_ip_smoke(void)
         return -1;
     }
     if (ssh_smoke() != 0) {
+        return -1;
+    }
+    if (http_client_smoke() != 0) {
         return -1;
     }
 

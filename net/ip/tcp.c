@@ -9,6 +9,7 @@
 #define TCP_LISTEN      1u
 #define TCP_SYN_RECV    2u
 #define TCP_ESTABLISHED 3u
+#define TCP_SYN_SENT    4u
 
 #define TCP_FLAG_FIN 0x01u
 #define TCP_FLAG_SYN 0x02u
@@ -152,6 +153,20 @@ static void tcp_on_rx(const uint8_t *ip_pkt, uint32_t ip_len, uint32_t ihl)
         return;
     }
 
+    if (g_sock.state == TCP_SYN_SENT && src_ip == g_sock.remote_ip && src_port == g_sock.remote_port &&
+        (flags & TCP_FLAG_SYN) != 0u && (flags & TCP_FLAG_ACK) != 0u) {
+        if (ack == g_sock.snd_nxt) {
+            g_sock.rcv_nxt = seq + 1u;
+            if (tcp_tx(src_ip, g_sock.local_port, src_port, g_sock.snd_nxt, g_sock.rcv_nxt,
+                       TCP_FLAG_ACK, NULL, 0) == 0) {
+                g_sock.state = TCP_ESTABLISHED;
+                g_sock.established = 1;
+                g_sock.syn_acked = 1;
+            }
+        }
+        return;
+    }
+
     if (g_sock.state == TCP_SYN_RECV && (flags & TCP_FLAG_ACK) != 0u) {
         if (ack == g_sock.snd_nxt && src_ip == g_sock.remote_ip && src_port == g_sock.remote_port) {
             g_sock.state = TCP_ESTABLISHED;
@@ -192,6 +207,31 @@ int32_t pm_metal_tcp_listen(uint16_t local_port)
     g_sock.state = TCP_LISTEN;
     g_sock.local_port = local_port;
     return 0;
+}
+
+int32_t pm_metal_tcp_connect(uint32_t dst_ip, uint16_t dst_port)
+{
+    int32_t rc;
+
+    if (dst_ip == 0u || dst_port == 0u) {
+        return -1;
+    }
+    tcp_register_once();
+    memset(&g_sock, 0, sizeof(g_sock));
+    g_isn_seq += 0x1111u;
+    g_sock.state = TCP_SYN_SENT;
+    g_sock.local_port = (uint16_t)(49152u + (g_isn_seq & 0x0fffu));
+    g_sock.remote_ip = dst_ip;
+    g_sock.remote_port = dst_port;
+    g_sock.snd_isn = g_isn_seq;
+    g_sock.snd_nxt = g_isn_seq;
+    rc = tcp_tx(dst_ip, g_sock.local_port, dst_port, g_sock.snd_isn, 0u, TCP_FLAG_SYN, NULL, 0);
+    if (rc == 0) {
+        g_sock.snd_nxt = g_sock.snd_isn + 1u;
+    } else if (rc != -2) {
+        g_sock.state = TCP_CLOSED;
+    }
+    return rc;
 }
 
 int32_t pm_metal_tcp_established(void)

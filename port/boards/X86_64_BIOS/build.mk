@@ -310,6 +310,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "tcp ok" $(BUILD)/serial.log \
 	  && grep -q "http ok" $(BUILD)/serial.log \
 	  && grep -q "ssh ok" $(BUILD)/serial.log \
+	  && grep -q "http client ok" $(BUILD)/serial.log \
 	  && grep -q "draw ok" $(BUILD)/serial.log \
 	  && grep -q "vt ok" $(BUILD)/serial.log \
 	  && grep -q "tui ok" $(BUILD)/serial.log \

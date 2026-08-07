@@ -295,6 +295,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	     && grep -a -q "tcp ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "http ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "ssh ok" $(BUILD)/serial.log 2>/dev/null \
+	     && grep -a -q "http client ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "draw ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "vt ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "tui ok" $(BUILD)/serial.log 2>/dev/null \
@@ -310,7 +311,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	done; \
 	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	echo "----- serial (trimmed) -----"; \
-	grep -a -E "metal |console ok|floor ok|net ok|dhcp ok|ping ok|ip ok|udp ok|dns ok|tcp ok|http ok|ssh ok|draw ok|vt ok|tui ok|kbd ok|wamr ok|framebuf ok|network ok|dns py ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
+	grep -a -E "metal |console ok|floor ok|net ok|dhcp ok|ping ok|ip ok|udp ok|dns ok|tcp ok|http ok|ssh ok|http client ok|draw ok|vt ok|tui ok|kbd ok|wamr ok|framebuf ok|network ok|dns py ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
 	if [ $$ok -eq 1 ]; then echo "X86_64_UEFI_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR) LLD=$(LLD_LINK)"; exit 0; fi; \
 	echo "X86_64_UEFI_FAIL ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	tail -c 1600 $(BUILD)/serial.log 2>/dev/null || true; \

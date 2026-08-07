@@ -8,6 +8,10 @@ extern "C" {
 #endif
 
 int32_t pm_metal_tcp_listen(uint16_t local_port);
+
+/* Active open; returns 0 SYN sent, -2 ARP pending, -1 error. Poll until established. */
+int32_t pm_metal_tcp_connect(uint32_t dst_ip, uint16_t dst_port);
+
 int32_t pm_metal_tcp_established(void);
 
 /* Send on the established connection. Returns 0 on success, -2 ARP pending. */

@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "pymergetic/metal/net/dns.h"
+#include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/tcp.h"
 
 static int32_t g_ready;
@@ -51,4 +53,115 @@ int32_t pm_metal_http_poll(void)
 int32_t pm_metal_http_served(void)
 {
     return g_served;
+}
+
+static int str_has_http(const uint8_t *buf, uint32_t n)
+{
+    uint32_t i;
+
+    if (buf == NULL || n < 5u) {
+        return 0;
+    }
+    for (i = 0; i + 5u <= n; i++) {
+        if (buf[i] == 'H' && buf[i + 1u] == 'T' && buf[i + 2u] == 'T' && buf[i + 3u] == 'P' &&
+            buf[i + 4u] == '/') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int32_t pm_metal_http_client_get(const char *host, uint16_t port, const char *path,
+                                 uint8_t *buf, uint32_t cap, uint32_t *len_out)
+{
+    char req[256];
+    uint32_t addr = 0;
+    uint32_t got = 0;
+    uint32_t chunk;
+    int i;
+    int32_t rc;
+    size_t rlen;
+    size_t o;
+
+    if (host == NULL || path == NULL || buf == NULL || len_out == NULL || cap < 16u || port == 0u) {
+        return -1;
+    }
+    *len_out = 0;
+    if (pm_metal_dns_resolve(host, &addr) != 0 || addr == 0u) {
+        return -1;
+    }
+
+    for (i = 0; i < 32; i++) {
+        rc = pm_metal_tcp_connect(addr, port);
+        if (rc == 0) {
+            break;
+        }
+        if (rc != -2) {
+            return -1;
+        }
+        pm_metal_ip_poll();
+    }
+    if (rc != 0) {
+        return -1;
+    }
+
+    for (i = 0; i < 8000 && !pm_metal_tcp_established(); i++) {
+        pm_metal_ip_poll();
+    }
+    if (!pm_metal_tcp_established()) {
+        return -2;
+    }
+
+    /* GET path HTTP/1.0\r\nHost: host\r\nConnection: close\r\n\r\n */
+    o = 0;
+    memcpy(req + o, "GET ", 4);
+    o += 4;
+    for (rlen = 0; path[rlen] != '\0' && o + 1u < sizeof(req); rlen++) {
+        req[o++] = path[rlen];
+    }
+    memcpy(req + o, " HTTP/1.0\r\nHost: ", 16);
+    o += 16;
+    for (rlen = 0; host[rlen] != '\0' && o + 1u < sizeof(req); rlen++) {
+        req[o++] = host[rlen];
+    }
+    memcpy(req + o, "\r\nConnection: close\r\n\r\n", 24);
+    o += 24;
+    if (o >= sizeof(req)) {
+        return -1;
+    }
+
+    for (i = 0; i < 32; i++) {
+        rc = pm_metal_tcp_send(req, (uint32_t)o);
+        if (rc == 0) {
+            break;
+        }
+        if (rc != -2) {
+            return -1;
+        }
+        pm_metal_ip_poll();
+    }
+    if (rc != 0) {
+        return -1;
+    }
+
+    for (i = 0; i < 12000; i++) {
+        pm_metal_ip_poll();
+        chunk = 0;
+        rc = pm_metal_tcp_recv(buf + got, cap - got, &chunk);
+        if (rc == 1 && chunk > 0u) {
+            got += chunk;
+            if (str_has_http(buf, got)) {
+                *len_out = got;
+                return 0;
+            }
+            if (got >= cap) {
+                break;
+            }
+        }
+    }
+    if (str_has_http(buf, got)) {
+        *len_out = got;
+        return 0;
+    }
+    return -2;
 }
