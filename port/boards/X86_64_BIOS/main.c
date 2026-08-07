@@ -1,8 +1,9 @@
-/* Freestanding BIOS entry — UART + µPy (smoke or REPL). */
+/* Freestanding BIOS entry — floor (mem+async) then µPy smoke/REPL. */
 #include <stdint.h>
 
 #include "io.h"
 #include "main_upy.h"
+#include "floor_smoke.h"
 
 void uart_init(void);
 void uart_puts(const char *s);
@@ -18,6 +19,13 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
 
     uart_init();
     uart_puts("metal X86_64_BIOS\n");
+
+    if (pm_metal_floor_smoke() != 0) {
+        outw(0x501u, 1u);
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
 
     mp_metal_upy_run(METAL_UPY_SMOKE);
 

@@ -4,6 +4,7 @@
 #include "py/runtime.h"
 
 #include "mphalport.h"
+#include "pymergetic/metal/async/board_time.h"
 
 /* Rough TSC-free tick: busy-loop calibrated loosely for QEMU smoke only. */
 static volatile uint32_t s_ticks_ms;
@@ -36,12 +37,14 @@ void mp_hal_delay_ms(mp_uint_t ms) {
         for (volatile uint32_t s = 0; s < 50000u; s++) {
         }
         s_ticks_ms++;
+        pm_metal_board_time_advance_us(1000ull);
     }
 }
 
 void mp_hal_delay_us(mp_uint_t us) {
     for (volatile uint32_t s = 0; s < us * 10u; s++) {
     }
+    pm_metal_board_time_advance_us((uint64_t)us);
 }
 
 mp_uint_t mp_hal_ticks_cpu(void) {

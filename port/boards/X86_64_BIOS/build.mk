@@ -7,6 +7,7 @@ BOARD_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 # make -f is always invoked with cwd = metalmod/port
 PORT_DIR := $(CURDIR)
 COMMON := $(PORT_DIR)/common
+METALMOD := $(abspath $(PORT_DIR)/..)
 BUILD ?= build-X86_64_BIOS
 
 ENGINE ?= mp
@@ -40,7 +41,8 @@ MICROPY_ROM_TEXT_COMPRESSION ?= 0
 
 include $(TOP)/py/py.mk
 
-INC := -I$(COMMON) -I$(BOARD_DIR) -I$(TOP) -I$(BUILD)
+INC := -I$(COMMON) -I$(BOARD_DIR) -I$(TOP) -I$(BUILD) \
+	-I$(METALMOD)/include -I$(METALMOD)/third_party/tlsf
 
 CFLAGS_METAL := -m64 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-mno-red-zone -fno-asynchronous-unwind-tables -fno-exceptions \
@@ -70,6 +72,8 @@ SRC_C = \
 	boards/X86_64_BIOS/uart.c \
 	common/mphalport.c \
 	common/main_upy.c \
+	common/metal_board_time.c \
+	common/floor_smoke.c \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
 	shared/runtime/stdout_helpers.c \
@@ -80,6 +84,19 @@ SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c
 
 OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
+OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o
+
+$(BUILD)/metal_mem.o: $(METALMOD)/mem/mem.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_tlsf.o: $(METALMOD)/third_party/tlsf/tlsf.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_async.o: $(METALMOD)/async/async.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 LIBGCC := $(shell $(CC) $(CFLAGS_METAL) -print-libgcc-file-name)
 
@@ -130,11 +147,13 @@ run: $(BUILD)/metal.qemu.elf
 	ec=$$?; \
 	echo "----- serial -----"; \
 	cat $(BUILD)/serial.log; \
-	if grep -q "upy ok" $(BUILD)/serial.log && grep -q "qemu ok" $(BUILD)/serial.log; then \
-	  echo "X86_64_BIOS_UPY_OK ENGINE=$(ENGINE)"; \
+	if grep -q "floor ok" $(BUILD)/serial.log \
+	  && grep -q "upy ok" $(BUILD)/serial.log \
+	  && grep -q "qemu ok" $(BUILD)/serial.log; then \
+	  echo "X86_64_BIOS_FLOOR_UPY_OK ENGINE=$(ENGINE)"; \
 	  exit 0; \
 	fi; \
-	echo "X86_64_BIOS_UPY_FAIL (qemu ec=$$ec)"; \
+	echo "X86_64_BIOS_FLOOR_UPY_FAIL (qemu ec=$$ec)"; \
 	exit 1
 
 clean:

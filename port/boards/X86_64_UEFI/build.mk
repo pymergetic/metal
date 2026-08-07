@@ -4,6 +4,7 @@
 BOARD_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 PORT_DIR := $(CURDIR)
 COMMON := $(PORT_DIR)/common
+METALMOD := $(abspath $(PORT_DIR)/..)
 BUILD ?= build-X86_64_UEFI
 
 ENGINE ?= mp
@@ -37,6 +38,7 @@ include $(TOP)/py/py.mk
 TARGET_WIN := --target=x86_64-unknown-windows
 
 INC := -I$(COMMON) -I$(BOARD_DIR) -I$(TOP) -I$(BUILD) \
+	-I$(METALMOD)/include -I$(METALMOD)/third_party/tlsf \
 	-I$(EDK_INC) -I$(EDK_INC)/X64 \
 	-isystem /usr/include -isystem /usr/include/x86_64-linux-gnu
 
@@ -62,6 +64,8 @@ SRC_C = \
 	boards/X86_64_UEFI/uart.c \
 	common/mphalport.c \
 	common/main_upy.c \
+	common/metal_board_time.c \
+	common/floor_smoke.c \
 	common/fsys/chkstk.c \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
@@ -73,6 +77,19 @@ SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c
 
 OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
+OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o
+
+$(BUILD)/metal_mem.o: $(METALMOD)/mem/mem.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_tlsf.o: $(METALMOD)/third_party/tlsf/tlsf.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_async.o: $(METALMOD)/async/async.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 LLD_LINK := $(shell command -v lld-link 2>/dev/null)
 ifeq ($(LLD_LINK),)
@@ -117,16 +134,17 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	qpid=$$!; \
 	ok=0; \
 	for i in $$(seq 1 120); do \
-	  if grep -a -q "upy ok" $(BUILD)/serial.log 2>/dev/null \
+	  if grep -a -q "floor ok" $(BUILD)/serial.log 2>/dev/null \
+	     && grep -a -q "upy ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "ovmf ok" $(BUILD)/serial.log 2>/dev/null; then ok=1; break; fi; \
 	  if ! kill -0 $$qpid 2>/dev/null; then break; fi; \
 	  sleep 0.1; \
 	done; \
 	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	echo "----- serial (trimmed) -----"; \
-	grep -a -E "metal |upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
-	if [ $$ok -eq 1 ]; then echo "X86_64_UEFI_UPY_OK ENGINE=$(ENGINE)"; exit 0; fi; \
-	echo "X86_64_UEFI_UPY_FAIL"; \
+	grep -a -E "metal |floor ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
+	if [ $$ok -eq 1 ]; then echo "X86_64_UEFI_FLOOR_UPY_OK ENGINE=$(ENGINE) LLD=$(LLD_LINK)"; exit 0; fi; \
+	echo "X86_64_UEFI_FLOOR_UPY_FAIL"; \
 	tail -c 1600 $(BUILD)/serial.log 2>/dev/null || true; \
 	exit 1
 
