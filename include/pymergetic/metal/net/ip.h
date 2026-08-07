@@ -1,0 +1,37 @@
+#ifndef PM_METAL_NET_IP_H_
+#define PM_METAL_NET_IP_H_
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* QEMU user-net defaults (guest side). */
+#ifndef PM_METAL_IP_DEFAULT_ADDR
+#define PM_METAL_IP_DEFAULT_ADDR 0x0a00020fu /* 10.0.2.15 */
+#endif
+#ifndef PM_METAL_IP_DEFAULT_MASK
+#define PM_METAL_IP_DEFAULT_MASK 0xffffff00u /* /24 */
+#endif
+#ifndef PM_METAL_IP_DEFAULT_GW
+#define PM_METAL_IP_DEFAULT_GW 0x0a000202u /* 10.0.2.2 */
+#endif
+
+int32_t pm_metal_ip_init(uint32_t addr_be, uint32_t mask_be, uint32_t gw_be);
+int32_t pm_metal_ip_ready(void);
+
+uint32_t pm_metal_ip_addr(void);
+uint32_t pm_metal_ip_gw(void);
+
+/* TX gratuitous ARP / announce for our address. */
+int32_t pm_metal_ip_announce(void);
+
+/* Poll virtio-net; handle ARP requests + ICMP echo; reap TX. */
+void pm_metal_ip_poll(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

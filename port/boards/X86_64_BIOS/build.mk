@@ -91,6 +91,7 @@ SRC_C = \
 	common/metal_board_time.c \
 	common/floor_smoke.c \
 	common/net_smoke.c \
+	common/ip_smoke.c \
 	common/console_smoke.c \
 	common/draw_smoke.c \
 	common/vt_smoke.c \
@@ -116,7 +117,7 @@ OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o
-OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
+OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o $(BUILD)/metal_ip.o
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -161,6 +162,10 @@ $(BUILD)/metal_virtio_pci.o: $(METAL)/bus/virtio/virtio_pci.c | $(BUILD)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_virtio_net.o: $(METAL)/dev/net/virtio_net.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_ip.o: $(METAL)/net/ip/ip.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -244,6 +249,7 @@ run: $(BUILD)/metal.qemu.elf
 	if grep -q "console ok" $(BUILD)/serial.log \
 	  && grep -q "floor ok" $(BUILD)/serial.log \
 	  && grep -q "net ok" $(BUILD)/serial.log \
+	  && grep -q "ip ok" $(BUILD)/serial.log \
 	  && grep -q "draw ok" $(BUILD)/serial.log \
 	  && grep -q "vt ok" $(BUILD)/serial.log \
 	  && grep -q "tui ok" $(BUILD)/serial.log \
