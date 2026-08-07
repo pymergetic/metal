@@ -1,2 +1,0 @@
-metalmod X86_64_BIOS
-qemu ok — ports/metal BOARD=X86_64_BIOS
