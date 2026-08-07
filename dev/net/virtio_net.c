@@ -278,7 +278,10 @@ int pm_metal_dev_net_virtio_tx(const void *frame, uint32_t len)
     }
 
     if (vnet_tx_alloc(&idx) != 0) {
-        return -1;
+        vnet_tx_reap();
+        if (vnet_tx_alloc(&idx) != 0) {
+            return -1;
+        }
     }
 
     scratch = m_tx_scratch[idx];

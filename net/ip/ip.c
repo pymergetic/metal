@@ -245,7 +245,17 @@ int32_t pm_metal_ip_tx_l4(uint32_t dst_ip_host, uint8_t proto,
     put_u16(frame + 24, pm_metal_ip_checksum(frame + 14, 20));
     memcpy(frame + 34, l4, l4_len);
 
-    return pm_metal_dev_net_virtio_tx(frame, frame_len) == 0 ? 0 : -1;
+    {
+        int32_t tries;
+        for (tries = 0; tries < 8; tries++) {
+            if (pm_metal_dev_net_virtio_tx(frame, frame_len) == 0) {
+                return 0;
+            }
+            pm_metal_dev_net_virtio_poll(NULL, NULL);
+            (void)pm_metal_dev_net_virtio_reap_tx();
+        }
+    }
+    return -1;
 }
 
 static int32_t tx_arp_reply(const uint8_t *req_frame)
