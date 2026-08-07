@@ -229,3 +229,8 @@ char *strtok_r(char *str, const char *delim, char **saveptr)
   }
   return start;
 }
+
+char *strtok_s(char *str, const char *delim, char **ctx)
+{
+  return strtok_r(str, delim, ctx);
+}

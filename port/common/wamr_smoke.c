@@ -3,6 +3,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Static freestanding link — never dllimport (clang --target=*-windows sets _MSC_BUILD). */
+#ifndef WASM_RUNTIME_API_EXTERN
+#define WASM_RUNTIME_API_EXTERN
+#endif
 #include "wasm_export.h"
 
 void uart_puts(const char *s);

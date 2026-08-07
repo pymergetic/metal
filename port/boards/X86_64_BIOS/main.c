@@ -1,8 +1,9 @@
-/* Freestanding BIOS entry — floor (mem+async) then µPy smoke/REPL. */
+/* Freestanding BIOS entry — console → floor → wamr → µPy. */
 #include <stdint.h>
 
 #include "io.h"
 #include "main_upy.h"
+#include "console_smoke.h"
 #include "floor_smoke.h"
 #include "wamr_smoke.h"
 
@@ -20,6 +21,13 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
 
     uart_init();
     uart_puts("metal X86_64_BIOS\n");
+
+    if (pm_metal_console_smoke() != 0) {
+        outw(0x501u, 1u);
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
 
     if (pm_metal_floor_smoke() != 0) {
         outw(0x501u, 1u);
@@ -39,7 +47,6 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
 
     mp_metal_upy_run(METAL_UPY_SMOKE);
 
-    /* QEMU isa-debug-exit: outw(0x501,0) → exit status 1 (success marker for run). */
     outw(0x501u, 0u);
 
     for (;;) {

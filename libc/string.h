@@ -18,5 +18,7 @@ char *strstr(const char *haystack, const char *needle);
 size_t strspn(const char *s, const char *accept);
 size_t strcspn(const char *s, const char *reject);
 char *strtok_r(char *str, const char *delim, char **saveptr);
+/* Windows/UEFI WAMR path calls strtok_s; same semantics as strtok_r. */
+char *strtok_s(char *str, const char *delim, char **ctx);
 
 #endif /* PM_METAL_LIBC_STRING_H_ */

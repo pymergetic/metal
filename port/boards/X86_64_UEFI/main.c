@@ -1,7 +1,9 @@
 #include <Uefi.h>
 
 #include "main_upy.h"
+#include "console_smoke.h"
 #include "floor_smoke.h"
+#include "wamr_smoke.h"
 
 void uart_init(void);
 void uart_puts(const char *s);
@@ -17,9 +19,19 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     uart_init();
     uart_puts("metal X86_64_UEFI\n");
 
+    if (pm_metal_console_smoke() != 0) {
+        return EFI_DEVICE_ERROR;
+    }
+
     if (pm_metal_floor_smoke() != 0) {
         return EFI_DEVICE_ERROR;
     }
+
+#if defined(METAL_LINK_WAMR) && METAL_LINK_WAMR
+    if (pm_metal_wamr_smoke() != 0) {
+        return EFI_DEVICE_ERROR;
+    }
+#endif
 
     mp_metal_upy_run(METAL_UPY_SMOKE);
 
