@@ -20,6 +20,8 @@ size_t pm_metal_console_write(const uint8_t *data, size_t n);
 
 /* Replay history then set live sink (one viewport for now). */
 int32_t pm_metal_console_attach(pm_metal_console_sink_fn sink, void *user);
+/* Live sink only — no history replay. */
+int32_t pm_metal_console_set_sink(pm_metal_console_sink_fn sink, void *user);
 void pm_metal_console_detach(void);
 
 uint64_t pm_metal_console_seq(void);

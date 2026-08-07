@@ -54,6 +54,7 @@
 #define MICROPY_PY_CMATH                  (0)
 #define MICROPY_PY_IO                     (0)
 #define MICROPY_PY_STRUCT                 (0)
+#define MICROPY_PY_FRAMEBUF               (1)
 
 #ifndef MICROPY_HEAP_SIZE
 #define MICROPY_HEAP_SIZE                 (128 * 1024)

@@ -48,6 +48,16 @@ void mp_metal_upy_run(int smoke) {
 
     if (smoke) {
 #if MICROPY_ENABLE_COMPILER
+#if MICROPY_PY_FRAMEBUF
+        do_str(
+            "import framebuf\n"
+            "b=bytearray(64)\n"
+            "f=framebuf.FrameBuffer(b,16,8,framebuf.MVLSB)\n"
+            "f.fill(1)\n"
+            "f.pixel(0,0,0)\n"
+            "print('framebuf ok')\n",
+            MP_PARSE_FILE_INPUT);
+#endif
         do_str("print('upy ok')", MP_PARSE_SINGLE_INPUT);
 #endif
         uart_puts("qemu ok\n");

@@ -3,11 +3,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "pymergetic/metal/console.h"
 #include "pymergetic/metal/draw.h"
 #include "pymergetic/metal/mem.h"
 #include "pymergetic/metal/vt.h"
 
 void uart_puts(const char *s);
+void uart_write(const char *s, size_t n);
+
+static void uart_and_vt_sink(const uint8_t *data, size_t n, void *user)
+{
+    (void)user;
+    uart_write((const char *)data, n);
+    if (pm_metal_vt_ready()) {
+        pm_metal_vt_write((const char *)data, n);
+    }
+}
 
 int pm_metal_vt_smoke(void)
 {
@@ -96,6 +107,13 @@ int pm_metal_vt_smoke(void)
     sum1 = pm_metal_draw_checksum(&ds);
     if (sum1 == 0 || sum1 != sum0) {
         uart_puts("vt checksum1 fail\n");
+        pm_metal_mem_free(fb);
+        return -1;
+    }
+
+    /* Serial stays primary; also mirror live console bytes into active VT. */
+    if (pm_metal_console_ready() && pm_metal_console_set_sink(uart_and_vt_sink, NULL) != 0) {
+        uart_puts("vt sink fail\n");
         pm_metal_mem_free(fb);
         return -1;
     }

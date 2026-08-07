@@ -93,6 +93,17 @@ void pm_metal_console_detach(void)
     g_con.sink_user = NULL;
 }
 
+/* Live sink only — no history replay (for fan-out after first attach). */
+int32_t pm_metal_console_set_sink(pm_metal_console_sink_fn sink, void *user)
+{
+    if (!g_con.ready || sink == NULL) {
+        return -1;
+    }
+    g_con.sink = sink;
+    g_con.sink_user = user;
+    return 0;
+}
+
 uint64_t pm_metal_console_seq(void)
 {
     return g_con.seq;

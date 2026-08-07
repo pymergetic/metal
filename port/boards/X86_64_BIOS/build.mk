@@ -95,7 +95,8 @@ SRC_C = \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
 	shared/runtime/stdout_helpers.c \
-	shared/libc/printf.c
+	shared/libc/printf.c \
+	extmod/modframebuf.c
 
 ifeq ($(LINK_WAMR),1)
 SRC_C += \
@@ -106,7 +107,7 @@ else
 SRC_C += shared/libc/string0.c
 endif
 
-SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c
+SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebuf.c
 
 OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
@@ -225,6 +226,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "vt ok" $(BUILD)/serial.log \
 	  && { [ "$(LINK_WAMR)" != "1" ] || grep -q "wamr ok" $(BUILD)/serial.log; } \
 	  && grep -q "upy ok" $(BUILD)/serial.log \
+	  && grep -q "framebuf ok" $(BUILD)/serial.log \
 	  && grep -q "qemu ok" $(BUILD)/serial.log; then \
 	  echo "X86_64_BIOS_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	  exit 0; \
