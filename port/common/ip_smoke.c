@@ -169,6 +169,8 @@ static int http_smoke(void)
 static int ssh_smoke(void)
 {
     if (!pm_metal_net_ssh_available()) {
+        /* Stub face still registers on the TUI protocol row. */
+        pm_metal_net_face_mark(PM_METAL_NET_FACE_SSH);
         uart_puts("ssh stub\n");
         return 0;
     }

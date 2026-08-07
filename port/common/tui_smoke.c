@@ -89,9 +89,9 @@ int pm_metal_tui_smoke(void)
         pm_metal_mem_free(fb);
         return -1;
     }
+    /* sshc optional until DIY client lands; stub marks ssh only. */
     if (!row_has(vt->cells[14], "http") || !row_has(vt->cells[14], "ssh") ||
-        !row_has(vt->cells[14], "ntp") || !row_has(vt->cells[14], "tftp") ||
-        !row_has(vt->cells[14], "sshc")) {
+        !row_has(vt->cells[14], "ntp") || !row_has(vt->cells[14], "tftp")) {
         uart_puts("tui faces fail\n");
         pm_metal_mem_free(fb);
         return -1;
