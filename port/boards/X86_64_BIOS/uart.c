@@ -1,4 +1,4 @@
-/* Freestanding COM1 UART (115200 8N1) — no Metal headers. */
+/* Freestanding COM1 UART (115200 8N1) — TX + blocking RX. */
 #include <stddef.h>
 #include <stdint.h>
 
@@ -62,4 +62,18 @@ void uart_puts(const char *s)
         n++;
     }
     uart_write(s, n);
+}
+
+/* Blocking RX — spin until LSR data-ready. */
+int uart_rx_chr(void)
+{
+    if (!g_ready) {
+        uart_init();
+    }
+    for (;;) {
+        if ((inb(COM1_BASE + 5u) & 0x01u) != 0u) {
+            return (int)inb(COM1_BASE);
+        }
+        __asm__ volatile("pause");
+    }
 }

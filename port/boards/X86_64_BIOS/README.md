@@ -1,11 +1,9 @@
-# X86_64_BIOS (metalmod)
+# X86_64_BIOS
 
-Freestanding Multiboot trampoline + COM1 banner. No forge.
+Freestanding Multiboot trampoline → long mode → COM1 UART → MicroPython.
 
 ```bash
-make -C ports/metal BOARD=X86_64_BIOS
-make -C ports/metal BOARD=X86_64_BIOS run
-# → qemu-system-x86_64 -kernel build-X86_64_BIOS/metal.qemu.elf
+make -C ports/metal BOARD=X86_64_BIOS ENGINE=mp run
 ```
 
-Serial: COM1 @ 115200. QEMU uses `isa-debug-exit` at `0x501`.
+Smoke expects serial `upy ok` and `qemu ok`.

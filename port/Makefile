@@ -1,5 +1,6 @@
 # metalmod port — boards under boards/$(BOARD)/
 BOARD ?= X86_64_BIOS
+ENGINE ?= mp
 BOARD_DIR := boards/$(BOARD)
 BUILD ?= build-$(BOARD)
 
@@ -9,4 +10,4 @@ endif
 
 .PHONY: all run clean
 all run clean:
-	$(MAKE) -f $(BOARD_DIR)/build.mk $@ BUILD=$(BUILD) BOARD=$(BOARD)
+	$(MAKE) -f $(BOARD_DIR)/build.mk $@ BUILD=$(BUILD) BOARD=$(BOARD) ENGINE=$(ENGINE)
