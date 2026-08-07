@@ -61,6 +61,8 @@
 
 typedef long mp_off_t;
 
-#include <alloca.h>
+#ifndef alloca
+#define alloca(n) __builtin_alloca(n)
+#endif
 
 #define MP_STATE_PORT MP_STATE_VM
