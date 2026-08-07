@@ -1,9 +1,9 @@
-/* Serial log sink for freestanding boards (until console ring is primary). */
-#include "pymergetic/metal/log.h"
-#include "pymergetic/metal/console.h"
-
+#include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+
+#include "pymergetic/metal/log.h"
+#include "pymergetic/metal/console.h"
 
 void uart_puts(const char *s);
 

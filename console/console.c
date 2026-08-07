@@ -1,5 +1,7 @@
 #include "pymergetic/metal/console.h"
 
+#include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 typedef struct {

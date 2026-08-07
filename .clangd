@@ -1,0 +1,33 @@
+# Absolute -I so clangd TU cwd cannot break includes.
+# Restart: Command Palette → "clangd: Restart language server".
+CompileFlags:
+  CompilationDatabase: None
+  Compiler: /usr/bin/clang
+  Add:
+    - -xc
+    - -std=gnu11
+    - -Wall
+    - -Wno-unused-parameter
+    - -ffreestanding
+    - -fshort-wchar
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metalmod/include
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metalmod
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metalmod/third_party/tlsf
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metalmod/port
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metalmod/port/common
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metalmod/port/boards/X86_64_BIOS
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metalmod/port/boards/X86_64_UEFI
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metalmod/port/build-X86_64_BIOS
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metalmod/libc
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metalmod/wasm/port/platform
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metalmod/_tmp/external/edk2/MdePkg/Include
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metalmod/_tmp/external/edk2/MdePkg/Include/X64
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/wasmmod/third_party/wamr/core/iwasm/include
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/wasmmod/third_party/wamr/core/shared/platform/include
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/py
+    - -DWASM_RUNTIME_API_EXTERN=
+    - -DBH_PLATFORM_METAL
+    - -DMETAL_LINK_WAMR=1
+    - -DMETAL_UPY_SMOKE=1
+    - -DMICROPY_ENABLE_COMPILER=1
