@@ -4,9 +4,9 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "pymergetic/metal/net/ip.h"
-#include "pymergetic/metal/net/ip_internal.h"
-#include "pymergetic/metal/net/udp.h"
+#include "pymergetic/metal/net/ip/__init__.h"
+#include "pymergetic/metal/net/ip/internal.h"
+#include "pymergetic/metal/net/ip/udp.h"
 
 #define DNS_PORT 53u
 #define DNS_CLIENT_PORT 49510u
@@ -194,15 +194,15 @@ static int arp_wait(uint32_t ip, int max_polls)
     int i;
 
     for (i = 0; i < max_polls; i++) {
-        if (pm_metal_ip_arp_resolve(ip) > 0) {
+        if (pm_metal_net_ip_arp_resolve(ip) > 0) {
             return 0;
         }
-        pm_metal_ip_poll();
+        pm_metal_net_ip_poll();
     }
     return -1;
 }
 
-int32_t pm_metal_dns_resolve(const char *name, uint32_t *addr_out)
+int32_t pm_metal_net_dns_resolve(const char *name, uint32_t *addr_out)
 {
     uint8_t q[256];
     uint8_t rx[512];
@@ -224,12 +224,12 @@ int32_t pm_metal_dns_resolve(const char *name, uint32_t *addr_out)
     if (parse_dotted_ipv4(name, addr_out) == 0) {
         return 0;
     }
-    if (!pm_metal_ip_ready()) {
+    if (!pm_metal_net_ip_ready()) {
         return -1;
     }
-    server = pm_metal_ip_dns();
+    server = pm_metal_net_ip_dns();
     if (server == 0u) {
-        server = PM_METAL_IP_DEFAULT_DNS;
+        server = PM_METAL_NET_IP_DEFAULT_DNS;
     }
 
     memset(q, 0, sizeof(q));
@@ -252,32 +252,32 @@ int32_t pm_metal_dns_resolve(const char *name, uint32_t *addr_out)
     q[14u + name_len] = 0x00u;
     q[15u + name_len] = 0x01u;
 
-    if (pm_metal_udp_bind(DNS_CLIENT_PORT) != 0) {
+    if (pm_metal_net_ip_udp_bind(DNS_CLIENT_PORT) != 0) {
         return -1;
     }
     if (arp_wait(server, 256) != 0) {
-        if (arp_wait(PM_METAL_IP_DEFAULT_GW, 256) != 0) {
+        if (arp_wait(PM_METAL_NET_IP_DEFAULT_GW, 256) != 0) {
             return -1;
         }
     }
 
     for (attempt = 0; attempt < 4 && !got; attempt++) {
         for (i = 0; i < 16; i++) {
-            rc = pm_metal_udp_sendto(server, DNS_PORT, q, (uint32_t)(16u + name_len));
+            rc = pm_metal_net_ip_udp_sendto(server, DNS_PORT, q, (uint32_t)(16u + name_len));
             if (rc == 0) {
                 break;
             }
             if (rc != -2) {
                 return -1;
             }
-            pm_metal_ip_poll();
+            pm_metal_net_ip_poll();
         }
         if (rc != 0) {
             return -1;
         }
         for (i = 0; i < 6000; i++) {
-            pm_metal_ip_poll();
-            if (pm_metal_udp_recv(&src_ip, &src_port, rx, sizeof(rx), &rx_len) == 1) {
+            pm_metal_net_ip_poll();
+            if (pm_metal_net_ip_udp_recv(&src_ip, &src_port, rx, sizeof(rx), &rx_len) == 1) {
                 if (src_port == DNS_PORT && parse_a_answer(rx, rx_len, xid, &addr) == 0) {
                     got = 1;
                     break;

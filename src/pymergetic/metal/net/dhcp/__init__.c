@@ -5,9 +5,9 @@
 #include <string.h>
 
 #include "pymergetic/metal/dev/net.h"
-#include "pymergetic/metal/net/ip.h"
-#include "pymergetic/metal/net/ip_internal.h"
-#include "pymergetic/metal/net/udp.h"
+#include "pymergetic/metal/net/ip/__init__.h"
+#include "pymergetic/metal/net/ip/internal.h"
+#include "pymergetic/metal/net/ip/udp.h"
 
 #define DHCP_SERVER_PORT 67u
 #define DHCP_CLIENT_PORT 68u
@@ -86,7 +86,7 @@ static uint32_t parse_options(const uint8_t *opt, uint32_t opt_len, uint8_t *msg
 static int32_t dhcp_build(uint8_t *pkt, uint32_t cap, uint32_t xid, uint8_t msgtype,
                           uint32_t req_ip, uint32_t server_ip)
 {
-    const uint8_t *mac = pm_metal_ip_mac();
+    const uint8_t *mac = pm_metal_net_ip_mac();
     uint32_t o;
 
     if (pkt == NULL || cap < 300u || mac == NULL) {
@@ -141,10 +141,10 @@ static int32_t dhcp_send(const uint8_t *pkt, uint32_t len)
     put_u16(seg + 4, (uint16_t)seg_len);
     put_u16(seg + 6, 0);
     memcpy(seg + 8, pkt, len);
-    return pm_metal_ip_tx_l4(0xffffffffu, 17, seg, seg_len);
+    return pm_metal_net_ip_tx_l4(0xffffffffu, 17, seg, seg_len);
 }
 
-static int32_t dhcp_recv(uint32_t xid, uint8_t want_type, pm_metal_dhcp_lease_t *lease)
+static int32_t dhcp_recv(uint32_t xid, uint8_t want_type, pm_metal_net_dhcp_lease_t *lease)
 {
     uint8_t buf[512];
     uint32_t n;
@@ -154,8 +154,8 @@ static int32_t dhcp_recv(uint32_t xid, uint8_t want_type, pm_metal_dhcp_lease_t 
     int i;
 
     for (i = 0; i < 8000; i++) {
-        pm_metal_ip_poll();
-        if (pm_metal_udp_recv(&src_ip, &src_port, buf, sizeof(buf), &n) != 1) {
+        pm_metal_net_ip_poll();
+        if (pm_metal_net_ip_udp_recv(&src_ip, &src_port, buf, sizeof(buf), &n) != 1) {
             continue;
         }
         if (src_port != DHCP_SERVER_PORT || n < 240u) {
@@ -190,17 +190,17 @@ static int32_t dhcp_recv(uint32_t xid, uint8_t want_type, pm_metal_dhcp_lease_t 
     return -1;
 }
 
-int32_t pm_metal_dhcp_run(pm_metal_dhcp_lease_t *lease_out)
+int32_t pm_metal_net_dhcp_run(pm_metal_net_dhcp_lease_t *lease_out)
 {
     uint8_t pkt[300];
     int32_t plen;
     uint32_t xid;
     const uint8_t *mac;
-    pm_metal_dhcp_lease_t offer;
-    pm_metal_dhcp_lease_t ack;
+    pm_metal_net_dhcp_lease_t offer;
+    pm_metal_net_dhcp_lease_t ack;
     int attempt;
 
-    if (lease_out == NULL || !pm_metal_ip_ready()) {
+    if (lease_out == NULL || !pm_metal_net_ip_ready()) {
         return -1;
     }
     mac = pm_metal_dev_net_virtio_mac();
@@ -209,7 +209,7 @@ int32_t pm_metal_dhcp_run(pm_metal_dhcp_lease_t *lease_out)
     }
     xid = 0x4d455441u ^ ((uint32_t)mac[4] << 8) ^ mac[5];
 
-    if (pm_metal_udp_bind(DHCP_CLIENT_PORT) != 0) {
+    if (pm_metal_net_ip_udp_bind(DHCP_CLIENT_PORT) != 0) {
         return -1;
     }
 

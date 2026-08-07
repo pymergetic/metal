@@ -186,15 +186,15 @@ $(BUILD)/metal_virtio_net.o: $(METAL)/src/pymergetic/metal/dev/net/virtio_net.c 
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_ip.o: $(METAL)/src/pymergetic/metal/net/minip/ip.c | $(BUILD)
+$(BUILD)/metal_ip.o: $(METAL)/src/pymergetic/metal/net/ip/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_udp.o: $(METAL)/src/pymergetic/metal/net/minip/udp.c | $(BUILD)
+$(BUILD)/metal_udp.o: $(METAL)/src/pymergetic/metal/net/ip/udp.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_tcp.o: $(METAL)/src/pymergetic/metal/net/minip/tcp.c | $(BUILD)
+$(BUILD)/metal_tcp.o: $(METAL)/src/pymergetic/metal/net/ip/tcp.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -206,11 +206,11 @@ $(BUILD)/metal_ssh.o: $(METAL)/src/pymergetic/metal/net/ssh/__init__.c | $(BUILD
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_dhcp.o: $(METAL)/src/pymergetic/metal/net/minip/dhcp.c | $(BUILD)
+$(BUILD)/metal_dhcp.o: $(METAL)/src/pymergetic/metal/net/dhcp/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_dns.o: $(METAL)/src/pymergetic/metal/net/minip/dns.c | $(BUILD)
+$(BUILD)/metal_dns.o: $(METAL)/src/pymergetic/metal/net/dns/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 

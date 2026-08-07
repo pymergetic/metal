@@ -1,5 +1,5 @@
-#include "pymergetic/metal/net/tcp.h"
-#include "pymergetic/metal/net/ip_internal.h"
+#include "pymergetic/metal/net/ip/tcp.h"
+#include "pymergetic/metal/net/ip/internal.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -104,8 +104,8 @@ static int32_t tcp_tx(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port, uin
     if (payload_len > 0u && payload != NULL) {
         memcpy(seg + 20, payload, payload_len);
     }
-    put_u16(seg + 16, pm_metal_ip_l4_checksum(pm_metal_ip_addr_host(), dst_ip, 6, seg, seg_len));
-    return pm_metal_ip_tx_l4(dst_ip, 6, seg, seg_len);
+    put_u16(seg + 16, pm_metal_net_ip_l4_checksum(pm_metal_net_ip_addr_host(), dst_ip, 6, seg, seg_len));
+    return pm_metal_net_ip_tx_l4(dst_ip, 6, seg, seg_len);
 }
 
 static void tcp_queue_rx(tcp_sock_t *s, const uint8_t *data, uint32_t len)
@@ -196,8 +196,8 @@ static void tcp_on_rx(const uint8_t *ip_pkt, uint32_t ip_len, uint32_t ihl)
         return;
     }
 
-    if (pm_metal_ip_arp_lookup(src_ip) == NULL) {
-        (void)pm_metal_ip_arp_resolve(src_ip);
+    if (pm_metal_net_ip_arp_lookup(src_ip) == NULL) {
+        (void)pm_metal_net_ip_arp_resolve(src_ip);
     }
 
     if (s->state == TCP_LISTEN && (flags & TCP_FLAG_SYN) != 0u && (flags & TCP_FLAG_ACK) == 0u) {
@@ -268,12 +268,12 @@ static void tcp_register_once(void)
     static int32_t registered;
 
     if (!registered) {
-        pm_metal_ip_register_tcp_rx(tcp_on_rx);
+        pm_metal_net_ip_register_tcp_rx(tcp_on_rx);
         registered = 1;
     }
 }
 
-int32_t pm_metal_tcp_listen(uint16_t local_port)
+int32_t pm_metal_net_ip_tcp_listen(uint16_t local_port)
 {
     tcp_register_once();
     sock_clear(&g_socks[TCP_SRV]);
@@ -283,13 +283,13 @@ int32_t pm_metal_tcp_listen(uint16_t local_port)
     return 0;
 }
 
-void pm_metal_tcp_abort(void)
+void pm_metal_net_ip_tcp_abort(void)
 {
     /* Abort the focused PCB only — passive listen/server can outlive a client. */
     sock_clear(&g_socks[g_io]);
 }
 
-int32_t pm_metal_tcp_passive_relisten(uint16_t local_port)
+int32_t pm_metal_net_ip_tcp_passive_relisten(uint16_t local_port)
 {
     tcp_sock_t *s = &g_socks[TCP_SRV];
 
@@ -306,7 +306,7 @@ int32_t pm_metal_tcp_passive_relisten(uint16_t local_port)
     return 0;
 }
 
-int32_t pm_metal_tcp_connect(uint32_t dst_ip, uint16_t dst_port)
+int32_t pm_metal_net_ip_tcp_connect(uint32_t dst_ip, uint16_t dst_port)
 {
     int32_t rc;
     tcp_sock_t *s;
@@ -334,42 +334,42 @@ int32_t pm_metal_tcp_connect(uint32_t dst_ip, uint16_t dst_port)
     return rc;
 }
 
-int32_t pm_metal_tcp_established(void)
+int32_t pm_metal_net_ip_tcp_established(void)
 {
     return g_socks[g_io].established ? 1 : 0;
 }
 
-int32_t pm_metal_tcp_peer_closed(void)
+int32_t pm_metal_net_ip_tcp_peer_closed(void)
 {
     return g_socks[g_io].peer_closed ? 1 : 0;
 }
 
-int32_t pm_metal_tcp_passive_established(void)
+int32_t pm_metal_net_ip_tcp_passive_established(void)
 {
     return g_socks[TCP_SRV].established ? 1 : 0;
 }
 
-int32_t pm_metal_tcp_passive_listening(void)
+int32_t pm_metal_net_ip_tcp_passive_listening(void)
 {
     return g_socks[TCP_SRV].state == TCP_LISTEN ? 1 : 0;
 }
 
-void pm_metal_tcp_focus_passive(void)
+void pm_metal_net_ip_tcp_focus_passive(void)
 {
     g_io = TCP_SRV;
 }
 
-void pm_metal_tcp_focus_active(void)
+void pm_metal_net_ip_tcp_focus_active(void)
 {
     g_io = TCP_CLI;
 }
 
-uint32_t pm_metal_tcp_rx_avail(void)
+uint32_t pm_metal_net_ip_tcp_rx_avail(void)
 {
     return g_socks[g_io].rx_len;
 }
 
-int32_t pm_metal_tcp_send(const void *data, uint32_t len)
+int32_t pm_metal_net_ip_tcp_send(const void *data, uint32_t len)
 {
     int32_t rc;
     tcp_sock_t *s = &g_socks[g_io];
@@ -385,7 +385,7 @@ int32_t pm_metal_tcp_send(const void *data, uint32_t len)
     return rc;
 }
 
-int32_t pm_metal_tcp_recv(uint8_t *buf, uint32_t cap, uint32_t *len_out)
+int32_t pm_metal_net_ip_tcp_recv(uint8_t *buf, uint32_t cap, uint32_t *len_out)
 {
     uint32_t n;
     tcp_sock_t *s = &g_socks[g_io];
@@ -412,7 +412,7 @@ static void tcp_inject(const uint8_t *ip_pkt, uint32_t ip_len)
     tcp_on_rx(ip_pkt, ip_len, 20);
 }
 
-int32_t pm_metal_tcp_smoke_syn_ack(void)
+int32_t pm_metal_net_ip_tcp_smoke_syn_ack(void)
 {
     uint8_t ip_pkt[40];
     const uint8_t peer_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
@@ -425,14 +425,14 @@ int32_t pm_metal_tcp_smoke_syn_ack(void)
     g_io = TCP_SRV;
     g_inject = 1;
 
-    pm_metal_ip_arp_cache_put(peer_ip, peer_mac);
+    pm_metal_net_ip_arp_cache_put(peer_ip, peer_mac);
 
     memset(ip_pkt, 0, sizeof(ip_pkt));
     ip_pkt[0] = 0x45;
     ip_pkt[9] = 6;
     put_u16(ip_pkt + 2, 40);
     put_u32(ip_pkt + 12, peer_ip);
-    put_u32(ip_pkt + 16, pm_metal_ip_addr_host());
+    put_u32(ip_pkt + 16, pm_metal_net_ip_addr_host());
     put_u16(ip_pkt + 20, 40000);
     put_u16(ip_pkt + 22, s->local_port);
     put_u32(ip_pkt + 24, 0xabcdef01u);
@@ -459,7 +459,7 @@ int32_t pm_metal_tcp_smoke_syn_ack(void)
     return s->established ? 0 : -1;
 }
 
-int32_t pm_metal_tcp_smoke_inject_payload(const void *data, uint32_t len)
+int32_t pm_metal_net_ip_tcp_smoke_inject_payload(const void *data, uint32_t len)
 {
     uint8_t ip_pkt[20 + 20 + 512];
     uint32_t total;
@@ -477,7 +477,7 @@ int32_t pm_metal_tcp_smoke_inject_payload(const void *data, uint32_t len)
     ip_pkt[9] = 6;
     put_u16(ip_pkt + 2, (uint16_t)total);
     put_u32(ip_pkt + 12, peer_ip);
-    put_u32(ip_pkt + 16, pm_metal_ip_addr_host());
+    put_u32(ip_pkt + 16, pm_metal_net_ip_addr_host());
     put_u16(ip_pkt + 20, 40000);
     put_u16(ip_pkt + 22, s->local_port);
     put_u32(ip_pkt + 24, s->rcv_nxt);

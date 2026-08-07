@@ -47,7 +47,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
         return EFI_DEVICE_ERROR;
     }
 
-    if (pm_metal_ip_smoke() != 0) {
+    if (pm_metal_net_ip_smoke() != 0) {
         return EFI_DEVICE_ERROR;
     }
 

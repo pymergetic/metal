@@ -1,5 +1,5 @@
-#include "pymergetic/metal/net/ip.h"
-#include "pymergetic/metal/net/ip_internal.h"
+#include "pymergetic/metal/net/ip/__init__.h"
+#include "pymergetic/metal/net/ip/internal.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -25,8 +25,8 @@ static uint32_t g_gw;
 static uint32_t g_dns;
 static uint8_t g_mac[6];
 static arp_entry_t g_arp_cache[ARP_CACHE_SIZE];
-static pm_metal_ip_l4_rx_fn g_udp_rx;
-static pm_metal_ip_l4_rx_fn g_tcp_rx;
+static pm_metal_net_ip_l4_rx_fn g_udp_rx;
+static pm_metal_net_ip_l4_rx_fn g_tcp_rx;
 static uint16_t g_ping_id;
 static uint16_t g_ping_seq;
 static uint32_t g_ping_replies;
@@ -57,7 +57,7 @@ static uint32_t get_u32(const uint8_t *p)
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
 }
 
-uint16_t pm_metal_ip_checksum(const uint8_t *data, uint32_t len)
+uint16_t pm_metal_net_ip_checksum(const uint8_t *data, uint32_t len)
 {
     uint32_t sum = 0;
     uint32_t i;
@@ -74,7 +74,7 @@ uint16_t pm_metal_ip_checksum(const uint8_t *data, uint32_t len)
     return (uint16_t)~sum;
 }
 
-uint16_t pm_metal_ip_l4_checksum(uint32_t src_ip, uint32_t dst_ip, uint8_t proto,
+uint16_t pm_metal_net_ip_l4_checksum(uint32_t src_ip, uint32_t dst_ip, uint8_t proto,
                                  const uint8_t *seg, uint32_t seg_len)
 {
     uint8_t pseudo[12];
@@ -102,27 +102,27 @@ uint16_t pm_metal_ip_l4_checksum(uint32_t src_ip, uint32_t dst_ip, uint8_t proto
     return (uint16_t)~sum;
 }
 
-void pm_metal_ip_register_udp_rx(pm_metal_ip_l4_rx_fn fn)
+void pm_metal_net_ip_register_udp_rx(pm_metal_net_ip_l4_rx_fn fn)
 {
     g_udp_rx = fn;
 }
 
-void pm_metal_ip_register_tcp_rx(pm_metal_ip_l4_rx_fn fn)
+void pm_metal_net_ip_register_tcp_rx(pm_metal_net_ip_l4_rx_fn fn)
 {
     g_tcp_rx = fn;
 }
 
-const uint8_t *pm_metal_ip_mac(void)
+const uint8_t *pm_metal_net_ip_mac(void)
 {
     return g_mac;
 }
 
-uint32_t pm_metal_ip_addr_host(void)
+uint32_t pm_metal_net_ip_addr_host(void)
 {
     return g_addr;
 }
 
-void pm_metal_ip_arp_cache_put(uint32_t ip, const uint8_t mac[6])
+void pm_metal_net_ip_arp_cache_put(uint32_t ip, const uint8_t mac[6])
 {
     uint32_t i;
     uint32_t slot = ARP_CACHE_SIZE;
@@ -154,7 +154,7 @@ void pm_metal_ip_arp_cache_put(uint32_t ip, const uint8_t mac[6])
     g_arp_cache[slot].valid = 1;
 }
 
-const uint8_t *pm_metal_ip_arp_lookup(uint32_t ip_host)
+const uint8_t *pm_metal_net_ip_arp_lookup(uint32_t ip_host)
 {
     uint32_t i;
 
@@ -193,12 +193,12 @@ static int32_t tx_arp_request(uint32_t target_ip)
     return pm_metal_dev_net_virtio_tx(frame, 42) == 0 ? 0 : -1;
 }
 
-int32_t pm_metal_ip_arp_resolve(uint32_t ip_host)
+int32_t pm_metal_net_ip_arp_resolve(uint32_t ip_host)
 {
     if (!g_ready) {
         return -1;
     }
-    if (pm_metal_ip_arp_lookup(ip_host) != NULL) {
+    if (pm_metal_net_ip_arp_lookup(ip_host) != NULL) {
         return 1;
     }
     return tx_arp_request(ip_host) == 0 ? 0 : -1;
@@ -218,7 +218,7 @@ static uint32_t ip_nexthop(uint32_t dst_ip)
     return g_gw;
 }
 
-int32_t pm_metal_ip_tx_l4(uint32_t dst_ip_host, uint8_t proto,
+int32_t pm_metal_net_ip_tx_l4(uint32_t dst_ip_host, uint8_t proto,
                            const uint8_t *l4, uint32_t l4_len)
 {
     uint8_t frame[1518];
@@ -236,7 +236,7 @@ int32_t pm_metal_ip_tx_l4(uint32_t dst_ip_host, uint8_t proto,
         dst_mac = bcast_mac;
     } else {
         nh = ip_nexthop(dst_ip_host);
-        dst_mac = pm_metal_ip_arp_lookup(nh);
+        dst_mac = pm_metal_net_ip_arp_lookup(nh);
         if (dst_mac == NULL) {
             (void)tx_arp_request(nh);
             return -2;
@@ -264,7 +264,7 @@ int32_t pm_metal_ip_tx_l4(uint32_t dst_ip_host, uint8_t proto,
     put_u32(frame + 26, g_addr);
     put_u32(frame + 30, dst_ip_host);
     put_u16(frame + 24, 0);
-    put_u16(frame + 24, pm_metal_ip_checksum(frame + 14, 20));
+    put_u16(frame + 24, pm_metal_net_ip_checksum(frame + 14, 20));
     memcpy(frame + 34, l4, l4_len);
 
     {
@@ -338,10 +338,10 @@ static int32_t tx_icmp_echo_reply(const uint8_t *frame, uint32_t len)
     put_u32(out + 14 + 16, g_addr);
     out[14 + 8] = 64;
     put_u16(out + 14 + 10, 0);
-    put_u16(out + 14 + 10, pm_metal_ip_checksum(out + 14, ihl));
+    put_u16(out + 14 + 10, pm_metal_net_ip_checksum(out + 14, ihl));
     out[icmp_off] = 0;
     put_u16(out + icmp_off + 2, 0);
-    put_u16(out + icmp_off + 2, pm_metal_ip_checksum(out + icmp_off, icmp_len));
+    put_u16(out + icmp_off + 2, pm_metal_net_ip_checksum(out + icmp_off, icmp_len));
 
     return pm_metal_dev_net_virtio_tx(out, 14u + ip_len) == 0 ? 0 : -1;
 }
@@ -372,7 +372,7 @@ static void on_frame(void *ctx, const uint8_t *frame, uint32_t len)
         oper = get_u16(frame + 20);
         spa = get_u32(frame + 28);
         if (oper == 2u) {
-            pm_metal_ip_arp_cache_put(spa, frame + 22);
+            pm_metal_net_ip_arp_cache_put(spa, frame + 22);
         }
         tpa = get_u32(frame + 38);
         if (oper == 1u && tpa == g_addr) {
@@ -406,7 +406,7 @@ static void on_frame(void *ctx, const uint8_t *frame, uint32_t len)
         src = get_u32(frame + 14 + 12);
         dst = get_u32(frame + 14 + 16);
         /* Learn L2 mapping from the frame that just arrived. */
-        pm_metal_ip_arp_cache_put(src, frame + 6);
+        pm_metal_net_ip_arp_cache_put(src, frame + 6);
         if (dst != g_addr && dst != 0xffffffffu && g_addr != 0u) {
             return;
         }
@@ -435,7 +435,7 @@ static void on_frame(void *ctx, const uint8_t *frame, uint32_t len)
     }
 }
 
-int32_t pm_metal_ip_init(uint32_t addr_be, uint32_t mask_be, uint32_t gw_be)
+int32_t pm_metal_net_ip_init(uint32_t addr_be, uint32_t mask_be, uint32_t gw_be)
 {
     const uint8_t *mac;
 
@@ -450,7 +450,7 @@ int32_t pm_metal_ip_init(uint32_t addr_be, uint32_t mask_be, uint32_t gw_be)
     g_addr = addr_be;
     g_mask = mask_be;
     g_gw = gw_be;
-    g_dns = PM_METAL_IP_DEFAULT_DNS;
+    g_dns = PM_METAL_NET_IP_DEFAULT_DNS;
     memset(g_arp_cache, 0, sizeof(g_arp_cache));
     g_udp_rx = NULL;
     g_tcp_rx = NULL;
@@ -461,27 +461,27 @@ int32_t pm_metal_ip_init(uint32_t addr_be, uint32_t mask_be, uint32_t gw_be)
     return 0;
 }
 
-int32_t pm_metal_ip_ready(void)
+int32_t pm_metal_net_ip_ready(void)
 {
     return g_ready;
 }
 
-uint32_t pm_metal_ip_addr(void)
+uint32_t pm_metal_net_ip_addr(void)
 {
     return g_addr;
 }
 
-uint32_t pm_metal_ip_gw(void)
+uint32_t pm_metal_net_ip_gw(void)
 {
     return g_gw;
 }
 
-uint32_t pm_metal_ip_mask(void)
+uint32_t pm_metal_net_ip_mask(void)
 {
     return g_mask;
 }
 
-int32_t pm_metal_ip_set_addrs(uint32_t addr, uint32_t mask, uint32_t gw)
+int32_t pm_metal_net_ip_set_addrs(uint32_t addr, uint32_t mask, uint32_t gw)
 {
     if (!g_ready) {
         return -1;
@@ -492,21 +492,21 @@ int32_t pm_metal_ip_set_addrs(uint32_t addr, uint32_t mask, uint32_t gw)
     return 0;
 }
 
-int32_t pm_metal_ip_set_dns(uint32_t dns)
+int32_t pm_metal_net_ip_set_dns(uint32_t dns)
 {
     if (!g_ready) {
         return -1;
     }
-    g_dns = dns != 0u ? dns : PM_METAL_IP_DEFAULT_DNS;
+    g_dns = dns != 0u ? dns : PM_METAL_NET_IP_DEFAULT_DNS;
     return 0;
 }
 
-uint32_t pm_metal_ip_dns(void)
+uint32_t pm_metal_net_ip_dns(void)
 {
-    return g_dns != 0u ? g_dns : PM_METAL_IP_DEFAULT_DNS;
+    return g_dns != 0u ? g_dns : PM_METAL_NET_IP_DEFAULT_DNS;
 }
 
-int32_t pm_metal_ip_announce(void)
+int32_t pm_metal_net_ip_announce(void)
 {
     uint8_t frame[64];
 
@@ -536,7 +536,7 @@ int32_t pm_metal_ip_announce(void)
     return 0;
 }
 
-void pm_metal_ip_poll(void)
+void pm_metal_net_ip_poll(void)
 {
     if (!g_ready) {
         return;
@@ -545,7 +545,7 @@ void pm_metal_ip_poll(void)
     (void)pm_metal_dev_net_virtio_reap_tx();
 }
 
-int32_t pm_metal_ip_ping(uint32_t dst_ip, uint16_t id, uint16_t seq)
+int32_t pm_metal_net_ip_ping(uint32_t dst_ip, uint16_t id, uint16_t seq)
 {
     uint8_t icmp[16];
 
@@ -560,11 +560,11 @@ int32_t pm_metal_ip_ping(uint32_t dst_ip, uint16_t id, uint16_t seq)
     put_u16(icmp + 4, id);
     put_u16(icmp + 6, seq);
     memset(icmp + 8, 0x5a, 8);
-    put_u16(icmp + 2, pm_metal_ip_checksum(icmp, sizeof(icmp)));
-    return pm_metal_ip_tx_l4(dst_ip, IP_PROTO_ICMP, icmp, sizeof(icmp));
+    put_u16(icmp + 2, pm_metal_net_ip_checksum(icmp, sizeof(icmp)));
+    return pm_metal_net_ip_tx_l4(dst_ip, IP_PROTO_ICMP, icmp, sizeof(icmp));
 }
 
-uint32_t pm_metal_ip_ping_replies(void)
+uint32_t pm_metal_net_ip_ping_replies(void)
 {
     return g_ping_replies;
 }

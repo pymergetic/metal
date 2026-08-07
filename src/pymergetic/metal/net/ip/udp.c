@@ -1,5 +1,5 @@
-#include "pymergetic/metal/net/udp.h"
-#include "pymergetic/metal/net/ip_internal.h"
+#include "pymergetic/metal/net/ip/udp.h"
+#include "pymergetic/metal/net/ip/internal.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -77,12 +77,12 @@ static void udp_register_once(void)
     static int32_t registered;
 
     if (!registered) {
-        pm_metal_ip_register_udp_rx(udp_on_rx);
+        pm_metal_net_ip_register_udp_rx(udp_on_rx);
         registered = 1;
     }
 }
 
-int32_t pm_metal_udp_bind(uint16_t local_port)
+int32_t pm_metal_net_ip_udp_bind(uint16_t local_port)
 {
     udp_register_once();
     g_bind_port = local_port;
@@ -92,7 +92,7 @@ int32_t pm_metal_udp_bind(uint16_t local_port)
     return 0;
 }
 
-int32_t pm_metal_udp_sendto(uint32_t dst_ip, uint16_t dst_port,
+int32_t pm_metal_net_ip_udp_sendto(uint32_t dst_ip, uint16_t dst_port,
                             const void *data, uint32_t len)
 {
     uint8_t seg[1500];
@@ -108,11 +108,11 @@ int32_t pm_metal_udp_sendto(uint32_t dst_ip, uint16_t dst_port,
     put_u16(seg + 4, (uint16_t)seg_len);
     put_u16(seg + 6, 0);
     memcpy(seg + 8, data, len);
-    put_u16(seg + 6, pm_metal_ip_l4_checksum(pm_metal_ip_addr_host(), dst_ip, 17, seg, seg_len));
-    return pm_metal_ip_tx_l4(dst_ip, 17, seg, seg_len);
+    put_u16(seg + 6, pm_metal_net_ip_l4_checksum(pm_metal_net_ip_addr_host(), dst_ip, 17, seg, seg_len));
+    return pm_metal_net_ip_tx_l4(dst_ip, 17, seg, seg_len);
 }
 
-int32_t pm_metal_udp_recv(uint32_t *src_ip, uint16_t *src_port,
+int32_t pm_metal_net_ip_udp_recv(uint32_t *src_ip, uint16_t *src_port,
                           void *buf, uint32_t cap, uint32_t *len_out)
 {
     udp_rx_pkt_t *slot;

@@ -19,19 +19,20 @@ Mirror of wasmmod: `include/` + `glue/`/`crates/pm` + Python faces
 
 1. **One ABI per module** — full prefix `pm_metal_<path>_*` (see `.cursor/rules/metal-c-abi-hub.mdc`).
 2. **No package-root muscle twins** (`net/`, `async/`, … at repo root). New work lands under `src/` + `include/` only.
-3. **Do not grow** short-prefix APIs (`pm_metal_tcp_*`, …). Migrate or quarantine.
+3. **Do not grow** short-prefix APIs (`pm_metal_tcp_*`, …). Product net uses full names (`pm_metal_net_ip_*`, `pm_metal_net_ip_tcp_*`, …).
 4. **`_tmp/`** is quarantine — not a second product path.
 
 ## Exemplar
 
 `src/pymergetic/metal/async/` + `include/pymergetic/metal/async/` — N-runner floor, hybrid faces.
 
-## Transitional: C mini-IP (`net/minip`)
+## Net IP (freestanding C)
 
-Port still links the freestanding mini-IP stack at
-`src/pymergetic/metal/net/minip/` (`pm_metal_tcp_*` short names in
-`include/.../net/tcp.h`). RS `src/.../net/ip/` (lwIP) is a twin — demote or
-merge later. **Do not** resurrect package-root `net/`.
+Port links the freestanding stack at `src/pymergetic/metal/net/ip/` with public
+faces under `include/pymergetic/metal/net/ip/` (`pm_metal_net_ip_*`,
+`pm_metal_net_ip_tcp_*`, `pm_metal_net_ip_udp_*`). DHCP/DNS are sibling modules
+(`net/dhcp`, `net/dns`). The former lwIP RS twin lives under
+`_tmp/package-root/net-ip-rs/` — not product. **Do not** resurrect package-root `net/`.
 
 ## Transitional leftovers at package root
 

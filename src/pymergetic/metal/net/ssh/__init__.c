@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "pymergetic/metal/net/tcp.h"
+#include "pymergetic/metal/net/ip/tcp.h"
 
 static int32_t g_banner_sent;
 static uint32_t g_listen_port;
@@ -96,13 +96,13 @@ int32_t pm_metal_net_ssh_client_exec(const char *host, uint16_t port,
 
 int32_t pm_metal_net_ssh_banner_send(void)
 {
-    if (!pm_metal_tcp_established()) {
+    if (!pm_metal_net_ip_tcp_established()) {
         return -1;
     }
     if (g_banner_sent) {
         return 0;
     }
-    if (pm_metal_tcp_send(k_banner, (uint32_t)(sizeof(k_banner) - 1u)) != 0) {
+    if (pm_metal_net_ip_tcp_send(k_banner, (uint32_t)(sizeof(k_banner) - 1u)) != 0) {
         return -1;
     }
     g_banner_sent = 1;

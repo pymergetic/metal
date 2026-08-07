@@ -13,10 +13,10 @@ typedef struct {
     uint32_t gw;
     uint32_t dns;
     uint32_t server;
-} pm_metal_dhcp_lease_t;
+} pm_metal_net_dhcp_lease_t;
 
 /* Run DORA (DISCOVER/OFFER/REQUEST/ACK). Requires IP stack init (addr may be 0). */
-int32_t pm_metal_dhcp_run(pm_metal_dhcp_lease_t *lease_out);
+int32_t pm_metal_net_dhcp_run(pm_metal_net_dhcp_lease_t *lease_out);
 
 #ifdef __cplusplus
 }

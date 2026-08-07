@@ -59,7 +59,7 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
         }
     }
 
-    if (pm_metal_ip_smoke() != 0) {
+    if (pm_metal_net_ip_smoke() != 0) {
         outw(0x501u, 1u);
         for (;;) {
             __asm__ volatile("hlt");

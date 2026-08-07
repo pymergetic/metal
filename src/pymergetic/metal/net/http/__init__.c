@@ -5,8 +5,8 @@
 #include <string.h>
 
 #include "pymergetic/metal/net/dns.h"
-#include "pymergetic/metal/net/ip.h"
-#include "pymergetic/metal/net/tcp.h"
+#include "pymergetic/metal/net/ip/__init__.h"
+#include "pymergetic/metal/net/ip/tcp.h"
 
 static int32_t g_ready;
 static int32_t g_served;
@@ -32,10 +32,10 @@ int32_t pm_metal_http_poll(void)
     uint32_t n;
     int32_t rc;
 
-    if (!g_ready || !pm_metal_tcp_established() || g_served) {
+    if (!g_ready || !pm_metal_net_ip_tcp_established() || g_served) {
         return 0;
     }
-    rc = pm_metal_tcp_recv(buf, sizeof(buf) - 1u, &n);
+    rc = pm_metal_net_ip_tcp_recv(buf, sizeof(buf) - 1u, &n);
     if (rc != 1 || n < 3u) {
         return 0;
     }
@@ -43,7 +43,7 @@ int32_t pm_metal_http_poll(void)
     if (buf[0] != 'G' || buf[1] != 'E' || buf[2] != 'T') {
         return 0;
     }
-    if (pm_metal_tcp_send(k_resp, (uint32_t)(sizeof(k_resp) - 1u)) != 0) {
+    if (pm_metal_net_ip_tcp_send(k_resp, (uint32_t)(sizeof(k_resp) - 1u)) != 0) {
         return -1;
     }
     g_served = 1;
@@ -88,28 +88,28 @@ int32_t pm_metal_http_client_get(const char *host, uint16_t port, const char *pa
         return -1;
     }
     *len_out = 0;
-    if (pm_metal_dns_resolve(host, &addr) != 0 || addr == 0u) {
+    if (pm_metal_net_dns_resolve(host, &addr) != 0 || addr == 0u) {
         return -1;
     }
 
     for (i = 0; i < 32; i++) {
-        rc = pm_metal_tcp_connect(addr, port);
+        rc = pm_metal_net_ip_tcp_connect(addr, port);
         if (rc == 0) {
             break;
         }
         if (rc != -2) {
             goto done;
         }
-        pm_metal_ip_poll();
+        pm_metal_net_ip_poll();
     }
     if (rc != 0) {
         goto done;
     }
 
-    for (i = 0; i < 20000 && !pm_metal_tcp_established(); i++) {
-        pm_metal_ip_poll();
+    for (i = 0; i < 20000 && !pm_metal_net_ip_tcp_established(); i++) {
+        pm_metal_net_ip_poll();
     }
-    if (!pm_metal_tcp_established()) {
+    if (!pm_metal_net_ip_tcp_established()) {
         out = -3; /* connect handshake timeout */
         goto done;
     }
@@ -133,23 +133,23 @@ int32_t pm_metal_http_client_get(const char *host, uint16_t port, const char *pa
     }
 
     for (i = 0; i < 32; i++) {
-        rc = pm_metal_tcp_send(req, (uint32_t)o);
+        rc = pm_metal_net_ip_tcp_send(req, (uint32_t)o);
         if (rc == 0) {
             break;
         }
         if (rc != -2) {
             goto done;
         }
-        pm_metal_ip_poll();
+        pm_metal_net_ip_poll();
     }
     if (rc != 0) {
         goto done;
     }
 
     for (i = 0; i < 20000; i++) {
-        pm_metal_ip_poll();
+        pm_metal_net_ip_poll();
         chunk = 0;
-        rc = pm_metal_tcp_recv(buf + got, cap - got, &chunk);
+        rc = pm_metal_net_ip_tcp_recv(buf + got, cap - got, &chunk);
         if (rc == 1 && chunk > 0u) {
             got += chunk;
             if (str_has_http(buf, got)) {
@@ -170,6 +170,6 @@ int32_t pm_metal_http_client_get(const char *host, uint16_t port, const char *pa
     }
 
 done:
-    pm_metal_tcp_abort();
+    pm_metal_net_ip_tcp_abort();
     return out;
 }

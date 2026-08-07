@@ -12,8 +12,8 @@
 #include "shared/netutils/netutils.h"
 
 #include "pymergetic/metal/net/dns.h"
-#include "pymergetic/metal/net/ip.h"
-#include "pymergetic/metal/net/tcp.h"
+#include "pymergetic/metal/net/ip/__init__.h"
+#include "pymergetic/metal/net/ip/tcp.h"
 #include "pymergetic/metal/net/upy_nic.h"
 
 #include <stdint.h>
@@ -51,7 +51,7 @@ static int metal_gethostbyname(mp_obj_t nic, const char *name, mp_uint_t len, ui
     }
     memcpy(host, name, (size_t)len);
     host[len] = '\0';
-    rc = pm_metal_dns_resolve(host, &addr);
+    rc = pm_metal_net_dns_resolve(host, &addr);
     if (rc == -2) {
         return MP_ETIMEDOUT;
     }
@@ -111,7 +111,7 @@ static void metal_close(mod_network_socket_obj_t *socket)
     if (socket != NULL) {
         socket->_private = NULL;
     }
-    pm_metal_tcp_abort();
+    pm_metal_net_ip_tcp_abort();
 }
 
 static int metal_bind(mod_network_socket_obj_t *socket, byte *ip, mp_uint_t port, int *_errno)
@@ -163,7 +163,7 @@ static int metal_connect(mod_network_socket_obj_t *socket, byte *ip, mp_uint_t p
     }
     addr = octets_to_ip(ip);
     for (i = 0; i < 32; i++) {
-        rc = pm_metal_tcp_connect(addr, (uint16_t)port);
+        rc = pm_metal_net_ip_tcp_connect(addr, (uint16_t)port);
         if (rc == 0) {
             break;
         }
@@ -171,7 +171,7 @@ static int metal_connect(mod_network_socket_obj_t *socket, byte *ip, mp_uint_t p
             *_errno = MP_EIO;
             return -1;
         }
-        pm_metal_ip_poll();
+        pm_metal_net_ip_poll();
     }
     if (rc != 0) {
         *_errno = MP_EHOSTUNREACH;
@@ -179,8 +179,8 @@ static int metal_connect(mod_network_socket_obj_t *socket, byte *ip, mp_uint_t p
     }
     budget = sock_poll_budget(socket);
     for (i = 0; i < budget; i++) {
-        pm_metal_ip_poll();
-        if (pm_metal_tcp_established()) {
+        pm_metal_net_ip_poll();
+        if (pm_metal_net_ip_tcp_established()) {
             socket->_private = (void *)(uintptr_t)1;
             return 0;
         }
@@ -199,13 +199,13 @@ static mp_uint_t metal_send(mod_network_socket_obj_t *socket, const byte *buf, m
         *_errno = MP_EINVAL;
         return (mp_uint_t)-1;
     }
-    if (!pm_metal_tcp_established()) {
+    if (!pm_metal_net_ip_tcp_established()) {
         *_errno = MP_ENOTCONN;
         return (mp_uint_t)-1;
     }
     budget = sock_poll_budget(socket);
     for (i = 0; i < budget; i++) {
-        rc = pm_metal_tcp_send(buf, (uint32_t)len);
+        rc = pm_metal_net_ip_tcp_send(buf, (uint32_t)len);
         if (rc == 0) {
             return len;
         }
@@ -213,7 +213,7 @@ static mp_uint_t metal_send(mod_network_socket_obj_t *socket, const byte *buf, m
             *_errno = MP_EIO;
             return (mp_uint_t)-1;
         }
-        pm_metal_ip_poll();
+        pm_metal_net_ip_poll();
     }
     *_errno = (socket->timeout == 0) ? MP_EAGAIN : MP_ETIMEDOUT;
     return (mp_uint_t)-1;
@@ -230,14 +230,14 @@ static mp_uint_t metal_recv(mod_network_socket_obj_t *socket, byte *buf, mp_uint
         *_errno = MP_EINVAL;
         return (mp_uint_t)-1;
     }
-    if (!pm_metal_tcp_established()) {
+    if (!pm_metal_net_ip_tcp_established()) {
         *_errno = MP_ENOTCONN;
         return (mp_uint_t)-1;
     }
     budget = sock_poll_budget(socket);
     for (i = 0; i < budget; i++) {
-        pm_metal_ip_poll();
-        rc = pm_metal_tcp_recv(buf, (uint32_t)len, &n);
+        pm_metal_net_ip_poll();
+        rc = pm_metal_net_ip_tcp_recv(buf, (uint32_t)len, &n);
         if (rc == 1 && n > 0u) {
             return n;
         }
@@ -349,7 +349,7 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(metal_nic_active_obj, 1, 2, metal_nic
 static mp_obj_t metal_nic_isconnected(mp_obj_t self_in)
 {
     (void)self_in;
-    return mp_obj_new_bool(pm_metal_ip_ready() && pm_metal_ip_addr() != 0u);
+    return mp_obj_new_bool(pm_metal_net_ip_ready() && pm_metal_net_ip_addr() != 0u);
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(metal_nic_isconnected_obj, metal_nic_isconnected);
 
@@ -362,10 +362,10 @@ static mp_obj_t metal_nic_ifconfig(size_t n_args, const mp_obj_t *args)
     if (n_args != 1) {
         mp_raise_ValueError(MP_ERROR_TEXT("ifconfig set not supported"));
     }
-    ipv4_to_octets(pm_metal_ip_addr(), ip);
-    ipv4_to_octets(pm_metal_ip_mask(), mask);
-    ipv4_to_octets(pm_metal_ip_gw(), gw);
-    ipv4_to_octets(pm_metal_ip_dns(), dns);
+    ipv4_to_octets(pm_metal_net_ip_addr(), ip);
+    ipv4_to_octets(pm_metal_net_ip_mask(), mask);
+    ipv4_to_octets(pm_metal_net_ip_gw(), gw);
+    ipv4_to_octets(pm_metal_net_ip_dns(), dns);
     tuple[0] = netutils_format_ipv4_addr(ip, NETUTILS_BIG);
     tuple[1] = netutils_format_ipv4_addr(mask, NETUTILS_BIG);
     tuple[2] = netutils_format_ipv4_addr(gw, NETUTILS_BIG);

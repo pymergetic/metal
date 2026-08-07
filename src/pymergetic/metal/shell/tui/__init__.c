@@ -9,7 +9,7 @@
 #include "pymergetic/metal/draw.h"
 #include "pymergetic/metal/mem.h"
 #include "pymergetic/metal/net/faces.h"
-#include "pymergetic/metal/net/ip.h"
+#include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/vt.h"
 
 #ifndef METAL_ENGINE
@@ -222,7 +222,7 @@ static void build_network_line(char *out, size_t cap)
         str_copy(out, cap, "net: down");
         return;
     }
-    addr = pm_metal_ip_ready() ? pm_metal_ip_addr() : 0u;
+    addr = pm_metal_net_ip_ready() ? pm_metal_net_ip_addr() : 0u;
     if (addr != 0u) {
         str_copy(out, cap, "ip ");
         append_ipv4(out, cap, addr);
