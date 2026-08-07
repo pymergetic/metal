@@ -1,7 +1,0 @@
-{
-  "type": "package",
-  "name": "sample.greeter",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "Nested-submodule wasm pack (words + numbers), each a plain source-level Rust module compiled into this one crate/wasm. Exports hello()/lucky() -> i32, called cross-package by sample.announcer. Not kernel-linked."
-}

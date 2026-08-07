@@ -1,8 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.dev.audio",
-  "impl": "rs",
-  "version": "0.1.0",
-  "guest_surface": true,
-  "comment": "PCM streams (S16LE stereo 22050); null backend discards + eager drain."
-}

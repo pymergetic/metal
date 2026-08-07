@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.net.http.microdot",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "ASGI app runner (routes + leaf handle); sockets owned by http.server."
-}

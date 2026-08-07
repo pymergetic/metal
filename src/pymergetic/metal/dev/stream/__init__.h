@@ -15,7 +15,7 @@ typedef uint32_t pm_metal_stream_h;
 
 #define PM_METAL_STREAM_INVALID 0u
 
-/** PTY attrs (sync). Flag values match Linux termios for Dropbear. */
+/** PTY attrs (sync). Flag values match Linux termios. */
 #define PM_METAL_STREAM_NCCS 32u
 
 #define PM_METAL_STREAM_VINTR  0u

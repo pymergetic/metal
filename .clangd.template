@@ -101,33 +101,6 @@ CompileFlags:
     - -DPM_METAL_LFS_FREESTANDING
 
 ---
-# Dropbear SSH glue — dropbear_stubs before metal/libc (errno/malloc/strrchr).
-If:
-  PathMatch: .*/src/pymergetic/metal/net/ssh/
-CompileFlags:
-  Remove:
-    - -Isrc/pymergetic/metal/libc
-  Add:
-    - -std=gnu11
-    - -Isrc/pymergetic/metal/net/ssh/dropbear_stubs
-    - -Isrc/pymergetic/metal/libc
-    - -Isrc/pymergetic/metal/net/ssh
-    - -Isrc/pymergetic/metal/net/ssh/dropbear_metal
-    - -Iexternal/dropbear/src
-    - -Iinclude
-    - -Isrc/pymergetic/metal
-    - -DDROPBEAR_SERVER=1
-    - -DDROPBEAR_CLIENT=0
-    - -DDROPBEAR_METAL=1
-    - -DLOCALOPTIONS_H_EXISTS=1
-    - -DBUNDLED_LIBTOM=1
-    - -DUSE_LTM
-    - -DLTM_DESC
-    - -U__linux__
-    - -Ulinux
-    - -U__gnu_linux__
-
----
 # WAMR Metal port — platform_api_vmcore.h / wasm_export.h from external/wamr.
 If:
   PathMatch: .*/src/pymergetic/metal/wasm/

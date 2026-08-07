@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.boot.tree",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "Boot tree builder API (item/enter/leave) + section registry. Nested under boot."
-}

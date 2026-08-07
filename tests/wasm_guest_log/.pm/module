@@ -1,7 +1,0 @@
-{
-  "type": "package",
-  "name": "tests.wasm_guest_log",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "W16.1: call kernel guest_surface pm_metal_log (no pm_metal_imports section — host natives)."
-}

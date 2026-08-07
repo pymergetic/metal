@@ -1,7 +1,0 @@
-{
-  "type": "package",
-  "name": "tests.wasm_guest_input",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "W16.3b: shell_log + input poll/lock via host natives."
-}

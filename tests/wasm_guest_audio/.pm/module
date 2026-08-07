@@ -1,7 +1,0 @@
-{
-  "type": "package",
-  "name": "tests.wasm_guest_audio",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "W16.3d: null audio open/queue/drain/backend via host natives."
-}

@@ -1,10 +1,9 @@
 /*
  * Metal HAL port — real console/time wiring (W11.2).
  *
- * stdin/stdout go through `dev.stream` (same-language C, direct link --
- * matches `net/ssh/ssh_dropbear.c`'s identical pattern: both this file
- * and `dev/stream/__init__.c` are plain C, always compiled into the same
- * link unit, so no registry proxy is needed). Log/time are Rust
+ * stdin/stdout go through `dev.stream` (same-language C, direct link —
+ * this file and `dev/stream/__init__.c` are plain C in the same link unit,
+ * so no registry proxy is needed). Log/time are Rust
  * (`impl = rs`) but not spine, so per the module system's "Consume
  * generated faces" rule this includes their generated `include/` face
  * headers rather than hand-declaring the prototypes.

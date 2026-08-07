@@ -7,7 +7,7 @@
 //! [`pm_metal_net_ip_tcp_write`] / [`pm_metal_net_ip_tcp_close`]. Clear or SSL
 //! is attached at open; callers never branch on TLS for byte I/O.
 //!
-//! **Sync poll** (Dropbear): [`pm_metal_net_ip_tcp_try_read`] /
+//! **Sync poll**: [`pm_metal_net_ip_tcp_try_read`] /
 //! [`pm_metal_net_ip_tcp_try_write`].
 #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(non_camel_case_types)]
@@ -872,7 +872,7 @@ pub unsafe extern "C" fn pm_metal_net_ip_tcp_close(stream_h: u32) {
     conn_free(stream_h);
 }
 
-/// Sync non-blocking read for Dropbear select/atomicio.
+/// Sync non-blocking read (select/atomicio-style).
 /// Returns bytes copied, `0` if empty (EAGAIN), or `u32::MAX` if closed/error.
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_net_ip_tcp_try_read(stream_h: u32, buf: *mut u8, cap: u32) -> u32 {
@@ -920,7 +920,7 @@ pub unsafe extern "C" fn pm_metal_net_ip_tcp_try_read(stream_h: u32, buf: *mut u
     0
 }
 
-/// Sync non-blocking write for Dropbear select/atomicio.
+/// Sync non-blocking write (select/atomicio-style).
 /// Returns bytes sent, or `0` if would-block / error.
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_net_ip_tcp_try_write(

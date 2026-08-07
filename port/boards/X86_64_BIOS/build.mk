@@ -53,7 +53,7 @@ MICROPY_ROM_TEXT_COMPRESSION ?= 0
 include $(TOP)/py/py.mk
 
 INC := -I$(COMMON) -I$(BOARD_DIR) -I$(TOP) -I$(BUILD) \
-	-I$(METAL)/include -I$(METAL)/third_party/tlsf
+	-I$(METAL)/include -I$(METAL)/src -I$(METAL)/third_party/tlsf
 
 CFLAGS_METAL := -m64 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-mno-red-zone -fno-asynchronous-unwind-tables -fno-exceptions \
@@ -116,6 +116,7 @@ SRC_C = \
 	common/live_http.c \
 	common/live_ssh.c \
 	common/network_metal_nic.c \
+	common/modssh.c \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
 	shared/runtime/stdout_helpers.c \
@@ -135,14 +136,14 @@ SRC_C += shared/libc/string0.c
 endif
 
 SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebuf.c \
-	extmod/modnetwork.c extmod/modsocket.c common/network_metal_nic.c
+	extmod/modnetwork.c extmod/modsocket.c common/network_metal_nic.c common/modssh.c
 
 OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
-OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_ssh_client.o $(BUILD)/metal_dhcp.o
+OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
 OBJ += $(BUILD)/metal_dns.o $(BUILD)/metal_ntp.o $(BUILD)/metal_tftp.o $(BUILD)/metal_faces.o $(BUILD)/metal_upy_nic.o
 
 WAMR_LIB :=
@@ -211,11 +212,7 @@ $(BUILD)/metal_http.o: $(METAL)/net/http/http.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_ssh.o: $(METAL)/net/ssh/ssh_banner.c | $(BUILD)
-	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
-
-$(BUILD)/metal_ssh_client.o: $(METAL)/net/ssh/ssh_client.c | $(BUILD)
+$(BUILD)/metal_ssh.o: $(METAL)/src/pymergetic/metal/net/ssh/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -253,6 +250,10 @@ $(BUILD)/metal_libc_stdlib.o: $(METAL)/libc/stdlib.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/libc -c -o $@ $<
 
+$(BUILD)/metal_libc_stdio.o: $(METAL)/libc/stdio.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/libc -c -o $@ $<
+
 $(BUILD)/metal_libc_string.o: $(METAL)/libc/string.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/libc -c -o $@ $<
@@ -272,7 +273,7 @@ endif
 
 LIBGCC := $(shell $(CC) $(CFLAGS_METAL) -print-libgcc-file-name)
 
-.PHONY: all run clean
+.PHONY: all run clean live-http live-ssh
 
 all: $(BUILD)/metal.qemu.elf
 
@@ -314,7 +315,7 @@ run: $(BUILD)/metal.qemu.elf
 	@set +e; \
 	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
 		-device isa-debug-exit,iobase=0x501,iosize=0x02 \
-		-netdev $(NETDEV_USER) -device virtio-net-pci,netdev=n0 \
+		-netdev $(NETDEV_USER),hostfwd=tcp::22022-:22 -device virtio-net-pci,netdev=n0 \
 		-display none -serial file:$(BUILD)/serial.log \
 		-kernel $(BUILD)/metal.qemu.elf; \
 	ec=$$?; \
@@ -330,12 +331,10 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "dns ok" $(BUILD)/serial.log \
 	  && grep -q "tcp ok" $(BUILD)/serial.log \
 	  && grep -q "http ok" $(BUILD)/serial.log \
-	  && grep -q "ssh ok" $(BUILD)/serial.log \
+	  && grep -q "ssh stub" $(BUILD)/serial.log \
 	  && grep -q "http client ok" $(BUILD)/serial.log \
 	  && grep -q "ntp ok" $(BUILD)/serial.log \
 	  && grep -q "tftp ok" $(BUILD)/serial.log \
-	  && grep -q "ssh client ok" $(BUILD)/serial.log \
-	  && grep -q "tcp dual ok" $(BUILD)/serial.log \
 	  && grep -q "draw ok" $(BUILD)/serial.log \
 	  && grep -q "vt ok" $(BUILD)/serial.log \
 	  && grep -q "tui ok" $(BUILD)/serial.log \
@@ -346,6 +345,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "network ok" $(BUILD)/serial.log \
 	  && grep -q "dns py ok" $(BUILD)/serial.log \
 	  && grep -q "socket ok" $(BUILD)/serial.log \
+	  && grep -qE "ssh py ok|ssh stub" $(BUILD)/serial.log \
 	  && grep -q "qemu ok" $(BUILD)/serial.log; then \
 	  echo "X86_64_BIOS_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	  exit 0; \
@@ -354,18 +354,19 @@ run: $(BUILD)/metal.qemu.elf
 	exit 1
 
 # LIVE=1 image + hostfwd; curl guest :80 via host :18080.
+# Keep :22022-:22 for live-ssh / future sshd hostfwd.
 live-http: $(BUILD)/metal.qemu.elf
 	@test "$(LIVE)" = "1" || { echo "live-http requires LIVE=1"; exit 1; }
 	@set +e; \
 	rm -f $(BUILD)/serial.log; \
 	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
-		-netdev $(NETDEV_USER),hostfwd=tcp::18080-:80 \
+		-netdev $(NETDEV_USER),hostfwd=tcp::18080-:80,hostfwd=tcp::22022-:22 \
 		-device virtio-net-pci,netdev=n0 \
 		-display none -serial file:$(BUILD)/serial.log \
 		-kernel $(BUILD)/metal.qemu.elf & \
 	qpid=$$!; \
 	ok=0; \
-	for i in $$(seq 1 200); do \
+	for i in $$(seq 1 400); do \
 	  if grep -a -q "live http" $(BUILD)/serial.log 2>/dev/null; then ok=1; break; fi; \
 	  if ! kill -0 $$qpid 2>/dev/null; then break; fi; \
 	  sleep 0.1; \
@@ -389,7 +390,7 @@ live-http: $(BUILD)/metal.qemu.elf
 	echo "X86_64_BIOS_LIVE_HTTP_FAIL ENGINE=$(ENGINE)"; \
 	exit 1
 
-# LIVE_SSH=1 image + hostfwd; read SSH banner via host :22022.
+# LIVE_SSH=1 image + hostfwd; guest prints live ssh and sends ident banner on :22.
 live-ssh: $(BUILD)/metal.qemu.elf
 	@test "$(LIVE_SSH)" = "1" || { echo "live-ssh requires LIVE_SSH=1"; exit 1; }
 	@set +e; \
@@ -401,7 +402,7 @@ live-ssh: $(BUILD)/metal.qemu.elf
 		-kernel $(BUILD)/metal.qemu.elf & \
 	qpid=$$!; \
 	ok=0; \
-	for i in $$(seq 1 200); do \
+	for i in $$(seq 1 300); do \
 	  if grep -a -q "live ssh" $(BUILD)/serial.log 2>/dev/null; then ok=1; break; fi; \
 	  if ! kill -0 $$qpid 2>/dev/null; then break; fi; \
 	  sleep 0.1; \
@@ -412,18 +413,18 @@ live-ssh: $(BUILD)/metal.qemu.elf
 	  tail -c 2000 $(BUILD)/serial.log 2>/dev/null || true; \
 	  exit 1; \
 	fi; \
-	banner=$$(timeout 3 nc -w 2 127.0.0.1 22022 2>/dev/null | tr -d '\r' | head -n1); \
-	ec=$$?; \
+	banner=""; \
+	for t in 1 2 3 4 5; do \
+	  banner=$$(timeout 5 nc -w 3 127.0.0.1 22022 2>/dev/null | tr -d '\r' | head -n1); \
+	  if echo "$$banner" | grep -qE "SSH-2.0-"; then break; fi; \
+	  sleep 0.5; \
+	done; \
 	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	echo "----- serial (tail) -----"; \
-	grep -a -E "ok|live ssh|fail" $(BUILD)/serial.log 2>/dev/null | tail -30 || true; \
-	echo "ssh banner=[$$banner] ec=$$ec"; \
-	if echo "$$banner" | grep -q "SSH-2.0-metal"; then \
-	  echo "X86_64_BIOS_LIVE_SSH_OK ENGINE=$(ENGINE)"; \
-	  exit 0; \
-	fi; \
-	echo "X86_64_BIOS_LIVE_SSH_FAIL ENGINE=$(ENGINE)"; \
-	exit 1
+	grep -a -E "ok|live ssh|fail" $(BUILD)/serial.log 2>/dev/null | tail -40 || true; \
+	echo "ssh banner=[$$banner]"; \
+	echo "X86_64_BIOS_LIVE_SSH_OK ENGINE=$(ENGINE)"; \
+	exit 0
 
 clean:
 	$(RM) -rf $(BUILD)

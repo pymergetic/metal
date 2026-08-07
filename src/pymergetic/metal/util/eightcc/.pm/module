@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.util.eightcc",
-  "impl": "c",
-  "version": "0.1.0",
-  "comment": "EightCC tags (BE semantic / LE wire) + PM_METAL_UTIL_EIGHTCC macros."
-}

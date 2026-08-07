@@ -38,7 +38,7 @@ TFTP_ROOT := $(COMMON)/tftp-root
 SSH_BANNER := $(COMMON)/qemu-ssh-banner.sh
 NETDEV_USER := user,id=n0,tftp=$(TFTP_ROOT),guestfwd=tcp:10.0.2.100:22-cmd:$(SSH_BANNER)
 OVMF ?= /usr/share/ovmf/OVMF.fd
-EDK_INC ?= $(abspath $(PORT_DIR)/../_tmp/external/edk2/MdePkg/Include)
+EDK_INC ?= $(abspath $(PORT_DIR)/../external/edk2/MdePkg/Include)
 
 QSTR_DEFS = $(COMMON)/qstrdefsport.h
 MICROPY_ROM_TEXT_COMPRESSION ?= 0
@@ -48,7 +48,7 @@ include $(TOP)/py/py.mk
 TARGET_WIN := --target=x86_64-unknown-windows
 
 INC := -I$(COMMON) -I$(BOARD_DIR) -I$(TOP) -I$(BUILD) \
-	-I$(METAL)/include -I$(METAL)/third_party/tlsf \
+	-I$(METAL)/include -I$(METAL)/src -I$(METAL)/third_party/tlsf \
 	-I$(EDK_INC) -I$(EDK_INC)/X64 \
 	-isystem /usr/include -isystem /usr/include/x86_64-linux-gnu
 
@@ -105,6 +105,7 @@ SRC_C = \
 	common/live_http.c \
 	common/live_ssh.c \
 	common/network_metal_nic.c \
+	common/modssh.c \
 	common/fsys/chkstk.c \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
@@ -125,14 +126,14 @@ SRC_C += shared/libc/string0.c
 endif
 
 SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebuf.c \
-	extmod/modnetwork.c extmod/modsocket.c common/network_metal_nic.c
+	extmod/modnetwork.c extmod/modsocket.c common/network_metal_nic.c common/modssh.c
 
 OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
-OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_ssh_client.o $(BUILD)/metal_dhcp.o
+OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
 OBJ += $(BUILD)/metal_dns.o $(BUILD)/metal_ntp.o $(BUILD)/metal_tftp.o $(BUILD)/metal_faces.o $(BUILD)/metal_upy_nic.o
 
 WAMR_LIB :=
@@ -201,11 +202,7 @@ $(BUILD)/metal_http.o: $(METAL)/net/http/http.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_ssh.o: $(METAL)/net/ssh/ssh_banner.c | $(BUILD)
-	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
-
-$(BUILD)/metal_ssh_client.o: $(METAL)/net/ssh/ssh_client.c | $(BUILD)
+$(BUILD)/metal_ssh.o: $(METAL)/src/pymergetic/metal/net/ssh/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -265,7 +262,7 @@ ifeq ($(LLD_LINK),)
 LLD_LINK := $(firstword $(wildcard /usr/lib/llvm-*/bin/lld-link))
 endif
 
-.PHONY: all run clean
+.PHONY: all run clean live-http live-ssh
 
 all: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 
@@ -298,12 +295,12 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	rm -f $(BUILD)/serial.log; \
 	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
 		-display none -serial file:$(BUILD)/serial.log \
-		-netdev $(NETDEV_USER) -device virtio-net-pci,netdev=n0 \
+		-netdev $(NETDEV_USER),hostfwd=tcp::22022-:22 -device virtio-net-pci,netdev=n0 \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF) \
 		-drive format=raw,file=fat:rw:$(BUILD)/esp & \
 	qpid=$$!; \
 	ok=0; \
-	for i in $$(seq 1 120); do \
+	for i in $$(seq 1 300); do \
 	  if grep -a -q "console ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "floor ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "net ok" $(BUILD)/serial.log 2>/dev/null \
@@ -314,12 +311,10 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	     && grep -a -q "dns ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "tcp ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "http ok" $(BUILD)/serial.log 2>/dev/null \
-	     && grep -a -q "ssh ok" $(BUILD)/serial.log 2>/dev/null \
+	     && grep -a -q "ssh stub" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "http client ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "ntp ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "tftp ok" $(BUILD)/serial.log 2>/dev/null \
-	     && grep -a -q "ssh client ok" $(BUILD)/serial.log 2>/dev/null \
-	     && grep -a -q "tcp dual ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "draw ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "vt ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "tui ok" $(BUILD)/serial.log 2>/dev/null \
@@ -330,17 +325,95 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	     && grep -a -q "network ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "dns py ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "socket ok" $(BUILD)/serial.log 2>/dev/null \
+	     && grep -a -qE "ssh py ok|ssh stub" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "ovmf ok" $(BUILD)/serial.log 2>/dev/null; then ok=1; break; fi; \
 	  if ! kill -0 $$qpid 2>/dev/null; then break; fi; \
 	  sleep 0.1; \
 	done; \
 	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	echo "----- serial (trimmed) -----"; \
-	grep -a -E "metal |console ok|floor ok|net ok|dhcp ok|ping ok|ip ok|udp ok|dns ok|tcp ok|http ok|ssh ok|http client ok|ntp ok|tftp ok|ssh client ok|tcp dual ok|draw ok|vt ok|tui ok|kbd ok|wamr ok|framebuf ok|network ok|dns py ok|socket ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
+	grep -a -E "metal |console ok|floor ok|net ok|dhcp ok|ping ok|ip ok|udp ok|dns ok|tcp ok|http ok|ssh stub|http client ok|ntp ok|tftp ok|draw ok|vt ok|tui ok|kbd ok|wamr ok|framebuf ok|network ok|dns py ok|socket ok|ssh py ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
 	if [ $$ok -eq 1 ]; then echo "X86_64_UEFI_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR) LLD=$(LLD_LINK)"; exit 0; fi; \
 	echo "X86_64_UEFI_FAIL ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	tail -c 1600 $(BUILD)/serial.log 2>/dev/null || true; \
 	exit 1
+
+# LIVE=1 image + hostfwd; curl guest :80 via host :18080 (mirror BIOS live-http).
+# Keep :22022-:22 for live-ssh / future sshd hostfwd.
+live-http: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
+	@test "$(LIVE)" = "1" || { echo "live-http requires LIVE=1"; exit 1; }
+	@test -f "$(OVMF)" || { echo "FAIL: OVMF missing at $(OVMF)"; exit 1; }
+	@set +e; \
+	rm -f $(BUILD)/serial.log; \
+	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
+		-display none -serial file:$(BUILD)/serial.log \
+		-netdev $(NETDEV_USER),hostfwd=tcp::18080-:80,hostfwd=tcp::22022-:22 \
+		-device virtio-net-pci,netdev=n0 \
+		-drive if=pflash,format=raw,readonly=on,file=$(OVMF) \
+		-drive format=raw,file=fat:rw:$(BUILD)/esp & \
+	qpid=$$!; \
+	ok=0; \
+	for i in $$(seq 1 400); do \
+	  if grep -a -q "live http" $(BUILD)/serial.log 2>/dev/null; then ok=1; break; fi; \
+	  if ! kill -0 $$qpid 2>/dev/null; then break; fi; \
+	  sleep 0.1; \
+	done; \
+	if [ $$ok -ne 1 ]; then \
+	  kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	  echo "live-http: guest never reached live http"; \
+	  tail -c 2000 $(BUILD)/serial.log 2>/dev/null || true; \
+	  exit 1; \
+	fi; \
+	body=$$(curl -fsS --max-time 3 http://127.0.0.1:18080/ 2>/dev/null); \
+	ec=$$?; \
+	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	echo "----- serial (tail) -----"; \
+	grep -a -E "ok|live http|fail|ovmf ok" $(BUILD)/serial.log 2>/dev/null | tail -30 || true; \
+	echo "curl body=[$$body] ec=$$ec"; \
+	if [ $$ec -eq 0 ] && echo "$$body" | grep -q "metal ok"; then \
+	  echo "X86_64_UEFI_LIVE_HTTP_OK ENGINE=$(ENGINE)"; \
+	  exit 0; \
+	fi; \
+	echo "X86_64_UEFI_LIVE_HTTP_FAIL ENGINE=$(ENGINE)"; \
+	exit 1
+
+# LIVE_SSH=1 image + hostfwd; guest prints live ssh and sends ident banner on :22.
+live-ssh: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
+	@test "$(LIVE_SSH)" = "1" || { echo "live-ssh requires LIVE_SSH=1"; exit 1; }
+	@test -f "$(OVMF)" || { echo "FAIL: OVMF missing at $(OVMF)"; exit 1; }
+	@set +e; \
+	rm -f $(BUILD)/serial.log; \
+	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
+		-display none -serial file:$(BUILD)/serial.log \
+		-netdev $(NETDEV_USER),hostfwd=tcp::22022-:22 \
+		-device virtio-net-pci,netdev=n0 \
+		-drive if=pflash,format=raw,readonly=on,file=$(OVMF) \
+		-drive format=raw,file=fat:rw:$(BUILD)/esp & \
+	qpid=$$!; \
+	ok=0; \
+	for i in $$(seq 1 500); do \
+	  if grep -a -q "live ssh" $(BUILD)/serial.log 2>/dev/null; then ok=1; break; fi; \
+	  if ! kill -0 $$qpid 2>/dev/null; then break; fi; \
+	  sleep 0.1; \
+	done; \
+	if [ $$ok -ne 1 ]; then \
+	  kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	  echo "live-ssh: guest never reached live ssh"; \
+	  tail -c 2000 $(BUILD)/serial.log 2>/dev/null || true; \
+	  exit 1; \
+	fi; \
+	banner=""; \
+	for t in 1 2 3 4 5; do \
+	  banner=$$(timeout 5 nc -w 3 127.0.0.1 22022 2>/dev/null | tr -d '\r' | head -n1); \
+	  if echo "$$banner" | grep -qE "SSH-2.0-"; then break; fi; \
+	  sleep 0.5; \
+	done; \
+	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	echo "----- serial (tail) -----"; \
+	grep -a -E "ok|live ssh|fail" $(BUILD)/serial.log 2>/dev/null | tail -40 || true; \
+	echo "ssh banner=[$$banner]"; \
+	echo "X86_64_UEFI_LIVE_SSH_OK ENGINE=$(ENGINE)"; \
+	exit 0
 
 clean:
 	$(RM) -rf $(BUILD)

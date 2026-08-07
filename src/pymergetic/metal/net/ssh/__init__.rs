@@ -1,4 +1,4 @@
-//! Dropbear sshd — Rust border; session glue + vendor Dropbear in build.rs.
+//! net.ssh — Rust export face over the C impl (`__init__.c`).
 #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(non_camel_case_types)]
 
@@ -9,42 +9,12 @@ use pymergetic_metal_reg::register_rows_bytes;
 use pymergetic_metal_rt as _;
 
 extern "C" {
-    fn metal_ssh_listen(port: u32) -> u32;
-    fn metal_ssh_close(s: u32);
-    fn metal_ssh_autoload() -> i32;
-    fn metal_ssh_status(buf: *mut u8, buf_len: u32) -> i32;
-    fn metal_ssh_listen_port() -> u32;
-    fn metal_ssh_hostkey_label(buf: *mut u8, buf_len: u32) -> i32;
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn pm_metal_net_ssh_listen(port: u32) -> u32 {
-    metal_ssh_listen(port)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn pm_metal_net_ssh_close(s: u32) {
-    metal_ssh_close(s)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn pm_metal_net_ssh_autoload() -> i32 {
-    metal_ssh_autoload()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn pm_metal_net_ssh_status(buf: *mut u8, buf_len: u32) -> i32 {
-    metal_ssh_status(buf, buf_len)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn pm_metal_net_ssh_listen_port() -> u32 {
-    metal_ssh_listen_port()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn pm_metal_net_ssh_hostkey_label(buf: *mut u8, buf_len: u32) -> i32 {
-    metal_ssh_hostkey_label(buf, buf_len)
+    fn pm_metal_net_ssh_listen(port: u32) -> u32;
+    fn pm_metal_net_ssh_close(s: u32);
+    fn pm_metal_net_ssh_autoload() -> i32;
+    fn pm_metal_net_ssh_status(buf: *mut u8, buf_len: u32) -> i32;
+    fn pm_metal_net_ssh_listen_port() -> u32;
+    fn pm_metal_net_ssh_hostkey_label(buf: *mut u8, buf_len: u32) -> i32;
 }
 
 #[no_mangle]

@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.net.ip.ssl",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "SSL addon under net.ip: CA + server creds. Session I/O is via net.ip.tcp stream."
-}

@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.net.ip.icmp",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "ICMP echo (ping) awaitable under net.ip."
-}

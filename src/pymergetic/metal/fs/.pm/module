@@ -1,8 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.fs",
-  "impl": "rs",
-  "version": "0.1.0",
-  "guest_surface": true,
-  "comment": "Async-first VFS fd API; guest_surface: size/mkdir/read_mem/write_mem via host_natives."
-}

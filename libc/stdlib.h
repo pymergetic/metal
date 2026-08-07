@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-/* Heap — definitions from dropbear_crt (TLSF via pm_metal_mem_*). */
+/* Heap — TLSF via pm_metal_mem_* (freestanding port). */
 void *malloc(size_t size);
 void *calloc(size_t nmemb, size_t size);
 void *realloc(void *ptr, size_t size);

@@ -46,7 +46,6 @@ cmake-build-*/
 
 # Generated from src/efi/MetalPkg/*.inf.tpl (@METAL_ROOT@ → checkout root)
 /src/efi/MetalPkg/Metal.inf
-/src/efi/MetalPkg/DropbearGlue.inf
 
 
 # Leftover product zip names (no longer built; keep ignored if present)

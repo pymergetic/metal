@@ -13,6 +13,8 @@ int32_t pm_metal_mem_init(uint8_t *base, size_t bytes);
 
 uint8_t *pm_metal_mem_alloc(size_t size);
 void pm_metal_mem_free(uint8_t *ptr);
+/* Like free, but reports retaddr when ptr is outside the TLSF arena. */
+void pm_metal_mem_free_checked(uint8_t *ptr, const void *retaddr);
 uint8_t *pm_metal_mem_memalign(size_t align, size_t size);
 uint8_t *pm_metal_mem_realloc(uint8_t *ptr, size_t size);
 

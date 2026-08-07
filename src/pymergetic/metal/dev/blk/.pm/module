@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.dev.blk",
-  "impl": "c",
-  "version": "0.1.0",
-  "comment": "Block I/O + IDE detect. Virtio-blk backend private."
-}

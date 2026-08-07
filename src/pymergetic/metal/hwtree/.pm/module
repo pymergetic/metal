@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.hwtree",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "Print DT (+ ACPI RSDP) inventory; not a shell."
-}

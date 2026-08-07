@@ -23,6 +23,10 @@ extern "C" {
 #ifndef PM_METAL_IP_QEMU_SSH
 #define PM_METAL_IP_QEMU_SSH 0x0a000264u /* 10.0.2.100 guestfwd SSH banner */
 #endif
+/* Hostfwd port used by `make run` / live-ssh for guest :22. */
+#ifndef PM_METAL_IP_QEMU_SSH_HOSTFWD_PORT
+#define PM_METAL_IP_QEMU_SSH_HOSTFWD_PORT 22022u
+#endif
 
 int32_t pm_metal_ip_init(uint32_t addr_be, uint32_t mask_be, uint32_t gw_be);
 int32_t pm_metal_ip_ready(void);

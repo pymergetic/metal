@@ -18,13 +18,26 @@ int32_t pm_metal_tcp_connect(uint32_t dst_ip, uint16_t dst_port);
  */
 void pm_metal_tcp_abort(void);
 
+/* Close the passive/server PCB (RST if established) and return it to LISTEN. */
+int32_t pm_metal_tcp_passive_relisten(uint16_t local_port);
+
 int32_t pm_metal_tcp_established(void);
+
+/* 1 if focused PCB saw remote FIN (half-close); RX may still have data. */
+int32_t pm_metal_tcp_peer_closed(void);
 
 /* 1 if the passive/server PCB (listen slot) is ESTABLISHED. */
 int32_t pm_metal_tcp_passive_established(void);
 
 /* 1 if the passive/server PCB is still in LISTEN. */
 int32_t pm_metal_tcp_passive_listening(void);
+
+/* Focus send/recv/established on the passive (listen) or active (connect) PCB. */
+void pm_metal_tcp_focus_passive(void);
+void pm_metal_tcp_focus_active(void);
+
+/* Bytes queued in the focused PCB RX buffer. */
+uint32_t pm_metal_tcp_rx_avail(void);
 
 /* Send on the established connection. Returns 0 on success, -2 ARP pending. */
 int32_t pm_metal_tcp_send(const void *data, uint32_t len);

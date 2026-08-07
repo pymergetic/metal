@@ -1,8 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.dev.gfx",
-  "impl": "rs",
-  "version": "0.1.0",
-  "guest_surface": true,
-  "comment": "Shadow compositor + scanout; guest_surface: width/height/blit/present via host_natives."
-}

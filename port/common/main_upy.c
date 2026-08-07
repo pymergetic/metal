@@ -15,6 +15,13 @@
 
 #include "mphalport.h"
 
+#ifndef METAL_LIVE
+#define METAL_LIVE 0
+#endif
+#ifndef METAL_LIVE_SSH
+#define METAL_LIVE_SSH 0
+#endif
+
 #if MICROPY_PY_NETWORK
 #include "extmod/modnetwork.h"
 #include "pymergetic/metal/net/upy_nic.h"
@@ -68,6 +75,17 @@ void mp_metal_upy_run(int smoke) {
             "print('framebuf ok')\n",
             MP_PARSE_FILE_INPUT);
 #endif
+        /* SSH µPy face (stub until real backend). */
+        do_str(
+            "import ssh\n"
+            "if ssh.available():\n"
+            "  assert ssh.__version__\n"
+            "  assert 'ssh' in ssh.info\n"
+            "  assert ssh.init()==0\n"
+            "  print('ssh py ok')\n"
+            "else:\n"
+            "  print('ssh stub')\n",
+            MP_PARSE_FILE_INPUT);
 #if MICROPY_PY_NETWORK
         do_str(
             "import network\n"
@@ -78,13 +96,21 @@ void mp_metal_upy_run(int smoke) {
             "assert c[0]!='0.0.0.0'\n"
             "print('network ok')\n"
             "assert n.resolve('10.0.2.2')=='10.0.2.2'\n"
-            "a=n.resolve('example.com')\n"
+            "a=''\n"
+            "for i in range(3):\n"
+            "  try:\n"
+            "    a=n.resolve('example.com')\n"
+            "    if a and a!='0.0.0.0':\n"
+            "      break\n"
+            "  except OSError:\n"
+            "    pass\n"
             "assert a and a!='0.0.0.0'\n"
             "print('dns py ok')\n"
             "import socket\n"
             "ai=socket.getaddrinfo(a,80)[0][-1]\n"
             "ok=0\n"
             "for i in range(4):\n"
+            "  s=None\n"
             "  try:\n"
             "    s=socket.socket()\n"
             "    s.connect(ai)\n"
@@ -92,9 +118,16 @@ void mp_metal_upy_run(int smoke) {
             "    d=s.recv(128)\n"
             "    if d and d[:5]==b'HTTP/':\n"
             "      ok=1\n"
-            "      break\n"
             "  except OSError:\n"
             "    pass\n"
+            "  finally:\n"
+            "    if s:\n"
+            "      try:\n"
+            "        s.close()\n"
+            "      except OSError:\n"
+            "        pass\n"
+            "  if ok:\n"
+            "    break\n"
             "assert ok\n"
             "print('socket ok')\n",
             MP_PARSE_FILE_INPUT);

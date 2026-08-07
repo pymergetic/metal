@@ -1,7 +1,0 @@
-{
-  "type": "package",
-  "name": "tests.wasm_hello_c",
-  "impl": "c",
-  "version": "0.1.0",
-  "comment": "Minimal C wasm pack: export ready() -> i32 { 0 }. Not kernel-linked."
-}

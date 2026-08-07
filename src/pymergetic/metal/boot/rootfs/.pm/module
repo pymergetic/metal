@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.boot.rootfs",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "Stage-A root FAT + module packs; Stage-B fstab (tmpfs/...)."
-}

@@ -17,9 +17,15 @@ all run clean:
 	$(MAKE) -f $(BOARD_DIR)/build.mk $@ BUILD=$(BUILD) BOARD=$(BOARD) ENGINE=$(ENGINE) REPL=$(REPL) LIVE=$(LIVE) LIVE_SSH=$(LIVE_SSH)
 
 # Boot with hostfwd, wait for live http, curl :18080, then kill QEMU.
+# Force -live BUILD: recipe LIVE=1 must not reuse a smoke BUILD from LIVE=0.
 live-http:
-	$(MAKE) -f $(BOARD_DIR)/build.mk live-http BUILD=$(BUILD) BOARD=$(BOARD) ENGINE=$(ENGINE) REPL=0 LIVE=1 LIVE_SSH=0
+	$(MAKE) -f $(BOARD_DIR)/build.mk live-http \
+		BUILD=build-$(BOARD)-$(ENGINE)-live \
+		BOARD=$(BOARD) ENGINE=$(ENGINE) REPL=0 LIVE=1 LIVE_SSH=0
 
 # Boot with hostfwd, wait for live ssh, read banner on :22022, then kill QEMU.
+# Force -live-ssh BUILD: recipe LIVE_SSH=1 must not reuse a smoke BUILD from LIVE_SSH=0.
 live-ssh:
-	$(MAKE) -f $(BOARD_DIR)/build.mk live-ssh BUILD=$(BUILD) BOARD=$(BOARD) ENGINE=$(ENGINE) REPL=0 LIVE=0 LIVE_SSH=1
+	$(MAKE) -f $(BOARD_DIR)/build.mk live-ssh \
+		BUILD=build-$(BOARD)-$(ENGINE)-live-ssh \
+		BOARD=$(BOARD) ENGINE=$(ENGINE) REPL=0 LIVE=0 LIVE_SSH=1

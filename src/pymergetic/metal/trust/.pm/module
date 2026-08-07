@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.trust",
-  "impl": "c",
-  "version": "0.1.0",
-  "comment": "Code trust: EdDSA (Monocypher) verify + off/soft/enforce policy for mods."
-}

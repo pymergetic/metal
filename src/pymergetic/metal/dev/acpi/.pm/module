@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.dev.acpi",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "ACPI RSDP + MADT cpu count (no DT class yet; hwtree reads rsdp)."
-}

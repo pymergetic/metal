@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.boot.externals",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "Third-party stack identity registry (count/get/find/register). Nested under boot."
-}

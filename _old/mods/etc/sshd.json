@@ -1,8 +1,0 @@
-{
-  "port": 22,
-  "budget_pct": 10,
-  "auth": {
-    "methods": ["passwd"]
-  },
-  "host_key": "/etc/ssh/dropbear_ed25519_host_key"
-}

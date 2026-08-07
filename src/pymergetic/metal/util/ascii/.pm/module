@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.util.ascii",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "FIGlet small ASCII art render."
-}

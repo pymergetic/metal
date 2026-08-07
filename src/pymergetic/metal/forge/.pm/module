@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.forge",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "Module codegen engine (solo Linux tool + metal in-kernel render)."
-}

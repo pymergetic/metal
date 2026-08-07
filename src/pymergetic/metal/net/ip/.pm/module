@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.net.ip",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "IPv4 + DHCP over pluggable L2; pure Rust bring-up, vanilla lwIP external. DNS is net/dns."
-}

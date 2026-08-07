@@ -1,7 +1,0 @@
-# EDK2 dialect lives here (see docs/SOURCETREE.md "C dialect") — its house
-# style (spread signatures, space-before-call-parens, etc.) is deliberately
-# different from the root config and is not something we're auto-formatting
-# right now. This makes both `clang-format -i` and editor format-on-save
-# no-ops under src/efi/**.
----
-DisableFormat: true

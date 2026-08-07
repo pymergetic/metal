@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.dev.blk.ram",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "In-memory block device (ramdisk); async sector R/W Ready."
-}

@@ -35,9 +35,22 @@ uint8_t *pm_metal_mem_alloc(size_t size)
     return (uint8_t *)p;
 }
 
+void uart_puts(const char *s);
+
 void pm_metal_mem_free(uint8_t *ptr)
 {
+    pm_metal_mem_free_checked(ptr, __builtin_return_address(0));
+}
+
+void pm_metal_mem_free_checked(uint8_t *ptr, const void *retaddr)
+{
+    (void)retaddr;
     if (g_tlsf == NULL || ptr == NULL) {
+        return;
+    }
+    /* Reject frees outside the TLSF arena (m_free of code/.rdata). */
+    if (g_base != NULL && (ptr < g_base || ptr >= g_base + g_bytes)) {
+        uart_puts("bad free\n");
         return;
     }
     tlsf_free(g_tlsf, ptr);

@@ -114,18 +114,7 @@ Topic modules place commands with `PM_METAL_SHELL_CMD` / `PM_METAL_SHELL_CMDS` i
 
 ### Externals registry
 
-Third-party stack identity (MicroPython, WAMR, lwIP, Dropbear, mbedTLS,
-microtar, …) self-registers with `PM_METAL_EXTERNAL` into
-`.pm_metal_externals.*` — same linker-section idiom as shell cmds / keyb
-layouts. This is **not** the mod registry and **not** Metal's own
-`authors` / `about` record. Surfaces: shell `externals`, Python
-`pymergetic.metal.externals`, WASI `pymergetic.metal.externals`, and the
-MetalPython boot banner (`Metal <ver> @ <cpu>` plus `  - <id> <version>`
-bullets).
-
-### Externals registry
-
-Third-party stack identity (MicroPython, WAMR, lwIP, Dropbear, mbedTLS,
+Third-party stack identity (MicroPython, WAMR, lwIP, mbedTLS,
 microtar, …) self-registers with `PM_METAL_EXTERNAL` into
 `.pm_metal_externals.*` — same linker-section idiom as shell cmds / keyb
 layouts. Guest-only stacks (Microdot, utemplate, …) register at runtime via
@@ -162,37 +151,20 @@ Endpoints: `uart`, `ui_tab`, `pipe`, `pty` (master/slave), later `virtio_console
 
 ### SSH console
 
-`sshd` is a Dropbear-backed console service, not a future stream feature. It
-listens on TCP port 22 by default, connects each network session to a PTY
-master, and gives the remote shell the PTY slave as its terminal. SSH is a
-viewport onto the shared Metal console (UART/UI): line editing is the shell
-editor; the PTY pair keeps real termios + winsize (`pm_metal_stream_termios_*`
-/ `pm_metal_stream_winsize_*`, Dropbear `tcgetattr`/`tcsetattr`/`TIOC*WINSZ`).
+SSH is planned as a console viewport onto the shared Metal console (UART/UI)
+via a PTY pair (`pm_metal_stream_termios_*` / `pm_metal_stream_winsize_*`),
+not a separate stream feature. Hybrid module `pymergetic.metal.net.ssh`:
+C impl + RS/Py export faces (`pm_metal_net_ssh_*`). Stub today
+(`available()` false; live-ssh may send an SSH-2.0 ident banner on TCP :22
+without crypto). Real server/client (wolfSSH or DIY) will listen on port 22
+and attach each session to a PTY.
 
 Metal job control (not POSIX signals): Ctrl-C cancels the foreground shell
 async job, Ctrl-Z stops it; `jobs` / `fg` / `bg` list and resume. POSIX
 `fork`/`kill`/signals stay omitted.
 
-`/etc/sshd.json` configures the port, host-key path, session budget, and
-enabled authentication methods. `passwd`, `pubkey`, and the Metal `sslcert`
-extension are available; password users come from the passwd database,
-public keys come from the configured user records, and `sslcert` uses
-`auth.client_ca`. The default image enables `passwd` and `pubkey`. Use the
-`sshd` shell command to inspect or control the service.
-
-A checked-in lab Dropbear ed25519 host key ships in
-`mods/etc/ssh/dropbear_ed25519_host_key` and is staged/preloaded as
-`/etc/ssh/dropbear_ed25519_host_key` so the host fingerprint is stable
-across boots. Override at ESP/PXE stage with `METAL_SSHD_HOSTKEY=/path`,
-or at runtime via `sshd.json` `"host_key"`. Do not use the lab key outside
-dev.
-
-A checked-in lab Dropbear ed25519 host key ships in
-`mods/etc/ssh/dropbear_ed25519_host_key` and is staged/preloaded as
-`/etc/ssh/dropbear_ed25519_host_key` so the host fingerprint is stable
-across boots. Override at ESP/PXE stage with `METAL_SSHD_HOSTKEY=/path`,
-or at runtime via `sshd.json` `"host_key"`. Do not use the lab key outside
-dev.
+`/etc/sshd.json` will configure port, host-key path, session budget, and
+auth methods when a real SSH backend is linked.
 
 ### SSH sslcert auth
 

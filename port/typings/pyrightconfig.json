@@ -1,0 +1,11 @@
+{
+  "include": ["."],
+  "stubPath": ".",
+  "extraPaths": ["."],
+  "reportMissingImports": "warning",
+  "reportMissingModuleSource": "none",
+  "reportUnusedImport": "none",
+  "reportUnusedVariable": "none",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic"
+}

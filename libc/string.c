@@ -168,7 +168,7 @@ char *strchr(const char *s, int c)
   }
 }
 
-/* strrchr: definition from dropbear_crt (UEFI/bios freestanding link). */
+/* strrchr: freestanding libc helper (UEFI/bios link). */
 
 size_t strspn(const char *s, const char *accept)
 {

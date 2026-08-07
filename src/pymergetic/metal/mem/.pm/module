@@ -1,8 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.mem",
-  "impl": "rs",
-  "version": "0.1.0",
-  "guest_surface": true,
-  "comment": "Host heap; guest_surface: wasm cookies via host_natives (not raw host pointers)."
-}

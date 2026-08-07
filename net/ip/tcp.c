@@ -17,7 +17,7 @@
 #define TCP_FLAG_PSH 0x08u
 #define TCP_FLAG_ACK 0x10u
 
-#define TCP_RX_CAP 512u
+#define TCP_RX_CAP 8192u
 #define TCP_SLOTS  2u
 #define TCP_SRV    0u
 #define TCP_CLI    1u
@@ -32,6 +32,7 @@ typedef struct {
     uint32_t snd_nxt;
     int32_t syn_acked;
     int32_t established;
+    int32_t peer_closed; /* remote FIN seen; RX may still have data */
     uint8_t rx[TCP_RX_CAP];
     uint32_t rx_len;
 } tcp_sock_t;
@@ -97,7 +98,7 @@ static int32_t tcp_tx(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port, uin
     put_u32(seg + 8, ack);
     seg[12] = 0x50;
     seg[13] = flags;
-    put_u16(seg + 14, 8192);
+    put_u16(seg + 14, (uint16_t)(TCP_RX_CAP > 65535u ? 65535u : TCP_RX_CAP));
     put_u16(seg + 16, 0);
     put_u16(seg + 18, 0);
     if (payload_len > 0u && payload != NULL) {
@@ -122,6 +123,19 @@ static void tcp_queue_rx(tcp_sock_t *s, const uint8_t *data, uint32_t len)
     }
     memcpy(s->rx + s->rx_len, data, take);
     s->rx_len += take;
+}
+
+/* Returns bytes actually queued (may be < len if RX ring is full). */
+static uint32_t tcp_queue_rx_n(tcp_sock_t *s, const uint8_t *data, uint32_t len)
+{
+    uint32_t before;
+
+    if (s == NULL) {
+        return 0;
+    }
+    before = s->rx_len;
+    tcp_queue_rx(s, data, len);
+    return s->rx_len - before;
 }
 
 static tcp_sock_t *tcp_find_rx(uint16_t dst_port, uint32_t src_ip, uint16_t src_port, uint8_t flags)
@@ -229,14 +243,18 @@ static void tcp_on_rx(const uint8_t *ip_pkt, uint32_t ip_len, uint32_t ihl)
         }
         payload_len = ip_len - (ihl + tcp_hdr_len);
         if (payload_len > 0u && seq == s->rcv_nxt) {
-            tcp_queue_rx(s, ip_pkt + ihl + tcp_hdr_len, payload_len);
-            s->rcv_nxt += payload_len;
-            seq += payload_len;
-            (void)tcp_tx(src_ip, s->local_port, src_port, s->snd_nxt, s->rcv_nxt, TCP_FLAG_ACK, NULL,
-                         0);
+            uint32_t took = tcp_queue_rx_n(s, ip_pkt + ihl + tcp_hdr_len, payload_len);
+
+            if (took > 0u) {
+                s->rcv_nxt += took;
+                seq += took;
+                (void)tcp_tx(src_ip, s->local_port, src_port, s->snd_nxt, s->rcv_nxt, TCP_FLAG_ACK,
+                             NULL, 0);
+            }
         }
         if ((flags & TCP_FLAG_FIN) != 0u && seq == s->rcv_nxt) {
             s->rcv_nxt += 1u;
+            s->peer_closed = 1;
             (void)tcp_tx(src_ip, s->local_port, src_port, s->snd_nxt, s->rcv_nxt, TCP_FLAG_ACK, NULL,
                          0);
         }
@@ -269,6 +287,23 @@ void pm_metal_tcp_abort(void)
 {
     /* Abort the focused PCB only — passive listen/server can outlive a client. */
     sock_clear(&g_socks[g_io]);
+}
+
+int32_t pm_metal_tcp_passive_relisten(uint16_t local_port)
+{
+    tcp_sock_t *s = &g_socks[TCP_SRV];
+
+    tcp_register_once();
+    if (s->established && s->remote_ip != 0u && s->remote_port != 0u) {
+        /* Best-effort RST so the peer (and QEMU SLIRP) drop the old 5-tuple. */
+        (void)tcp_tx(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt,
+                     (uint8_t)(TCP_FLAG_RST | TCP_FLAG_ACK), NULL, 0);
+    }
+    sock_clear(s);
+    s->state = TCP_LISTEN;
+    s->local_port = local_port;
+    g_io = TCP_SRV;
+    return 0;
 }
 
 int32_t pm_metal_tcp_connect(uint32_t dst_ip, uint16_t dst_port)
@@ -304,6 +339,11 @@ int32_t pm_metal_tcp_established(void)
     return g_socks[g_io].established ? 1 : 0;
 }
 
+int32_t pm_metal_tcp_peer_closed(void)
+{
+    return g_socks[g_io].peer_closed ? 1 : 0;
+}
+
 int32_t pm_metal_tcp_passive_established(void)
 {
     return g_socks[TCP_SRV].established ? 1 : 0;
@@ -312,6 +352,21 @@ int32_t pm_metal_tcp_passive_established(void)
 int32_t pm_metal_tcp_passive_listening(void)
 {
     return g_socks[TCP_SRV].state == TCP_LISTEN ? 1 : 0;
+}
+
+void pm_metal_tcp_focus_passive(void)
+{
+    g_io = TCP_SRV;
+}
+
+void pm_metal_tcp_focus_active(void)
+{
+    g_io = TCP_CLI;
+}
+
+uint32_t pm_metal_tcp_rx_avail(void)
+{
+    return g_socks[g_io].rx_len;
 }
 
 int32_t pm_metal_tcp_send(const void *data, uint32_t len)

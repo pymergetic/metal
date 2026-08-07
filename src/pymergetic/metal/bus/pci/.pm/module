@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.bus.pci",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "PCI config probe -> DT nodes (detect only)."
-}
