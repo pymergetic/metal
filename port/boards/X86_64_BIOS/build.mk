@@ -47,8 +47,15 @@ CFLAGS_METAL := -m64 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-Wall -Wextra -Wno-unused-parameter -Os -DNDEBUG \
 	-fdata-sections -ffunction-sections \
 	-std=gnu99 \
-	-DMICROPY_HEAP_SIZE=131072 \
-	-DMETAL_UPY_SMOKE=1
+	-DMICROPY_HEAP_SIZE=131072
+
+# REPL=1 → interactive friendly REPL (no auto isa-debug-exit smoke path)
+REPL ?= 0
+ifeq ($(REPL),1)
+CFLAGS_METAL += -DMETAL_UPY_SMOKE=0
+else
+CFLAGS_METAL += -DMETAL_UPY_SMOKE=1
+endif
 
 CFLAGS += $(INC) $(CFLAGS_METAL)
 CSUPEROPT = -Os

@@ -1,4 +1,5 @@
 # X86_64_UEFI — PE EFI app via clang COFF + lld-link (docker if host lacks lld).
+# µPy on UEFI needs mingw/windows headers + lld-link — next after BIOS REPL.
 BOARD_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 BUILD ?= build-X86_64_UEFI
 QEMU ?= qemu-system-x86_64
@@ -19,11 +20,10 @@ $(BUILD)/main.o: $(BOARD_DIR)/main.c | $(BUILD)
 		-I$(EDK_INC) -I$(EDK_INC)/X64 \
 		-c -o $@ $<
 
-# Prefer host lld-link; else docker with clang+lld.
 $(BUILD)/BOOTX64.EFI: $(BUILD)/main.o | $(BUILD)
 	@if command -v lld-link >/dev/null 2>&1; then \
 	  lld-link -subsystem:efi_application -entry:UefiMain -out:$@ $<; \
-	elif [ -x /usr/lib/llvm-*/bin/lld-link ]; then \
+	elif ls /usr/lib/llvm-*/bin/lld-link >/dev/null 2>&1; then \
 	  /usr/lib/llvm-*/bin/lld-link -subsystem:efi_application -entry:UefiMain -out:$@ $<; \
 	else \
 	  echo "note: host has no lld-link — linking EFI via docker"; \
@@ -56,7 +56,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	done; \
 	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	echo "----- serial (trimmed) -----"; \
-	grep -a -E "metalmod|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
+	grep -a -E "metal |ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
 	if [ $$ok -eq 1 ]; then echo "X86_64_UEFI_QEMU_OK"; exit 0; fi; \
 	echo "X86_64_UEFI_QEMU_FAIL"; \
 	tail -c 800 $(BUILD)/serial.log 2>/dev/null || true; \

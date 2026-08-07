@@ -12,7 +12,6 @@ static inline unsigned char inb(unsigned short port)
     return val;
 }
 
-/* COM1 so qemu -serial file: catches the banner without GOP. */
 static void com1_init(void)
 {
     outb(0x3F9, 0x00);
@@ -46,12 +45,12 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 {
     (void)ImageHandle;
     com1_init();
-    com1_puts("metalmod X86_64_UEFI\n");
+    com1_puts("metal X86_64_UEFI\n");
     com1_puts("ovmf ok — ports/metal BOARD=X86_64_UEFI\n");
 
     if (SystemTable != NULL && SystemTable->ConOut != NULL) {
         SystemTable->ConOut->OutputString(SystemTable->ConOut,
-            L"metalmod X86_64_UEFI\r\n");
+            L"metal X86_64_UEFI\r\n");
         SystemTable->ConOut->OutputString(SystemTable->ConOut,
             L"ovmf ok — ports/metal BOARD=X86_64_UEFI\r\n");
     }
