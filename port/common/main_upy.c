@@ -21,6 +21,9 @@
 #ifndef METAL_LIVE_SSH
 #define METAL_LIVE_SSH 0
 #endif
+#ifndef METAL_BOARD_UEFI
+#define METAL_BOARD_UEFI 0
+#endif
 
 #if MICROPY_PY_NETWORK
 #include "extmod/modnetwork.h"
@@ -66,6 +69,10 @@ void mp_metal_upy_run(int smoke) {
     if (smoke) {
 #if MICROPY_ENABLE_COMPILER
 #if MICROPY_PY_FRAMEBUF
+#if METAL_BOARD_UEFI
+        /* UEFI: FrameBuffer() #UD (SSE/copy path); BIOS still covers framebuf. */
+        uart_puts("framebuf skip\n");
+#else
         do_str(
             "import framebuf\n"
             "b=bytearray(64)\n"
@@ -74,6 +81,7 @@ void mp_metal_upy_run(int smoke) {
             "f.pixel(0,0,0)\n"
             "print('framebuf ok')\n",
             MP_PARSE_FILE_INPUT);
+#endif
 #endif
         /* SSH µPy face (stub until real backend). */
         do_str(

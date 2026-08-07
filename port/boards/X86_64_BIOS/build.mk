@@ -55,7 +55,7 @@ include $(TOP)/py/py.mk
 INC := -I$(COMMON) -I$(BOARD_DIR) -I$(TOP) -I$(BUILD) \
 	-I$(METAL)/include -I$(METAL)/src -I$(METAL)/third_party/tlsf
 
-CFLAGS_METAL := -m64 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
+CFLAGS_METAL := -DMETAL_BOARD_UEFI=0 -m64 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-mno-red-zone -fno-asynchronous-unwind-tables -fno-exceptions \
 	-Wall -Wextra -Wno-unused-parameter -Os -DNDEBUG \
 	-fdata-sections -ffunction-sections \
