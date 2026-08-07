@@ -195,6 +195,12 @@ int32_t pm_metal_ip_arp_resolve(uint32_t ip_host)
 
 static uint32_t ip_nexthop(uint32_t dst_ip)
 {
+    if (dst_ip == 0xffffffffu) {
+        return dst_ip;
+    }
+    if (g_addr == 0u) {
+        return dst_ip;
+    }
     if ((dst_ip & g_mask) == (g_addr & g_mask)) {
         return dst_ip;
     }
@@ -209,16 +215,21 @@ int32_t pm_metal_ip_tx_l4(uint32_t dst_ip_host, uint8_t proto,
     uint32_t frame_len;
     const uint8_t *dst_mac;
     uint32_t nh;
+    static const uint8_t bcast_mac[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
     if (!g_ready || l4 == NULL || l4_len == 0u || l4_len + 20u > 1500u) {
         return -1;
     }
 
-    nh = ip_nexthop(dst_ip_host);
-    dst_mac = pm_metal_ip_arp_lookup(nh);
-    if (dst_mac == NULL) {
-        (void)tx_arp_request(nh);
-        return -2;
+    if (dst_ip_host == 0xffffffffu) {
+        dst_mac = bcast_mac;
+    } else {
+        nh = ip_nexthop(dst_ip_host);
+        dst_mac = pm_metal_ip_arp_lookup(nh);
+        if (dst_mac == NULL) {
+            (void)tx_arp_request(nh);
+            return -2;
+        }
     }
 
     ip_len = 20u + l4_len;
@@ -385,7 +396,7 @@ static void on_frame(void *ctx, const uint8_t *frame, uint32_t len)
         dst = get_u32(frame + 14 + 16);
         /* Learn L2 mapping from the frame that just arrived. */
         pm_metal_ip_arp_cache_put(src, frame + 6);
-        if (dst != g_addr) {
+        if (dst != g_addr && dst != 0xffffffffu && g_addr != 0u) {
             return;
         }
         if (proto == IP_PROTO_ICMP) {
@@ -451,6 +462,22 @@ uint32_t pm_metal_ip_addr(void)
 uint32_t pm_metal_ip_gw(void)
 {
     return g_gw;
+}
+
+uint32_t pm_metal_ip_mask(void)
+{
+    return g_mask;
+}
+
+int32_t pm_metal_ip_set_addrs(uint32_t addr, uint32_t mask, uint32_t gw)
+{
+    if (!g_ready) {
+        return -1;
+    }
+    g_addr = addr;
+    g_mask = mask;
+    g_gw = gw;
+    return 0;
 }
 
 int32_t pm_metal_ip_announce(void)

@@ -23,9 +23,12 @@ extern "C" {
 
 int32_t pm_metal_ip_init(uint32_t addr_be, uint32_t mask_be, uint32_t gw_be);
 int32_t pm_metal_ip_ready(void);
+/* Apply a new address/mask/gw after init (e.g. DHCP lease). */
+int32_t pm_metal_ip_set_addrs(uint32_t addr, uint32_t mask, uint32_t gw);
 
 uint32_t pm_metal_ip_addr(void);
 uint32_t pm_metal_ip_gw(void);
+uint32_t pm_metal_ip_mask(void);
 
 /* TX gratuitous ARP / announce for our address. */
 int32_t pm_metal_ip_announce(void);

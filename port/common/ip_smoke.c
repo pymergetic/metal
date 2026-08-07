@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "pymergetic/metal/net/dhcp.h"
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/ip_internal.h"
@@ -253,9 +254,9 @@ static int ping_smoke(void)
 int pm_metal_ip_smoke(void)
 {
     int i;
+    pm_metal_dhcp_lease_t lease;
 
-    if (pm_metal_ip_init(PM_METAL_IP_DEFAULT_ADDR, PM_METAL_IP_DEFAULT_MASK,
-                         PM_METAL_IP_DEFAULT_GW) != 0) {
+    if (pm_metal_ip_init(0, 0, 0) != 0) {
         uart_puts("ip init fail\n");
         return -1;
     }
@@ -263,6 +264,18 @@ int pm_metal_ip_smoke(void)
         uart_puts("ip ready fail\n");
         return -1;
     }
+
+    memset(&lease, 0, sizeof(lease));
+    if (pm_metal_dhcp_run(&lease) != 0) {
+        uart_puts("dhcp fail\n");
+        return -1;
+    }
+    if (pm_metal_ip_set_addrs(lease.yiaddr, lease.mask, lease.gw) != 0) {
+        uart_puts("dhcp apply fail\n");
+        return -1;
+    }
+    uart_puts("dhcp ok\n");
+
     if (pm_metal_ip_announce() != 0) {
         uart_puts("ip announce fail\n");
         return -1;

@@ -27,3 +27,8 @@ int32_t pm_metal_ssh_banner_sent(void)
 {
     return g_sent;
 }
+
+void pm_metal_ssh_banner_reset(void)
+{
+    g_sent = 0;
+}

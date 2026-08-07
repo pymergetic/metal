@@ -69,11 +69,15 @@ CFLAGS_METAL += -DMETAL_UPY_SMOKE=1
 endif
 
 # LIVE=1 → after smoke stay up serving HTTP on :80 (needs hostfwd)
+# LIVE_SSH=1 → after smoke stay up sending SSH banner on :22
 LIVE ?= 0
-ifeq ($(LIVE),1)
-CFLAGS_METAL += -DMETAL_LIVE=1
+LIVE_SSH ?= 0
+ifeq ($(LIVE_SSH),1)
+CFLAGS_METAL += -DMETAL_LIVE_SSH=1 -DMETAL_LIVE=0
+else ifeq ($(LIVE),1)
+CFLAGS_METAL += -DMETAL_LIVE=1 -DMETAL_LIVE_SSH=0
 else
-CFLAGS_METAL += -DMETAL_LIVE=0
+CFLAGS_METAL += -DMETAL_LIVE=0 -DMETAL_LIVE_SSH=0
 endif
 
 ifeq ($(LINK_WAMR),1)
@@ -106,6 +110,7 @@ SRC_C = \
 	common/tui_smoke.c \
 	common/kbd_smoke.c \
 	common/live_http.c \
+	common/live_ssh.c \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
 	shared/runtime/stdout_helpers.c \
@@ -128,7 +133,7 @@ OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
-OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o
+OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -197,6 +202,10 @@ $(BUILD)/metal_http.o: $(METAL)/net/http/http.c | $(BUILD)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_ssh.o: $(METAL)/net/ssh/ssh_banner.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_dhcp.o: $(METAL)/net/ip/dhcp.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -280,6 +289,7 @@ run: $(BUILD)/metal.qemu.elf
 	if grep -q "console ok" $(BUILD)/serial.log \
 	  && grep -q "floor ok" $(BUILD)/serial.log \
 	  && grep -q "net ok" $(BUILD)/serial.log \
+	  && grep -q "dhcp ok" $(BUILD)/serial.log \
 	  && grep -q "ping ok" $(BUILD)/serial.log \
 	  && grep -q "ip ok" $(BUILD)/serial.log \
 	  && grep -q "udp ok" $(BUILD)/serial.log \
@@ -335,6 +345,42 @@ live-http: $(BUILD)/metal.qemu.elf
 	  exit 0; \
 	fi; \
 	echo "X86_64_BIOS_LIVE_HTTP_FAIL ENGINE=$(ENGINE)"; \
+	exit 1
+
+# LIVE_SSH=1 image + hostfwd; read SSH banner via host :22022.
+live-ssh: $(BUILD)/metal.qemu.elf
+	@test "$(LIVE_SSH)" = "1" || { echo "live-ssh requires LIVE_SSH=1"; exit 1; }
+	@set +e; \
+	rm -f $(BUILD)/serial.log; \
+	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
+		-netdev user,id=n0,hostfwd=tcp::22022-:22 \
+		-device virtio-net-pci,netdev=n0 \
+		-display none -serial file:$(BUILD)/serial.log \
+		-kernel $(BUILD)/metal.qemu.elf & \
+	qpid=$$!; \
+	ok=0; \
+	for i in $$(seq 1 200); do \
+	  if grep -a -q "live ssh" $(BUILD)/serial.log 2>/dev/null; then ok=1; break; fi; \
+	  if ! kill -0 $$qpid 2>/dev/null; then break; fi; \
+	  sleep 0.1; \
+	done; \
+	if [ $$ok -ne 1 ]; then \
+	  kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	  echo "live-ssh: guest never reached live ssh"; \
+	  tail -c 2000 $(BUILD)/serial.log 2>/dev/null || true; \
+	  exit 1; \
+	fi; \
+	banner=$$(timeout 3 nc -w 2 127.0.0.1 22022 2>/dev/null | tr -d '\r' | head -n1); \
+	ec=$$?; \
+	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	echo "----- serial (tail) -----"; \
+	grep -a -E "ok|live ssh|fail" $(BUILD)/serial.log 2>/dev/null | tail -30 || true; \
+	echo "ssh banner=[$$banner] ec=$$ec"; \
+	if echo "$$banner" | grep -q "SSH-2.0-metal"; then \
+	  echo "X86_64_BIOS_LIVE_SSH_OK ENGINE=$(ENGINE)"; \
+	  exit 0; \
+	fi; \
+	echo "X86_64_BIOS_LIVE_SSH_FAIL ENGINE=$(ENGINE)"; \
 	exit 1
 
 clean:

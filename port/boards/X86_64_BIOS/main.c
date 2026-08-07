@@ -13,6 +13,7 @@
 #include "kbd_smoke.h"
 #include "wamr_smoke.h"
 #include "live_http.h"
+#include "live_ssh.h"
 
 void uart_init(void);
 void uart_puts(const char *s);
@@ -23,6 +24,10 @@ void uart_puts(const char *s);
 
 #ifndef METAL_LIVE
 #define METAL_LIVE 0
+#endif
+
+#ifndef METAL_LIVE_SSH
+#define METAL_LIVE_SSH 0
 #endif
 
 void pm_metal_bios_main(uint32_t magic, void *mb_info)
@@ -100,7 +105,9 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
 
     mp_metal_upy_run(METAL_UPY_SMOKE);
 
-#if METAL_LIVE
+#if METAL_LIVE_SSH
+    pm_metal_live_ssh();
+#elif METAL_LIVE
     pm_metal_live_http();
 #else
     outw(0x501u, 0u);

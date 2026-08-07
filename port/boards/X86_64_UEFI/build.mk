@@ -66,10 +66,13 @@ CFLAGS_METAL += -DMETAL_UPY_SMOKE=1
 endif
 
 LIVE ?= 0
-ifeq ($(LIVE),1)
-CFLAGS_METAL += -DMETAL_LIVE=1
+LIVE_SSH ?= 0
+ifeq ($(LIVE_SSH),1)
+CFLAGS_METAL += -DMETAL_LIVE_SSH=1 -DMETAL_LIVE=0
+else ifeq ($(LIVE),1)
+CFLAGS_METAL += -DMETAL_LIVE=1 -DMETAL_LIVE_SSH=0
 else
-CFLAGS_METAL += -DMETAL_LIVE=0
+CFLAGS_METAL += -DMETAL_LIVE=0 -DMETAL_LIVE_SSH=0
 endif
 
 ifeq ($(LINK_WAMR),1)
@@ -97,6 +100,7 @@ SRC_C = \
 	common/tui_smoke.c \
 	common/kbd_smoke.c \
 	common/live_http.c \
+	common/live_ssh.c \
 	common/fsys/chkstk.c \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
@@ -120,7 +124,7 @@ OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
-OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o
+OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -189,6 +193,10 @@ $(BUILD)/metal_http.o: $(METAL)/net/http/http.c | $(BUILD)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_ssh.o: $(METAL)/net/ssh/ssh_banner.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_dhcp.o: $(METAL)/net/ip/dhcp.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -266,6 +274,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	  if grep -a -q "console ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "floor ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "net ok" $(BUILD)/serial.log 2>/dev/null \
+	     && grep -a -q "dhcp ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "ping ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "ip ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "udp ok" $(BUILD)/serial.log 2>/dev/null \
@@ -286,7 +295,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	done; \
 	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	echo "----- serial (trimmed) -----"; \
-	grep -a -E "metal |console ok|floor ok|net ok|ping ok|ip ok|udp ok|dns ok|tcp ok|http ok|ssh ok|draw ok|vt ok|tui ok|kbd ok|wamr ok|framebuf ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
+	grep -a -E "metal |console ok|floor ok|net ok|dhcp ok|ping ok|ip ok|udp ok|dns ok|tcp ok|http ok|ssh ok|draw ok|vt ok|tui ok|kbd ok|wamr ok|framebuf ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
 	if [ $$ok -eq 1 ]; then echo "X86_64_UEFI_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR) LLD=$(LLD_LINK)"; exit 0; fi; \
 	echo "X86_64_UEFI_FAIL ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	tail -c 1600 $(BUILD)/serial.log 2>/dev/null || true; \

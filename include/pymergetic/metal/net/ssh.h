@@ -13,6 +13,9 @@ int32_t pm_metal_ssh_banner_send(void);
 /* 1 after banner TX succeeded. */
 int32_t pm_metal_ssh_banner_sent(void);
 
+/* Clear sent flag so the next established peer gets a fresh banner. */
+void pm_metal_ssh_banner_reset(void);
+
 #ifdef __cplusplus
 }
 #endif
