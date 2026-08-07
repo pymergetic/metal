@@ -80,7 +80,15 @@ void mp_metal_upy_run(int smoke) {
             "assert n.resolve('10.0.2.2')=='10.0.2.2'\n"
             "a=n.resolve('example.com')\n"
             "assert a and a!='0.0.0.0'\n"
-            "print('dns py ok')\n",
+            "print('dns py ok')\n"
+            "import socket\n"
+            "ai=socket.getaddrinfo(a,80)[0][-1]\n"
+            "s=socket.socket()\n"
+            "s.connect(ai)\n"
+            "s.send(b'GET / HTTP/1.0\\r\\nHost: example.com\\r\\nConnection: close\\r\\n\\r\\n')\n"
+            "d=s.recv(64)\n"
+            "assert d[:5]==b'HTTP/'\n"
+            "print('socket ok')\n",
             MP_PARSE_FILE_INPUT);
 #endif
         do_str("print('upy ok')", MP_PARSE_SINGLE_INPUT);

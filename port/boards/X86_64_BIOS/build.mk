@@ -118,7 +118,8 @@ SRC_C = \
 	shared/libc/printf.c \
 	shared/netutils/netutils.c \
 	extmod/modframebuf.c \
-	extmod/modnetwork.c
+	extmod/modnetwork.c \
+	extmod/modsocket.c
 
 ifeq ($(LINK_WAMR),1)
 SRC_C += \
@@ -130,7 +131,7 @@ SRC_C += shared/libc/string0.c
 endif
 
 SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebuf.c \
-	extmod/modnetwork.c common/network_metal_nic.c
+	extmod/modnetwork.c extmod/modsocket.c common/network_metal_nic.c
 
 OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
@@ -320,6 +321,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "framebuf ok" $(BUILD)/serial.log \
 	  && grep -q "network ok" $(BUILD)/serial.log \
 	  && grep -q "dns py ok" $(BUILD)/serial.log \
+	  && grep -q "socket ok" $(BUILD)/serial.log \
 	  && grep -q "qemu ok" $(BUILD)/serial.log; then \
 	  echo "X86_64_BIOS_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	  exit 0; \

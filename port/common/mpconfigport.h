@@ -58,7 +58,8 @@
 
 #define MICROPY_PY_NETWORK                (1)
 #define MICROPY_PY_LWIP                   (0)
-#define MICROPY_PY_SOCKET                 (0)
+#define MICROPY_PY_SOCKET                 (1)
+#define MICROPY_PY_SOCKET_EXTENDED_STATE  (1)
 #define MICROPY_PY_NETWORK_HOSTNAME_DEFAULT "metal"
 extern const struct _mp_obj_type_t mp_network_metal_nic_type;
 #define MICROPY_PORT_NETWORK_INTERFACES \

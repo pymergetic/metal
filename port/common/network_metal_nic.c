@@ -13,6 +13,7 @@
 
 #include "pymergetic/metal/net/dns.h"
 #include "pymergetic/metal/net/ip.h"
+#include "pymergetic/metal/net/tcp.h"
 #include "pymergetic/metal/net/upy_nic.h"
 
 #include <stdint.h>
@@ -69,16 +70,47 @@ static void metal_deinit(void)
     metal_nic_singleton.active = false;
 }
 
+static uint32_t octets_to_ip(const byte *ip)
+{
+    return ((uint32_t)ip[0] << 24) | ((uint32_t)ip[1] << 16) | ((uint32_t)ip[2] << 8) | (uint32_t)ip[3];
+}
+
+static int sock_poll_budget(mod_network_socket_obj_t *socket)
+{
+    int n;
+
+    if (socket == NULL || socket->timeout < 0) {
+        /* UEFI virtio path needs a larger busy-wait than BIOS. */
+        return 80000;
+    }
+    if (socket->timeout == 0) {
+        return 1;
+    }
+    /* timeout is ms; each poll is a tight virtio spin — scale coarsely. */
+    n = (int)socket->timeout * 16;
+    return n < 64 ? 64 : n;
+}
+
 static int metal_socket(mod_network_socket_obj_t *socket, int *_errno)
 {
-    (void)socket;
-    *_errno = MP_EOPNOTSUPP;
-    return -1;
+    if (socket == NULL) {
+        *_errno = MP_EINVAL;
+        return -1;
+    }
+    if (socket->type != MOD_NETWORK_SOCK_STREAM) {
+        *_errno = MP_EOPNOTSUPP;
+        return -1;
+    }
+    socket->_private = NULL;
+    *_errno = 0;
+    return 0;
 }
 
 static void metal_close(mod_network_socket_obj_t *socket)
 {
-    (void)socket;
+    if (socket != NULL) {
+        socket->_private = NULL;
+    }
 }
 
 static int metal_bind(mod_network_socket_obj_t *socket, byte *ip, mp_uint_t port, int *_errno)
@@ -111,28 +143,109 @@ static int metal_accept(mod_network_socket_obj_t *socket, mod_network_socket_obj
 
 static int metal_connect(mod_network_socket_obj_t *socket, byte *ip, mp_uint_t port, int *_errno)
 {
-    (void)socket;
-    (void)ip;
-    (void)port;
-    *_errno = MP_EOPNOTSUPP;
+    uint32_t addr;
+    int i;
+    int32_t rc = -1;
+    int budget;
+
+    if (socket == NULL || ip == NULL || port == 0u || port > 65535u) {
+        *_errno = MP_EINVAL;
+        return -1;
+    }
+    if (socket->type != MOD_NETWORK_SOCK_STREAM) {
+        *_errno = MP_EOPNOTSUPP;
+        return -1;
+    }
+    if (socket->_private != NULL) {
+        *_errno = MP_EISCONN;
+        return -1;
+    }
+    addr = octets_to_ip(ip);
+    for (i = 0; i < 32; i++) {
+        rc = pm_metal_tcp_connect(addr, (uint16_t)port);
+        if (rc == 0) {
+            break;
+        }
+        if (rc != -2) {
+            *_errno = MP_EIO;
+            return -1;
+        }
+        pm_metal_ip_poll();
+    }
+    if (rc != 0) {
+        *_errno = MP_EHOSTUNREACH;
+        return -1;
+    }
+    budget = sock_poll_budget(socket);
+    for (i = 0; i < budget; i++) {
+        pm_metal_ip_poll();
+        if (pm_metal_tcp_established()) {
+            socket->_private = (void *)(uintptr_t)1;
+            return 0;
+        }
+    }
+    *_errno = (socket->timeout == 0) ? MP_EAGAIN : MP_ETIMEDOUT;
     return -1;
 }
 
 static mp_uint_t metal_send(mod_network_socket_obj_t *socket, const byte *buf, mp_uint_t len, int *_errno)
 {
-    (void)socket;
-    (void)buf;
-    (void)len;
-    *_errno = MP_EOPNOTSUPP;
+    int i;
+    int32_t rc = -1;
+    int budget;
+
+    if (socket == NULL || socket->_private == NULL || buf == NULL || len == 0u) {
+        *_errno = MP_EINVAL;
+        return (mp_uint_t)-1;
+    }
+    if (!pm_metal_tcp_established()) {
+        *_errno = MP_ENOTCONN;
+        return (mp_uint_t)-1;
+    }
+    budget = sock_poll_budget(socket);
+    for (i = 0; i < budget; i++) {
+        rc = pm_metal_tcp_send(buf, (uint32_t)len);
+        if (rc == 0) {
+            return len;
+        }
+        if (rc != -2) {
+            *_errno = MP_EIO;
+            return (mp_uint_t)-1;
+        }
+        pm_metal_ip_poll();
+    }
+    *_errno = (socket->timeout == 0) ? MP_EAGAIN : MP_ETIMEDOUT;
     return (mp_uint_t)-1;
 }
 
 static mp_uint_t metal_recv(mod_network_socket_obj_t *socket, byte *buf, mp_uint_t len, int *_errno)
 {
-    (void)socket;
-    (void)buf;
-    (void)len;
-    *_errno = MP_EOPNOTSUPP;
+    uint32_t n = 0;
+    int i;
+    int32_t rc;
+    int budget;
+
+    if (socket == NULL || socket->_private == NULL || buf == NULL || len == 0u) {
+        *_errno = MP_EINVAL;
+        return (mp_uint_t)-1;
+    }
+    if (!pm_metal_tcp_established()) {
+        *_errno = MP_ENOTCONN;
+        return (mp_uint_t)-1;
+    }
+    budget = sock_poll_budget(socket);
+    for (i = 0; i < budget; i++) {
+        pm_metal_ip_poll();
+        rc = pm_metal_tcp_recv(buf, (uint32_t)len, &n);
+        if (rc == 1 && n > 0u) {
+            return n;
+        }
+        if (socket->timeout == 0) {
+            *_errno = MP_EAGAIN;
+            return (mp_uint_t)-1;
+        }
+    }
+    *_errno = MP_ETIMEDOUT;
     return (mp_uint_t)-1;
 }
 
@@ -174,8 +287,11 @@ static int metal_setsockopt(mod_network_socket_obj_t *socket, mp_uint_t level, m
 
 static int metal_settimeout(mod_network_socket_obj_t *socket, mp_uint_t timeout_ms, int *_errno)
 {
-    (void)socket;
-    (void)timeout_ms;
+    if (socket == NULL) {
+        *_errno = MP_EINVAL;
+        return -1;
+    }
+    socket->timeout = (int32_t)timeout_ms;
     *_errno = 0;
     return 0;
 }
