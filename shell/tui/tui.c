@@ -8,6 +8,7 @@
 #include "pymergetic/metal/dev/net.h"
 #include "pymergetic/metal/draw.h"
 #include "pymergetic/metal/mem.h"
+#include "pymergetic/metal/net/faces.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/vt.h"
 
@@ -267,6 +268,7 @@ static void paint_dashboard_cells(pm_metal_vt_t *vt)
     char log_line[TUI_LEFT_INNER + 1];
     char sys_line[TUI_RIGHT_INNER + 1];
     char net_line[TUI_LEFT_INNER + 1];
+    char faces_line[TUI_LEFT_INNER + 1];
     char mem_line[TUI_RIGHT_INNER + 1];
     char footer[PM_METAL_VT_COLS + 1];
     int32_t r;
@@ -285,6 +287,7 @@ static void paint_dashboard_cells(pm_metal_vt_t *vt)
     build_log_line(log_line, sizeof(log_line));
     build_system_line(sys_line, sizeof(sys_line));
     build_network_line(net_line, sizeof(net_line));
+    pm_metal_net_face_format(faces_line, (uint32_t)sizeof(faces_line));
     build_memory_line(mem_line, sizeof(mem_line));
 
     vt_pane_row(vt, 2, " log", " system");
@@ -296,7 +299,8 @@ static void paint_dashboard_cells(pm_metal_vt_t *vt)
     vt_box_row(vt, 11);
     vt_pane_row(vt, 12, " network", " memory");
     vt_pane_row(vt, 13, net_line, mem_line);
-    for (r = 14; r <= 20; r++) {
+    vt_pane_row(vt, 14, faces_line, "");
+    for (r = 15; r <= 20; r++) {
         vt_pane_row(vt, r, "", "");
     }
     vt_box_row(vt, 21);

@@ -89,6 +89,12 @@ int pm_metal_tui_smoke(void)
         pm_metal_mem_free(fb);
         return -1;
     }
+    if (!row_has(vt->cells[14], "http") || !row_has(vt->cells[14], "ssh") ||
+        !row_has(vt->cells[14], "ntp")) {
+        uart_puts("tui faces fail\n");
+        pm_metal_mem_free(fb);
+        return -1;
+    }
 
     pm_metal_mem_free(fb);
     uart_puts("tui ok\n");

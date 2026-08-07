@@ -6,6 +6,7 @@
 
 #include "pymergetic/metal/net/dhcp.h"
 #include "pymergetic/metal/net/dns.h"
+#include "pymergetic/metal/net/faces.h"
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/ip_internal.h"
@@ -148,6 +149,7 @@ static int http_smoke(void)
         return -1;
     }
     uart_puts("http ok\n");
+    pm_metal_net_face_mark(PM_METAL_NET_FACE_HTTP);
     return 0;
 }
 
@@ -170,6 +172,7 @@ static int ssh_smoke(void)
         return -1;
     }
     uart_puts("ssh ok\n");
+    pm_metal_net_face_mark(PM_METAL_NET_FACE_SSH);
     return 0;
 }
 
@@ -193,6 +196,7 @@ static int http_client_smoke(void)
         return -1;
     }
     uart_puts("http client ok\n");
+    pm_metal_net_face_mark(PM_METAL_NET_FACE_HTTP_CLI);
     return 0;
 }
 
@@ -212,6 +216,7 @@ static int ntp_smoke(void)
         return -1;
     }
     uart_puts("ntp ok\n");
+    pm_metal_net_face_mark(PM_METAL_NET_FACE_NTP);
     return 0;
 }
 
@@ -280,6 +285,7 @@ int pm_metal_ip_smoke(void)
         return -1;
     }
     uart_puts("dhcp ok\n");
+    pm_metal_net_face_mark(PM_METAL_NET_FACE_DHCP);
 
     if (pm_metal_ip_announce() != 0) {
         uart_puts("ip announce fail\n");
