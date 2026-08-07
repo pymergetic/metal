@@ -90,7 +90,8 @@ int pm_metal_tui_smoke(void)
         return -1;
     }
     if (!row_has(vt->cells[14], "http") || !row_has(vt->cells[14], "ssh") ||
-        !row_has(vt->cells[14], "ntp") || !row_has(vt->cells[14], "tftp")) {
+        !row_has(vt->cells[14], "ntp") || !row_has(vt->cells[14], "tftp") ||
+        !row_has(vt->cells[14], "sshc")) {
         uart_puts("tui faces fail\n");
         pm_metal_mem_free(fb);
         return -1;

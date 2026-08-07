@@ -20,6 +20,9 @@ extern "C" {
 #ifndef PM_METAL_IP_DEFAULT_DNS
 #define PM_METAL_IP_DEFAULT_DNS 0x0a000203u /* 10.0.2.3 QEMU user DNS */
 #endif
+#ifndef PM_METAL_IP_QEMU_SSH
+#define PM_METAL_IP_QEMU_SSH 0x0a000264u /* 10.0.2.100 guestfwd SSH banner */
+#endif
 
 int32_t pm_metal_ip_init(uint32_t addr_be, uint32_t mask_be, uint32_t gw_be);
 int32_t pm_metal_ip_ready(void);

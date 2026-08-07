@@ -242,6 +242,35 @@ static int tftp_smoke(void)
     return 0;
 }
 
+static int ssh_client_smoke(void)
+{
+    uint8_t buf[128];
+    uint32_t n = 0;
+    int32_t rc;
+    int attempt;
+
+    /* QEMU user-net guestfwd at 10.0.2.100:22 (see qemu-ssh-banner.sh). */
+    for (attempt = 0; attempt < 3; attempt++) {
+        n = 0;
+        rc = pm_metal_ssh_client_ident_ip(PM_METAL_IP_QEMU_SSH, 22, buf, sizeof(buf), &n);
+        if (rc == 0 && n >= 7u) {
+            uart_puts("ssh client ok\n");
+            pm_metal_net_face_mark(PM_METAL_NET_FACE_SSH_CLI);
+            return 0;
+        }
+    }
+    if (rc == -3) {
+        uart_puts("ssh client syn fail\n");
+        return -1;
+    }
+    if (rc == -2) {
+        uart_puts("ssh client timeout\n");
+        return -1;
+    }
+    uart_puts("ssh client fail\n");
+    return -1;
+}
+
 static int ping_smoke(void)
 {
     int i;
@@ -342,6 +371,9 @@ int pm_metal_ip_smoke(void)
         return -1;
     }
     if (tftp_smoke() != 0) {
+        return -1;
+    }
+    if (ssh_client_smoke() != 0) {
         return -1;
     }
 

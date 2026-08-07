@@ -14,6 +14,7 @@ extern "C" {
 #define PM_METAL_NET_FACE_HTTP_CLI (1u << 3) /* outbound client */
 #define PM_METAL_NET_FACE_NTP      (1u << 4)
 #define PM_METAL_NET_FACE_TFTP     (1u << 5)
+#define PM_METAL_NET_FACE_SSH_CLI  (1u << 6) /* outbound client */
 
 void pm_metal_net_face_mark(uint32_t bit);
 uint32_t pm_metal_net_face_bits(void);
