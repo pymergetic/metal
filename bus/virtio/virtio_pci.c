@@ -17,6 +17,9 @@
 #define VIRTIO_PCI_CAP_NOTIFY_CFG    2u
 #define VIRTIO_PCI_CAP_DEVICE_CFG    4u
 
+#define VRING_DESC_F_NEXT  1u
+#define VRING_DESC_F_WRITE 2u
+
 #pragma pack(1)
 typedef struct {
     uint8_t cap_id;
@@ -47,6 +50,30 @@ typedef struct {
     uint64_t queue_avail;
     uint64_t queue_used;
 } metal_virtio_common_cfg_t;
+
+typedef struct {
+    uint64_t addr;
+    uint32_t len;
+    uint16_t flags;
+    uint16_t next;
+} metal_vring_desc_t;
+
+typedef struct {
+    uint16_t flags;
+    uint16_t idx;
+    uint16_t ring[];
+} metal_vring_avail_t;
+
+typedef struct {
+    uint32_t id;
+    uint32_t len;
+} metal_vring_used_elem_t;
+
+typedef struct {
+    uint16_t flags;
+    uint16_t idx;
+    metal_vring_used_elem_t ring[];
+} metal_vring_used_t;
 #pragma pack()
 
 typedef struct {
@@ -66,6 +93,8 @@ typedef struct {
     uint8_t *device_base;
     uint64_t features;
     uint16_t pci_device_id;
+    pm_metal_virtq_t *vqs;
+    uint16_t n_vqs;
 } metal_vdev_priv_t;
 
 static inline void pm_metal_mem_fence(void)
@@ -76,6 +105,22 @@ static inline void pm_metal_mem_fence(void)
 static metal_vdev_priv_t *virtio_priv(pm_metal_virtio_dev_t *dev)
 {
     return (metal_vdev_priv_t *)(uintptr_t)dev->pci_io;
+}
+
+void *pm_metal_virtio_pages_alloc(unsigned pages)
+{
+    if (pages == 0) {
+        return NULL;
+    }
+    return pm_metal_mem_memalign(PM_METAL_MEM_PAGE_SIZE, (size_t)pages * PM_METAL_MEM_PAGE_SIZE);
+}
+
+void pm_metal_virtio_pages_free(void *buf, unsigned pages)
+{
+    (void)pages;
+    if (buf != NULL) {
+        pm_metal_mem_free(buf);
+    }
 }
 
 static int cfg_rd32(metal_vdev_priv_t *p, uint32_t off, uint32_t *val)
@@ -97,6 +142,25 @@ static int cfg_wr32(metal_vdev_priv_t *p, uint32_t off, uint32_t val)
     return PM_ST_OK;
 }
 
+static int cfg_rd16(metal_vdev_priv_t *p, uint32_t off, uint16_t *val)
+{
+    if (p->common_base == NULL) {
+        return PM_ST_UNSUPPORTED;
+    }
+    *val = *(volatile uint16_t *)(p->common_base + off);
+    return PM_ST_OK;
+}
+
+static int cfg_wr16(metal_vdev_priv_t *p, uint32_t off, uint16_t val)
+{
+    if (p->common_base == NULL) {
+        return PM_ST_UNSUPPORTED;
+    }
+    *(volatile uint16_t *)(p->common_base + off) = val;
+    pm_metal_mem_fence();
+    return PM_ST_OK;
+}
+
 static int cfg_rd8(metal_vdev_priv_t *p, uint32_t off, uint8_t *val)
 {
     if (p->common_base == NULL) {
@@ -114,6 +178,14 @@ static int cfg_wr8(metal_vdev_priv_t *p, uint32_t off, uint8_t val)
     *(volatile uint8_t *)(p->common_base + off) = val;
     pm_metal_mem_fence();
     return PM_ST_OK;
+}
+
+static int cfg_wr64(metal_vdev_priv_t *p, uint32_t off, uint64_t val)
+{
+    if (PM_ST_FAILED(cfg_wr32(p, off, (uint32_t)val))) {
+        return PM_ST_UNSUPPORTED;
+    }
+    return cfg_wr32(p, off + 4u, (uint32_t)(val >> 32));
 }
 
 static int find_cap(uint8_t bus, uint8_t dev, uint8_t func, uint8_t type,
@@ -272,6 +344,7 @@ int pm_metal_virtio_open(uint16_t pci_device_id, pm_metal_virtio_dev_t *out)
 void pm_metal_virtio_close(pm_metal_virtio_dev_t *dev)
 {
     metal_vdev_priv_t *p;
+    uint16_t i;
 
     if (dev == NULL || dev->pci_io == NULL) {
         return;
@@ -279,6 +352,19 @@ void pm_metal_virtio_close(pm_metal_virtio_dev_t *dev)
 
     p = virtio_priv(dev);
     (void)cfg_wr8(p, offsetof(metal_virtio_common_cfg_t, device_status), 0);
+
+    if (p->vqs != NULL) {
+        for (i = 0; i < p->n_vqs; i++) {
+            if (p->vqs[i].ring_mem != NULL) {
+                pm_metal_virtio_pages_free(p->vqs[i].ring_mem, p->vqs[i].ring_pages);
+            }
+            if (p->vqs[i].next != NULL) {
+                pm_metal_mem_free((uint8_t *)p->vqs[i].next);
+            }
+        }
+        pm_metal_mem_free((uint8_t *)p->vqs);
+    }
+
     pm_metal_mem_free((uint8_t *)p);
     memset(dev, 0, sizeof(*dev));
 }
@@ -346,6 +432,208 @@ uint8_t pm_metal_virtio_get_status(pm_metal_virtio_dev_t *dev)
     }
     (void)cfg_rd8(virtio_priv(dev), offsetof(metal_virtio_common_cfg_t, device_status), &st);
     return st;
+}
+
+int pm_metal_virtio_driver_ok(pm_metal_virtio_dev_t *dev)
+{
+    uint8_t st;
+
+    st = pm_metal_virtio_get_status(dev);
+    st |= PM_METAL_VIRTIO_S_DRIVER_OK;
+    pm_metal_virtio_set_status(dev, st);
+    return 0;
+}
+
+int pm_metal_virtio_setup_queue(pm_metal_virtio_dev_t *dev, uint16_t qidx, uint16_t want_size)
+{
+    metal_vdev_priv_t *p;
+    pm_metal_virtq_t *vq;
+    uint16_t qsz;
+    uintptr_t desc_bytes;
+    uintptr_t avail_bytes;
+    uintptr_t used_bytes;
+    uintptr_t total;
+    uintptr_t pages;
+    uint8_t *mem;
+    uint16_t i;
+
+    if (dev == NULL || dev->pci_io == NULL) {
+        return -1;
+    }
+
+    p = virtio_priv(dev);
+    (void)cfg_wr16(p, offsetof(metal_virtio_common_cfg_t, queue_select), qidx);
+    qsz = 0;
+    (void)cfg_rd16(p, offsetof(metal_virtio_common_cfg_t, queue_size), &qsz);
+    if (qsz == 0) {
+        return -1;
+    }
+    if (want_size > 0 && want_size < qsz) {
+        qsz = want_size;
+    }
+
+    if (p->vqs == NULL) {
+        p->vqs = (pm_metal_virtq_t *)pm_metal_mem_alloc(sizeof(pm_metal_virtq_t) * 8u);
+        if (p->vqs == NULL) {
+            return -1;
+        }
+        memset(p->vqs, 0, sizeof(pm_metal_virtq_t) * 8u);
+        p->n_vqs = 8;
+        dev->vqs = p->vqs;
+        dev->n_vqs = 8;
+    }
+
+    if (qidx >= p->n_vqs) {
+        return -1;
+    }
+
+    vq = &p->vqs[qidx];
+    desc_bytes = sizeof(metal_vring_desc_t) * qsz;
+    avail_bytes = sizeof(uint16_t) * (3u + qsz);
+    used_bytes = sizeof(uint16_t) * 3u + sizeof(metal_vring_used_elem_t) * qsz;
+    total = desc_bytes + avail_bytes + 4096u + used_bytes;
+    pages = PM_METAL_VIRTIO_SIZE_TO_PAGES(total);
+    mem = pm_metal_virtio_pages_alloc((unsigned)pages);
+    if (mem == NULL) {
+        return -1;
+    }
+
+    memset(mem, 0, pages * PM_METAL_MEM_PAGE_SIZE);
+    vq->qidx = qidx;
+    vq->size = qsz;
+    vq->ring_mem = mem;
+    vq->ring_pages = (uint32_t)pages;
+    vq->desc = mem;
+    vq->avail = mem + desc_bytes;
+    vq->used = mem + ((desc_bytes + avail_bytes + 4095u) & ~4095u);
+    vq->desc_phys = (uint64_t)(uintptr_t)vq->desc;
+    vq->avail_phys = (uint64_t)(uintptr_t)vq->avail;
+    vq->used_phys = (uint64_t)(uintptr_t)vq->used;
+    vq->free_head = 0;
+    vq->num_free = qsz;
+    vq->last_used = 0;
+    vq->next = (uint16_t *)pm_metal_mem_alloc(sizeof(uint16_t) * qsz);
+    if (vq->next == NULL) {
+        pm_metal_virtio_pages_free(mem, (unsigned)pages);
+        return -1;
+    }
+
+    for (i = 0; i < qsz - 1u; i++) {
+        vq->next[i] = (uint16_t)(i + 1u);
+    }
+    vq->next[qsz - 1u] = 0xffffu;
+
+    (void)cfg_wr16(p, offsetof(metal_virtio_common_cfg_t, queue_select), qidx);
+    (void)cfg_wr16(p, offsetof(metal_virtio_common_cfg_t, queue_size), qsz);
+    (void)cfg_wr64(p, offsetof(metal_virtio_common_cfg_t, queue_desc), vq->desc_phys);
+    (void)cfg_wr64(p, offsetof(metal_virtio_common_cfg_t, queue_avail), vq->avail_phys);
+    (void)cfg_wr64(p, offsetof(metal_virtio_common_cfg_t, queue_used), vq->used_phys);
+    (void)cfg_rd16(p, offsetof(metal_virtio_common_cfg_t, queue_notify_off), &vq->notify_off);
+    (void)cfg_wr16(p, offsetof(metal_virtio_common_cfg_t, queue_enable), 1);
+    return 0;
+}
+
+int pm_metal_virtq_add(pm_metal_virtq_t *vq, void *buf, uint32_t len, int device_writeable,
+                       uint16_t *head_out)
+{
+    metal_vring_desc_t *desc;
+    metal_vring_avail_t *avail;
+    uint16_t head;
+    uint16_t aidx;
+
+    if (vq == NULL || buf == NULL || len == 0 || vq->num_free == 0) {
+        return -1;
+    }
+
+    head = vq->free_head;
+    vq->free_head = vq->next[head];
+    vq->num_free--;
+
+    desc = (metal_vring_desc_t *)vq->desc;
+    desc[head].addr = (uint64_t)(uintptr_t)buf;
+    desc[head].len = len;
+    desc[head].flags = (uint16_t)(device_writeable ? VRING_DESC_F_WRITE : 0);
+    desc[head].next = 0;
+
+    avail = (metal_vring_avail_t *)vq->avail;
+    aidx = avail->idx;
+    pm_metal_mem_fence();
+    avail->ring[aidx % vq->size] = head;
+    pm_metal_mem_fence();
+    avail->idx = (uint16_t)(aidx + 1u);
+
+    if (head_out != NULL) {
+        *head_out = head;
+    }
+    return 0;
+}
+
+void pm_metal_virtq_kick(pm_metal_virtio_dev_t *dev, pm_metal_virtq_t *vq)
+{
+    metal_vdev_priv_t *p;
+    uint32_t off;
+
+    if (dev == NULL || vq == NULL || dev->pci_io == NULL) {
+        return;
+    }
+
+    p = virtio_priv(dev);
+    off = vq->notify_off * p->notify_mult;
+    if (p->notify_base != NULL) {
+        *(volatile uint16_t *)(p->notify_base + off) = vq->qidx;
+        pm_metal_mem_fence();
+    }
+}
+
+int pm_metal_virtq_get_used(pm_metal_virtq_t *vq, uint16_t *head, uint32_t *len)
+{
+    metal_vring_used_t *used;
+    uint16_t uidx;
+
+    if (vq == NULL) {
+        return 0;
+    }
+
+    used = (metal_vring_used_t *)vq->used;
+    pm_metal_mem_fence();
+    uidx = used->idx;
+    if (uidx == vq->last_used) {
+        return 0;
+    }
+
+    if (head != NULL) {
+        *head = (uint16_t)used->ring[vq->last_used % vq->size].id;
+    }
+    if (len != NULL) {
+        *len = used->ring[vq->last_used % vq->size].len;
+    }
+
+    vq->last_used = (uint16_t)(vq->last_used + 1u);
+    return 1;
+}
+
+void pm_metal_virtq_free_chain(pm_metal_virtq_t *vq, uint16_t head)
+{
+    metal_vring_desc_t *desc;
+    uint16_t cur;
+    uint16_t next;
+
+    if (vq == NULL) {
+        return;
+    }
+
+    desc = (metal_vring_desc_t *)vq->desc;
+    cur = head;
+    for (;;) {
+        next = desc[cur].next;
+        vq->next[cur] = vq->free_head;
+        vq->free_head = cur;
+        vq->num_free++;
+        if ((desc[cur].flags & VRING_DESC_F_NEXT) == 0) {
+            break;
+        }
+        cur = next;
+    }
 }
 
 int pm_metal_virtio_cfg_read(pm_metal_virtio_dev_t *dev, uint32_t offset, void *buf, uint32_t len)
