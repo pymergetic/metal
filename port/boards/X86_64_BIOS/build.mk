@@ -4,10 +4,10 @@
 #   make -C ports/metal BOARD=X86_64_BIOS run
 
 BOARD_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
-# make -f is always invoked with cwd = metalmod/port
+# make -f is always invoked with cwd = metal/port
 PORT_DIR := $(CURDIR)
 COMMON := $(PORT_DIR)/common
-METALMOD := $(abspath $(PORT_DIR)/..)
+METAL := $(abspath $(PORT_DIR)/..)
 BUILD ?= build-X86_64_BIOS
 
 ENGINE ?= mp
@@ -23,7 +23,7 @@ else ifeq ($(ENGINE),mpwm)
 ENGINE_TOP := $(PACKAGES)/metalpython-wasmmod
 LINK_WAMR := 1
 else
-# port → metalmod → extmod → metalpython
+# port → metal → extmod → metalpython
 ENGINE_TOP := $(abspath $(PORT_DIR)/../../..)
 LINK_WAMR := 1
 endif
@@ -49,7 +49,7 @@ MICROPY_ROM_TEXT_COMPRESSION ?= 0
 include $(TOP)/py/py.mk
 
 INC := -I$(COMMON) -I$(BOARD_DIR) -I$(TOP) -I$(BUILD) \
-	-I$(METALMOD)/include -I$(METALMOD)/third_party/tlsf
+	-I$(METAL)/include -I$(METAL)/third_party/tlsf
 
 CFLAGS_METAL := -m64 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-mno-red-zone -fno-asynchronous-unwind-tables -fno-exceptions \
@@ -69,8 +69,8 @@ endif
 
 ifeq ($(LINK_WAMR),1)
 INC += -I$(WASMMOD)/third_party/wamr/core/iwasm/include \
-	-I$(METALMOD)/wasm/port/platform \
-	-I$(METALMOD)/libc
+	-I$(METAL)/wasm/port/platform \
+	-I$(METAL)/libc
 CFLAGS_METAL += -DBH_PLATFORM_METAL
 endif
 
@@ -116,46 +116,46 @@ WAMR_LIB := $(BUILD)/wamr-fs/libwasmmod_wamr_freestanding.a
 OBJ += $(BUILD)/metal_platform.o $(BUILD)/metal_libc_stdlib.o $(BUILD)/metal_libc_string.o
 endif
 
-$(BUILD)/metal_mem.o: $(METALMOD)/mem/mem.c | $(BUILD)
+$(BUILD)/metal_mem.o: $(METAL)/mem/mem.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_tlsf.o: $(METALMOD)/third_party/tlsf/tlsf.c | $(BUILD)
+$(BUILD)/metal_tlsf.o: $(METAL)/third_party/tlsf/tlsf.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_async.o: $(METALMOD)/async/async.c | $(BUILD)
+$(BUILD)/metal_async.o: $(METAL)/async/async.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_console.o: $(METALMOD)/console/console.c | $(BUILD)
+$(BUILD)/metal_console.o: $(METAL)/console/console.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 ifeq ($(LINK_WAMR),1)
-$(BUILD)/metal_platform.o: $(METALMOD)/wasm/port/platform/metal_platform.c | $(BUILD)
+$(BUILD)/metal_platform.o: $(METAL)/wasm/port/platform/metal_platform.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -I$(WASMMOD)/third_party/wamr/core/shared/platform/include \
 		-c -o $@ $<
 
-$(BUILD)/metal_libc_stdlib.o: $(METALMOD)/libc/stdlib.c | $(BUILD)
+$(BUILD)/metal_libc_stdlib.o: $(METAL)/libc/stdlib.c | $(BUILD)
 	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METALMOD)/libc -c -o $@ $<
+	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/libc -c -o $@ $<
 
-$(BUILD)/metal_libc_string.o: $(METALMOD)/libc/string.c | $(BUILD)
+$(BUILD)/metal_libc_string.o: $(METAL)/libc/string.c | $(BUILD)
 	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METALMOD)/libc -c -o $@ $<
+	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/libc -c -o $@ $<
 
 $(WAMR_LIB): $(WASMMOD)/ports/metal/wamr_freestanding.mk
 	$(ECHO) "WAMR freestanding $@"
 	$(Q)$(MAKE) -f $(WASMMOD)/ports/metal/wamr_freestanding.mk \
 		OUT_DIR=$(BUILD)/wamr-fs \
 		WAMR_DIR=$(WASMMOD)/third_party/wamr \
-		METAL_PLAT_INC=$(METALMOD)/wasm/port/platform \
-		METAL_PORT_INC=$(METALMOD)/wasm/port \
-		METAL_LIBC_INC=$(METALMOD)/libc \
-		METAL_SRC_INC=$(METALMOD) \
-		METAL_INCLUDE_INC=$(METALMOD)/include \
+		METAL_PLAT_INC=$(METAL)/wasm/port/platform \
+		METAL_PORT_INC=$(METAL)/wasm/port \
+		METAL_LIBC_INC=$(METAL)/libc \
+		METAL_SRC_INC=$(METAL) \
+		METAL_INCLUDE_INC=$(METAL)/include \
 		UEFI=0
 endif
 

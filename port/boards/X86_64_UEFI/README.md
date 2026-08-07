@@ -1,4 +1,4 @@
-# X86_64_UEFI (metalmod)
+# X86_64_UEFI (metal)
 
 Minimal EFI application (`UefiMain` → ConOut banner). No forge.
 

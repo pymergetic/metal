@@ -1,6 +1,6 @@
 /* Port I/O for BIOS floor (COM1, QEMU isa-debug-exit). */
-#ifndef METALMOD_BIOS_IO_H_
-#define METALMOD_BIOS_IO_H_
+#ifndef PM_METAL_BIOS_IO_H_
+#define PM_METAL_BIOS_IO_H_
 
 #include <stdint.h>
 

@@ -1,4 +1,4 @@
-# metalmod port — boards under boards/$(BOARD)/
+# metal port — boards under boards/$(BOARD)/
 BOARD ?= X86_64_BIOS
 ENGINE ?= mp
 REPL ?= 0
