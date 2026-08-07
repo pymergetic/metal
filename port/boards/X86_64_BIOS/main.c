@@ -5,6 +5,7 @@
 #include "main_upy.h"
 #include "console_smoke.h"
 #include "floor_smoke.h"
+#include "net_smoke.h"
 #include "draw_smoke.h"
 #include "vt_smoke.h"
 #include "wamr_smoke.h"
@@ -32,6 +33,13 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
     }
 
     if (pm_metal_floor_smoke() != 0) {
+        outw(0x501u, 1u);
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
+    if (pm_metal_net_smoke() != 0) {
         outw(0x501u, 1u);
         for (;;) {
             __asm__ volatile("hlt");

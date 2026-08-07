@@ -1,0 +1,36 @@
+/* x86 PCI config (CF8/CFC) and port I/O — shared by BIOS and UEFI smokes. */
+#ifndef PM_METAL_IO_PCI_H_
+#define PM_METAL_IO_PCI_H_
+
+#include <stdint.h>
+
+static inline void outb(uint16_t port, uint8_t val)
+{
+    __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline uint8_t inb(uint16_t port)
+{
+    uint8_t val;
+    __asm__ volatile("inb %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
+static inline void outw(uint16_t port, uint16_t val)
+{
+    __asm__ volatile("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline void outl(uint16_t port, uint32_t val)
+{
+    __asm__ volatile("outl %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline uint32_t inl(uint16_t port)
+{
+    uint32_t val;
+    __asm__ volatile("inl %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
+#endif

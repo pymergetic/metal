@@ -89,6 +89,7 @@ SRC_C = \
 	common/main_upy.c \
 	common/metal_board_time.c \
 	common/floor_smoke.c \
+	common/net_smoke.c \
 	common/console_smoke.c \
 	common/draw_smoke.c \
 	common/vt_smoke.c \
@@ -113,6 +114,7 @@ OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o
+OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -141,6 +143,18 @@ $(BUILD)/metal_draw.o: $(METAL)/draw/draw.c | $(BUILD)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_vt.o: $(METAL)/shell/vt/vt.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_pci.o: $(METAL)/bus/pci/pci.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_virtio_pci.o: $(METAL)/bus/virtio/virtio_pci.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_virtio_net.o: $(METAL)/dev/net/virtio_net.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -215,6 +229,7 @@ run: $(BUILD)/metal.qemu.elf
 	@set +e; \
 	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
 		-device isa-debug-exit,iobase=0x501,iosize=0x02 \
+		-netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
 		-display none -serial file:$(BUILD)/serial.log \
 		-kernel $(BUILD)/metal.qemu.elf; \
 	ec=$$?; \
@@ -222,6 +237,7 @@ run: $(BUILD)/metal.qemu.elf
 	cat $(BUILD)/serial.log; \
 	if grep -q "console ok" $(BUILD)/serial.log \
 	  && grep -q "floor ok" $(BUILD)/serial.log \
+	  && grep -q "net ok" $(BUILD)/serial.log \
 	  && grep -q "draw ok" $(BUILD)/serial.log \
 	  && grep -q "vt ok" $(BUILD)/serial.log \
 	  && { [ "$(LINK_WAMR)" != "1" ] || grep -q "wamr ok" $(BUILD)/serial.log; } \
