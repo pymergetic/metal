@@ -11,7 +11,7 @@
 
 void uart_puts(const char *s);
 
-static uint8_t g_metal_heap[256 * 1024] __attribute__((aligned(16)));
+static uint8_t g_metal_heap[512 * 1024] __attribute__((aligned(16)));
 
 int pm_metal_floor_smoke(void)
 {

@@ -12,13 +12,20 @@ BUILD ?= build-X86_64_BIOS
 
 ENGINE ?= mp
 PACKAGES := $(abspath $(PORT_DIR)/../../../..)
+WASMMOD ?= $(abspath $(PORT_DIR)/../../wasmmod)
+ifeq ($(wildcard $(WASMMOD)/ports/metal/wamr_freestanding.mk),)
+WASMMOD := $(PACKAGES)/metalpython/extmod/wasmmod
+endif
 ifeq ($(ENGINE),upy)
 ENGINE_TOP := $(PACKAGES)/micropython
+LINK_WAMR := 0
 else ifeq ($(ENGINE),mpwm)
 ENGINE_TOP := $(PACKAGES)/metalpython-wasmmod
+LINK_WAMR := 1
 else
 # port → metalmod → extmod → metalpython
 ENGINE_TOP := $(abspath $(PORT_DIR)/../../..)
+LINK_WAMR := 1
 endif
 
 ifeq ($(wildcard $(ENGINE_TOP)/py/mkenv.mk),)
@@ -49,7 +56,8 @@ CFLAGS_METAL := -m64 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-Wall -Wextra -Wno-unused-parameter -Os -DNDEBUG \
 	-fdata-sections -ffunction-sections \
 	-std=gnu99 \
-	-DMICROPY_HEAP_SIZE=131072
+	-DMICROPY_HEAP_SIZE=131072 \
+	-DMETAL_LINK_WAMR=$(LINK_WAMR)
 
 # REPL=1 → interactive friendly REPL (no auto isa-debug-exit smoke path)
 REPL ?= 0
@@ -57,6 +65,13 @@ ifeq ($(REPL),1)
 CFLAGS_METAL += -DMETAL_UPY_SMOKE=0
 else
 CFLAGS_METAL += -DMETAL_UPY_SMOKE=1
+endif
+
+ifeq ($(LINK_WAMR),1)
+INC += -I$(WASMMOD)/third_party/wamr/core/iwasm/include \
+	-I$(METALMOD)/wasm/port/platform \
+	-I$(METALMOD)/libc
+CFLAGS_METAL += -DBH_PLATFORM_METAL
 endif
 
 CFLAGS += $(INC) $(CFLAGS_METAL)
@@ -77,14 +92,28 @@ SRC_C = \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
 	shared/runtime/stdout_helpers.c \
-	shared/libc/printf.c \
-	shared/libc/string0.c
+	shared/libc/printf.c
+
+ifeq ($(LINK_WAMR),1)
+SRC_C += \
+	common/wamr_smoke.c \
+	common/metal_log.c \
+	common/metal_rt_halt.c
+else
+SRC_C += shared/libc/string0.c
+endif
 
 SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c
 
 OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o
+
+WAMR_LIB :=
+ifeq ($(LINK_WAMR),1)
+WAMR_LIB := $(BUILD)/wamr-fs/libwasmmod_wamr_freestanding.a
+OBJ += $(BUILD)/metal_platform.o $(BUILD)/metal_libc_stdlib.o $(BUILD)/metal_libc_string.o
+endif
 
 $(BUILD)/metal_mem.o: $(METALMOD)/mem/mem.c | $(BUILD)
 	$(ECHO) "CC $<"
@@ -97,6 +126,33 @@ $(BUILD)/metal_tlsf.o: $(METALMOD)/third_party/tlsf/tlsf.c | $(BUILD)
 $(BUILD)/metal_async.o: $(METALMOD)/async/async.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+ifeq ($(LINK_WAMR),1)
+$(BUILD)/metal_platform.o: $(METALMOD)/wasm/port/platform/metal_platform.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -I$(WASMMOD)/third_party/wamr/core/shared/platform/include \
+		-c -o $@ $<
+
+$(BUILD)/metal_libc_stdlib.o: $(METALMOD)/libc/stdlib.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METALMOD)/libc -c -o $@ $<
+
+$(BUILD)/metal_libc_string.o: $(METALMOD)/libc/string.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METALMOD)/libc -c -o $@ $<
+
+$(WAMR_LIB): $(WASMMOD)/ports/metal/wamr_freestanding.mk
+	$(ECHO) "WAMR freestanding $@"
+	$(Q)$(MAKE) -f $(WASMMOD)/ports/metal/wamr_freestanding.mk \
+		OUT_DIR=$(BUILD)/wamr-fs \
+		WAMR_DIR=$(WASMMOD)/third_party/wamr \
+		METAL_PLAT_INC=$(METALMOD)/wasm/port/platform \
+		METAL_PORT_INC=$(METALMOD)/wasm/port \
+		METAL_LIBC_INC=$(METALMOD)/libc \
+		METAL_SRC_INC=$(METALMOD) \
+		METAL_INCLUDE_INC=$(METALMOD)/include \
+		UEFI=0
+endif
 
 LIBGCC := $(shell $(CC) $(CFLAGS_METAL) -print-libgcc-file-name)
 
@@ -111,10 +167,10 @@ $(BUILD)/crt0.o: boards/X86_64_BIOS/crt0.S | $(BUILD)
 	$(ECHO) "AS $<"
 	$(Q)$(CC) $(ASFLAGS64) -c -o $@ $<
 
-$(BUILD)/metal.elf: $(BUILD)/crt0.o $(OBJ) boards/X86_64_BIOS/link.ld
+$(BUILD)/metal.elf: $(BUILD)/crt0.o $(OBJ) $(WAMR_LIB) boards/X86_64_BIOS/link.ld
 	$(ECHO) "LINK $@"
 	$(Q)$(LD) -m elf_x86_64 -nostdlib -T boards/X86_64_BIOS/link.ld \
-		--gc-sections -o $@ $(BUILD)/crt0.o $(OBJ) $(LIBGCC)
+		--gc-sections -o $@ $(BUILD)/crt0.o $(OBJ) $(WAMR_LIB) $(LIBGCC)
 	$(Q)$(SIZE) $@
 
 $(BUILD)/metal_elf.o: $(BUILD)/metal.elf | $(BUILD)
@@ -148,12 +204,13 @@ run: $(BUILD)/metal.qemu.elf
 	echo "----- serial -----"; \
 	cat $(BUILD)/serial.log; \
 	if grep -q "floor ok" $(BUILD)/serial.log \
+	  && { [ "$(LINK_WAMR)" != "1" ] || grep -q "wamr ok" $(BUILD)/serial.log; } \
 	  && grep -q "upy ok" $(BUILD)/serial.log \
 	  && grep -q "qemu ok" $(BUILD)/serial.log; then \
-	  echo "X86_64_BIOS_FLOOR_UPY_OK ENGINE=$(ENGINE)"; \
+	  echo "X86_64_BIOS_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	  exit 0; \
 	fi; \
-	echo "X86_64_BIOS_FLOOR_UPY_FAIL (qemu ec=$$ec)"; \
+	echo "X86_64_BIOS_FAIL (qemu ec=$$ec) ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	exit 1
 
 clean:

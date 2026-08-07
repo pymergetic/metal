@@ -4,6 +4,7 @@
 #include "io.h"
 #include "main_upy.h"
 #include "floor_smoke.h"
+#include "wamr_smoke.h"
 
 void uart_init(void);
 void uart_puts(const char *s);
@@ -26,6 +27,15 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
             __asm__ volatile("hlt");
         }
     }
+
+#if defined(METAL_LINK_WAMR) && METAL_LINK_WAMR
+    if (pm_metal_wamr_smoke() != 0) {
+        outw(0x501u, 1u);
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+#endif
 
     mp_metal_upy_run(METAL_UPY_SMOKE);
 

@@ -1,0 +1,4 @@
+{
+  "type": "hidden",
+  "comment": "Firmware -nostdinc ISO C headers/stubs (bios/efi/tlsf/...). Guests use Metal APIs; unify with µPy libc later if it fits."
+}
