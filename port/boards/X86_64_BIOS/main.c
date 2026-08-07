@@ -8,6 +8,7 @@
 #include "net_smoke.h"
 #include "draw_smoke.h"
 #include "vt_smoke.h"
+#include "tui_smoke.h"
 #include "wamr_smoke.h"
 
 void uart_init(void);
@@ -54,6 +55,13 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
     }
 
     if (pm_metal_vt_smoke() != 0) {
+        outw(0x501u, 1u);
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
+    if (pm_metal_tui_smoke() != 0) {
         outw(0x501u, 1u);
         for (;;) {
             __asm__ volatile("hlt");

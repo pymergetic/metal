@@ -113,3 +113,24 @@ size_t pm_metal_console_len(void)
 {
     return g_con.len;
 }
+
+size_t pm_metal_console_copy_tail(uint8_t *out, size_t cap)
+{
+    size_t n;
+    size_t i;
+    size_t pos;
+
+    if (!g_con.ready || out == NULL || cap == 0u) {
+        return 0;
+    }
+    n = g_con.len < cap ? g_con.len : cap;
+    if (n == 0u) {
+        return 0;
+    }
+    pos = (g_con.start + g_con.len - n) % g_con.cap;
+    for (i = 0; i < n; i++) {
+        out[i] = g_con.buf[pos];
+        pos = (pos + 1u) % g_con.cap;
+    }
+    return n;
+}

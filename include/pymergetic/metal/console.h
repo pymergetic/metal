@@ -27,6 +27,9 @@ void pm_metal_console_detach(void);
 uint64_t pm_metal_console_seq(void);
 size_t pm_metal_console_len(void);
 
+/* Copy up to cap newest bytes from the ring (no replay side effects). */
+size_t pm_metal_console_copy_tail(uint8_t *out, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif

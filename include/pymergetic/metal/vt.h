@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 #ifndef PM_METAL_VT_COUNT
-#define PM_METAL_VT_COUNT 6 /* F1–F6 */
+#define PM_METAL_VT_COUNT 7 /* F1–F6 shells + F7 dashboard */
 #endif
 
 #ifndef PM_METAL_VT_COLS

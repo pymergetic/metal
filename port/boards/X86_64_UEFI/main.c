@@ -6,6 +6,7 @@
 #include "net_smoke.h"
 #include "draw_smoke.h"
 #include "vt_smoke.h"
+#include "tui_smoke.h"
 #include "wamr_smoke.h"
 
 void uart_init(void);
@@ -39,6 +40,10 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     }
 
     if (pm_metal_vt_smoke() != 0) {
+        return EFI_DEVICE_ERROR;
+    }
+
+    if (pm_metal_tui_smoke() != 0) {
         return EFI_DEVICE_ERROR;
     }
 
