@@ -10,6 +10,7 @@
 #include "pymergetic/metal/mem.h"
 #include "pymergetic/metal/net/dhcp.h"
 #include "pymergetic/metal/net/ip/__init__.h"
+#include "pymergetic/metal/net/pump.h"
 #include "pymergetic/metal/net/upy_nic.h"
 
 void uart_puts(const char *s);
@@ -59,6 +60,7 @@ int pm_metal_product_bringup(void)
         uart_puts("bringup: async start fail\n");
         return -1;
     }
+    pm_metal_net_pump_bind_async();
 
     if (pm_metal_dev_net_virtio_probe(NULL) != 0 ||
         pm_metal_dev_net_virtio_open(mac) != 0 ||
@@ -90,7 +92,7 @@ int pm_metal_product_bringup(void)
     }
     (void)pm_metal_net_ip_announce();
     for (i = 0; i < 64; i++) {
-        pm_metal_net_ip_poll();
+        (void)pm_metal_async_run_poll();
     }
 
     uart_puts("metal repl\n");

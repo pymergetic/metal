@@ -25,8 +25,13 @@ int32_t pm_metal_async_run_poll_all(void);
 /* Poll until idle (nothing WAITING) or no progress. */
 int32_t pm_metal_async_run_loop(void);
 
+/* Optional idle pump (e.g. net) invoked once at the start of each run_poll. */
+typedef void (*pm_metal_async_idle_pump_fn)(void);
+void pm_metal_async_set_idle_pump(pm_metal_async_idle_pump_fn fn);
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif
+

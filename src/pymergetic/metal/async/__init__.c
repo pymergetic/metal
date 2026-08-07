@@ -52,6 +52,12 @@ static uint32_t g_n_runners;
 static uint32_t g_rr;
 static int g_started;
 static uint64_t g_boot_us;
+static pm_metal_async_idle_pump_fn g_idle_pump;
+
+void pm_metal_async_set_idle_pump(pm_metal_async_idle_pump_fn fn)
+{
+    g_idle_pump = fn;
+}
 
 void pm_metal_time_init(void)
 {
@@ -222,6 +228,7 @@ int32_t pm_metal_async_start(uint32_t n_cpus)
     g_n_runners = n;
     g_rr = 0;
     g_started = 1;
+    g_idle_pump = NULL;
     for (i = 0; i < n; i++) {
         g_runners[i].head = 0;
         g_runners[i].tail = 0;
@@ -310,6 +317,9 @@ int32_t pm_metal_async_run_poll(void)
 
     if (!g_started) {
         return -1;
+    }
+    if (g_idle_pump != NULL) {
+        g_idle_pump();
     }
     now = pm_metal_async_mono_us();
     for (ri = 0; ri < g_n_runners; ri++) {

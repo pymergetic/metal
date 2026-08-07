@@ -8,6 +8,7 @@
 #include "pymergetic/metal/async/time.h"
 #include "pymergetic/metal/async/runner.h"
 #include "pymergetic/metal/async/board_time.h"
+#include "pymergetic/metal/net/pump.h"
 
 void uart_puts(const char *s);
 
@@ -34,6 +35,7 @@ int pm_metal_floor_smoke(void)
         uart_puts("floor async_start fail\n");
         return -1;
     }
+    pm_metal_net_pump_bind_async();
     h = pm_metal_async_sleep_us(2000);
     if (h == 0) {
         uart_puts("floor sleep fail\n");
