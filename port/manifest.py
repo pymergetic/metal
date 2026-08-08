@@ -22,6 +22,7 @@ package(
         "metal/__init__.py",
         "metal/inspect/__init__.py",
         "metal/inspect/stubs.py",
+        "metal/inspect/self_desc.py",
         "metal/inspect/adapter_microdot.py",
         "metal/inspect/app.py",
         "metal/inspect/dispatch.py",

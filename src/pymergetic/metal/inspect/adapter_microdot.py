@@ -1,6 +1,6 @@
 """Route adapter: Inspect stubs → Microdot (framework-independent registry)."""
 
-from .stubs import ENDPOINT_STUBS, capabilities as make_capabilities
+from .stubs import ENDPOINT_STUBS, capabilities as make_capabilities, self_description
 
 try:
     from microdot import Microdot
@@ -20,6 +20,9 @@ class MicrodotAdapter:
     def capabilities(self):
         return make_capabilities(self.role, self.theme, fastapi=False)
 
+    def self_desc(self):
+        return self_description(self.role, self.theme)
+
     def _register(self):
         app = self.app
         adapter = self
@@ -31,6 +34,10 @@ class MicrodotAdapter:
         @app.get("/capabilities")
         async def capabilities(request):
             return adapter.capabilities()
+
+        @app.get("/inspect/self")
+        async def inspect_self(request):
+            return adapter.self_desc()
 
         for method, path, implemented in ENDPOINT_STUBS:
             if implemented:

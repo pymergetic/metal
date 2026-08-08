@@ -1,5 +1,7 @@
 """Shared Inspect endpoint contract (guest Microdot + CDN FastAPI)."""
 
+from .self_desc import self_description
+
 CAP_DEFAULTS = {
     "smp": True,
     "asgi": True,
@@ -27,5 +29,12 @@ def capabilities(role, theme, *, fastapi=False, **extra):
 ENDPOINT_STUBS = (
     ("GET", "/health", True),
     ("GET", "/capabilities", True),
-    ("GET", "/inspect/self", False),
+    ("GET", "/inspect/self", True),
 )
+
+__all__ = [
+    "CAP_DEFAULTS",
+    "ENDPOINT_STUBS",
+    "capabilities",
+    "self_description",
+]

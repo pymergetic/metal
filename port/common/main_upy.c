@@ -152,6 +152,8 @@ void mp_metal_upy_run(int smoke) {
             "assert st == 200 and 'ok' in body\n"
             "st, body = handle('GET', '/capabilities')\n"
             "assert st == 200 and 'metal' in body\n"
+            "st, body = handle('GET', '/inspect/self')\n"
+            "assert st == 200 and 'kernel' in body and 'has_source' in body\n"
             "assert handle('GET', '/inspect/') is None\n"
             "print('inspect py ok')\n",
             MP_PARSE_FILE_INPUT);

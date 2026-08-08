@@ -1,6 +1,6 @@
 """Route adapter: Inspect stubs → FastAPI (CDN / ASGI hosts)."""
 
-from .stubs import ENDPOINT_STUBS, capabilities as make_capabilities
+from .stubs import ENDPOINT_STUBS, capabilities as make_capabilities, self_description
 
 try:
     from fastapi import FastAPI
@@ -22,6 +22,9 @@ class FastAPIAdapter:
 
     def capabilities(self):
         return make_capabilities(self.role, self.theme, fastapi=True)
+
+    def self_desc(self):
+        return self_description(self.role, self.theme)
 
     def add_routes(self, app=None, *, include_health=None):
         """Mount routes onto an existing FastAPI app (or self.app)."""
@@ -45,6 +48,10 @@ class FastAPIAdapter:
         @app.get("/capabilities")
         async def capabilities():
             return adapter.capabilities()
+
+        @app.get("/inspect/self")
+        async def inspect_self():
+            return adapter.self_desc()
 
         for method, path, implemented in ENDPOINT_STUBS:
             if implemented:

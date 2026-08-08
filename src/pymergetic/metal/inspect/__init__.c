@@ -72,9 +72,15 @@ int32_t pm_metal_inspect_handle(const char *method, const char *path,
         return 1;
     }
     if (strcmp(path, "/inspect/self") == 0) {
-        *status = 501;
-        copy_str(body, body_len,
-                 "{\"error\":\"NotImplemented\",\"path\":\"/inspect/self\"}");
+        static const char k_self[] =
+            "{\"schema\":1,\"name\":\"pymergetic.metal\","
+            "\"role\":\"kernel\",\"product\":\"metal\",\"org\":\"pymergetic\","
+            "\"theme\":\"metal\",\"has_source\":false,\"has_pack\":false,"
+            "\"source_files\":[],\"pack_files\":[],"
+            "\"tags\":{\"role\":\"kernel\",\"product\":\"metal\","
+            "\"org\":\"pymergetic\"}}";
+        *status = 200;
+        copy_str(body, body_len, k_self);
         return 1;
     }
     return 0;

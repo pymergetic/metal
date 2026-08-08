@@ -464,7 +464,7 @@ live-http: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	  tail -c 2000 $(BUILD)/serial.log 2>/dev/null || true; \
 	  exit 1; \
 	fi; \
-	health=""; caps=""; page=""; ec1=1; ec2=1; ec3=1; \
+	health=""; caps=""; page=""; self=""; ec1=1; ec2=1; ec3=1; ec4=1; \
 	for t in 1 2 3 4 5 6 7 8; do \
 	  health=$$(curl -fsS --max-time 3 http://127.0.0.1:18080/health 2>/dev/null); \
 	  ec1=$$?; \
@@ -472,10 +472,14 @@ live-http: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	  ec2=$$?; \
 	  page=$$(curl -fsS --max-time 3 http://127.0.0.1:18080/inspect/ 2>/dev/null); \
 	  ec3=$$?; \
-	  if [ $$ec1 -eq 0 ] && [ $$ec2 -eq 0 ] && [ $$ec3 -eq 0 ] \
+	  self=$$(curl -fsS --max-time 3 http://127.0.0.1:18080/inspect/self 2>/dev/null); \
+	  ec4=$$?; \
+	  if [ $$ec1 -eq 0 ] && [ $$ec2 -eq 0 ] && [ $$ec3 -eq 0 ] && [ $$ec4 -eq 0 ] \
 	    && echo "$$health" | grep -q '"ok":true' \
 	    && echo "$$caps" | grep -q '"role":"metal"' \
-	    && echo "$$page" | grep -q '<title>Inspect</title>'; then \
+	    && echo "$$page" | grep -q '<title>Inspect</title>' \
+	    && echo "$$self" | grep -q '"role":"kernel"' \
+	    && echo "$$self" | grep -q '"has_source":false'; then \
 	    break; \
 	  fi; \
 	  sleep 0.4; \
@@ -486,10 +490,13 @@ live-http: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	echo "health=[$$health] ec=$$ec1"; \
 	echo "caps=[$$caps] ec=$$ec2"; \
 	echo "inspect_title=$$(echo "$$page" | tr -d '\r' | grep -o '<title>[^<]*</title>' | head -1) ec=$$ec3"; \
-	if [ $$ec1 -eq 0 ] && [ $$ec2 -eq 0 ] && [ $$ec3 -eq 0 ] \
+	echo "self=[$$self] ec=$$ec4"; \
+	if [ $$ec1 -eq 0 ] && [ $$ec2 -eq 0 ] && [ $$ec3 -eq 0 ] && [ $$ec4 -eq 0 ] \
 	  && echo "$$health" | grep -q '"ok":true' \
 	  && echo "$$caps" | grep -q '"role":"metal"' \
-	  && echo "$$page" | grep -q '<title>Inspect</title>'; then \
+	  && echo "$$page" | grep -q '<title>Inspect</title>' \
+	  && echo "$$self" | grep -q '"role":"kernel"' \
+	  && echo "$$self" | grep -q '"has_source":false'; then \
 	  echo "X86_64_UEFI_LIVE_HTTP_OK ENGINE=$(ENGINE)"; \
 	  exit 0; \
 	fi; \
