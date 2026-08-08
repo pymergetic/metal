@@ -1,43 +1,40 @@
-# Metal hybrid layout (wasmmod principles)
+# Metal layout = wasmmod
 
-**Product code builds against `include/` only.** Internals are hybrid C / Rust / Python — one impl, other languages are export faces.
+**Base = wasmmod.** Copy it. Do not invent a parallel dialect.
 
-## Layout
+**Kernel = code container** (same idea as a wasmmod pack): introspectable via the same inspect/self-desc model (`pymergetic.metal` ‖ `pymergetic.wasmmod`). Loaded packs and host self are the same kind of thing, different roots.
+
+## The point (wasmmod)
+
+**Callee (impl):** one language per module — **C or Rust or Python**.  
+**Caller:** **any** of C / Rust / Python.
 
 ```text
-include/pymergetic/metal/<mod>/.../*.h   # PUBLIC face (tracked)
-src/pymergetic/metal/<mod>/              # hybrid impl + export faces
-  __init__.c | __init__.rs | __init__.pyi
-port/                                    # -I$(METAL)/include ; link src objects
+caller\callee | Py | C | RS
+--------------+----+---+----
+Py            |  ✓ | ✓ | ✓
+C             |  ✓ | ✓ | ✓
+RS            |  ✓ | ✓ | ✓
 ```
 
-Mirror of wasmmod: `include/` + `glue/`/`crates/pm` + Python faces  
-→ Metal: `include/` + `src/...` hybrid + µPy `port/common/mod*.c` / `.pyi`.
+Same verbs everywhere via **SYMBOLS + registration** (`module_install` / faces). That is why `.pyi` and Rust faces exist — so callers work, not so every module has three brains.
 
-## Rules
+## Trees
 
-1. **One ABI per module** — full prefix `pm_metal_<path>_*` (see `.cursor/rules/metal-c-abi-hub.mdc`).
-2. **No package-root muscle twins** (`net/`, `async/`, … at repo root). New work lands under `src/` + `include/` only.
-3. **Do not grow** short-prefix APIs (`pm_metal_tcp_*`, …). Product net uses full names (`pm_metal_net_ip_*`, `pm_metal_net_ip_tcp_*`, …).
-4. **No `external/` vendor pile** — WAMR/µPy come from wasmmod / ENGINE_TOP.
+```text
+include/pymergetic/metal/…/*.h     # public C API (callers + C ABI border)
+src/pymergetic/metal/…/            # ONE impl: .c  OR  .rs  OR  .py
+crates/pm_metal/                   # Rust caller façade (bindgen / wraps) — Cargo root
+typings/pymergetic/metal/…/*.pyi   # Python caller stubs
+include/SYMBOLS.md                 # C ↔ RS ↔ Py names
+port/                              # -I include; link src
+```
 
-## Exemplar
+| Role | Where |
+|------|--------|
+| Impl (callee) | `src/` — exactly one of `.c` / `.rs` / `.py` |
+| C callers | `#include` + link |
+| RS callers | `crates/pm_metal` → same verbs |
+| Py callers | registered module + `.pyi` |
 
-`src/pymergetic/metal/async/` + `include/pymergetic/metal/async/` — N-runner floor, hybrid faces.
-
-## Net IP (freestanding C)
-
-Port links the freestanding stack at `src/pymergetic/metal/net/ip/` with public
-faces under `include/pymergetic/metal/net/ip/` (`pm_metal_net_ip_*`,
-`pm_metal_net_ip_tcp_*`, `pm_metal_net_ip_udp_*`). DHCP/DNS are sibling modules
-(`net/dhcp`, `net/dns`). The former lwIP RS twin lives under
-`_tmp/package-root/net-ip-rs/` — not product. **Do not** resurrect package-root `net/`.
-
-## Transitional leftovers at package root
-
-| Path | Why still there |
-|------|-----------------|
-| `include/pymergetic/metal/libc` | WAMR freestanding `-nostdinc` headers only — not a second product libc; µPy uses `shared/libc` |
-| `third_party/monocypher` + `sha256` | SSH KEX only (tiny); not a second TLS stack |
-
-No `external/`, no `_tmp/`, no package-root muscle twins.
+No twin impls in `src/`. ASGI under `asgi/`, not `net/`. Full `pm_metal_<path>_*`.
