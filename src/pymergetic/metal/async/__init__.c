@@ -29,7 +29,8 @@ typedef enum {
     SLOT_FREE = 0,
     SLOT_SLEEP,
     SLOT_YIELD,
-    SLOT_AWAIT
+    SLOT_AWAIT,
+    SLOT_PARK
 } slot_kind_t;
 
 typedef struct {
@@ -528,6 +529,32 @@ int32_t pm_metal_async_run_loop(void)
         guard++;
     }
     return total;
+}
+
+uint32_t pm_metal_async_park(void)
+{
+    uint32_t ri;
+
+    if (!g_started) {
+        return 0;
+    }
+    ri = next_runner();
+    return alloc_slot(SLOT_PARK, 0, ri);
+}
+
+void pm_metal_async_wake(uint32_t h)
+{
+    if (h == 0 || h >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[h].used) {
+        return;
+    }
+    if (g_slots[h].kind != SLOT_PARK && g_slots[h].kind != SLOT_AWAIT) {
+        return;
+    }
+    if (__atomic_load_n(&g_slots[h].status, __ATOMIC_ACQUIRE) != PM_METAL_ASYNC_WAITING) {
+        return;
+    }
+    /* Wake into shared prio class (tag already on slot). */
+    complete_slot(h);
 }
 
 pm_metal_async_status_t pm_metal_async_await(uint32_t self_h, uint32_t child_h)

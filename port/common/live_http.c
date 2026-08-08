@@ -3,7 +3,6 @@
 #include "pymergetic/metal/async/runner.h"
 #include "pymergetic/metal/net/http/__init__.h"
 #include "pymergetic/metal/net/ip/tcp.h"
-#include "pymergetic/metal/net/pump/__init__.h"
 
 void uart_puts(const char *s);
 
@@ -15,12 +14,8 @@ void pm_metal_live_http(void)
     }
     (void)pm_metal_net_http_init();
     uart_puts("live http\n");
+    /* Scheduler only — pump idle tick drives ip + http. */
     for (;;) {
-        if (pm_metal_async_ready()) {
-            (void)pm_metal_async_run_poll();
-        } else {
-            pm_metal_net_pump_once();
-        }
-        (void)pm_metal_net_http_poll();
+        (void)pm_metal_async_run_poll();
     }
 }
