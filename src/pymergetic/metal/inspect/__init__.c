@@ -1,4 +1,5 @@
 #include "pymergetic/metal/inspect/__init__.h"
+#include "pymergetic/metal/inspect/py_call.h"
 
 #include <string.h>
 
@@ -41,10 +42,19 @@ int32_t pm_metal_inspect_capabilities_json(char *buf, size_t buf_len)
 int32_t pm_metal_inspect_handle(const char *method, const char *path,
                                 int *status, char *body, size_t body_len)
 {
+    int32_t py;
+
     if (!g_ready || method == NULL || path == NULL || status == NULL ||
         body == NULL) {
         return -1;
     }
+
+    /* Prefer frozen MicrodotAdapter; C stubs remain as fallback. */
+    py = pm_metal_inspect_py_handle(method, path, status, body, body_len);
+    if (py >= 0) {
+        return py;
+    }
+
     if (strcmp(method, "GET") != 0) {
         return 0;
     }

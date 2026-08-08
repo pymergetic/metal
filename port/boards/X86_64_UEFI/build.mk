@@ -62,7 +62,7 @@ CFLAGS_METAL := $(TARGET_WIN) -ffreestanding -fno-stack-protector \
 	-Wall -Wextra -Wno-unused-parameter -Os -DNDEBUG \
 	-fdata-sections -ffunction-sections \
 	-std=gnu99 \
-	-DMICROPY_HEAP_SIZE=196608 \
+	-DMICROPY_HEAP_SIZE=262144 \
 	-DMETAL_BOARD_UEFI=1 \
 	-DMETAL_LINK_WAMR=$(LINK_WAMR) \
 	-DMETAL_ENGINE=\"$(ENGINE)\"
@@ -114,6 +114,7 @@ SRC_C = \
 	common/uefi_acpi_seed.c \
 	common/network_metal_nic.c \
 	common/modssh.c \
+	common/inspect_py.c \
 	common/fsys/chkstk.c \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \

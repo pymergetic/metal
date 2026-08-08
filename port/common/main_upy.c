@@ -146,7 +146,14 @@ void mp_metal_upy_run(int smoke) {
             "assert microdot.__version__\n"
             "from microdot import Microdot\n"
             "assert Microdot is not None\n"
-            "print('microdot ok')\n",
+            "print('microdot ok')\n"
+            "from pymergetic.metal.inspect.dispatch import handle\n"
+            "st, body = handle('GET', '/health')\n"
+            "assert st == 200 and 'ok' in body\n"
+            "st, body = handle('GET', '/capabilities')\n"
+            "assert st == 200 and 'metal' in body\n"
+            "assert handle('GET', '/inspect/') is None\n"
+            "print('inspect py ok')\n",
             MP_PARSE_FILE_INPUT);
 #endif
         do_str("print('upy ok')", MP_PARSE_SINGLE_INPUT);

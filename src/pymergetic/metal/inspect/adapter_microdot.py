@@ -3,10 +3,9 @@
 from .stubs import ENDPOINT_STUBS, capabilities as make_capabilities
 
 try:
-    from microdot import Microdot, Response
+    from microdot import Microdot
 except ImportError:  # pragma: no cover — host tooling
     Microdot = None
-    Response = None
 
 
 class MicrodotAdapter:
@@ -39,7 +38,6 @@ class MicrodotAdapter:
 
             @app.route(path, methods=[method])
             async def not_impl(request, p=path):
-                return Response(
-                    {"error": "NotImplemented", "path": p},
-                    status_code=501,
-                )
+                # Tuple form avoids Response/NoCaseDict (dict subclass attrs
+                # break under MICROPY_CONFIG_ROM_LEVEL_MINIMUM).
+                return {"error": "NotImplemented", "path": p}, 501
