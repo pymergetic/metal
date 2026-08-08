@@ -1,6 +1,6 @@
 /*
- * DIY SSH — version exchange + curve25519-sha256 KEX through NEWKEYS.
- * Post-NEWKEYS encryption / auth still TODO.
+ * DIY SSH — curve25519-sha256 KEX, chacha20-poly1305@openssh.com,
+ * SERVICE_ACCEPT + USERAUTH (none / password "metal").
  */
 #include "pymergetic/metal/net/ssh/__init__.h"
 
@@ -21,6 +21,8 @@ typedef enum {
     SSH_ST_KEXINIT_SENT,
     SSH_ST_WAIT_ECDH,
     SSH_ST_WAIT_NEWKEYS,
+    SSH_ST_SERVICE,
+    SSH_ST_AUTH,
     SSH_ST_DONE,
     SSH_ST_ERROR
 } ssh_st_t;
@@ -36,9 +38,59 @@ static pm_metal_net_ssh_kex_t g_kex;
 static const char k_ident[] = "SSH-2.0-metal\r\n";
 static const char k_ident_bare[] = "SSH-2.0-metal";
 
+#define SSH_MSG_DISCONNECT 1
+#define SSH_MSG_SERVICE_REQUEST 5
+#define SSH_MSG_SERVICE_ACCEPT 6
+#define SSH_MSG_USERAUTH_REQUEST 50
+#define SSH_MSG_USERAUTH_FAILURE 51
+#define SSH_MSG_USERAUTH_SUCCESS 52
 #define SSH_MSG_KEXINIT 20
 #define SSH_MSG_NEWKEYS 21
 #define SSH_MSG_KEX_ECDH_INIT 30
+
+static uint32_t get_u32b(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8)
+           | (uint32_t)p[3];
+}
+
+static int32_t send_service_accept(void)
+{
+    uint8_t pl[64];
+    uint32_t n;
+    const char *svc = "ssh-userauth";
+
+    pl[0] = SSH_MSG_SERVICE_ACCEPT;
+    n = (uint32_t)strlen(svc);
+    pl[1] = (uint8_t)(n >> 24);
+    pl[2] = (uint8_t)(n >> 16);
+    pl[3] = (uint8_t)(n >> 8);
+    pl[4] = (uint8_t)n;
+    memcpy(pl + 5, svc, n);
+    return pm_metal_net_ssh_pkt_send(pl, 5u + n);
+}
+
+static int32_t send_auth_success(void)
+{
+    uint8_t pl = SSH_MSG_USERAUTH_SUCCESS;
+    return pm_metal_net_ssh_pkt_send(&pl, 1);
+}
+
+static int32_t send_auth_failure(void)
+{
+    uint8_t pl[32];
+    const char *methods = "password,none";
+    uint32_t n = (uint32_t)strlen(methods);
+
+    pl[0] = SSH_MSG_USERAUTH_FAILURE;
+    pl[1] = (uint8_t)(n >> 24);
+    pl[2] = (uint8_t)(n >> 16);
+    pl[3] = (uint8_t)(n >> 8);
+    pl[4] = (uint8_t)n;
+    memcpy(pl + 5, methods, n);
+    pl[5u + n] = 0; /* partial success = false */
+    return pm_metal_net_ssh_pkt_send(pl, 6u + n);
+}
 
 static int32_t send_kexinit(void)
 {
@@ -252,10 +304,85 @@ int32_t pm_metal_net_ssh_poll(void)
             return -1;
         }
         if (rc == 1 && n > 0u && pl[0] == SSH_MSG_NEWKEYS) {
-            /* Peer encrypts after NEWKEYS — no cleartext DISCONNECT. */
-            g_st = SSH_ST_DONE;
-            g_served = 1;
-            return 1;
+            if (pm_metal_net_ssh_kex_derive_keys(&g_kex) != 0) {
+                g_st = SSH_ST_ERROR;
+                return -1;
+            }
+            pm_metal_net_ssh_pkt_set_keys(g_kex.key_c2s, g_kex.key_s2c);
+            g_st = SSH_ST_SERVICE;
+        }
+    }
+    if (g_st == SSH_ST_SERVICE) {
+        rc = pm_metal_net_ssh_pkt_recv(pl, sizeof(pl), &n);
+        if (rc < 0) {
+            g_st = SSH_ST_ERROR;
+            return -1;
+        }
+        if (rc == 1 && n >= 5u && pl[0] == SSH_MSG_SERVICE_REQUEST) {
+            if (send_service_accept() != 0) {
+                g_st = SSH_ST_ERROR;
+                return -1;
+            }
+            g_st = SSH_ST_AUTH;
+        }
+    }
+    if (g_st == SSH_ST_AUTH) {
+        rc = pm_metal_net_ssh_pkt_recv(pl, sizeof(pl), &n);
+        if (rc < 0) {
+            g_st = SSH_ST_ERROR;
+            return -1;
+        }
+        if (rc == 1 && n >= 5u && pl[0] == SSH_MSG_USERAUTH_REQUEST) {
+            /* Parse method name (user, service, method strings). */
+            uint32_t o = 1;
+            uint32_t slen;
+            int ok = 0;
+            const char *method = NULL;
+            uint32_t method_len = 0;
+
+            for (int fi = 0; fi < 3; fi++) {
+                if (o + 4u > n) {
+                    break;
+                }
+                slen = get_u32b(pl + o);
+                o += 4;
+                if (o + slen > n) {
+                    break;
+                }
+                if (fi == 2) {
+                    method = (const char *)(pl + o);
+                    method_len = slen;
+                }
+                o += slen;
+            }
+            if (method != NULL && method_len == 4u &&
+                memcmp(method, "none", 4) == 0) {
+                ok = 1;
+            } else if (method != NULL && method_len == 8u &&
+                       memcmp(method, "password", 8) == 0) {
+                /* optional bool + password string */
+                if (o < n) {
+                    o += 1; /* FALSE = new password follow */
+                }
+                if (o + 4u <= n) {
+                    slen = get_u32b(pl + o);
+                    o += 4;
+                    if (o + slen <= n && slen == 5u &&
+                        memcmp(pl + o, "metal", 5) == 0) {
+                        ok = 1;
+                    }
+                }
+            }
+            if (ok) {
+                if (send_auth_success() != 0) {
+                    g_st = SSH_ST_ERROR;
+                    return -1;
+                }
+                g_st = SSH_ST_DONE;
+                g_served = 1;
+                return 1;
+            }
+            (void)send_auth_failure();
         }
     }
     if (g_st == SSH_ST_DONE) {
@@ -274,7 +401,7 @@ int32_t pm_metal_net_ssh_served(void)
 
 int32_t pm_metal_net_ssh_status(uint8_t *buf, uint32_t buf_len)
 {
-    static const char msg[] = "ssh: diy-curve25519-sha256";
+    static const char msg[] = "ssh: diy-chacha20-poly1305+auth";
     uint32_t i;
 
     if (buf == NULL || buf_len == 0u) {

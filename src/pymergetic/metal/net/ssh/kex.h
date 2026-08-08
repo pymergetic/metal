@@ -19,9 +19,19 @@ typedef struct {
     uint8_t eph_pk[32];
     uint8_t session_id[32];
     uint8_t have_session;
+    uint8_t K_mpint[40]; /* SSH mpint of shared secret */
+    uint32_t K_mpint_len;
+    uint8_t H[32];
+    /* chacha20-poly1305@openssh.com: 64 bytes each direction (K2||K1) */
+    uint8_t key_c2s[64];
+    uint8_t key_s2c[64];
+    uint8_t have_keys;
 } pm_metal_net_ssh_kex_t;
 
 void pm_metal_net_ssh_kex_reset(pm_metal_net_ssh_kex_t *k);
+
+/* After mutual NEWKEYS: derive transport keys from K||H. */
+int32_t pm_metal_net_ssh_kex_derive_keys(pm_metal_net_ssh_kex_t *k);
 
 /* Build our KEXINIT payload (msg type included). Returns length or 0. */
 uint32_t pm_metal_net_ssh_kex_build_init(uint8_t *dst, uint32_t cap);

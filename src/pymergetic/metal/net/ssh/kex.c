@@ -172,7 +172,13 @@ int32_t pm_metal_net_ssh_kex_server_reply(pm_metal_net_ssh_kex_t *k,
     pm_metal_net_ssh_sha256_update(sha_ctx, mp, mp_len);
     pm_metal_net_ssh_sha256_final(sha_ctx, H);
     memcpy(k->session_id, H, 32);
+    memcpy(k->H, H, 32);
     k->have_session = 1;
+    if (mp_len > sizeof(k->K_mpint)) {
+        return -1;
+    }
+    memcpy(k->K_mpint, mp, mp_len);
+    k->K_mpint_len = mp_len;
 
     pm_metal_net_ssh_ed25519_sign(sig, H, 32);
     o = 0;
@@ -212,5 +218,39 @@ int32_t pm_metal_net_ssh_kex_server_reply(pm_metal_net_ssh_kex_t *k,
     *reply_len = o;
     crypto_wipe(shared, sizeof(shared));
     crypto_wipe(k->eph_sk, sizeof(k->eph_sk));
+    return 0;
+}
+
+static void hash_key(pm_metal_net_ssh_kex_t *k, uint8_t letter, uint8_t out[32],
+                     const uint8_t *prev, uint32_t prev_len)
+{
+    uint8_t ctx[128];
+
+    pm_metal_net_ssh_sha256_init(ctx);
+    pm_metal_net_ssh_sha256_update(ctx, k->K_mpint, k->K_mpint_len);
+    pm_metal_net_ssh_sha256_update(ctx, k->H, 32);
+    pm_metal_net_ssh_sha256_update(ctx, &letter, 1);
+    pm_metal_net_ssh_sha256_update(ctx, k->session_id, 32);
+    if (prev != NULL && prev_len > 0u) {
+        pm_metal_net_ssh_sha256_update(ctx, prev, prev_len);
+    }
+    pm_metal_net_ssh_sha256_final(ctx, out);
+}
+
+static void expand64(pm_metal_net_ssh_kex_t *k, uint8_t letter, uint8_t out[64])
+{
+    hash_key(k, letter, out, NULL, 0);
+    hash_key(k, letter, out + 32, out, 32);
+}
+
+int32_t pm_metal_net_ssh_kex_derive_keys(pm_metal_net_ssh_kex_t *k)
+{
+    if (k == NULL || !k->have_session || k->K_mpint_len == 0u) {
+        return -1;
+    }
+    /* C = client→server enc, D = server→client enc (64 bytes for ChaCha). */
+    expand64(k, (uint8_t)'C', k->key_c2s);
+    expand64(k, (uint8_t)'D', k->key_s2c);
+    k->have_keys = 1;
     return 0;
 }

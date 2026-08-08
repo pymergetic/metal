@@ -296,7 +296,7 @@ $(BUILD)/metal_net_pump.o: $(METAL)/src/pymergetic/metal/net/pump/__init__.c | $
 
 $(BUILD)/metal_ssh_pkt.o: $(METAL)/src/pymergetic/metal/net/ssh/packet.c | $(BUILD)
 	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
 
 ifeq ($(LINK_WAMR),1)
 $(BUILD)/metal_platform.o: $(METAL)/src/pymergetic/metal/wasm/port/platform/metal_platform.c | $(BUILD)
