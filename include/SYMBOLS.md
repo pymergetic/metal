@@ -10,8 +10,9 @@ Callee = one language in `src/`. Names below are the C ABI border (`pm_metal_<pa
 | `pm_metal_async_run_poll` | After SMP: current CPU only |
 | `pm_metal_async_run_poll_cpu` | Explicit runner |
 | `pm_metal_async_run_loop_cpu` | AP forever loop |
-| `pm_metal_async_create_task` / `_on` | RR or pinned runner |
-| `pm_metal_async_sleep_us` / `yield` / `await` | handles |
+| `pm_metal_async_create_task` / `_on` / `_prio` | RR or pinned; H/M/L tag |
+| `pm_metal_async_set_prio` / `get_prio` | shared coop classes |
+| `pm_metal_async_sleep_us` / `yield` / `await` | timing + handles |
 | `pm_metal_smp_start` | BIOS INIT-SIPI · UEFI EFI MP |
 | `pm_metal_smp_cpu_index` / `online_count` | per-CPU |
 

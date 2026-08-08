@@ -8,6 +8,7 @@
 #include "pymergetic/metal/async/time.h"
 #include "pymergetic/metal/async/runner.h"
 #include "pymergetic/metal/async/smp.h"
+#include "pymergetic/metal/async/prio.h"
 #include "pymergetic/metal/async/board_time.h"
 #include "pymergetic/metal/dev/acpi/__init__.h"
 #include "pymergetic/metal/net/pump/__init__.h"
@@ -140,6 +141,23 @@ int pm_metal_floor_smoke(void)
             uart_puts(" st=");
             uart_u32((uint32_t)pm_metal_async_status(handles[ri]));
             uart_puts("\n");
+            return -1;
+        }
+    }
+
+    /* H/M/L ready classes drain (shared schedule). */
+    {
+        uint32_t hi = pm_metal_async_create_task_prio(0, 0, PM_METAL_ASYNC_PRIO_HIGH);
+        uint32_t lo = pm_metal_async_create_task_prio(0, 0, PM_METAL_ASYNC_PRIO_LOW);
+        if (hi == 0u || lo == 0u) {
+            uart_puts("floor prio alloc fail\n");
+            return -1;
+        }
+        (void)pm_metal_async_run_poll();
+        if (pm_metal_async_status(hi) != PM_METAL_ASYNC_DONE ||
+            pm_metal_async_status(lo) != PM_METAL_ASYNC_DONE ||
+            pm_metal_async_get_prio(hi) != PM_METAL_ASYNC_PRIO_HIGH) {
+            uart_puts("floor prio drain fail\n");
             return -1;
         }
     }

@@ -8,6 +8,7 @@
 #include "pymergetic/metal/async/await.h"
 #include "pymergetic/metal/async/board_time.h"
 #include "pymergetic/metal/async/smp.h"
+#include "pymergetic/metal/async/prio.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -22,6 +23,7 @@
 #ifndef PM_METAL_ASYNC_READY_CAP
 #define PM_METAL_ASYNC_READY_CAP 64
 #endif
+#define PM_METAL_ASYNC_N_PRIO 3u
 
 typedef enum {
     SLOT_FREE = 0,
@@ -35,6 +37,7 @@ typedef struct {
     uint8_t kind;
     uint8_t status;
     uint8_t runner;
+    uint8_t prio;
     uint64_t deadline_us;
     uint32_t await_child;
     uint32_t result_u32;
@@ -45,6 +48,11 @@ typedef struct {
     uint32_t head;
     uint32_t tail;
     uint32_t count;
+} prio_q_t;
+
+typedef struct {
+    prio_q_t ready[PM_METAL_ASYNC_N_PRIO]; /* H M L */
+    uint32_t usage[PM_METAL_ASYNC_N_PRIO];
 } runner_t;
 
 static slot_t g_slots[PM_METAL_ASYNC_MAX_HANDLES];
@@ -88,40 +96,75 @@ uint64_t pm_metal_time_mono_us(void)
     return pm_metal_async_mono_us();
 }
 
-static int ready_push(uint32_t ri, uint32_t h)
+static int ready_push_prio(uint32_t ri, uint32_t h, uint8_t prio)
 {
     runner_t *r;
+    prio_q_t *q;
     int rc = -1;
 
-    if (ri >= g_n_runners || h == 0) {
+    if (ri >= g_n_runners || h == 0 || prio >= PM_METAL_ASYNC_N_PRIO) {
         return -1;
     }
     runner_lock(ri);
     r = &g_runners[ri];
-    if (r->count < PM_METAL_ASYNC_READY_CAP) {
-        r->q[r->tail] = h;
-        r->tail = (r->tail + 1u) % PM_METAL_ASYNC_READY_CAP;
-        r->count++;
+    q = &r->ready[prio];
+    if (q->count < PM_METAL_ASYNC_READY_CAP) {
+        q->q[q->tail] = h;
+        q->tail = (q->tail + 1u) % PM_METAL_ASYNC_READY_CAP;
+        q->count++;
+        g_slots[h].prio = prio;
         rc = 0;
     }
     runner_unlock(ri);
     return rc;
 }
 
+static int ready_push(uint32_t ri, uint32_t h)
+{
+    uint8_t p = PM_METAL_ASYNC_PRIO_MED;
+
+    if (h != 0u && h < PM_METAL_ASYNC_MAX_HANDLES && g_slots[h].used) {
+        p = g_slots[h].prio;
+        if (p >= PM_METAL_ASYNC_N_PRIO) {
+            p = PM_METAL_ASYNC_PRIO_MED;
+        }
+    }
+    return ready_push_prio(ri, h, p);
+}
+
+/* Pop next ready handle: timing boost already done; then H/M/L + usage weight. */
 static uint32_t ready_pop(uint32_t ri)
 {
     runner_t *r;
     uint32_t h = 0;
+    uint32_t order[3];
+    uint32_t oi;
 
     if (ri >= g_n_runners) {
         return 0;
     }
     runner_lock(ri);
     r = &g_runners[ri];
-    if (r->count != 0u) {
-        h = r->q[r->head];
-        r->head = (r->head + 1u) % PM_METAL_ASYNC_READY_CAP;
-        r->count--;
+    /* Default High→Med→Low; if Low starved vs High, try Low earlier. */
+    order[0] = PM_METAL_ASYNC_PRIO_HIGH;
+    order[1] = PM_METAL_ASYNC_PRIO_MED;
+    order[2] = PM_METAL_ASYNC_PRIO_LOW;
+    if (r->usage[PM_METAL_ASYNC_PRIO_HIGH] > (r->usage[PM_METAL_ASYNC_PRIO_LOW] + 8u) &&
+        r->ready[PM_METAL_ASYNC_PRIO_LOW].count > 0u) {
+        order[0] = PM_METAL_ASYNC_PRIO_LOW;
+        order[1] = PM_METAL_ASYNC_PRIO_HIGH;
+        order[2] = PM_METAL_ASYNC_PRIO_MED;
+    }
+    for (oi = 0; oi < 3u; oi++) {
+        prio_q_t *q = &r->ready[order[oi]];
+        if (q->count == 0u) {
+            continue;
+        }
+        h = q->q[q->head];
+        q->head = (q->head + 1u) % PM_METAL_ASYNC_READY_CAP;
+        q->count--;
+        r->usage[order[oi]]++;
+        break;
     }
     runner_unlock(ri);
     return h;
@@ -149,6 +192,7 @@ static uint32_t alloc_slot(slot_kind_t kind, uint64_t deadline_us, uint32_t runn
             g_slots[i].kind = (uint8_t)kind;
             g_slots[i].status = PM_METAL_ASYNC_WAITING;
             g_slots[i].runner = (uint8_t)runner;
+            g_slots[i].prio = (uint8_t)PM_METAL_ASYNC_PRIO_MED;
             g_slots[i].deadline_us = deadline_us;
             g_slots[i].await_child = 0;
             g_slots[i].result_u32 = 0;
@@ -156,6 +200,25 @@ static uint32_t alloc_slot(slot_kind_t kind, uint64_t deadline_us, uint32_t runn
         }
     }
     return 0;
+}
+
+void pm_metal_async_set_prio(uint32_t h, pm_metal_async_prio_t prio)
+{
+    if (h == 0 || h >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[h].used) {
+        return;
+    }
+    if ((uint32_t)prio >= PM_METAL_ASYNC_N_PRIO) {
+        prio = PM_METAL_ASYNC_PRIO_MED;
+    }
+    g_slots[h].prio = (uint8_t)prio;
+}
+
+pm_metal_async_prio_t pm_metal_async_get_prio(uint32_t h)
+{
+    if (h == 0 || h >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[h].used) {
+        return PM_METAL_ASYNC_PRIO_MED;
+    }
+    return (pm_metal_async_prio_t)g_slots[h].prio;
 }
 
 pm_metal_async_status_t pm_metal_async_status(uint32_t h)
@@ -247,11 +310,7 @@ int32_t pm_metal_async_start(uint32_t n_cpus)
     g_rr = 0;
     g_started = 1;
     g_idle_pump = NULL;
-    for (i = 0; i < n; i++) {
-        g_runners[i].head = 0;
-        g_runners[i].tail = 0;
-        g_runners[i].count = 0;
-    }
+    (void)i;
     pm_metal_time_init();
     return 0;
 }
@@ -287,6 +346,7 @@ static int32_t poll_runner(uint32_t ri, uint64_t now)
             continue;
         }
         if (g_slots[i].kind == SLOT_SLEEP && now >= g_slots[i].deadline_us) {
+            /* Timing class: due sleeps complete before ready drain. */
             complete_slot(i);
             n++;
         } else if (g_slots[i].kind == SLOT_AWAIT) {
@@ -365,28 +425,39 @@ int32_t pm_metal_async_run_poll(void)
     return n;
 }
 
-uint32_t pm_metal_async_create_task_on(uint32_t h, uint32_t runner)
+uint32_t pm_metal_async_create_task_prio(uint32_t h, uint32_t runner,
+                                         pm_metal_async_prio_t prio)
 {
     if (!g_started || runner >= g_n_runners) {
         return 0;
+    }
+    if ((uint32_t)prio >= PM_METAL_ASYNC_N_PRIO) {
+        prio = PM_METAL_ASYNC_PRIO_MED;
     }
     if (h == 0u) {
         h = alloc_slot(SLOT_YIELD, 0, runner);
         if (h == 0u) {
             return 0;
         }
-        (void)ready_push(runner, h);
+        g_slots[h].prio = (uint8_t)prio;
+        (void)ready_push_prio(runner, h, (uint8_t)prio);
         return h;
     }
     if (h >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[h].used) {
         return 0;
     }
     g_slots[h].runner = (uint8_t)runner;
+    g_slots[h].prio = (uint8_t)prio;
     if (g_slots[h].kind == SLOT_YIELD
         || g_slots[h].status == PM_METAL_ASYNC_PENDING) {
-        (void)ready_push(runner, h);
+        (void)ready_push_prio(runner, h, (uint8_t)prio);
     }
     return h;
+}
+
+uint32_t pm_metal_async_create_task_on(uint32_t h, uint32_t runner)
+{
+    return pm_metal_async_create_task_prio(h, runner, PM_METAL_ASYNC_PRIO_MED);
 }
 
 volatile uint32_t pm_metal_smp_poll_ticks[PM_METAL_ASYNC_MAX_RUNNERS];
