@@ -1,9 +1,15 @@
 (async function () {
   const params = new URLSearchParams(location.search);
-  const theme = params.get("theme") || "metal";
+  let theme = params.get("theme");
   const link = document.getElementById("theme-css");
-  if (link) {
-    link.href = "css/themes/" + theme + ".css";
+  function applyTheme(name) {
+    theme = name || "metal";
+    if (link) {
+      link.href = "css/themes/" + theme + ".css";
+    }
+  }
+  if (theme) {
+    applyTheme(theme);
   }
   async function load(id, path) {
     const el = document.getElementById(id);
@@ -14,6 +20,9 @@
       if (id === "caps") {
         try {
           const j = JSON.parse(t);
+          if (!params.get("theme") && j.theme) {
+            applyTheme(j.theme);
+          }
           document.getElementById("role").textContent =
             "role=" + (j.role || "?") + " theme=" + theme;
         } catch (_) {}
@@ -22,6 +31,7 @@
       el.textContent = String(e);
     }
   }
-  await load("health", "/health");
-  await load("caps", "/capabilities");
+  /* Relative to /inspect/ or /cdn/inspect/ → sibling host routes. */
+  await load("health", "../health");
+  await load("caps", "../capabilities");
 })();
