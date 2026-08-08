@@ -155,7 +155,7 @@ SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebu
 OBJ = $(PY_CORE_O)
 OBJ += $(BUILD)/frozen_content.o
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
-OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_smp.o $(BUILD)/metal_ap_tramp.o $(BUILD)/metal_acpi.o $(BUILD)/metal_asgi.o $(BUILD)/metal_inspect.o $(BUILD)/metal_console.o
+OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_smp.o $(BUILD)/metal_ap_tramp.o $(BUILD)/metal_acpi.o $(BUILD)/metal_asgi.o $(BUILD)/metal_asgi_static.o $(BUILD)/metal_inspect.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
 OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
@@ -198,7 +198,11 @@ $(BUILD)/metal_acpi.o: $(METAL)/src/pymergetic/metal/dev/acpi/__init__.c | $(BUI
 
 $(BUILD)/metal_asgi.o: $(METAL)/src/pymergetic/metal/asgi/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+	$(Q)$(CC) $(CFLAGS) -I$(METAL)/src/pymergetic/metal/asgi -c -o $@ $<
+
+$(BUILD)/metal_asgi_static.o: $(METAL)/src/pymergetic/metal/asgi/static_embed.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -I$(METAL)/src/pymergetic/metal/asgi -c -o $@ $<
 
 $(BUILD)/metal_inspect.o: $(METAL)/src/pymergetic/metal/inspect/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
@@ -470,15 +474,18 @@ live-http: $(BUILD)/metal.qemu.elf
 	  tail -c 2000 $(BUILD)/serial.log 2>/dev/null || true; \
 	  exit 1; \
 	fi; \
-	health=""; caps=""; ec1=1; ec2=1; \
+	health=""; caps=""; page=""; ec1=1; ec2=1; ec3=1; \
 	for t in 1 2 3 4 5 6 7 8; do \
 	  health=$$(curl -fsS --max-time 3 http://127.0.0.1:18080/health 2>/dev/null); \
 	  ec1=$$?; \
 	  caps=$$(curl -fsS --max-time 3 http://127.0.0.1:18080/capabilities 2>/dev/null); \
 	  ec2=$$?; \
-	  if [ $$ec1 -eq 0 ] && [ $$ec2 -eq 0 ] \
+	  page=$$(curl -fsS --max-time 3 http://127.0.0.1:18080/inspect/ 2>/dev/null); \
+	  ec3=$$?; \
+	  if [ $$ec1 -eq 0 ] && [ $$ec2 -eq 0 ] && [ $$ec3 -eq 0 ] \
 	    && echo "$$health" | grep -q '"ok":true' \
-	    && echo "$$caps" | grep -q '"role":"metal"'; then \
+	    && echo "$$caps" | grep -q '"role":"metal"' \
+	    && echo "$$page" | grep -q '<title>Inspect</title>'; then \
 	    break; \
 	  fi; \
 	  sleep 0.4; \
@@ -488,9 +495,11 @@ live-http: $(BUILD)/metal.qemu.elf
 	grep -a -E "ok|live http|fail|asgi|smp " $(BUILD)/serial.log 2>/dev/null | tail -30 || true; \
 	echo "health=[$$health] ec=$$ec1"; \
 	echo "caps=[$$caps] ec=$$ec2"; \
-	if [ $$ec1 -eq 0 ] && [ $$ec2 -eq 0 ] \
+	echo "inspect_title=$$(echo "$$page" | tr -d '\r' | grep -o '<title>[^<]*</title>' | head -1) ec=$$ec3"; \
+	if [ $$ec1 -eq 0 ] && [ $$ec2 -eq 0 ] && [ $$ec3 -eq 0 ] \
 	  && echo "$$health" | grep -q '"ok":true' \
-	  && echo "$$caps" | grep -q '"role":"metal"'; then \
+	  && echo "$$caps" | grep -q '"role":"metal"' \
+	  && echo "$$page" | grep -q '<title>Inspect</title>'; then \
 	  echo "X86_64_BIOS_LIVE_HTTP_OK ENGINE=$(ENGINE)"; \
 	  exit 0; \
 	fi; \

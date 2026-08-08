@@ -1,5 +1,6 @@
 /*
- * Minimal C ASGI-facing HTTP server: Inspect contract + static stub.
+ * Minimal C ASGI-facing HTTP server: Inspect contract + embedded static.
+ * Static mounts match httpd.json: /inspect → inspect/www/inspect (embedded).
  */
 #include "pymergetic/metal/asgi/__init__.h"
 
@@ -7,6 +8,7 @@
 
 #include "pymergetic/metal/inspect/__init__.h"
 #include "pymergetic/metal/net/ip/tcp.h"
+#include "static_embed.h"
 
 static int g_ready;
 static uint16_t g_port;
@@ -61,12 +63,12 @@ static void u32_to_dec(unsigned v, char *out, size_t out_len)
     out[n] = 0;
 }
 
-static void send_resp(int status, const char *ctype, const char *body)
+static void send_resp_bin(int status, const char *ctype, const uint8_t *body,
+                          uint32_t blen)
 {
     char hdr[256];
     char clen[16];
     char scode[8];
-    size_t blen = body ? strlen(body) : 0;
     size_t o = 0;
 
     u32_to_dec((unsigned)status, scode, sizeof(scode));
@@ -90,9 +92,35 @@ static void send_resp(int status, const char *ctype, const char *body)
     if (o > 0) {
         (void)pm_metal_net_ip_tcp_send((const uint8_t *)hdr, (uint32_t)o);
     }
-    if (blen > 0u) {
-        (void)pm_metal_net_ip_tcp_send((const uint8_t *)body, (uint32_t)blen);
+    if (blen > 0u && body != NULL) {
+        (void)pm_metal_net_ip_tcp_send(body, blen);
     }
+}
+
+static void send_resp(int status, const char *ctype, const char *body)
+{
+    send_resp_bin(status, ctype, (const uint8_t *)body,
+                  body ? (uint32_t)strlen(body) : 0u);
+}
+
+static int serve_inspect_static(const char *path)
+{
+    const char *rel;
+    const pm_metal_asgi_static_file_t *f;
+
+    if (strcmp(path, "/inspect") == 0 || strcmp(path, "/inspect/") == 0) {
+        rel = "index.html";
+    } else if (strncmp(path, "/inspect/", 9) == 0) {
+        rel = path + 9;
+    } else {
+        return 0;
+    }
+    f = pm_metal_asgi_static_lookup(rel);
+    if (f == NULL) {
+        return 0;
+    }
+    send_resp_bin(200, f->ctype, f->data, f->len);
+    return 1;
 }
 
 int32_t pm_metal_asgi_init(uint16_t port)
@@ -150,17 +178,7 @@ int32_t pm_metal_asgi_poll(void)
         (void)pm_metal_net_ip_tcp_passive_relisten(g_port);
         return 1;
     }
-    if (strcmp(method, "GET") == 0 &&
-        (strcmp(path, "/inspect") == 0 || strcmp(path, "/inspect/") == 0 ||
-         strcmp(path, "/inspect/index.html") == 0)) {
-        send_resp(200, "text/html",
-                  "<!doctype html><meta charset=utf-8>"
-                  "<title>metal inspect</title>"
-                  "<h1>metal inspect</h1>"
-                  "<p>theme=metal — UI from "
-                  "/mods/pymergetic.metal.inspect/www/inspect</p>"
-                  "<p><a href=/capabilities>capabilities</a> · "
-                  "<a href=/health>health</a></p>");
+    if (strcmp(method, "GET") == 0 && serve_inspect_static(path)) {
         (void)pm_metal_net_ip_tcp_passive_relisten(g_port);
         return 1;
     }

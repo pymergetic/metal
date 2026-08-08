@@ -11,21 +11,24 @@ except ImportError:  # pragma: no cover — guest / no FastAPI
 
 
 class FastAPIAdapter:
-    def __init__(self, role="cdn", theme="cdn", app=None):
+    def __init__(self, role="cdn", theme="cdn", app=None, *, include_health=True):
         if FastAPI is None:
             raise RuntimeError("fastapi not available")
         self.role = role
         self.theme = theme
+        self.include_health = include_health
         self.app = app if app is not None else FastAPI()
         self._register()
 
     def capabilities(self):
         return make_capabilities(self.role, self.theme, fastapi=True)
 
-    def add_routes(self, app=None):
+    def add_routes(self, app=None, *, include_health=None):
         """Mount routes onto an existing FastAPI app (or self.app)."""
         if app is not None:
             self.app = app
+        if include_health is not None:
+            self.include_health = include_health
         self._register()
         return self.app
 
@@ -33,9 +36,11 @@ class FastAPIAdapter:
         app = self.app
         adapter = self
 
-        @app.get("/health")
-        async def health():
-            return {"ok": True}
+        if self.include_health:
+
+            @app.get("/health")
+            async def health():
+                return {"ok": True}
 
         @app.get("/capabilities")
         async def capabilities():
