@@ -41,7 +41,9 @@ uint32_t pm_metal_net_ssh_kex_build_init(uint8_t *dst, uint32_t cap)
     dst[o++] = SSH_MSG_KEXINIT;
     pm_metal_net_ssh_crypto_random(dst + o, 16);
     o += 16;
-    n = put_name_list(dst + o, cap - o, "curve25519-sha256");
+    /* Advertise strict-KEX so both sides reset seq after NEWKEYS (OpenSSH 9+). */
+    n = put_name_list(dst + o, cap - o,
+        "curve25519-sha256,kex-strict-s-v00@openssh.com");
     if (n == 0u) {
         return 0;
     }
@@ -221,8 +223,8 @@ int32_t pm_metal_net_ssh_kex_server_reply(pm_metal_net_ssh_kex_t *k,
     return 0;
 }
 
-static void hash_key(pm_metal_net_ssh_kex_t *k, uint8_t letter, uint8_t out[32],
-                     const uint8_t *prev, uint32_t prev_len)
+/* K1 = HASH(K || H || X || session_id); Kn = HASH(K || H || K1..Kn-1). */
+static void expand64(pm_metal_net_ssh_kex_t *k, uint8_t letter, uint8_t out[64])
 {
     uint8_t ctx[128];
 
@@ -231,16 +233,13 @@ static void hash_key(pm_metal_net_ssh_kex_t *k, uint8_t letter, uint8_t out[32],
     pm_metal_net_ssh_sha256_update(ctx, k->H, 32);
     pm_metal_net_ssh_sha256_update(ctx, &letter, 1);
     pm_metal_net_ssh_sha256_update(ctx, k->session_id, 32);
-    if (prev != NULL && prev_len > 0u) {
-        pm_metal_net_ssh_sha256_update(ctx, prev, prev_len);
-    }
     pm_metal_net_ssh_sha256_final(ctx, out);
-}
 
-static void expand64(pm_metal_net_ssh_kex_t *k, uint8_t letter, uint8_t out[64])
-{
-    hash_key(k, letter, out, NULL, 0);
-    hash_key(k, letter, out + 32, out, 32);
+    pm_metal_net_ssh_sha256_init(ctx);
+    pm_metal_net_ssh_sha256_update(ctx, k->K_mpint, k->K_mpint_len);
+    pm_metal_net_ssh_sha256_update(ctx, k->H, 32);
+    pm_metal_net_ssh_sha256_update(ctx, out, 32);
+    pm_metal_net_ssh_sha256_final(ctx, out + 32);
 }
 
 int32_t pm_metal_net_ssh_kex_derive_keys(pm_metal_net_ssh_kex_t *k)

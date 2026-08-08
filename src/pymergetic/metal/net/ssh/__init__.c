@@ -23,6 +23,7 @@ typedef enum {
     SSH_ST_WAIT_NEWKEYS,
     SSH_ST_SERVICE,
     SSH_ST_AUTH,
+    SSH_ST_SESSION,
     SSH_ST_DONE,
     SSH_ST_ERROR
 } ssh_st_t;
@@ -34,16 +35,31 @@ static uint32_t g_peer_len;
 static int32_t g_served;
 static int32_t g_crypto_ready;
 static pm_metal_net_ssh_kex_t g_kex;
+static uint32_t g_peer_chan;
+static uint32_t g_our_chan;
 
 static const char k_ident[] = "SSH-2.0-metal\r\n";
 static const char k_ident_bare[] = "SSH-2.0-metal";
 
 #define SSH_MSG_DISCONNECT 1
+#define SSH_MSG_IGNORE 2
 #define SSH_MSG_SERVICE_REQUEST 5
 #define SSH_MSG_SERVICE_ACCEPT 6
 #define SSH_MSG_USERAUTH_REQUEST 50
 #define SSH_MSG_USERAUTH_FAILURE 51
 #define SSH_MSG_USERAUTH_SUCCESS 52
+#define SSH_MSG_GLOBAL_REQUEST 80
+#define SSH_MSG_REQUEST_SUCCESS 81
+#define SSH_MSG_REQUEST_FAILURE 82
+#define SSH_MSG_CHANNEL_OPEN 90
+#define SSH_MSG_CHANNEL_OPEN_CONFIRMATION 91
+#define SSH_MSG_CHANNEL_WINDOW_ADJUST 93
+#define SSH_MSG_CHANNEL_DATA 94
+#define SSH_MSG_CHANNEL_EOF 96
+#define SSH_MSG_CHANNEL_CLOSE 97
+#define SSH_MSG_CHANNEL_REQUEST 98
+#define SSH_MSG_CHANNEL_SUCCESS 99
+#define SSH_MSG_CHANNEL_FAILURE 100
 #define SSH_MSG_KEXINIT 20
 #define SSH_MSG_NEWKEYS 21
 #define SSH_MSG_KEX_ECDH_INIT 30
@@ -52,6 +68,73 @@ static uint32_t get_u32b(const uint8_t *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8)
            | (uint32_t)p[3];
+}
+
+static void put_u32b(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v >> 24);
+    p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8);
+    p[3] = (uint8_t)v;
+}
+
+static int32_t send_channel_open_confirm(uint32_t peer_chan)
+{
+    uint8_t pl[17];
+
+    pl[0] = SSH_MSG_CHANNEL_OPEN_CONFIRMATION;
+    put_u32b(pl + 1, peer_chan);
+    put_u32b(pl + 5, g_our_chan);
+    put_u32b(pl + 9, 32768u);
+    put_u32b(pl + 13, 16384u);
+    return pm_metal_net_ssh_pkt_send(pl, 17);
+}
+
+static int32_t send_channel_success(uint32_t peer_chan)
+{
+    uint8_t pl[5];
+
+    pl[0] = SSH_MSG_CHANNEL_SUCCESS;
+    put_u32b(pl + 1, peer_chan);
+    return pm_metal_net_ssh_pkt_send(pl, 5);
+}
+
+static int32_t send_channel_failure(uint32_t peer_chan)
+{
+    uint8_t pl[5];
+
+    pl[0] = SSH_MSG_CHANNEL_FAILURE;
+    put_u32b(pl + 1, peer_chan);
+    return pm_metal_net_ssh_pkt_send(pl, 5);
+}
+
+static int32_t send_exit_and_close(uint32_t peer_chan)
+{
+    uint8_t pl[64];
+    uint32_t o;
+    const char *req = "exit-status";
+
+    pl[0] = SSH_MSG_CHANNEL_REQUEST;
+    put_u32b(pl + 1, peer_chan);
+    o = 5;
+    put_u32b(pl + o, (uint32_t)strlen(req));
+    o += 4;
+    memcpy(pl + o, req, strlen(req));
+    o += (uint32_t)strlen(req);
+    pl[o++] = 0; /* want_reply = false */
+    put_u32b(pl + o, 0); /* exit status 0 */
+    o += 4;
+    if (pm_metal_net_ssh_pkt_send(pl, o) != 0) {
+        return -1;
+    }
+    pl[0] = SSH_MSG_CHANNEL_EOF;
+    put_u32b(pl + 1, peer_chan);
+    if (pm_metal_net_ssh_pkt_send(pl, 5) != 0) {
+        return -1;
+    }
+    pl[0] = SSH_MSG_CHANNEL_CLOSE;
+    put_u32b(pl + 1, peer_chan);
+    return pm_metal_net_ssh_pkt_send(pl, 5);
 }
 
 static int32_t send_service_accept(void)
@@ -127,6 +210,8 @@ int32_t pm_metal_net_ssh_init(void)
     g_st = SSH_ST_IDLE;
     g_peer_len = 0;
     g_served = 0;
+    g_peer_chan = 0;
+    g_our_chan = 0;
     memset(g_peer_ident, 0, sizeof(g_peer_ident));
     pm_metal_net_ssh_kex_reset(&g_kex);
     pm_metal_net_ssh_pkt_reset();
@@ -151,6 +236,8 @@ uint32_t pm_metal_net_ssh_listen(uint32_t port)
     g_st = SSH_ST_IDLE;
     g_peer_len = 0;
     g_served = 0;
+    g_peer_chan = 0;
+    g_our_chan = 0;
     pm_metal_net_ssh_kex_reset(&g_kex);
     g_kex.v_s_len = (uint32_t)(sizeof(k_ident_bare) - 1u);
     memcpy(g_kex.v_s, k_ident_bare, g_kex.v_s_len);
@@ -332,57 +419,127 @@ int32_t pm_metal_net_ssh_poll(void)
             g_st = SSH_ST_ERROR;
             return -1;
         }
-        if (rc == 1 && n >= 5u && pl[0] == SSH_MSG_USERAUTH_REQUEST) {
-            /* Parse method name (user, service, method strings). */
-            uint32_t o = 1;
-            uint32_t slen;
-            int ok = 0;
-            const char *method = NULL;
-            uint32_t method_len = 0;
-
-            for (int fi = 0; fi < 3; fi++) {
-                if (o + 4u > n) {
-                    break;
-                }
-                slen = get_u32b(pl + o);
-                o += 4;
-                if (o + slen > n) {
-                    break;
-                }
-                if (fi == 2) {
-                    method = (const char *)(pl + o);
-                    method_len = slen;
-                }
-                o += slen;
-            }
-            if (method != NULL && method_len == 4u &&
-                memcmp(method, "none", 4) == 0) {
-                ok = 1;
-            } else if (method != NULL && method_len == 8u &&
-                       memcmp(method, "password", 8) == 0) {
-                /* optional bool + password string */
-                if (o < n) {
-                    o += 1; /* FALSE = new password follow */
-                }
-                if (o + 4u <= n) {
-                    slen = get_u32b(pl + o);
-                    o += 4;
-                    if (o + slen <= n && slen == 5u &&
-                        memcmp(pl + o, "metal", 5) == 0) {
-                        ok = 1;
+        if (rc == 1 && n >= 1u) {
+            if (pl[0] == SSH_MSG_IGNORE || pl[0] == SSH_MSG_GLOBAL_REQUEST) {
+                if (pl[0] == SSH_MSG_GLOBAL_REQUEST && n >= 2u) {
+                    /* want_reply at end of name string — best-effort fail. */
+                    uint32_t slen = (n >= 5u) ? get_u32b(pl + 1) : 0;
+                    if (5u + slen < n && pl[5u + slen] != 0) {
+                        uint8_t fail = SSH_MSG_REQUEST_FAILURE;
+                        (void)pm_metal_net_ssh_pkt_send(&fail, 1);
                     }
                 }
-            }
-            if (ok) {
-                if (send_auth_success() != 0) {
-                    g_st = SSH_ST_ERROR;
-                    return -1;
+            } else if (pl[0] == SSH_MSG_USERAUTH_REQUEST && n >= 5u) {
+                /* Parse method name (user, service, method strings). */
+                uint32_t o = 1;
+                uint32_t slen;
+                int ok = 0;
+                const char *method = NULL;
+                uint32_t method_len = 0;
+
+                for (int fi = 0; fi < 3; fi++) {
+                    if (o + 4u > n) {
+                        break;
+                    }
+                    slen = get_u32b(pl + o);
+                    o += 4;
+                    if (o + slen > n) {
+                        break;
+                    }
+                    if (fi == 2) {
+                        method = (const char *)(pl + o);
+                        method_len = slen;
+                    }
+                    o += slen;
                 }
+                /* Accept password "metal" only; reject none so client retries. */
+                if (method != NULL && method_len == 8u &&
+                    memcmp(method, "password", 8) == 0) {
+                    if (o < n) {
+                        o += 1; /* FALSE = new password follow */
+                    }
+                    if (o + 4u <= n) {
+                        slen = get_u32b(pl + o);
+                        o += 4;
+                        if (o + slen <= n && slen == 5u &&
+                            memcmp(pl + o, "metal", 5) == 0) {
+                            ok = 1;
+                        }
+                    }
+                }
+                if (ok) {
+                    if (send_auth_success() != 0) {
+                        g_st = SSH_ST_ERROR;
+                        return -1;
+                    }
+                    g_st = SSH_ST_SESSION;
+                } else {
+                    (void)send_auth_failure();
+                }
+            }
+        }
+    }
+    if (g_st == SSH_ST_SESSION) {
+        rc = pm_metal_net_ssh_pkt_recv(pl, sizeof(pl), &n);
+        if (rc < 0) {
+            g_st = SSH_ST_ERROR;
+            return -1;
+        }
+        if (rc == 1 && n >= 1u) {
+            if (pl[0] == SSH_MSG_IGNORE || pl[0] == SSH_MSG_CHANNEL_WINDOW_ADJUST
+                || pl[0] == SSH_MSG_CHANNEL_DATA || pl[0] == SSH_MSG_CHANNEL_EOF) {
+                /* ignore */
+            } else if (pl[0] == SSH_MSG_GLOBAL_REQUEST) {
+                uint32_t slen = (n >= 5u) ? get_u32b(pl + 1) : 0;
+                if (5u + slen < n && pl[5u + slen] != 0) {
+                    uint8_t fail = SSH_MSG_REQUEST_FAILURE;
+                    (void)pm_metal_net_ssh_pkt_send(&fail, 1);
+                }
+            } else if (pl[0] == SSH_MSG_CHANNEL_OPEN && n >= 17u) {
+                uint32_t slen = get_u32b(pl + 1);
+                uint32_t o = 5u + slen;
+                if (o + 12u <= n && slen == 7u && memcmp(pl + 5, "session", 7) == 0) {
+                    g_peer_chan = get_u32b(pl + o);
+                    g_our_chan = 0;
+                    if (send_channel_open_confirm(g_peer_chan) != 0) {
+                        g_st = SSH_ST_ERROR;
+                        return -1;
+                    }
+                }
+            } else if (pl[0] == SSH_MSG_CHANNEL_REQUEST && n >= 10u) {
+                uint32_t chan = get_u32b(pl + 1);
+                uint32_t slen = get_u32b(pl + 5);
+                uint32_t o = 9u + slen;
+                uint8_t want = (o < n) ? pl[o] : 0;
+                int is_exec = (slen == 4u && memcmp(pl + 9, "exec", 4) == 0);
+                int is_shell = (slen == 5u && memcmp(pl + 9, "shell", 5) == 0);
+                int is_pty = (slen == 7u && memcmp(pl + 9, "pty-req", 7) == 0);
+                int is_env = (slen == 3u && memcmp(pl + 9, "env", 3) == 0);
+                if (want) {
+                    if (is_exec || is_shell || is_pty || is_env) {
+                        if (send_channel_success(chan) != 0) {
+                            g_st = SSH_ST_ERROR;
+                            return -1;
+                        }
+                    } else if (send_channel_failure(chan) != 0) {
+                        g_st = SSH_ST_ERROR;
+                        return -1;
+                    }
+                }
+                if (is_exec || is_shell) {
+                    if (send_exit_and_close(chan) != 0) {
+                        g_st = SSH_ST_ERROR;
+                        return -1;
+                    }
+                    g_st = SSH_ST_DONE;
+                    g_served = 1;
+                    return 1;
+                }
+            } else if (pl[0] == SSH_MSG_CHANNEL_CLOSE) {
                 g_st = SSH_ST_DONE;
                 g_served = 1;
                 return 1;
             }
-            (void)send_auth_failure();
         }
     }
     if (g_st == SSH_ST_DONE) {

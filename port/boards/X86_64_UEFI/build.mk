@@ -448,13 +448,27 @@ live-http: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	  tail -c 2000 $(BUILD)/serial.log 2>/dev/null || true; \
 	  exit 1; \
 	fi; \
-	body=$$(curl -fsS --max-time 3 http://127.0.0.1:18080/ 2>/dev/null); \
-	ec=$$?; \
+	health=""; caps=""; ec1=1; ec2=1; \
+	for t in 1 2 3 4 5 6 7 8; do \
+	  health=$$(curl -fsS --max-time 3 http://127.0.0.1:18080/health 2>/dev/null); \
+	  ec1=$$?; \
+	  caps=$$(curl -fsS --max-time 3 http://127.0.0.1:18080/capabilities 2>/dev/null); \
+	  ec2=$$?; \
+	  if [ $$ec1 -eq 0 ] && [ $$ec2 -eq 0 ] \
+	    && echo "$$health" | grep -q '"ok":true' \
+	    && echo "$$caps" | grep -q '"role":"metal"'; then \
+	    break; \
+	  fi; \
+	  sleep 0.4; \
+	done; \
 	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	echo "----- serial (tail) -----"; \
-	grep -a -E "ok|live http|fail|ovmf ok" $(BUILD)/serial.log 2>/dev/null | tail -30 || true; \
-	echo "curl body=[$$body] ec=$$ec"; \
-	if [ $$ec -eq 0 ] && echo "$$body" | grep -q "metal ok"; then \
+	grep -a -E "ok|live http|fail|ovmf ok|smp " $(BUILD)/serial.log 2>/dev/null | tail -30 || true; \
+	echo "health=[$$health] ec=$$ec1"; \
+	echo "caps=[$$caps] ec=$$ec2"; \
+	if [ $$ec1 -eq 0 ] && [ $$ec2 -eq 0 ] \
+	  && echo "$$health" | grep -q '"ok":true' \
+	  && echo "$$caps" | grep -q '"role":"metal"'; then \
 	  echo "X86_64_UEFI_LIVE_HTTP_OK ENGINE=$(ENGINE)"; \
 	  exit 0; \
 	fi; \
@@ -486,18 +500,40 @@ live-ssh: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	  tail -c 2000 $(BUILD)/serial.log 2>/dev/null || true; \
 	  exit 1; \
 	fi; \
-	banner=""; \
-	for t in 1 2 3 4 5; do \
-	  banner=$$(timeout 5 nc -w 3 127.0.0.1 22022 2>/dev/null | tr -d '\r' | head -n1); \
-	  if echo "$$banner" | grep -qE "SSH-2.0-"; then break; fi; \
-	  sleep 0.5; \
-	done; \
+	auth_ok=0; \
+	ask=$$(mktemp); \
+	printf '%s\n' '#!/bin/sh' 'echo metal' > $$ask; chmod 700 $$ask; \
+	if command -v ssh >/dev/null 2>&1; then \
+	  for t in 1 2 3 4 5 6 7 8 9 10; do \
+	    if command -v sshpass >/dev/null 2>&1; then \
+	      timeout 12 sshpass -p metal ssh -o StrictHostKeyChecking=no \
+	        -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password \
+	        -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1 \
+	        -o ConnectTimeout=5 -o ConnectionAttempts=1 \
+	        -p 22022 metal@127.0.0.1 true >/dev/null 2>&1 && auth_ok=1; \
+	    else \
+	      SSH_ASKPASS=$$ask SSH_ASKPASS_REQUIRE=force DISPLAY=:0 \
+	        timeout 12 setsid -w ssh -o StrictHostKeyChecking=no \
+	        -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password \
+	        -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1 \
+	        -o ConnectTimeout=5 -o ConnectionAttempts=1 \
+	        -p 22022 metal@127.0.0.1 true >/dev/null 2>&1 && auth_ok=1; \
+	    fi; \
+	    if [ $$auth_ok -eq 1 ]; then break; fi; \
+	    sleep 0.5; \
+	  done; \
+	fi; \
+	rm -f $$ask; \
 	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	echo "----- serial (tail) -----"; \
-	grep -a -E "ok|live ssh|fail" $(BUILD)/serial.log 2>/dev/null | tail -40 || true; \
-	echo "ssh banner=[$$banner]"; \
-	echo "X86_64_UEFI_LIVE_SSH_OK ENGINE=$(ENGINE)"; \
-	exit 0
+	grep -a -E "ok|live ssh|fail|smp " $(BUILD)/serial.log 2>/dev/null | tail -40 || true; \
+	echo "ssh auth_ok=$$auth_ok"; \
+	if [ $$auth_ok -eq 1 ]; then \
+	  echo "X86_64_UEFI_LIVE_SSH_OK ENGINE=$(ENGINE)"; \
+	  exit 0; \
+	fi; \
+	echo "X86_64_UEFI_LIVE_SSH_FAIL ENGINE=$(ENGINE)"; \
+	exit 1
 
 clean:
 	$(RM) -rf $(BUILD)

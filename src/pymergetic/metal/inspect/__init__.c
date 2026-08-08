@@ -28,7 +28,7 @@ int32_t pm_metal_inspect_capabilities_json(char *buf, size_t buf_len)
     static const char k_caps[] =
         "{\"role\":\"metal\",\"theme\":\"metal\","
         "\"smp\":true,\"asgi\":true,\"ssh_kex\":true,"
-        "\"ssh_auth\":false,\"fastapi\":false,"
+        "\"ssh_auth\":true,\"fastapi\":false,"
         "\"microdot\":true,\"vfs_static\":true}";
 
     if (buf == NULL || buf_len < sizeof(k_caps)) {

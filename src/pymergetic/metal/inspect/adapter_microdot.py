@@ -23,7 +23,7 @@ class MicrodotAdapter:
             "smp": True,
             "asgi": True,
             "ssh_kex": True,
-            "ssh_auth": False,
+            "ssh_auth": True,
             "fastapi": False,
             "microdot": True,
             "vfs_static": True,

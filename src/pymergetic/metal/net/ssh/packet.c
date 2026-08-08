@@ -64,8 +64,8 @@ static void chacha_poly_keys(const uint8_t key[64], uint32_t seq, uint8_t poly[3
 
     put_u64_be(nonce, (uint64_t)seq);
     memset(zeros, 0, sizeof(zeros));
-    /* Poly key = first 32 bytes of ChaCha block 0 with main key (K1). */
-    (void)crypto_chacha20_djb(block, zeros, 64, key + 32, nonce, 0);
+    /* OpenSSH: main=key[0:32] (payload+poly), header=key[32:64] (length). */
+    (void)crypto_chacha20_djb(block, zeros, 64, key, nonce, 0);
     memcpy(poly, block, 32);
 }
 
@@ -141,10 +141,10 @@ static int32_t send_enc(const uint8_t *payload, uint32_t payload_len)
     }
     put_u32(out, body_len);
     put_u64_be(nonce, (uint64_t)g_seq_out);
-    /* Encrypt length with K2 */
-    (void)crypto_chacha20_djb(out, out, 4, g_key_s2c, nonce, 0);
+    /* Length with header key; payload with main key (OpenSSH layout). */
+    (void)crypto_chacha20_djb(out, out, 4, g_key_s2c + 32, nonce, 0);
     chacha_poly_keys(g_key_s2c, g_seq_out, poly_key, block);
-    (void)crypto_chacha20_djb(out + 4, plain, body_len, g_key_s2c + 32, nonce, 1);
+    (void)crypto_chacha20_djb(out + 4, plain, body_len, g_key_s2c, nonce, 1);
     crypto_poly1305(mac, out, 4u + body_len, poly_key);
     memcpy(out + 4 + body_len, mac, 16);
     g_seq_out++;
@@ -238,7 +238,7 @@ static int32_t recv_enc(uint8_t *payload, uint32_t cap, uint32_t *len_out)
     }
     put_u64_be(nonce, (uint64_t)g_seq_in);
     memcpy(lenb, g_acc, 4);
-    (void)crypto_chacha20_djb(lenb, lenb, 4, g_key_c2s, nonce, 0);
+    (void)crypto_chacha20_djb(lenb, lenb, 4, g_key_c2s + 32, nonce, 0);
     body_len = get_u32(lenb);
     if (body_len < 5u || body_len > sizeof(g_acc) - 20u) {
         g_acc_len = 0;
@@ -254,8 +254,7 @@ static int32_t recv_enc(uint8_t *payload, uint32_t cap, uint32_t *len_out)
         g_acc_len = 0;
         return -1;
     }
-    (void)crypto_chacha20_djb(g_acc + 4, g_acc + 4, body_len, g_key_c2s + 32, nonce,
-                              1);
+    (void)crypto_chacha20_djb(g_acc + 4, g_acc + 4, body_len, g_key_c2s, nonce, 1);
     pad = g_acc[4];
     if (pad < 4u || (uint32_t)pad + 1u >= body_len) {
         g_acc_len = 0;

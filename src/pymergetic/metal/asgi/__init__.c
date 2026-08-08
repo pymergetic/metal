@@ -127,7 +127,11 @@ int32_t pm_metal_asgi_poll(void)
     int status = 404;
     int handled;
 
-    if (!g_ready || !pm_metal_net_ip_tcp_established()) {
+    if (!g_ready) {
+        return 0;
+    }
+    pm_metal_net_ip_tcp_focus_passive();
+    if (!pm_metal_net_ip_tcp_established()) {
         return 0;
     }
     if (pm_metal_net_ip_tcp_recv(buf, sizeof(buf) - 1u, &n) != 1 || n < 5u) {
@@ -136,12 +140,14 @@ int32_t pm_metal_asgi_poll(void)
     buf[n] = 0;
     if (parse_req((char *)buf, method, sizeof(method), path, sizeof(path)) != 0) {
         send_resp(400, "text/plain", "bad request");
+        (void)pm_metal_net_ip_tcp_passive_relisten(g_port);
         return 1;
     }
     body[0] = 0;
     handled = pm_metal_inspect_handle(method, path, &status, body, sizeof(body));
     if (handled == 1) {
         send_resp(status, "application/json", body);
+        (void)pm_metal_net_ip_tcp_passive_relisten(g_port);
         return 1;
     }
     if (strcmp(method, "GET") == 0 &&
@@ -155,8 +161,10 @@ int32_t pm_metal_asgi_poll(void)
                   "/mods/pymergetic.metal.inspect/www/inspect</p>"
                   "<p><a href=/capabilities>capabilities</a> · "
                   "<a href=/health>health</a></p>");
+        (void)pm_metal_net_ip_tcp_passive_relisten(g_port);
         return 1;
     }
     send_resp(404, "application/json", "{\"error\":\"not found\"}");
+    (void)pm_metal_net_ip_tcp_passive_relisten(g_port);
     return 1;
 }

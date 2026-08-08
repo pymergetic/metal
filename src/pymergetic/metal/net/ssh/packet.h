@@ -7,7 +7,7 @@
 
 void pm_metal_net_ssh_pkt_reset(void);
 
-/* Arm chacha20-poly1305@openssh.com (K2||K1 each direction, 64 bytes). */
+/* Arm chacha20-poly1305@openssh.com (main||header = 32||32 each direction). */
 void pm_metal_net_ssh_pkt_set_keys(const uint8_t key_c2s[64],
                                    const uint8_t key_s2c[64]);
 
