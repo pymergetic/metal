@@ -26,7 +26,7 @@ mods/build/
 # Toolchain (local download)
 .tools/
 
-# external/ holds git submodules (see .gitmodules). Do not gitignore them.
+# No metal/external vendor pile — use wasmmod / ENGINE_TOP (µPy) / third_party/tlsf.
 
 # IDE / tooling
 .vscode/

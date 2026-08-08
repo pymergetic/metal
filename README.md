@@ -6,34 +6,29 @@ Muscles for the MetalPython constellation (drivers, NIC, floor, net, …).
 ```bash
 # from packages/metalpython
 make -C ports/metal BOARD=X86_64_BIOS ENGINE=mp run
-make -C ports/metal BOARD=X86_64_BIOS ENGINE=mp live-ssh
+make -C ports/metal BOARD=X86_64_BIOS ENGINE=mp repl
 make -C ports/metal BOARD=X86_64_UEFI ENGINE=mp run
 ```
 
-Port forward + smoke: [`../../ports/metal/README.md`](../../ports/metal/README.md)
-(or [`port/README.md`](port/README.md)).
+Port: [`port/README.md`](port/README.md).
 
-## Layout (wasmmod principles)
+## Layout
 
 | Path | Role |
 |------|------|
-| [`include/pymergetic/metal/`](include/README.md) | **Public** C faces — enough to build against |
-| `src/pymergetic/metal/` | Hybrid impl + RS/Py export faces |
-| `port/` | BIOS/UEFI µPy boards; `-I include` (+ transitional `-I libc` symlink) |
-| `libc` → `include/.../libc` | Symlink for freestanding `-I` |
-| `external/` | Vendors |
-| `_tmp/` | Quarantine — **not** product |
+| [`include/pymergetic/metal/`](include/README.md) | **Public** C faces |
+| `src/pymergetic/metal/` | Hybrid impl |
+| `port/` | BIOS/UEFI µPy boards |
+| `libc` → `include/.../libc` | Freestanding headers for WAMR `-nostdinc` (µPy already uses `shared/libc`) |
+| `third_party/tlsf` | Tiny allocator used by floor |
 | [`docs/HYBRID.md`](docs/HYBRID.md) | Rules |
 
-**Gone from package root:** `net/` `async/` `mem/` `bus/` `console/` `draw/` `shell/` `dev/` `wasm/` product trees.
-
-**Net:** freestanding C under `src/.../net/ip/` + `include/.../net/ip/` (full
-`pm_metal_net_ip_*` prefix). Former lwIP RS twin quarantined in `_tmp`.
+**Not in metal:** `external/` vendor pile, `_tmp/`, package-root muscle twins.
+WAMR lives in **wasmmod**. µPy is **ENGINE_TOP**. No second copies here.
 
 ## Docs
 
 | Doc | Role |
 |-----|------|
-| [`docs/HYBRID.md`](docs/HYBRID.md) | include + hybrid C/RS/Py |
-| [`docs/IO.md`](docs/IO.md) | IO classes + N runners (aspirational / host-era notes) |
-| [`port/README.md`](port/README.md) | Board smoke / live surfaces |
+| [`docs/HYBRID.md`](docs/HYBRID.md) | include + hybrid |
+| [`port/README.md`](port/README.md) | smoke / REPL / live |

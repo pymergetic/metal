@@ -38,7 +38,8 @@ TFTP_ROOT := $(COMMON)/tftp-root
 SSH_BANNER := $(COMMON)/qemu-ssh-banner.sh
 NETDEV_USER := user,id=n0,tftp=$(TFTP_ROOT),guestfwd=tcp:10.0.2.100:22-cmd:$(SSH_BANNER)
 OVMF ?= /usr/share/ovmf/OVMF.fd
-EDK_INC ?= $(abspath $(PORT_DIR)/../external/edk2/MdePkg/Include)
+# Slim MdePkg headers only (no edk2 submodule — WAMR/µPy live in wasmmod / ENGINE_TOP).
+EDK_INC ?= $(BOARD_DIR)/edk_inc
 
 QSTR_DEFS = $(COMMON)/qstrdefsport.h
 MICROPY_ROM_TEXT_COMPRESSION ?= 0

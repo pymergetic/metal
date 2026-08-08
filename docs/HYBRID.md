@@ -9,7 +9,6 @@ include/pymergetic/metal/<mod>/.../*.h   # PUBLIC face (tracked)
 src/pymergetic/metal/<mod>/              # hybrid impl + export faces
   __init__.c | __init__.rs | __init__.pyi
 port/                                    # -I$(METAL)/include ; link src objects
-_tmp/                                    # quarantine for old parallel trees (not product)
 ```
 
 Mirror of wasmmod: `include/` + `glue/`/`crates/pm` + Python faces  
@@ -20,7 +19,7 @@ Mirror of wasmmod: `include/` + `glue/`/`crates/pm` + Python faces
 1. **One ABI per module** — full prefix `pm_metal_<path>_*` (see `.cursor/rules/metal-c-abi-hub.mdc`).
 2. **No package-root muscle twins** (`net/`, `async/`, … at repo root). New work lands under `src/` + `include/` only.
 3. **Do not grow** short-prefix APIs (`pm_metal_tcp_*`, …). Product net uses full names (`pm_metal_net_ip_*`, `pm_metal_net_ip_tcp_*`, …).
-4. **`_tmp/`** is quarantine — not a second product path.
+4. **No `external/` vendor pile** — WAMR/µPy come from wasmmod / ENGINE_TOP.
 
 ## Exemplar
 
@@ -38,7 +37,6 @@ faces under `include/pymergetic/metal/net/ip/` (`pm_metal_net_ip_*`,
 
 | Path | Why still there |
 |------|-----------------|
-| `libc` → `include/pymergetic/metal/libc` | Symlink so `-I$(METAL)/libc` keeps working; headers live under `include/` |
-| `_tmp/package-root/` | Quarantined old trees |
+| `libc` → `include/pymergetic/metal/libc` | Symlink for WAMR freestanding `-nostdinc`; µPy already has `shared/libc` for the interpreter |
 
-No package-root `net/` `async/` `mem/` `bus/` `console/` `draw/` `shell/` `dev/` `wasm/` product trees.
+No `external/`, no `_tmp/`, no package-root muscle twins.
