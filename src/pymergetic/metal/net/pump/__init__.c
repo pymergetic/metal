@@ -4,6 +4,7 @@
 #include "pymergetic/metal/async/handle.h"
 #include "pymergetic/metal/async/prio.h"
 #include "pymergetic/metal/async/runner.h"
+#include "pymergetic/metal/asgi/__init__.h"
 #include "pymergetic/metal/net/http/__init__.h"
 #include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/net/ip/tcp.h"
@@ -76,7 +77,11 @@ void pm_metal_net_pump_once(void)
     pm_metal_net_ip_poll();
     pm_metal_net_pump_wake_tcp();
     /* Live services driven from pump — not outer *_poll loops. */
-    (void)pm_metal_net_http_poll();
+    if (pm_metal_asgi_ready()) {
+        (void)pm_metal_asgi_poll();
+    } else {
+        (void)pm_metal_net_http_poll();
+    }
     (void)pm_metal_net_ssh_poll();
 }
 

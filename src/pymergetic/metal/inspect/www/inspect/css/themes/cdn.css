@@ -1,0 +1,11 @@
+:root {
+  --bg: #12131a;
+  --fg: #eceaf2;
+  --muted: #9a96a8;
+  --accent: #7aa2ff;
+}
+#brand::after {
+  content: " · cdn";
+  color: var(--accent);
+  font-weight: 500;
+}
