@@ -1,6 +1,6 @@
 /*
  * Minimal C ASGI-facing HTTP server: Inspect contract + embedded static.
- * Static mounts match httpd.json: /inspect → inspect/www/inspect (embedded).
+ * Mount table comes from embedded httpd.json (product LIVE has no VFS).
  */
 #include "pymergetic/metal/asgi/__init__.h"
 
@@ -103,24 +103,34 @@ static void send_resp(int status, const char *ctype, const char *body)
                   body ? (uint32_t)strlen(body) : 0u);
 }
 
-static int serve_inspect_static(const char *path)
+static int serve_httpd_static(const char *path)
 {
+    unsigned mi;
     const char *rel;
     const pm_metal_asgi_static_file_t *f;
+    size_t ulen;
 
-    if (strcmp(path, "/inspect") == 0 || strcmp(path, "/inspect/") == 0) {
-        rel = "index.html";
-    } else if (strncmp(path, "/inspect/", 9) == 0) {
-        rel = path + 9;
-    } else {
-        return 0;
+    for (mi = 0; mi < pm_metal_asgi_mount_count; mi++) {
+        const char *url = pm_metal_asgi_mounts[mi].url;
+        ulen = strlen(url);
+        if (strcmp(path, url) == 0) {
+            rel = "index.html";
+        } else if (path[ulen] == '/' && strncmp(path, url, ulen) == 0) {
+            rel = path + ulen + 1u;
+            if (rel[0] == 0) {
+                rel = "index.html";
+            }
+        } else {
+            continue;
+        }
+        f = pm_metal_asgi_static_lookup(rel);
+        if (f == NULL) {
+            return 0;
+        }
+        send_resp_bin(200, f->ctype, f->data, f->len);
+        return 1;
     }
-    f = pm_metal_asgi_static_lookup(rel);
-    if (f == NULL) {
-        return 0;
-    }
-    send_resp_bin(200, f->ctype, f->data, f->len);
-    return 1;
+    return 0;
 }
 
 int32_t pm_metal_asgi_init(uint16_t port)
@@ -178,7 +188,7 @@ int32_t pm_metal_asgi_poll(void)
         (void)pm_metal_net_ip_tcp_passive_relisten(g_port);
         return 1;
     }
-    if (strcmp(method, "GET") == 0 && serve_inspect_static(path)) {
+    if (strcmp(method, "GET") == 0 && serve_httpd_static(path)) {
         (void)pm_metal_net_ip_tcp_passive_relisten(g_port);
         return 1;
     }

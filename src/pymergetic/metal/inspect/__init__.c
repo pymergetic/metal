@@ -30,7 +30,8 @@ int32_t pm_metal_inspect_capabilities_json(char *buf, size_t buf_len)
         "{\"role\":\"metal\",\"theme\":\"metal\","
         "\"smp\":true,\"asgi\":true,\"ssh_kex\":true,"
         "\"ssh_auth\":true,\"fastapi\":false,"
-        "\"microdot\":true,\"vfs_static\":true}";
+        "\"microdot\":true,\"vfs_static\":false,"
+        "\"static_embed\":true}";
 
     if (buf == NULL || buf_len < sizeof(k_caps)) {
         return -1;
@@ -76,6 +77,7 @@ int32_t pm_metal_inspect_handle(const char *method, const char *path,
             "{\"schema\":1,\"name\":\"pymergetic.metal\","
             "\"role\":\"kernel\",\"product\":\"metal\",\"org\":\"pymergetic\","
             "\"theme\":\"metal\",\"has_source\":false,\"has_pack\":false,"
+            "\"static_backend\":\"embed\","
             "\"source_files\":[],\"pack_files\":[],"
             "\"tags\":{\"role\":\"kernel\",\"product\":\"metal\","
             "\"org\":\"pymergetic\"}}";

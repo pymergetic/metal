@@ -13,6 +13,9 @@
   }
   async function load(id, path) {
     const el = document.getElementById(id);
+    if (!el) {
+      return;
+    }
     try {
       const r = await fetch(path);
       const t = await r.text();
@@ -34,4 +37,5 @@
   /* Relative to /inspect/ or /cdn/inspect/ → sibling host routes. */
   await load("health", "../health");
   await load("caps", "../capabilities");
+  await load("self", "self");
 })();

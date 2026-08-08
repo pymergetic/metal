@@ -8,7 +8,9 @@ CAP_DEFAULTS = {
     "ssh_kex": True,
     "ssh_auth": True,
     "microdot": True,
-    "vfs_static": True,
+    # Product LIVE has no Rust VFS linked — static is ASGI embed.
+    "vfs_static": False,
+    "static_embed": True,
 }
 
 
@@ -21,6 +23,7 @@ def capabilities(role, theme, *, fastapi=False, **extra):
         caps["microdot"] = False
         caps["fastapi"] = True
         caps["vfs_static"] = False
+        caps["static_embed"] = False
     caps.update(extra)
     return caps
 

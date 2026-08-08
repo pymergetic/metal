@@ -1,4 +1,4 @@
-"""Honest v1 GET /inspect/self body (identity only; no forged source trees)."""
+"""Honest GET /inspect/self body (no forged source trees)."""
 
 
 def self_description(host_role, theme, **extra):
@@ -6,16 +6,18 @@ def self_description(host_role, theme, **extra):
 
     Guest metal → kernel identity (pymergetic.metal).
     CDN → host engine identity (pymergetic.wasmmod) until inventory fill-in.
-    has_source/has_pack stay false until a real embed or published artifact.
+    has_source/has_pack stay false until a real embed-host or published artifact.
     """
     if host_role == "cdn":
         name = "pymergetic.wasmmod"
         role = "host"
         product = "wasmmod"
+        static_backend = "none"
     else:
         name = "pymergetic.metal"
         role = "kernel"
         product = "metal"
+        static_backend = "embed"
     body = {
         "schema": 1,
         "name": name,
@@ -25,6 +27,7 @@ def self_description(host_role, theme, **extra):
         "theme": theme,
         "has_source": False,
         "has_pack": False,
+        "static_backend": static_backend,
         "source_files": [],
         "pack_files": [],
         "tags": {"role": role, "product": product, "org": "pymergetic"},
