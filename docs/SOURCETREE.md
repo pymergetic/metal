@@ -44,7 +44,9 @@ extmod/metal/
       __init__.c                 # capabilities + stub table
       endpoints.c
       app.py                     # Inspect routes (imports microdot)
+      stubs.py                   # shared endpoint contract
       adapter_microdot.py        # stubs → MicrodotAdapter
+      adapter_fastapi.py         # stubs → FastAPIAdapter (CDN)
       www/inspect/               # SHARED UI
         index.html
         js/

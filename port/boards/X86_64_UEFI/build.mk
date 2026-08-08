@@ -45,6 +45,8 @@ EDK_INC ?= $(BOARD_DIR)/edk_inc
 
 QSTR_DEFS = $(COMMON)/qstrdefsport.h
 MICROPY_ROM_TEXT_COMPRESSION ?= 0
+FROZEN_MANIFEST ?= $(PORT_DIR)/manifest.py
+MICROPY_MANIFEST_METAL := $(METAL)
 
 include $(TOP)/py/py.mk
 
@@ -60,7 +62,7 @@ CFLAGS_METAL := $(TARGET_WIN) -ffreestanding -fno-stack-protector \
 	-Wall -Wextra -Wno-unused-parameter -Os -DNDEBUG \
 	-fdata-sections -ffunction-sections \
 	-std=gnu99 \
-	-DMICROPY_HEAP_SIZE=131072 \
+	-DMICROPY_HEAP_SIZE=196608 \
 	-DMETAL_BOARD_UEFI=1 \
 	-DMETAL_LINK_WAMR=$(LINK_WAMR) \
 	-DMETAL_ENGINE=\"$(ENGINE)\"
@@ -120,7 +122,12 @@ SRC_C = \
 	shared/netutils/netutils.c \
 	extmod/modframebuf.c \
 	extmod/modnetwork.c \
-	extmod/modsocket.c
+	extmod/modsocket.c \
+	extmod/modasyncio.c \
+	extmod/modjson.c \
+	extmod/modre.c \
+	extmod/modtime.c \
+	extmod/modselect.c
 
 ifeq ($(LINK_WAMR),1)
 SRC_C += \
@@ -132,9 +139,12 @@ SRC_C += shared/libc/string0.c
 endif
 
 SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebuf.c \
-	extmod/modnetwork.c extmod/modsocket.c common/network_metal_nic.c common/modssh.c
+	extmod/modnetwork.c extmod/modsocket.c extmod/modasyncio.c extmod/modjson.c \
+	extmod/modre.c extmod/modtime.c extmod/modselect.c common/network_metal_nic.c \
+	common/modssh.c
 
 OBJ = $(PY_CORE_O)
+OBJ += $(BUILD)/frozen_content.o
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_smp.o $(BUILD)/metal_ap_tramp.o $(BUILD)/metal_acpi.o $(BUILD)/metal_asgi.o $(BUILD)/metal_inspect.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
@@ -405,6 +415,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	     && grep -a -q "kbd ok" $(BUILD)/serial.log 2>/dev/null \
 	     && { [ "$(LINK_WAMR)" != "1" ] || grep -a -q "wamr ok" $(BUILD)/serial.log 2>/dev/null; } \
 	     && grep -a -q "upy ok" $(BUILD)/serial.log 2>/dev/null \
+	     && grep -a -q "microdot ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -qE "framebuf ok|framebuf skip" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "network ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "dns py ok" $(BUILD)/serial.log 2>/dev/null \
@@ -416,7 +427,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	done; \
 	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	echo "----- serial (trimmed) -----"; \
-	grep -a -E "metal |console ok|floor ok|net ok|dhcp ok|ping ok|ip ok|udp ok|dns ok|tcp ok|http ok|ssh ok|ssh stub|http client ok|ntp ok|tftp ok|draw ok|vt ok|tui ok|kbd ok|wamr ok|framebuf ok|framebuf skip|network ok|dns py ok|socket ok|ssh py ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
+	grep -a -E "metal |console ok|floor ok|net ok|dhcp ok|ping ok|ip ok|udp ok|dns ok|tcp ok|http ok|ssh ok|ssh stub|http client ok|ntp ok|tftp ok|draw ok|vt ok|tui ok|kbd ok|wamr ok|framebuf ok|framebuf skip|network ok|dns py ok|socket ok|ssh py ok|microdot ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
 	if [ $$ok -eq 1 ]; then echo "X86_64_UEFI_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR) LLD=$(LLD_LINK)"; exit 0; fi; \
 	echo "X86_64_UEFI_FAIL ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	tail -c 1600 $(BUILD)/serial.log 2>/dev/null || true; \

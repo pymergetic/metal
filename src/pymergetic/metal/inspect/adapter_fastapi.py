@@ -1,0 +1,54 @@
+"""Route adapter: Inspect stubs → FastAPI (CDN / ASGI hosts)."""
+
+from .stubs import ENDPOINT_STUBS, capabilities as make_capabilities
+
+try:
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+except ImportError:  # pragma: no cover — guest / no FastAPI
+    FastAPI = None
+    JSONResponse = None
+
+
+class FastAPIAdapter:
+    def __init__(self, role="cdn", theme="cdn", app=None):
+        if FastAPI is None:
+            raise RuntimeError("fastapi not available")
+        self.role = role
+        self.theme = theme
+        self.app = app if app is not None else FastAPI()
+        self._register()
+
+    def capabilities(self):
+        return make_capabilities(self.role, self.theme, fastapi=True)
+
+    def add_routes(self, app=None):
+        """Mount routes onto an existing FastAPI app (or self.app)."""
+        if app is not None:
+            self.app = app
+        self._register()
+        return self.app
+
+    def _register(self):
+        app = self.app
+        adapter = self
+
+        @app.get("/health")
+        async def health():
+            return {"ok": True}
+
+        @app.get("/capabilities")
+        async def capabilities():
+            return adapter.capabilities()
+
+        for method, path, implemented in ENDPOINT_STUBS:
+            if implemented:
+                continue
+
+            async def not_impl(p=path):
+                return JSONResponse(
+                    {"error": "NotImplemented", "path": p},
+                    status_code=501,
+                )
+
+            app.add_api_route(path, not_impl, methods=[method])

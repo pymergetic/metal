@@ -1311,7 +1311,8 @@ class Microdot:
             except AttributeError:  # pragma: no cover
                 # the task hasn't been initialized in the server object yet
                 # wait a bit and try again
-                await asyncio.sleep(0.1)
+                # sleep_ms: avoid float const so freestanding FLOAT_NONE can freeze.
+                await asyncio.sleep_ms(100)
 
     def run(self, host='0.0.0.0', port=5000, debug=False, ssl=None):
         """Start the web server. This function does not normally return, as

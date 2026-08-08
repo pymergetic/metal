@@ -52,6 +52,8 @@ QEMU_MACHINE := -machine q35,accel=kvm:tcg -m 256 -smp $(SMP) -vga none
 
 QSTR_DEFS = $(COMMON)/qstrdefsport.h
 MICROPY_ROM_TEXT_COMPRESSION ?= 0
+FROZEN_MANIFEST ?= $(PORT_DIR)/manifest.py
+MICROPY_MANIFEST_METAL := $(METAL)
 
 include $(TOP)/py/py.mk
 
@@ -63,7 +65,7 @@ CFLAGS_METAL := -DMETAL_BOARD_UEFI=0 -m64 -ffreestanding -fno-stack-protector -f
 	-Wall -Wextra -Wno-unused-parameter -Os -DNDEBUG \
 	-fdata-sections -ffunction-sections \
 	-std=gnu99 \
-	-DMICROPY_HEAP_SIZE=131072 \
+	-DMICROPY_HEAP_SIZE=196608 \
 	-DMETAL_LINK_WAMR=$(LINK_WAMR) \
 	-DMETAL_ENGINE=\"$(ENGINE)\"
 
@@ -129,7 +131,12 @@ SRC_C = \
 	shared/netutils/netutils.c \
 	extmod/modframebuf.c \
 	extmod/modnetwork.c \
-	extmod/modsocket.c
+	extmod/modsocket.c \
+	extmod/modasyncio.c \
+	extmod/modjson.c \
+	extmod/modre.c \
+	extmod/modtime.c \
+	extmod/modselect.c
 
 ifeq ($(LINK_WAMR),1)
 SRC_C += \
@@ -141,9 +148,12 @@ SRC_C += shared/libc/string0.c
 endif
 
 SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebuf.c \
-	extmod/modnetwork.c extmod/modsocket.c common/network_metal_nic.c common/modssh.c
+	extmod/modnetwork.c extmod/modsocket.c extmod/modasyncio.c extmod/modjson.c \
+	extmod/modre.c extmod/modtime.c extmod/modselect.c common/network_metal_nic.c \
+	common/modssh.c
 
 OBJ = $(PY_CORE_O)
+OBJ += $(BUILD)/frozen_content.o
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_smp.o $(BUILD)/metal_ap_tramp.o $(BUILD)/metal_acpi.o $(BUILD)/metal_asgi.o $(BUILD)/metal_inspect.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
@@ -423,6 +433,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "kbd ok" $(BUILD)/serial.log \
 	  && { [ "$(LINK_WAMR)" != "1" ] || grep -q "wamr ok" $(BUILD)/serial.log; } \
 	  && grep -q "upy ok" $(BUILD)/serial.log \
+	  && grep -q "microdot ok" $(BUILD)/serial.log \
 	  && grep -q "framebuf ok" $(BUILD)/serial.log \
 	  && grep -q "network ok" $(BUILD)/serial.log \
 	  && grep -q "dns py ok" $(BUILD)/serial.log \

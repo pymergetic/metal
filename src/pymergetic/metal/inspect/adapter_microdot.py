@@ -1,5 +1,7 @@
 """Route adapter: Inspect stubs → Microdot (framework-independent registry)."""
 
+from .stubs import ENDPOINT_STUBS, capabilities as make_capabilities
+
 try:
     from microdot import Microdot, Response
 except ImportError:  # pragma: no cover — host tooling
@@ -17,20 +19,11 @@ class MicrodotAdapter:
         self._register()
 
     def capabilities(self):
-        return {
-            "role": self.role,
-            "theme": self.theme,
-            "smp": True,
-            "asgi": True,
-            "ssh_kex": True,
-            "ssh_auth": True,
-            "fastapi": False,
-            "microdot": True,
-            "vfs_static": True,
-        }
+        return make_capabilities(self.role, self.theme, fastapi=False)
 
     def _register(self):
         app = self.app
+        adapter = self
 
         @app.get("/health")
         async def health(request):
@@ -38,11 +31,15 @@ class MicrodotAdapter:
 
         @app.get("/capabilities")
         async def capabilities(request):
-            return self.capabilities()
+            return adapter.capabilities()
 
-        @app.get("/inspect/self")
-        async def inspect_self(request):
-            return Response(
-                {"error": "NotImplemented", "path": "/inspect/self"},
-                status_code=501,
-            )
+        for method, path, implemented in ENDPOINT_STUBS:
+            if implemented:
+                continue
+
+            @app.route(path, methods=[method])
+            async def not_impl(request, p=path):
+                return Response(
+                    {"error": "NotImplemented", "path": p},
+                    status_code=501,
+                )

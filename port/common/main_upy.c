@@ -140,6 +140,15 @@ void mp_metal_upy_run(int smoke) {
             "print('socket ok')\n",
             MP_PARSE_FILE_INPUT);
 #endif
+#if MICROPY_MODULE_FROZEN_MPY
+        do_str(
+            "import microdot\n"
+            "assert microdot.__version__\n"
+            "from microdot import Microdot\n"
+            "assert Microdot is not None\n"
+            "print('microdot ok')\n",
+            MP_PARSE_FILE_INPUT);
+#endif
         do_str("print('upy ok')", MP_PARSE_SINGLE_INPUT);
 #endif
         uart_puts("qemu ok\n");
@@ -172,6 +181,16 @@ mp_lexer_t *mp_lexer_new_from_file(qstr filename) {
     (void)filename;
     mp_raise_OSError(MP_ENOENT);
 }
+
+#if MICROPY_PY_IO
+mp_obj_t mp_builtin_open(size_t n_args, const mp_obj_t *args, mp_map_t *kwargs) {
+    (void)n_args;
+    (void)args;
+    (void)kwargs;
+    mp_raise_OSError(MP_ENOENT);
+}
+MP_DEFINE_CONST_FUN_OBJ_KW(mp_builtin_open_obj, 1, mp_builtin_open);
+#endif
 
 void nlr_jump_fail(void *val) {
     (void)val;
