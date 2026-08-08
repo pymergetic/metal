@@ -5,7 +5,9 @@
 #include <string.h>
 
 #include "pymergetic/metal/async/runner.h"
+#include "pymergetic/metal/async/smp.h"
 #include "pymergetic/metal/console.h"
+#include "pymergetic/metal/dev/acpi/__init__.h"
 #include "pymergetic/metal/dev/net.h"
 #include "pymergetic/metal/mem.h"
 #include "pymergetic/metal/net/dhcp.h"
@@ -57,9 +59,29 @@ int pm_metal_product_bringup(void)
         uart_puts("bringup: mem init fail\n");
         return -1;
     }
-    if (pm_metal_async_start(1) != 0) {
-        uart_puts("bringup: async start fail\n");
+    if (pm_metal_dev_acpi_init() != 0) {
+        uart_puts("bringup: acpi fail\n");
         return -1;
+    }
+    {
+        uint32_t n_cpus = pm_metal_dev_acpi_cpu_count();
+        if (n_cpus < 2u) {
+            uart_puts("bringup: smp refuse n<2\n");
+            return -1;
+        }
+        if (pm_metal_async_start(n_cpus) != 0) {
+            uart_puts("bringup: async start fail\n");
+            return -1;
+        }
+        if (pm_metal_smp_start() != 0) {
+            uart_puts("bringup: smp start fail\n");
+            return -1;
+        }
+        if (pm_metal_smp_online_count() < 2u ||
+            pm_metal_smp_online_count() != pm_metal_async_n_runners()) {
+            uart_puts("bringup: smp online fail\n");
+            return -1;
+        }
     }
     pm_metal_net_pump_bind_async();
 

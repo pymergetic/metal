@@ -7,6 +7,7 @@
 #include "pymergetic/metal/async/runner.h"
 #include "pymergetic/metal/async/await.h"
 #include "pymergetic/metal/async/board_time.h"
+#include "pymergetic/metal/async/smp.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -48,11 +49,24 @@ typedef struct {
 
 static slot_t g_slots[PM_METAL_ASYNC_MAX_HANDLES];
 static runner_t g_runners[PM_METAL_ASYNC_MAX_RUNNERS];
+static volatile uint32_t g_runner_lock[PM_METAL_ASYNC_MAX_RUNNERS];
 static uint32_t g_n_runners;
 static uint32_t g_rr;
 static int g_started;
 static uint64_t g_boot_us;
 static pm_metal_async_idle_pump_fn g_idle_pump;
+
+static void runner_lock(uint32_t ri)
+{
+    while (__atomic_exchange_n(&g_runner_lock[ri], 1u, __ATOMIC_ACQUIRE) != 0u) {
+        __asm__ volatile("pause");
+    }
+}
+
+static void runner_unlock(uint32_t ri)
+{
+    __atomic_store_n(&g_runner_lock[ri], 0u, __ATOMIC_RELEASE);
+}
 
 void pm_metal_async_set_idle_pump(pm_metal_async_idle_pump_fn fn)
 {
@@ -77,35 +91,39 @@ uint64_t pm_metal_time_mono_us(void)
 static int ready_push(uint32_t ri, uint32_t h)
 {
     runner_t *r;
+    int rc = -1;
 
     if (ri >= g_n_runners || h == 0) {
         return -1;
     }
+    runner_lock(ri);
     r = &g_runners[ri];
-    if (r->count >= PM_METAL_ASYNC_READY_CAP) {
-        return -1;
+    if (r->count < PM_METAL_ASYNC_READY_CAP) {
+        r->q[r->tail] = h;
+        r->tail = (r->tail + 1u) % PM_METAL_ASYNC_READY_CAP;
+        r->count++;
+        rc = 0;
     }
-    r->q[r->tail] = h;
-    r->tail = (r->tail + 1u) % PM_METAL_ASYNC_READY_CAP;
-    r->count++;
-    return 0;
+    runner_unlock(ri);
+    return rc;
 }
 
 static uint32_t ready_pop(uint32_t ri)
 {
     runner_t *r;
-    uint32_t h;
+    uint32_t h = 0;
 
     if (ri >= g_n_runners) {
         return 0;
     }
+    runner_lock(ri);
     r = &g_runners[ri];
-    if (r->count == 0u) {
-        return 0;
+    if (r->count != 0u) {
+        h = r->q[r->head];
+        r->head = (r->head + 1u) % PM_METAL_ASYNC_READY_CAP;
+        r->count--;
     }
-    h = r->q[r->head];
-    r->head = (r->head + 1u) % PM_METAL_ASYNC_READY_CAP;
-    r->count--;
+    runner_unlock(ri);
     return h;
 }
 
@@ -145,7 +163,7 @@ pm_metal_async_status_t pm_metal_async_status(uint32_t h)
     if (h == 0 || h >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[h].used) {
         return PM_METAL_ASYNC_ERROR;
     }
-    return (pm_metal_async_status_t)g_slots[h].status;
+    return (pm_metal_async_status_t)__atomic_load_n(&g_slots[h].status, __ATOMIC_ACQUIRE);
 }
 
 void pm_metal_async_set_result_u32(uint32_t h, uint32_t v)
@@ -250,7 +268,7 @@ uint32_t pm_metal_async_n_runners(void)
 
 static void complete_slot(uint32_t i)
 {
-    g_slots[i].status = PM_METAL_ASYNC_DONE;
+    __atomic_store_n(&g_slots[i].status, (uint8_t)PM_METAL_ASYNC_DONE, __ATOMIC_RELEASE);
 }
 
 static int32_t poll_runner(uint32_t ri, uint64_t now)
@@ -309,6 +327,21 @@ static int32_t poll_runner(uint32_t ri, uint64_t now)
     return n;
 }
 
+int32_t pm_metal_async_run_poll_cpu(uint32_t cpu)
+{
+    uint64_t now;
+
+    if (!g_started || cpu >= g_n_runners) {
+        return -1;
+    }
+    /* Net/device idle pump stays on BSP — not concurrent on APs. */
+    if (cpu == 0u && g_idle_pump != NULL) {
+        g_idle_pump();
+    }
+    now = pm_metal_async_mono_us();
+    return poll_runner(cpu, now);
+}
+
 int32_t pm_metal_async_run_poll(void)
 {
     uint64_t now;
@@ -318,6 +351,10 @@ int32_t pm_metal_async_run_poll(void)
     if (!g_started) {
         return -1;
     }
+    /* After real SMP, each CPU drains only its runner. */
+    if (pm_metal_smp_online_count() > 1u) {
+        return pm_metal_async_run_poll_cpu(pm_metal_smp_cpu_index());
+    }
     if (g_idle_pump != NULL) {
         g_idle_pump();
     }
@@ -326,6 +363,44 @@ int32_t pm_metal_async_run_poll(void)
         n += poll_runner(ri, now);
     }
     return n;
+}
+
+uint32_t pm_metal_async_create_task_on(uint32_t h, uint32_t runner)
+{
+    if (!g_started || runner >= g_n_runners) {
+        return 0;
+    }
+    if (h == 0u) {
+        h = alloc_slot(SLOT_YIELD, 0, runner);
+        if (h == 0u) {
+            return 0;
+        }
+        (void)ready_push(runner, h);
+        return h;
+    }
+    if (h >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[h].used) {
+        return 0;
+    }
+    g_slots[h].runner = (uint8_t)runner;
+    if (g_slots[h].kind == SLOT_YIELD
+        || g_slots[h].status == PM_METAL_ASYNC_PENDING) {
+        (void)ready_push(runner, h);
+    }
+    return h;
+}
+
+volatile uint32_t pm_metal_smp_poll_ticks[PM_METAL_ASYNC_MAX_RUNNERS];
+
+int32_t pm_metal_async_run_loop_cpu(uint32_t cpu)
+{
+    if (!g_started || cpu >= g_n_runners) {
+        return -1;
+    }
+    for (;;) {
+        (void)pm_metal_async_run_poll_cpu(cpu);
+        __atomic_fetch_add(&pm_metal_smp_poll_ticks[cpu], 1u, __ATOMIC_RELAXED);
+        __asm__ volatile("pause");
+    }
 }
 
 int32_t pm_metal_async_run_poll_all(void)

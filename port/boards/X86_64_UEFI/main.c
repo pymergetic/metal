@@ -13,6 +13,7 @@
 #include "wamr_smoke.h"
 #include "live_http.h"
 #include "live_ssh.h"
+#include "uefi_acpi_seed.h"
 
 void uart_init(void);
 void uart_puts(const char *s);
@@ -35,6 +36,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 
     uart_init();
     uart_puts("metal X86_64_UEFI\n");
+    pm_metal_uefi_acpi_seed(SystemTable);
 
 #if METAL_UPY_SMOKE
     if (pm_metal_console_smoke() != 0 ||

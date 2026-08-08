@@ -34,9 +34,11 @@ TOP := $(ENGINE_TOP)
 CLANG ?= clang
 CC := $(CLANG)
 QEMU ?= qemu-system-x86_64
+SMP ?= 2
 TFTP_ROOT := $(COMMON)/tftp-root
 SSH_BANNER := $(COMMON)/qemu-ssh-banner.sh
 NETDEV_USER := user,id=n0,tftp=$(TFTP_ROOT),guestfwd=tcp:10.0.2.100:22-cmd:$(SSH_BANNER)
+QEMU_MACHINE := -machine q35,accel=kvm:tcg -m 256 -smp $(SMP) -vga none
 OVMF ?= /usr/share/ovmf/OVMF.fd
 # Slim MdePkg headers only (no edk2 submodule — WAMR/µPy live in wasmmod / ENGINE_TOP).
 EDK_INC ?= $(BOARD_DIR)/edk_inc
@@ -107,6 +109,7 @@ SRC_C = \
 	common/kbd_smoke.c \
 	common/live_http.c \
 	common/live_ssh.c \
+	common/uefi_acpi_seed.c \
 	common/network_metal_nic.c \
 	common/modssh.c \
 	common/fsys/chkstk.c \
@@ -133,7 +136,7 @@ SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebu
 
 OBJ = $(PY_CORE_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
-OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_console.o
+OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_smp.o $(BUILD)/metal_ap_tramp.o $(BUILD)/metal_acpi.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
 OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
@@ -175,6 +178,18 @@ $(BUILD)/metal_kbd.o: $(METAL)/src/pymergetic/metal/dev/input/kbd.c | $(BUILD)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_async.o: $(METAL)/src/pymergetic/metal/async/__init__.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_smp.o: $(METAL)/src/pymergetic/metal/async/smp.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_ap_tramp.o: $(METAL)/src/pymergetic/metal/async/ap_trampoline.S | $(BUILD)
+	$(ECHO) "AS $<"
+	$(Q)$(CC) $(TARGET_WIN) -c -o $@ $<
+
+$(BUILD)/metal_acpi.o: $(METAL)/src/pymergetic/metal/dev/acpi/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -333,7 +348,7 @@ repl: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	rm -f $(BUILD)/serial.log; \
 	timeout 40s bash -c '\
 	  ( sleep 12; printf "print(1+1)\r\n"; sleep 2; printf "\x04"; sleep 1; ) \
-	  | $(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
+	  | $(QEMU) $(QEMU_MACHINE) \
 		-display none -serial stdio -monitor none \
 		-netdev $(NETDEV_USER) -device virtio-net-pci,netdev=n0 \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF) \
@@ -354,7 +369,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	@test -f "$(OVMF)" || { echo "FAIL: OVMF missing at $(OVMF)"; exit 1; }
 	@set +e; \
 	rm -f $(BUILD)/serial.log; \
-	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
+	$(QEMU) $(QEMU_MACHINE) \
 		-display none -serial file:$(BUILD)/serial.log \
 		-netdev $(NETDEV_USER),hostfwd=tcp::22022-:22 -device virtio-net-pci,netdev=n0 \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF) \
@@ -406,7 +421,7 @@ live-http: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	@test -f "$(OVMF)" || { echo "FAIL: OVMF missing at $(OVMF)"; exit 1; }
 	@set +e; \
 	rm -f $(BUILD)/serial.log; \
-	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
+	$(QEMU) $(QEMU_MACHINE) \
 		-display none -serial file:$(BUILD)/serial.log \
 		-netdev $(NETDEV_USER),hostfwd=tcp::18080-:80,hostfwd=tcp::22022-:22 \
 		-device virtio-net-pci,netdev=n0 \
@@ -444,7 +459,7 @@ live-ssh: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	@test -f "$(OVMF)" || { echo "FAIL: OVMF missing at $(OVMF)"; exit 1; }
 	@set +e; \
 	rm -f $(BUILD)/serial.log; \
-	$(QEMU) -machine q35,accel=kvm:tcg -m 256 -vga none \
+	$(QEMU) $(QEMU_MACHINE) \
 		-display none -serial file:$(BUILD)/serial.log \
 		-netdev $(NETDEV_USER),hostfwd=tcp::22022-:22 \
 		-device virtio-net-pci,netdev=n0 \
