@@ -1,8 +1,11 @@
 /*
- * DIY SSH — version exchange + KEXINIT; crypto/NEWKEYS still TODO.
+ * DIY SSH — version exchange + curve25519-sha256 KEX through NEWKEYS.
+ * Post-NEWKEYS encryption / auth still TODO.
  */
 #include "pymergetic/metal/net/ssh/__init__.h"
 
+#include "crypto.h"
+#include "kex.h"
 #include "packet.h"
 
 #include <stddef.h>
@@ -16,87 +19,54 @@ typedef enum {
     SSH_ST_IDENT_SENT,
     SSH_ST_IDENT_DONE,
     SSH_ST_KEXINIT_SENT,
+    SSH_ST_WAIT_ECDH,
+    SSH_ST_WAIT_NEWKEYS,
     SSH_ST_DONE,
     SSH_ST_ERROR
 } ssh_st_t;
 
 static ssh_st_t g_st;
 static uint32_t g_listen_port;
-static uint8_t g_peer_ident[128];
+static uint8_t g_peer_ident[PM_METAL_SSH_IDENT_MAX];
 static uint32_t g_peer_len;
 static int32_t g_served;
+static int32_t g_crypto_ready;
+static pm_metal_net_ssh_kex_t g_kex;
 
 static const char k_ident[] = "SSH-2.0-metal\r\n";
+static const char k_ident_bare[] = "SSH-2.0-metal";
 
-#define SSH_MSG_DISCONNECT 1
 #define SSH_MSG_KEXINIT 20
-
-static void put_u32(uint8_t *p, uint32_t v)
-{
-    p[0] = (uint8_t)(v >> 24);
-    p[1] = (uint8_t)(v >> 16);
-    p[2] = (uint8_t)(v >> 8);
-    p[3] = (uint8_t)v;
-}
-
-static uint32_t put_name_list(uint8_t *p, const char *s)
-{
-    uint32_t n = (uint32_t)strlen(s);
-
-    put_u32(p, n);
-    memcpy(p + 4, s, n);
-    return 4u + n;
-}
+#define SSH_MSG_NEWKEYS 21
+#define SSH_MSG_KEX_ECDH_INIT 30
 
 static int32_t send_kexinit(void)
 {
-    uint8_t pl[320];
-    uint32_t o = 0;
-    uint32_t i;
+    uint8_t pl[PM_METAL_SSH_KEXINIT_MAX];
+    uint32_t n;
 
-    pl[o++] = SSH_MSG_KEXINIT;
-    for (i = 0; i < 16u; i++) {
-        pl[o++] = (uint8_t)(0x10u + i);
+    n = pm_metal_net_ssh_kex_build_init(pl, sizeof(pl));
+    if (n == 0u) {
+        return -1;
     }
-    /* Advertise intent; crypto not wired — peer will see disconnect next. */
-    o += put_name_list(pl + o, "curve25519-sha256");
-    o += put_name_list(pl + o, "ssh-ed25519");
-    o += put_name_list(pl + o, "aes128-ctr");
-    o += put_name_list(pl + o, "aes128-ctr");
-    o += put_name_list(pl + o, "hmac-sha2-256");
-    o += put_name_list(pl + o, "hmac-sha2-256");
-    o += put_name_list(pl + o, "none");
-    o += put_name_list(pl + o, "none");
-    o += put_name_list(pl + o, "");
-    o += put_name_list(pl + o, "");
-    pl[o++] = 0; /* first_kex_packet_follows */
-    put_u32(pl + o, 0);
-    o += 4;
-    return pm_metal_net_ssh_pkt_send(pl, o);
+    if (n > sizeof(g_kex.i_s)) {
+        return -1;
+    }
+    memcpy(g_kex.i_s, pl, n);
+    g_kex.i_s_len = n;
+    return pm_metal_net_ssh_pkt_send(pl, n);
 }
 
-static int32_t send_disconnect(void)
+static int32_t send_newkeys(void)
 {
-    uint8_t pl[64];
-    const char *desc = "metal: kex not implemented yet";
-    uint32_t n = (uint32_t)strlen(desc);
-    uint32_t o = 0;
+    uint8_t pl = SSH_MSG_NEWKEYS;
 
-    pl[o++] = SSH_MSG_DISCONNECT;
-    put_u32(pl + o, 11); /* SSH_DISCONNECT_BY_APPLICATION */
-    o += 4;
-    put_u32(pl + o, n);
-    o += 4;
-    memcpy(pl + o, desc, n);
-    o += n;
-    put_u32(pl + o, 0); /* language tag empty */
-    o += 4;
-    return pm_metal_net_ssh_pkt_send(pl, o);
+    return pm_metal_net_ssh_pkt_send(&pl, 1);
 }
 
 int32_t pm_metal_net_ssh_available(void)
 {
-    return 0;
+    return g_crypto_ready;
 }
 
 int32_t pm_metal_net_ssh_init(void)
@@ -106,7 +76,15 @@ int32_t pm_metal_net_ssh_init(void)
     g_peer_len = 0;
     g_served = 0;
     memset(g_peer_ident, 0, sizeof(g_peer_ident));
+    pm_metal_net_ssh_kex_reset(&g_kex);
     pm_metal_net_ssh_pkt_reset();
+    if (pm_metal_net_ssh_crypto_init() != 0) {
+        g_crypto_ready = 0;
+        return -1;
+    }
+    g_crypto_ready = 1;
+    g_kex.v_s_len = (uint32_t)(sizeof(k_ident_bare) - 1u);
+    memcpy(g_kex.v_s, k_ident_bare, g_kex.v_s_len);
     return 0;
 }
 
@@ -121,6 +99,9 @@ uint32_t pm_metal_net_ssh_listen(uint32_t port)
     g_st = SSH_ST_IDLE;
     g_peer_len = 0;
     g_served = 0;
+    pm_metal_net_ssh_kex_reset(&g_kex);
+    g_kex.v_s_len = (uint32_t)(sizeof(k_ident_bare) - 1u);
+    memcpy(g_kex.v_s, k_ident_bare, g_kex.v_s_len);
     pm_metal_net_ssh_pkt_reset();
     if (pm_metal_net_ip_tcp_listen((uint16_t)port) != 0) {
         return 0;
@@ -143,6 +124,22 @@ static int32_t send_ident(void)
         return -1;
     }
     return 0;
+}
+
+static void store_peer_ident_bare(void)
+{
+    uint32_t n = g_peer_len;
+
+    while (n > 0u
+        && (g_peer_ident[n - 1u] == (uint8_t)'\n'
+            || g_peer_ident[n - 1u] == (uint8_t)'\r')) {
+        n--;
+    }
+    if (n > sizeof(g_kex.v_c)) {
+        n = sizeof(g_kex.v_c);
+    }
+    memcpy(g_kex.v_c, g_peer_ident, n);
+    g_kex.v_c_len = n;
 }
 
 static int32_t feed_peer_ident(void)
@@ -169,6 +166,7 @@ static int32_t feed_peer_ident(void)
                 g_st = SSH_ST_ERROR;
                 return -1;
             }
+            store_peer_ident_bare();
             if (i + 1u < n) {
                 (void)pm_metal_net_ssh_pkt_push(chunk + i + 1u, n - (i + 1u));
             }
@@ -181,8 +179,10 @@ static int32_t feed_peer_ident(void)
 
 int32_t pm_metal_net_ssh_poll(void)
 {
-    uint8_t pl[256];
+    uint8_t pl[PM_METAL_SSH_KEXINIT_MAX];
+    uint8_t reply[512];
     uint32_t n = 0;
+    uint32_t reply_len = 0;
     int32_t rc;
 
     if (!pm_metal_net_ip_tcp_established()) {
@@ -212,7 +212,47 @@ int32_t pm_metal_net_ssh_poll(void)
             return -1;
         }
         if (rc == 1 && n > 0u && pl[0] == SSH_MSG_KEXINIT) {
-            (void)send_disconnect();
+            if (n > sizeof(g_kex.i_c)) {
+                g_st = SSH_ST_ERROR;
+                return -1;
+            }
+            memcpy(g_kex.i_c, pl, n);
+            g_kex.i_c_len = n;
+            g_st = SSH_ST_WAIT_ECDH;
+        }
+    }
+    if (g_st == SSH_ST_WAIT_ECDH) {
+        rc = pm_metal_net_ssh_pkt_recv(pl, sizeof(pl), &n);
+        if (rc < 0) {
+            g_st = SSH_ST_ERROR;
+            return -1;
+        }
+        if (rc == 1 && n > 0u && pl[0] == SSH_MSG_KEX_ECDH_INIT) {
+            if (pm_metal_net_ssh_kex_server_reply(&g_kex, pl, n, reply,
+                    sizeof(reply), &reply_len)
+                != 0) {
+                g_st = SSH_ST_ERROR;
+                return -1;
+            }
+            if (pm_metal_net_ssh_pkt_send(reply, reply_len) != 0) {
+                g_st = SSH_ST_ERROR;
+                return -1;
+            }
+            if (send_newkeys() != 0) {
+                g_st = SSH_ST_ERROR;
+                return -1;
+            }
+            g_st = SSH_ST_WAIT_NEWKEYS;
+        }
+    }
+    if (g_st == SSH_ST_WAIT_NEWKEYS) {
+        rc = pm_metal_net_ssh_pkt_recv(pl, sizeof(pl), &n);
+        if (rc < 0) {
+            g_st = SSH_ST_ERROR;
+            return -1;
+        }
+        if (rc == 1 && n > 0u && pl[0] == SSH_MSG_NEWKEYS) {
+            /* Peer encrypts after NEWKEYS — no cleartext DISCONNECT. */
             g_st = SSH_ST_DONE;
             g_served = 1;
             return 1;
@@ -234,7 +274,7 @@ int32_t pm_metal_net_ssh_served(void)
 
 int32_t pm_metal_net_ssh_status(uint8_t *buf, uint32_t buf_len)
 {
-    static const char msg[] = "ssh: diy-ident+kexinit";
+    static const char msg[] = "ssh: diy-curve25519-sha256";
     uint32_t i;
 
     if (buf == NULL || buf_len == 0u) {
@@ -254,10 +294,17 @@ uint32_t pm_metal_net_ssh_listen_port(void)
 
 int32_t pm_metal_net_ssh_hostkey_label(uint8_t *buf, uint32_t buf_len)
 {
-    if (buf != NULL && buf_len > 0u) {
-        buf[0] = 0;
+    static const char lab[] = "ssh-ed25519";
+    uint32_t i;
+
+    if (buf == NULL || buf_len == 0u) {
+        return -1;
     }
-    return -1;
+    for (i = 0; i + 1u < buf_len && lab[i] != '\0'; i++) {
+        buf[i] = (uint8_t)lab[i];
+    }
+    buf[i] = 0;
+    return 0;
 }
 
 int32_t pm_metal_net_ssh_client_exec(const char *host, uint16_t port,
@@ -291,6 +338,9 @@ void pm_metal_net_ssh_banner_reset(void)
     g_peer_len = 0;
     g_served = 0;
     memset(g_peer_ident, 0, sizeof(g_peer_ident));
+    pm_metal_net_ssh_kex_reset(&g_kex);
+    g_kex.v_s_len = (uint32_t)(sizeof(k_ident_bare) - 1u);
+    memcpy(g_kex.v_s, k_ident_bare, g_kex.v_s_len);
     pm_metal_net_ssh_pkt_reset();
 }
 

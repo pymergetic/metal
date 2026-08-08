@@ -73,7 +73,7 @@ static mp_obj_t ssh_banner_reset(void) {
 static MP_DEFINE_CONST_FUN_OBJ_0(ssh_banner_reset_obj, ssh_banner_reset);
 
 static const MP_DEFINE_STR_OBJ(ssh_version_obj, "0");
-static const MP_DEFINE_STR_OBJ(ssh_info_obj, "metal net.ssh stub");
+static const MP_DEFINE_STR_OBJ(ssh_info_obj, "metal net.ssh diy-kex");
 
 static const mp_rom_map_elem_t ssh_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_ssh) },

@@ -147,6 +147,10 @@ OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_ne
 OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
 OBJ += $(BUILD)/metal_dns.o $(BUILD)/metal_ntp.o $(BUILD)/metal_tftp.o $(BUILD)/metal_faces.o $(BUILD)/metal_upy_nic.o
 OBJ += $(BUILD)/metal_net_pump.o $(BUILD)/metal_ssh_pkt.o
+OBJ += $(BUILD)/metal_ssh_crypto.o $(BUILD)/metal_ssh_kex.o
+OBJ += $(BUILD)/metal_monocypher.o $(BUILD)/metal_monocypher_ed25519.o $(BUILD)/metal_sha256.o
+
+SSH_CRYPTO_INC := -I$(METAL)/third_party/monocypher -I$(METAL)/third_party/sha256
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -216,7 +220,27 @@ $(BUILD)/metal_http.o: $(METAL)/src/pymergetic/metal/net/http/__init__.c | $(BUI
 
 $(BUILD)/metal_ssh.o: $(METAL)/src/pymergetic/metal/net/ssh/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
+
+$(BUILD)/metal_ssh_crypto.o: $(METAL)/src/pymergetic/metal/net/ssh/crypto.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
+
+$(BUILD)/metal_ssh_kex.o: $(METAL)/src/pymergetic/metal/net/ssh/kex.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
+
+$(BUILD)/metal_monocypher.o: $(METAL)/third_party/monocypher/monocypher.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
+
+$(BUILD)/metal_monocypher_ed25519.o: $(METAL)/third_party/monocypher/monocypher-ed25519.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
+
+$(BUILD)/metal_sha256.o: $(METAL)/third_party/sha256/sha256.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
 
 $(BUILD)/metal_dhcp.o: $(METAL)/src/pymergetic/metal/net/dhcp/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
@@ -365,7 +389,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "dns ok" $(BUILD)/serial.log \
 	  && grep -q "tcp ok" $(BUILD)/serial.log \
 	  && grep -q "http ok" $(BUILD)/serial.log \
-	  && grep -q "ssh stub" $(BUILD)/serial.log \
+	  && grep -qE "ssh ok|ssh stub" $(BUILD)/serial.log \
 	  && grep -q "http client ok" $(BUILD)/serial.log \
 	  && grep -q "ntp ok" $(BUILD)/serial.log \
 	  && grep -q "tftp ok" $(BUILD)/serial.log \
@@ -379,7 +403,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "network ok" $(BUILD)/serial.log \
 	  && grep -q "dns py ok" $(BUILD)/serial.log \
 	  && grep -q "socket ok" $(BUILD)/serial.log \
-	  && grep -qE "ssh py ok|ssh stub" $(BUILD)/serial.log \
+	  && grep -qE "ssh py ok|ssh ok|ssh stub" $(BUILD)/serial.log \
 	  && grep -q "qemu ok" $(BUILD)/serial.log; then \
 	  echo "X86_64_BIOS_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	  exit 0; \

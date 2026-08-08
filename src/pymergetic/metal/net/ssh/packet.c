@@ -4,7 +4,7 @@
 
 #include "pymergetic/metal/net/ip/tcp.h"
 
-static uint8_t g_acc[512];
+static uint8_t g_acc[PM_METAL_SSH_PKT_ACC];
 static uint32_t g_acc_len;
 
 static void put_u32(uint8_t *p, uint32_t v)
@@ -24,7 +24,6 @@ static uint32_t get_u32(const uint8_t *p)
 void pm_metal_net_ssh_pkt_reset(void)
 {
     g_acc_len = 0;
-    memset(g_acc, 0, sizeof(g_acc));
 }
 
 int32_t pm_metal_net_ssh_pkt_push(const uint8_t *data, uint32_t len)
@@ -43,15 +42,19 @@ int32_t pm_metal_net_ssh_pkt_push(const uint8_t *data, uint32_t len)
 
 int32_t pm_metal_net_ssh_pkt_send(const uint8_t *payload, uint32_t payload_len)
 {
-    uint8_t pkt[512];
+    uint8_t pkt[PM_METAL_SSH_PKT_ACC];
     uint32_t pad;
     uint32_t pkt_len;
     uint32_t i;
 
-    if (payload == NULL || payload_len == 0u || payload_len > 400u) {
+    if (payload == NULL || payload_len == 0u || payload_len > 3500u) {
         return -1;
     }
-    pad = 4u - ((payload_len + 1u) % 8u);
+    /*
+     * RFC4253: len(packet_length || padding_length || payload || padding)
+     * must be a multiple of 8; padding_length >= 4.
+     */
+    pad = (8u - ((payload_len + 5u) % 8u)) % 8u;
     if (pad < 4u) {
         pad += 8u;
     }
@@ -70,7 +73,7 @@ int32_t pm_metal_net_ssh_pkt_send(const uint8_t *payload, uint32_t payload_len)
 
 int32_t pm_metal_net_ssh_pkt_recv(uint8_t *payload, uint32_t cap, uint32_t *len_out)
 {
-    uint8_t chunk[128];
+    uint8_t chunk[256];
     uint32_t n = 0;
     uint32_t pkt_len;
     uint32_t need;

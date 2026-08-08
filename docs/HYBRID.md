@@ -38,5 +38,6 @@ faces under `include/pymergetic/metal/net/ip/` (`pm_metal_net_ip_*`,
 | Path | Why still there |
 |------|-----------------|
 | `include/pymergetic/metal/libc` | WAMR freestanding `-nostdinc` headers only — not a second product libc; µPy uses `shared/libc` |
+| `third_party/monocypher` + `sha256` | SSH KEX only (tiny); not a second TLS stack |
 
 No `external/`, no `_tmp/`, no package-root muscle twins.

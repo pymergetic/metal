@@ -9,6 +9,10 @@ void uart_puts(const char *s);
 
 void pm_metal_live_ssh(void)
 {
+    if (pm_metal_net_ssh_autoload() != 0) {
+        uart_puts("live ssh init fail\n");
+        return;
+    }
     pm_metal_net_ssh_banner_reset();
     if (pm_metal_net_ssh_listen(22) == 0u) {
         uart_puts("live ssh listen fail\n");
@@ -25,6 +29,13 @@ void pm_metal_live_ssh(void)
         if (!pm_metal_net_ip_tcp_passive_established()) {
             continue;
         }
-        (void)pm_metal_net_ssh_poll();
+        {
+            int32_t rc = pm_metal_net_ssh_poll();
+            if (pm_metal_net_ssh_served() || rc < 0) {
+                /* KEX floor done (or error); auth/encrypt TODO. */
+                pm_metal_net_ssh_banner_reset();
+                (void)pm_metal_net_ip_tcp_passive_relisten(22);
+            }
+        }
     }
 }

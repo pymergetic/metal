@@ -139,6 +139,10 @@ OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_ne
 OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
 OBJ += $(BUILD)/metal_dns.o $(BUILD)/metal_ntp.o $(BUILD)/metal_tftp.o $(BUILD)/metal_faces.o $(BUILD)/metal_upy_nic.o
 OBJ += $(BUILD)/metal_net_pump.o $(BUILD)/metal_ssh_pkt.o
+OBJ += $(BUILD)/metal_ssh_crypto.o $(BUILD)/metal_ssh_kex.o
+OBJ += $(BUILD)/metal_monocypher.o $(BUILD)/metal_monocypher_ed25519.o $(BUILD)/metal_sha256.o
+
+SSH_CRYPTO_INC := -I$(METAL)/third_party/monocypher -I$(METAL)/third_party/sha256
 
 WAMR_LIB :=
 ifeq ($(LINK_WAMR),1)
@@ -208,7 +212,27 @@ $(BUILD)/metal_http.o: $(METAL)/src/pymergetic/metal/net/http/__init__.c | $(BUI
 
 $(BUILD)/metal_ssh.o: $(METAL)/src/pymergetic/metal/net/ssh/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
+
+$(BUILD)/metal_ssh_crypto.o: $(METAL)/src/pymergetic/metal/net/ssh/crypto.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
+
+$(BUILD)/metal_ssh_kex.o: $(METAL)/src/pymergetic/metal/net/ssh/kex.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
+
+$(BUILD)/metal_monocypher.o: $(METAL)/third_party/monocypher/monocypher.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
+
+$(BUILD)/metal_monocypher_ed25519.o: $(METAL)/third_party/monocypher/monocypher-ed25519.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
+
+$(BUILD)/metal_sha256.o: $(METAL)/third_party/sha256/sha256.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
 
 $(BUILD)/metal_dhcp.o: $(METAL)/src/pymergetic/metal/net/dhcp/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
@@ -348,7 +372,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	     && grep -a -q "dns ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "tcp ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "http ok" $(BUILD)/serial.log 2>/dev/null \
-	     && grep -a -q "ssh stub" $(BUILD)/serial.log 2>/dev/null \
+	     && grep -a -qE "ssh ok|ssh stub" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "http client ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "ntp ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "tftp ok" $(BUILD)/serial.log 2>/dev/null \
@@ -362,14 +386,14 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	     && grep -a -q "network ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "dns py ok" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "socket ok" $(BUILD)/serial.log 2>/dev/null \
-	     && grep -a -qE "ssh py ok|ssh stub" $(BUILD)/serial.log 2>/dev/null \
+	     && grep -a -qE "ssh py ok|ssh ok|ssh stub" $(BUILD)/serial.log 2>/dev/null \
 	     && grep -a -q "ovmf ok" $(BUILD)/serial.log 2>/dev/null; then ok=1; break; fi; \
 	  if ! kill -0 $$qpid 2>/dev/null; then break; fi; \
 	  sleep 0.1; \
 	done; \
 	kill -KILL $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	echo "----- serial (trimmed) -----"; \
-	grep -a -E "metal |console ok|floor ok|net ok|dhcp ok|ping ok|ip ok|udp ok|dns ok|tcp ok|http ok|ssh stub|http client ok|ntp ok|tftp ok|draw ok|vt ok|tui ok|kbd ok|wamr ok|framebuf ok|framebuf skip|network ok|dns py ok|socket ok|ssh py ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
+	grep -a -E "metal |console ok|floor ok|net ok|dhcp ok|ping ok|ip ok|udp ok|dns ok|tcp ok|http ok|ssh ok|ssh stub|http client ok|ntp ok|tftp ok|draw ok|vt ok|tui ok|kbd ok|wamr ok|framebuf ok|framebuf skip|network ok|dns py ok|socket ok|ssh py ok|upy ok|ovmf ok|BdsDxe: (loading|starting) Boot0001" $(BUILD)/serial.log 2>/dev/null || true; \
 	if [ $$ok -eq 1 ]; then echo "X86_64_UEFI_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR) LLD=$(LLD_LINK)"; exit 0; fi; \
 	echo "X86_64_UEFI_FAIL ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
 	tail -c 1600 $(BUILD)/serial.log 2>/dev/null || true; \

@@ -11,6 +11,7 @@
 #include "pymergetic/metal/net/dhcp.h"
 #include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/net/pump.h"
+#include "pymergetic/metal/net/ssh/__init__.h"
 #include "pymergetic/metal/net/upy_nic.h"
 
 void uart_puts(const char *s);
@@ -91,6 +92,10 @@ int pm_metal_product_bringup(void)
         return -1;
     }
     (void)pm_metal_net_ip_announce();
+    if (pm_metal_net_ssh_autoload() != 0) {
+        uart_puts("bringup: ssh init fail\n");
+        return -1;
+    }
     for (i = 0; i < 64; i++) {
         (void)pm_metal_async_run_poll();
     }

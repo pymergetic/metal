@@ -154,10 +154,10 @@ Endpoints: `uart`, `ui_tab`, `pipe`, `pty` (master/slave), later `virtio_console
 SSH is planned as a console viewport onto the shared Metal console (UART/UI)
 via a PTY pair (`pm_metal_stream_termios_*` / `pm_metal_stream_winsize_*`),
 not a separate stream feature. Hybrid module `pymergetic.metal.net.ssh`:
-C impl + RS/Py export faces (`pm_metal_net_ssh_*`). Stub today
-(`available()` false; live-ssh may send an SSH-2.0 ident banner on TCP :22
-without crypto). Real server/client (wolfSSH or DIY) will listen on port 22
-and attach each session to a PTY.
+C impl + RS/Py export faces (`pm_metal_net_ssh_*`). DIY server floor:
+ident + `curve25519-sha256` / `ssh-ed25519` through mutual NEWKEYS
+(`available()` true). Post-NEWKEYS encrypt/auth and PTY attach still TODO
+(wolfSSH/libssh* banned).
 
 Metal job control (not POSIX signals): Ctrl-C cancels the foreground shell
 async job, Ctrl-Z stops it; `jobs` / `fg` / `bg` list and resume. POSIX

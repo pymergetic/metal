@@ -9,10 +9,10 @@ extern "C" {
 
 /*
  * pymergetic.metal.net.ssh — DIY hybrid face (C impl).
- * WolfSSH/libssh* banned (license). Crypto/KEX still TODO;
- * version-exchange (RFC4253 §4.2) is real.
+ * WolfSSH/libssh* banned (license). Server path: ident +
+ * curve25519-sha256 through NEWKEYS; post-NEWKEYS encrypt/auth TODO.
  */
-int32_t pm_metal_net_ssh_available(void); /* 1 once DIY path is linked */
+int32_t pm_metal_net_ssh_available(void); /* 1 once crypto/KEX linked */
 int32_t pm_metal_net_ssh_init(void);
 int32_t pm_metal_net_ssh_autoload(void);
 

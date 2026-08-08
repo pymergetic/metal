@@ -21,6 +21,8 @@ Port: [`port/README.md`](port/README.md).
 | `port/` | BIOS/UEFI µPy boards |
 | `include/.../libc` | WAMR freestanding headers only (`-nostdinc`); µPy uses `shared/libc` |
 | `third_party/tlsf` | Tiny allocator used by floor |
+| `third_party/monocypher` | X25519 + Ed25519 (SSH KEX); optional Ed25519/SHA-512 |
+| `third_party/sha256` | SHA-256 for `curve25519-sha256` |
 | [`docs/HYBRID.md`](docs/HYBRID.md) | Rules |
 
 **Not in metal:** `external/` vendor pile, `_tmp/`, package-root muscle twins.
