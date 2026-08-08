@@ -8,19 +8,19 @@ extern "C" {
 #endif
 
 /* Serve one fixed GET response on the established TCP socket. */
-int32_t pm_metal_http_init(void);
+int32_t pm_metal_net_http_init(void);
 
 /* Poll TCP RX; if buffer starts with GET, send HTTP/1.0 200 body "metal ok\n". */
-int32_t pm_metal_http_poll(void);
+int32_t pm_metal_net_http_poll(void);
 
 /* 1 after a response has been sent. */
-int32_t pm_metal_http_served(void);
+int32_t pm_metal_net_http_served(void);
 
 /*
  * Client GET over mini-TCP. Resolves host, connects, sends HTTP/1.0 GET.
  * Copies response into buf; returns 0 on success (saw "HTTP/"), -1 error, -2 timeout.
  */
-int32_t pm_metal_http_client_get(const char *host, uint16_t port, const char *path,
+int32_t pm_metal_net_http_client_get(const char *host, uint16_t port, const char *path,
                                  uint8_t *buf, uint32_t cap, uint32_t *len_out);
 
 #ifdef __cplusplus

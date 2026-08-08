@@ -1,4 +1,4 @@
-#include "pymergetic/metal/net/dns.h"
+#include "pymergetic/metal/net/dns/__init__.h"
 
 #include <stddef.h>
 #include <stdint.h>

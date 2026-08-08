@@ -1,4 +1,4 @@
-#include "pymergetic/metal/net/dhcp.h"
+#include "pymergetic/metal/net/dhcp/__init__.h"
 
 #include <stddef.h>
 #include <stdint.h>

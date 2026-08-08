@@ -1,9 +1,9 @@
 #include "live_http.h"
 
 #include "pymergetic/metal/async/runner.h"
-#include "pymergetic/metal/net/http.h"
+#include "pymergetic/metal/net/http/__init__.h"
 #include "pymergetic/metal/net/ip/tcp.h"
-#include "pymergetic/metal/net/pump.h"
+#include "pymergetic/metal/net/pump/__init__.h"
 
 void uart_puts(const char *s);
 
@@ -13,7 +13,7 @@ void pm_metal_live_http(void)
         uart_puts("live listen fail\n");
         return;
     }
-    (void)pm_metal_http_init();
+    (void)pm_metal_net_http_init();
     uart_puts("live http\n");
     for (;;) {
         if (pm_metal_async_ready()) {
@@ -21,6 +21,6 @@ void pm_metal_live_http(void)
         } else {
             pm_metal_net_pump_once();
         }
-        (void)pm_metal_http_poll();
+        (void)pm_metal_net_http_poll();
     }
 }

@@ -11,10 +11,10 @@ extern "C" {
  * Query an NTP server (UDP/123). On success writes Unix epoch seconds to
  * unix_secs_out (NTP era 0 → Unix). Returns 0 ok, -1 error, -2 timeout.
  */
-int32_t pm_metal_ntp_query(uint32_t server_ip, uint32_t *unix_secs_out);
+int32_t pm_metal_net_ntp_query(uint32_t server_ip, uint32_t *unix_secs_out);
 
 /* Resolve host then query. */
-int32_t pm_metal_ntp_query_host(const char *host, uint32_t *unix_secs_out);
+int32_t pm_metal_net_ntp_query_host(const char *host, uint32_t *unix_secs_out);
 
 #ifdef __cplusplus
 }

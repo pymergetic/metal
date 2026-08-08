@@ -27,7 +27,7 @@
 
 #if MICROPY_PY_NETWORK
 #include "extmod/modnetwork.h"
-#include "pymergetic/metal/net/upy_nic.h"
+#include "pymergetic/metal/net/upy_nic/__init__.h"
 #endif
 
 #if MICROPY_ENABLE_GC

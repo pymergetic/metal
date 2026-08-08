@@ -1,10 +1,10 @@
-#include "pymergetic/metal/net/http.h"
+#include "pymergetic/metal/net/http/__init__.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include "pymergetic/metal/net/dns.h"
+#include "pymergetic/metal/net/dns/__init__.h"
 #include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/net/ip/tcp.h"
 
@@ -19,14 +19,14 @@ static const char k_resp[] =
     "\r\n"
     "metal ok\n";
 
-int32_t pm_metal_http_init(void)
+int32_t pm_metal_net_http_init(void)
 {
     g_ready = 1;
     g_served = 0;
     return 0;
 }
 
-int32_t pm_metal_http_poll(void)
+int32_t pm_metal_net_http_poll(void)
 {
     uint8_t buf[256];
     uint32_t n;
@@ -50,7 +50,7 @@ int32_t pm_metal_http_poll(void)
     return 1;
 }
 
-int32_t pm_metal_http_served(void)
+int32_t pm_metal_net_http_served(void)
 {
     return g_served;
 }
@@ -71,7 +71,7 @@ static int str_has_http(const uint8_t *buf, uint32_t n)
     return 0;
 }
 
-int32_t pm_metal_http_client_get(const char *host, uint16_t port, const char *path,
+int32_t pm_metal_net_http_client_get(const char *host, uint16_t port, const char *path,
                                  uint8_t *buf, uint32_t cap, uint32_t *len_out)
 {
     char req[256];

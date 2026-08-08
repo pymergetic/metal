@@ -8,7 +8,7 @@
 #include "pymergetic/metal/dev/net.h"
 #include "pymergetic/metal/draw.h"
 #include "pymergetic/metal/mem.h"
-#include "pymergetic/metal/net/faces.h"
+#include "pymergetic/metal/net/faces/__init__.h"
 #include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/vt.h"
 

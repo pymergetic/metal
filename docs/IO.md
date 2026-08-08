@@ -33,10 +33,11 @@ Wait on the world → **async**. CPU work → **sync**. Same classes on host and
 
 ### N CPUs = N runners — no Extrawurst
 
-- `n_cpus` stacks + inboxes + cooperative runners — all equal.
-- Same work/input path; **FCFS** — who drains a ready task first serves it.
-- **No CPU0 pin** for wasm/guest sessions. `create_task` round-robins; session pump drains **all** inboxes.
-- Never await while holding a lock.
+- `n_cpus` = ACPI MADT count; product **refuses `n < 2`**. Soft runners alone are not SMP.
+- Each online CPU runs **its** `pm_metal_async_run_loop_cpu` (BIOS INIT-SIPI / UEFI EFI MP).
+- After `pm_metal_smp_start()`, `run_poll` drains **only the current CPU’s** runner; `create_task` still RR.
+- Never await while holding a lock. Coop only — multicore ≠ preemption.
+- Floor net is **mini-IP** (`pm_metal_net_ip_*` + packaged `net/<mod>/`). ASGI / lwIP multi-if are **not** landed.
 
 ---
 

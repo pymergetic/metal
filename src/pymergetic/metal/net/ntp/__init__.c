@@ -1,10 +1,10 @@
-#include "pymergetic/metal/net/ntp.h"
+#include "pymergetic/metal/net/ntp/__init__.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include "pymergetic/metal/net/dns.h"
+#include "pymergetic/metal/net/dns/__init__.h"
 #include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/net/ip/internal.h"
 #include "pymergetic/metal/net/ip/udp.h"
@@ -27,7 +27,7 @@ static int arp_wait(uint32_t ip, int max_polls)
     return -1;
 }
 
-int32_t pm_metal_ntp_query(uint32_t server_ip, uint32_t *unix_secs_out)
+int32_t pm_metal_net_ntp_query(uint32_t server_ip, uint32_t *unix_secs_out)
 {
     uint8_t req[NTP_PACKET_LEN];
     uint8_t rx[NTP_PACKET_LEN + 16u];
@@ -93,7 +93,7 @@ int32_t pm_metal_ntp_query(uint32_t server_ip, uint32_t *unix_secs_out)
     return got ? 0 : -2;
 }
 
-int32_t pm_metal_ntp_query_host(const char *host, uint32_t *unix_secs_out)
+int32_t pm_metal_net_ntp_query_host(const char *host, uint32_t *unix_secs_out)
 {
     uint32_t addr = 0;
 
@@ -103,5 +103,5 @@ int32_t pm_metal_ntp_query_host(const char *host, uint32_t *unix_secs_out)
     if (pm_metal_net_dns_resolve(host, &addr) != 0 || addr == 0u) {
         return -1;
     }
-    return pm_metal_ntp_query(addr, unix_secs_out);
+    return pm_metal_net_ntp_query(addr, unix_secs_out);
 }

@@ -11,7 +11,7 @@ extern "C" {
  * TFTP RRQ (octet). Reads first DATA block into buf.
  * Returns 0 on success, -1 error, -2 timeout.
  */
-int32_t pm_metal_tftp_get(uint32_t server_ip, const char *filename,
+int32_t pm_metal_net_tftp_get(uint32_t server_ip, const char *filename,
                           uint8_t *buf, uint32_t cap, uint32_t *len_out);
 
 #ifdef __cplusplus

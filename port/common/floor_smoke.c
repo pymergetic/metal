@@ -10,7 +10,7 @@
 #include "pymergetic/metal/async/smp.h"
 #include "pymergetic/metal/async/board_time.h"
 #include "pymergetic/metal/dev/acpi/__init__.h"
-#include "pymergetic/metal/net/pump.h"
+#include "pymergetic/metal/net/pump/__init__.h"
 
 void uart_puts(const char *s);
 

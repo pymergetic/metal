@@ -5,7 +5,7 @@
 #include <string.h>
 
 #include "pymergetic/metal/dev/net.h"
-#include "pymergetic/metal/net/upy_nic.h"
+#include "pymergetic/metal/net/upy_nic/__init__.h"
 
 void uart_puts(const char *s);
 

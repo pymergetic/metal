@@ -1,6 +1,6 @@
 /* Metal L2 → µPy AbstractNIC adapter (slim overnight face). */
 
-#include "pymergetic/metal/net/upy_nic.h"
+#include "pymergetic/metal/net/upy_nic/__init__.h"
 
 #include <stddef.h>
 

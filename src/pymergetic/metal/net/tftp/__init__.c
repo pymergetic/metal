@@ -1,4 +1,4 @@
-#include "pymergetic/metal/net/tftp.h"
+#include "pymergetic/metal/net/tftp/__init__.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -39,7 +39,7 @@ static void put_u16(uint8_t *p, uint16_t v)
     p[1] = (uint8_t)v;
 }
 
-int32_t pm_metal_tftp_get(uint32_t server_ip, const char *filename,
+int32_t pm_metal_net_tftp_get(uint32_t server_ip, const char *filename,
                           uint8_t *buf, uint32_t cap, uint32_t *len_out)
 {
     uint8_t req[256];

@@ -4,16 +4,16 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "pymergetic/metal/net/dhcp.h"
-#include "pymergetic/metal/net/dns.h"
-#include "pymergetic/metal/net/faces.h"
-#include "pymergetic/metal/net/http.h"
+#include "pymergetic/metal/net/dhcp/__init__.h"
+#include "pymergetic/metal/net/dns/__init__.h"
+#include "pymergetic/metal/net/faces/__init__.h"
+#include "pymergetic/metal/net/http/__init__.h"
 #include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/net/ip/internal.h"
-#include "pymergetic/metal/net/ntp.h"
+#include "pymergetic/metal/net/ntp/__init__.h"
 #include <pymergetic/metal/net/ssh/__init__.h>
 #include "pymergetic/metal/net/ip/tcp.h"
-#include "pymergetic/metal/net/tftp.h"
+#include "pymergetic/metal/net/tftp/__init__.h"
 #include "pymergetic/metal/net/ip/udp.h"
 
 void uart_puts(const char *s);
@@ -139,7 +139,7 @@ static int http_smoke(void)
         uart_puts("http syn fail\n");
         return -1;
     }
-    if (pm_metal_http_init() != 0) {
+    if (pm_metal_net_http_init() != 0) {
         uart_puts("http init fail\n");
         return -1;
     }
@@ -148,16 +148,16 @@ static int http_smoke(void)
         return -1;
     }
     for (i = 0; i < 8; i++) {
-        if (pm_metal_http_poll() < 0) {
+        if (pm_metal_net_http_poll() < 0) {
             uart_puts("http poll fail\n");
             return -1;
         }
-        if (pm_metal_http_served()) {
+        if (pm_metal_net_http_served()) {
             break;
         }
         pm_metal_net_ip_poll();
     }
-    if (!pm_metal_http_served()) {
+    if (!pm_metal_net_http_served()) {
         uart_puts("http serve fail\n");
         return -1;
     }
@@ -206,7 +206,7 @@ static int http_client_smoke(void)
     /* External HTTP via QEMU user-net can flake once; retry like ntp_smoke. */
     for (attempt = 0; attempt < 3; attempt++) {
         n = 0;
-        rc = pm_metal_http_client_get("example.com", 80, "/", buf, sizeof(buf), &n);
+        rc = pm_metal_net_http_client_get("example.com", 80, "/", buf, sizeof(buf), &n);
         if (rc == 0 && n >= 12u) {
             uart_puts("http client ok\n");
             pm_metal_net_face_mark(PM_METAL_NET_FACE_HTTP_CLI);
@@ -238,7 +238,7 @@ static int ntp_smoke(void)
     /* External NTP via QEMU user-net can flake once; retry like ssh_client_smoke. */
     for (attempt = 0; attempt < 3; attempt++) {
         secs = 0;
-        rc = pm_metal_ntp_query_host("time.google.com", &secs);
+        rc = pm_metal_net_ntp_query_host("time.google.com", &secs);
         /* Rough sanity: 2023-11 .. 2033-05 */
         if (rc == 0 && secs >= 1700000000u && secs <= 2000000000u) {
             uart_puts("ntp ok\n");
@@ -263,7 +263,7 @@ static int tftp_smoke(void)
     uint32_t n = 0;
     int32_t rc;
 
-    rc = pm_metal_tftp_get(PM_METAL_NET_IP_DEFAULT_GW, "metal.txt", buf, sizeof(buf) - 1u, &n);
+    rc = pm_metal_net_tftp_get(PM_METAL_NET_IP_DEFAULT_GW, "metal.txt", buf, sizeof(buf) - 1u, &n);
     if (rc != 0 || n < 8u) {
         uart_puts("tftp get fail\n");
         return -1;

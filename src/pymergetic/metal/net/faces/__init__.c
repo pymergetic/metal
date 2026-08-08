@@ -1,4 +1,4 @@
-#include "pymergetic/metal/net/faces.h"
+#include "pymergetic/metal/net/faces/__init__.h"
 
 #include <stddef.h>
 

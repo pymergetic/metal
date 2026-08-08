@@ -2,7 +2,7 @@
 
 #include "pymergetic/metal/async/runner.h"
 #include "pymergetic/metal/net/ip/tcp.h"
-#include "pymergetic/metal/net/pump.h"
+#include "pymergetic/metal/net/pump/__init__.h"
 #include "pymergetic/metal/net/ssh/__init__.h"
 
 void uart_puts(const char *s);

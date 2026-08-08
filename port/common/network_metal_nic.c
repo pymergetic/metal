@@ -11,10 +11,10 @@
 #include "extmod/modnetwork.h"
 #include "shared/netutils/netutils.h"
 
-#include "pymergetic/metal/net/dns.h"
+#include "pymergetic/metal/net/dns/__init__.h"
 #include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/net/ip/tcp.h"
-#include "pymergetic/metal/net/upy_nic.h"
+#include "pymergetic/metal/net/upy_nic/__init__.h"
 
 #include <stdint.h>
 #include <string.h>

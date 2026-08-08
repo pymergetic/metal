@@ -10,11 +10,11 @@
 #include "pymergetic/metal/dev/acpi/__init__.h"
 #include "pymergetic/metal/dev/net.h"
 #include "pymergetic/metal/mem.h"
-#include "pymergetic/metal/net/dhcp.h"
+#include "pymergetic/metal/net/dhcp/__init__.h"
 #include "pymergetic/metal/net/ip/__init__.h"
-#include "pymergetic/metal/net/pump.h"
+#include "pymergetic/metal/net/pump/__init__.h"
 #include "pymergetic/metal/net/ssh/__init__.h"
-#include "pymergetic/metal/net/upy_nic.h"
+#include "pymergetic/metal/net/upy_nic/__init__.h"
 
 void uart_puts(const char *s);
 void uart_write(const char *s, size_t n);
