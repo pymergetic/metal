@@ -37,6 +37,6 @@ faces under `include/pymergetic/metal/net/ip/` (`pm_metal_net_ip_*`,
 
 | Path | Why still there |
 |------|-----------------|
-| `libc` → `include/pymergetic/metal/libc` | Symlink for WAMR freestanding `-nostdinc`; µPy already has `shared/libc` for the interpreter |
+| `include/pymergetic/metal/libc` | WAMR freestanding `-nostdinc` headers only — not a second product libc; µPy uses `shared/libc` |
 
 No `external/`, no `_tmp/`, no package-root muscle twins.

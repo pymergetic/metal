@@ -7,7 +7,7 @@
 -mno-red-zone
 -Wno-macro-redefined
 -DPM_METAL_BOOT_TARGET_EFI=1
--I../../../libc
+-I../../../../../include/pymergetic/metal/libc
 -I../../../../../
 -I.
 -Iedk2_inc

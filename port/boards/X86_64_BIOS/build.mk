@@ -87,7 +87,7 @@ endif
 ifeq ($(LINK_WAMR),1)
 INC += -I$(WASMMOD)/third_party/wamr/core/iwasm/include \
 	-I$(METAL)/src/pymergetic/metal/wasm/port/platform \
-	-I$(METAL)/libc
+	-I$(METAL)/include/pymergetic/metal/libc
 CFLAGS_METAL += -DBH_PLATFORM_METAL
 endif
 
@@ -258,15 +258,15 @@ $(BUILD)/metal_platform.o: $(METAL)/src/pymergetic/metal/wasm/port/platform/meta
 
 $(BUILD)/metal_libc_stdlib.o: $(METAL)/src/pymergetic/metal/libc/port/stdlib.c | $(BUILD)
 	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/libc -c -o $@ $<
+	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/include/pymergetic/metal/libc -c -o $@ $<
 
 $(BUILD)/metal_libc_stdio.o: $(METAL)/src/pymergetic/metal/libc/port/stdio.c | $(BUILD)
 	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/libc -c -o $@ $<
+	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/include/pymergetic/metal/libc -c -o $@ $<
 
 $(BUILD)/metal_libc_string.o: $(METAL)/src/pymergetic/metal/libc/port/string.c | $(BUILD)
 	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/libc -c -o $@ $<
+	$(Q)$(CC) $(CFLAGS) -nostdinc -I$(METAL)/include/pymergetic/metal/libc -c -o $@ $<
 
 $(WAMR_LIB): $(WASMMOD)/ports/metal/wamr_freestanding.mk
 	$(ECHO) "WAMR freestanding $@"
@@ -275,7 +275,7 @@ $(WAMR_LIB): $(WASMMOD)/ports/metal/wamr_freestanding.mk
 		WAMR_DIR=$(WASMMOD)/third_party/wamr \
 		METAL_PLAT_INC=$(METAL)/src/pymergetic/metal/wasm/port/platform \
 		METAL_PORT_INC=$(METAL)/src/pymergetic/metal/wasm/port \
-		METAL_LIBC_INC=$(METAL)/libc \
+		METAL_LIBC_INC=$(METAL)/include/pymergetic/metal/libc \
 		METAL_SRC_INC=$(METAL) \
 		METAL_INCLUDE_INC=$(METAL)/include \
 		UEFI=0

@@ -19,7 +19,7 @@ Port: [`port/README.md`](port/README.md).
 | [`include/pymergetic/metal/`](include/README.md) | **Public** C faces |
 | `src/pymergetic/metal/` | Hybrid impl |
 | `port/` | BIOS/UEFI µPy boards |
-| `libc` → `include/.../libc` | Freestanding headers for WAMR `-nostdinc` (µPy already uses `shared/libc`) |
+| `include/.../libc` | WAMR freestanding headers only (`-nostdinc`); µPy uses `shared/libc` |
 | `third_party/tlsf` | Tiny allocator used by floor |
 | [`docs/HYBRID.md`](docs/HYBRID.md) | Rules |
 
