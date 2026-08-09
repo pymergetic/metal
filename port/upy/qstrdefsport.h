@@ -23,6 +23,10 @@ Q(client_exec)
 Q(banner_send)
 Q(banner_sent)
 Q(banner_reset)
+Q(lookup)
+Q(last_addr)
+Q(lease)
+Q(yiaddr)
 // Metal nested builtin import paths (must precede collected wrong `_dot_` text).
 // *FORMAT-OFF*
 Q(pymergetic.metal)

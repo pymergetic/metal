@@ -8,8 +8,14 @@ extern "C" {
 #endif
 
 /*
- * Resolve name to IPv4 (host uint32 in network byte layout, e.g. 0x0a000203).
- * Dotted literals short-circuit. Uses pm_metal_net_ip_dns() as the server.
+ * Async resolve (lwIP dns_gethostbyname under net.ip).
+ * Await handle → DONE; result_u32 1 ok / 0 fail; then last_addr().
+ */
+uint32_t pm_metal_net_dns_lookup(const char *name);
+uint32_t pm_metal_net_dns_last_addr(void);
+
+/*
+ * Sync façade for bring-up/smoke: parks via lookup + net pump.
  * Returns 0 on success, -1 on error/NXDOMAIN, -2 on timeout.
  */
 int32_t pm_metal_net_dns_resolve(const char *name, uint32_t *addr_out);

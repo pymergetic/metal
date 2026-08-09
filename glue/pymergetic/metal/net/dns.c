@@ -7,6 +7,18 @@
 
 #include <pymergetic/metal/net/dns/__init__.h>
 
+static mp_obj_t dns_lookup(mp_obj_t name_obj)
+{
+    return mp_obj_new_int_from_uint(pm_metal_net_dns_lookup(mp_obj_str_get_str(name_obj)));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(dns_lookup_obj, dns_lookup);
+
+static mp_obj_t dns_last_addr(void)
+{
+    return mp_obj_new_int_from_uint(pm_metal_net_dns_last_addr());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(dns_last_addr_obj, dns_last_addr);
+
 static mp_obj_t dns_resolve(mp_obj_t name_obj)
 {
     uint32_t addr = 0;
@@ -21,6 +33,8 @@ static MP_DEFINE_CONST_FUN_OBJ_1(dns_resolve_obj, dns_resolve);
 
 static const mp_rom_map_elem_t dns_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal_dot_net_dot_dns) },
+    { MP_ROM_QSTR(MP_QSTR_lookup), MP_ROM_PTR(&dns_lookup_obj) },
+    { MP_ROM_QSTR(MP_QSTR_last_addr), MP_ROM_PTR(&dns_last_addr_obj) },
     { MP_ROM_QSTR(MP_QSTR_resolve), MP_ROM_PTR(&dns_resolve_obj) },
 };
 static MP_DEFINE_CONST_DICT(dns_globals, dns_globals_table);

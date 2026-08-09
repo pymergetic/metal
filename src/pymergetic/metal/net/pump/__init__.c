@@ -5,6 +5,7 @@
 #include "pymergetic/metal/async/prio.h"
 #include "pymergetic/metal/async/runner.h"
 #include "pymergetic/metal/net/asgi/__init__.h"
+#include "pymergetic/metal/net/dhcp/__init__.h"
 #include "pymergetic/metal/net/http/__init__.h"
 #include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/net/ip/sock.h"
@@ -81,6 +82,7 @@ void pm_metal_net_pump_once(void)
 {
     pm_metal_net_ip_poll();
     pm_metal_net_pump_wake_tcp();
+    pm_metal_net_dhcp_poll();
     pm_metal_net_tls_poll();
     pm_metal_net_http_client_poll();
     if (pm_metal_asgi_ready()) {

@@ -179,21 +179,21 @@ Counts are ledger estimates (not a live link inventory).
 | `arch.x86_64` | Py | 3 | 3 | 3 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
 | `async` | C | 12 | 12 | 12 | 12 | yes | — | — | yes |  | W1 pure C · W5 +Py · W7 browser |
 | `auth` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | done |
-| `boot` | C | 4 | 4 | 4 | 4 | partial | yes | yes | yes | thin face over boot.tree UX | W6 unfreeze boot/__init__.py |
+| `boot` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | thin face over boot.tree UX | W6 unfreeze done |
 | `boot.tree` | C | 11 | 11 | 11 | 11 | yes | — | yes | yes |  | pure C · W5 +Py |
 | `bus.pci` | C | 8 | 8 | 8 | 8 | yes | — | — | yes |  | W5 +Py |
-| `bus.virtio` | C | 15 | 15 | 15 | 15 | partial | — | — | yes |  | W5 +Py · async |
-| `console` | C | 15 | 15 | 15 | 15 | partial | — | yes | yes |  | W5 +Py · async |
+| `bus.virtio` | C | 15 | 15 | 15 | 15 | yes | — | — | yes |  | done |
+| `console` | C | 15 | 15 | 15 | 15 | yes | — | yes | yes | sync ring façade | done |
 | `dev.acpi` | C | 6 | 6 | 6 | 6 | yes | — | — | yes |  | W5 +Py |
 | `dev.blk` | C | 6 | 6 | 6 | 6 | no | — | — | — |  | W1 pure C · W5 +Py · async |
-| `dev.gfx.compositor` | C | 10 | 10 | 10 | 10 | partial | — | — | yes |  | W5 +Py · async |
+| `dev.gfx.compositor` | C | 10 | 10 | 10 | 10 | yes | — | — | yes | sync present façade | done |
 | `dev.gfx.scanout` | C | 8 | 8 | 8 | 8 | partial | — | — | yes | virtio-gpu/bochs/radeon/i915/GOP/LFB | W5 +Py · async |
 | `dev.gfx.text` | C | 3 | 3 | 3 | 3 | yes | — | — | yes |  | W5 +Py |
 | `dev.input.kbd` | C | 5 | 5 | 5 | 5 | yes | — | — | yes |  | W5 +Py |
 | `dev.net.bge` | C | 6 | 6 | 6 | 6 | partial | — | — | yes |  | W5 +Py · async |
 | `dev.net.virtio_net` | C | 7 | 7 | 7 | 7 | partial | — | — | yes |  | W5 +Py · async |
-| `dev.serial` | C | 2 | 2 | 2 | 2 | partial | yes | — | yes |  | async |
-| `dev.stream` | C | 18 | 18 | 18 | 18 | partial | — | — | — |  | W5 +Py · async |
+| `dev.serial` | C | 2 | 2 | 2 | 2 | yes | yes | — | yes | write sink | done |
+| `dev.stream` | C | 18 | 18 | 18 | 18 | yes | — | — | — | park read/drain | done |
 | `draw` | C | 6 | 6 | 6 | 6 | yes | — | — | yes |  | W5 +Py |
 | `externals` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes |  | done |
 | `fs` | RS | 24 | 24 | 24 | 24 | no | yes | — | — | async VFS + ops_register/lookup | async · W7 browser |
@@ -203,7 +203,7 @@ Counts are ledger estimates (not a live link inventory).
 | `fs.mtar` | RS | 6 | 6 | 6 | 6 | no | yes | — | — |  | async · W7 browser |
 | `fs.overlay` | RS | 1 | 1 | 1 | 1 | partial | yes | — | — |  | async · W7 browser |
 | `fs.tmpfs` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | memory-backed | W7 browser |
-| `fs.vfs` | RS | 6 | 6 | 6 | 6 | no | yes | — | — |  | async · W7 browser |
+| `fs.vfs` | RS | 6 | 6 | 6 | 6 | yes | yes | — | — | mount table only | done · W7 browser |
 | `fs.wasmmod` | RS | 1 | 1 | 1 | 1 | partial | yes | — | — |  | async · W7 browser |
 | `fs.zip` | RS | 4 | 4 | 4 | 4 | no | yes | — | — |  | async · W7 browser |
 | `hwtree` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | print only (DT walk) | W7 browser |
@@ -214,12 +214,12 @@ Counts are ledger estimates (not a live link inventory).
 | `mem.tlsf` | RS | 20 | 20 | 20 | 20 | yes | yes | yes | yes | Conte TLSF border | done |
 | `net.microdot` | Py | 20 | 20 | 20 | 20 | partial | — | yes | yes | into-Py resolve/new + route/run/get/post + getattr/call* | keep Py muscle · W5 async |
 | `net.asgi` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | Py is consumer/codegen only | pure C · W5 +Py · W8 browser net |
-| `net.dhcp` | C | 1 | 1 | 1 | 1 | partial | — | — | yes |  | W5 +Py · async · W8 browser net |
-| `net.dns` | C | 1 | 1 | 1 | 1 | no | — | — | yes |  | W5 +Py · async · W8 browser net |
+| `net.dhcp` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | start parks; run sync façade | done · W8 browser net |
+| `net.dns` | C | 3 | 3 | 3 | 3 | yes | — | — | yes | lookup→ip_dns_lookup; resolve façade | done · W8 browser net |
 | `net.faces` | C | 3 | 3 | 3 | 3 | yes | yes | — | yes |  | W8 browser net |
 | `net.http` | C | 12 | 12 | 12 | 12 | partial | — | — | yes |  | W5 +Py · async · W8 browser net |
-| `net.ip` | C | 13 | 13 | 13 | 13 | partial | yes | — | yes | W8: browser shim under ABI | W5 +Py · async · W8 browser net |
-| `net.nic` | C | 4 | 4 | 4 | 4 | partial | — | — | yes |  | W5 +Py · async · W8 browser net |
+| `net.ip` | C | 13 | 13 | 13 | 13 | yes | yes | — | yes | socks+dns_lookup park | done · W8 browser net |
+| `net.nic` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | register+L2 poll | done · W8 browser net |
 | `net.ntp` | C | 2 | 2 | 2 | 2 | partial | — | — | yes |  | W5 +Py · async · W8 browser net |
 | `net.pump` | C | 7 | 7 | 7 | 7 | yes | — | — | yes |  | W5 +Py · W8 browser net |
 | `net.ssh` | C | 16 | 16 | 16 | 16 | partial | yes | — | yes | poll exists; some paths block | W1 pure C · W5 +Py · async · W8 browser net |
@@ -228,9 +228,9 @@ Counts are ledger estimates (not a live link inventory).
 | `net.wg` | C | 12 | 12 | 12 | 12 | partial | yes | — | yes |  | W5 +Py · async · W8 browser net |
 | `pack` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes |  | W5 +Py |
 | `rt` | RS | 5 | 5 | 5 | 5 | yes | yes | — | yes | halt/panic*/register/connect | W7 browser |
-| `shell.tui` | C | 4 | 4 | 4 | 4 | partial | — | — | yes |  | W5 +Py · async |
-| `shell.ui` | C | 2 | 2 | 2 | 2 | partial | — | — | yes |  | W5 +Py · async |
-| `shell.vt` | C | 9 | 9 | 9 | 9 | partial | — | — | yes |  | W5 +Py · async |
+| `shell.tui` | C | 4 | 4 | 4 | 4 | yes | — | — | yes |  | done |
+| `shell.ui` | C | 2 | 2 | 2 | 2 | yes | — | — | yes |  | done |
+| `shell.vt` | C | 9 | 9 | 9 | 9 | yes | — | — | yes |  | done |
 | `trust` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes |  | done |
 | `unix.x86` | Py | 2 | 2 | 2 | 2 | no | — | — | — | host sim sync | keep Py muscle · W4 +C/+RS bridges · W5 async |
 | `unix.x86_64` | Py | 2 | 2 | 2 | 2 | no | — | — | — | host sim sync | keep Py muscle · W4 +C/+RS bridges · W5 async |
@@ -251,7 +251,8 @@ Counts are ledger estimates (not a live link inventory).
 |--------|------:|
 | Rows | 69 |
 | Full export (C∧RS∧Py @ 100%) | **69/69** |
-| Smoke | `X86_64_BIOS_OK` ENGINE=mp (2026-08-09; dotted nest import; no face_pad/api_N) |
+| Strict green (export ∧ async=yes) | **47/69** |
+| Smoke | `X86_64_BIOS_OK` ENGINE=mp (2026-08-09; dns/dhcp park; honest async flips) |
 | Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). |
 
 Recompute the snapshot numbers when you bulk-edit the table.

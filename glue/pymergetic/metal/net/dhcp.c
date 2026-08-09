@@ -7,6 +7,35 @@
 
 #include <pymergetic/metal/net/dhcp/__init__.h>
 
+static mp_obj_t dhcp_start(void)
+{
+    return mp_obj_new_int_from_uint(pm_metal_net_dhcp_start());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(dhcp_start_obj, dhcp_start);
+
+static mp_obj_t dhcp_poll(void)
+{
+    pm_metal_net_dhcp_poll();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(dhcp_poll_obj, dhcp_poll);
+
+static mp_obj_t dhcp_lease(void)
+{
+    const pm_metal_net_dhcp_lease_t *lease = pm_metal_net_dhcp_lease();
+    mp_obj_t dict = mp_obj_new_dict(5);
+
+    mp_obj_dict_store(dict, MP_OBJ_NEW_QSTR(MP_QSTR_yiaddr),
+                      mp_obj_new_int_from_uint(lease->yiaddr));
+    mp_obj_dict_store(dict, MP_OBJ_NEW_QSTR(MP_QSTR_mask), mp_obj_new_int_from_uint(lease->mask));
+    mp_obj_dict_store(dict, MP_OBJ_NEW_QSTR(MP_QSTR_gw), mp_obj_new_int_from_uint(lease->gw));
+    mp_obj_dict_store(dict, MP_OBJ_NEW_QSTR(MP_QSTR_dns), mp_obj_new_int_from_uint(lease->dns));
+    mp_obj_dict_store(dict, MP_OBJ_NEW_QSTR(MP_QSTR_server),
+                      mp_obj_new_int_from_uint(lease->server));
+    return dict;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(dhcp_lease_obj, dhcp_lease);
+
 static mp_obj_t dhcp_run(void)
 {
     pm_metal_net_dhcp_lease_t lease;
@@ -30,6 +59,9 @@ static MP_DEFINE_CONST_FUN_OBJ_0(dhcp_run_obj, dhcp_run);
 
 static const mp_rom_map_elem_t dhcp_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal_dot_net_dot_dhcp) },
+    { MP_ROM_QSTR(MP_QSTR_start), MP_ROM_PTR(&dhcp_start_obj) },
+    { MP_ROM_QSTR(MP_QSTR_poll), MP_ROM_PTR(&dhcp_poll_obj) },
+    { MP_ROM_QSTR(MP_QSTR_lease), MP_ROM_PTR(&dhcp_lease_obj) },
     { MP_ROM_QSTR(MP_QSTR_run), MP_ROM_PTR(&dhcp_run_obj) },
 };
 static MP_DEFINE_CONST_DICT(dhcp_globals, dhcp_globals_table);

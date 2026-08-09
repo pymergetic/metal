@@ -34,7 +34,6 @@ package(
     "pymergetic",
     (
         "metal/arch/__init__.py",
-        "metal/boot/__init__.py",
         "metal/arch/x86/__init__.py",
         "metal/arch/x86/autoexec.py",
         "metal/arch/x86_64/__init__.py",
