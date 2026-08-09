@@ -25,23 +25,39 @@ static mp_obj_t ExtToDict(const pm_metal_external_t *e)
     return d;
 }
 
-static mp_obj_t externals_list(void)
+static mp_obj_t externals_init(void)
 {
-    mp_obj_t list = mp_obj_new_list(0, NULL);
-    uint32_t i;
-    uint32_t n = pm_metal_external_count();
-    pm_metal_external_t e;
-
-    for (i = 0u; i < n; i++) {
-        if (pm_metal_external_get(i, &e) == 0) {
-            mp_obj_list_append(list, ExtToDict(&e));
-        }
-    }
-    return list;
+    pm_metal_externals_init();
+    return mp_const_none;
 }
-static MP_DEFINE_CONST_FUN_OBJ_0(externals_list_obj, externals_list);
+static MP_DEFINE_CONST_FUN_OBJ_0(externals_init_obj, externals_init);
 
-static mp_obj_t externals_get(mp_obj_t id_obj)
+static mp_obj_t externals_seed_fallback(void)
+{
+    pm_metal_externals_seed_fallback();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(externals_seed_fallback_obj, externals_seed_fallback);
+
+static mp_obj_t externals_count(void)
+{
+    return mp_obj_new_int_from_uint((mp_uint_t)pm_metal_external_count());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(externals_count_obj, externals_count);
+
+static mp_obj_t externals_get(mp_obj_t idx_obj)
+{
+    pm_metal_external_t e;
+    uint32_t idx = (uint32_t)mp_obj_get_int(idx_obj);
+
+    if (pm_metal_external_get(idx, &e) != 0) {
+        return mp_const_none;
+    }
+    return ExtToDict(&e);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(externals_get_obj, externals_get);
+
+static mp_obj_t externals_find(mp_obj_t id_obj)
 {
     const char *id = mp_obj_str_get_str(id_obj);
     pm_metal_external_t e;
@@ -51,7 +67,7 @@ static mp_obj_t externals_get(mp_obj_t id_obj)
     }
     return ExtToDict(&e);
 }
-static MP_DEFINE_CONST_FUN_OBJ_1(externals_get_obj, externals_get);
+static MP_DEFINE_CONST_FUN_OBJ_1(externals_find_obj, externals_find);
 
 static mp_obj_t externals_register(size_t n_args, const mp_obj_t *args)
 {
@@ -75,8 +91,11 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(externals_register_obj, 2, 4, externa
 
 static const mp_rom_map_elem_t externals_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal_dot_externals) },
-    { MP_ROM_QSTR(MP_QSTR_list), MP_ROM_PTR(&externals_list_obj) },
+    { MP_ROM_QSTR(MP_QSTR_init), MP_ROM_PTR(&externals_init_obj) },
+    { MP_ROM_QSTR(MP_QSTR_seed_fallback), MP_ROM_PTR(&externals_seed_fallback_obj) },
+    { MP_ROM_QSTR(MP_QSTR_count), MP_ROM_PTR(&externals_count_obj) },
     { MP_ROM_QSTR(MP_QSTR_get), MP_ROM_PTR(&externals_get_obj) },
+    { MP_ROM_QSTR(MP_QSTR_find), MP_ROM_PTR(&externals_find_obj) },
     { MP_ROM_QSTR(MP_QSTR_register), MP_ROM_PTR(&externals_register_obj) },
 };
 static MP_DEFINE_CONST_DICT(externals_module_globals, externals_module_globals_table);

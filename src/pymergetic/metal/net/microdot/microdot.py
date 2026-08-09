@@ -948,7 +948,7 @@ class Microdot:
 
     Example::
 
-        from microdot import Microdot
+        from pymergetic.metal.net.microdot import Microdot
 
         app = Microdot()
     """
@@ -1204,7 +1204,7 @@ class Microdot:
 
         Example::
 
-            from microdot import abort
+            from pymergetic.metal.net.microdot import abort
 
             @app.route('/users/<int:id>')
             def get_user(id):
@@ -1248,7 +1248,7 @@ class Microdot:
         Example::
 
             import asyncio
-            from microdot import Microdot
+            from pymergetic.metal.net.microdot import Microdot
 
             app = Microdot()
 
@@ -1335,7 +1335,7 @@ class Microdot:
 
         Example::
 
-            from microdot import Microdot
+            from pymergetic.metal.net.microdot import Microdot
 
             app = Microdot()
 

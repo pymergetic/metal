@@ -1,11 +1,12 @@
 /*
- * C → frozen Microdot Inspect dispatch (live-http JSON routes).
+ * C → frozen Microdot Inspect dispatch via wasmmod pm_upy_* bus.
  */
 #include <string.h>
 
-#include "py/obj.h"
-#include "py/objstr.h"
-#include "py/runtime.h"
+#include "pm_common.h"
+#include "pm_upy/obj/call.h"
+#include "pm_upy/obj/core.h"
+#include "pm_upy/obj/ops.h"
 
 #include "pymergetic/metal/inspect/py_call.h"
 
@@ -22,45 +23,66 @@ static void copy_str(char *dst, size_t dst_len, const char *src)
     dst[i] = 0;
 }
 
+static int32_t tuple_get(pm_upy_obj_t tup, intptr_t i, pm_upy_obj_t *out)
+{
+    pm_upy_obj_t idx;
+    pm_upy_obj_t item;
+    pm_upy_obj_t none = pm_upy_obj_none();
+
+    idx = pm_upy_obj_new_int(i);
+    item = pm_upy_call_method(tup, "__getitem__", 1, &idx);
+    if (pm_upy_equal(item, none)) {
+        return -1;
+    }
+    *out = item;
+    return 0;
+}
+
 int32_t pm_metal_inspect_py_handle(const char *method, const char *path,
                                    int *status, char *body, size_t body_len)
 {
-    nlr_buf_t nlr;
-    mp_obj_t mod;
-    mp_obj_t fun;
-    mp_obj_t ret;
-    size_t n;
-    mp_obj_t *items;
+    uint32_t fn_h;
+    pm_upy_obj_t args[2];
+    pm_upy_obj_t ret;
+    pm_upy_obj_t none;
+    pm_upy_obj_t status_o;
+    pm_upy_obj_t body_o;
     const char *s;
+    size_t slen;
 
     if (method == NULL || path == NULL || status == NULL || body == NULL) {
         return -1;
     }
 
-    if (nlr_push(&nlr) != 0) {
+    fn_h = pm_upy_fn_resolve("pymergetic.metal.inspect.dispatch.handle");
+    if (fn_h == 0) {
         return -1;
     }
 
-    /* Non-empty fromlist so import returns the leaf module, not pymergetic. */
-    mod = mp_import_name(qstr_from_str("pymergetic.metal.inspect.dispatch"),
-                         mp_obj_new_str("*", 1), MP_OBJ_NEW_SMALL_INT(0));
-    fun = mp_load_attr(mod, qstr_from_str("handle"));
-    ret = mp_call_function_2(fun, mp_obj_new_str(method, strlen(method)),
-                             mp_obj_new_str(path, strlen(path)));
+    args[0] = pm_upy_obj_new_str(method, strlen(method));
+    args[1] = pm_upy_obj_new_str(path, strlen(path));
+    ret = pm_upy_fn_call(fn_h, 2, args);
 
-    if (ret == mp_const_none) {
-        nlr_pop();
+    none = pm_upy_obj_none();
+    if (pm_upy_equal(ret, none)) {
+        /* Not an Inspect route (None) or call soft-fail — both are none. */
         return 0;
     }
 
-    mp_obj_get_array(ret, &n, &items);
-    if (n != 2u) {
-        nlr_pop();
+    if (pm_upy_len(ret) != 2u) {
         return -1;
     }
-    *status = (int)mp_obj_get_int(items[0]);
-    s = mp_obj_str_get_str(items[1]);
+    if (tuple_get(ret, 0, &status_o) != 0) {
+        return -1;
+    }
+    if (tuple_get(ret, 1, &body_o) != 0) {
+        return -1;
+    }
+
+    *status = (int)pm_upy_obj_get_int(status_o);
+    if (pm_upy_obj_str_get(body_o, &s, &slen) != PM_OK || s == NULL) {
+        return -1;
+    }
     copy_str(body, body_len, s);
-    nlr_pop();
     return 1;
 }

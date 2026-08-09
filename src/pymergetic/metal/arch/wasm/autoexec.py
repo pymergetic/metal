@@ -78,6 +78,6 @@ def help():
     print("metal — CDN guests after ready")
     print("  packages()  list lead packs")
     print("  import <guest>")
-    print("  import microdot / pymergetic.metal.inspect  (frozen CORE)")
+    print("  import pymergetic.metal.net.microdot / pymergetic.metal.inspect  (frozen CORE)")
     print("  pymergetic.metal.externals.list()  (product stacks)")
     print("  httpd/sshd listen: firmware seats (browser has no virtio NIC)")

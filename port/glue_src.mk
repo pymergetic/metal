@@ -26,11 +26,15 @@ GLUE_C = \
 	pymergetic/metal/util/endian.c \
 	pymergetic/metal/util/fourcc.c \
 	pymergetic/metal/util/eightcc.c \
+	pymergetic/metal/util/ascii.c \
 	pymergetic/metal/util/tar.c \
 	pymergetic/metal/net/__init__.c \
 	pymergetic/metal/net/ip.c \
 	pymergetic/metal/net/wg.c \
-	pymergetic/metal/net/ssh.c
+	pymergetic/metal/net/ssh.c \
+	pymergetic/metal/net/faces.c \
+	pymergetic/metal/dev/__init__.c \
+	pymergetic/metal/dev/serial.c
 
 define GLUE_ATTACH
 SRC_QSTR += $(addprefix $(GLUE)/, $(GLUE_C))

@@ -7,7 +7,7 @@ under this port's MINIMUM ROM level (AttributeError in Response.__init__).
 import asyncio
 import json
 
-from microdot import Request
+from pymergetic.metal.net.microdot import Request
 
 from .app import create_app
 

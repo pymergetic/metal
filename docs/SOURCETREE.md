@@ -40,18 +40,18 @@ extmod/metal/
 
 | Step | What |
 |------|------|
-| Source of truth | `src/pymergetic/metal/microdot/*.py` (in-tree CORE, vendored upstream) |
-| Mod / VFS | appears as `/mods/pymergetic.metal/microdot/…` |
-| Import | Inspect app: `from microdot import …` / package path under that mod |
-| C/RS | `include/…/microdot/__init__.h` callers only — do not reimplement Microdot in C |
-| Not | wasm pack · not under `pymergetic.metal.inspect` · not top-level `py/` |
+| Source of truth | `src/pymergetic/metal/net/microdot/*.py` (path == `net.microdot`) |
+| Mod / VFS | `/mods/pymergetic.metal/net/microdot/…` |
+| Import | `from pymergetic.metal.net.microdot import …` |
+| C/RS | into-Py bridges via `pm_upy_*` (W4) — do not reimplement Microdot in C |
+| Not | top-level `microdot` reexport · wasm pack · under `inspect` |
 
 ## VFS view (runtime)
 
 ```text
 /mods/pymergetic.metal/
   net/asgi/…            ← C floor; Py ASGI apps mount here later
-  microdot/…
+  net/microdot/…        ← frozen CORE Py muscle (path == module)
   arch/…                ← seat modules (same pack face)
   httpd.json            ← only here (host that runs ASGI)
 

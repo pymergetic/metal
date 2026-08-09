@@ -62,6 +62,14 @@ void mp_metal_upy_run(int smoke) {
 #endif
     mp_init();
 
+    /* Mutable metal/net globals so frozen CORE can bind (import store_attr). */
+    void pm_metal_globals_init(void);
+    pm_metal_globals_init();
+#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
+    void pm_metal_net_globals_init(void);
+    pm_metal_net_globals_init();
+#endif
+
 #if MICROPY_PY_NETWORK
     mod_network_init();
 #if MICROPY_PY_LWIP
@@ -131,9 +139,9 @@ void mp_metal_upy_run(int smoke) {
 #endif
 #if MICROPY_MODULE_FROZEN_MPY
         do_str(
-            "import microdot\n"
+            "import pymergetic.metal.net.microdot as microdot\n"
             "assert microdot.__version__\n"
-            "from microdot import Microdot\n"
+            "from pymergetic.metal.net.microdot import Microdot\n"
             "assert Microdot is not None\n"
             "print('microdot ok')\n"
             "from pymergetic.metal.inspect.dispatch import handle\n"

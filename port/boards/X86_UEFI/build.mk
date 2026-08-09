@@ -196,7 +196,8 @@ OBJ += $(BUILD)/frozen_content.o
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_smp.o $(BUILD)/metal_ap_tramp.o $(BUILD)/win32_helpers.o $(BUILD)/metal_acpi.o $(BUILD)/metal_asgi.o $(BUILD)/metal_inspect.o $(BUILD)/metal_console.o
 OBJ += $(BUILD)/metal_mod_packs.o $(BUILD)/metal_pack_inspect.o $(BUILD)/metal_pack_metal.o
-OBJ += $(BUILD)/metal_boot_tree.o $(BUILD)/metal_externals.o $(BUILD)/metal_externals_rows.o $(BUILD)/metal_arch.o $(BUILD)/metal_ascii.o
+OBJ += $(BUILD)/metal_boot_tree.o $(BUILD)/metal_externals.o $(BUILD)/metal_externals_rows.o $(BUILD)/metal_arch.o $(BUILD)/metal_arch_py.o $(BUILD)/metal_ascii.o
+OBJ += $(BUILD)/metal_microdot.o
 OBJ += $(BUILD)/metal_auth.o $(BUILD)/metal_trust.o $(BUILD)/metal_endian.o $(BUILD)/metal_fourcc.o $(BUILD)/metal_eightcc.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_serial.o $(BUILD)/metal_shell_ui.o
@@ -219,6 +220,9 @@ include $(PORT_DIR)/lwip.mk
 
 # mbedTLS + Metal net/tls (appends CFLAGS -I and OBJ)
 include $(PORT_DIR)/mbedtls.mk
+
+# wasmmod pm_upy_* bus for into-Py bridges (inspect / arch / microdot)
+include $(PORT_DIR)/upy_bus.mk
 
 SSH_CRYPTO_INC := -I$(METAL)/third_party/monocypher -I$(METAL)/third_party/sha256
 
@@ -363,6 +367,14 @@ $(BUILD)/metal_externals_rows.o: $(METAL)/src/pymergetic/metal/boot/externals_ro
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_arch.o: $(METAL)/src/pymergetic/metal/arch/arch.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_arch_py.o: $(METAL)/src/pymergetic/metal/arch/py_call.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_microdot.o: $(METAL)/src/pymergetic/metal/net/microdot/bridge.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 

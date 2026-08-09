@@ -1,7 +1,7 @@
 import os
 from random import choice
-from microdot import abort, iscoroutine, AsyncBytesIO
-from microdot.helpers import wraps
+from pymergetic.metal.net.microdot import abort, iscoroutine, AsyncBytesIO
+from pymergetic.metal.net.microdot.helpers import wraps
 
 
 class FormDataIter:
@@ -12,7 +12,7 @@ class FormDataIter:
 
     Example usage::
 
-        from microdot.multipart import FormDataIter
+        from pymergetic.metal.net.microdot.multipart import FormDataIter
 
         @app.post('/upload')
         async def upload(request):
@@ -261,7 +261,7 @@ def with_form_data(f):
 
     Example usage::
 
-        from microdot.multipart import with_form_data
+        from pymergetic.metal.net.microdot.multipart import with_form_data
 
         @app.post('/upload')
         @with_form_data

@@ -3,7 +3,7 @@
 from .stubs import ENDPOINT_STUBS, capabilities as make_capabilities, self_description
 
 try:
-    from microdot import Microdot
+    from pymergetic.metal.net.microdot import Microdot
 except ImportError:  # pragma: no cover — host tooling
     Microdot = None
 

@@ -5,13 +5,13 @@
 include("$(MPY_DIR)/extmod/asyncio")
 
 package(
-    "microdot",
+    "pymergetic",
     (
-        "__init__.py",
-        "microdot.py",
-        "helpers.py",
+        "metal/net/microdot/__init__.py",
+        "metal/net/microdot/microdot.py",
+        "metal/net/microdot/helpers.py",
     ),
-    base_path="$(METAL)/src/pymergetic/metal",
+    base_path="$(METAL)/src",
     opt=3,
 )
 

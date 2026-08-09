@@ -51,12 +51,15 @@ METAL_BOOT_SRCS := \
 	$(METAL)/glue/pymergetic/metal/util/endian.c \
 	$(METAL)/glue/pymergetic/metal/util/fourcc.c \
 	$(METAL)/glue/pymergetic/metal/util/eightcc.c \
+	$(METAL)/glue/pymergetic/metal/util/ascii.c \
 	$(METAL)/port/hal/wasm/console.c \
 	$(METAL)/port/hal/wasm/mem.c \
 	$(METAL)/src/pymergetic/metal/boot/tree.c \
 	$(METAL)/src/pymergetic/metal/boot/externals.c \
 	$(METAL)/src/pymergetic/metal/boot/externals_rows.c \
 	$(METAL)/src/pymergetic/metal/arch/arch.c \
+	$(METAL)/src/pymergetic/metal/arch/py_call.c \
+	$(METAL)/src/pymergetic/metal/net/microdot/bridge.c \
 	$(METAL)/src/pymergetic/metal/auth/__init__.c \
 	$(METAL)/src/pymergetic/metal/trust/__init__.c \
 	$(METAL)/src/pymergetic/metal/util/ascii.c \
@@ -82,4 +85,5 @@ SRC_QSTR += \
 	$(METAL)/glue/pymergetic/metal/util/size.c \
 	$(METAL)/glue/pymergetic/metal/util/endian.c \
 	$(METAL)/glue/pymergetic/metal/util/fourcc.c \
-	$(METAL)/glue/pymergetic/metal/util/eightcc.c
+	$(METAL)/glue/pymergetic/metal/util/eightcc.c \
+	$(METAL)/glue/pymergetic/metal/util/ascii.c

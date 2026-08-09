@@ -15,6 +15,9 @@
 #ifndef PYMERGETIC_METAL_ARCH_H_
 #define PYMERGETIC_METAL_ARCH_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -36,6 +39,13 @@ typedef enum pm_metal_arch_firmware {
 pm_metal_arch_id_t pm_metal_arch_current(void);
 const char *pm_metal_arch_name(pm_metal_arch_id_t id);
 pm_metal_arch_firmware_t pm_metal_arch_firmware(void);
+
+/*
+ * Into-Py bridges (frozen pymergetic.metal.arch). Soft-fail: -1 / empty buf.
+ * Seat packs remain compile-time CFG above.
+ */
+int32_t pm_metal_arch_py_name(char *buf, size_t buf_len);
+int32_t pm_metal_arch_py_names(char *buf, size_t buf_len);
 
 #ifdef __cplusplus
 }
