@@ -82,8 +82,30 @@ METAL_BOOT_SRCS := \
 	$(METAL)/glue/pymergetic/metal/pack.c \
 	$(METAL)/glue/pymergetic/metal/hwtree.c \
 	$(METAL)/glue/pymergetic/metal/net/__init__.c \
+	$(METAL)/glue/pymergetic/metal/net/asgi.c \
+	$(METAL)/glue/pymergetic/metal/net/dhcp.c \
+	$(METAL)/glue/pymergetic/metal/net/dns.c \
 	$(METAL)/glue/pymergetic/metal/net/faces.c \
+	$(METAL)/glue/pymergetic/metal/net/http.c \
+	$(METAL)/glue/pymergetic/metal/net/ip.c \
 	$(METAL)/glue/pymergetic/metal/net/nic.c \
+	$(METAL)/glue/pymergetic/metal/net/ntp.c \
+	$(METAL)/glue/pymergetic/metal/net/pump.c \
+	$(METAL)/glue/pymergetic/metal/net/ssh.c \
+	$(METAL)/glue/pymergetic/metal/net/tftp.c \
+	$(METAL)/glue/pymergetic/metal/net/tls.c \
+	$(METAL)/glue/pymergetic/metal/net/wg.c \
+	$(METAL)/port/hal/wasm/net_http_fetch.c \
+	$(METAL)/port/hal/wasm/net_pump_thin.c \
+	$(METAL)/port/hal/wasm/net_ip_thin.c \
+	$(METAL)/port/hal/wasm/net_dns_doh.c \
+	$(METAL)/port/hal/wasm/net_ntp_wall.c \
+	$(METAL)/port/hal/wasm/net_dhcp_stub.c \
+	$(METAL)/port/hal/wasm/net_tftp_stub.c \
+	$(METAL)/port/hal/wasm/net_tls_stub.c \
+	$(METAL)/port/hal/wasm/net_ssh_stub.c \
+	$(METAL)/port/hal/wasm/net_wg_stub.c \
+	$(METAL)/port/hal/wasm/net_asgi_stub.c \
 	$(METAL)/src/pymergetic/metal/pack/mod_packs.c \
 	$(METAL)/src/pymergetic/metal/net/faces/__init__.c \
 	$(METAL)/src/pymergetic/metal/net/nic/__init__.c \
@@ -148,5 +170,16 @@ SRC_QSTR += \
 	$(METAL)/glue/pymergetic/metal/pack.c \
 	$(METAL)/glue/pymergetic/metal/hwtree.c \
 	$(METAL)/glue/pymergetic/metal/net/__init__.c \
+	$(METAL)/glue/pymergetic/metal/net/asgi.c \
+	$(METAL)/glue/pymergetic/metal/net/dhcp.c \
+	$(METAL)/glue/pymergetic/metal/net/dns.c \
 	$(METAL)/glue/pymergetic/metal/net/faces.c \
-	$(METAL)/glue/pymergetic/metal/net/nic.c
+	$(METAL)/glue/pymergetic/metal/net/http.c \
+	$(METAL)/glue/pymergetic/metal/net/ip.c \
+	$(METAL)/glue/pymergetic/metal/net/nic.c \
+	$(METAL)/glue/pymergetic/metal/net/ntp.c \
+	$(METAL)/glue/pymergetic/metal/net/pump.c \
+	$(METAL)/glue/pymergetic/metal/net/ssh.c \
+	$(METAL)/glue/pymergetic/metal/net/tftp.c \
+	$(METAL)/glue/pymergetic/metal/net/tls.c \
+	$(METAL)/glue/pymergetic/metal/net/wg.c

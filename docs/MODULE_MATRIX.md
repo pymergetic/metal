@@ -214,19 +214,19 @@ Counts are ledger estimates (not a live link inventory).
 | `mem.port` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser nest ok | done · W7 browser |
 | `mem.tlsf` | RS | 20 | 20 | 20 | 20 | yes | yes | yes | yes | Conte TLSF; browser via abi_faces_link | done · W7 browser |
 | `net.microdot` | Py | 20 | 20 | 20 | 20 | yes | — | yes | yes | asyncio server; Metal apps use async handlers | keep Py muscle · done |
-| `net.asgi` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | Py is consumer/codegen only | pure C · W5 +Py · W8 browser net |
-| `net.dhcp` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | start parks; run sync façade | done · W8 browser net |
-| `net.dns` | C | 3 | 3 | 3 | 3 | yes | — | — | yes | lookup→ip_dns_lookup; resolve façade | done · W8 browser net |
+| `net.asgi` | C | 4 | 4 | 4 | 4 | yes | — | yes | yes | browser: no TCP accept (init −1) | done · W8 browser net |
+| `net.dhcp` | C | 4 | 4 | 4 | 4 | yes | — | yes | yes | browser: synthetic lease; start parks | done · W8 browser net |
+| `net.dns` | C | 3 | 3 | 3 | 3 | yes | — | yes | yes | browser: DoH js.fetch; resolve façade | done · W8 browser net |
 | `net.faces` | C | 3 | 3 | 3 | 3 | yes | yes | yes | yes | bitfield mark/bits/format | done · W8 browser net |
-| `net.http` | C | 12 | 12 | 12 | 12 | yes | — | — | yes | get parks; client_get façade | done · W8 browser net |
-| `net.ip` | C | 13 | 13 | 13 | 13 | yes | yes | — | yes | socks+dns_lookup park | done · W8 browser net |
+| `net.http` | C | 12 | 12 | 12 | 12 | yes | — | yes | yes | browser GET via js.fetch; listen −1 | done · W8 browser net |
+| `net.ip` | C | 13 | 13 | 13 | 13 | yes | yes | yes | yes | browser: ifcfg thin (no L4 socks) | done · W8 browser net |
 | `net.nic` | C | 4 | 4 | 4 | 4 | yes | — | yes | yes | L2 registry; empty until host registers | done · W8 browser net |
-| `net.ntp` | C | 7 | 7 | 7 | 7 | yes | — | — | yes | sync parks; query* façades | done · W8 browser net |
-| `net.pump` | C | 7 | 7 | 7 | 7 | yes | — | — | yes |  | W5 +Py · W8 browser net |
-| `net.ssh` | C | 16 | 16 | 16 | 16 | yes | yes | — | yes | server poll-driven; client_exec stub | done · W8 browser net · client later |
-| `net.tftp` | C | 6 | 6 | 6 | 6 | yes | — | — | yes | get_async parks; get façade | done · W8 browser net |
-| `net.tls` | C | 18 | 18 | 18 | 18 | yes | — | — | yes | handshake parks; load_ca_file façade | done · W8 browser net |
-| `net.wg` | C | 12 | 12 | 12 | 12 | yes | yes | — | yes | up/peer sync CPU; handshake_smoke façade | done · W8 browser net |
+| `net.ntp` | C | 7 | 7 | 7 | 7 | yes | — | yes | yes | browser: wall clock Date.now | done · W8 browser net |
+| `net.pump` | C | 7 | 7 | 7 | 7 | yes | — | yes | yes | browser: idle→http/dhcp/ntp poll | done · W8 browser net |
+| `net.ssh` | C | 16 | 16 | 16 | 16 | yes | yes | yes | yes | browser: no TCP (available 0) | done · W8 browser net · client later |
+| `net.tftp` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes | browser: no UDP RRQ (fail-closed) | done · W8 browser net |
+| `net.tls` | C | 18 | 18 | 18 | 18 | yes | — | yes | yes | browser: sock-TLS −1; HTTPS via http | done · W8 browser net |
+| `net.wg` | C | 12 | 12 | 12 | 12 | yes | yes | yes | yes | browser: no UDP tunnel (fail-closed) | done · W8 browser net |
 | `pack` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes | MPWP embeds + mount_all via fs.wasmmod | done · W7 browser |
 | `rt` | RS | 5 | 5 | 5 | 5 | yes | yes | yes | yes | halt/panic*/register/connect; browser C twin rt_block.c (RS no export_c_abi) | done · W7 browser |
 | `shell.tui` | C | 4 | 4 | 4 | 4 | yes | — | — | yes |  | done |
@@ -253,8 +253,8 @@ Counts are ledger estimates (not a live link inventory).
 | Rows | 69 |
 | Full export (C∧RS∧Py @ 100%) | **69/69** |
 | Strict green (export ∧ async=yes) | **69/69** |
-| Browser=yes | **39/69** (W7 done; W8 faces+nic landed; remaining W8 need host shims · out-of-wave bus/dev/shell/unix/wamr) |
-| Smoke | `X86_64_BIOS_OK` ENGINE=mp · wasm util.tar import ok (2026-08-09) |
-| Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). Browser util.tar = C twin `tar_block.c`. |
+| Browser=yes | **50/69** (W7+W8 net complete · out-of-wave bus/dev/shell/draw/unix/wamr) |
+| Smoke | `X86_64_BIOS` ENGINE=mp link ok · wasm W8_NET_OK (http/dns/ntp/dhcp + nest import) (2026-08-09) |
+| Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). Browser net HAL under `port/hal/wasm/net_*.c`; Asyncify needs `runPythonAsync` + `{async:true}` ccall. |
 
 Recompute the snapshot numbers when you bulk-edit the table.
