@@ -211,13 +211,13 @@ Counts are ledger estimates (not a live link inventory).
 | `mem.lock` | RS | 8 | 8 | 8 | 8 | yes | yes | yes | yes | abi_faces/RS face linked on FW; browser RS | done · W7 browser |
 | `mem.port` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser nest ok | done · W7 browser |
 | `mem.tlsf` | RS | 20 | 20 | 20 | 20 | yes | yes | yes | yes | Conte TLSF; browser via abi_faces_link | done · W7 browser |
-| `net.microdot` | Py | 20 | 20 | 20 | 20 | yes | yes | yes | yes | asyncio server; Metal apps use async handlers | keep Py muscle · done |
 | `net.asgi` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser: no TCP accept (init −1) | done · W8 browser net |
 | `net.dhcp` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser: synthetic lease; start parks | done · W8 browser net |
 | `net.dns` | C | 3 | 3 | 3 | 3 | yes | yes | yes | yes | browser: DoH js.fetch; resolve façade | done · W8 browser net |
 | `net.faces` | C | 3 | 3 | 3 | 3 | yes | yes | yes | yes | bitfield mark/bits/format | done · W8 browser net |
 | `net.http` | C | 12 | 12 | 12 | 12 | yes | yes | yes | yes | browser GET via js.fetch; listen −1 | done · W8 browser net |
 | `net.ip` | C | 13 | 13 | 13 | 13 | yes | yes | yes | yes | browser: ifcfg thin (no L4 socks) | done · W8 browser net |
+| `net.microdot` | Py | 20 | 20 | 20 | 20 | yes | yes | yes | yes | asyncio server; Metal apps use async handlers | keep Py muscle · done |
 | `net.nic` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | L2 registry; empty until host registers | done · W8 browser net |
 | `net.ntp` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | browser: wall clock Date.now | done · W8 browser net |
 | `net.pump` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | browser: idle→http/dhcp/ntp poll | done · W8 browser net |
@@ -254,7 +254,7 @@ Counts are ledger estimates (not a live link inventory).
 | Browser=yes | **69/69** |
 | FW=yes | **69/69** |
 | Stub=.pyi | **69/69** |
-| Smoke | `X86_64_BIOS_OK` · wasm UNIX_BROWSER_OK (2026-08-09) |
-| Note | **Dev path W1–W10 complete.** All columns full. unix.* = identity faces on FW/browser; product runtime remains unix port. |
+| Smoke | `make -C tests/matrix all` (ledger + wasm MATRIX_BROWSER_OK 69) · `X86_64_BIOS_OK` ⇒ `matrix py ok` (2026-08-09) |
+| Note | **Dev path W1–W10 complete.** All columns full. unix.* = identity faces on FW/browser; product runtime remains unix port. Tests: `tests/matrix/`. |
 
 Recompute the snapshot numbers when you bulk-edit the table.

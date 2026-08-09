@@ -158,6 +158,43 @@ void mp_metal_upy_run(int smoke) {
             "assert handle('GET', '/inspect/') is None\n"
             "print('inspect py ok')\n",
             MP_PARSE_FILE_INPUT);
+        /* Every MODULE_MATRIX FW=yes seat — keep SEATS in sync with docs/MODULE_MATRIX.md
+         * (host: tests/matrix/test_module_matrix_ledger.py). */
+        do_str(
+            "SEATS=("
+            "'arch','arch.wasm','arch.x86','arch.x86_64',"
+            "'async','auth','boot','boot.tree',"
+            "'bus.pci','bus.virtio','console',"
+            "'dev.acpi','dev.blk','dev.gfx.compositor','dev.gfx.scanout','dev.gfx.text',"
+            "'dev.input.kbd','dev.net.bge','dev.net.virtio_net','dev.serial','dev.stream',"
+            "'draw','externals',"
+            "'fs','fs.embed','fs.fat','fs.littlefs','fs.mtar','fs.overlay',"
+            "'fs.tmpfs','fs.vfs','fs.wasmmod','fs.zip',"
+            "'hwtree','inspect',"
+            "'mem.arena','mem.lock','mem.port','mem.tlsf',"
+            "'net.asgi','net.dhcp','net.dns','net.faces','net.http',"
+            "'net.ip','net.microdot','net.nic','net.ntp','net.pump',"
+            "'net.ssh','net.tftp','net.tls','net.wg',"
+            "'pack','rt',"
+            "'shell.tui','shell.ui','shell.vt','trust',"
+            "'unix.x86','unix.x86_64',"
+            "'util.ascii','util.eightcc','util.endian','util.fourcc',"
+            "'util.lz4','util.size','util.tar','wamr_host')\n"
+            "def _imp(s):\n"
+            " parts=('pymergetic','metal')+tuple(s.split('.'))\n"
+            " cur=None\n"
+            " for i in range(len(parts)):\n"
+            "  dotted='.'.join(parts[:i+1])\n"
+            "  leaf=parts[i]\n"
+            "  try:\n"
+            "   cur=__import__(dotted,None,None,(leaf,))\n"
+            "  except ImportError:\n"
+            "   cur=getattr(cur,leaf)\n"
+            " return cur\n"
+            "for s in SEATS:\n"
+            " _=_imp(s)\n"
+            "print('matrix py ok', len(SEATS))\n",
+            MP_PARSE_FILE_INPUT);
 #endif
         do_str("print('upy ok')", MP_PARSE_SINGLE_INPUT);
 #endif

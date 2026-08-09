@@ -665,6 +665,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "tui ok" $(BUILD)/serial.log \
 	  && grep -q "kbd ok" $(BUILD)/serial.log \
 	  && { [ "$(LINK_WAMR)" != "1" ] || grep -q "wamr ok" $(BUILD)/serial.log; } \
+	  && grep -q "matrix py ok" $(BUILD)/serial.log \
 	  && grep -q "upy ok" $(BUILD)/serial.log \
 	  && grep -q "microdot ok" $(BUILD)/serial.log \
 	  && grep -q "framebuf ok" $(BUILD)/serial.log \
