@@ -45,3 +45,17 @@ package(
     base_path="$(METAL)/src",
     opt=3,
 )
+
+# Host-sim seat identity (into-Py bridges); runtime remains the unix port product.
+package(
+    "pymergetic",
+    (
+        "metal/unix/__init__.py",
+        "metal/unix/x86/__init__.py",
+        "metal/unix/x86/autoexec.py",
+        "metal/unix/x86_64/__init__.py",
+        "metal/unix/x86_64/autoexec.py",
+    ),
+    base_path="$(METAL)/src",
+    opt=3,
+)

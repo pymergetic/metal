@@ -126,9 +126,10 @@ Hints by area:
 | **W6** | **Freeze diet:** stop freezing files that aren’t real Py muscle. Does **not** delete inspect/microdot/arch/unix. See inventory below. **Done.** | unfreeze junk |
 | **W7** | **Browser seat (non-net):** **all `util.*`** + fs/mem/async/rt/hwtree/… (see `W7 browser` tags). Still skips PCI/virtio/NIC/blk/gop and host-unix. | browser |
 | **W8** | **Browser net complete:** every `net.*` seat on wasm with the **same C ABI**; browser/host shim under the hood (fetch / WebSocket / WASI sockets / CDN relay — TBD). Includes ip, dns, http, tls, ssh, wg, dhcp, ntp, tftp, nic, faces, pump, asgi. Goal: `Browser=yes` on all net rows. | browser net |
-| **W9** | **Browser remainder:** bus/dev/shell/draw/wamr_host on wasm (HAL stubs / soft draw). **Not** host-unix seats. | browser rest |
+| **W9** | **Browser remainder:** bus/dev/shell/draw/wamr_host on wasm (HAL stubs / soft draw). | browser rest |
+| **W10** | **Browser unix identity:** freeze `unix.*` + into-Py bridges on wasm (import surface). Product runtime stays the unix port. | browser unix |
 
-Dev path spellings: `W1…W9` · `W5 +Py` · `W5 async` · `W6 unfreeze` · `W7 browser` · `W8 browser net` · `W9 browser` · `keep Py muscle`.
+Dev path spellings: `W1…W10` · `W5 +Py` · `W5 async` · `W6 unfreeze` · `W7–W10 browser` · `keep Py muscle`.
 
 ### Py face rule (C/RS muscles)
 
@@ -146,7 +147,7 @@ Py muscle    →  frozen .py is correct (listed KEEP below)
 | FW + wasm | `net/microdot/{__init__,microdot,helpers}.py` |
 | FW + wasm | `inspect/{__init__,stubs,self_desc,adapter_microdot,app,dispatch}.py` |
 | FW + wasm | `arch/__init__.py` + `arch/{x86,x86_64,wasm}/{__init__,autoexec}.py` (+ `wasm/sim.py`) |
-| unix only | `unix/{__init__,__main__}.py` + `unix/{x86,x86_64}/{__init__,autoexec}.py` |
+| unix + wasm | `unix/{__init__}.py` + `unix/{x86,x86_64}/{__init__,autoexec}.py` (`__main__` unix-port only) |
 | all | µPy `asyncio` (extmod include) |
 
 **UNFREEZE — done (W6):** `metal/boot/__init__.py` removed (Boot UX is C: `boot.tree` + `port/boot`).
@@ -230,8 +231,8 @@ Counts are ledger estimates (not a live link inventory).
 | `shell.ui` | C | 2 | 2 | 2 | 2 | yes | yes | yes | yes | browser: no gfx present (attach −1) | done · W9 browser |
 | `shell.vt` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes | browser: cell grid + soft draw | done · W9 browser |
 | `trust` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes |  | done |
-| `unix.x86` | Py | 2 | 2 | 2 | 2 | yes | yes | — | — | host sim only (outside Metal runner) | keep Py muscle · done |
-| `unix.x86_64` | Py | 2 | 2 | 2 | 2 | yes | yes | — | — | host sim only (outside Metal runner) | keep Py muscle · done |
+| `unix.x86` | Py | 2 | 2 | 2 | 2 | yes | yes | yes | — | browser: frozen identity + into-Py bridge; runtime = unix port | keep Py muscle · done · W10 browser |
+| `unix.x86_64` | Py | 2 | 2 | 2 | 2 | yes | yes | yes | — | browser: frozen identity + into-Py bridge; runtime = unix port | keep Py muscle · done · W10 browser |
 | `util.ascii` | C | 5 | 5 | 5 | 5 | yes | yes | yes | yes |  | done · W7 browser |
 | `util.eightcc` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | done · W7 browser |
 | `util.endian` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | `*_inline`; +WIRE_IS_LE on Py | done · W7 browser |
@@ -250,10 +251,10 @@ Counts are ledger estimates (not a live link inventory).
 | Rows | 69 |
 | Full export (C∧RS∧Py @ 100%) | **69/69** |
 | Strict green (export ∧ async=yes) | **69/69** |
-| Browser=yes | **67/69** (unix.* host-sim only — intentional) |
-| FW=yes | **67/69** (unix.* host-sim only — intentional) |
+| Browser=yes | **69/69** |
+| FW=yes | **67/69** (unix.* = unix-port product, not Metal FW boards) |
 | Stub=.pyi | **69/69** |
-| Smoke | `X86_64_BIOS` link ok · wasm MATRIX_BROWSER_OK 17 (2026-08-09) |
-| Note | **Dev path W1–W9 complete.** Stub synced. FW=yes when symbols linked (incl. abi_faces). Browser HAL `port/hal/wasm/`; unix.* host-only. |
+| Smoke | `X86_64_BIOS` link ok · wasm UNIX_BROWSER_OK (2026-08-09) |
+| Note | **Dev path W1–W10 complete.** Browser full. FW omits unix.* by design. |
 
 Recompute the snapshot numbers when you bulk-edit the table.
