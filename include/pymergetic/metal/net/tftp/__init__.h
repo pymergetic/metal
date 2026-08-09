@@ -8,11 +8,22 @@ extern "C" {
 #endif
 
 /*
- * TFTP RRQ (octet). Reads first DATA block into buf.
+ * Async TFTP RRQ (first DATA block). Await handle → DONE; result_u32 1/0.
+ * Then status()/len()/body accessors.
+ */
+uint32_t pm_metal_net_tftp_get_async(uint32_t server_ip, const char *filename, uint8_t *buf,
+                                     uint32_t cap);
+void pm_metal_net_tftp_poll(void);
+int32_t pm_metal_net_tftp_status(void);
+uint32_t pm_metal_net_tftp_len(void);
+const uint8_t *pm_metal_net_tftp_body(void);
+
+/*
+ * Sync façade: pumps until DONE.
  * Returns 0 on success, -1 error, -2 timeout.
  */
-int32_t pm_metal_net_tftp_get(uint32_t server_ip, const char *filename,
-                          uint8_t *buf, uint32_t cap, uint32_t *len_out);
+int32_t pm_metal_net_tftp_get(uint32_t server_ip, const char *filename, uint8_t *buf, uint32_t cap,
+                              uint32_t *len_out);
 
 #ifdef __cplusplus
 }

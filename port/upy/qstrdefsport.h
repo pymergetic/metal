@@ -27,6 +27,9 @@ Q(lookup)
 Q(last_addr)
 Q(lease)
 Q(yiaddr)
+Q(sync_host)
+Q(last_unix_secs)
+Q(get_async)
 // Metal nested builtin import paths (must precede collected wrong `_dot_` text).
 // *FORMAT-OFF*
 Q(pymergetic.metal)

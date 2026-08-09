@@ -9,7 +9,9 @@
 #include "pymergetic/metal/net/http/__init__.h"
 #include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/net/ip/sock.h"
+#include "pymergetic/metal/net/ntp/__init__.h"
 #include "pymergetic/metal/net/ssh/__init__.h"
+#include "pymergetic/metal/net/tftp/__init__.h"
 #include "pymergetic/metal/net/tls/__init__.h"
 
 #ifndef PM_METAL_NET_TCP_WAITS
@@ -83,6 +85,8 @@ void pm_metal_net_pump_once(void)
     pm_metal_net_ip_poll();
     pm_metal_net_pump_wake_tcp();
     pm_metal_net_dhcp_poll();
+    pm_metal_net_ntp_poll();
+    pm_metal_net_tftp_poll();
     pm_metal_net_tls_poll();
     pm_metal_net_http_client_poll();
     if (pm_metal_asgi_ready()) {

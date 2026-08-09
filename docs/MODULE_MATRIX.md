@@ -220,10 +220,10 @@ Counts are ledger estimates (not a live link inventory).
 | `net.http` | C | 12 | 12 | 12 | 12 | partial | — | — | yes |  | W5 +Py · async · W8 browser net |
 | `net.ip` | C | 13 | 13 | 13 | 13 | yes | yes | — | yes | socks+dns_lookup park | done · W8 browser net |
 | `net.nic` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | register+L2 poll | done · W8 browser net |
-| `net.ntp` | C | 2 | 2 | 2 | 2 | partial | — | — | yes |  | W5 +Py · async · W8 browser net |
+| `net.ntp` | C | 7 | 7 | 7 | 7 | yes | — | — | yes | sync parks; query* façades | done · W8 browser net |
 | `net.pump` | C | 7 | 7 | 7 | 7 | yes | — | — | yes |  | W5 +Py · W8 browser net |
 | `net.ssh` | C | 16 | 16 | 16 | 16 | partial | yes | — | yes | poll exists; some paths block | W1 pure C · W5 +Py · async · W8 browser net |
-| `net.tftp` | C | 1 | 1 | 1 | 1 | no | — | — | yes |  | W5 +Py · async · W8 browser net |
+| `net.tftp` | C | 6 | 6 | 6 | 6 | yes | — | — | yes | get_async parks; get façade | done · W8 browser net |
 | `net.tls` | C | 18 | 18 | 18 | 18 | partial | — | — | yes |  | W5 +Py · async · W8 browser net |
 | `net.wg` | C | 12 | 12 | 12 | 12 | partial | yes | — | yes |  | W5 +Py · async · W8 browser net |
 | `pack` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes |  | W5 +Py |
@@ -251,8 +251,8 @@ Counts are ledger estimates (not a live link inventory).
 |--------|------:|
 | Rows | 69 |
 | Full export (C∧RS∧Py @ 100%) | **69/69** |
-| Strict green (export ∧ async=yes) | **47/69** |
-| Smoke | `X86_64_BIOS_OK` ENGINE=mp (2026-08-09; dns/dhcp park; honest async flips) |
+| Strict green (export ∧ async=yes) | **49/69** |
+| Smoke | `X86_64_BIOS_OK` ENGINE=mp (2026-08-09; ntp/tftp park + ARP; dns/dhcp) |
 | Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). |
 
 Recompute the snapshot numbers when you bulk-edit the table.

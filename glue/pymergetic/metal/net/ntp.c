@@ -7,6 +7,37 @@
 
 #include <pymergetic/metal/net/ntp/__init__.h>
 
+static mp_obj_t ntp_sync(mp_obj_t server_obj)
+{
+    return mp_obj_new_int_from_uint(pm_metal_net_ntp_sync((uint32_t)mp_obj_get_int(server_obj)));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(ntp_sync_obj, ntp_sync);
+
+static mp_obj_t ntp_sync_host(mp_obj_t host_obj)
+{
+    return mp_obj_new_int_from_uint(pm_metal_net_ntp_sync_host(mp_obj_str_get_str(host_obj)));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(ntp_sync_host_obj, ntp_sync_host);
+
+static mp_obj_t ntp_poll(void)
+{
+    pm_metal_net_ntp_poll();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(ntp_poll_obj, ntp_poll);
+
+static mp_obj_t ntp_status(void)
+{
+    return MP_OBJ_NEW_SMALL_INT(pm_metal_net_ntp_status());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(ntp_status_obj, ntp_status);
+
+static mp_obj_t ntp_last_unix_secs(void)
+{
+    return mp_obj_new_int_from_uint(pm_metal_net_ntp_last_unix_secs());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(ntp_last_unix_secs_obj, ntp_last_unix_secs);
+
 static mp_obj_t ntp_query(mp_obj_t server_obj)
 {
     uint32_t secs = 0;
@@ -33,6 +64,11 @@ static MP_DEFINE_CONST_FUN_OBJ_1(ntp_query_host_obj, ntp_query_host);
 
 static const mp_rom_map_elem_t ntp_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal_dot_net_dot_ntp) },
+    { MP_ROM_QSTR(MP_QSTR_sync), MP_ROM_PTR(&ntp_sync_obj) },
+    { MP_ROM_QSTR(MP_QSTR_sync_host), MP_ROM_PTR(&ntp_sync_host_obj) },
+    { MP_ROM_QSTR(MP_QSTR_poll), MP_ROM_PTR(&ntp_poll_obj) },
+    { MP_ROM_QSTR(MP_QSTR_status), MP_ROM_PTR(&ntp_status_obj) },
+    { MP_ROM_QSTR(MP_QSTR_last_unix_secs), MP_ROM_PTR(&ntp_last_unix_secs_obj) },
     { MP_ROM_QSTR(MP_QSTR_query), MP_ROM_PTR(&ntp_query_obj) },
     { MP_ROM_QSTR(MP_QSTR_query_host), MP_ROM_PTR(&ntp_query_host_obj) },
 };
