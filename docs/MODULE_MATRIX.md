@@ -123,7 +123,7 @@ Hints by area:
 | **W3** | **C ↔ RS** faces — remaining pure C/RS seats (still no Py). | no |
 | **W4** | **Into-Py bridges:** C/RS faces for Py-muscle seats (`+C`/`+RS` that call Py). Also RS bridge on C+Py ABI seats (e.g. inspect). | bridge only |
 | **W5** | **C/RS → Py via glue only:** nested builtin `glue/.../*.c` + `.pyi` → 100% API. Also **async** → parkable. **No** new frozen `.py` wrappers for C/RS muscles. | glue + async |
-| **W6** | **Freeze diet:** stop freezing files that aren’t real Py muscle. Does **not** delete inspect/microdot/arch/unix. See inventory below. | unfreeze junk |
+| **W6** | **Freeze diet:** stop freezing files that aren’t real Py muscle. Does **not** delete inspect/microdot/arch/unix. See inventory below. **Done.** | unfreeze junk |
 | **W7** | **Browser seat (non-net):** **all `util.*`** + fs/mem/async/rt/hwtree/… (see `W7 browser` tags). Still skips PCI/virtio/NIC/blk/gop and host-unix. | browser |
 | **W8** | **Browser net complete:** every `net.*` seat on wasm with the **same C ABI**; browser/host shim under the hood (fetch / WebSocket / WASI sockets / CDN relay — TBD). Includes ip, dns, http, tls, ssh, wg, dhcp, ntp, tftp, nic, faces, pump, asgi. Goal: `Browser=yes` on all net rows. | browser net |
 | **W9** | **Browser remainder:** bus/dev/shell/draw/wamr_host on wasm (HAL stubs / soft draw). **Not** host-unix seats. | browser rest |
@@ -149,11 +149,7 @@ Py muscle    →  frozen .py is correct (listed KEEP below)
 | unix only | `unix/{__init__,__main__}.py` + `unix/{x86,x86_64}/{__init__,autoexec}.py` |
 | all | µPy `asyncio` (extmod include) |
 
-**UNFREEZE / drop from manifest (unnecessary)** — W6 target:
-
-| File | Why |
-|------|-----|
-| `metal/boot/__init__.py` | One comment line. Boot UX is C (`boot.tree` + `port/boot`). Nest/`__path__` is enough if anything imports the package name. |
+**UNFREEZE — done (W6):** `metal/boot/__init__.py` removed (Boot UX is C: `boot.tree` + `port/boot`).
 
 **Not frozen today (already correct)** — C/RS seats use glue only; no frozen `util.*` / `net.*` / `auth` / … reexports.
 
@@ -173,69 +169,69 @@ Doc wins on conflict.
 
 Counts are ledger estimates (not a live link inventory).
 
-| Path | Impl | API | C | RS | Py | Async | Stub | Browser | FW | Note | Browser links `libpymergetic_metal_browser_rs.a` (fs/util; rt C twin). Pack embeds via product_packs.mk. Fat/zip/embed/littlefs/overlay/hwtree use abi_faces stubs on wasm where noted. |
+| Path | Impl | API | C | RS | Py | Async | Stub | Browser | FW | Note | Dev path |
 |------|------|----:|--:|---:|---:|-------|:----:|:-------:|:--:|------|----------|
-| `arch` | Py+C | 5 | 5 | 5 | 5 | yes | — | yes | yes | CFG seat + into-Py name/names | keep seats · W4 bridges done · W5 +Py(=glue) · W6 no dual Py |
-| `arch.wasm` | Py | 3 | 3 | 3 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
-| `arch.x86` | Py | 3 | 3 | 3 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
-| `arch.x86_64` | Py | 3 | 3 | 3 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
-| `async` | C | 12 | 12 | 12 | 12 | yes | — | yes | yes | browser smp stub + board_time | done · W7 browser |
+| `arch` | Py+C | 5 | 5 | 5 | 5 | yes | yes | yes | yes | CFG seat + into-Py name/names | keep seats · W4 bridges done · W5 +Py(=glue) · W6 no dual Py |
+| `arch.wasm` | Py | 3 | 3 | 3 | 3 | yes | yes | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
+| `arch.x86` | Py | 3 | 3 | 3 | 3 | yes | yes | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
+| `arch.x86_64` | Py | 3 | 3 | 3 | 3 | yes | yes | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
+| `async` | C | 12 | 12 | 12 | 12 | yes | yes | yes | yes | browser smp stub + board_time | done · W7 browser |
 | `auth` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | done |
 | `boot` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | thin face over boot.tree UX | done · W7 browser |
-| `boot.tree` | C | 11 | 11 | 11 | 11 | yes | — | yes | yes |  | pure C · W5 +Py |
-| `bus.pci` | C | 8 | 8 | 8 | 8 | yes | — | yes | yes | browser: no CF8 (fail-closed) | done · W9 browser |
-| `bus.virtio` | C | 15 | 15 | 15 | 15 | yes | — | yes | yes | browser: no PCI virtio (fail-closed) | done · W9 browser |
-| `console` | C | 15 | 15 | 15 | 15 | yes | — | yes | yes | sync ring façade | done · W7 browser |
-| `dev.acpi` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes | browser: cpu_count=1 stub | done · W9 browser |
-| `dev.blk` | C | 6 | 6 | 6 | 6 | yes | — | yes | — | browser: abi_faces fail-closed; read_async parks | done · W9 browser |
-| `dev.gfx.compositor` | C | 10 | 10 | 10 | 10 | yes | — | yes | yes | browser: gfx stub ready=0 | done · W9 browser |
-| `dev.gfx.scanout` | C | 8 | 8 | 8 | 8 | yes | — | yes | yes | browser: name wasm-none | done · W9 browser |
-| `dev.gfx.text` | C | 3 | 3 | 3 | 3 | yes | — | yes | yes | browser: gfx stub fonts | done · W9 browser |
-| `dev.input.kbd` | C | 5 | 5 | 5 | 5 | yes | — | yes | yes | browser: no i8042; feed/poll OK | done · W9 browser |
-| `dev.net.bge` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes | browser: no PCI NIC (fail-closed) | done · W9 browser |
-| `dev.net.virtio_net` | C | 7 | 7 | 7 | 7 | yes | — | yes | yes | browser: no PCI NIC (fail-closed) | done · W9 browser |
+| `boot.tree` | C | 11 | 11 | 11 | 11 | yes | yes | yes | yes |  | done · W5 +Py |
+| `bus.pci` | C | 8 | 8 | 8 | 8 | yes | yes | yes | yes | browser: no CF8 (fail-closed) | done · W9 browser |
+| `bus.virtio` | C | 15 | 15 | 15 | 15 | yes | yes | yes | yes | browser: no PCI virtio (fail-closed) | done · W9 browser |
+| `console` | C | 15 | 15 | 15 | 15 | yes | yes | yes | yes | sync ring façade | done · W7 browser |
+| `dev.acpi` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | browser: cpu_count=1 stub | done · W9 browser |
+| `dev.blk` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | abi_faces on FW+browser; read_async parks | done · W9 browser |
+| `dev.gfx.compositor` | C | 10 | 10 | 10 | 10 | yes | yes | yes | yes | browser: gfx stub ready=0 | done · W9 browser |
+| `dev.gfx.scanout` | C | 8 | 8 | 8 | 8 | yes | yes | yes | yes | browser: name wasm-none | done · W9 browser |
+| `dev.gfx.text` | C | 3 | 3 | 3 | 3 | yes | yes | yes | yes | browser: gfx stub fonts | done · W9 browser |
+| `dev.input.kbd` | C | 5 | 5 | 5 | 5 | yes | yes | yes | yes | browser: no i8042; feed/poll OK | done · W9 browser |
+| `dev.net.bge` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | browser: no PCI NIC (fail-closed) | done · W9 browser |
+| `dev.net.virtio_net` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | browser: no PCI NIC (fail-closed) | done · W9 browser |
 | `dev.serial` | C | 2 | 2 | 2 | 2 | yes | yes | yes | yes | browser: stdout sink | done · W9 browser |
-| `dev.stream` | C | 18 | 18 | 18 | 18 | yes | — | yes | — | browser: abi_faces fail-closed pipes | done · W9 browser |
-| `draw` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes | soft FB muscle on wasm | done · W9 browser |
+| `dev.stream` | C | 18 | 18 | 18 | 18 | yes | yes | yes | yes | abi_faces fail-closed pipes (FW+browser) | done · W9 browser |
+| `draw` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | soft FB muscle on wasm | done · W9 browser |
 | `externals` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes |  | done |
-| `fs` | RS | 24 | 24 | 24 | 24 | yes | yes | yes | — | browser RS libpymergetic_metal_browser_rs | done · W7 browser |
-| `fs.embed` | RS | 2 | 2 | 2 | 2 | yes | yes | yes | — | browser via abi_faces stub | done · W7 browser |
-| `fs.fat` | RS | 6 | 6 | 6 | 6 | yes | yes | yes | — | browser via abi_faces stub | done · W7 browser |
-| `fs.littlefs` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | — | browser via abi_faces stub | done · W7 browser |
-| `fs.mtar` | RS | 6 | 6 | 6 | 6 | yes | yes | yes | — | browser RS | done · W7 browser |
-| `fs.overlay` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | — | browser via abi_faces stub | done · W7 browser |
-| `fs.tmpfs` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | — | browser RS | done · W7 browser |
-| `fs.vfs` | RS | 6 | 6 | 6 | 6 | yes | yes | yes | — | browser RS | done · W7 browser |
-| `fs.wasmmod` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | — | browser RS | done · W7 browser |
-| `fs.zip` | RS | 4 | 4 | 4 | 4 | yes | yes | yes | — | browser via abi_faces stub | done · W7 browser |
-| `hwtree` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | — | print; browser abi_faces stub (no DT) | done · W7 browser |
-| `inspect` | Py+C | 6 | 6 | 6 | 6 | yes | — | yes | yes | C+RS into-Py via pm_upy | keep Py app · W4 bridges done |
-| `mem.arena` | RS | 13 | 13 | 13 | 13 | yes | yes | yes | — | Arena bytearray face | done · W7 browser |
-| `mem.lock` | RS | 8 | 8 | 8 | 8 | yes | yes | yes | — | spin+mutex word buffers | done · W7 browser |
+| `fs` | RS | 24 | 24 | 24 | 24 | yes | yes | yes | yes | RS on FW product image; browser via browser_rs | done · W7 browser |
+| `fs.embed` | RS | 2 | 2 | 2 | 2 | yes | yes | yes | yes | abi_faces stub on FW+browser | done · W7 browser |
+| `fs.fat` | RS | 6 | 6 | 6 | 6 | yes | yes | yes | yes | abi_faces stub on FW+browser | done · W7 browser |
+| `fs.littlefs` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | abi_faces stub on FW+browser | done · W7 browser |
+| `fs.mtar` | RS | 6 | 6 | 6 | 6 | yes | yes | yes | yes | RS on FW; browser RS | done · W7 browser |
+| `fs.overlay` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | abi_faces stub on FW+browser | done · W7 browser |
+| `fs.tmpfs` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | RS on FW; browser RS | done · W7 browser |
+| `fs.vfs` | RS | 6 | 6 | 6 | 6 | yes | yes | yes | yes | RS on FW; browser RS | done · W7 browser |
+| `fs.wasmmod` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | RS on FW; browser RS | done · W7 browser |
+| `fs.zip` | RS | 4 | 4 | 4 | 4 | yes | yes | yes | yes | abi_faces stub on FW+browser | done · W7 browser |
+| `hwtree` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | abi_faces print stub on FW+browser (no DT) | done · W7 browser |
+| `inspect` | Py+C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | C+RS into-Py via pm_upy | keep Py app · W4 bridges done |
+| `mem.arena` | RS | 13 | 13 | 13 | 13 | yes | yes | yes | yes | abi_faces/RS face linked on FW; browser RS | done · W7 browser |
+| `mem.lock` | RS | 8 | 8 | 8 | 8 | yes | yes | yes | yes | abi_faces/RS face linked on FW; browser RS | done · W7 browser |
 | `mem.port` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser nest ok | done · W7 browser |
 | `mem.tlsf` | RS | 20 | 20 | 20 | 20 | yes | yes | yes | yes | Conte TLSF; browser via abi_faces_link | done · W7 browser |
-| `net.microdot` | Py | 20 | 20 | 20 | 20 | yes | — | yes | yes | asyncio server; Metal apps use async handlers | keep Py muscle · done |
-| `net.asgi` | C | 4 | 4 | 4 | 4 | yes | — | yes | yes | browser: no TCP accept (init −1) | done · W8 browser net |
-| `net.dhcp` | C | 4 | 4 | 4 | 4 | yes | — | yes | yes | browser: synthetic lease; start parks | done · W8 browser net |
-| `net.dns` | C | 3 | 3 | 3 | 3 | yes | — | yes | yes | browser: DoH js.fetch; resolve façade | done · W8 browser net |
+| `net.microdot` | Py | 20 | 20 | 20 | 20 | yes | yes | yes | yes | asyncio server; Metal apps use async handlers | keep Py muscle · done |
+| `net.asgi` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser: no TCP accept (init −1) | done · W8 browser net |
+| `net.dhcp` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser: synthetic lease; start parks | done · W8 browser net |
+| `net.dns` | C | 3 | 3 | 3 | 3 | yes | yes | yes | yes | browser: DoH js.fetch; resolve façade | done · W8 browser net |
 | `net.faces` | C | 3 | 3 | 3 | 3 | yes | yes | yes | yes | bitfield mark/bits/format | done · W8 browser net |
-| `net.http` | C | 12 | 12 | 12 | 12 | yes | — | yes | yes | browser GET via js.fetch; listen −1 | done · W8 browser net |
+| `net.http` | C | 12 | 12 | 12 | 12 | yes | yes | yes | yes | browser GET via js.fetch; listen −1 | done · W8 browser net |
 | `net.ip` | C | 13 | 13 | 13 | 13 | yes | yes | yes | yes | browser: ifcfg thin (no L4 socks) | done · W8 browser net |
-| `net.nic` | C | 4 | 4 | 4 | 4 | yes | — | yes | yes | L2 registry; empty until host registers | done · W8 browser net |
-| `net.ntp` | C | 7 | 7 | 7 | 7 | yes | — | yes | yes | browser: wall clock Date.now | done · W8 browser net |
-| `net.pump` | C | 7 | 7 | 7 | 7 | yes | — | yes | yes | browser: idle→http/dhcp/ntp poll | done · W8 browser net |
+| `net.nic` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | L2 registry; empty until host registers | done · W8 browser net |
+| `net.ntp` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | browser: wall clock Date.now | done · W8 browser net |
+| `net.pump` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | browser: idle→http/dhcp/ntp poll | done · W8 browser net |
 | `net.ssh` | C | 16 | 16 | 16 | 16 | yes | yes | yes | yes | browser: no TCP (available 0) | done · W8 browser net · client later |
-| `net.tftp` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes | browser: no UDP RRQ (fail-closed) | done · W8 browser net |
-| `net.tls` | C | 18 | 18 | 18 | 18 | yes | — | yes | yes | browser: sock-TLS −1; HTTPS via http | done · W8 browser net |
+| `net.tftp` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | browser: no UDP RRQ (fail-closed) | done · W8 browser net |
+| `net.tls` | C | 18 | 18 | 18 | 18 | yes | yes | yes | yes | browser: sock-TLS −1; HTTPS via http | done · W8 browser net |
 | `net.wg` | C | 12 | 12 | 12 | 12 | yes | yes | yes | yes | browser: no UDP tunnel (fail-closed) | done · W8 browser net |
-| `pack` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes | MPWP embeds + mount_all via fs.wasmmod | done · W7 browser |
+| `pack` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | MPWP embeds + mount_all via fs.wasmmod | done · W7 browser |
 | `rt` | RS | 5 | 5 | 5 | 5 | yes | yes | yes | yes | halt/panic*/register/connect; browser C twin rt_block.c (RS no export_c_abi) | done · W7 browser |
-| `shell.tui` | C | 4 | 4 | 4 | 4 | yes | — | yes | yes | browser: VT/draw dashboard muscle | done · W9 browser |
-| `shell.ui` | C | 2 | 2 | 2 | 2 | yes | — | yes | yes | browser: no gfx present (attach −1) | done · W9 browser |
-| `shell.vt` | C | 9 | 9 | 9 | 9 | yes | — | yes | yes | browser: cell grid + soft draw | done · W9 browser |
+| `shell.tui` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser: VT/draw dashboard muscle | done · W9 browser |
+| `shell.ui` | C | 2 | 2 | 2 | 2 | yes | yes | yes | yes | browser: no gfx present (attach −1) | done · W9 browser |
+| `shell.vt` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes | browser: cell grid + soft draw | done · W9 browser |
 | `trust` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes |  | done |
-| `unix.x86` | Py | 2 | 2 | 2 | 2 | yes | — | — | — | host sim only (outside Metal runner) | keep Py muscle · done |
-| `unix.x86_64` | Py | 2 | 2 | 2 | 2 | yes | — | — | — | host sim only (outside Metal runner) | keep Py muscle · done |
+| `unix.x86` | Py | 2 | 2 | 2 | 2 | yes | yes | — | — | host sim only (outside Metal runner) | keep Py muscle · done |
+| `unix.x86_64` | Py | 2 | 2 | 2 | 2 | yes | yes | — | — | host sim only (outside Metal runner) | keep Py muscle · done |
 | `util.ascii` | C | 5 | 5 | 5 | 5 | yes | yes | yes | yes |  | done · W7 browser |
 | `util.eightcc` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | done · W7 browser |
 | `util.endian` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | `*_inline`; +WIRE_IS_LE on Py | done · W7 browser |
@@ -254,8 +250,10 @@ Counts are ledger estimates (not a live link inventory).
 | Rows | 69 |
 | Full export (C∧RS∧Py @ 100%) | **69/69** |
 | Strict green (export ∧ async=yes) | **69/69** |
-| Browser=yes | **67/69** (only `unix.x86` / `unix.x86_64` host-sim stay —) |
-| Smoke | `X86_64_BIOS` ENGINE=mp link ok · wasm MATRIX_BROWSER_OK 17 + draw/wamr/scanout (2026-08-09) |
-| Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). Browser HAL under `port/hal/wasm/`; unix.* intentionally host-only. |
+| Browser=yes | **67/69** (unix.* host-sim only — intentional) |
+| FW=yes | **67/69** (unix.* host-sim only — intentional) |
+| Stub=.pyi | **69/69** |
+| Smoke | `X86_64_BIOS` link ok · wasm MATRIX_BROWSER_OK 17 (2026-08-09) |
+| Note | **Dev path W1–W9 complete.** Stub synced. FW=yes when symbols linked (incl. abi_faces). Browser HAL `port/hal/wasm/`; unix.* host-only. |
 
 Recompute the snapshot numbers when you bulk-edit the table.
