@@ -32,6 +32,12 @@ MANIFEST_WASM = METAL / "port" / "manifest_wasm.py"
 GLUE_SRC_MK = METAL / "port" / "glue_src.mk"
 WASM_MK = METAL / "port" / "webassembly" / "variant" / "mpconfigvariant.mk"
 BIOS64_MK = METAL / "port" / "boards" / "X86_64_BIOS" / "build.mk"
+BOARD_MKS = (
+    METAL / "port" / "boards" / "X86_64_BIOS" / "build.mk",
+    METAL / "port" / "boards" / "X86_BIOS" / "build.mk",
+    METAL / "port" / "boards" / "X86_64_UEFI" / "build.mk",
+    METAL / "port" / "boards" / "X86_UEFI" / "build.mk",
+)
 
 
 def _paths_in_seats_tuple(text: str) -> list[str]:
@@ -163,6 +169,16 @@ class ModuleMatrixLedger(unittest.TestCase):
             else:
                 bad.append(f"{p}: no FW glue/frozen wiring")
         self.assertEqual(bad, [])
+
+    def test_all_boards_link_abi_faces(self):
+        """Glue nests for stub seats need abi_faces_link on every FW board (not only BIOS64)."""
+        missing = [
+            str(mk.relative_to(METAL))
+            for mk in BOARD_MKS
+            if "metal_abi_faces.o" not in mk.read_text(encoding="utf-8")
+            or "abi_faces_link.c" not in mk.read_text(encoding="utf-8")
+        ]
+        self.assertEqual(missing, [])
 
     def test_smoke_py_lists_all_seats(self):
         text = SMOKE_PY.read_text(encoding="utf-8")

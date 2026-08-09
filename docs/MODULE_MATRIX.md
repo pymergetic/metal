@@ -254,7 +254,7 @@ Counts are ledger estimates (not a live link inventory).
 | Browser=yes | **69/69** |
 | FW=yes | **69/69** |
 | Stub=.pyi | **69/69** |
-| Smoke | `make -C tests/matrix all` (ledger + wasm MATRIX_BROWSER_OK 69) · `X86_64_BIOS_OK` ⇒ `matrix py ok` (2026-08-09) |
+| Smoke | `make -C tests/matrix all` (ledger + wasm MATRIX_BROWSER_OK 69) · `X86_64_BIOS_OK` ⇒ `matrix py ok` · UEFI REPL link (`X86_64_UEFI`/`X86_UEFI` + `abi_faces`) (2026-08-09) |
 | Note | **Dev path W1–W10 complete.** All columns full. unix.* = identity faces on FW/browser; product runtime remains unix port. Tests: `tests/matrix/`. |
 
 Recompute the snapshot numbers when you bulk-edit the table.

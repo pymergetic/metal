@@ -135,6 +135,7 @@ CSUPEROPT = -Os
 SRC_C = \
 	boards/X86_UEFI/main.c \
 	boards/X86_UEFI/uart.c \
+	boards/X86_UEFI/fltused.c \
 	hal/efi/console.c \
 	upy/mphalport.c \
 	upy/main_upy.c \
@@ -214,6 +215,7 @@ OBJ += $(BUILD)/metal_dns.o $(BUILD)/metal_ntp.o $(BUILD)/metal_tftp.o $(BUILD)/
 OBJ += $(BUILD)/metal_net_pump.o $(BUILD)/metal_ssh_pkt.o
 OBJ += $(BUILD)/metal_ssh_crypto.o $(BUILD)/metal_ssh_kex.o
 OBJ += $(BUILD)/metal_monocypher.o $(BUILD)/metal_monocypher_ed25519.o $(BUILD)/metal_sha256.o
+OBJ += $(BUILD)/metal_abi_faces.o
 
 $(eval $(call GLUE_ATTACH))
 
@@ -236,6 +238,10 @@ endif
 RUST_LIBS := $(METAL_RT_LIB)
 
 $(BUILD)/metal_mem.o: $(METAL)/src/pymergetic/metal/mem/port/mem.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_abi_faces.o: $(METAL)/src/pymergetic/metal/port/abi_faces_link.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 

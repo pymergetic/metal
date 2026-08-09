@@ -1,7 +1,8 @@
 /*
  * Product link faces for seats whose muscle lives in RS/C sources not yet
- * pulled into RUST_LIBS / board OBJ. Keeps µPy glue resolvable on BIOS.
- * Prefer real crates/objs when those seats join the product image.
+ * pulled into RUST_LIBS / board OBJ. Keeps µPy glue resolvable on all FW
+ * boards (BIOS + UEFI). Prefer real crates/objs when those seats join the
+ * product image.
  */
 #include <stddef.h>
 #include <stdint.h>
