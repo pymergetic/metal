@@ -209,6 +209,10 @@ void pm_metal_externals_init(void)
 }
 
 #if defined(METAL_LINK_WAMR) && METAL_LINK_WAMR
+/* Static link into firmware — never dllimport (UEFI/clang _MSC_BUILD). */
+#ifndef WASM_RUNTIME_API_EXTERN
+#define WASM_RUNTIME_API_EXTERN
+#endif
 #include "wasm_export.h"
 
 typedef struct {

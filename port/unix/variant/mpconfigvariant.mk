@@ -23,3 +23,6 @@ LDFLAGS_EXTRA += -Wl,--wrap=main
 SRC_C += $(METAL)/src/pymergetic/metal/arch/arch.c
 
 PROG ?= micropython
+
+# Upstream µPy only (metal sources stay strict).
+$(BUILD)/py/parse.o: CFLAGS += -Wno-sign-compare

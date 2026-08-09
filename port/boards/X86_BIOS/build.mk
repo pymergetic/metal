@@ -734,7 +734,6 @@ live-ssh: $(BUILD)/metal.qemu.elf
 	echo "X86_BIOS_LIVE_SSH_FAIL ENGINE=$(ENGINE)"; \
 	exit 1
 
-clean:
-	$(RM) -rf $(BUILD)
-
+# clean: use py/mkrules.mk (do not redefine — avoids override warning)
+include $(PORT_DIR)/upy_external_warnings.mk
 include $(TOP)/py/mkrules.mk

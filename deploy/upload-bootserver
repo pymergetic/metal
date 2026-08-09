@@ -257,6 +257,10 @@ echo "upload-bootserver: TFTP (NBP + cfg — not the product image):" >&2
 ssh_cmd "ls -la '${DEST}/undionly.kpxe' '${DEST}/ipxe.efi' '${DEST}/${IPXE_NAME}'"
 
 echo "upload-bootserver: ok" >&2
-echo "upload-bootserver: DHCP: !ipxe+BIOS→undionly.kpxe  !ipxe+EFI64→ipxe.efi  ipxe→${IPXE_NAME}" >&2
+# dnsmasq tag:!ipxe means "client not yet running iPXE" (not a shell/make error).
+echo "upload-bootserver: DHCP match (dnsmasq tags):" >&2
+echo "upload-bootserver:   not-ipxe + BIOS  → undionly.kpxe" >&2
+echo "upload-bootserver:   not-ipxe + EFI64 → ipxe.efi" >&2
+echo "upload-bootserver:   already-ipxe     → ${IPXE_NAME}" >&2
 echo "upload-bootserver: then ${IPXE_NAME} pulls arch image from CDN" >&2
 echo "upload-bootserver: see ${DEPLOY}/bootserver/dnsmasq.metal.conf.example" >&2

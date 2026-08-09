@@ -119,7 +119,9 @@ ifeq ($(LINK_WAMR),1)
 INC += -I$(WASMMOD)/third_party/wamr/core/iwasm/include \
 	-I$(METAL)/src/pymergetic/metal/wamr_host/port/platform \
 	-I$(METAL)/include/pymergetic/metal/libc
-CFLAGS_METAL += -DBH_PLATFORM_METAL
+# Static freestanding WAMR — clang --target=*-windows sets _MSC_BUILD, so
+# wasm_export.h defaults to dllimport and lld-link warns LNK4217. Force empty.
+CFLAGS_METAL += -DBH_PLATFORM_METAL -DWASM_RUNTIME_API_EXTERN=
 endif
 
 CFLAGS += $(INC) $(CFLAGS_METAL) -DMICROPY_PY_LWIP=1
@@ -738,7 +740,6 @@ live-ssh: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	echo "X86_64_UEFI_LIVE_SSH_FAIL ENGINE=$(ENGINE)"; \
 	exit 1
 
-clean:
-	$(RM) -rf $(BUILD)
-
+# clean: use py/mkrules.mk (do not redefine — avoids override warning)
+include $(PORT_DIR)/upy_external_warnings.mk
 include $(TOP)/py/mkrules.mk
