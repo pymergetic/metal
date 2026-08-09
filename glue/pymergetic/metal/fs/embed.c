@@ -6,7 +6,6 @@
 #include <pymergetic/metal/fs/embed/__init__.h>
 #include <string.h>
 
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
 
 static mp_obj_t embed_emit(mp_obj_t name_obj, mp_obj_t data_obj, int is_rs)
 {
@@ -67,4 +66,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs_embed = {
     .globals = (mp_obj_dict_t *)&embed_globals,
 };
 
-#endif

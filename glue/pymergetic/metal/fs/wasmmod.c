@@ -6,7 +6,6 @@
 #include <pymergetic/metal/fs/wasmmod/__init__.h>
 #include <string.h>
 
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
 
 static mp_obj_t wasmmod_mount_mpwp(mp_obj_t target_obj, mp_obj_t mpwp_obj)
 {
@@ -39,4 +38,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs_wasmmod = {
     .globals = (mp_obj_dict_t *)&wasmmod_globals,
 };
 
-#endif

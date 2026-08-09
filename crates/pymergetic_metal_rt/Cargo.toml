@@ -12,5 +12,9 @@ crate-type = ["rlib"]
 
 [features]
 default = []
+# Emit pm_metal_rt_* no_mangle faces. Enable from the product umbrella
+# staticlib (pymergetic_metal_rs). Browser umbrella omits this so C
+# rt_block.c owns the ABI without wasm-ld signature clashes.
+export_c_abi = []
 # Wire when product links pymergetic.metal.reg.
 reg = []

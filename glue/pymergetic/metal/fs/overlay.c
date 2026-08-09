@@ -6,7 +6,6 @@
 #include <pymergetic/metal/fs/overlay/__init__.h>
 #include <string.h>
 
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
 
 static mp_obj_t overlay_mount(size_t n_args, const mp_obj_t *args)
 {
@@ -39,4 +38,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs_overlay = {
     .globals = (mp_obj_dict_t *)&overlay_globals,
 };
 
-#endif

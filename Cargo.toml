@@ -13,6 +13,7 @@ members = [
     "crates/pymergetic_metal_util_size",
     "crates/pymergetic_metal_fs_mtar",
     "crates/pymergetic_metal_rs",
+    "crates/pymergetic_metal_browser_rs",
 ]
 
 [profile.release]

@@ -19,16 +19,16 @@ Columns: **C** · **RS** · **Python** · **Seat** · **Status**
 | `auth` | `pm_metal_auth_*` | face `__init__.rs` | `pymergetic.metal.auth` | all | ok |
 | `trust` | `pm_metal_trust_*` | face `__init__.rs` | `pymergetic.metal.trust` | all | ok |
 | `externals` | `pm_metal_external_*` | — | `pymergetic.metal.externals` | all | ok |
-| `fs` | `pm_metal_fs_*` (+ `ops_*`) | callee `__init__.rs` / `ops.rs` | `pymergetic.metal.fs` | firmware | ok |
-| `fs.embed` | `pm_metal_fs_embed_*` | callee `__init__.rs` | `pymergetic.metal.fs.embed` | firmware | ok |
-| `fs.fat` | `pm_metal_fs_fat_*` | callee `__init__.rs` | `pymergetic.metal.fs.fat` | firmware | ok |
-| `fs.littlefs` | `pm_metal_fs_littlefs_*` | callee `__init__.rs` | `pymergetic.metal.fs.littlefs` | firmware | ok |
-| `fs.mtar` | `pm_metal_fs_mtar_*` | callee `__init__.rs` | `pymergetic.metal.fs.mtar` | firmware | ok |
-| `fs.overlay` | `pm_metal_fs_overlay_*` | callee `__init__.rs` | `pymergetic.metal.fs.overlay` | firmware | ok |
-| `fs.tmpfs` | `pm_metal_fs_tmpfs_*` | callee `__init__.rs` | `pymergetic.metal.fs.tmpfs` | firmware | ok |
-| `fs.vfs` | `pm_metal_fs_vfs_*` | callee `__init__.rs` | `pymergetic.metal.fs.vfs` | firmware | ok |
-| `fs.wasmmod` | `pm_metal_fs_wasmmod_*` | callee `__init__.rs` | `pymergetic.metal.fs.wasmmod` | firmware | ok |
-| `fs.zip` | `pm_metal_fs_zip_*` | callee `__init__.rs` | `pymergetic.metal.fs.zip` | firmware | ok |
+| `fs` | `pm_metal_fs_*` (+ `ops_*`) | callee `__init__.rs` / `ops.rs` | `pymergetic.metal.fs` | all | ok |
+| `fs.embed` | `pm_metal_fs_embed_*` | callee `__init__.rs` | `pymergetic.metal.fs.embed` | all | ok |
+| `fs.fat` | `pm_metal_fs_fat_*` | callee `__init__.rs` | `pymergetic.metal.fs.fat` | all | ok |
+| `fs.littlefs` | `pm_metal_fs_littlefs_*` | callee `__init__.rs` | `pymergetic.metal.fs.littlefs` | all | ok |
+| `fs.mtar` | `pm_metal_fs_mtar_*` | callee `__init__.rs` | `pymergetic.metal.fs.mtar` | all | ok |
+| `fs.overlay` | `pm_metal_fs_overlay_*` | callee `__init__.rs` | `pymergetic.metal.fs.overlay` | all | ok |
+| `fs.tmpfs` | `pm_metal_fs_tmpfs_*` | callee `__init__.rs` | `pymergetic.metal.fs.tmpfs` | all | ok |
+| `fs.vfs` | `pm_metal_fs_vfs_*` | callee `__init__.rs` | `pymergetic.metal.fs.vfs` | all | ok |
+| `fs.wasmmod` | `pm_metal_fs_wasmmod_*` | callee `__init__.rs` | `pymergetic.metal.fs.wasmmod` | all | ok |
+| `fs.zip` | `pm_metal_fs_zip_*` | callee `__init__.rs` | `pymergetic.metal.fs.zip` | all | ok |
 | `hwtree` | `pm_metal_hwtree_*` | callee `__init__.rs` | `pymergetic.metal.hwtree` | firmware | ok |
 | `mem.arena` | `pm_metal_mem_arena_*` | callee `__init__.rs` / browser `abi_faces_link.c` | `pymergetic.metal.mem.arena` | all | ok |
 | `mem.lock` | `pm_metal_mem_lock_{spin,mutex}_*` | `spin.rs` / `mutex.rs` / browser `abi_faces_link.c` | `pymergetic.metal.mem.lock` | all | ok |

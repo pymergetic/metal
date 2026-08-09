@@ -7,6 +7,22 @@ name = "pymergetic_metal_async"
 version = "0.1.0"
 
 [[package]]
+name = "pymergetic_metal_browser_rs"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_async",
+ "pymergetic_metal_fs",
+ "pymergetic_metal_fs_mtar",
+ "pymergetic_metal_fs_tmpfs",
+ "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_fs_wasmmod",
+ "pymergetic_metal_rt",
+ "pymergetic_metal_util_lz4",
+ "pymergetic_metal_util_size",
+ "pymergetic_metal_util_tar",
+]
+
+[[package]]
 name = "pymergetic_metal_fs"
 version = "0.1.0"
 dependencies = [

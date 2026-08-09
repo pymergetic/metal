@@ -1,8 +1,8 @@
 [package]
-name = "pymergetic_metal_rs"
+name = "pymergetic_metal_browser_rs"
 version = "0.1.0"
 edition = "2021"
-description = "Single freestanding staticlib for product BIOS/UEFI (rt + fs…)"
+description = "Browser wasm staticlib — fs/util RS without exporting C rt ABI"
 publish = false
 
 [lib]
@@ -10,7 +10,8 @@ path = "src/lib.rs"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-pymergetic_metal_rt = { path = "../pymergetic_metal_rt", features = ["export_c_abi"] }
+# C twin port/hal/wasm/rt_block.c owns pm_metal_rt_* on the browser seat.
+pymergetic_metal_rt = { path = "../pymergetic_metal_rt", default-features = false }
 pymergetic_metal_async = { path = "../pymergetic_metal_async" }
 pymergetic_metal_fs_vfs = { path = "../pymergetic_metal_fs_vfs" }
 pymergetic_metal_fs = { path = "../pymergetic_metal_fs" }

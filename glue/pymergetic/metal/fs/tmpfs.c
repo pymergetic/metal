@@ -6,7 +6,6 @@
 #include <pymergetic/metal/fs/tmpfs/__init__.h>
 #include <string.h>
 
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
 
 static mp_obj_t tmpfs_mount(mp_obj_t target_obj)
 {
@@ -33,4 +32,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs_tmpfs = {
     .globals = (mp_obj_dict_t *)&tmpfs_globals,
 };
 
-#endif

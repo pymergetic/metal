@@ -10,7 +10,6 @@
 
 #include <string.h>
 
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
 
 static const uint8_t *fs_path_z(mp_obj_t path_obj, uint8_t *buf, size_t cap)
 {
@@ -320,4 +319,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs = {
     .globals = (mp_obj_dict_t *)&fs_globals,
 };
 
-#endif

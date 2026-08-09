@@ -6,7 +6,6 @@
 #include <pymergetic/metal/fs/vfs/__init__.h>
 #include <string.h>
 
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
 
 static const uint8_t *path_z(mp_obj_t path_obj, uint8_t *buf, size_t cap)
 {
@@ -104,4 +103,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs_vfs = {
     .globals = (mp_obj_dict_t *)&vfs_globals,
 };
 
-#endif

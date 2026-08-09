@@ -80,25 +80,47 @@ fn halt_forever() -> ! {
 }
 
 /// Halt the CPU. Does not return.
+#[cfg(feature = "export_c_abi")]
 #[no_mangle]
 pub extern "C" fn pm_metal_rt_halt() -> ! {
     halt_forever()
 }
 
+#[cfg(not(feature = "export_c_abi"))]
+fn pm_metal_rt_halt() -> ! {
+    halt_forever()
+}
+
 /// Fatal panic: print ASCII `msg` (NUL-terminated, may be null) then halt.
 /// Same sink Rust `panic!` uses. Does not return.
+#[cfg(feature = "export_c_abi")]
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_rt_panic(msg: *const u8) -> ! {
     pm_metal_rt_panic_at(core::ptr::null(), 0, msg)
 }
 
+#[cfg(not(feature = "export_c_abi"))]
+unsafe fn pm_metal_rt_panic(msg: *const u8) -> ! {
+    pm_metal_rt_panic_at(core::ptr::null(), 0, msg)
+}
+
 /// Fatal panic with optional `file` + `line` (line 0 = omit). Does not return.
+#[cfg(feature = "export_c_abi")]
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_rt_panic_at(
     file: *const u8,
     line: u32,
     msg: *const u8,
 ) -> ! {
+    panic_at_body(file, line, msg)
+}
+
+#[cfg(not(feature = "export_c_abi"))]
+unsafe fn pm_metal_rt_panic_at(file: *const u8, line: u32, msg: *const u8) -> ! {
+    panic_at_body(file, line, msg)
+}
+
+unsafe fn panic_at_body(file: *const u8, line: u32, msg: *const u8) -> ! {
     let mut w = BufWriter::new();
     let _ = w.write_str("panic: ");
     let file_b = cstr_bytes(file);
@@ -156,6 +178,7 @@ fn rust_panic(info: &core::panic::PanicInfo) -> ! {
 
 /// Register rt's own dynamically-callable exports onto the registry
 /// (`pymergetic.metal.rt.*`) — for late/unloadable callers only.
+#[cfg(feature = "export_c_abi")]
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_rt_register_symbols() -> i32 {
     ffi::register_symbols()
@@ -164,6 +187,7 @@ pub unsafe extern "C" fn pm_metal_rt_register_symbols() -> i32 {
 /// No-op: `console`/`mem` are reached via direct `extern "C"` linkage (see
 /// `ffi.rs`), not a runtime bind step. Kept for the stable C ABI
 /// product bringup calls.
+#[cfg(feature = "export_c_abi")]
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_rt_connect_symbols() -> i32 {
     ffi::connect_symbols()

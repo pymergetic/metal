@@ -69,6 +69,16 @@ METAL_BOOT_SRCS := \
 	$(METAL)/port/hal/wasm/board_time.c \
 	$(METAL)/port/hal/wasm/smp_stub.c \
 	$(METAL)/port/hal/wasm/rt_block.c \
+	$(METAL)/glue/pymergetic/metal/fs/__init__.c \
+	$(METAL)/glue/pymergetic/metal/fs/embed.c \
+	$(METAL)/glue/pymergetic/metal/fs/fat.c \
+	$(METAL)/glue/pymergetic/metal/fs/littlefs.c \
+	$(METAL)/glue/pymergetic/metal/fs/mtar.c \
+	$(METAL)/glue/pymergetic/metal/fs/overlay.c \
+	$(METAL)/glue/pymergetic/metal/fs/tmpfs.c \
+	$(METAL)/glue/pymergetic/metal/fs/vfs.c \
+	$(METAL)/glue/pymergetic/metal/fs/wasmmod.c \
+	$(METAL)/glue/pymergetic/metal/fs/zip.c \
 	$(METAL)/src/pymergetic/metal/boot/tree.c \
 	$(METAL)/src/pymergetic/metal/boot/externals.c \
 	$(METAL)/src/pymergetic/metal/boot/externals_rows.c \
@@ -83,12 +93,9 @@ METAL_BOOT_SRCS := \
 	$(METAL)/src/pymergetic/metal/async/__init__.c \
 	$(METAL)/src/pymergetic/metal/console/__init__.c \
 	$(METAL)/src/pymergetic/metal/util/ascii.c \
-	$(METAL)/src/pymergetic/metal/util/lz4/lz4_block.c \
-	$(METAL)/src/pymergetic/metal/util/size/size_format.c \
 	$(METAL)/src/pymergetic/metal/util/endian/__init__.c \
 	$(METAL)/src/pymergetic/metal/util/fourcc/__init__.c \
 	$(METAL)/src/pymergetic/metal/util/eightcc/__init__.c \
-	$(METAL)/src/pymergetic/metal/util/tar/tar_block.c \
 	$(METAL)/src/pymergetic/metal/mem/port/mem.c \
 	$(METAL)/src/pymergetic/metal/port/abi_faces_link.c \
 	$(METAL)/third_party/tlsf/tlsf.c \
@@ -119,4 +126,14 @@ SRC_QSTR += \
 	$(METAL)/glue/pymergetic/metal/mem/port.c \
 	$(METAL)/glue/pymergetic/metal/mem/tlsf.c \
 	$(METAL)/glue/pymergetic/metal/mem/arena.c \
-	$(METAL)/glue/pymergetic/metal/mem/lock.c
+	$(METAL)/glue/pymergetic/metal/mem/lock.c \
+	$(METAL)/glue/pymergetic/metal/fs/__init__.c \
+	$(METAL)/glue/pymergetic/metal/fs/embed.c \
+	$(METAL)/glue/pymergetic/metal/fs/fat.c \
+	$(METAL)/glue/pymergetic/metal/fs/littlefs.c \
+	$(METAL)/glue/pymergetic/metal/fs/mtar.c \
+	$(METAL)/glue/pymergetic/metal/fs/overlay.c \
+	$(METAL)/glue/pymergetic/metal/fs/tmpfs.c \
+	$(METAL)/glue/pymergetic/metal/fs/vfs.c \
+	$(METAL)/glue/pymergetic/metal/fs/wasmmod.c \
+	$(METAL)/glue/pymergetic/metal/fs/zip.c
