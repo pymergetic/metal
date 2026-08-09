@@ -1,4 +1,6 @@
-//! Sync ustar walk + write helpers (memory archives / `.mtar` packs).
+//! Ustar walk + write helpers (memory archives / `.mtar` packs).
+//! Walk yields to the Metal async runner between entries so large archives
+//! do not starve the pump (CPU work stays sync; fairness is cooperative).
 #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(dead_code, non_camel_case_types)]
 
@@ -6,6 +8,10 @@ use pymergetic_metal_rt as _;
 
 const BLOCK: usize = 512;
 const NAME_MAX: usize = 100;
+
+extern "C" {
+    fn pm_metal_async_run_poll() -> i32;
+}
 
 /// Callback per entry. `data`/`data_len` point at the file payload in the
 /// archive (empty for directories). Return 0 to continue, non-zero to abort.
@@ -184,6 +190,8 @@ unsafe fn walk(
             return -1;
         }
         count += 1;
+        /* Cooperative fairness for Metal runners (ignore return). */
+        let _ = pm_metal_async_run_poll();
 
         off += padded(size);
         if off > len {

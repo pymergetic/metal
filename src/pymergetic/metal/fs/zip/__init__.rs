@@ -21,6 +21,7 @@ use pymergetic_metal_fs_vfs as vfs;
 
 extern "C" {
     fn pm_metal_async_completed_u32(v: u32) -> u32;
+    fn pm_metal_async_run_poll() -> i32;
 }
 
 const SIG_LOCAL: u32 = 0x0403_4b50;
@@ -173,6 +174,7 @@ unsafe fn parse_zip(blob: *const u8, len: usize) -> Option<Vec<TocEntry>> {
     let mut toc = Vec::new();
     let mut pos = cd_off;
     for _ in 0..cd_entries {
+        let _ = pm_metal_async_run_poll();
         if pos + 46 > len || read_u32(blob, pos) != SIG_CENTRAL {
             return None;
         }

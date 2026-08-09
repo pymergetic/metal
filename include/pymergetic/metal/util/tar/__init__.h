@@ -1,5 +1,6 @@
 /*
  * pymergetic.metal.util.tar — ustar walk/write (RS callee, C ABI).
+ * foreach* yield to the Metal async runner between entries.
  */
 #ifndef PYMERGETIC_METAL_UTIL_TAR_H_
 #define PYMERGETIC_METAL_UTIL_TAR_H_

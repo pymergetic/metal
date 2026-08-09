@@ -22,6 +22,7 @@ int32_t pm_metal_wasm_load_register(const uint8_t *full_module, const uint8_t *b
 int32_t pm_metal_wasm_load_verified(const uint8_t *full_module, const uint8_t *bytes, uint32_t len,
                                     const uint8_t *sig, uint32_t sig_len);
 int32_t pm_metal_wasm_unload(const uint8_t *full_module);
+/* Sync façade for short guest exports (e.g. ready). Prefer guest_coro for long work. */
 int32_t pm_metal_wasm_call0(const uint8_t *full_module, const uint8_t *func);
 int32_t pm_metal_wasm_proof_stress(void);
 int32_t pm_metal_wasm_proof(void);
