@@ -62,6 +62,8 @@ static int parse_dotted_ipv4(const char *s, uint32_t *addr_out)
 
 uint32_t pm_metal_net_dns_lookup(const char *name)
 {
+    /* Drop sticky cache so last_addr() reflects this lookup's ntoa. */
+    g_last_addr = 0;
     return pm_metal_net_ip_dns_lookup(name);
 }
 

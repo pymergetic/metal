@@ -20,8 +20,8 @@ int32_t pm_metal_net_http_poll(void);
 int32_t pm_metal_net_http_served(void);
 
 /*
- * Legacy sync GET (cleartext). Prefer pm_metal_net_http_get.
- * Returns 0 on success (saw "HTTP/"), -1 error, -2 timeout, -3 connect fail.
+ * Sync façade over pm_metal_net_http_get (bring-up/smoke).
+ * Returns 0 on success (saw "HTTP/"), -1 error, -2 timeout.
  */
 int32_t pm_metal_net_http_client_get(const char *host, uint16_t port, const char *path,
                                      uint8_t *buf, uint32_t cap, uint32_t *len_out);

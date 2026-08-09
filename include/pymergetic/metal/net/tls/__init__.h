@@ -56,7 +56,10 @@ uint32_t pm_metal_net_tls_write(pm_metal_net_tls_h th, const void *buf, uint32_t
 void pm_metal_net_tls_close(pm_metal_net_tls_h th);
 
 int32_t pm_metal_net_tls_load_ca_pem(const uint8_t *pem, uint32_t len);
-/* Load Mozilla-style PEM from VFS path (e.g. /etc/ssl/cert.pem). */
+/*
+ * Sync façade: fs_read_async + pump until DONE, then load_ca_pem.
+ * Prefer load_ca_pem when the PEM is already in memory.
+ */
 int32_t pm_metal_net_tls_load_ca_file(const char *path);
 int32_t pm_metal_net_tls_set_server_cert_pem(const uint8_t *pem, uint32_t len);
 int32_t pm_metal_net_tls_set_server_key_pem(const uint8_t *pem, uint32_t len);

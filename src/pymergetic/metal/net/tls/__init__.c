@@ -2,10 +2,12 @@
 
 #include <string.h>
 
+#include "pymergetic/metal/async/board_time.h"
 #include "pymergetic/metal/async/handle.h"
 #include "pymergetic/metal/async/runner.h"
 #include "pymergetic/metal/fs.h"
 #include "pymergetic/metal/mem.h"
+#include "pymergetic/metal/net/pump/__init__.h"
 
 static const pm_metal_net_tls_ops_t *g_ops;
 static int32_t g_inited;
@@ -132,6 +134,8 @@ int32_t pm_metal_net_tls_load_ca_file(const char *path)
         if (pm_metal_async_status(ah) == PM_METAL_ASYNC_DONE) {
             break;
         }
+        pm_metal_net_pump_once();
+        pm_metal_board_time_advance_us(1000);
         (void)pm_metal_async_run_poll();
     }
     if (pm_metal_async_status(ah) != PM_METAL_ASYNC_DONE) {

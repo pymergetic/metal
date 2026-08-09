@@ -25,6 +25,7 @@ enum {
 
 static int32_t g_verify_none;
 static uint32_t g_ah;
+static uint32_t g_dns_ah;
 static int g_st;
 static int g_https;
 static char g_host[128];
@@ -61,6 +62,10 @@ const uint8_t *pm_metal_net_http_body(void)
 
 static void client_fail(void)
 {
+    if (g_dns_ah != 0u) {
+        pm_metal_async_coro_close(g_dns_ah);
+        g_dns_ah = 0;
+    }
     if (g_tls != PM_METAL_NET_TLS_INVALID) {
         pm_metal_net_tls_close(g_tls);
         g_tls = PM_METAL_NET_TLS_INVALID;
@@ -183,7 +188,26 @@ void pm_metal_net_http_client_poll(void)
         return;
     }
     if (g_st == ST_DNS) {
-        if (pm_metal_net_dns_resolve(g_host, &g_addr) != 0 || g_addr == 0u) {
+        if (g_dns_ah == 0u) {
+            g_dns_ah = pm_metal_net_dns_lookup(g_host);
+            if (g_dns_ah == 0u) {
+                client_fail();
+                return;
+            }
+        }
+        if (pm_metal_async_status(g_dns_ah) != PM_METAL_ASYNC_DONE) {
+            return;
+        }
+        if (pm_metal_async_result_u32(g_dns_ah) != 1u) {
+            pm_metal_async_coro_close(g_dns_ah);
+            g_dns_ah = 0;
+            client_fail();
+            return;
+        }
+        g_addr = pm_metal_net_dns_last_addr();
+        pm_metal_async_coro_close(g_dns_ah);
+        g_dns_ah = 0;
+        if (g_addr == 0u) {
             client_fail();
             return;
         }
@@ -308,6 +332,8 @@ uint32_t pm_metal_net_http_get(const char *url)
     g_sock = PM_METAL_NET_IP_SOCK_INVALID;
     g_tls = PM_METAL_NET_TLS_INVALID;
     g_hs_ah = 0;
+    g_dns_ah = 0;
+    g_addr = 0;
     if (parse_url(url) != 0) {
         return pm_metal_async_completed_u32(0u);
     }

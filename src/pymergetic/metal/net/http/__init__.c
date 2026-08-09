@@ -4,11 +4,17 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "pymergetic/metal/async/board_time.h"
 #include "pymergetic/metal/async/handle.h"
-#include "pymergetic/metal/net/dns/__init__.h"
+#include "pymergetic/metal/async/runner.h"
 #include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/net/ip/sock.h"
+#include "pymergetic/metal/net/pump/__init__.h"
 #include "pymergetic/metal/net/tls/__init__.h"
+
+#ifndef PM_METAL_HTTP_CLIENT_WAIT_ITERS
+#define PM_METAL_HTTP_CLIENT_WAIT_ITERS 40000u
+#endif
 
 static int32_t g_ready;
 static int32_t g_served;
@@ -238,88 +244,82 @@ static int str_has_http(const uint8_t *buf, uint32_t n)
 int32_t pm_metal_net_http_client_get(const char *host, uint16_t port, const char *path,
                                      uint8_t *buf, uint32_t cap, uint32_t *len_out)
 {
-    char req[256];
-    uint32_t addr = 0;
-    uint32_t got = 0;
-    uint32_t chunk;
-    int i;
-    int32_t out = -1;
-    size_t rlen;
-    size_t o;
-    pm_metal_net_ip_sock_h h = PM_METAL_NET_IP_SOCK_INVALID;
+    char url[320];
+    size_t o = 0;
+    size_t i;
+    uint32_t h;
+    uint32_t n;
+    uint32_t copy;
+    const uint8_t *body;
 
     if (host == NULL || path == NULL || buf == NULL || len_out == NULL || cap < 16u || port == 0u) {
         return -1;
     }
     *len_out = 0;
-    if (pm_metal_net_dns_resolve(host, &addr) != 0 || addr == 0u) {
+    /* Build http://host[:port]/path for the async client. */
+    memcpy(url + o, "http://", 7);
+    o += 7;
+    for (i = 0; host[i] != '\0' && o + 1u < sizeof(url); i++) {
+        url[o++] = host[i];
+    }
+    if (port != 80u) {
+        char pbuf[8];
+        unsigned v = port;
+        unsigned pn = 0;
+        url[o++] = ':';
+        if (o >= sizeof(url)) {
+            return -1;
+        }
+        do {
+            pbuf[pn++] = (char)('0' + (v % 10u));
+            v /= 10u;
+        } while (v != 0u && pn < sizeof(pbuf));
+        while (pn > 0u && o + 1u < sizeof(url)) {
+            url[o++] = pbuf[--pn];
+        }
+    }
+    if (path[0] != '/') {
+        if (o + 1u >= sizeof(url)) {
+            return -1;
+        }
+        url[o++] = '/';
+    }
+    for (i = 0; path[i] != '\0' && o + 1u < sizeof(url); i++) {
+        url[o++] = path[i];
+    }
+    url[o] = '\0';
+
+    h = pm_metal_net_http_get(url);
+    if (h == 0u) {
         return -1;
     }
-
-    h = pm_metal_net_ip_socket(PM_METAL_NET_IP_AF_INET, PM_METAL_NET_IP_SOCK_STREAM);
-    if (h == PM_METAL_NET_IP_SOCK_INVALID) {
-        return -1;
-    }
-    if (pm_metal_net_ip_connect_ip4(h, addr, port) != 0) {
-        out = -1;
-        goto done;
-    }
-    for (i = 0; i < 20000 && !pm_metal_net_ip_sock_connected(h); i++) {
-        pm_metal_net_ip_poll();
-    }
-    if (!pm_metal_net_ip_sock_connected(h)) {
-        out = -3;
-        goto done;
-    }
-
-    o = 0;
-    memcpy(req + o, "GET ", 4);
-    o += 4;
-    for (rlen = 0; path[rlen] != '\0' && o + 1u < sizeof(req); rlen++) {
-        req[o++] = path[rlen];
-    }
-    memcpy(req + o, " HTTP/1.0\r\nHost: ", 16);
-    o += 16;
-    for (rlen = 0; host[rlen] != '\0' && o + 1u < sizeof(req); rlen++) {
-        req[o++] = host[rlen];
-    }
-    memcpy(req + o, "\r\nConnection: close\r\n\r\n", 24);
-    o += 24;
-    if (o >= sizeof(req)) {
-        goto done;
-    }
-    if (pm_metal_net_ip_send(h, req, (uint32_t)o) == 0u) {
-        goto done;
-    }
-
-    for (i = 0; i < 20000; i++) {
-        pm_metal_net_ip_poll();
-        chunk = pm_metal_net_ip_try_recv(h, buf + got, cap - got);
-        if (chunk == (uint32_t)-1) {
+    for (n = 0; n < PM_METAL_HTTP_CLIENT_WAIT_ITERS; n++) {
+        pm_metal_net_pump_once();
+        pm_metal_board_time_advance_us(1000);
+        (void)pm_metal_async_run_poll();
+        if (pm_metal_async_status(h) == PM_METAL_ASYNC_DONE) {
             break;
         }
-        if (chunk > 0u) {
-            got += chunk;
-            if (str_has_http(buf, got)) {
-                *len_out = got;
-                out = 0;
-                goto done;
-            }
-            if (got >= cap) {
-                break;
-            }
-        }
     }
-    if (str_has_http(buf, got)) {
-        *len_out = got;
-        out = 0;
-    } else {
-        out = -2;
+    if (pm_metal_async_status(h) != PM_METAL_ASYNC_DONE) {
+        pm_metal_async_coro_close(h);
+        return -2;
     }
-
-done:
-    if (h != PM_METAL_NET_IP_SOCK_INVALID) {
-        pm_metal_net_ip_close(h);
+    if (pm_metal_async_result_u32(h) != 1u) {
+        pm_metal_async_coro_close(h);
+        return -1;
     }
-    return out;
+    body = pm_metal_net_http_body();
+    copy = pm_metal_net_http_body_len();
+    if (body == NULL || copy == 0u || !str_has_http(body, copy)) {
+        pm_metal_async_coro_close(h);
+        return -1;
+    }
+    if (copy > cap) {
+        copy = cap;
+    }
+    memcpy(buf, body, copy);
+    *len_out = copy;
+    pm_metal_async_coro_close(h);
+    return 0;
 }
