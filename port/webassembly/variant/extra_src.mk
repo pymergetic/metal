@@ -6,6 +6,10 @@ endif
 METAL_BOOT_OBJ := $(patsubst $(METAL)/%.c,$(BUILD)/metal/%.o,$(METAL_BOOT_SRCS))
 OBJ += $(METAL_BOOT_OBJ)
 
+# Product MPWP pack embeds (inspect + metal) for pymergetic.metal.pack.
+include $(METAL)/port/product_packs.mk
+OBJ += $(BUILD)/metal_pack_inspect.o $(BUILD)/metal_pack_metal.o
+
 # Browser RS: fs/util muscle; C owns rt ABI (rt_block.c).
 # Keep .a out of OBJ (mkrules -include *.d would parse the archive as a makefile).
 RUST_TARGET := wasm32-unknown-unknown
@@ -28,4 +32,4 @@ $(BUILD)/metal/%.o: $(METAL)/%.c
 	$(Q)$(MKDIR) -p $(dir $@)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/micropython.mjs: $(METAL_BROWSER_RS_LIB)
+$(BUILD)/micropython.mjs: $(METAL_BROWSER_RS_LIB) $(BUILD)/metal_pack_inspect.o $(BUILD)/metal_pack_metal.o

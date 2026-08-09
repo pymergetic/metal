@@ -39,9 +39,10 @@ extern const mp_obj_module_t mp_module_pymergetic_metal_fs_tmpfs;
 extern const mp_obj_module_t mp_module_pymergetic_metal_fs_vfs;
 extern const mp_obj_module_t mp_module_pymergetic_metal_fs_wasmmod;
 extern const mp_obj_module_t mp_module_pymergetic_metal_fs_zip;
+extern const mp_obj_module_t mp_module_pymergetic_metal_pack;
+extern const mp_obj_module_t mp_module_pymergetic_metal_hwtree;
 #if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
 extern const mp_obj_module_t mp_module_pymergetic_metal_draw;
-extern const mp_obj_module_t mp_module_pymergetic_metal_pack;
 extern const mp_obj_module_t mp_module_pymergetic_metal_bus;
 extern const mp_obj_module_t mp_module_pymergetic_metal_bus_pci;
 extern const mp_obj_module_t mp_module_pymergetic_metal_bus_virtio;
@@ -77,7 +78,6 @@ extern const mp_obj_module_t mp_module_pymergetic_metal_shell;
 extern const mp_obj_module_t mp_module_pymergetic_metal_shell_tui;
 extern const mp_obj_module_t mp_module_pymergetic_metal_shell_ui;
 extern const mp_obj_module_t mp_module_pymergetic_metal_shell_vt;
-extern const mp_obj_module_t mp_module_pymergetic_metal_hwtree;
 extern const mp_obj_module_t mp_module_pymergetic_metal_wamr_host;
 #endif
 

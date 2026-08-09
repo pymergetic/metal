@@ -29,7 +29,7 @@ Columns: **C** · **RS** · **Python** · **Seat** · **Status**
 | `fs.vfs` | `pm_metal_fs_vfs_*` | callee `__init__.rs` | `pymergetic.metal.fs.vfs` | all | ok |
 | `fs.wasmmod` | `pm_metal_fs_wasmmod_*` | callee `__init__.rs` | `pymergetic.metal.fs.wasmmod` | all | ok |
 | `fs.zip` | `pm_metal_fs_zip_*` | callee `__init__.rs` | `pymergetic.metal.fs.zip` | all | ok |
-| `hwtree` | `pm_metal_hwtree_*` | callee `__init__.rs` | `pymergetic.metal.hwtree` | firmware | ok |
+| `hwtree` | `pm_metal_hwtree_*` | callee `__init__.rs` | `pymergetic.metal.hwtree` | all | ok |
 | `mem.arena` | `pm_metal_mem_arena_*` | callee `__init__.rs` / browser `abi_faces_link.c` | `pymergetic.metal.mem.arena` | all | ok |
 | `mem.lock` | `pm_metal_mem_lock_{spin,mutex}_*` | `spin.rs` / `mutex.rs` / browser `abi_faces_link.c` | `pymergetic.metal.mem.lock` | all | ok |
 | `mem.tlsf` | `pm_metal_mem_tlsf_*` | callee `__init__.rs` / browser `abi_faces_link.c` | `pymergetic.metal.mem.tlsf` | all | ok |

@@ -172,7 +172,7 @@ Doc wins on conflict.
 
 Counts are ledger estimates (not a live link inventory).
 
-| Path | Impl | API | C | RS | Py | Async | Stub | Browser | FW | Note | Browser links `libpymergetic_metal_browser_rs.a` (fs/util; rt C twin). Fat/zip/embed/littlefs/overlay use abi_faces stubs on wasm. Py = max(glue, .pyi). |
+| Path | Impl | API | C | RS | Py | Async | Stub | Browser | FW | Note | Browser links `libpymergetic_metal_browser_rs.a` (fs/util; rt C twin). Pack embeds via product_packs.mk. Fat/zip/embed/littlefs/overlay/hwtree use abi_faces stubs on wasm where noted. |
 |------|------|----:|--:|---:|---:|-------|:----:|:-------:|:--:|------|----------|
 | `arch` | Py+C | 5 | 5 | 5 | 5 | yes | — | yes | yes | CFG seat + into-Py name/names | keep seats · W4 bridges done · W5 +Py(=glue) · W6 no dual Py |
 | `arch.wasm` | Py | 3 | 3 | 3 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
@@ -207,7 +207,7 @@ Counts are ledger estimates (not a live link inventory).
 | `fs.vfs` | RS | 6 | 6 | 6 | 6 | yes | yes | yes | — | browser RS | done · W7 browser |
 | `fs.wasmmod` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | — | browser RS | done · W7 browser |
 | `fs.zip` | RS | 4 | 4 | 4 | 4 | yes | yes | yes | — | browser via abi_faces stub | done · W7 browser |
-| `hwtree` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | print only (DT walk) | done · W7 browser |
+| `hwtree` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | — | print; browser abi_faces stub (no DT) | done · W7 browser |
 | `inspect` | Py+C | 6 | 6 | 6 | 6 | yes | — | yes | yes | C+RS into-Py via pm_upy | keep Py app · W4 bridges done |
 | `mem.arena` | RS | 13 | 13 | 13 | 13 | yes | yes | yes | — | Arena bytearray face | done · W7 browser |
 | `mem.lock` | RS | 8 | 8 | 8 | 8 | yes | yes | yes | — | spin+mutex word buffers | done · W7 browser |
@@ -227,7 +227,7 @@ Counts are ledger estimates (not a live link inventory).
 | `net.tftp` | C | 6 | 6 | 6 | 6 | yes | — | — | yes | get_async parks; get façade | done · W8 browser net |
 | `net.tls` | C | 18 | 18 | 18 | 18 | yes | — | — | yes | handshake parks; load_ca_file façade | done · W8 browser net |
 | `net.wg` | C | 12 | 12 | 12 | 12 | yes | yes | — | yes | up/peer sync CPU; handshake_smoke façade | done · W8 browser net |
-| `pack` | C | 6 | 6 | 6 | 6 | yes | — | — | yes |  | W5 +Py · W7 browser |
+| `pack` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes | MPWP embeds + mount_all via fs.wasmmod | done · W7 browser |
 | `rt` | RS | 5 | 5 | 5 | 5 | yes | yes | yes | yes | halt/panic*/register/connect; browser C twin rt_block.c (RS no export_c_abi) | done · W7 browser |
 | `shell.tui` | C | 4 | 4 | 4 | 4 | yes | — | — | yes |  | done |
 | `shell.ui` | C | 2 | 2 | 2 | 2 | yes | — | — | yes |  | done |
@@ -253,7 +253,7 @@ Counts are ledger estimates (not a live link inventory).
 | Rows | 69 |
 | Full export (C∧RS∧Py @ 100%) | **69/69** |
 | Strict green (export ∧ async=yes) | **69/69** |
-| Browser=yes | **35/69** (W7 nearly done; remaining pack/hwtree · W8 net) |
+| Browser=yes | **37/69** (W7 complete; W8 net remaining · out-of-wave bus/dev/shell/unix/wamr) |
 | Smoke | `X86_64_BIOS_OK` ENGINE=mp · wasm util.tar import ok (2026-08-09) |
 | Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). Browser util.tar = C twin `tar_block.c`. |
 
