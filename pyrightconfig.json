@@ -1,0 +1,12 @@
+{
+  "include": ["typings", "src", "sample", "tests"],
+  "exclude": ["port/build", "**/third_party", "crates"],
+  "stubPath": "typings",
+  "extraPaths": ["typings", "src"],
+  "reportMissingImports": "warning",
+  "reportMissingModuleSource": "none",
+  "reportUnusedImport": "none",
+  "reportUnusedVariable": "none",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic"
+}

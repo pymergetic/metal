@@ -11,7 +11,7 @@ paths mean [`_old/src/efi/...`](../_old/src/efi/) unless noted.
 
 ## Dual-span arena
 
-One claimed conventional hole (`EfiLoaderData`):
+One claimed conventional hole (`EfiLoaderData` / browser HAL malloc window):
 
 ```text
 low (map_brk →)                    (← heap_brk) high
@@ -23,6 +23,16 @@ low (map_brk →)                    (← heap_brk) high
 | Low | `pm_metal_mem_map` / `PM_METAL_MEM_MAP` | upward |
 | High | TLSF via `pm_metal_mem_alloc` (HEAP) | downward (new pools) |
 | Middle | free hole | shrinks until OOM |
+
+**Initial carve** (`pm_metal_mem_init`):
+
+| Span | Init TLSF | Hole |
+|------|-----------|------|
+| **&lt; 4 MiB** (product static) | almost all (`span − 32 KiB`) | tiny dual-span stub |
+| **≥ 4 MiB** | `clamp(span/8, 256 KiB, 128 MiB)` and ≤25% | ≥75% for map + growth |
+
+`pm_metal_mem_alloc` **grows** new TLSF pools downward from the hole on OOM
+(`tlsf_add_pool`). The 128 MiB cap is only the *first* pool on huge claims.
 
 - **Looper stacks** come from the map side.
 - **Coros / tasks** and general malloc use the heap (TLSF).

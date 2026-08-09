@@ -39,6 +39,9 @@ uint32_t pm_metal_net_ip_gw(void);
 uint32_t pm_metal_net_ip_mask(void);
 uint32_t pm_metal_net_ip_dns(void);
 
+/* >0 resolved, 0 pending, <0 error. */
+int32_t pm_metal_net_ip_arp_resolve(uint32_t ip_host);
+
 /* TX gratuitous ARP / announce for our address. */
 int32_t pm_metal_net_ip_announce(void);
 

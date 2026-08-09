@@ -1,110 +1,75 @@
 # Definitions — filesystem / VFS
 
-Async-first path I/O for Metal firmware under ``. Public names align
-with product [`include/.../fs/fs.h`](../../include/pymergetic/metal/fs/fs.h);
-exp2 backs them with vfs + fstype ops (not ESP).
+## One module law
+
+Every first-party package is a **wasmmod pack** (MPWP in a `.wasm` / `.aot` / `.elf`
+artifact — see wasmmod [`docs/PACK.md`](../../../wasmmod/docs/PACK.md)).
+
+| Face | Role |
+|------|------|
+| **packload** | import / exec / exports → `sys.modules` |
+| **fs_wasmmod** | RO VFS tree at `/mods/<pack.name>` |
+
+Same law for `pymergetic.wasmmod`, `pymergetic.metal`, guests. No privileged
+`host_self` / ROM-embed seed as the product file store. **Not mtar** for `/mods`.
+
+```text
+/mods/<pack.name>/…     ← fs_wasmmod RO (paths = pack-relative paths)
+```
+
+Pack-relative path + mount = VFS path (no remap). Example:
+
+`httpd.json` root → `/mods/pymergetic.metal.inspect/www/inspect`
 
 ---
 
-## Layers
+## Layers (product LIVE)
 
 ```text
-upy / guest / shell
-    pm_metal_fs_*_async  ->  async handle
+upy / guest / ASGI
+    pm_metal_fs_*_async  →  async handle
         |
         v
 fs/                  fd table + path normalize
-        |  resolve (sync)
+        |  resolve
         v
 vfs/                 mount table (longest prefix)
         |
         v
-fs/mtar | fs/fat | fs/zip | fs/overlay | fs/littlefs | fs/tmpfs
-        |
-        v
-dev/blk[/ram]        sectors (ram completes Ready immediately)
+fs/wasmmod           MPWP RO (product /mods)
+fs/tmpfs             scratch (optional; not /mods)
 ```
 
 | Rule | Meaning |
 |------|---------|
-| Public I/O | `*_async` returns `pm_metal_async_handle_t` |
-| Ops ABI | Public `pm_metal_fs_ops_t` + `ops_register` / `ops_lookup` |
-| Stackless | No durable state on C/wasm stack across `await` |
-| Sync shims | Host tools only — not the guest contract |
+| Public I/O | `*_async` returns completed/awaitable handles |
+| Ops ABI | `pm_metal_fs_ops_t` + vfs mount |
+| `/mods/<fqn>` | **wasmmod pack** only |
+| mtar / fat / zip | In-tree; not the `/mods` product path |
 
 ---
 
-## Product face
+## Mount tree (product LIVE)
 
-exp2 `fs/__init__.rs` tracks product `fs.h` entrypoints on the VFS/ops path:
-`open` / `close` / `fread` / `fwrite` / `fpread` / `fpwrite` / `lseek` /
-`stat` / `fstat` / `readdir` / `mkdir` / `unlink` / `rename` / `fsync`, plus
-path helpers `size_async` / `read_async` / `write_async`. In-RAM fstypes
-complete Ready immediately. Dual-ABI buffer macros (`PM_METAL_FS_IO_PTR`)
-stay in the product header for guest wasm.
-
-Migration: switch product `fs.c` ESP dispatch to vfs resolve + ops lookup;
-keep WASI module string `pymergetic.metal.fs`.
-
----
-
-## Boot mount tree (kernel-owned root)
-
-Stage A rootfs, then Stage B fstab. Modules attach packs under `/` via
-`pm_metal_boot_mod_load` — they never replace `/`.
+Metal image mounts **metal** packs only (build → `$(BUILD)/packs/`, not checked into `src/`).
+`pymergetic.wasmmod` is produced/mounted by **wasmmod** (`embed-host` / host pack VFS), not forged here.
 
 ```text
-/                                  # FAT RW — kernel root (seeded)
-├── etc/fstab                      # Stage B mounts
-├── tmp/                           # tmpfs via fstab
-├── mods/
-│   └── <module.id>/               # mtar — runtime pack
-└── src/
-    └── <module.id>/               # mtar — sources (optional)
+/mods/
+├── pymergetic.metal/             # ASGI host (httpd.json)
+├── pymergetic.metal.inspect/     # Inspect UI + contract
+├── pymergetic.wasmmod/           # when wasmmod provides a real self pack
+└── <guest.fqn>/                  # loaded guests (same fstype)
 ```
 
 | Path | Fstype | Who |
 |------|--------|-----|
-| `/` | fat RW | kernel boot Stage A |
-| `/mods/<id>` | mtar (RO or RW) | kernel / `pm_metal_boot_mod_load` |
-| `/src/<id>` | mtar (RO or RW) | kernel / `pm_metal_boot_mod_load` |
-| `/tmp` | tmpfs | Stage B `pm_metal_boot_rootfs_fstab_apply` |
+| `/mods/<pack.name>` | fs_wasmmod RO | bringup / mod load |
+| `/tmp` | tmpfs (later) | scratch — not modules |
 
-Kernel module id (default): **`pymergetic.metal`**.
-
-Boot order: `mem_init` → console → **`pm_metal_boot_rootfs_mount_all`**
-→ Stage A (`/` + kernel packs) → Stage B (`/etc/fstab`) → rest.
+Bringup: `mem_init` → async → mount build-generated metal packs → ASGI.
 
 ```text
-pm_metal_boot_mod_load(id, mods_blob, mods_len, src_blob, src_len)
-pm_metal_boot_mod_unload(id)   # umount /mods/<id> and /src/<id>
+pm_metal_fs_wasmmod_mount_mpwp(target_or_null, mpwp, len)
+  → mounts at /mods/<MPWP.name> when target is null
 ```
-
----
-
-## Landed (former v1 non-goals)
-
-| Feature | Status |
-|---------|--------|
-| In-place mutable mtar | `pm_metal_fs_mtar_mount_rw` + RW ops (rebuild/compact) |
-| littlefs | `fs/littlefs/` + `forge img littlefs` |
-| Separate `/tmp` + fstab Stage B | tmpfs + `pm_metal_boot_rootfs_fstab_apply` |
-| Product `fs.h` face | exp2 implements product entrypoints on vfs |
-| Wasm mod loader mounts | `pm_metal_boot_mod_load` / `_unload` |
-
----
-
-## Source pack modes (Kconfig)
-
-Under `./forge-cli config edit` -> **pymergetic.metal -> fs**:
-
-| Mode | Meaning |
-|------|---------|
-| `none` | Do not embed or mount `/src/<kernel id>` |
-| `human only` | Pack forge originals only (no banner faces) |
-| `human + generated` | Human + forge-generated faces |
-
-Build pipeline: `./forge-cli build` -> `forge config gen` ->
-`forge img rootfs` → `metal mod sync` → compile/link.
-
-Default root size is **4 MiB** (`PM_METAL_FS_ROOT_SIZE_MIB`).

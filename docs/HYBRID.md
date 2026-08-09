@@ -7,7 +7,8 @@
 ## The point (wasmmod)
 
 **Callee (impl):** one language per module — **C or Rust or Python**.  
-**Caller:** **any** of C / Rust / Python.
+**Caller:** **any** of C / Rust / Python.  
+Py muscle still needs **C + RS bridges** (call into Py). C/RS muscle still needs **Py glue**. No “Py-only, native never calls it.”
 
 ```text
 caller\callee | Py | C | RS

@@ -1,0 +1,16 @@
+[package]
+name = "pymergetic_metal_rt"
+version = "0.1.0"
+edition = "2021"
+description = "Freestanding Metal rt — panic/halt + GlobalAlloc → pm_metal_mem_*"
+publish = false
+
+[lib]
+path = "../../src/pymergetic/metal/rt/__init__.rs"
+# rlib only — product links one umbrella staticlib (pymergetic_metal_rs).
+crate-type = ["rlib"]
+
+[features]
+default = []
+# Wire when product links pymergetic.metal.reg.
+reg = []

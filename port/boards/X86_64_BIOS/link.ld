@@ -17,6 +17,9 @@ SECTIONS
 
   .text : {
     KEEP(*(.text.boot))
+    /* Rust C ABI — survive --gc-sections when only force-undefined. */
+    KEEP(*(.text.pm_metal_rt_*))
+    KEEP(*(.text.pm_metal_fs_*))
     *(.text .text.*)
   }
 
@@ -26,6 +29,10 @@ SECTIONS
 
   .data : {
     *(.data .data.*)
+    . = ALIGN(16);
+    PROVIDE_HIDDEN (__pm_metal_externals_start = .);
+    KEEP (*(SORT_BY_NAME (.pm_metal_externals.*)));
+    PROVIDE_HIDDEN (__pm_metal_externals_end = .);
   }
 
   .bss : {

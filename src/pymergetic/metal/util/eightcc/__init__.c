@@ -31,7 +31,7 @@ void pm_metal_util_eightcc_from_wire_bytes(const pm_metal_util_eightcc_wire_t by
   if (bytes == NULL || out == NULL) {
     return;
   }
-  out->v = pm_metal_util_endian_load_u64_le(bytes);
+  out->v = pm_metal_util_endian_load_u64_le_inline(bytes);
 }
 
 void pm_metal_util_eightcc_to_wire_bytes(const pm_metal_util_eightcc_t *tag,
@@ -40,7 +40,7 @@ void pm_metal_util_eightcc_to_wire_bytes(const pm_metal_util_eightcc_t *tag,
   if (tag == NULL || out == NULL) {
     return;
   }
-  pm_metal_util_endian_store_u64_le(out, tag->v);
+  pm_metal_util_endian_store_u64_le_inline(out, tag->v);
 }
 
 void pm_metal_util_eightcc_to_bytes(const pm_metal_util_eightcc_t *tag,

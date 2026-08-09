@@ -30,8 +30,8 @@ int32_t pm_metal_inspect_capabilities_json(char *buf, size_t buf_len)
         "{\"role\":\"metal\",\"theme\":\"metal\","
         "\"smp\":true,\"asgi\":true,\"ssh_kex\":true,"
         "\"ssh_auth\":true,\"fastapi\":false,"
-        "\"microdot\":true,\"vfs_static\":false,"
-        "\"static_embed\":true}";
+        "\"microdot\":true,\"vfs_static\":true,"
+        "\"static_embed\":false,\"static_backend\":\"wasmmod\"}";
 
     if (buf == NULL || buf_len < sizeof(k_caps)) {
         return -1;
@@ -76,9 +76,9 @@ int32_t pm_metal_inspect_handle(const char *method, const char *path,
         static const char k_self[] =
             "{\"schema\":1,\"name\":\"pymergetic.metal\","
             "\"role\":\"kernel\",\"product\":\"metal\",\"org\":\"pymergetic\","
-            "\"theme\":\"metal\",\"has_source\":false,\"has_pack\":false,"
-            "\"static_backend\":\"embed\","
-            "\"source_files\":[],\"pack_files\":[],"
+            "\"theme\":\"metal\",\"has_source\":false,\"has_pack\":true,"
+            "\"static_backend\":\"wasmmod\","
+            "\"source_files\":[],\"pack_files\":[\"httpd.json\"],"
             "\"tags\":{\"role\":\"kernel\",\"product\":\"metal\","
             "\"org\":\"pymergetic\"}}";
         *status = 200;

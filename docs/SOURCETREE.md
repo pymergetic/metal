@@ -1,69 +1,39 @@
-# Metal filetree (proposed — product-relevant)
+# Metal filetree (product-relevant)
 
 Laws: wasmmod matrix · callee one lang · kernel = code container · Inspect = own mod · Microdot = kernel CORE Py (not a wasm pack).
+
+**Path == module (every lang):** `include|src|glue|typings`/…/`pymergetic/metal/<path>` ↔ import `pymergetic.metal.<path>`.
+C/RS callees → nested builtins (**glue**) + `.pyi`. No private `_pm_*` fucknames.
+**No frozen reexports / empty `__init__.py` for C/RS** — if it needs a Py face, it’s glue, not a weird little `.py`.
+
+Spines: [ARCH.md](ARCH.md) — **arch · port · wamr_host · wasmmod**.
+Ledgers: [../include/SYMBOLS.md](../include/SYMBOLS.md) (symbol spelling) ·
+[MODULE_MATRIX.md](MODULE_MATRIX.md) (export % · async compliance · maintain hints).
 
 ## Checkout tree
 
 ```text
 extmod/metal/
-  include/pymergetic/metal/
-    SYMBOLS.md
-    async/
-      runner.h  handle.h  await.h  time.h  board_time.h  prio.h
-    asgi/
-      __init__.h
-    microdot/
-      __init__.h                 # C/RS *caller* → Py microdot under /mods/…
-    inspect/                     # contract headers (CDN + guest)
-      __init__.h
-      endpoints.h
-      py_call.h                  # C/RS caller → inspect app Py
-    net/
-      pump/  ip/  dhcp/  dns/  ntp/  tftp/  http/  ssh/  faces/  upy_nic/
-    dev/acpi/  bus/  mem.h  console.h  …
+  include/pymergetic/metal/      # public C ABI (path == module)
+    SYMBOLS.md                   # C ↔ RS ↔ Py ledger
+    util/{lz4,tar,size,…}/__init__.h
+    auth/ trust/ net/{ip,wg,ssh}/ …
 
-  src/pymergetic/
-    metal/                       # ── mod id: pymergetic.metal ──
-      async/
-        __init__.c  smp.c
-      asgi/
-        __init__.c
-      net/
-        pump/  ip/  dhcp/  dns/  ntp/  tftp/  http/  ssh/  faces/ …
-      dev/acpi/
-        __init__.c
-      microdot/                  # ── CORE: upstream Microdot .py ──
-        __init__.py              #   vendored / tracked sources
-        microdot.py              #   (exact upstream layout as needed)
-        websocket.py             #   …
-        # NOT a wasm pack; freeze or import from VFS like other Py callees
-      httpd.json                 # ONE host config (ASGI static mounts → VFS)
-      # … other kernel modules …
+  src/pymergetic/metal/          # ONE callee per path (.c | .rs | .py)
+    util/lz4/  auth/  trust/  net/…
+    arch/  microdot/  inspect/   # CORE Py seats stay here
 
-    metal/inspect/               # ── mod id: pymergetic.metal.inspect ──
-      __init__.c                 # capabilities + stub table
-      endpoints.c
-      app.py                     # Inspect routes (imports microdot)
-      stubs.py                   # shared endpoint contract
-      adapter_microdot.py        # stubs → MicrodotAdapter
-      adapter_fastapi.py         # stubs → FastAPIAdapter (CDN)
-      www/inspect/               # SHARED UI
-        index.html
-        js/
-        css/
-          base.css
-          themes/
-            cdn.css
-            metal.css
-        theme.cdn.json
-        theme.metal.json
+  glue/pymergetic/metal/         # thin µPy nest (mirrors include/)
+  typings/pymergetic/metal/      # .pyi only for C/RS faces
 
-  crates/pm_metal/               # RS façade only
-  typings/pymergetic/metal/
-    async/  asgi/  microdot/  inspect/  net/…
-  port/common/  boards/
-  third_party/
-  docs/
+  port/                          # µPy image adaptation ONLY
+    boot/  live/  bringup/  upy/ # live/ = firmware LIVE proofs + QEMU helpers
+    boards/  hal/  webassembly/  unix/
+    Makefile  manifest*.py
+
+  deploy/                        # PXE ops (bootserver + upload-bootserver)
+
+  docs/ARCH.md  docs/SOURCETREE.md  docs/MODULE_MATRIX.md
 ```
 
 ## How Microdot gets in
@@ -80,8 +50,9 @@ extmod/metal/
 
 ```text
 /mods/pymergetic.metal/
-  asgi/…
+  net/asgi/…            ← C floor; Py ASGI apps mount here later
   microdot/…
+  arch/…                ← seat modules (same pack face)
   httpd.json            ← only here (host that runs ASGI)
 
 /mods/pymergetic.metal.inspect/
@@ -108,5 +79,15 @@ extmod/metal/
 |-------|-----|------|
 | Microdot framework `.py` | `pymergetic.metal` | CORE callee |
 | ASGI / async / net | `pymergetic.metal` | host runtime |
-| stubs · Inspect app · www | `pymergetic.metal.inspect` | contract + UI |
+| Arch seats (CDN packs) | `pymergetic.metal.arch.{x86,x86_64,wasm}` | role=`arch` (copper) |
+| Unix host seats (CDN) | `pymergetic.metal.unix.{x86,x86_64}` | role=`host` (blue); curl-and-run ELF |
+| Freestanding x86_64 (CDN) | `pymergetic.metal.arch.x86_64` | `.elf` BIOS trampoline + `.efi` UEFI |
+| Freestanding x86 (CDN) | `pymergetic.metal.arch.x86` | i686 Multiboot `.elf` + `BOOTIA32.efi` |
+| Browser seat (CDN) | `pymergetic.metal.arch.wasm` | `.mjs` + `.wasm` — CDN UI `mp` pill |
+| Boot UX | `port/boot/boot.c` + `src/.../boot/tree.c` | live tree → ready → rainbow MetalPython |
+| WAMR-on-box | `wamr_host/` | firmware hosts guest `.wasm` |
+| stubs · Inspect app · www | `pymergetic.metal.inspect` | role=`kernel` (green) |
+| CDN engine pack | `pymergetic.wasmmod` | role=`engine` (purple); `mpwm` pill |
+| CDN engine `mp` | lead `arch.wasm` artifacts | metal webassembly build; static/repl fallback |
+| CDN engine `mpwm` | wasmmod only | no metal arch |
 | CDN FastAPI adapter | outside | same contract; theme=cdn |

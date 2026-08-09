@@ -1,0 +1,25 @@
+/* Auto-generated smoke cert — NOT for production. */
+const char pm_metal_net_tls_smoke_server_crt[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIDgjCCAmqgAwIBAgIULVDrIoRBsmyw/uJTffxHPUmpVbswDQYJKoZIhvcNAQEL\n"
+    "BQAwODEUMBIGA1UEAwwLbWV0YWwubG9jYWwxEzARBgNVBAoMClB5bWVyZ2V0aWMx\n"
+    "CzAJBgNVBAYTAlVTMB4XDTI2MDgwODIyNTIzMFoXDTM2MDgwNTIyNTIzMFowODEU\n"
+    "MBIGA1UEAwwLbWV0YWwubG9jYWwxEzARBgNVBAoMClB5bWVyZ2V0aWMxCzAJBgNV\n"
+    "BAYTAlVTMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlbzJ0WKuQUEC\n"
+    "owdEmH7KWzdnS/MbxeYN57+15lR+xPbeU+dsf/noPARg/O22zcOao3r3P7T8R6Mk\n"
+    "Cx3qi0pbMPJeFGFxHrWU8oqbQlSaMVDSjLCWJAKEBIoIs1xPeeR554Y84xLR9rRc\n"
+    "W/5HUv0BH4up+YGv0IrGplyKwRNa/walLxX6sBOZV89nWYxr4y7d/RgvMSEkhLSr\n"
+    "7lx39wP7ZXuy0WyodNSyzXIF6yJomzjjWOCuhyjNWpgwzhEOR7wONP4bBNJ/ypFG\n"
+    "+7JXZS6qT8yijnGaowD3gQEPVIMrQwyA6V8gIFg9WWyssjggLTvy5Mwbt5AUL6nM\n"
+    "NldAAAVFXwIDAQABo4GDMIGAMB0GA1UdDgQWBBTBu56rHrqlkDhqA8nTtUtNgHih\n"
+    "ETAfBgNVHSMEGDAWgBTBu56rHrqlkDhqA8nTtUtNgHihETAPBgNVHRMBAf8EBTAD\n"
+    "AQH/MC0GA1UdEQQmMCSCC21ldGFsLmxvY2Fsgglsb2NhbGhvc3SHBAoAAg+HBH8A\n"
+    "AAEwDQYJKoZIhvcNAQELBQADggEBAHBCtH2ObxiyidThe4xPwty07B9AJqdPwlyh\n"
+    "7GuONghoceQglUPkvPwHMM2t1qNoTGBMBGZhnjQk48yqoyCszjreENy0Q0up1iNJ\n"
+    "7e4ZpfS1Eu/dMmXrUsZ+sutUi6AiuCvW6EbkXxKZHghag8lXyonIW9G/S1VImWJY\n"
+    "UTl0Pq1vQeXrJb8Er0MThUhqnzKCkR9tn3eeRFO133O8QrB6yks4MilKpAPVLoOV\n"
+    "VEBnmm7odaNmwXrVN216ohqJ6V9AW373Em6+CcKHiQH4LzFBpOBBhSu3gFb5seUA\n"
+    "un/n9c/TN7HWsp1YvDJBa5NEiyd94HJ7jhAKLH7Iq9kOuyz6wM0=\n"
+    "-----END CERTIFICATE-----\n"
+;
+const unsigned pm_metal_net_tls_smoke_server_crt_len = sizeof(pm_metal_net_tls_smoke_server_crt) - 1u;

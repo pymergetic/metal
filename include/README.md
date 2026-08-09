@@ -10,7 +10,7 @@ Pattern matches wasmmod [`extmod/wasmmod/include/`](../../wasmmod/include/README
 |-------|-------|---------|
 | Public headers | `include/pymergetic/metal/…` | `include/pm_*.h` |
 | Impl | `src/pymergetic/metal/…` | `glue/` + `crates/pm` |
-| Python | `port/typings/`, `mod*.c` | `wasmmod.c` faces |
+| Python | `typings/`, `glue/` nest | `wasmmod.c` faces |
 
 Headers here are **hand-maintained public faces** (forge mod-sync is gone).
 They are **tracked in git** — not wholesale-ignored.

@@ -1,0 +1,23 @@
+# Match product C freestanding: static kernel code model, no SSE.
+[target.x86_64-unknown-none]
+rustflags = [
+    "-C", "relocation-model=static",
+    "-C", "code-model=kernel",
+    "-C", "target-feature=-sse,-sse2,-avx,-avx2",
+]
+
+[target.x86_64-unknown-uefi]
+rustflags = [
+    "-C", "target-feature=-sse,-sse2,-avx,-avx2",
+]
+
+[target.i686-unknown-none]
+rustflags = [
+    "-C", "relocation-model=static",
+    "-C", "target-feature=-mmx,-sse,-sse2,-avx,-avx2",
+]
+
+[target.i686-unknown-uefi]
+rustflags = [
+    "-C", "target-feature=-mmx,-sse,-sse2,-avx,-avx2",
+]

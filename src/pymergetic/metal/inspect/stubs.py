@@ -8,9 +8,10 @@ CAP_DEFAULTS = {
     "ssh_kex": True,
     "ssh_auth": True,
     "microdot": True,
-    # Product LIVE has no Rust VFS linked — static is ASGI embed.
-    "vfs_static": False,
-    "static_embed": True,
+    # Guest: static from wasmmod pack VFS (/mods/<fqn>/…).
+    "vfs_static": True,
+    "static_embed": False,
+    "static_backend": "wasmmod",
 }
 
 

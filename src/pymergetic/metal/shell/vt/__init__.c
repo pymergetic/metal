@@ -1,4 +1,4 @@
-#include "pymergetic/metal/vt.h"
+#include "pymergetic/metal/shell/vt/__init__.h"
 
 #include <string.h>
 

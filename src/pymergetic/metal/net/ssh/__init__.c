@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "pymergetic/metal/net/ip/tcp.h"
+#include "pymergetic/metal/net/ip/sock.h"
 
 typedef enum {
     SSH_ST_IDLE = 0,
@@ -30,6 +30,8 @@ typedef enum {
 
 static ssh_st_t g_st;
 static uint32_t g_listen_port;
+static pm_metal_net_ip_sock_h g_listen_h;
+static pm_metal_net_ip_sock_h g_conn_h;
 static uint8_t g_peer_ident[PM_METAL_SSH_IDENT_MAX];
 static uint32_t g_peer_len;
 static int32_t g_served;
@@ -207,6 +209,8 @@ int32_t pm_metal_net_ssh_available(void)
 int32_t pm_metal_net_ssh_init(void)
 {
     g_listen_port = 0;
+    g_listen_h = PM_METAL_NET_IP_SOCK_INVALID;
+    g_conn_h = PM_METAL_NET_IP_SOCK_INVALID;
     g_st = SSH_ST_IDLE;
     g_peer_len = 0;
     g_served = 0;
@@ -215,6 +219,7 @@ int32_t pm_metal_net_ssh_init(void)
     memset(g_peer_ident, 0, sizeof(g_peer_ident));
     pm_metal_net_ssh_kex_reset(&g_kex);
     pm_metal_net_ssh_pkt_reset();
+    pm_metal_net_ssh_pkt_bind_sock(PM_METAL_NET_IP_SOCK_INVALID);
     if (pm_metal_net_ssh_crypto_init() != 0) {
         g_crypto_ready = 0;
         return -1;
@@ -232,6 +237,28 @@ int32_t pm_metal_net_ssh_autoload(void)
 
 uint32_t pm_metal_net_ssh_listen(uint32_t port)
 {
+    if (port == 0u) {
+        return 0;
+    }
+    if (g_conn_h != PM_METAL_NET_IP_SOCK_INVALID) {
+        pm_metal_net_ip_close(g_conn_h);
+        g_conn_h = PM_METAL_NET_IP_SOCK_INVALID;
+    }
+    if (g_listen_h != PM_METAL_NET_IP_SOCK_INVALID) {
+        pm_metal_net_ip_close(g_listen_h);
+        g_listen_h = PM_METAL_NET_IP_SOCK_INVALID;
+    }
+    g_listen_h = pm_metal_net_ip_socket(PM_METAL_NET_IP_AF_INET, PM_METAL_NET_IP_SOCK_STREAM);
+    if (g_listen_h == PM_METAL_NET_IP_SOCK_INVALID) {
+        g_listen_port = 0;
+        return 0;
+    }
+    if (pm_metal_net_ip_listen(g_listen_h, port) == 0u) {
+        pm_metal_net_ip_close(g_listen_h);
+        g_listen_h = PM_METAL_NET_IP_SOCK_INVALID;
+        g_listen_port = 0;
+        return 0;
+    }
     g_listen_port = port;
     g_st = SSH_ST_IDLE;
     g_peer_len = 0;
@@ -242,24 +269,43 @@ uint32_t pm_metal_net_ssh_listen(uint32_t port)
     g_kex.v_s_len = (uint32_t)(sizeof(k_ident_bare) - 1u);
     memcpy(g_kex.v_s, k_ident_bare, g_kex.v_s_len);
     pm_metal_net_ssh_pkt_reset();
-    if (pm_metal_net_ip_tcp_listen((uint16_t)port) != 0) {
-        return 0;
-    }
+    pm_metal_net_ssh_pkt_bind_sock(PM_METAL_NET_IP_SOCK_INVALID);
     return 1;
+}
+
+/* Close SSH socks only — never touches other services' listeners. */
+void pm_metal_net_ssh_release(void)
+{
+    if (g_conn_h != PM_METAL_NET_IP_SOCK_INVALID) {
+        pm_metal_net_ip_close(g_conn_h);
+        g_conn_h = PM_METAL_NET_IP_SOCK_INVALID;
+    }
+    if (g_listen_h != PM_METAL_NET_IP_SOCK_INVALID) {
+        pm_metal_net_ip_close(g_listen_h);
+        g_listen_h = PM_METAL_NET_IP_SOCK_INVALID;
+    }
+    g_listen_port = 0;
+    g_st = SSH_ST_IDLE;
+    g_peer_len = 0;
+    g_served = 0;
+    g_peer_chan = 0;
+    g_our_chan = 0;
+    pm_metal_net_ssh_pkt_reset();
+    pm_metal_net_ssh_pkt_bind_sock(PM_METAL_NET_IP_SOCK_INVALID);
 }
 
 void pm_metal_net_ssh_close(uint32_t s)
 {
     (void)s;
-    pm_metal_net_ip_tcp_abort();
-    g_st = SSH_ST_IDLE;
-    g_peer_len = 0;
-    pm_metal_net_ssh_pkt_reset();
+    pm_metal_net_ssh_release();
 }
 
 static int32_t send_ident(void)
 {
-    if (pm_metal_net_ip_tcp_send(k_ident, (uint32_t)(sizeof(k_ident) - 1u)) != 0) {
+    if (g_conn_h == PM_METAL_NET_IP_SOCK_INVALID) {
+        return -1;
+    }
+    if (pm_metal_net_ip_send(g_conn_h, k_ident, (uint32_t)(sizeof(k_ident) - 1u)) == 0u) {
         return -1;
     }
     return 0;
@@ -286,10 +332,12 @@ static int32_t feed_peer_ident(void)
     uint8_t chunk[64];
     uint32_t n = 0;
     uint32_t i;
-    int32_t rc;
 
-    rc = pm_metal_net_ip_tcp_recv(chunk, sizeof(chunk), &n);
-    if (rc != 1 || n == 0u) {
+    if (g_conn_h == PM_METAL_NET_IP_SOCK_INVALID) {
+        return 0;
+    }
+    n = pm_metal_net_ip_try_recv(g_conn_h, chunk, sizeof(chunk));
+    if (n == 0u || n == (uint32_t)-1) {
         return 0;
     }
     for (i = 0; i < n; i++) {
@@ -324,8 +372,19 @@ int32_t pm_metal_net_ssh_poll(void)
     uint32_t reply_len = 0;
     int32_t rc;
 
-    if (!pm_metal_net_ip_tcp_established()) {
+    if (g_listen_port == 0u || !g_crypto_ready ||
+        g_listen_h == PM_METAL_NET_IP_SOCK_INVALID) {
         return 0;
+    }
+    if (g_conn_h == PM_METAL_NET_IP_SOCK_INVALID) {
+        g_conn_h = pm_metal_net_ip_try_accept(g_listen_h);
+        if (g_conn_h == PM_METAL_NET_IP_SOCK_INVALID) {
+            return 0;
+        }
+        pm_metal_net_ssh_pkt_bind_sock(g_conn_h);
+        g_st = SSH_ST_IDLE;
+        g_peer_len = 0;
+        g_served = 0;
     }
     if (g_st == SSH_ST_IDLE) {
         if (send_ident() != 0) {
@@ -542,11 +601,13 @@ int32_t pm_metal_net_ssh_poll(void)
             }
         }
     }
-    if (g_st == SSH_ST_DONE) {
-        return 1;
-    }
-    if (g_st == SSH_ST_ERROR) {
-        return -1;
+    if (g_st == SSH_ST_DONE || g_st == SSH_ST_ERROR) {
+        if (g_conn_h != PM_METAL_NET_IP_SOCK_INVALID) {
+            pm_metal_net_ip_close(g_conn_h);
+            g_conn_h = PM_METAL_NET_IP_SOCK_INVALID;
+            pm_metal_net_ssh_pkt_bind_sock(PM_METAL_NET_IP_SOCK_INVALID);
+        }
+        return g_st == SSH_ST_DONE ? 1 : -1;
     }
     return 0;
 }
@@ -618,6 +679,10 @@ int32_t pm_metal_net_ssh_banner_sent(void)
 
 void pm_metal_net_ssh_banner_reset(void)
 {
+    if (g_conn_h != PM_METAL_NET_IP_SOCK_INVALID) {
+        pm_metal_net_ip_close(g_conn_h);
+        g_conn_h = PM_METAL_NET_IP_SOCK_INVALID;
+    }
     g_st = SSH_ST_IDLE;
     g_peer_len = 0;
     g_served = 0;
@@ -626,6 +691,7 @@ void pm_metal_net_ssh_banner_reset(void)
     g_kex.v_s_len = (uint32_t)(sizeof(k_ident_bare) - 1u);
     memcpy(g_kex.v_s, k_ident_bare, g_kex.v_s_len);
     pm_metal_net_ssh_pkt_reset();
+    pm_metal_net_ssh_pkt_bind_sock(PM_METAL_NET_IP_SOCK_INVALID);
 }
 
 int32_t pm_metal_net_ssh_bind_reg(void)

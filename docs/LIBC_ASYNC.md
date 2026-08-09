@@ -17,6 +17,7 @@ CPU work stays **sync**. Preemptive-OS machinery is **omit**.
 External apps (e.g. `packages/metal-doom`) build + stage themselves in their
 own sibling repo via `METAL_EXT_APPS`; see that repo's `docs/DOOM_ASYNC.md`.
 **Mods / process / async product model:** [`docs/MODS.md`](MODS.md) (mod ≠ process; process = command → func in a task).
+**Per-module async compliance ledger:** [`MODULE_MATRIX.md`](MODULE_MATRIX.md).
 
 ---
 
@@ -96,7 +97,7 @@ own sibling repo via `METAL_EXT_APPS`; see that repo's `docs/DOOM_ASYNC.md`.
 | `getaddrinfo` | **async** | `pm_metal_net_ip_dns` → await → `pm_metal_net_ip_result` (1/0) + `pm_metal_net_ip_dns_last_ntoa` (address string) |
 | ICMP ping | **async** | `pm_metal_net_ping` → await → `pm_metal_net_ping_rtt_us` (prefer) / `rtt_ms` / `last_err` |
 | SNTP | **async** | `pm_metal_net_ntp_sync` → await → `pm_metal_net_ntp_status` / `pm_metal_net_ntp_last_unix_ms` (sets wall on success) |
-| `http get` (HTTP/HTTPS) | **async** | `pm_metal_net_http_get` → await → `pm_metal_net_http_status` / `pm_metal_net_http_body_len` (TLS host-only under http) |
+| `http get` (HTTP/HTTPS) | **async** | `pm_metal_net_http_get` → await → `pm_metal_net_http_status` / `pm_metal_net_http_body_len` (TLS via `net/tls` / mbedTLS) |
 | TFTP get | **async** | `pm_metal_net_tftp_get` → await → `pm_metal_net_tftp_status` / `pm_metal_net_tftp_len` (proof: `async_tftp`) |
 | `gethostname` / `sethostname` | **sync** | `pm_metal_host_name_get` / `pm_metal_host_name_set` (identity; also DHCPv4 option 12) |
 

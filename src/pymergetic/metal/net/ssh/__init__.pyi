@@ -1,5 +1,5 @@
 # pymergetic.metal.net.ssh — Python face (C impl in __init__.c).
-# µPy builtin: port/common/modssh.c
+# µPy builtin: glue/pymergetic/metal/net/ssh.c
 
 from typing import TypeAlias
 

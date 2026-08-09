@@ -10,25 +10,38 @@ CompileFlags:
     - -Wno-unused-parameter
     - -ffreestanding
     - -fshort-wchar
+    # Match board build.mk: -I$(METAL)/include -I$(METAL)/src -I$(METAL)/glue
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/include
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/src
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/glue
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/third_party/tlsf
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port
-    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/common
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/upy
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/boot
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/live
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/bringup
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/hal
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/boards/X86_64_BIOS
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/boards/X86_64_UEFI
-    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/build-X86_64_BIOS-mp
-    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/build-X86_64_UEFI-mp
-    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/libc
-    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/wasm/port/platform
-    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/_tmp/external/edk2/MdePkg/Include
-    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/_tmp/external/edk2/MdePkg/Include/X64
-    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/wasmmod/third_party/wamr/core/iwasm/include
-    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/wasmmod/third_party/wamr/core/shared/platform/include
+    # $(BUILD) first so genhdr/qstrdefs.generated.h resolves (LIVE tree preferred)
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/build/X86_64_BIOS-mp-live
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/build/X86_64_BIOS-mp
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/build/X86_64_UEFI-mp
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/include/pymergetic/metal/libc
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/src/pymergetic/metal/net/asgi
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/mbedtls
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/lib/mbedtls/include
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/lwip_inc
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/lib/lwip/src/include
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/py
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/wasmmod/third_party/wamr/core/iwasm/include
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/wasmmod/third_party/wamr/core/shared/platform/include
+    # MBEDTLS_CONFIG_FILE comes from .vscode/compile_commands.json (quoted).
+    # Do not Add it here — a second -D wins and breaks #include MBEDTLS_CONFIG_FILE.
     - -DWASM_RUNTIME_API_EXTERN=
     - -DBH_PLATFORM_METAL
     - -DMETAL_LINK_WAMR=1
     - -DMETAL_UPY_SMOKE=1
-    - -DMICROPY_ENABLE_COMPILER=1
+    - -DMICROPY_SSL_MBEDTLS=1

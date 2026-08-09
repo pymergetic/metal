@@ -29,7 +29,7 @@ void pm_metal_util_fourcc_from_wire_bytes(const pm_metal_util_fourcc_wire_t byte
   if (bytes == NULL || out == NULL) {
     return;
   }
-  out->v = pm_metal_util_endian_load_u32_le(bytes);
+  out->v = pm_metal_util_endian_load_u32_le_inline(bytes);
 }
 
 void pm_metal_util_fourcc_to_wire_bytes(const pm_metal_util_fourcc_t *tag,
@@ -38,7 +38,7 @@ void pm_metal_util_fourcc_to_wire_bytes(const pm_metal_util_fourcc_t *tag,
   if (tag == NULL || out == NULL) {
     return;
   }
-  pm_metal_util_endian_store_u32_le(out, tag->v);
+  pm_metal_util_endian_store_u32_le_inline(out, tag->v);
 }
 
 void pm_metal_util_fourcc_to_bytes(const pm_metal_util_fourcc_t *tag,

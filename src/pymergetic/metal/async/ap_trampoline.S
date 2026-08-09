@@ -71,3 +71,8 @@ pm_metal_ap_tramp_end:
 	.align 8
 pm_metal_ap_tramp_size:
 	.quad pm_metal_ap_tramp_end - pm_metal_ap_tramp
+
+#ifdef __ELF__
+	/* PE/COFF (UEFI --target=*-windows) rejects @progbits; note is ELF-only. */
+	.section .note.GNU-stack,"",@progbits
+#endif

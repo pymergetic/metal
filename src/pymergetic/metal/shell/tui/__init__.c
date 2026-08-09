@@ -1,4 +1,4 @@
-#include "pymergetic/metal/tui.h"
+#include "pymergetic/metal/shell/tui/__init__.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -10,7 +10,8 @@
 #include "pymergetic/metal/mem.h"
 #include "pymergetic/metal/net/faces/__init__.h"
 #include "pymergetic/metal/net/ip/__init__.h"
-#include "pymergetic/metal/vt.h"
+#include "pymergetic/metal/net/ip/cfg.h"
+#include "pymergetic/metal/shell/vt/__init__.h"
 
 #ifndef METAL_ENGINE
 #define METAL_ENGINE "mp"
@@ -209,42 +210,31 @@ static void append_ipv4(char *out, size_t cap, uint32_t be)
 
 static void build_network_line(char *out, size_t cap)
 {
-    const uint8_t *mac;
-    static const char hex[] = "0123456789abcdef";
-    size_t i;
-    size_t pos;
+    char status[192];
     uint32_t addr;
 
     if (out == NULL || cap < 16u) {
         return;
     }
-    if (!pm_metal_dev_net_virtio_ready()) {
-        str_copy(out, cap, "net: down");
-        return;
-    }
     addr = pm_metal_net_ip_ready() ? pm_metal_net_ip_addr() : 0u;
     if (addr != 0u) {
+        /* Keep "ip … dhcp" for the dashboard cell; append iface summary. */
         str_copy(out, cap, "ip ");
         append_ipv4(out, cap, addr);
         str_append(out, cap, " dhcp");
-        return;
-    }
-    mac = pm_metal_dev_net_virtio_mac();
-    if (mac == NULL) {
-        str_copy(out, cap, "net: down");
-        return;
-    }
-    pos = 0;
-    memcpy(out + pos, "MAC ", 4);
-    pos += 4;
-    for (i = 0; i < 6u && pos + 3u < cap; i++) {
-        if (i > 0u && pos + 1u < cap) {
-            out[pos++] = ':';
+        if (pm_metal_net_ip_if_status(status, (uint32_t)sizeof(status)) == 0 && status[0] != '\0') {
+            size_t i;
+            for (i = 0; status[i] != '\0'; i++) {
+                if (status[i] == '\n') {
+                    status[i] = '/';
+                }
+            }
+            str_append(out, cap, " ");
+            str_append(out, cap, status);
         }
-        out[pos++] = hex[(mac[i] >> 4) & 0x0Fu];
-        out[pos++] = hex[mac[i] & 0x0Fu];
+        return;
     }
-    out[pos] = '\0';
+    str_copy(out, cap, "net: down");
 }
 
 static void build_memory_line(char *out, size_t cap)

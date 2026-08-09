@@ -56,6 +56,11 @@ utility is a **worse** change than one that reuses something imperfect.
 Read [`docs/SOURCETREE.md`](docs/SOURCETREE.md) before touching anything under
 `src/` or `include/` — it defines the tree layout and the C dialect rule.
 
+When you add/change a seat’s public face (include / glue / typings / board
+link / parkable I/O), update [`docs/MODULE_MATRIX.md`](docs/MODULE_MATRIX.md)
+(and [`include/SYMBOLS.md`](include/SYMBOLS.md)) in the same change — see the
+hints + seat checklist there.
+
 **Dual-ABI buffer args:** guest prototypes take `uint32_t` linear offsets;
 host takes pointers. Call sites must use the header's `PM_METAL_*_IO_PTR(p)`
 macro (never a bare `(uint32_t)(uintptr_t)p`). See SOURCETREE § dual

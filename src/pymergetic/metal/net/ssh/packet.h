@@ -7,6 +7,9 @@
 
 void pm_metal_net_ssh_pkt_reset(void);
 
+/* Bind packet I/O to an owned STREAM sock (accepted SSH connection). */
+void pm_metal_net_ssh_pkt_bind_sock(uint32_t sock_h);
+
 /* Arm chacha20-poly1305@openssh.com (main||header = 32||32 each direction). */
 void pm_metal_net_ssh_pkt_set_keys(const uint8_t key_c2s[64],
                                    const uint8_t key_s2c[64]);

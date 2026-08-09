@@ -1,4 +1,4 @@
-#include "pymergetic/metal/input/kbd.h"
+#include "pymergetic/metal/dev/input/kbd.h"
 
 #include <stddef.h>
 #include <stdint.h>

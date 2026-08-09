@@ -1,0 +1,22 @@
+[package]
+name = "pymergetic_metal_rs"
+version = "0.1.0"
+edition = "2021"
+description = "Single freestanding staticlib for product BIOS/UEFI (rt + fs…)"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+pymergetic_metal_rt = { path = "../pymergetic_metal_rt" }
+pymergetic_metal_async = { path = "../pymergetic_metal_async" }
+pymergetic_metal_fs_vfs = { path = "../pymergetic_metal_fs_vfs" }
+pymergetic_metal_fs = { path = "../pymergetic_metal_fs" }
+pymergetic_metal_fs_tmpfs = { path = "../pymergetic_metal_fs_tmpfs" }
+pymergetic_metal_fs_wasmmod = { path = "../pymergetic_metal_fs_wasmmod" }
+pymergetic_metal_util_lz4 = { path = "../pymergetic_metal_util_lz4" }
+pymergetic_metal_util_tar = { path = "../pymergetic_metal_util_tar" }
+pymergetic_metal_util_size = { path = "../pymergetic_metal_util_size" }
+pymergetic_metal_fs_mtar = { path = "../pymergetic_metal_fs_mtar" }

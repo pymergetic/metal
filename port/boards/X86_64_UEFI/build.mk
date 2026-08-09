@@ -3,9 +3,14 @@
 
 BOARD_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 PORT_DIR := $(CURDIR)
-COMMON := $(PORT_DIR)/common
+UPY := $(PORT_DIR)/upy
+BOOT := $(PORT_DIR)/boot
+LIVE_DIR := $(PORT_DIR)/live
+BRINGUP := $(PORT_DIR)/bringup
 METAL := $(abspath $(PORT_DIR)/..)
-BUILD ?= build-X86_64_UEFI-$(ENGINE)
+GLUE := $(METAL)/glue
+COMMON := $(UPY)
+BUILD ?= build/X86_64_UEFI-$(ENGINE)
 
 ENGINE ?= mp
 PACKAGES := $(abspath $(PORT_DIR)/../../../..)
@@ -35,15 +40,31 @@ CLANG ?= clang
 CC := $(CLANG)
 QEMU ?= qemu-system-x86_64
 SMP ?= 2
-TFTP_ROOT := $(COMMON)/tftp-root
-SSH_BANNER := $(COMMON)/qemu-ssh-banner.sh
+TFTP_ROOT := $(LIVE_DIR)/tftp-root
+SSH_BANNER := $(LIVE_DIR)/qemu-ssh-banner.sh
 NETDEV_USER := user,id=n0,tftp=$(TFTP_ROOT),guestfwd=tcp:10.0.2.100:22-cmd:$(SSH_BANNER)
-QEMU_MACHINE := -machine q35,accel=kvm:tcg -m 256 -smp $(SMP) -vga none
+GFX ?= 1
+ifeq ($(GFX),1)
+QEMU_VGA := -vga std
+else
+QEMU_VGA := -vga none
+endif
+
+# VNC=1 (default when GFX=1): QEMU listens on 127.0.0.1:5900+N for TightVNC/etc.
+# Laptop/SSH: ssh -L 5900:127.0.0.1:5900 host  then connect viewer to localhost:5900
+VNC ?= $(GFX)
+VNC_DISPLAY ?= 0
+ifeq ($(VNC),1)
+QEMU_DISPLAY := -display none -vnc 127.0.0.1:$(VNC_DISPLAY)
+else
+QEMU_DISPLAY := -display none
+endif
+QEMU_MACHINE := -machine q35,accel=kvm:tcg -m 256 -smp $(SMP) $(QEMU_VGA)
 OVMF ?= /usr/share/ovmf/OVMF.fd
 # Slim MdePkg headers only (no edk2 submodule — WAMR/µPy live in wasmmod / ENGINE_TOP).
 EDK_INC ?= $(BOARD_DIR)/edk_inc
 
-QSTR_DEFS = $(COMMON)/qstrdefsport.h
+QSTR_DEFS = $(UPY)/qstrdefsport.h
 MICROPY_ROM_TEXT_COMPRESSION ?= 0
 FROZEN_MANIFEST ?= $(PORT_DIR)/manifest.py
 MICROPY_MANIFEST_METAL := $(METAL)
@@ -52,27 +73,37 @@ include $(TOP)/py/py.mk
 
 TARGET_WIN := --target=x86_64-unknown-windows
 
-INC := -I$(COMMON) -I$(BOARD_DIR) -I$(TOP) -I$(BUILD) \
+INC := -I$(UPY) -I$(BOOT) -I$(LIVE_DIR) -I$(BRINGUP) -I$(GLUE) -I$(PORT_DIR)/hal -I$(BOARD_DIR) -I$(TOP) -I$(BUILD) \
 	-I$(METAL)/include -I$(METAL)/src -I$(METAL)/third_party/tlsf \
 	-I$(EDK_INC) -I$(EDK_INC)/X64 \
 	-isystem /usr/include -isystem /usr/include/x86_64-linux-gnu
 
-CFLAGS_METAL := $(TARGET_WIN) -ffreestanding -fno-stack-protector \
+# Master bake = official realm. Lab/own-realm: override METAL_CDN_URL at make.
+METAL_CDN_URL ?= https://cdn.pymergetic.com/cdn
+METAL_CDN_EXTRA_URLS ?=
+
+REPL ?= 0
+ifeq ($(REPL),1)
+MICROPY_HEAP_SIZE ?= 1048576
+CFLAGS_METAL_SMOKE := -DMETAL_UPY_SMOKE=0
+else
+MICROPY_HEAP_SIZE ?= 262144
+CFLAGS_METAL_SMOKE := -DMETAL_UPY_SMOKE=1
+endif
+
+CFLAGS_METAL := -DPM_METAL_BOARD_UEFI=1 $(TARGET_WIN) -ffreestanding -fno-stack-protector \
 	-fshort-wchar -mno-red-zone -fno-asynchronous-unwind-tables -fno-exceptions \
 	-Wall -Wextra -Wno-unused-parameter -Os -DNDEBUG \
 	-fdata-sections -ffunction-sections \
 	-std=gnu99 \
-	-DMICROPY_HEAP_SIZE=262144 \
+	-DMICROPY_HEAP_SIZE=$(MICROPY_HEAP_SIZE) \
+	$(CFLAGS_METAL_SMOKE) \
 	-DMETAL_BOARD_UEFI=1 \
+	-DPM_METAL_CFG_ARCH_X86_64=1 -DPM_METAL_CFG_FW_UEFI=1 \
 	-DMETAL_LINK_WAMR=$(LINK_WAMR) \
-	-DMETAL_ENGINE=\"$(ENGINE)\"
-
-REPL ?= 0
-ifeq ($(REPL),1)
-CFLAGS_METAL += -DMETAL_UPY_SMOKE=0
-else
-CFLAGS_METAL += -DMETAL_UPY_SMOKE=1
-endif
+	-DMETAL_ENGINE=\"$(ENGINE)\" \
+	-DMETAL_CDN_URL=\"$(METAL_CDN_URL)\" \
+	-DMETAL_CDN_EXTRA_URLS=\"$(METAL_CDN_EXTRA_URLS)\"
 
 LIVE ?= 0
 LIVE_SSH ?= 0
@@ -86,36 +117,40 @@ endif
 
 ifeq ($(LINK_WAMR),1)
 INC += -I$(WASMMOD)/third_party/wamr/core/iwasm/include \
-	-I$(METAL)/src/pymergetic/metal/wasm/port/platform \
+	-I$(METAL)/src/pymergetic/metal/wamr_host/port/platform \
 	-I$(METAL)/include/pymergetic/metal/libc
 CFLAGS_METAL += -DBH_PLATFORM_METAL
 endif
 
-CFLAGS += $(INC) $(CFLAGS_METAL)
+CFLAGS += $(INC) $(CFLAGS_METAL) -DMICROPY_PY_LWIP=1
 CSUPEROPT = -Os
 
 SRC_C = \
 	boards/X86_64_UEFI/main.c \
 	boards/X86_64_UEFI/uart.c \
-	common/mphalport.c \
-	common/main_upy.c \
-	common/product_bringup.c \
-	common/metal_board_time.c \
-	common/floor_smoke.c \
-	common/net_smoke.c \
-	common/ip_smoke.c \
-	common/console_smoke.c \
-	common/draw_smoke.c \
-	common/vt_smoke.c \
-	common/tui_smoke.c \
-	common/kbd_smoke.c \
-	common/live_http.c \
-	common/live_ssh.c \
-	common/uefi_acpi_seed.c \
-	common/network_metal_nic.c \
-	common/modssh.c \
-	common/inspect_py.c \
-	common/fsys/chkstk.c \
+	hal/efi/console.c \
+	upy/mphalport.c \
+	upy/main_upy.c \
+	boot/boot.c \
+	boot/autoexec.c \
+	boot/cdn_cfg.c \
+	bringup/product_bringup.c \
+	bringup/metal_board_time.c \
+	live/floor_smoke.c \
+	live/net_smoke.c \
+	live/ip_smoke.c \
+	live/console_smoke.c \
+	live/draw_smoke.c \
+	live/vt_smoke.c \
+	live/tui_smoke.c \
+	live/kbd_smoke.c \
+	boot/services.c \
+	live/live_http.c \
+	live/live_ssh.c \
+	bringup/uefi_acpi_seed.c \
+	bringup/network_metal_nic.c \
+	upy/inspect_py.c \
+	boot/fsys/chkstk.c \
 	shared/readline/readline.c \
 	shared/runtime/pyexec.c \
 	shared/runtime/stdout_helpers.c \
@@ -123,38 +158,61 @@ SRC_C = \
 	shared/netutils/netutils.c \
 	extmod/modframebuf.c \
 	extmod/modnetwork.c \
-	extmod/modsocket.c \
+	extmod/modlwip.c \
+	extmod/network_lwip.c \
 	extmod/modasyncio.c \
 	extmod/modjson.c \
 	extmod/modre.c \
 	extmod/modtime.c \
 	extmod/modselect.c
 
+SRC_C += live/metal_log.c
 ifeq ($(LINK_WAMR),1)
-SRC_C += \
-	common/wamr_smoke.c \
-	common/metal_log.c \
-	common/metal_rt_halt.c
+SRC_C += live/wamr_smoke.c
 else
 SRC_C += shared/libc/string0.c
 endif
 
+# Freestanding Rust rt — UEFI needs COFF objects for lld-link (not ELF none).
+RUST_TARGET := x86_64-unknown-uefi
+include $(PORT_DIR)/rust_product.mk
+include $(PORT_DIR)/product_packs.mk
+
+include $(PORT_DIR)/glue_src.mk
+
+
 SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebuf.c \
-	extmod/modnetwork.c extmod/modsocket.c extmod/modasyncio.c extmod/modjson.c \
-	extmod/modre.c extmod/modtime.c extmod/modselect.c common/network_metal_nic.c \
-	common/modssh.c
+	extmod/modnetwork.c extmod/modlwip.c extmod/network_lwip.c extmod/modasyncio.c extmod/modjson.c \
+	extmod/modre.c extmod/modtime.c extmod/modselect.c bringup/network_metal_nic.c
 
 OBJ = $(PY_CORE_O)
 OBJ += $(BUILD)/frozen_content.o
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
-OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_smp.o $(BUILD)/metal_ap_tramp.o $(BUILD)/metal_acpi.o $(BUILD)/metal_asgi.o $(BUILD)/metal_asgi_static.o $(BUILD)/metal_inspect.o $(BUILD)/metal_console.o
+OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_smp.o $(BUILD)/metal_ap_tramp.o $(BUILD)/metal_acpi.o $(BUILD)/metal_asgi.o $(BUILD)/metal_inspect.o $(BUILD)/metal_console.o
+OBJ += $(BUILD)/metal_mod_packs.o $(BUILD)/metal_pack_inspect.o $(BUILD)/metal_pack_metal.o
+OBJ += $(BUILD)/metal_boot_tree.o $(BUILD)/metal_externals.o $(BUILD)/metal_externals_rows.o $(BUILD)/metal_arch.o $(BUILD)/metal_ascii.o
+OBJ += $(BUILD)/metal_auth.o $(BUILD)/metal_trust.o $(BUILD)/metal_endian.o $(BUILD)/metal_fourcc.o $(BUILD)/metal_eightcc.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
+OBJ += $(BUILD)/metal_serial.o $(BUILD)/metal_shell_ui.o
+OBJ += $(BUILD)/metal_scanout.o $(BUILD)/metal_scanout_virtio_gpu.o $(BUILD)/metal_scanout_bochs.o
+OBJ += $(BUILD)/metal_scanout_radeon.o $(BUILD)/metal_scanout_i915.o
+OBJ += $(BUILD)/metal_scanout_gop_blt.o $(BUILD)/metal_scanout_lfb.o $(BUILD)/metal_gop_port.o $(BUILD)/metal_gop_stash.o
+OBJ += $(BUILD)/metal_gfx_compositor.o $(BUILD)/metal_gfx_text.o
+OBJ += $(BUILD)/metal_gfx_bringup.o $(BUILD)/metal_nic_bringup.o
+OBJ += $(BUILD)/metal_bge_metal.o $(BUILD)/metal_bge_netif.o $(BUILD)/metal_bge_port.o
 OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
-OBJ += $(BUILD)/metal_ip.o $(BUILD)/metal_udp.o $(BUILD)/metal_tcp.o $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
-OBJ += $(BUILD)/metal_dns.o $(BUILD)/metal_ntp.o $(BUILD)/metal_tftp.o $(BUILD)/metal_faces.o $(BUILD)/metal_upy_nic.o
+OBJ += $(BUILD)/metal_http.o $(BUILD)/metal_ssh.o $(BUILD)/metal_dhcp.o
+OBJ += $(BUILD)/metal_dns.o $(BUILD)/metal_ntp.o $(BUILD)/metal_tftp.o $(BUILD)/metal_faces.o $(BUILD)/metal_nic.o
 OBJ += $(BUILD)/metal_net_pump.o $(BUILD)/metal_ssh_pkt.o
 OBJ += $(BUILD)/metal_ssh_crypto.o $(BUILD)/metal_ssh_kex.o
 OBJ += $(BUILD)/metal_monocypher.o $(BUILD)/metal_monocypher_ed25519.o $(BUILD)/metal_sha256.o
+
+$(eval $(call GLUE_ATTACH))
+
+include $(PORT_DIR)/lwip.mk
+
+# mbedTLS + Metal net/tls (appends CFLAGS -I and OBJ)
+include $(PORT_DIR)/mbedtls.mk
 
 SSH_CRYPTO_INC := -I$(METAL)/third_party/monocypher -I$(METAL)/third_party/sha256
 
@@ -163,6 +221,8 @@ ifeq ($(LINK_WAMR),1)
 WAMR_LIB := $(BUILD)/wamr-fs/libwasmmod_wamr_freestanding.a
 OBJ += $(BUILD)/metal_platform.o $(BUILD)/metal_libc_stdlib.o $(BUILD)/metal_libc_string.o
 endif
+
+RUST_LIBS := $(METAL_RT_LIB)
 
 $(BUILD)/metal_mem.o: $(METAL)/src/pymergetic/metal/mem/port/mem.c | $(BUILD)
 	$(ECHO) "CC $<"
@@ -188,6 +248,78 @@ $(BUILD)/metal_kbd.o: $(METAL)/src/pymergetic/metal/dev/input/kbd.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
+$(BUILD)/metal_serial.o: $(METAL)/src/pymergetic/metal/dev/serial/__init__.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_shell_ui.o: $(METAL)/src/pymergetic/metal/shell/ui/viewport.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_scanout.o: $(METAL)/src/pymergetic/metal/dev/gfx/scanout.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_scanout_virtio_gpu.o: $(METAL)/src/pymergetic/metal/dev/gfx/scanout_virtio_gpu.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_scanout_bochs.o: $(METAL)/src/pymergetic/metal/dev/gfx/scanout_bochs.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_scanout_radeon.o: $(METAL)/src/pymergetic/metal/dev/gfx/scanout_radeon_rv370.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_scanout_i915.o: $(METAL)/src/pymergetic/metal/dev/gfx/scanout_i915_855gm.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_scanout_gop_blt.o: $(METAL)/src/pymergetic/metal/dev/gfx/scanout_gop_blt.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_scanout_lfb.o: $(METAL)/src/pymergetic/metal/dev/gfx/scanout_lfb_copy.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_gfx_compositor.o: $(METAL)/src/pymergetic/metal/dev/gfx/compositor.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_gfx_text.o: $(METAL)/src/pymergetic/metal/dev/gfx/text.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_gop_port.o: $(METAL)/src/pymergetic/metal/boot/platform/efi/gop_blt_port.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -DPM_METAL_BOOT_TARGET_EFI=1 -I$(EDK_INC) -c -o $@ $<
+
+$(BUILD)/metal_gop_stash.o: $(METAL)/src/pymergetic/metal/boot/platform/efi/gop_stash.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -DPM_METAL_BOOT_TARGET_EFI=1 -I$(EDK_INC) -I$(METAL)/src/pymergetic/metal/boot/platform/efi -c -o $@ $<
+
+$(BUILD)/metal_gfx_bringup.o: $(BRINGUP)/gfx_bringup.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_nic_bringup.o: $(BRINGUP)/nic_bringup.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_bge_metal.o: $(METAL)/src/pymergetic/metal/dev/net/bge/bge_metal.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -I$(METAL)/src/pymergetic/metal/dev/net/bge -c -o $@ $<
+
+$(BUILD)/metal_bge_netif.o: $(METAL)/src/pymergetic/metal/dev/net/bge/bge_netif.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -I$(METAL)/src/pymergetic/metal/dev/net/bge -c -o $@ $<
+
+$(BUILD)/metal_bge_port.o: $(METAL)/src/pymergetic/metal/dev/net/bge/bge_port.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
 $(BUILD)/metal_async.o: $(METAL)/src/pymergetic/metal/async/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
@@ -204,13 +336,55 @@ $(BUILD)/metal_acpi.o: $(METAL)/src/pymergetic/metal/dev/acpi/__init__.c | $(BUI
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_asgi.o: $(METAL)/src/pymergetic/metal/asgi/__init__.c | $(BUILD)
+$(BUILD)/metal_asgi.o: $(METAL)/src/pymergetic/metal/net/asgi/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -I$(METAL)/src/pymergetic/metal/asgi -c -o $@ $<
+	$(Q)$(CC) $(CFLAGS) -I$(METAL)/src/pymergetic/metal/net/asgi -c -o $@ $<
 
-$(BUILD)/metal_asgi_static.o: $(METAL)/src/pymergetic/metal/asgi/static_embed.c | $(BUILD)
+$(BUILD)/metal_boot_tree.o: $(METAL)/src/pymergetic/metal/boot/tree.c | $(BUILD)
 	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -I$(METAL)/src/pymergetic/metal/asgi -c -o $@ $<
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_externals.o: $(METAL)/src/pymergetic/metal/boot/externals.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_externals_rows.o: $(METAL)/src/pymergetic/metal/boot/externals_rows.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_arch.o: $(METAL)/src/pymergetic/metal/arch/arch.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_ascii.o: $(METAL)/src/pymergetic/metal/util/ascii.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_auth.o: $(METAL)/src/pymergetic/metal/auth/__init__.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -I$(METAL)/third_party/monocypher -c -o $@ $<
+
+$(BUILD)/metal_trust.o: $(METAL)/src/pymergetic/metal/trust/__init__.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -I$(METAL)/third_party/monocypher -c -o $@ $<
+
+$(BUILD)/metal_endian.o: $(METAL)/src/pymergetic/metal/util/endian/__init__.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_fourcc.o: $(METAL)/src/pymergetic/metal/util/fourcc/__init__.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_eightcc.o: $(METAL)/src/pymergetic/metal/util/eightcc/__init__.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+
+
+$(BUILD)/metal_mod_packs.o: $(METAL)/src/pymergetic/metal/pack/mod_packs.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_inspect.o: $(METAL)/src/pymergetic/metal/inspect/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
@@ -229,18 +403,6 @@ $(BUILD)/metal_virtio_pci.o: $(METAL)/src/pymergetic/metal/bus/virtio/virtio_pci
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_virtio_net.o: $(METAL)/src/pymergetic/metal/dev/net/virtio_net.c | $(BUILD)
-	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
-
-$(BUILD)/metal_ip.o: $(METAL)/src/pymergetic/metal/net/ip/__init__.c | $(BUILD)
-	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
-
-$(BUILD)/metal_udp.o: $(METAL)/src/pymergetic/metal/net/ip/udp.c | $(BUILD)
-	$(ECHO) "CC $<"
-	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
-
-$(BUILD)/metal_tcp.o: $(METAL)/src/pymergetic/metal/net/ip/tcp.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -292,7 +454,7 @@ $(BUILD)/metal_faces.o: $(METAL)/src/pymergetic/metal/net/faces/__init__.c | $(B
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_upy_nic.o: $(METAL)/src/pymergetic/metal/net/upy_nic/__init__.c | $(BUILD)
+$(BUILD)/metal_nic.o: $(METAL)/src/pymergetic/metal/net/nic/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -305,7 +467,7 @@ $(BUILD)/metal_ssh_pkt.o: $(METAL)/src/pymergetic/metal/net/ssh/packet.c | $(BUI
 	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
 
 ifeq ($(LINK_WAMR),1)
-$(BUILD)/metal_platform.o: $(METAL)/src/pymergetic/metal/wasm/port/platform/metal_platform.c | $(BUILD)
+$(BUILD)/metal_platform.o: $(METAL)/src/pymergetic/metal/wamr_host/port/platform/metal_platform.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -I$(WASMMOD)/third_party/wamr/core/shared/platform/include \
 		-c -o $@ $<
@@ -323,8 +485,8 @@ $(WAMR_LIB): $(WASMMOD)/ports/metal/wamr_freestanding.mk
 	$(Q)$(MAKE) -f $(WASMMOD)/ports/metal/wamr_freestanding.mk \
 		OUT_DIR=$(BUILD)/wamr-fs \
 		WAMR_DIR=$(WASMMOD)/third_party/wamr \
-		METAL_PLAT_INC=$(METAL)/src/pymergetic/metal/wasm/port/platform \
-		METAL_PORT_INC=$(METAL)/src/pymergetic/metal/wasm/port \
+		METAL_PLAT_INC=$(METAL)/src/pymergetic/metal/wamr_host/port/platform \
+		METAL_PORT_INC=$(METAL)/src/pymergetic/metal/wamr_host/port \
 		METAL_LIBC_INC=$(METAL)/include/pymergetic/metal/libc \
 		METAL_SRC_INC=$(METAL) \
 		METAL_INCLUDE_INC=$(METAL)/include \
@@ -343,21 +505,32 @@ all: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 $(BUILD):
 	$(MKDIR) -p $@
 
-$(BUILD)/BOOTX64.EFI: $(OBJ) $(WAMR_LIB) | $(BUILD)
+$(BUILD)/BOOTX64.EFI: $(OBJ) $(WAMR_LIB) $(RUST_LIBS) | $(BUILD)
 	$(ECHO) "LINK $@"
 	@if [ -n "$(LLD_LINK)" ]; then \
-	  $(LLD_LINK) -subsystem:efi_application -entry:UefiMain -out:$@ $(OBJ) $(WAMR_LIB); \
+	  $(LLD_LINK) -subsystem:efi_application -entry:UefiMain -out:$@ \
+	    -map:$(BUILD)/BOOTX64.map \
+	    -include:pm_metal_rt_halt -include:pm_metal_rt_connect_symbols \
+	    -include:pm_metal_fs_wasmmod_mount_mpwp \
+	    $(OBJ) $(WAMR_LIB) -wholearchive:$(METAL_RT_LIB); \
 	else \
 	  echo "note: lld-link via docker"; \
 	  printf '%s\n' $(OBJ) $(WAMR_LIB) | sed 's|^$(BUILD)/||' > $(BUILD)/obj.rsp; \
-	  docker run --rm -v $(abspath $(BUILD)):/b -w /b ubuntu:24.04 bash -lc '\
+	  docker run --rm -v $(abspath $(BUILD)):/b -v $(abspath $(dir $(METAL_RT_LIB))):/rt -w /b ubuntu:24.04 bash -lc '\
 	    set -euo pipefail; \
 	    export DEBIAN_FRONTEND=noninteractive; \
 	    apt-get update -qq; \
 	    apt-get install -y -qq lld >/tmp/apt.log; \
 	    mapfile -t objs < obj.rsp; \
-	    lld-link -subsystem:efi_application -entry:UefiMain -out:BOOTX64.EFI "$${objs[@]}"'; \
+	    lld-link -subsystem:efi_application -entry:UefiMain -out:BOOTX64.EFI -map:BOOTX64.map \
+	      -include:pm_metal_rt_halt -include:pm_metal_rt_connect_symbols \
+	      -include:pm_metal_fs_wasmmod_mount_mpwp \
+	      "$${objs[@]}" -wholearchive:/rt/$(notdir $(METAL_RT_LIB))'; \
 	fi
+	$(Q)grep -q 'pm_metal_rt_halt' $(BUILD)/BOOTX64.map \
+		|| (echo "FAIL: pm_metal_rt_halt missing in EFI map (Rust rt)" >&2; exit 1)
+	$(Q)grep -q 'pm_metal_fs_wasmmod_mount_mpwp' $(BUILD)/BOOTX64.map \
+		|| (echo "FAIL: pm_metal_fs_wasmmod_mount_mpwp missing in EFI map" >&2; exit 1)
 
 $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI: $(BUILD)/BOOTX64.EFI
 	$(MKDIR) -p $(BUILD)/esp/EFI/BOOT
@@ -372,16 +545,18 @@ repl: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	timeout 40s bash -c '\
 	  ( sleep 12; printf "print(1+1)\r\n"; sleep 2; printf "\x04"; sleep 1; ) \
 	  | $(QEMU) $(QEMU_MACHINE) \
-		-display none -serial stdio -monitor none \
+		$(QEMU_DISPLAY) -serial stdio -monitor none \
 		-netdev $(NETDEV_USER) -device virtio-net-pci,netdev=n0 \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF) \
 		-drive format=raw,file=fat:rw:$(BUILD)/esp \
 		>$(BUILD)/serial.log 2>&1'; \
 	ec=$$?; \
 	echo "----- serial (trimmed) -----"; \
-	grep -a -E "metal |bringup|repl|>>>|MicroPython|^2$$|print|Traceback" $(BUILD)/serial.log 2>/dev/null | tail -50 || true; \
-	if grep -a -q "metal repl" $(BUILD)/serial.log \
-	  && tr -d '\r' <$(BUILD)/serial.log | grep -qx "2"; then \
+	tr -d '\r' <$(BUILD)/serial.log | grep -E "metal |bringup|repl|>>>|MicroPython|^2$$|print|Traceback|AttributeError|Metal Python" | tail -50 || true; \
+	if grep -a -q "MetalPython" $(BUILD)/serial.log \
+	  && grep -a -q ">>>" $(BUILD)/serial.log \
+	  && tr -d '\r' <$(BUILD)/serial.log | grep -qx "2" \
+	  && ! tr -d '\r' <$(BUILD)/serial.log | grep -q "AttributeError"; then \
 	  echo "X86_64_UEFI_REPL_OK ENGINE=$(ENGINE)"; exit 0; \
 	fi; \
 	echo "X86_64_UEFI_REPL_FAIL ENGINE=$(ENGINE) qemu_ec=$$ec"; \
@@ -393,7 +568,7 @@ run: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	@set +e; \
 	rm -f $(BUILD)/serial.log; \
 	$(QEMU) $(QEMU_MACHINE) \
-		-display none -serial file:$(BUILD)/serial.log \
+		$(QEMU_DISPLAY) -serial file:$(BUILD)/serial.log \
 		-netdev $(NETDEV_USER),hostfwd=tcp::22022-:22 -device virtio-net-pci,netdev=n0 \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF) \
 		-drive format=raw,file=fat:rw:$(BUILD)/esp & \
@@ -446,7 +621,7 @@ live-http: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	@set +e; \
 	rm -f $(BUILD)/serial.log; \
 	$(QEMU) $(QEMU_MACHINE) \
-		-display none -serial file:$(BUILD)/serial.log \
+		$(QEMU_DISPLAY) -serial file:$(BUILD)/serial.log \
 		-netdev $(NETDEV_USER),hostfwd=tcp::18080-:80,hostfwd=tcp::22022-:22 \
 		-device virtio-net-pci,netdev=n0 \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF) \
@@ -510,7 +685,7 @@ live-ssh: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	@set +e; \
 	rm -f $(BUILD)/serial.log; \
 	$(QEMU) $(QEMU_MACHINE) \
-		-display none -serial file:$(BUILD)/serial.log \
+		$(QEMU_DISPLAY) -serial file:$(BUILD)/serial.log \
 		-netdev $(NETDEV_USER),hostfwd=tcp::22022-:22 \
 		-device virtio-net-pci,netdev=n0 \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF) \

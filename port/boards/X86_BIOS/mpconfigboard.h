@@ -1,0 +1,2 @@
+#define MICROPY_HW_BOARD_NAME "X86_BIOS"
+#define MICROPY_HW_MCU_NAME   "i686"

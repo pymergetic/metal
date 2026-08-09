@@ -1,0 +1,31 @@
+# Drop-in style notes for OpenWrt dnsmasq / PXE.
+# Path ideas: /etc/dnsmasq.conf  (conf-file= from UCI) or /etc/dnsmasq.d/metal.conf
+#
+# First stage MUST be a small iPXE NBP (undionly.kpxe / ipxe.efi).
+# Never dhcp-boot=metal.elf — "NBP is too big for base memory".
+# Second DHCP (iPXE option 175) → metal.ipxe → metal.elf / metal.efi (lab or CDN).
+
+# Tag clients that already speak iPXE (option 175).
+dhcp-match=set:ipxe,175
+
+# DHCP option 93 = client system architecture (RFC 4578) — first-stage NBP gate.
+#   0  = BIOS / pcbios          → undionly.kpxe
+#   7  = EFI x86-64             → ipxe.efi
+#   9  = EFI x86-64 (obsolete)
+# After iPXE runs, metal.ipxe further gates on ${platform}/${arch} for the image.
+dhcp-match=set:bios,option:client-arch,0
+dhcp-match=set:efi64,option:client-arch,7
+dhcp-match=set:efi64,option:client-arch,9
+
+dhcp-boot=tag:!ipxe,tag:bios,undionly.kpxe
+dhcp-boot=tag:!ipxe,tag:efi64,ipxe.efi
+# Fallback if arch match missing (BIOS lab):
+dhcp-boot=tag:!ipxe,undionly.kpxe
+dhcp-boot=tag:ipxe,metal.ipxe
+
+# Optional: site CDN for the guest (metal DHCP option 224).
+# Plain URL = add/prepend; "replace:https://…" = only that shelf; "off" = none.
+# dhcp-option=224,"https://cdn.example/cdn"
+# dhcp-option=224,"replace:https://cdn.example/cdn"
+
+# enable-tftp + tftp-root=/storage/tftp   (OpenWrt: luci / uci dhcp)

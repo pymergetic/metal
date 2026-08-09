@@ -5,8 +5,7 @@
 #include <string.h>
 
 #include "pymergetic/metal/net/ip/__init__.h"
-#include "pymergetic/metal/net/ip/internal.h"
-#include "pymergetic/metal/net/ip/udp.h"
+#include "pymergetic/metal/net/ip/sock.h"
 
 #define DNS_PORT 53u
 #define DNS_CLIENT_PORT 49510u
@@ -252,38 +251,42 @@ int32_t pm_metal_net_dns_resolve(const char *name, uint32_t *addr_out)
     q[14u + name_len] = 0x00u;
     q[15u + name_len] = 0x01u;
 
-    if (pm_metal_net_ip_udp_bind(DNS_CLIENT_PORT) != 0) {
-        return -1;
-    }
-    if (arp_wait(server, 256) != 0) {
-        if (arp_wait(PM_METAL_NET_IP_DEFAULT_GW, 256) != 0) {
+    {
+        pm_metal_net_ip_sock_h uh =
+            pm_metal_net_ip_socket(PM_METAL_NET_IP_AF_INET, PM_METAL_NET_IP_SOCK_DGRAM);
+        if (uh == PM_METAL_NET_IP_SOCK_INVALID) {
             return -1;
         }
-    }
-
-    for (attempt = 0; attempt < 4 && !got; attempt++) {
-        for (i = 0; i < 16; i++) {
-            rc = pm_metal_net_ip_udp_sendto(server, DNS_PORT, q, (uint32_t)(16u + name_len));
-            if (rc == 0) {
-                break;
-            }
-            if (rc != -2) {
+        if (pm_metal_net_ip_bind(uh, DNS_CLIENT_PORT) != 0) {
+            pm_metal_net_ip_close(uh);
+            return -1;
+        }
+        if (arp_wait(server, 256) != 0) {
+            if (arp_wait(PM_METAL_NET_IP_DEFAULT_GW, 256) != 0) {
+                pm_metal_net_ip_close(uh);
                 return -1;
             }
-            pm_metal_net_ip_poll();
         }
-        if (rc != 0) {
-            return -1;
-        }
-        for (i = 0; i < 6000; i++) {
-            pm_metal_net_ip_poll();
-            if (pm_metal_net_ip_udp_recv(&src_ip, &src_port, rx, sizeof(rx), &rx_len) == 1) {
-                if (src_port == DNS_PORT && parse_a_answer(rx, rx_len, xid, &addr) == 0) {
-                    got = 1;
-                    break;
+
+        for (attempt = 0; attempt < 4 && !got; attempt++) {
+            rc = (int32_t)pm_metal_net_ip_sendto_ip4(uh, server, DNS_PORT, q,
+                                                     (uint32_t)(16u + name_len));
+            if (rc == 0) {
+                pm_metal_net_ip_close(uh);
+                return -1;
+            }
+            for (i = 0; i < 6000; i++) {
+                pm_metal_net_ip_poll();
+                if (pm_metal_net_ip_try_recvfrom_ip4(uh, &src_ip, &src_port, rx, sizeof(rx),
+                                                     &rx_len) == 1) {
+                    if (src_port == DNS_PORT && parse_a_answer(rx, rx_len, xid, &addr) == 0) {
+                        got = 1;
+                        break;
+                    }
                 }
             }
         }
+        pm_metal_net_ip_close(uh);
     }
     if (!got) {
         return -2;

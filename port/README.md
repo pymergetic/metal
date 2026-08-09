@@ -1,6 +1,17 @@
 # metal/port
 
-Thin µPy board face. Muscles live under `extmod/metal/{include,src}/…`.
+MicroPython **port** only: boards, HAL, upy knobs, image boot/bringup/smoke,
+seat variants. Product faces live beside this tree:
+
+- `../include/` · `../src/` — C ABI + callees  
+- `../glue/` · `../typings/` — µPy nest + stubs (path == module)  
+- Frozen CORE Py (inspect/arch/…) from `../src/` via `manifest*.py` (nest builtins own parents)
+
+Build outputs land under [`build/`](build/) (one tree per board/engine/mode).
+
+Netboot (OpenWrt / SSH): [`../deploy/`](../deploy/) — `bootserver/` +
+`upload-bootserver` (iPXE + config; image from metal-cdn).
+LIVE firmware proofs: [`live/`](live/).
 
 ```bash
 # CI smoke battery
@@ -12,12 +23,12 @@ make -C ports/metal BOARD=X86_64_BIOS ENGINE=mp repl
 make -C ports/metal BOARD=X86_64_UEFI ENGINE=mp repl
 ```
 
-## µPy modules
+## µPy modules (wired from this port)
 
-| Module | Impl | IDE stub |
-|--------|------|----------|
-| `network.LAN` | `common/network_metal_nic.c` | — |
+| Import | Glue | Stub |
+|--------|------|------|
+| `pymergetic.metal.util.lz4` | `../glue/.../util/lz4.c` | `../typings/.../util/lz4.pyi` |
+| `pymergetic.metal.net.ssh` | `../glue/.../net/ssh.c` (firmware) | `../typings/.../net/ssh.pyi` |
+| `network.LAN` | `bringup/network_metal_nic.c` | — |
 | `socket` / `framebuf` | upstream µPy + Metal NIC | — |
-| `ssh` | `common/modssh.c` | `typings/ssh.pyi` |
 
-See `typings/README.md` for pyright `stubPath` setup.

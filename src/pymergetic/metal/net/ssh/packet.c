@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include "monocypher.h"
-#include "pymergetic/metal/net/ip/tcp.h"
+#include "pymergetic/metal/net/ip/sock.h"
 
 static uint8_t g_acc[PM_METAL_SSH_PKT_ACC];
 static uint32_t g_acc_len;
@@ -12,6 +12,42 @@ static uint8_t g_key_c2s[64];
 static uint8_t g_key_s2c[64];
 static uint32_t g_seq_out; /* server→client */
 static uint32_t g_seq_in;  /* client→server */
+static pm_metal_net_ip_sock_h g_sock;
+
+void pm_metal_net_ssh_pkt_bind_sock(uint32_t sock_h)
+{
+    g_sock = (pm_metal_net_ip_sock_h)sock_h;
+}
+
+static int32_t sock_send(const void *data, uint32_t len)
+{
+    if (g_sock == PM_METAL_NET_IP_SOCK_INVALID || data == NULL || len == 0u) {
+        return -1;
+    }
+    return pm_metal_net_ip_send(g_sock, data, len) == len ? 0 : -1;
+}
+
+static int32_t sock_recv(uint8_t *buf, uint32_t cap, uint32_t *n_out)
+{
+    uint32_t n;
+
+    if (n_out == NULL || buf == NULL || cap == 0u) {
+        return -1;
+    }
+    *n_out = 0;
+    if (g_sock == PM_METAL_NET_IP_SOCK_INVALID) {
+        return -1;
+    }
+    n = pm_metal_net_ip_try_recv(g_sock, buf, cap);
+    if (n == 0u) {
+        return 0;
+    }
+    if (n == (uint32_t)-1) {
+        return -1;
+    }
+    *n_out = n;
+    return 1;
+}
 
 static void put_u32(uint8_t *p, uint32_t v)
 {
@@ -107,7 +143,7 @@ static int32_t send_clear(const uint8_t *payload, uint32_t payload_len)
     for (i = 0; i < pad; i++) {
         pkt[5u + payload_len + i] = (uint8_t)(0xa5u ^ (uint8_t)i);
     }
-    return pm_metal_net_ip_tcp_send(pkt, 4u + pkt_len);
+    return sock_send(pkt, 4u + pkt_len);
 }
 
 static int32_t send_enc(const uint8_t *payload, uint32_t payload_len)
@@ -148,7 +184,7 @@ static int32_t send_enc(const uint8_t *payload, uint32_t payload_len)
     crypto_poly1305(mac, out, 4u + body_len, poly_key);
     memcpy(out + 4 + body_len, mac, 16);
     g_seq_out++;
-    return pm_metal_net_ip_tcp_send(out, 4u + body_len + 16u);
+    return sock_send(out, 4u + body_len + 16u);
 }
 
 int32_t pm_metal_net_ssh_pkt_send(const uint8_t *payload, uint32_t payload_len)
@@ -170,7 +206,7 @@ static int32_t recv_clear(uint8_t *payload, uint32_t cap, uint32_t *len_out)
     int32_t rc;
 
     *len_out = 0;
-    rc = pm_metal_net_ip_tcp_recv(chunk, sizeof(chunk), &n);
+    rc = sock_recv(chunk, sizeof(chunk), &n);
     if (rc == 1 && n > 0u) {
         if (g_acc_len + n > sizeof(g_acc)) {
             g_acc_len = 0;
@@ -224,7 +260,7 @@ static int32_t recv_enc(uint8_t *payload, uint32_t cap, uint32_t *len_out)
     int32_t rc;
 
     *len_out = 0;
-    rc = pm_metal_net_ip_tcp_recv(chunk, sizeof(chunk), &n);
+    rc = sock_recv(chunk, sizeof(chunk), &n);
     if (rc == 1 && n > 0u) {
         if (g_acc_len + n > sizeof(g_acc)) {
             g_acc_len = 0;

@@ -17,6 +17,7 @@ int32_t pm_metal_net_ssh_init(void);
 int32_t pm_metal_net_ssh_autoload(void);
 
 uint32_t pm_metal_net_ssh_listen(uint32_t port); /* handle, or 0 */
+void pm_metal_net_ssh_release(void); /* disarm poll; keep TCP for other faces */
 void pm_metal_net_ssh_close(uint32_t s);
 int32_t pm_metal_net_ssh_poll(void); /* drive server state; 1 = ident done */
 int32_t pm_metal_net_ssh_served(void);

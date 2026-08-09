@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include <pymergetic/metal/trust/__init__.h>
-#include <pymergetic/metal/log/__init__.h>
+#include <pymergetic/metal/log.h>
 
 #include "monocypher.h"
 

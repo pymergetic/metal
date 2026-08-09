@@ -20,6 +20,7 @@
 #include <pymergetic/metal/dev/net/__init__.h>
 #include <pymergetic/metal/log/__init__.h>
 #include <pymergetic/metal/net/ip/__init__.h>
+#include <pymergetic/metal/net/ip/lwip_start.h>
 #include <pymergetic/metal/net/ssh/__init__.h>
 #include <pymergetic/metal/net/http/server.h>
 #include <pymergetic/metal/net/http/__init__.h>
@@ -253,22 +254,15 @@ static int32_t seed_mem_partition(uint8_t *arena, size_t bytes)
 
 static int32_t net_dhcp_bringup(void)
 {
-  static const pm_metal_net_ip_l2_ops_t virtio_l2 = {
-    .open = pm_metal_dev_net_virtio_open,
-    .mac  = pm_metal_dev_net_virtio_mac,
-    .tx   = pm_metal_dev_net_virtio_tx,
-    .poll = (pm_metal_net_ip_l2_poll_fn)pm_metal_dev_net_virtio_poll,
-  };
   char     ip[16];
   uint64_t start;
   uint64_t deadline;
   int32_t  r;
 
-  /* Composition: L2 driver lives in dev/net; IP only sees ops. */
-  if (pm_metal_net_ip_l2_start("lwip+virtio-net", &virtio_l2) != 0) {
+  (void)pm_metal_net_ip_loopback_start();
+  if (pm_metal_net_ip_virtio_start() != 0) {
     return -1;
   }
-  (void)pm_metal_net_ip_loopback_start();
 
   ip[0]    = '\0';
   start    = pm_metal_time_mono_us();

@@ -5,8 +5,7 @@
 #include <string.h>
 
 #include "pymergetic/metal/net/ip/__init__.h"
-#include "pymergetic/metal/net/ip/internal.h"
-#include "pymergetic/metal/net/ip/udp.h"
+#include "pymergetic/metal/net/ip/sock.h"
 
 #define TFTP_PORT 69u
 #define TFTP_CLIENT_PORT 49569u
@@ -81,64 +80,62 @@ int32_t pm_metal_net_tftp_get(uint32_t server_ip, const char *filename,
     o += 5;
     req[o++] = 0;
 
-    if (pm_metal_net_ip_udp_bind(TFTP_CLIENT_PORT) != 0) {
-        return -1;
-    }
-    if (arp_wait(server_ip, 256) != 0) {
-        if (arp_wait(PM_METAL_NET_IP_DEFAULT_GW, 256) != 0) {
+    {
+        pm_metal_net_ip_sock_h uh =
+            pm_metal_net_ip_socket(PM_METAL_NET_IP_AF_INET, PM_METAL_NET_IP_SOCK_DGRAM);
+        if (uh == PM_METAL_NET_IP_SOCK_INVALID) {
             return -1;
         }
-    }
+        if (pm_metal_net_ip_bind(uh, TFTP_CLIENT_PORT) != 0) {
+            pm_metal_net_ip_close(uh);
+            return -1;
+        }
+        if (arp_wait(server_ip, 256) != 0) {
+            if (arp_wait(PM_METAL_NET_IP_DEFAULT_GW, 256) != 0) {
+                pm_metal_net_ip_close(uh);
+                return -1;
+            }
+        }
 
-    for (attempt = 0; attempt < 4 && !got; attempt++) {
-        for (i = 0; i < 16; i++) {
-            rc = pm_metal_net_ip_udp_sendto(server_ip, TFTP_PORT, req, (uint32_t)o);
+        for (attempt = 0; attempt < 4 && !got; attempt++) {
+            rc = (int32_t)pm_metal_net_ip_sendto_ip4(uh, server_ip, TFTP_PORT, req, (uint32_t)o);
             if (rc == 0) {
+                pm_metal_net_ip_close(uh);
+                return -1;
+            }
+            for (i = 0; i < 8000; i++) {
+                pm_metal_net_ip_poll();
+                if (pm_metal_net_ip_try_recvfrom_ip4(uh, &src_ip, &src_port, rx, sizeof(rx),
+                                                     &rx_len) != 1) {
+                    continue;
+                }
+                if (src_ip != server_ip || rx_len < 4u) {
+                    continue;
+                }
+                if (get_u16(rx) == TFTP_ERROR) {
+                    pm_metal_net_ip_close(uh);
+                    return -1;
+                }
+                if (get_u16(rx) != TFTP_DATA || get_u16(rx + 2) != 1u) {
+                    continue;
+                }
+                tid = src_port;
+                {
+                    uint32_t payload = rx_len - 4u;
+                    if (payload > cap) {
+                        payload = cap;
+                    }
+                    memcpy(buf, rx + 4, payload);
+                    *len_out = payload;
+                }
+                put_u16(ack, TFTP_ACK);
+                put_u16(ack + 2, 1u);
+                (void)pm_metal_net_ip_sendto_ip4(uh, server_ip, tid, ack, 4u);
+                got = 1;
                 break;
             }
-            if (rc != -2) {
-                return -1;
-            }
-            pm_metal_net_ip_poll();
         }
-        if (rc != 0) {
-            return -1;
-        }
-        for (i = 0; i < 8000; i++) {
-            pm_metal_net_ip_poll();
-            if (pm_metal_net_ip_udp_recv(&src_ip, &src_port, rx, sizeof(rx), &rx_len) != 1) {
-                continue;
-            }
-            if (src_ip != server_ip || rx_len < 4u) {
-                continue;
-            }
-            if (get_u16(rx) == TFTP_ERROR) {
-                return -1;
-            }
-            if (get_u16(rx) != TFTP_DATA || get_u16(rx + 2) != 1u) {
-                continue;
-            }
-            tid = src_port;
-            {
-                uint32_t payload = rx_len - 4u;
-                if (payload > cap) {
-                    payload = cap;
-                }
-                memcpy(buf, rx + 4, payload);
-                *len_out = payload;
-            }
-            put_u16(ack, TFTP_ACK);
-            put_u16(ack + 2, 1u);
-            for (i = 0; i < 16; i++) {
-                rc = pm_metal_net_ip_udp_sendto(server_ip, tid, ack, 4u);
-                if (rc == 0 || rc != -2) {
-                    break;
-                }
-                pm_metal_net_ip_poll();
-            }
-            got = 1;
-            break;
-        }
+        pm_metal_net_ip_close(uh);
     }
     return got ? 0 : -2;
 }

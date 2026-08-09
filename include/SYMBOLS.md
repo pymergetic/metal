@@ -1,46 +1,25 @@
-# Metal SYMBOLS — C ↔ RS ↔ Py (what links today)
+# Symbol names: C ↔ Rust ↔ Python (Metal)
 
-Callee = one language in `src/`. Names below are the C ABI border (`pm_metal_<path>_*`).
+Grouped by `include/pymergetic/metal/<path>`. Path == module.
 
-## async
+Coverage % / async compliance / maintain hints:
+[`../docs/MODULE_MATRIX.md`](../docs/MODULE_MATRIX.md).
 
-| C | Notes |
-|---|--------|
-| `pm_metal_async_start` | N runners from ACPI count (product: N≥2) |
-| `pm_metal_async_run_poll` | After SMP: current CPU only |
-| `pm_metal_async_run_poll_cpu` | Explicit runner |
-| `pm_metal_async_run_loop_cpu` | AP forever loop |
-| `pm_metal_async_create_task` / `_on` / `_prio` | RR or pinned; H/M/L tag |
-| `pm_metal_async_set_prio` / `get_prio` | shared coop classes |
-| `pm_metal_async_sleep_us` / `yield` / `await` | timing + handles |
-| `pm_metal_smp_start` | BIOS INIT-SIPI · UEFI EFI MP |
-| `pm_metal_smp_cpu_index` / `online_count` | per-CPU |
+Columns: **C** · **RS** · **Python** · **Seat** · **Status**
 
-## dev/acpi
+| Path | C | RS | Python | Seat | Status |
+|------|---|----|--------|------|--------|
+| `util.lz4` | `pm_metal_util_lz4_*` | callee `__init__.rs` | `pymergetic.metal.util.lz4` | all | ok |
+| `util.size` | `pm_metal_util_size_*` | callee `__init__.rs` / C twin browser | `pymergetic.metal.util.size` | all | ok |
+| `util.fourcc` | `pm_metal_util_fourcc_*` | — | `pymergetic.metal.util.fourcc` | all | ok |
+| `util.eightcc` | `pm_metal_util_eightcc_*` | — | `pymergetic.metal.util.eightcc` | all | ok |
+| `util.tar` | `pm_metal_util_tar_*` | callee `__init__.rs` | `pymergetic.metal.util.tar` | firmware | ok |
+| `util.endian` | `pm_metal_util_endian_*` (+ `*_inline`) | — | `pymergetic.metal.util.endian` | all | ok |
+| `auth` | `pm_metal_auth_*` | — | `pymergetic.metal.auth` | all | ok |
+| `trust` | `pm_metal_trust_*` | — | `pymergetic.metal.trust` | all | ok |
+| `externals` | `pm_metal_external_*` | — | `pymergetic.metal.externals` | all | ok |
+| `net.ip` | `pm_metal_net_ip_*` | FFI face | `pymergetic.metal.net.ip` | firmware | ok |
+| `net.wg` | `pm_metal_net_wg_*` | FFI face | `pymergetic.metal.net.wg` | firmware | ok |
+| `net.ssh` | `pm_metal_net_ssh_*` | face `__init__.rs` | `pymergetic.metal.net.ssh` | firmware | ok |
 
-| C | Notes |
-|---|--------|
-| `pm_metal_dev_acpi_init` | RSDP + MADT |
-| `pm_metal_dev_acpi_cpu_count` / `apic_id` / `lapic_base` | SMP |
-| `pm_metal_dev_acpi_set_rsdp` / `rsdp` | EFI seed |
-
-## net (packaged)
-
-| C prefix | Callee |
-|----------|--------|
-| `pm_metal_net_ip_*` | C `net/ip/` |
-| `pm_metal_net_dhcp_*` | C `net/dhcp/` |
-| `pm_metal_net_dns_*` | C `net/dns/` |
-| `pm_metal_net_http_*` | C `net/http/` (mini server/client — not ASGI) |
-| `pm_metal_net_ntp_*` | C `net/ntp/` |
-| `pm_metal_net_tftp_*` | C `net/tftp/` |
-| `pm_metal_net_ssh_*` | C `net/ssh/` (ident+KEX through NEWKEYS; encrypt/auth TODO) |
-| `pm_metal_net_pump_*` | C `net/pump/` |
-| `pm_metal_net_faces_*` | C `net/faces/` |
-| `pm_metal_net_upy_nic_*` | C `net/upy_nic/` |
-
-## Not in product tree (do not document as landed)
-
-- ASGI / Microdot Inspect UI (`asgi/`, `pymergetic.metal.inspect` mod) — planned
-- `crates/pm_metal/` full façade — pending
-- `typings/pymergetic/metal/` full tree — pending
+Missing seat ⇒ module **not nested** ⇒ `ImportError` (no stub `-1`).

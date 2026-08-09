@@ -10,14 +10,14 @@ def self_description(host_role, theme, **extra):
     """
     if host_role == "cdn":
         name = "pymergetic.wasmmod"
-        role = "host"
+        role = "engine"
         product = "wasmmod"
         static_backend = "none"
     else:
         name = "pymergetic.metal"
         role = "kernel"
         product = "metal"
-        static_backend = "embed"
+        static_backend = "wasmmod"
     body = {
         "schema": 1,
         "name": name,
@@ -26,10 +26,10 @@ def self_description(host_role, theme, **extra):
         "org": "pymergetic",
         "theme": theme,
         "has_source": False,
-        "has_pack": False,
+        "has_pack": host_role != "cdn",
         "static_backend": static_backend,
         "source_files": [],
-        "pack_files": [],
+        "pack_files": (["httpd.json"] if host_role != "cdn" else []),
         "tags": {"role": role, "product": product, "org": "pymergetic"},
     }
     body.update(extra)

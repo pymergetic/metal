@@ -1,0 +1,10 @@
+[package]
+name = "pymergetic_metal_async"
+version = "0.1.0"
+edition = "2021"
+description = "RS face marker — product async callee is C (async/__init__.c)"
+publish = false
+
+[lib]
+path = "../../src/pymergetic/metal/async/__init__.rs"
+crate-type = ["rlib"]

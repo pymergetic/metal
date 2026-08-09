@@ -1,9 +1,10 @@
-/* Freestanding BIOS entry — smoke battery OR lean product REPL. */
+/* Freestanding BIOS entry — smoke battery OR lean product REPL / live services. */
 #include <stdint.h>
 
 #include "io.h"
 #include "main_upy.h"
 #include "product_bringup.h"
+#include "pymergetic/metal/rt.h"
 #include "console_smoke.h"
 #include "floor_smoke.h"
 #include "net_smoke.h"
@@ -47,6 +48,12 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
     uart_init();
     uart_puts("metal X86_64_BIOS\n");
 
+    /* Keep freestanding Rust rt in the image (--gc-sections). */
+    if (pm_metal_rt_connect_symbols() != 0) {
+        uart_puts("rt connect fail\n");
+        bios_halt_fail();
+    }
+
 #if METAL_UPY_SMOKE
     if (pm_metal_console_smoke() != 0 ||
         pm_metal_floor_smoke() != 0 ||
@@ -63,14 +70,7 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
         bios_halt_fail();
     }
 #endif
-#else
-    if (pm_metal_product_bringup() != 0) {
-        bios_halt_fail();
-    }
-#endif
-
-    mp_metal_upy_run(METAL_UPY_SMOKE);
-
+    mp_metal_upy_run(1);
 #if METAL_LIVE_SSH
     pm_metal_live_ssh();
 #elif METAL_LIVE
@@ -80,5 +80,22 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info)
     for (;;) {
         __asm__ volatile("hlt");
     }
+#endif
+#else
+    /* Product bring-up: REPL, or LIVE services loop (no smoke battery). */
+    if (pm_metal_product_bringup() != 0) {
+        bios_halt_fail();
+    }
+#if METAL_LIVE_SSH && !METAL_LIVE
+    pm_metal_live_ssh();
+#elif METAL_LIVE
+    pm_metal_live_http();
+#else
+    mp_metal_upy_run(0);
+    outw(0x501u, 0u);
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+#endif
 #endif
 }

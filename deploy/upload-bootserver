@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+# Push MetalPython netboot bits to an OpenWrt / SSH TFTP root.
+#
+# Boot server holds ONLY:
+#   metal.ipxe     = iPXE config (chainloads image from CDN)
+#   undionly.kpxe  = BIOS first-stage NBP
+#   ipxe.efi       = UEFI first-stage NBP
+#
+# The MetalPython image is NOT on this box — it lives on metal-cdn
+# (METAL_PXE_CDN_URL / artifacts/lead/pymergetic.metal.arch.*).
+#
+# Usage:
+#   deploy/upload-bootserver              # config + ensure NBPs
+#   deploy/upload-bootserver --skip-nbp   # only metal.ipxe
+#   deploy/upload-bootserver --nbp PATH   # use local NBP instead of download
+#   deploy/upload-bootserver --image PATH # OPTIONAL CDN-miss fallback park (not normal)
+#   deploy/upload-bootserver --dry-run
+#
+# Env:
+#   METAL_PXE_HOST=192.168.10.1
+#   METAL_PXE_USER=root
+#   METAL_PXE_PATH=/storage/tftp
+#   METAL_PXE_SSH_OPTS=
+#   METAL_PXE_CDN_URL=https://cdn.pymergetic.com/cdn   # must be PXE-reachable
+#   METAL_BOOT_IMAGE_URL=…     # optional fallback URL baked into script
+#   METAL_BOOT_IMAGE_EFI_URL=…
+#   METAL_IPXE_BASE=http://boot.ipxe.org
+set -euo pipefail
+
+DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${DEPLOY}/.." && pwd)"
+TPL="${DEPLOY}/bootserver/metal.ipxe.tpl"
+HOST="${METAL_PXE_HOST:-192.168.10.1}"
+USER="${METAL_PXE_USER:-root}"
+DEST="${METAL_PXE_PATH:-/storage/tftp}"
+SSH_EXTRA="${METAL_PXE_SSH_OPTS:-}"
+# PXE clients must reach this CDN — never bake loopback.
+CDN_URL="${METAL_PXE_CDN_URL:-${METAL_CDN_URL:-https://cdn.pymergetic.com/cdn}}"
+IMAGE_URL="${METAL_BOOT_IMAGE_URL:-}"
+IMAGE_EFI_URL="${METAL_BOOT_IMAGE_EFI_URL:-}"
+IPXE_NAME="${METAL_BOOT_IPXE_NAME:-metal.ipxe}"
+IPXE_BASE="${METAL_IPXE_BASE:-http://boot.ipxe.org}"
+NBP_LOCAL=""
+IMAGE_LOCAL=""
+IMAGE_EFI_LOCAL=""
+SKIP_NBP=0
+ALLOW_LOOPBACK=0
+DRY=0
+
+NBP_NAMES=(undionly.kpxe ipxe.efi)
+
+usage() {
+	cat >&2 <<'EOF'
+usage: deploy/upload-bootserver [options]
+
+  Boot server = iPXE NBP + metal.ipxe only. Images come from CDN.
+
+  metal.ipxe           — iPXE config (kernel/chain → CDN lead artifacts)
+  undionly.kpxe / ipxe.efi — first-stage NBPs (fetch from boot.ipxe.org if missing)
+
+Options:
+  --nbp PATH         upload this local NBP (name preserved)
+  --skip-nbp         only push metal.ipxe
+  --image PATH       OPTIONAL: park metal.elf as CDN-miss fallback (not the normal path)
+  --image-efi PATH   OPTIONAL: park metal.efi as CDN-miss fallback
+  --allow-loopback   allow 127.0.0.1 in baked CDN URLs (same-host qemu only)
+  --dry-run          print rendered metal.ipxe; no ssh
+
+Env:
+  METAL_PXE_CDN_URL   CDN baked into metal.ipxe (default https://cdn.pymergetic.com/cdn)
+  METAL_PXE_HOST / METAL_PXE_USER / METAL_PXE_PATH / METAL_PXE_SSH_OPTS
+EOF
+	exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	-h | --help | help) usage ;;
+	--nbp)
+		NBP_LOCAL="${2:-}"
+		shift
+		;;
+	--skip-nbp) SKIP_NBP=1 ;;
+	--image)
+		IMAGE_LOCAL="${2:-}"
+		shift
+		;;
+	--image-efi)
+		IMAGE_EFI_LOCAL="${2:-}"
+		shift
+		;;
+	--allow-loopback) ALLOW_LOOPBACK=1 ;;
+	--dry-run) DRY=1 ;;
+	*) usage ;;
+	esac
+	shift
+done
+
+url_is_loopback() {
+	local u="${1:-}"
+	case "$u" in
+	*://127.0.0.1/* | *://127.0.0.1:* | *://localhost/* | *://localhost:* | *://[::1]/* | *://[::1]:*)
+		return 0
+		;;
+	esac
+	return 1
+}
+
+ssh_cmd() {
+	# shellcheck disable=SC2086
+	ssh ${SSH_EXTRA} "${USER}@${HOST}" "$@"
+}
+
+scp_put() {
+	local src="$1" dest_name="$2"
+	# shellcheck disable=SC2086
+	scp -O ${SSH_EXTRA} "${src}" "${USER}@${HOST}:${DEST}/${dest_name}"
+}
+
+remote_has() {
+	local name="$1"
+	ssh_cmd "test -s '${DEST}/${name}'"
+}
+
+fetch_url() {
+	local url="$1" out="$2"
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsSL --connect-timeout 20 -o "${out}" "${url}"
+	elif command -v wget >/dev/null 2>&1; then
+		wget -q -O "${out}" "${url}"
+	else
+		echo "upload-bootserver: need curl or wget to fetch ${url}" >&2
+		exit 1
+	fi
+	if [[ ! -s "${out}" ]]; then
+		echo "upload-bootserver: empty download: ${url}" >&2
+		exit 1
+	fi
+}
+
+ensure_nbp_on_server() {
+	local name="$1"
+	local url="${IPXE_BASE%/}/${name}"
+	local tmp local_nbp="${DEPLOY}/bootserver/nbp/${name}"
+
+	# Prefer freshly built HTTPS-capable NBPs (./deploy/bootserver/build-nbp.sh).
+	# Stock Ubuntu / boot.ipxe.org binaries are often too old for CDN TLS.
+	if [[ -f "${local_nbp}" ]]; then
+		echo "upload-bootserver: local HTTPS NBP → ${DEST}/${name}" >&2
+		scp_put "${local_nbp}" "${name}"
+		return 0
+	fi
+
+	if remote_has "${name}"; then
+		echo "upload-bootserver: NBP ${name} already on server — skip" >&2
+		return 0
+	fi
+	tmp="${WORKDIR}/${name}"
+	echo "upload-bootserver: fetch ${url}" >&2
+	fetch_url "${url}" "${tmp}"
+	echo "upload-bootserver: ${tmp} → ${USER}@${HOST}:${DEST}/${name}" >&2
+	scp_put "${tmp}" "${name}"
+}
+
+if [[ ! -f "${TPL}" ]]; then
+	echo "upload-bootserver: missing ${TPL}" >&2
+	exit 1
+fi
+
+# Fallback URLs only (CDN miss). Primary boot path always uses ${cdn-url}/artifacts/lead/…
+if [[ -z "${IMAGE_URL}" ]]; then
+	if [[ -n "${IMAGE_LOCAL}" ]]; then
+		IMAGE_URL="http://${HOST}:8080/metal.elf"
+	else
+		IMAGE_URL="${CDN_URL%/}/artifacts/lead/pymergetic.metal.arch.x86_64.elf"
+	fi
+fi
+if [[ -z "${IMAGE_EFI_URL}" ]]; then
+	if [[ -n "${IMAGE_EFI_LOCAL}" ]]; then
+		IMAGE_EFI_URL="http://${HOST}:8080/metal.efi"
+	else
+		IMAGE_EFI_URL="${CDN_URL%/}/artifacts/lead/pymergetic.metal.arch.x86_64.efi"
+	fi
+fi
+
+if [[ "${ALLOW_LOOPBACK}" -eq 0 ]]; then
+	if url_is_loopback "${CDN_URL}" || url_is_loopback "${IMAGE_URL}" || url_is_loopback "${IMAGE_EFI_URL}"; then
+		echo "upload-bootserver: refusing loopback CDN/image URL (PXE clients cannot reach your host's 127.0.0.1)" >&2
+		echo "upload-bootserver:   CDN_URL=${CDN_URL}" >&2
+		echo "upload-bootserver: set METAL_PXE_CDN_URL=https://cdn.pymergetic.com/cdn (PXE-reachable)" >&2
+		echo "upload-bootserver:   or pass --allow-loopback for a same-host qemu lab only" >&2
+		exit 1
+	fi
+fi
+
+WORKDIR="$(mktemp -d)"
+trap 'rm -rf "${WORKDIR}"' EXIT
+IPXE_OUT="${WORKDIR}/${IPXE_NAME}"
+
+sed \
+	-e "s|__NEXT_SERVER__|${HOST}|g" \
+	-e "s|__IMAGE_URL__|${IMAGE_URL}|g" \
+	-e "s|__IMAGE_EFI_URL__|${IMAGE_EFI_URL}|g" \
+	-e "s|__CDN_URL__|${CDN_URL}|g" \
+	"${TPL}" >"${IPXE_OUT}"
+
+echo "upload-bootserver: config ${IPXE_NAME} → ${USER}@${HOST}:${DEST}/" >&2
+echo "upload-bootserver:   boot server = iPXE NBP + cfg only" >&2
+echo "upload-bootserver:   images from CDN ${CDN_URL}" >&2
+echo "upload-bootserver:   BIOS  ${CDN_URL%/}/artifacts/lead/pymergetic.metal.arch.\${arch}.elf" >&2
+echo "upload-bootserver:   UEFI  ${CDN_URL%/}/artifacts/lead/pymergetic.metal.arch.\${arch}.efi" >&2
+
+if [[ "${DRY}" -eq 1 ]]; then
+	echo "----- ${IPXE_NAME} (config) -----" >&2
+	cat "${IPXE_OUT}"
+	echo "upload-bootserver: dry-run (no ssh)" >&2
+	exit 0
+fi
+
+ssh_cmd "mkdir -p '${DEST}'"
+scp_put "${IPXE_OUT}" "${IPXE_NAME}"
+
+if [[ "${SKIP_NBP}" -eq 0 ]]; then
+	if [[ -n "${NBP_LOCAL}" ]]; then
+		if [[ ! -f "${NBP_LOCAL}" ]]; then
+			echo "upload-bootserver: --nbp not a file: ${NBP_LOCAL}" >&2
+			exit 1
+		fi
+		echo "upload-bootserver: local NBP → ${DEST}/$(basename "${NBP_LOCAL}")" >&2
+		scp_put "${NBP_LOCAL}" "$(basename "${NBP_LOCAL}")"
+	else
+		for n in "${NBP_NAMES[@]}"; do
+			ensure_nbp_on_server "${n}"
+		done
+	fi
+fi
+
+if [[ -n "${IMAGE_LOCAL}" ]]; then
+	if [[ ! -f "${IMAGE_LOCAL}" ]]; then
+		echo "upload-bootserver: --image not a file: ${IMAGE_LOCAL}" >&2
+		exit 1
+	fi
+	echo "upload-bootserver: WARNING: parking fallback metal.elf (images normally from CDN)" >&2
+	scp_put "${IMAGE_LOCAL}" "metal.elf"
+fi
+
+if [[ -n "${IMAGE_EFI_LOCAL}" ]]; then
+	if [[ ! -f "${IMAGE_EFI_LOCAL}" ]]; then
+		echo "upload-bootserver: --image-efi not a file: ${IMAGE_EFI_LOCAL}" >&2
+		exit 1
+	fi
+	echo "upload-bootserver: WARNING: parking fallback metal.efi (images normally from CDN)" >&2
+	scp_put "${IMAGE_EFI_LOCAL}" "metal.efi"
+fi
+
+echo "upload-bootserver: TFTP (NBP + cfg — not the product image):" >&2
+ssh_cmd "ls -la '${DEST}/undionly.kpxe' '${DEST}/ipxe.efi' '${DEST}/${IPXE_NAME}'"
+
+echo "upload-bootserver: ok" >&2
+echo "upload-bootserver: DHCP: !ipxe+BIOS→undionly.kpxe  !ipxe+EFI64→ipxe.efi  ipxe→${IPXE_NAME}" >&2
+echo "upload-bootserver: then ${IPXE_NAME} pulls arch image from CDN" >&2
+echo "upload-bootserver: see ${DEPLOY}/bootserver/dnsmasq.metal.conf.example" >&2

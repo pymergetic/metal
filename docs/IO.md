@@ -37,7 +37,7 @@ Wait on the world → **async**. CPU work → **sync**. Same classes on host and
 - Each online CPU runs **its** `pm_metal_async_run_loop_cpu` (BIOS INIT-SIPI / UEFI EFI MP).
 - After `pm_metal_smp_start()`, `run_poll` drains **only the current CPU’s** runner; `create_task` still RR.
 - Never await while holding a lock. Coop only — multicore ≠ preemption.
-- Floor net is **mini-IP** (`pm_metal_net_ip_*` + packaged `net/<mod>/`). ASGI / lwIP multi-if are **not** landed.
+- Floor net is **lwIP** (`lib/lwip` + Metal `pm_metal_net_ip_*` socks/if-mgmt + µPy `modlwip` on the same stack). Named ifaces: `lo` / `ethN` / `wgN`. L4 is normal socks (`STREAM`/`DGRAM`) bound to real ports — services own their listen/conn handles (no shared dual-slot TCP / singleton UDP face). F7 + boot tree show status (no COM1 shell cmd registry).
 
 ---
 
@@ -87,11 +87,11 @@ Blk detectors: `pm_metal_blk_virtio_detect`, `pm_metal_blk_ide_detect` (legacy I
 
 ### Net (multi-if + DHCPv6)
 
-- Host ifs: always `lo` (127.0.0.1/8, ::1) plus `eth0`… (`PM_METAL_NET_IP_MAX_IFS`). Default route prefers ethN when present. Shell: `net status [lo|ethN]`, `net set [ethN] …`, `net set [ethN] dhcp`, `net set [ethN] dhcp6 off|stateless|stateful`.
+- Host ifs: always `lo` (127.0.0.1/8) plus `ethN` / `wgN` (slot budget `PM_METAL_NET_IP_MAX_IFS`). Default route prefers ethN when present. Status: F7 TUI + boot tree + C/RS/Py (`metalnet` / `pm_metal_net_ip_if_*`); no COM1 shell cmd registry.
 - **Iface events:** lwIP status/link/ext callbacks bump `pm_metal_net_ip_if_gen()`. Poll gen or `await pm_metal_net_ip_if_wait(since)` / Python `ip.if_gen()` + `await ip.if_wait(g)`. Snapshots: `ip.ifaces()` / `ip.iface([name])`. Guest WASI: `if_count`, `if_gen`, `if_wait`, `if_status_index`. Config `if_set*` stays host/shell.
 - **I/O budget:** wire chunk `PM_METAL_IO_WIRE_MAX` (32 KiB) for TLS/HTTP-client/py-recv; ASGI server iobuf `PM_METAL_ASGI_IO_MAX` (4 MiB). See `include/pymergetic/metal/net/io_budget.h`.
 - DHCPv6: **stateless** via lwIP; **stateful** via Metal client (`metal_dhcp6_stateful_*`) — lwIP `dhcp6_enable_stateful()` remains a stub.
-- Guest sockets: `pm_metal_net_ip_bind_if(h, "lo"|"eth0")` before connect/listen (NULL → default).
+- Guest sockets: `pm_metal_net_ip_socket` → `bind`/`bind_if`/`listen`/`accept`/`connect`/`send`/`recv`/`sendto` (NULL `bind_if` → any). Each service binds its own port(s); `:80` and `:22` coexist.
 - **Name layers:** `util/ip` = IPv4 literals only (`ip4_parse` / `ip4_is_literal`). Local nodename = sync `pm_metal_host_name_get/set` (default `metal`; shell `hostname`; optional `hostname=` in `metal/net.conf`; sent as DHCPv4 option 12). Resolve order for connect/dns: literal → `localhost`/nodename → VFS `/etc/hosts` (ESP `etc/hosts`) → async DNS. After successful `pm_metal_net_ip_dns` await: `pm_metal_net_ip_dns_last_ntoa` (guest/host). Shell: `nslookup <host>`.
 - **DHCP boot/TFTP:** lease exposes next-server (`siaddr` / opt 66) + boot file (BOOTP file / opt 67) via `pm_metal_net_ip_if_boot_get` / `ifcfg.tftp`+`boot_file`. Generic async client: `pm_metal_net_tftp_get(host, path, dest, cap)` (host/path empty → DHCP next-server + bootfile). Guest proof: `async_tftp` (EFI verify uses QEMU `-netdev user,tftp=…,bootfile=…`).
 - **Net life:** background coro (`pm_metal_net_ip_life_start`) — fast poll while no lease, slow while up; ASGI/SSH autoload on lease-up; NTP after. DHCP/NTP success quiet.
@@ -186,9 +186,15 @@ continue to use `passwd` or `pubkey`.
 The ASGI HTTP service is configured by `/etc/httpd.json` and controlled from
 the `httpd` shell command. Its route registry accepts native C, MicroPython,
 and wasm ASGI leaves, so one listener can mount applications from each
-runtime. TLS and WebSocket upgrades are handled by the server rather than by
-individual applications. Microdot is the small Python-friendly layer on top
-of the same ASGI registry; it is not a second HTTP server.
+runtime. TLS (`net/tls` / mbedTLS) and WebSocket upgrades are handled by the
+server rather than by individual applications. ASGI listens on `:80` (cleartext)
+and `:443` (TLS); DIY `net/http` can also bind those for smoke. Client HTTPS uses
+async `pm_metal_net_http_get` with verify-on by default (Mozilla CA bundle via
+`pm_metal_net_tls_load_ca_file`, refresh with `scripts/fetch_cacert.sh`).
+Firmware seats start httpd+sshd by default (`pm_metal_net_services_start` /
+`LIVE=1`); unix/wasm autoexec only hints start commands. Microdot is the small
+Python-friendly layer on top of the same ASGI registry; it is not a second HTTP
+server.
 
 Longest-prefix `mount_find` picks the route; the leaf's runner kind selects
 the backend. Host and guest both use `pm_metal_net_asgi_mount`; wasm apps

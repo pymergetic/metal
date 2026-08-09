@@ -246,6 +246,26 @@ uint32_t pm_metal_async_result_u32(uint32_t h)
     return g_slots[h].result_u32;
 }
 
+/* Already-complete handle (DONE) carrying v — sync backends on async APIs. */
+uint32_t pm_metal_async_completed_u32(uint32_t v)
+{
+    uint32_t h = alloc_slot(SLOT_YIELD, 0, next_runner());
+    if (h == 0) {
+        return 0;
+    }
+    g_slots[h].result_u32 = v;
+    __atomic_store_n(&g_slots[h].status, (uint8_t)PM_METAL_ASYNC_DONE, __ATOMIC_RELEASE);
+    return h;
+}
+
+void pm_metal_async_coro_close(uint32_t h)
+{
+    if (h == 0 || h >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[h].used) {
+        return;
+    }
+    memset(&g_slots[h], 0, sizeof(g_slots[h]));
+}
+
 uint32_t pm_metal_async_sleep_us(uint64_t us)
 {
     uint32_t ri = next_runner();

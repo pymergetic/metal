@@ -1,0 +1,9 @@
+def status() -> dict | None: ...
+def up(private_key_b64: str, listen_port: int, tunnel_ip: str, tunnel_mask: str) -> int: ...
+def peer_add(
+    public_key_b64: str,
+    endpoint_host: str,
+    endpoint_port: int,
+    allowed_ip: str,
+    allowed_mask: str,
+) -> int: ...

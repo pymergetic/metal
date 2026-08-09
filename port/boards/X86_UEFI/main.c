@@ -1,0 +1,98 @@
+#include <Uefi.h>
+
+#include "main_upy.h"
+#include "product_bringup.h"
+#include "pymergetic/metal/rt.h"
+#include "console_smoke.h"
+#include "floor_smoke.h"
+#include "net_smoke.h"
+#include "ip_smoke.h"
+#include "draw_smoke.h"
+#include "vt_smoke.h"
+#include "tui_smoke.h"
+#include "kbd_smoke.h"
+#include "wamr_smoke.h"
+#include "live_http.h"
+#include "live_ssh.h"
+#include "uefi_acpi_seed.h"
+
+#include "pymergetic/metal/boot/platform/gop.h"
+
+EFI_HANDLE g_pm_efi_image;
+EFI_SYSTEM_TABLE *g_pm_efi_st;
+int g_pm_efi_bs_alive;
+
+
+void uart_init(void);
+void uart_puts(const char *s);
+
+#ifndef METAL_UPY_SMOKE
+#define METAL_UPY_SMOKE 1
+#endif
+
+#ifndef METAL_LIVE
+#define METAL_LIVE 0
+#endif
+
+#ifndef METAL_LIVE_SSH
+#define METAL_LIVE_SSH 0
+#endif
+
+EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
+{
+    g_pm_efi_image = ImageHandle;
+    g_pm_efi_st = SystemTable;
+    g_pm_efi_bs_alive = (SystemTable != NULL && SystemTable->BootServices != NULL) ? 1 : 0;
+    pm_metal_boot_efi_gop_stash();
+
+    uart_init();
+    uart_puts("metal X86_UEFI\n");
+    pm_metal_uefi_acpi_seed(SystemTable);
+
+    /* Keep freestanding Rust rt in the image (--gc-sections). */
+    if (pm_metal_rt_connect_symbols() != 0) {
+        uart_puts("rt connect fail\n");
+        return EFI_DEVICE_ERROR;
+    }
+
+#if METAL_UPY_SMOKE
+    if (pm_metal_console_smoke() != 0 ||
+        pm_metal_floor_smoke() != 0 ||
+        pm_metal_net_smoke() != 0 ||
+        pm_metal_net_ip_smoke() != 0 ||
+        pm_metal_draw_smoke() != 0 ||
+        pm_metal_vt_smoke() != 0 ||
+        pm_metal_tui_smoke() != 0 ||
+        pm_metal_kbd_smoke() != 0) {
+        return EFI_DEVICE_ERROR;
+    }
+#if defined(METAL_LINK_WAMR) && METAL_LINK_WAMR
+    if (pm_metal_wamr_smoke() != 0) {
+        return EFI_DEVICE_ERROR;
+    }
+#endif
+#else
+    if (pm_metal_product_bringup() != 0) {
+        return EFI_DEVICE_ERROR;
+    }
+#endif
+
+    mp_metal_upy_run(METAL_UPY_SMOKE);
+
+#if METAL_UPY_SMOKE
+    uart_puts("ovmf ok\n");
+#endif
+
+#if METAL_LIVE_SSH
+    pm_metal_live_ssh();
+    return EFI_SUCCESS;
+#elif METAL_LIVE
+    pm_metal_live_http();
+    return EFI_SUCCESS;
+#else
+    if (SystemTable != NULL && SystemTable->BootServices != NULL) {
+        SystemTable->BootServices->Stall(200000);
+    }
+    return EFI_SUCCESS;
+#endif
+}

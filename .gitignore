@@ -70,3 +70,4 @@ cmake-build-*/
 
 # wamrc temp stack-usage dumps (cwd leftovers)
 wamrc-su-*.su
+third_party/wireguard-lwip/
