@@ -15,6 +15,7 @@ int32_t pm_metal_dev_blk_detect(void);
 
 int32_t  pm_metal_dev_blk_open(void);
 uint64_t pm_metal_dev_blk_capacity_sectors(void);
+/* Sync façade over read_async (pump until DONE). Prefer read_async. */
 int32_t  pm_metal_dev_blk_read(uint64_t lba, void *buf, uint32_t nsec);
 
 /** Native-pointer awaitable; caller keeps buf alive until completion. */

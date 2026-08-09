@@ -95,7 +95,8 @@ Hints by area:
 
 - **util** CPU codecs/tags → usually `yes`; archive walkers → `partial` until chunked/parked
 - **net** → `partial` until every wait is handle-based; `net.pump` / `net.asgi` aim `yes`
-- **fs** / **dev.blk** → `no` until async read/write is the only data path ([LIBC_ASYNC](LIBC_ASYNC.md) file class)
+- **fs** memory/eager ops → `yes` when awaits return `completed_u32` (RAM BD); archive open/walk → `partial` until chunked
+- **dev.blk** → `yes` when `read_async` parks and sync `read` is only a façade
 - **mem** / **async** / **rt** → `yes` (machinery itself)
 - **gfx** present/blit → sync façade is OK (`yes`/`partial`); never `sleep` in the worker
 
@@ -185,27 +186,27 @@ Counts are ledger estimates (not a live link inventory).
 | `bus.virtio` | C | 15 | 15 | 15 | 15 | yes | — | — | yes |  | done |
 | `console` | C | 15 | 15 | 15 | 15 | yes | — | yes | yes | sync ring façade | done |
 | `dev.acpi` | C | 6 | 6 | 6 | 6 | yes | — | — | yes |  | W5 +Py |
-| `dev.blk` | C | 6 | 6 | 6 | 6 | no | — | — | — |  | W1 pure C · W5 +Py · async |
+| `dev.blk` | C | 6 | 6 | 6 | 6 | yes | — | — | — | read_async parks; read façade | done |
 | `dev.gfx.compositor` | C | 10 | 10 | 10 | 10 | yes | — | — | yes | sync present façade | done |
 | `dev.gfx.scanout` | C | 8 | 8 | 8 | 8 | partial | — | — | yes | virtio-gpu/bochs/radeon/i915/GOP/LFB | W5 +Py · async |
 | `dev.gfx.text` | C | 3 | 3 | 3 | 3 | yes | — | — | yes |  | W5 +Py |
 | `dev.input.kbd` | C | 5 | 5 | 5 | 5 | yes | — | — | yes |  | W5 +Py |
-| `dev.net.bge` | C | 6 | 6 | 6 | 6 | partial | — | — | yes |  | W5 +Py · async |
-| `dev.net.virtio_net` | C | 7 | 7 | 7 | 7 | partial | — | — | yes |  | W5 +Py · async |
+| `dev.net.bge` | C | 6 | 6 | 6 | 6 | yes | — | — | yes | L2 poll façade | done |
+| `dev.net.virtio_net` | C | 7 | 7 | 7 | 7 | yes | — | — | yes | L2 poll façade | done |
 | `dev.serial` | C | 2 | 2 | 2 | 2 | yes | yes | — | yes | write sink | done |
 | `dev.stream` | C | 18 | 18 | 18 | 18 | yes | — | — | — | park read/drain | done |
 | `draw` | C | 6 | 6 | 6 | 6 | yes | — | — | yes |  | W5 +Py |
 | `externals` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes |  | done |
-| `fs` | RS | 24 | 24 | 24 | 24 | no | yes | — | — | async VFS + ops_register/lookup | async · W7 browser |
+| `fs` | RS | 24 | 24 | 24 | 24 | yes | yes | — | — | *_async border; eager completed_u32 | done · W7 browser |
 | `fs.embed` | RS | 2 | 2 | 2 | 2 | yes | yes | — | — | embed_c / embed_rs | W7 browser |
-| `fs.fat` | RS | 6 | 6 | 6 | 6 | no | yes | — | — |  | async · W7 browser |
-| `fs.littlefs` | RS | 1 | 1 | 1 | 1 | no | yes | — | — |  | async · W7 browser |
-| `fs.mtar` | RS | 6 | 6 | 6 | 6 | no | yes | — | — |  | async · W7 browser |
-| `fs.overlay` | RS | 1 | 1 | 1 | 1 | partial | yes | — | — |  | async · W7 browser |
+| `fs.fat` | RS | 6 | 6 | 6 | 6 | yes | yes | — | — | in-RAM FAT; completed_u32 | done · W7 browser |
+| `fs.littlefs` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | in-RAM BD; completed_u32 | done · W7 browser |
+| `fs.mtar` | RS | 6 | 6 | 6 | 6 | no | yes | — | — | open walks tar | async · W7 browser |
+| `fs.overlay` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | forwarder only | done · W7 browser |
 | `fs.tmpfs` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | memory-backed | W7 browser |
 | `fs.vfs` | RS | 6 | 6 | 6 | 6 | yes | yes | — | — | mount table only | done · W7 browser |
-| `fs.wasmmod` | RS | 1 | 1 | 1 | 1 | partial | yes | — | — |  | async · W7 browser |
-| `fs.zip` | RS | 4 | 4 | 4 | 4 | no | yes | — | — |  | async · W7 browser |
+| `fs.wasmmod` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | RO memory MPWP | done · W7 browser |
+| `fs.zip` | RS | 4 | 4 | 4 | 4 | no | yes | — | — | open scans CD/EOCD | async · W7 browser |
 | `hwtree` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | print only (DT walk) | W7 browser |
 | `inspect` | Py+C | 6 | 6 | 6 | 6 | yes | — | yes | yes | C+RS into-Py via pm_upy | keep Py app · W4 bridges done |
 | `mem.arena` | RS | 13 | 13 | 13 | 13 | yes | yes | — | — | Arena bytearray face | W7 browser |
@@ -222,10 +223,10 @@ Counts are ledger estimates (not a live link inventory).
 | `net.nic` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | register+L2 poll | done · W8 browser net |
 | `net.ntp` | C | 7 | 7 | 7 | 7 | yes | — | — | yes | sync parks; query* façades | done · W8 browser net |
 | `net.pump` | C | 7 | 7 | 7 | 7 | yes | — | — | yes |  | W5 +Py · W8 browser net |
-| `net.ssh` | C | 16 | 16 | 16 | 16 | partial | yes | — | yes | poll exists; some paths block | W1 pure C · W5 +Py · async · W8 browser net |
+| `net.ssh` | C | 16 | 16 | 16 | 16 | yes | yes | — | yes | server poll-driven; client_exec stub | done · W8 browser net · client later |
 | `net.tftp` | C | 6 | 6 | 6 | 6 | yes | — | — | yes | get_async parks; get façade | done · W8 browser net |
 | `net.tls` | C | 18 | 18 | 18 | 18 | yes | — | — | yes | handshake parks; load_ca_file façade | done · W8 browser net |
-| `net.wg` | C | 12 | 12 | 12 | 12 | partial | yes | — | yes |  | W5 +Py · async · W8 browser net |
+| `net.wg` | C | 12 | 12 | 12 | 12 | yes | yes | — | yes | up/peer sync CPU; handshake_smoke façade | done · W8 browser net |
 | `pack` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes |  | W5 +Py |
 | `rt` | RS | 5 | 5 | 5 | 5 | yes | yes | — | yes | halt/panic*/register/connect | W7 browser |
 | `shell.tui` | C | 4 | 4 | 4 | 4 | yes | — | — | yes |  | done |
@@ -251,8 +252,8 @@ Counts are ledger estimates (not a live link inventory).
 |--------|------:|
 | Rows | 69 |
 | Full export (C∧RS∧Py @ 100%) | **69/69** |
-| Strict green (export ∧ async=yes) | **51/69** |
-| Smoke | `X86_64_BIOS_OK` ENGINE=mp (2026-08-09; http/tls façades; ntp/tftp/dns/dhcp) |
+| Strict green (export ∧ async=yes) | **61/69** |
+| Smoke | `X86_64_BIOS_OK` ENGINE=mp (2026-08-09; fs/nic/blk + net async façades) |
 | Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). |
 
 Recompute the snapshot numbers when you bulk-edit the table.

@@ -4,6 +4,7 @@
 
 #include <pymergetic/metal/async/coro.h>
 #include <pymergetic/metal/async/handle.h>
+#include <pymergetic/metal/async/runner.h>
 #include <pymergetic/metal/async/task.h>
 #include <pymergetic/metal/async/time.h>
 #include <pymergetic/metal/bus/virtio/__init__.h>
@@ -179,23 +180,27 @@ uint64_t pm_metal_dev_blk_capacity_sectors(void)
 
 int32_t pm_metal_dev_blk_read(uint64_t lba, void *buf, uint32_t nsec)
 {
+  /* Sync façade over read_async (bring-up callers). */
+  uint32_t h;
   uint64_t deadline;
 
-  if (buf == NULL || vblk_submit(lba, nsec) != 0) {
+  h = pm_metal_dev_blk_read_async(lba, buf, nsec);
+  if (h == PM_METAL_DEV_BLK_INVALID) {
     return -1;
   }
   deadline = pm_metal_time_mono_us() + VBLK_TIMEOUT_US;
   while (pm_metal_time_mono_us() < deadline) {
-    int32_t status = vblk_poll();
-
-    if (status < 0) {
-      return -1;
-    }
-    if (status > 0) {
-      return vblk_finish(buf, nsec);
+    (void)pm_metal_async_run_poll();
+    if (pm_metal_async_status(h) == PM_METAL_ASYNC_DONE) {
+      break;
     }
   }
-  return -1;
+  if (pm_metal_async_status(h) != PM_METAL_ASYNC_DONE || pm_metal_async_result_u32(h) == 0u) {
+    pm_metal_async_coro_close(h);
+    return -1;
+  }
+  pm_metal_async_coro_close(h);
+  return 0;
 }
 
 static uint32_t vblk_async_step(uint32_t self_h)

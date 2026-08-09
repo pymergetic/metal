@@ -26,6 +26,7 @@ int32_t pm_metal_net_ssh_status(uint8_t *buf, uint32_t buf_len);
 uint32_t pm_metal_net_ssh_listen_port(void);
 int32_t pm_metal_net_ssh_hostkey_label(uint8_t *buf, uint32_t buf_len);
 
+/* Stub until DIY client lands (returns -1). Server path is poll-driven. */
 int32_t pm_metal_net_ssh_client_exec(const char *host, uint16_t port,
     const char *user, const char *cmd, uint8_t *buf, uint32_t cap, uint32_t *len_out);
 

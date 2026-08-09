@@ -47,8 +47,9 @@ int pm_metal_net_wg_status(pm_metal_net_wg_status_t *out);
 int pm_metal_net_wg_ready(void);
 
 /**
- * In-guest handshake prove: wg0 (listen) ↔ wg1 (client) over 127.0.0.1 UDP.
- * On success both peers report keypair up (last_handshake_sec != 0). Tears down wg1; leaves wg0 up.
+ * Sync façade for bring-up/smoke: wg0 (listen) ↔ wg1 (client) over 127.0.0.1 UDP.
+ * Pumps ip_poll until both peers report last_handshake_sec != 0 (or timeout).
+ * Tears down wg1; leaves wg0 up. Product waits use up/peer/status + net pump.
  */
 int pm_metal_net_wg_handshake_smoke(void);
 
