@@ -18,6 +18,7 @@ extern const mp_obj_module_t mp_module_pymergetic_metal_util_endian;
 extern const mp_obj_module_t mp_module_pymergetic_metal_util_fourcc;
 extern const mp_obj_module_t mp_module_pymergetic_metal_util_eightcc;
 extern const mp_obj_module_t mp_module_pymergetic_metal_util_ascii;
+extern const mp_obj_module_t mp_module_pymergetic_metal_util_tar;
 extern const mp_obj_module_t mp_module_pymergetic_metal_mem;
 extern const mp_obj_module_t mp_module_pymergetic_metal_mem_tlsf;
 #if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
@@ -65,7 +66,6 @@ extern const mp_obj_module_t mp_module_pymergetic_metal_shell;
 extern const mp_obj_module_t mp_module_pymergetic_metal_shell_tui;
 extern const mp_obj_module_t mp_module_pymergetic_metal_shell_ui;
 extern const mp_obj_module_t mp_module_pymergetic_metal_shell_vt;
-extern const mp_obj_module_t mp_module_pymergetic_metal_util_tar;
 extern const mp_obj_module_t mp_module_pymergetic_metal_fs;
 extern const mp_obj_module_t mp_module_pymergetic_metal_fs_embed;
 extern const mp_obj_module_t mp_module_pymergetic_metal_fs_fat;

@@ -13,9 +13,7 @@ static const mp_rom_map_elem_t util_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_fourcc), MP_ROM_PTR(&mp_module_pymergetic_metal_util_fourcc) },
     { MP_ROM_QSTR(MP_QSTR_eightcc), MP_ROM_PTR(&mp_module_pymergetic_metal_util_eightcc) },
     { MP_ROM_QSTR(MP_QSTR_ascii), MP_ROM_PTR(&mp_module_pymergetic_metal_util_ascii) },
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
     { MP_ROM_QSTR(MP_QSTR_tar), MP_ROM_PTR(&mp_module_pymergetic_metal_util_tar) },
-#endif
 };
 static MP_DEFINE_CONST_DICT(util_globals, util_globals_table);
 

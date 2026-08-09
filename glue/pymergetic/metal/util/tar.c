@@ -1,6 +1,6 @@
 /*
- * pymergetic.metal.util.tar — µPy face (callee: src/.../util/tar RS).
- * Firmware seats only (not nested on browser).
+ * pymergetic.metal.util.tar — µPy face.
+ * Muscle: RS on firmware; C twin tar_block.c on browser/wasm.
  */
 #include "py/obj.h"
 #include "py/runtime.h"

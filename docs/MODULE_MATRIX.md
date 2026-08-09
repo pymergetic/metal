@@ -180,11 +180,11 @@ Counts are ledger estimates (not a live link inventory).
 | `arch.x86_64` | Py | 3 | 3 | 3 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
 | `async` | C | 12 | 12 | 12 | 12 | yes | — | — | yes |  | W1 pure C · W5 +Py · W7 browser |
 | `auth` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | done |
-| `boot` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | thin face over boot.tree UX | W6 unfreeze done |
+| `boot` | C | 4 | 4 | 4 | 4 | yes | yes | — | yes | thin face over boot.tree UX | W6 unfreeze done · W7 browser |
 | `boot.tree` | C | 11 | 11 | 11 | 11 | yes | — | yes | yes |  | pure C · W5 +Py |
 | `bus.pci` | C | 8 | 8 | 8 | 8 | yes | — | — | yes |  | W5 +Py |
 | `bus.virtio` | C | 15 | 15 | 15 | 15 | yes | — | — | yes |  | done |
-| `console` | C | 15 | 15 | 15 | 15 | yes | — | yes | yes | sync ring façade | done |
+| `console` | C | 15 | 15 | 15 | 15 | yes | — | — | yes | sync ring façade | done · W7 browser |
 | `dev.acpi` | C | 6 | 6 | 6 | 6 | yes | — | — | yes |  | W5 +Py |
 | `dev.blk` | C | 6 | 6 | 6 | 6 | yes | — | — | — | read_async parks; read façade | done |
 | `dev.gfx.compositor` | C | 10 | 10 | 10 | 10 | yes | — | — | yes | sync present façade | done |
@@ -198,21 +198,21 @@ Counts are ledger estimates (not a live link inventory).
 | `draw` | C | 6 | 6 | 6 | 6 | yes | — | — | yes |  | W5 +Py |
 | `externals` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes |  | done |
 | `fs` | RS | 24 | 24 | 24 | 24 | yes | yes | — | — | *_async border; eager completed_u32 | done · W7 browser |
-| `fs.embed` | RS | 2 | 2 | 2 | 2 | yes | yes | — | — | embed_c / embed_rs | W7 browser |
+| `fs.embed` | RS | 2 | 2 | 2 | 2 | yes | yes | — | — | embed_c / embed_rs | done · W7 browser |
 | `fs.fat` | RS | 6 | 6 | 6 | 6 | yes | yes | — | — | in-RAM FAT; completed_u32 | done · W7 browser |
 | `fs.littlefs` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | in-RAM BD; completed_u32 | done · W7 browser |
 | `fs.mtar` | RS | 6 | 6 | 6 | 6 | yes | yes | — | — | open via tar foreach (yields) | done · W7 browser |
 | `fs.overlay` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | forwarder only | done · W7 browser |
-| `fs.tmpfs` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | memory-backed | W7 browser |
+| `fs.tmpfs` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | memory-backed | done · W7 browser |
 | `fs.vfs` | RS | 6 | 6 | 6 | 6 | yes | yes | — | — | mount table only | done · W7 browser |
 | `fs.wasmmod` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | RO memory MPWP | done · W7 browser |
 | `fs.zip` | RS | 4 | 4 | 4 | 4 | yes | yes | — | — | CD scan yields per entry | done · W7 browser |
-| `hwtree` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | print only (DT walk) | W7 browser |
+| `hwtree` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | print only (DT walk) | done · W7 browser |
 | `inspect` | Py+C | 6 | 6 | 6 | 6 | yes | — | yes | yes | C+RS into-Py via pm_upy | keep Py app · W4 bridges done |
-| `mem.arena` | RS | 13 | 13 | 13 | 13 | yes | yes | — | — | Arena bytearray face | W7 browser |
-| `mem.lock` | RS | 8 | 8 | 8 | 8 | yes | yes | — | — | spin+mutex word buffers | W7 browser |
-| `mem.port` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes |  | done |
-| `mem.tlsf` | RS | 20 | 20 | 20 | 20 | yes | yes | yes | yes | Conte TLSF border | done |
+| `mem.arena` | RS | 13 | 13 | 13 | 13 | yes | yes | — | — | Arena bytearray face | done · W7 browser |
+| `mem.lock` | RS | 8 | 8 | 8 | 8 | yes | yes | — | — | spin+mutex word buffers | done · W7 browser |
+| `mem.port` | C | 4 | 4 | 4 | 4 | yes | yes | — | yes | browser nest pending | done · W7 browser |
+| `mem.tlsf` | RS | 20 | 20 | 20 | 20 | yes | yes | — | yes | Conte TLSF; browser glue/qstr TBD | done · W7 browser |
 | `net.microdot` | Py | 20 | 20 | 20 | 20 | yes | — | yes | yes | asyncio server; Metal apps use async handlers | keep Py muscle · done |
 | `net.asgi` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | Py is consumer/codegen only | pure C · W5 +Py · W8 browser net |
 | `net.dhcp` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | start parks; run sync façade | done · W8 browser net |
@@ -227,21 +227,21 @@ Counts are ledger estimates (not a live link inventory).
 | `net.tftp` | C | 6 | 6 | 6 | 6 | yes | — | — | yes | get_async parks; get façade | done · W8 browser net |
 | `net.tls` | C | 18 | 18 | 18 | 18 | yes | — | — | yes | handshake parks; load_ca_file façade | done · W8 browser net |
 | `net.wg` | C | 12 | 12 | 12 | 12 | yes | yes | — | yes | up/peer sync CPU; handshake_smoke façade | done · W8 browser net |
-| `pack` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes |  | W5 +Py |
-| `rt` | RS | 5 | 5 | 5 | 5 | yes | yes | — | yes | halt/panic*/register/connect | W7 browser |
+| `pack` | C | 6 | 6 | 6 | 6 | yes | — | — | yes |  | W5 +Py · W7 browser |
+| `rt` | RS | 5 | 5 | 5 | 5 | yes | yes | — | yes | halt/panic*/register/connect | done · W7 browser |
 | `shell.tui` | C | 4 | 4 | 4 | 4 | yes | — | — | yes |  | done |
 | `shell.ui` | C | 2 | 2 | 2 | 2 | yes | — | — | yes |  | done |
 | `shell.vt` | C | 9 | 9 | 9 | 9 | yes | — | — | yes |  | done |
 | `trust` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes |  | done |
 | `unix.x86` | Py | 2 | 2 | 2 | 2 | yes | — | — | — | host sim only (outside Metal runner) | keep Py muscle · done |
 | `unix.x86_64` | Py | 2 | 2 | 2 | 2 | yes | — | — | — | host sim only (outside Metal runner) | keep Py muscle · done |
-| `util.ascii` | C | 5 | 5 | 5 | 5 | yes | yes | yes | yes |  | W7 browser |
-| `util.eightcc` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | W7 browser |
-| `util.endian` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | `*_inline`; +WIRE_IS_LE on Py | W7 browser |
-| `util.fourcc` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | W7 browser |
-| `util.lz4` | RS | 3 | 3 | 3 | 3 | yes | yes | yes | yes |  | W1 pure RS · W7 browser |
-| `util.size` | RS | 2 | 2 | 2 | 2 | yes | yes | yes | yes |  | W1 pure RS · W7 browser |
-| `util.tar` | RS | 5 | 5 | 5 | 5 | yes | yes | — | yes | foreach yields between entries | done · W7 browser |
+| `util.ascii` | C | 5 | 5 | 5 | 5 | yes | yes | yes | yes |  | done · W7 browser |
+| `util.eightcc` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | done · W7 browser |
+| `util.endian` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | `*_inline`; +WIRE_IS_LE on Py | done · W7 browser |
+| `util.fourcc` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | done · W7 browser |
+| `util.lz4` | RS | 3 | 3 | 3 | 3 | yes | yes | yes | yes |  | done · W7 browser |
+| `util.size` | RS | 2 | 2 | 2 | 2 | yes | yes | yes | yes |  | done · W7 browser |
+| `util.tar` | RS | 5 | 5 | 5 | 5 | yes | yes | yes | yes | foreach yields; browser C twin `tar_block.c` | done · W7 browser |
 | `wamr_host` | RS | 15 | 15 | 15 | 15 | yes | yes | — | yes | call0 short façade; guest_coro parks | done |
 
 ---
@@ -253,7 +253,8 @@ Counts are ledger estimates (not a live link inventory).
 | Rows | 69 |
 | Full export (C∧RS∧Py @ 100%) | **69/69** |
 | Strict green (export ∧ async=yes) | **69/69** |
-| Smoke | `X86_64_BIOS_OK` ENGINE=mp (2026-08-09; matrix complete — export ∧ async) |
-| Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). |
+| Browser=yes | **17/69** (W7 util.* complete; honest demote boot/console/pack/mem; remaining W7 fs/async/rt/mem · W8 net) |
+| Smoke | `X86_64_BIOS_OK` ENGINE=mp · wasm util.tar import ok (2026-08-09) |
+| Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). Browser util.tar = C twin `tar_block.c`. |
 
 Recompute the snapshot numbers when you bulk-edit the table.

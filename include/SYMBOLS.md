@@ -14,7 +14,7 @@ Columns: **C** · **RS** · **Python** · **Seat** · **Status**
 | `util.fourcc` | `pm_metal_util_fourcc_*` | face `__init__.rs` | `pymergetic.metal.util.fourcc` | all | ok |
 | `util.eightcc` | `pm_metal_util_eightcc_*` | face `__init__.rs` | `pymergetic.metal.util.eightcc` | all | ok |
 | `util.ascii` | `pm_metal_util_ascii_*` | face `__init__.rs` | `pymergetic.metal.util.ascii` | all | ok |
-| `util.tar` | `pm_metal_util_tar_*` | callee `__init__.rs` | `pymergetic.metal.util.tar` | firmware | ok |
+| `util.tar` | `pm_metal_util_tar_*` | callee `__init__.rs` (FW) / `tar_block.c` (browser) | `pymergetic.metal.util.tar` | all | ok |
 | `util.endian` | `pm_metal_util_endian_*` (+ `*_inline`) | face `__init__.rs` | `pymergetic.metal.util.endian` | all | ok |
 | `auth` | `pm_metal_auth_*` | face `__init__.rs` | `pymergetic.metal.auth` | all | ok |
 | `trust` | `pm_metal_trust_*` | face `__init__.rs` | `pymergetic.metal.trust` | all | ok |
