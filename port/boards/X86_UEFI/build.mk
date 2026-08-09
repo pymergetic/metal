@@ -198,7 +198,7 @@ OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD
 OBJ += $(BUILD)/metal_mod_packs.o $(BUILD)/metal_pack_inspect.o $(BUILD)/metal_pack_metal.o
 OBJ += $(BUILD)/metal_boot_tree.o $(BUILD)/metal_externals.o $(BUILD)/metal_externals_rows.o $(BUILD)/metal_arch.o $(BUILD)/metal_arch_py.o $(BUILD)/metal_ascii.o
 OBJ += $(BUILD)/metal_microdot.o
-OBJ += $(BUILD)/metal_arch_wasm.o $(BUILD)/metal_arch_x86.o $(BUILD)/metal_arch_x86_64.o
+OBJ += $(BUILD)/metal_arch_wasm.o $(BUILD)/metal_arch_x86.o $(BUILD)/metal_arch_x86_64.o $(BUILD)/metal_unix_x86.o $(BUILD)/metal_unix_x86_64.o
 OBJ += $(BUILD)/metal_auth.o $(BUILD)/metal_trust.o $(BUILD)/metal_endian.o $(BUILD)/metal_fourcc.o $(BUILD)/metal_eightcc.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_serial.o $(BUILD)/metal_shell_ui.o
@@ -388,6 +388,14 @@ $(BUILD)/metal_arch_x86.o: $(METAL)/src/pymergetic/metal/arch/x86/bridge.c | $(B
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_arch_x86_64.o: $(METAL)/src/pymergetic/metal/arch/x86_64/bridge.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_unix_x86.o: $(METAL)/src/pymergetic/metal/unix/x86/bridge.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_unix_x86_64.o: $(METAL)/src/pymergetic/metal/unix/x86_64/bridge.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
