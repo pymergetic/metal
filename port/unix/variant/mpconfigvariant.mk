@@ -20,7 +20,19 @@ MICROPY_PY_FFI = 0
 LDFLAGS_EXTRA += -Wl,--wrap=main
 
 # arch face for pm_metal_arch_firmware() / CFG (VARIANT_DIR *.c is already picked up).
+WASMMOD := $(abspath $(TOP)/extmod/wasmmod)
+CFLAGS += -I$(WASMMOD)/include -I$(WASMMOD)
 SRC_C += $(METAL)/src/pymergetic/metal/arch/arch.c
+# Into-Py unix seat bridges + wasmmod pm_upy_* bus (MICROPY_PY_WASM=0 → handle stub).
+SRC_C += \
+	$(METAL)/src/pymergetic/metal/unix/x86/bridge.c \
+	$(METAL)/src/pymergetic/metal/unix/x86_64/bridge.c \
+	$(WASMMOD)/glue/pm_upy/obj/core.c \
+	$(WASMMOD)/glue/pm_upy/obj/call.c \
+	$(WASMMOD)/glue/pm_upy/obj/module.c \
+	$(WASMMOD)/glue/pm_upy/obj/ops.c \
+	$(METAL)/port/upy/wasm_handles_stub.c
+SRC_QSTR += $(METAL)/port/upy/wasm_handles_stub.c
 
 PROG ?= micropython
 

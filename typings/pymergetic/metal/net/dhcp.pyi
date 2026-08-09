@@ -1,0 +1,3 @@
+"""pymergetic.metal.net.dhcp — µPy face."""
+
+def run() -> int: ...

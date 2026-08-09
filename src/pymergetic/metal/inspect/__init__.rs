@@ -23,6 +23,8 @@ extern "C" {
         body: *mut c_char,
         body_len: usize,
     ) -> i32;
+    fn pm_metal_inspect_py_create_app() -> u32;
+    fn pm_metal_inspect_py_close(h: u32);
 }
 
 #[inline]
@@ -52,4 +54,12 @@ pub unsafe fn py_handle(
     body_len: usize,
 ) -> i32 {
     pm_metal_inspect_py_handle(method, path, status, body, body_len)
+}
+#[inline]
+pub fn py_create_app() -> u32 {
+    unsafe { pm_metal_inspect_py_create_app() }
+}
+#[inline]
+pub fn py_close(h: u32) {
+    unsafe { pm_metal_inspect_py_close(h) }
 }

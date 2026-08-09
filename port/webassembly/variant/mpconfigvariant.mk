@@ -59,6 +59,9 @@ METAL_BOOT_SRCS := \
 	$(METAL)/src/pymergetic/metal/boot/externals_rows.c \
 	$(METAL)/src/pymergetic/metal/arch/arch.c \
 	$(METAL)/src/pymergetic/metal/arch/py_call.c \
+	$(METAL)/src/pymergetic/metal/arch/wasm/bridge.c \
+	$(METAL)/src/pymergetic/metal/arch/x86/bridge.c \
+	$(METAL)/src/pymergetic/metal/arch/x86_64/bridge.c \
 	$(METAL)/src/pymergetic/metal/net/microdot/bridge.c \
 	$(METAL)/src/pymergetic/metal/auth/__init__.c \
 	$(METAL)/src/pymergetic/metal/trust/__init__.c \

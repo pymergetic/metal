@@ -3,6 +3,7 @@
  */
 #include <string.h>
 
+#include "host.h"
 #include "pm_common.h"
 #include "pm_upy/obj/call.h"
 #include "pm_upy/obj/core.h"
@@ -85,4 +86,32 @@ int32_t pm_metal_inspect_py_handle(const char *method, const char *path,
     }
     copy_str(body, body_len, s);
     return 1;
+}
+
+uint32_t pm_metal_inspect_py_create_app(void)
+{
+    uint32_t fn_h;
+    pm_upy_obj_t inst;
+    pm_upy_obj_t none;
+    int32_t h;
+
+    fn_h = pm_upy_fn_resolve("pymergetic.metal.inspect.create_app");
+    if (fn_h == 0) {
+        return 0;
+    }
+    inst = pm_upy_fn_call(fn_h, 0, NULL);
+    none = pm_upy_obj_none();
+    if (pm_upy_equal(inst, none)) {
+        return 0;
+    }
+    h = mp_wasm_handle_register((mp_obj_t)(uintptr_t)inst);
+    return h > 0 ? (uint32_t)h : 0;
+}
+
+void pm_metal_inspect_py_close(uint32_t h)
+{
+    if (h == 0) {
+        return;
+    }
+    (void)mp_wasm_handle_free((int32_t)h);
 }

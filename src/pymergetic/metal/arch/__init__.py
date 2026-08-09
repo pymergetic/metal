@@ -41,3 +41,17 @@ def current():
 
 def name():
     return current().NAME
+
+
+def firmware():
+    """Firmware face string for the current seat (bios/uefi/browser/unix)."""
+    cur = current()
+    fn = getattr(cur, "firmware", None)
+    if callable(fn):
+        return fn()
+    return getattr(cur, "FIRMWARE", "")
+
+
+def autoexec():
+    """Run the current seat's autoexec epilogue."""
+    return current().autoexec()

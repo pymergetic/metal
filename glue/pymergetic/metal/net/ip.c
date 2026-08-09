@@ -2,65 +2,111 @@
  * pymergetic.metal.net.ip — µPy face (callee: src/.../net/ip).
  * Firmware seats only.
  */
-#include <string.h>
-
 #include "py/obj.h"
-#include "py/objstr.h"
 #include "py/runtime.h"
 
-#include "pymergetic/metal/net/ip/cfg.h"
-#include "pymergetic/metal/net/ip/sock.h"
-#include "services.h"
+#include <pymergetic/metal/net/ip/__init__.h>
 
-static mp_obj_t net_ip_if_count(void)
+static mp_obj_t net_ip_init(mp_obj_t addr_obj, mp_obj_t mask_obj, mp_obj_t gw_obj)
 {
-    return MP_OBJ_NEW_SMALL_INT(pm_metal_net_ip_if_count());
+    return MP_OBJ_NEW_SMALL_INT(pm_metal_net_ip_init((uint32_t)mp_obj_get_int(addr_obj),
+                                                     (uint32_t)mp_obj_get_int(mask_obj),
+                                                     (uint32_t)mp_obj_get_int(gw_obj)));
 }
-static MP_DEFINE_CONST_FUN_OBJ_0(net_ip_if_count_obj, net_ip_if_count);
+static MP_DEFINE_CONST_FUN_OBJ_3(net_ip_init_obj, net_ip_init);
 
-static mp_obj_t net_ip_if_status(void)
+static mp_obj_t net_ip_ready(void)
 {
-    char buf[512];
-    if (pm_metal_net_ip_if_status(buf, sizeof(buf)) != 0) {
-        return mp_const_none;
-    }
-    return mp_obj_new_str(buf, strlen(buf));
+    return MP_OBJ_NEW_SMALL_INT(pm_metal_net_ip_ready());
 }
-static MP_DEFINE_CONST_FUN_OBJ_0(net_ip_if_status_obj, net_ip_if_status);
+static MP_DEFINE_CONST_FUN_OBJ_0(net_ip_ready_obj, net_ip_ready);
 
-static mp_obj_t net_ip_iface(mp_obj_t name_obj)
+static mp_obj_t net_ip_set_addrs(mp_obj_t addr_obj, mp_obj_t mask_obj, mp_obj_t gw_obj)
 {
-    pm_metal_net_ip_ifcfg_t cfg;
-    const char *name = NULL;
-    mp_obj_t dict;
-    if (name_obj != mp_const_none) {
-        name = mp_obj_str_get_str(name_obj);
-    }
-    if (pm_metal_net_ip_if_get_named(name, &cfg) != 0) {
-        return mp_const_none;
-    }
-    dict = mp_obj_new_dict(8);
-    mp_obj_dict_store(dict, MP_OBJ_NEW_QSTR(MP_QSTR_name), mp_obj_new_str(cfg.name, strlen(cfg.name)));
-    mp_obj_dict_store(dict, MP_OBJ_NEW_QSTR(MP_QSTR_ip), mp_obj_new_str(cfg.ip, strlen(cfg.ip)));
-    mp_obj_dict_store(dict, MP_OBJ_NEW_QSTR(MP_QSTR_mask), mp_obj_new_str(cfg.mask, strlen(cfg.mask)));
-    mp_obj_dict_store(dict, MP_OBJ_NEW_QSTR(MP_QSTR_gw), mp_obj_new_str(cfg.gw, strlen(cfg.gw)));
-    mp_obj_dict_store(dict, MP_OBJ_NEW_QSTR(MP_QSTR_dns), mp_obj_new_str(cfg.dns, strlen(cfg.dns)));
-    return dict;
+    return MP_OBJ_NEW_SMALL_INT(pm_metal_net_ip_set_addrs((uint32_t)mp_obj_get_int(addr_obj),
+                                                          (uint32_t)mp_obj_get_int(mask_obj),
+                                                          (uint32_t)mp_obj_get_int(gw_obj)));
 }
-static MP_DEFINE_CONST_FUN_OBJ_1(net_ip_iface_obj, net_ip_iface);
+static MP_DEFINE_CONST_FUN_OBJ_3(net_ip_set_addrs_obj, net_ip_set_addrs);
 
-static mp_obj_t net_ip_services_start(void)
+static mp_obj_t net_ip_set_dns(mp_obj_t dns_obj)
 {
-    return MP_OBJ_NEW_SMALL_INT(pm_metal_net_services_start());
+    return MP_OBJ_NEW_SMALL_INT(pm_metal_net_ip_set_dns((uint32_t)mp_obj_get_int(dns_obj)));
 }
-static MP_DEFINE_CONST_FUN_OBJ_0(net_ip_services_start_obj, net_ip_services_start);
+static MP_DEFINE_CONST_FUN_OBJ_1(net_ip_set_dns_obj, net_ip_set_dns);
+
+static mp_obj_t net_ip_addr(void)
+{
+    return mp_obj_new_int_from_uint(pm_metal_net_ip_addr());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(net_ip_addr_obj, net_ip_addr);
+
+static mp_obj_t net_ip_gw(void)
+{
+    return mp_obj_new_int_from_uint(pm_metal_net_ip_gw());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(net_ip_gw_obj, net_ip_gw);
+
+static mp_obj_t net_ip_mask(void)
+{
+    return mp_obj_new_int_from_uint(pm_metal_net_ip_mask());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(net_ip_mask_obj, net_ip_mask);
+
+static mp_obj_t net_ip_dns(void)
+{
+    return mp_obj_new_int_from_uint(pm_metal_net_ip_dns());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(net_ip_dns_obj, net_ip_dns);
+
+static mp_obj_t net_ip_arp_resolve(mp_obj_t ip_obj)
+{
+    return MP_OBJ_NEW_SMALL_INT(pm_metal_net_ip_arp_resolve((uint32_t)mp_obj_get_int(ip_obj)));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(net_ip_arp_resolve_obj, net_ip_arp_resolve);
+
+static mp_obj_t net_ip_announce(void)
+{
+    return MP_OBJ_NEW_SMALL_INT(pm_metal_net_ip_announce());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(net_ip_announce_obj, net_ip_announce);
+
+static mp_obj_t net_ip_poll(void)
+{
+    pm_metal_net_ip_poll();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(net_ip_poll_obj, net_ip_poll);
+
+static mp_obj_t net_ip_ping(mp_obj_t dst_obj, mp_obj_t id_obj, mp_obj_t seq_obj)
+{
+    return MP_OBJ_NEW_SMALL_INT(pm_metal_net_ip_ping((uint32_t)mp_obj_get_int(dst_obj),
+                                                     (uint16_t)mp_obj_get_int(id_obj),
+                                                     (uint16_t)mp_obj_get_int(seq_obj)));
+}
+static MP_DEFINE_CONST_FUN_OBJ_3(net_ip_ping_obj, net_ip_ping);
+
+static mp_obj_t net_ip_ping_replies(void)
+{
+    return mp_obj_new_int_from_uint(pm_metal_net_ip_ping_replies());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(net_ip_ping_replies_obj, net_ip_ping_replies);
 
 static const mp_rom_map_elem_t net_ip_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal_dot_net_dot_ip) },
-    { MP_ROM_QSTR(MP_QSTR_if_count), MP_ROM_PTR(&net_ip_if_count_obj) },
-    { MP_ROM_QSTR(MP_QSTR_if_status), MP_ROM_PTR(&net_ip_if_status_obj) },
-    { MP_ROM_QSTR(MP_QSTR_iface), MP_ROM_PTR(&net_ip_iface_obj) },
-    { MP_ROM_QSTR(MP_QSTR_services_start), MP_ROM_PTR(&net_ip_services_start_obj) },
+    { MP_ROM_QSTR(MP_QSTR_init), MP_ROM_PTR(&net_ip_init_obj) },
+    { MP_ROM_QSTR(MP_QSTR_ready), MP_ROM_PTR(&net_ip_ready_obj) },
+    { MP_ROM_QSTR(MP_QSTR_set_addrs), MP_ROM_PTR(&net_ip_set_addrs_obj) },
+    { MP_ROM_QSTR(MP_QSTR_set_dns), MP_ROM_PTR(&net_ip_set_dns_obj) },
+    { MP_ROM_QSTR(MP_QSTR_addr), MP_ROM_PTR(&net_ip_addr_obj) },
+    { MP_ROM_QSTR(MP_QSTR_gw), MP_ROM_PTR(&net_ip_gw_obj) },
+    { MP_ROM_QSTR(MP_QSTR_mask), MP_ROM_PTR(&net_ip_mask_obj) },
+    { MP_ROM_QSTR(MP_QSTR_dns), MP_ROM_PTR(&net_ip_dns_obj) },
+    { MP_ROM_QSTR(MP_QSTR_arp_resolve), MP_ROM_PTR(&net_ip_arp_resolve_obj) },
+    { MP_ROM_QSTR(MP_QSTR_announce), MP_ROM_PTR(&net_ip_announce_obj) },
+    { MP_ROM_QSTR(MP_QSTR_poll), MP_ROM_PTR(&net_ip_poll_obj) },
+    { MP_ROM_QSTR(MP_QSTR_ping), MP_ROM_PTR(&net_ip_ping_obj) },
+    { MP_ROM_QSTR(MP_QSTR_ping_replies), MP_ROM_PTR(&net_ip_ping_replies_obj) },
 };
 static MP_DEFINE_CONST_DICT(net_ip_globals, net_ip_globals_table);
 

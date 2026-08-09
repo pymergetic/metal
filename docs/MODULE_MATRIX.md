@@ -173,75 +173,75 @@ Counts are ledger estimates (not a live link inventory).
 
 | Path | Impl | API | C | RS | Py | Async | Stub | Browser | FW | Note | Dev path |
 |------|------|----:|--:|---:|---:|-------|:----:|:-------:|:--:|------|----------|
-| `arch` | Py+C | 5 | 5 | 5 | 4 | yes | — | yes | yes | CFG seat + into-Py name/names | keep seats · W4 bridges done · W5 +Py(=glue) · W6 no dual Py |
-| `arch.wasm` | Py | 3 | 0 | 0 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
-| `arch.x86` | Py | 3 | 0 | 0 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
-| `arch.x86_64` | Py | 3 | 0 | 0 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
-| `async` | C | 12 | 6 | 6 | 0 | yes | — | — | yes |  | W1 pure C · W2 +RS · W5 +Py · W7 browser |
-| `auth` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  |  |
-| `boot` | C | 4 | 0 | 0 | 4 | partial | — | yes | yes | comment-only __init__ | pure C · W6 unfreeze boot/__init__.py |
-| `boot.tree` | C | 11 | 11 | 0 | 0 | yes | — | yes | yes |  | pure C · W3 +RS · W5 +Py |
-| `bus.pci` | C | 8 | 8 | 0 | 0 | yes | — | — | yes |  | W3 +RS · W5 +Py |
-| `bus.virtio` | C | 14 | 14 | 0 | 0 | partial | — | — | yes |  | W3 +RS · W5 +Py · async |
-| `console` | C | 15 | 15 | 0 | 0 | partial | — | yes | yes |  | W3 +RS · W5 +Py · async |
-| `dev.acpi` | C | 6 | 6 | 0 | 0 | yes | — | — | yes |  | W3 +RS · W5 +Py |
-| `dev.blk` | C | 8 | 4 | 4 | 0 | no | — | — | — |  | W1 pure C · W2 +RS · W5 +Py · async |
-| `dev.gfx.compositor` | C | 4 | 4 | 0 | 0 | partial | — | — | yes |  | W3 +RS · W5 +Py · async |
-| `dev.gfx.scanout` | C | 5 | 5 | 0 | 0 | partial | — | — | yes | virtio-gpu/bochs/radeon/i915/GOP/LFB | W3 +RS · W5 +Py · async |
-| `dev.gfx.text` | C | 4 | 4 | 0 | 0 | yes | — | — | yes |  | W3 +RS · W5 +Py |
-| `dev.input.kbd` | C | 5 | 5 | 0 | 0 | yes | — | — | yes |  | W3 +RS · W5 +Py |
-| `dev.net.bge` | C | 4 | 4 | 0 | 0 | partial | — | — | yes |  | W3 +RS · W5 +Py · async |
-| `dev.net.virtio_net` | C | 6 | 6 | 0 | 0 | partial | — | — | yes |  | W3 +RS · W5 +Py · async |
+| `arch` | Py+C | 5 | 5 | 5 | 5 | yes | — | yes | yes | CFG seat + into-Py name/names | keep seats · W4 bridges done · W5 +Py(=glue) · W6 no dual Py |
+| `arch.wasm` | Py | 3 | 3 | 3 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
+| `arch.x86` | Py | 3 | 3 | 3 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
+| `arch.x86_64` | Py | 3 | 3 | 3 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
+| `async` | C | 12 | 12 | 12 | 12 | yes | — | — | yes |  | W1 pure C · W5 +Py · W7 browser |
+| `auth` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | done |
+| `boot` | C | 4 | 4 | 4 | 4 | partial | yes | yes | yes | thin face over boot.tree UX | W6 unfreeze boot/__init__.py |
+| `boot.tree` | C | 11 | 11 | 11 | 11 | yes | — | yes | yes |  | pure C · W5 +Py |
+| `bus.pci` | C | 8 | 8 | 8 | 8 | yes | — | — | yes |  | W5 +Py |
+| `bus.virtio` | C | 15 | 15 | 15 | 15 | partial | — | — | yes |  | W5 +Py · async |
+| `console` | C | 15 | 15 | 15 | 15 | partial | — | yes | yes |  | W5 +Py · async |
+| `dev.acpi` | C | 6 | 6 | 6 | 6 | yes | — | — | yes |  | W5 +Py |
+| `dev.blk` | C | 6 | 6 | 6 | 6 | no | — | — | — |  | W1 pure C · W5 +Py · async |
+| `dev.gfx.compositor` | C | 10 | 10 | 10 | 10 | partial | — | — | yes |  | W5 +Py · async |
+| `dev.gfx.scanout` | C | 8 | 8 | 8 | 8 | partial | — | — | yes | virtio-gpu/bochs/radeon/i915/GOP/LFB | W5 +Py · async |
+| `dev.gfx.text` | C | 3 | 3 | 3 | 3 | yes | — | — | yes |  | W5 +Py |
+| `dev.input.kbd` | C | 5 | 5 | 5 | 5 | yes | — | — | yes |  | W5 +Py |
+| `dev.net.bge` | C | 6 | 6 | 6 | 6 | partial | — | — | yes |  | W5 +Py · async |
+| `dev.net.virtio_net` | C | 7 | 7 | 7 | 7 | partial | — | — | yes |  | W5 +Py · async |
 | `dev.serial` | C | 2 | 2 | 2 | 2 | partial | yes | — | yes |  | async |
-| `dev.stream` | C | 4 | 4 | 0 | 0 | partial | — | — | — |  | W3 +RS · W5 +Py · async |
-| `draw` | C | 6 | 6 | 0 | 0 | yes | — | — | yes |  | W3 +RS · W5 +Py |
-| `externals` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes |  |  |
-| `fs` | RS | 22 | 9 | 22 | 0 | no | — | — | — |  | W3 +C · W5 +Py · async · W7 browser |
-| `fs.embed` | RS | 3 | 0 | 3 | 0 | yes | — | — | — |  | W3 +C · W5 +Py · W7 browser |
-| `fs.fat` | RS | 6 | 0 | 6 | 0 | no | — | — | — |  | W3 +C · W5 +Py · async · W7 browser |
-| `fs.littlefs` | RS | 1 | 0 | 1 | 0 | no | — | — | — |  | W1 pure RS · W2 +C · W5 +Py · async · W7 browser |
-| `fs.mtar` | RS | 6 | 0 | 6 | 0 | no | — | — | — |  | W3 +C · W5 +Py · async · W7 browser |
-| `fs.overlay` | RS | 1 | 0 | 1 | 0 | partial | — | — | — |  | W3 +C · W5 +Py · async · W7 browser |
-| `fs.tmpfs` | RS | 1 | 0 | 1 | 0 | yes | — | — | — | memory-backed | W3 +C · W5 +Py · W7 browser |
-| `fs.vfs` | RS | 6 | 0 | 6 | 0 | no | — | — | — |  | W3 +C · W5 +Py · async · W7 browser |
-| `fs.wasmmod` | RS | 1 | 0 | 1 | 0 | partial | — | — | — |  | W3 +C · W5 +Py · async · W7 browser |
-| `fs.zip` | RS | 4 | 0 | 4 | 0 | no | — | — | — |  | W3 +C · W5 +Py · async · W7 browser |
-| `hwtree` | RS | 8 | 0 | 8 | 0 | yes | — | — | — |  | W3 +C · W5 +Py · W7 browser |
-| `inspect` | Py+C | 6 | 4 | 4 | 6 | yes | — | yes | yes | C+RS into-Py via pm_upy | keep Py app · W4 bridges done |
-| `mem.arena` | RS | 24 | 0 | 24 | 0 | yes | — | — | — |  | W3 +C · W5 +Py · W7 browser |
-| `mem.lock` | RS | 13 | 0 | 13 | 0 | yes | — | — | — |  | W3 +C · W5 +Py · W7 browser |
-| `mem.port` | C | 4 | 4 | 0 | 0 | yes | — | yes | yes |  | W3 +RS · W5 +Py |
-| `mem.tlsf` | RS | 32 | 8 | 32 | 0 | yes | — | yes | yes |  | W1 pure RS · W2 +C · W5 +Py |
-| `net.microdot` | Py | 20 | 4 | 4 | 20 | partial | — | yes | yes | vendored CORE; into-Py new/resolve | keep Py muscle · W4 bridges done · W5 async |
-| `net.asgi` | C | 4 | 4 | 0 | 0 | yes | — | — | yes | Py is consumer/codegen only | pure C · W3 +RS · W5 +Py · W8 browser net |
-| `net.dhcp` | C | 1 | 1 | 0 | 0 | partial | — | — | yes |  | W3 +RS · W5 +Py · async · W8 browser net |
-| `net.dns` | C | 1 | 1 | 0 | 0 | no | — | — | yes |  | W3 +RS · W5 +Py · async · W8 browser net |
+| `dev.stream` | C | 18 | 18 | 18 | 18 | partial | — | — | — |  | W5 +Py · async |
+| `draw` | C | 6 | 6 | 6 | 6 | yes | — | — | yes |  | W5 +Py |
+| `externals` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes |  | done |
+| `fs` | RS | 24 | 24 | 24 | 24 | no | yes | — | — | async VFS + ops_register/lookup | async · W7 browser |
+| `fs.embed` | RS | 2 | 2 | 2 | 2 | yes | yes | — | — | embed_c / embed_rs | W7 browser |
+| `fs.fat` | RS | 6 | 6 | 6 | 6 | no | yes | — | — |  | async · W7 browser |
+| `fs.littlefs` | RS | 1 | 1 | 1 | 1 | no | yes | — | — |  | async · W7 browser |
+| `fs.mtar` | RS | 6 | 6 | 6 | 6 | no | yes | — | — |  | async · W7 browser |
+| `fs.overlay` | RS | 1 | 1 | 1 | 1 | partial | yes | — | — |  | async · W7 browser |
+| `fs.tmpfs` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | memory-backed | W7 browser |
+| `fs.vfs` | RS | 6 | 6 | 6 | 6 | no | yes | — | — |  | async · W7 browser |
+| `fs.wasmmod` | RS | 1 | 1 | 1 | 1 | partial | yes | — | — |  | async · W7 browser |
+| `fs.zip` | RS | 4 | 4 | 4 | 4 | no | yes | — | — |  | async · W7 browser |
+| `hwtree` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | print only (DT walk) | W7 browser |
+| `inspect` | Py+C | 6 | 6 | 6 | 6 | yes | — | yes | yes | C+RS into-Py via pm_upy | keep Py app · W4 bridges done |
+| `mem.arena` | RS | 13 | 13 | 13 | 13 | yes | yes | — | — | Arena bytearray face | W7 browser |
+| `mem.lock` | RS | 8 | 8 | 8 | 8 | yes | yes | — | — | spin+mutex word buffers | W7 browser |
+| `mem.port` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes |  | done |
+| `mem.tlsf` | RS | 20 | 20 | 20 | 20 | yes | yes | yes | yes | Conte TLSF border | done |
+| `net.microdot` | Py | 20 | 20 | 20 | 20 | partial | — | yes | yes | into-Py resolve/new + route/run/get/post + getattr/call* | keep Py muscle · W5 async |
+| `net.asgi` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | Py is consumer/codegen only | pure C · W5 +Py · W8 browser net |
+| `net.dhcp` | C | 1 | 1 | 1 | 1 | partial | — | — | yes |  | W5 +Py · async · W8 browser net |
+| `net.dns` | C | 1 | 1 | 1 | 1 | no | — | — | yes |  | W5 +Py · async · W8 browser net |
 | `net.faces` | C | 3 | 3 | 3 | 3 | yes | yes | — | yes |  | W8 browser net |
-| `net.http` | C | 11 | 11 | 0 | 0 | partial | — | — | yes |  | W3 +RS · W5 +Py · async · W8 browser net |
-| `net.ip` | C | 13 | 13 | 0 | 4 | partial | yes | — | yes | RS FFI partial / uncounted; W8: browser shim under ABI | W3 +RS · W5 +Py · async · W8 browser net |
-| `net.nic` | C | 2 | 2 | 0 | 0 | partial | — | — | yes |  | W3 +RS · W5 +Py · async · W8 browser net |
-| `net.ntp` | C | 2 | 2 | 0 | 0 | partial | — | — | yes |  | W3 +RS · W5 +Py · async · W8 browser net |
-| `net.pump` | C | 8 | 8 | 0 | 0 | yes | — | — | yes |  | W3 +RS · W5 +Py · W8 browser net |
-| `net.ssh` | C | 16 | 16 | 1 | 11 | partial | yes | — | yes | poll exists; some paths block | W1 pure C · W2 +RS · W5 +Py · async · W8 browser net |
-| `net.tftp` | C | 1 | 1 | 0 | 0 | no | — | — | yes |  | W3 +RS · W5 +Py · async · W8 browser net |
-| `net.tls` | C | 18 | 18 | 0 | 0 | partial | — | — | yes |  | W3 +RS · W5 +Py · async · W8 browser net |
-| `net.wg` | C | 12 | 12 | 0 | 3 | partial | yes | — | yes | RS FFI partial / uncounted | W3 +RS · W5 +Py · async · W8 browser net |
-| `pack` | C | 6 | 6 | 0 | 0 | yes | — | yes | yes |  | W3 +RS · W5 +Py |
-| `rt` | RS | 12 | 5 | 12 | 0 | yes | — | — | yes |  | W1 pure RS · W2 +C · W5 +Py · W7 browser |
-| `shell.tui` | C | 4 | 4 | 0 | 0 | partial | — | — | yes |  | W3 +RS · W5 +Py · async |
-| `shell.ui` | C | 2 | 2 | 0 | 0 | partial | — | — | yes |  | W3 +RS · W5 +Py · async |
-| `shell.vt` | C | 8 | 8 | 0 | 0 | partial | — | — | yes |  | W3 +RS · W5 +Py · async |
-| `trust` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes |  |  |
-| `unix.x86` | Py | 2 | 0 | 0 | 2 | no | — | — | — | host sim sync | keep Py muscle · W4 +C/+RS bridges · W5 async |
-| `unix.x86_64` | Py | 2 | 0 | 0 | 2 | no | — | — | — | host sim sync | keep Py muscle · W4 +C/+RS bridges · W5 async |
+| `net.http` | C | 12 | 12 | 12 | 12 | partial | — | — | yes |  | W5 +Py · async · W8 browser net |
+| `net.ip` | C | 13 | 13 | 13 | 13 | partial | yes | — | yes | W8: browser shim under ABI | W5 +Py · async · W8 browser net |
+| `net.nic` | C | 4 | 4 | 4 | 4 | partial | — | — | yes |  | W5 +Py · async · W8 browser net |
+| `net.ntp` | C | 2 | 2 | 2 | 2 | partial | — | — | yes |  | W5 +Py · async · W8 browser net |
+| `net.pump` | C | 7 | 7 | 7 | 7 | yes | — | — | yes |  | W5 +Py · W8 browser net |
+| `net.ssh` | C | 16 | 16 | 16 | 16 | partial | yes | — | yes | poll exists; some paths block | W1 pure C · W5 +Py · async · W8 browser net |
+| `net.tftp` | C | 1 | 1 | 1 | 1 | no | — | — | yes |  | W5 +Py · async · W8 browser net |
+| `net.tls` | C | 18 | 18 | 18 | 18 | partial | — | — | yes |  | W5 +Py · async · W8 browser net |
+| `net.wg` | C | 12 | 12 | 12 | 12 | partial | yes | — | yes |  | W5 +Py · async · W8 browser net |
+| `pack` | C | 6 | 6 | 6 | 6 | yes | — | yes | yes |  | W5 +Py |
+| `rt` | RS | 5 | 5 | 5 | 5 | yes | yes | — | yes | halt/panic*/register/connect | W7 browser |
+| `shell.tui` | C | 4 | 4 | 4 | 4 | partial | — | — | yes |  | W5 +Py · async |
+| `shell.ui` | C | 2 | 2 | 2 | 2 | partial | — | — | yes |  | W5 +Py · async |
+| `shell.vt` | C | 9 | 9 | 9 | 9 | partial | — | — | yes |  | W5 +Py · async |
+| `trust` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes |  | done |
+| `unix.x86` | Py | 2 | 2 | 2 | 2 | no | — | — | — | host sim sync | keep Py muscle · W4 +C/+RS bridges · W5 async |
+| `unix.x86_64` | Py | 2 | 2 | 2 | 2 | no | — | — | — | host sim sync | keep Py muscle · W4 +C/+RS bridges · W5 async |
 | `util.ascii` | C | 5 | 5 | 5 | 5 | yes | yes | yes | yes |  | W7 browser |
 | `util.eightcc` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | W7 browser |
 | `util.endian` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | `*_inline`; +WIRE_IS_LE on Py | W7 browser |
 | `util.fourcc` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | W7 browser |
 | `util.lz4` | RS | 3 | 3 | 3 | 3 | yes | yes | yes | yes |  | W1 pure RS · W7 browser |
 | `util.size` | RS | 2 | 2 | 2 | 2 | yes | yes | yes | yes |  | W1 pure RS · W7 browser |
-| `util.tar` | RS | 5 | 5 | 5 | 2 | partial | yes | — | yes | sync walk today | W5 +Py · async · W7 browser |
-| `wamr_host` | RS | 13 | 4 | 13 | 0 | partial | — | — | yes | LINK_WAMR=1; guest may block | W1 pure RS · W2 +C · W5 +Py · async |
+| `util.tar` | RS | 5 | 5 | 5 | 5 | partial | yes | — | yes | sync walk today | async · W7 browser |
+| `wamr_host` | RS | 15 | 15 | 15 | 15 | partial | yes | — | yes | LINK_WAMR=1; guest may block | async |
 
 ---
 
@@ -250,8 +250,8 @@ Counts are ledger estimates (not a live link inventory).
 | Metric | Value |
 |--------|------:|
 | Rows | 69 |
-| Full export (C∧RS∧Py @ 100%) | 11 (`util.lz4`, `util.size`, `util.endian`, `util.fourcc`, `util.eightcc`, `util.ascii`, `auth`, `trust`, `externals`, `net.faces`, `dev.serial`) |
-| Async = yes | count the `yes` column when editing |
-| Py = 0% | still the common gap for gfx / most net / fs |
+| Full export (C∧RS∧Py @ 100%) | **69/69** |
+| Smoke | `X86_64_BIOS_OK` ENGINE=mp (2026-08-09; dotted nest import; no face_pad/api_N) |
+| Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). |
 
 Recompute the snapshot numbers when you bulk-edit the table.

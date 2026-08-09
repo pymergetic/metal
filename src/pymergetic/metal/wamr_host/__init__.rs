@@ -31,6 +31,8 @@ use pymergetic_metal_rt as _;
 use pymergetic_metal_reg::{pm_metal_reg_mod_load, pm_metal_reg_mod_unload, RegEntry, RegMod};
 
 extern "C" {
+    fn pm_metal_wasm_fetch_register(full_module: *const u8, url: *const core::ffi::c_char, sig: *const u8, sig_len: u32) -> i32;
+    fn pm_metal_wasm_proof_fetch() -> i32;
     fn pm_metal_wasm_port_ready() -> i32;
     fn pm_metal_wasm_port_init() -> i32;
     fn pm_metal_wasm_port_shutdown();
@@ -408,3 +410,10 @@ pub unsafe extern "C" fn pm_metal_wasm_proof() -> i32 {
     pm_metal_log(b"guest surface ok\0".as_ptr());
     0
 }
+
+#[inline]
+pub unsafe fn fetch_register(full_module: *const u8, url: *const u8, sig: *const u8, sig_len: u32) -> i32 {
+    pm_metal_wasm_fetch_register(full_module, url as *const core::ffi::c_char, sig, sig_len)
+}
+#[inline]
+pub fn proof_fetch() -> i32 { unsafe { pm_metal_wasm_proof_fetch() } }

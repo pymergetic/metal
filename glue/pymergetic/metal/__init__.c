@@ -19,13 +19,15 @@ void pm_metal_globals_init(void) {
     if (metal_globals_ready) {
         return;
     }
-    mp_obj_dict_init(&metal_globals, 10);
+    mp_obj_dict_init(&metal_globals, 24);
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR___name__),
                       MP_OBJ_NEW_QSTR(MP_QSTR_pymergetic_dot_metal));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR___path__),
                       MP_OBJ_FROM_PTR(&metal_path_obj));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_util),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_util));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_mem),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_mem));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_externals),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_externals));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_auth),
@@ -33,10 +35,32 @@ void pm_metal_globals_init(void) {
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_trust),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_trust));
 #if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_async),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_async));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_net),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_dev),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_dev));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_boot),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_boot));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_pack),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_pack));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_draw),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_draw));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_console),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_console));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_shell),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_shell));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_bus),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_bus));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_fs),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_fs));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_rt),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_rt));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_hwtree),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_hwtree));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_wamr_host),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_wamr_host));
 #endif
     metal_globals_ready = 1;
 }

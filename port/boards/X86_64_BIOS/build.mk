@@ -210,6 +210,7 @@ OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD
 OBJ += $(BUILD)/metal_mod_packs.o $(BUILD)/metal_pack_inspect.o $(BUILD)/metal_pack_metal.o
 OBJ += $(BUILD)/metal_boot_tree.o $(BUILD)/metal_externals.o $(BUILD)/metal_externals_rows.o $(BUILD)/metal_arch.o $(BUILD)/metal_arch_py.o $(BUILD)/metal_ascii.o
 OBJ += $(BUILD)/metal_microdot.o
+OBJ += $(BUILD)/metal_arch_wasm.o $(BUILD)/metal_arch_x86.o $(BUILD)/metal_arch_x86_64.o
 OBJ += $(BUILD)/metal_auth.o $(BUILD)/metal_trust.o $(BUILD)/metal_endian.o $(BUILD)/metal_fourcc.o $(BUILD)/metal_eightcc.o
 OBJ += $(BUILD)/metal_draw.o $(BUILD)/metal_vt.o $(BUILD)/metal_tui.o $(BUILD)/metal_kbd.o
 OBJ += $(BUILD)/metal_pci.o $(BUILD)/metal_virtio_pci.o $(BUILD)/metal_virtio_net.o
@@ -225,6 +226,7 @@ OBJ += $(BUILD)/metal_dns.o $(BUILD)/metal_ntp.o $(BUILD)/metal_tftp.o $(BUILD)/
 OBJ += $(BUILD)/metal_net_pump.o $(BUILD)/metal_ssh_pkt.o
 OBJ += $(BUILD)/metal_ssh_crypto.o $(BUILD)/metal_ssh_kex.o
 OBJ += $(BUILD)/metal_monocypher.o $(BUILD)/metal_monocypher_ed25519.o $(BUILD)/metal_sha256.o
+OBJ += $(BUILD)/metal_abi_faces.o
 
 # lwIP stack + Metal sockets + WireGuard (appends CFLAGS -I and OBJ)
 $(eval $(call GLUE_ATTACH))
@@ -248,6 +250,10 @@ endif
 RUST_LIBS := $(METAL_RT_LIB)
 
 $(BUILD)/metal_mem.o: $(METAL)/src/pymergetic/metal/mem/port/mem.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_abi_faces.o: $(METAL)/src/pymergetic/metal/port/abi_faces_link.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -296,6 +302,18 @@ $(BUILD)/metal_arch_py.o: $(METAL)/src/pymergetic/metal/arch/py_call.c | $(BUILD
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_microdot.o: $(METAL)/src/pymergetic/metal/net/microdot/bridge.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_arch_wasm.o: $(METAL)/src/pymergetic/metal/arch/wasm/bridge.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_arch_x86.o: $(METAL)/src/pymergetic/metal/arch/x86/bridge.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_arch_x86_64.o: $(METAL)/src/pymergetic/metal/arch/x86_64/bridge.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 

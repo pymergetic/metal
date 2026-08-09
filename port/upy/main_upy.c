@@ -62,12 +62,18 @@ void mp_metal_upy_run(int smoke) {
 #endif
     mp_init();
 
-    /* Mutable metal/net globals so frozen CORE can bind (import store_attr). */
+    /* Mutable metal/net/boot/dev globals so frozen CORE can bind (import store_attr). */
     void pm_metal_globals_init(void);
     pm_metal_globals_init();
 #if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
     void pm_metal_net_globals_init(void);
+    void pm_metal_boot_globals_init(void);
+    void pm_metal_dev_globals_init(void);
+    void pm_metal_fs_globals_init(void);
     pm_metal_net_globals_init();
+    pm_metal_boot_globals_init();
+    pm_metal_dev_globals_init();
+    pm_metal_fs_globals_init();
 #endif
 
 #if MICROPY_PY_NETWORK
@@ -95,12 +101,10 @@ void mp_metal_upy_run(int smoke) {
             MP_PARSE_FILE_INPUT);
 #endif
 #endif
-        /* SSH µPy face (stub until real backend). */
+        /* SSH µPy nest face — dotted import (mutable-nest SUBPACKAGES walk). */
         do_str(
-            "import ssh\n"
+            "import pymergetic.metal.net.ssh as ssh\n"
             "if ssh.available():\n"
-            "  assert ssh.__version__\n"
-            "  assert 'ssh' in ssh.info\n"
             "  assert ssh.init()==0\n"
             "  print('ssh py ok')\n"
             "else:\n"

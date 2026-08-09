@@ -1,5 +1,6 @@
 # Minimal wasmmod pm_upy bus for metal into-Py bridges (fn_resolve / fn_call / …).
-# Include after WASMMOD / PORT_DIR / BUILD / CFLAGS / OBJ are set.
+# Used by inspect / arch(+seats) / unix seats / microdot. Include after
+# WASMMOD / PORT_DIR / BUILD / CFLAGS / OBJ are set.
 #
 # Browser (MICROPY_PY_WASM=1) already links full wasmmod glue + host.c — skip
 # the handle stub and do not double-link glue objects.
@@ -20,6 +21,7 @@ OBJ += \
 	$(BUILD)/upy_bus_call.o \
 	$(BUILD)/upy_bus_module.o \
 	$(BUILD)/upy_bus_ops.o \
+	$(BUILD)/upy_bus_attr.o \
 	$(BUILD)/upy_bus_handles.o
 
 SRC_QSTR += $(PORT_DIR)/upy/wasm_handles_stub.c
@@ -37,6 +39,10 @@ $(BUILD)/upy_bus_module.o: $(WASMMOD)/glue/pm_upy/obj/module.c | $(BUILD)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/upy_bus_ops.o: $(WASMMOD)/glue/pm_upy/obj/ops.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/upy_bus_attr.o: $(WASMMOD)/glue/pm_upy/obj/attr.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 

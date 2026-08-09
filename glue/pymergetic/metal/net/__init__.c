@@ -21,7 +21,7 @@ void pm_metal_net_globals_init(void) {
     if (net_globals_ready) {
         return;
     }
-    mp_obj_dict_init(&net_globals, 8);
+    mp_obj_dict_init(&net_globals, 20);
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&net_globals), MP_OBJ_NEW_QSTR(MP_QSTR___name__),
                       MP_OBJ_NEW_QSTR(MP_QSTR_pymergetic_dot_metal_dot_net));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&net_globals), MP_OBJ_NEW_QSTR(MP_QSTR___path__),
@@ -34,6 +34,24 @@ void pm_metal_net_globals_init(void) {
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net_ssh));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&net_globals), MP_OBJ_NEW_QSTR(MP_QSTR_faces),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net_faces));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&net_globals), MP_OBJ_NEW_QSTR(MP_QSTR_asgi),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net_asgi));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&net_globals), MP_OBJ_NEW_QSTR(MP_QSTR_dhcp),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net_dhcp));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&net_globals), MP_OBJ_NEW_QSTR(MP_QSTR_dns),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net_dns));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&net_globals), MP_OBJ_NEW_QSTR(MP_QSTR_http),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net_http));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&net_globals), MP_OBJ_NEW_QSTR(MP_QSTR_nic),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net_nic));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&net_globals), MP_OBJ_NEW_QSTR(MP_QSTR_ntp),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net_ntp));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&net_globals), MP_OBJ_NEW_QSTR(MP_QSTR_pump),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net_pump));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&net_globals), MP_OBJ_NEW_QSTR(MP_QSTR_tftp),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net_tftp));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&net_globals), MP_OBJ_NEW_QSTR(MP_QSTR_tls),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net_tls));
     net_globals_ready = 1;
 }
 
