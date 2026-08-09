@@ -217,10 +217,10 @@ Counts are ledger estimates (not a live link inventory).
 | `net.asgi` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | Py is consumer/codegen only | pure C · W5 +Py · W8 browser net |
 | `net.dhcp` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | start parks; run sync façade | done · W8 browser net |
 | `net.dns` | C | 3 | 3 | 3 | 3 | yes | — | — | yes | lookup→ip_dns_lookup; resolve façade | done · W8 browser net |
-| `net.faces` | C | 3 | 3 | 3 | 3 | yes | yes | — | yes |  | W8 browser net |
+| `net.faces` | C | 3 | 3 | 3 | 3 | yes | yes | yes | yes | bitfield mark/bits/format | done · W8 browser net |
 | `net.http` | C | 12 | 12 | 12 | 12 | yes | — | — | yes | get parks; client_get façade | done · W8 browser net |
 | `net.ip` | C | 13 | 13 | 13 | 13 | yes | yes | — | yes | socks+dns_lookup park | done · W8 browser net |
-| `net.nic` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | register+L2 poll | done · W8 browser net |
+| `net.nic` | C | 4 | 4 | 4 | 4 | yes | — | yes | yes | L2 registry; empty until host registers | done · W8 browser net |
 | `net.ntp` | C | 7 | 7 | 7 | 7 | yes | — | — | yes | sync parks; query* façades | done · W8 browser net |
 | `net.pump` | C | 7 | 7 | 7 | 7 | yes | — | — | yes |  | W5 +Py · W8 browser net |
 | `net.ssh` | C | 16 | 16 | 16 | 16 | yes | yes | — | yes | server poll-driven; client_exec stub | done · W8 browser net · client later |
@@ -253,7 +253,7 @@ Counts are ledger estimates (not a live link inventory).
 | Rows | 69 |
 | Full export (C∧RS∧Py @ 100%) | **69/69** |
 | Strict green (export ∧ async=yes) | **69/69** |
-| Browser=yes | **37/69** (W7 complete; W8 net remaining · out-of-wave bus/dev/shell/unix/wamr) |
+| Browser=yes | **39/69** (W7 done; W8 faces+nic landed; remaining W8 need host shims · out-of-wave bus/dev/shell/unix/wamr) |
 | Smoke | `X86_64_BIOS_OK` ENGINE=mp · wasm util.tar import ok (2026-08-09) |
 | Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). Browser util.tar = C twin `tar_block.c`. |
 

@@ -81,7 +81,12 @@ METAL_BOOT_SRCS := \
 	$(METAL)/glue/pymergetic/metal/fs/zip.c \
 	$(METAL)/glue/pymergetic/metal/pack.c \
 	$(METAL)/glue/pymergetic/metal/hwtree.c \
+	$(METAL)/glue/pymergetic/metal/net/__init__.c \
+	$(METAL)/glue/pymergetic/metal/net/faces.c \
+	$(METAL)/glue/pymergetic/metal/net/nic.c \
 	$(METAL)/src/pymergetic/metal/pack/mod_packs.c \
+	$(METAL)/src/pymergetic/metal/net/faces/__init__.c \
+	$(METAL)/src/pymergetic/metal/net/nic/__init__.c \
 	$(METAL)/src/pymergetic/metal/boot/tree.c \
 	$(METAL)/src/pymergetic/metal/boot/externals.c \
 	$(METAL)/src/pymergetic/metal/boot/externals_rows.c \
@@ -141,4 +146,7 @@ SRC_QSTR += \
 	$(METAL)/glue/pymergetic/metal/fs/wasmmod.c \
 	$(METAL)/glue/pymergetic/metal/fs/zip.c \
 	$(METAL)/glue/pymergetic/metal/pack.c \
-	$(METAL)/glue/pymergetic/metal/hwtree.c
+	$(METAL)/glue/pymergetic/metal/hwtree.c \
+	$(METAL)/glue/pymergetic/metal/net/__init__.c \
+	$(METAL)/glue/pymergetic/metal/net/faces.c \
+	$(METAL)/glue/pymergetic/metal/net/nic.c

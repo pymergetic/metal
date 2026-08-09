@@ -48,9 +48,9 @@ void pm_metal_globals_init(void) {
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_pack));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_hwtree),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_hwtree));
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_net),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net));
+#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_dev),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_dev));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_draw),

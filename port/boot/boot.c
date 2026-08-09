@@ -134,12 +134,14 @@ static int boot_wasm_sim(void)
     void pm_metal_globals_init(void);
     void pm_metal_boot_globals_init(void);
     void pm_metal_fs_globals_init(void);
+    void pm_metal_net_globals_init(void);
 
     pm_metal_hal_console_init();
-    /* Nest util/mem/auth/async/fs/… under pymergetic.metal for dotted imports. */
+    /* Nest util/mem/auth/async/fs/net/… under pymergetic.metal for dotted imports. */
     pm_metal_globals_init();
     pm_metal_boot_globals_init();
     pm_metal_fs_globals_init();
+    pm_metal_net_globals_init();
     pm_metal_boot_set_print(tree_print_bridge, NULL);
     pm_metal_boot_banner(PM_METAL_VERSION, pm_metal_hal_cpu_label());
 
