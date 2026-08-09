@@ -8,8 +8,6 @@
 #include "../modules.h"
 #include <pymergetic/metal/boot/__init__.h>
 
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
-
 static const MP_DEFINE_STR_OBJ(boot_path_obj, ".frozen/pymergetic/metal/boot");
 
 static mp_obj_t boot_banner(mp_obj_t version_obj, mp_obj_t cpu_obj)
@@ -68,5 +66,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_boot = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&boot_globals,
 };
-
-#endif

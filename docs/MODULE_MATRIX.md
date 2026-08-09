@@ -172,19 +172,19 @@ Doc wins on conflict.
 
 Counts are ledger estimates (not a live link inventory).
 
-| Path | Impl | API | C | RS | Py | Async | Stub | Browser | FW | Note | Dev path |
+| Path | Impl | API | C | RS | Py | Async | Stub | Browser | FW | Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). Browser util.tar = C twin `tar_block.c`; rt = `rt_block.c`; mem.tlsf/arena/lock via abi_faces. |
 |------|------|----:|--:|---:|---:|-------|:----:|:-------:|:--:|------|----------|
 | `arch` | Py+C | 5 | 5 | 5 | 5 | yes | — | yes | yes | CFG seat + into-Py name/names | keep seats · W4 bridges done · W5 +Py(=glue) · W6 no dual Py |
 | `arch.wasm` | Py | 3 | 3 | 3 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
 | `arch.x86` | Py | 3 | 3 | 3 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
 | `arch.x86_64` | Py | 3 | 3 | 3 | 3 | yes | — | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
-| `async` | C | 12 | 12 | 12 | 12 | yes | — | — | yes |  | W1 pure C · W5 +Py · W7 browser |
+| `async` | C | 12 | 12 | 12 | 12 | yes | — | yes | yes | browser smp stub + board_time | done · W7 browser |
 | `auth` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | done |
-| `boot` | C | 4 | 4 | 4 | 4 | yes | yes | — | yes | thin face over boot.tree UX | W6 unfreeze done · W7 browser |
+| `boot` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | thin face over boot.tree UX | done · W7 browser |
 | `boot.tree` | C | 11 | 11 | 11 | 11 | yes | — | yes | yes |  | pure C · W5 +Py |
 | `bus.pci` | C | 8 | 8 | 8 | 8 | yes | — | — | yes |  | W5 +Py |
 | `bus.virtio` | C | 15 | 15 | 15 | 15 | yes | — | — | yes |  | done |
-| `console` | C | 15 | 15 | 15 | 15 | yes | — | — | yes | sync ring façade | done · W7 browser |
+| `console` | C | 15 | 15 | 15 | 15 | yes | — | yes | yes | sync ring façade | done · W7 browser |
 | `dev.acpi` | C | 6 | 6 | 6 | 6 | yes | — | — | yes |  | W5 +Py |
 | `dev.blk` | C | 6 | 6 | 6 | 6 | yes | — | — | — | read_async parks; read façade | done |
 | `dev.gfx.compositor` | C | 10 | 10 | 10 | 10 | yes | — | — | yes | sync present façade | done |
@@ -209,10 +209,10 @@ Counts are ledger estimates (not a live link inventory).
 | `fs.zip` | RS | 4 | 4 | 4 | 4 | yes | yes | — | — | CD scan yields per entry | done · W7 browser |
 | `hwtree` | RS | 1 | 1 | 1 | 1 | yes | yes | — | — | print only (DT walk) | done · W7 browser |
 | `inspect` | Py+C | 6 | 6 | 6 | 6 | yes | — | yes | yes | C+RS into-Py via pm_upy | keep Py app · W4 bridges done |
-| `mem.arena` | RS | 13 | 13 | 13 | 13 | yes | yes | — | — | Arena bytearray face | done · W7 browser |
-| `mem.lock` | RS | 8 | 8 | 8 | 8 | yes | yes | — | — | spin+mutex word buffers | done · W7 browser |
-| `mem.port` | C | 4 | 4 | 4 | 4 | yes | yes | — | yes | browser nest pending | done · W7 browser |
-| `mem.tlsf` | RS | 20 | 20 | 20 | 20 | yes | yes | — | yes | Conte TLSF; browser glue/qstr TBD | done · W7 browser |
+| `mem.arena` | RS | 13 | 13 | 13 | 13 | yes | yes | yes | — | Arena bytearray face | done · W7 browser |
+| `mem.lock` | RS | 8 | 8 | 8 | 8 | yes | yes | yes | — | spin+mutex word buffers | done · W7 browser |
+| `mem.port` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser nest ok | done · W7 browser |
+| `mem.tlsf` | RS | 20 | 20 | 20 | 20 | yes | yes | yes | yes | Conte TLSF; browser via abi_faces_link | done · W7 browser |
 | `net.microdot` | Py | 20 | 20 | 20 | 20 | yes | — | yes | yes | asyncio server; Metal apps use async handlers | keep Py muscle · done |
 | `net.asgi` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | Py is consumer/codegen only | pure C · W5 +Py · W8 browser net |
 | `net.dhcp` | C | 4 | 4 | 4 | 4 | yes | — | — | yes | start parks; run sync façade | done · W8 browser net |
@@ -228,7 +228,7 @@ Counts are ledger estimates (not a live link inventory).
 | `net.tls` | C | 18 | 18 | 18 | 18 | yes | — | — | yes | handshake parks; load_ca_file façade | done · W8 browser net |
 | `net.wg` | C | 12 | 12 | 12 | 12 | yes | yes | — | yes | up/peer sync CPU; handshake_smoke façade | done · W8 browser net |
 | `pack` | C | 6 | 6 | 6 | 6 | yes | — | — | yes |  | W5 +Py · W7 browser |
-| `rt` | RS | 5 | 5 | 5 | 5 | yes | yes | — | yes | halt/panic*/register/connect | done · W7 browser |
+| `rt` | RS | 5 | 5 | 5 | 5 | yes | yes | yes | yes | halt/panic*/register/connect; browser C twin rt_block.c | done · W7 browser |
 | `shell.tui` | C | 4 | 4 | 4 | 4 | yes | — | — | yes |  | done |
 | `shell.ui` | C | 2 | 2 | 2 | 2 | yes | — | — | yes |  | done |
 | `shell.vt` | C | 9 | 9 | 9 | 9 | yes | — | — | yes |  | done |
@@ -253,7 +253,7 @@ Counts are ledger estimates (not a live link inventory).
 | Rows | 69 |
 | Full export (C∧RS∧Py @ 100%) | **69/69** |
 | Strict green (export ∧ async=yes) | **69/69** |
-| Browser=yes | **17/69** (W7 util.* complete; honest demote boot/console/pack/mem; remaining W7 fs/async/rt/mem · W8 net) |
+| Browser=yes | **25/69** (W7: util/mem/async/rt/boot/console; remaining fs*/hwtree/pack · W8 net) |
 | Smoke | `X86_64_BIOS_OK` ENGINE=mp · wasm util.tar import ok (2026-08-09) |
 | Note | Product link uses `abi_faces_link.c` for seats not yet in RUST_LIBS; Py = max(glue, .pyi). Browser util.tar = C twin `tar_block.c`. |
 

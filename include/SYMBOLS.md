@@ -30,10 +30,10 @@ Columns: **C** · **RS** · **Python** · **Seat** · **Status**
 | `fs.wasmmod` | `pm_metal_fs_wasmmod_*` | callee `__init__.rs` | `pymergetic.metal.fs.wasmmod` | firmware | ok |
 | `fs.zip` | `pm_metal_fs_zip_*` | callee `__init__.rs` | `pymergetic.metal.fs.zip` | firmware | ok |
 | `hwtree` | `pm_metal_hwtree_*` | callee `__init__.rs` | `pymergetic.metal.hwtree` | firmware | ok |
-| `mem.arena` | `pm_metal_mem_arena_*` | callee `__init__.rs` | `pymergetic.metal.mem.arena` | firmware | ok |
-| `mem.lock` | `pm_metal_mem_lock_{spin,mutex}_*` | `spin.rs` / `mutex.rs` | `pymergetic.metal.mem.lock` | firmware | ok |
-| `mem.tlsf` | `pm_metal_mem_tlsf_*` | callee `__init__.rs` | `pymergetic.metal.mem.tlsf` | all | ok |
-| `rt` | `pm_metal_rt_*` | callee `__init__.rs` | `pymergetic.metal.rt` | firmware | ok |
+| `mem.arena` | `pm_metal_mem_arena_*` | callee `__init__.rs` / browser `abi_faces_link.c` | `pymergetic.metal.mem.arena` | all | ok |
+| `mem.lock` | `pm_metal_mem_lock_{spin,mutex}_*` | `spin.rs` / `mutex.rs` / browser `abi_faces_link.c` | `pymergetic.metal.mem.lock` | all | ok |
+| `mem.tlsf` | `pm_metal_mem_tlsf_*` | callee `__init__.rs` / browser `abi_faces_link.c` | `pymergetic.metal.mem.tlsf` | all | ok |
+| `rt` | `pm_metal_rt_*` | callee `__init__.rs` / browser `rt_block.c` | `pymergetic.metal.rt` | all | ok |
 | `wamr_host` | `pm_metal_wasm_*` | callee `__init__.rs` / `_fetch.rs` | `pymergetic.metal.wamr_host` | firmware | ok |
 | `net.ip` | `pm_metal_net_ip_*` | face `__init__.rs` | `pymergetic.metal.net.ip` | firmware | ok |
 | `net.wg` | `pm_metal_net_wg_*` | face `__init__.rs` | `pymergetic.metal.net.wg` | firmware | ok |

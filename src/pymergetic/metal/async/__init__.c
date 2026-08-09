@@ -25,6 +25,11 @@
 #endif
 #define PM_METAL_ASYNC_N_PRIO 3u
 
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+#define PM_METAL_CPU_PAUSE() ((void)0)
+#else
+#define PM_METAL_CPU_PAUSE() __asm__ volatile("pause")
+#endif
 typedef enum {
     SLOT_FREE = 0,
     SLOT_SLEEP,
@@ -68,7 +73,7 @@ static pm_metal_async_idle_pump_fn g_idle_pump;
 static void runner_lock(uint32_t ri)
 {
     while (__atomic_exchange_n(&g_runner_lock[ri], 1u, __ATOMIC_ACQUIRE) != 0u) {
-        __asm__ volatile("pause");
+        PM_METAL_CPU_PAUSE();
     }
 }
 
@@ -491,7 +496,7 @@ int32_t pm_metal_async_run_loop_cpu(uint32_t cpu)
     for (;;) {
         (void)pm_metal_async_run_poll_cpu(cpu);
         __atomic_fetch_add(&pm_metal_smp_poll_ticks[cpu], 1u, __ATOMIC_RELAXED);
-        __asm__ volatile("pause");
+        PM_METAL_CPU_PAUSE();
     }
 }
 

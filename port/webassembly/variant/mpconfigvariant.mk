@@ -45,6 +45,11 @@ METAL_BOOT_SRCS := \
 	$(METAL)/glue/pymergetic/metal/externals.c \
 	$(METAL)/glue/pymergetic/metal/auth.c \
 	$(METAL)/glue/pymergetic/metal/trust.c \
+	$(METAL)/glue/pymergetic/metal/async.c \
+	$(METAL)/glue/pymergetic/metal/console.c \
+	$(METAL)/glue/pymergetic/metal/rt.c \
+	$(METAL)/glue/pymergetic/metal/boot/__init__.c \
+	$(METAL)/glue/pymergetic/metal/boot/tree.c \
 	$(METAL)/glue/pymergetic/metal/util/__init__.c \
 	$(METAL)/glue/pymergetic/metal/util/lz4.c \
 	$(METAL)/glue/pymergetic/metal/util/size.c \
@@ -53,9 +58,17 @@ METAL_BOOT_SRCS := \
 	$(METAL)/glue/pymergetic/metal/util/eightcc.c \
 	$(METAL)/glue/pymergetic/metal/util/ascii.c \
 	$(METAL)/glue/pymergetic/metal/util/tar.c \
+	$(METAL)/glue/pymergetic/metal/mem/__init__.c \
+	$(METAL)/glue/pymergetic/metal/mem/port.c \
+	$(METAL)/glue/pymergetic/metal/mem/tlsf.c \
+	$(METAL)/glue/pymergetic/metal/mem/arena.c \
+	$(METAL)/glue/pymergetic/metal/mem/lock.c \
 	$(METAL)/port/hal/wasm/console.c \
 	$(METAL)/port/hal/wasm/metal_log.c \
 	$(METAL)/port/hal/wasm/mem.c \
+	$(METAL)/port/hal/wasm/board_time.c \
+	$(METAL)/port/hal/wasm/smp_stub.c \
+	$(METAL)/port/hal/wasm/rt_block.c \
 	$(METAL)/src/pymergetic/metal/boot/tree.c \
 	$(METAL)/src/pymergetic/metal/boot/externals.c \
 	$(METAL)/src/pymergetic/metal/boot/externals_rows.c \
@@ -67,6 +80,8 @@ METAL_BOOT_SRCS := \
 	$(METAL)/src/pymergetic/metal/net/microdot/bridge.c \
 	$(METAL)/src/pymergetic/metal/auth/__init__.c \
 	$(METAL)/src/pymergetic/metal/trust/__init__.c \
+	$(METAL)/src/pymergetic/metal/async/__init__.c \
+	$(METAL)/src/pymergetic/metal/console/__init__.c \
 	$(METAL)/src/pymergetic/metal/util/ascii.c \
 	$(METAL)/src/pymergetic/metal/util/lz4/lz4_block.c \
 	$(METAL)/src/pymergetic/metal/util/size/size_format.c \
@@ -75,6 +90,7 @@ METAL_BOOT_SRCS := \
 	$(METAL)/src/pymergetic/metal/util/eightcc/__init__.c \
 	$(METAL)/src/pymergetic/metal/util/tar/tar_block.c \
 	$(METAL)/src/pymergetic/metal/mem/port/mem.c \
+	$(METAL)/src/pymergetic/metal/port/abi_faces_link.c \
 	$(METAL)/third_party/tlsf/tlsf.c \
 	$(METAL)/third_party/monocypher/monocypher.c \
 	$(METAL)/third_party/monocypher/monocypher-ed25519.c \
@@ -86,6 +102,11 @@ SRC_QSTR += \
 	$(METAL)/glue/pymergetic/metal/externals.c \
 	$(METAL)/glue/pymergetic/metal/auth.c \
 	$(METAL)/glue/pymergetic/metal/trust.c \
+	$(METAL)/glue/pymergetic/metal/async.c \
+	$(METAL)/glue/pymergetic/metal/console.c \
+	$(METAL)/glue/pymergetic/metal/rt.c \
+	$(METAL)/glue/pymergetic/metal/boot/__init__.c \
+	$(METAL)/glue/pymergetic/metal/boot/tree.c \
 	$(METAL)/glue/pymergetic/metal/util/__init__.c \
 	$(METAL)/glue/pymergetic/metal/util/lz4.c \
 	$(METAL)/glue/pymergetic/metal/util/size.c \
@@ -93,4 +114,9 @@ SRC_QSTR += \
 	$(METAL)/glue/pymergetic/metal/util/fourcc.c \
 	$(METAL)/glue/pymergetic/metal/util/eightcc.c \
 	$(METAL)/glue/pymergetic/metal/util/ascii.c \
-	$(METAL)/glue/pymergetic/metal/util/tar.c
+	$(METAL)/glue/pymergetic/metal/util/tar.c \
+	$(METAL)/glue/pymergetic/metal/mem/__init__.c \
+	$(METAL)/glue/pymergetic/metal/mem/port.c \
+	$(METAL)/glue/pymergetic/metal/mem/tlsf.c \
+	$(METAL)/glue/pymergetic/metal/mem/arena.c \
+	$(METAL)/glue/pymergetic/metal/mem/lock.c
