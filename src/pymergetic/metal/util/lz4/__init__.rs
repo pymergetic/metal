@@ -260,3 +260,40 @@ pub unsafe extern "C" fn pm_metal_util_lz4_decompress_safe(
         }
     }
 }
+
+use core::ffi::c_void;
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod lz4 = "pymergetic.metal.util.lz4";
+    exports: [compress, decompress_safe, compress_bound];
+}
+
+extern "C" fn lz4_register_symbols(_ctx: *mut c_void) -> i32 {
+    lz4::compress.publish(pm_metal_util_lz4_compress as *const c_void);
+    lz4::decompress_safe.publish(pm_metal_util_lz4_decompress_safe as *const c_void);
+    lz4::compress_bound.publish(pm_metal_util_lz4_compress_bound as *const c_void);
+    0
+}
+
+static LZ4_MOD: RegMod = RegMod::from_static(
+    lz4::NAME,
+    &lz4::STORAGE.exports,
+    &lz4::STORAGE.imports,
+    Some(lz4_register_symbols),
+);
+
+/// Load this module into the kernel RegMod ring (idempotent).
+#[no_mangle]
+pub extern "C" fn pm_metal_util_lz4_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(lz4::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&LZ4_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_util_lz4_reg_load()
+}

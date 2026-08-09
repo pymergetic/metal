@@ -253,3 +253,50 @@ pub extern "C" fn pm_metal_mem_arena_align_down(x: usize, a: usize) -> usize {
 pub extern "C" fn pm_metal_mem_arena_page_size() -> usize {
     PAGE_SIZE
 }
+
+
+use core::ffi::c_void;
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod arena = "pymergetic.metal.mem.arena";
+    exports: [empty, init, ready, bytes, map_used, heap_used, hole, heap_grow, map, unmap, align_up, align_down, page_size];
+}
+
+extern "C" fn arena_register_symbols(_ctx: *mut c_void) -> i32 {
+    arena::empty.publish(pm_metal_mem_arena_empty as *const c_void);
+    arena::init.publish(pm_metal_mem_arena_init as *const c_void);
+    arena::ready.publish(pm_metal_mem_arena_ready as *const c_void);
+    arena::bytes.publish(pm_metal_mem_arena_bytes as *const c_void);
+    arena::map_used.publish(pm_metal_mem_arena_map_used as *const c_void);
+    arena::heap_used.publish(pm_metal_mem_arena_heap_used as *const c_void);
+    arena::hole.publish(pm_metal_mem_arena_hole as *const c_void);
+    arena::heap_grow.publish(pm_metal_mem_arena_heap_grow as *const c_void);
+    arena::map.publish(pm_metal_mem_arena_map as *const c_void);
+    arena::unmap.publish(pm_metal_mem_arena_unmap as *const c_void);
+    arena::align_up.publish(pm_metal_mem_arena_align_up as *const c_void);
+    arena::align_down.publish(pm_metal_mem_arena_align_down as *const c_void);
+    arena::page_size.publish(pm_metal_mem_arena_page_size as *const c_void);
+    0
+}
+
+static ARENA_MOD: RegMod = RegMod::from_static(
+    arena::NAME,
+    &arena::STORAGE.exports,
+    &arena::STORAGE.imports,
+    Some(arena_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_mem_arena_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(arena::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&ARENA_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_mem_arena_reg_load()
+}

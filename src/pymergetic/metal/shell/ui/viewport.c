@@ -9,6 +9,25 @@
 
 #include "pymergetic/metal/shell/ui.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_shell_ui_reg_load. */
+static pm_metal_reg_export_t shell_ui_exports[] = {
+    PM_METAL_REG_EXPORT(attach_console0),
+    PM_METAL_REG_EXPORT(present),
+};
+PM_METAL_REG_REF(shell_ui, attach_console0, 0);
+PM_METAL_REG_REF(shell_ui, present, 1);
+PM_METAL_REG_MOD(shell_ui, "pymergetic.metal.shell.ui")
+
+static int32_t shell_ui_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(shell_ui_attach_console0, (void *)pm_metal_shell_ui_attach_console0);
+    pm_metal_reg_export_publish(shell_ui_present, (void *)pm_metal_shell_ui_present);
+    return 0;
+}
+
 static pm_metal_draw_surface_t g_ds;
 static int g_bound;
 static pm_metal_console_vp_id g_vp = -1;

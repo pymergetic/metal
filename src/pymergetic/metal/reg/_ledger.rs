@@ -1,6 +1,6 @@
 //! Cold-path completeness ledger — inspect only.
 //!
-//! Hot dispatch stays on [`crate::RegEntry`] (one atomic ptr). This table
+//! Hot dispatch stays on [`crate::RegExport`] (one atomic ptr). This table
 //! records many callees (any lang, multiple per lang) and caller edges
 //! with honesty / sync-async metadata. Never walked on the call path.
 
@@ -10,7 +10,7 @@ use core::ffi::c_void;
 use crate::spin::Spin;
 use crate::table::{FUNC_MAX, MODULE_MAX};
 
-pub const LEDGER_METHOD_MAX: usize = 96;
+pub const LEDGER_METHOD_MAX: usize = 256;
 pub const LEDGER_CALLEE_MAX: usize = 8;
 pub const LEDGER_CALLER_MAX: usize = 8;
 pub const LEDGER_LABEL_MAX: usize = 32;
@@ -350,7 +350,11 @@ impl Ledger {
         gaps
     }
 
-    /// Write a compact JSON snapshot into `buf`. Returns byte length or -1.
+    /// Write a compact JSON rollup into `buf` (counts only).
+    ///
+    /// Full method rows live under `/inspect/reg/<module>` — embedding every
+    /// method here does not scale once floor RegMods publish into the ledger.
+    /// Returns byte length or -1.
     pub fn write_json(&self, buf: &mut [u8]) -> i32 {
         let mut w = JsonWriter::new(buf);
         self.lock.lock();
@@ -376,22 +380,6 @@ impl Ledger {
             w.comma()?;
             w.key("gap_count")?;
             w.u32(gaps)?;
-            w.comma()?;
-            w.key("methods")?;
-            w.arr_start()?;
-            let mut first = true;
-            for i in 0..count {
-                let m = &methods[i];
-                if !m.used {
-                    continue;
-                }
-                if !first {
-                    w.comma()?;
-                }
-                first = false;
-                write_method(&mut w, m)?;
-            }
-            w.arr_end()?;
             w.obj_end()?;
             Some(())
         })();
@@ -1117,8 +1105,13 @@ impl Ledger {
             w.comma()?;
             w.key("gaps")?;
             w.arr_start()?;
+            /* Per-gap rows only with detail=1 — floor RegMods make the full
+             * gap list too large for Inspect's default body buffers. */
             let mut first_gap = true;
             for i in 0..count {
+                if !opts.detail {
+                    break;
+                }
                 let m = &methods[i];
                 if !m.used || !module_matches(m, opts.module) || !Self::method_is_gap(m) {
                     continue;

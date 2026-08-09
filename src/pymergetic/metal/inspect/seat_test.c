@@ -17,7 +17,7 @@ static int body_has(const char *body, const char *needle)
 int32_t pm_metal_inspect_seat_test(void)
 {
     int status = 0;
-    char body[8192];
+    char body[24576];
     int32_t r;
 
     if (pm_metal_inspect_init() != 0) {
@@ -46,10 +46,6 @@ int32_t pm_metal_inspect_seat_test(void)
         return -1;
     }
 
-    if (pm_metal_reg_ledger_seed_pilot() != 0) {
-        uart_puts("inspect fail seed\n");
-        return -1;
-    }
     if (pm_metal_reg_ledger_method_count() <= 0) {
         uart_puts("inspect fail method_count\n");
         return -1;
@@ -81,7 +77,8 @@ int32_t pm_metal_inspect_seat_test(void)
     }
     r = pm_metal_inspect_handle("GET", "/inspect/reg/pymergetic.metal.async/yield", &status, body,
                                 sizeof(body));
-    if (r <= 0 || status != 200 || !body_has(body, "callees") || !body_has(body, "c_runner")) {
+    if (r <= 0 || status != 200 || !body_has(body, "callees")
+        || !body_has(body, "regmod_entry")) {
         uart_puts("inspect fail reg method\n");
         return -1;
     }

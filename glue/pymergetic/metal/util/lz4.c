@@ -5,7 +5,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/util/lz4/__init__.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t lz4_compress_bound(mp_obj_t n_obj)
 {
@@ -81,5 +80,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_util_lz4 = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&lz4_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_util_lz4, "pymergetic.metal.util.lz4", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

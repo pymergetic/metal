@@ -1899,3 +1899,41 @@ unsafe extern "C" fn op_unlink(ctx: *mut c_void, path: *const u8) -> u32 {
     delete_entry(vm, dir_cl, off);
     done(0)
 }
+
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod fat = "pymergetic.metal.fs.fat";
+    exports: [format_buf, open_buf, close, mount, seed_simple, mount_ram];
+}
+
+extern "C" fn fat_register_symbols(_ctx: *mut c_void) -> i32 {
+    fat::format_buf.publish(pm_metal_fs_fat_format_buf as *const c_void);
+    fat::open_buf.publish(pm_metal_fs_fat_open_buf as *const c_void);
+    fat::close.publish(pm_metal_fs_fat_close as *const c_void);
+    fat::mount.publish(pm_metal_fs_fat_mount as *const c_void);
+    fat::seed_simple.publish(pm_metal_fs_fat_seed_simple as *const c_void);
+    fat::mount_ram.publish(pm_metal_fs_fat_mount_ram as *const c_void);
+    0
+}
+
+static FAT_MOD: RegMod = RegMod::from_static(
+    fat::NAME,
+    &fat::STORAGE.exports,
+    &fat::STORAGE.imports,
+    Some(fat_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_fs_fat_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(fat::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&FAT_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_fs_fat_reg_load()
+}

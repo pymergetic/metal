@@ -1,6 +1,39 @@
 #include "pymergetic/metal/shell/vt/__init__.h"
+#include <pymergetic/metal/reg/mod.h>
 
 #include <string.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_shell_vt_reg_load. */
+static pm_metal_reg_export_t shell_vt_exports[] = {
+    PM_METAL_REG_EXPORT(init),
+    PM_METAL_REG_EXPORT(ready),
+    PM_METAL_REG_EXPORT(switch),
+    PM_METAL_REG_EXPORT(active),
+    PM_METAL_REG_EXPORT(write),
+    PM_METAL_REG_EXPORT(puts),
+    PM_METAL_REG_EXPORT(render),
+};
+PM_METAL_REG_REF(shell_vt, init, 0);
+PM_METAL_REG_REF(shell_vt, ready, 1);
+PM_METAL_REG_REF(shell_vt, switch, 2);
+PM_METAL_REG_REF(shell_vt, active, 3);
+PM_METAL_REG_REF(shell_vt, write, 4);
+PM_METAL_REG_REF(shell_vt, puts, 5);
+PM_METAL_REG_REF(shell_vt, render, 6);
+PM_METAL_REG_MOD(shell_vt, "pymergetic.metal.shell.vt")
+
+static int32_t shell_vt_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(shell_vt_init, (void *)pm_metal_vt_init);
+    pm_metal_reg_export_publish(shell_vt_ready, (void *)pm_metal_vt_ready);
+    pm_metal_reg_export_publish(shell_vt_switch, (void *)pm_metal_vt_switch);
+    pm_metal_reg_export_publish(shell_vt_active, (void *)pm_metal_vt_active);
+    pm_metal_reg_export_publish(shell_vt_write, (void *)pm_metal_vt_write);
+    pm_metal_reg_export_publish(shell_vt_puts, (void *)pm_metal_vt_puts);
+    pm_metal_reg_export_publish(shell_vt_render, (void *)pm_metal_vt_render);
+    return 0;
+}
 
 static pm_metal_vt_t g_vts[PM_METAL_VT_COUNT];
 static int32_t g_active;

@@ -296,3 +296,41 @@ fn cstr<'a>(p: *const u8) -> &'a str {
         core::str::from_utf8_unchecked(core::slice::from_raw_parts(p, n))
     }
 }
+
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod vfs = "pymergetic.metal.fs.vfs";
+    exports: [mount, umount, mount_count, mount_info, mount_get, resolve];
+}
+
+extern "C" fn vfs_register_symbols(_ctx: *mut c_void) -> i32 {
+    vfs::mount.publish(pm_metal_fs_vfs_mount as *const c_void);
+    vfs::umount.publish(pm_metal_fs_vfs_umount as *const c_void);
+    vfs::mount_count.publish(pm_metal_fs_vfs_mount_count as *const c_void);
+    vfs::mount_info.publish(pm_metal_fs_vfs_mount_info as *const c_void);
+    vfs::mount_get.publish(pm_metal_fs_vfs_mount_get as *const c_void);
+    vfs::resolve.publish(pm_metal_fs_vfs_resolve as *const c_void);
+    0
+}
+
+static VFS_MOD: RegMod = RegMod::from_static(
+    vfs::NAME,
+    &vfs::STORAGE.exports,
+    &vfs::STORAGE.imports,
+    Some(vfs_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_fs_vfs_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(vfs::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&VFS_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_fs_vfs_reg_load()
+}

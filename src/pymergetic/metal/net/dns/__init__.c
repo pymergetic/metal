@@ -11,6 +11,28 @@
 #include "pymergetic/metal/net/ip/sock.h"
 #include "pymergetic/metal/net/pump/__init__.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_net_dns_reg_load. */
+static pm_metal_reg_export_t net_dns_exports[] = {
+    PM_METAL_REG_EXPORT(lookup),
+    PM_METAL_REG_EXPORT(last_addr),
+    PM_METAL_REG_EXPORT(resolve),
+};
+PM_METAL_REG_REF(net_dns, lookup, 0);
+PM_METAL_REG_REF(net_dns, last_addr, 1);
+PM_METAL_REG_REF(net_dns, resolve, 2);
+PM_METAL_REG_MOD(net_dns, "pymergetic.metal.net.dns")
+
+static int32_t net_dns_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(net_dns_lookup, (void *)pm_metal_net_dns_lookup);
+    pm_metal_reg_export_publish(net_dns_last_addr, (void *)pm_metal_net_dns_last_addr);
+    pm_metal_reg_export_publish(net_dns_resolve, (void *)pm_metal_net_dns_resolve);
+    return 0;
+}
+
 #ifndef PM_METAL_DNS_WAIT_ITERS
 #define PM_METAL_DNS_WAIT_ITERS 20000u
 #endif

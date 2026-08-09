@@ -3,6 +3,39 @@
 
 #include "io_pci.h"
 #include "pymergetic/metal/bus/pci.h"
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_bus_pci_reg_load. */
+static pm_metal_reg_export_t bus_pci_exports[] = {
+    PM_METAL_REG_EXPORT(read32),
+    PM_METAL_REG_EXPORT(read16),
+    PM_METAL_REG_EXPORT(read8),
+    PM_METAL_REG_EXPORT(write16),
+    PM_METAL_REG_EXPORT(write32),
+    PM_METAL_REG_EXPORT(enable_mem_bm),
+    PM_METAL_REG_EXPORT(find),
+};
+PM_METAL_REG_REF(bus_pci, read32, 0);
+PM_METAL_REG_REF(bus_pci, read16, 1);
+PM_METAL_REG_REF(bus_pci, read8, 2);
+PM_METAL_REG_REF(bus_pci, write16, 3);
+PM_METAL_REG_REF(bus_pci, write32, 4);
+PM_METAL_REG_REF(bus_pci, enable_mem_bm, 5);
+PM_METAL_REG_REF(bus_pci, find, 6);
+PM_METAL_REG_MOD(bus_pci, "pymergetic.metal.bus.pci")
+
+static int32_t bus_pci_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(bus_pci_read32, (void *)pm_metal_bus_pci_read32);
+    pm_metal_reg_export_publish(bus_pci_read16, (void *)pm_metal_bus_pci_read16);
+    pm_metal_reg_export_publish(bus_pci_read8, (void *)pm_metal_bus_pci_read8);
+    pm_metal_reg_export_publish(bus_pci_write16, (void *)pm_metal_bus_pci_write16);
+    pm_metal_reg_export_publish(bus_pci_write32, (void *)pm_metal_bus_pci_write32);
+    pm_metal_reg_export_publish(bus_pci_enable_mem_bm, (void *)pm_metal_bus_pci_enable_mem_bm);
+    pm_metal_reg_export_publish(bus_pci_find, (void *)pm_metal_bus_pci_find);
+    return 0;
+}
 
 #define PCI_COMMAND_MEMORY_SPACE 0x0002u
 #define PCI_COMMAND_BUS_MASTER   0x0004u

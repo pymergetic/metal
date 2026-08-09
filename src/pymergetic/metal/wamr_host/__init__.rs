@@ -3,7 +3,7 @@
 //! `pymergetic.metal.arch.wasm`).
 //!
 //! Loaded packs join the same registry as every other module
-//! (`pymergetic_metal_reg` RegMod/RegEntry, quiesce-protected unload).
+//! (`pymergetic_metal_reg` RegMod/RegExport, quiesce-protected unload).
 #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(dead_code, non_camel_case_types)]
 
@@ -29,7 +29,7 @@ use pymergetic_metal_mem as _;
 use pymergetic_metal_rt as _;
 
 use pymergetic_metal_reg::{
-    ledger_add_callee, pm_metal_reg_mod_load, pm_metal_reg_mod_unload, RegEntry, RegMod, HONESTY_OK,
+    ledger_add_callee, pm_metal_reg_mod_load, pm_metal_reg_mod_unload, RegExport, RegMod, HONESTY_OK,
     LANG_RS, ROLE_TRAMPOLINE,
 };
 
@@ -158,7 +158,7 @@ extern "C" fn wasm_on_unload(ctx: *mut c_void) -> i32 {
 /// provider case the registry's quiesce-protected unload exists for).
 /// Returns the published export count, or `-1`.
 ///
-/// The `RegMod`/its `entries`/its name buffer are `Box::leak`ed to get
+/// The `RegMod`/its `exports`/its name buffer are `Box::leak`ed to get
 /// the `'static` lifetime the registry API requires; a repeated
 /// load/unload/reload cycle under the same name currently leaks a new
 /// copy each time (matches every other genuinely dynamic provider's
@@ -175,7 +175,7 @@ pub unsafe extern "C" fn pm_metal_wasm_register(full_module: *const u8) -> i32 {
     }
     let n = n as usize;
 
-    let mut entries: Vec<RegEntry> = Vec::with_capacity(n);
+    let mut entries: Vec<RegExport> = Vec::with_capacity(n);
     let mut buf = [0u8; FUNC_BUF_MAX];
     for i in 0..n {
         if pm_metal_wasm_port_export_name(full_module, i as i32, buf.as_mut_ptr(), buf.len() as u32)
@@ -191,7 +191,7 @@ pub unsafe extern "C" fn pm_metal_wasm_register(full_module: *const u8) -> i32 {
         if ptr.is_null() {
             return -1;
         }
-        let entry = RegEntry::new(fname_str);
+        let entry = RegExport::new(fname_str);
         entry.publish(ptr);
         let _ = ledger_add_callee(
             name.as_bytes(),
@@ -207,7 +207,8 @@ pub unsafe extern "C" fn pm_metal_wasm_register(full_module: *const u8) -> i32 {
         );
         entries.push(entry);
     }
-    let entries: &'static [RegEntry] = Box::leak(entries.into_boxed_slice());
+    let export_n = entries.len();
+    let exports: &'static [RegExport] = Box::leak(entries.into_boxed_slice());
     let (name_cstr, name_str) = leak_cstring(name);
 
     let regmod: &'static RegMod = Box::leak(Box::new(RegMod {
@@ -221,15 +222,16 @@ pub unsafe extern "C" fn pm_metal_wasm_register(full_module: *const u8) -> i32 {
         on_registrations_updated: None,
         deregister_symbols: None,
         on_unload: Some(wasm_on_unload),
-        entries,
+        exports,
         imports: &[],
+        lang: LANG_RS,
         raw_next: Cell::new(core::ptr::null()),
         raw_prev: Cell::new(core::ptr::null()),
     }));
     if pm_metal_reg_mod_load(regmod) != 0 {
         return -1;
     }
-    entries.len() as i32
+    export_n as i32
 }
 
 /// Load, then register (join the registry). Returns the published
@@ -280,7 +282,7 @@ pub unsafe extern "C" fn pm_metal_wasm_load_verified(
 }
 
 /// Cascading, quiesced unload through the registry -- withdraws every
-/// published `RegEntry` first (no concurrent caller anywhere in the
+/// published `RegExport` first (no concurrent caller anywhere in the
 /// system while that happens, see `pymergetic_metal_reg::kernel::unload`),
 /// then this module's `on_unload` hook tears down the WAMR instance.
 /// `0` ok, `-1` if not loaded.
@@ -432,3 +434,42 @@ pub unsafe fn fetch_register(full_module: *const u8, url: *const u8, sig: *const
 }
 #[inline]
 pub fn proof_fetch() -> i32 { unsafe { pm_metal_wasm_proof_fetch() } }
+
+
+pymergetic_metal_reg::reg_mod! {
+    mod wamr_host = "pymergetic.metal.wamr_host";
+    exports: [ready, init, shutdown, load, register, load_register, unload, call0, proof];
+}
+
+extern "C" fn wamr_host_register_symbols(_ctx: *mut c_void) -> i32 {
+    wamr_host::ready.publish(pm_metal_wasm_ready as *const c_void);
+    wamr_host::init.publish(pm_metal_wasm_init as *const c_void);
+    wamr_host::shutdown.publish(pm_metal_wasm_shutdown as *const c_void);
+    wamr_host::load.publish(pm_metal_wasm_load as *const c_void);
+    wamr_host::register.publish(pm_metal_wasm_register as *const c_void);
+    wamr_host::load_register.publish(pm_metal_wasm_load_register as *const c_void);
+    wamr_host::unload.publish(pm_metal_wasm_unload as *const c_void);
+    wamr_host::call0.publish(pm_metal_wasm_call0 as *const c_void);
+    wamr_host::proof.publish(pm_metal_wasm_proof as *const c_void);
+    0
+}
+
+static WAMR_HOST_MOD: RegMod = RegMod::from_static(
+    wamr_host::NAME,
+    &wamr_host::STORAGE.exports,
+    &wamr_host::STORAGE.imports,
+    Some(wamr_host_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_wamr_host_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(wamr_host::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&WAMR_HOST_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_wamr_host_reg_load()
+}

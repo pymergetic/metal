@@ -14,6 +14,39 @@
 #include "pymergetic/metal/net/ip/cfg.h"
 #include "pymergetic/metal/net/ip/lwip_start.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_net_wg_reg_load. */
+static pm_metal_reg_export_t net_wg_exports[] = {
+    PM_METAL_REG_EXPORT(up),
+    PM_METAL_REG_EXPORT(down),
+    PM_METAL_REG_EXPORT(peer_add),
+    PM_METAL_REG_EXPORT(peer_del),
+    PM_METAL_REG_EXPORT(status),
+    PM_METAL_REG_EXPORT(ready),
+    PM_METAL_REG_EXPORT(handshake_smoke),
+};
+PM_METAL_REG_REF(net_wg, up, 0);
+PM_METAL_REG_REF(net_wg, down, 1);
+PM_METAL_REG_REF(net_wg, peer_add, 2);
+PM_METAL_REG_REF(net_wg, peer_del, 3);
+PM_METAL_REG_REF(net_wg, status, 4);
+PM_METAL_REG_REF(net_wg, ready, 5);
+PM_METAL_REG_REF(net_wg, handshake_smoke, 6);
+PM_METAL_REG_MOD(net_wg, "pymergetic.metal.net.wg")
+
+static int32_t net_wg_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(net_wg_up, (void *)pm_metal_net_wg_up);
+    pm_metal_reg_export_publish(net_wg_down, (void *)pm_metal_net_wg_down);
+    pm_metal_reg_export_publish(net_wg_peer_add, (void *)pm_metal_net_wg_peer_add);
+    pm_metal_reg_export_publish(net_wg_peer_del, (void *)pm_metal_net_wg_peer_del);
+    pm_metal_reg_export_publish(net_wg_status, (void *)pm_metal_net_wg_status);
+    pm_metal_reg_export_publish(net_wg_ready, (void *)pm_metal_net_wg_ready);
+    pm_metal_reg_export_publish(net_wg_handshake_smoke, (void *)pm_metal_net_wg_handshake_smoke);
+    return 0;
+}
 typedef struct {
     struct wireguardif_init_data init;
     char priv[PM_METAL_NET_WG_KEY_B64_MAX];

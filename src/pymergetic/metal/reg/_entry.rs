@@ -1,30 +1,32 @@
-//! One exported symbol slot inside a module's static registry state.
+//! One exported symbol slot ([`RegExport`]) inside a module's registry state.
 
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-/// One exported symbol slot inside a module's [`crate::RegModStatic`].
-/// `name` is the short function name (no module prefix -- the module
-/// name comes from the owning [`crate::RegMod`]). `ptr` is null until
-/// `register_symbols` publishes it via [`RegEntry::publish`], and is
-/// zeroed again by `deregister_symbols` on unload via
-/// [`RegEntry::withdraw`].
+/// One export: short function name + atomic fn pointer.
 ///
-/// No refcount: a provider is safe to withdraw at any time because
-/// `_kernel::unload` quiesces every async runner first (see
-/// `pymergetic_metal_async::quiesce`) -- there is no concurrent caller
-/// anywhere in the system while `withdraw` runs, fixed provider or
-/// unloadable one alike, so there is nothing for a per-entry live-count
-/// to protect against.
-pub struct RegEntry {
+/// `name` is the short function name (no module prefix — the module name
+/// comes from the owning [`crate::RegMod`]). `ptr` is null until
+/// `register_symbols` publishes it via [`RegExport::publish`], and is
+/// zeroed again by `deregister_symbols` on unload via
+/// [`RegExport::withdraw`].
+///
+/// No refcount: unload quiesces every async runner first (see
+/// `pymergetic_metal_async::quiesce`), so there is no concurrent caller
+/// while `withdraw` runs.
+pub struct RegExport {
     pub name: &'static str,
     ptr: AtomicPtr<c_void>,
 }
 
-// Safety: the only field with interior mutability is the atomic.
-unsafe impl Sync for RegEntry {}
+/// Temporary alias while call sites migrate off the old name.
+#[deprecated(note = "renamed to RegExport")]
+pub type RegEntry = RegExport;
 
-impl RegEntry {
+// Safety: the only field with interior mutability is the atomic.
+unsafe impl Sync for RegExport {}
+
+impl RegExport {
     pub const fn new(name: &'static str) -> Self {
         Self {
             name,
@@ -42,5 +44,9 @@ impl RegEntry {
 
     pub fn get(&self) -> *const c_void {
         self.ptr.load(Ordering::Acquire)
+    }
+
+    pub fn is_published(&self) -> bool {
+        !self.get().is_null()
     }
 }

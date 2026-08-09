@@ -6,9 +6,29 @@
 #include <string.h>
 
 #include <pymergetic/metal/auth/__init__.h>
+#include <pymergetic/metal/reg/mod.h>
 #include <pymergetic/metal/mem.h>
 
 #include "monocypher.h"
+
+static pm_metal_reg_export_t auth_exports[] = {
+    PM_METAL_REG_EXPORT(user_check),
+    PM_METAL_REG_EXPORT(hash_verify),
+    PM_METAL_REG_EXPORT(pubkey_check),
+};
+PM_METAL_REG_REF(auth, user_check, 0);
+PM_METAL_REG_REF(auth, hash_verify, 1);
+PM_METAL_REG_REF(auth, pubkey_check, 2);
+PM_METAL_REG_MOD(auth, "pymergetic.metal.auth")
+
+static int32_t auth_register_symbols(void *ctx)
+{
+  (void)ctx;
+  pm_metal_reg_export_publish(auth_user_check, (void *)pm_metal_auth_user_check);
+  pm_metal_reg_export_publish(auth_hash_verify, (void *)pm_metal_auth_hash_verify);
+  pm_metal_reg_export_publish(auth_pubkey_check, (void *)pm_metal_auth_pubkey_check);
+  return 0;
+}
 
 static pm_metal_auth_user_t g_users[PM_METAL_AUTH_USERS_MAX];
 static pm_metal_auth_pubkey_t g_pubkeys[PM_METAL_AUTH_PUBKEYS_MAX];

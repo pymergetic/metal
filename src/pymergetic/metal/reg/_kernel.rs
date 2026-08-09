@@ -27,8 +27,8 @@
 use core::cell::Cell;
 use core::ffi::c_void;
 
-use crate::declare::ImportRow;
-use crate::entry::RegEntry;
+use crate::declare::RegImport;
+use crate::entry::RegExport;
 use crate::ledger::{self, HONESTY_OK, HONESTY_STUB, LANG_RS, ROLE_MUSCLE, VIA_IMPORT_ROW};
 use crate::spin::Spin;
 
@@ -44,7 +44,7 @@ pub type HookFn = extern "C" fn(*mut c_void) -> i32;
 /// One loaded module's lifecycle shape + published border. Non-generic
 /// (unlike [`crate::RegModStatic`]) so the kernel table can hold
 /// heterogeneous modules without a const-generic size parameter leaking
-/// into the table's own type -- `entries`/`imports` borrow the module's
+/// into the table's own type -- `exports`/`imports` borrow the module's
 /// own fixed-capacity arrays as plain slices.
 pub struct RegMod {
     pub name: &'static str,
@@ -60,8 +60,10 @@ pub struct RegMod {
     pub on_registrations_updated: Option<HookFn>,
     pub deregister_symbols: Option<HookFn>,
     pub on_unload: Option<HookFn>,
-    pub entries: &'static [RegEntry],
-    pub imports: &'static [ImportRow],
+    pub exports: &'static [RegExport],
+    pub imports: &'static [RegImport],
+    /// Ledger language for published exports (`LANG_C` / `LANG_RS` / `LANG_PY`).
+    pub lang: u8,
     /// Raw-tape link (insertion-order circular ring) -- mutated only
     /// under [`KernelTable`]'s lock by `insert`/`remove`. Null (self,
     /// really -- see `insert`) until this node is actually spliced in.
@@ -69,8 +71,41 @@ pub struct RegMod {
     pub raw_prev: Cell<*const RegMod>,
 }
 
+impl RegMod {
+    /// Permanent floor module backed by a [`crate::RegModStatic`]'s slices.
+    pub const fn from_static(
+        name: &'static str,
+        exports: &'static [RegExport],
+        imports: &'static [RegImport],
+        register_symbols: Option<HookFn>,
+    ) -> Self {
+        Self {
+            name,
+            unloadable: false,
+            parent: None,
+            ctx: core::ptr::null_mut(),
+            on_load: None,
+            register_symbols,
+            connect_symbols: None,
+            on_registrations_updated: None,
+            deregister_symbols: None,
+            on_unload: None,
+            exports,
+            imports,
+            lang: LANG_RS,
+            raw_next: Cell::new(core::ptr::null()),
+            raw_prev: Cell::new(core::ptr::null()),
+        }
+    }
+
+    /// Inventory-only module (frozen Py package, no C/RS exports yet).
+    pub const fn py_inventory(name: &'static str) -> Self {
+        Self::from_static(name, &[], &[], None)
+    }
+}
+
 // Safety: `RegMod`'s non-`Cell` fields are plain data once built (hooks
-// are function pointers, `entries`/`imports` are `'static` slices of
+// are function pointers, `exports`/`imports` are `'static` slices of
 // `Sync` types); `ctx` is only ever dereferenced inside the owning
 // module's own hooks. `raw_next`/`raw_prev` are `Cell`s (not `Sync` on
 // their own) but are only ever touched while holding the owning
@@ -201,16 +236,21 @@ pub fn find_mod(name: &str) -> Option<&'static RegMod> {
     KERNEL.snapshot().into_iter().flatten().find(|m| m.name == name)
 }
 
-pub fn find_entry(module: &str, func: &str) -> Option<&'static RegEntry> {
-    find_mod(module).and_then(|m| m.entries.iter().find(|e| e.name == func))
+pub fn find_export(module: &str, func: &str) -> Option<&'static RegExport> {
+    find_mod(module).and_then(|m| m.exports.iter().find(|e| e.name == func))
+}
+
+#[inline]
+pub fn find_entry(module: &str, func: &str) -> Option<&'static RegExport> {
+    find_export(module, func)
 }
 
 fn connect_one(m: &'static RegMod) {
     for imp in m.imports {
-        let entry = find_entry(imp.module, imp.func);
-        imp.set(entry);
+        let export = find_export(imp.module, imp.func);
+        imp.set(export);
         /* Cold ledger caller edge — inspect only; hot path still one atomic load. */
-        let honesty = if entry.is_some() {
+        let honesty = if export.is_some() {
             HONESTY_OK
         } else {
             HONESTY_STUB
@@ -228,7 +268,7 @@ fn connect_one(m: &'static RegMod) {
 }
 
 fn publish_entries_to_ledger(m: &'static RegMod) {
-    for e in m.entries {
+    for e in m.exports {
         let ptr = e.get();
         let honesty = if ptr.is_null() {
             HONESTY_STUB
@@ -238,7 +278,7 @@ fn publish_entries_to_ledger(m: &'static RegMod) {
         let _ = ledger::LEDGER.add_callee(
             m.name.as_bytes(),
             e.name.as_bytes(),
-            LANG_RS,
+            m.lang,
             ROLE_MUSCLE,
             honesty,
             false,
@@ -282,12 +322,16 @@ pub fn load(m: &'static RegMod) -> i32 {
     }
     publish_entries_to_ledger(m);
     connect_all();
-    /* Pack / dyn seats share the C seat table (Inspect/REPL intel). */
-    let mut name_buf = [0u8; 128];
-    let n = m.name.len().min(name_buf.len() - 1);
-    name_buf[..n].copy_from_slice(&m.name.as_bytes()[..n]);
-    unsafe {
-        pm_metal_reg_seat_on_mod_load(name_buf.as_ptr());
+    /* Unloadable packs share the C seat table (Inspect/REPL intel).
+     * Permanently-linked floor modules already have glue seats — do not
+     * invent import-test seats for names with no µPy face. */
+    if m.unloadable {
+        let mut name_buf = [0u8; 128];
+        let n = m.name.len().min(name_buf.len() - 1);
+        name_buf[..n].copy_from_slice(&m.name.as_bytes()[..n]);
+        unsafe {
+            pm_metal_reg_seat_on_mod_load(name_buf.as_ptr());
+        }
     }
     0
 }
@@ -362,7 +406,7 @@ pub fn unload(name: &str) -> i32 {
     }
     with_quiesce(|| {
         let _ = run_hook(m, m.deregister_symbols);
-        for e in m.entries {
+        for e in m.exports {
             e.withdraw();
         }
         let _ = run_hook(m, m.on_unload);

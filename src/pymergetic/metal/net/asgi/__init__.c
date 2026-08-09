@@ -16,6 +16,34 @@
 #include "pymergetic/metal/process/__init__.h"
 #include "ws.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_net_asgi_reg_load. */
+static pm_metal_reg_export_t net_asgi_exports[] = {
+    PM_METAL_REG_EXPORT(init),
+    PM_METAL_REG_EXPORT(init_tls),
+    PM_METAL_REG_EXPORT(release),
+    PM_METAL_REG_EXPORT(poll),
+    PM_METAL_REG_EXPORT(ready),
+};
+PM_METAL_REG_REF(net_asgi, init, 0);
+PM_METAL_REG_REF(net_asgi, init_tls, 1);
+PM_METAL_REG_REF(net_asgi, release, 2);
+PM_METAL_REG_REF(net_asgi, poll, 3);
+PM_METAL_REG_REF(net_asgi, ready, 4);
+PM_METAL_REG_MOD(net_asgi, "pymergetic.metal.net.asgi")
+
+static int32_t net_asgi_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(net_asgi_init, (void *)pm_metal_asgi_init);
+    pm_metal_reg_export_publish(net_asgi_init_tls, (void *)pm_metal_asgi_init_tls);
+    pm_metal_reg_export_publish(net_asgi_release, (void *)pm_metal_asgi_release);
+    pm_metal_reg_export_publish(net_asgi_poll, (void *)pm_metal_asgi_poll);
+    pm_metal_reg_export_publish(net_asgi_ready, (void *)pm_metal_asgi_ready);
+    return 0;
+}
+
 #ifndef PM_METAL_ASGI_VFS_BUF
 #define PM_METAL_ASGI_VFS_BUF 4096u
 #endif

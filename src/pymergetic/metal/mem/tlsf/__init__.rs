@@ -194,3 +194,55 @@ pub unsafe extern "C" fn pm_metal_mem_tlsf_check_pool(pool: *mut Pool) -> i32 {
     }
     tlsf_check_pool(pool)
 }
+
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod tlsf = "pymergetic.metal.mem.tlsf";
+    exports: [size, pool_overhead, align_size, alloc_overhead, create_with_pool, get_pool, add_pool, malloc, memalign, realloc, free, block_size, block_size_min, block_size_max, create, destroy, remove_pool, walk_pool, check, check_pool];
+}
+
+extern "C" fn tlsf_register_symbols(_ctx: *mut c_void) -> i32 {
+    tlsf::size.publish(pm_metal_mem_tlsf_size as *const c_void);
+    tlsf::pool_overhead.publish(pm_metal_mem_tlsf_pool_overhead as *const c_void);
+    tlsf::align_size.publish(pm_metal_mem_tlsf_align_size as *const c_void);
+    tlsf::alloc_overhead.publish(pm_metal_mem_tlsf_alloc_overhead as *const c_void);
+    tlsf::create_with_pool.publish(pm_metal_mem_tlsf_create_with_pool as *const c_void);
+    tlsf::get_pool.publish(pm_metal_mem_tlsf_get_pool as *const c_void);
+    tlsf::add_pool.publish(pm_metal_mem_tlsf_add_pool as *const c_void);
+    tlsf::malloc.publish(pm_metal_mem_tlsf_malloc as *const c_void);
+    tlsf::memalign.publish(pm_metal_mem_tlsf_memalign as *const c_void);
+    tlsf::realloc.publish(pm_metal_mem_tlsf_realloc as *const c_void);
+    tlsf::free.publish(pm_metal_mem_tlsf_free as *const c_void);
+    tlsf::block_size.publish(pm_metal_mem_tlsf_block_size as *const c_void);
+    tlsf::block_size_min.publish(pm_metal_mem_tlsf_block_size_min as *const c_void);
+    tlsf::block_size_max.publish(pm_metal_mem_tlsf_block_size_max as *const c_void);
+    tlsf::create.publish(pm_metal_mem_tlsf_create as *const c_void);
+    tlsf::destroy.publish(pm_metal_mem_tlsf_destroy as *const c_void);
+    tlsf::remove_pool.publish(pm_metal_mem_tlsf_remove_pool as *const c_void);
+    tlsf::walk_pool.publish(pm_metal_mem_tlsf_walk_pool as *const c_void);
+    tlsf::check.publish(pm_metal_mem_tlsf_check as *const c_void);
+    tlsf::check_pool.publish(pm_metal_mem_tlsf_check_pool as *const c_void);
+    0
+}
+
+static TLSF_MOD: RegMod = RegMod::from_static(
+    tlsf::NAME,
+    &tlsf::STORAGE.exports,
+    &tlsf::STORAGE.imports,
+    Some(tlsf_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_mem_tlsf_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(tlsf::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&TLSF_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_mem_tlsf_reg_load()
+}

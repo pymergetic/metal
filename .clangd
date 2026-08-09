@@ -18,6 +18,9 @@ CompileFlags:
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/glue
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/third_party/tlsf
+    # Board builds add these only on crypto TUs; IDE needs them for trust/auth.
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/third_party/monocypher
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/third_party/sha256
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/upy
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/boot

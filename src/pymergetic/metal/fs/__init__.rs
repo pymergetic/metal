@@ -373,3 +373,57 @@ pub unsafe extern "C" fn pm_metal_fs_set_active_ops(
         LAST_CTX = ctx;
     }
 }
+
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod fs = "pymergetic.metal.fs";
+    exports: [open_async, close_async, fread_async, fwrite_async, fpread_async, fpwrite_async, lseek, stat_async, readdir_async, mkdir_async, unlink_async, rename_async, fsync_async, fstat_async, size_async, read_async, write_async, read_mem_async, write_mem_async, result, mount_statfs, set_active_ops];
+}
+
+extern "C" fn fs_register_symbols(_ctx: *mut c_void) -> i32 {
+    fs::open_async.publish(pm_metal_fs_open_async as *const c_void);
+    fs::close_async.publish(pm_metal_fs_close_async as *const c_void);
+    fs::fread_async.publish(pm_metal_fs_fread_async as *const c_void);
+    fs::fwrite_async.publish(pm_metal_fs_fwrite_async as *const c_void);
+    fs::fpread_async.publish(pm_metal_fs_fpread_async as *const c_void);
+    fs::fpwrite_async.publish(pm_metal_fs_fpwrite_async as *const c_void);
+    fs::lseek.publish(pm_metal_fs_lseek as *const c_void);
+    fs::stat_async.publish(pm_metal_fs_stat_async as *const c_void);
+    fs::readdir_async.publish(pm_metal_fs_readdir_async as *const c_void);
+    fs::mkdir_async.publish(pm_metal_fs_mkdir_async as *const c_void);
+    fs::unlink_async.publish(pm_metal_fs_unlink_async as *const c_void);
+    fs::rename_async.publish(pm_metal_fs_rename_async as *const c_void);
+    fs::fsync_async.publish(pm_metal_fs_fsync_async as *const c_void);
+    fs::fstat_async.publish(pm_metal_fs_fstat_async as *const c_void);
+    fs::size_async.publish(pm_metal_fs_size_async as *const c_void);
+    fs::read_async.publish(pm_metal_fs_read_async as *const c_void);
+    fs::write_async.publish(pm_metal_fs_write_async as *const c_void);
+    fs::read_mem_async.publish(pm_metal_fs_read_mem_async as *const c_void);
+    fs::write_mem_async.publish(pm_metal_fs_write_mem_async as *const c_void);
+    fs::result.publish(pm_metal_fs_result as *const c_void);
+    fs::mount_statfs.publish(pm_metal_fs_mount_statfs as *const c_void);
+    fs::set_active_ops.publish(pm_metal_fs_set_active_ops as *const c_void);
+    0
+}
+
+static FS_MOD: RegMod = RegMod::from_static(
+    fs::NAME,
+    &fs::STORAGE.exports,
+    &fs::STORAGE.imports,
+    Some(fs_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_fs_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(fs::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&FS_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_fs_reg_load()
+}

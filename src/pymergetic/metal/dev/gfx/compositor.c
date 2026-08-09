@@ -7,6 +7,34 @@
 #include "pymergetic/metal/dev/gfx/scanout.h"
 #include "pymergetic/metal/mem.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_dev_gfx_compositor_reg_load. */
+static pm_metal_reg_export_t dev_gfx_compositor_exports[] = {
+    PM_METAL_REG_EXPORT(init),
+    PM_METAL_REG_EXPORT(fini),
+    PM_METAL_REG_EXPORT(ready),
+    PM_METAL_REG_EXPORT(present),
+    PM_METAL_REG_EXPORT(clear),
+};
+PM_METAL_REG_REF(dev_gfx_compositor, init, 0);
+PM_METAL_REG_REF(dev_gfx_compositor, fini, 1);
+PM_METAL_REG_REF(dev_gfx_compositor, ready, 2);
+PM_METAL_REG_REF(dev_gfx_compositor, present, 3);
+PM_METAL_REG_REF(dev_gfx_compositor, clear, 4);
+PM_METAL_REG_MOD(dev_gfx_compositor, "pymergetic.metal.dev.gfx.compositor")
+
+static int32_t dev_gfx_compositor_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(dev_gfx_compositor_init, (void *)pm_metal_gfx_init);
+    pm_metal_reg_export_publish(dev_gfx_compositor_fini, (void *)pm_metal_gfx_fini);
+    pm_metal_reg_export_publish(dev_gfx_compositor_ready, (void *)pm_metal_gfx_ready);
+    pm_metal_reg_export_publish(dev_gfx_compositor_present, (void *)pm_metal_gfx_present);
+    pm_metal_reg_export_publish(dev_gfx_compositor_clear, (void *)pm_metal_gfx_clear);
+    return 0;
+}
+
 static pm_metal_gfx_surface_t g_surf;
 static int g_ready;
 static int g_heap_shadow; /* 1 = shadow from heap (free on fini) */

@@ -6,7 +6,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/net/asgi/__init__.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t asgi_init(mp_obj_t port_obj)
 {
@@ -45,5 +44,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_net_asgi = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&asgi_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_net_asgi, "pymergetic.metal.net.asgi", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

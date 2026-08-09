@@ -16,6 +16,10 @@ METAL_RS_SRCS := \
 	$(METAL)/.cargo/config.toml \
 	$(METAL)/crates/pymergetic_metal_rs/Cargo.toml \
 	$(METAL)/crates/pymergetic_metal_rs/src/lib.rs \
+	$(METAL)/crates/pymergetic_metal_rs/src/floor_c.rs \
+	$(METAL)/crates/pymergetic_metal_rs/src/floor_dev.rs \
+	$(METAL)/crates/pymergetic_metal_rs/src/floor_frozen.rs \
+	$(METAL)/crates/pymergetic_metal_rs/src/floor_seats.rs \
 	$(METAL)/crates/pymergetic_metal_rt/Cargo.toml \
 	$(METAL)/src/pymergetic/metal/rt/__init__.rs \
 	$(METAL)/src/pymergetic/metal/rt/ffi.rs \
@@ -43,6 +47,9 @@ METAL_RS_SRCS := \
 	$(METAL)/src/pymergetic/metal/reg/_kernel.rs \
 	$(METAL)/src/pymergetic/metal/reg/_entry.rs \
 	$(METAL)/src/pymergetic/metal/reg/_table.rs \
+	$(METAL)/src/pymergetic/metal/reg/_c_desc.rs \
+	$(METAL)/src/pymergetic/metal/reg/_macros.rs \
+	$(METAL)/src/pymergetic/metal/reg/_declare.rs \
 	$(METAL)/crates/pymergetic_metal_fs_vfs/Cargo.toml \
 	$(METAL)/src/pymergetic/metal/fs/vfs/__init__.rs \
 	$(METAL)/crates/pymergetic_metal_fs/Cargo.toml \

@@ -9,6 +9,52 @@
 #include "pymergetic/metal/mem.h"
 #include "pymergetic/metal/net/pump/__init__.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_net_tls_reg_load. */
+static pm_metal_reg_export_t net_tls_exports[] = {
+    PM_METAL_REG_EXPORT(init),
+    PM_METAL_REG_EXPORT(fini),
+    PM_METAL_REG_EXPORT(poll),
+    PM_METAL_REG_EXPORT(mbedtls_register),
+    PM_METAL_REG_EXPORT(client_open),
+    PM_METAL_REG_EXPORT(server_open),
+    PM_METAL_REG_EXPORT(handshake),
+    PM_METAL_REG_EXPORT(try_read),
+    PM_METAL_REG_EXPORT(write),
+    PM_METAL_REG_EXPORT(close),
+    PM_METAL_REG_EXPORT(load_smoke_server),
+};
+PM_METAL_REG_REF(net_tls, init, 0);
+PM_METAL_REG_REF(net_tls, fini, 1);
+PM_METAL_REG_REF(net_tls, poll, 2);
+PM_METAL_REG_REF(net_tls, mbedtls_register, 3);
+PM_METAL_REG_REF(net_tls, client_open, 4);
+PM_METAL_REG_REF(net_tls, server_open, 5);
+PM_METAL_REG_REF(net_tls, handshake, 6);
+PM_METAL_REG_REF(net_tls, try_read, 7);
+PM_METAL_REG_REF(net_tls, write, 8);
+PM_METAL_REG_REF(net_tls, close, 9);
+PM_METAL_REG_REF(net_tls, load_smoke_server, 10);
+PM_METAL_REG_MOD(net_tls, "pymergetic.metal.net.tls")
+
+static int32_t net_tls_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(net_tls_init, (void *)pm_metal_net_tls_init);
+    pm_metal_reg_export_publish(net_tls_fini, (void *)pm_metal_net_tls_fini);
+    pm_metal_reg_export_publish(net_tls_poll, (void *)pm_metal_net_tls_poll);
+    pm_metal_reg_export_publish(net_tls_mbedtls_register, (void *)pm_metal_net_tls_mbedtls_register);
+    pm_metal_reg_export_publish(net_tls_client_open, (void *)pm_metal_net_tls_client_open);
+    pm_metal_reg_export_publish(net_tls_server_open, (void *)pm_metal_net_tls_server_open);
+    pm_metal_reg_export_publish(net_tls_handshake, (void *)pm_metal_net_tls_handshake);
+    pm_metal_reg_export_publish(net_tls_try_read, (void *)pm_metal_net_tls_try_read);
+    pm_metal_reg_export_publish(net_tls_write, (void *)pm_metal_net_tls_write);
+    pm_metal_reg_export_publish(net_tls_close, (void *)pm_metal_net_tls_close);
+    pm_metal_reg_export_publish(net_tls_load_smoke_server, (void *)pm_metal_net_tls_load_smoke_server);
+    return 0;
+}
+
 static const pm_metal_net_tls_ops_t *g_ops;
 static int32_t g_inited;
 

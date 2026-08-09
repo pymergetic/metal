@@ -51,6 +51,9 @@ int pm_metal_util_eightcc_to_string(const pm_metal_util_eightcc_t *tag,
                                     char out[PM_METAL_UTIL_EIGHTCC_LEN + 1]);
 int pm_metal_util_eightcc_label(uint64_t magic, char out[PM_METAL_UTIL_EIGHTCC_LEN + 1]);
 
+/** Load this module's RegMod (idempotent). */
+int32_t pm_metal_util_eightcc_reg_load(void);
+
 #ifdef __cplusplus
 }
 #endif

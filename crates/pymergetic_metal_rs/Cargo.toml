@@ -19,6 +19,7 @@ pymergetic_metal_mem_arena = { path = "../pymergetic_metal_mem_arena" }
 pymergetic_metal_mem_tlsf = { path = "../pymergetic_metal_mem_tlsf" }
 pymergetic_metal_mem = { path = "../pymergetic_metal_mem" }
 pymergetic_metal_reg = { path = "../pymergetic_metal_reg" }
+pymergetic_metal_net_ssh = { path = "../pymergetic_metal_net_ssh" }
 pymergetic_metal_fs_vfs = { path = "../pymergetic_metal_fs_vfs" }
 pymergetic_metal_fs = { path = "../pymergetic_metal_fs" }
 pymergetic_metal_fs_tmpfs = { path = "../pymergetic_metal_fs_tmpfs" }

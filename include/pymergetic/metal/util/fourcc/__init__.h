@@ -47,6 +47,9 @@ int pm_metal_util_fourcc_to_string(const pm_metal_util_fourcc_t *tag,
                                    char out[PM_METAL_UTIL_FOURCC_LEN + 1]);
 int pm_metal_util_fourcc_label(uint32_t magic, char out[PM_METAL_UTIL_FOURCC_LEN + 1]);
 
+/** Load this module's RegMod (idempotent). */
+int32_t pm_metal_util_fourcc_reg_load(void);
+
 #ifdef __cplusplus
 }
 #endif

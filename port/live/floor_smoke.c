@@ -86,8 +86,6 @@ int pm_metal_floor_smoke(void)
     }
     /* Cold reg ledger pilot rows (inspect only). */
     {
-        extern int32_t pm_metal_reg_ledger_seed_pilot(void);
-        (void)pm_metal_reg_ledger_seed_pilot();
     }
     if (pm_metal_async_n_runners() != n_cpus &&
         pm_metal_async_n_runners() < 2u) {

@@ -133,10 +133,16 @@ pub extern "C" fn pm_metal_py_loop_last_result_valid() -> i32 {
     repl_loop::last_result_valid()
 }
 
-/// Publish edge symbols onto `reg` (`pymergetic.metal.py.*`).
+/// Load edge symbols onto `reg` as RegMod (`pymergetic.metal.py.*`).
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_py_bind_reg() -> i32 {
-    bind::publish()
+    bind::reg_load()
+}
+
+/// Preferred name — same as [`pm_metal_py_bind_reg`].
+#[no_mangle]
+pub extern "C" fn pm_metal_py_reg_load() -> i32 {
+    bind::reg_load()
 }
 
 /// Spawn the REPL-as-boot-shell async task (see `_shell.rs` doc). `0` on

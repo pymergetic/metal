@@ -4,6 +4,25 @@
 
 #include <stddef.h>
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_net_nic_reg_load. */
+static pm_metal_reg_export_t net_nic_exports[] = {
+    PM_METAL_REG_EXPORT(register),
+    PM_METAL_REG_EXPORT(attach_upy),
+};
+PM_METAL_REG_REF(net_nic, register, 0);
+PM_METAL_REG_REF(net_nic, attach_upy, 1);
+PM_METAL_REG_MOD(net_nic, "pymergetic.metal.net.nic")
+
+static int32_t net_nic_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(net_nic_register, (void *)pm_metal_net_nic_register);
+    pm_metal_reg_export_publish(net_nic_attach_upy, (void *)pm_metal_net_nic_attach_upy);
+    return 0;
+}
+
 static const pm_metal_net_nic_l2_ops_t *s_ops;
 static const char *s_name;
 

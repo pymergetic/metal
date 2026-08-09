@@ -8,6 +8,49 @@
 
 #include <stdio.h>
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_boot_mod_reg_load. */
+static pm_metal_reg_export_t boot_mod_exports[] = {
+    PM_METAL_REG_EXPORT(banner),
+    PM_METAL_REG_EXPORT(emit),
+    PM_METAL_REG_EXPORT(tree_ready_ok),
+    PM_METAL_REG_EXPORT(tree_print),
+    PM_METAL_REG_EXPORT(unboot),
+    PM_METAL_REG_EXPORT(shutdown),
+    PM_METAL_REG_EXPORT(reboot),
+    PM_METAL_REG_EXPORT(is_dead),
+    PM_METAL_REG_EXPORT(clear_dead),
+    PM_METAL_REG_EXPORT(shutting_down),
+};
+PM_METAL_REG_REF(boot_mod, banner, 0);
+PM_METAL_REG_REF(boot_mod, emit, 1);
+PM_METAL_REG_REF(boot_mod, tree_ready_ok, 2);
+PM_METAL_REG_REF(boot_mod, tree_print, 3);
+PM_METAL_REG_REF(boot_mod, unboot, 4);
+PM_METAL_REG_REF(boot_mod, shutdown, 5);
+PM_METAL_REG_REF(boot_mod, reboot, 6);
+PM_METAL_REG_REF(boot_mod, is_dead, 7);
+PM_METAL_REG_REF(boot_mod, clear_dead, 8);
+PM_METAL_REG_REF(boot_mod, shutting_down, 9);
+PM_METAL_REG_MOD(boot_mod, "pymergetic.metal.boot")
+
+static int32_t boot_mod_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(boot_mod_banner, (void *)pm_metal_boot_banner);
+    pm_metal_reg_export_publish(boot_mod_emit, (void *)pm_metal_boot_emit);
+    pm_metal_reg_export_publish(boot_mod_tree_ready_ok, (void *)pm_metal_boot_tree_ready_ok);
+    pm_metal_reg_export_publish(boot_mod_tree_print, (void *)pm_metal_boot_tree_print);
+    pm_metal_reg_export_publish(boot_mod_unboot, (void *)pm_metal_boot_unboot);
+    pm_metal_reg_export_publish(boot_mod_shutdown, (void *)pm_metal_boot_shutdown);
+    pm_metal_reg_export_publish(boot_mod_reboot, (void *)pm_metal_boot_reboot);
+    pm_metal_reg_export_publish(boot_mod_is_dead, (void *)pm_metal_boot_is_dead);
+    pm_metal_reg_export_publish(boot_mod_clear_dead, (void *)pm_metal_boot_clear_dead);
+    pm_metal_reg_export_publish(boot_mod_shutting_down, (void *)pm_metal_boot_shutting_down);
+    return 0;
+}
+
 #ifndef PM_METAL_VERSION
 #define PM_METAL_VERSION "0.1.0"
 #endif

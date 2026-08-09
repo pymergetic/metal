@@ -12,6 +12,37 @@
 #include "pymergetic/metal/net/ip/sock.h"
 #include "pymergetic/metal/net/pump/__init__.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_net_tftp_reg_load. */
+static pm_metal_reg_export_t net_tftp_exports[] = {
+    PM_METAL_REG_EXPORT(get_async),
+    PM_METAL_REG_EXPORT(poll),
+    PM_METAL_REG_EXPORT(status),
+    PM_METAL_REG_EXPORT(body_len),
+    PM_METAL_REG_EXPORT(body),
+    PM_METAL_REG_EXPORT(get),
+};
+PM_METAL_REG_REF(net_tftp, get_async, 0);
+PM_METAL_REG_REF(net_tftp, poll, 1);
+PM_METAL_REG_REF(net_tftp, status, 2);
+PM_METAL_REG_REF(net_tftp, body_len, 3);
+PM_METAL_REG_REF(net_tftp, body, 4);
+PM_METAL_REG_REF(net_tftp, get, 5);
+PM_METAL_REG_MOD(net_tftp, "pymergetic.metal.net.tftp")
+
+static int32_t net_tftp_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(net_tftp_get_async, (void *)pm_metal_net_tftp_get_async);
+    pm_metal_reg_export_publish(net_tftp_poll, (void *)pm_metal_net_tftp_poll);
+    pm_metal_reg_export_publish(net_tftp_status, (void *)pm_metal_net_tftp_status);
+    pm_metal_reg_export_publish(net_tftp_body_len, (void *)pm_metal_net_tftp_len);
+    pm_metal_reg_export_publish(net_tftp_body, (void *)pm_metal_net_tftp_body);
+    pm_metal_reg_export_publish(net_tftp_get, (void *)pm_metal_net_tftp_get);
+    return 0;
+}
+
 #define TFTP_PORT 69u
 #define TFTP_CLIENT_PORT 49569u
 #define TFTP_RRQ 1u

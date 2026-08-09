@@ -8,3 +8,6 @@ publish = false
 [lib]
 path = "../../src/pymergetic/metal/async/__init__.rs"
 crate-type = ["rlib"]
+
+[dependencies]
+pymergetic_metal_reg = { path = "../pymergetic_metal_reg" }

@@ -8,7 +8,6 @@
 #include <string.h>
 
 #include <pymergetic/metal/process/__init__.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t process_current(void)
 {
@@ -89,5 +88,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_process = {
 };
 
 int32_t pm_metal_process_seat_test(void) __attribute__((weak));
-
-PM_METAL_REG_SEAT(g_pm_seat_process, "pymergetic.metal.process", PM_METAL_REG_SEAT_GLUE, 1, 1, pm_metal_process_seat_test);

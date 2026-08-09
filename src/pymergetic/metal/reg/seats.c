@@ -196,8 +196,8 @@ typedef struct {
     char path[];
 } dyn_seat_t;
 
-int32_t pm_metal_reg_seat_register(const char *path, pm_metal_reg_seat_kind_t kind, uint8_t fw,
-                                   uint8_t browser, pm_metal_reg_seat_test_fn test)
+int32_t pm_metal_reg_seat_register_ex(const char *path, pm_metal_reg_seat_kind_t kind, uint8_t fw,
+                                      uint8_t browser, uint8_t flags, pm_metal_reg_seat_test_fn test)
 {
     pm_metal_reg_seat_t *exist;
     dyn_seat_t *dyn;
@@ -213,6 +213,7 @@ int32_t pm_metal_reg_seat_register(const char *path, pm_metal_reg_seat_kind_t ki
         exist->kind = kind;
         exist->fw = fw ? 1u : 0u;
         exist->browser = browser ? 1u : 0u;
+        exist->flags = flags;
         if (test != NULL) {
             exist->test = test;
         }
@@ -230,8 +231,15 @@ int32_t pm_metal_reg_seat_register(const char *path, pm_metal_reg_seat_kind_t ki
     dyn->seat.kind = kind;
     dyn->seat.fw = fw ? 1u : 0u;
     dyn->seat.browser = browser ? 1u : 0u;
+    dyn->seat.flags = flags;
     dyn->seat.test = test;
     return pm_metal_reg_seat_splice(&dyn->seat);
+}
+
+int32_t pm_metal_reg_seat_register(const char *path, pm_metal_reg_seat_kind_t kind, uint8_t fw,
+                                   uint8_t browser, pm_metal_reg_seat_test_fn test)
+{
+    return pm_metal_reg_seat_register_ex(path, kind, fw, browser, 0, test);
 }
 
 int32_t pm_metal_reg_seat_set_test(const char *path, pm_metal_reg_seat_test_fn fn)
@@ -483,23 +491,7 @@ int32_t pm_metal_reg_run_tests(void)
 
 void pm_metal_reg_seats_boot(void)
 {
-    uintptr_t addr;
-    uintptr_t end;
-
-    if (g_booted) {
-        return;
-    }
+    /* Linker seat section retired — seats are registered from RegMod floor
+     * load / smoke helpers via pm_metal_reg_seat_register(_ex). */
     g_booted = 1;
-
-    addr = (uintptr_t)__pm_metal_seats_start;
-    end = (uintptr_t)__pm_metal_seats_end;
-    if (addr != 0u && end > addr) {
-        while (addr < end) {
-            const pm_metal_reg_seat_table_t *t = (const pm_metal_reg_seat_table_t *)addr;
-            if (t->seat != NULL) {
-                (void)pm_metal_reg_seat_splice(t->seat);
-            }
-            addr += sizeof(pm_metal_reg_seat_table_t);
-        }
-    }
 }

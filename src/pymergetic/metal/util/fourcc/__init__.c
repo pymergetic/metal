@@ -2,8 +2,26 @@
  * util/fourcc — see __init__.h (PM_METAL_UTIL_FOURCC macros).
  */
 #include <pymergetic/metal/util/fourcc/__init__.h>
+#include <pymergetic/metal/reg/mod.h>
 
 #include <string.h>
+
+/* RegMod declare (C SoT) — loaded from floor via pm_metal_util_fourcc_reg_load. */
+static pm_metal_reg_export_t util_fourcc_exports[] = {
+    PM_METAL_REG_EXPORT(from_u32),
+    PM_METAL_REG_EXPORT(to_u32),
+};
+PM_METAL_REG_REF(util_fourcc, from_u32, 0);
+PM_METAL_REG_REF(util_fourcc, to_u32, 1);
+PM_METAL_REG_MOD(util_fourcc, "pymergetic.metal.util.fourcc")
+
+static int32_t util_fourcc_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(util_fourcc_from_u32, (void *)pm_metal_util_fourcc_from_u32);
+    pm_metal_reg_export_publish(util_fourcc_to_u32, (void *)pm_metal_util_fourcc_to_u32);
+    return 0;
+}
 
 static uint32_t pack_be(uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 {

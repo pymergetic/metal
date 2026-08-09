@@ -5,7 +5,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/dev/input/kbd.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t kbd_init(void)
 {
@@ -57,5 +56,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_dev_input_kbd = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&kbd_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_dev_input_kbd, "pymergetic.metal.dev.input.kbd", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

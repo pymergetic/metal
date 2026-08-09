@@ -72,3 +72,50 @@ pub fn sleep_us(us: u64) -> u32 {
 pub fn yield_() -> u32 {
     unsafe { pm_metal_async_yield() }
 }
+
+
+use core::ffi::c_void;
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod async_mod = "pymergetic.metal.async";
+    exports: [
+        yield_ = "yield",
+        start,
+        ready,
+        run_poll,
+        run_poll_all,
+        sleep_us
+    ];
+}
+
+extern "C" fn async_register_symbols(_ctx: *mut c_void) -> i32 {
+    async_mod::yield_.publish(pm_metal_async_yield as *const c_void);
+    async_mod::start.publish(pm_metal_async_start as *const c_void);
+    async_mod::ready.publish(pm_metal_async_ready as *const c_void);
+    async_mod::run_poll.publish(pm_metal_async_run_poll as *const c_void);
+    async_mod::run_poll_all.publish(pm_metal_async_run_poll_all as *const c_void);
+    async_mod::sleep_us.publish(pm_metal_async_sleep_us as *const c_void);
+    0
+}
+
+static ASYNC_MOD: RegMod = RegMod::from_static(
+    async_mod::NAME,
+    &async_mod::STORAGE.exports,
+    &async_mod::STORAGE.imports,
+    Some(async_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_async_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(async_mod::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&ASYNC_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_async_reg_load()
+}

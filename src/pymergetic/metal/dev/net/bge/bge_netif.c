@@ -9,6 +9,34 @@
 #include "pymergetic/metal/bus/pci.h"
 #include "pymergetic/metal/dev/net/bge/bge_compat.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_dev_net_bge_reg_load. */
+static pm_metal_reg_export_t dev_net_bge_exports[] = {
+    PM_METAL_REG_EXPORT(detect),
+    PM_METAL_REG_EXPORT(open),
+    PM_METAL_REG_EXPORT(ready),
+    PM_METAL_REG_EXPORT(mac),
+    PM_METAL_REG_EXPORT(tx),
+};
+PM_METAL_REG_REF(dev_net_bge, detect, 0);
+PM_METAL_REG_REF(dev_net_bge, open, 1);
+PM_METAL_REG_REF(dev_net_bge, ready, 2);
+PM_METAL_REG_REF(dev_net_bge, mac, 3);
+PM_METAL_REG_REF(dev_net_bge, tx, 4);
+PM_METAL_REG_MOD(dev_net_bge, "pymergetic.metal.dev.net.bge")
+
+static int32_t dev_net_bge_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(dev_net_bge_detect, (void *)pm_metal_bge_netif_detect);
+    pm_metal_reg_export_publish(dev_net_bge_open, (void *)pm_metal_bge_netif_open);
+    pm_metal_reg_export_publish(dev_net_bge_ready, (void *)pm_metal_bge_netif_ready);
+    pm_metal_reg_export_publish(dev_net_bge_mac, (void *)pm_metal_bge_netif_mac);
+    pm_metal_reg_export_publish(dev_net_bge_tx, (void *)pm_metal_bge_netif_tx);
+    return 0;
+}
+
 static metal_bge_softc_t mSc;
 static int32_t           mReady;
 static uint8_t           mBus;

@@ -6,9 +6,7 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/boot/externals.h>
-
 #include <string.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t ExtToDict(const pm_metal_external_t *e)
 {
@@ -105,5 +103,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_externals = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&externals_module_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_externals, "pymergetic.metal.externals", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

@@ -13,6 +13,40 @@
 #include "pymergetic/metal/net/ip/sock.h"
 #include "pymergetic/metal/net/pump/__init__.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_net_ntp_reg_load. */
+static pm_metal_reg_export_t net_ntp_exports[] = {
+    PM_METAL_REG_EXPORT(sync),
+    PM_METAL_REG_EXPORT(sync_host),
+    PM_METAL_REG_EXPORT(poll),
+    PM_METAL_REG_EXPORT(status),
+    PM_METAL_REG_EXPORT(last_unix_secs),
+    PM_METAL_REG_EXPORT(query),
+    PM_METAL_REG_EXPORT(query_host),
+};
+PM_METAL_REG_REF(net_ntp, sync, 0);
+PM_METAL_REG_REF(net_ntp, sync_host, 1);
+PM_METAL_REG_REF(net_ntp, poll, 2);
+PM_METAL_REG_REF(net_ntp, status, 3);
+PM_METAL_REG_REF(net_ntp, last_unix_secs, 4);
+PM_METAL_REG_REF(net_ntp, query, 5);
+PM_METAL_REG_REF(net_ntp, query_host, 6);
+PM_METAL_REG_MOD(net_ntp, "pymergetic.metal.net.ntp")
+
+static int32_t net_ntp_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(net_ntp_sync, (void *)pm_metal_net_ntp_sync);
+    pm_metal_reg_export_publish(net_ntp_sync_host, (void *)pm_metal_net_ntp_sync_host);
+    pm_metal_reg_export_publish(net_ntp_poll, (void *)pm_metal_net_ntp_poll);
+    pm_metal_reg_export_publish(net_ntp_status, (void *)pm_metal_net_ntp_status);
+    pm_metal_reg_export_publish(net_ntp_last_unix_secs, (void *)pm_metal_net_ntp_last_unix_secs);
+    pm_metal_reg_export_publish(net_ntp_query, (void *)pm_metal_net_ntp_query);
+    pm_metal_reg_export_publish(net_ntp_query_host, (void *)pm_metal_net_ntp_query_host);
+    return 0;
+}
+
 #define NTP_PORT 123u
 #define NTP_CLIENT_PORT 49523u
 #define NTP_PACKET_LEN 48u

@@ -82,6 +82,9 @@ int32_t pm_metal_auth_pubkey_load_text(const char *user, const char *text, uint3
 int32_t pm_metal_auth_pubkey_check(const char *user, const char *algo, const uint8_t *key_blob,
                                    uint32_t key_len);
 
+/** Load this module's RegMod (idempotent). */
+int32_t pm_metal_auth_reg_load(void);
+
 #ifdef __cplusplus
 }
 #endif

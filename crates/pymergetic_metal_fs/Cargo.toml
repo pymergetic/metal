@@ -9,6 +9,7 @@ path = "../../src/pymergetic/metal/fs/__init__.rs"
 crate-type = ["rlib"]
 
 [dependencies]
+pymergetic_metal_reg = { path = "../pymergetic_metal_reg" }
 pymergetic_metal_rt = { path = "../pymergetic_metal_rt" }
 pymergetic_metal_async = { path = "../pymergetic_metal_async" }
 pymergetic_metal_fs_vfs = { path = "../pymergetic_metal_fs_vfs" }

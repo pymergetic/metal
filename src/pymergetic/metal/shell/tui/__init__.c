@@ -1,4 +1,5 @@
 #include "pymergetic/metal/shell/tui/__init__.h"
+#include <pymergetic/metal/reg/mod.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -12,6 +13,29 @@
 #include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/net/ip/cfg.h"
 #include "pymergetic/metal/shell/vt/__init__.h"
+
+/* RegMod declare (C SoT) — loaded via pm_metal_shell_tui_reg_load. */
+static pm_metal_reg_export_t shell_tui_exports[] = {
+    PM_METAL_REG_EXPORT(init),
+    PM_METAL_REG_EXPORT(paint_vt),
+    PM_METAL_REG_EXPORT(render_vt),
+    PM_METAL_REG_EXPORT(render_draw),
+};
+PM_METAL_REG_REF(shell_tui, init, 0);
+PM_METAL_REG_REF(shell_tui, paint_vt, 1);
+PM_METAL_REG_REF(shell_tui, render_vt, 2);
+PM_METAL_REG_REF(shell_tui, render_draw, 3);
+PM_METAL_REG_MOD(shell_tui, "pymergetic.metal.shell.tui")
+
+static int32_t shell_tui_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(shell_tui_init, (void *)pm_metal_tui_init);
+    pm_metal_reg_export_publish(shell_tui_paint_vt, (void *)pm_metal_tui_paint_vt);
+    pm_metal_reg_export_publish(shell_tui_render_vt, (void *)pm_metal_tui_render_vt);
+    pm_metal_reg_export_publish(shell_tui_render_draw, (void *)pm_metal_tui_render_draw);
+    return 0;
+}
 
 #ifndef METAL_ENGINE
 #define METAL_ENGINE "mp"

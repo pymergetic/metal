@@ -5,7 +5,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/pack/mod_packs.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t pack_mount_all(void)
 {
@@ -61,5 +60,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_pack = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&pack_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_pack, "pymergetic.metal.pack", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

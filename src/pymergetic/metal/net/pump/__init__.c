@@ -14,6 +14,28 @@
 #include "pymergetic/metal/net/tftp/__init__.h"
 #include "pymergetic/metal/net/tls/__init__.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_net_pump_reg_load. */
+static pm_metal_reg_export_t net_pump_exports[] = {
+    PM_METAL_REG_EXPORT(once),
+    PM_METAL_REG_EXPORT(bind_async),
+    PM_METAL_REG_EXPORT(wake_tcp),
+};
+PM_METAL_REG_REF(net_pump, once, 0);
+PM_METAL_REG_REF(net_pump, bind_async, 1);
+PM_METAL_REG_REF(net_pump, wake_tcp, 2);
+PM_METAL_REG_MOD(net_pump, "pymergetic.metal.net.pump")
+
+static int32_t net_pump_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(net_pump_once, (void *)pm_metal_net_pump_once);
+    pm_metal_reg_export_publish(net_pump_bind_async, (void *)pm_metal_net_pump_bind_async);
+    pm_metal_reg_export_publish(net_pump_wake_tcp, (void *)pm_metal_net_pump_wake_tcp);
+    return 0;
+}
+
 #ifndef PM_METAL_NET_TCP_WAITS
 #define PM_METAL_NET_TCP_WAITS 16
 #endif

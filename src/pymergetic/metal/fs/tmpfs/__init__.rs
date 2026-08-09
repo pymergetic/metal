@@ -478,3 +478,36 @@ unsafe extern "C" fn op_unlink(ctx: *mut c_void, path: *const u8) -> u32 {
     fs.nodes.remove(i);
     done(0)
 }
+
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod tmpfs = "pymergetic.metal.fs.tmpfs";
+    exports: [mount];
+}
+
+extern "C" fn tmpfs_register_symbols(_ctx: *mut c_void) -> i32 {
+    tmpfs::mount.publish(pm_metal_fs_tmpfs_mount as *const c_void);
+    0
+}
+
+static TMPFS_MOD: RegMod = RegMod::from_static(
+    tmpfs::NAME,
+    &tmpfs::STORAGE.exports,
+    &tmpfs::STORAGE.imports,
+    Some(tmpfs_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_fs_tmpfs_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(tmpfs::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&TMPFS_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_fs_tmpfs_reg_load()
+}

@@ -17,6 +17,7 @@ pub unsafe fn register_rows(module: *const u8, rows: &[(*const u8, *const c_void
 }
 
 /// Same as [`register_rows`] with Rust byte slices (must include trailing NUL).
+/// Late-attach only. Floor modules must use [`crate::reg_mod!`] + `mod_load`.
 pub unsafe fn register_rows_bytes(module: &[u8], rows: &[(&[u8], *const c_void)]) -> i32 {
     for &(func, ptr) in rows {
         if pm_metal_reg_register(module.as_ptr(), func.as_ptr(), ptr) != 0 {

@@ -712,7 +712,4 @@ void pm_metal_net_ssh_banner_reset(void)
     pm_metal_net_ssh_pkt_bind_sock(PM_METAL_NET_IP_SOCK_INVALID);
 }
 
-int32_t pm_metal_net_ssh_bind_reg(void)
-{
-    return 0;
-}
+/* bind_reg / reg_load provided by Rust face (RegModStatic). */

@@ -19,6 +19,9 @@ extern const unsigned pm_metal_pack_metal_len;
  * Does not mount pymergetic.wasmmod — that is wasmmod's own pack. */
 int32_t pm_metal_mod_packs_mount_all(void);
 
+/** Load pymergetic.metal.pack RegMod (idempotent). */
+int32_t pm_metal_pack_reg_load(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -6,7 +6,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/draw.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static void draw_surface_from_obj(mp_obj_t obj, pm_metal_draw_surface_t *s)
 {
@@ -118,5 +117,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_draw = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&draw_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_draw, "pymergetic.metal.draw", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

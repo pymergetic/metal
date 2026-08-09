@@ -202,7 +202,12 @@ int32_t pm_metal_smoke_network_test(void)
 #endif
 }
 
-PM_METAL_REG_SEAT_TEST_ONLY(g_pm_seat_smoke_framebuf, "framebuf", pm_metal_smoke_framebuf_test);
+void pm_metal_smoke_register_seats(void)
+{
+    (void)pm_metal_reg_seat_register_ex("framebuf", PM_METAL_REG_SEAT_GLUE, 0, 0,
+                                        PM_METAL_REG_SEAT_F_TEST_ONLY, pm_metal_smoke_framebuf_test);
 #if MICROPY_PY_NETWORK
-PM_METAL_REG_SEAT_TEST_ONLY(g_pm_seat_smoke_network, "network", pm_metal_smoke_network_test);
+    (void)pm_metal_reg_seat_register_ex("network", PM_METAL_REG_SEAT_GLUE, 0, 0,
+                                        PM_METAL_REG_SEAT_F_TEST_ONLY, pm_metal_smoke_network_test);
 #endif
+}

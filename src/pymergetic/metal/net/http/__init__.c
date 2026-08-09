@@ -12,6 +12,43 @@
 #include "pymergetic/metal/net/pump/__init__.h"
 #include "pymergetic/metal/net/tls/__init__.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_net_http_reg_load. */
+static pm_metal_reg_export_t net_http_exports[] = {
+    PM_METAL_REG_EXPORT(init),
+    PM_METAL_REG_EXPORT(init_tls),
+    PM_METAL_REG_EXPORT(shutdown),
+    PM_METAL_REG_EXPORT(poll),
+    PM_METAL_REG_EXPORT(served),
+    PM_METAL_REG_EXPORT(get),
+    PM_METAL_REG_EXPORT(status),
+    PM_METAL_REG_EXPORT(body_len),
+};
+PM_METAL_REG_REF(net_http, init, 0);
+PM_METAL_REG_REF(net_http, init_tls, 1);
+PM_METAL_REG_REF(net_http, shutdown, 2);
+PM_METAL_REG_REF(net_http, poll, 3);
+PM_METAL_REG_REF(net_http, served, 4);
+PM_METAL_REG_REF(net_http, get, 5);
+PM_METAL_REG_REF(net_http, status, 6);
+PM_METAL_REG_REF(net_http, body_len, 7);
+PM_METAL_REG_MOD(net_http, "pymergetic.metal.net.http")
+
+static int32_t net_http_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(net_http_init, (void *)pm_metal_net_http_init);
+    pm_metal_reg_export_publish(net_http_init_tls, (void *)pm_metal_net_http_init_tls);
+    pm_metal_reg_export_publish(net_http_shutdown, (void *)pm_metal_net_http_shutdown);
+    pm_metal_reg_export_publish(net_http_poll, (void *)pm_metal_net_http_poll);
+    pm_metal_reg_export_publish(net_http_served, (void *)pm_metal_net_http_served);
+    pm_metal_reg_export_publish(net_http_get, (void *)pm_metal_net_http_get);
+    pm_metal_reg_export_publish(net_http_status, (void *)pm_metal_net_http_status);
+    pm_metal_reg_export_publish(net_http_body_len, (void *)pm_metal_net_http_body_len);
+    return 0;
+}
+
 #ifndef PM_METAL_HTTP_CLIENT_WAIT_ITERS
 #define PM_METAL_HTTP_CLIENT_WAIT_ITERS 40000u
 #endif

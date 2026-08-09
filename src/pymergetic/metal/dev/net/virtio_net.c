@@ -6,6 +6,37 @@
 #include "pymergetic/metal/dev/net.h"
 #include "pymergetic/metal/mem.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_dev_net_virtio_net_reg_load. */
+static pm_metal_reg_export_t dev_net_virtio_net_exports[] = {
+    PM_METAL_REG_EXPORT(probe),
+    PM_METAL_REG_EXPORT(open),
+    PM_METAL_REG_EXPORT(ready),
+    PM_METAL_REG_EXPORT(mac),
+    PM_METAL_REG_EXPORT(tx),
+    PM_METAL_REG_EXPORT(reap_tx),
+};
+PM_METAL_REG_REF(dev_net_virtio_net, probe, 0);
+PM_METAL_REG_REF(dev_net_virtio_net, open, 1);
+PM_METAL_REG_REF(dev_net_virtio_net, ready, 2);
+PM_METAL_REG_REF(dev_net_virtio_net, mac, 3);
+PM_METAL_REG_REF(dev_net_virtio_net, tx, 4);
+PM_METAL_REG_REF(dev_net_virtio_net, reap_tx, 5);
+PM_METAL_REG_MOD(dev_net_virtio_net, "pymergetic.metal.dev.net.virtio_net")
+
+static int32_t dev_net_virtio_net_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(dev_net_virtio_net_probe, (void *)pm_metal_dev_net_virtio_probe);
+    pm_metal_reg_export_publish(dev_net_virtio_net_open, (void *)pm_metal_dev_net_virtio_open);
+    pm_metal_reg_export_publish(dev_net_virtio_net_ready, (void *)pm_metal_dev_net_virtio_ready);
+    pm_metal_reg_export_publish(dev_net_virtio_net_mac, (void *)pm_metal_dev_net_virtio_mac);
+    pm_metal_reg_export_publish(dev_net_virtio_net_tx, (void *)pm_metal_dev_net_virtio_tx);
+    pm_metal_reg_export_publish(dev_net_virtio_net_reap_tx, (void *)pm_metal_dev_net_virtio_reap_tx);
+    return 0;
+}
+
 #define VNET_RX      0
 #define VNET_TX      1
 #define VNET_QSZ     16

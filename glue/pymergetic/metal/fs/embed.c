@@ -3,11 +3,9 @@
  */
 #include "py/obj.h"
 #include "py/runtime.h"
+
 #include <pymergetic/metal/fs/embed/__init__.h>
 #include <string.h>
-#include <pymergetic/metal/reg/seats.h>
-
-
 static mp_obj_t embed_emit(mp_obj_t name_obj, mp_obj_t data_obj, int is_rs)
 {
     size_t nlen;
@@ -66,6 +64,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs_embed = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&embed_globals,
 };
-
-
-PM_METAL_REG_SEAT(g_pm_seat_fs_embed, "pymergetic.metal.fs.embed", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

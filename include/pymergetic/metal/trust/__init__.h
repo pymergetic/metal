@@ -57,6 +57,9 @@ int32_t pm_metal_trust_accept_mods(const void *data,
  */
 int32_t pm_metal_trust_proof(void);
 
+/** Load this module's RegMod (idempotent). */
+int32_t pm_metal_trust_reg_load(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -10,4 +10,5 @@ crate-type = ["rlib"]
 
 [dependencies]
 pymergetic_metal_rt = { path = "../pymergetic_metal_rt" }
-pymergetic_metal_async = { path = "../pymergetic_metal_async" }
+# async quiesce is linked via metal_rs / product image (C ABI). Do not depend
+# on pymergetic_metal_async here — that would cycle when async declares RegMod.

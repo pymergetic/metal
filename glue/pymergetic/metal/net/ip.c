@@ -6,7 +6,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/net/ip/__init__.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t net_ip_init(mp_obj_t addr_obj, mp_obj_t mask_obj, mp_obj_t gw_obj)
 {
@@ -115,5 +114,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_net_ip = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&net_ip_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_net_ip, "pymergetic.metal.net.ip", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

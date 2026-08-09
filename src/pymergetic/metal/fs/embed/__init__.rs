@@ -149,3 +149,39 @@ pub fn embed_c_string(name: &str, data: &[u8]) -> Option<Vec<u8>> {
     out.truncate(olen);
     Some(out)
 }
+
+
+use core::ffi::c_void;
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod embed = "pymergetic.metal.fs.embed";
+    exports: [c, rs];
+}
+
+extern "C" fn embed_register_symbols(_ctx: *mut c_void) -> i32 {
+    embed::c.publish(pm_metal_fs_embed_c as *const c_void);
+    embed::rs.publish(pm_metal_fs_embed_rs as *const c_void);
+    0
+}
+
+static EMBED_MOD: RegMod = RegMod::from_static(
+    embed::NAME,
+    &embed::STORAGE.exports,
+    &embed::STORAGE.imports,
+    Some(embed_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_fs_embed_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(embed::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&EMBED_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_fs_embed_reg_load()
+}

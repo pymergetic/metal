@@ -9,12 +9,38 @@
 #include "pymergetic/metal/util/ascii.h"
 
 #include "pymergetic/metal/boot/tree.h"
+#include <pymergetic/metal/reg/mod.h>
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "ascii_fig_small.inc.c"
+
+static pm_metal_reg_export_t util_ascii_exports[] = {
+    PM_METAL_REG_EXPORT(bound),
+    PM_METAL_REG_EXPORT(render),
+    PM_METAL_REG_EXPORT(log),
+    PM_METAL_REG_EXPORT(log_cyan),
+    PM_METAL_REG_EXPORT(log_rainbow),
+};
+PM_METAL_REG_REF(util_ascii, bound, 0);
+PM_METAL_REG_REF(util_ascii, render, 1);
+PM_METAL_REG_REF(util_ascii, log, 2);
+PM_METAL_REG_REF(util_ascii, log_cyan, 3);
+PM_METAL_REG_REF(util_ascii, log_rainbow, 4);
+PM_METAL_REG_MOD(util_ascii, "pymergetic.metal.util.ascii")
+
+static int32_t util_ascii_register_symbols(void *ctx)
+{
+  (void)ctx;
+  pm_metal_reg_export_publish(util_ascii_bound, (void *)pm_metal_util_ascii_bound);
+  pm_metal_reg_export_publish(util_ascii_render, (void *)pm_metal_util_ascii_render);
+  pm_metal_reg_export_publish(util_ascii_log, (void *)pm_metal_util_ascii_log);
+  pm_metal_reg_export_publish(util_ascii_log_cyan, (void *)pm_metal_util_ascii_log_cyan);
+  pm_metal_reg_export_publish(util_ascii_log_rainbow, (void *)pm_metal_util_ascii_log_rainbow);
+  return 0;
+}
 
 #define PM_METAL_ASCII_MAX_W 160
 #define PM_METAL_ASCII_MAX_H 32

@@ -42,6 +42,7 @@ int32_t pm_metal_reg_ledger_json(uint8_t *buf, uint32_t cap);
 int32_t pm_metal_reg_ledger_module_json(const uint8_t *full_module, uint8_t *buf, uint32_t cap);
 int32_t pm_metal_reg_ledger_method_json(const uint8_t *full_module, const uint8_t *func,
                                         uint8_t *buf, uint32_t cap);
+/// Deprecated no-op — ledger filled by RegExport publish.
 int32_t pm_metal_reg_ledger_seed_pilot(void);
 
 /**

@@ -6,9 +6,32 @@
 #include <string.h>
 
 #include <pymergetic/metal/trust/__init__.h>
+#include <pymergetic/metal/reg/mod.h>
 #include <pymergetic/metal/log.h>
 
 #include "monocypher.h"
+
+static pm_metal_reg_export_t trust_exports[] = {
+    PM_METAL_REG_EXPORT(mode),
+    PM_METAL_REG_EXPORT(ready),
+    PM_METAL_REG_EXPORT(accept_mods),
+    PM_METAL_REG_EXPORT(proof),
+};
+PM_METAL_REG_REF(trust, mode, 0);
+PM_METAL_REG_REF(trust, ready, 1);
+PM_METAL_REG_REF(trust, accept_mods, 2);
+PM_METAL_REG_REF(trust, proof, 3);
+PM_METAL_REG_MOD(trust, "pymergetic.metal.trust")
+
+static int32_t trust_register_symbols(void *ctx)
+{
+  (void)ctx;
+  pm_metal_reg_export_publish(trust_mode, (void *)pm_metal_trust_mode);
+  pm_metal_reg_export_publish(trust_ready, (void *)pm_metal_trust_ready);
+  pm_metal_reg_export_publish(trust_accept_mods, (void *)pm_metal_trust_accept_mods);
+  pm_metal_reg_export_publish(trust_proof, (void *)pm_metal_trust_proof);
+  return 0;
+}
 
 #if defined(CONFIG_PM_METAL_TRUST_MODE_ENFORCE)
 #define PM_METAL_TRUST_MODE_VAL PM_METAL_TRUST_MODE_ENFORCE

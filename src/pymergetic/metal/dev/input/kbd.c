@@ -3,6 +3,30 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_dev_input_kbd_reg_load. */
+static pm_metal_reg_export_t dev_input_kbd_exports[] = {
+    PM_METAL_REG_EXPORT(init),
+    PM_METAL_REG_EXPORT(ready),
+    PM_METAL_REG_EXPORT(feed_scancode),
+    PM_METAL_REG_EXPORT(poll),
+};
+PM_METAL_REG_REF(dev_input_kbd, init, 0);
+PM_METAL_REG_REF(dev_input_kbd, ready, 1);
+PM_METAL_REG_REF(dev_input_kbd, feed_scancode, 2);
+PM_METAL_REG_REF(dev_input_kbd, poll, 3);
+PM_METAL_REG_MOD(dev_input_kbd, "pymergetic.metal.dev.input.kbd")
+
+static int32_t dev_input_kbd_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(dev_input_kbd_init, (void *)pm_metal_kbd_init);
+    pm_metal_reg_export_publish(dev_input_kbd_ready, (void *)pm_metal_kbd_ready);
+    pm_metal_reg_export_publish(dev_input_kbd_feed_scancode, (void *)pm_metal_kbd_feed_scancode);
+    pm_metal_reg_export_publish(dev_input_kbd_poll, (void *)pm_metal_kbd_poll);
+    return 0;
+}
 /* Local port I/O so muscle does not depend on port/ path. */
 static inline uint8_t kbd_inb(uint16_t port)
 {

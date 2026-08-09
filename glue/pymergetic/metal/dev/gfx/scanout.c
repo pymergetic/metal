@@ -8,7 +8,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/dev/gfx/scanout.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t scanout_bind(mp_obj_t bind_obj)
 {
@@ -90,5 +89,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_dev_gfx_scanout = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&scanout_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_dev_gfx_scanout, "pymergetic.metal.dev.gfx.scanout", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

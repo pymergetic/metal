@@ -7,6 +7,37 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_dev_acpi_reg_load. */
+static pm_metal_reg_export_t dev_acpi_exports[] = {
+    PM_METAL_REG_EXPORT(set_rsdp),
+    PM_METAL_REG_EXPORT(rsdp),
+    PM_METAL_REG_EXPORT(init),
+    PM_METAL_REG_EXPORT(cpu_count),
+    PM_METAL_REG_EXPORT(apic_id),
+    PM_METAL_REG_EXPORT(lapic_base),
+};
+PM_METAL_REG_REF(dev_acpi, set_rsdp, 0);
+PM_METAL_REG_REF(dev_acpi, rsdp, 1);
+PM_METAL_REG_REF(dev_acpi, init, 2);
+PM_METAL_REG_REF(dev_acpi, cpu_count, 3);
+PM_METAL_REG_REF(dev_acpi, apic_id, 4);
+PM_METAL_REG_REF(dev_acpi, lapic_base, 5);
+PM_METAL_REG_MOD(dev_acpi, "pymergetic.metal.dev.acpi")
+
+static int32_t dev_acpi_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(dev_acpi_set_rsdp, (void *)pm_metal_dev_acpi_set_rsdp);
+    pm_metal_reg_export_publish(dev_acpi_rsdp, (void *)pm_metal_dev_acpi_rsdp);
+    pm_metal_reg_export_publish(dev_acpi_init, (void *)pm_metal_dev_acpi_init);
+    pm_metal_reg_export_publish(dev_acpi_cpu_count, (void *)pm_metal_dev_acpi_cpu_count);
+    pm_metal_reg_export_publish(dev_acpi_apic_id, (void *)pm_metal_dev_acpi_apic_id);
+    pm_metal_reg_export_publish(dev_acpi_lapic_base, (void *)pm_metal_dev_acpi_lapic_base);
+    return 0;
+}
+
 #ifndef PM_METAL_ACPI_MAX_CPU
 #define PM_METAL_ACPI_MAX_CPU 8
 #endif

@@ -7,6 +7,34 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_dev_gfx_scanout_reg_load. */
+static pm_metal_reg_export_t dev_gfx_scanout_exports[] = {
+    PM_METAL_REG_EXPORT(bind),
+    PM_METAL_REG_EXPORT(ops),
+    PM_METAL_REG_EXPORT(name),
+    PM_METAL_REG_EXPORT(caps),
+    PM_METAL_REG_EXPORT(fini),
+};
+PM_METAL_REG_REF(dev_gfx_scanout, bind, 0);
+PM_METAL_REG_REF(dev_gfx_scanout, ops, 1);
+PM_METAL_REG_REF(dev_gfx_scanout, name, 2);
+PM_METAL_REG_REF(dev_gfx_scanout, caps, 3);
+PM_METAL_REG_REF(dev_gfx_scanout, fini, 4);
+PM_METAL_REG_MOD(dev_gfx_scanout, "pymergetic.metal.dev.gfx.scanout")
+
+static int32_t dev_gfx_scanout_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(dev_gfx_scanout_bind, (void *)pm_metal_scanout_bind);
+    pm_metal_reg_export_publish(dev_gfx_scanout_ops, (void *)pm_metal_scanout_ops);
+    pm_metal_reg_export_publish(dev_gfx_scanout_name, (void *)pm_metal_scanout_name);
+    pm_metal_reg_export_publish(dev_gfx_scanout_caps, (void *)pm_metal_scanout_caps);
+    pm_metal_reg_export_publish(dev_gfx_scanout_fini, (void *)pm_metal_scanout_fini);
+    return 0;
+}
+
 static const pm_metal_scanout_ops_t *mOps;
 static pm_metal_scanout_bind_t       mBind;
 

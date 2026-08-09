@@ -5,7 +5,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/util/size/__init__.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t util_size_format(mp_obj_t bytes_obj)
 {
@@ -46,5 +45,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_util_size = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&util_size_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_util_size, "pymergetic.metal.util.size", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

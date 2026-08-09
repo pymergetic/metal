@@ -18,6 +18,7 @@
 
 #include "mphalport.h"
 #include "pymergetic/metal/boot/product.h"
+#include "pymergetic/metal/reg/mod.h"
 #include "pymergetic/metal/reg/seats.h"
 
 #include "pm_upy/obj/call.h"
@@ -84,6 +85,12 @@ void mp_metal_upy_run(int smoke) {
 
     /* Floor seats + co-located tests — same store for smoke and REPL/Inspect. */
     pm_metal_reg_seats_boot();
+    {
+        extern void pm_metal_smoke_register_seats(void);
+        pm_metal_smoke_register_seats();
+    }
+    /* Permanently-linked RegMods (exports first, then connect_all). */
+    (void)pm_metal_reg_floor_load();
 
     if (smoke) {
         if (pm_metal_reg_run_tests() != 0) {

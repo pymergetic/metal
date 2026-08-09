@@ -5,7 +5,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/dev/gfx/gfx.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t text_font_width(void)
 {
@@ -54,5 +53,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_dev_gfx_text = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&text_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_dev_gfx_text, "pymergetic.metal.dev.gfx.text", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

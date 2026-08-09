@@ -7,7 +7,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/dev/net/bge/bge_netif.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t bge_detect(void)
 {
@@ -56,5 +55,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_dev_net_bge = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&bge_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_dev_net_bge, "pymergetic.metal.dev.net.bge", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

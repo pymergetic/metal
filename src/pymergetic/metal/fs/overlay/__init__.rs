@@ -382,3 +382,36 @@ unsafe extern "C" fn op_unlink(ctx: *mut c_void, path: *const u8) -> u32 {
     };
     u(ov.upper_ctx, path)
 }
+
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod overlay = "pymergetic.metal.fs.overlay";
+    exports: [mount];
+}
+
+extern "C" fn overlay_register_symbols(_ctx: *mut c_void) -> i32 {
+    overlay::mount.publish(pm_metal_fs_overlay_mount as *const c_void);
+    0
+}
+
+static OVERLAY_MOD: RegMod = RegMod::from_static(
+    overlay::NAME,
+    &overlay::STORAGE.exports,
+    &overlay::STORAGE.imports,
+    Some(overlay_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_fs_overlay_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(overlay::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&OVERLAY_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_fs_overlay_reg_load()
+}

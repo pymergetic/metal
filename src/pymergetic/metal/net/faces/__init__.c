@@ -2,6 +2,28 @@
 
 #include <stddef.h>
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_net_faces_reg_load. */
+static pm_metal_reg_export_t net_faces_exports[] = {
+    PM_METAL_REG_EXPORT(mark),
+    PM_METAL_REG_EXPORT(bits),
+    PM_METAL_REG_EXPORT(format),
+};
+PM_METAL_REG_REF(net_faces, mark, 0);
+PM_METAL_REG_REF(net_faces, bits, 1);
+PM_METAL_REG_REF(net_faces, format, 2);
+PM_METAL_REG_MOD(net_faces, "pymergetic.metal.net.faces")
+
+static int32_t net_faces_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(net_faces_mark, (void *)pm_metal_net_face_mark);
+    pm_metal_reg_export_publish(net_faces_bits, (void *)pm_metal_net_face_bits);
+    pm_metal_reg_export_publish(net_faces_format, (void *)pm_metal_net_face_format);
+    return 0;
+}
+
 static uint32_t g_faces;
 
 void pm_metal_net_face_mark(uint32_t bit)

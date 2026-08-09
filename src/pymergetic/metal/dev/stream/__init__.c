@@ -12,6 +12,40 @@
 #include <pymergetic/metal/dev/stream/__init__.h>
 #include <pymergetic/metal/mem/__init__.h>
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_dev_stream_reg_load. */
+static pm_metal_reg_export_t dev_stream_exports[] = {
+    PM_METAL_REG_EXPORT(pipe),
+    PM_METAL_REG_EXPORT(pty),
+    PM_METAL_REG_EXPORT(write),
+    PM_METAL_REG_EXPORT(try_read),
+    PM_METAL_REG_EXPORT(read),
+    PM_METAL_REG_EXPORT(close),
+    PM_METAL_REG_EXPORT(pending),
+};
+PM_METAL_REG_REF(dev_stream, pipe, 0);
+PM_METAL_REG_REF(dev_stream, pty, 1);
+PM_METAL_REG_REF(dev_stream, write, 2);
+PM_METAL_REG_REF(dev_stream, try_read, 3);
+PM_METAL_REG_REF(dev_stream, read, 4);
+PM_METAL_REG_REF(dev_stream, close, 5);
+PM_METAL_REG_REF(dev_stream, pending, 6);
+PM_METAL_REG_MOD(dev_stream, "pymergetic.metal.dev.stream")
+
+static int32_t dev_stream_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(dev_stream_pipe, (void *)pm_metal_stream_pipe);
+    pm_metal_reg_export_publish(dev_stream_pty, (void *)pm_metal_stream_pty);
+    pm_metal_reg_export_publish(dev_stream_write, (void *)pm_metal_stream_write);
+    pm_metal_reg_export_publish(dev_stream_try_read, (void *)pm_metal_stream_try_read);
+    pm_metal_reg_export_publish(dev_stream_read, (void *)pm_metal_stream_read);
+    pm_metal_reg_export_publish(dev_stream_close, (void *)pm_metal_stream_close);
+    pm_metal_reg_export_publish(dev_stream_pending, (void *)pm_metal_stream_pending);
+    return 0;
+}
+
 #ifndef PM_METAL_STREAM_MAX
 #define PM_METAL_STREAM_MAX 32u
 #endif

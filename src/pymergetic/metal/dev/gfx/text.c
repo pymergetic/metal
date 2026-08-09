@@ -6,6 +6,27 @@
 
 #include "font_vga8x16.inc.c"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_dev_gfx_text_reg_load. */
+static pm_metal_reg_export_t dev_gfx_text_exports[] = {
+    PM_METAL_REG_EXPORT(draw_text),
+    PM_METAL_REG_EXPORT(font_width),
+    PM_METAL_REG_EXPORT(font_height),
+};
+PM_METAL_REG_REF(dev_gfx_text, draw_text, 0);
+PM_METAL_REG_REF(dev_gfx_text, font_width, 1);
+PM_METAL_REG_REF(dev_gfx_text, font_height, 2);
+PM_METAL_REG_MOD(dev_gfx_text, "pymergetic.metal.dev.gfx.text")
+
+static int32_t dev_gfx_text_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(dev_gfx_text_draw_text, (void *)pm_metal_gfx_draw_text);
+    pm_metal_reg_export_publish(dev_gfx_text_font_width, (void *)pm_metal_gfx_font_width);
+    pm_metal_reg_export_publish(dev_gfx_text_font_height, (void *)pm_metal_gfx_font_height);
+    return 0;
+}
 uint32_t pm_metal_gfx_font_width(void)
 {
     return (uint32_t)PM_METAL_GFX_FONT_W;

@@ -756,3 +756,39 @@ pub unsafe extern "C" fn pm_metal_fs_zip_empty(
     *out_len = 22;
     0
 }
+
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod zip = "pymergetic.metal.fs.zip";
+    exports: [open_blob, mount, pack_simple, empty];
+}
+
+extern "C" fn zip_register_symbols(_ctx: *mut c_void) -> i32 {
+    zip::open_blob.publish(pm_metal_fs_zip_open_blob as *const c_void);
+    zip::mount.publish(pm_metal_fs_zip_mount as *const c_void);
+    zip::pack_simple.publish(pm_metal_fs_zip_pack_simple as *const c_void);
+    zip::empty.publish(pm_metal_fs_zip_empty as *const c_void);
+    0
+}
+
+static ZIP_MOD: RegMod = RegMod::from_static(
+    zip::NAME,
+    &zip::STORAGE.exports,
+    &zip::STORAGE.imports,
+    Some(zip_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_fs_zip_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(zip::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&ZIP_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_fs_zip_reg_load()
+}

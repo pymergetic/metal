@@ -137,3 +137,38 @@ pub unsafe extern "C" fn pm_metal_hwtree_print() -> i32 {
     }
     0
 }
+
+
+use core::ffi::c_void;
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod hwtree = "pymergetic.metal.hwtree";
+    exports: [print];
+}
+
+extern "C" fn hwtree_register_symbols(_ctx: *mut c_void) -> i32 {
+    hwtree::print.publish(pm_metal_hwtree_print as *const c_void);
+    0
+}
+
+static HWTREE_MOD: RegMod = RegMod::from_static(
+    hwtree::NAME,
+    &hwtree::STORAGE.exports,
+    &hwtree::STORAGE.imports,
+    Some(hwtree_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_hwtree_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(hwtree::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&HWTREE_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_hwtree_reg_load()
+}

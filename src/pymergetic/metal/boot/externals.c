@@ -215,6 +215,37 @@ void pm_metal_externals_init(void)
 #endif
 #include "wasm_export.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_externals_reg_load. */
+static pm_metal_reg_export_t externals_exports[] = {
+    PM_METAL_REG_EXPORT(init),
+    PM_METAL_REG_EXPORT(seed_fallback),
+    PM_METAL_REG_EXPORT(count),
+    PM_METAL_REG_EXPORT(get),
+    PM_METAL_REG_EXPORT(find),
+    PM_METAL_REG_EXPORT(register),
+};
+PM_METAL_REG_REF(externals, init, 0);
+PM_METAL_REG_REF(externals, seed_fallback, 1);
+PM_METAL_REG_REF(externals, count, 2);
+PM_METAL_REG_REF(externals, get, 3);
+PM_METAL_REG_REF(externals, find, 4);
+PM_METAL_REG_REF(externals, register, 5);
+PM_METAL_REG_MOD(externals, "pymergetic.metal.externals")
+
+static int32_t externals_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(externals_init, (void *)pm_metal_externals_init);
+    pm_metal_reg_export_publish(externals_seed_fallback, (void *)pm_metal_externals_seed_fallback);
+    pm_metal_reg_export_publish(externals_count, (void *)pm_metal_external_count);
+    pm_metal_reg_export_publish(externals_get, (void *)pm_metal_external_get);
+    pm_metal_reg_export_publish(externals_find, (void *)pm_metal_external_find);
+    pm_metal_reg_export_publish(externals_register, (void *)pm_metal_external_register);
+    return 0;
+}
+
 typedef struct {
     char id[32];
     char version[48];

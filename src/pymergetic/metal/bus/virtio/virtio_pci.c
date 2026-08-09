@@ -6,6 +6,34 @@
 #include "pymergetic/metal/bus/virtio.h"
 #include "pymergetic/metal/mem.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_bus_virtio_reg_load. */
+static pm_metal_reg_export_t bus_virtio_exports[] = {
+    PM_METAL_REG_EXPORT(open),
+    PM_METAL_REG_EXPORT(set_features),
+    PM_METAL_REG_EXPORT(cfg_read),
+    PM_METAL_REG_EXPORT(setup_queue),
+    PM_METAL_REG_EXPORT(driver_ok),
+};
+PM_METAL_REG_REF(bus_virtio, open, 0);
+PM_METAL_REG_REF(bus_virtio, set_features, 1);
+PM_METAL_REG_REF(bus_virtio, cfg_read, 2);
+PM_METAL_REG_REF(bus_virtio, setup_queue, 3);
+PM_METAL_REG_REF(bus_virtio, driver_ok, 4);
+PM_METAL_REG_MOD(bus_virtio, "pymergetic.metal.bus.virtio")
+
+static int32_t bus_virtio_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(bus_virtio_open, (void *)pm_metal_virtio_open);
+    pm_metal_reg_export_publish(bus_virtio_set_features, (void *)pm_metal_virtio_set_features);
+    pm_metal_reg_export_publish(bus_virtio_cfg_read, (void *)pm_metal_virtio_cfg_read);
+    pm_metal_reg_export_publish(bus_virtio_setup_queue, (void *)pm_metal_virtio_setup_queue);
+    pm_metal_reg_export_publish(bus_virtio_driver_ok, (void *)pm_metal_virtio_driver_ok);
+    return 0;
+}
+
 #define PM_ST_OK           0
 #define PM_ST_UNSUPPORTED  (-1)
 #define PM_ST_NOT_FOUND    (-3)

@@ -3,6 +3,7 @@
 #define PYMERGETIC_METAL_UTIL_ASCII_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,6 +16,9 @@ void pm_metal_util_ascii_log(const char *text);
 /* Each FIGlet line wrapped in \033[36m … \033[0m (classic Metal banner). */
 void pm_metal_util_ascii_log_cyan(const char *text);
 void pm_metal_util_ascii_log_rainbow(const char *text);
+
+/** Load this module's RegMod (idempotent). */
+int32_t pm_metal_util_ascii_reg_load(void);
 
 #ifdef __cplusplus
 }

@@ -2,8 +2,25 @@
  * util/eightcc — see __init__.h (PM_METAL_UTIL_EIGHTCC macros).
  */
 #include <pymergetic/metal/util/eightcc/__init__.h>
+#include <pymergetic/metal/reg/mod.h>
 
 #include <string.h>
+
+static pm_metal_reg_export_t util_eightcc_exports[] = {
+    PM_METAL_REG_EXPORT(from_u64),
+    PM_METAL_REG_EXPORT(to_u64),
+};
+PM_METAL_REG_REF(util_eightcc, from_u64, 0);
+PM_METAL_REG_REF(util_eightcc, to_u64, 1);
+PM_METAL_REG_MOD(util_eightcc, "pymergetic.metal.util.eightcc")
+
+static int32_t util_eightcc_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(util_eightcc_from_u64, (void *)pm_metal_util_eightcc_from_u64);
+    pm_metal_reg_export_publish(util_eightcc_to_u64, (void *)pm_metal_util_eightcc_to_u64);
+    return 0;
+}
 
 static uint64_t pack_be8(
   uint8_t a, uint8_t b, uint8_t c, uint8_t d, uint8_t e, uint8_t f, uint8_t g, uint8_t h)

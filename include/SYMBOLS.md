@@ -2,8 +2,11 @@
 
 Grouped by `include/pymergetic/metal/<path>`. Path == module.
 
+**SoT:** loaded [`RegMod`](../src/pymergetic/metal/reg/) exports (boot `pm_metal_reg_floor_load`).
+This file is a human spelling ledger, not the registry.
+
 Coverage % / async compliance / maintain hints:
-[`../docs/MODULE_MATRIX.md`](../docs/MODULE_MATRIX.md) (export; seats SoT is `reg/seats.c`).
+[`../docs/MODULE_MATRIX.md`](../docs/MODULE_MATRIX.md).
 
 Columns: **C** · **RS** · **Python** · **Seat** · **Status**
 

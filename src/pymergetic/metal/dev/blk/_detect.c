@@ -5,6 +5,37 @@
 #include <pymergetic/metal/dev/blk/__init__.h>
 #include <pymergetic/metal/dt/__init__.h>
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_dev_blk_reg_load. */
+static pm_metal_reg_export_t dev_blk_exports[] = {
+    PM_METAL_REG_EXPORT(detect),
+    PM_METAL_REG_EXPORT(open),
+    PM_METAL_REG_EXPORT(capacity_sectors),
+    PM_METAL_REG_EXPORT(read),
+    PM_METAL_REG_EXPORT(read_async),
+    PM_METAL_REG_EXPORT(result),
+};
+PM_METAL_REG_REF(dev_blk, detect, 0);
+PM_METAL_REG_REF(dev_blk, open, 1);
+PM_METAL_REG_REF(dev_blk, capacity_sectors, 2);
+PM_METAL_REG_REF(dev_blk, read, 3);
+PM_METAL_REG_REF(dev_blk, read_async, 4);
+PM_METAL_REG_REF(dev_blk, result, 5);
+PM_METAL_REG_MOD(dev_blk, "pymergetic.metal.dev.blk")
+
+static int32_t dev_blk_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(dev_blk_detect, (void *)pm_metal_dev_blk_detect);
+    pm_metal_reg_export_publish(dev_blk_open, (void *)pm_metal_dev_blk_open);
+    pm_metal_reg_export_publish(dev_blk_capacity_sectors, (void *)pm_metal_dev_blk_capacity_sectors);
+    pm_metal_reg_export_publish(dev_blk_read, (void *)pm_metal_dev_blk_read);
+    pm_metal_reg_export_publish(dev_blk_read_async, (void *)pm_metal_dev_blk_read_async);
+    pm_metal_reg_export_publish(dev_blk_result, (void *)pm_metal_dev_blk_result);
+    return 0;
+}
+
 #define IDE_PRIMARY 0x1F0u
 #define IDE_STATUS  0x1F7u
 

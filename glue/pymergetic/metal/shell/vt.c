@@ -5,7 +5,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/shell/vt/__init__.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t vt_init(void)
 {
@@ -88,5 +87,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_shell_vt = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&vt_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_shell_vt, "pymergetic.metal.shell.vt", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

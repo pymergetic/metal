@@ -20,6 +20,63 @@
 #include "pymergetic/metal/dev/net/bge/bge_netif.h"
 #include "pymergetic/metal/net/ip/__init__.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_net_ip_reg_load. */
+static pm_metal_reg_export_t net_ip_exports[] = {
+    PM_METAL_REG_EXPORT(init),
+    PM_METAL_REG_EXPORT(ready),
+    PM_METAL_REG_EXPORT(poll),
+    PM_METAL_REG_EXPORT(addr),
+    PM_METAL_REG_EXPORT(gw),
+    PM_METAL_REG_EXPORT(mask),
+    PM_METAL_REG_EXPORT(dns),
+    PM_METAL_REG_EXPORT(ping),
+    PM_METAL_REG_EXPORT(close),
+    PM_METAL_REG_EXPORT(bind),
+    PM_METAL_REG_EXPORT(connect),
+    PM_METAL_REG_EXPORT(listen),
+    PM_METAL_REG_EXPORT(accept),
+    PM_METAL_REG_EXPORT(recv),
+    PM_METAL_REG_EXPORT(send),
+};
+PM_METAL_REG_REF(net_ip, init, 0);
+PM_METAL_REG_REF(net_ip, ready, 1);
+PM_METAL_REG_REF(net_ip, poll, 2);
+PM_METAL_REG_REF(net_ip, addr, 3);
+PM_METAL_REG_REF(net_ip, gw, 4);
+PM_METAL_REG_REF(net_ip, mask, 5);
+PM_METAL_REG_REF(net_ip, dns, 6);
+PM_METAL_REG_REF(net_ip, ping, 7);
+PM_METAL_REG_REF(net_ip, close, 8);
+PM_METAL_REG_REF(net_ip, bind, 9);
+PM_METAL_REG_REF(net_ip, connect, 10);
+PM_METAL_REG_REF(net_ip, listen, 11);
+PM_METAL_REG_REF(net_ip, accept, 12);
+PM_METAL_REG_REF(net_ip, recv, 13);
+PM_METAL_REG_REF(net_ip, send, 14);
+PM_METAL_REG_MOD(net_ip, "pymergetic.metal.net.ip")
+
+static int32_t net_ip_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(net_ip_init, (void *)pm_metal_net_ip_init);
+    pm_metal_reg_export_publish(net_ip_ready, (void *)pm_metal_net_ip_ready);
+    pm_metal_reg_export_publish(net_ip_poll, (void *)pm_metal_net_ip_poll);
+    pm_metal_reg_export_publish(net_ip_addr, (void *)pm_metal_net_ip_addr);
+    pm_metal_reg_export_publish(net_ip_gw, (void *)pm_metal_net_ip_gw);
+    pm_metal_reg_export_publish(net_ip_mask, (void *)pm_metal_net_ip_mask);
+    pm_metal_reg_export_publish(net_ip_dns, (void *)pm_metal_net_ip_dns);
+    pm_metal_reg_export_publish(net_ip_ping, (void *)pm_metal_net_ip_ping);
+    pm_metal_reg_export_publish(net_ip_close, (void *)pm_metal_net_ip_close);
+    pm_metal_reg_export_publish(net_ip_bind, (void *)pm_metal_net_ip_bind);
+    pm_metal_reg_export_publish(net_ip_connect, (void *)pm_metal_net_ip_connect);
+    pm_metal_reg_export_publish(net_ip_listen, (void *)pm_metal_net_ip_listen);
+    pm_metal_reg_export_publish(net_ip_accept, (void *)pm_metal_net_ip_accept);
+    pm_metal_reg_export_publish(net_ip_recv, (void *)pm_metal_net_ip_recv);
+    pm_metal_reg_export_publish(net_ip_send, (void *)pm_metal_net_ip_send);
+    return 0;
+}
 metal_net_iface_t g_metal_ifaces[METAL_NET_MAX_IFACES];
 uint32_t g_metal_iface_count;
 uint32_t g_metal_eth_count;

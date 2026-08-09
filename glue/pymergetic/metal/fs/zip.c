@@ -3,11 +3,9 @@
  */
 #include "py/obj.h"
 #include "py/runtime.h"
+
 #include <pymergetic/metal/fs/zip/__init__.h>
 #include <string.h>
-#include <pymergetic/metal/reg/seats.h>
-
-
 static const uint8_t *path_z(mp_obj_t path_obj, uint8_t *buf, size_t cap)
 {
     size_t n;
@@ -128,6 +126,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs_zip = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&zip_globals,
 };
-
-
-PM_METAL_REG_SEAT(g_pm_seat_fs_zip, "pymergetic.metal.fs.zip", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

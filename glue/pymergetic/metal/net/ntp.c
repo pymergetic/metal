@@ -6,7 +6,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/net/ntp/__init__.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t ntp_sync(mp_obj_t server_obj)
 {
@@ -79,5 +78,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_net_ntp = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&ntp_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_net_ntp, "pymergetic.metal.net.ntp", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

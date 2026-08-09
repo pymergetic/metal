@@ -6,7 +6,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/mem.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t mem_heap_bytes(void)
 {
@@ -45,5 +44,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_mem_port = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&mem_port_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_mem_port, "pymergetic.metal.mem.port", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

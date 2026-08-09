@@ -1,0 +1,13 @@
+[package]
+name = "pymergetic_metal_net_ssh"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "../../src/pymergetic/metal/net/ssh/__init__.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+pymergetic_metal_rt = { path = "../pymergetic_metal_rt" }
+pymergetic_metal_reg = { path = "../pymergetic_metal_reg" }

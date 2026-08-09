@@ -166,3 +166,36 @@ unsafe extern "C" fn op_unlink(ctx: *mut c_void, path: *const u8) -> u32 {
 unsafe extern "C" fn op_fsync(_ctx: *mut c_void, h: u32) -> u32 {
     done(pm_metal_fs_littlefs_op_fsync(h))
 }
+
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod littlefs = "pymergetic.metal.fs.littlefs";
+    exports: [mount];
+}
+
+extern "C" fn littlefs_register_symbols(_ctx: *mut c_void) -> i32 {
+    littlefs::mount.publish(pm_metal_fs_littlefs_mount as *const c_void);
+    0
+}
+
+static LITTLEFS_MOD: RegMod = RegMod::from_static(
+    littlefs::NAME,
+    &littlefs::STORAGE.exports,
+    &littlefs::STORAGE.imports,
+    Some(littlefs_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_fs_littlefs_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(littlefs::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&LITTLEFS_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_fs_littlefs_reg_load()
+}

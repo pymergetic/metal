@@ -121,3 +121,38 @@ fn write_u64_suf(out: &mut [u8], mut v: u64, suf: &[u8]) -> usize {
     }
     i
 }
+
+use core::ffi::c_void;
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod size = "pymergetic.metal.util.size";
+    exports: [format, format_bytes];
+}
+
+extern "C" fn size_register_symbols(_ctx: *mut c_void) -> i32 {
+    size::format.publish(pm_metal_util_size_format as *const c_void);
+    size::format_bytes.publish(pm_metal_util_size_format_bytes as *const c_void);
+    0
+}
+
+static SIZE_MOD: RegMod = RegMod::from_static(
+    size::NAME,
+    &size::STORAGE.exports,
+    &size::STORAGE.imports,
+    Some(size_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_util_size_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(size::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&SIZE_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_util_size_reg_load()
+}

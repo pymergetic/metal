@@ -6,7 +6,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/bus/virtio.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t virtio_virtio_pages_free(mp_obj_t buf_obj, mp_obj_t pages_obj)
 {
@@ -107,7 +106,6 @@ static mp_obj_t virtio_virtq_free_chain(mp_obj_t vq_obj, mp_obj_t head_obj)
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(virtio_virtq_free_chain_obj, virtio_virtq_free_chain);
 
-
 static mp_obj_t virtio_pages_alloc(mp_obj_t pages_obj)
 {
     return mp_obj_new_int_from_ull((uintptr_t)pm_metal_virtio_pages_alloc((unsigned)mp_obj_get_int(pages_obj)));
@@ -166,5 +164,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_bus_virtio = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&virtio_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_bus_virtio, "pymergetic.metal.bus.virtio", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

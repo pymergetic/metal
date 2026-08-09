@@ -30,6 +30,8 @@
 mod bind;
 #[path = "_bulk.rs"]
 mod bulk;
+#[path = "_c_desc.rs"]
+mod c_desc;
 #[path = "_declare.rs"]
 mod declare;
 #[path = "_entry.rs"]
@@ -40,6 +42,9 @@ mod floor;
 mod kernel;
 #[path = "_ledger.rs"]
 mod ledger;
+#[path = "_macros.rs"]
+#[macro_use]
+mod macros;
 #[path = "_spin.rs"]
 mod spin;
 #[path = "_table.rs"]
@@ -47,17 +52,18 @@ mod table;
 
 use core::ffi::c_void;
 
-use pymergetic_metal_async as _;
 use pymergetic_metal_rt as _;
 
 use bind::bind as bind_key;
 use table::{cstr_bytes, Table, FUNC_MAX, MODULE_MAX};
 
 pub use bulk::{register_rows, register_rows_bytes};
-pub use declare::{ImportRow, RegModStatic};
-pub use entry::RegEntry;
-pub use floor::publish_entries;
-pub use kernel::{HookFn, RegMod};
+#[allow(deprecated)]
+pub use declare::{ImportRow, RegImport, RegModStatic};
+#[allow(deprecated)]
+pub use entry::{RegEntry, RegExport};
+pub use floor::{publish_entries, publish_exports};
+pub use kernel::{find_mod, HookFn, RegMod};
 pub use ledger::{
     HONESTY_INCOMPLETE, HONESTY_OK, HONESTY_STUB, LANG_C, LANG_PY, LANG_RS, ROLE_FACE, ROLE_MUSCLE,
     ROLE_SHIM, ROLE_TRAMPOLINE, VIA_BIND, VIA_GUEST_FWD, VIA_IMPORT_ROW, VIA_PY_ATTR,
@@ -93,12 +99,12 @@ pub fn ledger_add_caller(
 }
 
 /// Fill `row` from the kernel table when its slot is still null.
-/// Used by generated always-proxy faces (path-included ImportRows are
+/// Used by generated always-proxy faces (path-included RegImports are
 /// often not listed on any `RegMod.imports` slice, so `connect_all`
 /// alone cannot see them). After the first successful resolve the slot
 /// stays hot -- subsequent calls are one atomic load.
 #[inline]
-pub fn resolve_import(row: &ImportRow) {
+pub fn resolve_import(row: &RegImport) {
     if row.entry().is_none() {
         row.set(kernel::find_entry(row.module, row.func));
     }
@@ -288,7 +294,7 @@ pub unsafe extern "C" fn pm_metal_reg_mod_at(
 #[no_mangle]
 pub unsafe extern "C" fn pm_metal_reg_mod_entry_count(full_module: *const u8) -> u32 {
     match cstr_str(full_module, MODULE_MAX).and_then(kernel::find_mod) {
-        Some(m) => m.entries.len() as u32,
+        Some(m) => m.exports.len() as u32,
         None => 0,
     }
 }
@@ -310,7 +316,7 @@ pub unsafe extern "C" fn pm_metal_reg_mod_entry_at(
     let Some(m) = cstr_str(full_module, MODULE_MAX).and_then(kernel::find_mod) else {
         return -1;
     };
-    let Some(e) = m.entries.get(index as usize) else {
+    let Some(e) = m.exports.get(index as usize) else {
         return -1;
     };
     if write_cstr(name_out, name_cap, e.name) != 0 {
@@ -499,164 +505,10 @@ pub unsafe extern "C" fn pm_metal_reg_ledger_completeness(
     )
 }
 
-/// Seed a small pilot set so Inspect has multi-callee / honesty rows before
-/// every publisher is wired. Idempotent (dedupe by lang/role/label).
+/// Deprecated: ledger rows come from `RegExport` publish via `mod_load`.
+/// Kept as a no-op so existing Inspect/glue call sites stay green.
 #[no_mangle]
 pub extern "C" fn pm_metal_reg_ledger_seed_pilot() -> i32 {
-    let l = &ledger::LEDGER;
-    let _ = l.add_callee(
-        b"pymergetic.metal.async",
-        b"yield",
-        LANG_C,
-        ROLE_MUSCLE,
-        HONESTY_OK,
-        false,
-        true,
-        b"",
-        b"c_runner",
-        core::ptr::null(),
-    );
-    let _ = l.add_callee(
-        b"pymergetic.metal.async",
-        b"yield",
-        LANG_RS,
-        ROLE_FACE,
-        HONESTY_OK,
-        false,
-        true,
-        b"",
-        b"rs_face",
-        core::ptr::null(),
-    );
-    let _ = l.add_callee(
-        b"pymergetic.metal.async",
-        b"yield",
-        LANG_PY,
-        ROLE_FACE,
-        HONESTY_OK,
-        false,
-        true,
-        b"",
-        b"py_glue",
-        core::ptr::null(),
-    );
-    let _ = l.add_caller(
-        b"pymergetic.metal.async",
-        b"yield",
-        LANG_RS,
-        b"pymergetic.metal.reg",
-        VIA_IMPORT_ROW,
-        HONESTY_OK,
-    );
-
-    let _ = l.add_callee(
-        b"pymergetic.metal.net.ssh",
-        b"poll",
-        LANG_C,
-        ROLE_MUSCLE,
-        HONESTY_OK,
-        false,
-        true,
-        b"",
-        b"c_server",
-        core::ptr::null(),
-    );
-    /* Sync parkable muscle without async partner → cold gap (honesty incomplete). */
-    let _ = l.add_callee(
-        b"pymergetic.metal.net.ssh",
-        b"client_exec",
-        LANG_C,
-        ROLE_MUSCLE,
-        HONESTY_INCOMPLETE,
-        true,
-        false,
-        b"",
-        b"client_later",
-        core::ptr::null(),
-    );
-    let _ = l.add_callee(
-        b"pymergetic.metal.net.ssh",
-        b"available",
-        LANG_PY,
-        ROLE_FACE,
-        HONESTY_OK,
-        true,
-        false,
-        b"",
-        b"py_face",
-        core::ptr::null(),
-    );
-
-    let _ = l.add_callee(
-        b"pymergetic.metal.wamr_host",
-        b"port_init",
-        LANG_RS,
-        ROLE_MUSCLE,
-        HONESTY_OK,
-        false,
-        true,
-        b"",
-        b"rs_host",
-        core::ptr::null(),
-    );
-    let _ = l.add_callee(
-        b"pymergetic.metal.wamr_host",
-        b"port_init",
-        LANG_C,
-        ROLE_FACE,
-        HONESTY_OK,
-        false,
-        true,
-        b"",
-        b"c_runtime_host",
-        core::ptr::null(),
-    );
-
-    /* HAL stub face: multi-callee (C shim + RS face + Py attr), honesty stub. */
-    let _ = l.add_callee(
-        b"pymergetic.metal.bus.pci",
-        b"config_read",
-        LANG_C,
-        ROLE_SHIM,
-        HONESTY_STUB,
-        true,
-        false,
-        b"",
-        b"browser_hal_stub",
-        core::ptr::null(),
-    );
-    let _ = l.add_callee(
-        b"pymergetic.metal.bus.pci",
-        b"config_read",
-        LANG_RS,
-        ROLE_FACE,
-        HONESTY_STUB,
-        true,
-        false,
-        b"",
-        b"rs_hal_face",
-        core::ptr::null(),
-    );
-    let _ = l.add_callee(
-        b"pymergetic.metal.bus.pci",
-        b"config_read",
-        LANG_PY,
-        ROLE_FACE,
-        HONESTY_STUB,
-        true,
-        false,
-        b"",
-        b"py_hal_face",
-        core::ptr::null(),
-    );
-    let _ = l.add_caller(
-        b"pymergetic.metal.bus.pci",
-        b"config_read",
-        LANG_PY,
-        b"pymergetic.metal.bus",
-        VIA_PY_ATTR,
-        HONESTY_STUB,
-    );
     0
 }
 

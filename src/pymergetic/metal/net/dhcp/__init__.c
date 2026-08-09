@@ -18,6 +18,28 @@
 #include "pymergetic/metal/net/ip/lwip_start.h"
 #include "pymergetic/metal/net/pump/__init__.h"
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_net_dhcp_reg_load. */
+static pm_metal_reg_export_t net_dhcp_exports[] = {
+    PM_METAL_REG_EXPORT(start),
+    PM_METAL_REG_EXPORT(poll),
+    PM_METAL_REG_EXPORT(run),
+};
+PM_METAL_REG_REF(net_dhcp, start, 0);
+PM_METAL_REG_REF(net_dhcp, poll, 1);
+PM_METAL_REG_REF(net_dhcp, run, 2);
+PM_METAL_REG_MOD(net_dhcp, "pymergetic.metal.net.dhcp")
+
+static int32_t net_dhcp_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(net_dhcp_start, (void *)pm_metal_net_dhcp_start);
+    pm_metal_reg_export_publish(net_dhcp_poll, (void *)pm_metal_net_dhcp_poll);
+    pm_metal_reg_export_publish(net_dhcp_run, (void *)pm_metal_net_dhcp_run);
+    return 0;
+}
+
 #ifndef PM_METAL_DHCP_WAIT_US
 #define PM_METAL_DHCP_WAIT_US (15000000ull)
 #endif

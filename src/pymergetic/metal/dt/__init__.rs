@@ -284,3 +284,50 @@ pub mod api {
         unsafe { pm_metal_dt_seed_bound_uart(compat.as_ptr(), bus, iobase) }
     }
 }
+
+
+use core::ffi::c_void;
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod dt = "pymergetic.metal.dt";
+    exports: [reset, add, get, count, count_class, by_class, lookup, set_compat, or_caps, foreach, seed_mem, seed_bound_uart, uart_bound];
+}
+
+extern "C" fn dt_register_symbols(_ctx: *mut c_void) -> i32 {
+    dt::reset.publish(pm_metal_dt_reset as *const c_void);
+    dt::add.publish(pm_metal_dt_add as *const c_void);
+    dt::get.publish(pm_metal_dt_get as *const c_void);
+    dt::count.publish(pm_metal_dt_count as *const c_void);
+    dt::count_class.publish(pm_metal_dt_count_class as *const c_void);
+    dt::by_class.publish(pm_metal_dt_by_class as *const c_void);
+    dt::lookup.publish(pm_metal_dt_lookup as *const c_void);
+    dt::set_compat.publish(pm_metal_dt_set_compat as *const c_void);
+    dt::or_caps.publish(pm_metal_dt_or_caps as *const c_void);
+    dt::foreach.publish(pm_metal_dt_foreach as *const c_void);
+    dt::seed_mem.publish(pm_metal_dt_seed_mem as *const c_void);
+    dt::seed_bound_uart.publish(pm_metal_dt_seed_bound_uart as *const c_void);
+    dt::uart_bound.publish(pm_metal_dt_uart_bound as *const c_void);
+    0
+}
+
+static DT_MOD: RegMod = RegMod::from_static(
+    dt::NAME,
+    &dt::STORAGE.exports,
+    &dt::STORAGE.imports,
+    Some(dt_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_dt_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(dt::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&DT_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_dt_reg_load()
+}

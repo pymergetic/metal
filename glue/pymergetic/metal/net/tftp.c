@@ -6,7 +6,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/net/tftp/__init__.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t tftp_get_async(mp_obj_t server_obj, mp_obj_t name_obj, mp_obj_t buf_obj)
 {
@@ -81,5 +80,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_net_tftp = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&tftp_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_net_tftp, "pymergetic.metal.net.tftp", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

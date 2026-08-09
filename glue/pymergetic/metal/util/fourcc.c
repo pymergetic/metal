@@ -6,7 +6,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/util/fourcc/__init__.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t fourcc_from_u32(mp_obj_t v_obj)
 {
@@ -136,5 +135,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_util_fourcc = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&fourcc_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_util_fourcc, "pymergetic.metal.util.fourcc", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

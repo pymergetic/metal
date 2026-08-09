@@ -6,7 +6,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/shell/ui.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t ui_attach_console0(void)
 {
@@ -31,5 +30,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_shell_ui = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&ui_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_shell_ui, "pymergetic.metal.shell.ui", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

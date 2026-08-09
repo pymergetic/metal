@@ -339,3 +339,41 @@ pub unsafe extern "C" fn pm_metal_util_tar_write_end(out: *mut u8, out_cap: usiz
     }
     (BLOCK * 2) as i32
 }
+
+use core::ffi::c_void;
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod tar = "pymergetic.metal.util.tar";
+    exports: [foreach, foreach_ex, write_header, pad_len, write_end];
+}
+
+extern "C" fn tar_register_symbols(_ctx: *mut c_void) -> i32 {
+    tar::foreach.publish(pm_metal_util_tar_foreach as *const c_void);
+    tar::foreach_ex.publish(pm_metal_util_tar_foreach_ex as *const c_void);
+    tar::write_header.publish(pm_metal_util_tar_write_header as *const c_void);
+    tar::pad_len.publish(pm_metal_util_tar_pad_len as *const c_void);
+    tar::write_end.publish(pm_metal_util_tar_write_end as *const c_void);
+    0
+}
+
+static TAR_MOD: RegMod = RegMod::from_static(
+    tar::NAME,
+    &tar::STORAGE.exports,
+    &tar::STORAGE.imports,
+    Some(tar_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_util_tar_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(tar::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&TAR_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_util_tar_reg_load()
+}

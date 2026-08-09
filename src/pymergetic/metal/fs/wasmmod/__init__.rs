@@ -607,3 +607,36 @@ unsafe extern "C" fn op_statfs(ctx: *mut c_void, out: *mut pm_metal_fs_statfs_t)
     (*out).flags = PM_METAL_FS_ST_RDONLY;
     0
 }
+
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod wasmmod = "pymergetic.metal.fs.wasmmod";
+    exports: [mount_mpwp];
+}
+
+extern "C" fn wasmmod_register_symbols(_ctx: *mut c_void) -> i32 {
+    wasmmod::mount_mpwp.publish(pm_metal_fs_wasmmod_mount_mpwp as *const c_void);
+    0
+}
+
+static WASMMOD_MOD: RegMod = RegMod::from_static(
+    wasmmod::NAME,
+    &wasmmod::STORAGE.exports,
+    &wasmmod::STORAGE.imports,
+    Some(wasmmod_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_fs_wasmmod_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(wasmmod::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&WASMMOD_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_fs_wasmmod_reg_load()
+}

@@ -3,11 +3,9 @@
  */
 #include "py/obj.h"
 #include "py/runtime.h"
+
 #include <pymergetic/metal/fs/wasmmod/__init__.h>
 #include <string.h>
-#include <pymergetic/metal/reg/seats.h>
-
-
 static mp_obj_t wasmmod_mount_mpwp(mp_obj_t target_obj, mp_obj_t mpwp_obj)
 {
     mp_buffer_info_t mpwp;
@@ -38,6 +36,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs_wasmmod = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&wasmmod_globals,
 };
-
-
-PM_METAL_REG_SEAT(g_pm_seat_fs_wasmmod, "pymergetic.metal.fs.wasmmod", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

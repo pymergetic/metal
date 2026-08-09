@@ -19,6 +19,7 @@ members = [
     "crates/pymergetic_metal_mem_tlsf",
     "crates/pymergetic_metal_mem",
     "crates/pymergetic_metal_reg",
+    "crates/pymergetic_metal_net_ssh",
     "crates/pymergetic_metal_fs_embed",
     "crates/pymergetic_metal_fs_zip",
     "crates/pymergetic_metal_dev_blk_ram",

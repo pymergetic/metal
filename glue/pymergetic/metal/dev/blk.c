@@ -6,7 +6,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/dev/blk/__init__.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t blk_detect(void)
 {
@@ -65,5 +64,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_dev_blk = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&blk_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_dev_blk, "pymergetic.metal.dev.blk", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

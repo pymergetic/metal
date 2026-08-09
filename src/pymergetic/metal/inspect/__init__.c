@@ -91,7 +91,6 @@ int32_t pm_metal_inspect_handle(const char *method, const char *path,
     }
     if (strcmp(path, "/inspect/reg") == 0) {
         int32_t n;
-        (void)pm_metal_reg_ledger_seed_pilot();
         n = pm_metal_reg_ledger_json((uint8_t *)body, (uint32_t)body_len);
         if (n < 0 || (size_t)n >= body_len) {
             *status = 500;
@@ -127,7 +126,6 @@ int32_t pm_metal_inspect_handle(const char *method, const char *path,
         if (strstr(q, "fmt=tree") != NULL) {
             fmt_json = 0;
         }
-        (void)pm_metal_reg_ledger_seed_pilot();
         n = pm_metal_reg_ledger_completeness(NULL, gaps_only, detail, fmt_json, (uint8_t *)body,
                                              (uint32_t)body_len);
         if (n < 0 || (size_t)n >= body_len) {
@@ -159,7 +157,6 @@ int32_t pm_metal_inspect_handle(const char *method, const char *path,
         size_t fl = 0;
         int32_t n;
 
-        (void)pm_metal_reg_ledger_seed_pilot();
         slash = strchr(rest, '/');
         if (slash == NULL) {
             /* /inspect/reg/<module> */

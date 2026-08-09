@@ -7,7 +7,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/dev/net.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t vnet_probe(void)
 {
@@ -77,5 +76,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_dev_net_virtio_net = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&vnet_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_dev_net_virtio_net, "pymergetic.metal.dev.net.virtio_net", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

@@ -1,6 +1,33 @@
 #include "pymergetic/metal/draw.h"
+#include <pymergetic/metal/reg/mod.h>
 
 #include <string.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_draw_reg_load. */
+static pm_metal_reg_export_t draw_exports[] = {
+    PM_METAL_REG_EXPORT(soft_init),
+    PM_METAL_REG_EXPORT(fill),
+    PM_METAL_REG_EXPORT(pixel),
+    PM_METAL_REG_EXPORT(text8),
+    PM_METAL_REG_EXPORT(checksum),
+};
+PM_METAL_REG_REF(draw, soft_init, 0);
+PM_METAL_REG_REF(draw, fill, 1);
+PM_METAL_REG_REF(draw, pixel, 2);
+PM_METAL_REG_REF(draw, text8, 3);
+PM_METAL_REG_REF(draw, checksum, 4);
+PM_METAL_REG_MOD(draw, "pymergetic.metal.draw")
+
+static int32_t draw_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(draw_soft_init, (void *)pm_metal_draw_soft_init);
+    pm_metal_reg_export_publish(draw_fill, (void *)pm_metal_draw_fill);
+    pm_metal_reg_export_publish(draw_pixel, (void *)pm_metal_draw_pixel);
+    pm_metal_reg_export_publish(draw_text8, (void *)pm_metal_draw_text8);
+    pm_metal_reg_export_publish(draw_checksum, (void *)pm_metal_draw_checksum);
+    return 0;
+}
 
 /* Compact 8×8 font for ASCII 0x20–0x7E (95 glyphs). Row-major, MSB = left. */
 static const uint8_t font8x8_basic[95][8] = {

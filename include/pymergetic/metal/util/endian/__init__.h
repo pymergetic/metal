@@ -31,6 +31,9 @@ void pm_metal_util_endian_store_u32_le(uint8_t dst[4], uint32_t v);
 uint64_t pm_metal_util_endian_load_u64_le(const uint8_t src[8]);
 void pm_metal_util_endian_store_u64_le(uint8_t dst[8], uint64_t v);
 
+/** Load this module's RegMod (idempotent). */
+int32_t pm_metal_util_endian_reg_load(void);
+
 static inline int pm_metal_util_endian_host_is_le_inline(void)
 {
   return PM_METAL_UTIL_ENDIAN_HOST_IS_LE;

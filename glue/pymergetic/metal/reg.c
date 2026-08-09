@@ -13,11 +13,6 @@
 #define PM_METAL_REG_JSON_CAP 24576
 #endif
 
-static mp_obj_t reg_ledger_seed_pilot(void)
-{
-    return mp_obj_new_int((mp_int_t)pm_metal_reg_ledger_seed_pilot());
-}
-static MP_DEFINE_CONST_FUN_OBJ_0(reg_ledger_seed_pilot_obj, reg_ledger_seed_pilot);
 
 static mp_obj_t reg_ledger_method_count(void)
 {
@@ -36,7 +31,6 @@ static mp_obj_t reg_ledger_json(void)
     uint8_t buf[PM_METAL_REG_JSON_CAP];
     int32_t n;
 
-    (void)pm_metal_reg_ledger_seed_pilot();
     n = pm_metal_reg_ledger_json(buf, (uint32_t)sizeof(buf));
     if (n < 0) {
         mp_raise_ValueError(MP_ERROR_TEXT("ledger json"));
@@ -51,7 +45,6 @@ static mp_obj_t reg_ledger_module_json(mp_obj_t module_obj)
     uint8_t buf[PM_METAL_REG_JSON_CAP];
     int32_t n;
 
-    (void)pm_metal_reg_ledger_seed_pilot();
     n = pm_metal_reg_ledger_module_json((const uint8_t *)module, buf, (uint32_t)sizeof(buf));
     if (n < 0) {
         mp_raise_ValueError(MP_ERROR_TEXT("module not in ledger"));
@@ -67,7 +60,6 @@ static mp_obj_t reg_ledger_method_json(mp_obj_t module_obj, mp_obj_t func_obj)
     uint8_t buf[PM_METAL_REG_JSON_CAP];
     int32_t n;
 
-    (void)pm_metal_reg_ledger_seed_pilot();
     n = pm_metal_reg_ledger_method_json((const uint8_t *)module, (const uint8_t *)func, buf,
                                         (uint32_t)sizeof(buf));
     if (n < 0) {
@@ -154,7 +146,6 @@ static mp_obj_t reg_completeness(size_t n_args, const mp_obj_t *pos_args, mp_map
         }
     }
 
-    (void)pm_metal_reg_ledger_seed_pilot();
     n = pm_metal_reg_ledger_completeness((const uint8_t *)module, gaps_only, detail, fmt_json, buf,
                                          (uint32_t)sizeof(buf));
     if (n < 0) {
@@ -166,7 +157,6 @@ static MP_DEFINE_CONST_FUN_OBJ_KW(reg_completeness_obj, 0, reg_completeness);
 
 static const mp_rom_map_elem_t reg_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal_dot_reg) },
-    { MP_ROM_QSTR(MP_QSTR_ledger_seed_pilot), MP_ROM_PTR(&reg_ledger_seed_pilot_obj) },
     { MP_ROM_QSTR(MP_QSTR_ledger_method_count), MP_ROM_PTR(&reg_ledger_method_count_obj) },
     { MP_ROM_QSTR(MP_QSTR_ledger_gap_count), MP_ROM_PTR(&reg_ledger_gap_count_obj) },
     { MP_ROM_QSTR(MP_QSTR_ledger_json), MP_ROM_PTR(&reg_ledger_json_obj) },

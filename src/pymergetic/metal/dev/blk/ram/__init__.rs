@@ -169,3 +169,44 @@ pub unsafe extern "C" fn pm_metal_dev_blk_ram_write_async(
     }
     done(0)
 }
+
+
+use core::ffi::c_void;
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod ram = "pymergetic.metal.dev.blk.ram";
+    exports: [create, from_image, destroy, capacity_sectors, bytes, read_async, write_async];
+}
+
+extern "C" fn ram_register_symbols(_ctx: *mut c_void) -> i32 {
+    ram::create.publish(pm_metal_dev_blk_ram_create as *const c_void);
+    ram::from_image.publish(pm_metal_dev_blk_ram_from_image as *const c_void);
+    ram::destroy.publish(pm_metal_dev_blk_ram_destroy as *const c_void);
+    ram::capacity_sectors.publish(pm_metal_dev_blk_ram_capacity_sectors as *const c_void);
+    ram::bytes.publish(pm_metal_dev_blk_ram_bytes as *const c_void);
+    ram::read_async.publish(pm_metal_dev_blk_ram_read_async as *const c_void);
+    ram::write_async.publish(pm_metal_dev_blk_ram_write_async as *const c_void);
+    0
+}
+
+static RAM_MOD: RegMod = RegMod::from_static(
+    ram::NAME,
+    &ram::STORAGE.exports,
+    &ram::STORAGE.imports,
+    Some(ram_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_dev_blk_ram_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(ram::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&RAM_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_dev_blk_ram_reg_load()
+}

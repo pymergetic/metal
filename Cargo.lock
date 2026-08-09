@@ -5,6 +5,9 @@ version = 4
 [[package]]
 name = "pymergetic_metal_async"
 version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_reg",
+]
 
 [[package]]
 name = "pymergetic_metal_browser_rs"
@@ -41,6 +44,7 @@ name = "pymergetic_metal_dev_blk_ram"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -48,6 +52,7 @@ dependencies = [
 name = "pymergetic_metal_dt"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -57,6 +62,7 @@ version = "0.1.0"
 dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -64,6 +70,7 @@ dependencies = [
 name = "pymergetic_metal_fs_embed"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -75,6 +82,7 @@ dependencies = [
  "pymergetic_metal_dev_blk_ram",
  "pymergetic_metal_fs",
  "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -85,6 +93,7 @@ dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_fs",
  "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -95,6 +104,7 @@ dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_fs",
  "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
  "pymergetic_metal_util_lz4",
  "pymergetic_metal_util_tar",
@@ -107,6 +117,7 @@ dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_fs",
  "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -116,6 +127,7 @@ version = "0.1.0"
 dependencies = [
  "pymergetic_metal_fs",
  "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -123,6 +135,7 @@ dependencies = [
 name = "pymergetic_metal_fs_vfs"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -132,6 +145,7 @@ version = "0.1.0"
 dependencies = [
  "pymergetic_metal_fs",
  "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -142,6 +156,7 @@ dependencies = [
  "pymergetic_metal_async",
  "pymergetic_metal_fs",
  "pymergetic_metal_fs_vfs",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -151,6 +166,7 @@ version = "0.1.0"
 dependencies = [
  "pymergetic_metal_dt",
  "pymergetic_metal_log",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -158,6 +174,7 @@ dependencies = [
 name = "pymergetic_metal_log"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -168,6 +185,7 @@ dependencies = [
  "pymergetic_metal_mem_arena",
  "pymergetic_metal_mem_lock",
  "pymergetic_metal_mem_tlsf",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -176,6 +194,7 @@ name = "pymergetic_metal_mem_arena"
 version = "0.1.0"
 dependencies = [
  "pymergetic_metal_mem_lock",
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -183,6 +202,7 @@ dependencies = [
 name = "pymergetic_metal_mem_lock"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -190,6 +210,15 @@ dependencies = [
 name = "pymergetic_metal_mem_tlsf"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
+ "pymergetic_metal_rt",
+]
+
+[[package]]
+name = "pymergetic_metal_net_ssh"
+version = "0.1.0"
+dependencies = [
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -197,7 +226,6 @@ dependencies = [
 name = "pymergetic_metal_reg"
 version = "0.1.0"
 dependencies = [
- "pymergetic_metal_async",
  "pymergetic_metal_rt",
 ]
 
@@ -224,6 +252,7 @@ dependencies = [
  "pymergetic_metal_mem_arena",
  "pymergetic_metal_mem_lock",
  "pymergetic_metal_mem_tlsf",
+ "pymergetic_metal_net_ssh",
  "pymergetic_metal_reg",
  "pymergetic_metal_rt",
  "pymergetic_metal_util_lz4",
@@ -240,6 +269,7 @@ version = "0.1.0"
 name = "pymergetic_metal_util_lz4"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -247,6 +277,7 @@ dependencies = [
 name = "pymergetic_metal_util_size"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 
@@ -254,6 +285,7 @@ dependencies = [
 name = "pymergetic_metal_util_tar"
 version = "0.1.0"
 dependencies = [
+ "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 

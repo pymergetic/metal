@@ -67,3 +67,38 @@ pub unsafe extern "C" fn pm_metal_log_styled(style: pm_metal_log_style_t, line: 
     buf[pos] = 0;
     pm_metal_log(buf.as_ptr());
 }
+
+
+use core::ffi::c_void;
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod log = "pymergetic.metal.log";
+    exports: [styled];
+}
+
+extern "C" fn log_register_symbols(_ctx: *mut c_void) -> i32 {
+    log::styled.publish(pm_metal_log_styled as *const c_void);
+    0
+}
+
+static LOG_MOD: RegMod = RegMod::from_static(
+    log::NAME,
+    &log::STORAGE.exports,
+    &log::STORAGE.imports,
+    Some(log_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_log_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(log::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&LOG_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_log_reg_load()
+}

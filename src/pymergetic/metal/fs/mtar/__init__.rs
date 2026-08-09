@@ -1396,3 +1396,41 @@ pub unsafe extern "C" fn pm_metal_fs_mtar_pack_simple(
     *out_len = w;
     0
 }
+
+
+use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
+
+pymergetic_metal_reg::reg_mod! {
+    mod mtar = "pymergetic.metal.fs.mtar";
+    exports: [open_blob, open_owned, mount, mount_rw, empty, pack_simple];
+}
+
+extern "C" fn mtar_register_symbols(_ctx: *mut c_void) -> i32 {
+    mtar::open_blob.publish(pm_metal_fs_mtar_open_blob as *const c_void);
+    mtar::open_owned.publish(pm_metal_fs_mtar_open_owned as *const c_void);
+    mtar::mount.publish(pm_metal_fs_mtar_mount as *const c_void);
+    mtar::mount_rw.publish(pm_metal_fs_mtar_mount_rw as *const c_void);
+    mtar::empty.publish(pm_metal_fs_mtar_empty as *const c_void);
+    mtar::pack_simple.publish(pm_metal_fs_mtar_pack_simple as *const c_void);
+    0
+}
+
+static MTAR_MOD: RegMod = RegMod::from_static(
+    mtar::NAME,
+    &mtar::STORAGE.exports,
+    &mtar::STORAGE.imports,
+    Some(mtar_register_symbols),
+);
+
+#[no_mangle]
+pub extern "C" fn pm_metal_fs_mtar_reg_load() -> i32 {
+    if pymergetic_metal_reg::find_mod(mtar::NAME).is_some() {
+        return 0;
+    }
+    unsafe { pm_metal_reg_mod_load(&MTAR_MOD) }
+}
+
+#[inline]
+pub fn reg_load() -> i32 {
+    pm_metal_fs_mtar_reg_load()
+}

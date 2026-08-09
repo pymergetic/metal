@@ -6,7 +6,6 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/dev/serial.h>
-#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t serial_write(mp_obj_t data_obj)
 {
@@ -39,5 +38,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_dev_serial = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&serial_globals,
 };
-
-PM_METAL_REG_SEAT(g_pm_seat_dev_serial, "pymergetic.metal.dev.serial", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

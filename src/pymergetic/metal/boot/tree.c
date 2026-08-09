@@ -9,6 +9,43 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <pymergetic/metal/reg/mod.h>
+
+/* RegMod declare (C SoT) — loaded via pm_metal_boot_tree_reg_load. */
+static pm_metal_reg_export_t boot_tree_exports[] = {
+    PM_METAL_REG_EXPORT(reset),
+    PM_METAL_REG_EXPORT(enter),
+    PM_METAL_REG_EXPORT(leave),
+    PM_METAL_REG_EXPORT(ready_ok),
+    PM_METAL_REG_EXPORT(dead),
+    PM_METAL_REG_EXPORT(print),
+    PM_METAL_REG_EXPORT(emit),
+    PM_METAL_REG_EXPORT(banner),
+};
+PM_METAL_REG_REF(boot_tree, reset, 0);
+PM_METAL_REG_REF(boot_tree, enter, 1);
+PM_METAL_REG_REF(boot_tree, leave, 2);
+PM_METAL_REG_REF(boot_tree, ready_ok, 3);
+PM_METAL_REG_REF(boot_tree, dead, 4);
+PM_METAL_REG_REF(boot_tree, print, 5);
+PM_METAL_REG_REF(boot_tree, emit, 6);
+PM_METAL_REG_REF(boot_tree, banner, 7);
+PM_METAL_REG_MOD(boot_tree, "pymergetic.metal.boot.tree")
+
+static int32_t boot_tree_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(boot_tree_reset, (void *)pm_metal_boot_tree_reset);
+    pm_metal_reg_export_publish(boot_tree_enter, (void *)pm_metal_boot_tree_enter);
+    pm_metal_reg_export_publish(boot_tree_leave, (void *)pm_metal_boot_tree_leave);
+    pm_metal_reg_export_publish(boot_tree_ready_ok, (void *)pm_metal_boot_tree_ready_ok);
+    pm_metal_reg_export_publish(boot_tree_dead, (void *)pm_metal_boot_tree_dead);
+    pm_metal_reg_export_publish(boot_tree_print, (void *)pm_metal_boot_tree_print);
+    pm_metal_reg_export_publish(boot_tree_emit, (void *)pm_metal_boot_emit);
+    pm_metal_reg_export_publish(boot_tree_banner, (void *)pm_metal_boot_banner);
+    return 0;
+}
+
 #ifndef PM_METAL_VERSION
 #define PM_METAL_VERSION "0.1.0"
 #endif
