@@ -35,6 +35,7 @@ package(
 package(
     "pymergetic",
     (
+        "metal/site.py",
         "metal/arch/__init__.py",
         "metal/arch/x86/__init__.py",
         "metal/arch/x86/autoexec.py",

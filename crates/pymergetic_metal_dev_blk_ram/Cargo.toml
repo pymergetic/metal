@@ -1,0 +1,13 @@
+[package]
+name = "pymergetic_metal_dev_blk_ram"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "../../src/pymergetic/metal/dev/blk/ram/__init__.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+pymergetic_metal_rt = { path = "../pymergetic_metal_rt" }
+pymergetic_metal_async = { path = "../pymergetic_metal_async" }

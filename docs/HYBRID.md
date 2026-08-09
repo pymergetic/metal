@@ -27,18 +27,19 @@ include/pymergetic/metal/…/*.h     # public C API (callers + C ABI border)
 src/pymergetic/metal/…/            # ONE impl: .c  OR  .rs  OR  .py
 include/SYMBOLS.md                 # C ↔ RS ↔ Py names (what links)
 port/                              # -I include; link src
-crates/pm_metal/                   # RS caller façade — thin / pending
-typings/pymergetic/metal/…/*.pyi   # Py caller stubs — pending full tree
+crates/pymergetic_metal_*/         # per-module RS crates (product umbrella)
+typings/pymergetic/metal/…/*.pyi   # Py caller stubs (matrix Stub column)
 ```
 
 | Role | Where |
 |------|--------|
 | Impl (callee) | `src/` — exactly one of `.c` / `.rs` / `.py` |
 | C callers | `#include` + link |
-| RS callers | `crates/pm_metal` → same verbs (façade pending) |
+| RS callers | `crates/pymergetic_metal_*` + path faces in `src/…/__init__.rs` |
 | Py callers | registered module + `.pyi` |
 
-No twin impls in `src/`. Net headers are packaged (`net/<mod>/__init__.h`). ASGI under `asgi/` (not landed). Full `pm_metal_<path>_*`.
+No twin impls in `src/`. Net headers are packaged (`net/<mod>/__init__.h`).
+ASGI lives at `net/asgi/`. Full `pm_metal_<path>_*`.
 
 ## SMP (landed)
 

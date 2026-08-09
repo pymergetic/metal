@@ -34,6 +34,12 @@ ENDPOINT_STUBS = (
     ("GET", "/health", True),
     ("GET", "/capabilities", True),
     ("GET", "/inspect/self", True),
+    ("GET", "/inspect/reg", True),
+    ("GET", "/inspect/reg/seats", True),
+    ("GET", "/inspect/reg/completeness", True),
+    ("GET", "/inspect/reg/method", True),
+    ("GET", "/inspect/reg/<module>", True),
+    ("GET", "/inspect/reg/<module>/<method>", True),
 )
 
 __all__ = [

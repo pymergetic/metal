@@ -1,0 +1,12 @@
+[package]
+name = "pymergetic_metal_mem_tlsf"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "../../src/pymergetic/metal/mem/tlsf/__init__.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+pymergetic_metal_rt = { path = "../pymergetic_metal_rt" }

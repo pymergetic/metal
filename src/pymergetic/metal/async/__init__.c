@@ -9,10 +9,19 @@
 #include "pymergetic/metal/async/board_time.h"
 #include "pymergetic/metal/async/smp.h"
 #include "pymergetic/metal/async/prio.h"
+#include "pymergetic/metal/async/coro.h"
+#include "pymergetic/metal/async/task.h"
+#include "pymergetic/metal/async/quiesce.h"
+#include "pymergetic/metal/async/meter.h"
+#include "pymergetic/metal/mem.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
+#ifndef PM_METAL_ASYNC_METER
+#define PM_METAL_ASYNC_METER 1
+#endif
 
 #ifndef PM_METAL_ASYNC_MAX_HANDLES
 #define PM_METAL_ASYNC_MAX_HANDLES 64
@@ -35,7 +44,8 @@ typedef enum {
     SLOT_SLEEP,
     SLOT_YIELD,
     SLOT_AWAIT,
-    SLOT_PARK
+    SLOT_PARK,
+    SLOT_CORO
 } slot_kind_t;
 
 typedef struct {
@@ -47,6 +57,9 @@ typedef struct {
     uint64_t deadline_us;
     uint32_t await_child;
     uint32_t result_u32;
+    pm_metal_async_step_fn_t step;
+    uint8_t *frame;
+    uint32_t frame_bytes;
 } slot_t;
 
 typedef struct {
@@ -95,6 +108,11 @@ void pm_metal_time_init(void)
 uint64_t pm_metal_async_mono_us(void)
 {
     return pm_metal_board_mono_us() - g_boot_us;
+}
+
+uint64_t pm_metal_async_mono_ms(void)
+{
+    return pm_metal_async_mono_us() / 1000ull;
 }
 
 uint64_t pm_metal_time_mono_us(void)
@@ -202,6 +220,9 @@ static uint32_t alloc_slot(slot_kind_t kind, uint64_t deadline_us, uint32_t runn
             g_slots[i].deadline_us = deadline_us;
             g_slots[i].await_child = 0;
             g_slots[i].result_u32 = 0;
+            g_slots[i].step = NULL;
+            g_slots[i].frame = NULL;
+            g_slots[i].frame_bytes = 0;
             return i;
         }
     }
@@ -268,7 +289,107 @@ void pm_metal_async_coro_close(uint32_t h)
     if (h == 0 || h >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[h].used) {
         return;
     }
+    if (g_slots[h].frame != NULL) {
+        pm_metal_mem_free(g_slots[h].frame);
+    }
     memset(&g_slots[h], 0, sizeof(g_slots[h]));
+}
+
+uint32_t pm_metal_async_await_child(uint32_t h)
+{
+    if (h == 0 || h >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[h].used) {
+        return 0;
+    }
+    return g_slots[h].await_child;
+}
+
+void pm_metal_async_cancel_tree(uint32_t h)
+{
+    uint32_t guard = 0;
+    while (h != 0u && h < PM_METAL_ASYNC_MAX_HANDLES && g_slots[h].used && guard < PM_METAL_ASYNC_MAX_HANDLES) {
+        uint32_t child = g_slots[h].await_child;
+        g_slots[h].await_child = 0;
+        pm_metal_async_coro_close(h);
+        h = child;
+        guard++;
+    }
+}
+
+uint32_t pm_metal_async_coro_create(pm_metal_async_step_fn_t step, uint32_t state_bytes)
+{
+    uint32_t h;
+    uint8_t *frame = NULL;
+
+    if (step == NULL || !g_started) {
+        return 0;
+    }
+    if (state_bytes > 0u) {
+        frame = pm_metal_mem_alloc((size_t)state_bytes);
+        if (frame == NULL) {
+            return 0;
+        }
+        memset(frame, 0, (size_t)state_bytes);
+    }
+    h = alloc_slot(SLOT_CORO, 0, next_runner());
+    if (h == 0u) {
+        if (frame != NULL) {
+            pm_metal_mem_free(frame);
+        }
+        return 0;
+    }
+    g_slots[h].step = step;
+    g_slots[h].frame = frame;
+    g_slots[h].frame_bytes = state_bytes;
+    g_slots[h].status = (uint8_t)PM_METAL_ASYNC_PENDING;
+    return h;
+}
+
+void *pm_metal_async_coro_state(uint32_t h)
+{
+    if (h == 0 || h >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[h].used) {
+        return NULL;
+    }
+    return g_slots[h].frame;
+}
+
+void *pm_metal_async_coro_alloc(uint32_t h, uint32_t n)
+{
+    uint8_t *frame;
+
+    if (h == 0 || h >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[h].used || n == 0u) {
+        return NULL;
+    }
+    if (g_slots[h].frame != NULL && g_slots[h].frame_bytes >= n) {
+        return g_slots[h].frame;
+    }
+    frame = pm_metal_mem_alloc((size_t)n);
+    if (frame == NULL) {
+        return NULL;
+    }
+    memset(frame, 0, (size_t)n);
+    if (g_slots[h].frame != NULL) {
+        size_t copy = g_slots[h].frame_bytes < n ? g_slots[h].frame_bytes : n;
+        memcpy(frame, g_slots[h].frame, copy);
+        pm_metal_mem_free(g_slots[h].frame);
+    }
+    g_slots[h].frame = frame;
+    g_slots[h].frame_bytes = n;
+    return frame;
+}
+
+uint32_t pm_metal_async_spawn(pm_metal_async_step_fn_t step, uint32_t state_bytes,
+                              pm_metal_async_prio_t prio)
+{
+    uint32_t h = pm_metal_async_coro_create(step, state_bytes);
+
+    if (h == 0u) {
+        return 0;
+    }
+    if ((uint32_t)prio >= PM_METAL_ASYNC_N_PRIO) {
+        prio = PM_METAL_ASYNC_PRIO_MED;
+    }
+    g_slots[h].prio = (uint8_t)prio;
+    return pm_metal_async_create_task_prio(h, g_slots[h].runner, prio);
 }
 
 uint32_t pm_metal_async_sleep_us(uint64_t us)
@@ -314,7 +435,7 @@ uint32_t pm_metal_async_create_task(uint32_t h)
     }
     ri = next_runner();
     g_slots[h].runner = (uint8_t)ri;
-    if (g_slots[h].kind == SLOT_YIELD
+    if (g_slots[h].kind == SLOT_YIELD || g_slots[h].kind == SLOT_CORO
         || g_slots[h].status == PM_METAL_ASYNC_PENDING) {
         (void)ready_push(ri, h);
     }
@@ -363,6 +484,12 @@ static int32_t poll_runner(uint32_t ri, uint64_t now)
     int32_t n = 0;
     uint32_t steps;
 
+    /* Quiesce checkpoint: park before any dispatch on this runner. */
+    if (pm_metal_async_quiesce_requested()) {
+        pm_metal_async_quiesce_park_runner(ri);
+        return 0;
+    }
+
     /* Due sleeps owned by this runner. */
     for (i = 1; i < PM_METAL_ASYNC_MAX_HANDLES; i++) {
         if (!g_slots[i].used || g_slots[i].status != PM_METAL_ASYNC_WAITING) {
@@ -375,25 +502,38 @@ static int32_t poll_runner(uint32_t ri, uint64_t now)
             /* Timing class: due sleeps complete before ready drain. */
             complete_slot(i);
             n++;
-        } else if (g_slots[i].kind == SLOT_AWAIT) {
+        } else if (g_slots[i].kind == SLOT_AWAIT
+                   || (g_slots[i].kind == SLOT_CORO && g_slots[i].await_child != 0u)) {
             uint32_t c = g_slots[i].await_child;
 
             if (c == 0 || c >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[c].used) {
                 g_slots[i].status = PM_METAL_ASYNC_ERROR;
+                g_slots[i].await_child = 0;
                 n++;
             } else if (g_slots[c].status == PM_METAL_ASYNC_DONE
                        || g_slots[c].status == PM_METAL_ASYNC_ERROR
                        || g_slots[c].status == PM_METAL_ASYNC_CANCELLED) {
-                g_slots[i].status = g_slots[c].status;
-                g_slots[i].result_u32 = g_slots[c].result_u32;
-                n++;
+                if (g_slots[i].kind == SLOT_CORO && g_slots[i].step != NULL) {
+                    /* Child finished — resume step on ready ring. */
+                    g_slots[i].await_child = 0;
+                    g_slots[i].status = (uint8_t)PM_METAL_ASYNC_PENDING;
+                    (void)ready_push(ri, i);
+                    n++;
+                } else {
+                    g_slots[i].status = g_slots[c].status;
+                    g_slots[i].result_u32 = g_slots[c].result_u32;
+                    g_slots[i].await_child = 0;
+                    n++;
+                }
             }
         }
     }
 
-    /* Drain ready ring (yields / create_task). */
+    /* Drain ready ring (yields / create_task / coro steps). */
     steps = 0;
     while (steps < PM_METAL_ASYNC_READY_CAP) {
+        uint32_t st;
+
         h = ready_pop(ri);
         if (h == 0u) {
             break;
@@ -402,11 +542,43 @@ static int32_t poll_runner(uint32_t ri, uint64_t now)
         if (h >= PM_METAL_ASYNC_MAX_HANDLES || !g_slots[h].used) {
             continue;
         }
-        if (g_slots[h].status != PM_METAL_ASYNC_WAITING) {
+        if (g_slots[h].kind == SLOT_YIELD) {
+            if (g_slots[h].status == PM_METAL_ASYNC_WAITING
+                || g_slots[h].status == PM_METAL_ASYNC_PENDING) {
+                complete_slot(h);
+                n++;
+            }
             continue;
         }
-        if (g_slots[h].kind == SLOT_YIELD) {
-            complete_slot(h);
+        if (g_slots[h].kind != SLOT_CORO || g_slots[h].step == NULL) {
+            continue;
+        }
+        if (g_slots[h].await_child != 0u) {
+            continue;
+        }
+        g_slots[h].status = (uint8_t)PM_METAL_ASYNC_WAITING;
+#if PM_METAL_ASYNC_METER
+        if (__builtin_expect(pm_metal_async_meter_on_fast() != 0, 0)) {
+            uint64_t t0 = pm_metal_async_meter_cycles();
+            st = g_slots[h].step(h);
+            pm_metal_async_meter_record(pm_metal_async_meter_cycles() - t0);
+        } else
+#endif
+        {
+            st = g_slots[h].step(h);
+        }
+        if (st == (uint32_t)PM_METAL_ASYNC_DONE
+            || st == (uint32_t)PM_METAL_ASYNC_ERROR
+            || st == (uint32_t)PM_METAL_ASYNC_CANCELLED) {
+            __atomic_store_n(&g_slots[h].status, (uint8_t)st, __ATOMIC_RELEASE);
+            n++;
+        } else if (st == (uint32_t)PM_METAL_ASYNC_PENDING) {
+            g_slots[h].status = (uint8_t)PM_METAL_ASYNC_PENDING;
+            (void)ready_push(ri, h);
+            n++;
+        } else {
+            /* WAITING — parked on await_child or external wake. */
+            g_slots[h].status = (uint8_t)PM_METAL_ASYNC_WAITING;
             n++;
         }
     }
@@ -474,7 +646,7 @@ uint32_t pm_metal_async_create_task_prio(uint32_t h, uint32_t runner,
     }
     g_slots[h].runner = (uint8_t)runner;
     g_slots[h].prio = (uint8_t)prio;
-    if (g_slots[h].kind == SLOT_YIELD
+    if (g_slots[h].kind == SLOT_YIELD || g_slots[h].kind == SLOT_CORO
         || g_slots[h].status == PM_METAL_ASYNC_PENDING) {
         (void)ready_push_prio(runner, h, (uint8_t)prio);
     }
@@ -494,6 +666,11 @@ int32_t pm_metal_async_run_loop_cpu(uint32_t cpu)
         return -1;
     }
     for (;;) {
+        if (pm_metal_async_quiesce_requested()) {
+            pm_metal_async_quiesce_park_runner(cpu);
+            PM_METAL_CPU_PAUSE();
+            continue;
+        }
         (void)pm_metal_async_run_poll_cpu(cpu);
         __atomic_fetch_add(&pm_metal_smp_poll_ticks[cpu], 1u, __ATOMIC_RELAXED);
         PM_METAL_CPU_PAUSE();
@@ -591,11 +768,13 @@ pm_metal_async_status_t pm_metal_async_await(uint32_t self_h, uint32_t child_h)
         return PM_METAL_ASYNC_ERROR;
     }
     if (self_h != 0 && self_h < PM_METAL_ASYNC_MAX_HANDLES && g_slots[self_h].used) {
-        g_slots[self_h].kind = SLOT_AWAIT;
+        /* Keep SLOT_CORO + step so the frame can resume after the child. */
+        if (g_slots[self_h].kind != SLOT_CORO) {
+            g_slots[self_h].kind = SLOT_AWAIT;
+        }
         g_slots[self_h].status = PM_METAL_ASYNC_WAITING;
         g_slots[self_h].await_child = child_h;
-        (void)pm_metal_async_run_poll();
-        return pm_metal_async_status(self_h);
+        return PM_METAL_ASYNC_WAITING;
     }
     /* No self handle: allocate await on RR runner. */
     ri = next_runner();

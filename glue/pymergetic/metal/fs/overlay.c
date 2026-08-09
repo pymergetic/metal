@@ -5,6 +5,7 @@
 #include "py/runtime.h"
 #include <pymergetic/metal/fs/overlay/__init__.h>
 #include <string.h>
+#include <pymergetic/metal/reg/seats.h>
 
 
 static mp_obj_t overlay_mount(size_t n_args, const mp_obj_t *args)
@@ -38,3 +39,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs_overlay = {
     .globals = (mp_obj_dict_t *)&overlay_globals,
 };
 
+
+PM_METAL_REG_SEAT(g_pm_seat_fs_overlay, "pymergetic.metal.fs.overlay", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

@@ -1,5 +1,6 @@
 //! FFI + Metal C border over vendored Conte TLSF 3.1 (`external/tlsf`).
 //! No local reimplementation — same library product EFI/BIOS already uses.
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(dead_code)]
 
 use core::ffi::c_void;

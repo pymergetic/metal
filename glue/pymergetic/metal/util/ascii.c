@@ -7,6 +7,7 @@
 #include <pymergetic/metal/util/ascii.h>
 
 #include <string.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t ascii_bound(mp_obj_t text_len_obj)
 {
@@ -82,3 +83,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_util_ascii = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&ascii_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_util_ascii, "pymergetic.metal.util.ascii", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

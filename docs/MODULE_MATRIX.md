@@ -1,9 +1,12 @@
 # Module matrix — export faces × async compliance
 
-**Source of truth** for seat coverage under `pymergetic.metal.*`.
-Keep this file updated when a seat lands, shrinks, or grows a face.
+**Not the source of truth for seats.** Runtime authority is the reg seat
+table (`src/pymergetic/metal/reg/seats.c` + `pm_metal_reg_seat_*` /
+Inspect `/inspect/reg/seats`). This markdown is a human export / maintain
+hint: update it when faces change, but do not treat it as a parallel ledger
+for smoke or CI seat lists.
 Interactive view (optional): Cursor canvas `metal-module-matrix` — regenerate
-from this table when the ledger moves.
+from reg / this table when the export moves.
 
 Related: [`SOURCETREE.md`](SOURCETREE.md) (path == module) ·
 [`../include/SYMBOLS.md`](../include/SYMBOLS.md) (symbol spelling) ·
@@ -25,6 +28,11 @@ Related: [`SOURCETREE.md`](SOURCETREE.md) (path == module) ·
 | **FW** | Linked on firmware boards |
 | **Note** | Short seat hint (facts about today’s seat) |
 | **Dev path** | Planned work. Waves below. Blank = not scheduled yet. |
+
+**`done` ≠ full muscle.** A green / `done` row means the **nested ABI faces**
+exist on that seat (ImportError-free nest). Browser notes that say
+fail-closed / HAL stub are still **seat honesty**, not fake muscle. Read
+**Note** before treating a path as production-complete.
 
 **Law: 1 impl · 3 faces — always.** Muscle is exactly one of C / RS / Py.  
 Callers are **any** of C / RS / Py. Missing face = **0%**, not “N/A”.
@@ -178,13 +186,13 @@ Counts are ledger estimates (not a live link inventory).
 | `arch.x86_64` | Py | 3 | 3 | 3 | 3 | yes | yes | yes | yes |  | keep Py muscle · W4 +C/+RS bridges |
 | `async` | C | 12 | 12 | 12 | 12 | yes | yes | yes | yes | browser smp stub + board_time | done · W7 browser |
 | `auth` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes |  | done |
-| `boot` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | thin face over boot.tree UX | done · W7 browser |
+| `boot` | C | 9 | 9 | 9 | 9 | yes | yes | yes | yes | tree UX + unboot/shutdown/reboot | done · W7 browser |
 | `boot.tree` | C | 11 | 11 | 11 | 11 | yes | yes | yes | yes |  | done · W5 +Py |
 | `bus.pci` | C | 8 | 8 | 8 | 8 | yes | yes | yes | yes | browser: no CF8 (fail-closed) | done · W9 browser |
 | `bus.virtio` | C | 15 | 15 | 15 | 15 | yes | yes | yes | yes | browser: no PCI virtio (fail-closed) | done · W9 browser |
 | `console` | C | 15 | 15 | 15 | 15 | yes | yes | yes | yes | sync ring façade | done · W7 browser |
 | `dev.acpi` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | browser: cpu_count=1 stub | done · W9 browser |
-| `dev.blk` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | abi_faces on FW+browser; read_async parks | done · W9 browser |
+| `dev.blk` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | real C detect+virtio on FW; browser HAL fail-closed; read_async parks | done · W9 browser |
 | `dev.gfx.compositor` | C | 10 | 10 | 10 | 10 | yes | yes | yes | yes | browser: gfx stub ready=0 | done · W9 browser |
 | `dev.gfx.scanout` | C | 8 | 8 | 8 | 8 | yes | yes | yes | yes | browser: name wasm-none | done · W9 browser |
 | `dev.gfx.text` | C | 3 | 3 | 3 | 3 | yes | yes | yes | yes | browser: gfx stub fonts | done · W9 browser |
@@ -192,25 +200,25 @@ Counts are ledger estimates (not a live link inventory).
 | `dev.net.bge` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | browser: no PCI NIC (fail-closed) | done · W9 browser |
 | `dev.net.virtio_net` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | browser: no PCI NIC (fail-closed) | done · W9 browser |
 | `dev.serial` | C | 2 | 2 | 2 | 2 | yes | yes | yes | yes | browser: stdout sink | done · W9 browser |
-| `dev.stream` | C | 18 | 18 | 18 | 18 | yes | yes | yes | yes | abi_faces fail-closed pipes (FW+browser) | done · W9 browser |
+| `dev.stream` | C | 18 | 18 | 18 | 18 | yes | yes | yes | yes | real stream C on FW+browser | done · W9 browser |
 | `draw` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | soft FB muscle on wasm | done · W9 browser |
 | `externals` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes |  | done |
 | `fs` | RS | 24 | 24 | 24 | 24 | yes | yes | yes | yes | RS on FW product image; browser via browser_rs | done · W7 browser |
-| `fs.embed` | RS | 2 | 2 | 2 | 2 | yes | yes | yes | yes | abi_faces stub on FW+browser | done · W7 browser |
-| `fs.fat` | RS | 6 | 6 | 6 | 6 | yes | yes | yes | yes | abi_faces stub on FW+browser | done · W7 browser |
-| `fs.littlefs` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | abi_faces stub on FW+browser | done · W7 browser |
+| `fs.embed` | RS | 2 | 2 | 2 | 2 | yes | yes | yes | yes | product/browser RS staticlib | done · W7 browser |
+| `fs.fat` | RS | 6 | 6 | 6 | 6 | yes | yes | yes | yes | product/browser RS staticlib | done · W7 browser |
+| `fs.littlefs` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | product/browser RS staticlib | done · W7 browser |
 | `fs.mtar` | RS | 6 | 6 | 6 | 6 | yes | yes | yes | yes | RS on FW; browser RS | done · W7 browser |
-| `fs.overlay` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | abi_faces stub on FW+browser | done · W7 browser |
+| `fs.overlay` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | product/browser RS staticlib | done · W7 browser |
 | `fs.tmpfs` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | RS on FW; browser RS | done · W7 browser |
 | `fs.vfs` | RS | 6 | 6 | 6 | 6 | yes | yes | yes | yes | RS on FW; browser RS | done · W7 browser |
 | `fs.wasmmod` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | RS on FW; browser RS | done · W7 browser |
-| `fs.zip` | RS | 4 | 4 | 4 | 4 | yes | yes | yes | yes | abi_faces stub on FW+browser | done · W7 browser |
-| `hwtree` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | abi_faces print stub on FW+browser (no DT) | done · W7 browser |
+| `fs.zip` | RS | 4 | 4 | 4 | 4 | yes | yes | yes | yes | product/browser RS staticlib | done · W7 browser |
+| `hwtree` | RS | 1 | 1 | 1 | 1 | yes | yes | yes | yes | RS hwtree + restored dt on FW+browser | done · W7 browser |
 | `inspect` | Py+C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | C+RS into-Py via pm_upy | keep Py app · W4 bridges done |
-| `mem.arena` | RS | 13 | 13 | 13 | 13 | yes | yes | yes | yes | abi_faces/RS face linked on FW; browser RS | done · W7 browser |
-| `mem.lock` | RS | 8 | 8 | 8 | 8 | yes | yes | yes | yes | abi_faces/RS face linked on FW; browser RS | done · W7 browser |
+| `mem.arena` | RS | 13 | 13 | 13 | 13 | yes | yes | yes | yes | RS face in product/browser staticlib | done · W7 browser |
+| `mem.lock` | RS | 8 | 8 | 8 | 8 | yes | yes | yes | yes | RS face in product/browser staticlib | done · W7 browser |
 | `mem.port` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser nest ok | done · W7 browser |
-| `mem.tlsf` | RS | 20 | 20 | 20 | 20 | yes | yes | yes | yes | Conte TLSF; browser via abi_faces_link | done · W7 browser |
+| `mem.tlsf` | RS | 20 | 20 | 20 | 20 | yes | yes | yes | yes | Conte TLSF + RS pm_metal_mem_tlsf_* face | done · W7 browser |
 | `net.asgi` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser: no TCP accept (init −1) | done · W8 browser net |
 | `net.dhcp` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser: synthetic lease; start parks | done · W8 browser net |
 | `net.dns` | C | 3 | 3 | 3 | 3 | yes | yes | yes | yes | browser: DoH js.fetch; resolve façade | done · W8 browser net |
@@ -221,11 +229,12 @@ Counts are ledger estimates (not a live link inventory).
 | `net.nic` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | L2 registry; empty until host registers | done · W8 browser net |
 | `net.ntp` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | browser: wall clock Date.now | done · W8 browser net |
 | `net.pump` | C | 7 | 7 | 7 | 7 | yes | yes | yes | yes | browser: idle→http/dhcp/ntp poll | done · W8 browser net |
-| `net.ssh` | C | 16 | 16 | 16 | 16 | yes | yes | yes | yes | browser: no TCP (available 0) | done · W8 browser net · client later |
+| `net.ssh` | C | 16 | 16 | 16 | 16 | yes | yes | yes | yes | FW: KEX+encrypt+password auth; PTY console/client later; browser: available 0 | done · W8 browser net · PTY later |
 | `net.tftp` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | browser: no UDP RRQ (fail-closed) | done · W8 browser net |
 | `net.tls` | C | 18 | 18 | 18 | 18 | yes | yes | yes | yes | browser: sock-TLS −1; HTTPS via http | done · W8 browser net |
 | `net.wg` | C | 12 | 12 | 12 | 12 | yes | yes | yes | yes | browser: no UDP tunnel (fail-closed) | done · W8 browser net |
 | `pack` | C | 6 | 6 | 6 | 6 | yes | yes | yes | yes | MPWP embeds + mount_all via fs.wasmmod | done · W7 browser |
+| `process` | C | 8 | 8 | 8 | 8 | yes | yes | yes | yes | intent roots + ps/quit; pilots sshd/httpd | done · W7 browser |
 | `rt` | RS | 5 | 5 | 5 | 5 | yes | yes | yes | yes | halt/panic*/register/connect; browser C twin rt_block.c (RS no export_c_abi) | done · W7 browser |
 | `shell.tui` | C | 4 | 4 | 4 | 4 | yes | yes | yes | yes | browser: VT/draw dashboard muscle | done · W9 browser |
 | `shell.ui` | C | 2 | 2 | 2 | 2 | yes | yes | yes | yes | browser: no gfx present (attach −1) | done · W9 browser |
@@ -240,7 +249,7 @@ Counts are ledger estimates (not a live link inventory).
 | `util.lz4` | RS | 3 | 3 | 3 | 3 | yes | yes | yes | yes |  | done · W7 browser |
 | `util.size` | RS | 2 | 2 | 2 | 2 | yes | yes | yes | yes |  | done · W7 browser |
 | `util.tar` | RS | 5 | 5 | 5 | 5 | yes | yes | yes | yes | foreach yields; browser RS (browser_rs) | done · W7 browser |
-| `wamr_host` | RS | 15 | 15 | 15 | 15 | yes | yes | yes | yes | browser: abi_faces fail-closed (no nested guest) | done · W9 browser |
+| `wamr_host` | RS | 15 | 15 | 15 | 15 | yes | yes | yes | yes | FW: RS+WAMR port; browser: HAL fail-closed (no nested guest) | done · W9 browser |
 
 ---
 
@@ -248,13 +257,13 @@ Counts are ledger estimates (not a live link inventory).
 
 | Metric | Value |
 |--------|------:|
-| Rows | 69 |
-| Full export (C∧RS∧Py @ 100%) | **69/69** |
-| Strict green (export ∧ async=yes) | **69/69** |
-| Browser=yes | **69/69** |
-| FW=yes | **69/69** |
-| Stub=.pyi | **69/69** |
-| Smoke | `make -C tests/matrix all` (ledger + wasm MATRIX_BROWSER_OK 69) · `X86_64_BIOS_OK` ⇒ `matrix py ok` · UEFI REPL link (`X86_64_UEFI`/`X86_UEFI` + `abi_faces`) (2026-08-09) |
+| Rows | 70 |
+| Full export (C∧RS∧Py @ 100%) | **70/70** |
+| Strict green (export ∧ async=yes) | **70/70** |
+| Browser=yes | **70/70** |
+| FW=yes | **70/70** |
+| Stub=.pyi | **70/70** |
+| Smoke | `make -C tests/matrix all` (ledger + wasm MATRIX_BROWSER_OK 70) · `X86_64_BIOS_OK` ⇒ `matrix py ok` · UEFI REPL link · FW always links wasmmod freestanding WAMR + real `host_natives` (fixed `-DMETAL_LINK_WAMR=1` for externals only) (2026-08-09) |
 | Note | **Dev path W1–W10 complete.** All columns full. unix.* = identity faces on FW/browser; product runtime remains unix port. Tests: `tests/matrix/`. |
 
 Recompute the snapshot numbers when you bulk-edit the table.

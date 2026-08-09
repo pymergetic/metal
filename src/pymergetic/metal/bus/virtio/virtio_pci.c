@@ -658,3 +658,54 @@ int pm_metal_virtio_cfg_read(pm_metal_virtio_dev_t *dev, uint32_t offset, void *
     }
     return 0;
 }
+
+int pm_metal_virtq_add3(pm_metal_virtq_t *vq, void *buf0, uint32_t len0, int write0, void *buf1,
+                        uint32_t len1, int write1, void *buf2, uint32_t len2, int write2,
+                        uint16_t *head_out)
+{
+    metal_vring_desc_t *desc;
+    metal_vring_avail_t *avail;
+    uint16_t a, b, c, aidx;
+
+    if (vq == NULL || buf0 == NULL || buf1 == NULL || buf2 == NULL || len0 == 0 || len1 == 0 ||
+        len2 == 0 || vq->num_free < 3) {
+        return -1;
+    }
+
+    a = vq->free_head;
+    b = vq->next[a];
+    c = vq->next[b];
+    vq->free_head = vq->next[c];
+    vq->num_free = (uint16_t)(vq->num_free - 3u);
+
+    desc = (metal_vring_desc_t *)vq->desc;
+    desc[a].addr = (uint64_t)(uintptr_t)buf0;
+    desc[a].len = len0;
+    desc[a].flags = (uint16_t)(VRING_DESC_F_NEXT | (write0 ? VRING_DESC_F_WRITE : 0));
+    desc[a].next = b;
+    desc[b].addr = (uint64_t)(uintptr_t)buf1;
+    desc[b].len = len1;
+    desc[b].flags = (uint16_t)(VRING_DESC_F_NEXT | (write1 ? VRING_DESC_F_WRITE : 0));
+    desc[b].next = c;
+    desc[c].addr = (uint64_t)(uintptr_t)buf2;
+    desc[c].len = len2;
+    desc[c].flags = (uint16_t)(write2 ? VRING_DESC_F_WRITE : 0);
+    desc[c].next = 0;
+
+    avail = (metal_vring_avail_t *)vq->avail;
+    aidx = avail->idx;
+    pm_metal_mem_fence();
+    avail->ring[aidx % vq->size] = a;
+    pm_metal_mem_fence();
+    avail->idx = (uint16_t)(aidx + 1u);
+
+    if (head_out != NULL) {
+        *head_out = a;
+    }
+    return 0;
+}
+
+void pm_metal_virtio_ack_isr(pm_metal_virtio_dev_t *dev)
+{
+    (void)dev;
+}

@@ -38,8 +38,12 @@ void pm_metal_boot_tree_item(
 void pm_metal_boot_tree_leave(void);
 
 void pm_metal_boot_tree_ready_ok(void);
+/* Close open sections; final `` `-- dead`` leaf (shutdown endpoint). */
+void pm_metal_boot_tree_dead(void);
 /* Rainbow FIGlet + stamp line (ver @ cpu) — mirrors boot_banner. */
 void pm_metal_boot_rainbow_metalpython(const char *version, const char *cpu);
+/* Fat red dead sentence + dim stamp — shutdown finale (mirror of rainbow ready). */
+void pm_metal_boot_dead_art(const char *version, const char *cpu);
 
 /* Deprecated: was a full dump. Prefer live enter/item/leave. */
 int pm_metal_boot_tree_print(void);

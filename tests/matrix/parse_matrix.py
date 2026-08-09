@@ -6,6 +6,7 @@ from pathlib import Path
 
 METAL = Path(__file__).resolve().parents[2]
 MATRIX_MD = METAL / "docs" / "MODULE_MATRIX.md"
+SEATS_C = METAL / "src" / "pymergetic" / "metal" / "reg" / "seats.c"
 TYPINGS = METAL / "typings" / "pymergetic" / "metal"
 GLUE = METAL / "glue" / "pymergetic" / "metal"
 
@@ -112,3 +113,29 @@ def manifest_has_frozen(manifest: Path, path: str) -> bool:
     rel = frozen_src_rel(path)
     # arch.wasm → metal/arch/wasm/__init__.py
     return rel in text or rel.replace("/__init__.py", "/") in text
+
+
+def parse_reg_seats(text: str | None = None) -> list[str]:
+    """Seat paths from PM_METAL_REG_SEAT macros (self-register SoT).
+
+    Scans glue/**, seats_frozen.c. Ignores PM_METAL_REG_SEAT_TEST_ONLY.
+    """
+    import re
+
+    if text is not None:
+        return sorted(set(re.findall(r'PM_METAL_REG_SEAT\s*\(\s*\w+\s*,\s*"([^"]+)"', text)))
+
+    paths: set[str] = set()
+    pat = re.compile(r'PM_METAL_REG_SEAT\s*\(\s*\w+\s*,\s*"([^"]+)"')
+    roots = [
+        GLUE,
+        METAL / "src" / "pymergetic" / "metal" / "reg" / "seats_frozen.c",
+    ]
+    for root in roots:
+        if root.is_file():
+            paths.update(pat.findall(root.read_text(encoding="utf-8")))
+            continue
+        if root.is_dir():
+            for f in root.rglob("*.c"):
+                paths.update(pat.findall(f.read_text(encoding="utf-8")))
+    return sorted(paths)

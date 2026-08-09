@@ -9,6 +9,7 @@
 #include <pymergetic/metal/fs/__init__.h>
 
 #include <string.h>
+#include <pymergetic/metal/reg/seats.h>
 
 
 static const uint8_t *fs_path_z(mp_obj_t path_obj, uint8_t *buf, size_t cap)
@@ -319,3 +320,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs = {
     .globals = (mp_obj_dict_t *)&fs_globals,
 };
 
+
+PM_METAL_REG_SEAT(g_pm_seat_fs, "pymergetic.metal.fs", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

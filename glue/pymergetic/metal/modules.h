@@ -25,6 +25,8 @@ extern const mp_obj_module_t mp_module_pymergetic_metal_mem_port;
 extern const mp_obj_module_t mp_module_pymergetic_metal_mem_arena;
 extern const mp_obj_module_t mp_module_pymergetic_metal_mem_lock;
 extern const mp_obj_module_t mp_module_pymergetic_metal_async;
+extern const mp_obj_module_t mp_module_pymergetic_metal_process;
+extern const mp_obj_module_t mp_module_pymergetic_metal_reg;
 extern const mp_obj_module_t mp_module_pymergetic_metal_console;
 extern const mp_obj_module_t mp_module_pymergetic_metal_boot;
 extern const mp_obj_module_t mp_module_pymergetic_metal_boot_tree;

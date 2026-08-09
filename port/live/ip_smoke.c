@@ -149,15 +149,13 @@ static int http_smoke(void)
 static int ssh_smoke(void)
 {
     if (pm_metal_net_ssh_init() != 0 || !pm_metal_net_ssh_available()) {
-        pm_metal_net_face_mark(PM_METAL_NET_FACE_SSH);
-        uart_puts("ssh stub\n");
-        return 0;
+        uart_puts("ssh init fail\n");
+        return -1;
     }
     /* Own TCP :22 — concurrent with :80/:8080. */
     if (pm_metal_net_ssh_listen(22) == 0u) {
-        pm_metal_net_face_mark(PM_METAL_NET_FACE_SSH);
-        uart_puts("ssh stub\n");
-        return 0;
+        uart_puts("ssh listen fail\n");
+        return -1;
     }
     uart_puts("ssh ok\n");
     pm_metal_net_face_mark(PM_METAL_NET_FACE_SSH);
@@ -252,8 +250,8 @@ static int ssh_client_smoke(void)
     if (!pm_metal_net_ssh_available()) {
         return 0;
     }
-    /* Server KEX is live; client_exec still TODO. */
-    uart_puts("ssh client stub\n");
+    /* Server path is live; DIY client_exec not product yet. */
+    uart_puts("ssh client later\n");
     return 0;
 }
 

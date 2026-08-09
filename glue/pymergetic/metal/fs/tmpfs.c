@@ -5,6 +5,7 @@
 #include "py/runtime.h"
 #include <pymergetic/metal/fs/tmpfs/__init__.h>
 #include <string.h>
+#include <pymergetic/metal/reg/seats.h>
 
 
 static mp_obj_t tmpfs_mount(mp_obj_t target_obj)
@@ -32,3 +33,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs_tmpfs = {
     .globals = (mp_obj_dict_t *)&tmpfs_globals,
 };
 
+
+PM_METAL_REG_SEAT(g_pm_seat_fs_tmpfs, "pymergetic.metal.fs.tmpfs", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

@@ -6,6 +6,7 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/net/dns/__init__.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t dns_lookup(mp_obj_t name_obj)
 {
@@ -43,3 +44,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_net_dns = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&dns_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_net_dns, "pymergetic.metal.net.dns", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

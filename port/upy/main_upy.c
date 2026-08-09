@@ -1,20 +1,26 @@
 /*
  * Shared µPy bring-up after board UART is live.
  * Called from board platform_main / pm_metal_bios_main.
+ *
+ * No embedded Python source (do_str). Smoke = reg_run_tests();
+ * product = C callees (autoexec, wasmmod hook, arch.autoexec).
  */
 #include <stdint.h>
 #include <string.h>
 
 #include "py/builtin.h"
-#include "py/compile.h"
 #include "py/gc.h"
 #include "py/lexer.h"
 #include "py/mperrno.h"
+#include "py/nlr.h"
 #include "py/runtime.h"
 #include "shared/runtime/pyexec.h"
 
 #include "mphalport.h"
 #include "pymergetic/metal/boot/product.h"
+#include "pymergetic/metal/reg/seats.h"
+
+#include "pm_upy/obj/call.h"
 
 #ifndef METAL_LIVE
 #define METAL_LIVE 0
@@ -37,21 +43,13 @@ static char heap[MICROPY_HEAP_SIZE] __attribute__((aligned(16)));
 
 static char *stack_top;
 
-#if MICROPY_ENABLE_COMPILER
-static void do_str(const char *src, mp_parse_input_kind_t input_kind) {
-    nlr_buf_t nlr;
-    if (nlr_push(&nlr) == 0) {
-        mp_lexer_t *lex = mp_lexer_new_from_str_len(MP_QSTR__lt_stdin_gt_, src, strlen(src), 0);
-        qstr source_name = lex->source_name;
-        mp_parse_tree_t parse_tree = mp_parse(lex, input_kind);
-        mp_obj_t module_fun = mp_compile(&parse_tree, source_name, true);
-        mp_call_function_0(module_fun);
-        nlr_pop();
-    } else {
-        mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
+static void call_upy_fn0(const char *dotted)
+{
+    uint32_t h = pm_upy_fn_resolve(dotted);
+    if (h != 0) {
+        (void)pm_upy_fn_call(h, 0, NULL);
     }
 }
-#endif
 
 void mp_metal_upy_run(int smoke) {
     int stack_dummy;
@@ -84,120 +82,14 @@ void mp_metal_upy_run(int smoke) {
     (void)pm_metal_net_nic_attach_upy();
 #endif
 
+    /* Floor seats + co-located tests — same store for smoke and REPL/Inspect. */
+    pm_metal_reg_seats_boot();
+
     if (smoke) {
-#if MICROPY_ENABLE_COMPILER
-#if MICROPY_PY_FRAMEBUF
-#if METAL_BOARD_UEFI
-        /* UEFI: FrameBuffer() #UD (SSE/copy path); BIOS still covers framebuf. */
-        uart_puts("framebuf skip\n");
-#else
-        do_str(
-            "import framebuf\n"
-            "b=bytearray(64)\n"
-            "f=framebuf.FrameBuffer(b,16,8,framebuf.MVLSB)\n"
-            "f.fill(1)\n"
-            "f.pixel(0,0,0)\n"
-            "print('framebuf ok')\n",
-            MP_PARSE_FILE_INPUT);
-#endif
-#endif
-        /* SSH µPy nest face — dotted import (mutable-nest SUBPACKAGES walk). */
-        do_str(
-            "import pymergetic.metal.net.ssh as ssh\n"
-            "if ssh.available():\n"
-            "  assert ssh.init()==0\n"
-            "  print('ssh py ok')\n"
-            "else:\n"
-            "  print('ssh stub')\n",
-            MP_PARSE_FILE_INPUT);
-#if MICROPY_PY_NETWORK
-        do_str(
-            "import network\n"
-            "n=network.LAN()\n"
-            "assert n.active()\n"
-            "assert n.isconnected()\n"
-            "c=n.ifconfig()\n"
-            "assert c[0]!='0.0.0.0'\n"
-            "print('network ok')\n"
-            "assert n.resolve('10.0.2.2')=='10.0.2.2'\n"
-            "a=''\n"
-            "for i in range(3):\n"
-            "  try:\n"
-            "    a=n.resolve('example.com')\n"
-            "    if a and a!='0.0.0.0':\n"
-            "      break\n"
-            "  except OSError:\n"
-            "    pass\n"
-            "assert a and a!='0.0.0.0'\n"
-            "print('dns py ok')\n"
-            "import socket\n"
-            "print('socket import ok')\n"
-            "s=socket.socket()\n"
-            "print('socket new ok')\n"
-            "ai=socket.getaddrinfo('10.0.2.2',80)[0][-1]\n"
-            "print('socket gai ok')\n"
-            "assert ai[1]==80\n"
-            "s.close()\n"
-            "print('socket ok')\n",
-            MP_PARSE_FILE_INPUT);
-#endif
-#if MICROPY_MODULE_FROZEN_MPY
-        do_str(
-            "import pymergetic.metal.net.microdot as microdot\n"
-            "assert microdot.__version__\n"
-            "from pymergetic.metal.net.microdot import Microdot\n"
-            "assert Microdot is not None\n"
-            "print('microdot ok')\n"
-            "from pymergetic.metal.inspect.dispatch import handle\n"
-            "st, body = handle('GET', '/health')\n"
-            "assert st == 200 and 'ok' in body\n"
-            "st, body = handle('GET', '/capabilities')\n"
-            "assert st == 200 and 'metal' in body\n"
-            "st, body = handle('GET', '/inspect/self')\n"
-            "assert st == 200 and 'kernel' in body and 'has_source' in body\n"
-            "assert handle('GET', '/inspect/') is None\n"
-            "print('inspect py ok')\n",
-            MP_PARSE_FILE_INPUT);
-        /* Every MODULE_MATRIX FW=yes seat — keep SEATS in sync with docs/MODULE_MATRIX.md
-         * (host: tests/matrix/test_module_matrix_ledger.py). */
-        do_str(
-            "SEATS=("
-            "'arch','arch.wasm','arch.x86','arch.x86_64',"
-            "'async','auth','boot','boot.tree',"
-            "'bus.pci','bus.virtio','console',"
-            "'dev.acpi','dev.blk','dev.gfx.compositor','dev.gfx.scanout','dev.gfx.text',"
-            "'dev.input.kbd','dev.net.bge','dev.net.virtio_net','dev.serial','dev.stream',"
-            "'draw','externals',"
-            "'fs','fs.embed','fs.fat','fs.littlefs','fs.mtar','fs.overlay',"
-            "'fs.tmpfs','fs.vfs','fs.wasmmod','fs.zip',"
-            "'hwtree','inspect',"
-            "'mem.arena','mem.lock','mem.port','mem.tlsf',"
-            "'net.asgi','net.dhcp','net.dns','net.faces','net.http',"
-            "'net.ip','net.microdot','net.nic','net.ntp','net.pump',"
-            "'net.ssh','net.tftp','net.tls','net.wg',"
-            "'pack','rt',"
-            "'shell.tui','shell.ui','shell.vt','trust',"
-            "'unix.x86','unix.x86_64',"
-            "'util.ascii','util.eightcc','util.endian','util.fourcc',"
-            "'util.lz4','util.size','util.tar','wamr_host')\n"
-            "def _imp(s):\n"
-            " parts=('pymergetic','metal')+tuple(s.split('.'))\n"
-            " cur=None\n"
-            " for i in range(len(parts)):\n"
-            "  dotted='.'.join(parts[:i+1])\n"
-            "  leaf=parts[i]\n"
-            "  try:\n"
-            "   cur=__import__(dotted,None,None,(leaf,))\n"
-            "  except ImportError:\n"
-            "   cur=getattr(cur,leaf)\n"
-            " return cur\n"
-            "for s in SEATS:\n"
-            " _=_imp(s)\n"
-            "print('matrix py ok', len(SEATS))\n",
-            MP_PARSE_FILE_INPUT);
-#endif
-        do_str("print('upy ok')", MP_PARSE_SINGLE_INPUT);
-#endif
+        if (pm_metal_reg_run_tests() != 0) {
+            uart_puts("reg tests fail\n");
+            return;
+        }
         uart_puts("qemu ok\n");
         return;
     }
@@ -206,20 +98,11 @@ void mp_metal_upy_run(int smoke) {
     /* After mp_init: bind CDN (all seats), then thin arch epilogue. */
     (void)pm_metal_autoexec();
 #if defined(MICROPY_PY_WASM) && MICROPY_PY_WASM
-    do_str(
-        "try:\n"
-        " import pymergetic.wasmmod as _w\n"
-        " _w.install_hook()\n"
-        "except ImportError:\n"
-        " pass\n",
-        MP_PARSE_FILE_INPUT);
+    call_upy_fn0("pymergetic.wasmmod.install_hook");
 #endif
 #if MICROPY_MODULE_FROZEN_MPY
-    /* Do not assign arbitrary sys.* — bare µPy rejects it (AttributeError). */
-    do_str(
-        "from pymergetic.metal.arch import current\n"
-        "current().autoexec()\n",
-        MP_PARSE_FILE_INPUT);
+    /* arch.autoexec() installs quit/exit then runs the seat epilogue. */
+    call_upy_fn0("pymergetic.metal.arch.autoexec");
 #endif
     pyexec_friendly_repl();
 #else
@@ -261,16 +144,14 @@ void nlr_jump_fail(void *val) {
     (void)val;
     uart_puts("nlr_jump_fail\n");
     for (;;) {
-        __asm__ volatile("hlt");
     }
 }
 
-void MP_NORETURN __fatal_error(const char *msg) {
+void __fatal_error(const char *msg) {
     uart_puts("FATAL: ");
-    uart_puts(msg);
+    uart_puts(msg ? msg : "?");
     uart_puts("\n");
     for (;;) {
-        __asm__ volatile("hlt");
     }
 }
 
@@ -280,6 +161,6 @@ void MP_WEAK __assert_func(const char *file, int line, const char *func, const c
     (void)line;
     (void)func;
     (void)expr;
-    __fatal_error("assert");
+    __fatal_error("Assertion failed");
 }
 #endif

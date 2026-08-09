@@ -28,7 +28,10 @@ use pymergetic_metal_log as _;
 use pymergetic_metal_mem as _;
 use pymergetic_metal_rt as _;
 
-use pymergetic_metal_reg::{pm_metal_reg_mod_load, pm_metal_reg_mod_unload, RegEntry, RegMod};
+use pymergetic_metal_reg::{
+    ledger_add_callee, pm_metal_reg_mod_load, pm_metal_reg_mod_unload, RegEntry, RegMod, HONESTY_OK,
+    LANG_RS, ROLE_TRAMPOLINE,
+};
 
 extern "C" {
     fn pm_metal_wasm_fetch_register(full_module: *const u8, url: *const core::ffi::c_char, sig: *const u8, sig_len: u32) -> i32;
@@ -190,6 +193,18 @@ pub unsafe extern "C" fn pm_metal_wasm_register(full_module: *const u8) -> i32 {
         }
         let entry = RegEntry::new(fname_str);
         entry.publish(ptr);
+        let _ = ledger_add_callee(
+            name.as_bytes(),
+            fname_str.as_bytes(),
+            LANG_RS,
+            ROLE_TRAMPOLINE,
+            HONESTY_OK,
+            false,
+            true,
+            b"",
+            b"wasm_export",
+            ptr,
+        );
         entries.push(entry);
     }
     let entries: &'static [RegEntry] = Box::leak(entries.into_boxed_slice());

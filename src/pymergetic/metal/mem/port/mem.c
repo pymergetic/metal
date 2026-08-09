@@ -328,15 +328,63 @@ uint8_t *pm_metal_mem_map(size_t bytes)
     return p;
 }
 
-/* Guest cookie map — not wired on product LIVE yet (wasm guest path). */
+#ifndef PM_METAL_MEM_GUEST_SLOTS
+#define PM_METAL_MEM_GUEST_SLOTS 64u
+#endif
+
+typedef struct {
+    uint8_t *ptr;
+    uint32_t size;
+} guest_slot_t;
+
+static guest_slot_t g_guest[PM_METAL_MEM_GUEST_SLOTS];
+
+uint32_t pm_metal_mem_guest_alloc(uint32_t size)
+{
+    uint32_t i;
+    uint8_t *p;
+
+    if (size == 0u) {
+        return 0u;
+    }
+    for (i = 1u; i < PM_METAL_MEM_GUEST_SLOTS; i++) {
+        if (g_guest[i].ptr == NULL) {
+            p = pm_metal_mem_alloc((size_t)size);
+            if (p == NULL) {
+                return 0u;
+            }
+            g_guest[i].ptr = p;
+            g_guest[i].size = size;
+            return i;
+        }
+    }
+    return 0u;
+}
+
+void pm_metal_mem_guest_free(uint32_t cookie)
+{
+    if (cookie == 0u || cookie >= PM_METAL_MEM_GUEST_SLOTS) {
+        return;
+    }
+    if (g_guest[cookie].ptr != NULL) {
+        pm_metal_mem_free(g_guest[cookie].ptr);
+        g_guest[cookie].ptr = NULL;
+        g_guest[cookie].size = 0u;
+    }
+}
+
 uint8_t *pm_metal_mem_guest_ptr(uint32_t cookie)
 {
-    (void)cookie;
-    return NULL;
+    if (cookie == 0u || cookie >= PM_METAL_MEM_GUEST_SLOTS) {
+        return NULL;
+    }
+    return g_guest[cookie].ptr;
 }
 
 uint32_t pm_metal_mem_guest_size(uint32_t cookie)
 {
-    (void)cookie;
-    return 0;
+    if (cookie == 0u || cookie >= PM_METAL_MEM_GUEST_SLOTS) {
+        return 0u;
+    }
+    return g_guest[cookie].size;
 }

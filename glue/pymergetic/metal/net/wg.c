@@ -8,6 +8,7 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/net/wg/__init__.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t wg_status_to_dict(const pm_metal_net_wg_status_t *st)
 {
@@ -145,3 +146,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_net_wg = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&net_wg_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_net_wg, "pymergetic.metal.net.wg", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

@@ -7,6 +7,7 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/boot/tree.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t boot_print_cb = MP_OBJ_NULL;
 static void boot_print_tramp(const char *line, void *user)
@@ -129,3 +130,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_boot_tree = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&boot_tree_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_boot_tree, "pymergetic.metal.boot.tree", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

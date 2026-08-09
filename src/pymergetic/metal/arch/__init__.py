@@ -54,4 +54,10 @@ def firmware():
 
 def autoexec():
     """Run the current seat's autoexec epilogue."""
+    try:
+        from pymergetic.metal.site import install as _install_quitters
+
+        _install_quitters()
+    except ImportError:
+        pass
     return current().autoexec()

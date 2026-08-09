@@ -8,6 +8,7 @@
 #include <pymergetic/metal/util/tar/__init__.h>
 
 #include <string.h>
+#include <pymergetic/metal/reg/seats.h>
 
 typedef struct {
     mp_obj_t list;
@@ -155,3 +156,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_util_tar = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&util_tar_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_util_tar, "pymergetic.metal.util.tar", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

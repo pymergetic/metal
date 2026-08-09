@@ -3,7 +3,7 @@
 Grouped by `include/pymergetic/metal/<path>`. Path == module.
 
 Coverage % / async compliance / maintain hints:
-[`../docs/MODULE_MATRIX.md`](../docs/MODULE_MATRIX.md).
+[`../docs/MODULE_MATRIX.md`](../docs/MODULE_MATRIX.md) (export; seats SoT is `reg/seats.c`).
 
 Columns: **C** · **RS** · **Python** · **Seat** · **Status**
 
@@ -30,9 +30,9 @@ Columns: **C** · **RS** · **Python** · **Seat** · **Status**
 | `fs.wasmmod` | `pm_metal_fs_wasmmod_*` | callee `__init__.rs` | `pymergetic.metal.fs.wasmmod` | all | ok |
 | `fs.zip` | `pm_metal_fs_zip_*` | callee `__init__.rs` | `pymergetic.metal.fs.zip` | all | ok |
 | `hwtree` | `pm_metal_hwtree_*` | callee `__init__.rs` | `pymergetic.metal.hwtree` | all | ok |
-| `mem.arena` | `pm_metal_mem_arena_*` | callee `__init__.rs` / browser `abi_faces_link.c` | `pymergetic.metal.mem.arena` | all | ok |
-| `mem.lock` | `pm_metal_mem_lock_{spin,mutex}_*` | `spin.rs` / `mutex.rs` / browser `abi_faces_link.c` | `pymergetic.metal.mem.lock` | all | ok |
-| `mem.tlsf` | `pm_metal_mem_tlsf_*` | callee `__init__.rs` / browser `abi_faces_link.c` | `pymergetic.metal.mem.tlsf` | all | ok |
+| `mem.arena` | `pm_metal_mem_arena_*` | callee `__init__.rs` (browser: same RS via product) | `pymergetic.metal.mem.arena` | all | ok |
+| `mem.lock` | `pm_metal_mem_lock_{spin,mutex}_*` | `spin.rs` / `mutex.rs` | `pymergetic.metal.mem.lock` | all | ok |
+| `mem.tlsf` | `pm_metal_mem_tlsf_*` | callee `__init__.rs` | `pymergetic.metal.mem.tlsf` | all | ok |
 | `rt` | `pm_metal_rt_*` | callee `__init__.rs` / browser `rt_block.c` | `pymergetic.metal.rt` | all | ok |
 | `wamr_host` | `pm_metal_wasm_*` | callee `__init__.rs` / `_fetch.rs` | `pymergetic.metal.wamr_host` | firmware | ok |
 | `net.ip` | `pm_metal_net_ip_*` | face `__init__.rs` | `pymergetic.metal.net.ip` | firmware | ok |

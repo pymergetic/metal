@@ -30,7 +30,9 @@ size_t pm_metal_mem_hole(void);
 /* Grow map side upward from the low brk; NULL if hole too small. */
 uint8_t *pm_metal_mem_map(size_t bytes);
 
-/* Wasm guest cookies — NULL/0 until guest map is product-linked. */
+/* Wasm guest cookies — host-side buffers addressed by u32 cookie. */
+uint32_t pm_metal_mem_guest_alloc(uint32_t size);
+void pm_metal_mem_guest_free(uint32_t cookie);
 uint8_t *pm_metal_mem_guest_ptr(uint32_t cookie);
 uint32_t pm_metal_mem_guest_size(uint32_t cookie);
 

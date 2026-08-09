@@ -9,6 +9,7 @@ extern "C" {
 
 void pm_metal_time_init(void);
 uint64_t pm_metal_async_mono_us(void);
+uint64_t pm_metal_async_mono_ms(void);
 uint64_t pm_metal_time_mono_us(void);
 
 /* Returns async handle; completion via poll. */

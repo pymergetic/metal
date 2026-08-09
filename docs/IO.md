@@ -87,7 +87,7 @@ Blk detectors: `pm_metal_blk_virtio_detect`, `pm_metal_blk_ide_detect` (legacy I
 
 ### Net (multi-if + DHCPv6)
 
-- Host ifs: always `lo` (127.0.0.1/8) plus `ethN` / `wgN` (slot budget `PM_METAL_NET_IP_MAX_IFS`). Default route prefers ethN when present. Status: F7 TUI + boot tree + C/RS/Py (`metalnet` / `pm_metal_net_ip_if_*`); no COM1 shell cmd registry.
+- Host ifs: always `lo` (127.0.0.1/8) plus `ethN` / `wgN` (slot budget `PM_METAL_NET_IP_MAX_IFS`). Default route prefers ethN when present. Status: F7 TUI + boot tree + C/RS/Py (`pymergetic.metal.net` / `pm_metal_net_ip_if_*`); no COM1 shell cmd registry.
 - **Iface events:** lwIP status/link/ext callbacks bump `pm_metal_net_ip_if_gen()`. Poll gen or `await pm_metal_net_ip_if_wait(since)` / Python `ip.if_gen()` + `await ip.if_wait(g)`. Snapshots: `ip.ifaces()` / `ip.iface([name])`. Guest WASI: `if_count`, `if_gen`, `if_wait`, `if_status_index`. Config `if_set*` stays host/shell.
 - **I/O budget:** wire chunk `PM_METAL_IO_WIRE_MAX` (32 KiB) for TLS/HTTP-client/py-recv; ASGI server iobuf `PM_METAL_ASGI_IO_MAX` (4 MiB). See `include/pymergetic/metal/net/io_budget.h`.
 - DHCPv6: **stateless** via lwIP; **stateful** via Metal client (`metal_dhcp6_stateful_*`) — lwIP `dhcp6_enable_stateful()` remains a stub.
@@ -155,10 +155,11 @@ Endpoints: `uart`, `ui_tab`, `pipe`, `pty` (master/slave), later `virtio_console
 SSH is planned as a console viewport onto the shared Metal console (UART/UI)
 via a PTY pair (`pm_metal_stream_termios_*` / `pm_metal_stream_winsize_*`),
 not a separate stream feature. Hybrid module `pymergetic.metal.net.ssh`:
-C impl + RS/Py export faces (`pm_metal_net_ssh_*`). DIY server floor:
-ident + `curve25519-sha256` / `ssh-ed25519` through mutual NEWKEYS
-(`available()` true). Post-NEWKEYS encrypt/auth and PTY attach still TODO
-(wolfSSH/libssh* banned).
+C impl + RS/Py export faces (`pm_metal_net_ssh_*`). DIY server path:
+ident + `curve25519-sha256` / `ssh-ed25519` through mutual NEWKEYS,
+chacha20-poly1305 encrypt, password auth (`metal`), and a minimal session
+channel (`available()` true). **PTY→Metal console** and `client_exec` still
+later (wolfSSH/libssh* banned).
 
 Metal job control (not POSIX signals): Ctrl-C cancels the foreground shell
 async job, Ctrl-Z stops it; `jobs` / `fg` / `bg` list and resume. POSIX
@@ -246,12 +247,12 @@ See also [MODS.md](MODS.md) for wasm registration and
 
 ## Process
 
-**Target** ([`docs/MODS.md`](MODS.md)): **process = registered shell command runs a function in a task.**  
-Mod load ≠ process. Plain function call-in ≠ process. Commands are special funcs; Shell uses cmds; µPy later can use funcs and cmds.
+**Live:** [`ORCHESTRATION.md`](ORCHESTRATION.md) + [`definitions/async/process.md`](definitions/async/process.md).
+Process = crowned user-intent root (`sshd` / `httpd` …) over async tasks — **not** the REPL,
+**not** a Linux shell command registry. Face: `pymergetic.metal.process` (C/RS/Py).
+`quit` / `unboot` / `shutdown` / `reboot` as documented there.
 
-**Today:** `run`/`tab` → `mod_cmd_invoke` (registered cmd → func in a task).
-Still one live call-in/session. API: `guest/mod/mod.h`, `guest/process/process.h`,
-WASI `pymergetic.metal.mod` + `pymergetic.metal.process`, `PID=` env, `ps`.
+Archive vocabulary (shell cmds / `pmcmd` / guest process paths): [`MODS.md`](MODS.md) — historical.
 
 ---
 
@@ -263,6 +264,6 @@ shell linker-section registry, random/realtime, tab surfaces + clipped present, 
 console scrollback/scrollbar + EFI/BIOS wheel + PageUp/Down,
 Ctrl+Shift+Left/Right tab cycle,
 `shell_log`/WASI stdout → stdio streams, `gfx_set_surface` for tab-clipped guest draw,
-process/ps/`PID=` still on today’s inverted guest-session path ([`docs/MODS.md`](MODS.md) target).  
+process/ps live under `pymergetic.metal.process` ([`ORCHESTRATION.md`](ORCHESTRATION.md)).  
 Framebuffer on BIOS i386: Multiboot tag → Bochs → **VESA LFB** (`vesa.c`); x86_64 BIOS still stubs VESA RM. Audio: virtio-snd, else **AC97**, else null. Names/TFTP: hostname + `/etc/hosts` + `pm_metal_net_tftp_get`.  
-Open follow-ups: `docs/TODO.md` (mostly iron smoke); mod registry migration; overlay view.
+Open follow-ups: [`TODO.md`](TODO.md); mod registry migration; overlay view.

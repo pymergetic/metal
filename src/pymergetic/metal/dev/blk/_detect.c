@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdint.h>
 
 #include <pymergetic/metal/boot/platform/io.h>

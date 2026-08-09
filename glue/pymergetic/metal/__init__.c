@@ -19,7 +19,7 @@ void pm_metal_globals_init(void) {
     if (metal_globals_ready) {
         return;
     }
-    mp_obj_dict_init(&metal_globals, 24);
+    mp_obj_dict_init(&metal_globals, 28);
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR___name__),
                       MP_OBJ_NEW_QSTR(MP_QSTR_pymergetic_dot_metal));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR___path__),
@@ -36,6 +36,11 @@ void pm_metal_globals_init(void) {
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_mem));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_async),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_async));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_process),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_process));
+    /* Cold ledger + seat table (same store smoke / Inspect / REPL use). */
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_reg),
+                      MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_reg));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_boot),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_boot));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_console),

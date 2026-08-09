@@ -2,7 +2,7 @@
 name = "pymergetic_metal_async"
 version = "0.1.0"
 edition = "2021"
-description = "RS face marker — product async callee is C (async/__init__.c)"
+description = "RS async face + quiesce safepoint muscle (C runner is async/__init__.c)"
 publish = false
 
 [lib]

@@ -5,6 +5,7 @@
 #include "py/runtime.h"
 #include <pymergetic/metal/fs/littlefs/__init__.h>
 #include <string.h>
+#include <pymergetic/metal/reg/seats.h>
 
 
 static mp_obj_t littlefs_mount(mp_obj_t target_obj, mp_obj_t buf_obj)
@@ -34,3 +35,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_fs_littlefs = {
     .globals = (mp_obj_dict_t *)&littlefs_globals,
 };
 
+
+PM_METAL_REG_SEAT(g_pm_seat_fs_littlefs, "pymergetic.metal.fs.littlefs", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

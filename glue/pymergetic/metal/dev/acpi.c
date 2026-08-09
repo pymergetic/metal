@@ -6,6 +6,7 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/dev/acpi/__init__.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t acpi_set_rsdp(mp_obj_t addr_obj)
 {
@@ -61,3 +62,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_dev_acpi = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&acpi_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_dev_acpi, "pymergetic.metal.dev.acpi", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

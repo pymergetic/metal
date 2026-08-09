@@ -5,7 +5,6 @@
 use pymergetic_metal_rt as _;
 
 extern "C" {
-    fn pm_metal_pack_names() -> i32;
     static pm_metal_pack_inspect: u8;
     static pm_metal_pack_inspect_len: u32;
     static pm_metal_pack_metal: u8;
@@ -34,4 +33,3 @@ pub fn mount_all() -> i32 {
     unsafe { pm_metal_mod_packs_mount_all() }
 }
 
-#[inline] pub fn names() -> i32 { unsafe { pm_metal_pack_names() } }

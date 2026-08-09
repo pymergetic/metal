@@ -10,7 +10,8 @@ extern "C" {
 /*
  * pymergetic.metal.net.ssh — DIY hybrid face (C impl).
  * WolfSSH/libssh* banned (license). Server path: ident +
- * curve25519-sha256 through NEWKEYS; post-NEWKEYS encrypt/auth TODO.
+ * curve25519-sha256 through NEWKEYS, chacha20-poly1305, password auth,
+ * minimal session. PTY→Metal console and client_exec still later.
  */
 int32_t pm_metal_net_ssh_available(void); /* 1 once crypto/KEX linked */
 int32_t pm_metal_net_ssh_init(void);

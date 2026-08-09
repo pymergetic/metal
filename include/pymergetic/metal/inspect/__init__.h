@@ -18,9 +18,6 @@ int32_t pm_metal_inspect_capabilities_json(char *buf, size_t buf_len);
 int32_t pm_metal_inspect_handle(const char *method, const char *path,
                                 int *status, char *body, size_t body_len);
 
-int32_t pm_metal_inspect_py_app(void);
-int32_t pm_metal_inspect_py_dispatch(void);
-int32_t pm_metal_inspect_py_ready(void);
 
 #ifdef __cplusplus
 }

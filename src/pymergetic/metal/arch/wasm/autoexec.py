@@ -23,6 +23,14 @@ def _cdn_configured():
 def run():
     global _LEAD_PACKAGES, _PACKAGES_SRC
 
+    # CDN bootstrap runs this file directly (not via arch.autoexec).
+    try:
+        from pymergetic.metal.site import install as _install_quitters
+
+        _install_quitters()
+    except ImportError:
+        pass
+
     if not _cdn_configured():
         return True
 
@@ -81,3 +89,4 @@ def help():
     print("  import pymergetic.metal.net.microdot / pymergetic.metal.inspect  (frozen CORE)")
     print("  pymergetic.metal.externals.list()  (product stacks)")
     print("  httpd/sshd listen: firmware seats (browser has no virtio NIC)")
+    print("  quit()/exit(): hint only — reload the page to reset")

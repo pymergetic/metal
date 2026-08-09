@@ -1,5 +1,5 @@
-/* Bare ./metal-unix → -m pymergetic.metal.unix (banner + seat autoexec).
- * Linked with -Wl,--wrap=main.
+/* Bare ./micropython → -i -m pymergetic.metal.unix
+ * (banner + seat autoexec, then friendly REPL). Linked with -Wl,--wrap=main.
  *
  * Heap: compile default MICROPY_HEAP_SIZE (see mpconfigvariant.h).
  * Runtime: METAL_HEAPSIZE or MICROPY_HEAPSIZE (same grammar as -X heapsize=),
@@ -10,6 +10,7 @@
 #include <string.h>
 
 extern int __real_main(int argc, char **argv);
+void pm_metal_unix_boot_tree(void);
 
 static int argv_has_heapsize(int argc, char **argv) {
     int i;
@@ -66,7 +67,8 @@ int __wrap_main(int argc, char **argv) {
         (void)snprintf(heap_arg, sizeof(heap_arg), "heapsize=%s", env_heap);
     }
 
-    nargc = argc + (inject_heap ? 2 : 0) + (inject_mod ? 2 : 0);
+    /* -i keeps the friendly REPL after -m (otherwise the process exits). */
+    nargc = argc + (inject_heap ? 2 : 0) + (inject_mod ? 3 : 0);
     nargv = (char **)malloc((size_t)(nargc + 1) * sizeof(char *));
     if (nargv == NULL) {
         return __real_main(argc, argv);
@@ -82,10 +84,16 @@ int __wrap_main(int argc, char **argv) {
         nargv[nargc++] = argv[i];
     }
     if (inject_mod) {
+        nargv[nargc++] = "-i";
         nargv[nargc++] = "-m";
         nargv[nargc++] = "pymergetic.metal.unix";
     }
     nargv[nargc] = NULL;
+
+    if (inject_mod) {
+        /* Live boot.tree on stdout before µPy (same UX as FW/browser). */
+        pm_metal_unix_boot_tree();
+    }
 
     {
         int rc = __real_main(nargc, nargv);

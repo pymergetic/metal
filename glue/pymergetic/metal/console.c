@@ -6,6 +6,7 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/console.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t console_init(mp_obj_t buf_obj)
 {
@@ -138,3 +139,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_console = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&console_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_console, "pymergetic.metal.console", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

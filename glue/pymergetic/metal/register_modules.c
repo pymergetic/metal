@@ -69,6 +69,8 @@ static const char *const pm_metal_modname_seeds[] = {
     "pymergetic.metal.net.tls",
     "pymergetic.metal.net.wg",
     "pymergetic.metal.pack",
+    "pymergetic.metal.process",
+    "pymergetic.metal.reg",
     "pymergetic.metal.rt",
     "pymergetic.metal.shell",
     "pymergetic.metal.shell.tui",
@@ -94,6 +96,7 @@ void pm_metal_modname_seeds_keep(void)
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal, mp_module_pymergetic_metal);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_async, mp_module_pymergetic_metal_async);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_auth, mp_module_pymergetic_metal_auth);
+MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_process, mp_module_pymergetic_metal_process);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_boot, mp_module_pymergetic_metal_boot);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_boot_dot_tree, mp_module_pymergetic_metal_boot_tree);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_bus, mp_module_pymergetic_metal_bus);
@@ -104,20 +107,14 @@ MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev, mp_module_pymergetic_me
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_acpi, mp_module_pymergetic_metal_dev_acpi);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_blk, mp_module_pymergetic_metal_dev_blk);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_gfx, mp_module_pymergetic_metal_dev_gfx);
-MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_gfx_dot_compositor,
-                   mp_module_pymergetic_metal_dev_gfx_compositor);
-MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_gfx_dot_scanout,
-                   mp_module_pymergetic_metal_dev_gfx_scanout);
-MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_gfx_dot_text,
-                   mp_module_pymergetic_metal_dev_gfx_text);
+MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_gfx_dot_compositor, mp_module_pymergetic_metal_dev_gfx_compositor);
+MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_gfx_dot_scanout, mp_module_pymergetic_metal_dev_gfx_scanout);
+MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_gfx_dot_text, mp_module_pymergetic_metal_dev_gfx_text);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_input, mp_module_pymergetic_metal_dev_input);
-MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_input_dot_kbd,
-                   mp_module_pymergetic_metal_dev_input_kbd);
+MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_input_dot_kbd, mp_module_pymergetic_metal_dev_input_kbd);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_net, mp_module_pymergetic_metal_dev_net);
-MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_net_dot_bge,
-                   mp_module_pymergetic_metal_dev_net_bge);
-MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_net_dot_virtio_net,
-                   mp_module_pymergetic_metal_dev_net_virtio_net);
+MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_net_dot_bge, mp_module_pymergetic_metal_dev_net_bge);
+MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_net_dot_virtio_net, mp_module_pymergetic_metal_dev_net_virtio_net);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_serial, mp_module_pymergetic_metal_dev_serial);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_stream, mp_module_pymergetic_metal_dev_stream);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_draw, mp_module_pymergetic_metal_draw);
@@ -153,6 +150,7 @@ MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_net_dot_tftp, mp_module_pyme
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_net_dot_tls, mp_module_pymergetic_metal_net_tls);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_net_dot_wg, mp_module_pymergetic_metal_net_wg);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_pack, mp_module_pymergetic_metal_pack);
+MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_reg, mp_module_pymergetic_metal_reg);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_rt, mp_module_pymergetic_metal_rt);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_shell, mp_module_pymergetic_metal_shell);
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal_dot_shell_dot_tui, mp_module_pymergetic_metal_shell_tui);

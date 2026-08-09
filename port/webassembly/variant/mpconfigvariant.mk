@@ -26,6 +26,9 @@ METAL_CDN_URL ?= https://cdn.pymergetic.com/cdn
 METAL_CDN_EXTRA_URLS ?=
 
 CFLAGS += -I$(METAL)/include -I$(METAL)/port/hal \
+	-I$(METAL)/src/pymergetic/metal/fs/littlefs \
+	-I$(METAL)/src/pymergetic/metal/fs/littlefs/vendor \
+	-DLFS_CONFIG=lfs_config.h -DPM_METAL_LFS_FREESTANDING \
 	-I$(METAL)/port/boot -I$(METAL)/glue \
 	-I$(METAL)/src \
 	-I$(METAL)/src/pymergetic/metal/util \
@@ -47,6 +50,9 @@ METAL_BOOT_SRCS := \
 	$(METAL)/glue/pymergetic/metal/auth.c \
 	$(METAL)/glue/pymergetic/metal/trust.c \
 	$(METAL)/glue/pymergetic/metal/async.c \
+	$(METAL)/glue/pymergetic/metal/process.c \
+	$(METAL)/glue/pymergetic/metal/reg.c \
+	$(METAL)/src/pymergetic/metal/reg/seats.c \
 	$(METAL)/glue/pymergetic/metal/console.c \
 	$(METAL)/glue/pymergetic/metal/rt.c \
 	$(METAL)/glue/pymergetic/metal/boot/__init__.c \
@@ -159,13 +165,20 @@ METAL_BOOT_SRCS := \
 	$(METAL)/src/pymergetic/metal/auth/__init__.c \
 	$(METAL)/src/pymergetic/metal/trust/__init__.c \
 	$(METAL)/src/pymergetic/metal/async/__init__.c \
+	$(METAL)/src/pymergetic/metal/async/meter.c \
+	$(METAL)/src/pymergetic/metal/process/__init__.c \
+	$(METAL)/src/pymergetic/metal/boot/unboot.c \
 	$(METAL)/src/pymergetic/metal/console/__init__.c \
 	$(METAL)/src/pymergetic/metal/util/ascii.c \
 	$(METAL)/src/pymergetic/metal/util/endian/__init__.c \
 	$(METAL)/src/pymergetic/metal/util/fourcc/__init__.c \
 	$(METAL)/src/pymergetic/metal/util/eightcc/__init__.c \
 	$(METAL)/src/pymergetic/metal/mem/port/mem.c \
-	$(METAL)/src/pymergetic/metal/port/abi_faces_link.c \
+	$(METAL)/src/pymergetic/metal/dev/stream/__init__.c \
+	$(METAL)/port/hal/wasm/dev_blk.c \
+	$(METAL)/port/hal/wasm/wamr_host.c \
+	$(METAL)/src/pymergetic/metal/fs/littlefs/_glue.c \
+	$(METAL)/src/pymergetic/metal/fs/littlefs/vendor/lfs.c \
 	$(METAL)/third_party/tlsf/tlsf.c \
 	$(METAL)/third_party/monocypher/monocypher.c \
 	$(METAL)/third_party/monocypher/monocypher-ed25519.c \
@@ -178,6 +191,9 @@ SRC_QSTR += \
 	$(METAL)/glue/pymergetic/metal/auth.c \
 	$(METAL)/glue/pymergetic/metal/trust.c \
 	$(METAL)/glue/pymergetic/metal/async.c \
+	$(METAL)/glue/pymergetic/metal/process.c \
+	$(METAL)/glue/pymergetic/metal/reg.c \
+	$(METAL)/src/pymergetic/metal/reg/seats.c \
 	$(METAL)/glue/pymergetic/metal/console.c \
 	$(METAL)/glue/pymergetic/metal/rt.c \
 	$(METAL)/glue/pymergetic/metal/boot/__init__.c \

@@ -15,6 +15,8 @@ int32_t pm_metal_asgi_init_tls(uint16_t port)
     return -1;
 }
 
+void pm_metal_asgi_release(void) {}
+
 int32_t pm_metal_asgi_poll(void)
 {
     return 0;

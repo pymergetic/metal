@@ -3,10 +3,11 @@
 //!
 //! Mutating ops and size queries take the embedded spin (product `arena.c`
 //! `mLock`). Layout: four `size_t` spans + `uint32_t` lock word (same as
-//! [`crate::lock::Spin`]).
+//! [`pymergetic_metal_mem_lock::Spin`]).
+#![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(dead_code)]
 
-use crate::lock::Spin;
+use pymergetic_metal_mem_lock::Spin;
 
 pub const PAGE_SIZE: usize = 4096;
 const MIN_BYTES: usize = PAGE_SIZE * 8;

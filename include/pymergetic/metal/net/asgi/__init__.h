@@ -11,6 +11,7 @@ extern "C" {
 int32_t pm_metal_asgi_init(uint16_t port);
 /* TLS listener (default 443). Requires net/tls server cert loaded. */
 int32_t pm_metal_asgi_init_tls(uint16_t port);
+void pm_metal_asgi_release(void);
 int32_t pm_metal_asgi_poll(void);
 int32_t pm_metal_asgi_ready(void);
 

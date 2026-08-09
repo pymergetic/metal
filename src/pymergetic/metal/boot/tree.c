@@ -39,9 +39,9 @@ static void default_print(const char *line, void *user)
         uart_puts("\n");
         return;
     }
-#if defined(__EMSCRIPTEN__) || defined(__wasm__)
-    /* Browser seat before HAL set_print: hosted stdio. */
-    fputs(line, stdout);
+#if defined(__EMSCRIPTEN__) || defined(__wasm__) || defined(PM_METAL_CFG_FW_UNIX)
+    /* Browser / unix host before HAL set_print: hosted stdio. */
+    fputs(line ? line : "", stdout);
     fputc('\n', stdout);
     fflush(stdout);
 #else
@@ -252,6 +252,14 @@ void pm_metal_boot_tree_ready_ok(void)
     pm_metal_boot_emit("`-- ready        \033[32mok\033[0m");
 }
 
+void pm_metal_boot_tree_dead(void)
+{
+    while (g_depth > 0) {
+        pm_metal_boot_tree_leave();
+    }
+    pm_metal_boot_emit("`-- dead         \033[1;31mok\033[0m");
+}
+
 void pm_metal_boot_rainbow_metalpython(const char *version, const char *cpu)
 {
     char line[160];
@@ -261,6 +269,19 @@ void pm_metal_boot_rainbow_metalpython(const char *version, const char *cpu)
     pm_metal_util_ascii_log_rainbow("MetalPython");
     /* Same shape as Metal cyan stamp under the first FIGlet. */
     snprintf(line, sizeof(line), "\033[35m%s @ %s\033[0m", ver, c);
+    pm_metal_boot_emit(line);
+}
+
+void pm_metal_boot_dead_art(const char *version, const char *cpu)
+{
+    char line[192];
+    const char *ver = version && version[0] ? version : PM_METAL_VERSION;
+    const char *c = cpu && cpu[0] ? cpu : "cpu";
+
+    /* Fat sentence — not FIGlet; reads as the dead stamp under `-- dead`. */
+    pm_metal_boot_emit("");
+    pm_metal_boot_emit("\033[1;31m*** SEAT DEAD — halted. Reset / reboot to boot again. ***\033[0m");
+    snprintf(line, sizeof(line), "\033[2;31m%s @ %s\033[0m", ver, c);
     pm_metal_boot_emit(line);
 }
 

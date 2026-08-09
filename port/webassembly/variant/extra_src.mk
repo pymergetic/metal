@@ -22,7 +22,11 @@ LDFLAGS += $(METAL_BROWSER_RS_LIB)
 .PHONY: metal-browser-rs
 metal-browser-rs: $(METAL_BROWSER_RS_LIB)
 
-$(METAL_BROWSER_RS_LIB): $(METAL)/Cargo.toml $(METAL)/crates/pymergetic_metal_browser_rs/Cargo.toml $(METAL)/crates/pymergetic_metal_browser_rs/src/lib.rs
+$(METAL_BROWSER_RS_LIB): $(METAL)/Cargo.toml \
+		$(METAL)/crates/pymergetic_metal_browser_rs/Cargo.toml \
+		$(METAL)/crates/pymergetic_metal_browser_rs/src/lib.rs \
+		$(METAL)/src/pymergetic/metal/async/__init__.rs \
+		$(METAL)/src/pymergetic/metal/async/quiesce.rs
 	$(ECHO) "CARGO pymergetic_metal_browser_rs ($(RUST_TARGET))"
 	$(Q)$(CARGO) build --release --target $(RUST_TARGET) \
 		--manifest-path $(METAL)/Cargo.toml -p pymergetic_metal_browser_rs
@@ -31,5 +35,11 @@ $(BUILD)/metal/%.o: $(METAL)/%.c
 	$(ECHO) "CC $<"
 	$(Q)$(MKDIR) -p $(dir $@)
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+# littlefs: LFS_NO_ASSERT in lfs_config.h — compile under -Werror (no silence).
+$(BUILD)/metal/src/pymergetic/metal/fs/littlefs/vendor/lfs.o: $(METAL)/src/pymergetic/metal/fs/littlefs/vendor/lfs.c
+	$(ECHO) "CC $<"
+	$(Q)$(MKDIR) -p $(dir $@)
+	$(Q)$(CC) $(CFLAGS) -Werror -c -o $@ $<
 
 $(BUILD)/micropython.mjs: $(METAL_BROWSER_RS_LIB) $(BUILD)/metal_pack_inspect.o $(BUILD)/metal_pack_metal.o

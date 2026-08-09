@@ -22,6 +22,8 @@ GLUE_C = \
 	pymergetic/metal/auth.c \
 	pymergetic/metal/trust.c \
 	pymergetic/metal/async.c \
+	pymergetic/metal/process.c \
+	pymergetic/metal/reg.c \
 	pymergetic/metal/console.c \
 	pymergetic/metal/draw.c \
 	pymergetic/metal/pack.c \

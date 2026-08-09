@@ -2,7 +2,7 @@
 name = "pymergetic_metal_browser_rs"
 version = "0.1.0"
 edition = "2021"
-description = "Browser wasm staticlib — fs/util RS without exporting C rt ABI"
+description = "Browser wasm staticlib — fs/util/mem RS; wamr/blk stay seat HAL"
 publish = false
 
 [lib]
@@ -13,11 +13,25 @@ crate-type = ["staticlib", "rlib"]
 # C twin port/hal/wasm/rt_block.c owns pm_metal_rt_* on the browser seat.
 pymergetic_metal_rt = { path = "../pymergetic_metal_rt", default-features = false }
 pymergetic_metal_async = { path = "../pymergetic_metal_async" }
+pymergetic_metal_reg = { path = "../pymergetic_metal_reg" }
+pymergetic_metal_dt = { path = "../pymergetic_metal_dt" }
+pymergetic_metal_log = { path = "../pymergetic_metal_log" }
+pymergetic_metal_mem_lock = { path = "../pymergetic_metal_mem_lock" }
+pymergetic_metal_mem_arena = { path = "../pymergetic_metal_mem_arena" }
+pymergetic_metal_mem_tlsf = { path = "../pymergetic_metal_mem_tlsf" }
+pymergetic_metal_mem = { path = "../pymergetic_metal_mem" }
 pymergetic_metal_fs_vfs = { path = "../pymergetic_metal_fs_vfs" }
 pymergetic_metal_fs = { path = "../pymergetic_metal_fs" }
 pymergetic_metal_fs_tmpfs = { path = "../pymergetic_metal_fs_tmpfs" }
 pymergetic_metal_fs_wasmmod = { path = "../pymergetic_metal_fs_wasmmod" }
+pymergetic_metal_fs_embed = { path = "../pymergetic_metal_fs_embed" }
+pymergetic_metal_fs_zip = { path = "../pymergetic_metal_fs_zip" }
+pymergetic_metal_dev_blk_ram = { path = "../pymergetic_metal_dev_blk_ram" }
+pymergetic_metal_fs_fat = { path = "../pymergetic_metal_fs_fat" }
+pymergetic_metal_fs_overlay = { path = "../pymergetic_metal_fs_overlay" }
+pymergetic_metal_fs_littlefs = { path = "../pymergetic_metal_fs_littlefs" }
 pymergetic_metal_util_lz4 = { path = "../pymergetic_metal_util_lz4" }
 pymergetic_metal_util_tar = { path = "../pymergetic_metal_util_tar" }
 pymergetic_metal_util_size = { path = "../pymergetic_metal_util_size" }
 pymergetic_metal_fs_mtar = { path = "../pymergetic_metal_fs_mtar" }
+pymergetic_metal_hwtree = { path = "../pymergetic_metal_hwtree" }

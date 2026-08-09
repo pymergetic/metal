@@ -1,9 +1,9 @@
 # Mods, functions, commands, process (EFI product model)
 
-**Status:** product-era / archive-shaped. **Live host orchestration** is the
-three-tier plan in [`ORCHESTRATION.md`](ORCHESTRATION.md) (`reg` / `wasm` /
-`py`) — full module names, no FRESH instance cages, Metal alloc only.
-This file keeps the old mod/process vocabulary for reference.
+**Status:** product-era / archive-shaped. **Live orchestration** is
+[`ORCHESTRATION.md`](ORCHESTRATION.md) (process rank, quit, boot/unboot).
+This file keeps the old mod/shell-cmd/`pmcmd` vocabulary for reference only —
+do **not** treat shell command registries as the product path.
 
 Live async/task floor: [`src/.../async/`](../src/pymergetic/metal/async/).
 Also [`definitions/async/`](definitions/async/),

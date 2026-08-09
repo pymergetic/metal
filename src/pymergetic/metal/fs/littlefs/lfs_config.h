@@ -26,6 +26,14 @@ extern "C" {
 #ifndef LFS_ERROR
 #define LFS_ERROR(...)
 #endif
+/*
+ * Freestanding: no assert backend. Must define LFS_NO_ASSERT so vendor
+ * helpers used only inside LFS_ASSERT (e.g. lfs_mlist_isopen) are omitted
+ * — a no-op LFS_ASSERT that still compiles those helpers is -Wunused-function.
+ */
+#ifndef LFS_NO_ASSERT
+#define LFS_NO_ASSERT
+#endif
 #ifndef LFS_ASSERT
 #define LFS_ASSERT(test) ((void)0)
 #endif

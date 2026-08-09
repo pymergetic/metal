@@ -7,6 +7,8 @@
 
 #include "../modules.h"
 #include <pymergetic/metal/boot/__init__.h>
+#include <pymergetic/metal/boot/unboot.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static const MP_DEFINE_STR_OBJ(boot_path_obj, ".frozen/pymergetic/metal/boot");
 
@@ -37,6 +39,36 @@ static mp_obj_t boot_tree_print(void)
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(boot_tree_print_obj, boot_tree_print);
 
+static mp_obj_t boot_unboot(void)
+{
+    return mp_obj_new_int((mp_int_t)pm_metal_boot_unboot());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(boot_unboot_obj, boot_unboot);
+
+static mp_obj_t boot_shutting_down(void)
+{
+    return mp_obj_new_bool(pm_metal_boot_shutting_down() != 0);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(boot_shutting_down_obj, boot_shutting_down);
+
+static mp_obj_t boot_shutdown(void)
+{
+    return mp_obj_new_int((mp_int_t)pm_metal_boot_shutdown());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(boot_shutdown_obj, boot_shutdown);
+
+static mp_obj_t boot_reboot(void)
+{
+    return mp_obj_new_int((mp_int_t)pm_metal_boot_reboot());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(boot_reboot_obj, boot_reboot);
+
+static mp_obj_t boot_is_dead(void)
+{
+    return mp_obj_new_bool(pm_metal_boot_is_dead() != 0);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(boot_is_dead_obj, boot_is_dead);
+
 static mp_obj_dict_t boot_globals;
 static int boot_globals_ready;
 
@@ -44,7 +76,7 @@ void pm_metal_boot_globals_init(void) {
     if (boot_globals_ready) {
         return;
     }
-    mp_obj_dict_init(&boot_globals, 8);
+    mp_obj_dict_init(&boot_globals, 16);
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&boot_globals), MP_OBJ_NEW_QSTR(MP_QSTR___name__),
                       MP_OBJ_NEW_QSTR(MP_QSTR_pymergetic_dot_metal_dot_boot));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&boot_globals), MP_OBJ_NEW_QSTR(MP_QSTR___path__),
@@ -59,6 +91,16 @@ void pm_metal_boot_globals_init(void) {
                       MP_OBJ_FROM_PTR(&boot_tree_ready_ok_obj));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&boot_globals), MP_OBJ_NEW_QSTR(MP_QSTR_tree_print),
                       MP_OBJ_FROM_PTR(&boot_tree_print_obj));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&boot_globals), MP_OBJ_NEW_QSTR(MP_QSTR_unboot),
+                      MP_OBJ_FROM_PTR(&boot_unboot_obj));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&boot_globals), MP_OBJ_NEW_QSTR(MP_QSTR_shutting_down),
+                      MP_OBJ_FROM_PTR(&boot_shutting_down_obj));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&boot_globals), MP_OBJ_NEW_QSTR(MP_QSTR_shutdown),
+                      MP_OBJ_FROM_PTR(&boot_shutdown_obj));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&boot_globals), MP_OBJ_NEW_QSTR(MP_QSTR_reboot),
+                      MP_OBJ_FROM_PTR(&boot_reboot_obj));
+    mp_obj_dict_store(MP_OBJ_FROM_PTR(&boot_globals), MP_OBJ_NEW_QSTR(MP_QSTR_is_dead),
+                      MP_OBJ_FROM_PTR(&boot_is_dead_obj));
     boot_globals_ready = 1;
 }
 
@@ -66,3 +108,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_boot = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&boot_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_boot, "pymergetic.metal.boot", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

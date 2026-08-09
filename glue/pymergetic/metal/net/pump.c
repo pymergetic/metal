@@ -6,6 +6,7 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/net/pump/__init__.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t pump_once(void)
 {
@@ -73,3 +74,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_net_pump = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&pump_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_net_pump, "pymergetic.metal.net.pump", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

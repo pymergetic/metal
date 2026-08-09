@@ -23,18 +23,13 @@ WASMMOD := $(PACKAGES)/metalpython/extmod/wasmmod
 endif
 ifeq ($(ENGINE),upy)
 ENGINE_TOP := $(PACKAGES)/micropython
-LINK_WAMR := 0
 else ifeq ($(ENGINE),mpwm)
 ENGINE_TOP := $(PACKAGES)/metalpython-wasmmod
-LINK_WAMR := 1
 else
 # port → metal → extmod → metalpython
 ENGINE_TOP := $(abspath $(PORT_DIR)/../../..)
-LINK_WAMR := 1
 endif
 
-# WAMR ia32 freestanding port not wired yet — keep off for i686 bring-up.
-override LINK_WAMR := 0
 
 ifeq ($(wildcard $(ENGINE_TOP)/py/mkenv.mk),)
 $(error ENGINE_TOP=$(ENGINE_TOP) has no py/mkenv.mk (ENGINE=$(ENGINE)))
@@ -72,7 +67,9 @@ QEMU_DISPLAY := -display none -vnc 127.0.0.1:$(VNC_DISPLAY)
 else
 QEMU_DISPLAY := -display none
 endif
-QEMU_MACHINE := -machine q35,accel=kvm:tcg -m 256 -smp $(SMP) $(QEMU_VGA)
+# -audio none: VNC path otherwise probes PipeWire (pw.conf spam on headless hosts).
+# -cpu max,-svm: drop AMD SVM bit so Intel/KVM hosts stop warning on every vCPU.
+QEMU_MACHINE := -machine q35,accel=kvm:tcg -cpu max,-svm -m 256 -smp $(SMP) $(QEMU_VGA) -audio none
 
 QSTR_DEFS = $(UPY)/qstrdefsport.h
 MICROPY_ROM_TEXT_COMPRESSION ?= 0
@@ -107,7 +104,7 @@ CFLAGS_METAL := -DMETAL_BOARD_UEFI=0 -DPM_METAL_BOARD_BIOS=1 -m32 -ffreestanding
 	-DMICROPY_HEAP_SIZE=$(MICROPY_HEAP_SIZE) \
 	$(CFLAGS_METAL_SMOKE) \
 	-DPM_METAL_CFG_ARCH_X86=1 -DPM_METAL_CFG_FW_BIOS=1 \
-	-DMETAL_LINK_WAMR=$(LINK_WAMR) \
+	-DMETAL_LINK_WAMR=1 \
 	-DMETAL_ENGINE=\"$(ENGINE)\" \
 	-DMETAL_CDN_URL=\"$(METAL_CDN_URL)\" \
 	-DMETAL_CDN_EXTRA_URLS=\"$(METAL_CDN_EXTRA_URLS)\"
@@ -124,12 +121,10 @@ else
 CFLAGS_METAL += -DMETAL_LIVE=0 -DMETAL_LIVE_SSH=0
 endif
 
-ifeq ($(LINK_WAMR),1)
 INC += -I$(WASMMOD)/third_party/wamr/core/iwasm/include \
 	-I$(METAL)/src/pymergetic/metal/wamr_host/port/platform \
 	-I$(METAL)/include/pymergetic/metal/libc
 CFLAGS_METAL += -DBH_PLATFORM_METAL
-endif
 
 CFLAGS += $(INC) $(CFLAGS_METAL) -DMICROPY_PY_LWIP=1
 CSUPEROPT = -Os
@@ -178,11 +173,7 @@ SRC_C = \
 	extmod/modselect.c
 
 SRC_C += live/metal_log.c
-ifeq ($(LINK_WAMR),1)
 SRC_C += live/wamr_smoke.c
-else
-SRC_C += shared/libc/string0.c
-endif
 
 # Freestanding Rust rt — custom i686 target JSON (no prebuilt rust-std).
 export RUST_TARGET_PATH := $(METAL)
@@ -203,7 +194,7 @@ SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebu
 OBJ = $(PY_CORE_O)
 OBJ += $(BUILD)/frozen_content.o
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
-OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_smp.o $(BUILD)/metal_ap_tramp.o $(BUILD)/metal_acpi.o $(BUILD)/metal_asgi.o $(BUILD)/metal_inspect.o $(BUILD)/metal_console.o
+OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_meter.o $(BUILD)/metal_process.o $(BUILD)/metal_unboot.o $(BUILD)/metal_smp.o $(BUILD)/metal_ap_tramp.o $(BUILD)/metal_acpi.o $(BUILD)/metal_asgi.o $(BUILD)/metal_inspect.o $(BUILD)/metal_console.o $(BUILD)/metal_reg_seats.o $(BUILD)/metal_reg_seats_frozen.o $(BUILD)/metal_ssh_seat_test.o $(BUILD)/metal_inspect_seat_test.o $(BUILD)/metal_process_seat_test.o $(BUILD)/metal_microdot_seat_test.o $(BUILD)/metal_smoke_extras.o
 OBJ += $(BUILD)/metal_mod_packs.o $(BUILD)/metal_pack_inspect.o $(BUILD)/metal_pack_metal.o
 OBJ += $(BUILD)/metal_boot_tree.o $(BUILD)/metal_externals.o $(BUILD)/metal_externals_rows.o $(BUILD)/metal_arch.o $(BUILD)/metal_arch_py.o $(BUILD)/metal_ascii.o
 OBJ += $(BUILD)/metal_microdot.o
@@ -223,7 +214,12 @@ OBJ += $(BUILD)/metal_dns.o $(BUILD)/metal_ntp.o $(BUILD)/metal_tftp.o $(BUILD)/
 OBJ += $(BUILD)/metal_net_pump.o $(BUILD)/metal_ssh_pkt.o
 OBJ += $(BUILD)/metal_ssh_crypto.o $(BUILD)/metal_ssh_kex.o
 OBJ += $(BUILD)/metal_monocypher.o $(BUILD)/metal_monocypher_ed25519.o $(BUILD)/metal_sha256.o
-OBJ += $(BUILD)/metal_abi_faces.o
+OBJ += $(BUILD)/metal_stream.o $(BUILD)/metal_blk_detect.o $(BUILD)/metal_virtio_blk.o
+OBJ += $(BUILD)/metal_boot_io.o
+OBJ += $(BUILD)/metal_littlefs_glue.o $(BUILD)/metal_lfs.o
+OBJ += $(BUILD)/metal_wamr_runtime_host.o $(BUILD)/metal_wamr_guest_coro.o
+OBJ += $(BUILD)/metal_wamr_host_natives.o $(BUILD)/metal_wamr_wasi_stubs.o
+OBJ += $(BUILD)/wasmmod_metal_io_ops.o $(BUILD)/upy_io_fill.o
 
 $(eval $(call GLUE_ATTACH))
 
@@ -237,11 +233,8 @@ include $(PORT_DIR)/upy_bus.mk
 
 SSH_CRYPTO_INC := -I$(METAL)/third_party/monocypher -I$(METAL)/third_party/sha256
 
-WAMR_LIB :=
-ifeq ($(LINK_WAMR),1)
 WAMR_LIB := $(BUILD)/wamr-fs/libwasmmod_wamr_freestanding.a
 OBJ += $(BUILD)/metal_platform.o $(BUILD)/metal_libc_stdlib.o $(BUILD)/metal_libc_string.o
-endif
 
 RUST_LIBS := $(METAL_RT_LIB)
 
@@ -249,15 +242,98 @@ $(BUILD)/metal_mem.o: $(METAL)/src/pymergetic/metal/mem/port/mem.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/metal_abi_faces.o: $(METAL)/src/pymergetic/metal/port/abi_faces_link.c | $(BUILD)
+$(BUILD)/metal_boot_io.o: $(METAL)/src/pymergetic/metal/boot/platform/bios/io_port.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -DPM_METAL_BOOT_TARGET_BIOS=1 -I$(METAL)/src/pymergetic/metal/boot/platform/bios -c -o $@ $<
+
+$(BUILD)/metal_stream.o: $(METAL)/src/pymergetic/metal/dev/stream/__init__.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_blk_detect.o: $(METAL)/src/pymergetic/metal/dev/blk/_detect.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_virtio_blk.o: $(METAL)/src/pymergetic/metal/dev/blk/_virtio_blk.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_littlefs_glue.o: $(METAL)/src/pymergetic/metal/fs/littlefs/_glue.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -Werror -DLFS_CONFIG=lfs_config.h -DPM_METAL_LFS_FREESTANDING -I$(METAL)/src/pymergetic/metal/fs/littlefs -I$(METAL)/src/pymergetic/metal/fs/littlefs/vendor -c -o $@ $<
+
+$(BUILD)/metal_lfs.o: $(METAL)/src/pymergetic/metal/fs/littlefs/vendor/lfs.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -Werror -DLFS_CONFIG=lfs_config.h -DPM_METAL_LFS_FREESTANDING -I$(METAL)/src/pymergetic/metal/fs/littlefs -I$(METAL)/src/pymergetic/metal/fs/littlefs/vendor -c -o $@ $<
+
+$(BUILD)/metal_wamr_runtime_host.o: $(METAL)/src/pymergetic/metal/wamr_host/port/runtime_host.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -I$(METAL)/src/pymergetic/metal/wamr_host/port -c -o $@ $<
+
+$(BUILD)/metal_wamr_guest_coro.o: $(METAL)/src/pymergetic/metal/wamr_host/port/guest_coro.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -I$(METAL)/src/pymergetic/metal/wamr_host/port -c -o $@ $<
+
+$(BUILD)/metal_wamr_host_natives.o: $(METAL)/src/pymergetic/metal/wamr_host/port/host_natives.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -I$(METAL)/src/pymergetic/metal/wamr_host/port -c -o $@ $<
+
+$(BUILD)/metal_wamr_wasi_stubs.o: $(METAL)/src/pymergetic/metal/wamr_host/port/wasi_stubs.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -I$(METAL)/src/pymergetic/metal/wamr_host/port -c -o $@ $<
+
+$(BUILD)/wasmmod_metal_io_ops.o: $(WASMMOD)/ports/metal/io_ops.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -I$(WASMMOD)/ports/metal -I$(WASMMOD) -c -o $@ $<
+
+$(BUILD)/upy_io_fill.o: $(METAL)/src/pymergetic/metal/py/port/upy_io_fill.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -I$(WASMMOD)/ports/metal -I$(WASMMOD) -c -o $@ $<
 
 $(BUILD)/metal_tlsf.o: $(METAL)/third_party/tlsf/tlsf.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/metal_async.o: $(METAL)/src/pymergetic/metal/async/__init__.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+$(BUILD)/metal_meter.o: $(METAL)/src/pymergetic/metal/async/meter.c | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+
+
+$(BUILD)/metal_reg_seats.o: $(METAL)/src/pymergetic/metal/reg/seats.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_reg_seats_frozen.o: $(METAL)/src/pymergetic/metal/reg/seats_frozen.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+$(BUILD)/metal_ssh_seat_test.o: $(METAL)/src/pymergetic/metal/net/ssh/seat_test.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_inspect_seat_test.o: $(METAL)/src/pymergetic/metal/inspect/seat_test.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_process_seat_test.o: $(METAL)/src/pymergetic/metal/process/seat_test.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_microdot_seat_test.o: $(METAL)/src/pymergetic/metal/net/microdot/seat_test.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_smoke_extras.o: $(METAL)/port/upy/smoke_extras.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_process.o: $(METAL)/src/pymergetic/metal/process/__init__.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_unboot.o: $(METAL)/src/pymergetic/metal/boot/unboot.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -519,7 +595,6 @@ $(BUILD)/metal_ssh_pkt.o: $(METAL)/src/pymergetic/metal/net/ssh/packet.c | $(BUI
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) $(SSH_CRYPTO_INC) -c -o $@ $<
 
-ifeq ($(LINK_WAMR),1)
 $(BUILD)/metal_platform.o: $(METAL)/src/pymergetic/metal/wamr_host/port/platform/metal_platform.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -I$(WASMMOD)/third_party/wamr/core/shared/platform/include \
@@ -547,8 +622,8 @@ $(WAMR_LIB): $(WASMMOD)/ports/metal/wamr_freestanding.mk
 		METAL_LIBC_INC=$(METAL)/include/pymergetic/metal/libc \
 		METAL_SRC_INC=$(METAL) \
 		METAL_INCLUDE_INC=$(METAL)/include \
+		ARCH=x86_32 \
 		UEFI=0
-endif
 
 LIBGCC := $(shell $(CC) $(CFLAGS_METAL) -print-libgcc-file-name)
 
@@ -582,10 +657,17 @@ $(BUILD)/metal.elf: $(BUILD)/crt0.o $(OBJ) $(WAMR_LIB) $(RUST_LIBS) boards/X86_B
 $(BUILD)/metal.qemu.elf: $(BUILD)/metal.elf
 	$(Q)cp -f $< $@
 
-# Product REPL: lean bring-up + friendly µPy on COM1 (not the smoke battery).
-# Stdin feeder waits for DHCP, then sends print(1+1); expect banner + >>> + result.
+# Interactive product REPL on COM1 (this terminal). CI prove: repl-check.
 repl: $(BUILD)/metal.qemu.elf
 	@test "$(REPL)" = "1" || { echo "repl requires REPL=1"; exit 1; }
+	@echo "Interactive REPL on serial stdio — wait for >>> then type; Ctrl-C to stop"
+	$(QEMU) $(QEMU_MACHINE) \
+		-netdev $(NETDEV_USER) -device virtio-net-pci,netdev=n0 \
+		$(QEMU_DISPLAY) -serial stdio -monitor none \
+		-kernel $(BUILD)/metal.qemu.elf
+
+repl-check: $(BUILD)/metal.qemu.elf
+	@test "$(REPL)" = "1" || { echo "repl-check requires REPL=1"; exit 1; }
 	@set +e; \
 	rm -f $(BUILD)/serial.log; \
 	timeout 25s bash -c '\
@@ -598,7 +680,7 @@ repl: $(BUILD)/metal.qemu.elf
 	ec=$$?; \
 	echo "----- serial -----"; \
 	tr -d '\r' <$(BUILD)/serial.log | grep -E "metal |bringup|repl|>>>|MicroPython|^2$$|print|Traceback|AttributeError|Metal Python" | tail -50 || true; \
-	if grep -a -q "MetalPython" $(BUILD)/serial.log \
+	if grep -a -qE "MicroPython|MetalPython" $(BUILD)/serial.log \
 	  && grep -a -q ">>>" $(BUILD)/serial.log \
 	  && tr -d '\r' <$(BUILD)/serial.log | grep -qx "2" \
 	  && ! tr -d '\r' <$(BUILD)/serial.log | grep -q "AttributeError"; then \
@@ -628,7 +710,7 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "dns ok" $(BUILD)/serial.log \
 	  && grep -q "tcp ok" $(BUILD)/serial.log \
 	  && grep -q "http ok" $(BUILD)/serial.log \
-	  && grep -qE "ssh ok|ssh stub" $(BUILD)/serial.log \
+	  && grep -qE "ssh ok" $(BUILD)/serial.log \
 	  && grep -q "http client ok" $(BUILD)/serial.log \
 	  && grep -q "ntp ok" $(BUILD)/serial.log \
 	  && grep -q "tftp ok" $(BUILD)/serial.log \
@@ -636,20 +718,21 @@ run: $(BUILD)/metal.qemu.elf
 	  && grep -q "vt ok" $(BUILD)/serial.log \
 	  && grep -q "tui ok" $(BUILD)/serial.log \
 	  && grep -q "kbd ok" $(BUILD)/serial.log \
-	  && { [ "$(LINK_WAMR)" != "1" ] || grep -q "wamr ok" $(BUILD)/serial.log; } \
-	  && grep -q "matrix py ok" $(BUILD)/serial.log \
+	  && grep -q "wamr ok" $(BUILD)/serial.log \
+	  && grep -q "reg seats ok" $(BUILD)/serial.log \
 	  && grep -q "upy ok" $(BUILD)/serial.log \
 	  && grep -q "microdot ok" $(BUILD)/serial.log \
+	  && grep -q "inspect ok" $(BUILD)/serial.log \
 	  && grep -q "framebuf ok" $(BUILD)/serial.log \
 	  && grep -q "network ok" $(BUILD)/serial.log \
 	  && grep -q "dns py ok" $(BUILD)/serial.log \
 	  && grep -q "socket ok" $(BUILD)/serial.log \
-	  && grep -qE "ssh py ok|ssh ok|ssh stub" $(BUILD)/serial.log \
+	  && grep -q "ssh ok" $(BUILD)/serial.log \
 	  && grep -q "qemu ok" $(BUILD)/serial.log; then \
-	  echo "X86_BIOS_OK ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
+	  echo "X86_BIOS_OK ENGINE=$(ENGINE)"; \
 	  exit 0; \
 	fi; \
-	echo "X86_BIOS_FAIL (qemu ec=$$ec) ENGINE=$(ENGINE) LINK_WAMR=$(LINK_WAMR)"; \
+	echo "X86_BIOS_FAIL (qemu ec=$$ec) ENGINE=$(ENGINE)"; \
 	exit 1
 
 # LIVE=1 image + hostfwd; curl guest :80 via host :18080.
@@ -776,3 +859,7 @@ live-ssh: $(BUILD)/metal.qemu.elf
 # clean: use py/mkrules.mk (do not redefine — avoids override warning)
 include $(PORT_DIR)/upy_external_warnings.mk
 include $(TOP)/py/mkrules.mk
+
+# Rebuild qstr pool / frozen when genhdr changes (order-only OBJ deps alone can leave stale .o).
+$(BUILD)/py/qstr.o: $(HEADER_BUILD)/qstrdefs.generated.h
+$(BUILD)/frozen_content.o: $(HEADER_BUILD)/qstrdefs.generated.h

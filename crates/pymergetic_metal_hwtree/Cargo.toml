@@ -1,0 +1,14 @@
+[package]
+name = "pymergetic_metal_hwtree"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "../../src/pymergetic/metal/hwtree/__init__.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+pymergetic_metal_rt = { path = "../pymergetic_metal_rt" }
+pymergetic_metal_dt = { path = "../pymergetic_metal_dt" }
+pymergetic_metal_log = { path = "../pymergetic_metal_log" }

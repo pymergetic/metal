@@ -7,6 +7,7 @@
 #include <pymergetic/metal/auth/__init__.h>
 
 #include <string.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t auth_users_set(mp_obj_t list_obj)
 {
@@ -145,3 +146,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_auth = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&auth_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_auth, "pymergetic.metal.auth", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

@@ -1,0 +1,15 @@
+[package]
+name = "pymergetic_metal_fs_overlay"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "../../src/pymergetic/metal/fs/overlay/__init__.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+pymergetic_metal_rt = { path = "../pymergetic_metal_rt" }
+pymergetic_metal_fs = { path = "../pymergetic_metal_fs" }
+pymergetic_metal_fs_vfs = { path = "../pymergetic_metal_fs_vfs" }
+pymergetic_metal_async = { path = "../pymergetic_metal_async" }

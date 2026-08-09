@@ -8,6 +8,7 @@ include("$(MPY_DIR)/extmod/asyncio")
 package(
     "pymergetic",
     (
+        "metal/site.py",
         "metal/unix/__init__.py",
         "metal/unix/__main__.py",
         "metal/unix/x86/__init__.py",

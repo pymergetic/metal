@@ -13,6 +13,7 @@
 #include "pymergetic/metal/net/ip/sock.h"
 #include "pymergetic/metal/net/tls/__init__.h"
 #include "pymergetic/metal/pack/mod_packs.h"
+#include "pymergetic/metal/process/__init__.h"
 #include "ws.h"
 
 #ifndef PM_METAL_ASGI_VFS_BUF
@@ -37,6 +38,7 @@ static uint16_t g_port;
 static uint16_t g_tls_port;
 static pm_metal_net_ip_sock_h g_listen;
 static pm_metal_net_ip_sock_h g_listen_tls;
+static uint32_t g_httpd_pid;
 static pm_metal_net_ip_sock_h g_conn;
 static pm_metal_net_tls_h g_tls;
 static uint32_t g_hs_ah;
@@ -248,12 +250,46 @@ static void conn_done(void)
     g_ws = 0;
 }
 
+void pm_metal_asgi_release(void)
+{
+    conn_done();
+    if (g_listen != PM_METAL_NET_IP_SOCK_INVALID) {
+        pm_metal_net_ip_close(g_listen);
+        g_listen = PM_METAL_NET_IP_SOCK_INVALID;
+    }
+    if (g_listen_tls != PM_METAL_NET_IP_SOCK_INVALID) {
+        pm_metal_net_ip_close(g_listen_tls);
+        g_listen_tls = PM_METAL_NET_IP_SOCK_INVALID;
+    }
+    g_port = 0;
+    g_tls_port = 0;
+    g_ready = 0;
+}
+
+static void httpd_teardown(uint32_t pid, void *user)
+{
+    (void)pid;
+    (void)user;
+    g_httpd_pid = 0;
+    pm_metal_asgi_release();
+}
+
+static void httpd_crown(void)
+{
+    if (g_httpd_pid != 0u) {
+        return;
+    }
+    g_httpd_pid = pm_metal_process_crown(0, PM_METAL_PROCESS_MODE_DAEMON, "httpd", httpd_teardown,
+                                         NULL);
+}
+
 int32_t pm_metal_asgi_init(uint16_t port)
 {
     if (port == 0) {
         port = 80;
     }
     if (g_ready && g_port == port && pm_metal_net_ip_sock_listening(g_listen)) {
+        httpd_crown();
         return 0;
     }
     if (pm_metal_inspect_init() != 0) {
@@ -278,6 +314,7 @@ int32_t pm_metal_asgi_init(uint16_t port)
     }
     g_port = port;
     g_ready = 1;
+    httpd_crown();
     return 0;
 }
 
@@ -289,6 +326,7 @@ int32_t pm_metal_asgi_init_tls(uint16_t port)
     if (g_listen_tls != PM_METAL_NET_IP_SOCK_INVALID && g_tls_port == port &&
         pm_metal_net_ip_sock_listening(g_listen_tls)) {
         g_ready = 1;
+        httpd_crown();
         return 0;
     }
     if (pm_metal_net_tls_init() != 0) {
@@ -313,6 +351,7 @@ int32_t pm_metal_asgi_init_tls(uint16_t port)
     }
     g_tls_port = port;
     g_ready = 1;
+    httpd_crown();
     return 0;
 }
 

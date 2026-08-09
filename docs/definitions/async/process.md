@@ -13,21 +13,23 @@ UI without caring what coros/tasks sit behind it.
 
 ## Orchestration (not “human user”)
 
-“Intent” here means the **orchestration machinery** — shell, pmcmd,
-user-facing Python APIs, `run`, scripts — whether a person typed the
-command or a script did. That layer crowns the root.
+“Intent” here means the **orchestration machinery** — public-facing
+Python/C/RS APIs and scripts (e.g. `sshd.listen`, httpd start) — whether
+a person typed the call or a script did. That layer crowns the root.
+
+The REPL is **not** a process (core view on the seat). There is no
+Linux-style shell command registry. See [`ORCHESTRATION.md`](../../ORCHESTRATION.md).
 
 Internal callers (net life, seed, mod-to-mod, drivers) leave the same
 body as a plain [task](task.md).
 
 | Caller kind | Rank |
 |-------------|------|
-| Orchestration entry (shell / script / public API / `run`) | process |
+| Orchestration entry (public API / script / service listen) | process |
 | Library / internal / behind another face | task |
 
-Example: an SSH coro is a task when started from another program; the
-same body is a process when started via shell or a user-facing Python
-API — the orchestrator’s main interface, with machinery behind it.
+Example: an SSH accept loop is a task when started from another program;
+the same body is a process when started via `net.ssh.listen`.
 
 ## Must
 
@@ -59,5 +61,6 @@ separate id index). No new await semantics.
 
 ## Related
 
-- Metal process table / spawn: `include/pymergetic/metal/guest/process/`.
+- Metal process table / spawn: `include/pymergetic/metal/process/`.
+- Product verbs / unboot: [`ORCHESTRATION.md`](../../ORCHESTRATION.md).
 - [`coro.md`](coro.md), [`task.md`](task.md).

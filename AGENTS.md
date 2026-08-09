@@ -57,7 +57,8 @@ Read [`docs/SOURCETREE.md`](docs/SOURCETREE.md) before touching anything under
 `src/` or `include/` — it defines the tree layout and the C dialect rule.
 
 When you add/change a seat’s public face (include / glue / typings / board
-link / parkable I/O), update [`docs/MODULE_MATRIX.md`](docs/MODULE_MATRIX.md)
+link / parkable I/O), register the seat in `src/pymergetic/metal/reg/seats.c`
+and refresh the human export [`docs/MODULE_MATRIX.md`](docs/MODULE_MATRIX.md)
 (and [`include/SYMBOLS.md`](include/SYMBOLS.md)) in the same change — see the
 hints + seat checklist there.
 

@@ -1,0 +1,38 @@
+---
+description: Treat compiler/Rust warnings as hard errors — fix root cause, never hide
+alwaysApply: true
+---
+
+# Warnings are errors (no hiding)
+
+**Why:** Green exit codes with a wall of warnings ship rot. The owner treats
+warnings as build failures.
+
+## Hard rule
+
+- A warning in **Metal first-party** or **Metal-patched third_party** is a
+  **hard error**. Do not declare the task done until it is gone.
+- **Do not** paper over with `-Wno-*`, `#pragma`, `#[allow(...)]`, or
+  log filters unless the warning is in **unmodified upstream** that Metal
+  does not own (documented in `port/upy_external_warnings.mk` only).
+- Prefer the **correct type/control-flow fix** over silencing.
+
+## Required agent habit
+
+1. Scan the full build log for `warning:` / `unused` / `-W` after every
+   build you run (BIOS, webassembly, `cargo test`, `dev-up`).
+2. If warnings appear: **stop**, fix root cause, rebuild, prove clean.
+3. Do not say “OK” / mark todos complete while warnings remain in scope.
+
+## Examples
+
+```text
+BAD:  -Wno-unused-function on vendor lfs because asserts are no-ops
+GOOD: #define LFS_NO_ASSERT so unused assert helpers are not compiled
+
+BAD:  ignore -Wsign-compare in wireguard base64 loops
+GOOD: use size_t indices / cast byte counts correctly
+
+BAD:  cargo test green while lib emits 17 dead_code warnings you introduced
+GOOD: fix or gate dead code; do not grow #![allow(dead_code)]
+```

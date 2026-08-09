@@ -1,5 +1,6 @@
 # Absolute -I so clangd TU cwd cannot break includes.
-# Restart: Command Palette → "clangd: Restart language server".
+# After edits: Command Palette → "clangd: Restart language server".
+# Genhdr SoT for IDE: port/build/X86_64_BIOS-mp (smoke). LIVE is secondary.
 CompileFlags:
   CompilationDatabase: None
   Compiler: /usr/bin/clang
@@ -8,6 +9,7 @@ CompileFlags:
     - -std=gnu11
     - -Wall
     - -Wno-unused-parameter
+    - -Wno-unused-function
     - -ffreestanding
     - -fshort-wchar
     # Match board build.mk: -I$(METAL)/include -I$(METAL)/src -I$(METAL)/glue
@@ -24,9 +26,9 @@ CompileFlags:
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/hal
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/boards/X86_64_BIOS
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/boards/X86_64_UEFI
-    # $(BUILD) first so genhdr/qstrdefs.generated.h resolves (LIVE tree preferred)
-    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/build/X86_64_BIOS-mp-live
+    # Prefer smoke BIOS genhdr (has seat_* qstrs). LIVE tree often lags.
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/build/X86_64_BIOS-mp
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/build/X86_64_BIOS-mp-live
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/port/build/X86_64_UEFI-mp
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/include/pymergetic/metal/libc
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/metal/src/pymergetic/metal/net/asgi
@@ -36,6 +38,9 @@ CompileFlags:
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/lib/lwip/src/include
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/py
+    # wasmmod pm_upy/* faces (main_upy / inspect bridges)
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/wasmmod/include
+    - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/wasmmod
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/wasmmod/third_party/wamr/core/iwasm/include
     - -I/home/ladmin/Devel/os-sdk/packages/metalpython/extmod/wasmmod/third_party/wamr/core/shared/platform/include
     # MBEDTLS_CONFIG_FILE comes from .vscode/compile_commands.json (quoted).

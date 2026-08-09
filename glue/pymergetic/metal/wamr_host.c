@@ -3,6 +3,7 @@
 #include "py/objstr.h"
 #include "py/runtime.h"
 #include <pymergetic/metal/wamr_host/__init__.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t wamr_host_fetch_register(size_t n_args, const mp_obj_t *args) {
     (void)n_args;
@@ -249,3 +250,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_wamr_host = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&wamr_host_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_wamr_host, "pymergetic.metal.wamr_host", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

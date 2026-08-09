@@ -8,6 +8,7 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/net/nic/__init__.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t nic_name(void)
 {
@@ -36,3 +37,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_net_nic = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&nic_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_net_nic, "pymergetic.metal.net.nic", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

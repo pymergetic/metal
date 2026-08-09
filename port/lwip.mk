@@ -81,7 +81,7 @@ $(foreach f,$(LWIP_SRC_C),$(eval $(call LWIP_COMPILE_RULE,$(f))))
 define WG_COMPILE_RULE
 $(BUILD)/wg/$(notdir $(1:.c=.o)): $(1) | $(BUILD)/wg
 	$$(ECHO) "CC $$<"
-	$$(Q)$$(CC) $$(CFLAGS) -c -o $$@ $$<
+	$$(Q)$$(CC) $$(CFLAGS) -Werror -c -o $$@ $$<
 endef
 $(foreach f,$(WG_SRC_C),$(eval $(call WG_COMPILE_RULE,$(f))))
 

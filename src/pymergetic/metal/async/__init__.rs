@@ -1,9 +1,13 @@
-//! async — Rust face over the C N-runner impl.
+//! async — Rust face over the C N-runner impl + quiesce safepoint muscle.
 //!
-//! Product LIVE links the C callee. This crate is the RS FFI face so FS/other
-//! RS crates can `use pymergetic_metal_async as _` without a second engine.
+//! Product LIVE links the C callee for the runner. Quiesce flags live here
+//! (`quiesce.rs`) so every seat that links this crate (FW + browser) provides
+//! the C ABI symbols `async/__init__.c` checkpoints call.
 #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(non_camel_case_types)]
+
+#[path = "quiesce.rs"]
+pub mod quiesce;
 
 extern "C" {
     fn pm_metal_async_await(self_h: u32, child_h: u32) -> i32;

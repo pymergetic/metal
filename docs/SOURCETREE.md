@@ -40,7 +40,7 @@ extmod/metal/
 
 | Step | What |
 |------|------|
-| Source of truth | `src/pymergetic/metal/net/microdot/*.py` (path == `net.microdot`) |
+| Source of truth | `src/pymergetic/metal/net/microdot/*.py` (package path == `net.microdot`; seat/import == `pymergetic.metal.net.microdot`) |
 | Mod / VFS | `/mods/pymergetic.metal/net/microdot/…` |
 | Import | `from pymergetic.metal.net.microdot import …` |
 | C/RS | into-Py bridges via `pm_upy_*` (W4) — do not reimplement Microdot in C |

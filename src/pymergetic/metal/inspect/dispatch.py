@@ -15,10 +15,30 @@ _app = None
 
 
 async def _invoke(handler, req):
-    ret = handler(req)
+    # Path params from find_route (e.g. /inspect/reg/<module>/<method>).
+    kwargs = getattr(req, "url_args", None) or {}
+    ret = handler(req, **kwargs)
     if hasattr(ret, "send") and hasattr(ret, "throw"):
         ret = await ret
     return ret
+
+
+def _plain_qs(qs):
+    """Parse query string into a plain dict (avoid MultiDict under MINIMUM ROM)."""
+    out = {}
+    if not qs:
+        return out
+    for part in qs.split("&"):
+        if not part:
+            continue
+        if "=" in part:
+            k, v = part.split("=", 1)
+        else:
+            k, v = part, ""
+        # First value wins; keep strings only.
+        if k and k not in out:
+            out[k] = v
+    return out
 
 
 def handle(method, path):
@@ -31,6 +51,12 @@ def handle(method, path):
     if _app is None:
         _app = create_app()
     req = Request(_app, ("127.0.0.1", 0), method, path, "1.0", {})
+    # MultiDict subclasses dict and breaks under MICROPY_CONFIG_ROM_LEVEL_MINIMUM
+    # when attributes are set; replace with a plain dict after parse.
+    qs = getattr(req, "query_string", None) or ""
+    if "?" in path and not qs:
+        qs = path.split("?", 1)[1]
+    req.args = _plain_qs(qs)
     f, _prefix, _sub = _app.find_route(req)
     if not callable(f):
         return None

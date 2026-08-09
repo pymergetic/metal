@@ -1,6 +1,6 @@
 /** @file
  * Third-party externals registry — linker-section walk + dyn register.
- * Optional WASI natives when METAL_LINK_WAMR.
+ * Host WASI natives when METAL_LINK_WAMR=1 (FW always; browser HAL omits).
  */
 #include <pymergetic/metal/boot/externals.h>
 

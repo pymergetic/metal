@@ -11,6 +11,7 @@
 #include <pymergetic/metal/async/await.h>
 #include <pymergetic/metal/async/prio.h>
 #include <pymergetic/metal/async/smp.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t async_status(mp_obj_t h_obj)
 {
@@ -115,3 +116,5 @@ const mp_obj_module_t mp_module_pymergetic_metal_async = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&async_globals,
 };
+
+PM_METAL_REG_SEAT(g_pm_seat_async, "pymergetic.metal.async", PM_METAL_REG_SEAT_GLUE, 1, 1, NULL);

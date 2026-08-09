@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "pymergetic/metal/net/ip/sock.h"
+#include "pymergetic/metal/process/__init__.h"
 
 typedef enum {
     SSH_ST_IDLE = 0,
@@ -235,6 +236,16 @@ int32_t pm_metal_net_ssh_autoload(void)
     return pm_metal_net_ssh_init();
 }
 
+static uint32_t g_sshd_pid;
+
+static void sshd_teardown(uint32_t pid, void *user)
+{
+    (void)pid;
+    (void)user;
+    g_sshd_pid = 0;
+    pm_metal_net_ssh_release();
+}
+
 uint32_t pm_metal_net_ssh_listen(uint32_t port)
 {
     if (port == 0u) {
@@ -270,6 +281,13 @@ uint32_t pm_metal_net_ssh_listen(uint32_t port)
     memcpy(g_kex.v_s, k_ident_bare, g_kex.v_s_len);
     pm_metal_net_ssh_pkt_reset();
     pm_metal_net_ssh_pkt_bind_sock(PM_METAL_NET_IP_SOCK_INVALID);
+    /* Crown sshd as daemon intent root (table-only until accept is a task). */
+    if (g_sshd_pid != 0u) {
+        (void)pm_metal_process_quit(g_sshd_pid, 0);
+        g_sshd_pid = 0;
+    }
+    g_sshd_pid = pm_metal_process_crown(0, PM_METAL_PROCESS_MODE_DAEMON, "sshd", sshd_teardown,
+                                        NULL);
     return 1;
 }
 

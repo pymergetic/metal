@@ -10,6 +10,7 @@
 #include "py/runtime.h"
 
 #include <pymergetic/metal/net/ssh/__init__.h>
+#include <pymergetic/metal/reg/seats.h>
 
 static mp_obj_t ssh_available(void)
 {
@@ -190,3 +191,7 @@ const mp_obj_module_t mp_module_pymergetic_metal_net_ssh = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&ssh_module_globals,
 };
+
+int32_t pm_metal_net_ssh_seat_test(void) __attribute__((weak));
+
+PM_METAL_REG_SEAT(g_pm_seat_net_ssh, "pymergetic.metal.net.ssh", PM_METAL_REG_SEAT_GLUE, 1, 1, pm_metal_net_ssh_seat_test);

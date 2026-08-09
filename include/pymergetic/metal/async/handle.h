@@ -23,6 +23,12 @@ uint32_t pm_metal_async_completed_u32(uint32_t v);
 /* Release a completed/unused handle slot. */
 void pm_metal_async_coro_close(uint32_t h);
 
+/** Await-child handle for h, or 0. */
+uint32_t pm_metal_async_await_child(uint32_t h);
+
+/** Close h and walk await-child chain (traceless cancel for process quit). */
+void pm_metal_async_cancel_tree(uint32_t h);
+
 #ifdef __cplusplus
 }
 #endif

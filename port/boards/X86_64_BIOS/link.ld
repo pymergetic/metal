@@ -33,6 +33,10 @@ SECTIONS
     PROVIDE_HIDDEN (__pm_metal_externals_start = .);
     KEEP (*(SORT_BY_NAME (.pm_metal_externals.*)));
     PROVIDE_HIDDEN (__pm_metal_externals_end = .);
+    . = ALIGN(16);
+    PROVIDE_HIDDEN (__pm_metal_seats_start = .);
+    KEEP (*(SORT_BY_NAME (.pm_metal_seats.*)));
+    PROVIDE_HIDDEN (__pm_metal_seats_end = .);
   }
 
   .bss : {

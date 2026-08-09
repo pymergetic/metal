@@ -32,4 +32,22 @@ def name():
 
 def boot():
     """Banner + seat autoexec — used by -m pymergetic.metal.unix."""
+    try:
+        import sys
+
+        import metal_unix_orch
+        import pymergetic.metal as metal
+
+        metal_unix_orch.bind()
+        # Frozen metal rejects C store_attr; re-export from sys.modules.
+        metal.process = sys.modules["pymergetic.metal.process"]
+        metal.boot = sys.modules["pymergetic.metal.boot"]
+    except Exception:
+        pass
+    try:
+        from pymergetic.metal.site import install as _install_quitters
+
+        _install_quitters()
+    except ImportError:
+        pass
     return current().autoexec()

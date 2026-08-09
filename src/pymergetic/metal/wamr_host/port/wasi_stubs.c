@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <pymergetic/metal/shell/__init__.h>
+#include <pymergetic/metal/log/__init__.h>
 
 #include "wasm_export.h"
 
@@ -160,7 +160,7 @@ static int32_t wasi_fd_write(wasm_exec_env_t exec_env, int32_t fd, void *iovs,
       line[n] = '\0';
     }
     if (n > 0u) {
-      pm_metal_shell_log((const uint8_t *)line);
+      pm_metal_log((const uint8_t *)line);
     }
     total += len;
   }
