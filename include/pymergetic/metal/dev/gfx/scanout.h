@@ -14,8 +14,6 @@
 extern "C" {
 #endif
 
-#if !defined(__wasm__)
-
 #define PM_METAL_SCANOUT_CAP_TEAR_FREE (1u << 0)
 #define PM_METAL_SCANOUT_CAP_CHUNKED   (1u << 1)
 #define PM_METAL_SCANOUT_CAP_DIRECT    (1u << 2)
@@ -84,8 +82,6 @@ extern const pm_metal_scanout_ops_t g_pm_metal_scanout_radeon_rv370;
 extern const pm_metal_scanout_ops_t g_pm_metal_scanout_i915_855gm; /* sample */
 extern const pm_metal_scanout_ops_t g_pm_metal_scanout_gop_blt;
 extern const pm_metal_scanout_ops_t g_pm_metal_scanout_lfb_copy;
-
-#endif
 
 #ifdef __cplusplus
 }

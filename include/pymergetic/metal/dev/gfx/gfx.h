@@ -22,8 +22,6 @@ typedef uint32_t pm_metal_gfx_color_t;
 
 #define PM_METAL_GFX_RGB(r, g, b) PM_METAL_GFX_RGBA((r), (g), (b), 0xff)
 
-#if !defined(__wasm__)
-
 typedef struct {
     uint32_t *pixels;
     uint32_t width;
@@ -51,8 +49,6 @@ int pm_metal_gfx_present(void);
 
 uint32_t pm_metal_gfx_font_width(void);
 uint32_t pm_metal_gfx_font_height(void);
-
-#endif /* !__wasm__ */
 
 #ifdef __cplusplus
 }

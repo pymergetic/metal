@@ -27,6 +27,7 @@ METAL_CDN_EXTRA_URLS ?=
 
 CFLAGS += -I$(METAL)/include -I$(METAL)/port/hal \
 	-I$(METAL)/port/boot -I$(METAL)/glue \
+	-I$(METAL)/src \
 	-I$(METAL)/src/pymergetic/metal/util \
 	-I$(METAL)/third_party/tlsf \
 	-I$(METAL)/third_party/monocypher \
@@ -106,6 +107,41 @@ METAL_BOOT_SRCS := \
 	$(METAL)/port/hal/wasm/net_ssh_stub.c \
 	$(METAL)/port/hal/wasm/net_wg_stub.c \
 	$(METAL)/port/hal/wasm/net_asgi_stub.c \
+	$(METAL)/glue/pymergetic/metal/bus/__init__.c \
+	$(METAL)/glue/pymergetic/metal/bus/pci.c \
+	$(METAL)/glue/pymergetic/metal/bus/virtio.c \
+	$(METAL)/glue/pymergetic/metal/dev/__init__.c \
+	$(METAL)/glue/pymergetic/metal/dev/serial.c \
+	$(METAL)/glue/pymergetic/metal/dev/acpi.c \
+	$(METAL)/glue/pymergetic/metal/dev/blk.c \
+	$(METAL)/glue/pymergetic/metal/dev/stream.c \
+	$(METAL)/glue/pymergetic/metal/dev/gfx/__init__.c \
+	$(METAL)/glue/pymergetic/metal/dev/gfx/compositor.c \
+	$(METAL)/glue/pymergetic/metal/dev/gfx/scanout.c \
+	$(METAL)/glue/pymergetic/metal/dev/gfx/text.c \
+	$(METAL)/glue/pymergetic/metal/dev/input/__init__.c \
+	$(METAL)/glue/pymergetic/metal/dev/input/kbd.c \
+	$(METAL)/glue/pymergetic/metal/dev/net/__init__.c \
+	$(METAL)/glue/pymergetic/metal/dev/net/bge.c \
+	$(METAL)/glue/pymergetic/metal/dev/net/virtio_net.c \
+	$(METAL)/glue/pymergetic/metal/shell/__init__.c \
+	$(METAL)/glue/pymergetic/metal/shell/tui.c \
+	$(METAL)/glue/pymergetic/metal/shell/ui.c \
+	$(METAL)/glue/pymergetic/metal/shell/vt.c \
+	$(METAL)/glue/pymergetic/metal/draw.c \
+	$(METAL)/glue/pymergetic/metal/wamr_host.c \
+	$(METAL)/port/hal/wasm/bus_pci_stub.c \
+	$(METAL)/port/hal/wasm/bus_virtio_stub.c \
+	$(METAL)/port/hal/wasm/dev_acpi_stub.c \
+	$(METAL)/port/hal/wasm/kbd_stub.c \
+	$(METAL)/port/hal/wasm/dev_serial.c \
+	$(METAL)/port/hal/wasm/dev_net_bge_stub.c \
+	$(METAL)/port/hal/wasm/dev_net_virtio_stub.c \
+	$(METAL)/port/hal/wasm/gfx_stub.c \
+	$(METAL)/port/hal/wasm/shell_ui_stub.c \
+	$(METAL)/src/pymergetic/metal/draw/__init__.c \
+	$(METAL)/src/pymergetic/metal/shell/vt/__init__.c \
+	$(METAL)/src/pymergetic/metal/shell/tui/__init__.c \
 	$(METAL)/src/pymergetic/metal/pack/mod_packs.c \
 	$(METAL)/src/pymergetic/metal/net/faces/__init__.c \
 	$(METAL)/src/pymergetic/metal/net/nic/__init__.c \
@@ -182,4 +218,27 @@ SRC_QSTR += \
 	$(METAL)/glue/pymergetic/metal/net/ssh.c \
 	$(METAL)/glue/pymergetic/metal/net/tftp.c \
 	$(METAL)/glue/pymergetic/metal/net/tls.c \
-	$(METAL)/glue/pymergetic/metal/net/wg.c
+	$(METAL)/glue/pymergetic/metal/net/wg.c \
+	$(METAL)/glue/pymergetic/metal/bus/__init__.c \
+	$(METAL)/glue/pymergetic/metal/bus/pci.c \
+	$(METAL)/glue/pymergetic/metal/bus/virtio.c \
+	$(METAL)/glue/pymergetic/metal/dev/__init__.c \
+	$(METAL)/glue/pymergetic/metal/dev/serial.c \
+	$(METAL)/glue/pymergetic/metal/dev/acpi.c \
+	$(METAL)/glue/pymergetic/metal/dev/blk.c \
+	$(METAL)/glue/pymergetic/metal/dev/stream.c \
+	$(METAL)/glue/pymergetic/metal/dev/gfx/__init__.c \
+	$(METAL)/glue/pymergetic/metal/dev/gfx/compositor.c \
+	$(METAL)/glue/pymergetic/metal/dev/gfx/scanout.c \
+	$(METAL)/glue/pymergetic/metal/dev/gfx/text.c \
+	$(METAL)/glue/pymergetic/metal/dev/input/__init__.c \
+	$(METAL)/glue/pymergetic/metal/dev/input/kbd.c \
+	$(METAL)/glue/pymergetic/metal/dev/net/__init__.c \
+	$(METAL)/glue/pymergetic/metal/dev/net/bge.c \
+	$(METAL)/glue/pymergetic/metal/dev/net/virtio_net.c \
+	$(METAL)/glue/pymergetic/metal/shell/__init__.c \
+	$(METAL)/glue/pymergetic/metal/shell/tui.c \
+	$(METAL)/glue/pymergetic/metal/shell/ui.c \
+	$(METAL)/glue/pymergetic/metal/shell/vt.c \
+	$(METAL)/glue/pymergetic/metal/draw.c \
+	$(METAL)/glue/pymergetic/metal/wamr_host.c

@@ -249,6 +249,16 @@ int32_t pm_metal_stream_pipe(pm_metal_stream_h *read_end, pm_metal_stream_h *wri
     }
     return -1;
 }
+int32_t pm_metal_stream_pty(pm_metal_stream_h *master, pm_metal_stream_h *slave)
+{
+    if (master) {
+        *master = PM_METAL_STREAM_INVALID;
+    }
+    if (slave) {
+        *slave = PM_METAL_STREAM_INVALID;
+    }
+    return -1;
+}
 uint32_t pm_metal_stream_write(pm_metal_stream_h h, const void *ptr, uint32_t len)
 {
     (void)h;
@@ -263,7 +273,76 @@ uint32_t pm_metal_stream_try_read(pm_metal_stream_h h, void *ptr, uint32_t len)
     (void)len;
     return 0;
 }
+uint32_t pm_metal_stream_read(pm_metal_stream_h h, void *ptr, uint32_t len)
+{
+    (void)h;
+    (void)ptr;
+    (void)len;
+    return 0;
+}
+uint32_t pm_metal_stream_drain(pm_metal_stream_h h)
+{
+    (void)h;
+    return 0;
+}
 void pm_metal_stream_close(pm_metal_stream_h h) { (void)h; }
+
+int32_t pm_metal_stream_termios_get(pm_metal_stream_h h, pm_metal_stream_termios_t *out)
+{
+    (void)h;
+    if (out) {
+        memset(out, 0, sizeof(*out));
+    }
+    return -1;
+}
+int32_t pm_metal_stream_termios_set(pm_metal_stream_h h, const pm_metal_stream_termios_t *in)
+{
+    (void)h;
+    (void)in;
+    return -1;
+}
+int32_t pm_metal_stream_winsize_get(pm_metal_stream_h h, pm_metal_stream_winsize_t *out)
+{
+    (void)h;
+    if (out) {
+        memset(out, 0, sizeof(*out));
+    }
+    return -1;
+}
+int32_t pm_metal_stream_winsize_set(pm_metal_stream_h h, const pm_metal_stream_winsize_t *in)
+{
+    (void)h;
+    (void)in;
+    return -1;
+}
+uint32_t pm_metal_stream_pending(pm_metal_stream_h h)
+{
+    (void)h;
+    return 0;
+}
+
+int32_t pm_metal_stdio_attach(pm_metal_stream_h in, pm_metal_stream_h out, pm_metal_stream_h err)
+{
+    (void)in;
+    (void)out;
+    (void)err;
+    return -1;
+}
+pm_metal_stream_h pm_metal_stdio_in(void) { return PM_METAL_STREAM_INVALID; }
+pm_metal_stream_h pm_metal_stdio_out(void) { return PM_METAL_STREAM_INVALID; }
+pm_metal_stream_h pm_metal_stdio_err(void) { return PM_METAL_STREAM_INVALID; }
+uint32_t pm_metal_stream_feed_stdin(const void *ptr, uint32_t len)
+{
+    (void)ptr;
+    (void)len;
+    return 0;
+}
+uint32_t pm_metal_stream_write_line(pm_metal_stream_h h, const char *line)
+{
+    (void)h;
+    (void)line;
+    return 0;
+}
 
 int32_t pm_metal_fs_fat_format_buf(uint8_t *buf, size_t len)
 {

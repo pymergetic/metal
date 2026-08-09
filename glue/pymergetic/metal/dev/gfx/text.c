@@ -6,8 +6,6 @@
 
 #include <pymergetic/metal/dev/gfx/gfx.h>
 
-#if !defined(__wasm__)
-
 static mp_obj_t text_font_width(void)
 {
     return mp_obj_new_int_from_uint(pm_metal_gfx_font_width());
@@ -47,6 +45,7 @@ static const mp_rom_map_elem_t text_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_font_width), MP_ROM_PTR(&text_font_width_obj) },
     { MP_ROM_QSTR(MP_QSTR_font_height), MP_ROM_PTR(&text_font_height_obj) },
     { MP_ROM_QSTR(MP_QSTR_draw), MP_ROM_PTR(&text_draw_obj) },
+    { MP_ROM_QSTR(MP_QSTR_rgb), MP_ROM_PTR(&text_rgb_obj) },
 };
 static MP_DEFINE_CONST_DICT(text_globals, text_globals_table);
 
@@ -54,18 +53,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_dev_gfx_text = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&text_globals,
 };
-
-#else
-
-static const mp_rom_map_elem_t text_globals_table[] = {
-    { MP_ROM_QSTR(MP_QSTR___name__),
-      MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_gfx_dot_text) },
-};
-static MP_DEFINE_CONST_DICT(text_globals, text_globals_table);
-
-const mp_obj_module_t mp_module_pymergetic_metal_dev_gfx_text = {
-    .base = { &mp_type_module },
-    .globals = (mp_obj_dict_t *)&text_globals,
-};
-
-#endif

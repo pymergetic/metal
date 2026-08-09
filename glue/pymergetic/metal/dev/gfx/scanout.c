@@ -9,8 +9,6 @@
 
 #include <pymergetic/metal/dev/gfx/scanout.h>
 
-#if !defined(__wasm__)
-
 static mp_obj_t scanout_bind(mp_obj_t bind_obj)
 {
     return mp_obj_new_int(pm_metal_scanout_bind(
@@ -91,18 +89,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_dev_gfx_scanout = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&scanout_globals,
 };
-
-#else
-
-static const mp_rom_map_elem_t scanout_globals_table[] = {
-    { MP_ROM_QSTR(MP_QSTR___name__),
-      MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_gfx_dot_scanout) },
-};
-static MP_DEFINE_CONST_DICT(scanout_globals, scanout_globals_table);
-
-const mp_obj_module_t mp_module_pymergetic_metal_dev_gfx_scanout = {
-    .base = { &mp_type_module },
-    .globals = (mp_obj_dict_t *)&scanout_globals,
-};
-
-#endif

@@ -5,8 +5,6 @@
 
 #include "../modules.h"
 
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
-
 static const mp_rom_map_elem_t bus_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal_dot_bus) },
     { MP_ROM_QSTR(MP_QSTR_pci), MP_ROM_PTR(&mp_module_pymergetic_metal_bus_pci) },
@@ -18,5 +16,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_bus = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&bus_globals,
 };
-
-#endif

@@ -8,8 +8,6 @@
 
 #include <pymergetic/metal/dev/gfx/gfx.h>
 
-#if !defined(__wasm__)
-
 static mp_obj_t gfx_init(void)
 {
     return MP_OBJ_NEW_SMALL_INT(pm_metal_gfx_init());
@@ -49,18 +47,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_dev_gfx_compositor = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&compositor_globals,
 };
-
-#else
-
-static const mp_rom_map_elem_t compositor_globals_table[] = {
-    { MP_ROM_QSTR(MP_QSTR___name__),
-      MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal_dot_dev_dot_gfx_dot_compositor) },
-};
-static MP_DEFINE_CONST_DICT(compositor_globals, compositor_globals_table);
-
-const mp_obj_module_t mp_module_pymergetic_metal_dev_gfx_compositor = {
-    .base = { &mp_type_module },
-    .globals = (mp_obj_dict_t *)&compositor_globals,
-};
-
-#endif

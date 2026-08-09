@@ -6,8 +6,6 @@
 
 #include "../modules.h"
 
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
-
 static mp_obj_dict_t dev_globals;
 static int dev_globals_ready;
 
@@ -39,5 +37,3 @@ const mp_obj_module_t mp_module_pymergetic_metal_dev = {
     .base = { &mp_type_module },
     .globals = (mp_obj_dict_t *)&dev_globals,
 };
-
-#endif

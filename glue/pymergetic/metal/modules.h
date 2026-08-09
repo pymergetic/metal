@@ -55,7 +55,6 @@ extern const mp_obj_module_t mp_module_pymergetic_metal_net_ssh;
 extern const mp_obj_module_t mp_module_pymergetic_metal_net_tftp;
 extern const mp_obj_module_t mp_module_pymergetic_metal_net_tls;
 extern const mp_obj_module_t mp_module_pymergetic_metal_net_wg;
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
 extern const mp_obj_module_t mp_module_pymergetic_metal_draw;
 extern const mp_obj_module_t mp_module_pymergetic_metal_bus;
 extern const mp_obj_module_t mp_module_pymergetic_metal_bus_pci;
@@ -79,6 +78,5 @@ extern const mp_obj_module_t mp_module_pymergetic_metal_shell_tui;
 extern const mp_obj_module_t mp_module_pymergetic_metal_shell_ui;
 extern const mp_obj_module_t mp_module_pymergetic_metal_shell_vt;
 extern const mp_obj_module_t mp_module_pymergetic_metal_wamr_host;
-#endif
 
 #endif

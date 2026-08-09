@@ -15,12 +15,12 @@ static mp_obj_t wamr_host_fetch_register(size_t n_args, const mp_obj_t *args) {
         mp_get_buffer_raise(args[0], &full_module_bi, MP_BUFFER_READ); full_module=(const uint8_t*)full_module_bi.buf;
     }
     mp_buffer_info_t url_bi;
-    const uint8_t *url;
+    const char *url;
     if (args[1] == mp_const_none) { url = NULL; }
     else if (mp_obj_is_str_or_bytes(args[1])) {
-        size_t _url_n; const char *_url_s = mp_obj_str_get_data(args[1], &_url_n); url=(const uint8_t*)_url_s;
+        size_t _url_n; url = mp_obj_str_get_data(args[1], &_url_n);
     } else {
-        mp_get_buffer_raise(args[1], &url_bi, MP_BUFFER_READ); url=(const uint8_t*)url_bi.buf;
+        mp_get_buffer_raise(args[1], &url_bi, MP_BUFFER_READ); url=(const char *)url_bi.buf;
     }
     mp_buffer_info_t sig_bi;
     const uint8_t *sig;
@@ -103,16 +103,10 @@ static mp_obj_t wamr_host_image(size_t n_args, const mp_obj_t *args) {
     } else {
         mp_get_buffer_raise(args[0], &full_module_bi, MP_BUFFER_READ); full_module=(const uint8_t*)full_module_bi.buf;
     }
-    mp_buffer_info_t out_bytes_bi;
-    const uint8_t *out_bytes;
-    if (args[1] == mp_const_none) { out_bytes = NULL; }
-    else if (mp_obj_is_str_or_bytes(args[1])) {
-        size_t _out_bytes_n; const char *_out_bytes_s = mp_obj_str_get_data(args[1], &_out_bytes_n); out_bytes=(const uint8_t*)_out_bytes_s;
-    } else {
-        mp_get_buffer_raise(args[1], &out_bytes_bi, MP_BUFFER_READ); out_bytes=(const uint8_t*)out_bytes_bi.buf;
-    }
-    void *_out_len_v = (args[2] == mp_const_none) ? NULL : (void *)(uintptr_t)mp_obj_get_int(args[2]);
-    uint32_t * out_len = (uint32_t *)_out_len_v;
+    const uint8_t **out_bytes =
+        (args[1] == mp_const_none) ? NULL : (const uint8_t **)(uintptr_t)mp_obj_get_int(args[1]);
+    uint32_t *out_len =
+        (args[2] == mp_const_none) ? NULL : (uint32_t *)(uintptr_t)mp_obj_get_int(args[2]);
     return mp_obj_new_int((mp_int_t)pm_metal_wasm_image(full_module, out_bytes, out_len));
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(wamr_host_image_obj, 3, 3, wamr_host_image);

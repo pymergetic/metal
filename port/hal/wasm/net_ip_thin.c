@@ -3,8 +3,10 @@
  * Socks remain unavailable; ARP/ping are no-ops / fail-closed.
  */
 #include "pymergetic/metal/net/ip/__init__.h"
+#include "pymergetic/metal/net/ip/cfg.h"
 
 #include <stdint.h>
+#include <stdio.h>
 
 static int g_ready;
 static uint32_t g_addr = PM_METAL_NET_IP_DEFAULT_ADDR;
@@ -91,4 +93,32 @@ int32_t pm_metal_net_ip_ping(uint32_t dst_ip, uint16_t id, uint16_t seq)
 uint32_t pm_metal_net_ip_ping_replies(void)
 {
     return 0u;
+}
+
+static void ipv4_ntoa(uint32_t be, char *out, size_t cap)
+{
+    if (!out || cap < 8u) {
+        return;
+    }
+    snprintf(out, cap, "%u.%u.%u.%u", (unsigned)((be >> 24) & 0xffu),
+             (unsigned)((be >> 16) & 0xffu), (unsigned)((be >> 8) & 0xffu),
+             (unsigned)(be & 0xffu));
+}
+
+int pm_metal_net_ip_if_status(char *buf, uint32_t buf_len)
+{
+    char ip[16], mask[16], gw[16];
+
+    if (!buf || buf_len == 0u) {
+        return -1;
+    }
+    if (!g_ready) {
+        buf[0] = '\0';
+        return 0;
+    }
+    ipv4_ntoa(g_addr, ip, sizeof(ip));
+    ipv4_ntoa(g_mask, mask, sizeof(mask));
+    ipv4_ntoa(g_gw, gw, sizeof(gw));
+    snprintf(buf, buf_len, "wasm0 %s/%s gw %s", ip, mask, gw);
+    return 0;
 }

@@ -50,7 +50,6 @@ void pm_metal_globals_init(void) {
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_hwtree));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_net),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_net));
-#if !defined(PM_METAL_CFG_FW_BROWSER) || !PM_METAL_CFG_FW_BROWSER
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_dev),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_dev));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_draw),
@@ -61,7 +60,6 @@ void pm_metal_globals_init(void) {
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_bus));
     mp_obj_dict_store(MP_OBJ_FROM_PTR(&metal_globals), MP_OBJ_NEW_QSTR(MP_QSTR_wamr_host),
                       MP_OBJ_FROM_PTR(&mp_module_pymergetic_metal_wamr_host));
-#endif
     metal_globals_ready = 1;
 }
 
