@@ -14,7 +14,10 @@ Netboot (OpenWrt / SSH): [`../deploy/`](../deploy/) — `bootserver/` +
 LIVE firmware proofs: [`live/`](live/).
 
 ```bash
-# CI smoke battery
+# MODULE_MATRIX ledger + wasm import of all seats (from extmod/metal)
+make -C tests/matrix all
+
+# CI smoke battery (includes matrix py ok on FW)
 make -C ports/metal BOARD=X86_64_BIOS ENGINE=mp run
 make -C ports/metal BOARD=X86_64_UEFI ENGINE=mp run
 

@@ -35,5 +35,6 @@ WAMR lives in **wasmmod**. µPy is **ENGINE_TOP**. No second copies here.
 | [`docs/HYBRID.md`](docs/HYBRID.md) | include + hybrid |
 | [`docs/SOURCETREE.md`](docs/SOURCETREE.md) | path == module tree |
 | [`docs/MODULE_MATRIX.md`](docs/MODULE_MATRIX.md) | export faces × async compliance (keep updated) |
+| [`tests/matrix/`](tests/matrix/) | ledger + browser import smoke (`make -C tests/matrix all`) |
 | [`include/SYMBOLS.md`](include/SYMBOLS.md) | C ↔ RS ↔ Py symbol ledger |
 | [`port/README.md`](port/README.md) | smoke / REPL / live |
