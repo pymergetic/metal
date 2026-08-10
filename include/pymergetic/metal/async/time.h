@@ -12,6 +12,10 @@ uint64_t pm_metal_async_mono_us(void);
 uint64_t pm_metal_async_mono_ms(void);
 uint64_t pm_metal_time_mono_us(void);
 
+/* Blocking wall sleep: board wait + mono advance + idle/async poll. */
+void pm_metal_time_sleep_us(uint64_t us);
+void pm_metal_time_sleep_ms(uint32_t ms);
+
 /* Returns async handle; completion via poll. */
 uint32_t pm_metal_async_sleep_us(uint64_t us);
 uint32_t pm_metal_async_sleep_until_us(uint64_t deadline_us);

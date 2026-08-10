@@ -20,3 +20,17 @@ void pm_metal_board_time_advance_us(uint64_t us)
 {
     (void)us;
 }
+
+void pm_metal_board_sleep_us(uint64_t us)
+{
+#if defined(__EMSCRIPTEN__)
+    /* Browser: ms granularity; blocks the worker (ok for seat teardown). */
+    double ms = (double)us / 1000.0;
+    if (ms < 1.0 && us > 0ull) {
+        ms = 1.0;
+    }
+    emscripten_sleep((unsigned int)ms);
+#else
+    (void)us;
+#endif
+}

@@ -202,16 +202,12 @@ int32_t pm_metal_net_tls_load_ca_file(const char *path)
 
 int32_t pm_metal_net_tls_set_server_cert_pem(const uint8_t *pem, uint32_t len)
 {
-    extern void uart_puts(const char *s);
     if (pm_metal_net_tls_init() != 0) {
-        uart_puts("tls setcert init fail\n");
         return -1;
     }
     if (g_ops == NULL || g_ops->set_server_cert_pem == NULL) {
-        uart_puts("tls setcert no ops\n");
         return -1;
     }
-    uart_puts("tls setcert call\n");
     return g_ops->set_server_cert_pem(pem, len);
 }
 

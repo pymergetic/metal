@@ -12,6 +12,11 @@ extern "C" {
 uint64_t pm_metal_board_mono_us(void);
 void pm_metal_board_time_advance_us(uint64_t us);
 
+/* Blocking wall wait (PIT / Stall / nanosleep / …). Does not advance mono —
+ * callers that use software ticks should advance separately (see
+ * pm_metal_time_sleep_*). */
+void pm_metal_board_sleep_us(uint64_t us);
+
 #ifdef __cplusplus
 }
 #endif

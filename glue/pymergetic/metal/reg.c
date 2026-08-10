@@ -1,18 +1,32 @@
 /*
  * pymergetic.metal.reg — µPy face over cold ledger + seat table.
+ *
+ * Diagnostic dumps use Metal-heap linked/growable buffers (*_heap APIs) —
+ * never oversized stack scratch for inspect text.
  */
 #include "py/obj.h"
 #include "py/runtime.h"
 
+#include <pymergetic/metal/mem/port/__init__.h>
 #include <pymergetic/metal/reg/ledger.h>
 #include <pymergetic/metal/reg/seats.h>
 
 #include <string.h>
 
-#ifndef PM_METAL_REG_JSON_CAP
-#define PM_METAL_REG_JSON_CAP 24576
-#endif
+static mp_obj_t heap_bytes_to_str(uint8_t *buf, int32_t n)
+{
+    mp_obj_t out;
 
+    if (n < 0 || buf == NULL) {
+        if (buf) {
+            pm_metal_mem_free(buf);
+        }
+        return MP_OBJ_NULL;
+    }
+    out = mp_obj_new_str((const char *)buf, (size_t)n);
+    pm_metal_mem_free(buf);
+    return out;
+}
 
 static mp_obj_t reg_ledger_method_count(void)
 {
@@ -28,28 +42,26 @@ static MP_DEFINE_CONST_FUN_OBJ_0(reg_ledger_gap_count_obj, reg_ledger_gap_count)
 
 static mp_obj_t reg_ledger_json(void)
 {
-    uint8_t buf[PM_METAL_REG_JSON_CAP];
-    int32_t n;
-
-    n = pm_metal_reg_ledger_json(buf, (uint32_t)sizeof(buf));
-    if (n < 0) {
+    uint8_t *buf = NULL;
+    int32_t n = pm_metal_reg_ledger_json_heap(&buf);
+    mp_obj_t out = heap_bytes_to_str(buf, n);
+    if (out == MP_OBJ_NULL) {
         mp_raise_ValueError(MP_ERROR_TEXT("ledger json"));
     }
-    return mp_obj_new_str((const char *)buf, (size_t)n);
+    return out;
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(reg_ledger_json_obj, reg_ledger_json);
 
 static mp_obj_t reg_ledger_module_json(mp_obj_t module_obj)
 {
     const char *module = mp_obj_str_get_str(module_obj);
-    uint8_t buf[PM_METAL_REG_JSON_CAP];
-    int32_t n;
-
-    n = pm_metal_reg_ledger_module_json((const uint8_t *)module, buf, (uint32_t)sizeof(buf));
-    if (n < 0) {
+    uint8_t *buf = NULL;
+    int32_t n = pm_metal_reg_ledger_module_json_heap((const uint8_t *)module, &buf);
+    mp_obj_t out = heap_bytes_to_str(buf, n);
+    if (out == MP_OBJ_NULL) {
         mp_raise_ValueError(MP_ERROR_TEXT("module not in ledger"));
     }
-    return mp_obj_new_str((const char *)buf, (size_t)n);
+    return out;
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(reg_ledger_module_json_obj, reg_ledger_module_json);
 
@@ -57,15 +69,14 @@ static mp_obj_t reg_ledger_method_json(mp_obj_t module_obj, mp_obj_t func_obj)
 {
     const char *module = mp_obj_str_get_str(module_obj);
     const char *func = mp_obj_str_get_str(func_obj);
-    uint8_t buf[PM_METAL_REG_JSON_CAP];
-    int32_t n;
-
-    n = pm_metal_reg_ledger_method_json((const uint8_t *)module, (const uint8_t *)func, buf,
-                                        (uint32_t)sizeof(buf));
-    if (n < 0) {
+    uint8_t *buf = NULL;
+    int32_t n =
+        pm_metal_reg_ledger_method_json_heap((const uint8_t *)module, (const uint8_t *)func, &buf);
+    mp_obj_t out = heap_bytes_to_str(buf, n);
+    if (out == MP_OBJ_NULL) {
         mp_raise_ValueError(MP_ERROR_TEXT("method not in ledger"));
     }
-    return mp_obj_new_str((const char *)buf, (size_t)n);
+    return out;
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(reg_ledger_method_json_obj, reg_ledger_method_json);
 
@@ -99,12 +110,13 @@ static MP_DEFINE_CONST_FUN_OBJ_1(reg_seat_at_obj, reg_seat_at);
 
 static mp_obj_t reg_seats_json(void)
 {
-    char buf[PM_METAL_REG_JSON_CAP];
-    int32_t n = pm_metal_reg_seats_json(buf, (uint32_t)sizeof(buf));
-    if (n < 0) {
+    char *buf = NULL;
+    int32_t n = pm_metal_reg_seats_json_heap(&buf);
+    mp_obj_t out = heap_bytes_to_str((uint8_t *)buf, n);
+    if (out == MP_OBJ_NULL) {
         mp_raise_ValueError(MP_ERROR_TEXT("seats json"));
     }
-    return mp_obj_new_str(buf, (size_t)n);
+    return out;
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(reg_seats_json_obj, reg_seats_json);
 
@@ -128,8 +140,9 @@ static mp_obj_t reg_completeness(size_t n_args, const mp_obj_t *pos_args, mp_map
     int32_t gaps_only;
     int32_t detail;
     int32_t fmt_json = 0;
-    uint8_t buf[PM_METAL_REG_JSON_CAP];
+    uint8_t *buf = NULL;
     int32_t n;
+    mp_obj_t out;
 
     mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
     if (args[ARG_module].u_obj != mp_const_none) {
@@ -146,12 +159,13 @@ static mp_obj_t reg_completeness(size_t n_args, const mp_obj_t *pos_args, mp_map
         }
     }
 
-    n = pm_metal_reg_ledger_completeness((const uint8_t *)module, gaps_only, detail, fmt_json, buf,
-                                         (uint32_t)sizeof(buf));
-    if (n < 0) {
+    n = pm_metal_reg_ledger_completeness_heap((const uint8_t *)module, gaps_only, detail, fmt_json,
+                                              &buf);
+    out = heap_bytes_to_str(buf, n);
+    if (out == MP_OBJ_NULL) {
         mp_raise_ValueError(MP_ERROR_TEXT("completeness"));
     }
-    return mp_obj_new_str((const char *)buf, (size_t)n);
+    return out;
 }
 static MP_DEFINE_CONST_FUN_OBJ_KW(reg_completeness_obj, 0, reg_completeness);
 

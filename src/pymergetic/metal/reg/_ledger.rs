@@ -302,21 +302,18 @@ impl Ledger {
         rc.unwrap_or(-1)
     }
 
+    /// Gap = incomplete polyglot publish: need OK muscle + C/RS/Py faces,
+    /// honesty, sync/async partner, and no orphan callers.
     fn method_is_gap(m: &MethodRec) -> bool {
-        let mut has_c = false;
-        let mut has_rs = false;
-        let mut has_py = false;
+        let mut has_ok_muscle = false;
         let mut bad = false;
         for j in 0..(m.callee_n as usize) {
             let c = &m.callees[j];
             if !c.used {
                 continue;
             }
-            match c.lang {
-                LANG_C => has_c = true,
-                LANG_RS => has_rs = true,
-                LANG_PY => has_py = true,
-                _ => {}
+            if c.role == ROLE_MUSCLE && c.honesty == HONESTY_OK && !c.ptr.is_null() {
+                has_ok_muscle = true;
             }
             if c.honesty != HONESTY_OK {
                 bad = true;
@@ -325,7 +322,13 @@ impl Ledger {
                 bad = true;
             }
         }
-        !has_c || !has_rs || !has_py || bad || (m.caller_n > 0 && m.callee_n == 0)
+        let (has_c, has_rs, has_py) = method_lang_flags(m);
+        !has_ok_muscle
+            || bad
+            || !has_c
+            || !has_rs
+            || !has_py
+            || (m.caller_n > 0 && m.callee_n == 0)
     }
 
     pub fn method_count(&self) -> usize {
@@ -356,7 +359,8 @@ impl Ledger {
     /// method here does not scale once floor RegMods publish into the ledger.
     /// Returns byte length or -1.
     pub fn write_json(&self, buf: &mut [u8]) -> i32 {
-        let mut w = JsonWriter::new(buf);
+        let mut d = DynBuf::new();
+        let mut w = JsonWriter::new(&mut d);
         self.lock.lock();
         let methods = unsafe { &*self.methods.get() };
         let count = unsafe { *self.count.get() };
@@ -385,13 +389,50 @@ impl Ledger {
         })();
         self.lock.unlock();
         match ok {
-            Some(()) => w.len() as i32,
+            Some(()) => dyn_finish(&d, buf),
             None => -1,
         }
     }
 
+    pub fn write_json_heap(&self) -> (*mut u8, usize) {
+        let mut d = DynBuf::new();
+        let mut w = JsonWriter::new(&mut d);
+        self.lock.lock();
+        let methods = unsafe { &*self.methods.get() };
+        let count = unsafe { *self.count.get() };
+        let gaps = {
+            let mut g = 0u32;
+            for i in 0..count {
+                let m = &methods[i];
+                if m.used && Self::method_is_gap(m) {
+                    g = g.saturating_add(1);
+                }
+            }
+            g
+        };
+        let ok = (|| {
+            w.obj_start()?;
+            w.key("schema")?;
+            w.u32(1)?;
+            w.comma()?;
+            w.key("method_count")?;
+            w.u32(count as u32)?;
+            w.comma()?;
+            w.key("gap_count")?;
+            w.u32(gaps)?;
+            w.obj_end()?;
+            Some(())
+        })();
+        self.lock.unlock();
+        if ok.is_none() {
+            return (core::ptr::null_mut(), 0);
+        }
+        d.take_flat()
+    }
+
     pub fn write_module_json(&self, module: &[u8], buf: &mut [u8]) -> i32 {
-        let mut w = JsonWriter::new(buf);
+        let mut d = DynBuf::new();
+        let mut w = JsonWriter::new(&mut d);
         self.lock.lock();
         let methods = unsafe { &*self.methods.get() };
         let count = unsafe { *self.count.get() };
@@ -446,13 +487,14 @@ impl Ledger {
         })();
         self.lock.unlock();
         match ok {
-            Some(()) => w.len() as i32,
+            Some(()) => dyn_finish(&d, buf),
             None => -1,
         }
     }
 
     pub fn write_method_json(&self, module: &[u8], func: &[u8], buf: &mut [u8]) -> i32 {
-        let mut w = JsonWriter::new(buf);
+        let mut d = DynBuf::new();
+        let mut w = JsonWriter::new(&mut d);
         self.lock.lock();
         let methods = unsafe { &*self.methods.get() };
         let count = unsafe { *self.count.get() };
@@ -478,9 +520,104 @@ impl Ledger {
         };
         self.lock.unlock();
         match ok {
-            Some(()) => w.len() as i32,
+            Some(()) => dyn_finish(&d, buf),
             None => -1,
         }
+    }
+
+    pub fn write_module_json_heap(&self, module: &[u8]) -> (*mut u8, usize) {
+        let mut d = DynBuf::new();
+        let mut w = JsonWriter::new(&mut d);
+        self.lock.lock();
+        let methods = unsafe { &*self.methods.get() };
+        let count = unsafe { *self.count.get() };
+        let mut method_count = 0u32;
+        let mut gaps = 0u32;
+        for i in 0..count {
+            let m = &methods[i];
+            if !m.used || m.module_len as usize != module.len() || m.module[..module.len()] != *module
+            {
+                continue;
+            }
+            method_count = method_count.saturating_add(1);
+            if Self::method_is_gap(m) {
+                gaps = gaps.saturating_add(1);
+            }
+        }
+        if method_count == 0 {
+            self.lock.unlock();
+            return (core::ptr::null_mut(), 0);
+        }
+        let ok = (|| {
+            w.obj_start()?;
+            w.key("module")?;
+            w.str_bytes(module)?;
+            w.comma()?;
+            w.key("method_count")?;
+            w.u32(method_count)?;
+            w.comma()?;
+            w.key("gap_count")?;
+            w.u32(gaps)?;
+            w.comma()?;
+            w.key("methods")?;
+            w.arr_start()?;
+            let mut first = true;
+            for i in 0..count {
+                let m = &methods[i];
+                if !m.used
+                    || m.module_len as usize != module.len()
+                    || m.module[..module.len()] != *module
+                {
+                    continue;
+                }
+                if !first {
+                    w.comma()?;
+                }
+                first = false;
+                write_method(&mut w, m)?;
+            }
+            w.arr_end()?;
+            w.obj_end()?;
+            Some(())
+        })();
+        self.lock.unlock();
+        if ok.is_none() {
+            return (core::ptr::null_mut(), 0);
+        }
+        d.take_flat()
+    }
+
+    pub fn write_method_json_heap(&self, module: &[u8], func: &[u8]) -> (*mut u8, usize) {
+        let mut d = DynBuf::new();
+        let mut w = JsonWriter::new(&mut d);
+        self.lock.lock();
+        let methods = unsafe { &*self.methods.get() };
+        let count = unsafe { *self.count.get() };
+        let mut found: Option<&MethodRec> = None;
+        for i in 0..count {
+            let m = &methods[i];
+            if !m.used {
+                continue;
+            }
+            if m.module_len as usize == module.len()
+                && m.func_len as usize == func.len()
+                && m.module[..module.len()] == *module
+                && m.func[..func.len()] == *func
+            {
+                found = Some(m);
+                break;
+            }
+        }
+        let ok = if let Some(m) = found {
+            write_method(&mut w, m)
+        } else {
+            None
+        };
+        self.lock.unlock();
+        if ok.is_none() {
+            return (core::ptr::null_mut(), 0);
+        }
+        d.take_flat()
     }
 }
 
@@ -598,31 +735,24 @@ fn via_name(v: u8) -> &'static str {
     }
 }
 
+use super::dynbuf::DynBuf;
+
 struct JsonWriter<'a> {
-    buf: &'a mut [u8],
-    n: usize,
+    buf: &'a mut DynBuf,
 }
 
 impl<'a> JsonWriter<'a> {
-    fn new(buf: &'a mut [u8]) -> Self {
-        Self { buf, n: 0 }
+    fn new(buf: &'a mut DynBuf) -> Self {
+        Self { buf }
     }
     fn len(&self) -> usize {
-        self.n
+        self.buf.len()
     }
     fn push(&mut self, b: u8) -> Option<()> {
-        if self.n >= self.buf.len() {
-            return None;
-        }
-        self.buf[self.n] = b;
-        self.n += 1;
-        Some(())
+        self.buf.push(b)
     }
     fn raw(&mut self, s: &str) -> Option<()> {
-        for b in s.as_bytes() {
-            self.push(*b)?;
-        }
-        Some(())
+        self.buf.append(s.as_bytes())
     }
     fn obj_start(&mut self) -> Option<()> {
         self.push(b'{')
@@ -750,36 +880,24 @@ fn module_matches(m: &MethodRec, filter: Option<&[u8]>) -> bool {
 }
 
 struct TextWriter<'a> {
-    buf: &'a mut [u8],
-    n: usize,
+    buf: &'a mut DynBuf,
 }
 
 impl<'a> TextWriter<'a> {
-    fn new(buf: &'a mut [u8]) -> Self {
-        Self { buf, n: 0 }
+    fn new(buf: &'a mut DynBuf) -> Self {
+        Self { buf }
     }
     fn len(&self) -> usize {
-        self.n
+        self.buf.len()
     }
     fn push(&mut self, b: u8) -> Option<()> {
-        if self.n >= self.buf.len() {
-            return None;
-        }
-        self.buf[self.n] = b;
-        self.n += 1;
-        Some(())
+        self.buf.push(b)
     }
     fn raw(&mut self, s: &str) -> Option<()> {
-        for b in s.as_bytes() {
-            self.push(*b)?;
-        }
-        Some(())
+        self.buf.append(s.as_bytes())
     }
     fn bytes(&mut self, s: &[u8]) -> Option<()> {
-        for &b in s {
-            self.push(b)?;
-        }
-        Some(())
+        self.buf.append(s)
     }
     fn u32(&mut self, v: u32) -> Option<()> {
         let mut tmp = [0u8; 10];
@@ -803,17 +921,43 @@ impl<'a> TextWriter<'a> {
     }
 }
 
+
+fn dyn_finish(d: &DynBuf, buf: &mut [u8]) -> i32 {
+    let n = d.len();
+    if !d.copy_to(buf) {
+        return -1;
+    }
+    n as i32
+}
+
 impl Ledger {
     pub fn write_completeness(&self, opts: CompletenessOpts<'_>, buf: &mut [u8]) -> i32 {
+        let mut d = DynBuf::new();
+        let rc = self.write_completeness_dyn(opts, &mut d);
+        if rc < 0 {
+            return -1;
+        }
+        dyn_finish(&d, buf)
+    }
+
+    pub fn write_completeness_heap(&self, opts: CompletenessOpts<'_>) -> (*mut u8, usize) {
+        let mut d = DynBuf::new();
+        if self.write_completeness_dyn(opts, &mut d) < 0 {
+            return (core::ptr::null_mut(), 0);
+        }
+        d.take_flat()
+    }
+
+    fn write_completeness_dyn(&self, opts: CompletenessOpts<'_>, d: &mut DynBuf) -> i32 {
         if opts.json {
-            self.write_completeness_json(opts, buf)
+            self.write_completeness_json(opts, d)
         } else {
-            self.write_completeness_tree(opts, buf)
+            self.write_completeness_tree(opts, d)
         }
     }
 
-    fn write_completeness_tree(&self, opts: CompletenessOpts<'_>, buf: &mut [u8]) -> i32 {
-        let mut w = TextWriter::new(buf);
+    fn write_completeness_tree(&self, opts: CompletenessOpts<'_>, d: &mut DynBuf) -> i32 {
+        let mut w = TextWriter::new(d);
         self.lock.lock();
         let methods = unsafe { &*self.methods.get() };
         let count = unsafe { *self.count.get() };
@@ -1012,8 +1156,8 @@ impl Ledger {
         }
     }
 
-    fn write_completeness_json(&self, opts: CompletenessOpts<'_>, buf: &mut [u8]) -> i32 {
-        let mut w = JsonWriter::new(buf);
+    fn write_completeness_json(&self, opts: CompletenessOpts<'_>, d: &mut DynBuf) -> i32 {
+        let mut w = JsonWriter::new(d);
         self.lock.lock();
         let methods = unsafe { &*self.methods.get() };
         let count = unsafe { *self.count.get() };
@@ -1282,8 +1426,85 @@ mod tests {
     }
 
     #[test]
+    fn ok_muscle_without_rs_py_faces_is_gap() {
+        let l = Ledger::new();
+        let sentinel = 1usize as *const c_void;
+        assert_eq!(
+            l.add_callee(
+                b"m.c",
+                b"f",
+                LANG_C,
+                ROLE_MUSCLE,
+                HONESTY_OK,
+                false,
+                false,
+                b"",
+                b"regmod_entry",
+                sentinel,
+            ),
+            0
+        );
+        assert_eq!(l.gap_count(), 1);
+    }
+
+    #[test]
+    fn trilogy_faces_plus_ok_muscle_clears_gap() {
+        let l = Ledger::new();
+        let sentinel = 1usize as *const c_void;
+        assert_eq!(
+            l.add_callee(
+                b"m.full",
+                b"f",
+                LANG_C,
+                ROLE_MUSCLE,
+                HONESTY_OK,
+                false,
+                false,
+                b"",
+                b"c_muscle",
+                sentinel,
+            ),
+            0
+        );
+        assert_eq!(l.gap_count(), 1);
+        assert_eq!(
+            l.add_callee(
+                b"m.full",
+                b"f",
+                LANG_RS,
+                ROLE_FACE,
+                HONESTY_OK,
+                false,
+                false,
+                b"",
+                b"rs_face",
+                sentinel,
+            ),
+            0
+        );
+        assert_eq!(l.gap_count(), 1);
+        assert_eq!(
+            l.add_callee(
+                b"m.full",
+                b"f",
+                LANG_PY,
+                ROLE_FACE,
+                HONESTY_OK,
+                false,
+                false,
+                b"",
+                b"py_face",
+                sentinel,
+            ),
+            0
+        );
+        assert_eq!(l.gap_count(), 0);
+    }
+
+    #[test]
     fn sync_muscle_without_async_partner_is_gap() {
         let l = Ledger::new();
+        let sentinel = 1usize as *const c_void;
         assert_eq!(
             l.add_callee(
                 b"m.sync",
@@ -1295,12 +1516,12 @@ mod tests {
                 false,
                 b"",
                 b"c_muscle",
-                ptr::null(),
+                sentinel,
             ),
             0
         );
         assert_eq!(l.gap_count(), 1);
-        /* Partner clears the sync/async parity gap; missing langs remain. */
+        /* Partner clears sync/async parity; trilogy faces still required. */
         assert_eq!(
             l.add_callee(
                 b"m.sync",
@@ -1312,36 +1533,41 @@ mod tests {
                 false,
                 b"parkable_async",
                 b"c_muscle",
-                ptr::null(),
+                sentinel,
+            ),
+            0
+        );
+        assert_eq!(
+            l.add_callee(
+                b"m.sync",
+                b"parkable",
+                LANG_RS,
+                ROLE_FACE,
+                HONESTY_OK,
+                false,
+                false,
+                b"",
+                b"rs_face",
+                sentinel,
+            ),
+            0
+        );
+        assert_eq!(
+            l.add_callee(
+                b"m.sync",
+                b"parkable",
+                LANG_PY,
+                ROLE_FACE,
+                HONESTY_OK,
+                false,
+                false,
+                b"",
+                b"py_face",
+                sentinel,
             ),
             0
         );
         assert_eq!(l.method_count(), 1);
-        assert_eq!(l.gap_count(), 1); /* still missing rs/py */
-        let _ = l.add_callee(
-            b"m.sync",
-            b"parkable",
-            LANG_RS,
-            ROLE_FACE,
-            HONESTY_OK,
-            true,
-            true,
-            b"parkable_async",
-            b"rs_face",
-            ptr::null(),
-        );
-        let _ = l.add_callee(
-            b"m.sync",
-            b"parkable",
-            LANG_PY,
-            ROLE_FACE,
-            HONESTY_OK,
-            true,
-            true,
-            b"parkable_async",
-            b"py_face",
-            ptr::null(),
-        );
         assert_eq!(l.gap_count(), 0);
     }
 

@@ -424,8 +424,3 @@ pub fn count() -> usize {
 pub fn mod_at(index: usize) -> Option<&'static RegMod> {
     KERNEL.snapshot().into_iter().flatten().nth(index)
 }
-
-/// Point-in-time walk of every loaded module (lock released before yield).
-pub fn snapshot_iter() -> impl Iterator<Item = &'static RegMod> {
-    KERNEL.snapshot().into_iter().flatten()
-}

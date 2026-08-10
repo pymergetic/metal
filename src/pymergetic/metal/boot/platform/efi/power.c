@@ -16,28 +16,36 @@
 
 static void efi_halt(void)
 {
-  /* QEMU isa-debug-exit when present (same port as BIOS peer). */
-  __asm__ volatile("outw %0, %1" : : "a"((uint16_t)0), "Nd"((uint16_t)0x501));
-  for (;;) {
-    __asm__ volatile("hlt");
-  }
+    for (;;) {
+        __asm__ volatile("cli; hlt");
+    }
 }
 
 static void efi_reset(int32_t reboot)
 {
-  if (g_pm_efi_st != NULL && g_pm_efi_st->RuntimeServices != NULL) {
-    (void)g_pm_efi_st->RuntimeServices->ResetSystem(
-        reboot ? EfiResetCold : EfiResetShutdown, EFI_SUCCESS, 0, NULL);
-  }
-  efi_halt();
+    if (g_pm_efi_st != NULL && g_pm_efi_st->RuntimeServices != NULL) {
+        (void)g_pm_efi_st->RuntimeServices->ResetSystem(
+            reboot ? EfiResetCold : EfiResetShutdown, EFI_SUCCESS, 0, NULL);
+    }
+    efi_halt();
+}
+
+void pm_metal_boot_halt(void)
+{
+    efi_halt();
+}
+
+void pm_metal_boot_reset(int32_t reboot)
+{
+    efi_reset(reboot);
 }
 
 static const pm_metal_boot_power_ops_t g_ops = {
-  .halt = efi_halt,
-  .reset = efi_reset,
+    .halt = efi_halt,
+    .reset = efi_reset,
 };
 
 const pm_metal_boot_power_ops_t *pm_metal_boot_power_ops(void)
 {
-  return &g_ops;
+    return &g_ops;
 }

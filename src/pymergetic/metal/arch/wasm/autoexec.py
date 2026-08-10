@@ -83,10 +83,14 @@ def packages(limit=40, refresh=False):
 
 
 def help():
+    from pymergetic.metal.site import print_net_listeners
+
     print("metal — CDN guests after ready")
     print("  packages()  list lead packs")
     print("  import <guest>")
     print("  import pymergetic.metal.net.microdot / pymergetic.metal.inspect  (frozen CORE)")
     print("  pymergetic.metal.externals.list()  (product stacks)")
-    print("  httpd/sshd listen: firmware seats (browser has no virtio NIC)")
-    print("  quit()/exit(): hint only — reload the page to reset")
+    print_net_listeners()
+    print("  quit()/exit(): hint only — not in a process")
+    print("  Ctrl-D returns to >>> (REPL is the seat)")
+    print("  shutdown()/reboot() unboot; reload the page to revive")

@@ -4,7 +4,11 @@ See docs/ORCHESTRATION.md:
 
 - quit/exit end the **current process** (noop + hint if none)
 - shutdown/reboot are boot shims over ``unboot``
-- REPL is not a process; Ctrl-D leaves the REPL/host face
+- On every Metal seat the REPL *is* the face: Ctrl-D returns to ``>>>``;
+  only shutdown()/reboot() leave (browser: reload to revive).
+
+Note: avoid ``%`` string formatting here — freestanding µPy raises
+``TypeError: unsupported type for operator`` on several ``%`` forms.
 """
 
 
@@ -59,8 +63,10 @@ class Quitter:
         self.name = name
 
     def __repr__(self):
-        return "Use %s() to end a process; shutdown()/reboot() or Ctrl-D to leave the seat" % (
-            self.name,
+        return (
+            "Use "
+            + self.name
+            + "() to end a process; shutdown()/reboot() to leave the seat"
         )
 
     def __call__(self, *args):
@@ -95,7 +101,7 @@ class Quitter:
         if pid != 0:
             if _process_quit(pid, code):
                 return
-            print("%s: process nest unavailable" % self.name)
+            print(self.name + ": process nest unavailable")
             return
 
         if cur:
@@ -103,8 +109,8 @@ class Quitter:
             return
 
         print(
-            "%s: not in a process — use shutdown()/reboot() or Ctrl-D to leave the REPL"
-            % self.name
+            self.name
+            + ": not in a process — use shutdown()/reboot() to leave the seat"
         )
 
 
@@ -122,6 +128,35 @@ def _reboot_builtin(*_args):
             print("reboot: revive / Reset")
         return
     print("reboot: boot.reboot unavailable")
+
+
+def print_net_listeners():
+    """One job: are httpd/sshd listening? If not, how to start.
+
+    Same shape as boot.tree detail: ``:80/:443`` / ``:22`` — or start recipe.
+    """
+    try:
+        import pymergetic.metal.net.asgi as asgi
+
+        if asgi.ready():
+            print("  - httpd: :80/:443")
+        else:
+            print("  - httpd: down — asgi.init(80); asgi.init_tls(443)")
+    except Exception:
+        print("  - httpd: down — asgi.init(80); asgi.init_tls(443)")
+
+    try:
+        import pymergetic.metal.net.ssh as ssh
+
+        port = ssh.listen_port()
+        if port != 0:
+            print("  - sshd: :" + str(port))
+        else:
+            print("  - sshd: down — ssh.autoload(); ssh.listen(22)")
+    except Exception:
+        print(
+            "  - sshd: down — import pymergetic.metal.net.ssh as ssh; ssh.listen(22)"
+        )
 
 
 def install():

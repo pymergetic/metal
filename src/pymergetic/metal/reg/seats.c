@@ -387,6 +387,35 @@ int32_t pm_metal_reg_seats_json(char *buf, uint32_t buf_len)
 #undef PUTS
 }
 
+int32_t pm_metal_reg_seats_json_heap(char **out_buf)
+{
+    /* Grow by doubling via metal heap — seats dump is small but unbounded. */
+    uint32_t cap = 512;
+    char *buf;
+    int32_t n;
+
+    if (out_buf == NULL) {
+        return -1;
+    }
+    *out_buf = NULL;
+    for (;;) {
+        buf = (char *)pm_metal_mem_alloc(cap);
+        if (buf == NULL) {
+            return -1;
+        }
+        n = pm_metal_reg_seats_json(buf, cap);
+        if (n >= 0) {
+            *out_buf = buf;
+            return n;
+        }
+        pm_metal_mem_free(buf);
+        if (cap >= (1u << 20)) {
+            return -1;
+        }
+        cap *= 2u;
+    }
+}
+
 static void reg_puts(const char *s)
 {
 #if defined(PM_METAL_CFG_FW_BROWSER) && PM_METAL_CFG_FW_BROWSER

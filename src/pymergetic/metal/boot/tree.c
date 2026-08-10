@@ -305,7 +305,7 @@ void pm_metal_boot_rainbow_metalpython(const char *version, const char *cpu)
 
     pm_metal_util_ascii_log_rainbow("MetalPython");
     /* Same shape as Metal cyan stamp under the first FIGlet. */
-    snprintf(line, sizeof(line), "\033[35m%s @ %s\033[0m", ver, c);
+    snprintf(line, sizeof(line), "\033[35mversion %s @ %s\033[0m", ver, c);
     pm_metal_boot_emit(line);
 }
 
@@ -315,11 +315,11 @@ void pm_metal_boot_dead_art(const char *version, const char *cpu)
     const char *ver = version && version[0] ? version : PM_METAL_VERSION;
     const char *c = cpu && cpu[0] ? cpu : "cpu";
 
-    /* Fat sentence — not FIGlet; reads as the dead stamp under `-- dead`. */
+    /* Version first, then the dead sentence (power-off follows after delay). */
     pm_metal_boot_emit("");
-    pm_metal_boot_emit("\033[1;31m*** SEAT DEAD — halted. Reset / reboot to boot again. ***\033[0m");
-    snprintf(line, sizeof(line), "\033[2;31m%s @ %s\033[0m", ver, c);
+    snprintf(line, sizeof(line), "\033[1;31mversion %s @ %s\033[0m", ver, c);
     pm_metal_boot_emit(line);
+    pm_metal_boot_emit("\033[1;31m*** SEAT DEAD — power off in 2s ***\033[0m");
 }
 
 int pm_metal_boot_tree_print(void)

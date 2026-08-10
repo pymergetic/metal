@@ -23,6 +23,7 @@
 #include "pymergetic/metal/dev/acpi/__init__.h"
 #include "pymergetic/metal/dev/serial.h"
 #include "pymergetic/metal/mem.h"
+#include "pymergetic/metal/net/asgi/__init__.h"
 #include "pymergetic/metal/net/dhcp/__init__.h"
 #include "pymergetic/metal/net/ip/__init__.h"
 #include "pymergetic/metal/net/pump/__init__.h"
@@ -33,6 +34,7 @@
 #include "gfx_bringup.h"
 #include "metal_heap_buf.h"
 #include "nic_bringup.h"
+#include "services.h"
 
 static uint8_t g_console_ring[8 * 1024];
 static uint8_t g_metal_heap[PM_METAL_PORT_HEAP_BYTES] __attribute__((aligned(4096)));
@@ -185,6 +187,11 @@ static int boot_wasm_sim(void)
             home ? PM_METAL_BOOT_TREE_OK : PM_METAL_BOOT_TREE_DIM,
             home ? home : "unset");
     }
+    /* Seat policy: wasm never auto-listens — hint only (not a NIC gate). */
+    pm_metal_boot_tree_item("httpd", PM_METAL_BOOT_TREE_DIM,
+                            "start: asgi.init(80); asgi.init_tls(443)");
+    pm_metal_boot_tree_item("sshd", PM_METAL_BOOT_TREE_DIM,
+                            "start: ssh.listen(22)");
     pm_metal_boot_tree_leave();
 
     pm_metal_boot_tree_enter("async");
@@ -335,12 +342,24 @@ static int boot_native(void)
                 home ? home : "unset");
         }
     }
-    if (pm_metal_net_ssh_autoload() != 0) {
-        pm_metal_boot_tree_item("ssh", PM_METAL_BOOT_TREE_FAIL, "init");
-        pm_metal_boot_tree_leave();
-        return -1;
+    /* Seat policy: FW auto-starts httpd+sshd (not METAL_LIVE-gated, not NIC-gated). */
+    (void)pm_metal_net_services_start();
+    if (pm_metal_asgi_ready()) {
+        pm_metal_boot_tree_item("httpd", PM_METAL_BOOT_TREE_OK, ":80/:443");
+    } else {
+        pm_metal_boot_tree_item("httpd", PM_METAL_BOOT_TREE_FAIL,
+                                "down — asgi.init(80); asgi.init_tls(443)");
     }
-    pm_metal_boot_tree_item("ssh", PM_METAL_BOOT_TREE_OK, "autoload");
+    {
+        uint32_t sport = pm_metal_net_ssh_listen_port();
+        if (sport != 0u) {
+            snprintf(detail, sizeof(detail), ":%u", (unsigned)sport);
+            pm_metal_boot_tree_item("sshd", PM_METAL_BOOT_TREE_OK, detail);
+        } else {
+            pm_metal_boot_tree_item("sshd", PM_METAL_BOOT_TREE_FAIL,
+                                    "down — ssh.autoload(); ssh.listen(22)");
+        }
+    }
     pm_metal_boot_tree_leave();
 
     pm_metal_boot_tree_enter("async");
@@ -362,19 +381,6 @@ static int boot_native(void)
 
     pm_metal_boot_tree_ready_ok();
     pm_metal_boot_rainbow_metalpython(PM_METAL_VERSION, pm_metal_hal_cpu_label());
-
-#if defined(METAL_LIVE) && METAL_LIVE
-    {
-        extern int32_t pm_metal_net_services_start(void);
-        extern void uart_puts(const char *s);
-        uart_puts("services...\n");
-        if (pm_metal_net_services_start() != 0) {
-            uart_puts("services fail\n");
-        } else {
-            uart_puts("live http\n");
-        }
-    }
-#endif
     return 0;
 }
 

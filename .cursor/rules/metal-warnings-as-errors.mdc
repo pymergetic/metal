@@ -24,6 +24,23 @@ warnings as build failures.
 2. If warnings appear: **stop**, fix root cause, rebuild, prove clean.
 3. Do not say “OK” / mark todos complete while warnings remain in scope.
 
+## Polyglot: three layers of “used”
+
+Do not confuse rustc `dead_code`, ledger gaps, and runtime callers.
+
+| Layer | Question | Soft? |
+|-------|----------|-------|
+| **Ledger gap** | Are **C + RS + Py faces** present (plus OK muscle / honesty / sync partner)? | **No** — missing language face = gap. |
+| **rustc `dead_code`** | Reachable in this compiled TU/crate? | Private rot = error. Public / `#[no_mangle]` / named in `register_symbols` = used. |
+| **Runtime call** | Did someone invoke via that language? | **Yes** — unused caller is normal; do not delete faces for it. |
+
+Rules:
+
+- Naming a fn in `register_symbols` / RegExport publish makes rustc see it as used; it does **not** clear a missing-face gap.
+- Fix `gaps=N` by publishing missing faces into the ledger — never by weakening `method_is_gap`.
+- Host vs freestanding: compile only what the target owns (`cfg`); do not `#[allow(dead_code)]` optional faces.
+- Never delete a trilogy face to silence rustc; wire it into the register table or cfg the whole export out of that image.
+
 ## Examples
 
 ```text
@@ -35,4 +52,7 @@ GOOD: use size_t indices / cast byte counts correctly
 
 BAD:  cargo test green while lib emits 17 dead_code warnings you introduced
 GOOD: fix or gate dead code; do not grow #![allow(dead_code)]
+
+BAD:  redefine gap so missing RS/Py faces look green
+GOOD: keep trilogy in method_is_gap; publish the faces
 ```

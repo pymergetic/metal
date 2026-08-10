@@ -120,6 +120,24 @@ uint64_t pm_metal_time_mono_us(void)
     return pm_metal_async_mono_us();
 }
 
+void pm_metal_time_sleep_us(uint64_t us)
+{
+    /* Chunk so idle pump / async can run during long waits (e.g. unboot 2s). */
+    while (us > 0ull) {
+        uint64_t chunk = us > 1000ull ? 1000ull : us;
+
+        pm_metal_board_sleep_us(chunk);
+        pm_metal_board_time_advance_us(chunk);
+        us -= chunk;
+        (void)pm_metal_async_run_poll();
+    }
+}
+
+void pm_metal_time_sleep_ms(uint32_t ms)
+{
+    pm_metal_time_sleep_us((uint64_t)ms * 1000ull);
+}
+
 static int ready_push_prio(uint32_t ri, uint32_t h, uint8_t prio)
 {
     runner_t *r;

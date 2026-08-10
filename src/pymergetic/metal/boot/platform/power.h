@@ -1,8 +1,8 @@
 /*
- * Halt / reset (host-only).
+ * Halt / reset — platform OWN (bios/efi power.c).
  *
- * impl: bios - boot/platform/bios/power.c
- * impl: efi  - boot/platform/efi/power.c
+ * reboot == 0 → power off (ACPI S5 / EFI ResetShutdown)
+ * reboot != 0 → restart (KBC / EFI ResetCold)
  */
 #ifndef PYMERGETIC_METAL_BOOT_POWER_H_
 #define PYMERGETIC_METAL_BOOT_POWER_H_
@@ -16,26 +16,17 @@ extern "C" {
 #if !defined(__wasm__)
 
 typedef struct pm_metal_boot_power_ops {
-  /** Stop the CPU. May not return. */
-  void (*halt)(void);
-  /**
-   * reboot == 0: power off if possible; non-zero: restart.
-   * Does not return.
-   */
-  void (*reset)(int32_t reboot);
+    void (*halt)(void);
+    void (*reset)(int32_t reboot);
 } pm_metal_boot_power_ops_t;
 
 const pm_metal_boot_power_ops_t *pm_metal_boot_power_ops(void);
 
-static inline void pm_metal_boot_halt(void)
-{
-  pm_metal_boot_power_ops()->halt();
-}
+/** Never returns. */
+void pm_metal_boot_halt(void);
 
-static inline void pm_metal_boot_reset(int32_t reboot)
-{
-  pm_metal_boot_power_ops()->reset(reboot);
-}
+/** Never returns on success. reboot: 0=off, nonzero=restart. */
+void pm_metal_boot_reset(int32_t reboot);
 
 #endif
 

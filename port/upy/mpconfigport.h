@@ -5,6 +5,12 @@
 
 #define MICROPY_CONFIG_ROM_LEVEL (MICROPY_CONFIG_ROM_LEVEL_MINIMUM)
 
+/* site.install() binds quit/exit/shutdown/reboot onto builtins. */
+#define MICROPY_CAN_OVERRIDE_BUILTINS     (1)
+
+/* Seat REPL is the face — Ctrl-D must not exit into void. */
+#define MICROPY_METAL_REPL_IS_SEAT        (1)
+
 #define MICROPY_ENABLE_COMPILER           (1)
 #define MICROPY_ENABLE_GC                 (1)
 #define MICROPY_HELPER_REPL               (1)

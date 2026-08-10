@@ -1,6 +1,12 @@
 # Match product C freestanding: static kernel code model, no SSE.
+# Warnings are errors (see .cursor/rules/metal-warnings-as-errors.mdc).
+
+[build]
+rustflags = ["-Dwarnings"]
+
 [target.x86_64-unknown-none]
 rustflags = [
+    "-Dwarnings",
     "-C", "relocation-model=static",
     "-C", "code-model=kernel",
     "-C", "target-feature=-sse,-sse2,-avx,-avx2",
@@ -8,16 +14,19 @@ rustflags = [
 
 [target.x86_64-unknown-uefi]
 rustflags = [
+    "-Dwarnings",
     "-C", "target-feature=-sse,-sse2,-avx,-avx2",
 ]
 
 [target.i686-unknown-none]
 rustflags = [
+    "-Dwarnings",
     "-C", "relocation-model=static",
     "-C", "target-feature=-mmx,-sse,-sse2,-avx,-avx2",
 ]
 
 [target.i686-unknown-uefi]
 rustflags = [
+    "-Dwarnings",
     "-C", "target-feature=-mmx,-sse,-sse2,-avx,-avx2",
 ]

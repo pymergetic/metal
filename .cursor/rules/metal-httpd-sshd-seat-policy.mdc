@@ -1,0 +1,26 @@
+---
+description: When httpd/sshd auto-start vs hint-only (seat policy)
+alwaysApply: true
+---
+
+# httpd / sshd start policy (seat, not NIC)
+
+## Law
+
+| Seat | Default |
+|------|---------|
+| **x86 / x86_64 BIOS+UEFI** | **Auto-start** `httpd` (`:80`/`:443`) + `sshd` (`:22`) during product boot |
+| **unix / wasm** | **Do not auto-listen** — boot tree + autoexec show **how to start** only |
+
+This is **seat policy**. It is **not** gated on NIC presence, virtio, or `METAL_LIVE`.
+
+## Boot tree names
+
+- Leaves are **`httpd`** and **`sshd`** (daemon names), never `ssh` / `autoload`.
+- Detail is listen truth: `:22`, `:80/:443`, or `down — <start recipe>`.
+- Crypto `ssh.autoload()` is an implementation step inside start — not a tree leaf.
+
+## Intel surfaces
+
+- Boot tree and REPL autoexec answer only: **running?** else **how to start?**
+- Never print "C live", `services_start`, or "no NIC" as the reason for skip.

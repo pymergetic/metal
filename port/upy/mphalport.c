@@ -5,12 +5,9 @@
 #include "py/runtime.h"
 
 #include "mphalport.h"
-#include "pymergetic/metal/async/board_time.h"
+#include "pymergetic/metal/async/time.h"
 #include "pymergetic/metal/console.h"
 #include "pymergetic/metal/net/ip/__init__.h"
-
-/* Rough TSC-free tick: busy-loop calibrated loosely for QEMU smoke only. */
-static volatile uint32_t s_ticks_ms;
 
 uintptr_t mp_hal_stdio_poll(uintptr_t poll_flags) {
     (void)poll_flags;
@@ -30,30 +27,22 @@ mp_uint_t mp_hal_stdout_tx_strn(const char *str, size_t len) {
 }
 
 mp_uint_t mp_hal_ticks_ms(void) {
-    return s_ticks_ms;
+    return (mp_uint_t)pm_metal_time_mono_us() / 1000u;
 }
 
 mp_uint_t mp_hal_ticks_us(void) {
-    return s_ticks_ms * 1000u;
+    return (mp_uint_t)pm_metal_time_mono_us();
 }
 
 void mp_hal_delay_ms(mp_uint_t ms) {
-    /* Busy wait + net poll so blocking modlwip sockets make progress. */
-    for (mp_uint_t i = 0; i < ms; i++) {
-        for (volatile uint32_t s = 0; s < 50000u; s++) {
-        }
-        s_ticks_ms++;
-        pm_metal_board_time_advance_us(1000ull);
-        pm_metal_net_ip_poll();
-    }
+    pm_metal_time_sleep_ms((uint32_t)ms);
+    pm_metal_net_ip_poll();
 }
 
 void mp_hal_delay_us(mp_uint_t us) {
-    for (volatile uint32_t s = 0; s < us * 10u; s++) {
-    }
-    pm_metal_board_time_advance_us((uint64_t)us);
+    pm_metal_time_sleep_us((uint64_t)us);
 }
 
 mp_uint_t mp_hal_ticks_cpu(void) {
-    return s_ticks_ms;
+    return (mp_uint_t)pm_metal_time_mono_us();
 }

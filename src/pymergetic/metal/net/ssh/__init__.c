@@ -14,6 +14,7 @@
 
 #include "pymergetic/metal/net/ip/sock.h"
 #include "pymergetic/metal/process/__init__.h"
+#include <pymergetic/metal/reg/mod.h>
 
 typedef enum {
     SSH_ST_IDLE = 0,
@@ -712,4 +713,64 @@ void pm_metal_net_ssh_banner_reset(void)
     pm_metal_net_ssh_pkt_bind_sock(PM_METAL_NET_IP_SOCK_INVALID);
 }
 
-/* bind_reg / reg_load provided by Rust face (RegModStatic). */
+/* --- RegMod declare (C owns; indexes stay in this TU) ---------------- */
+
+enum {
+    PM_METAL_NET_SSH_EXPORT_LISTEN = 0,
+    PM_METAL_NET_SSH_EXPORT_CLOSE,
+    PM_METAL_NET_SSH_EXPORT_AUTOLOAD,
+    PM_METAL_NET_SSH_EXPORT_STATUS,
+};
+
+enum {
+    PM_METAL_NET_SSH_IMPORT_YIELD = 0,
+};
+
+static pm_metal_reg_export_t ssh_exports[] = {
+    PM_METAL_REG_EXPORT(listen),
+    PM_METAL_REG_EXPORT(close),
+    PM_METAL_REG_EXPORT(autoload),
+    PM_METAL_REG_EXPORT(status),
+};
+
+static pm_metal_reg_import_t ssh_imports[] = {
+    [PM_METAL_NET_SSH_IMPORT_YIELD] = {
+        .module = "pymergetic.metal.async",
+        .func = "yield",
+    },
+};
+
+static int32_t ssh_register_symbols(void *ctx)
+{
+    (void)ctx;
+    pm_metal_reg_export_publish(&ssh_exports[PM_METAL_NET_SSH_EXPORT_LISTEN],
+        (void *)pm_metal_net_ssh_listen);
+    pm_metal_reg_export_publish(&ssh_exports[PM_METAL_NET_SSH_EXPORT_CLOSE],
+        (void *)pm_metal_net_ssh_close);
+    pm_metal_reg_export_publish(&ssh_exports[PM_METAL_NET_SSH_EXPORT_AUTOLOAD],
+        (void *)pm_metal_net_ssh_autoload);
+    pm_metal_reg_export_publish(&ssh_exports[PM_METAL_NET_SSH_EXPORT_STATUS],
+        (void *)pm_metal_net_ssh_status);
+    return 0;
+}
+
+static pm_metal_reg_mod_desc_t ssh_desc = {
+    .name = "pymergetic.metal.net.ssh",
+    .exports = ssh_exports,
+    .n_exports = (uint32_t)(sizeof(ssh_exports) / sizeof(ssh_exports[0])),
+    .imports = ssh_imports,
+    .n_imports = (uint32_t)(sizeof(ssh_imports) / sizeof(ssh_imports[0])),
+    .register_symbols = ssh_register_symbols,
+    .ctx = NULL,
+    .lang = PM_METAL_REG_LANG_C,
+};
+
+int32_t pm_metal_net_ssh_reg_load(void)
+{
+    return pm_metal_reg_mod_load_c(&ssh_desc);
+}
+
+int32_t pm_metal_net_ssh_bind_reg(void)
+{
+    return pm_metal_net_ssh_reg_load();
+}

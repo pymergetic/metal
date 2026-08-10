@@ -1,30 +1,8 @@
 //! Cross-lang registry bus — two tiers, both keyed by full module names
 //! like `pymergetic.metal.fs.open` (Locked #2).
-//!
-//! - **Dynamic/late** (`_table.rs`): a small flat linear-scan table for
-//!   callers that only know their (module, func) pair at runtime and
-//!   have no per-load `RegMod` of their own -- Python attach (see
-//!   `pm_metal_reg_register`'s real callers in `py/`). `wasm`'s own
-//!   module registration uses the static tier below instead (each
-//!   loaded pack gets its own `RegMod`, same shape as a compile-time
-//!   module).
-//! - **Static per-module lifecycle** (`_entry.rs` / `_declare.rs` /
-//!   `_kernel.rs`): `on_load` -> `register_symbols` -> `connect_symbols`
-//!   -> ... -> `deregister_symbols` -> `on_unload`. No per-entry
-//!   refcount: `unload` quiesces every async runner (parks every
-//!   dispatch loop at its own next checkpoint, see
-//!   `pymergetic_metal_async::quiesce`) before withdrawing anything, so
-//!   there is no concurrent caller to protect against, fixed provider or
-//!   unloadable one alike. Only genuinely `unloadable` providers (wasm,
-//!   Python) publish through here; `pymergetic.metal` itself is the
-//!   first module loaded this way (kernel is kernel: permanent, first in
-//!   boot order, but architecturally just another module).
-//!
-//! Floor modules (except the mem/reg/async/kernel spine) publish through
-//! the static lifecycle and are consumed via always-proxy faces -- see
-//! `docs/definitions/module.md` "Two face shapes".
+#![deny(warnings)]
 #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
-#![allow(dead_code, non_camel_case_types)]
+#![allow(non_camel_case_types)]
 
 #[path = "_bind.rs"]
 mod bind;
@@ -34,6 +12,8 @@ mod bulk;
 mod c_desc;
 #[path = "_declare.rs"]
 mod declare;
+#[path = "_dynbuf.rs"]
+mod dynbuf;
 #[path = "_entry.rs"]
 mod entry;
 #[path = "_floor.rs"]
@@ -62,7 +42,7 @@ pub use bulk::{register_rows, register_rows_bytes};
 pub use declare::{ImportRow, RegImport, RegModStatic};
 #[allow(deprecated)]
 pub use entry::{RegEntry, RegExport};
-pub use floor::{publish_entries, publish_exports};
+pub use floor::{publish_exports, publish_exports_meta};
 pub use kernel::{find_mod, HookFn, RegMod};
 pub use ledger::{
     HONESTY_INCOMPLETE, HONESTY_OK, HONESTY_STUB, LANG_C, LANG_PY, LANG_RS, ROLE_FACE, ROLE_MUSCLE,
@@ -280,14 +260,10 @@ pub unsafe extern "C" fn pm_metal_reg_mod_at(
     if name_out.is_null() || name_cap == 0 {
         return -1;
     }
-    let mut n = 0u32;
-    for m in kernel::snapshot_iter() {
-        if n == index {
-            return write_cstr(name_out, name_cap, m.name);
-        }
-        n += 1;
+    match kernel::mod_at(index as usize) {
+        Some(m) => write_cstr(name_out, name_cap, m.name),
+        None => -1,
     }
-    -1
 }
 
 /// How many export slots a loaded module declares (0 if not loaded).
@@ -473,6 +449,93 @@ pub unsafe extern "C" fn pm_metal_reg_ledger_method_json(
     };
     let slice = core::slice::from_raw_parts_mut(buf, cap as usize);
     ledger::LEDGER.write_method_json(m, f, slice)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_reg_ledger_json_heap(out_buf: *mut *mut u8) -> i32 {
+    if out_buf.is_null() {
+        return -1;
+    }
+    let (p, n) = ledger::LEDGER.write_json_heap();
+    if p.is_null() && n > 0 {
+        return -1;
+    }
+    *out_buf = p;
+    n as i32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_reg_ledger_module_json_heap(
+    full_module: *const u8,
+    out_buf: *mut *mut u8,
+) -> i32 {
+    if out_buf.is_null() {
+        return -1;
+    }
+    let Some(m) = cstr_bytes(full_module, MODULE_MAX) else {
+        return -1;
+    };
+    let (p, n) = ledger::LEDGER.write_module_json_heap(m);
+    if p.is_null() && n > 0 {
+        return -1;
+    }
+    if p.is_null() {
+        return -1;
+    }
+    *out_buf = p;
+    n as i32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_reg_ledger_method_json_heap(
+    full_module: *const u8,
+    func: *const u8,
+    out_buf: *mut *mut u8,
+) -> i32 {
+    if out_buf.is_null() {
+        return -1;
+    }
+    let Some(m) = cstr_bytes(full_module, MODULE_MAX) else {
+        return -1;
+    };
+    let Some(f) = cstr_bytes(func, FUNC_MAX) else {
+        return -1;
+    };
+    let (p, n) = ledger::LEDGER.write_method_json_heap(m, f);
+    if p.is_null() {
+        return -1;
+    }
+    *out_buf = p;
+    n as i32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_metal_reg_ledger_completeness_heap(
+    module: *const u8,
+    gaps_only: i32,
+    detail: i32,
+    fmt_json: i32,
+    out_buf: *mut *mut u8,
+) -> i32 {
+    if out_buf.is_null() {
+        return -1;
+    }
+    let filter = if module.is_null() {
+        None
+    } else {
+        cstr_bytes(module, MODULE_MAX).filter(|m| !m.is_empty())
+    };
+    let (p, n) = ledger::LEDGER.write_completeness_heap(ledger::CompletenessOpts {
+        module: filter,
+        gaps_only: gaps_only != 0,
+        detail: detail != 0,
+        json: fmt_json != 0,
+    });
+    if p.is_null() && n > 0 {
+        return -1;
+    }
+    *out_buf = p;
+    n as i32
 }
 
 /// Completeness tree/JSON rollup. `module` NULL or empty = all modules.

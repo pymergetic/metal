@@ -13,7 +13,7 @@ void pm_metal_live_http(void)
     char line[48];
     int32_t rc;
 
-    /* Boot may already have started services under METAL_LIVE. */
+    /* Boot already auto-starts on FW; LIVE loop only polls if still down. */
     if (!pm_metal_asgi_ready()) {
         rc = pm_metal_net_services_start();
         if (rc != 0) {

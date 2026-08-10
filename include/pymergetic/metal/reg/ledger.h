@@ -42,11 +42,25 @@ int32_t pm_metal_reg_ledger_json(uint8_t *buf, uint32_t cap);
 int32_t pm_metal_reg_ledger_module_json(const uint8_t *full_module, uint8_t *buf, uint32_t cap);
 int32_t pm_metal_reg_ledger_method_json(const uint8_t *full_module, const uint8_t *func,
                                         uint8_t *buf, uint32_t cap);
+
+/**
+ * Heap variants — grow linked chunks while writing, then flatten once.
+ * On success: *out_buf is pm_metal_mem_alloc'd; caller must pm_metal_mem_free.
+ * Returns byte length or -1 (*out_buf left unchanged / NULL).
+ */
+int32_t pm_metal_reg_ledger_json_heap(uint8_t **out_buf);
+int32_t pm_metal_reg_ledger_module_json_heap(const uint8_t *full_module, uint8_t **out_buf);
+int32_t pm_metal_reg_ledger_method_json_heap(const uint8_t *full_module, const uint8_t *func,
+                                             uint8_t **out_buf);
+int32_t pm_metal_reg_ledger_completeness_heap(const uint8_t *module, int32_t gaps_only,
+                                              int32_t detail, int32_t fmt_json, uint8_t **out_buf);
+
 /// Deprecated no-op — ledger filled by RegExport publish.
 int32_t pm_metal_reg_ledger_seed_pilot(void);
 
 /**
- * Completeness rollup (tree text or JSON).
+ * Completeness rollup (tree text or JSON) into a caller buffer.
+ * Prefer *_heap for µPy faces (no oversized stack scratch).
  * module: optional NUL-terminated filter (NULL/empty = all).
  * gaps_only / detail: nonzero = true.
  * fmt_json: 0 = tree text, nonzero = JSON.

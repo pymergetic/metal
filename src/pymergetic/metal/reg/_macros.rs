@@ -1,4 +1,8 @@
-//! Named `reg_mod!` declare surface — indexes stay an implementation detail.
+//! Named `reg_mod!` declare sugar — optional.
+//!
+//! Hand form (preferred parallel to C): module-local `Export` / `Import`
+//! enums as named indexes; see `.cursor/rules/metal-regmod-slot-enums.mdc`
+//! and `net/ssh` as reference. Outside the muscle: string names only.
 
 /// Declare a module namespace with named export/import handles over
 /// [`crate::RegModStatic`].

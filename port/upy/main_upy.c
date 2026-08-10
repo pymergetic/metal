@@ -18,10 +18,9 @@
 
 #include "mphalport.h"
 #include "pymergetic/metal/boot/product.h"
+#include "pymergetic/metal/boot/unboot.h"
 #include "pymergetic/metal/reg/mod.h"
 #include "pymergetic/metal/reg/seats.h"
-
-#include "pm_upy/obj/call.h"
 
 #ifndef METAL_LIVE
 #define METAL_LIVE 0
@@ -44,12 +43,48 @@ static char heap[MICROPY_HEAP_SIZE] __attribute__((aligned(16)));
 
 static char *stack_top;
 
-static void call_upy_fn0(const char *dotted)
+/* Boot-time dotted call without wasmmod handles (silent miss broke shutdown()). */
+static int call_upy_fn0(const char *dotted)
 {
-    uint32_t h = pm_upy_fn_resolve(dotted);
-    if (h != 0) {
-        (void)pm_upy_fn_call(h, 0, NULL);
+    const char *last_dot = NULL;
+    const char *p;
+    size_t mod_len;
+    char mod_buf[160];
+    nlr_buf_t nlr;
+
+    if (dotted == NULL || dotted[0] == '\0') {
+        return -1;
     }
+    for (p = dotted; *p != '\0'; p++) {
+        if (*p == '.') {
+            last_dot = p;
+        }
+    }
+    if (last_dot == NULL || last_dot == dotted || last_dot[1] == '\0') {
+        uart_puts("upy call: bad name\n");
+        return -1;
+    }
+    mod_len = (size_t)(last_dot - dotted);
+    if (mod_len >= sizeof(mod_buf)) {
+        uart_puts("upy call: name too long\n");
+        return -1;
+    }
+    memcpy(mod_buf, dotted, mod_len);
+    mod_buf[mod_len] = '\0';
+
+    if (nlr_push(&nlr) == 0) {
+        mp_obj_t mod = mp_import_name(
+            qstr_from_str(mod_buf), mp_const_true, MP_OBJ_NEW_SMALL_INT(0));
+        mp_obj_t fun = mp_load_attr(mod, qstr_from_str(last_dot + 1));
+        (void)mp_call_function_0(fun);
+        nlr_pop();
+        return 0;
+    }
+    uart_puts("upy call fail: ");
+    uart_puts(dotted);
+    uart_puts("\n");
+    mp_obj_print_exception(&mp_plat_print, MP_OBJ_FROM_PTR(nlr.ret_val));
+    return -1;
 }
 
 void mp_metal_upy_run(int smoke) {
@@ -108,14 +143,26 @@ void mp_metal_upy_run(int smoke) {
     call_upy_fn0("pymergetic.wasmmod.install_hook");
 #endif
 #if MICROPY_MODULE_FROZEN_MPY
-    /* arch.autoexec() installs quit/exit then runs the seat epilogue. */
-    call_upy_fn0("pymergetic.metal.arch.autoexec");
+    /* quit/exit/shutdown/reboot — install even if arch epilogue fails. */
+    (void)call_upy_fn0("pymergetic.metal.site.install");
+    /* Seat epilogue (banner / hints). */
+    (void)call_upy_fn0("pymergetic.metal.arch.autoexec");
 #endif
-    pyexec_friendly_repl();
+    /* Firmware seat: REPL is the face. Ctrl-D must not fall into void —
+     * re-enter >>>. Leave the seat with shutdown()/reboot() only. */
+    for (;;) {
+        if (pm_metal_boot_is_dead()) {
+            for (;;) {
+#if defined(__x86_64__) || defined(__i386__) || defined(__i686__)
+                __asm__ volatile("cli; hlt");
+#endif
+            }
+        }
+        (void)pyexec_friendly_repl();
+    }
 #else
     uart_puts("upy: compiler disabled\n");
 #endif
-    mp_deinit();
 }
 
 #if MICROPY_ENABLE_GC

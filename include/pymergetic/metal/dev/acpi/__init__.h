@@ -23,6 +23,13 @@ uint32_t pm_metal_dev_acpi_apic_id(uint32_t cpu_index);
 /* MADT Local APIC MMIO base (default 0xFEE00000). */
 uint64_t pm_metal_dev_acpi_lapic_base(void);
 
+/**
+ * Command ACPI S5 (soft off) via FADT PM1a_CNT + \\_S5_ SLP_TYPa.
+ * Returns 0 if the write was issued (may not return on success).
+ * <0 if tables / ports unavailable — caller may fall back.
+ */
+int32_t pm_metal_dev_acpi_power_off(void);
+
 #ifdef __cplusplus
 }
 #endif

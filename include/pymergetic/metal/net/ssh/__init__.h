@@ -37,7 +37,7 @@ int32_t pm_metal_net_ssh_banner_sent(void);
 void pm_metal_net_ssh_banner_reset(void);
 
 int32_t pm_metal_net_ssh_bind_reg(void);
-/** Load RegModStatic into the kernel ring (idempotent). */
+/** Load C RegMod declare into the kernel ring (idempotent). */
 int32_t pm_metal_net_ssh_reg_load(void);
 
 #ifdef __cplusplus

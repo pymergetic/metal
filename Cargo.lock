@@ -218,7 +218,6 @@ dependencies = [
 name = "pymergetic_metal_net_ssh"
 version = "0.1.0"
 dependencies = [
- "pymergetic_metal_reg",
  "pymergetic_metal_rt",
 ]
 

@@ -88,6 +88,12 @@ int32_t pm_metal_reg_seat_at(uint32_t index, char *path_buf, uint32_t path_cap, 
 int32_t pm_metal_reg_seats_json(char *buf, uint32_t buf_len);
 
 /**
+ * Heap seats JSON — linked growth then flatten. Caller pm_metal_mem_free(*out_buf).
+ * Returns length or -1.
+ */
+int32_t pm_metal_reg_seats_json_heap(char **out_buf);
+
+/**
  * Walk ring: custom test, or default import proof (skipped for TEST_ONLY).
  * Prints `reg seats ok N` / `upy ok` on success.
  */

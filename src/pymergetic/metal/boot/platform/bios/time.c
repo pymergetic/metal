@@ -30,6 +30,12 @@ static uint64_t rdtsc(void)
 
 static void pit_delay_ms(uint32_t ms)
 {
+  /* Prefer shared board sleep when linked (port product). */
+  extern void pm_metal_board_sleep_us(uint64_t us) __attribute__((weak));
+  if (pm_metal_board_sleep_us) {
+    pm_metal_board_sleep_us((uint64_t)ms * 1000ull);
+    return;
+  }
   /* Channel 2, mode 0; gate via port 0x61. Bounded — OUT2 may stick. */
   while (ms--) {
     uint32_t count = 1193u; /* ~1ms at 1.193182 MHz */

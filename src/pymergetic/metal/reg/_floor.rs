@@ -12,12 +12,6 @@ pub fn publish_exports(exports: &[RegExport], ptrs: &[*const c_void]) -> i32 {
     publish_exports_meta(b"", exports, ptrs)
 }
 
-/// Old name — prefer [`publish_exports`].
-#[inline]
-pub fn publish_entries(exports: &[RegExport], ptrs: &[*const c_void]) -> i32 {
-    publish_exports(exports, ptrs)
-}
-
 /// Like [`publish_exports`], and records cold-ledger callees under `module`.
 pub fn publish_exports_meta(
     module: &[u8],
@@ -43,14 +37,4 @@ pub fn publish_exports_meta(
         }
     }
     0
-}
-
-/// Old name — prefer [`publish_exports_meta`].
-#[inline]
-pub fn publish_entries_meta(
-    module: &[u8],
-    exports: &[RegExport],
-    ptrs: &[*const c_void],
-) -> i32 {
-    publish_exports_meta(module, exports, ptrs)
 }

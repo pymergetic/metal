@@ -5,6 +5,7 @@
 #include <pymergetic/metal/boot/__init__.h>
 #include <pymergetic/metal/boot/tree.h>
 #include <pymergetic/metal/process/__init__.h>
+#include <pymergetic/metal/async/time.h>
 
 #include <stdio.h>
 
@@ -59,9 +60,13 @@ static pm_metal_boot_seat_power_fn g_shutdown_hook;
 static pm_metal_boot_seat_power_fn g_reboot_hook;
 static int32_t g_dead;
 
-/* Optional: board power muscle (bios/efi power.c). Weak when not linked. */
+#if defined(PM_METAL_CFG_ARCH_WASM) && PM_METAL_CFG_ARCH_WASM
+/* Browser: no platform power muscle. */
+#else
+/* Strong defs in bios/efi power.c when linked; weak park if not. */
 void pm_metal_boot_halt(void) __attribute__((weak));
 void pm_metal_boot_reset(int32_t reboot) __attribute__((weak));
+#endif
 
 void pm_metal_boot_set_shutdown_hook(pm_metal_boot_seat_power_fn fn)
 {
@@ -152,48 +157,110 @@ int32_t pm_metal_boot_unboot(void)
     return 0;
 }
 
+static void seat_park_forever(void)
+{
+#if defined(PM_METAL_CFG_ARCH_WASM) && PM_METAL_CFG_ARCH_WASM
+    /* Browser soft-dead: return to JS; reload revives. */
+    return;
+#else
+    for (;;) {
+#if defined(__x86_64__) || defined(__i386__) || defined(__i686__)
+        __asm__ volatile("cli; hlt");
+#else
+        /* spin */
+#endif
+    }
+#endif
+}
+
+#if !(defined(PM_METAL_CFG_ARCH_WASM) && PM_METAL_CFG_ARCH_WASM)
+static void seat_kbc_restart(void)
+{
+    uint32_t spins;
+    uint8_t st;
+
+    for (spins = 0; spins < 100000u; spins++) {
+        __asm__ volatile("inb %1, %0" : "=a"(st) : "Nd"((uint16_t)0x64));
+        if ((st & 0x02u) == 0u) {
+            break;
+        }
+    }
+    __asm__ volatile("outb %0, %1" : : "a"((uint8_t)0xFEu), "Nd"((uint16_t)0x64));
+}
+#endif
+
 static void default_shutdown(void)
 {
-    if (pm_metal_boot_halt) {
-        pm_metal_boot_halt();
+    pm_metal_time_sleep_ms(2000u);
+#if !(defined(PM_METAL_CFG_ARCH_WASM) && PM_METAL_CFG_ARCH_WASM)
+    /* Platform OWN: ACPI S5 (BIOS) / EFI ResetShutdown — not a QEMU debug port. */
+    if (pm_metal_boot_reset) {
+        pm_metal_boot_reset(0);
     }
+#endif
     g_dead = 1;
+    seat_park_forever();
 }
 
 static void default_reboot(void)
 {
+    pm_metal_time_sleep_ms(2000u);
+#if !(defined(PM_METAL_CFG_ARCH_WASM) && PM_METAL_CFG_ARCH_WASM)
     if (pm_metal_boot_reset) {
         pm_metal_boot_reset(1);
+    } else {
+        seat_kbc_restart();
     }
+#endif
     g_dead = 0;
     pm_metal_process_set_shutting_down(0);
+    seat_park_forever();
 }
 
 int32_t pm_metal_boot_shutdown(void)
 {
+    if (g_dead) {
+        /* Already shut down — do not re-print the reverse tree. */
+        seat_park_forever();
+        return 0;
+    }
+
     (void)pm_metal_boot_unboot();
     pm_metal_boot_tree_dead();
     pm_metal_boot_dead_art(PM_METAL_VERSION, unboot_cpu());
+    g_dead = 1;
     if (g_shutdown_hook) {
         g_shutdown_hook();
     } else {
         default_shutdown();
     }
-    g_dead = 1;
+    /* Hooks must not return into a live REPL. */
+    seat_park_forever();
     return 0;
 }
 
 int32_t pm_metal_boot_reboot(void)
 {
+    char line[96];
+
+    if (g_dead) {
+        seat_park_forever();
+        return 0;
+    }
+
     (void)pm_metal_boot_unboot();
-    /* No dead art — seat comes back. */
+    /* No dead art — seat comes back after countdown. */
     pm_metal_boot_emit("`-- revive       \033[33mok\033[0m");
-    pm_metal_boot_emit("\033[33mreboot → boot again\033[0m");
+    snprintf(line, sizeof(line), "\033[33mversion %s @ %s\033[0m", PM_METAL_VERSION,
+             unboot_cpu());
+    pm_metal_boot_emit(line);
+    pm_metal_boot_emit("\033[33m*** reboot in 2s ***\033[0m");
     g_dead = 0;
     if (g_reboot_hook) {
         g_reboot_hook();
     } else {
         default_reboot();
     }
+    seat_park_forever();
     return 0;
 }

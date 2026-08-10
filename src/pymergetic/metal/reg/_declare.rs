@@ -79,8 +79,9 @@ impl RegImport {
 
 /// Fixed-capacity registry state: `N` exports + `I` imports.
 ///
-/// Prefer the `reg_mod!` macro for named field access; indexes are an
-/// implementation detail of this storage.
+/// Hand form: module-local `Export` / `Import` enums as named indexes
+/// (see `.cursor/rules/metal-regmod-slot-enums.mdc`). Outside the muscle,
+/// resolve by string name only. `reg_mod!` remains optional sugar.
 pub struct RegModStatic<const N: usize, const I: usize> {
     pub exports: [RegExport; N],
     pub imports: [RegImport; I],

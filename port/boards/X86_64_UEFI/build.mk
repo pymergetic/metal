@@ -183,7 +183,7 @@ SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c extmod/modframebu
 OBJ = $(PY_CORE_O)
 OBJ += $(BUILD)/frozen_content.o
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
-OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_meter.o $(BUILD)/metal_process.o $(BUILD)/metal_unboot.o $(BUILD)/metal_smp.o $(BUILD)/metal_ap_tramp.o $(BUILD)/metal_acpi.o $(BUILD)/metal_asgi.o $(BUILD)/metal_inspect.o $(BUILD)/metal_console.o $(BUILD)/metal_reg_seats.o $(BUILD)/metal_ssh_seat_test.o $(BUILD)/metal_inspect_seat_test.o $(BUILD)/metal_process_seat_test.o $(BUILD)/metal_microdot_seat_test.o $(BUILD)/metal_smoke_extras.o
+OBJ += $(BUILD)/metal_mem.o $(BUILD)/metal_tlsf.o $(BUILD)/metal_async.o $(BUILD)/metal_meter.o $(BUILD)/metal_process.o $(BUILD)/metal_unboot.o $(BUILD)/metal_boot_power.o $(BUILD)/metal_smp.o $(BUILD)/metal_ap_tramp.o $(BUILD)/metal_acpi.o $(BUILD)/metal_asgi.o $(BUILD)/metal_inspect.o $(BUILD)/metal_console.o $(BUILD)/metal_reg_seats.o $(BUILD)/metal_ssh_seat_test.o $(BUILD)/metal_inspect_seat_test.o $(BUILD)/metal_process_seat_test.o $(BUILD)/metal_microdot_seat_test.o $(BUILD)/metal_smoke_extras.o
 OBJ += $(BUILD)/metal_mod_packs.o $(BUILD)/metal_pack_inspect.o $(BUILD)/metal_pack_metal.o
 OBJ += $(BUILD)/metal_boot_tree.o $(BUILD)/metal_externals.o $(BUILD)/metal_externals_rows.o $(BUILD)/metal_arch.o $(BUILD)/metal_arch_py.o $(BUILD)/metal_ascii.o
 OBJ += $(BUILD)/metal_microdot.o
@@ -410,6 +410,10 @@ $(BUILD)/metal_process.o: $(METAL)/src/pymergetic/metal/process/__init__.c | $(B
 $(BUILD)/metal_unboot.o: $(METAL)/src/pymergetic/metal/boot/unboot.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/metal_boot_power.o: $(METAL)/src/pymergetic/metal/boot/platform/efi/power.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) -DPM_METAL_BOOT_TARGET_EFI=1 -I$(EDK_INC) -I$(METAL)/src/pymergetic/metal/boot/platform/efi -c -o $@ $<
 
 $(BUILD)/metal_smp.o: $(METAL)/src/pymergetic/metal/async/smp.c | $(BUILD)
 	$(ECHO) "CC $<"

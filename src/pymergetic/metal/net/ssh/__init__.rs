@@ -1,8 +1,8 @@
-//! net.ssh — Rust face over the C impl + RegModStatic declare.
+//! net.ssh — Rust face over the C impl + C-owned RegMod declare.
 #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std)]
 #![allow(non_camel_case_types)]
 
-use core::ffi::{c_char, c_void};
+use core::ffi::c_char;
 
 use pymergetic_metal_rt as _;
 
@@ -30,6 +30,8 @@ extern "C" {
     fn pm_metal_net_ssh_banner_send() -> i32;
     fn pm_metal_net_ssh_banner_sent() -> i32;
     fn pm_metal_net_ssh_banner_reset();
+    fn pm_metal_net_ssh_reg_load() -> i32;
+    fn pm_metal_net_ssh_bind_reg() -> i32;
 }
 
 #[inline]
@@ -101,50 +103,12 @@ pub fn banner_reset() {
     unsafe { pm_metal_net_ssh_banner_reset() }
 }
 
-use pymergetic_metal_reg::{pm_metal_reg_mod_load, RegMod};
-
-pymergetic_metal_reg::reg_mod! {
-    mod ssh = "pymergetic.metal.net.ssh";
-    exports: [listen, close, autoload, status];
-    imports: [yield_ = "pymergetic.metal.async"::"yield"];
-}
-
-extern "C" fn ssh_register_symbols(_ctx: *mut c_void) -> i32 {
-    ssh::listen.publish(pm_metal_net_ssh_listen as *const c_void);
-    ssh::close.publish(pm_metal_net_ssh_close as *const c_void);
-    ssh::autoload.publish(pm_metal_net_ssh_autoload as *const c_void);
-    ssh::status.publish(pm_metal_net_ssh_status as *const c_void);
-    0
-}
-
-static SSH_MOD: RegMod = RegMod::from_static(
-    ssh::NAME,
-    &ssh::STORAGE.exports,
-    &ssh::STORAGE.imports,
-    Some(ssh_register_symbols),
-);
-
-/// Load this module into the kernel RegMod ring (idempotent).
-#[no_mangle]
-pub extern "C" fn pm_metal_net_ssh_reg_load() -> i32 {
-    if pymergetic_metal_reg::find_mod(ssh::NAME).is_some() {
-        return 0;
-    }
-    unsafe { pm_metal_reg_mod_load(&SSH_MOD) }
-}
-
-/// Compat: old dyn-table bind path now loads the RegMod.
-#[no_mangle]
-pub unsafe extern "C" fn pm_metal_net_ssh_bind_reg() -> i32 {
-    pm_metal_net_ssh_reg_load()
+#[inline]
+pub fn reg_load() -> i32 {
+    unsafe { pm_metal_net_ssh_reg_load() }
 }
 
 #[inline]
 pub fn bind_reg() -> i32 {
-    pm_metal_net_ssh_reg_load()
-}
-
-#[inline]
-pub fn reg_load() -> i32 {
-    pm_metal_net_ssh_reg_load()
+    unsafe { pm_metal_net_ssh_bind_reg() }
 }

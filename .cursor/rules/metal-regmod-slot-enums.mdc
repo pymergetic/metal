@@ -1,0 +1,54 @@
+---
+description: RegMod declare — module-local Export/Import enums; name resolution outside
+alwaysApply: true
+---
+
+# RegMod slot indexes (enum) vs outside (names)
+
+## Law
+
+- **Inside the owning muscle TU:** fixed export/import tables use
+  **module-local enums** as named indexes (`0,1,2,…`). Indexes never leave
+  the TU as an API.
+- **Outside the module:** resolve only by **string names**
+  (`(module, func)` / `find_export` / `RegImport`). Never peer enums,
+  never naked export indexes.
+
+## Naming
+
+### Rust
+
+Per-module nested types (not crate-global):
+
+```rust
+mod ssh {
+    #[repr(usize)]
+    pub(crate) enum Export { Listen, Close, Autoload, Status }
+
+    #[repr(usize)]
+    pub(crate) enum Import { Yield }
+}
+// ssh::Export::Listen, ssh::Import::Yield
+```
+
+`RegExport` / `RegImport` remain the **slot value types**. Enums are only
+indexes. `reg_mod!` is optional sugar that hides indexes behind named
+statics; hand form should use `Export` / `Import` like C.
+
+### C
+
+Full path prefix (no namespaces):
+
+```c
+PM_METAL_<PATH>_EXPORT_<NAME>   /* e.g. PM_METAL_NET_SSH_EXPORT_LISTEN */
+PM_METAL_<PATH>_IMPORT_<NAME>   /* e.g. PM_METAL_NET_SSH_IMPORT_YIELD */
+```
+
+`<PATH>` mirrors the module path after `pymergetic.metal.` (`net.ssh` →
+`NET_SSH`).
+
+## Reference
+
+- C declare (SoT for this muscle): `src/pymergetic/metal/net/ssh/__init__.c`
+- Rust face (FFI only): `src/pymergetic/metal/net/ssh/__init__.rs`
+- C face docs: `include/pymergetic/metal/reg/mod.h`

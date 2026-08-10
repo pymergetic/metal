@@ -1,22 +1,55 @@
 /*
  * Static RegMod lifecycle (Rust kernel) — C face.
  *
- * In the owning muscle TU:
+ * Indexes stay inside the owning TU (named enums). Outside resolves by
+ * string name only — never peer enums / naked export indexes.
  *
- *   static pm_metal_reg_export_t draw_exports[] = {
- *       PM_METAL_REG_EXPORT(soft_init),
- *       PM_METAL_REG_EXPORT(fill),
+ *   enum {
+ *       PM_METAL_NET_SSH_EXPORT_LISTEN = 0,
+ *       PM_METAL_NET_SSH_EXPORT_CLOSE,
+ *       PM_METAL_NET_SSH_EXPORT_AUTOLOAD,
+ *       PM_METAL_NET_SSH_EXPORT_STATUS,
  *   };
- *   PM_METAL_REG_REF(draw, soft_init, 0);
- *   PM_METAL_REG_REF(draw, fill, 1);
- *   PM_METAL_REG_MOD(draw, "pymergetic.metal.draw");
+ *   enum {
+ *       PM_METAL_NET_SSH_IMPORT_YIELD = 0,
+ *   };
  *
- *   static int32_t draw_register_symbols(void *ctx) {
- *     pm_metal_reg_export_publish(draw_soft_init, (void *)pm_metal_draw_soft_init);
- *     ...
+ *   static pm_metal_reg_export_t ssh_exports[] = {
+ *       PM_METAL_REG_EXPORT(listen),
+ *       PM_METAL_REG_EXPORT(close),
+ *       PM_METAL_REG_EXPORT(autoload),
+ *       PM_METAL_REG_EXPORT(status),
+ *   };
+ *   static pm_metal_reg_import_t ssh_imports[] = {
+ *       { .module = "pymergetic.metal.async", .func = "yield" },
+ *   };
+ *
+ *   static int32_t ssh_register_symbols(void *ctx) {
+ *       (void)ctx;
+ *       pm_metal_reg_export_publish(
+ *           &ssh_exports[PM_METAL_NET_SSH_EXPORT_LISTEN],
+ *           (void *)pm_metal_net_ssh_listen);
+ *       ...
+ *       return 0;
  *   }
  *
- * Floor load calls pm_metal_draw_reg_load().
+ *   static pm_metal_reg_mod_desc_t ssh_desc = {
+ *       .name = "pymergetic.metal.net.ssh",
+ *       .exports = ssh_exports,
+ *       .n_exports = 4,
+ *       .imports = ssh_imports,
+ *       .n_imports = 1,
+ *       .register_symbols = ssh_register_symbols,
+ *       .lang = PM_METAL_REG_LANG_C,
+ *   };
+ *   int32_t pm_metal_net_ssh_reg_load(void) {
+ *       return pm_metal_reg_mod_load_c(&ssh_desc);
+ *   }
+ *
+ * Naming: PM_METAL_<PATH>_{EXPORT|IMPORT}_<NAME>
+ * (path after pymergetic.metal. — net.ssh → NET_SSH).
+ *
+ * Floor load calls pm_metal_*_reg_load().
  */
 #ifndef PYMERGETIC_METAL_REG_MOD_H_
 #define PYMERGETIC_METAL_REG_MOD_H_
@@ -91,13 +124,17 @@ int32_t pm_metal_reg_floor_load(void);
         .name = #name_, .ptr = NULL  \
     }
 
-/** Named handle → exports[idx] (idx only here; call sites use the name). */
+/**
+ * Optional alias → exports[idx]. Prefer module enums
+ * `PM_METAL_<PATH>_EXPORT_*` at call sites instead of this macro.
+ */
 #define PM_METAL_REG_REF(sym, name_, idx) \
     static pm_metal_reg_export_t *const sym##_##name_ = &sym##_exports[(idx)]
 
 /**
  * Wire sym_exports[] + sym_register_symbols → pm_metal_sym_reg_load().
- * Define sym_exports and sym_register_symbols in the same TU first.
+ * Exports-only (imports = NULL). With imports, write desc by hand (see
+ * file header). Define sym_exports and sym_register_symbols first.
  */
 #define PM_METAL_REG_MOD(sym, full_name)                        \
     static int32_t sym##_register_symbols(void *ctx);           \

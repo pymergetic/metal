@@ -26,3 +26,14 @@ void pm_metal_board_time_advance_us(uint64_t us)
 {
     (void)us; /* wall clock — no software advance */
 }
+
+void pm_metal_board_sleep_us(uint64_t us)
+{
+    struct timespec req;
+
+    req.tv_sec = (time_t)(us / 1000000ull);
+    req.tv_nsec = (long)((us % 1000000ull) * 1000ull);
+    while (nanosleep(&req, &req) != 0) {
+        /* EINTR — continue remaining */
+    }
+}

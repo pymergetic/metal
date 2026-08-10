@@ -10,6 +10,9 @@
  */
 #define MICROPY_CONFIG_ROM_LEVEL (MICROPY_CONFIG_ROM_LEVEL_EXTRA_FEATURES)
 
+/* Seat REPL is the face — Ctrl-D returns to >>>; shutdown()/reboot() leave. */
+#define MICROPY_METAL_REPL_IS_SEAT (1)
+
 #ifndef MICROPY_HEAP_SIZE
 #define MICROPY_HEAP_SIZE (4 * 1024 * 1024)
 #endif

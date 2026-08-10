@@ -59,16 +59,17 @@ void pm_metal_unix_boot_tree(void)
         "cdn",
         (cdn && cdn[0]) ? PM_METAL_BOOT_TREE_OK : PM_METAL_BOOT_TREE_DIM,
         (cdn && cdn[0]) ? cdn : "unset");
+    /* Seat policy: unix never auto-listens — hint only. */
     pm_metal_boot_tree_item("httpd", PM_METAL_BOOT_TREE_DIM,
-                            "start: Microdot/ASGI listen :80/:443");
+                            "start: asgi.init(80); asgi.init_tls(443)");
     pm_metal_boot_tree_item("sshd", PM_METAL_BOOT_TREE_DIM,
-                            "start: pymergetic.metal.net.ssh.listen");
+                            "start: ssh.listen(22)");
     pm_metal_boot_tree_leave();
 
     pm_metal_boot_tree_enter("repl");
     pm_metal_boot_tree_item("mode", PM_METAL_BOOT_TREE_OK, "friendly (-i after seat boot)");
     pm_metal_boot_tree_item("leave", PM_METAL_BOOT_TREE_OK,
-                            "Ctrl-D REPL; quit=process; shutdown/reboot=unboot");
+                            "Ctrl-D→>>>; shutdown/reboot leave seat");
     pm_metal_boot_tree_leave();
 
     pm_metal_boot_tree_ready_ok();

@@ -324,3 +324,142 @@ int32_t pm_metal_dev_acpi_init(void)
     g_inited = 1;
     return 0;
 }
+
+static void outw_port(uint16_t port, uint16_t val)
+{
+    __asm__ volatile("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
+/* Scan DSDT/SSDT for `_S5_` package → SLP_TYPa (byte after package header). */
+static int parse_s5_slp_typa(const uint8_t *dsdt, uint32_t len, uint8_t *typa_out)
+{
+    uint32_t i;
+
+    if (dsdt == NULL || len < 36 || typa_out == NULL) {
+        return -1;
+    }
+    for (i = 36; i + 9 < len; i++) {
+        if (dsdt[i] != '_' || dsdt[i + 1] != 'S' || dsdt[i + 2] != '5' ||
+            dsdt[i + 3] != '_') {
+            continue;
+        }
+        /* Common AML: Name(_S5_, Package(){typa, typb, ...}) → 0x12 PackageOp */
+        if (i >= 1 && dsdt[i - 1] == 0x08) {
+            /* NameOp _S5_ … skip to Package */
+        }
+        {
+            uint32_t j;
+            for (j = i + 4; j + 5 < len && j < i + 64; j++) {
+                if (dsdt[j] == 0x12) { /* PackageOp */
+                    /* Skip pkg length (PkgLength encoding) — short form: one byte */
+                    uint32_t k = j + 1;
+                    uint8_t pkglen = dsdt[k];
+                    if ((pkglen & 0xC0u) == 0) {
+                        k += 1; /* PkgLength */
+                    } else {
+                        uint8_t n = (uint8_t)((pkglen >> 6) & 3u);
+                        k += 1u + n;
+                    }
+                    if (k >= len) {
+                        break;
+                    }
+                    k += 1; /* NumElements */
+                    if (k >= len) {
+                        break;
+                    }
+                    if (dsdt[k] == 0x0A && k + 1 < len) { /* BytePrefix */
+                        *typa_out = dsdt[k + 1];
+                        return 0;
+                    }
+                    if (dsdt[k] == 0x00) { /* ZeroOp */
+                        *typa_out = 0;
+                        return 0;
+                    }
+                    if (dsdt[k] == 0x01) { /* OneOp */
+                        *typa_out = 1;
+                        return 0;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    return -1;
+}
+
+int32_t pm_metal_dev_acpi_power_off(void)
+{
+    uint64_t rsdp_a;
+    const uint8_t *rsdp;
+    const uint8_t *fadt;
+    const uint8_t *dsdt;
+    uint32_t fadt_len;
+    uint32_t dsdt_len;
+    uint32_t pm1a = 0;
+    uint8_t slp_typa = 5; /* common default when \\_S5_ parse fails */
+    uint16_t val;
+
+    (void)pm_metal_dev_acpi_init();
+    rsdp_a = pm_metal_dev_acpi_rsdp();
+    if (rsdp_a == 0) {
+        return -1;
+    }
+    rsdp = (const uint8_t *)(uintptr_t)rsdp_a;
+    fadt = find_sdt(rsdp, "FACP");
+    if (fadt == NULL) {
+        return -1;
+    }
+    fadt_len = (uint32_t)fadt[4] | ((uint32_t)fadt[5] << 8) |
+               ((uint32_t)fadt[6] << 16) | ((uint32_t)fadt[7] << 24);
+    /* ACPI 1.0 FADT: PM1a_CNT_BLK at offset 64 */
+    if (fadt_len >= 76) {
+        pm1a = (uint32_t)fadt[64] | ((uint32_t)fadt[65] << 8) |
+               ((uint32_t)fadt[66] << 16) | ((uint32_t)fadt[67] << 24);
+    }
+    /* ACPI 2.0+ may use X_PM1a_CNT_BLK (GAS) at offset 148 when pm1a==0 */
+    if (pm1a == 0 && fadt_len >= 148 + 12) {
+        uint8_t asid = fadt[148];
+        uint64_t addr = (uint64_t)fadt[152] | ((uint64_t)fadt[153] << 8) |
+                        ((uint64_t)fadt[154] << 16) | ((uint64_t)fadt[155] << 24) |
+                        ((uint64_t)fadt[156] << 32) | ((uint64_t)fadt[157] << 40) |
+                        ((uint64_t)fadt[158] << 48) | ((uint64_t)fadt[159] << 56);
+        if (asid == 1 && addr != 0 && addr < 0x10000ull) { /* System I/O */
+            pm1a = (uint32_t)addr;
+        }
+    }
+    if (pm1a == 0 || pm1a > 0xffffu) {
+        return -1;
+    }
+
+    /* DSDT pointer: ACPI1 at 40; prefer X_DSDT at 140 when present */
+    dsdt = NULL;
+    if (fadt_len >= 148) {
+        uint64_t xdsdt = (uint64_t)fadt[140] | ((uint64_t)fadt[141] << 8) |
+                         ((uint64_t)fadt[142] << 16) | ((uint64_t)fadt[143] << 24) |
+                         ((uint64_t)fadt[144] << 32) | ((uint64_t)fadt[145] << 40) |
+                         ((uint64_t)fadt[146] << 48) | ((uint64_t)fadt[147] << 56);
+        if (xdsdt != 0) {
+            dsdt = (const uint8_t *)(uintptr_t)xdsdt;
+        }
+    }
+    if (dsdt == NULL && fadt_len >= 44) {
+        uint32_t d32 = (uint32_t)fadt[40] | ((uint32_t)fadt[41] << 8) |
+                       ((uint32_t)fadt[42] << 16) | ((uint32_t)fadt[43] << 24);
+        if (d32 != 0) {
+            dsdt = (const uint8_t *)(uintptr_t)d32;
+        }
+    }
+    if (dsdt != NULL && dsdt[0] == 'D' && dsdt[1] == 'S' && dsdt[2] == 'D' &&
+        dsdt[3] == 'T') {
+        dsdt_len = (uint32_t)dsdt[4] | ((uint32_t)dsdt[5] << 8) |
+                   ((uint32_t)dsdt[6] << 16) | ((uint32_t)dsdt[7] << 24);
+        if (dsdt_len >= 36 && checksum_ok(dsdt, dsdt_len)) {
+            (void)parse_s5_slp_typa(dsdt, dsdt_len, &slp_typa);
+        }
+    }
+
+    /* PM1_CNT: bits 12:10 = SLP_TYP, bit 13 = SLP_EN */
+    val = (uint16_t)(((uint16_t)slp_typa << 10) | (1u << 13));
+    outw_port((uint16_t)pm1a, val);
+    return 0;
+}
