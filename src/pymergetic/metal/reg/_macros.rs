@@ -10,11 +10,9 @@
 /// ```ignore
 /// pymergetic_metal_reg::reg_mod! {
 ///     mod ssh = "pymergetic.metal.net.ssh";
-///     exports: [listen, close, yield_ = "yield"];
-///     imports: [aio_yield = "pymergetic.metal.async"::"yield"];
+///     exports: [init, listen, close, release, poll, served, listen_port, status, hostkey_label];
 /// }
-/// // ssh::listen.publish(ptr);
-/// // ssh::aio_yield.call0();
+/// // Prefer C SoT + Rust FFI for net.ssh; this sugar is for RS-owned muscles.
 /// ```
 #[macro_export]
 macro_rules! reg_mod {

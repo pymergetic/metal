@@ -23,16 +23,24 @@ Per-module nested types (not crate-global):
 ```rust
 mod ssh {
     #[repr(usize)]
-    pub(crate) enum Export { Listen, Close, Autoload, Status }
-
-    #[repr(usize)]
-    pub(crate) enum Import { Yield }
+    pub(crate) enum Export {
+        Init,
+        Listen,
+        Close,
+        Release,
+        Poll,
+        Served,
+        ListenPort,
+        Status,
+        HostkeyLabel,
+    }
 }
-// ssh::Export::Listen, ssh::Import::Yield
+// ssh::Export::Listen — indexes stay in the TU
 ```
 
 `RegExport` / `RegImport` remain the **slot value types**. Enums are only
-indexes. `reg_mod!` is optional sugar that hides indexes behind named
+indexes. Soft imports (when needed) use a hand-written desc; do not invent
+dead imports. `reg_mod!` is optional sugar that hides indexes behind named
 statics; hand form should use `Export` / `Import` like C.
 
 ### C

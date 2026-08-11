@@ -881,6 +881,9 @@ live-ssh: $(BUILD)/esp/EFI/BOOT/BOOTIA32.EFI
 include $(PORT_DIR)/upy_external_warnings.mk
 include $(TOP)/py/mkrules.mk
 
-# Rebuild qstr pool / frozen when genhdr changes (order-only OBJ deps alone can leave stale .o).
+# Rebuild qstr pool / frozen / port+glue C when genhdr changes (order-only OBJ
+# deps alone leave stale .o with wrong MP_QSTR_* indices → ImportError).
 $(BUILD)/py/qstr.o: $(HEADER_BUILD)/qstrdefs.generated.h
 $(BUILD)/frozen_content.o: $(HEADER_BUILD)/qstrdefs.generated.h
+$(addprefix $(BUILD)/, $(SRC_C:.c=.o)) $(addprefix $(BUILD)/glue/, $(GLUE_C:.c=.o)): \
+	$(HEADER_BUILD)/qstrdefs.generated.h $(HEADER_BUILD)/root_pointers.h

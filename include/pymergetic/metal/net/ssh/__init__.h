@@ -15,6 +15,7 @@ extern "C" {
  */
 int32_t pm_metal_net_ssh_available(void); /* 1 once crypto/KEX linked */
 int32_t pm_metal_net_ssh_init(void);
+/** Alias of init — kept for boot/autoexec recipes. */
 int32_t pm_metal_net_ssh_autoload(void);
 
 uint32_t pm_metal_net_ssh_listen(uint32_t port); /* handle, or 0 */
@@ -23,6 +24,7 @@ void pm_metal_net_ssh_close(uint32_t s);
 int32_t pm_metal_net_ssh_poll(void); /* drive server state; 1 = ident done */
 int32_t pm_metal_net_ssh_served(void);
 
+/** Runtime listen state into buf ("down" or ":N"). Crypto label → hostkey_label. */
 int32_t pm_metal_net_ssh_status(uint8_t *buf, uint32_t buf_len);
 uint32_t pm_metal_net_ssh_listen_port(void);
 int32_t pm_metal_net_ssh_hostkey_label(uint8_t *buf, uint32_t buf_len);
@@ -36,7 +38,6 @@ int32_t pm_metal_net_ssh_banner_send(void);
 int32_t pm_metal_net_ssh_banner_sent(void);
 void pm_metal_net_ssh_banner_reset(void);
 
-int32_t pm_metal_net_ssh_bind_reg(void);
 /** Load C RegMod declare into the kernel ring (idempotent). */
 int32_t pm_metal_net_ssh_reg_load(void);
 

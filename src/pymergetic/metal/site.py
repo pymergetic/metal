@@ -152,7 +152,7 @@ def print_net_listeners():
         if port != 0:
             print("  - sshd: :" + str(port))
         else:
-            print("  - sshd: down — ssh.autoload(); ssh.listen(22)")
+            print("  - sshd: down — ssh.init(); ssh.listen(22)")
     except Exception:
         print(
             "  - sshd: down — import pymergetic.metal.net.ssh as ssh; ssh.listen(22)"

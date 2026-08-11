@@ -29,7 +29,7 @@
 #include "pymergetic/metal/net/pump/__init__.h"
 #include "pymergetic/metal/net/ssh/__init__.h"
 #include "pymergetic/metal/pack/mod_packs.h"
-#include "pymergetic/metal/rt.h"
+#include "pymergetic/metal/rt/__init__.h"
 
 #include "gfx_bringup.h"
 #include "metal_heap_buf.h"
@@ -357,7 +357,7 @@ static int boot_native(void)
             pm_metal_boot_tree_item("sshd", PM_METAL_BOOT_TREE_OK, detail);
         } else {
             pm_metal_boot_tree_item("sshd", PM_METAL_BOOT_TREE_FAIL,
-                                    "down — ssh.autoload(); ssh.listen(22)");
+                                    "down — ssh.init(); ssh.listen(22)");
         }
     }
     pm_metal_boot_tree_leave();

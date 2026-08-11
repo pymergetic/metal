@@ -638,16 +638,36 @@ int32_t pm_metal_net_ssh_served(void)
 
 int32_t pm_metal_net_ssh_status(uint8_t *buf, uint32_t buf_len)
 {
-    static const char msg[] = "ssh: diy-chacha20-poly1305+auth";
     uint32_t i;
+    uint32_t port;
+    char digits[10];
+    uint32_t nd;
 
     if (buf == NULL || buf_len == 0u) {
         return -1;
     }
-    for (i = 0; i + 1u < buf_len && msg[i] != '\0'; i++) {
-        buf[i] = (uint8_t)msg[i];
+    port = g_listen_port;
+    if (port == 0u) {
+        static const char down[] = "down";
+        for (i = 0; i + 1u < buf_len && down[i] != '\0'; i++) {
+            buf[i] = (uint8_t)down[i];
+        }
+        buf[i] = 0;
+        return 0;
     }
-    buf[i] = 0;
+    nd = 0;
+    do {
+        digits[nd++] = (char)('0' + (char)(port % 10u));
+        port /= 10u;
+    } while (port != 0u && nd < sizeof(digits));
+    if (buf_len < nd + 2u) {
+        return -1;
+    }
+    buf[0] = (uint8_t)':';
+    for (i = 0; i < nd; i++) {
+        buf[1u + i] = (uint8_t)digits[nd - 1u - i];
+    }
+    buf[1u + nd] = 0;
     return 0;
 }
 
@@ -658,7 +678,7 @@ uint32_t pm_metal_net_ssh_listen_port(void)
 
 int32_t pm_metal_net_ssh_hostkey_label(uint8_t *buf, uint32_t buf_len)
 {
-    static const char lab[] = "ssh-ed25519";
+    static const char lab[] = "ssh-ed25519 / chacha20-poly1305";
     uint32_t i;
 
     if (buf == NULL || buf_len == 0u) {
@@ -713,64 +733,53 @@ void pm_metal_net_ssh_banner_reset(void)
     pm_metal_net_ssh_pkt_bind_sock(PM_METAL_NET_IP_SOCK_INVALID);
 }
 
-/* --- RegMod declare (C owns; indexes stay in this TU) ---------------- */
+/* --- RegMod declare (C SoT; indexes stay in this TU) ----------------- */
 
 enum {
-    PM_METAL_NET_SSH_EXPORT_LISTEN = 0,
+    PM_METAL_NET_SSH_EXPORT_INIT = 0,
+    PM_METAL_NET_SSH_EXPORT_LISTEN,
     PM_METAL_NET_SSH_EXPORT_CLOSE,
-    PM_METAL_NET_SSH_EXPORT_AUTOLOAD,
+    PM_METAL_NET_SSH_EXPORT_RELEASE,
+    PM_METAL_NET_SSH_EXPORT_POLL,
+    PM_METAL_NET_SSH_EXPORT_SERVED,
+    PM_METAL_NET_SSH_EXPORT_LISTEN_PORT,
     PM_METAL_NET_SSH_EXPORT_STATUS,
+    PM_METAL_NET_SSH_EXPORT_HOSTKEY_LABEL,
 };
 
-enum {
-    PM_METAL_NET_SSH_IMPORT_YIELD = 0,
-};
-
-static pm_metal_reg_export_t ssh_exports[] = {
+static pm_metal_reg_export_t net_ssh_exports[] = {
+    PM_METAL_REG_EXPORT(init),
     PM_METAL_REG_EXPORT(listen),
     PM_METAL_REG_EXPORT(close),
-    PM_METAL_REG_EXPORT(autoload),
+    PM_METAL_REG_EXPORT(release),
+    PM_METAL_REG_EXPORT(poll),
+    PM_METAL_REG_EXPORT(served),
+    PM_METAL_REG_EXPORT(listen_port),
     PM_METAL_REG_EXPORT(status),
+    PM_METAL_REG_EXPORT(hostkey_label),
 };
+PM_METAL_REG_MOD(net_ssh, "pymergetic.metal.net.ssh")
 
-static pm_metal_reg_import_t ssh_imports[] = {
-    [PM_METAL_NET_SSH_IMPORT_YIELD] = {
-        .module = "pymergetic.metal.async",
-        .func = "yield",
-    },
-};
-
-static int32_t ssh_register_symbols(void *ctx)
+static int32_t net_ssh_register_symbols(void *ctx)
 {
     (void)ctx;
-    pm_metal_reg_export_publish(&ssh_exports[PM_METAL_NET_SSH_EXPORT_LISTEN],
+    pm_metal_reg_export_publish(&net_ssh_exports[PM_METAL_NET_SSH_EXPORT_INIT],
+        (void *)pm_metal_net_ssh_init);
+    pm_metal_reg_export_publish(&net_ssh_exports[PM_METAL_NET_SSH_EXPORT_LISTEN],
         (void *)pm_metal_net_ssh_listen);
-    pm_metal_reg_export_publish(&ssh_exports[PM_METAL_NET_SSH_EXPORT_CLOSE],
+    pm_metal_reg_export_publish(&net_ssh_exports[PM_METAL_NET_SSH_EXPORT_CLOSE],
         (void *)pm_metal_net_ssh_close);
-    pm_metal_reg_export_publish(&ssh_exports[PM_METAL_NET_SSH_EXPORT_AUTOLOAD],
-        (void *)pm_metal_net_ssh_autoload);
-    pm_metal_reg_export_publish(&ssh_exports[PM_METAL_NET_SSH_EXPORT_STATUS],
+    pm_metal_reg_export_publish(&net_ssh_exports[PM_METAL_NET_SSH_EXPORT_RELEASE],
+        (void *)pm_metal_net_ssh_release);
+    pm_metal_reg_export_publish(&net_ssh_exports[PM_METAL_NET_SSH_EXPORT_POLL],
+        (void *)pm_metal_net_ssh_poll);
+    pm_metal_reg_export_publish(&net_ssh_exports[PM_METAL_NET_SSH_EXPORT_SERVED],
+        (void *)pm_metal_net_ssh_served);
+    pm_metal_reg_export_publish(&net_ssh_exports[PM_METAL_NET_SSH_EXPORT_LISTEN_PORT],
+        (void *)pm_metal_net_ssh_listen_port);
+    pm_metal_reg_export_publish(&net_ssh_exports[PM_METAL_NET_SSH_EXPORT_STATUS],
         (void *)pm_metal_net_ssh_status);
+    pm_metal_reg_export_publish(&net_ssh_exports[PM_METAL_NET_SSH_EXPORT_HOSTKEY_LABEL],
+        (void *)pm_metal_net_ssh_hostkey_label);
     return 0;
-}
-
-static pm_metal_reg_mod_desc_t ssh_desc = {
-    .name = "pymergetic.metal.net.ssh",
-    .exports = ssh_exports,
-    .n_exports = (uint32_t)(sizeof(ssh_exports) / sizeof(ssh_exports[0])),
-    .imports = ssh_imports,
-    .n_imports = (uint32_t)(sizeof(ssh_imports) / sizeof(ssh_imports[0])),
-    .register_symbols = ssh_register_symbols,
-    .ctx = NULL,
-    .lang = PM_METAL_REG_LANG_C,
-};
-
-int32_t pm_metal_net_ssh_reg_load(void)
-{
-    return pm_metal_reg_mod_load_c(&ssh_desc);
-}
-
-int32_t pm_metal_net_ssh_bind_reg(void)
-{
-    return pm_metal_net_ssh_reg_load();
 }

@@ -1,5 +1,10 @@
 //! Kernel root table: loaded modules + lifecycle (load/connect/unload).
 //!
+//! **Transitional façade:** module identity / soft-import resolve SoT is
+//! µPy `sys.modules` via `pm_mod_*`. This circular ring is bookkeeping for
+//! floor load hooks + ledger — do not grow new module-OS features here.
+//! Prefer `pm_mod_publish` / `pm_mod_connect_import` for new work.
+//!
 //! `pymergetic.metal` itself is the first module loaded through here
 //! (see `boot`'s bootstrap), permanently `unloadable = false`. Every
 //! other genuinely `unloadable` provider (wasm, Python attach) loads the
@@ -25,7 +30,7 @@
 //! speculative machinery this tree's own rules warn against.
 
 use core::cell::Cell;
-use core::ffi::c_void;
+use core::ffi::{c_char, c_void};
 
 use crate::declare::RegImport;
 use crate::entry::RegExport;
@@ -37,6 +42,29 @@ extern "C" {
     fn pm_metal_async_quiesce_request();
     fn pm_metal_async_quiesce_all_parked() -> i32;
     fn pm_metal_async_quiesce_release();
+    /* µPy SoT — may be absent on tiny stubs; weak-style via optional link. */
+    fn pm_mod_publish(
+        name: *const c_char,
+        container: i32,
+        exports: *const c_void,
+        n_exports: u32,
+    ) -> i32;
+    fn pm_mod_export_set(module: *const c_char, func: *const c_char, fn_ptr: *mut c_void) -> i32;
+    fn pm_mod_resolve_native(module: *const c_char, func: *const c_char) -> *mut c_void;
+}
+
+/// Mirrors C `pm_mod_container_t` (`extmod/wasmmod/include/pm_mod.h`) —
+/// the code-container tag `pm_mod_publish` records, not a module kind.
+/// Keep the discriminants in lockstep with the C enum; this is an FFI
+/// mirror, not an independent Rust-side definition.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // full C enum mirror; only Resident is published from Rust today
+pub enum PmModContainer {
+    Resident = 0,
+    Wasm = 1,
+    Aot = 2,
+    Elf = 3,
 }
 
 pub type HookFn = extern "C" fn(*mut c_void) -> i32;
@@ -245,12 +273,67 @@ pub fn find_entry(module: &str, func: &str) -> Option<&'static RegExport> {
     find_export(module, func)
 }
 
+fn cstr_tmp(s: &str, buf: &mut [u8]) -> *const c_char {
+    let n = core::cmp::min(s.len(), buf.len().saturating_sub(1));
+    buf[..n].copy_from_slice(&s.as_bytes()[..n]);
+    buf[n] = 0;
+    buf.as_ptr() as *const c_char
+}
+
+/// Mirror RegMod exports into __pm_modules.
+fn mirror_to_upy(m: &'static RegMod) {
+    let mut name_buf = [0u8; 128];
+    let name_c = cstr_tmp(m.name, &mut name_buf);
+    let _ = unsafe { pm_mod_publish(name_c, PmModContainer::Resident as i32, core::ptr::null(), 0) };
+    for e in m.exports {
+        let mut fn_buf = [0u8; 64];
+        let fn_c = cstr_tmp(e.name, &mut fn_buf);
+        let _ = unsafe { pm_mod_export_set(name_c, fn_c, e.get() as *mut c_void) };
+    }
+}
+
+fn resolve_native_upy(module: &str, func: &str) -> *mut c_void {
+    let mut mbuf = [0u8; 128];
+    let mut fbuf = [0u8; 64];
+    let mc = cstr_tmp(module, &mut mbuf);
+    let fc = cstr_tmp(func, &mut fbuf);
+    unsafe { pm_mod_resolve_native(mc, fc) }
+}
+
+/// CString pointers (already NUL-terminated) → µPy native resolve.
+pub(crate) fn resolve_native_c(module: *const u8, func: *const u8) -> *mut c_void {
+    if module.is_null() || func.is_null() {
+        return core::ptr::null_mut();
+    }
+    unsafe { pm_mod_resolve_native(module as *const c_char, func as *const c_char) }
+}
+
+/// Lazy connect for path-included RegImports (see [`crate::resolve_import`]).
+pub(crate) fn resolve_import_row(row: &RegImport) {
+    let fnp = resolve_native_upy(row.module, row.func);
+    if !fnp.is_null() {
+        row.set_fn(fnp);
+        return;
+    }
+    if let Some(e) = find_export(row.module, row.func) {
+        row.set(Some(e));
+    }
+}
+
 fn connect_one(m: &'static RegMod) {
     for imp in m.imports {
+        /* SoT: sys.modules native table first; RegMod ring is transitional. */
+        let mut fnp = resolve_native_upy(imp.module, imp.func);
         let export = find_export(imp.module, imp.func);
+        if fnp.is_null() {
+            if let Some(e) = export {
+                fnp = e.get() as *mut c_void;
+            }
+        }
         imp.set(export);
+        imp.set_fn(fnp);
         /* Cold ledger caller edge — inspect only; hot path still one atomic load. */
-        let honesty = if export.is_some() {
+        let honesty = if !fnp.is_null() {
             HONESTY_OK
         } else {
             HONESTY_STUB
@@ -290,9 +373,9 @@ fn publish_entries_to_ledger(m: &'static RegMod) {
     }
 }
 
-/// Re-resolve every loaded module's import slots against the current
-/// kernel table. Called after every load/unload; also safe to call any
-/// time a caller wants a fresh reconnect pass.
+/// Re-resolve every loaded module's import slots against µPy SoT (+ ring façade).
+/// Called after every load/unload; also safe to call any time a caller wants
+/// a fresh reconnect pass. Caches into import slots — no per-call lookup.
 pub fn connect_all() {
     for m in KERNEL.snapshot().into_iter().flatten() {
         connect_one(m);
@@ -320,6 +403,7 @@ pub fn load(m: &'static RegMod) -> i32 {
         KERNEL.remove(m.name);
         return -1;
     }
+    mirror_to_upy(m);
     publish_entries_to_ledger(m);
     connect_all();
     /* Unloadable packs share the C seat table (Inspect/REPL intel).

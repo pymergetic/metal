@@ -23,7 +23,7 @@ int32_t pm_metal_net_services_start(void)
         ok = 1;
     }
 
-    if (pm_metal_net_ssh_autoload() == 0) {
+    if (pm_metal_net_ssh_init() == 0) {
         pm_metal_net_ssh_banner_reset();
         (void)pm_metal_net_ssh_listen(22);
     }

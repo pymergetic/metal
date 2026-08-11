@@ -15,6 +15,19 @@ else
 UPY_BUS_LINK_GLUE := 1
 endif
 
+# mp is the only product line that links TLSF (pymergetic.metal.mem) — route
+# pm_mod's border allocator through it on every mp platform (BIOS/EFI here,
+# and mp's own unix port, wherever that links this same mod.c). mpwm/upy/plain
+# unix never link mem.c/tlsf.c, so they must keep alloc.h's libc default —
+# do not touch MICROPY_WASM_MALLOC for them. Scoped to mod.c's own compile
+# recipe (not global CFLAGS) — pymergetic/metal/mem.h's uint8_t*-typed
+# declarations conflict with mem/port/__init__.h's void*-typed ones, and
+# forcing mem.h into every metal TU would trip that pre-existing mismatch.
+ifeq ($(ENGINE),mp)
+PM_MOD_WASM_MALLOC_CFLAGS := -DMICROPY_WASM_MALLOC=pm_metal_mem_alloc -DMICROPY_WASM_FREE=pm_metal_mem_free \
+	-DMICROPY_WASM_REALLOC=pm_metal_mem_realloc -include pymergetic/metal/mem.h
+endif
+
 ifeq ($(UPY_BUS_LINK_GLUE),1)
 OBJ += \
 	$(BUILD)/upy_bus_core.o \
@@ -22,9 +35,11 @@ OBJ += \
 	$(BUILD)/upy_bus_module.o \
 	$(BUILD)/upy_bus_ops.o \
 	$(BUILD)/upy_bus_attr.o \
-	$(BUILD)/upy_bus_handles.o
+	$(BUILD)/upy_bus_handles.o \
+	$(BUILD)/upy_bus_pm_mod.o
 
 SRC_QSTR += $(PORT_DIR)/upy/wasm_handles_stub.c
+SRC_QSTR += $(WASMMOD)/mod.c
 
 $(BUILD)/upy_bus_core.o: $(WASMMOD)/glue/pm_upy/obj/core.c | $(BUILD)
 	$(ECHO) "CC $<"
@@ -49,4 +64,8 @@ $(BUILD)/upy_bus_attr.o: $(WASMMOD)/glue/pm_upy/obj/attr.c | $(BUILD)
 $(BUILD)/upy_bus_handles.o: $(PORT_DIR)/upy/wasm_handles_stub.c | $(BUILD)
 	$(ECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/upy_bus_pm_mod.o: $(WASMMOD)/mod.c | $(BUILD)
+	$(ECHO) "CC $<"
+	$(Q)$(CC) $(CFLAGS) $(PM_MOD_WASM_MALLOC_CFLAGS) -c -o $@ $<
 endif

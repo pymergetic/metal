@@ -203,7 +203,7 @@ fn process_reg_load() -> i32 {
 #[no_mangle]
 pub extern "C" fn pm_metal_reg_floor_load() -> i32 {
     let mut rc = 0i32;
-    /* Spine first so soft imports (e.g. ssh → async.yield) can connect. */
+    /* Spine / async first; C net modules load after (exports-only today). */
     rc |= rt_reg_load();
     rc |= metal_async::reg_load();
     rc |= console_reg_load();

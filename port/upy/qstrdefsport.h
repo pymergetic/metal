@@ -1,5 +1,9 @@
 // Port-specific qstrs — short attrs that must stay in the global pool.
 // Do not Q() dotted module names or package segment names also emitted by frozen.
+// Not a C header — QSTR_DEFS / makeqstrdata only (build quotes Q() lines before CPP).
+#ifndef Q
+#define Q(x)
+#endif
 // *FORMAT-OFF*
 Q(if_count)
 Q(if_status)
@@ -19,6 +23,8 @@ Q(hash_verify)
 Q(verify_mods)
 Q(available)
 Q(autoload)
+Q(reg_load)
+Q(__pack__)
 Q(client_exec)
 Q(banner_send)
 Q(banner_sent)

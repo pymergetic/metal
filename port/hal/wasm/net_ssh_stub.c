@@ -92,7 +92,7 @@ int32_t pm_metal_net_ssh_banner_sent(void)
 
 void pm_metal_net_ssh_banner_reset(void) {}
 
-int32_t pm_metal_net_ssh_bind_reg(void)
+int32_t pm_metal_net_ssh_reg_load(void)
 {
-    return -1;
+    return 0;
 }

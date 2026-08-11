@@ -926,6 +926,8 @@ vnc: $(BUILD)/metal.qemu.elf
 include $(PORT_DIR)/upy_external_warnings.mk
 include $(TOP)/py/mkrules.mk
 
-# Rebuild µPy core / frozen when genhdr changes (order-only OBJ deps alone leave stale .o
-# and mis-sized mp_state_ctx — e.g. sys.path written at the wrong offset).
-$(PY_CORE_O) $(BUILD)/frozen_content.o: $(HEADER_BUILD)/qstrdefs.generated.h $(HEADER_BUILD)/root_pointers.h
+# Rebuild µPy core / frozen / port+glue C when genhdr changes (order-only OBJ
+# deps alone leave stale .o with wrong MP_QSTR_* indices → ImportError).
+$(PY_CORE_O) $(BUILD)/frozen_content.o $(addprefix $(BUILD)/, $(SRC_C:.c=.o)) \
+	$(addprefix $(BUILD)/glue/, $(GLUE_C:.c=.o)): \
+	$(HEADER_BUILD)/qstrdefs.generated.h $(HEADER_BUILD)/root_pointers.h

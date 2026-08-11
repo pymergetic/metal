@@ -4,6 +4,19 @@
 
 **Kernel = code container** (same idea as a wasmmod pack): introspectable via the same inspect/self-desc model (`pymergetic.metal` ‖ `pymergetic.wasmmod`). Loaded packs and host self are the same kind of thing, different roots.
 
+## Module registry law (locked)
+
+**µPy modules are the registry** (`sys.modules` + packages). Same registration for
+resident C/RS, wasmmod itself, and wasm/aot/elf packs:
+
+1. Publish a µPy module
+2. Put exports on it (Py gets them for free)
+3. Soft-connect once (`PM_MOD_IMPORT` / `PM_MOD_NEED`) — cache the call edge
+
+See wasmmod [`PACK.md`](../../wasmmod/docs/PACK.md) “One module law” and
+[`pm_mod.h`](../../wasmmod/include/pm_mod.h). Metal `PM_METAL_REG_MOD` / RegMod
+ring is a **frozen façade** — new work uses `pm_mod_*`; do not grow the ring.
+
 ## The point (wasmmod)
 
 **Callee (impl):** one language per module — **C or Rust or Python**.  
@@ -18,7 +31,8 @@ C             |  ✓ | ✓ | ✓
 RS            |  ✓ | ✓ | ✓
 ```
 
-Same verbs everywhere via **SYMBOLS + registration** (`module_install` / faces). That is why `.pyi` and Rust faces exist — so callers work, not so every module has three brains.
+Same verbs everywhere via **µPy module publish + connect** (`pm_mod_*` /
+faces). That is why `.pyi` and Rust faces exist — so callers work, not so every module has three brains.
 
 ## Trees
 

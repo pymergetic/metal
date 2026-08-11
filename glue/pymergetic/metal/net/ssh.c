@@ -5,7 +5,6 @@
 #include <string.h>
 
 #include "py/obj.h"
-#include "py/objstr.h"
 #include "py/mperrno.h"
 #include "py/runtime.h"
 
@@ -159,11 +158,11 @@ static mp_obj_t ssh_banner_reset(void)
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(ssh_banner_reset_obj, ssh_banner_reset);
 
-static mp_obj_t ssh_bind_reg(void)
+static mp_obj_t ssh_reg_load(void)
 {
-    return MP_OBJ_NEW_SMALL_INT(pm_metal_net_ssh_bind_reg());
+    return MP_OBJ_NEW_SMALL_INT(pm_metal_net_ssh_reg_load());
 }
-static MP_DEFINE_CONST_FUN_OBJ_0(ssh_bind_reg_obj, ssh_bind_reg);
+static MP_DEFINE_CONST_FUN_OBJ_0(ssh_reg_load_obj, ssh_reg_load);
 
 static const mp_rom_map_elem_t ssh_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal_dot_net_dot_ssh) },
@@ -182,7 +181,7 @@ static const mp_rom_map_elem_t ssh_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_banner_send), MP_ROM_PTR(&ssh_banner_send_obj) },
     { MP_ROM_QSTR(MP_QSTR_banner_sent), MP_ROM_PTR(&ssh_banner_sent_obj) },
     { MP_ROM_QSTR(MP_QSTR_banner_reset), MP_ROM_PTR(&ssh_banner_reset_obj) },
-    { MP_ROM_QSTR(MP_QSTR_bind_reg), MP_ROM_PTR(&ssh_bind_reg_obj) },
+    { MP_ROM_QSTR(MP_QSTR_reg_load), MP_ROM_PTR(&ssh_reg_load_obj) },
 };
 static MP_DEFINE_CONST_DICT(ssh_module_globals, ssh_module_globals_table);
 

@@ -9,7 +9,7 @@ void pm_metal_live_ssh(void)
 {
     /* Boot already auto-starts sshd on FW; this lab loop only binds if still down. */
     if (pm_metal_net_ssh_listen_port() == 0u) {
-        if (pm_metal_net_ssh_autoload() != 0) {
+        if (pm_metal_net_ssh_init() != 0) {
             uart_puts("live ssh init fail\n");
             return;
         }

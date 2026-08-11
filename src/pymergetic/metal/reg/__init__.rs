@@ -78,27 +78,31 @@ pub fn ledger_add_caller(
     ledger::LEDGER.add_caller(module, func, lang, caller_module, via, honesty)
 }
 
-/// Fill `row` from the kernel table when its slot is still null.
+/// Fill `row` from µPy SoT / kernel table when its slot is still null.
 /// Used by generated always-proxy faces (path-included RegImports are
 /// often not listed on any `RegMod.imports` slice, so `connect_all`
 /// alone cannot see them). After the first successful resolve the slot
 /// stays hot -- subsequent calls are one atomic load.
 #[inline]
 pub fn resolve_import(row: &RegImport) {
-    if row.entry().is_none() {
-        row.set(kernel::find_entry(row.module, row.func));
+    if !row.ptr().is_null() {
+        return;
     }
+    kernel::resolve_import_row(row);
 }
 
 static TABLE: Table = Table::new();
 
 /// Resolve `(full_module, func)` across both registry tiers: the late
-/// dynamic table first, then the static `RegMod` kernel ring (wasm packs
-/// and floor modules). One name space for call-by-name convenience APIs.
+/// dynamic table first, then µPy SoT, then the static RegMod ring façade.
 fn bind_any(full_module: *const u8, func: *const u8) -> *const c_void {
     let p = bind_key(&TABLE, full_module, func);
     if !p.is_null() {
         return p;
+    }
+    let upy = kernel::resolve_native_c(full_module, func);
+    if !upy.is_null() {
+        return upy;
     }
     let Some(m) = cstr_bytes(full_module, MODULE_MAX) else {
         return core::ptr::null();

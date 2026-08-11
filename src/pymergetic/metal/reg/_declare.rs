@@ -1,19 +1,28 @@
 //! Import slot + fixed-capacity per-module registry state.
+//!
+//! **Façade:** module *identity* is µPy `sys.modules` (`pm_mod_*`).
+//! This slot only caches the resolved call edge after connect — do not grow
+//! a parallel module OS here.
 
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::entry::RegExport;
 
-/// One import: peer `(module, func)` + cached [`RegExport`] after connect.
+/// One import: peer `(module, func)` + cached call edge after connect.
 ///
-/// Populated by `_kernel::connect_one` / `connect_all`. Reset to null when
-/// the peer was never found or has since been unloaded.
+/// Populated by `_kernel::connect_one` / `connect_all` (or
+/// [`crate::resolve_import`]). Resolve order: µPy `pm_mod_resolve_native`
+/// first, then RegMod export table (transitional). Reset to null when the
+/// peer was never found or has since been unloaded.
 ///
-/// Hot path: [`RegImport::export`] → [`RegExport::get`] — no strings.
+/// Hot path: [`RegImport::ptr`] — no strings, no `sys.modules` walk.
 pub struct RegImport {
     pub module: &'static str,
     pub func: &'static str,
+    /// Cached fn / trampoline pointer (SoT connect result).
+    fn_slot: AtomicPtr<c_void>,
+    /// Optional RegExport meta (ledger / transitional ring).
     slot: AtomicPtr<RegExport>,
 }
 
@@ -21,8 +30,7 @@ pub struct RegImport {
 #[deprecated(note = "renamed to RegImport")]
 pub type ImportRow = RegImport;
 
-// Safety: `slot` is the only field with interior mutability, and it is an
-// atomic.
+// Safety: atomics are the only interior mutability.
 unsafe impl Sync for RegImport {}
 
 impl RegImport {
@@ -30,6 +38,7 @@ impl RegImport {
         Self {
             module,
             func,
+            fn_slot: AtomicPtr::new(core::ptr::null_mut()),
             slot: AtomicPtr::new(core::ptr::null_mut()),
         }
     }
@@ -40,6 +49,18 @@ impl RegImport {
             None => core::ptr::null_mut(),
         };
         self.slot.store(p, Ordering::Release);
+        let fnp = match export {
+            Some(e) => e.get() as *mut c_void,
+            None => core::ptr::null_mut(),
+        };
+        if !fnp.is_null() {
+            self.fn_slot.store(fnp, Ordering::Release);
+        }
+    }
+
+    /// Cache a resolved native/trampoline pointer (from `pm_mod_*`).
+    pub(crate) fn set_fn(&self, ptr: *mut c_void) {
+        self.fn_slot.store(ptr, Ordering::Release);
     }
 
     /// Cached export handle after `connect_all`, or None if not hooked.
@@ -59,6 +80,10 @@ impl RegImport {
     }
 
     pub fn ptr(&self) -> *const c_void {
+        let p = self.fn_slot.load(Ordering::Acquire);
+        if !p.is_null() {
+            return p;
+        }
         match self.export() {
             Some(e) => e.get(),
             None => core::ptr::null(),

@@ -1,50 +1,33 @@
 /*
  * Static RegMod lifecycle (Rust kernel) — C face.
  *
+ * **FROZEN / transitional façade.** Module identity SoT is µPy
+ * `sys.modules` via `pm_mod_publish` / `pm_mod_connect_import`
+ * (`extmod/wasmmod/include/pm_mod.h`). Do not grow new RegMod ring
+ * features — publish exports onto the µPy module and connect soft
+ * imports there. This header remains so existing floor muscles keep
+ * compiling while the ring is starved and deleted.
+ *
  * Indexes stay inside the owning TU (named enums). Outside resolves by
  * string name only — never peer enums / naked export indexes.
  *
- *   enum {
- *       PM_METAL_NET_SSH_EXPORT_LISTEN = 0,
- *       PM_METAL_NET_SSH_EXPORT_CLOSE,
- *       PM_METAL_NET_SSH_EXPORT_AUTOLOAD,
- *       PM_METAL_NET_SSH_EXPORT_STATUS,
- *   };
- *   enum {
- *       PM_METAL_NET_SSH_IMPORT_YIELD = 0,
- *   };
+ * Exports-only (usual):
  *
- *   static pm_metal_reg_export_t ssh_exports[] = {
- *       PM_METAL_REG_EXPORT(listen),
- *       PM_METAL_REG_EXPORT(close),
- *       PM_METAL_REG_EXPORT(autoload),
- *       PM_METAL_REG_EXPORT(status),
- *   };
- *   static pm_metal_reg_import_t ssh_imports[] = {
- *       { .module = "pymergetic.metal.async", .func = "yield" },
- *   };
- *
- *   static int32_t ssh_register_symbols(void *ctx) {
- *       (void)ctx;
- *       pm_metal_reg_export_publish(
- *           &ssh_exports[PM_METAL_NET_SSH_EXPORT_LISTEN],
- *           (void *)pm_metal_net_ssh_listen);
+ *   enum {
+ *       PM_METAL_NET_SSH_EXPORT_INIT = 0,
+ *       PM_METAL_NET_SSH_EXPORT_LISTEN,
  *       ...
- *       return 0;
- *   }
- *
- *   static pm_metal_reg_mod_desc_t ssh_desc = {
- *       .name = "pymergetic.metal.net.ssh",
- *       .exports = ssh_exports,
- *       .n_exports = 4,
- *       .imports = ssh_imports,
- *       .n_imports = 1,
- *       .register_symbols = ssh_register_symbols,
- *       .lang = PM_METAL_REG_LANG_C,
  *   };
- *   int32_t pm_metal_net_ssh_reg_load(void) {
- *       return pm_metal_reg_mod_load_c(&ssh_desc);
- *   }
+ *   static pm_metal_reg_export_t net_ssh_exports[] = {
+ *       PM_METAL_REG_EXPORT(init),
+ *       PM_METAL_REG_EXPORT(listen),
+ *       ...
+ *   };
+ *   PM_METAL_REG_MOD(net_ssh, "pymergetic.metal.net.ssh")
+ *   static int32_t net_ssh_register_symbols(void *ctx) { ... }
+ *
+ * With soft imports: write pm_metal_reg_mod_desc_t by hand (imports != NULL);
+ * PM_METAL_REG_MOD is exports-only.
  *
  * Naming: PM_METAL_<PATH>_{EXPORT|IMPORT}_<NAME>
  * (path after pymergetic.metal. — net.ssh → NET_SSH).
