@@ -20,6 +20,11 @@
 #define BH_PLATFORM_METAL
 #endif
 
+/* UEFI clang --target=*-windows* sets _MSC_BUILD. WAMR then
+ * __declspec(dllimport)s BH_MALLOC (os_malloc). This image *is*
+ * os_malloc — static firmware, not a DLL. */
+#undef _MSC_BUILD
+
 #define BH_APPLET_PRESERVED_STACK_SIZE (2 * BH_KB)
 #define BH_THREAD_DEFAULT_PRIORITY 0
 

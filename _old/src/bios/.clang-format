@@ -1,4 +1,0 @@
-# EDK2 dialect lives here too (incl. src/bios/shim/**) — see
-# src/efi/.clang-format for why this is disabled rather than reformatted.
----
-DisableFormat: true

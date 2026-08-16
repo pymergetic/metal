@@ -1,5 +1,0 @@
-menu "util"
-
-source "metal/util/Kconfig.iface"
-
-endmenu

@@ -1,45 +1,72 @@
-# extmod/metal — Metal product as a µPy extmod
+# extmod/metal — `pymergetic.metal` on mp
 
-metalpython = **upywm + Metal**. This directory is Metal’s µPy package
-(`pymergetic.metal`). Fleet: [os-sdk `REPO_LAYOUT.md`](https://github.com/pymergetic/os-sdk/blob/main/packages/REPO_LAYOUT.md).
-`metal.git` **`main`** is this card tree; **`preview`** is the standalone CMake runtime (metal-doom).
-one defining lang, C/RS/Py faces — not a Python-only twin.
+metalpython (**mp**) = **upywm + Metal**. This directory is the Metal
+package (`pymergetic.metal` cards). Fleet map:
+[os-sdk `REPO_LAYOUT.md`](https://github.com/pymergetic/os-sdk/blob/main/packages/REPO_LAYOUT.md).
 
-**Heap is wasmmod, not Metal:** `pymergetic.util.mem` (`impl = "c"`).
-`#include "pymergetic/util/mem/__exports__.h"` / generated `.rs`. There is
-**no** `pymergetic.metal.mem`. Dual-arena usage is two
-`pm_util_mem_arena_create` calls.
+Two trees, same git repo, **different products**:
+
+| Branch | What | Who consumes it |
+|--------|------|-----------------|
+| **`main`** (this tree) | Card extmod nested at mp `extmod/metal` | unix / emcc / firmware seats |
+| **`preview`** | Standalone CMake OS (shell, gfx, PXE, Doom) | [metal-doom](https://github.com/pymergetic/metal-doom) via sibling clone |
+
+Do **not** point `METAL_ROOT` / Doom at this card tree. Preview screenshots
+and CMake docs live on
+[`preview`](https://github.com/pymergetic/metal/tree/preview).
+
+Heap is wasmmod `pymergetic.util.mem` (`impl = "c"`). There is **no**
+`pymergetic.metal.mem`.
 
 ```bash
-make -C ports/unix MICROPY_PY_WASM=1 MICROPY_PY_METAL=1 BUILD=build-metal
-make -C extmod/metal test
+make -C extmod/metal test      # host C, then firmware, unix, emcc
 make -C extmod/metal upy
-# unix boot: arena → runners → lo → metal io_ops → host_boot (GC stays on)
+make -C extmod/metal firmware  # QEMU BIOS + UEFI (headless serial prove)
+make -C extmod/metal/port BOARD=X86_64_BIOS run
+make -C ports/unix MICROPY_PY_WASM=1 MICROPY_PY_METAL=1 BUILD=build-metal
 ./ports/unix/build-metal/micropython -c "import pymergetic.metal as m; print(m.ready())"
 ```
 
-`pymergetic.metal.async` is the stackless runner (ready ring + timer list +
-`run_until`). `pymergetic.metal.net.ip` is IPv4 + ICMP + UDP + TCP + **lo**
-(lo-reliable TCP on loopback; L2 TCP rexmit after `sim_drop`). Faces are
-**`pymergetic.util.gen`** output (`PM_MOD_EXPORT_C` in `__impl__.c`).
-Regenerate: `make -C extmod/metal gen` (wasmmod-gen also walks `../metal/src`
-from the wasmmod crate). `pymergetic.metal.net.tls`
-wraps the same µPy-vendored mbedtls on ip socks (`VERIFY_NONE` client).
-`pymergetic.metal.net.http` is the GET client and strong `pm_metal_wasm_io_*`
-(parked `io.fetch` to lo, `http://` and `https://`). `pymergetic.metal.net.http.asgi`
-is the RS HTTP/1.0 server on the same socks (`impl = rs`). L2 NICs live in
-`pymergetic.metal.drivers.net` (tap, virtio, bge, sim) — hardware adapters, not the
-stack; gfx/audio land under `pymergetic.metal.drivers` later. `wg` stays
-`pymergetic.metal.net.wg` (tunnel on ip, not a NIC). TCP rexmit lives in ip and
-is pumped on L2. `pymergetic.metal.net.dns`
-answers A queries on ip UDP. `ntp` is SNTP, `dhcp` is DISCOVER/OFFER then `if_up`,
-`tftp` is RRQ/DATA, `ssh` sends an SSH-2.0 ident on TCP. Cards compile here only
-(`metal.mk`). Host mbedtls objects are the same `lib/mbedtls` unix already
-links — not a second copy in firmware.
+Unix boot (`pm_metal_boot` before `pm_wasmmod_host_boot`): arena → async →
+ip+lo → tls → http → metal `io_ops`. Packet / `io.fetch` bytes stay on the
+arena, not the GC heap. Do not auto-listen ASGI on unix boot.
 
-Unix `MICROPY_PY_METAL=1` boots from `pm_metal_boot` (before `pm_wasmmod_host_boot`):
-`util.mem` arena, async runner, ip+lo, tls, http, then `pm_wasmmod_metal_io_ops_init` + `io_set`.
-`host_boot` keeps that table. Packet/`io.fetch` bytes stay on the arena, not the GC heap.
-Do not auto-listen ASGI/L7 on unix boot.
+## Live cards
 
-Not this slice: virtio PCI MMIO, Noise_IK WireGuard, `register_upy`.
+Faces are `pymergetic.util.gen` (`PM_MOD_EXPORT_C` / RS). Regen:
+`make -C extmod/metal gen`.
+
+| Layer | Cards | Host prove | Firmware image | Notes |
+|-------|-------|------------|----------------|-------|
+| bus / dt | `dt`, `bus.pci`, `bus.virtio` | yes | yes | virtio MMIO magic on firmware |
+| drivers | `drivers`, `.net`, `.blk`, `.rtc` | yes | yes | |
+| NIC | `drivers.net.{virtio,sim,tap,bge}` | yes | virtio only | tap = host; sim = in-process / emcc frames; bge = probe/queue, not FreeBSD `if_bge` |
+| blk / rtc | `blk.virtio`, `blk.ide`, `rtc.{sim,cmos}` | yes | virtio-blk + cmos | |
+| async | `async` | yes | yes | stackless ready-ring + timers — not preview N-CPU coop |
+| ip | `net.ip` | yes | yes | IPv4 + ICMP/UDP/TCP; lo-reliable; L2 rexmit after `sim_drop` |
+| L7 | `net.tls`, `net.http`, `http.asgi` | yes | tls+http (`fw_cdn.mk`) | ASGI is RS HTTP/1.0 on lo (one listen) |
+| more L7 | `dns`, `ntp`, `dhcp`, `tftp`, `ssh`, `wg` | yes | **not linked yet** | ssh = ident+KEXINIT; wg = Noise_IK |
+| memmap | `fw.memmap` | yes | yes | |
+| µPy | `register_upy` | unix / firmware REPL | yes | `upy_guest_prove.py` |
+
+`io.fetch` fills: unix mp stays POSIX+mbedtls; firmware parks in
+`metal.net.http`; emcc WAN is `js.fetch` (sim L2 is frames, not HTTP).
+
+## Not this product (stays on `preview`)
+
+Shell / tabs / UART+FB consoles, gfx scanout (Bochs/VESA/radeon/i915),
+audio, PS/2, CMake EFI/BIOS/`upload-pxe`, Dropbear viewport, lwIP IPv6,
+N-CPU coop runners, Doom guest. Those are the CMake runtime. Bring them
+across as **new cards** (`drivers.gfx`, `shell`, …) when firmware wants a
+console — do not revive `_old/` or vendor patches from preview `setup.d`.
+
+## Firmware vs 32-bit board names
+
+| `BOARD` | What it actually is |
+|---------|---------------------|
+| `X86_64_BIOS` / `X86_64_UEFI` | Real QEMU seats |
+| `X86_BIOS` | Include of the 64-bit BIOS makefile |
+| `X86_UEFI` | Copies `BOOTX64.EFI` → `BOOTIA32.EFI` |
+
+WAMR on firmware is wasmmod `ports/metal/wamr_freestanding.mk` (interp +
+shared heap). Fast-jit stays off.
