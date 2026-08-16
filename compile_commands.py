@@ -6,7 +6,7 @@ import pathlib
 import sys
 
 metal = pathlib.Path(sys.argv[1]).resolve()
-mpwm = pathlib.Path(sys.argv[2]).resolve()
+host = pathlib.Path(sys.argv[2]).resolve()
 wasm = pathlib.Path(sys.argv[3]).resolve()
 ws = pathlib.Path(sys.argv[4]).resolve()
 vscode_cdb = pathlib.Path(sys.argv[5])
@@ -29,21 +29,21 @@ card_incs = [
     metal / "src",
     wasm,
     wasm / "src",
-    mpwm,
-    mpwm / "ports/unix",
-    mpwm / "ports/unix/variants/standard",
-    mpwm / "ports/unix/build-wasm",
-    mpwm / "lib/mbedtls/include",
+    host,
+    host / "ports/unix",
+    host / "ports/unix/variants/standard",
+    host / "ports/unix/build-wasm",
+    host / "lib/mbedtls/include",
 ]
 upy_incs = [
     metal / "src",
     wasm,
     wasm / "src",
-    mpwm,
-    mpwm / "ports/unix",
-    mpwm / "ports/unix/variants/standard",
-    mpwm / "ports/unix/build-metal",
-    mpwm / "lib/mbedtls/include",
+    host,
+    host / "ports/unix",
+    host / "ports/unix/variants/standard",
+    host / "ports/unix/build-metal",
+    host / "lib/mbedtls/include",
 ]
 # Firmware µPy (port/upy, mpconfigport.h). unix build-wasm has no Q(metal).
 fw_incs = [
@@ -53,7 +53,7 @@ fw_incs = [
     metal / "src",
     wasm,
     wasm / "src",
-    mpwm,
+    host,
 ]
 fw_defs = " -DPM_METAL_FIRMWARE=1 -DPM_WASMMOD_GUEST=1 -DNDEBUG"
 wasm_h = wasm / "ports/micropython/mpconfig_wasm.h"

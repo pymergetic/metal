@@ -1,6 +1,6 @@
 # extmod/metal — Metal product as a µPy extmod
 
-metalpython = **mpwm + Metal**. This directory is Metal’s µPy package
+metalpython = **upywm + Metal**. This directory is Metal’s µPy package
 (`pymergetic.metal`). Leaves (async, net, …) use the same rule as wasmmod:
 one defining lang, C/RS/Py faces — not a Python-only twin.
 
