@@ -1,5 +1,10 @@
 # Metal
 
+> **Branch `preview`.** Standalone CMake runtime (UEFI/BIOS, doom, old async).
+> Product Metal — `pymergetic.metal` cards nested at metalpython `extmod/metal` — is **`main`**.
+> metal-doom sets `METAL_ROOT` at this tree, not the card tree.
+
+
 Blank metal. Async wasm + MicroPython. High-speed awaitable APIs — almost
 nothing in the way.
 
