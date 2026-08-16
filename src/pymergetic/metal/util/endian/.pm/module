@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.util.endian",
-  "impl": "c",
-  "version": "0.1.0",
-  "comment": "Header-only LE wire load/store for fourcc/eightcc."
-}

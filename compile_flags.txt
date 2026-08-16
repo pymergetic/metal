@@ -1,0 +1,23 @@
+# Fallback when clangd has no CDB hit (paths relative to this file).
+# µPy TUs (modmetal.c, boot.c): never -Ihost_inc (shadows py/mpconfig.h).
+-xc
+-std=gnu11
+-Isrc
+-I../../lib/mbedtls/include
+-I../wasmmod
+-I../wasmmod/src
+-I../..
+-I../../ports/unix
+-I../../ports/unix/variants/standard
+-I../../ports/unix/build-metal
+-include ../wasmmod/ports/micropython/mpconfig_wasm.h
+-include mpconfig_unix.h
+-DMICROPY_PY_WASM=1
+-DMICROPY_PY_METAL=1
+-DMICROPY_SSL_MBEDTLS=1
+-DMBEDTLS_CONFIG_FILE="mbedtls/mbedtls_config_port.h"
+-DMICROPY_MODULE_BUILTIN_INIT=1
+-DMICROPY_MODULE_BUILTIN_SUBPACKAGES=1
+-DPM_WASMMOD_GUEST=0
+-D_POSIX_C_SOURCE=200809L
+-Wno-unknown-attributes

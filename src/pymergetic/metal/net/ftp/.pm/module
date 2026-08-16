@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.net.ftp",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "FTP client (RETR/STOR) and memory-root server on net.tcp."
-}

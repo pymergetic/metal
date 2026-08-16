@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Inspect</title>
+  <link rel="stylesheet" href="css/base.css" />
+  <link rel="stylesheet" id="theme-css" href="css/themes/metal.css" />
+</head>
+<body>
+  <header>
+    <h1 id="brand">Inspect</h1>
+    <p id="role">loading capabilities…</p>
+  </header>
+  <main>
+    <section>
+      <h2>Health</h2>
+      <pre id="health"></pre>
+    </section>
+    <section>
+      <h2>Capabilities</h2>
+      <pre id="caps"></pre>
+    </section>
+    <section>
+      <h2>Self</h2>
+      <pre id="self"></pre>
+    </section>
+    <section>
+      <h2>Registry completeness</h2>
+      <p class="hint">Cold-path multi-callee / face / honesty gaps (not hot dispatch).</p>
+      <p id="reg-summary" class="hint"></p>
+      <div class="reg-controls">
+        <label><input type="checkbox" id="gaps-only" /> gaps only</label>
+        <label><input type="checkbox" id="detail" /> detail</label>
+        <button type="button" id="reg-reload">Reload</button>
+      </div>
+      <pre id="reg-tree" class="reg-tree"></pre>
+      <div id="reg-modules"></div>
+      <details>
+        <summary>method drill</summary>
+        <pre id="reg-drill"></pre>
+      </details>
+      <details>
+        <summary>raw ledger JSON</summary>
+        <pre id="reg"></pre>
+      </details>
+    </section>
+  </main>
+  <script src="js/inspect.js"></script>
+</body>
+</html>

@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.dev.random",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "Random probe (RDRAND) -> DT RANDOM."
-}

@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.fs.fat",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "FAT16/FAT32 + VFAT LFN on buffer/blk: format, seed, RW async ops."
-}

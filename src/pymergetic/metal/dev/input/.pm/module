@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.dev.input",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "Input probe (PS/2) -> DT INPUT."
-}

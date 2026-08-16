@@ -1,9 +1,0 @@
-menu "boot.rootfs"
-
-config PM_METAL_LOG_BOOT_MOUNTS
-	bool "Log each rootfs mount at bringup"
-	default y
-	help
-	  Print one line per successful Stage-A / module mount.
-
-endmenu

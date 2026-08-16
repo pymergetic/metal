@@ -1,0 +1,8 @@
+{
+  "include": ["."],
+  "extraPaths": ["src", "../wasmmod/src"],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "error",
+  "reportMissingModuleSource": "none"
+}

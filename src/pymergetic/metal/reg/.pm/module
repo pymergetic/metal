@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.reg",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "Cross-lang symbol bus: full module name + func, lookup and ptr bind."
-}

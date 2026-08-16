@@ -1,0 +1,118 @@
+# clangd for extmod/metal. Workspace clangd uses --compile-commands-dir=.vscode
+# and will fuzzy-match this tree to old metalpython metal TUs unless this
+# directory's compile_commands.json is also spliced there
+# (make -C extmod/metal compile-commands). Relative -I are from this file.
+#
+# host_inc/py/mpconfig.h is a mbedtls host-test stub. It must not sit on
+# the include path for µPy TUs (modmetal.c, boot.c) or mp_int_t never
+# typedefs and mp_obj_new_bool looks like int (*)(int *).
+#
+# Firmware port TUs must not use unix/build-wasm genhdr — that tree has no
+# Q(metal) / MP_QSTR_metal (qstrdefs.metal is firmware + unix build-metal).
+
+CompileFlags:
+  CompilationDatabase: .
+  Remove:
+    - -I.*/ports/unix/build-standard
+    - -I.*/build-standard
+    - -I.*/extmod/metal/host_inc
+
+---
+If:
+  PathMatch: .*/port/.*\.(c|h)$
+CompileFlags:
+  CompilationDatabase: None
+  Add:
+    - -xc
+    - -std=gnu11
+    - -ffreestanding
+    - -Wall
+    - -Iport
+    - -Iport/boards/X86_64_BIOS
+    - -Iport/build/X86_64_BIOS-mp-repl
+    - -I../..
+    - -Isrc
+    - -I../wasmmod
+    - -I../wasmmod/src
+    - -DPM_METAL_FIRMWARE=1
+    - -DPM_WASMMOD_GUEST=1
+    - -Wno-unknown-attributes
+Diagnostics:
+  UnusedIncludes: None
+
+---
+# WAMR Metal glue. Same -I as port/fw_wamr.mk (platform_api_vmcore.h).
+If:
+  PathMatch: .*/port/wamr/.*\.(c|h)$
+CompileFlags:
+  Add:
+    - -Iport/wamr
+    - -Iport/fwinc
+    - -I../wasmmod/third_party/wamr/core/iwasm/include
+    - -I../wasmmod/third_party/wamr/core/shared/platform/include
+    - -I../wasmmod/third_party/wamr/core
+    - -DBH_PLATFORM_METAL
+    - -DBUILD_TARGET_X86_64
+    - -DWASM_ENABLE_INTERP=1
+    - -DWASM_ENABLE_FAST_INTERP=1
+    - -DWASM_ENABLE_SHARED_HEAP=1
+    - -DWASM_DISABLE_HW_BOUND_CHECK=1
+
+---
+If:
+  PathMatch: .*/(modmetal|modpymergetic|boot|mpconfig_unix).*\.(c|h)$
+CompileFlags:
+  Add:
+    - -xc
+    - -std=gnu11
+    - -I../..
+    - -I../../ports/unix
+    - -I../../ports/unix/variants/standard
+    - -I../../ports/unix/build-metal
+    - -I../wasmmod
+    - -I../wasmmod/src
+    - -Isrc
+    - -I../../lib/mbedtls/include
+    - -include
+    - ../wasmmod/ports/micropython/mpconfig_wasm.h
+    - -include
+    - mpconfig_unix.h
+    - -DMICROPY_PY_WASM=1
+    - -DMICROPY_PY_METAL=1
+    - -DMICROPY_SSL_MBEDTLS=1
+    - -DMBEDTLS_CONFIG_FILE="mbedtls/mbedtls_config_port.h"
+    - -DMICROPY_MODULE_BUILTIN_INIT=1
+    - -DMICROPY_MODULE_BUILTIN_SUBPACKAGES=1
+    - -DPM_WASMMOD_GUEST=0
+    - -D_POSIX_C_SOURCE=200809L
+    - -Wno-unknown-attributes
+Diagnostics:
+  UnusedIncludes: None
+
+---
+If:
+  PathMatch: .*\.(c|h)$
+  PathExclude: .*/(port/|(modmetal|modpymergetic|boot|mpconfig_unix))
+CompileFlags:
+  Add:
+    - -xc
+    - -std=gnu11
+    - -I../..
+    - -I../../ports/unix
+    - -I../../ports/unix/variants/standard
+    - -I../../ports/unix/build-wasm
+    - -I../wasmmod
+    - -I../wasmmod/src
+    - -Isrc
+    - -I../../lib/mbedtls/include
+    - -DMICROPY_PY_WASM=1
+    - -DMICROPY_PY_METAL=1
+    - -DMICROPY_SSL_MBEDTLS=1
+    - -DMBEDTLS_CONFIG_FILE="mbedtls/mbedtls_config_port.h"
+    - -DMICROPY_MODULE_BUILTIN_INIT=1
+    - -DMICROPY_MODULE_BUILTIN_SUBPACKAGES=1
+    - -DPM_WASMMOD_GUEST=0
+    - -D_POSIX_C_SOURCE=200809L
+    - -Wno-unknown-attributes
+Diagnostics:
+  UnusedIncludes: None

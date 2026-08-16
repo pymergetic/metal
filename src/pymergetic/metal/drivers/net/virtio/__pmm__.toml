@@ -1,0 +1,2 @@
+fqn = "pymergetic.metal.drivers.net.virtio"
+impl = "c"

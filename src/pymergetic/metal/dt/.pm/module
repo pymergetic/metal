@@ -1,6 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.dt",
-  "impl": "rs",
-  "version": "0.1.0"
-}

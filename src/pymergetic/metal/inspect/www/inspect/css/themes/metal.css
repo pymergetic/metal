@@ -1,0 +1,11 @@
+:root {
+  --bg: #101418;
+  --fg: #e7ece8;
+  --muted: #8a958c;
+  --accent: #5cb88a;
+}
+#brand::after {
+  content: " · metal";
+  color: var(--accent);
+  font-weight: 500;
+}

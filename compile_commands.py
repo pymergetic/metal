@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Emit clangd compile_commands.json for extmod/metal (µPy TUs vs host-test)."""
+import json
+import os
+import pathlib
+import sys
+
+metal = pathlib.Path(sys.argv[1]).resolve()
+mpwm = pathlib.Path(sys.argv[2]).resolve()
+wasm = pathlib.Path(sys.argv[3]).resolve()
+ws = pathlib.Path(sys.argv[4]).resolve()
+vscode_cdb = pathlib.Path(sys.argv[5])
+
+upy = {
+    "modmetal.c",
+    "modmetal.h",
+    "modpymergetic.c",
+    "boot.c",
+    "boot.h",
+    "mpconfig_unix.h",
+}
+defs = (
+    " -DMICROPY_PY_WASM=1 -DMICROPY_PY_METAL=1 -DMICROPY_SSL_MBEDTLS=1"
+    ' -DMBEDTLS_CONFIG_FILE=\\"mbedtls/mbedtls_config_port.h\\"'
+    " -DMICROPY_MODULE_BUILTIN_INIT=1 -DMICROPY_MODULE_BUILTIN_SUBPACKAGES=1"
+    " -DPM_WASMMOD_GUEST=0 -D_POSIX_C_SOURCE=200809L"
+)
+card_incs = [
+    metal / "src",
+    wasm,
+    wasm / "src",
+    mpwm,
+    mpwm / "ports/unix",
+    mpwm / "ports/unix/variants/standard",
+    mpwm / "ports/unix/build-wasm",
+    mpwm / "lib/mbedtls/include",
+]
+upy_incs = [
+    metal / "src",
+    wasm,
+    wasm / "src",
+    mpwm,
+    mpwm / "ports/unix",
+    mpwm / "ports/unix/variants/standard",
+    mpwm / "ports/unix/build-metal",
+    mpwm / "lib/mbedtls/include",
+]
+# Firmware µPy (port/upy, mpconfigport.h). unix build-wasm has no Q(metal).
+fw_incs = [
+    metal / "port",
+    metal / "port/boards/X86_64_BIOS",
+    metal / "port/build/X86_64_BIOS-mp-repl",
+    metal / "src",
+    wasm,
+    wasm / "src",
+    mpwm,
+]
+fw_defs = " -DPM_METAL_FIRMWARE=1 -DPM_WASMMOD_GUEST=1 -DNDEBUG"
+wasm_h = wasm / "ports/micropython/mpconfig_wasm.h"
+unix_h = metal / "mpconfig_unix.h"
+
+
+def inc(paths):
+    return " ".join("-I" + str(p) for p in paths)
+
+
+def is_fw(f):
+    try:
+        return f.relative_to(metal).parts[0] == "port"
+    except ValueError:
+        return False
+
+
+ents = []
+for f in sorted(metal.rglob("*")):
+    if f.suffix not in {".c", ".h"} or "build" in f.parts:
+        continue
+    if is_fw(f):
+        pfx = (
+            "clang -xc -std=gnu11 -ffreestanding -Wall -Wno-unknown-attributes "
+            + inc(fw_incs)
+            + fw_defs
+        )
+    elif f.name in upy:
+        pfx = (
+            "clang -xc -std=gnu11 -Wall -Wno-unknown-attributes "
+            + inc(upy_incs)
+            + defs
+            + " -include "
+            + str(wasm_h)
+            + " -include "
+            + str(unix_h)
+        )
+    else:
+        pfx = "clang -xc -std=gnu11 -Wall -Wno-unknown-attributes " + inc(card_incs) + defs
+    ents.append({"directory": str(ws), "file": str(f), "command": pfx + " -c " + str(f)})
+
+(metal / "compile_commands.json").write_text(json.dumps(ents, indent=2) + "\n")
+data = json.loads(vscode_cdb.read_text()) if vscode_cdb.exists() else []
+pref = str(metal) + os.sep
+kept = [
+    e
+    for e in data
+    if not str(e.get("file", "")).startswith(pref)
+    and "packages/micropython-wasmmod/extmod/metal/" not in str(e.get("file", ""))
+]
+vscode_cdb.write_text(json.dumps(ents + kept, indent=4) + "\n")
+print("metal clangd TUs", len(ents))

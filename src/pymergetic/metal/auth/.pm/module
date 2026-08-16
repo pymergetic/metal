@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.auth",
-  "impl": "c",
-  "version": "0.1.0",
-  "comment": "Password (Argon2id) + SSH pubkey table. Bcrypt when crypt_blowfish vendored."
-}

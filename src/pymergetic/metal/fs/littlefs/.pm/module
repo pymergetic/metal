@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.fs.littlefs",
-  "impl": "rs",
-  "version": "0.1.0",
-  "comment": "littlefs on buffer: format, seed, RW async ops (vendor lfs.c)."
-}

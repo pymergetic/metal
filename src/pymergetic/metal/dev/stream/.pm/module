@@ -1,7 +1,0 @@
-{
-  "type": "module",
-  "name": "pymergetic.metal.dev.stream",
-  "impl": "c",
-  "version": "0.1.0",
-  "comment": "Byte streams: pipe/pty rings + async read/drain (Dropbear/shell)."
-}
