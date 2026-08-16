@@ -1,5 +1,7 @@
-/* pymergetic.metal.net.http — parked io.fetch to lo (http + https). */
+/* pymergetic.metal.net.http — parked io.fetch on lo and sim L2. */
 #include "pymergetic/metal/async.h"
+#include "pymergetic/metal/drivers/net.h"
+#include "pymergetic/metal/drivers/net/sim.h"
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/tls.h"
@@ -13,9 +15,11 @@
 #include <string.h>
 
 #define LO4 0x7f000001u
+#define IF4 0x0a000001u
 #define HTTP_PORT 8080
 #define HTTPS_PORT 8444
 #define AUTH_PORT 8082
+#define SIM_HTTP_PORT 8088
 
 typedef struct {
     pm_metal_async_coro_t coro;
@@ -106,9 +110,10 @@ static pm_metal_async_status_t step_https_server(pm_metal_async_coro_t *self) {
     return PM_METAL_ASYNC_DONE;
 }
 
-static int32_t serve_and_fetch(uint16_t port, int https, pm_metal_async_step_fn srv_step, const char *uri) {
+static int32_t serve_and_fetch(uint32_t addr, uint16_t port, int https, pm_metal_async_step_fn srv_step,
+    const char *uri) {
     int32_t ls = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
-    if (ls < 0 || pm_metal_net_ip_bind(ls, LO4, port) != 0 || pm_metal_net_ip_listen(ls, 1) != 0) {
+    if (ls < 0 || pm_metal_net_ip_bind(ls, addr, port) != 0 || pm_metal_net_ip_listen(ls, 1) != 0) {
         return fail("listen");
     }
     http_srv_t *srv = (http_srv_t *)pm_metal_async_coro_create(srv_step, sizeof(*srv));
@@ -136,14 +141,26 @@ static int32_t serve_and_fetch(uint16_t port, int https, pm_metal_async_step_fn 
 }
 
 static int32_t case_fetch_lo(void) {
-    return serve_and_fetch(HTTP_PORT, 0, step_server, "http://127.0.0.1:8080/x");
+    return serve_and_fetch(LO4, HTTP_PORT, 0, step_server, "http://127.0.0.1:8080/x");
 }
 
 static int32_t case_https_lo(void) {
     if (!pm_metal_net_tls_ready()) {
         return fail("tls");
     }
-    return serve_and_fetch(HTTPS_PORT, 1, step_https_server, "https://127.0.0.1:8444/x");
+    return serve_and_fetch(LO4, HTTPS_PORT, 1, step_https_server, "https://127.0.0.1:8444/x");
+}
+
+static int32_t case_fetch_sim(void) {
+    int32_t h;
+    if (pm_metal_drivers_net_sim_up() != 0) {
+        return fail("sim up");
+    }
+    h = pm_metal_drivers_net_by_compat("sim", 0);
+    if (h < 0 || pm_metal_net_ip_if_up_h(h, IF4) != 0) {
+        return fail("sim if_up");
+    }
+    return serve_and_fetch(IF4, SIM_HTTP_PORT, 0, step_server, "http://10.0.0.1:8088/x");
 }
 
 typedef struct {
@@ -238,6 +255,9 @@ int32_t pm_metal_net_http_tests(void) {
         return 1;
     }
     if (case_auth_headers() != 0) {
+        return 1;
+    }
+    if (case_fetch_sim() != 0) {
         return 1;
     }
     return 0;
