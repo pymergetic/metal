@@ -1,7 +1,8 @@
 # extmod/metal — Metal product as a µPy extmod
 
 metalpython = **upywm + Metal**. This directory is Metal’s µPy package
-(`pymergetic.metal`). Leaves (async, net, …) use the same rule as wasmmod:
+(`pymergetic.metal`). Fleet: [os-sdk `REPO_LAYOUT.md`](https://github.com/pymergetic/os-sdk/blob/main/packages/REPO_LAYOUT.md).
+`metal.git` **`main`** is this card tree; **`preview`** is the standalone CMake runtime (metal-doom).
 one defining lang, C/RS/Py faces — not a Python-only twin.
 
 **Heap is wasmmod, not Metal:** `pymergetic.util.mem` (`impl = "c"`).
