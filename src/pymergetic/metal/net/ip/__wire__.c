@@ -124,6 +124,7 @@ int32_t pm_metal_net_ip_rx_from(int32_t h, const uint8_t *frame, uint16_t len) {
         return -1;
     }
     pm_ip_rx_l2 = h;
+    pm_metal_drivers_net_count_rx(h);
     if (len >= 14u) {
         et = (uint16_t)((frame[12] << 8) | frame[13]);
         if (et == 0x0806u) {

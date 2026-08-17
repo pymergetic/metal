@@ -26,6 +26,7 @@ void pm_metal_boot_fill_bind_arena(pm_util_mem_arena_t *arena);
 const char *pm_metal_boot_fill_seat(void);
 int pm_metal_boot_fill_kernel(uint64_t *base, uint64_t *len);
 const char *pm_metal_boot_fill_map_label(void);
+int32_t pm_metal_boot_fill_want_dhcp(void);
 
 #ifdef __cplusplus
 }

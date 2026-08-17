@@ -3,7 +3,6 @@
 #define PYMERGETIC_METAL_BOOT_TREE_H
 
 #include "pymergetic/metal/boot/tree/__exports__.h" /* IWYU pragma: export */
-
-void pm_metal_boot_motd(void);
+#include "pymergetic/metal/boot/tree/__types__.h"   /* IWYU pragma: export */
 
 #endif /* PYMERGETIC_METAL_BOOT_TREE_H */

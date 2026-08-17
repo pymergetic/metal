@@ -84,6 +84,12 @@ const char *pm_metal_boot_fill_map_label(void) {
     return "upy";
 }
 
+/* Firmware boots onto a real wire — QEMU user-net or a lab LAN — where the
+ * address is the server's to give, not ours to invent. */
+int32_t pm_metal_boot_fill_want_dhcp(void) {
+    return 1;
+}
+
 void *pm_metal_wasm_malloc(size_t n) {
     pm_metal_upy_hdr_t *h;
     size_t need;

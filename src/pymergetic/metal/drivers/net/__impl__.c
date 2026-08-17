@@ -12,6 +12,11 @@
 struct pm_metal_netdev {
     uint32_t used;
     int32_t dt_id;
+    /* Frames the driver took and frames it refused. A wire that carries nothing
+     * looks exactly like a wire nobody used until someone counts. */
+    uint32_t tx_n;
+    uint32_t tx_err;
+    uint32_t rx_n;
     pm_metal_netdev_ops_t ops;
 };
 
@@ -167,7 +172,43 @@ int32_t pm_metal_drivers_net_tx(int32_t h, const uint8_t *frame, uint16_t len) {
     if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used || s_dev[h].ops.tx == NULL) {
         return -1;
     }
-    return s_dev[h].ops.tx(s_dev[h].ops.ctx, frame, len);
+    {
+        int32_t st = s_dev[h].ops.tx(s_dev[h].ops.ctx, frame, len);
+        if (st == 0) {
+            s_dev[h].tx_n++;
+        } else {
+            s_dev[h].tx_err++;
+        }
+        return st;
+    }
+}
+
+void pm_metal_drivers_net_count_rx(int32_t h) {
+    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used) {
+        return;
+    }
+    s_dev[h].rx_n++;
+}
+
+uint32_t pm_metal_drivers_net_tx_n(int32_t h) {
+    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used) {
+        return 0;
+    }
+    return s_dev[h].tx_n;
+}
+
+uint32_t pm_metal_drivers_net_tx_err(int32_t h) {
+    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used) {
+        return 0;
+    }
+    return s_dev[h].tx_err;
+}
+
+uint32_t pm_metal_drivers_net_rx_n(int32_t h) {
+    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used) {
+        return 0;
+    }
+    return s_dev[h].rx_n;
 }
 
 void pm_metal_drivers_net_mac(int32_t h, uint8_t *out) {
@@ -196,6 +237,10 @@ PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_poll, pm_meta
 PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_poll_all, pm_metal_drivers_net_poll_all, int32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_tx, pm_metal_drivers_net_tx, int32_t(int32_t, const uint8_t *, uint16_t));
 PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_mac, pm_metal_drivers_net_mac, void(int32_t, uint8_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_count_rx, pm_metal_drivers_net_count_rx, void(int32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_tx_n, pm_metal_drivers_net_tx_n, uint32_t(int32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_tx_err, pm_metal_drivers_net_tx_err, uint32_t(int32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_rx_n, pm_metal_drivers_net_rx_n, uint32_t(int32_t));
 
 PM_MOD_BOOT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_init, pm_metal_drivers_net_deinit);
 PM_MOD_BOOTDEP_C(pymergetic.metal.drivers.net, pymergetic.metal.drivers);

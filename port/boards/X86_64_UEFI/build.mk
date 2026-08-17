@@ -65,6 +65,12 @@ include $(PORT_DIR)/fw_cards.mk
 include $(PORT_DIR)/fw_wamr.mk
 include $(PORT_DIR)/upy.mk
 
+# The live half of the prove: a pack server on the host loopback, which the
+# guest reaches at the user-net gateway. Port agreed with upy/firmware_upy_cdn.py.
+CDN_PORT ?= 18123
+CDN_PACKS := $(WASMMOD)/examples/packs
+LIVE_CDN := $(PORT_DIR)/live_cdn.sh $(CDN_PACKS) $(CDN_PORT) $(BUILD)/cdn.log
+
 .PHONY: all prove run upload clean
 all: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 
@@ -107,7 +113,7 @@ $(BUILD)/blk.img: | $(BUILD)
 	printf 'METL' | dd of=$@ conv=notrunc status=none
 
 prove: $(BUILD)/esp.img $(BUILD)/blk.img
-	$(QEMU) $(QEMU_MACHINE) -serial file:$(BUILD)/serial.log -monitor none; \
+	$(LIVE_CDN) $(QEMU) $(QEMU_MACHINE) -serial file:$(BUILD)/serial.log -monitor none; \
 	st=$$?; cat $(BUILD)/serial.log; \
 	grep -q "pymergetic metal" $(BUILD)/serial.log || exit 1; \
 	grep -q "\`-- ready" $(BUILD)/serial.log || exit 1; \
@@ -121,8 +127,16 @@ prove: $(BUILD)/esp.img $(BUILD)/blk.img
 	grep -q "viewport" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy metal ready" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy native card import" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy inspect" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy inspect caps" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy dns" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy socket" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy cdn" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy pack import" $(BUILD)/serial.log || exit 1; \
+	grep -q "dhcp" $(BUILD)/serial.log || exit 1; \
+	grep -q "10.0.2.15" $(BUILD)/serial.log || exit 1; \
+	grep -q "10.0.2.2" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy cdn fetch 11" $(BUILD)/serial.log || exit 1; \
 	if [ $$st -eq 1 ] || [ $$st -eq 0 ]; then exit 0; fi; exit $$st
 
 run: $(BUILD)/esp.img $(BUILD)/blk.img

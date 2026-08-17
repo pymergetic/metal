@@ -1,4 +1,2 @@
-# pymergetic.metal.inspect — Inspect app package (Py callee for Microdot path)
-from .app import create_app
-
-__all__ = ["create_app"]
+# pymergetic.metal.inspect — C card. Python adapters live beside this file.
+# Import the registry face (`handle`, `body`), not this file.

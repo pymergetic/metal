@@ -74,10 +74,9 @@ SRC_METAL_CORE = \
 SRC_METAL_C = $(SRC_METAL_CORE) \
 	$(addprefix extmod/metal/src/pymergetic/metal/,$(METAL_CARD_REL))
 ifdef PM_METAL_BROWSER
-# The emcc cell needs no platform from us: wasmmod owns its own WAMR platform,
-# fw_lock crate and interp archive for that seat (ports/webassembly/wamr,
-# ports/webassembly/fw_lock). Metal's port/wamr platform is for firmware only.
-# Extra --js-library; leave ports/webassembly/library.js vanilla.
+# The emcc cell needs no platform from us: wasmmod owns WAMR + interp;
+# metal's fw_lock (ASGI + lock/registry) is selected in micropython.mk
+# when MICROPY_PY_METAL=1. Extra --js-library; leave library.js vanilla.
 JSFLAGS += --js-library $(TOP)/extmod/metal/src/pymergetic/metal/drivers/net/sim/library.js
 JSFLAGS += -s ALLOW_MEMORY_GROWTH=1
 JSFLAGS += -s INITIAL_MEMORY=33554432

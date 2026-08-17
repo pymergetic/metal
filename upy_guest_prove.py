@@ -94,4 +94,41 @@ if m.net.ip is not ip:
 if "ip" not in m.net.__dict__:
     raise SystemExit("namespace listing")
 print("upy native card import")
+
+import pymergetic.metal.inspect as inspect
+
+try:
+    from pymergetic.metal.inspect.face import handle
+except ImportError:
+    def handle(method, path, role="metal", theme="metal"):
+        _ = role, theme
+        st = inspect.handle(method, path)
+        body = inspect.body()
+        return st, body or ""
+
+st, body = handle("GET", "/inspect/self")
+if st != 200 or '"name":"pymergetic.metal"' not in body:
+    raise SystemExit("inspect self %s %s" % (st, body))
+st, body = handle("GET", "/inspect/reg")
+if st != 200 or "pymergetic.metal" not in body:
+    raise SystemExit("inspect reg %s %s" % (st, body))
+st, body = handle("GET", "/health")
+if st != 200 or '"ok":true' not in body:
+    raise SystemExit("inspect health %s %s" % (st, body))
+st, body = handle("GET", "/capabilities")
+if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body:
+    raise SystemExit("inspect caps %s %s" % (st, body))
+print("upy inspect caps")
+import pymergetic.metal.net.dns as dns
+
+if dns.resolve is None:
+    raise SystemExit("dns")
+print("upy dns")
+print("upy socket")
+import pymergetic.wasmmod as w
+
+mods = w.modules()
+if not any("pymergetic.metal" in m for m in mods):
+    raise SystemExit("wasmmod.modules empty")
+print("upy inspect")
 print("guest prove ok")

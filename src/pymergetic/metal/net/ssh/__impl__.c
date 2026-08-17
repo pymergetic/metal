@@ -40,12 +40,13 @@ static int32_t send_kexinit(void) {
     for (i = 0; i < 16; i++) {
         payload[n++] = (uint8_t)(0xa0u + i);
     }
-    n += put_name(payload + n, "curve25519-sha256");
-    n += put_name(payload + n, "ssh-ed25519");
-    n += put_name(payload + n, "chacha20-poly1305@openssh.com");
-    n += put_name(payload + n, "chacha20-poly1305@openssh.com");
-    n += put_name(payload + n, "hmac-sha2-256");
-    n += put_name(payload + n, "hmac-sha2-256");
+    /* Fail closed: do not name algos this card cannot run yet. */
+    n += put_name(payload + n, "none");
+    n += put_name(payload + n, "none");
+    n += put_name(payload + n, "none");
+    n += put_name(payload + n, "none");
+    n += put_name(payload + n, "none");
+    n += put_name(payload + n, "none");
     n += put_name(payload + n, "none");
     n += put_name(payload + n, "none");
     n += put_name(payload + n, "");

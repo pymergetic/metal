@@ -1,6 +1,8 @@
-"""Inspect Microdot app — mounts shared stubs via MicrodotAdapter."""
+"""Inspect Microdot app — same stubs, attached to ASGI listen."""
 from .adapter_microdot import MicrodotAdapter
 
 
 def create_app():
-    return MicrodotAdapter(role="metal", theme="metal").app
+    adapter = MicrodotAdapter(role="metal", theme="metal")
+    adapter.attach_asgi()
+    return adapter.app

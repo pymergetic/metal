@@ -41,12 +41,28 @@ for c in $(find . -name '*.c' ! -name '__tests__.c' | sed 's|^\./||' | sort); do
     }
 done
 
-# Manifests that promise C they do not have.
+# Manifests that promise a muscle they do not have, or missing generated faces.
 for toml in $(find . -name '__pmm__.toml' | sed 's|^\./||' | sort); do
     dir=$(dirname "$toml")
-    grep -q '^impl[[:space:]]*=[[:space:]]*"c"' "$toml" || continue
-    [ -f "$dir/__impl__.c" ] || {
-        echo "cards.sh: $root/$dir claims impl = \"c\" but has no __impl__.c" >&2
+    if grep -q '^impl[[:space:]]*=[[:space:]]*"c"' "$toml"; then
+        [ -f "$dir/__impl__.c" ] || {
+            echo "cards.sh: $root/$dir claims impl = \"c\" but has no __impl__.c" >&2
+            drift=1
+        }
+    elif grep -q '^impl[[:space:]]*=[[:space:]]*"rs"' "$toml"; then
+        [ -f "$dir/__impl__.rs" ] || {
+            echo "cards.sh: $root/$dir claims impl = \"rs\" but has no __impl__.rs" >&2
+            drift=1
+        }
+    fi
+    for face in __exports__.h __exports__.rs __init__.pyi; do
+        [ -f "$dir/$face" ] || {
+            echo "cards.sh: $root/$dir missing face $face" >&2
+            drift=1
+        }
+    done
+    [ -f "$dir/__tests__.c" ] || {
+        echo "cards.sh: $root/$dir missing prove __tests__.c" >&2
         drift=1
     }
 done

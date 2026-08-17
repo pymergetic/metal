@@ -7,6 +7,7 @@
 #include "pymergetic/metal/drivers.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/fw/memmap.h"
+#include "pymergetic/metal/net/dhcp.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/__version__.h"
@@ -18,6 +19,12 @@
 
 #ifndef PM_METAL_DT_WALK
 #define PM_METAL_DT_WALK 128
+#endif
+
+/* Long enough for a server on the same wire to answer, short enough that a
+ * seat with no server does not stall the tree. */
+#ifndef PM_METAL_BOOT_DHCP_WAIT_US
+#define PM_METAL_BOOT_DHCP_WAIT_US 300000u
 #endif
 
 #ifndef PM_METAL_BOOT_ARENA_SPAN
@@ -58,6 +65,12 @@ __attribute__((weak)) size_t pm_metal_boot_fill_arena_need(void) {
 }
 
 __attribute__((weak)) void pm_metal_boot_fill_io(void) {}
+
+/* Seats that sit on a wire with a server say so. A host unit test must not go
+ * asking the office DHCP server for a lease. */
+__attribute__((weak)) int32_t pm_metal_boot_fill_want_dhcp(void) {
+    return 0;
+}
 
 __attribute__((weak)) void pm_metal_boot_fill_bind_arena(pm_util_mem_arena_t *arena) {
     (void)arena;
@@ -146,11 +159,23 @@ static int32_t nics_up(void) {
     int32_t i;
     int32_t up = 0;
     uint32_t addr = 0x0a000001u;
+    int32_t ask = pm_metal_boot_fill_want_dhcp();
     if (pm_metal_drivers_net_count() <= 0) {
         return -1;
     }
+    if (ask) {
+        /* Boot pays this wait once per interface nobody answers on, so keep it
+         * short; a client that wants to insist can set its own. */
+        (void)pm_metal_net_dhcp_set_wait_us(PM_METAL_BOOT_DHCP_WAIT_US);
+    }
     for (i = 0; i < PM_METAL_DT_WALK; i++) {
         if (pm_metal_drivers_net_dt_id(i) < 0) {
+            continue;
+        }
+        /* A leased address is the real one; the made-up 10.0.0.x only holds the
+         * interface open on a seat with no server. */
+        if (ask && pm_metal_net_dhcp_up(i, NULL) == 0) {
+            up++;
             continue;
         }
         if (pm_metal_net_ip_if_up_h(i, addr) == 0) {

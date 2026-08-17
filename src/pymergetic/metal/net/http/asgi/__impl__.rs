@@ -16,10 +16,19 @@ const WAITING: i32 = 1;
 const DONE: i32 = 2;
 const ERROR: i32 = 4;
 const ACCEPT_WAIT: i32 = -2;
-const MAX_ROUTE: usize = 8;
+const MAX_ROUTE: usize = 16;
 const MAX_CONN: usize = 4;
 const RX_MAX: usize = 1024;
 const HDR_MAX: usize = 160;
+const BODY_MAX: usize = 16384;
+
+type Handler = unsafe extern "C" fn(
+    method: *const u8,
+    path: *const u8,
+    out: *mut u8,
+    out_max: u32,
+    out_len: *mut u32,
+) -> i32;
 
 #[repr(C)]
 pub struct pm_util_mem_arena_t {
@@ -58,6 +67,7 @@ struct Route {
     path: [u8; 80],
     body: [u8; 256],
     body_len: u32,
+    handler: Option<Handler>,
 }
 
 #[derive(Clone, Copy)]
@@ -70,6 +80,7 @@ struct Conn {
     snd_off: u32,
     hdr_len: u32,
     hdr: [u8; HDR_MAX],
+    body_buf: [u8; BODY_MAX],
     body: *const u8,
     body_len: u32,
 }
@@ -85,6 +96,7 @@ static ROUTES: Mut<[Route; MAX_ROUTE]> = Mut(UnsafeCell::new([Route {
     path: [0; 80],
     body: [0; 256],
     body_len: 0,
+    handler: None,
 }; MAX_ROUTE]));
 static CONNS: Mut<[Conn; MAX_CONN]> = Mut(UnsafeCell::new([Conn {
     used: false,
@@ -95,6 +107,7 @@ static CONNS: Mut<[Conn; MAX_CONN]> = Mut(UnsafeCell::new([Conn {
     snd_off: 0,
     hdr_len: 0,
     hdr: [0; HDR_MAX],
+    body_buf: [0; BODY_MAX],
     body: ptr::null(),
     body_len: 0,
 }; MAX_CONN]));
@@ -147,15 +160,53 @@ fn parse_req<'a>(buf: &'a [u8]) -> Option<(&'a [u8], &'a [u8])> {
     Some((method, path))
 }
 
-fn lookup(method: &[u8], path: &[u8]) -> (*const u8, u32) {
+fn path_only(path: &[u8]) -> &[u8] {
+    match path.iter().position(|&b| b == b'?') {
+        Some(i) => &path[..i],
+        None => path,
+    }
+}
+
+fn copy_cstr(dst: &mut [u8], src: &[u8]) {
+    dst.fill(0);
+    let n = src.len().min(dst.len().saturating_sub(1));
+    dst[..n].copy_from_slice(&src[..n]);
+}
+
+fn lookup_into(c: &mut Conn, method: &[u8], path: &[u8]) {
+    let match_path = path_only(path);
     unsafe {
         for r in routes().iter() {
-            if r.used && cstr_eq(&r.method, method) && cstr_eq(&r.path, path) {
-                return (r.body.as_ptr(), r.body_len);
+            if !(r.used && cstr_eq(&r.method, method) && cstr_eq(&r.path, match_path)) {
+                continue;
+            }
+            if let Some(h) = r.handler {
+                let mut mbuf = [0u8; 8];
+                let mut pbuf = [0u8; 160];
+                copy_cstr(&mut mbuf, method);
+                copy_cstr(&mut pbuf, path);
+                let mut n = 0u32;
+                let rc = h(
+                    mbuf.as_ptr(),
+                    pbuf.as_ptr(),
+                    c.body_buf.as_mut_ptr(),
+                    BODY_MAX as u32,
+                    &mut n,
+                );
+                if rc == 0 && n as usize <= BODY_MAX {
+                    c.body = c.body_buf.as_ptr();
+                    c.body_len = n;
+                    return;
+                }
+            } else {
+                c.body = r.body.as_ptr();
+                c.body_len = r.body_len;
+                return;
             }
         }
     }
-    (DEFAULT_BODY.as_ptr(), DEFAULT_BODY.len() as u32)
+    c.body = DEFAULT_BODY.as_ptr();
+    c.body_len = DEFAULT_BODY.len() as u32;
 }
 
 fn conn_slot() -> Option<usize> {
@@ -245,9 +296,13 @@ unsafe extern "C" fn step_conn_frame(self_: *mut pm_metal_async_coro_t) -> i32 {
                 return ERROR;
             }
         };
-        let (body, blen) = lookup(method, path);
-        c.body = body;
-        c.body_len = blen;
+        let mut mbuf = [0u8; 8];
+        let mut pbuf = [0u8; 160];
+        let mlen = method.len().min(7);
+        let plen = path.len().min(159);
+        copy_cstr(&mut mbuf, method);
+        copy_cstr(&mut pbuf, path);
+        lookup_into(c, &mbuf[..mlen], &pbuf[..plen]);
         build_hdr(c);
         c.snd_off = 0;
         c.step = 1;
@@ -314,6 +369,7 @@ fn spawn_conn(fd: i32) -> i32 {
             snd_off: 0,
             hdr_len: 0,
             hdr: [0; HDR_MAX],
+            body_buf: [0; BODY_MAX],
             body: ptr::null(),
             body_len: 0,
         };
@@ -419,6 +475,32 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route(
             ptr::copy_nonoverlapping(body, r.body.as_mut_ptr(), body_len as usize);
         }
         r.body_len = body_len;
+        r.handler = None;
+        r.used = true;
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pm_metal_net_http_asgi_route_fn(
+    method: *const u8,
+    path: *const u8,
+    handler: Option<Handler>,
+) -> i32 {
+    if method.is_null() || path.is_null() || handler.is_none() {
+        return -1;
+    }
+    unsafe {
+        let Some(slot) = routes().iter().position(|r| !r.used) else {
+            return -1;
+        };
+        let r = &mut routes()[slot];
+        if !cstr_copy(&mut r.method, method) || !cstr_copy(&mut r.path, path) {
+            return -1;
+        }
+        r.body.fill(0);
+        r.body_len = 0;
+        r.handler = handler;
         r.used = true;
     }
     0
@@ -466,6 +548,11 @@ pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",
     pm_metal_net_http_asgi_route,
     "int32_t(const char *, const char *, const uint8_t *, uint32_t)"
+);
+pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
+    "pymergetic.metal.net.http.asgi",
+    pm_metal_net_http_asgi_route_fn,
+    "int32_t(const char *, const char *, pm_metal_net_http_asgi_handler_t)"
 );
 pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",

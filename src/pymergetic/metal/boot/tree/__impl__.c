@@ -1,27 +1,16 @@
-/* pymergetic.metal.boot.tree — floor tree + quit/reboot/shutdown. */
+/* pymergetic.metal.boot.tree — surfaces, backend, walk. Cards attach the text. */
 #include "pymergetic/metal/boot/tree/__exports__.h"
+#include "pymergetic/metal/boot/tree/__types__.h"
 
 #include "pymergetic/metal/boot/__types__.h"
-#include "pymergetic/metal/boot/externals.h"
-#include "pymergetic/metal/async.h"
 #include "pymergetic/metal/console.h"
-#include "pymergetic/metal/dt.h"
-#include "pymergetic/metal/drivers/net.h"
-#include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/util/ascii.h"
-#include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/boot.h"
-#include "pymergetic/wasmmod/net/cdn/__exports__.h"
 #include "pymergetic/wasmmod/registry.h"
 
-#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-
-#ifndef PM_METAL_DT_WALK
-#define PM_METAL_DT_WALK 128
-#endif
 
 #define PM_METAL_BOOT_TREE_NAME_PAD 13
 #define PM_METAL_BOOT_TREE_LINE 384
@@ -34,37 +23,35 @@
 #define PM_METAL_BOOT_SGR_FAIL "\033[31m"
 #define PM_METAL_BOOT_SGR_WARN "\033[33m"
 #define PM_METAL_BOOT_SGR_RST "\033[0m"
+#define PM_METAL_BOOT_MSG_MAX 16
 
-/* Nodes that printed FAIL during this walk. `ready` is the sum, not a wish. */
+#if !defined(PM_METAL_FIRMWARE) && !defined(__EMSCRIPTEN__)
+int execv(const char *path, char *const argv[]);
+void _exit(int status);
+#endif
+
+typedef struct {
+    uint32_t used;
+    uint32_t surf;
+    uint32_t order;
+    pm_metal_boot_msg_fn fn;
+} pm_metal_boot_msg_slot_t;
+
+static pm_metal_boot_msg_slot_t s_msg[PM_METAL_BOOT_MSG_MAX];
 static uint32_t s_nfail;
 
-static void note_fail(void) {
+void pm_metal_boot_msg_fail(void) {
     s_nfail++;
 }
 
-static int32_t pm_metal_boot_tree_init(pm_util_mem_arena_t *arena) {
-    (void)arena;
-    return 0;
-}
-
-static void pm_metal_boot_tree_deinit(void) {}
-
-/* Same grammar everywhere: "1 region(s)", "4 runner(s)", "2 node(s)". */
-static void fmt_count(char *dst, unsigned cap, const char *lead, unsigned n, const char *unit) {
+void pm_metal_boot_msg_count(char *dst, unsigned cap, const char *lead, unsigned n, const char *unit) {
     if (lead == NULL) {
         lead = "";
     }
     snprintf(dst, cap, "%s%u %s(s)", lead, n, unit);
 }
 
-#if !defined(PM_METAL_FIRMWARE) && !defined(__EMSCRIPTEN__)
-/* POSIX hosted halt. Do not include <unistd.h>: firmware fwinc/unistd.h is
- * on the clangd path for this TU and does not declare these. */
-int execv(const char *path, char *const argv[]);
-void _exit(int status);
-#endif
-
-static void emit_line(const char *s) {
+void pm_metal_boot_msg_line(const char *s) {
     uint32_t n = 0;
     if (s == NULL) {
         s = "";
@@ -74,6 +61,62 @@ static void emit_line(const char *s) {
     }
     (void)pm_metal_console_write(s, n);
     (void)pm_metal_console_write("\n", 1);
+}
+
+int32_t pm_metal_boot_msg_attach(uint32_t surf, uint32_t order, pm_metal_boot_msg_fn fn) {
+    uint32_t i;
+    if (fn == NULL || (surf != PM_METAL_BOOT_SURF_TREE && surf != PM_METAL_BOOT_SURF_MOTD)) {
+        return -1;
+    }
+    for (i = 0; i < PM_METAL_BOOT_MSG_MAX; i++) {
+        if (s_msg[i].used && s_msg[i].surf == surf && s_msg[i].fn == fn) {
+            s_msg[i].order = order;
+            return 0;
+        }
+    }
+    for (i = 0; i < PM_METAL_BOOT_MSG_MAX; i++) {
+        if (!s_msg[i].used) {
+            s_msg[i].used = 1;
+            s_msg[i].surf = surf;
+            s_msg[i].order = order;
+            s_msg[i].fn = fn;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+uint32_t pm_metal_boot_msg_attached(uint32_t surf) {
+    uint32_t i;
+    uint32_t n = 0;
+    for (i = 0; i < PM_METAL_BOOT_MSG_MAX; i++) {
+        if (s_msg[i].used && s_msg[i].surf == surf) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static uint32_t collect_surf(uint32_t surf, pm_metal_boot_msg_fn *out, uint32_t cap) {
+    uint32_t i;
+    uint32_t n = 0;
+    uint32_t order[PM_METAL_BOOT_MSG_MAX];
+    for (i = 0; i < PM_METAL_BOOT_MSG_MAX; i++) {
+        uint32_t j;
+        if (!s_msg[i].used || s_msg[i].surf != surf || n >= cap) {
+            continue;
+        }
+        j = n;
+        while (j > 0 && order[j - 1u] > s_msg[i].order) {
+            out[j] = out[j - 1u];
+            order[j] = order[j - 1u];
+            j--;
+        }
+        out[j] = s_msg[i].fn;
+        order[j] = s_msg[i].order;
+        n++;
+    }
+    return n;
 }
 
 static int token_is(const char *s, unsigned n, const char *w) {
@@ -155,63 +198,7 @@ static void paint_detail(char *dst, unsigned cap, const char *detail) {
     }
 }
 
-static const char *class_name(int32_t class) {
-    switch (class) {
-    case PM_METAL_DT_CLASS_NET:
-        return "net";
-    case PM_METAL_DT_CLASS_BLK:
-        return "blk";
-    case PM_METAL_DT_CLASS_RTC:
-        return "rtc";
-    case PM_METAL_DT_CLASS_MEM:
-        return "mem";
-    case PM_METAL_DT_CLASS_GFX:
-        return "gfx";
-    case PM_METAL_DT_CLASS_AUDIO:
-        return "audio";
-    case PM_METAL_DT_CLASS_INPUT:
-        return "input";
-    default:
-        return "?";
-    }
-}
-
-static const char *bus_name(int32_t bus) {
-    switch (bus) {
-    case PM_METAL_DT_BUS_PLATFORM:
-        return "plat";
-    case PM_METAL_DT_BUS_PCI:
-        return "pci";
-    case PM_METAL_DT_BUS_ISA:
-        return "isa";
-    case PM_METAL_DT_BUS_VIRTIO:
-        return "virtio";
-    case PM_METAL_DT_BUS_MMIO:
-        return "mmio";
-    default:
-        return "?";
-    }
-}
-
-static void fmt_size64(char *out, unsigned cap, uint64_t n) {
-    if (n >= (1024ull * 1024ull)) {
-        snprintf(out, cap, "%u MiB", (unsigned)(n / (1024ull * 1024ull)));
-        return;
-    }
-    if (n >= 1024ull) {
-        snprintf(out, cap, "%u KiB", (unsigned)(n / 1024ull));
-        return;
-    }
-    snprintf(out, cap, "%u B", (unsigned)n);
-}
-
-static void fmt_base_size(char *out, unsigned cap, uint64_t base, uint64_t len) {
-    char human[24];
-    fmt_size64(human, sizeof(human), len);
-    snprintf(out, cap, "base=0x%08x%08x size=%s", (unsigned)(base >> 32), (unsigned)base, human);
-}
-
-static void item(int last, int depth, int parent_cont, const char *name, const char *detail) {
+void pm_metal_boot_msg_item(int last, int depth, int parent_cont, const char *name, const char *detail) {
     char line[PM_METAL_BOOT_TREE_LINE];
     char painted[160];
     unsigned nlen = 0;
@@ -223,7 +210,6 @@ static void item(int last, int depth, int parent_cont, const char *name, const c
         nlen++;
     }
     paint_detail(painted, sizeof(painted), detail);
-    /* Dim the glyph+name as one span so prove can still grep "`-- ready". */
     if (depth == 0) {
         if (detail != NULL && detail[0] != 0 && nlen < PM_METAL_BOOT_TREE_NAME_PAD) {
             char padded[PM_METAL_BOOT_TREE_NAME_PAD + 1];
@@ -251,8 +237,6 @@ static void item(int last, int depth, int parent_cont, const char *name, const c
                 PM_METAL_BOOT_SGR_RST);
         }
     } else if (depth == 2) {
-        /* Area children. parent_cont = area has a following sibling (spare /
-         * root). Mem/fs are never last among the floor-tree roots. */
         const char *stem = parent_cont ? "|   " : "    ";
         if (detail != NULL && detail[0] != 0) {
             snprintf(line, sizeof(line), "%s|   %s%s %s  %s%s", PM_METAL_BOOT_SGR_DIM, stem, br, name,
@@ -262,8 +246,6 @@ static void item(int last, int depth, int parent_cont, const char *name, const c
                 PM_METAL_BOOT_SGR_RST);
         }
     } else {
-        /* Depth 3: family leaves under mods. parent_cont = that family has a
-         * following sibling. fs and mods always continue (net / root follow). */
         const char *fam = parent_cont ? "|   " : "    ";
         if (detail != NULL && detail[0] != 0) {
             snprintf(line, sizeof(line), "%s|   |   %s%s %s  %s%s", PM_METAL_BOOT_SGR_DIM, fam, br,
@@ -273,162 +255,24 @@ static void item(int last, int depth, int parent_cont, const char *name, const c
                 PM_METAL_BOOT_SGR_RST);
         }
     }
-    emit_line(line);
+    pm_metal_boot_msg_line(line);
 }
 
-static int32_t collect_class(int32_t want, int32_t *ids, int32_t cap) {
-    int32_t i;
-    int32_t n = 0;
-    for (i = 0; i < PM_METAL_DT_WALK && n < cap; i++) {
-        int32_t class;
-        if (pm_metal_dt_compat(i) == NULL) {
-            continue;
-        }
-        class = pm_metal_dt_class(i);
-        if (want == PM_METAL_DT_CLASS_MEM) {
-            if (class != PM_METAL_DT_CLASS_MEM) {
-                continue;
-            }
-        } else if (class == PM_METAL_DT_CLASS_MEM) {
-            continue;
-        }
-        ids[n++] = i;
-    }
-    return n;
-}
-
-static void emit_mem(int last) {
-    pm_util_mem_arena_t *arena = pm_metal_boot_arena();
-    uint64_t kbase = 0;
-    uint64_t klen = 0;
-    int have_k = pm_metal_boot_fill_kernel(&kbase, &klen) == 0 && klen != 0;
-    int nreg = 0;
-    int have_spare = 0;
-    char loc[80];
-    char detail[sizeof(loc) + 8];
-    char human[24];
-    size_t bytes;
-    size_t mapped;
-    size_t hole;
-    size_t heap;
-    size_t spare = 0;
-    const char *tag;
-    uint64_t abase;
-
-    if (arena != NULL) {
-        nreg++;
-        spare = pm_util_mem_arena_spare(arena);
-        if (spare != 0) {
-            have_spare = 1;
-            nreg++;
-        }
-    }
-    if (have_k) {
-        nreg++;
-    }
-    if (nreg == 0) {
-        item(last, 0, 0, "mem", "-");
-        return;
-    }
-    fmt_count(detail, sizeof(detail), "ok  ", (unsigned)nreg, "region");
-    item(last, 0, 0, "mem", detail);
-    if (have_k) {
-        fmt_base_size(loc, sizeof(loc), kbase, klen);
-        snprintf(detail, sizeof(detail), "ok  %s", loc);
-        item(arena == NULL, 1, !last, "kernel", detail);
-    }
-    if (arena == NULL) {
-        return;
-    }
-    bytes = pm_util_mem_arena_bytes(arena);
-    mapped = pm_util_mem_arena_map_used(arena);
-    hole = pm_util_mem_arena_hole(arena);
-    heap = pm_util_mem_arena_heap_used(arena);
-    abase = (uint64_t)(uintptr_t)arena;
-    fmt_base_size(loc, sizeof(loc), abase, (uint64_t)bytes);
-    item(!have_spare, 1, !last, "area", loc);
-    if (mapped != 0) {
-        fmt_size64(human, sizeof(human), (uint64_t)mapped);
-        tag = pm_metal_boot_fill_map_label();
-        if (tag != NULL && tag[0] != 0) {
-            snprintf(detail, sizeof(detail), "%s  %s", human, tag);
-        } else {
-            snprintf(detail, sizeof(detail), "%s", human);
-        }
-        item(0, 2, have_spare, "map", detail);
-    }
-    fmt_size64(human, sizeof(human), (uint64_t)hole);
-    item(0, 2, have_spare, "hole", human);
-    fmt_size64(human, sizeof(human), (uint64_t)heap);
-    snprintf(detail, sizeof(detail), "ok  %s", human);
-    item(1, 2, have_spare, "tlsf (heap)", detail);
-    if (have_spare) {
-        fmt_size64(human, sizeof(human), (uint64_t)spare);
-        item(1, 1, !last, "spare", human);
-    }
-}
-
-static void emit_cpu(int last) {
-    uint32_t n = pm_metal_async_n_runners();
-    const char *kind;
-    char detail[48];
-    char smp[64];
-    if (n == 0) {
-        n = 1;
-    }
-    kind = pm_metal_async_runner_kind();
-    fmt_count(detail, sizeof(detail), "ok  ", n, "runner");
-    item(last, 0, 0, "cpu", detail);
-    if (kind != NULL && kind[0] == 's' && kind[1] == 'i' && kind[2] == 'm') {
-        fmt_count(smp, sizeof(smp), "sim  ", n, "runner");
-    } else {
-        fmt_count(smp, sizeof(smp), "ok  ", n, "runner");
-    }
-    item(1, 1, !last, "smp", smp);
-}
-
-static void emit_devices(int last) {
-    int32_t ids[PM_METAL_DT_WALK];
-    int32_t n;
-    int32_t i;
-    char detail[32];
-    char cat[32];
-    char cons[48];
-    uint32_t nvp;
-    uint32_t v;
-    int cons_last;
-    n = collect_class(-1, ids, PM_METAL_DT_WALK);
-    fmt_count(detail, sizeof(detail), "", (unsigned)n, "node");
-    item(last, 0, 0, "devices", detail);
-    fmt_count(cat, sizeof(cat), "ok  ", (unsigned)n, "node");
-    item(0, 1, !last, "catalog", cat);
-    nvp = pm_metal_console_ready() ? pm_metal_console_viewport_count() : 0u;
-    cons_last = (n == 0);
-    if (pm_metal_console_ready()) {
-        char vpc[24];
-        fmt_count(vpc, sizeof(vpc), "", nvp, "viewport");
-        snprintf(cons, sizeof(cons), "ok  #%u  %s", (unsigned)pm_metal_console_id(), vpc);
-    } else {
-        snprintf(cons, sizeof(cons), "FAIL");
-        note_fail();
-    }
-    item(cons_last, 1, !last, "console", cons);
-    for (v = 0; v < nvp; v++) {
-        char vp[48];
-        const char *kind = pm_metal_console_viewport_kind(v);
-        snprintf(vp, sizeof(vp), "ok  %s", kind != NULL ? kind : "?");
-        item(v + 1u == nvp, 2, n != 0, "viewport", vp);
-    }
+static void walk(uint32_t surf) {
+    pm_metal_boot_msg_fn fns[PM_METAL_BOOT_MSG_MAX];
+    uint32_t n = collect_surf(surf, fns, PM_METAL_BOOT_MSG_MAX);
+    uint32_t i;
     for (i = 0; i < n; i++) {
-        char name[48];
-        char bus[24];
-        const char *compat = pm_metal_dt_compat(ids[i]);
-        snprintf(name, sizeof(name), "%s/%s", class_name(pm_metal_dt_class(ids[i])),
-            compat != NULL ? compat : "-");
-        snprintf(bus, sizeof(bus), "bus=%s", bus_name(pm_metal_dt_bus(ids[i])));
-        item(i + 1 == n, 1, !last, name, bus);
+        fns[i](0);
     }
 }
+
+static int32_t pm_metal_boot_tree_init(pm_util_mem_arena_t *arena) {
+    (void)arena;
+    return 0;
+}
+
+static void pm_metal_boot_tree_deinit(void) {}
 
 static int fqn_has_pfx(const char *s, uint32_t n, const char *pfx) {
     uint32_t i = 0;
@@ -477,16 +321,13 @@ static void util_first_leaf(char *dst, unsigned cap, const char *s, uint32_t n) 
     dst[i] = 0;
 }
 
-/* Registered module families. This was printed under an `fs` node with a
- * `root sim memfs` leaf, and both were literals: there is no filesystem card in
- * the tree, so nothing could answer for either. What the registry does know is
- * which modules registered, so that is all this reports. */
-static void emit_mods(int last) {
+/* This card's own faces: what the registry knows, not what other cards own. */
+static void msg_mods(int last) {
     char leaves[PM_METAL_BOOT_UTIL_MAX][PM_METAL_BOOT_UTIL_NAME];
     uint32_t nleaf = 0;
     uint32_t nmetal = 0;
     uint32_t nwasm = 0;
-    uint32_t nmod;
+    uint32_t nmod = pm_wasmmod_registry_module_count();
     uint32_t i;
     uint32_t nfam;
     uint32_t fi;
@@ -495,8 +336,8 @@ static void emit_mods(int last) {
     int have_util;
     int have_wasm;
 
+    (void)last;
     memset(leaves, 0, sizeof(leaves));
-    nmod = pm_wasmmod_registry_module_count();
     for (i = 0; i < nmod; i++) {
         uint8_t buf[192];
         uint32_t len = (uint32_t)sizeof(buf);
@@ -542,141 +383,39 @@ static void emit_mods(int last) {
         }
         memcpy(leaves[j], tmp, PM_METAL_BOOT_UTIL_NAME);
     }
-
     have_metal = nmetal != 0;
     have_util = nleaf != 0;
     have_wasm = nwasm != 0;
     nfam = (uint32_t)have_metal + (uint32_t)have_util + (uint32_t)have_wasm;
-
     if (nfam == 0u) {
-        item(last, 0, 0, "mods", "-");
+        pm_metal_boot_msg_item(0, 0, 0, "mods", "-");
         return;
     }
-    fmt_count(detail, sizeof(detail), "ok  ", nfam, "family");
-    item(last, 0, 0, "mods", detail);
-
+    pm_metal_boot_msg_count(detail, sizeof(detail), "ok  ", nfam, "family");
+    pm_metal_boot_msg_item(0, 0, 0, "mods", detail);
     fi = 0;
     if (have_metal) {
         char det[40];
-        int fam_last = (fi + 1u == nfam);
-        fmt_count(det, sizeof(det), "ok  ", nmetal, "card");
-        item(fam_last, 1, !last, "metal*", det);
+        pm_metal_boot_msg_count(det, sizeof(det), "ok  ", nmetal, "card");
+        pm_metal_boot_msg_item(fi + 1u == nfam, 1, 1, "metal*", det);
         fi++;
     }
     if (have_util) {
         char det[40];
-        int fam_last = (fi + 1u == nfam);
         uint32_t u;
-        fmt_count(det, sizeof(det), "ok  ", nleaf, "card");
-        item(fam_last, 1, !last, "util", det);
+        int fam_last = (fi + 1u == nfam);
+        pm_metal_boot_msg_count(det, sizeof(det), "ok  ", nleaf, "card");
+        pm_metal_boot_msg_item(fam_last, 1, 1, "util", det);
         for (u = 0; u < nleaf; u++) {
-            item(u + 1u == nleaf, 2, !fam_last, leaves[u], "ok");
+            pm_metal_boot_msg_item(u + 1u == nleaf, 2, !fam_last, leaves[u], "ok");
         }
         fi++;
     }
     if (have_wasm) {
         char det[40];
-        int fam_last = (fi + 1u == nfam);
-        fmt_count(det, sizeof(det), "ok  ", nwasm, "card");
-        item(fam_last, 1, !last, "wasmmod*", det);
-        fi++;
+        pm_metal_boot_msg_count(det, sizeof(det), "ok  ", nwasm, "card");
+        pm_metal_boot_msg_item(fi + 1u == nfam, 1, 1, "wasmmod*", det);
     }
-}
-
-static void emit_cdn_urls(int last, int depth, int parent_cont) {
-    uint32_t n = pm_wasmmod_net_cdn_base_count();
-    uint32_t i;
-    char detail[48];
-    if (n == 0u) {
-        item(last, depth, parent_cont, "cdn", "-");
-        return;
-    }
-    fmt_count(detail, sizeof(detail), "ok  ", n, "base");
-    item(last, depth, parent_cont, "cdn", detail);
-    for (i = 0; i < n; i++) {
-        const char *b = pm_wasmmod_net_cdn_base_at(i);
-        if (b == NULL || b[0] == 0) {
-            b = "?";
-        }
-        item(i + 1u == n, depth + 1, !last, b, NULL);
-    }
-}
-
-static void emit_net(int last) {
-    int32_t n = pm_metal_drivers_net_count();
-    int32_t i;
-    int32_t seen = 0;
-    int lo = pm_metal_net_ip_lo_ready() != 0;
-    char detail[48];
-    if (n == 0 && !lo) {
-        item(last, 0, 0, "net", "-");
-        emit_cdn_urls(1, 1, !last);
-        return;
-    }
-    fmt_count(detail, sizeof(detail), "ok  ", (unsigned)(n + (int32_t)lo), "interface");
-    item(last, 0, 0, "net", detail);
-    if (lo) {
-        item(0, 1, !last, "lo", "127.0.0.1");
-    }
-    for (i = 0; i < PM_METAL_DT_WALK && seen < n; i++) {
-        int32_t h;
-        uint32_t addr;
-        uint8_t mac[6];
-        char name[48];
-        char det[64];
-        const char *compat;
-        if (pm_metal_dt_class(i) != PM_METAL_DT_CLASS_NET) {
-            continue;
-        }
-        compat = pm_metal_dt_compat(i);
-        h = pm_metal_drivers_net_by_dt(i);
-        if (h < 0) {
-            h = pm_metal_drivers_net_by_compat(compat != NULL ? compat : "", 0);
-        }
-        addr = h >= 0 ? pm_metal_net_ip_if_addr(h) : 0;
-        if (h >= 0) {
-            pm_metal_drivers_net_mac(h, mac);
-        } else {
-            mac[0] = mac[1] = mac[2] = mac[3] = mac[4] = mac[5] = 0;
-        }
-        snprintf(name, sizeof(name), "%s", compat != NULL ? compat : "net");
-        if (addr != 0) {
-            snprintf(det, sizeof(det), "%u.%u.%u.%u  %02x:%02x:%02x:%02x:%02x:%02x",
-                (unsigned)((addr >> 24) & 0xffu), (unsigned)((addr >> 16) & 0xffu),
-                (unsigned)((addr >> 8) & 0xffu), (unsigned)(addr & 0xffu), (unsigned)mac[0],
-                (unsigned)mac[1], (unsigned)mac[2], (unsigned)mac[3], (unsigned)mac[4],
-                (unsigned)mac[5]);
-        } else {
-            snprintf(det, sizeof(det), "%02x:%02x:%02x:%02x:%02x:%02x", (unsigned)mac[0],
-                (unsigned)mac[1], (unsigned)mac[2], (unsigned)mac[3], (unsigned)mac[4],
-                (unsigned)mac[5]);
-        }
-        item(0, 1, !last, name, det);
-        seen++;
-    }
-    emit_cdn_urls(1, 1, !last);
-}
-
-static void emit_async(int last) {
-    char detail[48];
-    char run[64];
-    uint32_t n;
-    const char *kind;
-    if (pm_metal_async_ready() == 0) {
-        item(last, 0, 0, "async", "FAIL");
-        note_fail();
-        return;
-    }
-    n = pm_metal_async_n_runners();
-    kind = pm_metal_async_runner_kind();
-    fmt_count(detail, sizeof(detail), "ok  ", n, "runner");
-    item(last, 0, 0, "async", detail);
-    if (kind != NULL && kind[0] == 's' && kind[1] == 'i' && kind[2] == 'm') {
-        snprintf(run, sizeof(run), "%s", kind);
-    } else {
-        snprintf(run, sizeof(run), "ok  %s", kind != NULL ? kind : "runner");
-    }
-    item(1, 1, !last, "runners", run);
 }
 
 static uint32_t kinds_present(const uint32_t *nkind) {
@@ -690,10 +429,7 @@ static uint32_t kinds_present(const uint32_t *nkind) {
     return n;
 }
 
-/* Guest packs the loader actually instantiated. A resident module is C or Rust
- * linked into this image and never crossed a container boundary, so counting it
- * here would report the image back to itself. */
-static void emit_wasm(int last) {
+static void msg_wasm(int last) {
     static const char *const kind_name[3] = { "wasm", "aot", "elf" };
     uint32_t nmod = pm_wasmmod_registry_module_count();
     uint32_t nkind[3] = { 0, 0, 0 };
@@ -702,6 +438,7 @@ static void emit_wasm(int last) {
     uint32_t shown = 0;
     char detail[48];
 
+    (void)last;
     for (i = 0; i < nmod; i++) {
         uint8_t buf[192];
         uint32_t len = (uint32_t)sizeof(buf);
@@ -717,128 +454,78 @@ static void emit_wasm(int last) {
         npack++;
     }
     if (npack == 0u) {
-        item(last, 0, 0, "wasm", "-  no pack loaded");
+        pm_metal_boot_msg_item(0, 0, 0, "wasm", "-  no pack loaded");
         return;
     }
-    fmt_count(detail, sizeof(detail), "ok  ", npack, "pack");
-    item(last, 0, 0, "wasm", detail);
+    pm_metal_boot_msg_count(detail, sizeof(detail), "ok  ", npack, "pack");
+    pm_metal_boot_msg_item(0, 0, 0, "wasm", detail);
     for (i = 0; i < 3u; i++) {
         char det[40];
         if (nkind[i] == 0u) {
             continue;
         }
         shown++;
-        fmt_count(det, sizeof(det), "ok  ", nkind[i], "pack");
-        item(shown == kinds_present(nkind), 1, !last, kind_name[i], det);
+        pm_metal_boot_msg_count(det, sizeof(det), "ok  ", nkind[i], "pack");
+        pm_metal_boot_msg_item(shown == kinds_present(nkind), 1, 1, kind_name[i], det);
     }
 }
 
-static void emit_externals(int last) {
-    uint32_t n = pm_metal_external_count();
-    uint32_t i;
-    char detail[40];
-    if (n == 0u) {
-        item(last, 0, 0, "externals", "FAIL");
-        note_fail();
-        return;
-    }
-    fmt_count(detail, sizeof(detail), "ok  ", n, "external");
-    item(last, 0, 0, "externals", detail);
-    for (i = 0; i < n; i++) {
-        char ver[48];
-        const char *v = pm_metal_external_version(i);
-        const char *nm = pm_metal_external_name(i);
-        snprintf(ver, sizeof(ver), "ok  %s", v != NULL ? v : "?");
-        item(i + 1u == n, 1, !last, nm != NULL ? nm : "?", ver);
-    }
+static void msg_repl(int last) {
+    (void)last;
+    pm_metal_boot_msg_item(1, 0, 0, "repl", "packages() | help()");
 }
 
 int32_t pm_metal_boot_tree_print(void) {
     const char *seat = pm_metal_boot_fill_seat();
     char ready[32];
     s_nfail = 0;
-    emit_line("");
+    pm_metal_boot_msg_line("");
     pm_metal_util_ascii_log_styled(PM_METAL_UTIL_ASCII_STYLE_ACCENT, "METAL");
-    emit_line("");
-    item(0, 0, 0, "pymergetic metal", PM_METAL_BOOT_TREE_VERSION);
-    emit_line(PM_METAL_BOOT_SGR_DIM "|" PM_METAL_BOOT_SGR_RST);
-    item(0, 0, 0, "arch", seat != NULL ? seat : "host");
-    emit_mem(0);
-    emit_cpu(0);
-    emit_devices(0);
-    emit_mods(0);
-    emit_net(0);
-    emit_async(0);
-    emit_wasm(0);
-    emit_externals(0);
+    pm_metal_boot_msg_line("");
+    pm_metal_boot_msg_item(0, 0, 0, "pymergetic metal", PM_METAL_BOOT_TREE_VERSION);
+    pm_metal_boot_msg_line(PM_METAL_BOOT_SGR_DIM "|" PM_METAL_BOOT_SGR_RST);
+    pm_metal_boot_msg_item(0, 0, 0, "arch", seat != NULL ? seat : "host");
+    walk(PM_METAL_BOOT_SURF_TREE);
     if (s_nfail == 0u) {
-        item(1, 0, 0, "ready", "ok");
+        pm_metal_boot_msg_item(1, 0, 0, "ready", "ok");
     } else {
-        fmt_count(ready, sizeof(ready), "FAIL  ", s_nfail, "node");
-        item(1, 0, 0, "ready", ready);
+        pm_metal_boot_msg_count(ready, sizeof(ready), "FAIL  ", s_nfail, "node");
+        pm_metal_boot_msg_item(1, 0, 0, "ready", ready);
     }
-    emit_line("");
-    /* Printing succeeded either way; a failed node is reported on the `ready`
-     * line, not by pretending the print itself broke. */
+    pm_metal_boot_msg_line("");
     return 0;
 }
 
 void pm_metal_boot_motd(void) {
     const char *seat = pm_metal_boot_fill_seat();
     char title[96];
-    char cons[48];
-    uint32_t nvp;
-    uint32_t v;
-
     if (seat == NULL) {
         seat = "host";
     }
-    emit_line("");
+    pm_metal_boot_msg_line("");
     pm_metal_util_ascii_log_rainbow("MetalPython");
     snprintf(title, sizeof(title), "%sMetalPython%s %s%s%s @ %s", PM_METAL_BOOT_SGR_SIM,
         PM_METAL_BOOT_SGR_RST, PM_METAL_BOOT_SGR_OK, PM_METAL_BOOT_TREE_VERSION,
         PM_METAL_BOOT_SGR_RST, seat);
-    emit_line(title);
-
-    nvp = 0u;
-    if (pm_metal_console_ready()) {
-        char vpc[24];
-        nvp = pm_metal_console_viewport_count();
-        fmt_count(vpc, sizeof(vpc), "", nvp, "viewport");
-        snprintf(cons, sizeof(cons), "ok  #%u  %s", (unsigned)pm_metal_console_id(), vpc);
-    } else {
-        snprintf(cons, sizeof(cons), "FAIL");
-    }
-    item(0, 0, 0, "console", cons);
-    for (v = 0; v < nvp; v++) {
-        char vp[48];
-        const char *kind = pm_metal_console_viewport_kind(v);
-        snprintf(vp, sizeof(vp), "ok  %s", kind != NULL ? kind : "?");
-        item(v + 1u == nvp, 1, 1, "viewport", vp);
-    }
-
-    emit_cdn_urls(0, 0, 0);
-    item(1, 0, 0, "repl", "packages() | help()");
+    pm_metal_boot_msg_line(title);
+    walk(PM_METAL_BOOT_SURF_MOTD);
 }
 
 void pm_metal_boot_shutdown(int reboot) {
     char title[64];
     uint32_t nboot;
-    emit_line("");
+    pm_metal_boot_msg_line("");
     snprintf(title, sizeof(title), "%smetal-boot: %s%s", PM_METAL_BOOT_SGR_WARN,
         reboot ? "reboot" : "shutdown", PM_METAL_BOOT_SGR_RST);
-    emit_line(title);
-    /* The boot graph knows the order it came up in and holds each card's
-     * deinit, so unwind it instead of printing a subsystem list that no code
-     * behind it ever touched. */
+    pm_metal_boot_msg_line(title);
     nboot = pm_mod_boot_count();
     pm_mod_boot_unwind();
     if (nboot == 0u) {
-        item(1, 0, 0, "stop", "-  nothing booted");
+        pm_metal_boot_msg_item(1, 0, 0, "stop", "-  nothing booted");
     } else {
         char detail[32];
-        fmt_count(detail, sizeof(detail), "ok  ", nboot, "card");
-        item(1, 0, 0, "stop", detail);
+        pm_metal_boot_msg_count(detail, sizeof(detail), "ok  ", nboot, "card");
+        pm_metal_boot_msg_item(1, 0, 0, "stop", detail);
     }
 #if defined(PM_METAL_FIRMWARE)
 #if defined(__i386__) || defined(__x86_64__)
@@ -872,7 +559,19 @@ void pm_metal_boot_shutdown(int reboot) {
 PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_tree_print, pm_metal_boot_tree_print, int32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_motd, pm_metal_boot_motd, void(void));
 PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_shutdown, pm_metal_boot_shutdown, void(int));
+PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_msg_attach, pm_metal_boot_msg_attach,
+    int32_t(uint32_t, uint32_t, pm_metal_boot_msg_fn));
+PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_msg_attached, pm_metal_boot_msg_attached, uint32_t(uint32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_msg_item, pm_metal_boot_msg_item,
+    void(int, int, int, const char *, const char *));
+PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_msg_line, pm_metal_boot_msg_line, void(const char *));
+PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_msg_fail, pm_metal_boot_msg_fail, void(void));
+PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_msg_count, pm_metal_boot_msg_count,
+    void(char *, unsigned, const char *, unsigned, const char *));
+
+PM_METAL_BOOT_MSG_C(PM_METAL_BOOT_SURF_TREE, PM_METAL_BOOT_MSG_MODS, msg_mods);
+PM_METAL_BOOT_MSG_C(PM_METAL_BOOT_SURF_TREE, PM_METAL_BOOT_MSG_WASM, msg_wasm);
+PM_METAL_BOOT_MSG_C(PM_METAL_BOOT_SURF_MOTD, PM_METAL_BOOT_MSG_MOTD_REPL, msg_repl);
 
 PM_MOD_BOOT_C(pymergetic.metal.boot.tree, pm_metal_boot_tree_init, pm_metal_boot_tree_deinit);
 PM_MOD_BOOTDEP_C(pymergetic.metal.boot.tree, pymergetic.metal.console);
-PM_MOD_BOOTDEP_C(pymergetic.metal.boot.tree, pymergetic.metal.boot.externals);

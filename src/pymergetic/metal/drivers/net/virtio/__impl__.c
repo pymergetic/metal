@@ -17,7 +17,9 @@
 #include <string.h>
 
 #define VQ_N 8
-#define VNET_HDR 10
+/* virtio_net_hdr_v1: the version-1 layout always carries num_buffers, so the
+ * header in front of every frame is 12 bytes, not the legacy 10. */
+#define VNET_HDR 12
 #define FRAME_MAX 2048
 #define VNET_MAX 8u
 
@@ -271,6 +273,7 @@ int32_t pm_metal_drivers_net_virtio_mmio_up(volatile uint32_t *base) {
 
 #if defined(PM_METAL_FIRMWARE)
 #define FW_QSZ 16u
+#define FW_TX_SPINS 200000u
 #define FW_DESC_F_NEXT 1u
 #define FW_DESC_F_WRITE 2u
 #define VIRTIO_PCI_CAP_COMMON 1u
@@ -278,6 +281,24 @@ int32_t pm_metal_drivers_net_virtio_mmio_up(volatile uint32_t *base) {
 #define VIRTIO_PCI_CAP_DEVCFG 4u
 #define VIRTIO_NET_F_MAC 5u
 #define VIRTIO_F_VERSION_1 32u
+
+/* Ring memory is plain RAM the device also reads and writes, so indices are
+ * loaded and stored a byte at a time in little endian and never cached. */
+static uint16_t ring_ld16(volatile const uint8_t *p) {
+    return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+}
+
+static void ring_st16(volatile uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+}
+
+static void ring_st32(volatile uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
 
 static uint8_t mmio_r8(volatile uint8_t *p) {
     return *p;
@@ -387,29 +408,22 @@ static int32_t fw_setup_queue(struct vnet *d, uint16_t qidx, uint8_t *mem, uint8
         return -1;
     }
     memset(mem, 0, 4096);
+    /* One buffer per descriptor. Both rings are the same size, so the data area
+     * the caller passed is qsz buffers wide on the receive and the send side. */
     memset(data, 0, (size_t)qsz * (VNET_HDR + FRAME_MAX));
     for (i = 0; i < qsz; i++) {
         uint64_t addr = (uint64_t)(uintptr_t)(data + i * (VNET_HDR + FRAME_MAX));
         uint8_t *de = desc + i * 16u;
-        de[0] = (uint8_t)addr;
-        de[1] = (uint8_t)(addr >> 8);
-        de[2] = (uint8_t)(addr >> 16);
-        de[3] = (uint8_t)(addr >> 24);
-        de[4] = (uint8_t)(addr >> 32);
-        de[5] = (uint8_t)(addr >> 40);
-        de[6] = (uint8_t)(addr >> 48);
-        de[7] = (uint8_t)(addr >> 56);
-        de[8] = (uint8_t)(VNET_HDR + FRAME_MAX);
-        de[9] = (uint8_t)((VNET_HDR + FRAME_MAX) >> 8);
+        ring_st32(de, (uint32_t)addr);
+        ring_st32(de + 4, (uint32_t)(addr >> 32));
         if (rx) {
-            de[12] = (uint8_t)FW_DESC_F_WRITE;
-            avail[4 + i * 2u] = (uint8_t)i;
-            avail[5 + i * 2u] = 0;
+            ring_st32(de + 8, (uint32_t)(VNET_HDR + FRAME_MAX));
+            ring_st16(de + 12, (uint16_t)FW_DESC_F_WRITE);
+            ring_st16(avail + 4 + i * 2u, (uint16_t)i);
         }
     }
     if (rx) {
-        avail[2] = (uint8_t)qsz;
-        avail[3] = 0;
+        ring_st16(avail + 2, qsz);
     }
     mmio_w64(c + 32, (uint64_t)(uintptr_t)desc);
     mmio_w64(c + 40, (uint64_t)(uintptr_t)avail);
@@ -427,27 +441,42 @@ static int32_t fw_setup_queue(struct vnet *d, uint16_t qidx, uint8_t *mem, uint8
     return 0;
 }
 
+/* Take back the send buffers the device is finished with. Until it hands a
+ * descriptor back, the frame in that buffer is still being read. */
+static void fw_vnet_tx_reap(struct vnet *d) {
+    volatile uint8_t *used = d->vqmem + 4096 + 512;
+    d->tx_last = ring_ld16(used + 2);
+}
+
 static int32_t fw_vnet_tx(struct vnet *d, const uint8_t *frame, uint16_t len) {
     uint8_t *desc = d->vqmem + 4096;
     uint8_t *avail = desc + 256;
-    uint16_t idx;
+    uint8_t *buf;
     uint16_t aidx;
-    if (d->tx_data == NULL || len > FRAME_MAX) {
+    uint16_t slot;
+    uint32_t spins;
+    if (d->tx_data == NULL || len == 0 || len > FRAME_MAX) {
         return -1;
     }
-    memset(d->tx_data, 0, VNET_HDR);
-    memcpy(d->tx_data + VNET_HDR, frame, len);
-    desc[8] = (uint8_t)(VNET_HDR + len);
-    desc[9] = (uint8_t)((VNET_HDR + len) >> 8);
-    desc[12] = 0;
-    desc[13] = 0;
-    aidx = (uint16_t)(avail[2] | ((uint16_t)avail[3] << 8));
-    idx = (uint16_t)(aidx % FW_QSZ);
-    avail[4 + idx * 2u] = 0;
-    avail[5 + idx * 2u] = 0;
-    aidx++;
-    avail[2] = (uint8_t)aidx;
-    avail[3] = (uint8_t)(aidx >> 8);
+    aidx = ring_ld16(avail + 2);
+    fw_vnet_tx_reap(d);
+    for (spins = 0; (uint16_t)(aidx - d->tx_last) >= (uint16_t)FW_QSZ; spins++) {
+        if (spins >= FW_TX_SPINS) {
+            return -1;
+        }
+        pm_cpu_pause();
+        fw_vnet_tx_reap(d);
+    }
+    slot = (uint16_t)(aidx % FW_QSZ);
+    buf = d->tx_data + (uint32_t)slot * (VNET_HDR + FRAME_MAX);
+    memset(buf, 0, VNET_HDR);
+    memcpy(buf + VNET_HDR, frame, len);
+    ring_st32(desc + (uint32_t)slot * 16u + 8u, (uint32_t)(VNET_HDR + len));
+    ring_st16(desc + (uint32_t)slot * 16u + 12u, 0);
+    ring_st16(avail + 4 + (uint32_t)slot * 2u, slot);
+    /* The index publishes the entry; the entry has to be there first. */
+    pm_cpu_store_fence();
+    ring_st16(avail + 2, (uint16_t)(aidx + 1u));
     pm_cpu_store_fence();
     fw_notify(d, 1, d->tx_nqoff);
     return 0;
@@ -461,12 +490,12 @@ static int32_t fw_vnet_poll(struct vnet *d) {
     if (d->rx_data == NULL) {
         return -1;
     }
-    uidx = (uint16_t)(used[2] | ((uint16_t)used[3] << 8));
+    uidx = ring_ld16(used + 2);
     while (d->rx_last != uidx) {
         uint32_t slot = (uint32_t)(d->rx_last % FW_QSZ);
         uint8_t *ue = used + 4 + slot * 8u;
-        uint16_t id = (uint16_t)(ue[0] | ((uint16_t)ue[1] << 8));
-        uint16_t n = (uint16_t)(ue[4] | ((uint16_t)ue[5] << 8));
+        uint16_t id = (uint16_t)ring_ld16(ue);
+        uint16_t n = (uint16_t)ring_ld16(ue + 4);
         uint8_t *pkt = d->rx_data + (uint32_t)id * (VNET_HDR + FRAME_MAX);
         if (n > VNET_HDR) {
             n = (uint16_t)(n - VNET_HDR);
@@ -475,15 +504,14 @@ static int32_t fw_vnet_poll(struct vnet *d) {
             }
             (void)pm_metal_net_ip_rx_from(d->net_h, pkt + VNET_HDR, n);
         }
-        aidx = (uint16_t)(avail[2] | ((uint16_t)avail[3] << 8));
-        avail[4 + (aidx % FW_QSZ) * 2u] = (uint8_t)id;
-        avail[5 + (aidx % FW_QSZ) * 2u] = 0;
-        aidx++;
-        avail[2] = (uint8_t)aidx;
-        avail[3] = (uint8_t)(aidx >> 8);
+        aidx = ring_ld16(avail + 2);
+        ring_st16(avail + 4 + (uint32_t)(aidx % FW_QSZ) * 2u, id);
+        pm_cpu_store_fence();
+        ring_st16(avail + 2, (uint16_t)(aidx + 1u));
         d->rx_last++;
-        uidx = (uint16_t)(used[2] | ((uint16_t)used[3] << 8));
+        uidx = ring_ld16(used + 2);
     }
+    fw_notify(d, 0, d->rx_nqoff);
     return 0;
 }
 
@@ -535,7 +563,7 @@ static int32_t fw_vnet_attach_pci(uint32_t bus, uint32_t dev, uint32_t fn) {
     d->qsz = (uint16_t)FW_QSZ;
     d->vqmem = pm_util_mem_memalign(s_arena, 4096, 8192);
     d->rx_data = pm_util_mem_alloc(s_arena, (size_t)FW_QSZ * (VNET_HDR + FRAME_MAX));
-    d->tx_data = pm_util_mem_alloc(s_arena, VNET_HDR + FRAME_MAX);
+    d->tx_data = pm_util_mem_alloc(s_arena, (size_t)FW_QSZ * (VNET_HDR + FRAME_MAX));
     if (d->vqmem == NULL || d->rx_data == NULL || d->tx_data == NULL) {
         d->used = 0;
         return -1;

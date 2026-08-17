@@ -8,7 +8,7 @@
 
 #include "pymergetic/metal/console.h"
 
-#include "fig_small.inc"
+#include "fig_small.inc.h"
 
 #define PM_METAL_ASCII_MAX_W 160
 #define PM_METAL_ASCII_MAX_H 32

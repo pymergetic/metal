@@ -3,6 +3,7 @@
 #include "pymergetic/metal/net/http/__exports__.h"
 
 #include "pymergetic/metal/async.h"
+#include "pymergetic/metal/console.h"
 #include "pymergetic/metal/net/dns.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/tls.h"
@@ -173,6 +174,22 @@ static int32_t parse_clen(const uint8_t *hdr, uint32_t hdr_len, uint32_t *clen) 
     return 0;
 }
 
+static void hdbg(const char *tag, uint32_t a, uint32_t b) {
+    char d[48];
+    static const char hx[] = "0123456789abcdef";
+    int k = 0;
+    d[k++] = 'H';
+    d[k++] = tag[0];
+    d[k++] = ' ';
+    d[k++] = hx[(a >> 20) & 15]; d[k++] = hx[(a >> 16) & 15]; d[k++] = hx[(a >> 12) & 15];
+    d[k++] = hx[(a >> 8) & 15]; d[k++] = hx[(a >> 4) & 15]; d[k++] = hx[a & 15];
+    d[k++] = ' ';
+    d[k++] = hx[(b >> 20) & 15]; d[k++] = hx[(b >> 16) & 15]; d[k++] = hx[(b >> 12) & 15];
+    d[k++] = hx[(b >> 8) & 15]; d[k++] = hx[(b >> 4) & 15]; d[k++] = hx[b & 15];
+    d[k++] = '\n';
+    (void)pm_metal_console_write(d, (uint32_t)k);
+}
+
 static int32_t finish_body(pm_metal_http_fetch_t *f) {
     uint32_t hdr_end = 0;
     if (find_hdr_end(f->acc, f->acc_len, &hdr_end) == NULL) {
@@ -187,6 +204,7 @@ static int32_t finish_body(pm_metal_http_fetch_t *f) {
     uint32_t clen = 0;
     uint32_t have = f->acc_len - hdr_end;
     if (parse_clen(f->acc, hdr_end, &clen) == 0) {
+        hdbg("c", have, clen);
         if (have < clen) {
             return 1;
         }
@@ -327,6 +345,7 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
             return PM_METAL_ASYNC_WAITING;
         }
         if (n == -2) {
+            hdbg("z", f->acc_len, 0);
             if (finish_body(f) != 0) {
                 f->err = 1;
                 return PM_METAL_ASYNC_ERROR;
@@ -335,6 +354,7 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
             return PM_METAL_ASYNC_DONE;
         }
         if (n < 0) {
+            hdbg("e", (uint32_t)(-n), f->acc_len);
             f->err = 1;
             return PM_METAL_ASYNC_ERROR;
         }

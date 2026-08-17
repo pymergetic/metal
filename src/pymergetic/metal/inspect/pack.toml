@@ -1,0 +1,12 @@
+type = "package"
+name = "pymergetic.metal.inspect"
+version = "0.1.0"
+impl = ["c"]
+description = "Metal Inspect: live registry JSON + www/ UI."
+[python]
+keep_source = true
+freeze = false
+[source]
+embed = true
+[pack]
+compress = false

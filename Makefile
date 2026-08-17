@@ -152,6 +152,10 @@ browser:
 	grep -q "upy pack import" $(CURDIR)/build/browser_prove.log
 	grep -q "upy metal ready" $(CURDIR)/build/browser_prove.log
 	grep -q "upy native card import" $(CURDIR)/build/browser_prove.log
+	grep -q "upy inspect" $(CURDIR)/build/browser_prove.log
+	grep -q "upy inspect caps" $(CURDIR)/build/browser_prove.log
+	grep -q "upy dns" $(CURDIR)/build/browser_prove.log
+	grep -q "upy socket" $(CURDIR)/build/browser_prove.log
 
 compile-commands:
 	python3 $(WASMMOD)/compile_commands.py $(WASMMOD) $(WS) $(VSCODE_CDB)

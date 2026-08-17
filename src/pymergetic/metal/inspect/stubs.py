@@ -5,13 +5,15 @@ from .self_desc import self_description
 CAP_DEFAULTS = {
     "smp": True,
     "asgi": True,
-    "ssh_kex": True,
-    "ssh_auth": True,
+    "ssh_kex": False,
+    "ssh_auth": False,
+    # Py face mounts on ASGI; not a second listen. fastapi only when role=cdn.
     "microdot": True,
-    # Guest: static from wasmmod pack VFS (/mods/<fqn>/…).
-    "vfs_static": True,
+    "fastapi": False,
+    # www/ not on the wire until ASGI route_static.
+    "vfs_static": False,
     "static_embed": False,
-    "static_backend": "wasmmod",
+    "static_backend": "none",
 }
 
 
@@ -19,12 +21,11 @@ def capabilities(role, theme, *, fastapi=False, **extra):
     caps = dict(CAP_DEFAULTS)
     caps["role"] = role
     caps["theme"] = theme
-    caps["fastapi"] = bool(fastapi)
     if role == "cdn":
         caps["microdot"] = False
         caps["fastapi"] = True
-        caps["vfs_static"] = False
-        caps["static_embed"] = False
+    else:
+        caps["fastapi"] = bool(fastapi)
     caps.update(extra)
     return caps
 
