@@ -3,6 +3,7 @@
 #include "pymergetic/metal/net/http/__exports__.h"
 
 #include "pymergetic/metal/async.h"
+#include "pymergetic/metal/net/dns.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/tls.h"
 #include "pymergetic/util/mem.h"
@@ -43,21 +44,6 @@ static void err_set(char *errbuf, size_t errbuf_len, const char *msg) {
         return;
     }
     snprintf(errbuf, errbuf_len, "%s", msg);
-}
-
-static int32_t parse_ipv4(const char *s, uint32_t *out) {
-    unsigned a = 0;
-    unsigned b = 0;
-    unsigned c = 0;
-    unsigned d = 0;
-    if (sscanf(s, "%u.%u.%u.%u", &a, &b, &c, &d) != 4) {
-        return -1;
-    }
-    if (a > 255u || b > 255u || c > 255u || d > 255u) {
-        return -1;
-    }
-    *out = (a << 24) | (b << 16) | (c << 8) | d;
-    return 0;
 }
 
 static int32_t http_send(pm_metal_http_fetch_t *f, const uint8_t *buf, uint32_t len) {
@@ -397,8 +383,8 @@ static pm_wasmmod_io_result_t http_do(const char *method, const char *uri, const
         err_set(errbuf, errbuf_len, "uri");
         return PM_WASMMOD_IO_ERR;
     }
-    if (parse_ipv4(f->host, &f->addr) != 0) {
-        err_set(errbuf, errbuf_len, "host not ipv4");
+    if (pm_metal_net_dns_resolve(f->host, &f->addr) != 0) {
+        err_set(errbuf, errbuf_len, "host");
         return PM_WASMMOD_IO_ERR;
     }
     snprintf(f->method, sizeof(f->method), "%s", method != NULL ? method : "GET");
@@ -486,3 +472,4 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.http, pm_metal_net_http_request, pm_metal_n
 
 PM_MOD_BOOT_C(pymergetic.metal.net.http, pm_metal_net_http_init, pm_metal_net_http_deinit);
 PM_MOD_BOOTDEP_C(pymergetic.metal.net.http, pymergetic.metal.net.tls);
+PM_MOD_BOOTDEP_C(pymergetic.metal.net.http, pymergetic.metal.net.dns);

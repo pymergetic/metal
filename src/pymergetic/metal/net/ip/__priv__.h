@@ -145,8 +145,9 @@ int32_t pm_ip_if_up_mask(int32_t h, uint32_t addr_be, uint32_t mask_be);
 void pm_ip_l2_apply_pending(void);
 uint32_t pm_ip_src_for(const struct pm_metal_sock *s, uint32_t dst);
 /* Egress interface plus the neighbour whose MAC carries the frame: the
- * destination when it shares a subnet with us, else the route's gateway. */
-int32_t pm_ip_route_out(uint32_t src_be, uint32_t dst_be, uint32_t *hop_be);
+ * destination when it shares a subnet with us, else the route's gateway.
+ * h_hint is the socket's pinned interface, or -1 to route by address. */
+int32_t pm_ip_route_out(int32_t h_hint, uint32_t src_be, uint32_t dst_be, uint32_t *hop_be);
 int32_t pm_ip_l2_addr_ours(uint32_t dst_be);
 void pm_ip_eth_tx(int32_t h, const uint8_t dmac[6], uint16_t ethertype, const uint8_t *body,
     uint32_t len);
@@ -170,6 +171,8 @@ void pm_ip_write_be32(uint8_t *p, uint32_t v);
 uint16_t pm_ip_read_be16(const uint8_t *p);
 void pm_ip_write_be16(uint8_t *p, uint16_t v);
 void pm_ip_output(const uint8_t *pkt, uint32_t len);
+/* Same, but leaving by the socket's pinned interface. */
+void pm_ip_output_via(int32_t h_hint, const uint8_t *pkt, uint32_t len);
 
 /* __tcp__.c */
 void pm_ip_tcp_xmit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data, uint32_t dlen);

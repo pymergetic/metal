@@ -1,6 +1,7 @@
 /* pymergetic.metal.net.dns — A lookup + tiny zone on ip UDP. */
 #include "pymergetic/metal/net/dns/__exports__.h"
 
+#include "pymergetic/metal/async.h"
 #include "pymergetic/metal/net/ip.h"
 
 #include <string.h>
@@ -8,6 +9,9 @@
 #define ZONE_MAX 8
 #define NAME_MAX 80
 #define DNS_MAX 512
+#define DNS_PORT 53u
+#define DNS_WAIT_US 2000000ull
+#define DNS_SPINS 200000u
 
 struct zone {
     uint32_t used;
@@ -19,6 +23,8 @@ static pm_util_mem_arena_t *s_arena;
 static struct zone s_zone[ZONE_MAX];
 static int32_t s_fd = -1;
 static uint16_t s_xid = 1;
+static uint16_t s_cport = 49500;
+static uint32_t s_server_be;
 
 static uint32_t name_eq(const char *a, const char *b) {
     uint32_t i;
@@ -160,6 +166,37 @@ static void dns_reply(const uint8_t *q, uint32_t qlen, uint32_t src, uint16_t sp
     (void)pm_metal_net_ip_sendto(s_fd, out, n, src, sport);
 }
 
+/* A query port per lookup: a reply for the previous question must not land in
+ * this one's socket. */
+static uint16_t cli_port(void) {
+    s_cport++;
+    if (s_cport < 49500u || s_cport > 49999u) {
+        s_cport = 49500u;
+    }
+    return s_cport;
+}
+
+/* Wait for the answer while driving the wire. If this box is also serving the
+ * zone, its socket is the only one nobody else pumps, so service it here too:
+ * a lookup against our own resolver has to make progress. */
+static int32_t await_answer(int32_t fd, uint8_t *buf, uint32_t cap, uint32_t *addr, uint16_t *port) {
+    uint64_t t0 = pm_metal_async_mono_us();
+    uint32_t spins = 0;
+    for (;;) {
+        int32_t n = pm_metal_net_ip_recvfrom(fd, buf, cap, addr, port);
+        if (n != 0) {
+            return n;
+        }
+        (void)pm_metal_net_ip_pump();
+        if (s_fd >= 0) {
+            (void)pm_metal_net_dns_poll();
+        }
+        if (pm_metal_async_mono_us() - t0 > DNS_WAIT_US || ++spins > DNS_SPINS) {
+            return -1;
+        }
+    }
+}
+
 int32_t pm_metal_net_dns_init(pm_util_mem_arena_t *arena) {
     if (arena == NULL) {
         return -1;
@@ -167,6 +204,8 @@ int32_t pm_metal_net_dns_init(pm_util_mem_arena_t *arena) {
     s_arena = arena;
     memset(s_zone, 0, sizeof(s_zone));
     s_fd = -1;
+    s_server_be = 0;
+    s_cport = 49500;
     return 0;
 }
 
@@ -175,7 +214,17 @@ void pm_metal_net_dns_deinit(void) {
         (void)pm_metal_net_ip_close(s_fd);
         s_fd = -1;
     }
+    s_server_be = 0;
     s_arena = NULL;
+}
+
+int32_t pm_metal_net_dns_server_set(uint32_t addr_be) {
+    s_server_be = addr_be;
+    return 0;
+}
+
+uint32_t pm_metal_net_dns_server(void) {
+    return s_server_be;
 }
 
 int32_t pm_metal_net_dns_add(const char *name, uint32_t addr_be) {
@@ -250,7 +299,7 @@ int32_t pm_metal_net_dns_lookup(const char *name, uint32_t server_be, uint16_t s
         return -1;
     }
     fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_DGRAM);
-    if (fd < 0 || pm_metal_net_ip_bind(fd, 0x7f000001u, 5354) != 0) {
+    if (fd < 0 || pm_metal_net_ip_bind(fd, 0, cli_port()) != 0) {
         if (fd >= 0) {
             (void)pm_metal_net_ip_close(fd);
         }
@@ -275,8 +324,7 @@ int32_t pm_metal_net_dns_lookup(const char *name, uint32_t server_be, uint16_t s
         (void)pm_metal_net_ip_close(fd);
         return -1;
     }
-    (void)pm_metal_net_dns_poll();
-    n = pm_metal_net_ip_recvfrom(fd, buf, sizeof(buf), &addr, &port);
+    n = await_answer(fd, buf, sizeof(buf), &addr, &port);
     (void)pm_metal_net_ip_close(fd);
     if (n < 12) {
         return -1;
@@ -303,6 +351,56 @@ int32_t pm_metal_net_dns_lookup(const char *name, uint32_t server_be, uint16_t s
     return 0;
 }
 
+/* A dotted quad is already an answer. */
+static int32_t literal(const char *name, uint32_t *out_be) {
+    uint32_t q[4] = { 0, 0, 0, 0 };
+    uint32_t i = 0;
+    uint32_t seen = 0;
+    const char *p = name;
+    for (;;) {
+        if (*p >= '0' && *p <= '9') {
+            q[i] = q[i] * 10u + (uint32_t)(*p - '0');
+            if (q[i] > 255u) {
+                return -1;
+            }
+            seen = 1;
+            p++;
+            continue;
+        }
+        if (*p == '.' && seen && i < 3u) {
+            i++;
+            seen = 0;
+            p++;
+            continue;
+        }
+        if (*p == 0 && seen && i == 3u) {
+            *out_be = (q[0] << 24) | (q[1] << 16) | (q[2] << 8) | q[3];
+            return 0;
+        }
+        return -1;
+    }
+}
+
+int32_t pm_metal_net_dns_resolve(const char *name, uint32_t *out_be) {
+    if (name == NULL || out_be == NULL) {
+        return -1;
+    }
+    if (literal(name, out_be) == 0) {
+        return 0;
+    }
+    {
+        uint32_t zi = zone_find(name);
+        if (zi < ZONE_MAX) {
+            *out_be = s_zone[zi].addr_be;
+            return 0;
+        }
+    }
+    if (s_server_be == 0) {
+        return -1;
+    }
+    return pm_metal_net_dns_lookup(name, s_server_be, DNS_PORT, out_be);
+}
+
 #include "pymergetic/wasmmod/guest.h"
 
 PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_init, pm_metal_net_dns_init, int32_t(pm_util_mem_arena_t *));
@@ -311,6 +409,9 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_add, pm_metal_net_dns
 PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_listen, pm_metal_net_dns_listen, int32_t(uint32_t, uint16_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_poll, pm_metal_net_dns_poll, int32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_lookup, pm_metal_net_dns_lookup, int32_t(const char *, uint32_t, uint16_t, uint32_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_server_set, pm_metal_net_dns_server_set, int32_t(uint32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_server, pm_metal_net_dns_server, uint32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_resolve, pm_metal_net_dns_resolve, int32_t(const char *, uint32_t *));
 
 PM_MOD_BOOT_C(pymergetic.metal.net.dns, pm_metal_net_dns_init, pm_metal_net_dns_deinit);
 PM_MOD_BOOTDEP_C(pymergetic.metal.net.dns, pymergetic.metal.net.ip);

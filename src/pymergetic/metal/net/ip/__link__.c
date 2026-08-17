@@ -199,25 +199,28 @@ static uint32_t ip_src_route(uint32_t dst) {
 }
 
 uint32_t pm_ip_src_for(const struct pm_metal_sock *s, uint32_t dst) {
-    uint32_t addr;
     if (s != NULL && s->laddr_be != 0 && s->laddr_be != 0xffffffffu) {
         return s->laddr_be;
     }
     if (s != NULL && s->l2_h >= 0) {
-        addr = pm_ip_l2_addr_of(s->l2_h);
-        if (addr != 0) {
-            return addr;
-        }
+        /* Pinned to an interface, so its address is the answer even when it has
+         * none yet: a DHCP client must say 0.0.0.0, not borrow lo or a peer. */
+        return pm_ip_l2_addr_of(s->l2_h);
     }
     return ip_src_route(dst);
 }
 
-int32_t pm_ip_route_out(uint32_t src_be, uint32_t dst_be, uint32_t *hop_be) {
+int32_t pm_ip_route_out(int32_t h_hint, uint32_t src_be, uint32_t dst_be, uint32_t *hop_be) {
     const struct pm_metal_ip_rt *rt = rt_match(dst_be);
     uint32_t mask;
-    int32_t h;
+    int32_t h = -1;
     uint32_t hop = dst_be;
-    h = pm_ip_l2_h_for_addr(src_be);
+    if (h_hint >= 0 && pm_ip_l2_has(h_hint)) {
+        h = h_hint;
+    }
+    if (h < 0) {
+        h = pm_ip_l2_h_for_addr(src_be);
+    }
     if (h < 0) {
         h = rt != NULL ? rt->h : -1;
     }

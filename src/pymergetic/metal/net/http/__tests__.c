@@ -2,6 +2,7 @@
 #include "pymergetic/metal/async.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/drivers/net/sim.h"
+#include "pymergetic/metal/net/dns.h"
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/tls.h"
@@ -20,6 +21,7 @@
 #define HTTP_PORT 8080
 #define HTTPS_PORT 8444
 #define AUTH_PORT 8082
+#define NAME_PORT 8086
 #define SIM_HTTP_PORT 8088
 
 typedef struct {
@@ -152,6 +154,14 @@ static int32_t case_https_lo(void) {
     return serve_and_fetch(LO4, HTTPS_PORT, 1, step_https_server, "https://127.0.0.1:8444/x");
 }
 
+/* A URL names a host, not an address: the name goes through net.dns. */
+static int32_t case_fetch_by_name(void) {
+    if (pm_metal_net_dns_add("box.test", LO4) != 0) {
+        return fail("dns add");
+    }
+    return serve_and_fetch(LO4, NAME_PORT, 0, step_server, "http://box.test:8086/x");
+}
+
 static int32_t case_fetch_sim(void) {
     int32_t h;
     if (pm_metal_drivers_net_sim_up() != 0) {
@@ -256,6 +266,9 @@ int32_t pm_metal_net_http_tests(void) {
         return 1;
     }
     if (case_auth_headers() != 0) {
+        return 1;
+    }
+    if (case_fetch_by_name() != 0) {
         return 1;
     }
     if (case_fetch_sim() != 0) {

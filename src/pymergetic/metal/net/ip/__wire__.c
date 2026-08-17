@@ -146,6 +146,10 @@ int32_t pm_metal_net_ip_rx(const uint8_t *frame, uint16_t len) {
 }
 
 void pm_ip_output(const uint8_t *pkt, uint32_t len) {
+    pm_ip_output_via(-1, pkt, len);
+}
+
+void pm_ip_output_via(int32_t h_hint, const uint8_t *pkt, uint32_t len) {
     uint32_t dst;
     uint32_t hop = 0;
     uint32_t mask;
@@ -159,7 +163,7 @@ void pm_ip_output(const uint8_t *pkt, uint32_t len) {
         ip_input(pkt, len);
         return;
     }
-    h = pm_ip_route_out(pm_ip_read_be32(pkt + 12), dst, &hop);
+    h = pm_ip_route_out(h_hint, pm_ip_read_be32(pkt + 12), dst, &hop);
     if (h < 0) {
         return;
     }

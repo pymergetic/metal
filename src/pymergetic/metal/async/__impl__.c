@@ -43,6 +43,10 @@
 #define PM_METAL_ASYNC_RING_MIN 256u
 /* xAPIC CPUID leaf 1 id is 8-bit. Lookup width, not a core cap. */
 #define PM_METAL_ASYNC_APIC_N 256u
+/* How long run_until keeps waiting with nothing runnable before it calls the
+ * wait dead. Orders of magnitude above a cross-thread wakeup, far below any
+ * human timeout. */
+#define PM_METAL_ASYNC_STALL_US 250000ull
 
 struct pm_metal_async_timer {
     struct pm_metal_async_timer *next;
@@ -708,7 +712,11 @@ int32_t pm_metal_async_run_until(pm_metal_async_coro_t *waiter) {
     if (owner != NULL) {
         owner->on_c_stack = 1;
     }
-    unsigned empty_rounds = 0;
+    /* An empty ready ring does not mean stuck: a wakeup pushed by a worker, or
+     * a packet the next pump will deliver, is still on its way. Give up only
+     * when nothing has moved for a whole stall window, or a loaded box turns a
+     * live wait into a failure. */
+    uint64_t stall_until = pm_metal_async_mono_us() + PM_METAL_ASYNC_STALL_US;
     while (waiter->status != PM_METAL_ASYNC_DONE && waiter->status != PM_METAL_ASYNC_ERROR
         && waiter->status != PM_METAL_ASYNC_CANCELLED) {
         pm_metal_net_ip_pump();
@@ -722,7 +730,7 @@ int32_t pm_metal_async_run_until(pm_metal_async_coro_t *waiter) {
             }
             pm_metal_async_task_t *task = (pm_metal_async_task_t *)pay_ptr(ring_pay(word));
             ring_release(idx);
-            empty_rounds = 0;
+            stall_until = pm_metal_async_mono_us() + PM_METAL_ASYNC_STALL_US;
             if (task == owner) {
                 continue;
             }
@@ -732,17 +740,17 @@ int32_t pm_metal_async_run_until(pm_metal_async_coro_t *waiter) {
         uint64_t next = next_timer_deadline();
         if (next == UINT64_MAX) {
             if (atomic_load(&s_busy) != 0u) {
-                empty_rounds = 0;
+                stall_until = pm_metal_async_mono_us() + PM_METAL_ASYNC_STALL_US;
                 idle_wait_us(50ull);
                 continue;
             }
-            empty_rounds++;
-            if (empty_rounds > 1u) {
+            if (pm_metal_async_mono_us() >= stall_until) {
                 if (owner != NULL) {
                     owner->on_c_stack = 0;
                 }
                 return -1;
             }
+            idle_wait_us(50ull);
             continue;
         }
         uint64_t now = pm_metal_async_mono_us();
@@ -751,7 +759,7 @@ int32_t pm_metal_async_run_until(pm_metal_async_coro_t *waiter) {
             wait = 1000000ull;
         }
         idle_wait_us(wait);
-        empty_rounds = 0;
+        stall_until = pm_metal_async_mono_us() + PM_METAL_ASYNC_STALL_US;
     }
     if (owner != NULL) {
         owner->on_c_stack = 0;

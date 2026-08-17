@@ -208,7 +208,7 @@ int32_t pm_metal_drivers_net_sim_tests(void) {
             return fail("cross sendto");
         }
         pm_metal_net_ip_pump();
-        if (pm_metal_net_ip_recvfrom(rx, buf, sizeof(buf), NULL, &port) >= 0) {
+        if (pm_metal_net_ip_recvfrom(rx, buf, sizeof(buf), NULL, &port) > 0) {
             return fail("bind_l2 leaked ha rx");
         }
         if (pm_metal_net_ip_bind(a, b4, 9504) != 0 || pm_metal_net_ip_bind(b, b4, 9505) != 0) {

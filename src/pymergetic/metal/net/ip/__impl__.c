@@ -211,7 +211,7 @@ int32_t pm_metal_net_ip_arp_resolve(uint32_t addr_be) {
     if (pm_ip_arena == NULL || addr_be == 0) {
         return -1;
     }
-    h = pm_ip_route_out(0, addr_be, &hop);
+    h = pm_ip_route_out(-1, 0, addr_be, &hop);
     if (h < 0) {
         return -1;
     }
@@ -468,7 +468,7 @@ int32_t pm_metal_net_ip_sendto(int32_t fd, const uint8_t *buf, uint32_t len, uin
     pm_ip_write_be16(pkt + 24, (uint16_t)(8u + len));
     memcpy(pkt + 28, buf, len);
     pm_ip_l4_stamp(pkt, total);
-    pm_ip_output(pkt, total);
+    pm_ip_output_via(pcb->l2_h, pkt, total);
     return (int32_t)len;
 }
 
@@ -479,12 +479,13 @@ int32_t pm_metal_net_ip_recvfrom(int32_t fd, uint8_t *buf, uint32_t len, uint32_
         return -1;
     }
     if (pcb->rx_len == 0) {
+        /* Nothing queued is 0 bytes, never an error: a caller that polls has to
+         * be able to tell an empty socket from a bad one. A task also parks. */
         pm_metal_async_task_t *cur = pm_metal_async_current_task();
         if (cur != NULL) {
             pcb->waiter = cur;
-            return 0;
         }
-        return -1;
+        return 0;
     }
     uint32_t n = pcb->rx_len < len ? pcb->rx_len : len;
     memcpy(buf, pcb->rx, n);

@@ -32,7 +32,7 @@ static void tcp_emit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data
         memcpy(pkt + 40, data, dlen);
     }
     pm_ip_l4_stamp(pkt, total);
-    pm_ip_output(pkt, total);
+    pm_ip_output_via(s->l2_h, pkt, total);
 }
 
 void pm_ip_tcp_xmit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data, uint32_t dlen) {
