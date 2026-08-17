@@ -4,6 +4,8 @@
 #include "pymergetic/metal/net/http/asgi.h"
 #include "pymergetic/wasmmod/registry.h"
 
+#include "www_embed.inc.h"
+
 #include <string.h>
 
 #ifndef PM_METAL_INSPECT_BODY
@@ -139,15 +141,15 @@ static uint32_t sorted_ids(uint16_t *idx, uint32_t idx_max) {
 static void fill_self(js_t *j) {
     js_raw(j, "{\"schema\":1,\"name\":\"pymergetic.metal\",\"role\":\"kernel\",");
     js_raw(j, "\"product\":\"metal\",\"org\":\"pymergetic\",\"theme\":\"metal\",");
-    js_raw(j, "\"has_source\":false,\"has_pack\":true,\"static_backend\":\"none\",");
+    js_raw(j, "\"has_source\":false,\"has_pack\":true,\"static_backend\":\"embed\",");
     js_raw(j, "\"source_files\":[],\"pack_files\":[\"httpd.json\"],");
     js_raw(j, "\"tags\":{\"role\":\"kernel\",\"product\":\"metal\",\"org\":\"pymergetic\"}}");
 }
 
 static void fill_caps(js_t *j) {
     js_raw(j, "{\"role\":\"metal\",\"theme\":\"metal\",\"asgi\":true,");
-    js_raw(j, "\"microdot\":true,\"fastapi\":false,\"ssh_kex\":false,\"ssh_auth\":false,");
-    js_raw(j, "\"vfs_static\":false}");
+    js_raw(j, "\"microdot\":true,\"fastapi\":false,\"ssh_kex\":true,\"ssh_auth\":false,");
+    js_raw(j, "\"vfs_static\":false,\"static_embed\":true,\"static_backend\":\"embed\"}");
 }
 
 static void fill_reg(js_t *j, int tree) {
@@ -285,6 +287,9 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
     (void)add_route("/inspect/reg");
     (void)add_route("/inspect/reg/completeness");
     (void)add_route("/inspect/reg/seats");
+    if (inspect_www_mount() != 0) {
+        return -1;
+    }
     return 0;
 }
 

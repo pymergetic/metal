@@ -17,7 +17,7 @@ def self_description(host_role, theme, **extra):
         name = "pymergetic.metal"
         role = "kernel"
         product = "metal"
-        static_backend = "wasmmod"
+        static_backend = "embed"
     body = {
         "schema": 1,
         "name": name,

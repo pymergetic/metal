@@ -5,15 +5,15 @@ from .self_desc import self_description
 CAP_DEFAULTS = {
     "smp": True,
     "asgi": True,
-    "ssh_kex": False,
+    "ssh_kex": True,
     "ssh_auth": False,
     # Py face mounts on ASGI; not a second listen. fastapi only when role=cdn.
     "microdot": True,
     "fastapi": False,
-    # www/ not on the wire until ASGI route_static.
+    # www/ is route_static of embedded bytes (firmware cannot fopen).
     "vfs_static": False,
-    "static_embed": False,
-    "static_backend": "none",
+    "static_embed": True,
+    "static_backend": "embed",
 }
 
 

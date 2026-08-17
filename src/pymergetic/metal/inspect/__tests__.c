@@ -104,6 +104,15 @@ static int32_t case_http(void) {
     if (body == NULL || n == 0 || !has(body, n, "live_registry")) {
         return fail("fetch reg body");
     }
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch("http://127.0.0.1:8090/inspect/index.html", &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch www");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "<title>Inspect</title>")) {
+        return fail("fetch www body");
+    }
     return 0;
 }
 

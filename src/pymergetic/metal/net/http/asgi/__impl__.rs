@@ -16,7 +16,7 @@ const WAITING: i32 = 1;
 const DONE: i32 = 2;
 const ERROR: i32 = 4;
 const ACCEPT_WAIT: i32 = -2;
-const MAX_ROUTE: usize = 16;
+const MAX_ROUTE: usize = 24;
 const MAX_CONN: usize = 4;
 const RX_MAX: usize = 1024;
 const HDR_MAX: usize = 160;
@@ -68,6 +68,8 @@ struct Route {
     body: [u8; 256],
     body_len: u32,
     handler: Option<Handler>,
+    /* Caller-owned bytes for route_static. Null means use `body`. */
+    ext: *const u8,
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +99,7 @@ static ROUTES: Mut<[Route; MAX_ROUTE]> = Mut(UnsafeCell::new([Route {
     body: [0; 256],
     body_len: 0,
     handler: None,
+    ext: ptr::null(),
 }; MAX_ROUTE]));
 static CONNS: Mut<[Conn; MAX_CONN]> = Mut(UnsafeCell::new([Conn {
     used: false,
@@ -198,6 +201,10 @@ fn lookup_into(c: &mut Conn, method: &[u8], path: &[u8]) {
                     c.body_len = n;
                     return;
                 }
+            } else if !r.ext.is_null() {
+                c.body = r.ext;
+                c.body_len = r.body_len;
+                return;
             } else {
                 c.body = r.body.as_ptr();
                 c.body_len = r.body_len;
@@ -213,10 +220,34 @@ fn conn_slot() -> Option<usize> {
     unsafe { conns().iter().position(|c| !c.used) }
 }
 
-fn build_hdr(c: &mut Conn) {
+fn ctype_of(path: &[u8]) -> &'static [u8] {
+    let mut end = path.len();
+    while end > 0 && path[end - 1] == 0 {
+        end -= 1;
+    }
+    let p = &path[..end];
+    let dot = p.iter().rposition(|&b| b == b'.');
+    match dot.map(|i| &p[i..]) {
+        Some(b".html") | Some(b".htm") => b"text/html; charset=utf-8",
+        Some(b".css") => b"text/css; charset=utf-8",
+        Some(b".js") => b"application/javascript",
+        Some(b".json") => b"application/json",
+        Some(b".svg") => b"image/svg+xml",
+        Some(b".png") => b"image/png",
+        _ => b"application/octet-stream",
+    }
+}
+
+fn build_hdr(c: &mut Conn, path: &[u8]) {
     c.hdr.fill(0);
     let mut n = 0usize;
-    let prefix = b"HTTP/1.0 200 OK\r\nContent-Length: ";
+    let status = b"HTTP/1.0 200 OK\r\nContent-Type: ";
+    c.hdr[n..n + status.len()].copy_from_slice(status);
+    n += status.len();
+    let ct = ctype_of(path);
+    c.hdr[n..n + ct.len()].copy_from_slice(ct);
+    n += ct.len();
+    let prefix = b"\r\nContent-Length: ";
     c.hdr[n..n + prefix.len()].copy_from_slice(prefix);
     n += prefix.len();
     let mut tmp = [0u8; 10];
@@ -303,7 +334,7 @@ unsafe extern "C" fn step_conn_frame(self_: *mut pm_metal_async_coro_t) -> i32 {
         copy_cstr(&mut mbuf, method);
         copy_cstr(&mut pbuf, path);
         lookup_into(c, &mbuf[..mlen], &pbuf[..plen]);
-        build_hdr(c);
+        build_hdr(c, &pbuf[..plen]);
         c.snd_off = 0;
         c.step = 1;
     }
@@ -476,6 +507,7 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route(
         }
         r.body_len = body_len;
         r.handler = None;
+        r.ext = ptr::null();
         r.used = true;
     }
     0
@@ -501,6 +533,33 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route_fn(
         r.body.fill(0);
         r.body_len = 0;
         r.handler = handler;
+        r.ext = ptr::null();
+        r.used = true;
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pm_metal_net_http_asgi_route_static(
+    url: *const u8,
+    body: *const u8,
+    body_len: u32,
+) -> i32 {
+    if url.is_null() || (body_len != 0 && body.is_null()) {
+        return -1;
+    }
+    unsafe {
+        let Some(slot) = routes().iter().position(|r| !r.used) else {
+            return -1;
+        };
+        let r = &mut routes()[slot];
+        if !cstr_copy(&mut r.method, b"GET\0".as_ptr()) || !cstr_copy(&mut r.path, url) {
+            return -1;
+        }
+        r.body.fill(0);
+        r.body_len = body_len;
+        r.handler = None;
+        r.ext = body;
         r.used = true;
     }
     0
@@ -553,6 +612,11 @@ pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",
     pm_metal_net_http_asgi_route_fn,
     "int32_t(const char *, const char *, pm_metal_net_http_asgi_handler_t)"
+);
+pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
+    "pymergetic.metal.net.http.asgi",
+    pm_metal_net_http_asgi_route_static,
+    "int32_t(const char *, const uint8_t *, uint32_t)"
 );
 pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",

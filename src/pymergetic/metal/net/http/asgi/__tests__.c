@@ -79,6 +79,21 @@ static int32_t case_route(void) {
     if (n != 5 || body == NULL || memcmp(body, "fn-ok", 5) != 0) {
         return fail("route_fn body");
     }
+    {
+        static const uint8_t page[] = "<h1>static</h1>";
+        if (pm_metal_net_http_asgi_route_static("/s.html", page, 15) != 0) {
+            return fail("route_static");
+        }
+        body = NULL;
+        n = 0;
+        st = pm_metal_net_http_fetch("http://127.0.0.1:8090/s.html", &body, &n, err, sizeof(err));
+        if (st != PM_WASMMOD_IO_OK) {
+            return fail(err[0] ? err : "fetch route_static");
+        }
+        if (n != 15 || body == NULL || memcmp(body, page, 15) != 0) {
+            return fail("route_static body");
+        }
+    }
     return 0;
 }
 
