@@ -8,8 +8,7 @@
 
 #include <string.h>
 
-uint16_t pm_ip_csum(const uint8_t *p, uint32_t n) {
-    uint32_t s = 0;
+static uint32_t csum_add(const uint8_t *p, uint32_t n, uint32_t s) {
     while (n > 1u) {
         s += ((uint32_t)p[0] << 8) | p[1];
         p += 2;
@@ -18,10 +17,80 @@ uint16_t pm_ip_csum(const uint8_t *p, uint32_t n) {
     if (n != 0) {
         s += (uint32_t)p[0] << 8;
     }
+    return s;
+}
+
+static uint16_t csum_fold(uint32_t s) {
     while ((s >> 16) != 0) {
         s = (s & 0xffffu) + (s >> 16);
     }
     return (uint16_t)~s;
+}
+
+uint16_t pm_ip_csum(const uint8_t *p, uint32_t n) {
+    return csum_fold(csum_add(p, n, 0));
+}
+
+uint16_t pm_ip_l4_csum(const uint8_t *pkt, uint32_t total) {
+    uint32_t ihl = (uint32_t)(pkt[0] & 0x0fu) * 4u;
+    uint32_t l4len;
+    uint32_t s;
+    if (total < ihl + 8u) {
+        return 0;
+    }
+    l4len = total - ihl;
+    s = csum_add(pkt + 12, 8u, 0);
+    s += (uint32_t)pkt[9];
+    s += l4len;
+    return csum_fold(csum_add(pkt + ihl, l4len, s));
+}
+
+/* Write the transport checksum of a packet we are about to send. Leaving it at
+ * zero is what kept this stack on loopback: every real peer drops a TCP segment
+ * whose checksum does not add up, and only UDP may spell "unchecked" as 0. */
+void pm_ip_l4_stamp(uint8_t *pkt, uint32_t total) {
+    uint32_t ihl = (uint32_t)(pkt[0] & 0x0fu) * 4u;
+    uint8_t proto = pkt[9];
+    uint32_t at;
+    uint16_t cs;
+    if (proto == 6u) {
+        at = ihl + 16u;
+    } else if (proto == 17u) {
+        at = ihl + 6u;
+    } else {
+        return;
+    }
+    if (total < at + 2u) {
+        return;
+    }
+    pkt[at] = 0;
+    pkt[at + 1u] = 0;
+    cs = pm_ip_l4_csum(pkt, total);
+    if (cs == 0 && proto == 17u) {
+        cs = 0xffffu;
+    }
+    pm_ip_write_be16(pkt + at, cs);
+}
+
+static int32_t l4_csum_ok(const uint8_t *pkt, uint32_t total) {
+    uint32_t ihl = (uint32_t)(pkt[0] & 0x0fu) * 4u;
+    uint8_t proto = pkt[9];
+    uint32_t at;
+    if (proto == 6u) {
+        at = ihl + 16u;
+    } else if (proto == 17u) {
+        at = ihl + 6u;
+    } else {
+        return 1;
+    }
+    if (total < at + 2u) {
+        return 0;
+    }
+    /* A zero UDP checksum means the sender computed none. */
+    if (proto == 17u && pm_ip_read_be16(pkt + at) == 0) {
+        return 1;
+    }
+    return pm_ip_l4_csum(pkt, total) == 0 ? 1 : 0;
 }
 
 uint32_t pm_ip_read_be32(const uint8_t *p) {
@@ -56,11 +125,9 @@ int32_t pm_metal_net_ip_rx_from(int32_t h, const uint8_t *frame, uint16_t len) {
     }
     pm_ip_rx_l2 = h;
     if (len >= 14u) {
-        memcpy(pm_ip_eth_dmac, frame + 6, 6);
-        pm_ip_eth_dmac_ok = 1;
         et = (uint16_t)((frame[12] << 8) | frame[13]);
         if (et == 0x0806u) {
-            pm_ip_arp_reply(h, frame, len);
+            pm_ip_arp_input(h, frame, len);
             pm_ip_rx_l2 = prev;
             return 0;
         }
@@ -79,37 +146,39 @@ int32_t pm_metal_net_ip_rx(const uint8_t *frame, uint16_t len) {
 }
 
 void pm_ip_output(const uint8_t *pkt, uint32_t len) {
-    if (pm_ip_lo_up && len >= 20u) {
-        uint32_t dst = pm_ip_read_be32(pkt + 16);
-        if (dst == pm_ip_lo_addr_be || dst == 0x7f000001u) {
-            ip_input(pkt, len);
-            return;
-        }
+    uint32_t dst;
+    uint32_t hop = 0;
+    uint32_t mask;
+    int32_t h;
+    uint8_t dmac[6];
+    if (len < 20u || len > PM_METAL_IP_PKT_MAX) {
+        return;
     }
-    if (len >= 20u) {
-        int32_t h = pm_ip_l2_tx_for_pkt(pm_ip_read_be32(pkt + 12), pm_ip_read_be32(pkt + 16));
-        if (h >= 0) {
-            uint8_t frame[PM_METAL_IP_PKT_MAX + 14u];
-            uint8_t srcmac[6];
-            uint32_t flen;
-            if (len > PM_METAL_IP_PKT_MAX) {
-                return;
-            }
-            if (pm_ip_eth_dmac_ok) {
-                memcpy(frame, pm_ip_eth_dmac, 6);
-            } else {
-                memset(frame, 0xff, 6);
-            }
-            memset(srcmac, 0, 6);
-            pm_metal_drivers_net_mac(h, srcmac);
-            memcpy(frame + 6, srcmac, 6);
-            frame[12] = 0x08;
-            frame[13] = 0x00;
-            memcpy(frame + 14, pkt, len);
-            flen = len + 14u;
-            (void)pm_metal_drivers_net_tx(h, frame, (uint16_t)flen);
-        }
+    dst = pm_ip_read_be32(pkt + 16);
+    if (pm_ip_lo_up && (dst == pm_ip_lo_addr_be || dst == 0x7f000001u)) {
+        ip_input(pkt, len);
+        return;
     }
+    h = pm_ip_route_out(pm_ip_read_be32(pkt + 12), dst, &hop);
+    if (h < 0) {
+        return;
+    }
+    mask = pm_ip_l2_mask_of(h);
+    if (dst == 0xffffffffu || (mask != 0 && (dst | mask) == 0xffffffffu)) {
+        memset(dmac, 0xff, sizeof(dmac));
+    } else if (pm_ip_l2_addr_ours(dst)) {
+        /* Our own address on a wire that loops back to us (sim, a tunnel): the
+         * frame is addressed to this very NIC, so there is nobody to ask. */
+        memset(dmac, 0, sizeof(dmac));
+        pm_metal_drivers_net_mac(h, dmac);
+    } else if (!pm_ip_arp_lookup(h, hop, dmac)) {
+        /* Hold the datagram, ask, and send it from pm_ip_arp_learn when the
+         * neighbour answers. Guessing a MAC is what the old code did. */
+        pm_ip_arp_queue(h, hop, pkt, len);
+        pm_ip_arp_ask(h, hop);
+        return;
+    }
+    pm_ip_eth_tx(h, dmac, 0x0800u, pkt, len);
 }
 
 static void ip_input(const uint8_t *pkt, uint32_t len) {
@@ -118,6 +187,18 @@ static void ip_input(const uint8_t *pkt, uint32_t len) {
     }
     uint32_t ihl = (uint32_t)(pkt[0] & 0x0fu) * 4u;
     if (ihl < 20u || len < ihl) {
+        return;
+    }
+    /* A trailer-padded frame (every ethernet frame under 60 bytes) carries more
+     * bytes than the header claims, and the transport checksum is over the
+     * claimed length only. */
+    {
+        uint32_t total = pm_ip_read_be16(pkt + 2);
+        if (total >= ihl && total <= len) {
+            len = total;
+        }
+    }
+    if (pm_ip_csum(pkt, ihl) != 0 || !l4_csum_ok(pkt, len)) {
         return;
     }
     uint32_t dst = pm_ip_read_be32(pkt + 16);
@@ -138,9 +219,19 @@ static void ip_input(const uint8_t *pkt, uint32_t len) {
     uint8_t proto = pkt[9];
     const uint8_t *l4 = pkt + ihl;
     uint32_t l4len = len - ihl;
+    if (proto == 1 && l4len >= 8u && l4[0] == 0) {
+        /* Echo reply. Only the answer to our own outstanding ping counts, so a
+         * stray reply cannot satisfy pm_metal_net_ip_ping4. */
+        if (pm_ip_read_be16(l4 + 4) == pm_ip_ping_id) {
+            uint32_t copy = l4len > PM_METAL_IP_RX_MAX ? PM_METAL_IP_RX_MAX : l4len;
+            memcpy(pm_ip_ping_out, l4, copy);
+            pm_ip_ping_len = copy;
+        }
+        return;
+    }
     if (proto == 1 && l4len >= 8u && l4[0] == 8) {
         uint8_t reply[PM_METAL_IP_PKT_MAX];
-        if (len > PM_METAL_IP_PKT_MAX) {
+        if (len > PM_METAL_IP_PKT_MAX || dst == 0xffffffffu) {
             return;
         }
         memcpy(reply, pkt, len);
@@ -155,9 +246,8 @@ static void ip_input(const uint8_t *pkt, uint32_t len) {
         reply[ihl + 3] = 0;
         cs = pm_ip_csum(reply + ihl, l4len);
         pm_ip_write_be16(reply + ihl + 2, cs);
-        uint32_t copy = l4len > PM_METAL_IP_RX_MAX ? PM_METAL_IP_RX_MAX : l4len;
-        memcpy(pm_ip_ping_out, reply + ihl, copy);
-        pm_ip_ping_len = copy;
+        /* Our own ping to ourselves lands back here as the echo reply above,
+         * so the answering side has nothing to record. */
         pm_ip_output(reply, len);
         return;
     }

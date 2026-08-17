@@ -23,13 +23,14 @@ int32_t pm_ip_l2_cur = -1;
 uint32_t pm_ip_if_pending_be;
 uint32_t pm_ip_if_pending_mask;
 struct pm_metal_ip_rt pm_ip_rt[PM_METAL_IP_RT_MAX];
+struct pm_metal_ip_arp pm_ip_arp[PM_METAL_IP_ARP_MAX];
 int32_t pm_ip_rx_l2 = -1;
-uint8_t pm_ip_eth_dmac[6];
-uint32_t pm_ip_eth_dmac_ok;
 uint8_t pm_ip_ping_out[PM_METAL_IP_RX_MAX];
 uint32_t pm_ip_ping_len;
+uint16_t pm_ip_ping_id;
 
 static uint16_t s_eph = 49152u;
+static uint16_t s_ping_seq;
 
 void pm_ip_sock_wake(struct pm_metal_sock *s) {
     if (s->waiter != NULL) {
@@ -81,7 +82,9 @@ int32_t pm_metal_net_ip_init(pm_util_mem_arena_t *arena) {
     pm_ip_lo_up = 0;
     pm_ip_rx_l2 = -1;
     pm_ip_ping_len = 0;
+    pm_ip_ping_id = 0;
     s_eph = 49152u;
+    s_ping_seq = 0;
     (void)pm_ip_arena;
     return 0;
 }
@@ -154,9 +157,69 @@ uint32_t pm_metal_net_ip_if_addr(int32_t h) {
 void pm_metal_net_ip_pump(void) {
     uint32_t i;
     pm_ip_tcp_check_timeouts();
+    pm_ip_arp_tick();
     for (i = 0; i < pm_ip_l2_n; i++) {
         (void)pm_metal_drivers_net_poll(pm_ip_l2[i].h);
     }
+}
+
+int32_t pm_metal_net_ip_route_add(uint32_t dst_be, uint32_t mask_be, uint32_t gw_be, int32_t h) {
+    if (pm_ip_arena == NULL || !pm_ip_l2_has(h)) {
+        return -1;
+    }
+    pm_ip_rt_upsert(dst_be & mask_be, mask_be, gw_be, h);
+    return 0;
+}
+
+int32_t pm_metal_net_ip_route_del(uint32_t dst_be, uint32_t mask_be) {
+    if (pm_ip_arena == NULL) {
+        return -1;
+    }
+    pm_ip_rt_del(dst_be & mask_be, mask_be);
+    return 0;
+}
+
+int32_t pm_metal_net_ip_gw_set(uint32_t gw_be) {
+    int32_t h = pm_ip_l2_cur;
+    if (pm_ip_arena == NULL) {
+        return -1;
+    }
+    if (h < 0) {
+        h = pm_ip_l2_n != 0 ? pm_ip_l2[0].h : -1;
+    }
+    if (h < 0) {
+        return -1;
+    }
+    pm_ip_rt_upsert(0, 0, gw_be, h);
+    return 0;
+}
+
+uint32_t pm_metal_net_ip_gw(void) {
+    uint32_t i;
+    for (i = 0; i < PM_METAL_IP_RT_MAX; i++) {
+        if (pm_ip_rt[i].used && pm_ip_rt[i].mask_be == 0) {
+            return pm_ip_rt[i].gw_be;
+        }
+    }
+    return 0;
+}
+
+int32_t pm_metal_net_ip_arp_resolve(uint32_t addr_be) {
+    uint8_t mac[6];
+    uint32_t hop = 0;
+    int32_t h;
+    if (pm_ip_arena == NULL || addr_be == 0) {
+        return -1;
+    }
+    h = pm_ip_route_out(0, addr_be, &hop);
+    if (h < 0) {
+        return -1;
+    }
+    if (pm_ip_arp_lookup(h, hop, mac) == 1) {
+        return 1;
+    }
+    pm_ip_arp_ask(h, hop);
+    return 0;
 }
 
 int32_t pm_metal_net_ip_l2_attach(int32_t h) {
@@ -186,6 +249,7 @@ int32_t pm_metal_net_ip_l2_attach(int32_t h) {
 int32_t pm_metal_net_ip_l2_detach(int32_t h) {
     uint32_t i;
     uint32_t j;
+    uint32_t gw = pm_metal_net_ip_gw();
     int32_t found = 0;
     for (i = 0; i < pm_ip_l2_n; i++) {
         if (pm_ip_l2[i].h == h) {
@@ -204,7 +268,9 @@ int32_t pm_metal_net_ip_l2_detach(int32_t h) {
     if (pm_ip_l2_cur == h) {
         pm_ip_l2_cur = pm_ip_l2_n != 0 ? pm_ip_l2[pm_ip_l2_n - 1u].h : -1;
         if (pm_ip_l2_cur >= 0) {
-            pm_ip_rt_upsert(0, 0, pm_ip_l2_cur);
+            /* The gateway outlives the interface it was reached through: the
+             * remaining interface is on the same wire in every case we serve. */
+            pm_ip_rt_upsert(0, 0, gw, pm_ip_l2_cur);
         }
     }
     return 0;
@@ -401,6 +467,7 @@ int32_t pm_metal_net_ip_sendto(int32_t fd, const uint8_t *buf, uint32_t len, uin
     pm_ip_write_be16(pkt + 22, port_host);
     pm_ip_write_be16(pkt + 24, (uint16_t)(8u + len));
     memcpy(pkt + 28, buf, len);
+    pm_ip_l4_stamp(pkt, total);
     pm_ip_output(pkt, total);
     return (int32_t)len;
 }
@@ -447,18 +514,36 @@ int32_t pm_metal_net_ip_ping4(uint32_t addr_be, const uint8_t *payload, uint32_t
     pm_ip_write_be16(pkt + 2, (uint16_t)total);
     pkt[8] = 64;
     pkt[9] = 1;
-    pm_ip_write_be32(pkt + 12, pm_ip_lo_addr_be);
+    pm_ip_write_be32(pkt + 12, pm_ip_src_for(NULL, addr_be));
     pm_ip_write_be32(pkt + 16, addr_be);
     uint16_t cs = pm_ip_csum(pkt, 20);
     pm_ip_write_be16(pkt + 10, cs);
     pkt[20] = 8;
+    pm_ip_ping_id = (uint16_t)(0x4d45u + s_ping_seq);
+    pm_ip_write_be16(pkt + 24, pm_ip_ping_id);
+    pm_ip_write_be16(pkt + 26, ++s_ping_seq);
     memcpy(pkt + 28, payload, plen);
     cs = pm_ip_csum(pkt + 20, icmp_len);
     pm_ip_write_be16(pkt + 22, cs);
     pm_ip_ping_len = 0;
     pm_ip_output(pkt, total);
     if (pm_ip_ping_len == 0) {
-        return -1;
+        /* Off-box the reply arrives on a later poll, and the first send may still
+         * be waiting on ARP. Loopback answered inside pm_ip_output already.
+         * The spin cap is the real bound on a seat whose monotonic clock is a
+         * call counter (no cycle counter under it), where the deadline alone
+         * would take billions of polls to pass. */
+        uint64_t deadline = pm_metal_async_mono_us() + PM_METAL_IP_PING_WAIT_US;
+        uint32_t spins;
+        for (spins = 0; spins < PM_METAL_IP_PING_SPINS; spins++) {
+            if (pm_ip_ping_len != 0 || pm_metal_async_mono_us() >= deadline) {
+                break;
+            }
+            pm_metal_net_ip_pump();
+        }
+    }
+    if (pm_ip_ping_len == 0) {
+        return -2;
     }
     uint32_t n = pm_ip_ping_len < *out_len ? pm_ip_ping_len : *out_len;
     memcpy(out, pm_ip_ping_out, n);
@@ -477,6 +562,11 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_if_up_h, pm_metal_net_i
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_if_up_mask, pm_metal_net_ip_if_up_mask, int32_t(int32_t, uint32_t, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_if_addr, pm_metal_net_ip_if_addr, uint32_t(int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_pump, pm_metal_net_ip_pump, void(void));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_route_add, pm_metal_net_ip_route_add, int32_t(uint32_t, uint32_t, uint32_t, int32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_route_del, pm_metal_net_ip_route_del, int32_t(uint32_t, uint32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_gw_set, pm_metal_net_ip_gw_set, int32_t(uint32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_gw, pm_metal_net_ip_gw, uint32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_arp_resolve, pm_metal_net_ip_arp_resolve, int32_t(uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_l2_attach, pm_metal_net_ip_l2_attach, int32_t(int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_l2_detach, pm_metal_net_ip_l2_detach, int32_t(int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_l2_attach, pm_metal_net_l2_attach, int32_t(const char *, const pm_metal_net_l2_ops_t *));

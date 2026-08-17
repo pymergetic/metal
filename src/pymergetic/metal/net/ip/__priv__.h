@@ -25,6 +25,19 @@
 #define PM_METAL_IP_L2_MAX 32u
 #define PM_METAL_IP_RT_MAX 16u
 #define PM_METAL_IP_MASK24 0xffffff00u
+#define PM_METAL_IP_ARP_MAX 8u
+/* One datagram waits per unresolved neighbour: a UDP client gets no retransmit,
+ * so dropping its first query would make every one-shot request fail once. */
+#define PM_METAL_IP_ARP_PEND 1500u
+#define PM_METAL_IP_ARP_TTL_US 60000000ull
+#define PM_METAL_IP_ARP_RETRY_US 500000ull
+#define PM_METAL_IP_ARP_TRIES 4u
+#define PM_METAL_IP_PING_WAIT_US 2000000ull
+#define PM_METAL_IP_PING_SPINS 200000u
+
+#define ARP_FREE 0u
+#define ARP_ASKING 1u
+#define ARP_LIVE 2u
 
 #define SK_UDP 1u
 #define SK_TCP 2u
@@ -82,7 +95,21 @@ struct pm_metal_ip_rt {
     uint32_t used;
     uint32_t dst_be;
     uint32_t mask_be;
+    /* 0 = on-link: the destination itself is the neighbour to resolve. */
+    uint32_t gw_be;
     int32_t h;
+};
+
+struct pm_metal_ip_arp {
+    uint32_t state;
+    int32_t h;
+    uint32_t addr_be;
+    uint8_t mac[6];
+    /* ARP_LIVE: when the entry goes stale. ARP_ASKING: when to ask again. */
+    uint64_t at_us;
+    uint32_t tries;
+    uint8_t pend[PM_METAL_IP_ARP_PEND];
+    uint32_t pend_len;
 };
 
 /* Defined by __impl__.c. */
@@ -96,32 +123,48 @@ extern int32_t pm_ip_l2_cur;
 extern uint32_t pm_ip_if_pending_be;
 extern uint32_t pm_ip_if_pending_mask;
 extern struct pm_metal_ip_rt pm_ip_rt[PM_METAL_IP_RT_MAX];
+extern struct pm_metal_ip_arp pm_ip_arp[PM_METAL_IP_ARP_MAX];
 extern int32_t pm_ip_rx_l2;
-extern uint8_t pm_ip_eth_dmac[6];
-extern uint32_t pm_ip_eth_dmac_ok;
 extern uint8_t pm_ip_ping_out[PM_METAL_IP_RX_MAX];
 extern uint32_t pm_ip_ping_len;
+extern uint16_t pm_ip_ping_id;
 
 void pm_ip_sock_wake(struct pm_metal_sock *s);
 int32_t pm_ip_sock_alloc(uint8_t kind);
 
 /* __link__.c — routes, interfaces, ARP. */
-void pm_ip_rt_upsert(uint32_t dst_be, uint32_t mask_be, int32_t h);
+void pm_ip_rt_upsert(uint32_t dst_be, uint32_t mask_be, uint32_t gw_be, int32_t h);
+void pm_ip_rt_del(uint32_t dst_be, uint32_t mask_be);
 void pm_ip_rt_del_h(int32_t h);
 void pm_ip_l2_clear(void);
 uint32_t pm_ip_l2_addr_of(int32_t h);
+uint32_t pm_ip_l2_mask_of(int32_t h);
 int32_t pm_ip_l2_has(int32_t h);
 int32_t pm_ip_l2_h_for_addr(uint32_t addr_be);
 int32_t pm_ip_if_up_mask(int32_t h, uint32_t addr_be, uint32_t mask_be);
 void pm_ip_l2_apply_pending(void);
 uint32_t pm_ip_src_for(const struct pm_metal_sock *s, uint32_t dst);
-int32_t pm_ip_l2_tx_for_pkt(uint32_t src_be, uint32_t dst_be);
+/* Egress interface plus the neighbour whose MAC carries the frame: the
+ * destination when it shares a subnet with us, else the route's gateway. */
+int32_t pm_ip_route_out(uint32_t src_be, uint32_t dst_be, uint32_t *hop_be);
 int32_t pm_ip_l2_addr_ours(uint32_t dst_be);
-void pm_ip_arp_reply(int32_t h, const uint8_t *frame, uint16_t len);
+void pm_ip_eth_tx(int32_t h, const uint8_t dmac[6], uint16_t ethertype, const uint8_t *body,
+    uint32_t len);
+void pm_ip_arp_clear(void);
+int32_t pm_ip_arp_lookup(int32_t h, uint32_t addr_be, uint8_t mac[6]);
+void pm_ip_arp_learn(int32_t h, uint32_t addr_be, const uint8_t mac[6]);
+void pm_ip_arp_ask(int32_t h, uint32_t addr_be);
+void pm_ip_arp_queue(int32_t h, uint32_t addr_be, const uint8_t *pkt, uint32_t len);
+void pm_ip_arp_tick(void);
+void pm_ip_arp_input(int32_t h, const uint8_t *frame, uint16_t len);
 void pm_ip_arp_announce(int32_t h);
 
 /* __wire__.c — IPv4 datagram in/out, ICMP echo, UDP demux, byte order. */
 uint16_t pm_ip_csum(const uint8_t *p, uint32_t n);
+/* Pseudo-header + payload, for TCP and UDP. Zero over a received packet means
+ * the checksum in it is good; over an outgoing one it is the value to write. */
+uint16_t pm_ip_l4_csum(const uint8_t *pkt, uint32_t total);
+void pm_ip_l4_stamp(uint8_t *pkt, uint32_t total);
 uint32_t pm_ip_read_be32(const uint8_t *p);
 void pm_ip_write_be32(uint8_t *p, uint32_t v);
 uint16_t pm_ip_read_be16(const uint8_t *p);
