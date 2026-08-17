@@ -46,7 +46,7 @@ def main() -> int:
     mounts: list[tuple[str, str, int]] = []
     for path in files:
         rel = path.relative_to(root).as_posix()
-        url = "/inspect/" + rel
+        url = "/" + rel
         name = ident(rel)
         data = path.read_bytes()
         emit_array(buf, name, data)
@@ -59,7 +59,11 @@ def main() -> int:
             f"    }}\n"
         )
     buf.write("    return 0;\n}\n")
-    pathlib.Path(args.output).write_text(buf.getvalue(), encoding="utf-8")
+    text = buf.getvalue()
+    out = pathlib.Path(args.output)
+    if out.is_file() and out.read_text(encoding="utf-8") == text:
+        return 0
+    out.write_text(text, encoding="utf-8")
     return 0
 
 

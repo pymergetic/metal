@@ -5,3 +5,11 @@ target/
 
 # clangd database — absolute -I paths naming one checkout (make compile-commands).
 compile_commands.json
+
+# Host CPython bytecode from running inspect / microdot .py next to the cards.
+__pycache__/
+*.pyc
+
+# Bytes from inspect/www/. Recreate with tools/embed_www.py (every seat's make).
+# Lives in the metal root ignore so wasmmod-gen cannot wipe a card .gitignore.
+www_embed.inc.h

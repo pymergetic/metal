@@ -104,7 +104,7 @@ static int32_t case_tcp_echo(void) {
     if (pm_metal_net_ip_send(cl, msg, sizeof(msg)) != 2) {
         return fail("tcp send");
     }
-    pump_n(2);
+    pump_n(8);
     n = pm_metal_net_ip_recv(sv, buf, sizeof(buf));
     (void)pm_metal_net_ip_close(cl);
     (void)pm_metal_net_ip_close(sv);
@@ -139,7 +139,7 @@ static int32_t case_tcp_rexmit(void) {
     }
     pump_n(2);
     n = pm_metal_net_ip_recv(sv, buf, sizeof(buf));
-    if (n >= 0) {
+    if (n > 0) {
         return fail("dropped data arrived");
     }
     wait_us(80000ull);

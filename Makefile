@@ -31,6 +31,7 @@ CPPFLAGS += -I$(CURDIR)/host_inc -I$(METAL_SRC) -I$(WASMMOD_SRC) -I$(WASMMOD) -I
 
 WASMMOD_GEN_ROOTS := $(CURDIR)/src
 include $(WASMMOD)/gen.mk
+include $(CURDIR)/tools/www.mk
 
 # Cards and their tests come from the tree (tools/cards.sh), so a new card is
 # proven here the moment it has a manifest — nothing to add below.
