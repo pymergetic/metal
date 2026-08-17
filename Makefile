@@ -128,10 +128,17 @@ firmware-check:
 	@echo firmware Metal GC/scheduler off ok
 
 upy:
+	mkdir -p $(CURDIR)/build
 	$(MAKE) -C $(TOP)/ports/unix MICROPY_PY_WASM=1 MICROPY_PY_METAL=1 BUILD=build-metal
 	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_guest_prove.py
 	python3 $(CURDIR)/upy_cdn_prove_host.py \
 		$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_cdn_prove.py
+	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_shutdown_prove.py \
+		> $(CURDIR)/build/upy_shutdown.log 2>&1
+	grep -q "upy shutdown prove" $(CURDIR)/build/upy_shutdown.log
+	grep -qE "stop .*card\(s\)" $(CURDIR)/build/upy_shutdown.log
+	! grep -q "nothing booted" $(CURDIR)/build/upy_shutdown.log
+	@echo upy shutdown unwound the boot graph ok
 
 browser:
 	mkdir -p $(CURDIR)/build

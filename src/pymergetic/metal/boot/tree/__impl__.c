@@ -10,6 +10,7 @@
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/util/ascii.h"
 #include "pymergetic/util/mem.h"
+#include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/net/cdn/__exports__.h"
 #include "pymergetic/wasmmod/registry.h"
 
@@ -33,6 +34,13 @@
 #define PM_METAL_BOOT_SGR_FAIL "\033[31m"
 #define PM_METAL_BOOT_SGR_WARN "\033[33m"
 #define PM_METAL_BOOT_SGR_RST "\033[0m"
+
+/* Nodes that printed FAIL during this walk. `ready` is the sum, not a wish. */
+static uint32_t s_nfail;
+
+static void note_fail(void) {
+    s_nfail++;
+}
 
 static int32_t pm_metal_boot_tree_init(pm_util_mem_arena_t *arena) {
     (void)arena;
@@ -402,6 +410,7 @@ static void emit_devices(int last) {
         snprintf(cons, sizeof(cons), "ok  #%u  %s", (unsigned)pm_metal_console_id(), vpc);
     } else {
         snprintf(cons, sizeof(cons), "FAIL");
+        note_fail();
     }
     item(cons_last, 1, !last, "console", cons);
     for (v = 0; v < nvp; v++) {
@@ -468,7 +477,11 @@ static void util_first_leaf(char *dst, unsigned cap, const char *s, uint32_t n) 
     dst[i] = 0;
 }
 
-static void emit_fs(int last) {
+/* Registered module families. This was printed under an `fs` node with a
+ * `root sim memfs` leaf, and both were literals: there is no filesystem card in
+ * the tree, so nothing could answer for either. What the registry does know is
+ * which modules registered, so that is all this reports. */
+static void emit_mods(int last) {
     char leaves[PM_METAL_BOOT_UTIL_MAX][PM_METAL_BOOT_UTIL_NAME];
     uint32_t nleaf = 0;
     uint32_t nmetal = 0;
@@ -535,21 +548,19 @@ static void emit_fs(int last) {
     have_wasm = nwasm != 0;
     nfam = (uint32_t)have_metal + (uint32_t)have_util + (uint32_t)have_wasm;
 
-    item(last, 0, 0, "fs", "ok");
     if (nfam == 0u) {
-        item(0, 1, !last, "mods", "-");
-        item(1, 1, !last, "root", "sim  memfs");
+        item(last, 0, 0, "mods", "-");
         return;
     }
     fmt_count(detail, sizeof(detail), "ok  ", nfam, "family");
-    item(0, 1, !last, "mods", detail);
+    item(last, 0, 0, "mods", detail);
 
     fi = 0;
     if (have_metal) {
         char det[40];
         int fam_last = (fi + 1u == nfam);
         fmt_count(det, sizeof(det), "ok  ", nmetal, "card");
-        item(fam_last, 2, 1, "metal*", det);
+        item(fam_last, 1, !last, "metal*", det);
         fi++;
     }
     if (have_util) {
@@ -557,9 +568,9 @@ static void emit_fs(int last) {
         int fam_last = (fi + 1u == nfam);
         uint32_t u;
         fmt_count(det, sizeof(det), "ok  ", nleaf, "card");
-        item(fam_last, 2, 1, "util", det);
+        item(fam_last, 1, !last, "util", det);
         for (u = 0; u < nleaf; u++) {
-            item(u + 1u == nleaf, 3, !fam_last, leaves[u], "ok");
+            item(u + 1u == nleaf, 2, !fam_last, leaves[u], "ok");
         }
         fi++;
     }
@@ -567,10 +578,9 @@ static void emit_fs(int last) {
         char det[40];
         int fam_last = (fi + 1u == nfam);
         fmt_count(det, sizeof(det), "ok  ", nwasm, "card");
-        item(fam_last, 2, 1, "wasmmod*", det);
+        item(fam_last, 1, !last, "wasmmod*", det);
         fi++;
     }
-    item(1, 1, !last, "root", "sim  memfs");
 }
 
 static void emit_cdn_urls(int last, int depth, int parent_cont) {
@@ -596,8 +606,18 @@ static void emit_net(int last) {
     int32_t n = pm_metal_drivers_net_count();
     int32_t i;
     int32_t seen = 0;
-    item(last, 0, 0, "net", "ok");
-    item(0, 1, !last, "lo", "127.0.0.1");
+    int lo = pm_metal_net_ip_lo_ready() != 0;
+    char detail[48];
+    if (n == 0 && !lo) {
+        item(last, 0, 0, "net", "-");
+        emit_cdn_urls(1, 1, !last);
+        return;
+    }
+    fmt_count(detail, sizeof(detail), "ok  ", (unsigned)(n + (int32_t)lo), "interface");
+    item(last, 0, 0, "net", detail);
+    if (lo) {
+        item(0, 1, !last, "lo", "127.0.0.1");
+    }
     for (i = 0; i < PM_METAL_DT_WALK && seen < n; i++) {
         int32_t h;
         uint32_t addr;
@@ -644,6 +664,7 @@ static void emit_async(int last) {
     const char *kind;
     if (pm_metal_async_ready() == 0) {
         item(last, 0, 0, "async", "FAIL");
+        note_fail();
         return;
     }
     n = pm_metal_async_n_runners();
@@ -658,9 +679,58 @@ static void emit_async(int last) {
     item(1, 1, !last, "runners", run);
 }
 
+static uint32_t kinds_present(const uint32_t *nkind) {
+    uint32_t i;
+    uint32_t n = 0;
+    for (i = 0; i < 3u; i++) {
+        if (nkind[i] != 0u) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* Guest packs the loader actually instantiated. A resident module is C or Rust
+ * linked into this image and never crossed a container boundary, so counting it
+ * here would report the image back to itself. */
 static void emit_wasm(int last) {
-    item(last, 0, 0, "wasm", "ok");
-    item(1, 1, !last, "wasmmod", "ok  host");
+    static const char *const kind_name[3] = { "wasm", "aot", "elf" };
+    uint32_t nmod = pm_wasmmod_registry_module_count();
+    uint32_t nkind[3] = { 0, 0, 0 };
+    uint32_t npack = 0;
+    uint32_t i;
+    uint32_t shown = 0;
+    char detail[48];
+
+    for (i = 0; i < nmod; i++) {
+        uint8_t buf[192];
+        uint32_t len = (uint32_t)sizeof(buf);
+        int32_t c;
+        if (pm_wasmmod_registry_module_at(i, buf, &len) == 0 || len == 0) {
+            continue;
+        }
+        c = pm_wasmmod_registry_container(buf, len);
+        if (c < 0 || c > (int32_t)PM_WASMMOD_REGISTRY_CONTAINER_ELF) {
+            continue;
+        }
+        nkind[c]++;
+        npack++;
+    }
+    if (npack == 0u) {
+        item(last, 0, 0, "wasm", "-  no pack loaded");
+        return;
+    }
+    fmt_count(detail, sizeof(detail), "ok  ", npack, "pack");
+    item(last, 0, 0, "wasm", detail);
+    for (i = 0; i < 3u; i++) {
+        char det[40];
+        if (nkind[i] == 0u) {
+            continue;
+        }
+        shown++;
+        fmt_count(det, sizeof(det), "ok  ", nkind[i], "pack");
+        item(shown == kinds_present(nkind), 1, !last, kind_name[i], det);
+    }
 }
 
 static void emit_externals(int last) {
@@ -669,6 +739,7 @@ static void emit_externals(int last) {
     char detail[40];
     if (n == 0u) {
         item(last, 0, 0, "externals", "FAIL");
+        note_fail();
         return;
     }
     fmt_count(detail, sizeof(detail), "ok  ", n, "external");
@@ -684,6 +755,8 @@ static void emit_externals(int last) {
 
 int32_t pm_metal_boot_tree_print(void) {
     const char *seat = pm_metal_boot_fill_seat();
+    char ready[32];
+    s_nfail = 0;
     emit_line("");
     pm_metal_util_ascii_log_styled(PM_METAL_UTIL_ASCII_STYLE_ACCENT, "METAL");
     emit_line("");
@@ -693,13 +766,20 @@ int32_t pm_metal_boot_tree_print(void) {
     emit_mem(0);
     emit_cpu(0);
     emit_devices(0);
-    emit_fs(0);
+    emit_mods(0);
     emit_net(0);
     emit_async(0);
     emit_wasm(0);
     emit_externals(0);
-    item(1, 0, 0, "ready", "ok");
+    if (s_nfail == 0u) {
+        item(1, 0, 0, "ready", "ok");
+    } else {
+        fmt_count(ready, sizeof(ready), "FAIL  ", s_nfail, "node");
+        item(1, 0, 0, "ready", ready);
+    }
     emit_line("");
+    /* Printing succeeded either way; a failed node is reported on the `ready`
+     * line, not by pretending the print itself broke. */
     return 0;
 }
 
@@ -743,20 +823,23 @@ void pm_metal_boot_motd(void) {
 
 void pm_metal_boot_shutdown(int reboot) {
     char title[64];
+    uint32_t nboot;
     emit_line("");
     snprintf(title, sizeof(title), "%smetal-boot: %s%s", PM_METAL_BOOT_SGR_WARN,
         reboot ? "reboot" : "shutdown", PM_METAL_BOOT_SGR_RST);
     emit_line(title);
-    item(1, 0, 0, "stop", "");
-    item(0, 1, 0, "shell", "ok");
-    item(0, 1, 0, "externals", "ok");
-    item(0, 1, 0, "wasm", "ok");
-    item(0, 1, 0, "async", "ok");
-    item(0, 1, 0, "net", "ok");
-    item(0, 1, 0, "fs", "ok");
-    item(0, 1, 0, "devices", "ok");
-    item(0, 1, 0, "cpu", "ok");
-    item(1, 1, 0, "mem", "ok");
+    /* The boot graph knows the order it came up in and holds each card's
+     * deinit, so unwind it instead of printing a subsystem list that no code
+     * behind it ever touched. */
+    nboot = pm_mod_boot_count();
+    pm_mod_boot_unwind();
+    if (nboot == 0u) {
+        item(1, 0, 0, "stop", "-  nothing booted");
+    } else {
+        char detail[32];
+        fmt_count(detail, sizeof(detail), "ok  ", nboot, "card");
+        item(1, 0, 0, "stop", detail);
+    }
 #if defined(PM_METAL_FIRMWARE)
 #if defined(__i386__) || defined(__x86_64__)
     if (reboot) {

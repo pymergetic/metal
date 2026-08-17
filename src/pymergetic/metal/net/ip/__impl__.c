@@ -102,6 +102,10 @@ int32_t pm_metal_net_ip_lo_up(void) {
     return 0;
 }
 
+int32_t pm_metal_net_ip_lo_ready(void) {
+    return (pm_ip_arena != NULL && pm_ip_lo_up != 0) ? 1 : 0;
+}
+
 static int32_t first_netdev(void) {
     int32_t i;
     for (i = 0; i < 32; i++) {
@@ -467,6 +471,7 @@ int32_t pm_metal_net_ip_ping4(uint32_t addr_be, const uint8_t *payload, uint32_t
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_init, pm_metal_net_ip_init, int32_t(pm_util_mem_arena_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_deinit, pm_metal_net_ip_deinit, void(void));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_lo_up, pm_metal_net_ip_lo_up, int32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_lo_ready, pm_metal_net_ip_lo_ready, int32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_if_up, pm_metal_net_ip_if_up, int32_t(uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_if_up_h, pm_metal_net_ip_if_up_h, int32_t(int32_t, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_if_up_mask, pm_metal_net_ip_if_up_mask, int32_t(int32_t, uint32_t, uint32_t));
