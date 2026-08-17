@@ -12,7 +12,7 @@ $(BUILD)/wasmmod_io.o: $(WASMMOD_SRC)/pymergetic/wasmmod/io/__impl__.c | $(BUILD
 	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
 
 $(BUILD)/wasmmod_cdn.o: $(WASMMOD_SRC)/pymergetic/wasmmod/net/cdn/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
+	$(CC) $(CFLAGS_METAL) $(INC) -DMICROPY_WASM_CONTAINERS=\"wasm\" -c -o $@ $<
 
 $(BUILD)/io_ops.o: $(WASMMOD)/ports/freestanding/io_ops.c | $(BUILD)
 	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<

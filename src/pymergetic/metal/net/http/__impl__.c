@@ -72,6 +72,12 @@ static void http_close_fd(pm_metal_http_fetch_t *f) {
     }
 }
 
+static pm_metal_async_status_t fetch_fail(pm_metal_http_fetch_t *f) {
+    f->err = 1;
+    http_close_fd(f);
+    return PM_METAL_ASYNC_ERROR;
+}
+
 static int32_t parse_http_uri(const char *uri, char *host, uint32_t host_cap, uint16_t *port,
     char *path, uint32_t path_cap, uint32_t *use_tls) {
     const char *p;
@@ -227,8 +233,7 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
     if (f->step == 0) {
         f->fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
         if (f->fd < 0) {
-            f->err = 1;
-            return PM_METAL_ASYNC_ERROR;
+            return fetch_fail(f);
         }
         int32_t st = pm_metal_net_ip_connect(f->fd, f->addr, f->port);
         if (st == 0) {
@@ -236,8 +241,7 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
             return PM_METAL_ASYNC_WAITING;
         }
         if (st < 0) {
-            f->err = 1;
-            return PM_METAL_ASYNC_ERROR;
+            return fetch_fail(f);
         }
         f->step = 1;
     }
@@ -245,8 +249,7 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
         if (f->tls == NULL) {
             f->tls = pm_metal_net_tls_client(f->fd, f->host);
             if (f->tls == NULL) {
-                f->err = 1;
-                return PM_METAL_ASYNC_ERROR;
+                return fetch_fail(f);
             }
         }
         int32_t st = pm_metal_net_tls_handshake(f->tls);
@@ -254,8 +257,7 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
             return PM_METAL_ASYNC_WAITING;
         }
         if (st < 0) {
-            f->err = 1;
-            return PM_METAL_ASYNC_ERROR;
+            return fetch_fail(f);
         }
         f->step = 2;
     } else if (f->step == 1) {
@@ -268,22 +270,19 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
         int n = snprintf(req, sizeof(req),
             "%s %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n", f->method, f->path, f->host);
         if (n < 0 || (uint32_t)n >= sizeof(req)) {
-            f->err = 1;
-            return PM_METAL_ASYNC_ERROR;
+            return fetch_fail(f);
         }
         if (tok != NULL && tok[0] != '\0') {
             int k = snprintf(req + n, sizeof(req) - (uint32_t)n, "Authorization: Bearer %s\r\n", tok);
             if (k < 0 || (uint32_t)k >= sizeof(req) - (uint32_t)n) {
-                f->err = 1;
-                return PM_METAL_ASYNC_ERROR;
+                return fetch_fail(f);
             }
             n += k;
         }
         if (sid != NULL && sid[0] != '\0') {
             int k = snprintf(req + n, sizeof(req) - (uint32_t)n, "X-Shell-Session-Id: %s\r\n", sid);
             if (k < 0 || (uint32_t)k >= sizeof(req) - (uint32_t)n) {
-                f->err = 1;
-                return PM_METAL_ASYNC_ERROR;
+                return fetch_fail(f);
             }
             n += k;
         }
@@ -291,24 +290,21 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
             int k = snprintf(req + n, sizeof(req) - (uint32_t)n, "Content-Length: %u\r\n",
                 (unsigned)f->req_body_len);
             if (k < 0 || (uint32_t)k >= sizeof(req) - (uint32_t)n) {
-                f->err = 1;
-                return PM_METAL_ASYNC_ERROR;
+                return fetch_fail(f);
             }
             n += k;
         }
         if (f->ctype != NULL && f->ctype[0] != 0) {
             int k = snprintf(req + n, sizeof(req) - (uint32_t)n, "Content-Type: %s\r\n", f->ctype);
             if (k < 0 || (uint32_t)k >= sizeof(req) - (uint32_t)n) {
-                f->err = 1;
-                return PM_METAL_ASYNC_ERROR;
+                return fetch_fail(f);
             }
             n += k;
         }
         {
             int k = snprintf(req + n, sizeof(req) - (uint32_t)n, "\r\n");
             if (k < 0 || (uint32_t)k >= sizeof(req) - (uint32_t)n) {
-                f->err = 1;
-                return PM_METAL_ASYNC_ERROR;
+                return fetch_fail(f);
             }
             n += k;
         }
@@ -318,8 +314,7 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
                 return PM_METAL_ASYNC_WAITING;
             }
             if (k < 0) {
-                f->err = 1;
-                return PM_METAL_ASYNC_ERROR;
+                return fetch_fail(f);
             }
             f->snd_off += (uint32_t)k;
         }
@@ -330,8 +325,7 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
                 return PM_METAL_ASYNC_WAITING;
             }
             if (k < 0) {
-                f->err = 1;
-                return PM_METAL_ASYNC_ERROR;
+                return fetch_fail(f);
             }
             f->snd_off += (uint32_t)k;
             body_off += (uint32_t)k;
@@ -347,28 +341,24 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
         if (n == -2) {
             hdbg("z", f->acc_len, 0);
             if (finish_body(f) != 0) {
-                f->err = 1;
-                return PM_METAL_ASYNC_ERROR;
+                return fetch_fail(f);
             }
             http_close_fd(f);
             return PM_METAL_ASYNC_DONE;
         }
         if (n < 0) {
             hdbg("e", (uint32_t)(-n), f->acc_len);
-            f->err = 1;
-            return PM_METAL_ASYNC_ERROR;
+            return fetch_fail(f);
         }
         if (acc_put(f, buf, (uint32_t)n) != 0) {
-            f->err = 1;
-            return PM_METAL_ASYNC_ERROR;
+            return fetch_fail(f);
         }
         uint32_t hdr_end = 0;
         if (find_hdr_end(f->acc, f->acc_len, &hdr_end) != NULL) {
             uint32_t clen = 0;
             if (parse_clen(f->acc, hdr_end, &clen) == 0 && f->acc_len - hdr_end >= clen) {
                 if (finish_body(f) != 0) {
-                    f->err = 1;
-                    return PM_METAL_ASYNC_ERROR;
+                    return fetch_fail(f);
                 }
                 http_close_fd(f);
                 return PM_METAL_ASYNC_DONE;

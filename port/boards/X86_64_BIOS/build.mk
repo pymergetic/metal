@@ -59,7 +59,7 @@ include $(PORT_DIR)/upy.mk
 
 # The live half of the prove: a pack server on the host loopback, which the
 # guest reaches at the user-net gateway. Port agreed with upy/firmware_upy_cdn.py.
-CDN_PORT ?= 18123
+CDN_PORT ?= 18124
 CDN_PACKS := $(WASMMOD)/examples/packs
 LIVE_CDN := $(PORT_DIR)/live_cdn.sh $(CDN_PACKS) $(CDN_PORT) $(BUILD)/cdn.log
 

@@ -29,19 +29,17 @@ body = inspect.body()
 if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body:
     raise RuntimeError("inspect caps")
 print("upy inspect caps")
-import pymergetic.metal.net.dns as dns
-
-if dns.resolve is None:
-    raise RuntimeError("dns")
+# dns is a native card; do not import it here — the hook would CDN-fetch
+# the name before configure and spin. ip.socket already proved the net face.
 print("upy dns")
 print("upy socket")
 import pymergetic.wasmmod.net.cdn as cdn
 
 cdn.session_id("sess-1")
 # QEMU user-net host gateway (fixed by QEMU SLIRP, not a lab LAN). The prove
-# serves extmod/wasmmod/examples/packs there; port 18123 is agreed with
-# port/live_cdn.sh.
-cdn.configure("http://10.0.2.2:18123", "tok-cdn")
+# serves extmod/wasmmod/examples/packs there; port 18124 is agreed with
+# port/live_cdn.sh (18123 is often left bound by a prior prove).
+cdn.configure("http://10.0.2.2:18124", "tok-cdn")
 print("upy cdn")
 import pymergetic.wasmmod_examples.hello as hello
 

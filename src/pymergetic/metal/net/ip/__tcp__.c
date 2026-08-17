@@ -172,7 +172,16 @@ void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thl
             pm_ip_tcp_xmit(s, TCP_ACK, NULL, 0);
             pm_ip_sock_wake(s);
         }
+        /* FIN consumes one seq after the payload. A FIN that arrives before
+         * the missing bytes (or with a hole) is not EOF — ACK rcv_nxt so the
+         * peer retransmits the hole. HTTP/1.0 Connection: close often delivers
+         * headers, then body, then FIN; treating the FIN first used to make
+         * recv return -2 with only the headers in acc. */
         if ((flags & TCP_FIN) != 0) {
+            if (seq + dlen != s->rcv_nxt) {
+                pm_ip_tcp_xmit(s, TCP_ACK, NULL, 0);
+                return;
+            }
             s->rcv_nxt += 1u;
             s->peer_fin = 1;
             if (s->tcp_st == TCP_ESTAB) {
