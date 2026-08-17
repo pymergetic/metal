@@ -1,0 +1,28 @@
+---
+description: Never ship incomplete APIs that pretend to work
+alwaysApply: true
+---
+
+# No stubs that lie
+
+Never expose a public function, method, or symbol that only validates args /
+returns success while the real behavior is "TODO later."
+
+- No `stub` that returns `OK` / `0` / empty success
+- No "v1: null-check only" behind a shipped name
+- No comments like "grows here" on a call path callers depend on
+
+Either implement the real behavior, or do not put the symbol in the public
+header / API yet (keep it private, unexported, or behind an explicit
+unfinished gate that fails closed — never silent success).
+
+This covers build targets too. A board whose `build.mk` re-includes another
+board's image under a different arch name is a stub that lies: the artifact
+boots nowhere it claims to. Ship no board rather than a mislabelled one.
+
+```make
+# BAD — X86_UEFI/build.mk: 32-bit seat that is the 64-bit PE renamed
+include boards/X86_64_UEFI/build.mk
+$(BUILD)/esp/EFI/BOOT/BOOTIA32.EFI: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
+	cp -f $< $@
+```

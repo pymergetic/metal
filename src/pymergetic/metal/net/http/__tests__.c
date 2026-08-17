@@ -9,6 +9,7 @@
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/io.h"
 #include "pymergetic/wasmmod/net/cdn.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -129,7 +130,7 @@ static int32_t serve_and_fetch(uint32_t addr, uint16_t port, int https, pm_metal
     uint8_t *body = NULL;
     uint32_t n = 0;
     char err[64];
-    pm_wasmmod_io_result_t st = pm_metal_wasm_io_fetch(uri, &body, &n, err, sizeof(err));
+    pm_wasmmod_io_result_t st = pm_metal_net_http_fetch(uri, &body, &n, err, sizeof(err));
     (void)pm_metal_net_ip_close(ls);
     if (st != PM_WASMMOD_IO_OK) {
         return fail(err[0] ? err : (https ? "https fetch" : "fetch"));
@@ -234,7 +235,7 @@ static int32_t case_auth_headers(void) {
     uint32_t n = 0;
     char err[64];
     pm_wasmmod_io_result_t st =
-        pm_metal_wasm_io_fetch("http://127.0.0.1:8082/x", &body, &n, err, sizeof(err));
+        pm_metal_net_http_fetch("http://127.0.0.1:8082/x", &body, &n, err, sizeof(err));
     pm_wasmmod_io_set_auth_bearer(NULL);
     pm_wasmmod_net_cdn_set_session_id(NULL);
     (void)pm_metal_net_ip_close(ls);
@@ -262,3 +263,5 @@ int32_t pm_metal_net_http_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.net.http, tests, pm_metal_net_http_tests);

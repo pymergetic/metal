@@ -481,3 +481,29 @@ __attribute__((naked)) void longjmp(jmp_buf env, int val) {
         : "memory");
 }
 #endif
+
+#if defined(__arm__) && !defined(__aarch64__)
+#include <setjmp.h>
+
+__attribute__((naked)) int setjmp(jmp_buf env) {
+    __asm__ volatile(
+        "stmia r0, {r4-r11}\n\t"
+        "str sp, [r0, #32]\n\t"
+        "str lr, [r0, #36]\n\t"
+        "mov r0, #0\n\t"
+        "bx lr\n\t");
+}
+
+__attribute__((naked)) void longjmp(jmp_buf env, int val) {
+    __asm__ volatile(
+        "movs r2, r1\n\t"
+        "bne 1f\n\t"
+        "mov r2, #1\n\t"
+        "1:\n\t"
+        "ldr sp, [r0, #32]\n\t"
+        "ldr lr, [r0, #36]\n\t"
+        "ldmia r0, {r4-r11}\n\t"
+        "mov r0, r2\n\t"
+        "bx lr\n\t");
+}
+#endif

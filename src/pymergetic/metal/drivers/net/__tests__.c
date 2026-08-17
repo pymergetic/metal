@@ -1,6 +1,7 @@
 /* pymergetic.metal.drivers.net — bind two, unbind one. */
 #include "pymergetic/metal/dt.h"
 #include "pymergetic/metal/drivers/net.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -48,6 +49,7 @@ int32_t pm_metal_drivers_net_tests(void) {
     int32_t db;
     int32_t ha;
     int32_t hb;
+    int32_t n0;
     uint8_t mac[6];
     memset(&oa, 0, sizeof(oa));
     memset(&ob, 0, sizeof(ob));
@@ -62,6 +64,7 @@ int32_t pm_metal_drivers_net_tests(void) {
     if (pm_metal_drivers_net_init(NULL) != -1) {
         return fail("init null");
     }
+    n0 = pm_metal_drivers_net_count();
     da = pm_metal_dt_add(PM_METAL_DT_CLASS_NET, "test-nic", PM_METAL_DT_BUS_PLATFORM, 0, 0, 0, 0);
     db = pm_metal_dt_add(PM_METAL_DT_CLASS_NET, "test-nic", PM_METAL_DT_BUS_PLATFORM, 0, 0, 0, 1);
     ha = pm_metal_drivers_net_bind(da, &oa);
@@ -69,7 +72,7 @@ int32_t pm_metal_drivers_net_tests(void) {
     if (ha < 0 || hb < 0 || ha == hb) {
         return fail("bind two");
     }
-    if (pm_metal_drivers_net_count() != 2) {
+    if (pm_metal_drivers_net_count() != n0 + 2) {
         return fail("count");
     }
     pm_metal_drivers_net_mac(ha, mac);
@@ -79,7 +82,7 @@ int32_t pm_metal_drivers_net_tests(void) {
     if (pm_metal_drivers_net_unbind(hb) != 0) {
         return fail("unbind b");
     }
-    if (pm_metal_drivers_net_count() != 1) {
+    if (pm_metal_drivers_net_count() != n0 + 1) {
         return fail("count after");
     }
     if (pm_metal_drivers_net_unbind(ha) != 0) {
@@ -87,3 +90,5 @@ int32_t pm_metal_drivers_net_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.drivers.net, tests, pm_metal_drivers_net_tests);

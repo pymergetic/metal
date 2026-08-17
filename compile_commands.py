@@ -14,7 +14,6 @@ vscode_cdb = pathlib.Path(sys.argv[5])
 upy = {
     "modmetal.c",
     "modmetal.h",
-    "modpymergetic.c",
     "boot.c",
     "boot.h",
     "mpconfig_unix.h",
@@ -23,7 +22,7 @@ defs = (
     " -DMICROPY_PY_WASM=1 -DMICROPY_PY_METAL=1 -DMICROPY_SSL_MBEDTLS=1"
     ' -DMBEDTLS_CONFIG_FILE=\\"mbedtls/mbedtls_config_port.h\\"'
     " -DMICROPY_MODULE_BUILTIN_INIT=1 -DMICROPY_MODULE_BUILTIN_SUBPACKAGES=1"
-    " -DPM_WASMMOD_GUEST=0 -D_POSIX_C_SOURCE=200809L"
+    " -DPM_WASMMOD_GUEST=0 -DPM_MOD_TESTS=1 -D_POSIX_C_SOURCE=200809L"
 )
 card_incs = [
     metal / "src",
@@ -48,14 +47,20 @@ upy_incs = [
 # Firmware µPy (port/upy, mpconfigport.h). unix build-wasm has no Q(metal).
 fw_incs = [
     metal / "port",
+    metal / "port/fwinc",
     metal / "port/boards/X86_64_BIOS",
     metal / "port/build/X86_64_BIOS-mp-repl",
     metal / "src",
     wasm,
     wasm / "src",
     host,
+    host / "lib/mbedtls/include",
 ]
-fw_defs = " -DPM_METAL_FIRMWARE=1 -DPM_WASMMOD_GUEST=1 -DNDEBUG"
+fw_defs = (
+    " -DPM_METAL_FIRMWARE=1 -DPM_WASMMOD_GUEST=1 -DNDEBUG"
+    " -DMICROPY_SSL_MBEDTLS=1"
+    ' -DMBEDTLS_CONFIG_FILE=\\"mbedtls/mbedtls_config_port.h\\"'
+)
 wasm_h = wasm / "ports/micropython/mpconfig_wasm.h"
 unix_h = metal / "mpconfig_unix.h"
 

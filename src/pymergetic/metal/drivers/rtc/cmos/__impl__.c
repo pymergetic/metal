@@ -17,7 +17,7 @@ static int32_t s_dt;
 static int32_t s_h;
 static pm_metal_rtc_ops_t s_ops;
 
-#if defined(PM_METAL_FIRMWARE)
+#if defined(PM_METAL_FIRMWARE) && (defined(__i386__) || defined(__x86_64__))
 static inline void cmos_outb(uint16_t port, uint8_t val) {
     __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));
 }
@@ -63,6 +63,17 @@ static int64_t cmos_get(void *ctx) {
     }
     days += (int64_t)day - 1;
     return days * 86400ll + (int64_t)hour * 3600ll + (int64_t)min * 60ll + (int64_t)sec;
+}
+
+static int32_t cmos_set(void *ctx, int64_t unix_s) {
+    (void)ctx;
+    (void)unix_s;
+    return -1;
+}
+#elif defined(PM_METAL_FIRMWARE)
+static int64_t cmos_get(void *ctx) {
+    (void)ctx;
+    return -1;
 }
 
 static int32_t cmos_set(void *ctx, int64_t unix_s) {

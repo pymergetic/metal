@@ -1,5 +1,7 @@
 # Metal host prove (no µPy). Heap/lock are wasmmod: util.mem (impl=c) and
-# util.lock (impl=rs) from libpymergetic_wasmmod.a — not a C lock twin.
+# util.lock (impl=rs), reached through Metal's own crate — not a C lock twin.
+# libpymergetic_metal.a depends on wasmmod and carries it, so this binary links
+# one archive; wasmmod itself never mentions Metal.
 # Same µPy-vendored mbedtls (lib/mbedtls) unix already compiles.
 # host_inc/py/mpconfig.h is only for MBEDTLS_CONFIG_FILE on this binary.
 #
@@ -11,77 +13,37 @@ WASMMOD_SRC ?= $(WASMMOD)/src
 TOP ?= $(abspath ../..)
 MBEDTLS_DIR ?= $(TOP)/lib/mbedtls
 
-WASMMOD_LIBDIR := $(shell cd $(WASMMOD) && cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['target_directory']+'/release')")
-ifeq ($(WASMMOD_LIBDIR),)
-WASMMOD_LIBDIR := $(WASMMOD)/target/release
+METAL_LIBDIR := $(shell cd $(CURDIR) && cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['target_directory']+'/release')")
+ifeq ($(METAL_LIBDIR),)
+METAL_LIBDIR := $(CURDIR)/target/release
 endif
-WASMMOD_STATICLIB := $(WASMMOD_LIBDIR)/libpymergetic_wasmmod.a
-WASMMOD_IWASM_A := $(firstword $(wildcard $(WASMMOD_LIBDIR)/build/*/out/vmlib/build/libiwasm.a))
+METAL_STATICLIB := $(METAL_LIBDIR)/libpymergetic_metal.a
+WASMMOD_IWASM_A := $(firstword $(wildcard $(METAL_LIBDIR)/build/*/out/vmlib/build/libiwasm.a))
 
 CC ?= cc
 NODE ?= node
-CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O1 -g
+CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O1 -g -pthread
 CPPFLAGS += -I$(CURDIR)/host_inc -I$(METAL_SRC) -I$(WASMMOD_SRC) -I$(WASMMOD) -I$(TOP) \
 	-I$(TOP)/ports/unix -I$(MBEDTLS_DIR)/include \
-	-D_POSIX_C_SOURCE=200809L -DPM_WASMMOD_GUEST=1 -DMICROPY_SSL_MBEDTLS=1 \
+	-D_POSIX_C_SOURCE=200809L -DPM_WASMMOD_GUEST=0 -DPM_MOD_TESTS=1 \
+	-DMICROPY_SSL_MBEDTLS=1 \
 	-DMBEDTLS_CONFIG_FILE='"mbedtls/mbedtls_config_port.h"'
 
-SRCS := \
-	host_test.c \
-	$(METAL_SRC)/pymergetic/metal/dt/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/dt/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/bus/pci/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/bus/pci/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/bus/virtio/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/bus/virtio/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/net/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/net/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/blk/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/blk/virtio/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/blk/virtio/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/blk/ide/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/blk/ide/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/rtc/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/rtc/sim/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/rtc/sim/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/rtc/cmos/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/rtc/cmos/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/fw/memmap/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/fw/memmap/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/async/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/async/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/net/ip/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/net/ip/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/net/tls/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/net/tls/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/net/http/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/net/http/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/net/http/asgi/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/net/tap/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/net/tap/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/net/dns/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/net/dns/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/net/sim/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/net/sim/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/net/virtio/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/net/virtio/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/net/wg/__crypto__.c \
-	$(METAL_SRC)/pymergetic/metal/net/wg/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/net/wg/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/net/bge/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/drivers/net/bge/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/net/ntp/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/net/ntp/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/net/dhcp/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/net/dhcp/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/net/tftp/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/net/tftp/__tests__.c \
-	$(METAL_SRC)/pymergetic/metal/net/ssh/__impl__.c \
-	$(METAL_SRC)/pymergetic/metal/net/ssh/__tests__.c
+WASMMOD_GEN_ROOTS := $(CURDIR)/src
+include $(WASMMOD)/gen.mk
 
-LDFLAGS_WASMMOD := -L$(WASMMOD_LIBDIR) -lpymergetic_wasmmod -lpthread -ldl -lm -lstdc++ -lrt
+# Cards and their tests come from the tree (tools/cards.sh), so a new card is
+# proven here the moment it has a manifest — nothing to add below.
+CARD_REL := $(shell $(CURDIR)/tools/cards.sh impl $(METAL_SRC)/pymergetic/metal) \
+	$(shell $(CURDIR)/tools/cards.sh tests $(METAL_SRC)/pymergetic/metal)
+ifeq ($(CARD_REL),)
+$(error metal card discovery failed — see tools/cards.sh output above)
+endif
+
+SRCS := host_test.c \
+	$(addprefix $(METAL_SRC)/pymergetic/metal/,$(CARD_REL))
+
+LDFLAGS_WASMMOD := -L$(METAL_LIBDIR) -lpymergetic_metal -lpthread -ldl -lm -lstdc++ -lrt
 ifneq ($(WASMMOD_IWASM_A),)
 LDFLAGS_WASMMOD += -L$(dir $(WASMMOD_IWASM_A)) -liwasm
 endif
@@ -105,40 +67,59 @@ MBEDTLS_CPPFLAGS := -I$(CURDIR)/host_inc -I$(TOP) -I$(TOP)/ports/unix \
 	-DMBEDTLS_CONFIG_FILE='"mbedtls/mbedtls_config_port.h"' -D_POSIX_C_SOURCE=200809L
 
 OUT := $(CURDIR)/build/metal-async-test
-EMSDK ?= /home/ladmin/emsdk
+# emcc from PATH, or $EMSDK/upstream/emscripten — do not bake a home directory.
+ifneq ($(wildcard $(EMSDK)/upstream/emscripten/emcc),)
+BROWSER_PATH := $(EMSDK)/upstream/emscripten:$(PATH)
+else
+BROWSER_PATH := $(PATH)
+endif
 WASM_UPY := $(TOP)/ports/webassembly/build-metal/micropython.mjs
 WS ?= $(abspath $(TOP)/../..)
 VSCODE_CDB ?= $(WS)/.vscode/compile_commands.json
 
-.PHONY: test clean compile-commands gen wasmmod-lib upy browser firmware firmware-check FORCE
+.PHONY: test prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE
 
 FORCE:
 
-wasmmod-lib: $(WASMMOD_STATICLIB)
+help menu-list:
+	bash $(CURDIR)/menu.sh list
 
-$(WASMMOD_STATICLIB): FORCE
-	cd $(WASMMOD) && cargo build --lib --release --no-default-features --features upy-host
+menu:
+	bash $(CURDIR)/menu.sh
+
+metal-lib: $(METAL_STATICLIB)
+
+$(METAL_STATICLIB): FORCE
+	cd $(CURDIR) && cargo build --lib --release --no-default-features --features upy-host
 
 gen:
-	cd $(WASMMOD) && cargo run --features gen --bin wasmmod-gen
+	$(WASMMOD)/tools/genfaces.sh --force $(METAL_SRC)
 
 $(CURDIR)/build/mbedtls/%.o: $(MBEDTLS_DIR)/library/%.c
 	mkdir -p $(dir $@)
 	$(CC) -std=gnu11 -O1 -g $(MBEDTLS_CPPFLAGS) -c -o $@ $<
 
-$(OUT): $(SRCS) $(MBEDTLS_OBJS) $(WASMMOD_STATICLIB)
+$(OUT): $(SRCS) $(MBEDTLS_OBJS) $(METAL_STATICLIB)
 	mkdir -p $(dir $(OUT))
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $(OUT) $(SRCS) $(MBEDTLS_OBJS) $(LDFLAGS_WASMMOD)
 
-test: $(OUT) firmware-check
+test: prove-all
+
+prove-all: $(OUT) firmware-check
 	$(OUT)
-	$(MAKE) firmware
+	$(MAKE) firmware-prove
 	$(MAKE) upy
 	$(MAKE) browser
 
 firmware:
-	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_BIOS run
-	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_UEFI run
+	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_BIOS all
+	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_UEFI all
+	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_RV1106 all
+
+firmware-prove:
+	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_BIOS prove
+	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_UEFI prove
+	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_RV1106 prove
 
 firmware-check:
 	mkdir -p $(CURDIR)/build
@@ -154,7 +135,8 @@ upy:
 
 browser:
 	mkdir -p $(CURDIR)/build
-	PATH="$(EMSDK)/upstream/emscripten:$(PATH)" \
+	PATH="$(BROWSER_PATH)" bash -c 'command -v emcc >/dev/null || { echo "emcc not on PATH; set EMSDK to an emsdk checkout" >&2; exit 1; }'
+	PATH="$(BROWSER_PATH)" \
 		$(MAKE) -C $(TOP)/ports/webassembly MICROPY_PY_WASM=1 MICROPY_PY_METAL=1 BUILD=build-metal
 	$(NODE) $(CURDIR)/upy_browser_prove.mjs $(WASM_UPY) $(CURDIR)/upy_browser_prove.py \
 		> $(CURDIR)/build/browser_prove.log 2>&1
@@ -162,6 +144,7 @@ browser:
 	grep -q "upy cdn js.fetch" $(CURDIR)/build/browser_prove.log
 	grep -q "upy pack import" $(CURDIR)/build/browser_prove.log
 	grep -q "upy metal ready" $(CURDIR)/build/browser_prove.log
+	grep -q "upy native card import" $(CURDIR)/build/browser_prove.log
 
 compile-commands:
 	python3 $(WASMMOD)/compile_commands.py $(WASMMOD) $(WS) $(VSCODE_CDB)

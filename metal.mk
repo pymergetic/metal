@@ -14,6 +14,15 @@ ifeq ($(notdir $(CURDIR)),webassembly)
 PM_METAL_BROWSER := 1
 endif
 
+WASMMOD_GEN_ROOTS := $(TOP)/extmod/metal/src
+include $(TOP)/extmod/wasmmod/gen.mk
+
+# Metal's crate depends on wasmmod, so libpymergetic_metal.a already contains
+# it. Claim the seat's cargo build here and wasmmod's fragment links ours
+# instead of a second archive with the same wasmmod objects in it.
+WASMMOD_CARGO_DIR := $(TOP)/extmod/metal
+WASMMOD_CARGO_LIB := pymergetic_metal
+
 CFLAGS_EXTMOD += -DMICROPY_PY_METAL=1
 CFLAGS_EXTMOD += -include $(TOP)/extmod/metal/mpconfig_unix.h
 INC += -I$(TOP)/extmod/metal/src
@@ -47,52 +56,33 @@ SRC_METAL_MBEDTLS = $(addprefix $(MBEDTLS_DIR)/library/,\
 PY_O += $(addprefix $(BUILD)/, $(SRC_METAL_MBEDTLS:.c=.o))
 endif
 
+# Cards come from the tree, not from a list here — see tools/cards.sh. The same
+# TUs land on unix, firmware, and emcc; fills already #ifdef (tap is linux,
+# virtio MMIO is firmware, cmos ports are firmware, the rest is plain C).
+METAL_CARD_REL := $(shell $(TOP)/extmod/metal/tools/cards.sh impl \
+	$(TOP)/extmod/metal/src/pymergetic/metal)
+ifeq ($(METAL_CARD_REL),)
+$(error metal card discovery failed — see tools/cards.sh output above)
+endif
+
 # io_ops.c is wasmmod-owned; Metal compiles it (not SRC_WASMMOD / cargo / CPython).
 SRC_METAL_CORE = \
 	extmod/metal/modmetal.c \
 	extmod/metal/boot.c \
-	extmod/wasmmod/ports/metal/io_ops.c \
-	extmod/metal/src/pymergetic/metal/dt/__impl__.c \
-	extmod/metal/src/pymergetic/metal/bus/pci/__impl__.c \
-	extmod/metal/src/pymergetic/metal/bus/virtio/__impl__.c \
-	extmod/metal/src/pymergetic/metal/drivers/__impl__.c \
-	extmod/metal/src/pymergetic/metal/drivers/net/__impl__.c \
-	extmod/metal/src/pymergetic/metal/drivers/blk/__impl__.c \
-	extmod/metal/src/pymergetic/metal/drivers/blk/virtio/__impl__.c \
-	extmod/metal/src/pymergetic/metal/drivers/rtc/__impl__.c \
-	extmod/metal/src/pymergetic/metal/drivers/rtc/sim/__impl__.c \
-	extmod/metal/src/pymergetic/metal/fw/memmap/__impl__.c \
-	extmod/metal/src/pymergetic/metal/async/__impl__.c \
-	extmod/metal/src/pymergetic/metal/net/ip/__impl__.c \
-	extmod/metal/src/pymergetic/metal/net/tls/__impl__.c \
-	extmod/metal/src/pymergetic/metal/net/http/__impl__.c \
-	extmod/metal/src/pymergetic/metal/net/dns/__impl__.c \
-	extmod/metal/src/pymergetic/metal/drivers/net/sim/__impl__.c \
-	extmod/metal/src/pymergetic/metal/net/wg/__crypto__.c \
-	extmod/metal/src/pymergetic/metal/net/wg/__impl__.c \
-	extmod/metal/src/pymergetic/metal/net/ntp/__impl__.c \
-	extmod/metal/src/pymergetic/metal/net/dhcp/__impl__.c \
-	extmod/metal/src/pymergetic/metal/net/tftp/__impl__.c \
-	extmod/metal/src/pymergetic/metal/net/ssh/__impl__.c
+	extmod/wasmmod/ports/freestanding/io_ops.c
 
-# unix / firmware NICs and ISA leaves — not in the browser cell (emcc).
-SRC_METAL_HOST = \
-	extmod/metal/src/pymergetic/metal/drivers/net/tap/__impl__.c \
-	extmod/metal/src/pymergetic/metal/drivers/net/virtio/__impl__.c \
-	extmod/metal/src/pymergetic/metal/drivers/net/bge/__impl__.c \
-	extmod/metal/src/pymergetic/metal/drivers/blk/ide/__impl__.c \
-	extmod/metal/src/pymergetic/metal/drivers/rtc/cmos/__impl__.c
-
+SRC_METAL_C = $(SRC_METAL_CORE) \
+	$(addprefix extmod/metal/src/pymergetic/metal/,$(METAL_CARD_REL))
 ifdef PM_METAL_BROWSER
-SRC_METAL_C = $(SRC_METAL_CORE) extmod/metal/modpymergetic.c
+# The emcc cell needs no platform from us: wasmmod owns its own WAMR platform,
+# fw_lock crate and interp archive for that seat (ports/webassembly/wamr,
+# ports/webassembly/fw_lock). Metal's port/wamr platform is for firmware only.
 # Extra --js-library; leave ports/webassembly/library.js vanilla.
 JSFLAGS += --js-library $(TOP)/extmod/metal/src/pymergetic/metal/drivers/net/sim/library.js
 JSFLAGS += -s ALLOW_MEMORY_GROWTH=1
 JSFLAGS += -s INITIAL_MEMORY=33554432
 $(BUILD)/micropython.mjs: $(TOP)/extmod/metal/src/pymergetic/metal/drivers/net/sim/library.js
 $(addprefix $(BUILD)/, $(SRC_METAL_C:.c=.o)): CFLAGS += -std=gnu99
-else
-SRC_METAL_C = $(SRC_METAL_CORE) $(SRC_METAL_HOST)
 endif
 
 PY_O += $(addprefix $(BUILD)/, $(SRC_METAL_C:.c=.o))

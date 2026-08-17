@@ -1,0 +1,9 @@
+# Relative to this directory (same as the TU). clangd --compile-commands-dir
+# fuzzy-matches port/*.c without lib/mbedtls; these flags still apply.
+CompileFlags:
+  Add:
+    - -I../../../../lib/mbedtls/include
+    - -I..
+    - -I../fwinc
+    - -DMICROPY_SSL_MBEDTLS=1
+    - -DMBEDTLS_CONFIG_FILE="mbedtls/mbedtls_config_port.h"

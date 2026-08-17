@@ -3,6 +3,7 @@
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/http/asgi.h"
 #include "pymergetic/metal/net/ip.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -25,7 +26,7 @@ static int32_t case_fetch_default(void) {
     uint8_t *body = NULL;
     uint32_t n = 0;
     char err[64];
-    pm_wasmmod_io_result_t st = pm_metal_wasm_io_fetch("http://127.0.0.1:8090/x", &body, &n, err, sizeof(err));
+    pm_wasmmod_io_result_t st = pm_metal_net_http_fetch("http://127.0.0.1:8090/x", &body, &n, err, sizeof(err));
     if (st != PM_WASMMOD_IO_OK) {
         return fail(err[0] ? err : "fetch");
     }
@@ -44,7 +45,7 @@ static int32_t case_route(void) {
     uint8_t *body = NULL;
     uint32_t n = 0;
     char err[64];
-    pm_wasmmod_io_result_t st = pm_metal_wasm_io_fetch("http://127.0.0.1:8090/hi", &body, &n, err, sizeof(err));
+    pm_wasmmod_io_result_t st = pm_metal_net_http_fetch("http://127.0.0.1:8090/hi", &body, &n, err, sizeof(err));
     if (st != PM_WASMMOD_IO_OK) {
         return fail(err[0] ? err : "fetch route");
     }
@@ -63,3 +64,5 @@ int32_t pm_metal_net_http_asgi_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.net.http.asgi, tests, pm_metal_net_http_asgi_tests);

@@ -3,6 +3,7 @@
 #include "pymergetic/metal/drivers/blk.h"
 #include "pymergetic/metal/drivers/blk/virtio.h"
 #include "pymergetic/metal/dt.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -38,7 +39,7 @@ int32_t pm_metal_drivers_blk_virtio_tests(void) {
     if (pm_metal_drivers_blk_read(a, 1, r, 1) != 0 || r[0] != 0xa5) {
         return fail("read a");
     }
-    dt = pm_metal_dt_by_class(PM_METAL_DT_CLASS_BLK, 1);
+    dt = pm_metal_drivers_blk_dt_id(b);
     if (dt < 0 || pm_metal_drivers_unbind(dt) != 0) {
         return fail("unbind b");
     }
@@ -48,3 +49,5 @@ int32_t pm_metal_drivers_blk_virtio_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.drivers.blk.virtio, tests, pm_metal_drivers_blk_virtio_tests);

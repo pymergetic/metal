@@ -3,6 +3,5 @@ __exports__.h
 __exports__.rs
 __imports__.h
 __imports__.rs
-__init__.pyi
 __version__.h
 !.gitignore

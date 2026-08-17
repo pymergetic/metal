@@ -1,6 +1,7 @@
 /* pymergetic.metal.net.ip — lo ping + UDP park prove. */
 #include "pymergetic/metal/async.h"
 #include "pymergetic/metal/net/ip.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -226,3 +227,5 @@ int32_t pm_metal_net_ip_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.net.ip, tests, pm_metal_net_ip_tests);

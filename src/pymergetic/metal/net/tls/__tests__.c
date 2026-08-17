@@ -3,6 +3,7 @@
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/tls.h"
 #include "pymergetic/metal/net/tls/__testcert__.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -168,3 +169,5 @@ int32_t pm_metal_net_tls_tests(void) {
     }
     return case_lo_ping();
 }
+
+PM_MOD_TEST_C(pymergetic.metal.net.tls, tests, pm_metal_net_tls_tests);

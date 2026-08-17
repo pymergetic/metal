@@ -1,6 +1,7 @@
 /* pymergetic.metal.drivers.rtc.cmos — get is host unix time. */
 #include "pymergetic/metal/drivers/rtc.h"
 #include "pymergetic/metal/drivers/rtc/cmos.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -31,3 +32,5 @@ int32_t pm_metal_drivers_rtc_cmos_tests(void) {
     (void)time;
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.drivers.rtc.cmos, tests, pm_metal_drivers_rtc_cmos_tests);

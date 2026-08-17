@@ -4,6 +4,7 @@
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/drivers/net/bge.h"
 #include "pymergetic/metal/net/ip.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -113,3 +114,5 @@ int32_t pm_metal_drivers_net_bge_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.drivers.net.bge, tests, pm_metal_drivers_net_bge_tests);

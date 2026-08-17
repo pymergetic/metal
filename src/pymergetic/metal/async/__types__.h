@@ -36,7 +36,14 @@ struct pm_metal_async_coro {
 struct pm_metal_async_task {
     pm_metal_async_coro_t *root;
     uint32_t on_c_stack; /* 1 while nested run_until owns this task's C frame */
+    uint32_t running;    /* CAS: one runner steps a task at a time */
+    uint32_t pid;        /* 0 = not a process (no human intent / id) */
 };
+
+int32_t pm_metal_async_ready(void);
+uint32_t pm_metal_async_n_runners(void);
+const char *pm_metal_async_runner_kind(void);
+uint32_t pm_metal_async_process_id(void);
 
 #ifdef __cplusplus
 }

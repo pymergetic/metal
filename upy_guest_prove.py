@@ -83,4 +83,15 @@ m.PM_METAL_DRV_PLATFORM("pymergetic.test.plat", attach)
 m.PM_METAL_DRV_ISA("pymergetic.test.isa", 0x300, attach)
 if len(hits) < 2:
     raise SystemExit("late drv attach %s" % (hits,))
+
+# Cards resolve from the registry at any depth, with no name list to maintain.
+import pymergetic.metal.net.ip as ip
+
+if ip.socket is None:
+    raise SystemExit("native card import")
+if m.net.ip is not ip:
+    raise SystemExit("namespace walk")
+if "ip" not in m.net.__dict__:
+    raise SystemExit("namespace listing")
+print("upy native card import")
 print("guest prove ok")

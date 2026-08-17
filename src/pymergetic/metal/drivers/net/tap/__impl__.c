@@ -8,7 +8,7 @@
 
 #include <string.h>
 
-#if defined(__linux__)
+#if defined(__linux__) && !defined(PM_METAL_FIRMWARE)
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/if_tun.h>
@@ -33,7 +33,7 @@ static struct tap_nic s_dev[TAP_MAX];
 
 static int32_t tap_open(void *ctx) {
     struct tap_nic *d = ctx;
-#if defined(__linux__)
+#if defined(__linux__) && !defined(PM_METAL_FIRMWARE)
     struct ifreq ifr;
     int fd;
     if (d == NULL) {
@@ -65,7 +65,7 @@ static void tap_close(void *ctx) {
     if (d == NULL) {
         return;
     }
-#if defined(__linux__)
+#if defined(__linux__) && !defined(PM_METAL_FIRMWARE)
     if (d->fd >= 0) {
         close(d->fd);
     }
@@ -87,7 +87,7 @@ static void tap_mac(void *ctx, uint8_t out[6]) {
 
 static int32_t tap_tx(void *ctx, const uint8_t *frame, uint16_t len) {
     struct tap_nic *d = ctx;
-#if defined(__linux__)
+#if defined(__linux__) && !defined(PM_METAL_FIRMWARE)
     ssize_t n;
     if (d == NULL || d->fd < 0 || frame == NULL || len == 0) {
         return -1;
@@ -104,7 +104,7 @@ static int32_t tap_tx(void *ctx, const uint8_t *frame, uint16_t len) {
 
 static int32_t tap_poll(void *ctx) {
     struct tap_nic *d = ctx;
-#if defined(__linux__)
+#if defined(__linux__) && !defined(PM_METAL_FIRMWARE)
     uint8_t buf[2048];
     ssize_t n;
     if (d == NULL || d->fd < 0) {
@@ -180,7 +180,7 @@ int32_t pm_metal_drivers_net_tap_init(pm_util_mem_arena_t *arena) {
 
 void pm_metal_drivers_net_tap_deinit(void) {
     uint32_t i;
-#if defined(__linux__)
+#if defined(__linux__) && !defined(PM_METAL_FIRMWARE)
     for (i = 0; i < TAP_MAX; i++) {
         if (s_dev[i].fd >= 0) {
             close(s_dev[i].fd);

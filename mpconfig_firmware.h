@@ -7,6 +7,6 @@
 #ifndef PYMERGETIC_METAL_MPCONFIG_FIRMWARE_H
 #define PYMERGETIC_METAL_MPCONFIG_FIRMWARE_H
 
-#include "extmod/wasmmod/ports/metal/mpconfig_metal.h"
+#include "extmod/wasmmod/ports/freestanding/mpconfig_freestanding.h"
 
 #endif /* PYMERGETIC_METAL_MPCONFIG_FIRMWARE_H */

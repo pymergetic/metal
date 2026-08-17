@@ -1,16 +1,21 @@
-/* Firmware µPy: arena malloc, ready flag, one-shot `import pymergetic.metal`. */
+/* Firmware µPy: bump slab + one-shot guest. Ready comes from pm_metal_boot(). */
 #include "extmod/metal/port/upy/firmware_upy.h"
 
-#include "extmod/metal/boot.h"
+#include "pymergetic/metal/boot.h"
+#include "pymergetic/metal/console.h"
 #include "ports/micropython/finder.h"
 #include "ports/micropython/importhook.h"
-#include "pymergetic/wasmmod/pyexport/__exports__.h"
+#include "pymergetic/wasmmod/pyexport.h"
 #include "py/builtin.h"
 #include "py/compile.h"
 #include "py/mperrno.h"
 #include "py/runtime.h"
 #include "py/stackctrl.h"
 #include "pymergetic/util/mem.h"
+#if MICROPY_HELPER_REPL
+#include "shared/readline/readline.h"
+#include "shared/runtime/pyexec.h"
+#endif
 
 #include <stddef.h>
 #include <stdint.h>
@@ -18,6 +23,7 @@
 
 void uart_write(const char *s, size_t n);
 void uart_puts(const char *s);
+int uart_rx_chr(void);
 
 void *malloc(size_t n);
 void free(void *p);
@@ -35,7 +41,6 @@ typedef struct {
 } pm_metal_upy_hdr_t;
 
 static pm_util_mem_arena_t *s_arena;
-static int s_ready;
 static uint8_t *s_bump;
 static uint8_t *s_bump_end;
 #ifdef PM_METAL_UEFI
@@ -58,7 +63,7 @@ void pm_metal_firmware_bind_arena(pm_util_mem_arena_t *arena) {
     if (arena == NULL) {
         return;
     }
-    /* TLSF grow (add_pool) after cake does not serve µPy 1KiB requests;
+    /* TLSF grow (add_pool) after bring-up does not serve µPy 1KiB requests;
      * take a map() slab from the same arena hole and bump-allocate. */
     s_bump = (uint8_t *)pm_util_mem_map(arena, PM_METAL_FIRMWARE_UPY_SLAB);
     if (s_bump != NULL) {
@@ -71,16 +76,12 @@ void pm_metal_firmware_bind_arena(pm_util_mem_arena_t *arena) {
     }
 }
 
-void pm_metal_set_ready(int v) {
-    s_ready = v;
+void pm_metal_boot_fill_bind_arena(pm_util_mem_arena_t *arena) {
+    pm_metal_firmware_bind_arena(arena);
 }
 
-int pm_metal_ready(void) {
-    return s_ready;
-}
-
-int pm_metal_boot(void) {
-    return s_ready ? 0 : -1;
+const char *pm_metal_boot_fill_map_label(void) {
+    return "upy";
 }
 
 void *pm_metal_wasm_malloc(size_t n) {
@@ -155,12 +156,13 @@ int pm_wasmmod_pyexport_bind_module(const char *fqn, pm_wasmmod_py_obj_t module)
 }
 
 mp_uint_t mp_hal_stdout_tx_strn(const char *str, size_t len) {
-    uart_write(str, len);
-    return (mp_uint_t)len;
+    uint32_t n = len > 0xffffffffu ? 0xffffffffu : (uint32_t)len;
+    (void)pm_metal_console_write(str, n);
+    return (mp_uint_t)n;
 }
 
 int mp_hal_stdin_rx_chr(void) {
-    return -1;
+    return uart_rx_chr();
 }
 
 #if !MICROPY_VFS
@@ -179,7 +181,11 @@ void nlr_jump_fail(void *val) {
     (void)val;
     uart_puts("nlr fail\n");
     for (;;) {
+#if defined(__i386__) || defined(__x86_64__)
         __asm__ volatile("hlt");
+#else
+        __asm__ volatile("wfi");
+#endif
     }
 }
 
@@ -201,19 +207,25 @@ static int firmware_upy_run(void)
 int pm_metal_firmware_upy(void)
 #endif
 {
-    static const char src[] = "import pymergetic.metal as m\n"
-                              "if not m.ready():\n"
-                              "    raise RuntimeError('ready')\n"
-                              "print('upy metal ready')\n"
-                              "import pymergetic.wasmmod.net.cdn as cdn\n"
-                              "cdn.session_id('sess-1')\n"
-                              "cdn.configure('http://10.0.2.2:1', 'tok-cdn')\n"
-                              "print('upy cdn')\n"
-                              "import pymergetic.wasmmod_examples.hello as hello\n"
-                              "print('upy pack import')\n";
+    /* Guest autoexec (prove / first script). MOTD is pm_metal_boot_motd(),
+     * not this file — same painter as the REPL banner hook. */
+    extern const char *pm_metal_firmware_upy_ready_py(void);
+    extern unsigned pm_metal_firmware_upy_ready_py_len(void);
+    extern const char *pm_metal_firmware_upy_cdn_py(void);
+    extern unsigned pm_metal_firmware_upy_cdn_py_len(void);
     extern const uint8_t *pm_metal_hello_wasm_bytes(void);
     extern unsigned pm_metal_hello_wasm_size(void);
+    const char *src;
+    unsigned src_len;
     nlr_buf_t nlr;
+#if defined(__arm__) || defined(__ARM_ARCH)
+    /* Luckfox: QEMU CDN is 10.0.2.2 — skip it on hardware. */
+    src = pm_metal_firmware_upy_ready_py();
+    src_len = pm_metal_firmware_upy_ready_py_len();
+#else
+    src = pm_metal_firmware_upy_cdn_py();
+    src_len = pm_metal_firmware_upy_cdn_py_len();
+#endif
     if (s_bump == NULL) {
         uart_puts("upy slab\n");
         return -1;
@@ -226,24 +238,37 @@ int pm_metal_firmware_upy(void)
         mp_wasm_ensure_inited();
         mp_wasm_register_local_bytes("pymergetic.wasmmod_examples.hello",
             pm_metal_hello_wasm_bytes(), pm_metal_hello_wasm_size());
-        mp_lexer_t *lex = mp_lexer_new_from_str_len(MP_QSTR__lt_stdin_gt_, src, sizeof(src) - 1u, 0);
+        mp_lexer_t *lex = mp_lexer_new_from_str_len(MP_QSTR__lt_stdin_gt_, src, src_len, 0);
         qstr source_name = lex->source_name;
         mp_parse_tree_t tree = mp_parse(lex, MP_PARSE_FILE_INPUT);
         mp_obj_t fn = mp_compile(&tree, source_name, false);
         mp_call_function_0(fn);
         nlr_pop();
+    } else {
+        mp_obj_print_exception(&mp_plat_print, MP_OBJ_FROM_PTR(nlr.ret_val));
+#if !MICROPY_HELPER_REPL
 #ifdef PM_METAL_UEFI
-        /* WAMR teardown on the EFI return path #UDs; this seat halts next. */
+        return -1;
 #else
         mp_deinit();
+        return -1;
 #endif
-        return 0;
+#endif
     }
-    mp_obj_print_exception(&mp_plat_print, MP_OBJ_FROM_PTR(nlr.ret_val));
+#if MICROPY_HELPER_REPL
+    readline_init0();
+    for (;;) {
+        /* System REPL: Ctrl-D re-enters. shutdown()/reboot() halt. */
+        (void)pyexec_friendly_repl();
+    }
+#else
+    /* Prove seat: guest autoexec already ran; same MOTD as the REPL banner hook. */
+    pm_metal_boot_motd();
+#endif
 #ifdef PM_METAL_UEFI
-    return -1;
+    /* WAMR teardown on the EFI return path #UDs; this seat halts next. */
 #else
     mp_deinit();
-    return -1;
 #endif
+    return 0;
 }

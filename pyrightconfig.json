@@ -1,6 +1,7 @@
 {
   "include": ["."],
-  "extraPaths": ["src", "../wasmmod/src"],
+  "stubPath": "src",
+  "extraPaths": ["src", "../wasmmod/src", "../wasmmod/examples/hello/src"],
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",
   "reportMissingImports": "error",

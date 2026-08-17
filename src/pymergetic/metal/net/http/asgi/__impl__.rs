@@ -452,32 +452,32 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_listen(addr: u32, port: u16) -> 
     0
 }
 
-crate::PM_MOD_EXPORT_RS!(
+pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",
     pm_metal_net_http_asgi_init,
     "int32_t(pm_util_mem_arena_t *)"
 );
-crate::PM_MOD_EXPORT_RS!(
+pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",
     pm_metal_net_http_asgi_deinit,
     "void(void)"
 );
-crate::PM_MOD_EXPORT_RS!(
+pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",
     pm_metal_net_http_asgi_route,
     "int32_t(const char *, const char *, const uint8_t *, uint32_t)"
 );
-crate::PM_MOD_EXPORT_RS!(
+pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",
     pm_metal_net_http_asgi_listen,
     "int32_t(uint32_t, uint16_t)"
 );
-crate::PM_MOD_BOOT_RS!(
+pymergetic_wasmmod::PM_MOD_BOOT_RS!(
     "pymergetic.metal.net.http.asgi",
     pm_metal_net_http_asgi_init,
     pm_metal_net_http_asgi_deinit
 );
-crate::PM_MOD_BOOTDEP_RS!(
+pymergetic_wasmmod::PM_MOD_BOOTDEP_RS!(
     "pymergetic.metal.net.http.asgi",
     "pymergetic.metal.net.http"
 );

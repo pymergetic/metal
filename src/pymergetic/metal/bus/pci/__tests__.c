@@ -1,5 +1,6 @@
 /* pymergetic.metal.bus.pci — two identical IDs at different slots. */
 #include "pymergetic/metal/bus/pci.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -55,3 +56,5 @@ int32_t pm_metal_bus_pci_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.bus.pci, tests, pm_metal_bus_pci_tests);

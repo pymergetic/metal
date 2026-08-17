@@ -1,0 +1,29 @@
+[package]
+name = "pymergetic-metal"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "pymergetic.metal RS cards — the Rust half of the Metal card tree"
+
+# Metal depends on wasmmod; wasmmod must never depend on Metal. The RS cards
+# live here, in Metal's own crate, so wasmmod builds and tests with no idea
+# this tree exists. Seats link libpymergetic_metal.a, which carries wasmmod
+# with it.
+[lib]
+name = "pymergetic_metal"
+path = "src/pymergetic/metal.rs"
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+pymergetic-wasmmod = { path = "../wasmmod", default-features = false }
+
+# Forwarded to wasmmod: a seat picks its fills once, here.
+[features]
+default = []
+upy-host = ["pymergetic-wasmmod/upy-host"]
+bundle-mbedtls = ["pymergetic-wasmmod/bundle-mbedtls"]
+# In-binary facegen. Pulls std into wasmmod, so this crate un-no_std's with it.
+gen = ["pymergetic-wasmmod/gen"]
+
+[profile.release]
+panic = "abort"

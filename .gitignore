@@ -1,1 +1,7 @@
 build/
+
+# Cargo output for this crate (metal is its own crate now).
+target/
+
+# clangd database — absolute -I paths naming one checkout (make compile-commands).
+compile_commands.json

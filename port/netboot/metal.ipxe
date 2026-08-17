@@ -1,0 +1,6 @@
+#!ipxe
+# BIOS: DHCP filename stays a small NBP (undionly.kpxe). This script loads the
+# Multiboot1 trampoline (uploaded as metal.elf). next-server comes from DHCP.
+echo metal bios via iPXE
+kernel http://${next-server}:8080/metal.elf || kernel metal.elf
+boot || shell

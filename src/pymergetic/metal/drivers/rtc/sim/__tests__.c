@@ -3,6 +3,7 @@
 #include "pymergetic/metal/drivers/rtc.h"
 #include "pymergetic/metal/drivers/rtc/sim.h"
 #include "pymergetic/metal/dt.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -30,7 +31,7 @@ int32_t pm_metal_drivers_rtc_sim_tests(void) {
     if (pm_metal_drivers_rtc_set(a, 1500) != 0 || pm_metal_drivers_rtc_get(a) != 1500) {
         return fail("set");
     }
-    dt = pm_metal_dt_by_class(PM_METAL_DT_CLASS_RTC, 1);
+    dt = pm_metal_drivers_rtc_dt_id(b);
     if (dt < 0 || pm_metal_drivers_unbind(dt) != 0) {
         return fail("unbind");
     }
@@ -39,3 +40,5 @@ int32_t pm_metal_drivers_rtc_sim_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.drivers.rtc.sim, tests, pm_metal_drivers_rtc_sim_tests);

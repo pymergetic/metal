@@ -3,6 +3,8 @@
 
 #include "pymergetic/metal/bus/pci.h"
 #include "pymergetic/metal/dt.h"
+#include "pymergetic/metal/drivers/net.h"
+#include "pymergetic/metal/drivers/net/sim.h"
 #include "pymergetic/metal/fw/memmap.h"
 
 #include <string.h>
@@ -305,6 +307,10 @@ int32_t pm_metal_drivers_probe(void) {
         }
     }
     if (pm_metal_fw_memmap_probe() != 0) {
+        return -1;
+    }
+    /* sim is the NIC fill when PCI/ISA/platform bound none (unix/emcc). virtio/gmac/tap win. */
+    if (pm_metal_drivers_net_count() <= 0 && pm_metal_drivers_net_sim_up() != 0) {
         return -1;
     }
     s_probed = 1;

@@ -1,6 +1,7 @@
 /* pymergetic.metal.net.ntp — SNTP on lo UDP. */
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/ntp.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -26,3 +27,5 @@ int32_t pm_metal_net_ntp_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.net.ntp, tests, pm_metal_net_ntp_tests);

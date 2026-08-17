@@ -435,12 +435,12 @@ void pm_metal_net_http_deinit(void) {
     s_arena = NULL;
 }
 
-pm_wasmmod_io_result_t pm_metal_wasm_io_fetch(const char *uri, uint8_t **out_bytes, uint32_t *out_len,
+pm_wasmmod_io_result_t pm_metal_net_http_fetch(const char *uri, uint8_t **out_bytes, uint32_t *out_len,
     char *errbuf, size_t errbuf_len) {
     return http_do("GET", uri, NULL, 0, NULL, out_bytes, out_len, errbuf, errbuf_len);
 }
 
-pm_wasmmod_io_result_t pm_metal_wasm_io_probe(const char *uri) {
+pm_wasmmod_io_result_t pm_metal_net_http_probe(const char *uri) {
     uint8_t *b = NULL;
     uint32_t n = 0;
     char err[32];
@@ -451,19 +451,38 @@ pm_wasmmod_io_result_t pm_metal_wasm_io_probe(const char *uri) {
     return st;
 }
 
-pm_wasmmod_io_result_t pm_metal_wasm_io_request(const char *method, const char *uri,
+pm_wasmmod_io_result_t pm_metal_net_http_request(const char *method, const char *uri,
     const uint8_t *body, uint32_t body_len, const char *content_type, uint8_t **out_bytes,
     uint32_t *out_len, char *errbuf, size_t errbuf_len) {
     return http_do(method, uri, body, body_len, content_type, out_bytes, out_len, errbuf, errbuf_len);
+}
+
+/* Strong fills for wasmmod's freestanding io hooks (ports/freestanding/io_ops.h).
+ * Link-level border, not card exports: wasmmod asks for pm_wasmmod_host_io_*
+ * and never names a card of ours. */
+pm_wasmmod_io_result_t pm_wasmmod_host_io_fetch(const char *uri, uint8_t **out_bytes,
+    uint32_t *out_len, char *errbuf, size_t errbuf_len) {
+    return pm_metal_net_http_fetch(uri, out_bytes, out_len, errbuf, errbuf_len);
+}
+
+pm_wasmmod_io_result_t pm_wasmmod_host_io_probe(const char *uri) {
+    return pm_metal_net_http_probe(uri);
+}
+
+pm_wasmmod_io_result_t pm_wasmmod_host_io_request(const char *method, const char *uri,
+    const uint8_t *body, uint32_t body_len, const char *content_type, uint8_t **out_bytes,
+    uint32_t *out_len, char *errbuf, size_t errbuf_len) {
+    return pm_metal_net_http_request(method, uri, body, body_len, content_type, out_bytes,
+        out_len, errbuf, errbuf_len);
 }
 
 #include "pymergetic/wasmmod/guest.h"
 
 PM_MOD_EXPORT_C(pymergetic.metal.net.http, pm_metal_net_http_init, pm_metal_net_http_init, int32_t(pm_util_mem_arena_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.net.http, pm_metal_net_http_deinit, pm_metal_net_http_deinit, void(void));
-PM_MOD_EXPORT_C(pymergetic.metal.net.http, pm_metal_wasm_io_fetch, pm_metal_wasm_io_fetch, pm_wasmmod_io_result_t(const char *, uint8_t **, uint32_t *, char *, size_t));
-PM_MOD_EXPORT_C(pymergetic.metal.net.http, pm_metal_wasm_io_probe, pm_metal_wasm_io_probe, pm_wasmmod_io_result_t(const char *));
-PM_MOD_EXPORT_C(pymergetic.metal.net.http, pm_metal_wasm_io_request, pm_metal_wasm_io_request, pm_wasmmod_io_result_t(const char *, const char *, const uint8_t *, uint32_t, const char *, uint8_t **, uint32_t *, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.net.http, pm_metal_net_http_fetch, pm_metal_net_http_fetch, pm_wasmmod_io_result_t(const char *, uint8_t **, uint32_t *, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.net.http, pm_metal_net_http_probe, pm_metal_net_http_probe, pm_wasmmod_io_result_t(const char *));
+PM_MOD_EXPORT_C(pymergetic.metal.net.http, pm_metal_net_http_request, pm_metal_net_http_request, pm_wasmmod_io_result_t(const char *, const char *, const uint8_t *, uint32_t, const char *, uint8_t **, uint32_t *, char *, size_t));
 
 PM_MOD_BOOT_C(pymergetic.metal.net.http, pm_metal_net_http_init, pm_metal_net_http_deinit);
 PM_MOD_BOOTDEP_C(pymergetic.metal.net.http, pymergetic.metal.net.tls);

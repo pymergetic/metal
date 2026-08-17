@@ -7,12 +7,18 @@
 #include "extmod/metal/modmetal.h"
 
 #include "extmod/metal/boot.h"
+#include "ports/micropython/finder.h"
 #include "ports/micropython/importhook.h"
 #include "py/nlr.h"
 #include "py/obj.h"
+#include "py/objtuple.h"
 #include "py/runtime.h"
 #include "pymergetic/metal/async.h"
+#include "pymergetic/metal/boot/externals.h"
+#include "pymergetic/metal/boot/tree.h"
 #include "pymergetic/metal/drivers/__types__.h"
+#include "pymergetic/wasmmod/boot.h"
+#include "pymergetic/wasmmod/net/cdn.h"
 
 #include <string.h>
 
@@ -213,6 +219,110 @@ static mp_obj_t metal_PM_METAL_DRV_PLATFORM(mp_obj_t mod, mp_obj_t attach) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(metal_PM_METAL_DRV_PLATFORM_obj, metal_PM_METAL_DRV_PLATFORM);
 
+static mp_obj_t mp_metal_builtin_quit(size_t n_args, const mp_obj_t *args) {
+    /* Process = task with human intent + pid. System REPL has pid 0. */
+    uint32_t here = pm_metal_async_process_id();
+    uint32_t want = here;
+    if (n_args == 1) {
+        want = (uint32_t)mp_obj_get_int(args[0]);
+    }
+    if (here != 0u && (n_args == 0 || want == here)) {
+        mp_raise_type(&mp_type_SystemExit);
+    }
+    if (here == 0u) {
+        if (n_args == 0) {
+            mp_printf(&mp_plat_print,
+                "quit() no-op: not in a process (pid 0); use shutdown() or reboot()\n");
+        } else {
+            mp_printf(&mp_plat_print,
+                "quit(%u) no-op: not in a process (pid 0); use shutdown() or reboot()\n",
+                (unsigned)want);
+        }
+    } else {
+        mp_printf(&mp_plat_print,
+            "quit(%u) no-op: not in process %u (here pid %u)\n",
+            (unsigned)want, (unsigned)want, (unsigned)here);
+    }
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp_metal_builtin_quit_obj, 0, 1, mp_metal_builtin_quit);
+
+static mp_obj_t mp_metal_builtin_packages(void) {
+    uint32_t n;
+    uint32_t i;
+    uint32_t nbase;
+    metal_ensure();
+    n = mp_wasm_local_pack_count();
+    nbase = pm_wasmmod_net_cdn_base_count();
+
+    mp_printf(&mp_plat_print, "+-- local        %u pack(s)\n", (unsigned)n);
+    for (i = 0; i < n; i++) {
+        const char *name = mp_wasm_local_pack_name(i);
+        if (name != NULL && name[0] != 0) {
+            mp_printf(&mp_plat_print, "|   %s %s\n", (i + 1u == n) ? "`--" : "+--", name);
+        }
+    }
+    if (nbase == 0u) {
+        mp_printf(&mp_plat_print, "`-- cdn          -\n");
+    } else {
+        mp_printf(&mp_plat_print, "`-- cdn          %u base(s)\n", (unsigned)nbase);
+        for (i = 0; i < nbase; i++) {
+            const char *b = pm_wasmmod_net_cdn_base_at(i);
+            if (b != NULL && b[0] != 0) {
+                mp_printf(&mp_plat_print, "    %s %s\n", (i + 1u == nbase) ? "`--" : "+--", b);
+            }
+        }
+    }
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_packages_obj, mp_metal_builtin_packages);
+
+static mp_obj_t mp_metal_builtin_help(void) {
+    mp_printf(&mp_plat_print,
+        "MetalPython system REPL (not a process; quit/exit are no-ops here)\n"
+        "  packages()     guest packs (local + cdn)\n"
+        "  help()         this text\n"
+        "  quit([pid]) / exit([pid])  SystemExit in a process; at pid 0 use shutdown()/reboot()\n"
+        "  reboot()       reboot the seat\n"
+        "  shutdown()     halt the seat\n"
+        "  process()      booted module FQNs\n");
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_help_obj, mp_metal_builtin_help);
+
+static mp_obj_t mp_metal_builtin_reboot(void) {
+    pm_metal_boot_shutdown(1);
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_reboot_obj, mp_metal_builtin_reboot);
+
+static mp_obj_t mp_metal_builtin_shutdown(void) {
+    pm_metal_boot_shutdown(0);
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_shutdown_obj, mp_metal_builtin_shutdown);
+
+static mp_obj_t mp_metal_builtin_process(void) {
+    uint32_t n;
+    uint32_t i;
+    mp_obj_t *items;
+    metal_ensure();
+    n = pm_mod_boot_count();
+    if (n == 0) {
+        return mp_obj_new_tuple(0, NULL);
+    }
+    items = m_new(mp_obj_t, n);
+    for (i = 0; i < n; i++) {
+        const char *fqn = pm_mod_boot_fqn(i);
+        if (fqn == NULL) {
+            fqn = "";
+        }
+        items[i] = mp_obj_new_str(fqn, strlen(fqn));
+    }
+    return mp_obj_new_tuple(n, items);
+}
+MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_process_obj, mp_metal_builtin_process);
+
 static const mp_rom_map_elem_t mp_module_pymergetic_metal_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal) },
     { MP_ROM_QSTR(MP_QSTR___init__), MP_ROM_PTR(&metal___init___obj) },
@@ -230,4 +340,10 @@ const mp_obj_module_t mp_module_pymergetic_metal = {
     .globals = (mp_obj_dict_t *)&mp_module_pymergetic_metal_globals,
 };
 
+#if MICROPY_MODULE_ATTR_DELEGATION
+/* Fixed ROM dict cannot hold child cards; the registry resolves them. */
+MP_REGISTER_MODULE_DELEGATION(mp_module_pymergetic_metal, mp_wasm_pymergetic_attr);
+#endif
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal, mp_module_pymergetic_metal);
+
+PM_METAL_EXTERNAL_C(micropython, MICROPY_VERSION_STRING);

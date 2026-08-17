@@ -7,6 +7,10 @@
 #include "pymergetic/metal/drivers/blk.h"
 #include "pymergetic/util/mem.h"
 
+#if defined(PM_METAL_FIRMWARE)
+#include "pm_cpu.h"
+#endif
+
 #include <string.h>
 
 #define VIRTIO_BLK_MAX 4u
@@ -197,16 +201,16 @@ static int32_t fw_blk_io(struct virtio_blk *d, uint64_t lba, void *buf, const vo
     aidx++;
     avail[2] = (uint8_t)aidx;
     avail[3] = (uint8_t)(aidx >> 8);
-    __asm__ volatile("sfence" ::: "memory");
+    pm_cpu_store_fence();
     mmio_w16(d->notify + (uint32_t)d->nqoff * d->notify_mult, 0);
     for (spins = 0; spins < 10000000u; spins++) {
-        __asm__ volatile("lfence" ::: "memory");
+        pm_cpu_load_fence();
         uidx = (uint16_t)(used[2] | ((uint16_t)used[3] << 8));
         if (uidx != d->last_used) {
             d->last_used = uidx;
             return d->stbyte[0] == 0 ? 0 : -1;
         }
-        __asm__ volatile("pause");
+        pm_cpu_pause();
     }
     return -1;
 }
@@ -371,7 +375,7 @@ static int32_t fw_blk_attach_pci(uint32_t bus, uint32_t dev, uint32_t fn) {
     }
     mmio_w8(common + 20, 0);
     while (mmio_r8(common + 20) != 0) {
-        __asm__ volatile("pause");
+        pm_cpu_pause();
     }
     mmio_w8(common + 20, 1u | 2u);
     mmio_w32(common + 0, 1);

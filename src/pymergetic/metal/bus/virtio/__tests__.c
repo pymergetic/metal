@@ -1,5 +1,6 @@
 /* pymergetic.metal.bus.virtio — net vs blk IDs. */
 #include "pymergetic/metal/bus/virtio.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -33,3 +34,5 @@ int32_t pm_metal_bus_virtio_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.bus.virtio, tests, pm_metal_bus_virtio_tests);

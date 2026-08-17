@@ -30,9 +30,9 @@ SECTIONS
   .data : {
     *(.data .data.*)
     . = ALIGN(16);
-    PROVIDE_HIDDEN (__pm_metal_externals_start = .);
-    KEEP (*(SORT_BY_NAME (.pm_metal_externals.*)));
-    PROVIDE_HIDDEN (__pm_metal_externals_end = .);
+    PROVIDE_HIDDEN (__start_pm_metal_externals = .);
+    KEEP(*(pm_metal_externals))
+    PROVIDE_HIDDEN (__stop_pm_metal_externals = .);
     . = ALIGN(8);
     PROVIDE_HIDDEN (__start_pm_mod_boot = .);
     KEEP(*(pm_mod_boot))

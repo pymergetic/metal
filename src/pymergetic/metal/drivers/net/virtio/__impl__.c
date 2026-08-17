@@ -9,6 +9,10 @@
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/util/mem.h"
 
+#if defined(PM_METAL_FIRMWARE)
+#include "pm_cpu.h"
+#endif
+
 #include <stdint.h>
 #include <string.h>
 
@@ -444,7 +448,7 @@ static int32_t fw_vnet_tx(struct vnet *d, const uint8_t *frame, uint16_t len) {
     aidx++;
     avail[2] = (uint8_t)aidx;
     avail[3] = (uint8_t)(aidx >> 8);
-    __asm__ volatile("sfence" ::: "memory");
+    pm_cpu_store_fence();
     fw_notify(d, 1, d->tx_nqoff);
     return 0;
 }
@@ -498,7 +502,7 @@ static int32_t fw_vnet_attach_pci(uint32_t bus, uint32_t dev, uint32_t fn) {
     }
     mmio_w8(common + 20, 0);
     while (mmio_r8(common + 20) != 0) {
-        __asm__ volatile("pause");
+        pm_cpu_pause();
     }
     mmio_w8(common + 20, 1u | 2u);
     mmio_w32(common + 0, 0);

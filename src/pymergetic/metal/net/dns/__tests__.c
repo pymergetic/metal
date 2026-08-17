@@ -1,6 +1,7 @@
 /* pymergetic.metal.net.dns — A lookup on lo UDP. */
 #include "pymergetic/metal/net/dns.h"
 #include "pymergetic/metal/net/ip.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -33,3 +34,5 @@ static int32_t case_lookup_lo(void) {
 int32_t pm_metal_net_dns_tests(void) {
     return case_lookup_lo();
 }
+
+PM_MOD_TEST_C(pymergetic.metal.net.dns, tests, pm_metal_net_dns_tests);

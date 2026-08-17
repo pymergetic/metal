@@ -53,10 +53,10 @@ macro_rules! PM_METAL_DRV_PCI_FULL_RS {
         const _: () = {
             #[used]
             #[unsafe(link_section = "pm_metal_drv")]
-            static __PM_METAL_DRV: $crate::metal::drivers::pm_metal_drv_t =
-                $crate::metal::drivers::pm_metal_drv_t {
+            static __PM_METAL_DRV: $crate::drivers::pm_metal_drv_t =
+                $crate::drivers::pm_metal_drv_t {
                     module: concat!($mod, "\0").as_ptr(),
-                    kind: $crate::metal::drivers::PM_METAL_DRV_KIND_PCI,
+                    kind: $crate::drivers::PM_METAL_DRV_KIND_PCI,
                     id0: $vendor as u32,
                     id1: $device as u32,
                     id2: $pci_class as u32,
@@ -77,7 +77,7 @@ macro_rules! PM_METAL_DRV_PCI_FULL_RS {
             static __PM_METAL_DRV_REG: extern "C" fn() = {
                 extern "C" fn __pm_metal_drv_reg() {
                     unsafe {
-                        let _ = $crate::metal::drivers::pm_metal_drv_add(&__PM_METAL_DRV);
+                        let _ = $crate::drivers::pm_metal_drv_add(&__PM_METAL_DRV);
                     }
                 }
                 __pm_metal_drv_reg
@@ -93,9 +93,9 @@ macro_rules! PM_METAL_DRV_PCI_RS {
             $mod,
             $vendor,
             $device,
-            $crate::metal::drivers::PM_METAL_DRV_PCI_ANY,
-            $crate::metal::drivers::PM_METAL_DRV_PCI_ANY,
-            $crate::metal::drivers::PM_METAL_DRV_PCI_ANY,
+            $crate::drivers::PM_METAL_DRV_PCI_ANY,
+            $crate::drivers::PM_METAL_DRV_PCI_ANY,
+            $crate::drivers::PM_METAL_DRV_PCI_ANY,
             $attach
         );
     };
@@ -107,7 +107,7 @@ macro_rules! PM_METAL_DRV_PCI_VENDOR_RS {
         $crate::PM_METAL_DRV_PCI_RS!(
             $mod,
             $vendor,
-            $crate::metal::drivers::PM_METAL_DRV_PCI_ANY,
+            $crate::drivers::PM_METAL_DRV_PCI_ANY,
             $attach
         );
     };
@@ -119,10 +119,10 @@ macro_rules! PM_METAL_DRV_ISA_RS {
         const _: () = {
             #[used]
             #[unsafe(link_section = "pm_metal_drv")]
-            static __PM_METAL_DRV: $crate::metal::drivers::pm_metal_drv_t =
-                $crate::metal::drivers::pm_metal_drv_t {
+            static __PM_METAL_DRV: $crate::drivers::pm_metal_drv_t =
+                $crate::drivers::pm_metal_drv_t {
                     module: concat!($mod, "\0").as_ptr(),
-                    kind: $crate::metal::drivers::PM_METAL_DRV_KIND_ISA,
+                    kind: $crate::drivers::PM_METAL_DRV_KIND_ISA,
                     id0: $port as u32,
                     id1: 0,
                     id2: 0,
@@ -143,7 +143,7 @@ macro_rules! PM_METAL_DRV_ISA_RS {
             static __PM_METAL_DRV_REG: extern "C" fn() = {
                 extern "C" fn __pm_metal_drv_reg() {
                     unsafe {
-                        let _ = $crate::metal::drivers::pm_metal_drv_add(&__PM_METAL_DRV);
+                        let _ = $crate::drivers::pm_metal_drv_add(&__PM_METAL_DRV);
                     }
                 }
                 __pm_metal_drv_reg
@@ -158,10 +158,10 @@ macro_rules! PM_METAL_DRV_PLATFORM_RS {
         const _: () = {
             #[used]
             #[unsafe(link_section = "pm_metal_drv")]
-            static __PM_METAL_DRV: $crate::metal::drivers::pm_metal_drv_t =
-                $crate::metal::drivers::pm_metal_drv_t {
+            static __PM_METAL_DRV: $crate::drivers::pm_metal_drv_t =
+                $crate::drivers::pm_metal_drv_t {
                     module: concat!($mod, "\0").as_ptr(),
-                    kind: $crate::metal::drivers::PM_METAL_DRV_KIND_PLATFORM,
+                    kind: $crate::drivers::PM_METAL_DRV_KIND_PLATFORM,
                     id0: 0,
                     id1: 0,
                     id2: 0,
@@ -182,7 +182,7 @@ macro_rules! PM_METAL_DRV_PLATFORM_RS {
             static __PM_METAL_DRV_REG: extern "C" fn() = {
                 extern "C" fn __pm_metal_drv_reg() {
                     unsafe {
-                        let _ = $crate::metal::drivers::pm_metal_drv_add(&__PM_METAL_DRV);
+                        let _ = $crate::drivers::pm_metal_drv_add(&__PM_METAL_DRV);
                     }
                 }
                 __pm_metal_drv_reg
@@ -197,8 +197,8 @@ macro_rules! PM_METAL_CLASS_RS {
         const _: () = {
             #[used]
             #[unsafe(link_section = "pm_metal_class")]
-            static __PM_METAL_CLASS: $crate::metal::drivers::pm_metal_class_t =
-                $crate::metal::drivers::pm_metal_class_t {
+            static __PM_METAL_CLASS: $crate::drivers::pm_metal_class_t =
+                $crate::drivers::pm_metal_class_t {
                     class_id: $class_id as i32,
                     unbind_dt: Some($unbind),
                 };
@@ -215,7 +215,7 @@ macro_rules! PM_METAL_CLASS_RS {
             static __PM_METAL_CLASS_REG: extern "C" fn() = {
                 extern "C" fn __pm_metal_class_reg() {
                     unsafe {
-                        let _ = $crate::metal::drivers::pm_metal_class_add(&__PM_METAL_CLASS);
+                        let _ = $crate::drivers::pm_metal_class_add(&__PM_METAL_CLASS);
                     }
                 }
                 __pm_metal_class_reg

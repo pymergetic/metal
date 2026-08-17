@@ -2,6 +2,7 @@
 #include "pymergetic/metal/drivers/blk.h"
 #include "pymergetic/metal/drivers/blk/ide.h"
 #include "pymergetic/metal/dt.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -24,9 +25,9 @@ int32_t pm_metal_drivers_blk_ide_tests(void) {
     if (h < 0) {
         return fail("probe");
     }
-    dt = pm_metal_dt_by_class(PM_METAL_DT_CLASS_BLK, 0);
-    if (dt >= 0 && strcmp(pm_metal_dt_compat(dt), "ide-ata") != 0) {
-        dt = pm_metal_dt_by_class(PM_METAL_DT_CLASS_BLK, 1);
+    dt = pm_metal_drivers_blk_dt_id(h);
+    if (dt < 0 || strcmp(pm_metal_dt_compat(dt), "ide-ata") != 0) {
+        return fail("dt");
     }
     memset(w, 0x3c, sizeof(w));
     if (pm_metal_drivers_blk_write(h, 0, w, 1) != 0) {
@@ -36,6 +37,7 @@ int32_t pm_metal_drivers_blk_ide_tests(void) {
     if (pm_metal_drivers_blk_read(h, 0, r, 1) != 0 || r[0] != 0x3c) {
         return fail("read");
     }
-    (void)dt;
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.drivers.blk.ide, tests, pm_metal_drivers_blk_ide_tests);

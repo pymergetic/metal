@@ -4,6 +4,7 @@
 
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/util/mem.h"
+#include "pymergetic/metal/boot/externals.h"
 
 #include <string.h>
 
@@ -279,3 +280,8 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.tls, pm_metal_net_tls_close, pm_metal_net_t
 
 PM_MOD_BOOT_C(pymergetic.metal.net.tls, pm_metal_net_tls_init, pm_metal_net_tls_deinit);
 PM_MOD_BOOTDEP_C(pymergetic.metal.net.tls, pymergetic.metal.net.ip);
+
+#if defined(MICROPY_SSL_MBEDTLS) && MICROPY_SSL_MBEDTLS
+#include "mbedtls/build_info.h"
+PM_METAL_EXTERNAL_C(mbedtls, MBEDTLS_VERSION_STRING);
+#endif

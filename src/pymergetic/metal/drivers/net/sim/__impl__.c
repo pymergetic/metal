@@ -1,4 +1,5 @@
 /* pymergetic.metal.drivers.net.sim — instanced in-process L2.
+ * Fill when probe bound no NIC (unix/emcc). Not a platform device next to virtio.
  * Browser: JS import in this card's library.js (metal.mk --js-library). */
 #include "pymergetic/metal/drivers/net/sim/__exports__.h"
 
@@ -228,16 +229,3 @@ PM_MOD_EXPORT_C(pymergetic.metal.drivers.net.sim, pm_metal_drivers_net_sim_drop,
 PM_MOD_BOOT_C(pymergetic.metal.drivers.net.sim, pm_metal_drivers_net_sim_init, pm_metal_drivers_net_sim_deinit);
 PM_MOD_BOOTDEP_C(pymergetic.metal.drivers.net.sim, pymergetic.metal.drivers.net);
 PM_MOD_BOOTDEP_C(pymergetic.metal.drivers.net.sim, pymergetic.metal.net.ip);
-
-static int32_t sim_drv_attach(int32_t bus, uint32_t loc0, uint32_t loc1, uint32_t loc2,
-    uint32_t loc3) {
-    (void)bus;
-    (void)loc0;
-    (void)loc1;
-    (void)loc2;
-    return sim_attach(loc3) >= 0 ? 0 : -1;
-}
-
-#include "pymergetic/metal/drivers/__types__.h"
-
-PM_METAL_DRV_PLATFORM_C(pymergetic.metal.drivers.net.sim, sim_drv_attach);

@@ -1,0 +1,5 @@
+#!ipxe
+# UEFI: DHCP filename stays ipxe.efi. Chain the uploaded ESP payload.
+echo metal uefi via iPXE
+chain http://${next-server}:8080/efi/EFI/BOOT/BOOTX64.EFI || chain /efi/EFI/BOOT/BOOTX64.EFI
+boot || shell

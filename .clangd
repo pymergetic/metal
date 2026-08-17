@@ -28,14 +28,19 @@ CompileFlags:
     - -ffreestanding
     - -Wall
     - -Iport
+    - -Iport/fwinc
     - -Iport/boards/X86_64_BIOS
     - -Iport/build/X86_64_BIOS-mp-repl
     - -I../..
     - -Isrc
     - -I../wasmmod
     - -I../wasmmod/src
+    - -I../../lib/mbedtls/include
+    - -I../../../../lib/mbedtls/include
     - -DPM_METAL_FIRMWARE=1
     - -DPM_WASMMOD_GUEST=1
+    - -DMICROPY_SSL_MBEDTLS=1
+    - -DMBEDTLS_CONFIG_FILE="mbedtls/mbedtls_config_port.h"
     - -Wno-unknown-attributes
 Diagnostics:
   UnusedIncludes: None

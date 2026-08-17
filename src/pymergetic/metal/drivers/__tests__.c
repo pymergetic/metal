@@ -7,6 +7,7 @@
 #include "pymergetic/metal/drivers/blk.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/drivers/rtc.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -66,7 +67,7 @@ int32_t pm_metal_drivers_probe_tests(void) {
         return fail("probe again");
     }
     if (pm_metal_drivers_net_by_compat("sim", 0) < 0) {
-        return fail("sim platform");
+        return fail("sim fill");
     }
     if (pm_metal_drivers_rtc_by_compat("cmos", 0) < 0) {
         return fail("cmos isa");
@@ -118,3 +119,6 @@ int32_t pm_metal_drivers_probe_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.drivers, tests, pm_metal_drivers_tests);
+PM_MOD_TEST_C(pymergetic.metal.drivers, probe, pm_metal_drivers_probe_tests);

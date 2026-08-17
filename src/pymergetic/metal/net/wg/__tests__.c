@@ -2,6 +2,7 @@
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/wg.h"
 #include "pymergetic/metal/net/wg/__crypto__.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -98,3 +99,5 @@ int32_t pm_metal_net_wg_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.net.wg, tests, pm_metal_net_wg_tests);

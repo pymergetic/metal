@@ -1,14 +1,12 @@
-/* Freestanding BIOS/UEFI entry — live driver core on Q35 (arena from CLASS_MEM). */
+/* Freestanding BIOS/UEFI entry — HW fill, then one pm_metal_boot(). */
+#include "pymergetic/metal/boot.h"
 #include "pymergetic/metal/drivers.h"
 #include "pymergetic/metal/drivers/blk.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/drivers/rtc.h"
 #include "pymergetic/metal/fw/memmap.h"
-#include "pymergetic/metal/net/ip.h"
-#include "pymergetic/util/mem.h"
-#include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/io.h"
-#include "ports/metal/io_ops.h"
+#include "ports/freestanding/io_ops.h"
 #include "extmod/metal/port/upy/firmware_upy.h"
 
 #include <stdint.h>
@@ -16,8 +14,6 @@
 
 void uart_init(void);
 void uart_puts(const char *s);
-
-#define FW_ARENA_SPAN (48u * 1024u * 1024u)
 
 extern char __pm_metal_image_base[] __attribute__((weak));
 extern char __pm_metal_image_end[] __attribute__((weak));
@@ -68,7 +64,15 @@ static uint64_t image_hi(void) {
 #endif
 }
 
-static int32_t arena_from_memmap(pm_util_mem_arena_t **out) {
+const char *pm_metal_boot_fill_seat(void) {
+#ifdef PM_METAL_UEFI
+    return "uefi";
+#else
+    return "bios";
+#endif
+}
+
+void pm_metal_boot_fill_avoid(uint64_t *lo, uint64_t *hi) {
     /* BIOS trampoline page tables live near 1MiB. The largest CLASS_MEM
      * split is often below the 64MiB image and would mmap live CR3.
      * UEFI has no trampoline — avoid only the loaded PE. */
@@ -78,88 +82,68 @@ static int32_t arena_from_memmap(pm_util_mem_arena_t **out) {
     uint64_t avoid_lo = 0;
 #endif
     uint64_t avoid_hi = image_hi();
-    uint64_t base = 0;
-    uint64_t len = 0;
-    if (out == NULL) {
-        return -1;
-    }
     if (avoid_hi < image_lo()) {
         avoid_hi = image_lo();
     }
-    if (pm_metal_fw_memmap_pick(avoid_lo, avoid_hi, FW_ARENA_SPAN, &base, &len) != 0) {
-        return -1;
+    if (lo != NULL) {
+        *lo = avoid_lo;
     }
-    *out = pm_util_mem_arena_create((void *)(uintptr_t)base, (size_t)len);
-    return *out == NULL ? -1 : 0;
+    if (hi != NULL) {
+        *hi = avoid_hi;
+    }
 }
 
-void pm_metal_bios_main(uint32_t magic, void *mb_info) {
-    pm_util_mem_arena_t *arena;
-    int32_t h0 = -1;
-    int32_t h1 = -1;
+void pm_metal_boot_fill_io(void) {
+    pm_wasmmod_host_io_ops_init();
+    pm_wasmmod_io_set(&pm_wasmmod_host_io_ops);
+}
+
+int pm_metal_boot_fill_kernel(uint64_t *base, uint64_t *len) {
+    uint64_t lo = image_lo();
+    uint64_t hi = image_hi();
+    if (base == NULL || len == NULL || hi <= lo) {
+        return -1;
+    }
+    *base = lo;
+    *len = hi - lo;
+    return 0;
+}
+
+static void prove_x86(void) {
+    int32_t h0;
+    int32_t h1;
     int32_t blk;
     int32_t rtc;
     uint8_t frame[64];
     uint8_t sec[512];
     uint8_t mac[6];
 
-    uart_init();
-    uart_puts("metal X86_64_BIOS cake\n");
-
-    if (magic == 0x2BADB002u && mb_info != NULL) {
-        if (pm_metal_fw_memmap_feed(magic, mb_info) != 0) {
-            fail("feed");
-        }
-    }
-    if (arena_from_memmap(&arena) != 0) {
-        fail("arena");
-    }
-    if (pm_mod_boot_run(arena) != 0) {
-        fail("boot");
-    }
-    pm_wasmmod_metal_io_ops_init();
-    pm_wasmmod_io_set(&pm_wasmmod_metal_io_ops);
-    if (pm_metal_drivers_probe() != 0) {
-        fail("probe");
-    }
-    if (pm_metal_fw_memmap_count() <= 0) {
-        fail("memmap");
-    }
-    uart_puts("memmap ok\n");
-
     h0 = pm_metal_drivers_net_by_compat("virtio-net", 0);
     h1 = pm_metal_drivers_net_by_compat("virtio-net", 1);
     if (h0 < 0 || h1 < 0) {
         fail("virtio-net pci");
     }
-    if (pm_metal_net_ip_if_up_h(h0, 0x0a000001u) != 0
-        || pm_metal_net_ip_if_up_h(h1, 0x0a000002u) != 0) {
-        fail("if_up_h");
-    }
-    uart_puts("nics up\n");
-
     rtc = pm_metal_drivers_rtc_by_compat("cmos", 0);
     if (rtc < 0 || pm_metal_drivers_rtc_get(rtc) <= 0) {
         fail("cmos");
     }
-    uart_puts("cmos ok\n");
-
     blk = pm_metal_drivers_blk_by_compat("virtio-blk", 0);
     if (blk < 0 || pm_metal_drivers_blk_ready(blk) != 1 || pm_metal_drivers_blk_capacity(blk) == 0) {
         fail("virtio-blk pci");
     }
     memset(sec, 0, sizeof(sec));
-    if (pm_metal_drivers_blk_read(blk, 0, sec, 1) != 0 || sec[0] != 'C' || sec[1] != 'A'
-        || sec[2] != 'K' || sec[3] != 'E') {
+    if (pm_metal_drivers_blk_read(blk, 0, sec, 1) != 0 || sec[0] != 'M' || sec[1] != 'E'
+        || sec[2] != 'T' || sec[3] != 'L') {
         fail("blk read");
     }
-    uart_puts("blk ok\n");
-
     if (pm_metal_drivers_unbind(pm_metal_drivers_net_dt_id(h1)) != 0) {
         fail("unbind nic1");
     }
-    if (pm_metal_drivers_net_count() != 1) {
+    if (pm_metal_drivers_net_by_compat("virtio-net", 1) >= 0) {
         fail("nic1 gone");
+    }
+    if (pm_metal_drivers_net_by_compat("virtio-net", 0) != h0) {
+        fail("nic0");
     }
     memset(frame, 0, sizeof(frame));
     memset(frame, 0xff, 6);
@@ -171,9 +155,25 @@ void pm_metal_bios_main(uint32_t magic, void *mb_info) {
         fail("tx nic0");
     }
     (void)pm_metal_drivers_net_poll(h0);
-    uart_puts("unbind+tx ok\n");
-    pm_metal_firmware_bind_arena(arena);
-    pm_metal_set_ready(1);
+}
+
+void pm_metal_bios_main(uint32_t magic, void *mb_info) {
+    uart_init();
+#ifdef PM_METAL_UEFI
+    uart_puts("metal X86_64_UEFI\n");
+#else
+    uart_puts("metal X86_64_BIOS\n");
+#endif
+
+    if (magic == 0x2BADB002u && mb_info != NULL) {
+        if (pm_metal_fw_memmap_feed(magic, mb_info) != 0) {
+            fail("feed");
+        }
+    }
+    if (pm_metal_boot() != 0) {
+        fail("boot");
+    }
+    prove_x86();
     if (pm_metal_firmware_upy() != 0) {
         fail("upy");
     }

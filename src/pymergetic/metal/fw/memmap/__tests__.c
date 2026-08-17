@@ -1,9 +1,12 @@
 /* pymergetic.metal.fw.memmap — two ranges in dt. */
 #include "pymergetic/metal/dt.h"
 #include "pymergetic/metal/fw/memmap.h"
+#include "pymergetic/util/mem.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static void put_test_u64(uint8_t *p, uint64_t v) {
@@ -105,5 +108,48 @@ int32_t pm_metal_fw_memmap_tests(void) {
             return fail("count after efi");
         }
     }
+    {
+        enum { N = 2u * 1024u * 1024u };
+        void *pri;
+        void *extra;
+        pm_util_mem_arena_t *arena;
+        uint8_t mmap[48];
+        uint64_t pb;
+        uint64_t eb;
+        pri = malloc(N);
+        extra = malloc(N);
+        if (pri == NULL || extra == NULL) {
+            return fail("spare malloc");
+        }
+        arena = pm_util_mem_arena_create(pri, N);
+        if (arena == NULL) {
+            return fail("spare arena");
+        }
+        memset(mmap, 0, sizeof(mmap));
+        pb = (uint64_t)(uintptr_t)pri;
+        eb = (uint64_t)(uintptr_t)extra;
+        mmap[0] = 20;
+        put_test_u64(mmap + 4, pb);
+        put_test_u64(mmap + 12, (uint64_t)N);
+        mmap[20] = 1;
+        mmap[24] = 20;
+        put_test_u64(mmap + 28, eb);
+        put_test_u64(mmap + 36, (uint64_t)N);
+        mmap[44] = 1;
+        if (pm_metal_fw_memmap_feed_mmap(mmap, sizeof(mmap)) != 0) {
+            return fail("spare feed");
+        }
+        if (pm_metal_fw_memmap_add_spare(arena, 0, 0, pb, pb + (uint64_t)N) != 0) {
+            return fail("add spare");
+        }
+        if (pm_util_mem_arena_spare(arena) < (256u * 1024u)) {
+            return fail("spare bytes");
+        }
+        pm_util_mem_arena_destroy(arena);
+        free(pri);
+        free(extra);
+    }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.fw.memmap, tests, pm_metal_fw_memmap_tests);

@@ -19,19 +19,22 @@ RUSTC ?= rustc
 CFLAGS_METAL := -m64 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
 	-mno-red-zone -fno-asynchronous-unwind-tables -fno-exceptions \
 	-Wall -Wextra -Wno-unused-parameter -Os -DNDEBUG -std=gnu99 \
-	-DPM_METAL_FIRMWARE=1 -DPM_WASMMOD_GUEST=1
+	-DPM_METAL_FIRMWARE=1 -DPM_WASMMOD_GUEST=0 -DPM_WASMMOD_IO_FILE=0
+ifeq ($(REPL),1)
+CFLAGS_METAL += -DPM_METAL_UART_REPL=1
+endif
 CFLAGS32 := -m32 -ffreestanding -fno-stack-protector -fno-pic -fno-pie -Wall -O2
 ASFLAGS64 := -m64
 ASFLAGS32 := -m32
 INC := -I$(PORT_DIR)/fwinc -I$(BOARD_DIR) -I$(PORT_DIR) -I$(PORT_DIR)/bringup -I$(METAL_SRC) -I$(WASMMOD_SRC) -I$(WASMMOD) \
 	-I$(abspath $(PORT_DIR)/../../..)
 
-QEMU_MACHINE := -machine q35,accel=kvm:tcg -cpu max,-svm -m 128 -smp 1 \
+QEMU_MACHINE := -machine q35,accel=kvm:tcg -cpu max,-svm -m 256 -smp 4 \
 	-vga none -audio none -display none \
 	-device isa-debug-exit,iobase=0x501,iosize=0x02 \
 	-netdev user,id=n0 -device virtio-net-pci,disable-legacy=on,netdev=n0 \
 	-netdev user,id=n1 -device virtio-net-pci,disable-legacy=on,netdev=n1 \
-	-drive file=$(BUILD)/cake.img,if=none,format=raw,id=d0 \
+	-drive file=$(BUILD)/blk.img,if=none,format=raw,id=d0 \
 	-device virtio-blk-pci,disable-legacy=on,drive=d0
 
 FW_OBJS := \
@@ -42,27 +45,19 @@ FW_OBJS := \
 	$(BUILD)/lib.o \
 	$(BUILD)/mem.o \
 	$(BUILD)/tlsf.o \
-	$(BUILD)/dt.o \
-	$(BUILD)/pci.o \
-	$(BUILD)/virtio_bus.o \
-	$(BUILD)/drivers.o \
-	$(BUILD)/drivers_net.o \
-	$(BUILD)/drivers_blk.o \
-	$(BUILD)/drivers_rtc.o \
-	$(BUILD)/blk_virtio.o \
-	$(BUILD)/net_virtio.o \
-	$(BUILD)/rtc_cmos.o \
-	$(BUILD)/memmap.o \
-	$(BUILD)/async.o \
-	$(BUILD)/ip.o \
+	$(BUILD)/smp.o \
+	$(BUILD)/smp_tramp.o \
 	$(BUILD)/modboot.o
+# Cards are added by fw_cards.mk from the card tree — do not list them here.
 
 FW_RUSTC_TARGET := x86_64-unknown-none
 include $(PORT_DIR)/fw_cdn.mk
+include $(PORT_DIR)/fw_mbedtls.mk
+include $(PORT_DIR)/fw_cards.mk
 include $(PORT_DIR)/fw_wamr.mk
 include $(PORT_DIR)/upy.mk
 
-.PHONY: all run clean
+.PHONY: all prove run upload clean
 all: $(BUILD)/metal.qemu.elf
 
 $(BUILD):
@@ -89,44 +84,11 @@ $(BUILD)/mem.o: $(WASMMOD_SRC)/pymergetic/util/mem/__impl__.c | $(BUILD)
 $(BUILD)/tlsf.o: $(WASMMOD)/third_party/tlsf/tlsf.c | $(BUILD)
 	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
 
-$(BUILD)/dt.o: $(METAL_SRC)/pymergetic/metal/dt/__impl__.c | $(BUILD)
+$(BUILD)/smp.o: $(PORT_DIR)/smp/smp_x86.c | $(BUILD)
 	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
 
-$(BUILD)/pci.o: $(METAL_SRC)/pymergetic/metal/bus/pci/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
-
-$(BUILD)/virtio_bus.o: $(METAL_SRC)/pymergetic/metal/bus/virtio/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
-
-$(BUILD)/drivers.o: $(METAL_SRC)/pymergetic/metal/drivers/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
-
-$(BUILD)/drivers_net.o: $(METAL_SRC)/pymergetic/metal/drivers/net/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
-
-$(BUILD)/drivers_blk.o: $(METAL_SRC)/pymergetic/metal/drivers/blk/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
-
-$(BUILD)/drivers_rtc.o: $(METAL_SRC)/pymergetic/metal/drivers/rtc/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
-
-$(BUILD)/blk_virtio.o: $(METAL_SRC)/pymergetic/metal/drivers/blk/virtio/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
-
-$(BUILD)/net_virtio.o: $(METAL_SRC)/pymergetic/metal/drivers/net/virtio/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
-
-$(BUILD)/rtc_cmos.o: $(METAL_SRC)/pymergetic/metal/drivers/rtc/cmos/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
-
-$(BUILD)/memmap.o: $(METAL_SRC)/pymergetic/metal/fw/memmap/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
-
-$(BUILD)/async.o: $(METAL_SRC)/pymergetic/metal/async/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
-
-$(BUILD)/ip.o: $(METAL_SRC)/pymergetic/metal/net/ip/__impl__.c | $(BUILD)
-	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
+$(BUILD)/smp_tramp.o: $(PORT_DIR)/smp/trampoline.S | $(BUILD)
+	$(CC) $(ASFLAGS64) -c -o $@ $<
 
 $(BUILD)/modboot.o: $(WASMMOD_SRC)/pymergetic/wasmmod/boot/__impl__.c | $(BUILD)
 	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
@@ -163,17 +125,32 @@ $(BUILD)/metal.qemu.elf: $(BUILD)/trampoline32.o $(BUILD)/trampoline64.o \
 		$(BUILD)/trampoline32.o $(BUILD)/trampoline64.o \
 		$(BUILD)/trampoline_load.o $(BUILD)/metal_elf.o
 
-$(BUILD)/cake.img: | $(BUILD)
+$(BUILD)/blk.img: | $(BUILD)
 	dd if=/dev/zero of=$@ bs=512 count=32 status=none
-	printf 'CAKE' | dd of=$@ conv=notrunc status=none
+	printf 'METL' | dd of=$@ conv=notrunc status=none
 
-run: $(BUILD)/metal.qemu.elf $(BUILD)/cake.img
+prove: $(BUILD)/metal.qemu.elf $(BUILD)/blk.img
 	$(QEMU) $(QEMU_MACHINE) -serial file:$(BUILD)/serial.log -monitor none -kernel $(BUILD)/metal.qemu.elf; \
 	st=$$?; cat $(BUILD)/serial.log; \
+	grep -q "pymergetic metal" $(BUILD)/serial.log || exit 1; \
+	grep -q "\`-- ready" $(BUILD)/serial.log || exit 1; \
+	grep -q "smp" $(BUILD)/serial.log || exit 1; \
+	grep -q "4 runner" $(BUILD)/serial.log || exit 1; \
+	grep -q "externals" $(BUILD)/serial.log || exit 1; \
+	grep -q "lz4" $(BUILD)/serial.log || exit 1; \
+	grep -q "mtar" $(BUILD)/serial.log || exit 1; \
+	grep -q "packages()" $(BUILD)/serial.log || exit 1; \
+	grep -q "\`-- repl" $(BUILD)/serial.log || exit 1; \
+	grep -q "viewport" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy metal ready" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy native card import" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy cdn" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy pack import" $(BUILD)/serial.log || exit 1; \
 	if [ $$st -eq 1 ] || [ $$st -eq 0 ]; then exit 0; fi; exit $$st
 
-clean:
-	rm -rf $(BUILD)
+run: $(BUILD)/metal.qemu.elf $(BUILD)/blk.img
+	$(QEMU) $(QEMU_MACHINE) -serial mon:stdio -kernel $(BUILD)/metal.qemu.elf; \
+	st=$$?; if [ $$st -eq 1 ] || [ $$st -eq 0 ]; then exit 0; fi; exit $$st
+
+upload: $(BUILD)/metal.qemu.elf
+	$(PORT_DIR)/upload.sh bios $(BUILD)

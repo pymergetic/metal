@@ -1,6 +1,7 @@
 /* pymergetic.metal.async — host prove (not product exports). */
 #include "pymergetic/metal/async.h"
 #include "pymergetic/util/mem.h"
+#include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -158,6 +159,9 @@ static int32_t case_facade_yield(void) {
 }
 
 int32_t pm_metal_async_tests(void) {
+    if (pm_metal_async_n_runners() < 2u) {
+        return fail("ncpu");
+    }
     if (case_yield_two_tasks() != 0) {
         return 1;
     }
@@ -175,3 +179,5 @@ int32_t pm_metal_async_tests(void) {
     }
     return 0;
 }
+
+PM_MOD_TEST_C(pymergetic.metal.async, tests, pm_metal_async_tests);

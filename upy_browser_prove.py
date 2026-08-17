@@ -4,6 +4,15 @@ if not m.ready():
     raise SystemExit("metal not ready")
 print("upy metal ready")
 
+# Cards resolve from the registry at any depth, with no name list to maintain.
+import pymergetic.metal.net.ip as ip
+
+if ip.socket is None:
+    raise SystemExit("native card import")
+if m.net.ip is not ip:
+    raise SystemExit("namespace walk")
+print("upy native card import")
+
 
 def _cdn(base):
     import pymergetic.wasmmod.net.cdn as cdn
