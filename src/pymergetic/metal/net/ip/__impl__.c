@@ -424,12 +424,14 @@ int32_t pm_metal_net_ip_recv(int32_t fd, uint8_t *buf, uint32_t len) {
         if (s->peer_fin) {
             return -2;
         }
+        /* Empty is wait, not an error — same as connect. A step that runs
+         * without current_task (SMP runner vs run_until) used to return -1
+         * after the first segment and abort a live GET. */
         pm_metal_async_task_t *cur = pm_metal_async_current_task();
         if (cur != NULL) {
             s->waiter = cur;
-            return 0;
         }
-        return -1;
+        return 0;
     }
     uint32_t n = s->rx_len < len ? s->rx_len : len;
     memcpy(buf, s->rx, n);

@@ -338,17 +338,19 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
         if (n == 0) {
             return PM_METAL_ASYNC_WAITING;
         }
-        if (n == -2) {
-            hdbg("z", f->acc_len, 0);
-            if (finish_body(f) != 0) {
+        if (n == -2 || n < 0) {
+            int32_t body = finish_body(f);
+            if (body == 0) {
+                http_close_fd(f);
+                return PM_METAL_ASYNC_DONE;
+            }
+            if (n == -2 || body < 0) {
+                if (n < 0 && n != -2) {
+                    hdbg("e", (uint32_t)(-n), f->acc_len);
+                }
                 return fetch_fail(f);
             }
-            http_close_fd(f);
-            return PM_METAL_ASYNC_DONE;
-        }
-        if (n < 0) {
-            hdbg("e", (uint32_t)(-n), f->acc_len);
-            return fetch_fail(f);
+            return PM_METAL_ASYNC_WAITING;
         }
         if (acc_put(f, buf, (uint32_t)n) != 0) {
             return fetch_fail(f);

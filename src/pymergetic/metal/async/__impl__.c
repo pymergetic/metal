@@ -382,6 +382,10 @@ static void step_task(pm_metal_async_task_t *task) {
     if (task == NULL || task->root == NULL || task->on_c_stack) {
         return;
     }
+    if (task->root->status == PM_METAL_ASYNC_DONE || task->root->status == PM_METAL_ASYNC_ERROR
+        || task->root->status == PM_METAL_ASYNC_CANCELLED) {
+        return;
+    }
     uint32_t expected = 0;
     if (!__atomic_compare_exchange_n(&task->running, &expected, 1u, 0, __ATOMIC_ACQ_REL,
             __ATOMIC_RELAXED)) {
