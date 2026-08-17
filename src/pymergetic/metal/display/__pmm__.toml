@@ -1,0 +1,2 @@
+fqn = "pymergetic.metal.display"
+impl = "c"
