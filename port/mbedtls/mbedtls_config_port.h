@@ -26,6 +26,8 @@
 
 #include "extmod/mbedtls/mbedtls_config_common.h"
 
+#define MBEDTLS_CIPHER_MODE_CTR
+
 /* libc has time() (fixed epoch). Skip gmtime_r / cert calendar. */
 #undef MBEDTLS_HAVE_TIME_DATE
 #define MBEDTLS_PLATFORM_MS_TIME_ALT

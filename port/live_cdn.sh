@@ -19,12 +19,30 @@ if [ ! -d "$dir" ]; then
     exit 1
 fi
 
+# Drop a leftover listener on this port (prior prove trap missed).
+if command -v fuser >/dev/null 2>&1; then
+    fuser -k "${port}/tcp" >/dev/null 2>&1 || true
+    sleep 0.1
+fi
+
 # The cdn card asks for <base>/artifacts/lead/<module><ext>, so the packs have
 # to answer under that path and not at the server root.
 root=${log%/*}/cdnroot
 rm -rf "$root"
-mkdir -p "$root/artifacts"
-ln -s "$(cd "$dir" && pwd)" "$root/artifacts/lead"
+mkdir -p "$root/artifacts/lead"
+packdir=$(cd "$dir" && pwd)
+# Real files, not a dangling symlink after rm -rf of a prior root.
+for f in "$packdir"/*; do
+    [ -f "$f" ] || continue
+    ln -s "$f" "$root/artifacts/lead/$(basename "$f")"
+    case $f in
+    *.wasm)
+        # First CDN try is .wasm.zlib. Serve the wasm bytes so that GET is 200
+        # with \0asm (loader accepts the magic; do not 404 then retry).
+        ln -s "$f" "$root/artifacts/lead/$(basename "$f").zlib"
+        ;;
+    esac
+done
 
 python3 -m http.server "$port" --bind 127.0.0.1 --directory "$root" >"$log" 2>&1 &
 srv=$!
@@ -53,6 +71,21 @@ PY
 done
 if [ "$i" -ge 50 ]; then
     echo "live cdn: server never came up on 127.0.0.1:$port" >&2
+    exit 1
+fi
+
+# Prove the lead path before QEMU: a 404 here is a host setup bug, not a guest one.
+if ! python3 - "$port" <<'PY'
+import sys
+import urllib.request
+
+port = int(sys.argv[1])
+url = "http://127.0.0.1:%d/artifacts/lead/pymergetic.wasmmod_examples.test_a.wasm" % port
+body = urllib.request.urlopen(url, timeout=2).read()
+sys.exit(0 if body[:4] == b"\x00asm" else 1)
+PY
+then
+    echo "live cdn: test_a.wasm not served on 127.0.0.1:$port (see $log)" >&2
     exit 1
 fi
 

@@ -43,7 +43,10 @@ QEMU_MACHINE := -machine q35,accel=kvm:tcg -cpu max,-svm -m 256 -smp 4 \
 	-drive file=$(BUILD)/blk.img,if=none,format=raw,id=d0 \
 	-device virtio-blk-pci,disable-legacy=on,drive=d0 \
 	-drive file=$(BUILD)/esp.img,if=none,format=raw,id=esp \
-	-device virtio-blk-pci,disable-legacy=on,drive=esp,bootindex=0
+	-device virtio-blk-pci,disable-legacy=on,drive=esp,bootindex=0 \
+	-device virtio-gpu-pci,disable-legacy=on \
+	-device virtio-keyboard-pci,disable-legacy=on \
+	-device virtio-tablet-pci,disable-legacy=on
 
 FW_OBJS := \
 	$(BUILD)/crt.o \
@@ -109,8 +112,15 @@ $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI: $(FW_OBJS) $(FW_WAMR_LIBS) | $(BUILD)
 		/opt:ref /base:0x1000000 /out:$@ $(FW_OBJS) $(FW_WAMR_LIBS)
 
 $(BUILD)/blk.img: | $(BUILD)
-	dd if=/dev/zero of=$@ bs=512 count=32 status=none
-	printf 'METL' | dd of=$@ conv=notrunc status=none
+	dd if=/dev/zero of=$@ bs=512 count=64 status=none
+	mkfs.vfat -F 12 -n METAL $@ >/dev/null
+	printf 'hi\n' > $(BUILD)/hi.txt
+	printf 'x' > $(BUILD)/x.txt
+	printf 'ok\n' > $(BUILD)/hello_fat.txt
+	mmd -i $@ ::SUB
+	mcopy -i $@ $(BUILD)/hi.txt ::HI.TXT
+	mcopy -i $@ $(BUILD)/x.txt ::SUB/X.TXT
+	mcopy -i $@ $(BUILD)/hello_fat.txt ::hello.txt
 
 prove: $(BUILD)/esp.img $(BUILD)/blk.img
 	$(LIVE_CDN) $(QEMU) $(QEMU_MACHINE) -serial file:$(BUILD)/serial.log -monitor none; \
@@ -137,6 +147,12 @@ prove: $(BUILD)/esp.img $(BUILD)/blk.img
 	grep -q "10.0.2.15" $(BUILD)/serial.log || exit 1; \
 	grep -q "10.0.2.2" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy cdn fetch 11" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy display present" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy input feed" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy console ids" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy fs embed" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy process" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy ssh session" $(BUILD)/serial.log || exit 1; \
 	if [ $$st -eq 1 ] || [ $$st -eq 0 ]; then exit 0; fi; exit $$st
 
 run: $(BUILD)/esp.img $(BUILD)/blk.img

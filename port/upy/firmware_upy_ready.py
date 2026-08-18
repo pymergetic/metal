@@ -29,5 +29,7 @@ body = inspect.body()
 if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body:
     raise RuntimeError("inspect caps")
 print("upy inspect caps")
+if m.net.dns.resolve is None:
+    raise RuntimeError("dns")
 print("upy dns")
 print("upy socket")

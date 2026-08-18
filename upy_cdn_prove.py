@@ -22,3 +22,23 @@ if hello is None:
 print("upy pack import")
 cdn.reset()
 print("upy cdn")
+if m.display.up() != 0:
+    raise SystemExit("display up")
+if m.console.fb_attach() != 0:
+    raise SystemExit("console fb")
+print("upy display present")
+if m.input.up() != 0:
+    raise SystemExit("input up")
+print("upy input feed")
+if m.console.up() != 0:
+    raise SystemExit("console ids")
+print("upy console ids")
+if m.fs.up() != 0:
+    raise SystemExit("fs up")
+print("upy fs embed")
+if m.process.up() != 0:
+    raise SystemExit("process up")
+print("upy process")
+if m.net.ssh.up() != 0:
+    raise SystemExit("ssh up")
+print("upy ssh session")

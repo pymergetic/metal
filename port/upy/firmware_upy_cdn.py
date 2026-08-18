@@ -29,8 +29,8 @@ body = inspect.body()
 if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body:
     raise RuntimeError("inspect caps")
 print("upy inspect caps")
-# dns is a native card; do not import it here — the hook would CDN-fetch
-# the name before configure and spin. ip.socket already proved the net face.
+if m.net.dns.resolve is None:
+    raise RuntimeError("dns")
 print("upy dns")
 print("upy socket")
 import pymergetic.wasmmod.net.cdn as cdn
@@ -56,3 +56,29 @@ except Exception as e:
 if test_a.a_ping() != 11:
     raise RuntimeError("cdn fetch call")
 print("upy cdn fetch 11")
+# Late `import pymergetic.metal.process` (and siblings) after CDN configure
+# parks the firmware hook. Cards are already on `m` from the first import.
+cdn.reset()
+print("upy cdn reset")
+
+if m.display.up() != 0:
+    raise RuntimeError("display up")
+print("upy display up")
+if m.console.fb_attach() != 0:
+    raise RuntimeError("console fb")
+print("upy display present")
+if m.input.up() != 0:
+    raise RuntimeError("input up")
+print("upy input feed")
+if m.console.up() != 0:
+    raise RuntimeError("console ids")
+print("upy console ids")
+if m.fs.up() != 0:
+    raise RuntimeError("fs up")
+print("upy fs embed")
+if m.process.up() != 0:
+    raise RuntimeError("process up")
+print("upy process")
+if m.net.ssh.up() != 0:
+    raise RuntimeError("ssh up")
+print("upy ssh session")
