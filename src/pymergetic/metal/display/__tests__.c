@@ -1,5 +1,7 @@
-/* pymergetic.metal.display — attach a 2x2 and put a pixel. */
+/* pymergetic.metal.display — attach a 2x2, put a pixel, present via sim. */
 #include "pymergetic/metal/display.h"
+#include "pymergetic/metal/drivers/gfx.h"
+#include "pymergetic/metal/drivers/gfx/sim.h"
 #include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
@@ -28,6 +30,30 @@ int32_t pm_metal_display_tests(void) {
     }
     if (pm_metal_display_put(2, 0, 1) == 0) {
         return fail("oob");
+    }
+    if (pm_metal_display_present() == 0) {
+        return fail("present no gfx");
+    }
+    {
+        int32_t h = pm_metal_drivers_gfx_sim_probe();
+        if (h < 0) {
+            return fail("sim");
+        }
+        if (pm_metal_display_attach_h(h) != 0) {
+            return fail("attach_h");
+        }
+        if (pm_metal_display_gfx_h() != h) {
+            return fail("gfx_h");
+        }
+        if (pm_metal_display_present() != 0) {
+            return fail("present");
+        }
+        if (pm_metal_drivers_gfx_present_n(h) == 0u) {
+            return fail("present_n");
+        }
+    }
+    if (pm_metal_display_up() != 0) {
+        return fail("up");
     }
     return 0;
 }

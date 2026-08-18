@@ -39,6 +39,26 @@ int32_t pm_metal_bus_virtio_is_blk(uint32_t vendor, uint32_t device) {
         : 0;
 }
 
+int32_t pm_metal_bus_virtio_is_gpu(uint32_t vendor, uint32_t device) {
+    vendor &= 0xffffu;
+    device &= 0xffffu;
+    if (vendor != PM_METAL_BUS_VIRTIO_VENDOR) {
+        return 0;
+    }
+    return (device == PM_METAL_BUS_VIRTIO_DEV_GPU || device == PM_METAL_BUS_VIRTIO_DEV_GPU_LEGACY)
+        ? 1
+        : 0;
+}
+
+int32_t pm_metal_bus_virtio_is_input(uint32_t vendor, uint32_t device) {
+    vendor &= 0xffffu;
+    device &= 0xffffu;
+    if (vendor != PM_METAL_BUS_VIRTIO_VENDOR) {
+        return 0;
+    }
+    return device == PM_METAL_BUS_VIRTIO_DEV_INPUT ? 1 : 0;
+}
+
 int32_t pm_metal_bus_virtio_mmio_net_ok(volatile uint32_t *base) {
     if (base == NULL) {
         return 0;
@@ -159,6 +179,8 @@ PM_MOD_EXPORT_C(pymergetic.metal.bus.virtio, pm_metal_bus_virtio_init, pm_metal_
 PM_MOD_EXPORT_C(pymergetic.metal.bus.virtio, pm_metal_bus_virtio_deinit, pm_metal_bus_virtio_deinit, void(void));
 PM_MOD_EXPORT_C(pymergetic.metal.bus.virtio, pm_metal_bus_virtio_is_net, pm_metal_bus_virtio_is_net, int32_t(uint32_t, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.bus.virtio, pm_metal_bus_virtio_is_blk, pm_metal_bus_virtio_is_blk, int32_t(uint32_t, uint32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.bus.virtio, pm_metal_bus_virtio_is_gpu, pm_metal_bus_virtio_is_gpu, int32_t(uint32_t, uint32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.bus.virtio, pm_metal_bus_virtio_is_input, pm_metal_bus_virtio_is_input, int32_t(uint32_t, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.bus.virtio, pm_metal_bus_virtio_mmio_net_ok, pm_metal_bus_virtio_mmio_net_ok, int32_t(volatile uint32_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.bus.virtio, pm_metal_bus_virtio_find_net_nth, pm_metal_bus_virtio_find_net_nth, int32_t(uint32_t, uint32_t *, uint32_t *, uint32_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.bus.virtio, pm_metal_bus_virtio_find_blk_nth, pm_metal_bus_virtio_find_blk_nth, int32_t(uint32_t, uint32_t *, uint32_t *, uint32_t *));

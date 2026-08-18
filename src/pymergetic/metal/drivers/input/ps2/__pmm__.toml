@@ -1,0 +1,2 @@
+fqn = "pymergetic.metal.drivers.input.ps2"
+impl = "c"

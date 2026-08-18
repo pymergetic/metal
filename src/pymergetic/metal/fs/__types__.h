@@ -1,4 +1,4 @@
-/* pymergetic.metal.fs — in-memory path table (no POSIX fopen). */
+/* pymergetic.metal.fs — arena path table (no POSIX fopen). */
 #ifndef PYMERGETIC_METAL_FS_TYPES_H
 #define PYMERGETIC_METAL_FS_TYPES_H
 

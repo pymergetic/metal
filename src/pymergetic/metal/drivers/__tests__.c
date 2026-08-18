@@ -5,6 +5,7 @@
 #include "pymergetic/metal/drivers/__types__.h"
 #include "pymergetic/metal/dt.h"
 #include "pymergetic/metal/drivers/blk.h"
+#include "pymergetic/metal/drivers/input.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/drivers/rtc.h"
 #include "pymergetic/wasmmod/guest.h"
@@ -71,6 +72,9 @@ int32_t pm_metal_drivers_probe_tests(void) {
     }
     if (pm_metal_drivers_rtc_by_compat("cmos", 0) < 0) {
         return fail("cmos isa");
+    }
+    if (pm_metal_drivers_input_by_compat("ps2", 0) < 0) {
+        return fail("ps2 isa");
     }
     if (pm_metal_bus_pci_sim_add(3, 1, 0, 0x1af4u, 0x1041u) != 0) {
         return fail("pci sim add");

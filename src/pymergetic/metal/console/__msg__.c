@@ -14,7 +14,8 @@ static void emit_console(int depth0, int last_root) {
     if (pm_metal_console_ready()) {
         char vpc[24];
         pm_metal_boot_msg_count(vpc, sizeof(vpc), "", nvp, "viewport");
-        snprintf(cons, sizeof(cons), "ok  #%u  %s", (unsigned)pm_metal_console_id(), vpc);
+        snprintf(cons, sizeof(cons), "ok  #%u/%u  %s", (unsigned)pm_metal_console_id(),
+            (unsigned)pm_metal_console_count(), vpc);
     } else {
         snprintf(cons, sizeof(cons), "FAIL");
         pm_metal_boot_msg_fail();

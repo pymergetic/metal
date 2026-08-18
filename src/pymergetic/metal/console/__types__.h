@@ -1,4 +1,4 @@
-/* pymergetic.metal.console — text ring + viewports (serial today, FB later). */
+/* pymergetic.metal.console — N text rings (F1–F6) + viewports (serial + fb). */
 #ifndef PYMERGETIC_METAL_CONSOLE_TYPES_H
 #define PYMERGETIC_METAL_CONSOLE_TYPES_H
 

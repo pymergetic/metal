@@ -1,0 +1,7 @@
+# pymergetic.util.gen — generated faces. Recreate with wasmmod-gen.
+__exports__.h
+__exports__.rs
+__imports__.h
+__imports__.rs
+__version__.h
+!.gitignore

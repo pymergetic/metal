@@ -22,6 +22,13 @@ int32_t pm_metal_bus_virtio_tests(void) {
     if (!pm_metal_bus_virtio_is_blk(0x1af4u, 0x1042u) || pm_metal_bus_virtio_is_blk(0x1af4u, 0x1041u)) {
         return fail("is_blk");
     }
+    if (!pm_metal_bus_virtio_is_gpu(0x1af4u, 0x1050u) || pm_metal_bus_virtio_is_gpu(0x1af4u, 0x1041u)) {
+        return fail("is_gpu");
+    }
+    if (!pm_metal_bus_virtio_is_input(0x1af4u, 0x1052u)
+        || pm_metal_bus_virtio_is_input(0x1af4u, 0x1050u)) {
+        return fail("is_input");
+    }
     memset(regs, 0, sizeof(regs));
     regs[0] = 0x74726976u;
     regs[2] = 1u;

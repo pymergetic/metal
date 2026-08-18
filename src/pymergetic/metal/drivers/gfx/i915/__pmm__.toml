@@ -1,0 +1,2 @@
+fqn = "pymergetic.metal.drivers.gfx.i915"
+impl = "c"

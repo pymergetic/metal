@@ -3,6 +3,8 @@
 
 #include "pymergetic/metal/bus/pci.h"
 #include "pymergetic/metal/dt.h"
+#include "pymergetic/metal/drivers/gfx.h"
+#include "pymergetic/metal/drivers/gfx/sim.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/drivers/net/sim.h"
 #include "pymergetic/metal/fw/memmap.h"
@@ -313,6 +315,10 @@ int32_t pm_metal_drivers_probe(void) {
     if (pm_metal_drivers_net_count() <= 0 && pm_metal_drivers_net_sim_up() != 0) {
         return -1;
     }
+    /* sim is the scanout fill when PCI bound none. virtio-gpu / bochs / GOP win. */
+    if (pm_metal_drivers_gfx_count() <= 0 && pm_metal_drivers_gfx_sim_up() != 0) {
+        return -1;
+    }
     s_probed = 1;
     return 0;
 }
@@ -332,3 +338,5 @@ PM_MOD_BOOTDEP_C(pymergetic.metal.drivers, pymergetic.metal.fw.memmap);
 PM_MOD_BOOT_CHILD_C(pymergetic.metal.drivers, pymergetic.metal.drivers.net);
 PM_MOD_BOOT_CHILD_C(pymergetic.metal.drivers, pymergetic.metal.drivers.blk);
 PM_MOD_BOOT_CHILD_C(pymergetic.metal.drivers, pymergetic.metal.drivers.rtc);
+PM_MOD_BOOT_CHILD_C(pymergetic.metal.drivers, pymergetic.metal.drivers.gfx);
+PM_MOD_BOOT_CHILD_C(pymergetic.metal.drivers, pymergetic.metal.drivers.input);

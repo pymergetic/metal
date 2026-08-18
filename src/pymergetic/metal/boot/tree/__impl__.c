@@ -511,8 +511,45 @@ void pm_metal_boot_motd(void) {
     walk(PM_METAL_BOOT_SURF_MOTD);
 }
 
+/* Portable ~1s busy-wait for the shutdown/reboot countdown. No POSIX
+ * nanosleep (firmware has no OS) and no clock card dependency: a volatile
+ * NOP-pump is the countdown feel on every seat (unix/emcc/firmware). The loop
+ * counter is volatile so the compiler cannot hoist the whole spin; the count
+ * is heuristic (≈1s on a ≈3GHz unix host; slower seats pause longer, which is
+ * the point — time to read the banner before power off). */
+static void pm_metal_boot_tick_sleep(void) {
+    volatile uint32_t s;
+    for (s = 0; s < 470000000u; s++) {
+    }
+}
+
+static void pm_metal_boot_countdown(const char *done, unsigned n) {
+    unsigned i;
+    unsigned dl = 0;
+    while (done[dl] != 0) {
+        dl++;
+    }
+    for (i = 0; i < n; i++) {
+        unsigned d = n - i;
+        char line[24];
+        unsigned p = 0;
+        line[p++] = (char)('0' + (d % 10u));
+        if (i + 1u == n) {
+            unsigned k;
+            line[p++] = ' ';
+            for (k = 0; k < dl; k++) {
+                line[p++] = done[k];
+            }
+        }
+        line[p++] = '\n';
+        (void)pm_metal_console_write(line, p);
+        pm_metal_boot_tick_sleep();
+    }
+}
+
 void pm_metal_boot_shutdown(int reboot) {
-    char title[64];
+    char title[96];
+    char art[160];
     uint32_t nboot;
     pm_metal_boot_msg_line("");
     snprintf(title, sizeof(title), "%smetal-boot: %s%s", PM_METAL_BOOT_SGR_WARN,
@@ -526,6 +563,21 @@ void pm_metal_boot_shutdown(int reboot) {
         char detail[32];
         pm_metal_boot_msg_count(detail, sizeof(detail), "ok  ", nboot, "card");
         pm_metal_boot_msg_item(1, 0, 0, "stop", detail);
+    }
+    /* Big fat red system-down / rebooting banner + version, then a short
+     * countdown so the reverse-boot result is visible before power off. */
+    pm_metal_boot_msg_line("");
+    snprintf(title, sizeof(title), "%smetal version %s%s", PM_METAL_BOOT_SGR_FAIL,
+        PM_METAL_BOOT_TREE_VERSION, PM_METAL_BOOT_SGR_RST);
+    pm_metal_boot_msg_line(title);
+    snprintf(art, sizeof(art), "%s*** %s — %s in 3s ***%s", PM_METAL_BOOT_SGR_FAIL,
+        reboot ? "REBOOTING" : "SYSTEM DOWN", reboot ? "reset" : "power off",
+        PM_METAL_BOOT_SGR_RST);
+    pm_metal_boot_msg_line(art);
+    if (reboot) {
+        pm_metal_boot_countdown("REBOOTING", 3u);
+    } else {
+        pm_metal_boot_countdown("SYSTEM DOWN", 3u);
     }
 #if defined(PM_METAL_FIRMWARE)
 #if defined(__i386__) || defined(__x86_64__)
