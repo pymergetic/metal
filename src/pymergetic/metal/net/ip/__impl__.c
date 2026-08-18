@@ -419,6 +419,32 @@ int32_t pm_ip_socket_locked(int32_t type) {
     return -1;
 }
 
+/* Outbound (client-ish) socket from the HIGH end of the table. Listeners park
+ * in the low range (0..), so a fwd-side guest client can never alias a live
+ * listener even if low fds churn during boot races — closing it is always safe. */
+int32_t pm_ip_out_socket_locked(int32_t type) {
+    uint8_t kind = (type == PM_METAL_NET_IP_SOCK_DGRAM) ? SK_UDP : SK_TCP;
+    uint32_t i = PM_METAL_IP_SOCK_MAX;
+    while (i-- > 0u) {
+        if (!pm_ip_sk[i].used) {
+            memset(&pm_ip_sk[i], 0, sizeof(pm_ip_sk[i]));
+            pm_ip_sk[i].used = 1;
+            pm_ip_sk[i].kind = kind;
+            pm_ip_sk[i].listen_fd = -1;
+            pm_ip_sk[i].l2_h = -1;
+            return (int32_t)i;
+        }
+    }
+    return -1;
+}
+
+int32_t pm_metal_net_ip_out_socket(int32_t type) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_out_socket_locked(type);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
 int32_t pm_metal_net_ip_socket(int32_t type) {
     pm_util_lock_acquire(&pm_ip_lock);
     int32_t rc = pm_ip_socket_locked(type);
@@ -564,6 +590,18 @@ int32_t pm_ip_connect_locked(int32_t fd, uint32_t addr_be, uint16_t port_host) {
 int32_t pm_metal_net_ip_connect(int32_t fd, uint32_t addr_be, uint16_t port_host) {
     pm_util_lock_acquire(&pm_ip_lock);
     int32_t rc = pm_ip_connect_locked(fd, addr_be, port_host);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+/* Non-blocking connect handshake query: 1 once the TCP peer is ESTAB, 0 while
+ * the SYN/SYN-ACK handshake is still in flight (connect returned 0), -1 for a
+ * bad fd or a non-TCP socket. Lets unix-seat forwarders (net.fwd) wait on the
+ * loopback connect instead of aborting an in-progress client. */
+int32_t pm_metal_net_ip_established(int32_t fd) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    struct pm_metal_sock *s = sock_get(fd, SK_TCP);
+    int32_t rc = (s != NULL && s->tcp_st == TCP_ESTAB) ? 1 : (s != NULL ? 0 : -1);
     pm_util_lock_release(&pm_ip_lock);
     return rc;
 }
@@ -783,11 +821,13 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_l2_attach, pm_metal_net_l2
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_rx, pm_metal_net_ip_rx, int32_t(const uint8_t *, uint16_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_rx_from, pm_metal_net_ip_rx_from, int32_t(int32_t, const uint8_t *, uint16_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_socket, pm_metal_net_ip_socket, int32_t(int32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_out_socket, pm_metal_net_ip_out_socket, int32_t(int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_close, pm_metal_net_ip_close, int32_t(int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_bind, pm_metal_net_ip_bind, int32_t(int32_t, uint32_t, uint16_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_bind_l2, pm_metal_net_ip_bind_l2, int32_t(int32_t, int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_listen, pm_metal_net_ip_listen, int32_t(int32_t, int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_connect, pm_metal_net_ip_connect, int32_t(int32_t, uint32_t, uint16_t));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_established, pm_metal_net_ip_established, int32_t(int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_send, pm_metal_net_ip_send, int32_t(int32_t, const uint8_t *, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_recv, pm_metal_net_ip_recv, int32_t(int32_t, uint8_t *, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_accept, pm_metal_net_ip_accept, int32_t(int32_t));

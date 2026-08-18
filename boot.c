@@ -14,6 +14,7 @@
 #include "pymergetic/metal/async/__exports__.h"
 #include "pymergetic/metal/net/http/asgi.h"
 #include "pymergetic/metal/net/ssh.h"
+#include "pymergetic/metal/net/fwd.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/io.h"
 #include "pymergetic/wasmmod/net/cdn.h"
@@ -155,10 +156,15 @@ void pm_metal_upy_port_init(void) {
      * runs never set METAL_SERVE and stay listener-free. */
     if (getenv("METAL_SERVE") != NULL) {
         /* ANY (0) matches loopback and the outer NIC. On the sim L2 the session
-         * stays in-process; the firmware QEMU run additionally hostfwds these
-         * to the host. */
+         * stays in-process; on the unix host the net.fwd card mirrors each of
+         * these guest listeners onto a real 0.0.0.0:<port> AF_INET socket — the
+         * unix-seat analogue of the firmware QEMU hostfwd — while the firmware
+         * QEMU run additionally hostfwds them to the host. fwd is a no-op off
+         * Linux, so this one block serves every µPy seat. */
         (void)pm_metal_net_http_asgi_listen(0u, 8090);
         (void)pm_metal_net_ssh_listen(0u, 2222);
+        (void)pm_metal_fwd_listen(8090);
+        (void)pm_metal_fwd_listen(2222);
     }
     mp_wasm_port_init();
 #if MICROPY_PY_SYS_PS1_PS2
