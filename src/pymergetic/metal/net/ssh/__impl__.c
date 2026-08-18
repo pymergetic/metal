@@ -51,51 +51,103 @@ static const char s_user[] = "metal";
 static const char s_pass[] = "metal";
 
 static pm_util_mem_arena_t *s_arena;
-static int32_t s_ls = -1;
-static int32_t s_peer = -1;
-static uint32_t s_kex_ok;
 static uint32_t s_have_key;
 
+/* Per-server host key + DRBG: shared across every sshd instance. */
 static mbedtls_entropy_context s_entropy;
 static mbedtls_ctr_drbg_context s_drbg;
 static mbedtls_ecdsa_context s_hk;
 static uint8_t s_ks[160];
 static uint32_t s_ks_len;
 
-static uint8_t s_is[256];
-static uint32_t s_is_len;
-static uint8_t s_ic[256];
-static uint32_t s_ic_len;
-static uint8_t s_vc[64];
-static uint32_t s_vc_len;
-static uint8_t s_rx[RX_MAX];
-static uint32_t s_rx_len;
-static uint32_t s_got_ident;
-static uint32_t s_sent_kex;
-static uint32_t s_got_ic;
-static uint32_t s_auth_ok;
-static uint32_t s_chan_ok;
-static uint32_t s_remote_chan;
-static int32_t s_cons = -1;
+/* A single sshd instance: one listener + the one peer it drives to a session.
+ * Multiple instances coexist on different ports/addresses. All the buffer +
+ * crypto state is per-instance so connections don't clobber each other. */
+#define MAX_SSH 4u
 
-static uint32_t s_seq_in;
-static uint32_t s_seq_out;
-static uint32_t s_enc_in;
-static uint32_t s_enc_out;
-static uint32_t s_keys_ok;
-static mbedtls_aes_context s_aes_in;
-static mbedtls_aes_context s_aes_out;
-static uint8_t s_ctr_in[SSH_BLOCK];
-static uint8_t s_ctr_out[SSH_BLOCK];
-static uint8_t s_sb_in[SSH_BLOCK];
-static uint8_t s_sb_out[SSH_BLOCK];
-static size_t s_off_in;
-static size_t s_off_out;
-static uint8_t s_mk_in[SSH_MAC];
-static uint8_t s_mk_out[SSH_MAC];
-static uint8_t s_k_mp[40];
-static uint32_t s_k_mp_len;
-static uint8_t s_sid[32];
+struct pm_metal_ssh_inst {
+    int32_t ls;
+    int32_t peer;
+    uint32_t laddr;
+    uint16_t lport;
+    uint32_t kex_ok;
+    uint8_t is[256];
+    uint32_t is_len;
+    uint8_t ic[256];
+    uint32_t ic_len;
+    uint8_t vc[64];
+    uint32_t vc_len;
+    uint8_t rx[RX_MAX];
+    uint32_t rx_len;
+    uint32_t got_ident;
+    uint32_t sent_kex;
+    uint32_t got_ic;
+    uint32_t auth_ok;
+    uint32_t chan_ok;
+    uint32_t remote_chan;
+    int32_t cons;
+    uint32_t seq_in;
+    uint32_t seq_out;
+    uint32_t enc_in;
+    uint32_t enc_out;
+    uint32_t keys_ok;
+    mbedtls_aes_context aes_in;
+    mbedtls_aes_context aes_out;
+    uint8_t ctr_in[SSH_BLOCK];
+    uint8_t ctr_out[SSH_BLOCK];
+    uint8_t sb_in[SSH_BLOCK];
+    uint8_t sb_out[SSH_BLOCK];
+    size_t off_in;
+    size_t off_out;
+    uint8_t mk_in[SSH_MAC];
+    uint8_t mk_out[SSH_MAC];
+    uint8_t k_mp[40];
+    uint32_t k_mp_len;
+    uint8_t sid[32];
+};
+
+static struct pm_metal_ssh_inst s_inst[MAX_SSH];
+static int32_t s_cur = -1; /* instance being driven in poll() */
+
+/* Per-instance accessor: helpers reference the field name directly; map it to
+ * the currently-driven instance so the protocol code is unchanged. */
+#define inst ((struct pm_metal_ssh_inst *)&s_inst[s_cur])
+#define s_ls inst->ls
+#define s_peer inst->peer
+#define s_kex_ok inst->kex_ok
+#define s_is inst->is
+#define s_is_len inst->is_len
+#define s_ic inst->ic
+#define s_ic_len inst->ic_len
+#define s_vc inst->vc
+#define s_vc_len inst->vc_len
+#define s_rx inst->rx
+#define s_rx_len inst->rx_len
+#define s_got_ident inst->got_ident
+#define s_sent_kex inst->sent_kex
+#define s_got_ic inst->got_ic
+#define s_auth_ok inst->auth_ok
+#define s_chan_ok inst->chan_ok
+#define s_remote_chan inst->remote_chan
+#define s_cons inst->cons
+#define s_seq_in inst->seq_in
+#define s_seq_out inst->seq_out
+#define s_enc_in inst->enc_in
+#define s_enc_out inst->enc_out
+#define s_keys_ok inst->keys_ok
+#define s_aes_in inst->aes_in
+#define s_aes_out inst->aes_out
+#define s_ctr_in inst->ctr_in
+#define s_ctr_out inst->ctr_out
+#define s_sb_in inst->sb_in
+#define s_sb_out inst->sb_out
+#define s_off_in inst->off_in
+#define s_off_out inst->off_out
+#define s_mk_in inst->mk_in
+#define s_mk_out inst->mk_out
+#define s_k_mp inst->k_mp
+#define s_k_mp_len inst->k_mp_len
+#define s_sid inst->sid
 
 static void put_be32(uint8_t *p, uint32_t v) {
     p[0] = (uint8_t)(v >> 24);
@@ -765,7 +817,8 @@ static int32_t eat_ident(void) {
     return 0;
 }
 
-static void reset_peer(void) {
+static void reset_peer(int32_t i) {
+    s_cur = i;
     s_kex_ok = 0;
     s_auth_ok = 0;
     s_chan_ok = 0;
@@ -785,105 +838,137 @@ static void reset_peer(void) {
 
 int32_t pm_metal_net_ssh_init(pm_util_mem_arena_t *arena) {
     static const char pers[] = "metal-ssh";
+    uint32_t i;
     if (arena == NULL) {
         return -1;
     }
     s_arena = arena;
-    s_ls = -1;
-    s_peer = -1;
     s_have_key = 0;
-    s_is_len = 0;
-    s_cons = -1;
-    reset_peer();
-    memcpy(s_vc, s_vc_default, sizeof(s_vc_default) - 1u);
-    s_vc_len = (uint32_t)(sizeof(s_vc_default) - 1u);
+    for (i = 0; i < MAX_SSH; i++) {
+        s_cur = (int32_t)i;
+        s_ls = -1;
+        s_peer = -1;
+        s_is_len = 0;
+        s_cons = -1;
+        s_vc_len = (uint32_t)(sizeof(s_vc_default) - 1u);
+        memcpy(s_vc, s_vc_default, s_vc_len);
+        mbedtls_aes_init(&s_aes_in);
+        mbedtls_aes_init(&s_aes_out);
+        reset_peer((int32_t)i);
+    }
     mbedtls_entropy_init(&s_entropy);
     mbedtls_ctr_drbg_init(&s_drbg);
-    mbedtls_aes_init(&s_aes_in);
-    mbedtls_aes_init(&s_aes_out);
     if (mbedtls_ctr_drbg_seed(&s_drbg, mbedtls_entropy_func, &s_entropy, (const uint8_t *)pers,
             sizeof(pers) - 1u)
         != 0) {
+        s_cur = 0;
         return 0;
     }
     (void)hostkey_init();
+    s_cur = 0;
     return 0;
 }
 
 void pm_metal_net_ssh_deinit(void) {
-    if (s_peer >= 0) {
-        (void)pm_metal_net_ip_close(s_peer);
-        s_peer = -1;
-    }
-    if (s_ls >= 0) {
-        (void)pm_metal_net_ip_close(s_ls);
-        s_ls = -1;
+    uint32_t i;
+    for (i = 0; i < MAX_SSH; i++) {
+        s_cur = (int32_t)i;
+        if (s_peer >= 0) {
+            (void)pm_metal_net_ip_close(s_peer);
+            s_peer = -1;
+        }
+        if (s_ls >= 0) {
+            (void)pm_metal_net_ip_close(s_ls);
+            s_ls = -1;
+        }
+        mbedtls_aes_free(&s_aes_in);
+        mbedtls_aes_free(&s_aes_out);
+        reset_peer((int32_t)i);
+        s_cons = -1;
     }
     if (s_have_key) {
         mbedtls_ecdsa_free(&s_hk);
         s_have_key = 0;
     }
-    mbedtls_aes_free(&s_aes_in);
-    mbedtls_aes_free(&s_aes_out);
     mbedtls_ctr_drbg_free(&s_drbg);
     mbedtls_entropy_free(&s_entropy);
-    reset_peer();
-    s_cons = -1;
     s_arena = NULL;
+    s_cur = 0;
 }
 
 int32_t pm_metal_net_ssh_listen(uint32_t addr_be, uint16_t port) {
+    uint32_t i;
     if (s_arena == NULL) {
         return -1;
     }
-    if (s_ls >= 0) {
-        return 0;
-    }
-    s_ls = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
-    if (s_ls < 0 || pm_metal_net_ip_bind(s_ls, addr_be, port) != 0
-        || pm_metal_net_ip_listen(s_ls, 1) != 0) {
-        if (s_ls >= 0) {
-            (void)pm_metal_net_ip_close(s_ls);
-            s_ls = -1;
+    for (i = 0; i < MAX_SSH; i++) {
+        int32_t fd;
+        s_cur = (int32_t)i;
+        /* Idempotent: an existing listener on this exact addr:port is it. */
+        if (s_ls >= 0 && s_inst[i].laddr == addr_be && s_inst[i].lport == port) {
+            s_cur = 0;
+            return (int32_t)i;
         }
-        return -1;
+        if (s_ls >= 0) {
+            continue;
+        }
+        fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+        if (fd < 0 || pm_metal_net_ip_bind(fd, addr_be, port) != 0
+            || pm_metal_net_ip_listen(fd, 1) != 0) {
+            if (fd >= 0) {
+                (void)pm_metal_net_ip_close(fd);
+            }
+            s_cur = 0;
+            return -1;
+        }
+        s_ls = fd;
+        s_inst[i].laddr = addr_be;
+        s_inst[i].lport = port;
+        s_is_len = 0; /* server kexinit is built lazily by send_kexinit */
+        return (int32_t)i;
     }
-    return 0;
+    s_cur = 0;
+    return -1; /* no free slot */
 }
 
 int32_t pm_metal_net_ssh_poll(void) {
+    uint32_t i;
     int32_t c;
     int32_t n;
-    if (s_ls < 0) {
-        return 0;
-    }
-    c = pm_metal_net_ip_accept(s_ls);
-    if (c >= 0) {
-        if (s_peer >= 0) {
-            (void)pm_metal_net_ip_close(s_peer);
+    for (i = 0; i < MAX_SSH; i++) {
+        s_cur = (int32_t)i;
+        if (s_ls < 0) {
+            continue;
         }
-        s_peer = c;
-        reset_peer();
-        (void)pm_metal_net_ip_send(s_peer, s_ident, (uint32_t)(sizeof(s_ident) - 1u));
-    }
-    if (s_peer < 0) {
-        return 0;
-    }
-    if (s_rx_len < RX_MAX) {
-        n = pm_metal_net_ip_recv(s_peer, s_rx + s_rx_len, RX_MAX - s_rx_len);
-        if (n > 0) {
-            s_rx_len += (uint32_t)n;
+        c = pm_metal_net_ip_accept(s_ls);
+        if (c >= 0) {
+            if (s_peer >= 0) {
+                (void)pm_metal_net_ip_close(s_peer);
+            }
+            s_peer = c;
+            reset_peer((int32_t)i);
+            (void)pm_metal_net_ip_send(s_peer, s_ident, (uint32_t)(sizeof(s_ident) - 1u));
+        }
+        if (s_peer < 0) {
+            continue;
+        }
+        if (s_rx_len < RX_MAX) {
+            n = pm_metal_net_ip_recv(s_peer, s_rx + s_rx_len, RX_MAX - s_rx_len);
+            if (n > 0) {
+                s_rx_len += (uint32_t)n;
+            }
+        }
+        if (!s_got_ident) {
+            (void)eat_ident();
+            if (s_got_ident && !s_sent_kex) {
+                (void)send_kexinit();
+            }
+        }
+        if (s_got_ident) {
+            (void)pump_rx();
         }
     }
-    if (!s_got_ident) {
-        (void)eat_ident();
-        if (s_got_ident && !s_sent_kex) {
-            (void)send_kexinit();
-        }
-    }
-    if (s_got_ident) {
-        (void)pump_rx();
-    }
+    s_cur = 0;
     return 0;
 }
 
@@ -892,22 +977,27 @@ const char *pm_metal_net_ssh_ident(void) {
 }
 
 int32_t pm_metal_net_ssh_kex_ok(void) {
+    s_cur = 0;
     return s_kex_ok ? 1 : 0;
 }
 
 int32_t pm_metal_net_ssh_auth_ok(void) {
+    s_cur = 0;
     return s_auth_ok ? 1 : 0;
 }
 
 int32_t pm_metal_net_ssh_channel_ok(void) {
+    s_cur = 0;
     return s_chan_ok ? 1 : 0;
 }
 
 int32_t pm_metal_net_ssh_console_id(void) {
+    s_cur = 0;
     return s_cons;
 }
 
 int32_t pm_metal_net_ssh_viewport_attach(int32_t id) {
+    s_cur = 0;
     if (id < 1 || id >= SSH_CONSOLE_N) {
         return -1;
     }
@@ -931,7 +1021,49 @@ int32_t pm_metal_net_ssh_up(void) {
     return 0;
 }
 
+/* ---- multi-instance API: count / status / stop ---- */
+
+uint32_t pm_metal_net_ssh_count(void) {
+    uint32_t i;
+    uint32_t n = 0;
+    for (i = 0; i < MAX_SSH; i++) {
+        if (s_inst[i].ls >= 0 || s_inst[i].peer >= 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
+int32_t pm_metal_net_ssh_status(int32_t id) {
+    if (id < 0 || (uint32_t)id >= MAX_SSH) {
+        return -1;
+    }
+    return s_inst[id].ls >= 0 ? 1 : 0;
+}
+
+int32_t pm_metal_net_ssh_stop(int32_t id) {
+    if (id < 0 || (uint32_t)id >= MAX_SSH) {
+        return -1;
+    }
+    s_cur = id;
+    if (s_peer >= 0) {
+        (void)pm_metal_net_ip_close(s_peer);
+        s_peer = -1;
+    }
+    if (s_ls >= 0) {
+        (void)pm_metal_net_ip_close(s_ls);
+        s_ls = -1;
+    }
+    s_inst[id].laddr = 0;
+    s_inst[id].lport = 0;
+    s_cons = -1;
+    reset_peer(id);
+    s_cur = 0;
+    return 0;
+}
+
 #include "pymergetic/wasmmod/guest.h"
+#include "pymergetic/metal/services.h"
 
 PM_MOD_EXPORT_C(pymergetic.metal.net.ssh, pm_metal_net_ssh_init, pm_metal_net_ssh_init, int32_t(pm_util_mem_arena_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ssh, pm_metal_net_ssh_deinit, pm_metal_net_ssh_deinit, void(void));
@@ -944,7 +1076,14 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.ssh, pm_metal_net_ssh_channel_ok, pm_metal_
 PM_MOD_EXPORT_C(pymergetic.metal.net.ssh, pm_metal_net_ssh_console_id, pm_metal_net_ssh_console_id, int32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ssh, pm_metal_net_ssh_viewport_attach, pm_metal_net_ssh_viewport_attach, int32_t(int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ssh, pm_metal_net_ssh_up, pm_metal_net_ssh_up, int32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ssh, pm_metal_net_ssh_count, pm_metal_net_ssh_count, uint32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ssh, pm_metal_net_ssh_status, pm_metal_net_ssh_status, int32_t(int32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ssh, pm_metal_net_ssh_stop, pm_metal_net_ssh_stop, int32_t(int32_t));
 
 PM_MOD_BOOT_C(pymergetic.metal.net.ssh, pm_metal_net_ssh_init, pm_metal_net_ssh_deinit);
 PM_MOD_BOOTDEP_C(pymergetic.metal.net.ssh, pymergetic.metal.net.ip);
 PM_MOD_BOOTDEP_C(pymergetic.metal.net.ssh, pymergetic.metal.console);
+
+PM_MOD_SERVICE_C(pymergetic.metal.net.ssh, ssh_svc,
+    "ssh", pm_metal_net_ssh_listen, pm_metal_net_ssh_count,
+    pm_metal_net_ssh_status, pm_metal_net_ssh_stop, 0u, 2222);

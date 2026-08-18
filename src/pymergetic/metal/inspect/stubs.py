@@ -10,10 +10,17 @@ CAP_DEFAULTS = {
     # Py face mounts on ASGI; not a second listen. fastapi only when role=cdn.
     "microdot": True,
     "fastapi": False,
+    "utemplate": True,  # vendored pfalcon/utemplate engine (microdot server-side templates)
     # www/ is route_static of embedded bytes (firmware cannot fopen).
     "vfs_static": False,
     "static_embed": True,
     "static_backend": "embed",
+    # Registry modules + funcs are exposed; RPC invokes container (wasm/aot/elf)
+    # exports over the wire. Resident native C/Rust exports are refused.
+    "rpc": True,
+    "rpc_i64": True,
+    "rpc_f32": False,
+    "rpc_f64": False,
 }
 
 
@@ -23,6 +30,7 @@ def capabilities(role, theme, *, fastapi=False, **extra):
     caps["theme"] = theme
     if role == "cdn":
         caps["microdot"] = False
+        caps["utemplate"] = False
         caps["fastapi"] = True
     else:
         caps["fastapi"] = bool(fastapi)
@@ -41,6 +49,8 @@ ENDPOINT_STUBS = (
     ("GET", "/inspect/reg/method", True),
     ("GET", "/inspect/reg/<module>", True),
     ("GET", "/inspect/reg/<module>/<method>", True),
+    # RPC: invoke a container (wasm/aot/elf) export with scalar args in query.
+    ("GET", "/inspect/call/<module>/<method>", True),
 )
 
 __all__ = [

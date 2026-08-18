@@ -48,6 +48,24 @@ QEMU_MACHINE := -machine q35,accel=kvm:tcg -cpu max,-svm -m 256 -smp 4 \
 	-device virtio-keyboard-pci,disable-legacy=on \
 	-device virtio-tablet-pci,disable-legacy=on
 
+# Interactive run seat: same machine as prove but the n0 user-net also hostfwds
+# host loopback -> guest (10.0.2.15 DHCP) so the auto-served httpd/sshd are
+# reachable from the host.
+QEMU_RUN_MACHINE := -machine q35,accel=kvm:tcg -cpu max,-svm -m 256 -smp 4 \
+	-vga none -audio none -display none \
+	-bios $(OVMF) \
+	-device isa-debug-exit,iobase=0x501,iosize=0x02 \
+	-netdev user,id=n0,hostfwd=tcp:127.0.0.1:8090-10.0.2.15:8090,hostfwd=tcp:127.0.0.1:2222-10.0.2.15:2222 \
+	-device virtio-net-pci,disable-legacy=on,netdev=n0 \
+	-netdev user,id=n1 -device virtio-net-pci,disable-legacy=on,netdev=n1 \
+	-drive file=$(BUILD)/blk.img,if=none,format=raw,id=d0 \
+	-device virtio-blk-pci,disable-legacy=on,drive=d0 \
+	-drive file=$(BUILD)/esp.img,if=none,format=raw,id=esp \
+	-device virtio-blk-pci,disable-legacy=on,drive=esp,bootindex=0 \
+	-device virtio-gpu-pci,disable-legacy=on \
+	-device virtio-keyboard-pci,disable-legacy=on \
+	-device virtio-tablet-pci,disable-legacy=on
+
 FW_OBJS := \
 	$(BUILD)/crt.o \
 	$(BUILD)/uart.o \
@@ -159,7 +177,7 @@ prove: $(BUILD)/esp.img $(BUILD)/blk.img
 	if [ $$st -eq 1 ] || [ $$st -eq 0 ]; then exit 0; fi; exit $$st
 
 run: $(BUILD)/esp.img $(BUILD)/blk.img
-	$(QEMU) $(QEMU_MACHINE) -serial mon:stdio; \
+	$(QEMU) $(QEMU_RUN_MACHINE) -serial mon:stdio; \
 	st=$$?; if [ $$st -eq 1 ] || [ $$st -eq 0 ]; then exit 0; fi; exit $$st
 
 upload: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI

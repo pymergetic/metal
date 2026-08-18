@@ -82,3 +82,8 @@ print("upy process")
 if m.net.ssh.up() != 0:
     raise RuntimeError("ssh up")
 print("upy ssh session")
+
+# Render the module help (the same banner the REPL shows), which proves the
+# packages()/packages_catalog()/search/filter API surface is wired and listed.
+m.help()
+

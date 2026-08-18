@@ -3,6 +3,8 @@
 
 #include "pymergetic/metal/boot.h"
 #include "pymergetic/metal/console.h"
+#include "pymergetic/metal/net/http/asgi.h"
+#include "pymergetic/metal/net/ssh.h"
 #include "ports/micropython/finder.h"
 #include "ports/micropython/importhook.h"
 #include "pymergetic/wasmmod/pyexport.h"
@@ -224,8 +226,12 @@ int pm_metal_firmware_upy(void)
     const char *src;
     unsigned src_len;
     nlr_buf_t nlr;
-#if defined(__arm__) || defined(__ARM_ARCH)
-    /* Luckfox: QEMU CDN is 10.0.2.2 — skip it on hardware. */
+    /* Autoexec choice. The interactive REPL seat ('run', REPL=1) uses the ready
+     * autoexec: it has no CDN fetch, so boot reaches the REPL + auto-served
+     * httpd/sshd regardless of whether any host pack server is up. The prove
+     * seat (REPL=0) runs the full CDN autoexec under the live host CDN. ARM
+     * hardware has no QEMU CDN (10.0.2.2), so it always uses ready. */
+#if defined(__arm__) || defined(__ARM_ARCH) || MICROPY_HELPER_REPL
     src = pm_metal_firmware_upy_ready_py();
     src_len = pm_metal_firmware_upy_ready_py_len();
 #else
@@ -263,6 +269,15 @@ int pm_metal_firmware_upy(void)
     }
 #if MICROPY_HELPER_REPL
     readline_init0();
+    /* Interactive run seat (REPL=1): bring up the inspect httpd (:8090) and the
+     * ssh console (:2222) so the box serves the moment it boots. Both listeners
+     * are idempotent — already-listening is not an error. ANY (0) makes them
+     * accept on the DHCP'd NIC address (10.0.2.15 under QEMU user-net), so the
+     * QEMU hostfwd rules map them to the host. REPL=0 prove seats skip this
+     * block entirely and stay listener-free. */
+    int32_t _http = pm_metal_net_http_asgi_listen(0u, 8090);
+    int32_t _ssh = pm_metal_net_ssh_listen(0u, 2222);
+    mp_printf(&mp_plat_print, "serve httpd=%d ssh=%d\n", (int)_http, (int)_ssh);
     for (;;) {
         /* System REPL: Ctrl-D re-enters. shutdown()/reboot() halt. */
         (void)pyexec_friendly_repl();

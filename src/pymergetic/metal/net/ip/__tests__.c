@@ -102,8 +102,14 @@ static int32_t case_udp_park(void) {
     if (t == NULL) {
         return fail("park task");
     }
-    /* First poll parks on empty recv. */
-    pm_metal_async_poll();
+    /* First poll parks on empty recv. Under SMP a worker may claim the just-
+     * pushed task first, so a single poll() can return before the step runs;
+     * pump until the very first step has settled, then require it parked. */
+    uint32_t settle = 0;
+    while (f->coro.status == PM_METAL_ASYNC_PENDING && settle < 100000u) {
+        pm_metal_async_poll();
+        settle++;
+    }
     if (f->coro.status != PM_METAL_ASYNC_WAITING) {
         return fail("not parked");
     }
@@ -200,7 +206,16 @@ static int32_t case_tcp_accept_park(void) {
     if (t == NULL) {
         return fail("acc task");
     }
-    pm_metal_async_poll();
+    /* A fresh accept on an empty listener must park, not error or complete.
+     * Poll until the coro's very first step has run (status leaves PENDING):
+     * under SMP a worker may beat the caller to the just-pushed task, so a
+     * single poll() can legitimately return before the step happens. The
+     * invariant is the settle: once stepped, it must be parked (WAITING). */
+    uint32_t settle = 0;
+    while (f->coro.status == PM_METAL_ASYNC_PENDING && settle < 100000u) {
+        pm_metal_async_poll();
+        settle++;
+    }
     if (f->coro.status != PM_METAL_ASYNC_WAITING) {
         return fail("acc not parked");
     }

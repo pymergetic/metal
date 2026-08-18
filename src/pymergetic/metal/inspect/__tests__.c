@@ -106,6 +106,41 @@ static int32_t case_http(void) {
     }
     body = NULL;
     n = 0;
+    st = pm_metal_net_http_fetch("http://127.0.0.1:8090/inspect/reg/pymergetic.metal.inspect",
+        &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch reg module");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "\"export_count\"")
+        || !has(body, n, "pm_metal_inspect_handle")) {
+        return fail("fetch reg module body");
+    }
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch(
+        "http://127.0.0.1:8090/inspect/reg/pymergetic.metal.inspect/pm_metal_inspect_handle",
+        &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch reg export");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "\"found\":true")
+        || !has(body, n, "\"kind\":\"fn\"")) {
+        return fail("fetch reg export body");
+    }
+    /* RPC on a resident (native C) module must be refused, not crash. */
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch(
+        "http://127.0.0.1:8090/inspect/call/pymergetic.wasmmod.registry/pm_wasmmod_registry_module_count",
+        &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch rpc resident");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "\"error\":\"native_module\"")) {
+        return fail("fetch rpc resident body");
+    }
+    body = NULL;
+    n = 0;
     st = pm_metal_net_http_fetch("http://127.0.0.1:8090/inspect/index.html", &body, &n, err, sizeof(err));
     if (st != PM_WASMMOD_IO_OK) {
         return fail(err[0] ? err : "fetch www");

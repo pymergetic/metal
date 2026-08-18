@@ -97,11 +97,46 @@ static int32_t case_route(void) {
     return 0;
 }
 
+/* Multi-instance: a second httpd on another port, live count/status/stop, and
+ * a fetch that only the new listener serves (same routes, so /x is asgi). */
+static int32_t case_multi_instance(void) {
+    uint8_t *body = NULL;
+    uint32_t n = 0;
+    char err[64];
+    pm_wasmmod_io_result_t st;
+    int32_t a = pm_metal_net_http_asgi_listen(LO4, ASGI_PORT); /* id 0 dup-safe */
+    if (a != 0 || pm_metal_net_http_asgi_status(0) != 1) {
+        return fail("dup listen");
+    }
+    if (pm_metal_net_http_asgi_count() < 1) {
+        return fail("count");
+    }
+    int32_t b = pm_metal_net_http_asgi_listen(LO4, ASGI_PORT + 1); /* new instance */
+    if (b <= a || pm_metal_net_http_asgi_status(b) != 1) {
+        return fail("listen 2nd");
+    }
+    pm_metal_async_poll();
+    st = pm_metal_net_http_fetch("http://127.0.0.1:8091/x", &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK || n != 4 || body == NULL || memcmp(body, "asgi", 4) != 0) {
+        return fail("fetch 2nd");
+    }
+    if (pm_metal_net_http_asgi_stop(b) != 0 || pm_metal_net_http_asgi_status(b) != 0) {
+        return fail("stop 2nd");
+    }
+    if (pm_metal_net_http_asgi_status(0) != 1) {
+        return fail("stop clobbered first");
+    }
+    return 0;
+}
+
 int32_t pm_metal_net_http_asgi_tests(void) {
     if (case_fetch_default() != 0) {
         return 1;
     }
     if (case_route() != 0) {
+        return 1;
+    }
+    if (case_multi_instance() != 0) {
         return 1;
     }
     return 0;

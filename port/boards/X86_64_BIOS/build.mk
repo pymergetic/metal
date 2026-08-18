@@ -181,8 +181,22 @@ prove: $(BUILD)/metal.qemu.elf $(BUILD)/blk.img
 	grep -q "upy ssh session" $(BUILD)/serial.log || exit 1; \
 	if [ $$st -eq 1 ] || [ $$st -eq 0 ]; then exit 0; fi; exit $$st
 
+# Interactive run seat: same machine as prove but the n0 user-net also hostfwds
+# host loopback -> guest (10.0.2.15 DHCP) so the auto-served httpd/sshd are
+# reachable from the host.
+QEMU_RUN_MACHINE := -machine q35,accel=kvm:tcg -cpu max,-svm -m 256 -smp 4 \
+	-vga none -audio none -display none -device isa-debug-exit,iobase=0x501,iosize=0x02 \
+	-netdev user,id=n0,hostfwd=tcp:127.0.0.1:8090-10.0.2.15:8090,hostfwd=tcp:127.0.0.1:2222-10.0.2.15:2222 \
+	-device virtio-net-pci,disable-legacy=on,netdev=n0 \
+	-netdev user,id=n1 -device virtio-net-pci,disable-legacy=on,netdev=n1 \
+	-drive file=$(BUILD)/blk.img,if=none,format=raw,id=d0 \
+	-device virtio-blk-pci,disable-legacy=on,drive=d0 \
+	-device virtio-gpu-pci,disable-legacy=on \
+	-device virtio-keyboard-pci,disable-legacy=on \
+	-device virtio-tablet-pci,disable-legacy=on
+
 run: $(BUILD)/metal.qemu.elf $(BUILD)/blk.img
-	$(QEMU) $(QEMU_MACHINE) -serial mon:stdio -kernel $(BUILD)/metal.qemu.elf; \
+	$(QEMU) $(QEMU_RUN_MACHINE) -serial mon:stdio -kernel $(BUILD)/metal.qemu.elf; \
 	st=$$?; if [ $$st -eq 1 ] || [ $$st -eq 0 ]; then exit 0; fi; exit $$st
 
 upload: $(BUILD)/metal.qemu.elf

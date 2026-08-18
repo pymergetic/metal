@@ -343,7 +343,7 @@ static void msg_wasm(int last) {
 
 static void msg_repl(int last) {
     (void)last;
-    pm_metal_boot_msg_item(1, 0, 0, "repl", "packages() | help()");
+    pm_metal_boot_msg_item(1, 0, 0, "repl", "import pymergetic.metal as m");
 }
 
 int32_t pm_metal_boot_tree_print(void) {

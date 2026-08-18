@@ -170,6 +170,8 @@ run_unix() {
     build_unix "$tree"
     bin="$(unix_bin "$(unix_root "$tree")")"
     say "$bin"
+    # Interactive run seat: boot straight into serving httpd+sshd. prove/one-shot runs never set this.
+    export METAL_SERVE=1
     exec "$bin"
 }
 

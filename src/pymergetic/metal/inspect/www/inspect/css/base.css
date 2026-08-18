@@ -86,3 +86,56 @@ summary {
   cursor: pointer;
   color: var(--muted);
 }
+.mod-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.25rem 0 0.75rem;
+}
+.mod-btn {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--fg);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  padding: 0.3rem 0.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-size: 0.78rem;
+}
+#rpc-ui {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
+  margin: 0.75rem 0;
+}
+#rpc-ui label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+#rpc-ui input {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+  border: 1px solid color-mix(in srgb, var(--fg) 20%, transparent);
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  min-width: 16rem;
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-size: 0.8rem;
+}
+#rpc-run {
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  padding: 0.55rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+#rpc-out {
+  min-height: 1.5rem;
+  font-size: 0.85rem;
+}
+

@@ -28,6 +28,8 @@
           }
           document.getElementById("role").textContent =
             "role=" + (j.role || "?") + " theme=" + theme;
+          window.__caps = j;
+          renderRpcUi(j);
         } catch (_) {}
       }
     } catch (e) {
@@ -151,4 +153,102 @@
       el.addEventListener("change", loadCompleteness);
     }
   });
+
+  /* ---- Module / func / RPC drive (gate on capabilities) ---- */
+  const rpcUi = document.getElementById("rpc-ui");
+  const rpcModule = document.getElementById("rpc-module");
+  const rpcFunc = document.getElementById("rpc-func");
+  const rpcArg = document.getElementById("rpc-arg");
+  const rpcRun = document.getElementById("rpc-run");
+  const rpcOut = document.getElementById("rpc-out");
+  const navEl = document.getElementById("mod-list");
+
+  function renderRpcUi(caps) {
+    if (!rpcUi) {
+      return;
+    }
+    const canRpc = !!(caps && caps.rpc);
+    rpcUi.style.display = canRpc ? "" : "none";
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function showOut(text, prettyJson) {
+    if (!rpcOut) {
+      return;
+    }
+    try {
+      if (prettyJson) {
+        rpcOut.textContent = JSON.stringify(JSON.parse(text), null, 2);
+        return;
+      }
+    } catch (_) {}
+    rpcOut.textContent = text;
+  }
+
+  async function openModule(fqn) {
+    rpcModule.value = fqn;
+    try {
+      const r = await fetch("reg/" + encodeURIComponent(fqn));
+      showOut(await r.text(), true);
+    } catch (e) {
+      showOut(String(e));
+    }
+  }
+
+  /* Make each module in the completeness JSON a clickable nav link. */
+  async function wireModuleNav() {
+    if (!navEl) {
+      return;
+    }
+    try {
+      const r = await fetch("reg");
+      const j = JSON.parse(await r.text());
+      const mods = j.modules || [];
+      navEl.textContent = "";
+      mods.forEach(function (m) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "mod-btn";
+        btn.textContent = m;
+        btn.addEventListener("click", function () {
+          openModule(m);
+        });
+        navEl.appendChild(btn);
+      });
+    } catch (e) {
+      if (navEl) {
+        navEl.textContent = String(e);
+      }
+    }
+  }
+
+  if (rpcRun && rpcModule && rpcFunc) {
+    rpcRun.addEventListener("click", async function () {
+      const m = rpcModule.value.trim();
+      const f = rpcFunc.value.trim();
+      if (!m || !f) {
+        showOut("error: module and func required");
+        return;
+      }
+      const a0 = rpcArg ? rpcArg.value.trim() : "";
+      try {
+        const r = await fetch(
+          "call/" +
+            encodeURIComponent(m) +
+            "/" +
+            encodeURIComponent(f) +
+            (a0 ? "?a0=" + encodeURIComponent(a0) : "")
+        );
+        showOut(await r.text(), true);
+      } catch (e) {
+        showOut(String(e));
+      }
+    });
+  }
+  await wireModuleNav();
 })();

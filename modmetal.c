@@ -18,6 +18,9 @@
 #include "pymergetic/metal/boot/tree.h"
 #include "pymergetic/metal/util/tree.h"
 #include "pymergetic/metal/drivers/__types__.h"
+#include "pymergetic/metal/net/http/asgi.h"
+#include "pymergetic/metal/net/ssh.h"
+#include "pymergetic/metal/services.h"
 #include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/net/cdn.h"
 
@@ -628,16 +631,22 @@ MP_DEFINE_CONST_FUN_OBJ_KW(mp_metal_builtin_packages_filter_obj, 0, mp_metal_bui
 static mp_obj_t mp_metal_builtin_help(void) {
     mp_printf(&mp_plat_print,
         "MetalPython system REPL (not a process; quit/exit are no-ops here)\n"
-        "  packages()     guest packs + CDN bases\n"
-        "  packages_catalog(channel=...)     full CDN index (µPy json on cdn.fetch_index)\n"
-        "  packages_search(q, channel=...)   pack names containing q\n"
-        "  packages_filter(prefix=..., name_contains=..., kind=..., arch=..., channel=...)\n"
+        "  import pymergetic.metal as m    then call these on m:\n"
+        "  m.packages()     guest packs + CDN bases\n"
+        "  m.packages_catalog(channel=...)     full CDN index (µPy json on cdn.fetch_index)\n"
+        "  m.packages_search(q, channel=...)   pack names containing q\n"
+        "  m.packages_filter(prefix=..., name_contains=..., kind=..., arch=..., channel=...)\n"
         "            filter CDN packs by prefix/name/kind/arch\n"
-        "  help()         this text\n"
-        "  quit([pid]) / exit([pid])  SystemExit in a process; at pid 0 use shutdown()/reboot()\n"
-        "  reboot()       reboot the seat\n"
-        "  shutdown()     halt the seat\n"
-        "  process()      booted module FQNs\n");
+        "  m.capabilities()     µPy dict of host + vendored-Python faces (asgi, ssh, microdot, utemplate)\n"
+        "  m.serve()        start the default instance of every registered service (httpd :8090, sshd :2222) on ANY\n"
+        "  m.services()     list registered services + their live instances (start/stop hints)\n"
+        "  per-module      pymergetic.metal.net.ssh.listen(addr,port)->id / .stop(id) / .status(id) / .count()\n"
+        "                  pymergetic.metal.net.http.asgi.listen(addr,port)->id / .stop(id) / .status(id) / .count()\n"
+        "  m.help()         this text\n"
+        "  m.quit([pid]) / m.exit([pid])  SystemExit in a process; at pid 0 use shutdown()/reboot()\n"
+        "  m.reboot()       reboot the seat\n"
+        "  m.shutdown()     halt the seat\n"
+        "  m.process()      booted module FQNs\n");
     return mp_const_none;
 }
 MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_help_obj, mp_metal_builtin_help);
@@ -675,6 +684,82 @@ static mp_obj_t mp_metal_builtin_process(void) {
 }
 MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_process_obj, mp_metal_builtin_process);
 
+/* Python hook for the vendored-Python + host capability surface (/capabilities
+ * JSON, but as a live µPy dict). Advertises the asgi/ssh/microdot/utemplate
+ * faces so a REPL script can gate on them without an HTTP round-trip. */
+static mp_obj_t mp_metal_builtin_capabilities(void) {
+    mp_obj_t d = mp_obj_new_dict(16);
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("role")), MP_OBJ_NEW_QSTR(qstr_from_str("metal")));
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("theme")), MP_OBJ_NEW_QSTR(qstr_from_str("metal")));
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("asgi")), mp_const_true);
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("microdot")), mp_const_true);
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("fastapi")), mp_const_false);
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("utemplate")), mp_const_true);
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("ssh_kex")), mp_const_true);
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("ssh_auth")), mp_const_false);
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("vfs_static")), mp_const_false);
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("static_embed")), mp_const_true);
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("static_backend")), MP_OBJ_NEW_QSTR(qstr_from_str("embed")));
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("rpc")), mp_const_true);
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("rpc_i64")), mp_const_true);
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("rpc_f32")), mp_const_false);
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(qstr_from_str("rpc_f64")), mp_const_false);
+    return d;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_capabilities_obj, mp_metal_builtin_capabilities);
+
+/* m.serve(): data-driven convenience — start the default instance of every
+ * registered service (ssh :2222, httpd :8090, ...). `serve` is just a walk of
+ * the services registry; adding a service card auto-extends it. */
+static mp_obj_t mp_metal_builtin_serve(void) {
+    uint32_t n = pm_metal_services_count();
+    uint32_t i;
+    int started = 0;
+    metal_ensure();
+    for (i = 0; i < n; i++) {
+        const char *name = pm_metal_services_name(i);
+        uint16_t port = pm_metal_services_port(i);
+        int32_t id = pm_metal_services_start(i);
+        started += (id >= 0);
+        mp_printf(&mp_plat_print, "+-- %-6s %s :%u (id=%d)\n", name ? name : "?",
+            (id >= 0) ? "on " : "err", (unsigned)port, (int)id);
+    }
+    (void)started;
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_serve_obj, mp_metal_builtin_serve);
+
+/* m.services(): enumerate registered service types, print their live instances
+ * (via count/status) and the start/stop hint. Registration-driven, so a new
+ * server card shows up here with no help/serve edit. */
+static mp_obj_t mp_metal_builtin_services(void) {
+    uint32_t n = pm_metal_services_count();
+    uint32_t i;
+    metal_ensure();
+    if (n == 0) {
+        mp_printf(&mp_plat_print, "  no services registered\n");
+        return mp_const_none;
+    }
+    for (i = 0; i < n; i++) {
+        const char *name = pm_metal_services_name(i);
+        const char *fqn = pm_metal_services_fqn(i);
+        uint16_t port = pm_metal_services_port(i);
+        uint32_t live = pm_metal_services_instances(i);
+        const char *shortmod = fqn ? fqn : "m";
+        mp_printf(&mp_plat_print, "  %-6s %s :%u  %u instance(s)\n",
+            name ? name : "?", (live > 0) ? "up  " : "down", (unsigned)port, (unsigned)live);
+        if (live > 0) {
+            mp_printf(&mp_plat_print, "          stop: %s.stop(<id>)\n", shortmod);
+        } else {
+            mp_printf(&mp_plat_print, "          start: %s.listen(0x0, %u)\n", shortmod,
+                (unsigned)port);
+        }
+    }
+    mp_printf(&mp_plat_print, "  m.serve()  start the default instance of every service above\n");
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_services_obj, mp_metal_builtin_services);
+
 static const mp_rom_map_elem_t mp_module_pymergetic_metal_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_pymergetic_dot_metal) },
     { MP_ROM_QSTR(MP_QSTR___init__), MP_ROM_PTR(&metal___init___obj) },
@@ -688,6 +773,9 @@ static const mp_rom_map_elem_t mp_module_pymergetic_metal_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_packages_catalog), MP_ROM_PTR(&mp_metal_builtin_packages_catalog_obj) },
     { MP_ROM_QSTR(MP_QSTR_packages_search), MP_ROM_PTR(&mp_metal_builtin_packages_search_obj) },
     { MP_ROM_QSTR(MP_QSTR_packages_filter), MP_ROM_PTR(&mp_metal_builtin_packages_filter_obj) },
+    { MP_ROM_QSTR(MP_QSTR_capabilities), MP_ROM_PTR(&mp_metal_builtin_capabilities_obj) },
+    { MP_ROM_QSTR(MP_QSTR_serve), MP_ROM_PTR(&mp_metal_builtin_serve_obj) },
+    { MP_ROM_QSTR(MP_QSTR_services), MP_ROM_PTR(&mp_metal_builtin_services_obj) },
     { MP_ROM_QSTR(MP_QSTR_help), MP_ROM_PTR(&mp_metal_builtin_help_obj) },
 };
 static MP_DEFINE_CONST_DICT(mp_module_pymergetic_metal_globals, mp_module_pymergetic_metal_globals_table);

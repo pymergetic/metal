@@ -566,4 +566,24 @@ int32_t pm_metal_net_ssh_tests(void) {
     return 0;
 }
 
+/* Multi-instance: a second sshd on another port coexists; status/stop per id. */
+static int32_t pm_metal_net_ssh_multi_tests(void) {
+    int32_t a = pm_metal_net_ssh_listen(LO4, SSH_PORT); /* id 0, dup-safe */
+    if (a != 0 || pm_metal_net_ssh_status(0) != 1) {
+        return fail("dup listen");
+    }
+    int32_t b = pm_metal_net_ssh_listen(LO4, SSH_PORT + 1);
+    if (b <= a || pm_metal_net_ssh_status(b) != 1 || pm_metal_net_ssh_count() < 1) {
+        return fail("listen 2nd");
+    }
+    if (pm_metal_net_ssh_stop(b) != 0 || pm_metal_net_ssh_status(b) != 0) {
+        return fail("stop 2nd");
+    }
+    if (pm_metal_net_ssh_status(0) != 1) {
+        return fail("stop clobbered first");
+    }
+    return 0;
+}
+
 PM_MOD_TEST_C(pymergetic.metal.net.ssh, tests, pm_metal_net_ssh_tests);
+PM_MOD_TEST_C(pymergetic.metal.net.ssh, multi_instance, pm_metal_net_ssh_multi_tests);

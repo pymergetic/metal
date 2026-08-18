@@ -18,6 +18,7 @@ const ERROR: i32 = 4;
 const ACCEPT_WAIT: i32 = -2;
 const MAX_ROUTE: usize = 24;
 const MAX_CONN: usize = 4;
+const MAX_ASGI: usize = 4;
 const RX_MAX: usize = 1024;
 const HDR_MAX: usize = 160;
 const BODY_MAX: usize = 16384;
@@ -58,6 +59,22 @@ unsafe extern "C" {
         frame_bytes: usize,
     ) -> *mut pm_metal_async_coro_t;
     fn pm_metal_async_create_task(coro: *mut pm_metal_async_coro_t) -> *mut pm_metal_async_task_t;
+    fn pm_metal_services_register(rec: *const pm_metal_service_t) -> i32;
+}
+
+/// C mirror of `pm_metal_service_t` (services __types__.h). The asgi RS card
+/// self-registers one here so `m.serve()` / `m.services()` see it; the record
+/// is shared C-ABI with the services registry in Metal.
+#[repr(C)]
+struct pm_metal_service_t {
+    name: *const u8,
+    fqn: *const u8,
+    default_addr: u32,
+    default_port: u16,
+    listen: unsafe extern "C" fn(u32, u16) -> i32,
+    count: unsafe extern "C" fn() -> u32,
+    status: unsafe extern "C" fn(i32) -> i32,
+    stop: unsafe extern "C" fn(i32) -> i32,
 }
 
 #[derive(Clone, Copy)]
@@ -91,7 +108,13 @@ struct Mut<T>(UnsafeCell<T>);
 unsafe impl<T> Sync for Mut<T> {}
 
 static ARENA: Mut<*mut pm_util_mem_arena_t> = Mut(UnsafeCell::new(ptr::null_mut()));
-static LISTEN_FD: Mut<i32> = Mut(UnsafeCell::new(-1));
+static LISTEN_FDS: Mut<[i32; MAX_ASGI]> = Mut(UnsafeCell::new([-1; MAX_ASGI]));
+static LISTEN_ADDRS: Mut<[u32; MAX_ASGI]> = Mut(UnsafeCell::new([0; MAX_ASGI]));
+static LISTEN_PORTS: Mut<[u16; MAX_ASGI]> = Mut(UnsafeCell::new([0; MAX_ASGI]));
+
+unsafe fn listen_fds() -> *mut i32 {
+    LISTEN_FDS.0.get() as *mut i32
+}
 static ROUTES: Mut<[Route; MAX_ROUTE]> = Mut(UnsafeCell::new([Route {
     used: false,
     method: [0; 8],
@@ -115,6 +138,19 @@ static CONNS: Mut<[Conn; MAX_CONN]> = Mut(UnsafeCell::new([Conn {
     body_len: 0,
 }; MAX_CONN]));
 static DEFAULT_BODY: &[u8] = b"asgi";
+
+/// Self-registration record: httpd default on ANY :8090, driven through the
+/// asgi multi-instance listen/count/status/stop exports.
+static HTTPD_SVC: Mut<pm_metal_service_t> = Mut(UnsafeCell::new(pm_metal_service_t {
+    name: b"httpd\0".as_ptr(),
+    fqn: b"pymergetic.metal.net.http.asgi\0".as_ptr(),
+    default_addr: 0,
+    default_port: 8090,
+    listen: pm_metal_net_http_asgi_listen,
+    count: pm_metal_net_http_asgi_count,
+    status: pm_metal_net_http_asgi_status,
+    stop: pm_metal_net_http_asgi_stop,
+}));
 
 unsafe fn routes() -> &'static mut [Route; MAX_ROUTE] {
     unsafe { &mut *ROUTES.0.get() }
@@ -150,6 +186,24 @@ fn cstr_eq(stored: &[u8], got: &[u8]) -> bool {
     n == got.len() && stored[..n] == got[..]
 }
 
+/// Route match. A stored route ending in `*` is a prefix wildcard (no
+/// trailing-slash requirement): the handler still receives the full request
+/// path, so the C face can parse `/inspect/reg/<module>/<func>` segments and
+/// page/query params itself. Everything else is an exact match.
+fn path_matches(stored: &[u8], got: &[u8]) -> bool {
+    let mut n = 0usize;
+    while n < stored.len() && stored[n] != 0 {
+        n += 1;
+    }
+    let prefix = &stored[..n];
+    if prefix.len() >= 2 && prefix[prefix.len() - 1] == b'*' && prefix[prefix.len() - 2] == b'/' {
+        let base = &prefix[..prefix.len() - 1];
+        got.len() >= base.len() && got[..base.len()] == base[..]
+    } else {
+        n == got.len() && prefix == got
+    }
+}
+
 fn find_headers_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4)
 }
@@ -180,7 +234,7 @@ fn lookup_into(c: &mut Conn, method: &[u8], path: &[u8]) {
     let match_path = path_only(path);
     unsafe {
         for r in routes().iter() {
-            if !(r.used && cstr_eq(&r.method, method) && cstr_eq(&r.path, match_path)) {
+            if !(r.used && cstr_eq(&r.method, method) && path_matches(&r.path, match_path)) {
                 continue;
             }
             if let Some(h) = r.handler {
@@ -423,10 +477,40 @@ fn spawn_conn(fd: i32) -> i32 {
 #[repr(C)]
 struct ListenFrame {
     _coro: CoroHead,
+    slot: u32,
 }
 
-unsafe extern "C" fn step_listen(_self: *mut pm_metal_async_coro_t) -> i32 {
-    let fd = unsafe { *LISTEN_FD.0.get() };
+unsafe fn listen_at(slot: usize) -> i32 {
+    unsafe { *listen_fds().add(slot) }
+}
+unsafe fn listen_at_set(slot: usize, v: i32) {
+    unsafe { *listen_fds().add(slot) = v; }
+}
+unsafe fn listen_addrs() -> *mut u32 {
+    LISTEN_ADDRS.0.get() as *mut u32
+}
+unsafe fn listen_ports() -> *mut u16 {
+    LISTEN_PORTS.0.get() as *mut u16
+}
+unsafe fn listen_addr_set(slot: usize, addr: u32, port: u16) {
+    unsafe {
+        *listen_addrs().add(slot) = addr;
+        *listen_ports().add(slot) = port;
+    }
+}
+unsafe fn listen_same(slot: usize, addr: u32, port: u16) -> bool {
+    unsafe {
+        listen_at(slot) >= 0 && *listen_addrs().add(slot) == addr && *listen_ports().add(slot) == port
+    }
+}
+
+unsafe extern "C" fn step_listen(self_: *mut pm_metal_async_coro_t) -> i32 {
+    let f = self_ as *mut ListenFrame;
+    let slot = unsafe { (*f).slot as usize };
+    if slot >= MAX_ASGI {
+        return ERROR;
+    }
+    let fd = unsafe { listen_at(slot) };
     if fd < 0 {
         return ERROR;
     }
@@ -451,13 +535,18 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_init(arena: *mut pm_util_mem_are
     }
     unsafe {
         *ARENA.0.get() = arena;
-        *LISTEN_FD.0.get() = -1;
+        for slot in 0..MAX_ASGI {
+            listen_at_set(slot, -1);
+            listen_addr_set(slot, 0, 0);
+        }
         for r in routes().iter_mut() {
             r.used = false;
         }
         for c in conns().iter_mut() {
             c.used = false;
         }
+        // Self-register the httpd service so m.serve()/m.services() see it.
+        pm_metal_services_register(HTTPD_SVC.0.get() as *const pm_metal_service_t);
     }
     0
 }
@@ -465,10 +554,12 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_init(arena: *mut pm_util_mem_are
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pm_metal_net_http_asgi_deinit() {
     unsafe {
-        let fd = *LISTEN_FD.0.get();
-        if fd >= 0 {
-            pm_metal_net_ip_close(fd);
-            *LISTEN_FD.0.get() = -1;
+        for slot in 0..MAX_ASGI {
+            let fd = listen_at(slot);
+            if fd >= 0 {
+                pm_metal_net_ip_close(fd);
+            }
+            listen_at_set(slot, -1);
         }
         *ARENA.0.get() = ptr::null_mut();
         for c in conns().iter_mut() {
@@ -571,23 +662,69 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_listen(addr: u32, port: u16) -> 
         if (*ARENA.0.get()).is_null() {
             return -1;
         }
-        if *LISTEN_FD.0.get() >= 0 {
-            return 0;
-        }
-        let fd = pm_metal_net_ip_socket(SOCK_STREAM);
-        if fd < 0 || pm_metal_net_ip_bind(fd, addr, port) != 0 || pm_metal_net_ip_listen(fd, 4) != 0
-        {
-            if fd >= 0 {
-                pm_metal_net_ip_close(fd);
+        for slot in 0..MAX_ASGI {
+            // Idempotent: an existing instance on this exact addr:port is it.
+            if listen_same(slot, addr, port) {
+                return slot as i32;
             }
-            return -1;
+            if listen_at(slot) >= 0 {
+                continue;
+            }
+            let fd = pm_metal_net_ip_socket(SOCK_STREAM);
+            if fd < 0 || pm_metal_net_ip_bind(fd, addr, port) != 0
+                || pm_metal_net_ip_listen(fd, 4) != 0
+            {
+                if fd >= 0 {
+                    pm_metal_net_ip_close(fd);
+                }
+                return -1;
+            }
+            listen_at_set(slot, fd);
+            listen_addr_set(slot, addr, port);
+            let coro = pm_metal_async_coro_create(step_listen, core::mem::size_of::<ListenFrame>());
+            if coro.is_null() || pm_metal_async_create_task(coro).is_null() {
+                pm_metal_net_ip_close(fd);
+                listen_at_set(slot, -1);
+                return -1;
+            }
+            (*(coro as *mut ListenFrame)).slot = slot as u32;
+            return slot as i32;
         }
-        *LISTEN_FD.0.get() = fd;
-        let coro = pm_metal_async_coro_create(step_listen, core::mem::size_of::<ListenFrame>());
-        if coro.is_null() || pm_metal_async_create_task(coro).is_null() {
-            pm_metal_net_ip_close(fd);
-            *LISTEN_FD.0.get() = -1;
-            return -1;
+    }
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pm_metal_net_http_asgi_count() -> u32 {
+    unsafe {
+        let mut n = 0u32;
+        for slot in 0..MAX_ASGI {
+            if listen_at(slot) >= 0 {
+                n += 1;
+            }
+        }
+        n
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pm_metal_net_http_asgi_status(id: i32) -> i32 {
+    if id < 0 || id as usize >= MAX_ASGI {
+        return -1;
+    }
+    unsafe { if listen_at(id as usize) >= 0 { 1 } else { 0 } }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pm_metal_net_http_asgi_stop(id: i32) -> i32 {
+    if id < 0 || id as usize >= MAX_ASGI {
+        return -1;
+    }
+    unsafe {
+        if listen_at(id as usize) >= 0 {
+            pm_metal_net_ip_close(listen_at(id as usize));
+            listen_at_set(id as usize, -1);
+            listen_addr_set(id as usize, 0, 0);
         }
     }
     0
@@ -622,6 +759,21 @@ pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",
     pm_metal_net_http_asgi_listen,
     "int32_t(uint32_t, uint16_t)"
+);
+pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
+    "pymergetic.metal.net.http.asgi",
+    pm_metal_net_http_asgi_count,
+    "uint32_t(void)"
+);
+pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
+    "pymergetic.metal.net.http.asgi",
+    pm_metal_net_http_asgi_status,
+    "int32_t(int32_t)"
+);
+pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
+    "pymergetic.metal.net.http.asgi",
+    pm_metal_net_http_asgi_stop,
+    "int32_t(int32_t)"
 );
 pymergetic_wasmmod::PM_MOD_BOOT_RS!(
     "pymergetic.metal.net.http.asgi",

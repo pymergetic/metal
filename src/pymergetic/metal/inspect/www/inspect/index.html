@@ -45,6 +45,25 @@
         <pre id="reg"></pre>
       </details>
     </section>
+    <section>
+      <h2>Modules &amp; RPC</h2>
+      <p class="hint">Click a module to list its exports; drill a func detail; invoke a
+        container (wasm/aot/elf) export when the device advertises <code>rpc</code>.</p>
+      <div id="mod-list" class="mod-list"></div>
+      <div id="rpc-ui" style="display:none">
+        <label>module
+          <input type="text" id="rpc-module" placeholder="pymergetic.metal.inspect" />
+        </label>
+        <label>func
+          <input type="text" id="rpc-func" placeholder="pm_metal_inspect_handle" />
+        </label>
+        <label>arg (i32:N or i64:N)
+          <input type="text" id="rpc-arg" placeholder="" />
+        </label>
+        <button type="button" id="rpc-run">Call</button>
+      </div>
+      <pre id="rpc-out"></pre>
+    </section>
   </main>
   <script src="js/inspect.js"></script>
 </body>
