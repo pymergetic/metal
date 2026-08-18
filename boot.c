@@ -11,9 +11,11 @@
 #include "ports/micropython/importhook.h"
 #include "pymergetic/metal/boot.h"
 #include "pymergetic/metal/boot/__types__.h"
+#include "pymergetic/metal/async/__exports__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/io.h"
 #include "pymergetic/wasmmod/net/cdn.h"
+#include "pymergetic/wasmmod/registry/__exports__.h"
 #include "py/mpstate.h"
 #include "py/obj.h"
 
@@ -140,6 +142,11 @@ void pm_metal_upy_port_init(void) {
     if (pm_metal_boot() != 0) {
         fputs("metal boot failed\n", stderr);
     }
+    /* Give the seat a bench clock so wm.bench_all()/wm.bench() report ns/op
+     * instead of "no clock". Benches are informational and never gate; without
+     * this a bench just stays honest. The clock is the async mono_us the
+     * host bench binary already installs by hand. */
+    pm_wasmmod_registry_set_bench_clock(pm_metal_async_mono_us);
     mp_wasm_port_init();
 #if MICROPY_PY_SYS_PS1_PS2
     {

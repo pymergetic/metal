@@ -26,6 +26,11 @@ WASMMOD_CARGO_LIB := pymergetic_metal
 
 CFLAGS_EXTMOD += -DMICROPY_PY_METAL=1
 CFLAGS_EXTMOD += -include $(TOP)/extmod/metal/mpconfig_unix.h
+# Blown-in `__bench__.c` cards self-register benches into the registry behind
+# the same `-DPM_MOD_BENCHES=1` the host bench binary uses. Benches never gate;
+# the seat's bench clock (metal mono_us, installed at boot) decides whether a
+# REPL call to wm.bench_all() reports ns/op or an honest "no clock".
+CFLAGS_EXTMOD += -DPM_MOD_BENCHES=1
 INC += -I$(TOP)/extmod/metal/src
 
 # wg X25519 + net.tls use vendored mbedtls. Unix SSL already compiles it;
