@@ -4,6 +4,7 @@
 
 #include "pymergetic/metal/boot/__types__.h"
 #include "pymergetic/metal/console.h"
+#include "pymergetic/metal/services.h"
 #include "pymergetic/metal/util/ascii.h"
 #include "pymergetic/metal/util/tree.h"
 #include "pymergetic/wasmmod/boot.h"
@@ -342,8 +343,34 @@ static void msg_wasm(int last) {
 }
 
 static void msg_repl(int last) {
+    /* Interactive hint on the MOTD surface: list every registered service with
+     * its default port and a run sample, plus how many live instances exist.
+     * `m.serve()` starts the default instance of all of them on ANY. */
+    char detail[192];
+    unsigned off = 0;
+    uint32_t n = pm_metal_services_count();
+    uint32_t i;
     (void)last;
-    pm_metal_boot_msg_item(1, 0, 0, "repl", "import pymergetic.metal as m");
+    /* Fits: "import pymergetic.metal as m  run m.serve() -> ssh:2222 asgi:8090" */
+    off += (unsigned)snprintf(detail + off, sizeof(detail) - off,
+        "import pymergetic.metal as m" PM_METAL_BOOT_SGR_DIM "  run m.serve() ->"
+        PM_METAL_BOOT_SGR_RST);
+    for (i = 0; i < n && off + 24u < sizeof(detail); i++) {
+        const char *name = pm_metal_services_name(i);
+        uint16_t port = pm_metal_services_port(i);
+        uint32_t up = pm_metal_services_instances(i);
+        if (name == NULL) {
+            continue;
+        }
+        off += (unsigned)snprintf(detail + off, sizeof(detail) - off,
+            " " PM_METAL_BOOT_SGR_SIM "%s:%u" PM_METAL_BOOT_SGR_RST,
+            name, (unsigned)port);
+        if (up > 0u) {
+            off += (unsigned)snprintf(detail + off, sizeof(detail) - off,
+                PM_METAL_BOOT_SGR_OK "(%u up)" PM_METAL_BOOT_SGR_RST, up);
+        }
+    }
+    pm_metal_boot_msg_item(1, 0, 0, "repl", detail);
 }
 
 int32_t pm_metal_boot_tree_print(void) {
