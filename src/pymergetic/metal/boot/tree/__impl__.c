@@ -5,6 +5,7 @@
 #include "pymergetic/metal/boot/__types__.h"
 #include "pymergetic/metal/console.h"
 #include "pymergetic/metal/util/ascii.h"
+#include "pymergetic/metal/util/tree.h"
 #include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/registry.h"
 
@@ -12,18 +13,19 @@
 #include <stdio.h>
 #include <string.h>
 
-#define PM_METAL_BOOT_TREE_NAME_PAD 13
-#define PM_METAL_BOOT_TREE_LINE 384
 #define PM_METAL_BOOT_TREE_VERSION "0.1.0"
 #define PM_METAL_BOOT_UTIL_MAX 16
 #define PM_METAL_BOOT_UTIL_NAME 24
-#define PM_METAL_BOOT_SGR_DIM "\033[2m"
-#define PM_METAL_BOOT_SGR_OK "\033[32m"
-#define PM_METAL_BOOT_SGR_SIM "\033[36m"
-#define PM_METAL_BOOT_SGR_FAIL "\033[31m"
-#define PM_METAL_BOOT_SGR_WARN "\033[33m"
-#define PM_METAL_BOOT_SGR_RST "\033[0m"
 #define PM_METAL_BOOT_MSG_MAX 16
+
+/* Style shorthand used by motd/shutdown/print — the shared palettes from the
+ * pymergetic.metal.util.tree card (the only place SGR codes are defined). */
+#define PM_METAL_BOOT_SGR_DIM PM_METAL_UTIL_TREE_SGR_DIM
+#define PM_METAL_BOOT_SGR_OK PM_METAL_UTIL_TREE_SGR_OK
+#define PM_METAL_BOOT_SGR_SIM PM_METAL_UTIL_TREE_SGR_SIM
+#define PM_METAL_BOOT_SGR_FAIL PM_METAL_UTIL_TREE_SGR_FAIL
+#define PM_METAL_BOOT_SGR_WARN PM_METAL_UTIL_TREE_SGR_WARN
+#define PM_METAL_BOOT_SGR_RST PM_METAL_UTIL_TREE_SGR_RST
 
 #if !defined(PM_METAL_FIRMWARE) && !defined(__EMSCRIPTEN__)
 int execv(const char *path, char *const argv[]);
@@ -119,143 +121,12 @@ static uint32_t collect_surf(uint32_t surf, pm_metal_boot_msg_fn *out, uint32_t 
     return n;
 }
 
-static int token_is(const char *s, unsigned n, const char *w) {
-    unsigned i = 0;
-    if (w == NULL) {
-        return 0;
-    }
-    while (w[i] != 0) {
-        if (i >= n || s[i] != w[i]) {
-            return 0;
-        }
-        i++;
-    }
-    return i == n;
-}
-
-static void paint_detail(char *dst, unsigned cap, const char *detail) {
-    unsigned oi = 0;
-    const char *p;
-    if (dst == NULL || cap == 0) {
-        return;
-    }
-    dst[0] = 0;
-    if (detail == NULL) {
-        return;
-    }
-    p = detail;
-    while (p[0] != 0 && oi + 24u < cap) {
-        const char *tok;
-        unsigned n;
-        const char *col;
-        if (p[0] == ' ') {
-            dst[oi++] = *p++;
-            continue;
-        }
-        tok = p;
-        while (p[0] != 0 && p[0] != ' ') {
-            p++;
-        }
-        n = (unsigned)(p - tok);
-        col = NULL;
-        if (token_is(tok, n, "ok")) {
-            col = PM_METAL_BOOT_SGR_OK;
-        } else if (token_is(tok, n, "sim")) {
-            col = PM_METAL_BOOT_SGR_SIM;
-        } else if (token_is(tok, n, "FAIL")) {
-            col = PM_METAL_BOOT_SGR_FAIL;
-        }
-        if (col != NULL) {
-            unsigned cl = 0;
-            unsigned rl = 0;
-            while (col[cl] != 0) {
-                cl++;
-            }
-            while (PM_METAL_BOOT_SGR_RST[rl] != 0) {
-                rl++;
-            }
-            if (oi + cl + n + rl >= cap) {
-                break;
-            }
-            memcpy(dst + oi, col, cl);
-            oi += cl;
-            memcpy(dst + oi, tok, n);
-            oi += n;
-            memcpy(dst + oi, PM_METAL_BOOT_SGR_RST, rl);
-            oi += rl;
-        } else {
-            if (oi + n >= cap) {
-                break;
-            }
-            memcpy(dst + oi, tok, n);
-            oi += n;
-        }
-    }
-    if (oi < cap) {
-        dst[oi] = 0;
-    } else {
-        dst[cap - 1u] = 0;
-    }
-}
-
+/* The node renderer lives in the shared pymergetic.metal.util.tree card. It
+ * draws the same dim `+--`/`` `-- `` glyphs, pads depth-0 names, and colors
+ * `ok`:green, `sim`:cyan, `FAIL`:red tokens — but it supports arbitrary depth,
+ * so a boot card could attach a 4-level branch cleanly too. */
 void pm_metal_boot_msg_item(int last, int depth, int parent_cont, const char *name, const char *detail) {
-    char line[PM_METAL_BOOT_TREE_LINE];
-    char painted[160];
-    unsigned nlen = 0;
-    const char *br = last ? "`--" : "+--";
-    if (name == NULL) {
-        name = "?";
-    }
-    while (name[nlen] != 0) {
-        nlen++;
-    }
-    paint_detail(painted, sizeof(painted), detail);
-    if (depth == 0) {
-        if (detail != NULL && detail[0] != 0 && nlen < PM_METAL_BOOT_TREE_NAME_PAD) {
-            char padded[PM_METAL_BOOT_TREE_NAME_PAD + 1];
-            unsigned p;
-            for (p = 0; p < PM_METAL_BOOT_TREE_NAME_PAD; p++) {
-                padded[p] = (p < nlen) ? name[p] : ' ';
-            }
-            padded[PM_METAL_BOOT_TREE_NAME_PAD] = 0;
-            snprintf(line, sizeof(line), "%s%s %s%s%s", PM_METAL_BOOT_SGR_DIM, br, padded,
-                PM_METAL_BOOT_SGR_RST, painted);
-        } else if (detail != NULL && detail[0] != 0) {
-            snprintf(line, sizeof(line), "%s%s %s %s%s", PM_METAL_BOOT_SGR_DIM, br, name,
-                PM_METAL_BOOT_SGR_RST, painted);
-        } else {
-            snprintf(line, sizeof(line), "%s%s %s%s", PM_METAL_BOOT_SGR_DIM, br, name,
-                PM_METAL_BOOT_SGR_RST);
-        }
-    } else if (depth == 1) {
-        const char *pad = parent_cont ? "|   " : "    ";
-        if (detail != NULL && detail[0] != 0) {
-            snprintf(line, sizeof(line), "%s%s%s %s  %s%s", PM_METAL_BOOT_SGR_DIM, pad, br, name,
-                PM_METAL_BOOT_SGR_RST, painted);
-        } else {
-            snprintf(line, sizeof(line), "%s%s%s %s%s", PM_METAL_BOOT_SGR_DIM, pad, br, name,
-                PM_METAL_BOOT_SGR_RST);
-        }
-    } else if (depth == 2) {
-        const char *stem = parent_cont ? "|   " : "    ";
-        if (detail != NULL && detail[0] != 0) {
-            snprintf(line, sizeof(line), "%s|   %s%s %s  %s%s", PM_METAL_BOOT_SGR_DIM, stem, br, name,
-                PM_METAL_BOOT_SGR_RST, painted);
-        } else {
-            snprintf(line, sizeof(line), "%s|   %s%s %s%s", PM_METAL_BOOT_SGR_DIM, stem, br, name,
-                PM_METAL_BOOT_SGR_RST);
-        }
-    } else {
-        const char *fam = parent_cont ? "|   " : "    ";
-        if (detail != NULL && detail[0] != 0) {
-            snprintf(line, sizeof(line), "%s|   |   %s%s %s  %s%s", PM_METAL_BOOT_SGR_DIM, fam, br,
-                name, PM_METAL_BOOT_SGR_RST, painted);
-        } else {
-            snprintf(line, sizeof(line), "%s|   |   %s%s %s%s", PM_METAL_BOOT_SGR_DIM, fam, br, name,
-                PM_METAL_BOOT_SGR_RST);
-        }
-    }
-    pm_metal_boot_msg_line(line);
+    pm_metal_util_tree_item(last, depth, parent_cont, name, detail);
 }
 
 static void walk(uint32_t surf) {
@@ -627,3 +498,4 @@ PM_METAL_BOOT_MSG_C(PM_METAL_BOOT_SURF_MOTD, PM_METAL_BOOT_MSG_MOTD_REPL, msg_re
 
 PM_MOD_BOOT_C(pymergetic.metal.boot.tree, pm_metal_boot_tree_init, pm_metal_boot_tree_deinit);
 PM_MOD_BOOTDEP_C(pymergetic.metal.boot.tree, pymergetic.metal.console);
+PM_MOD_BOOTDEP_C(pymergetic.metal.boot.tree, pymergetic.metal.util.tree);

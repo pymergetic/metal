@@ -16,6 +16,7 @@
 #include "pymergetic/metal/async.h"
 #include "pymergetic/metal/boot/externals.h"
 #include "pymergetic/metal/boot/tree.h"
+#include "pymergetic/metal/util/tree.h"
 #include "pymergetic/metal/drivers/__types__.h"
 #include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/net/cdn.h"
@@ -368,15 +369,14 @@ typedef struct pkg_tree_node {
     struct pkg_tree_node *parent;
     struct pkg_tree_node *next;      /* sibling */
     struct pkg_tree_node *child;     /* first child */
-    const char *label;               /* borrowed: points into the fqn/name */
-    size_t label_len;
+    char label[48];                  /* one dot-segment, NUL-terminated */
     bool has_pack;                   /* a package ends exactly at this node */
     bool is_last;                    /* last sibling (drives "`--" vs "+--") */
 } pkg_tree_node_t;
 
-static pkg_tree_node_t *pkg_tree_find_child(pkg_tree_node_t *n, const char *label, size_t len) {
+static pkg_tree_node_t *pkg_tree_find_child(pkg_tree_node_t *n, const char *label) {
     for (pkg_tree_node_t *c = n->child; c != NULL; c = c->next) {
-        if (c->label_len == len && memcmp(c->label, label, len) == 0) {
+        if (strcmp(c->label, label) == 0) {
             return c;
         }
     }
@@ -387,17 +387,23 @@ static pkg_tree_node_t *pkg_tree_insert(pkg_tree_node_t *root, const char *fqn, 
     pkg_tree_node_t *cur = root;
     const char *p = fqn;
     const char *end = fqn + fqn_len;
-    while (p < end) {
-        const char *dot = memchr(p, '.', (size_t)(end - p));
-        size_t plen = (dot == NULL) ? (size_t)(end - p) : (size_t)(dot - p);
-        pkg_tree_node_t *c = pkg_tree_find_child(cur, p, plen);
+    (void)end;
+    while (p[0] != 0) {
+        const char *dot = strchr(p, '.');
+        size_t plen = (dot == NULL) ? strlen(p) : (size_t)(dot - p);
+        char seg[48];
+        if (plen >= sizeof(seg)) {
+            plen = sizeof(seg) - 1u;
+        }
+        memcpy(seg, p, plen);
+        seg[plen] = 0;
+        pkg_tree_node_t *c = pkg_tree_find_child(cur, seg);
         if (c == NULL) {
             c = m_new_obj(pkg_tree_node_t);
             c->parent = cur;
             c->next = NULL;
             c->child = NULL;
-            c->label = p;
-            c->label_len = plen;
+            memcpy(c->label, seg, plen + 1u);
             c->has_pack = false;
             c->is_last = false;
             /* Append to the sibling list. */
@@ -407,9 +413,9 @@ static pkg_tree_node_t *pkg_tree_insert(pkg_tree_node_t *root, const char *fqn, 
             }
             *tail = c;
         }
-        p = p + plen;
-        if (p < end) {
-            p++; /* skip '.' */
+        p += plen;
+        if (p[0] == '.') {
+            p++;
         }
         cur = c;
     }
@@ -429,25 +435,31 @@ static void pkg_tree_mark_last(pkg_tree_node_t *root) {
     }
 }
 
-/* Recursively print the tree. `pad` is the inherited prefix ("|   " / "    ")
- * for ancestors; each child draws its own "-- " branch. */
-static void pkg_tree_print(const pkg_tree_node_t *root, const char *pad) {
+/* Recursively render the tree through the shared boot-tree renderer
+ * (pymergetic.metal.util.tree). `stems` is the exact leading bar run for this
+ * node (a 4-char cell per ancestor: "|   " when that ancestor still has a
+ * sibling to come, "    " when it is last), so non-continuing ancestors draw
+ * blank bars exactly like a hand-drawn box tree — something the boot tree's
+ * single `parent_cont` (deepest-stem-only) model cannot express below depth 2.
+ * `depth` counts from 1 for the children of the reported `cdn` root. */
+static void pkg_tree_print(pkg_tree_node_t *root, char *stems, unsigned stems_len) {
     for (pkg_tree_node_t *c = root->child; c != NULL; c = c->next) {
-        const char *branch = c->is_last ? "`-- " : "+-- ";
-        mp_printf(&mp_plat_print, "%s%s%.*s\n", pad, branch, (int)c->label_len, c->label);
-        char child_pad[128];
-        size_t n = 0;
-        while (pad[n] != '\0' && n + 4 < sizeof(child_pad)) {
-            child_pad[n] = pad[n];
-            n++;
+        pm_metal_util_tree_item_at(c->is_last, stems, c->label, NULL);
+        /* Descend: extend the stem with this node's own continuation cell. */
+        char child_stems[192];
+        unsigned cl = stems_len;
+        unsigned i;
+        for (i = 0; i < stems_len && i < sizeof(child_stems) - 4u; i++) {
+            child_stems[i] = stems[i];
         }
-        /* Extend with "|   " if more siblings follow, else "    ". */
-        const char *continuation = (c->next != NULL) ? "|   " : "    ";
-        for (size_t k = 0; k < 4 && n < sizeof(child_pad) - 1; k++) {
-            child_pad[n++] = continuation[k];
+        const char *cell = c->is_last ? "    " : "|   ";
+        for (i = 0; cell[i] != 0 && cl < sizeof(child_stems) - 1u; i++) {
+            child_stems[cl++] = cell[i];
         }
-        child_pad[n] = '\0';
-        pkg_tree_print(c, child_pad);
+        child_stems[cl] = 0;
+        if (c->child != NULL) {
+            pkg_tree_print(c, child_stems, cl);
+        }
     }
 }
 
@@ -500,12 +512,20 @@ static void packages_print_matches(mp_obj_t packages,
     }
     bool any = (root.child != NULL);
     if (!any) {
-        mp_printf(&mp_plat_print, "`-- cdn          - (no match)\n");
+        pm_metal_util_tree_item(1, 0, 0, "cdn", NULL);
+        pm_metal_util_tree_line("-  (no match)");
         return;
     }
-    mp_printf(&mp_plat_print, "`-- cdn\n");
+    /* Root `cdn` item, then the pack namespace tree starting at column 0. */
     pkg_tree_mark_last(&root);
-    pkg_tree_print(&root, "    ");
+    pm_metal_util_tree_item(1, 0, 0, "cdn", NULL);
+    /* `cdn` is drawn as the last depth-0 root ("`-- cdn"), so its children
+     * sit one empty cell in (no vertical bar continues beneath it) at depth 1,
+     * exactly matching the boot tree's depth-0/depth-1 indentation. */
+    char roots[8];
+    memcpy(roots, "    ", 4u);
+    roots[4] = 0;
+    pkg_tree_print(&root, roots, 4);
 }
 
 static mp_obj_t mp_metal_builtin_packages(void) {
