@@ -335,142 +335,266 @@ static int entry_artifacts_match(mp_obj_t entry, const char *kind, const char *a
     return kind_ok && arch_ok;
 }
 
-/* Optionally folded to a string subcommand:
- *   packages()                 local packs + CDN bases (the REPL tree)
- *   packages("catalog")        full CDN index (parsed with µPy json)
- *   packages("search", q)      pack names containing q (µPy json)
- *   packages("filter", ...)    filter by prefix/name/kind/arch (µPy json)
+/* CDN pack discovery on pymergetic.metal, folded to a µPy-native fill:
+ *   packages()            local packs + CDN bases (the REPL tree)
+ *   packages_catalog(...) full CDN index
+ *   packages_search(q)    pack names containing q
+ *   packages_filter(...)  filter by prefix/name/kind/arch
  * Every µPy seat has the json module and cdn.fetch_index, so this fold is a
  * µPy-native fill over the same CDN index — no serde is dragged into any µPy
  * or firmware build. The Rust net.search card stays the C/RS host face. */
-static mp_obj_t mp_metal_builtin_packages(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
-    uint32_t n;
-    uint32_t i;
-    uint32_t nbase;
-    const char *sub;
-    const char *channel = "lead";
-    const char *q = NULL;
-    const char *prefix = NULL;
-    const char *name_contains = NULL;
-    const char *kind = NULL;
-    const char *arch = NULL;
-    enum {
-        ARG_sub, ARG_q, ARG_prefix, ARG_name_contains, ARG_kind, ARG_arch, ARG_channel
-    };
-    static const mp_arg_t allowed_args[] = {
-        { MP_QSTR_sub, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
-        { MP_QSTR_q, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
-        { MP_QSTR_prefix, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
-        { MP_QSTR_name_contains, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
-        { MP_QSTR_kind, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
-        { MP_QSTR_arch, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
-        { MP_QSTR_channel, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
-    };
-    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
-    mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+/* Fetch the CDN index for `channel` and return the parsed `packages` dict. */
+static mp_obj_t packages_load_channel(const char *channel) {
+    mp_obj_t pg = mp_import_name(qstr_from_str("pymergetic"), mp_const_none,
+        MP_OBJ_NEW_SMALL_INT(0));
+    mp_obj_t wm = mp_load_attr(pg, qstr_from_str("wasmmod"));
+    mp_obj_t net = mp_load_attr(wm, qstr_from_str("net"));
+    mp_obj_t cdnmod = mp_load_attr(net, qstr_from_str("cdn"));
+    mp_obj_t fetch = mp_load_attr(cdnmod, qstr_from_str("fetch_index"));
+    mp_obj_t bytes = mp_call_function_1(fetch, mp_obj_new_str(channel, strlen(channel)));
+    mp_obj_t json_mod = mp_import_name(qstr_from_str("json"), mp_const_none,
+        MP_OBJ_NEW_SMALL_INT(0));
+    mp_obj_t loads = mp_load_attr(json_mod, qstr_from_str("loads"));
+    mp_obj_t doc = mp_call_function_1(loads, bytes);
+    return mp_obj_dict_get(doc, MP_OBJ_NEW_QSTR(qstr_from_str("packages")));
+}
+
+/* Print every name in the packages dict that survives the given filters.
+ * A NULL filter is treated as already-ok (mirrors the RS search card). */
+/* Node in the dotted-FQN print tree. Equal names coalesce (a package and the
+ * folder that parents deeper packs share their line). */
+typedef struct pkg_tree_node {
+    struct pkg_tree_node *parent;
+    struct pkg_tree_node *next;      /* sibling */
+    struct pkg_tree_node *child;     /* first child */
+    const char *label;               /* borrowed: points into the fqn/name */
+    size_t label_len;
+    bool has_pack;                   /* a package ends exactly at this node */
+    bool is_last;                    /* last sibling (drives "`--" vs "+--") */
+} pkg_tree_node_t;
+
+static pkg_tree_node_t *pkg_tree_find_child(pkg_tree_node_t *n, const char *label, size_t len) {
+    for (pkg_tree_node_t *c = n->child; c != NULL; c = c->next) {
+        if (c->label_len == len && memcmp(c->label, label, len) == 0) {
+            return c;
+        }
+    }
+    return NULL;
+}
+
+static pkg_tree_node_t *pkg_tree_insert(pkg_tree_node_t *root, const char *fqn, size_t fqn_len) {
+    pkg_tree_node_t *cur = root;
+    const char *p = fqn;
+    const char *end = fqn + fqn_len;
+    while (p < end) {
+        const char *dot = memchr(p, '.', (size_t)(end - p));
+        size_t plen = (dot == NULL) ? (size_t)(end - p) : (size_t)(dot - p);
+        pkg_tree_node_t *c = pkg_tree_find_child(cur, p, plen);
+        if (c == NULL) {
+            c = m_new_obj(pkg_tree_node_t);
+            c->parent = cur;
+            c->next = NULL;
+            c->child = NULL;
+            c->label = p;
+            c->label_len = plen;
+            c->has_pack = false;
+            c->is_last = false;
+            /* Append to the sibling list. */
+            pkg_tree_node_t **tail = &cur->child;
+            while (*tail != NULL) {
+                tail = &(*tail)->next;
+            }
+            *tail = c;
+        }
+        p = p + plen;
+        if (p < end) {
+            p++; /* skip '.' */
+        }
+        cur = c;
+    }
+    cur->has_pack = true;
+    return cur;
+}
+
+static void pkg_tree_mark_last(pkg_tree_node_t *root) {
+    size_t count = 0;
+    for (pkg_tree_node_t *c = root->child; c != NULL; c = c->next) {
+        count++;
+    }
+    size_t i = 0;
+    for (pkg_tree_node_t *c = root->child; c != NULL; c = c->next) {
+        c->is_last = (++i == count);
+        pkg_tree_mark_last(c);
+    }
+}
+
+/* Recursively print the tree. `pad` is the inherited prefix ("|   " / "    ")
+ * for ancestors; each child draws its own "-- " branch. */
+static void pkg_tree_print(const pkg_tree_node_t *root, const char *pad) {
+    for (pkg_tree_node_t *c = root->child; c != NULL; c = c->next) {
+        const char *branch = c->is_last ? "`-- " : "+-- ";
+        mp_printf(&mp_plat_print, "%s%s%.*s\n", pad, branch, (int)c->label_len, c->label);
+        char child_pad[128];
+        size_t n = 0;
+        while (pad[n] != '\0' && n + 4 < sizeof(child_pad)) {
+            child_pad[n] = pad[n];
+            n++;
+        }
+        /* Extend with "|   " if more siblings follow, else "    ". */
+        const char *continuation = (c->next != NULL) ? "|   " : "    ";
+        for (size_t k = 0; k < 4 && n < sizeof(child_pad) - 1; k++) {
+            child_pad[n++] = continuation[k];
+        }
+        child_pad[n] = '\0';
+        pkg_tree_print(c, child_pad);
+    }
+}
+
+/* Print the dotted-FQN index as a natural tree (pymergetic → metal → arch →
+ * x86_64), mirroring the CDN's web nav. Filters mimic the RS search card
+ * (NULL = already-ok). The legacy bare "metal" pack is suppressed like the
+ * CDN catalog does. */
+static void packages_print_matches(mp_obj_t packages,
+    const char *prefix, const char *name_contains, const char *q,
+    const char *kind, const char *arch) {
+    mp_map_t *map = mp_obj_dict_get_map(packages);
+    pkg_tree_node_t root;
+    memset(&root, 0, sizeof(root));
+    for (size_t idx = 0; idx < map->alloc; idx++) {
+        if (!mp_map_slot_is_filled(map, idx)) {
+            continue;
+        }
+        const char *name = mp_obj_str_get_str(map->table[idx].key);
+        if (prefix != NULL && strncmp(name, prefix, strlen(prefix)) != 0) {
+            continue;
+        }
+        if (name_contains != NULL && !contains_ci(name, name_contains)) {
+            continue;
+        }
+        if (q != NULL && !contains_ci(name, q)) {
+            continue;
+        }
+        if ((kind != NULL || arch != NULL)
+            && !entry_artifacts_match(map->table[idx].value, kind, arch)) {
+            continue;
+        }
+        if (strcmp(name, "metal") == 0) {
+            continue; /* legacy bare kernel pack; the CDN catalog hides it too */
+        }
+        pkg_tree_insert(&root, name, strlen(name));
+    }
+    bool any = (root.child != NULL);
+    if (!any) {
+        mp_printf(&mp_plat_print, "`-- cdn          - (no match)\n");
+        return;
+    }
+    mp_printf(&mp_plat_print, "`-- cdn\n");
+    pkg_tree_mark_last(&root);
+    pkg_tree_print(&root, "    ");
+}
+
+static mp_obj_t mp_metal_builtin_packages(void) {
+    uint32_t n = mp_wasm_local_pack_count();
+    uint32_t nbase = pm_wasmmod_net_cdn_base_count();
 
     metal_ensure();
 
-    if (args[ARG_sub].u_obj == mp_const_none) {
-        n = mp_wasm_local_pack_count();
-        nbase = pm_wasmmod_net_cdn_base_count();
-
-        mp_printf(&mp_plat_print, "+-- local        %u pack(s)\n", (unsigned)n);
-        for (i = 0; i < n; i++) {
-            const char *name = mp_wasm_local_pack_name(i);
-            if (name != NULL && name[0] != 0) {
-                mp_printf(&mp_plat_print, "|   %s %s\n", (i + 1u == n) ? "`--" : "+--", name);
-            }
+    mp_printf(&mp_plat_print, "+-- local        %u pack(s)\n", (unsigned)n);
+    for (uint32_t i = 0; i < n; i++) {
+        const char *name = mp_wasm_local_pack_name(i);
+        if (name != NULL && name[0] != 0) {
+            mp_printf(&mp_plat_print, "|   %s %s\n", (i + 1u == n) ? "`--" : "+--", name);
         }
-        if (nbase == 0u) {
-            mp_printf(&mp_plat_print, "`-- cdn          -\n");
-        } else {
-            mp_printf(&mp_plat_print, "`-- cdn          %u base(s)\n", (unsigned)nbase);
-            for (i = 0; i < nbase; i++) {
-                const char *b = pm_wasmmod_net_cdn_base_at(i);
-                if (b != NULL && b[0] != 0) {
-                    mp_printf(&mp_plat_print, "    %s %s\n", (i + 1u == nbase) ? "`--" : "+--", b);
-                }
-            }
-        }
-        return mp_const_none;
     }
-
-    sub = mp_obj_str_get_str(args[ARG_sub].u_obj);
-    if (args[ARG_channel].u_obj != mp_const_none) {
-        channel = mp_obj_str_get_str(args[ARG_channel].u_obj);
-    }
-    if (strcmp(sub, "search") == 0) {
-        if (args[ARG_q].u_obj == mp_const_none || !mp_obj_is_str(args[ARG_q].u_obj)) {
-            mp_raise_TypeError(MP_ERROR_TEXT("packages('search', q): q must be str"));
-        }
-        q = mp_obj_str_get_str(args[ARG_q].u_obj);
-    } else if (strcmp(sub, "filter") == 0) {
-        prefix = (args[ARG_prefix].u_obj == mp_const_none)
-            ? NULL : mp_obj_str_get_str(args[ARG_prefix].u_obj);
-        name_contains = (args[ARG_name_contains].u_obj == mp_const_none)
-            ? NULL : mp_obj_str_get_str(args[ARG_name_contains].u_obj);
-        kind = (args[ARG_kind].u_obj == mp_const_none)
-            ? NULL : mp_obj_str_get_str(args[ARG_kind].u_obj);
-        arch = (args[ARG_arch].u_obj == mp_const_none)
-            ? NULL : mp_obj_str_get_str(args[ARG_arch].u_obj);
-    } else if (strcmp(sub, "catalog") != 0) {
-        mp_raise_msg_varg(&mp_type_ValueError, MP_ERROR_TEXT(
-            "packages(%s): sub must be 'catalog', 'search', or 'filter'"), sub);
-    }
-
-    {
-        /* ... µPy-native fill ... */
-        mp_obj_t pg = mp_import_name(qstr_from_str("pymergetic"), mp_const_none,
-            MP_OBJ_NEW_SMALL_INT(0));
-        mp_obj_t wm = mp_load_attr(pg, qstr_from_str("wasmmod"));
-        mp_obj_t net = mp_load_attr(wm, qstr_from_str("net"));
-        mp_obj_t cdnmod = mp_load_attr(net, qstr_from_str("cdn"));
-        mp_obj_t fetch = mp_load_attr(cdnmod, qstr_from_str("fetch_index"));
-        mp_obj_t bytes = mp_call_function_1(fetch, mp_obj_new_str(channel, strlen(channel)));
-        mp_obj_t json_mod = mp_import_name(qstr_from_str("json"), mp_const_none,
-            MP_OBJ_NEW_SMALL_INT(0));
-        mp_obj_t loads = mp_load_attr(json_mod, qstr_from_str("loads"));
-        mp_obj_t doc = mp_call_function_1(loads, bytes);
-        mp_obj_t packages = mp_obj_dict_get(doc, MP_OBJ_NEW_QSTR(qstr_from_str("packages")));
-        mp_map_t *map = mp_obj_dict_get_map(packages);
-        bool printed_any = false;
-        for (size_t idx = 0; idx < map->alloc; idx++) {
-            if (mp_map_slot_is_filled(map, idx)) {
-                const char *name = mp_obj_str_get_str(map->table[idx].key);
-                if (prefix != NULL && strncmp(name, prefix, strlen(prefix)) != 0) {
-                    continue;
-                }
-                if (name_contains != NULL && !contains_ci(name, name_contains)) {
-                    continue;
-                }
-                if (q != NULL && !contains_ci(name, q)) {
-                    continue;
-                }
-                if ((kind != NULL || arch != NULL)
-                    && !entry_artifacts_match(map->table[idx].value, kind, arch)) {
-                    continue;
-                }
-                printed_any = true;
-                mp_printf(&mp_plat_print, "`-- cdn +-- %s\n", name);
+    if (nbase == 0u) {
+        mp_printf(&mp_plat_print, "`-- cdn          -\n");
+    } else {
+        mp_printf(&mp_plat_print, "`-- cdn          %u base(s)\n", (unsigned)nbase);
+        for (uint32_t i = 0; i < nbase; i++) {
+            const char *b = pm_wasmmod_net_cdn_base_at(i);
+            if (b != NULL && b[0] != 0) {
+                mp_printf(&mp_plat_print, "    %s %s\n", (i + 1u == nbase) ? "`--" : "+--", b);
             }
-        }
-        if (!printed_any) {
-            mp_printf(&mp_plat_print, "`-- cdn          - (no match)\n");
         }
     }
     return mp_const_none;
 }
-MP_DEFINE_CONST_FUN_OBJ_KW(mp_metal_builtin_packages_obj, 0, mp_metal_builtin_packages);
+MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_packages_obj, mp_metal_builtin_packages);
+
+static mp_obj_t mp_metal_builtin_packages_catalog(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+static const mp_arg_t allowed_args[] = {
+    { MP_QSTR_channel, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+};
+mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+metal_ensure();
+mp_obj_t channel_obj = (args[0].u_obj == mp_const_none)
+    ? mp_obj_new_str("lead", 4) : args[0].u_obj;
+const char *channel = mp_obj_str_get_str(channel_obj);
+packages_print_matches(packages_load_channel(channel), NULL, NULL, NULL, NULL, NULL);
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_KW(mp_metal_builtin_packages_catalog_obj, 0, mp_metal_builtin_packages_catalog);
+
+static mp_obj_t mp_metal_builtin_packages_search(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_q, MP_ARG_REQUIRED | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+    { MP_QSTR_channel, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+};
+mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+metal_ensure();
+if (!mp_obj_is_str(args[0].u_obj)) {
+    mp_raise_TypeError(MP_ERROR_TEXT("packages_search(q): q must be str"));
+}
+const char *q = mp_obj_str_get_str(args[0].u_obj);
+mp_obj_t channel_obj = (args[1].u_obj == mp_const_none)
+    ? mp_obj_new_str("lead", 4) : args[1].u_obj;
+const char *channel = mp_obj_str_get_str(channel_obj);
+    packages_print_matches(packages_load_channel(channel), NULL, NULL, q, NULL, NULL);
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_KW(mp_metal_builtin_packages_search_obj, 0, mp_metal_builtin_packages_search);
+
+static mp_obj_t mp_metal_builtin_packages_filter(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+static const mp_arg_t allowed_args[] = {
+    { MP_QSTR_prefix, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+    { MP_QSTR_name_contains, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+    { MP_QSTR_kind, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+    { MP_QSTR_arch, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+    { MP_QSTR_channel, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+};
+mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+metal_ensure();
+const char *prefix = (args[0].u_obj == mp_const_none)
+    ? NULL : mp_obj_str_get_str(args[0].u_obj);
+const char *name_contains = (args[1].u_obj == mp_const_none)
+    ? NULL : mp_obj_str_get_str(args[1].u_obj);
+const char *kind = (args[2].u_obj == mp_const_none)
+    ? NULL : mp_obj_str_get_str(args[2].u_obj);
+const char *arch = (args[3].u_obj == mp_const_none)
+    ? NULL : mp_obj_str_get_str(args[3].u_obj);
+mp_obj_t channel_obj = (args[4].u_obj == mp_const_none)
+    ? mp_obj_new_str("lead", 4) : args[4].u_obj;
+const char *channel = mp_obj_str_get_str(channel_obj);
+    packages_print_matches(packages_load_channel(channel), prefix, name_contains, NULL, kind, arch);
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_KW(mp_metal_builtin_packages_filter_obj, 0, mp_metal_builtin_packages_filter);
 
 static mp_obj_t mp_metal_builtin_help(void) {
     mp_printf(&mp_plat_print,
         "MetalPython system REPL (not a process; quit/exit are no-ops here)\n"
         "  packages()     guest packs + CDN bases\n"
-        "  packages('catalog')            full CDN index (µPy json on cdn.fetch_index)\n"
-        "  packages('search', q)          pack names containing q\n"
-        "  packages('filter', ...,        filter by prefix/name/kind/arch (µPy json)\n"
-        "             prefix=..., name_contains=..., kind=..., arch=...)\n"
+        "  packages_catalog(channel=...)     full CDN index (µPy json on cdn.fetch_index)\n"
+        "  packages_search(q, channel=...)   pack names containing q\n"
+        "  packages_filter(prefix=..., name_contains=..., kind=..., arch=..., channel=...)\n"
+        "            filter CDN packs by prefix/name/kind/arch\n"
         "  help()         this text\n"
         "  quit([pid]) / exit([pid])  SystemExit in a process; at pid 0 use shutdown()/reboot()\n"
         "  reboot()       reboot the seat\n"
@@ -523,6 +647,9 @@ static const mp_rom_map_elem_t mp_module_pymergetic_metal_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_PM_METAL_DRV_ISA), MP_ROM_PTR(&metal_PM_METAL_DRV_ISA_obj) },
     { MP_ROM_QSTR(MP_QSTR_PM_METAL_DRV_PLATFORM), MP_ROM_PTR(&metal_PM_METAL_DRV_PLATFORM_obj) },
     { MP_ROM_QSTR(MP_QSTR_packages), MP_ROM_PTR(&mp_metal_builtin_packages_obj) },
+    { MP_ROM_QSTR(MP_QSTR_packages_catalog), MP_ROM_PTR(&mp_metal_builtin_packages_catalog_obj) },
+    { MP_ROM_QSTR(MP_QSTR_packages_search), MP_ROM_PTR(&mp_metal_builtin_packages_search_obj) },
+    { MP_ROM_QSTR(MP_QSTR_packages_filter), MP_ROM_PTR(&mp_metal_builtin_packages_filter_obj) },
     { MP_ROM_QSTR(MP_QSTR_help), MP_ROM_PTR(&mp_metal_builtin_help_obj) },
 };
 static MP_DEFINE_CONST_DICT(mp_module_pymergetic_metal_globals, mp_module_pymergetic_metal_globals_table);

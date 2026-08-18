@@ -40,7 +40,10 @@ extern const struct _mp_obj_fun_builtin_var_t mp_metal_builtin_quit_obj;
 extern const struct _mp_obj_fun_builtin_fixed_t mp_metal_builtin_reboot_obj;
 extern const struct _mp_obj_fun_builtin_fixed_t mp_metal_builtin_shutdown_obj;
 extern const struct _mp_obj_fun_builtin_fixed_t mp_metal_builtin_process_obj;
-extern const struct _mp_obj_fun_builtin_var_t mp_metal_builtin_packages_obj;
+extern const struct _mp_obj_fun_builtin_fixed_t mp_metal_builtin_packages_obj;
+extern const struct _mp_obj_fun_builtin_var_t mp_metal_builtin_packages_catalog_obj;
+extern const struct _mp_obj_fun_builtin_var_t mp_metal_builtin_packages_search_obj;
+extern const struct _mp_obj_fun_builtin_var_t mp_metal_builtin_packages_filter_obj;
 extern const struct _mp_obj_fun_builtin_fixed_t mp_metal_builtin_help_obj;
 
 /* Stock help() wins first-match in the ROM map. Metal owns help(). */
@@ -57,6 +60,9 @@ extern const struct _mp_obj_fun_builtin_fixed_t mp_metal_builtin_help_obj;
     { MP_ROM_QSTR(MP_QSTR_shutdown), MP_ROM_PTR(&mp_metal_builtin_shutdown_obj) }, \
     { MP_ROM_QSTR(MP_QSTR_process), MP_ROM_PTR(&mp_metal_builtin_process_obj) }, \
     { MP_ROM_QSTR(MP_QSTR_packages), MP_ROM_PTR(&mp_metal_builtin_packages_obj) }, \
+    { MP_ROM_QSTR(MP_QSTR_packages_catalog), MP_ROM_PTR(&mp_metal_builtin_packages_catalog_obj) }, \
+    { MP_ROM_QSTR(MP_QSTR_packages_search), MP_ROM_PTR(&mp_metal_builtin_packages_search_obj) }, \
+    { MP_ROM_QSTR(MP_QSTR_packages_filter), MP_ROM_PTR(&mp_metal_builtin_packages_filter_obj) }, \
     { MP_ROM_QSTR(MP_QSTR_help), MP_ROM_PTR(&mp_metal_builtin_help_obj) },
 
 #endif /* PYMERGETIC_METAL_MPCONFIG_UNIX_H */
