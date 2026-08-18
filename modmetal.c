@@ -451,10 +451,24 @@ static void pkg_tree_print(const pkg_tree_node_t *root, const char *pad) {
     }
 }
 
+/* True when the CDN index entry for a package carries yanked=true. The CDN
+ * catalog hides yanked packs (the legacy bare "metal" name, renamed to
+ * pymergetic.metal.arch.*, is yanked upstream) — the REPL mirrors that. */
+static bool package_is_yanked(mp_obj_t entry) {
+    if (mp_obj_get_type(entry) != &mp_type_dict) {
+        return false;
+    }
+    mp_map_elem_t *it = mp_map_lookup(mp_obj_dict_get_map(entry),
+        MP_OBJ_NEW_QSTR(qstr_from_str("yanked")), MP_MAP_LOOKUP);
+    if (it == NULL) {
+        return false;
+    }
+    return mp_obj_is_true(it->value);
+}
+
 /* Print the dotted-FQN index as a natural tree (pymergetic → metal → arch →
  * x86_64), mirroring the CDN's web nav. Filters mimic the RS search card
- * (NULL = already-ok). The legacy bare "metal" pack is suppressed like the
- * CDN catalog does. */
+ * (NULL = already-ok); yanked packs are suppressed like the CDN catalog. */
 static void packages_print_matches(mp_obj_t packages,
     const char *prefix, const char *name_contains, const char *q,
     const char *kind, const char *arch) {
@@ -479,8 +493,8 @@ static void packages_print_matches(mp_obj_t packages,
             && !entry_artifacts_match(map->table[idx].value, kind, arch)) {
             continue;
         }
-        if (strcmp(name, "metal") == 0) {
-            continue; /* legacy bare kernel pack; the CDN catalog hides it too */
+        if (package_is_yanked(map->table[idx].value)) {
+            continue; /* yanked upstream (e.g. bare "metal"); CDN catalog hides them */
         }
         pkg_tree_insert(&root, name, strlen(name));
     }
