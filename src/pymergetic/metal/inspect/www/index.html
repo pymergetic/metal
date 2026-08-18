@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>pymergetic.metal — seat</title>
+  <meta http-equiv="refresh" content="0; url=/inspect/" />
+  <style>
+    :root {
+      --bg: #101418;
+      --fg: #e7ece8;
+      --muted: #8a958c;
+      --accent: #5cb88a;
+    }
+    html, body { margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: "IBM Plex Sans", "Segoe UI", ui-sans-serif, sans-serif;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      text-align: center;
+    }
+    a { color: var(--accent); }
+    .brand { font-weight: 500; letter-spacing: -0.03em; }
+    .brand::after { content: " \00b7 metal"; color: var(--accent); font-weight: 600; }
+    .muted { color: var(--muted); }
+    .links { margin-top: 1rem; display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 class="brand">pymergetic.metal</h1>
+    <p class="muted">The inspect console lives at <a href="/inspect/">/inspect</a> — redirecting…</p>
+    <nav class="links">
+      <a href="/inspect/">Inspect</a>
+      <a href="/health">health</a>
+      <a href="/capabilities">capabilities</a>
+      <a href="/inspect/reg">registry</a>
+    </nav>
+  </main>
+</body>
+</html>

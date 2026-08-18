@@ -1,4 +1,5 @@
 /* pymergetic.metal.net.http.asgi — parked io.fetch to RS listen on lo. */
+#define _GNU_SOURCE
 #include "pymergetic/metal/async.h"
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/http/asgi.h"
@@ -129,8 +130,40 @@ static int32_t case_multi_instance(void) {
     return 0;
 }
 
+/* The seat index: GET / serves the inspection landing (also served by the
+ * CDN's shared www design), never the raw asgi octet-stream fallback. The
+ * inspect card registers "/" at boot via inspect_www_mount(); /x stays asgi. */
+static int32_t case_fetch_root(void) {
+    uint8_t *body = NULL;
+    uint32_t n = 0;
+    char err[64];
+    pm_wasmmod_io_result_t st;
+    pm_metal_async_poll();
+    st = pm_metal_net_http_fetch("http://127.0.0.1:8090/", &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch root");
+    }
+    if (n < 100 || body == NULL || memmem(body, n, "pymergetic.metal", 16) == NULL) {
+        return fail("root landing");
+    }
+    if (n == 4 && memcmp(body, "asgi", 4) == 0) {
+        return fail("root is octet-stream fallback");
+    }
+    /* Unmounted paths still fall back to the asgi default. */
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch("http://127.0.0.1:8090/x", &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK || n != 4 || body == NULL || memcmp(body, "asgi", 4) != 0) {
+        return fail("fallback changed");
+    }
+    return 0;
+}
+
 int32_t pm_metal_net_http_asgi_tests(void) {
     if (case_fetch_default() != 0) {
+        return 1;
+    }
+    if (case_fetch_root() != 0) {
         return 1;
     }
     if (case_route() != 0) {

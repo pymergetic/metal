@@ -280,6 +280,10 @@ fn ctype_of(path: &[u8]) -> &'static [u8] {
         end -= 1;
     }
     let p = &path[..end];
+    // Landing/index routes without a file extension (e.g. `/`) are HTML.
+    if p == b"/" {
+        return b"text/html; charset=utf-8";
+    }
     let dot = p.iter().rposition(|&b| b == b'.');
     match dot.map(|i| &p[i..]) {
         Some(b".html") | Some(b".htm") => b"text/html; charset=utf-8",

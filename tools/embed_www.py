@@ -46,7 +46,9 @@ def main() -> int:
     mounts: list[tuple[str, str, int]] = []
     for path in files:
         rel = path.relative_to(root).as_posix()
-        url = "/" + rel
+        # A root index.html is the seat landing page: mount it at "/" (browsers
+        # hitting the bare host:port get our index), not just "/index.html".
+        url = "/" if rel == "index.html" else "/" + rel
         name = ident(rel)
         data = path.read_bytes()
         emit_array(buf, name, data)
