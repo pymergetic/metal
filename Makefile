@@ -26,6 +26,7 @@ CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O1 -g -pthread
 CPPFLAGS += -I$(CURDIR)/host_inc -I$(METAL_SRC) -I$(WASMMOD_SRC) -I$(WASMMOD) -I$(TOP) \
 	-I$(TOP)/ports/unix -I$(MBEDTLS_DIR)/include \
 	-D_POSIX_C_SOURCE=200809L -DPM_WASMMOD_GUEST=0 -DPM_MOD_TESTS=1 \
+	-DPM_MOD_BENCHES=1 \
 	-DMICROPY_SSL_MBEDTLS=1 \
 	-DMBEDTLS_CONFIG_FILE='"mbedtls/mbedtls_config_port.h"'
 
@@ -42,6 +43,12 @@ $(error metal card discovery failed — see tools/cards.sh output above)
 endif
 
 SRCS := host_test.c \
+	$(addprefix $(METAL_SRC)/pymergetic/metal/,$(CARD_REL))
+
+# Bench binary reuses the same cards (incl. __bench__.c, which is inert under
+# the test runner) but swaps the entrypoint. Benches report numbers and never
+# gate, so both binaries register them into the same registry.
+BENCH_SRCS := host_bench.c \
 	$(addprefix $(METAL_SRC)/pymergetic/metal/,$(CARD_REL))
 
 LDFLAGS_WASMMOD := -L$(METAL_LIBDIR) -lpymergetic_metal -lpthread -ldl -lm -lstdc++ -lrt
@@ -68,6 +75,7 @@ MBEDTLS_CPPFLAGS := -I$(CURDIR)/host_inc -I$(TOP) -I$(TOP)/ports/unix \
 	-DMBEDTLS_CONFIG_FILE='"mbedtls/mbedtls_config_port.h"' -D_POSIX_C_SOURCE=200809L
 
 OUT := $(CURDIR)/build/metal-async-test
+BENCH_OUT := $(CURDIR)/build/metal-async-bench
 # emcc from PATH, or $EMSDK/upstream/emscripten — do not bake a home directory.
 ifneq ($(wildcard $(EMSDK)/upstream/emscripten/emcc),)
 BROWSER_PATH := $(EMSDK)/upstream/emscripten:$(PATH)
@@ -78,7 +86,7 @@ WASM_UPY := $(TOP)/ports/webassembly/build-metal/micropython.mjs
 WS ?= $(abspath $(TOP)/../..)
 VSCODE_CDB ?= $(WS)/.vscode/compile_commands.json
 
-.PHONY: test prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE
+.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE
 
 FORCE:
 
@@ -104,7 +112,16 @@ $(OUT): $(SRCS) $(MBEDTLS_OBJS) $(METAL_STATICLIB)
 	mkdir -p $(dir $(OUT))
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $(OUT) $(SRCS) $(MBEDTLS_OBJS) $(LDFLAGS_WASMMOD)
 
+$(BENCH_OUT): $(BENCH_SRCS) $(MBEDTLS_OBJS) $(METAL_STATICLIB)
+	mkdir -p $(dir $(BENCH_OUT))
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $(BENCH_OUT) $(BENCH_SRCS) $(MBEDTLS_OBJS) $(LDFLAGS_WASMMOD)
+
 test: prove-all
+
+# Benches report numbers and never gate. `make bench` builds + runs the
+# registry-walking runner; the result is human guidance, not a CI gate.
+bench: $(BENCH_OUT)
+	$(BENCH_OUT)
 
 prove-all: $(OUT) firmware-check
 	$(OUT)
@@ -157,6 +174,12 @@ browser:
 	grep -q "upy inspect caps" $(CURDIR)/build/browser_prove.log
 	grep -q "upy dns" $(CURDIR)/build/browser_prove.log
 	grep -q "upy socket" $(CURDIR)/build/browser_prove.log
+	grep -q "upy display present" $(CURDIR)/build/browser_prove.log
+	grep -q "upy input feed" $(CURDIR)/build/browser_prove.log
+	grep -q "upy console ids" $(CURDIR)/build/browser_prove.log
+	grep -q "upy fs embed" $(CURDIR)/build/browser_prove.log
+	grep -q "upy process" $(CURDIR)/build/browser_prove.log
+	grep -q "upy ssh session" $(CURDIR)/build/browser_prove.log
 
 compile-commands:
 	python3 $(WASMMOD)/compile_commands.py $(WASMMOD) $(WS) $(VSCODE_CDB)

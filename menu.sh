@@ -287,6 +287,7 @@ print_matrix() {
     printf '  %supload%s  bios/uefi → TFTP/BOOTP host (%sMETAL_PXE_HOST%s); rv1106 → Maskrom (same as run).\n' \
         "$BOLD" "$RESET" "$DIM" "$RESET"
     printf '  extra: %srun cdn%s  (wasmmod-cdn docker lab)\n' "$DIM" "$RESET"
+    printf '  extra: %sbench%s  make -C extmod/metal bench  → host bench runner, numbers never gate\n' "$BOLD" "$RESET"
     printf '  %scards%s  metal C tests, no µPy. Only %smp%s — upywm has wasmmod, not metal.\n' \
         "$BOLD" "$RESET" "$BOLD" "$RESET"
     printf '\n'
@@ -300,6 +301,7 @@ usage: menu.sh                     interactive (mode, then tree, then seat)
        menu.sh MODE TREE SEAT      MODE is build|prove|run|upload (b|p|r|u)
        menu.sh prove-all           build+prove every cell; run none
        menu.sh run cdn             CDN docker lab
+       make -C extmod/metal bench  host bench runner (numbers never gate)
 
 trees:  upy  upywm  mp
 seats:  unix  emcc  bios  uefi  rv1106  cards
