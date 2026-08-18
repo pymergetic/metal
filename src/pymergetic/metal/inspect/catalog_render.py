@@ -114,7 +114,7 @@ def _meta(modules, export_count):
             "updated_at": None,
             "origin": "local",
             "role": _role_of(fqn),
-            "href": _href("packs", fqn),
+            "href": _href("inspect", "reg", fqn),
             "data_search": fqn.lower(),
             "data_yanked": "0",
             "data_deprecated": "0",
@@ -155,7 +155,7 @@ def _nav_li(node, depth):
         cls.append("is-" + role)
     data = ' data-name="%s" data-package="%s"' % (_esc(node.get("name", "").lower()), _esc(node.get("name", "")))
     name = _esc(node.get("name", ""))
-    href = _href("packs", node.get("name", ""))
+    href = _href("inspect", "reg", node.get("name", ""))
     maxlen = node.get("_maxlen", 0)
     short = _esc(node.get("name", "")[:maxlen]) if maxlen else name
     out = ['<li class="%s"%s>' % (" ".join(cls), data)]
@@ -222,20 +222,20 @@ def shell_ctx(catalog, *, title, active_package="", body_html="", nav_html_overr
         "experimental": False,
         "experimental_message": "",
         "brand_name": "pymergetic.metal",
-        "home_href": _href("channels", "lead"),
-        "brand_logo": _href("static", "img", "pymergetic.png"),
+        "home_href": _href("inspect", ""),
+        "brand_logo": "",
         "health_href": _href("health"),
         "main_class": "",
         "active_package": active_package,
         "current_user": None,
         "user_email": "",
-        "nav_browse": _href("channels", "lead"),
-        "nav_users": _href("authors"),
-        "nav_publish": _href("publish"),
-        "nav_sessions": _href("sessions"),
-        "nav_docs": _href("docs"),
-        "nav_login": _href("login"),
-        "nav_browse_cls": "is-active",
+        "nav_browse": "/",
+        "nav_users": "",   # no user accounts on the seat
+        "nav_publish": "",  # publishing is a host/CDN activity
+        "nav_sessions": "",  # no browser sessions to list on the seat
+        "nav_docs": _href("inspect", ""),  # the live RPC console is the seat's docs
+        "nav_login": "",
+        "nav_browse_cls": "is-active" if (nav_html_override is None or active_package == "") else "",
         "nav_users_cls": "",
         "nav_publish_cls": "",
         "nav_sessions_cls": "",
@@ -255,7 +255,7 @@ def shell_ctx(catalog, *, title, active_package="", body_html="", nav_html_overr
         "content": body_html,
         "content_nav": nav_html_override if nav_html_override is not None else "",
         "app_version": "seat",
-        "inspect_js": _href("static", "inspect", "main.js"),
+        "inspect_js": _href("inspect", "js", "inspect.js"),
     }
     return d
 

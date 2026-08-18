@@ -1,0 +1,88 @@
+/* Shell sessions tab (963-1049) */
+/* Shell sessions tab */
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.session-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  background: color-mix(in srgb, var(--panel, #161d27) 88%, transparent);
+}
+.session-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.65rem 1rem;
+  margin-bottom: 0.75rem;
+}
+.session-id { font-size: 0.95rem; }
+.session-time { margin-left: auto; font-size: 0.8rem; }
+.session-loader-label {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.session-tree {
+  list-style: none;
+  margin: 0 0 0.85rem;
+  padding: 0;
+  font-size: 0.88rem;
+}
+.session-tree li { margin: 0.2rem 0; }
+.session-tree .k {
+  display: inline-block;
+  min-width: 4.5rem;
+  color: var(--muted);
+}
+.session-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 2.5rem;
+  padding: 0.15rem 0;
+}
+.session-spark-bar {
+  flex: 1 1 0;
+  min-width: 2px;
+  height: var(--h, 0%);
+  min-height: 2px;
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+  border-radius: 1px 1px 0 0;
+}
+.session-spark-bar.is-hot {
+  background: var(--accent, #6ec1ff);
+}
+.session-spark-caption { margin: 0.4rem 0 0; font-size: 0.8rem; }
+.session-events {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+}
+.session-events li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+.session-ev-kind {
+  display: inline-block;
+  min-width: 3.5rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.06);
+  color: var(--fg);
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+}
+

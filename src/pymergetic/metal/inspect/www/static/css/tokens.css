@@ -1,0 +1,122 @@
+/* Design tokens + document base (1-95) */
+:root {
+  --bg: #0f1419;
+  --fg: #e7ecf1;
+  --muted: #8b9aab;
+    --accent: #3d9cfd;
+  --ready: #8ecf9a;
+  --remote: #c9a227;
+  --remote-dim: rgba(201, 162, 39, 0.12);
+  --host: #6a9fb5;
+  --host-dim: rgba(106, 159, 181, 0.12);
+  --kernel: #8ecf9a;
+  --kernel-dim: rgba(142, 207, 154, 0.12);
+  /* Arch seat / netboot images — copper (distinct from remote gold). */
+  --arch: #d08a5a;
+  --arch-dim: rgba(208, 138, 90, 0.14);
+  /* CDN / browser host engine (wasmmod) — purple, distinct from host blue. */
+  --engine: #a78bfa;
+  --engine-dim: rgba(167, 139, 250, 0.14);
+  --line: #243041;
+  --card: #161d27;
+  --sidebar: #121820;
+  --font: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font);
+  color: var(--fg);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, #1a2a40 0%, transparent 55%),
+    var(--bg);
+}
+.site-top {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  flex-shrink: 0;
+}
+.exp-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+  padding: 0.55rem 1.25rem;
+  background: #3a2a12;
+  border-bottom: 1px solid #c48a2a;
+  color: #f5d79a;
+  font-size: 0.88rem;
+}
+.exp-banner strong {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75rem;
+  color: #ffcc66;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+  background: rgba(15, 20, 25, 0.92);
+  backdrop-filter: blur(8px);
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--fg);
+}
+.brand:hover { text-decoration: none; color: var(--accent); }
+.brand-mark {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: block;
+  flex-shrink: 0;
+}
+.top-nav { display: flex; gap: 0.35rem; align-items: center; }
+.top-nav a {
+  margin: 0;
+  color: var(--muted);
+  padding: 0.35rem 0.7rem;
+  border-radius: 6px;
+}
+.top-nav a:hover { color: var(--fg); text-decoration: none; background: rgba(255,255,255,0.04); }
+.top-nav a.is-active {
+  color: var(--fg);
+  background: rgba(61, 156, 253, 0.12);
+}
+.nav-user {
+  color: var(--muted);
+  font-size: 0.85rem;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: 0.25rem;
+}
+.nav-logout {
+  appearance: none;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.55rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.nav-logout:hover { color: var(--fg); background: rgba(255,255,255,0.04); }
+

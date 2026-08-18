@@ -1,0 +1,89 @@
+/* Federation admin page */
+.fed-page {
+  display: grid;
+  gap: 1.5rem;
+  max-width: 56rem;
+}
+.fed-grid {
+  display: grid;
+  gap: 1.25rem;
+}
+@media (min-width: 720px) {
+  .fed-grid {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+}
+.fed-panel h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+.fed-help {
+  margin: 0 0 0.85rem;
+  font-size: 0.9rem;
+}
+.fed-form {
+  max-width: none;
+}
+.fed-status {
+  display: grid;
+  gap: 0.35rem 1rem;
+  margin: 0;
+  grid-template-columns: auto 1fr;
+}
+.fed-status > div {
+  display: contents;
+}
+.fed-status dt {
+  font-weight: 600;
+  color: var(--fg);
+}
+.fed-status dd {
+  margin: 0;
+}
+.fed-table-wrap {
+  overflow-x: auto;
+}
+.fed-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.fed-table th,
+.fed-table td {
+  text-align: left;
+  padding: 0.4rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.fed-table code {
+  font-size: 0.82rem;
+}
+.fed-del {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 0.15rem 0.45rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+}
+.fed-del:hover {
+  color: var(--fg);
+  border-color: var(--fg);
+}
+.fed-secret {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: #0b1016;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 0.82rem;
+  color: var(--fg);
+}
+.fed-error {
+  color: #f07178;
+}
