@@ -1,0 +1,914 @@
+{% args d %}
+<section class="hero">
+  <p class="eyebrow">package</p>
+  {% if d.fed_origin == 'remote' %}
+  <p class="fed-banner" role="status">
+    <span class="pill pill-remote">remote</span>
+    Federated via {{ d.fed_peer_label }}.
+    {% if d.fed_peer_browse_url %}
+    <a href="{{ d.fed_peer_browse_url }}" rel="noopener" target="_blank">Visit on remote CDN</a>
+    {% endif %}
+  </p>
+  {% endif %}
+  {% if d.package_role in ('host', 'kernel', 'arch', 'engine') %}
+  <p class="fed-banner" role="status">
+    <span class="pill pill-{{ d.package_role }}">{{ d.package_role }}</span>
+    {% if d.is_unix_seat %}
+    Unix host seat — curl the lead <code>.elf</code>, <code>chmod +x</code>, run. Inspect + download; Play disabled.
+    {% elif d.package_role == 'engine' %}
+    CDN engine — browser host that loads guests / packs. Inspect + download; Play disabled.
+    {% elif d.package_role == 'arch' and d.name.endswith('.wasm') %}
+    Architecture seat (browser) — CDN UI <code>mp</code> engine loads these artifacts. Inspect + download; Play disabled.
+    {% elif d.package_role == 'arch' %}
+    Architecture image — freestanding firmware; Inspect + download; iPXE loads these URLs. Play disabled.
+    {% else %}
+    Platform {{ d.package_role }} — Inspect only; Play/Try guest-load is disabled.
+    {% endif %}
+  </p>
+  {% endif %}
+  <div class="hero-title-row">
+    <h1>{{ d.name }}{% if d.package_role in ('host', 'kernel', 'arch', 'engine') %} <span class="pill pill-{{ d.package_role }}">{{ d.package_role }}</span>{% endif %}</h1>
+    {% if d.package_versions %}
+    <label class="pkg-ver-picker">
+      <span class="muted">channel</span>
+      <select id="pkg-version-select" aria-label="Package version">
+        {% for v in d.package_versions %}
+        <option
+          value="{{ v.channel }}"
+          data-href="{{ v.href }}"
+          {% if v.is_current %}selected{% endif %}
+        >{{ v.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+  </div>
+  <p class="lede">
+    {% if d.channel == "lead" %}
+    lead · {{ d.entry.version }}
+    {% else %}
+    pin {{ d.channel }} · {{ d.entry.version }}
+    {% endif %}
+    {% if d.entry.license %} · {{ d.entry.license }}{% endif %}
+    {% if d.package_versions_len > 1 %}
+    · <a href="#history">{{ d.package_versions_len }} channels</a>
+    {% endif %}
+  </p>
+  {% if d.entry.description %}
+  <p>{{ d.entry.description }}</p>
+  {% endif %}
+  {% if d.entry.homepage %}
+  <p><a href="{{ d.entry.homepage }}" rel="noopener">{{ d.entry.homepage }}</a></p>
+  {% endif %}
+  {% if d.entry.yanked %}
+  <p class="muted">Yanked{% if d.entry.yank_reason %}: {{ d.entry.yank_reason }}{% endif %}</p>
+  {% endif %}
+  {% if d.entry.deprecated %}
+  <p class="muted">Deprecated</p>
+  {% endif %}
+  {% if d.entry.successor %}
+  <p>Successor: <code>{{ d.entry.successor }}</code></p>
+  {% endif %}
+</section>
+
+<section class="about">
+  <h2>About</h2>
+  <dl class="meta-grid">
+    <dt>Package</dt><dd><code>{{ d.name }}</code></dd>
+    <dt>Version</dt>
+    <dd>
+      <a href="#history"><code>{{ d.entry.version }}</code></a>
+      {% if d.channel == "lead" %}
+      <span class="pill pill-lead">lead</span>
+      {% endif %}
+    </dd>
+    <dt>Channel</dt>
+    <dd><a href="{{ d.channel_href }}"><code>{{ d.channel }}</code></a></dd>
+    {% if d.author_href %}
+    <dt>Author</dt>
+    <dd><a href="{{ d.author_href }}">{{ d.entry.maintainer_email }}</a></dd>
+    {% endif %}
+    {% if d.entry.license %}
+    <dt>License</dt><dd>{{ d.entry.license }}</dd>
+    {% endif %}
+    {% if d.entry.homepage %}
+    <dt>Homepage</dt><dd><a href="{{ d.entry.homepage }}" rel="noopener">{{ d.entry.homepage }}</a></dd>
+    {% endif %}
+    {% if d.entry.aot_version %}
+    <dt>AOT</dt><dd>{{ d.entry.aot_version }}</dd>
+    {% endif %}
+  </dl>
+</section>
+
+{% if d.deps_links %}
+<section>
+  <h2>Dependencies</h2>
+  <p class="muted">Packages this one needs (<code>[deps]</code> / MPWD). Green = exact version published; red = missing/yanked.</p>
+  <ul class="pkg-list">
+    {% for dep in d.deps_links %}
+    <li>
+      <a class="dep-chip {% if dep.ok %}dep-chip-ok{% else %}dep-chip-bad{% endif %}"
+         href="{{ dep.href }}"><code>{{ dep.name }}</code></a>
+      <a class="ver" href="{{ dep.ver_href }}">{{ dep.ver }}</a>
+      {% if not dep.ok %}<span class="pill pill-warn">unfit</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% if d.needed_links %}
+<section>
+  <h2>Needed by</h2>
+  <p class="muted">Known published packages that list this one in their <code>[deps]</code>.</p>
+  <ul class="pkg-list">
+    {% for dep in d.needed_links %}
+    <li>
+      <a class="dep-chip{{ dep.cls }}" href="{{ dep.href }}"><code>{{ dep.name }}</code></a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% if d.package_versions %}
+<section id="history">
+  <h2>Version history</h2>
+  <p class="muted">Lead channel plus immutable pins. Click a row to open that publish.</p>
+  <div class="pkg-table-wrap">
+    <table class="pkg-table pkg-history" id="pkg-history"
+           data-show="3" data-total="{{ d.package_versions_len }}">
+      <thead>
+        <tr>
+          <th scope="col">Channel</th>
+          <th scope="col">Version</th>
+          <th scope="col">Arts</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for v in d.package_versions %}
+        <tr class="{% if v.is_current %}is-current{% endif %}{% if v.folded %} history-fold{% endif %}"
+            {% if v.folded %}hidden{% endif %}>
+          <td>
+            <a href="{{ v.href }}">
+              {% if v.channel == 'lead' %}
+              <span class="pill pill-lead">lead</span>
+              {% else %}
+              <code>{{ v.channel }}</code>
+              {% endif %}
+            </a>
+          </td>
+          <td><a class="ver" href="{{ v.href }}">{{ v.version }}</a></td>
+          <td class="mono">{{ v.artifact_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if d.version_fold_count > 0 %}
+  <p class="history-more-wrap">
+    <button type="button" class="history-more-btn" id="history-more-btn"
+            aria-expanded="false" aria-controls="pkg-history">
+      Show {{ d.version_fold_count }} older
+    </button>
+  </p>
+  {% endif %}
+</section>
+<script>
+(() => {
+  const sel = document.getElementById("pkg-version-select");
+  if (sel) {
+    sel.addEventListener("change", () => {
+      const opt = sel.selectedOptions[0];
+      if (opt && opt.dataset.href) window.location.href = opt.dataset.href;
+    });
+  }
+  const btn = document.getElementById("history-more-btn");
+  const table = document.getElementById("pkg-history");
+  if (!btn || !table) return;
+  const folded = () => Array.from(table.querySelectorAll("tr.history-fold"));
+  folded().forEach((tr) => {
+    if (tr.classList.contains("is-current")) tr.hidden = false;
+  });
+  const rest = () => folded().filter((tr) => tr.hidden).length;
+  const sync = (open) => {
+    folded().forEach((tr) => {
+      if (!open && tr.classList.contains("is-current")) return;
+      tr.hidden = !open;
+    });
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    const n = rest();
+    btn.textContent = open ? "Show fewer" : ("Show " + n + " older");
+    btn.hidden = !open && n === 0;
+  };
+  btn.addEventListener("click", () => {
+    sync(btn.getAttribute("aria-expanded") !== "true");
+  });
+  sync(false);
+})();
+</script>
+{% endif %}
+{% if d.is_unix_seat and d.channel == "lead" %}
+<section>
+  <h2>Run (curl)</h2>
+  <p class="muted">
+    Linux userspace seat — download the lead ELF and execute it (banner + REPL).
+    Inspect / download also in <a href="#artifact-list">Artifacts</a>.
+  </p>
+  <ul class="pkg-list artifact-list" id="unix-run-list">
+    {% for a in d.run_artifacts %}
+    <li class="artifact-row">
+      <div class="artifact-main">
+        <span class="artifact-open is-static"><code>curl and run</code></span>
+        <span class="muted artifact-meta">{{ a.path }} · {{ a.size_str }}</span>
+      </div>
+      <pre class="ipxe-snippet" tabindex="0">curl -fsSL {{ d.cdn_base }}/artifacts/lead/{{ a.path }} -o metal-unix
+chmod +x metal-unix
+./metal-unix</pre>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% if d.is_arch_seat and d.channel == "lead" and (d.has_elf or d.has_efi) %}
+<section>
+  <h2>Netboot (iPXE)</h2>
+  <p class="muted">
+    Boot server holds NBP + <code>metal.ipxe</code> only; product images stay on this CDN (HTTPS).
+    Inspect / download the images in <a href="#artifact-list">Artifacts</a>.
+  </p>
+  <ul class="pkg-list artifact-list" id="netboot-list">
+    <li class="artifact-row">
+      <div class="artifact-main">
+        <a class="artifact-open" href="{{ d.cdn_base }}/static/netboot/undionly.kpxe" download="undionly.kpxe"><code>undionly.kpxe</code></a>
+        <span class="muted artifact-meta">BIOS · first-stage NBP (HTTPS-capable Metal build)</span>
+      </div>
+      <div class="artifact-actions">
+        <a class="icon-btn download-btn" href="{{ d.cdn_base }}/static/netboot/undionly.kpxe" download="undionly.kpxe" title="Download undionly.kpxe" aria-label="Download undionly.kpxe">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"/></svg>
+        </a>
+      </div>
+    </li>
+    <li class="artifact-row">
+      <div class="artifact-main">
+        <a class="artifact-open" href="{{ d.cdn_base }}/static/netboot/ipxe.efi" download="ipxe.efi"><code>ipxe.efi</code></a>
+        <span class="muted artifact-meta">UEFI · first-stage NBP (HTTPS-capable Metal build)</span>
+      </div>
+      <div class="artifact-actions">
+        <a class="icon-btn download-btn" href="{{ d.cdn_base }}/static/netboot/ipxe.efi" download="ipxe.efi" title="Download ipxe.efi" aria-label="Download ipxe.efi">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"/></svg>
+        </a>
+      </div>
+    </li>
+    <li class="artifact-row">
+      <div class="artifact-main">
+        <a class="artifact-open" href="{{ d.cdn_base }}/static/netboot/metal.ipxe" download="metal.ipxe"><code>metal.ipxe</code></a>
+        <span class="muted artifact-meta">iPXE script · chains CDN lead <code>arch.*.elf/efi</code></span>
+      </div>
+      <div class="artifact-actions">
+        <a class="icon-btn download-btn" href="{{ d.cdn_base }}/static/netboot/metal.ipxe" download="metal.ipxe" title="Download metal.ipxe" aria-label="Download metal.ipxe">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"/></svg>
+        </a>
+      </div>
+    </li>
+    {% for a in d.ipxe_artifacts %}
+    <li class="artifact-row">
+      <div class="artifact-main">
+        <span class="artifact-open is-static"><code>{% if a.ends_efi %}UEFI · snippet{% else %}BIOS · snippet{% endif %}</code></span>
+        <span class="muted artifact-meta">{% if a.ends_efi %}chain{% else %}kernel{% endif %} → copy into iPXE / metal.ipxe</span>
+      </div>
+      <pre class="ipxe-snippet" tabindex="0">#!ipxe
+{% if a.ends_efi %}chain{% else %}kernel{% endif %} {{ d.cdn_base }}/artifacts/lead/{{ a.path }}
+boot</pre>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+<section>
+  <h2>Artifacts</h2>
+  <p class="muted">
+    {% if d.is_arch_seat and d.name.endswith('.wasm') %}
+    Browser arch seat — <code>.mjs</code> / <code>.wasm</code> for the CDN shell <code>mp</code> pill. Click to inspect.
+    {% elif d.is_arch_seat %}
+    Freestanding arch seat images — click to inspect (sections / signature / hex). Download or use the Netboot rows above in iPXE.
+    {% else %}
+    Click a name to inspect pack guts. The commander navigates package · version · artifact · section · symbol with dual hex/asm/source views.
+    {% endif %}
+  </p>
+  <ul class="pkg-list artifact-list" id="artifact-list">
+    {% for a in d.entry.artifacts %}
+    <li class="artifact-row"
+        data-filename="{{ a.path }}"
+        data-package="{{ d.name }}"
+        data-channel="{{ d.channel }}"
+        {% if d.channel != "lead" %}data-version="{{ a.version_arg }}"{% endif %}
+        data-inspect="{{ a.inspect_href }}"
+        data-files="{{ a.files_base }}"
+        data-files-raw="{{ a.files_raw }}"
+        data-sections-raw="{{ a.sections_raw }}">
+      <div class="artifact-main">
+        <button type="button" class="artifact-open" aria-expanded="false">
+          <code>{{ a.path }}</code>
+        </button>
+        <span class="muted artifact-meta">
+          {% if d.is_arch_seat and a.ends_efi_zlib %}UEFI twin · {% elif d.is_arch_seat and a.ends_elf_zlib %}BIOS twin · {% elif d.is_arch_seat and a.ends_efi %}UEFI · {% elif d.is_arch_seat and a.ends_elf %}BIOS · {% endif %}{{ a.kind }} · {{ a.encoding }} · {{ a.size_str }}
+        </span>
+        <div class="artifact-actions">
+          <button type="button" class="icon-btn inspect-open-btn"
+            data-filename="{{ a.path }}"
+            data-package="{{ d.name }}"
+            {% if d.channel != "lead" %}data-version="{{ a.version_arg }}"{% endif %}
+            title="Inspect {{ a.path }}"
+            aria-label="Inspect {{ a.path }}">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"
+                d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z"/>
+              <circle cx="12" cy="12" r="3.25" fill="none" stroke="currentColor" stroke-width="1.75"/>
+            </svg>
+          </button>
+          <a class="icon-btn download-btn" href="{{ a.dl_href }}" download="{{ a.path }}" title="Download {{ a.path }}" aria-label="Download {{ a.path }}">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"/>
+            </svg>
+          </a>
+          {% if d.show_try and a.is_wasm %}
+          <button type="button" class="icon-btn try-btn" data-mpy-try="{{ d.name }}"
+                  title="Try in µPy shell: import {{ d.name }}; exports({{ d.name }})"
+                  aria-label="Try {{ d.name }} in MicroPython shell">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path fill="currentColor" d="M8 5.14v14l11-7-11-7Z"/>
+            </svg>
+          </button>
+          {% endif %}
+        </div>
+      </div>
+      <div class="artifact-panel" hidden></div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% if d.entry.contents %}
+<section>
+  <h2>Package contents (index)</h2>
+  <p class="muted">
+    {% if d.entry.contents.name %}pack <code>{{ d.entry.contents.name }}</code>{% endif %}
+    {% if d.entry.contents.pkg_version %} · {{ d.entry.contents.pkg_version }}{% endif %}
+    · signed={{ d.entry.contents.signed }}
+    · pack={{ d.entry.contents.has_pack }}
+    · source={{ d.entry.contents.has_source }}
+  </p>
+</section>
+{% endif %}
+
+<dialog id="source-dialog" class="source-dialog">
+  <form method="dialog" class="source-dialog-head">
+    <strong id="source-dialog-title">Source</strong>
+    <div class="source-dialog-actions">
+      <a id="source-dialog-download" class="icon-btn" href="#" download title="Download file" aria-label="Download file" hidden>
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"/>
+        </svg>
+      </a>
+      <button type="submit" class="icon-btn" value="close" aria-label="Close">✕</button>
+    </div>
+  </form>
+  <div id="source-dialog-meta" class="source-dialog-meta muted" hidden></div>
+  <pre id="source-dialog-body" class="source-body"></pre>
+</dialog>
+
+<script src="{{ d.vendor_0 }}"></script>
+<script src="{{ d.vendor_1 }}"></script>
+<script src="{{ d.vendor_2 }}"></script>
+<script src="{{ d.vendor_3 }}"></script>
+<script src="{{ d.vendor_4 }}"></script>
+<script src="{{ d.vendor_5 }}"></script>
+<script src="{{ d.vendor_6 }}"></script>
+<script src="{{ d.vendor_7 }}"></script>
+<script src="{{ d.vendor_8 }}"></script>
+<script src="{{ d.vendor_9 }}"></script>
+<script src="{{ d.vendor_10 }}"></script>
+<script src="{{ d.vendor_11 }}"></script>
+<script src="{{ d.vendor_12 }}"></script>
+<script src="{{ d.vendor_13 }}"></script>
+<script src="{{ d.vendor_14 }}"></script>
+<script src="{{ d.vendor_15 }}"></script>
+<script src="{{ d.vendor_16 }}"></script>
+<script src="{{ d.vendor_17 }}"></script>
+<script src="{{ d.vendor_18 }}"></script>
+<script src="{{ d.vendor_19 }}"></script>
+<script src="{{ d.vendor_20 }}"></script>
+<script src="{{ d.vendor_21 }}"></script>
+<script src="{{ d.vendor_22 }}"></script>
+<script src="{{ d.vendor_23 }}"></script>
+<script src="{{ d.vendor_24 }}"></script>
+<script>
+(() => {
+  const list = document.getElementById("artifact-list");
+  if (!list) return;
+  const dialog = document.getElementById("source-dialog");
+  const dialogTitle = document.getElementById("source-dialog-title");
+  const dialogBody = document.getElementById("source-dialog-body");
+  const dialogMeta = document.getElementById("source-dialog-meta");
+  const dialogDl = document.getElementById("source-dialog-download");
+  const HEX_PREVIEW = 65536;
+
+  const DL_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"/></svg>`;
+  /* Generic eye — Inspect opener (avoid star-in-circle branding lookalikes). */
+  const INSP_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3.25" fill="none" stroke="currentColor" stroke-width="1.75"/></svg>`;
+
+  function inspectBtnAttrs(ctx, extra) {
+    const filename = (ctx && ctx.filename) || "";
+    const pkg = (ctx && ctx.package) || "";
+    const version = (ctx && ctx.version) || "";
+    let attrs =
+      ` data-filename="${esc(filename)}" data-package="${esc(pkg)}" data-version="${esc(version)}"`;
+    if (extra) attrs += " " + extra;
+    return attrs;
+  }
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[c]);
+  }
+
+  function fmtSize(n) {
+    const bytes = Number(n);
+    if (!Number.isFinite(bytes) || bytes < 0) return "?";
+    const exact = Math.trunc(bytes) + " B";
+    if (bytes < 1024) return exact;
+    const units = ["KiB", "MiB", "GiB", "TiB"];
+    let value = bytes;
+    let unit = units[0];
+    for (let i = 0; i < units.length; i++) {
+      value /= 1024;
+      unit = units[i];
+      if (value < 1024) break;
+    }
+    const pretty = value >= 100 ? value.toFixed(0)
+      : value >= 10 ? value.toFixed(1)
+      : value.toFixed(2);
+    return pretty + " " + unit + " (" + exact + ")";
+  }
+
+  function guessLang(path) {
+    const lower = path.toLowerCase().replace(/\\/g, "/");
+    const base = lower.split("/").pop() || lower;
+    if (base === "makefile" || base === "gnumakefile" || lower.endsWith(".mk")) return "makefile";
+    if (base === "cmakelists.txt" || lower.endsWith(".cmake")) return "cmake";
+    if (base === "dockerfile" || base.startsWith("dockerfile.")) return "dockerfile";
+    if (lower.endsWith(".py") || lower.endsWith(".pyi")) return "python";
+    if (lower.endsWith(".c") || lower.endsWith(".h")) return "c";
+    if (lower.endsWith(".cc") || lower.endsWith(".cpp") || lower.endsWith(".cxx")
+        || lower.endsWith(".hpp") || lower.endsWith(".hh") || lower.endsWith(".hxx")
+        || lower.endsWith(".ipp") || lower.endsWith(".inl")) return "cpp";
+    if (lower.endsWith(".rs")) return "rust";
+    if (lower.endsWith(".ts") || lower.endsWith(".tsx") || lower.endsWith(".mts") || lower.endsWith(".cts")) return "typescript";
+    if (lower.endsWith(".js") || lower.endsWith(".mjs") || lower.endsWith(".cjs") || lower.endsWith(".jsx")) return "javascript";
+    if (lower.endsWith(".json") || lower.endsWith(".jsonc") || lower.endsWith(".json5")) return "json";
+    if (lower.endsWith(".md") || lower.endsWith(".markdown") || lower.endsWith(".mdx")) return "markdown";
+    if (lower.endsWith(".toml") || lower.endsWith(".ini") || lower.endsWith(".cfg")
+        || lower.endsWith(".conf") || base === "pack.toml") return "ini";
+    if (lower.endsWith(".yml") || lower.endsWith(".yaml")) return "yaml";
+    if (lower.endsWith(".xml") || lower.endsWith(".html") || lower.endsWith(".htm")
+        || lower.endsWith(".svg") || lower.endsWith(".xhtml")) return "xml";
+    if (lower.endsWith(".sh") || lower.endsWith(".bash") || lower.endsWith(".zsh")
+        || lower.endsWith(".ksh") || base === ".bashrc" || base === ".profile") return "bash";
+    if (lower.endsWith(".diff") || lower.endsWith(".patch")) return "diff";
+    if (lower.endsWith(".ll")) return "llvm";
+    if (lower.endsWith(".go")) return "go";
+    if (lower.endsWith(".java")) return "java";
+    if (lower.endsWith(".sql")) return "sql";
+    if (lower.endsWith(".rb") || lower.endsWith(".rake")) return "ruby";
+    if (lower.endsWith(".pl") || lower.endsWith(".pm")) return "perl";
+    if (lower.endsWith(".wat") || lower.endsWith(".wast")) return "lisp";
+    if (lower.endsWith(".s") || lower.endsWith(".asm")) return "x86asm";
+    return "";
+  }
+
+  function fileRow(path, filesBase, filesRaw, metaHtml, ctx) {
+    const rawUrl = filesRaw + "?path=" + encodeURIComponent(path);
+    const base = path.split("/").pop() || path;
+    const isMpy = /\.mpy$/i.test(path);
+    let inspBtn = "";
+    if (ctx) {
+      const common =
+        ` data-filename="${esc(ctx.filename || "")}" data-package="${esc(ctx.package || "")}" data-version="${esc(ctx.version || "")}"`;
+      if (isMpy) {
+        inspBtn =
+          `<button type="button" class="icon-btn mpy-inspect-btn"${common} data-mpy-path="${esc(path)}" title="mpy-dis in Inspect" aria-label="Inspect ${esc(path)}">${INSP_SVG}</button>`;
+      } else {
+        inspBtn =
+          `<button type="button" class="icon-btn inspect-open-btn"${common} data-source-path="${esc(path)}" title="Inspect ${esc(path)}" aria-label="Inspect ${esc(path)}">${INSP_SVG}</button>`;
+      }
+    }
+    return `<li>
+      <button type="button" class="file-link" data-path="${esc(path)}" data-files="${esc(filesBase)}" data-files-raw="${esc(filesRaw)}" title="Open ${esc(path)}">${esc(path)}</button>
+      <span class="muted">${metaHtml}</span>
+      ${inspBtn}
+      <a class="icon-btn file-download" href="${esc(rawUrl)}" download="${esc(base)}" title="Download ${esc(path)}" aria-label="Download ${esc(path)}">${DL_SVG}</a>
+    </li>`;
+  }
+
+  function sectionRow(sec, sectionsRaw, ctx) {
+    const rawUrl = sectionsRaw + "?index=" + encodeURIComponent(String(sec.index));
+    const role = sec.role || "other";
+    const roleCls = role === "code" ? " sec-code" : (role === "meta" ? " sec-meta" : "");
+    const dlName = (sec.name || ("section_" + sec.index)).replace(/\//g, "_");
+    const insp = ctx
+      ? `<button type="button" class="icon-btn inspect-open-btn"${inspectBtnAttrs(ctx, `data-section-index="${esc(sec.index)}"`)} title="Inspect section ${esc(sec.name)}" aria-label="Inspect section ${esc(sec.name)}">${INSP_SVG}</button>`
+      : "";
+    return `<li class="section-row${roleCls}">
+      <button type="button" class="section-link" data-index="${esc(sec.index)}" data-name="${esc(sec.name)}" data-sections-raw="${esc(sectionsRaw)}" data-size="${esc(sec.size)}" data-role="${esc(role)}" title="Inspect section: ${esc(sec.name)}">${esc(sec.name)}</button>
+      <span class="muted">${esc(role)} · type=${esc(sec.type_id)} · ${esc(fmtSize(sec.size))}</span>
+      ${insp}
+      <a class="icon-btn file-download" href="${esc(rawUrl)}" download="${esc(dlName)}" title="Download section ${esc(sec.name)}" aria-label="Download section ${esc(sec.name)}">${DL_SVG}</a>
+    </li>`;
+  }
+
+  function renderInspect(data, filesBase, filesRaw, sectionsRaw, ctx) {
+    const packFiles = (data.pack && data.pack.files) || [];
+    const sourceFiles = (data.source && data.source.files) || [];
+    const exports = (data.pack && data.pack.exports) || [];
+    const imports = data.imports || [];
+    const sections = data.sections || [];
+    const symbols = data.symbols || [];
+    const filename = (ctx && ctx.filename) || "";
+    const version = (ctx && ctx.version) || "";
+    const pkg = (ctx && ctx.package) || "";
+    let html = `<div class="guts">
+      <p class="muted">
+        kind=<code>${esc(data.kind)}</code>
+        · encoding=<code>${esc(data.encoding)}</code>
+        · signed=<code>${esc(data.signed)}</code>
+        · naked=${esc(fmtSize(data.naked_size))}
+        ${data.aot_version != null ? " · aot=" + esc(data.aot_version) : ""}
+        ${data.has_dwarf ? " · dwarf" : ""}
+      </p>`;
+    if (data.error) html += `<p class="muted">error: ${esc(data.error)}</p>`;
+    if (symbols.length || sections.length) {
+      html += `<p class="inspect-toolbar"><button type="button" class="icon-btn inspect-open-btn"
+        data-filename="${esc(filename)}"
+        data-package="${esc(pkg)}"
+        data-version="${esc(version)}"
+        title="Open Inspect commander"
+        aria-label="Open Inspect commander">${INSP_SVG}</button>
+        <span class="muted">Open Inspect…</span></p>`;
+    }
+    if (symbols.length) {
+      html += `<h3>Symbols <span class="muted">(${symbols.length})</span></h3>
+        <ul class="file-tree">`;
+      for (const sym of symbols) {
+        const meta = [sym.kind, sym.binding, fmtSize(sym.size || 0)].filter(Boolean).join(" · ");
+        html += `<li>
+          <button type="button" class="symbol-link"
+            data-filename="${esc(filename)}"
+            data-package="${esc(pkg)}"
+            data-version="${esc(version)}"
+            data-symbol="${esc(sym.name)}"
+            data-section-index="${esc(sym.section_index == null ? "" : sym.section_index)}"
+            data-offset="${esc(sym.offset == null ? 0 : sym.offset)}"
+            title="Inspect ${esc(sym.name)}"><code>${esc(sym.name)}</code></button>
+          <span class="muted">${esc(meta)}</span>
+          <button type="button" class="icon-btn inspect-open-btn"
+            data-filename="${esc(filename)}"
+            data-package="${esc(pkg)}"
+            data-version="${esc(version)}"
+            data-symbol="${esc(sym.name)}"
+            data-section-index="${esc(sym.section_index == null ? "" : sym.section_index)}"
+            data-offset="${esc(sym.offset == null ? 0 : sym.offset)}"
+            title="Inspect ${esc(sym.name)}"
+            aria-label="Inspect ${esc(sym.name)}">${INSP_SVG}</button>
+        </li>`;
+      }
+      html += `</ul>`;
+    }
+    if (sections.length) {
+      html += `<h3>Sections <span class="muted">(${sections.length})</span></h3>
+        <ul class="file-tree">`;
+      for (const sec of sections) {
+        html += sectionRow(sec, sectionsRaw, ctx);
+      }
+      html += `</ul>`;
+    }
+    if (data.pack) {
+      html += `<h3>Pack <code>${esc(data.pack.name)}</code> (v${esc(data.pack.version)})</h3>
+        <ul class="file-tree">`;
+      for (const f of packFiles) {
+        html += fileRow(
+          f.path, filesBase, filesRaw,
+          `${esc(f.kind)} · ${esc(fmtSize(f.raw_len))}`,
+          ctx
+        );
+      }
+      html += `</ul>`;
+      if (exports.length) {
+        html += `<h4>Exports</h4><ul class="file-tree">`;
+        for (const ex of exports) {
+          const name = ex.export || ex.func;
+          const typeLabel = ex.typesig || (ex.sig === 255 ? "auto" : ("tag:" + ex.sig));
+          html += `<li>
+            <button type="button" class="symbol-link"
+              data-filename="${esc(filename)}"
+              data-package="${esc(pkg)}"
+              data-version="${esc(version)}"
+              data-symbol="${esc(name)}"
+              title="Inspect export ${esc(name)}"><code>${esc(name)}</code></button>
+            <span class="muted">${esc(typeLabel)}</span>
+            <button type="button" class="icon-btn inspect-open-btn"
+              data-filename="${esc(filename)}"
+              data-package="${esc(pkg)}"
+              data-version="${esc(version)}"
+              data-symbol="${esc(name)}"
+              title="Inspect export ${esc(name)}"
+              aria-label="Inspect export ${esc(name)}">${INSP_SVG}</button>
+          </li>`;
+        }
+        html += `</ul>`;
+      }
+    }
+    if (data.source) {
+      const tags = data.source.tags || {};
+      const tagBits = Object.keys(tags).map((k) => `${esc(k)}=${esc(tags[k])}`).join(" · ");
+      html += `<h3>Source tree <code>${esc(data.source.name)}</code> ${esc(data.source.pkg_version || "")}${
+        tagBits ? ` <span class="muted">${tagBits}</span>` : ""
+      }</h3>
+        <ul class="file-tree">`;
+      for (const f of sourceFiles) {
+        html += fileRow(f.path, filesBase, filesRaw, esc(fmtSize(f.raw_len)), ctx);
+      }
+      html += `</ul>`;
+    }
+    if (imports.length) {
+      html += `<h4>Imports <span class="muted">(guest→guest call graph)</span></h4><ul class="file-tree">`;
+      for (const im of imports) {
+        html += `<li><code>${esc(im.module)}.${esc(im.func)}</code></li>`;
+      }
+      html += `</ul>`;
+    }
+    const deps = data.deps || [];
+    if (deps.length) {
+      html += `<h4>Dependencies <span class="muted">(wasmmod.deps)</span></h4><ul class="file-tree">`;
+      for (const d of deps) {
+        html += `<li><code>${esc(d.name)}</code> <span class="muted">== ${esc(d.version)}</span></li>`;
+      }
+      html += `</ul>`;
+    }
+    if (data.sig) {
+      const s = data.sig;
+      const fmt = s.format === "mpws"
+        ? `MPWS v${esc(s.version ?? "?")}`
+        : "raw ECDSA";
+      html += `<h3>Signature <code>wasmmod.sig</code></h3>
+        <p class="muted">
+          format=<code>${fmt}</code>
+          · flags=<code>${esc(s.flags)}</code>
+          · payload=${esc(fmtSize(s.payload_len))}
+        </p>
+        <ul class="file-tree">
+          <li>digest covers <span class="muted">${esc(fmtSize(s.signed_len))}</span>
+            <span class="muted">(module bytes with embedded wasmmod.sig section stripped)</span></li>
+          <li>ECDSA sig <span class="muted">${esc(fmtSize(s.sig_len))} · sha256=${esc(s.sig_sha256)}</span></li>
+          <li>chain <span class="muted">${esc(fmtSize(s.chain_len))} · ${(s.certs || []).length} cert(s)</span></li>
+        </ul>`;
+      if ((s.certs || []).length) {
+        html += `<h4>Certificate chain</h4><ul class="file-tree">`;
+        for (const c of s.certs) {
+          const role = c.role === "leaf" ? "leaf" : `intermediate[${c.index}]`;
+          html += `<li><code>[${esc(c.index)} ${role}]</code>
+            <span class="muted">${esc(fmtSize(c.der_len))} · sha256=${esc(c.sha256)}</span></li>`;
+        }
+        html += `</ul>`;
+      }
+    } else if (data.sig_error) {
+      html += `<h3>Signature <code>wasmmod.sig</code></h3>
+        <p class="muted">error: ${esc(data.sig_error)}</p>`;
+    }
+    if (!data.pack && !data.source && !data.sig && !data.error && !data.sig_error && !sections.length) {
+      html += `<p class="muted">No wasmmod.pack / wasmmod.source / wasmmod.sig sections in this artifact.</p>`;
+    }
+    html += `</div>`;
+    return html;
+  }
+
+  function hexdumpHtml(buf, limit) {
+    if (window.MetalInspect && window.MetalInspect.hexdumpHtml) {
+      return window.MetalInspect.hexdumpHtml(buf, limit);
+    }
+    const view = buf.byteLength > limit ? buf.slice(0, limit) : buf;
+    const u8 = new Uint8Array(view);
+    const width = 16;
+    const lines = [];
+    for (let i = 0; i < u8.length; i += width) {
+      const chunk = u8.subarray(i, i + width);
+      const hex = Array.from(chunk, (b) => {
+        const hx = b.toString(16).padStart(2, "0");
+        if (b === 0) return `<span class="hx-null">${hx}</span>`;
+        if (b >= 32 && b < 127) return `<span class="hx-print">${hx}</span>`;
+        return `<span class="hx-hi">${hx}</span>`;
+      }).join(" ");
+      const pad = "   ".repeat(width - chunk.length);
+      let ascii = "";
+      for (const b of chunk) ascii += (b >= 32 && b < 127) ? String.fromCharCode(b) : ".";
+      lines.push(
+        `<span class="hx-off">${i.toString(16).padStart(8, "0")}</span>  ${hex}${pad}  |${esc(ascii)}|`
+      );
+    }
+    let html = lines.join("\n");
+    if (buf.byteLength > limit) {
+      html += `\n… showing ${limit} of ${buf.byteLength} bytes`;
+    }
+    return html;
+  }
+
+  function openInspectFromBtn(btn) {
+    if (!window.openInspect) return;
+    const version = btn.dataset.version || undefined;
+    const sectionRaw = btn.dataset.sectionIndex;
+    const sourcePath = btn.dataset.sourcePath || undefined;
+    const mpyPath = btn.dataset.mpyPath || undefined;
+    window.openInspect({
+      package: btn.dataset.package || undefined,
+      filename: btn.dataset.filename,
+      version: version || undefined,
+      symbol: btn.dataset.symbol || undefined,
+      mpyPath,
+      sourcePath,
+      addr: btn.dataset.offset != null && btn.dataset.offset !== ""
+        ? Number(btn.dataset.offset) : undefined,
+      sectionIndex: sectionRaw !== "" && sectionRaw != null ? Number(sectionRaw) : undefined,
+      tab: mpyPath ? "asm" : (sourcePath ? "source" : undefined),
+    });
+  }
+
+  function setDownload(rawUrl, filename) {
+    dialogDl.hidden = false;
+    dialogDl.href = rawUrl;
+    dialogDl.setAttribute("download", filename);
+  }
+
+  function resetSourceBody(className, text) {
+    // hljs 11 refuses to re-highlight if dataset.highlighted is still set.
+    delete dialogBody.dataset.highlighted;
+    dialogBody.className = className || "source-body";
+    dialogBody.textContent = text == null ? "" : text;
+  }
+
+  function paintSource(text, lang) {
+    delete dialogBody.dataset.highlighted;
+    if (window.hljs && lang && window.hljs.getLanguage(lang)) {
+      try {
+        const out = window.hljs.highlight(text, { language: lang, ignoreIllegals: true });
+        dialogBody.className = "source-body hljs language-" + lang;
+        dialogBody.innerHTML = out.value;
+        dialogBody.dataset.highlighted = "yes";
+        return;
+      } catch (err) {
+        console.warn("hljs highlight failed", lang, err);
+      }
+    }
+    dialogBody.className = "source-body" + (lang ? (" language-" + lang) : "");
+    dialogBody.textContent = text;
+  }
+
+  async function openSource(filesBase, filesRaw, path) {
+    dialogTitle.textContent = path;
+    resetSourceBody("source-body", "Loading…");
+    dialogMeta.hidden = true;
+    dialogMeta.textContent = "";
+    setDownload(filesRaw + "?path=" + encodeURIComponent(path), path.split("/").pop() || path);
+    dialog.showModal();
+
+    const metaUrl = filesBase + "?path=" + encodeURIComponent(path);
+    const res = await fetch(metaUrl, { headers: { Accept: "application/json" } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      resetSourceBody("source-body", data.detail || ("failed (" + res.status + ")"));
+      return;
+    }
+
+    const isBinary = !!(data.binary || data.text == null);
+    dialogMeta.hidden = false;
+    dialogMeta.textContent =
+      (isBinary ? "binary" : "text") +
+      " · " + fmtSize(data.size || 0) +
+      " · section " + (data.section || "?") +
+      (data.kind ? (" · kind " + data.kind) : "");
+
+    if (!isBinary) {
+      paintSource(data.text, guessLang(path));
+      return;
+    }
+
+    const rawUrl = filesRaw + "?path=" + encodeURIComponent(path);
+    const rawRes = await fetch(rawUrl, { headers: { Accept: "application/octet-stream" } });
+    if (!rawRes.ok) {
+      resetSourceBody(
+        "source-body",
+        `(binary ${fmtSize(data.size || 0)} — download failed ${rawRes.status})`
+      );
+      return;
+    }
+    const buf = await rawRes.arrayBuffer();
+    delete dialogBody.dataset.highlighted;
+    dialogBody.className = "source-body hex-body";
+    dialogBody.innerHTML = hexdumpHtml(buf, HEX_PREVIEW);
+  }
+
+  async function openSection(sectionsRaw, index, name, size, role) {
+    const title = name || ("section_" + index);
+    dialogTitle.textContent = title;
+    resetSourceBody("source-body", "Loading…");
+    dialogMeta.hidden = false;
+    dialogMeta.textContent =
+      "container section · " + (role || "other") +
+      " · index " + index +
+      " · " + fmtSize(size || 0);
+    const rawUrl = sectionsRaw + "?index=" + encodeURIComponent(String(index));
+    setDownload(rawUrl, title.replace(/\//g, "_"));
+    dialog.showModal();
+
+    const rawRes = await fetch(rawUrl, { headers: { Accept: "application/octet-stream" } });
+    if (!rawRes.ok) {
+      const err = await rawRes.json().catch(() => ({}));
+      resetSourceBody(
+        "source-body",
+        err.detail || ("failed to load section (" + rawRes.status + ")")
+      );
+      return;
+    }
+    const buf = await rawRes.arrayBuffer();
+    delete dialogBody.dataset.highlighted;
+    dialogBody.className = "source-body hex-body";
+    dialogBody.innerHTML = hexdumpHtml(buf, HEX_PREVIEW);
+  }
+
+  list.addEventListener("click", async (ev) => {
+    if (ev.target.closest(".file-download") || ev.target.closest(".download-btn") || ev.target.closest(".try-btn")) return;
+    const inspBtn = ev.target.closest(".symbol-link, .inspect-open-btn, .mpy-inspect-btn");
+    if (inspBtn) {
+      ev.preventDefault();
+      openInspectFromBtn(inspBtn);
+      return;
+    }
+    const secBtn = ev.target.closest(".section-link");
+    if (secBtn) {
+      ev.preventDefault();
+      const row = secBtn.closest(".artifact-row");
+      if (window.openInspect && row) {
+        window.openInspect({
+          package: row.dataset.package,
+          filename: row.dataset.filename,
+          version: row.dataset.version || undefined,
+          sectionIndex: Number(secBtn.dataset.index),
+          tab: "hex",
+        });
+        return;
+      }
+      openSection(
+        secBtn.dataset.sectionsRaw,
+        Number(secBtn.dataset.index),
+        secBtn.dataset.name,
+        Number(secBtn.dataset.size),
+        secBtn.dataset.role
+      );
+      return;
+    }
+    const fileBtn = ev.target.closest(".file-link");
+    if (fileBtn) {
+      ev.preventDefault();
+      openSource(fileBtn.dataset.files, fileBtn.dataset.filesRaw, fileBtn.dataset.path);
+      return;
+    }
+    const openBtn = ev.target.closest(".artifact-open");
+    if (!openBtn) return;
+    const row = openBtn.closest(".artifact-row");
+    const panel = row.querySelector(".artifact-panel");
+    const expanded = openBtn.getAttribute("aria-expanded") === "true";
+    if (expanded) {
+      openBtn.setAttribute("aria-expanded", "false");
+      panel.hidden = true;
+      return;
+    }
+    openBtn.setAttribute("aria-expanded", "true");
+    panel.hidden = false;
+    if (!panel.dataset.loaded) {
+      panel.innerHTML = `<p class="muted">Inspecting…</p>`;
+      try {
+        const res = await fetch(row.dataset.inspect, { headers: { Accept: "application/json" } });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || res.status);
+        panel.innerHTML = renderInspect(
+          data, row.dataset.files, row.dataset.filesRaw, row.dataset.sectionsRaw,
+          {
+            filename: row.dataset.filename,
+            package: row.dataset.package,
+            version: row.dataset.version || "",
+          }
+        );
+        panel.dataset.loaded = "1";
+      } catch (err) {
+        panel.innerHTML = `<p class="muted">Inspect failed: ${esc(err.message || err)}</p>`;
+      }
+    }
+  });
+})();
+</script>

@@ -1,0 +1,297 @@
+{% args d %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ d.title }}</title>
+  <link rel="stylesheet" href="{{ d.site_css }}" />
+  {{ d.page_head }}
+</head>
+<body class="{{ d.body_class }}" data-base-path="{{ d.base_path }}">
+  <div class="site-top">
+    {% if d.experimental %}
+    <div class="exp-banner" role="status">
+      <strong>Experimental</strong>
+      <span>{{ d.experimental_message }}</span>
+    </div>
+    {% endif %}
+    <header class="banner">
+      <a class="brand" href="{{ d.home_href }}">
+        <img class="brand-mark" src="{{ d.brand_logo }}" width="22" height="22" alt="" decoding="async" referrerpolicy="no-referrer" crossorigin="anonymous" />
+        {{ d.brand_name }}
+      </a>
+      <nav class="top-nav">
+        <a href="{{ d.nav_browse }}" class="{{ d.nav_browse_cls }}">Browse</a>
+        <a href="{{ d.nav_users }}" class="{{ d.nav_users_cls }}">Users</a>
+        <a href="{{ d.nav_publish }}" class="{{ d.nav_publish_cls }}">Publish</a>
+        {% if d.nav_federation %}
+        <a href="{{ d.nav_federation }}" class="{{ d.nav_federation_cls }}">Federation</a>
+        {% endif %}
+        <a href="{{ d.nav_sessions }}" class="{{ d.nav_sessions_cls }}">Sessions</a>
+        <a href="{{ d.nav_docs }}" class="{{ d.nav_docs_cls }}">API</a>
+        {% if d.current_user %}
+        <span class="nav-user" title="{{ d.user_email }}">{{ d.user_email }}</span>
+        <button type="button" class="nav-logout" id="nav-logout">Logout</button>
+        {% else %}
+        <a href="{{ d.nav_login }}" class="{{ d.nav_login_cls }}">Login</a>
+        {% endif %}
+      </nav>
+    </header>
+  </div>
+
+  <div class="shell">
+    <aside
+      class="sidebar"
+      aria-label="Package tree"
+      id="pkg-nav"
+      data-active="{{ d.active_package }}"
+    >
+      <p class="sidebar-label">Packages</p>
+      <label class="tree-filter">
+        <span class="visually-hidden">Filter packages</span>
+        <input
+          type="search"
+          id="pkg-nav-filter"
+          placeholder="Filter packages…"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </label>
+      <p class="tree-filter-empty" id="pkg-nav-filter-empty" hidden>No matches</p>
+      {% if d.content_nav %}
+      {{ d.content_nav }}
+      {% else %}
+      <p class="tree-empty">No packages yet</p>
+      {% endif %}
+    </aside>
+
+    <main class="{{ d.main_class }}">
+      {{ d.content }}
+    </main>
+  </div>
+
+  <footer>
+    <div class="footer-product">
+      <span class="product">{{ d.brand_name }}</span>
+      <span class="footer-ver" title="package version">{{ d.app_version }}</span>
+    </div>
+    <nav class="footer-links" aria-label="Project links">
+      <a href="https://github.com/pymergetic-wasmmod/wasmmod-cdn" rel="noopener" target="_blank">GitHub</a>
+      <a href="https://pypi.org/project/pymergetic-wasmmod-cdn/" rel="noopener" target="_blank">PyPI</a>
+      <a href="https://github.com/pymergetic-wasmmod/wasmmod" rel="noopener" target="_blank">wasmmod</a>
+    </nav>
+    <a class="footer-health" href="{{ d.health_href }}" title="service health">
+      <span class="health-dot" aria-hidden="true"></span>
+      <span>ok</span>
+    </a>
+  </footer>
+
+  {% if d.experimental_repl %}
+  <div
+    id="mpy-repl"
+    class="mpy-repl is-mini"
+    aria-expanded="false"
+    data-base-path="{{ d.base_path }}"
+    data-cdn-base="{{ d.cdn_base }}"
+    data-mjs-url="{{ d.repl_mjs_url }}"
+    data-repl-asset-v="{{ d.repl_asset_v }}"
+    data-repl-engine="{{ d.repl_default_engine }}"
+    data-autoexec-url="{{ d.repl_autoexec }}"
+  >
+    <div class="mpy-repl-bar">
+      <div class="mpy-repl-engines" role="group" aria-label="µPy engine">
+        {% for e in d.repl_engines %}
+        <button
+          type="button"
+          class="mpy-repl-engine{% if e.id == d.repl_default_engine %} is-active{% endif %}"
+          data-mpy-engine="{{ e.id }}"
+          data-mjs-href="{{ e.mjs_href }}"
+          title="{{ e.title }}"
+          {% if not e.ready %}disabled{% endif %}
+        >{{ e.label }}</button>
+        {% endfor %}
+      </div>
+      <label class="mpy-repl-heap" title="GC heap for the focused engine (restarts that engine)">
+        <span class="visually-hidden">Heap size</span>
+        <select id="mpy-repl-heap" aria-label="GC heap size for focused engine">
+          <option value="4194304">4M</option>
+          <option value="8388608">8M</option>
+          <option value="16777216">16M</option>
+          <option value="33554432">32M</option>
+          <option value="67108864">64M</option>
+          <option value="134217728">128M</option>
+        </select>
+      </label>
+      <button type="button" id="mpy-repl-reset" class="mpy-repl-reset" title="Reset seat after shutdown (reboot / boot again)" hidden>Reset</button>
+      <button type="button" id="mpy-repl-toggle" class="mpy-repl-toggle" title="Toggle MicroPython shell size">
+        <span class="mpy-repl-title">µPy</span>
+        <span id="mpy-repl-status" class="mpy-repl-status muted">{% if d.repl_ready %}idle{% else %}loading…{% endif %}</span>
+      </button>
+    </div>
+    <div class="mpy-repl-body">
+      <div class="mpy-repl-term" id="mpy-repl-term" tabindex="-1">
+        {% for e in d.repl_engines %}
+        <div
+          class="mpy-repl-out"
+          data-engine-out="{{ e.id }}"
+          aria-live="polite"
+          {% if e.id != d.repl_default_engine %}hidden{% endif %}
+        ></div>
+        {% endfor %}
+        <div class="mpy-repl-line">
+          <span class="mpy-repl-prompt" aria-hidden="true">&gt;&gt;&gt; </span>
+          <label class="visually-hidden" for="mpy-repl-in">Python input</label>
+          <input id="mpy-repl-in" type="text" autocomplete="off" spellcheck="false" />
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+  (() => {
+    const el = document.getElementById("mpy-repl");
+    if (!el) return;
+    const prefix = (el.dataset.basePath || "").split("/").join("");
+    const p = window.location.pathname;
+    const pathPref = (p === "/cdn" || p.startsWith("/cdn/")) ? "/cdn" : "";
+    el.dataset.cdnBase = window.location.origin + (prefix || pathPref || "");
+  })();
+  </script>
+  <script src="{{ d.repl_js_src }}" defer></script>
+  {% endif %}
+
+  <script>
+  (() => {
+    const nav = document.getElementById("pkg-nav");
+    if (!nav) return;
+    const active = nav.dataset.active || "";
+    const filterInput = document.getElementById("pkg-nav-filter");
+    const filterEmpty = document.getElementById("pkg-nav-filter-empty");
+
+    function setOpen(li, open) {
+      const btn = li.querySelector(":scope > .tree-row > .tree-toggle")
+        || li.querySelector(":scope > .tree-toggle");
+      const kids = li.querySelector(":scope > .tree-children");
+      li.classList.toggle("is-open", open);
+      if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
+      if (kids) kids.hidden = !open;
+    }
+
+    function openAncestors(leaf) {
+      let el = leaf;
+      while (el && el !== nav) {
+        if (el.classList && el.classList.contains("is-folder")) setOpen(el, true);
+        el = el.parentElement;
+      }
+    }
+
+    if (active) {
+      const leaf = nav.querySelector(`.tree-node[data-package="${CSS.escape(active)}"]`);
+      if (leaf) openAncestors(leaf);
+    }
+
+    nav.addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".tree-toggle");
+      if (!btn || !nav.contains(btn)) return;
+      const li = btn.closest(".tree-node");
+      if (!li) return;
+      setOpen(li, !li.classList.contains("is-open"));
+    });
+
+    nav.addEventListener("change", (ev) => {
+      const sel = ev.target.closest(".tree-ver-select");
+      if (!sel) return;
+      const opt = sel.selectedOptions[0];
+      const href = opt && opt.dataset.href;
+      if (href) window.location.href = href;
+    });
+
+    function applyFilter(raw) {
+      const q = String(raw || "").trim().toLowerCase();
+      const nodes = nav.querySelectorAll(".tree-node");
+      if (!q) {
+        nodes.forEach((li) => {
+          li.hidden = false;
+          if (li.classList.contains("is-folder")) setOpen(li, false);
+        });
+        if (filterEmpty) filterEmpty.hidden = true;
+        if (active) {
+          const leaf = nav.querySelector(`.tree-node[data-package="${CSS.escape(active)}"]`);
+          if (leaf) openAncestors(leaf);
+        }
+        return;
+      }
+
+      nodes.forEach((li) => { li.hidden = true; });
+      let hits = 0;
+      nav.querySelectorAll(".tree-node[data-package]").forEach((leaf) => {
+        const hay = leaf.dataset.search || leaf.dataset.package || "";
+        if (!hay.includes(q)) return;
+        hits += 1;
+        leaf.hidden = false;
+        openAncestors(leaf);
+        let p = leaf.parentElement;
+        while (p && p !== nav) {
+          if (p.classList && p.classList.contains("tree-node")) p.hidden = false;
+          p = p.parentElement;
+        }
+      });
+      nav.querySelectorAll(".tree-node.is-folder").forEach((folder) => {
+        const hay = folder.dataset.search || folder.dataset.name || "";
+        if (!hay.includes(q)) return;
+        hits += 1;
+        folder.hidden = false;
+        setOpen(folder, true);
+        folder.querySelectorAll(".tree-node").forEach((n) => { n.hidden = false; });
+        let p = folder.parentElement;
+        while (p && p !== nav) {
+          if (p.classList && p.classList.contains("tree-node")) {
+            p.hidden = false;
+            if (p.classList.contains("is-folder")) setOpen(p, true);
+          }
+          p = p.parentElement;
+        }
+      });
+      if (filterEmpty) filterEmpty.hidden = hits > 0;
+    }
+
+    if (filterInput) {
+      filterInput.addEventListener("input", () => applyFilter(filterInput.value));
+      filterInput.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") {
+          filterInput.value = "";
+          applyFilter("");
+          filterInput.blur();
+        }
+      });
+    }
+  })();
+  </script>
+  {% if d.current_user %}
+  <script>
+  (function () {
+    const btn = document.getElementById("nav-logout");
+    if (!btn) return;
+    const apiBase = "{{ d.base_path }}";
+    btn.addEventListener("click", async () => {
+      const headers = { "Content-Type": "application/json" };
+      try {
+        const csrfRes = await fetch(apiBase + "/auth/csrf", { credentials: "same-origin" });
+        if (csrfRes.ok) {
+          const data = await csrfRes.json();
+          if (data.csrf_token) headers["X-CSRF-Token"] = data.csrf_token;
+        }
+      } catch (_) {}
+      await fetch(apiBase + "/auth/logout", {
+        method: "POST",
+        credentials: "same-origin",
+        headers,
+      });
+      window.location.href = apiBase + "/channels/lead";
+    });
+  })();
+  </script>
+  {% endif %}
+  <script type="module" src="{{ d.inspect_js }}"></script>
+</body>
+</html>

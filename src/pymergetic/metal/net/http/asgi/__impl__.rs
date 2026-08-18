@@ -50,6 +50,7 @@ unsafe extern "C" {
     fn pm_metal_net_ip_socket(kind: i32) -> i32;
     fn pm_metal_net_ip_close(fd: i32) -> i32;
     fn pm_metal_net_ip_bind(fd: i32, addr: u32, port: u16) -> i32;
+    fn pm_util_mem_alloc(arena: *mut pm_util_mem_arena_t, n: usize) -> *mut u8;
     fn pm_metal_net_ip_listen(fd: i32, backlog: i32) -> i32;
     fn pm_metal_net_ip_accept(fd: i32) -> i32;
     fn pm_metal_net_ip_send(fd: i32, buf: *const u8, len: u32) -> i32;
@@ -661,6 +662,46 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route_static(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn pm_metal_net_http_asgi_route_static_copy(
+    url: *const u8,
+    body: *const u8,
+    body_len: u32,
+) -> i32 {
+    /* Runtime-render wiring: copy the given bytes into a stable arena allocation
+     * (survives the caller; the seat renders live templates into a buffer, then
+     * hands the bytes off here) and serve them as a GET static route. Empty is
+     * not mountable. Nothing is retained between calls. */
+    if url.is_null() || body.is_null() || body_len == 0 {
+        return -1;
+    }
+    unsafe {
+        let arena = *ARENA.0.get();
+        if arena.is_null() {
+            return -1;
+        }
+        let Some(slot) = routes().iter().position(|r| !r.used) else {
+            return -1;
+        };
+        let n = body_len as usize;
+        let dst = pm_util_mem_alloc(arena, n);
+        if dst.is_null() {
+            return -1;
+        }
+        ptr::copy_nonoverlapping(body, dst, n);
+        let r = &mut routes()[slot];
+        if !cstr_copy(&mut r.method, b"GET\0".as_ptr()) || !cstr_copy(&mut r.path, url) {
+            return -1;
+        }
+        r.body.fill(0);
+        r.body_len = body_len;
+        r.handler = None;
+        r.ext = dst;
+        r.used = true;
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn pm_metal_net_http_asgi_listen(addr: u32, port: u16) -> i32 {
     unsafe {
         if (*ARENA.0.get()).is_null() {
@@ -757,6 +798,11 @@ pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
 pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",
     pm_metal_net_http_asgi_route_static,
+    "int32_t(const char *, const uint8_t *, uint32_t)"
+);
+pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
+    "pymergetic.metal.net.http.asgi",
+    pm_metal_net_http_asgi_route_static_copy,
     "int32_t(const char *, const uint8_t *, uint32_t)"
 );
 pymergetic_wasmmod::PM_MOD_EXPORT_RS!(

@@ -44,7 +44,7 @@ class Compiler:
             self.indent()
             self.file_out.write('yield """')
             self.in_literal = True
-        self.file_out.write(s.replace('"', '\\"'))
+        self.file_out.write(s.replace("\\", "\\\\").replace('"', '\\"'))
 
     def close_literal(self):
         if self.in_literal:

@@ -1,0 +1,241 @@
+{% args d %}
+<section class="hero">
+  <p class="eyebrow">browse</p>
+  <h1>Packages</h1>
+  <p class="lede">
+    Flat catalog by fully-qualified name. Sort by date, filter by text / status /
+    deps. <strong>Needed by</strong> shows reverse deps from known packages.
+  </p>
+</section>
+
+<section class="pkg-catalog" id="pkg-catalog"
+  data-count="{{ d.catalog_len }}">
+  <div class="pkg-toolbar">
+    <label class="pkg-search">
+      <span class="visually-hidden">Search packages</span>
+      <input type="search" id="pkg-q" placeholder="Filter by name, author, deps…"
+             autocomplete="off" spellcheck="false" />
+    </label>
+    <label class="pkg-filter">
+      <span class="visually-hidden">Status</span>
+      <select id="pkg-status" aria-label="Status filter">
+        <option value="all">All status</option>
+        <option value="ok">Active</option>
+        <option value="yanked">Yanked</option>
+        <option value="deprecated">Deprecated</option>
+      </select>
+    </label>
+    <label class="pkg-filter">
+      <span class="visually-hidden">Channel</span>
+      <select id="pkg-channel" aria-label="Channel filter">
+        <option value="all">Any channel</option>
+        <option value="lead">Has lead</option>
+        <option value="pin">Pins only</option>
+      </select>
+    </label>
+    <label class="pkg-filter">
+      <span class="visually-hidden">Deps</span>
+      <select id="pkg-deps" aria-label="Dependency filter">
+        <option value="all">Any deps</option>
+        <option value="has-deps">Has dependencies</option>
+        <option value="needed">Needed by others</option>
+        <option value="leaf">No deps / not needed</option>
+      </select>
+    </label>
+    <label class="pkg-filter">
+      <span class="visually-hidden">Origin</span>
+      <select id="pkg-origin" aria-label="Origin filter">
+        <option value="all">Any origin</option>
+        <option value="local">Local</option>
+        <option value="remote">Federated</option>
+      </select>
+    </label>
+    <label class="pkg-filter">
+      <span class="visually-hidden">Sort</span>
+      <select id="pkg-sort" aria-label="Sort packages">
+        <option value="date-desc">Newest first</option>
+        <option value="date-asc">Oldest first</option>
+        <option value="name-asc">Name A–Z</option>
+        <option value="name-desc">Name Z–A</option>
+        <option value="arts-desc">Most artifacts</option>
+        <option value="needed-desc">Most needed-by</option>
+      </select>
+    </label>
+    <p class="pkg-count muted" id="pkg-count"></p>
+  </div>
+
+  {% if d.catalog %}
+  <div class="pkg-table-wrap">
+    <table class="pkg-table" id="pkg-table">
+      <thead>
+        <tr>
+          <th scope="col">Package</th>
+          <th scope="col">Version</th>
+          <th scope="col">Deps</th>
+          <th scope="col">Needed by</th>
+          <th scope="col">Updated</th>
+          <th scope="col">Arts</th>
+          <th scope="col">Flags</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for pkg in d.catalog %}
+        <tr class="pkg-row{% if pkg.origin == 'remote' %} is-remote{% endif %}"
+            data-name="{{ pkg.name_lower }}"
+            data-search="{{ pkg.data_search }}"
+            data-channel="{{ pkg.channel }}"
+            data-origin="{{ pkg.origin }}"
+            data-yanked="{{ pkg.data_yanked }}"
+            data-deprecated="{{ pkg.data_deprecated }}"
+            data-updated="{{ pkg.data_updated }}"
+            data-arts="{{ pkg.artifact_count }}"
+            data-versions="{{ pkg.version_count }}"
+            data-deps="{{ pkg.deps_len }}"
+            data-needed="{{ pkg.needed_len }}">
+          <td class="pkg-fqn">
+            <a href="{{ pkg.href }}">{{ pkg.name }}</a>
+            {% if pkg.origin == 'remote' and pkg.peer_browse_url %}
+            <a class="pkg-remote-link" href="{{ pkg.peer_browse_url }}" rel="noopener" target="_blank"
+               title="Open on {{ pkg.peer_label }}">Visit remote</a>
+            {% endif %}
+            {% if pkg.description %}
+            <span class="pkg-desc muted">{{ pkg.description }}</span>
+            {% endif %}
+          </td>
+          <td class="pkg-ver">
+            <a class="ver" href="{{ pkg.href }}#history">{{ pkg.version }}</a>
+            {% if pkg.version_count > 1 %}
+            <a class="muted pkg-ch-count" href="{{ pkg.href }}#history"
+               title="{{ pkg.version_count }} published channels">· {{ pkg.version_count }} ch</a>
+            {% endif %}
+            <span class="pill{{ pkg.lead_pill }}">{{ pkg.channel }}</span>
+          </td>
+          <td class="pkg-deps">
+            {% if pkg.dep_links %}
+            {% for dep in pkg.dep_links %}
+            <a class="dep-chip {{ dep.cls }}" href="{{ dep.href }}"
+               title="{{ dep.title }}">{{ dep.name }}</a>{% if not dep.last %} {% endif %}
+            {% endfor %}
+            {% else %}
+            <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td class="pkg-needed">
+            {% if pkg.needed_links %}
+            {% for dep in pkg.needed_links %}
+            <a class="dep-chip{{ dep.cls }}" href="{{ dep.href }}">{{ dep.name }}</a>{% if not dep.last %} {% endif %}
+            {% endfor %}
+            {% else %}
+            <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td class="pkg-date mono" title="{{ pkg.data_updated }}">
+            {% if pkg.updated_str %}
+            {{ pkg.updated_str }}
+            {% else %}
+            <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td class="pkg-arts mono">{{ pkg.artifact_count }}</td>
+          <td class="pkg-flags">
+            {% if pkg.role == 'host' %}<span class="pill pill-host">host</span>{% endif %}
+            {% if pkg.role == 'engine' %}<span class="pill pill-engine">engine</span>{% endif %}
+            {% if pkg.role == 'kernel' %}<span class="pill pill-kernel">kernel</span>{% endif %}
+            {% if pkg.role == 'arch' %}<span class="pill pill-arch">arch</span>{% endif %}
+            {% if pkg.origin == 'remote' %}<span class="pill pill-remote" title="{{ pkg.peer_label }}">remote</span>{% endif %}
+            {% if pkg.yanked %}<span class="pill pill-warn">yanked</span>{% endif %}
+            {% if pkg.deprecated %}<span class="pill pill-warn">deprecated</span>{% endif %}
+            {% if not pkg.role and pkg.origin != 'remote' and not pkg.yanked and not pkg.deprecated %}<span class="muted">—</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="tree-filter-empty" id="pkg-empty" hidden>No packages match these filters.</p>
+  {% else %}
+  <p class="muted">No packages yet. Publish signed wasmmod artifacts to get started.</p>
+  {% endif %}
+</section>
+
+{% if d.catalog %}
+<script>
+(() => {
+  const root = document.getElementById("pkg-catalog");
+  const table = document.getElementById("pkg-table");
+  if (!root || !table) return;
+  const tbody = table.tBodies[0];
+  const qEl = document.getElementById("pkg-q");
+  const statusEl = document.getElementById("pkg-status");
+  const channelEl = document.getElementById("pkg-channel");
+  const depsEl = document.getElementById("pkg-deps");
+  const originEl = document.getElementById("pkg-origin");
+  const sortEl = document.getElementById("pkg-sort");
+  const countEl = document.getElementById("pkg-count");
+  const emptyEl = document.getElementById("pkg-empty");
+  const rows = Array.from(tbody.querySelectorAll(".pkg-row"));
+
+  function apply() {
+    const q = (qEl.value || "").trim().toLowerCase();
+    const status = statusEl.value;
+    const channel = channelEl.value;
+    const deps = depsEl.value;
+    const origin = originEl ? originEl.value : "all";
+    let visible = 0;
+    rows.forEach((row) => {
+      const hay = row.dataset.search || "";
+      const yanked = row.dataset.yanked === "1";
+      const deprecated = row.dataset.deprecated === "1";
+      const ch = row.dataset.channel || "";
+      const org = row.dataset.origin || "local";
+      const nDeps = Number(row.dataset.deps || 0);
+      const nNeeded = Number(row.dataset.needed || 0);
+      let ok = !q || hay.includes(q);
+      if (ok && status === "ok") ok = !yanked && !deprecated;
+      if (ok && status === "yanked") ok = yanked;
+      if (ok && status === "deprecated") ok = deprecated;
+      if (ok && channel === "lead") ok = ch === "lead";
+      if (ok && channel === "pin") ok = ch !== "lead";
+      if (ok && deps === "has-deps") ok = nDeps > 0;
+      if (ok && deps === "needed") ok = nNeeded > 0;
+      if (ok && deps === "leaf") ok = nDeps === 0 && nNeeded === 0;
+      if (ok && origin === "local") ok = org !== "remote";
+      if (ok && origin === "remote") ok = org === "remote";
+      row.hidden = !ok;
+      if (ok) visible += 1;
+    });
+    const sort = sortEl.value;
+    const shown = rows.filter((r) => !r.hidden);
+    shown.sort((a, b) => {
+      const nameA = a.dataset.name || "";
+      const nameB = b.dataset.name || "";
+      const dateA = a.dataset.updated || "";
+      const dateB = b.dataset.updated || "";
+      const artsA = Number(a.dataset.arts || 0);
+      const artsB = Number(b.dataset.arts || 0);
+      const needA = Number(a.dataset.needed || 0);
+      const needB = Number(b.dataset.needed || 0);
+      if (sort === "name-asc") return nameA.localeCompare(nameB);
+      if (sort === "name-desc") return nameB.localeCompare(nameA);
+      if (sort === "date-asc") return dateA.localeCompare(dateB) || nameA.localeCompare(nameB);
+      if (sort === "arts-desc") return artsB - artsA || nameA.localeCompare(nameB);
+      if (sort === "needed-desc") return needB - needA || nameA.localeCompare(nameB);
+      return dateB.localeCompare(dateA) || nameA.localeCompare(nameB);
+    });
+    shown.forEach((r) => tbody.appendChild(r));
+    if (countEl) countEl.textContent = visible + " / " + rows.length + " packages";
+    if (emptyEl) emptyEl.hidden = visible > 0;
+  }
+
+  [qEl, statusEl, channelEl, depsEl, originEl, sortEl].forEach((el) => {
+    if (!el) return;
+    el.addEventListener("input", apply);
+    el.addEventListener("change", apply);
+  });
+  qEl.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") { qEl.value = ""; apply(); qEl.blur(); }
+  });
+  apply();
+})();
+</script>
+{% endif %}
