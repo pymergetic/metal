@@ -343,34 +343,64 @@ static void msg_wasm(int last) {
 }
 
 static void msg_repl(int last) {
-    /* Interactive hint on the MOTD surface: list every registered service with
-     * its default port and a run sample, plus how many live instances exist.
-     * `m.serve()` starts the default instance of all of them on ANY. */
+    /* Interactive hint on the MOTD surface (last in order, order 30): the repl
+     * node lists the import + `m.serve()` sample, and one child per registered
+     * service shows that service's single-start (RUNMOD.listen(...)) sample with
+     * its live state. Driven by the services registry, so adding a service makes
+     * it appear here automatically; none of the paths are hardcoded. */
     char detail[192];
-    unsigned off = 0;
-    uint32_t n = pm_metal_services_count();
+    const uint32_t n = pm_metal_services_count();
     uint32_t i;
     (void)last;
-    /* Fits: "import pymergetic.metal as m  run m.serve() -> ssh:2222 asgi:8090" */
-    off += (unsigned)snprintf(detail + off, sizeof(detail) - off,
+    /* Root: import + the start-all sample. */
+    snprintf(detail, sizeof(detail),
         "import pymergetic.metal as m" PM_METAL_BOOT_SGR_DIM "  run m.serve() ->"
-        PM_METAL_BOOT_SGR_RST);
-    for (i = 0; i < n && off + 24u < sizeof(detail); i++) {
+        " every service" PM_METAL_BOOT_SGR_RST);
+    pm_metal_boot_msg_item(0, 0, 0, "repl", detail);
+    if (n == 0u) {
+        pm_metal_boot_msg_item(1, 1, 0, "none",
+            PM_METAL_BOOT_SGR_DIM "no service registered" PM_METAL_BOOT_SGR_RST);
+        return;
+    }
+    for (i = 0; i < n; i++) {
         const char *name = pm_metal_services_name(i);
+        const char *fqn = pm_metal_services_fqn(i);
         uint16_t port = pm_metal_services_port(i);
         uint32_t up = pm_metal_services_instances(i);
+        int is_last = (i + 1u == n);
         if (name == NULL) {
             continue;
         }
-        off += (unsigned)snprintf(detail + off, sizeof(detail) - off,
-            " " PM_METAL_BOOT_SGR_SIM "%s:%u" PM_METAL_BOOT_SGR_RST,
-            name, (unsigned)port);
-        if (up > 0u) {
-            off += (unsigned)snprintf(detail + off, sizeof(detail) - off,
-                PM_METAL_BOOT_SGR_OK "(%u up)" PM_METAL_BOOT_SGR_RST, up);
+        /* Derive the REPL path: `import pymergetic.metal as m` aliases the
+         * module, so pymergetic.metal.<rest> is typed as `m.<rest>` in the
+         * sample. Anything else keeps its full fqn. */
+        if (fqn != NULL && strncmp(fqn, "pymergetic.metal.", 17u) == 0) {
+            const char *rest = fqn + 17u; /* "net.ssh", "net.http.asgi", ... */
+            if (up > 0u) {
+                snprintf(detail, sizeof(detail),
+                    PM_METAL_BOOT_SGR_DIM "run m.%s.listen(0x0, %u)" PM_METAL_BOOT_SGR_RST
+                    "  " PM_METAL_BOOT_SGR_OK "(%u up)" PM_METAL_BOOT_SGR_RST,
+                    rest, (unsigned)port, up);
+            } else {
+                snprintf(detail, sizeof(detail),
+                    PM_METAL_BOOT_SGR_DIM "run m.%s.listen(0x0, %u)" PM_METAL_BOOT_SGR_RST,
+                    rest, (unsigned)port);
+            }
+        } else {
+            const char *mod = (fqn != NULL) ? fqn : "m";
+            if (up > 0u) {
+                snprintf(detail, sizeof(detail),
+                    PM_METAL_BOOT_SGR_DIM "run %s.listen(0x0, %u)" PM_METAL_BOOT_SGR_RST
+                    "  " PM_METAL_BOOT_SGR_OK "(%u up)" PM_METAL_BOOT_SGR_RST,
+                    mod, (unsigned)port, up);
+            } else {
+                snprintf(detail, sizeof(detail),
+                    PM_METAL_BOOT_SGR_DIM "run %s.listen(0x0, %u)" PM_METAL_BOOT_SGR_RST,
+                    mod, (unsigned)port);
+            }
         }
+        pm_metal_boot_msg_item(is_last, 1, !is_last, name, detail);
     }
-    pm_metal_boot_msg_item(1, 0, 0, "repl", detail);
 }
 
 int32_t pm_metal_boot_tree_print(void) {

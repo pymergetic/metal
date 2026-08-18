@@ -159,7 +159,7 @@ prove: $(BUILD)/metal.qemu.elf $(BUILD)/blk.img
 	grep -q "lz4" $(BUILD)/serial.log || exit 1; \
 	grep -q "mtar" $(BUILD)/serial.log || exit 1; \
 	grep -q "packages()" $(BUILD)/serial.log || exit 1; \
-	grep -q "\`-- repl" $(BUILD)/serial.log || exit 1; \
+	grep -q "run m.net.ssh.listen(0x0, 2222)" $(BUILD)/serial.log || exit 1; \
 	grep -q "viewport" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy metal ready" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy native card import" $(BUILD)/serial.log || exit 1; \
