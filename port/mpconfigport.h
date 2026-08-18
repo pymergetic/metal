@@ -51,7 +51,7 @@ extern const struct _mp_obj_fun_builtin_var_t mp_metal_builtin_quit_obj;
 extern const struct _mp_obj_fun_builtin_fixed_t mp_metal_builtin_reboot_obj;
 extern const struct _mp_obj_fun_builtin_fixed_t mp_metal_builtin_shutdown_obj;
 extern const struct _mp_obj_fun_builtin_fixed_t mp_metal_builtin_process_obj;
-extern const struct _mp_obj_fun_builtin_fixed_t mp_metal_builtin_packages_obj;
+extern const struct _mp_obj_fun_builtin_var_t mp_metal_builtin_packages_obj;
 extern const struct _mp_obj_fun_builtin_fixed_t mp_metal_builtin_help_obj;
 
 #define MICROPY_PORT_BUILTINS \
