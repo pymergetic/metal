@@ -112,8 +112,11 @@ $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI: $(FW_OBJS) $(FW_WAMR_LIBS) | $(BUILD)
 		/opt:ref /base:0x1000000 /out:$@ $(FW_OBJS) $(FW_WAMR_LIBS)
 
 $(BUILD)/blk.img: | $(BUILD)
-	dd if=/dev/zero of=$@ bs=512 count=64 status=none
+	dd if=/dev/zero of=$@ bs=512 count=512 status=none
 	mkfs.vfat -F 12 -n METAL $@ >/dev/null
+	# prove_x86() in main.c reads LBA0 and requires a "METL" brand. mkfs puts
+	# "METAL" only in the BPB OEM field, so stamp the first 4 bytes again.
+	printf 'METL' | dd of=$@ conv=notrunc status=none
 	printf 'hi\n' > $(BUILD)/hi.txt
 	printf 'x' > $(BUILD)/x.txt
 	printf 'ok\n' > $(BUILD)/hello_fat.txt

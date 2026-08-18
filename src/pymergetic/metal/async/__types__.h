@@ -31,6 +31,7 @@ struct pm_metal_async_coro {
     pm_metal_async_coro_t *waiter;   /* parent */
     pm_metal_async_task_t *task;     /* outer scheduled unit (set on create_task) */
     uint32_t status;
+    uint32_t vm_only; /* 1 = step() re-enters the bytecode VM; only the VM owner may run it */
 };
 
 struct pm_metal_async_task {
@@ -44,6 +45,10 @@ int32_t pm_metal_async_ready(void);
 uint32_t pm_metal_async_n_runners(void);
 const char *pm_metal_async_runner_kind(void);
 uint32_t pm_metal_async_process_id(void);
+
+/* Mark a coro as re-entering the bytecode VM: only the thread that owns the VM
+ * (the boot/main thread) may step it. Background SMP runners re-queue instead. */
+void pm_metal_async_coro_set_vm_only(pm_metal_async_coro_t *coro);
 
 #ifdef __cplusplus
 }

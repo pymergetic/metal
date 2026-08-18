@@ -69,6 +69,11 @@ static struct pm_metal_async_timer *s_timers;
 static pm_util_lock_t s_timer_lock;
 static uint32_t s_ready;
 static uint32_t s_ncpu;
+/* Worker (AP / runner pthread) marking per current-slot. The boot thread that
+ * runs pm_metal_async_init owns the bytecode VM and never marks itself a
+ * runner; coros that re-enter the VM (metal.register_upy step_upy) must be
+ * stepped only by the owner. A plain slot array keeps TLS out of firmware. */
+static uint32_t s_worker[PM_METAL_ASYNC_APIC_N];
 #if defined(PM_METAL_ASYNC_PTHREAD)
 static uint32_t s_njoin;
 static pthread_t *s_thread;
@@ -163,6 +168,18 @@ static pm_metal_async_task_t **current_slot(void) {
         id = 0;
     }
     return &s_current_cpu[id];
+#endif
+}
+
+static uint32_t cpu_slot(void) {
+#if defined(PM_METAL_ASYNC_PTHREAD)
+    return s_cpu;
+#else
+    uint32_t id = cpu_id();
+    if (id >= PM_METAL_ASYNC_APIC_N) {
+        id = 0;
+    }
+    return id;
 #endif
 }
 
@@ -377,6 +394,16 @@ static uint64_t next_timer_deadline(void) {
     return d;
 }
 
+void pm_metal_async_coro_set_vm_only(pm_metal_async_coro_t *coro) {
+    if (coro != NULL) {
+        coro->vm_only = 1u;
+    }
+}
+
+static int vm_owner(void) {
+    return s_worker[cpu_slot()] == 0u;
+}
+
 static void step_task(pm_metal_async_task_t *task) {
     pm_metal_async_task_t **cur;
     if (task == NULL || task->root == NULL || task->on_c_stack) {
@@ -385,6 +412,19 @@ static void step_task(pm_metal_async_task_t *task) {
     if (task->root->status == PM_METAL_ASYNC_DONE || task->root->status == PM_METAL_ASYNC_ERROR
         || task->root->status == PM_METAL_ASYNC_CANCELLED) {
         return;
+    }
+    if (!vm_owner()) {
+        /* A leaf on this task re-enters the bytecode VM, which is single-threaded
+         * and owned by the boot thread. A runner must not step it (no MP thread
+         * state, no GIL): hand it back so the boot thread drains it. */
+        pm_metal_async_coro_t *leaf = task->root;
+        while (leaf->awaiting != NULL) {
+            leaf = leaf->awaiting;
+        }
+        if (leaf->vm_only) {
+            (void)ring_push(PM_METAL_RING_KIND_TASK, task);
+            return;
+        }
     }
     uint32_t expected = 0;
     if (!__atomic_compare_exchange_n(&task->running, &expected, 1u, 0, __ATOMIC_ACQ_REL,
@@ -448,6 +488,9 @@ static void runner_entry(void *arg) {
 #else
     (void)arg;
 #endif
+    /* A runner (AP or pthread) never owns the bytecode VM; mark the slot so
+     * vm_only coros are handed back to the boot thread. */
+    s_worker[cpu_slot()] = 1u;
     atomic_fetch_add(&s_alive, 1u);
     while (atomic_load(&s_run) != 0u) {
         pm_metal_net_ip_pump();
@@ -482,6 +525,7 @@ int32_t pm_metal_async_init(pm_util_mem_arena_t *arena, uint32_t ncpu) {
     }
     pm_util_lock_init(&s_timer_lock);
     s_timers = NULL;
+    memset(s_worker, 0, sizeof(s_worker));
     s_ncpu = 1;
     atomic_store(&s_alive, 1u);
     atomic_store(&s_run, 1u);

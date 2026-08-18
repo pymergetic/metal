@@ -108,6 +108,10 @@ static mp_obj_t metal_register_upy(mp_obj_t gen) {
     if (frame == NULL) {
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("upy coro"));
     }
+    /* step_upy re-enters the bytecode VM (nlr_push + mp_iternext on the global
+     * metal_upy_gen root-pointer). Only the boot thread owns the VM; mark the
+     * coro so SMP/async runners hand it back instead of stepping it. */
+    pm_metal_async_coro_set_vm_only(&frame->coro);
     frame->slot = i;
     MP_STATE_VM(metal_upy_gen)[i] = gen;
     if (pm_metal_async_create_task(&frame->coro) == NULL) {

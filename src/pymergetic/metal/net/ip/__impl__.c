@@ -9,6 +9,7 @@
 #include "pymergetic/metal/async.h"
 #include "pymergetic/metal/dt.h"
 #include "pymergetic/metal/drivers/net.h"
+#include "pymergetic/util/lock.h"
 #include "pymergetic/util/mem.h"
 
 #include <string.h>
@@ -16,6 +17,7 @@
 pm_util_mem_arena_t *pm_ip_arena;
 uint32_t pm_ip_lo_up;
 uint32_t pm_ip_lo_addr_be = PM_METAL_IP_LO_BE;
+pm_util_lock_t pm_ip_lock;
 struct pm_metal_sock pm_ip_sk[PM_METAL_IP_SOCK_MAX];
 struct pm_metal_ip_l2 pm_ip_l2[PM_METAL_IP_L2_MAX];
 uint32_t pm_ip_l2_n;
@@ -31,6 +33,39 @@ uint16_t pm_ip_ping_id;
 
 static uint16_t s_eph = 49152u;
 static uint16_t s_ping_seq;
+
+/* Locked internals: defined later in this TU, but referenced by the if_up
+ * path before their definitions. External entry points take pm_ip_lock and
+ * call these; internal flow calls them with the lock already held. */
+int32_t pm_ip_l2_attach_locked(int32_t h);
+int32_t pm_ip_socket_locked(int32_t type);
+int32_t pm_ip_close_locked(int32_t fd);
+int32_t pm_ip_bind_locked(int32_t fd, uint32_t addr_be, uint16_t port_host);
+int32_t pm_ip_bind_l2_locked(int32_t fd, int32_t h);
+int32_t pm_ip_listen_locked(int32_t fd, int32_t backlog);
+int32_t pm_ip_accept_locked(int32_t fd);
+int32_t pm_ip_connect_locked(int32_t fd, uint32_t addr_be, uint16_t port_host);
+int32_t pm_ip_send_locked(int32_t fd, const uint8_t *buf, uint32_t len);
+int32_t pm_ip_recv_locked(int32_t fd, uint8_t *buf, uint32_t len);
+int32_t pm_ip_sendto_locked(int32_t fd, const uint8_t *buf, uint32_t len, uint32_t addr_be,
+    uint16_t port_host);
+int32_t pm_ip_recvfrom_locked(int32_t fd, uint8_t *buf, uint32_t len, uint32_t *addr_be,
+    uint16_t *port_host);
+int32_t pm_ip_route_add_locked(uint32_t dst_be, uint32_t mask_be, uint32_t gw_be, int32_t h);
+int32_t pm_ip_route_del_locked(uint32_t dst_be, uint32_t mask_be);
+int32_t pm_ip_gw_set_locked(uint32_t gw_be);
+int32_t pm_ip_arp_resolve_locked(uint32_t addr_be);
+void pm_ip_pump_locked(void);
+
+/* The IP stack is one shared, inherently single-threaded set of tables
+ * (sockets, interfaces, routes, ARP, NIC rx). Background async runners poll
+ * the NIC via pm_metal_net_ip_pump() concurrently with the main thread's
+ * synchronous socket work (tests, run_until waiters, firmware main). Without a
+ * gate that polling races the data path — a worker mid-rx can strand or corrupt
+ * the bytes a synchronous recv/send/accept is about to consume, and a lost
+ * wakeup makes a fetch stall. One RS lock serializes the whole card. Exported
+ * entry points take pm_ip_lock and call the pm_ip_*_locked internals, so a lock
+ * is never held across a nested exported call (RS lock is non-reentrant). */
 
 void pm_ip_sock_wake(struct pm_metal_sock *s) {
     if (s->waiter != NULL) {
@@ -77,6 +112,7 @@ int32_t pm_metal_net_ip_init(pm_util_mem_arena_t *arena) {
         return -1;
     }
     pm_ip_arena = arena;
+    pm_util_lock_init(&pm_ip_lock);
     memset(pm_ip_sk, 0, sizeof(pm_ip_sk));
     pm_ip_l2_clear();
     pm_ip_lo_up = 0;
@@ -101,12 +137,17 @@ int32_t pm_metal_net_ip_lo_up(void) {
     if (pm_ip_arena == NULL) {
         return -1;
     }
+    pm_util_lock_acquire(&pm_ip_lock);
     pm_ip_lo_up = 1;
+    pm_util_lock_release(&pm_ip_lock);
     return 0;
 }
 
 int32_t pm_metal_net_ip_lo_ready(void) {
-    return (pm_ip_arena != NULL && pm_ip_lo_up != 0) ? 1 : 0;
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t r = (pm_ip_arena != NULL && pm_ip_lo_up != 0) ? 1 : 0;
+    pm_util_lock_release(&pm_ip_lock);
+    return r;
 }
 
 static int32_t first_netdev(void) {
@@ -120,10 +161,13 @@ static int32_t first_netdev(void) {
 }
 
 int32_t pm_metal_net_ip_if_up_mask(int32_t h, uint32_t addr_be, uint32_t mask_be) {
-    if (pm_metal_net_ip_l2_attach(h) != 0) {
-        return -1;
+    int32_t rc = -1;
+    pm_util_lock_acquire(&pm_ip_lock);
+    if (pm_ip_l2_attach_locked(h) == 0) {
+        rc = pm_ip_if_up_mask(h, addr_be, mask_be);
     }
-    return pm_ip_if_up_mask(h, addr_be, mask_be);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
 }
 
 int32_t pm_metal_net_ip_if_up_h(int32_t h, uint32_t addr_be) {
@@ -131,30 +175,41 @@ int32_t pm_metal_net_ip_if_up_h(int32_t h, uint32_t addr_be) {
 }
 
 int32_t pm_metal_net_ip_if_up(uint32_t addr_be) {
+    int32_t rc = -1;
     int32_t h;
     if (pm_ip_arena == NULL || addr_be == 0) {
         return -1;
     }
+    pm_util_lock_acquire(&pm_ip_lock);
     if (pm_ip_l2_cur >= 0) {
-        return pm_ip_if_up_mask(pm_ip_l2_cur, addr_be, PM_METAL_IP_MASK24);
+        rc = pm_ip_if_up_mask(pm_ip_l2_cur, addr_be, PM_METAL_IP_MASK24);
+    } else if (pm_ip_l2_n != 0) {
+        rc = pm_ip_if_up_mask(pm_ip_l2[0].h, addr_be, PM_METAL_IP_MASK24);
+    } else {
+        h = first_netdev();
+        if (h >= 0) {
+            rc = pm_ip_l2_attach_locked(h);
+            if (rc == 0) {
+                rc = pm_ip_if_up_mask(h, addr_be, PM_METAL_IP_MASK24);
+            }
+        } else {
+            pm_ip_if_pending_be = addr_be;
+            pm_ip_if_pending_mask = PM_METAL_IP_MASK24;
+            rc = 0;
+        }
     }
-    if (pm_ip_l2_n != 0) {
-        return pm_ip_if_up_mask(pm_ip_l2[0].h, addr_be, PM_METAL_IP_MASK24);
-    }
-    h = first_netdev();
-    if (h >= 0) {
-        return pm_metal_net_ip_if_up_mask(h, addr_be, PM_METAL_IP_MASK24);
-    }
-    pm_ip_if_pending_be = addr_be;
-    pm_ip_if_pending_mask = PM_METAL_IP_MASK24;
-    return 0;
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
 }
 
 uint32_t pm_metal_net_ip_if_addr(int32_t h) {
-    return pm_ip_l2_addr_of(h);
+    pm_util_lock_acquire(&pm_ip_lock);
+    uint32_t v = pm_ip_l2_addr_of(h);
+    pm_util_lock_release(&pm_ip_lock);
+    return v;
 }
 
-void pm_metal_net_ip_pump(void) {
+void pm_ip_pump_locked(void) {
     uint32_t i;
     pm_ip_tcp_check_timeouts();
     pm_ip_arp_tick();
@@ -163,7 +218,13 @@ void pm_metal_net_ip_pump(void) {
     }
 }
 
-int32_t pm_metal_net_ip_route_add(uint32_t dst_be, uint32_t mask_be, uint32_t gw_be, int32_t h) {
+void pm_metal_net_ip_pump(void) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    pm_ip_pump_locked();
+    pm_util_lock_release(&pm_ip_lock);
+}
+
+int32_t pm_ip_route_add_locked(uint32_t dst_be, uint32_t mask_be, uint32_t gw_be, int32_t h) {
     if (pm_ip_arena == NULL || !pm_ip_l2_has(h)) {
         return -1;
     }
@@ -171,7 +232,14 @@ int32_t pm_metal_net_ip_route_add(uint32_t dst_be, uint32_t mask_be, uint32_t gw
     return 0;
 }
 
-int32_t pm_metal_net_ip_route_del(uint32_t dst_be, uint32_t mask_be) {
+int32_t pm_metal_net_ip_route_add(uint32_t dst_be, uint32_t mask_be, uint32_t gw_be, int32_t h) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_route_add_locked(dst_be, mask_be, gw_be, h);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_route_del_locked(uint32_t dst_be, uint32_t mask_be) {
     if (pm_ip_arena == NULL) {
         return -1;
     }
@@ -179,7 +247,14 @@ int32_t pm_metal_net_ip_route_del(uint32_t dst_be, uint32_t mask_be) {
     return 0;
 }
 
-int32_t pm_metal_net_ip_gw_set(uint32_t gw_be) {
+int32_t pm_metal_net_ip_route_del(uint32_t dst_be, uint32_t mask_be) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_route_del_locked(dst_be, mask_be);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_gw_set_locked(uint32_t gw_be) {
     int32_t h = pm_ip_l2_cur;
     if (pm_ip_arena == NULL) {
         return -1;
@@ -194,7 +269,14 @@ int32_t pm_metal_net_ip_gw_set(uint32_t gw_be) {
     return 0;
 }
 
-uint32_t pm_metal_net_ip_gw(void) {
+int32_t pm_metal_net_ip_gw_set(uint32_t gw_be) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_gw_set_locked(gw_be);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+uint32_t pm_ip_gw_locked(void) {
     uint32_t i;
     for (i = 0; i < PM_METAL_IP_RT_MAX; i++) {
         if (pm_ip_rt[i].used && pm_ip_rt[i].mask_be == 0) {
@@ -204,7 +286,14 @@ uint32_t pm_metal_net_ip_gw(void) {
     return 0;
 }
 
-int32_t pm_metal_net_ip_arp_resolve(uint32_t addr_be) {
+uint32_t pm_metal_net_ip_gw(void) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    uint32_t v = pm_ip_gw_locked();
+    pm_util_lock_release(&pm_ip_lock);
+    return v;
+}
+
+int32_t pm_ip_arp_resolve_locked(uint32_t addr_be) {
     uint8_t mac[6];
     uint32_t hop = 0;
     int32_t h;
@@ -222,7 +311,14 @@ int32_t pm_metal_net_ip_arp_resolve(uint32_t addr_be) {
     return 0;
 }
 
-int32_t pm_metal_net_ip_l2_attach(int32_t h) {
+int32_t pm_metal_net_ip_arp_resolve(uint32_t addr_be) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_arp_resolve_locked(addr_be);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_l2_attach_locked(int32_t h) {
     uint32_t i;
     if (pm_metal_drivers_net_dt_id(h) < 0) {
         return -1;
@@ -246,39 +342,56 @@ int32_t pm_metal_net_ip_l2_attach(int32_t h) {
     return 0;
 }
 
+int32_t pm_metal_net_ip_l2_attach(int32_t h) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_l2_attach_locked(h);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
 int32_t pm_metal_net_ip_l2_detach(int32_t h) {
     uint32_t i;
     uint32_t j;
-    uint32_t gw = pm_metal_net_ip_gw();
-    int32_t found = 0;
-    for (i = 0; i < pm_ip_l2_n; i++) {
-        if (pm_ip_l2[i].h == h) {
-            for (j = i; j + 1u < pm_ip_l2_n; j++) {
-                pm_ip_l2[j] = pm_ip_l2[j + 1u];
+    uint32_t gw;
+    int32_t rc = -1;
+    pm_util_lock_acquire(&pm_ip_lock);
+    gw = pm_ip_gw_locked();
+    {
+        uint32_t found = 0;
+        for (i = 0; i < pm_ip_l2_n; i++) {
+            if (pm_ip_l2[i].h == h) {
+                for (j = i; j + 1u < pm_ip_l2_n; j++) {
+                    pm_ip_l2[j] = pm_ip_l2[j + 1u];
+                }
+                pm_ip_l2_n--;
+                found = 1;
+                break;
             }
-            pm_ip_l2_n--;
-            found = 1;
-            break;
         }
-    }
-    if (!found) {
-        return -1;
-    }
-    pm_ip_rt_del_h(h);
-    if (pm_ip_l2_cur == h) {
-        pm_ip_l2_cur = pm_ip_l2_n != 0 ? pm_ip_l2[pm_ip_l2_n - 1u].h : -1;
-        if (pm_ip_l2_cur >= 0) {
-            /* The gateway outlives the interface it was reached through: the
-             * remaining interface is on the same wire in every case we serve. */
-            pm_ip_rt_upsert(0, 0, gw, pm_ip_l2_cur);
+        if (!found) {
+            rc = -1;
+            goto out;
         }
+        pm_ip_rt_del_h(h);
+        if (pm_ip_l2_cur == h) {
+            pm_ip_l2_cur = pm_ip_l2_n != 0 ? pm_ip_l2[pm_ip_l2_n - 1u].h : -1;
+            if (pm_ip_l2_cur >= 0) {
+                /* The gateway outlives the interface it was reached through: the
+                 * remaining interface is on the same wire in every case we serve. */
+                pm_ip_rt_upsert(0, 0, gw, pm_ip_l2_cur);
+            }
+        }
+        rc = 0;
     }
-    return 0;
+out:
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
 }
 
 int32_t pm_metal_net_l2_attach(const char *name, const pm_metal_net_l2_ops_t *ops) {
     int32_t dt;
     int32_t h;
+    int32_t rc = -1;
     if (name == NULL || name[0] == 0 || ops == NULL) {
         return -1;
     }
@@ -290,10 +403,13 @@ int32_t pm_metal_net_l2_attach(const char *name, const pm_metal_net_l2_ops_t *op
     if (h < 0) {
         return h;
     }
-    return pm_metal_net_ip_l2_attach(h);
+    pm_util_lock_acquire(&pm_ip_lock);
+    rc = pm_ip_l2_attach_locked(h);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
 }
 
-int32_t pm_metal_net_ip_socket(int32_t type) {
+int32_t pm_ip_socket_locked(int32_t type) {
     if (type == PM_METAL_NET_IP_SOCK_STREAM) {
         return pm_ip_sock_alloc(SK_TCP);
     }
@@ -303,7 +419,14 @@ int32_t pm_metal_net_ip_socket(int32_t type) {
     return -1;
 }
 
-int32_t pm_metal_net_ip_close(int32_t fd) {
+int32_t pm_metal_net_ip_socket(int32_t type) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_socket_locked(type);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_close_locked(int32_t fd) {
     struct pm_metal_sock *s = sock_get(fd, 0);
     if (s == NULL) {
         return -1;
@@ -316,7 +439,14 @@ int32_t pm_metal_net_ip_close(int32_t fd) {
     return 0;
 }
 
-int32_t pm_metal_net_ip_bind(int32_t fd, uint32_t addr_be, uint16_t port_host) {
+int32_t pm_metal_net_ip_close(int32_t fd) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_close_locked(fd);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_bind_locked(int32_t fd, uint32_t addr_be, uint16_t port_host) {
     struct pm_metal_sock *s = sock_get(fd, 0);
     int32_t h;
     if (s == NULL) {
@@ -332,7 +462,14 @@ int32_t pm_metal_net_ip_bind(int32_t fd, uint32_t addr_be, uint16_t port_host) {
     return 0;
 }
 
-int32_t pm_metal_net_ip_bind_l2(int32_t fd, int32_t h) {
+int32_t pm_metal_net_ip_bind(int32_t fd, uint32_t addr_be, uint16_t port_host) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_bind_locked(fd, addr_be, port_host);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_bind_l2_locked(int32_t fd, int32_t h) {
     struct pm_metal_sock *s = sock_get(fd, 0);
     if (s == NULL || !pm_ip_l2_has(h)) {
         return -1;
@@ -341,7 +478,14 @@ int32_t pm_metal_net_ip_bind_l2(int32_t fd, int32_t h) {
     return 0;
 }
 
-int32_t pm_metal_net_ip_listen(int32_t fd, int32_t backlog) {
+int32_t pm_metal_net_ip_bind_l2(int32_t fd, int32_t h) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_bind_l2_locked(fd, h);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_listen_locked(int32_t fd, int32_t backlog) {
     struct pm_metal_sock *s = sock_get(fd, SK_TCP);
     (void)backlog;
     if (s == NULL || !s->bound) {
@@ -351,7 +495,14 @@ int32_t pm_metal_net_ip_listen(int32_t fd, int32_t backlog) {
     return 0;
 }
 
-int32_t pm_metal_net_ip_accept(int32_t fd) {
+int32_t pm_metal_net_ip_listen(int32_t fd, int32_t backlog) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_listen_locked(fd, backlog);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_accept_locked(int32_t fd) {
     struct pm_metal_sock *s = sock_get(fd, SK_TCP);
     if (s == NULL || s->tcp_st != TCP_LISTEN) {
         return -1;
@@ -373,7 +524,14 @@ int32_t pm_metal_net_ip_accept(int32_t fd) {
     return child;
 }
 
-int32_t pm_metal_net_ip_connect(int32_t fd, uint32_t addr_be, uint16_t port_host) {
+int32_t pm_metal_net_ip_accept(int32_t fd) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_accept_locked(fd);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_connect_locked(int32_t fd, uint32_t addr_be, uint16_t port_host) {
     struct pm_metal_sock *s = sock_get(fd, SK_TCP);
     if (s == NULL) {
         return -1;
@@ -403,7 +561,14 @@ int32_t pm_metal_net_ip_connect(int32_t fd, uint32_t addr_be, uint16_t port_host
     return 0;
 }
 
-int32_t pm_metal_net_ip_send(int32_t fd, const uint8_t *buf, uint32_t len) {
+int32_t pm_metal_net_ip_connect(int32_t fd, uint32_t addr_be, uint16_t port_host) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_connect_locked(fd, addr_be, port_host);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_send_locked(int32_t fd, const uint8_t *buf, uint32_t len) {
     struct pm_metal_sock *s = sock_get(fd, SK_TCP);
     if (s == NULL || buf == NULL || s->tcp_st != TCP_ESTAB) {
         return -1;
@@ -415,7 +580,14 @@ int32_t pm_metal_net_ip_send(int32_t fd, const uint8_t *buf, uint32_t len) {
     return (int32_t)len;
 }
 
-int32_t pm_metal_net_ip_recv(int32_t fd, uint8_t *buf, uint32_t len) {
+int32_t pm_metal_net_ip_send(int32_t fd, const uint8_t *buf, uint32_t len) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_send_locked(fd, buf, len);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_recv_locked(int32_t fd, uint8_t *buf, uint32_t len) {
     struct pm_metal_sock *s = sock_get(fd, SK_TCP);
     if (s == NULL || buf == NULL) {
         return -1;
@@ -442,7 +614,14 @@ int32_t pm_metal_net_ip_recv(int32_t fd, uint8_t *buf, uint32_t len) {
     return (int32_t)n;
 }
 
-int32_t pm_metal_net_ip_sendto(int32_t fd, const uint8_t *buf, uint32_t len, uint32_t addr_be,
+int32_t pm_metal_net_ip_recv(int32_t fd, uint8_t *buf, uint32_t len) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_recv_locked(fd, buf, len);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_sendto_locked(int32_t fd, const uint8_t *buf, uint32_t len, uint32_t addr_be,
     uint16_t port_host) {
     struct pm_metal_sock *pcb = sock_get(fd, SK_UDP);
     if (pcb == NULL || buf == NULL) {
@@ -474,7 +653,15 @@ int32_t pm_metal_net_ip_sendto(int32_t fd, const uint8_t *buf, uint32_t len, uin
     return (int32_t)len;
 }
 
-int32_t pm_metal_net_ip_recvfrom(int32_t fd, uint8_t *buf, uint32_t len, uint32_t *addr_be,
+int32_t pm_metal_net_ip_sendto(int32_t fd, const uint8_t *buf, uint32_t len, uint32_t addr_be,
+    uint16_t port_host) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_sendto_locked(fd, buf, len, addr_be, port_host);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_recvfrom_locked(int32_t fd, uint8_t *buf, uint32_t len, uint32_t *addr_be,
     uint16_t *port_host) {
     struct pm_metal_sock *pcb = sock_get(fd, SK_UDP);
     if (pcb == NULL || buf == NULL) {
@@ -499,6 +686,14 @@ int32_t pm_metal_net_ip_recvfrom(int32_t fd, uint8_t *buf, uint32_t len, uint32_
     }
     pcb->rx_len = 0;
     return (int32_t)n;
+}
+
+int32_t pm_metal_net_ip_recvfrom(int32_t fd, uint8_t *buf, uint32_t len, uint32_t *addr_be,
+    uint16_t *port_host) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_recvfrom_locked(fd, buf, len, addr_be, port_host);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
 }
 
 int32_t pm_metal_net_ip_ping4(uint32_t addr_be, const uint8_t *payload, uint32_t plen, uint8_t *out,
@@ -528,30 +723,42 @@ int32_t pm_metal_net_ip_ping4(uint32_t addr_be, const uint8_t *payload, uint32_t
     memcpy(pkt + 28, payload, plen);
     cs = pm_ip_csum(pkt + 20, icmp_len);
     pm_ip_write_be16(pkt + 22, cs);
+    pm_util_lock_acquire(&pm_ip_lock);
     pm_ip_ping_len = 0;
     pm_ip_output(pkt, total);
+    pm_util_lock_release(&pm_ip_lock);
     if (pm_ip_ping_len == 0) {
         /* Off-box the reply arrives on a later poll, and the first send may still
          * be waiting on ARP. Loopback answered inside pm_ip_output already.
          * The spin cap is the real bound on a seat whose monotonic clock is a
          * call counter (no cycle counter under it), where the deadline alone
-         * would take billions of polls to pass. */
+         * would take billions of polls to pass. Short locked rounds keep the
+         * stack (and background runners) moving instead of holding pm_ip_lock. */
         uint64_t deadline = pm_metal_async_mono_us() + PM_METAL_IP_PING_WAIT_US;
         uint32_t spins;
         for (spins = 0; spins < PM_METAL_IP_PING_SPINS; spins++) {
-            if (pm_ip_ping_len != 0 || pm_metal_async_mono_us() >= deadline) {
+            pm_util_lock_acquire(&pm_ip_lock);
+            pm_ip_pump_locked();
+            uint32_t got = pm_ip_ping_len;
+            pm_util_lock_release(&pm_ip_lock);
+            if (got != 0 || pm_metal_async_mono_us() >= deadline) {
                 break;
             }
-            pm_metal_net_ip_pump();
         }
     }
-    if (pm_ip_ping_len == 0) {
-        return -2;
+    pm_util_lock_acquire(&pm_ip_lock);
+    uint32_t have = pm_ip_ping_len;
+    uint8_t tmp[PM_METAL_IP_RX_MAX];
+    if (have != 0) {
+        uint32_t n = have < *out_len ? have : *out_len;
+        memcpy(tmp, pm_ip_ping_out, n);
+        pm_util_lock_release(&pm_ip_lock);
+        memcpy(out, tmp, n);
+        *out_len = n;
+        return 0;
     }
-    uint32_t n = pm_ip_ping_len < *out_len ? pm_ip_ping_len : *out_len;
-    memcpy(out, pm_ip_ping_out, n);
-    *out_len = n;
-    return 0;
+    pm_util_lock_release(&pm_ip_lock);
+    return -2;
 }
 
 #include "pymergetic/wasmmod/guest.h"

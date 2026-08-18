@@ -10,6 +10,7 @@
 #define PYMERGETIC_METAL_NET_IP_PRIV_H
 
 #include "pymergetic/metal/async.h"
+#include "pymergetic/util/lock.h"
 #include "pymergetic/util/mem.h"
 
 #include <stdint.h>
@@ -116,6 +117,7 @@ struct pm_metal_ip_arp {
 extern pm_util_mem_arena_t *pm_ip_arena;
 extern uint32_t pm_ip_lo_up;
 extern uint32_t pm_ip_lo_addr_be;
+extern pm_util_lock_t pm_ip_lock;
 extern struct pm_metal_sock pm_ip_sk[PM_METAL_IP_SOCK_MAX];
 extern struct pm_metal_ip_l2 pm_ip_l2[PM_METAL_IP_L2_MAX];
 extern uint32_t pm_ip_l2_n;
@@ -131,6 +133,10 @@ extern uint16_t pm_ip_ping_id;
 
 void pm_ip_sock_wake(struct pm_metal_sock *s);
 int32_t pm_ip_sock_alloc(uint8_t kind);
+/* Pump the NIC/TCP timers assuming pm_ip_lock is already held (non-reentrant
+ * RS lock: external callers go through pm_metal_net_ip_pump, locked internal
+ * flow calls straight here). */
+void pm_ip_pump_locked(void);
 
 /* __link__.c — routes, interfaces, ARP. */
 void pm_ip_rt_upsert(uint32_t dst_be, uint32_t mask_be, uint32_t gw_be, int32_t h);
