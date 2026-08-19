@@ -13,6 +13,7 @@ void *realloc(void *p, size_t n);
 void *calloc(size_t nmemb, size_t size);
 long strtol(const char *nptr, char **endptr, int base);
 unsigned long strtoul(const char *nptr, char **endptr, int base);
+double strtod(const char *nptr, char **endptr);
 int atoi(const char *s);
 int abs(int x);
 long labs(long x);

@@ -34,6 +34,17 @@ uint16_t pm_ip_ping_id;
 static uint16_t s_eph = 49152u;
 static uint16_t s_ping_seq;
 
+/* Depth of pm_metal_net_ip_pump already on this OS thread's stack (>0 means we
+ * hold pm_ip_lock and are inside pm_ip_pump_locked, e.g. a net driver poll that
+ * drove a cooperative waiter into a nested pump). pm_ip_lock is a non-reentrant
+ * spinlock, and a cooperative yield inside the pump body re-enters it with no
+ * way for the holder to give it up, so a re-entrant call runs the body inline
+ * without re-acquiring. Thread-local because multiple OS threads (async runners)
+ * can each be inside a pump; only the lock holder on its own thread ever reaches
+ * nest>0, so skipping the lock there is race-free on every seat. Single-threaded
+ * firmware seats collapse __thread to a plain slot, which is equally correct. */
+static __thread uint32_t s_ip_pump_nest;
+
 /* Locked internals: defined later in this TU, but referenced by the if_up
  * path before their definitions. External entry points take pm_ip_lock and
  * call these; internal flow calls them with the lock already held. */
@@ -220,8 +231,19 @@ void pm_ip_pump_locked(void) {
 }
 
 void pm_metal_net_ip_pump(void) {
+    if (s_ip_pump_nest != 0u) {
+        /* Re-entrant on this thread: we already hold pm_ip_lock (nest>0 only
+         * reaches here while inside pm_ip_pump_locked). Run the same body
+         * inline; nobody else can be in it concurrently by the outer acquire. */
+        s_ip_pump_nest++;
+        pm_ip_pump_locked();
+        s_ip_pump_nest--;
+        return;
+    }
     pm_util_lock_acquire(&pm_ip_lock);
+    s_ip_pump_nest = 1u;
     pm_ip_pump_locked();
+    s_ip_pump_nest = 0u;
     pm_util_lock_release(&pm_ip_lock);
 }
 
@@ -455,8 +477,22 @@ int32_t pm_metal_net_ip_socket(int32_t type) {
 
 int32_t pm_ip_close_locked(int32_t fd) {
     struct pm_metal_sock *s = sock_get(fd, 0);
+    uint32_t i;
     if (s == NULL) {
         return -1;
+    }
+    /* Closing a listener (TCP_LISTEN) must also free every child it accepted:
+     * those children point back via listen_fd and, if never accept()-ed by the
+     * application, otherwise leak a net.ip slot forever. Leaked accept children
+     * are exactly what exhausted the shared 32-slot table across a boot in the
+     * two-session zenoh prove and corrupted later tests (http.asgi). */
+    if (s->kind == SK_TCP && s->tcp_st == TCP_LISTEN) {
+        for (i = 0; i < PM_METAL_IP_SOCK_MAX; i++) {
+            struct pm_metal_sock *c = &pm_ip_sk[i];
+            if (c != s && c->used && c->kind == SK_TCP && c->listen_fd == fd) {
+                c->used = 0;
+            }
+        }
     }
     if (s->kind == SK_TCP && s->tcp_st == TCP_ESTAB) {
         pm_ip_tcp_xmit(s, (uint8_t)(TCP_FIN | TCP_ACK), NULL, 0);
@@ -772,6 +808,80 @@ int32_t pm_metal_net_ip_recvfrom(int32_t fd, uint8_t *buf, uint32_t len, uint32_
     return rc;
 }
 
+/* Join a multicast group on a UDP socket (IP_ADD_MEMBERSHIP on a real stack).
+ * After this the socket receives UDP datagrams addressed to group_be:port (see
+ * the udp demux in __wire__.c), which is what zenoh-pico's scout link needs on
+ * the multicast listener. group_be is a 224.0.0.0/4 network-order address. */
+int32_t pm_ip_join_group_locked(int32_t fd, uint32_t group_be) {
+    struct pm_metal_sock *s;
+    uint32_t i;
+    if ((group_be & 0xf0000000u) != 0xe0000000u) {
+        return -1; /* not in 224.0.0.0/4 */
+    }
+    s = sock_get(fd, SK_UDP);
+    if (s == NULL) {
+        return -1;
+    }
+    for (i = 0; i < s->mcast_n; i++) {
+        if (s->mcast_be[i] == group_be) {
+            return 0; /* already a member */
+        }
+    }
+    if (s->mcast_n >= PM_METAL_IP_MCAST_MAX) {
+        return -1;
+    }
+    s->mcast_be[s->mcast_n++] = group_be;
+    return 0;
+}
+
+int32_t pm_metal_net_ip_join_group(int32_t fd, uint32_t group_be) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_join_group_locked(fd, group_be);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_leave_group_locked(int32_t fd, uint32_t group_be) {
+    struct pm_metal_sock *s;
+    uint32_t i;
+    s = sock_get(fd, SK_UDP);
+    if (s == NULL) {
+        return -1;
+    }
+    for (i = 0; i < s->mcast_n; i++) {
+        if (s->mcast_be[i] == group_be) {
+            s->mcast_be[i] = s->mcast_be[s->mcast_n - 1u];
+            s->mcast_n--;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+int32_t pm_metal_net_ip_leave_group(int32_t fd, uint32_t group_be) {
+    pm_util_lock_acquire(&pm_ip_lock);
+    int32_t rc = pm_ip_leave_group_locked(fd, group_be);
+    pm_util_lock_release(&pm_ip_lock);
+    return rc;
+}
+
+int32_t pm_ip_mcast_joined(uint32_t dst_be) {
+    uint32_t i;
+    uint32_t j;
+    for (i = 0; i < PM_METAL_IP_SOCK_MAX; i++) {
+        const struct pm_metal_sock *s = &pm_ip_sk[i];
+        if (!s->used || s->kind != SK_UDP) {
+            continue;
+        }
+        for (j = 0; j < s->mcast_n; j++) {
+            if (s->mcast_be[j] == dst_be) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 int32_t pm_metal_net_ip_ping4(uint32_t addr_be, const uint8_t *payload, uint32_t plen, uint8_t *out,
     uint32_t *out_len) {
     if (!pm_ip_lo_up || payload == NULL || out == NULL || out_len == NULL) {
@@ -871,6 +981,8 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_recv, pm_metal_net_ip_r
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_accept, pm_metal_net_ip_accept, int32_t(int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_sendto, pm_metal_net_ip_sendto, int32_t(int32_t, const uint8_t *, uint32_t, uint32_t, uint16_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_recvfrom, pm_metal_net_ip_recvfrom, int32_t(int32_t, uint8_t *, uint32_t, uint32_t *, uint16_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_join_group, pm_metal_net_ip_join_group, int32_t(int32_t, uint32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_leave_group, pm_metal_net_ip_leave_group, int32_t(int32_t, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_ping4, pm_metal_net_ip_ping4, int32_t(uint32_t, const uint8_t *, uint32_t, uint8_t *, uint32_t *));
 
 PM_MOD_BOOT_READY_C(pymergetic.metal.net.ip, pm_metal_net_ip_init, pm_metal_net_ip_deinit, pm_metal_net_ip_lo_up);

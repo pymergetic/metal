@@ -1,0 +1,2 @@
+fqn = "pymergetic.metal.net.zenoh"
+impl = "c"

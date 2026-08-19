@@ -1,0 +1,61 @@
+/*
+ * Metal compile-time config for the vendored zenoh-pico (picked up via the
+ * ZENOH_GENERIC branch of zenoh-pico/config.h). One defining lang = C; this is
+ * the integration's config header, never an edit to the vendored tree.
+ *
+ * Single-threaded: Metal drives the library from one poll() step (zp_spin_once
+ * + zp_send_keep_alive), so Z_FEATURE_MULTI_THREAD stays 0 and every thread
+ * type degrades to a dummy void in the platform header.
+ */
+#ifndef PM_METAL_NET_ZENOH_GENERIC_CONFIG_H
+#define PM_METAL_NET_ZENOH_GENERIC_CONFIG_H
+
+#define Z_FRAG_MAX_SIZE 4096
+#define Z_BATCH_UNICAST_SIZE 2048
+#define Z_BATCH_MULTICAST_SIZE 2048
+#define Z_CONFIG_SOCKET_TIMEOUT 100
+#define Z_TRANSPORT_LEASE 10000
+#define Z_TRANSPORT_LEASE_EXPIRE_FACTOR 3
+#define Z_RUNTIME_MAX_TASKS 64
+#define Z_TRANSPORT_ACCEPT_TIMEOUT 150
+#define Z_TRANSPORT_CONNECT_TIMEOUT 500
+
+#define Z_FEATURE_CONNECTIVITY 0
+#define Z_FEATURE_MULTI_THREAD 0
+#define Z_FEATURE_PUBLICATION 1
+#define Z_FEATURE_ADVANCED_PUBLICATION 0
+#define Z_FEATURE_SUBSCRIPTION 1
+#define Z_FEATURE_ADVANCED_SUBSCRIPTION 0
+#define Z_FEATURE_QUERY 1
+#define Z_FEATURE_QUERYABLE 1
+#define Z_FEATURE_LIVELINESS 1
+#define Z_FEATURE_RAWETH_TRANSPORT 0
+#define Z_FEATURE_INTEREST 1
+#define Z_FEATURE_LINK_TCP 1
+#define Z_FEATURE_LINK_BLUETOOTH 0
+#define Z_FEATURE_LINK_WS 0
+#define Z_FEATURE_LINK_SERIAL 0
+#define Z_FEATURE_LINK_SERIAL_USB 0
+#define Z_FEATURE_LINK_TLS 0
+#define Z_FEATURE_SCOUTING 1
+#define Z_FEATURE_LINK_UDP_MULTICAST 1
+#define Z_FEATURE_LINK_UDP_UNICAST 1
+#define Z_FEATURE_MULTICAST_TRANSPORT 1
+#define Z_FEATURE_UNICAST_TRANSPORT 1
+#define Z_FEATURE_FRAGMENTATION 1
+#define Z_FEATURE_ENCODING_VALUES 1
+#define Z_FEATURE_TCP_NODELAY 1
+#define Z_FEATURE_LOCAL_SUBSCRIBER 0
+#define Z_FEATURE_LOCAL_QUERYABLE 0
+#define Z_FEATURE_SESSION_CHECK 1
+#define Z_FEATURE_BATCHING 1
+#define Z_FEATURE_BATCH_TX_MUTEX 0
+#define Z_FEATURE_BATCH_PEER_MUTEX 0
+#define Z_FEATURE_MATCHING 1
+#define Z_FEATURE_RX_CACHE 0
+#define Z_FEATURE_UNICAST_PEER 1
+#define Z_FEATURE_AUTO_RECONNECT 1
+#define Z_FEATURE_MULTICAST_DECLARATIONS 0
+#define Z_FEATURE_ADMIN_SPACE 0
+
+#endif /* PM_METAL_NET_ZENOH_GENERIC_CONFIG_H */

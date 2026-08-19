@@ -17,3 +17,8 @@ www_embed.inc.h
 # Bytes from each card's C/Rust muscle source. Recreate with tools/embed_src.py
 # (every seat's make), same shape as www_embed.inc.h above.
 src_embed.inc.h
+
+# Stage 1 zenoh-pico standalone prove build outputs (tools/zp_pico_prove).
+tools/zp_pico_prove/.build/
+tools/zp_pico_prove/prove_pub
+tools/zp_pico_prove/prove_sub

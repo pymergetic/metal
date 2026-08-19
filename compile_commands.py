@@ -34,6 +34,17 @@ card_incs = [
     host / "ports/unix/build-wasm",
     host / "lib/mbedtls/include",
 ]
+# net.zenoh card + its zenoh-pico platform shim. Same flags as the build's
+# ZP_CPPFLAGS (tools/zenoh.mk / Makefile): the vendored include/src dirs, the
+# card dir's GENERIC config, and -DZENOH_GENERIC so zenoh-pico/config.h picks
+# the card dir's zenoh_generic_config.h instead of a board system layer.
+zp_pico = host / "lib/zenoh-pico"
+zenoh_incs = card_incs + [
+    zp_pico / "include",
+    zp_pico / "src",
+    metal / "src/pymergetic/metal/net/zenoh",
+]
+zenoh_defs = defs + " -DZENOH_GENERIC"
 upy_incs = [
     metal / "src",
     wasm,
@@ -86,6 +97,8 @@ for f in sorted(metal.rglob("*")):
             + inc(fw_incs)
             + fw_defs
         )
+    elif "src/pymergetic/metal/net/zenoh" in str(f.relative_to(metal)) and f.suffix == ".c":
+        pfx = "clang -xc -std=gnu11 -Wall -Wno-unknown-attributes " + inc(zenoh_incs) + zenoh_defs
     elif f.name in upy:
         pfx = (
             "clang -xc -std=gnu11 -Wall -Wno-unknown-attributes "

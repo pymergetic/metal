@@ -161,7 +161,25 @@ void pm_ip_output_via(int32_t h_hint, const uint8_t *pkt, uint32_t len) {
     }
     dst = pm_ip_read_be32(pkt + 16);
     if (pm_ip_lo_up && (dst == pm_ip_lo_addr_be || dst == 0x7f000001u)) {
+        /* Loopback: the segment arrives "on" no physical wire, so deliver it to
+         * any-l2 sockets (a listener bound on lo must not be gated by a stale
+         * pm_ip_rx_l2 left over from a real NIC's poll). Save/swap/restore the
+         * rx-l2 filter so nested tcp_input matches the loopback listener. */
+        int32_t prev_l2 = pm_ip_rx_l2;
+        pm_ip_rx_l2 = -1;
         ip_input(pkt, len);
+        pm_ip_rx_l2 = prev_l2;
+        return;
+    }
+    if (pm_ip_lo_up && (dst & 0xf0000000u) == 0xe0000000u) {
+        /* Multicast on loopback: the joined subscribers live in this stack, so
+         * loop the datagram back through ip_input instead of building an
+         * ethernet frame (there is no NIC on lo). This is the userspace-stack
+         * equivalent of the kernel looping multicast back to local members. */
+        int32_t prev_l2 = pm_ip_rx_l2;
+        pm_ip_rx_l2 = -1;
+        ip_input(pkt, len);
+        pm_ip_rx_l2 = prev_l2;
         return;
     }
     h = pm_ip_route_out(h_hint, pm_ip_read_be32(pkt + 12), dst, &hop);
@@ -169,7 +187,16 @@ void pm_ip_output_via(int32_t h_hint, const uint8_t *pkt, uint32_t len) {
         return;
     }
     mask = pm_ip_l2_mask_of(h);
-    if (dst == 0xffffffffu || (mask != 0 && (dst | mask) == 0xffffffffu)) {
+    if ((dst & 0xf0000000u) == 0xe0000000u) {
+        /* IP multicast MAC: 01:00:5e:00:00:00 | low 23 bits of the group. */
+        uint32_t lo23 = dst & 0x007fffffu;
+        dmac[0] = 0x01;
+        dmac[1] = 0x00;
+        dmac[2] = 0x5e;
+        dmac[3] = (uint8_t)(lo23 >> 16);
+        dmac[4] = (uint8_t)(lo23 >> 8);
+        dmac[5] = (uint8_t)lo23;
+    } else if (dst == 0xffffffffu || (mask != 0 && (dst | mask) == 0xffffffffu)) {
         memset(dmac, 0xff, sizeof(dmac));
     } else if (pm_ip_l2_addr_ours(dst)) {
         /* Our own address on a wire that loops back to us (sim, a tunnel): the
@@ -216,6 +243,9 @@ static void ip_input(const uint8_t *pkt, uint32_t len) {
         ours = 1;
     }
     if (dst == 0xffffffffu) {
+        ours = 1;
+    }
+    if ((dst & 0xf0000000u) == 0xe0000000u && pm_ip_mcast_joined(dst)) {
         ours = 1;
     }
     if (!ours) {
@@ -268,6 +298,8 @@ static void ip_input(const uint8_t *pkt, uint32_t len) {
         uint32_t i;
         for (i = 0; i < PM_METAL_IP_SOCK_MAX; i++) {
             struct pm_metal_sock *pcb = &pm_ip_sk[i];
+            uint32_t j;
+            uint32_t member = 0;
             if (!pcb->used || pcb->kind != SK_UDP || !pcb->bound) {
                 continue;
             }
@@ -277,7 +309,22 @@ static void ip_input(const uint8_t *pkt, uint32_t len) {
             if (pcb->l2_h >= 0 && pm_ip_rx_l2 >= 0 && pcb->l2_h != pm_ip_rx_l2) {
                 continue;
             }
+            /* Unicast: a non-wildcard bound address must equal the dst. */
             if (pcb->laddr_be != 0 && pcb->laddr_be != 0xffffffffu && pcb->laddr_be != dst) {
+                continue;
+            }
+            if (pcb->laddr_be == 0 || pcb->laddr_be == 0xffffffffu || pcb->laddr_be == dst) {
+                member = 1;
+            }
+            if (!member && (dst & 0xf0000000u) == 0xe0000000u) {
+                for (j = 0; j < pcb->mcast_n; j++) {
+                    if (pcb->mcast_be[j] == dst) {
+                        member = 1;
+                        break;
+                    }
+                }
+            }
+            if (!member) {
                 continue;
             }
             if (plen > PM_METAL_IP_RX_MAX) {

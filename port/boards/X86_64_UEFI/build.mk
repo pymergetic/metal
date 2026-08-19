@@ -82,6 +82,7 @@ FW_RUSTC_TARGET := x86_64-unknown-uefi
 FW_WAMR_UEFI := 1
 include $(PORT_DIR)/fw_cdn.mk
 include $(PORT_DIR)/fw_mbedtls.mk
+include $(PORT_DIR)/fw_zenoh.mk
 include $(PORT_DIR)/fw_cards.mk
 include $(PORT_DIR)/fw_wamr.mk
 include $(PORT_DIR)/upy.mk
@@ -174,6 +175,7 @@ prove: $(BUILD)/esp.img $(BUILD)/blk.img
 	grep -q "upy fs embed" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy process" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy ssh session" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy zenoh" $(BUILD)/serial.log || exit 1; \
 	if [ $$st -eq 1 ] || [ $$st -eq 0 ]; then exit 0; fi; exit $$st
 
 run: $(BUILD)/esp.img $(BUILD)/blk.img

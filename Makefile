@@ -12,6 +12,11 @@ METAL_SRC ?= $(abspath src)
 WASMMOD_SRC ?= $(WASMMOD)/src
 TOP ?= $(abspath ../..)
 MBEDTLS_DIR ?= $(TOP)/lib/mbedtls
+ZENOH_PICO_DIR ?= $(TOP)/lib/zenoh-pico
+# zenoh-pico generic/Metal compile-time config + platform header live in the
+# net.zenoh card dir (never in the vendored tree); the card dir must be an
+# include path for the GENERIC branch of zenoh-pico's config.h / platform.h.
+ZENOH_CARD_DIR ?= $(METAL_SRC)/pymergetic/metal/net/zenoh
 
 METAL_LIBDIR := $(shell cd $(CURDIR) && cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['target_directory']+'/release')")
 ifeq ($(METAL_LIBDIR),)
@@ -25,8 +30,9 @@ NODE ?= node
 CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O1 -g -pthread
 CPPFLAGS += -I$(CURDIR)/host_inc -I$(METAL_SRC) -I$(WASMMOD_SRC) -I$(WASMMOD) -I$(TOP) \
 	-I$(TOP)/ports/unix -I$(MBEDTLS_DIR)/include \
+	-I$(ZENOH_PICO_DIR)/include -I$(ZENOH_PICO_DIR)/src -I$(ZENOH_CARD_DIR) \
 	-D_POSIX_C_SOURCE=200809L -DPM_WASMMOD_GUEST=0 -DPM_MOD_TESTS=1 \
-	-DPM_MOD_BENCHES=1 \
+	-DPM_MOD_BENCHES=1 -DZENOH_GENERIC \
 	-DMICROPY_SSL_MBEDTLS=1 \
 	-DMBEDTLS_CONFIG_FILE='"mbedtls/mbedtls_config_port.h"'
 
@@ -75,6 +81,21 @@ MBEDTLS_CPPFLAGS := -I$(CURDIR)/host_inc -I$(TOP) -I$(TOP)/ports/unix \
 	-I$(MBEDTLS_DIR)/include -I$(MBEDTLS_DIR)/library \
 	-DMBEDTLS_CONFIG_FILE='"mbedtls/mbedtls_config_port.h"' -D_POSIX_C_SOURCE=200809L
 
+# zenoh-pico: vendored freestanding core + the card's own platform shim. The
+# card border (__impl__.c, platform_metal.c, platform_metal_sys.c) is picked up
+# by cards.sh impl from the manifest; only the vendored core is listed here,
+# mbedtls-style, from the shared source glob (tools/zenoh.mk — same list the
+# firmware seats use, compiled in GENERIC mode so it uses ZENOH_CARD_DIR's
+# zenoh_generic_{config,platform}.h instead of a board system layer).
+include $(CURDIR)/tools/zenoh.mk
+ZP_OBJS := $(addprefix $(CURDIR)/build/zenoh-pico/,$(sort $(ZP_REL:.c=.o)))
+ZP_CPPFLAGS := -DZENOH_GENERIC -I$(ZENOH_PICO_DIR)/include -I$(ZENOH_PICO_DIR)/src \
+	-I$(ZENOH_CARD_DIR) -D_POSIX_C_SOURCE=200809L
+
+$(CURDIR)/build/zenoh-pico/%.o: $(ZENOH_PICO_DIR)/%.c
+	mkdir -p $(dir $@)
+	$(CC) -std=gnu11 -O1 -g -Wall -Wextra $(ZP_CPPFLAGS) -c -o $@ $<
+
 OUT := $(CURDIR)/build/metal-async-test
 BENCH_OUT := $(CURDIR)/build/metal-async-bench
 # emcc from PATH, or $EMSDK/upstream/emscripten — do not bake a home directory.
@@ -87,7 +108,7 @@ WASM_UPY := $(TOP)/ports/webassembly/build-metal/micropython.mjs
 WS ?= $(abspath $(TOP)/../..)
 VSCODE_CDB ?= $(WS)/.vscode/compile_commands.json
 
-.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE
+.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico
 
 FORCE:
 
@@ -109,13 +130,13 @@ $(CURDIR)/build/mbedtls/%.o: $(MBEDTLS_DIR)/library/%.c
 	mkdir -p $(dir $@)
 	$(CC) -std=gnu11 -O1 -g $(MBEDTLS_CPPFLAGS) -c -o $@ $<
 
-$(OUT): $(SRCS) $(MBEDTLS_OBJS) $(METAL_STATICLIB)
+$(OUT): $(SRCS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(METAL_STATICLIB)
 	mkdir -p $(dir $(OUT))
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $(OUT) $(SRCS) $(MBEDTLS_OBJS) $(LDFLAGS_WASMMOD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $(OUT) $(SRCS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(LDFLAGS_WASMMOD)
 
-$(BENCH_OUT): $(BENCH_SRCS) $(MBEDTLS_OBJS) $(METAL_STATICLIB)
+$(BENCH_OUT): $(BENCH_SRCS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(METAL_STATICLIB)
 	mkdir -p $(dir $(BENCH_OUT))
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $(BENCH_OUT) $(BENCH_SRCS) $(MBEDTLS_OBJS) $(LDFLAGS_WASMMOD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $(BENCH_OUT) $(BENCH_SRCS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(LDFLAGS_WASMMOD)
 
 test: prove-all
 
@@ -123,6 +144,11 @@ test: prove-all
 # registry-walking runner; the result is human guidance, not a CI gate.
 bench: $(BENCH_OUT)
 	$(BENCH_OUT)
+
+# Stage 1 standalone prove: the vendored zenoh-pico lib builds and delivers
+# unicast pub/sub on lo by itself, before any Metal card wraps it.
+prove-zpico:
+	$(MAKE) -C $(CURDIR)/tools/zp_pico_prove prove
 
 prove-all: $(OUT) firmware-check
 	$(OUT)
@@ -183,6 +209,7 @@ browser:
 	grep -q "upy fs embed" $(CURDIR)/build/browser_prove.log
 	grep -q "upy process" $(CURDIR)/build/browser_prove.log
 	grep -q "upy ssh session" $(CURDIR)/build/browser_prove.log
+	grep -q "upy zenoh" $(CURDIR)/build/browser_prove.log
 
 compile-commands:
 	python3 $(WASMMOD)/compile_commands.py $(WASMMOD) $(WS) $(VSCODE_CDB)

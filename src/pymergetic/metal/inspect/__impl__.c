@@ -152,6 +152,7 @@ static void fill_caps(js_t *j) {
     js_raw(j, "{\"role\":\"metal\",\"theme\":\"metal\",\"asgi\":true,");
     js_raw(j, "\"microdot\":true,\"fastapi\":false,\"utemplate\":true,");
     js_raw(j, "\"ssh_kex\":true,\"ssh_auth\":false,");
+    js_raw(j, "\"zenoh\":true,");
     js_raw(j, "\"vfs_static\":false,\"static_embed\":true,\"static_backend\":\"embed\",");
     js_raw(j, "\"rpc\":true,\"rpc_i64\":true,\"rpc_f32\":false,\"rpc_f64\":false}");
 }

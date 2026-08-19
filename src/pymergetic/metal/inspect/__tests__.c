@@ -73,7 +73,7 @@ static int32_t case_handle(void) {
     }
     body = pm_metal_inspect_body();
     if (body == NULL || strstr(body, "\"asgi\":true") == NULL
-        || strstr(body, "\"microdot\":true") == NULL) {
+        || strstr(body, "\"microdot\":true") == NULL || strstr(body, "\"zenoh\":true") == NULL) {
         return fail("caps body");
     }
     return 0;

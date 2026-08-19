@@ -26,7 +26,7 @@ if st != 200 or "pymergetic.metal" not in body:
 print("upy inspect")
 st = inspect.handle("GET", "/capabilities")
 body = inspect.body()
-if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body:
+if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body or '"zenoh":true' not in body:
     raise SystemExit("inspect caps %s %s" % (st, body))
 print("upy inspect caps")
 # The source pane is real code on this seat too: every card with a C/Rust
@@ -83,3 +83,23 @@ def _cdn(base):
     if m.net.ssh.up() != 0:
         raise SystemExit("ssh up")
     print("upy ssh session")
+    # net.zenoh: the card must mount cooperatively here too. Peer config, an
+    # immediate up() (even with no listener, because z_open drives the whole
+    # handshake across poll()), bounded poll() steps that don't hang the guest,
+    # and a 16-byte local ZID. js.fetch cannot nest inside the cdn exec, but
+    # zenoh needs no CDN fetch — it is resident C on every seat.
+    if m.net.zenoh is None:
+        raise SystemExit("zenoh card")
+    import pymergetic.metal.net.zenoh as zenoh
+
+    if zenoh.peer is None:
+        raise SystemExit("zenoh peer")
+    if zenoh.peer(0x7F000001, 7447, 0) != 0:
+        raise SystemExit("zenoh peer cfg")
+    zenoh.up()
+    for _ in range(4):
+        zenoh.poll()
+    zid = zenoh.zid()
+    if not isinstance(zid, bytes) or len(zid) != 16:
+        raise SystemExit("zenoh zid %r" % (zid,))
+    print("upy zenoh")

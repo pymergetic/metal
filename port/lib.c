@@ -1,6 +1,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+void fflush(void *stream) {
+    /* No stdio buffering on firmware; the zenoh-pico core's stray fflush(stdout)
+     * has nothing to flush. */
+    (void)stream;
+}
+
 void *memcpy(void *dst, const void *src, size_t n) {
     unsigned char *d = dst;
     const unsigned char *s = src;
@@ -125,6 +131,30 @@ char *strncpy(char *dst, const char *src, size_t n) {
         *d++ = 0;
         n--;
     }
+    return dst;
+}
+
+size_t strnlen(const char *s, size_t maxlen) {
+    size_t n = 0;
+    if (s == NULL) {
+        return 0;
+    }
+    while (n < maxlen && s[n] != 0) {
+        n++;
+    }
+    return n;
+}
+
+char *strncat(char *dst, const char *src, size_t n) {
+    char *d = dst;
+    while (*d) {
+        d++;
+    }
+    while (n > 0 && *src) {
+        *d++ = *src++;
+        n--;
+    }
+    *d = 0;
     return dst;
 }
 
@@ -260,6 +290,64 @@ long strtol(const char *nptr, char **endptr, int base) {
 
 unsigned long strtoul(const char *nptr, char **endptr, int base) {
     return (unsigned long)strtol(nptr, endptr, base);
+}
+
+double strtod(const char *nptr, char **endptr) {
+    /* Minimal freestanding strtod for decimal literals (the zenoh-pico time-range
+     * parser feeds it "1.5", "0.001", "-3e2", ...). No hex/inf/nan handling. */
+    const char *p = nptr;
+    int neg = 0;
+    double value = 0.0, frac = 0.0, scale = 0.1;
+    int exp10 = 0, eneg = 0;
+    while (*p == ' ' || *p == '\t' || *p == '\n') {
+        p++;
+    }
+    if (*p == '+' || *p == '-') {
+        neg = (*p == '-');
+        p++;
+    }
+    while (*p >= '0' && *p <= '9') {
+        value = value * 10.0 + (double)(*p - '0');
+        p++;
+    }
+    if (*p == '.') {
+        p++;
+        while (*p >= '0' && *p <= '9') {
+            frac += (double)(*p - '0') * scale;
+            scale *= 0.1;
+            p++;
+        }
+    }
+    value += frac;
+    if (*p == 'e' || *p == 'E') {
+        int en = 0;
+        p++;
+        if (*p == '+' || *p == '-') {
+            eneg = (*p == '-');
+            p++;
+        }
+        while (*p >= '0' && *p <= '9') {
+            en = en * 10 + (*p - '0');
+            p++;
+        }
+        exp10 = en;
+    }
+    {
+        int k;
+        double mag = 1.0;
+        for (k = 0; k < exp10; k++) {
+            mag *= 10.0;
+        }
+        if (eneg) {
+            value /= mag;
+        } else {
+            value *= mag;
+        }
+    }
+    if (endptr != NULL) {
+        *endptr = (char *)p;
+    }
+    return neg ? -value : value;
 }
 
 int atoi(const char *s) {

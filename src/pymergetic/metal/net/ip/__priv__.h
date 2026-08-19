@@ -31,6 +31,9 @@
 #define PM_METAL_IP_RT_MAX 16u
 #define PM_METAL_IP_MASK24 0xffffff00u
 #define PM_METAL_IP_ARP_MAX 8u
+/* Groups a single UDP socket may join via pm_metal_net_ip_join_group. Zenoh's
+ * scout link joins the scouting group on its listener; unicast sockets need none. */
+#define PM_METAL_IP_MCAST_MAX 4u
 /* One datagram waits per unresolved neighbour: a UDP client gets no retransmit,
  * so dropping its first query would make every one-shot request fail once. */
 #define PM_METAL_IP_ARP_PEND 1500u
@@ -70,6 +73,10 @@ struct pm_metal_sock {
     uint16_t lport;
     uint32_t raddr_be;
     uint16_t rport;
+    /* Multicast groups this UDP socket has joined (IGMP-style membership).
+     * Empty for unicast/loopback sockets. */
+    uint32_t mcast_be[PM_METAL_IP_MCAST_MAX];
+    uint32_t mcast_n;
     uint32_t snd_nxt;
     uint32_t snd_una;
     uint32_t snd_wnd; /* peer's advertised receive window (in-flight budget) */
@@ -138,6 +145,10 @@ extern uint16_t pm_ip_ping_id;
 
 void pm_ip_sock_wake(struct pm_metal_sock *s);
 int32_t pm_ip_sock_alloc(uint8_t kind);
+/* True if any UDP socket has joined the given multicast group. Lets __wire__.c
+ * accept a multicast-destined IPv4 datagram that is not one of our unicast
+ * addresses (see ip_input). */
+int32_t pm_ip_mcast_joined(uint32_t dst_be);
 /* Pump the NIC/TCP timers assuming pm_ip_lock is already held (non-reentrant
  * RS lock: external callers go through pm_metal_net_ip_pump, locked internal
  * flow calls straight here). */

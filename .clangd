@@ -96,6 +96,26 @@ Diagnostics:
 
 ---
 If:
+  PathMatch: .*/src/pymergetic/metal/net/zenoh/.*\.(c|h)$
+  PathExclude: .*/__tests__\.c$
+CompileFlags:
+  Add:
+    - -xc
+    - -std=gnu11
+    - -I../../lib/zenoh-pico/include
+    - -I../../lib/zenoh-pico/src
+    - -Isrc/pymergetic/metal/net/zenoh
+    - -Isrc
+    - -I../wasmmod
+    - -I../wasmmod/src
+    - -I../../lib/mbedtls/include
+    - -DZENOH_GENERIC
+    - -D_POSIX_C_SOURCE=200809L
+    - -Wno-unknown-attributes
+Diagnostics:
+  UnusedIncludes: None
+---
+If:
   PathMatch: .*\.(c|h)$
   PathExclude: .*/(port/|(modmetal|modpymergetic|boot|mpconfig_unix))
 CompileFlags:

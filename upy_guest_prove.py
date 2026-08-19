@@ -116,7 +116,7 @@ st, body = handle("GET", "/health")
 if st != 200 or '"ok":true' not in body:
     raise SystemExit("inspect health %s %s" % (st, body))
 st, body = handle("GET", "/capabilities")
-if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body:
+if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body or '"zenoh":true' not in body:
     raise SystemExit("inspect caps %s %s" % (st, body))
 print("upy inspect caps")
 import pymergetic.metal.net.dns as dns
@@ -151,4 +151,22 @@ print("upy process")
 if m.net.ssh.up() != 0:
     raise SystemExit("ssh up")
 print("upy ssh session")
+
+# net.zenoh: the card must be importable, peer-configurable, and its open step
+# must be cooperative — up() returns immediately even with no listener up, a few
+# poll() steps must not hang the µPy guest, and a 16-byte ZID must resolve.
+if m.net.zenoh is None:
+    raise SystemExit("zenoh card")
+import pymergetic.metal.net.zenoh as zenoh
+if zenoh.peer is None:
+    raise SystemExit("zenoh peer")
+if zenoh.peer(0x7F000001, 7447, 0) != 0:
+    raise SystemExit("zenoh peer cfg")
+zenoh.up()
+for _ in range(4):
+    zenoh.poll()
+zid = zenoh.zid()
+if not isinstance(zid, bytes) or len(zid) != 16:
+    raise SystemExit("zenoh zid %r" % (zid,))
+print("upy zenoh")
 print("guest prove ok")

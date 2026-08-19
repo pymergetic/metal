@@ -26,7 +26,7 @@ if st != 200 or "pymergetic.metal" not in body:
 print("upy inspect")
 st = inspect.handle("GET", "/capabilities")
 body = inspect.body()
-if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body:
+if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body or '"zenoh":true' not in body:
     raise RuntimeError("inspect caps")
 print("upy inspect caps")
 if m.net.dns.resolve is None:
@@ -82,6 +82,26 @@ print("upy process")
 if m.net.ssh.up() != 0:
     raise RuntimeError("ssh up")
 print("upy ssh session")
+
+# net.zenoh: cooperative mount on bare-metal firmware too. Peer config, an
+# immediate up() (z_open drives the whole handshake across poll(), never
+# blocking the boot), bounded poll() steps, and a 16-byte local ZID. Resident
+# C on the firmware build — no CDN pack.
+if m.net.zenoh is None:
+    raise RuntimeError("zenoh card")
+import pymergetic.metal.net.zenoh as zenoh
+
+if zenoh.peer is None:
+    raise RuntimeError("zenoh peer")
+if zenoh.peer(0x7F000001, 7447, 0) != 0:
+    raise RuntimeError("zenoh peer cfg")
+zenoh.up()
+for _ in range(4):
+    zenoh.poll()
+zid = zenoh.zid()
+if not isinstance(zid, bytes) or len(zid) != 16:
+    raise RuntimeError("zenoh zid %r" % (zid,))
+print("upy zenoh")
 
 # Render the module help (the same banner the REPL shows), which proves the
 # packages()/packages_catalog()/search/filter API surface is wired and listed.

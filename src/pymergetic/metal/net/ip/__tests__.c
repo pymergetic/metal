@@ -618,6 +618,50 @@ static int32_t case_csum_drop(void) {
     return 0;
 }
 
+static int32_t case_multicast_lo(void) {
+#define MGROUP 0xef000001u /* 239.0.0.1 */
+    int32_t sub = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_DGRAM);
+    int32_t non = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_DGRAM);
+    int32_t tx = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_DGRAM);
+    uint8_t buf[8];
+    uint32_t addr = 0;
+    uint16_t port = 0;
+    int32_t n;
+    if (sub < 0 || non < 0 || tx < 0) {
+        return fail("mcast socket");
+    }
+    /* The group listener binds the wildcard address (like a scout socket) so it
+     * can receive group traffic on any interface; both sub and non take the same
+     * port so "did the join gate delivery" is the only difference. */
+    if (pm_metal_net_ip_bind(sub, 0, 7300) != 0 || pm_metal_net_ip_bind(non, 0, 7300) != 0 ||
+        pm_metal_net_ip_bind(tx, LO4, 7301) != 0) {
+        return fail("mcast bind");
+    }
+    if (pm_metal_net_ip_join_group(sub, MGROUP) != 0) {
+        return fail("mcast join");
+    }
+    /* Before the sender publishes, the non-member already tried to read and must
+     * stay empty: nothing has arrived, so recvfrom returns 0 (nothing queued). */
+    const uint8_t msg[] = { 'g', 'r', 'p' };
+    if (pm_metal_net_ip_sendto(tx, msg, sizeof(msg), MGROUP, 7300) != (int32_t)sizeof(msg)) {
+        return fail("mcast sendto");
+    }
+    n = pm_metal_net_ip_recvfrom(non, buf, sizeof(buf), &addr, &port);
+    if (n != 0) {
+        return fail("mcast leaked to non-member");
+    }
+    n = pm_metal_net_ip_recvfrom(sub, buf, sizeof(buf), &addr, &port);
+    (void)pm_metal_net_ip_leave_group(sub, MGROUP);
+    (void)pm_metal_net_ip_leave_group(non, MGROUP);
+    (void)pm_metal_net_ip_close(sub);
+    (void)pm_metal_net_ip_close(non);
+    (void)pm_metal_net_ip_close(tx);
+    if (n != (int32_t)sizeof(msg) || buf[0] != 'g' || buf[2] != 'p' || addr != LO4 || port != 7301) {
+        return fail("mcast recvfrom");
+    }
+    return 0;
+}
+
 static int32_t case_offbox(void) {
     int32_t st;
     if (peer_up() != 0) {
@@ -655,6 +699,9 @@ int32_t pm_metal_net_ip_tests(void) {
         return 1;
     }
     if (case_tcp_accept_park() != 0) {
+        return 1;
+    }
+    if (case_multicast_lo() != 0) {
         return 1;
     }
     if (case_offbox() != 0) {

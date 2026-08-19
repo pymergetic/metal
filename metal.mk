@@ -63,6 +63,29 @@ SRC_METAL_MBEDTLS = $(addprefix $(MBEDTLS_DIR)/library/,\
 PY_O += $(addprefix $(BUILD)/, $(SRC_METAL_MBEDTLS:.c=.o))
 endif
 
+# net.zenoh: vendored zenoh-pico core, same GENERIC config/platform headers the
+# host (metal.mk) and firmware (fw_zenoh.mk) seats use. The card border + platform
+# shim come from the card tree (METAL_CARD_REL); only the vendored core is listed
+# here, mbedtls-style, from the shared source glob.
+ZENOH_PICO_DIR ?= $(TOP)/lib/zenoh-pico
+ZENOH_CARD_DIR ?= $(TOP)/extmod/metal/src/pymergetic/metal/net/zenoh
+include $(TOP)/extmod/metal/tools/zenoh.mk
+SRC_METAL_ZENOH = $(addprefix lib/zenoh-pico/,$(ZP_REL))
+PY_O += $(addprefix $(BUILD)/, $(SRC_METAL_ZENOH:.c=.o))
+INC += -I$(ZENOH_PICO_DIR)/include -I$(ZENOH_PICO_DIR)/src -I$(ZENOH_CARD_DIR)
+CFLAGS_EXTMOD += -DZENOH_GENERIC
+
+# zenoh-pico's api/macros.h is C11 _Generic; unix µPy defaults to gnu99 and the
+# browser seat forces gnu99 on all card objects, so re-up the zenoh card + core
+# objects to gnu11 (last -std wins). The vendored core's benign warnings must also
+# not become hard errors under the µPy build's global -Werror (host metal.mk and
+# fw_zenoh.mk drop -Werror for the same reason).
+ZENOH_GN11_OBJS = $(addprefix $(BUILD)/, $(filter %net/zenoh/, $(SRC_METAL_C:.c=.o)) \
+	$(SRC_METAL_ZENOH:.c=.o))
+$(ZENOH_GN11_OBJS): CFLAGS += -std=gnu11
+$(addprefix $(BUILD)/, $(SRC_METAL_ZENOH:.c=.o)): \
+	CFLAGS += -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+
 # Cards come from the tree, not from a list here — see tools/cards.sh. The same
 # TUs land on unix, firmware, and emcc; fills already #ifdef (tap is linux,
 # virtio MMIO is firmware, cmos ports are firmware, the rest is plain C).

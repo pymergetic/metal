@@ -26,7 +26,7 @@ if st != 200 or "pymergetic.metal" not in body:
 print("upy inspect")
 st = inspect.handle("GET", "/capabilities")
 body = inspect.body()
-if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body:
+if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body or '"zenoh":true' not in body:
     raise RuntimeError("inspect caps")
 print("upy inspect caps")
 if m.net.dns.resolve is None:

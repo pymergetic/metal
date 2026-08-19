@@ -72,6 +72,7 @@ FW_RUSTC_TARGET := armv7a-none-eabihf
 FW_WAMR_ARCH := armv7
 include $(PORT_DIR)/fw_cdn.mk
 include $(PORT_DIR)/fw_mbedtls.mk
+include $(PORT_DIR)/fw_zenoh.mk
 include $(PORT_DIR)/fw_cards.mk
 include $(PORT_DIR)/fw_wamr.mk
 include $(PORT_DIR)/upy.mk

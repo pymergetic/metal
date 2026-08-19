@@ -10,6 +10,12 @@ static inline __attribute__((unused)) int isdigit(int c) {
 static inline __attribute__((unused)) int isalpha(int c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
+static inline __attribute__((unused)) int isupper(int c) {
+    return (c >= 'A' && c <= 'Z');
+}
+static inline __attribute__((unused)) int islower(int c) {
+    return (c >= 'a' && c <= 'z');
+}
 static inline __attribute__((unused)) int isalnum(int c) {
     return isalpha(c) || isdigit(c);
 }
