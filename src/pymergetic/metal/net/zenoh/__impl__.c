@@ -57,9 +57,26 @@ typedef struct pm_metal_net_zenoh_ctx {
     uint8_t sub_set;
     pm_metal_net_zenoh_value_cb_t sub_cb;
     void *sub_arg;
+    /* Queryable (roster/roster-item answers). queryable() keeps the
+     * z_owned_queryable_t + the user callback; a query delivered by zp_spin_once
+     * fires the callback with a bounded in-flight reply sink, synchronously,
+     * inside the step. */
+    z_owned_queryable_t qle;
+    uint8_t qle_set;
+    pm_metal_net_zenoh_query_cb_t q_cb;
+    void *q_arg;
+    uint8_t q_buf[PM_METAL_NET_ZENOH_MAX_SAMPLE]; /* in-flight reply bytes */
+    uint32_t q_qlen;                              /* bytes accumulated in-q_buf */
 } pm_metal_net_zenoh_ctx_t;
 
 #define PM_METAL_NET_ZENOH_SLOTS 2u
+
+/* Query reply sink passed to the query callback (see __types__.h). The layout
+ * is private to this card: it names the slot whose bounded reply buffer the
+ * callback refills via pm_metal_net_zenoh_reply_append. */
+struct pm_metal_net_zenoh_reply {
+    uint8_t _slot;
+};
 
 static pm_metal_net_zenoh_ctx_t s_slots[PM_METAL_NET_ZENOH_SLOTS];
 static uint8_t s_sel;            /* slot the bounded faces drive */
@@ -253,6 +270,12 @@ void pm_metal_net_zenoh_deinit(void) {
     pm_metal_net_zenoh_scout_answer_off(); /* no stale group listener between tests */
     for (i = 0; i < PM_METAL_NET_ZENOH_SLOTS; i++) {
         pm_metal_net_zenoh_ctx_t *sl = &s_slots[i];
+        if (sl->qle_set) {
+            (void)z_undeclare_queryable(z_move(sl->qle));
+            sl->qle_set = 0;
+            sl->q_cb = NULL;
+            sl->q_arg = NULL;
+        }
         if (sl->sub_set) {
             z_undeclare_subscriber(z_move(sl->sub));
             sl->sub_set = 0;
@@ -405,6 +428,112 @@ int32_t pm_metal_net_zenoh_subscribe(const char *key, pm_metal_net_zenoh_value_c
     sl->sub_set = 1;
     sl->sub_cb = cb;
     sl->sub_arg = arg;
+    return 1;
+}
+
+/* Append to the in-flight query reply (the query callback's sink). Copies into
+ * the bounded slot buffer; returns 0 when full (the reply stays bounded). The
+ * zenoh query being answered is the slot's q_buf owner, so this is valid only
+ * while the query callback is on the stack. */
+int32_t pm_metal_net_zenoh_reply_append(pm_metal_net_zenoh_reply_t *reply, const uint8_t *data, size_t len) {
+    pm_metal_net_zenoh_ctx_t *sl;
+    if (reply == NULL || reply->_slot >= PM_METAL_NET_ZENOH_SLOTS) {
+        return -1;
+    }
+    sl = &s_slots[reply->_slot];
+    if (sl->open_state != 2) {
+        return -1;
+    }
+    if (len > sizeof(sl->q_buf) - sl->q_qlen) {
+        len = sizeof(sl->q_buf) - sl->q_qlen;
+    }
+    if (data != NULL && len != 0) {
+        memcpy(sl->q_buf + sl->q_qlen, data, len);
+    }
+    sl->q_qlen += (uint32_t)len;
+    return (int32_t)len;
+}
+
+/* Query handler installed by pm_metal_net_zenoh_queryable(). Runs inside a
+ * zp_spin_once that delivered the query. It points the slot's reply sink at `q`
+ * and fires the user callback; the callback's pm_metal_net_zenoh_reply_append
+ * calls refill the slot's bounded q_buf, and we send that one reply to the
+ * querier. */
+static void zenoh_query_cb(z_loaned_query_t *q, void *arg) {
+    uintptr_t idx = (uintptr_t)arg;
+    z_view_string_t kw;
+    z_view_string_t params;
+    const z_loaned_string_t *kl;
+    const char *key;
+    const z_loaned_string_t *pl;
+    const uint8_t *pdata;
+    pm_metal_net_zenoh_reply_t reply;
+    z_owned_bytes_t payload;
+    z_view_keyexpr_t rke;
+    z_result_t rc;
+    if (idx >= (uintptr_t)PM_METAL_NET_ZENOH_SLOTS || q == NULL) {
+        return;
+    }
+    pm_metal_net_zenoh_ctx_t *sl = &s_slots[idx];
+    if (sl->open_state != 2 || sl->q_cb == NULL) {
+        return;
+    }
+    key = NULL;
+    if (z_keyexpr_as_view_string(z_query_keyexpr(q), &kw) == Z_OK) {
+        kl = z_loan(kw);
+        key = z_string_data(kl);
+    }
+    z_query_parameters(q, &params);
+    pl = z_loan(params);
+    pdata = (const uint8_t *)z_string_data(pl);
+    /* Reset the bounded reply buffer + reply sink for this query. */
+    sl->q_qlen = 0;
+    reply._slot = (uint8_t)idx;
+    /* The reply keyexpr: echoes the query's asked key (the query handler already
+     * consumed a copy of the key string, so reusing it here is safe). */
+    (void)z_view_keyexpr_from_str_unchecked(&rke, key != NULL ? key : "");
+    sl->q_cb((key != NULL) ? z_string_data(kl) : "", key != NULL ? (size_t)z_string_len(kl) : 0, pdata,
+        (size_t)z_string_len(pl), &reply, sl->q_arg);
+    /* Send the accumulated bounded reply (or the empty one) to the querier. */
+    rc = z_bytes_copy_from_buf(&payload, sl->q_buf, sl->q_qlen);
+    if (rc == Z_OK) {
+        (void)z_query_reply(q, z_loan(rke), z_move(payload), NULL);
+    }
+}
+
+int32_t pm_metal_net_zenoh_queryable(const char *key, pm_metal_net_zenoh_query_cb_t cb, void *arg) {
+    z_view_keyexpr_t ke;
+    z_owned_closure_query_t cl;
+    z_result_t ret;
+    pm_metal_net_zenoh_ctx_t *sl = &s_slots[s_sel];
+    if (sl->open_state != 2 || key == NULL || cb == NULL) {
+        return -1;
+    }
+    if (sl->qle_set) {
+        return -1; /* one queryable per slot for this border pass */
+    }
+    z_view_keyexpr_from_str_unchecked(&ke, key);
+    (void)z_closure_query(&cl, zenoh_query_cb, NULL, (void *)(uintptr_t)s_sel);
+    ret = z_declare_queryable(z_loan(sl->session), &sl->qle, z_loan(ke), z_move(cl), NULL);
+    if (ret != Z_OK) {
+        return -1;
+    }
+    sl->qle_set = 1;
+    sl->q_cb = cb;
+    sl->q_arg = arg;
+    return 1;
+}
+
+int32_t pm_metal_net_zenoh_undeclare_queryable(void) {
+    pm_metal_net_zenoh_ctx_t *sl = &s_slots[s_sel];
+    if (!sl->qle_set) {
+        return 0;
+    }
+    (void)z_undeclare_queryable(z_move(sl->qle));
+    sl->qle_set = 0;
+    sl->q_cb = NULL;
+    sl->q_arg = NULL;
+    sl->q_qlen = 0;
     return 1;
 }
 
@@ -626,6 +755,9 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_up, pm_metal_net_
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_poll, pm_metal_net_zenoh_poll, int32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_put, pm_metal_net_zenoh_put, int32_t(const char *, const uint8_t *, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_subscribe, pm_metal_net_zenoh_subscribe, int32_t(const char *, pm_metal_net_zenoh_value_cb_t, void *));
+PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_queryable, pm_metal_net_zenoh_queryable, int32_t(const char *, pm_metal_net_zenoh_query_cb_t, void *));
+PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_undeclare_queryable, pm_metal_net_zenoh_undeclare_queryable, int32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_reply_append, pm_metal_net_zenoh_reply_append, int32_t(pm_metal_net_zenoh_reply_t *, const uint8_t *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_zid, pm_metal_net_zenoh_zid, int32_t(uint8_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_scout_answer_on, pm_metal_net_zenoh_scout_answer_on, int32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_scout_answer_off, pm_metal_net_zenoh_scout_answer_off, void(void));

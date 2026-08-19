@@ -25,6 +25,22 @@ static int32_t fail_zenoh(const char *why) {
     return 1;
 }
 
+/* Queryable handler for the prove: echoes nothing, just records it fired and
+ * appends a fixed marker byte into the reply. Proves the callback type wiring
+ * regardless of whether a peer ever delivers a query. */
+static void query_cb(const char *key, size_t klen, const uint8_t *params, size_t plen,
+                     pm_metal_net_zenoh_reply_t *reply, void *arg) {
+    uint8_t tag = 0x5a;
+    (void)key;
+    (void)klen;
+    (void)params;
+    (void)plen;
+    (void)arg;
+    if (reply != NULL) {
+        (void)pm_metal_net_zenoh_reply_append(reply, &tag, 1);
+    }
+}
+
 static int32_t case_zid_deterministic(void) {
     uint8_t zid1[PM_METAL_NET_ZENOH_ZID_LEN];
     uint8_t zid2[PM_METAL_NET_ZENOH_ZID_LEN];
@@ -152,6 +168,37 @@ static int32_t case_two_session_roundtrip(void) {
     }
     if (pm_metal_net_zenoh_zid(zid) != 1) {
         return fail_zenoh("listener zid");
+    }
+
+    /* Queryable (swarm roster) faces on the open peer session. Declare succeeds
+     * on the open listener; a second declare on the same slot is rejected (one
+     * queryable per slot for this border pass); replying while unarmed is a
+     * guarded no-op; undeclare frees the slot so a fresh declare succeeds. A
+     * full query/roster round-trip needs a second peer and stays the
+     * `two-session-prove` data-plane remainder (same gate as subscribe/put). */
+    {
+        if (pm_metal_net_zenoh_queryable("@/swarm/roster", query_cb, NULL) != 1) {
+            return fail_zenoh("queryable declare");
+        }
+        if (pm_metal_net_zenoh_queryable("@/swarm/roster2", query_cb, NULL) != -1) {
+            (void)pm_metal_net_zenoh_undeclare_queryable();
+            return fail_zenoh("second queryable accepted");
+        }
+        if (pm_metal_net_zenoh_undeclare_queryable() != 1) {
+            return fail_zenoh("queryable undeclare");
+        }
+        if (pm_metal_net_zenoh_undeclare_queryable() != 0) {
+            return fail_zenoh("queryable undeclare twice");
+        }
+        if (pm_metal_net_zenoh_reply_append(NULL, (const uint8_t *)"x", 1) != -1) {
+            return fail_zenoh("reply append unarmed");
+        }
+        if (pm_metal_net_zenoh_queryable("@/swarm/roster", query_cb, NULL) != 1) {
+            return fail_zenoh("queryable redeclare");
+        }
+        if (pm_metal_net_zenoh_undeclare_queryable() != 1) {
+            return fail_zenoh("queryable undeclare 2");
+        }
     }
 
     /* Slot 0 = connector (client mode) against the same endpoint. Drive its

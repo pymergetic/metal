@@ -32,8 +32,15 @@ extern "C" {
 typedef void (*pm_metal_net_zenoh_value_cb_t)(const char *key, size_t klen,
     const uint8_t *payload, size_t plen, void *arg);
 
-/* Queryable reply sink: append a bytes value to the in-flight reply. */
+/* Queryable reply sink: append a bytes value to the in-flight reply. The
+ * layout is private to the card (__impl__.c); the query callback only ever sees
+ * the pm_metal_net_zenoh_reply_append face below. */
 typedef struct pm_metal_net_zenoh_reply pm_metal_net_zenoh_reply_t;
+
+/* Append bytes to the in-flight query reply. Returns 0 when the reply buffer is
+ * full (the reply is already truncated enough to stay bounded). Valid only
+ * inside a query callback. */
+int32_t pm_metal_net_zenoh_reply_append(pm_metal_net_zenoh_reply_t *reply, const uint8_t *data, size_t len);
 
 typedef void (*pm_metal_net_zenoh_query_cb_t)(const char *key, size_t klen,
     const uint8_t *params, size_t plen, pm_metal_net_zenoh_reply_t *reply, void *arg);
