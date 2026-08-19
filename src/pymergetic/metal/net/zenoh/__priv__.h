@@ -39,6 +39,14 @@ void pm_metal_net_zenoh_yield(void); /* calls the hook, or pumps net.ip alone */
  * caller-resolved first. */
 int pm_metal_net_zenoh_parse_ipv4(const char *host, uint32_t *addr_be_out);
 
+/* Scouting (SCOUT/HELLO) faces. Declared here (card-private) so the card's own
+ * TUs that drive the answerer from poll()/deinit() compile against the public
+ * __exports__ border in every TU. */
+int32_t pm_metal_net_zenoh_scout_answer_on(void);
+void pm_metal_net_zenoh_scout_answer_off(void);
+int32_t pm_metal_net_zenoh_scout_answer_pump(void);
+int32_t pm_metal_net_zenoh_scout(uint8_t what, uint8_t out_zid[PM_METAL_NET_ZENOH_ZID_LEN], uint8_t *out_whatami);
+
 #ifdef __cplusplus
 }
 #endif

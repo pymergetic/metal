@@ -196,6 +196,82 @@ static int32_t case_two_session_roundtrip(void) {
     return 0;
 }
 
+/* Scout/HELLO round-trip gated behind the net.ip multicast join_group task.
+ *
+ * zenoh scouting sends a SCOUT datagram to 224.0.0.224:7446; a live peer
+ * answers a HELLO unicast to the scout's source. The vendored zenoh-pico core
+ * only encodes/decodes scouting messages (it never answers a SCOUT), so the
+ * card synthesizes the hello side (scout_answer_*). This proves:
+ *   1. The net.ip multicast group-join is the gate — with NO joined answerer,
+ *      scout() gets no HELLO (0); the group datagram is not delivered anywhere.
+ *   2. Once the joined answerer is armed, a scout sent to the group is
+ *      looped back, decoded, and answered with a HELLO carrying the local ZID
+ *      and WhatAmI=Peer, received by the ephemeral scout socket on loopback.
+ *   3. The answer listener is single-slot (a second armed answer is rejected),
+ *      so the prove never leaves a stray group member behind.
+ * All steps are bounded and cooperative; the same host C test proves every seat.
+ * Runs after case_two_session_roundtrip (which deinit's the session slots); the
+ * card keeps the boot arena across deinit so this pre-open z_malloc still works.
+ */
+static int32_t case_scout_roundtrip(void) {
+    uint8_t zid[PM_METAL_NET_ZENOH_ZID_LEN];
+    uint8_t whatami = 0;
+    uint8_t local_zid[PM_METAL_NET_ZENOH_ZID_LEN];
+    uint32_t steps;
+    int32_t rc;
+    /* Gate 1: no joined answerer -> no HELLO. A scout must NOT resolve (0)
+     * because nothing is on the multicast group yet. */
+    (void)pm_metal_net_ip_pump();
+    rc = 0;
+    for (steps = 0; steps < 8u; steps++) {
+        rc = pm_metal_net_zenoh_scout(2u /* Z_WHAT_PEER */, zid, &whatami);
+        (void)pm_metal_net_zenoh_poll();
+        (void)pm_metal_async_poll();
+        if (rc != 0) {
+            return fail_zenoh("scout resolved with no answerer");
+        }
+    }
+    /* Arm the hello side (joins 224.0.0.224:7446 on net.ip). A second arm while
+     * one is live must be rejected: only one group listener at a time. */
+    if (pm_metal_net_zenoh_scout_answer_on() != 0) {
+        return fail_zenoh("scout answer on");
+    }
+    if (pm_metal_net_zenoh_scout_answer_on() == 0) {
+        (void)pm_metal_net_zenoh_scout_answer_off();
+        return fail_zenoh("second scout answer accepted");
+    }
+    /* Local ZID the HELLO must carry back (pre-open identity). */
+    if (pm_metal_net_zenoh_zid(local_zid) != 1) {
+        (void)pm_metal_net_zenoh_scout_answer_off();
+        return fail_zenoh("scout local zid");
+    }
+    /* Gate 2: with the joined answerer live, the scout round-trips. Drive the
+     * cooperative step (scout + answer pump + net.ip) until a HELLO lands or a
+     * bounded budget is exhausted. */
+    rc = 0;
+    for (steps = 0; steps < 24u; steps++) {
+        rc = pm_metal_net_zenoh_scout(2u /* Z_WHAT_PEER */, zid, &whatami);
+        (void)pm_metal_net_zenoh_scout_answer_pump();
+        (void)pm_metal_net_ip_pump();
+        (void)pm_metal_async_poll();
+        if (rc == 1) {
+            break;
+        }
+    }
+    (void)pm_metal_net_zenoh_scout_answer_off();
+    if (rc != 1) {
+        return fail_zenoh("scout no hello");
+    }
+    if (whatami != 2u /* Z_WHATAMI_PEER */) {
+        return fail_zenoh("scout whatami");
+    }
+    if (memcmp(zid, local_zid, PM_METAL_NET_ZENOH_ZID_LEN) != 0) {
+        return fail_zenoh("scout zid mismatch");
+    }
+    return 0;
+}
+
 PM_MOD_TEST_C(pymergetic.metal.net.zenoh, "zid_deterministic", case_zid_deterministic);
 PM_MOD_TEST_C(pymergetic.metal.net.zenoh, "up_poll_bounded", case_up_poll_bounded);
 PM_MOD_TEST_C(pymergetic.metal.net.zenoh, "two_session_roundtrip", case_two_session_roundtrip);
+PM_MOD_TEST_C(pymergetic.metal.net.zenoh, "scout_roundtrip", case_scout_roundtrip);

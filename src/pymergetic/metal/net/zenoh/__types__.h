@@ -14,6 +14,13 @@ extern "C" {
 
 #define PM_METAL_NET_ZENOH_ZID_LEN 16
 
+/* Scouting (SCOUT/HELLO) — Zenoh discovery over UDP multicast. The group an
+ * endpoint scouting / hello-answering peer joins is 224.0.0.224:7446, the net.ip
+ * multicast group a card slots into so a live peer's datagrams demux here. */
+#define PM_METAL_NET_ZENOH_SCOUT_PORT 7446u
+#define PM_METAL_NET_ZENOH_SCOUT_GROUP 0xe00000e0u /* 224.0.0.224, network order */
+#define PM_METAL_NET_ZENOH_SCOUT_BUFFER 256
+
 /* Bounded stack sample buffer for subscriber delivery: a sample payload is
  * copied here before the callback runs, so no pointer is held across a poll()
  * step. Longer payloads are truncated. */
