@@ -697,7 +697,14 @@ int32_t pm_metal_net_zenoh_scout(uint8_t what, uint8_t out_zid[PM_METAL_NET_ZENO
     if (fd < 0) {
         return -1;
     }
-    if (pm_metal_net_ip_bind(fd, 0u, 0u) != 0) {
+    /* Pin the probe socket to the loopback address, not 0.0.0.0/any. The
+     * discovery SWARM group is scouted over lo on every seat, and pm_ip_src_for
+     * uses a bound local address as the datagram source; binding *any* lets
+     * ip_src_route borrow whichever NIC happens to be up first in the boot
+     * (e.g. sim's 10.0.0.1) once sim is live, so the answerer's unicast HELLO
+     * returns to 10.0.0.2:0 instead of our lo socket and the round-trip never
+     * lands. Pinning to 127.0.0.1 makes the source lo in every boot state. */
+    if (pm_metal_net_ip_bind(fd, 0x7f000001u, 0u) != 0) {
         (void)pm_metal_net_ip_close(fd);
         return -1;
     }
