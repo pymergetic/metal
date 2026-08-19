@@ -15,6 +15,12 @@ extern "C" {
 
 void pm_metal_upy_port_init(void);
 
+/* The Python renderer behind the httpd's deferred page routes (modmetal.c).
+ * `start` is what m.serve() calls; `autostart` marks it to be started from the
+ * MOTD surface, for a seat that brought its listeners up on its own. */
+void mp_metal_packs_start(void);
+void mp_metal_packs_autostart(void);
+
 void *pm_metal_wasm_malloc(size_t n);
 void pm_metal_wasm_free(void *p);
 void *pm_metal_wasm_realloc(void *p, size_t n);

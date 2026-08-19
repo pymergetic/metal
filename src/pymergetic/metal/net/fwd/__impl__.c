@@ -32,7 +32,12 @@
 
 #define FWD_LO_BE 0x7f000001u
 #define PM_METAL_FWD_MAX 8u
-#define PM_METAL_FWD_CHUNK 1400u
+/* Drain granularity for guest->host shuttling. Must be >= the guest TCP rx
+ * window (PM_METAL_IP_RX_MAX) so one pump tick can empty the whole guest
+ * client buffer. A small chunk (e.g. 1400) would free only that much of the
+ * send window per tick, thrash the sender's window park, and stall large
+ * responses — a browser hanging on a big page/download. */
+#define PM_METAL_FWD_CHUNK 8192u
 
 #if !defined(PM_METAL_FIRMWARE) && !defined(__EMSCRIPTEN__)
 
@@ -128,6 +133,11 @@ static void *fwd_pump(void *arg) {
     struct fwd_ep *e = arg;
     while (e->running) {
         struct pollfd pf[PM_METAL_FWD_MAX + 1];
+        /* Which pf slot each connection went into. The array is packed (free
+         * connections are skipped), so conn[i] is not pf[i + 1] once any earlier
+         * slot is free — reading the wrong revents loses the peer's POLLHUP and
+         * leaks the connection for good. */
+        int pfi[PM_METAL_FWD_MAX];
         int nfds = 1;
         uint32_t i;
         /* Drive the guest stack each round so our guest client handshake, the
@@ -138,9 +148,11 @@ static void *fwd_pump(void *arg) {
         pf[0].fd = e->listen_fd;
         pf[0].events = POLLIN;
         for (i = 0; i < PM_METAL_FWD_MAX; i++) {
+            pfi[i] = -1;
             if (e->conn[i].host_fd >= 0) {
                 pf[nfds].fd = e->conn[i].host_fd;
                 pf[nfds].events = POLLIN;
+                pfi[i] = nfds;
                 nfds++;
             }
         }
@@ -162,7 +174,7 @@ static void *fwd_pump(void *arg) {
             fwd_accept(e);
         }
         for (i = 0; i < PM_METAL_FWD_MAX; i++) {
-            int idx = (int)i + 1;
+            int idx = pfi[i];
             struct fwd_conn *c = &e->conn[i];
             if (c->host_fd < 0) {
                 continue;
@@ -179,7 +191,7 @@ static void *fwd_pump(void *arg) {
                 }
                 c->connecting = 0;
             }
-            if (idx < nfds && (pf[idx].revents & (POLLIN | POLLHUP | POLLERR)) && !c->connecting) {
+            if (idx > 0 && (pf[idx].revents & (POLLIN | POLLHUP | POLLERR)) && !c->connecting) {
                 /* Host has bytes or closed. */
                 uint8_t buf[PM_METAL_FWD_CHUNK];
                 ssize_t n = recv(c->host_fd, buf, sizeof(buf), 0);
@@ -198,19 +210,30 @@ static void *fwd_pump(void *arg) {
                     }
                 }
             }
-            /* Guest -> host: pull whatever the guest socket has queued. */
+            /* Guest -> host: pull whatever the guest socket has queued. Drain the
+             * whole guest rx (up to the window) per tick so the sender's window
+             * reopens fully each round — a single small read would otherwise leave
+             * the server parked on a near-full window and stall the transfer. */
             if (c->guest_fd >= 0 && !c->connecting) {
-                int32_t n = pm_metal_net_ip_recv(c->guest_fd, e->guest_buf, PM_METAL_FWD_CHUNK);
-                if (n > 0) {
+                uint32_t guard = 64; /* cap a pathological loop, not a healthy drain */
+                for (;;) {
+                    int32_t n = pm_metal_net_ip_recv(c->guest_fd, e->guest_buf, PM_METAL_FWD_CHUNK);
+                    if (n <= 0) {
+                        if (n == -2) {
+                            close(c->host_fd);
+                            fwd_guest_close(e, c);
+                        }
+                        break;
+                    }
                     ssize_t w = send(c->host_fd, e->guest_buf, (size_t)n, 0);
                     if (w <= 0) {
                         close(c->host_fd);
                         fwd_guest_close(e, c);
-                        continue;
+                        break;
                     }
-                } else if (n == -2) {
-                    close(c->host_fd);
-                    fwd_guest_close(e, c);
+                    if (--guard == 0u) {
+                        break;
+                    }
                 }
             }
         }

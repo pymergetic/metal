@@ -83,6 +83,7 @@ int32_t pm_ip_sock_alloc(uint8_t kind) {
             pm_ip_sk[i].kind = kind;
             pm_ip_sk[i].listen_fd = -1;
             pm_ip_sk[i].l2_h = -1;
+            pm_ip_sk[i].snd_wnd = kind == SK_TCP ? SSND_WND_DEFAULT : 0u;
             return (int32_t)i;
         }
     }
@@ -611,10 +612,41 @@ int32_t pm_ip_send_locked(int32_t fd, const uint8_t *buf, uint32_t len) {
     if (s == NULL || buf == NULL || s->tcp_st != TCP_ESTAB) {
         return -1;
     }
+    /* Send-window flow control: never exceed the bytes the peer can buffer.
+     * in-flight = snd_nxt - snd_una. A zero window parks the coroutine (0 = wait)
+     * until ACKs advance snd_una/window, instead of firing MSS chunks that the
+     * peer's full rx buffer drops as out-of-order. */
+    uint32_t request = len;
+    uint32_t in_flight = s->snd_nxt - s->snd_una;
+    if (in_flight >= s->snd_wnd) {
+        /* Park the sending coroutine; tcp_input wakes it when an ACK opens space. */
+        pm_metal_async_task_t *cur = pm_metal_async_current_task();
+        if (cur != NULL) {
+            s->waiter = cur;
+        }
+        return 0;
+    }
+    uint32_t room = s->snd_wnd - in_flight;
+    if (len > room) {
+        len = room;
+    }
     if (len > PM_METAL_IP_TCP_MSS) {
         len = PM_METAL_IP_TCP_MSS;
     }
+    if (len == 0) {
+        return 0;
+    }
     pm_ip_tcp_xmit(s, (uint8_t)(TCP_PSH | TCP_ACK), buf, len);
+    /* The caller gave us more data than this segment carries: the coroutine
+     * must be woken when the peer's ACK frees window space, otherwise it parks
+     * at the runner level with no wake source and a large (streamed) body stalls
+     * mid-transfer. Register here so tcp_input resumes it on the next ACK. */
+    if (request > len) {
+        pm_metal_async_task_t *cur = pm_metal_async_current_task();
+        if (cur != NULL) {
+            s->waiter = cur;
+        }
+    }
     return (int32_t)len;
 }
 
@@ -649,6 +681,12 @@ int32_t pm_ip_recv_locked(int32_t fd, uint8_t *buf, uint32_t len) {
         memmove(s->rx, s->rx + n, s->rx_len - n);
     }
     s->rx_len -= n;
+    /* Drained receive space: tell the peer the window re-opened so a sender
+     * parked on a full window resumes streaming the response body. This is the
+     * ACK/flow-control heartbeat for large (non-buffered) downloads. */
+    if (n != 0) {
+        pm_ip_tcp_xmit(s, TCP_ACK, NULL, 0);
+    }
     return (int32_t)n;
 }
 

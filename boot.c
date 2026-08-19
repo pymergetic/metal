@@ -165,6 +165,11 @@ void pm_metal_upy_port_init(void) {
         (void)pm_metal_net_ssh_listen(0u, 2222);
         (void)pm_metal_fwd_listen(8090);
         (void)pm_metal_fwd_listen(2222);
+        /* The Python page renderer cannot start here: this runs from mp_init(),
+         * so importing a module or spawning a thread crashes a half-built VM.
+         * Mark it instead — it starts from the MOTD surface, which walks once the
+         * VM is up and the seat is genuinely ready to serve. */
+        mp_metal_packs_autostart();
     }
     mp_wasm_port_init();
 #if MICROPY_PY_SYS_PS1_PS2

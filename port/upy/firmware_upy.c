@@ -27,6 +27,12 @@ void uart_write(const char *s, size_t n);
 void uart_puts(const char *s);
 int uart_rx_chr(void);
 
+/* modmetal.c — mark the /packs page renderer to start from the MOTD surface
+ * (a firmware seat brings its listeners up itself, so it declares the flag the
+ * banner hook consumes). The root boot.h declares these for the hosted port;
+ * the firmware port includes the module umbrella instead, so redeclare. */
+void mp_metal_packs_autostart(void);
+
 void *malloc(size_t n);
 void free(void *p);
 void *realloc(void *p, size_t n);
@@ -278,6 +284,11 @@ int pm_metal_firmware_upy(void)
     int32_t _http = pm_metal_net_http_asgi_listen(0u, 8090);
     int32_t _ssh = pm_metal_net_ssh_listen(0u, 2222);
     mp_printf(&mp_plat_print, "serve httpd=%d ssh=%d\n", (int)_http, (int)_ssh);
+    /* Mark the page renderer to start from the MOTD/banner surface (which the
+     * REPL banner hook below re-walks once the VM is up) — the same single
+     * surface every seat starts it from. Callers of mp/metal_packs start() do
+     * their own import, so nothing needs pre-publishing into sys.modules. */
+    mp_metal_packs_autostart();
     for (;;) {
         /* System REPL: Ctrl-D re-enters. shutdown()/reboot() halt. */
         (void)pyexec_friendly_repl();

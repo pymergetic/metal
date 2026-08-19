@@ -19,6 +19,10 @@
 #define PM_METAL_IP_RX_MAX 8192
 #define PM_METAL_IP_PKT_MAX 8232
 #define PM_METAL_IP_TCP_MSS (PM_METAL_IP_PKT_MAX - 40u)
+
+/* Initial send window for a fresh TCP socket before we learn the peer's
+ * advertised window; matches the peer's receive buffer for a single-hop sim. */
+#define SSND_WND_DEFAULT PM_METAL_IP_RX_MAX
 #define PM_METAL_IP_LO_BE 0x7f000001u
 #define PM_METAL_IP_ACCEPT_MAX 4
 #define PM_METAL_IP_REXMIT_MAX 2048
@@ -68,6 +72,7 @@ struct pm_metal_sock {
     uint16_t rport;
     uint32_t snd_nxt;
     uint32_t snd_una;
+    uint32_t snd_wnd; /* peer's advertised receive window (in-flight budget) */
     uint32_t rcv_nxt;
     uint32_t iss;
     uint8_t rexmit[PM_METAL_IP_REXMIT_MAX];

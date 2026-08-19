@@ -1,5 +1,7 @@
-/* Host prove for metal. Cases register with PM_MOD_TEST_C; this binary
- * only boots and walks the registry — not a card list. */
+/* Host test runner for metal. Tests register with PM_MOD_TEST_C/RS!; this
+ * binary boots, installs the monotonic clock fill, and walks the registry —
+ * the same shape as host_bench.c, but a failing test gates the build. */
+#include "pymergetic/metal/async/__exports__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/registry.h"
@@ -8,6 +10,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static int fqn_is_metal(const uint8_t *buf, uint32_t len) {
+    static const char pfx[] = "pymergetic.metal";
+    uint32_t n = (uint32_t)(sizeof(pfx) - 1u);
+    if (len < n) {
+        return 0;
+    }
+    if (memcmp(buf, pfx, n) != 0) {
+        return 0;
+    }
+    return len == n || buf[n] == '.';
+}
 
 static void teardown(pm_util_mem_arena_t *arena, void *backing) {
     pm_mod_boot_unwind();
@@ -22,23 +36,45 @@ static int32_t late_boot_init(pm_util_mem_arena_t *a) {
 
 static void late_boot_deinit(void) {}
 
-static int fqn_is_metal(const uint8_t *buf, uint32_t len) {
-    static const char pfx[] = "pymergetic.metal";
-    uint32_t n = (uint32_t)(sizeof(pfx) - 1u);
-    if (len < n) {
-        return 0;
-    }
-    if (memcmp(buf, pfx, n) != 0) {
-        return 0;
-    }
-    return len == n || buf[n] == '.';
-}
+int main(void) {
+    /* Async's lock-free ready ring shrinks to fill the arena, so hand it a
+     * generous span (see host_bench.c): a tight arena is what intermittently
+     * made parallel tests fail with NULL (arena-exhaust). */
+    enum { SPAN = 256u * 1024u * 1024u };
+    void *backing = malloc(SPAN);
+    pm_util_mem_arena_t *arena;
+    uint32_t n, i, ran = 0, bad = 0;
 
-static int32_t run_registered_tests(void) {
-    uint32_t n = pm_wasmmod_registry_module_count();
-    uint32_t i;
-    uint32_t ran = 0;
-    int32_t fails = 0;
+    if (backing == NULL) {
+        fprintf(stderr, "metal.test: malloc\n");
+        return 1;
+    }
+    arena = pm_util_mem_arena_create(backing, SPAN);
+    if (arena == NULL) {
+        fprintf(stderr, "metal.test: arena_create\n");
+        free(backing);
+        return 1;
+    }
+    if (pm_mod_boot_run(arena) != 0) {
+        fprintf(stderr, "metal.test: boot\n");
+        teardown(arena, backing);
+        return 1;
+    }
+    {
+        static const pm_mod_boot_t late = {
+            "pymergetic.test.lateboot", late_boot_init, late_boot_deinit, NULL
+        };
+        if (pm_mod_boot_add(&late) != 0) {
+            fprintf(stderr, "metal.test: late boot add\n");
+            teardown(arena, backing);
+            return 1;
+        }
+    }
+
+    /* Per-seat clock fill: metal's monotonic timer. */
+    pm_wasmmod_registry_set_bench_clock(pm_metal_async_mono_us);
+
+    n = pm_wasmmod_registry_module_count();
     for (i = 0; i < n; i++) {
         uint8_t buf[256];
         uint32_t len = sizeof(buf);
@@ -54,51 +90,13 @@ static int32_t run_registered_tests(void) {
             continue;
         }
         ran += tc;
-        fails += pm_wasmmod_registry_test_run_all(buf, len);
-    }
-    if (ran == 0u) {
-        fprintf(stderr, "metal.host: no registered tests\n");
-        return 1;
-    }
-    if (fails != 0) {
-        fprintf(stderr, "metal.host: %d case(s) failed (%u ran)\n", (int)fails, (unsigned)ran);
-        return 1;
-    }
-    printf("metal host tests ok (%u cases)\n", (unsigned)ran);
-    return 0;
-}
-
-int main(void) {
-    enum { SPAN = 8u * 1024u * 1024u };
-    void *backing = malloc(SPAN);
-    pm_util_mem_arena_t *arena;
-    int32_t st;
-    if (backing == NULL) {
-        fprintf(stderr, "metal.host: malloc\n");
-        return 1;
-    }
-    arena = pm_util_mem_arena_create(backing, SPAN);
-    if (arena == NULL) {
-        fprintf(stderr, "metal.host: arena_create\n");
-        free(backing);
-        return 1;
-    }
-    if (pm_mod_boot_run(arena) != 0) {
-        fprintf(stderr, "metal.host: boot\n");
-        teardown(arena, backing);
-        return 1;
-    }
-    {
-        static const pm_mod_boot_t late = {
-            "pymergetic.test.lateboot", late_boot_init, late_boot_deinit, NULL
-        };
-        if (pm_mod_boot_add(&late) != 0) {
-            fprintf(stderr, "metal.host: late boot add\n");
-            teardown(arena, backing);
-            return 1;
+        if (pm_wasmmod_registry_test_run_all(buf, len) != 0) {
+            bad++;
+            printf("FAIL %.*s\n", (int)len, buf);
         }
     }
-    st = run_registered_tests();
+
+    printf("metal tests: %u run, %u not clean\n", ran, bad);
     teardown(arena, backing);
-    return st != 0 ? 1 : 0;
+    return bad == 0 ? 0 : 1;
 }

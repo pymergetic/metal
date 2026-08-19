@@ -315,7 +315,7 @@ static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
         f->step = 3;
     }
     for (;;) {
-        uint8_t buf[256];
+        uint8_t buf[4096];
         int32_t n = http_recv(f, buf, sizeof(buf));
         if (n == 0) {
             return PM_METAL_ASYNC_WAITING;

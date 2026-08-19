@@ -13,6 +13,8 @@
 #include "py/obj.h"
 #include "py/objtuple.h"
 #include "py/runtime.h"
+#include "py/mpstate.h"
+#include "py/mpthread.h"
 #include "pymergetic/metal/async.h"
 #include "pymergetic/metal/boot/externals.h"
 #include "pymergetic/metal/boot/tree.h"
@@ -25,6 +27,52 @@
 #include "pymergetic/wasmmod/net/cdn.h"
 
 #include <string.h>
+
+#if MICROPY_PY_THREAD
+/* Every async-runner core may consume the interpreter. A runner that will step a
+ * vm_only coro (metal_packs render, e.g.) must have MicroPython thread state so
+ * mp_iternext sees a valid nlr/GC/root state of its own instead of the main
+ * thread's. Installed from the async card's per-runner seat hook.
+ *
+ * py/mpstate.h + py/mpthread.h are included at top of this file (not here):
+ * step_upy/metal_register_upy call MP_THREAD_GIL_* and MP_STATE_VM outside any
+ * thread guard, and mpthread.h defines MP_THREAD_GIL_* unconditionally (empty
+ * stubs when threads are off), so they must resolve for every seat including
+ * firmware, where MICROPY_PY_THREAD is unset. */
+#ifndef PM_METAL_UPY_RUNNER_N
+#define PM_METAL_UPY_RUNNER_N 64
+#endif
+static mp_state_thread_t metal_upy_runner_ts[PM_METAL_UPY_RUNNER_N];
+static uint32_t metal_upy_runner_ts_used[PM_METAL_UPY_RUNNER_N];
+
+int pm_metal_async_runner_begin(uint32_t slot) {
+    mp_state_thread_t *ts;
+    if (slot == 0u || slot >= PM_METAL_UPY_RUNNER_N) {
+        return 0;
+    }
+    ts = &metal_upy_runner_ts[slot];
+    if (!metal_upy_runner_ts_used[slot]) {
+        mp_thread_init_state(ts, PM_METAL_UPY_RUNNER_N * 1024u, NULL, NULL);
+        metal_upy_runner_ts_used[slot] = 1u;
+    }
+    /* This runs on the runner's own thread at its entry frame, the highest
+     * address a runner C stack ever reaches (the stack grows down from here).
+     * gc_helper on a runner uses MP_STATE_THREAD(stack_top) as the upper bound of
+     * its root scan: [sp, stack_top]. It must not point past the thread's mapped
+     * stack. A first-frame + 1 MiB override walked ~1 MiB past the top of the
+     * 8 MiB pthread stack into the guard page / adjacent arena, so a GC triggered
+     * mid vm_only step SIGSEGV'd. Pointing it at this entry frame covers exactly
+     * the live frames below and stays inside the mapping. */
+    {
+        volatile int probe;
+        enum { RUNNER_TRACKED = 0x200000u }; /* 2 MiB headroom; > renderer C depth */
+        ts->stack_top = (char *)&probe;
+        ts->stack_limit = RUNNER_TRACKED;
+    }
+    mp_thread_set_state(ts);
+    return 1;
+}
+#endif /* MICROPY_PY_THREAD */
 
 #ifndef PM_METAL_UPY_GEN_N
 #define PM_METAL_UPY_GEN_N 8
@@ -71,25 +119,30 @@ static MP_DEFINE_CONST_FUN_OBJ_0(metal_poll_obj, metal_poll);
 static pm_metal_async_status_t step_upy(pm_metal_async_coro_t *self) {
     pm_metal_upy_frame_t *f = (pm_metal_upy_frame_t *)self;
     mp_obj_t gen;
+    pm_metal_async_status_t ret;
     nlr_buf_t nlr;
     if (f->slot >= PM_METAL_UPY_GEN_N) {
         return PM_METAL_ASYNC_ERROR;
     }
+    MP_THREAD_GIL_ENTER();
     gen = MP_STATE_VM(metal_upy_gen)[f->slot];
     if (gen == MP_OBJ_NULL) {
-        return PM_METAL_ASYNC_ERROR;
-    }
-    if (nlr_push(&nlr) == 0) {
+        ret = PM_METAL_ASYNC_ERROR;
+    } else if (nlr_push(&nlr) == 0) {
         mp_obj_t v = mp_iternext(gen);
         nlr_pop();
         if (v == MP_OBJ_STOP_ITERATION) {
             MP_STATE_VM(metal_upy_gen)[f->slot] = MP_OBJ_NULL;
-            return PM_METAL_ASYNC_DONE;
+            ret = PM_METAL_ASYNC_DONE;
+        } else {
+            ret = pm_metal_async_yield_park(self);
         }
-        return pm_metal_async_yield_park(self);
+    } else {
+        MP_STATE_VM(metal_upy_gen)[f->slot] = MP_OBJ_NULL;
+        ret = PM_METAL_ASYNC_ERROR;
     }
-    MP_STATE_VM(metal_upy_gen)[f->slot] = MP_OBJ_NULL;
-    return PM_METAL_ASYNC_ERROR;
+    MP_THREAD_GIL_EXIT();
+    return ret;
 }
 
 static mp_obj_t metal_register_upy(mp_obj_t gen) {
@@ -99,28 +152,34 @@ static mp_obj_t metal_register_upy(mp_obj_t gen) {
     if (!pm_metal_ready()) {
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("metal not ready"));
     }
+    MP_THREAD_GIL_ENTER();
     for (i = 0; i < PM_METAL_UPY_GEN_N; i++) {
         if (MP_STATE_VM(metal_upy_gen)[i] == MP_OBJ_NULL) {
             break;
         }
     }
     if (i >= PM_METAL_UPY_GEN_N) {
+        MP_THREAD_GIL_EXIT();
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("upy gen slots full"));
     }
     frame = (pm_metal_upy_frame_t *)pm_metal_async_coro_create(step_upy, sizeof(*frame));
     if (frame == NULL) {
+        MP_THREAD_GIL_EXIT();
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("upy coro"));
     }
     /* step_upy re-enters the bytecode VM (nlr_push + mp_iternext on the global
-     * metal_upy_gen root-pointer). Only the boot thread owns the VM; mark the
-     * coro so SMP/async runners hand it back instead of stepping it. */
+     * metal_upy_gen root-pointer). The async card steps a vm_only coro on any
+     * runner core under the VM lock; each runner core that steps it has its own
+     * MicroPython thread state (installed in pm_metal_async_runner_begin). */
     pm_metal_async_coro_set_vm_only(&frame->coro);
     frame->slot = i;
     MP_STATE_VM(metal_upy_gen)[i] = gen;
     if (pm_metal_async_create_task(&frame->coro) == NULL) {
         MP_STATE_VM(metal_upy_gen)[i] = MP_OBJ_NULL;
+        MP_THREAD_GIL_EXIT();
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("upy task"));
     }
+    MP_THREAD_GIL_EXIT();
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(metal_register_upy_obj, metal_register_upy);
@@ -708,6 +767,43 @@ static mp_obj_t mp_metal_builtin_capabilities(void) {
 }
 MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_capabilities_obj, mp_metal_builtin_capabilities);
 
+/* The httpd's server-rendered pages (/packs/<fqn>) come from the template
+ * engine, which is Python: asgi parks those requests on a deferred route and the
+ * renderer answers them off the connection threads. A seat that serves without
+ * it would leave every catalog link timing out, so both entry points into
+ * "serving" — m.serve() and the METAL_SERVE autostart — come through here. */
+void mp_metal_packs_start(void) {
+    nlr_buf_t nlr;
+    if (nlr_push(&nlr) == 0) {
+        mp_obj_t mod = mp_import_name(MP_QSTR_metal_packs, mp_const_none,
+            MP_OBJ_NEW_SMALL_INT(0));
+        mp_obj_t res = mp_call_function_0(mp_load_attr(mod, MP_QSTR_start));
+        nlr_pop();
+        mp_printf(&mp_plat_print, "`-- %s\n", mp_obj_str_get_str(res));
+        return;
+    }
+    mp_printf(&mp_plat_print, "`-- packs renderer unavailable\n");
+}
+
+/* Autostart for a seat that brings its listeners up by itself. Whoever starts
+ * them says so here; this file must not read the environment, because firmware
+ * has none. The renderer cannot start at that moment anyway — listeners come up
+ * from mp_init(), far too early to touch Python — so it joins on the MOTD
+ * surface, which walks once the VM is up, and reports in the same banner as the
+ * rest of the seat's readiness. */
+static int s_packs_autostart;
+
+void mp_metal_packs_autostart(void) {
+    s_packs_autostart = 1;
+}
+
+static void msg_packs(int last) {
+    (void)last;
+    if (s_packs_autostart) {
+        mp_metal_packs_start();
+    }
+}
+
 /* m.serve(): data-driven convenience — start the default instance of every
  * registered service (ssh :2222, httpd :8090, ...). `serve` is just a walk of
  * the services registry; adding a service card auto-extends it. */
@@ -725,6 +821,7 @@ static mp_obj_t mp_metal_builtin_serve(void) {
             (id >= 0) ? "on " : "err", (unsigned)port, (int)id);
     }
     (void)started;
+    mp_metal_packs_start();
     return mp_const_none;
 }
 MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_serve_obj, mp_metal_builtin_serve);
@@ -790,5 +887,9 @@ const mp_obj_module_t mp_module_pymergetic_metal = {
 MP_REGISTER_MODULE_DELEGATION(mp_module_pymergetic_metal, mp_wasm_pymergetic_attr);
 #endif
 MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal, mp_module_pymergetic_metal);
+
+/* Last on the MOTD surface: the renderer starts after every other card has
+ * reported, so its line reads as the final step of coming up. */
+PM_METAL_BOOT_MSG_C(PM_METAL_BOOT_SURF_MOTD, PM_METAL_BOOT_MSG_MOTD_REPL + 1u, msg_packs);
 
 PM_METAL_EXTERNAL_C(micropython, MICROPY_VERSION_STRING);

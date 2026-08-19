@@ -67,13 +67,23 @@ static pm_util_mem_arena_t *s_arena;
 static pm_metal_async_inbox_t *s_inbox;
 static struct pm_metal_async_timer *s_timers;
 static pm_util_lock_t s_timer_lock;
+/* VM-entry lock: the interpreter is one resource shared by every runner core.
+ * A runner that must re-enter the bytecode VM (a vm_only coro) takes this lock
+ * for the duration of the step; a runner that cannot get it hands the task back
+ * to the ready ring so another core can pick it up instead of spinning on the
+ * interpreter. This replaces the old one-slot "VM owner" monopoly: threads only
+ * simulate cores, and every core may consume the interpreter, serialized here. */
+static pm_util_lock_t s_vm_lock;
+static uint32_t s_vm_lock_ready;
 static uint32_t s_ready;
 static uint32_t s_ncpu;
-/* Worker (AP / runner pthread) marking per current-slot. The boot thread that
- * runs pm_metal_async_init owns the bytecode VM and never marks itself a
- * runner; coros that re-enter the VM (metal.register_upy step_upy) must be
- * stepped only by the owner. A plain slot array keeps TLS out of firmware. */
+/* Worker (AP / runner pthread) marking per current-slot. Kept for CPU id / slot
+ * bookkeeping; it no longer gates vm_only stepping. A plain slot array keeps
+ * TLS out of firmware. */
 static uint32_t s_worker[PM_METAL_ASYNC_APIC_N];
+/* Per-slot: 1 if that runner installed MicroPython thread state and may re-enter
+ * the bytecode VM. The boot thread (s_worker == 0) is always VM-capable. */
+static uint32_t s_vm_capable[PM_METAL_ASYNC_APIC_N];
 #if defined(PM_METAL_ASYNC_PTHREAD)
 static uint32_t s_njoin;
 static pthread_t *s_thread;
@@ -128,6 +138,17 @@ __attribute__((weak)) uint32_t pm_metal_async_fill_ncpu(void) {
 #else
     return 1u;
 #endif
+}
+
+/* Seat hook: called once when a runner core starts, passing its slot. A seat that
+ * threads MicroPython (upy) overrides this to install per-runner MP thread state so
+ * any core may step a vm_only task; it returns 1 iff the runner is then safe to
+ * re-enter the bytecode VM. Default returns 0, so on a seat that cannot bring that
+ * up (e.g. firmware pre-thread) a runner will never consume the interpreter. The
+ * async card itself never depends on MicroPython. */
+__attribute__((weak)) int pm_metal_async_runner_begin(uint32_t slot) {
+    (void)slot;
+    return 0;
 }
 
 #if !defined(PM_METAL_ASYNC_PTHREAD)
@@ -400,8 +421,29 @@ void pm_metal_async_coro_set_vm_only(pm_metal_async_coro_t *coro) {
     }
 }
 
-static int vm_owner(void) {
-    return s_worker[cpu_slot()] == 0u;
+/* Try to claim the interpreter for a vm_only step. Returns 1 on success, 0 if
+ * another core is already in the interpreter (the caller should hand the task
+ * back to the ring rather than spin). A runner may only consume the interpreter
+ * if it installed MicroPython thread state (s_vm_capable); the boot thread is
+ * always capable. Before the VM lock is brought up, serialization is moot and a
+ * non-runner slot is allowed. */
+static int vm_enter(void) {
+    uint32_t slot = cpu_slot();
+    if (!s_vm_lock_ready) {
+        return s_worker[slot] == 0u;
+    }
+    /* The boot thread owns the main MP thread state and may always step. A
+     * runner may only consume the interpreter after it installed thread state. */
+    if (s_worker[slot] != 0u && !s_vm_capable[slot]) {
+        return 0;
+    }
+    return pm_util_lock_try_acquire(&s_vm_lock) == 1;
+}
+
+static void vm_leave(void) {
+    if (s_vm_lock_ready) {
+        pm_util_lock_release(&s_vm_lock);
+    }
 }
 
 static void step_task(pm_metal_async_task_t *task) {
@@ -412,19 +454,6 @@ static void step_task(pm_metal_async_task_t *task) {
     if (task->root->status == PM_METAL_ASYNC_DONE || task->root->status == PM_METAL_ASYNC_ERROR
         || task->root->status == PM_METAL_ASYNC_CANCELLED) {
         return;
-    }
-    if (!vm_owner()) {
-        /* A leaf on this task re-enters the bytecode VM, which is single-threaded
-         * and owned by the boot thread. A runner must not step it (no MP thread
-         * state, no GIL): hand it back so the boot thread drains it. */
-        pm_metal_async_coro_t *leaf = task->root;
-        while (leaf->awaiting != NULL) {
-            leaf = leaf->awaiting;
-        }
-        if (leaf->vm_only) {
-            (void)ring_push(PM_METAL_RING_KIND_TASK, task);
-            return;
-        }
     }
     uint32_t expected = 0;
     if (!__atomic_compare_exchange_n(&task->running, &expected, 1u, 0, __ATOMIC_ACQ_REL,
@@ -437,6 +466,7 @@ static void step_task(pm_metal_async_task_t *task) {
     *cur = task;
     for (;;) {
         pm_metal_async_coro_t *leaf = task->root;
+        int vm_held = 0;
         while (leaf->awaiting != NULL) {
             leaf = leaf->awaiting;
         }
@@ -444,7 +474,25 @@ static void step_task(pm_metal_async_task_t *task) {
             leaf->status = PM_METAL_ASYNC_ERROR;
             break;
         }
+        if (leaf->vm_only) {
+            /* Re-enter the bytecode VM on this core. Any runner may do it, not
+             * just a single owner slot — but only one core may be inside the
+             * interpreter at a time, so claim the VM lock first. If another
+             * core holds it, hand the task back and let a core that is idle
+             * step it when it polls. */
+            if (!vm_enter()) {
+                *cur = NULL;
+                __atomic_store_n(&task->running, 0u, __ATOMIC_RELEASE);
+                atomic_fetch_sub(&s_busy, 1u);
+                (void)ring_push(PM_METAL_RING_KIND_TASK, task);
+                return;
+            }
+            vm_held = 1;
+        }
         pm_metal_async_status_t st = leaf->step(leaf);
+        if (vm_held) {
+            vm_leave();
+        }
         leaf->status = (uint32_t)st;
         if (st == PM_METAL_ASYNC_WAITING) {
             if (leaf->awaiting != NULL) {
@@ -488,9 +536,12 @@ static void runner_entry(void *arg) {
 #else
     (void)arg;
 #endif
-    /* A runner (AP or pthread) never owns the bytecode VM; mark the slot so
-     * vm_only coros are handed back to the boot thread. */
+    /* A runner (AP or pthread) marks its slot a worker so cpu id / slot bookkeeping
+     * is stable; vm_only stepping is no longer restricted to the boot thread.
+     * Runners that re-enter the bytecode VM do so under the VM lock, and only if
+     * the seat installed MicroPython thread state for them (s_vm_capable). */
     s_worker[cpu_slot()] = 1u;
+    s_vm_capable[cpu_slot()] = (uint32_t)pm_metal_async_runner_begin(cpu_slot());
     atomic_fetch_add(&s_alive, 1u);
     while (atomic_load(&s_run) != 0u) {
         pm_metal_net_ip_pump();
@@ -524,8 +575,11 @@ int32_t pm_metal_async_init(pm_util_mem_arena_t *arena, uint32_t ncpu) {
         return -1;
     }
     pm_util_lock_init(&s_timer_lock);
+    pm_util_lock_init(&s_vm_lock);
+    s_vm_lock_ready = 1;
     s_timers = NULL;
     memset(s_worker, 0, sizeof(s_worker));
+    memset(s_vm_capable, 0, sizeof(s_vm_capable));
     s_ncpu = 1;
     atomic_store(&s_alive, 1u);
     atomic_store(&s_run, 1u);

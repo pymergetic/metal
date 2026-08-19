@@ -27,7 +27,8 @@ static void tcp_emit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data
     pm_ip_write_be32(pkt + 28, s->rcv_nxt);
     pkt[32] = 0x50;
     pkt[33] = flags;
-    pm_ip_write_be16(pkt + 34, 4096);
+    uint32_t wnd = PM_METAL_IP_RX_MAX - s->rx_len; /* advertise real room */
+    pm_ip_write_be16(pkt + 34, wnd > 0xffffu ? 0xffffu : (uint16_t)wnd);
     if (dlen != 0 && data != NULL) {
         memcpy(pkt + 40, data, dlen);
     }
@@ -119,6 +120,24 @@ void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thl
         s->snd_una = ack;
         if (s->rexmit_len != 0 && s->snd_una >= s->rexmit_seq + s->rexmit_len) {
             s->rexmit_len = 0;
+        }
+        /* An ACK freed send-window space; wake any coroutine parked on a full
+         * window (streaming server responses) so it can push the next chunk. */
+        pm_ip_sock_wake(s);
+    }
+    /* Track the peer's advertised window so a streamed (large) response stops
+     * sending when the peer's receive buffer is full instead of firing MSS
+     * chunks that are then dropped as out-of-order (rx space NAK'd). Every
+     * ACK-carrying segment reports the peer's current window; a window update
+     * (e.g. the peer drained its rx) re-opens send space, so wake too. */
+    if ((flags & TCP_ACK) != 0) {
+        uint16_t pw = pm_ip_read_be16(th + 14);
+        uint32_t w = (uint32_t)pw;
+        if (w > s->snd_wnd) {
+            s->snd_wnd = w;
+            pm_ip_sock_wake(s);
+        } else if (w < s->snd_wnd) {
+            s->snd_wnd = w;
         }
     }
     if (s->tcp_st == TCP_LISTEN && (flags & TCP_SYN) != 0 && (flags & TCP_ACK) == 0) {

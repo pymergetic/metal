@@ -1,0 +1,51 @@
+RENDERER_UP
+page=200
+page=200 bytes=61819
+sitecss=200 bytes=731
+inspectjs=200 bytes=7405
+PAGE_LINKS:
+href="/static/site.css"
+href="/inspect"
+src="/static/img/pymergetic.png"
+href="/"
+href="/inspect"
+href="/packs/pymergetic.metal"
+href="/packs/pymergetic.metal.async"
+href="/packs/pymergetic.metal.boot"
+href="/packs/pymergetic.metal.boot.externals"
+href="/packs/pymergetic.metal.boot.tree"
+href="/packs/pymergetic.metal.bus.pci"
+href="/packs/pymergetic.metal.bus.virtio"
+href="/packs/pymergetic.metal.console"
+href="/packs/pymergetic.metal.display"
+href="/packs/pymergetic.metal.drivers"
+href="/packs/pymergetic.metal.drivers.blk"
+href="/packs/pymergetic.metal.drivers.blk.ide"
+href="/packs/pymergetic.metal.drivers.blk.virtio"
+href="/packs/pymergetic.metal.drivers.gfx"
+href="/packs/pymergetic.metal.drivers.gfx.bochs"
+href="/packs/pymergetic.metal.drivers.gfx.gop"
+href="/packs/pymergetic.metal.drivers.gfx.i915"
+href="/packs/pymergetic.metal.drivers.gfx.lfb"
+href="/packs/pymergetic.metal.drivers.gfx.radeon"
+href="/packs/pymergetic.metal.drivers.gfx.sim"
+href="/packs/pymergetic.metal.drivers.gfx.virtio"
+href="/packs/pymergetic.metal.drivers.input"
+href="/packs/pymergetic.metal.drivers.input.ps2"
+href="/packs/pymergetic.metal.drivers.input.virtio"
+href="/packs/pymergetic.metal.drivers.net"
+href="/packs/pymergetic.metal.drivers.net.bge"
+href="/packs/pymergetic.metal.drivers.net.gmac"
+href="/packs/pymergetic.metal.drivers.net.sim"
+href="/packs/pymergetic.metal.drivers.net.tap"
+href="/packs/pymergetic.metal.drivers.net.virtio"
+href="/packs/pymergetic.metal.drivers.rtc"
+href="/packs/pymergetic.metal.drivers.rtc.cmos"
+href="/packs/pymergetic.metal.drivers.rtc.sim"
+href="/packs/pymergetic.metal.dt"
+href="/packs/pymergetic.metal.fs"
+SITE_CSS_HEAD:
+/* wasmmod-cdn site styles — modular; edit pieces under css/, keep this as the entry. */
+@import url("css/tokens.css"); /* Design tokens + document base */
+@import url("css/layout.css"); /* Shell, sidebar package tree, hero/meta */
+DONE

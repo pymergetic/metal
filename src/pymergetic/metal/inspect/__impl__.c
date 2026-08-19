@@ -700,8 +700,11 @@ static int32_t asgi_handler(const char *method, const char *path, uint8_t *out, 
     return 0;
 }
 
+/* Every inspect route answers JSON. The paths carry no usable extension (and
+ * /inspect/reg/<fqn> ends in a dotted module name), so the type must be stated
+ * or the asgi default makes a browser download the reply instead of showing it. */
 static int32_t add_route(const char *path) {
-    return pm_metal_net_http_asgi_route_fn("GET", path, asgi_handler);
+    return pm_metal_net_http_asgi_route_fn_ct("GET", path, asgi_handler, "application/json");
 }
 
 int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {

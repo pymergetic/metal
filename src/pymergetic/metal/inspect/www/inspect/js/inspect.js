@@ -251,4 +251,10 @@
     });
   }
   await wireModuleNav();
+  /* Deep link from the seat's /packs/ pages: the inspect buttons hop here with
+   * ?module=<fqn>; open that card's live registry exports when present. */
+  const want = params.get("module");
+  if (want) {
+    openModule(want);
+  }
 })();

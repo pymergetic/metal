@@ -24,7 +24,11 @@ def render_index(module_names, template_dir):
         "modules": lambda: module_names,
         "export_count": lambda f: 0,
     }
-    return cr.render_home(registry, engine=cr.Engine(template_dir))
+    engine = cr.Engine(template_dir)
+    # The seat renders /packs/<fqn> at runtime from the compiled template, so
+    # compile it here even though this build step never renders a package page.
+    engine.compile("package.html")
+    return cr.render_home(registry, engine=engine)
 
 
 def ident(rel: str) -> str:
@@ -105,10 +109,32 @@ def main() -> int:
         for i, (u, name, n) in enumerate(mounts):
             if u == "/index.html":
                 mounts[i] = ("/", name, n)
+
+    # A directory index must also answer the directory itself: links point at
+    # /inspect (and /inspect/), not /inspect/index.html, and an unmounted path
+    # falls through to the asgi default body — which a browser downloads.
+    taken = {u for u, _, _ in mounts}
+    aliases: list[tuple[str, str, int]] = []
+    for url, name, n in mounts:
+        if not url.endswith("/index.html"):
+            continue
+        bare = url[: -len("/index.html")]
+        for alias in (bare, bare + "/"):
+            if alias and alias not in taken:
+                aliases.append((alias, name, n))
+                taken.add(alias)
     buf.write("static int32_t inspect_www_mount(void) {\n")
     for url, name, n in mounts:
         buf.write(
             f'    if (pm_metal_net_http_asgi_route_static("{url}", s_{name}, {n}u) != 0) {{\n'
+            f"        return -1;\n"
+            f"    }}\n"
+        )
+    # Directory aliases carry no file extension, so they must state the type.
+    for url, name, n in aliases:
+        buf.write(
+            f'    if (pm_metal_net_http_asgi_route_static_ct("{url}", s_{name}, {n}u,\n'
+            f'            "text/html; charset=utf-8") != 0) {{\n'
             f"        return -1;\n"
             f"    }}\n"
         )

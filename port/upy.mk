@@ -58,11 +58,31 @@ include $(MPWM_TOP)/py/py.mk
 
 UPY_O := $(PY_CORE_O) $(addprefix $(BUILD)/, $(SRC_UPY_WASMMOD:.c=.o))
 
+# The httpd's /packs/<fqn> pages are rendered by Python on every µPy seat. This
+# build has no frozen-module support (MICROPY_MPYCROSS := none), so the renderer
+# and its compiled templates ride in the same way the autoexec guests do: bytes
+# from the .py, published into sys.modules at startup. Edit the .py files.
+PM_METAL_SEAT_PY := $(METAL_DIR)/src/pymergetic/metal/inspect
+PM_METAL_PACKS_PY := \
+	$(PM_METAL_SEAT_PY)/www/_compiled/package_html.py \
+	$(PM_METAL_SEAT_PY)/www/_compiled/shell_html.py \
+	$(PM_METAL_SEAT_PY)/catalog_render.py \
+	$(PM_METAL_SEAT_PY)/artifacts.py \
+	$(PM_METAL_SEAT_PY)/openapi.py \
+	$(PM_METAL_SEAT_PY)/metal_packs.py
+
 $(BUILD)/firmware_upy_src.c: $(PORT_DIR)/upy/firmware_upy_ready.py \
-		$(PORT_DIR)/upy/firmware_upy_cdn.py $(PORT_DIR)/embed_bytes.py | $(BUILD)
+		$(PORT_DIR)/upy/firmware_upy_cdn.py $(PM_METAL_PACKS_PY) \
+		$(PORT_DIR)/embed_bytes.py | $(BUILD)
 	python3 $(PORT_DIR)/embed_bytes.py -o $@ \
 		--str pm_metal_firmware_upy_ready_py $(PORT_DIR)/upy/firmware_upy_ready.py \
-		--str pm_metal_firmware_upy_cdn_py $(PORT_DIR)/upy/firmware_upy_cdn.py
+		--str pm_metal_firmware_upy_cdn_py $(PORT_DIR)/upy/firmware_upy_cdn.py \
+		--str pm_metal_seat_package_html_py $(PM_METAL_SEAT_PY)/www/_compiled/package_html.py \
+		--str pm_metal_seat_shell_html_py $(PM_METAL_SEAT_PY)/www/_compiled/shell_html.py \
+		--str pm_metal_seat_catalog_render_py $(PM_METAL_SEAT_PY)/catalog_render.py \
+		--str pm_metal_seat_artifacts_py $(PM_METAL_SEAT_PY)/artifacts.py \
+		--str pm_metal_seat_openapi_py $(PM_METAL_SEAT_PY)/openapi.py \
+		--str pm_metal_seat_metal_packs_py $(PM_METAL_SEAT_PY)/metal_packs.py
 
 $(BUILD)/firmware_upy_src.o: $(BUILD)/firmware_upy_src.c
 	$(CC) $(CFLAGS_METAL) -c -o $@ $<

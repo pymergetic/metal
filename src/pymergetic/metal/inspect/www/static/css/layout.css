@@ -88,6 +88,10 @@
 .tree-node.is-open > .tree-toggle .tree-chevron {
   transform: rotate(45deg);
 }
+/* A closed folder hides its subtree: collapse is driven by the .is-open class
+ * the shell toggles (setOpen also sets kids.hidden, but the class is the CSS
+ * contract, so the fold holds even where the [hidden] attribute is overridden). */
+.tree-node:not(.is-open) > .tree-children { display: none; }
 /* Leaf rows reuse .tree-row; spacer matches .tree-toggle so names align with folders. */
 .tree-toggle-spacer {
   display: inline-flex;

@@ -22,7 +22,13 @@ ifneq ($(MAKECMDGOALS),clean)
 # render_index imports the seat catalog driver (pymergetic.metal.*) to build
 # the CDN-catalog "/" page, so the metal + wasmmod source trees must be on the
 # embed's module path (namespace packages, no __init__.py on the host).
-PM_METAL_EMBED_PYTHONPATH := $(PM_METAL_WWW_ROOT)/src:$(WASMMOD_SRC)
+# WASMMOD_SRC is only set by the host Makefile and the firmware boards; the
+# unix/webassembly ports leave it empty. Derive it here rather than emitting an
+# empty PYTHONPATH entry: an empty entry means "cwd", and a port directory holds
+# MicroPython stdlib shims (ports/webassembly/asyncio) that shadow the host's
+# and break the render with an unrelated ImportError.
+PM_METAL_EMBED_WASMMOD := $(if $(WASMMOD_SRC),$(WASMMOD_SRC),$(PM_METAL_WWW_ROOT)/../wasmmod/src)
+PM_METAL_EMBED_PYTHONPATH := $(PM_METAL_WWW_ROOT)/src:$(PM_METAL_EMBED_WASMMOD)
 PM_METAL_WWW_FAIL := $(shell PYTHONPATH="$(PM_METAL_EMBED_PYTHONPATH)" python3 $(PM_METAL_WWW_TOOLS)/embed_www.py -o $(PM_METAL_WWW_INC) $(PM_METAL_WWW_DIR) --render-index "$(PM_METAL_HOME_FQNS)" || echo fail)
 ifneq ($(PM_METAL_WWW_FAIL),)
 $(error inspect www embed failed — run $(PM_METAL_WWW_TOOLS)/embed_www.py)

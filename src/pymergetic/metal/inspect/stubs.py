@@ -51,6 +51,26 @@ ENDPOINT_STUBS = (
     ("GET", "/inspect/reg/<module>/<method>", True),
     # RPC: invoke a container (wasm/aot/elf) export with scalar args in query.
     ("GET", "/inspect/call/<module>/<method>", True),
+    # Package catalog + version nav for the shared Inspect commander. The seat
+    # serves these from the live registry (artifacts.py, deferred pump); the CDN
+    # from its database — same wire contract, so `implemented` on both.
+    ("GET", "/packages", True),
+    ("GET", "/packages/{name}", True),
+    ("GET", "/packages/{name}/versions", True),
+    # CDN-shaped artifact introspect API (a card artifact -> inspect/sections/
+    # symbols/disasm/addr2line/locations/files). Same shapes both seats answer.
+    ("GET", "/artifacts/lead/{artifact}/inspect", True),
+    ("GET", "/artifacts/lead/{artifact}/sections", True),
+    ("GET", "/artifacts/lead/{artifact}/symbols", True),
+    ("GET", "/artifacts/lead/{artifact}/disasm", True),
+    ("GET", "/artifacts/lead/{artifact}/addr2line", True),
+    ("GET", "/artifacts/lead/{artifact}/locations", True),
+    ("GET", "/artifacts/lead/{artifact}/files", True),
+    ("GET", "/artifacts/lead/{artifact}/files/raw", True),
+    ("GET", "/artifacts/lead/{artifact}/sections/raw", True),
+    # FastAPI-style interactive API docs (swagger-ui over /openapi.json).
+    ("GET", "/openapi.json", True),
+    ("GET", "/docs", True),
 )
 
 __all__ = [

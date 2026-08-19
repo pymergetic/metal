@@ -23,17 +23,17 @@
       </a>
       <nav class="top-nav">
         <a href="{{ d.nav_browse }}" class="{{ d.nav_browse_cls }}">Browse</a>
-        <a href="{{ d.nav_users }}" class="{{ d.nav_users_cls }}">Users</a>
-        <a href="{{ d.nav_publish }}" class="{{ d.nav_publish_cls }}">Publish</a>
+        {% if d.nav_users %}<a href="{{ d.nav_users }}" class="{{ d.nav_users_cls }}">Users</a>{% endif %}
+        {% if d.nav_publish %}<a href="{{ d.nav_publish }}" class="{{ d.nav_publish_cls }}">Publish</a>{% endif %}
         {% if d.nav_federation %}
         <a href="{{ d.nav_federation }}" class="{{ d.nav_federation_cls }}">Federation</a>
         {% endif %}
-        <a href="{{ d.nav_sessions }}" class="{{ d.nav_sessions_cls }}">Sessions</a>
+        {% if d.nav_sessions %}<a href="{{ d.nav_sessions }}" class="{{ d.nav_sessions_cls }}">Sessions</a>{% endif %}
         <a href="{{ d.nav_docs }}" class="{{ d.nav_docs_cls }}">API</a>
         {% if d.current_user %}
         <span class="nav-user" title="{{ d.user_email }}">{{ d.user_email }}</span>
         <button type="button" class="nav-logout" id="nav-logout">Logout</button>
-        {% else %}
+        {% elif d.nav_login %}
         <a href="{{ d.nav_login }}" class="{{ d.nav_login_cls }}">Login</a>
         {% endif %}
       </nav>
