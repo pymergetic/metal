@@ -11,6 +11,7 @@
 WASMMOD_GEN_ROOTS := $(METAL_SRC)
 include $(WASMMOD)/gen.mk
 include $(METAL_DIR)/tools/www.mk
+include $(METAL_DIR)/tools/src.mk
 
 FW_CARD_REL := $(shell $(METAL_DIR)/tools/cards.sh impl $(METAL_SRC)/pymergetic/metal)
 ifeq ($(FW_CARD_REL),)

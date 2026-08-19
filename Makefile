@@ -33,6 +33,7 @@ CPPFLAGS += -I$(CURDIR)/host_inc -I$(METAL_SRC) -I$(WASMMOD_SRC) -I$(WASMMOD) -I
 WASMMOD_GEN_ROOTS := $(CURDIR)/src
 include $(WASMMOD)/gen.mk
 include $(CURDIR)/tools/www.mk
+include $(CURDIR)/tools/src.mk
 
 # Cards and their tests come from the tree (tools/cards.sh), so a new card is
 # proven here the moment it has a manifest — nothing to add below.
@@ -173,6 +174,7 @@ browser:
 	grep -q "upy native card import" $(CURDIR)/build/browser_prove.log
 	grep -q "upy inspect" $(CURDIR)/build/browser_prove.log
 	grep -q "upy inspect caps" $(CURDIR)/build/browser_prove.log
+	grep -q "upy src" $(CURDIR)/build/browser_prove.log
 	grep -q "upy dns" $(CURDIR)/build/browser_prove.log
 	grep -q "upy socket" $(CURDIR)/build/browser_prove.log
 	grep -q "upy display present" $(CURDIR)/build/browser_prove.log

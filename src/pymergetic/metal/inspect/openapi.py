@@ -87,7 +87,7 @@ def _refs():
                 "symbols": {"type": "array"},
                 "exports": {"type": "array"},
                 "pack": {"type": "object", "nullable": True},
-                "source": {"type": "object", "nullable": True},
+                "source": {"$ref": "#/components/schemas/SourceTree"},
             },
         },
         "PackageCatalog": {
@@ -120,6 +120,25 @@ def _refs():
                     "items": {
                         "type": "object",
                         "properties": {"path": {"type": "string"}},
+                    },
+                },
+            },
+        },
+        "SourceTree": {
+            "type": "object",
+            "required": ["name", "files"],
+            "properties": {
+                "name": {"type": "string"},
+                "pkg_version": {"type": "string"},
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["path", "raw_len"],
+                        "properties": {
+                            "path": {"type": "string"},
+                            "raw_len": {"type": "integer"},
+                        },
                     },
                 },
             },
@@ -228,6 +247,45 @@ def build():
                     {"type": "array"},
                     params=artifact_params,
                     tags=["artifacts"],
+                ),
+            },
+            "/artifacts/lead/{artifact}/files": {
+                "get": _op(
+                    "artifact source tree",
+                    {"$ref": "#/components/schemas/SourceTree"},
+                    params=artifact_params
+                    + [_param("path", "query", False, {"type": "string",
+                                                        "description": "a card FQN, or a source file path for /files/raw"})],
+                    tags=["artifacts"],
+                ),
+            },
+            "/artifacts/lead/{artifact}/files/raw": {
+                "get": _op(
+                    "one embedded source file (text/x-c | text/x-rust)",
+                    {"type": "string", "format": "byte"},
+                    params=artifact_params
+                    + [_param("file", "query", True, {"type": "string",
+                                                      "description": "relative source path, e.g. __impl__.c"})],
+                    tags=["artifacts"],
+                ),
+            },
+            "/src/{fqn}": {
+                "get": _op(
+                    "embedded card source manifest",
+                    {"$ref": "#/components/schemas/SourceTree"},
+                    params=[_param("fqn", "path", True, {"type": "string"})],
+                    tags=["source"],
+                ),
+            },
+            "/src/{fqn}/{file}": {
+                "get": _op(
+                    "one embedded source file (raw text)",
+                    {"type": "string"},
+                    params=[
+                        _param("fqn", "path", True, {"type": "string"}),
+                        _param("file", "path", True, {"type": "string"}),
+                    ],
+                    tags=["source"],
                 ),
             },
             "/packages": {

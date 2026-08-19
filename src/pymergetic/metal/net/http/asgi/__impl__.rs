@@ -672,6 +672,22 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_next() -> *const u8 {
 /// connection. Returns -1 when no request is current or the body does not fit.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_reply(body: *const u8, len: u32) -> i32 {
+    unsafe { pm_metal_net_http_asgi_defer_reply_ct(body, len, ptr::null()) }
+}
+
+/// Answer like `defer_reply`, but the caller may override the route's declared
+/// Content-Type per response. A deferred route registers one type for all of
+/// its bodies (the pump does not know the type when it claims the slot), so raw
+/// replies — a card's C/Rust source, an octet-stream section slice — need the
+/// per-request escape hatch. Pass a null `ctype` to keep the route's declared
+/// type. `ctype`, when non-null, must be a static NUL-terminated string that
+/// outlives the reply (the header is copied while the connection is current).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_reply_ct(
+    body: *const u8,
+    len: u32,
+    ctype: *const u8,
+) -> i32 {
     unsafe {
         pm_util_lock_acquire(defer_lock());
         let cur = *DEFER_CUR.0.get();
@@ -695,6 +711,11 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_reply(body: *const u8, len
                     c.body = dst;
                 }
                 c.body_len = len;
+                /* Override the route's declared type when the reply says so
+                 * (the raw-source / octet-stream fallback). */
+                if !ctype.is_null() {
+                    c.ctype = ctype;
+                }
                 /* Set last: the parked coroutine reads this to move on. */
                 c.defer_ready = true;
                 let waiter = d.waiter;
@@ -1531,6 +1552,11 @@ pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",
     pm_metal_net_http_asgi_defer_reply,
     "int32_t(const uint8_t *, uint32_t)"
+);
+pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
+    "pymergetic.metal.net.http.asgi",
+    pm_metal_net_http_asgi_defer_reply_ct,
+    "int32_t(const uint8_t *, uint32_t, const char *)"
 );
 pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",

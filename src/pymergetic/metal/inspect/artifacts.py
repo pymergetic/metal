@@ -30,6 +30,52 @@ except ImportError:  # pragma: no cover - MicroPython
 _ART_PREFIX = "/artifacts/lead/"
 
 
+def query_get(raw, name):
+    """First `?name=<urlencoded>` value from a raw request path, or None."""
+    q = raw.find("?")
+    if q < 0:
+        return None
+    for pair in raw[q + 1:].split("&"):
+        k, _, v = pair.partition("=")
+        if k == name and v:
+            try:
+                from urllib.parse import unquote as _uq
+            except ImportError:  # MicroPython
+                def _uq(s):
+                    return s.replace("%20", " ").replace("%2F", "/").replace("%2f", "/")
+            return _uq(v)
+    return None
+
+
+_SRC_CTYPE_BY_EXT = {
+    ".c": "text/x-c; charset=utf-8",
+    ".h": "text/x-c; charset=utf-8",
+    ".rs": "text/x-rust; charset=utf-8",
+    ".toml": "text/toml; charset=utf-8",
+}
+
+
+def content_type(path):
+    """The reply Content-Type for a deferred path, or None to keep the route's.
+
+    A deferred route registers one type for every body; the raw-file reply is
+    per-path (a card's C vs Rust vs TOML source), so the pump asks here and
+    answers with `asgi.defer_reply_ct`. Non-raw and empty replies keep the
+    route type (None)."""
+    name = path.split("?")[0]
+    if not name.startswith(_ART_PREFIX):
+        return None
+    _fqn, op = _art_route(name)
+    if op is None or not op.startswith("files/raw"):
+        return None
+    qp = query_get(path, "path")
+    if not qp:
+        return None
+    dot = qp.rfind(".")
+    ext = qp[dot:] if dot >= 0 else ""
+    return _SRC_CTYPE_BY_EXT.get(ext)
+
+
 def _json(obj):
     return json.dumps(obj, separators=(",", ":"))
 
@@ -122,6 +168,48 @@ def _sections(fqn, exports):
     }]
 
 
+def _source(fqn):
+    """The card's embedded source tree (files + raw_len) from the C face.
+
+    The C inspect card embeds each card's real .c/.rs at build (src_embed.inc.h)
+    and answers the manifest JSON for a fqn via `src_manifest`. Returns a
+    plain dict the commander can render, or None when the C face is absent or
+    the card has no muscle source to browse (impl=py / a Python-only module).
+    """
+    try:
+        import pymergetic.metal.inspect as mi
+    except Exception:
+        return None
+    try:
+        raw = mi.src_manifest(fqn)
+    except Exception:
+        return None
+    if raw is None:
+        return None
+    try:
+        doc = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(doc, dict) or not isinstance(doc.get("files"), list):
+        return None
+    return doc
+
+
+def _source_read(fqn, path):
+    """Raw bytes of one embedded source file, or None when unknown."""
+    try:
+        import pymergetic.metal.inspect as mi
+    except Exception:
+        return None
+    try:
+        body = mi.src_read(fqn, path)
+    except Exception:
+        return None
+    if body is None:
+        return None
+    return body.encode("utf-8")
+
+
 def _inspect(fqn, exports, symbols):
     sections = _sections(fqn, exports)
     exports_json = []
@@ -149,7 +237,7 @@ def _inspect(fqn, exports, symbols):
         "size": size,
         "has_dwarf": False,
         "pack": None,
-        "source": None,
+        "source": _source(fqn),
         "sections": sections,
         "symbols": _symbols_only(symbols),
         "exports": exports_json,
@@ -266,9 +354,17 @@ def route(path):
     if op.startswith("files"):
         sub = op[len("files"):]
         if sub.startswith("/raw"):
-            return b"", 200, True
-        # `/files` and `/files?path=` — a card carries no embedded source tree.
-        return _json({}).encode(), 200, False
+            # `?path=<file>` — one embedded source file's bytes. URL-decoded by
+            # the caller; the commander encodes with encodeURIComponent.
+            qp = query_get(path, "path")
+            body = _source_read(fqn, qp) if qp else None
+            if body is None:
+                return _json({"detail": "no such source file",
+                              "artifact": fqn, "file": qp}).encode(), 404, False
+            return body, 200, True
+        # `/files` and `/files?path=` — the card's embedded source tree.
+        src = _source(fqn)
+        return _json(src if src is not None else {"files": []}).encode(), 200, False
     if op.startswith("locations"):
         # No DWARF/address → no source locations for a registry card.
         return _json([]).encode(), 200, False

@@ -91,7 +91,12 @@ def install(pattern=None):
 
 
 def render(path):
-    """Render the response for a request path, as raw bytes ready to hand back."""
+    """Render the response for a request path. Returns (body_bytes, ctype).
+
+    `ctype` is None to reply with the deferred route's declared type, or a
+    NUL-terminated str when the reply should override it (a raw source file's
+    own Content-Type).
+    """
     if path.startswith(_PREFIX):
         fqn = path[len(_PREFIX):]
         if fqn.endswith("/"):
@@ -105,14 +110,15 @@ def render(path):
             html = "<!doctype html><title>no such module</title><h1>%s</h1>" % (
                 _cr._esc(fqn) or "no module named"
             )
-        return html.encode()
+        return html.encode(), None
     # The shared commander's API: artifact + package-catalog routes and the
     # FastAPI-style docs page. One pump answers all of them.
     body, _status = _openapi().route(path)
     if body is not None:
-        return body
+        return body, None
     body, _status, _binary = _artifacts().route(path)
-    return body
+    ctype = _artifacts().content_type(path) if _binary else None
+    return body, ctype
 
 
 try:
@@ -147,9 +153,9 @@ def _render_one(path):
         if path.startswith(_PREFIX):
             fqn = path[len(_PREFIX):]
             return ("<!doctype html><title>render error</title>"
-                    "<h1>render failed for %s</h1>" % _cr._esc(fqn)).encode()
+                    "<h1>render failed for %s</h1>" % _cr._esc(fqn)).encode(), None
         return _artifacts()._json({"detail": "render error", "path": path,
-                                   "error": str(e)}).encode()
+                                   "error": str(e)}).encode(), None
 
 
 def pump(budget=4):
@@ -160,9 +166,12 @@ def pump(budget=4):
         path = asgi.defer_next()
         if path is None:
             break
-        body = _render_one(path)
+        body, ctype = _render_one(path)
         try:
-            asgi.defer_reply(body)
+            if ctype:
+                asgi.defer_reply_ct(body, ctype)
+            else:
+                asgi.defer_reply(body)
         except Exception as e:  # a bad reply must not end the drain cycle
             _print_tb(e)
         served += 1

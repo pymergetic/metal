@@ -13,3 +13,7 @@ __pycache__/
 # Bytes from inspect/www/. Recreate with tools/embed_www.py (every seat's make).
 # Lives in the metal root ignore so wasmmod-gen cannot wipe a card .gitignore.
 www_embed.inc.h
+
+# Bytes from each card's C/Rust muscle source. Recreate with tools/embed_src.py
+# (every seat's make), same shape as www_embed.inc.h above.
+src_embed.inc.h

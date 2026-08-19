@@ -5,6 +5,7 @@
 #include "pymergetic/wasmmod/registry.h"
 
 #include "www_embed.inc.h"
+#include "src_embed.inc.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -686,6 +687,123 @@ const char *pm_metal_inspect_body(void) {
     return s_body;
 }
 
+/* ===== Card source tree (tools/embed_src.py -> src_embed.inc.h) =====
+ *
+ * The source pane is real code, embedded from each card's authored .c/.rs at
+ * build and served from the same arrays on every seat (incl. firmware). These
+ * faces are what the Python artifacts pump calls for /files and /files/raw;
+ * the /src/<fqn> and /src/<fqn>/<file> asgi routes make the same bytes
+ * fetchable directly, so the host C prove can hit them over HTTP too. */
+
+const char *pm_metal_inspect_src_manifest(const char *fqn) {
+    const pm_metal_src_card_t *c = fqn != NULL ? pm_metal_src_find(fqn) : NULL;
+    return c != NULL ? c->manifest : NULL;
+}
+
+const char *pm_metal_inspect_src_read(const char *fqn, const char *path) {
+    const pm_metal_src_card_t *c;
+    uint32_t i;
+    if (fqn == NULL || path == NULL) {
+        return NULL;
+    }
+    c = pm_metal_src_find(fqn);
+    if (c == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < c->nfiles; i++) {
+        if (strcmp(c->files[i].rel, path) == 0) {
+            return (const char *)c->files[i].data;
+        }
+    }
+    return NULL;
+}
+
+static const char *src_ctype(const char *path) {
+    const char *dot = path != NULL ? strrchr(path, '.') : NULL;
+    if (dot == NULL) {
+        return "text/plain; charset=utf-8";
+    }
+    if (strcmp(dot, ".c") == 0 || strcmp(dot, ".h") == 0) {
+        return "text/x-c; charset=utf-8";
+    }
+    if (strcmp(dot, ".rs") == 0) {
+        return "text/x-rust; charset=utf-8";
+    }
+    if (strcmp(dot, ".toml") == 0) {
+        return "text/toml; charset=utf-8";
+    }
+    return "text/plain; charset=utf-8";
+}
+
+/* /src/<fqn>            -> manifest JSON.
+ * /src/<fqn>/<file>     -> raw file body. Returns 0 and fills out on success,
+ *                          -1 (-> asgi 404 empty) on an unknown fqn/file. */
+static int32_t src_http(const char *method, const char *path, uint8_t *out, uint32_t out_max,
+    uint32_t *out_len, const char **ctype) {
+    const char *p;
+    const char *fqn;
+    const char *file;
+    const char *body;
+    size_t n;
+    if (method == NULL || strcmp(method, "GET") != 0 || path == NULL) {
+        return -1;
+    }
+    p = path;
+    if (strncmp(p, "/src/", 5) != 0) {
+        return -1;
+    }
+    p += 5;
+    fqn = p;
+    file = strchr(p, '/');
+    if (file == NULL) {
+        /* /src/<fqn> — manifest. */
+        body = pm_metal_inspect_src_manifest(fqn);
+        if (body == NULL) {
+            return -1;
+        }
+        *ctype = "application/json";
+        n = (uint32_t)strlen(body);
+        if (n >= out_max) {
+            return -1;
+        }
+        memcpy(out, body, n);
+        *out_len = n;
+        return 0;
+    }
+    /* /src/<fqn>/<file> — raw body into a NUL-terminated copy (the embedded
+     * arrays are NUL-terminated, so a straight string length is the file len). */
+    {
+        char fqnbuf[192];
+        size_t flen = (size_t)(file - fqn);
+        if (flen >= sizeof(fqnbuf)) {
+            return -1;
+        }
+        memcpy(fqnbuf, fqn, flen);
+        fqnbuf[flen] = 0;
+        body = pm_metal_inspect_src_read(fqnbuf, file + 1);
+        if (body == NULL) {
+            return -1;
+        }
+        *ctype = src_ctype(file + 1);
+        n = (uint32_t)strlen(body);
+        if (n >= out_max) {
+            return -1;
+        }
+        memcpy(out, body, n);
+        *out_len = n;
+        return 0;
+    }
+}
+
+static int32_t src_asgi_handler(const char *method, const char *path, uint8_t *out, uint32_t out_max,
+    uint32_t *out_len) {
+    const char *ctype = NULL;
+    if (src_http(method, path, out, out_max, out_len, &ctype) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int32_t asgi_handler(const char *method, const char *path, uint8_t *out, uint32_t out_max,
     uint32_t *out_len) {
     int32_t st;
@@ -723,6 +841,14 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
      * /inspect/reg/<fqn> (exports) and /inspect/call/<fqn>/<func> (RPC). */
     (void)add_route("/inspect/reg/*");
     (void)add_route("/inspect/call/*");
+    /* Card source, directly fetchable on every seat + by the host C prove.
+     * Content-type is fixed text because a wildcard route cannot vary it per
+     * file; the JS commander gets per-file types from the deferred artifacts
+     * pump, which sets its own response type. */
+    if (pm_metal_net_http_asgi_route_fn_ct("GET", "/src/*", src_asgi_handler,
+            "text/plain; charset=utf-8") != 0) {
+        return -1;
+    }
     if (inspect_www_mount() != 0) {
         return -1;
     }
@@ -742,6 +868,10 @@ PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_deinit, pm_metal_insp
 PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_handle, pm_metal_inspect_handle,
     int32_t(const char *, const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_body, pm_metal_inspect_body, const char *(void));
+PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_src_manifest, pm_metal_inspect_src_manifest,
+    const char *(const char *));
+PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_src_read, pm_metal_inspect_src_read,
+    const char *(const char *, const char *));
 
 PM_MOD_BOOT_C(pymergetic.metal.inspect, pm_metal_inspect_init, pm_metal_inspect_deinit);
 PM_MOD_BOOTDEP_C(pymergetic.metal.inspect, pymergetic.metal.net.http.asgi);

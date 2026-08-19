@@ -29,6 +29,17 @@ body = inspect.body()
 if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body:
     raise SystemExit("inspect caps %s %s" % (st, body))
 print("upy inspect caps")
+# The source pane is real code on this seat too: every card with a C/Rust
+# muscle ships its manifest + first file through the python bridge on every
+# µPy seat. (An over-HTTP /src fetch is not gated here — js.fetch is Asyncify
+# and cannot nest inside an already-asyncified exec; the /src asgi route is the
+# same C handler the unix HTTP seat, the host C prove and firmware exercise.)
+if inspect.src_manifest("pymergetic.metal.inspect") is None:
+    raise SystemExit("src manifest")
+body = inspect.src_read("pymergetic.metal.inspect", "__impl__.c")
+if body is None or "pm_metal_inspect_init" not in body:
+    raise SystemExit("src read")
+print("upy src")
 import pymergetic.metal.net.dns as dns
 
 if dns.resolve is None:

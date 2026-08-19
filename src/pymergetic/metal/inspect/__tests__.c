@@ -148,6 +148,42 @@ static int32_t case_http(void) {
     if (body == NULL || n == 0 || !has(body, n, "<title>Inspect</title>")) {
         return fail("fetch www body");
     }
+    /* Card source over HTTP: the /src/<fqn> manifest and /src/<fqn>/<file>
+     * route serve the embedded C/Rust (the same bytes the commander's source
+     * pane shows on every seat). */
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch(
+        "http://127.0.0.1:8090/src/pymergetic.metal.inspect", &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch src manifest");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "\"name\":\"pymergetic.metal.inspect\"")
+        || !has(body, n, "\"files\"")) {
+        return fail("fetch src manifest body");
+    }
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch(
+        "http://127.0.0.1:8090/src/pymergetic.metal.inspect/__impl__.c", &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch src raw");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "pm_metal_inspect_init")) {
+        return fail("fetch src raw body");
+    }
+    /* An unknown fqn/file must not serve the real card (route miss → empty
+     * reply), never a crash or the wrong card's bytes. */
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch(
+        "http://127.0.0.1:8090/src/no.such.card/nope.c", &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch src missing");
+    }
+    if (body != NULL && n != 0 && has(body, n, "pm_metal_inspect_init")) {
+        return fail("fetch src missing body served real source");
+    }
     return 0;
 }
 
