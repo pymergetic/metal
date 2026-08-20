@@ -23,11 +23,10 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Roster keyexpr namespace this card arms. "%s" is the group (lowercased caller
- * filter); the queryable answers "@roster/<group>". */
-static char s_group[PM_METAL_NET_SWARM_GROUP_MAX];
-static uint8_t s_group_len;
-static uint8_t s_armed; /* 1 when the roster queryable is declared on a slot */
+/* Armed flag: 1 when the roster queryable is declared on a slot. The card stores
+ * no group text of its own — the query key is built, declared, and forgotten in
+ * start(); the roster callback simply answers with this node's own ZID. */
+static uint8_t s_armed;
 
 /* Convert the zenoh ZID bytes to a lowercase base-16 identity. */
 static void zid_to_hex(const uint8_t zid[16], char out[PM_METAL_NET_SWARM_MEMBER_ID_LEN]) {
@@ -82,8 +81,6 @@ int32_t pm_metal_net_swarm_membership_start(const char *group) {
     if (pm_metal_net_zenoh_queryable(key, roster_query_cb, NULL) != 1) {
         return -1;
     }
-    memcpy(s_group, group, glen);
-    s_group_len = (uint8_t)glen;
     s_armed = 1;
     return 1;
 }
@@ -94,7 +91,6 @@ int32_t pm_metal_net_swarm_membership_stop(void) {
     }
     (void)pm_metal_net_zenoh_undeclare_queryable();
     s_armed = 0;
-    s_group_len = 0;
     return 1;
 }
 

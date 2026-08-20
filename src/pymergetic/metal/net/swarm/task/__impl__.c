@@ -33,8 +33,6 @@ struct offer_cb {
     void *arg;
 };
 static struct offer_cb s_offer;
-static char s_verb[PM_METAL_NET_SWARM_VERB_MAX];
-static uint8_t s_verb_len;
 static uint8_t s_offering;  /* 1 when the offer queryable is armed on a slot */
 static uint8_t s_declaring; /* 1 when the exec subscription is armed on a slot */
 
@@ -91,8 +89,6 @@ int32_t pm_metal_net_swarm_task_offer(const char *verb, pm_metal_net_swarm_offer
         s_offer.arg = NULL;
         return -1;
     }
-    memcpy(s_verb, verb, vlen);
-    s_verb_len = (uint8_t)vlen;
     s_offering = 1;
     return 1;
 }
@@ -180,7 +176,6 @@ int32_t pm_metal_net_swarm_task_done(void) {
         did |= pm_metal_net_zenoh_undeclare_subscribe();
         s_declaring = 0;
     }
-    s_verb_len = 0;
     return did ? 1 : 0;
 }
 

@@ -76,15 +76,14 @@ INC += -I$(ZENOH_PICO_DIR)/include -I$(ZENOH_PICO_DIR)/src -I$(ZENOH_CARD_DIR)
 CFLAGS_EXTMOD += -DZENOH_GENERIC
 
 # zenoh-pico's api/macros.h is C11 _Generic; unix µPy defaults to gnu99 and the
-# browser seat forces gnu99 on all card objects, so re-up the zenoh card + core
-# objects to gnu11 (last -std wins). The vendored core's benign warnings must also
-# not become hard errors under the µPy build's global -Werror (host metal.mk and
+# browser seat forces gnu99 on all card objects, so the zenoh card + core objects
+# are re-upped to gnu11 (last -std wins). The vendored core's benign warnings must
+# also not hard-error under the µPy build's global -Werror (host metal.mk and
 # fw_zenoh.mk drop -Werror for the same reason).
-ZENOH_GN11_OBJS = $(addprefix $(BUILD)/, $(filter %net/zenoh/, $(SRC_METAL_C:.c=.o)) \
-	$(SRC_METAL_ZENOH:.c=.o))
-$(ZENOH_GN11_OBJS): CFLAGS += -std=gnu11
-$(addprefix $(BUILD)/, $(SRC_METAL_ZENOH:.c=.o)): \
-	CFLAGS += -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+# NOTE: the actual CFLAGS install for ZENOH_GN11_OBJS lives AFTER SRC_METAL_C is
+# defined below — this is a recursive variable that expands SRC_METAL_C at rule
+# install time; installing earlier silently drops the net/zenoh card border
+# objects (no gnu11, and c99 rejects zenoh-pico's typedef redefinition).
 
 # Cards come from the tree, not from a list here — see tools/cards.sh. The same
 # TUs land on unix, firmware, and emcc; fills already #ifdef (tap is linux,
@@ -113,6 +112,25 @@ JSFLAGS += -s INITIAL_MEMORY=33554432
 $(BUILD)/micropython.mjs: $(TOP)/extmod/metal/src/pymergetic/metal/drivers/net/sim/library.js
 $(addprefix $(BUILD)/, $(SRC_METAL_C:.c=.o)): CFLAGS += -std=gnu99
 endif
+
+# Zenoh card + core get gnu11 and the core's warnings are suppressed. This must
+# live AFTER the per-seat card CFLAGS (the browser block above forces gnu99 on
+# every card object): for target-specific CFLAGS the later-defined rule wins for
+# a given object, so this gnu11 rule would be silently shadowed by that gnu99 one
+# if installed earlier. Not installing it makes c99/gnu99 reject zenoh-pico's
+# typedef redefinition (a C11 feature). ZENOH_GN11_OBJS expands SRC_METAL_C here,
+# so it does cover net/zenoh/__impl__.o.
+# (The border is picked with findstring-in-foreach, NOT $(filter %net/zenoh/%,...):
+# make's filter allows only ONE '%' wildcard per pattern, so a two-% pattern like
+# %net/zenoh/% silently matches nothing for these card paths.)
+ZENOH_CARD_BORDER = $(foreach f,$(SRC_METAL_C),$(if $(findstring /net/zenoh/,$f),$f))
+ZENOH_GN11_OBJS = $(addprefix $(BUILD)/, $(ZENOH_CARD_BORDER:.c=.o) $(SRC_METAL_ZENOH:.c=.o))
+$(ZENOH_GN11_OBJS): CFLAGS += -std=gnu11
+# The vendored core's benign warnings must not hard-error under the µPy build's
+# global -Werror (its -Wmaybe-uninitialized etc. are GCC-only selectors that
+# clang/emcc rejects outright — so suppress globally, not per-selector, exactly
+# like fw_zenoh.mk omits -Werror for the same external tree).
+$(addprefix $(BUILD)/, $(SRC_METAL_ZENOH:.c=.o)): CFLAGS += -Wno-error
 
 PY_O += $(addprefix $(BUILD)/, $(SRC_METAL_C:.c=.o))
 SRC_QSTR += $(SRC_METAL_C)
