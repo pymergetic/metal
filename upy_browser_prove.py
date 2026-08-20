@@ -103,3 +103,31 @@ def _cdn(base):
     if not isinstance(zid, bytes) or len(zid) != 16:
         raise SystemExit("zenoh zid %r" % (zid,))
     print("upy zenoh")
+
+    # net.swarm.*: the three fleet cards must mount here too. Callback faces
+    # (offer, declare) are host-C only; the off-on defers, the membership node
+    # identity, and the discovery arm/teardown must hold with no peer present.
+    import pymergetic.metal.net.swarm.membership as sm
+    import pymergetic.metal.net.swarm.task as st
+    import pymergetic.metal.net.swarm.discovery as sd
+
+    if sm is None or st is None or sd is None:
+        raise SystemExit("swarm card import")
+    if sm.alive() != 0 or sm.stop() != 0 or sm.start("fleet") != 0:
+        raise SystemExit("swarm membership not-open")
+    nid = sm.node_id()
+    if not isinstance(nid, bytes) or len(nid) != 32:
+        raise SystemExit("swarm membership node_id %r" % (nid,))
+    if st.offering() != 0 or st.declaring() != 0 or st.done() != 0:
+        raise SystemExit("swarm task not-open")
+    if st.dispatch("render", b"\x01\x02\x03") != 0:
+        raise SystemExit("swarm task dispatch defer")
+    sr = sd.scout()
+    if not isinstance(sr, tuple) or len(sr) != 2 or sr[0] != 0:
+        raise SystemExit("swarm discovery scout no-peer %r" % (sr,))
+    if sd.answer_on() != 1 or sd.answer_on() != 0:
+        raise SystemExit("swarm discovery answer")
+    sd.answer_off()
+    if sd.pump() != 0:
+        raise SystemExit("swarm discovery pump")
+    print("upy swarm")

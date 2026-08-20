@@ -168,6 +168,7 @@ prove: $(BUILD)/metal.qemu.elf $(BUILD)/blk.img
 	grep -q "upy inspect caps" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy dns" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy socket" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy swarm" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy cdn" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy pack import" $(BUILD)/serial.log || exit 1; \
 	grep -q "dhcp" $(BUILD)/serial.log || exit 1; \

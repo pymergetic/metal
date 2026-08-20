@@ -210,6 +210,7 @@ browser:
 	grep -q "upy process" $(CURDIR)/build/browser_prove.log
 	grep -q "upy ssh session" $(CURDIR)/build/browser_prove.log
 	grep -q "upy zenoh" $(CURDIR)/build/browser_prove.log
+	grep -q "upy swarm" $(CURDIR)/build/browser_prove.log
 
 compile-commands:
 	python3 $(WASMMOD)/compile_commands.py $(WASMMOD) $(WS) $(VSCODE_CDB)
