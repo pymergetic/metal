@@ -537,6 +537,18 @@ int32_t pm_metal_net_zenoh_undeclare_queryable(void) {
     return 1;
 }
 
+int32_t pm_metal_net_zenoh_undeclare_subscribe(void) {
+    pm_metal_net_zenoh_ctx_t *sl = &s_slots[s_sel];
+    if (!sl->sub_set) {
+        return 0;
+    }
+    (void)z_undeclare_subscriber(z_move(sl->sub));
+    sl->sub_set = 0;
+    sl->sub_cb = NULL;
+    sl->sub_arg = NULL;
+    return 1;
+}
+
 int32_t pm_metal_net_zenoh_zid(uint8_t out[PM_METAL_NET_ZENOH_ZID_LEN]) {
     pm_metal_net_zenoh_ctx_t *sl = &s_slots[s_sel];
     if (out == NULL) {
@@ -764,6 +776,7 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_put, pm_metal_net
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_subscribe, pm_metal_net_zenoh_subscribe, int32_t(const char *, pm_metal_net_zenoh_value_cb_t, void *));
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_queryable, pm_metal_net_zenoh_queryable, int32_t(const char *, pm_metal_net_zenoh_query_cb_t, void *));
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_undeclare_queryable, pm_metal_net_zenoh_undeclare_queryable, int32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_undeclare_subscribe, pm_metal_net_zenoh_undeclare_subscribe, int32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_reply_append, pm_metal_net_zenoh_reply_append, int32_t(pm_metal_net_zenoh_reply_t *, const uint8_t *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_zid, pm_metal_net_zenoh_zid, int32_t(uint8_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_scout_answer_on, pm_metal_net_zenoh_scout_answer_on, int32_t(void));
