@@ -1,7 +1,9 @@
 /*
  * Standalone zenoh-pico put/subscriber loopback proof (Stage 1) -- subscriber.
  *
- * Listener half of the proof. Declares demo/example/** and keeps a bounded
+ * Listener half of the proof. Declares the subscriber keyexpr "demo/example"
+ * with the multi-segment wildcard suffix (the glob the publisher writes to;
+ * see the z_view_keyexpr_from_str string below) and keeps a bounded
  * zp_spin_once + zp_send_keep_alive loop running until prove_pub delivers the
  * expected count, then exits 0 on success / non-zero on failure.
  */

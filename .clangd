@@ -115,6 +115,22 @@ CompileFlags:
 Diagnostics:
   UnusedIncludes: None
 ---
+# Standalone Stage-1 zenoh-pico lo proofs (tools/zp_pico_prove). They compile
+# against the vendored lib's own unix system layer (-DZENOH_LINUX), NOT the
+# Metal card's ZENOH_GENERIC platform, so the lone include dir / define here
+# mirror tools/zp_pico_prove/Makefile's ZPFLAGS.
+If:
+  PathMatch: .*/tools/zp_pico_prove/.*\.(c|h)$
+CompileFlags:
+  Add:
+    - -xc
+    - -std=gnu11
+    - -I../../lib/zenoh-pico/include
+    - -DZENOH_LINUX
+    - -Wno-unknown-attributes
+Diagnostics:
+  UnusedIncludes: None
+---
 If:
   PathMatch: .*\.(c|h)$
   PathExclude: .*/(port/|(modmetal|modpymergetic|boot|mpconfig_unix))

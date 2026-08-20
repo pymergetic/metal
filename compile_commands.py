@@ -97,7 +97,11 @@ for f in sorted(metal.rglob("*")):
             + inc(fw_incs)
             + fw_defs
         )
-    elif "src/pymergetic/metal/net/zenoh" in str(f.relative_to(metal)) and f.suffix == ".c":
+    elif "src/pymergetic/metal/net/zenoh" in str(f.relative_to(metal)):
+        # Both .c and .h under net/zenoh: the platform card headers reference the
+        # vendored tree (zenoh_generic_platform.h -> "zenoh-pico/config.h"), so a
+        # .h-only clangd TU must get the same ZENOH_GENERIC + pico include dirs as
+        # the .c faces or clangd reports 'zenoh-pico/config.h' file not found.
         pfx = "clang -xc -std=gnu11 -Wall -Wno-unknown-attributes " + inc(zenoh_incs) + zenoh_defs
     elif f.name in upy:
         pfx = (
