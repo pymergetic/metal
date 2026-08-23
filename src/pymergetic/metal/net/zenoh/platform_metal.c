@@ -19,6 +19,7 @@
 
 #include "zenoh-pico/system/link/tcp.h"
 #include "zenoh-pico/system/link/udp.h"
+#include "zenoh-pico/transport/transport.h"
 #include "zenoh-pico/utils/logging.h"
 #include "zenoh-pico/utils/result.h"
 
@@ -155,9 +156,24 @@ z_result_t _z_socket_get_endpoints(const _z_sys_net_socket_t *sock, char *local,
 }
 
     z_result_t _z_socket_wait_event(void *v_peers, _z_mutex_rec_t *mutex) {
-        /* Single-threaded build: readiness is polled by the card, not awaited here. */
-        _ZP_UNUSED(v_peers);
+        /* Single-threaded build: readiness is polled by the card, not awaited
+         * here. Mark every attached peer pending; the peer rx task then drains
+         * each socket's buffered bytes (a cooperative step with no data parks
+         * via _z_read_tcp returning SIZE_MAX, not a fatal close). Without this
+         * gate the unicast peer rx task skips every peer and the DATA / DECLARE
+         * a connector sends to a listener is never read. */
         _ZP_UNUSED(mutex);
+        _z_transport_peer_unicast_slist_t **peers =
+            (_z_transport_peer_unicast_slist_t **)v_peers;
+        if (peers != NULL) {
+            _z_transport_peer_unicast_slist_t *curr = *peers;
+            while (curr != NULL) {
+                _z_transport_peer_unicast_t *peer =
+                    _z_transport_peer_unicast_slist_value(curr);
+                peer->_pending = true;
+                curr = _z_transport_peer_unicast_slist_next(curr);
+            }
+        }
         return _Z_RES_OK;
     }
 
@@ -264,14 +280,17 @@ size_t _z_read_tcp(const _z_sys_net_socket_t sock, uint8_t *ptr, size_t len) {
     }
     if (n == 0) {
         /* Would-block (no data in the socket rx buffer yet). This is the
-         * steady-state streaming read: it is driven by the card's poll() step,
-         * so it must PARK (report 0, non-fatal) and let the executor re-poll
-         * this socket on a later zp_spin_once. The synchronous handshake read
-         * (connector z_open AND the listener accept task) goes through
-         * _z_read_exact_tcp, which performs its own retry (SIZE_MAX) so a
-         * would-block inside a handshake never surfaces as a fatal RX here. */
+         * steady-state streaming read, driven by the card's poll() step. Return
+         * SIZE_MAX (the stock-unix EAGAIN meaning) so the unicast peer rx task
+         * parks as PENDING_DATA instead of reading 0 as a socket close and
+         * dropping the peer. The card's own poll() step yields the executor on
+         * the same call so this is still cooperative and bounded. The
+         * synchronous handshake reads (connector z_open AND the listener accept
+         * task) go through _z_read_exact_tcp, which performs its own retry
+         * (SIZE_MAX) so a would-block inside a handshake never surfaces as a
+         * fatal RX here. */
         pm_metal_net_zenoh_yield();
-        return (size_t)0;
+        return SIZE_MAX;
     }
     return (size_t)n;
 }
@@ -306,15 +325,43 @@ size_t _z_read_exact_tcp(const _z_sys_net_socket_t sock, uint8_t *ptr, size_t le
 }
 
 size_t _z_send_tcp(const _z_sys_net_socket_t sock, const uint8_t *ptr, size_t len) {
-    int32_t n;
+    /* A net.ip send caps each call at the peer's ACK'd window (snd_wnd) and the
+     * stream MSS, so for a frame larger than a segment (or sent before the peer
+     * has ACK'd the first window) pm_metal_net_ip_send returns a PARTIAL count.
+     * zenoh-pico's _z_link_send_wbuf treats a short write on a streamed link as
+     * a hard _Z_ERR_TRANSPORT_TX_FAILED, so the one-shot return above made the
+     * client INIT(OpenSyn) churn a fresh socket instead of settling. Loop the
+     * remainder, pumping net.ip and spinning the peer's executor (the co-slot
+     * that must ACK to open window) between segments, until the whole frame is
+     * out or a bounded deadline lapses. This matches the unix stream contract
+     * where send() writes the full lo frame in one call. */
+    size_t off = 0;
+    uint64_t deadline;
     if (sock._fd < 0) {
         return SIZE_MAX;
     }
-    n = pm_metal_net_ip_send(sock._fd, ptr, (uint32_t)len);
-    if (n < 0) {
-        return SIZE_MAX;
+    if (len == 0u) {
+        return 0;
     }
-    return (size_t)n;
+    deadline = pm_metal_async_mono_us() + (uint64_t)PM_METAL_NET_ZENOH_CONNECT_WAIT_US;
+    while (off < len) {
+        int32_t n = pm_metal_net_ip_send(sock._fd, ptr + off, (uint32_t)(len - off));
+        if (n < 0) {
+            return SIZE_MAX;
+        }
+        if (n == 0) {
+            /* No window right now: give the peer a cooperative turn to ACK and
+             * open it, bounded by the deadline, then retry. */
+            if (pm_metal_async_mono_us() >= deadline) {
+                return SIZE_MAX;
+            }
+            pm_metal_net_ip_pump();
+            pm_metal_net_zenoh_yield();
+            continue;
+        }
+        off += (size_t)n;
+    }
+    return (size_t)off;
 }
 
 /*------------------ UDP unicast ------------------*/

@@ -103,6 +103,17 @@ for f in sorted(metal.rglob("*")):
         # .h-only clangd TU must get the same ZENOH_GENERIC + pico include dirs as
         # the .c faces or clangd reports 'zenoh-pico/config.h' file not found.
         pfx = "clang -xc -std=gnu11 -Wall -Wno-unknown-attributes " + inc(zenoh_incs) + zenoh_defs
+    elif "tools/zp_pico_prove" in str(f.relative_to(metal)):
+        # Standalone Stage-1 proofs compile against the vendored lib's own unix
+        # layer (-DZENOH_LINUX, mirroring tools/zp_pico_prove/Makefile ZPFLAGS),
+        # not the Metal card's ZENOH_GENERIC platform shim. Falls to the generic
+        # µPy flags otherwise, which hides <zenoh-pico.h> and z_loaned_sample_t.
+        prove_incs = [zp_pico / "include"]
+        pfx = (
+            "clang -xc -std=gnu11 -Wall -Wno-unknown-attributes "
+            + inc(prove_incs)
+            + " -DZENOH_LINUX"
+        )
     elif f.name in upy:
         pfx = (
             "clang -xc -std=gnu11 -Wall -Wno-unknown-attributes "

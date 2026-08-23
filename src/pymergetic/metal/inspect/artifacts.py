@@ -9,13 +9,20 @@ database.
 
 A seat card artifact (`<fqn>.card`, encoding "registry") has no downloadable
 binary: its cargo is the set of registered C/Rust exports. So the commander's
-binary-shaped endpoints (sections/raw, disasm, files) return the same *truthful*
-"No code so far" minimal answers the FastAPI adapter's non-live stubs return for
-a card, while `/inspect`, `/sections`, `/symbols`, `/packages` and the navigation
-endpoints are real data from the registry (module FQNs, export counts and — via
-the live C face — every export's real name/kind/signature). This keeps the SPA
-never breaking (every route answers, never 404s) and never lying about bytes the
-card does not have.
+byte-backed endpoints (sections/raw, disasm) return the same *truthful* empty
+answers the FastAPI adapter's non-live stubs return for a card, while `/inspect`,
+`/sections`, `/symbols`, `/packages` and the navigation endpoints are real data
+from the registry (module FQNs, export counts and — via the live C face — every
+export's real name/kind/signature). This keeps the SPA never breaking (every
+route answers, never 404s) and never lying about bytes the card does not have.
+
+Sections, symbols, `/inspect`, and the EmbeddedFileView/Locations/files shapes
+follow the *same JSON contract* a downloaded container artifact serves
+(`ArtifactContents` / `ContainerSectionInfo` / `SymbolInfo`), and that contract
+does not branch on role: a kernel, a module, a host or an arch card on any seat
+meets the exact schema a wasm/elf pack meets, so a consumer that reads a file can
+read the live card without a second path. `kind`/`encoding` simply say
+`card`/`registry` truthfully instead of pretending to be a container.
 
 Every handler returns a `(json_string, status)` pair just like `api.py`, so the
 same core could be mounted on FastAPI or Microdot; the seat serves it from
@@ -134,7 +141,16 @@ def _exports(fqn):
 
 
 def _symbols(fqn, docs):
-    """The card's registered exports as commander symbols (kind "export").
+    """The card's registered exports as contract `SymbolInfo` rows.
+
+    Mirrors the CDN's `list_pack_symbols` shape exactly:
+    `{name, section_index, offset, size, kind, binding}`. `kind` carries the
+    registry's real binder tag (`fn`/`mem`/`obj`/`i64`/`f32`/`f64`/`bufptr`),
+    not a fabricate. `section_index` names the one meta section that holds the
+    card's public ledger (index 0 from `_sections`); `offset` is the export's
+    ordinal, `size` 0 (a card carries no code bytes). No `tag`/`binding`
+    fabrications survive — a tool that parses a container's `/symbols` can
+    parse a live card's identically.
     """
     out = []
     if docs is None:
@@ -146,25 +162,33 @@ def _symbols(fqn, docs):
             continue
         out.append({
             "name": name,
-            "kind": "export",
-            "binding": "global",
-            "size": 0,
-            "offset": i,
             "section_index": 0,
-            "tag": "reserved" if kind == "reserved" else kind,
+            "offset": i,
+            "size": 0,
+            "kind": kind,
+            "binding": "global",
         })
     return out
 
 
 def _sections(fqn, exports):
+    """The card's sections as contract `ContainerSectionInfo` rows.
+
+    A card has no file bytes, so there is no code/data extraction to report —
+    but it does have one real, addressable region: its live export ledger. That
+    becomes a single `meta` section (role is one of the contract's
+    code|meta|other, never a bespoke value), `type_id` a truthful metadata id,
+    `offset` 0, `size` the export count. The commander (and any consumer) that
+    walks a container's `/sections` walks a card the same way.
+    """
     export_count = len(exports or [])
     return [{
         "index": 0,
         "name": "exports",
-        "role": "symbols",
-        "type_id": 1,
-        "size": export_count,
+        "type_id": 4,
         "offset": 0,
+        "size": export_count,
+        "role": "meta",
     }]
 
 
@@ -210,6 +234,50 @@ def _source_read(fqn, path):
     return body.encode("utf-8")
 
 
+def _source_view(fqn, path):
+    """One embedded source file as an `EmbeddedFileView` (path, text, binary).
+
+    Mirrors the CDN's `/artifacts/.../files` contract (`extract_embedded_file`):
+    a dict with `path`, `section`, `kind`, `size`, `text`, `binary`, `encoding`.
+    `text` is null (and `binary` true) when the bytes are not clean UTF-8, so the
+    commander never mispaints a real C/Rust file as binary. Returns None when the
+    file is unknown, so the caller answers a truthful 404.
+    """
+    try:
+        import pymergetic.metal.inspect as mi
+    except Exception:
+        return None
+    try:
+        text = mi.src_read(fqn, path)
+    except Exception:
+        return None
+    if text is None:
+        return None
+    try:
+        b = text.encode("utf-8")
+        if "\x00" in text:
+            raise UnicodeError("nul")
+        return {
+            "path": path,
+            "section": "source",
+            "kind": "c" if path.endswith((".c", ".h")) else "rs",
+            "size": len(b),
+            "text": text,
+            "binary": False,
+            "encoding": "utf-8",
+        }
+    except UnicodeError:
+        return {
+            "path": path,
+            "section": "source",
+            "kind": None,
+            "size": len(path),
+            "text": None,
+            "binary": True,
+            "encoding": "utf-8",
+        }
+
+
 def _inspect(fqn, exports, symbols):
     sections = _sections(fqn, exports)
     exports_json = []
@@ -229,19 +297,35 @@ def _inspect(fqn, exports, symbols):
             exports_json.append(item)
     count = len(exports or [])
     size = sum(len(e.get("sig", "")) for e in exports_json) if exports_json else 0
+    # Contract `ArtifactContents` field set (mirrors the CDN's inspect_artifact
+    # serialization), with truthful card values. `kind`/`encoding` say card, not
+    # a pretend wasm/elf; every structural field (sections/symbols/source/
+    # has_dwarf/naked_size/size) conforms so any consumer treats a live card and
+    # a downloaded container through one mechanism. `naked_size` is the number
+    # of registered exports (the card's "byte-free" cargo), `size` the signature
+    # ledger length.
     return {
+        "filename": fqn + ".card",
         "kind": "card",
         "encoding": "registry",
-        "signed": False,
-        "naked_size": count,
         "size": size,
-        "has_dwarf": False,
+        "naked_size": count,
+        "signed": False,
+        "aot_version": None,
         "pack": None,
         "source": _source(fqn),
+        "sig": None,
+        "imports": [],
+        "deps": {},
         "sections": sections,
         "symbols": _symbols_only(symbols),
-        "exports": exports_json,
+        "has_dwarf": False,
         "error": None,
+        "pack_error": None,
+        "source_error": None,
+        "imports_error": None,
+        "deps_error": None,
+        "sig_error": None,
     }
 
 
@@ -250,14 +334,12 @@ def _symbols_only(symbols):
     for s in symbols:
         row = {
             "name": s["name"],
+            "section_index": s["section_index"],
+            "offset": s["offset"],
+            "size": s["size"],
             "kind": s["kind"],
             "binding": s["binding"],
-            "size": s["size"],
-            "offset": s["offset"],
-            "section_index": s["section_index"],
         }
-        if s.get("tag"):
-            row["tag"] = s["tag"]
         out.append(row)
     return out
 
@@ -362,7 +444,19 @@ def route(path):
                 return _json({"detail": "no such source file",
                               "artifact": fqn, "file": qp}).encode(), 404, False
             return body, 200, True
-        # `/files` and `/files?path=` — the card's embedded source tree.
+        # `/files?path=<file>` — one embedded source file's EmbeddedFileView
+        # (path/text/binary), the exact contract the shared commander's
+        # loadSourceForLoc consumes. Without `path`, `/files` is the card's
+        # embedded source tree (manifest). The C face returns real code, never
+        # section bytes, so a file with a `path` is a text source view.
+        qp = query_get(path, "path")
+        if qp:
+            view = _source_view(fqn, qp)
+            if view is None:
+                return _json({"detail": "no such source file",
+                              "artifact": fqn, "file": qp}).encode(), 404, False
+            return _json(view).encode(), 200, False
+        # `/files` — the card's embedded source tree.
         src = _source(fqn)
         return _json(src if src is not None else {"files": []}).encode(), 200, False
     if op.startswith("locations"):

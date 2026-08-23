@@ -33,6 +33,19 @@
 #include "zenoh-pico/protocol/codec/transport.h"
 #include "zenoh-pico/protocol/definitions/transport.h"
 #include "zenoh-pico/protocol/iobuf.h"
+/* Cooperative accept: to interleave a listener + connector on one thread we
+ * bypass the vendored blocking _z_unicast_handshake_listen (its accept task
+ * cannot yield back for the partner to send OPEN(Syn)). The card drives the
+ * INIT/OPEN accept wire itself in bounded steps and attaches the established
+ * peer to the listener transport via the same _z_transport_peer_unicast_add the
+ * stock accept task uses. These internals sit in the vendored core the card
+ * already compiles/link its own muscle against. */
+#include "zenoh-pico/net/session.h"
+#include "zenoh-pico/transport/transport.h"
+#include "zenoh-pico/transport/unicast/transport.h"
+#include "zenoh-pico/transport/common/tx.h"
+#include "zenoh-pico/transport/utils.h"
+#include "zenoh-pico/session/interest.h"
 
 /* Session whose executor the platform can spin while this session would block.
  * The card supports a small peer set so up()/poll() can drive a connector and a
@@ -71,6 +84,36 @@ typedef struct pm_metal_net_zenoh_ctx {
 
 #define PM_METAL_NET_ZENOH_SLOTS 2u
 
+/* Cooperative-accept per-slot state. When a session is opened in peer/listen
+ * mode, the card parks the stock accept task and drives the INIT/OPEN handshake
+ * itself in bounded steps (see accept_step). Each step reads the framed t-msg
+ * that a connector would currently be sending, advances the negotiation, and
+ * yields so the partner's executor can answer. Once OPEN(Syn) has been
+ * validated the peer is attached and the parked listener session is told to
+ * resume the local-init handshake. */
+typedef struct pm_metal_net_zenoh_accept {
+    int32_t fd;              /* accepted socket; <0 once attached/closed */
+    int32_t listen_fd;       /* listener's listen socket (to skip re-fetch) */
+    uint8_t magic;           /* reserved: magic+version already validated */
+    uint8_t phase;           /* 0=idle,1=recv INIT(Syn),2=recv OPEN(Syn),3=attach */
+    uint8_t len_known;       /* length prefix fully read */
+    uint8_t iter;            /* guard against an infinite in-call loop */
+    uint32_t len;            /* framed body length (2-byte LE prefix) */
+    uint16_t mini_off;       /* bytes of 2-byte length read */
+    uint16_t body_off;       /* bytes of framed body read */
+    uint8_t mini_buf[2];     /* 2-byte length prefix scratch */
+    uint8_t in_buf[4096];    /* framed body scratch (decode target) */
+    _z_transport_message_t rmsg; /* decoded OPEN/INIT while validating */
+    uint8_t rmsg_valid;
+    uint8_t oam;             /* remote whatami (from INIT(Syn)) */
+    uint8_t oam_valid;
+    uint8_t patch;           /* remote INIT(Syn) patch */
+    _z_transport_unicast_establish_param_t param;
+    uint8_t param_ready;     /* param filled and peer not yet attached */
+    uint8_t peer_added;
+    void *peer;              /* attached _z_transport_peer_unicast_t* for re-push */
+} pm_metal_net_zenoh_accept_t;
+
 /* Query reply sink passed to the query callback (see __types__.h). The layout
  * is private to this card: it names the slot whose bounded reply buffer the
  * callback refills via pm_metal_net_zenoh_reply_append. */
@@ -79,6 +122,7 @@ struct pm_metal_net_zenoh_reply {
 };
 
 static pm_metal_net_zenoh_ctx_t s_slots[PM_METAL_NET_ZENOH_SLOTS];
+static pm_metal_net_zenoh_accept_t s_accept[PM_METAL_NET_ZENOH_SLOTS];
 static uint8_t s_sel;            /* slot the bounded faces drive */
 static pm_util_mem_arena_t *s_arena;
 static pm_metal_net_zenoh_yield_fn s_yield_hook;
@@ -89,7 +133,10 @@ static pm_metal_net_zenoh_yield_fn s_yield_hook;
 static uint8_t s_exec_in[PM_METAL_NET_ZENOH_SLOTS];
 static uint8_t s_local_zid[PM_METAL_NET_ZENOH_ZID_LEN];
 static int32_t s_local_zid_init;
-/* Joined-group listener that answers a SCOUT with a HELLO (the card-level hello
+/* Cooperative-accept border (defined further down); declared here so
+ * spin_open_slots can step a peer/listen seat during a connector handshake. */
+static int32_t accept_pump(uint8_t slot);
+static void accept_reset(pm_metal_net_zenoh_accept_t *ac);/* Joined-group listener that answers a SCOUT with a HELLO (the card-level hello
  * side; zenoh-pico core has no SCOUT→HELLO answerer). One at a time. A live
  * card that has a session would send HELLOs from its own transport; this is the
  * border path that lets a bare scouting peer discover us before any session. */
@@ -121,17 +168,29 @@ static void spin_open_slots(void) {
         if (s_slots[i].open_state != 2 || s_exec_in[i]) {
             continue;
         }
+        /* A PEER (listener) slot has no base data socket to keep alive and its
+         * zenoh-pico accept task must not run in spin mode (its blocking
+         * OPEN(Syn) read monopolizes the one executor and starves the connector
+         * that must send it). The card owns the accept border instead: step it
+         * here so the connector's handshake yield advances both sides, and only
+         * spin the listener's executor once the remote peer has been attached
+         * (its reads then come off the accepted socket). */
+        if (s_slots[i].mode == 1u) {
+            (void)accept_pump(i);
+            if (!s_accept[i].peer_added) {
+                continue;
+            }
+            s_exec_in[i] = 1;
+            for (s = 0; s < 8; s++) {
+                (void)zp_spin_once(z_loan(s_slots[i].session));
+            }
+            s_exec_in[i] = 0;
+            continue;
+        }
         s_exec_in[i] = 1;
         /* A CLIENT slot's transport has one base socket that carries its
-         * keep-alives; a PEER (listener) slot's transport has NO base data
-         * socket — zebala sends to peers via their accepted sockets, and the
-         * transport's base link is the LISTEN socket, which can never accept a
-         * write. Sending a keep-alive there is a guaranteed -1 that, in the
-         * hot yield loop, becomes a multiple-megabyte busy spin and starves the
-         * very handshake we are trying to advance. So keep-alive only clients. */
-        if (s_slots[i].mode == 0u) {
-            (void)zp_send_keep_alive(z_loan(s_slots[i].session), NULL);
-        }
+         * keep-alives. */
+        (void)zp_send_keep_alive(z_loan(s_slots[i].session), NULL);
         for (s = 0; s < 8; s++) {
             (void)zp_spin_once(z_loan(s_slots[i].session));
         }
@@ -177,6 +236,286 @@ static void zenoh_local_zid(uint8_t out[PM_METAL_NET_ZENOH_ZID_LEN]) {
     memcpy(out, s_local_zid, PM_METAL_NET_ZENOH_ZID_LEN);
 }
 
+/*------------------ cooperative accept ------------------*
+ * The peer/listen seat needs a connector + a listener on one _lo_ net.ip to
+ * finish a real INIT/OPEN handshake on a single thread. zenoh-pico's stock
+ * accept (_zp_unicast_accept_task_fn -> _z_unicast_handshake_listen) is not
+ * usable here: its OPEN(Syn) read spins in _z_link_recv_t_msg's `while
+ * ret==Z_ETIMEDOUT` loop, monopolizing the one executor and starving the client
+ * that must send that very OPEN(Syn) (the 1s accept timeout then tears the
+ * socket). So the card owns the accept border instead: it accepts the dangling
+ * socket and drives the INIT/OPEN handshake itself in bounded, non-blocking
+ * steps, reusing the vendored codec + the same _z_transport_peer_unicast_add +
+ * interest-push the stock accept task would use. Each step returns when a read
+ * would block, so the peer (connector) executor gets a turn to answer.
+ *
+ * A fresh TCP connect to a non-blocking listen socket appears on the platform
+ * accept as soon as the connector reaches ESTAB (loopback completes synchronously
+ * in pm_metal_net_ip_connect). The connector's z_open then drives us through the
+ * yields; when it blocks reading INIT(Ack) / OPEN(Ack) the card steps the accept.
+ * -------------------------------------------------- */
+
+static uint8_t s_in_accept;   /* guard against re-entrant accept_pump     */
+
+/* Mutable raw session for a slot's owned session (the RC wrapper's _val is the
+ * _z_session_t the transport/install machinery operates on directly). */
+static _z_session_t *meter_session_raw(const pm_metal_net_zenoh_ctx_t *sl) {
+    return _Z_RC_IN_VAL(&sl->session._rc);
+}
+
+/* Read the 2-byte LE frame length prefix from the accept socket. Returns 1 when
+ * the length is fully known, 0 when it would block (socket preserved), -1 on a
+ * hard error. */
+static int accept_len_step(pm_metal_net_zenoh_accept_t *ac) {
+    while (ac->mini_off < 2u) {
+        int32_t n = pm_metal_net_ip_recv(ac->fd, ac->mini_buf, 2u);
+        if (n < 0) {
+            return -1;
+        }
+        if (n == 0) {
+            return 0; /* would block — park */
+        }
+        ac->mini_off += (uint16_t)n;
+    }
+    return 1;
+}
+
+/* Read the framed body into ac->in_buf. Returns 1 when the whole frame is
+ * available, 0 when it would block, -1 on error. */
+static int accept_body_step(pm_metal_net_zenoh_accept_t *ac) {
+    while (ac->body_off < ac->len) {
+        int32_t n = pm_metal_net_ip_recv(ac->fd, ac->in_buf + ac->body_off, ac->len - ac->body_off);
+        if (n < 0) {
+            return -1;
+        }
+        if (n == 0) {
+            return 0; /* would block — park */
+        }
+        ac->body_off += (uint16_t)n;
+    }
+    return 1;
+}
+
+/* Read one complete framed transport message off the accept socket, non-blocking.
+ * Returns 1 with msg filled, 0 if it would block (socket preserved), -1 on a
+ * hard error. Mirrors _z_link_recv_t_msg_cap_flow_stream framing: a 2-byte LE
+ * length then exactly that many bytes, decoded by _z_transport_message_decode. */
+static int accept_recv_tmsg(pm_metal_net_zenoh_accept_t *ac, _z_transport_message_t *msg) {
+    int st;
+    if (!ac->len_known) {
+        st = accept_len_step(ac);
+        if (st <= 0) {
+            return st;
+        }
+        ac->len = (uint32_t)((uint16_t)ac->mini_buf[0] | ((uint16_t)ac->mini_buf[1] << 8u));
+        if (ac->len > sizeof(ac->in_buf)) {
+            return -1;
+        }
+        ac->len_known = 1;
+    }
+    st = accept_body_step(ac);
+    if (st <= 0) {
+        return st;
+    }
+    {
+        _z_zbuf_t zbf = _z_zbuf_make(sizeof(ac->in_buf));
+        z_result_t rc;
+        _z_zbuf_reset(&zbf);
+        memcpy(_z_zbuf_get_wptr(&zbf), ac->in_buf, ac->len);
+        _z_zbuf_set_wpos(&zbf, ac->len);
+        rc = _z_transport_message_decode(msg, &zbf);
+        _z_zbuf_clear(&zbf);
+        if (rc != _Z_RES_OK) {
+            return -1;
+        }
+    }
+    ac->len_known = 0;
+    ac->mini_off = 0;
+    ac->body_off = 0;
+    return 1;
+}
+
+/* Reset an accept attempt so a failed/closed border can be retried. */
+static void accept_reset(pm_metal_net_zenoh_accept_t *ac) {
+    if (ac->fd >= 0) {
+        pm_metal_net_ip_close(ac->fd);
+        ac->fd = -1;
+    }
+    ac->phase = 0;
+    ac->len_known = 0;
+    ac->mini_off = 0;
+    ac->body_off = 0;
+    ac->rmsg_valid = 0;
+    ac->param_ready = 0;
+    ac->peer_added = 0;
+    ac->peer = NULL;
+}
+
+/* One bounded, non-blocking step of the accept border for a peer/listen slot.
+ * Returns 1 when the listener has gained its peer (or already had it), 0 while
+ * a step needs more CPU (a read would block — park), -1 on hard failure.
+ * Called from the connector's handshake yield so the two sides interleave on
+ * one thread. */
+static int32_t accept_pump(uint8_t slot) {
+    pm_metal_net_zenoh_ctx_t *sl = &s_slots[slot];
+    pm_metal_net_zenoh_accept_t *ac = &s_accept[slot];
+    const _z_sys_net_socket_t *listen_sock;
+    _z_session_t *sess;
+    _z_sys_net_socket_t con = {0};
+    _z_transport_message_t msg = {0};
+    z_result_t ret;
+    int st = 0;
+
+    if (s_in_accept) {
+        return 0; /* already advancing; skip to avoid recursion */
+    }
+    if (sl->mode != 1u || sl->open_state != 2) {
+        return 0;
+    }
+    if (ac->peer_added) {
+        return 1;
+    }
+
+    /* Grab a dangling connect if none held yet. */
+    if (ac->fd < 0) {
+        _z_session_t *sess_raw = meter_session_raw(sl);
+        const _z_link_t *link = sess_raw->_tp._transport._unicast._common._link;
+        if (link == NULL) {
+            return 0;
+        }
+        listen_sock = _z_link_get_socket(link);
+        if (listen_sock == NULL || listen_sock->_fd < 0) {
+            return 0;
+        }
+        ac->phase = 1;
+        ret = _z_socket_accept(listen_sock, &con);
+        if (ret != _Z_RES_OK) {
+            return 0; /* no pending connection yet — park */
+        }
+        ac->fd = con._fd;
+    }
+
+    s_in_accept = 1;
+    switch (ac->phase) {
+        case 1: /* read INIT(Syn) */
+            st = accept_recv_tmsg(ac, &msg);
+            if (st <= 0) {
+                break; /* would-block or error; fail handled below */
+            }
+            if ((_Z_MID(msg._header) != _Z_MID_T_INIT) || _Z_HAS_FLAG(msg._header, _Z_FLAG_T_INIT_A)) {
+                _z_t_msg_clear(&msg);
+                st = -1;
+                break;
+            }
+            {
+                _z_transport_message_t iam;
+                sess = meter_session_raw(sl);
+                iam = _z_t_msg_make_init_ack(Z_WHATAMI_PEER, sess->_local_zid, _z_slice_null());
+                /* negotiate down the announced params, as _z_unicast_handshake_listen */
+                if (msg._body._init._seq_num_res < iam._body._init._seq_num_res) {
+                    iam._body._init._seq_num_res = msg._body._init._seq_num_res;
+                }
+                if (msg._body._init._req_id_res < iam._body._init._req_id_res) {
+                    iam._body._init._req_id_res = msg._body._init._req_id_res;
+                }
+                if (msg._body._init._batch_size < iam._body._init._batch_size) {
+                    iam._body._init._batch_size = msg._body._init._batch_size;
+                }
+#if Z_FEATURE_FRAGMENTATION == 1
+                if (iam._body._init._patch > msg._body._init._patch) {
+                    iam._body._init._patch = msg._body._init._patch;
+                }
+#endif
+                memset(&ac->param, 0, sizeof(ac->param));
+                ac->param._seq_num_res = iam._body._init._seq_num_res;
+                ac->param._req_id_res = iam._body._init._req_id_res;
+                ac->param._batch_size = iam._body._init._batch_size;
+                ac->param._remote_zid = msg._body._init._zid;
+                ac->param._remote_whatami = msg._body._init._whatami;
+                ac->param._key_id_res = 0x08u << ac->param._key_id_res;
+                ac->param._req_id_res = 0x08u << ac->param._req_id_res;
+#if Z_FEATURE_FRAGMENTATION == 1
+                ac->param._patch = iam._body._init._patch;
+#endif
+                _z_t_msg_clear(&msg);
+                /* send INIT(Ack) → phase 2 */
+                {
+                    _z_session_t *sess_raw = meter_session_raw(sl);
+                    _z_sys_net_socket_t c = {._fd = ac->fd};
+                    ret = _z_link_send_t_msg(sess_raw->_tp._transport._unicast._common._link, &iam, &c);
+                }
+                _z_t_msg_clear(&iam);
+                if (ret != _Z_RES_OK) {
+                    ret = _Z_RES_OK; /* message send churn tolerated; keep stepping */
+                }
+                ac->phase = 2;
+            }
+            break;
+        case 2: /* read OPEN(Syn) */
+            st = accept_recv_tmsg(ac, &msg);
+            if (st <= 0) {
+                break;
+            }
+            if ((_Z_MID(msg._header) != _Z_MID_T_OPEN) || _Z_HAS_FLAG(msg._header, _Z_FLAG_T_INIT_A)) {
+                _z_t_msg_clear(&msg);
+                st = -1;
+                break;
+            }
+            ac->param._lease = (msg._body._open._lease < Z_TRANSPORT_LEASE) ? msg._body._open._lease : Z_TRANSPORT_LEASE;
+            ac->param._initial_sn_rx = msg._body._open._initial_sn;
+            _z_t_msg_clear(&msg);
+            /* local initial SN TX (peer mode random, masked), send OPEN(Ack) */
+            {
+                _z_transport_message_t oam;
+                z_random_fill(&ac->param._initial_sn_tx, sizeof(ac->param._initial_sn_tx));
+                ac->param._initial_sn_tx =
+                    ac->param._initial_sn_tx & (_z_zint_t)~_z_sn_modulo_mask(ac->param._seq_num_res);
+                oam = _z_t_msg_make_open_ack(Z_TRANSPORT_LEASE, ac->param._initial_sn_tx);
+                {
+                    _z_session_t *sess_raw = meter_session_raw(sl);
+                    ret = _z_link_send_t_msg(sess_raw->_tp._transport._unicast._common._link, &oam,
+                                             &(_z_sys_net_socket_t){._fd = ac->fd});
+                }
+                _z_t_msg_clear(&oam);
+                (void)ret; /* tolerated; the connector drives completion */
+                ac->param_ready = 1;
+                ac->phase = 3;
+            }
+            break;
+        case 3: /* attach the peer to the listener transport */
+            {
+                _z_session_t *sess_raw = meter_session_raw(sl);
+                _z_transport_peer_unicast_t *new_peer = NULL;
+                _z_transport_unicast_t *ztu = &sess_raw->_tp._transport._unicast;
+                _z_sys_net_socket_t c = {._fd = ac->fd};
+                ret = _z_transport_peer_unicast_add(ztu, &ac->param, c, true, &new_peer);
+                if (ret != _Z_RES_OK) {
+                    st = -1;
+                    break;
+                }
+                if (new_peer != NULL) {
+                    ac->peer = (void *)new_peer;
+                    (void)_z_interest_push_declarations_to_peer(sess_raw, (void *)new_peer);
+                }
+                ac->peer_added = 1;
+                ac->fd = -1;
+            }
+            break;
+        default:
+            st = -1;
+            break;
+    }
+    if (st < 0 && ac->peer_added == 0) {
+        accept_reset(ac);
+        s_in_accept = 0;
+        return -1;
+    }
+    s_in_accept = 0;
+    return (int32_t)ac->peer_added;
+}
+
+
+
 /* Build the locator string "tcp/127.0.0.1:7447" from the slot's peer() args. */
 static void fill_locator(pm_metal_net_zenoh_ctx_t *sl, char *dst, size_t dstlen) {
     (void)snprintf(dst, dstlen, "tcp/%u.%u.%u.%u:%u", (unsigned)(sl->peer_ip >> 24),
@@ -218,14 +557,10 @@ static int32_t try_open(pm_metal_net_zenoh_ctx_t *sl) {
     rc = z_open(zs, z_move(sl->config), NULL);
     s_exec_in[(size_t)(sl - s_slots)] = 0;
     if (rc != Z_OK) {
-        /* The platform cooperated for a bounded time and the peer did not
-         * answer yet (classic single-thread case where poll() must retry). Put
-         * the session back to idle and retry after a backoff. */
         sl->open_state = 0;
         sl->retry_at_us = pm_metal_async_mono_us() + 250000ull; /* 250 ms */
         return 0;
     }
-
     /* OPEN. Sync our ZID copy from the session. */
     {
         z_id_t zid = z_info_zid(z_loan(*zs));
@@ -251,11 +586,17 @@ static int32_t try_open(pm_metal_net_zenoh_ctx_t *sl) {
 }
 
 int32_t pm_metal_net_zenoh_init(pm_util_mem_arena_t *arena) {
+    uint8_t i;
     if (arena == NULL) {
         return -1;
     }
     memset(s_slots, 0, sizeof(s_slots));
     memset(s_exec_in, 0, sizeof(s_exec_in));
+    memset(s_accept, 0, sizeof(s_accept));
+    for (i = 0; i < PM_METAL_NET_ZENOH_SLOTS; i++) {
+        s_accept[i].fd = -1;
+    }
+    s_in_accept = 0;
     s_arena = arena;
     s_sel = 0;
     s_yield_hook = NULL;
@@ -270,6 +611,7 @@ void pm_metal_net_zenoh_deinit(void) {
     pm_metal_net_zenoh_scout_answer_off(); /* no stale group listener between tests */
     for (i = 0; i < PM_METAL_NET_ZENOH_SLOTS; i++) {
         pm_metal_net_zenoh_ctx_t *sl = &s_slots[i];
+        accept_reset(&s_accept[i]); /* tear down any dangling accept socket */
         if (sl->qle_set) {
             (void)z_undeclare_queryable(z_move(sl->qle));
             sl->qle_set = 0;
@@ -290,6 +632,13 @@ void pm_metal_net_zenoh_deinit(void) {
         }
         sl->open_state = 0;
         sl->zid_set = 0; /* a closed session must not report its old random ZID */
+        /* Drop the peer configuration too, so a later poll()/try_open cannot
+         * silently re-open a stale listener/client against the old endpoint
+         * (that re-open is what made a scout-only test pick up a random session
+         * ZID instead of the deterministic pre-open identity). */
+        sl->peer_ip = 0;
+        sl->peer_port = 0;
+        sl->mode = 0;
     }
     s_sel = 0;
     s_yield_hook = NULL;
@@ -424,6 +773,19 @@ int32_t pm_metal_net_zenoh_subscribe(const char *key, pm_metal_net_zenoh_value_c
     ret = z_declare_subscriber(z_loan(sl->session), &sl->sub, z_loan(ke), z_move(cl), NULL);
     if (ret != Z_OK) {
         return -1;
+    }
+    /* The subscriber declaration must reach the already-attached peer. In the
+     * stock accept flow the declarations are pushed at accept time, but a peer
+     * accepted by the card's cooperative border then declares a NEW subscriber
+     * later; zenoh-pico only flushes fresh declarations on a transport spin,
+     * and a put on the connector routes by its learned remote interests. Re-push
+     * the declarations to the attached peer now so the connector learns the
+     * interest before the test's put. */
+    {
+        _z_session_t *sess_raw = meter_session_raw(sl);
+        if (s_accept[s_sel].peer != NULL && sess_raw != NULL) {
+            (void)_z_interest_push_declarations_to_peer(sess_raw, s_accept[s_sel].peer);
+        }
     }
     sl->sub_set = 1;
     sl->sub_cb = cb;

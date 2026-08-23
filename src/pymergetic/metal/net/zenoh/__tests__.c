@@ -1,13 +1,8 @@
 /* pymergetic.metal.net.zenoh — border prove. This passes when the card
  * initializes, opens a peer + a client on one shared _lo_ net.ip, resolves
- * 16-byte ZIDs, tears down cleanly across bounded poll() steps, and interleaves
- * two cooperative sessions (listener + connector) on one thread over loopback.
- *
- * The two-session prove (`case_two_session_roundtrip`) asserts the peer
- * listener opens and both cooperative sessions interleave on one thread;
- * the client-mode connector open and the subscribe/put data plane are driven
- * safely but are still tied to zenoh-pico's synchronous z_open and are the
- * tracked `two-session-prove` remainder (see the test header). */
+ * 16-byte ZIDs, tears down cleanly across bounded poll() steps, interleaves
+ * two cooperative sessions (listener + connector) on one thread over loopback,
+ * and round-trips a PUT to a cross-peer SUBSCRIBER sample over that pair. */
 #include "pymergetic/metal/async.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/zenoh.h"
@@ -38,6 +33,31 @@ static void query_cb(const char *key, size_t klen, const uint8_t *params, size_t
     (void)arg;
     if (reply != NULL) {
         (void)pm_metal_net_zenoh_reply_append(reply, &tag, 1);
+    }
+}
+
+/* Cross-peer subscription capture. The card delivers a subscribed sample to the
+ * slot's value callback synchronously inside a pump step; this records key +
+ * payload into a bounded static target so the two-session prove can assert the
+ * exact bytes arrived across the wire. */
+static struct pm_zenoh_sample_capture {
+    uint8_t key[PM_METAL_NET_ZENOH_MAX_SAMPLE];
+    size_t keylen;
+    uint8_t payload[PM_METAL_NET_ZENOH_MAX_SAMPLE];
+    size_t payloadlen;
+} g_sample;
+
+static void on_sample(const char *key, size_t klen, const uint8_t *payload, size_t plen, void *arg) {
+    (void)arg;
+    fprintf(stderr, "[zenoh-sample] plen=%zu keylen=%zu\n", plen, klen);
+    memset(&g_sample, 0, sizeof(g_sample));
+    if (key != NULL && klen < sizeof(g_sample.key)) {
+        memcpy(g_sample.key, key, klen);
+        g_sample.keylen = klen;
+    }
+    if (payload != NULL && plen <= sizeof(g_sample.payload)) {
+        memcpy(g_sample.payload, payload, plen);
+        g_sample.payloadlen = plen;
     }
 }
 
@@ -72,6 +92,7 @@ static int32_t case_zid_deterministic(void) {
 static int32_t case_up_poll_bounded(void) {
     uint8_t zid[PM_METAL_NET_ZENOH_ZID_LEN];
     uint32_t steps;
+    fprintf(stderr, "===SCOPE up_poll_bounded BEGIN===\n");
     /* Client open against a listener that is not up: the open step must return
      * immediately (cooperative, no blocking z_open), and poll() must retry a
      * bounded number of steps without blocking or erroring the card. */
@@ -149,6 +170,13 @@ static void pump_both(void) {
 static int32_t case_two_session_roundtrip(void) {
     uint32_t steps;
     uint8_t zid[PM_METAL_NET_ZENOH_ZID_LEN];
+    fprintf(stderr, "===SCOPE two_session_roundtrip BEGIN===\n");
+    /* The whole card shares one boot with other cards (net.swarm.* opens a
+     * peer/listen session in slot 1, and this suite's own case_up_poll_bounded
+     * leaves slot 0 open against that listener). Prior tests can leave slots
+     * mid-open, so tear the session slate down before re-proving the two-session
+     * data plane from a clean, known state. */
+    pm_metal_net_zenoh_deinit();
     /* Slot 1 = listener (peer mode, bind 127.0.0.1:7447). Peer-mode open must be
      * immediate and non-blocking (nothing to wait for yet). */
     if (pm_metal_net_zenoh_sel(1) != 0) {
@@ -202,32 +230,97 @@ static int32_t case_two_session_roundtrip(void) {
     }
 
     /* Slot 0 = connector (client mode) against the same endpoint. Drive its
-     * open cooperatively for a bounded window together with the open listener:
-     * this is the async-open call path under the platform's cooperative yield.
-     * The connector's TCP connect reaches ESTAB and the listener's OPEN_REPLY
-     * is delivered into its transport, but zenoh-pico's client-mode z_open has
-     * a self-contained real-time connect window that races the single-threaded
-     * cooperative driver, so the client does not deterministically reach
-     * open_state==2 within a bounded step budget on this seat (see the header
-     * scope). It is DRIVEN here (not asserted) so the actuator + the put/
-     * subscribe faces stay exercised, and the async peer half and clean
-     * dual-session teardown are what this prove gates. */
+     * open cooperatively together with the open listener: this is the async-open
+     * call path under the platform's cooperative yield. The client's z_open runs
+     * the whole INIT/OPEN handshake synchronously; its platform reads yield to
+     * pump net.ip and spin the listener's executor (the accept task answers the
+     * connector) and its platform sends now loop partial net.ip writes to a full
+     * frame (a short write on a streamed link is TX_FAILED, which used to churn a
+     * fresh socket instead of settling). So the connector must deterministically
+     * reach open_state==2 within a bounded cooperative step budget. */
     if (pm_metal_net_zenoh_sel(0) != 0) {
         return fail_zenoh("sel0");
     }
     if (pm_metal_net_zenoh_peer(ZENOH_ADDR_BE, ZENOH_PORT, 0) != 0) {
         return fail_zenoh("peer0");
     }
-    for (steps = 0; steps < 48u; steps++) {
-        (void)pump_both();
+    (void)pm_metal_net_zenoh_up(); /* first attempt */
+    for (steps = 0; steps < 400u; steps++) {
+        if ((uint32_t)pm_metal_net_zenoh_up() == 1u) {
+            break;
+        }
+        pump_both();
+    }
+    if ((uint32_t)pm_metal_net_zenoh_up() != 1u) {
+        return fail_zenoh("connector open");
+    }
+    if (pm_metal_net_zenoh_zid(zid) != 1) {
+        return fail_zenoh("connector zid");
+    }
+
+    /* Cross-peer data plane: the connector PUTs a payload on a keyexpr the
+     * listener has subscribed to, and the listener's value callback must fire
+     * (synchronously inside a pump step) with the exact bytes. This is the
+     * two-session put/subscriber round-trip the card drives as its raison
+     * d'etre: two cooperatively-interleaved zenoh sessions on one thread,
+     * sample delivered end-to-end over the shared _lo_ net.ip. */
+    {
+        uint32_t x;
+        static const uint8_t payload[] = "tcp-two-session-data-plane";
+        static const char keyexpr[] = "demo/twosession";
+        memset(&g_sample, 0, sizeof(g_sample));
+        /* Listener declares the subscription first, then the connector puts on
+         * that keyexpr; a subscriber that is not yet active would drop the
+         * sample, so declare before putting and pump once to arm the interest. */
+        if (pm_metal_net_zenoh_sel(1) != 0) {
+            return fail_zenoh("sel1-sub");
+        }
+        if (pm_metal_net_zenoh_subscribe(keyexpr, on_sample, NULL) != 1) {
+            return fail_zenoh("subscriber declare");
+        }
+        /* Interest is async: the listener's executor must flush the DECLARE to
+         * the connector peer and the connector's executor must parse it back
+         * into a remote interest for the keyexpr before a put will route to the
+         * listener. Pump the interleaved pair until that round-trip settles. */
+        {
+            uint32_t p;
+            for (p = 0; p < 20u; p++) {
+                pump_both();
+            }
+        }
+        /* Connector put on the subscribed keyexpr. */
+        if (pm_metal_net_zenoh_sel(0) != 0) {
+            return fail_zenoh("sel0-put");
+        }
+        if (pm_metal_net_zenoh_put(keyexpr, payload, (uint32_t)sizeof(payload) - 1u) != 1) {
+            return fail_zenoh("connector put");
+        }
+        /* Pump the interleaved pair until the listener's callback receives the
+         * sample or a bounded budget lapses. */
+        for (x = 0; x < 200u; x++) {
+            pump_both();
+            if (g_sample.payloadlen != 0u) {
+                break;
+            }
+        }
+        if (g_sample.payloadlen == 0u) {
+            return fail_zenoh("no sample delivered");
+        }
+        if (g_sample.payloadlen != (uint32_t)sizeof(payload) - 1u ||
+            memcmp(g_sample.payload, payload, (size_t)g_sample.payloadlen) != 0) {
+            return fail_zenoh("sample mismatch");
+        }
+        if (g_sample.keylen != sizeof(keyexpr) - 1u ||
+            memcmp(g_sample.key, keyexpr, (size_t)g_sample.keylen) != 0) {
+            return fail_zenoh("sample key mismatch");
+        }
+        (void)pm_metal_net_zenoh_sel(1);
+        (void)pm_metal_net_zenoh_undeclare_subscribe();
     }
 
     /* The listener must still be live and its ZID resolvable after driving both
-     * executors cooperatively: the peer half of the async open holds up while a
-     * client churns against it. The put/subscribe faces stay well-formed but,
-     * with the connector not reliably at open_state==2, they are driven safely
-     * rather than asserted (ZOK acceptance and sample delivery are the
-     * remaining data-plane task). */
+     * executors cooperatively and round-tripping a sample: the peer half of the
+     * async open holds up while a client churns against it. */
     (void)pm_metal_net_zenoh_sel(1);
     if ((uint32_t)pm_metal_net_zenoh_up() != 1u) {
         return fail_zenoh("listener lost");
@@ -266,6 +359,12 @@ static int32_t case_scout_roundtrip(void) {
     uint8_t local_zid[PM_METAL_NET_ZENOH_ZID_LEN];
     uint32_t steps;
     int32_t rc;
+    /* Self-contained: close any session slots left over from earlier proves so
+     * the HELLO we compare against is the deterministic pre-open ZID
+     * (zenoh_local_zid), not a stale session's random one. Deinit also clears
+     * peer config, so the poll() calls below will not re-open those slots. */
+    pm_metal_net_zenoh_deinit();
+    (void)pm_metal_net_zenoh_sel(0);
     /* Gate 1: no joined answerer -> no HELLO. A scout must NOT resolve (0)
      * because nothing is on the multicast group yet. */
     (void)pm_metal_net_ip_pump();
@@ -313,6 +412,12 @@ static int32_t case_scout_roundtrip(void) {
         return fail_zenoh("scout whatami");
     }
     if (memcmp(zid, local_zid, PM_METAL_NET_ZENOH_ZID_LEN) != 0) {
+        uint_fast8_t z;
+        fprintf(stderr, "scout zid mismatch: scout=");
+        for (z = 0; z < PM_METAL_NET_ZENOH_ZID_LEN; z++) fprintf(stderr, "%02x", (unsigned)zid[z]);
+        fprintf(stderr, " local=");
+        for (z = 0; z < PM_METAL_NET_ZENOH_ZID_LEN; z++) fprintf(stderr, "%02x", (unsigned)local_zid[z]);
+        fprintf(stderr, "\n");
         return fail_zenoh("scout zid mismatch");
     }
     return 0;

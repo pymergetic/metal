@@ -152,19 +152,23 @@ static mp_obj_t metal_register_upy(mp_obj_t gen) {
     if (!pm_metal_ready()) {
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("metal not ready"));
     }
-    MP_THREAD_GIL_ENTER();
+    /* No MP_THREAD_GIL_* here: this is always called from running Python (the
+     * REPL thread, a boot MOTD hook, or metal_packs.start()), so the caller
+     * already holds the GIL. Recapturing it deadlocks the seat whenever the GIL
+     * is a plain (non-recursive) mutex, which is the default in these builds —
+     * it wedged the whole VM (and the serve seat before its REPL came up). The
+     * runner threads that later step the coro acquire the GIL for their own
+     * slice inside step_upy, so only that side touches the lock. */
     for (i = 0; i < PM_METAL_UPY_GEN_N; i++) {
         if (MP_STATE_VM(metal_upy_gen)[i] == MP_OBJ_NULL) {
             break;
         }
     }
     if (i >= PM_METAL_UPY_GEN_N) {
-        MP_THREAD_GIL_EXIT();
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("upy gen slots full"));
     }
     frame = (pm_metal_upy_frame_t *)pm_metal_async_coro_create(step_upy, sizeof(*frame));
     if (frame == NULL) {
-        MP_THREAD_GIL_EXIT();
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("upy coro"));
     }
     /* step_upy re-enters the bytecode VM (nlr_push + mp_iternext on the global
@@ -176,10 +180,8 @@ static mp_obj_t metal_register_upy(mp_obj_t gen) {
     MP_STATE_VM(metal_upy_gen)[i] = gen;
     if (pm_metal_async_create_task(&frame->coro) == NULL) {
         MP_STATE_VM(metal_upy_gen)[i] = MP_OBJ_NULL;
-        MP_THREAD_GIL_EXIT();
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("upy task"));
     }
-    MP_THREAD_GIL_EXIT();
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(metal_register_upy_obj, metal_register_upy);
