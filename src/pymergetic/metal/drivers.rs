@@ -11,6 +11,12 @@ pub mod net;
 #[path = "drivers/blk.rs"]
 pub mod blk;
 
+#[path = "drivers/gfx.rs"]
+pub mod gfx;
+
+#[path = "drivers/input.rs"]
+pub mod input;
+
 #[path = "drivers/rtc.rs"]
 pub mod rtc;
 
