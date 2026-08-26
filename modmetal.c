@@ -9,6 +9,8 @@
 #include "extmod/metal/boot.h"
 #include "ports/micropython/finder.h"
 #include "ports/micropython/importhook.h"
+#include "py/compile.h"
+#include "py/lexer.h"
 #include "py/nlr.h"
 #include "py/obj.h"
 #include "py/objtuple.h"
@@ -18,6 +20,7 @@
 #include "pymergetic/metal/async.h"
 #include "pymergetic/metal/boot/externals.h"
 #include "pymergetic/metal/boot/tree.h"
+#include "pymergetic/metal/jit/py.h"
 #include "pymergetic/metal/util/tree.h"
 #include "pymergetic/metal/drivers/__types__.h"
 #include "pymergetic/metal/net/http/asgi.h"
@@ -124,7 +127,12 @@ static pm_metal_async_status_t step_upy(pm_metal_async_coro_t *self) {
     if (f->slot >= PM_METAL_UPY_GEN_N) {
         return PM_METAL_ASYNC_ERROR;
     }
-    MP_THREAD_GIL_ENTER();
+    /* Non-blocking trylock: async workers park instead of blocking the runner
+     * pthread. The REPL thread (or another worker) may hold the GIL — try,
+     * and if contended, WAITING so the runner picks up the next task. */
+    if (!MP_THREAD_GIL_TRYLOCK()) {
+        return PM_METAL_ASYNC_WAITING;
+    }
     gen = MP_STATE_VM(metal_upy_gen)[f->slot];
     if (gen == MP_OBJ_NULL) {
         ret = PM_METAL_ASYNC_ERROR;
@@ -185,6 +193,47 @@ static mp_obj_t metal_register_upy(mp_obj_t gen) {
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(metal_register_upy_obj, metal_register_upy);
+
+static mp_obj_t metal_compile_py(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+    static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_source, MP_ARG_REQUIRED | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+        { MP_QSTR_module_name, MP_ARG_REQUIRED | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+    };
+    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+    metal_ensure();
+
+    const char *source = mp_obj_str_get_str(args[0].u_obj);
+    size_t source_len;
+    mp_obj_str_get_data(args[0].u_obj, &source_len);
+    const char *mod_name = mp_obj_str_get_str(args[1].u_obj);
+    qstr mod_qstr = qstr_from_str(mod_name);
+
+    /* Create a new module object and install it early so the compiled
+     * body's own imports resolve it. */
+    mp_obj_t module = mp_obj_new_module(mod_qstr);
+    mp_obj_dict_store(
+        MP_OBJ_FROM_PTR(&MP_STATE_VM(mp_loaded_modules_dict)),
+        MP_OBJ_NEW_QSTR(mod_qstr), module);
+
+    mp_obj_module_t *mod = MP_OBJ_TO_PTR(module);
+    mp_obj_dict_t *globals = mod->globals;
+
+    nlr_buf_t nlr;
+    if (nlr_push(&nlr) == 0) {
+        mp_lexer_t *lex = mp_lexer_new_from_str_len(
+            mod_qstr, source, source_len, 0);
+        (void)mp_parse_compile_execute(
+            lex, MP_PARSE_FILE_INPUT, globals, globals);
+        nlr_pop();
+    } else {
+        /* Exception propagates to the caller naturally. */
+        nlr_jump(nlr.ret_val);
+    }
+    return module;
+}
+static MP_DEFINE_CONST_FUN_OBJ_KW(metal_compile_py_obj, 0, metal_compile_py);
 
 #define PM_METAL_DRV_PY_DEF(i) \
     static int32_t metal_drv_py_attach_##i(int32_t bus, uint32_t loc0, uint32_t loc1, uint32_t loc2, \
@@ -876,6 +925,7 @@ static const mp_rom_map_elem_t mp_module_pymergetic_metal_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_serve), MP_ROM_PTR(&mp_metal_builtin_serve_obj) },
     { MP_ROM_QSTR(MP_QSTR_services), MP_ROM_PTR(&mp_metal_builtin_services_obj) },
     { MP_ROM_QSTR(MP_QSTR_help), MP_ROM_PTR(&mp_metal_builtin_help_obj) },
+    { MP_ROM_QSTR(MP_QSTR_compile_py), MP_ROM_PTR(&metal_compile_py_obj) },
 };
 static MP_DEFINE_CONST_DICT(mp_module_pymergetic_metal_globals, mp_module_pymergetic_metal_globals_table);
 
