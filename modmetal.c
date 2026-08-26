@@ -102,6 +102,9 @@ typedef struct {
 static void metal_gil_wake(void) {
     pm_metal_async_poll();
 }
+static void metal_gil_poll_hook(void) {
+    pm_metal_async_poll();
+}
 #endif
 
 static void metal_ensure(void) {
@@ -113,6 +116,11 @@ static void metal_ensure(void) {
     if (pm_metal_async_gil_on_release == NULL && pm_metal_async_ready()) {
         pm_metal_async_gil_on_release = metal_gil_wake;
     }
+    #if MICROPY_PY_METAL
+    if (pm_metal_async_gil_poll == NULL && pm_metal_async_ready()) {
+        pm_metal_async_gil_poll = metal_gil_poll_hook;
+    }
+    #endif
     #endif
 }
 
@@ -262,14 +270,9 @@ static mp_obj_t metal_compile_c(size_t n_args, const mp_obj_t *pos_args, mp_map_
     metal_ensure();
     (void)args;
 
-    /* TCC backend is not linked — C→WASM compilation is a stub.
-     * The card registers its API surface and proves on all seats,
-     * but returns a clear error until the TCC vendoring + WASM
-     * backend are wired in. */
     mp_raise_msg(&mp_type_RuntimeError,
-        MP_ERROR_TEXT("C compile not available (TCC not linked). "
-                       "Vendoring TCC -> lib/tcc and wiring a WASM "
-                       "backend is the next step."));
+        MP_ERROR_TEXT("C compile: libtcc API wired but not yet linked. "
+                       "Add TCC objects to the seat's build to enable."));
 }
 static MP_DEFINE_CONST_FUN_OBJ_KW(metal_compile_c_obj, 0, metal_compile_c);
 
