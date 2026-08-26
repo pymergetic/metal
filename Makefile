@@ -174,7 +174,7 @@ firmware-check:
 
 upy:
 	mkdir -p $(CURDIR)/build
-	$(MAKE) -C $(TOP)/ports/unix MICROPY_PY_WASM=1 MICROPY_PY_METAL=1 MICROPY_PY_THREAD_GIL=1 BUILD=build-metal
+	$(MAKE) -C $(TOP)/ports/unix MICROPY_PY_WASM=1 MICROPY_PY_METAL=1 MICROPY_PY_THREAD_GIL=1 BUILD=build-metal LDFLAGS_EXTRA="-Wl,-no-pie"
 	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_guest_prove.py
 	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_runner_vm_prove.py
 	python3 $(CURDIR)/upy_cdn_prove_host.py \

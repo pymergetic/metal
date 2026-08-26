@@ -22,6 +22,7 @@
 #include "pymergetic/metal/boot/tree.h"
 #include "pymergetic/metal/jit/c.h"
 #include "pymergetic/metal/jit/py.h"
+#include "pymergetic/metal/jit/rs.h"
 #include "pymergetic/metal/util/tree.h"
 #include "pymergetic/metal/drivers/__types__.h"
 #include "pymergetic/metal/net/http/asgi.h"
@@ -271,6 +272,28 @@ static mp_obj_t metal_compile_c(size_t n_args, const mp_obj_t *pos_args, mp_map_
                        "backend is the next step."));
 }
 static MP_DEFINE_CONST_FUN_OBJ_KW(metal_compile_c_obj, 0, metal_compile_c);
+
+static mp_obj_t metal_compile_rs(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+    static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_source, MP_ARG_REQUIRED | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+        { MP_QSTR_module_name, MP_ARG_REQUIRED | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+    };
+    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+    metal_ensure();
+    (void)args;
+
+    /* mrustc+TCC chain is not linked — Rust→WASM compilation is a stub.
+     * The card registers its API surface and proves on all seats,
+     * but returns a clear error until mrustc vendoring + TCC/WASM
+     * backend are wired in. */
+    mp_raise_msg(&mp_type_RuntimeError,
+        MP_ERROR_TEXT("Rust compile not available (mrustc+TCC not linked). "
+                       "Vendoring mrustc as a WASM guest + TCC with WASM "
+                       "backend are follow-on steps."));
+}
+static MP_DEFINE_CONST_FUN_OBJ_KW(metal_compile_rs_obj, 0, metal_compile_rs);
 
 #define PM_METAL_DRV_PY_DEF(i) \
     static int32_t metal_drv_py_attach_##i(int32_t bus, uint32_t loc0, uint32_t loc1, uint32_t loc2, \
@@ -964,6 +987,7 @@ static const mp_rom_map_elem_t mp_module_pymergetic_metal_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_help), MP_ROM_PTR(&mp_metal_builtin_help_obj) },
     { MP_ROM_QSTR(MP_QSTR_compile_py), MP_ROM_PTR(&metal_compile_py_obj) },
     { MP_ROM_QSTR(MP_QSTR_compile_c), MP_ROM_PTR(&metal_compile_c_obj) },
+    { MP_ROM_QSTR(MP_QSTR_compile_rs), MP_ROM_PTR(&metal_compile_rs_obj) },
 };
 static MP_DEFINE_CONST_DICT(mp_module_pymergetic_metal_globals, mp_module_pymergetic_metal_globals_table);
 
