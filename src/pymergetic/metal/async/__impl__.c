@@ -67,13 +67,11 @@ static pm_util_mem_arena_t *s_arena;
 static pm_metal_async_inbox_t *s_inbox;
 static struct pm_metal_async_timer *s_timers;
 static pm_util_lock_t s_timer_lock;
-/* VM-entry lock: the interpreter is one resource shared by every runner core.
- * A runner that must re-enter the bytecode VM (a vm_only coro) takes this lock
- * for the duration of the step; a runner that cannot get it hands the task back
- * to the ready ring so another core can pick it up instead of spinning on the
- * interpreter. This replaces the old one-slot "VM owner" monopoly: threads only
- * simulate cores, and every core may consume the interpreter, serialized here. */
-static pm_util_lock_t s_vm_lock;
+/* VM-entry mutex: async-aware (park on contention, wake on release, never spin).
+ * The interpreter is one resource shared by every runner core; a vm_only coro
+ * takes this mutex for the duration of its step. Replaces the ad-hoc
+ * vm_enter/vm_leave hand-back on raw s_vm_lock. */
+static pm_metal_async_mutex_t s_vm_mutex;
 static uint32_t s_vm_lock_ready;
 static uint32_t s_ready;
 static uint32_t s_ncpu;
@@ -421,28 +419,108 @@ void pm_metal_async_coro_set_vm_only(pm_metal_async_coro_t *coro) {
     }
 }
 
-/* Try to claim the interpreter for a vm_only step. Returns 1 on success, 0 if
- * another core is already in the interpreter (the caller should hand the task
- * back to the ring rather than spin). A runner may only consume the interpreter
- * if it installed MicroPython thread state (s_vm_capable); the boot thread is
- * always capable. Before the VM lock is brought up, serialization is moot and a
- * non-runner slot is allowed. */
-static int vm_enter(void) {
-    uint32_t slot = cpu_slot();
-    if (!s_vm_lock_ready) {
-        return s_worker[slot] == 0u;
+/* ===== Async mutex: one reusable cast (park-on-contention, wake-on-release). ===== */
+
+void pm_metal_async_mutex_init(pm_metal_async_mutex_t *m) {
+    if (m == NULL) {
+        return;
     }
-    /* The boot thread owns the main MP thread state and may always step. A
-     * runner may only consume the interpreter after it installed thread state. */
-    if (s_worker[slot] != 0u && !s_vm_capable[slot]) {
-        return 0;
-    }
-    return pm_util_lock_try_acquire(&s_vm_lock) == 1;
+    memset(m, 0, sizeof(*m));
+    pm_util_lock_init(&m->fifo_lock);
 }
 
-static void vm_leave(void) {
-    if (s_vm_lock_ready) {
-        pm_util_lock_release(&s_vm_lock);
+/* Try to claim the mutex. On success (owner: NULL→task CAS passes) returns
+ * PM_METAL_ASYNC_PENDING — the caller must then step the coro. On contention
+ * the current task is parked on the FIFO and PM_METAL_ASYNC_WAITING is
+ * returned; the runner hands the task back to the ready ring.
+ *
+ * Race window between CAS fail and push-to-FIFO: the holder may release and
+ * pop the FIFO between our fail and our push. The fifo_lock serializes that
+ * window — under the lock, re-check owner after the push; if owner is NULL
+ * now (release popped nothing), self-claim and return PENDING. */
+pm_metal_async_status_t pm_metal_async_mutex_try_acquire(pm_metal_async_mutex_t *m, pm_metal_async_coro_t *self) {
+    pm_metal_async_task_t *task;
+    pm_metal_async_task_t *expected = NULL;
+    if (m == NULL || self == NULL) {
+        return PM_METAL_ASYNC_ERROR;
+    }
+    task = task_of(self);
+    if (task == NULL) {
+        return PM_METAL_ASYNC_ERROR;
+    }
+    /* Re-entry after a wake: the mutex release transferred ownership to this
+     * task already. Proceed without any CAS. */
+    if (m->owner == task) {
+        return PM_METAL_ASYNC_PENDING;
+    }
+    if (__atomic_compare_exchange_n(&m->owner, &expected, task, 0, __ATOMIC_ACQ_REL,
+            __ATOMIC_RELAXED)) {
+        return PM_METAL_ASYNC_PENDING;
+    }
+    /* Contended: park this task on the mutex FIFO under the fifo_lock, then
+     * re-check — if owner changed to NULL between our CAS fail and this push,
+     * self-claim and proceed without waiting. */
+    pm_util_lock_acquire(&m->fifo_lock);
+    task->mutex_next = NULL;
+    if (m->waiters_tail != NULL) {
+        m->waiters_tail->mutex_next = task;
+    } else {
+        m->waiters_head = task;
+    }
+    m->waiters_tail = task;
+    /* Re-check: the holder may have released and popped nothing. */
+    expected = NULL;
+    if (__atomic_compare_exchange_n(&m->owner, &expected, task, 0, __ATOMIC_ACQ_REL,
+            __ATOMIC_RELAXED)) {
+        /* Self-claimed after re-check: dequeue self from FIFO. */
+        pm_metal_async_task_t *prev = NULL;
+        pm_metal_async_task_t *cur = m->waiters_head;
+        while (cur != NULL && cur != task) {
+            prev = cur;
+            cur = cur->mutex_next;
+        }
+        if (cur == task) {
+            if (prev != NULL) {
+                prev->mutex_next = task->mutex_next;
+            } else {
+                m->waiters_head = task->mutex_next;
+            }
+            if (m->waiters_tail == task) {
+                m->waiters_tail = prev;
+            }
+        }
+        task->mutex_next = NULL;
+        pm_util_lock_release(&m->fifo_lock);
+        return PM_METAL_ASYNC_PENDING;
+    }
+    pm_util_lock_release(&m->fifo_lock);
+    return PM_METAL_ASYNC_WAITING;
+}
+
+/* Release the mutex. If a task is waiting, transfer ownership directly (the
+ * woken task becomes m->owner) and push it to the ready ring. Under
+ * fifo_lock the pop is atomic with respect to the contending try_acquire
+ * re-check, so no task is lost. */
+void pm_metal_async_mutex_release(pm_metal_async_mutex_t *m) {
+    pm_metal_async_task_t *wake;
+    if (m == NULL) {
+        return;
+    }
+    pm_util_lock_acquire(&m->fifo_lock);
+    wake = m->waiters_head;
+    if (wake != NULL) {
+        m->waiters_head = wake->mutex_next;
+        if (m->waiters_head == NULL) {
+            m->waiters_tail = NULL;
+        }
+        wake->mutex_next = NULL;
+    }
+    /* Transfer or clear ownership under fifo_lock: a racing try_acquire that
+     * pushed to FIFO and is about to re-check will see the correct state. */
+    __atomic_store_n(&m->owner, wake, __ATOMIC_RELEASE);
+    pm_util_lock_release(&m->fifo_lock);
+    if (wake != NULL) {
+        (void)ring_push(PM_METAL_RING_KIND_TASK, wake);
     }
 }
 
@@ -475,23 +553,47 @@ static void step_task(pm_metal_async_task_t *task) {
             break;
         }
         if (leaf->vm_only) {
-            /* Re-enter the bytecode VM on this core. Any runner may do it, not
-             * just a single owner slot — but only one core may be inside the
-             * interpreter at a time, so claim the VM lock first. If another
-             * core holds it, hand the task back and let a core that is idle
-             * step it when it polls. */
-            if (!vm_enter()) {
-                *cur = NULL;
-                __atomic_store_n(&task->running, 0u, __ATOMIC_RELEASE);
-                atomic_fetch_sub(&s_busy, 1u);
-                (void)ring_push(PM_METAL_RING_KIND_TASK, task);
-                return;
+            uint32_t slot;
+            pm_metal_async_status_t mst;
+            /* Only VM-capable runners may enter the interpreter. Before the
+             * VM lock is up, serialization is moot and only the boot thread
+             * qualifies. */
+            if (!s_vm_lock_ready) {
+                slot = cpu_slot();
+                if (s_worker[slot] != 0u) {
+                    *cur = NULL;
+                    __atomic_store_n(&task->running, 0u, __ATOMIC_RELEASE);
+                    atomic_fetch_sub(&s_busy, 1u);
+                    (void)ring_push(PM_METAL_RING_KIND_TASK, task);
+                    return;
+                }
+            } else {
+                slot = cpu_slot();
+                if (s_worker[slot] != 0u && !s_vm_capable[slot]) {
+                    *cur = NULL;
+                    __atomic_store_n(&task->running, 0u, __ATOMIC_RELEASE);
+                    atomic_fetch_sub(&s_busy, 1u);
+                    (void)ring_push(PM_METAL_RING_KIND_TASK, task);
+                    return;
+                }
+                /* Try to claim the interpreter via the async mutex. On
+                 * contention the task parks on the mutex FIFO and we hand it
+                 * back — another core will wake it when it releases. */
+                mst = pm_metal_async_mutex_try_acquire(&s_vm_mutex, leaf);
+                if (mst == PM_METAL_ASYNC_WAITING) {
+                    *cur = NULL;
+                    __atomic_store_n(&task->running, 0u, __ATOMIC_RELEASE);
+                    atomic_fetch_sub(&s_busy, 1u);
+                    return;
+                }
             }
             vm_held = 1;
         }
         pm_metal_async_status_t st = leaf->step(leaf);
         if (vm_held) {
-            vm_leave();
+            if (s_vm_lock_ready) {
+                pm_metal_async_mutex_release(&s_vm_mutex);
+            }
         }
         leaf->status = (uint32_t)st;
         if (st == PM_METAL_ASYNC_WAITING) {
@@ -575,7 +677,7 @@ int32_t pm_metal_async_init(pm_util_mem_arena_t *arena, uint32_t ncpu) {
         return -1;
     }
     pm_util_lock_init(&s_timer_lock);
-    pm_util_lock_init(&s_vm_lock);
+    pm_metal_async_mutex_init(&s_vm_mutex);
     s_vm_lock_ready = 1;
     s_timers = NULL;
     memset(s_worker, 0, sizeof(s_worker));
@@ -913,6 +1015,9 @@ uint32_t pm_wasmmod_host_io_yield(void) {
 
 PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_init, pm_metal_async_init, int32_t(pm_util_mem_arena_t *, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_deinit, pm_metal_async_deinit, void(void));
+PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_mutex_init, pm_metal_async_mutex_init, void(pm_metal_async_mutex_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_mutex_try_acquire, pm_metal_async_mutex_try_acquire, pm_metal_async_status_t(pm_metal_async_mutex_t *, pm_metal_async_coro_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_mutex_release, pm_metal_async_mutex_release, void(pm_metal_async_mutex_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_coro_create, pm_metal_async_coro_create, pm_metal_async_coro_t *(pm_metal_async_step_fn, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_create_task, pm_metal_async_create_task, pm_metal_async_task_t *(pm_metal_async_coro_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_await, pm_metal_async_await, pm_metal_async_status_t(pm_metal_async_coro_t *, pm_metal_async_coro_t *));
