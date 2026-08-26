@@ -20,6 +20,7 @@
 #include "pymergetic/metal/async.h"
 #include "pymergetic/metal/boot/externals.h"
 #include "pymergetic/metal/boot/tree.h"
+#include "pymergetic/metal/jit/c.h"
 #include "pymergetic/metal/jit/py.h"
 #include "pymergetic/metal/util/tree.h"
 #include "pymergetic/metal/drivers/__types__.h"
@@ -93,11 +94,25 @@ typedef struct {
     uint32_t slot;
 } pm_metal_upy_frame_t;
 
+/* GIL release hook: called from MP_THREAD_GIL_EXIT after the REPL thread
+ * drops the lock. Kicks a poll cycle so parked async workers get picked up
+ * immediately rather than waiting for the next 200µs idle timer. */
+#if MICROPY_PY_THREAD && MICROPY_PY_THREAD_GIL
+static void metal_gil_wake(void) {
+    pm_metal_async_poll();
+}
+#endif
+
 static void metal_ensure(void) {
     mp_wasm_ensure_inited();
     if (!pm_metal_ready() && pm_metal_boot() != 0) {
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("metal boot failed"));
     }
+    #if MICROPY_PY_THREAD && MICROPY_PY_THREAD_GIL
+    if (pm_metal_async_gil_on_release == NULL && pm_metal_async_ready()) {
+        pm_metal_async_gil_on_release = metal_gil_wake;
+    }
+    #endif
 }
 
 static mp_obj_t metal___init__(void) {
@@ -127,11 +142,11 @@ static pm_metal_async_status_t step_upy(pm_metal_async_coro_t *self) {
     if (f->slot >= PM_METAL_UPY_GEN_N) {
         return PM_METAL_ASYNC_ERROR;
     }
-    /* Non-blocking trylock: async workers park instead of blocking the runner
-     * pthread. The REPL thread (or another worker) may hold the GIL — try,
-     * and if contended, WAITING so the runner picks up the next task. */
+    /* Trylock the GIL. On contention the REPL thread (or another worker) holds
+     * it. park-to-ready-ring — the GIL release hook kicks a poll cycle that
+     * drains the ring immediately rather than waiting for the next idle poll. */
     if (!MP_THREAD_GIL_TRYLOCK()) {
-        return PM_METAL_ASYNC_WAITING;
+        return pm_metal_async_yield_park(self);
     }
     gen = MP_STATE_VM(metal_upy_gen)[f->slot];
     if (gen == MP_OBJ_NULL) {
@@ -234,6 +249,28 @@ static mp_obj_t metal_compile_py(size_t n_args, const mp_obj_t *pos_args, mp_map
     return module;
 }
 static MP_DEFINE_CONST_FUN_OBJ_KW(metal_compile_py_obj, 0, metal_compile_py);
+
+static mp_obj_t metal_compile_c(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+    static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_source, MP_ARG_REQUIRED | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+        { MP_QSTR_module_name, MP_ARG_REQUIRED | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
+    };
+    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+    metal_ensure();
+    (void)args;
+
+    /* TCC backend is not linked — C→WASM compilation is a stub.
+     * The card registers its API surface and proves on all seats,
+     * but returns a clear error until the TCC vendoring + WASM
+     * backend are wired in. */
+    mp_raise_msg(&mp_type_RuntimeError,
+        MP_ERROR_TEXT("C compile not available (TCC not linked). "
+                       "Vendoring TCC -> lib/tcc and wiring a WASM "
+                       "backend is the next step."));
+}
+static MP_DEFINE_CONST_FUN_OBJ_KW(metal_compile_c_obj, 0, metal_compile_c);
 
 #define PM_METAL_DRV_PY_DEF(i) \
     static int32_t metal_drv_py_attach_##i(int32_t bus, uint32_t loc0, uint32_t loc1, uint32_t loc2, \
@@ -926,6 +963,7 @@ static const mp_rom_map_elem_t mp_module_pymergetic_metal_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_services), MP_ROM_PTR(&mp_metal_builtin_services_obj) },
     { MP_ROM_QSTR(MP_QSTR_help), MP_ROM_PTR(&mp_metal_builtin_help_obj) },
     { MP_ROM_QSTR(MP_QSTR_compile_py), MP_ROM_PTR(&metal_compile_py_obj) },
+    { MP_ROM_QSTR(MP_QSTR_compile_c), MP_ROM_PTR(&metal_compile_c_obj) },
 };
 static MP_DEFINE_CONST_DICT(mp_module_pymergetic_metal_globals, mp_module_pymergetic_metal_globals_table);
 
