@@ -1,10 +1,9 @@
-/* pymergetic.metal.jit.c — TCC C → WASM bytecode async coroutine.
+/* pymergetic.metal.jit.c — C → native via embedded TCC / libtcc.
  *
- * Step function: lex/parse/compile via TCC (embedded in-bin),
- * serialize WASM bytes, return DONE with the WASM module bytes.
+ * Step function: lex/parse/compile via TCC, relocate, return
+ * a callable function pointer (native_entry).
  *
- * The card is vm_only — the compile step may invoke TCC which uses
- * malloc/GC, so it runs under the async card's VM lock.
+ * The card is vm_only — the compile step uses TCC's allocator.
  */
 #ifndef PYMERGETIC_METAL_JIT_C_TYPES_H
 #define PYMERGETIC_METAL_JIT_C_TYPES_H
@@ -18,17 +17,13 @@
 extern "C" {
 #endif
 
-/* Result of a C → WASM compilation.
- *
- * On success, ok = 1, wasm_bytes/wasm_len point to the emitted WASM
- * module (owned by the coro frame — caller must not free).
- * On failure, ok = 0 and error points to a diagnostic string
- * (allocated in the coro frame's tail; valid until the coro is freed). */
 typedef struct pm_metal_jit_c_result {
     int32_t ok;
+    uint8_t wasmbuf[262144];   /* 256KB WASM buffer */
     const uint8_t *wasm_bytes;
     size_t wasm_len;
     const char *error;
+    void *native_entry;   /* function pointer from tcc_get_symbol("main") */
 } pm_metal_jit_c_result_t;
 
 /* Allocate a compile frame. source is copied into the frame; caller

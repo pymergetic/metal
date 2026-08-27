@@ -1,0 +1,538 @@
+/*
+ *  WASM32 code generator for TCC
+ *
+ *  Emits WebAssembly 1.0 (MVP) bytecode.
+ *
+ *  This file is included twice by tcc.h:
+ *    - First with TARGET_DEFS_ONLY for arch parameters
+ *    - Second without it for the code generator implementation
+ */
+
+#ifdef TARGET_DEFS_ONLY
+
+/* --- Arch parameters (TARGET_DEFS_ONLY) --- */
+
+#define NB_REGS            8
+#define NB_ASM_REGS        0
+
+#define RC_INT     0x0001
+#define RC_FLOAT   0x0002
+
+#define RC_R0      0x0004
+#define RC_R1      0x0008
+#define RC_R2      0x0010
+#define RC_R3      0x0020
+#define RC_R4      0x0040
+#define RC_R5      0x0080
+#define RC_R6      0x0100
+#define RC_R7      0x0200
+
+#define RC_IRET    RC_R0
+#define RC_IRE2    RC_R1
+#define RC_FRET    RC_R0
+
+enum {
+    TREG_R0 = 0,
+    TREG_R1,
+    TREG_R2,
+    TREG_R3,
+    TREG_R4,
+    TREG_R5,
+    TREG_R6,
+    TREG_R7,
+};
+
+#define REG_VALUE(reg) ((reg) & 7)
+
+#define REG_IRET TREG_R0
+#define REG_IRE2 TREG_R1
+#define REG_FRET TREG_R0
+
+#define PTR_SIZE 4
+#define LDOUBLE_SIZE 8
+#define LDOUBLE_ALIGN 8
+#define MAX_ALIGN 8
+
+#else /* !TARGET_DEFS_ONLY */
+/******************************************************/
+#define USING_GLOBALS
+#include "tcc.h"
+#include <string.h>
+#include <stdlib.h>
+
+/* ----- WASM opcodes (MVP subset) ----- */
+enum {
+    WOP_UNREACHABLE   = 0x00,
+    WOP_NOP           = 0x01,
+    WOP_BLOCK         = 0x02,
+    WOP_LOOP          = 0x03,
+    WOP_IF            = 0x04,
+    WOP_ELSE          = 0x05,
+    WOP_END           = 0x0b,
+    WOP_BR            = 0x0c,
+    WOP_BR_IF         = 0x0d,
+    WOP_BR_TABLE      = 0x0e,
+    WOP_RETURN        = 0x0f,
+    WOP_CALL          = 0x10,
+    WOP_CALL_INDIRECT = 0x11,
+    WOP_DROP          = 0x1a,
+    WOP_SELECT        = 0x1b,
+    WOP_LOCAL_GET     = 0x20,
+    WOP_LOCAL_SET     = 0x21,
+    WOP_LOCAL_TEE     = 0x22,
+    WOP_GLOBAL_GET    = 0x23,
+    WOP_GLOBAL_SET    = 0x24,
+    WOP_I32_LOAD      = 0x28,
+    WOP_I32_LOAD8_S   = 0x2c,
+    WOP_I32_LOAD8_U   = 0x2d,
+    WOP_I32_LOAD16_S  = 0x2e,
+    WOP_I32_LOAD16_U  = 0x2f,
+    WOP_I64_LOAD      = 0x29,
+    WOP_F32_LOAD      = 0x2a,
+    WOP_F64_LOAD      = 0x2b,
+    WOP_I32_STORE     = 0x36,
+    WOP_I32_STORE8    = 0x3a,
+    WOP_I32_STORE16   = 0x3b,
+    WOP_I64_STORE     = 0x37,
+    WOP_F32_STORE     = 0x38,
+    WOP_F64_STORE     = 0x39,
+    WOP_MEMORY_SIZE   = 0x3f,
+    WOP_MEMORY_GROW   = 0x40,
+    WOP_I32_CONST     = 0x41,
+    WOP_I64_CONST     = 0x42,
+    WOP_F32_CONST     = 0x43,
+    WOP_F64_CONST     = 0x44,
+    WOP_I32_EQZ       = 0x45,
+    WOP_I32_EQ        = 0x46,
+    WOP_I32_NE        = 0x47,
+    WOP_I32_LT_S      = 0x48,
+    WOP_I32_LT_U      = 0x49,
+    WOP_I32_GT_S      = 0x4a,
+    WOP_I32_GT_U      = 0x4b,
+    WOP_I32_LE_S      = 0x4c,
+    WOP_I32_LE_U      = 0x4d,
+    WOP_I32_GE_S      = 0x4e,
+    WOP_I32_GE_U      = 0x4f,
+    WOP_F32_EQ        = 0x50,
+    WOP_F32_NE        = 0x51,
+    WOP_F32_LT        = 0x52,
+    WOP_F32_GT        = 0x53,
+    WOP_F32_LE        = 0x54,
+    WOP_F32_GE        = 0x55,
+    WOP_F64_EQ        = 0x56,
+    WOP_F64_NE        = 0x57,
+    WOP_F64_LT        = 0x58,
+    WOP_F64_GT        = 0x59,
+    WOP_F64_LE        = 0x5a,
+    WOP_F64_GE        = 0x5b,
+    WOP_I32_CLZ       = 0x67,
+    WOP_I32_CTZ       = 0x68,
+    WOP_I32_POPCNT    = 0x69,
+    WOP_I32_ADD       = 0x6a,
+    WOP_I32_SUB       = 0x6b,
+    WOP_I32_MUL       = 0x6c,
+    WOP_I32_DIV_S     = 0x6d,
+    WOP_I32_DIV_U     = 0x6e,
+    WOP_I32_REM_S     = 0x6f,
+    WOP_I32_REM_U     = 0x70,
+    WOP_I32_AND       = 0x71,
+    WOP_I32_OR        = 0x72,
+    WOP_I32_XOR       = 0x73,
+    WOP_I32_SHL       = 0x74,
+    WOP_I32_SHR_S     = 0x75,
+    WOP_I32_SHR_U     = 0x76,
+    WOP_I32_ROTL      = 0x77,
+    WOP_I32_ROTR      = 0x78,
+    WOP_F32_ABS       = 0x8b,
+    WOP_F32_NEG       = 0x8c,
+    WOP_F32_SQRT      = 0x91,
+    WOP_F32_ADD       = 0x92,
+    WOP_F32_SUB       = 0x93,
+    WOP_F32_MUL       = 0x94,
+    WOP_F32_DIV       = 0x95,
+    WOP_F64_ABS       = 0x99,
+    WOP_F64_NEG       = 0x9a,
+    WOP_F64_SQRT      = 0x9f,
+    WOP_F64_ADD       = 0xa0,
+    WOP_F64_SUB       = 0xa1,
+    WOP_F64_MUL       = 0xa2,
+    WOP_F64_DIV       = 0xa3,
+    WOP_I32_WRAP_I64     = 0xa7,
+    WOP_I32_TRUNC_F32_S  = 0xa8,
+    WOP_I32_TRUNC_F64_S  = 0xaa,
+    WOP_F32_CONVERT_I32_S = 0xb2,
+    WOP_F64_CONVERT_I32_S = 0xb7,
+    WOP_F32_DEMOTE_F64   = 0xb6,
+    WOP_F64_PROMOTE_F32  = 0xbb,
+    WOP_I64_EXTEND_I32_S = 0xac,
+    WOP_I64_EXTEND_I32_U = 0xad,
+};
+
+enum {
+    VALTYPE_I32  = 0x7f,
+    VALTYPE_I64  = 0x7e,
+    VALTYPE_F32  = 0x7d,
+    VALTYPE_F64  = 0x7c,
+    VALTYPE_NONE = 0x40,
+};
+
+/* ----- Target machine defines ----- */
+
+ST_DATA const char * const target_machine_defs =
+    "__wasm__\0"
+    "__wasm32__\0"
+    ;
+
+ST_DATA const int reg_classes[NB_REGS] = {
+    RC_INT | RC_R0, RC_INT | RC_R1,
+    RC_INT | RC_R2, RC_INT | RC_R3,
+    RC_INT | RC_R4, RC_INT | RC_R5,
+    RC_INT | RC_R6, RC_INT | RC_R7,
+};
+
+/* ----- LEB128 helpers ----- */
+
+static void leb_u32(uint8_t **pp, uint32_t v) {
+    do {
+        uint8_t b = (uint8_t)(v & 0x7fu);
+        v >>= 7;
+        if (v) b |= 0x80u;
+        *(*pp)++ = b;
+    } while (v);
+}
+
+static void leb_i32(uint8_t **pp, int32_t v) {
+    int more = 1;
+    while (more) {
+        uint8_t b = (uint8_t)(v & 0x7f);
+        v >>= 7;
+        if ((v == 0 && !(b & 0x40)) || (v == -1 && (b & 0x40)))
+            more = 0;
+        else
+            b |= 0x80;
+        *(*pp)++ = b;
+    }
+}
+
+/* ----- Code emission context ----- */
+
+#define CODE_BUF_CAP (256 * 1024)
+static uint8_t code_buf[CODE_BUF_CAP];
+static uint8_t *code_ptr = code_buf;
+static int func_start_offs[256];
+static int func_body_len[256];
+static int func_local_decl_count[256];
+static int func_count;
+static int label_depth;
+
+static void wasm_reset(void) {
+    code_ptr = code_buf;
+    func_count = 0;
+    label_depth = 0;
+}
+
+static void we(uint8_t b) { *code_ptr++ = b; }
+static void we_u32(uint32_t v) { leb_u32(&code_ptr, v); }
+static void we_i32(int32_t v) { leb_i32(&code_ptr, v); }
+
+/* ----- Basic code gen interface ----- */
+
+ST_FUNC void g(int c) { we((uint8_t)c); }
+
+ST_FUNC void o(unsigned int c) {
+    we((uint8_t)(c & 0xFF));
+    we((uint8_t)((c >> 8) & 0xFF));
+    we((uint8_t)((c >> 16) & 0xFF));
+    we((uint8_t)((c >> 24) & 0xFF));
+}
+
+ST_FUNC void gen_le16(int v) {
+    we((uint8_t)(v & 0xFF));
+    we((uint8_t)((v >> 8) & 0xFF));
+}
+
+ST_FUNC void gen_le32(int c) {
+    we((uint8_t)(c & 0xFF));
+    we((uint8_t)((c >> 8) & 0xFF));
+    we((uint8_t)((c >> 16) & 0xFF));
+    we((uint8_t)((c >> 24) & 0xFF));
+}
+
+ST_FUNC void gen_le64(int64_t c) {
+    gen_le32((uint32_t)c);
+    gen_le32((uint32_t)(c >> 32));
+}
+
+static void we_op_local(uint8_t op, int idx) { we(op); we_u32((uint32_t)idx); }
+static void push_i32(int32_t v) { we(WOP_I32_CONST); we_i32(v); }
+
+/* ----- load: bring SValue sv into register r ----- */
+ST_FUNC void load(int r, SValue *sv)
+{
+    int fr = sv->r;
+    int ft = sv->type.t & ~VT_DEFSIGN;
+    int fc = sv->c.i;
+    int v = fr & VT_VALMASK;
+    ft &= ~(VT_VOLATILE | VT_CONSTANT);
+
+    if (fr & VT_LVAL) {
+        if (v == VT_LOCAL) {
+            push_i32(fc);
+        } else if (v == VT_LLOCAL) {
+            push_i32(fc);
+            we_op_local(WOP_LOCAL_GET, NB_REGS + 0);
+            we(WOP_I32_ADD);
+        } else if ((fr & VT_SYM) && sv->sym) {
+            push_i32(fc);
+        } else {
+            we_op_local(WOP_LOCAL_GET, v);
+            if (fc) { push_i32(fc); we(WOP_I32_ADD); }
+        }
+        switch (ft & VT_BTYPE) {
+        case VT_BYTE: case VT_BOOL:
+            we(ft & VT_UNSIGNED ? WOP_I32_LOAD8_U : WOP_I32_LOAD8_S);
+            we_u32(0); we_u32(0); break;
+        case VT_SHORT:
+            we(ft & VT_UNSIGNED ? WOP_I32_LOAD16_U : WOP_I32_LOAD16_S);
+            we_u32(1); we_u32(0); break;
+        case VT_LLONG: we(WOP_I64_LOAD); we_u32(3); we_u32(0); break;
+        case VT_FLOAT: we(WOP_F32_LOAD); we_u32(2); we_u32(0); break;
+        case VT_DOUBLE: case VT_LDOUBLE: we(WOP_F64_LOAD); we_u32(3); we_u32(0); break;
+        case VT_INT: case VT_PTR:
+        default: we(WOP_I32_LOAD); we_u32(2); we_u32(0); break;
+        }
+    } else {
+        if (fr & VT_SYM) { push_i32(fc); }
+        else if (v == VT_CONST) { push_i32(fc); }
+        else if (v == VT_CMP) { /* already on stack */ }
+        else if (v == VT_JMP || v == VT_JMPI) { push_i32((v & 1) ? 1 : 0); }
+        else { we_op_local(WOP_LOCAL_GET, v); }
+    }
+    we_op_local(WOP_LOCAL_TEE, r);
+}
+
+/* ----- store: write register r to SValue v (lvalue) ----- */
+ST_FUNC void store(int r, SValue *v)
+{
+    int fr = v->r;
+    int bt = v->type.t & VT_BTYPE;
+    int fc = v->c.i;
+    int vi = fr & VT_VALMASK;
+
+    if (vi == VT_LOCAL) { push_i32(fc); }
+    else if (vi == VT_LLOCAL) { push_i32(fc); we_op_local(WOP_LOCAL_GET, NB_REGS + 0); we(WOP_I32_ADD); }
+    else if ((fr & VT_SYM) && v->sym) { push_i32(fc); }
+    else { we_op_local(WOP_LOCAL_GET, vi); if (fc) { push_i32(fc); we(WOP_I32_ADD); } }
+
+    we_op_local(WOP_LOCAL_GET, r);
+
+    switch (bt) {
+    case VT_BYTE: case VT_BOOL: we(WOP_I32_STORE8); we_u32(0); we_u32(0); break;
+    case VT_SHORT: we(WOP_I32_STORE16); we_u32(1); we_u32(0); break;
+    case VT_LLONG: we(WOP_I64_STORE); we_u32(3); we_u32(0); break;
+    case VT_FLOAT: we(WOP_F32_STORE); we_u32(2); we_u32(0); break;
+    case VT_DOUBLE: case VT_LDOUBLE: we(WOP_F64_STORE); we_u32(3); we_u32(0); break;
+    case VT_INT: case VT_PTR:
+    default: we(WOP_I32_STORE); we_u32(2); we_u32(0); break;
+    }
+}
+
+/* ----- Function prologue / epilogue ----- */
+
+ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int *regsize)
+{
+    (void)vt; (void)variadic; (void)ret;
+    *ret_align = 4; *regsize = 4;
+    return 0;
+}
+
+ST_FUNC void gfunc_prolog(Sym *func_sym)
+{
+    (void)func_sym;
+    func_start_offs[func_count] = (int)(code_ptr - code_buf);
+    we_u32(0); /* body size placeholder */
+    int total_locals = NB_REGS + 2;
+    we_u32((uint32_t)total_locals);
+    for (int i = 0; i < total_locals; i++) { we_u32(1); we(VALTYPE_I32); }
+    func_local_decl_count[func_count] = total_locals;
+    we(WOP_BLOCK); we(VALTYPE_NONE);
+    label_depth = 1;
+    loc = 0; ind = 0; func_vc = 0;
+}
+
+ST_FUNC void gfunc_epilog(void)
+{
+    we(WOP_END); label_depth = 0; we(WOP_END);
+    int body_start   = func_start_offs[func_count] + 1;
+    int body_end     = (int)(code_ptr - code_buf);
+    int body_content_len = body_end - body_start;       /* WASM body_size (excludes the size field itself) */
+    int full_body_len    = body_end - func_start_offs[func_count]; /* total bytes to copy (includes size field) */
+    uint8_t *patch = code_buf + func_start_offs[func_count];
+    uint8_t *save  = code_ptr;
+    code_ptr = patch; we_u32((uint32_t)body_content_len); code_ptr = save;
+    func_body_len[func_count] = full_body_len;
+    func_count++;
+}
+
+/* ----- Function call ----- */
+
+ST_FUNC void gfunc_call(int nb_args)
+{
+    int func_idx = (nb_args > 0) ? (vtop - nb_args)->c.i : 0;
+    we(WOP_CALL); we_u32((uint32_t)func_idx);
+    vtop -= nb_args;
+}
+
+/* ----- Control flow ----- */
+
+ST_FUNC int gjmp(int t) { we(WOP_BR); we_u32((uint32_t)(label_depth - 1 - t)); return t; }
+ST_FUNC void gjmp_addr(int a) { we(WOP_BR); we_u32((uint32_t)a); }
+
+ST_FUNC int gjmp_cond(int op, int t)
+{
+    switch (op) {
+    case TOK_EQ:  we(WOP_I32_EQ); break;
+    case TOK_NE:  we(WOP_I32_NE); break;
+    case TOK_LT:  we(WOP_I32_LT_S); break;
+    case TOK_GT:  we(WOP_I32_GT_S); break;
+    case TOK_LE:  we(WOP_I32_LE_S); break;
+    case TOK_GE:  we(WOP_I32_GE_S); break;
+    case TOK_ULT: we(WOP_I32_LT_U); break;
+    case TOK_UGT: we(WOP_I32_GT_U); break;
+    case TOK_ULE: we(WOP_I32_LE_U); break;
+    case TOK_UGE: we(WOP_I32_GE_U); break;
+    default: break;
+    }
+    we(WOP_BR_IF); we_u32((uint32_t)(label_depth - 1 - t));
+    return t;
+}
+
+ST_FUNC int gjmp_append(int n, int t) { (void)n; return t; }
+
+/* ----- Integer operations ----- */
+
+ST_FUNC void gen_opi(int op)
+{
+    if (op >= TOK_ULT && op <= TOK_GT) {
+        int lop = vtop[-1].r & VT_VALMASK; int rop = vtop[0].r & VT_VALMASK;
+        we_op_local(WOP_LOCAL_GET, lop); we_op_local(WOP_LOCAL_GET, rop);
+        switch (op) {
+        case TOK_ULT: we(WOP_I32_LT_U); break;
+        case TOK_UGT: we(WOP_I32_GT_U); break;
+        case TOK_ULE: we(WOP_I32_LE_U); break;
+        case TOK_UGE: we(WOP_I32_GE_U); break;
+        default: break;
+        }
+    } else {
+        int lop = vtop[-1].r & VT_VALMASK; int rop = vtop[0].r & VT_VALMASK;
+        we_op_local(WOP_LOCAL_GET, lop); we_op_local(WOP_LOCAL_GET, rop);
+        switch (op) {
+        case '+': we(WOP_I32_ADD); break; case '-': we(WOP_I32_SUB); break;
+        case '*': we(WOP_I32_MUL); break; case '/': we(WOP_I32_DIV_S); break;
+        case '%': we(WOP_I32_REM_S); break; case '&': we(WOP_I32_AND); break;
+        case '|': we(WOP_I32_OR); break; case '^': we(WOP_I32_XOR); break;
+        case TOK_SHL: we(WOP_I32_SHL); break;
+        case TOK_SAR: we(WOP_I32_SHR_S); break;
+        case TOK_SHR: we(WOP_I32_SHR_U); break;
+        case TOK_UDIV: we(WOP_I32_DIV_U); break;
+        case TOK_UMOD: we(WOP_I32_REM_U); break;
+        default: break;
+        }
+    }
+    vtop--;
+}
+
+/* ----- Float operations ----- */
+
+ST_FUNC void gen_opf(int op)
+{
+    int size = ((vtop->type.t & VT_BTYPE) == VT_FLOAT) ? 4 : 8;
+    int lop = vtop[-1].r & VT_VALMASK; int rop = vtop[0].r & VT_VALMASK;
+    we_op_local(WOP_LOCAL_GET, lop); we_op_local(WOP_LOCAL_GET, rop);
+    if (op == '+') we(size == 4 ? WOP_F32_ADD : WOP_F64_ADD);
+    else if (op == '-') we(size == 4 ? WOP_F32_SUB : WOP_F64_SUB);
+    else if (op == '*') we(size == 4 ? WOP_F32_MUL : WOP_F64_MUL);
+    else if (op == '/') we(size == 4 ? WOP_F32_DIV : WOP_F64_DIV);
+    vtop--;
+}
+
+/* ----- Type conversions ----- */
+
+ST_FUNC void gen_cvt_itof(int t) { (void)t; we(WOP_F64_CONVERT_I32_S); }
+ST_FUNC void gen_cvt_ftoi(int t) { (void)t; we(WOP_I32_TRUNC_F64_S); }
+ST_FUNC void gen_cvt_ftof(int t) {
+    if ((t & VT_BTYPE) == VT_FLOAT) we(WOP_F64_PROMOTE_F32);
+    else we(WOP_F32_DEMOTE_F64);
+}
+ST_FUNC void gen_cvt_sxtw(void) {}
+ST_FUNC void gen_cvt_csti(int t) { (void)t; }
+
+/* ----- Address computation ----- */
+ST_FUNC void gen_addr32(int r, Sym *sym, int c) { (void)r; (void)sym; push_i32(c); }
+ST_FUNC void gen_addrpc32(int r, Sym *sym, int c) { (void)r; (void)sym; push_i32(c); }
+
+/* ----- Misc ----- */
+ST_FUNC void gen_fill_nops(int bytes) { for (int i = 0; i < bytes; i++) we(WOP_NOP); }
+ST_FUNC void gen_increment_tcov(SValue *sv) { (void)sv; }
+ST_FUNC void ggoto(void) { tcc_error("computed goto not supported on wasm target"); }
+
+/* ----- Varargs / VLA ----- */
+ST_FUNC void gen_va_start(void) {}
+ST_FUNC void gen_va_arg(CType *t) { (void)t; }
+ST_FUNC void gen_clear_cache(void) {}
+ST_FUNC void gen_vla_sp_save(int addr) { (void)addr; }
+ST_FUNC void gen_vla_sp_restore(int addr) { (void)addr; }
+ST_FUNC void gen_vla_alloc(CType *type, int align) { (void)type; (void)align; }
+ST_FUNC void gen_vla_result(int addr) { (void)addr; }
+
+/* gsym_addr — resolve forward jumps. Called by tccgen.c. */
+ST_FUNC void gsym_addr(int t, int a)
+{
+    /* Write the forward jump target address at the jump position. */
+    (void)t; (void)a;
+}
+
+/* ----- WASM module serializer ----- */
+/* one-shot: make this one function non-static, then restore */
+#undef ST_FUNC
+int wasm_build_module(uint8_t **out_buf, int *out_len)
+{
+    int total = 8 + 7 + (2 + func_count) + (2 + 5) + (2 + 18) + (2 + CODE_BUF_CAP) + 256;
+    *out_buf = (uint8_t *)tcc_malloc((size_t)total);
+    if (!*out_buf) return -1;
+    uint8_t *p = *out_buf;
+
+    memcpy(p, "\0asm\x01\0\0\0", 8); p += 8;
+
+    /* Type section (id=1): one functype () -> i32 */
+    *p++ = 1; *p++ = 6; *p++ = 1; *p++ = 0x60; *p++ = 0; *p++ = 1; *p++ = VALTYPE_I32;
+
+    /* Function section (id=3) */
+    *p++ = 3; *p++ = (uint8_t)(func_count + 1); *p++ = (uint8_t)func_count;
+    for (int i = 0; i < func_count; i++) *p++ = 0;
+
+    /* Memory section (id=5) — 0 pages, no max, required for
+     * wasm_runtime_attach_shared_heap. The working WAMR fixture
+     * uses: 05 03 01 00 00 = 1 memory, flags=0 (no max), min=0. */
+    *p++ = 5; *p++ = 3; *p++ = 1; *p++ = 0x00; *p++ = 0x00;
+
+    /* Export section (id=7) */
+    { *p++ = 7; uint8_t *len_ptr = p++; *p++ = 2;
+      *p++ = 6; memcpy(p, "memory", 6); p += 6; *p++ = 0x02; *p++ = 0x00;
+      *p++ = 4; memcpy(p, "main", 4); p += 4; *p++ = 0x00; *p++ = 0x00;
+      *len_ptr = (uint8_t)(p - len_ptr - 1); }
+
+    /* Code section (id=10) */
+    *p++ = 10; uint8_t *cs_len_ptr = p++; *p++ = (uint8_t)func_count;
+    for (int i = 0; i < func_count; i++) {
+        int len = func_body_len[i];
+        memcpy(p, code_buf + func_start_offs[i], (size_t)len); p += len;
+    }
+    *cs_len_ptr = (uint8_t)(p - cs_len_ptr - 1);
+
+    *out_len = (int)(p - *out_buf);
+    return 0;
+}
+#define ST_FUNC static
+
+#endif /* !TARGET_DEFS_ONLY */

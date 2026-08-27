@@ -12,7 +12,7 @@ METAL_SRC ?= $(abspath src)
 WASMMOD_SRC ?= $(WASMMOD)/src
 TOP ?= $(abspath ../..)
 MBEDTLS_DIR ?= $(TOP)/lib/mbedtls
-ZENOH_PICO_DIR ?= $(TOP)/lib/zenoh-pico
+ZENOH_PICO_DIR ?= $(CURDIR)/externals/zenoh-pico
 # zenoh-pico generic/Metal compile-time config + platform header live in the
 # net.zenoh card dir (never in the vendored tree); the card dir must be an
 # include path for the GENERIC branch of zenoh-pico's config.h / platform.h.
@@ -26,6 +26,7 @@ METAL_STATICLIB := $(METAL_LIBDIR)/libpymergetic_metal.a
 WASMMOD_IWASM_A := $(firstword $(wildcard $(METAL_LIBDIR)/build/*/out/vmlib/build/libiwasm.a))
 
 CC ?= cc
+CXX ?= g++
 NODE ?= node
 CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O1 -g -pthread
 CPPFLAGS += -I$(CURDIR)/host_inc -I$(METAL_SRC) -I$(WASMMOD_SRC) -I$(WASMMOD) -I$(TOP) \
@@ -51,6 +52,11 @@ endif
 
 SRCS := host_test.c \
 	$(addprefix $(METAL_SRC)/pymergetic/metal/,$(CARD_REL))
+
+# Compile C sources to individual objects so the final link can use g++
+# (cc can't resolve C++ ABI symbols from the mrustc embed shim).
+SRC_OBJS := $(addprefix $(CURDIR)/build/, $(SRCS:.c=.o))
+BENCH_SRC_OBJS := $(addprefix $(CURDIR)/build/, $(BENCH_SRCS:.c=.o))
 
 # Bench binary reuses the same cards (incl. __bench__.c, which is inert under
 # the test runner) but swaps the entrypoint. Benches report numbers and never
@@ -92,9 +98,43 @@ ZP_OBJS := $(addprefix $(CURDIR)/build/zenoh-pico/,$(sort $(ZP_REL:.c=.o)))
 ZP_CPPFLAGS := -DZENOH_GENERIC -I$(ZENOH_PICO_DIR)/include -I$(ZENOH_PICO_DIR)/src \
 	-I$(ZENOH_CARD_DIR) -D_POSIX_C_SOURCE=200809L
 
+# vendored TCC (externals/tcc) — pre-built static library
+TCC_DIR ?= $(CURDIR)/externals/tcc
+TCC_A := $(TCC_DIR)/libtcc.a
+TCC_WASM32_OBJ := $(CURDIR)/build/tcc/wasm32_wrapper.o
+CPPFLAGS += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -I$(TCC_DIR) -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
+
+# vendored mrustc (externals/mrustc) — in-process Rust→C JIT front-end. The card's
+# __impl__.c calls pm_metal_jit_rs_mrustc_compile() which is provided by the
+# tools/mrustc_embed C++ shim; the shim reproduces mrustc's CLI driver pipeline
+# (every pass is in bin/mrustc.a; only CLI main.o is excluded) and runs it in
+# this process — no subprocess, no system().
+MRUSTC_DIR ?= $(CURDIR)/externals/mrustc
+MRUSTC_A := $(MRUSTC_DIR)/bin/mrustc.a
+MRUSTC_COMMON_A := $(MRUSTC_DIR)/bin/common_lib.a
+MRUSTC_EMBED_DIR := $(CURDIR)/tools/mrustc_embed
+MRUSTC_EMBED_O := $(CURDIR)/build/mrustc_embed.o
+MRUSTC_CXXFLAGS := -std=c++14 -O2 -g -Wall -Wno-unused-parameter -Wno-sign-compare \
+	-I $(MRUSTC_DIR)/src/include -I $(MRUSTC_DIR)/src -I $(MRUSTC_DIR)/tools/common \
+	-I $(MRUSTC_EMBED_DIR)
+CPPFLAGS += -DPM_HAS_MRUSTC=1 -I$(MRUSTC_EMBED_DIR)
+
+# mrustc.a must be whole-archive: the embed shim is the only direct client of
+# the pass objects inside, so the linker would otherwise drop them all.
+LDFLAGS_MRUSTC := -Wl,--whole-archive $(MRUSTC_A) -Wl,--no-whole-archive $(MRUSTC_COMMON_A) -lz
+
 $(CURDIR)/build/zenoh-pico/%.o: $(ZENOH_PICO_DIR)/%.c
 	mkdir -p $(dir $@)
 	$(CC) -std=gnu11 -O1 -g -Wall -Wextra $(ZP_CPPFLAGS) -c -o $@ $<
+
+$(CURDIR)/build/tcc/%.o: $(TCC_DIR)/%.c
+	mkdir -p $(dir $@)
+	$(CC) -std=gnu11 -O1 -g -Wall -Wno-unused-parameter -Wno-sign-compare $(TCC_CPPFLAGS) -c -o $@ $<
+
+# mrustc in-process embed shim: compile the C++ shim that drives mrustc.a
+$(MRUSTC_EMBED_O): $(MRUSTC_EMBED_DIR)/mrustc_embed.cpp $(MRUSTC_EMBED_DIR)/mrustc_embed.h $(MRUSTC_A) $(MRUSTC_COMMON_A)
+	mkdir -p $(dir $@)
+	$(CXX) $(MRUSTC_CXXFLAGS) -c -o $@ $<
 
 OUT := $(CURDIR)/build/metal-async-test
 BENCH_OUT := $(CURDIR)/build/metal-async-bench
@@ -130,13 +170,27 @@ $(CURDIR)/build/mbedtls/%.o: $(MBEDTLS_DIR)/library/%.c
 	mkdir -p $(dir $@)
 	$(CC) -std=gnu11 -O1 -g $(MBEDTLS_CPPFLAGS) -c -o $@ $<
 
-$(OUT): $(SRCS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(METAL_STATICLIB)
-	mkdir -p $(dir $(OUT))
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $(OUT) $(SRCS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(LDFLAGS_WASMMOD)
+# Compile every C source to an object in build/ mirroring the source tree.
+$(CURDIR)/build/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-$(BENCH_OUT): $(BENCH_SRCS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(METAL_STATICLIB)
-	mkdir -p $(dir $(BENCH_OUT))
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $(BENCH_OUT) $(BENCH_SRCS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(LDFLAGS_WASMMOD)
+$(OUT): $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_A) $(MRUSTC_EMBED_O) $(METAL_STATICLIB)
+	@mkdir -p $(dir $(OUT))
+	$(CXX) -o $(OUT) $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_A) $(MRUSTC_EMBED_O) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+
+$(BENCH_OUT): $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_A) $(MRUSTC_EMBED_O) $(METAL_STATICLIB)
+	@mkdir -p $(dir $(BENCH_OUT))
+	$(CXX) -o $(BENCH_OUT) $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_A) $(MRUSTC_EMBED_O) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+
+test: prove-all
+
+# WASM32 backend prove (standalone)
+wasm32-prove:
+	mkdir -p $(CURDIR)/build
+	$(CC) -std=gnu11 -O1 -g -I$(TCC_DIR) -DTCC_TARGET_WASM32 -DONE_SOURCE \
+		$(TCC_DIR)/wasm32_prove.c $(TCC_DIR)/libtcc.c \
+		-lm -ldl -o $(CURDIR)/build/wasm32_prove && $(CURDIR)/build/wasm32_prove
 
 test: prove-all
 

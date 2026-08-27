@@ -9,7 +9,7 @@
 # pattern rule for cards/net/zenoh/% overrides fw_cards.mk's generic cards/% rule
 # (shortest-stem match wins), and the core rule omits -Werror, matching how the host
 # metal.mk and mbedtls treat external trees.
-ZENOH_PICO_DIR ?= $(abspath $(PORT_DIR)/../../../lib/zenoh-pico)
+ZENOH_PICO_DIR ?= $(METAL_DIR)/externals/zenoh-pico
 ZENOH_CARD_DIR ?= $(METAL_SRC)/pymergetic/metal/net/zenoh
 include $(METAL_DIR)/tools/zenoh.mk
 

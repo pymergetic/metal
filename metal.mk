@@ -67,13 +67,30 @@ endif
 # host (metal.mk) and firmware (fw_zenoh.mk) seats use. The card border + platform
 # shim come from the card tree (METAL_CARD_REL); only the vendored core is listed
 # here, mbedtls-style, from the shared source glob.
-ZENOH_PICO_DIR ?= $(TOP)/lib/zenoh-pico
+ZENOH_PICO_DIR ?= $(TOP)/extmod/metal/externals/zenoh-pico
 ZENOH_CARD_DIR ?= $(TOP)/extmod/metal/src/pymergetic/metal/net/zenoh
 include $(TOP)/extmod/metal/tools/zenoh.mk
-SRC_METAL_ZENOH = $(addprefix lib/zenoh-pico/,$(ZP_REL))
+SRC_METAL_ZENOH = $(addprefix extmod/metal/externals/zenoh-pico/,$(ZP_REL))
 PY_O += $(addprefix $(BUILD)/, $(SRC_METAL_ZENOH:.c=.o))
 INC += -I$(ZENOH_PICO_DIR)/include -I$(ZENOH_PICO_DIR)/src -I$(ZENOH_CARD_DIR)
 CFLAGS_EXTMOD += -DZENOH_GENERIC
+
+# vendored TCC (externals/tcc) — ONE_SOURCE=1: only libtcc.c compiles all others via #include
+# The browser seat runs as wasm32 (emcc), so its embedded TCC targets WASM32:
+# C source is JIT'd to WASM and fed to WAMR, never to native x86_64. The unix
+# µPy seat is a native x86_64 process, so it keeps the native backend.
+TCC_DIR ?= $(TOP)/extmod/metal/externals/tcc
+PY_O += $(BUILD)/externals/tcc/libtcc.o
+ifdef PM_METAL_BROWSER
+CFLAGS_EXTMOD += -DTCC_TARGET_WASM32 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
+else
+CFLAGS_EXTMOD += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
+endif
+INC += -I$(TCC_DIR)
+
+$(BUILD)/externals/tcc/libtcc.o: $(TCC_DIR)/libtcc.c
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS_EXTMOD) $(INC) -std=gnu11 -Wno-unused-parameter -Wno-sign-compare -Wno-error -c -o $@ $<
 
 # zenoh-pico's api/macros.h is C11 _Generic; unix µPy defaults to gnu99 and the
 # browser seat forces gnu99 on all card objects, so the zenoh card + core objects

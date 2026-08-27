@@ -20,6 +20,7 @@
 
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/async.h"
+#include "pymergetic/metal/boot/externals.h"
 #include "pymergetic/util/mem.h"
 
 #include <stdint.h>
@@ -1149,3 +1150,5 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_scout, pm_metal_n
 PM_MOD_BOOT_READY_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_init, pm_metal_net_zenoh_deinit, NULL);
 PM_MOD_BOOTDEP_C(pymergetic.metal.net.zenoh, pymergetic.metal.async);
 PM_MOD_BOOTDEP_C(pymergetic.metal.net.zenoh, pymergetic.metal.net.ip);
+
+PM_METAL_EXTERNAL_C(zenoh_pico, "1.9.0");

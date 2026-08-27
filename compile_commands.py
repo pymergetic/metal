@@ -38,7 +38,7 @@ card_incs = [
 # ZP_CPPFLAGS (tools/zenoh.mk / Makefile): the vendored include/src dirs, the
 # card dir's GENERIC config, and -DZENOH_GENERIC so zenoh-pico/config.h picks
 # the card dir's zenoh_generic_config.h instead of a board system layer.
-zp_pico = host / "lib/zenoh-pico"
+zp_pico = host / "externals/zenoh-pico"
 zenoh_incs = card_incs + [
     zp_pico / "include",
     zp_pico / "src",
@@ -89,13 +89,29 @@ def is_fw(f):
 
 ents = []
 for f in sorted(metal.rglob("*")):
-    if f.suffix not in {".c", ".h"} or "build" in f.parts:
+    if f.suffix not in {".c", ".h", ".cpp"} or "build" in f.parts:
         continue
     if is_fw(f):
         pfx = (
             "clang -xc -std=gnu11 -ffreestanding -Wall -Wno-unknown-attributes "
             + inc(fw_incs)
             + fw_defs
+        )
+    elif "tools/mrustc_embed" in str(f.relative_to(metal)):
+        # mrustc in-process embed shim (C++14, links mrustc.a). Must see
+        # mrustc's own include dirs so clangd resolves <version.hpp>,
+        # <span.hpp>, <ast/crate.hpp>, etc.
+        mrustc_incs = [
+            metal / "externals/mrustc/src/include",
+            metal / "externals/mrustc/src",
+            metal / "externals/mrustc/tools/common",
+            metal / "tools/mrustc_embed",
+        ]
+        mrustc_defs = " -DPM_HAS_MRUSTC=1"
+        pfx = (
+            "clang -xc++ -std=c++14 -g -Wall -Wno-unused-parameter -Wno-sign-compare "
+            + inc(mrustc_incs)
+            + mrustc_defs
         )
     elif "src/pymergetic/metal/net/zenoh" in str(f.relative_to(metal)):
         # Both .c and .h under net/zenoh: the platform card headers reference the

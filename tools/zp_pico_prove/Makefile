@@ -2,13 +2,13 @@
 # put/subscriber loop on lo, before any Metal card wraps it.
 #
 # use: make -C extmod/metal prove-zpico     (or: make -f tools/zp_pico_prove/Makefile)
-# depends on the pinned submodule: metalpython/lib/zenoh-pico
+# depends on the pinned submodule: metal/externals/zenoh-pico
 #
 # The lib is compiled against its own unix system layer (z_open/z_spin tools
 # only) in single-thread mode (Z_FEATURE_MULTI_THREAD=0) -- the model the
 # pymergetic.metal.net.zenoh card reuses for its poll() step.
 
-ZPICO_DIR ?= $(abspath ../../../../lib/zenoh-pico)
+ZPICO_DIR ?= $(abspath ../../externals/zenoh-pico)
 
 CC      ?= cc
 AR      ?= ar
