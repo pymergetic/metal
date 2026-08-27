@@ -1,4 +1,9 @@
-build/
+# Host build outputs at the metal root. Anchored: src/pymergetic/metal/build/
+# is the build CARD, not a build directory.
+/build/
+port/build/
+tools/mrustc_embed/build/
+tools/zp_pico_prove/.build/
 
 # Cargo output for this crate (metal is its own crate now).
 target/
@@ -18,7 +23,5 @@ www_embed.inc.h
 # (every seat's make), same shape as www_embed.inc.h above.
 src_embed.inc.h
 
-# Stage 1 zenoh-pico standalone prove build outputs (tools/zp_pico_prove).
-tools/zp_pico_prove/.build/
 tools/zp_pico_prove/prove_pub
 tools/zp_pico_prove/prove_sub
