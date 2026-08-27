@@ -42,6 +42,17 @@ pm_metal_async_status_t pm_metal_jit_c_compile_step(pm_metal_async_coro_t *self)
 /* Free the result and its owned strings via the arena. */
 void pm_metal_jit_c_result_free(pm_util_mem_arena_t *arena, pm_metal_jit_c_result_t *r);
 
+/* Compile one C source to an ELF ET_REL object (arena-owned bytes in obj_out).
+ * The TCC_OUTPUT_MEMORY path above is untouched; this is the multi-object
+ * build path: tcc_set_output_type(TCC_OUTPUT_OBJ) → tcc_output_file to a
+ * temp file → bytes read back and copied into the arena.
+ * Native seats only (x86_64 backend); the wasm32 seat has no ELF object
+ * output and returns -1 with errbuf set. */
+int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
+    const char *source, size_t source_len,
+    uint8_t **obj_out, size_t *obj_len,
+    char *errbuf, size_t errbuf_len);
+
 #ifdef __cplusplus
 }
 #endif

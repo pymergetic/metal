@@ -3,6 +3,7 @@
 #include "pymergetic/metal/boot/externals.h"
 #include "pymergetic/util/mem.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #define PM_METAL_JIT_C_ERR_MAX 256u
@@ -87,6 +88,111 @@ void pm_metal_jit_c_result_free(pm_util_mem_arena_t *arena, pm_metal_jit_c_resul
     (void)arena; (void)r;
 }
 
+#if PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+#define PM_METAL_JIT_C_OBJECT_PATH 1
+/* Object path (multi-object build): compile to ET_REL .o via tcc_output_file.
+ * Same temp-file convention as the jit.rs mrustc embed (/tmp/.jit_*). */
+#include <unistd.h>
+#include <fcntl.h>
+
+static void jit_c_obj_err(char *errbuf, size_t errbuf_len, const char *msg) {
+    if (errbuf == NULL || errbuf_len == 0) return;
+    snprintf(errbuf, errbuf_len, "%s", msg);
+}
+
+int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
+    const char *source, size_t source_len,
+    uint8_t **obj_out, size_t *obj_len,
+    char *errbuf, size_t errbuf_len) {
+    char tmpl[] = "/tmp/.jit_c_obj_XXXXXX";
+    int fd;
+    FILE *f;
+    long n;
+    uint8_t *buf;
+    TCCState *s;
+
+    if (arena == NULL || source == NULL || source_len == 0
+        || obj_out == NULL || obj_len == NULL) {
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: bad args");
+        return -1;
+    }
+    *obj_out = NULL;
+    *obj_len = 0;
+
+    fd = mkstemp(tmpl);
+    if (fd < 0) {
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: mkstemp failed");
+        return -1;
+    }
+    close(fd);
+
+    s = tcc_new();
+    if (s == NULL) {
+        unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: tcc_new failed");
+        return -1;
+    }
+    tcc_set_lib_path(s, PM_METAL_TCC_LIB_DIR);
+    tcc_add_library_path(s, PM_METAL_TCC_LIB_DIR);
+    tcc_set_output_type(s, TCC_OUTPUT_OBJ);
+    if (tcc_compile_string(s, source) != 0) {
+        tcc_delete(s); unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: tcc compile failed");
+        return -1;
+    }
+    if (tcc_output_file(s, tmpl) != 0) {
+        tcc_delete(s); unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: tcc_output_file failed");
+        return -1;
+    }
+    tcc_delete(s);
+
+    f = fopen(tmpl, "rb");
+    if (f == NULL) {
+        unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: reopen failed");
+        return -1;
+    }
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    rewind(f);
+    if (n <= 0) {
+        fclose(f); unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: empty object");
+        return -1;
+    }
+    buf = (uint8_t *)pm_util_mem_alloc(arena, (size_t)n);
+    if (buf == NULL) {
+        fclose(f); unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: arena alloc failed");
+        return -1;
+    }
+    if (fread(buf, 1, (size_t)n, f) != (size_t)n) {
+        fclose(f); unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: short read");
+        return -1;
+    }
+    fclose(f);
+    unlink(tmpl);
+    *obj_out = buf;
+    *obj_len = (size_t)n;
+    return 0;
+}
+#else
+int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
+    const char *source, size_t source_len,
+    uint8_t **obj_out, size_t *obj_len,
+    char *errbuf, size_t errbuf_len) {
+    (void)arena; (void)source; (void)source_len;
+    (void)obj_out; (void)obj_len;
+    if (errbuf != NULL && errbuf_len > 0) {
+        snprintf(errbuf, errbuf_len,
+            "object_compile: no native object output on this seat");
+    }
+    return -1;
+}
+#endif /* PM_HAS_TCC && !TCC_TARGET_WASM32 */
+
 pm_metal_async_status_t pm_metal_jit_c_compile_step(pm_metal_async_coro_t *self) {
     if (!self) return PM_METAL_ASYNC_ERROR;
     pm_metal_jit_c_frame_t *f = (pm_metal_jit_c_frame_t *)self;
@@ -112,5 +218,8 @@ PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_compile_step, pm_metal_ji
     pm_metal_async_status_t(pm_metal_async_coro_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_result_free, pm_metal_jit_c_result_free,
     void(pm_util_mem_arena_t *, pm_metal_jit_c_result_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_object_compile, pm_metal_jit_c_object_compile,
+    int32_t(pm_util_mem_arena_t *, const char *, size_t,
+        uint8_t **, size_t *, char *, size_t));
 
 PM_METAL_EXTERNAL_C(tcc, "0.9.28rc");

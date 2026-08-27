@@ -11,6 +11,7 @@
 #include "pymergetic/metal/build/__exports__.h"
 
 #include "pymergetic/metal/build/__types__.h"
+#include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
 
 #include <stdio.h>
@@ -415,22 +416,94 @@ int32_t pm_metal_build_graph_resolve(pm_util_mem_arena_t *arena,
 
 /*------------------ compile + link (Phase 3) ------------------*/
 
+/* compile_source: drive the jit.c card's TCC object path (TCC_OUTPUT_OBJ →
+ * ET_REL .o bytes in the arena). Native seats only — the wasm32 browser cell
+ * has no ELF object output and jit.c reports that via errbuf. */
 int32_t pm_metal_build_compile_source(pm_util_mem_arena_t *arena,
     const pm_metal_build_unit_t *unit, const char *source,
     uint8_t **obj_out, size_t *obj_len, char *errbuf, size_t errbuf_len) {
-    (void)arena; (void)unit; (void)source; (void)obj_out; (void)obj_len;
-    err_set(errbuf, errbuf_len, "compile_source: Phase 3", 0);
-    return PM_METAL_BUILD_ERR_COMPILE;
+    if (arena == NULL || unit == NULL || source == NULL || source[0] == '\0'
+        || obj_out == NULL || obj_len == NULL) {
+        err_set(errbuf, errbuf_len, "compile_source: bad args", 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    return pm_metal_jit_c_object_compile(arena, source, strlen(source),
+        obj_out, obj_len, errbuf, errbuf_len) == 0
+        ? PM_METAL_BUILD_OK : PM_METAL_BUILD_ERR_COMPILE;
 }
+
+#ifdef PM_METAL_BUILD_HAS_ELF
+#include "pymergetic/wasmmod/pack/format/elf/load.h"
+#endif
 
 int32_t pm_metal_build_link(pm_util_mem_arena_t *arena,
     const pm_metal_build_unit_t *unit, uint8_t **objects, const size_t *lens,
     uint32_t n_objects, pm_metal_build_artifact_t *artifact,
     char *errbuf, size_t errbuf_len) {
+#ifdef PM_METAL_BUILD_HAS_ELF
+    mp_wasm_elf_image_t *img = NULL;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    uint32_t i;
+    uint32_t *lens32;
+
+    if (arena == NULL || unit == NULL || objects == NULL || lens == NULL
+        || n_objects == 0 || artifact == NULL) {
+        err_set(errbuf, errbuf_len, "link: bad args", 0);
+        return PM_METAL_BUILD_ERR_LINK;
+    }
+    /* the multi loader takes uint32 lens; our artifacts are small */
+    lens32 = (uint32_t *)pm_util_mem_alloc(arena, n_objects * sizeof(uint32_t));
+    if (lens32 == NULL) {
+        err_set(errbuf, errbuf_len, "link: arena alloc failed", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    for (i = 0; i < n_objects; i++) {
+        lens32[i] = (uint32_t)lens[i];
+    }
+    if (!mp_wasm_elf_image_load_multi((const uint8_t *const *)objects, lens32,
+        n_objects, NULL, NULL, &img, err, sizeof(err))) {
+        err_set(errbuf, errbuf_len, err, 0);
+        return PM_METAL_BUILD_ERR_LINK;
+    }
+    /* The image is mmap'd (not arena memory): publish it through the
+     * artifact so the caller can lookup and free it. */
+    memset(artifact, 0, sizeof(*artifact));
+    snprintf(artifact->fqn, sizeof(artifact->fqn), "%s", unit->fqn);
+    artifact->bytes = (uint8_t *)img;
+    artifact->len = img->size;
+    artifact->is_wasm = 0;
+    return PM_METAL_BUILD_OK;
+#else
     (void)arena; (void)unit; (void)objects; (void)lens; (void)n_objects;
     (void)artifact;
-    err_set(errbuf, errbuf_len, "link: Phase 3", 0);
+    err_set(errbuf, errbuf_len, "link: no ELF loader on this seat", 0);
     return PM_METAL_BUILD_ERR_LINK;
+#endif
+}
+
+void pm_metal_build_artifact_destroy(pm_metal_build_artifact_t *artifact) {
+#ifdef PM_METAL_BUILD_HAS_ELF
+    if (artifact != NULL && artifact->bytes != NULL) {
+        mp_wasm_elf_image_free((mp_wasm_elf_image_t *)artifact->bytes);
+        artifact->bytes = NULL;
+        artifact->len = 0;
+    }
+#else
+    (void)artifact;
+#endif
+}
+
+void *pm_metal_build_artifact_lookup(const pm_metal_build_artifact_t *artifact,
+    const char *name) {
+#ifdef PM_METAL_BUILD_HAS_ELF
+    if (artifact == NULL || artifact->bytes == NULL || name == NULL) {
+        return NULL;
+    }
+    return mp_wasm_elf_lookup((const mp_wasm_elf_image_t *)artifact->bytes, name);
+#else
+    (void)artifact; (void)name;
+    return NULL;
+#endif
 }
 
 #include "pymergetic/wasmmod/guest.h"
@@ -447,3 +520,7 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_compile_source, pm_metal_
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_link, pm_metal_build_link,
     int32_t(pm_util_mem_arena_t *, const pm_metal_build_unit_t *, uint8_t **,
         const size_t *, uint32_t, pm_metal_build_artifact_t *, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_destroy, pm_metal_build_artifact_destroy,
+    void(pm_metal_build_artifact_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_lookup, pm_metal_build_artifact_lookup,
+    void *(const pm_metal_build_artifact_t *, const char *));

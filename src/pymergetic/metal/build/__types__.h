@@ -73,11 +73,20 @@ int32_t pm_metal_build_compile_source(pm_util_mem_arena_t *arena,
     uint8_t **obj_out, size_t *obj_len, char *errbuf, size_t errbuf_len);
 
 /* Link the unit's compiled objects through the in-tree ELF relocator and
- * return the loaded image (arena-owned). */
+ * return the loaded, executable image. artifact->bytes carries the image
+ * pointer — release it with pm_metal_build_artifact_destroy. */
 int32_t pm_metal_build_link(pm_util_mem_arena_t *arena,
     const pm_metal_build_unit_t *unit, uint8_t **objects, const size_t *lens,
     uint32_t n_objects, pm_metal_build_artifact_t *artifact,
     char *errbuf, size_t errbuf_len);
+
+/* Release a link artifact (munmap the image). Safe on NULL / empty. */
+void pm_metal_build_artifact_destroy(pm_metal_build_artifact_t *artifact);
+
+/* Look up a function symbol in a linked artifact. Returns NULL when the
+ * name is not present. */
+void *pm_metal_build_artifact_lookup(const pm_metal_build_artifact_t *artifact,
+    const char *name);
 
 #ifdef __cplusplus
 }

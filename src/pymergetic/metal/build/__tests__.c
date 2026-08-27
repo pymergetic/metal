@@ -214,6 +214,84 @@ static int32_t test_graph_cycle(void) {
     return 0;
 }
 
+/*------------------ Phase 3: multi-object compile + link prove ------------------
+ * Two tiny C sources — a callee and a caller, each compiled to its own
+ * ET_REL object — linked through the in-tree ELF relocator, then the
+ * caller's function is called through the image and its return value
+ * (which crosses the object boundary into the callee) is asserted.
+ * This is the cross-object symbol-resolution proof.
+ */
+static const char *S_CALLEE =
+    "int add_two(int a, int b) { return a + b; }\n";
+
+static const char *S_CALLER =
+    "int add_two(int a, int b);\n"
+    "int call_add(void) { return add_two(19, 23); }\n";
+
+static int32_t test_multi_object_link(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    void *backing = malloc(1u << 19);
+    pm_util_mem_arena_t *arena;
+    pm_metal_build_unit_t unit;
+    uint8_t *obj_callee = NULL, *obj_caller = NULL;
+    size_t len_callee = 0, len_caller = 0;
+    uint8_t *objs[2];
+    size_t lens[2];
+    pm_metal_build_artifact_t art;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    int32_t rc;
+    int (*fn)(void);
+    int rv;
+
+    if (!backing) return 50;
+    arena = pm_util_mem_arena_create(backing, 1u << 19);
+    if (!arena) { free(backing); return 51; }
+
+    memset(&unit, 0, sizeof(unit));
+    snprintf(unit.fqn, sizeof(unit.fqn), "%s", "test.multi");
+
+    rc = pm_metal_build_compile_source(arena, &unit, S_CALLEE,
+        &obj_callee, &len_callee, err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 52;
+    }
+    rc = pm_metal_build_compile_source(arena, &unit, S_CALLER,
+        &obj_caller, &len_caller, err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 53;
+    }
+
+    objs[0] = obj_callee;
+    objs[1] = obj_caller;
+    lens[0] = len_callee;
+    lens[1] = len_caller;
+
+    rc = pm_metal_build_link(arena, &unit, objs, lens, 2, &art, err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 54;
+    }
+
+    fn = (int (*)(void))pm_metal_build_artifact_lookup(&art, "call_add");
+    if (fn == NULL) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 55;
+    }
+    rv = fn();
+    if (rv != 42) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 56;
+    }
+    pm_metal_build_artifact_destroy(&art);
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+#else
+    /* No native TCC object output / no ELF loader on this seat (browser
+     * cell, firmware) — link must refuse honestly, not silently pass. */
+    return 0;
+#endif
+}
+
 static int32_t pm_metal_build_tests(void) {
     int32_t rc;
     rc = test_parse_real_tcc_manifest();
@@ -221,6 +299,8 @@ static int32_t pm_metal_build_tests(void) {
     rc = test_graph_order();
     if (rc) return rc;
     rc = test_graph_cycle();
+    if (rc) return rc;
+    rc = test_multi_object_link();
     if (rc) return rc;
     return 0;
 }

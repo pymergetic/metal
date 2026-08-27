@@ -89,6 +89,10 @@ ifdef PM_METAL_BROWSER
 CFLAGS_EXTMOD += -DTCC_TARGET_WASM32 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
 else
 CFLAGS_EXTMOD += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
+# The build card's multi-object link drives wasmmod's in-tree ELF relocator.
+# unix compiles load.c (MICROPY_PY_WASM_ELF=1 default); the browser cell does
+# not (ELF=0 there — its TCC targets wasm32, objects are WASM not ET_REL).
+CFLAGS_EXTMOD += -DPM_METAL_BUILD_HAS_ELF=1
 endif
 INC += -I$(TCC_DIR)
 

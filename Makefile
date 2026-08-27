@@ -107,6 +107,16 @@ TCC_DIR ?= $(CURDIR)/externals/tcc
 TCC_OBJS := $(CURDIR)/build/tcc/libtcc.o
 TCC_DEPS := $(addprefix $(TCC_DIR)/,$(TCC_MANIFEST_SRCS))
 CPPFLAGS += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -I$(TCC_DIR) -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
+
+# In-tree ELF64 ET_REL relocator (wasmmod) — the build card's multi-object
+# link drives it. Host seat only: the browser cell has no ELF loader
+# (MICROPY_PY_WASM_ELF=0 there) and firmware links none either.
+ELF_LOAD_SRC := $(WASMMOD_SRC)/pymergetic/wasmmod/pack/format/elf/load.c
+ELF_LOAD_OBJ := $(CURDIR)/build/elf/load.o
+CPPFLAGS += -DPM_METAL_BUILD_HAS_ELF=1
+$(ELF_LOAD_OBJ): $(ELF_LOAD_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DMICROPY_PY_WASM_ELF=1 -c -o $@ $<
 # vendored mrustc (externals/mrustc) — in-process Rust→C JIT front-end. The card's
 # __impl__.c calls pm_metal_jit_rs_mrustc_compile() which is provided by the
 # tools/mrustc_embed C++ shim; the shim reproduces mrustc's CLI driver pipeline
@@ -179,13 +189,13 @@ $(CURDIR)/build/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-$(OUT): $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(METAL_STATICLIB)
+$(OUT): $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(OUT))
-	$(CXX) -o $(OUT) $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+	$(CXX) -o $(OUT) $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
 
-$(BENCH_OUT): $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(METAL_STATICLIB)
+$(BENCH_OUT): $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(BENCH_OUT))
-	$(CXX) -o $(BENCH_OUT) $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+	$(CXX) -o $(BENCH_OUT) $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
 
 test: prove-all
 
