@@ -79,7 +79,11 @@ CFLAGS_EXTMOD += -DZENOH_GENERIC
 # The browser seat runs as wasm32 (emcc), so its embedded TCC targets WASM32:
 # C source is JIT'd to WASM and fed to WAMR, never to native x86_64. The unix
 # µPy seat is a native x86_64 process, so it keeps the native backend.
+# The source list (and thus the object's dependencies) is the manifest via
+# tools/tcc.mk — same one definition every seat reads.
 TCC_DIR ?= $(TOP)/extmod/metal/externals/tcc
+include $(TOP)/extmod/metal/tools/tcc.mk
+TCC_DEPS := $(addprefix $(TCC_DIR)/,$(TCC_MANIFEST_SRCS))
 PY_O += $(BUILD)/externals/tcc/libtcc.o
 ifdef PM_METAL_BROWSER
 CFLAGS_EXTMOD += -DTCC_TARGET_WASM32 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
@@ -88,9 +92,9 @@ CFLAGS_EXTMOD += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(T
 endif
 INC += -I$(TCC_DIR)
 
-$(BUILD)/externals/tcc/libtcc.o: $(TCC_DIR)/libtcc.c
+$(BUILD)/externals/tcc/libtcc.o: $(TCC_DEPS)
 	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS_EXTMOD) $(INC) -std=gnu11 -Wno-unused-parameter -Wno-sign-compare -Wno-error -c -o $@ $<
+	$(CC) $(CFLAGS_EXTMOD) $(INC) -std=gnu11 -Wno-unused-parameter -Wno-sign-compare -Wno-error $(TCC_DEFINES) -c -o $@ $(TCC_DIR)/libtcc.c
 
 # zenoh-pico's api/macros.h is C11 _Generic; unix µPy defaults to gnu99 and the
 # browser seat forces gnu99 on all card objects, so the zenoh card + core objects

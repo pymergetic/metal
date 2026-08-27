@@ -1,0 +1,23 @@
+fqn = "pymergetic.metal.external.tcc"
+impl = "c"
+version = "0.9.28rc"
+sources = [
+    "libtcc.c",
+    "tccpp.c",
+    "tccgen.c",
+    "tccelf.c",
+    "tccasm.c",
+    "tccdbg.c",
+    "tccrun.c",
+    "tcctools.c",
+    "i386-asm.c",
+    "x86_64-gen.c",
+    "x86_64-link.c",
+    "wasm32-gen.c",
+    "wasm32-link.c",
+]
+include_dirs = ["."]
+defines = ["TCC_TARGET_X86_64"]
+depends = []
+upstream = "https://github.com/TinyCC/tinycc.git"
+notes = "libtcc.c defaults ONE_SOURCE=1 and #includes every other source, so seats compile libtcc.c alone (one TU) with -I and -DTCC_TARGET_* flags; the full list is the translation set that ONE_SOURCE pulls in (and the object's dependency list — compiling them as separate objects would need tcc.c, the CLI driver, which no seat links). i386-asm.c is required by the x86_64 target (libtcc.c: TCC_TARGET_X86_64 -> #include i386-asm.c) and wasm32-gen.c carries wasm_build_module() for the browser seat. Host/unix seats must also pass -DCONFIG_TRIPLET=$(cc -print-multiarch): config.h defines it only when no TCC_TARGET_* is predefined, and without it the embedded library searches /usr/lib (no libc.so on multiarch hosts) and tcc_relocate fails with 'library c not found'. libtcc.a/libtcc1.a in this tree are stale configure outputs (gitignored); no seat links them anymore."

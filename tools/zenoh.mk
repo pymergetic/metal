@@ -1,6 +1,7 @@
 # Shared source list for the vendored zenoh-pico core, used by every seat that
 # links it: host metal.mk and each firmware board (fw_zenoh.mk). One list, one
-# glob — a seat that compiles the core has no second copy to drift.
+# definition — the externals/zenoh-pico/__pmm__.toml manifest. The list itself
+# is regenerable via `tools/externals.sh gen zenoh-pico`.
 #
 # The vendored tree keeps src/system/** out: Metal replaces the whole platform
 # layer (plus the unix system dir), exactly like the host build and the Stage-1
@@ -13,9 +14,11 @@ ifndef ZENOH_PICO_DIR
 $(error tools/zenoh.mk included before ZENOH_PICO_DIR was set)
 endif
 
-ZP_REL := $(shell find $(ZENOH_PICO_DIR)/src -name '*.c' \
-	| grep -E '/(api|collections|link|net|protocol|runtime|session|transport|utils)/' \
-	| grep -v '/src/system/' \
-	| sed 's#$(ZENOH_PICO_DIR)/##')
+EXTERNALS_SH := $(dir $(lastword $(MAKEFILE_LIST)))externals.sh
+ZP_REL := $(shell $(EXTERNALS_SH) list zenoh-pico)
+
+ifeq ($(ZP_REL),)
+$(error tools/zenoh.mk: externals.sh list zenoh-pico returned nothing)
+endif
 
 endif

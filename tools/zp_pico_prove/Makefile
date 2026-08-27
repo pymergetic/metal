@@ -21,14 +21,14 @@ BUILD   := $(abspath .build)
 # Object list: one .o per source, named after its relative path under
 # ZPICO_DIR, so a single pattern rule can drive the whole lib compile.
 #
-# Freestanding build = the seat-independent core plus one system layer. The
-# unix platform is used here; the Metal card replaces unix/network.c +
-# unix/system.c with its own platform shim against pm_metal_net_ip_*. All the
-# other board platforms (espidf, rpi_pico, freertos, zephyr, windows, ...) are
-# excluded, so no board SDK headers are required.
-ZP_REL  := $(shell find $(ZPICO_DIR)/src -name '*.c' \
-                | grep -E '/(api|collections|link|net|protocol|runtime|session|transport|utils)/' \
-                | sed 's#$(ZPICO_DIR)/##')
+# Freestanding build = the seat-independent core (the manifest's list, same
+# one definition every seat reads) plus one system layer. The unix platform
+# is used here; the Metal card replaces unix/network.c + unix/system.c with
+# its own platform shim against pm_metal_net_ip_*. All the other board
+# platforms (espidf, rpi_pico, freertos, zephyr, windows, ...) are excluded,
+# so no board SDK headers are required.
+EXTERNALS_SH := $(abspath ../../tools/externals.sh)
+ZP_REL  := $(shell $(EXTERNALS_SH) list zenoh-pico)
 ZP_REL  += src/system/common/platform.c src/system/common/serial.c \
            src/system/unix/network.c src/system/unix/system.c
 ZP_OBJS := $(addprefix $(BUILD)/,$(sort $(ZP_REL:.c=.o)))

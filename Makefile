@@ -98,12 +98,15 @@ ZP_OBJS := $(addprefix $(CURDIR)/build/zenoh-pico/,$(sort $(ZP_REL:.c=.o)))
 ZP_CPPFLAGS := -DZENOH_GENERIC -I$(ZENOH_PICO_DIR)/include -I$(ZENOH_PICO_DIR)/src \
 	-I$(ZENOH_CARD_DIR) -D_POSIX_C_SOURCE=200809L
 
-# vendored TCC (externals/tcc) — pre-built static library
+# vendored TCC (externals/tcc) — compiled from source, one TU. The manifest's
+# sources are the translation set libtcc.c #includes (ONE_SOURCE default 1), so
+# they are the object's dependency list. Compiling them as separate objects
+# would need tcc.c (the CLI driver), which no seat links.
+include $(CURDIR)/tools/tcc.mk
 TCC_DIR ?= $(CURDIR)/externals/tcc
-TCC_A := $(TCC_DIR)/libtcc.a
-TCC_WASM32_OBJ := $(CURDIR)/build/tcc/wasm32_wrapper.o
+TCC_OBJS := $(CURDIR)/build/tcc/libtcc.o
+TCC_DEPS := $(addprefix $(TCC_DIR)/,$(TCC_MANIFEST_SRCS))
 CPPFLAGS += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -I$(TCC_DIR) -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
-
 # vendored mrustc (externals/mrustc) — in-process Rust→C JIT front-end. The card's
 # __impl__.c calls pm_metal_jit_rs_mrustc_compile() which is provided by the
 # tools/mrustc_embed C++ shim; the shim reproduces mrustc's CLI driver pipeline
@@ -127,9 +130,10 @@ $(CURDIR)/build/zenoh-pico/%.o: $(ZENOH_PICO_DIR)/%.c
 	mkdir -p $(dir $@)
 	$(CC) -std=gnu11 -O1 -g -Wall -Wextra $(ZP_CPPFLAGS) -c -o $@ $<
 
-$(CURDIR)/build/tcc/%.o: $(TCC_DIR)/%.c
+$(CURDIR)/build/tcc/libtcc.o: $(TCC_DEPS)
 	mkdir -p $(dir $@)
-	$(CC) -std=gnu11 -O1 -g -Wall -Wno-unused-parameter -Wno-sign-compare $(TCC_CPPFLAGS) -c -o $@ $<
+	$(CC) -std=gnu11 -O1 -g -Wall -Wno-unused-parameter -Wno-sign-compare \
+		-I$(TCC_DIR) -DTCC_TARGET_X86_64 $(TCC_DEFINES) -c -o $@ $(TCC_DIR)/libtcc.c
 
 # mrustc in-process embed shim: compile the C++ shim that drives mrustc.a
 $(MRUSTC_EMBED_O): $(MRUSTC_EMBED_DIR)/mrustc_embed.cpp $(MRUSTC_EMBED_DIR)/mrustc_embed.h $(MRUSTC_A) $(MRUSTC_COMMON_A)
@@ -175,13 +179,13 @@ $(CURDIR)/build/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-$(OUT): $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_A) $(MRUSTC_EMBED_O) $(METAL_STATICLIB)
+$(OUT): $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(OUT))
-	$(CXX) -o $(OUT) $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_A) $(MRUSTC_EMBED_O) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+	$(CXX) -o $(OUT) $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
 
-$(BENCH_OUT): $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_A) $(MRUSTC_EMBED_O) $(METAL_STATICLIB)
+$(BENCH_OUT): $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(BENCH_OUT))
-	$(CXX) -o $(BENCH_OUT) $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_A) $(MRUSTC_EMBED_O) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+	$(CXX) -o $(BENCH_OUT) $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
 
 test: prove-all
 
