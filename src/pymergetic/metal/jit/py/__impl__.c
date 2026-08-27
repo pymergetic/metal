@@ -21,6 +21,10 @@
 #include "py/objmodule.h"
 #include "py/objstr.h"
 #include "py/runtime.h"
+/* mpthread.h defines MP_THREAD_GIL_* unconditionally (empty stubs when
+ * threads are off), so TRYLOCK/EXIT below resolve on every seat including
+ * the browser where MICROPY_PY_THREAD_GIL is unset. */
+#include "py/mpthread.h"
 #endif
 
 #define PM_METAL_JIT_PY_ERR_MAX 512u
