@@ -41,9 +41,18 @@ static uint16_t s_ping_seq;
  * way for the holder to give it up, so a re-entrant call runs the body inline
  * without re-acquiring. Thread-local because multiple OS threads (async runners)
  * can each be inside a pump; only the lock holder on its own thread ever reaches
- * nest>0, so skipping the lock there is race-free on every seat. Single-threaded
- * firmware seats collapse __thread to a plain slot, which is equally correct. */
+ * nest>0, so skipping the lock there is race-free on every seat.
+ *
+ * On freestanding firmware __thread must NOT be used: clang lowers it to a
+ * %fs-relative access, and the BIOS/UEFI boot never sets up a TCB (FS base = 0),
+ * so the access page-faults and triple-faults into a reset loop. Firmware is a
+ * single logical flow (cooperative APIC runners, no pthread), so a plain static
+ * slot is equally correct — same gate the async card uses. */
+#if defined(PM_METAL_FIRMWARE)
+static uint32_t s_ip_pump_nest;
+#else
 static __thread uint32_t s_ip_pump_nest;
+#endif
 
 /* Locked internals: defined later in this TU, but referenced by the if_up
  * path before their definitions. External entry points take pm_ip_lock and
