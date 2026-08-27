@@ -142,6 +142,7 @@ CompileFlags:
     - -I../../ports/unix
     - -I../../ports/unix/variants/standard
     - -I../../ports/unix/build-wasm
+    - -I../../ports/unix/build-metal
     - -I../wasmmod
     - -I../wasmmod/src
     - -Isrc
