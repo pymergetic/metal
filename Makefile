@@ -41,6 +41,7 @@ WASMMOD_GEN_ROOTS := $(CURDIR)/src
 include $(WASMMOD)/gen.mk
 include $(CURDIR)/tools/www.mk
 include $(CURDIR)/tools/src.mk
+include $(CURDIR)/tools/ledger.mk
 
 # Cards and their tests come from the tree (tools/cards.sh), so a new card is
 # proven here the moment it has a manifest — nothing to add below.
@@ -279,6 +280,7 @@ browser:
 	grep -q "upy input feed" $(CURDIR)/build/browser_prove.log
 	grep -q "upy console ids" $(CURDIR)/build/browser_prove.log
 	grep -q "upy fs embed" $(CURDIR)/build/browser_prove.log
+	grep -q "upy ledger round-trip" $(CURDIR)/build/browser_prove.log
 	grep -q "upy process" $(CURDIR)/build/browser_prove.log
 	grep -q "upy ssh session" $(CURDIR)/build/browser_prove.log
 	grep -q "upy zenoh" $(CURDIR)/build/browser_prove.log

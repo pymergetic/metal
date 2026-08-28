@@ -18,6 +18,7 @@ WASMMOD_GEN_ROOTS := $(TOP)/extmod/metal/src
 include $(TOP)/extmod/wasmmod/gen.mk
 include $(TOP)/extmod/metal/tools/www.mk
 include $(TOP)/extmod/metal/tools/src.mk
+include $(TOP)/extmod/metal/tools/ledger.mk
 
 # Metal's crate depends on wasmmod, so libpymergetic_metal.a already contains
 # it. Claim the seat's cargo build here and wasmmod's fragment links ours

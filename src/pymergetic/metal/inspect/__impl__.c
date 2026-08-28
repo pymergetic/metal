@@ -617,6 +617,13 @@ static void fill_call(js_t *j, const char *path) {
     js_ch(j, '}');
 }
 
+static int32_t fill(const char *method, const char *path, char *out, uint32_t out_max);
+
+/* /changes/<target> — the ledger read pane (defined after fill; the local
+ * dispatch in fill and the asgi route both serve it). */
+static int32_t changes_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len);
+
 static int32_t fill(const char *method, const char *path, char *out, uint32_t out_max) {
     js_t j;
     const char *raw;
@@ -704,6 +711,17 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
         }
         js_raw(&j, doc);
         return js_ok(&j) ? 200 : -1;
+    }
+    /* /changes/<target> — the ledger read pane, same body the /changes asgi
+     * route serves; local path for REPL + host prove without a listener. */
+    if (strncmp(path, "/changes/", 9) == 0) {
+        uint32_t blen = 0;
+        if (changes_http(method, path, j.p, j.max, &blen) == 0) {
+            j.n = blen;
+            return 200;
+        }
+        js_raw(&j, "{\"error\":\"not_found\"}");
+        return 404;
     }
     js_raw(&j, "{\"error\":\"not_found\"}");
     return js_ok(&j) ? 404 : -1;
@@ -1425,6 +1443,86 @@ static int32_t docs_asgi_handler(const char *method, const char *path, uint8_t *
     return 0;
 }
 
+/* /changes/<target> — the build card's change ledger, read pane: the JSON
+ * lines recorded for one target, wrapped as one JSON array. Unknown target
+ * is an empty array (a target with no notes is legitimate), a missing
+ * build card is 404 (this pane rides on it). */
+static int32_t changes_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len) {
+    static char lines[PM_METAL_BUILD_LEDGER_MAX];
+    const char *target;
+    js_t j;
+    int32_t n;
+    uint32_t n_lines = 0;
+    size_t w;
+
+    if (method == NULL || strcmp(method, "GET") != 0 || path == NULL) {
+        return -1;
+    }
+    if (strncmp(path, "/changes/", 9) != 0) {
+        return -1;
+    }
+    target = path + 9;
+    if (target[0] == 0) {
+        return -1;
+    }
+    n = pm_metal_build_notes_query(target, -1, lines, sizeof(lines), &n_lines);
+    if (n < 0) {
+        return -1;
+    }
+    j.p = out;
+    j.n = 0;
+    j.max = out_max;
+    js_raw(&j, "{\"target\":");
+    js_str(&j, target);
+    js_raw(&j, ",\"count\":");
+    js_u32(&j, n_lines);
+    js_raw(&j, ",\"dbg_n\":");
+    js_i32(&j, n);
+    js_raw(&j, ",\"lines\":[");
+    /* each ledger line is already a JSON object; emit them as array items */
+    {
+        const char *p = lines;
+        const char *end = lines + strlen(lines);
+        uint32_t i = 0;
+        while (p < end) {
+            const char *nl = (const char *)memchr(p, '\n', (size_t)(end - p));
+            size_t lnlen = nl != NULL ? (size_t)(nl - p) : (size_t)(end - p);
+            if (lnlen > 0) {
+                if (i > 0) {
+                    js_ch(&j, ',');
+                }
+                js_raw(&j, "\"");
+                /* the line is JSON — escape the quotes and backslashes only;
+                 * the payload is ASCII-safe by construction (note_esc) */
+                for (w = 0; w < lnlen; w++) {
+                    if (p[w] == '"' || p[w] == '\\') {
+                        js_ch(&j, '\\');
+                    }
+                    js_ch(&j, p[w]);
+                }
+                js_raw(&j, "\"");
+                i++;
+            }
+            p = nl != NULL ? nl + 1 : end;
+        }
+    }
+    js_raw(&j, "]}");
+    if (!js_ok(&j)) {
+        return -1;
+    }
+    *out_len = j.n;
+    return 0;
+}
+
+static int32_t changes_asgi_handler(const char *method, const char *path, uint8_t *out,
+    uint32_t out_max, uint32_t *out_len) {
+    if (changes_http(method, path, (char *)out, out_max, out_len) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int32_t asgi_handler(const char *method, const char *path, uint8_t *out, uint32_t out_max,
     uint32_t *out_len) {
     int32_t st;
@@ -1479,6 +1577,12 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
     /* Docs: /docs/<fqn>/<fn> serves the extracted comment block of one
      * export face (prose + :param: + :example:). */
     if (pm_metal_net_http_asgi_route_fn_ct("GET", "/docs/*", docs_asgi_handler,
+            "application/json") != 0) {
+        return -1;
+    }
+    /* Changes: /changes/<target> serves the ledger lines for one target
+     * (all kinds). The build card owns the ledger; this is the read pane. */
+    if (pm_metal_net_http_asgi_route_fn_ct("GET", "/changes/*", changes_asgi_handler,
             "application/json") != 0) {
         return -1;
     }

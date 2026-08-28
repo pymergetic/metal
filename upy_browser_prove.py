@@ -77,6 +77,14 @@ def _cdn(base):
     if m.fs.up() != 0:
         raise SystemExit("fs up")
     print("upy fs embed")
+    # metal.build ledger: round-trip through the /changes read pane on the
+    # browser seat too (the fs card is arena-backed here as everywhere).
+    import pymergetic.metal.inspect as inspect
+
+    st = inspect.handle("GET", "/changes/pymergetic.metal.build")
+    if st != 200 or 'decision' not in (inspect.body() or ""):
+        raise SystemExit("ledger seed %s" % (st,))
+    print("upy ledger round-trip")
     if m.process.up() != 0:
         raise SystemExit("process up")
     print("upy process")

@@ -145,6 +145,29 @@ print("upy console ids")
 if m.fs.up() != 0:
     raise SystemExit("fs up")
 print("upy fs embed")
+
+# metal.build ledger: the fs-backed change ledger round-trips on this seat —
+# seeded lines query, a note_add appends, note_has gates on kind.
+import pymergetic.metal.build as build
+
+lines = build.notes_query("pymergetic.metal.build", -1)
+if lines is None or '"kind":"decision"' not in lines:
+    raise SystemExit("ledger seed %s" % (lines,))
+if build.note_add(
+    "upy.prove.ledger",
+    0,
+    "upy prove: ledger append from the unix seat",
+    ("pymergetic.metal.fs",),
+) != 0:
+    raise SystemExit("ledger add")
+lines = build.notes_query("upy.prove.ledger", -1)
+if lines is None or '"kind":"change"' not in lines:
+    raise SystemExit("ledger query %s" % (lines,))
+if build.note_has("upy.prove.ledger", 0) != 1:
+    raise SystemExit("ledger has")
+if build.note_has("never.noted", 0) != 0:
+    raise SystemExit("ledger gate")
+print("upy ledger round-trip")
 if m.process.up() != 0:
     raise SystemExit("process up")
 print("upy process")

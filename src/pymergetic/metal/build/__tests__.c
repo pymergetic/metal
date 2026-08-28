@@ -995,6 +995,126 @@ static int32_t test_record_query(void) {
     return 0;
 }
 
+/*------------------ Phase 10: change ledger ------------------
+ * The ledger is one fs file (/src/.changes.jsonl), seeded from the authored
+ * changes.jsonl beside this muscle. The prove: the seed materializes on
+ * first use, note_add appends a JSON line, notes_query filters by target
+ * and kind, note_has is the write-back gate, and refusals are honest (no
+ * target, empty reason, bad kind). A mutation attempt with no matching
+ * note must fail the gate — that refusal is the point of the ledger. */
+static int32_t test_ledger_roundtrip(void) {
+    static char scratch[PM_METAL_BUILD_LEDGER_MAX];
+    const char *refs[2];
+    uint32_t n = 0;
+    int32_t rc;
+
+    /* (a) the seed materializes: the authored decision/warning/todo lines
+     * for their targets are queryable without any note_add. */
+    rc = pm_metal_build_notes_query("pymergetic.metal.build", -1,
+        scratch, sizeof(scratch), &n);
+    if (rc < 0 || n != 1) {
+        return 140;
+    }
+    if (strstr(scratch, "\"kind\":\"decision\"") == NULL
+        || strstr(scratch, "ledger lives as one fs file") == NULL) {
+        return 141;
+    }
+    rc = pm_metal_build_notes_query("pymergetic.metal.jit.rs.compiler", -1,
+        scratch, sizeof(scratch), &n);
+    if (rc < 0 || n != 1) {
+        return 142;
+    }
+    if (strstr(scratch, "\"kind\":\"todo\"") == NULL) {
+        return 143;
+    }
+    /* kind filter: the todo is not a change */
+    if (pm_metal_build_note_has("pymergetic.metal.jit.rs.compiler",
+            PM_METAL_BUILD_NOTE_CHANGE) != 0) {
+        return 144;
+    }
+    if (pm_metal_build_note_has("pymergetic.metal.jit.rs.compiler",
+            PM_METAL_BUILD_NOTE_TODO) != 1) {
+        return 145;
+    }
+
+    /* (b) add + query round-trip with refs */
+    refs[0] = "pymergetic.metal.build";
+    refs[1] = "/src/pymergetic/metal/build/__impl__.c";
+    rc = pm_metal_build_note_add("test.ledger.target",
+        PM_METAL_BUILD_NOTE_CHANGE,
+        "phase 10 prove: appended a change note with refs",
+        refs, 2);
+    if (rc != PM_METAL_BUILD_OK) {
+        return 146;
+    }
+    rc = pm_metal_build_notes_query("test.ledger.target", -1,
+        scratch, sizeof(scratch), &n);
+    if (rc < 0 || n != 1) {
+        return 147;
+    }
+    if (strstr(scratch, "\"kind\":\"change\"") == NULL
+        || strstr(scratch, "phase 10 prove") == NULL
+        || strstr(scratch, "\"refs\":[") == NULL
+        || strstr(scratch, "/src/pymergetic/metal/build/__impl__.c") == NULL) {
+        return 148;
+    }
+    /* appends stack: second note on the same target is line 2 */
+    rc = pm_metal_build_note_add("test.ledger.target",
+        PM_METAL_BUILD_NOTE_WARNING, "second note: overflows a small buf",
+        NULL, 0);
+    if (rc != PM_METAL_BUILD_OK) {
+        return 149;
+    }
+    rc = pm_metal_build_notes_query("test.ledger.target", -1,
+        scratch, sizeof(scratch), &n);
+    if (rc < 0 || n != 2) {
+        return 150;
+    }
+    /* kind filter: only the warning matches */
+    rc = pm_metal_build_notes_query("test.ledger.target",
+        (int32_t)PM_METAL_BUILD_NOTE_WARNING, scratch, sizeof(scratch), &n);
+    if (rc < 0 || n != 1
+        || strstr(scratch, "second note") == NULL) {
+        return 151;
+    }
+    /* (c) out too small: line 1 matches, output truncated, count honest */
+    {
+        char tiny[16];
+        uint32_t m = 0;
+        rc = pm_metal_build_notes_query("pymergetic.metal.net.ip", -1, tiny,
+            sizeof(tiny), &m);
+        if (rc < 0 || m != 1) {
+            return 152;
+        }
+    }
+
+    /* (d) refusals — the negative proves */
+    if (pm_metal_build_note_add(NULL, PM_METAL_BUILD_NOTE_CHANGE,
+            "no target", NULL, 0) == PM_METAL_BUILD_OK) {
+        return 153;
+    }
+    if (pm_metal_build_note_add("x.y", PM_METAL_BUILD_NOTE_CHANGE,
+            "", NULL, 0) == PM_METAL_BUILD_OK) {
+        return 154;
+    }
+    if (pm_metal_build_note_add("x.y",
+            (pm_metal_build_note_kind_t)99, "bad kind", NULL, 0)
+            == PM_METAL_BUILD_OK) {
+        return 155;
+    }
+    /* the write-back gate: a target with no change note must refuse */
+    if (pm_metal_build_note_has("never.noted.anywhere",
+            PM_METAL_BUILD_NOTE_CHANGE) != 0) {
+        return 156;
+    }
+
+    /* (e) ledger path is the card-owned file */
+    if (strcmp(pm_metal_build_ledger_path(), "/src/.changes.jsonl") != 0) {
+        return 157;
+    }
+    return 0;
+}
+
 static int32_t pm_metal_build_tests(void) {
     int32_t rc;
     rc = test_parse_real_tcc_manifest();
@@ -1014,6 +1134,8 @@ static int32_t pm_metal_build_tests(void) {
     rc = test_rebuild_tcc();
     if (rc) return rc;
     rc = test_record_query();
+    if (rc) return rc;
+    rc = test_ledger_roundtrip();
     if (rc) return rc;
     return 0;
 }

@@ -208,6 +208,7 @@ int32_t pm_metal_fs_up(void) {
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_init, pm_metal_fs_init, int32_t(pm_util_mem_arena_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_deinit, pm_metal_fs_deinit, void(void));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_add, pm_metal_fs_add, int32_t(const char *, const uint8_t *, uint32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_drop, pm_metal_fs_drop, int32_t(const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_stat, pm_metal_fs_stat, int32_t(const char *, uint32_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_read, pm_metal_fs_read, int32_t(const char *, uint8_t *, uint32_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_import_blk, pm_metal_fs_import_blk, int32_t(int32_t));

@@ -29,6 +29,14 @@ body = inspect.body()
 if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body or '"zenoh":true' not in body:
     raise RuntimeError("inspect caps")
 print("upy inspect caps")
+
+# metal.build change ledger: the seed materializes on the fs card and the
+# /changes read pane serves it - on firmware seats too (arena fs, no POSIX).
+st = inspect.handle("GET", "/changes/pymergetic.metal.build")
+body = inspect.body()
+if st != 200 or 'decision' not in body:
+    raise RuntimeError("changes ledger")
+print("upy changes ledger")
 if m.net.dns.resolve is None:
     raise RuntimeError("dns")
 print("upy dns")

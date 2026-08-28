@@ -151,6 +151,48 @@ const pm_metal_build_record_t *pm_metal_build_record_find(const char *fqn);
  * linked images themselves are freed via artifact_destroy). */
 void pm_metal_build_record_reset(void);
 
+/*------------------ change ledger (fs-backed, JSON-lines) ------------------
+ * Every source mutation carries a note: what kind of change, why, and the
+ * things it touches. The ledger is one card-owned file in the fs card
+ * (/src/.changes.jsonl) — one JSON object per line, appended by the build
+ * card (it owns write-back) and queried by anyone. Phase 11's AST editor
+ * refuses a write-back without a matching note for the target. */
+
+#define PM_METAL_BUILD_NOTE_TARGET_MAX 160u
+#define PM_METAL_BUILD_NOTE_REASON_MAX 256u
+#define PM_METAL_BUILD_NOTE_REFS_MAX 8u
+#define PM_METAL_BUILD_LEDGER_MAX (64u * 1024u)
+
+typedef enum pm_metal_build_note_kind {
+    PM_METAL_BUILD_NOTE_CHANGE = 0,
+    PM_METAL_BUILD_NOTE_DECISION = 1,
+    PM_METAL_BUILD_NOTE_WARNING = 2,
+    PM_METAL_BUILD_NOTE_TODO = 3,
+} pm_metal_build_note_kind_t;
+
+/* Append one note as a JSON line to /src/.changes.jsonl. kind is validated;
+ * an empty reason is refused (a note without a reason is noise). refs are
+ * optional targets the note touches (card fqns, file paths). Returns 0 on
+ * append, a negative status on refusal. */
+int32_t pm_metal_build_note_add(const char *target,
+    pm_metal_build_note_kind_t kind, const char *reason,
+    const char *const *refs, uint32_t n_refs);
+
+/* Query notes: lines whose target matches (exact) or all when target is
+ * NULL, filtered by kind when kind >= 0. Matching lines are concatenated
+ * (newline-joined) into out, which receives the byte count. Returns the
+ * number of matching lines, or a negative status on error. */
+int32_t pm_metal_build_notes_query(const char *target,
+    int32_t kind, char *out, size_t out_len, uint32_t *out_n);
+
+/* True when target has at least one note of kind (the write-back gate:
+ * Phase 11's editor refuses a mutation without this). */
+int32_t pm_metal_build_note_has(const char *target,
+    pm_metal_build_note_kind_t kind);
+
+/* The ledger path in the fs card — the one file the build card owns. */
+const char *pm_metal_build_ledger_path(void);
+
 #ifdef __cplusplus
 }
 #endif

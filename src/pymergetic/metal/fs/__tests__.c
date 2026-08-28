@@ -18,7 +18,7 @@ int32_t pm_metal_fs_tests(void) {
     uint8_t out[8];
     uint32_t n = sizeof(out);
     uint32_t len = 0;
-    if (pm_metal_fs_add("/hi.txt", body, 2) != 0) {
+    if (pm_metal_fs_add("/hi.txt", body, 2) < 0) {
         return fail("add");
     }
     if (pm_metal_fs_stat("/hi.txt", &len) != 0 || len != 2u) {

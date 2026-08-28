@@ -86,6 +86,259 @@ void pm_metal_build_record_reset(void) {
     s_record_epoch = 0;
 }
 
+/*------------------ change ledger (fs-backed, JSON-lines) ------------------
+ * One file in the fs card: /src/.changes.jsonl. note_add appends a JSON line
+ * (read the file, drop it, re-add with the new bytes — fs_add refuses
+ * duplicates, so append is a read-modify-write). notes_query scans lines and
+ * concatenates matches. The ledger is seeded from the authored
+ * changes.jsonl beside the muscle (source-in-its-lang: the seed is a real
+ * file, embedded as bytes, never a C string). */
+
+#include "pymergetic/metal/fs/__exports__.h"
+#include "pymergetic/metal/build/changes_embed.inc.h"
+
+#define PM_METAL_BUILD_LEDGER_PATH "/src/.changes.jsonl"
+
+/* One shared scratch for every ledger read path (file read + scan). The
+ * runtime is single-threaded and note_add / notes_query never nest, so a
+ * single static keeps the card's BSS footprint at one ledger-sized buffer
+ * (firmware seats link this card too). */
+static uint8_t s_ledger_buf[PM_METAL_BUILD_LEDGER_MAX];
+
+const char *pm_metal_build_ledger_path(void) {
+    return PM_METAL_BUILD_LEDGER_PATH;
+}
+
+/* Materialize the ledger file into fs at first use (idempotent). Returns 0
+ * when the file exists (now or before), -1 when it cannot be created. */
+static int32_t ledger_ensure(void) {
+    uint32_t len = 0;
+    int32_t st = pm_metal_fs_stat(PM_METAL_BUILD_LEDGER_PATH, &len);
+    if (st == 0) {
+        return len > 0 ? 0 : -1;
+    }
+    return pm_metal_fs_add(PM_METAL_BUILD_LEDGER_PATH,
+        (const uint8_t *)pm_metal_build_changes_jsonl(),
+        pm_metal_build_changes_jsonl_len()) < 0 ? -1 : 0;
+}
+
+/* Portable bounded substring find (memmem is a GNU extension; firmware
+ * freestanding has neither). Returns the match or NULL. */
+static const char *build_memfind(const char *hay, size_t hay_n,
+    const char *needle) {
+    size_t nn = strlen(needle);
+    size_t i;
+    if (nn == 0 || hay_n < nn) {
+        return NULL;
+    }
+    for (i = 0; i + nn <= hay_n; i++) {
+        if (hay[i] == needle[0] && memcmp(hay + i, needle, nn) == 0) {
+            return hay + i;
+        }
+    }
+    return NULL;
+}
+
+/* JSON string escape into out (bounded). Returns bytes written. */
+static size_t note_esc(const char *s, char *out, size_t out_max) {
+    size_t w = 0;
+    for (; *s != 0 && w + 7u < out_max; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') {
+            out[w++] = '\\';
+            out[w++] = (char)c;
+        } else if (c == '\n') {
+            out[w++] = '\\';
+            out[w++] = 'n';
+        } else if (c == '\r') {
+            out[w++] = '\\';
+            out[w++] = 'r';
+        } else if (c == '\t') {
+            out[w++] = '\\';
+            out[w++] = 't';
+        } else if (c < 0x20u) {
+            w += (size_t)snprintf(out + w, out_max - w, "\\u%04x", c);
+        } else {
+            out[w++] = (char)c;
+        }
+    }
+    out[w] = 0;
+    return w;
+}
+
+static const char *note_kind_name(pm_metal_build_note_kind_t kind) {
+    switch (kind) {
+        case PM_METAL_BUILD_NOTE_CHANGE:   return "change";
+        case PM_METAL_BUILD_NOTE_DECISION: return "decision";
+        case PM_METAL_BUILD_NOTE_WARNING:  return "warning";
+        case PM_METAL_BUILD_NOTE_TODO:     return "todo";
+        default:                           return NULL;
+    }
+}
+
+int32_t pm_metal_build_note_add(const char *target,
+    pm_metal_build_note_kind_t kind, const char *reason,
+    const char *const *refs, uint32_t n_refs) {
+    static char line[512 + PM_METAL_BUILD_NOTE_REFS_MAX * 80u];
+    char esc[2 * PM_METAL_BUILD_NOTE_REASON_MAX];
+    const char *kname;
+    size_t w = 0;
+    uint32_t existing_len = 0;
+    uint32_t i;
+    if (target == NULL || target[0] == 0 || reason == NULL || reason[0] == 0) {
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    kname = note_kind_name(kind);
+    if (kname == NULL) {
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    if (n_refs > PM_METAL_BUILD_NOTE_REFS_MAX) {
+        n_refs = PM_METAL_BUILD_NOTE_REFS_MAX;
+    }
+    if (ledger_ensure() != 0) {
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    w = (size_t)snprintf(line, sizeof(line), "{\"kind\":\"%s\",\"target\":\"%s\",\"reason\":\"",
+        kname, target);
+    if (w >= sizeof(line)) {
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    note_esc(reason, esc, sizeof(esc));
+    w += (size_t)snprintf(line + w, sizeof(line) - w, "%s\"", esc);
+    if (w >= sizeof(line)) {
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    if (n_refs > 0) {
+        int wrote_any = 0;
+        w += (size_t)snprintf(line + w, sizeof(line) - w, ",\"refs\":[");
+        for (i = 0; i < n_refs && w < sizeof(line); i++) {
+            if (refs[i] == NULL) {
+                continue;
+            }
+            if (wrote_any) {
+                w += (size_t)snprintf(line + w, sizeof(line) - w, ",");
+            }
+            note_esc(refs[i], esc, sizeof(esc));
+            w += (size_t)snprintf(line + w, sizeof(line) - w, "\"%s\"", esc);
+            wrote_any = 1;
+        }
+        w += (size_t)snprintf(line + w, sizeof(line) - w, "]");
+    }
+    if (w >= sizeof(line)) {
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    w += (size_t)snprintf(line + w, sizeof(line) - w, "}\n");
+    if (w >= sizeof(line)) {
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    /* read-modify-write append: fs_add refuses an existing path */
+    {
+        uint32_t got = 0;
+        uint8_t *existing = s_ledger_buf;
+        if (pm_metal_fs_stat(PM_METAL_BUILD_LEDGER_PATH, &existing_len) != 0) {
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        if (existing_len > 0) {
+            got = existing_len;
+            if (got > sizeof(s_ledger_buf)) {
+                got = sizeof(s_ledger_buf);
+            }
+            if (pm_metal_fs_read(PM_METAL_BUILD_LEDGER_PATH, existing, &got) != 0) {
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+        }
+        if (got + w >= sizeof(s_ledger_buf)) {
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        if (pm_metal_fs_drop(PM_METAL_BUILD_LEDGER_PATH) != 0 && existing_len > 0) {
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        memcpy(existing + got, line, w);
+        if (pm_metal_fs_add(PM_METAL_BUILD_LEDGER_PATH, existing, got + (uint32_t)w) < 0) {
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+    }
+    return PM_METAL_BUILD_OK;
+}
+
+/* Does ledger line `ln` (length n) match target + kind? target NULL = all. */
+static int note_line_match(const char *ln, size_t n, const char *target,
+    int32_t kind) {
+    char pat[PM_METAL_BUILD_NOTE_TARGET_MAX + 8u];
+    if (kind >= 0) {
+        const char *kname = note_kind_name((pm_metal_build_note_kind_t)kind);
+        if (kname == NULL) {
+            return 0;
+        }
+        snprintf(pat, sizeof(pat), "\"kind\":\"%s\"", kname);
+        if (build_memfind(ln, n, pat) == NULL) {
+            return 0;
+        }
+    }
+    if (target == NULL) {
+        return 1;
+    }
+    snprintf(pat, sizeof(pat), "\"target\":\"%s\"", target);
+    return build_memfind(ln, n, pat) != NULL;
+}
+
+int32_t pm_metal_build_notes_query(const char *target,
+    int32_t kind, char *out, size_t out_len, uint32_t *out_n) {
+    uint32_t len = 0;
+    uint32_t n_match = 0;
+    size_t w = 0;
+    const char *p;
+    const char *end;
+    uint8_t *buf = s_ledger_buf;
+    if (out == NULL || out_len == 0 || out_n == NULL) {
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    out[0] = 0;
+    *out_n = 0;
+    if (ledger_ensure() != 0) {
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    len = sizeof(s_ledger_buf);
+    if (pm_metal_fs_read(PM_METAL_BUILD_LEDGER_PATH, buf, &len) != 0) {
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    p = (const char *)buf;
+    end = p + len;
+    while (p < end) {
+        const char *nl = (const char *)memchr(p, '\n', (size_t)(end - p));
+        size_t lnlen = nl != NULL ? (size_t)(nl - p) : (size_t)(end - p);
+        if (lnlen > 0 && note_line_match(p, lnlen, target, kind)) {
+            if (n_match > 0 && w + 1u < out_len) {
+                out[w++] = '\n';
+            }
+            if (lnlen >= out_len - w) {
+                lnlen = out_len - w - 1u;
+            }
+            memcpy(out + w, p, lnlen);
+            w += lnlen;
+            out[w] = 0;
+            n_match++;
+        }
+        p = nl != NULL ? nl + 1 : end;
+    }
+    *out_n = n_match;
+    return (int32_t)n_match;
+}
+
+int32_t pm_metal_build_note_has(const char *target,
+    pm_metal_build_note_kind_t kind) {
+    char scratch[128];
+    uint32_t n = 0;
+    if (target == NULL || target[0] == 0) {
+        return 0;
+    }
+    if (pm_metal_build_notes_query(target, (int32_t)kind, scratch,
+            sizeof(scratch), &n) < 0) {
+        return 0;
+    }
+    return n > 0 ? 1 : 0;
+}
+
 /*------------------ error helpers ------------------*/
 
 static void err_set(char *errbuf, size_t errbuf_len, const char *fmt, int line) {
@@ -1000,6 +1253,15 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_record_find, pm_metal_bui
     const pm_metal_build_record_t *(const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_record_reset, pm_metal_build_record_reset,
     void(void));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_note_add, pm_metal_build_note_add,
+    int32_t(const char *, pm_metal_build_note_kind_t, const char *,
+        const char *const *, uint32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_notes_query, pm_metal_build_notes_query,
+    int32_t(const char *, int32_t, char *, size_t, uint32_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_note_has, pm_metal_build_note_has,
+    int32_t(const char *, pm_metal_build_note_kind_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_ledger_path, pm_metal_build_ledger_path,
+    const char *(void));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_destroy, pm_metal_build_artifact_destroy,
     void(pm_metal_build_artifact_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_lookup, pm_metal_build_artifact_lookup,

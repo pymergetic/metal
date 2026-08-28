@@ -1,0 +1,3 @@
+{"kind":"decision","target":"pymergetic.metal.build","reason":"ledger lives as one fs file (/src/.changes.jsonl) owned by the build card, not a new module"}
+{"kind":"warning","target":"pymergetic.metal.net.ip","reason":"custom TCP stack has no robust retransmit timer; UEFI CDN fetch flakes ~10% under QEMU user-net (pre-existing, mitigated by async stall 1s + autoexec retry)"}
+{"kind":"todo","target":"pymergetic.metal.jit.rs.compiler","reason":"mrustc port is the remaining unlifted external: embed as a runtime card, then rewrite in Rust so the card self-hosts"}

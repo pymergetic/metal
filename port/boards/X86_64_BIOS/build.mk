@@ -166,6 +166,7 @@ prove: $(BUILD)/metal.qemu.elf $(BUILD)/blk.img
 	grep -q "upy native card import" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy inspect" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy inspect caps" $(BUILD)/serial.log || exit 1; \
+	grep -q "upy changes ledger" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy dns" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy socket" $(BUILD)/serial.log || exit 1; \
 	grep -q "upy swarm" $(BUILD)/serial.log || exit 1; \

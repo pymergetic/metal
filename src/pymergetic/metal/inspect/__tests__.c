@@ -112,6 +112,28 @@ static int32_t case_handle(void) {
         || strstr(body, "\"example\":\"st = pm_metal_inspect_handle") == NULL) {
         return fail("docs documented face body");
     }
+    /* /changes/<target>: the ledger read pane. A seeded target serves its
+     * lines; an unnoted target is count 0 (not 404); a bare /changes/ is 404. */
+    if (pm_metal_inspect_handle(
+            "GET", "/changes/pymergetic.metal.jit.rs.compiler") != 200) {
+        return fail("changes seeded status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"count\":1") == NULL
+        || strstr(body, "mrustc port is the remaining unlifted external") == NULL) {
+        return fail("changes seeded body");
+    }
+    if (pm_metal_inspect_handle("GET", "/changes/unnoted.target") != 200) {
+        return fail("changes unnoted status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"count\":0") == NULL
+        || strstr(body, "\"lines\":[]") == NULL) {
+        return fail("changes unnoted body");
+    }
+    if (pm_metal_inspect_handle("GET", "/changes/") != 404) {
+        return fail("changes empty 404");
+    }
     /* the example block alone, as REPL-runnable text */
     {
         const char *ex = pm_metal_inspect_example("pymergetic.metal.inspect",
