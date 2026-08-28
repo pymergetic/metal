@@ -317,6 +317,102 @@ static int32_t test_multi_object_link(void) {
 #endif
 }
 
+/*------------------ Phase 13: wasm-seat build path ------------------
+ * On the browser seat the "object" a compile produces IS a wasm module
+ * (TCC's wasm32 backend serializes one), and "linking" = loading every
+ * module through the loader, which instantiates it in WAMR and publishes
+ * its named exports into the registry. The prove: compile -> link ->
+ * artifact_lookup resolves a named export through the registry, and
+ * destroy unloads (module count returns to baseline). */
+static int32_t test_wasm_seat_link(void) {
+#if defined(PM_METAL_BUILD_WASM_LINK)
+    static const char *src =
+        "int probe_two(void) { return 2; }\n"
+        "int probe_add_one(int x) { return x + 1; }\n";
+    void *backing = malloc(1u << 19);
+    pm_util_mem_arena_t *arena;
+    pm_metal_build_unit_t unit;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    pm_metal_build_artifact_t art;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    uint32_t baseline;
+    int32_t rc;
+
+    if (!backing) return 200;
+    arena = pm_util_mem_arena_create(backing, 1u << 19);
+    if (!arena) { free(backing); return 201; }
+
+    memset(&unit, 0, sizeof(unit));
+    snprintf(unit.fqn, sizeof(unit.fqn), "%s", "test.wasm.seat");
+
+    rc = pm_metal_build_compile_source(arena, &unit, NULL, src,
+        &obj, &obj_len, err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 202;
+    }
+    if (obj == NULL || obj_len < 8
+        || obj[0] != 0x00 || obj[1] != 0x61) {   /* \0asm magic */
+        pm_util_mem_arena_destroy(arena); free(backing); return 203;
+    }
+
+    baseline = pm_wasmmod_registry_module_count();
+    rc = pm_metal_build_link(arena, &unit, &obj, &obj_len, 1, &art,
+        err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 204;
+    }
+    if (!art.is_wasm || art.n_loader_handles != 1) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 205;
+    }
+    if (pm_wasmmod_registry_module_count() != baseline + 1) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 206;
+    }
+
+    /* the named export resolves through the registry */
+    if (pm_metal_build_artifact_lookup(&art, "probe_two") == NULL) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 207;
+    }
+    if (pm_metal_build_artifact_lookup(&art, "probe_add_one") == NULL) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 208;
+    }
+    if (pm_metal_build_artifact_lookup(&art, "no_such") != NULL) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 209;
+    }
+
+    /* destroy unloads: the registry entry leaves with the artifact */
+    pm_metal_build_artifact_destroy(&art);
+    if (pm_wasmmod_registry_module_count() != baseline) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 210;
+    }
+
+    /* (b) negative: empty object refused honestly */
+    {
+        uint8_t *bogus = NULL;
+        size_t bogus_len = 0;
+        rc = pm_metal_build_link(arena, &unit, &bogus, &bogus_len, 1, &art,
+            err, sizeof(err));
+        if (rc == PM_METAL_BUILD_OK) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing); return 211;
+        }
+    }
+
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+#else
+    /* ELF seats prove the multi-object path above; the wasm link is a
+     * browser-seat concern. */
+    return 0;
+#endif
+}
+
 /*------------------ Phase 4.2: manifest include/define forwarding ----------
  * Parse the REAL externals/tcc/__pmm__.toml, then compile a source that
  * #includes "libtcc.h" with include_dirs=["."] rooted at externals/tcc and
@@ -1244,6 +1340,8 @@ static int32_t pm_metal_build_tests(void) {
     rc = test_graph_cycle();
     if (rc) return rc;
     rc = test_multi_object_link();
+    if (rc) return rc;
+    rc = test_wasm_seat_link();
     if (rc) return rc;
     rc = test_compile_tcc_manifest_forwarding();
     if (rc) return rc;

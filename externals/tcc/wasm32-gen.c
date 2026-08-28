@@ -222,13 +222,38 @@ static uint8_t *code_ptr = code_buf;
 static int func_start_offs[256];
 static int func_body_len[256];
 static int func_local_decl_count[256];
+static char func_names[256][128];
+static int func_param_count[256];   /* source params (all i32) */
+static int func_ret_i32[256];       /* 1 when the fn returns a value */
+static int cur_ret_i32;             /* the fn being generated */
+static int cur_param_count;         /* its param count (register-local base) */
 static int func_count;
 static int label_depth;
 
-static void wasm_reset(void) {
+/* Frame model: TCC addresses locals by negative offsets from 0 (loc counts
+ * down). Map offset a -> linear-memory FRAME_BASE + a so every frame slot
+ * lands in the module's own memory (FRAME_BASE keeps them positive). */
+#define WASM_FRAME_BASE 8192
+/* Param model: each source param is one i32 wasm local (locals 0..n-1, the
+ * functype's own params). gfunc_set_param assigns param i the sentinel
+ * address PARAM_ADDR(i); load/store recognize it and use the local. */
+#define PARAM_ADDR(i) (-65536 - 4 * (i))
+static int param_local_of(int addr) {
+    if (addr <= -65536) {
+        int idx = (-addr - 65536) / 4;
+        return idx;
+    }
+    return -1;
+}
+static int frame_addr(int addr) { return WASM_FRAME_BASE + addr; }
+
+void wasm_reset(void) {
     code_ptr = code_buf;
     func_count = 0;
     label_depth = 0;
+    memset(func_names, 0, sizeof(func_names));
+    memset(func_param_count, 0, sizeof(func_param_count));
+    memset(func_ret_i32, 0, sizeof(func_ret_i32));
 }
 
 static void we(uint8_t b) { *code_ptr++ = b; }
@@ -266,6 +291,17 @@ ST_FUNC void gen_le64(int64_t c) {
 static void we_op_local(uint8_t op, int idx) { we(op); we_u32((uint32_t)idx); }
 static void push_i32(int32_t v) { we(WOP_I32_CONST); we_i32(v); }
 
+/* register r's wasm local index: the body's declared locals start AFTER the
+ * functype's params, so every synthetic register local is shifted by the
+ * current fn's param count. */
+static int reg_local(int r) { return cur_param_count + r; }
+
+/* consume the stack top into local idx: locals ARE the registers, the wasm
+ * stack is only ever transient scratch between one producer and its
+ * consumer, so the operand stack is balanced at every statement boundary
+ * (a requirement for validation). */
+static void we_op_setlocal(uint8_t op, int idx) { we(op); we_u32((uint32_t)idx); }
+
 /* ----- load: bring SValue sv into register r ----- */
 ST_FUNC void load(int r, SValue *sv)
 {
@@ -273,19 +309,26 @@ ST_FUNC void load(int r, SValue *sv)
     int ft = sv->type.t & ~VT_DEFSIGN;
     int fc = sv->c.i;
     int v = fr & VT_VALMASK;
+    int pl;
     ft &= ~(VT_VOLATILE | VT_CONSTANT);
 
     if (fr & VT_LVAL) {
+        if (v == VT_LOCAL && (pl = param_local_of(fc)) >= 0) {
+            /* a param: its value IS the local, no memory deref */
+            we_op_local(WOP_LOCAL_GET, pl);
+            we_op_setlocal(WOP_LOCAL_SET, r);
+            return;
+        }
         if (v == VT_LOCAL) {
-            push_i32(fc);
+            push_i32(frame_addr(fc));
         } else if (v == VT_LLOCAL) {
-            push_i32(fc);
-            we_op_local(WOP_LOCAL_GET, NB_REGS + 0);
+            push_i32(frame_addr(fc));
+            we_op_local(WOP_LOCAL_GET, reg_local(NB_REGS + 0));
             we(WOP_I32_ADD);
         } else if ((fr & VT_SYM) && sv->sym) {
             push_i32(fc);
         } else {
-            we_op_local(WOP_LOCAL_GET, v);
+            we_op_local(WOP_LOCAL_GET, reg_local(v));
             if (fc) { push_i32(fc); we(WOP_I32_ADD); }
         }
         switch (ft & VT_BTYPE) {
@@ -304,11 +347,13 @@ ST_FUNC void load(int r, SValue *sv)
     } else {
         if (fr & VT_SYM) { push_i32(fc); }
         else if (v == VT_CONST) { push_i32(fc); }
-        else if (v == VT_CMP) { /* already on stack */ }
-        else if (v == VT_JMP || v == VT_JMPI) { push_i32((v & 1) ? 1 : 0); }
-        else { we_op_local(WOP_LOCAL_GET, v); }
+        else if (v == VT_CMP || v == VT_JMP || v == VT_JMPI) {
+            /* cmp results and jump values live in the vtop register as 0/1 */
+            we_op_local(WOP_LOCAL_GET, reg_local(TREG_R0));
+        }
+        else { we_op_local(WOP_LOCAL_GET, reg_local(v)); }
     }
-    we_op_local(WOP_LOCAL_TEE, r);
+    we_op_setlocal(WOP_LOCAL_SET, reg_local(r));
 }
 
 /* ----- store: write register r to SValue v (lvalue) ----- */
@@ -318,13 +363,20 @@ ST_FUNC void store(int r, SValue *v)
     int bt = v->type.t & VT_BTYPE;
     int fc = v->c.i;
     int vi = fr & VT_VALMASK;
+    int pl;
 
-    if (vi == VT_LOCAL) { push_i32(fc); }
-    else if (vi == VT_LLOCAL) { push_i32(fc); we_op_local(WOP_LOCAL_GET, NB_REGS + 0); we(WOP_I32_ADD); }
+    if (vi == VT_LOCAL && (pl = param_local_of(fc)) >= 0) {
+        /* store to a param: it IS a local */
+        we_op_local(WOP_LOCAL_GET, reg_local(r));
+        we_op_setlocal(WOP_LOCAL_SET, pl);
+        return;
+    }
+    if (vi == VT_LOCAL) { push_i32(frame_addr(fc)); }
+    else if (vi == VT_LLOCAL) { push_i32(frame_addr(fc)); we_op_local(WOP_LOCAL_GET, reg_local(NB_REGS + 0)); we(WOP_I32_ADD); }
     else if ((fr & VT_SYM) && v->sym) { push_i32(fc); }
-    else { we_op_local(WOP_LOCAL_GET, vi); if (fc) { push_i32(fc); we(WOP_I32_ADD); } }
+    else { we_op_local(WOP_LOCAL_GET, reg_local(vi)); if (fc) { push_i32(fc); we(WOP_I32_ADD); } }
 
-    we_op_local(WOP_LOCAL_GET, r);
+    we_op_local(WOP_LOCAL_GET, reg_local(r));
 
     switch (bt) {
     case VT_BYTE: case VT_BOOL: we(WOP_I32_STORE8); we_u32(0); we_u32(0); break;
@@ -335,6 +387,7 @@ ST_FUNC void store(int r, SValue *v)
     case VT_INT: case VT_PTR:
     default: we(WOP_I32_STORE); we_u32(2); we_u32(0); break;
     }
+    /* the store consumed both scratch operands: stack is clean */
 }
 
 /* ----- Function prologue / epilogue ----- */
@@ -348,20 +401,63 @@ ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int 
 
 ST_FUNC void gfunc_prolog(Sym *func_sym)
 {
-    (void)func_sym;
+    int ret_i32 = 1;
+    int n_params = 0;
+    Sym *ps;
     func_start_offs[func_count] = (int)(code_ptr - code_buf);
+    /* capture the function's source name: the wasm module exports it, which
+     * is what the registry-linked build path addresses faces by. */
+    if (func_count < 256) {
+        const char *nm = get_tok_str(func_sym->v, NULL);
+        if (nm != NULL) {
+            size_t i;
+            for (i = 0; i + 1 < sizeof(func_names[0]) && nm[i] != '\0'; i++) {
+                func_names[func_count][i] = nm[i];
+            }
+            func_names[func_count][i] = '\0';
+        } else {
+            func_names[func_count][0] = '\0';
+        }
+    }
+    /* signature: every source param is one i32 wasm local (the functype's
+     * own params). gfunc_set_param binds each param Sym to its sentinel
+     * address; load/store recognize it and use the local directly. */
+    if (func_sym != NULL && (func_sym->type.t & VT_FUNC)) {
+        ret_i32 = !((func_sym->type.ref->type.t & VT_BTYPE) == VT_VOID);
+        for (ps = func_sym->type.ref->next; ps != NULL; ps = ps->next) {
+            if (gfunc_set_param(ps, PARAM_ADDR(n_params), 0) != NULL) {
+                n_params++;
+            }
+        }
+    }
+    if (func_count < 256) {
+        func_param_count[func_count] = n_params;
+        func_ret_i32[func_count] = ret_i32;
+    }
+    cur_ret_i32 = ret_i32;
+    cur_param_count = n_params;
     we_u32(0); /* body size placeholder */
     int total_locals = NB_REGS + 2;
     we_u32((uint32_t)total_locals);
     for (int i = 0; i < total_locals; i++) { we_u32(1); we(VALTYPE_I32); }
     func_local_decl_count[func_count] = total_locals;
-    we(WOP_BLOCK); we(VALTYPE_NONE);
+    /* One block wraps the body and is the single exit label every gjmp's
+     * br 0 targets, typed by the fn: (result i32) for value fns. Values
+     * live in locals (locals are the registers); a br to the exit reads
+     * the return register (TREG_R0 = REG_IRET) onto the stack, and the
+     * fallthrough path does the same at the epilog. */
+    we(WOP_BLOCK); we(ret_i32 ? VALTYPE_I32 : VALTYPE_NONE);
     label_depth = 1;
     loc = 0; ind = 0; func_vc = 0;
 }
 
 ST_FUNC void gfunc_epilog(void)
 {
+    /* fallthrough: the fn result rides TREG_R0 (gv(RC_RET) set it there);
+     * void fns end on the empty stack their void block expects. */
+    if (cur_ret_i32) {
+        we_op_local(WOP_LOCAL_GET, reg_local(TREG_R0));
+    }
     we(WOP_END); label_depth = 0; we(WOP_END);
     int body_start   = func_start_offs[func_count] + 1;
     int body_end     = (int)(code_ptr - code_buf);
@@ -378,31 +474,38 @@ ST_FUNC void gfunc_epilog(void)
 
 ST_FUNC void gfunc_call(int nb_args)
 {
+    /* args were gv'd to registers by tccgen (vtop-nb_args..vtop-1); push
+     * them in order, call, and park the i32 result in the caller's reg 0
+     * (REG_IRET — where gv(RC_RET) for the call's result expects it). */
     int func_idx = (nb_args > 0) ? (vtop - nb_args)->c.i : 0;
+    for (int i = nb_args; i > 0; i--) {
+        we_op_local(WOP_LOCAL_GET, reg_local((vtop - i)->r & VT_VALMASK));
+    }
     we(WOP_CALL); we_u32((uint32_t)func_idx);
+    we_op_setlocal(WOP_LOCAL_SET, reg_local(TREG_R0));
     vtop -= nb_args;
 }
 
 /* ----- Control flow ----- */
 
-ST_FUNC int gjmp(int t) { we(WOP_BR); we_u32((uint32_t)(label_depth - 1 - t)); return t; }
+ST_FUNC int gjmp(int t) {
+    /* a br to the exit label (depth 0 = the body block) must carry the fn
+     * result when the fn returns a value: it rides TREG_R0 like the
+     * fallthrough path. Non-exit depths are forward labels this backend
+     * does not support (gsym_addr is a stub) — still emit a legal br. */
+    if (label_depth == 1 && t == 0 && cur_ret_i32) {
+        we_op_local(WOP_LOCAL_GET, reg_local(TREG_R0));
+    }
+    we(WOP_BR); we_u32((uint32_t)(label_depth - 1 - t)); return t;
+}
 ST_FUNC void gjmp_addr(int a) { we(WOP_BR); we_u32((uint32_t)a); }
 
 ST_FUNC int gjmp_cond(int op, int t)
 {
-    switch (op) {
-    case TOK_EQ:  we(WOP_I32_EQ); break;
-    case TOK_NE:  we(WOP_I32_NE); break;
-    case TOK_LT:  we(WOP_I32_LT_S); break;
-    case TOK_GT:  we(WOP_I32_GT_S); break;
-    case TOK_LE:  we(WOP_I32_LE_S); break;
-    case TOK_GE:  we(WOP_I32_GE_S); break;
-    case TOK_ULT: we(WOP_I32_LT_U); break;
-    case TOK_UGT: we(WOP_I32_GT_U); break;
-    case TOK_ULE: we(WOP_I32_LE_U); break;
-    case TOK_UGE: we(WOP_I32_GE_U); break;
-    default: break;
-    }
+    /* the condition is already a 0/1 in the vtop register (gen_opi parked
+     * it there and vset_VT_CMP kept the register); br_if tests it. */
+    (void)op;
+    we_op_local(WOP_LOCAL_GET, reg_local(vtop->r & VT_VALMASK));
     we(WOP_BR_IF); we_u32((uint32_t)(label_depth - 1 - t));
     return t;
 }
@@ -413,47 +516,71 @@ ST_FUNC int gjmp_append(int n, int t) { (void)n; return t; }
 
 ST_FUNC void gen_opi(int op)
 {
-    if (op >= TOK_ULT && op <= TOK_GT) {
-        int lop = vtop[-1].r & VT_VALMASK; int rop = vtop[0].r & VT_VALMASK;
-        we_op_local(WOP_LOCAL_GET, lop); we_op_local(WOP_LOCAL_GET, rop);
-        switch (op) {
-        case TOK_ULT: we(WOP_I32_LT_U); break;
-        case TOK_UGT: we(WOP_I32_GT_U); break;
-        case TOK_ULE: we(WOP_I32_LE_U); break;
-        case TOK_UGE: we(WOP_I32_GE_U); break;
-        default: break;
-        }
-    } else {
-        int lop = vtop[-1].r & VT_VALMASK; int rop = vtop[0].r & VT_VALMASK;
-        we_op_local(WOP_LOCAL_GET, lop); we_op_local(WOP_LOCAL_GET, rop);
-        switch (op) {
-        case '+': we(WOP_I32_ADD); break; case '-': we(WOP_I32_SUB); break;
-        case '*': we(WOP_I32_MUL); break; case '/': we(WOP_I32_DIV_S); break;
-        case '%': we(WOP_I32_REM_S); break; case '&': we(WOP_I32_AND); break;
-        case '|': we(WOP_I32_OR); break; case '^': we(WOP_I32_XOR); break;
-        case TOK_SHL: we(WOP_I32_SHL); break;
-        case TOK_SAR: we(WOP_I32_SHR_S); break;
-        case TOK_SHR: we(WOP_I32_SHR_U); break;
-        case TOK_UDIV: we(WOP_I32_DIV_U); break;
-        case TOK_UMOD: we(WOP_I32_REM_U); break;
-        default: break;
-        }
+    int r1, r2;
+
+    /* operands may be constants/lvalues: materialize both into registers
+     * first (the x86 backend's contract — gv2 leaves vtop-1/vtop in regs). */
+    gv2(RC_INT, RC_INT);
+    r1 = vtop[-1].r & VT_VALMASK;
+    r2 = vtop[0].r & VT_VALMASK;
+
+    we_op_local(WOP_LOCAL_GET, reg_local(r1));
+    we_op_local(WOP_LOCAL_GET, reg_local(r2));
+    switch (op) {
+    case '+': we(WOP_I32_ADD); break;
+    case '-': we(WOP_I32_SUB); break;
+    case '*': we(WOP_I32_MUL); break;
+    case '/': we(WOP_I32_DIV_S); break;
+    case '%': we(WOP_I32_REM_S); break;
+    case '&': we(WOP_I32_AND); break;
+    case '|': we(WOP_I32_OR); break;
+    case '^': we(WOP_I32_XOR); break;
+    case TOK_SHL: we(WOP_I32_SHL); break;
+    case TOK_SAR: we(WOP_I32_SHR_S); break;
+    case TOK_SHR: we(WOP_I32_SHR_U); break;
+    case TOK_UDIV: we(WOP_I32_DIV_U); break;
+    case TOK_UMOD: we(WOP_I32_REM_U); break;
+    case TOK_EQ:  we(WOP_I32_EQ); break;
+    case TOK_NE:  we(WOP_I32_NE); break;
+    case TOK_LT:  we(WOP_I32_LT_S); break;
+    case TOK_GT:  we(WOP_I32_GT_S); break;
+    case TOK_LE:  we(WOP_I32_LE_S); break;
+    case TOK_GE:  we(WOP_I32_GE_S); break;
+    case TOK_ULT: we(WOP_I32_LT_U); break;
+    case TOK_UGT: we(WOP_I32_GT_U); break;
+    case TOK_ULE: we(WOP_I32_LE_U); break;
+    case TOK_UGE: we(WOP_I32_GE_U); break;
+    default:
+        /* unknown op: leave the first operand as the result */
+        we(WOP_DROP);
+        break;
     }
+    /* the result parks in r1 (the surviving SValue's register) */
+    we_op_setlocal(WOP_LOCAL_SET, reg_local(r1));
     vtop--;
+    vtop->r = (vtop->r & ~VT_VALMASK) | r1;
 }
 
 /* ----- Float operations ----- */
 
 ST_FUNC void gen_opf(int op)
 {
+    int r1, r2;
     int size = ((vtop->type.t & VT_BTYPE) == VT_FLOAT) ? 4 : 8;
-    int lop = vtop[-1].r & VT_VALMASK; int rop = vtop[0].r & VT_VALMASK;
-    we_op_local(WOP_LOCAL_GET, lop); we_op_local(WOP_LOCAL_GET, rop);
+
+    gv2(RC_FLOAT, RC_FLOAT);
+    r1 = vtop[-1].r & VT_VALMASK;
+    r2 = vtop[0].r & VT_VALMASK;
+    we_op_local(WOP_LOCAL_GET, reg_local(r1));
+    we_op_local(WOP_LOCAL_GET, reg_local(r2));
     if (op == '+') we(size == 4 ? WOP_F32_ADD : WOP_F64_ADD);
     else if (op == '-') we(size == 4 ? WOP_F32_SUB : WOP_F64_SUB);
     else if (op == '*') we(size == 4 ? WOP_F32_MUL : WOP_F64_MUL);
     else if (op == '/') we(size == 4 ? WOP_F32_DIV : WOP_F64_DIV);
+    else we(WOP_DROP);
+    we_op_setlocal(WOP_LOCAL_SET, reg_local(r1));
     vtop--;
+    vtop->r = (vtop->r & ~VT_VALMASK) | r1;
 }
 
 /* ----- Type conversions ----- */
@@ -495,40 +622,179 @@ ST_FUNC void gsym_addr(int t, int a)
 /* ----- WASM module serializer ----- */
 /* one-shot: make this one function non-static, then restore */
 #undef ST_FUNC
+
+/* append a u32 LEB into p */
+static void wput_leb(uint8_t **pp, uint32_t v) { leb_u32(pp, v); }
+
+
+/* write v as a 2-byte LEB (padded with continuation bits) — sizes are
+ * patched in place after the section body is known, so every size slot
+ * must occupy a fixed width; a padded LEB is still valid encoding */
+static void wput_leb2(uint8_t **pp, uint32_t v) {
+    (*pp)[0] = (uint8_t)((v & 0x7f) | 0x80);
+    (*pp)[1] = (uint8_t)((v >> 7) & 0x7f);
+    *pp += 2;
+}
+
 int wasm_build_module(uint8_t **out_buf, int *out_len)
 {
-    int total = 8 + 7 + (2 + func_count) + (2 + 5) + (2 + 18) + (2 + CODE_BUF_CAP) + 256;
+    int main_idx = -1;
+    int n_exp = 0; /* named function exports (main counts when present) */
+    /* Type table: one functype per distinct (n_params, returns_i32). */
+    int type_params[64];
+    int type_ret[64];
+    int n_types = 0;
+    int fn_type[256];
+    for (int i = 0; i < func_count; i++) {
+        if (func_names[i][0] == '\0')
+            continue;
+        if (strcmp(func_names[i], "main") == 0) {
+            main_idx = i;
+            continue;
+        }
+        n_exp++;
+    }
+    /* assign each fn a type index (allocating table entries on demand) */
+    for (int i = 0; i < func_count; i++) {
+        int k;
+        int found = -1;
+        for (k = 0; k < n_types; k++) {
+            if (type_params[k] == func_param_count[i]
+                && type_ret[k] == func_ret_i32[i]) {
+                found = k;
+                break;
+            }
+        }
+        if (found < 0 && n_types < 64) {
+            type_params[n_types] = func_param_count[i];
+            type_ret[n_types] = func_ret_i32[i];
+            found = n_types++;
+        }
+        fn_type[i] = found < 0 ? 0 : found;
+    }
+    if (main_idx >= 0) {
+        n_exp++; /* main rides its true index */
+    }
+    int exp_name_bytes = 0;
+    for (int i = 0; i < func_count; i++) {
+        if (func_names[i][0] != '\0')
+            exp_name_bytes += (int)strlen(func_names[i]);
+    }
+    /* section sizes are LEB-encoded into a scratch first, then copied, so
+     * each section carries an honest size instead of the old 1-byte cap */
+    int total = 8 + 7 + (2 + func_count) + (2 + 5)
+        + (2 + 1 + n_exp * 2 + exp_name_bytes + 16)
+        + (2 + func_count + (int)(code_ptr - code_buf) + 256) + 512;
     *out_buf = (uint8_t *)tcc_malloc((size_t)total);
     if (!*out_buf) return -1;
     uint8_t *p = *out_buf;
 
     memcpy(p, "\0asm\x01\0\0\0", 8); p += 8;
 
-    /* Type section (id=1): one functype () -> i32 */
-    *p++ = 1; *p++ = 6; *p++ = 1; *p++ = 0x60; *p++ = 0; *p++ = 1; *p++ = VALTYPE_I32;
+    /* Type section (id=1): every distinct functype, params and result all
+     * i32 (or empty results for void fns). Scratch-built for honest LEB
+     * sizes. */
+    {
+        uint8_t ts[2048];
+        uint8_t *t = ts;
+        uint8_t *body;
+        size_t used;
+        for (int k = 0; k < n_types; k++) {
+            *t++ = 0x60;                      /* functype */
+            wput_leb(&t, (uint32_t)type_params[k]);
+            for (int a = 0; a < type_params[k]; a++) {
+                *t++ = VALTYPE_I32;
+            }
+            if (type_ret[k]) {
+                wput_leb(&t, 1);
+                *t++ = VALTYPE_I32;
+            } else {
+                wput_leb(&t, 0);
+            }
+        }
+        used = (size_t)(t - ts);
+        *p++ = 1;
+        body = p;
+        wput_leb2(&p, 0);                     /* fixed 2-byte size slot */
+        wput_leb(&p, (uint32_t)n_types);
+        memcpy(p, ts, used); p += used;
+        wput_leb2(&body, (uint32_t)(p - body - 2));
+    }
 
-    /* Function section (id=3) */
-    *p++ = 3; *p++ = (uint8_t)(func_count + 1); *p++ = (uint8_t)func_count;
-    for (int i = 0; i < func_count; i++) *p++ = 0;
+    /* Function section (id=3): each fn's type index */
+    {
+        uint8_t *body;
+        *p++ = 3;
+        body = p;
+        wput_leb2(&p, 0);                     /* fixed 2-byte size slot */
+        wput_leb(&p, (uint32_t)func_count);
+        for (int i = 0; i < func_count; i++) {
+            wput_leb(&p, (uint32_t)fn_type[i]);
+        }
+        wput_leb2(&body, (uint32_t)(p - body - 2));
+    }
 
-    /* Memory section (id=5) — 0 pages, no max, required for
-     * wasm_runtime_attach_shared_heap. The working WAMR fixture
-     * uses: 05 03 01 00 00 = 1 memory, flags=0 (no max), min=0. */
-    *p++ = 5; *p++ = 3; *p++ = 1; *p++ = 0x00; *p++ = 0x00;
+    /* Memory section (id=5) — 2 pages, no max. wasm_runtime_attach_shared_heap
+     * grafts the shared heap onto the module's linear memory, which needs real
+     * backing: the working fixture (hello.wasm) declares min=2, and a min=0
+     * memory makes attach fail and the loader refuse the module. */
+    *p++ = 5; *p++ = 3; *p++ = 1; *p++ = 0x00; *p++ = 0x02;
 
-    /* Export section (id=7) */
-    { *p++ = 7; uint8_t *len_ptr = p++; *p++ = 2;
-      *p++ = 6; memcpy(p, "memory", 6); p += 6; *p++ = 0x02; *p++ = 0x00;
-      *p++ = 4; memcpy(p, "main", 4); p += 4; *p++ = 0x00; *p++ = 0x00;
-      *len_ptr = (uint8_t)(p - len_ptr - 1); }
+    /* Export section (id=7): memory + main (at its true index) + every
+     * other named function. Nothing is exported that was not defined. */
+    {
+        uint8_t exp[8192];
+        uint8_t *e = exp;
+        size_t used;
+        int n_entries = 1; /* memory */
+        /* memory export */
+        *e++ = 6; memcpy(e, "memory", 6); e += 6; *e++ = 0x02; *e++ = 0x00;
+        if (main_idx >= 0) {
+            *e++ = 4; memcpy(e, "main", 4); e += 4; *e++ = 0x00;
+            wput_leb(&e, (uint32_t)main_idx);
+            n_entries++;
+        }
+        for (int i = 0; i < func_count; i++) {
+            if (func_names[i][0] == '\0' || strcmp(func_names[i], "main") == 0)
+                continue;
+            {
+                size_t nl = strlen(func_names[i]);
+                if (nl > 120) nl = 120;
+                *e++ = (uint8_t)nl;
+                memcpy(e, func_names[i], nl); e += nl;
+                *e++ = 0x00;             /* kind func */
+                wput_leb(&e, (uint32_t)i); /* function index */
+                n_entries++;
+            }
+        }
+        used = (size_t)(e - exp);
+        {
+            /* exact section size: count LEB + entries, measured first */
+            uint8_t cnt_scratch[8];
+            uint8_t *cs = cnt_scratch;
+            size_t cnt_bytes;
+            wput_leb(&cs, (uint32_t)n_entries);
+            cnt_bytes = (size_t)(cs - cnt_scratch);
+            *p++ = 7;
+            wput_leb(&p, (uint32_t)(used + cnt_bytes));
+            memcpy(p, cnt_scratch, cnt_bytes); p += cnt_bytes;
+            memcpy(p, exp, used); p += used;
+        }
+    }
 
     /* Code section (id=10) */
-    *p++ = 10; uint8_t *cs_len_ptr = p++; *p++ = (uint8_t)func_count;
-    for (int i = 0; i < func_count; i++) {
-        int len = func_body_len[i];
-        memcpy(p, code_buf + func_start_offs[i], (size_t)len); p += len;
+    {
+        uint8_t *body;
+        *p++ = 10;
+        body = p;
+        wput_leb2(&p, 0);                     /* fixed 2-byte size slot */
+        wput_leb(&p, (uint32_t)func_count);
+        for (int i = 0; i < func_count; i++) {
+            int len = func_body_len[i];
+            memcpy(p, code_buf + func_start_offs[i], (size_t)len); p += len;
+        }
+        wput_leb2(&body, (uint32_t)(p - body - 2));
     }
-    *cs_len_ptr = (uint8_t)(p - cs_len_ptr - 1);
 
     *out_len = (int)(p - *out_buf);
     return 0;

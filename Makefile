@@ -217,8 +217,6 @@ wasm32-prove:
 		$(TCC_DIR)/wasm32_prove.c $(TCC_DIR)/libtcc.c \
 		-lm -ldl -o $(CURDIR)/build/wasm32_prove && $(CURDIR)/build/wasm32_prove
 
-test: prove-all
-
 # Benches report numbers and never gate. `make bench` builds + runs the
 # registry-walking runner; the result is human guidance, not a CI gate.
 bench: $(BENCH_OUT)
@@ -293,6 +291,7 @@ browser:
 	grep -q "upy ssh session" $(CURDIR)/build/browser_prove.log
 	grep -q "upy zenoh" $(CURDIR)/build/browser_prove.log
 	grep -q "upy swarm" $(CURDIR)/build/browser_prove.log
+	grep -q "upy wasm build link" $(CURDIR)/build/browser_prove.log
 
 compile-commands:
 	python3 $(WASMMOD)/compile_commands.py $(WASMMOD) $(WS) $(VSCODE_CDB)

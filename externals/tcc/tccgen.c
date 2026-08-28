@@ -411,6 +411,12 @@ ST_FUNC int tccgen_compile(TCCState *s1)
 #ifdef TCC_TARGET_ARM
     arm_init(s1);
 #endif
+#ifdef TCC_TARGET_WASM32
+    /* the wasm32 backend's code buffer and function tables are file-scoped
+     * statics; a second compile in the same process must start empty or the
+     * serialized module would carry the previous TU's bodies and exports */
+    wasm_reset();
+#endif
 #ifdef INC_DEBUG
     printf("%s: **** new file\n", file->filename);
 #endif

@@ -123,6 +123,25 @@ def _cdn(base):
     if wb is None or wb[0] == 0 or "ledger note" not in wb[1]:
         raise SystemExit("edit write no-note %r" % (wb,))
     print("upy editor")
+    # metal.workspace: the card tree materializes into the fs card on the
+    # browser seat too (the embedded src table ships in the wasm image);
+    # no mirror here — emscripten has no host FS, and mirror_set refuses.
+    import pymergetic.metal.workspace as workspace
+
+    n = workspace.materialize()
+    if not isinstance(n, tuple) or n[0] != 0 or n[1] == 0:
+        raise SystemExit("workspace materialize %r" % (n,))
+    if workspace.mirror_set("/tmp/x") == 0:
+        raise SystemExit("workspace mirror must refuse on emcc")
+    st = m.fs.stat("/src/pymergetic/metal/build/__impl__.c")
+    if not isinstance(st, tuple) or st[0] != 0 or st[1] == 0:
+        raise SystemExit("workspace fs stat %r" % (st,))
+    body = m.fs.read("/src/pymergetic/metal/build/__impl__.c", 32)
+    if not isinstance(body, bytes) or len(body) != 32:
+        raise SystemExit("workspace fs read %r" % (body,))
+    if body[:25] != b"/* pymergetic.metal.build":
+        raise SystemExit("workspace bytes %r" % (body[:25],))
+    print("upy workspace")
     if m.process.up() != 0:
         raise SystemExit("process up")
     print("upy process")
@@ -177,3 +196,32 @@ def _cdn(base):
     if sd.pump() != 0:
         raise SystemExit("swarm discovery pump")
     print("upy swarm")
+
+    # metal.build wasm-seat link (Phase 13): the browser cell's TCC targets
+    # wasm32, so compile_source produces a wasm module whose named exports the
+    # loader publishes into the registry — the software-defined link. The
+    # prove: compile -> link -> lookup resolves, destroy unloads.
+    import pymergetic.metal.build as build
+
+    obj = build.compile_source(
+        "upy.build.probe",
+        "int probe_two(void) { return 2; }\n"
+        "int probe_add_one(int x) { return x + 1; }\n",
+    )
+    print("compiled:", type(obj), len(obj) if isinstance(obj, bytes) else obj)
+    if not isinstance(obj, bytes) or len(obj) < 8 or obj[:4] != b"\x00asm":
+        raise SystemExit("build compile %r" % (type(obj),))
+    lk = build.link("upy.build.probe", obj)
+    print("linked:", lk)
+    if not isinstance(lk, tuple) or lk[0] != 0:
+        raise SystemExit("build link %r" % (lk,))
+    if build.artifact_lookup("probe_two") is None:
+        raise SystemExit("build lookup probe_two")
+    if build.artifact_lookup("probe_add_one") is None:
+        raise SystemExit("build lookup probe_add_one")
+    if build.artifact_lookup("no_such_export") is not None:
+        raise SystemExit("build lookup negative")
+    build.artifact_destroy()
+    if build.artifact_lookup("probe_two") is not None:
+        raise SystemExit("build lookup after destroy")
+    print("upy wasm build link")

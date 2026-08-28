@@ -9,6 +9,7 @@
 #define PYMERGETIC_METAL_BUILD_TYPES_H
 
 #include "pymergetic/util/mem/__types__.h"
+#include "pymergetic/wasmmod/registry/__types__.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -19,6 +20,7 @@ extern "C" {
 
 #define PM_METAL_BUILD_ERR_MAX 160u
 #define PM_METAL_BUILD_STR_MAX 128u
+#define PM_METAL_BUILD_MAX_OBJS 8u
 
 typedef struct pm_metal_build_unit {
     char fqn[PM_METAL_BUILD_STR_MAX];
@@ -39,6 +41,11 @@ typedef struct pm_metal_build_artifact {
     uint8_t *bytes;          /* arena-owned */
     size_t len;
     int32_t is_wasm;
+    /* wasm-seat link: the loader handle of each loaded module (the registry
+     * owns the published exports; destroy unloads the modules). Unused
+     * (zeroed) on ELF seats. */
+    pm_wasmmod_registry_handle_t loader_handles[PM_METAL_BUILD_MAX_OBJS];
+    uint32_t n_loader_handles;
 } pm_metal_build_artifact_t;
 
 typedef enum pm_metal_build_status {
@@ -124,7 +131,6 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
 
 #define PM_METAL_BUILD_MAX_RECORDS 8u
 #define PM_METAL_BUILD_MAX_SRC_PATH 96u
-#define PM_METAL_BUILD_MAX_OBJS 8u
 #define PM_METAL_BUILD_MAX_SYMS 64u
 #define PM_METAL_BUILD_SYM_NAME_MAX 64u
 

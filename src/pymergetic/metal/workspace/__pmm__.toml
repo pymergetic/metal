@@ -1,0 +1,4 @@
+fqn = "pymergetic.metal.workspace"
+impl = "c"
+depends = ["pymergetic.metal.fs", "pymergetic.metal.inspect"]
+notes = "Source workspace materialization (Phase 14): the full card tree walks out of the embedded src table into the fs card at /src/pymergetic/metal/<card-path>/<file>; externals extract from a .tar.gz archive through the minimal tar reader on uzlib's inflate. The unix seat mirrors every materialized file to a host directory so vim/VS Code see the same bytes the kernel sees. Cards path is standalone (no archive needed); the external path takes archive bytes the caller loaded (the 575 MB mrustc archive is a host build input, not image bytes)."

@@ -214,6 +214,101 @@ int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
         NULL, 0, NULL, 0, obj_out, obj_len, errbuf, errbuf_len);
 }
 #else
+#if PM_HAS_TCC && defined(TCC_TARGET_WASM32)
+/* WASM object path (browser seat): the wasm32 backend serializes the module
+ * directly from its code buffer (wasm_build_module), so the "object" is the
+ * module itself — the loader instantiates it and the registry publishes its
+ * named exports. No temp file: bytes go straight into the arena. */
+int32_t pm_metal_jit_c_object_compile_opts(pm_util_mem_arena_t *arena,
+    const char *source, size_t source_len,
+    const char **include_dirs, uint32_t n_include_dirs,
+    const char **defines, uint32_t n_defines,
+    uint8_t **obj_out, size_t *obj_len,
+    char *errbuf, size_t errbuf_len) {
+    TCCState *s;
+    uint8_t *mod = NULL;
+    int mod_len = 0;
+    uint8_t *buf;
+    uint32_t i;
+
+    if (arena == NULL || source == NULL || source_len == 0
+        || obj_out == NULL || obj_len == NULL) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "object_compile: bad args");
+        }
+        return -1;
+    }
+    if ((include_dirs == NULL && n_include_dirs != 0)
+        || (defines == NULL && n_defines != 0)) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "object_compile: bad args");
+        }
+        return -1;
+    }
+    *obj_out = NULL;
+    *obj_len = 0;
+
+    s = tcc_new();
+    if (s == NULL) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "object_compile: tcc_new failed");
+        }
+        return -1;
+    }
+    tcc_set_lib_path(s, PM_METAL_TCC_LIB_DIR);
+    tcc_add_library_path(s, PM_METAL_TCC_LIB_DIR);
+    tcc_set_output_type(s, TCC_OUTPUT_MEMORY);
+    for (i = 0; i < n_include_dirs; i++) {
+        if (include_dirs[i] != NULL && include_dirs[i][0] != '\0') {
+            tcc_add_include_path(s, include_dirs[i]);
+        }
+    }
+    for (i = 0; i < n_defines; i++) {
+        if (defines[i] != NULL && defines[i][0] != '\0') {
+            tcc_define_symbol(s, defines[i], NULL);
+        }
+    }
+    if (tcc_compile_string(s, source) != 0) {
+        tcc_delete(s);
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "object_compile: tcc compile failed");
+        }
+        return -1;
+    }
+    if (wasm_build_module(&mod, &mod_len) != 0 || mod == NULL || mod_len <= 0) {
+        tcc_delete(s);
+        if (mod != NULL) {
+            free(mod);
+        }
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "object_compile: wasm serialize failed");
+        }
+        return -1;
+    }
+    tcc_delete(s);
+    buf = (uint8_t *)pm_util_mem_alloc(arena, (size_t)mod_len);
+    if (buf == NULL) {
+        free(mod);
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "object_compile: arena alloc failed");
+        }
+        return -1;
+    }
+    memcpy(buf, mod, (size_t)mod_len);
+    free(mod);
+    *obj_out = buf;
+    *obj_len = (size_t)mod_len;
+    return 0;
+}
+
+int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
+    const char *source, size_t source_len,
+    uint8_t **obj_out, size_t *obj_len,
+    char *errbuf, size_t errbuf_len) {
+    return pm_metal_jit_c_object_compile_opts(arena, source, source_len,
+        NULL, 0, NULL, 0, obj_out, obj_len, errbuf, errbuf_len);
+}
+#else
 int32_t pm_metal_jit_c_object_compile_opts(pm_util_mem_arena_t *arena,
     const char *source, size_t source_len,
     const char **include_dirs, uint32_t n_include_dirs,
@@ -238,6 +333,7 @@ int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
     return pm_metal_jit_c_object_compile_opts(arena, source, source_len,
         NULL, 0, NULL, 0, obj_out, obj_len, errbuf, errbuf_len);
 }
+#endif /* PM_HAS_TCC && TCC_TARGET_WASM32 */
 #endif /* PM_HAS_TCC && !TCC_TARGET_WASM32 */
 
 pm_metal_async_status_t pm_metal_jit_c_compile_step(pm_metal_async_coro_t *self) {

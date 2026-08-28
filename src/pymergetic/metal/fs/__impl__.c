@@ -22,6 +22,7 @@ static uint32_t s_next_id;
 int32_t pm_metal_fs_import_blk(int32_t);
 int32_t pm_metal_fs_reserve(const char *, uint32_t, uint8_t **);
 int32_t pm_metal_fs_drop(const char *);
+int32_t pm_metal_fs_write(const char *, const uint8_t *, uint32_t);
 void pm_metal_fs_fat_bind(pm_util_mem_arena_t *);
 void pm_metal_fs_fat_reset(void);
 int32_t pm_metal_fs_fat_stat(const char *, uint32_t *);
@@ -132,6 +133,28 @@ int32_t pm_metal_fs_add(const char *path, const uint8_t *data, uint32_t len) {
     return id;
 }
 
+/* Replace semantics for the rebuild contract: same-len content is written
+ * in place (no new allocation — a second materialize with identical bytes
+ * must not grow the arena); different-len content drops the old entry and
+ * reserves a fresh one. The old entry's bytes are not reclaimed (the fs
+ * card's arena is monotonic); a changed file is a new version, and the
+ * leaked span is the price of the monotonic arena, not a bug. */
+int32_t pm_metal_fs_write(const char *path, const uint8_t *data, uint32_t len) {
+    struct file *f;
+    if (data == NULL || len == 0) {
+        return -1;
+    }
+    f = find_file(path);
+    if (f != NULL) {
+        if (f->len == len) {
+            memcpy(f->data, data, len);
+            return (int32_t)f->id;
+        }
+        f->used = 0;
+    }
+    return pm_metal_fs_add(path, data, len);
+}
+
 int32_t pm_metal_fs_stat(const char *path, uint32_t *len) {
     struct file *f = find_file(path);
     if (f != NULL) {
@@ -208,6 +231,7 @@ int32_t pm_metal_fs_up(void) {
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_init, pm_metal_fs_init, int32_t(pm_util_mem_arena_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_deinit, pm_metal_fs_deinit, void(void));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_add, pm_metal_fs_add, int32_t(const char *, const uint8_t *, uint32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_write, pm_metal_fs_write, int32_t(const char *, const uint8_t *, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_drop, pm_metal_fs_drop, int32_t(const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_stat, pm_metal_fs_stat, int32_t(const char *, uint32_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_read, pm_metal_fs_read, int32_t(const char *, uint8_t *, uint32_t *));

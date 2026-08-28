@@ -29,6 +29,8 @@ SRC_UPY_WASMMOD := \
 	extmod/wasmmod/ports/common/boot.c \
 	extmod/wasmmod/ports/common/load.c \
 	extmod/wasmmod/ports/common/memcookie.c \
+	extmod/wasmmod/src/pymergetic/util/zlib/__impl__.c \
+	lib/uzlib/lz77.c \
 	extmod/wasmmod/src/pymergetic/wasmmod/pack/manifest.c \
 	extmod/wasmmod/src/pymergetic/wasmmod/pack/zlib_env.c \
 	extmod/wasmmod/src/pymergetic/wasmmod/pack/format/common/format.c \

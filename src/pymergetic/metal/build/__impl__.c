@@ -19,6 +19,14 @@
 #include "pymergetic/wasmmod/registry.h"
 #include "pymergetic/metal/inspect/__exports__.h"
 
+/* WASM-seat link path: the loader is RS (loader/__impl__.rs) on every seat,
+ * but only the wasm-container seats need it for linking — ELF seats link
+ * through the in-tree relocator instead. */
+#if PM_HAS_TCC && defined(TCC_TARGET_WASM32) && !defined(PM_METAL_BUILD_HAS_ELF)
+#define PM_METAL_BUILD_WASM_LINK 1
+#include "pymergetic/wasmmod/loader/__exports__.h"
+#endif
+
 #include <stdio.h>
 #include <string.h>
 
@@ -964,6 +972,50 @@ int32_t pm_metal_build_link(pm_util_mem_arena_t *arena,
     const pm_metal_build_unit_t *unit, uint8_t **objects, const size_t *lens,
     uint32_t n_objects, pm_metal_build_artifact_t *artifact,
     char *errbuf, size_t errbuf_len) {
+#ifdef PM_METAL_BUILD_WASM_LINK
+    /* wasm-seat link: each object IS a wasm module (the jit.c wasm32 object
+     * path). "Linking" = load every module through the loader, which
+     * instantiates it and publishes its named exports into the registry —
+     * the software-defined linker. Cross-module calls resolve through the
+     * registry (connect_import), not through a merged image. */
+    uint32_t i;
+    if (arena == NULL || unit == NULL || objects == NULL || lens == NULL
+        || n_objects == 0 || artifact == NULL) {
+        err_set(errbuf, errbuf_len, "link: bad args", 0);
+        return PM_METAL_BUILD_ERR_LINK;
+    }
+    if (n_objects > PM_METAL_BUILD_MAX_OBJS) {
+        err_set(errbuf, errbuf_len, "link: too many objects", 0);
+        return PM_METAL_BUILD_ERR_LINK;
+    }
+    memset(artifact, 0, sizeof(*artifact));
+    snprintf(artifact->fqn, sizeof(artifact->fqn), "%s", unit->fqn);
+    artifact->is_wasm = 1;
+    /* rebuild contract (same shape as the ELF seat's munmap): destroy the
+     * previous artifact before linking a new one — the loader publishes
+     * under the unit fqn and a live previous module would shadow it. */
+    for (i = 0; i < n_objects; i++) {
+        pm_wasmmod_registry_handle_t h;
+        if (objects[i] == NULL || lens[i] == 0) {
+            err_set(errbuf, errbuf_len, "link: empty object", 0);
+            pm_metal_build_artifact_destroy(artifact);
+            return PM_METAL_BUILD_ERR_LINK;
+        }
+        h = pm_wasmmod_loader_load(
+            (const uint8_t *)unit->fqn, (uint32_t)strlen(unit->fqn),
+            objects[i], (uint32_t)lens[i]);
+        if (h.index == UINT32_MAX) {
+            char msg[PM_METAL_BUILD_ERR_MAX];
+            snprintf(msg, sizeof(msg), "link: loader refused object %u", (unsigned)i);
+            err_set(errbuf, errbuf_len, msg, 0);
+            pm_metal_build_artifact_destroy(artifact);
+            return PM_METAL_BUILD_ERR_LINK;
+        }
+        artifact->loader_handles[i] = h;
+        artifact->n_loader_handles++;
+    }
+    return PM_METAL_BUILD_OK;
+#else
 #ifdef PM_METAL_BUILD_HAS_ELF
     mp_wasm_elf_image_t *img = NULL;
     char err[PM_METAL_BUILD_ERR_MAX];
@@ -1009,10 +1061,19 @@ int32_t pm_metal_build_link(pm_util_mem_arena_t *arena,
     err_set(errbuf, errbuf_len, "link: no ELF loader on this seat", 0);
     return PM_METAL_BUILD_ERR_LINK;
 #endif
+#endif /* PM_METAL_BUILD_WASM_LINK */
 }
 
 void pm_metal_build_artifact_destroy(pm_metal_build_artifact_t *artifact) {
-#ifdef PM_METAL_BUILD_HAS_ELF
+#ifdef PM_METAL_BUILD_WASM_LINK
+    if (artifact != NULL && artifact->n_loader_handles > 0) {
+        uint32_t i;
+        for (i = 0; i < artifact->n_loader_handles; i++) {
+            (void)pm_wasmmod_loader_unload(artifact->loader_handles[i]);
+        }
+        artifact->n_loader_handles = 0;
+    }
+#elif defined(PM_METAL_BUILD_HAS_ELF)
     if (artifact != NULL && artifact->bytes != NULL) {
         mp_wasm_elf_image_free((mp_wasm_elf_image_t *)artifact->bytes);
         artifact->bytes = NULL;
@@ -1025,7 +1086,37 @@ void pm_metal_build_artifact_destroy(pm_metal_build_artifact_t *artifact) {
 
 void *pm_metal_build_artifact_lookup(const pm_metal_build_artifact_t *artifact,
     const char *name) {
-#ifdef PM_METAL_BUILD_HAS_ELF
+#ifdef PM_METAL_BUILD_WASM_LINK
+    /* wasm seat: the module's exports live in the registry (published by the
+     * loader at link time). Lookup walks the registry's export table for the
+     * unit fqn; the honest handle is the sentinel 1 — calling goes through
+     * pm_wasmmod_registry_call, which owns the wasm trampoline. */
+    if (artifact == NULL || artifact->fqn[0] == '\0' || name == NULL) {
+        return NULL;
+    }
+    {
+        uint32_t n = pm_wasmmod_registry_export_count(
+            (const uint8_t *)artifact->fqn,
+            (uint32_t)strlen(artifact->fqn));
+        uint32_t i;
+        for (i = 0; i < n; i++) {
+            char ename[96];
+            uint32_t elen = sizeof(ename);
+            pm_wasmmod_registry_export_kind_t kind =
+                PM_WASMMOD_REGISTRY_EXPORT_FN;
+            if (pm_wasmmod_registry_export_at(
+                    (const uint8_t *)artifact->fqn,
+                    (uint32_t)strlen(artifact->fqn), i,
+                    (uint8_t *)ename, &elen, &kind, NULL, 0) == 0) {
+                continue;
+            }
+            if (strcmp(ename, name) == 0) {
+                return (void *)(uintptr_t)1;
+            }
+        }
+        return NULL;
+    }
+#elif defined(PM_METAL_BUILD_HAS_ELF)
     if (artifact == NULL || artifact->bytes == NULL || name == NULL) {
         return NULL;
     }

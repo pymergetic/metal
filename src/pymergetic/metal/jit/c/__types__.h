@@ -47,12 +47,11 @@ const pm_metal_jit_c_result_t *pm_metal_jit_c_result_of(
 /* Free the result and its owned strings via the arena. */
 void pm_metal_jit_c_result_free(pm_util_mem_arena_t *arena, pm_metal_jit_c_result_t *r);
 
-/* Compile one C source to an ELF ET_REL object (arena-owned bytes in obj_out).
- * The TCC_OUTPUT_MEMORY path above is untouched; this is the multi-object
- * build path: tcc_set_output_type(TCC_OUTPUT_OBJ) → tcc_output_file to a
- * temp file → bytes read back and copied into the arena.
- * Native seats only (x86_64 backend); the wasm32 seat has no ELF object
- * output and returns -1 with errbuf set. */
+/* Compile one C source to a loadable object (arena-owned bytes in obj_out).
+ * Native seats: ELF ET_REL via TCC_OUTPUT_OBJ (the multi-object link path).
+ * The wasm32 seat: the serialized WASM module itself — every defined
+ * function is exported by name, and the loader publishes those exports
+ * into the registry (the software-defined link). */
 int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
     const char *source, size_t source_len,
     uint8_t **obj_out, size_t *obj_len,

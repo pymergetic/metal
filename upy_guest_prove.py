@@ -245,6 +245,31 @@ wb = edit.write_back("upy.edit.probe", "/src/upy_edit_probe.c", out)
 if wb is None or wb[0] != 0:
     raise SystemExit("edit write %r" % (wb,))
 print("upy editor")
+
+# metal.workspace: the full card tree materializes out of the embedded src
+# table into the fs card, byte-identical on read-back, idempotent on a second
+# walk — the Phase 14 workspace prove on the unix seat. The mirror is a
+# host-side projection (checked by the host C test); here fs is the truth.
+import pymergetic.metal.workspace as workspace
+
+n = workspace.materialize()
+if not isinstance(n, tuple) or n[0] != 0 or n[1] == 0:
+    raise SystemExit("workspace materialize %r" % (n,))
+count = n[1]
+st = m.fs.stat("/src/pymergetic/metal/build/__impl__.c")
+if not isinstance(st, tuple) or st[0] != 0 or st[1] == 0:
+    raise SystemExit("workspace fs stat %r" % (st,))
+body = m.fs.read("/src/pymergetic/metal/build/__impl__.c", 32)
+if not isinstance(body, bytes) or len(body) != 32:
+    raise SystemExit("workspace fs read %r" % (body,))
+if body[:25] != b"/* pymergetic.metal.build":
+    raise SystemExit("workspace bytes %r" % (body[:25],))
+n2 = workspace.materialize()
+if not isinstance(n2, tuple) or n2[0] != 0 or n2[1] != count:
+    raise SystemExit("workspace idempotent %r" % (n2,))
+if workspace.file_count() != count:
+    raise SystemExit("workspace count %r" % (workspace.file_count(),))
+print("upy workspace")
 if m.process.up() != 0:
     raise SystemExit("process up")
 print("upy process")
