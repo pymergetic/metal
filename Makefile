@@ -288,6 +288,7 @@ browser:
 	grep -q "upy fs embed" $(CURDIR)/build/browser_prove.log
 	grep -q "upy ledger round-trip" $(CURDIR)/build/browser_prove.log
 	grep -q "upy accessor spine" $(CURDIR)/build/browser_prove.log
+	grep -q "upy editor" $(CURDIR)/build/browser_prove.log
 	grep -q "upy process" $(CURDIR)/build/browser_prove.log
 	grep -q "upy ssh session" $(CURDIR)/build/browser_prove.log
 	grep -q "upy zenoh" $(CURDIR)/build/browser_prove.log

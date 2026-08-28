@@ -37,6 +37,32 @@ body = inspect.body()
 if st != 200 or 'decision' not in body:
     raise RuntimeError("changes ledger")
 print("upy changes ledger")
+
+# metal.edit C editor (Phase 12): parse/locate/set_define on the firmware seat
+# - the editor is resident C, so the span splice works on arena memory with no
+# POSIX. The write-back gate (no note -> refusal) is the card contract.
+import pymergetic.metal.edit as edit
+
+SRC = (
+    "#include <stdint.h>\n"
+    "#define EDIT_PROBE_BUF 64\n"
+    "int32_t edit_probe_add(int32_t a) {\n"
+    "    return a + EDIT_PROBE_BUF;\n"
+    "}\n"
+)
+h = edit.parse_c(SRC)
+if h is None:
+    raise RuntimeError("edit parse")
+n = edit.locate(h, "define", "EDIT_PROBE_BUF")
+if n is None or n[1] != "EDIT_PROBE_BUF":
+    raise RuntimeError("edit locate")
+out = edit.set_define(h, "EDIT_PROBE_BUF", "128")
+if out is None or "128" not in out:
+    raise RuntimeError("edit set_define")
+wb = edit.write_back("fw.edit.probe", "/src/fw_edit_probe.c", out)
+if wb is None or wb[0] == 0:
+    raise RuntimeError("edit write gate")
+print("upy editor")
 if m.net.dns.resolve is None:
     raise RuntimeError("dns")
 print("upy dns")

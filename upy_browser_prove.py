@@ -99,6 +99,30 @@ def _cdn(base):
     if ast is None or ast[0] != 1 or ast[1] != "c":
         raise SystemExit("at ast %r" % (ast,))
     print("upy accessor spine")
+    # metal.edit C editor on the browser seat: same parse/locate/edit/write
+    # gates as unix — the card is resident C on every seat, so the editor
+    # works identically under js.fetch-side conditions.
+    import pymergetic.metal.edit as edit
+
+    h = edit.parse_c(
+        "#include <stdint.h>\n"
+        "#define EDIT_PROBE_BUF 64\n"
+        "int32_t edit_probe_add(int32_t a) {\n"
+        "    return a + EDIT_PROBE_BUF;\n"
+        "}\n"
+    )
+    if h is None:
+        raise SystemExit("edit parse")
+    n = edit.locate(h, "define", "EDIT_PROBE_BUF")
+    if n is None or n[1] != "EDIT_PROBE_BUF":
+        raise SystemExit("edit locate %r" % (n,))
+    out = edit.set_define(h, "EDIT_PROBE_BUF", "128")
+    if out is None or "#define EDIT_PROBE_BUF 128" not in out:
+        raise SystemExit("edit set_define")
+    wb = edit.write_back("upy.edit.probe", "/src/upy_edit_probe.c", out)
+    if wb is None or wb[0] == 0 or "ledger note" not in wb[1]:
+        raise SystemExit("edit write no-note %r" % (wb,))
+    print("upy editor")
     if m.process.up() != 0:
         raise SystemExit("process up")
     print("upy process")

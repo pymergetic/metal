@@ -195,6 +195,56 @@ if ast is None or ast[0] != 1 or ast[1] != "c":
 if build.at("no.such.card", None) != 0:
     raise SystemExit("at negative")
 print("upy accessor spine")
+
+# metal.edit C editor: parse/locate/set_define/set_fn_body through the
+# nativecall bridges, then the write-back gates (no note -> refusal, note +
+# typecheck -> fs write) — the Phase 12 editor prove on the unix seat.
+import pymergetic.metal.edit as edit
+
+SRC = (
+    "#include <stdint.h>\n"
+    "#define EDIT_PROBE_BUF 64\n"
+    "\n"
+    "int32_t edit_probe_add(int32_t a) {\n"
+    "    return a + EDIT_PROBE_BUF;\n"
+    "}\n"
+)
+h = edit.parse_c(SRC)
+if h is None:
+    raise SystemExit("edit parse")
+n = edit.locate(h, "define", "EDIT_PROBE_BUF")
+if n is None or n[1] != "EDIT_PROBE_BUF" or n[2] != 2:
+    raise SystemExit("edit locate %r" % (n,))
+fn = edit.locate(h, "fn", "edit_probe_add")
+if fn is None or fn[2] != 4:
+    raise SystemExit("edit locate fn %r" % (fn,))
+out = edit.set_define(h, "EDIT_PROBE_BUF", "128")
+if out is None or "#define EDIT_PROBE_BUF 128" not in out:
+    raise SystemExit("edit set_define")
+if "return a + EDIT_PROBE_BUF;" not in out:
+    raise SystemExit("edit set_define collateral")
+body = edit.set_fn_body(h, "edit_probe_add", " return a * 2; ")
+if body is None or "return a * 2;" not in body:
+    raise SystemExit("edit set_fn_body")
+if "return a + EDIT_PROBE_BUF;" in body:
+    raise SystemExit("edit set_fn_body old body remains")
+tc = edit.typecheck_c(out)
+if tc is None or tc[0] != 0:
+    raise SystemExit("edit typecheck %r" % (tc,))
+bad = edit.typecheck_c("int f( {\n")
+if bad is None or bad[0] == 0 or len(bad[1]) == 0:
+    raise SystemExit("edit typecheck broken %r" % (bad,))
+# the write gates: no note -> refusal, nothing written
+wb = edit.write_back("upy.edit.probe", "/src/upy_edit_probe.c", out)
+if wb is None or wb[0] == 0 or "ledger note" not in wb[1]:
+    raise SystemExit("edit write no-note %r" % (wb,))
+# note -> write
+if build.note_add("upy.edit.probe", 0, "phase 12 upy editor prove") != 0:
+    raise SystemExit("edit note_add")
+wb = edit.write_back("upy.edit.probe", "/src/upy_edit_probe.c", out)
+if wb is None or wb[0] != 0:
+    raise SystemExit("edit write %r" % (wb,))
+print("upy editor")
 if m.process.up() != 0:
     raise SystemExit("process up")
 print("upy process")
