@@ -10,6 +10,24 @@
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
 
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+#include "libtcc.h"
+#include <unistd.h>
+#include <fcntl.h>
+/* TCC lowers u64->long double and long double->u64 as calls to these libgcc
+ * helpers (gcc inlines them, so the seat binary does not export them).
+ * Defining them here with external linkage lets -rdynamic expose them to the
+ * build card's process resolver. */
+long double __floatundixf(unsigned long long v) { return (long double)v; }
+long long __fixxfdi(long double v) { return (long long)v; }
+unsigned long long __fixunsxfdi(long double v) {
+    return (unsigned long long)(v < 0 ? 0 : v);
+}
+unsigned __fixunsxfsi(long double v) {
+    return (unsigned)(v < 0 ? 0 : v);
+}
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -635,6 +653,297 @@ static int32_t test_rebuild_jit_c(void) {
 #endif
 }
 
+/*------------------ Phase 5: TCC self-rebuild ------------------
+ * Compile the embedded TCC's own libtcc.c (ONE_SOURCE: one TU pulling the
+ * whole translation set) with the seat's proven defines, link it with the
+ * process resolver, and drive the FRESH tcc: compile+run a trivial program,
+ * byte-compare its object output against the pre-linked TCC's for the same
+ * input, then compile a second program. TCC is not a card — externals are
+ * not in the embedded table — so the source is read from the tree relative
+ * to __FILE__, exactly like the manifest itself in the parse test. */
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+typedef TCCState *(*pm_build_tcc_new_fn)(void);
+typedef void (*pm_build_tcc_delete_fn)(TCCState *);
+typedef int (*pm_build_tcc_set_output_type_fn)(TCCState *, int);
+typedef int (*pm_build_tcc_compile_string_fn)(TCCState *, const char *);
+typedef int (*pm_build_tcc_relocate_fn)(TCCState *);
+typedef void *(*pm_build_tcc_get_symbol_fn)(TCCState *, const char *);
+typedef int (*pm_build_tcc_set_lib_path_fn)(TCCState *, const char *);
+typedef int (*pm_build_tcc_add_library_path_fn)(TCCState *, const char *);
+typedef int (*pm_build_tcc_output_file_fn)(TCCState *, const char *);
+#endif
+static int32_t test_rebuild_tcc(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    enum { SPAN = 192u * 1024u * 1024u };
+    char path[512];
+    char tcc_dir[512];
+    void *backing = malloc(SPAN);
+    pm_util_mem_arena_t *arena;
+    size_t len = 0;
+    char *bytes;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    int32_t rc;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    uint8_t *va_obj = NULL;
+    size_t va_obj_len = 0;
+    const char *includes[1];
+    const char *defines[3];
+    uint32_t n_defines = 0;
+    pm_metal_build_unit_t unit;
+    pm_metal_build_artifact_t art;
+    pm_build_tcc_new_fn fresh_new;
+    pm_build_tcc_delete_fn fresh_delete;
+    pm_build_tcc_set_output_type_fn fresh_set_output;
+    pm_build_tcc_compile_string_fn fresh_compile_string;
+    pm_build_tcc_relocate_fn fresh_relocate;
+    pm_build_tcc_get_symbol_fn fresh_get_symbol;
+    pm_build_tcc_output_file_fn fresh_output_file;
+    pm_build_tcc_set_lib_path_fn fresh_set_lib_path;
+    pm_build_tcc_add_library_path_fn fresh_add_library_path;
+    TCCState *s;
+    static const char *add_one_src =
+        "static int add_one(int v) { return v + 1; }\n"
+        "int main(void) { return add_one(41); }\n";
+    static const char *second_src =
+        "int main(void) { return 3 * 7; }\n";
+    int (*main_fn)(void);
+
+    if (!backing) return 100;
+    arena = pm_util_mem_arena_create(backing, SPAN);
+    if (!arena) { free(backing); return 101; }
+
+    /* externals/tcc resolved from this file, like TCC_MANIFEST_REL */
+    snprintf(path, sizeof(path), "%s", __FILE__);
+    {
+        char *slash = strrchr(path, '/');
+        if (!slash) { pm_util_mem_arena_destroy(arena); free(backing); return 102; }
+        *slash = '\0';
+    }
+    snprintf(path + strlen(path), sizeof(path) - strlen(path),
+        "/" TCC_MANIFEST_REL);
+    snprintf(tcc_dir, sizeof(tcc_dir), "%s", path);
+    {
+        char *slash = strrchr(tcc_dir, '/');
+        if (!slash) { pm_util_mem_arena_destroy(arena); free(backing); return 103; }
+        *slash = '\0';
+    }
+
+    bytes = read_file(path, &len);
+    if (!bytes) { pm_util_mem_arena_destroy(arena); free(backing); return 104; }
+    rc = pm_metal_build_unit_parse(arena, (const uint8_t *)bytes, len, &unit,
+        err, sizeof(err));
+    free(bytes);
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 105;
+    }
+
+    /* read libtcc.c from the tree and compile it with the seat's flags:
+     * ONE_SOURCE means this one TU is the whole library. lib/va_list.c is the
+     * TCC runtime half of libtcc1.a: tccdefs.h lowers va_arg to a call to
+     * __va_arg, which gcc inlines when IT compiles libtcc.c but the fresh
+     * TCC cannot — so the runtime ships as a second object in the link. */
+    {
+        char libtcc_path[600];
+        size_t src_len = 0;
+        char *src;
+        snprintf(libtcc_path, sizeof(libtcc_path), "%s/libtcc.c", tcc_dir);
+        src = read_file(libtcc_path, &src_len);
+        if (!src) { pm_util_mem_arena_destroy(arena); free(backing); return 106; }
+        includes[0] = tcc_dir;
+        defines[n_defines++] = "TCC_TARGET_X86_64";
+        {
+            static char triplet_def[128];
+            FILE *trip = popen("cc -print-multiarch 2>/dev/null", "r");
+            if (trip != NULL) {
+                if (fgets(triplet_def, sizeof(triplet_def), trip) != NULL) {
+                    char *nl = strchr(triplet_def, '\n');
+                    if (nl) *nl = '\0';
+                    if (triplet_def[0] != '\0') {
+                        static char triplet_val[160];
+                        snprintf(triplet_val, sizeof(triplet_val),
+                            "CONFIG_TRIPLET=\"%s\"", triplet_def);
+                        defines[n_defines++] = triplet_val;
+                    }
+                }
+                pclose(trip);
+            }
+        }
+        /* parse the manifest's unit (fqn pymergetic.metal.external.tcc) so
+         * the link knows the unit; compile the source through the opts seam */
+        memset(&unit, 0, sizeof(unit));
+        snprintf(unit.fqn, sizeof(unit.fqn), "%s", "pymergetic.metal.external.tcc");
+        rc = pm_metal_jit_c_object_compile_opts(arena, src, src_len,
+            includes, 1, defines, n_defines, &obj, &obj_len, err, sizeof(err));
+        free(src);
+        if (rc != 0) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 107;
+        }
+        {
+            char valist_path[600];
+            size_t val_len = 0;
+            char *val_src;
+            uint8_t *val_obj = NULL;
+            size_t val_len_out = 0;
+            snprintf(valist_path, sizeof(valist_path), "%s/lib/va_list.c", tcc_dir);
+            val_src = read_file(valist_path, &val_len);
+            if (!val_src) { pm_util_mem_arena_destroy(arena); free(backing); return 130; }
+            rc = pm_metal_jit_c_object_compile_opts(arena, val_src, val_len,
+                includes, 1, defines, n_defines, &val_obj, &val_len_out,
+                err, sizeof(err));
+            free(val_src);
+            if (rc != 0) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 131;
+            }
+            va_obj = val_obj;
+            va_obj_len = val_len_out;
+        }
+    }
+    if (rc != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 107;
+    }
+
+    {
+        uint8_t *objs[2];
+        size_t lens[2];
+        objs[0] = obj;
+        lens[0] = obj_len;
+        objs[1] = va_obj;
+        lens[1] = va_obj_len;
+        rc = pm_metal_build_link(arena, &unit, objs, lens, 2, &art, err, sizeof(err));
+    }
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 108;
+    }
+
+    fresh_new = (pm_build_tcc_new_fn)pm_metal_build_artifact_lookup(&art, "tcc_new");
+    fresh_delete = (pm_build_tcc_delete_fn)pm_metal_build_artifact_lookup(&art, "tcc_delete");
+    fresh_set_output = (pm_build_tcc_set_output_type_fn)pm_metal_build_artifact_lookup(
+        &art, "tcc_set_output_type");
+    fresh_compile_string = (pm_build_tcc_compile_string_fn)pm_metal_build_artifact_lookup(
+        &art, "tcc_compile_string");
+    fresh_relocate = (pm_build_tcc_relocate_fn)pm_metal_build_artifact_lookup(
+        &art, "tcc_relocate");
+    fresh_get_symbol = (pm_build_tcc_get_symbol_fn)pm_metal_build_artifact_lookup(
+        &art, "tcc_get_symbol");
+    fresh_output_file = (pm_build_tcc_output_file_fn)pm_metal_build_artifact_lookup(
+        &art, "tcc_output_file");
+    fresh_set_lib_path = (pm_build_tcc_set_lib_path_fn)pm_metal_build_artifact_lookup(
+        &art, "tcc_set_lib_path");
+    fresh_add_library_path = (pm_build_tcc_add_library_path_fn)pm_metal_build_artifact_lookup(
+        &art, "tcc_add_library_path");
+    if (!fresh_new || !fresh_delete || !fresh_set_output || !fresh_compile_string
+        || !fresh_relocate || !fresh_get_symbol || !fresh_output_file
+        || !fresh_set_lib_path || !fresh_add_library_path) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 109;
+    }
+
+    /* fresh TCC compiles + runs a trivial program: add_one(41) == 42. The
+     * pre-linked copy runs with the seat's library path (PM_METAL_TCC_LIB_DIR
+     * baked at compile time); the fresh copy gets the same, resolved from
+     * __FILE__ like the manifest. */
+    s = fresh_new();
+    if (!s) { pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 110; }
+    fresh_set_lib_path(s, tcc_dir);
+    fresh_add_library_path(s, tcc_dir);
+    fresh_set_output(s, TCC_OUTPUT_MEMORY);
+    if (fresh_compile_string(s, add_one_src) != 0) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 111; }
+    if (fresh_relocate(s) != 0) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 112; }
+    main_fn = (int (*)(void))fresh_get_symbol(s, "main");
+    if (!main_fn) { pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 113; }
+    if (main_fn() != 42) { pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 114; }
+    fresh_delete(s);
+
+    /* fresh TCC emits an object; byte-compare against the pre-linked TCC's
+     * output for identical input+flags */
+    {
+        uint8_t *fresh_obj = NULL;
+        size_t fresh_len = 0;
+        uint8_t *prelinked_obj = NULL;
+        size_t prelinked_len = 0;
+        s = fresh_new();
+        if (!s) { pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing); return 115; }
+        fresh_set_lib_path(s, tcc_dir);
+        fresh_add_library_path(s, tcc_dir);
+        fresh_set_output(s, TCC_OUTPUT_OBJ);
+        if (fresh_compile_string(s, add_one_src) != 0) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing); return 116; }
+        {
+            /* object output goes through the jit.c card's temp-file path:
+             * drive it via the fresh TCC's tcc_output_file + read back. The
+             * fresh state's file output writes to the cwd — use a temp path. */
+            char tmpl[] = "/tmp/.jit_c_fresh_XXXXXX";
+            int fd = mkstemp(tmpl);
+            FILE *f;
+            long n;
+            if (fd < 0) { pm_metal_build_artifact_destroy(&art);
+                pm_util_mem_arena_destroy(arena); free(backing); return 117; }
+            close(fd);
+            if (fresh_output_file(s, tmpl) != 0) {
+                unlink(tmpl);
+                pm_metal_build_artifact_destroy(&art);
+                pm_util_mem_arena_destroy(arena); free(backing); return 118; }
+            f = fopen(tmpl, "rb");
+            if (!f) { unlink(tmpl); pm_metal_build_artifact_destroy(&art);
+                pm_util_mem_arena_destroy(arena); free(backing); return 119; }
+            fseek(f, 0, SEEK_END); n = ftell(f); rewind(f);
+            fresh_obj = (uint8_t *)pm_util_mem_alloc(arena, (size_t)n);
+            if (!fresh_obj || fread(fresh_obj, 1, (size_t)n, f) != (size_t)n) {
+                fclose(f); unlink(tmpl); pm_metal_build_artifact_destroy(&art);
+                pm_util_mem_arena_destroy(arena); free(backing); return 120; }
+            fclose(f);
+            fresh_len = (size_t)n;
+            unlink(tmpl);
+        }
+        fresh_delete(s);
+
+        if (pm_metal_jit_c_object_compile(arena, add_one_src, strlen(add_one_src),
+            &prelinked_obj, &prelinked_len, err, sizeof(err)) != 0) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing); return 121; }
+        if (fresh_len != prelinked_len || memcmp(fresh_obj, prelinked_obj, fresh_len) != 0) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing); return 122; }
+    }
+
+    /* fresh TCC compiles a second program */
+    s = fresh_new();
+    if (!s) { pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 123; }
+    fresh_set_lib_path(s, tcc_dir);
+    fresh_add_library_path(s, tcc_dir);
+    fresh_set_output(s, TCC_OUTPUT_MEMORY);
+    if (fresh_compile_string(s, second_src) != 0) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 124; }
+    if (fresh_relocate(s) != 0) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 125; }
+    main_fn = (int (*)(void))fresh_get_symbol(s, "main");
+    if (!main_fn || main_fn() != 21) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 126; }
+    fresh_delete(s);
+
+    pm_metal_build_artifact_destroy(&art);
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 static int32_t pm_metal_build_tests(void) {
     int32_t rc;
     rc = test_parse_real_tcc_manifest();
@@ -650,6 +959,8 @@ static int32_t pm_metal_build_tests(void) {
     rc = test_discover();
     if (rc) return rc;
     rc = test_rebuild_jit_c();
+    if (rc) return rc;
+    rc = test_rebuild_tcc();
     if (rc) return rc;
     return 0;
 }

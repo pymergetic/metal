@@ -543,6 +543,60 @@ static void thunk_ctx_deinit(pm_build_resolve_ctx_t *ctx) {
     }
 }
 
+/* Executable ranges of this process, from /proc/self/maps. A far DATA symbol
+ * (stderr, environ) must be returned raw: GOT slots hold full 64-bit
+ * addresses, so nothing truncates. Only far CODE needs a thunk, because a
+ * direct `call rel32` cannot reach 0x7f... from a MAP_32BIT image. */
+typedef struct pm_build_exec_range {
+    uintptr_t lo;
+    uintptr_t hi;
+} pm_build_exec_range_t;
+
+static pm_build_exec_range_t pm_build_exec_ranges[512];
+static uint32_t pm_build_n_exec_ranges;
+static int pm_build_exec_ranges_ready;
+
+static void pm_build_exec_ranges_load(void) {
+    FILE *f = fopen("/proc/self/maps", "r");
+    if (f == NULL) {
+        pm_build_exec_ranges_ready = 1;
+        return;
+    }
+    while (pm_build_n_exec_ranges
+        < (uint32_t)(sizeof(pm_build_exec_ranges) / sizeof(pm_build_exec_ranges[0]))) {
+        char line[512];
+        unsigned long lo, hi;
+        char perms[8];
+        if (fgets(line, sizeof(line), f) == NULL) {
+            break;
+        }
+        if (sscanf(line, "%lx-%lx %7s", &lo, &hi, perms) != 3) {
+            continue;
+        }
+        if (perms[2] != 'x') {
+            continue;
+        }
+        pm_build_exec_ranges[pm_build_n_exec_ranges].lo = (uintptr_t)lo;
+        pm_build_exec_ranges[pm_build_n_exec_ranges].hi = (uintptr_t)hi;
+        pm_build_n_exec_ranges++;
+    }
+    fclose(f);
+    pm_build_exec_ranges_ready = 1;
+}
+
+static int pm_build_addr_is_code(uintptr_t a) {
+    uint32_t i;
+    if (!pm_build_exec_ranges_ready) {
+        pm_build_exec_ranges_load();
+    }
+    for (i = 0; i < pm_build_n_exec_ranges; i++) {
+        if (a >= pm_build_exec_ranges[i].lo && a < pm_build_exec_ranges[i].hi) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void *proc_resolve(const char *name, void *ctx_in) {
     pm_build_resolve_ctx_t *ctx = (pm_build_resolve_ctx_t *)ctx_in;
     void *h = dlopen(NULL, RTLD_LAZY);
@@ -551,6 +605,9 @@ static void *proc_resolve(const char *name, void *ctx_in) {
         return NULL;
     }
     if (ctx == NULL || ctx->thunk_base == NULL) {
+        return p;
+    }
+    if (!pm_build_addr_is_code((uintptr_t)p)) {
         return p;
     }
     {
