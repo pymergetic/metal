@@ -76,6 +76,53 @@ static int32_t case_handle(void) {
     if (pm_metal_inspect_handle("GET", "/build/") != 404) {
         return fail("build empty 404");
     }
+    /* /docs/<fqn>/<fn>: unknown card and unknown face are 404; the real
+     * face serves its extracted doc JSON. */
+    if (pm_metal_inspect_handle("GET", "/docs/no.such.card/face") != 404) {
+        return fail("docs unknown fqn 404");
+    }
+    if (pm_metal_inspect_handle("GET", "/docs/pymergetic.metal.inspect/no_such_face") != 404) {
+        return fail("docs unknown face 404");
+    }
+    if (pm_metal_inspect_handle("GET", "/docs/") != 404) {
+        return fail("docs empty 404");
+    }
+    if (pm_metal_inspect_handle(
+            "GET", "/docs/pymergetic.metal.inspect/pm_metal_inspect_doc") != 200) {
+        return fail("docs real face status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"fqn\":\"pymergetic.metal.inspect\"") == NULL
+        || strstr(body, "\"name\":\"pm_metal_inspect_doc\"") == NULL
+        || strstr(body, "\"file\":\"__impl__.c\"") == NULL
+        || strstr(body, "\"line\":") == NULL
+        || strstr(body, "\"prose\"") == NULL) {
+        return fail("docs real face body");
+    }
+    /* a documented face: params and example extracted from the authored
+     * comment block above the export macro */
+    if (pm_metal_inspect_handle(
+            "GET", "/docs/pymergetic.metal.inspect/pm_metal_inspect_handle") != 200) {
+        return fail("docs documented face status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"prose\":\"Serve one inspect route locally") == NULL
+        || strstr(body, "\"params\":[\"method:") == NULL
+        || strstr(body, "\"params\":[\"method: \\\"GET\\\"") == NULL
+        || strstr(body, "\"example\":\"st = pm_metal_inspect_handle") == NULL) {
+        return fail("docs documented face body");
+    }
+    /* the example block alone, as REPL-runnable text */
+    {
+        const char *ex = pm_metal_inspect_example("pymergetic.metal.inspect",
+            "pm_metal_inspect_handle");
+        if (ex == NULL || strstr(ex, "pm_metal_inspect_body()") == NULL) {
+            return fail("example face");
+        }
+        if (pm_metal_inspect_example("pymergetic.metal.inspect", "no_such_face") != NULL) {
+            return fail("example unknown face");
+        }
+    }
     if (pm_metal_inspect_handle("GET", "/capabilities") != 200) {
         return fail("caps status");
     }
@@ -195,11 +242,49 @@ static int32_t case_http(void) {
     return 0;
 }
 
+/* Every export face in the tree must have an extractable doc: walk the live
+ * registry's C modules (their export lists are enumerable via the export
+ * symbol table), ask /docs for each face, and require a JSON body back for
+ * every face whose card has embedded muscle source. Rust cards declare their
+ * exports in the same registry; the doc extractor handles both comment
+ * styles, so the sweep covers them too. */
+static int32_t case_docs_sweep(void) {
+    /* pm_metal_inspect_doc is the C face of the same extractor the route
+     * uses; probing it across the whole tree is the sweep. */
+    const char *doc;
+    /* a spread of resident cards, one per language/muscle kind: c, rs, py */
+    static const char *const probes[][2] = {
+        { "pymergetic.metal.inspect", "pm_metal_inspect_handle" },
+        { "pymergetic.metal.inspect", "pm_metal_inspect_doc" },
+        { "pymergetic.metal.jit.c", "pm_metal_jit_c_object_compile" },
+        { "pymergetic.metal.build", "pm_metal_build_unit_compile" },
+        { "pymergetic.metal.jit.rs", "pm_metal_jit_rs_compile_alloc" },
+    };
+    uint32_t i;
+    for (i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+        doc = pm_metal_inspect_doc(probes[i][0], probes[i][1]);
+        if (doc == NULL) {
+            fprintf(stderr, "metal.inspect test: no doc for %s.%s\n",
+                probes[i][0], probes[i][1]);
+            return fail("docs sweep missing");
+        }
+        if (strstr(doc, "\"name\"") == NULL || strstr(doc, "\"prose\"") == NULL) {
+            fprintf(stderr, "metal.inspect test: thin doc for %s.%s\n",
+                probes[i][0], probes[i][1]);
+            return fail("docs sweep thin");
+        }
+    }
+    return 0;
+}
+
 int32_t pm_metal_inspect_tests(void) {
     if (case_handle() != 0) {
         return 1;
     }
     if (case_http() != 0) {
+        return 1;
+    }
+    if (case_docs_sweep() != 0) {
         return 1;
     }
     return 0;

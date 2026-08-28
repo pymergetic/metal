@@ -9,6 +9,7 @@
 #include "src_embed.inc.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #ifndef PM_METAL_INSPECT_BODY
@@ -676,10 +677,47 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
         fill_call(&j, raw);
         return js_ok(&j) ? 200 : -1;
     }
+    /* /docs/<fqn>/<name> — doc extract for one export face. Same body the
+     * /docs asgi route serves; this local path is what REPL callers and
+     * the host prove hit without a listener. */
+    if (strncmp(path, "/docs/", 6) == 0) {
+        const char *p = path + 6;
+        const char *slash = strchr(p, '/');
+        char fqnbuf[192];
+        size_t flen;
+        const char *doc;
+        if (slash == NULL) {
+            js_raw(&j, "{\"error\":\"not_found\"}");
+            return 404;
+        }
+        flen = (size_t)(slash - p);
+        if (flen == 0 || flen >= sizeof(fqnbuf)) {
+            js_raw(&j, "{\"error\":\"not_found\"}");
+            return 404;
+        }
+        memcpy(fqnbuf, p, flen);
+        fqnbuf[flen] = 0;
+        doc = pm_metal_inspect_doc(fqnbuf, slash + 1);
+        if (doc == NULL) {
+            js_raw(&j, "{\"error\":\"not_found\"}");
+            return 404;
+        }
+        js_raw(&j, doc);
+        return js_ok(&j) ? 200 : -1;
+    }
     js_raw(&j, "{\"error\":\"not_found\"}");
     return js_ok(&j) ? 404 : -1;
 }
 
+/* Serve one inspect route locally, without a listener.
+ *
+ * :param method: "GET" (other methods are 405)
+ * :param path: route path, e.g. "/inspect/self" or "/docs/<fqn>/<fn>"
+ * :return: HTTP status code; the body comes from pm_metal_inspect_body()
+ * :example:
+ * st = pm_metal_inspect_handle("GET", "/health");
+ * body = pm_metal_inspect_body();  // {"ok":true}
+ */
 int32_t pm_metal_inspect_handle(const char *method, const char *path) {
     s_status = fill(method, path, s_body, sizeof(s_body));
     return s_status;
@@ -697,6 +735,13 @@ const char *pm_metal_inspect_body(void) {
  * the /src/<fqn> and /src/<fqn>/<file> asgi routes make the same bytes
  * fetchable directly, so the host C prove can hit them over HTTP too. */
 
+/* The card's embedded source manifest (JSON: name + files[] with raw_len).
+ *
+ * :param fqn: fully-qualified card name, e.g. "pymergetic.metal.jit.c"
+ * :return: manifest JSON or NULL when the card has no muscle source
+ * :example:
+ * man = pm_metal_inspect_src_manifest("pymergetic.metal.inspect");
+ */
 const char *pm_metal_inspect_src_manifest(const char *fqn) {
     const pm_metal_src_card_t *c = fqn != NULL ? pm_metal_src_find(fqn) : NULL;
     return c != NULL ? c->manifest : NULL;
@@ -715,6 +760,448 @@ const char *pm_metal_inspect_src_read(const char *fqn, const char *path) {
     for (i = 0; i < c->nfiles; i++) {
         if (strcmp(c->files[i].rel, path) == 0) {
             return (const char *)c->files[i].data;
+        }
+    }
+    return NULL;
+}
+
+/* ===== Docs extraction (Phase 9) =====
+ *
+ * The doc bytes already ship in the embedded card table — the extractor is
+ * the missing piece. For an export face it finds the PM_MOD_EXPORT_C/_RS
+ * line naming it, walks back over the contiguous comment block, and renders
+ * it as JSON: prose, :param name: entries, and an :example: block. Rust
+ * cards use /// doc comments above the #[unsafe(no_mangle)] export, so the
+ * walker accepts both block comments (C) and /// runs (Rust). */
+
+#define PM_INSPECT_DOC_MAX (PM_METAL_INSPECT_BODY / 2u)
+#define PM_INSPECT_DOC_PROSE_MAX 2048u
+#define PM_INSPECT_DOC_PARAMS_MAX 12u
+#define PM_INSPECT_DOC_PARAM_MAX 96u
+
+/* Locate the export macro line for (fqn, name) inside file text. The macro
+ * sits in the export block at the file's foot, where no doc comment lives;
+ * the authored doc is above the function DEFINITION. The macro's second
+ * field repeats the C name, so find the macro (for existence + line
+ * reporting), then locate the definition line "name(" at a line start and
+ * hand doc_collect the definition's offset. macro_out gets the definition
+ * offset when found, else the macro offset. Returns the offset or (size_t)-1
+ * when the face is not exported from this file. */
+static size_t doc_find_export(const char *text, size_t len,
+    const char *fqn, const char *name, size_t *macro_off) {
+    char needle[192];
+    char defn[96];
+    size_t nl;
+    size_t dl;
+    size_t i;
+    size_t macro_at = (size_t)-1;
+    nl = (size_t)snprintf(needle, sizeof(needle), "PM_MOD_EXPORT_C(%s, %s,", fqn, name);
+    if (nl > 0 && nl < sizeof(needle)) {
+        for (i = 0; i + nl <= len; i++) {
+            if (text[i] != needle[0] || memcmp(text + i, needle, nl) != 0) {
+                continue;
+            }
+            if (i == 0 || text[i - 1] == '\n') {
+                macro_at = i;
+                break;
+            }
+        }
+    }
+    if (macro_at == (size_t)-1) {
+        /* Rust: the export macro is PM_MOD_EXPORT_RS!("fqn", name, ...) */
+        nl = (size_t)snprintf(needle, sizeof(needle), "PM_MOD_EXPORT_RS!(\"%s\", %s,", fqn, name);
+        if (nl <= 0 || nl >= sizeof(needle)) {
+            return (size_t)-1;
+        }
+        for (i = 0; i + nl <= len; i++) {
+            if (text[i] != needle[0] || memcmp(text + i, needle, nl) != 0) {
+                continue;
+            }
+            if (i == 0 || text[i - 1] == '\n') {
+                macro_at = i;
+                break;
+            }
+        }
+        if (macro_at == (size_t)-1) {
+            return (size_t)-1;
+        }
+    }
+    /* the definition: "name(" preceded on its line by nothing or by a single
+     * return-type word ("int32_t name("). A call site ("x = name(",
+     * "return name(") has '=' or two words before the name and never
+     * matches. */
+    dl = (size_t)snprintf(defn, sizeof(defn), "%s(", name);
+    for (i = 0; i + dl <= len; i++) {
+        size_t ls;
+        size_t wstart;
+        if (text[i] != name[0] || memcmp(text + i, defn, dl) != 0) {
+            continue;
+        }
+        if (i == 0 || text[i - 1] != ' ') {
+            continue;
+        }
+        ls = i;
+        while (ls > 0 && text[ls - 1] != '\n') {
+            ls--;
+        }
+        wstart = i - 1;
+        while (wstart > ls && text[wstart - 1] != ' ') {
+            wstart--;
+        }
+        /* the prefix [ls, i) must be exactly one type word + the separator
+         * space — "int32_t name(". A call site has "= ", "return ", or a
+         * second word before the name and fails this. */
+        if (memchr(text + ls, ' ', i - ls - 1u) == NULL
+            && memchr(text + ls, '=', i - ls) == NULL
+            && memchr(text + ls, '(', i - ls) == NULL
+            && memchr(text + ls, ')', i - ls) == NULL) {
+            *macro_off = i;
+            return i;
+        }
+    }
+    *macro_off = macro_at;
+    return macro_at;
+}
+
+typedef struct {
+    char prose[PM_INSPECT_DOC_PROSE_MAX];
+    uint32_t prose_len;
+    char params[PM_INSPECT_DOC_PARAMS_MAX][PM_INSPECT_DOC_PARAM_MAX];
+    uint32_t n_params;
+    char example[512];
+    uint32_t example_len;
+    int has_any;
+} pm_inspect_doc_t;
+
+static void doc_push_prose(pm_inspect_doc_t *d, const char *s, size_t n) {
+    if (d->prose_len + n + 1u >= sizeof(d->prose)) {
+        n = sizeof(d->prose) - 1u - d->prose_len;
+    }
+    if (n == 0) {
+        return;
+    }
+    memcpy(d->prose + d->prose_len, s, n);
+    d->prose_len += (uint32_t)n;
+    if (d->prose_len < sizeof(d->prose)) {
+        d->prose[d->prose_len] = 0;
+    }
+}
+
+static void doc_push_example(pm_inspect_doc_t *d, const char *s, size_t n) {
+    if (d->example_len + n + 1u >= sizeof(d->example)) {
+        n = sizeof(d->example) - 1u - d->example_len;
+    }
+    if (n == 0) {
+        return;
+    }
+    memcpy(d->example + d->example_len, s, n);
+    d->example_len += (uint32_t)n;
+    if (d->example_len < sizeof(d->example)) {
+        d->example[d->example_len] = 0;
+    }
+}
+
+static void doc_push_param(pm_inspect_doc_t *d, const char *name, size_t nname,
+    const char *desc, size_t ndesc) {
+    size_t total;
+    if (d->n_params >= PM_INSPECT_DOC_PARAMS_MAX || nname == 0) {
+        return;
+    }
+    total = nname + 2u + ndesc;   /* "name: desc" */
+    if (total >= PM_INSPECT_DOC_PARAM_MAX) {
+        ndesc = PM_INSPECT_DOC_PARAM_MAX - 1u - nname - 2u;
+    }
+    memcpy(d->params[d->n_params], name, nname);
+    d->params[d->n_params][nname] = ':';
+    d->params[d->n_params][nname + 1u] = ' ';
+    if (ndesc != 0) {
+        memcpy(d->params[d->n_params] + nname + 2u, desc, ndesc);
+    }
+    d->params[d->n_params][nname + 2u + ndesc] = 0;
+    d->n_params++;
+    d->has_any = 1;
+}
+
+/* Walk one comment block (delimiters stripped, passed as raw comment body)
+ * into the doc struct. A line starting ":param NAME:"
+ * becomes a param entry; the ":example:" keyword starts the example block
+ * (every following line until the block ends joins it, prose stops). */
+static void doc_parse_lines(pm_inspect_doc_t *d, const char *block, size_t blen,
+    int in_example) {
+    size_t i = 0;
+    while (i < blen) {
+        size_t eol = i;
+        const char *ln;
+        size_t lnlen;
+        while (eol < blen && block[eol] != '\n') {
+            eol++;
+        }
+        ln = block + i;
+        lnlen = eol - i;
+        /* strip one leading run of block-comment continuation + spaces */
+        while (lnlen > 0 && (*ln == ' ' || *ln == '\t' || *ln == '*')) {
+            ln++;
+            lnlen--;
+        }
+        while (lnlen > 0 && (ln[lnlen - 1] == ' ' || ln[lnlen - 1] == '\t'
+            || ln[lnlen - 1] == '\r')) {
+            lnlen--;
+        }
+        if (lnlen > 7u && memcmp(ln, ":param ", 7) == 0) {
+            const char *p = ln + 7;
+            size_t pn = 0;
+            while (p + pn < ln + lnlen && p[pn] != ':' && p[pn] != ' ') {
+                pn++;
+            }
+            if (pn != 0 && p + pn < ln + lnlen && p[pn] == ':') {
+                size_t ds = pn + 1;
+                while (p + ds < ln + lnlen && (p[ds] == ' ' || p[ds] == '\t')) {
+                    ds++;
+                }
+                doc_push_param(d, p, pn, p + ds, lnlen - 7u - ds);
+            }
+        } else if (lnlen >= 9u && memcmp(ln, ":example:", 9) == 0) {
+            in_example = 1;
+            if (lnlen > 9u) {
+                doc_push_example(d, ln + 9, lnlen - 9u);
+                doc_push_example(d, "\n", 1);
+            }
+        } else if (in_example) {
+            doc_push_example(d, ln, lnlen);
+            doc_push_example(d, "\n", 1);
+        } else if (lnlen != 0) {
+            if (d->prose_len != 0) {
+                doc_push_prose(d, " ", 1);
+            }
+            doc_push_prose(d, ln, lnlen);
+            d->has_any = 1;
+        }
+        i = eol + 1;
+    }
+}
+
+/* Extract the contiguous doc block above macro_off: for C, a block comment
+ * whose close is the last non-blank thing before the macro; for
+ * Rust, a /// run. Returns 1 when a block was found. */
+static int doc_collect(const char *text, size_t len, size_t macro_off,
+    pm_inspect_doc_t *d) {
+    /* back over blanks between comment and the definition */
+    size_t end = macro_off;
+    (void)len;
+    while (end > 0 && (text[end - 1] == '\n' || text[end - 1] == ' '
+        || text[end - 1] == '\t' || text[end - 1] == '\r')) {
+        end--;
+    }
+    /* back over the return-type word ("int32_t name(" — the offset names
+     * the definition's identifier, the comment sits above the whole line) */
+    while (end > 0 && (text[end - 1] != '\n' && text[end - 1] != ' '
+        && text[end - 1] != '\t' && text[end - 1] != ';' && text[end - 1] != '}')) {
+        end--;
+    }
+    while (end > 0 && (text[end - 1] == '\n' || text[end - 1] == ' '
+        || text[end - 1] == '\t' || text[end - 1] == '\r')) {
+        end--;
+    }
+    if (end == 0) {
+        return 0;
+    }
+    /* Rust /// run: walk back over consecutive lines starting with /// */
+    {
+        size_t e = end;
+        size_t start = e;
+        int found = 0;
+        while (e > 0) {
+            size_t ls = e - 1;
+            while (ls > 0 && text[ls] != '\n') {
+                ls--;
+            }
+            if (text[ls] == '\n') {
+                ls++;
+            }
+            /* line [ls, e) */
+            size_t ll = e - ls;
+            size_t k = ls;
+            while (k < e && (text[k] == ' ' || text[k] == '\t')) {
+                k++;
+            }
+            if (ll >= 3u && text[k] == '/' && text[k + 1] == '/' && text[k + 2] == '/') {
+                start = ls;
+                e = ls > 0 ? ls - 1 : 0;
+                if (ls == 0) {
+                    break;
+                }
+                /* e now points at the char before the line start (the \n) */
+                found = 1;
+                continue;
+            }
+            break;
+        }
+        if (found) {
+            doc_parse_lines(d, text + start, end - start, 0);
+            return 1;
+        }
+    }
+    /* C block comment must end exactly at `end` */
+    if (end >= 2u && text[end - 1] == '/' && text[end - 2] == '*') {
+        size_t close = end;
+        size_t i;
+        /* scan backwards for the nearest "slash-star"; C comments do not
+         * nest, and any inner "*" cannot be preceded by "/" here without
+         * closing early — first hit scanning back is the open */
+        for (i = close; i >= 2u; i--) {
+            if (text[i - 2] == '/' && text[i - 1] == '*') {
+                size_t body = i;
+                size_t blen = close - 2u - body;
+                doc_parse_lines(d, text + body, blen, 0);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int32_t doc_render_json(const char *fqn, const char *name,
+    const char *file, uint32_t line, const char *impl, const pm_inspect_doc_t *d,
+    char *out, uint32_t out_max, uint32_t *out_len) {
+    js_t j;
+    uint32_t i;
+    j.p = out;
+    j.n = 0;
+    j.max = out_max;
+    js_raw(&j, "{\"fqn\":");
+    js_str(&j, fqn);
+    js_raw(&j, ",\"name\":");
+    js_str(&j, name);
+    js_raw(&j, ",\"file\":");
+    js_str(&j, file);
+    js_raw(&j, ",\"line\":");
+    js_u32(&j, line);
+    js_raw(&j, ",\"impl\":");
+    js_str(&j, impl);
+    js_raw(&j, ",\"prose\":");
+    js_str(&j, d->prose);
+    js_raw(&j, ",\"params\":[");
+    for (i = 0; i < d->n_params; i++) {
+        if (i > 0) {
+            js_ch(&j, ',');
+        }
+        js_str(&j, d->params[i]);
+    }
+    js_raw(&j, "],\"example\":");
+    js_str(&j, d->example);
+    js_ch(&j, '}');
+    if (!js_ok(&j)) {
+        return -1;
+    }
+    *out_len = j.n;
+    return 0;
+}
+
+/* Count the line (1-based) of offset off in text. */
+static uint32_t doc_line_of(const char *text, size_t off) {
+    uint32_t line = 1;
+    size_t i;
+    for (i = 0; i < off && text[i] != 0; i++) {
+        if (text[i] == '\n') {
+            line++;
+        }
+    }
+    return line;
+}
+
+/* The public face: JSON doc for (fqn, name) or NULL when the face is not an
+ * exported doc target (unknown fqn/name, or no doc block found). Static
+ * buffer: single-threaded prove/REPL use; the route re-renders per request. */
+static char s_doc_json[PM_INSPECT_DOC_MAX];
+
+/* The :example: block alone, as runnable REPL text (no JSON wrapper). NULL
+ * when the face has no doc or no example. Static buffer: same single-
+ * threaded prove/REPL contract as pm_metal_inspect_doc. */
+static char s_doc_example[512];
+
+const char *pm_metal_inspect_example(const char *fqn, const char *name) {
+    const pm_metal_src_card_t *c;
+    pm_inspect_doc_t doc;
+    uint32_t i;
+    if (fqn == NULL || name == NULL) {
+        return NULL;
+    }
+    c = pm_metal_src_find(fqn);
+    if (c == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < c->nfiles; i++) {
+        const char *text = (const char *)c->files[i].data;
+        size_t len = c->files[i].len;
+        size_t macro_off = 0;
+        if (doc_find_export(text, len, fqn, name, &macro_off) != (size_t)-1) {
+            memset(&doc, 0, sizeof(doc));
+            if (!doc_collect(text, len, macro_off, &doc)) {
+                return NULL;
+            }
+            if (doc.example_len == 0 || doc.example[0] == 0) {
+                return NULL;
+            }
+            snprintf(s_doc_example, sizeof(s_doc_example), "%s", doc.example);
+            return s_doc_example;
+        }
+    }
+    return NULL;
+}
+
+/* The extracted doc for one export face, as JSON (prose + params + example).
+ *
+ * Walks the card's embedded muscle source, finds the export macro line naming
+ * the face, and extracts the comment block above it. The same extractor the
+ * /docs/<fqn>/<fn> route serves — REPL help and HTTP agree by construction.
+ *
+ * :param fqn: fully-qualified card name, e.g. "pymergetic.metal.jit.c"
+ * :param name: export face name, e.g. "pm_metal_jit_c_object_compile"
+ * :return: JSON doc string or NULL when fqn/name is not an exported face
+ * :example:
+ * doc = pm_metal_inspect_doc("pymergetic.metal.inspect",
+ *     "pm_metal_inspect_handle");
+ */
+const char *pm_metal_inspect_doc(const char *fqn, const char *name) {
+    const pm_metal_src_card_t *c;
+    pm_inspect_doc_t doc;
+    uint32_t i;
+    const char *impl = "";
+    if (fqn == NULL || name == NULL) {
+        return NULL;
+    }
+    c = pm_metal_src_find(fqn);
+    if (c == NULL) {
+        return NULL;
+    }
+    impl = c->impl != NULL ? c->impl : "";
+    for (i = 0; i < c->nfiles; i++) {
+        const char *text = (const char *)c->files[i].data;
+        size_t len = c->files[i].len;
+        size_t macro_off = 0;
+        if (doc_find_export(text, len, fqn, name, &macro_off) != (size_t)-1) {
+            memset(&doc, 0, sizeof(doc));
+            if (doc_collect(text, len, macro_off, &doc)) {
+                uint32_t out_len = 0;
+                if (doc_render_json(fqn, name, c->files[i].rel,
+                        doc_line_of(text, macro_off), impl, &doc,
+                        s_doc_json, sizeof(s_doc_json), &out_len) == 0) {
+                    return s_doc_json;
+                }
+                return NULL;
+            }
+            /* export found but no doc block: empty doc, still 200 — the
+             * face is real, its author wrote no comment above it */
+            memset(&doc, 0, sizeof(doc));
+            {
+                uint32_t out_len = 0;
+                if (doc_render_json(fqn, name, c->files[i].rel,
+                        doc_line_of(text, macro_off), impl, &doc,
+                        s_doc_json, sizeof(s_doc_json), &out_len) == 0) {
+                    return s_doc_json;
+                }
+            }
+            return NULL;
         }
     }
     return NULL;
@@ -890,6 +1377,54 @@ static int32_t build_asgi_handler(const char *method, const char *path, uint8_t 
     return 0;
 }
 
+/* /docs/<fqn>/<name> — the doc extract for one export face: prose, params,
+ * example, provenance (file + line). Unknown fqn/face is 404. */
+static int32_t docs_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len) {
+    const char *p;
+    const char *slash;
+    char fqnbuf[192];
+    const char *body;
+    size_t flen;
+    size_t n;
+    if (method == NULL || strcmp(method, "GET") != 0 || path == NULL) {
+        return -1;
+    }
+    if (strncmp(path, "/docs/", 6) != 0) {
+        return -1;
+    }
+    p = path + 6;
+    slash = strchr(p, '/');
+    if (slash == NULL) {
+        return -1;
+    }
+    flen = (size_t)(slash - p);
+    if (flen == 0 || flen >= sizeof(fqnbuf)) {
+        return -1;
+    }
+    memcpy(fqnbuf, p, flen);
+    fqnbuf[flen] = 0;
+    body = pm_metal_inspect_doc(fqnbuf, slash + 1);
+    if (body == NULL) {
+        return -1;
+    }
+    n = strlen(body);
+    if (n >= out_max) {
+        return -1;
+    }
+    memcpy(out, body, n);
+    *out_len = (uint32_t)n;
+    return 0;
+}
+
+static int32_t docs_asgi_handler(const char *method, const char *path, uint8_t *out, uint32_t out_max,
+    uint32_t *out_len) {
+    if (docs_http(method, path, (char *)out, out_max, out_len) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int32_t asgi_handler(const char *method, const char *path, uint8_t *out, uint32_t out_max,
     uint32_t *out_len) {
     int32_t st;
@@ -941,6 +1476,12 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
             "application/json") != 0) {
         return -1;
     }
+    /* Docs: /docs/<fqn>/<fn> serves the extracted comment block of one
+     * export face (prose + :param: + :example:). */
+    if (pm_metal_net_http_asgi_route_fn_ct("GET", "/docs/*", docs_asgi_handler,
+            "application/json") != 0) {
+        return -1;
+    }
     if (inspect_www_mount() != 0) {
         return -1;
     }
@@ -963,6 +1504,10 @@ PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_body, pm_metal_inspec
 PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_src_manifest, pm_metal_inspect_src_manifest,
     const char *(const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_src_read, pm_metal_inspect_src_read,
+    const char *(const char *, const char *));
+PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_doc, pm_metal_inspect_doc,
+    const char *(const char *, const char *));
+PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_example, pm_metal_inspect_example,
     const char *(const char *, const char *));
 
 PM_MOD_BOOT_C(pymergetic.metal.inspect, pm_metal_inspect_init, pm_metal_inspect_deinit);
