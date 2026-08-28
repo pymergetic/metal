@@ -2,6 +2,7 @@
 #include "pymergetic/metal/inspect/__exports__.h"
 
 #include "pymergetic/metal/net/http/asgi.h"
+#include "pymergetic/metal/build/__types__.h"
 #include "pymergetic/wasmmod/registry.h"
 
 #include "www_embed.inc.h"
@@ -805,6 +806,90 @@ static int32_t src_asgi_handler(const char *method, const char *path, uint8_t *o
     return 0;
 }
 
+/* /build/<fqn> — the build record of the unit's last runtime compile:
+ * manifest fields, per-source object sizes, and the linked image's exported
+ * symbols. The record exists only after a unit_compile — an unknown fqn or
+ * a never-built card is a 404, not an empty record. */
+static int32_t build_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len) {
+    const pm_metal_build_record_t *rec;
+    const char *p;
+    const char *fqn;
+    js_t j;
+    uint32_t i;
+    char fqnbuf[192];
+    size_t flen;
+
+    if (method == NULL || strcmp(method, "GET") != 0 || path == NULL) {
+        return -1;
+    }
+    if (strncmp(path, "/build/", 7) != 0) {
+        return -1;
+    }
+    p = path + 7;
+    /* a trailing segment is not part of the fqn: /build/<fqn>/<file> serves
+     * the authored source of that file (the intermediate panes come from
+     * the transpiler cards' own routes once they exist). */
+    fqn = p;
+    {
+        const char *slash = strchr(p, '/');
+        if (slash != NULL) {
+            flen = (size_t)(slash - fqn);
+        } else {
+            flen = strlen(fqn);
+        }
+        if (flen == 0 || flen >= sizeof(fqnbuf)) {
+            return -1;
+        }
+        memcpy(fqnbuf, fqn, flen);
+        fqnbuf[flen] = 0;
+    }
+    rec = pm_metal_build_record_find(fqnbuf);
+    if (rec == NULL) {
+        return -1;
+    }
+    j.p = out;
+    j.n = 0;
+    j.max = out_max;
+    js_raw(&j, "{\"fqn\":");
+    js_str(&j, rec->fqn);
+    js_raw(&j, ",\"n_sources\":");
+    js_u32(&j, rec->n_sources);
+    js_raw(&j, ",\"objects\":[");
+    for (i = 0; i < rec->n_sources; i++) {
+        if (i > 0) {
+            js_ch(&j, ',');
+        }
+        js_ch(&j, '{');
+        js_raw(&j, "\"src\":");
+        js_str(&j, rec->src_paths[i]);
+        js_raw(&j, ",\"obj_len\":");
+        js_u32(&j, rec->obj_lens[i]);
+        js_ch(&j, '}');
+    }
+    js_raw(&j, "],\"symbols\":[");
+    for (i = 0; i < rec->n_syms; i++) {
+        if (i > 0) {
+            js_ch(&j, ',');
+        }
+        js_str(&j, rec->sym_names[i]);
+    }
+    js_raw(&j, "]}");
+    if (!js_ok(&j)) {
+        return -1;
+    }
+    *out_len = j.n;
+    return 0;
+}
+
+static int32_t build_asgi_handler(const char *method, const char *path, uint8_t *out, uint32_t out_max,
+    uint32_t *out_len) {
+    if (build_http(method, path, (char *)out, out_max, out_len) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int32_t asgi_handler(const char *method, const char *path, uint8_t *out, uint32_t out_max,
     uint32_t *out_len) {
     int32_t st;
@@ -848,6 +933,12 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
      * pump, which sets its own response type. */
     if (pm_metal_net_http_asgi_route_fn_ct("GET", "/src/*", src_asgi_handler,
             "text/plain; charset=utf-8") != 0) {
+        return -1;
+    }
+    /* Build records: /build/<fqn> serves the provenance of the unit's last
+     * runtime compile (objects + linked symbols). */
+    if (pm_metal_net_http_asgi_route_fn_ct("GET", "/build/*", build_asgi_handler,
+            "application/json") != 0) {
         return -1;
     }
     if (inspect_www_mount() != 0) {

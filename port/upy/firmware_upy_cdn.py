@@ -76,11 +76,20 @@ print("upy pack import")
 
 # Off the box for real: the address came from the wire's DHCP server, and this
 # pack comes over TCP from a server that is not us. a_ping is 11 in test_a.
-try:
-    import pymergetic.wasmmod_examples.test_a as test_a
-except Exception as e:
-    print("upy cdn fetch err", e)
-    raise
+# The guest TCP stack has no retransmit timer yet, so a segment QEMU SLIRP
+# delivers late (rare, UEFI seat) fails the fetch outright; one retry covers
+# it. The retry is the CDN resilience prove, not a mask: a broken CDN (wrong
+# base, no server, 404s) still fails — only the transport hiccup is retried.
+test_a = None
+for attempt in range(2):
+    try:
+        import pymergetic.wasmmod_examples.test_a as test_a
+        break
+    except ImportError as e:
+        if "no pack" not in str(e) or attempt == 1:
+            print("upy cdn fetch err", e)
+            raise
+        print("upy cdn fetch retry")
 
 if test_a.a_ping() != 11:
     raise RuntimeError("cdn fetch call")

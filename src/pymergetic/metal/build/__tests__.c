@@ -3,6 +3,11 @@
  *    never the process cwd) and assert fqn/impl/defines + every source exists
  *  - topological order of a synthetic 3-unit graph with a dependency edge
  *  - a cyclic synthetic graph must error
+ *  - multi-object compile+link via the Phase-3 seam, cross-object symbols
+ *  - discovery synthesizes units from the embedded card table
+ *  - jit.c rebuilt from its embedded source: byte-identical object output,
+ *    rebuilt async path, and the retained provenance record (Phase 8)
+ *  - tcc self-rebuild: fresh tcc compiles, runs, matches object bytes
  */
 #include "pymergetic/metal/async/__types__.h"
 #include "pymergetic/metal/build/__types__.h"
@@ -587,6 +592,35 @@ static int32_t test_rebuild_jit_c(void) {
         pm_util_mem_arena_destroy(arena); free(backing); return 86;
     }
 
+    /* Phase 8: the compile retained a provenance record — the inspector's
+     * /build/<fqn> pane serves exactly this. Sources must carry the card's
+     * muscle file, and the linked image must export the card's faces. */
+    {
+        const pm_metal_build_record_t *rec =
+            pm_metal_build_record_find("pymergetic.metal.jit.c");
+        int found_impl_src = 0;
+        int found_obj_compile_sym = 0;
+        uint32_t k;
+        if (rec == NULL || rec->n_sources == 0 || rec->n_syms == 0) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing); return 96;
+        }
+        for (k = 0; k < rec->n_sources; k++) {
+            if (strstr(rec->src_paths[k], "__impl__.c") != NULL) {
+                found_impl_src = rec->obj_lens[k] > 0;
+            }
+        }
+        for (k = 0; k < rec->n_syms; k++) {
+            if (strcmp(rec->sym_names[k], "pm_metal_jit_c_object_compile") == 0) {
+                found_obj_compile_sym = 1;
+            }
+        }
+        if (!found_impl_src || !found_obj_compile_sym) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing); return 97;
+        }
+    }
+
     /* (a) byte-identity: the rebuilt card's object_compile output must be
      * byte-identical to the pre-linked one for identical input+flags. */
     rebuilt_compile = (pm_build_obj_compile_fn)pm_metal_build_artifact_lookup(
@@ -944,6 +978,23 @@ static int32_t test_rebuild_tcc(void) {
 #endif
 }
 
+/* Phase 8: record query faces — unknown fqn is NULL (404 pane), reset clears.
+ * Runs after test_rebuild_jit_c so the jit.c record from that compile is live
+ * and observable here. */
+static int32_t test_record_query(void) {
+    if (pm_metal_build_record_find("no.such.card") != NULL) {
+        return 98;
+    }
+    if (pm_metal_build_record_find(NULL) != NULL) {
+        return 99;
+    }
+    pm_metal_build_record_reset();
+    if (pm_metal_build_record_find("pymergetic.metal.jit.c") != NULL) {
+        return 100;
+    }
+    return 0;
+}
+
 static int32_t pm_metal_build_tests(void) {
     int32_t rc;
     rc = test_parse_real_tcc_manifest();
@@ -961,6 +1012,8 @@ static int32_t pm_metal_build_tests(void) {
     rc = test_rebuild_jit_c();
     if (rc) return rc;
     rc = test_rebuild_tcc();
+    if (rc) return rc;
+    rc = test_record_query();
     if (rc) return rc;
     return 0;
 }

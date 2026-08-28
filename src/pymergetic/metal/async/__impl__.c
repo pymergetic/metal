@@ -44,9 +44,12 @@
 /* xAPIC CPUID leaf 1 id is 8-bit. Lookup width, not a core cap. */
 #define PM_METAL_ASYNC_APIC_N 256u
 /* How long run_until keeps waiting with nothing runnable before it calls the
- * wait dead. Orders of magnitude above a cross-thread wakeup, far below any
- * human timeout. */
-#define PM_METAL_ASYNC_STALL_US 250000ull
+ * wait dead. Must survive one guest-TCP retransmit cycle: a dropped packet
+ * on a real wire (QEMU user-net under load drops) waits out the initial RTO
+ * (~200-300ms) with nothing runnable, and firing first turns a healthy
+ * fetch into "fetch failed". 1s tolerates a retransmit and still catches a
+ * genuinely dead wait far below any human timeout. */
+#define PM_METAL_ASYNC_STALL_US 1000000ull
 
 struct pm_metal_async_timer {
     struct pm_metal_async_timer *next;

@@ -19,6 +19,73 @@
 #include <stdio.h>
 #include <string.h>
 
+/*------------------ build records (provenance chain) ------------------
+ * Retained per unit_compile. Arena memory dies with the caller's arena, but
+ * the record must outlive it (the inspector serves it later), so names and
+ * lengths are copied into fixed static storage. Object bytes stay arena-
+ * owned and are NOT retained — the record carries lengths + symbols only;
+ * the inspector's /build/<fqn>/<file> pane serves authored source with
+ * provenance, not a byte dump of the .o. */
+static pm_metal_build_record_t s_records[PM_METAL_BUILD_MAX_RECORDS];
+static uint32_t s_record_epoch;
+
+/* Symbol names live inside each record — a refresh-in-place rebuild simply
+ * overwrites them, so no global pool exhaustion and no cross-record aliasing. */
+typedef struct pm_build_rec_sym_ctx {
+    pm_metal_build_record_t *r;
+    uint32_t w;
+} pm_build_rec_sym_ctx_t;
+
+#ifdef PM_METAL_BUILD_HAS_ELF
+static void record_sym_cb(const char *name, void *addr, void *ctx_in) {
+    pm_build_rec_sym_ctx_t *ctx = (pm_build_rec_sym_ctx_t *)ctx_in;
+    (void)addr;
+    if (ctx == NULL || ctx->r == NULL
+        || ctx->w >= PM_METAL_BUILD_MAX_SYMS) {
+        return;
+    }
+    snprintf(ctx->r->sym_names_buf[ctx->w], PM_METAL_BUILD_SYM_NAME_MAX, "%s", name);
+    ctx->r->sym_names[ctx->w] = ctx->r->sym_names_buf[ctx->w];
+    ctx->w++;
+}
+#endif
+
+static pm_metal_build_record_t *record_slot(const char *fqn) {
+    uint32_t i;
+    for (i = 0; i < PM_METAL_BUILD_MAX_RECORDS; i++) {
+        if (s_records[i].valid && strcmp(s_records[i].fqn, fqn) == 0) {
+            return &s_records[i];
+        }
+    }
+    return NULL;
+}
+
+static pm_metal_build_record_t *record_slot_acquire(const char *fqn) {
+    pm_metal_build_record_t *r = record_slot(fqn);
+    if (r != NULL) {
+        return r;   /* rebuild of an already-recorded unit: refresh in place */
+    }
+    /* oldest-slot eviction: epoch round-robins through the table */
+    r = &s_records[s_record_epoch % PM_METAL_BUILD_MAX_RECORDS];
+    s_record_epoch++;
+    memset(r, 0, sizeof(*r));
+    snprintf(r->fqn, sizeof(r->fqn), "%s", fqn);
+    r->valid = 1;
+    return r;
+}
+
+const pm_metal_build_record_t *pm_metal_build_record_find(const char *fqn) {
+    if (fqn == NULL) {
+        return NULL;
+    }
+    return record_slot(fqn);
+}
+
+void pm_metal_build_record_reset(void) {
+    memset(s_records, 0, sizeof(s_records));
+    s_record_epoch = 0;
+}
+
 /*------------------ error helpers ------------------*/
 
 static void err_set(char *errbuf, size_t errbuf_len, const char *fmt, int line) {
@@ -786,6 +853,7 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
     uint32_t i;
     uint32_t obj_i;
     int32_t rc;
+    pm_metal_build_record_t *rec = NULL;
 
     if (arena == NULL || unit == NULL || unit_root == NULL || artifact == NULL) {
         err_set(errbuf, errbuf_len, "unit_compile: bad args", 0);
@@ -878,6 +946,34 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
     if (rc != PM_METAL_BUILD_OK) {
         return rc;
     }
+
+    /* provenance record: source paths + object lengths + linked symbols.
+     * Best-effort — a record overflow truncates the lists, never fails the
+     * build (the artifact is the product; the record is the audit trail). */
+    rec = record_slot_acquire(unit->fqn);
+    if (rec != NULL) {
+        uint32_t cap = unit->n_sources;
+        if (cap > PM_METAL_BUILD_MAX_OBJS) {
+            cap = PM_METAL_BUILD_MAX_OBJS;
+        }
+        for (i = 0; i < cap; i++) {
+            snprintf(rec->src_paths[i], PM_METAL_BUILD_MAX_SRC_PATH, "%s",
+                unit->sources[i]);
+            rec->obj_lens[i] = (uint32_t)lens[i];
+        }
+        rec->n_sources = cap;
+#ifdef PM_METAL_BUILD_HAS_ELF
+        {
+            pm_build_rec_sym_ctx_t sctx;
+            sctx.r = rec;
+            sctx.w = 0;
+            mp_wasm_elf_foreach_func(
+                (const mp_wasm_elf_image_t *)artifact->bytes,
+                record_sym_cb, &sctx);
+            rec->n_syms = sctx.w;
+        }
+#endif
+    }
     return PM_METAL_BUILD_OK;
 }
 
@@ -900,6 +996,10 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_unit_compile, pm_metal_bu
     int32_t(pm_util_mem_arena_t *, const pm_metal_build_unit_t *, const char *,
         const char **, uint32_t, const char **, uint32_t,
         pm_metal_build_artifact_t *, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_record_find, pm_metal_build_record_find,
+    const pm_metal_build_record_t *(const char *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_record_reset, pm_metal_build_record_reset,
+    void(void));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_destroy, pm_metal_build_artifact_destroy,
     void(pm_metal_build_artifact_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_lookup, pm_metal_build_artifact_lookup,

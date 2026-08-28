@@ -68,6 +68,14 @@ static int32_t case_handle(void) {
     if (pm_metal_inspect_handle("GET", "/nope") != 404) {
         return fail("404");
     }
+    /* /build/<fqn>: unbuilt card is 404 — a record exists only after a
+     * runtime unit_compile, and this test has not built one. */
+    if (pm_metal_inspect_handle("GET", "/build/pymergetic.metal.jit.c") != 404) {
+        return fail("build unbuilt 404");
+    }
+    if (pm_metal_inspect_handle("GET", "/build/") != 404) {
+        return fail("build empty 404");
+    }
     if (pm_metal_inspect_handle("GET", "/capabilities") != 200) {
         return fail("caps status");
     }

@@ -116,6 +116,41 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
     pm_metal_build_artifact_t *artifact,
     char *errbuf, size_t errbuf_len);
 
+/*------------------ build records (provenance chain) ------------------
+ * Every unit_compile retains a record: the unit's sources, the per-source
+ * object bytes, the linked image's exported symbols. The inspector serves
+ * these as /build/<fqn> — authored source stays the primary pane, the
+ * record is the build-product pane with the provenance chain in between. */
+
+#define PM_METAL_BUILD_MAX_RECORDS 8u
+#define PM_METAL_BUILD_MAX_SRC_PATH 96u
+#define PM_METAL_BUILD_MAX_OBJS 8u
+#define PM_METAL_BUILD_MAX_SYMS 64u
+#define PM_METAL_BUILD_SYM_NAME_MAX 64u
+
+typedef struct pm_metal_build_record {
+    char fqn[PM_METAL_BUILD_STR_MAX];
+    int32_t valid;                       /* slot in use */
+    /* per-source objects: path + the .o length it compiled to */
+    char src_paths[PM_METAL_BUILD_MAX_OBJS][PM_METAL_BUILD_MAX_SRC_PATH];
+    uint32_t obj_lens[PM_METAL_BUILD_MAX_OBJS];
+    uint32_t n_sources;
+    /* the linked image's exported function symbols (name only — addresses
+     * are seat-local and not stable across runs) */
+    const char *sym_names[PM_METAL_BUILD_MAX_SYMS];
+    char sym_names_buf[PM_METAL_BUILD_MAX_SYMS][PM_METAL_BUILD_SYM_NAME_MAX];
+    uint32_t n_syms;
+} pm_metal_build_record_t;
+
+/* The record of the most recent unit_compile of fqn (NULL when never built
+ * or after record_reset). The record table is retained until reset — build
+ * products stay inspectable as long as the images are live. */
+const pm_metal_build_record_t *pm_metal_build_record_find(const char *fqn);
+
+/* Drop every retained record (called by the record owner at teardown; the
+ * linked images themselves are freed via artifact_destroy). */
+void pm_metal_build_record_reset(void);
+
 #ifdef __cplusplus
 }
 #endif
