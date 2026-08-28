@@ -168,6 +168,33 @@ if build.note_has("upy.prove.ledger", 0) != 1:
 if build.note_has("never.noted", 0) != 0:
     raise SystemExit("ledger gate")
 print("upy ledger round-trip")
+
+# metal.build accessor spine: b.at(fqn, name) joins the live registry, the
+# embedded source table (lang/doc/file/line), the ledger notes, and the build
+# record. at() on a real face, at_info() carrying the joined answer, at_ast()
+# dispatching C to the Phase-12 editor leaf.
+h = build.at("pymergetic.metal.build", "pm_metal_build_at")
+if h == 0:
+    raise SystemExit("at resolve")
+info = build.at_info(h)
+if info is None:
+    raise SystemExit("at info")
+if info[0] != "pymergetic.metal.build" or info[1] != "pm_metal_build_at":
+    raise SystemExit("at identity %r" % (info,))
+if info[2] != "fn" or info[3] != "c":
+    raise SystemExit("at kind/lang %r" % (info,))
+if "const char *" not in info[4]:
+    raise SystemExit("at sig %r" % (info,))
+if len(info[8]) == 0 or info[9] != "__impl__.c" or info[10] == 0:
+    raise SystemExit("at doc %r" % (info,))
+if info[11] is not None and len(info[11]) == 0:
+    raise SystemExit("at notes %r" % (info,))
+ast = build.at_ast(h)
+if ast is None or ast[0] != 1 or ast[1] != "c":
+    raise SystemExit("at ast %r" % (ast,))
+if build.at("no.such.card", None) != 0:
+    raise SystemExit("at negative")
+print("upy accessor spine")
 if m.process.up() != 0:
     raise SystemExit("process up")
 print("upy process")

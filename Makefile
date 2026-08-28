@@ -59,6 +59,12 @@ SRCS := host_test.c \
 SRC_OBJS := $(addprefix $(CURDIR)/build/, $(SRCS:.c=.o))
 BENCH_SRC_OBJS := $(addprefix $(CURDIR)/build/, $(BENCH_SRCS:.c=.o))
 
+# The generated embed headers (src/www/ledger bytes) are #include'd by card
+# objects; a regeneration without a recompile leaves stale bytes in the .o.
+# Every card object depends on them — embed_src.py leaves the file untouched
+# when bytes match, so this only rebuilds on a real content change.
+$(SRC_OBJS) $(BENCH_SRC_OBJS): $(PM_METAL_SRC_INC) $(PM_METAL_WWW_INC) $(PM_METAL_LEDGER_INC)
+
 # Bench binary reuses the same cards (incl. __bench__.c, which is inert under
 # the test runner) but swaps the entrypoint. Benches report numbers and never
 # gate, so both binaries register them into the same registry.
@@ -281,6 +287,7 @@ browser:
 	grep -q "upy console ids" $(CURDIR)/build/browser_prove.log
 	grep -q "upy fs embed" $(CURDIR)/build/browser_prove.log
 	grep -q "upy ledger round-trip" $(CURDIR)/build/browser_prove.log
+	grep -q "upy accessor spine" $(CURDIR)/build/browser_prove.log
 	grep -q "upy process" $(CURDIR)/build/browser_prove.log
 	grep -q "upy ssh session" $(CURDIR)/build/browser_prove.log
 	grep -q "upy zenoh" $(CURDIR)/build/browser_prove.log

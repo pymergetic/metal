@@ -16,8 +16,15 @@
 
 #include "pymergetic/metal/inspect/src_embed.inc.h"
 
+#include "pymergetic/wasmmod/registry.h"
+#include "pymergetic/metal/inspect/__exports__.h"
+
 #include <stdio.h>
 #include <string.h>
+
+/* strtoul lives in stdlib.h; the firmware seats get it through their own
+ * libc shims. */
+#include <stdlib.h>
 
 /*------------------ build records (provenance chain) ------------------
  * Retained per unit_compile. Arena memory dies with the caller's arena, but
@@ -1230,6 +1237,248 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
     return PM_METAL_BUILD_OK;
 }
 
+#define PM_METAL_BUILD_AT_SLOTS 4u
+
+typedef struct pm_build_at_slot {
+    pm_metal_build_at_info_t info;
+    int32_t valid;
+} pm_build_at_slot_t;
+
+static pm_build_at_slot_t s_at[PM_METAL_BUILD_AT_SLOTS];
+static uint32_t s_at_epoch;
+
+/* deps from the embedded manifest: parse the card's __pmm__.toml and copy
+ * its depends[] into the info block (bounded, de-duplicated). The TOML
+ * parse needs an arena; one card-local scratch serves it (the parse is
+ * single-threaded and self-contained). */
+static void at_fill_deps(pm_metal_build_at_info_t *info) {
+    const pm_metal_src_card_t *c = pm_metal_src_find(info->fqn);
+    static uint8_t deps_scratch[8192];
+    pm_util_mem_arena_t *arena;
+    pm_metal_build_unit_t unit;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    uint32_t i;
+    if (c == NULL || c->toml == NULL) {
+        return;
+    }
+    arena = pm_util_mem_arena_create(deps_scratch, sizeof(deps_scratch));
+    if (arena == NULL) {
+        return;
+    }
+    if (pm_metal_build_unit_parse(arena, (const uint8_t *)c->toml,
+            strlen(c->toml), &unit, err, sizeof(err)) == PM_METAL_BUILD_OK) {
+        for (i = 0; i < unit.n_depends && info->n_deps < PM_METAL_BUILD_AT_REFS_MAX; i++) {
+            uint32_t j;
+            int dup = 0;
+            for (j = 0; j < info->n_deps; j++) {
+                if (strcmp(info->deps[j], unit.depends[i]) == 0) {
+                    dup = 1;
+                    break;
+                }
+            }
+            if (!dup) {
+                snprintf(info->deps[info->n_deps], PM_METAL_BUILD_AT_REF_MAX,
+                    "%s", unit.depends[i]);
+                info->n_deps++;
+            }
+        }
+    }
+    pm_util_mem_arena_destroy(arena);
+}
+
+/* doc from the inspect extractor: JSON in, first prose line + file/line out.
+ * The JSON shape is {"fqn":...,"name":...,"file":...,"line":N,"impl":...,
+ * "prose":"...","params":[...],"example":"..."}. */
+static void at_fill_doc(pm_metal_build_at_info_t *info) {
+    const char *json = pm_metal_inspect_doc(info->fqn, info->name);
+    const char *p;
+    if (json == NULL) {
+        return;
+    }
+    p = build_memfind(json, strlen(json), "\"prose\":\"");
+    if (p != NULL) {
+        const char *q = p + 9;
+        uint32_t w = 0;
+        while (*q != 0 && *q != '"' && w + 1u < sizeof(info->doc)) {
+            if (q[0] == '\\' && q[1] != 0) {
+                q++;
+            }
+            info->doc[w++] = *q++;
+        }
+        info->doc[w] = 0;
+    }
+    p = build_memfind(json, strlen(json), "\"file\":\"");
+    if (p != NULL) {
+        const char *q = p + 8;
+        uint32_t w = 0;
+        while (*q != 0 && *q != '"' && w + 1u < sizeof(info->file)) {
+            info->file[w++] = *q++;
+        }
+        info->file[w] = 0;
+    }
+    p = build_memfind(json, strlen(json), "\"line\":");
+    if (p != NULL) {
+        info->line = (uint32_t)strtoul(p + 7, NULL, 10);
+    }
+}
+
+/* notes from our own ledger (raw JSONL lines, target = fqn). */
+static void at_fill_notes(pm_metal_build_at_info_t *info) {
+    int32_t rc = pm_metal_build_notes_query(info->fqn, -1,
+        info->notes, sizeof(info->notes), &info->n_notes);
+    if (rc < 0) {
+        info->n_notes = 0;
+    }
+}
+
+/* kind tag from the registry's export kind (same mapping as inspect's
+ * kind_tag). */
+static const char *at_kind_tag(pm_wasmmod_registry_export_kind_t k) {
+    switch (k) {
+        case PM_WASMMOD_REGISTRY_EXPORT_FN:     return "fn";
+        case PM_WASMMOD_REGISTRY_EXPORT_MEM:    return "mem";
+        case PM_WASMMOD_REGISTRY_EXPORT_OBJ:    return "obj";
+        case PM_WASMMOD_REGISTRY_EXPORT_I64:    return "i64";
+        case PM_WASMMOD_REGISTRY_EXPORT_F32:    return "f32";
+        case PM_WASMMOD_REGISTRY_EXPORT_F64:    return "f64";
+        case PM_WASMMOD_REGISTRY_EXPORT_BUFPTR: return "bufptr";
+        default:                                return "?";
+    }
+}
+
+/* Resolve fqn (+ optional export name) against the live registry first,
+ * then layer the build record, the doc, the notes, and the manifest deps.
+ * Returns a handle for at_info / at_ast, NONE when fqn is unknown to both
+ * the registry and the embedded source table. */
+pm_metal_build_at_handle_t pm_metal_build_at(const char *fqn, const char *name) {
+    pm_build_at_slot_t *slot;
+    pm_metal_build_at_info_t *info;
+    const pm_metal_src_card_t *card;
+    const pm_metal_build_record_t *rec;
+    uint8_t fqnb[PM_METAL_BUILD_AT_FQN_MAX];
+    uint32_t flen;
+    uint32_t i;
+
+    if (fqn == NULL || fqn[0] == 0) {
+        return PM_METAL_BUILD_AT_NONE;
+    }
+    flen = (uint32_t)strlen(fqn);
+    if (flen >= sizeof(fqnb)) {
+        return PM_METAL_BUILD_AT_NONE;
+    }
+    memcpy(fqnb, fqn, flen);
+
+    /* resolve: the live registry first, then the embedded source table. A
+     * fqn unknown to both is not resolvable. */
+    card = pm_metal_src_find(fqn);
+    if (pm_wasmmod_registry_has(fqnb, flen) != 1 && card == NULL) {
+        return PM_METAL_BUILD_AT_NONE;
+    }
+
+    slot = &s_at[s_at_epoch % PM_METAL_BUILD_AT_SLOTS];
+    s_at_epoch++;
+    memset(slot, 0, sizeof(*slot));
+    info = &slot->info;
+    snprintf(info->fqn, sizeof(info->fqn), "%s", fqn);
+    if (name != NULL && name[0] != 0) {
+        snprintf(info->name, sizeof(info->name), "%s", name);
+    } else {
+        snprintf(info->name, sizeof(info->name), "%s", fqn);
+        name = NULL;    /* card-level query */
+    }
+    info->lang[0] = 0;
+    if (card != NULL && card->impl != NULL) {
+        snprintf(info->lang, sizeof(info->lang), "%s", card->impl);
+    }
+
+    if (name != NULL) {
+        /* face-level: find the export in the live registry */
+        uint32_t nx = pm_wasmmod_registry_export_count(fqnb, flen);
+        int found = 0;
+        for (i = 0; i < nx; i++) {
+            uint8_t ename[PM_METAL_BUILD_AT_NAME_MAX];
+            uint32_t elen = sizeof(ename);
+            uint8_t esig[PM_METAL_BUILD_AT_SIG_MAX];
+            uint32_t slen = sizeof(esig);
+            pm_wasmmod_registry_export_kind_t kind = PM_WASMMOD_REGISTRY_EXPORT_FN;
+            if (pm_wasmmod_registry_export_at(fqnb, flen, i, ename, &elen,
+                    &kind, esig, &slen) != 0
+                    && elen == (uint32_t)strlen(name)
+                    && memcmp(ename, name, elen) == 0) {
+                snprintf(info->kind, sizeof(info->kind), "%s",
+                    at_kind_tag(kind));
+                if (slen > 0 && slen < sizeof(esig)) {
+                    memcpy(info->sig, esig, slen);
+                    info->sig[slen] = 0;
+                }
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            /* not a live export: an embedded-source face (documented but not
+             * registered, or a card-local helper). kind stays empty — info
+             * still resolves with doc/notes/deps from the source table. */
+            info->kind[0] = 0;
+        }
+        at_fill_doc(info);
+    } else {
+        snprintf(info->kind, sizeof(info->kind), "mod");
+        /* card-level: no doc face, but the manifest may carry one */
+    }
+
+    /* provenance: the build record (present when fqn was unit_compiled) */
+    rec = pm_metal_build_record_find(fqn);
+    if (rec != NULL) {
+        info->has_record = 1;
+        info->n_sources = rec->n_sources;
+        info->n_syms = rec->n_syms;
+    }
+
+    at_fill_notes(info);
+    at_fill_deps(info);
+    slot->valid = 1;
+    return (pm_metal_build_at_handle_t)((uintptr_t)(slot - s_at) + 1u);
+}
+
+int32_t pm_metal_build_at_info(pm_metal_build_at_handle_t handle,
+    pm_metal_build_at_info_t *info) {
+    pm_build_at_slot_t *slot;
+    if (info == NULL || handle == PM_METAL_BUILD_AT_NONE
+        || handle > PM_METAL_BUILD_AT_SLOTS) {
+        return -1;
+    }
+    slot = &s_at[handle - 1u];
+    if (!slot->valid) {
+        return -1;
+    }
+    *info = slot->info;
+    return 0;
+}
+
+int32_t pm_metal_build_at_ast(pm_metal_build_at_handle_t handle,
+    char *lang_out, size_t lang_max) {
+    pm_build_at_slot_t *slot;
+    const char *lang;
+    if (handle == PM_METAL_BUILD_AT_NONE || handle > PM_METAL_BUILD_AT_SLOTS) {
+        return -1;
+    }
+    slot = &s_at[handle - 1u];
+    if (!slot->valid) {
+        return -1;
+    }
+    lang = slot->info.lang[0] != 0 ? slot->info.lang : "c";
+    if (lang_out != NULL && lang_max > 0) {
+        snprintf(lang_out, lang_max, "%s", lang);
+    }
+    /* Phase 12 fills the C leaf (TCC tree); Rust/C++ editors come later.
+     * The spine itself is language-neutral: the dispatch is the contract. */
+    if (strcmp(lang, "c") == 0) {
+        return 1;
+    }
+    return 0;
+}
+
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_unit_parse, pm_metal_build_unit_parse,
     int32_t(pm_util_mem_arena_t *, const uint8_t *, size_t, pm_metal_build_unit_t *,
         char *, size_t));
@@ -1266,3 +1515,9 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_destroy, pm_meta
     void(pm_metal_build_artifact_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_lookup, pm_metal_build_artifact_lookup,
     void *(const pm_metal_build_artifact_t *, const char *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_at, pm_metal_build_at,
+    pm_metal_build_at_handle_t(const char *, const char *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_at_info, pm_metal_build_at_info,
+    int32_t(pm_metal_build_at_handle_t, pm_metal_build_at_info_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_at_ast, pm_metal_build_at_ast,
+    int32_t(pm_metal_build_at_handle_t, char *, size_t));

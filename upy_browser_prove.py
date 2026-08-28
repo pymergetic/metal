@@ -85,6 +85,20 @@ def _cdn(base):
     if st != 200 or 'decision' not in (inspect.body() or ""):
         raise SystemExit("ledger seed %s" % (st,))
     print("upy ledger round-trip")
+    # metal.build accessor spine: b.at(fqn, name) resolves against the live
+    # registry + embedded source table on the browser seat too.
+    import pymergetic.metal.build as build
+
+    h = build.at("pymergetic.metal.build", "pm_metal_build_at")
+    if h == 0:
+        raise SystemExit("at resolve")
+    info = build.at_info(h)
+    if info is None or info[2] != "fn" or info[3] != "c" or len(info[8]) == 0:
+        raise SystemExit("at info %r" % (info,))
+    ast = build.at_ast(h)
+    if ast is None or ast[0] != 1 or ast[1] != "c":
+        raise SystemExit("at ast %r" % (ast,))
+    print("upy accessor spine")
     if m.process.up() != 0:
         raise SystemExit("process up")
     print("upy process")

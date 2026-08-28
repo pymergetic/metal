@@ -193,6 +193,72 @@ int32_t pm_metal_build_note_has(const char *target,
 /* The ledger path in the fs card — the one file the build card owns. */
 const char *pm_metal_build_ledger_path(void);
 
+/*------------------ accessor spine (Phase 11) ------------------
+ * One language-neutral query shape over everything the earlier phases
+ * built: the live registry (Phase 4/8: what actually runs + provenance),
+ * the doc extractor (Phase 9), the change ledger (Phase 10), and the
+ * embedded source table. `b.at(fqn, name)` resolves; at_info carries the
+ * joined answer; at_ast dispatches to the per-language editor (Phase 12).
+ *
+ * at() prefers the live registry — what actually executes — and layers the
+ * build record on top for provenance: the same query before and after a
+ * runtime rebuild returns the same identity pointed at the new record. */
+
+typedef uint32_t pm_metal_build_at_handle_t;
+#define PM_METAL_BUILD_AT_NONE 0u
+
+#define PM_METAL_BUILD_AT_FQN_MAX 128u
+#define PM_METAL_BUILD_AT_NAME_MAX 128u
+#define PM_METAL_BUILD_AT_SIG_MAX 192u
+#define PM_METAL_BUILD_AT_DOC_MAX 512u
+#define PM_METAL_BUILD_AT_NOTES_MAX 512u
+#define PM_METAL_BUILD_AT_REFS_MAX 12u
+#define PM_METAL_BUILD_AT_REF_MAX 128u
+#define PM_METAL_BUILD_AT_FILE_MAX 96u
+
+typedef struct pm_metal_build_at_info {
+    /* identity */
+    char fqn[PM_METAL_BUILD_AT_FQN_MAX];
+    char name[PM_METAL_BUILD_AT_NAME_MAX];
+    char kind[8];       /* "fn" | "mem" | "obj" | "i64" | "f32" | "f64" | "mod" */
+    char lang[8];       /* card impl: "c" | "rs" | "py" */
+    /* registry face */
+    char sig[PM_METAL_BUILD_AT_SIG_MAX];    /* empty when the face is not an fn */
+    /* provenance (build record; present when fqn was unit_compiled) */
+    int32_t has_record;
+    uint32_t n_sources;
+    uint32_t n_syms;
+    /* Phase 9: doc prose first-line + the file/line the extractor found */
+    char doc[PM_METAL_BUILD_AT_DOC_MAX];    /* empty when undocumented */
+    char file[PM_METAL_BUILD_AT_FILE_MAX];  /* embedded-source relative path */
+    uint32_t line;
+    /* Phase 10: the ledger notes for this target (raw JSONL lines) */
+    char notes[PM_METAL_BUILD_AT_NOTES_MAX];
+    uint32_t n_notes;
+    /* call-graph: fqns this face's card imports from (connect_import edges) */
+    char deps[PM_METAL_BUILD_AT_REFS_MAX][PM_METAL_BUILD_AT_REF_MAX];
+    uint32_t n_deps;
+} pm_metal_build_at_info_t;
+
+/* Resolve fqn (+ optional export name; NULL = the card itself, kind "mod")
+ * against the live registry, then layer the build record + doc + notes +
+ * deps. Returns a handle for at_info / at_ast, PM_METAL_BUILD_AT_NONE when
+ * fqn is unknown to both the registry and the embedded source table. */
+pm_metal_build_at_handle_t pm_metal_build_at(const char *fqn, const char *name);
+
+/* Fill info from a handle returned by at(). Returns 0 on success, -1 when
+ * the handle is stale (record_reset between at() and at_info()). */
+int32_t pm_metal_build_at_info(pm_metal_build_at_handle_t handle,
+    pm_metal_build_at_info_t *info);
+
+/* The per-language editor leaf. Tonight's spine returns the language and a
+ * flag saying whether an editor exists for it (Phase 12 fills the C leaf;
+ * Rust/C++ later). lang_out receives "c" | "rs" | "cpp" | "py". Returns 1
+ * when an editor exists, 0 when the language has none yet, -1 on a bad
+ * handle. */
+int32_t pm_metal_build_at_ast(pm_metal_build_at_handle_t handle,
+    char *lang_out, size_t lang_max);
+
 #ifdef __cplusplus
 }
 #endif
