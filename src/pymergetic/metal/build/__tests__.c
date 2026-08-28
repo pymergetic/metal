@@ -4,7 +4,9 @@
  *  - topological order of a synthetic 3-unit graph with a dependency edge
  *  - a cyclic synthetic graph must error
  */
+#include "pymergetic/metal/async/__types__.h"
 #include "pymergetic/metal/build/__types__.h"
+#include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
 
@@ -250,12 +252,12 @@ static int32_t test_multi_object_link(void) {
     memset(&unit, 0, sizeof(unit));
     snprintf(unit.fqn, sizeof(unit.fqn), "%s", "test.multi");
 
-    rc = pm_metal_build_compile_source(arena, &unit, S_CALLEE,
+    rc = pm_metal_build_compile_source(arena, &unit, NULL, S_CALLEE,
         &obj_callee, &len_callee, err, sizeof(err));
     if (rc != PM_METAL_BUILD_OK) {
         pm_util_mem_arena_destroy(arena); free(backing); return 52;
     }
-    rc = pm_metal_build_compile_source(arena, &unit, S_CALLER,
+    rc = pm_metal_build_compile_source(arena, &unit, NULL, S_CALLER,
         &obj_caller, &len_caller, err, sizeof(err));
     if (rc != PM_METAL_BUILD_OK) {
         pm_util_mem_arena_destroy(arena); free(backing); return 53;
@@ -292,6 +294,347 @@ static int32_t test_multi_object_link(void) {
 #endif
 }
 
+/*------------------ Phase 4.2: manifest include/define forwarding ----------
+ * Parse the REAL externals/tcc/__pmm__.toml, then compile a source that
+ * #includes "libtcc.h" with include_dirs=["."] rooted at externals/tcc and
+ * the manifest's defines (TCC_TARGET_X86_64). This proves the unit's fields
+ * reach TCC through compile_source exactly as the manifest declares them. */
+static int32_t test_compile_tcc_manifest_forwarding(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    char path[512];
+    size_t len = 0;
+    char *bytes;
+    void *backing;
+    pm_util_mem_arena_t *arena;
+    pm_metal_build_unit_t unit;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    int32_t rc;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    static const char *src =
+        "#include \"libtcc.h\"\n"
+        "#ifndef TCC_TARGET_X86_64\n"
+        "#error manifest define not forwarded\n"
+        "#endif\n"
+        "int pm_build_fwd_probe(void) { return (int)sizeof(TCCState *); }\n";
+
+    snprintf(path, sizeof(path), "%s", __FILE__);
+    {
+        char *slash = strrchr(path, '/');
+        if (!slash) return 60;
+        *slash = '\0';
+    }
+    snprintf(path + strlen(path), sizeof(path) - strlen(path),
+        "/" TCC_MANIFEST_REL);
+    bytes = read_file(path, &len);
+    if (!bytes) return 61;
+
+    backing = malloc(1u << 20);
+    if (!backing) { free(bytes); return 62; }
+    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    if (!arena) { free(backing); free(bytes); return 63; }
+
+    rc = pm_metal_build_unit_parse(arena, (const uint8_t *)bytes, len, &unit,
+        err, sizeof(err));
+    free(bytes);
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 64;
+    }
+
+    /* unit_root = externals/tcc (the manifest's dir); unit->include_dirs
+     * ["."] resolves against it, so libtcc.h is found. */
+    {
+        char root[512];
+        char *slash;
+        snprintf(root, sizeof(root), "%s", path);
+        slash = strrchr(root, '/');
+        if (!slash) { pm_util_mem_arena_destroy(arena); free(backing); return 65; }
+        *slash = '\0';
+        rc = pm_metal_build_compile_source(arena, &unit, root, src,
+            &obj, &obj_len, err, sizeof(err));
+    }
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 66;
+    }
+    if (obj == NULL || obj_len < 64 || obj[0] != 0x7f) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 67;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
+/*------------------ Phase 4.4: runtime discovery ------------------
+ * discover walks the embedded card table: every impl="c" card becomes a
+ * buildable unit; rs/py cards are present too (their units compile not —
+ * unit_compile refuses them honestly). */
+static int32_t test_discover(void) {
+    void *backing = malloc(1u << 20);
+    pm_util_mem_arena_t *arena;
+    pm_metal_build_unit_t *units = NULL;
+    uint32_t n_units = 0;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    int32_t rc;
+    uint32_t i;
+    int have_jit_c = 0;
+    uint32_t n_buildable = 0, n_rs = 0, n_other = 0;
+
+    if (!backing) return 70;
+    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    if (!arena) { free(backing); return 71; }
+
+    rc = pm_metal_build_discover(arena, &units, &n_units, err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 72;
+    }
+    if (n_units < 20) {  /* the tree carries 60+ cards */
+        pm_util_mem_arena_destroy(arena); free(backing); return 73;
+    }
+    for (i = 0; i < n_units; i++) {
+        if (strcmp(units[i].impl, "c") == 0) {
+            n_buildable++;
+            if (strcmp(units[i].fqn, "pymergetic.metal.jit.c") == 0) {
+                have_jit_c = 1;
+                if (units[i].n_sources < 1
+                    || strcmp(units[i].sources[0], "__impl__.c") != 0) {
+                    pm_util_mem_arena_destroy(arena); free(backing); return 74;
+                }
+            }
+        } else if (strcmp(units[i].impl, "rs") == 0) {
+            n_rs++;
+        } else {
+            n_other++;
+        }
+    }
+    if (!have_jit_c) { pm_util_mem_arena_destroy(arena); free(backing); return 75; }
+    if (n_buildable < 20) { pm_util_mem_arena_destroy(arena); free(backing); return 76; }
+
+    /* an impl="rs" unit must refuse to compile with an honest error */
+    {
+        const pm_metal_build_unit_t *rs_unit = NULL;
+        pm_metal_build_artifact_t art;
+        for (i = 0; i < n_units; i++) {
+            if (strcmp(units[i].impl, "rs") == 0) { rs_unit = &units[i]; break; }
+        }
+        if (rs_unit != NULL) {
+            rc = pm_metal_build_unit_compile(arena, rs_unit, "", NULL, 0,
+                NULL, 0, &art, err, sizeof(err));
+            if (rc == PM_METAL_BUILD_OK
+                || strstr(err, "not yet buildable") == NULL) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 77;
+            }
+        }
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/*------------------ Phase 4.5: THE PROVE ------------------
+ * Rebuild pymergetic.metal.jit.c from its EMBEDDED source bytes: discover,
+ * compile with the seat's real include roots + defines, link with the
+ * process resolver, then (a) byte-compare its object output against the
+ * pre-linked card's for the same input, and (b) drive the rebuilt async
+ * compile path end-to-end (alloc + step -> DONE, native_entry() == 7). */
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+typedef int32_t (*pm_build_obj_compile_fn)(pm_util_mem_arena_t *, const char *,
+    size_t, uint8_t **, size_t *, char *, size_t);
+typedef pm_metal_async_coro_t *(*pm_build_alloc_fn)(pm_util_mem_arena_t *,
+    const char *, size_t, const char *);
+typedef pm_metal_async_status_t (*pm_build_step_fn)(pm_metal_async_coro_t *);
+#endif
+
+static int32_t test_rebuild_jit_c(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    enum { SPAN = 64u * 1024u * 1024u };
+    void *backing = malloc(SPAN);
+    pm_util_mem_arena_t *arena;
+    pm_metal_build_unit_t *units = NULL;
+    uint32_t n_units = 0;
+    const pm_metal_build_unit_t *jit_unit = NULL;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    int32_t rc;
+    uint32_t i;
+    pm_metal_build_artifact_t art;
+    pm_build_obj_compile_fn rebuilt_compile;
+    pm_build_alloc_fn rebuilt_alloc;
+    pm_build_step_fn rebuilt_step;
+    static const char *probe_src = "int pm_build_rebuilt_probe(void) { return 11; }\n";
+    uint8_t *obj_a = NULL, *obj_b = NULL;
+    size_t len_a = 0, len_b = 0;
+    char dir[512];
+    char src_root[2048], wasmmod_src_root[2048], wasmmod_root[2048], top_root[2048];
+    char tcc_root[2048];
+    const char *includes[6];
+    const char *defines[6];
+    uint32_t n_defines = 0;
+    pm_metal_async_coro_t *coro;
+    const pm_metal_jit_c_result_t *r;
+
+    if (!backing) return 80;
+    arena = pm_util_mem_arena_create(backing, SPAN);
+    if (!arena) { free(backing); return 81; }
+
+    rc = pm_metal_build_discover(arena, &units, &n_units, err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK) { pm_util_mem_arena_destroy(arena); free(backing); return 82; }
+    for (i = 0; i < n_units; i++) {
+        if (strcmp(units[i].fqn, "pymergetic.metal.jit.c") == 0) {
+            jit_unit = &units[i];
+            break;
+        }
+    }
+    if (jit_unit == NULL || jit_unit->n_sources == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 83;
+    }
+
+    /* Seat fill: the same roots the Makefile passes, resolved from __FILE__
+     * (this file is src/pymergetic/metal/build/__tests__.c). After stripping
+     * the file and dir components, dir = .../src/pymergetic/metal:
+     *   src root      = dir/../..                (metal/src)
+     *   wasmmod src   = dir/../../../wasmmod/src (extmod/wasmmod/src)
+     *   wasmmod root  = dir/../../../wasmmod
+     *   top           = dir/../../..             (metalpython)
+     *   tcc           = dir/../../externals/tcc  (metal/externals/tcc)
+     */
+    snprintf(dir, sizeof(dir), "%s", __FILE__);
+    {
+        char *slash = strrchr(dir, '/');
+        if (!slash) { pm_util_mem_arena_destroy(arena); free(backing); return 84; }
+        *slash = '\0';
+    }
+    /* dir = .../src/pymergetic/metal/build — one more up to the metal dir */
+    {
+        char *slash = strrchr(dir, '/');
+        if (!slash) { pm_util_mem_arena_destroy(arena); free(backing); return 85; }
+        *slash = '\0';
+    }
+    /* dir = .../src/pymergetic/metal — the seat's real include roots, the
+     * same set the host Makefile passes: -Isrc -I../wasmmod/src -I../wasmmod
+     * -I<metalpython> -Iexternals/tcc
+     * From dir, src is 2 up; the metal root is 3 up (dir/../.. = src,
+     * dir/../../.. = <metal>); wasmmod and the top sit one above <metal>. */
+    snprintf(src_root, sizeof(src_root), "%s/../..", dir);
+    snprintf(tcc_root, sizeof(tcc_root), "%s/../../../externals/tcc", dir);
+    snprintf(wasmmod_root, sizeof(wasmmod_root), "%s/../../../../wasmmod", dir);
+    snprintf(wasmmod_src_root, sizeof(wasmmod_src_root), "%s/../../../../wasmmod/src", dir);
+    snprintf(top_root, sizeof(top_root), "%s/../../../../..", dir);
+
+    includes[0] = src_root;
+    includes[1] = wasmmod_src_root;
+    includes[2] = wasmmod_root;
+    includes[3] = top_root;
+    includes[4] = tcc_root;
+    includes[5] = tcc_root;  /* libtcc.h + tcc's own headers both live here */
+
+    defines[n_defines++] = "PM_WASMMOD_GUEST=0";
+    defines[n_defines++] = "PM_MOD_TESTS=1";
+    defines[n_defines++] = "TCC_TARGET_X86_64";
+    defines[n_defines++] = "PM_HAS_TCC=1";
+    {
+        static char libdir_def[2100];
+        snprintf(libdir_def, sizeof(libdir_def), "PM_METAL_TCC_LIB_DIR=\"%s\"",
+            tcc_root);
+        defines[n_defines++] = libdir_def;
+    }
+    {
+        static char triplet_def[128];
+        FILE *trip;
+        trip = popen("cc -print-multiarch 2>/dev/null", "r");
+        if (trip != NULL) {
+            if (fgets(triplet_def, sizeof(triplet_def), trip) != NULL) {
+                char *nl = strchr(triplet_def, '\n');
+                if (nl) *nl = '\0';
+                if (triplet_def[0] != '\0') {
+                    static char triplet_val[160];
+                    snprintf(triplet_val, sizeof(triplet_val),
+                        "CONFIG_TRIPLET=\"%s\"", triplet_def);
+                    defines[n_defines++] = triplet_val;
+                }
+            }
+            pclose(trip);
+        }
+    }
+
+    /* unit_root: the card's own dir (relative includes resolve there). */
+    {
+        char unit_root[2100];
+        snprintf(unit_root, sizeof(unit_root), "%s/pymergetic/metal/jit/c", src_root);
+        rc = pm_metal_build_unit_compile(arena, jit_unit, unit_root,
+            includes, 6, defines, n_defines, &art, err, sizeof(err));
+    }
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 86;
+    }
+
+    /* (a) byte-identity: the rebuilt card's object_compile output must be
+     * byte-identical to the pre-linked one for identical input+flags. */
+    rebuilt_compile = (pm_build_obj_compile_fn)pm_metal_build_artifact_lookup(
+        &art, "pm_metal_jit_c_object_compile");
+    if (rebuilt_compile == NULL) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 87;
+    }
+    if (pm_metal_jit_c_object_compile(arena, probe_src, strlen(probe_src),
+        &obj_a, &len_a, err, sizeof(err)) != 0) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 88;
+    }
+    if (rebuilt_compile(arena, probe_src, strlen(probe_src),
+        &obj_b, &len_b, err, sizeof(err)) != 0) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 89;
+    }
+    if (len_a != len_b || memcmp(obj_a, obj_b, len_a) != 0) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 90;
+    }
+
+    /* (b) the rebuilt async path end-to-end: alloc + step -> DONE, and the
+     * compiled program returns 7 through native_entry. */
+    rebuilt_alloc = (pm_build_alloc_fn)pm_metal_build_artifact_lookup(
+        &art, "pm_metal_jit_c_compile_alloc");
+    rebuilt_step = (pm_build_step_fn)pm_metal_build_artifact_lookup(
+        &art, "pm_metal_jit_c_compile_step");
+    if (rebuilt_alloc == NULL || rebuilt_step == NULL) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing); return 91;
+    }
+    {
+        static const char *main_src = "int main(void) { return 7; }\n";
+        pm_metal_async_status_t st;
+        coro = rebuilt_alloc(arena, main_src, strlen(main_src), "rebuilt_jit_c");
+        if (coro == NULL) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing); return 92;
+        }
+        st = rebuilt_step(coro);
+        if (st != PM_METAL_ASYNC_DONE) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing); return 93;
+        }
+        r = pm_metal_jit_c_result_of(coro);
+        if (r == NULL || r->ok != 1 || r->native_entry == NULL) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing); return 94;
+        }
+        if (((int (*)(void))r->native_entry)() != 7) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing); return 95;
+        }
+    }
+
+    pm_metal_build_artifact_destroy(&art);
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 static int32_t pm_metal_build_tests(void) {
     int32_t rc;
     rc = test_parse_real_tcc_manifest();
@@ -301,6 +644,12 @@ static int32_t pm_metal_build_tests(void) {
     rc = test_graph_cycle();
     if (rc) return rc;
     rc = test_multi_object_link();
+    if (rc) return rc;
+    rc = test_compile_tcc_manifest_forwarding();
+    if (rc) return rc;
+    rc = test_discover();
+    if (rc) return rc;
+    rc = test_rebuild_jit_c();
     if (rc) return rc;
     return 0;
 }

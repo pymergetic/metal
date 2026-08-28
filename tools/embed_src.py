@@ -20,11 +20,15 @@ Output is a header that both the C inspect card and the .rs driver include:
 
     static const pm_metal_src_file_t PM_METAL_SRC_FILES_<n>[] = {...};
     static const pm_metal_src_card_t PM_METAL_SRC_CARDS[] = {
-        { .fqn="pymergetic.metal.inspect", .files=..., .nfiles=..., .manifest=... },
+        { .fqn="...", .impl="c", .files=..., .nfiles=..., .manifest=..., .toml=... },
         ...
     };
     uint32_t pm_metal_src_card_count(void);
     const pm_metal_src_card_t *pm_metal_src_find(const char *fqn);
+
+`impl` is the manifest's impl string and `toml` the raw __pmm__.toml bytes
+(NUL-terminated) — the build card's runtime discovery parses them to
+synthesize build units without touching the filesystem.
 
 pm_metal_src_find is a plain binary search over the sorted card table. The
 generator leaves the output header untouched when it is byte-identical, so a
@@ -131,7 +135,8 @@ def gather(card_roots: list[pathlib.Path]) -> list[dict]:
             if not src:
                 continue  # impl="py" (pysample) or no native muscle: nothing to browse
             seen.add(fqn)
-            cards.append({"fqn": fqn, "impl": impl, "dir": card_dir, "files": src})
+            cards.append({"fqn": fqn, "impl": impl, "dir": card_dir, "files": src,
+                          "toml": toml})
     cards.sort(key=lambda c: c["fqn"])
     return cards
 
@@ -170,9 +175,11 @@ def main() -> int:
               "} pm_metal_src_file_t;\n\n")
     buf.write("typedef struct {\n"
               "    const char *fqn;\n"
+              "    const char *impl;\n"
               "    const pm_metal_src_file_t *files;\n"
               "    uint32_t nfiles;\n"
               "    const char *manifest;\n"
+              "    const char *toml;\n"
               "} pm_metal_src_card_t;\n\n")
 
     # Per-card file tables (after the types above).
@@ -187,12 +194,20 @@ def main() -> int:
         files = [(path.name, path.stat().st_size) for path in card["files"]]
         man = _card_manifest(card["fqn"], files)
         name = _ident(card["fqn"], "manifest")
+        toml_name = _ident(card["fqn"], "pmm")
+        toml_bytes = card["toml"].read_bytes()
+        if b"\x00" in toml_bytes:
+            print(f"embed_src: {card['toml']} contains a NUL byte", file=sys.stderr)
+            return 1
         _emit_array(buf, name, man.encode("utf-8") + b"\x00")  # NUL-terminated for const char * bridge
+        _emit_array(buf, toml_name, toml_bytes + b"\x00")
         buf.write(f'static const pm_metal_src_card_t PM_METAL_SRC_CARD_{ci} = {{\n'
             f'    "{card["fqn"]}",\n'
+            f'    "{card["impl"]}",\n'
             f'    PM_METAL_SRC_FILES_{ci},\n'
             f'    {len(card["files"])}u,\n'
             f'    (const char *)s_src_{name},\n'
+            f'    (const char *)s_src_{toml_name},\n'
             f"}};\n\n")
 
     buf.write("static const pm_metal_src_card_t PM_METAL_SRC_CARDS[] = {\n")
@@ -201,8 +216,15 @@ def main() -> int:
     buf.write("};\n\n")
     buf.write(f"#define PM_METAL_SRC_CARD_COUNT {len(cards)}u\n\n")
 
-    buf.write("uint32_t pm_metal_src_card_count(void) {\n    return PM_METAL_SRC_CARD_COUNT;\n}\n\n")
-    buf.write("const pm_metal_src_card_t *pm_metal_src_find(const char *fqn) {\n"
+    buf.write("/* Table accessors are static: the header is included by every card\n"
+              " * that needs the embedded tree (inspect, build), one copy per TU. */\n"
+              "static uint32_t pm_metal_src_card_count(void)\n"
+              "    __attribute__((unused));\n"
+              "static uint32_t pm_metal_src_card_count(void) {\n"
+              "    return PM_METAL_SRC_CARD_COUNT;\n}\n\n"
+              "static const pm_metal_src_card_t *pm_metal_src_find(const char *fqn)\n"
+              "    __attribute__((unused));\n"
+              "static const pm_metal_src_card_t *pm_metal_src_find(const char *fqn) {\n"
               "    if (fqn == NULL) return NULL;\n"
               "    size_t lo = 0, hi = PM_METAL_SRC_CARD_COUNT;\n"
               "    while (lo < hi) {\n"

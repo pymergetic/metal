@@ -14,6 +14,8 @@
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
 
+#include "pymergetic/metal/inspect/src_embed.inc.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -414,20 +416,66 @@ int32_t pm_metal_build_graph_resolve(pm_util_mem_arena_t *arena,
     return PM_METAL_BUILD_OK;
 }
 
-/*------------------ compile + link (Phase 3) ------------------*/
+/*------------------ compile + link (Phase 3/4) ------------------*/
+
+/* join(unit_root, rel) into arena storage; rel may be absolute already. */
+static const char *join_path(pm_util_mem_arena_t *arena, const char *root,
+    const char *rel) {
+    size_t rl, el;
+    char *out;
+    if (rel == NULL || rel[0] == '\0') {
+        return NULL;
+    }
+    if (rel[0] == '/' || root == NULL || root[0] == '\0') {
+        return dup_str(arena, rel, strlen(rel));
+    }
+    rl = strlen(root);
+    el = strlen(rel);
+    out = (char *)pm_util_mem_alloc(arena, rl + 1u + el + 1u);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, root, rl);
+    out[rl] = '/';
+    memcpy(out + rl + 1u, rel, el);
+    out[rl + 1u + el] = '\0';
+    return out;
+}
 
 /* compile_source: drive the jit.c card's TCC object path (TCC_OUTPUT_OBJ →
- * ET_REL .o bytes in the arena). Native seats only — the wasm32 browser cell
+ * ET_REL .o bytes in the arena), forwarding the unit's include_dirs (joined
+ * with unit_root) and defines. Native seats only — the wasm32 browser cell
  * has no ELF object output and jit.c reports that via errbuf. */
 int32_t pm_metal_build_compile_source(pm_util_mem_arena_t *arena,
-    const pm_metal_build_unit_t *unit, const char *source,
+    const pm_metal_build_unit_t *unit, const char *unit_root, const char *source,
     uint8_t **obj_out, size_t *obj_len, char *errbuf, size_t errbuf_len) {
+    const char **includes = NULL;
+    uint32_t n_includes = 0;
+    uint32_t i;
+
     if (arena == NULL || unit == NULL || source == NULL || source[0] == '\0'
         || obj_out == NULL || obj_len == NULL) {
         err_set(errbuf, errbuf_len, "compile_source: bad args", 0);
         return PM_METAL_BUILD_ERR_COMPILE;
     }
-    return pm_metal_jit_c_object_compile(arena, source, strlen(source),
+    if (unit->n_include_dirs > 0) {
+        includes = (const char **)pm_util_mem_alloc(
+            arena, unit->n_include_dirs * sizeof(const char *));
+        if (includes == NULL) {
+            err_set(errbuf, errbuf_len, "compile_source: arena exhausted", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        for (i = 0; i < unit->n_include_dirs; i++) {
+            includes[i] = join_path(arena, unit_root, unit->include_dirs[i]);
+            if (includes[i] == NULL) {
+                err_set(errbuf, errbuf_len, "compile_source: arena exhausted", 0);
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+            n_includes++;
+        }
+    }
+    return pm_metal_jit_c_object_compile_opts(arena, source, strlen(source),
+        includes, n_includes, unit->defines, unit->n_defines,
         obj_out, obj_len, errbuf, errbuf_len) == 0
         ? PM_METAL_BUILD_OK : PM_METAL_BUILD_ERR_COMPILE;
 }
@@ -435,6 +483,98 @@ int32_t pm_metal_build_compile_source(pm_util_mem_arena_t *arena,
 #ifdef PM_METAL_BUILD_HAS_ELF
 #include "pymergetic/wasmmod/pack/format/elf/load.h"
 #endif
+
+/* Process resolver (Phase 4.3): resolve a rebuilt card's true externals
+ * (tcc_new, malloc, registry functions) against the already-linked process
+ * copies. dlopen(NULL) — the global symbol table of the running process,
+ * RTLD_LAZY so no eager relocation of every loaded object — not RTLD_DEFAULT
+ * because the latter is a dlsym-side constant of a different lookup mode
+ * that some platforms restrict to global-scope queries only.
+ *
+ * On x86_64 the linked image is mapped MAP_32BIT (~<4GiB) while process
+ * symbols sit at 0x7f...: a direct R_X86_64_PLT32 call would truncate its
+ * 32-bit displacement. Every far target is answered with a synthesized
+ * movabs+jmp thunk from ONE pre-allocated RWX thunk table — allocated before
+ * the loader starts so it never moves (earlier relocs already point in). */
+#define PM_BUILD_THUNK_SLOTS 512u
+#define PM_BUILD_THUNK_BYTES 16u
+
+typedef struct pm_build_resolve_ctx {
+#ifdef PM_METAL_BUILD_HAS_ELF
+    uint8_t *thunk_base;
+    size_t thunk_used;
+    int failed;
+#else
+    char _pad;
+#endif
+} pm_build_resolve_ctx_t;
+
+#ifdef PM_METAL_BUILD_HAS_ELF
+#include <dlfcn.h>
+#include <sys/mman.h>
+
+static void thunk_ctx_init(pm_build_resolve_ctx_t *ctx) {
+    memset(ctx, 0, sizeof(*ctx));
+    /* MAP_32BIT like the loader's image mapping: the image's PLT32 relocs
+     * point here with a signed 32-bit displacement, so the table must sit
+     * in the same low address span. No fallback: without it links would
+     * silently truncate (better an honest link error). */
+    ctx->thunk_base = (uint8_t *)mmap(NULL,
+        (size_t)PM_BUILD_THUNK_SLOTS * PM_BUILD_THUNK_BYTES,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+#if defined(__x86_64__) && defined(MAP_32BIT)
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT,
+#else
+        MAP_PRIVATE | MAP_ANONYMOUS,
+#endif
+        -1, 0);
+    ctx->thunk_used = 0;
+    ctx->failed = ctx->thunk_base == MAP_FAILED;
+    if (ctx->failed) {
+        ctx->thunk_base = NULL;
+    }
+}
+
+static void thunk_ctx_deinit(pm_build_resolve_ctx_t *ctx) {
+    if (ctx != NULL && ctx->thunk_base != NULL) {
+        munmap(ctx->thunk_base,
+            (size_t)PM_BUILD_THUNK_SLOTS * PM_BUILD_THUNK_BYTES);
+        ctx->thunk_base = NULL;
+    }
+}
+
+static void *proc_resolve(const char *name, void *ctx_in) {
+    pm_build_resolve_ctx_t *ctx = (pm_build_resolve_ctx_t *)ctx_in;
+    void *h = dlopen(NULL, RTLD_LAZY);
+    void *p = h != NULL ? dlsym(h, name) : NULL;
+    if (p == NULL) {
+        return NULL;
+    }
+    if (ctx == NULL || ctx->thunk_base == NULL) {
+        return p;
+    }
+    {
+        ptrdiff_t delta = (uint8_t *)p - (ctx->thunk_base + ctx->thunk_used);
+        /* PLT32 carries a signed 32-bit displacement; keep a wide margin. */
+        if (delta > (ptrdiff_t)INT32_MIN / 2 && delta < (ptrdiff_t)INT32_MAX / 2) {
+            return p;
+        }
+    }
+    if (ctx->thunk_used >= (size_t)PM_BUILD_THUNK_SLOTS * PM_BUILD_THUNK_BYTES) {
+        ctx->failed = 1;
+        return NULL;
+    }
+    {
+        uint8_t *t = ctx->thunk_base + ctx->thunk_used;
+        /* movabs $target, %rax ; jmp *%rax */
+        t[0] = 0x48; t[1] = 0xb8;
+        memcpy(t + 2, &p, sizeof(p));
+        t[10] = 0xff; t[11] = 0xe0;
+        ctx->thunk_used += PM_BUILD_THUNK_BYTES;
+        return t;
+    }
+}
+#endif /* PM_METAL_BUILD_HAS_ELF */
 
 int32_t pm_metal_build_link(pm_util_mem_arena_t *arena,
     const pm_metal_build_unit_t *unit, uint8_t **objects, const size_t *lens,
@@ -445,6 +585,7 @@ int32_t pm_metal_build_link(pm_util_mem_arena_t *arena,
     char err[PM_METAL_BUILD_ERR_MAX];
     uint32_t i;
     uint32_t *lens32;
+    pm_build_resolve_ctx_t rctx;
 
     if (arena == NULL || unit == NULL || objects == NULL || lens == NULL
         || n_objects == 0 || artifact == NULL) {
@@ -460,13 +601,18 @@ int32_t pm_metal_build_link(pm_util_mem_arena_t *arena,
     for (i = 0; i < n_objects; i++) {
         lens32[i] = (uint32_t)lens[i];
     }
+    memset(&rctx, 0, sizeof(rctx));
+    thunk_ctx_init(&rctx);
     if (!mp_wasm_elf_image_load_multi((const uint8_t *const *)objects, lens32,
-        n_objects, NULL, NULL, &img, err, sizeof(err))) {
+        n_objects, proc_resolve, &rctx, &img, err, sizeof(err))) {
+        thunk_ctx_deinit(&rctx);
         err_set(errbuf, errbuf_len, err, 0);
         return PM_METAL_BUILD_ERR_LINK;
     }
     /* The image is mmap'd (not arena memory): publish it through the
-     * artifact so the caller can lookup and free it. */
+     * artifact so the caller can lookup and free it. The thunk table is
+     * leaked deliberately: the image's code points into it, so it must
+     * outlive the artifact. */
     memset(artifact, 0, sizeof(*artifact));
     snprintf(artifact->fqn, sizeof(artifact->fqn), "%s", unit->fqn);
     artifact->bytes = (uint8_t *)img;
@@ -508,6 +654,176 @@ void *pm_metal_build_artifact_lookup(const pm_metal_build_artifact_t *artifact,
 
 #include "pymergetic/wasmmod/guest.h"
 
+/*------------------ runtime card discovery (Phase 4.4) ------------------
+ * The embedded card table (tools/embed_src.py -> src_embed.inc.h, included
+ * by the inspect card on every seat) is the source of truth: each entry
+ * carries the card's impl and raw __pmm__.toml bytes, so discovery is pure
+ * data — no filesystem walk, identical on every seat. */
+
+int32_t pm_metal_build_discover(pm_util_mem_arena_t *arena,
+    pm_metal_build_unit_t **units, uint32_t *n_units,
+    char *errbuf, size_t errbuf_len) {
+    uint32_t n = pm_metal_src_card_count();
+    pm_metal_build_unit_t *out;
+    uint32_t i;
+    uint32_t w = 0;
+
+    if (arena == NULL || units == NULL || n_units == NULL) {
+        err_set(errbuf, errbuf_len, "discover: bad args", 0);
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    *units = NULL;
+    *n_units = 0;
+    if (n == 0) {
+        return PM_METAL_BUILD_OK;
+    }
+    out = (pm_metal_build_unit_t *)pm_util_mem_alloc(
+        arena, n * sizeof(pm_metal_build_unit_t));
+    if (out == NULL) {
+        err_set(errbuf, errbuf_len, "discover: arena exhausted", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    for (i = 0; i < n; i++) {
+        const pm_metal_src_card_t *c = &PM_METAL_SRC_CARDS[i];
+        char err[PM_METAL_BUILD_ERR_MAX];
+        if (c->toml == NULL) {
+            continue;
+        }
+        if (pm_metal_build_unit_parse(arena, (const uint8_t *)c->toml,
+            strlen(c->toml), &out[w], err, sizeof(err)) != PM_METAL_BUILD_OK) {
+            continue;  /* a broken manifest is skipped, not fatal */
+        }
+        /* sources: the card's embedded muscle file names (the parse filled
+         * everything else; a card unit has no extra relative paths). */
+        {
+            const char **srcs = (const char **)pm_util_mem_alloc(
+                arena, c->nfiles * sizeof(const char *));
+            uint32_t f;
+            if (srcs == NULL) {
+                err_set(errbuf, errbuf_len, "discover: arena exhausted", 0);
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+            for (f = 0; f < c->nfiles; f++) {
+                srcs[f] = c->files[f].rel;
+            }
+            out[w].sources = srcs;
+            out[w].n_sources = c->nfiles;
+        }
+        w++;
+    }
+    *units = out;
+    *n_units = w;
+    return PM_METAL_BUILD_OK;
+}
+
+int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
+    const pm_metal_build_unit_t *unit, const char *unit_root,
+    const char **include_dirs, uint32_t n_include_dirs,
+    const char **extra_defines, uint32_t n_extra_defines,
+    pm_metal_build_artifact_t *artifact,
+    char *errbuf, size_t errbuf_len) {
+    uint8_t **objs;
+    size_t *lens;
+    const char **all_includes = NULL;
+    uint32_t n_all_includes = 0;
+    uint32_t i;
+    uint32_t obj_i;
+    int32_t rc;
+
+    if (arena == NULL || unit == NULL || unit_root == NULL || artifact == NULL) {
+        err_set(errbuf, errbuf_len, "unit_compile: bad args", 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    if (strcmp(unit->impl, "c") != 0) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "not yet buildable: impl=%s", unit->impl);
+        err_set(errbuf, errbuf_len, msg, 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    if (unit->n_sources == 0) {
+        err_set(errbuf, errbuf_len, "unit_compile: no sources", 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    objs = (uint8_t **)pm_util_mem_alloc(
+        arena, unit->n_sources * sizeof(uint8_t *));
+    lens = (size_t *)pm_util_mem_alloc(arena, unit->n_sources * sizeof(size_t));
+    if (objs == NULL || lens == NULL) {
+        err_set(errbuf, errbuf_len, "unit_compile: arena exhausted", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+
+    /* merge unit->include_dirs (rooted at unit_root) + the seat fill */
+    n_all_includes = unit->n_include_dirs + n_include_dirs;
+    if (n_all_includes > 0) {
+        all_includes = (const char **)pm_util_mem_alloc(
+            arena, n_all_includes * sizeof(const char *));
+        if (all_includes == NULL) {
+            err_set(errbuf, errbuf_len, "unit_compile: arena exhausted", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        for (i = 0; i < unit->n_include_dirs; i++) {
+            all_includes[i] = join_path(arena, unit_root, unit->include_dirs[i]);
+            if (all_includes[i] == NULL) {
+                err_set(errbuf, errbuf_len, "unit_compile: arena exhausted", 0);
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+        }
+        for (i = 0; i < n_include_dirs; i++) {
+            all_includes[unit->n_include_dirs + i] = include_dirs[i];
+        }
+    }
+
+    /* compile each embedded source through the opts seam (unit defines +
+     * the seat fill's defines joined) */
+    {
+        const char **all_defines = NULL;
+        uint32_t n_all_defines = unit->n_defines + n_extra_defines;
+        if (n_all_defines > 0) {
+            all_defines = (const char **)pm_util_mem_alloc(
+                arena, n_all_defines * sizeof(const char *));
+            if (all_defines == NULL) {
+                err_set(errbuf, errbuf_len, "unit_compile: arena exhausted", 0);
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+            for (i = 0; i < unit->n_defines; i++) {
+                all_defines[i] = unit->defines[i];
+            }
+            for (i = 0; i < n_extra_defines; i++) {
+                all_defines[unit->n_defines + i] = extra_defines[i];
+            }
+        }
+        for (obj_i = 0; obj_i < unit->n_sources; obj_i++) {
+            const pm_metal_src_card_t *c = pm_metal_src_find(unit->fqn);
+            const char *src = NULL;
+            if (c != NULL) {
+                uint32_t f;
+                for (f = 0; f < c->nfiles; f++) {
+                    if (strcmp(c->files[f].rel, unit->sources[obj_i]) == 0) {
+                        src = (const char *)c->files[f].data;
+                        break;
+                    }
+                }
+            }
+            if (src == NULL) {
+                err_set(errbuf, errbuf_len, "unit_compile: source not in embed", 0);
+                return PM_METAL_BUILD_ERR_COMPILE;
+            }
+            if (pm_metal_jit_c_object_compile_opts(arena, src, strlen(src),
+                all_includes, n_all_includes, all_defines, n_all_defines,
+                &objs[obj_i], &lens[obj_i], errbuf, errbuf_len) != 0) {
+                return PM_METAL_BUILD_ERR_COMPILE;
+            }
+        }
+    }
+
+    rc = pm_metal_build_link(arena, unit, objs, lens, unit->n_sources,
+        artifact, errbuf, errbuf_len);
+    if (rc != PM_METAL_BUILD_OK) {
+        return rc;
+    }
+    return PM_METAL_BUILD_OK;
+}
+
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_unit_parse, pm_metal_build_unit_parse,
     int32_t(pm_util_mem_arena_t *, const uint8_t *, size_t, pm_metal_build_unit_t *,
         char *, size_t));
@@ -516,10 +832,17 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_graph_resolve, pm_metal_b
         const pm_metal_build_unit_t ***, uint32_t *, char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_compile_source, pm_metal_build_compile_source,
     int32_t(pm_util_mem_arena_t *, const pm_metal_build_unit_t *, const char *,
-        uint8_t **, size_t *, char *, size_t));
+        const char *, uint8_t **, size_t *, char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_link, pm_metal_build_link,
     int32_t(pm_util_mem_arena_t *, const pm_metal_build_unit_t *, uint8_t **,
         const size_t *, uint32_t, pm_metal_build_artifact_t *, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_discover, pm_metal_build_discover,
+    int32_t(pm_util_mem_arena_t *, pm_metal_build_unit_t **, uint32_t *,
+        char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_unit_compile, pm_metal_build_unit_compile,
+    int32_t(pm_util_mem_arena_t *, const pm_metal_build_unit_t *, const char *,
+        const char **, uint32_t, const char **, uint32_t,
+        pm_metal_build_artifact_t *, char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_destroy, pm_metal_build_artifact_destroy,
     void(pm_metal_build_artifact_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_lookup, pm_metal_build_artifact_lookup,

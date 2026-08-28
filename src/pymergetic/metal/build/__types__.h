@@ -67,9 +67,11 @@ int32_t pm_metal_build_graph_resolve(pm_util_mem_arena_t *arena,
     char *errbuf, size_t errbuf_len);
 
 /* Compile one source of unit into an object (arena-owned bytes in obj_out).
+ * unit_root is the directory the unit's relative include_dirs resolve
+ * against (the manifest's own directory); source is C source text.
  * Phase 3 drives the jit.c card's TCC object path. */
 int32_t pm_metal_build_compile_source(pm_util_mem_arena_t *arena,
-    const pm_metal_build_unit_t *unit, const char *source,
+    const pm_metal_build_unit_t *unit, const char *unit_root, const char *source,
     uint8_t **obj_out, size_t *obj_len, char *errbuf, size_t errbuf_len);
 
 /* Link the unit's compiled objects through the in-tree ELF relocator and
@@ -87,6 +89,32 @@ void pm_metal_build_artifact_destroy(pm_metal_build_artifact_t *artifact);
  * name is not present. */
 void *pm_metal_build_artifact_lookup(const pm_metal_build_artifact_t *artifact,
     const char *name);
+
+/* Runtime card discovery: walk the embedded card source table (every seat
+ * ships it — tools/embed_src.py), parse each card's raw __pmm__.toml with
+ * pm_metal_build_unit_parse, and synthesize one unit per card. Units receive
+ * an arena-owned array in *units; n_units is its length.
+ *
+ * impl="c" cards become buildable units: sources are the card's embedded
+ * muscle file names, include_dirs/defines empty — the caller supplies the
+ * seat's include roots + defines at compile time (the seat fill, like
+ * io.fetch differs per seat). impl="rs"/"py" cards are listed too, with
+ * impl copied verbatim: pm_metal_build_unit_compile refuses them with a
+ * clear "not yet buildable" error rather than silently skipping. */
+int32_t pm_metal_build_discover(pm_util_mem_arena_t *arena,
+    pm_metal_build_unit_t **units, uint32_t *n_units,
+    char *errbuf, size_t errbuf_len);
+
+/* Compile every source of unit (via pm_metal_build_compile_source, rooted at
+ * unit_root + include_dirs/extra_defines — the seat fill) and link the
+ * objects through the in-tree ELF relocator with the process resolver.
+ * One call: sources -> artifact. */
+int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
+    const pm_metal_build_unit_t *unit, const char *unit_root,
+    const char **include_dirs, uint32_t n_include_dirs,
+    const char **extra_defines, uint32_t n_extra_defines,
+    pm_metal_build_artifact_t *artifact,
+    char *errbuf, size_t errbuf_len);
 
 #ifdef __cplusplus
 }

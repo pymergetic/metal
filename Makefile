@@ -64,7 +64,11 @@ BENCH_SRC_OBJS := $(addprefix $(CURDIR)/build/, $(BENCH_SRCS:.c=.o))
 BENCH_SRCS := host_bench.c \
 	$(addprefix $(METAL_SRC)/pymergetic/metal/,$(CARD_REL))
 
-LDFLAGS_WASMMOD := -L$(METAL_LIBDIR) -lpymergetic_metal -lpthread -ldl -lm -lstdc++ -lrt
+# -rdynamic: the build card's process resolver (dlsym on dlopen(NULL)) must
+# find the pre-linked card symbols (tcc_new, pm_util_mem_alloc, ...) in the
+# main binary's dynamic symbol table.
+LDFLAGS_WASMMOD := -rdynamic -L$(METAL_LIBDIR) -lpymergetic_metal -lpthread -ldl -lm -lstdc++ -lrt
+
 ifneq ($(WASMMOD_IWASM_A),)
 LDFLAGS_WASMMOD += -L$(dir $(WASMMOD_IWASM_A)) -liwasm
 endif
@@ -242,7 +246,7 @@ firmware-check:
 
 upy:
 	mkdir -p $(CURDIR)/build
-	$(MAKE) -C $(TOP)/ports/unix MICROPY_PY_WASM=1 MICROPY_PY_METAL=1 MICROPY_PY_THREAD_GIL=1 BUILD=build-metal LDFLAGS_EXTRA="-Wl,-no-pie"
+	$(MAKE) -C $(TOP)/ports/unix MICROPY_PY_WASM=1 MICROPY_PY_METAL=1 MICROPY_PY_THREAD_GIL=1 BUILD=build-metal LDFLAGS_EXTRA="-Wl,-no-pie -rdynamic"
 	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_guest_prove.py
 	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_runner_vm_prove.py
 	python3 $(CURDIR)/upy_cdn_prove_host.py \
