@@ -358,6 +358,7 @@ upy:
 	grep -q "upy artifact call loop" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy process budget loop" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy cross compile wasm loop" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy types value loop" $(CURDIR)/build/upy_guest_prove.log
 	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_runner_vm_prove.py
 	python3 $(CURDIR)/upy_cdn_prove_host.py \
 		$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_cdn_prove.py
@@ -401,6 +402,7 @@ browser:
 	grep -q "upy process budget loop" $(CURDIR)/build/browser_prove.log
 	grep -q "upy wasm build link" $(CURDIR)/build/browser_prove.log
 	grep -q "upy browser cross knob + elf refuse" $(CURDIR)/build/browser_prove.log
+	grep -q "upy types value loop" $(CURDIR)/build/browser_prove.log
 	grep -q "compiled:" $(CURDIR)/build/browser_prove.log
 
 compile-commands:

@@ -82,3 +82,8 @@ try {
 } finally {
     await new Promise((resolve) => server.close(resolve));
 }
+/* The prove itself is done; exit explicitly. Asyncify keeps a parked JS
+ * promise chain that node 18's natural-exit path can stall on after the
+ * `exit` event, leaving a passing run hung at 100% idle. process.exit is
+ * deterministic and the log is already on disk. */
+process.exit(0);

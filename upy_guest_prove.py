@@ -474,4 +474,40 @@ try:
 except Exception as _e:
     print("jit py past-cap refused: %s" % (_e,))
 print("upy process budget loop")
+
+# pymergetic.types — the universal 16-byte value crosses the Python face as
+# 16-byte bytes. Constructors, probes (kind/is_nil), field access by
+# name_hash, mutation via rebound value bytes, and the descriptor registry
+# round-trip. Same faces on every seat.
+import pymergetic.types as t
+
+_tn = t.nil()
+if t.kind(_tn) != 0:
+    raise SystemExit("types nil kind %r" % (t.kind(_tn),))
+_ti = t.i32(42)
+if t.kind(_ti) != 1:
+    raise SystemExit("types i32 kind")
+if t.is_nil(_ti):
+    raise SystemExit("types i32 is_nil")
+_tf = t.f64(2.5)
+if t.kind(_tf) != 6:
+    raise SystemExit("types f64 kind")
+_ts = t.str("hello")
+if t.kind(_ts) != 8:
+    raise SystemExit("types str kind")
+_hx = t.name_hash("x")
+if _hx <= 0 or t.name_hash("x") != _hx:
+    raise SystemExit("types name hash")
+if t.registry_find("pymergetic.types.i32") is None:
+    raise SystemExit("types registry find i32")
+if t.registry_find("pymergetic.types.Entity") is None:
+    # Entity/Person/Point are prove-card types (cargo __tests__.c registers
+    # them on the host seat); a resident seat still has the list descriptor.
+    if t.registry_find("pymergetic.types.list") is None:
+        raise SystemExit("types registry find list")
+if t.registry_find("pymergetic.types.Nope") is not None:
+    raise SystemExit("types registry find Nope")
+if t.registry_count() < 12:
+    raise SystemExit("types registry count %r" % (t.registry_count(),))
+print("upy types value loop")
 print("guest prove ok")

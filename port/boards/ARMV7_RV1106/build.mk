@@ -64,6 +64,7 @@ FW_OBJS := \
 	$(BUILD)/main.o \
 	$(BUILD)/lib.o \
 	$(BUILD)/mem.o \
+	$(BUILD)/types.o \
 	$(BUILD)/tlsf.o \
 	$(BUILD)/modboot.o
 # Cards are added by fw_cards.mk from the card tree — do not list them here.
@@ -103,6 +104,9 @@ $(BUILD)/lib.o: $(PORT_DIR)/lib.c | $(BUILD)
 	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
 
 $(BUILD)/mem.o: $(WASMMOD_SRC)/pymergetic/util/mem/__impl__.c | $(BUILD)
+	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
+
+$(BUILD)/types.o: $(WASMMOD_SRC)/pymergetic/types/__impl__.c | $(BUILD)
 	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
 
 $(BUILD)/tlsf.o: $(WASMMOD)/third_party/tlsf/tlsf.c | $(BUILD)

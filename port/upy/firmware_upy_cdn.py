@@ -170,6 +170,30 @@ if _fw_mpy2 is not None:
     raise RuntimeError("jit py firmware budgeted should refuse")
 print("upy process budget refuses (cap set, compile still no)")
 
+# pymergetic.types (firmware seat): the universal 16-byte value crosses the
+# Python face as 16-byte bytes. Same card, same faces as unix/browser — no
+# float/longlong on this build, so the prove sticks to nil/i32/str probes
+# and the descriptor registry round-trip.
+import pymergetic.types as t
+
+_tn = t.nil()
+if t.kind(_tn) != 0:
+    raise RuntimeError("types nil kind %r" % (t.kind(_tn),))
+_ti = t.i32(42)
+if t.kind(_ti) != 1 or t.is_nil(_ti):
+    raise RuntimeError("types i32 kind/is_nil")
+if t.kind(t.str("hello")) != 8:
+    raise RuntimeError("types str kind")
+if t.name_hash("x") <= 0:
+    raise RuntimeError("types name hash")
+if t.registry_find("pymergetic.types.i32") is None:
+    raise RuntimeError("types registry find i32")
+if t.registry_find("pymergetic.types.list") is None:
+    raise RuntimeError("types registry find list")
+if t.registry_count() < 12:
+    raise RuntimeError("types registry count %r" % (t.registry_count(),))
+print("upy types value loop")
+
 if m.display.up() != 0:
     raise RuntimeError("display up")
 print("upy display up")

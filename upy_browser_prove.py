@@ -338,3 +338,31 @@ def _cdn(base):
     except Exception as _e:
         print("jit py past-cap refused: %s" % (_e,))
     print("upy process budget loop")
+
+# pymergetic.types — same card, same faces as the unix seat: the universal
+# 16-byte value crosses the Python face as 16-byte bytes. Probes and the
+# descriptor registry round-trip inside the browser cell.
+import pymergetic.types as t
+
+_tn = t.nil()
+if t.kind(_tn) != 0:
+    raise SystemExit("types nil kind %r" % (t.kind(_tn),))
+_ti = t.i32(42)
+if t.kind(_ti) != 1 or t.is_nil(_ti):
+    raise SystemExit("types i32 kind/is_nil")
+if t.kind(t.f64(2.5)) != 6:
+    raise SystemExit("types f64 kind")
+if t.kind(t.str("hello")) != 8:
+    raise SystemExit("types str kind")
+if t.name_hash("x") <= 0:
+    raise SystemExit("types name hash")
+if t.registry_find("pymergetic.types.i32") is None:
+    raise SystemExit("types registry find i32")
+if t.registry_find("pymergetic.types.Entity") is None:
+    # Entity/Person/Point are prove-card types (cargo __tests__.c registers
+    # them on the host seat); a resident seat still has the list descriptor.
+    if t.registry_find("pymergetic.types.list") is None:
+        raise SystemExit("types registry find list")
+if t.registry_count() < 12:
+    raise SystemExit("types registry count %r" % (t.registry_count(),))
+print("upy types value loop")

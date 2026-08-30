@@ -72,6 +72,7 @@ FW_OBJS := \
 	$(BUILD)/main.o \
 	$(BUILD)/lib.o \
 	$(BUILD)/mem.o \
+	$(BUILD)/types.o \
 	$(BUILD)/tlsf.o \
 	$(BUILD)/smp.o \
 	$(BUILD)/smp_tramp.o \
@@ -112,6 +113,9 @@ $(BUILD)/lib.o: $(PORT_DIR)/lib.c | $(BUILD)
 	$(CC) $(CFLAGS_METAL) -I$(PORT_DIR)/fwinc -c -o $@ $<
 
 $(BUILD)/mem.o: $(WASMMOD_SRC)/pymergetic/util/mem/__impl__.c | $(BUILD)
+	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
+
+$(BUILD)/types.o: $(WASMMOD_SRC)/pymergetic/types/__impl__.c | $(BUILD)
 	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
 
 $(BUILD)/tlsf.o: $(WASMMOD)/third_party/tlsf/tlsf.c | $(BUILD)
