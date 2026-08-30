@@ -4,4 +4,7 @@ __exports__.rs
 __imports__.h
 __imports__.rs
 __version__.h
+__view__.h
+__view__.rs
+__view__.pyi
 !.gitignore
