@@ -1,0 +1,35 @@
+pymergetic metal
+`-- ready
+smp
+4 runner
+externals
+lz4
+mtar
+packages()
+run m.net.ssh.listen(0x0, 2222)
+viewport
+upy metal ready
+upy native card import
+upy inspect
+upy inspect caps
+upy changes ledger
+upy editor
+upy dns
+upy socket
+upy cdn
+upy pack import
+dhcp
+10.0.2.15
+10.0.2.2
+upy cdn fetch 11
+upy display present
+upy input feed
+upy console ids
+upy fs embed
+upy process
+upy ssh session
+upy zenoh
+upy swarm
+upy jit py refuses
+upy jit py load refuses
+upy process budget refuses

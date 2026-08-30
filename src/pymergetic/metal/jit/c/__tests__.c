@@ -2,6 +2,7 @@
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
+#include "tccsrc_embed.inc.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -52,7 +53,9 @@ static int32_t test_null_guard(void) {
  * cleanly and contain the expected symbol. */
 static int32_t test_object_compile_opts(void) {
 #if PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
-    void *backing = malloc(1u << 20);
+    /* 32MB: the compile rides the arena now (jit.c's arena reallocator);
+     * 1MB starves the tccpp pools and TCC has no NULL checks. */
+    void *backing = malloc(1u << 25);
     pm_util_mem_arena_t *arena;
     uint8_t *obj = NULL;
     size_t obj_len = 0;
@@ -74,7 +77,7 @@ static int32_t test_object_compile_opts(void) {
     int32_t rc;
 
     if (!backing) return 20;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 25);
     if (!arena) { free(backing); return 21; }
 
     snprintf(incdir, sizeof(incdir), "%s", __FILE__);
@@ -105,6 +108,60 @@ static int32_t test_object_compile_opts(void) {
 #endif
 }
 
+/* C self-host: TCC compiles TCC. libtcc.c (ONE_SOURCE — the whole
+ * translation set via #include) goes through object_compile with the
+ * vendored tree as the include dir and the same defines every seat's
+ * build passes. The object that comes back is TCC itself, built by
+ * itself, in-process — no host cc in the chain. Browser (wasm32) and
+ * no-TCC seats compile this away; firmware has no PM_METAL_TCC_LIB_DIR
+ * and its object path refuses politely (no temp files there), so it
+ * skips rather than fails. */
+static int32_t test_object_self_host_tcc(void) {
+#if PM_HAS_TCC && !defined(TCC_TARGET_WASM32) && defined(PM_METAL_TCC_LIB_DIR)
+    void *backing = malloc(1u << 26);
+    pm_util_mem_arena_t *arena;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    char err[256];
+    const char *includes[1];
+    const char *defines[1];
+    const char *src;
+    unsigned src_len;
+    int32_t rc;
+
+    if (!backing) return 30;
+    src = pm_metal_jit_c_tcc_source();
+    src_len = pm_metal_jit_c_tcc_source_len();
+    if (src == NULL || src_len < 1000) { free(backing); return 31; }
+
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
+    if (!arena) { free(backing); return 32; }
+
+    includes[0] = PM_METAL_TCC_LIB_DIR;
+    defines[0] = "ONE_SOURCE";
+
+    rc = pm_metal_jit_c_object_compile_opts(arena, src, src_len,
+        includes, 1, defines, 1, &obj, &obj_len, err, sizeof(err));
+    if (rc != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing);
+        return 33;
+    }
+    if (obj == NULL || obj_len < 4096) {
+        pm_util_mem_arena_destroy(arena); free(backing);
+        return 34;
+    }
+    if (obj[0] != 0x7f || obj[1] != 'E' || obj[2] != 'L' || obj[3] != 'F') {
+        pm_util_mem_arena_destroy(arena); free(backing);
+        return 35;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 static int32_t pm_metal_jit_c_tests(void) {
     int32_t rc;
     rc = test_compile_alloc();
@@ -114,6 +171,8 @@ static int32_t pm_metal_jit_c_tests(void) {
     rc = test_null_guard();
     if (rc) return rc;
     rc = test_object_compile_opts();
+    if (rc) return rc;
+    rc = test_object_self_host_tcc();
     if (rc) return rc;
     return 0;
 }

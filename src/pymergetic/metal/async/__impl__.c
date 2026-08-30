@@ -756,6 +756,13 @@ const char *pm_metal_async_runner_kind(void) {
 #endif
 }
 
+/* The arena the card booted with (async_init's argument). Cards whose
+ * faces take no arena of their own (jit.c's compile coro, for example)
+ * route in-kernel scratch allocations through it. */
+pm_util_mem_arena_t *pm_metal_async_arena(void) {
+    return s_ready ? s_arena : NULL;
+}
+
 void pm_metal_async_deinit(void) {
     uint32_t i;
     atomic_store(&s_run, 0u);
@@ -1018,6 +1025,7 @@ uint32_t pm_wasmmod_host_io_yield(void) {
 
 PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_init, pm_metal_async_init, int32_t(pm_util_mem_arena_t *, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_deinit, pm_metal_async_deinit, void(void));
+PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_arena, pm_metal_async_arena, pm_util_mem_arena_t *(void));
 PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_mutex_init, pm_metal_async_mutex_init, void(pm_metal_async_mutex_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_mutex_try_acquire, pm_metal_async_mutex_try_acquire, pm_metal_async_status_t(pm_metal_async_mutex_t *, pm_metal_async_coro_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.async, pm_metal_async_mutex_release, pm_metal_async_mutex_release, void(pm_metal_async_mutex_t *));

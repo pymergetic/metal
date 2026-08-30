@@ -399,10 +399,17 @@ int32_t pm_metal_edit_set_fn_body(pm_util_mem_arena_t *arena,
 
 int32_t pm_metal_edit_typecheck_c(const char *source, size_t source_len,
     char *errbuf, size_t errbuf_len) {
-    /* static backing: the arena only carries the compiled object, and one
-     * typecheck runs at a time (the editor flow is sequential by contract).
-     * Firmware seats link this card and have no malloc. */
-    static uint8_t backing[256u * 1024u];
+    /* static backing: the arena carries the whole in-arena TCC compile
+     * (jit.c's arena reallocator routes the compiler's pools and tables
+     * here too), and one typecheck runs at a time (the editor flow is
+     * sequential by contract). Firmware links this card and has no
+     * malloc — 2MB covers the small typecheck sources (the tccpp pools
+     * are 2 x 256KB); non-firmware seats get the full 32MB budget. */
+#if defined(PM_METAL_FIRMWARE)
+    static uint8_t backing[2u * 1024u * 1024u];
+#else
+    static uint8_t backing[32u * 1024u * 1024u];
+#endif
     pm_util_mem_arena_t *arena;
     uint8_t *obj = NULL;
     size_t obj_len = 0;

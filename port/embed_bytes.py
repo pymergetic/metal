@@ -54,7 +54,10 @@ def main() -> int:
             data = pathlib.Path(path).read_bytes()
             ident = f"str_{n}"
             n += 1
-            emit_array(buf, ident, data, "char")
+            # NUL-terminated: consumers that hand the buffer to C string APIs
+            # (tcc_compile_string, printf %s) must not read past the content.
+            # _len() stays the content length — the terminator is not content.
+            emit_array(buf, ident, data + b"\0", "char")
             buf.write(f"const char *{name}(void) {{ return s_{ident}; }}\n")
             buf.write(f"unsigned {name}_len(void) {{ return {len(data)}u; }}\n\n")
         for prefix, path in args.bytes:

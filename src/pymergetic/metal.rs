@@ -47,6 +47,9 @@ pub mod inspect;
 #[path = "metal/net.rs"]
 pub mod net;
 
+#[path = "metal/jit.rs"]
+pub mod jit;
+
 #[path = "metal/process.rs"]
 pub mod process;
 

@@ -331,4 +331,122 @@ sd.answer_off()
 if sd.pump() != 0:
     raise SystemExit("swarm discovery pump")
 print("upy swarm")
+
+# metal.jit.py object loop: µPy compiles Python to mpy bytes in-process —
+# its own bytecode compiler (py/compile.c + persistentcode.c), no host
+# tool anywhere — then loads those bytes back into a live module. The
+# Python twin of the C (TCC) and Rust (micro-rustc) object proves.
+import pymergetic.metal.jit.py as jpy
+
+_selfhost_src = (
+    "VAL = 11\n"
+    "def ping(x):\n"
+    "    return x + VAL\n"
+)
+_mpy = jpy.object_compile(_selfhost_src, "upy_jitpy_selfhost")
+if not isinstance(_mpy, bytes) or len(_mpy) < 8 or _mpy[:1] != b"M":
+    raise SystemExit("jit py compile %r" % (type(_mpy),))
+if jpy.object_load(_mpy, "upy_jitpy_selfhost") != 0:
+    raise SystemExit("jit py load")
+# the module was born at runtime (object_load published it into the loader
+# dict) — __import__ is the same call the import statement lowers to, but
+# the analyzer can chase it no further than the card's own face.
+upy_jitpy_selfhost = __import__("upy_jitpy_selfhost")
+
+if upy_jitpy_selfhost.ping(31) != 42:
+    raise SystemExit("jit py run")
+print("upy jit py object loop")
+
+# metal.jit.cpp REPL rebuild loop: the C++ card transpiles ITS OWN source
+# from the kernel fs (workspace) through lex -> parse -> lower, the lowered
+# C re-lowers byte-identical (the fixed point), TCC makes a real ELF object,
+# and the build card's relocator links it in-process — the linked card's own
+# faces resolve. C++ -> C -> TCC -> link, all from Python, no host cc or
+# cc1plus anywhere. The Python-level twin of selfhost_cycle.sh stage 6b.
+import pymergetic.metal.jit.cpp as jcpp
+
+_cpp_src = m.fs.read("/src/pymergetic/metal/jit/cpp/__impl__.c", 300000)
+if not isinstance(_cpp_src, bytes) or len(_cpp_src) < 100000:
+    raise SystemExit("cpp own source %r" % (type(_cpp_src),))
+_cpp_src = _cpp_src.decode()
+_c1 = jcpp.lower(jcpp.parse(jcpp.lex(_cpp_src)))
+if not isinstance(_c1, str) or len(_c1) < 100000:
+    raise SystemExit("cpp lower %r" % (type(_c1),))
+_c2 = jcpp.lower(jcpp.parse(jcpp.lex(_c1)))
+if _c1 != _c2:
+    raise SystemExit("cpp fixed point")
+import pymergetic.metal.jit.c as jc
+
+_cpp_obj = jc.object_compile(_c1)
+if not isinstance(_cpp_obj, bytes) or len(_cpp_obj) < 4096:
+    raise SystemExit("cpp object %r" % (type(_cpp_obj),))
+if _cpp_obj[:4] != b"\x7fELF":
+    raise SystemExit("cpp object not ELF")
+_lk = build.link("upy.cppx.selfhost", _cpp_obj)
+if not isinstance(_lk, tuple) or _lk[0] != 0:
+    raise SystemExit("cpp link %r" % (_lk,))
+if build.artifact_lookup("pm_metal_jit_cpp_lower") is None:
+    raise SystemExit("cpp linked lower face")
+if build.artifact_lookup("pm_metal_jit_cpp_lex") is None:
+    raise SystemExit("cpp linked lex face")
+build.artifact_destroy()
+print("upy jit cpp rebuild loop")
+
+# artifact call: the REPL links a small scalar C object and CALLS into the
+# linked image — the same face the C feeds use, now from Python. Two arities
+# (void and 2-arg) plus the refuse path (unknown symbol). The artifact slot
+# is live here; destroy releases it.
+_call_src = (
+    "int magic(void) { return 7; }\n"
+    "int scale(int a, int b) { return a * 100 + b; }\n"
+)
+_call_obj = jc.object_compile(_call_src)
+if not isinstance(_call_obj, bytes) or _call_obj[:4] != b"\x7fELF":
+    raise SystemExit("call object %r" % (type(_call_obj),))
+_lk2 = build.link("upy.artifact.call", _call_obj)
+if not isinstance(_lk2, tuple) or _lk2[0] != 0:
+    raise SystemExit("call link %r" % (_lk2,))
+if build.artifact_call("magic") != 7:
+    raise SystemExit("artifact call magic")
+if build.artifact_call("scale", 3, 21) != 321:
+    raise SystemExit("artifact call scale")
+try:
+    build.artifact_call("no_such_fn")
+    raise SystemExit("artifact call unknown should refuse")
+except Exception:
+    pass
+build.artifact_destroy()
+print("upy artifact call loop")
+
+# metal.process memory budget: the REPL caps its own compile scratch and the
+# compile bridges honor it — a small compile still works inside the budget,
+# a compile whose object cannot fit the cap is refused (None), not an abort.
+# Then the cap is lifted and the same compile works again. Same faces on
+# every seat; firmware refuses politely (it has no persistent-code save
+# anyway).
+import pymergetic.metal.process as proc
+
+if proc.budget(0) != 0:
+    raise SystemExit("process budget default %r" % (proc.budget(0),))
+if proc.budget_set(0, 64 * 1024) != 0:
+    raise SystemExit("process budget set")
+if proc.budget(0) != 64 * 1024:
+    raise SystemExit("process budget readback %r" % (proc.budget(0),))
+if proc.budget_used(0) <= 0:
+    raise SystemExit("process budget used %r" % (proc.budget_used(0),))
+_mpy2 = jpy.object_compile(_selfhost_src, "upy_jitpy_budgeted")
+if not isinstance(_mpy2, bytes) or len(_mpy2) < 8:
+    raise SystemExit("jit py budgeted compile")
+# an ~80KB string constant: the mpy object embeds it whole, so it cannot fit
+# a 64KB compile cap — refused with None (or an exception), never an abort.
+# The cap stays set: it is the REPL's own budget, and this is the prove's
+# last compile — the budget is per-process accounting, not a leak.
+_big = 'v = "' + "_x" * 40000 + '"'
+try:
+    _r = jpy.object_compile(_big, "upy_jitpy_toobig")
+    if _r is not None:
+        raise SystemExit("jit py past-cap compile should refuse")
+except Exception as _e:
+    print("jit py past-cap refused: %s" % (_e,))
+print("upy process budget loop")
 print("guest prove ok")

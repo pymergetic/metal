@@ -87,9 +87,9 @@ include $(TOP)/extmod/metal/tools/tcc.mk
 TCC_DEPS := $(addprefix $(TCC_DIR)/,$(TCC_MANIFEST_SRCS))
 PY_O += $(BUILD)/externals/tcc/libtcc.o
 ifdef PM_METAL_BROWSER
-CFLAGS_EXTMOD += -DTCC_TARGET_WASM32 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
+CFLAGS_EXTMOD += -DTCC_TARGET_WASM32 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(abspath $(TCC_DIR))\"
 else
-CFLAGS_EXTMOD += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
+CFLAGS_EXTMOD += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(abspath $(TCC_DIR))\"
 # The build card's multi-object link drives wasmmod's in-tree ELF relocator.
 # unix compiles load.c (MICROPY_PY_WASM_ELF=1 default); the browser cell does
 # not (ELF=0 there — its TCC targets wasm32, objects are WASM not ET_REL).
@@ -134,7 +134,12 @@ ifdef PM_METAL_BROWSER
 # when MICROPY_PY_METAL=1. Extra --js-library; leave library.js vanilla.
 JSFLAGS += --js-library $(TOP)/extmod/metal/src/pymergetic/metal/drivers/net/sim/library.js
 JSFLAGS += -s ALLOW_MEMORY_GROWTH=1
-JSFLAGS += -s INITIAL_MEMORY=33554432
+# 256MB: the in-kernel compile arenas are static bss now (nativecall's shared
+# 32MB compile scratch + 64MB link backing + 64MB cpp transpile-chain arena +
+# edit's 32MB typecheck arena, since jit.c routes TCC's pools through the
+# caller's arena); wasm-ld sizes initial memory to hold them plus the µPy
+# heap and the loaded wasm modules.
+JSFLAGS += -s INITIAL_MEMORY=268435456
 $(BUILD)/micropython.mjs: $(TOP)/extmod/metal/src/pymergetic/metal/drivers/net/sim/library.js
 $(addprefix $(BUILD)/, $(SRC_METAL_C:.c=.o)): CFLAGS += -std=gnu99
 endif

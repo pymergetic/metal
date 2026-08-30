@@ -56,6 +56,7 @@ extern "C" {
     X(ELLIPSIS)        /* ... */ \
     X(SCOPE)           /* (kept for symmetry; :: is DOUBLE_COLON) */ \
     X(PUNCT)           /* single-char punctuation */ \
+    X(PP_DIRECTIVE)    /* preprocessor line, verbatim (starts with '#') */ \
     X(ERROR)
 
 typedef enum {
@@ -113,6 +114,16 @@ typedef enum {
     PM_JIT_CPP_AST_NEW_EXPR,
     PM_JIT_CPP_AST_DELETE_EXPR,
     PM_JIT_CPP_AST_REF_QUALIFIER,
+    PM_JIT_CPP_AST_SWITCH,         /* switch (expr) { case/default ... } */
+    PM_JIT_CPP_AST_CASE,           /* case EXPR: stmt-list (label) */
+    PM_JIT_CPP_AST_DEFAULT,        /* default: stmt-list (label) */
+    PM_JIT_CPP_AST_GOTO,           /* goto label; */
+    PM_JIT_CPP_AST_LABEL,          /* label: stmt */
+    PM_JIT_CPP_AST_TYPEDEF,        /* typedef struct {...} Name; — verbatim */
+    PM_JIT_CPP_AST_PP,             /* preprocessor directive, verbatim */
+    PM_JIT_CPP_AST_CAST,           /* (type)expr — C cast */
+    PM_JIT_CPP_AST_COMMA,          /* comma-separated exprs (array inits) */
+    PM_JIT_CPP_AST_DECL_GROUP,     /* int a, b; — inline decl list, no scope */
 } pm_jit_cpp_ast_kind;
 
 typedef struct pm_jit_cpp_ast pm_jit_cpp_ast_t;
@@ -140,6 +151,16 @@ int32_t pm_metal_jit_cpp_parse(pm_util_mem_arena_t *arena,
  * number of bytes written, or -1 with errbuf set when the buffer is short. */
 int32_t pm_metal_jit_cpp_ast_dump(const pm_jit_cpp_ast_t *ast,
     char *out, size_t out_cap, char *errbuf, size_t errbuf_len);
+
+/* Lower a parsed translation unit to C source (arena-owned, NUL-terminated
+ * but len excludes the terminator). The subset is the C-compatible layer:
+ * free functions, params, locals, if/while/for, return/break/continue, the
+ * C-shared expression operators, literals. Class/template/using declarations
+ * and C++-only expressions are refused with
+ * "cppx: unsupported: <construct> at line N" — never a silent miscompile. */
+int32_t pm_metal_jit_cpp_lower(pm_util_mem_arena_t *arena,
+    const pm_jit_cpp_ast_t *unit, char **c_out, size_t *c_out_len,
+    char *errbuf, size_t errbuf_len);
 
 #ifdef __cplusplus
 }

@@ -1740,6 +1740,7 @@ ST_FUNC void gen_clear_cache(void);
 #ifdef TCC_TARGET_WASM32
 int wasm_build_module(uint8_t **out_buf, int *out_len);
 void wasm_reset(void);
+void wasm_release_buffers(void);
 ST_FUNC void gen_opl(int op);
 ST_FUNC void gen_va_start(void);
 ST_FUNC void gen_va_arg(CType *t);

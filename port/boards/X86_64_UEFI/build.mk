@@ -145,41 +145,8 @@ $(BUILD)/blk.img: | $(BUILD)
 	mcopy -i $@ $(BUILD)/hello_fat.txt ::hello.txt
 
 prove: $(BUILD)/esp.img $(BUILD)/blk.img
-	$(LIVE_CDN) $(QEMU) $(QEMU_MACHINE) -serial file:$(BUILD)/serial.log -monitor none; \
-	st=$$?; cat $(BUILD)/serial.log; \
-	grep -q "pymergetic metal" $(BUILD)/serial.log || exit 1; \
-	grep -q "\`-- ready" $(BUILD)/serial.log || exit 1; \
-	grep -q "smp" $(BUILD)/serial.log || exit 1; \
-	grep -q "4 runner" $(BUILD)/serial.log || exit 1; \
-	grep -q "externals" $(BUILD)/serial.log || exit 1; \
-	grep -q "lz4" $(BUILD)/serial.log || exit 1; \
-	grep -q "mtar" $(BUILD)/serial.log || exit 1; \
-	grep -q "packages()" $(BUILD)/serial.log || exit 1; \
-	grep -q "run m.net.ssh.listen(0x0, 2222)" $(BUILD)/serial.log || exit 1; \
-	grep -q "viewport" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy metal ready" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy native card import" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy inspect" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy inspect caps" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy changes ledger" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy editor" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy dns" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy socket" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy cdn" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy pack import" $(BUILD)/serial.log || exit 1; \
-	grep -q "dhcp" $(BUILD)/serial.log || exit 1; \
-	grep -q "10.0.2.15" $(BUILD)/serial.log || exit 1; \
-	grep -q "10.0.2.2" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy cdn fetch 11" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy display present" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy input feed" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy console ids" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy fs embed" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy process" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy ssh session" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy zenoh" $(BUILD)/serial.log || exit 1; \
-	grep -q "upy swarm" $(BUILD)/serial.log || exit 1; \
-	if [ $$st -eq 1 ] || [ $$st -eq 0 ]; then exit 0; fi; exit $$st
+	$(LIVE_CDN) $(PORT_DIR)/serial_prove.sh $(BUILD)/serial.log $(BOARD_DIR)/prove_markers.txt \
+		$(QEMU) $(QEMU_MACHINE) -serial file:$(BUILD)/serial.log -monitor none
 
 run: $(BUILD)/esp.img $(BUILD)/blk.img
 	$(QEMU) $(QEMU_RUN_MACHINE) -serial mon:stdio; \

@@ -1127,6 +1127,106 @@ void *pm_metal_build_artifact_lookup(const pm_metal_build_artifact_t *artifact,
 #endif
 }
 
+/* Call a function in a linked artifact with scalar args. args are the
+ * caller's values (i64 transport; the wasm seat narrows to i32 — its C
+ * ints are wasm i32), n_args their count; the result lands in *res as
+ * an i64 (widened from the callee's return width). The callee's
+ * arity/type contract is the caller's: this face only transports
+ * scalars, it does not typecheck the target — the same posture as the C
+ * feeds, which cast lookup's pointer themselves.
+ *
+ * Returns 0 on a completed call, negative on refusal (bad artifact, name
+ * not present, or a wasm trampoline failure).
+ *
+ * ELF seats: lookup resolves a native code pointer and the call goes
+ * through it directly (the image is already relocated and executable).
+ * wasm seat: the pointer is the sentinel 1 — the honest call path is the
+ * registry trampoline (pm_wasmmod_registry_call), which owns the WAMR
+ * exec-env plumbing the adapter fns need. */
+int32_t pm_metal_build_artifact_call(const pm_metal_build_artifact_t *artifact,
+    const char *name, const int64_t *args, uint32_t n_args, int64_t *res) {
+    if (res != NULL) {
+        *res = 0;
+    }
+    if (artifact == NULL || name == NULL || n_args > 8u) {
+        return -1;
+    }
+#ifdef PM_METAL_BUILD_WASM_LINK
+    if (artifact->fqn[0] == '\0') {
+        return -1;
+    }
+    {
+        pm_wasmmod_registry_value_t wargs[8];
+        pm_wasmmod_registry_value_t wres;
+        uint32_t i;
+        int32_t st;
+        if (pm_metal_build_artifact_lookup(artifact, name) == NULL) {
+            return -2;
+        }
+        /* i32 spine: TCC's wasm32 C lowers int params to wasm i32, and
+         * WAMR packs each arg by the caller-declared kind — an i64-kind
+         * arg would hand an i32 callee two cells and misalign every
+         * parameter after it. The transport widens to i64 only on the
+         * way back (the result union covers both). */
+        for (i = 0; i < n_args; i++) {
+            wargs[i].kind = PM_WASMMOD_REGISTRY_VALKIND_I32;
+            wargs[i].of.i32 = (int32_t)args[i];
+        }
+        wres.kind = PM_WASMMOD_REGISTRY_VALKIND_I32;
+        wres.of.i32 = 0;
+        st = pm_wasmmod_registry_call(
+            (const uint8_t *)artifact->fqn, (uint32_t)strlen(artifact->fqn),
+            (const uint8_t *)name, (uint32_t)strlen(name),
+            &wargs[0], n_args, &wres, 1u);
+        if (st < 0) {
+            return -3;
+        }
+        if (res != NULL) {
+            *res = (int64_t)wres.of.i32;
+        }
+        return 0;
+    }
+#elif defined(PM_METAL_BUILD_HAS_ELF)
+    {
+        void *p = pm_metal_build_artifact_lookup(artifact, name);
+        if (p == NULL) {
+            return -2;
+        }
+        /* one call shape per arity: int64_t(int64_t...) — the honest scalar
+         * spine. Struct returns, variadics and pointers stay C-feed-only
+         * until the bridge grows a type spine of its own. */
+        switch (n_args) {
+        case 0:
+            if (res != NULL) {
+                *res = ((int64_t (*)(void))p)();
+            } else {
+                ((void (*)(void))p)();
+            }
+            return 0;
+        case 1:
+            if (res != NULL) {
+                *res = ((int64_t (*)(int64_t))p)(args[0]);
+            } else {
+                ((void (*)(int64_t))p)(args[0]);
+            }
+            return 0;
+        case 2:
+            if (res != NULL) {
+                *res = ((int64_t (*)(int64_t, int64_t))p)(args[0], args[1]);
+            } else {
+                ((void (*)(int64_t, int64_t))p)(args[0], args[1]);
+            }
+            return 0;
+        default:
+            return -4;
+        }
+    }
+#else
+    (void)args;
+    return -5;
+#endif
+}
+
 #include "pymergetic/wasmmod/guest.h"
 
 /*------------------ runtime card discovery (Phase 4.4) ------------------
@@ -1606,6 +1706,8 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_destroy, pm_meta
     void(pm_metal_build_artifact_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_lookup, pm_metal_build_artifact_lookup,
     void *(const pm_metal_build_artifact_t *, const char *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_artifact_call, pm_metal_build_artifact_call,
+    int32_t(const pm_metal_build_artifact_t *, const char *, const int64_t *, uint32_t, int64_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_at, pm_metal_build_at,
     pm_metal_build_at_handle_t(const char *, const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_at_info, pm_metal_build_at_info,

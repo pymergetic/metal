@@ -42,6 +42,7 @@ include $(WASMMOD)/gen.mk
 include $(CURDIR)/tools/www.mk
 include $(CURDIR)/tools/src.mk
 include $(CURDIR)/tools/ledger.mk
+include $(CURDIR)/tools/tccsrc.mk
 
 # Cards and their tests come from the tree (tools/cards.sh), so a new card is
 # proven here the moment it has a manifest — nothing to add below.
@@ -163,6 +164,11 @@ $(MRUSTC_EMBED_O): $(MRUSTC_EMBED_DIR)/mrustc_embed.cpp $(MRUSTC_EMBED_DIR)/mrus
 
 OUT := $(CURDIR)/build/metal-async-test
 BENCH_OUT := $(CURDIR)/build/metal-async-bench
+# selfhost feed: the developer driver for the micro-rustc self-host cycle
+# (tools/selfhost_cycle.sh). Same card/link config as the host prove so the
+# build card's ELF link path is in-process here too — the feed's --link mode
+# is what closes the Rust -> C -> TCC -> link loop with no host cc.
+SELFHOST_FEED := $(CURDIR)/build/selfhost_feed
 # emcc from PATH, or $EMSDK/upstream/emscripten — do not bake a home directory.
 ifneq ($(wildcard $(EMSDK)/upstream/emscripten/emcc),)
 BROWSER_PATH := $(EMSDK)/upstream/emscripten:$(PATH)
@@ -173,7 +179,7 @@ WASM_UPY := $(TOP)/ports/webassembly/build-metal/micropython.mjs
 WS ?= $(abspath $(TOP)/../..)
 VSCODE_CDB ?= $(WS)/.vscode/compile_commands.json
 
-.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico
+.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico selfhost
 
 FORCE:
 
@@ -207,6 +213,87 @@ $(OUT): $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(E
 $(BENCH_OUT): $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(BENCH_OUT))
 	$(CXX) -o $(BENCH_OUT) $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+
+SELFHOST_FEED_O := $(CURDIR)/build/selfhost_feed.o
+$(SELFHOST_FEED_O): $(CURDIR)/tools/selfhost_feed.c
+	@mkdir -p $(dir $(SELFHOST_FEED_O))
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+# SRC_OBJS minus host_test.o (its main) — the feed brings its own main.
+FEED_CARD_OBJS := $(filter-out $(CURDIR)/build/host_test.o,$(SRC_OBJS))
+
+$(SELFHOST_FEED): $(SELFHOST_FEED_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+	@mkdir -p $(dir $(SELFHOST_FEED))
+	$(CXX) -o $(SELFHOST_FEED) $(SELFHOST_FEED_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+
+selfhost-feed: $(SELFHOST_FEED)
+
+# selfhost self: the same feed entrypoint, but the rsx card's code comes from
+# gen-1 C (micro-rustc's own output) instead of the rustc boot build — the
+# self binary of tools/selfhost_cycle.sh stage 2. Every other card stays the
+# boot build: the cycle isolates one card at a time. gen1.o rides the command
+# line BEFORE the metal archive, so the archive's rsx member is never
+# extracted (it defines rsx only — explicit objects win) and asgi + the rest
+# of the crate still come from the archive.
+SELFHOST_GEN1_C ?= /tmp/selfhost_cycle/gen1.c
+SELFHOST_GEN1_O := $(CURDIR)/build/selfhost_gen1.o
+SELFHOST_SELF := $(CURDIR)/build/selfhost_self
+
+$(SELFHOST_GEN1_O): $(SELFHOST_GEN1_C)
+	@mkdir -p $(dir $(SELFHOST_GEN1_O))
+	$(CC) -std=gnu11 -O0 -g -w $(CPPFLAGS) -c -o $@ $<
+
+$(SELFHOST_SELF): $(SELFHOST_FEED_O) $(SELFHOST_GEN1_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+	@mkdir -p $(dir $(SELFHOST_SELF))
+	$(CXX) -o $(SELFHOST_SELF) $(SELFHOST_FEED_O) $(SELFHOST_GEN1_O) \
+		$(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) \
+		$(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+
+selfhost-self: $(SELFHOST_SELF)
+
+# cppx selfhost: the same cycle for the C++ card (tools/cppx_feed.c). The
+# self binary swaps the jit.cpp card's object for the C the card generated
+# from its own lowerer — every other card stays the boot build. cppx_gen1.o
+# rides the command line BEFORE the metal archive so the archive's cppx
+# member is never extracted (it defines cppx only — explicit objects win).
+CPPX_FEED := $(CURDIR)/build/cppx_feed
+CPPX_FEED_O := $(CURDIR)/build/cppx_feed.o
+CPPX_GEN1_C ?= /tmp/selfhost_cycle/cppx_gen1.c
+CPPX_GEN1_O := $(CURDIR)/build/cppx_gen1.o
+CPPX_SELF := $(CURDIR)/build/cppx_self
+# the cppx card is a C card: its boot object sits in FEED_CARD_OBJS, so the
+# self link must drop it or the card's symbols double-define (gen1 wins by
+# riding first; the rest of the card stack stays boot).
+CPPX_CARD_OBJ := $(patsubst %.c,$(CURDIR)/build/%.o,$(abspath $(METAL_SRC)/pymergetic/metal/jit/cpp/__impl__.c))
+CPPX_FEED_CARD_OBJS := $(filter-out $(CPPX_CARD_OBJ),$(FEED_CARD_OBJS))
+
+$(CPPX_FEED_O): $(CURDIR)/tools/cppx_feed.c
+	@mkdir -p $(dir $(CPPX_FEED_O))
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+$(CPPX_FEED): $(CPPX_FEED_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+	@mkdir -p $(dir $(CPPX_FEED))
+	$(CXX) -o $(CPPX_FEED) $(CPPX_FEED_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+
+cppx-feed: $(CPPX_FEED)
+
+$(CPPX_GEN1_O): $(CPPX_GEN1_C)
+	@mkdir -p $(dir $(CPPX_GEN1_O))
+	$(CC) -std=gnu11 -O0 -g -w $(CPPFLAGS) -c -o $@ $<
+
+$(CPPX_SELF): $(CPPX_FEED_O) $(CPPX_GEN1_O) $(CPPX_FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+	@mkdir -p $(dir $(CPPX_SELF))
+	$(CXX) -o $(CPPX_SELF) $(CPPX_FEED_O) $(CPPX_GEN1_O) \
+		$(CPPX_FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) \
+		$(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+
+cppx-self: $(CPPX_SELF)
+
+# The whole self-host loop in one target: boot rebuild, rust fixed point,
+# in-kernel object+link, corpus, and the C++ chain + its own selfhost —
+# tools/selfhost_cycle.sh is the single source of truth for the stages.
+selfhost:
+	$(CURDIR)/tools/selfhost_cycle.sh
 
 test: prove-all
 
@@ -252,7 +339,13 @@ firmware-check:
 upy:
 	mkdir -p $(CURDIR)/build
 	$(MAKE) -C $(TOP)/ports/unix MICROPY_PY_WASM=1 MICROPY_PY_METAL=1 MICROPY_PY_THREAD_GIL=1 BUILD=build-metal LDFLAGS_EXTRA="-Wl,-no-pie -rdynamic"
-	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_guest_prove.py
+	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_guest_prove.py \
+		> $(CURDIR)/build/upy_guest_prove.log 2>&1
+	cat $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy jit py object loop" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy jit cpp rebuild loop" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy artifact call loop" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy process budget loop" $(CURDIR)/build/upy_guest_prove.log
 	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_runner_vm_prove.py
 	python3 $(CURDIR)/upy_cdn_prove_host.py \
 		$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_cdn_prove.py
@@ -291,7 +384,11 @@ browser:
 	grep -q "upy ssh session" $(CURDIR)/build/browser_prove.log
 	grep -q "upy zenoh" $(CURDIR)/build/browser_prove.log
 	grep -q "upy swarm" $(CURDIR)/build/browser_prove.log
+	grep -q "upy jit py object loop" $(CURDIR)/build/browser_prove.log
+	grep -q "upy jit cpp rebuild loop" $(CURDIR)/build/browser_prove.log
+	grep -q "upy process budget loop" $(CURDIR)/build/browser_prove.log
 	grep -q "upy wasm build link" $(CURDIR)/build/browser_prove.log
+	grep -q "compiled:" $(CURDIR)/build/browser_prove.log
 
 compile-commands:
 	python3 $(WASMMOD)/compile_commands.py $(WASMMOD) $(WS) $(VSCODE_CDB)

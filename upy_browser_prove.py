@@ -221,7 +221,92 @@ def _cdn(base):
         raise SystemExit("build lookup probe_add_one")
     if build.artifact_lookup("no_such_export") is not None:
         raise SystemExit("build lookup negative")
+    # call into the linked wasm module: the same face, routed through the
+    # registry trampoline on this seat (the wasm32 C ints ride the i32
+    # spine). The result widens to i64 on the way back.
+    if build.artifact_call("probe_two") != 2:
+        raise SystemExit("build call probe_two")
+    if build.artifact_call("probe_add_one", 41) != 42:
+        raise SystemExit("build call probe_add_one")
+    try:
+        build.artifact_call("no_such_export")
+        raise SystemExit("build call unknown should refuse")
+    except Exception:
+        pass
     build.artifact_destroy()
     if build.artifact_lookup("probe_two") is not None:
         raise SystemExit("build lookup after destroy")
     print("upy wasm build link")
+
+    # metal.jit.py object loop (browser seat): same card, same faces as the
+    # unix seat — µPy compiles Python to mpy bytes and loads them back, all
+    # inside the browser cell. No host tool, no fetch: the compiler is in
+    # this wasm binary.
+    import pymergetic.metal.jit.py as jpy
+
+    _selfhost_src = (
+        "VAL = 11\n"
+        "def ping(x):\n"
+        "    return x + VAL\n"
+    )
+    _mpy = jpy.object_compile(_selfhost_src, "upy_jitpy_selfhost")
+    if not isinstance(_mpy, bytes) or len(_mpy) < 8 or _mpy[:1] != b"M":
+        raise SystemExit("jit py compile %r" % (type(_mpy),))
+    if jpy.object_load(_mpy, "upy_jitpy_selfhost") != 0:
+        raise SystemExit("jit py load")
+    # born at runtime (object_load published it) — __import__ is the same
+    # call the import statement lowers to; the analyzer stops at the face.
+    upy_jitpy_selfhost = __import__("upy_jitpy_selfhost")
+
+    if upy_jitpy_selfhost.ping(31) != 42:
+        raise SystemExit("jit py run")
+    print("upy jit py object loop")
+
+    # metal.jit.cpp REPL rebuild loop (browser seat): the same chain the unix
+    # prove drives, on wasm32 — the C++ card transpiles its own source from
+    # the kernel fs through lex -> parse -> lower, the lowered C re-lowers
+    # byte-identical (the fixed point holds on this seat too), and TCC
+    # (wasm32 backend) makes the object. The link face on this seat loads
+    # wasm modules, so the full object path stops at compile here; the
+    # build-link loop above already proves the wasm link on this seat.
+    import pymergetic.metal.jit.cpp as jcpp
+
+    _cpp_src = m.fs.read("/src/pymergetic/metal/jit/cpp/__impl__.c", 300000)
+    if not isinstance(_cpp_src, bytes) or len(_cpp_src) < 100000:
+        raise SystemExit("cpp own source %r" % (type(_cpp_src),))
+    _cpp_src = _cpp_src.decode()
+    _c1 = jcpp.lower(jcpp.parse(jcpp.lex(_cpp_src)))
+    if not isinstance(_c1, str) or len(_c1) < 100000:
+        raise SystemExit("cpp lower %r" % (type(_c1),))
+    _c2 = jcpp.lower(jcpp.parse(jcpp.lex(_c1)))
+    if _c1 != _c2:
+        raise SystemExit("cpp fixed point")
+    print("upy jit cpp rebuild loop")
+
+    # metal.process memory budget (browser seat): the REPL caps its own
+    # compile scratch and the compile bridge honors it — a small compile
+    # still works inside the budget, a compile whose object cannot fit the
+    # cap is refused (None), never an abort. Same faces as the unix seat.
+    import pymergetic.metal.process as proc
+
+    if proc.budget(0) != 0:
+        raise SystemExit("process budget default %r" % (proc.budget(0),))
+    if proc.budget_set(0, 64 * 1024) != 0:
+        raise SystemExit("process budget set")
+    if proc.budget(0) != 64 * 1024:
+        raise SystemExit("process budget readback %r" % (proc.budget(0),))
+    if proc.budget_used(0) <= 0:
+        raise SystemExit("process budget used %r" % (proc.budget_used(0),))
+    _mpy2 = jpy.object_compile(_selfhost_src, "upy_jitpy_budgeted")
+    if not isinstance(_mpy2, bytes) or len(_mpy2) < 8:
+        raise SystemExit("jit py budgeted compile")
+    # an ~80KB string constant: the mpy object embeds it whole, so it cannot
+    # fit a 64KB compile cap — refused, never an abort
+    _big = 'v = "' + "_x" * 40000 + '"'
+    try:
+        _r = jpy.object_compile(_big, "upy_jitpy_toobig")
+        if _r is not None:
+            raise SystemExit("jit py past-cap compile should refuse")
+    except Exception as _e:
+        print("jit py past-cap refused: %s" % (_e,))
+    print("upy process budget loop")

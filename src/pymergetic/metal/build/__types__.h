@@ -97,6 +97,13 @@ void pm_metal_build_artifact_destroy(pm_metal_build_artifact_t *artifact);
 void *pm_metal_build_artifact_lookup(const pm_metal_build_artifact_t *artifact,
     const char *name);
 
+/* Call a function in a linked artifact with scalar (i64-transport) args.
+ * Returns 0 on a completed call, negative on refusal. The result lands in
+ * *res when res is non-NULL (0-2 args on ELF seats; i32 spine on the wasm
+ * seat, widened to i64 on return). */
+int32_t pm_metal_build_artifact_call(const pm_metal_build_artifact_t *artifact,
+    const char *name, const int64_t *args, uint32_t n_args, int64_t *res);
+
 /* Runtime card discovery: walk the embedded card source table (every seat
  * ships it — tools/embed_src.py), parse each card's raw __pmm__.toml with
  * pm_metal_build_unit_parse, and synthesize one unit per card. Units receive

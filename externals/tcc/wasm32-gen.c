@@ -216,19 +216,73 @@ static void leb_i32(uint8_t **pp, int32_t v) {
 
 /* ----- Code emission context ----- */
 
-#define CODE_BUF_CAP (256 * 1024)
-static uint8_t code_buf[CODE_BUF_CAP];
-static uint8_t *code_ptr = code_buf;
-static int func_start_offs[256];
-static int func_body_len[256];
-static int func_local_decl_count[256];
-static char func_names[256][128];
-static int func_param_count[256];   /* source params (all i32) */
-static int func_ret_i32[256];       /* 1 when the fn returns a value */
+/* Growable emission buffers: capacity starts at CODE_BUF_FIRST and doubles
+ * on demand through tcc_realloc, so the backend follows whatever allocator
+ * the embedder installed (jit.c routes TCC allocations through the caller's
+ * arena). Everything funnels through we()/we_u32()/we_i32(), so the grow
+ * check lives in one place. */
+#define CODE_BUF_FIRST (64 * 1024)
+static uint8_t *code_buf = NULL;
+static size_t code_cap = 0;
+static uint8_t *code_ptr = NULL;
+/* Per-function build state, one row per compiled function. Grown through
+ * tcc_realloc like the code buffer, so the tables follow the embedder's
+ * allocator (jit.c routes TCC through the caller's arena) and no compile is
+ * capped by a static 256-function array. */
+typedef struct WasmFuncRow {
+    int start_offs;
+    int body_len;
+    int local_decl_count;
+    int param_count;        /* source params (all i32) */
+    int ret_i32;           /* 1 when the fn returns a value */
+    char name[128];
+} WasmFuncRow;
+
+#define FUNC_ROWS_FIRST 64
+static WasmFuncRow *func_rows = NULL;
+static int func_rows_cap = 0;
 static int cur_ret_i32;             /* the fn being generated */
 static int cur_param_count;         /* its param count (register-local base) */
 static int func_count;
 static int label_depth;
+
+/* Ensure room for one more function row. Returns 0 on success. */
+static int func_row_reserve(void) {
+    if (func_count < func_rows_cap) {
+        return 0;
+    }
+    int want = func_rows_cap ? func_rows_cap * 2 : FUNC_ROWS_FIRST;
+    WasmFuncRow *nb = (WasmFuncRow *)tcc_realloc(func_rows,
+        (unsigned long)want * sizeof(WasmFuncRow));
+    if (nb == NULL) {
+        return -1;
+    }
+    memset(nb + func_rows_cap, 0,
+        (size_t)(want - func_rows_cap) * sizeof(WasmFuncRow));
+    func_rows = nb;
+    func_rows_cap = want;
+    return 0;
+}
+
+/* Grow so code_ptr has room for n more bytes. Returns 0 on success. */
+static int code_reserve(size_t n) {
+    size_t used = (size_t)(code_ptr - code_buf);
+    if (used + n <= code_cap) {
+        return 0;
+    }
+    size_t want = code_cap ? code_cap : CODE_BUF_FIRST;
+    while (used + n > want) {
+        want *= 2;
+    }
+    uint8_t *nb = (uint8_t *)tcc_realloc(code_buf, want);
+    if (nb == NULL) {
+        return -1;
+    }
+    code_buf = nb;
+    code_cap = want;
+    code_ptr = code_buf + used;
+    return 0;
+}
 
 /* Frame model: TCC addresses locals by negative offsets from 0 (loc counts
  * down). Map offset a -> linear-memory FRAME_BASE + a so every frame slot
@@ -248,17 +302,55 @@ static int param_local_of(int addr) {
 static int frame_addr(int addr) { return WASM_FRAME_BASE + addr; }
 
 void wasm_reset(void) {
+    /* first use lazily seeds the buffers through the active TCC allocator
+     * (jit.c routes that through the caller's arena) */
+    if (code_reserve(1) != 0) {
+        return;
+    }
     code_ptr = code_buf;
     func_count = 0;
     label_depth = 0;
-    memset(func_names, 0, sizeof(func_names));
-    memset(func_param_count, 0, sizeof(func_param_count));
-    memset(func_ret_i32, 0, sizeof(func_ret_i32));
 }
 
-static void we(uint8_t b) { *code_ptr++ = b; }
-static void we_u32(uint32_t v) { leb_u32(&code_ptr, v); }
-static void we_i32(int32_t v) { leb_i32(&code_ptr, v); }
+/* Free the serializer's static buffers under the allocator that owns them
+ * (the still-active arena window — jit.c calls this before restoring the
+ * reallocator). NULLs them so the next compile re-seeds through its own
+ * arena: reusing a previous compile's buffers would emit into the destroyed
+ * arena's memory. */
+void wasm_release_buffers(void) {
+    if (code_buf != NULL) {
+        tcc_free(code_buf);
+        code_buf = NULL;
+        code_ptr = NULL;
+        code_cap = 0;
+    }
+    if (func_rows != NULL) {
+        tcc_free(func_rows);
+        func_rows = NULL;
+        func_rows_cap = 0;
+    }
+}
+
+/* leb emitters must also pass through the reserve check: leb_u32/leb_i32
+ * take a **pp and advance it, so give each its own checked wrapper. */
+static void we(uint8_t b) {
+    if (code_reserve(1) != 0) {
+        tcc_error("wasm32: out of code memory");
+    }
+    *code_ptr++ = b;
+}
+static void we_u32(uint32_t v) {
+    if (code_reserve(5) != 0) {
+        tcc_error("wasm32: out of code memory");
+    }
+    leb_u32(&code_ptr, v);
+}
+static void we_i32(int32_t v) {
+    if (code_reserve(5) != 0) {
+        tcc_error("wasm32: out of code memory");
+    }
+    leb_i32(&code_ptr, v);
+}
 
 /* ----- Basic code gen interface ----- */
 
@@ -314,9 +406,12 @@ ST_FUNC void load(int r, SValue *sv)
 
     if (fr & VT_LVAL) {
         if (v == VT_LOCAL && (pl = param_local_of(fc)) >= 0) {
-            /* a param: its value IS the local, no memory deref */
+            /* a param: its value IS the local, no memory deref. The
+             * destination register is a declared local, so it lives past
+             * the params — reg_local, not the raw register number (a raw
+             * r < n_params would clobber a param slot). */
             we_op_local(WOP_LOCAL_GET, pl);
-            we_op_setlocal(WOP_LOCAL_SET, r);
+            we_op_setlocal(WOP_LOCAL_SET, reg_local(r));
             return;
         }
         if (v == VT_LOCAL) {
@@ -404,19 +499,24 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
     int ret_i32 = 1;
     int n_params = 0;
     Sym *ps;
-    func_start_offs[func_count] = (int)(code_ptr - code_buf);
+    WasmFuncRow *row;
+    if (func_row_reserve() != 0) {
+        tcc_error("wasm32: out of function table memory");
+    }
+    row = &func_rows[func_count];
+    row->start_offs = (int)(code_ptr - code_buf);
     /* capture the function's source name: the wasm module exports it, which
      * is what the registry-linked build path addresses faces by. */
-    if (func_count < 256) {
+    {
         const char *nm = get_tok_str(func_sym->v, NULL);
         if (nm != NULL) {
             size_t i;
-            for (i = 0; i + 1 < sizeof(func_names[0]) && nm[i] != '\0'; i++) {
-                func_names[func_count][i] = nm[i];
+            for (i = 0; i + 1 < sizeof(row->name) && nm[i] != '\0'; i++) {
+                row->name[i] = nm[i];
             }
-            func_names[func_count][i] = '\0';
+            row->name[i] = '\0';
         } else {
-            func_names[func_count][0] = '\0';
+            row->name[0] = '\0';
         }
     }
     /* signature: every source param is one i32 wasm local (the functype's
@@ -430,17 +530,15 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
             }
         }
     }
-    if (func_count < 256) {
-        func_param_count[func_count] = n_params;
-        func_ret_i32[func_count] = ret_i32;
-    }
+    row->param_count = n_params;
+    row->ret_i32 = ret_i32;
     cur_ret_i32 = ret_i32;
     cur_param_count = n_params;
     we_u32(0); /* body size placeholder */
     int total_locals = NB_REGS + 2;
     we_u32((uint32_t)total_locals);
     for (int i = 0; i < total_locals; i++) { we_u32(1); we(VALTYPE_I32); }
-    func_local_decl_count[func_count] = total_locals;
+    row->local_decl_count = total_locals;
     /* One block wraps the body and is the single exit label every gjmp's
      * br 0 targets, typed by the fn: (result i32) for value fns. Values
      * live in locals (locals are the registers); a br to the exit reads
@@ -459,14 +557,20 @@ ST_FUNC void gfunc_epilog(void)
         we_op_local(WOP_LOCAL_GET, reg_local(TREG_R0));
     }
     we(WOP_END); label_depth = 0; we(WOP_END);
-    int body_start   = func_start_offs[func_count] + 1;
-    int body_end     = (int)(code_ptr - code_buf);
-    int body_content_len = body_end - body_start;       /* WASM body_size (excludes the size field itself) */
-    int full_body_len    = body_end - func_start_offs[func_count]; /* total bytes to copy (includes size field) */
-    uint8_t *patch = code_buf + func_start_offs[func_count];
-    uint8_t *save  = code_ptr;
-    code_ptr = patch; we_u32((uint32_t)body_content_len); code_ptr = save;
-    func_body_len[func_count] = full_body_len;
+    {
+        WasmFuncRow *row = &func_rows[func_count];
+        int body_start   = row->start_offs + 1;
+        int body_end     = (int)(code_ptr - code_buf);
+        int body_content_len = body_end - body_start;   /* WASM body_size (excludes the size field itself) */
+        int full_body_len    = body_end - row->start_offs; /* total bytes to copy (includes size field) */
+        uint8_t *patch = code_buf + row->start_offs;
+        uint8_t *save  = code_ptr;
+        /* the placeholder reserved one byte; a longer LEB rewrites the body
+         * from the patch point. No growth can trigger here (patch+5 <=
+         * body_end), so `save` stays valid across the we_u32. */
+        code_ptr = patch; we_u32((uint32_t)body_content_len); code_ptr = save;
+        row->body_len = full_body_len;
+    }
     func_count++;
 }
 
@@ -644,11 +748,16 @@ int wasm_build_module(uint8_t **out_buf, int *out_len)
     int type_params[64];
     int type_ret[64];
     int n_types = 0;
-    int fn_type[256];
+    /* per-fn type index: heap-backed so a module with more than 256
+     * functions cannot blow the stack (func_count itself is growable) */
+    int *fn_type = (int *)tcc_malloc((size_t)func_count * sizeof(int));
+    if (fn_type == NULL && func_count > 0) {
+        return -1;
+    }
     for (int i = 0; i < func_count; i++) {
-        if (func_names[i][0] == '\0')
+        if (func_rows[i].name[0] == '\0')
             continue;
-        if (strcmp(func_names[i], "main") == 0) {
+        if (strcmp(func_rows[i].name, "main") == 0) {
             main_idx = i;
             continue;
         }
@@ -659,15 +768,15 @@ int wasm_build_module(uint8_t **out_buf, int *out_len)
         int k;
         int found = -1;
         for (k = 0; k < n_types; k++) {
-            if (type_params[k] == func_param_count[i]
-                && type_ret[k] == func_ret_i32[i]) {
+            if (type_params[k] == func_rows[i].param_count
+                && type_ret[k] == func_rows[i].ret_i32) {
                 found = k;
                 break;
             }
         }
         if (found < 0 && n_types < 64) {
-            type_params[n_types] = func_param_count[i];
-            type_ret[n_types] = func_ret_i32[i];
+            type_params[n_types] = func_rows[i].param_count;
+            type_ret[n_types] = func_rows[i].ret_i32;
             found = n_types++;
         }
         fn_type[i] = found < 0 ? 0 : found;
@@ -677,8 +786,8 @@ int wasm_build_module(uint8_t **out_buf, int *out_len)
     }
     int exp_name_bytes = 0;
     for (int i = 0; i < func_count; i++) {
-        if (func_names[i][0] != '\0')
-            exp_name_bytes += (int)strlen(func_names[i]);
+        if (func_rows[i].name[0] != '\0')
+            exp_name_bytes += (int)strlen(func_rows[i].name);
     }
     /* section sizes are LEB-encoded into a scratch first, then copied, so
      * each section carries an honest size instead of the old 1-byte cap */
@@ -686,7 +795,10 @@ int wasm_build_module(uint8_t **out_buf, int *out_len)
         + (2 + 1 + n_exp * 2 + exp_name_bytes + 16)
         + (2 + func_count + (int)(code_ptr - code_buf) + 256) + 512;
     *out_buf = (uint8_t *)tcc_malloc((size_t)total);
-    if (!*out_buf) return -1;
+    if (!*out_buf) {
+        tcc_free(fn_type);
+        return -1;
+    }
     uint8_t *p = *out_buf;
 
     memcpy(p, "\0asm\x01\0\0\0", 8); p += 8;
@@ -755,13 +867,14 @@ int wasm_build_module(uint8_t **out_buf, int *out_len)
             n_entries++;
         }
         for (int i = 0; i < func_count; i++) {
-            if (func_names[i][0] == '\0' || strcmp(func_names[i], "main") == 0)
+            const char *nm = func_rows[i].name;
+            if (nm[0] == '\0' || strcmp(nm, "main") == 0)
                 continue;
             {
-                size_t nl = strlen(func_names[i]);
+                size_t nl = strlen(nm);
                 if (nl > 120) nl = 120;
                 *e++ = (uint8_t)nl;
-                memcpy(e, func_names[i], nl); e += nl;
+                memcpy(e, nm, nl); e += nl;
                 *e++ = 0x00;             /* kind func */
                 wput_leb(&e, (uint32_t)i); /* function index */
                 n_entries++;
@@ -790,13 +903,14 @@ int wasm_build_module(uint8_t **out_buf, int *out_len)
         wput_leb2(&p, 0);                     /* fixed 2-byte size slot */
         wput_leb(&p, (uint32_t)func_count);
         for (int i = 0; i < func_count; i++) {
-            int len = func_body_len[i];
-            memcpy(p, code_buf + func_start_offs[i], (size_t)len); p += len;
+            int len = func_rows[i].body_len;
+            memcpy(p, code_buf + func_rows[i].start_offs, (size_t)len); p += len;
         }
         wput_leb2(&body, (uint32_t)(p - body - 2));
     }
 
     *out_len = (int)(p - *out_buf);
+    tcc_free(fn_type);
     return 0;
 }
 #define ST_FUNC static

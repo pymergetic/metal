@@ -475,7 +475,7 @@ static void pm_metal_boot_countdown(const char *done, unsigned n) {
     }
 }
 
-void pm_metal_boot_shutdown(int reboot) {
+void pm_metal_boot_shutdown(int reboot, unsigned delay_s) {
     char title[96];
     char art[160];
     uint32_t nboot;
@@ -498,14 +498,14 @@ void pm_metal_boot_shutdown(int reboot) {
     snprintf(title, sizeof(title), "%smetal version %s%s", PM_METAL_BOOT_SGR_FAIL,
         PM_METAL_BOOT_TREE_VERSION, PM_METAL_BOOT_SGR_RST);
     pm_metal_boot_msg_line(title);
-    snprintf(art, sizeof(art), "%s*** %s — %s in 3s ***%s", PM_METAL_BOOT_SGR_FAIL,
+    snprintf(art, sizeof(art), "%s*** %s — %s in %us ***%s", PM_METAL_BOOT_SGR_FAIL,
         reboot ? "REBOOTING" : "SYSTEM DOWN", reboot ? "reset" : "power off",
-        PM_METAL_BOOT_SGR_RST);
+        delay_s, PM_METAL_BOOT_SGR_RST);
     pm_metal_boot_msg_line(art);
     if (reboot) {
-        pm_metal_boot_countdown("REBOOTING", 3u);
+        pm_metal_boot_countdown("REBOOTING", delay_s);
     } else {
-        pm_metal_boot_countdown("SYSTEM DOWN", 3u);
+        pm_metal_boot_countdown("SYSTEM DOWN", delay_s);
     }
 #if defined(PM_METAL_FIRMWARE)
 #if defined(__i386__) || defined(__x86_64__)
@@ -538,7 +538,7 @@ void pm_metal_boot_shutdown(int reboot) {
 
 PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_tree_print, pm_metal_boot_tree_print, int32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_motd, pm_metal_boot_motd, void(void));
-PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_shutdown, pm_metal_boot_shutdown, void(int));
+PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_shutdown, pm_metal_boot_shutdown, void(int, unsigned));
 PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_msg_attach, pm_metal_boot_msg_attach,
     int32_t(uint32_t, uint32_t, pm_metal_boot_msg_fn));
 PM_MOD_EXPORT_C(pymergetic.metal.boot.tree, pm_metal_boot_msg_attached, pm_metal_boot_msg_attached, uint32_t(uint32_t));

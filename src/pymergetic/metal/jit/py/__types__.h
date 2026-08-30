@@ -53,6 +53,26 @@ pm_metal_async_coro_t *pm_metal_jit_py_compile_alloc(
     size_t source_len,
     const char *module_name);
 
+/* Python object loop (mpy artifacts) — the Python twin of jit.c's
+ * object_compile: source in, serialized bytecode out. Load runs the
+ * reverse: bytes back into a live module (exactly what a .mpy import
+ * does). Together they close Python's in-kernel compile loop with no
+ * host tool anywhere: Python source -> µPy compiler -> mpy bytes -> µPy
+ * VM. Needs MICROPY_PERSISTENT_CODE_SAVE; seats without it refuse
+ * politely (rc -1) so callers can skip. */
+int32_t pm_metal_jit_py_object_compile(
+    pm_util_mem_arena_t *arena,
+    const char *source, size_t source_len,
+    const char *module_name,
+    uint8_t **mpy_out, size_t *mpy_len,
+    char *errbuf, size_t errbuf_len);
+
+int32_t pm_metal_jit_py_object_load(
+    pm_util_mem_arena_t *arena,
+    const uint8_t *mpy, size_t mpy_len,
+    const char *module_name,
+    char *errbuf, size_t errbuf_len);
+
 #ifdef __cplusplus
 }
 #endif

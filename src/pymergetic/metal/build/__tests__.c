@@ -255,7 +255,10 @@ static const char *S_CALLER =
 
 static int32_t test_multi_object_link(void) {
 #if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
-    void *backing = malloc(1u << 19);
+    /* 32MB: TCC's token and symbol pools are 2 x 256KB and every table rides
+     * this arena (jit.c's arena reallocator); below ~32MB the arena grow path
+     * can hand TCC blocks that fail its no-NULL-check paths. */
+    void *backing = malloc(1u << 25);
     pm_util_mem_arena_t *arena;
     pm_metal_build_unit_t unit;
     uint8_t *obj_callee = NULL, *obj_caller = NULL;
@@ -269,7 +272,7 @@ static int32_t test_multi_object_link(void) {
     int rv;
 
     if (!backing) return 50;
-    arena = pm_util_mem_arena_create(backing, 1u << 19);
+    arena = pm_util_mem_arena_create(backing, 1u << 25);
     if (!arena) { free(backing); return 51; }
 
     memset(&unit, 0, sizeof(unit));
@@ -329,7 +332,9 @@ static int32_t test_wasm_seat_link(void) {
     static const char *src =
         "int probe_two(void) { return 2; }\n"
         "int probe_add_one(int x) { return x + 1; }\n";
-    void *backing = malloc(1u << 19);
+    /* 32MB: the wasm32 compile routes through this arena via jit.c's arena
+     * reallocator — TCC's tccpp pools (2 x 256KB) plus tables must fit. */
+    void *backing = malloc(1u << 25);
     pm_util_mem_arena_t *arena;
     pm_metal_build_unit_t unit;
     uint8_t *obj = NULL;
@@ -340,7 +345,7 @@ static int32_t test_wasm_seat_link(void) {
     int32_t rc;
 
     if (!backing) return 200;
-    arena = pm_util_mem_arena_create(backing, 1u << 19);
+    arena = pm_util_mem_arena_create(backing, 1u << 25);
     if (!arena) { free(backing); return 201; }
 
     memset(&unit, 0, sizeof(unit));

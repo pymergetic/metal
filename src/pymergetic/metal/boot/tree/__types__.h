@@ -30,7 +30,7 @@ typedef void (*pm_metal_boot_msg_fn)(int last);
 
 int32_t pm_metal_boot_tree_print(void);
 void pm_metal_boot_motd(void);
-void pm_metal_boot_shutdown(int reboot);
+void pm_metal_boot_shutdown(int reboot, unsigned delay_s);
 
 int32_t pm_metal_boot_msg_attach(uint32_t surf, uint32_t order, pm_metal_boot_msg_fn fn);
 uint32_t pm_metal_boot_msg_attached(uint32_t surf);

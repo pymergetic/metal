@@ -1,4 +1,5 @@
 #include "pymergetic/metal/jit/cpp/__types__.h"
+#include "pymergetic/metal/jit/c/__exports__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
 #include <stdlib.h>
@@ -66,7 +67,9 @@ static int32_t test_lex_minimal(void) {
     if (src == NULL) { pm_util_mem_arena_destroy(arena); free(backing); return 4; }
 
     memset(&toks, 0, sizeof(toks));
+    memset(err, 0, sizeof(err)); /* lex signals failures via errbuf[0] */
     if (pm_metal_jit_cpp_lex(arena, src, src_len, &toks, err, sizeof(err)) != 0) {
+        printf("cppx lex err: %s\n", err);
         pm_util_mem_arena_destroy(arena); free(backing); return 5;
     }
     if (toks.n_toks < 60) { pm_util_mem_arena_destroy(arena); free(backing); return 6; }
@@ -120,6 +123,7 @@ static int32_t test_lex_templates(void) {
     if (src == NULL) { pm_util_mem_arena_destroy(arena); free(backing); return 13; }
 
     memset(&toks, 0, sizeof(toks));
+    memset(err, 0, sizeof(err)); /* lex signals failures via errbuf[0] */
     if (pm_metal_jit_cpp_lex(arena, src, src_len, &toks, err, sizeof(err)) != 0) {
         pm_util_mem_arena_destroy(arena); free(backing); return 14;
     }
@@ -265,9 +269,11 @@ static int32_t test_parse_templates(void) {
         if (unit->kids[i]->kind == PM_JIT_CPP_AST_CLASS) n_class++;
         if (unit->kids[i]->kind == PM_JIT_CPP_AST_TEMPLATE_DECL) {
             n_template++;
-            /* a template class wraps the CLASS node in the TEMPLATE_DECL */
+            /* a template class wraps the CLASS node in the TEMPLATE_DECL —
+             * the entity is the LAST kid (param NAMEs lead) */
             if (unit->kids[i]->n_kids > 0
-                && unit->kids[i]->kids[0]->kind == PM_JIT_CPP_AST_CLASS) {
+                && unit->kids[i]->kids[unit->kids[i]->n_kids - 1]->kind
+                    == PM_JIT_CPP_AST_CLASS) {
                 n_class++;
             }
         }
@@ -412,11 +418,25 @@ static int32_t test_unsupported(void) {
 
     memset(&toks, 0, sizeof(toks));
     memset(err, 0, sizeof(err));
-    if (pm_metal_jit_cpp_lex(arena, pp_src, strlen(pp_src), &toks, err, sizeof(err)) == 0) {
+    /* preprocessor directives now lex (PP_DIRECTIVE tokens) — the card
+     * passes them through for TCC's cpp. Roundtrip: lex must succeed and
+     * produce a PP_DIRECTIVE token carrying the verbatim text. */
+    if (pm_metal_jit_cpp_lex(arena, pp_src, strlen(pp_src), &toks, err, sizeof(err)) != 0) {
         pm_util_mem_arena_destroy(arena); free(backing); return 74;
     }
-    if (strncmp(err, "cppx: unsupported", 17) != 0) {
-        pm_util_mem_arena_destroy(arena); free(backing); return 75;
+    {
+        uint32_t k;
+        int saw_pp = 0;
+        for (k = 0; k < toks.n_toks; k++) {
+            if (toks.toks[k].kind == PM_JIT_CPP_TOK_PP_DIRECTIVE
+                && toks.toks[k].text_len == 11
+                && memcmp(toks.toks[k].text, "#define Y 1", 11) == 0) {
+                saw_pp = 1;
+            }
+        }
+        if (!saw_pp) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 75;
+        }
     }
 
     memset(&toks, 0, sizeof(toks));
@@ -428,7 +448,7 @@ static int32_t test_unsupported(void) {
         pm_util_mem_arena_destroy(arena); free(backing); return 77;
     }
 
-    /* switch statements parse-error with the unsupported prefix */
+    /* switch statements now parse — verify the SWITCH/CASE/DEFAULT nodes */
     {
         static const char *sw_src = "int f(int a) {\n    switch (a) { default: break; }\n    return 0;\n}\n";
         memset(&toks, 0, sizeof(toks));
@@ -437,11 +457,19 @@ static int32_t test_unsupported(void) {
         if (pm_metal_jit_cpp_lex(arena, sw_src, strlen(sw_src), &toks, err, sizeof(err)) != 0) {
             pm_util_mem_arena_destroy(arena); free(backing); return 78;
         }
-        if (pm_metal_jit_cpp_parse(arena, &toks, &unit, err, sizeof(err)) == 0) {
+        if (pm_metal_jit_cpp_parse(arena, &toks, &unit, err, sizeof(err)) != 0) {
             pm_util_mem_arena_destroy(arena); free(backing); return 79;
         }
-        if (strncmp(err, "cppx: unsupported", 17) != 0) {
-            pm_util_mem_arena_destroy(arena); free(backing); return 80;
+        {
+            /* function body -> compound -> switch stmt */
+            const pm_jit_cpp_ast_t *fn = unit->n_kids > 0 ? unit->kids[0] : NULL;
+            const pm_jit_cpp_ast_t *body = fn && fn->n_kids > 0
+                ? fn->kids[fn->n_kids - 1] : NULL;
+            const pm_jit_cpp_ast_t *sw = body && body->n_kids > 0
+                ? body->kids[0] : NULL;
+            if (sw == NULL || sw->kind != PM_JIT_CPP_AST_SWITCH) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 80;
+            }
         }
     }
     pm_util_mem_arena_destroy(arena);
@@ -449,24 +477,317 @@ static int32_t test_unsupported(void) {
     return 0;
 }
 
+/* lower minimal.cpp: full function subset through the C backend — the C text
+ * must carry both signatures, the forward decls, and the control flow. */
+static int32_t test_lower_minimal(void) {
+    void *backing = malloc(4u << 20);
+    pm_util_mem_arena_t *arena;
+    char path[600];
+    char *src;
+    size_t src_len = 0;
+    pm_jit_cpp_toklist_t toks;
+    pm_jit_cpp_ast_t *unit = NULL;
+    char err[256];
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+
+    if (backing == NULL) return 100;
+    arena = pm_util_mem_arena_create(backing, 4u << 20);
+    if (arena == NULL) { free(backing); return 101; }
+    if (cppx_fixture_path(path, sizeof(path), "minimal.cpp") != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 102;
+    }
+    src = cppx_read_file(path, &src_len);
+    if (src == NULL) { pm_util_mem_arena_destroy(arena); free(backing); return 103; }
+
+    memset(&toks, 0, sizeof(toks));
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_cpp_lex(arena, src, src_len, &toks, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 104;
+    }
+    if (pm_metal_jit_cpp_parse(arena, &toks, &unit, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 105;
+    }
+    if (pm_metal_jit_cpp_lower(arena, unit, &c_out, &c_out_len,
+            err, sizeof(err)) != 0) {
+        printf("cppx lower err: %s\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 106;
+    }
+    if (c_out == NULL || c_out_len < 200) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 107;
+    }
+    /* both forward decls, both definitions, the for/if/while bodies */
+    if (strstr(c_out, "int add(int a, int b);") == NULL
+        || strstr(c_out, "int main();") == NULL
+        || strstr(c_out, "int add(int a, int b) {") == NULL
+        || strstr(c_out, "int main() {") == NULL
+        || strstr(c_out, "return a + b;") == NULL
+        || strstr(c_out, "total = total + i;") == NULL
+        || strstr(c_out, "total += 10;") == NULL
+        /* the inc is the third for-clause, so no semicolon follows */
+        || strstr(c_out, "i++)") == NULL
+        || strstr(c_out, "return add(total, 1);") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 108;
+    }
+    free(src);
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/* lower refusals: every C++-only construct fails with the unsupported
+ * prefix, never silently miscompiles. */
+static int32_t test_lower_refuses(void) {
+    static const char *cases[] = {
+        "auto f() {\n    return 1;\n}\n",                       /* auto return */
+        "int g() {\n    auto x = 1;\n    return x;\n}\n",       /* auto local */
+        "int g() {\n    int *p = nullptr;\n    return 0;\n}\n", /* nullptr */
+        NULL
+    };
+    void *backing = malloc(2u << 20);
+    pm_util_mem_arena_t *arena;
+    uint32_t i;
+
+    if (backing == NULL) return 120;
+    arena = pm_util_mem_arena_create(backing, 2u << 20);
+    if (arena == NULL) { free(backing); return 121; }
+    for (i = 0; cases[i] != NULL; i++) {
+        pm_jit_cpp_toklist_t toks;
+        pm_jit_cpp_ast_t *unit = NULL;
+        char err[256];
+        char *c_out = NULL;
+        size_t c_out_len = 0;
+        memset(&toks, 0, sizeof(toks));
+        memset(err, 0, sizeof(err));
+        if (pm_metal_jit_cpp_lex(arena, cases[i], strlen(cases[i]),
+                &toks, err, sizeof(err)) != 0) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 122;
+        }
+        if (pm_metal_jit_cpp_parse(arena, &toks, &unit, err, sizeof(err)) != 0) {
+            /* parser-level refusal (class member shapes) is fine too */
+            if (strncmp(err, "cppx: unsupported", 17) != 0) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 123;
+            }
+            continue;
+        }
+        if (pm_metal_jit_cpp_lower(arena, unit, &c_out, &c_out_len,
+                err, sizeof(err)) == 0) {
+            printf("cppx lower accepted case %u\n", (unsigned)i);
+            pm_util_mem_arena_destroy(arena); free(backing); return 124;
+        }
+        if (strncmp(err, "cppx: unsupported", 17) != 0) {
+            printf("cppx lower wrong refusal %u: %s\n", (unsigned)i, err);
+            pm_util_mem_arena_destroy(arena); free(backing); return 125;
+        }
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/* the object prove: minimal.cpp -> lower -> TCC object bytes, in-kernel.
+ * Seats without native object output refuse politely and skip. */
+static int32_t test_lower_object(void) {
+    void *backing = malloc(4u << 20);
+    pm_util_mem_arena_t *arena;
+    char path[600];
+    char *src;
+    size_t src_len = 0;
+    pm_jit_cpp_toklist_t toks;
+    pm_jit_cpp_ast_t *unit = NULL;
+    char err[256];
+    char oerr[256];
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    void *obacking;
+    pm_util_mem_arena_t *oarena;
+    int32_t rc;
+
+    if (backing == NULL) return 140;
+    arena = pm_util_mem_arena_create(backing, 4u << 20);
+    if (arena == NULL) { free(backing); return 141; }
+    if (cppx_fixture_path(path, sizeof(path), "minimal.cpp") != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 142;
+    }
+    src = cppx_read_file(path, &src_len);
+    if (src == NULL) { pm_util_mem_arena_destroy(arena); free(backing); return 143; }
+    memset(&toks, 0, sizeof(toks));
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_cpp_lex(arena, src, src_len, &toks, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 144;
+    }
+    if (pm_metal_jit_cpp_parse(arena, &toks, &unit, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 145;
+    }
+    if (pm_metal_jit_cpp_lower(arena, unit, &c_out, &c_out_len,
+            err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 146;
+    }
+
+    obacking = malloc(1u << 26);
+    if (obacking == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 147;
+    }
+    oarena = pm_util_mem_arena_create(obacking, 1u << 26);
+    if (oarena == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); free(obacking);
+        return 148;
+    }
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_jit_c_object_compile(oarena, c_out, c_out_len,
+        &obj, &obj_len, oerr, sizeof(oerr));
+    if (rc != 0) {
+        if (strstr(oerr, "no native object output on this seat") != NULL) {
+            /* browser/wasm32, firmware: face wired, fill says no */
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0;
+        }
+        printf("cppx object err: %s\n", oerr);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking);
+        return 149;
+    }
+    if (obj == NULL || obj_len < 4) {
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking);
+        return 150;
+    }
+    if (!(obj[0] == 0x7f && obj[1] == 'E' && obj[2] == 'L' && obj[3] == 'F')) {
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking);
+        return 151;
+    }
+    free(src);
+    pm_util_mem_arena_destroy(arena);
+    pm_util_mem_arena_destroy(oarena);
+    free(backing);
+    free(obacking);
+    return 0;
+}
+
+/* lower templates_virtual.cpp: classes, inheritance, template
+ * instantiation, vtables, new/delete, ctor init lists — then compile the
+ * generated C to an object (host seats) proving the C is well-formed. */
+static int32_t test_lower_classes(void) {
+    void *backing = malloc(4u << 20);
+    pm_util_mem_arena_t *arena;
+    char path[600];
+    char *src;
+    size_t src_len = 0;
+    pm_jit_cpp_toklist_t toks;
+    pm_jit_cpp_ast_t *unit = NULL;
+    char err[256];
+    char oerr[256];
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    void *obacking;
+    pm_util_mem_arena_t *oarena;
+    int32_t rc;
+
+    if (backing == NULL) return 160;
+    arena = pm_util_mem_arena_create(backing, 4u << 20);
+    if (arena == NULL) { free(backing); return 161; }
+    if (cppx_fixture_path(path, sizeof(path), "templates_virtual.cpp") != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 162;
+    }
+    src = cppx_read_file(path, &src_len);
+    if (src == NULL) { pm_util_mem_arena_destroy(arena); free(backing); return 163; }
+    memset(&toks, 0, sizeof(toks));
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_cpp_lex(arena, src, src_len, &toks, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 164;
+    }
+    if (pm_metal_jit_cpp_parse(arena, &toks, &unit, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 165;
+    }
+    if (pm_metal_jit_cpp_lower(arena, unit, &c_out, &c_out_len,
+            err, sizeof(err)) != 0) {
+        printf("cppx classes err: %s\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 166;
+    }
+    /* the C face of the lowering: template instantiation, vtable, methods,
+     * ctor, new/delete helpers, virtual dispatch. Box_int_dtor is the dtor
+     * the source declares (~Box); LoudBox declares none, so none is emitted. */
+    if (strstr(c_out, "struct Box_int") == NULL
+        || strstr(c_out, "Box_int_get") == NULL
+        || strstr(c_out, "LoudBox_describe") == NULL
+        || strstr(c_out, "_vtable") == NULL
+        || strstr(c_out, "LoudBox_ctor") == NULL
+        || strstr(c_out, "Box_int_dtor") == NULL
+        || strstr(c_out, "LoudBox_new") == NULL
+        || strstr(c_out, "identity_int") == NULL) {
+        printf("cppx classes C missing expected symbols\n");
+        pm_util_mem_arena_destroy(arena); free(backing); return 167;
+    }
+
+    obacking = malloc(1u << 26);
+    if (obacking == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 168;
+    }
+    oarena = pm_util_mem_arena_create(obacking, 1u << 26);
+    if (oarena == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); free(obacking);
+        return 169;
+    }
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_jit_c_object_compile(oarena, c_out, c_out_len,
+        &obj, &obj_len, oerr, sizeof(oerr));
+    if (rc != 0) {
+        if (strstr(oerr, "no native object output on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0;
+        }
+        printf("cppx classes object err: %s\n", oerr);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking);
+        return 170;
+    }
+    if (obj == NULL || obj_len < 4
+        || !(obj[0] == 0x7f && obj[1] == 'E' && obj[2] == 'L' && obj[3] == 'F')) {
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking);
+        return 171;
+    }
+    free(src);
+    pm_util_mem_arena_destroy(arena);
+    pm_util_mem_arena_destroy(oarena);
+    free(backing);
+    free(obacking);
+    return 0;
+}
+
 static int32_t pm_metal_jit_cpp_tests(void) {
     int32_t rc;
     rc = test_lex_minimal();
-    if (rc) return rc;
+    if (rc) { printf("cppx fail lex_minimal %d\n", (int)rc); return rc; }
     rc = test_lex_templates();
-    if (rc) return rc;
+    if (rc) { printf("cppx fail lex_templates %d\n", (int)rc); return rc; }
     rc = test_lex_errors();
-    if (rc) return rc;
+    if (rc) { printf("cppx fail lex_errors %d\n", (int)rc); return rc; }
     rc = test_parse_minimal();
-    if (rc) return rc;
+    if (rc) { printf("cppx fail parse_minimal %d\n", (int)rc); return rc; }
     rc = test_parse_templates();
-    if (rc) return rc;
+    if (rc) { printf("cppx fail parse_templates %d\n", (int)rc); return rc; }
     rc = test_parse_broken();
-    if (rc) return rc;
+    if (rc) { printf("cppx fail parse_broken %d\n", (int)rc); return rc; }
     rc = test_parse_exprs();
-    if (rc) return rc;
+    if (rc) { printf("cppx fail parse_exprs %d\n", (int)rc); return rc; }
     rc = test_unsupported();
-    if (rc) return rc;
+    if (rc) { printf("cppx fail unsupported %d\n", (int)rc); return rc; }
+    rc = test_lower_minimal();
+    if (rc) { printf("cppx fail lower_minimal %d\n", (int)rc); return rc; }
+    rc = test_lower_refuses();
+    if (rc) { printf("cppx fail lower_refuses %d\n", (int)rc); return rc; }
+    rc = test_lower_object();
+    if (rc) { printf("cppx fail lower_object %d\n", (int)rc); return rc; }
+    rc = test_lower_classes();
+    if (rc) { printf("cppx fail lower_classes %d\n", (int)rc); return rc; }
     return 0;
 }
 

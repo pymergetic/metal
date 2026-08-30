@@ -33,7 +33,12 @@
 #endif
 
 #ifndef PM_METAL_UNIX_ARENA_SPAN
-#define PM_METAL_UNIX_ARENA_SPAN (4u * 1024u * 1024u)
+/* The boot arena backs every MICROPY_WASM_MALLOC on this seat (pack bytes,
+ * loader tables, the ELF relocator's link-time allocations). Whole-card
+ * in-kernel links (the jit cards' self-host C: ~250KB source, ~1.5MB of
+ * symtab/GOT/image-copy at link) need more than the old 4MB after the
+ * workspace materializes — 64MB keeps the REPL rebuild loop honest. */
+#define PM_METAL_UNIX_ARENA_SPAN (64u * 1024u * 1024u)
 #endif
 #ifndef PM_METAL_CDN_DEFAULT
 #define PM_METAL_CDN_DEFAULT "https://cdn.pymergetic.com/cdn"

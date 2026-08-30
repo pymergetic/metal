@@ -817,24 +817,32 @@ static mp_obj_t mp_metal_builtin_help(void) {
         "                  pymergetic.metal.net.http.asgi.listen(addr,port)->id / .stop(id) / .status(id) / .count()\n"
         "  m.help()         this text\n"
         "  m.quit([pid]) / m.exit([pid])  SystemExit in a process; at pid 0 use shutdown()/reboot()\n"
-        "  m.reboot()       reboot the seat\n"
-        "  m.shutdown()     halt the seat\n"
+        "  m.reboot([delay])   reboot the seat (delay in seconds, default 3)\n"
+        "  m.shutdown([delay])  halt the seat (delay in seconds, default 3)\n"
         "  m.process()      booted module FQNs\n");
     return mp_const_none;
 }
 MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_help_obj, mp_metal_builtin_help);
 
-static mp_obj_t mp_metal_builtin_reboot(void) {
-    pm_metal_boot_shutdown(1);
+static mp_obj_t mp_metal_builtin_reboot(size_t n_args, const mp_obj_t *args) {
+    unsigned delay = 3u;
+    if (n_args == 1) {
+        delay = (unsigned)mp_obj_get_int(args[0]);
+    }
+    pm_metal_boot_shutdown(1, delay);
     return mp_const_none;
 }
-MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_reboot_obj, mp_metal_builtin_reboot);
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp_metal_builtin_reboot_obj, 0, 1, mp_metal_builtin_reboot);
 
-static mp_obj_t mp_metal_builtin_shutdown(void) {
-    pm_metal_boot_shutdown(0);
+static mp_obj_t mp_metal_builtin_shutdown(size_t n_args, const mp_obj_t *args) {
+    unsigned delay = 3u;
+    if (n_args == 1) {
+        delay = (unsigned)mp_obj_get_int(args[0]);
+    }
+    pm_metal_boot_shutdown(0, delay);
     return mp_const_none;
 }
-MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_shutdown_obj, mp_metal_builtin_shutdown);
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp_metal_builtin_shutdown_obj, 0, 1, mp_metal_builtin_shutdown);
 
 static mp_obj_t mp_metal_builtin_process(void) {
     uint32_t n;

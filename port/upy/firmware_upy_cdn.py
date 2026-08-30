@@ -125,6 +125,12 @@ for attempt in range(2):
             raise
         print("upy cdn fetch retry")
 
+# The loop cannot fall through with None (the second attempt raises on
+# failure), so this gate never fires at runtime — it narrows the imported
+# module for the checker, same convention as the card gates above.
+if test_a is None:
+    raise RuntimeError("cdn fetch module")
+
 if test_a.a_ping() != 11:
     raise RuntimeError("cdn fetch call")
 print("upy cdn fetch 11")
@@ -132,6 +138,37 @@ print("upy cdn fetch 11")
 # parks the firmware hook. Cards are already on `m` from the first import.
 cdn.reset()
 print("upy cdn reset")
+
+# metal.jit.py object loop: firmware compiles with no PERSISTENT_CODE (the
+# MINIMUM ROM budget leaves no room for mpy save), so object_compile must
+# refuse politely, not crash and not silently succeed. The face is wired on
+# every seat; the fill says no on this one, and the prove pins that.
+import pymergetic.metal.jit.py as jpy
+
+_fw_mpy = jpy.object_compile("VAL = 1\n", "fw_jitpy_refuse")
+if _fw_mpy is not None:
+    raise RuntimeError("jit py firmware should refuse")
+print("upy jit py refuses (no mpy save on firmware)")
+if jpy.object_load(b"M\x06\x00\x00", "fw_jitpy_refuse") == 0:
+    raise RuntimeError("jit py firmware load should refuse")
+print("upy jit py load refuses")
+
+# metal.process budget faces (firmware seat): the faces are wired here like
+# on every seat. A budget set succeeds (the sub-arena is small and the boot
+# arena has room), and a compile under it is still refused by the jit.py
+# fill — the cap and the refusal compose, nothing aborts.
+import pymergetic.metal.process as proc
+
+if proc.budget(0) != 0:
+    raise RuntimeError("process budget default %r" % (proc.budget(0),))
+if proc.budget_set(0, 64 * 1024) != 0:
+    raise RuntimeError("process budget set")
+if proc.budget(0) != 64 * 1024:
+    raise RuntimeError("process budget readback %r" % (proc.budget(0),))
+_fw_mpy2 = jpy.object_compile("VAL = 1\n", "fw_jitpy_budgeted")
+if _fw_mpy2 is not None:
+    raise RuntimeError("jit py firmware budgeted should refuse")
+print("upy process budget refuses (cap set, compile still no)")
 
 if m.display.up() != 0:
     raise RuntimeError("display up")

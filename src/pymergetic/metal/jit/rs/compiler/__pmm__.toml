@@ -1,0 +1,3 @@
+fqn = "pymergetic.metal.jit.rs.compiler"
+impl = "rs"
+notes = "micro-rustc (Phase 7): the Rust->C pipeline in Rust itself, one defining lang. Bootstrapped by the vendored mrustc embed (jit.rs card) until it self-hosts; the prove is compile-self -> byte-identical C output. The kernel's own Rust subset only: no_std cards, extern \"C\" blocks, #[repr(C)], atomics, slices, Option<fn>, const fns, PM_MOD_EXPORT_RS ctors."
