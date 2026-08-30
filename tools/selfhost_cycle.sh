@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # selfhost_cycle.sh — the micro-rustc self-host loop in one command.
 #
-#   tools/selfhost_cycle.sh [--skip-build] [--corpus-only]
+#   tools/selfhost_cycle.sh [--skip-build] [--corpus-only] [--no-ksweep]
 #
 # Stages (each prints PASS/FAIL and stops the run on the first failure):
 #   0. rebuild boot (cargo, real rustc)           [unless --skip-build]
@@ -29,6 +29,10 @@
 #      compiles it, the relocator links it in-process, and the LINKED
 #      card's lex/parse/lower re-transpile __impl__.c — the output must
 #      byte-match C1. The C++ fixed point through the kernel's own chain.
+#   7. ksweep: every card in the embedded table through discover ->
+#      unit_compile (TCC object + in-kernel link). A readiness map of the
+#      whole tree, not a gate: refusals name the next backend seams (TLS
+#      relocs, __va_arg, __atomic_store_8).
 #
 # Why this exists: the 2026-08-28 self-host night burned most of its time on
 # loop latency (~35s cargo rebuilds) and a misdiagnosis that a gen1-vs-gen2
@@ -49,11 +53,13 @@ TARGET_DIR="${PM_SELFHOST_CARGO_TARGET:-/tmp/selfhost_cycle/cargo}"
 SKIP_BUILD=0
 CORPUS_ONLY=0
 REGEN_GOLDEN=0
+NO_KSWEEP=0
 for arg in "$@"; do
     case "$arg" in
         --skip-build)   SKIP_BUILD=1 ;;
         --corpus-only)  CORPUS_ONLY=1 ;;
         --regen-golden) REGEN_GOLDEN=1 ;;
+        --no-ksweep)    NO_KSWEEP=1 ;;
         -h|--help)
             sed -n '2,32p' "$0"; exit 0 ;;
         *)
@@ -262,6 +268,22 @@ else
     echo "--- first differences (boot C1 vs linked) ---"
     diff "$WORK/cppx_c1.c" "$WORK/cppx_link.c" | head -40 || true
     die "linked cppx output differs from boot C1"
+fi
+
+# ------------------------------------------------------ 7. ksweep ----
+if [ "$NO_KSWEEP" -eq 0 ] && [ "$CORPUS_ONLY" -eq 0 ]; then
+step "7. ksweep: every card through the in-kernel compile chain"
+# The N-card readiness map: pm_metal_build_discover -> unit_compile (TCC
+# object + ELF relocator link) over the whole embedded card table. The
+# result lines are data, not gates — a refused card is the next milestone's
+# seam (TLS relocs, __va_arg, __atomic_store_8, ...), which is exactly what
+# the overnight run wants to enumerate fresh.
+( cd "$METAL_DIR" && make ksweep >"$WORK/ksweep.log" 2>&1 ) \
+    || { tail -40 "$WORK/ksweep.log"; die "ksweep run failed"; }
+grep -q "^ksweep done:" "$WORK/ksweep.log" \
+    || { tail -40 "$WORK/ksweep.log"; die "no ksweep summary line"; }
+cp "$METAL_DIR/build/ksweep_report.txt" "$WORK/ksweep_report.txt" 2>/dev/null || true
+grep "^ksweep done:" "$WORK/ksweep.log"
 fi
 
 printf '\nALL STAGES PASSED\n'

@@ -890,6 +890,7 @@ typedef struct pm_build_resolve_ctx {
 #ifdef PM_METAL_BUILD_HAS_ELF
 #include <dlfcn.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 
 static void thunk_ctx_init(pm_build_resolve_ctx_t *ctx) {
     memset(ctx, 0, sizeof(*ctx));
@@ -934,31 +935,57 @@ static pm_build_exec_range_t pm_build_exec_ranges[512];
 static uint32_t pm_build_n_exec_ranges;
 static int pm_build_exec_ranges_ready;
 
+/* The main executable's own mapping bounds — the host-seat fill for the
+ * boot card's weak image symbols. Firmware linker scripts PROVIDE
+ * __pm_metal_image_base/_end; on the host seat the running process IS
+ * the kernel image, so proc_resolve answers those names with the exe's
+ * own mapping instead of leaving them unresolved. */
+static uintptr_t pm_build_exe_lo;
+static uintptr_t pm_build_exe_hi;
+static int pm_build_exe_bounds_ready;
+
 static void pm_build_exec_ranges_load(void) {
     FILE *f = fopen("/proc/self/maps", "r");
+    long exe_ino = -1;
+    struct stat st;
+    if (stat("/proc/self/exe", &st) == 0) {
+        exe_ino = (long)st.st_ino;
+    }
     if (f == NULL) {
         pm_build_exec_ranges_ready = 1;
+        pm_build_exe_bounds_ready = 1;
         return;
     }
     while (pm_build_n_exec_ranges
         < (uint32_t)(sizeof(pm_build_exec_ranges) / sizeof(pm_build_exec_ranges[0]))) {
         char line[512];
         unsigned long lo, hi;
+        unsigned long devmaj, devmin, ino;
         char perms[8];
         if (fgets(line, sizeof(line), f) == NULL) {
             break;
         }
-        if (sscanf(line, "%lx-%lx %7s", &lo, &hi, perms) != 3) {
+        if (sscanf(line, "%lx-%lx %7s %*x %lx:%lx %lu",
+            &lo, &hi, perms, &devmaj, &devmin, &ino) < 3) {
             continue;
         }
-        if (perms[2] != 'x') {
-            continue;
+        if (perms[2] == 'x'
+            && pm_build_n_exec_ranges
+                < (uint32_t)(sizeof(pm_build_exec_ranges)
+                    / sizeof(pm_build_exec_ranges[0]))) {
+            pm_build_exec_ranges[pm_build_n_exec_ranges].lo = (uintptr_t)lo;
+            pm_build_exec_ranges[pm_build_n_exec_ranges].hi = (uintptr_t)hi;
+            pm_build_n_exec_ranges++;
         }
-        pm_build_exec_ranges[pm_build_n_exec_ranges].lo = (uintptr_t)lo;
-        pm_build_exec_ranges[pm_build_n_exec_ranges].hi = (uintptr_t)hi;
-        pm_build_n_exec_ranges++;
+        if ((long)ino == exe_ino) {
+            if (pm_build_exe_lo == 0) {
+                pm_build_exe_lo = (uintptr_t)lo;
+            }
+            pm_build_exe_hi = (uintptr_t)hi;
+        }
     }
     fclose(f);
+    pm_build_exe_bounds_ready = 1;
     pm_build_exec_ranges_ready = 1;
 }
 
@@ -980,6 +1007,23 @@ static void *proc_resolve(const char *name, void *ctx_in) {
     void *h = dlopen(NULL, RTLD_LAZY);
     void *p = h != NULL ? dlsym(h, name) : NULL;
     if (p == NULL) {
+        /* the boot card's weak image symbols: firmware gets them from the
+         * linker script; the host seat's kernel image IS this process */
+        if (strcmp(name, "__pm_metal_image_base") == 0) {
+            if (!pm_build_exe_bounds_ready) {
+                pm_build_exec_ranges_load();
+            }
+            if (pm_build_exe_lo != 0 && pm_build_exe_hi > pm_build_exe_lo) {
+                return (void *)pm_build_exe_lo;
+            }
+        } else if (strcmp(name, "__pm_metal_image_end") == 0) {
+            if (!pm_build_exe_bounds_ready) {
+                pm_build_exec_ranges_load();
+            }
+            if (pm_build_exe_lo != 0 && pm_build_exe_hi > pm_build_exe_lo) {
+                return (void *)pm_build_exe_hi;
+            }
+        }
         return NULL;
     }
     if (ctx == NULL || ctx->thunk_base == NULL) {
@@ -1485,8 +1529,11 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
         return PM_METAL_BUILD_ERR_NOMEM;
     }
 
-    /* merge unit->include_dirs (rooted at unit_root) + the seat fill */
-    n_all_includes = unit->n_include_dirs + n_include_dirs;
+    /* merge unit->include_dirs (rooted at unit_root) + the seat fill. The
+     * card's own dir rides first: generated headers in the card
+     * (fig_small.inc.h, www_embed.inc.h) are relative to the muscle, so
+     * TCC must search the same dir the host build compiles from. */
+    n_all_includes = unit->n_include_dirs + n_include_dirs + 1;
     if (n_all_includes > 0) {
         all_includes = (const char **)pm_util_mem_alloc(
             arena, n_all_includes * sizeof(const char *));
@@ -1494,15 +1541,20 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
             err_set(errbuf, errbuf_len, "unit_compile: arena exhausted", 0);
             return PM_METAL_BUILD_ERR_NOMEM;
         }
+        all_includes[0] = join_path(arena, unit_root, ".");
+        if (all_includes[0] == NULL) {
+            err_set(errbuf, errbuf_len, "unit_compile: arena exhausted", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
         for (i = 0; i < unit->n_include_dirs; i++) {
-            all_includes[i] = join_path(arena, unit_root, unit->include_dirs[i]);
-            if (all_includes[i] == NULL) {
+            all_includes[1 + i] = join_path(arena, unit_root, unit->include_dirs[i]);
+            if (all_includes[1 + i] == NULL) {
                 err_set(errbuf, errbuf_len, "unit_compile: arena exhausted", 0);
                 return PM_METAL_BUILD_ERR_NOMEM;
             }
         }
         for (i = 0; i < n_include_dirs; i++) {
-            all_includes[unit->n_include_dirs + i] = include_dirs[i];
+            all_includes[1 + unit->n_include_dirs + i] = include_dirs[i];
         }
     }
 

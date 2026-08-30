@@ -259,6 +259,111 @@ static void jit_c_obj_err(char *errbuf, size_t errbuf_len, const char *msg) {
     snprintf(errbuf, errbuf_len, "%s", msg);
 }
 
+/* Capture TCC's own diagnostics so a refused compile names the real cause
+ * (file:line + message), not just "compile failed". The callback receives
+ * the raw message; the retained prefix survives into errbuf. */
+static char *s_jit_c_diag;
+static size_t s_jit_c_diag_len;
+static size_t s_jit_c_diag_max;
+
+static void jit_c_diag_cb(void *opaque, const char *msg) {
+    size_t n;
+    (void)opaque;
+    if (msg == NULL || s_jit_c_diag == NULL || s_jit_c_diag_max == 0) return;
+    /* Keep only the most recent lines: TCC emits include-stack prefixes
+     * first and the error line last, so a full buffer would evict the
+     * cause. Roll the buffer when this line does not fit. */
+    n = strlen(msg);
+    if (n >= s_jit_c_diag_max - 1) {
+        /* a single line longer than the buffer: keep its tail */
+        s_jit_c_diag_len = 0;
+        memcpy(s_jit_c_diag, msg + (n - (s_jit_c_diag_max - 2)),
+            s_jit_c_diag_max - 2);
+        s_jit_c_diag_len = s_jit_c_diag_max - 2;
+        s_jit_c_diag[s_jit_c_diag_len++] = '\n';
+        s_jit_c_diag[s_jit_c_diag_len] = '\0';
+        return;
+    }
+    if (s_jit_c_diag_len + n + 1 >= s_jit_c_diag_max) {
+        /* drop the oldest lines until the new one fits */
+        size_t need = n + 2;
+        size_t drop = 0;
+        while (s_jit_c_diag_len - drop >= need
+            && drop < s_jit_c_diag_len) {
+            /* advance one line */
+            size_t adv = drop;
+            while (adv < s_jit_c_diag_len
+                && s_jit_c_diag[adv] != '\n') {
+                adv++;
+            }
+            if (adv < s_jit_c_diag_len) adv++;
+            drop = adv;
+        }
+        if (drop > 0 && drop < s_jit_c_diag_len) {
+            memmove(s_jit_c_diag, s_jit_c_diag + drop,
+                s_jit_c_diag_len - drop);
+            s_jit_c_diag_len -= drop;
+        } else if (drop >= s_jit_c_diag_len) {
+            s_jit_c_diag_len = 0;
+        }
+    }
+    if (s_jit_c_diag_len + n + 1 < s_jit_c_diag_max) {
+        memcpy(s_jit_c_diag + s_jit_c_diag_len, msg, n);
+        s_jit_c_diag_len += n;
+        s_jit_c_diag[s_jit_c_diag_len++] = '\n';
+        s_jit_c_diag[s_jit_c_diag_len] = '\0';
+    }
+}
+
+static void jit_c_diag_begin(char *buf, size_t cap) {
+    s_jit_c_diag = buf;
+    s_jit_c_diag_len = 0;
+    s_jit_c_diag_max = cap;
+    if (buf != NULL && cap > 0) buf[0] = '\0';
+}
+
+/* Drop the capture (success path): the diagnostics were only interesting
+ * on refusal. */
+static void jit_c_diag_end(void) {
+    s_jit_c_diag = NULL;
+    s_jit_c_diag_len = 0;
+    s_jit_c_diag_max = 0;
+}
+
+/* Fold the retained diagnostics into errbuf (kept when non-empty; the
+ * "compile failed" prefix stays so callers still see the stage). TCC
+ * diagnostics end with the error line, so when the whole capture does
+ * not fit, keep the tail — the last lines carry the cause. */
+static void jit_c_obj_err_diag(char *errbuf, size_t errbuf_len,
+    const char *msg) {
+    if (errbuf == NULL || errbuf_len == 0) return;
+    if (s_jit_c_diag != NULL && s_jit_c_diag[0] != '\0') {
+        size_t msg_len = strlen(msg);
+        size_t room = errbuf_len > msg_len + 2
+            ? errbuf_len - msg_len - 2 : 0;
+        const char *diag = s_jit_c_diag;
+        size_t skip = 0;
+        if (s_jit_c_diag_len + msg_len + 2 > errbuf_len) {
+            if (s_jit_c_diag_len > room) {
+                skip = s_jit_c_diag_len - room;
+                /* advance to the next line so the tail starts clean */
+                while (diag[skip] != '\0' && diag[skip] != '\n'
+                    && skip < s_jit_c_diag_len) {
+                    skip++;
+                }
+                if (skip < s_jit_c_diag_len) skip++;
+            }
+            diag = s_jit_c_diag + skip;
+        }
+        snprintf(errbuf, errbuf_len, "%s: %s", msg, diag);
+    } else {
+        snprintf(errbuf, errbuf_len, "%s", msg);
+    }
+    s_jit_c_diag = NULL;
+    s_jit_c_diag_len = 0;
+    s_jit_c_diag_max = 0;
+}
+
 static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     const char *source, size_t source_len,
     const char **include_dirs, uint32_t n_include_dirs,
@@ -312,6 +417,13 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     tcc_set_lib_path(s, PM_METAL_TCC_LIB_DIR);
     tcc_add_library_path(s, PM_METAL_TCC_LIB_DIR);
     tcc_set_output_type(s, TCC_OUTPUT_OBJ);
+    /* route diagnostics into a scratch buffer folded into errbuf on
+     * refusal — the capture rides this function's stack frame */
+    {
+        char diag[1024];
+        jit_c_diag_begin(diag, sizeof(diag));
+        tcc_set_error_func(s, NULL, jit_c_diag_cb);
+    }
     for (i = 0; i < n_include_dirs; i++) {
         if (include_dirs[i] != NULL && include_dirs[i][0] != '\0') {
             tcc_add_include_path(s, include_dirs[i]);
@@ -329,7 +441,7 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
         tcc_set_realloc(saved_realloc);
         s_tcc_arena = NULL;
         unlink(tmpl);
-        jit_c_obj_err(errbuf, errbuf_len, "object_compile: tcc compile failed");
+        jit_c_obj_err_diag(errbuf, errbuf_len, "object_compile: tcc compile failed");
         return -1;
     }
     if (tcc_output_file(s, tmpl) != 0) {
@@ -337,7 +449,7 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
         tcc_set_realloc(saved_realloc);
         s_tcc_arena = NULL;
         unlink(tmpl);
-        jit_c_obj_err(errbuf, errbuf_len, "object_compile: tcc_output_file failed");
+        jit_c_obj_err_diag(errbuf, errbuf_len, "object_compile: tcc_output_file failed");
         return -1;
     }
     tcc_delete(s);
@@ -345,6 +457,7 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
      * happens below this point */
     tcc_set_realloc(saved_realloc);
     s_tcc_arena = NULL;
+    jit_c_diag_end();
 
     f = fopen(tmpl, "rb");
     if (f == NULL) {

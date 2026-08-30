@@ -201,18 +201,24 @@ def main() -> int:
             return 1
         _emit_array(buf, name, man.encode("utf-8") + b"\x00")  # NUL-terminated for const char * bridge
         _emit_array(buf, toml_name, toml_bytes + b"\x00")
-        buf.write(f'static const pm_metal_src_card_t PM_METAL_SRC_CARD_{ci} = {{\n'
-            f'    "{card["fqn"]}",\n'
-            f'    "{card["impl"]}",\n'
-            f'    PM_METAL_SRC_FILES_{ci},\n'
-            f'    {len(card["files"])}u,\n'
-            f'    (const char *)s_src_{name},\n'
-            f'    (const char *)s_src_{toml_name},\n'
-            f"}};\n\n")
 
+    # The cards array expands every field in braces (no per-card statics).
+    # A TCC guest compiles this header in-kernel (the ksweep / rebuild
+    # chain): tcc rejects "arr = { t0, t1 }" (struct-typed constant
+    # elements) as non-constant, while the fully braced per-field form is
+    # a plain constant expression in both gcc/clang and tcc.
     buf.write("static const pm_metal_src_card_t PM_METAL_SRC_CARDS[] = {\n")
-    for ci in range(len(cards)):
-        buf.write(f"    PM_METAL_SRC_CARD_{ci},\n")
+    for ci, card in enumerate(cards):
+        name = _ident(card["fqn"], "manifest")
+        toml_name = _ident(card["fqn"], "pmm")
+        buf.write(f'    {{\n'
+            f'        "{card["fqn"]}",\n'
+            f'        "{card["impl"]}",\n'
+            f'        PM_METAL_SRC_FILES_{ci},\n'
+            f'        {len(card["files"])}u,\n'
+            f'        (const char *)s_src_{name},\n'
+            f'        (const char *)s_src_{toml_name},\n'
+            f'    }},\n')
     buf.write("};\n\n")
     buf.write(f"#define PM_METAL_SRC_CARD_COUNT {len(cards)}u\n\n")
 
