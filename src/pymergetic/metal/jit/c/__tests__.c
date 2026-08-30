@@ -162,6 +162,51 @@ static int32_t test_object_self_host_tcc(void) {
 #endif
 }
 
+/* object_compile_target: the cross knob. On an ELF seat with the second
+ * (wasm32) TCC instance linked in, target=WASM32 must hand back \0asm
+ * bytes; without the instance it refuses politely (rc != 0 + error text).
+ * On a wasm32-native seat the knob names the seat's own backend, so the
+ * object is \0asm either way. */
+static int32_t test_object_compile_target(void) {
+#if PM_HAS_TCC
+    void *backing = malloc(1u << 25);
+    pm_util_mem_arena_t *arena;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    char err[256];
+    static const char *src =
+        "int target_probe(int v) { return v * 3 + 1; }\n";
+    int32_t rc;
+
+    if (!backing) return 40;
+    arena = pm_util_mem_arena_create(backing, 1u << 25);
+    if (!arena) { free(backing); return 41; }
+
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_c_object_compile_target(arena, src, strlen(src),
+        NULL, 0, NULL, 0, (int32_t)PM_METAL_JIT_C_TARGET_WASM32,
+        &obj, &obj_len, err, sizeof(err));
+#if defined(PM_METAL_TCC_CROSS_WASM32) || defined(TCC_TARGET_WASM32)
+    if (rc != 0 || obj == NULL || obj_len < 8) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 42;
+    }
+    if (obj[0] != 0x00 || obj[1] != 'a' || obj[2] != 's' || obj[3] != 'm') {
+        pm_util_mem_arena_destroy(arena); free(backing); return 43;
+    }
+#else
+    /* no wasm32 backend here: the refusal is the honest result, and the
+     * errbuf must say so (a silent failure hides a dark port) */
+    if (rc == 0) { pm_util_mem_arena_destroy(arena); free(backing); return 44; }
+    if (err[0] == '\0') { pm_util_mem_arena_destroy(arena); free(backing); return 45; }
+#endif
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 static int32_t pm_metal_jit_c_tests(void) {
     int32_t rc;
     rc = test_compile_alloc();
@@ -173,6 +218,8 @@ static int32_t pm_metal_jit_c_tests(void) {
     rc = test_object_compile_opts();
     if (rc) return rc;
     rc = test_object_self_host_tcc();
+    if (rc) return rc;
+    rc = test_object_compile_target();
     if (rc) return rc;
     return 0;
 }

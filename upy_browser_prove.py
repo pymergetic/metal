@@ -238,6 +238,34 @@ def _cdn(base):
         raise SystemExit("build lookup after destroy")
     print("upy wasm build link")
 
+    # cross-compile knob (browser seat): the seat's own backend IS wasm32,
+    # so an explicit target=1 (WASM32) is the same face as the default —
+    # object bytes come out \0asm either way, and the link below proves the
+    # full loop. But ELF bytes have no backend on this seat: build.link
+    # refuses them politely (an error tuple), never an abort — a missing
+    # fill is a stub that fails the prove, not a dark port.
+    import pymergetic.metal.jit.c as jc
+
+    _xobj = jc.object_compile(
+        "int xcross_magic(void) { return 42; }\n"
+        "int xcross_add(int a, int b) { return a + b; }\n",
+        target=1,
+    )
+    if not isinstance(_xobj, bytes) or len(_xobj) < 8 or _xobj[:4] != b"\x00asm":
+        raise SystemExit("cross object %r" % (type(_xobj),))
+    _xlk = build.link("upy.browser.xcross", _xobj)
+    if not isinstance(_xlk, tuple) or _xlk[0] != 0:
+        raise SystemExit("cross link %r" % (_xlk,))
+    if build.artifact_call("xcross_magic") != 42:
+        raise SystemExit("cross call magic")
+    if build.artifact_call("xcross_add", 19, 23) != 42:
+        raise SystemExit("cross call add")
+    build.artifact_destroy()
+    _elf_lk = build.link("upy.browser.elfrefuse", b"\x7fELF" + b"\x00" * 64)
+    if not isinstance(_elf_lk, tuple) or _elf_lk[0] == 0:
+        raise SystemExit("elf refuse %r" % (_elf_lk,))
+    print("upy browser cross knob + elf refuse")
+
     # metal.jit.py object loop (browser seat): same card, same faces as the
     # unix seat — µPy compiles Python to mpy bytes and loads them back, all
     # inside the browser cell. No host tool, no fetch: the compiler is in

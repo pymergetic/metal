@@ -101,6 +101,25 @@ $(BUILD)/externals/tcc/libtcc.o: $(TCC_DEPS)
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_EXTMOD) $(INC) -std=gnu11 -Wno-unused-parameter -Wno-sign-compare -Wno-error $(TCC_DEFINES) -c -o $@ $(TCC_DIR)/libtcc.c
 
+# Cross-compile instance (ELF seats): a second libtcc compiled with
+# -DTCC_TARGET_WASM32 and every defined tcc_*/wasm_* symbol renamed to
+# pm_tccw_* (objcopy --redefine-sym; --prefix-symbols would rename the
+# libc imports too and break every strlen/memcpy reference). jit.c's
+# cross path declares the prefixed names by hand — the wasm instance's
+# TCCState layout differs from the native one, so only opaque-pointer
+# calls cross that seam. This is what makes compile_target(wasm32) work
+# on unix: one binary, two backends, no second card (one defining lang).
+ifndef PM_METAL_BROWSER
+PY_O += $(BUILD)/externals/tcc/libtcc_wasm_cross.o
+CFLAGS_EXTMOD += -DPM_METAL_TCC_CROSS_WASM32=1
+
+$(BUILD)/externals/tcc/libtcc_wasm_cross.o: $(TCC_DEPS)
+	mkdir -p $(dir $@)
+	$(CC) -DTCC_TARGET_WASM32 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(abspath $(TCC_DIR))\" $(TCC_DEFINES) $(INC) -std=gnu11 -w -c -o $@.raw $(TCC_DIR)/libtcc.c
+	nm -g --defined-only $@.raw | awk '$$2 ~ /[TDBR]/ {print $$3}' | grep -E '^_?tcc_|^wasm_' | sed 's/.*/--redefine-sym &=pm_tccw_&/' | tr '\n' ' ' > $@.redef
+	objcopy $$(cat $@.redef) $@.raw $@ && rm -f $@.raw $@.redef
+endif
+
 # zenoh-pico's api/macros.h is C11 _Generic; unix µPy defaults to gnu99 and the
 # browser seat forces gnu99 on all card objects, so the zenoh card + core objects
 # are re-upped to gnu11 (last -std wins). The vendored core's benign warnings must

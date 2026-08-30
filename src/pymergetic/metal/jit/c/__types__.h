@@ -57,6 +57,16 @@ int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
     uint8_t **obj_out, size_t *obj_len,
     char *errbuf, size_t errbuf_len);
 
+/* Cross-compile target: which TCC backend produces the object. SEAT is the
+ * backend this binary embeds natively; WASM32 asks for the wasm32 backend
+ * when the seat links a second, symbol-prefixed instance (ELF seats that
+ * enable PM_METAL_TCC_CROSS_WASM32). A seat without the requested backend
+ * refuses with a clear errbuf — never silently falling back. */
+typedef enum pm_metal_jit_c_target {
+    PM_METAL_JIT_C_TARGET_SEAT = 0,
+    PM_METAL_JIT_C_TARGET_WASM32 = 1,
+} pm_metal_jit_c_target_t;
+
 /* compile_opts: the include/define seam the build card drives. include_dirs
  * are added with tcc_add_include_path in order; defines with
  * tcc_define_symbol, where "NAME" defines to 1 and "NAME=VALUE" (split on
@@ -66,6 +76,19 @@ int32_t pm_metal_jit_c_object_compile_opts(pm_util_mem_arena_t *arena,
     const char *source, size_t source_len,
     const char **include_dirs, uint32_t n_include_dirs,
     const char **defines, uint32_t n_defines,
+    uint8_t **obj_out, size_t *obj_len,
+    char *errbuf, size_t errbuf_len);
+
+/* compile_target: compile_opts plus the cross-compile knob. TARGET_SEAT
+ * picks the seat's native backend exactly like compile_opts; TARGET_WASM32
+ * routes to the wasm32 instance (or refuses where none is linked). The
+ * object format follows the backend: ELF ET_REL from the native backend,
+ * a serialized WASM module from wasm32. */
+int32_t pm_metal_jit_c_object_compile_target(pm_util_mem_arena_t *arena,
+    const char *source, size_t source_len,
+    const char **include_dirs, uint32_t n_include_dirs,
+    const char **defines, uint32_t n_defines,
+    int32_t target,
     uint8_t **obj_out, size_t *obj_len,
     char *errbuf, size_t errbuf_len);
 

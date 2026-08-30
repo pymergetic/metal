@@ -64,14 +64,73 @@ static void *pm_metal_jit_c_tcc_arena_realloc(void *ptr, unsigned long size) {
     return pm_util_mem_realloc(s_tcc_arena, ptr, (size_t)size);
 }
 
+#if PM_HAS_TCC && defined(TCC_TARGET_WASM32)
+#define PM_METAL_JIT_C_WASM_PATH 1
+#endif
+#if PM_HAS_TCC && defined(PM_METAL_TCC_CROSS_WASM32)
+#define PM_METAL_JIT_C_WASM_PATH 1
+#endif
+
+#if PM_METAL_JIT_C_WASM_PATH
 #ifdef TCC_TARGET_WASM32
 /* WASM backend: compile and serialize the WASM module via wasm_build_module() */
 int wasm_build_module(uint8_t **out_buf, int *out_len);
 void wasm_release_buffers(void);
+/* thin shims so both wasm-path bodies below read identically: on the
+ * wasm-native seat the instance API is the unprefixed libtcc one */
+static void *wasm_tcc_new(void) { return tcc_new(); }
+static void wasm_tcc_delete(void *s) { tcc_delete((TCCState *)s); }
+static void wasm_tcc_set_lib_path(void *s, const char *p) { tcc_set_lib_path((TCCState *)s, p); }
+static void wasm_tcc_add_library_path(void *s, const char *p) { tcc_add_library_path((TCCState *)s, p); }
+static void wasm_tcc_add_include_path(void *s, const char *p) { tcc_add_include_path((TCCState *)s, p); }
+static void wasm_tcc_set_output_type(void *s, int t) { tcc_set_output_type((TCCState *)s, t); }
+static int wasm_tcc_compile_string(void *s, const char *b) { return tcc_compile_string((TCCState *)s, b); }
+static void wasm_tcc_define_symbol(void *s, const char *sym, const char *val) { tcc_define_symbol((TCCState *)s, sym, val); }
+static void wasm_tcc_set_realloc(void *f) { tcc_set_realloc((TCCReallocFunc *)f); }
+static void wasm_tcc_free(void *p) { tcc_free(p); }
+static int wasm_build_mod(uint8_t **out_buf, int *out_len) { return wasm_build_module(out_buf, out_len); }
+static void wasm_release_bufs(void) { wasm_release_buffers(); }
+#else
+/* Cross-compiled wasm32 instance (ELF seat): same libtcc API, symbol-
+ * prefixed so the two backends coexist in one binary. The wasm instance's
+ * TCCState layout differs from the native one — only opaque-pointer calls
+ * cross this seam. */
+extern void *pm_tccw_tcc_new(void);
+extern void pm_tccw_tcc_delete(void *s);
+extern void pm_tccw_tcc_set_lib_path(void *s, const char *p);
+extern void pm_tccw_tcc_add_library_path(void *s, const char *p);
+extern void pm_tccw_tcc_add_include_path(void *s, const char *p);
+extern void pm_tccw_tcc_set_output_type(void *s, int t);
+extern int pm_tccw_tcc_compile_string(void *s, const char *b);
+extern void pm_tccw_tcc_define_symbol(void *s, const char *sym, const char *val);
+extern void pm_tccw_tcc_set_realloc(void *f);
+extern void pm_tccw_tcc_free(void *ptr);
+extern int pm_tccw_wasm_build_module(uint8_t **out_buf, int *out_len);
+extern void pm_tccw_wasm_release_buffers(void);
+static void *wasm_tcc_new(void) { return pm_tccw_tcc_new(); }
+static void wasm_tcc_delete(void *s) { pm_tccw_tcc_delete(s); }
+static void wasm_tcc_set_lib_path(void *s, const char *p) { pm_tccw_tcc_set_lib_path(s, p); }
+static void wasm_tcc_add_library_path(void *s, const char *p) { pm_tccw_tcc_add_library_path(s, p); }
+static void wasm_tcc_add_include_path(void *s, const char *p) { pm_tccw_tcc_add_include_path(s, p); }
+static void wasm_tcc_set_output_type(void *s, int t) { pm_tccw_tcc_set_output_type(s, t); }
+static int wasm_tcc_compile_string(void *s, const char *b) { return pm_tccw_tcc_compile_string(s, b); }
+static void wasm_tcc_define_symbol(void *s, const char *sym, const char *val) { pm_tccw_tcc_define_symbol(s, sym, val); }
+static void wasm_tcc_set_realloc(void *f) { pm_tccw_tcc_set_realloc(f); }
+static void wasm_tcc_free(void *p) { pm_tccw_tcc_free(p); }
+static int wasm_build_mod(uint8_t **out_buf, int *out_len) { return pm_tccw_wasm_build_module(out_buf, out_len); }
+static void wasm_release_bufs(void) { pm_tccw_wasm_release_buffers(); }
+#endif
 
+/* unused on cross seats' coro face (native_entry is the seat's own backend)
+ * — object_compile_target is the only caller there */
+#if defined(PM_METAL_TCC_CROSS_WASM32) && !defined(TCC_TARGET_WASM32)
+__attribute__((unused))
+#endif
 static int pm_metal_jit_c_tcc_wasm_compile(const char *source,
     uint8_t *wasm_out, size_t wasm_cap, size_t *wasm_len) {
-    TCCState *s;
+    /* opaque on cross seats: the wasm instance's TCCState layout differs
+     * from the native instance's — only the prefixed API touches it */
+    void *s;
     uint8_t *buf = NULL;
     int len = 0;
     /* the coro face carries no arena of its own — the compile's scratch
@@ -80,50 +139,52 @@ static int pm_metal_jit_c_tcc_wasm_compile(const char *source,
     pm_util_mem_arena_t *a = pm_metal_async_arena();
     if (!a) return -1;
     s_tcc_arena = a;
-    tcc_set_realloc(pm_metal_jit_c_tcc_arena_realloc);
-    s = tcc_new();
+    wasm_tcc_set_realloc(pm_metal_jit_c_tcc_arena_realloc);
+    s = wasm_tcc_new();
     if (!s) {
-        tcc_set_realloc(NULL);
+        wasm_tcc_set_realloc(NULL);
         s_tcc_arena = NULL;
         return -1;
     }
-    tcc_set_lib_path(s, PM_METAL_TCC_LIB_DIR);
-    tcc_add_library_path(s, PM_METAL_TCC_LIB_DIR);
-    tcc_set_output_type(s, TCC_OUTPUT_MEMORY);
-    if (tcc_compile_string(s, source) != 0) {
-        tcc_delete(s);
-        wasm_release_buffers();
-        tcc_set_realloc(NULL);
+    wasm_tcc_set_lib_path(s, PM_METAL_TCC_LIB_DIR);
+    wasm_tcc_add_library_path(s, PM_METAL_TCC_LIB_DIR);
+    wasm_tcc_set_output_type(s, TCC_OUTPUT_MEMORY);
+    if (wasm_tcc_compile_string(s, source) != 0) {
+        wasm_tcc_delete(s);
+        wasm_release_bufs();
+        wasm_tcc_set_realloc(NULL);
         s_tcc_arena = NULL;
         return -1;
     }
-    if (wasm_build_module(&buf, &len) != 0 || !buf) {
-        tcc_delete(s);
-        wasm_release_buffers();
-        tcc_set_realloc(NULL);
+    if (wasm_build_mod(&buf, &len) != 0 || !buf) {
+        wasm_tcc_delete(s);
+        wasm_release_bufs();
+        wasm_tcc_set_realloc(NULL);
         s_tcc_arena = NULL;
         return -1;
     }
-    tcc_delete(s);
+    wasm_tcc_delete(s);
     /* copy out while the arena reallocator still owns buf's allocator,
      * then free it under the same window (tcc_free after the restore would
      * be libc free on an arena block) */
     if (len > (int)wasm_cap) {
-        tcc_free(buf);
-        wasm_release_buffers();
-        tcc_set_realloc(NULL);
+        wasm_tcc_free(buf);
+        wasm_release_bufs();
+        wasm_tcc_set_realloc(NULL);
         s_tcc_arena = NULL;
         return -1;
     }
     memcpy(wasm_out, buf, (size_t)len);
     *wasm_len = (size_t)len;
-    tcc_free(buf);
-    wasm_release_buffers();
-    tcc_set_realloc(NULL);
+    wasm_tcc_free(buf);
+    wasm_release_bufs();
+    wasm_tcc_set_realloc(NULL);
     s_tcc_arena = NULL;
     return 0;
 }
-#else
+#endif /* PM_METAL_JIT_C_WASM_PATH */
+
+#if PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
 /* Native (x86_64) backend: compile and relocate. The whole compile stays on
  * the default (libc) reallocator on purpose: tcc_relocate's run image is
  * mprotect'ed RX from the block rt_mem allocates (libc heap semantics), and
@@ -142,11 +203,23 @@ static int pm_metal_jit_c_tcc_native_compile(const char *source, pm_metal_jit_c_
     r->ok = 1;
     return 0;
 }
-#endif /* TCC_TARGET_WASM32 */
-
 #else
+/* wasm32-native seat: the coro face never calls this (its compile_step
+ * drives the wasm path) — present only for link shape */
+__attribute__((unused))
 static int pm_metal_jit_c_tcc_native_compile(const char *source, pm_metal_jit_c_result_t *r) {
     (void)source; (void)r; return -1;
+}
+#endif
+
+#else /* !PM_HAS_TCC */
+static int pm_metal_jit_c_tcc_native_compile(const char *source, pm_metal_jit_c_result_t *r) {
+    (void)source; (void)r; return -1;
+}
+static int pm_metal_jit_c_tcc_wasm_compile(const char *source,
+    uint8_t *wasm_out, size_t wasm_cap, size_t *wasm_len) {
+    (void)source; (void)wasm_out; (void)wasm_cap; (void)wasm_len;
+    return -1;
 }
 #endif /* PM_HAS_TCC */
 
@@ -186,7 +259,7 @@ static void jit_c_obj_err(char *errbuf, size_t errbuf_len, const char *msg) {
     snprintf(errbuf, errbuf_len, "%s", msg);
 }
 
-int32_t pm_metal_jit_c_object_compile_opts(pm_util_mem_arena_t *arena,
+static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     const char *source, size_t source_len,
     const char **include_dirs, uint32_t n_include_dirs,
     const char **defines, uint32_t n_defines,
@@ -304,27 +377,41 @@ int32_t pm_metal_jit_c_object_compile_opts(pm_util_mem_arena_t *arena,
     *obj_len = (size_t)n;
     return 0;
 }
-
-int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
-    const char *source, size_t source_len,
-    uint8_t **obj_out, size_t *obj_len,
-    char *errbuf, size_t errbuf_len) {
-    return pm_metal_jit_c_object_compile_opts(arena, source, source_len,
-        NULL, 0, NULL, 0, obj_out, obj_len, errbuf, errbuf_len);
-}
 #else
-#if PM_HAS_TCC && defined(TCC_TARGET_WASM32)
-/* WASM object path (browser seat): the wasm32 backend serializes the module
- * directly from its code buffer (wasm_build_module), so the "object" is the
- * module itself — the loader instantiates it and the registry publishes its
- * named exports. No temp file: bytes go straight into the arena. */
-int32_t pm_metal_jit_c_object_compile_opts(pm_util_mem_arena_t *arena,
+/* wasm32-native seat: never called (the seat router picks the wasm path) —
+ * present only for the call shape */
+__attribute__((unused))
+static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     const char *source, size_t source_len,
     const char **include_dirs, uint32_t n_include_dirs,
     const char **defines, uint32_t n_defines,
     uint8_t **obj_out, size_t *obj_len,
     char *errbuf, size_t errbuf_len) {
-    TCCState *s;
+    (void)arena; (void)source; (void)source_len;
+    (void)include_dirs; (void)n_include_dirs;
+    (void)defines; (void)n_defines;
+    (void)obj_out; (void)obj_len;
+    if (errbuf != NULL && errbuf_len > 0) {
+        snprintf(errbuf, errbuf_len,
+            "object_compile: no native object output on this seat");
+    }
+    return -1;
+}
+#endif /* PM_HAS_TCC && !TCC_TARGET_WASM32 */
+
+#if PM_METAL_JIT_C_WASM_PATH
+/* WASM object path (wasm32 seats and cross seats): the wasm32 backend
+ * serializes the module directly from its code buffer (wasm_build_module),
+ * so the "object" is the module itself — the loader instantiates it and the
+ * registry publishes its named exports. No temp file: bytes go straight
+ * into the arena. */
+static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
+    const char *source, size_t source_len,
+    const char **include_dirs, uint32_t n_include_dirs,
+    const char **defines, uint32_t n_defines,
+    uint8_t **obj_out, size_t *obj_len,
+    char *errbuf, size_t errbuf_len) {
+    void *s;
     uint8_t *mod = NULL;
     int mod_len = 0;
     uint8_t *buf;
@@ -350,58 +437,58 @@ int32_t pm_metal_jit_c_object_compile_opts(pm_util_mem_arena_t *arena,
     /* the compile's scratch — and wasm32-gen's growable buffers — ride the
      * caller's arena; saved/restored because tcc's reallocator is global */
     s_tcc_arena = arena;
-    tcc_set_realloc(pm_metal_jit_c_tcc_arena_realloc);
-    s = tcc_new();
+    wasm_tcc_set_realloc(pm_metal_jit_c_tcc_arena_realloc);
+    s = wasm_tcc_new();
     if (s == NULL) {
-        tcc_set_realloc(NULL);
+        wasm_tcc_set_realloc(NULL);
         s_tcc_arena = NULL;
         if (errbuf != NULL && errbuf_len > 0) {
             snprintf(errbuf, errbuf_len, "object_compile: tcc_new failed");
         }
         return -1;
     }
-    tcc_set_lib_path(s, PM_METAL_TCC_LIB_DIR);
-    tcc_add_library_path(s, PM_METAL_TCC_LIB_DIR);
-    tcc_set_output_type(s, TCC_OUTPUT_MEMORY);
+    wasm_tcc_set_lib_path(s, PM_METAL_TCC_LIB_DIR);
+    wasm_tcc_add_library_path(s, PM_METAL_TCC_LIB_DIR);
+    wasm_tcc_set_output_type(s, TCC_OUTPUT_MEMORY);
     for (i = 0; i < n_include_dirs; i++) {
         if (include_dirs[i] != NULL && include_dirs[i][0] != '\0') {
-            tcc_add_include_path(s, include_dirs[i]);
+            wasm_tcc_add_include_path(s, include_dirs[i]);
         }
     }
     for (i = 0; i < n_defines; i++) {
         if (defines[i] != NULL && defines[i][0] != '\0') {
-            tcc_define_symbol(s, defines[i], NULL);
+            wasm_tcc_define_symbol(s, defines[i], NULL);
         }
     }
-    if (tcc_compile_string(s, source) != 0) {
-        tcc_delete(s);
-        wasm_release_buffers(); /* partial emission still rode this arena */
-        tcc_set_realloc(NULL);
+    if (wasm_tcc_compile_string(s, source) != 0) {
+        wasm_tcc_delete(s);
+        wasm_release_bufs(); /* partial emission still rode this arena */
+        wasm_tcc_set_realloc(NULL);
         s_tcc_arena = NULL;
         if (errbuf != NULL && errbuf_len > 0) {
             snprintf(errbuf, errbuf_len, "object_compile: tcc compile failed");
         }
         return -1;
     }
-    if (wasm_build_module(&mod, &mod_len) != 0 || mod == NULL || mod_len <= 0) {
+    if (wasm_build_mod(&mod, &mod_len) != 0 || mod == NULL || mod_len <= 0) {
         if (mod != NULL) {
-            tcc_free(mod); /* free under the arena window that allocated it */
+            wasm_tcc_free(mod); /* free under the arena window that allocated it */
         }
-        tcc_delete(s);
-        wasm_release_buffers(); /* same window: their backing is this arena */
-        tcc_set_realloc(NULL);
+        wasm_tcc_delete(s);
+        wasm_release_bufs(); /* same window: their backing is this arena */
+        wasm_tcc_set_realloc(NULL);
         s_tcc_arena = NULL;
         if (errbuf != NULL && errbuf_len > 0) {
             snprintf(errbuf, errbuf_len, "object_compile: wasm serialize failed");
         }
         return -1;
     }
-    tcc_delete(s);
+    wasm_tcc_delete(s);
     buf = (uint8_t *)pm_util_mem_alloc(arena, (size_t)mod_len);
     if (buf == NULL) {
-        tcc_free(mod); /* still inside the arena window */
-        wasm_release_buffers();
-        tcc_set_realloc(NULL);
+        wasm_tcc_free(mod); /* still inside the arena window */
+        wasm_release_bufs();
+        wasm_tcc_set_realloc(NULL);
         s_tcc_arena = NULL;
         if (errbuf != NULL && errbuf_len > 0) {
             snprintf(errbuf, errbuf_len, "object_compile: arena alloc failed");
@@ -409,25 +496,17 @@ int32_t pm_metal_jit_c_object_compile_opts(pm_util_mem_arena_t *arena,
         return -1;
     }
     memcpy(buf, mod, (size_t)mod_len);
-    tcc_free(mod); /* must free before the restore — tcc_free after would be
+    wasm_tcc_free(mod); /* must free before the restore — tcc_free after would be
      * libc free on an arena block */
-    wasm_release_buffers();
-    tcc_set_realloc(NULL);
+    wasm_release_bufs();
+    wasm_tcc_set_realloc(NULL);
     s_tcc_arena = NULL;
     *obj_out = buf;
     *obj_len = (size_t)mod_len;
     return 0;
 }
-
-int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
-    const char *source, size_t source_len,
-    uint8_t **obj_out, size_t *obj_len,
-    char *errbuf, size_t errbuf_len) {
-    return pm_metal_jit_c_object_compile_opts(arena, source, source_len,
-        NULL, 0, NULL, 0, obj_out, obj_len, errbuf, errbuf_len);
-}
 #else
-int32_t pm_metal_jit_c_object_compile_opts(pm_util_mem_arena_t *arena,
+static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
     const char *source, size_t source_len,
     const char **include_dirs, uint32_t n_include_dirs,
     const char **defines, uint32_t n_defines,
@@ -439,9 +518,66 @@ int32_t pm_metal_jit_c_object_compile_opts(pm_util_mem_arena_t *arena,
     (void)obj_out; (void)obj_len;
     if (errbuf != NULL && errbuf_len > 0) {
         snprintf(errbuf, errbuf_len,
-            "object_compile: no native object output on this seat");
+            "object_compile: no wasm32 backend on this seat");
     }
     return -1;
+}
+#endif /* PM_METAL_JIT_C_WASM_PATH */
+
+int32_t pm_metal_jit_c_object_compile_opts(pm_util_mem_arena_t *arena,
+    const char *source, size_t source_len,
+    const char **include_dirs, uint32_t n_include_dirs,
+    const char **defines, uint32_t n_defines,
+    uint8_t **obj_out, size_t *obj_len,
+    char *errbuf, size_t errbuf_len) {
+    /* seat routing, unchanged from before the target knob: the wasm32 seat's
+     * "native" object IS the wasm module. */
+#if defined(TCC_TARGET_WASM32) && PM_HAS_TCC
+    return jit_c_object_compile_wasm(arena, source, source_len,
+        include_dirs, n_include_dirs, defines, n_defines,
+        obj_out, obj_len, errbuf, errbuf_len);
+#else
+    return jit_c_object_compile_native(arena, source, source_len,
+        include_dirs, n_include_dirs, defines, n_defines,
+        obj_out, obj_len, errbuf, errbuf_len);
+#endif
+}
+
+int32_t pm_metal_jit_c_object_compile_target(pm_util_mem_arena_t *arena,
+    const char *source, size_t source_len,
+    const char **include_dirs, uint32_t n_include_dirs,
+    const char **defines, uint32_t n_defines,
+    int32_t target,
+    uint8_t **obj_out, size_t *obj_len,
+    char *errbuf, size_t errbuf_len) {
+    if (target == (int32_t)PM_METAL_JIT_C_TARGET_WASM32) {
+#if PM_METAL_JIT_C_WASM_PATH
+        return jit_c_object_compile_wasm(arena, source, source_len,
+            include_dirs, n_include_dirs, defines, n_defines,
+            obj_out, obj_len, errbuf, errbuf_len);
+#else
+        (void)arena; (void)source; (void)source_len;
+        (void)include_dirs; (void)n_include_dirs;
+        (void)defines; (void)n_defines;
+        (void)obj_out; (void)obj_len;
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len,
+                "object_compile: wasm32 target not available on this seat");
+        }
+        return -1;
+#endif
+    }
+    /* TARGET_SEAT: the native backend this binary embeds. On the wasm32
+     * seat that IS the wasm path — same object, same loader. */
+#if defined(TCC_TARGET_WASM32) && PM_HAS_TCC
+    return jit_c_object_compile_wasm(arena, source, source_len,
+        include_dirs, n_include_dirs, defines, n_defines,
+        obj_out, obj_len, errbuf, errbuf_len);
+#else
+    return jit_c_object_compile_native(arena, source, source_len,
+        include_dirs, n_include_dirs, defines, n_defines,
+        obj_out, obj_len, errbuf, errbuf_len);
+#endif
 }
 
 int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
@@ -451,14 +587,12 @@ int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
     return pm_metal_jit_c_object_compile_opts(arena, source, source_len,
         NULL, 0, NULL, 0, obj_out, obj_len, errbuf, errbuf_len);
 }
-#endif /* PM_HAS_TCC && TCC_TARGET_WASM32 */
-#endif /* PM_HAS_TCC && !TCC_TARGET_WASM32 */
 
 pm_metal_async_status_t pm_metal_jit_c_compile_step(pm_metal_async_coro_t *self) {
     if (!self) return PM_METAL_ASYNC_ERROR;
     pm_metal_jit_c_frame_t *f = (pm_metal_jit_c_frame_t *)self;
     if (!f->source || !f->source_len) return PM_METAL_ASYNC_ERROR;
-#ifdef TCC_TARGET_WASM32
+#if PM_HAS_TCC && defined(TCC_TARGET_WASM32)
     if (pm_metal_jit_c_tcc_wasm_compile(f->source, f->wasmbuf,
         PM_METAL_JIT_C_WASM_CAP, &f->result.wasm_len) != 0) return PM_METAL_ASYNC_ERROR;
     f->result.wasm_bytes = f->wasmbuf;
@@ -500,6 +634,11 @@ PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_object_compile, pm_metal_
 PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_object_compile_opts, pm_metal_jit_c_object_compile_opts,
     int32_t(pm_util_mem_arena_t *, const char *, size_t,
         const char **, uint32_t, const char **, uint32_t,
+        uint8_t **, size_t *, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_object_compile_target, pm_metal_jit_c_object_compile_target,
+    int32_t(pm_util_mem_arena_t *, const char *, size_t,
+        const char **, uint32_t, const char **, uint32_t,
+        int32_t,
         uint8_t **, size_t *, char *, size_t));
 
 PM_METAL_EXTERNAL_C(tcc, "0.9.28rc");

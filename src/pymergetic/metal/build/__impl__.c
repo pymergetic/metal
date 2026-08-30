@@ -21,9 +21,16 @@
 
 /* WASM-seat link path: the loader is RS (loader/__impl__.rs) on every seat,
  * but only the wasm-container seats need it for linking — ELF seats link
- * through the in-tree relocator instead. */
+ * through the in-tree relocator instead. Cross seats (ELF + the second
+ * wasm32 TCC instance) need BOTH routes: link dispatches on the object's
+ * magic (\0asm -> loader, ELF -> relocator), not the seat's build flags. */
 #if PM_HAS_TCC && defined(TCC_TARGET_WASM32) && !defined(PM_METAL_BUILD_HAS_ELF)
 #define PM_METAL_BUILD_WASM_LINK 1
+#include "pymergetic/wasmmod/loader/__exports__.h"
+#endif
+#if PM_HAS_TCC && defined(PM_METAL_TCC_CROSS_WASM32) && defined(PM_METAL_BUILD_HAS_ELF)
+#define PM_METAL_BUILD_WASM_LINK 1
+#define PM_METAL_BUILD_ELF_LINK 1
 #include "pymergetic/wasmmod/loader/__exports__.h"
 #endif
 
@@ -815,6 +822,42 @@ int32_t pm_metal_build_compile_source(pm_util_mem_arena_t *arena,
         ? PM_METAL_BUILD_OK : PM_METAL_BUILD_ERR_COMPILE;
 }
 
+int32_t pm_metal_build_compile_source_target(pm_util_mem_arena_t *arena,
+    const pm_metal_build_unit_t *unit, const char *unit_root, const char *source,
+    int32_t target,
+    uint8_t **obj_out, size_t *obj_len, char *errbuf, size_t errbuf_len) {
+    const char **includes = NULL;
+    uint32_t n_includes = 0;
+    uint32_t i;
+
+    if (arena == NULL || unit == NULL || source == NULL || source[0] == '\0'
+        || obj_out == NULL || obj_len == NULL) {
+        err_set(errbuf, errbuf_len, "compile_source: bad args", 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    if (unit->n_include_dirs > 0) {
+        includes = (const char **)pm_util_mem_alloc(
+            arena, unit->n_include_dirs * sizeof(const char *));
+        if (includes == NULL) {
+            err_set(errbuf, errbuf_len, "compile_source: arena exhausted", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        for (i = 0; i < unit->n_include_dirs; i++) {
+            includes[i] = join_path(arena, unit_root, unit->include_dirs[i]);
+            if (includes[i] == NULL) {
+                err_set(errbuf, errbuf_len, "compile_source: arena exhausted", 0);
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+            n_includes++;
+        }
+    }
+    return pm_metal_jit_c_object_compile_target(arena, source, strlen(source),
+        includes, n_includes, unit->defines, unit->n_defines,
+        target,
+        obj_out, obj_len, errbuf, errbuf_len) == 0
+        ? PM_METAL_BUILD_OK : PM_METAL_BUILD_ERR_COMPILE;
+}
+
 #ifdef PM_METAL_BUILD_HAS_ELF
 #include "pymergetic/wasmmod/pack/format/elf/load.h"
 #endif
@@ -968,17 +1011,18 @@ static void *proc_resolve(const char *name, void *ctx_in) {
 }
 #endif /* PM_METAL_BUILD_HAS_ELF */
 
-int32_t pm_metal_build_link(pm_util_mem_arena_t *arena,
+#if defined(PM_METAL_BUILD_WASM_LINK)
+/* wasm route: each object IS a wasm module (the jit.c wasm32 object path —
+ * wasm-native or cross-compiled). "Linking" = load every module through
+ * the loader, which instantiates it and publishes its named exports into
+ * the registry — the software-defined linker. Cross-module calls resolve
+ * through the registry (connect_import), not through a merged image. */
+static int32_t link_wasm(pm_util_mem_arena_t *arena,
     const pm_metal_build_unit_t *unit, uint8_t **objects, const size_t *lens,
     uint32_t n_objects, pm_metal_build_artifact_t *artifact,
     char *errbuf, size_t errbuf_len) {
-#ifdef PM_METAL_BUILD_WASM_LINK
-    /* wasm-seat link: each object IS a wasm module (the jit.c wasm32 object
-     * path). "Linking" = load every module through the loader, which
-     * instantiates it and publishes its named exports into the registry —
-     * the software-defined linker. Cross-module calls resolve through the
-     * registry (connect_import), not through a merged image. */
     uint32_t i;
+    (void)arena;
     if (arena == NULL || unit == NULL || objects == NULL || lens == NULL
         || n_objects == 0 || artifact == NULL) {
         err_set(errbuf, errbuf_len, "link: bad args", 0);
@@ -1015,7 +1059,14 @@ int32_t pm_metal_build_link(pm_util_mem_arena_t *arena,
         artifact->n_loader_handles++;
     }
     return PM_METAL_BUILD_OK;
-#else
+}
+#endif /* PM_METAL_BUILD_WASM_LINK */
+
+#if defined(PM_METAL_BUILD_HAS_ELF) || defined(PM_METAL_BUILD_ELF_LINK)
+static int32_t link_elf(pm_util_mem_arena_t *arena,
+    const pm_metal_build_unit_t *unit, uint8_t **objects, const size_t *lens,
+    uint32_t n_objects, pm_metal_build_artifact_t *artifact,
+    char *errbuf, size_t errbuf_len) {
 #ifdef PM_METAL_BUILD_HAS_ELF
     mp_wasm_elf_image_t *img = NULL;
     char err[PM_METAL_BUILD_ERR_MAX];
@@ -1061,11 +1112,123 @@ int32_t pm_metal_build_link(pm_util_mem_arena_t *arena,
     err_set(errbuf, errbuf_len, "link: no ELF loader on this seat", 0);
     return PM_METAL_BUILD_ERR_LINK;
 #endif
-#endif /* PM_METAL_BUILD_WASM_LINK */
+}
+#endif /* PM_METAL_BUILD_HAS_ELF || PM_METAL_BUILD_ELF_LINK */
+
+int32_t pm_metal_build_link(pm_util_mem_arena_t *arena,
+    const pm_metal_build_unit_t *unit, uint8_t **objects, const size_t *lens,
+    uint32_t n_objects, pm_metal_build_artifact_t *artifact,
+    char *errbuf, size_t errbuf_len) {
+#if defined(PM_METAL_BUILD_WASM_LINK) && defined(PM_METAL_BUILD_ELF_LINK)
+    /* cross seat: the object's own bytes pick the route — a \0asm module
+     * goes through the loader (registry publishes its exports), an ELF
+     * ET_REL through the relocator. Mixed batches refuse: one artifact,
+     * one target. */
+    uint32_t i;
+    int is_wasm;
+    if (objects == NULL || lens == NULL || n_objects == 0) {
+        err_set(errbuf, errbuf_len, "link: bad args", 0);
+        return PM_METAL_BUILD_ERR_LINK;
+    }
+    is_wasm = (lens[0] >= 4 && objects[0][0] == 0x00 && objects[0][1] == 0x61
+        && objects[0][2] == 0x73 && objects[0][3] == 0x6d);
+    for (i = 1; i < n_objects; i++) {
+        int w = (lens[i] >= 4 && objects[i][0] == 0x00 && objects[i][1] == 0x61
+            && objects[i][2] == 0x73 && objects[i][3] == 0x6d);
+        if (w != is_wasm) {
+            err_set(errbuf, errbuf_len, "link: mixed wasm/ELF objects", 0);
+            return PM_METAL_BUILD_ERR_LINK;
+        }
+    }
+    if (is_wasm) {
+        return link_wasm(arena, unit, objects, lens, n_objects, artifact,
+            errbuf, errbuf_len);
+    }
+    return link_elf(arena, unit, objects, lens, n_objects, artifact,
+        errbuf, errbuf_len);
+#elif defined(PM_METAL_BUILD_WASM_LINK)
+    return link_wasm(arena, unit, objects, lens, n_objects, artifact,
+        errbuf, errbuf_len);
+#elif defined(PM_METAL_BUILD_HAS_ELF)
+    return link_elf(arena, unit, objects, lens, n_objects, artifact,
+        errbuf, errbuf_len);
+#else
+    (void)arena; (void)unit; (void)objects; (void)lens; (void)n_objects;
+    (void)artifact;
+    err_set(errbuf, errbuf_len, "link: no loader on this seat", 0);
+    return PM_METAL_BUILD_ERR_LINK;
+#endif
 }
 
+#if defined(PM_METAL_BUILD_WASM_LINK)
+/* wasm route: the module's exports live in the registry (published by the
+ * loader at link time). Lookup walks the registry's export table for the
+ * unit fqn; the honest handle is the sentinel 1 — calling goes through
+ * pm_wasmmod_registry_call, which owns the wasm trampoline. */
+static void *artifact_lookup_wasm(const pm_metal_build_artifact_t *artifact,
+    const char *name) {
+    if (artifact == NULL || artifact->fqn[0] == '\0' || name == NULL) {
+        return NULL;
+    }
+    {
+        uint32_t n = pm_wasmmod_registry_export_count(
+            (const uint8_t *)artifact->fqn,
+            (uint32_t)strlen(artifact->fqn));
+        uint32_t i;
+        for (i = 0; i < n; i++) {
+            char ename[96];
+            uint32_t elen = sizeof(ename);
+            pm_wasmmod_registry_export_kind_t kind =
+                PM_WASMMOD_REGISTRY_EXPORT_FN;
+            if (pm_wasmmod_registry_export_at(
+                    (const uint8_t *)artifact->fqn,
+                    (uint32_t)strlen(artifact->fqn), i,
+                    (uint8_t *)ename, &elen, &kind, NULL, 0) == 0) {
+                continue;
+            }
+            /* copy_str_to_buf writes exactly elen bytes, no terminator —
+             * a shorter name over a longer leftover would keep its tail
+             * and never compare equal. */
+            if (elen >= sizeof(ename)) {
+                elen = (uint32_t)sizeof(ename) - 1u;
+            }
+            ename[elen] = '\0';
+            if (strcmp(ename, name) == 0) {
+                return (void *)(uintptr_t)1;
+            }
+        }
+        return NULL;
+    }
+}
+#endif
+
+#if defined(PM_METAL_BUILD_HAS_ELF)
+static void *artifact_lookup_elf(const pm_metal_build_artifact_t *artifact,
+    const char *name) {
+    if (artifact == NULL || artifact->bytes == NULL || name == NULL) {
+        return NULL;
+    }
+    return mp_wasm_elf_lookup((const mp_wasm_elf_image_t *)artifact->bytes, name);
+}
+#endif
+
 void pm_metal_build_artifact_destroy(pm_metal_build_artifact_t *artifact) {
-#ifdef PM_METAL_BUILD_WASM_LINK
+#if defined(PM_METAL_BUILD_WASM_LINK) && defined(PM_METAL_BUILD_ELF_LINK)
+    /* cross seat: both release shapes can be live across a session —
+     * release whichever this artifact carries */
+    if (artifact != NULL && artifact->n_loader_handles > 0) {
+        uint32_t i;
+        for (i = 0; i < artifact->n_loader_handles; i++) {
+            (void)pm_wasmmod_loader_unload(artifact->loader_handles[i]);
+        }
+        artifact->n_loader_handles = 0;
+    }
+    if (artifact != NULL && artifact->bytes != NULL) {
+        mp_wasm_elf_image_free((mp_wasm_elf_image_t *)artifact->bytes);
+        artifact->bytes = NULL;
+        artifact->len = 0;
+    }
+#elif defined(PM_METAL_BUILD_WASM_LINK)
     if (artifact != NULL && artifact->n_loader_handles > 0) {
         uint32_t i;
         for (i = 0; i < artifact->n_loader_handles; i++) {
@@ -1086,41 +1249,19 @@ void pm_metal_build_artifact_destroy(pm_metal_build_artifact_t *artifact) {
 
 void *pm_metal_build_artifact_lookup(const pm_metal_build_artifact_t *artifact,
     const char *name) {
-#ifdef PM_METAL_BUILD_WASM_LINK
-    /* wasm seat: the module's exports live in the registry (published by the
-     * loader at link time). Lookup walks the registry's export table for the
-     * unit fqn; the honest handle is the sentinel 1 — calling goes through
-     * pm_wasmmod_registry_call, which owns the wasm trampoline. */
-    if (artifact == NULL || artifact->fqn[0] == '\0' || name == NULL) {
+#if defined(PM_METAL_BUILD_WASM_LINK) && defined(PM_METAL_BUILD_ELF_LINK)
+    if (artifact == NULL || name == NULL) {
         return NULL;
     }
-    {
-        uint32_t n = pm_wasmmod_registry_export_count(
-            (const uint8_t *)artifact->fqn,
-            (uint32_t)strlen(artifact->fqn));
-        uint32_t i;
-        for (i = 0; i < n; i++) {
-            char ename[96];
-            uint32_t elen = sizeof(ename);
-            pm_wasmmod_registry_export_kind_t kind =
-                PM_WASMMOD_REGISTRY_EXPORT_FN;
-            if (pm_wasmmod_registry_export_at(
-                    (const uint8_t *)artifact->fqn,
-                    (uint32_t)strlen(artifact->fqn), i,
-                    (uint8_t *)ename, &elen, &kind, NULL, 0) == 0) {
-                continue;
-            }
-            if (strcmp(ename, name) == 0) {
-                return (void *)(uintptr_t)1;
-            }
-        }
-        return NULL;
+    /* the artifact's own shape picks the route, same as link */
+    if (artifact->is_wasm) {
+        return artifact_lookup_wasm(artifact, name);
     }
+    return artifact_lookup_elf(artifact, name);
+#elif defined(PM_METAL_BUILD_WASM_LINK)
+    return artifact_lookup_wasm(artifact, name);
 #elif defined(PM_METAL_BUILD_HAS_ELF)
-    if (artifact == NULL || artifact->bytes == NULL || name == NULL) {
-        return NULL;
-    }
-    return mp_wasm_elf_lookup((const mp_wasm_elf_image_t *)artifact->bytes, name);
+    return artifact_lookup_elf(artifact, name);
 #else
     (void)artifact; (void)name;
     return NULL;
@@ -1143,6 +1284,82 @@ void *pm_metal_build_artifact_lookup(const pm_metal_build_artifact_t *artifact,
  * wasm seat: the pointer is the sentinel 1 — the honest call path is the
  * registry trampoline (pm_wasmmod_registry_call), which owns the WAMR
  * exec-env plumbing the adapter fns need. */
+#if defined(PM_METAL_BUILD_WASM_LINK)
+static int32_t artifact_call_wasm(const pm_metal_build_artifact_t *artifact,
+    const char *name, const int64_t *args, uint32_t n_args, int64_t *res) {
+    pm_wasmmod_registry_value_t wargs[8];
+    pm_wasmmod_registry_value_t wres;
+    uint32_t i;
+    int32_t st;
+    if (artifact->fqn[0] == '\0') {
+        return -1;
+    }
+    if (pm_metal_build_artifact_lookup(artifact, name) == NULL) {
+        return -2;
+    }
+    /* i32 spine: TCC's wasm32 C lowers int params to wasm i32, and
+     * WAMR packs each arg by the caller-declared kind — an i64-kind
+     * arg would hand an i32 callee two cells and misalign every
+     * parameter after it. The transport widens to i64 only on the
+     * way back (the result union covers both). */
+    for (i = 0; i < n_args; i++) {
+        wargs[i].kind = PM_WASMMOD_REGISTRY_VALKIND_I32;
+        wargs[i].of.i32 = (int32_t)args[i];
+    }
+    wres.kind = PM_WASMMOD_REGISTRY_VALKIND_I32;
+    wres.of.i32 = 0;
+    st = pm_wasmmod_registry_call(
+        (const uint8_t *)artifact->fqn, (uint32_t)strlen(artifact->fqn),
+        (const uint8_t *)name, (uint32_t)strlen(name),
+        &wargs[0], n_args, &wres, 1u);
+    if (st < 0) {
+        return -3;
+    }
+    if (res != NULL) {
+        *res = (int64_t)wres.of.i32;
+    }
+    return 0;
+}
+#endif
+
+#if defined(PM_METAL_BUILD_HAS_ELF)
+static int32_t artifact_call_elf(const pm_metal_build_artifact_t *artifact,
+    const char *name, const int64_t *args, uint32_t n_args, int64_t *res) {
+    void *p = pm_metal_build_artifact_lookup(artifact, name);
+    if (p == NULL) {
+        return -2;
+    }
+    /* one call shape per arity: int64_t(int64_t...) — the honest scalar
+     * spine. Struct returns, variadics and pointers stay C-feed-only
+     * until the bridge grows a type spine of its own. */
+    switch (n_args) {
+    case 0:
+        if (res != NULL) {
+            *res = ((int64_t (*)(void))p)();
+        } else {
+            ((void (*)(void))p)();
+        }
+        return 0;
+    case 1:
+        if (res != NULL) {
+            *res = ((int64_t (*)(int64_t))p)(args[0]);
+        } else {
+            ((void (*)(int64_t))p)(args[0]);
+        }
+        return 0;
+    case 2:
+        if (res != NULL) {
+            *res = ((int64_t (*)(int64_t, int64_t))p)(args[0], args[1]);
+        } else {
+            ((void (*)(int64_t, int64_t))p)(args[0], args[1]);
+        }
+        return 0;
+    default:
+        return -4;
+    }
+}
+#endif
+
 int32_t pm_metal_build_artifact_call(const pm_metal_build_artifact_t *artifact,
     const char *name, const int64_t *args, uint32_t n_args, int64_t *res) {
     if (res != NULL) {
@@ -1151,76 +1368,16 @@ int32_t pm_metal_build_artifact_call(const pm_metal_build_artifact_t *artifact,
     if (artifact == NULL || name == NULL || n_args > 8u) {
         return -1;
     }
-#ifdef PM_METAL_BUILD_WASM_LINK
-    if (artifact->fqn[0] == '\0') {
-        return -1;
+#if defined(PM_METAL_BUILD_WASM_LINK) && defined(PM_METAL_BUILD_ELF_LINK)
+    /* cross seat: the artifact's own shape picks the route, same as link */
+    if (artifact->is_wasm) {
+        return artifact_call_wasm(artifact, name, args, n_args, res);
     }
-    {
-        pm_wasmmod_registry_value_t wargs[8];
-        pm_wasmmod_registry_value_t wres;
-        uint32_t i;
-        int32_t st;
-        if (pm_metal_build_artifact_lookup(artifact, name) == NULL) {
-            return -2;
-        }
-        /* i32 spine: TCC's wasm32 C lowers int params to wasm i32, and
-         * WAMR packs each arg by the caller-declared kind — an i64-kind
-         * arg would hand an i32 callee two cells and misalign every
-         * parameter after it. The transport widens to i64 only on the
-         * way back (the result union covers both). */
-        for (i = 0; i < n_args; i++) {
-            wargs[i].kind = PM_WASMMOD_REGISTRY_VALKIND_I32;
-            wargs[i].of.i32 = (int32_t)args[i];
-        }
-        wres.kind = PM_WASMMOD_REGISTRY_VALKIND_I32;
-        wres.of.i32 = 0;
-        st = pm_wasmmod_registry_call(
-            (const uint8_t *)artifact->fqn, (uint32_t)strlen(artifact->fqn),
-            (const uint8_t *)name, (uint32_t)strlen(name),
-            &wargs[0], n_args, &wres, 1u);
-        if (st < 0) {
-            return -3;
-        }
-        if (res != NULL) {
-            *res = (int64_t)wres.of.i32;
-        }
-        return 0;
-    }
+    return artifact_call_elf(artifact, name, args, n_args, res);
+#elif defined(PM_METAL_BUILD_WASM_LINK)
+    return artifact_call_wasm(artifact, name, args, n_args, res);
 #elif defined(PM_METAL_BUILD_HAS_ELF)
-    {
-        void *p = pm_metal_build_artifact_lookup(artifact, name);
-        if (p == NULL) {
-            return -2;
-        }
-        /* one call shape per arity: int64_t(int64_t...) — the honest scalar
-         * spine. Struct returns, variadics and pointers stay C-feed-only
-         * until the bridge grows a type spine of its own. */
-        switch (n_args) {
-        case 0:
-            if (res != NULL) {
-                *res = ((int64_t (*)(void))p)();
-            } else {
-                ((void (*)(void))p)();
-            }
-            return 0;
-        case 1:
-            if (res != NULL) {
-                *res = ((int64_t (*)(int64_t))p)(args[0]);
-            } else {
-                ((void (*)(int64_t))p)(args[0]);
-            }
-            return 0;
-        case 2:
-            if (res != NULL) {
-                *res = ((int64_t (*)(int64_t, int64_t))p)(args[0], args[1]);
-            } else {
-                ((void (*)(int64_t, int64_t))p)(args[0], args[1]);
-            }
-            return 0;
-        default:
-            return -4;
-        }
-    }
+    return artifact_call_elf(artifact, name, args, n_args, res);
 #else
     (void)args;
     return -5;
@@ -1679,6 +1836,9 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_graph_resolve, pm_metal_b
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_compile_source, pm_metal_build_compile_source,
     int32_t(pm_util_mem_arena_t *, const pm_metal_build_unit_t *, const char *,
         const char *, uint8_t **, size_t *, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_compile_source_target, pm_metal_build_compile_source_target,
+    int32_t(pm_util_mem_arena_t *, const pm_metal_build_unit_t *, const char *,
+        const char *, int32_t, uint8_t **, size_t *, char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_link, pm_metal_build_link,
     int32_t(pm_util_mem_arena_t *, const pm_metal_build_unit_t *, uint8_t **,
         const size_t *, uint32_t, pm_metal_build_artifact_t *, char *, size_t));

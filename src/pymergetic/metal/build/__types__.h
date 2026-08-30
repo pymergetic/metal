@@ -81,6 +81,18 @@ int32_t pm_metal_build_compile_source(pm_util_mem_arena_t *arena,
     const pm_metal_build_unit_t *unit, const char *unit_root, const char *source,
     uint8_t **obj_out, size_t *obj_len, char *errbuf, size_t errbuf_len);
 
+/* compile_source with the cross-compile knob: target selects which TCC
+ * backend makes the object. JIT_C_TARGET_SEAT is exactly compile_source;
+ * JIT_C_TARGET_WASM32 cross-compiles a wasm module on ELF seats that link
+ * the second (prefixed) wasm32 libtcc instance. The object format follows
+ * the target — an ELF ET_REL for the seat, a serialized wasm module for
+ * wasm32 — and the link face accepts either shape (ELF relocator on ELF
+ * seats, loader publish on wasm-capable seats). */
+int32_t pm_metal_build_compile_source_target(pm_util_mem_arena_t *arena,
+    const pm_metal_build_unit_t *unit, const char *unit_root, const char *source,
+    int32_t target,
+    uint8_t **obj_out, size_t *obj_len, char *errbuf, size_t errbuf_len);
+
 /* Link the unit's compiled objects through the in-tree ELF relocator and
  * return the loaded, executable image. artifact->bytes carries the image
  * pointer — release it with pm_metal_build_artifact_destroy. */

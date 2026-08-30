@@ -418,6 +418,31 @@ except Exception:
 build.artifact_destroy()
 print("upy artifact call loop")
 
+# cross-compile: the unix REPL asks jit.c for a wasm32 object (the second,
+# pm_tccw_-prefixed TCC instance), the build card links it through the wasm
+# loader (magic-byte routing, same face), and artifact_call reaches the
+# module's exports through the WAMR trampoline — all from Python, on the
+# ELF seat. TARGET 0 is the seat's own backend (ELF), refused politely
+# where no backend is linked (browser has no ELF relocator).
+_cross_src = (
+    "int cross_magic(void) { return 42; }\n"
+    "int cross_add(int a, int b) { return a + b; }\n"
+)
+_cross_obj = jc.object_compile(_cross_src, target=1)
+if not isinstance(_cross_obj, bytes) or len(_cross_obj) < 8:
+    raise SystemExit("cross object %r" % (type(_cross_obj),))
+if _cross_obj[:4] != b"\x00asm":
+    raise SystemExit("cross object not wasm")
+_lk3 = build.link("upy.cross.wasm", _cross_obj)
+if not isinstance(_lk3, tuple) or _lk3[0] != 0:
+    raise SystemExit("cross link %r" % (_lk3,))
+if build.artifact_call("cross_magic") != 42:
+    raise SystemExit("cross call magic")
+if build.artifact_call("cross_add", 19, 23) != 42:
+    raise SystemExit("cross call add")
+build.artifact_destroy()
+print("upy cross compile wasm loop")
+
 # metal.process memory budget: the REPL caps its own compile scratch and the
 # compile bridges honor it — a small compile still works inside the budget,
 # a compile whose object cannot fit the cap is refused (None), not an abort.

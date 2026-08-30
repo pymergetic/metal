@@ -117,8 +117,10 @@ ZP_CPPFLAGS := -DZENOH_GENERIC -I$(ZENOH_PICO_DIR)/include -I$(ZENOH_PICO_DIR)/s
 include $(CURDIR)/tools/tcc.mk
 TCC_DIR ?= $(CURDIR)/externals/tcc
 TCC_OBJS := $(CURDIR)/build/tcc/libtcc.o
+TCC_CROSS_OBJS := $(CURDIR)/build/tcc/libtcc_wasm_cross.o
 TCC_DEPS := $(addprefix $(TCC_DIR)/,$(TCC_MANIFEST_SRCS))
 CPPFLAGS += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -I$(TCC_DIR) -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
+CPPFLAGS += -DPM_METAL_TCC_CROSS_WASM32=1
 
 # In-tree ELF64 ET_REL relocator (wasmmod) — the build card's multi-object
 # link drives it. Host seat only: the browser cell has no ELF loader
@@ -156,6 +158,15 @@ $(CURDIR)/build/tcc/libtcc.o: $(TCC_DEPS)
 	mkdir -p $(dir $@)
 	$(CC) -std=gnu11 -O1 -g -Wall -Wno-unused-parameter -Wno-sign-compare \
 		-I$(TCC_DIR) -DTCC_TARGET_X86_64 $(TCC_DEFINES) -c -o $@ $(TCC_DIR)/libtcc.c
+
+# cross instance (host seat): wasm32 backend with pm_tccw_-prefixed symbols
+# (objcopy --redefine-sym on defined tcc_*/wasm_* only — --prefix-symbols
+# would rename the libc imports too). See metal.mk's comment for the seam.
+$(TCC_CROSS_OBJS): $(TCC_DEPS)
+	mkdir -p $(dir $@)
+	$(CC) -std=gnu11 -O1 -g -w -I$(TCC_DIR) -DTCC_TARGET_WASM32 $(TCC_DEFINES) -c -o $@.raw $(TCC_DIR)/libtcc.c
+	nm -g --defined-only $@.raw | awk '$$2 ~ /[TDBR]/ {print $$3}' | grep -E '^_?tcc_|^wasm_' | sed 's/.*/--redefine-sym &=pm_tccw_&/' | tr '\n' ' ' > $@.redef
+	objcopy $$(cat $@.redef) $@.raw $@ && rm -f $@.raw $@.redef
 
 # mrustc in-process embed shim: compile the C++ shim that drives mrustc.a
 $(MRUSTC_EMBED_O): $(MRUSTC_EMBED_DIR)/mrustc_embed.cpp $(MRUSTC_EMBED_DIR)/mrustc_embed.h $(MRUSTC_A) $(MRUSTC_COMMON_A)
@@ -206,13 +217,13 @@ $(CURDIR)/build/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-$(OUT): $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+$(OUT): $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(OUT))
-	$(CXX) -o $(OUT) $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+	$(CXX) -o $(OUT) $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
 
-$(BENCH_OUT): $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+$(BENCH_OUT): $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(BENCH_OUT))
-	$(CXX) -o $(BENCH_OUT) $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+	$(CXX) -o $(BENCH_OUT) $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
 
 SELFHOST_FEED_O := $(CURDIR)/build/selfhost_feed.o
 $(SELFHOST_FEED_O): $(CURDIR)/tools/selfhost_feed.c
@@ -222,9 +233,9 @@ $(SELFHOST_FEED_O): $(CURDIR)/tools/selfhost_feed.c
 # SRC_OBJS minus host_test.o (its main) — the feed brings its own main.
 FEED_CARD_OBJS := $(filter-out $(CURDIR)/build/host_test.o,$(SRC_OBJS))
 
-$(SELFHOST_FEED): $(SELFHOST_FEED_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+$(SELFHOST_FEED): $(SELFHOST_FEED_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(SELFHOST_FEED))
-	$(CXX) -o $(SELFHOST_FEED) $(SELFHOST_FEED_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+	$(CXX) -o $(SELFHOST_FEED) $(SELFHOST_FEED_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
 
 selfhost-feed: $(SELFHOST_FEED)
 
@@ -243,10 +254,10 @@ $(SELFHOST_GEN1_O): $(SELFHOST_GEN1_C)
 	@mkdir -p $(dir $(SELFHOST_GEN1_O))
 	$(CC) -std=gnu11 -O0 -g -w $(CPPFLAGS) -c -o $@ $<
 
-$(SELFHOST_SELF): $(SELFHOST_FEED_O) $(SELFHOST_GEN1_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+$(SELFHOST_SELF): $(SELFHOST_FEED_O) $(SELFHOST_GEN1_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(SELFHOST_SELF))
 	$(CXX) -o $(SELFHOST_SELF) $(SELFHOST_FEED_O) $(SELFHOST_GEN1_O) \
-		$(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) \
+		$(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) \
 		$(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
 
 selfhost-self: $(SELFHOST_SELF)
@@ -271,9 +282,9 @@ $(CPPX_FEED_O): $(CURDIR)/tools/cppx_feed.c
 	@mkdir -p $(dir $(CPPX_FEED_O))
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-$(CPPX_FEED): $(CPPX_FEED_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+$(CPPX_FEED): $(CPPX_FEED_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(CPPX_FEED))
-	$(CXX) -o $(CPPX_FEED) $(CPPX_FEED_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+	$(CXX) -o $(CPPX_FEED) $(CPPX_FEED_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
 
 cppx-feed: $(CPPX_FEED)
 
@@ -281,10 +292,10 @@ $(CPPX_GEN1_O): $(CPPX_GEN1_C)
 	@mkdir -p $(dir $(CPPX_GEN1_O))
 	$(CC) -std=gnu11 -O0 -g -w $(CPPFLAGS) -c -o $@ $<
 
-$(CPPX_SELF): $(CPPX_FEED_O) $(CPPX_GEN1_O) $(CPPX_FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+$(CPPX_SELF): $(CPPX_FEED_O) $(CPPX_GEN1_O) $(CPPX_FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(CPPX_SELF))
 	$(CXX) -o $(CPPX_SELF) $(CPPX_FEED_O) $(CPPX_GEN1_O) \
-		$(CPPX_FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) \
+		$(CPPX_FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) \
 		$(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
 
 cppx-self: $(CPPX_SELF)
@@ -346,6 +357,7 @@ upy:
 	grep -q "upy jit cpp rebuild loop" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy artifact call loop" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy process budget loop" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy cross compile wasm loop" $(CURDIR)/build/upy_guest_prove.log
 	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_runner_vm_prove.py
 	python3 $(CURDIR)/upy_cdn_prove_host.py \
 		$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_cdn_prove.py
@@ -388,6 +400,7 @@ browser:
 	grep -q "upy jit cpp rebuild loop" $(CURDIR)/build/browser_prove.log
 	grep -q "upy process budget loop" $(CURDIR)/build/browser_prove.log
 	grep -q "upy wasm build link" $(CURDIR)/build/browser_prove.log
+	grep -q "upy browser cross knob + elf refuse" $(CURDIR)/build/browser_prove.log
 	grep -q "compiled:" $(CURDIR)/build/browser_prove.log
 
 compile-commands:
