@@ -9,8 +9,13 @@
 # other marker printed — a transport hiccup, not a kernel failure. The guest
 # already retries the fetch once in its autoexec (firmware_upy_cdn.py); this
 # wrapper is the host-side second chance for the rare case the whole TCP
-# exchange died. Any OTHER missing marker or a nonzero guest exit fails
-# immediately — only the CDN fetch line is retryable, and only 2 tries.
+# exchange died. The same race class hits boot DHCP: with two user-net NICs
+# SLIRP can flood one (rx hundreds of thousands) so the OFFER/ACK exchange
+# loses — the NIC still boots static with no lease, no gw route, no "gw"
+# banner line. DHCP is asked once at boot with no retransmit, so the re-run
+# is the retry; a server that never answers fails both attempts. Any OTHER
+# missing marker or a nonzero guest exit fails immediately — only these two
+# lines are retryable, and only 2 tries.
 #
 # The exit status of the last QEMU run is passed through (the caller decides
 # what isa-debug-exit code means), except that a retryable CDN flake turns a
@@ -22,6 +27,15 @@ markers=$2
 shift 2
 
 retryable="upy cdn fetch 11"
+
+# "gw <ip>" from the boot net tree: SLIRP boot-DHCP race (see header).
+is_retryable() {
+    case "$1" in
+    "$retryable") return 0 ;;
+    gw\ *) return 0 ;;
+    esac
+    return 1
+}
 
 run_once() {
     # 0 = prove ok, 1 = retryable flake, 2 = hard failure
@@ -39,7 +53,7 @@ run_once() {
         if grep -q "$m" "$serial"; then
             continue
         fi
-        if [ "$m" = "$retryable" ]; then
+        if is_retryable "$m"; then
             echo "serial prove: retryable SLIRP flake (missing: $m)" >&2
             flake=1
             continue

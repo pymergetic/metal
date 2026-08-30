@@ -114,6 +114,10 @@ print("upy pack import")
 # delivers late (rare, UEFI seat) fails the fetch outright; one retry covers
 # it. The retry is the CDN resilience prove, not a mask: a broken CDN (wrong
 # base, no server, 404s) still fails — only the transport hiccup is retried.
+# The hiccup surfaces two ways: ImportError "no pack" when the fetch gives
+# up before a byte lands, and OSError EINVAL from the wasmmod registry when
+# a truncated segment stream still 200s — the trampoline then instantiates
+# half a pack and the call refuses. Both are the same wire race; retry both.
 test_a = None
 for attempt in range(2):
     try:
@@ -124,6 +128,11 @@ for attempt in range(2):
             print("upy cdn fetch err", e)
             raise
         print("upy cdn fetch retry")
+    except OSError as e:
+        if attempt == 1:
+            print("upy cdn fetch err", e)
+            raise
+        print("upy cdn fetch retry (oserr)")
 
 # The loop cannot fall through with None (the second attempt raises on
 # failure), so this gate never fires at runtime — it narrows the imported
