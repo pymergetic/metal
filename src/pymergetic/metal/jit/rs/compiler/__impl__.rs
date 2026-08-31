@@ -17,7 +17,9 @@
 //! variants refused at lowering — C has no sum types), `impl Type` /
 //! `impl Trait for Type`, `extern "C" { fn .. }` blocks, `static`/`const`
 //! (literal initializers), `type` aliases, `fn` with `const`/`unsafe`/
-//! `extern "C"` qualifiers. Refused: generics on items, `trait`/`mod` items,
+//! `extern "C"` qualifiers, `mod name;` / `mod name { .. }` items (module
+//! structure is compile-time — both forms lower to a comment, the inline
+//! body is not lowered). Refused: generics on items, `trait` items,
 //! `macro_rules!`, `async`/`const` blocks, nested items in fn bodies.
 //!
 //! Statements: `let` (ident / `mut ident` / `_`, optional type + init; let-else
@@ -25,10 +27,14 @@
 //! `a..=b`, `return`/`break`/`continue`, expression and assignment statements.
 //!
 //! Expressions: literals (int with suffixes, float, char, byte char/string,
-//! string, raw string), paths, calls, method calls, field access, indexing,
-//! casts, unary `! - * & &mut`, binary ops, ranges, parens, struct literals
+//! string, raw string), paths, calls, method calls, field access, indexing
+//! (incl. range indexes `a[..n]` `a[n..]` `a[n..m]` — the slice stays a
+//! pointer to the start element, the length side is not carried), casts,
+//! unary `! - * & &mut`, binary ops, ranges, parens, struct literals
 //! (`T { f: v }` — `..base` and shorthand refused), block-exprs, `unsafe`
-//! blocks. Closures parse but lowering refuses them.
+//! blocks, `expr?` (Option-of-pointer only, inside a pointer-returning fn —
+//! lowers to a GNU statement expression that early-returns `0`/None).
+//! Closures parse but lowering refuses them.
 //!
 //! Types: `u8..u64` `i8..i64` `usize` `isize` `f32` `f64` `bool` `char`
 //! (`u128`/`i128` have no C type), `*const T` `*mut T` `&T` `&mut T`
@@ -54,7 +60,8 @@
 //! - `match` lowers to an `if`/`else` chain. Supported patterns: literals,
 //!   enum variant paths, `_`, `None`, `Some(bind)` (Option-of-pointer only —
 //!   the bind becomes an inner declaration), `&bind`, or-patterns of
-//!   literals/variants. Guards, ranges, tuple and struct patterns refuse.
+//!   literals/variants, literal range patterns `lo..=hi` (inclusive both
+//!   ends). Guards, open-ended ranges, tuple and struct patterns refuse.
 //! - `for x in a..b` -> C `for` loop; `for` over anything else refuses.
 //! - `static` -> file-scope global (`const` qualified unless `static mut`),
 //!   `const` -> `static const`, `type` -> `typedef`.
@@ -341,6 +348,29 @@ unsafe fn z_eq(p: *const u8, n: usize, z: *const u8) -> bool {
         }
         i += 1;
     }
+}
+
+/* An INDEX node whose index kid is a range (`a[lo..hi]` / `a[..hi]` /
+ * `a[lo..]`): the index is a BINARY with text ".."/"..=". Shared by the
+ * emission, ctype-inference, and unary-& paths. */
+unsafe fn rsx_idx_is_range(e: *const pm_jit_rsx_ast_t) -> bool {
+    if e.is_null() {
+        return false;
+    }
+    if (unsafe { (*e).kind }) != pm_jit_rsx_ast_kind::INDEX {
+        return false;
+    }
+    let kids = unsafe { (*e).kids };
+    if (unsafe { (*e).n_kids }) < 2 {
+        return false;
+    }
+    let idx: *const pm_jit_rsx_ast_t = unsafe { *kids.add(1) };
+    if (unsafe { (*idx).kind }) != pm_jit_rsx_ast_kind::BINARY {
+        return false;
+    }
+    let t = unsafe { (*idx).text };
+    let tl = unsafe { (*idx).text_len };
+    (unsafe { z_eq(t, tl, b"..\0".as_ptr()) }) || (unsafe { z_eq(t, tl, b"..=\0".as_ptr()) })
 }
 
 /* Build "unsupported character 'x'" into out (NUL-terminated). */
@@ -1186,7 +1216,7 @@ impl Lexer {
             let ok2 = c == b'%' || c == b'^' || c == b'!' || c == b'&' || c == b'|';
             let ok3 = c == b'<' || c == b'>' || c == b'=' || c == b'(' || c == b')';
             let ok4 = c == b'[' || c == b']' || c == b'{' || c == b'}' || c == b',';
-            let ok5 = c == b';' || c == b':' || c == b'.' || c == b'#';
+            let ok5 = c == b';' || c == b':' || c == b'.' || c == b'#' || c == b'?';
             if !ok && !ok2 && !ok3 && !ok4 && !ok5 {
                 let mut m = [0u8; 32];
                 unsafe {
@@ -1515,6 +1545,10 @@ struct Parser {
     /* true while parsing a `while`/`if`/`for` condition: a `{` after a path
      * is the body block, never a struct literal. */
     cond_ctx: bool,
+    /* `>>` (SHR) closes up to two open generic lists. When a generic list
+     * eats a SHR token as its own `>`, the second close belongs to the
+     * enclosing list: this counter is how the enclosing loop learns. */
+    shr_closes: u32,
 }
 
 impl Parser {
@@ -1985,13 +2019,38 @@ impl Parser {
                  * position it always does. */
                 self.at += 1;
                 loop {
+                    /* An inner list consumed a SHR token that carried a
+                     * second close for THIS list — done, nothing to eat. */
+                    if self.shr_closes > 0 {
+                        self.shr_closes -= 1;
+                        break;
+                    }
                     if unsafe { self.is_punct(self.at, b'>') } {
                         self.at += 1;
                         break;
                     }
+                    /* `>>` lexes as one SHR: it closes this list and, when
+                     * an outer generic list is open, that one too. Eat the
+                     * token for this list and post the second close on the
+                     * counter the outer loop checks above. */
+                    if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::SHR {
+                        self.at += 1;
+                        self.shr_closes += 1;
+                        break;
+                    }
+                    let before = self.at;
                     let g = unsafe { self.parse_type() };
                     unsafe {
                         kids.add(g, self.arena);
+                    }
+                    if !self.ok {
+                        return core::ptr::null_mut();
+                    }
+                    if self.at == before {
+                        unsafe {
+                            self.err(b"expected '>' in generic list\0".as_ptr());
+                        }
+                        return core::ptr::null_mut();
                     }
                     if unsafe { self.is_punct(self.at, b',') } {
                         self.at += 1;
@@ -2020,6 +2079,89 @@ impl Parser {
 
     /* ---- patterns (match arms, for heads) ---- */
 
+    /* After a literal (or negated literal) pattern atom: `..=`/`..` range
+     * pattern (`b'0'..=b'7'`) and/or `|` or-pattern of literal atoms. The
+     * shapes the lower knows: LITERAL, UNARY(-), PATH "range" [lo, hi],
+     * PATH "or" [alts..]. */
+    unsafe fn parse_pattern_suffix(
+        &mut self,
+        lo: *mut pm_jit_rsx_ast_t,
+        line: u32,
+    ) -> *mut pm_jit_rsx_ast_t {
+        let mut alts = Kids::new();
+        let mut cur = lo;
+        loop {
+            if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::RANGE {
+                self.at += 1;
+                /* open `..x` has no lower bound in this subset — literal
+                 * atoms always carry one, so `.. hi` (from a bare `..`)
+                 * is a prefix range the lower cannot test. Refuse. */
+                let hk = unsafe { self.kind(self.at) };
+                if hk != pm_jit_rsx_tok_kind::INT_LITERAL
+                    && hk != pm_jit_rsx_tok_kind::FLOAT_LITERAL
+                    && hk != pm_jit_rsx_tok_kind::CHAR_LITERAL
+                    && hk != pm_jit_rsx_tok_kind::STRING_LITERAL
+                    && hk != pm_jit_rsx_tok_kind::BYTE_STR_LITERAL
+                    && !(hk == pm_jit_rsx_tok_kind::PUNCT
+                        && unsafe { self.is_punct(self.at, b'-') })
+                {
+                    unsafe {
+                        self.err(b"unsupported: open-ended range pattern\0".as_ptr());
+                    }
+                    return core::ptr::null_mut();
+                }
+                let hi = unsafe { self.parse_pattern() };
+                if !self.ok {
+                    return core::ptr::null_mut();
+                }
+                let mut rk = Kids::new();
+                unsafe {
+                    rk.add(cur, self.arena);
+                    rk.add(hi, self.arena);
+                }
+                cur = unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, b"range\0".as_ptr(), 5) };
+                unsafe {
+                    self.set_kids(cur, &rk);
+                }
+            }
+            unsafe {
+                alts.add(cur, self.arena);
+            }
+            if unsafe { self.is_punct(self.at, b'|') } {
+                self.at += 1;
+                let nxt = unsafe { self.kind(self.at) };
+                if nxt != pm_jit_rsx_tok_kind::INT_LITERAL
+                    && nxt != pm_jit_rsx_tok_kind::FLOAT_LITERAL
+                    && nxt != pm_jit_rsx_tok_kind::CHAR_LITERAL
+                    && nxt != pm_jit_rsx_tok_kind::STRING_LITERAL
+                    && nxt != pm_jit_rsx_tok_kind::BYTE_STR_LITERAL
+                    && !(nxt == pm_jit_rsx_tok_kind::PUNCT
+                        && unsafe { self.is_punct(self.at, b'-') })
+                {
+                    unsafe {
+                        self.err(b"unsupported: or-pattern alternative\0".as_ptr());
+                    }
+                    return core::ptr::null_mut();
+                }
+                cur = unsafe { self.parse_pattern() };
+                if !self.ok {
+                    return core::ptr::null_mut();
+                }
+                continue;
+            }
+            break;
+        }
+        if unsafe { alts.n } == 1 {
+            let one: *mut pm_jit_rsx_ast_t = unsafe { *alts.fixed.as_ptr() };
+            return one;
+        }
+        let n = unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, b"or\0".as_ptr(), 2) };
+        unsafe {
+            self.set_kids(n, &alts);
+        }
+        n
+    }
+
     unsafe fn parse_pattern(&mut self) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
         let k = unsafe { self.kind(self.at) };
@@ -2038,7 +2180,7 @@ impl Parser {
                 )
             };
             self.at += 1;
-            return n;
+            return unsafe { self.parse_pattern_suffix(n, line) };
         }
         if k == pm_jit_rsx_tok_kind::PUNCT && unsafe { self.is_punct(self.at, b'-') } {
             /* negative literal pattern */
@@ -2068,7 +2210,7 @@ impl Parser {
             unsafe {
                 self.set_kids(n, &kids);
             }
-            return n;
+            return unsafe { self.parse_pattern_suffix(n, line) };
         }
         if k == pm_jit_rsx_tok_kind::PUNCT && unsafe { self.is_punct(self.at, b'&') } {
             self.at += 1;
@@ -2096,6 +2238,51 @@ impl Parser {
             let first = unsafe { self.parse_path_expr() };
             unsafe {
                 kids.add(first, self.arena);
+            }
+            /* `Some(bind)` — the lower reads this as PATH kids [Some, bind]
+             * (the bind declared at the arm body top). Only the single-bind
+             * form: `Some((a, b))` and friends are tuple patterns, refused
+             * below as an unsupported pattern form via the inner parse. */
+            if unsafe { self.is_punct(self.at, b'(') } {
+                self.at += 1;
+                let inner = unsafe { self.parse_pattern() };
+                if !self.ok {
+                    return core::ptr::null_mut();
+                }
+                if !unsafe { self.is_punct(self.at, b')') } {
+                    unsafe {
+                        self.err(b"expected ')' in Some(bind) pattern\0".as_ptr());
+                    }
+                    return core::ptr::null_mut();
+                }
+                self.at += 1;
+                /* unwrap the path wrapper: the pattern node's kids are the
+                 * path SEGMENTS (text = Some), then the bind. */
+                let mut segs = Kids::new();
+                if unsafe { (*first).kind } == pm_jit_rsx_ast_kind::PATH {
+                    let fk = unsafe { (*first).kids };
+                    let fkn = unsafe { (*first).n_kids } as usize;
+                    let mut j = 0usize;
+                    while j < fkn {
+                        unsafe {
+                            segs.add(*fk.add(j), self.arena);
+                        }
+                        j += 1;
+                    }
+                }
+                if unsafe { segs.n } == 0 {
+                    unsafe {
+                        segs.add(first, self.arena);
+                    }
+                }
+                unsafe {
+                    segs.add(inner, self.arena);
+                }
+                let n = unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, b"pat\0".as_ptr(), 3) };
+                unsafe {
+                    self.set_kids(n, &segs);
+                }
+                return n;
             }
             if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::PUNCT
                 && unsafe { self.is_punct(self.at, b'|') }
@@ -2679,7 +2866,10 @@ impl Parser {
             }
             if k == pm_jit_rsx_tok_kind::PUNCT && unsafe { self.is_punct(self.at, b'[') } {
                 self.at += 1;
-                let idx = unsafe { self.parse_expr() };
+                /* index or range index: `a[i]`, `a[..n]`, `a[n..]`, `a[n..m]`.
+                 * A range keeps the slice a pointer (start side only —
+                 * rsx slice lengths are not carried, matching `&[T]`). */
+                let idx = unsafe { self.parse_index_body() };
                 if !unsafe { self.is_punct(self.at, b']') } {
                     unsafe {
                         self.err(b"expected ']'\0".as_ptr());
@@ -2711,8 +2901,73 @@ impl Parser {
                 }
                 continue;
             }
+            if k == pm_jit_rsx_tok_kind::PUNCT && unsafe { self.is_punct(self.at, b'?') } {
+                /* `expr?` — Try. UNARY with text "?" (the AST kind table is a
+                 * stable __types__.h contract; a new kind would churn every
+                 * face for one operator). */
+                self.at += 1;
+                let mut kids = Kids::new();
+                unsafe {
+                    kids.add(e, self.arena);
+                }
+                e = unsafe { self.mk(pm_jit_rsx_ast_kind::UNARY, line, b"?\0".as_ptr(), 1) };
+                unsafe {
+                    self.set_kids(e, &kids);
+                }
+                continue;
+            }
             return e;
         }
+    }
+
+    /* Body of an index bracket (the `[` is consumed): either a plain
+     * expression or a range `lo..hi` with either side optional. A missing
+     * side is a TUPLE `()` node — the lowering reads bounds positionally.
+     * Bounds parse at or-expr level so the `..` stays ours to read. */
+    unsafe fn parse_index_body(&mut self) -> *mut pm_jit_rsx_ast_t {
+        let line = unsafe { self.line(self.at) };
+        let has_lo = unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::RANGE;
+        if !has_lo && unsafe { self.is_punct(self.at, b']') } {
+            /* `a[]` is not a range — empty index; refuse at the caller's
+             * expected-expression wall by producing nothing sane. */
+            unsafe {
+                self.err(b"expected index expression\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        let lo = if has_lo {
+            unsafe { self.parse_or_expr() }
+        } else {
+            unsafe { self.mk(pm_jit_rsx_ast_kind::TUPLE, line, b"()\0".as_ptr(), 2) }
+        };
+        if !self.ok || lo.is_null() {
+            return lo;
+        }
+        if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::RANGE {
+            return lo;
+        }
+        let inclusive = unsafe { self.text_len(self.at) } == 3;
+        self.at += 1;
+        let hi = if unsafe { self.is_punct(self.at, b']') } {
+            unsafe { self.mk(pm_jit_rsx_ast_kind::TUPLE, line, b"()\0".as_ptr(), 2) }
+        } else {
+            unsafe { self.parse_or_expr() }
+        };
+        let mut kids = Kids::new();
+        unsafe {
+            kids.add(lo, self.arena);
+            kids.add(hi, self.arena);
+        }
+        let z = if inclusive {
+            b"..=\0".as_ptr()
+        } else {
+            b"..\0".as_ptr()
+        };
+        let n = unsafe { self.mk(pm_jit_rsx_ast_kind::BINARY, line, z, 2) };
+        unsafe {
+            self.set_kids(n, &kids);
+        }
+        n
     }
 
     /* `(` is at self.at; returns a TUPLE node of arg exprs. */
@@ -2919,9 +3174,14 @@ impl Parser {
                 }
                 return n;
             }
-            if unsafe { self.is_punct(self.at, b'|') } || unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::OROR {
+            if unsafe { self.is_punct(self.at, b'|') } {
                 return unsafe { self.parse_closure() };
             }
+        }
+        /* `||` at expression start is an empty-param closure (the logical-or
+         * operator never begins an expression). */
+        if k == pm_jit_rsx_tok_kind::OROR {
+            return unsafe { self.parse_closure() };
         }
         if k == pm_jit_rsx_tok_kind::IDENT {
             if unsafe { self.is_kw(self.at, b"if\0".as_ptr()) } {
@@ -3050,39 +3310,54 @@ impl Parser {
         core::ptr::null_mut()
     }
 
-    /* Closure: |a, b| expr or |a| { .. } (parse; lowering refuses). */
+    /* Closure: `|a, b| expr`, `|a| { .. }`, `|| expr` — and `move |..| ..`
+     * when the caller already consumed the `move`. Params are plain idents
+     * (no patterns/types — the lowering refuses closures anyway, so this is
+     * parse-only structure for honest diagnostics + ast_dump). */
     unsafe fn parse_closure(&mut self) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
         let mut kids = Kids::new();
-        loop {
-            if unsafe { self.is_punct(self.at, b'|') } {
-                self.at += 1;
-                if unsafe { self.is_punct(self.at, b'|') } {
-                    self.at += 1;
-                    break;
-                }
-            }
-            if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::IDENT {
-                unsafe {
-                    self.err(b"expected closure parameter\0".as_ptr());
-                }
-                return core::ptr::null_mut();
-            }
-            let p = unsafe {
-                self.mk(
-                    pm_jit_rsx_ast_kind::PARAM,
-                    line,
-                    self.text(self.at),
-                    self.text_len(self.at),
-                )
-            };
-            unsafe {
-                kids.add(p, self.arena);
-            }
+        /* opening bar (or `||` when the param list is empty — `||` may lex
+         * as one OROR token or two PUNCT bars) */
+        if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::OROR {
             self.at += 1;
-            if unsafe { self.is_punct(self.at, b',') } {
+        } else if unsafe { self.is_punct(self.at, b'|') }
+            && unsafe { self.is_punct(self.at + 1, b'|') }
+        {
+            self.at += 2;
+        } else if unsafe { self.is_punct(self.at, b'|') } {
+            self.at += 1;
+            loop {
+                if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::IDENT {
+                    unsafe {
+                        self.err(b"expected closure parameter\0".as_ptr());
+                    }
+                    return core::ptr::null_mut();
+                }
+                let p = unsafe {
+                    self.mk(
+                        pm_jit_rsx_ast_kind::PARAM,
+                        line,
+                        self.text(self.at),
+                        self.text_len(self.at),
+                    )
+                };
+                unsafe {
+                    kids.add(p, self.arena);
+                }
                 self.at += 1;
-                continue;
+                if unsafe { self.is_punct(self.at, b',') } {
+                    self.at += 1;
+                    continue;
+                }
+                if !unsafe { self.is_punct(self.at, b'|') } {
+                    unsafe {
+                        self.err(b"expected '|' after closure parameters\0".as_ptr());
+                    }
+                    return core::ptr::null_mut();
+                }
+                self.at += 1;
+                break;
             }
         }
         let body = unsafe { self.parse_expr() };
@@ -3128,6 +3403,22 @@ impl Parser {
                 if unsafe { self.kind(self.at + 1) } == pm_jit_rsx_tok_kind::IDENT {
                     self.at += 1;
                     continue;
+                }
+                /* `path::mac!(..)` — the invocation names its path; keep the
+                 * MACRO_INVOC token so the lower refuses expr macros BY
+                 * NAME (never a stranded `::`). */
+                if unsafe { self.kind(self.at + 1) } == pm_jit_rsx_tok_kind::MACRO_INVOC {
+                    self.at += 1;
+                    let m = unsafe {
+                        self.mk(
+                            pm_jit_rsx_ast_kind::MACRO,
+                            line,
+                            self.text(self.at),
+                            self.text_len(self.at),
+                        )
+                    };
+                    self.at += 1;
+                    return m;
                 }
                 break;
             }
@@ -3210,6 +3501,22 @@ impl Parser {
                 }
                 self.at += 1;
             }
+        }
+        /* `path::macro!(..)` — the path names the macro; the MACRO_INVOC
+         * token carries the whole invocation text. Consume it so the lower
+         * can refuse expression macros BY NAME (a bare path parse would
+         * strand the `!` and misreport "expected ';' after let"). */
+        if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::MACRO_INVOC {
+            let m = unsafe {
+                self.mk(
+                    pm_jit_rsx_ast_kind::MACRO,
+                    line,
+                    self.text(self.at),
+                    self.text_len(self.at),
+                )
+            };
+            self.at += 1;
+            return m;
         }
         /* Struct literal `S { f: v, .. }` — only when `{` follows the path
          * outside a condition (there `cond {` is the loop/if body). */
@@ -3715,6 +4022,56 @@ impl Parser {
         }
         self.at += 1;
         unsafe { self.mk(pm_jit_rsx_ast_kind::USE, line, buf.p, buf.len) }
+    }
+
+    /* Module item: `mod name;` (path form, `#[path]`-attributed test mods
+     * included) or `mod name { items }`. The C translation is flat — a
+     * module is compile-time path structure, so both forms lower to a
+     * comment naming the module; the inline body's items would need the
+     * same pass batching as file level, which no in-tree card uses. */
+    unsafe fn parse_mod(&mut self) -> *mut pm_jit_rsx_ast_t {
+        let line = unsafe { self.line(self.at) };
+        self.at += 1;
+        if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::IDENT {
+            unsafe {
+                self.err(b"expected module name\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        let name = unsafe { self.text(self.at) };
+        let name_len = unsafe { self.text_len(self.at) };
+        let n = unsafe { self.mk(pm_jit_rsx_ast_kind::MODULE, line, name, name_len) };
+        self.at += 1;
+        if unsafe { self.is_punct(self.at, b';') } {
+            self.at += 1;
+            return n;
+        }
+        /* `mod name { .. }`: skip the balanced braces. The skipped items are
+         * not lowered — a refusal here would be about code no in-tree card
+         * writes, so the honest shape is a plain comment. */
+        if !unsafe { self.is_punct(self.at, b'{') } {
+            unsafe {
+                self.err(b"expected ';' or '{' after mod name\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        let mut depth = 0usize;
+        while self.at < self.n_toks {
+            if unsafe { self.is_punct(self.at, b'{') } {
+                depth += 1;
+            } else if unsafe { self.is_punct(self.at, b'}') } {
+                depth -= 1;
+                if depth == 0 {
+                    self.at += 1;
+                    return n;
+                }
+            }
+            self.at += 1;
+        }
+        unsafe {
+            self.err(b"unterminated module body\0".as_ptr());
+        }
+        core::ptr::null_mut()
     }
 
     /* Struct: named fields, tuple form, or unit form. */
@@ -4648,6 +5005,14 @@ impl Parser {
                 return unsafe { self.parse_extern_block() };
             }
         }
+        /* `unsafe impl ..` (marker traits like Send/Sync) is an impl — the
+         * unsafe qualifier is inert for the C translation. */
+        if unsafe { self.is_kw(self.at, b"unsafe\0".as_ptr()) }
+            && unsafe { self.is_kw(self.at + 1, b"impl\0".as_ptr()) }
+        {
+            self.at += 1;
+            return unsafe { self.parse_impl(&mut kids) };
+        }
         if unsafe { self.is_kw(self.at, b"static\0".as_ptr()) } {
             return unsafe { self.parse_static(&mut kids, 0) };
         }
@@ -4667,8 +5032,10 @@ impl Parser {
         if unsafe { self.is_kw(self.at, b"impl\0".as_ptr()) } {
             return unsafe { self.parse_impl(&mut kids) };
         }
+        if unsafe { self.is_kw(self.at, b"mod\0".as_ptr()) } {
+            return unsafe { self.parse_mod() };
+        }
         if unsafe { self.is_kw(self.at, b"trait\0".as_ptr()) }
-            || unsafe { self.is_kw(self.at, b"mod\0".as_ptr()) }
             || unsafe { self.is_kw(self.at, b"macro_rules\0".as_ptr()) }
             || unsafe { self.is_kw(self.at, b"async\0".as_ptr()) }
         {
@@ -5152,6 +5519,11 @@ struct Lower {
      * empty when lowering a free fn. */
     recv_type: [u8; 64],
     recv_len: usize,
+    /* C type text of the fn currently being lowered's return — `?` lowers
+     * to an early `return 0` (Option-of-pointer: None == 0), which is only
+     * sound when the fn itself returns a pointer. Empty outside a fn body. */
+    cur_ret: [u8; 128],
+    cur_ret_len: usize,
     /* last-resort scratch when the arena is exhausted: every arena_tmp
      * failure also sets ok=false, so lowering aborts before the reused
      * bytes can matter — this only keeps the NULL deref off the OOM path. */
@@ -6045,6 +6417,17 @@ impl Lower {
                     if bn == 0 {
                         return 0;
                     }
+                    /* `&slice[lo..hi]` is the sub-slice pointer itself —
+                     * no extra indirection over the index's own type. */
+                    let inner = unsafe { *kids.add(0) };
+                    let is_range_idx = unsafe { rsx_idx_is_range(inner) };
+                    if is_range_idx {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(b_buf, out, bn);
+                            *out.add(bn) = 0;
+                        }
+                        return bn;
+                    }
                     let n2 = unsafe { zput(out, cap, 0, b_buf) };
                     if n2 >= cap {
                         return 0;
@@ -6053,6 +6436,18 @@ impl Lower {
                     return if n3 >= cap { 0 } else { n3 };
                 }
                 if unsafe { z_eq(op, op_len, b"-\0".as_ptr()) } {
+                    if bn == 0 {
+                        return 0;
+                    }
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(b_buf, out, bn);
+                        *out.add(bn) = 0;
+                    }
+                    return bn;
+                }
+                if unsafe { z_eq(op, op_len, b"?\0".as_ptr()) } {
+                    /* `expr?` — the Option-of-pointer already maps to the
+                     * inner pointer type, so the try carries it through. */
                     if bn == 0 {
                         return 0;
                     }
@@ -6313,6 +6708,14 @@ impl Lower {
                 return 0;
             }
             let base = unsafe { *kids.add(0) };
+            /* range index `a[lo..hi]`: still a slice pointer of the same
+             * element type — the base type carries over unchanged. */
+            if unsafe { (*e).n_kids } >= 2 {
+                let is_range = unsafe { rsx_idx_is_range(e) };
+                if is_range {
+                    return unsafe { self.expr_ctype(base, out, cap, locals) };
+                }
+            }
             let b_buf = self.arena_tmp();
             let bn = unsafe { self.expr_ctype(base, b_buf, 128, locals) };
             if bn == 0 {
@@ -7662,6 +8065,34 @@ impl Lower {
                 self.out.puts(b") \0".as_ptr());
             }
             self.out.puts(b"{\n\0".as_ptr());
+            /* Some(bind): the scrutinee temp IS the inner pointer; declare
+             * the bind as a const alias so the arm body names it. */
+            if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH {
+                let pk = unsafe { (*pat).kids };
+                let pnk = unsafe { (*pat).n_kids } as usize;
+                if pnk >= 2 {
+                    let head = unsafe { *pk.add(0) };
+                    let bind = unsafe { *pk.add(1) };
+                    if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH
+                        && unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Some\0".as_ptr()) }
+                        && unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
+                        && unsafe { (*bind).n_kids } >= 1
+                    {
+                        let bleaf = unsafe { *(*bind).kids.add(0) };
+                        self.depth += 1;
+                        self.indent();
+                        /* ct already carries the C qualifiers (const for
+                         * &T / *const T); no extra `const` keyword. */
+                        self.out.put(ct, ct_len);
+                        self.out.putc(b' ');
+                        self.out.put(unsafe { (*bleaf).text }, unsafe { (*bleaf).text_len });
+                        self.out.puts(b" = \0".as_ptr());
+                        self.out.put(st, st_len);
+                        self.out.puts(b";\n\0".as_ptr());
+                        self.depth -= 1;
+                    }
+                }
+            }
             self.depth += 1;
             unsafe { self.emit_block_value(body, locals, temp, temp_len) };
             self.depth -= 1;
@@ -7725,6 +8156,30 @@ impl Lower {
                     unsafe { self.emit_pat_test(*kids.add(i), sv, sv_len, locals) };
                     i += 1;
                 }
+                self.out.putc(b')');
+                return;
+            }
+            /* range pattern `lo..=hi` — inclusive both ends. The atoms are
+             * literal nodes; emit their values, not sv tests. */
+            if nk >= 2 && unsafe { z_eq(t, tl, b"range\0".as_ptr()) } {
+                let lo = unsafe { *kids.add(0) };
+                let hi = unsafe { *kids.add(1) };
+                if unsafe { (*lo).kind } != pm_jit_rsx_ast_kind::LITERAL
+                    || unsafe { (*hi).kind } != pm_jit_rsx_ast_kind::LITERAL
+                {
+                    unsafe {
+                        self.err(b"unsupported: range pattern atom\0".as_ptr(), unsafe { (*pat).line });
+                    }
+                    return;
+                }
+                self.out.putc(b'(');
+                self.out.put(sv, sv_len);
+                self.out.puts(b" >= \0".as_ptr());
+                unsafe { self.emit_literal(unsafe { (*lo).text }, unsafe { (*lo).text_len }) };
+                self.out.puts(b" && \0".as_ptr());
+                self.out.put(sv, sv_len);
+                self.out.puts(b" <= \0".as_ptr());
+                unsafe { self.emit_literal(unsafe { (*hi).text }, unsafe { (*hi).text_len }) };
                 self.out.putc(b')');
                 return;
             }
@@ -8421,10 +8876,28 @@ impl Lower {
                 let kids = unsafe { (*e).kids };
                 self.out.putc(b'(');
                 if unsafe { (*e).n_kids } >= 2 {
-                    unsafe { self.emit_expr(*kids.add(0), locals) };
-                    self.out.putc(b'[');
-                    unsafe { self.emit_expr(*kids.add(1), locals) };
-                    self.out.putc(b']');
+                    let idx: *const pm_jit_rsx_ast_t = unsafe { *kids.add(1) };
+                    /* range index `a[lo..hi]` / `a[..hi]` / `a[lo..]`: the
+                     * slice stays a pointer to the start element — `a+lo`.
+                     * The length side is not carried (rsx slices are ptr+len
+                     * pairs by convention, same as `&[T]`). */
+                    let is_range = unsafe { rsx_idx_is_range(e) };
+                    if is_range {
+                        let ik = unsafe { (*idx).kids };
+                        let lo = unsafe { *ik.add(0) };
+                        let lo_empty = unsafe { (*lo).kind } == pm_jit_rsx_ast_kind::TUPLE
+                            && unsafe { (*lo).n_kids } == 0;
+                        unsafe { self.emit_expr(*kids.add(0), locals) };
+                        if !lo_empty {
+                            self.out.puts(b" + \0".as_ptr());
+                            unsafe { self.emit_expr(lo, locals) };
+                        }
+                    } else {
+                        unsafe { self.emit_expr(*kids.add(0), locals) };
+                        self.out.putc(b'[');
+                        unsafe { self.emit_expr(idx, locals) };
+                        self.out.putc(b']');
+                    }
                 }
                 self.out.putc(b')');
             }
@@ -8573,16 +9046,55 @@ impl Lower {
             self.out.putc(b')');
             return;
         }
-        if unsafe { z_eq(op, op_len, b"&\0".as_ptr()) } {
+        if unsafe { z_eq(op, op_len, b"&\0".as_ptr()) }
+            || unsafe { z_eq(op, op_len, b"&mut\0".as_ptr()) }
+        {
+            /* `&slice[lo..hi]` / `&arr[lo..hi]`: the range index already
+             * lowers to the sub-slice pointer — taking its address would be
+             * one indirection too many. Emit the index expr itself. */
+            let inner = unsafe { *kids.add(0) };
+            let is_range_idx = unsafe { rsx_idx_is_range(inner) };
+            if is_range_idx {
+                unsafe { self.emit_expr(inner, locals) };
+                return;
+            }
             self.out.puts(b"(&\0".as_ptr());
-            unsafe { self.emit_expr(*kids.add(0), locals) };
+            unsafe { self.emit_expr(inner, locals) };
             self.out.putc(b')');
             return;
         }
-        if unsafe { z_eq(op, op_len, b"&mut\0".as_ptr()) } {
-            self.out.puts(b"(&\0".as_ptr());
-            unsafe { self.emit_expr(*kids.add(0), locals) };
-            self.out.putc(b')');
+        if unsafe { z_eq(op, op_len, b"?\0".as_ptr()) } {
+            /* `expr?` on an Option-of-pointer: a GNU statement expression
+             * (TCC, the kernel C backend, accepts it) that tests the
+             * pointer and early-returns None (0) for the null case.
+             * Sound only inside a fn whose own return is a pointer (an
+             * Option-of-pointer maps to the inner pointer type). */
+            if self.cur_ret_len == 0 || unsafe { self.cur_ret[self.cur_ret_len - 1] } != b'*' {
+                unsafe {
+                    self.err(
+                        b"unsupported: ? outside a pointer-returning fn\0".as_ptr(),
+                        unsafe { (*e).line },
+                    );
+                }
+                return;
+            }
+            let operand = unsafe { *kids.add(0) };
+            let ct = self.arena_tmp();
+            let ct_len = unsafe { self.expr_ctype(operand, ct, 128, locals) };
+            if ct_len == 0 || ct_len >= 128 || unsafe { *ct.add(ct_len - 1) } != b'*' {
+                unsafe {
+                    self.err(
+                        b"unsupported: ? on a non-pointer Option (payload must be a pointer)\0".as_ptr(),
+                        unsafe { (*e).line },
+                    );
+                }
+                return;
+            }
+            self.out.puts(b"({ \0".as_ptr());
+            self.out.put(ct, ct_len);
+            self.out.puts(b" __rsx_try = (\0".as_ptr());
+            unsafe { self.emit_expr(operand, locals) };
+            self.out.puts(b"); if (__rsx_try == 0) { return 0; } __rsx_try; })\0".as_ptr());
             return;
         }
         unsafe {
@@ -9326,6 +9838,24 @@ impl Lower {
         }
         if declare_only == 0 {
             if !init.is_null() {
+                /* C file-scope initializers must be constant expressions.
+                 * The subset takes literals only — a call/path initializer
+                 * (`= Mutex::new(None)`) has no C constant form, so it
+                 * refuses by name rather than emitting a bogus `static
+                 * const path X = new(None);`. */
+                let mut init_lit = init;
+                if unsafe { (*init_lit).kind } == pm_jit_rsx_ast_kind::UNARY
+                    && unsafe { (*init_lit).n_kids } >= 1
+                {
+                    let inner = unsafe { *(*init_lit).kids.add(0) };
+                    if unsafe { (*inner).kind } == pm_jit_rsx_ast_kind::LITERAL {
+                        init_lit = inner;
+                    }
+                }
+                if unsafe { (*init_lit).kind } != pm_jit_rsx_ast_kind::LITERAL {
+                    self.err(b"unsupported: non-literal static initializer\0".as_ptr(), line);
+                    return;
+                }
                 self.out.puts(b" = \0".as_ptr());
                 let mut locals = LocalTab::new();
                 unsafe { self.emit_expr(init, &mut locals) };
@@ -9541,6 +10071,16 @@ impl Lower {
             self.out.puts(b";\n\0".as_ptr());
             return;
         }
+        /* body lowering from here on: `?` needs the fn's return type to
+         * soundly emit its early `return 0`. */
+        {
+            let mut j = 0usize;
+            while j < ret_len && j < 127 {
+                self.cur_ret[j] = unsafe { *ret_ct.add(j) };
+                j += 1;
+            }
+            self.cur_ret_len = j;
+        }
         self.out.puts(b"{\n\0".as_ptr());
         /* body: the tail expression of a value-returning fn becomes
          * `return expr;` — C has no implicit block value. */
@@ -9636,6 +10176,7 @@ impl Lower {
             }
             self.depth = 0;
         }
+        self.cur_ret_len = 0;
         self.out.puts(b"}\n\0".as_ptr());
         self.out.putc(b'\n');
     }
@@ -10053,6 +10594,7 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_parse(
         },
         ok: true,
         cond_ctx: false,
+        shr_closes: 0,
     };
     let file = unsafe { p.parse_file() };
     if !p.ok || !p.nd.ok || file.is_null() {
@@ -10126,6 +10668,8 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_lower(
         cur_impl_n: 0,
         recv_type: [0; 64],
         recv_len: 0,
+        cur_ret: [0; 128],
+        cur_ret_len: 0,
         oom_buf: [0; 160],
         nerrs: 0,
     };

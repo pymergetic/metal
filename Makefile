@@ -287,6 +287,23 @@ $(KSWEEP): $(KSWEEP_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) 
 ksweep: $(KSWEEP)
 	$(KSWEEP) $(CURDIR)/build/ksweep_report.txt
 
+# rsx-probe: one-card diagnostic (tools/rsx_probe.c) — runs only the
+# jit.rs.compiler tests entry and prints the raw rc per test. tools/
+# posture: not a prove gate, same link shape as ksweep.
+RSX_PROBE := $(CURDIR)/build/rsx_probe
+RSX_PROBE_O := $(CURDIR)/build/rsx_probe.o
+
+$(RSX_PROBE_O): $(CURDIR)/tools/rsx_probe.c
+	@mkdir -p $(dir $(RSX_PROBE_O))
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+$(RSX_PROBE): $(RSX_PROBE_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+	@mkdir -p $(dir $(RSX_PROBE))
+	$(CXX) -o $(RSX_PROBE) $(RSX_PROBE_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+
+rsx-probe: $(RSX_PROBE)
+	$(RSX_PROBE)
+
 # selfhost self: the same feed entrypoint, but the rsx card's code comes from
 # gen-1 C (micro-rustc's own output) instead of the rustc boot build — the
 # self binary of tools/selfhost_cycle.sh stage 2. Every other card stays the

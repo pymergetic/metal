@@ -261,8 +261,8 @@ static int32_t test_parse_unsupported(void) {
     pm_jit_rsx_toklist_t toks;
     pm_jit_rsx_ast_t *unit = NULL;
     char err[PM_METAL_JIT_RSX_ERR_MAX];
-    static const char mod_src[] =
-        "mod inner {\n"
+    static const char trait_src[] =
+        "trait Inner {\n"
         "}\n";
 
     if (backing == NULL) return 60;
@@ -271,7 +271,7 @@ static int32_t test_parse_unsupported(void) {
 
     memset(&toks, 0, sizeof(toks));
     memset(err, 0, sizeof(err));
-    if (pm_metal_jit_rsx_lex(arena, mod_src, strlen(mod_src), &toks, err, sizeof(err)) != 0) {
+    if (pm_metal_jit_rsx_lex(arena, trait_src, strlen(trait_src), &toks, err, sizeof(err)) != 0) {
         pm_util_mem_arena_destroy(arena); free(backing); return 62;
     }
     unit = NULL;
@@ -280,6 +280,41 @@ static int32_t test_parse_unsupported(void) {
     }
     if (strncmp(err, "rsx: unsupported", 16) != 0) {
         pm_util_mem_arena_destroy(arena); free(backing); return 64;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/* parse+lower: `mod` items (path form and inline body) are structure —
+ * the flat C translation records them as a comment, never a refusal. */
+static int32_t test_compile_mod_item(void) {
+    void *backing = malloc(1u << 20);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    static const char src[] =
+        "#[cfg(test)]\n"
+        "#[path = \"__tests__.rs\"]\n"
+        "mod __tests__;\n"
+        "pub mod sink;\n"
+        "pub use sink::{apply_faces, GenSink};\n"
+        "fn pm_mod_probe() -> i32 {\n"
+        "    7\n"
+        "}\n";
+
+    if (backing == NULL) return 70;
+    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    if (arena == NULL) { free(backing); return 71; }
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, src, strlen(src),
+            &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 72;
+    }
+    if (c_out == NULL || c_out_len == 0
+        || strstr(c_out, "pm_mod_probe") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 73;
     }
     pm_util_mem_arena_destroy(arena);
     free(backing);
@@ -349,6 +384,172 @@ static int32_t test_compile_struct(void) {
     }
     if (!rsx_strstr(c_out, "Foo")) {
         pm_util_mem_arena_destroy(arena); free(backing); return 85;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/* compile: match range patterns (lo..=hi), literal or-patterns, and
+ * Some(bind) — the three pattern lifts (each refuses by name before). */
+static int32_t test_compile_match_patterns(void) {
+    void *backing = malloc(1u << 20);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    static const char src[] =
+        "pub fn pm_octal_step(b: u8, val: u64) -> u64 {\n"
+        "    match b {\n"
+        "        b'0'..=b'7' => val * 8 + (b - b'0') as u64,\n"
+        "        b' ' | 0 => val,\n"
+        "        _ => 0,\n"
+        "    }\n"
+        "}\n"
+        "pub fn pm_take(opt: *const u8) -> u64 {\n"
+        "    match opt {\n"
+        "        Some(h) => unsafe { *h as u64 },\n"
+        "        None => 0,\n"
+        "    }\n"
+        "}\n";
+
+    if (backing == NULL) return 96;
+    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    if (arena == NULL) { free(backing); return 97; }
+
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, src, strlen(src),
+                                 &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 98;
+    }
+    if (c_out == NULL || c_out_len == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 99;
+    }
+    if (!rsx_strstr(c_out, ">= '0'") || !rsx_strstr(c_out, "<= '7'")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 100;
+    }
+    if (!rsx_strstr(c_out, "== ' '") || !rsx_strstr(c_out, "__rsx_m == 0")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 101;
+    }
+    /* the Some bind is declared as an alias of the scrutinee temp */
+    if (!rsx_strstr(c_out, "h = __rsx_m")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 102;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/* compile: `expr?` on an Option-of-pointer and range indexes */
+static int32_t test_compile_try_and_range_index(void) {
+    void *backing = malloc(1u << 20);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    static const char src[] =
+        "extern \"C\" {\n"
+        "    fn pm_test_lookup(k: u32) -> *const u8;\n"
+        "}\n"
+        "pub fn pm_test_get(k: u32) -> *const u8 {\n"
+        "    let p = pm_test_lookup(k)?;\n"
+        "    p\n"
+        "}\n"
+        "pub fn pm_test_sub(buf: *const u8, at: usize) -> *const u8 {\n"
+        "    let s = &buf[at..at + 4];\n"
+        "    let t = &buf[..at];\n"
+        "    s\n"
+        "}\n";
+
+    if (backing == NULL) return 130;
+    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    if (arena == NULL) { free(backing); return 131; }
+
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, src, strlen(src),
+                                 &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 132;
+    }
+    if (c_out == NULL || c_out_len == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 133;
+    }
+    /* ? lowers to a statement expression with a null test + early return */
+    if (!rsx_strstr(c_out, "__rsx_try") || !rsx_strstr(c_out, "return 0; } __rsx_try; })")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 134;
+    }
+    /* `&buf[a..b]` lowers to pointer arithmetic, not an address-of */
+    if (!rsx_strstr(c_out, "(buf + at)")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 135;
+    }
+    /* `&buf[..b]` lowers to the base pointer alone */
+    if (!rsx_strstr(c_out, "= (buf)")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 136;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/* parse: nested generic types `A<B<C>>` — the `>>` lexes as one SHR token
+ * and once hung the generic-list loop (the fix splits the close). */
+static int32_t test_parse_nested_generics(void) {
+    void *backing = malloc(1u << 20);
+    pm_util_mem_arena_t *arena;
+    pm_jit_rsx_toklist_t toks;
+    pm_jit_rsx_ast_t *unit = NULL;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    static const char src[] =
+        "pub struct Outer {\n"
+        "    slot: crate::util::lock::Mutex<Option<Inner>>,\n"
+        "}\n"
+        "pub struct Inner {\n"
+        "    n: u32,\n"
+        "}\n";
+
+    if (backing == NULL) return 104;
+    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    if (arena == NULL) { free(backing); return 105; }
+    memset(&toks, 0, sizeof(toks));
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_lex(arena, src, strlen(src), &toks, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 106;
+    }
+    if (pm_metal_jit_rsx_parse(arena, &toks, &unit, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 107;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/* compile: `unsafe impl Marker for Type {}` (marker-trait impl, empty
+ * body) parses and lowers to nothing. */
+static int32_t test_compile_unsafe_impl_marker(void) {
+    void *backing = malloc(1u << 20);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    static const char src[] =
+        "pub struct PyHook {\n"
+        "    f: u32,\n"
+        "}\n"
+        "unsafe impl Send for PyHook {}\n"
+        "pub fn pm_hook_probe() -> i32 {\n"
+        "    1\n"
+        "}\n";
+
+    if (backing == NULL) return 108;
+    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    if (arena == NULL) { free(backing); return 109; }
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, src, strlen(src),
+                                 &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 110;
+    }
+    if (c_out == NULL || c_out_len == 0
+        || !rsx_strstr(c_out, "pm_hook_probe")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 111;
     }
     pm_util_mem_arena_destroy(arena);
     free(backing);
@@ -799,24 +1000,39 @@ static int32_t test_introspection(void) {
 
 /* --- registration ------------------------------------------------------ */
 
+/* RSX_TEST_VERBOSE=1 prints one line per subtest with its rc, so a FAIL from
+ * the registry entry can be attributed without re-running under a debugger. */
+static int32_t rsx_run_named(const char *name, int32_t (*fn)(void)) {
+    int32_t rc = fn();
+    if (getenv("RSX_TEST_VERBOSE") != NULL) {
+        fprintf(stderr, "rsx subtest %-28s rc=%d\n", name, rc);
+    }
+    return rc;
+}
+
 static int32_t pm_metal_jit_rsx_tests(void) {
     int32_t rc;
-    rc = test_lex_minimal();      if (rc) return rc;
-    rc = test_lex_macro();        if (rc) return rc;
-    rc = test_lex_errors();       if (rc) return rc;
-    rc = test_parse_minimal();    if (rc) return rc;
-    rc = test_parse_struct();     if (rc) return rc;
-    rc = test_parse_fn();         if (rc) return rc;
-    rc = test_parse_unsupported(); if (rc) return rc;
-    rc = test_compile_minimal_fn(); if (rc) return rc;
-    rc = test_compile_struct();   if (rc) return rc;
-    rc = test_compile_fn_body();  if (rc) return rc;
-    rc = test_compile_provenance(); if (rc) return rc;
-    rc = test_ast_dump();         if (rc) return rc;
-    rc = test_self_host();       if (rc) return rc;
-    rc = test_self_host_object(); if (rc) return rc;
-    rc = test_self_host_link();  if (rc) return rc;
-    rc = test_introspection();    if (rc) return rc;
+    rc = rsx_run_named("lex_minimal", test_lex_minimal);           if (rc) return rc;
+    rc = rsx_run_named("lex_macro", test_lex_macro);               if (rc) return rc;
+    rc = rsx_run_named("lex_errors", test_lex_errors);             if (rc) return rc;
+    rc = rsx_run_named("parse_minimal", test_parse_minimal);       if (rc) return rc;
+    rc = rsx_run_named("parse_struct", test_parse_struct);         if (rc) return rc;
+    rc = rsx_run_named("parse_fn", test_parse_fn);                 if (rc) return rc;
+    rc = rsx_run_named("parse_unsupported", test_parse_unsupported); if (rc) return rc;
+    rc = rsx_run_named("compile_mod_item", test_compile_mod_item); if (rc) return rc;
+    rc = rsx_run_named("compile_match_patterns", test_compile_match_patterns); if (rc) return rc;
+    rc = rsx_run_named("compile_try_and_range_index", test_compile_try_and_range_index); if (rc) return rc;
+    rc = rsx_run_named("parse_nested_generics", test_parse_nested_generics); if (rc) return rc;
+    rc = rsx_run_named("compile_unsafe_impl_marker", test_compile_unsafe_impl_marker); if (rc) return rc;
+    rc = rsx_run_named("compile_minimal_fn", test_compile_minimal_fn); if (rc) return rc;
+    rc = rsx_run_named("compile_struct", test_compile_struct);     if (rc) return rc;
+    rc = rsx_run_named("compile_fn_body", test_compile_fn_body);   if (rc) return rc;
+    rc = rsx_run_named("compile_provenance", test_compile_provenance); if (rc) return rc;
+    rc = rsx_run_named("ast_dump", test_ast_dump);                 if (rc) return rc;
+    rc = rsx_run_named("self_host", test_self_host);               if (rc) return rc;
+    rc = rsx_run_named("self_host_object", test_self_host_object); if (rc) return rc;
+    rc = rsx_run_named("self_host_link", test_self_host_link);    if (rc) return rc;
+    rc = rsx_run_named("introspection", test_introspection);      if (rc) return rc;
     return 0;
 }
 
