@@ -1,4 +1,6 @@
-# inspect/src_embed.inc.h — each card's C/Rust muscle source as bytes.
+# inspect/src_embed.inc.h — each card's authored muscle source as bytes
+# (.c/.rs muscle for C/RS cards, .py files for PY cards — the build card
+# compiles the py muscle to mpy bytecode in-kernel).
 #
 # Include from every seat that compiles inspect (host Makefile, metal.mk,
 # fw_cards.mk), exactly like tools/www.mk. Generation runs at parse time so the

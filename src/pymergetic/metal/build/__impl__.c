@@ -14,6 +14,14 @@
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
 
+/* Transpiler cards for the non-C impls: rs -> C (micro-rustc), cpp -> C,
+ * py -> mpy bytecode. Plain link-time faces, same posture as jit.c's
+ * object_compile_opts. The py face refuses politely on seats without
+ * MICROPY_PERSISTENT_CODE_SAVE — the py branch reports that refusal. */
+#include "pymergetic/metal/jit/rs/compiler/__types__.h"
+#include "pymergetic/metal/jit/cpp/__types__.h"
+#include "pymergetic/metal/jit/py/__types__.h"
+
 #include "pymergetic/metal/inspect/src_embed.inc.h"
 
 #include "pymergetic/wasmmod/registry.h"
@@ -1257,6 +1265,13 @@ static void *artifact_lookup_elf(const pm_metal_build_artifact_t *artifact,
 #endif
 
 void pm_metal_build_artifact_destroy(pm_metal_build_artifact_t *artifact) {
+    /* impl = py artifacts carry arena-owned mpy bytes, not a linked image —
+     * every free path below assumes a native image, so py stops here. */
+    if (artifact != NULL && artifact->is_mpy) {
+        artifact->bytes = NULL;
+        artifact->len = 0;
+        return;
+    }
 #if defined(PM_METAL_BUILD_WASM_LINK) && defined(PM_METAL_BUILD_ELF_LINK)
     /* cross seat: both release shapes can be live across a session —
      * release whichever this artifact carries */
@@ -1492,6 +1507,118 @@ int32_t pm_metal_build_discover(pm_util_mem_arena_t *arena,
     return PM_METAL_BUILD_OK;
 }
 
+/* One unit source to a TCC object, dispatching on the file extension:
+ * .rs -> micro-rustc -> C -> TCC; .cpp/.cxx/.cc -> cpp lower -> C -> TCC;
+ * .c direct; .h is not a TU (skipped, not an object). Refusals carry the
+ * transpiler's own diagnostics (rsx names the construct + line). */
+static int32_t unit_source_compile(pm_util_mem_arena_t *arena,
+    const char *rel, const char *src,
+    const char **includes, uint32_t n_includes,
+    const char **defines, uint32_t n_defines,
+    uint8_t **obj_out, size_t *obj_len,
+    char *errbuf, size_t errbuf_len) {
+    const char *dot = rel != NULL ? strrchr(rel, '.') : NULL;
+    const char *csrc = src;
+    char *transpiled = NULL;
+    size_t transpiled_len = 0;
+
+    if (dot != NULL) {
+        if (strcmp(dot, ".rs") == 0) {
+            if (pm_metal_jit_rsx_compile(arena, src, strlen(src),
+                    &transpiled, &transpiled_len, errbuf, errbuf_len) != 0) {
+                return PM_METAL_BUILD_ERR_COMPILE;
+            }
+            csrc = transpiled;
+        } else if (strcmp(dot, ".cpp") == 0 || strcmp(dot, ".cxx") == 0
+            || strcmp(dot, ".cc") == 0) {
+            pm_jit_cpp_toklist_t toks;
+            pm_jit_cpp_ast_t *ast = NULL;
+            if (pm_metal_jit_cpp_lex(arena, src, strlen(src), &toks,
+                    errbuf, errbuf_len) != 0) {
+                return PM_METAL_BUILD_ERR_COMPILE;
+            }
+            if (pm_metal_jit_cpp_parse(arena, &toks, &ast,
+                    errbuf, errbuf_len) != 0) {
+                return PM_METAL_BUILD_ERR_COMPILE;
+            }
+            if (pm_metal_jit_cpp_lower(arena, ast, &transpiled, &transpiled_len,
+                    errbuf, errbuf_len) != 0) {
+                return PM_METAL_BUILD_ERR_COMPILE;
+            }
+            csrc = transpiled;
+        }
+    }
+    if (pm_metal_jit_c_object_compile_opts(arena, csrc, strlen(csrc),
+            includes, n_includes, defines, n_defines,
+            obj_out, obj_len, errbuf, errbuf_len) != 0) {
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    return PM_METAL_BUILD_OK;
+}
+
+/* impl = py: Python source -> mpy bytecode (the µPy compiler in-process).
+ * The product is bytecode, not a native image — artifact->bytes carries
+ * the FIRST source's mpy (loadable via jit.py's object_load), later
+ * sources' mpy lengths ride the record like object lengths. Seats
+ * without MICROPY_PERSISTENT_CODE_SAVE refuse politely; that refusal is
+ * reported, not papered over. */
+static int32_t unit_compile_py(pm_util_mem_arena_t *arena,
+    const pm_metal_build_unit_t *unit, pm_metal_build_artifact_t *artifact,
+    char *errbuf, size_t errbuf_len) {
+    const pm_metal_src_card_t *c = pm_metal_src_find(unit->fqn);
+    uint32_t obj_i;
+    pm_metal_build_record_t *rec;
+
+    if (c == NULL) {
+        err_set(errbuf, errbuf_len, "unit_compile: card not in embed", 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    memset(artifact, 0, sizeof(*artifact));
+    snprintf(artifact->fqn, sizeof(artifact->fqn), "%s", unit->fqn);
+    artifact->is_mpy = 1;
+    for (obj_i = 0; obj_i < unit->n_sources; obj_i++) {
+        const char *src = NULL;
+        uint8_t *mpy = NULL;
+        size_t mpy_len = 0;
+        uint32_t f;
+        const char *dot = strrchr(unit->sources[obj_i], '.');
+        if (dot != NULL && strcmp(dot, ".py") != 0) {
+            continue;  /* a non-py file beside the muscle is not a TU here */
+        }
+        for (f = 0; f < c->nfiles; f++) {
+            if (strcmp(c->files[f].rel, unit->sources[obj_i]) == 0) {
+                src = (const char *)c->files[f].data;
+                break;
+            }
+        }
+        if (src == NULL) {
+            err_set(errbuf, errbuf_len, "unit_compile: source not in embed", 0);
+            return PM_METAL_BUILD_ERR_COMPILE;
+        }
+        if (pm_metal_jit_py_object_compile(arena, src, strlen(src),
+                unit->fqn, &mpy, &mpy_len, errbuf, errbuf_len) != 0) {
+            return PM_METAL_BUILD_ERR_COMPILE;
+        }
+        if (artifact->bytes == NULL) {
+            artifact->bytes = mpy;
+            artifact->len = mpy_len;
+        }
+        /* record the mpy lengths like object lengths (audit trail) */
+        rec = record_slot_acquire(unit->fqn);
+        if (rec != NULL && rec->n_sources < PM_METAL_BUILD_MAX_OBJS) {
+            snprintf(rec->src_paths[rec->n_sources], PM_METAL_BUILD_MAX_SRC_PATH,
+                "%s", unit->sources[obj_i]);
+            rec->obj_lens[rec->n_sources] = (uint32_t)mpy_len;
+            rec->n_sources++;
+        }
+    }
+    if (artifact->bytes == NULL) {
+        err_set(errbuf, errbuf_len, "unit_compile: no py source produced mpy", 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    return PM_METAL_BUILD_OK;
+}
+
 int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
     const pm_metal_build_unit_t *unit, const char *unit_root,
     const char **include_dirs, uint32_t n_include_dirs,
@@ -1500,10 +1627,12 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
     char *errbuf, size_t errbuf_len) {
     uint8_t **objs;
     size_t *lens;
+    const char **compiled_srcs;
     const char **all_includes = NULL;
     uint32_t n_all_includes = 0;
     uint32_t i;
     uint32_t obj_i;
+    uint32_t n_objs = 0;
     int32_t rc;
     pm_metal_build_record_t *rec = NULL;
 
@@ -1511,9 +1640,10 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
         err_set(errbuf, errbuf_len, "unit_compile: bad args", 0);
         return PM_METAL_BUILD_ERR_COMPILE;
     }
-    if (strcmp(unit->impl, "c") != 0) {
+    if (strcmp(unit->impl, "c") != 0 && strcmp(unit->impl, "rs") != 0
+        && strcmp(unit->impl, "cpp") != 0 && strcmp(unit->impl, "py") != 0) {
         char msg[96];
-        snprintf(msg, sizeof(msg), "not yet buildable: impl=%s", unit->impl);
+        snprintf(msg, sizeof(msg), "unknown impl=%s", unit->impl);
         err_set(errbuf, errbuf_len, msg, 0);
         return PM_METAL_BUILD_ERR_COMPILE;
     }
@@ -1521,10 +1651,19 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
         err_set(errbuf, errbuf_len, "unit_compile: no sources", 0);
         return PM_METAL_BUILD_ERR_COMPILE;
     }
+    /* impl = py: Python -> mpy bytecode, no native link (the module's
+     * product is loadable bytecode; lookup/call are not applicable). */
+    if (strcmp(unit->impl, "py") == 0) {
+        return unit_compile_py(arena, unit, artifact, errbuf, errbuf_len);
+    }
+    /* impl = rs / cpp / c: every source lands in C (rs and cpp transpile
+     * first), then TCC objects, then the native link. */
     objs = (uint8_t **)pm_util_mem_alloc(
         arena, unit->n_sources * sizeof(uint8_t *));
     lens = (size_t *)pm_util_mem_alloc(arena, unit->n_sources * sizeof(size_t));
-    if (objs == NULL || lens == NULL) {
+    compiled_srcs = (const char **)pm_util_mem_alloc(
+        arena, unit->n_sources * sizeof(const char *));
+    if (objs == NULL || lens == NULL || compiled_srcs == NULL) {
         err_set(errbuf, errbuf_len, "unit_compile: arena exhausted", 0);
         return PM_METAL_BUILD_ERR_NOMEM;
     }
@@ -1580,6 +1719,7 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
         for (obj_i = 0; obj_i < unit->n_sources; obj_i++) {
             const pm_metal_src_card_t *c = pm_metal_src_find(unit->fqn);
             const char *src = NULL;
+            const char *dot;
             if (c != NULL) {
                 uint32_t f;
                 for (f = 0; f < c->nfiles; f++) {
@@ -1593,15 +1733,26 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
                 err_set(errbuf, errbuf_len, "unit_compile: source not in embed", 0);
                 return PM_METAL_BUILD_ERR_COMPILE;
             }
-            if (pm_metal_jit_c_object_compile_opts(arena, src, strlen(src),
+            dot = strrchr(unit->sources[obj_i], '.');
+            if (dot != NULL && strcmp(dot, ".h") == 0) {
+                continue;  /* headers ride the include path, never a TU */
+            }
+            if (unit_source_compile(arena, unit->sources[obj_i], src,
                 all_includes, n_all_includes, all_defines, n_all_defines,
-                &objs[obj_i], &lens[obj_i], errbuf, errbuf_len) != 0) {
+                &objs[n_objs], &lens[n_objs], errbuf, errbuf_len)
+                    != PM_METAL_BUILD_OK) {
                 return PM_METAL_BUILD_ERR_COMPILE;
             }
+            compiled_srcs[n_objs] = unit->sources[obj_i];
+            n_objs++;
+        }
+        if (n_objs == 0) {
+            err_set(errbuf, errbuf_len, "unit_compile: no compilable sources", 0);
+            return PM_METAL_BUILD_ERR_COMPILE;
         }
     }
 
-    rc = pm_metal_build_link(arena, unit, objs, lens, unit->n_sources,
+    rc = pm_metal_build_link(arena, unit, objs, lens, n_objs,
         artifact, errbuf, errbuf_len);
     if (rc != PM_METAL_BUILD_OK) {
         return rc;
@@ -1612,13 +1763,13 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
      * build (the artifact is the product; the record is the audit trail). */
     rec = record_slot_acquire(unit->fqn);
     if (rec != NULL) {
-        uint32_t cap = unit->n_sources;
+        uint32_t cap = n_objs;
         if (cap > PM_METAL_BUILD_MAX_OBJS) {
             cap = PM_METAL_BUILD_MAX_OBJS;
         }
         for (i = 0; i < cap; i++) {
             snprintf(rec->src_paths[i], PM_METAL_BUILD_MAX_SRC_PATH, "%s",
-                unit->sources[i]);
+                compiled_srcs[i]);
             rec->obj_lens[i] = (uint32_t)lens[i];
         }
         rec->n_sources = cap;

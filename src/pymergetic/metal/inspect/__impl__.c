@@ -1565,16 +1565,15 @@ static void ib_row(js_t *j, const pm_metal_build_unit_t *u) {
     js_raw(j, ",\"n_sources\":");
     js_u32(j, u->n_sources);
     js_raw(j, ",\"buildable\":");
-    js_ch(j, strcmp(u->impl, "c") == 0
-        && u->n_sources <= PM_METAL_BUILD_MAX_OBJS ? '1' : '0');
+    js_ch(j, u->n_sources <= PM_METAL_BUILD_MAX_OBJS ? '1' : '0');
     js_raw(j, ",\"built\":");
     js_ch(j, rec != NULL ? '1' : '0');
     js_ch(j, '}');
 }
 
 /* GET /build — the tree index: every discovered unit, its impl, and
- * whether the in-kernel chain can build it (impl=c is the whole chain;
- * rs/py/cpp cards are reported honestly as not buildable yet). */
+ * whether the in-kernel chain can build it (c/rs/cpp/py all ride the
+ * chain now: rs -> micro-rustc -> C, cpp -> lower -> C, py -> mpy). */
 static int32_t build_index_http(const char *method, const char *path,
     char *out, uint32_t out_max, uint32_t *out_len) {
     js_t j;
@@ -1731,8 +1730,17 @@ static int32_t build_rebuild_http(const char *method, const char *path,
             break;
         }
     }
-    if (u == NULL || strcmp(u->impl, "c") != 0
-        || u->n_sources > PM_METAL_BUILD_MAX_OBJS) {
+    if (u == NULL) {
+        snprintf(err, sizeof(err), "unit not discovered: %.130s", fqnbuf);
+        goto fail;
+    }
+    if (u->n_sources > PM_METAL_BUILD_MAX_OBJS) {
+        snprintf(err, sizeof(err), "too many sources: %.130s", fqnbuf);
+        goto fail;
+    }
+    if (strcmp(u->impl, "c") != 0 && strcmp(u->impl, "rs") != 0
+        && strcmp(u->impl, "cpp") != 0 && strcmp(u->impl, "py") != 0) {
+        snprintf(err, sizeof(err), "unsupported impl=%.130s", u->impl);
         goto fail;
     }
     if (ib_fill(includes, &n_inc, defines, &n_def) != 0) {

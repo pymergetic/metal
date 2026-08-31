@@ -407,6 +407,7 @@ upy:
 	grep -q "upy process budget loop" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy cross compile wasm loop" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy types value loop" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy build py unit_compile" $(CURDIR)/build/upy_guest_prove.log
 	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_runner_vm_prove.py
 	python3 $(CURDIR)/upy_cdn_prove_host.py \
 		$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_cdn_prove.py

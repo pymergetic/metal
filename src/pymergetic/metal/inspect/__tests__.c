@@ -341,7 +341,8 @@ static int32_t case_build_face(void) {
         || strstr(body, "\"fqn\":\"pymergetic.metal.jit.c\"") == NULL
         || strstr(body, "\"impl\":\"c\"") == NULL
         || strstr(body, "\"buildable\":1") == NULL
-        || strstr(body, "\"buildable\":0") == NULL) {
+        /* the rs cards ride the chain now too (micro-rustc -> C -> TCC) */
+        || strstr(body, "\"impl\":\"rs\"") == NULL) {
         return fail("build index body");
     }
     /* rebuild a small real card through the whole chain */

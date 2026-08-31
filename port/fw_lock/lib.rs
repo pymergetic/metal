@@ -198,3 +198,10 @@ pub mod wasmmod;
 
 #[path = "../../src/pymergetic/metal/net/http/asgi/__impl__.rs"]
 mod asgi;
+
+/* micro-rustc joins the same cards: the build card's impl=rs dispatch
+ * (rs -> C -> TCC -> link) needs pm_metal_jit_rsx_compile on this seat,
+ * and the card is the one defining lang for it — same __impl__.rs as
+ * cargo, no twin. */
+#[path = "../../src/pymergetic/metal/jit/rs/compiler/__impl__.rs"]
+mod rs_compiler;

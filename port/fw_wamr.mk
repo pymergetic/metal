@@ -58,7 +58,8 @@ $(BUILD)/libfw_lock.a: $(PORT_DIR)/fw_lock/lib.rs \
 		$(WASMMOD)/src/pymergetic/wasmmod/registry/__impl__.rs \
 		$(WASMMOD)/src/pymergetic/wasmmod/loader/__impl__.rs \
 		$(WASMMOD)/src/pymergetic/wasmmod/api/__impl__.rs \
-		$(METAL_SRC)/pymergetic/metal/net/http/asgi/__impl__.rs | $(BUILD)
+		$(METAL_SRC)/pymergetic/metal/net/http/asgi/__impl__.rs \
+		$(METAL_SRC)/pymergetic/metal/jit/rs/compiler/__impl__.rs | $(BUILD)
 	$(RUSTC) --edition 2024 --crate-type staticlib --crate-name fw_lock \
 		--target $(FW_RUSTC_TARGET) -C panic=abort -C opt-level=s \
 		$(FW_RUSTC_REDZONE) $(FW_RUSTC_CPU) \

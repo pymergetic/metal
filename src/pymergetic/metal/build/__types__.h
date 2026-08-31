@@ -41,6 +41,10 @@ typedef struct pm_metal_build_artifact {
     uint8_t *bytes;          /* arena-owned */
     size_t len;
     int32_t is_wasm;
+    /* impl = py: bytes are mpy bytecode (loadable via jit.py's
+     * object_load), not a linked native image — destroy leaves them to
+     * the arena, lookup/call are not applicable. */
+    int32_t is_mpy;
     /* wasm-seat link: the loader handle of each loaded module (the registry
      * owns the published exports; destroy unloads the modules). Unused
      * (zeroed) on ELF seats. */

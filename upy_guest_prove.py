@@ -357,6 +357,17 @@ if upy_jitpy_selfhost.ping(31) != 42:
     raise SystemExit("jit py run")
 print("upy jit py object loop")
 
+# metal.build py-card rebuild: a real impl="py" card (pymergetic.wasmmod.net)
+# through the build face's unit_compile on this POSIX µPy seat — its .py
+# muscle from the embed table -> mpy bytecode in-process. The rebuild route
+# is the same /build/<fqn> the browser console serves.
+st, body = handle("POST", "/build/pymergetic.wasmmod.net")
+if st != 200 or '"rebuild":"ok"' not in body:
+    raise SystemExit("build py rebuild %s %s" % (st, body))
+if '"fqn":"pymergetic.wasmmod.net"' not in body:
+    raise SystemExit("build py fqn %s" % (body,))
+print("upy build py unit_compile")
+
 # metal.jit.cpp REPL rebuild loop: the C++ card transpiles ITS OWN source
 # from the kernel fs (workspace) through lex -> parse -> lower, the lowered
 # C re-lowers byte-identical (the fixed point), TCC makes a real ELF object,

@@ -3,10 +3,12 @@
  * The one-card self-host proofs (selfhost_cycle.sh stage 4c, the build
  * card's test_rebuild_jit_c / test_rebuild_tcc) show the chain works. This
  * driver answers the next question: how much of the whole tree does it
- * already carry? Every impl="c" unit from pm_metal_build_discover goes
- * through pm_metal_build_unit_compile (TCC objects -> ELF relocator link)
- * with the host seat's include/define fill, and the run prints one line
- * per card: OK with object sizes, or the refusal reason.
+ * already carry? Every unit from pm_metal_build_discover goes through
+ * pm_metal_build_unit_compile with the host seat's include/define fill:
+ * impl="c" straight to TCC, impl="rs" through micro-rustc -> C -> TCC,
+ * impl="cpp" through the cpp lower -> C -> TCC, impl="py" to mpy bytecode.
+ * The run prints one line per card: OK with object sizes, or the refusal
+ * reason (rsx names the construct + line).
  *
  * Output is a readiness map, not a prove: a card that fails here is data
  * (what the seat fill still misses), never a regression. Not registered,
@@ -163,12 +165,6 @@ int main(int argc, char **argv) {
         snprintf(rows[i].impl, sizeof(rows[i].impl), "%s", u->impl);
         rows[i].n_sources = u->n_sources;
 
-        if (strcmp(u->impl, "c") != 0) {
-            rows[i].rc = -1000;  /* not buildable yet: rs/cpp/py */
-            n_skip++;
-            printf("skip  %-44s impl=%s (%u src)\n", u->fqn, u->impl, u->n_sources);
-            continue;
-        }
         if (u->n_sources > PM_METAL_BUILD_MAX_OBJS) {
             rows[i].rc = -1001;  /* manifest wider than the link face */
             n_refused++;
@@ -177,19 +173,26 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        /* unit_root: <metal>/src + the full dotted fqn (the same convention
-         * as the build card's own rebuild test — pymergetic.metal.jit.c
-         * lives at src/pymergetic/metal/jit/c). */
+        /* unit_root: the card's real tree — <metal>/src for pymergetic.metal.*
+         * cards, <wasmmod>/src for the pymergetic.wasmmod.* / pymergetic.util.*
+         * cards that live in the wasmmod repo (same convention as the build
+         * card's rebuild test). */
         {
-            size_t w = strlen(src_root);
+            const char *root = src_root;
+            size_t w;
             size_t tl = strlen(u->fqn);
+            if (strncmp(u->fqn, "pymergetic.wasmmod", 18) == 0
+                || strncmp(u->fqn, "pymergetic.util", 15) == 0) {
+                root = wasmmod_src_root;
+            }
+            w = strlen(root);
             if (w + tl + 2 > sizeof(unit_root)) {
                 rows[i].rc = -1002;
                 n_refused++;
                 printf("deep  %-44s path overflows unit_root\n", u->fqn);
                 continue;
             }
-            memcpy(unit_root, src_root, w);
+            memcpy(unit_root, root, w);
             unit_root[w++] = '/';
             memcpy(unit_root + w, u->fqn, tl);
             unit_root[w + tl] = '\0';
@@ -257,7 +260,7 @@ int main(int argc, char **argv) {
     free(rows);
     pm_util_mem_arena_destroy(arena);
     free(backing);
-    printf("ksweep done: %u/%u c-cards linked in-kernel\n", n_ok,
+    printf("ksweep done: %u/%u cards compiled in-kernel\n", n_ok,
         n_ok + n_refused);
     return 0;
 #else

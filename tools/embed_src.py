@@ -10,11 +10,12 @@ second copy of the source anywhere (edit the .c/.rs, not this output).
 
 Discovery is the card tree: a directory holding __pmm__.toml is a card, and its
 `fqn` field is the authoritative registry FQN (pymergetic.util.gen's
-find_cards() reads the same field). Only cards with a muscle (`__impl__.c` /
-`__impl__.rs`) get a source slot — `impl = "py"` cards have no native source to
-browse. Companion .c/.rs units beside the muscle (net/wg's __crypto__.c, e.g.)
-ride along; generated faces (__exports__.* / __types__.*) and prove tests are
-skipped, they are not authored source.
+find_cards() reads the same field). Only cards with authored muscle get a
+source slot: `impl = "c"` / `impl = "rs"` with `__impl__.*`, and `impl = "py"`
+whose `.py` files ARE the muscle (the build card compiles them to mpy
+bytecode in-kernel). Companion .c/.rs units beside the muscle (net/wg's
+__crypto__.c, e.g.) ride along; generated faces (__exports__.* /
+__types__.*) and prove tests are skipped, they are not authored source.
 
 Output is a header that both the C inspect card and the .rs driver include:
 
@@ -96,7 +97,13 @@ def _muscle_files(card_dir: pathlib.Path, impl: str) -> list[pathlib.Path]:
     .rs beside it is the cargo crate's module-declaration glue (`#[path=...] pub
     mod`), never card source, so it is skipped. An RS card owns __impl__.rs plus
     any authored companion .rs (util/gen's cli.rs/discover.rs/host.rs/sink.rs).
+    A PY card owns .py — its __init__.py IS the muscle (the unit_compile face
+    turns it into mpy bytecode in-kernel), not a generated face like the .pyi.
     """
+    if impl == "py":
+        out = [p for p in sorted(card_dir.iterdir())
+               if p.is_file() and p.suffix == ".py"]
+        return out
     want = ".c" if impl == "c" else ".rs"
     out = []
     for p in sorted(card_dir.iterdir()):

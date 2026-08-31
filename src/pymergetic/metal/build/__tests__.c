@@ -492,11 +492,11 @@ static int32_t test_compile_tcc_manifest_forwarding(void) {
 }
 
 /*------------------ Phase 4.4: runtime discovery ------------------
- * discover walks the embedded card table: every impl="c" card becomes a
- * buildable unit; rs/py cards are present too (their units compile not —
- * unit_compile refuses them honestly). */
+ * discover walks the embedded card table: every impl card becomes a
+ * buildable unit. rs units run the real rs->C->TCC->link chain (or refuse
+ * with rsx's own diagnostic); py units produce mpy bytecode. */
 static int32_t test_discover(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(8u << 20);
     pm_util_mem_arena_t *arena;
     pm_metal_build_unit_t *units = NULL;
     uint32_t n_units = 0;
@@ -507,7 +507,7 @@ static int32_t test_discover(void) {
     uint32_t n_buildable = 0, n_rs = 0, n_other = 0;
 
     if (!backing) return 70;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 8u << 20);
     if (!arena) { free(backing); return 71; }
 
     rc = pm_metal_build_discover(arena, &units, &n_units, err, sizeof(err));
@@ -536,7 +536,10 @@ static int32_t test_discover(void) {
     if (!have_jit_c) { pm_util_mem_arena_destroy(arena); free(backing); return 75; }
     if (n_buildable < 20) { pm_util_mem_arena_destroy(arena); free(backing); return 76; }
 
-    /* an impl="rs" unit must refuse to compile with an honest error */
+    /* an impl="rs" unit runs the real rs->C->TCC->link chain now: it either
+     * links (rc OK, artifact live) or refuses with the transpiler's own
+     * diagnostic (rsx names the construct + line) — never "not yet
+     * buildable", that era is over. */
     {
         const pm_metal_build_unit_t *rs_unit = NULL;
         pm_metal_build_artifact_t art;
@@ -546,9 +549,14 @@ static int32_t test_discover(void) {
         if (rs_unit != NULL) {
             rc = pm_metal_build_unit_compile(arena, rs_unit, "", NULL, 0,
                 NULL, 0, &art, err, sizeof(err));
-            if (rc == PM_METAL_BUILD_OK
-                || strstr(err, "not yet buildable") == NULL) {
+            if (rc == PM_METAL_BUILD_OK) {
+                pm_metal_build_artifact_destroy(&art);
+            } else if (strstr(err, "not yet buildable") != NULL) {
                 pm_util_mem_arena_destroy(arena); free(backing); return 77;
+            }
+            /* a refusal must carry a real diagnostic, not an empty errbuf */
+            if (rc != PM_METAL_BUILD_OK && err[0] == '\0') {
+                pm_util_mem_arena_destroy(arena); free(backing); return 78;
             }
         }
     }
