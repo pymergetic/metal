@@ -49,6 +49,10 @@
 //! - `struct S { f: T }` -> `typedef struct S { C_T f; } S;` (declaration
 //!   order is the layout; `#[repr(C)]` is accepted and recorded, non-repr
 //!   structs lower the same way — documented divergence).
+//! - `union U { f: T }` -> `typedef union U { C_T f; } U;` — same field
+//!   grammar as a struct, same registration; a literal `U { f: v }` is a
+//!   designated initializer (sets the active member), field access reads
+//!   the active member like any C union.
 //! - Type map: `uN`->`uintN_t`, `iN`->`intN_t`, `usize`->`size_t`,
 //!   `isize`->`intptr_t`, `f32`->`float`, `f64`->`double`, `bool`->`bool`,
 //!   `char`->`uint32_t`, `*const T`/`&T`->`const C_T *`, `*mut T`/`&mut T`->
@@ -5100,6 +5104,18 @@ impl Parser {
         if unsafe { self.is_kw(self.at, b"struct\0".as_ptr()) } {
             return unsafe { self.parse_struct(&mut kids) };
         }
+        if unsafe { self.is_kw(self.at, b"union\0".as_ptr()) } {
+            /* `pub union U { f: T, .. }` — same field body grammar as a
+             * struct; a marker ATTR kid ("union") tells the lowering to
+             * emit a C union instead of a struct. No new AST kind — the
+             * kind table is a stable __types__.h contract. */
+            let line = unsafe { self.line(self.at) };
+            let marker = unsafe { self.mk(pm_jit_rsx_ast_kind::ATTR, line, b"union\0".as_ptr(), 5) };
+            unsafe {
+                kids.add(marker, self.arena);
+            }
+            return unsafe { self.parse_struct(&mut kids) };
+        }
         if unsafe { self.is_kw(self.at, b"enum\0".as_ptr()) } {
             return unsafe { self.parse_enum(&mut kids) };
         }
@@ -9898,13 +9914,23 @@ impl Lower {
         }
     }
 
-    /* `typedef struct S { C_T f; } S;` — declaration order is the layout. */
+    /* `typedef struct S { C_T f; } S;` — declaration order is the layout.
+     * A marker ATTR kid ("union", from the `union` item keyword) swaps the
+     * C tag to `union` — same fields, same registration, `of.i32` field
+     * access reads the active member like any C union. */
     unsafe fn lower_struct(&mut self, item: *const pm_jit_rsx_ast_t) {
         let name = unsafe { (*item).text };
         let nlen = unsafe { (*item).text_len };
         let line = unsafe { (*item).line };
         let kids = unsafe { (*item).kids };
         let nk = unsafe { (*item).n_kids } as usize;
+        let is_union = unsafe { self.has_union_marker(item) };
+        let tag: *const u8 = if is_union {
+            b"union\0".as_ptr()
+        } else {
+            b"struct\0".as_ptr()
+        };
+        let tag_len: usize = if is_union { 5 } else { 6 };
         self.out.puts(b"#line \0".as_ptr());
         unsafe { self.out.put_u32(line) };
         self.out.puts(b" \"__impl__.rs\"\n\0".as_ptr());
@@ -9922,12 +9948,15 @@ impl Lower {
         if has_fields {
             /* forward typedef so fields may name their own struct type
              * (C: the typedef name is not in scope inside the body). */
-            self.out.puts(b"typedef struct \0".as_ptr());
+            self.out.puts(b"typedef \0".as_ptr());
+            self.out.put(tag, tag_len);
+            self.out.putc(b' ');
             self.out.put(name, nlen);
             self.out.putc(b' ');
             self.out.put(name, nlen);
             self.out.puts(b";\n\0".as_ptr());
-            self.out.puts(b"struct \0".as_ptr());
+            self.out.put(tag, tag_len);
+            self.out.putc(b' ');
             self.out.put(name, nlen);
             self.out.puts(b" {\n\0".as_ptr());
             i = 0;
@@ -9958,19 +9987,43 @@ impl Lower {
                 i += 1;
             }
             self.out.puts(b"};\n\0".as_ptr());
-            self.out.puts(b"typedef struct \0".as_ptr());
+            self.out.puts(b"typedef \0".as_ptr());
+            self.out.put(tag, tag_len);
+            self.out.putc(b' ');
             self.out.put(name, nlen);
             self.out.putc(b' ');
             self.out.put(name, nlen);
             self.out.puts(b";\n\0".as_ptr());
         } else {
-            self.out.puts(b"typedef struct \0".as_ptr());
+            self.out.puts(b"typedef \0".as_ptr());
+            self.out.put(tag, tag_len);
+            self.out.putc(b' ');
             self.out.put(name, nlen);
             self.out.puts(b" \0".as_ptr());
             self.out.put(name, nlen);
             self.out.puts(b";\n\0".as_ptr());
         }
         self.out.putc(b'\n');
+    }
+
+    /* Does this STRUCT item carry the union marker ATTR? (from the `union`
+     * keyword dispatch in parse_item — text is exactly "union"). */
+    unsafe fn has_union_marker(&mut self, item: *const pm_jit_rsx_ast_t) -> bool {
+        let kids = unsafe { (*item).kids };
+        let nk = unsafe { (*item).n_kids } as usize;
+        let mut i = 0usize;
+        while i < nk {
+            let k = unsafe { *kids.add(i) };
+            if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::ATTR {
+                let t = unsafe { (*k).text };
+                let tl = unsafe { (*k).text_len };
+                if tl == 5 && !t.is_null() && unsafe { z_eq(t, tl, b"union\0".as_ptr()) } {
+                    return true;
+                }
+            }
+            i += 1;
+        }
+        false
     }
 
     /* Fieldless enums lower to `enum Name { A, B };` + int constants so

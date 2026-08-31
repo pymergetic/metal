@@ -565,6 +565,68 @@ static int32_t test_compile_labeled_loops(void) {
     return 0;
 }
 
+/* compile: `union` items — the wasmmod Value convention's shape (kind +
+ * union of payloads) is the canonical cross-card use. Same field grammar
+ * as a struct; a literal is a designated initializer (sets the active
+ * member); field access reads the active member. */
+static int32_t test_compile_union_item(void) {
+    void *backing = malloc(1u << 20);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    static const char src[] =
+        "#[repr(C)]\n"
+        "pub union pm_test_of {\n"
+        "    pub a: i32,\n"
+        "    pub b: i64,\n"
+        "}\n"
+        "#[repr(C)]\n"
+        "pub struct pm_test_val {\n"
+        "    pub kind: u32,\n"
+        "    pub of: pm_test_of,\n"
+        "}\n"
+        "pub unsafe extern \"C\" fn pm_test_mk(x: i32) -> pm_test_val {\n"
+        "    let v = pm_test_val { kind: 0, of: pm_test_of { a: x } };\n"
+        "    v\n"
+        "}\n"
+        "pub unsafe extern \"C\" fn pm_test_rd(v: *const pm_test_val) -> i32 {\n"
+        "    unsafe { (*v).of.a }\n"
+        "}\n";
+
+    if (backing == NULL) return 150;
+    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    if (arena == NULL) { free(backing); return 151; }
+
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, src, strlen(src),
+                                 &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 152;
+    }
+    if (c_out == NULL || c_out_len == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 153;
+    }
+    /* the union lowers to a C union, not a struct */
+    if (!rsx_strstr(c_out, "union pm_test_of") || !rsx_strstr(c_out, "typedef union pm_test_of")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 154;
+    }
+    /* struct containing it keeps the struct tag */
+    if (!rsx_strstr(c_out, "struct pm_test_val")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 155;
+    }
+    /* nested union literal is a designated initializer */
+    if (!rsx_strstr(c_out, "(pm_test_of){ .a = x }")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 156;
+    }
+    /* field read through the pointer reaches the union member */
+    if (!rsx_strstr(c_out, ".of") || !rsx_strstr(c_out, ".a")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 157;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
 /* parse: nested generic types `A<B<C>>` — the `>>` lexes as one SHR token
  * and once hung the generic-list loop (the fix splits the close). */
 static int32_t test_parse_nested_generics(void) {
@@ -1098,6 +1160,7 @@ static int32_t pm_metal_jit_rsx_tests(void) {
     rc = rsx_run_named("compile_match_patterns", test_compile_match_patterns); if (rc) return rc;
     rc = rsx_run_named("compile_try_and_range_index", test_compile_try_and_range_index); if (rc) return rc;
     rc = rsx_run_named("compile_labeled_loops", test_compile_labeled_loops); if (rc) return rc;
+    rc = rsx_run_named("compile_union_item", test_compile_union_item); if (rc) return rc;
     rc = rsx_run_named("parse_nested_generics", test_parse_nested_generics); if (rc) return rc;
     rc = rsx_run_named("compile_unsafe_impl_marker", test_compile_unsafe_impl_marker); if (rc) return rc;
     rc = rsx_run_named("compile_minimal_fn", test_compile_minimal_fn); if (rc) return rc;
