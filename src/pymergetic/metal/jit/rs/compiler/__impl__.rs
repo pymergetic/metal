@@ -24,7 +24,9 @@
 //!
 //! Statements: `let` (ident / `mut ident` / `_`, optional type + init; let-else
 //! refused), `if`/`else`, `match`, `loop`, `while`, `for pat in a..b` /
-//! `a..=b`, `return`/`break`/`continue`, expression and assignment statements.
+//! `a..=b`, `return`/`break`/`continue` (labeled too: `'l: for …` +
+//! `continue 'l` — C has no labeled break, so it lowers to goto labels),
+//! expression and assignment statements.
 //!
 //! Expressions: literals (int with suffixes, float, char, byte char/string,
 //! string, raw string), paths, calls, method calls, field access, indexing
@@ -3183,6 +3185,21 @@ impl Parser {
         if k == pm_jit_rsx_tok_kind::OROR {
             return unsafe { self.parse_closure() };
         }
+        /* Labeled loop: `'name: loop/while/for …`. The label token's text
+         * (with the leading `'`) rides on the loop node's text field — the
+         * plain forms keep "loop"/"while"/"for" and the lowering tells the
+         * two apart by the leading quote. */
+        if k == pm_jit_rsx_tok_kind::LIFETIME
+            && (unsafe { self.is_punct(self.at + 1, b':') })
+            && (unsafe { self.is_kw(self.at + 2, b"loop\0".as_ptr()) }
+                || unsafe { self.is_kw(self.at + 2, b"while\0".as_ptr()) }
+                || unsafe { self.is_kw(self.at + 2, b"for\0".as_ptr()) })
+        {
+            let lname = unsafe { self.text(self.at) };
+            let llen = unsafe { self.text_len(self.at) };
+            self.at += 2;
+            return unsafe { self.parse_labeled_or_plain_loop(lname, llen) };
+        }
         if k == pm_jit_rsx_tok_kind::IDENT {
             if unsafe { self.is_kw(self.at, b"if\0".as_ptr()) } {
                 return unsafe { self.parse_if_expr() };
@@ -3291,11 +3308,28 @@ impl Parser {
             }
             if unsafe { self.is_kw(self.at, b"break\0".as_ptr()) } {
                 self.at += 1;
+                /* `break 'name` — the label rides in the node text so the
+                 * lowering can emit the goto form; plain keeps "break". */
+                if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::LIFETIME {
+                    let lt = unsafe { self.text(self.at) };
+                    let ll = unsafe { self.text_len(self.at) };
+                    self.at += 1;
+                    let n = unsafe { self.mk(pm_jit_rsx_ast_kind::BREAK, line, lt, ll) };
+                    return n;
+                }
                 let n = unsafe { self.mk(pm_jit_rsx_ast_kind::BREAK, line, b"break\0".as_ptr(), 5) };
                 return n;
             }
             if unsafe { self.is_kw(self.at, b"continue\0".as_ptr()) } {
                 self.at += 1;
+                /* `continue 'name` — same label-in-text scheme as break. */
+                if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::LIFETIME {
+                    let lt = unsafe { self.text(self.at) };
+                    let ll = unsafe { self.text_len(self.at) };
+                    self.at += 1;
+                    let n = unsafe { self.mk(pm_jit_rsx_ast_kind::CONTINUE, line, lt, ll) };
+                    return n;
+                }
                 let n = unsafe {
                     self.mk(pm_jit_rsx_ast_kind::CONTINUE, line, b"continue\0".as_ptr(), 8)
                 };
@@ -3308,6 +3342,95 @@ impl Parser {
             self.err(b"expected expression\0".as_ptr());
         }
         core::ptr::null_mut()
+    }
+
+    /* Loop with a label (lname non-NULL, includes the leading `'`) or a
+     * plain loop (lname NULL) — one body for all three keyword forms; the
+     * label rides in the node text so the lowering can emit goto targets. */
+    unsafe fn parse_labeled_or_plain_loop(
+        &mut self,
+        lname: *const u8,
+        llen: usize,
+    ) -> *mut pm_jit_rsx_ast_t {
+        let line = unsafe { self.line(self.at) };
+        let mut kids = Kids::new();
+        if unsafe { self.is_kw(self.at, b"loop\0".as_ptr()) } {
+            self.at += 1;
+            let body = unsafe { self.parse_block() };
+            unsafe {
+                kids.add(body, self.arena);
+            }
+            let n = unsafe { self.mk(pm_jit_rsx_ast_kind::LOOP, line, b"loop\0".as_ptr(), 4) };
+            unsafe {
+                self.set_kids(n, &kids);
+            }
+            return unsafe { self.relabel(n, lname, llen) };
+        }
+        if unsafe { self.is_kw(self.at, b"while\0".as_ptr()) } {
+            self.at += 1;
+            let save = self.cond_ctx;
+            self.cond_ctx = true;
+            let cond = unsafe { self.parse_expr() };
+            self.cond_ctx = save;
+            let body = unsafe { self.parse_block() };
+            unsafe {
+                kids.add(cond, self.arena);
+                kids.add(body, self.arena);
+            }
+            let n = unsafe { self.mk(pm_jit_rsx_ast_kind::WHILE, line, b"while\0".as_ptr(), 5) };
+            unsafe {
+                self.set_kids(n, &kids);
+            }
+            return unsafe { self.relabel(n, lname, llen) };
+        }
+        if unsafe { self.is_kw(self.at, b"for\0".as_ptr()) } {
+            self.at += 1;
+            let pat = unsafe { self.parse_pattern() };
+            if !unsafe { self.is_kw(self.at, b"in\0".as_ptr()) } {
+                unsafe {
+                    self.err(b"expected 'in' in for loop\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            self.at += 1;
+            let save = self.cond_ctx;
+            self.cond_ctx = true;
+            let iter = unsafe { self.parse_expr() };
+            self.cond_ctx = save;
+            let body = unsafe { self.parse_block() };
+            unsafe {
+                kids.add(pat, self.arena);
+                kids.add(iter, self.arena);
+                kids.add(body, self.arena);
+            }
+            let n = unsafe { self.mk(pm_jit_rsx_ast_kind::FOR, line, b"for\0".as_ptr(), 3) };
+            unsafe {
+                self.set_kids(n, &kids);
+            }
+            return unsafe { self.relabel(n, lname, llen) };
+        }
+        unsafe {
+            self.err(b"expected loop after label\0".as_ptr());
+        }
+        core::ptr::null_mut()
+    }
+
+    /* Overwrite a loop node's text with the label span (re-arena'd): the
+     * plain keyword forms keep their "loop"/"while"/"for" text. */
+    unsafe fn relabel(
+        &mut self,
+        n: *mut pm_jit_rsx_ast_t,
+        lname: *const u8,
+        llen: usize,
+    ) -> *mut pm_jit_rsx_ast_t {
+        if n.is_null() || lname.is_null() || llen == 0 {
+            return n;
+        }
+        unsafe {
+            (*n).text = self.nd.span(lname, llen, (*n).line);
+            (*n).text_len = llen;
+        }
+        n
     }
 
     /* Closure: `|a, b| expr`, `|a| { .. }`, `|| expr` — and `move |..| ..`
@@ -7346,12 +7469,35 @@ impl Lower {
             pm_jit_rsx_ast_kind::FOR => unsafe { self.emit_for(s, locals) },
             pm_jit_rsx_ast_kind::RETURN => unsafe { self.emit_return(s, locals) },
             pm_jit_rsx_ast_kind::BREAK => unsafe {
+                let t = unsafe { (*s).text };
+                let tl = unsafe { (*s).text_len };
+                let labeled = tl > 0 && !t.is_null() && unsafe { *t == b'\'' };
                 self.indent();
-                self.out.puts(b"break;\n\0".as_ptr());
+                if labeled {
+                    /* C has no labeled break: `break 'l` is a goto to the
+                     * _end label the labeled loop emits after its body. */
+                    self.out.puts(b"goto \0".as_ptr());
+                    unsafe { self.put_lbl(t, tl, b"_end\0".as_ptr()) };
+                    self.out.puts(b";\n\0".as_ptr());
+                } else {
+                    self.out.puts(b"break;\n\0".as_ptr());
+                }
             },
             pm_jit_rsx_ast_kind::CONTINUE => unsafe {
+                let t = unsafe { (*s).text };
+                let tl = unsafe { (*s).text_len };
+                let labeled = tl > 0 && !t.is_null() && unsafe { *t == b'\'' };
                 self.indent();
-                self.out.puts(b"continue;\n\0".as_ptr());
+                if labeled {
+                    /* `continue 'l` is a goto to the _cont label just
+                     * before the loop's closing brace — the for-header
+                     * increment still runs on the way out. */
+                    self.out.puts(b"goto \0".as_ptr());
+                    unsafe { self.put_lbl(t, tl, b"_cont\0".as_ptr()) };
+                    self.out.puts(b";\n\0".as_ptr());
+                } else {
+                    self.out.puts(b"continue;\n\0".as_ptr());
+                }
             },
             pm_jit_rsx_ast_kind::EXPR_STMT => {
                 /* one expr kid */
@@ -8262,19 +8408,58 @@ impl Lower {
         }
     }
 
+    /* Emit "rsx_lbl_<name>" (suffix "_cont"/"_end") from a label node text
+     * — C labels share the ordinary identifier namespace with locals, so
+     * the rsx_lbl_ prefix keeps `'outer` from colliding with an `outer`. */
+    unsafe fn put_lbl(&mut self, t: *const u8, tl: usize, suffix: *const u8) {
+        let mut i = 0usize;
+        if tl > 0 && !t.is_null() && unsafe { *t.add(0) } == b'\'' {
+            i = 1;
+        }
+        self.out.puts(b"rsx_lbl_\0".as_ptr());
+        if tl > i {
+            self.out.put(t.add(i), tl - i);
+        }
+        self.out.puts(suffix);
+    }
+
+    /* Is this loop node labeled? (label text starts with the quote). */
+    unsafe fn loop_is_labeled(s: *const pm_jit_rsx_ast_t) -> bool {
+        let t = unsafe { (*s).text };
+        let tl = unsafe { (*s).text_len };
+        tl > 0 && !t.is_null() && unsafe { *t == b'\'' }
+    }
+
     unsafe fn emit_loop(&mut self, s: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
         let kids = unsafe { (*s).kids };
         if unsafe { (*s).n_kids } < 1 {
             return;
         }
         let body = unsafe { *kids.add(0) };
+        let labeled = unsafe { Lower::loop_is_labeled(s) };
+        let lt = unsafe { (*s).text };
+        let ll = unsafe { (*s).text_len };
         self.indent();
+        if labeled {
+            unsafe { self.put_lbl(lt, ll, b"_\0".as_ptr()) };
+            self.out.puts(b": \0".as_ptr());
+        }
         self.out.puts(b"for (;;) {\n\0".as_ptr());
         self.depth += 1;
         unsafe { self.emit_block_stmt(body, locals) };
         self.depth -= 1;
+        if labeled {
+            self.indent();
+            unsafe { self.put_lbl(lt, ll, b"_cont\0".as_ptr()) };
+            self.out.puts(b": ;\n\0".as_ptr());
+        }
         self.indent();
         self.out.puts(b"}\n\0".as_ptr());
+        if labeled {
+            self.indent();
+            unsafe { self.put_lbl(lt, ll, b"_end\0".as_ptr()) };
+            self.out.puts(b": ;\n\0".as_ptr());
+        }
     }
 
     unsafe fn emit_while(&mut self, s: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
@@ -8284,15 +8469,32 @@ impl Lower {
         }
         let cond = unsafe { *kids.add(0) };
         let body = unsafe { *kids.add(1) };
+        let labeled = unsafe { Lower::loop_is_labeled(s) };
+        let lt = unsafe { (*s).text };
+        let ll = unsafe { (*s).text_len };
         self.indent();
+        if labeled {
+            unsafe { self.put_lbl(lt, ll, b"_\0".as_ptr()) };
+            self.out.puts(b": \0".as_ptr());
+        }
         self.out.puts(b"while (\0".as_ptr());
         unsafe { self.emit_expr(cond, locals) };
         self.out.puts(b") {\n\0".as_ptr());
         self.depth += 1;
         unsafe { self.emit_block_stmt(body, locals) };
         self.depth -= 1;
+        if labeled {
+            self.indent();
+            unsafe { self.put_lbl(lt, ll, b"_cont\0".as_ptr()) };
+            self.out.puts(b": ;\n\0".as_ptr());
+        }
         self.indent();
         self.out.puts(b"}\n\0".as_ptr());
+        if labeled {
+            self.indent();
+            unsafe { self.put_lbl(lt, ll, b"_end\0".as_ptr()) };
+            self.out.puts(b": ;\n\0".as_ptr());
+        }
     }
 
     unsafe fn emit_for(&mut self, s: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
@@ -8332,28 +8534,64 @@ impl Lower {
         }
         let lo = unsafe { *ikids.add(0) };
         let hi = unsafe { *ikids.add(1) };
-        /* pat must be a simple binding */
+        /* pat must be a simple binding: a PATH wrapper (text "path") whose
+         * one kid is the binding's own PATH segment — `k` in `for k in …`.
+         * (Reading the wrapper's text yields the literal "path", a bug that
+         * predates labeled loops; unwrap to the segment.) */
         if unsafe { (*pat).kind } != pm_jit_rsx_ast_kind::PATH {
             unsafe {
                 self.err(b"unsupported: for pattern\0".as_ptr(), unsafe { (*s).line });
             }
             return;
         }
-        let vname = unsafe { (*pat).text };
-        let vlen = unsafe { (*pat).text_len };
-        /* bound type from the low end */
+        let mut bind = pat;
+        if unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+            && unsafe { (*pat).n_kids } == 1
+        {
+            let pk = unsafe { (*pat).kids };
+            let seg: *mut pm_jit_rsx_ast_t = unsafe { *pk.add(0) };
+            if (unsafe { (*seg).kind }) == pm_jit_rsx_ast_kind::PATH {
+                bind = seg;
+            }
+        }
+        let vname = unsafe { (*bind).text };
+        let vlen = unsafe { (*bind).text_len };
+        /* bound type: from the low end, but a bare integer literal `0` is
+         * int32_t by default — when the high end carries a wider type
+         * (`0..bn` with bn: usize), take the high end so the loop var
+         * compares against the bound without a narrowing surprise. */
         let ct = self.arena_tmp();
-        let ct_len = unsafe { self.expr_ctype(lo, ct, 128, locals) };
+        let mut ct_len = unsafe { self.expr_ctype(lo, ct, 128, locals) };
         if ct_len == 0 {
             unsafe {
                 self.err(b"cannot infer for-range bound type\0".as_ptr(), unsafe { (*s).line });
             }
             return;
         }
+        if (unsafe { (*lo).kind }) == pm_jit_rsx_ast_kind::LITERAL
+            && unsafe { z_eq(ct, ct_len, b"int32_t\0".as_ptr()) }
+        {
+            let ht = self.arena_tmp();
+            let hl = unsafe { self.expr_ctype(hi, ht, 128, locals) };
+            if hl > 0 && !unsafe { z_eq(ht, hl, b"int32_t\0".as_ptr()) } {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(ht, ct, hl);
+                    *ct.add(hl) = 0;
+                }
+                ct_len = hl;
+            }
+        }
         unsafe {
             (*locals).add(vname, vlen, ct, ct_len, self.depth + 1);
         }
+        let labeled = unsafe { Lower::loop_is_labeled(s) };
+        let lt = unsafe { (*s).text };
+        let ll = unsafe { (*s).text_len };
         self.indent();
+        if labeled {
+            unsafe { self.put_lbl(lt, ll, b"_\0".as_ptr()) };
+            self.out.puts(b": \0".as_ptr());
+        }
         self.out.puts(b"for (\0".as_ptr());
         self.out.put(ct, ct_len);
         self.out.putc(b' ');
@@ -8374,8 +8612,18 @@ impl Lower {
         self.depth += 1;
         unsafe { self.emit_block_stmt(body, locals) };
         self.depth -= 1;
+        if labeled {
+            self.indent();
+            unsafe { self.put_lbl(lt, ll, b"_cont\0".as_ptr()) };
+            self.out.puts(b": ;\n\0".as_ptr());
+        }
         self.indent();
         self.out.puts(b"}\n\0".as_ptr());
+        if labeled {
+            self.indent();
+            unsafe { self.put_lbl(lt, ll, b"_end\0".as_ptr()) };
+            self.out.puts(b": ;\n\0".as_ptr());
+        }
     }
 
     unsafe fn emit_return(&mut self, s: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
@@ -8996,8 +9244,30 @@ impl Lower {
             }
             /* statement forms reachable through EXPR_STMT wrappers */
             pm_jit_rsx_ast_kind::RETURN => unsafe { self.emit_return(e, locals) },
-            pm_jit_rsx_ast_kind::BREAK => self.out.puts(b"break\0".as_ptr()),
-            pm_jit_rsx_ast_kind::CONTINUE => self.out.puts(b"continue\0".as_ptr()),
+            pm_jit_rsx_ast_kind::BREAK => {
+                let t = unsafe { (*e).text };
+                let tl = unsafe { (*e).text_len };
+                let labeled = tl > 0 && !t.is_null() && unsafe { *t == b'\'' };
+                if labeled {
+                    self.out.puts(b"goto \0".as_ptr());
+                    unsafe { self.put_lbl(t, tl, b"_end\0".as_ptr()) };
+                    self.out.putc(b';');
+                } else {
+                    self.out.puts(b"break\0".as_ptr());
+                }
+            }
+            pm_jit_rsx_ast_kind::CONTINUE => {
+                let t = unsafe { (*e).text };
+                let tl = unsafe { (*e).text_len };
+                let labeled = tl > 0 && !t.is_null() && unsafe { *t == b'\'' };
+                if labeled {
+                    self.out.puts(b"goto \0".as_ptr());
+                    unsafe { self.put_lbl(t, tl, b"_cont\0".as_ptr()) };
+                    self.out.putc(b';');
+                } else {
+                    self.out.puts(b"continue\0".as_ptr());
+                }
+            }
             _ => unsafe {
                 self.err(b"unsupported: expression form\0".as_ptr(), unsafe { (*e).line });
             },
