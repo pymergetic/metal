@@ -261,6 +261,30 @@ static int32_t case_http(void) {
     if (body != NULL && n != 0 && has(body, n, "pm_metal_inspect_init")) {
         return fail("fetch src missing body served real source");
     }
+    /* Build face over the wire: GET /build is the index, POST /build/<fqn>
+     * is the on-demand in-kernel rebuild (no request body — the unit's
+     * sources come from the embedded card table). */
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch("http://127.0.0.1:8090/build", &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch build index");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "\"units\":[")
+        || !has(body, n, "\"buildable\":1")) {
+        return fail("fetch build index body");
+    }
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_request("POST",
+        "http://127.0.0.1:8090/build/pymergetic.util.mem",
+        NULL, 0, NULL, &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "post build rebuild");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "\"rebuild\":\"ok\"")) {
+        return fail("post build rebuild body");
+    }
     return 0;
 }
 
@@ -299,6 +323,67 @@ static int32_t case_docs_sweep(void) {
     return 0;
 }
 
+/* The build face over the local handle (same bodies the asgi routes serve):
+ * GET /build indexes the discovered tree, POST /build/<fqn> rebuilds one
+ * card in-kernel (the full discover -> TCC objects -> ELF relocator link
+ * chain, the same one ksweep drives), and the refusal path answers JSON
+ * data instead of an empty 404. A POST needs no request body — the unit's
+ * sources come from the embedded card table, which is the point: the
+ * wire triggers a rebuild of what the kernel already carries. */
+static int32_t case_build_face(void) {
+    const char *body;
+    /* index: every unit, honest buildable flags */
+    if (pm_metal_inspect_handle("GET", "/build") != 200) {
+        return fail("build index status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"units\":[") == NULL
+        || strstr(body, "\"fqn\":\"pymergetic.metal.jit.c\"") == NULL
+        || strstr(body, "\"impl\":\"c\"") == NULL
+        || strstr(body, "\"buildable\":1") == NULL
+        || strstr(body, "\"buildable\":0") == NULL) {
+        return fail("build index body");
+    }
+    /* rebuild a small real card through the whole chain */
+    if (pm_metal_inspect_handle("POST",
+            "/build/pymergetic.util.mem") != 200) {
+        return fail("build rebuild status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"rebuild\":\"ok\"") == NULL
+        || strstr(body, "\"objects\":[") == NULL
+        || strstr(body, "\"symbols\":[") == NULL) {
+        return fail("build rebuild body");
+    }
+    /* the record now serves on the GET read too */
+    if (pm_metal_inspect_handle("GET", "/build/pymergetic.util.mem") != 200) {
+        return fail("build record after rebuild");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "pm_util_mem_alloc") == NULL) {
+        return fail("build record body");
+    }
+    /* a non-c card is refused with data, not a silent 404 */
+    if (pm_metal_inspect_handle("POST",
+            "/build/pymergetic.wasmmod.registry") != 200) {
+        return fail("build refusal status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"rebuild\":\"refused\"") == NULL
+        || strstr(body, "\"error\":") == NULL) {
+        return fail("build refusal body");
+    }
+    /* an unknown fqn is refused the same way */
+    if (pm_metal_inspect_handle("POST", "/build/no.such.card") != 200) {
+        return fail("build unknown status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"rebuild\":\"refused\"") == NULL) {
+        return fail("build unknown body");
+    }
+    return 0;
+}
+
 int32_t pm_metal_inspect_tests(void) {
     if (case_handle() != 0) {
         return 1;
@@ -307,6 +392,9 @@ int32_t pm_metal_inspect_tests(void) {
         return 1;
     }
     if (case_docs_sweep() != 0) {
+        return 1;
+    }
+    if (case_build_face() != 0) {
         return 1;
     }
     return 0;

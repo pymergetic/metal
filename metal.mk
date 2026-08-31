@@ -90,6 +90,9 @@ ifdef PM_METAL_BROWSER
 CFLAGS_EXTMOD += -DTCC_TARGET_WASM32 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(abspath $(TCC_DIR))\"
 else
 CFLAGS_EXTMOD += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(abspath $(TCC_DIR))\"
+# Absolute tree roots for the runtime build faces (inspect's /build rebuild
+# route): __FILE__ is relative, and the seat binary runs from any CWD.
+CFLAGS_EXTMOD += -DPM_METAL_ROOT=\"$(abspath $(TOP)/extmod/metal)\" -DPM_METAL_WASMMOD_ROOT=\"$(abspath $(TOP)/extmod/wasmmod)\" -DPM_METAL_TOP_ROOT=\"$(abspath $(TOP)/..)\"
 # The build card's multi-object link drives wasmmod's in-tree ELF relocator.
 # unix compiles load.c (MICROPY_PY_WASM_ELF=1 default); the browser cell does
 # not (ELF=0 there — its TCC targets wasm32, objects are WASM not ET_REL).
@@ -100,6 +103,26 @@ INC += -I$(TCC_DIR)
 $(BUILD)/externals/tcc/libtcc.o: $(TCC_DEPS)
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_EXTMOD) $(INC) -std=gnu11 -Wno-unused-parameter -Wno-sign-compare -Wno-error $(TCC_DEFINES) -c -o $@ $(TCC_DIR)/libtcc.c
+
+# tcc1 runtime helpers (va_list.c / atomic.S / stdatomic.c): cards compiled
+# in-kernel call __va_arg / __atomic_*; the seat binary defines them so the
+# build card's process resolver answers every in-kernel link (same set the
+# host metal Makefile links).
+PY_O += $(BUILD)/externals/tcc/libtcc1.o
+PY_O += $(BUILD)/externals/tcc/libtcc1_atomic.o
+PY_O += $(BUILD)/externals/tcc/libtcc1_stdatomic.o
+
+$(BUILD)/externals/tcc/libtcc1.o: $(TCC_DIR)/lib/va_list.c
+	mkdir -p $(dir $@)
+	$(CC) -std=gnu11 -O1 -w -I$(TCC_DIR) -I$(TCC_DIR)/lib -c -o $@ $(TCC_DIR)/lib/va_list.c
+
+$(BUILD)/externals/tcc/libtcc1_atomic.o: $(TCC_DIR)/lib/atomic.S
+	mkdir -p $(dir $@)
+	$(CC) -I$(TCC_DIR)/lib -c -o $@ $(TCC_DIR)/lib/atomic.S
+
+$(BUILD)/externals/tcc/libtcc1_stdatomic.o: $(TCC_DIR)/lib/stdatomic.c
+	mkdir -p $(dir $@)
+	$(CC) -std=gnu11 -O1 -g -w -c -o $@ $(TCC_DIR)/lib/stdatomic.c
 
 # Cross-compile instance (ELF seats): a second libtcc compiled with
 # -DTCC_TARGET_WASM32 and every defined tcc_*/wasm_* symbol renamed to

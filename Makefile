@@ -128,6 +128,11 @@ TCC1_OBJS := $(CURDIR)/build/tcc/libtcc1.o $(CURDIR)/build/tcc/libtcc1_atomic.o 
 TCC_DEPS := $(addprefix $(TCC_DIR)/,$(TCC_MANIFEST_SRCS))
 CPPFLAGS += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -I$(TCC_DIR) -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
 CPPFLAGS += -DPM_METAL_TCC_CROSS_WASM32=1
+# Absolute tree roots for the runtime build faces (inspect's /build rebuild
+# route, ksweep): __FILE__ is relative under make, so a route serving a
+# rebuild from any CWD needs the absolute anchors. Same pattern as
+# PM_METAL_TCC_LIB_DIR above.
+CPPFLAGS += -DPM_METAL_ROOT=\"$(CURDIR)\" -DPM_METAL_WASMMOD_ROOT=\"$(abspath ../wasmmod)\" -DPM_METAL_TOP_ROOT=\"$(abspath ../../..)\"
 
 # In-tree ELF64 ET_REL relocator (wasmmod) — the build card's multi-object
 # link drives it. Host seat only: the browser cell has no ELF loader

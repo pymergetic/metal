@@ -3,6 +3,7 @@
 
 #include "pymergetic/metal/net/http/asgi.h"
 #include "pymergetic/metal/build/__types__.h"
+#include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/registry.h"
 
 #include "www_embed.inc.h"
@@ -11,6 +12,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#if !defined(PM_METAL_FIRMWARE) && !defined(PM_METAL_BROWSER)
+#include <sys/stat.h>
+#endif
 
 #ifndef PM_METAL_INSPECT_BODY
 #define PM_METAL_INSPECT_BODY 16384u
@@ -624,6 +628,14 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
 static int32_t changes_http(const char *method, const char *path,
     char *out, uint32_t out_max, uint32_t *out_len);
 
+/* Build face handlers (defined after fill; same relay pattern). */
+static int32_t build_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len);
+static int32_t build_index_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len);
+static int32_t build_rebuild_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len);
+
 static int32_t fill(const char *method, const char *path, char *out, uint32_t out_max) {
     js_t j;
     const char *raw;
@@ -636,7 +648,9 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
     j.max = out_max;
     raw = path != NULL ? path : "";
     path = path_only(raw);
-    if (method == NULL || strcmp(method, "GET") != 0) {
+    if (method == NULL
+        || (strcmp(method, "GET") != 0
+            && !(strcmp(method, "POST") == 0 && strncmp(path, "/build/", 7) == 0))) {
         js_raw(&j, "{\"error\":\"method\"}");
         return js_ok(&j) ? 405 : -1;
     }
@@ -717,6 +731,33 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
     if (strncmp(path, "/changes/", 9) == 0) {
         uint32_t blen = 0;
         if (changes_http(method, path, j.p, j.max, &blen) == 0) {
+            j.n = blen;
+            return 200;
+        }
+        js_raw(&j, "{\"error\":\"not_found\"}");
+        return 404;
+    }
+    /* /build — the tree index (GET) and /build/<fqn> rebuild (POST): same
+     * bodies the asgi routes serve, local for the host prove + REPL. The
+     * rebuild is the whole in-kernel chain, so it needs the bigger body
+     * buffer than s_body provides for records — it writes through its own
+     * out pointer, and fill just relays the length. */
+    if (path_is(path, "/build")) {
+        uint32_t blen = 0;
+        if (build_index_http(method, path, j.p, j.max, &blen) == 0) {
+            j.n = blen;
+            return 200;
+        }
+        js_raw(&j, "{\"error\":\"not_found\"}");
+        return 404;
+    }
+    if (strncmp(path, "/build/", 7) == 0) {
+        uint32_t blen = 0;
+        if (build_rebuild_http(method, path, j.p, j.max, &blen) == 0) {
+            j.n = blen;
+            return 200;
+        }
+        if (build_http(method, path, j.p, j.max, &blen) == 0) {
             j.n = blen;
             return 200;
         }
@@ -1395,6 +1436,422 @@ static int32_t build_asgi_handler(const char *method, const char *path, uint8_t 
     return 0;
 }
 
+/* ---------------- build face: the webserver build surface ---------------- */
+
+/* The seat's compile fill for on-demand rebuilds — the same includes and
+ * defines the host Makefile passes and the build card's own rebuild test
+ * derives. Rooted at THIS file (src/pymergetic/metal/inspect), so every
+ * seat that can read the tree shares it. The buffers are static: routes
+ * must stay valid after the handler returns (unit_compile stores the
+ * pointers for the duration of the call only, and the arrays are reused
+ * per request, but the fill strings must outlive the compile).
+ *
+ * POSIX seats only (host binary, unix µPy): firmware and the browser cell
+ * refuse the rebuild in the handler — their builds are gated there, and
+ * the compiler must not see dead statics. */
+#define INSPECT_BUILD_MAX_INC 12u
+#define INSPECT_BUILD_MAX_DEF 12u
+/* The discover+compile arena: one whole card's TCC objects + ELF image.
+ * Same span the build card's rebuild test and ksweep use (64 MiB). */
+#define INSPECT_BUILD_SPAN (64u * 1024u * 1024u)
+
+#if !defined(PM_METAL_FIRMWARE) && !defined(PM_METAL_BROWSER)
+static char ib_src_root[2560];
+static char ib_wasmmod_root[2560];
+static char ib_wasmmod_src_root[2560];
+static char ib_top_root[2560];
+static char ib_tcc_root[2560];
+static char ib_libdir_def[2600];
+static char ib_triplet_val[160];
+
+static int32_t ib_fill(const char *includes[INSPECT_BUILD_MAX_INC],
+    uint32_t *n_inc, const char *defines[INSPECT_BUILD_MAX_DEF],
+    uint32_t *n_def) {
+    static int ready = 0;
+    if (!ready) {
+#ifdef PM_METAL_ROOT
+        /* the Makefile bakes absolute tree roots (__FILE__ is relative under
+         * make, and a rebuild route can run from any CWD) */
+        snprintf(ib_src_root, sizeof(ib_src_root), "%s/src", PM_METAL_ROOT);
+        snprintf(ib_tcc_root, sizeof(ib_tcc_root), "%s/externals/tcc", PM_METAL_ROOT);
+        snprintf(ib_wasmmod_root, sizeof(ib_wasmmod_root), "%s", PM_METAL_WASMMOD_ROOT);
+        snprintf(ib_wasmmod_src_root, sizeof(ib_wasmmod_src_root),
+            "%s/src", PM_METAL_WASMMOD_ROOT);
+        snprintf(ib_top_root, sizeof(ib_top_root), "%s", PM_METAL_TOP_ROOT);
+#else
+        /* fallback: derive from this file's compiled path (correct only when
+         * the CWD is the metal root — the gen'd seats below pass the roots) */
+        char dirbuf[2048];
+        char *dir;
+        snprintf(dirbuf, sizeof(dirbuf), "%s", __FILE__);
+        dir = strrchr(dirbuf, '/');
+        if (dir == NULL) {
+            return -1;
+        }
+        *dir = '\0';
+        dir = strrchr(dirbuf, '/');
+        if (dir == NULL) {
+            return -1;
+        }
+        *dir = '\0';
+        dir = strrchr(dirbuf, '/');
+        if (dir == NULL) {
+            return -1;
+        }
+        *dir = '\0';
+        /* dirbuf = <metal>/src/pymergetic */
+        snprintf(ib_src_root, sizeof(ib_src_root), "%s/../..", dirbuf);
+        snprintf(ib_tcc_root, sizeof(ib_tcc_root), "%s/../../../externals/tcc", dirbuf);
+        snprintf(ib_wasmmod_root, sizeof(ib_wasmmod_root), "%s/../../../../wasmmod", dirbuf);
+        snprintf(ib_wasmmod_src_root, sizeof(ib_wasmmod_src_root),
+            "%s/../../../../wasmmod/src", dirbuf);
+        snprintf(ib_top_root, sizeof(ib_top_root), "%s/../../../../..", dirbuf);
+#endif
+        snprintf(ib_libdir_def, sizeof(ib_libdir_def),
+            "PM_METAL_TCC_LIB_DIR=\"%s\"", ib_tcc_root);
+        ready = 1;
+    }
+    *n_inc = 0;
+    includes[(*n_inc)++] = ib_src_root;
+    includes[(*n_inc)++] = ib_wasmmod_src_root;
+    includes[(*n_inc)++] = ib_wasmmod_root;
+    includes[(*n_inc)++] = ib_top_root;
+    includes[(*n_inc)++] = ib_tcc_root;
+    *n_def = 0;
+    defines[(*n_def)++] = "PM_WASMMOD_GUEST=0";
+    defines[(*n_def)++] = "PM_MOD_TESTS=1";
+    defines[(*n_def)++] = "TCC_TARGET_X86_64";
+    defines[(*n_def)++] = "PM_HAS_TCC=1";
+    defines[(*n_def)++] = ib_libdir_def;
+    {
+        /* triplet: same probe as the rebuild test — a static value, cached
+         * on the first fill (popen is not reentrant in the request path).
+         * Firmware has no host cc and no stdio files; the seat's rebuild
+         * fill refuses elsewhere, so the probe simply stays empty there. */
+        static char triplet[64];
+        static int triplet_ready = 0;
+#ifndef PM_METAL_FIRMWARE
+        if (!triplet_ready) {
+            FILE *t = popen("cc -print-multiarch 2>/dev/null", "r");
+            if (t != NULL) {
+                if (fgets(triplet, sizeof(triplet), t) != NULL) {
+                    char *nl = strchr(triplet, '\n');
+                    if (nl != NULL) {
+                        *nl = '\0';
+                    }
+                }
+                pclose(t);
+            }
+            triplet_ready = 1;
+        }
+#endif
+        if (triplet[0] != '\0') {
+            snprintf(ib_triplet_val, sizeof(ib_triplet_val),
+                "CONFIG_TRIPLET=\"%s\"", triplet);
+            defines[(*n_def)++] = ib_triplet_val;
+        }
+    }
+    return 0;
+}
+#endif /* !PM_METAL_FIRMWARE && !PM_METAL_BROWSER */
+
+/* Emit one unit row for the index. */
+static void ib_row(js_t *j, const pm_metal_build_unit_t *u) {
+    const pm_metal_build_record_t *rec = pm_metal_build_record_find(u->fqn);
+    js_raw(j, "{\"fqn\":");
+    js_str(j, u->fqn);
+    js_raw(j, ",\"impl\":");
+    js_str(j, u->impl);
+    js_raw(j, ",\"n_sources\":");
+    js_u32(j, u->n_sources);
+    js_raw(j, ",\"buildable\":");
+    js_ch(j, strcmp(u->impl, "c") == 0
+        && u->n_sources <= PM_METAL_BUILD_MAX_OBJS ? '1' : '0');
+    js_raw(j, ",\"built\":");
+    js_ch(j, rec != NULL ? '1' : '0');
+    js_ch(j, '}');
+}
+
+/* GET /build — the tree index: every discovered unit, its impl, and
+ * whether the in-kernel chain can build it (impl=c is the whole chain;
+ * rs/py/cpp cards are reported honestly as not buildable yet). */
+static int32_t build_index_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len) {
+    js_t j;
+    pm_metal_build_unit_t *units = NULL;
+    uint32_t n_units = 0;
+    uint32_t i;
+    int32_t st;
+    char err[128];
+    void *backing;
+    pm_util_mem_arena_t *arena;
+
+    if (method == NULL || strcmp(method, "GET") != 0 || path == NULL
+        || !path_is(path, "/build")) {
+        return -1;
+    }
+    /* discover only parses manifests — the unit array is small. */
+    backing = malloc(1u << 20);
+    if (backing == NULL) {
+        return -1;
+    }
+    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    if (arena == NULL) {
+        free(backing);
+        return -1;
+    }
+    st = pm_metal_build_discover(arena, &units, &n_units, err, sizeof(err));
+    if (st != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena);
+        free(backing);
+        return -1;
+    }
+    j.p = out;
+    j.n = 0;
+    j.max = out_max;
+    js_raw(&j, "{\"units\":[");
+    for (i = 0; i < n_units; i++) {
+        if (i > 0) {
+            js_ch(&j, ',');
+        }
+        ib_row(&j, &units[i]);
+    }
+    js_raw(&j, "]}");
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    if (!js_ok(&j)) {
+        return -1;
+    }
+    *out_len = j.n;
+    return 0;
+}
+
+static int32_t build_index_asgi_handler(const char *method, const char *path,
+    uint8_t *out, uint32_t out_max, uint32_t *out_len) {
+    if (build_index_http(method, path, (char *)out, out_max, out_len) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* POST /build/<fqn> — rebuild that card in-kernel, right now: discover,
+ * find the unit, compile its sources with the seat fill (TCC objects),
+ * link through the ELF relocator, publish the fresh record. The reply is
+ * the same JSON a GET /build/<fqn> serves, plus the build status and any
+ * refusal reason. GET on the same path stays the record read.
+ *
+ * Every seat compiles this handler (the route is the same face); the
+ * POSIX rebuild chain only exists where it can run — firmware and the
+ * browser cell answer the honest refusal instead. */
+static int32_t build_rebuild_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len) {
+    char fqnbuf[192];
+    js_t j;
+
+    if (method == NULL || strcmp(method, "POST") != 0 || path == NULL
+        || strncmp(path, "/build/", 7) != 0) {
+        return -1;
+    }
+    memcpy(fqnbuf, path + 7, strlen(path + 7) + 1);
+    {
+        char *q = strchr(fqnbuf, '?');
+        if (q != NULL) {
+            *q = '\0';
+        }
+    }
+#if defined(PM_METAL_FIRMWARE) || defined(PM_METAL_BROWSER)
+    /* Seat fill: firmware has no host cc and no process resolver; the
+     * browser cell compiles to wasm32 objects but has no ELF loader and
+     * no filesystem to stat the tree. Same posture as jit.py's
+     * object_compile refusal, which those proves pin. */
+    j.p = out;
+    j.n = 0;
+    j.max = out_max;
+    js_raw(&j, "{\"fqn\":");
+    js_str(&j, fqnbuf);
+#ifdef PM_METAL_FIRMWARE
+    js_raw(&j, ",\"rebuild\":\"refused\",\"error\":\"seat fill: no in-kernel rebuild on firmware\"}");
+#else
+    js_raw(&j, ",\"rebuild\":\"refused\",\"error\":\"seat fill: no ELF loader in the browser cell\"}");
+#endif
+    if (!js_ok(&j)) {
+        return -1;
+    }
+    *out_len = j.n;
+    return 0;
+#else
+    {
+    const char *includes[INSPECT_BUILD_MAX_INC];
+    const char *defines[INSPECT_BUILD_MAX_DEF];
+    uint32_t n_inc = 0;
+    uint32_t n_def = 0;
+    pm_metal_build_unit_t *units = NULL;
+    uint32_t n_units = 0;
+    uint32_t i;
+    const pm_metal_build_unit_t *u = NULL;
+    const pm_metal_build_record_t *rec;
+    pm_metal_build_artifact_t art;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    char unit_root[2560];
+    size_t flen;
+    const char *p;
+    int32_t st;
+    void *backing;
+    pm_util_mem_arena_t *arena;
+
+    p = path + 7;
+    flen = strlen(p);
+    if (flen == 0 || flen >= sizeof(fqnbuf)) {
+        return -1;
+    }
+    memcpy(fqnbuf, p, flen + 1);
+    {
+        char *q = strchr(fqnbuf, '?');
+        if (q != NULL) {
+            *q = '\0';
+        }
+    }
+
+    backing = malloc(INSPECT_BUILD_SPAN);
+    if (backing == NULL) {
+        return -1;
+    }
+    arena = pm_util_mem_arena_create(backing, INSPECT_BUILD_SPAN);
+    if (arena == NULL) {
+        free(backing);
+        return -1;
+    }
+    st = pm_metal_build_discover(arena, &units, &n_units, err, sizeof(err));
+    if (st != PM_METAL_BUILD_OK) {
+        goto fail;
+    }
+    for (i = 0; i < n_units; i++) {
+        if (strcmp(units[i].fqn, fqnbuf) == 0) {
+            u = &units[i];
+            break;
+        }
+    }
+    if (u == NULL || strcmp(u->impl, "c") != 0
+        || u->n_sources > PM_METAL_BUILD_MAX_OBJS) {
+        goto fail;
+    }
+    if (ib_fill(includes, &n_inc, defines, &n_def) != 0) {
+        goto fail;
+    }
+    /* unit_root: the card's real dir — metal cards live under <metal>/src,
+     * wasmmod cards (pymergetic.util.*, pymergetic.wasmmod.*) under
+     * <wasmmod>/src. The first dir that exists wins; a miss is the refusal
+     * errbuf below. */
+    {
+        const char *roots[2];
+        uint32_t r;
+        int found = 0;
+        roots[0] = ib_src_root;
+        roots[1] = ib_wasmmod_src_root;
+        for (r = 0; r < 2 && !found; r++) {
+            size_t rl = strlen(roots[r]);
+            size_t tl = strlen(u->fqn);
+            size_t k;
+            struct stat st_dir;
+            if (rl + tl + 2 > sizeof(unit_root)) {
+                continue;
+            }
+            memcpy(unit_root, roots[r], rl);
+            unit_root[rl] = '/';
+            memcpy(unit_root + rl + 1, u->fqn, tl);
+            unit_root[rl + 1 + tl] = '\0';
+            for (k = rl + 1; k < rl + 1 + tl; k++) {
+                if (unit_root[k] == '.') {
+                    unit_root[k] = '/';
+                }
+            }
+            if (stat(unit_root, &st_dir) == 0 && S_ISDIR(st_dir.st_mode)) {
+                found = 1;
+            }
+        }
+        if (!found) {
+            snprintf(err, sizeof(err), "unit dir not found: %s", u->fqn);
+            goto fail;
+        }
+    }
+    memset(&art, 0, sizeof(art));
+    err[0] = '\0';
+    st = pm_metal_build_unit_compile(arena, u, unit_root,
+        includes, n_inc, defines, n_def, &art, err, sizeof(err));
+    if (st != PM_METAL_BUILD_OK) {
+        goto fail;
+    }
+    rec = pm_metal_build_record_find(u->fqn);
+    pm_metal_build_artifact_destroy(&art);
+    if (rec == NULL) {
+        goto fail;
+    }
+    /* The fresh record, same shape as the GET read. */
+    j.p = out;
+    j.n = 0;
+    j.max = out_max;
+    js_raw(&j, "{\"fqn\":");
+    js_str(&j, rec->fqn);
+    js_raw(&j, ",\"n_sources\":");
+    js_u32(&j, rec->n_sources);
+    js_raw(&j, ",\"objects\":[");
+    for (i = 0; i < rec->n_sources; i++) {
+        if (i > 0) {
+            js_ch(&j, ',');
+        }
+        js_ch(&j, '{');
+        js_raw(&j, "\"src\":");
+        js_str(&j, rec->src_paths[i]);
+        js_raw(&j, ",\"obj_len\":");
+        js_u32(&j, rec->obj_lens[i]);
+        js_ch(&j, '}');
+    }
+    js_raw(&j, "],\"symbols\":[");
+    for (i = 0; i < rec->n_syms; i++) {
+        if (i > 0) {
+            js_ch(&j, ',');
+        }
+        js_str(&j, rec->sym_names[i]);
+    }
+    js_raw(&j, "],\"rebuild\":\"ok\"}");
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    if (!js_ok(&j)) {
+        return -1;
+    }
+    *out_len = j.n;
+    return 0;
+
+fail:
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    /* The refusal is data: 200 with the reason, so a browser build console
+     * shows the same text the ksweep report carries. */
+    j.p = out;
+    j.n = 0;
+    j.max = out_max;
+    js_raw(&j, "{\"fqn\":");
+    js_str(&j, fqnbuf);
+    js_raw(&j, ",\"rebuild\":\"refused\",\"error\":");
+    js_str(&j, err[0] != '\0' ? err : "unknown unit");
+    js_ch(&j, '}');
+    if (!js_ok(&j)) {
+        return -1;
+    }
+    *out_len = j.n;
+    return 0;
+    } /* POSIX rebuild body */
+#endif /* PM_METAL_FIRMWARE || PM_METAL_BROWSER */
+}
+
+static int32_t build_rebuild_asgi_handler(const char *method, const char *path,
+    uint8_t *out, uint32_t out_max, uint32_t *out_len) {
+    if (build_rebuild_http(method, path, (char *)out, out_max, out_len) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 /* /docs/<fqn>/<name> — the doc extract for one export face: prose, params,
  * example, provenance (file + line). Unknown fqn/face is 404. */
 static int32_t docs_http(const char *method, const char *path,
@@ -1571,6 +2028,19 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
     /* Build records: /build/<fqn> serves the provenance of the unit's last
      * runtime compile (objects + linked symbols). */
     if (pm_metal_net_http_asgi_route_fn_ct("GET", "/build/*", build_asgi_handler,
+            "application/json") != 0) {
+        return -1;
+    }
+    /* Build face: GET /build is the tree index (every unit, impl, readiness),
+     * POST /build/<fqn> rebuilds that card in-kernel and returns the fresh
+     * record. Same chain ksweep drives, on demand, over the wire. Firmware
+     * and the browser cell wire the same routes; their rebuild fill answers
+     * the honest refusal (the handlers exist on every seat). */
+    if (pm_metal_net_http_asgi_route_fn_ct("GET", "/build", build_index_asgi_handler,
+            "application/json") != 0) {
+        return -1;
+    }
+    if (pm_metal_net_http_asgi_route_fn_ct("POST", "/build/*", build_rebuild_asgi_handler,
             "application/json") != 0) {
         return -1;
     }
