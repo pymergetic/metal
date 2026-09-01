@@ -19,6 +19,7 @@ enum Other {
     Other_V,
 };
 
+
 #line 4 "__impl__.rs"
 int32_t chain(bool a, bool b, bool c)
 ;
@@ -44,7 +45,9 @@ uint32_t discriminate(bool a, bool b, bool c)
 {
     Kind kind = Kind_P;
     if ((chain(a, b, c) == 2)) {
-        kind = Kind_Q;
+        {
+            kind = Kind_Q;
+        }
     }
     if ((kind == Kind_Q)) {
         return KINDS;

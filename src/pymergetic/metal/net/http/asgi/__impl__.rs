@@ -19,71 +19,17 @@ const ACCEPT_WAIT: i32 = -2;
 /* Route table is unbounded by design: it grows on demand from the arena (see
  * routes_grow), so adding routes can never overflow a fixed MAX_ROUTE table
  * again. The only limit on route count is arena free space. */
-/* Concurrency / buffer budgets. These used to be bare "microcontroller" guesses
- * (4 connections, 1 KiB rx, 160 B headers) that starve a native x64 API server;
- * each is now env-configurable (PM_METAL_ASGI_*) with a larger default. A
- * firmware/intent build that needs to stay small overrides the envs — the card
- * itself is seat-agnostic. */
-const MAX_CONN: usize = parse_pm_metal_asgi_max_conn();
-const MAX_ASGI: usize = parse_pm_metal_asgi_max_asgi();
-const RX_MAX: usize = parse_pm_metal_asgi_rx_max();
-const HDR_MAX: usize = parse_pm_metal_asgi_hdr_max();
-/* Response body budget for a single dynamic (route_fn) handler. This used to be
- * a fixed 16KiB "microcontroller" guess; this platform is a native x64 API
- * server (async runners, arena, streaming), so the default is 1 MiB and IS
- * configurable per build via the PM_METAL_ASGI_BODY_MAX env. Handlers that
- * outgrow even this should use route_stream_fn (progressive chunks). */
-const BODY_MAX: usize = parse_pm_metal_asgi_body_max();
-
-/* option_env! needs a literal at the call site, so each budget has its own thin
- * parser wrapped around one parse helper. */
-const fn parse_opt(en: Option<&str>, default: usize) -> usize {
-    let b = match en {
-        Some(v) => v.as_bytes(),
-        None => return default,
-    };
-    let mut n: usize = 0;
-    let mut i = 0usize;
-    while i < b.len() {
-        let d = b[i];
-        if d >= b'0' && d <= b'9' {
-            let m = match n.checked_mul(10) {
-                Some(x) => x,
-                None => return usize::MAX,
-            };
-            n = match m.checked_add((d - b'0') as usize) {
-                Some(x) => x,
-                None => return usize::MAX,
-            };
-        }
-        i += 1;
-    }
-    if n == 0 && b.len() != 0 {
-        default
-    } else {
-        n
-    }
-}
-
-const fn parse_pm_metal_asgi_max_conn() -> usize {
-    parse_opt(option_env!("PM_METAL_ASGI_MAX_CONN"), 16)
-}
-
-const fn parse_pm_metal_asgi_max_asgi() -> usize {
-    parse_opt(option_env!("PM_METAL_ASGI_MAX_ASGI"), 8)
-}
-
-const fn parse_pm_metal_asgi_rx_max() -> usize {
-    parse_opt(option_env!("PM_METAL_ASGI_RX_MAX"), 4096)
-}
-
-const fn parse_pm_metal_asgi_hdr_max() -> usize {
-    parse_opt(option_env!("PM_METAL_ASGI_HDR_MAX"), 1024)
-}
-
-const fn parse_pm_metal_asgi_body_max() -> usize {
-    parse_opt(option_env!("PM_METAL_ASGI_BODY_MAX"), 1 << 20)
-}
+/* Concurrency / buffer budgets. These used to be env-derived (PM_METAL_ASGI_*)
+ * via option_env!/const-eval, which the rsx subset refuses; no seat ever set
+ * the envs, so the defaults below are the fixed contract. */
+const MAX_CONN: usize = 16;
+const MAX_ASGI: usize = 8;
+const RX_MAX: usize = 4096;
+const HDR_MAX: usize = 1024;
+/* Response body budget for a single dynamic (route_fn) handler: 1 MiB on
+ * this native x64 platform (async runners, arena, streaming). Handlers that
+ * outgrow it should use route_stream_fn (progressive chunks). */
+const BODY_MAX: usize = 1048576;
 
 type Handler = unsafe extern "C" fn(
     method: *const u8,
@@ -98,8 +44,8 @@ type Handler = unsafe extern "C" fn(
  * large download (kernel/ELF/EFI, artifact, file) streams without buffering the
  * whole body — the total length comes from the size callback and is set as
  * Content-Length before the first chunk is sent. */
-const STREAM_CHUNK: usize = 1 << 14; // 16 KiB transfer slice (not a body cap)
-const STREAM_MAX: usize = 1 << 31; // safety upper bound for a streamed response
+const STREAM_CHUNK: usize = 16384; // 16 KiB transfer slice (not a body cap)
+const STREAM_MAX: usize = 2147483648; // safety upper bound for a streamed response
 
 type StreamSize = unsafe extern "C" fn(ctx: *mut c_void) -> u64;
 type StreamProducer = unsafe extern "C" fn(
@@ -264,6 +210,8 @@ static CONNS: Mut<[Conn; MAX_CONN]> = Mut(UnsafeCell::new([Conn {
 }; MAX_CONN]));
 static DEFAULT_BODY: &[u8] = b"asgi";
 static DEFER_BUSY_BODY: &[u8] = b"no renderer";
+const DEFAULT_BODY_LEN: u32 = 4;
+const DEFER_BUSY_BODY_LEN: u32 = 12;
 
 /* Deferred-request queue. A connection coroutine (async runner thread) enqueues
  * here and parks; the renderer thread — the one that owns the template engine,
@@ -274,7 +222,8 @@ static DEFER_BUSY_BODY: &[u8] = b"no renderer";
  * defer_next hands out the pending path and remembers it as *current*, so the
  * renderer needs no request id: one drainer at a time, which is what a render
  * pump is. */
-const MAX_DEFER: usize = MAX_CONN;
+/* Mirrors MAX_CONN (16) — kept a literal: the rsx subset chains no const-to-const. */
+const MAX_DEFER: usize = 16;
 /* A parked request sleeps in slices rather than waiting on nothing: the reply
  * posts the task for an immediate wake, and the timer bounds the wait when no
  * renderer is draining, so a missing pump answers instead of wedging the slot
@@ -304,8 +253,8 @@ static DEFERS: Mut<[Defer; MAX_DEFER]> = Mut(UnsafeCell::new([Defer {
 static DEFER_CUR: Mut<i32> = Mut(UnsafeCell::new(-1));
 static DEFER_LOCK: Mut<pm_util_lock_t> = Mut(UnsafeCell::new(pm_util_lock_t { locked: 0 }));
 
-unsafe fn defers() -> &'static mut [Defer; MAX_DEFER] {
-    unsafe { &mut *DEFERS.0.get() }
+unsafe fn defers() -> *mut Defer {
+    DEFERS.0.get() as *mut Defer
 }
 
 unsafe fn defer_lock() -> *mut pm_util_lock_t {
@@ -313,7 +262,9 @@ unsafe fn defer_lock() -> *mut pm_util_lock_t {
 }
 
 /// Self-registration record: httpd default on ANY :8090, driven through the
-/// asgi multi-instance listen/count/status/stop exports.
+/// asgi multi-instance listen/count/status/stop exports. rsx defers statics
+/// whose initializers name fns to after the prototype pass, so the fn-ptr
+/// fields are legal C here.
 static HTTPD_SVC: Mut<pm_metal_service_t> = Mut(UnsafeCell::new(pm_metal_service_t {
     name: b"httpd\0".as_ptr(),
     fqn: b"pymergetic.metal.net.http.asgi\0".as_ptr(),
@@ -325,17 +276,16 @@ static HTTPD_SVC: Mut<pm_metal_service_t> = Mut(UnsafeCell::new(pm_metal_service
     stop: pm_metal_net_http_asgi_stop,
 }));
 
-/* Live route entries, as a slice. Length is the allocated capacity; entries
- * past ROUTES_N are zeroed at grow time. Safe to call before any route is
- * registered (base is null → an empty slice). */
-unsafe fn routes() -> &'static mut [Route] {
-    let n = unsafe { *ROUTES_N.0.get() };
-    if n == 0 {
-        // No routes registered yet: never build a slice from a null base.
-        return &mut [];
-    }
-    let base = unsafe { *ROUTES_PTR.0.get() };
-    unsafe { core::slice::from_raw_parts_mut(base, n) }
+/* Live route entries, as a raw base pointer + count (subset discipline:
+ * no slice values). Entries past ROUTES_N are zeroed at grow time. The
+ * base is null until the first route is registered; count 0 means the
+ * pointer must not be dereferenced. */
+unsafe fn routes_ptr() -> *mut Route {
+    unsafe { *ROUTES_PTR.0.get() }
+}
+
+unsafe fn routes_len() -> usize {
+    unsafe { *ROUTES_N.0.get() }
 }
 
 /// Reset an arena-allocated Route slot so it is safe to reuse or to report as
@@ -343,9 +293,9 @@ unsafe fn routes() -> &'static mut [Route] {
 unsafe fn route_reset_storage(r: *mut Route) {
     unsafe {
         (*r).used = false;
-        (*r).method = [0; 8];
-        (*r).path = [0; 80];
-        (*r).body = [0; 256];
+        (*r).method.fill(0);
+        (*r).path.fill(0);
+        (*r).body.fill(0);
         (*r).body_len = 0;
         (*r).handler = None;
         (*r).ext = ptr::null();
@@ -422,73 +372,187 @@ unsafe fn routes_next_slot() -> Option<usize> {
     }
 }
 
-unsafe fn conns() -> &'static mut [Conn; MAX_CONN] {
-    unsafe { &mut *CONNS.0.get() }
+unsafe fn conns() -> *mut Conn {
+    CONNS.0.get() as *mut Conn
 }
 
-fn cstr_copy(dst: &mut [u8], src: *const u8) -> bool {
+/// Copy a NUL-terminated static into a fixed route array, zeroing the rest.
+/// ptr+len discipline: `dlen` is the array's capacity (subset: no slice lens).
+fn cstr_copy(dst: *mut u8, dlen: usize, src: *const u8) -> bool {
     if src.is_null() {
         return false;
     }
-    dst.fill(0);
     let mut i = 0usize;
     unsafe {
-        while i + 1 < dst.len() {
+        while i < dlen {
+            *dst.add(i) = 0;
+            i += 1;
+        }
+        i = 0;
+        while i + 1 < dlen {
             let b = *src.add(i);
             if b == 0 {
                 break;
             }
-            dst[i] = b;
+            *dst.add(i) = b;
             i += 1;
         }
     }
     true
 }
 
-fn cstr_eq(stored: &[u8], got: &[u8]) -> bool {
+/// Byte equality of a NUL-terminated stored span (route arrays are always
+/// NUL-terminated by cstr_copy) against a ptr+len got span.
+fn cstr_eq(stored: *const u8, got: *const u8, glen: usize) -> bool {
     let mut n = 0usize;
-    while n < stored.len() && stored[n] != 0 {
-        n += 1;
+    unsafe {
+        while *stored.add(n) != 0 {
+            n += 1;
+        }
+        if n != glen {
+            return false;
+        }
+        let mut i = 0usize;
+        while i < n {
+            if *stored.add(i) != *got.add(i) {
+                return false;
+            }
+            i += 1;
+        }
     }
-    n == got.len() && stored[..n] == got[..]
+    true
 }
 
 /// Route match. A stored route ending in `*` is a prefix wildcard (no
 /// trailing-slash requirement): the handler still receives the full request
 /// path, so the C face can parse `/inspect/reg/<module>/<func>` segments and
 /// page/query params itself. Everything else is an exact match.
-fn path_matches(stored: &[u8], got: &[u8]) -> bool {
+/// `stored` is NUL-terminated; `got` is ptr+len.
+fn path_matches(stored: *const u8, got: *const u8, glen: usize) -> bool {
     let mut n = 0usize;
-    while n < stored.len() && stored[n] != 0 {
-        n += 1;
+    unsafe {
+        while *stored.add(n) != 0 {
+            n += 1;
+        }
+        /* prefix wildcard: stored ends in star-slash */
+        if n >= 2 && *stored.add(n - 1) == b'*' && *stored.add(n - 2) == b'/' {
+            let base_len = n - 1;
+            if glen < base_len {
+                return false;
+            }
+            let mut i = 0usize;
+            while i < base_len {
+                if *stored.add(i) != *got.add(i) {
+                    return false;
+                }
+                i += 1;
+            }
+            return true;
+        }
+        if n != glen {
+            return false;
+        }
+        let mut i = 0usize;
+        while i < n {
+            if *stored.add(i) != *got.add(i) {
+                return false;
+            }
+            i += 1;
+        }
     }
-    let prefix = &stored[..n];
-    if prefix.len() >= 2 && prefix[prefix.len() - 1] == b'*' && prefix[prefix.len() - 2] == b'/' {
-        let base = &prefix[..prefix.len() - 1];
-        got.len() >= base.len() && got[..base.len()] == base[..]
-    } else {
-        n == got.len() && prefix == got
-    }
+    true
 }
 
-fn find_headers_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4)
-}
-
-fn parse_req<'a>(buf: &'a [u8]) -> Option<(&'a [u8], &'a [u8])> {
-    let line_end = buf.windows(2).position(|w| w == b"\r\n")?;
-    let line = &buf[..line_end];
-    let mut it = line.split(|b| *b == b' ');
-    let method = it.next()?;
-    let path = it.next()?;
-    Some((method, path))
-}
-
-fn path_only(path: &[u8]) -> &[u8] {
-    match path.iter().position(|&b| b == b'?') {
-        Some(i) => &path[..i],
-        None => path,
+/// The subset carries no slice lengths, so byte spans travel as ptr+len
+/// pairs (the kernel discipline). These three were iterator chains
+/// (`windows().position().map()`, `split().next()`, `iter().position()`);
+/// they are now explicit scans over the same bytes — same results, no
+/// iterator machinery.
+fn find_headers_end(buf: &[u8], len: usize) -> Option<usize> {
+    /* header terminator \r\n\r\n: scan 4-byte windows by index */
+    let mut i = 0usize;
+    while i + 4 <= len {
+        if buf[i] == b'\r'
+            && buf[i + 1] == b'\n'
+            && buf[i + 2] == b'\r'
+            && buf[i + 3] == b'\n'
+        {
+            return Some(i + 4);
+        }
+        i += 1;
     }
+    None
+}
+
+/// Request line `METHOD /path` — out-params carry the two spans (offsets into
+/// `buf`, plus lens) instead of a tuple Option. Returns MTAR-style: true on
+/// success with m_off/m_len/p_off/p_len filled in.
+fn parse_req(
+    buf: &[u8],
+    len: usize,
+    m_off: *mut usize,
+    m_len: *mut usize,
+    p_off: *mut usize,
+    p_len: *mut usize,
+) -> bool {
+    /* find the end of the first line */
+    let mut line_end = 0usize;
+    let mut have_line_end = false;
+    let mut i = 0usize;
+    while i + 2 <= len {
+        if buf[i] == b'\r' && buf[i + 1] == b'\n' {
+            line_end = i;
+            have_line_end = true;
+            break;
+        }
+        i += 1;
+    }
+    if !have_line_end {
+        return false;
+    }
+    /* method = up to the first space */
+    let mut m0 = 0usize;
+    while m0 < line_end && buf[m0] != b' ' {
+        m0 += 1;
+    }
+    if m0 == 0 || m0 >= line_end {
+        return false;
+    }
+    /* path = after the space(s), up to the next space (the HTTP version
+     * follows it — the path is the line's second space-delimited token) */
+    let mut p0 = m0;
+    while p0 < line_end && buf[p0] == b' ' {
+        p0 += 1;
+    }
+    if p0 >= line_end {
+        return false;
+    }
+    let mut p1 = p0;
+    while p1 < line_end && buf[p1] != b' ' {
+        p1 += 1;
+    }
+    unsafe {
+        *m_off = 0;
+        *m_len = m0;
+        *p_off = p0;
+        *p_len = p1 - p0;
+    }
+    true
+}
+
+/// Query-stripped path: the length is the caller's concern — returns the
+/// byte offset where `?` starts, or `len` when there is no query.
+fn path_query_off(path: *const u8, len: usize) -> usize {
+    let mut i = 0usize;
+    unsafe {
+        while i < len {
+            if *path.add(i) == b'?' {
+                return i;
+            }
+            i += 1;
+        }
+    }
+    len
 }
 
 /// Clear a slot's optional extras so a reused route never inherits the previous
@@ -501,20 +565,22 @@ fn route_reset_opts(r: &mut Route) {
     r.defer = false;
 }
 
-fn copy_cstr(dst: &mut [u8], src: &[u8]) {
-    dst.fill(0);
-    let n = src.len().min(dst.len().saturating_sub(1));
-    dst[..n].copy_from_slice(&src[..n]);
-}
-
 /// Resolve a request to a body. Returns true when the match is a deferred
 /// route, meaning no body was produced and the caller must park the connection.
-fn lookup_into(c: &mut Conn, method: &[u8], path: &[u8]) -> bool {
-    let match_path = path_only(path);
+/// Spans travel as ptr+len (subset discipline): method/path are byte spans of
+/// the connection's rx buffer, mlen/plen their lengths.
+fn lookup_into(c: &mut Conn, method: *const u8, mlen: usize, path: *const u8, plen: usize) -> bool {
+    /* query-stripped path span: the match uses the path up to `?` */
+    let match_len = path_query_off(path, plen);
     c.ctype = ptr::null();
     unsafe {
-        for r in routes().iter() {
-            if !(r.used && cstr_eq(&r.method, method) && path_matches(&r.path, match_path)) {
+        let base = routes_ptr();
+        let count = *ROUTES_N.0.get();
+        let mut i = 0usize;
+        while i < count {
+            let r = &mut *base.add(i);
+            if !(r.used && cstr_eq(r.method.as_ptr(), method, mlen) && path_matches(r.path.as_ptr(), path, match_len)) {
+                i += 1;
                 continue;
             }
             c.ctype = r.ctype;
@@ -526,8 +592,16 @@ fn lookup_into(c: &mut Conn, method: &[u8], path: &[u8]) -> bool {
             if let Some(h) = r.handler {
                 let mut mbuf = [0u8; 8];
                 let mut pbuf = [0u8; 160];
-                copy_cstr(&mut mbuf, method);
-                copy_cstr(&mut pbuf, path);
+                let mut k = 0usize;
+                while k < mlen && k < 7 {
+                    mbuf[k] = *method.add(k);
+                    k += 1;
+                }
+                let mut k = 0usize;
+                while k < plen && k < 159 {
+                    pbuf[k] = *path.add(k);
+                    k += 1;
+                }
                 let arena = *ARENA.0.get();
                 if arena.is_null() {
                     return false;
@@ -582,12 +656,21 @@ fn lookup_into(c: &mut Conn, method: &[u8], path: &[u8]) -> bool {
     }
     c.ctype = ptr::null();
     c.body = DEFAULT_BODY.as_ptr();
-    c.body_len = DEFAULT_BODY.len() as u32;
+    c.body_len = DEFAULT_BODY_LEN;
     false
 }
 
 fn conn_slot() -> Option<usize> {
-    unsafe { conns().iter().position(|c| !c.used) }
+    unsafe {
+        let mut i = 0usize;
+        while i < MAX_CONN {
+            if !(*conns().add(i)).used {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
 }
 
 /// Free a connection's heap body buffer and close its fd. Call on every
@@ -610,23 +693,40 @@ unsafe fn release_conn(c: &mut Conn) {
 
 /// Queue a parked connection's path for the renderer. False when the queue is
 /// full, in which case the caller must answer instead of parking.
-fn defer_enqueue(conn: u32, path: &[u8]) -> bool {
+/// `path` is ptr+len (subset discipline).
+fn defer_enqueue(conn: u32, path: *const u8, plen: usize) -> bool {
     unsafe {
         pm_util_lock_acquire(defer_lock());
-        let out = match defers().iter().position(|d| !d.used) {
-            Some(i) => {
-                let d = &mut defers()[i];
-                d.used = true;
-                d.taken = false;
-                d.conn = conn;
-                d.waiter = pm_metal_async_current_task();
-                d.path.fill(0);
-                let n = path.len().min(d.path.len() - 1);
-                d.path[..n].copy_from_slice(&path[..n]);
-                true
+        let arr = &mut *DEFERS.0.get();
+        let n_slots = MAX_DEFER;
+        let mut found = MAX_DEFER;
+        let mut i = 0usize;
+        while i < n_slots {
+            if !arr[i].used {
+                found = i;
+                break;
             }
-            None => false,
-        };
+            i += 1;
+        }
+        let out = found != MAX_DEFER;
+        if out {
+            let d = &mut arr[found];
+            d.used = true;
+            d.taken = false;
+            d.conn = conn;
+            d.waiter = pm_metal_async_current_task();
+            let mut k = 0usize;
+            while k < 160 {
+                d.path[k] = 0;
+                k += 1;
+            }
+            let n = plen.min(159);
+            let mut k = 0usize;
+            while k < n {
+                d.path[k] = *path.add(k);
+                k += 1;
+            }
+        }
         pm_util_lock_release(defer_lock());
         out
     }
@@ -636,7 +736,10 @@ fn defer_enqueue(conn: u32, path: &[u8]) -> bool {
 fn defer_drop(conn: u32) {
     unsafe {
         pm_util_lock_acquire(defer_lock());
-        for (i, d) in defers().iter_mut().enumerate() {
+        let base = (*DEFERS.0.get()).as_mut_ptr();
+        let mut i = 0usize;
+        while i < MAX_DEFER {
+            let d = &mut *base.add(i);
             if d.used && d.conn == conn {
                 d.used = false;
                 d.taken = false;
@@ -645,6 +748,7 @@ fn defer_drop(conn: u32) {
                     *DEFER_CUR.0.get() = -1;
                 }
             }
+            i += 1;
         }
         pm_util_lock_release(defer_lock());
     }
@@ -657,11 +761,18 @@ fn defer_drop(conn: u32) {
 pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_next() -> *const u8 {
     unsafe {
         pm_util_lock_acquire(defer_lock());
-        let mut out = ptr::null();
-        if let Some(i) = defers().iter().position(|d| d.used && !d.taken) {
-            defers()[i].taken = true;
-            *DEFER_CUR.0.get() = i as i32;
-            out = defers()[i].path.as_ptr();
+        let mut out: *const u8 = ptr::null();
+        let base = (*DEFERS.0.get()).as_mut_ptr();
+        let mut i = 0usize;
+        while i < MAX_DEFER {
+            let d = &mut *base.add(i);
+            if d.used && !d.taken {
+                d.taken = true;
+                *DEFER_CUR.0.get() = i as i32;
+                out = d.path.as_ptr();
+                break;
+            }
+            i += 1;
         }
         pm_util_lock_release(defer_lock());
         out
@@ -693,10 +804,11 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_reply_ct(
         let cur = *DEFER_CUR.0.get();
         let mut rc = -1;
         if cur >= 0 && (cur as usize) < MAX_DEFER {
-            let d = defers()[cur as usize];
+            let dp = unsafe { defers().add(cur as usize) };
+            let d = unsafe { *dp };
             let fits = (len as usize) <= BODY_MAX && (len == 0 || !body.is_null());
             if d.used && fits && (d.conn as usize) < MAX_CONN {
-                let c = &mut conns()[d.conn as usize];
+                let c = unsafe { &mut *conns().add(d.conn as usize) };
                 if len != 0 {
                     let arena = *ARENA.0.get();
                     if arena.is_null() {
@@ -719,9 +831,11 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_reply_ct(
                 /* Set last: the parked coroutine reads this to move on. */
                 c.defer_ready = true;
                 let waiter = d.waiter;
-                defers()[cur as usize].used = false;
-                defers()[cur as usize].taken = false;
-                defers()[cur as usize].waiter = ptr::null_mut();
+                unsafe {
+                    (*dp).used = false;
+                    (*dp).taken = false;
+                    (*dp).waiter = ptr::null_mut();
+                }
                 *DEFER_CUR.0.get() = -1;
                 if !waiter.is_null() {
                     pm_metal_async_post_task(waiter);
@@ -749,8 +863,8 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route_defer(
         let Some(slot) = routes_next_slot() else {
             return -1;
         };
-        let r = &mut routes()[slot];
-        if !cstr_copy(&mut r.method, b"GET\0".as_ptr()) || !cstr_copy(&mut r.path, path) {
+        let r = unsafe { &mut *routes_ptr().add(slot) };
+        if !cstr_copy(r.method.as_mut_ptr(), 8, b"GET\0".as_ptr()) || !cstr_copy(r.path.as_mut_ptr(), 80, path) {
             return -1;
         }
         r.body.fill(0);
@@ -765,34 +879,90 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route_defer(
     0
 }
 
-fn ctype_of(path: &[u8]) -> &'static [u8] {
-    let mut end = path.len();
-    while end > 0 && path[end - 1] == 0 {
+/// Content-Type by file extension. `path` is ptr+len (subset discipline);
+/// the return is a NUL-terminated static string (all callers copy to the
+/// NUL, so no length travels with it).
+fn ctype_of(path: *const u8, plen: usize) -> *const u8 {
+    let mut end = plen;
+    while end > 0 && unsafe { *path.add(end - 1) } == 0 {
         end -= 1;
     }
-    let p = &path[..end];
     // Landing/index routes without a file extension (e.g. `/`) are HTML.
-    if p == b"/" {
-        return b"text/html; charset=utf-8";
+    if end == 1 && unsafe { *path } == b'/' {
+        return b"text/html; charset=utf-8\0".as_ptr();
     }
-    let dot = p.iter().rposition(|&b| b == b'.');
-    match dot.map(|i| &p[i..]) {
-        Some(b".html") | Some(b".htm") => b"text/html; charset=utf-8",
-        Some(b".css") => b"text/css; charset=utf-8",
-        Some(b".js") => b"application/javascript",
-        Some(b".json") => b"application/json",
-        Some(b".svg") => b"image/svg+xml",
-        Some(b".png") => b"image/png",
-        _ => b"application/octet-stream",
+    /* last dot in the stripped span: scan backwards (subset: no rposition) */
+    let mut dot = end;
+    let mut found = false;
+    while dot > 0 {
+        dot -= 1;
+        if unsafe { *path.add(dot) } == b'.' {
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        return b"application/octet-stream\0".as_ptr();
+    }
+    let ext = unsafe { path.add(dot) };
+    if unsafe { cstr_eq_static(ext, b".html\0".as_ptr(), end - dot) } {
+        return b"text/html; charset=utf-8\0".as_ptr();
+    }
+    if unsafe { cstr_eq_static(ext, b".htm\0".as_ptr(), end - dot) } {
+        return b"text/html; charset=utf-8\0".as_ptr();
+    }
+    if unsafe { cstr_eq_static(ext, b".css\0".as_ptr(), end - dot) } {
+        return b"text/css\0".as_ptr();
+    }
+    if unsafe { cstr_eq_static(ext, b".js\0".as_ptr(), end - dot) } {
+        return b"application/javascript\0".as_ptr();
+    }
+    if unsafe { cstr_eq_static(ext, b".json\0".as_ptr(), end - dot) } {
+        return b"application/json\0".as_ptr();
+    }
+    if unsafe { cstr_eq_static(ext, b".svg\0".as_ptr(), end - dot) } {
+        return b"image/svg+xml\0".as_ptr();
+    }
+    if unsafe { cstr_eq_static(ext, b".png\0".as_ptr(), end - dot) } {
+        return b"image/png\0".as_ptr();
+    }
+    b"application/octet-stream\0".as_ptr()
+}
+
+/// span-eq: `p` (len `n`) vs a NUL-terminated static (subset helper for the
+/// extension table above).
+unsafe fn cstr_eq_static(p: *const u8, z: *const u8, n: usize) -> bool {
+    let mut i = 0usize;
+    loop {
+        let c = unsafe { *z.add(i) };
+        if c == 0 {
+            return i == n;
+        }
+        if i >= n || unsafe { *p.add(i) } != c {
+            return false;
+        }
+        i += 1;
     }
 }
 
-fn build_hdr(c: &mut Conn, path: &[u8]) {
-    c.hdr.fill(0);
+/// Build the response header into the conn's fixed hdr array. `path` is
+/// ptr+len (subset discipline): the file extension drives the fallback
+/// Content-Type.
+fn build_hdr(c: &mut Conn, path: *const u8, plen: usize) {
     let mut n = 0usize;
-    let status = b"HTTP/1.0 200 OK\r\nContent-Type: ";
-    c.hdr[n..n + status.len()].copy_from_slice(status);
-    n += status.len();
+    /* zero the fixed header buffer (subset: no fill) */
+    let mut k = 0usize;
+    while k < HDR_MAX {
+        c.hdr[k] = 0;
+        k += 1;
+    }
+    let status = b"HTTP/1.0 200 OK\r\nContent-Type: \0".as_ptr();
+    let mut k = 0usize;
+    while unsafe { *status.add(k) } != 0 {
+        c.hdr[n + k] = unsafe { *status.add(k) };
+        k += 1;
+    }
+    n += k;
     // A route may declare its own Content-Type (JSON APIs, whose paths carry no
     // usable extension); otherwise fall back to the path's file extension.
     if !c.ctype.is_null() {
@@ -809,21 +979,35 @@ fn build_hdr(c: &mut Conn, path: &[u8]) {
         }
         n += i;
     } else {
-        let ct = ctype_of(path);
-        c.hdr[n..n + ct.len()].copy_from_slice(ct);
-        n += ct.len();
+        let ct = ctype_of(path, plen);
+        let mut k = 0usize;
+        unsafe {
+            while *ct.add(k) != 0 {
+                c.hdr[n + k] = *ct.add(k);
+                k += 1;
+            }
+        }
+        n += k;
     }
-    let prefix = b"\r\nContent-Length: ";
-    c.hdr[n..n + prefix.len()].copy_from_slice(prefix);
-    n += prefix.len();
-    n += put_u64(&mut c.hdr[n..], c.body_len as u64);
-    let tail = b"\r\n\r\n";
-    c.hdr[n..n + tail.len()].copy_from_slice(tail);
-    n += tail.len();
+    let prefix = b"\r\nContent-Length: \0".as_ptr();
+    let mut k = 0usize;
+    while unsafe { *prefix.add(k) } != 0 {
+        c.hdr[n + k] = unsafe { *prefix.add(k) };
+        k += 1;
+    }
+    n += k;
+    n += unsafe { put_u64(c.hdr.as_mut_ptr().add(n), c.body_len as u64) };
+    let tail = b"\r\n\r\n\0".as_ptr();
+    let mut k = 0usize;
+    while unsafe { *tail.add(k) } != 0 {
+        c.hdr[n + k] = unsafe { *tail.add(k) };
+        k += 1;
+    }
+    n += k;
     c.hdr_len = n as u32;
 }
 
-fn put_u64(dst: &mut [u8], mut v: u64) -> usize {
+fn put_u64(dst: *mut u8, mut v: u64) -> usize {
     let mut tmp = [0u8; 20];
     let mut i = 0usize;
     loop {
@@ -837,7 +1021,9 @@ fn put_u64(dst: &mut [u8], mut v: u64) -> usize {
     let mut o = 0usize;
     while i > 0 {
         i -= 1;
-        dst[o] = tmp[i];
+        unsafe {
+            *dst.add(o) = tmp[i];
+        }
         o += 1;
     }
     o
@@ -865,7 +1051,7 @@ struct ConnFrame {
     if slot >= MAX_CONN {
         return ERROR;
     }
-    let c = unsafe { &mut conns()[slot] };
+    let c = unsafe { &mut *conns().add(slot) };
     if c.step == 0 {
         let room = RX_MAX as u32 - c.rx_len;
         if room == 0 {
@@ -883,35 +1069,45 @@ struct ConnFrame {
             return ERROR;
         }
         c.rx_len += n as u32;
-        let end = match find_headers_end(&c.rx[..c.rx_len as usize]) {
+        let end = match find_headers_end(&c.rx, c.rx_len as usize) {
             Some(e) => e,
             None => return WAITING,
         };
-        let (method, path) = match parse_req(&c.rx[..end]) {
-            Some(v) => v,
-            None => {
-                unsafe { release_conn(c) };
-                c.used = false;
-                return ERROR;
-            }
-        };
+        let mut m_off = 0usize;
+        let mut m_len2 = 0usize;
+        let mut p_off = 0usize;
+        let mut p_len2 = 0usize;
+        if !parse_req(&c.rx, end, &mut m_off, &mut m_len2, &mut p_off, &mut p_len2) {
+            unsafe { release_conn(c) };
+            c.used = false;
+            return ERROR;
+        }
         let mut mbuf = [0u8; 8];
         let mut pbuf = [0u8; 160];
-        let mlen = method.len().min(7);
-        let plen = path.len().min(159);
-        copy_cstr(&mut mbuf, method);
-        copy_cstr(&mut pbuf, path);
-        if lookup_into(c, &mbuf[..mlen], &pbuf[..plen]) {
+        let mlen = m_len2.min(7);
+        let plen = p_len2.min(159);
+        /* span copy (subset: no copy_from_slice) */
+        let mut k = 0usize;
+        while k < mlen {
+            mbuf[k] = c.rx[m_off + k];
+            k += 1;
+        }
+        let mut k = 0usize;
+        while k < plen {
+            pbuf[k] = c.rx[p_off + k];
+            k += 1;
+        }
+        if lookup_into(c, mbuf.as_ptr(), mlen, pbuf.as_ptr(), plen) {
             /* Deferred route: park until the renderer answers. The header waits
              * too — Content-Length is only known once the body lands. */
             c.defer_waits = 0;
             c.defer_ready = false;
-            if !defer_enqueue(slot as u32, &pbuf[..plen]) {
+            if !defer_enqueue(slot as u32, pbuf.as_ptr(), plen) {
                 /* Queue full: answer rather than park forever. */
                 c.ctype = ptr::null();
                 c.body = DEFER_BUSY_BODY.as_ptr();
-                c.body_len = DEFER_BUSY_BODY.len() as u32;
-                build_hdr(c, &pbuf[..plen]);
+                c.body_len = DEFER_BUSY_BODY_LEN;
+                build_hdr(c, pbuf.as_ptr(), plen);
                 c.snd_off = 0;
                 c.step = 1;
             } else {
@@ -919,7 +1115,7 @@ struct ConnFrame {
                 return unsafe { pm_metal_async_sleep_us(self_, DEFER_SLICE_US) };
             }
         } else {
-            build_hdr(c, &pbuf[..plen]);
+            build_hdr(c, pbuf.as_ptr(), plen);
             c.snd_off = 0;
             c.step = 1;
         }
@@ -935,9 +1131,9 @@ struct ConnFrame {
             defer_drop(slot as u32);
             c.ctype = ptr::null();
             c.body = DEFER_BUSY_BODY.as_ptr();
-            c.body_len = DEFER_BUSY_BODY.len() as u32;
+            c.body_len = DEFER_BUSY_BODY_LEN;
         }
-        build_hdr(c, b"");
+        build_hdr(c, b"\0".as_ptr(), 0);
         c.snd_off = 0;
         c.step = 1;
     }
@@ -980,15 +1176,16 @@ struct ConnFrame {
                     }
                     let mut more = 1i32;
                     let mut len = want as u32;
-                    let rc = unsafe {
-                        prod(
+                    let rc: i32;
+                    unsafe {
+                        rc = prod(
                             c.stream_ctx,
                             c.stream_chunk.as_mut_ptr(),
                             &mut len,
                             STREAM_CHUNK as u32,
                             &mut more,
-                        )
-                    };
+                        );
+                    }
                     if rc != 0 {
                         unsafe { release_conn(c) };
                         c.used = false;
@@ -1055,7 +1252,7 @@ fn spawn_conn(fd: i32) -> i32 {
         return -1;
     };
     unsafe {
-        let c = &mut conns()[slot];
+        let c = &mut *conns().add(slot);
         *c = Conn {
             used: true,
             step: 0,
@@ -1159,11 +1356,23 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_init(arena: *mut pm_util_mem_are
             listen_at_set(slot, -1);
             listen_addr_set(slot, 0, 0);
         }
-        for r in routes().iter_mut() {
-            r.used = false;
+        unsafe {
+            let base = routes_ptr();
+            let n = routes_len();
+            let mut i = 0usize;
+            while i < n {
+                let r = &mut *base.add(i);
+                r.used = false;
+                i += 1;
+            }
         }
-        for c in conns().iter_mut() {
-            c.used = false;
+        unsafe {
+            let cbase = conns();
+            let mut ci = 0usize;
+            while ci < MAX_CONN {
+                (*cbase.add(ci)).used = false;
+                ci += 1;
+            }
         }
         // Self-register the httpd service so m.serve()/m.services() see it.
         pm_metal_services_register(HTTPD_SVC.0.get() as *const pm_metal_service_t);
@@ -1181,11 +1390,17 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_deinit() {
             }
             listen_at_set(slot, -1);
         }
-        for c in conns().iter_mut() {
-            if c.used {
-                release_conn(c);
+        unsafe {
+            let cbase = conns();
+            let mut ci = 0usize;
+            while ci < MAX_CONN {
+                let c = &mut *cbase.add(ci);
+                if c.used {
+                    release_conn(c);
+                }
+                c.used = false;
+                ci += 1;
             }
-            c.used = false;
         }
         // Free the dynamic route table so a re-init starts clean and cannot
         // double-register over stale entries.
@@ -1217,8 +1432,8 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route(
         let Some(slot) = routes_next_slot() else {
             return -1;
         };
-        let r = &mut routes()[slot];
-        if !cstr_copy(&mut r.method, method) || !cstr_copy(&mut r.path, path) {
+        let r = unsafe { &mut *routes_ptr().add(slot) };
+        if !cstr_copy(r.method.as_mut_ptr(), 8, method) || !cstr_copy(r.path.as_mut_ptr(), 80, path) {
             return -1;
         }
         r.body.fill(0);
@@ -1248,8 +1463,8 @@ unsafe fn route_fn_claim(
     }
     unsafe {
         let slot = routes_next_slot()?;
-        let r = &mut routes()[slot];
-        if !cstr_copy(&mut r.method, method) || !cstr_copy(&mut r.path, path) {
+        let r = unsafe { &mut *routes_ptr().add(slot) };
+        if !cstr_copy(r.method.as_mut_ptr(), 8, method) || !cstr_copy(r.path.as_mut_ptr(), 80, path) {
             return None;
         }
         r.body.fill(0);
@@ -1309,8 +1524,8 @@ unsafe fn route_static_claim(
     }
     unsafe {
         let slot = routes_next_slot()?;
-        let r = &mut routes()[slot];
-        if !cstr_copy(&mut r.method, b"GET\0".as_ptr()) || !cstr_copy(&mut r.path, url) {
+        let r = unsafe { &mut *routes_ptr().add(slot) };
+        if !cstr_copy(r.method.as_mut_ptr(), 8, b"GET\0".as_ptr()) || !cstr_copy(r.path.as_mut_ptr(), 80, url) {
             return None;
         }
         r.body.fill(0);
@@ -1382,8 +1597,8 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route_static_copy(
             return -1;
         }
         ptr::copy_nonoverlapping(body, dst, n);
-        let r = &mut routes()[slot];
-        if !cstr_copy(&mut r.method, b"GET\0".as_ptr()) || !cstr_copy(&mut r.path, url) {
+        let r = unsafe { &mut *routes_ptr().add(slot) };
+        if !cstr_copy(r.method.as_mut_ptr(), 8, b"GET\0".as_ptr()) || !cstr_copy(r.path.as_mut_ptr(), 80, url) {
             return -1;
         }
         r.body.fill(0);
@@ -1418,8 +1633,8 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route_stream_fn(
         let Some(slot) = routes_next_slot() else {
             return -1;
         };
-        let r = &mut routes()[slot];
-        if !cstr_copy(&mut r.method, method) || !cstr_copy(&mut r.path, path) {
+        let r = unsafe { &mut *routes_ptr().add(slot) };
+        if !cstr_copy(r.method.as_mut_ptr(), 8, method) || !cstr_copy(r.path.as_mut_ptr(), 80, path) {
             return -1;
         }
         r.body.fill(0);

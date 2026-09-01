@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <string.h>
 
+
 #line 3 "__impl__.rs"
 uint8_t classify(uint8_t c)
 ;

@@ -12,6 +12,7 @@ struct Kid {
 };
 typedef struct Kid Kid;
 
+
 #line 11 "__impl__.rs"
 int32_t pack(Kid * * src, Kid * * dst, size_t count)
 ;
@@ -21,14 +22,18 @@ uint8_t copy_bytes(const uint8_t * src, uint8_t * dst, size_t n)
 #line 11 "__impl__.rs"
 int32_t pack(Kid * * src, Kid * * dst, size_t count)
 {
-    memcpy(dst, src, (count) * sizeof(*src));
+    {
+        memcpy(dst, src, (count) * sizeof(*src));
+    }
     return (int32_t)(count);
 }
 
 #line 19 "__impl__.rs"
 uint8_t copy_bytes(const uint8_t * src, uint8_t * dst, size_t n)
 {
-    memcpy(dst, src, (n) * sizeof(*src));
+    {
+        memcpy(dst, src, (n) * sizeof(*src));
+    }
     return (*dst);
 }
 

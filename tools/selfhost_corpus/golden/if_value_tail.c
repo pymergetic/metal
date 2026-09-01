@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <string.h>
 
+
 #line 5 "__impl__.rs"
 const uint8_t * pick(bool fixed)
 ;
