@@ -17,15 +17,24 @@ bytecode in-kernel). Companion .c/.rs units beside the muscle (net/wg's
 __crypto__.c, e.g.) ride along; generated faces (__exports__.* /
 __types__.*) and prove tests are skipped, they are not authored source.
 
+The one face exception is an authored `__types__.rs` (the Rust twin of the
+C `__types__.h`, hand-written, e.g. wasmmod's registry Value-convention
+shapes): it is not a TU — it is embedded in a separate per-card faces list,
+reachable by the build card's in-kernel rsx compile when a unit
+`#[path]`-includes it (the rsx equivalent of a C `#include`, resolved from
+the embedded tree so firmware needs no filesystem).
+
 Output is a header that both the C inspect card and the .rs driver include:
 
     static const pm_metal_src_file_t PM_METAL_SRC_FILES_<n>[] = {...};
+    static const pm_metal_src_file_t PM_METAL_SRC_FACES_<n>[] = {...};
     static const pm_metal_src_card_t PM_METAL_SRC_CARDS[] = {
-        { .fqn="...", .impl="c", .files=..., .nfiles=..., .manifest=..., .toml=... },
+        { .fqn="...", .impl="c", .files=..., .nfaces=..., .manifest=..., .toml=... },
         ...
     };
     uint32_t pm_metal_src_card_count(void);
     const pm_metal_src_card_t *pm_metal_src_find(const char *fqn);
+    const pm_metal_src_file_t *pm_metal_src_face_find(const char *fqn, const char *rel);
 
 `impl` is the manifest's impl string and `toml` the raw __pmm__.toml bytes
 (NUL-terminated) — the build card's runtime discovery parses them to
@@ -127,6 +136,20 @@ def _card_manifest(fqn: str, files: list[tuple[str, int]]) -> str:
     return json.dumps(tree, separators=(",", ":"))
 
 
+def _face_files(card_dir: pathlib.Path, impl: str) -> list[pathlib.Path]:
+    """Authored faces reachable by `#[path]` includes from other cards.
+
+    Just `__types__.rs` today — the hand-written Rust twin of `__types__.h`.
+    Not a TU: never compiled standalone, only spliced into a unit that
+    `#[path]`-includes it (the generated `__exports__.rs`/`__types__.h`
+    stay out — those are regen artifacts, not authored).
+    """
+    if impl != "rs":
+        return []
+    p = card_dir / "__types__.rs"
+    return [p] if p.is_file() else []
+
+
 def gather(card_roots: list[pathlib.Path]) -> list[dict]:
     cards: list[dict] = []
     seen: set[str] = set()
@@ -142,8 +165,9 @@ def gather(card_roots: list[pathlib.Path]) -> list[dict]:
             if not src:
                 continue  # impl="py" (pysample) or no native muscle: nothing to browse
             seen.add(fqn)
+            faces = _face_files(card_dir, impl)
             cards.append({"fqn": fqn, "impl": impl, "dir": card_dir, "files": src,
-                          "toml": toml})
+                          "faces": faces, "toml": toml})
     cards.sort(key=lambda c: c["fqn"])
     return cards
 
@@ -167,7 +191,7 @@ def main() -> int:
     buf.write('#include <stdint.h>\n#include <stddef.h>\n#include <string.h>\n\n')
 
     for card in cards:
-        for path in card["files"]:
+        for path in card["files"] + card["faces"]:
             name = _ident(card["fqn"], path.name)
             data = path.read_bytes()
             if b"\x00" in data:
@@ -185,6 +209,8 @@ def main() -> int:
               "    const char *impl;\n"
               "    const pm_metal_src_file_t *files;\n"
               "    uint32_t nfiles;\n"
+              "    const pm_metal_src_file_t *faces;\n"
+              "    uint32_t nfaces;\n"
               "    const char *manifest;\n"
               "    const char *toml;\n"
               "} pm_metal_src_card_t;\n\n")
@@ -193,6 +219,11 @@ def main() -> int:
     for ci, card in enumerate(cards):
         buf.write(f"static const pm_metal_src_file_t PM_METAL_SRC_FILES_{ci}[] = {{\n")
         for path in card["files"]:
+            name = _ident(card["fqn"], path.name)
+            buf.write(f'    {{ "{path.name}", s_src_{name}, sizeof(s_src_{name}) - 1u }},\n')
+        buf.write("};\n\n")
+        buf.write(f"static const pm_metal_src_file_t PM_METAL_SRC_FACES_{ci}[] = {{\n")
+        for path in card["faces"]:
             name = _ident(card["fqn"], path.name)
             buf.write(f'    {{ "{path.name}", s_src_{name}, sizeof(s_src_{name}) - 1u }},\n')
         buf.write("};\n\n")
@@ -223,6 +254,8 @@ def main() -> int:
             f'        "{card["impl"]}",\n'
             f'        PM_METAL_SRC_FILES_{ci},\n'
             f'        {len(card["files"])}u,\n'
+            f'        PM_METAL_SRC_FACES_{ci},\n'
+            f'        {len(card["faces"])}u,\n'
             f'        (const char *)s_src_{name},\n'
             f'        (const char *)s_src_{toml_name},\n'
             f'    }},\n')
@@ -245,6 +278,21 @@ def main() -> int:
               "        int c = strcmp(PM_METAL_SRC_CARDS[mid].fqn, fqn);\n"
               "        if (c == 0) return &PM_METAL_SRC_CARDS[mid];\n"
               "        if (c < 0) lo = mid + 1u; else hi = mid;\n"
+              "    }\n"
+              "    return NULL;\n"
+              "}\n\n"
+              "static const pm_metal_src_file_t *pm_metal_src_face_find(\n"
+              "    const char *fqn, const char *rel)\n"
+              "    __attribute__((unused));\n"
+              "static const pm_metal_src_file_t *pm_metal_src_face_find(\n"
+              "    const char *fqn, const char *rel) {\n"
+              "    const pm_metal_src_card_t *c = pm_metal_src_find(fqn);\n"
+              "    uint32_t i;\n"
+              "    if (c == NULL || rel == NULL) return NULL;\n"
+              "    for (i = 0; i < c->nfaces; i++) {\n"
+              "        if (strcmp(c->faces[i].rel, rel) == 0) {\n"
+              "            return &c->faces[i];\n"
+              "        }\n"
               "    }\n"
               "    return NULL;\n"
               "}\n\n")

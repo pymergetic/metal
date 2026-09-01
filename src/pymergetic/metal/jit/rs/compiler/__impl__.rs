@@ -1987,6 +1987,13 @@ impl Parser {
             self.at += 1;
             ret = unsafe { self.parse_type() };
         }
+        if ret.is_null() {
+            /* No `-> T`: the fnptr kids always carry a ret node (last), so
+             * absence is spelled as an explicit `void` — a synthetic TYPE
+             * node, not a new AST kind (the kind table is a stable
+             * __types__.h contract). */
+            ret = unsafe { self.mk(pm_jit_rsx_ast_kind::TYPE, line, b"void\0".as_ptr(), 4) };
+        }
         unsafe {
             kids.add(ret, self.arena);
         }
@@ -5245,8 +5252,14 @@ impl Parser {
     unsafe fn parse_file(&mut self) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
         let mut kids = Kids::new();
-        /* inner attributes `#![...]` — skipped (not attached to an item). */
         loop {
+            if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::END {
+                break;
+            }
+            /* inner attributes `#![...]` — skipped, not attached to an item.
+             * Anywhere in the file, not just the top: the build face
+             * splices `#[path]`-included face files into a unit, and a
+             * face carries its own `#![...]` where the splice lands. */
             if unsafe { self.is_punct(self.at, b'#') }
                 && unsafe { self.is_punct(self.at + 1, b'!') }
                 && unsafe { self.is_punct(self.at + 2, b'[') }
@@ -5269,12 +5282,6 @@ impl Parser {
                 }
                 self.at += 1;
                 continue;
-            }
-            break;
-        }
-        loop {
-            if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::END {
-                break;
             }
             let before = self.at;
             let item = unsafe { self.parse_item() };
@@ -5904,7 +5911,9 @@ impl Lower {
                 at = unsafe { zput(out, cap, at, b"uint32_t\0".as_ptr()) };
                 return at;
             }
-            if unsafe { z_eq(text, text_len, b"()\0".as_ptr()) } {
+            if unsafe { z_eq(text, text_len, b"()\0".as_ptr()) }
+                || unsafe { z_eq(text, text_len, b"void\0".as_ptr()) }
+            {
                 at = unsafe { zput(out, cap, at, b"void\0".as_ptr()) };
                 return at;
             }
@@ -6039,9 +6048,13 @@ impl Lower {
                         let ptl = unsafe { (*pty).text_len };
                         if unsafe { z_eq(pt, ptl, b"unsafe\0".as_ptr()) }
                             || unsafe { z_eq(pt, ptl, b"extern\0".as_ptr()) }
-                            || unsafe { z_eq(pt, ptl, b"path\0".as_ptr()) }
                         {
-                            /* ABI string / qualifier — skip */
+                            /* qualifier — skip */
+                            i += 1;
+                            continue;
+                        }
+                        if ptl > 0 && unsafe { *pt } == b'"' {
+                            /* ABI string ("C") — skip */
                             i += 1;
                             continue;
                         }
@@ -7239,6 +7252,11 @@ impl Lower {
 
     /* Primitive Rust spelling -> C type; 0 when not a primitive. */
     unsafe fn prim_ctype(&mut self, s: *const u8, n: usize, out: *mut u8, cap: usize) -> usize {
+        if unsafe { z_eq(s, n, b"c_void\0".as_ptr()) } {
+            /* core::ffi::c_void (the leaf of the path) and a bare
+             * `c_void` after `use core::ffi::c_void` — same void. */
+            return unsafe { zput(out, cap, 0, b"void\0".as_ptr()) };
+        }
         if unsafe { z_eq(s, n, b"f32\0".as_ptr()) } {
             return unsafe { zput(out, cap, 0, b"float\0".as_ptr()) };
         }
@@ -8931,14 +8949,25 @@ impl Lower {
             }
             return;
         }
-        /* type name: the first path segment of the wrapping node */
+        /* type name: the last path segment of the wrapping node — the
+         * same rule expr_ctype applies, so `m::S { .. }` and `S { .. }`
+         * both resolve to S. */
         let mut tname: *const u8 = b"\0".as_ptr();
         let mut tlen = 0usize;
         if unsafe { (*lit).kind } == pm_jit_rsx_ast_kind::PATH {
-            if nk >= 1 {
-                let seg = unsafe { *kids.add(0) };
-                tname = unsafe { (*seg).text };
-                tlen = unsafe { (*seg).text_len };
+            let mut i = nk;
+            while i > 0 {
+                i -= 1;
+                let seg = unsafe { *kids.add(i) };
+                if unsafe { (*seg).kind } != pm_jit_rsx_ast_kind::PATH {
+                    continue;
+                }
+                let sl2 = unsafe { (*seg).text_len };
+                if sl2 > 0 {
+                    tname = unsafe { (*seg).text };
+                    tlen = sl2;
+                    break;
+                }
             }
         }
         if tlen == 0 {
@@ -10212,6 +10241,16 @@ impl Lower {
             }
             return;
         }
+        /* A fn-ptr alias needs the C declarator form — `ret (*name)(params)` —
+         * not the expression-style spelling ctype renders; the alias is the
+         * one place the name sits inside the type. */
+        if unsafe { (*ty).kind } == pm_jit_rsx_ast_kind::TYPE
+            && unsafe { z_eq((*ty).text, (*ty).text_len, b"fnptr\0".as_ptr()) }
+        {
+            if unsafe { self.emit_fnptr_typedef(ty, name, nlen, line) } {
+                return;
+            }
+        }
         let ct = self.arena_tmp();
         let ct_len = unsafe { self.ctype(ty, ct, 128) };
         if ct_len == 0 {
@@ -10226,6 +10265,69 @@ impl Lower {
         self.out.put(name, nlen);
         self.out.puts(b";\n\0".as_ptr());
         self.out.putc(b'\n');
+    }
+
+    /* `typedef ret (*name)(param, ..);` for a `type X = .. fn(..) -> ..`
+     * alias. kids layout: quals (unsafe/extern/"C"), params, ret (last,
+     * always present — parse synthesizes an explicit void). */
+    unsafe fn emit_fnptr_typedef(&mut self, ty: *const pm_jit_rsx_ast_t,
+        name: *const u8, nlen: usize, line: u32) -> bool {
+        let kids = unsafe { (*ty).kids };
+        let nk = unsafe { (*ty).n_kids } as usize;
+        if nk == 0 {
+            return false;
+        }
+        let ret = unsafe { *kids.add(nk - 1) };
+        let ret_buf = self.arena_tmp();
+        let ret_len = unsafe { self.ctype(ret, ret_buf, 128) };
+        if ret_len == 0 {
+            return false;
+        }
+        self.out.puts(b"#line \0".as_ptr());
+        unsafe { self.out.put_u32(line) };
+        self.out.puts(b" \"__impl__.rs\"\n\0".as_ptr());
+        self.out.puts(b"typedef \0".as_ptr());
+        self.out.put(ret_buf, ret_len);
+        self.out.puts(b" (*\0".as_ptr());
+        self.out.put(name, nlen);
+        self.out.puts(b")(\0".as_ptr());
+        let mut i = 0usize;
+        let mut first = true;
+        while i + 1 < nk {
+            let pty = unsafe { *kids.add(i) };
+            if unsafe { (*pty).kind } == pm_jit_rsx_ast_kind::TYPE {
+                let pt = unsafe { (*pty).text };
+                let ptl = unsafe { (*pty).text_len };
+                if unsafe { z_eq(pt, ptl, b"unsafe\0".as_ptr()) }
+                    || unsafe { z_eq(pt, ptl, b"extern\0".as_ptr()) }
+                {
+                    i += 1;
+                    continue;
+                }
+                if ptl > 0 && unsafe { *pt } == b'"' {
+                    /* ABI string ("C") — not a C parameter */
+                    i += 1;
+                    continue;
+                }
+            }
+            if !first {
+                self.out.puts(b", \0".as_ptr());
+            }
+            let p_buf = self.arena_tmp();
+            let pn = unsafe { self.ctype(pty, p_buf, 128) };
+            if pn == 0 {
+                return false;
+            }
+            self.out.put(p_buf, pn);
+            first = false;
+            i += 1;
+        }
+        if first {
+            self.out.puts(b"void\0".as_ptr());
+        }
+        self.out.puts(b");\n\0".as_ptr());
+        self.out.putc(b'\n');
+        true
     }
 
     /* extern block members: prototypes only. */

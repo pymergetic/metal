@@ -30,6 +30,7 @@ int main(int argc, char **argv) {
     int argi = 1;
     int do_object = 0;
     int do_link = 0;
+    int do_dump = 0;
     const char *path;
     const char *out_path;
     FILE *f;
@@ -48,6 +49,7 @@ int main(int argc, char **argv) {
     while (argi < argc && argv[argi][0] == '-' && argv[argi][1] == '-') {
         if (strcmp(argv[argi], "--object") == 0) { do_object = 1; argi++; }
         else if (strcmp(argv[argi], "--link") == 0) { do_link = 1; argi++; }
+        else if (strcmp(argv[argi], "--dump") == 0) { do_dump = 1; argi++; }
         else if (strcmp(argv[argi], "--") == 0)  { argi++; break; }
         else { fprintf(stderr, "unknown flag %s\n", argv[argi]); return 2; }
     }
@@ -76,6 +78,17 @@ int main(int argc, char **argv) {
     rc = pm_metal_jit_rsx_parse(arena, &toks, &unit, err, sizeof(err));
     if (rc != 0) { printf("PARSE REFUSED: %s\n", err); return 1; }
     printf("parse ok\n");
+
+    if (do_dump) {
+        static char dbuf[1u << 21];
+        static char derr[256];
+        memset(dbuf, 0, sizeof(dbuf));
+        memset(derr, 0, sizeof(derr));
+        rc = pm_metal_jit_rsx_ast_dump(unit, dbuf, sizeof(dbuf), derr, sizeof(derr));
+        if (rc < 0) { printf("DUMP REFUSED: %s\n", derr); return 1; }
+        fwrite(dbuf, 1, (size_t)rc, stdout);
+        printf("\n");
+    }
 
     rc = pm_metal_jit_rsx_lower(arena, unit, &c_out, &c_out_len, err, sizeof(err));
     if (rc != 0) { printf("LOWER REFUSED: %s\n", err); return 1; }

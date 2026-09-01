@@ -1507,12 +1507,313 @@ int32_t pm_metal_build_discover(pm_util_mem_arena_t *arena,
     return PM_METAL_BUILD_OK;
 }
 
+/* ---- rsx `#[path]` splice ----
+ *
+ * rsx compiles a card standalone: one .rs in, one C unit out. A card that
+ * needs another card's ABI shapes (wasmmod.api using the registry's Value
+ * convention) reaches them through `#[path = ".."] mod NAME;` — cargo's
+ * own module include. The kernel's rsx has no filesystem, so the build
+ * face resolves those includes against the embedded card tree and
+ * splices the file bytes into the unit before compiling: the rsx
+ * equivalent of a C `#include`, resolved the same way (bytes in the
+ * image, no second copy anywhere). One level of nesting: an included
+ * face may itself path-include (depth-capped, refuse deeper honestly).
+ */
+
+#define PM_BUILD_SPLICE_MAX_DEPTH 2u
+
+static char *fqn_to_dir(pm_util_mem_arena_t *arena, const char *fqn) {
+    size_t n = fqn != NULL ? strlen(fqn) : 0u;
+    char *out = (char *)pm_util_mem_alloc(arena, n + 1u);
+    size_t i;
+    if (out == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < n; i++) {
+        out[i] = fqn[i] == '.' ? '/' : fqn[i];
+    }
+    out[n] = '\0';
+    return out;
+}
+
+/* dir/file with `..` and `.` folded; returns the normalized path (arena).
+ * Kept segments are [start,end) spans in the joined buffer; `..` pops the
+ * last kept span, an empty stack refuses (no path escapes the tree root). */
+static char *norm_join(pm_util_mem_arena_t *arena, const char *dir,
+    const char *rel) {
+    size_t dl = dir != NULL ? strlen(dir) : 0u;
+    size_t rl = rel != NULL ? strlen(rel) : 0u;
+    char *buf = (char *)pm_util_mem_alloc(arena, dl + rl + 4u);
+    size_t starts[32];
+    size_t ends[32];
+    size_t n = 0u;
+    size_t i = 0u;
+    if (buf == NULL) {
+        return NULL;
+    }
+    if (dl > 0u) {
+        memcpy(buf, dir, dl);
+        buf[dl] = '/';
+        memcpy(buf + dl + 1u, rel, rl);
+        buf[dl + 1u + rl] = '\0';
+    } else {
+        memcpy(buf, rel, rl);
+        buf[rl] = '\0';
+    }
+    while (buf[i] != '\0') {
+        size_t start = i;
+        while (buf[i] != '\0' && buf[i] != '/') {
+            i++;
+        }
+        {
+            size_t len = i - start;
+            if (len == 1u && buf[start] == '.') {
+                /* skip */
+            } else if (len == 2u && buf[start] == '.' && buf[start + 1u] == '.') {
+                if (n == 0u) {
+                    return NULL;  /* above the tree root — refuse */
+                }
+                n--;
+            } else if (len > 0u) {
+                if (n < 32u) {
+                    starts[n] = start;
+                    ends[n] = i;
+                    n++;
+                }
+            }
+        }
+        if (buf[i] == '/') {
+            i++;
+        }
+    }
+    {
+        char *out = (char *)pm_util_mem_alloc(arena, dl + rl + 4u);
+        size_t o = 0u;
+        size_t s;
+        if (out == NULL) {
+            return NULL;
+        }
+        for (s = 0u; s < n; s++) {
+            if (o > 0u) {
+                out[o++] = '/';
+            }
+            memcpy(out + o, buf + starts[s], ends[s] - starts[s]);
+            o += ends[s] - starts[s];
+        }
+        out[o] = '\0';
+        return out;
+    }
+}
+
+/* Append every `#[path = ".."] mod NAME;`-included face to *out (grown in
+ * the arena). Depth-capped recursion. Returns 0 ok, nonzero refuse. */
+/* An attribute line guards a test-only item when its cfg mentions test
+ * (`#[cfg(test)]`, `#[cfg(all(test, ...))]`, ...). Loose on purpose: the
+ * authored tree never writes a non-test cfg on a `#[path]` mod. */
+static int rs_attr_is_test(const char *ls, size_t len) {
+    size_t i;
+    if (build_memfind(ls, len, "cfg(") == NULL) {
+        return 0;
+    }
+    for (i = 0u; i + 4u <= len; i++) {
+        if (memcmp(ls + i, "test", 4u) == 0
+            && (i == 0u
+                || !(ls[i - 1u] == '_' || ls[i - 1u] == '"'
+                    || (ls[i - 1u] >= 'a' && ls[i - 1u] <= 'z')
+                    || (ls[i - 1u] >= 'A' && ls[i - 1u] <= 'Z')
+                    || (ls[i - 1u] >= '0' && ls[i - 1u] <= '9')))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
+    const char *src, uint32_t depth, char **buf_io, size_t *len_io,
+    char *errbuf, size_t errbuf_len) {
+    const char *p = src;
+    char *dir = fqn_to_dir(arena, fqn);
+    /* Sticky while consecutive attribute lines stack above one item; a
+     * non-attribute line ends the run. */
+    uint32_t test_guard = 0u;
+    if (dir == NULL) {
+        err_set(errbuf, errbuf_len, "splice: arena exhausted", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    while (*p != '\0') {
+        /* line-start `#[path ...` (after optional whitespace) */
+        const char *ls = p;
+        const char *le = p;
+        int is_attr;
+        while (*ls == ' ' || *ls == '\t') {
+            ls++;
+        }
+        while (*le != '\0' && *le != '\n') {
+            le++;
+        }
+        is_attr = ls[0] == '#' && ls[1] == '[';
+        if (!is_attr) {
+            test_guard = 0u;
+        } else if (rs_attr_is_test(ls, (size_t)(le - ls))) {
+            test_guard = 1u;
+        }
+        if (is_attr && test_guard) {
+            /* cfg(test)-guarded `#[path] mod __tests__` — the test face is
+             * not muscle and is never embedded; rsx skips the guarded item
+             * itself, so the splice must skip it too (a chase would refuse
+             * on a file that is out of the embed by design). */
+            p = le;
+            if (*p == '\n') {
+                p++;
+            }
+            continue;
+        }
+        if (ls == p || p == src || p[-1] == '\n') {
+            if (ls[0] == '#' && ls[1] == '['
+                && (ls[2] == 'p' || ls[2] == 'P')
+                && strncmp(ls + 2, "path", 4) == 0) {
+                const char *q = ls + 6;
+                while (*q == ' ' || *q == '\t' || *q == '=') {
+                    q++;
+                }
+                if (*q == '"') {
+                    const char *e = q + 1;
+                    const char *rel;
+                    const char *full;
+                    char *tcard;
+                    const char *tfile;
+                    const char *slash;
+                    const pm_metal_src_file_t *face;
+                    while (*e != '\0' && *e != '"') {
+                        e++;
+                    }
+                    if (*e == '"') {
+                        rel = dup_str(arena, q + 1, (size_t)(e - q - 1u));
+                        full = norm_join(arena, dir, rel);
+                        if (full == NULL) {
+                            err_set(errbuf, errbuf_len,
+                                "splice: path escapes the card tree", 0);
+                            return PM_METAL_BUILD_ERR_PARSE;
+                        }
+                        slash = strrchr(full, '/');
+                        tfile = dup_str(arena,
+                            slash != NULL ? slash + 1 : full,
+                            strlen(slash != NULL ? slash + 1 : full));
+                        {
+                            const char *tdir = (slash != NULL)
+                                ? full
+                                : (dir != NULL && dir[0] != '\0') ? dir : ".";
+                            size_t tn = (slash != NULL)
+                                ? (size_t)(slash - full) : strlen(tdir);
+                            char *tm = (char *)pm_util_mem_alloc(arena, tn + 1u);
+                            size_t k;
+                            if (tm == NULL) {
+                                err_set(errbuf, errbuf_len,
+                                    "splice: arena exhausted", 0);
+                                return PM_METAL_BUILD_ERR_NOMEM;
+                            }
+                            memcpy(tm, tdir, tn);
+                            tm[tn] = '\0';
+                            for (k = 0; k < tn; k++) {
+                                if (tm[k] == '/') {
+                                    tm[k] = '.';
+                                }
+                            }
+                            tcard = tm;
+                        }
+                        if (tcard == NULL || tfile == NULL) {
+                            err_set(errbuf, errbuf_len,
+                                "splice: arena exhausted", 0);
+                            return PM_METAL_BUILD_ERR_NOMEM;
+                        }
+                        /* card dir -> fqn: dots for slashes */
+                        {
+                            size_t cn = strlen(tcard);
+                            size_t k;
+                            for (k = 0; k < cn; k++) {
+                                if (tcard[k] == '/') {
+                                    tcard[k] = '.';
+                                }
+                            }
+                        }
+                        face = pm_metal_src_face_find(tcard, tfile);
+                        if (face == NULL) {
+                            err_set(errbuf, errbuf_len,
+                                "splice: included face not in embed", 0);
+                            return PM_METAL_BUILD_ERR_PARSE;
+                        }
+                        if (depth + 1u > PM_BUILD_SPLICE_MAX_DEPTH) {
+                            err_set(errbuf, errbuf_len,
+                                "splice: include nesting too deep", 0);
+                            return PM_METAL_BUILD_ERR_PARSE;
+                        }
+                        {
+                            char *nb = (char *)pm_util_mem_alloc(
+                                arena, *len_io + (size_t)face->len + 4u);
+                            if (nb == NULL) {
+                                err_set(errbuf, errbuf_len,
+                                    "splice: arena exhausted", 0);
+                                return PM_METAL_BUILD_ERR_NOMEM;
+                            }
+                            /* copy the source without its NUL, then the
+                             * face, then the newline + NUL terminator */
+                            memcpy(nb, *buf_io, *len_io);
+                            memcpy(nb + *len_io, face->data, (size_t)face->len);
+                            *len_io += (size_t)face->len;
+                            nb[*len_io] = '\n';
+                            (*len_io)++;
+                            nb[*len_io] = '\0';
+                            *buf_io = nb;
+                        }
+                        {
+                            int32_t rc = rs_splice_into(arena, tcard,
+                                (const char *)face->data, depth + 1u,
+                                buf_io, len_io, errbuf, errbuf_len);
+                            if (rc != PM_METAL_BUILD_OK) {
+                                return rc;
+                            }
+                        }
+                        p = e + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        while (*p != '\0' && *p != '\n') {
+            p++;
+        }
+        if (*p == '\n') {
+            p++;
+        }
+    }
+    return PM_METAL_BUILD_OK;
+}
+
+/* Splice every `#[path]`-included face after the unit source. The card's
+ * own text keeps its true line numbers (rsx #line diagnostics stay
+ * honest); the appended faces shift beyond the file end, which only
+ * affects diagnostics inside the face itself. */
+static const char *rs_splice(pm_util_mem_arena_t *arena, const char *fqn,
+    const char *src, char *errbuf, size_t errbuf_len) {
+    size_t len = strlen(src);
+    char *buf = (char *)dup_str(arena, src, len);
+    if (buf == NULL) {
+        err_set(errbuf, errbuf_len, "splice: arena exhausted", 0);
+        return NULL;
+    }
+    if (rs_splice_into(arena, fqn, buf, 0u, &buf, &len, errbuf, errbuf_len)
+            != PM_METAL_BUILD_OK) {
+        return NULL;
+    }
+    return buf;
+}
+
 /* One unit source to a TCC object, dispatching on the file extension:
  * .rs -> micro-rustc -> C -> TCC; .cpp/.cxx/.cc -> cpp lower -> C -> TCC;
  * .c direct; .h is not a TU (skipped, not an object). Refusals carry the
  * transpiler's own diagnostics (rsx names the construct + line). */
 static int32_t unit_source_compile(pm_util_mem_arena_t *arena,
-    const char *rel, const char *src,
+    const char *fqn, const char *rel, const char *src,
     const char **includes, uint32_t n_includes,
     const char **defines, uint32_t n_defines,
     uint8_t **obj_out, size_t *obj_len,
@@ -1524,7 +1825,13 @@ static int32_t unit_source_compile(pm_util_mem_arena_t *arena,
 
     if (dot != NULL) {
         if (strcmp(dot, ".rs") == 0) {
-            if (pm_metal_jit_rsx_compile(arena, src, strlen(src),
+            /* `#[path]`-included faces ride in: the rsx compile is
+             * standalone, cross-card ABI shapes arrive by splice. */
+            const char *spliced = rs_splice(arena, fqn, src, errbuf, errbuf_len);
+            if (spliced == NULL) {
+                return PM_METAL_BUILD_ERR_COMPILE;
+            }
+            if (pm_metal_jit_rsx_compile(arena, spliced, strlen(spliced),
                     &transpiled, &transpiled_len, errbuf, errbuf_len) != 0) {
                 return PM_METAL_BUILD_ERR_COMPILE;
             }
@@ -1737,7 +2044,7 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
             if (dot != NULL && strcmp(dot, ".h") == 0) {
                 continue;  /* headers ride the include path, never a TU */
             }
-            if (unit_source_compile(arena, unit->sources[obj_i], src,
+            if (unit_source_compile(arena, unit->fqn, unit->sources[obj_i], src,
                 all_includes, n_all_includes, all_defines, n_all_defines,
                 &objs[n_objs], &lens[n_objs], errbuf, errbuf_len)
                     != PM_METAL_BUILD_OK) {
