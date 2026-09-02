@@ -42,7 +42,9 @@
 //! (`u128`/`i128` have no C type), `*const T` `*mut T` `&T` `&mut T`
 //! (lifetimes skipped), `[T; N]` `[T]` `&[T]`, `()` (return only), paths
 //! with one generic list (`Option<T>` — pointer/fn-ptr payload only),
-//! `fn(..) -> R` and `unsafe extern "C" fn(..) -> R`. Tuples refuse.
+//! `fn(..) -> R` and `unsafe extern "C" fn(..) -> R`, tuples `(A, B)` ->
+//! anonymous-layout structs `_0`/`_1`/... (let-pattern destructuring and
+//! numeric field access `t.0` included; tuple struct patterns refuse).
 //!
 //! ## Lowering rules
 //!
@@ -67,7 +69,8 @@
 //!   enum variant paths, `_`, `None`, `Some(bind)` (Option-of-pointer only —
 //!   the bind becomes an inner declaration), `&bind`, or-patterns of
 //!   literals/variants, literal range patterns `lo..=hi` (inclusive both
-//!   ends). Guards, open-ended ranges, tuple and struct patterns refuse.
+//!   ends). Guards, open-ended ranges, tuple-of-Some `let-else` is the one
+//!   tuple form accepted; struct patterns refuse.
 //! - `for x in a..b` -> C `for` loop; `for` over anything else refuses.
 //! - `static` -> file-scope global (`const` qualified unless `static mut`),
 //!   `const` -> `static const`, `type` -> `typedef`.
@@ -80,7 +83,9 @@
 //!   (Rust counts elements, memcpy counts bytes),
 //!   `core::mem::size_of::<T>()`->`sizeof(T)`, `iN::MIN/MAX`/`uN::`/`
 //!   `usize::MAX` -> stdint limit macros, `.is_null()`->`(x == 0)`,
-//!   `.add(k)`/`.sub(k)`->`(x + k)`/`(x - k)`, `.as_ptr()` -> identity,
+//!   `.add(k)`/`.sub(k)`->`(x + k)`/`(x - k)`, `.as_ptr()` -> identity
+//!   (on a pointer-to-array receiver: the C deref — the array lvalue
+//!   decays to the element pointer),
 //!   `.is_ascii_{digit,alphanumeric,alphabetic}()` -> range tests,
 //!   `.len()` -> literal/array constant only. Anything else refuses.
 //! - Item-level `PM_MOD_EXPORT_RS!` / `PM_MOD_BOOT*_RS!` ctors lower to a
@@ -1868,15 +1873,45 @@ impl Parser {
                 return n;
             }
             if unsafe { self.is_punct(self.at, b'(') } {
-                /* `()` is the unit type; other tuples refuse. */
+                /* `()` is the unit type; `(A, B, ..)` is a tuple type — a
+                 * TYPE node tagged "tuple" with one kid TYPE per element
+                 * (the lower registers it as the named struct
+                 * rsx_tuple_<sig> so every use site agrees on one C type). */
                 if unsafe { self.is_punct(self.at + 1, b')') } {
                     self.at += 2;
                     return unsafe { self.mk(pm_jit_rsx_ast_kind::TYPE, line, b"()\0".as_ptr(), 2) };
                 }
-                unsafe {
-                    self.err(b"unsupported: tuple type\0".as_ptr());
+                self.at += 1;
+                let mut kids = Kids::new();
+                loop {
+                    let elem = unsafe { self.parse_type() };
+                    if !self.ok || elem.is_null() {
+                        return core::ptr::null_mut();
+                    }
+                    unsafe {
+                        kids.add(elem, self.arena);
+                    }
+                    if unsafe { self.is_punct(self.at, b',') } {
+                        self.at += 1;
+                        if unsafe { self.is_punct(self.at, b')') } {
+                            break;
+                        }
+                        continue;
+                    }
+                    if unsafe { self.is_punct(self.at, b')') } {
+                        break;
+                    }
+                    unsafe {
+                        self.err(b"expected ',' or ')' in tuple type\0".as_ptr());
+                    }
+                    return core::ptr::null_mut();
                 }
-                return core::ptr::null_mut();
+                self.at += 1;
+                let n = unsafe { self.mk(pm_jit_rsx_ast_kind::TYPE, line, b"tuple\0".as_ptr(), 5) };
+                unsafe {
+                    self.set_kids(n, &kids);
+                }
+                return n;
             }
             if unsafe { self.is_punct(self.at, b'[') } {
                 self.at += 1;
@@ -4361,6 +4396,56 @@ impl Parser {
     unsafe fn parse_let(&mut self) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
         self.at += 1;
+        /* tuple pattern `let (a, b) = ..`: parse_pattern builds the TUPLE
+         * node of sub-patterns; the lower destructures it element-wise
+         * against the initializer's tuple type. */
+        if unsafe { self.is_punct(self.at, b'(') } {
+            let pat = unsafe { self.parse_pattern() };
+            if !self.ok || pat.is_null() {
+                return core::ptr::null_mut();
+            }
+            if unsafe { (*pat).kind } != pm_jit_rsx_ast_kind::TUPLE {
+                unsafe {
+                    self.err(b"unsupported: let pattern\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            /* `let (Some(a), Some(b)) = .. else { .. }`: a tuple pattern
+             * whose every element is a Some-pattern (or `_`). The lower
+             * tests each tuple field's Option in one `if` and runs the
+             * diverging else-block when any is None — so let-else is
+             * allowed here, same contract as the single-bind form. */
+            let mut all_some = true;
+            {
+                let pk = unsafe { (*pat).kids };
+                let pn = unsafe { (*pat).n_kids } as usize;
+                let mut f = 0usize;
+                while f < pn {
+                    let sub = unsafe { *pk.add(f) };
+                    let mut is_some = false;
+                    if unsafe { (*sub).kind } == pm_jit_rsx_ast_kind::PATH
+                        && unsafe { z_eq((*sub).text, (*sub).text_len, b"pat\0".as_ptr()) }
+                        && unsafe { (*sub).n_kids } as usize >= 1
+                    {
+                        let seg0 = unsafe { *(*sub).kids.add(0) };
+                        if unsafe { (*seg0).kind } == pm_jit_rsx_ast_kind::PATH
+                            && unsafe { z_eq((*seg0).text, (*seg0).text_len, b"Some\0".as_ptr()) }
+                        {
+                            is_some = true;
+                        }
+                    }
+                    if !is_some {
+                        all_some = false;
+                    }
+                    f += 1;
+                }
+            }
+            let mut kids = Kids::new();
+            unsafe {
+                kids.add(pat, self.arena);
+            }
+            return unsafe { self.parse_let_rest(line, kids, all_some) };
+        }
         /* pattern: ident, mut ident, `_`, or `Some(bind)` (single-bind —
          * the lower lowers it to a ._has test + inner decl). */
         let mut pat_name: *const u8 = b"_\0".as_ptr();
@@ -4428,6 +4513,13 @@ impl Parser {
                 kids.add(m, self.arena);
             }
         }
+        unsafe { self.parse_let_rest(line, kids, is_some_pat) }
+    }
+
+    /* Shared let tail after the pattern kids are built: optional `: T`,
+     * `= init`, let-else (Some-patterns only), `;`. The LET node's text tag
+     * is "let", or "letelse" when an else-block is present. */
+    unsafe fn parse_let_rest(&mut self, line: u32, mut kids: Kids, is_some_pat: bool) -> *mut pm_jit_rsx_ast_t {
         let mut ty: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
         if unsafe { self.is_punct(self.at, b':') } {
             self.at += 1;
@@ -5893,14 +5985,20 @@ impl Parser {
  * constants. */
 
 const SYM_CAP: usize = 512;
-/* fields per struct — the Lower struct itself has 32; the cap must carry
- * the compiler's own shape or the self-host prove fails field inference. */
-const FPC: usize = 40;
+/* fields per struct — the Lower struct itself has 43 (grew with the tuple
+ * support's six state fields); the cap must carry the compiler's own
+ * shape or the self-host prove fails field inference past slot 40. */
+const FPC: usize = 64;
 
 /* Transparent newtype registry cap (single-field generic tuple structs). */
 const NT_CAP: usize = 16;
 const OPT_CAP: usize = 8;
 const ST_CAP: usize = 64;
+/* Tuple signature cap: distinct (A, B, ..) spellings per unit. Tuples
+ * render as named structs rsx_tuple_<sig>; the table mirrors the Option
+ * payload table (register idempotent, emit once in the preamble). */
+const TUP_CAP: usize = 8;
+const TUP_MAXF: usize = 4;
 
 /* A struct record: name, fields, C types of fields. Field names and C
  * types are arena spans (NUL-terminated copies), so the table stores
@@ -6280,6 +6378,20 @@ struct Lower {
     opt_lens: [usize; OPT_CAP],
     opt_done: [bool; OPT_CAP],
     opt_n: usize,
+    /* Tuple signatures seen this unit (each renders as the named struct
+     * rsx_tuple_<elem0>_<elem1>.., fields _0.._n, emitted once in the
+     * preamble — same one-C-type-per-signature rule as rsx_opt_<elem>).
+     * Flattened like SymTab's field table: signature s, element f lives
+     * at tup_elems[s * TUP_MAXF + f][0..tup_lens[s * TUP_MAXF + f]],
+     * for f in 0..tup_counts[s]. */
+    tup_elems: [[u8; 64]; TUP_CAP * TUP_MAXF],
+    tup_lens: [usize; TUP_CAP * TUP_MAXF],
+    tup_counts: [usize; TUP_CAP],
+    tup_done: [bool; TUP_CAP],
+    tup_n: usize,
+    /* per-unit counter for tuple-destructure temp names (two tuple lets
+     * in one C scope would redeclare `__rsx_tup` — each gets its own). */
+    tup_tmp_n: usize,
     /* opaque extern type names seen in signatures/statics (`pm_util_lock_t`):
      * the generated C is self-contained, so each gets a hoisted
      * `typedef struct X X;` — the real definition lives in the linked lib. */
@@ -6491,6 +6603,27 @@ impl Lower {
         be
     }
 
+    /* Locate a pointer-to-array declarator ` (*)` in a rendered C type —
+     * the byte index of its '(' or usize::MAX when the type is not a
+     * pointer-to-array. `T (*)[N]` is how `*const [T; N]` / `&[T; N]`
+     * render; the strip sites below need its position to take apart. */
+    unsafe fn parr_declarator(&mut self, ct: *const u8, n: usize) -> usize {
+        if n < 3 {
+            return usize::MAX;
+        }
+        let mut i = 0usize;
+        while i + 3 <= n {
+            if unsafe { *ct.add(i) } == b'('
+                && unsafe { *ct.add(i + 1) } == b'*'
+                && unsafe { *ct.add(i + 2) } == b')'
+            {
+                return i;
+            }
+            i += 1;
+        }
+        usize::MAX
+    }
+
     /* Rust type node -> C type into out (NUL-terminated); byte length or 0 on
      * refusal (err already set). */
     unsafe fn ctype(&mut self, ty: *const pm_jit_rsx_ast_t, out: *mut u8, cap: usize) -> usize {
@@ -6573,6 +6706,55 @@ impl Lower {
             if unsafe { z_eq(text, text_len, b"str\0".as_ptr()) } {
                 at = unsafe { zput(out, cap, at, b"char\0".as_ptr()) };
                 return at;
+            }
+            /* tuple type: kids are the element TYPEs. Registers the
+             * signature (idempotent) and renders the one shared typedef
+             * name — emitted once in the preamble as
+             * `struct { A _0; B _1; } rsx_tuple_A_B;`. */
+            if text_len == 5 && unsafe { z_eq(text, text_len, b"tuple\0".as_ptr()) } {
+                let kids = unsafe { (*ty).kids };
+                let nk = unsafe { (*ty).n_kids } as usize;
+                if nk == 0 {
+                    return 0;
+                }
+                let mut el_bufs: [[u8; 64]; TUP_MAXF] = [[0; 64]; TUP_MAXF];
+                let mut el_lens: [usize; TUP_MAXF] = [0; TUP_MAXF];
+                if nk > TUP_MAXF {
+                    unsafe {
+                        self.err(b"unsupported: tuple with more than 4 elements\0".as_ptr(), unsafe { (*ty).line });
+                    }
+                    return 0;
+                }
+                let mut f = 0usize;
+                while f < nk {
+                    let e = unsafe { *kids.add(f) };
+                    let n = unsafe { self.ctype(e, el_bufs[f].as_mut_ptr(), 64) };
+                    if n == 0 || n >= 64 {
+                        return 0;
+                    }
+                    el_lens[f] = n;
+                    f += 1;
+                }
+                let slot = unsafe { self.tup_add(el_bufs.as_ptr(), el_lens.as_ptr(), nk) };
+                if slot >= TUP_CAP {
+                    unsafe {
+                        self.err(b"internal: too many tuple types\0".as_ptr(), unsafe { (*ty).line });
+                    }
+                    return 0;
+                }
+                let tdn = self.arena_tmp();
+                let base = self.tup_elems.as_ptr().add(slot * TUP_MAXF);
+                let blens = self.tup_lens.as_ptr().add(slot * TUP_MAXF);
+                let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, nk, tdn, 160) };
+                at = unsafe { bput(out, cap, at, tdn, tdn_len) };
+                unsafe {
+                    if at < cap {
+                        *out.add(at) = 0;
+                    } else if cap > 0 {
+                        *out.add(cap - 1) = 0;
+                    }
+                }
+                return if at >= cap { 0 } else { at };
             }
             /* wrapper forms */
             if unsafe { z_eq(text, text_len, b"*\0".as_ptr()) } {
@@ -7358,6 +7540,45 @@ impl Lower {
             }
             return 0;
         }
+        if kind == pm_jit_rsx_ast_kind::TUPLE {
+            /* tuple expression: register the signature from the element
+             * types and render the shared typedef name — same path the
+             * tuple TYPE takes, so both agree on one C type. */
+            let kids = unsafe { (*e).kids };
+            let nk = unsafe { (*e).n_kids } as usize;
+            if nk == 0 || nk > TUP_MAXF {
+                return 0;
+            }
+            let mut el_bufs: [[u8; 64]; TUP_MAXF] = [[0; 64]; TUP_MAXF];
+            let mut el_lens: [usize; TUP_MAXF] = [0; TUP_MAXF];
+            let mut f = 0usize;
+            while f < nk {
+                let kv = unsafe { *kids.add(f) };
+                let n = unsafe { self.expr_ctype(kv, el_bufs[f].as_mut_ptr(), 64, locals) };
+                if n == 0 || n >= 64 {
+                    return 0;
+                }
+                el_lens[f] = n;
+                f += 1;
+            }
+            let slot = unsafe { self.tup_add(el_bufs.as_ptr(), el_lens.as_ptr(), nk) };
+            if slot >= TUP_CAP {
+                return 0;
+            }
+            let tdn = self.arena_tmp();
+            let base = self.tup_elems.as_ptr().add(slot * TUP_MAXF);
+            let blens = self.tup_lens.as_ptr().add(slot * TUP_MAXF);
+            let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, nk, tdn, 160) };
+            let at = unsafe { bput(out, cap, 0, tdn, tdn_len) };
+            unsafe {
+                if at < cap {
+                    *out.add(at) = 0;
+                } else if cap > 0 {
+                    *out.add(cap - 1) = 0;
+                }
+            }
+            return if at >= cap { 0 } else { at };
+        }
         if kind == pm_jit_rsx_ast_kind::BLOCK {
             /* value-position block (incl. `unsafe { .. }` wrappers): type of
              * its tail expr, unwrapping nested statement wrappers. */
@@ -7402,6 +7623,31 @@ impl Lower {
                         j -= 1;
                     }
                     if j == 0 || unsafe { *b_buf.add(j - 1) } != b'*' {
+                        /* pointer-to-array operand (`T (*)[N]`): the deref is
+                         * the array lvalue `T [N]` — drop the ` (*)` group,
+                         * never the trailing-star identity (the type ends
+                         * with `]`, which the strip above would misread). */
+                        let pp = unsafe { self.parr_declarator(b_buf, bn) };
+                        if pp != usize::MAX {
+                            if bn < cap {
+                                let mut w = 0usize;
+                                let mut r = 0usize;
+                                while r < bn {
+                                    if r < pp || r >= pp + 3 {
+                                        unsafe {
+                                            *out.add(w) = *b_buf.add(r);
+                                        }
+                                        w += 1;
+                                    }
+                                    r += 1;
+                                }
+                                unsafe {
+                                    *out.add(w) = 0;
+                                }
+                                return w;
+                            }
+                            return 0;
+                        }
                         return bn;
                     }
                     j -= 1;
@@ -7785,12 +8031,33 @@ impl Lower {
             if unsafe { (*e).n_kids } >= 2 {
                 let base = unsafe { *kids.add(0) };
                 let fname = unsafe { *kids.add(1) };
-                /* numeric `.0` on a transparent newtype: the unwrap keeps
-                 * the base's (already-inner) C type. */
+                /* numeric `.N` on a transparent newtype: the unwrap keeps
+                 * the base's (already-inner) C type. On a real tuple
+                 * (rsx_tuple_*) it is the designated element: look the
+                 * signature back up by typedef name. */
                 {
                     let ftxt = unsafe { (*fname).text };
                     let flen = unsafe { (*fname).text_len };
                     if flen > 0 && !ftxt.is_null() && unsafe { *ftxt } >= b'0' && unsafe { *ftxt } <= b'9' {
+                        let bb = self.arena_tmp();
+                        let bl = unsafe { self.expr_ctype(base, bb, 128, locals) };
+                        if bl >= 10 && unsafe { z_eq(bb, 10, b"rsx_tuple_\0".as_ptr()) } {
+                            let fi = (unsafe { *ftxt }) - b'0';
+                            let s = unsafe { self.tup_find(bb, bl) };
+                            if s >= TUP_CAP || (fi as usize) >= self.tup_counts[s] {
+                                return 0;
+                            }
+                            let a = s * TUP_MAXF + fi as usize;
+                            let el = unsafe { bput(out, cap, 0, self.tup_elems[a].as_ptr(), self.tup_lens[a]) };
+                            unsafe {
+                                if el < cap {
+                                    *out.add(el) = 0;
+                                } else if cap > 0 {
+                                    *out.add(cap - 1) = 0;
+                                }
+                            }
+                            return if el >= cap { 0 } else { el };
+                        }
                         return unsafe { self.expr_ctype(base, out, cap, locals) };
                     }
                 }
@@ -8325,6 +8592,33 @@ impl Lower {
                         j -= 1;
                     }
                     if j == 0 {
+                        /* pointer-to-array receiver (`T (*)[N]`): `.as_ptr()`
+                         * is the first element — the spelling before the
+                         * ` (*)` group plus a star. The generic scan below
+                         * would split at the wrong bracket and emit garbage. */
+                        let pp = unsafe { self.parr_declarator(rbuf, rn) };
+                        if pp != usize::MAX {
+                            let mut last = pp;
+                            while last > 0 && unsafe { *rbuf.add(last - 1) } == b' ' {
+                                last -= 1;
+                            }
+                            if last == 0 || last + 2 >= cap {
+                                return 0;
+                            }
+                            let mut i2 = 0usize;
+                            while i2 < last {
+                                unsafe {
+                                    *out.add(i2) = *rbuf.add(i2);
+                                }
+                                i2 += 1;
+                            }
+                            unsafe {
+                                *out.add(last) = b' ';
+                                *out.add(last + 1) = b'*';
+                                *out.add(last + 2) = 0;
+                            }
+                            return last + 2;
+                        }
                         /* not an array — already a pointer (or a pointer-y
                          * value): re-starring it would double the star. */
                         let mut i3 = 0usize;
@@ -8349,6 +8643,68 @@ impl Lower {
                     }
                     if w == 0 {
                         return 0;
+                    }
+                    /* multi-dimensional receiver (`T [D1] [D2]` — e.g. the
+                     * tuple table `[[u8;64]; N]`): the element is the inner
+                     * array, so the pointer is `T (*)[D1]` — strip the
+                     * outer group, keep the inner ones behind a `(*)`.
+                     * The generic one-dim path below would emit
+                     * `T [D1] *`, which is not a C declarator at all. */
+                    {
+                        let mut g1 = w;
+                        let mut has_inner = false;
+                        while g1 > 0 {
+                            if unsafe { *rbuf.add(g1 - 1) } == b']' {
+                                has_inner = true;
+                                break;
+                            }
+                            g1 -= 1;
+                        }
+                        if has_inner {
+                            /* k lands one PAST the inner group's `[` (the scan
+                             * tests k-1) — the group span is [k-1, g1). */
+                            let mut k = g1;
+                            while k > 0 && unsafe { *rbuf.add(k - 1) } != b'[' {
+                                k -= 1;
+                            }
+                            if k == 0 {
+                                return 0;
+                            }
+                            k -= 1;
+                            let mut e2 = k;
+                            while e2 > 0 && unsafe { *rbuf.add(e2 - 1) } == b' ' {
+                                e2 -= 1;
+                            }
+                            if e2 == 0 || e2 + 5 >= cap {
+                                return 0;
+                            }
+                            let mut i4 = 0usize;
+                            while i4 < e2 {
+                                unsafe {
+                                    *out.add(i4) = *rbuf.add(i4);
+                                }
+                                i4 += 1;
+                            }
+                            unsafe {
+                                *out.add(e2) = b' ';
+                                *out.add(e2 + 1) = b'(';
+                                *out.add(e2 + 2) = b'*';
+                                *out.add(e2 + 3) = b')';
+                            }
+                            let mut w3 = e2 + 4;
+                            let mut r2 = k;
+                            while r2 < g1 && w3 < cap - 1 {
+                                unsafe {
+                                    *out.add(w3) = *rbuf.add(r2);
+                                }
+                                w3 += 1;
+                                r2 += 1;
+                            }
+                            unsafe {
+                                *out.add(w3) = 0;
+                            }
+                            return w3;
+                        }
                     }
                     let mut i2 = 0usize;
                     while i2 < w {
@@ -8950,6 +9306,14 @@ impl Lower {
         }
         /* kids: [pat, (mut)?, init, else] — pat's kids [Some seg, bind] */
         let pat = unsafe { *kids.add(0) };
+        /* tuple-of-Some pattern `let (Some(a), Some(b)) = (e0, e1) else ..`:
+         * one temp tuple, each bind from the field's payload, one `if`
+         * testing every field (._has for struct-Options, == 0 for pointer
+         * payloads) running the diverging else-block. */
+        if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::TUPLE {
+            unsafe { self.emit_let_else_tuple(s, locals) };
+            return;
+        }
         let mut bind: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
         if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH {
             let pk = unsafe { (*pat).kids };
@@ -8978,16 +9342,22 @@ impl Lower {
             }
             return;
         }
-        /* the bind leaf (a PATH) */
-        if unsafe { (*bind).kind } != pm_jit_rsx_ast_kind::PATH {
+        /* the bind: a PATH (one identifier) or a TUPLE (Option-of-tuple) */
+        let is_tuple_bind = unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE;
+        if !is_tuple_bind && unsafe { (*bind).kind } != pm_jit_rsx_ast_kind::PATH {
             unsafe {
                 self.err(b"unsupported: let-else binds one identifier\0".as_ptr(), line);
             }
             return;
         }
-        let bleaf = unsafe { *(*bind).kids.add(0) };
-        let bname = unsafe { (*bleaf).text };
-        let blen = unsafe { (*bleaf).text_len };
+        let mut bleaf: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut bname: *const u8 = b"_\0".as_ptr();
+        let mut blen = 1usize;
+        if !is_tuple_bind {
+            bleaf = unsafe { *(*bind).kids.add(0) };
+            bname = unsafe { (*bleaf).text };
+            blen = unsafe { (*bleaf).text_len };
+        }
         let ct = self.arena_tmp();
         let ct_len = unsafe { self.expr_ctype(init, ct, 128, locals) };
         if ct_len == 0 {
@@ -9024,13 +9394,20 @@ impl Lower {
             self.out.puts(b" __rsx_le = \0".as_ptr());
             unsafe { self.emit_expr(init, locals) };
             self.out.puts(b";\n\0".as_ptr());
-            self.indent();
-            self.out.put(elbuf, eln);
-            self.out.putc(b' ');
-            self.out.put(bname, blen);
-            self.out.puts(b" = __rsx_le._v;\n\0".as_ptr());
-            unsafe {
-                (*locals).add(bname, blen, elbuf, eln, self.depth);
+            if is_tuple_bind {
+                /* Option-of-tuple: cur_opt_elem drives the shared destructure */
+                unsafe { core::ptr::copy_nonoverlapping(elbuf, self.cur_opt_elem.as_mut_ptr(), eln) };
+                self.cur_opt_elem_len = eln;
+                unsafe { self.emit_some_binds(bind, b"__rsx_le\0".as_ptr(), 8, ct, ct_len, locals) };
+            } else {
+                self.indent();
+                self.out.put(elbuf, eln);
+                self.out.putc(b' ');
+                self.out.put(bname, blen);
+                self.out.puts(b" = __rsx_le._v;\n\0".as_ptr());
+                unsafe {
+                    (*locals).add(bname, blen, elbuf, eln, self.depth);
+                }
             }
             self.indent();
             self.out.puts(b"if (!__rsx_le._has) {\n\0".as_ptr());
@@ -9063,6 +9440,439 @@ impl Lower {
         }
     }
 
+    /* `let (Some(a), Some(b)) = (e0, e1) else { diverging }` — the
+     * tuple-of-Options let-else. Kids: [TUPLE pat, (TYPE)?, init, BLOCK].
+     * One temp tuple holds the initializer (single evaluation); each
+     * Some-bind declares from its field (payload `._v` for struct-Options,
+     * the field itself for pointer payloads — None == 0); one `if` tests
+     * every fielded Option and runs the diverging else-block. Parse only
+     * lets all-Some element patterns through, so each sub is
+     * PATH("pat", [Some seg, bind]). */
+    unsafe fn emit_let_else_tuple(&mut self, s: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
+        let kids = unsafe { (*s).kids };
+        let nk = unsafe { (*s).n_kids } as usize;
+        let line = unsafe { (*s).line };
+        if nk < 3 {
+            unsafe {
+                self.err(b"internal: malformed tuple let-else\0".as_ptr(), line);
+            }
+            return;
+        }
+        let pat = unsafe { *kids.add(0) };
+        let pn = unsafe { (*pat).n_kids } as usize;
+        if pn == 0 || pn > TUP_MAXF {
+            unsafe {
+                self.err(b"unsupported: tuple pattern with more than 4 binds\0".as_ptr(), line);
+            }
+            return;
+        }
+        /* remaining kids: optional TYPE, init expr, else BLOCK */
+        let mut init: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut els: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut i = 1usize;
+        while i < nk {
+            let k = unsafe { *kids.add(i) };
+            let kk = unsafe { (*k).kind };
+            if kk == pm_jit_rsx_ast_kind::TYPE {
+                /* ascription on a tuple let-else: the init's inferred type
+                 * is the same tuple; nothing to record */
+            } else if kk == pm_jit_rsx_ast_kind::BLOCK && !init.is_null() {
+                els = k;
+            } else if kk != pm_jit_rsx_ast_kind::ATTR {
+                init = k;
+            }
+            i += 1;
+        }
+        if init.is_null() || els.is_null() {
+            unsafe {
+                self.err(b"internal: malformed tuple let-else\0".as_ptr(), line);
+            }
+            return;
+        }
+        while unsafe { (*init).kind } == pm_jit_rsx_ast_kind::EXPR_STMT
+            && unsafe { (*init).n_kids } as usize >= 1
+        {
+            init = unsafe { *(*init).kids.add(0) };
+        }
+        let ct = self.arena_tmp();
+        let ct_len = unsafe { self.expr_ctype(init, ct, 128, locals) };
+        if ct_len == 0 || ct_len >= 128 {
+            unsafe {
+                self.err(b"cannot infer tuple let-else type\0".as_ptr(), line);
+            }
+            return;
+        }
+        if ct_len < 10 || !unsafe { z_eq(ct, 10, b"rsx_tuple_\0".as_ptr()) } {
+            unsafe {
+                self.err(b"tuple let-else on a non-tuple initializer\0".as_ptr(), line);
+            }
+            return;
+        }
+        let slot = unsafe { self.tup_find(ct, ct_len) };
+        if slot >= TUP_CAP {
+            unsafe {
+                self.err(b"internal: tuple let-else signature not registered\0".as_ptr(), line);
+            }
+            return;
+        }
+        if self.tup_counts[slot] != pn {
+            unsafe {
+                self.err(b"tuple let-else pattern does not match the tuple type\0".as_ptr(), line);
+            }
+            return;
+        }
+        /* the temp name: __rsx_tup<N>, one counter for every tuple temp */
+        let tmp = self.arena_tmp();
+        let at0 = unsafe { bput(tmp, 160, 0, b"__rsx_tup\0".as_ptr(), 9) };
+        let mut cnt = self.tup_tmp_n;
+        self.tup_tmp_n += 1;
+        let mut digs: [u8; 10] = [0; 10];
+        let mut nd = 0usize;
+        if cnt == 0 {
+            digs[0] = b'0';
+            nd = 1;
+        } else {
+            while cnt > 0 && nd < 10 {
+                digs[nd] = b'0' + (cnt % 10) as u8;
+                cnt /= 10;
+                nd += 1;
+            }
+        }
+        let mut q = nd;
+        let mut tmp_len = at0;
+        while q > 0 {
+            q -= 1;
+            tmp_len = unsafe { bput(tmp, 160, tmp_len, &digs[q], 1) };
+        }
+        unsafe {
+            if tmp_len < 160 {
+                *tmp.add(tmp_len) = 0;
+            }
+        }
+        self.indent();
+        self.out.put(ct, ct_len);
+        self.out.putc(b' ');
+        self.out.put(tmp, tmp_len);
+        self.out.puts(b" = \0".as_ptr());
+        unsafe { self.emit_expr(init, locals) };
+        self.out.puts(b";\n\0".as_ptr());
+        /* binds from the fields, payload spelling per element */
+        let pk = unsafe { (*pat).kids };
+        let mut f = 0usize;
+        while f < pn {
+            let sub = unsafe { *pk.add(f) };
+            /* unwrap Some(bind): pat kids [Some seg, bind] */
+            let mut bind: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            if unsafe { (*sub).kind } == pm_jit_rsx_ast_kind::PATH
+                && unsafe { z_eq((*sub).text, (*sub).text_len, b"pat\0".as_ptr()) }
+                && unsafe { (*sub).n_kids } as usize >= 2
+            {
+                bind = unsafe { *(*sub).kids.add(1) };
+            }
+            if bind.is_null() {
+                unsafe {
+                    self.err(b"unsupported: tuple let-else element (expect Some binds)\0".as_ptr(), line);
+                }
+                return;
+            }
+            let mut bnode = bind;
+            if unsafe { (*bnode).kind } == pm_jit_rsx_ast_kind::PATH
+                && unsafe { z_eq((*bnode).text, (*bnode).text_len, b"path\0".as_ptr()) }
+                && unsafe { (*bnode).n_kids } as usize == 1
+            {
+                bnode = unsafe { *(*bnode).kids.add(0) };
+            }
+            if unsafe { (*bnode).kind } != pm_jit_rsx_ast_kind::PATH {
+                unsafe {
+                    self.err(b"unsupported: tuple let-else binds one identifier per element\0".as_ptr(), line);
+                }
+                return;
+            }
+            let bn = unsafe { (*bnode).text };
+            let bl = unsafe { (*bnode).text_len };
+            let a = slot * TUP_MAXF + f;
+            let elct = self.tup_elems[a].as_ptr();
+            let elct_len = self.tup_lens[a];
+            /* payload type: struct-Option (rsx_opt_<elem>) unwraps ._v;
+             * pointer-Option binds the field itself */
+            let mut payct = elct;
+            let mut payct_len = elct_len;
+            let mut is_struct_opt = false;
+            if elct_len >= 8 && unsafe { z_eq(elct, 8, b"rsx_opt_\0".as_ptr()) } {
+                is_struct_opt = true;
+                let pb = self.arena_tmp();
+                let pln = unsafe { Lower::opt_typedef_elem(elct, elct_len, pb, 96) };
+                if pln == 0 || pln > 96 {
+                    unsafe {
+                        self.err(b"internal: tuple let-else payload\0".as_ptr(), line);
+                    }
+                    return;
+                }
+                payct = pb;
+                payct_len = pln;
+            }
+            /* `_` drops the bind */
+            if !(bl == 1 && unsafe { z_eq(bn, 1, b"_\0".as_ptr()) }) {
+                self.indent();
+                self.out.put(payct, payct_len);
+                self.out.putc(b' ');
+                self.out.put(bn, bl);
+                self.out.puts(b" = \0".as_ptr());
+                self.out.put(tmp, tmp_len);
+                self.out.puts(b"._\0".as_ptr());
+                let d = b'0' + f as u8;
+                self.out.putc(d);
+                if is_struct_opt {
+                    self.out.puts(b"._v\0".as_ptr());
+                }
+                self.out.puts(b";\n\0".as_ptr());
+                unsafe {
+                    (*locals).add(bn, bl, payct, payct_len, self.depth);
+                }
+            }
+            f += 1;
+        }
+        /* the test: every fielded Option must be Some */
+        self.indent();
+        self.out.puts(b"if (\0".as_ptr());
+        let mut first = true;
+        f = 0;
+        while f < pn {
+            let a = slot * TUP_MAXF + f;
+            let elct = self.tup_elems[a].as_ptr();
+            let elct_len = self.tup_lens[a];
+            if elct_len >= 8 && unsafe { z_eq(elct, 8, b"rsx_opt_\0".as_ptr()) } {
+                if !first {
+                    self.out.puts(b" || \0".as_ptr());
+                }
+                self.out.puts(b"!\0".as_ptr());
+                self.out.put(tmp, tmp_len);
+                self.out.puts(b"._\0".as_ptr());
+                let d = b'0' + f as u8;
+                self.out.putc(d);
+                self.out.puts(b"._has\0".as_ptr());
+                first = false;
+            } else {
+                if !first {
+                    self.out.puts(b" || \0".as_ptr());
+                }
+                self.out.put(tmp, tmp_len);
+                self.out.puts(b"._\0".as_ptr());
+                let d = b'0' + f as u8;
+                self.out.putc(d);
+                self.out.puts(b" == 0\0".as_ptr());
+                first = false;
+            }
+            f += 1;
+        }
+        self.out.puts(b") {\n\0".as_ptr());
+        self.depth += 1;
+        unsafe { self.emit_block_stmt(els, locals) };
+        self.depth -= 1;
+        self.indent();
+        self.out.puts(b"}\n\0".as_ptr());
+    }
+
+    /* `let (a, b) = expr` — kids: [TUPLE pat, (type TYPE), init]. One temp
+     * holds the initializer's value (the expr's tuple type drives the
+     * typedef; an ascription, when present, must agree — it is rendered
+     * instead when the init has no inferable type, e.g. value-position
+     * if/match). Each element bind then declares from `temp._N`. */
+    unsafe fn emit_let_tuple(&mut self, s: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
+        let kids = unsafe { (*s).kids };
+        let nk = unsafe { (*s).n_kids } as usize;
+        let line = unsafe { (*s).line };
+        if nk < 2 {
+            unsafe {
+                self.err(b"tuple let with no initializer\0".as_ptr(), line);
+            }
+            return;
+        }
+        let pat = unsafe { *kids.add(0) };
+        let pn = unsafe { (*pat).n_kids } as usize;
+        if pn == 0 || pn > TUP_MAXF {
+            unsafe {
+                self.err(b"unsupported: tuple pattern with more than 4 binds\0".as_ptr(), line);
+            }
+            return;
+        }
+        /* remaining kids: optional TYPE, then init expr */
+        let mut ty: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut init: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut i = 1usize;
+        while i < nk {
+            let k = unsafe { *kids.add(i) };
+            let kk = unsafe { (*k).kind };
+            if kk == pm_jit_rsx_ast_kind::TYPE {
+                ty = k;
+            } else {
+                init = k;
+            }
+            i += 1;
+        }
+        if init.is_null() {
+            unsafe {
+                self.err(b"tuple let with no initializer\0".as_ptr(), line);
+            }
+            return;
+        }
+        /* unwrap EXPR_STMT wrappers (desugared if-let arms) */
+        while unsafe { (*init).kind } == pm_jit_rsx_ast_kind::EXPR_STMT
+            && unsafe { (*init).n_kids } as usize >= 1
+        {
+            init = unsafe { *(*init).kids.add(0) };
+        }
+        /* the tuple C type: ascription first, else inferred from init */
+        let ct = self.arena_tmp();
+        let mut ct_len = 0usize;
+        if !ty.is_null() {
+            ct_len = unsafe { self.ctype(ty, ct, 128) };
+        }
+        if ct_len == 0 {
+            ct_len = unsafe { self.expr_ctype(init, ct, 128, locals) };
+        }
+        if ct_len == 0 || ct_len >= 128 {
+            unsafe {
+                self.err(b"cannot infer tuple let type - ascribe it\0".as_ptr(), line);
+            }
+            return;
+        }
+        if ct_len < 10 || !unsafe { z_eq(ct, 10, b"rsx_tuple_\0".as_ptr()) } {
+            unsafe {
+                self.err(b"tuple let on a non-tuple initializer\0".as_ptr(), line);
+            }
+            return;
+        }
+        let slot = unsafe { self.tup_find(ct, ct_len) };
+        if slot >= TUP_CAP {
+            unsafe {
+                self.err(b"internal: tuple let signature not registered\0".as_ptr(), line);
+            }
+            return;
+        }
+        if self.tup_counts[slot] != pn {
+            unsafe {
+                self.err(b"tuple let pattern does not match the tuple type\0".as_ptr(), line);
+            }
+            return;
+        }
+        /* the temp: declared, then filled (value-position if/match store
+         * into it; any other expr assigns directly). Name carries a
+         * per-unit counter — a second tuple let in the same C scope
+         * would redeclare the temp. */
+        let tmp = self.arena_tmp();
+        let at0 = unsafe { bput(tmp, 160, 0, b"__rsx_tup\0".as_ptr(), 9) };
+        let mut cnt = self.tup_tmp_n;
+        self.tup_tmp_n += 1;
+        /* counter digits, ASCII, most-significant first */
+        let mut digs: [u8; 10] = [0; 10];
+        let mut nd = 0usize;
+        if cnt == 0 {
+            digs[0] = b'0';
+            nd = 1;
+        } else {
+            while cnt > 0 && nd < 10 {
+                digs[nd] = b'0' + (cnt % 10) as u8;
+                cnt /= 10;
+                nd += 1;
+            }
+        }
+        let mut q = nd;
+        let mut tmp_len = at0;
+        while q > 0 {
+            q -= 1;
+            tmp_len = unsafe { bput(tmp, 160, tmp_len, &digs[q], 1) };
+        }
+        unsafe {
+            if tmp_len < 160 {
+                *tmp.add(tmp_len) = 0;
+            }
+        }
+        self.indent();
+        self.out.put(ct, ct_len);
+        self.out.putc(b' ');
+        self.out.put(tmp, tmp_len);
+        self.out.puts(b" = {0};\n\0".as_ptr());
+        let ik = unsafe { (*init).kind };
+        if ik == pm_jit_rsx_ast_kind::IF {
+            /* cur_ret carries the expected tuple to the arm bodies so
+             * unsuffixed literals in `(0, 0)` mint the right signature */
+            let saved_ret_len = self.cur_ret_len;
+            {
+                let mut j = 0usize;
+                while j < ct_len && j < 127 {
+                    self.cur_ret[j] = unsafe { *ct.add(j) };
+                    j += 1;
+                }
+                self.cur_ret_len = ct_len;
+            }
+            unsafe { self.emit_if_value(init, locals, tmp, tmp_len) };
+            self.cur_ret_len = saved_ret_len;
+        } else if ik == pm_jit_rsx_ast_kind::MATCH {
+            let saved_ret_len = self.cur_ret_len;
+            {
+                let mut j = 0usize;
+                while j < ct_len && j < 127 {
+                    self.cur_ret[j] = unsafe { *ct.add(j) };
+                    j += 1;
+                }
+                self.cur_ret_len = ct_len;
+            }
+            unsafe { self.emit_match_value(init, locals, tmp, tmp_len) };
+            self.cur_ret_len = saved_ret_len;
+        } else {
+            self.indent();
+            self.out.put(tmp, tmp_len);
+            self.out.puts(b" = \0".as_ptr());
+            unsafe { self.emit_expr(init, locals) };
+            self.out.puts(b";\n\0".as_ptr());
+        }
+        /* element binds from the temp's fields */
+        let pk = unsafe { (*pat).kids };
+        let mut f = 0usize;
+        while f < pn {
+            let sub = unsafe { *pk.add(f) };
+            /* unwrap the PATH wrapper around each bind */
+            let mut bnode = sub;
+            if unsafe { (*bnode).kind } == pm_jit_rsx_ast_kind::PATH
+                && unsafe { z_eq((*bnode).text, (*bnode).text_len, b"path\0".as_ptr()) }
+                && unsafe { (*bnode).n_kids } as usize == 1
+            {
+                bnode = unsafe { *(*bnode).kids.add(0) };
+            }
+            if unsafe { (*bnode).kind } != pm_jit_rsx_ast_kind::PATH {
+                unsafe {
+                    self.err(b"unsupported: tuple pattern element (expect binds)\0".as_ptr(), line);
+                }
+                return;
+            }
+            let bn = unsafe { (*bnode).text };
+            let bl = unsafe { (*bnode).text_len };
+            /* `_` drops the bind */
+            if bl == 1 && unsafe { z_eq(bn, 1, b"_\0".as_ptr()) } {
+                f += 1;
+                continue;
+            }
+            let a = slot * TUP_MAXF + f;
+            let elct = self.tup_elems[a].as_ptr();
+            let elct_len = self.tup_lens[a];
+            self.indent();
+            self.out.put(elct, elct_len);
+            self.out.putc(b' ');
+            self.out.put(bn, bl);
+            self.out.puts(b" = \0".as_ptr());
+            self.out.put(tmp, tmp_len);
+            self.out.puts(b"._\0".as_ptr());
+            let d = b'0' + f as u8;
+            self.out.putc(d);
+            self.out.puts(b";\n\0".as_ptr());
+            unsafe {
+                (*locals).add(bn, bl, elct, elct_len, self.depth);
+            }
+            f += 1;
+        }
+    }
+
     unsafe fn emit_let(&mut self, s: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
         /* kids: name(PATH), [mut ATTR], [type TYPE], [init expr]. Text tag
          * "letelse" (see parse_let) carries [Some-pat PATH, (mut), (init),
@@ -9074,6 +9884,19 @@ impl Lower {
         if unsafe { (*s).text_len } == 7 && unsafe { z_eq((*s).text, 7, b"letelse\0".as_ptr()) } {
             unsafe { self.emit_let_else(s, locals) };
             return;
+        }
+        /* tuple pattern `let (a, b) = ..`: destructure — one temp holds the
+         * whole tuple, each element bind declares from the temp's field. */
+        {
+            let kids0 = unsafe { (*s).kids };
+            let nk0 = unsafe { (*s).n_kids } as usize;
+            if nk0 >= 1 {
+                let k0 = unsafe { *kids0.add(0) };
+                if unsafe { (*k0).kind } == pm_jit_rsx_ast_kind::TUPLE {
+                    unsafe { self.emit_let_tuple(s, locals) };
+                    return;
+                }
+            }
         }
         let kids = unsafe { (*s).kids };
         let nk = unsafe { (*s).n_kids } as usize;
@@ -9375,6 +10198,7 @@ impl Lower {
             || k == pm_jit_rsx_ast_kind::INDEX
             || k == pm_jit_rsx_ast_kind::CAST
             || k == pm_jit_rsx_ast_kind::STRUCT_LIT
+            || k == pm_jit_rsx_ast_kind::TUPLE
             || k == pm_jit_rsx_ast_kind::CLOSURE
             || k == pm_jit_rsx_ast_kind::MACRO
             || k == pm_jit_rsx_ast_kind::BLOCK;
@@ -9560,40 +10384,10 @@ impl Lower {
                     let bind = unsafe { *pk.add(1) };
                     if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH
                         && unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Some\0".as_ptr()) }
-                        && unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
-                        && unsafe { (*bind).n_kids } >= 1
+                        && (unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
+                            || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
                     {
-                        let bleaf = unsafe { *(*bind).kids.add(0) };
-                        self.indent();
-                        let mut bct: *const u8 = ct;
-                        let mut bct_len = ct_len;
-                        let eln = self.cur_opt_elem_len;
-                        if eln > 0 {
-                            bct = self.cur_opt_elem.as_ptr();
-                            bct_len = eln;
-                            self.out.put(bct, bct_len);
-                            self.out.putc(b' ');
-                            self.out.put(unsafe { (*bleaf).text }, unsafe { (*bleaf).text_len });
-                            self.out.puts(b" = \0".as_ptr());
-                            self.out.put(temp, temp_len);
-                            self.out.puts(b"._v;\n\0".as_ptr());
-                        } else {
-                            self.out.put(ct, ct_len);
-                            self.out.putc(b' ');
-                            self.out.put(unsafe { (*bleaf).text }, unsafe { (*bleaf).text_len });
-                            self.out.puts(b" = \0".as_ptr());
-                            self.out.put(temp, temp_len);
-                            self.out.puts(b";\n\0".as_ptr());
-                        }
-                        unsafe {
-                            (*locals).add(
-                                unsafe { (*bleaf).text },
-                                unsafe { (*bleaf).text_len },
-                                bct,
-                                bct_len,
-                                1,
-                            );
-                        }
+                        unsafe { self.emit_some_binds(bind, temp, temp_len, ct, ct_len, locals) };
                     }
                 }
             }
@@ -9617,6 +10411,133 @@ impl Lower {
      * emit_pat_test's Some-branch does inline (it emits the decl after the
      * test, still inside the if's condition, which is wrong for scoping), so
      * match with Some-patterns uses a pre-declared temp instead. */
+
+    /* Declare Some(bind)'s binds from the scrutinee temp — one level of
+     * destructure: a PATH bind aliases `temp` (pointer payload) or copies
+     * `temp._v` (struct-Option payload, cur_opt_elem carries the element
+     * type); a TUPLE bind (Some((a, b)) — Option-of-tuple) declares each
+     * element bind from `temp._v._N`. `ct` is the scrutinee's C type. */
+    unsafe fn emit_some_binds(
+        &mut self,
+        bind: *const pm_jit_rsx_ast_t,
+        temp: *const u8,
+        temp_len: usize,
+        ct: *const u8,
+        ct_len: usize,
+        locals: *mut LocalTab,
+    ) {
+        if unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH && unsafe { (*bind).n_kids } >= 1 {
+            let bleaf = unsafe { *(*bind).kids.add(0) };
+            self.indent();
+            let mut bct: *const u8 = ct;
+            let mut bct_len = ct_len;
+            let eln = self.cur_opt_elem_len;
+            if eln > 0 {
+                bct = self.cur_opt_elem.as_ptr();
+                bct_len = eln;
+                self.out.put(bct, bct_len);
+                self.out.putc(b' ');
+                self.out.put(unsafe { (*bleaf).text }, unsafe { (*bleaf).text_len });
+                self.out.puts(b" = \0".as_ptr());
+                self.out.put(temp, temp_len);
+                self.out.puts(b"._v;\n\0".as_ptr());
+            } else {
+                self.out.put(ct, ct_len);
+                self.out.putc(b' ');
+                self.out.put(unsafe { (*bleaf).text }, unsafe { (*bleaf).text_len });
+                self.out.puts(b" = \0".as_ptr());
+                self.out.put(temp, temp_len);
+                self.out.puts(b";\n\0".as_ptr());
+            }
+            unsafe {
+                (*locals).add(
+                    unsafe { (*bleaf).text },
+                    unsafe { (*bleaf).text_len },
+                    bct,
+                    bct_len,
+                    1,
+                );
+            }
+            return;
+        }
+        if unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE {
+            /* Option-of-tuple: the payload is the tuple struct. Each element
+             * bind copies the designated field of `temp._v` (or of `temp`
+             * itself when the Option is pointer-shaped — never: a pointer
+             * payload tuple makes no sense; the struct path is the only
+             * sound one). */
+            if self.cur_opt_elem_len == 0 {
+                unsafe {
+                    self.err(b"unsupported: Some((..)) on a pointer-Option\0".as_ptr(), unsafe { (*bind).line });
+                }
+                return;
+            }
+            let pk = unsafe { (*bind).kids };
+            let pn = unsafe { (*bind).n_kids } as usize;
+            if pn == 0 || pn > TUP_MAXF {
+                unsafe {
+                    self.err(b"unsupported: tuple pattern with more than 4 binds\0".as_ptr(), unsafe { (*bind).line });
+                }
+                return;
+            }
+            /* payload spelling must be a registered tuple typedef */
+            let pc = self.cur_opt_elem.as_ptr();
+            let pl = self.cur_opt_elem_len;
+            let slot = unsafe { self.tup_find(pc, pl) };
+            if slot >= TUP_CAP {
+                unsafe {
+                    self.err(b"internal: Some-tuple payload not registered\0".as_ptr(), unsafe { (*bind).line });
+                }
+                return;
+            }
+            if self.tup_counts[slot] != pn {
+                unsafe {
+                    self.err(b"Some-tuple pattern arity mismatch\0".as_ptr(), unsafe { (*bind).line });
+                }
+                return;
+            }
+            let mut f = 0usize;
+            while f < pn {
+                let sub = unsafe { *pk.add(f) };
+                let mut bnode = sub;
+                if unsafe { (*bnode).kind } == pm_jit_rsx_ast_kind::PATH
+                    && unsafe { z_eq((*bnode).text, (*bnode).text_len, b"path\0".as_ptr()) }
+                    && unsafe { (*bnode).n_kids } as usize == 1
+                {
+                    bnode = unsafe { *(*bnode).kids.add(0) };
+                }
+                if unsafe { (*bnode).kind } != pm_jit_rsx_ast_kind::PATH {
+                    unsafe {
+                        self.err(b"unsupported: tuple pattern element (expect binds)\0".as_ptr(), unsafe { (*bind).line });
+                    }
+                    return;
+                }
+                let bn = unsafe { (*bnode).text };
+                let bl = unsafe { (*bnode).text_len };
+                if bl == 1 && unsafe { z_eq(bn, 1, b"_\0".as_ptr()) } {
+                    f += 1;
+                    continue;
+                }
+                let a = slot * TUP_MAXF + f;
+                let elct = self.tup_elems[a].as_ptr();
+                let elct_len = self.tup_lens[a];
+                self.indent();
+                self.out.put(elct, elct_len);
+                self.out.putc(b' ');
+                self.out.put(bn, bl);
+                self.out.puts(b" = \0".as_ptr());
+                self.out.put(temp, temp_len);
+                self.out.puts(b"._v._\0".as_ptr());
+                let d = b'0' + f as u8;
+                self.out.putc(d);
+                self.out.puts(b";\n\0".as_ptr());
+                unsafe {
+                    (*locals).add(bn, bl, elct, elct_len, 1);
+                }
+                f += 1;
+            }
+        }
+    }
 
 
     /* match with a value: arms store into temp. */
@@ -9702,45 +10623,11 @@ impl Lower {
                     let bind = unsafe { *pk.add(1) };
                     if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH
                         && unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Some\0".as_ptr()) }
-                        && unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
-                        && unsafe { (*bind).n_kids } >= 1
+                        && (unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
+                            || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
                     {
-                        let bleaf = unsafe { *(*bind).kids.add(0) };
                         self.depth += 1;
-                        self.indent();
-                        let mut bct: *const u8 = ct;
-                        let mut bct_len = ct_len;
-                        let eln = self.cur_opt_elem_len;
-                        if eln > 0 {
-                            bct = self.cur_opt_elem.as_ptr();
-                            bct_len = eln;
-                            self.out.put(bct, bct_len);
-                            self.out.putc(b' ');
-                            self.out.put(unsafe { (*bleaf).text }, unsafe { (*bleaf).text_len });
-                            self.out.puts(b" = \0".as_ptr());
-                            self.out.put(st, st_len);
-                            self.out.puts(b"._v;\n\0".as_ptr());
-                        } else {
-                            /* ct already carries the C qualifiers (const for
-                             * &T / *const T); no extra `const` keyword. */
-                            self.out.put(ct, ct_len);
-                            self.out.putc(b' ');
-                            self.out.put(unsafe { (*bleaf).text }, unsafe { (*bleaf).text_len });
-                            self.out.puts(b" = \0".as_ptr());
-                            self.out.put(st, st_len);
-                            self.out.puts(b";\n\0".as_ptr());
-                        }
-                        /* the bind is a live local for the arm body — typing
-                         * must see it (call through fn-ptr bind, field reads) */
-                        unsafe {
-                            (*locals).add(
-                                unsafe { (*bleaf).text },
-                                unsafe { (*bleaf).text_len },
-                                bct,
-                                bct_len,
-                                1,
-                            );
-                        }
+                        unsafe { self.emit_some_binds(bind, st, st_len, ct, ct_len, locals) };
                         self.depth -= 1;
                     }
                 }
@@ -10876,7 +11763,7 @@ impl Lower {
                     let tdn_len = unsafe { Lower::opt_typedef_name(eb, eln, tdn, 160) };
                     self.out.putc(b'(');
                     self.out.put(tdn, tdn_len);
-                    self.out.puts(b"){ ._v = 0, ._has = 0 }\0".as_ptr());
+                    self.out.puts(b"){ ._v = {0}, ._has = 0 }\0".as_ptr());
                     return;
                 }
             }
@@ -11029,6 +11916,100 @@ impl Lower {
      * the wrapping PATH node: kids = segments…, STRUCT_LIT node whose kids
      * are [STRUCT_FIELD(name), value, STRUCT_FIELD(name), value, …].
      * Emits a C99 compound literal `(S){ .a = 1, .b = 2 }`. */
+    /* Tuple expression `(a, b, ..)`: a compound literal of the shared
+     * rsx_tuple_<sig> struct, one designated field per element. The
+     * signature registers from the elements' inferred C types — same
+     * table the tuple *type* path fills, so `(x, y)` in a fn returning
+     * `(usize, usize)` picks up exactly that typedef. Unit `()` (text
+     * "()" — no kids) stays a refusal: C void is not a value. */
+    unsafe fn emit_tuple_expr(&mut self, e: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
+        let kids = unsafe { (*e).kids };
+        let nk = unsafe { (*e).n_kids } as usize;
+        if nk == 0 {
+            unsafe {
+                self.err(b"unsupported: tuple expression\0".as_ptr(), unsafe { (*e).line });
+            }
+            return;
+        }
+        if nk > TUP_MAXF {
+            unsafe {
+                self.err(b"unsupported: tuple with more than 4 elements\0".as_ptr(), unsafe { (*e).line });
+            }
+            return;
+        }
+        /* The fn's own return type wins when it is a tuple — unsuffixed
+         * literals inside would otherwise infer int32_t and mint a second
+         * signature (same rustc rule: expected type from context). */
+        if self.cur_ret_len >= 10 && unsafe { z_eq(self.cur_ret.as_ptr(), 10, b"rsx_tuple_\0".as_ptr()) } {
+            let slot = unsafe { self.tup_find(self.cur_ret.as_ptr(), self.cur_ret_len) };
+            if slot < TUP_CAP && self.tup_counts[slot] == nk {
+                let tdn = self.arena_tmp();
+                let basep = self.tup_elems.as_ptr().add(slot * TUP_MAXF);
+                let blens = self.tup_lens.as_ptr().add(slot * TUP_MAXF);
+                let tdn_len = unsafe { Lower::tup_typedef_name(basep, blens, nk, tdn, 160) };
+                self.out.putc(b'(');
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"){ \0".as_ptr());
+                let mut f2 = 0usize;
+                while f2 < nk {
+                    if f2 > 0 {
+                        self.out.puts(b", \0".as_ptr());
+                    }
+                    self.out.puts(b"._\0".as_ptr());
+                    let d = b'0' + f2 as u8;
+                    self.out.putc(d);
+                    self.out.puts(b" = \0".as_ptr());
+                    unsafe { self.emit_expr(*kids.add(f2), locals) };
+                    f2 += 1;
+                }
+                self.out.puts(b" }\0".as_ptr());
+                return;
+            }
+        }
+        let mut el_bufs: [[u8; 64]; TUP_MAXF] = [[0; 64]; TUP_MAXF];
+        let mut el_lens: [usize; TUP_MAXF] = [0; TUP_MAXF];
+        let mut f = 0usize;
+        while f < nk {
+            let kv = unsafe { *kids.add(f) };
+            let n = unsafe { self.expr_ctype(kv, el_bufs[f].as_mut_ptr(), 64, locals) };
+            if n == 0 || n >= 64 {
+                unsafe {
+                    self.err(b"cannot infer tuple element type - ascribe it\0".as_ptr(), unsafe { (*e).line });
+                }
+                return;
+            }
+            el_lens[f] = n;
+            f += 1;
+        }
+        let slot = unsafe { self.tup_add(el_bufs.as_ptr(), el_lens.as_ptr(), nk) };
+        if slot >= TUP_CAP {
+            unsafe {
+                self.err(b"internal: too many tuple types\0".as_ptr(), unsafe { (*e).line });
+            }
+            return;
+        }
+        let tdn = self.arena_tmp();
+        let base = self.tup_elems.as_ptr().add(slot * TUP_MAXF);
+        let blens = self.tup_lens.as_ptr().add(slot * TUP_MAXF);
+        let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, nk, tdn, 160) };
+        self.out.putc(b'(');
+        self.out.put(tdn, tdn_len);
+        self.out.puts(b"){ \0".as_ptr());
+        let mut f2 = 0usize;
+        while f2 < nk {
+            if f2 > 0 {
+                self.out.puts(b", \0".as_ptr());
+            }
+            self.out.puts(b"._\0".as_ptr());
+            let d = b'0' + f2 as u8;
+            self.out.putc(d);
+            self.out.puts(b" = \0".as_ptr());
+            unsafe { self.emit_expr(*kids.add(f2), locals) };
+            f2 += 1;
+        }
+        self.out.puts(b" }\0".as_ptr());
+    }
+
     unsafe fn emit_struct_lit(&mut self, lit: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
         let kids = unsafe { (*lit).kids };
         let nk = unsafe { (*lit).n_kids } as usize;
@@ -11123,7 +12104,7 @@ impl Lower {
                             if cl >= 8
                                 && unsafe { z_eq(ct, 8, b"rsx_opt_\0".as_ptr()) }
                             {
-                                self.out.puts(b"{ ._v = 0, ._has = 0 }\0".as_ptr());
+                                self.out.puts(b"{ ._v = {0}, ._has = 0 }\0".as_ptr());
                             } else {
                                 self.out.puts(b"NULL\0".as_ptr());
                             }
@@ -11395,9 +12376,7 @@ impl Lower {
                 }
                 self.out.putc(b'}');
             }
-            pm_jit_rsx_ast_kind::TUPLE => unsafe {
-                self.err(b"unsupported: tuple expression\0".as_ptr(), unsafe { (*e).line });
-            },
+            pm_jit_rsx_ast_kind::TUPLE => unsafe { self.emit_tuple_expr(e, locals) },
             pm_jit_rsx_ast_kind::STRUCT_LIT => unsafe { self.emit_struct_lit(e, locals) },
             pm_jit_rsx_ast_kind::CLOSURE => unsafe {
                 self.err(b"unsupported: closure\0".as_ptr(), unsafe { (*e).line });
@@ -11532,6 +12511,16 @@ impl Lower {
                     j -= 1;
                 }
                 if j == 0 || unsafe { *b_buf.add(j - 1) } != b'*' {
+                    /* pointer-to-array operand (`T (*)[N]`): emit the real C
+                     * deref — the identity drop would make `*(tbl + f)` into
+                     * `tbl + f`, silently indexing whole arrays. */
+                    let pp = unsafe { self.parr_declarator(b_buf, bn) };
+                    if pp != usize::MAX {
+                        self.out.puts(b"(*\0".as_ptr());
+                        unsafe { self.emit_expr(*kids.add(0), locals) };
+                        self.out.putc(b')');
+                        return;
+                    }
                     unsafe { self.emit_expr(*kids.add(0), locals) };
                     return;
                 }
@@ -11706,7 +12695,7 @@ impl Lower {
                     self.out.putc(b'(');
                     self.out.put(ct, cl);
                     if is_none {
-                        self.out.puts(b"){ ._v = 0, ._has = 0 }\0".as_ptr());
+                        self.out.puts(b"){ ._v = {0}, ._has = 0 }\0".as_ptr());
                     } else {
                         self.out.puts(b"){ ._v = \0".as_ptr());
                         unsafe { self.emit_expr(some_v, locals) };
@@ -12331,11 +13320,22 @@ impl Lower {
             self.out.putc(b')');
             return;
         }
-        /* .as_ptr() / .as_mut_ptr() on a known literal/array — identity */
+        /* .as_ptr() / .as_mut_ptr() on a known literal/array — identity.
+         * Pointer-to-array receiver (`T (*)[N]`): the identity would hand
+         * back the array pointer itself, but `.as_ptr()` is the first
+         * element — emit the C deref; the array lvalue decays to `T *`. */
         if an == 0
             && (unsafe { z_eq(mname, mlen, b"as_ptr\0".as_ptr()) }
                 || unsafe { z_eq(mname, mlen, b"as_mut_ptr\0".as_ptr()) })
         {
+            let abuf = self.arena_tmp();
+            let an2 = unsafe { self.expr_ctype(recv, abuf, 128, locals) };
+            if an2 > 0 && unsafe { self.parr_declarator(abuf, an2) } != usize::MAX {
+                self.out.puts(b"(*\0".as_ptr());
+                unsafe { self.emit_expr(recv, locals) };
+                self.out.putc(b')');
+                return;
+            }
             unsafe { self.emit_expr(recv, locals) };
             return;
         }
@@ -12484,13 +13484,21 @@ impl Lower {
         let name = unsafe { *kids.add(1) };
         let fname = unsafe { (*name).text };
         let flen = unsafe { (*name).text_len };
-        /* Numeric tuple field `.0` on a transparent newtype: the newtype IS
-         * its inner in C, so the unwrap is the base itself. Bases that are
-         * not a newtype refuse (real tuple access needs layout the subset
-         * does not define). */
+        /* Numeric tuple field `.N`: on a transparent newtype the newtype IS
+         * its inner in C (unwrap = the base itself); on a real tuple
+         * (rsx_tuple_*) it is the designated element field. */
         if flen > 0 && !fname.is_null() && unsafe { *fname } >= b'0' && unsafe { *fname } <= b'9' {
             let bt0 = self.arena_tmp();
             let bn0 = unsafe { self.expr_ctype(base, bt0, 128, locals) };
+            if bn0 >= 10 && unsafe { z_eq(bt0, 10, b"rsx_tuple_\0".as_ptr()) } {
+                self.out.puts(b"(\0".as_ptr());
+                self.out.putc(b'(');
+                unsafe { self.emit_expr(base, locals) };
+                self.out.puts(b")._\0".as_ptr());
+                self.out.put(fname, flen);
+                self.out.putc(b')');
+                return;
+            }
             if bn0 > 0 {
                 unsafe { self.emit_expr(base, locals) };
                 return;
@@ -12899,6 +13907,127 @@ impl Lower {
         self.opt_lens[slot] = elen;
         self.opt_n += 1;
         slot
+    }
+
+    /* Tuple typedef name: rsx_tuple_<elem0>_<elem1>_… — each element's C
+     * spelling sanitized to identifier characters (same rule as
+     * opt_typedef_name), elements joined by '_'. */
+    unsafe fn tup_typedef_name(elems: *const [u8; 64], lens: *const usize, n: usize, out: *mut u8, cap: usize) -> usize {
+        let mut at = unsafe { bput(out, cap, 0, b"rsx_tuple_\0".as_ptr(), 10) };
+        let mut f = 0usize;
+        while f < n {
+            if f > 0 {
+                at = unsafe { bput(out, cap, at, b"_\0".as_ptr(), 1) };
+            }
+            let elen = unsafe { *lens.add(f) };
+            let elem = unsafe { (*elems.add(f)).as_ptr() };
+            let mut i = 0usize;
+            while i < elen {
+                let c = unsafe { *elem.add(i) };
+                let ok = c.is_ascii_alphanumeric() || c == b'_';
+                let putc = if ok { c } else { b'_' };
+                at = unsafe { bput(out, cap, at, &putc, 1) };
+                i += 1;
+            }
+            f += 1;
+        }
+        unsafe {
+            if at < cap {
+                *out.add(at) = 0;
+            } else if cap > 0 {
+                *out.add(cap - 1) = 0;
+            }
+        }
+        at
+    }
+
+    /* Register a tuple signature (idempotent). elems/lens describe the
+     * rendered C element types; returns the slot or TUP_CAP when the
+     * table is full — the caller refuses then. */
+    unsafe fn tup_add(&mut self, elems: *const [u8; 64], lens: *const usize, n: usize) -> usize {
+        if n == 0 || n > TUP_MAXF {
+            return TUP_CAP;
+        }
+        let mut s = 0usize;
+        while s < self.tup_n {
+            if self.tup_counts[s] != n {
+                s += 1;
+                continue;
+            }
+            let mut same = true;
+            let mut f = 0usize;
+            while f < n {
+                let a = s * TUP_MAXF + f;
+                if self.tup_lens[a] != unsafe { *lens.add(f) } {
+                    same = false;
+                    break;
+                }
+                let mut i = 0usize;
+                while i < self.tup_lens[a] {
+                    if self.tup_elems[a][i] != unsafe { (*elems.add(f))[i] } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if !same {
+                    break;
+                }
+                f += 1;
+            }
+            if same {
+                return s;
+            }
+            s += 1;
+        }
+        if self.tup_n >= TUP_CAP {
+            return TUP_CAP;
+        }
+        let slot = self.tup_n;
+        let mut f = 0usize;
+        while f < n {
+            let a = slot * TUP_MAXF + f;
+            let elen = unsafe { *lens.add(f) };
+            let mut i = 0usize;
+            while i < elen {
+                self.tup_elems[a][i] = unsafe { (*elems.add(f))[i] };
+                i += 1;
+            }
+            self.tup_lens[a] = elen;
+            f += 1;
+        }
+        self.tup_counts[slot] = n;
+        self.tup_n += 1;
+        slot
+    }
+
+    /* Find a tuple signature slot by its typedef name (name_len bytes).
+     * Returns the slot or TUP_CAP when no signature matches. */
+    unsafe fn tup_find(&mut self, name: *const u8, name_len: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.tup_n {
+            let n = self.tup_counts[s];
+            let tdn = self.arena_tmp();
+            let basep = self.tup_elems.as_ptr().add(s * TUP_MAXF);
+            let blens = self.tup_lens.as_ptr().add(s * TUP_MAXF);
+            let tdl = unsafe { Lower::tup_typedef_name(basep, blens, n, tdn, 160) };
+            if tdl == name_len {
+                let mut same = true;
+                let mut j = 0usize;
+                while j < tdl {
+                    if unsafe { *tdn.add(j) } != unsafe { *name.add(j) } {
+                        same = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        TUP_CAP
     }
 
     /* Static/const type table: register a top-level name with its rendered
@@ -13838,6 +14967,93 @@ impl Lower {
         }
     }
 
+    /* Emit a pending tuple typedef (signature slot s) — the shared
+     * `struct { A _0; B _1; } rsx_tuple_A_B;`. */
+    unsafe fn tup_emit_one(&mut self, s: usize) {
+        if self.tup_done[s] {
+            return;
+        }
+        let n = self.tup_counts[s];
+        if n == 0 || n > TUP_MAXF {
+            return;
+        }
+        let tdn = self.arena_tmp();
+        let base = self.tup_elems.as_ptr().add(s * TUP_MAXF);
+        let blens = self.tup_lens.as_ptr().add(s * TUP_MAXF);
+        let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, n, tdn, 160) };
+        self.out.puts(b"typedef struct { \0".as_ptr());
+        let mut f = 0usize;
+        while f < n {
+            let a = s * TUP_MAXF + f;
+            let elen = self.tup_lens[a];
+            let elem = self.tup_elems[a].as_ptr();
+            self.out.put(elem, elen);
+            self.out.puts(b" _\0".as_ptr());
+            /* field index as ASCII — f < 4, one digit */
+            let d = b'0' + f as u8;
+            self.out.putc(d);
+            self.out.puts(b"; \0".as_ptr());
+            f += 1;
+        }
+        self.out.puts(b"} \0".as_ptr());
+        self.out.put(tdn, tdn_len);
+        self.out.puts(b";\n\0".as_ptr());
+        self.tup_done[s] = true;
+    }
+
+    /* Emit pending tuple typedefs whose element spelling names the type
+     * just declared — same pass-A ordering contract as opt_emit_for. */
+    unsafe fn tup_emit_for(&mut self, name: *const u8, nlen: usize) {
+        if nlen == 0 || name.is_null() {
+            return;
+        }
+        let mut s = 0usize;
+        while s < self.tup_n {
+            if self.tup_done[s] {
+                s += 1;
+                continue;
+            }
+            let n = self.tup_counts[s];
+            let mut matched = false;
+            let mut f = 0usize;
+            while f < n {
+                let a = s * TUP_MAXF + f;
+                if self.tup_lens[a] == nlen {
+                    let elen = self.tup_lens[a];
+                    let elem = self.tup_elems[a].as_ptr();
+                    let mut j = 0usize;
+                    let mut eq = true;
+                    while j < elen {
+                        if unsafe { *elem.add(j) } != unsafe { *name.add(j) } {
+                            eq = false;
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if eq {
+                        matched = true;
+                        break;
+                    }
+                }
+                f += 1;
+            }
+            if matched {
+                unsafe { self.tup_emit_one(s) };
+            }
+            s += 1;
+        }
+    }
+
+    /* Emit every still-pending tuple typedef (primitive element types,
+     * and anything whose naming type never matched). */
+    unsafe fn tup_emit_rest(&mut self) {
+        let mut s = 0usize;
+        while s < self.tup_n {
+            unsafe { self.tup_emit_one(s) };
+            s += 1;
+        }
+    }
+
     /* Emit struct-Option typedefs (`rsx_opt_<elem>`) whose payload spelling
      * matches `name` — called right after the alias/struct declaring that
      * name lands in the C, so the typedef body's payload is declared first.
@@ -14101,14 +15317,18 @@ impl Lower {
             kind = unsafe { (*item).kind };
             if kind == pm_jit_rsx_ast_kind::STRUCT {
                 unsafe { self.lower_struct(item) };
-                /* Option typedefs whose payload names this struct follow it */
+                /* Option/tuple typedefs whose payloads name this struct
+                 * follow it */
                 unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                unsafe { self.tup_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
             } else if kind == pm_jit_rsx_ast_kind::ENUM {
                 unsafe { self.lower_enum(item) };
                 unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                unsafe { self.tup_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
             } else if kind == pm_jit_rsx_ast_kind::TYPE_ALIAS {
                 unsafe { self.lower_type_alias(item) };
                 unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                unsafe { self.tup_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
             }
             if !self.ok {
                 bad = true;
@@ -14116,6 +15336,10 @@ impl Lower {
             }
             i += 1;
         }
+        /* remaining tuple typedefs — primitive element types need no
+         * naming type; before the Option typedefs whose payloads may
+         * name them (rsx_opt_rsx_tuple_…) and before prototypes/fns */
+        unsafe { self.tup_emit_rest() };
         /* remaining Option typedefs — primitive payloads need no naming
          * type; emit before the prototypes/fns that use them */
         unsafe { self.opt_emit_rest() };
@@ -14547,6 +15771,12 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_lower(
         opt_lens: [0; OPT_CAP],
         opt_done: [false; OPT_CAP],
         opt_n: 0,
+        tup_elems: [[0; 64]; TUP_CAP * TUP_MAXF],
+        tup_lens: [0; TUP_CAP * TUP_MAXF],
+        tup_counts: [0; TUP_CAP],
+        tup_done: [false; TUP_CAP],
+        tup_n: 0,
+        tup_tmp_n: 0,
         opq_names: [[0; 48]; 24],
         opq_lens: [0; 24],
         opq_n: 0,
@@ -14557,6 +15787,14 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_lower(
         st_ct_lens: [0; ST_CAP],
         st_n: 0,
     };
+    /* SymTab is arena-backed — a span smaller than its block hands back
+     * NULL and every table probe would crash. Refuse instead. */
+    if lw.syms.is_null() {
+        unsafe {
+            err_set(errbuf, errbuf_len, b"arena too small for the symbol table\0".as_ptr(), 0);
+        }
+        return -1;
+    }
     let good = unsafe { lw.lower_file(unit) };
     if !good || !lw.ok || !lw.out.ok {
         /* aborted without a specific message (arena exhausted mid-render):

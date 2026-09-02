@@ -28,11 +28,15 @@ shift 2
 
 retryable="upy cdn fetch 11"
 
-# "gw <ip>" from the boot net tree: SLIRP boot-DHCP race (see header).
+# "gw <ip>" from the boot net tree, and the bare-IP markers the DHCP lease
+# prints: SLIRP boot-DHCP race (see header). The lease never lands when the
+# OFFER/ACK exchange loses, so the IP lines never print — the re-run is the
+# retry (QEMU asks DHCP again at boot).
 is_retryable() {
     case "$1" in
     "$retryable") return 0 ;;
     gw\ *) return 0 ;;
+    10.0.2.[0-9]*) return 0 ;;
     esac
     return 1
 }
@@ -48,6 +52,16 @@ run_once() {
     fi
     cat "$serial"
     flake=0
+    # A CDN fetch that gave up kills the autoexec (ImportError), so every
+    # later marker is absent and the first hard-fail below fires before the
+    # retryable "upy cdn fetch 11" is even evaluated. The abort line in the
+    # log is the same SLIRP race — treat it as the flake, not a new failure
+    # class. A genuinely broken CDN (wrong base, no server, 404s) fails the
+    # re-run the same way, so this stays a retry, not a mask.
+    if grep -q "upy cdn fetch err" "$serial"; then
+        echo "serial prove: retryable SLIRP flake (cdn fetch err)" >&2
+        flake=1
+    fi
     while IFS= read -r m; do
         [ -n "$m" ] || continue
         if grep -q "$m" "$serial"; then
@@ -56,6 +70,11 @@ run_once() {
         if is_retryable "$m"; then
             echo "serial prove: retryable SLIRP flake (missing: $m)" >&2
             flake=1
+            continue
+        fi
+        # The fetch-err flake above already explained the abort; the
+        # markers past it are the consequence, not extra failures.
+        if [ "$flake" -eq 1 ]; then
             continue
         fi
         echo "serial prove: missing marker: $m" >&2

@@ -21,7 +21,7 @@ static int rsx_strstr(const char *hay, const char *needle) {
 /* --- lex --------------------------------------------------------------- */
 
 static int32_t test_lex_minimal(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     pm_jit_rsx_toklist_t toks;
     char err[PM_METAL_JIT_RSX_ERR_MAX];
@@ -31,7 +31,7 @@ static int32_t test_lex_minimal(void) {
         "}\n";
 
     if (backing == NULL) return 1;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 2; }
 
     memset(&toks, 0, sizeof(toks));
@@ -67,7 +67,7 @@ static int32_t test_lex_minimal(void) {
 /* lexer: macro invocations capture whole text; macro_rules! is refused at
  * parse, not lex (the lexer emits MACRO_INVOC for any name!(...) shape). */
 static int32_t test_lex_macro(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     pm_jit_rsx_toklist_t toks;
     char err[PM_METAL_JIT_RSX_ERR_MAX];
@@ -79,7 +79,7 @@ static int32_t test_lex_macro(void) {
         ");\n";
 
     if (backing == NULL) return 10;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 11; }
 
     memset(&toks, 0, sizeof(toks));
@@ -104,13 +104,13 @@ static int32_t test_lex_macro(void) {
 
 /* lexer: unterminated string errors with a line number, not a crash */
 static int32_t test_lex_errors(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     pm_jit_rsx_toklist_t toks;
     char err[PM_METAL_JIT_RSX_ERR_MAX];
 
     if (backing == NULL) return 20;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 21; }
 
     memset(&toks, 0, sizeof(toks));
@@ -129,7 +129,7 @@ static int32_t test_lex_errors(void) {
 /* --- parse ------------------------------------------------------------- */
 
 static int32_t test_parse_minimal(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     pm_jit_rsx_toklist_t toks;
     pm_jit_rsx_ast_t *unit = NULL;
@@ -140,7 +140,7 @@ static int32_t test_parse_minimal(void) {
         "}\n";
 
     if (backing == NULL) return 30;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 31; }
 
     memset(&toks, 0, sizeof(toks));
@@ -168,7 +168,7 @@ static int32_t test_parse_minimal(void) {
 
 /* parse: #[repr(C)] pub struct { fields } */
 static int32_t test_parse_struct(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     pm_jit_rsx_toklist_t toks;
     pm_jit_rsx_ast_t *unit = NULL;
@@ -181,7 +181,7 @@ static int32_t test_parse_struct(void) {
         "}\n";
 
     if (backing == NULL) return 40;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 41; }
 
     memset(&toks, 0, sizeof(toks));
@@ -213,7 +213,7 @@ static int32_t test_parse_struct(void) {
 
 /* parse: const fn with body, let + typed pattern, return expr */
 static int32_t test_parse_fn(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     pm_jit_rsx_toklist_t toks;
     pm_jit_rsx_ast_t *unit = NULL;
@@ -225,7 +225,7 @@ static int32_t test_parse_fn(void) {
         "}\n";
 
     if (backing == NULL) return 50;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 51; }
 
     memset(&toks, 0, sizeof(toks));
@@ -256,7 +256,7 @@ static int32_t test_parse_fn(void) {
 
 /* parse: out-of-subset constructs are refused with the rsx: prefix */
 static int32_t test_parse_unsupported(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     pm_jit_rsx_toklist_t toks;
     pm_jit_rsx_ast_t *unit = NULL;
@@ -266,7 +266,7 @@ static int32_t test_parse_unsupported(void) {
         "}\n";
 
     if (backing == NULL) return 60;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 61; }
 
     memset(&toks, 0, sizeof(toks));
@@ -289,7 +289,7 @@ static int32_t test_parse_unsupported(void) {
 /* parse+lower: `mod` items (path form and inline body) are structure —
  * the flat C translation records them as a comment, never a refusal. */
 static int32_t test_compile_mod_item(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     char *c_out = NULL;
     size_t c_out_len = 0;
@@ -305,7 +305,7 @@ static int32_t test_compile_mod_item(void) {
         "}\n";
 
     if (backing == NULL) return 70;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 71; }
     memset(err, 0, sizeof(err));
     if (pm_metal_jit_rsx_compile(arena, src, strlen(src),
@@ -324,7 +324,7 @@ static int32_t test_compile_mod_item(void) {
 /* --- lower / compile --------------------------------------------------- */
 
 static int32_t test_compile_minimal_fn(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     char *c_out = NULL;
     size_t c_out_len = 0;
@@ -335,7 +335,7 @@ static int32_t test_compile_minimal_fn(void) {
         "}\n";
 
     if (backing == NULL) return 70;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 71; }
 
     memset(err, 0, sizeof(err));
@@ -355,7 +355,7 @@ static int32_t test_compile_minimal_fn(void) {
 }
 
 static int32_t test_compile_struct(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     char *c_out = NULL;
     size_t c_out_len = 0;
@@ -368,7 +368,7 @@ static int32_t test_compile_struct(void) {
         "}\n";
 
     if (backing == NULL) return 80;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 81; }
 
     memset(err, 0, sizeof(err));
@@ -393,7 +393,7 @@ static int32_t test_compile_struct(void) {
 /* compile: match range patterns (lo..=hi), literal or-patterns, and
  * Some(bind) — the three pattern lifts (each refuses by name before). */
 static int32_t test_compile_match_patterns(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     char *c_out = NULL;
     size_t c_out_len = 0;
@@ -414,7 +414,7 @@ static int32_t test_compile_match_patterns(void) {
         "}\n";
 
     if (backing == NULL) return 96;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 97; }
 
     memset(err, 0, sizeof(err));
@@ -442,7 +442,7 @@ static int32_t test_compile_match_patterns(void) {
 
 /* compile: `expr?` on an Option-of-pointer and range indexes */
 static int32_t test_compile_try_and_range_index(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     char *c_out = NULL;
     size_t c_out_len = 0;
@@ -462,7 +462,7 @@ static int32_t test_compile_try_and_range_index(void) {
         "}\n";
 
     if (backing == NULL) return 130;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 131; }
 
     memset(err, 0, sizeof(err));
@@ -496,7 +496,7 @@ static int32_t test_compile_try_and_range_index(void) {
  * `break`/`continue`. Also proves the for-range binding is the real
  * loop variable (a PATH wrapper bug once emitted a var named "path"). */
 static int32_t test_compile_labeled_loops(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     char *c_out = NULL;
     size_t c_out_len = 0;
@@ -528,7 +528,7 @@ static int32_t test_compile_labeled_loops(void) {
         "}\n";
 
     if (backing == NULL) return 140;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 141; }
 
     memset(err, 0, sizeof(err));
@@ -570,7 +570,7 @@ static int32_t test_compile_labeled_loops(void) {
  * as a struct; a literal is a designated initializer (sets the active
  * member); field access reads the active member. */
 static int32_t test_compile_union_item(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     char *c_out = NULL;
     size_t c_out_len = 0;
@@ -595,7 +595,7 @@ static int32_t test_compile_union_item(void) {
         "}\n";
 
     if (backing == NULL) return 150;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 151; }
 
     memset(err, 0, sizeof(err));
@@ -630,7 +630,7 @@ static int32_t test_compile_union_item(void) {
 /* parse: nested generic types `A<B<C>>` — the `>>` lexes as one SHR token
  * and once hung the generic-list loop (the fix splits the close). */
 static int32_t test_parse_nested_generics(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     pm_jit_rsx_toklist_t toks;
     pm_jit_rsx_ast_t *unit = NULL;
@@ -644,7 +644,7 @@ static int32_t test_parse_nested_generics(void) {
         "}\n";
 
     if (backing == NULL) return 104;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 105; }
     memset(&toks, 0, sizeof(toks));
     memset(err, 0, sizeof(err));
@@ -662,7 +662,7 @@ static int32_t test_parse_nested_generics(void) {
 /* compile: `unsafe impl Marker for Type {}` (marker-trait impl, empty
  * body) parses and lowers to nothing. */
 static int32_t test_compile_unsafe_impl_marker(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     char *c_out = NULL;
     size_t c_out_len = 0;
@@ -677,7 +677,7 @@ static int32_t test_compile_unsafe_impl_marker(void) {
         "}\n";
 
     if (backing == NULL) return 108;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 109; }
     memset(err, 0, sizeof(err));
     if (pm_metal_jit_rsx_compile(arena, src, strlen(src),
@@ -695,7 +695,7 @@ static int32_t test_compile_unsafe_impl_marker(void) {
 
 /* compile: a fn with a body lowers to a C fn with the same name */
 static int32_t test_compile_fn_body(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     char *c_out = NULL;
     size_t c_out_len = 0;
@@ -707,7 +707,7 @@ static int32_t test_compile_fn_body(void) {
         "}\n";
 
     if (backing == NULL) return 90;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 91; }
 
     memset(err, 0, sizeof(err));
@@ -732,7 +732,7 @@ static int32_t test_compile_fn_body(void) {
 
 /* compile: #line provenance — generated C carries source line mapping */
 static int32_t test_compile_provenance(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     char *c_out = NULL;
     size_t c_out_len = 0;
@@ -743,7 +743,7 @@ static int32_t test_compile_provenance(void) {
         "}\n";
 
     if (backing == NULL) return 100;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 101; }
 
     memset(err, 0, sizeof(err));
@@ -766,7 +766,7 @@ static int32_t test_compile_provenance(void) {
 /* --- ast_dump ---------------------------------------------------------- */
 
 static int32_t test_ast_dump(void) {
-    void *backing = malloc(1u << 20);
+    void *backing = malloc(1u << 26);
     pm_util_mem_arena_t *arena;
     pm_jit_rsx_toklist_t toks;
     pm_jit_rsx_ast_t *unit = NULL;
@@ -778,7 +778,7 @@ static int32_t test_ast_dump(void) {
         "}\n";
 
     if (backing == NULL) return 110;
-    arena = pm_util_mem_arena_create(backing, 1u << 20);
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (arena == NULL) { free(backing); return 111; }
 
     memset(&toks, 0, sizeof(toks));
