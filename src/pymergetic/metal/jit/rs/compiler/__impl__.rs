@@ -87,7 +87,12 @@
 //!   (on a pointer-to-array receiver: the C deref — the array lvalue
 //!   decays to the element pointer),
 //!   `.is_ascii_{digit,alphanumeric,alphabetic}()` -> range tests,
-//!   `.len()` -> literal/array constant only. Anything else refuses.
+//!   `.len()` -> literal/array constant only,
+//!   `AtomicU32` -> `_Atomic uint32_t`, `AtomicU32::new(v)` -> `(v)`,
+//!   `.load/.store/.swap(Ordering::X)` on an `AtomicU32` ->
+//!   `__atomic_load/_store/_exchange` builtins with the stdatomic.h
+//!   order numbering (Relaxed=0..SeqCst=5), `Ordering::X` -> the int,
+//!   `core::hint::spin_loop()` -> `0`. Anything else refuses.
 //! - Item-level `PM_MOD_EXPORT_RS!` / `PM_MOD_BOOT*_RS!` ctors lower to a
 //!   `//` comment (the registry table is built by the real toolchain).
 //!   Every other macro refuses.
@@ -6392,6 +6397,9 @@ struct Lower {
     /* per-unit counter for tuple-destructure temp names (two tuple lets
      * in one C scope would redeclare `__rsx_tup` — each gets its own). */
     tup_tmp_n: usize,
+    /* per-unit counter for atomic-op temp names (same redeclaration
+     * concern as tup_tmp_n, for `__rsx_at<N>` inside one C scope). */
+    atom_tmp_n: usize,
     /* opaque extern type names seen in signatures/statics (`pm_util_lock_t`):
      * the generated C is self-contained, so each gets a hoisted
      * `typedef struct X X;` — the real definition lives in the linked lib. */
@@ -6651,6 +6659,13 @@ impl Lower {
             }
             if unsafe { z_eq(text, text_len, b"u32\0".as_ptr()) } {
                 at = unsafe { zput(out, cap, at, b"uint32_t\0".as_ptr()) };
+                return at;
+            }
+            /* AtomicU32 -> _Atomic uint32_t: the field is a C11 atomic;
+             * loads/stores/swaps go through the __atomic_* builtins
+             * (see emit_method_call), never plain access. */
+            if unsafe { z_eq(text, text_len, b"AtomicU32\0".as_ptr()) } {
+                at = unsafe { zput(out, cap, at, b"_Atomic uint32_t\0".as_ptr()) };
                 return at;
             }
             if unsafe { z_eq(text, text_len, b"u64\0".as_ptr()) } {
@@ -8792,6 +8807,12 @@ impl Lower {
         }
         if unsafe { z_eq(s, n, b"char\0".as_ptr()) } {
             return unsafe { zput(out, cap, 0, b"uint32_t\0".as_ptr()) };
+        }
+        /* AtomicU32 -> _Atomic uint32_t: the field is a C11 atomic;
+         * loads/stores/swaps go through the __atomic_* builtins
+         * (see emit_method_call), never plain access. */
+        if unsafe { z_eq(s, n, b"AtomicU32\0".as_ptr()) } {
+            return unsafe { zput(out, cap, 0, b"_Atomic uint32_t\0".as_ptr()) };
         }
         unsafe { self.suffix_ctype(s, n, out, cap) }
     }
@@ -11819,6 +11840,19 @@ impl Lower {
                     self.out.puts(limit);
                     return;
                 }
+                /* `Ordering::X` -> the C __ATOMIC_* value as a literal
+                 * (same numbering stdatomic.h assigns). */
+                if unsafe { z_eq(ftext, flen, b"Ordering\0".as_ptr()) } {
+                    let ord = unsafe { self.atomic_order(e) };
+                    if ord >= 0 {
+                        self.out.put_u32(ord as u32);
+                        return;
+                    }
+                    unsafe {
+                        self.err(b"unsupported: unknown Ordering variant\0".as_ptr(), unsafe { (*e).line });
+                    }
+                    return;
+                }
                 /* 2-segment enum variant: `State::Ready` -> State_Ready */
                 if unsafe { (*last).kind } == pm_jit_rsx_ast_kind::PATH {
                     let mut full = self.arena_tmp();
@@ -11912,6 +11946,49 @@ impl Lower {
         core::ptr::null()
     }
 
+    /* Memory-order argument of an atomic op: an `Ordering::X` path (2
+     * segments) or a bare `X`. Returns the C __ATOMIC_* value — the
+     * same numbering stdatomic.h assigns: Relaxed=0, Consume=1,
+     * Acquire=2, Release=3, AcqRel=4, SeqCst=5 — or -1 (not an order:
+     * the caller refuses). */
+    unsafe fn atomic_order(&mut self, arg: *const pm_jit_rsx_ast_t) -> i32 {
+        let mut a = arg;
+        while unsafe { (*a).kind } == pm_jit_rsx_ast_kind::PAREN
+            && unsafe { (*a).n_kids } as usize >= 1
+        {
+            a = unsafe { *(*a).kids.add(0) };
+        }
+        if unsafe { (*a).kind } != pm_jit_rsx_ast_kind::PATH {
+            return -1;
+        }
+        let kids = unsafe { (*a).kids };
+        let nk = unsafe { (*a).n_kids } as usize;
+        let mut t = unsafe { (*a).text };
+        let mut tl = unsafe { (*a).text_len };
+        if nk >= 2 {
+            t = unsafe { (*(*kids.add(nk - 1))).text };
+            tl = unsafe { (*(*kids.add(nk - 1))).text_len };
+        }
+        if unsafe { z_eq(t, tl, b"Relaxed\0".as_ptr()) } {
+            return 0;
+        }
+        if unsafe { z_eq(t, tl, b"Consume\0".as_ptr()) } {
+            return 1;
+        }
+        if unsafe { z_eq(t, tl, b"Acquire\0".as_ptr()) } {
+            return 2;
+        }
+        if unsafe { z_eq(t, tl, b"Release\0".as_ptr()) } {
+            return 3;
+        }
+        if unsafe { z_eq(t, tl, b"AcqRel\0".as_ptr()) } {
+            return 4;
+        }
+        if unsafe { z_eq(t, tl, b"SeqCst\0".as_ptr()) } {
+            return 5;
+        }
+        -1
+    }
     /* Struct literal S { a: 1, b: 2 }. The parser attaches the fields to
      * the wrapping PATH node: kids = segments…, STRUCT_LIT node whose kids
      * are [STRUCT_FIELD(name), value, STRUCT_FIELD(name), value, …].
@@ -12970,6 +13047,36 @@ impl Lower {
         if cn >= 1 {
             let leaf = unsafe { *ck.add(cn - 1) };
             if unsafe { (*leaf).kind } == pm_jit_rsx_ast_kind::PATH {
+                /* `core::hint::spin_loop()` — no C equivalent needed: the
+                 * pause itself is a perf nicety, not a correctness one;
+                 * emit a bare `0` statement-expression-neutral value. */
+                if cn >= 3 {
+                    let h0 = unsafe { *ck.add(0) };
+                    let h1 = unsafe { *ck.add(1) };
+                    if unsafe { z_eq(unsafe { (*h0).text }, unsafe { (*h0).text_len }, b"core\0".as_ptr()) }
+                        && unsafe { z_eq(unsafe { (*h1).text }, unsafe { (*h1).text_len }, b"hint\0".as_ptr()) }
+                        && unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"spin_loop\0".as_ptr()) }
+                        && unsafe { (*args).n_kids } as usize == 0
+                    {
+                        self.out.putc(b'0');
+                        return;
+                    }
+                }
+                /* `AtomicU32::new(v)` -> the value itself: the C field IS
+                 * a `_Atomic uint32_t`, construction is plain init. */
+                if cn >= 2 {
+                    let h0 = unsafe { *ck.add(0) };
+                    if unsafe { z_eq(unsafe { (*h0).text }, unsafe { (*h0).text_len }, b"AtomicU32\0".as_ptr()) }
+                        && unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"new\0".as_ptr()) }
+                        && unsafe { (*args).n_kids } as usize == 1
+                    {
+                        let ak2 = unsafe { (*args).kids };
+                        self.out.putc(b'(');
+                        unsafe { self.emit_expr(*ak2.add(0), locals) };
+                        self.out.putc(b')');
+                        return;
+                    }
+                }
                 /* `Type::fn(..)` — associated fn: mangle to Type_fn. */
                 if cn >= 2 {
                     let head = unsafe { *ck.add(0) };
@@ -13021,6 +13128,105 @@ impl Lower {
             unsafe { self.emit_expr(recv, locals) };
             self.out.puts(b" == 0)\0".as_ptr());
             return;
+        }
+        /* Atomic loads/stores/swap on an `AtomicU32` (C: `_Atomic uint32_t`)
+         * — a plain u32 field of the receiver. The GNU statement expression
+         * holds the value tmp the pointer-based `__atomic_*` builtins need
+         * (tcc/gcc/clang all lower them to real RMW machine code). Memory
+         * orders map by value: Relaxed/Acquire/Release/AcqRel/SeqCst ->
+         * 0/2/3/4/5 (the __ATOMIC_* macros' numbering). `swap` is the
+         * test-and-set: acquire == "old == UNLOCKED". load takes the order
+         * alone; store/swap are (value, order). */
+        if (an == 1 && unsafe { z_eq(mname, mlen, b"load\0".as_ptr()) })
+            || (an == 2
+                && (unsafe { z_eq(mname, mlen, b"store\0".as_ptr()) }
+                    || unsafe { z_eq(mname, mlen, b"swap\0".as_ptr()) }))
+        {
+            /* load(order) — order is arg 0; store/swap(value, order) — order is arg 1 */
+            let oi = if an == 1 { 0usize } else { 1usize };
+            let ord = unsafe { self.atomic_order(*ak.add(oi)) };
+            if ord >= 0 {
+                let tmp = self.arena_tmp();
+                let mut tl = unsafe { bput(tmp, 160, 0, b"__rsx_at\0".as_ptr(), 8) };
+                let mut cnt = self.atom_tmp_n;
+                self.atom_tmp_n += 1;
+                let mut digs: [u8; 10] = [0; 10];
+                let mut nd = 0usize;
+                if cnt == 0 {
+                    digs[0] = b'0';
+                    nd = 1;
+                } else {
+                    while cnt > 0 && nd < 10 {
+                        digs[nd] = b'0' + (cnt % 10) as u8;
+                        cnt /= 10;
+                        nd += 1;
+                    }
+                }
+                let mut q = nd;
+                while q > 0 {
+                    q -= 1;
+                    tl = unsafe { bput(tmp, 160, tl, &digs[q], 1) };
+                }
+                unsafe {
+                    *tmp.add(tl) = 0;
+                }
+                self.out.puts(b"({\0".as_ptr());
+                self.out.putc(b'\n');
+                self.out.puts(b"uint32_t \0".as_ptr());
+                self.out.put(tmp, tl);
+                self.out.puts(b";\0".as_ptr());
+                self.out.putc(b'\n');
+                if unsafe { z_eq(mname, mlen, b"load\0".as_ptr()) } {
+                    self.out.puts(b"__atomic_load(&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b", &\0".as_ptr());
+                    self.out.put(tmp, tl);
+                    self.out.puts(b", \0".as_ptr());
+                    self.out.put_u32(ord as u32);
+                    self.out.puts(b");\0".as_ptr());
+                    self.out.putc(b'\n');
+                    self.out.put(tmp, tl);
+                    self.out.puts(b"; })\0".as_ptr());
+                    return;
+                }
+                if unsafe { z_eq(mname, mlen, b"store\0".as_ptr()) } {
+                    self.out.puts(b"(\0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                    self.out.puts(b");\0".as_ptr());
+                    self.out.putc(b'\n');
+                    self.out.puts(b"__atomic_store(&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b", &\0".as_ptr());
+                    self.out.put(tmp, tl);
+                    self.out.puts(b", \0".as_ptr());
+                    self.out.put_u32(ord as u32);
+                    self.out.puts(b");\0".as_ptr());
+                    self.out.putc(b'\n');
+                    self.out.putc(b'0');
+                    self.out.puts(b"; })\0".as_ptr());
+                    return;
+                }
+                /* swap */
+                self.out.puts(b"(\0".as_ptr());
+                unsafe { self.emit_expr(*ak.add(0), locals) };
+                self.out.puts(b");\0".as_ptr());
+                self.out.putc(b'\n');
+                self.out.puts(b"__atomic_exchange(&\0".as_ptr());
+                unsafe { self.emit_expr(recv, locals) };
+                self.out.puts(b", &\0".as_ptr());
+                self.out.put(tmp, tl);
+                self.out.puts(b", &\0".as_ptr());
+                /* the old value rides the same tmp: exchange reads old into
+                 * the same slot the desired was read from */
+                self.out.put(tmp, tl);
+                self.out.puts(b", \0".as_ptr());
+                self.out.put_u32(ord as u32);
+                self.out.puts(b");\0".as_ptr());
+                self.out.putc(b'\n');
+                self.out.put(tmp, tl);
+                self.out.puts(b"; })\0".as_ptr());
+                return;
+            }
         }
         /* `.fill(0)` / `.fill(byte)` on a fixed array — memset. The
          * receiver's C type carries [N] so the byte count is known.
@@ -15777,6 +15983,7 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_lower(
         tup_done: [false; TUP_CAP],
         tup_n: 0,
         tup_tmp_n: 0,
+        atom_tmp_n: 0,
         opq_names: [[0; 48]; 24],
         opq_lens: [0; 24],
         opq_n: 0,

@@ -1,4 +1,4 @@
-#[path = "../../../wasmmod/src/pymergetic/util/lock/__impl__.rs"]
+#[path = "../../../wasmmod/src/pymergetic/util/lock.rs"]
 pub mod lock;
 #[path = "../../../wasmmod/src/pymergetic/util/lz4/__impl__.rs"]
 pub mod lz4;
