@@ -6006,6 +6006,10 @@ const ST_CAP: usize = 64;
  * payload table (register idempotent, emit once in the preamble). */
 const TUP_CAP: usize = 8;
 const TUP_MAXF: usize = 4;
+/* Emitted-type set cap (dependency-ordered struct pass). One entry per
+ * struct/union/alias emitted this unit — 96 covers a card's types plus
+ * the appended face's. */
+const TYD_CAP: usize = 96;
 
 /* A struct record: name, fields, C types of fields. Field names and C
  * types are arena spans (NUL-terminated copies), so the table stores
@@ -6558,6 +6562,16 @@ struct Lower {
     st_cts: [[u8; 128]; ST_CAP],
     st_ct_lens: [usize; ST_CAP],
     st_n: usize,
+    /* Types already emitted by the dependency-ordered struct pass (pass A).
+     * A name here must not re-emit — the C typedef would redefine. Also
+     * the recursion guard: a cyclic pair (A names B, B names A by value)
+     * cannot be ordered and is refused, not looped on. */
+    tydone_names: [[u8; 48]; TYD_CAP],
+    tydone_lens: [usize; TYD_CAP],
+    tydone_n: usize,
+    /* recursion depth of emit_struct_ordered — the cycle refusal needs to
+     * know the walk is still inside, not a fresh top-level call */
+    tyorder_depth: usize,
 }
 
 impl Lower {
@@ -7540,7 +7554,9 @@ impl Lower {
                     }
                 }
             } else if kind == pm_jit_rsx_ast_kind::EXTERN_BLOCK {
-                /* extern fns: register name + return type for call inference */
+                /* extern fns: register name + return type + param types for
+                 * call inference — a `None`/`Some(x)` argument at a call
+                 * site reads the param's Option shape from the FnTab */
                 let mut j = 0usize;
                 while j < unsafe { (*item).n_kids } as usize {
                     let k = unsafe { *(*item).kids.add(j) };
@@ -7549,10 +7565,27 @@ impl Lower {
                         let elen = unsafe { (*k).text_len };
                         let mut ret = b"void\0".as_ptr();
                         let mut retlen = 4usize;
+                        let mut nparams = 0u32;
+                        let mut ptypes: [*const u8; FN_MAXP] = [b"\0".as_ptr(); FN_MAXP];
+                        let mut plens: [usize; FN_MAXP] = [0; FN_MAXP];
                         let mut j2 = 0usize;
                         while j2 < unsafe { (*k).n_kids } as usize {
                             let kk = unsafe { *(*k).kids.add(j2) };
-                            if unsafe { (*kk).kind } == pm_jit_rsx_ast_kind::TYPE {
+                            if unsafe { (*kk).kind } == pm_jit_rsx_ast_kind::PARAM {
+                                if (nparams as usize) < FN_MAXP {
+                                    let pk = unsafe { (*kk).kids };
+                                    if unsafe { (*kk).n_kids } as usize >= 1 {
+                                        let pty = unsafe { *pk.add(0) };
+                                        let ct = self.arena_tmp();
+                                        let n = unsafe { self.ctype(pty, ct, 128) };
+                                        if n > 0 && n <= 64 {
+                                            ptypes[nparams as usize] = ct;
+                                            plens[nparams as usize] = n;
+                                        }
+                                    }
+                                }
+                                nparams += 1;
+                            } else if unsafe { (*kk).kind } == pm_jit_rsx_ast_kind::TYPE {
                                 let t = unsafe { (*kk).text };
                                 let tl = unsafe { (*kk).text_len };
                                 if tl == 0 || t.is_null() {
@@ -7576,7 +7609,20 @@ impl Lower {
                             j2 += 1;
                         }
                         let fs = unsafe { self.fns.add(ename, elen, ret, retlen) };
-                        let _ = fs;
+                        unsafe {
+                            self.fns.set_n_params(fs, nparams);
+                        }
+                        if fs < SYM_CAP {
+                            let mut p = 0usize;
+                            while p < FN_MAXP && p < nparams as usize {
+                                if plens[p] > 0 {
+                                    unsafe {
+                                        self.fns.add_param(fs, p, ptypes[p], plens[p]);
+                                    }
+                                }
+                                p += 1;
+                            }
+                        }
                     }
                     j += 1;
                 }
@@ -8611,11 +8657,95 @@ impl Lower {
         if kind == pm_jit_rsx_ast_kind::MATCH {
             /* match-expression: first arm's body type (unwrapping
              * EXPR_STMT/BLOCK layers like the IF case). A struct-Option
-             * scrutinee types the whole match by its payload: every
-             * `Some(v) => v` arm returns v (payload), `None` arms diverge
-             * or return something C-assignable to it — the arm-body walk
-             * below cannot see the bind's type (it is declared only at
-             * emission). */
+             * scrutinee is a FALLBACK for arms whose body type is not yet
+             * computable (`Some(v) => v` — the bind is declared only at
+             * emission): every such arm returns v (payload) and `None`
+             * arms diverge. Arms whose body IS typed (`Some(s) => s.heap`
+             * — a field read) must win: the match's value is the body's
+             * type, not the payload's. */
+            {
+                let kids = unsafe { (*e).kids };
+                let nk = unsafe { (*e).n_kids } as usize;
+                if nk >= 1 {
+                    /* payload type of a struct-Option scrutinee: pre-registers
+                     * the Some-bind's type so arm bodies can resolve it */
+                    let scrut = unsafe { *kids.add(0) };
+                    let sct = self.arena_tmp();
+                    let scn = unsafe { self.expr_ctype(scrut, sct, 128, locals) };
+                    let mut elem_buf: [u8; 96] = [0; 96];
+                    let mut elem_len = 0usize;
+                    if scn > 0 {
+                        elem_len = unsafe { Lower::opt_typedef_elem(sct, scn, elem_buf.as_mut_ptr(), 96) };
+                    }
+                    let mut i = 1usize;
+                    while i < nk {
+                        let arm = unsafe { *kids.add(i) };
+                        if unsafe { (*arm).kind } == pm_jit_rsx_ast_kind::MATCH_ARM
+                            && unsafe { (*arm).n_kids } >= 2
+                        {
+                            let ak = unsafe { (*arm).kids };
+                            let pat = unsafe { *ak.add(0) };
+                            let mut br = unsafe { *ak.add(1) };
+                            let mut bk = unsafe { (*br).kind };
+                            while bk == pm_jit_rsx_ast_kind::EXPR_STMT
+                                && unsafe { (*br).n_kids } >= 1
+                            {
+                                br = unsafe { *(*br).kids.add(0) };
+                                bk = unsafe { (*br).kind };
+                            }
+                            if bk == pm_jit_rsx_ast_kind::BLOCK {
+                                let b2 = unsafe { self.block_tail_node(br) };
+                                if !b2.is_null() {
+                                    br = b2 as *mut pm_jit_rsx_ast_t;
+                                }
+                            }
+                            if bk == pm_jit_rsx_ast_kind::RETURN
+                                || bk == pm_jit_rsx_ast_kind::BREAK
+                                || bk == pm_jit_rsx_ast_kind::CONTINUE
+                            {
+                                i += 1;
+                                continue;
+                            }
+                            /* Some(bind): register the bind with the payload
+                             * type for the body walk (emission declares it
+                             * the same way — see emit_some_binds) */
+                            let saved_n = unsafe { (*locals).n };
+                            if elem_len > 0
+                                && unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
+                            {
+                                let pk = unsafe { (*pat).kids };
+                                let pnk = unsafe { (*pat).n_kids } as usize;
+                                if pnk >= 2 {
+                                    let head = unsafe { *pk.add(0) };
+                                    let bind = unsafe { *pk.add(1) };
+                                    if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH
+                                        && unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Some\0".as_ptr()) }
+                                        && unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
+                                        && unsafe { (*bind).n_kids } >= 1
+                                    {
+                                        let bleaf = unsafe { *(*bind).kids.add(0) };
+                                        unsafe {
+                                            (*locals).add(
+                                                unsafe { (*bleaf).text },
+                                                unsafe { (*bleaf).text_len },
+                                                elem_buf.as_ptr(),
+                                                elem_len,
+                                                self.depth + 1,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            let n = unsafe { self.expr_ctype(br, out, cap, locals) };
+                            unsafe { (*locals).n = saved_n };
+                            if n > 0 {
+                                return n;
+                            }
+                        }
+                        i += 1;
+                    }
+                }
+            }
             {
                 let kids0 = unsafe { (*e).kids };
                 if unsafe { (*e).n_kids } as usize >= 1 {
@@ -8634,33 +8764,6 @@ impl Lower {
                         }
                     }
                 }
-            }
-            let kids = unsafe { (*e).kids };
-            let nk = unsafe { (*e).n_kids } as usize;
-            let mut i = 1usize;
-            while i < nk {
-                let arm = unsafe { *kids.add(i) };
-                if unsafe { (*arm).kind } == pm_jit_rsx_ast_kind::MATCH_ARM
-                    && unsafe { (*arm).n_kids } >= 2
-                {
-                    let ak = unsafe { (*arm).kids };
-                    let mut br = unsafe { *ak.add(1) };
-                    let mut bk = unsafe { (*br).kind };
-                    while bk == pm_jit_rsx_ast_kind::EXPR_STMT
-                        && unsafe { (*br).n_kids } >= 1
-                    {
-                        br = unsafe { *(*br).kids.add(0) };
-                        bk = unsafe { (*br).kind };
-                    }
-                    if bk == pm_jit_rsx_ast_kind::BLOCK {
-                        let b2 = unsafe { self.block_tail_node(br) };
-                        if !b2.is_null() {
-                            return unsafe { self.expr_ctype(b2, out, cap, locals) };
-                        }
-                    }
-                    return unsafe { self.expr_ctype(br, out, cap, locals) };
-                }
-                i += 1;
             }
             return 0;
         }
@@ -10502,11 +10605,53 @@ impl Lower {
             return;
         }
         if k == pm_jit_rsx_ast_kind::MATCH {
-            /* nested tail match: arms store into a temp, then return it. */
+            /* nested tail match: arms store into a temp, then return it.
+             * The temp's type is the ARMS' value type, not the scrutinee's
+             * (`match index { 0 => f as *mut c_void, _ => null_mut() }`
+             * joins pointers while the scrutinee is a usize — inferring
+             * from the scrutinee emits `size_t __rsx_ret;` and the pointer
+             * stores lose). First non-diverging arm decides (an arm that
+             * `return`s contributes no value); falls back to the scrutinee
+             * when every arm diverges (the temp is then unused). */
             let ct = self.arena_tmp();
-            let ct_len = unsafe {
-                self.expr_ctype(unsafe { *(*st).kids.add(0) }, ct, 128, locals)
-            };
+            let mut ct_len = 0usize;
+            {
+                let mk = unsafe { (*st).kids };
+                let mn = unsafe { (*st).n_kids } as usize;
+                let mut a = 1usize;
+                while a < mn {
+                    let arm = unsafe { *mk.add(a) };
+                    if unsafe { (*arm).kind } != pm_jit_rsx_ast_kind::MATCH_ARM {
+                        a += 1;
+                        continue;
+                    }
+                    let ak = unsafe { (*arm).kids };
+                    let akn = unsafe { (*arm).n_kids } as usize;
+                    if akn < 2 {
+                        a += 1;
+                        continue;
+                    }
+                    let body = unsafe { *ak.add(akn - 1) };
+                    let bk = unsafe { (*body).kind };
+                    if bk == pm_jit_rsx_ast_kind::RETURN
+                        || bk == pm_jit_rsx_ast_kind::BREAK
+                        || bk == pm_jit_rsx_ast_kind::CONTINUE
+                    {
+                        a += 1;
+                        continue;
+                    }
+                    let n = unsafe { self.expr_ctype(body, ct, 128, locals) };
+                    if n > 0 {
+                        ct_len = n;
+                    }
+                    break;
+                }
+            }
+            if ct_len == 0 {
+                ct_len = unsafe {
+                    self.expr_ctype(unsafe { *(*st).kids.add(0) }, ct, 128, locals)
+                };
+            }
             if ct_len > 0 {
                 self.indent();
                 self.out.put(ct, ct_len);
@@ -13731,6 +13876,59 @@ impl Lower {
                             done_none = true;
                         }
                     }
+                    /* `Some(x)` in argument position: symmetric with None —
+                     * the param's Option shape decides. A struct-shaped
+                     * param wraps x in the rsx_opt_<elem> compound literal
+                     * (the enclosing fn's own return type is NOT the
+                     * deciding context here, unlike return-position Some);
+                     * a pointer-shaped (or unknown) param passes x bare —
+                     * the Option-of-pointer collapse. */
+                    if !done_none {
+                        let mut some_v: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+                        let ai = unsafe { *ak.add(i) };
+                        if unsafe { (*ai).kind } == pm_jit_rsx_ast_kind::CALL {
+                            let aick = unsafe { (*ai).kids };
+                            let aicn = unsafe { (*ai).n_kids } as usize;
+                            if aicn == 2 {
+                                let callee2 = unsafe { *aick.add(0) };
+                                if unsafe { (*callee2).kind } == pm_jit_rsx_ast_kind::PATH
+                                    && unsafe { (*callee2).n_kids } == 1
+                                {
+                                    let cseg2 = unsafe { *(*callee2).kids.add(0) };
+                                    if unsafe {
+                                        z_eq(
+                                            unsafe { (*cseg2).text },
+                                            unsafe { (*cseg2).text_len },
+                                            b"Some\0".as_ptr(),
+                                        )
+                                    } {
+                                        let av = unsafe { *aick.add(1) };
+                                        if unsafe { (*av).n_kids } as usize == 1 {
+                                            some_v = unsafe { *(*av).kids.add(0) };
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !some_v.is_null()
+                            && callok
+                            && !cname.is_null()
+                            && cnamelen > 0
+                        {
+                            let pt = self.arena_tmp();
+                            let pl = unsafe {
+                                self.fns.param_ctype(cname, cnamelen, i, pt)
+                            };
+                            if pl >= 8 && unsafe { z_eq(pt, 8, b"rsx_opt_\0".as_ptr()) } {
+                                self.out.putc(b'(');
+                                self.out.put(pt, pl);
+                                self.out.puts(b"){ ._v = \0".as_ptr());
+                                unsafe { self.emit_expr(some_v, locals) };
+                                self.out.puts(b", ._has = 1 }\0".as_ptr());
+                                done_none = true;
+                            }
+                        }
+                    }
                     if !done_none {
                         unsafe { self.emit_expr(*ak.add(i), locals) };
                     }
@@ -14393,6 +14591,338 @@ impl Lower {
 /* ==== item lowering ==== */
 
 impl Lower {
+    /* ---- type-emission topological ordering ----
+     *
+     * A struct/union field with a by-value named type needs that type's
+     * typedef COMPLETE at the field's declaration (C rule), while a
+     * pointer field only needs it declared. The rsx source order is not
+     * a valid C order for two reasons: face splices append `#[path]`
+     * types AFTER the muscle (so a muscle struct naming a face type comes
+     * first), and Rust item order is free. The emit passes therefore need
+     * a dependency walk: before emitting a STRUCT/UNION, emit every
+     * unit-defined type its by-value fields name, recursively.
+     *
+     * `dep_collect` walks one TYPE node tree collecting named types that
+     * sit in value position (not behind a pointer — `*T`, `&T` only need
+     * a declaration, which the forward `typedef struct S S;` already
+     * gives every struct). Option<T>/Cell/UnsafeCell/Mut wrappers
+     * recurse into their arg. Arrays/tuples recurse into their element
+     * types. A path's leaf name that is neither primitive nor a unit type
+     * is an opaque extern — opq_note already hoists a declaration for it.
+     */
+    unsafe fn dep_collect(
+        &mut self,
+        ty: *const pm_jit_rsx_ast_t,
+        out: *mut u8,
+        out_lens: *mut usize,
+        out_n: *mut usize,
+        cap: usize,
+    ) {
+        if ty.is_null() {
+            return;
+        }
+        let kind = unsafe { (*ty).kind };
+        if kind != pm_jit_rsx_ast_kind::TYPE {
+            return;
+        }
+        let text = unsafe { (*ty).text };
+        let text_len = unsafe { (*ty).text_len };
+        let kids = unsafe { (*ty).kids };
+        let nk = unsafe { (*ty).n_kids } as usize;
+        /* pointer / reference wrappers: the pointee only needs a
+         * declaration — the hoisted forward typedef covers it. Do NOT
+         * recurse (a struct naming `*Later` may emit before `Later`). */
+        if unsafe { z_eq(text, text_len, b"*\0".as_ptr()) }
+            || unsafe { z_eq(text, text_len, b"&\0".as_ptr()) }
+            || unsafe { z_eq(text, text_len, b"&mut\0".as_ptr()) }
+        {
+            return;
+        }
+        /* fn-ptr: params/ret are values? No — params and returns are
+         * themselves passed by value, so a fn-ptr field whose param is a
+         * struct needs the struct complete... but a fn-ptr PARAM type in
+         * a prototype only needs a declaration (C promotes parameter
+         * declarations to prototypes). Leave fn-ptrs un-walked: the
+         * prototype declaration suffices for C to parse the fnptr type. */
+        if unsafe { z_eq(text, text_len, b"fnptr\0".as_ptr()) } {
+            return;
+        }
+        /* arrays: element type is a value dep */
+        if unsafe { z_eq(text, text_len, b"[]\0".as_ptr()) }
+            || unsafe { z_eq(text, text_len, b"[;]\0".as_ptr()) }
+        {
+            if nk >= 1 {
+                let inner = unsafe { *kids.add(0) };
+                unsafe { self.dep_collect(inner, out, out_lens, out_n, cap) };
+            }
+            return;
+        }
+        /* tuple: every element is a value dep */
+        if text_len == 5 && unsafe { z_eq(text, text_len, b"tuple\0".as_ptr()) } {
+            let mut j = 0usize;
+            while j < nk {
+                let e = unsafe { *kids.add(j) };
+                unsafe { self.dep_collect(e, out, out_lens, out_n, cap) };
+                j += 1;
+            }
+            return;
+        }
+        /* generic wrappers with a value arg: recurse into the arg */
+        if unsafe { z_eq(text, text_len, b"path\0".as_ptr()) }
+            || unsafe { z_eq(text, text_len, b"gpath\0".as_ptr()) }
+        {
+            if nk == 0 {
+                return;
+            }
+            let first = unsafe { *kids.add(0) };
+            let fname = unsafe { (*first).text };
+            let flen = unsafe { (*first).text_len };
+            /* Option<T>: pointer payload needs nothing; value payload
+             * (rsx_opt_<elem> struct) needs elem complete. */
+            if unsafe { z_eq(fname, flen, b"Option\0".as_ptr()) } {
+                if nk >= 2 {
+                    let inner = unsafe { *kids.add(1) };
+                    unsafe { self.dep_collect(inner, out, out_lens, out_n, cap) };
+                }
+                return;
+            }
+            if unsafe { z_eq(fname, flen, b"UnsafeCell\0".as_ptr()) }
+                || unsafe { z_eq(fname, flen, b"Cell\0".as_ptr()) }
+            {
+                if nk >= 2 {
+                    let inner = unsafe { *kids.add(1) };
+                    unsafe { self.dep_collect(inner, out, out_lens, out_n, cap) };
+                }
+                return;
+            }
+            /* single-segment path: the leaf name is the dep candidate */
+            if nk == 1 {
+                unsafe { self.dep_name(fname, flen, out, out_lens, out_n, cap) };
+                return;
+            }
+            /* multi-segment path: leaf is the candidate */
+            let leaf = unsafe { *kids.add(nk - 1) };
+            let lname = unsafe { (*leaf).text };
+            let llen = unsafe { (*leaf).text_len };
+            unsafe { self.dep_name(lname, llen, out, out_lens, out_n, cap) };
+            return;
+        }
+        /* leaf TYPE: a primitive spelling names no dep */
+        let prim_test = self.arena_tmp();
+        let pn = unsafe { self.prim_ctype(text, text_len, prim_test, 160) };
+        if pn > 0 {
+            return;
+        }
+        /* anything else: a named type in value position */
+        unsafe { self.dep_name(text, text_len, out, out_lens, out_n, cap) };
+    }
+
+    /* Record one candidate dep name if the unit defines it as a struct /
+     * union (only those need complete-before-use; enums ride pass A0 and
+     * aliases resolve through their own target). Duplicates are fine —
+     * the emit side dedups by emitted-set. */
+    unsafe fn dep_name(
+        &mut self,
+        name: *const u8,
+        nlen: usize,
+        out: *mut u8,
+        out_lens: *mut usize,
+        out_n: *mut usize,
+        cap: usize,
+    ) {
+        if name.is_null() || nlen == 0 || nlen >= 48 || unsafe { *out_n } >= cap {
+            return;
+        }
+        /* primitives / bool / void spell no dep */
+        let pt = self.arena_tmp();
+        let pn = unsafe { self.prim_ctype(name, nlen, pt, 160) };
+        if pn > 0 {
+            return;
+        }
+        if unsafe { z_eq(name, nlen, b"tuple\0".as_ptr()) } {
+            return;
+        }
+        let n = unsafe { *out_n };
+        let mut i = 0usize;
+        while i < nlen {
+            unsafe {
+                *(out.add(n * 48 + i)) = *name.add(i);
+            }
+            i += 1;
+        }
+        unsafe {
+            *out_lens.add(n) = nlen;
+            *out_n = n + 1;
+        }
+    }
+
+    /* Is `name` a type this unit declares as a STRUCT/UNION (not a
+     * transparent newtype, not an alias — those are not field-complete
+     * targets)? Returns the item pointer, or null when the unit does not
+     * declare it (then it is an enum from pass A0, or opaque extern). */
+    unsafe fn tyorder_find(
+        &mut self,
+        kids: *mut *mut pm_jit_rsx_ast_t,
+        nk: usize,
+        name: *const u8,
+        nlen: usize,
+    ) -> *const pm_jit_rsx_ast_t {
+        let mut i = 0usize;
+        while i < nk {
+            let item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            if unsafe { (*item).kind } != pm_jit_rsx_ast_kind::STRUCT {
+                i += 1;
+                continue;
+            }
+            if unsafe { self.has_generic_marker(item) } {
+                i += 1;
+                continue;
+            }
+            let t = unsafe { (*item).text };
+            let tl = unsafe { (*item).text_len };
+            if tl == nlen && !t.is_null() {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < nlen {
+                    if unsafe { *t.add(j) } != unsafe { *name.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    return item;
+                }
+            }
+            i += 1;
+        }
+        core::ptr::null()
+    }
+
+    /* Emit one STRUCT/UNION item with its by-value field deps emitted
+     * first (recursive). Pass A calls this per item in file order; a dep
+     * found later in the file (splice-append case) or in any order rides
+     * ahead. The tydone set prevents double emission (C redefinition) and
+     * catches cycles: a dep that is already ON the current recursion
+     * chain but not yet in tydone is cyclic — refuse with the site. */
+    unsafe fn emit_struct_ordered(
+        &mut self,
+        kids: *mut *mut pm_jit_rsx_ast_t,
+        nk: usize,
+        item: *const pm_jit_rsx_ast_t,
+    ) {
+        if item.is_null() {
+            return;
+        }
+        let name = unsafe { (*item).text };
+        let nlen = unsafe { (*item).text_len };
+        if self.tyorder_depth > 32 {
+            unsafe {
+                self.err(
+                    b"unsupported: struct value-dependency cycle or nesting too deep\0".as_ptr(),
+                    unsafe { (*item).line },
+                );
+            }
+            return;
+        }
+        /* deps first */
+        let mut dep_bufs: [[u8; 48]; 16] = [[0; 48]; 16];
+        let mut dep_lens: [usize; 16] = [0; 16];
+        let mut dep_n: usize = 0;
+        let ikids = unsafe { (*item).kids };
+        let ikn = unsafe { (*item).n_kids } as usize;
+        let mut j = 0usize;
+        while j < ikn {
+            let f = unsafe { *ikids.add(j) };
+            if unsafe { (*f).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD {
+                let fk = unsafe { (*f).kids };
+                let fkn = unsafe { (*f).n_kids } as usize;
+                if fkn >= 1 {
+                    let fty = unsafe { *fk.add(0) };
+                    unsafe {
+                        self.dep_collect(
+                            fty,
+                            dep_bufs.as_mut_ptr() as *mut u8,
+                            dep_lens.as_mut_ptr(),
+                            &mut dep_n,
+                            16,
+                        );
+                    };
+                }
+            }
+            j += 1;
+        }
+        let mut d = 0usize;
+        while d < dep_n {
+            let dn = dep_bufs[d].as_ptr();
+            let dl = dep_lens[d];
+            d += 1;
+            if unsafe { self.tydone_find(dn, dl) } {
+                continue;
+            }
+            let dep_item = unsafe { self.tyorder_find(kids, nk, dn, dl) };
+            if dep_item.is_null() {
+                continue;
+            }
+            self.tyorder_depth += 1;
+            unsafe { self.emit_struct_ordered(kids, nk, dep_item) };
+            self.tyorder_depth -= 1;
+            if !self.ok {
+                return;
+            }
+        }
+        /* self, unless a sibling already pulled it in */
+        if unsafe { self.tydone_find(name, nlen) } {
+            return;
+        }
+        unsafe { self.tydone_add(name, nlen) };
+        unsafe { self.lower_struct(item) };
+        /* Option/tuple typedefs whose payloads name this struct follow it */
+        unsafe { self.opt_emit_for(name, nlen) };
+        unsafe { self.tup_emit_for(name, nlen) };
+    }
+
+    unsafe fn tydone_find(&mut self, name: *const u8, nlen: usize) -> bool {
+        let mut s = 0usize;
+        while s < self.tydone_n {
+            if self.tydone_lens[s] == nlen {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < nlen {
+                    if unsafe { *self.tydone_names[s].as_ptr().add(j) } != unsafe { *name.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    return true;
+                }
+            }
+            s += 1;
+        }
+        false
+    }
+
+    unsafe fn tydone_add(&mut self, name: *const u8, nlen: usize) {
+        if nlen >= 48 || self.tydone_n >= TYD_CAP {
+            return;
+        }
+        let mut j = 0usize;
+        while j < nlen {
+            unsafe {
+                self.tydone_names[self.tydone_n][j] = *name.add(j);
+            }
+            j += 1;
+        }
+        self.tydone_lens[self.tydone_n] = nlen;
+        self.tydone_n += 1;
+    }
+
     /* C declarator: a ctype spelling may carry trailing array dimensions
      * (`T [N]`, `T [A] [B]`); C wants them after the declared name
      * (`T name[A][B]`). Scans trailing `[...]` groups from the right and
@@ -15492,7 +16022,50 @@ impl Lower {
     unsafe fn lower_extern_block(&mut self, item: *const pm_jit_rsx_ast_t) {
         let kids = unsafe { (*item).kids };
         let nk = unsafe { (*item).n_kids } as usize;
+        /* pre-render every fn's param types (discard the spellings) so any
+         * Option-payload typedefs register BEFORE the prototypes emit —
+         * `Option<T_alias>` in a param (`fn set_wasm_test_runner(f:
+         * Option<pm_wasmmod_registry_wasm_test_runner_t>)`) names an alias,
+         * so the pass-A matched flushes missed it; the prototype below
+         * spells `rsx_opt_<alias>` and needs the typedef ahead of it. Same
+         * ordering contract as lower_static's flush, but here registration
+         * itself must happen first (ctype runs inside the emit). */
         let mut i = 0usize;
+        while i < nk {
+            let k = unsafe { *kids.add(i) };
+            let kk = unsafe { (*k).kind };
+            if kk == pm_jit_rsx_ast_kind::FN {
+                let fkd = unsafe { (*k).kids };
+                let fkn = unsafe { (*k).n_kids } as usize;
+                let mut j = 0usize;
+                while j < fkn {
+                    let c = unsafe { *fkd.add(j) };
+                    let ckk = unsafe { (*c).kind };
+                    let mut ty_node: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+                    if ckk == pm_jit_rsx_ast_kind::PARAM {
+                        let ck = unsafe { (*c).kids };
+                        let ckn = unsafe { (*c).n_kids } as usize;
+                        if ckn >= 1 {
+                            ty_node = unsafe { *ck.add(0) };
+                        }
+                    } else if ckk == pm_jit_rsx_ast_kind::TYPE {
+                        /* ret type is the last TYPE kid (quals also arrive
+                         * as TYPE — re-rendering them is harmless) */
+                        ty_node = c;
+                    }
+                    if !ty_node.is_null() {
+                        let scratch = self.arena_tmp();
+                        let _ = unsafe { self.ctype(ty_node, scratch, 160) };
+                    }
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
+        if self.types_done {
+            unsafe { self.opt_emit_rest() };
+        }
+        i = 0;
         while i < nk {
             let k = unsafe { *kids.add(i) };
             let kk = unsafe { (*k).kind };
@@ -16255,7 +16828,15 @@ impl Lower {
             }
             i += 1;
         }
-        /* pass A: struct/typedef items */
+        /* pass A: struct/typedef items — dependency-ordered. A struct's
+         * by-value field naming another unit type needs that type's
+         * typedef complete first (C rule); pointer fields only need the
+         * forward declaration lower_struct already emits. File order is
+         * not a valid C order (face splices append types after the
+         * muscle), so emit_struct_ordered pulls deps ahead recursively.
+         * Aliases: the aliased type is by-value (`typedef S S2;` needs S
+         * complete) — dep-collect its TYPE node the same way, then emit
+         * the alias itself in file order. */
         i = 0;
         while i < nk {
             item = unsafe { *kids.add(i) };
@@ -16265,12 +16846,54 @@ impl Lower {
             }
             kind = unsafe { (*item).kind };
             if kind == pm_jit_rsx_ast_kind::STRUCT {
-                unsafe { self.lower_struct(item) };
-                /* Option/tuple typedefs whose payloads name this struct
-                 * follow it */
-                unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
-                unsafe { self.tup_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                unsafe { self.emit_struct_ordered(kids, nk, item) };
             } else if kind == pm_jit_rsx_ast_kind::TYPE_ALIAS {
+                /* alias: pull in the struct/union the aliased type names
+                 * by value before the typedef renders it */
+                let akids = unsafe { (*item).kids };
+                let akn = unsafe { (*item).n_kids } as usize;
+                let mut ty: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+                let mut j = 0usize;
+                while j < akn {
+                    let k = unsafe { *akids.add(j) };
+                    if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::TYPE {
+                        ty = k;
+                    }
+                    j += 1;
+                }
+                if !ty.is_null() {
+                    let mut dep_bufs: [[u8; 48]; 16] = [[0; 48]; 16];
+                    let mut dep_lens: [usize; 16] = [0; 16];
+                    let mut dep_n: usize = 0;
+                    unsafe {
+                        self.dep_collect(
+                            ty,
+                            dep_bufs.as_mut_ptr() as *mut u8,
+                            dep_lens.as_mut_ptr(),
+                            &mut dep_n,
+                            16,
+                        );
+                    };
+                    let mut d = 0usize;
+                    while d < dep_n {
+                        let dn = dep_bufs[d].as_ptr();
+                        let dl = dep_lens[d];
+                        d += 1;
+                        if unsafe { self.tydone_find(dn, dl) } {
+                            continue;
+                        }
+                        let dep_item = unsafe { self.tyorder_find(kids, nk, dn, dl) };
+                        if dep_item.is_null() {
+                            continue;
+                        }
+                        self.tyorder_depth += 1;
+                        unsafe { self.emit_struct_ordered(kids, nk, dep_item) };
+                        self.tyorder_depth -= 1;
+                        if !self.ok {
+                            break;
+                        }
+                    }
+                }
                 unsafe { self.lower_type_alias(item) };
                 unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
                 unsafe { self.tup_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
@@ -16738,6 +17361,10 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_lower(
         st_cts: [[0; 128]; ST_CAP],
         st_ct_lens: [0; ST_CAP],
         st_n: 0,
+        tydone_names: [[0; 48]; TYD_CAP],
+        tydone_lens: [0; TYD_CAP],
+        tydone_n: 0,
+        tyorder_depth: 0,
     };
     /* SymTab is arena-backed — a span smaller than its block hands back
      * NULL and every table probe would crash. Refuse instead. */
