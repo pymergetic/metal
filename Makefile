@@ -219,7 +219,7 @@ WASM_UPY := $(TOP)/ports/webassembly/build-metal/micropython.mjs
 WS ?= $(abspath $(TOP)/../..)
 VSCODE_CDB ?= $(WS)/.vscode/compile_commands.json
 
-.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico selfhost ksweep
+.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico selfhost ksweep rsx-probe rsx-dump
 
 FORCE:
 
@@ -303,6 +303,23 @@ $(RSX_PROBE): $(RSX_PROBE_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_
 
 rsx-probe: $(RSX_PROBE)
 	$(RSX_PROBE)
+
+# rsx-dump: one-file C dump (tools/rsx_dump.c) — the generated C a card's
+# Rust source lowers to, printed for diagnosis. Same tools/ posture and
+# link shape as rsx_probe / ksweep; not a prove gate.
+RSX_DUMP := $(CURDIR)/build/rsx_dump
+RSX_DUMP_O := $(CURDIR)/build/rsx_dump.o
+
+$(RSX_DUMP_O): $(CURDIR)/tools/rsx_dump.c
+	@mkdir -p $(dir $(RSX_DUMP_O))
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+$(RSX_DUMP): $(RSX_DUMP_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+	@mkdir -p $(dir $(RSX_DUMP))
+	$(CXX) -o $(RSX_DUMP) $(RSX_DUMP_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+
+rsx-dump: $(RSX_DUMP)
+	@echo "rsx-dump built: $(RSX_DUMP) <file.rs> [fqn...]"
 
 # selfhost self: the same feed entrypoint, but the rsx card's code comes from
 # gen-1 C (micro-rustc's own output) instead of the rustc boot build — the

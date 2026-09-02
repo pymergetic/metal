@@ -29,7 +29,11 @@ INC := -I$(PORT_DIR)/fwinc -I$(PORT_DIR) -I$(BIOS_DIR) -I$(PORT_DIR)/bringup -I$
 	-I$(abspath $(PORT_DIR)/../../..)
 
 $(BUILD)/esp.img: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
-	dd if=/dev/zero of=$@ bs=1M count=8 status=none
+# ESP sized from the payload, not a fixed count: the EFI binary crossed
+# 8MB (mcopy "Disk full" with a hardcoded count=8), so take its size,
+# add FAT overhead + slack, and round up to whole MB.
+	$(eval ESP_MB := $(shell stat -c%s $< | awk '{print int(($$1 + 3*1024*1024 - 1)/(1024*1024))}'))
+	dd if=/dev/zero of=$@ bs=1M count=$(ESP_MB) status=none
 	mkfs.vfat -n ESP $@ >/dev/null
 	mmd -i $@ ::EFI ::EFI/BOOT
 	mcopy -i $@ $< ::EFI/BOOT/BOOTX64.EFI

@@ -390,6 +390,142 @@ static int32_t test_compile_struct(void) {
     return 0;
 }
 
+/* compile: an all-zero static initializer elides to a bare tentative
+ * definition — the storage rides .bss with no materialized zero blob.
+ * Covers every zero leaf: int literal 0, false, None (pointer Option),
+ * ptr::null_mut(), a zero enum variant, [0; N] repeats, and the
+ * Mut(UnsafeCell::new(..)) wrapper chain. */
+static int32_t test_compile_zero_static_elision(void) {
+    void *backing = malloc(1u << 26);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    static const char src[] =
+        "#[repr(C)]\n"
+        "pub struct Row {\n"
+        "    a: u32,\n"
+        "    p: *mut u8,\n"
+        "}\n"
+        "#[repr(C)]\n"
+        "pub enum Kind {\n"
+        "    Zero = 0,\n"
+        "    One = 1,\n"
+        "}\n"
+        "#[repr(C)]\n"
+        "pub struct Tbl {\n"
+        "    rows: [Row; 2],\n"
+        "    live: bool,\n"
+        "    k: Kind,\n"
+        "}\n"
+        "struct Mut<T>(core::cell::UnsafeCell<T>);\n"
+        "const N: usize = 2;\n"
+        "static ZERO_TBL: Mut<Tbl> = Mut(core::cell::UnsafeCell::new(Tbl {\n"
+        "    rows: [Row { a: 0, p: core::ptr::null_mut() }; N],\n"
+        "    live: false,\n"
+        "    k: Kind::Zero,\n"
+        "}));\n"
+        "static ZERO_ENUM: Kind = Kind::Zero;\n";
+
+    if (backing == NULL) return 130;
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
+    if (arena == NULL) { free(backing); return 131; }
+
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, src, strlen(src),
+                                 &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 132;
+    }
+    if (c_out == NULL || c_out_len == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 133;
+    }
+    /* both statics emit bare: `static Tbl ZERO_TBL;` and
+     * `static const Kind ZERO_ENUM;` — no ` = ` initializer */
+    if (!rsx_strstr(c_out, "static Tbl ZERO_TBL;")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 134;
+    }
+    if (!rsx_strstr(c_out, "static const Kind ZERO_ENUM;")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 135;
+    }
+    /* the zero rows never expand — no compound-literal initializer for
+     * the table at all */
+    if (rsx_strstr(c_out, "ZERO_TBL =")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 136;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/* compile: a nonzero static keeps its explicit initializer (elision is
+ * only for provably-zero tables), and an if-let whose arm returns does
+ * not double the following tail return. */
+static int32_t test_compile_nonzero_static_and_iflet_return(void) {
+    void *backing = malloc(1u << 26);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    static const char src[] =
+        "#[repr(C)]\n"
+        "pub struct Row {\n"
+        "    a: u32,\n"
+        "}\n"
+        "#[repr(C)]\n"
+        "pub struct Tbl {\n"
+        "    rows: [Row; 2],\n"
+        "}\n"
+        "struct Mut<T>(core::cell::UnsafeCell<T>);\n"
+        "static LIVE_TBL: Mut<Tbl> = Mut(core::cell::UnsafeCell::new(Tbl {\n"
+        "    rows: [Row { a: 1 }; 2],\n"
+        "}));\n"
+        "pub type Runner = unsafe extern \"C\" fn() -> i32;\n"
+        "static RUNNER: Mut<Option<Runner>> = Mut(core::cell::UnsafeCell::new(None));\n"
+        "pub unsafe extern \"C\" fn zz_run() -> i32 {\n"
+        "    unsafe {\n"
+        "        let runner = *(RUNNER.0.get());\n"
+        "        if let Some(runner) = runner {\n"
+        "            return runner();\n"
+        "        }\n"
+        "        return -1;\n"
+        "    }\n"
+        "}\n";
+
+    if (backing == NULL) return 140;
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
+    if (arena == NULL) { free(backing); return 141; }
+
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, src, strlen(src),
+                                 &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 142;
+    }
+    if (c_out == NULL || c_out_len == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 143;
+    }
+    /* nonzero rows keep the compound literal */
+    if (!rsx_strstr(c_out, "static Tbl LIVE_TBL = (Tbl){")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 144;
+    }
+    /* the RUNNER cell is a zero Option — bare */
+    if (!rsx_strstr(c_out, "static rsx_opt_Runner RUNNER;")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 145;
+    }
+    /* no doubled return from the if-let tail */
+    if (rsx_strstr(c_out, "return     return")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 146;
+    }
+    if (!rsx_strstr(c_out, "return runner();")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 147;
+    }
+    if (!rsx_strstr(c_out, "return (-1);")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 148;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
 /* compile: match range patterns (lo..=hi), literal or-patterns, and
  * Some(bind) — the three pattern lifts (each refuses by name before). */
 static int32_t test_compile_match_patterns(void) {
@@ -1165,6 +1301,8 @@ static int32_t pm_metal_jit_rsx_tests(void) {
     rc = rsx_run_named("compile_unsafe_impl_marker", test_compile_unsafe_impl_marker); if (rc) return rc;
     rc = rsx_run_named("compile_minimal_fn", test_compile_minimal_fn); if (rc) return rc;
     rc = rsx_run_named("compile_struct", test_compile_struct);     if (rc) return rc;
+    rc = rsx_run_named("compile_zero_static_elision", test_compile_zero_static_elision); if (rc) return rc;
+    rc = rsx_run_named("compile_nonzero_static_and_iflet_return", test_compile_nonzero_static_and_iflet_return); if (rc) return rc;
     rc = rsx_run_named("compile_fn_body", test_compile_fn_body);   if (rc) return rc;
     rc = rsx_run_named("compile_provenance", test_compile_provenance); if (rc) return rc;
     rc = rsx_run_named("ast_dump", test_ast_dump);                 if (rc) return rc;

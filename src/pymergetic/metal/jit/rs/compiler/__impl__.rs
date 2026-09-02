@@ -5994,6 +5994,8 @@ const SYM_CAP: usize = 512;
  * support's six state fields); the cap must carry the compiler's own
  * shape or the self-host prove fails field inference past slot 40. */
 const FPC: usize = 64;
+/* params per fn whose C types the FnTab records (for `None` args). */
+const FN_MAXP: usize = 8;
 
 /* Transparent newtype registry cap (single-field generic tuple structs). */
 const NT_CAP: usize = 16;
@@ -6162,6 +6164,12 @@ struct FnTab {
     ret_lens: [usize; SYM_CAP],
     n_params: [u32; SYM_CAP],
     used: [bool; SYM_CAP],
+    /* param C types (rendered), up to FN_MAXP per fn: a `None` argument
+     * needs the param's Option shape — pointer-Option renders NULL,
+     * struct-shaped renders the rsx_opt_<elem> zero literal — and the
+     * only source of that shape is the callee's signature. */
+    params: [[u8; 64]; SYM_CAP * FN_MAXP],
+    param_lens: [usize; SYM_CAP * FN_MAXP],
 }
 
 impl FnTab {
@@ -6173,6 +6181,8 @@ impl FnTab {
             ret_lens: [0; SYM_CAP],
             n_params: [0; SYM_CAP],
             used: [false; SYM_CAP],
+            params: [[0; 64]; SYM_CAP * FN_MAXP],
+            param_lens: [0; SYM_CAP * FN_MAXP],
         }
     }
 
@@ -6232,6 +6242,11 @@ impl FnTab {
         self.ret_lens[s] = retlen;
         self.used[s] = true;
         self.n_params[s] = 0;
+        let mut p = 0usize;
+        while p < FN_MAXP {
+            self.param_lens[s * FN_MAXP + p] = 0;
+            p += 1;
+        }
         s
     }
 
@@ -6239,6 +6254,49 @@ impl FnTab {
         if s < SYM_CAP {
             self.n_params[s] = n;
         }
+    }
+
+    /* Record param slot p's rendered C type (collect-time; the params
+     * table is what a `None` argument reads at the call site). */
+    unsafe fn add_param(&mut self, s: usize, p: usize, ct: *const u8, ctlen: usize) {
+        if s >= SYM_CAP || p >= FN_MAXP || ctlen > 64 || ct.is_null() {
+            return;
+        }
+        let at = s * FN_MAXP + p;
+        let mut i = 0usize;
+        while i < ctlen {
+            self.params[at][i] = unsafe { *ct.add(i) };
+            i += 1;
+        }
+        self.param_lens[at] = ctlen;
+    }
+
+    /* Rendered C type of the callee's param slot p (0 when unknown —
+     * extern fns and methods beyond the table). */
+    unsafe fn param_ctype(&self, name: *const u8, len: usize, p: usize, out: *mut u8) -> usize {
+        if p >= FN_MAXP {
+            return 0;
+        }
+        let s = unsafe { self.slot(name, len) };
+        if s < SYM_CAP && self.used[s] && self.name_lens[s] == len {
+            let at = s * FN_MAXP + p;
+            let pl = self.param_lens[at];
+            if pl == 0 {
+                return 0;
+            }
+            let mut i = 0usize;
+            while i < pl {
+                unsafe {
+                    *out.add(i) = self.params[at][i];
+                }
+                i += 1;
+            }
+            unsafe {
+                *out.add(pl) = 0;
+            }
+            return pl;
+        }
+        0
     }
 
     unsafe fn ret_ctype(&self, name: *const u8, len: usize, out: *mut u8) -> usize {
@@ -6330,6 +6388,80 @@ impl ConstTab {
     }
 }
 
+/* Enum variant discriminants: the all-zero static-initializer elision
+ * needs to prove `E::V` (and bare variant names) carry value 0, the same
+ * numbering the C `enum` lowering assigns (explicit `= N` wins, else the
+ * previous variant + 1, first starts at 0). Names are stored as the C
+ * member spelling (`Enum_Variant`) so both the 2-segment path and the
+ * joined emission resolve through one lookup. */
+const ENUM_CAP: usize = 256;
+
+struct EnumTab {
+    names: [[u8; 64]; ENUM_CAP],
+    name_lens: [usize; ENUM_CAP],
+    vals: [u64; ENUM_CAP],
+    n: usize,
+}
+
+impl EnumTab {
+    unsafe fn new() -> EnumTab {
+        EnumTab {
+            names: [[0; 64]; ENUM_CAP],
+            name_lens: [0; ENUM_CAP],
+            vals: [0; ENUM_CAP],
+            n: 0,
+        }
+    }
+
+    /* Splice one `Enum_Variant = value` row; a duplicate name is a
+     * re-registration of the same variant (never occurs in one unit) and
+     * keeps the first value. */
+    unsafe fn add(&mut self, name: *const u8, nlen: usize, val: u64) {
+        if self.n >= ENUM_CAP || nlen > 64 {
+            return;
+        }
+        let mut i = 0usize;
+        while i < nlen {
+            self.names[self.n][i] = unsafe { *name.add(i) };
+            i += 1;
+        }
+        self.name_lens[self.n] = nlen;
+        self.vals[self.n] = val;
+        self.n += 1;
+    }
+
+    unsafe fn lookup(&self, s: *const u8, n: usize, found: *mut bool) -> u64 {
+        unsafe {
+            *found = false;
+        }
+        if n == 0 || s.is_null() {
+            return 0;
+        }
+        let mut i = 0usize;
+        while i < self.n {
+            if self.name_lens[i] == n {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < n {
+                    if self.names[i][j] != unsafe { *s.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    unsafe {
+                        *found = true;
+                    }
+                    return self.vals[i];
+                }
+            }
+            i += 1;
+        }
+        0
+    }
+}
+
 /* One lowering context. */
 struct Lower {
     arena: *mut pm_util_mem_arena_t,
@@ -6341,6 +6473,7 @@ struct Lower {
     syms: *mut SymTab,
     fns: FnTab,
     consts: ConstTab,
+    enums: EnumTab,
     depth: usize,
     /* the struct type currently being lowered (for method resolution) */
     cur_impl: [*const u8; 16],
@@ -6383,6 +6516,14 @@ struct Lower {
     opt_lens: [usize; OPT_CAP],
     opt_done: [bool; OPT_CAP],
     opt_n: usize,
+    /* True once the struct/alias passes have run: every Option payload
+     * that names a unit type is then either already flushed (matched the
+     * naming type in opt_emit_for) or safe to flush (the naming type's
+     * typedef is emitted). Before this point a pending Option may name a
+     * type the type passes have not emitted yet, so flushing from
+     * lower_static (pass 0a consts run first) would emit it ahead of its
+     * own payload typedef — a C parse error. */
+    types_done: bool,
     /* Tuple signatures seen this unit (each renders as the named struct
      * rsx_tuple_<elem0>_<elem1>.., fields _0.._n, emitted once in the
      * preamble — same one-C-type-per-signature rule as rsx_opt_<elem>).
@@ -7248,8 +7389,91 @@ impl Lower {
                 }
             } else if kind == pm_jit_rsx_ast_kind::ENUM {
                 /* enum type name registered (no fields) so `E::V` paths can
-                 * resolve their type. */
+                 * resolve their type; variants go into the enum table so
+                 * the all-zero static-initializer elision can prove which
+                 * variants are zero (same numbering lower_enum assigns). */
                 let _ = unsafe { (*self.syms).add(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                let ename = unsafe { (*item).text };
+                let elen = unsafe { (*item).text_len };
+                let ekids = unsafe { (*item).kids };
+                let ekn = unsafe { (*item).n_kids } as usize;
+                let mut next: u64 = 0;
+                let mut j = 0usize;
+                while j < ekn {
+                    let k = unsafe { *ekids.add(j) };
+                    if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::ENUM_VARIANT {
+                        let vt = unsafe { (*k).text };
+                        let vl = unsafe { (*k).text_len };
+                        let mut val = next;
+                        let vkn = unsafe { (*k).n_kids } as usize;
+                        let mut m = 0usize;
+                        while m < vkn {
+                            let d = unsafe { *(*k).kids.add(m) };
+                            if unsafe { (*d).kind } == pm_jit_rsx_ast_kind::LITERAL {
+                                let dt = unsafe { (*d).text };
+                                let dl = unsafe { (*d).text_len };
+                                if dl > 0 && !dt.is_null() {
+                                    let mut v: u64 = 0;
+                                    let mut okv = true;
+                                    let mut at = 0usize;
+                                    let hex = dl > 2 && unsafe { *dt } == b'0'
+                                        && (unsafe { *dt.add(1) } == b'x' || unsafe { *dt.add(1) } == b'X');
+                                    if hex {
+                                        at = 2;
+                                    }
+                                    while at < dl {
+                                        let c = unsafe { *dt.add(at) };
+                                        if c == b'u' || c == b'U' || c == b'i' || c == b'I' {
+                                            break;
+                                        }
+                                        if c == b'_' {
+                                            at += 1;
+                                            continue;
+                                        }
+                                        if hex {
+                                            let d2 = if c >= b'0' && c <= b'9' {
+                                                (c - b'0') as u64
+                                            } else if c >= b'a' && c <= b'f' {
+                                                (c - b'a' + 10) as u64
+                                            } else if c >= b'A' && c <= b'F' {
+                                                (c - b'A' + 10) as u64
+                                            } else {
+                                                okv = false;
+                                                break;
+                                            };
+                                            v = v.wrapping_mul(16).wrapping_add(d2);
+                                        } else {
+                                            if c < b'0' || c > b'9' {
+                                                okv = false;
+                                                break;
+                                            }
+                                            v = v.wrapping_mul(10).wrapping_add((c - b'0') as u64);
+                                        }
+                                        at += 1;
+                                    }
+                                    if okv {
+                                        val = v;
+                                    }
+                                }
+                                break;
+                            }
+                            m += 1;
+                        }
+                        /* C member spelling: Enum_Variant (matches the
+                         * joined emission of `E::V` paths). */
+                        let mut joined = self.arena_tmp();
+                        let mut at2 = 0usize;
+                        at2 = unsafe { bput(joined, 64, at2, ename, elen) };
+                        at2 = unsafe { bput(joined, 64, at2, b"_\0".as_ptr(), 1) };
+                        at2 = unsafe { bput(joined, 64, at2, vt, vl) };
+                        unsafe {
+                            *joined.add(at2) = 0;
+                        }
+                        unsafe { self.enums.add(joined, at2, val) };
+                        next = val.wrapping_add(1);
+                    }
+                    j += 1;
+                }
             } else if kind == pm_jit_rsx_ast_kind::STATIC || kind == pm_jit_rsx_ast_kind::CONST {
                 /* const NAME: T = <int literal> — remember the numeric value
                  * so `[e; NAME]` repeat counts and friends resolve. */
@@ -7363,11 +7587,28 @@ impl Lower {
                 let mut ret = b"void\0".as_ptr();
                 let mut retlen = 4usize;
                 let mut nparams = 0u32;
+                /* param slots in order — rendered ctypes land in the FnTab
+                 * so a `None` argument at a call site reads the param's
+                 * Option shape (NULL vs the rsx_opt_ zero literal) */
+                let mut ptypes: [*const u8; FN_MAXP] = [b"\0".as_ptr(); FN_MAXP];
+                let mut plens: [usize; FN_MAXP] = [0; FN_MAXP];
                 let mut j = 0usize;
                 while j < n_k {
                     let k = unsafe { *(*item).kids.add(j) };
                     let kk = unsafe { (*k).kind };
                     if kk == pm_jit_rsx_ast_kind::PARAM {
+                        if (nparams as usize) < FN_MAXP {
+                            let pk = unsafe { (*k).kids };
+                            if unsafe { (*k).n_kids } as usize >= 1 {
+                                let pty = unsafe { *pk.add(0) };
+                                let ct = self.arena_tmp();
+                                let n = unsafe { self.ctype(pty, ct, 128) };
+                                if n > 0 && n <= 64 {
+                                    ptypes[nparams as usize] = ct;
+                                    plens[nparams as usize] = n;
+                                }
+                            }
+                        }
                         nparams += 1;
                     } else if kk == pm_jit_rsx_ast_kind::TYPE {
                         /* return type is the last TYPE kid; quals arrive as
@@ -7400,6 +7641,17 @@ impl Lower {
                 let fs = unsafe { self.fns.add(name, nlen, ret, retlen) };
                 unsafe {
                     self.fns.set_n_params(fs, nparams);
+                }
+                if fs < SYM_CAP {
+                    let mut p = 0usize;
+                    while p < FN_MAXP && p < nparams as usize {
+                        if plens[p] > 0 {
+                            unsafe {
+                                self.fns.add_param(fs, p, ptypes[p], plens[p]);
+                            }
+                        }
+                        p += 1;
+                    }
                 }
             } else if kind == pm_jit_rsx_ast_kind::IMPL {
                 /* methods: Type_method with self as first param. */
@@ -7994,11 +8246,13 @@ impl Lower {
                                 if an == 1 {
                                     let mut unwrap = unsafe { self.nt_find(name, nl) };
                                     if !unwrap && cn >= 2 && unsafe { z_eq(name, nl, b"new\0".as_ptr()) } {
-                                        let head = unsafe { *ck.add(0) };
-                                        let hname = unsafe { (*head).text };
-                                        let hlen = unsafe { (*head).text_len };
-                                        if unsafe { z_eq(hname, hlen, b"UnsafeCell\0".as_ptr()) }
-                                            || unsafe { z_eq(hname, hlen, b"Cell\0".as_ptr()) }
+                                        /* segment before `new` names the
+                                         * wrapper, any qualification depth */
+                                        let wrap = unsafe { *ck.add(cn - 2) };
+                                        let wname = unsafe { (*wrap).text };
+                                        let wlen = unsafe { (*wrap).text_len };
+                                        if unsafe { z_eq(wname, wlen, b"UnsafeCell\0".as_ptr()) }
+                                            || unsafe { z_eq(wname, wlen, b"Cell\0".as_ptr()) }
                                         {
                                             unwrap = true;
                                         }
@@ -10225,6 +10479,18 @@ impl Lower {
             || k == pm_jit_rsx_ast_kind::BLOCK;
         if k == pm_jit_rsx_ast_kind::EXPR_STMT && unsafe { (*st).n_kids } >= 1 {
             let e = unsafe { *(*st).kids.add(0) };
+            /* a wrapped control-flow tail (`return e;` parses as
+             * EXPR_STMT(RETURN)) is a statement, not a value — emitting
+             * `return <expr>` here would double the return (emit_expr on
+             * a RETURN emits its own). */
+            let ek = unsafe { (*e).kind };
+            if ek == pm_jit_rsx_ast_kind::RETURN
+                || ek == pm_jit_rsx_ast_kind::BREAK
+                || ek == pm_jit_rsx_ast_kind::CONTINUE
+            {
+                unsafe { self.emit_stmt(st, locals, 0) };
+                return;
+            }
             self.indent();
             self.out.puts(b"return \0".as_ptr());
             unsafe { self.emit_expr(e, locals) };
@@ -11989,6 +12255,326 @@ impl Lower {
         }
         -1
     }
+
+    /* Is this expression a bare `None`? Parser shape: a PATH whose single
+     * kid is a PATH named None (field/arg positions); the wrapping node's
+     * own text may also be None (pattern shorthands). */
+    unsafe fn expr_is_none(&mut self, e: *const pm_jit_rsx_ast_t) -> bool {
+        if e.is_null() || unsafe { (*e).kind } != pm_jit_rsx_ast_kind::PATH {
+            return false;
+        }
+        let t = unsafe { (*e).text };
+        let tl = unsafe { (*e).text_len };
+        if tl == 4 && !t.is_null() && unsafe { z_eq(t, tl, b"None\0".as_ptr()) } {
+            return true;
+        }
+        let kids = unsafe { (*e).kids };
+        let nk = unsafe { (*e).n_kids } as usize;
+        if nk == 1 {
+            let only = unsafe { *kids.add(0) };
+            if unsafe { (*only).kind } == pm_jit_rsx_ast_kind::PATH {
+                let ot = unsafe { (*only).text };
+                let otl = unsafe { (*only).text_len };
+                if otl == 4 && !ot.is_null() && unsafe { z_eq(ot, otl, b"None\0".as_ptr()) } {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /* Is this static initializer provably all-zero? A `static` whose
+     * initializer folds to zero at every byte has no .data content worth
+     * materializing: the initializer is dropped and the C declaration is
+     * emitted bare (a tentative definition), so the object carries the
+     * storage in .bss with zero file bytes instead of a multi-megabyte
+     * zero blob through the compiler's section machinery. The predicate
+     * walks the accepted static-initializer shapes only:
+     *
+     *   - `0` (and `0u32`, `-0` is excluded by the shape check anyway)
+     *   - `false`
+     *   - `None` (both the pointer Option — NULL — and the struct-shaped
+     *     Option — { ._v = {0}, ._has = 0 })
+     *   - `core::ptr::null[_mut]()` — renders 0
+     *   - an enum variant whose discriminant is 0 (`E::V`, bare `V`,
+     *     joined `E_V`)
+     *   - an array literal / `[e; n]` repeat whose every element (resp.
+     *     the one repeated element) is all-zero
+     *   - a struct literal whose every field value is all-zero
+     *   - the constant-lowering wrappers over any of those: a transparent
+     *     newtype ctor (`Mut(..)`) and `UnsafeCell::new(..)` / `Cell::new(..)`
+     *
+     * Anything else — a nonzero literal, a fn-named initializer, a
+     * non-constant expression — is not provably zero, so the full
+     * initializer is emitted as before. False positives are impossible
+     * (every leaf case maps to a C zero initializer); false negatives
+     * merely keep the explicit emission, never a miscompile. */
+    unsafe fn init_all_zero(&mut self, e: *const pm_jit_rsx_ast_t) -> bool {
+        if e.is_null() {
+            return false;
+        }
+        let kind = unsafe { (*e).kind };
+        match kind {
+            pm_jit_rsx_ast_kind::LITERAL => {
+                let t = unsafe { (*e).text };
+                let tl = unsafe { (*e).text_len };
+                if tl == 0 || t.is_null() {
+                    return false;
+                }
+                let mut at = 0usize;
+                if unsafe { *t } == b'0'
+                    && tl > 1
+                    && (unsafe { *t.add(1) } == b'x' || unsafe { *t.add(1) } == b'X')
+                {
+                    at = 2;
+                }
+                let mut all_zero = at < tl;
+                while at < tl {
+                    let c = unsafe { *t.add(at) };
+                    /* digits (with _ separators and type suffixes): every
+                     * digit must be 0; suffix chars only follow digits */
+                    if c == b'_' {
+                        at += 1;
+                        continue;
+                    }
+                    if c < b'0' || c > b'9' {
+                        if c == b'u' || c == b'U' || c == b'i' || c == b'I' {
+                            at += 1;
+                            continue;
+                        }
+                        all_zero = false;
+                        break;
+                    }
+                    if c != b'0' {
+                        all_zero = false;
+                        break;
+                    }
+                    at += 1;
+                }
+                all_zero
+            }
+            pm_jit_rsx_ast_kind::PAREN => {
+                if unsafe { (*e).n_kids } as usize >= 1 {
+                    unsafe { self.init_all_zero(*(*e).kids.add(0)) }
+                } else {
+                    false
+                }
+            }
+            pm_jit_rsx_ast_kind::PATH => unsafe { self.path_is_zero(e) },
+            pm_jit_rsx_ast_kind::ARRAY => {
+                let kids = unsafe { (*e).kids };
+                let nk = unsafe { (*e).n_kids } as usize;
+                let is_repeat = unsafe { z_eq((*e).text, (*e).text_len, b"[;]\0".as_ptr()) };
+                if is_repeat {
+                    if nk == 2 {
+                        unsafe { self.init_all_zero(*kids.add(0)) }
+                    } else {
+                        false
+                    }
+                } else {
+                    let mut i = 0usize;
+                    while i < nk {
+                        if !unsafe { self.init_all_zero(*kids.add(i)) } {
+                            return false;
+                        }
+                        i += 1;
+                    }
+                    true
+                }
+            }
+            pm_jit_rsx_ast_kind::STRUCT_LIT => unsafe { self.struct_lit_is_zero(e) },
+            pm_jit_rsx_ast_kind::CALL => {
+                /* the constant-lowering wrappers: newtype ctor (`Mut(x)`),
+                 * UnsafeCell/Cell::new — zero-ness rides the sole argument.
+                 * Node shape mirrors emit_call: kids[0] = callee PATH,
+                 * kids[1] = args container. */
+                let kids = unsafe { (*e).kids };
+                let nk = unsafe { (*e).n_kids } as usize;
+                if nk < 2 {
+                    return false;
+                }
+                let callee = unsafe { *kids.add(0) };
+                let args = unsafe { *kids.add(1) };
+                if unsafe { (*callee).kind } != pm_jit_rsx_ast_kind::PATH {
+                    return false;
+                }
+                let an = unsafe { (*args).n_kids } as usize;
+                let ak = unsafe { (*args).kids };
+                let ck = unsafe { (*callee).kids };
+                let cn = unsafe { (*callee).n_kids } as usize;
+                if cn == 0 {
+                    return false;
+                }
+                let leaf = unsafe { *ck.add(cn - 1) };
+                let lt = unsafe { (*leaf).text };
+                let ll = unsafe { (*leaf).text_len };
+                /* `ptr::null[_mut]()` — no args, renders NULL (checked
+                 * before the arity-1 wrappers so an empty arg list never
+                 * falls into the newtype branches). Any qualification
+                 * depth (`ptr::null_mut`, `core::ptr::null_mut`): the
+                 * segment before the leaf names the module. */
+                if unsafe { z_eq(lt, ll, b"null\0".as_ptr()) }
+                    || unsafe { z_eq(lt, ll, b"null_mut\0".as_ptr()) }
+                {
+                    if cn >= 2 {
+                        let wrap = unsafe { *ck.add(cn - 2) };
+                        let wt = unsafe { (*wrap).text };
+                        let wl = unsafe { (*wrap).text_len };
+                        if unsafe { z_eq(wt, wl, b"ptr\0".as_ptr()) } {
+                            return true;
+                        }
+                    }
+                }
+                if an != 1 {
+                    return false;
+                }
+                /* single-segment callee: a transparent-newtype ctor */
+                if cn == 1 && unsafe { self.nt_find(lt, ll) } {
+                    return unsafe { self.init_all_zero(*ak.add(0)) };
+                }
+                if unsafe { z_eq(lt, ll, b"new\0".as_ptr()) } && cn >= 2 {
+                    /* `UnsafeCell::new` / `Cell::new`, however deeply
+                     * qualified (`core::cell::UnsafeCell::new`): the segment
+                     * before `new` names the wrapper, not the path head. */
+                    let wrap = unsafe { *ck.add(cn - 2) };
+                    let wt = unsafe { (*wrap).text };
+                    let wl = unsafe { (*wrap).text_len };
+                    if unsafe { z_eq(wt, wl, b"UnsafeCell\0".as_ptr()) }
+                        || unsafe { z_eq(wt, wl, b"Cell\0".as_ptr()) }
+                    {
+                        return unsafe { self.init_all_zero(*ak.add(0)) };
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /* Zero-ness of a PATH initializer: `None`, `false`, a zero-valued
+     * enum variant (`E::V`, joined `E_V`, or the bare variant name), or
+     * a wrapping path around a struct literal (zero-ness is the fields').
+     * A PATH wrapping a STRUCT_LIT delegates; any other multi-segment
+     * path (a static name, a fn name) is not provably zero. */
+    unsafe fn path_is_zero(&mut self, e: *const pm_jit_rsx_ast_t) -> bool {
+        let kids = unsafe { (*e).kids };
+        let nk = unsafe { (*e).n_kids } as usize;
+        if nk == 0 {
+            /* bare PATH carries its name in its own text */
+            let t = unsafe { (*e).text };
+            let tl = unsafe { (*e).text_len };
+            if tl == 5 && !t.is_null() && unsafe { z_eq(t, tl, b"false\0".as_ptr()) } {
+                return true;
+            }
+            return false;
+        }
+        /* struct-lit wrapper: the last kid is the STRUCT_LIT — the
+         * zero-ness is the field values' */
+        let last = unsafe { *kids.add(nk - 1) };
+        if unsafe { (*last).kind } == pm_jit_rsx_ast_kind::STRUCT_LIT {
+            return unsafe { self.struct_lit_is_zero(e) };
+        }
+        /* single segment naming None / a variant */
+        if nk == 1 {
+            let only = unsafe { *kids.add(0) };
+            let t = unsafe { (*only).text };
+            let tl = unsafe { (*only).text_len };
+            if tl == 4 && !t.is_null() && unsafe { z_eq(t, tl, b"None\0".as_ptr()) } {
+                return true;
+            }
+            /* `false` parses as a single-segment path whose leaf text is
+             * the keyword — C `false` is 0 (stdbool) */
+            if tl == 5 && !t.is_null() && unsafe { z_eq(t, tl, b"false\0".as_ptr()) } {
+                return true;
+            }
+            if !t.is_null() && tl > 0 {
+                let mut found = false;
+                let v = unsafe { self.enums.lookup(t, tl, &mut found) };
+                if found {
+                    return v == 0;
+                }
+                /* a named const: zero-ness is its recorded value (BODY_NATIVE
+                 * and friends are 0 — the consts table already knows it) */
+                let mut cfound = false;
+                let cv = unsafe { self.consts.lookup(t, tl, &mut cfound) };
+                if cfound {
+                    return cv == 0;
+                }
+            }
+            return false;
+        }
+        /* 2-segment `E::V`: zero iff the variant discriminant is 0 */
+        let head = unsafe { *kids.add(0) };
+        let lastseg = unsafe { *kids.add(nk - 1) };
+        if unsafe { (*lastseg).kind } == pm_jit_rsx_ast_kind::PATH
+            && unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH
+        {
+            let ht = unsafe { (*head).text };
+            let hl = unsafe { (*head).text_len };
+            let lt = unsafe { (*lastseg).text };
+            let ll = unsafe { (*lastseg).text_len };
+            /* joined spelling Enum_Variant — same text the emission
+             * produces and the enum table stores */
+            let mut joined = self.arena_tmp();
+            let mut at = 0usize;
+            at = unsafe { bput(joined, 64, at, ht, hl) };
+            at = unsafe { bput(joined, 64, at, b"_\0".as_ptr(), 1) };
+            at = unsafe { bput(joined, 64, at, lt, ll) };
+            unsafe {
+                *joined.add(at) = 0;
+            }
+            let mut found = false;
+            let v = unsafe { self.enums.lookup(joined, at, &mut found) };
+            if found {
+                return v == 0;
+            }
+        }
+        false
+    }
+
+    /* Zero-ness of a struct literal: every field's value must be
+     * all-zero. Field names (STRUCT_FIELD kids) alternate with values;
+     * a fieldless literal `S { }` is all-zero by definition. The wrapping
+     * PATH node (parser shape for `S { .. }`) is unwrapped first. */
+    unsafe fn struct_lit_is_zero(&mut self, lit: *const pm_jit_rsx_ast_t) -> bool {
+        let mut sl: *const pm_jit_rsx_ast_t = lit;
+        if unsafe { (*lit).kind } == pm_jit_rsx_ast_kind::PATH {
+            let kids = unsafe { (*lit).kids };
+            let nk = unsafe { (*lit).n_kids } as usize;
+            let mut inner: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            let mut i = 0usize;
+            while i < nk {
+                let k = unsafe { *kids.add(i) };
+                if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::STRUCT_LIT {
+                    inner = k;
+                    break;
+                }
+                i += 1;
+            }
+            if inner.is_null() {
+                return false;
+            }
+            sl = inner;
+        }
+        if unsafe { (*sl).kind } != pm_jit_rsx_ast_kind::STRUCT_LIT {
+            return false;
+        }
+        let fk = unsafe { (*sl).kids };
+        let fkn = unsafe { (*sl).n_kids } as usize;
+        let mut i = 0usize;
+        while i + 1 < fkn {
+            let fnode = unsafe { *fk.add(i) };
+            let v = unsafe { *fk.add(i + 1) };
+            if unsafe { (*fnode).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD {
+                if !unsafe { self.init_all_zero(v) } {
+                    return false;
+                }
+            }
+            i += 2;
+        }
+        true
+    }
+
     /* Struct literal S { a: 1, b: 2 }. The parser attaches the fields to
      * the wrapping PATH node: kids = segments…, STRUCT_LIT node whose kids
      * are [STRUCT_FIELD(name), value, STRUCT_FIELD(name), value, …].
@@ -12181,7 +12767,12 @@ impl Lower {
                             if cl >= 8
                                 && unsafe { z_eq(ct, 8, b"rsx_opt_\0".as_ptr()) }
                             {
-                                self.out.puts(b"{ ._v = {0}, ._has = 0 }\0".as_ptr());
+                                /* struct-shaped Option: the compound
+                                 * literal needs its typedef name — a bare
+                                 * braced init is not a C initializer */
+                                self.out.putc(b'(');
+                                self.out.put(ct, cl);
+                                self.out.puts(b"){ ._v = {0}, ._has = 0 }\0".as_ptr());
                             } else {
                                 self.out.puts(b"NULL\0".as_ptr());
                             }
@@ -12869,11 +13460,12 @@ impl Lower {
                 {
                     let mut unwrap = unsafe { self.nt_find(lname, llen) };
                     if !unwrap && cn2 >= 2 {
-                        let head = unsafe { *ck2.add(0) };
-                        let hname = unsafe { (*head).text };
-                        let hlen = unsafe { (*head).text_len };
-                        if unsafe { z_eq(hname, hlen, b"UnsafeCell\0".as_ptr()) }
-                            || unsafe { z_eq(hname, hlen, b"Cell\0".as_ptr()) }
+                        /* segment before `new` names the wrapper */
+                        let wrap = unsafe { *ck2.add(cn2 - 2) };
+                        let wname = unsafe { (*wrap).text };
+                        let wlen = unsafe { (*wrap).text_len };
+                        if unsafe { z_eq(wname, wlen, b"UnsafeCell\0".as_ptr()) }
+                            || unsafe { z_eq(wname, wlen, b"Cell\0".as_ptr()) }
                         {
                             unwrap = true;
                         }
@@ -13063,10 +13655,11 @@ impl Lower {
                     }
                 }
                 /* `AtomicU32::new(v)` -> the value itself: the C field IS
-                 * a `_Atomic uint32_t`, construction is plain init. */
+                 * a `_Atomic uint32_t`, construction is plain init. The
+                 * segment before `new` names the atomic (any depth). */
                 if cn >= 2 {
-                    let h0 = unsafe { *ck.add(0) };
-                    if unsafe { z_eq(unsafe { (*h0).text }, unsafe { (*h0).text_len }, b"AtomicU32\0".as_ptr()) }
+                    let wrap = unsafe { *ck.add(cn - 2) };
+                    if unsafe { z_eq(unsafe { (*wrap).text }, unsafe { (*wrap).text_len }, b"AtomicU32\0".as_ptr()) }
                         && unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"new\0".as_ptr()) }
                         && unsafe { (*args).n_kids } as usize == 1
                     {
@@ -13091,12 +13684,56 @@ impl Lower {
                 self.out.putc(b'(');
                 let ak = unsafe { (*args).kids };
                 let an = unsafe { (*args).n_kids } as usize;
+                /* callee name for param-type lookups (a `None` arg needs
+                 * the param's Option shape: NULL for pointer payloads,
+                 * the rsx_opt_ zero literal for struct-shaped ones) */
+                let callok = cn == 1;
+                let mut cname: *const u8 = b"\0".as_ptr();
+                let mut cnamelen = 0usize;
+                if callok {
+                    let seg0 = unsafe { *ck.add(0) };
+                    cname = unsafe { (*seg0).text };
+                    cnamelen = unsafe { (*seg0).text_len };
+                }
                 let mut i = 0usize;
                 while i < an {
                     if i > 0 {
                         self.out.puts(b", \0".as_ptr());
                     }
-                    unsafe { self.emit_expr(*ak.add(i), locals) };
+                    /* `None` in argument position: the param type decides
+                     * the C spelling. Known unit fn -> exact shape;
+                     * otherwise NULL (sound for the pointer-Option
+                     * collapse, the common case for fn-ptr params). */
+                    let mut done_none = false;
+                    if unsafe { self.expr_is_none(*ak.add(i)) } {
+                        if callok && !cname.is_null() && cnamelen > 0 {
+                            let pt = self.arena_tmp();
+                            let pl = unsafe {
+                                self.fns.param_ctype(cname, cnamelen, i, pt)
+                            };
+                            if pl > 0 {
+                                if pl >= 8 && unsafe { z_eq(pt, 8, b"rsx_opt_\0".as_ptr()) } {
+                                    /* struct-shaped Option: the compound
+                                     * literal carries the typedef name —
+                                     * a bare braced init is not a C
+                                     * expression at a call argument */
+                                    self.out.putc(b'(');
+                                    self.out.put(pt, pl);
+                                    self.out.puts(b"){ ._v = {0}, ._has = 0 }\0".as_ptr());
+                                } else {
+                                    self.out.puts(b"NULL\0".as_ptr());
+                                }
+                                done_none = true;
+                            }
+                        }
+                        if !done_none {
+                            self.out.puts(b"NULL\0".as_ptr());
+                            done_none = true;
+                        }
+                    }
+                    if !done_none {
+                        unsafe { self.emit_expr(*ak.add(i), locals) };
+                    }
                     i += 1;
                 }
                 self.out.putc(b')');
@@ -14489,6 +15126,19 @@ impl Lower {
          * fn prototypes); fn bodies in pass D use the static, so the name
          * must be declared here even though the initializer comes later. */
         unsafe { self.st_add(name, nlen, ct, ct_len) };
+        /* The declared type's render may have registered a fresh
+         * Option-payload typedef (`Option<T_alias>` — the payload names a
+         * type alias, so the pass-A matched flushes missed it and this is
+         * the first ctype to render it). Flush pending Option typedefs now
+         * — every one emits before this static's declaration line — but
+         * only once the type passes are done: before that, a pending
+         * payload may name a struct/alias the type passes have not
+         * emitted yet (pass 0a consts run first and would emit the
+         * Option typedef ahead of its own payload's typedef). The
+         * per-slot done marks keep each typedef to one emission. */
+        if self.types_done {
+            unsafe { self.opt_emit_rest() };
+        }
         if declare_only == 2 {
             self.out.puts(b"#line \0".as_ptr());
             unsafe { self.out.put_u32(line) };
@@ -14590,6 +15240,52 @@ impl Lower {
                 {
                     ok_shape = true;
                 }
+                /* a PATH initializer is constant when it names a known
+                 * enum variant — `Kind::Zero` (C: the enum member, a
+                 * constant expression). Zero variants then take the
+                 * all-zero elision; nonzero ones emit the member name. */
+                if !ok_shape && ik == pm_jit_rsx_ast_kind::PATH {
+                    let pk0 = unsafe { (*init_top).kids };
+                    let pn0 = unsafe { (*init_top).n_kids } as usize;
+                    if pn0 >= 1 {
+                        let leaf = unsafe { *pk0.add(pn0 - 1) };
+                        let lt = unsafe { (*leaf).text };
+                        let ll = unsafe { (*leaf).text_len };
+                        /* a PATH wrapping a STRUCT_LIT (`S { .. }` parses
+                         * with the fields hung off the wrapping PATH) is
+                         * the struct-literal initializer shape */
+                        if unsafe { (*leaf).kind } == pm_jit_rsx_ast_kind::STRUCT_LIT {
+                            ok_shape = true;
+                        } else if !lt.is_null()
+                            && ll > 0
+                        {
+                            let mut joined = self.arena_tmp();
+                            let mut jat = 0usize;
+                            let mut seg = 0usize;
+                            while seg < pn0 {
+                                let s = unsafe { *pk0.add(seg) };
+                                if unsafe { (*s).kind } == pm_jit_rsx_ast_kind::PATH
+                                    && unsafe { (*s).text_len } > 0
+                                {
+                                    jat = unsafe { bput(joined, 64, jat, (*s).text, (*s).text_len) };
+                                    jat = unsafe { bput(joined, 64, jat, b"_\0".as_ptr(), 1) };
+                                }
+                                seg += 1;
+                            }
+                            if jat > 1 {
+                                jat -= 1;
+                            }
+                            unsafe {
+                                *joined.add(jat) = 0;
+                            }
+                            let mut found = false;
+                            let _ = unsafe { self.enums.lookup(joined, jat, &mut found) };
+                            if found {
+                                ok_shape = true;
+                            }
+                        }
+                    }
+                }
                 if !ok_shape && ik == pm_jit_rsx_ast_kind::CALL {
                     /* calls that lower to constants: newtype ctor (leaf in
                      * the nt table), UnsafeCell::new/Cell::new, ptr::null */
@@ -14609,11 +15305,13 @@ impl Lower {
                                 }
                                 if pn0 >= 2 {
                                     if unsafe { z_eq(lt, ll, b"new\0".as_ptr()) } {
-                                        let head = unsafe { *pk0.add(0) };
-                                        let ht = unsafe { (*head).text };
-                                        let hl = unsafe { (*head).text_len };
-                                        if unsafe { z_eq(ht, hl, b"UnsafeCell\0".as_ptr()) }
-                                            || unsafe { z_eq(ht, hl, b"Cell\0".as_ptr()) }
+                                        /* segment before `new` names the
+                                         * wrapper, any qualification depth */
+                                        let wrap = unsafe { *pk0.add(pn0 - 2) };
+                                        let wt = unsafe { (*wrap).text };
+                                        let wl = unsafe { (*wrap).text_len };
+                                        if unsafe { z_eq(wt, wl, b"UnsafeCell\0".as_ptr()) }
+                                            || unsafe { z_eq(wt, wl, b"Cell\0".as_ptr()) }
                                         {
                                             ok_shape = true;
                                         }
@@ -14621,11 +15319,15 @@ impl Lower {
                                     if unsafe { z_eq(lt, ll, b"null_mut\0".as_ptr()) }
                                         || unsafe { z_eq(lt, ll, b"null\0".as_ptr()) }
                                     {
-                                        let head = unsafe { *pk0.add(0) };
-                                        let ht = unsafe { (*head).text };
-                                        let hl = unsafe { (*head).text_len };
-                                        if unsafe { z_eq(ht, hl, b"ptr\0".as_ptr()) } {
-                                            ok_shape = true;
+                                        /* any `..::ptr::null[_mut]` */
+                                        let mut k = 0usize;
+                                        while k + 1 < pn0 {
+                                            let seg = unsafe { *pk0.add(k) };
+                                            if unsafe { z_eq(unsafe { (*seg).text }, unsafe { (*seg).text_len }, b"ptr\0".as_ptr()) } {
+                                                ok_shape = true;
+                                                break;
+                                            }
+                                            k += 1;
                                         }
                                     }
                                 }
@@ -14635,6 +15337,21 @@ impl Lower {
                 }
                 if !ok_shape {
                     self.err(b"unsupported: non-constant static initializer\0".as_ptr(), line);
+                    return;
+                }
+                /* All-zero elision: an initializer that folds to zero at
+                 * every byte has no .data content — emit the declaration
+                 * bare (a C tentative definition) and let the storage live
+                 * in .bss. Materializing a multi-megabyte zero blob (the
+                 * fixed-cap registry table) through the object compiler's
+                 * section machinery is exactly the allocation that breaks
+                 * in-kernel compiles on a shared arena; a bare `static T x;`
+                 * carries the same storage as SHT_NOBITS with zero file
+                 * bytes. Only provably-zero initializers take this path —
+                 * anything else keeps the explicit `= {...}` emission. */
+                if unsafe { self.init_all_zero(init) } {
+                    self.out.puts(b";\n\0".as_ptr());
+                    self.out.putc(b'\n');
                     return;
                 }
                 self.out.puts(b" = \0".as_ptr());
@@ -15512,7 +16229,33 @@ impl Lower {
             }
             i += 1;
         }
-        /* pass A: struct/enum/typedef items */
+        /* pass A0: enums first. An enum is an opaque integer tag in C —
+         * `typedef enum E E;` needs no other type — while a struct field
+         * can name one. Face splices append `#[path]` types after the
+         * muscle, so file order alone would emit a struct's field before
+         * the enum typedef it names; hoisting every ENUM item (a full
+         * sweep before the struct/alias sweep) makes the append-splice
+         * sound. Aliases stay in the later sweep — an alias may name a
+         * struct, so it must follow it. */
+        i = 0;
+        while i < nk {
+            item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            if unsafe { (*item).kind } == pm_jit_rsx_ast_kind::ENUM {
+                unsafe { self.lower_enum(item) };
+                unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                unsafe { self.tup_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+            }
+            if !self.ok {
+                bad = true;
+                self.ok = true;
+            }
+            i += 1;
+        }
+        /* pass A: struct/typedef items */
         i = 0;
         while i < nk {
             item = unsafe { *kids.add(i) };
@@ -15525,10 +16268,6 @@ impl Lower {
                 unsafe { self.lower_struct(item) };
                 /* Option/tuple typedefs whose payloads name this struct
                  * follow it */
-                unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
-                unsafe { self.tup_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
-            } else if kind == pm_jit_rsx_ast_kind::ENUM {
-                unsafe { self.lower_enum(item) };
                 unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
                 unsafe { self.tup_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
             } else if kind == pm_jit_rsx_ast_kind::TYPE_ALIAS {
@@ -15545,6 +16284,10 @@ impl Lower {
         /* remaining tuple typedefs — primitive element types need no
          * naming type; before the Option typedefs whose payloads may
          * name them (rsx_opt_rsx_tuple_…) and before prototypes/fns */
+        /* from here on every unit type (struct/alias) is emitted, so a
+         * pending Option typedef can no longer name an unemitted payload
+         * — lower_static's flush becomes safe */
+        self.types_done = true;
         unsafe { self.tup_emit_rest() };
         /* remaining Option typedefs — primitive payloads need no naming
          * type; emit before the prototypes/fns that use them */
@@ -15958,6 +16701,7 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_lower(
         syms: SymTab::new(arena),
         fns: FnTab::new(),
         consts: ConstTab::new(),
+        enums: EnumTab::new(),
         depth: 0,
         cur_impl: [b"\0".as_ptr(); 16],
         cur_impl_lens: [0; 16],
@@ -15977,6 +16721,7 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_lower(
         opt_lens: [0; OPT_CAP],
         opt_done: [false; OPT_CAP],
         opt_n: 0,
+        types_done: false,
         tup_elems: [[0; 64]; TUP_CAP * TUP_MAXF],
         tup_lens: [0; TUP_CAP * TUP_MAXF],
         tup_counts: [0; TUP_CAP],

@@ -364,15 +364,20 @@ static int32_t case_build_face(void) {
     if (body == NULL || strstr(body, "pm_util_mem_alloc") == NULL) {
         return fail("build record body");
     }
-    /* a non-c card is refused with data, not a silent 404 */
+    /* an rs card now rides the same chain (micro-rustc -> C -> TCC objects
+     * -> ELF link) as the c cards — rebuild it for real. The registry is
+     * the biggest rs card, so this is also the in-kernel elision prove. */
     if (pm_metal_inspect_handle("POST",
             "/build/pymergetic.wasmmod.registry") != 200) {
-        return fail("build refusal status");
+        return fail("build rs card status");
     }
     body = pm_metal_inspect_body();
-    if (body == NULL || strstr(body, "\"rebuild\":\"refused\"") == NULL
-        || strstr(body, "\"error\":") == NULL) {
-        return fail("build refusal body");
+    if (body == NULL || strstr(body, "\"rebuild\":\"ok\"") == NULL
+        || strstr(body, "\"objects\":[") == NULL
+        || strstr(body, "\"symbols\":[") == NULL) {
+        fprintf(stderr, "metal.inspect test: rs rebuild body: %.200s\n",
+            body != NULL ? body : "(null)");
+        return fail("build rs card body");
     }
     /* an unknown fqn is refused the same way */
     if (pm_metal_inspect_handle("POST", "/build/no.such.card") != 200) {
