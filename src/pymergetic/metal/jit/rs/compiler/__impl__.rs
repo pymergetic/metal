@@ -8044,23 +8044,20 @@ impl Lower {
                 if unsafe { z_eq(op, op_len, b"?\0".as_ptr()) } {
                     /* `expr?` yields the *payload*, not the Option. A
                      * pointer-Option operand is already the inner pointer
-                     * spelling; a struct-Option operand (`rsx_opt_<elem>`)
+                     * spelling; a struct-Option operand (`rsx_opt_<len>e<elem>`)
                      * must unwrap: the try expression's value is
-                     * `__rsx_try._v`. The typedef name is the sanitized
-                     * payload spelling (opt_typedef_name), and the
-                     * non-pointer payloads this accepts are plain
-                     * identifiers (size_t, u32, ..), so stripping the
-                     * `rsx_opt_` prefix recovers the payload exactly. */
+                     * `__rsx_try._v`. opt_typedef_elem parses the `<len>e`
+                     * prefix (and validates the payload length) — never a
+                     * hardcoded byte skip. */
                     if bn == 0 {
                         return 0;
                     }
                     if bn >= 8 && unsafe { z_eq(b_buf, 8, b"rsx_opt_\0".as_ptr()) } {
-                        let pl = bn - 8;
-                        unsafe {
-                            core::ptr::copy_nonoverlapping(b_buf.add(8), out, pl);
-                            *out.add(pl) = 0;
+                        let pl = unsafe { Lower::opt_typedef_elem(b_buf, bn, out, cap) };
+                        if pl > 0 {
+                            return pl;
                         }
-                        return pl;
+                        return 0;
                     }
                     unsafe {
                         core::ptr::copy_nonoverlapping(b_buf, out, bn);
@@ -9766,12 +9763,20 @@ impl Lower {
                 }
                 return;
             }
-            /* struct-Option: one temp, bind from ._v, test !._has */
+            /* struct-Option: one temp; the ._has test runs BEFORE the
+             * payload copy — no `._v` of a None is ever read */
             self.indent();
             self.out.put(ct, ct_len);
             self.out.puts(b" __rsx_le = \0".as_ptr());
             unsafe { self.emit_expr(init, locals) };
             self.out.puts(b";\n\0".as_ptr());
+            self.indent();
+            self.out.puts(b"if (!__rsx_le._has) {\n\0".as_ptr());
+            self.depth += 1;
+            unsafe { self.emit_block_stmt(els, locals) };
+            self.depth -= 1;
+            self.indent();
+            self.out.puts(b"}\n\0".as_ptr());
             if is_tuple_bind {
                 /* Option-of-tuple: cur_opt_elem drives the shared destructure */
                 unsafe { core::ptr::copy_nonoverlapping(elbuf, self.cur_opt_elem.as_mut_ptr(), eln) };
@@ -9787,13 +9792,6 @@ impl Lower {
                     (*locals).add(bname, blen, elbuf, eln, self.depth);
                 }
             }
-            self.indent();
-            self.out.puts(b"if (!__rsx_le._has) {\n\0".as_ptr());
-            self.depth += 1;
-            unsafe { self.emit_block_stmt(els, locals) };
-            self.depth -= 1;
-            self.indent();
-            self.out.puts(b"}\n\0".as_ptr());
         } else {
             /* pointer-Option: the bind IS the temp; None == 0 */
             self.indent();
@@ -9934,9 +9932,53 @@ impl Lower {
         self.out.puts(b" = \0".as_ptr());
         unsafe { self.emit_expr(init, locals) };
         self.out.puts(b";\n\0".as_ptr());
-        /* binds from the fields, payload spelling per element */
-        let pk = unsafe { (*pat).kids };
+        /* ORDER: the ._has test runs BEFORE any payload read — no `._v`
+         * is copied out of a None field. The else-block diverges (parse
+         * proves it), so binding after the test is sound: when the test
+         * passes, every field is Some; when it fails, control never
+         * reaches the binds. */
+        self.indent();
+        self.out.puts(b"if (\0".as_ptr());
+        let mut first = true;
         let mut f = 0usize;
+        while f < pn {
+            let a = slot * TUP_MAXF + f;
+            let elct = self.tup_elems[a].as_ptr();
+            let elct_len = self.tup_lens[a];
+            if elct_len >= 8 && unsafe { z_eq(elct, 8, b"rsx_opt_\0".as_ptr()) } {
+                if !first {
+                    self.out.puts(b" || \0".as_ptr());
+                }
+                self.out.puts(b"!\0".as_ptr());
+                self.out.put(tmp, tmp_len);
+                self.out.puts(b"._\0".as_ptr());
+                let d = b'0' + f as u8;
+                self.out.putc(d);
+                self.out.puts(b"._has\0".as_ptr());
+                first = false;
+            } else {
+                if !first {
+                    self.out.puts(b" || \0".as_ptr());
+                }
+                self.out.put(tmp, tmp_len);
+                self.out.puts(b"._\0".as_ptr());
+                let d = b'0' + f as u8;
+                self.out.putc(d);
+                self.out.puts(b" == 0\0".as_ptr());
+                first = false;
+            }
+            f += 1;
+        }
+        self.out.puts(b") {\n\0".as_ptr());
+        self.depth += 1;
+        unsafe { self.emit_block_stmt(els, locals) };
+        self.depth -= 1;
+        self.indent();
+        self.out.puts(b"}\n\0".as_ptr());
+        /* binds from the fields, payload spelling per element — emitted
+         * only after every ._has check succeeded */
+        let pk = unsafe { (*pat).kids };
+        f = 0;
         while f < pn {
             let sub = unsafe { *pk.add(f) };
             /* unwrap Some(bind): pat kids [Some seg, bind] */
@@ -10010,45 +10052,6 @@ impl Lower {
             }
             f += 1;
         }
-        /* the test: every fielded Option must be Some */
-        self.indent();
-        self.out.puts(b"if (\0".as_ptr());
-        let mut first = true;
-        f = 0;
-        while f < pn {
-            let a = slot * TUP_MAXF + f;
-            let elct = self.tup_elems[a].as_ptr();
-            let elct_len = self.tup_lens[a];
-            if elct_len >= 8 && unsafe { z_eq(elct, 8, b"rsx_opt_\0".as_ptr()) } {
-                if !first {
-                    self.out.puts(b" || \0".as_ptr());
-                }
-                self.out.puts(b"!\0".as_ptr());
-                self.out.put(tmp, tmp_len);
-                self.out.puts(b"._\0".as_ptr());
-                let d = b'0' + f as u8;
-                self.out.putc(d);
-                self.out.puts(b"._has\0".as_ptr());
-                first = false;
-            } else {
-                if !first {
-                    self.out.puts(b" || \0".as_ptr());
-                }
-                self.out.put(tmp, tmp_len);
-                self.out.puts(b"._\0".as_ptr());
-                let d = b'0' + f as u8;
-                self.out.putc(d);
-                self.out.puts(b" == 0\0".as_ptr());
-                first = false;
-            }
-            f += 1;
-        }
-        self.out.puts(b") {\n\0".as_ptr());
-        self.depth += 1;
-        unsafe { self.emit_block_stmt(els, locals) };
-        self.depth -= 1;
-        self.indent();
-        self.out.puts(b"}\n\0".as_ptr());
     }
 
     /* `let (a, b) = expr` — kids: [TUPLE pat, (type TYPE), init]. One temp
@@ -12730,6 +12733,90 @@ impl Lower {
      * table the tuple *type* path fills, so `(x, y)` in a fn returning
      * `(usize, usize)` picks up exactly that typedef. Unit `()` (text
      * "()" — no kids) stays a refusal: C void is not a value. */
+    /* Tuple-element (or any initializer-position) render of a `None` /
+     * `Some(x)` where the expected C type is known (the tuple slot's
+     * element type): struct-Option -> compound literal of rsx_opt_..,
+     * pointer-Option -> NULL / x bare. Returns false when v is neither
+     * (the caller emits v normally). The expected type MUST be known —
+     * an Option element with an unknown expected shape refuses (audit:
+     * never assume the pointer-Option collapse). */
+    unsafe fn emit_opt_elem(
+        &mut self,
+        v: *const pm_jit_rsx_ast_t,
+        expect: *const u8,
+        expect_len: usize,
+        locals: *mut LocalTab,
+        line: u32,
+    ) -> bool {
+        if expect_len == 0 || expect.is_null() {
+            return false;
+        }
+        /* bare None? */
+        if unsafe { (*v).kind } == pm_jit_rsx_ast_kind::PATH
+            && unsafe { (*v).n_kids } as usize == 1
+        {
+            let only = unsafe { *(*v).kids.add(0) };
+            if unsafe { (*only).kind } == pm_jit_rsx_ast_kind::PATH
+                && unsafe { z_eq(unsafe { (*only).text }, unsafe { (*only).text_len }, b"None\0".as_ptr()) }
+            {
+                if expect_len >= 8 && unsafe { z_eq(expect, 8, b"rsx_opt_\0".as_ptr()) } {
+                    self.out.putc(b'(');
+                    self.out.put(expect, expect_len);
+                    self.out.puts(b"){ ._v = {0}, ._has = 0 }\0".as_ptr());
+                } else if expect_len > 0 && unsafe { *expect.add(expect_len - 1) } == b'*' {
+                    self.out.puts(b"NULL\0".as_ptr());
+                } else {
+                    unsafe {
+                        self.err(
+                            b"unsupported: None with a non-Option expected type\0".as_ptr(),
+                            line,
+                        );
+                    }
+                }
+                return true;
+            }
+        }
+        /* Some(x)? — CALL node callee Some */
+        if unsafe { (*v).kind } == pm_jit_rsx_ast_kind::CALL {
+            let vck = unsafe { (*v).kids };
+            if unsafe { (*v).n_kids } as usize == 2 {
+                let callee = unsafe { *vck.add(0) };
+                if unsafe { (*callee).kind } == pm_jit_rsx_ast_kind::PATH
+                    && unsafe { (*callee).n_kids } as usize == 1
+                {
+                    let cseg = unsafe { *(*callee).kids.add(0) };
+                    if unsafe { z_eq(unsafe { (*cseg).text }, unsafe { (*cseg).text_len }, b"Some\0".as_ptr()) }
+                    {
+                        let args = unsafe { *vck.add(1) };
+                        if unsafe { (*args).n_kids } as usize == 1 {
+                            let inner = unsafe { *(*args).kids.add(0) };
+                            if expect_len >= 8 && unsafe { z_eq(expect, 8, b"rsx_opt_\0".as_ptr()) } {
+                                self.out.putc(b'(');
+                                self.out.put(expect, expect_len);
+                                self.out.puts(b"){ ._v = \0".as_ptr());
+                                unsafe { self.emit_expr(inner, locals) };
+                                self.out.puts(b", ._has = 1 }\0".as_ptr());
+                            } else if expect_len > 0
+                                && unsafe { *expect.add(expect_len - 1) } == b'*'
+                            {
+                                unsafe { self.emit_expr(inner, locals) };
+                            } else {
+                                unsafe {
+                                    self.err(
+                                        b"unsupported: Some with a non-Option expected type\0".as_ptr(),
+                                        line,
+                                    );
+                                }
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
     unsafe fn emit_tuple_expr(&mut self, e: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
         let kids = unsafe { (*e).kids };
         let nk = unsafe { (*e).n_kids } as usize;
@@ -12767,7 +12854,18 @@ impl Lower {
                     let d = b'0' + f2 as u8;
                     self.out.putc(d);
                     self.out.puts(b" = \0".as_ptr());
-                    unsafe { self.emit_expr(*kids.add(f2), locals) };
+                    /* Option elements (None / Some(x)) render by the
+                     * slot's element type — the expected shape */
+                    let ea = slot * TUP_MAXF + f2;
+                    let eexp = self.tup_elems[ea].as_ptr();
+                    let eexpl = self.tup_lens[ea];
+                    let v = unsafe { *kids.add(f2) };
+                    let rendered = unsafe {
+                        self.emit_opt_elem(v, eexp, eexpl, locals, unsafe { (*e).line })
+                    };
+                    if !rendered {
+                        unsafe { self.emit_expr(v, locals) };
+                    }
                     f2 += 1;
                 }
                 self.out.puts(b" }\0".as_ptr());
@@ -12812,7 +12910,18 @@ impl Lower {
             let d = b'0' + f2 as u8;
             self.out.putc(d);
             self.out.puts(b" = \0".as_ptr());
-            unsafe { self.emit_expr(*kids.add(f2), locals) };
+            /* Option elements (None / Some(x)) render by the slot's
+             * element type — the expected shape */
+            let ea = slot * TUP_MAXF + f2;
+            let eexp = self.tup_elems[ea].as_ptr();
+            let eexpl = self.tup_lens[ea];
+            let v = unsafe { *kids.add(f2) };
+            let rendered = unsafe {
+                self.emit_opt_elem(v, eexp, eexpl, locals, unsafe { (*e).line })
+            };
+            if !rendered {
+                unsafe { self.emit_expr(v, locals) };
+            }
             f2 += 1;
         }
         self.out.puts(b" }\0".as_ptr());
@@ -13846,35 +13955,48 @@ impl Lower {
                         self.out.puts(b", \0".as_ptr());
                     }
                     /* `None` in argument position: the param type decides
-                     * the C spelling. Known unit fn -> exact shape;
-                     * otherwise NULL (sound for the pointer-Option
-                     * collapse, the common case for fn-ptr params). */
+                     * the C spelling — known unit fn -> exact shape
+                     * (rsx_opt_ zero literal for struct-Options, NULL for
+                     * pointer payloads). UNKNOWN callee (indirect call,
+                     * multi-segment path, unregistered fn): REFUSE. A
+                     * bare NULL here would assume the pointer-Option
+                     * collapse and miscompile a struct-Option param. */
                     let mut done_none = false;
                     if unsafe { self.expr_is_none(*ak.add(i)) } {
-                        if callok && !cname.is_null() && cnamelen > 0 {
-                            let pt = self.arena_tmp();
-                            let pl = unsafe {
-                                self.fns.param_ctype(cname, cnamelen, i, pt)
-                            };
-                            if pl > 0 {
-                                if pl >= 8 && unsafe { z_eq(pt, 8, b"rsx_opt_\0".as_ptr()) } {
-                                    /* struct-shaped Option: the compound
-                                     * literal carries the typedef name —
-                                     * a bare braced init is not a C
-                                     * expression at a call argument */
-                                    self.out.putc(b'(');
-                                    self.out.put(pt, pl);
-                                    self.out.puts(b"){ ._v = {0}, ._has = 0 }\0".as_ptr());
-                                } else {
-                                    self.out.puts(b"NULL\0".as_ptr());
-                                }
-                                done_none = true;
+                        if !callok || cname.is_null() || cnamelen == 0 {
+                            unsafe {
+                                self.err(
+                                    b"unsupported: None argument to an unknown callee - declare the fn or pass the Option explicitly\0".as_ptr(),
+                                    unsafe { (*e).line },
+                                );
                             }
+                            return;
                         }
-                        if !done_none {
+                        let pt = self.arena_tmp();
+                        let pl = unsafe {
+                            self.fns.param_ctype(cname, cnamelen, i, pt)
+                        };
+                        if pl == 0 {
+                            unsafe {
+                                self.err(
+                                    b"unsupported: None argument - param type unknown\0".as_ptr(),
+                                    unsafe { (*e).line },
+                                );
+                            }
+                            return;
+                        }
+                        if pl >= 8 && unsafe { z_eq(pt, 8, b"rsx_opt_\0".as_ptr()) } {
+                            /* struct-shaped Option: the compound
+                             * literal carries the typedef name —
+                             * a bare braced init is not a C
+                             * expression at a call argument */
+                            self.out.putc(b'(');
+                            self.out.put(pt, pl);
+                            self.out.puts(b"){ ._v = {0}, ._has = 0 }\0".as_ptr());
+                        } else {
                             self.out.puts(b"NULL\0".as_ptr());
-                            done_none = true;
                         }
+                        done_none = true;
                     }
                     /* `Some(x)` in argument position: symmetric with None —
                      * the param's Option shape decides. A struct-shaped
@@ -13910,15 +14032,29 @@ impl Lower {
                                 }
                             }
                         }
-                        if !some_v.is_null()
-                            && callok
-                            && !cname.is_null()
-                            && cnamelen > 0
-                        {
+                        if !some_v.is_null() {
+                            if !callok || cname.is_null() || cnamelen == 0 {
+                                unsafe {
+                                    self.err(
+                                        b"unsupported: Some argument to an unknown callee - declare the fn or pass the Option explicitly\0".as_ptr(),
+                                        unsafe { (*e).line },
+                                    );
+                                }
+                                return;
+                            }
                             let pt = self.arena_tmp();
                             let pl = unsafe {
                                 self.fns.param_ctype(cname, cnamelen, i, pt)
                             };
+                            if pl == 0 {
+                                unsafe {
+                                    self.err(
+                                        b"unsupported: Some argument - param type unknown\0".as_ptr(),
+                                        unsafe { (*e).line },
+                                    );
+                                }
+                                return;
+                            }
                             if pl >= 8 && unsafe { z_eq(pt, 8, b"rsx_opt_\0".as_ptr()) } {
                                 self.out.putc(b'(');
                                 self.out.put(pt, pl);
@@ -13927,6 +14063,10 @@ impl Lower {
                                 self.out.puts(b", ._has = 1 }\0".as_ptr());
                                 done_none = true;
                             }
+                            /* pointer-shaped payload: x passes bare
+                             * (the Option-of-pointer collapse) — pl > 0
+                             * proves the param is a pointer, not an
+                             * unknown shape */
                         }
                     }
                     if !done_none {
@@ -13977,6 +14117,21 @@ impl Lower {
                 && (unsafe { z_eq(mname, mlen, b"store\0".as_ptr()) }
                     || unsafe { z_eq(mname, mlen, b"swap\0".as_ptr()) }))
         {
+            /* Receiver typing gate: the __atomic_* builtins require a C11
+             * `_Atomic` object — the method name alone is not validation.
+             * A non-atomic receiver naming .store/.load/.swap must refuse,
+             * never miscompile to __atomic_* on a plain field. */
+            let rct = self.arena_tmp();
+            let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+            if rctl < 8 || !unsafe { z_eq(rct, 7, b"_Atomic\0".as_ptr()) } {
+                unsafe {
+                    self.err(
+                        b"unsupported: atomic op on a non-atomic receiver\0".as_ptr(),
+                        unsafe { (*e).line },
+                    );
+                }
+                return;
+            }
             /* load(order) — order is arg 0; store/swap(value, order) — order is arg 1 */
             let oi = if an == 1 { 0usize } else { 1usize };
             let ord = unsafe { self.atomic_order(*ak.add(oi)) };
@@ -14025,9 +14180,13 @@ impl Lower {
                     return;
                 }
                 if unsafe { z_eq(mname, mlen, b"store\0".as_ptr()) } {
-                    self.out.puts(b"(\0".as_ptr());
+                    /* the desired value MUST land in the temp before the
+                     * builtin's pointer read — `(v);` would drop it and
+                     * store garbage */
+                    self.out.put(tmp, tl);
+                    self.out.puts(b" = \0".as_ptr());
                     unsafe { self.emit_expr(*ak.add(0), locals) };
-                    self.out.puts(b");\0".as_ptr());
+                    self.out.puts(b";\0".as_ptr());
                     self.out.putc(b'\n');
                     self.out.puts(b"__atomic_store(&\0".as_ptr());
                     unsafe { self.emit_expr(recv, locals) };
@@ -14041,26 +14200,57 @@ impl Lower {
                     self.out.puts(b"; })\0".as_ptr());
                     return;
                 }
-                /* swap */
-                self.out.puts(b"(\0".as_ptr());
-                unsafe { self.emit_expr(*ak.add(0), locals) };
-                self.out.puts(b");\0".as_ptr());
-                self.out.putc(b'\n');
-                self.out.puts(b"__atomic_exchange(&\0".as_ptr());
-                unsafe { self.emit_expr(recv, locals) };
-                self.out.puts(b", &\0".as_ptr());
-                self.out.put(tmp, tl);
-                self.out.puts(b", &\0".as_ptr());
-                /* the old value rides the same tmp: exchange reads old into
-                 * the same slot the desired was read from */
-                self.out.put(tmp, tl);
-                self.out.puts(b", \0".as_ptr());
-                self.out.put_u32(ord as u32);
-                self.out.puts(b");\0".as_ptr());
-                self.out.putc(b'\n');
-                self.out.put(tmp, tl);
-                self.out.puts(b"; })\0".as_ptr());
-                return;
+                /* swap: desired and old are SEPARATE objects — the builtin
+                 * contract forbids aliasing them; the old value rides its
+                 * own temp */
+                {
+                    let otmp = self.arena_tmp();
+                    let mut otl = unsafe { bput(otmp, 160, 0, b"__rsx_at\0".as_ptr(), 8) };
+                    let mut ocnt = self.atom_tmp_n;
+                    self.atom_tmp_n += 1;
+                    let mut odigs: [u8; 10] = [0; 10];
+                    let mut ond = 0usize;
+                    if ocnt == 0 {
+                        odigs[0] = b'0';
+                        ond = 1;
+                    } else {
+                        while ocnt > 0 && ond < 10 {
+                            odigs[ond] = b'0' + (ocnt % 10) as u8;
+                            ocnt /= 10;
+                            ond += 1;
+                        }
+                    }
+                    let mut oq = ond;
+                    while oq > 0 {
+                        oq -= 1;
+                        otl = unsafe { bput(otmp, 160, otl, &odigs[oq], 1) };
+                    }
+                    unsafe {
+                        *otmp.add(otl) = 0;
+                    }
+                    self.out.puts(b"uint32_t \0".as_ptr());
+                    self.out.put(otmp, otl);
+                    self.out.puts(b";\0".as_ptr());
+                    self.out.putc(b'\n');
+                    self.out.put(tmp, tl);
+                    self.out.puts(b" = \0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                    self.out.puts(b";\0".as_ptr());
+                    self.out.putc(b'\n');
+                    self.out.puts(b"__atomic_exchange(&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b", &\0".as_ptr());
+                    self.out.put(tmp, tl);
+                    self.out.puts(b", &\0".as_ptr());
+                    self.out.put(otmp, otl);
+                    self.out.puts(b", \0".as_ptr());
+                    self.out.put_u32(ord as u32);
+                    self.out.puts(b");\0".as_ptr());
+                    self.out.putc(b'\n');
+                    self.out.put(otmp, otl);
+                    self.out.puts(b"; })\0".as_ptr());
+                    return;
+                }
             }
         }
         /* `.fill(0)` / `.fill(byte)` on a fixed array — memset. The
@@ -15224,6 +15414,27 @@ impl Lower {
      * Returns the length. */
     unsafe fn opt_typedef_name(elem: *const u8, elen: usize, out: *mut u8, cap: usize) -> usize {
         let mut at = unsafe { bput(out, cap, 0, b"rsx_opt_\0".as_ptr(), 8) };
+        /* `<len>e` prefix — injective: two C spellings sanitize equal iff
+         * they are equal (same guard as tup_typedef_name) */
+        let mut ld = [0u8; 10];
+        let mut ln = 0usize;
+        let mut lc = elen;
+        if lc == 0 {
+            ld[0] = b'0';
+            ln = 1;
+        } else {
+            while lc > 0 && ln < 10 {
+                ld[ln] = b'0' + (lc % 10) as u8;
+                lc /= 10;
+                ln += 1;
+            }
+        }
+        let mut q = ln;
+        while q > 0 {
+            q -= 1;
+            at = unsafe { bput(out, cap, at, &ld[q], 1) };
+        }
+        at = unsafe { bput(out, cap, at, b"e\0".as_ptr(), 1) };
         let mut i = 0usize;
         while i < elen {
             let c = unsafe { *elem.add(i) };
@@ -15282,17 +15493,59 @@ impl Lower {
         slot
     }
 
-    /* Tuple typedef name: rsx_tuple_<elem0>_<elem1>_… — each element's C
-     * spelling sanitized to identifier characters (same rule as
-     * opt_typedef_name), elements joined by '_'. */
+    /* Tuple typedef name: rsx_tuple_<n>_<len0>e<elem0>_<len1>e<elem1>_…
+     * Each element's C spelling is sanitized to identifier chars and
+     * PREFIXED WITH ITS LENGTH (`<len>e`), so element boundaries are
+     * recoverable from the name itself: two signatures cannot render the
+     * same identifier (`(Foo_, Bar)` and `(Foo, _Bar)` both sanitized to
+     * `Foo__Bar` under the old join-only scheme — a real collision).
+     * The encoding is injective: the sanitized spellings are equal iff
+     * the C spellings are equal (see the negative test in __tests__.c). */
     unsafe fn tup_typedef_name(elems: *const [u8; 64], lens: *const usize, n: usize, out: *mut u8, cap: usize) -> usize {
         let mut at = unsafe { bput(out, cap, 0, b"rsx_tuple_\0".as_ptr(), 10) };
+        /* element count first: `rsx_tuple_2_...` */
+        let mut cd = [0u8; 10];
+        let mut cn = 0usize;
+        let mut cnt = n;
+        if cnt == 0 {
+            cd[0] = b'0';
+            cn = 1;
+        } else {
+            while cnt > 0 && cn < 10 {
+                cd[cn] = b'0' + (cnt % 10) as u8;
+                cnt /= 10;
+                cn += 1;
+            }
+        }
+        let mut q = cn;
+        while q > 0 {
+            q -= 1;
+            at = unsafe { bput(out, cap, at, &cd[q], 1) };
+        }
         let mut f = 0usize;
         while f < n {
-            if f > 0 {
-                at = unsafe { bput(out, cap, at, b"_\0".as_ptr(), 1) };
-            }
+            at = unsafe { bput(out, cap, at, b"_\0".as_ptr(), 1) };
             let elen = unsafe { *lens.add(f) };
+            /* `<len>e` prefix — the boundary marker */
+            let mut ld = [0u8; 10];
+            let mut ln = 0usize;
+            let mut lc = elen;
+            if lc == 0 {
+                ld[0] = b'0';
+                ln = 1;
+            } else {
+                while lc > 0 && ln < 10 {
+                    ld[ln] = b'0' + (lc % 10) as u8;
+                    lc /= 10;
+                    ln += 1;
+                }
+            }
+            let mut q2 = ln;
+            while q2 > 0 {
+                q2 -= 1;
+                at = unsafe { bput(out, cap, at, &ld[q2], 1) };
+            }
+            at = unsafe { bput(out, cap, at, b"e\0".as_ptr(), 1) };
             let elem = unsafe { (*elems.add(f)).as_ptr() };
             let mut i = 0usize;
             while i < elen {
@@ -15502,7 +15755,7 @@ impl Lower {
      * (rsx_opt_<elem>)? Returns the payload spelling pointer + length via
      * out (copied), or 0 when not that shape. */
     unsafe fn opt_typedef_elem(ct: *const u8, n: usize, out: *mut u8, cap: usize) -> usize {
-        if n < 9 {
+        if n < 10 {
             return 0;
         }
         let pre = b"rsx_opt_\0".as_ptr();
@@ -15513,15 +15766,31 @@ impl Lower {
             }
             i += 1;
         }
-        let elen = n - 8;
-        if elen == 0 || elen >= cap {
+        /* skip the `<len>e` prefix emitted by opt_typedef_name — parse the
+         * decimal, then the 'e', then the payload follows. The payload's
+         * length must equal the parsed len (a consistency check, not a
+         * guess: mismatched shape returns 0). */
+        let mut at = 8usize;
+        let mut plen: usize = 0;
+        let mut sawdigit = false;
+        while at < n && unsafe { *ct.add(at) } >= b'0' && unsafe { *ct.add(at) } <= b'9' {
+            plen = plen * 10 + (unsafe { *ct.add(at) } - b'0') as usize;
+            sawdigit = true;
+            at += 1;
+        }
+        if !sawdigit || at >= n || unsafe { *ct.add(at) } != b'e' {
+            return 0;
+        }
+        at += 1;
+        let rest = n - at;
+        if plen != rest || rest == 0 || rest >= cap {
             return 0;
         }
         unsafe {
-            core::ptr::copy_nonoverlapping(ct.add(8), out, elen);
-            *out.add(elen) = 0;
+            core::ptr::copy_nonoverlapping(ct.add(at), out, rest);
+            *out.add(rest) = 0;
         }
-        elen
+        rest
     }
 
     /* Does this STRUCT item carry the union marker ATTR? (from the `union`
@@ -16473,6 +16742,21 @@ impl Lower {
         if n == 0 || n > TUP_MAXF {
             return;
         }
+        /* A tuple element may itself be a struct-Option (`rsx_opt_<len>e..`)
+         * whose typedef is still pending — emit those FIRST, or the tuple
+         * body references an undeclared name (tuple-of-Option, e.g.
+         * `(Option<u32>, Option<u32>)`). The element IS the Option's
+         * typedef name, so the lookup is by name. */
+        {
+            let mut f0 = 0usize;
+            while f0 < n {
+                let a = s * TUP_MAXF + f0;
+                let elen = self.tup_lens[a];
+                let elem = self.tup_elems[a].as_ptr();
+                unsafe { self.opt_emit_by_name(elem, elen) };
+                f0 += 1;
+            }
+        }
         let tdn = self.arena_tmp();
         let base = self.tup_elems.as_ptr().add(s * TUP_MAXF);
         let blens = self.tup_lens.as_ptr().add(s * TUP_MAXF);
@@ -16495,6 +16779,49 @@ impl Lower {
         self.out.put(tdn, tdn_len);
         self.out.puts(b";\n\0".as_ptr());
         self.tup_done[s] = true;
+    }
+
+    /* Emit any still-pending struct-Option typedef whose RENDERED NAME
+     * equals `name` — a tuple-of-Option element references the Option by
+     * its typedef name (`rsx_opt_<len>e<elem>`), so the pending Option is
+     * looked up by name, not by payload. */
+    unsafe fn opt_emit_by_name(&mut self, name: *const u8, nlen: usize) {
+        if nlen == 0 || name.is_null() || nlen > 160 {
+            return;
+        }
+        let mut s = 0usize;
+        while s < self.opt_n {
+            if unsafe { self.opt_done[s] } {
+                s += 1;
+                continue;
+            }
+            let elem = self.opt_elems[s].as_ptr();
+            let elen = self.opt_lens[s];
+            let tdn = self.arena_tmp();
+            let tdn_len = unsafe { Lower::opt_typedef_name(elem, elen, tdn, 160) };
+            if tdn_len == nlen {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < tdn_len {
+                    if unsafe { *tdn.add(j) } != unsafe { *name.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    self.out.puts(b"typedef struct { \0".as_ptr());
+                    self.out.put(elem, elen);
+                    self.out.puts(b" _v; bool _has; } \0".as_ptr());
+                    self.out.put(tdn, tdn_len);
+                    self.out.puts(b";\n\0".as_ptr());
+                    unsafe {
+                        self.opt_done[s] = true;
+                    }
+                }
+            }
+            s += 1;
+        }
     }
 
     /* Emit pending tuple typedefs whose element spelling names the type

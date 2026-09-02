@@ -423,8 +423,7 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
         char diag[1024];
         jit_c_diag_begin(diag, sizeof(diag));
         tcc_set_error_func(s, NULL, jit_c_diag_cb);
-    }
-    for (i = 0; i < n_include_dirs; i++) {
+    }    for (i = 0; i < n_include_dirs; i++) {
         if (include_dirs[i] != NULL && include_dirs[i][0] != '\0') {
             tcc_add_include_path(s, include_dirs[i]);
         }

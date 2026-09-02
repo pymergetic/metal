@@ -507,8 +507,9 @@ static int32_t test_compile_nonzero_static_and_iflet_return(void) {
     if (!rsx_strstr(c_out, "static Tbl LIVE_TBL = (Tbl){")) {
         pm_util_mem_arena_destroy(arena); free(backing); return 144;
     }
-    /* the RUNNER cell is a zero Option — bare */
-    if (!rsx_strstr(c_out, "static rsx_opt_Runner RUNNER;")) {
+    /* the RUNNER cell is a zero Option — bare; the typedef name carries
+     * the injective `<len>e` encoding (`Runner` is 6 chars) */
+    if (!rsx_strstr(c_out, "static rsx_opt_6eRunner RUNNER;")) {
         pm_util_mem_arena_destroy(arena); free(backing); return 145;
     }
     /* no doubled return from the if-let tail */
@@ -1271,6 +1272,512 @@ static int32_t test_introspection(void) {
     return 0;
 }
 
+/* --- atomic runtime: linked execution of RSX-generated + TCC-compiled code ---
+ * Audit items:
+ * (1) store must assign the desired value to the value tmp BEFORE
+ *     __atomic_store reads it;
+ * (2) swap's desired and old must be separate objects; the expression must
+ *     yield the OLD value with nonzero distinct operands at runtime;
+ * (3) a non-atomic receiver naming .store/.load/.swap must REFUSE, never
+ *     miscompile to __atomic_* builtins on a plain field.
+ * Proven by: rsx compile -> in-kernel TCC object -> ELF link -> calling the
+ * exported fn straight out of the linked image. */
+
+static const char ATOMIC_RT_SRC[] =
+    "use core::sync::atomic::{AtomicU32, Ordering};\n"
+    "#[repr(C)]\n"
+    "pub struct T { pub a: AtomicU32 }\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn rsx_at_rt_main() -> u32 {\n"
+    "    let t = T { a: AtomicU32::new(0) };\n"
+    "    t.a.store(0x12345678, Ordering::SeqCst);\n"
+    "    let old: u32 = t.a.swap(0x87654321, Ordering::SeqCst);\n"
+    "    let fin: u32 = t.a.load(Ordering::SeqCst);\n"
+    "    if old != 0x12345678 { return 0xDEAD0001; }\n"
+    "    if fin != 0x87654321 { return 0xDEAD0002; }\n"
+    "    0x600D600D\n"
+    "}\n";
+
+/* negative: a plain u32 field named .store must refuse */
+static const char ATOMIC_NEG_SRC[] =
+    "use core::sync::atomic::{AtomicU32, Ordering};\n"
+    "#[repr(C)]\n"
+    "pub struct P { pub v: u32 }\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn rsx_at_neg_main(p: *mut P) -> u32 {\n"
+    "    (*p).v.store(0x12345678, Ordering::SeqCst);\n"
+    "    0\n"
+    "}\n";
+
+static int32_t test_atomic_runtime_linked(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    void *backing = NULL, *obacking = NULL;
+    pm_util_mem_arena_t *arena = NULL, *oarena = NULL;
+    char *c = NULL;
+    size_t c_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    char oerr[256];
+    int32_t rc;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    pm_metal_build_unit_t unit;
+    pm_metal_build_artifact_t art;
+    uint8_t *objs[1];
+    size_t lens[1];
+    uint32_t (*l_main)(void);
+    uint32_t r;
+
+    /* --- (3) negative: non-atomic receiver must REFUSE --- */
+    backing = malloc(1u << 24);
+    if (!backing) return 180;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (!arena) { free(backing); return 181; }
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_rsx_compile(arena, ATOMIC_NEG_SRC,
+                                  strlen(ATOMIC_NEG_SRC),
+                                  &c, &c_len, err, sizeof(err));
+    if (rc == 0) {
+        /* miscompile slipped through: .store on a plain u32 compiled */
+        pm_util_mem_arena_destroy(arena); free(backing);
+        return 182;
+    }
+    if (strstr(err, "non-atomic receiver") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing);
+        return 183;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    arena = NULL;
+
+    /* --- (1)(2) positive: codegen shape + linked execution --- */
+    backing = malloc(1u << 24);
+    if (!backing) return 184;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (!arena) { free(backing); return 185; }
+    memset(err, 0, sizeof(err));
+    c = NULL; c_len = 0;
+    rc = pm_metal_jit_rsx_compile(arena, ATOMIC_RT_SRC,
+                                  strlen(ATOMIC_RT_SRC),
+                                  &c, &c_len, err, sizeof(err));
+    if (rc != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 186;
+    }
+    if (c == NULL || c_len < 200) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 187;
+    }
+
+    /* (1) the desired value must be assigned to the tmp BEFORE
+     * __atomic_store reads it: `__rsx_atN = 0x12345678;` must appear
+     * before `__atomic_store(...)` in the same statement expression. */
+    {
+        const char *st = strstr(c, "__atomic_store");
+        const char *asg = NULL;
+        const char *p;
+        if (st == NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 188;
+        }
+        p = st;
+        while (p > c) {
+            if (p >= c + 14
+                && memcmp(p - 14, " = 0x12345678;", 14) == 0) {
+                asg = p - 14;
+                break;
+            }
+            p--;
+        }
+        if (asg == NULL || asg > st) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 189;
+        }
+        /* the tmp assigned must be the tmp whose address is passed */
+        {
+            const char *amp = strstr(st, "&__rsx_at");
+            char tmp_at[32];
+            size_t al = 0;
+            char asg_at[32];
+            size_t bl = 0;
+            if (amp == NULL) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 190;
+            }
+            amp += 1; /* skip the & — copy the full `__rsx_atN` name */
+            while (*amp != 0 && *amp != ',' && *amp != ' '
+                   && al < sizeof(tmp_at) - 1) {
+                tmp_at[al++] = *amp++;
+            }
+            tmp_at[al] = 0;
+            /* walk back from the assignment to its LHS start: scan back
+             * over the digits to the `__rsx_at` prefix */
+            p = asg;
+            while (p > c && *(p - 1) >= '0' && *(p - 1) <= '9') p--;
+            if (p < c + 8 || memcmp(p - 8, "__rsx_at", 8) != 0) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 191;
+            }
+            p -= 8;
+            while (p < asg && bl < sizeof(asg_at) - 1) asg_at[bl++] = *p++;
+            asg_at[bl] = 0;
+            if (strcmp(asg_at, tmp_at) != 0) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 192;
+            }
+        }
+    }
+
+    /* (2) exchange must use two DISTINCT tmp names — desired and old
+     * never share storage (the builtin contract forbids aliasing). */
+    {
+        const char *ex = strstr(c, "__atomic_exchange");
+        const char *d1;
+        const char *d2;
+        char t1[32];
+        size_t l1 = 0;
+        if (ex == NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 193;
+        }
+        d1 = strstr(ex, "&__rsx_at");
+        if (d1 == NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 194;
+        }
+        d1 += 9;
+        while (d1[l1] >= '0' && d1[l1] <= '9' && l1 < sizeof(t1) - 1) l1++;
+        memcpy(t1, d1, l1);
+        t1[l1] = 0;
+        d2 = strstr(d1 + l1, "&__rsx_at");
+        if (d2 == NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 195;
+        }
+        d2 += 9;
+        if (strncmp(d2, t1, l1 + 1) == 0) {
+            /* same tmp passed as desired AND old — aliasing */
+            pm_util_mem_arena_destroy(arena); free(backing); return 196;
+        }
+    }
+
+    /* linked execution: TCC object -> ELF link -> call from the image */
+    obacking = malloc(1u << 24);
+    if (!obacking) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 197;
+    }
+    oarena = pm_util_mem_arena_create(obacking, 1u << 24);
+    if (!oarena) {
+        pm_util_mem_arena_destroy(arena); free(backing); free(obacking);
+        return 198;
+    }
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_jit_c_object_compile(oarena, c, c_len, &obj, &obj_len,
+                                       oerr, sizeof(oerr));
+    if (rc != 0) {
+        if (strstr(oerr, "no native object output on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0; /* polite seat refusal — skip */
+        }
+        fprintf(stderr, "atomic_rt: object compile failed: %s\n", oerr);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 199;
+    }
+    memset(&unit, 0, sizeof(unit));
+    snprintf(unit.fqn, sizeof(unit.fqn), "%s", "rsx.atomic.rt");
+    objs[0] = obj;
+    lens[0] = obj_len;
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_build_link(oarena, &unit, objs, lens, 1, &art,
+                             oerr, sizeof(oerr));
+    if (rc != PM_METAL_BUILD_OK) {
+        if (strstr(oerr, "no ELF loader on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0; /* polite seat refusal — skip */
+        }
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 200;
+    }
+    l_main = (uint32_t (*)(void))
+        pm_metal_build_artifact_lookup(&art, "rsx_at_rt_main");
+    if (l_main == NULL) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 201;
+    }
+    r = l_main();
+    pm_metal_build_artifact_destroy(&art);
+    pm_util_mem_arena_destroy(arena);
+    pm_util_mem_arena_destroy(oarena);
+    free(backing);
+    free(obacking);
+    /* old == 0x12345678 AND fin == 0x87654321, else the linked code
+     * reports the mismatch itself (0xDEAD0001/2) */
+    if (r != 0x600D600D) return 202;
+    return 0;
+#else
+    /* No native TCC object output / no ELF loader on this seat — skip */
+    return 0;
+#endif
+}
+
+/* --- tuple typedef collision ---------------------------------------------
+ * Audit item 5: the OLD naming scheme (elements sanitized then joined
+ * by '_') is NOT injective — `(Foo_, Bar)` and `(Foo, _Bar)` both
+ * sanitized to `rsx_tuple_Foo__Bar`, producing two different C types
+ * with one typedef name (a hard C error, or a type-confused destructure
+ * via tup_find). The NEW scheme prefixes each element with `<len>e` and
+ * the element count, so boundaries are recoverable and the map
+ * signature -> identifier is injective. This test constructs the exact
+ * colliding pair and proves the emitted typedef names differ. */
+
+static const char TUP_COLLIDE_SRC[] =
+    "#[repr(C)]\n"
+    "pub struct Foo_ { pub x: u32 }\n"
+    "#[repr(C)]\n"
+    "pub struct Foo { pub x: u32 }\n"
+    "#[repr(C)]\n"
+    "pub struct Bar { pub x: u32 }\n"
+    "#[repr(C)]\n"
+    "pub struct _Bar { pub x: u32 }\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn make_a() -> (Foo_, Bar) {\n"
+    "    (Foo_ { x: 1 }, Bar { x: 2 })\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn make_b() -> (Foo, _Bar) {\n"
+    "    (Foo { x: 3 }, _Bar { x: 4 })\n"
+    "}\n";
+
+static int32_t test_tuple_collision(void) {
+    void *backing = NULL;
+    pm_util_mem_arena_t *arena = NULL;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    int32_t rc;
+    char name_a[64];
+    char name_b[64];
+    const char *ta;
+    const char *tb;
+    size_t la;
+    size_t lb;
+    const char *t;
+
+    backing = malloc(1u << 24);
+    if (!backing) return 210;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (!arena) { free(backing); return 211; }
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_rsx_compile(arena, TUP_COLLIDE_SRC,
+                                  strlen(TUP_COLLIDE_SRC),
+                                  &c_out, &c_out_len, err, sizeof(err));
+    if (rc != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 212;
+    }
+    if (c_out == NULL || c_out_len < 200) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 213;
+    }
+    /* extract the two tuple typedef names: `rsx_tuple_<N>_<len>e...` */
+    ta = NULL; tb = NULL;
+    t = c_out;
+    while ((t = strstr(t, "rsx_tuple_")) != NULL) {
+        if (ta == NULL) { ta = t; } else if (tb == NULL) { tb = t; break; }
+        t++;
+    }
+    if (ta == NULL || tb == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 214;
+    }
+    la = 0;
+    while (ta[la] != 0 && ta[la] != ';' && ta[la] != ' ' && la < sizeof(name_a) - 1) {
+        name_a[la] = ta[la]; la++;
+    }
+    name_a[la] = 0;
+    lb = 0;
+    while (tb[lb] != 0 && tb[lb] != ';' && tb[lb] != ' ' && lb < sizeof(name_b) - 1) {
+        name_b[lb] = tb[lb]; lb++;
+    }
+    name_b[lb] = 0;
+    /* the two signatures must render DISTINCT identifiers */
+    if (strcmp(name_a, name_b) == 0) {
+        fprintf(stderr, "tuple collision: %s == %s\n", name_a, name_b);
+        pm_util_mem_arena_destroy(arena); free(backing); return 215;
+    }
+    /* and each must carry its length-encoded elements:
+     * (Foo_, Bar) -> rsx_tuple_2_4eFoo__3eBar
+     * (Foo, _Bar) -> rsx_tuple_2_3eFoo_4e_Bar */
+    if (strcmp(name_a, "rsx_tuple_2_4eFoo__3eBar") != 0) {
+        fprintf(stderr, "tuple a: got %s\n", name_a);
+        pm_util_mem_arena_destroy(arena); free(backing); return 216;
+    }
+    if (strcmp(name_b, "rsx_tuple_2_3eFoo_4e_Bar") != 0) {
+        fprintf(stderr, "tuple b: got %s\n", name_b);
+        pm_util_mem_arena_destroy(arena); free(backing); return 217;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/* --- tuple let-else ordering: runtime prove --------------------------------
+ * Audit item 4: in the generated C, the `._has` test must run BEFORE any
+ * `._v` payload read for tuple-of-Option let-else. Two things proven
+ * here: (a) the codegen order — the `if (... ._has ...)` block precedes
+ * the payload copies in the emitted C; (b) generated + TCC-compiled +
+ * ELF-linked execution: the Some path binds both payloads, each None
+ * path runs the diverging else-block (never the binds). */
+
+static const char LET_ELSE_RT_SRC[] =
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn le_pick(which: u32) -> (Option<u32>, Option<u32>) {\n"
+    "    if which == 0 { return (None, None); }\n"
+    "    if which == 1 { return (Some(0xAAA), None); }\n"
+    "    if which == 2 { return (None, Some(0xBBB)); }\n"
+    "    (Some(0xAAA), Some(0xBBB))\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn le_run(which: u32) -> u32 {\n"
+    "    let (Some(a), Some(b)) = le_pick(which) else { return 0xDEAD0000 + which; };\n"
+    "    if a != 0xAAA { return 0xDEAD1000; }\n"
+    "    if b != 0xBBB { return 0xDEAD2000; }\n"
+    "    0x600D600D\n"
+    "}\n";
+
+static int32_t test_let_else_order_linked(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    void *backing = NULL, *obacking = NULL;
+    pm_util_mem_arena_t *arena = NULL, *oarena = NULL;
+    char *c = NULL;
+    size_t c_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    char oerr[256];
+    int32_t rc;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    pm_metal_build_unit_t unit;
+    pm_metal_build_artifact_t art;
+    uint8_t *objs[1];
+    size_t lens[1];
+    uint32_t (*l_run)(uint32_t);
+    uint32_t r;
+
+    backing = malloc(1u << 24);
+    if (!backing) return 220;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (!arena) { free(backing); return 221; }
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_rsx_compile(arena, LET_ELSE_RT_SRC,
+                                  strlen(LET_ELSE_RT_SRC),
+                                  &c, &c_len, err, sizeof(err));
+    if (rc != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 222;
+    }
+    /* (a) codegen order: the else-block (which contains the `return`)
+     * must appear BEFORE the payload copies in the emitted C. The
+     * let-else emits: temp decl, if-test + else-block, then binds. */
+    {
+        const char *tmp_decl = strstr(c, "rsx_tuple_");
+        const char *test;
+        const char *ret_else;
+        const char *bind_a;
+        if (tmp_decl == NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 223;
+        }
+        /* the if-test line: `if (!__rsx_tupN._0._has || ... */
+        test = strstr(c, "._has");
+        if (test == NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 224;
+        }
+        /* the diverging else return inside the if-block */
+        ret_else = strstr(c, "0xDEAD0000");
+        if (ret_else == NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 225;
+        }
+        /* the first payload copy: `= __rsx_tupN._0._v;` */
+        bind_a = strstr(c, "._v;");
+        if (bind_a == NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 226;
+        }
+        /* ORDER: test < ret_else < bind_a — no payload read before the
+         * ._has checks gate the else-block */
+        if (!(test < ret_else && ret_else < bind_a)) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 227;
+        }
+    }
+    /* (b) linked execution: all four paths */
+    obacking = malloc(1u << 24);
+    if (!obacking) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 228;
+    }
+    oarena = pm_util_mem_arena_create(obacking, 1u << 24);
+    if (!oarena) {
+        pm_util_mem_arena_destroy(arena); free(backing); free(obacking);
+        return 229;
+    }
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_jit_c_object_compile(oarena, c, c_len, &obj, &obj_len,
+                                       oerr, sizeof(oerr));
+    if (rc != 0) {
+        if (strstr(oerr, "no native object output on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0; /* polite seat refusal — skip */
+        }
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 230;
+    }
+    memset(&unit, 0, sizeof(unit));
+    snprintf(unit.fqn, sizeof(unit.fqn), "%s", "rsx.letelse.rt");
+    objs[0] = obj;
+    lens[0] = obj_len;
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_build_link(oarena, &unit, objs, lens, 1, &art,
+                             oerr, sizeof(oerr));
+    if (rc != PM_METAL_BUILD_OK) {
+        if (strstr(oerr, "no ELF loader on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0; /* polite seat refusal — skip */
+        }
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 231;
+    }
+    l_run = (uint32_t (*)(uint32_t))
+        pm_metal_build_artifact_lookup(&art, "le_run");
+    if (l_run == NULL) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 232;
+    }
+    /* Some path: both payloads bound, checks pass */
+    r = l_run(3);
+    if (r != 0x600D600D) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 233;
+    }
+    /* None paths: the diverging else ran (never the binds) */
+    r = l_run(0);
+    if (r != 0xDEAD0000) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 234;
+    }
+    r = l_run(1);
+    if (r != 0xDEAD0001) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 235;
+    }
+    r = l_run(2);
+    if (r != 0xDEAD0002) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 236;
+    }
+    pm_metal_build_artifact_destroy(&art);
+    pm_util_mem_arena_destroy(arena);
+    pm_util_mem_arena_destroy(oarena);
+    free(backing);
+    free(obacking);
+    return 0;
+#else
+    /* No native TCC object output / no ELF loader on this seat — skip */
+    return 0;
+#endif
+}
+
 /* --- registration ------------------------------------------------------ */
 
 /* RSX_TEST_VERBOSE=1 prints one line per subtest with its rc, so a FAIL from
@@ -1309,6 +1816,9 @@ static int32_t pm_metal_jit_rsx_tests(void) {
     rc = rsx_run_named("self_host", test_self_host);               if (rc) return rc;
     rc = rsx_run_named("self_host_object", test_self_host_object); if (rc) return rc;
     rc = rsx_run_named("self_host_link", test_self_host_link);    if (rc) return rc;
+    rc = rsx_run_named("atomic_runtime_linked", test_atomic_runtime_linked); if (rc) return rc;
+    rc = rsx_run_named("tuple_collision", test_tuple_collision);  if (rc) return rc;
+    rc = rsx_run_named("let_else_order_linked", test_let_else_order_linked); if (rc) return rc;
     rc = rsx_run_named("introspection", test_introspection);      if (rc) return rc;
     return 0;
 }
