@@ -4,6 +4,7 @@
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/http/asgi.h"
 #include "pymergetic/wasmmod/guest.h"
+#include "pymergetic/wasmmod/registry.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -390,6 +391,110 @@ static int32_t case_build_face(void) {
     return 0;
 }
 
+/* Export manifest: expected == registered. A public face may never
+ * disappear silently (the SIG_CAP dark-export audit): every refused
+ * registration lands in the registry's loud-refusal ring, so a non-empty
+ * ring at test time is a manifest failure naming the culprit. Plus the
+ * faces that were dark at the accepted baseline must resolve by name. */
+static int32_t case_export_manifest(void) {
+    uint32_t n_ref;
+    uint32_t i;
+
+    /* one registration per expected face — the ring is the refusal
+     * manifest; anything in it is a face the tree promised and the
+     * registry refused (name/sig over cap, table full, store fail) */
+    n_ref = pm_wasmmod_registry_refusal_count();
+    if (n_ref != 0) {
+        for (i = 0; i < n_ref; i++) {
+            uint8_t fqn[72];
+            uint32_t fqn_len = sizeof(fqn);
+            uint8_t name[100];
+            uint32_t name_len = sizeof(name);
+            uint8_t reason = 0;
+            uint32_t count = 0;
+            if (pm_wasmmod_registry_refusal_at(i, fqn, &fqn_len, name,
+                    &name_len, &reason, &count) == 1) {
+                fprintf(stderr, "metal.inspect test: refused face %.*s :: "
+                    "%.*s (reason %u, x%u)\n",
+                    (int)fqn_len, fqn, (int)name_len, name,
+                    (unsigned)reason, (unsigned)count);
+            }
+        }
+        return fail("refused registrations in the manifest");
+    }
+
+    /* the previously dark faces resolve by name — a signature over the
+     * cap used to refuse these registrations silently, so the faces
+     * existed in source but never appeared in the registry */
+    {
+        static const struct {
+            const char *fqn;
+            const char *name;
+        } must_exist[] = {
+            /* the build card's complete public face (26 exports: the
+             * Phase-5 set of 25 + actor_release from this audit). The
+             * count check below asserts expected == registered — a new
+             * export that forgets its must_exist row fails, and a removed
+             * export leaves a stale row failing too. */
+            { "pymergetic.metal.build", "pm_metal_build_unit_compile" },
+            { "pymergetic.metal.build", "pm_metal_build_actor_submit" },
+            { "pymergetic.metal.build", "pm_metal_build_actor_run" },
+            { "pymergetic.metal.build", "pm_metal_build_actor_step" },
+            { "pymergetic.metal.build", "pm_metal_build_actor_cancel" },
+            { "pymergetic.metal.build", "pm_metal_build_actor_depth" },
+            { "pymergetic.metal.build", "pm_metal_build_actor_release" },
+            { "pymergetic.metal.build", "pm_metal_build_dag_run" },
+            { "pymergetic.metal.build", "pm_metal_build_compile_source" },
+            { "pymergetic.metal.build", "pm_metal_build_compile_source_target" },
+            { "pymergetic.metal.build", "pm_metal_build_discover" },
+            { "pymergetic.metal.build", "pm_metal_build_graph_resolve" },
+            { "pymergetic.metal.build", "pm_metal_build_link" },
+            { "pymergetic.metal.build", "pm_metal_build_note_add" },
+            { "pymergetic.metal.build", "pm_metal_build_note_has" },
+            { "pymergetic.metal.build", "pm_metal_build_notes_query" },
+            { "pymergetic.metal.build", "pm_metal_build_ledger_path" },
+            { "pymergetic.metal.build", "pm_metal_build_record_find" },
+            { "pymergetic.metal.build", "pm_metal_build_record_reset" },
+            { "pymergetic.metal.build", "pm_metal_build_unit_parse" },
+            { "pymergetic.metal.build", "pm_metal_build_at" },
+            { "pymergetic.metal.build", "pm_metal_build_at_info" },
+            { "pymergetic.metal.build", "pm_metal_build_at_ast" },
+            { "pymergetic.metal.build", "pm_metal_build_artifact_lookup" },
+            { "pymergetic.metal.build", "pm_metal_build_artifact_call" },
+            { "pymergetic.metal.build", "pm_metal_build_artifact_destroy" },
+            /* the Phase-5 recorded blocker, now registered (SIG_CAP fix):
+             * the wasmmod nativecall µPy path resolves this by name */
+            { "pymergetic.metal.jit.c", "pm_metal_jit_c_object_compile_target" },
+        };
+        uint32_t k;
+        for (k = 0; k < (uint32_t)(sizeof(must_exist) / sizeof(must_exist[0])); k++) {
+            if (pm_wasmmod_registry_resolve_native(
+                    (const uint8_t *)must_exist[k].fqn,
+                    (uint32_t)strlen(must_exist[k].fqn),
+                    (const uint8_t *)must_exist[k].name,
+                    (uint32_t)strlen(must_exist[k].name)) == NULL) {
+                fprintf(stderr, "metal.inspect test: dark face %s :: %s\n",
+                    must_exist[k].fqn, must_exist[k].name);
+                return fail("expected export missing from the registry");
+            }
+        }
+        /* expected == registered, exactly: the build card's face is 26
+         * exports (the 25 of Phase 5 + actor_release). A 27th export
+         * means a new face the manifest does not know; a lower count
+         * means a registration refused. */
+        {
+            uint32_t reg = pm_wasmmod_registry_export_count(
+                (const uint8_t *)"pymergetic.metal.build", 22u);
+            if (reg != 26u) {
+                fprintf(stderr, "metal.inspect test: build face %u "
+                    "registered, 26 expected\n", (unsigned)reg);
+                return fail("build export count != manifest");
+            }
+        }
+    }
+    return 0;
+}
+
 int32_t pm_metal_inspect_tests(void) {
     if (case_handle() != 0) {
         return 1;
@@ -401,6 +506,9 @@ int32_t pm_metal_inspect_tests(void) {
         return 1;
     }
     if (case_build_face() != 0) {
+        return 1;
+    }
+    if (case_export_manifest() != 0) {
         return 1;
     }
     return 0;
