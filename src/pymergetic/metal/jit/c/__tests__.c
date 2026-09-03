@@ -207,6 +207,118 @@ static int32_t test_object_compile_target(void) {
 #endif
 }
 
+/* --- diagnostic capture: invalid source names the cause --------------------
+ * A refused compile must fold TCC's own diagnostic (file:line + message)
+ * into errbuf, so the refusal names the real cause — never a bare
+ * "compile failed" with the reason lost. */
+
+static int32_t test_diag_invalid_source(void) {
+#if PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    void *backing = malloc(1u << 24);
+    pm_util_mem_arena_t *arena;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    char err[256];
+    static const char *bad = "int diag_probe(v) { return undeclared_name; }\n";
+    int32_t rc;
+
+    if (!backing) return 50;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (!arena) { free(backing); return 51; }
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_c_object_compile_opts(arena, bad, strlen(bad),
+        NULL, 0, NULL, 0, &obj, &obj_len, err, sizeof(err));
+    if (rc == 0) {
+        /* compiled: TCC accepted an undeclared identifier — wrong (but a
+         * compiler change, not a diag change; still a refusal expected) */
+        pm_util_mem_arena_destroy(arena); free(backing); return 52;
+    }
+    /* the refusal must name the cause, not just the stage */
+    if (strstr(err, "undeclared") == NULL) {
+        fprintf(stderr, "diag invalid: err='%s'\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 53;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
+/* --- diagnostic isolation: a refused compile leaves no residue --------------
+ * The capture is per-call (opaque pointer): a refused compile must not
+ * poison the next one. Refuse, then compile GOOD source in the same
+ * arena — the good compile must succeed and its errbuf must stay clean.
+ * The old globals failed this shape under reentrancy: the second call's
+ * capture inherited the first's tail (or wrote through a dangling
+ * pointer into the first call's exited frame). */
+
+static int32_t test_diag_isolation(void) {
+#if PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    void *backing = malloc(1u << 24);
+    pm_util_mem_arena_t *arena;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    char err[256];
+    static const char *bad = "int iso_bad( { return 0; }\n";
+    static const char *good = "int iso_good(int v) { return v + 1; }\n";
+    int32_t rc;
+
+    if (!backing) return 60;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (!arena) { free(backing); return 61; }
+
+    /* 1. refused compile: malformed source */
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_c_object_compile_opts(arena, bad, strlen(bad),
+        NULL, 0, NULL, 0, &obj, &obj_len, err, sizeof(err));
+    if (rc == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 62;
+    }
+    if (err[0] == '\0') {
+        pm_util_mem_arena_destroy(arena); free(backing); return 63;
+    }
+
+    /* 2. good compile immediately after: must succeed with a clean errbuf */
+    memset(err, 0, sizeof(err));
+    obj = NULL;
+    obj_len = 0;
+    rc = pm_metal_jit_c_object_compile_opts(arena, good, strlen(good),
+        NULL, 0, NULL, 0, &obj, &obj_len, err, sizeof(err));
+    if (rc != 0) {
+        fprintf(stderr, "diag isolation: good compile refused: %s\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 64;
+    }
+    if (err[0] != '\0') {
+        fprintf(stderr, "diag isolation: residue in errbuf: '%s'\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 65;
+    }
+    if (obj == NULL || obj[0] != 0x7f) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 66;
+    }
+
+    /* 3. a second refusal right after a success: still names its cause */
+    memset(err, 0, sizeof(err));
+    obj = NULL;
+    obj_len = 0;
+    rc = pm_metal_jit_c_object_compile_opts(arena, bad, strlen(bad),
+        NULL, 0, NULL, 0, &obj, &obj_len, err, sizeof(err));
+    if (rc == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 67;
+    }
+    if (err[0] == '\0') {
+        pm_util_mem_arena_destroy(arena); free(backing); return 68;
+    }
+
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 static int32_t pm_metal_jit_c_tests(void) {
     int32_t rc;
     rc = test_compile_alloc();
@@ -220,6 +332,10 @@ static int32_t pm_metal_jit_c_tests(void) {
     rc = test_object_self_host_tcc();
     if (rc) return rc;
     rc = test_object_compile_target();
+    if (rc) return rc;
+    rc = test_diag_invalid_source();
+    if (rc) return rc;
+    rc = test_diag_isolation();
     if (rc) return rc;
     return 0;
 }

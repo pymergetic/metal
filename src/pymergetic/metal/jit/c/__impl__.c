@@ -88,6 +88,7 @@ static int wasm_tcc_compile_string(void *s, const char *b) { return tcc_compile_
 static void wasm_tcc_define_symbol(void *s, const char *sym, const char *val) { tcc_define_symbol((TCCState *)s, sym, val); }
 static void wasm_tcc_set_realloc(void *f) { tcc_set_realloc((TCCReallocFunc *)f); }
 static void wasm_tcc_free(void *p) { tcc_free(p); }
+static void wasm_tcc_set_error_func(void *s, void *opaque, TCCErrorFunc *cb) { tcc_set_error_func((TCCState *)s, opaque, cb); }
 static int wasm_build_mod(uint8_t **out_buf, int *out_len) { return wasm_build_module(out_buf, out_len); }
 static void wasm_release_bufs(void) { wasm_release_buffers(); }
 #else
@@ -105,6 +106,7 @@ extern int pm_tccw_tcc_compile_string(void *s, const char *b);
 extern void pm_tccw_tcc_define_symbol(void *s, const char *sym, const char *val);
 extern void pm_tccw_tcc_set_realloc(void *f);
 extern void pm_tccw_tcc_free(void *ptr);
+extern void pm_tccw_tcc_set_error_func(void *s, void *opaque, TCCErrorFunc *cb);
 extern int pm_tccw_wasm_build_module(uint8_t **out_buf, int *out_len);
 extern void pm_tccw_wasm_release_buffers(void);
 static void *wasm_tcc_new(void) { return pm_tccw_tcc_new(); }
@@ -117,6 +119,7 @@ static int wasm_tcc_compile_string(void *s, const char *b) { return pm_tccw_tcc_
 static void wasm_tcc_define_symbol(void *s, const char *sym, const char *val) { pm_tccw_tcc_define_symbol(s, sym, val); }
 static void wasm_tcc_set_realloc(void *f) { pm_tccw_tcc_set_realloc(f); }
 static void wasm_tcc_free(void *p) { pm_tccw_tcc_free(p); }
+static void wasm_tcc_set_error_func(void *s, void *opaque, TCCErrorFunc *cb) { pm_tccw_tcc_set_error_func(s, opaque, cb); }
 static int wasm_build_mod(uint8_t **out_buf, int *out_len) { return pm_tccw_wasm_build_module(out_buf, out_len); }
 static void wasm_release_bufs(void) { pm_tccw_wasm_release_buffers(); }
 #endif
@@ -247,6 +250,96 @@ void pm_metal_jit_c_result_free(pm_util_mem_arena_t *arena, pm_metal_jit_c_resul
     (void)arena; (void)r;
 }
 
+#if PM_HAS_TCC
+/* ---- diagnostic capture (shared by both object paths) ---------------------
+ * TCC's error callback writes file:line + message lines. The capture is a
+ * caller-owned struct passed as the callback's opaque pointer: no module
+ * globals, so two compiles in flight never corrupt each other's capture and
+ * the buffer's lifetime is exactly the TCC invocation's. */
+
+typedef struct {
+    char *buf;      /* capture buffer (caller frame, whole invocation) */
+    size_t len;     /* retained bytes (always NUL-terminated) */
+    size_t max;     /* capacity of buf */
+} jit_c_diag_t;
+
+static void jit_c_diag_cb(void *opaque, const char *msg) {
+    jit_c_diag_t *d = (jit_c_diag_t *)opaque;
+    size_t n;
+    if (d == NULL || msg == NULL || d->buf == NULL || d->max == 0) return;
+    /* Keep only the most recent lines: TCC emits include-stack prefixes
+     * first and the error line last, so a full buffer would evict the
+     * cause. Roll the buffer when this line does not fit. */
+    n = strlen(msg);
+    if (n >= d->max - 1) {
+        /* a single line longer than the buffer: keep its tail */
+        d->len = 0;
+        memcpy(d->buf, msg + (n - (d->max - 2)), d->max - 2);
+        d->len = d->max - 2;
+        d->buf[d->len++] = '\n';
+        d->buf[d->len] = '\0';
+        return;
+    }
+    if (d->len + n + 1 >= d->max) {
+        /* drop the oldest lines until the new one fits */
+        size_t need = n + 2;
+        size_t drop = 0;
+        while (d->len - drop >= need && drop < d->len) {
+            /* advance one line */
+            size_t adv = drop;
+            while (adv < d->len && d->buf[adv] != '\n') {
+                adv++;
+            }
+            if (adv < d->len) adv++;
+            drop = adv;
+        }
+        if (drop > 0 && drop < d->len) {
+            memmove(d->buf, d->buf + drop, d->len - drop);
+            d->len -= drop;
+        } else if (drop >= d->len) {
+            d->len = 0;
+        }
+    }
+    if (d->len + n + 1 < d->max) {
+        memcpy(d->buf + d->len, msg, n);
+        d->len += n;
+        d->buf[d->len++] = '\n';
+        d->buf[d->len] = '\0';
+    }
+}
+
+/* Fold the captured diagnostics into errbuf (kept when non-empty; the
+ * "compile failed" prefix stays so callers still see the stage). TCC
+ * diagnostics end with the error line, so when the whole capture does
+ * not fit, keep the tail — the last lines carry the cause. */
+static void jit_c_obj_err_diag(char *errbuf, size_t errbuf_len,
+    const char *msg, const jit_c_diag_t *d) {
+    if (errbuf == NULL || errbuf_len == 0) return;
+    if (d != NULL && d->buf != NULL && d->buf[0] != '\0') {
+        size_t msg_len = strlen(msg);
+        size_t room = errbuf_len > msg_len + 2
+            ? errbuf_len - msg_len - 2 : 0;
+        const char *diag = d->buf;
+        size_t skip = 0;
+        if (d->len + msg_len + 2 > errbuf_len) {
+            if (d->len > room) {
+                skip = d->len - room;
+                /* advance to the next line so the tail starts clean */
+                while (diag[skip] != '\0' && diag[skip] != '\n'
+                    && skip < d->len) {
+                    skip++;
+                }
+                if (skip < d->len) skip++;
+            }
+            diag = d->buf + skip;
+        }
+        snprintf(errbuf, errbuf_len, "%s: %s", msg, diag);
+    } else {
+        snprintf(errbuf, errbuf_len, "%s", msg);
+    }
+}
+#endif /* PM_HAS_TCC */
+
 #if PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
 #define PM_METAL_JIT_C_OBJECT_PATH 1
 /* Object path (multi-object build): compile to ET_REL .o via tcc_output_file.
@@ -259,111 +352,6 @@ static void jit_c_obj_err(char *errbuf, size_t errbuf_len, const char *msg) {
     snprintf(errbuf, errbuf_len, "%s", msg);
 }
 
-/* Capture TCC's own diagnostics so a refused compile names the real cause
- * (file:line + message), not just "compile failed". The callback receives
- * the raw message; the retained prefix survives into errbuf. */
-static char *s_jit_c_diag;
-static size_t s_jit_c_diag_len;
-static size_t s_jit_c_diag_max;
-
-static void jit_c_diag_cb(void *opaque, const char *msg) {
-    size_t n;
-    (void)opaque;
-    if (msg == NULL || s_jit_c_diag == NULL || s_jit_c_diag_max == 0) return;
-    /* Keep only the most recent lines: TCC emits include-stack prefixes
-     * first and the error line last, so a full buffer would evict the
-     * cause. Roll the buffer when this line does not fit. */
-    n = strlen(msg);
-    if (n >= s_jit_c_diag_max - 1) {
-        /* a single line longer than the buffer: keep its tail */
-        s_jit_c_diag_len = 0;
-        memcpy(s_jit_c_diag, msg + (n - (s_jit_c_diag_max - 2)),
-            s_jit_c_diag_max - 2);
-        s_jit_c_diag_len = s_jit_c_diag_max - 2;
-        s_jit_c_diag[s_jit_c_diag_len++] = '\n';
-        s_jit_c_diag[s_jit_c_diag_len] = '\0';
-        return;
-    }
-    if (s_jit_c_diag_len + n + 1 >= s_jit_c_diag_max) {
-        /* drop the oldest lines until the new one fits */
-        size_t need = n + 2;
-        size_t drop = 0;
-        while (s_jit_c_diag_len - drop >= need
-            && drop < s_jit_c_diag_len) {
-            /* advance one line */
-            size_t adv = drop;
-            while (adv < s_jit_c_diag_len
-                && s_jit_c_diag[adv] != '\n') {
-                adv++;
-            }
-            if (adv < s_jit_c_diag_len) adv++;
-            drop = adv;
-        }
-        if (drop > 0 && drop < s_jit_c_diag_len) {
-            memmove(s_jit_c_diag, s_jit_c_diag + drop,
-                s_jit_c_diag_len - drop);
-            s_jit_c_diag_len -= drop;
-        } else if (drop >= s_jit_c_diag_len) {
-            s_jit_c_diag_len = 0;
-        }
-    }
-    if (s_jit_c_diag_len + n + 1 < s_jit_c_diag_max) {
-        memcpy(s_jit_c_diag + s_jit_c_diag_len, msg, n);
-        s_jit_c_diag_len += n;
-        s_jit_c_diag[s_jit_c_diag_len++] = '\n';
-        s_jit_c_diag[s_jit_c_diag_len] = '\0';
-    }
-}
-
-static void jit_c_diag_begin(char *buf, size_t cap) {
-    s_jit_c_diag = buf;
-    s_jit_c_diag_len = 0;
-    s_jit_c_diag_max = cap;
-    if (buf != NULL && cap > 0) buf[0] = '\0';
-}
-
-/* Drop the capture (success path): the diagnostics were only interesting
- * on refusal. */
-static void jit_c_diag_end(void) {
-    s_jit_c_diag = NULL;
-    s_jit_c_diag_len = 0;
-    s_jit_c_diag_max = 0;
-}
-
-/* Fold the retained diagnostics into errbuf (kept when non-empty; the
- * "compile failed" prefix stays so callers still see the stage). TCC
- * diagnostics end with the error line, so when the whole capture does
- * not fit, keep the tail — the last lines carry the cause. */
-static void jit_c_obj_err_diag(char *errbuf, size_t errbuf_len,
-    const char *msg) {
-    if (errbuf == NULL || errbuf_len == 0) return;
-    if (s_jit_c_diag != NULL && s_jit_c_diag[0] != '\0') {
-        size_t msg_len = strlen(msg);
-        size_t room = errbuf_len > msg_len + 2
-            ? errbuf_len - msg_len - 2 : 0;
-        const char *diag = s_jit_c_diag;
-        size_t skip = 0;
-        if (s_jit_c_diag_len + msg_len + 2 > errbuf_len) {
-            if (s_jit_c_diag_len > room) {
-                skip = s_jit_c_diag_len - room;
-                /* advance to the next line so the tail starts clean */
-                while (diag[skip] != '\0' && diag[skip] != '\n'
-                    && skip < s_jit_c_diag_len) {
-                    skip++;
-                }
-                if (skip < s_jit_c_diag_len) skip++;
-            }
-            diag = s_jit_c_diag + skip;
-        }
-        snprintf(errbuf, errbuf_len, "%s: %s", msg, diag);
-    } else {
-        snprintf(errbuf, errbuf_len, "%s", msg);
-    }
-    s_jit_c_diag = NULL;
-    s_jit_c_diag_len = 0;
-    s_jit_c_diag_max = 0;
-}
-
 static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     const char *source, size_t source_len,
     const char **include_dirs, uint32_t n_include_dirs,
@@ -371,6 +359,7 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     uint8_t **obj_out, size_t *obj_len,
     char *errbuf, size_t errbuf_len) {
     char tmpl[] = "/tmp/.jit_c_obj_XXXXXX";
+    char diag_buf[1024]; /* TCC diagnostic capture — whole-invocation lifetime */
     int fd;
     FILE *f;
     long n;
@@ -418,45 +407,52 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     tcc_add_library_path(s, PM_METAL_TCC_LIB_DIR);
     tcc_set_output_type(s, TCC_OUTPUT_OBJ);
     /* route diagnostics into a scratch buffer folded into errbuf on
-     * refusal — the capture rides this function's stack frame */
+     * refusal — the capture rides this function's frame for the WHOLE
+     * invocation (through tcc_delete), passed to the callback as its
+     * opaque pointer: no globals, safe under reentrancy */
     {
-        char diag[1024];
-        jit_c_diag_begin(diag, sizeof(diag));
-        tcc_set_error_func(s, NULL, jit_c_diag_cb);
-    }    for (i = 0; i < n_include_dirs; i++) {
-        if (include_dirs[i] != NULL && include_dirs[i][0] != '\0') {
-            tcc_add_include_path(s, include_dirs[i]);
+        jit_c_diag_t diag;
+        diag.buf = diag_buf;
+        diag.len = 0;
+        diag.max = sizeof(diag_buf);
+        diag_buf[0] = '\0';
+        tcc_set_error_func(s, &diag, jit_c_diag_cb);
+        for (i = 0; i < n_include_dirs; i++) {
+            if (include_dirs[i] != NULL && include_dirs[i][0] != '\0') {
+                tcc_add_include_path(s, include_dirs[i]);
+            }
         }
-    }
-    for (i = 0; i < n_defines; i++) {
-        if (defines[i] != NULL && defines[i][0] != '\0') {
-            /* "NAME" defines to 1; "NAME=VALUE" splits on the first '=' —
-             * tcc_define_symbol implements exactly that split. */
-            tcc_define_symbol(s, defines[i], NULL);
+        for (i = 0; i < n_defines; i++) {
+            if (defines[i] != NULL && defines[i][0] != '\0') {
+                /* "NAME" defines to 1; "NAME=VALUE" splits on the first '=' —
+                 * tcc_define_symbol implements exactly that split. */
+                tcc_define_symbol(s, defines[i], NULL);
+            }
         }
-    }
-    if (tcc_compile_string(s, source) != 0) {
+        if (tcc_compile_string(s, source) != 0) {
+            tcc_delete(s);
+            tcc_set_realloc(saved_realloc);
+            s_tcc_arena = NULL;
+            unlink(tmpl);
+            jit_c_obj_err_diag(errbuf, errbuf_len,
+                "object_compile: tcc compile failed", &diag);
+            return -1;
+        }
+        if (tcc_output_file(s, tmpl) != 0) {
+            tcc_delete(s);
+            tcc_set_realloc(saved_realloc);
+            s_tcc_arena = NULL;
+            unlink(tmpl);
+            jit_c_obj_err_diag(errbuf, errbuf_len,
+                "object_compile: tcc_output_file failed", &diag);
+            return -1;
+        }
         tcc_delete(s);
-        tcc_set_realloc(saved_realloc);
-        s_tcc_arena = NULL;
-        unlink(tmpl);
-        jit_c_obj_err_diag(errbuf, errbuf_len, "object_compile: tcc compile failed");
-        return -1;
     }
-    if (tcc_output_file(s, tmpl) != 0) {
-        tcc_delete(s);
-        tcc_set_realloc(saved_realloc);
-        s_tcc_arena = NULL;
-        unlink(tmpl);
-        jit_c_obj_err_diag(errbuf, errbuf_len, "object_compile: tcc_output_file failed");
-        return -1;
-    }
-    tcc_delete(s);
     /* restore the prior reallocator before the read-back — no tcc allocation
      * happens below this point */
     tcc_set_realloc(saved_realloc);
     s_tcc_arena = NULL;
-    jit_c_diag_end();
 
     f = fopen(tmpl, "rb");
     if (f == NULL) {
@@ -524,6 +520,8 @@ static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
     uint8_t **obj_out, size_t *obj_len,
     char *errbuf, size_t errbuf_len) {
     void *s;
+    char diag_buf[1024]; /* TCC diagnostic capture — whole-invocation lifetime */
+    jit_c_diag_t diag;
     uint8_t *mod = NULL;
     int mod_len = 0;
     uint8_t *buf;
@@ -562,6 +560,13 @@ static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
     wasm_tcc_set_lib_path(s, PM_METAL_TCC_LIB_DIR);
     wasm_tcc_add_library_path(s, PM_METAL_TCC_LIB_DIR);
     wasm_tcc_set_output_type(s, TCC_OUTPUT_MEMORY);
+    /* same per-call diagnostic capture as the native path: opaque pointer,
+     * whole-invocation lifetime, no globals */
+    diag.buf = diag_buf;
+    diag.len = 0;
+    diag.max = sizeof(diag_buf);
+    diag_buf[0] = '\0';
+    wasm_tcc_set_error_func(s, &diag, jit_c_diag_cb);
     for (i = 0; i < n_include_dirs; i++) {
         if (include_dirs[i] != NULL && include_dirs[i][0] != '\0') {
             wasm_tcc_add_include_path(s, include_dirs[i]);
@@ -577,9 +582,8 @@ static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
         wasm_release_bufs(); /* partial emission still rode this arena */
         wasm_tcc_set_realloc(NULL);
         s_tcc_arena = NULL;
-        if (errbuf != NULL && errbuf_len > 0) {
-            snprintf(errbuf, errbuf_len, "object_compile: tcc compile failed");
-        }
+        jit_c_obj_err_diag(errbuf, errbuf_len,
+            "object_compile: tcc compile failed", &diag);
         return -1;
     }
     if (wasm_build_mod(&mod, &mod_len) != 0 || mod == NULL || mod_len <= 0) {
