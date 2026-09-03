@@ -6164,7 +6164,11 @@ impl SymTab {
 struct FnTab {
     names: [*const u8; SYM_CAP],
     name_lens: [usize; SYM_CAP],
-    rets: [[u8; 64]; SYM_CAP],
+    /* Return and param C types are arena spans (NUL-terminated copies),
+     * not inline arrays: tuple/Option typedef names are unbounded by any
+     * fixed slot — a span grows to the name, exactly like SymTab's field
+     * ctypes. NULL/0 = unknown. */
+    rets: [*const u8; SYM_CAP],
     ret_lens: [usize; SYM_CAP],
     n_params: [u32; SYM_CAP],
     used: [bool; SYM_CAP],
@@ -6172,21 +6176,30 @@ struct FnTab {
      * needs the param's Option shape — pointer-Option renders NULL,
      * struct-shaped renders the rsx_opt_<elem> zero literal — and the
      * only source of that shape is the callee's signature. */
-    params: [[u8; 64]; SYM_CAP * FN_MAXP],
+    params: [*const u8; SYM_CAP * FN_MAXP],
     param_lens: [usize; SYM_CAP * FN_MAXP],
+    /* arena for the span copies (FnTab lives inside Lower, on the native
+     * stack — the spans must outlive it, so they live in the arena). */
+    arena: *mut pm_util_mem_arena_t,
+    /* set when a span allocation refuses — the owning Lower turns it into
+     * the immediate "arena exhausted" refusal instead of compiling on with
+     * unknown param/return types. */
+    oom: bool,
 }
 
 impl FnTab {
-    unsafe fn new() -> FnTab {
+    unsafe fn new(arena: *mut pm_util_mem_arena_t) -> FnTab {
         FnTab {
             names: [b"\0".as_ptr(); SYM_CAP],
             name_lens: [0; SYM_CAP],
-            rets: [[0; 64]; SYM_CAP],
+            rets: [b"\0".as_ptr(); SYM_CAP],
             ret_lens: [0; SYM_CAP],
             n_params: [0; SYM_CAP],
             used: [false; SYM_CAP],
-            params: [[0; 64]; SYM_CAP * FN_MAXP],
+            params: [b"\0".as_ptr(); SYM_CAP * FN_MAXP],
             param_lens: [0; SYM_CAP * FN_MAXP],
+            arena,
+            oom: false,
         }
     }
 
@@ -6238,12 +6251,19 @@ impl FnTab {
         }
         self.names[s] = name;
         self.name_lens[s] = len;
-        let mut i = 0usize;
-        while i < retlen && i < 64 {
-            self.rets[s][i] = unsafe { *ret.add(i) };
-            i += 1;
+        /* an arena span copy of the return C type: NUL-terminated, the
+         * caller's tmp buffer is reused after this returns. NULL span =
+         * unknown (ret_ctype reports 0) — the fn still compiles, only
+         * call-site return-type inference loses it. */
+        self.rets[s] = b"\0".as_ptr();
+        self.ret_lens[s] = 0;
+        if !ret.is_null() && retlen > 0 {
+            let sp = unsafe { self.span(ret, retlen) };
+            if unsafe { *sp } != 0 {
+                self.rets[s] = sp;
+                self.ret_lens[s] = retlen;
+            }
         }
-        self.ret_lens[s] = retlen;
         self.used[s] = true;
         self.n_params[s] = 0;
         let mut p = 0usize;
@@ -6260,19 +6280,34 @@ impl FnTab {
         }
     }
 
+    /* Copy len bytes into a fresh arena block (NUL-terminated). NULL-safe:
+     * an OOM hands back the empty string AND flags the tab — the compile
+     * refuses with the specific arena error rather than degrading. */
+    unsafe fn span(&mut self, src: *const u8, len: usize) -> *const u8 {
+        let p = unsafe { pm_util_mem_alloc(self.arena, len + 1) };
+        if p.is_null() {
+            self.oom = true;
+            return b"\0".as_ptr();
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(src, p, len);
+            *p.add(len) = 0;
+        }
+        p
+    }
+
     /* Record param slot p's rendered C type (collect-time; the params
      * table is what a `None` argument reads at the call site). */
     unsafe fn add_param(&mut self, s: usize, p: usize, ct: *const u8, ctlen: usize) {
-        if s >= SYM_CAP || p >= FN_MAXP || ctlen > 64 || ct.is_null() {
+        if s >= SYM_CAP || p >= FN_MAXP || ct.is_null() || ctlen == 0 {
             return;
         }
         let at = s * FN_MAXP + p;
-        let mut i = 0usize;
-        while i < ctlen {
-            self.params[at][i] = unsafe { *ct.add(i) };
-            i += 1;
+        let sp = unsafe { self.span(ct, ctlen) };
+        if unsafe { *sp } != 0 {
+            self.params[at] = sp;
+            self.param_lens[at] = ctlen;
         }
-        self.param_lens[at] = ctlen;
     }
 
     /* Rendered C type of the callee's param slot p (0 when unknown —
@@ -6288,10 +6323,11 @@ impl FnTab {
             if pl == 0 {
                 return 0;
             }
+            let src = self.params[at];
             let mut i = 0usize;
             while i < pl {
                 unsafe {
-                    *out.add(i) = self.params[at][i];
+                    *out.add(i) = *src.add(i);
                 }
                 i += 1;
             }
@@ -6307,10 +6343,14 @@ impl FnTab {
         let s = unsafe { self.slot(name, len) };
         if s < SYM_CAP && self.used[s] && self.name_lens[s] == len {
             let rl = self.ret_lens[s];
+            if rl == 0 {
+                return 0;
+            }
+            let src = self.rets[s];
             let mut i = 0usize;
             while i < rl {
                 unsafe {
-                    *out.add(i) = self.rets[s][i];
+                    *out.add(i) = *src.add(i);
                 }
                 i += 1;
             }
@@ -6912,10 +6952,27 @@ impl Lower {
                     }
                     return 0;
                 }
-                let tdn = self.arena_tmp();
                 let base = self.tup_elems.as_ptr().add(slot * TUP_MAXF);
                 let blens = self.tup_lens.as_ptr().add(slot * TUP_MAXF);
-                let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, nk, tdn, 160) };
+                let need = unsafe { Lower::tup_name_need(blens, nk) };
+                let tdn = if need == 0 {
+                    core::ptr::null_mut()
+                } else {
+                    unsafe { self.name_tmp(need) }
+                };
+                if tdn.is_null() {
+                    unsafe {
+                        self.err(b"internal: tuple typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                    }
+                    return 0;
+                }
+                let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, nk, tdn, need) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: tuple typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                    }
+                    return 0;
+                }
                 at = unsafe { bput(out, cap, at, tdn, tdn_len) };
                 unsafe {
                     if at < cap {
@@ -7168,6 +7225,67 @@ impl Lower {
         self.oom_buf.as_mut_ptr()
     }
 
+    /* Exact-size scratch for one encoded typedef name. The 160-byte
+     * arena_tmp covers every name the current corpus produces; a longer
+     * (still legal) tuple signature gets an allocation sized to its exact
+     * encoded length rather than a refusal. Bounded by the same
+     * elem/caps rules as the encoders: need is computed by the caller from
+     * the signature, never from untrusted input. Refuses (NULL) on OOM —
+     * the caller records the specific error. */
+    unsafe fn name_tmp(&mut self, need: usize) -> *mut u8 {
+        if need <= 160 {
+            return unsafe { self.arena_tmp() };
+        }
+        if need > 1024 {
+            /* hard ceiling: names beyond this are a runaway signature
+             * (nested tuples of Options), refused — not a buffer to grow. */
+            return core::ptr::null_mut();
+        }
+        let p = unsafe { pm_util_mem_alloc(self.arena, need) };
+        if p.is_null() {
+            self.ok = false;
+            return core::ptr::null_mut();
+        }
+        p
+    }
+
+    /* Exact encoded length of a tuple typedef name for signature
+     * (elems,lens,n): `rsx_tuple_` + count digits + per element
+     * ('_' + len digits + 'e' + 2*elen). Mirrors tup_typedef_name's layout
+     * byte for byte; 0 when any element would overflow the sum. */
+    unsafe fn tup_name_need(lens: *const usize, n: usize) -> usize {
+        let mut need = 10usize; /* "rsx_tuple_" */
+        let mut cnt = n;
+        let mut cd = 0usize;
+        while cnt > 0 {
+            cd += 1;
+            cnt /= 10;
+        }
+        if cd == 0 {
+            cd = 1;
+        }
+        need += cd;
+        let mut f = 0usize;
+        while f < n {
+            let elen = unsafe { *lens.add(f) };
+            if elen > (usize::MAX - need) / 2 {
+                return 0;
+            }
+            let mut ld = 1usize;
+            let mut l = elen;
+            while l >= 10 {
+                ld += 1;
+                l /= 10;
+            }
+            need += 1 + ld + 1 + 2 * elen;
+            if need > 1024 {
+                return 0;
+            }
+            f += 1;
+        }
+        need + 1 /* NUL */
+    }
+
     unsafe fn ctype_path(&mut self, ty: *const pm_jit_rsx_ast_t, out: *mut u8, cap: usize) -> usize {
         let kids = unsafe { (*ty).kids };
         let nk = unsafe { (*ty).n_kids } as usize;
@@ -7234,6 +7352,12 @@ impl Lower {
                 }
                 let tdn = self.arena_tmp();
                 let tdn_len = unsafe { Lower::opt_typedef_name(inner_buf, n, tdn, 160) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: Option typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                    }
+                    return 0;
+                }
                 at = unsafe { bput(out, cap, at, tdn, tdn_len) };
                 unsafe {
                     if at < cap {
@@ -7578,7 +7702,10 @@ impl Lower {
                                         let pty = unsafe { *pk.add(0) };
                                         let ct = self.arena_tmp();
                                         let n = unsafe { self.ctype(pty, ct, 128) };
-                                        if n > 0 && n <= 64 {
+                                        /* FnTab param types are arena
+                                         * spans — no fixed-slot cap; the
+                                         * 128 render buffer is the bound */
+                                        if n > 0 && n < 128 {
                                             ptypes[nparams as usize] = ct;
                                             plens[nparams as usize] = n;
                                         }
@@ -7649,7 +7776,9 @@ impl Lower {
                                 let pty = unsafe { *pk.add(0) };
                                 let ct = self.arena_tmp();
                                 let n = unsafe { self.ctype(pty, ct, 128) };
-                                if n > 0 && n <= 64 {
+                                /* FnTab param types are arena spans — no
+                                 * fixed-slot cap; the render buffer is */
+                                if n > 0 && n < 128 {
                                     ptypes[nparams as usize] = ct;
                                     plens[nparams as usize] = n;
                                 }
@@ -7878,10 +8007,21 @@ impl Lower {
             if slot >= TUP_CAP {
                 return 0;
             }
-            let tdn = self.arena_tmp();
             let base = self.tup_elems.as_ptr().add(slot * TUP_MAXF);
             let blens = self.tup_lens.as_ptr().add(slot * TUP_MAXF);
-            let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, nk, tdn, 160) };
+            let need = unsafe { Lower::tup_name_need(blens, nk) };
+            let tdn = if need == 0 {
+                core::ptr::null_mut()
+            } else {
+                unsafe { self.name_tmp(need) }
+            };
+            if tdn.is_null() {
+                return 0;
+            }
+            let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, nk, tdn, need) };
+            if tdn_len == 0 {
+                return 0;
+            }
             let at = unsafe { bput(out, cap, 0, tdn, tdn_len) };
             unsafe {
                 if at < cap {
@@ -8793,21 +8933,38 @@ impl Lower {
         }
         if kind == pm_jit_rsx_ast_kind::IF {
             /* if-expression: try each branch's value expression in order —
-             * then-branch first, else-branch as fallback (a `null_mut()`
-             * else cannot be typed, but its then-branch can). */
+             * then-branch first, else-branch as fallback. A `void *`
+             * branch (core::ptr::null_mut() rendered generically) is only a
+             * LAST resort: the other arm of `cond ? null_mut() : typed`
+             * carries the real pointee, and the let must be typed by it or
+             * every later deref is a void operation. */
             let kids = unsafe { (*e).kids };
             let nk = unsafe { (*e).n_kids } as usize;
             if nk < 2 {
                 return 0;
             }
+            let mut void_at = 0usize;
+            let mut void_len = 0usize;
             let mut ti = 1usize;
             while ti < nk && ti < 3 {
                 let br = self.block_tail_node(unsafe { *kids.add(ti) });
                 let n = unsafe { self.expr_ctype(br, out, cap, locals) };
                 if n > 0 {
+                    if n == 6 && unsafe { z_eq(out, n, b"void *\0".as_ptr()) } {
+                        if void_len == 0 {
+                            void_len = n;
+                            void_at = ti;
+                        }
+                        ti += 1;
+                        continue;
+                    }
                     return n;
                 }
                 ti += 1;
+            }
+            if void_len > 0 {
+                let n2 = unsafe { zput(out, cap, 0, b"void *\0".as_ptr()) };
+                return if n2 >= cap { 0 } else { n2 };
             }
             return 0;
         }
@@ -9212,7 +9369,10 @@ const LOCAL_CAP: usize = 256;
 struct LocalTab {
     names: [[u8; 48]; LOCAL_CAP],
     name_lens: [usize; LOCAL_CAP],
-    ctypes: [[u8; 64]; LOCAL_CAP],
+    /* Local C types are arena spans (NUL-terminated copies), not inline
+     * arrays: tuple/Option typedef names are unbounded by any fixed slot
+     * — a span grows to the name, exactly like SymTab's field ctypes. */
+    ctypes: [*const u8; LOCAL_CAP],
     ctype_lens: [usize; LOCAL_CAP],
     depths: [usize; LOCAL_CAP],
     epochs: [usize; LOCAL_CAP],
@@ -9220,14 +9380,20 @@ struct LocalTab {
     nmarks: usize,
     n: usize,
     epoch: usize,
+    /* arena for the span copies (LocalTab lives on the native stack). */
+    arena: *mut pm_util_mem_arena_t,
+    /* set the moment a span allocation refuses — the owning Lower reads
+     * it after each fn body so an OOM is a refusal, never a silent
+     * unknown-type local. */
+    oom: bool,
 }
 
 impl LocalTab {
-    unsafe fn new() -> LocalTab {
+    unsafe fn new(arena: *mut pm_util_mem_arena_t) -> LocalTab {
         LocalTab {
             names: [[0; 48]; LOCAL_CAP],
             name_lens: [0; LOCAL_CAP],
-            ctypes: [[0; 64]; LOCAL_CAP],
+            ctypes: [b"\0".as_ptr(); LOCAL_CAP],
             ctype_lens: [0; LOCAL_CAP],
             depths: [0; LOCAL_CAP],
             epochs: [0; LOCAL_CAP],
@@ -9235,6 +9401,8 @@ impl LocalTab {
             nmarks: 0,
             n: 0,
             epoch: 0,
+            arena,
+            oom: false,
         }
     }
 
@@ -9267,9 +9435,53 @@ impl LocalTab {
         ctlen: usize,
         depth: usize,
     ) {
-        if self.n >= LOCAL_CAP || nlen >= 48 || ctlen >= 64 {
+        if self.n >= LOCAL_CAP || nlen >= 48 || ct.is_null() || ctlen == 0 {
             return;
         }
+        /* Reuse guard BEFORE the span allocation: a same-scope shadowing
+         * entry with the identical C type reuses the existing row — the
+         * arena span of a dropped speculative registration is never freed,
+         * so re-registering every reassignment of one local would grow the
+         * arena monotonically. Only genuinely new bindings allocate. */
+        let mut s = self.n;
+        while s > 0 {
+            s -= 1;
+            if self.name_lens[s] == nlen
+                && self.depths[s] == depth
+                && self.epochs[s] == self.epoch
+                && unsafe { self.span_eq(s, name, nlen) }
+                && self.ctype_lens[s] == ctlen
+            {
+                let sp = self.ctypes[s];
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < ctlen {
+                    if unsafe { *sp.add(j) } != unsafe { *ct.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    return;
+                }
+            }
+        }
+        /* span copy: no fixed ctype slot bound (a tuple/Option typedef name
+         * can exceed any inline cap); NULL span drops the entry, lookup
+         * then reports unknown — the caller's ascription refusal. */
+        let p = unsafe { pm_util_mem_alloc(self.arena, ctlen + 1) };
+        if p.is_null() {
+            /* immediate, specific: the compile is dead, not degraded —
+             * callers that ignore lookup's 0 would emit untyped locals. */
+            self.oom = true;
+            return;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(ct, p, ctlen);
+            *p.add(ctlen) = 0;
+        }
+        let sp = p;
         let s = self.n;
         let mut i = 0usize;
         while i < nlen {
@@ -9280,11 +9492,7 @@ impl LocalTab {
          * C string (z_eq's z side reads until the terminator). */
         self.names[s][nlen] = 0;
         self.name_lens[s] = nlen;
-        i = 0;
-        while i < ctlen {
-            self.ctypes[s][i] = unsafe { *ct.add(i) };
-            i += 1;
-        }
+        self.ctypes[s] = sp;
         self.ctype_lens[s] = ctlen;
         self.depths[s] = depth;
         self.epochs[s] = self.epoch;
@@ -9299,10 +9507,11 @@ impl LocalTab {
             i -= 1;
             if self.name_lens[i] == nlen && unsafe { self.span_eq(i, name, nlen) } {
                 let cl = self.ctype_lens[i];
+                let src = self.ctypes[i];
                 let mut j = 0usize;
                 while j < cl {
                     unsafe {
-                        *out.add(j) = self.ctypes[i][j];
+                        *out.add(j) = *src.add(j);
                     }
                     j += 1;
                 }
@@ -9356,8 +9565,9 @@ impl LocalTab {
                 && unsafe { self.span_eq(i, name, nlen) }
             {
                 let mut j = 0usize;
+                let sp = self.ctypes[i];
                 while j < ctlen {
-                    if self.ctypes[i][j] != unsafe { *ct.add(j) } {
+                    if unsafe { *sp.add(j) } != unsafe { *ct.add(j) } {
                         return false;
                     }
                     j += 1;
@@ -12196,10 +12406,12 @@ impl Lower {
                 if eln > 0 {
                     let tdn = self.arena_tmp();
                     let tdn_len = unsafe { Lower::opt_typedef_name(eb, eln, tdn, 160) };
-                    self.out.putc(b'(');
-                    self.out.put(tdn, tdn_len);
-                    self.out.puts(b"){ ._v = {0}, ._has = 0 }\0".as_ptr());
-                    return;
+                    if tdn_len > 0 {
+                        self.out.putc(b'(');
+                        self.out.put(tdn, tdn_len);
+                        self.out.puts(b"){ ._v = {0}, ._has = 0 }\0".as_ptr());
+                        return;
+                    }
                 }
             }
         }
@@ -12838,10 +13050,27 @@ impl Lower {
         if self.cur_ret_len >= 10 && unsafe { z_eq(self.cur_ret.as_ptr(), 10, b"rsx_tuple_\0".as_ptr()) } {
             let slot = unsafe { self.tup_find(self.cur_ret.as_ptr(), self.cur_ret_len) };
             if slot < TUP_CAP && self.tup_counts[slot] == nk {
-                let tdn = self.arena_tmp();
                 let basep = self.tup_elems.as_ptr().add(slot * TUP_MAXF);
                 let blens = self.tup_lens.as_ptr().add(slot * TUP_MAXF);
-                let tdn_len = unsafe { Lower::tup_typedef_name(basep, blens, nk, tdn, 160) };
+                let need = unsafe { Lower::tup_name_need(blens, nk) };
+                let tdn = if need == 0 {
+                    core::ptr::null_mut()
+                } else {
+                    unsafe { self.name_tmp(need) }
+                };
+                if tdn.is_null() {
+                    unsafe {
+                        self.err(b"internal: tuple typedef name too long\0".as_ptr(), unsafe { (*e).line });
+                    }
+                    return;
+                }
+                let tdn_len = unsafe { Lower::tup_typedef_name(basep, blens, nk, tdn, need) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: tuple typedef name too long\0".as_ptr(), unsafe { (*e).line });
+                    }
+                    return;
+                }
                 self.out.putc(b'(');
                 self.out.put(tdn, tdn_len);
                 self.out.puts(b"){ \0".as_ptr());
@@ -12894,10 +13123,27 @@ impl Lower {
             }
             return;
         }
-        let tdn = self.arena_tmp();
         let base = self.tup_elems.as_ptr().add(slot * TUP_MAXF);
         let blens = self.tup_lens.as_ptr().add(slot * TUP_MAXF);
-        let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, nk, tdn, 160) };
+        let need = unsafe { Lower::tup_name_need(blens, nk) };
+        let tdn = if need == 0 {
+            core::ptr::null_mut()
+        } else {
+            unsafe { self.name_tmp(need) }
+        };
+        if tdn.is_null() {
+            unsafe {
+                self.err(b"internal: tuple typedef name too long\0".as_ptr(), unsafe { (*e).line });
+            }
+            return;
+        }
+        let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, nk, tdn, need) };
+        if tdn_len == 0 {
+            unsafe {
+                self.err(b"internal: tuple typedef name too long\0".as_ptr(), unsafe { (*e).line });
+            }
+            return;
+        }
         self.out.putc(b'(');
         self.out.put(tdn, tdn_len);
         self.out.puts(b"){ \0".as_ptr());
@@ -13753,12 +13999,14 @@ impl Lower {
                     if eln > 0 {
                         let tdn = self.arena_tmp();
                         let tdn_len = unsafe { Lower::opt_typedef_name(eb, eln, tdn, 160) };
-                        self.out.putc(b'(');
-                        self.out.put(tdn, tdn_len);
-                        self.out.puts(b"){ ._v = \0".as_ptr());
-                        unsafe { self.emit_expr(*ak.add(0), locals) };
-                        self.out.puts(b", ._has = 1 }\0".as_ptr());
-                        return;
+                        if tdn_len > 0 {
+                            self.out.putc(b'(');
+                            self.out.put(tdn, tdn_len);
+                            self.out.puts(b"){ ._v = \0".as_ptr());
+                            unsafe { self.emit_expr(*ak.add(0), locals) };
+                            self.out.puts(b", ._has = 1 }\0".as_ptr());
+                            return;
+                        }
                     }
                 }
             }
@@ -15073,7 +15321,7 @@ impl Lower {
         unsafe { self.lower_struct(item) };
         /* Option/tuple typedefs whose payloads name this struct follow it */
         unsafe { self.opt_emit_for(name, nlen) };
-        unsafe { self.tup_emit_for(name, nlen) };
+        unsafe { self.tup_emit_for(kids, nk, name, nlen) };
     }
 
     unsafe fn tydone_find(&mut self, name: *const u8, nlen: usize) -> bool {
@@ -15408,49 +15656,121 @@ impl Lower {
         n - 9 - 17
     }
 
-    /* Sanitized C identifier for an Option payload spelling: non-alnum
-     * bytes collapse to '_' (uint64_t stays; "const u8 *" becomes
-     * const_u8__). Written into out (cap >= 8 + elem), NUL-terminated.
-     * Returns the length. */
-    unsafe fn opt_typedef_name(elem: *const u8, elen: usize, out: *mut u8, cap: usize) -> usize {
-        let mut at = unsafe { bput(out, cap, 0, b"rsx_opt_\0".as_ptr(), 8) };
-        /* `<len>e` prefix — injective: two C spellings sanitize equal iff
-         * they are equal (same guard as tup_typedef_name) */
-        let mut ld = [0u8; 10];
-        let mut ln = 0usize;
+    /* Lowercase hex digit for a value < 16 (canonical identifier form). */
+    unsafe fn hex_lo(v: u8) -> u8 {
+        if v < 10 {
+            b'0' + v
+        } else {
+            b'a' + (v - 10)
+        }
+    }
+
+    /* Canonical lowercase hex value of a hex digit, or 0xFF when c is not
+     * [0-9a-f]. Uppercase is rejected — one canonical spelling only. */
+    unsafe fn hex_val(c: u8) -> u8 {
+        if c >= b'0' && c <= b'9' {
+            c - b'0'
+        } else if c >= b'a' && c <= b'f' {
+            c - b'a' + 10
+        } else {
+            0xFF
+        }
+    }
+
+    /* `<raw_len>e<2*raw_len lowercase hex digits>` — the canonical
+     * injective byte encoding of one payload type. Every raw byte maps to
+     * exactly two identifier-safe hex digits, so distinct payloads encode
+     * to distinct components AND distinct components decode back to the
+     * exact payload bytes (hex is one-to-one per byte). The decimal
+     * raw_len is a validation field (the encoded char count is 2*raw_len,
+     * never raw_len). Writes into out at `at`, NUL-terminates when it
+     * fits. Returns the new offset; when the component would not fit in
+     * [at, cap) the write is refused entirely (nothing partial) and cap is
+     * returned — the caller treats name_len == cap as a refusal. */
+    unsafe fn hex_put_len_e(
+        elem: *const u8,
+        elen: usize,
+        out: *mut u8,
+        cap: usize,
+        at: usize,
+    ) -> usize {
+        /* exact encoded size: <decimal raw_len> + 'e' + 2*elen, +1 for NUL
+         * reservation. Overflow is impossible on this architecture's
+         * usize for the byte payloads the compiler handles (elen < 64),
+         * but guard anyway — a refusal beats a wraparound. */
+        if elen > (usize::MAX - 2) / 2 {
+            return cap;
+        }
+        let hex_len = elen * 2;
+        let mut digs = [0u8; 20];
+        let mut dn = 0usize;
         let mut lc = elen;
         if lc == 0 {
-            ld[0] = b'0';
-            ln = 1;
+            digs[0] = b'0';
+            dn = 1;
         } else {
-            while lc > 0 && ln < 10 {
-                ld[ln] = b'0' + (lc % 10) as u8;
+            while lc > 0 && dn < digs.len() {
+                digs[dn] = b'0' + (lc % 10) as u8;
                 lc /= 10;
-                ln += 1;
+                dn += 1;
+            }
+            /* decimal did not fit 20 digits — refuse rather than print a
+             * wrong length (the validation field must be exact) */
+            if lc > 0 {
+                return cap;
             }
         }
-        let mut q = ln;
+        let need = dn + 1 + hex_len;
+        /* refuse when the component (+ NUL) does not fit whole */
+        if out.is_null() || cap == 0 || at >= cap || need > cap - at - 1 {
+            return cap;
+        }
+        let mut a = at;
+        let mut q = dn;
         while q > 0 {
             q -= 1;
-            at = unsafe { bput(out, cap, at, &ld[q], 1) };
+            unsafe {
+                *out.add(a) = digs[q];
+            }
+            a += 1;
         }
-        at = unsafe { bput(out, cap, at, b"e\0".as_ptr(), 1) };
+        unsafe {
+            *out.add(a) = b'e';
+        }
+        a += 1;
         let mut i = 0usize;
         while i < elen {
-            let c = unsafe { *elem.add(i) };
-            let ok = c.is_ascii_alphanumeric() || c == b'_';
-            let putc = if ok { c } else { b'_' };
-            at = unsafe { bput(out, cap, at, &putc, 1) };
+            let b = unsafe { *elem.add(i) };
+            let hi = unsafe { Lower::hex_lo(b >> 4) };
+            let lo = unsafe { Lower::hex_lo(b & 0x0F) };
+            unsafe {
+                *out.add(a) = hi;
+                *out.add(a + 1) = lo;
+            }
+            a += 2;
             i += 1;
         }
         unsafe {
-            if at < cap {
-                *out.add(at) = 0;
-            } else if cap > 0 {
-                *out.add(cap - 1) = 0;
-            }
+            *out.add(a) = 0;
         }
-        at
+        a
+    }
+
+    /* Canonical Option typedef name:
+     *   rsx_opt_<raw_len>e<2*raw_len lowercase hex digits>
+     * Reversible: opt_typedef_elem decodes the component back to the exact
+     * payload C-type bytes. Returns the name length; 0 when the name does
+     * not fit cap whole (never a truncation). */
+    unsafe fn opt_typedef_name(elem: *const u8, elen: usize, out: *mut u8, cap: usize) -> usize {
+        let at = unsafe { bput(out, cap, 0, b"rsx_opt_\0".as_ptr(), 8) };
+        if at != 8 || cap <= 9 {
+            return 0;
+        }
+        let end = unsafe { Lower::hex_put_len_e(elem, elen, out, cap, at) };
+        if end >= cap {
+            return 0;
+        }
+        end
     }
 
     /* Register a payload spelling (idempotent). Returns the slot, or
@@ -15493,76 +15813,67 @@ impl Lower {
         slot
     }
 
-    /* Tuple typedef name: rsx_tuple_<n>_<len0>e<elem0>_<len1>e<elem1>_…
-     * Each element's C spelling is sanitized to identifier chars and
-     * PREFIXED WITH ITS LENGTH (`<len>e`), so element boundaries are
-     * recoverable from the name itself: two signatures cannot render the
-     * same identifier (`(Foo_, Bar)` and `(Foo, _Bar)` both sanitized to
-     * `Foo__Bar` under the old join-only scheme — a real collision).
-     * The encoding is injective: the sanitized spellings are equal iff
-     * the C spellings are equal (see the negative test in __tests__.c). */
+    /* Tuple typedef name:
+     *   rsx_tuple_<count>_<raw_len0>e<2*raw_len0 hex>_<raw_len1>e<2*raw_len1 hex>_…
+     * Each element is encoded with the shared canonical hex component
+     * (hex_put_len_e), so every element boundary is unambiguous (the
+     * decimal raw_len fixes how many hex digits follow the 'e') and the
+     * bytes used for identity are the exact raw canonical C-type bytes.
+     * Returns the name length; 0 when the name does not fit cap whole. */
     unsafe fn tup_typedef_name(elems: *const [u8; 64], lens: *const usize, n: usize, out: *mut u8, cap: usize) -> usize {
         let mut at = unsafe { bput(out, cap, 0, b"rsx_tuple_\0".as_ptr(), 10) };
+        if at != 10 || cap <= 11 {
+            return 0;
+        }
         /* element count first: `rsx_tuple_2_...` */
-        let mut cd = [0u8; 10];
+        let mut cd = [0u8; 20];
         let mut cn = 0usize;
         let mut cnt = n;
         if cnt == 0 {
             cd[0] = b'0';
             cn = 1;
         } else {
-            while cnt > 0 && cn < 10 {
+            while cnt > 0 && cn < cd.len() {
                 cd[cn] = b'0' + (cnt % 10) as u8;
                 cnt /= 10;
                 cn += 1;
             }
+            /* count decimal did not fit — refuse rather than print wrong */
+            if cnt > 0 {
+                return 0;
+            }
+        }
+        if 10 + cn >= cap {
+            return 0;
         }
         let mut q = cn;
         while q > 0 {
             q -= 1;
-            at = unsafe { bput(out, cap, at, &cd[q], 1) };
+            unsafe {
+                *out.add(at) = cd[q];
+            }
+            at += 1;
+        }
+        unsafe {
+            *out.add(at) = 0;
         }
         let mut f = 0usize;
         while f < n {
-            at = unsafe { bput(out, cap, at, b"_\0".as_ptr(), 1) };
+            if at + 1 >= cap {
+                return 0;
+            }
+            unsafe {
+                *out.add(at) = b'_';
+            }
+            at += 1;
             let elen = unsafe { *lens.add(f) };
-            /* `<len>e` prefix — the boundary marker */
-            let mut ld = [0u8; 10];
-            let mut ln = 0usize;
-            let mut lc = elen;
-            if lc == 0 {
-                ld[0] = b'0';
-                ln = 1;
-            } else {
-                while lc > 0 && ln < 10 {
-                    ld[ln] = b'0' + (lc % 10) as u8;
-                    lc /= 10;
-                    ln += 1;
-                }
-            }
-            let mut q2 = ln;
-            while q2 > 0 {
-                q2 -= 1;
-                at = unsafe { bput(out, cap, at, &ld[q2], 1) };
-            }
-            at = unsafe { bput(out, cap, at, b"e\0".as_ptr(), 1) };
             let elem = unsafe { (*elems.add(f)).as_ptr() };
-            let mut i = 0usize;
-            while i < elen {
-                let c = unsafe { *elem.add(i) };
-                let ok = c.is_ascii_alphanumeric() || c == b'_';
-                let putc = if ok { c } else { b'_' };
-                at = unsafe { bput(out, cap, at, &putc, 1) };
-                i += 1;
+            let end = unsafe { Lower::hex_put_len_e(elem, elen, out, cap, at) };
+            if end >= cap {
+                return 0;
             }
+            at = end;
             f += 1;
-        }
-        unsafe {
-            if at < cap {
-                *out.add(at) = 0;
-            } else if cap > 0 {
-                *out.add(cap - 1) = 0;
-            }
         }
         at
     }
@@ -15628,16 +15939,27 @@ impl Lower {
     }
 
     /* Find a tuple signature slot by its typedef name (name_len bytes).
-     * Returns the slot or TUP_CAP when no signature matches. */
+     * Returns the slot or TUP_CAP when no signature matches. A signature
+     * whose canonical name refuses to render in the scratch cap is not a
+     * match for any input name (its name is not representable here). */
     unsafe fn tup_find(&mut self, name: *const u8, name_len: usize) -> usize {
         let mut s = 0usize;
         while s < self.tup_n {
             let n = self.tup_counts[s];
-            let tdn = self.arena_tmp();
             let basep = self.tup_elems.as_ptr().add(s * TUP_MAXF);
             let blens = self.tup_lens.as_ptr().add(s * TUP_MAXF);
-            let tdl = unsafe { Lower::tup_typedef_name(basep, blens, n, tdn, 160) };
-            if tdl == name_len {
+            let need = unsafe { Lower::tup_name_need(blens, n) };
+            let tdn = if need == 0 {
+                core::ptr::null_mut()
+            } else {
+                unsafe { self.name_tmp(need) }
+            };
+            if tdn.is_null() {
+                s += 1;
+                continue;
+            }
+            let tdl = unsafe { Lower::tup_typedef_name(basep, blens, n, tdn, need) };
+            if tdl > 0 && tdl == name_len {
                 let mut same = true;
                 let mut j = 0usize;
                 while j < tdl {
@@ -15752,8 +16074,10 @@ impl Lower {
     }
 
     /* Does the rendered C type name a struct-shaped Option typedef
-     * (rsx_opt_<elem>)? Returns the payload spelling pointer + length via
-     * out (copied), or 0 when not that shape. */
+     * (rsx_opt_<raw_len>e<2*raw_len hex>)? Strict decode of the canonical
+     * component: the payload C-type bytes recovered exactly. Returns the
+     * payload length copied into out (NUL-terminated), or 0 when ct is
+     * not a well-formed canonical Option name — never a partial decode. */
     unsafe fn opt_typedef_elem(ct: *const u8, n: usize, out: *mut u8, cap: usize) -> usize {
         if n < 10 {
             return 0;
@@ -15766,15 +16090,19 @@ impl Lower {
             }
             i += 1;
         }
-        /* skip the `<len>e` prefix emitted by opt_typedef_name — parse the
-         * decimal, then the 'e', then the payload follows. The payload's
-         * length must equal the parsed len (a consistency check, not a
-         * guess: mismatched shape returns 0). */
+        /* `<raw_len>e` — decimal raw length, then 'e'. The payload is
+         * exactly raw_len bytes encoded as 2*raw_len lowercase hex digits
+         * (the encoded char count, not the raw length). */
         let mut at = 8usize;
         let mut plen: usize = 0;
         let mut sawdigit = false;
         while at < n && unsafe { *ct.add(at) } >= b'0' && unsafe { *ct.add(at) } <= b'9' {
-            plen = plen * 10 + (unsafe { *ct.add(at) } - b'0') as usize;
+            let d = (unsafe { *ct.add(at) } - b'0') as usize;
+            /* decimal length overflow: refuse before it wraps */
+            if plen > (usize::MAX - d) / 10 {
+                return 0;
+            }
+            plen = plen * 10 + d;
             sawdigit = true;
             at += 1;
         }
@@ -15782,15 +16110,50 @@ impl Lower {
             return 0;
         }
         at += 1;
-        let rest = n - at;
-        if plen != rest || rest == 0 || rest >= cap {
+        /* zero-length payload: no valid representation requires it (every
+         * C type is at least one byte) — refuse */
+        if plen == 0 {
             return 0;
         }
-        unsafe {
-            core::ptr::copy_nonoverlapping(ct.add(at), out, rest);
-            *out.add(rest) = 0;
+        /* encoded-size multiplication overflow: 2*plen must not wrap */
+        if plen > (usize::MAX - 1) / 2 {
+            return 0;
         }
-        rest
+        let hex_len = plen * 2;
+        /* overlong / truncated: the remaining digits are exactly 2*plen */
+        if n - at != hex_len {
+            return 0;
+        }
+        /* the decoded payload (+ NUL) must fit the caller's buffer whole */
+        if plen + 1 > cap || out.is_null() {
+            return 0;
+        }
+        /* decode: exactly 2*plen lowercase hex digits, byte pairs.
+         * Two-pass: validate EVERY digit before the first destination
+         * write — a malformed digit at position k leaves out untouched
+         * (the caller's buffer holds no partial payload). */
+        let mut w = 0usize;
+        while w < plen {
+            let hi = unsafe { Lower::hex_val(*ct.add(at + w * 2)) };
+            let lo = unsafe { Lower::hex_val(*ct.add(at + w * 2 + 1)) };
+            if hi == 0xFF || lo == 0xFF {
+                return 0;
+            }
+            w += 1;
+        }
+        w = 0;
+        while w < plen {
+            let hi = unsafe { Lower::hex_val(*ct.add(at + w * 2)) };
+            let lo = unsafe { Lower::hex_val(*ct.add(at + w * 2 + 1)) };
+            unsafe {
+                *out.add(w) = (hi << 4) | lo;
+            }
+            w += 1;
+        }
+        unsafe {
+            *out.add(plen) = 0;
+        }
+        plen
     }
 
     /* Does this STRUCT item carry the union marker ATTR? (from the `union`
@@ -16154,8 +16517,13 @@ impl Lower {
                     return;
                 }
                 self.out.puts(b" = \0".as_ptr());
-                let mut locals = LocalTab::new();
+                let mut locals = LocalTab::new(self.arena);
                 unsafe { self.emit_expr(init, &mut locals) };
+                /* a span OOM inside this body's locals must refuse the
+                 * whole compile (specific error), not degrade inference */
+                if locals.oom {
+                    self.ok = false;
+                }
             }
             self.out.puts(b";\n\0".as_ptr());
         } else {
@@ -16510,7 +16878,7 @@ impl Lower {
         /* body: the tail expression of a value-returning fn becomes
          * `return expr;` — C has no implicit block value. */
         if !body.is_null() {
-            let mut locals = LocalTab::new();
+            let mut locals = LocalTab::new(self.arena);
             if self.recv_len > 0 {
                 unsafe {
                     locals.add(b"self\0".as_ptr(), 4, self.recv_type.as_ptr(), self.recv_len, 1);
@@ -16600,6 +16968,11 @@ impl Lower {
                 unsafe { self.emit_block_stmt(body, &mut locals) };
             }
             self.depth = 0;
+            /* a span OOM inside this body's locals must refuse the whole
+             * compile (specific error), not degrade inference */
+            if locals.oom {
+                self.ok = false;
+            }
         }
         self.cur_ret_len = 0;
         self.out.puts(b"}\n\0".as_ptr());
@@ -16742,11 +17115,12 @@ impl Lower {
         if n == 0 || n > TUP_MAXF {
             return;
         }
-        /* A tuple element may itself be a struct-Option (`rsx_opt_<len>e..`)
-         * whose typedef is still pending — emit those FIRST, or the tuple
-         * body references an undeclared name (tuple-of-Option, e.g.
-         * `(Option<u32>, Option<u32>)`). The element IS the Option's
-         * typedef name, so the lookup is by name. */
+        /* A tuple element may itself be a struct-Option
+         * (`rsx_opt_<raw_len>e<hex>`) whose typedef is still pending —
+         * emit those FIRST, or the tuple body references an undeclared
+         * name (tuple-of-Option, e.g. `(Option<u32>, Option<u32>)`).
+         * The element IS the Option's typedef name, so the lookup is by
+         * name. */
         {
             let mut f0 = 0usize;
             while f0 < n {
@@ -16757,10 +17131,29 @@ impl Lower {
                 f0 += 1;
             }
         }
-        let tdn = self.arena_tmp();
         let base = self.tup_elems.as_ptr().add(s * TUP_MAXF);
         let blens = self.tup_lens.as_ptr().add(s * TUP_MAXF);
-        let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, n, tdn, 160) };
+        let need = unsafe { Lower::tup_name_need(blens, n) };
+        if need == 0 {
+            unsafe {
+                self.err(b"internal: tuple typedef name too long\0".as_ptr(), 0);
+            }
+            return;
+        }
+        let tdn = unsafe { self.name_tmp(need) };
+        if tdn.is_null() {
+            unsafe {
+                self.err(b"internal: tuple typedef name too long\0".as_ptr(), 0);
+            }
+            return;
+        }
+        let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, n, tdn, need) };
+        if tdn_len == 0 {
+            unsafe {
+                self.err(b"internal: tuple typedef name too long\0".as_ptr(), 0);
+            }
+            return;
+        }
         self.out.puts(b"typedef struct { \0".as_ptr());
         let mut f = 0usize;
         while f < n {
@@ -16783,8 +17176,8 @@ impl Lower {
 
     /* Emit any still-pending struct-Option typedef whose RENDERED NAME
      * equals `name` — a tuple-of-Option element references the Option by
-     * its typedef name (`rsx_opt_<len>e<elem>`), so the pending Option is
-     * looked up by name, not by payload. */
+     * its typedef name (`rsx_opt_<raw_len>e<hex>`), so the pending Option
+     * is looked up by name, not by payload. */
     unsafe fn opt_emit_by_name(&mut self, name: *const u8, nlen: usize) {
         if nlen == 0 || name.is_null() || nlen > 160 {
             return;
@@ -16799,7 +17192,7 @@ impl Lower {
             let elen = self.opt_lens[s];
             let tdn = self.arena_tmp();
             let tdn_len = unsafe { Lower::opt_typedef_name(elem, elen, tdn, 160) };
-            if tdn_len == nlen {
+            if tdn_len > 0 && tdn_len == nlen {
                 let mut j = 0usize;
                 let mut eq = true;
                 while j < tdn_len {
@@ -16825,8 +17218,41 @@ impl Lower {
     }
 
     /* Emit pending tuple typedefs whose element spelling names the type
-     * just declared — same pass-A ordering contract as opt_emit_for. */
-    unsafe fn tup_emit_for(&mut self, name: *const u8, nlen: usize) {
+     * just declared — same pass-A ordering contract as opt_emit_for.
+     * Readiness: a tuple typedef body names EVERY element by value, so it
+     * may only land once each element that names a unit STRUCT has that
+     * struct's typedef complete. A tuple matching the just-declared type
+     * while another element still names an unemitted struct (file order
+     * puts it later) must wait: a later tup_emit_for for that struct, or
+     * tup_emit_rest after the type pass, emits it. */
+    unsafe fn tup_ready(
+        &mut self,
+        kids: *mut *mut pm_jit_rsx_ast_t,
+        nk: usize,
+        s: usize,
+    ) -> bool {
+        let n = self.tup_counts[s];
+        let mut f = 0usize;
+        while f < n {
+            let a = s * TUP_MAXF + f;
+            let elen = self.tup_lens[a];
+            let elem = self.tup_elems[a].as_ptr();
+            let dep = unsafe { self.tyorder_find(kids, nk, elem, elen) };
+            if !dep.is_null() && !unsafe { self.tydone_find(elem, elen) } {
+                return false;
+            }
+            f += 1;
+        }
+        true
+    }
+
+    unsafe fn tup_emit_for(
+        &mut self,
+        kids: *mut *mut pm_jit_rsx_ast_t,
+        nk: usize,
+        name: *const u8,
+        nlen: usize,
+    ) {
         if nlen == 0 || name.is_null() {
             return;
         }
@@ -16860,7 +17286,7 @@ impl Lower {
                 }
                 f += 1;
             }
-            if matched {
+            if matched && unsafe { self.tup_ready(kids, nk, s) } {
                 unsafe { self.tup_emit_one(s) };
             }
             s += 1;
@@ -16911,6 +17337,12 @@ impl Lower {
             if eq {
                 let tdn = self.arena_tmp();
                 let tdn_len = unsafe { Lower::opt_typedef_name(elem, elen, tdn, 160) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: Option typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
                 self.out.puts(b"typedef struct { \0".as_ptr());
                 self.out.put(elem, elen);
                 self.out.puts(b" _v; bool _has; } \0".as_ptr());
@@ -16934,6 +17366,12 @@ impl Lower {
                 let elen = self.opt_lens[s];
                 let tdn = self.arena_tmp();
                 let tdn_len = unsafe { Lower::opt_typedef_name(elem, elen, tdn, 160) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: Option typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
                 self.out.puts(b"typedef struct { \0".as_ptr());
                 self.out.put(elem, elen);
                 self.out.puts(b" _v; bool _has; } \0".as_ptr());
@@ -17147,7 +17585,7 @@ impl Lower {
             if unsafe { (*item).kind } == pm_jit_rsx_ast_kind::ENUM {
                 unsafe { self.lower_enum(item) };
                 unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
-                unsafe { self.tup_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                unsafe { self.tup_emit_for(kids, nk, unsafe { (*item).text }, unsafe { (*item).text_len }) };
             }
             if !self.ok {
                 bad = true;
@@ -17223,7 +17661,7 @@ impl Lower {
                 }
                 unsafe { self.lower_type_alias(item) };
                 unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
-                unsafe { self.tup_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                unsafe { self.tup_emit_for(kids, nk, unsafe { (*item).text }, unsafe { (*item).text_len }) };
             }
             if !self.ok {
                 bad = true;
@@ -17649,7 +18087,7 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_lower(
         errline: 0,
         ok: true,
         syms: SymTab::new(arena),
-        fns: FnTab::new(),
+        fns: FnTab::new(arena),
         consts: ConstTab::new(),
         enums: EnumTab::new(),
         depth: 0,
@@ -17702,6 +18140,14 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_lower(
         return -1;
     }
     let good = unsafe { lw.lower_file(unit) };
+    /* FnTab span OOM: refuse with the specific error — compiling on with
+     * unknown return/param types would emit untyped call sites. */
+    if lw.fns.oom {
+        unsafe {
+            err_set(errbuf, errbuf_len, b"arena exhausted while lowering\0".as_ptr(), 0);
+        }
+        return -1;
+    }
     if !good || !lw.ok || !lw.out.ok {
         /* aborted without a specific message (arena exhausted mid-render):
          * leave the caller a reason instead of an empty errbuf */

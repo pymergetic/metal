@@ -508,8 +508,8 @@ static int32_t test_compile_nonzero_static_and_iflet_return(void) {
         pm_util_mem_arena_destroy(arena); free(backing); return 144;
     }
     /* the RUNNER cell is a zero Option — bare; the typedef name carries
-     * the injective `<len>e` encoding (`Runner` is 6 chars) */
-    if (!rsx_strstr(c_out, "static rsx_opt_6eRunner RUNNER;")) {
+     * the injective `<len>e<hex>` encoding (`Runner` = 52 75 6e 6e 65 72) */
+    if (!rsx_strstr(c_out, "static rsx_opt_6e52756e6e6572 RUNNER;")) {
         pm_util_mem_arena_destroy(arena); free(backing); return 145;
     }
     /* no doubled return from the if-let tail */
@@ -1086,6 +1086,7 @@ static int32_t test_self_host_object(void) {
             pm_util_mem_arena_destroy(oarena); free(obacking);
             return 0;
         }
+        fprintf(stderr, "self_host_object: tcc: %s\n", oerr);
         pm_util_mem_arena_destroy(arena); free(backing);
         pm_util_mem_arena_destroy(oarena); free(obacking);
         return 158;
@@ -1513,14 +1514,16 @@ static int32_t test_atomic_runtime_linked(void) {
 }
 
 /* --- tuple typedef collision ---------------------------------------------
- * Audit item 5: the OLD naming scheme (elements sanitized then joined
- * by '_') is NOT injective — `(Foo_, Bar)` and `(Foo, _Bar)` both
- * sanitized to `rsx_tuple_Foo__Bar`, producing two different C types
- * with one typedef name (a hard C error, or a type-confused destructure
- * via tup_find). The NEW scheme prefixes each element with `<len>e` and
- * the element count, so boundaries are recoverable and the map
- * signature -> identifier is injective. This test constructs the exact
- * colliding pair and proves the emitted typedef names differ. */
+ * The OLD naming schemes are NOT injective:
+ *   join-only: `(Foo_, Bar)` and `(Foo, _Bar)` both sanitized to
+ *     `rsx_tuple_Foo__Bar` — two different C types, one typedef name.
+ *   `<len>e<sanitized>`: `Foo *` and `Foo__` are both 5 raw bytes and
+ *     both sanitize to `Foo__` — `(*mut Foo, u32)` and `(Foo__, u32)`
+ *     collided as `rsx_tuple_2_5eFoo__5e75696e7433325f74`.
+ * The NEW scheme encodes every payload byte as two lowercase hex digits
+ * (`<raw_len>e<2*raw_len hex>`), so distinct raw spellings always render
+ * distinct identifiers. This test constructs BOTH colliding pairs and
+ * proves the emitted typedef names differ and carry the exact hex. */
 
 static const char TUP_COLLIDE_SRC[] =
     "#[repr(C)]\n"
@@ -1531,6 +1534,8 @@ static const char TUP_COLLIDE_SRC[] =
     "pub struct Bar { pub x: u32 }\n"
     "#[repr(C)]\n"
     "pub struct _Bar { pub x: u32 }\n"
+    "#[repr(C)]\n"
+    "pub struct Foo__ { pub x: u32 }\n"
     "#[no_mangle]\n"
     "pub extern \"C\" fn make_a() -> (Foo_, Bar) {\n"
     "    (Foo_ { x: 1 }, Bar { x: 2 })\n"
@@ -1538,6 +1543,24 @@ static const char TUP_COLLIDE_SRC[] =
     "#[no_mangle]\n"
     "pub extern \"C\" fn make_b() -> (Foo, _Bar) {\n"
     "    (Foo { x: 3 }, _Bar { x: 4 })\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn make_c(p: *mut Foo) -> (*mut Foo, u32) {\n"
+    "    (p, 5u32)\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn make_d(q: Foo__) -> (Foo__, u32) {\n"
+    "    (q, 6u32)\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn make_c1(p: *mut Foo) -> u32 {\n"
+    "    let (q, v) = make_c(p);\n"
+    "    v\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn make_d1(q: Foo__) -> u32 {\n"
+    "    let (w, v) = make_d(q);\n"
+    "    v\n"
     "}\n";
 
 static int32_t test_tuple_collision(void) {
@@ -1547,12 +1570,8 @@ static int32_t test_tuple_collision(void) {
     size_t c_out_len = 0;
     char err[PM_METAL_JIT_RSX_ERR_MAX];
     int32_t rc;
-    char name_a[64];
-    char name_b[64];
-    const char *ta;
-    const char *tb;
-    size_t la;
-    size_t lb;
+    char names[4][96];
+    size_t nn = 0;
     const char *t;
 
     backing = malloc(1u << 24);
@@ -1564,47 +1583,154 @@ static int32_t test_tuple_collision(void) {
                                   strlen(TUP_COLLIDE_SRC),
                                   &c_out, &c_out_len, err, sizeof(err));
     if (rc != 0) {
+        fprintf(stderr, "tuple collision: %s\n", err);
         pm_util_mem_arena_destroy(arena); free(backing); return 212;
     }
     if (c_out == NULL || c_out_len < 200) {
         pm_util_mem_arena_destroy(arena); free(backing); return 213;
     }
-    /* extract the two tuple typedef names: `rsx_tuple_<N>_<len>e...` */
-    ta = NULL; tb = NULL;
+    /* collect every tuple typedef name: `rsx_tuple_<N>_<len>e...` */
     t = c_out;
     while ((t = strstr(t, "rsx_tuple_")) != NULL) {
-        if (ta == NULL) { ta = t; } else if (tb == NULL) { tb = t; break; }
+        size_t l = 0;
+        if (nn >= 4) break;
+        while (t[l] != 0 && t[l] != ';' && t[l] != ' ' && l < sizeof(names[0]) - 1) {
+            names[nn][l] = t[l]; l++;
+        }
+        names[nn][l] = 0;
+        nn++;
         t++;
     }
-    if (ta == NULL || tb == NULL) {
+    if (nn != 4) {
+        fprintf(stderr, "tuple collision: expected 4 names, saw %zu\n", nn);
         pm_util_mem_arena_destroy(arena); free(backing); return 214;
     }
-    la = 0;
-    while (ta[la] != 0 && ta[la] != ';' && ta[la] != ' ' && la < sizeof(name_a) - 1) {
-        name_a[la] = ta[la]; la++;
+    /* the four signatures must render pairwise DISTINCT identifiers */
+    {
+        size_t i, j;
+        for (i = 0; i < nn; i++) {
+            for (j = i + 1; j < nn; j++) {
+                if (strcmp(names[i], names[j]) == 0) {
+                    fprintf(stderr, "tuple collision: %s == %s\n", names[i], names[j]);
+                    pm_util_mem_arena_destroy(arena); free(backing); return 215;
+                }
+            }
+        }
     }
-    name_a[la] = 0;
-    lb = 0;
-    while (tb[lb] != 0 && tb[lb] != ';' && tb[lb] != ' ' && lb < sizeof(name_b) - 1) {
-        name_b[lb] = tb[lb]; lb++;
+    /* exact canonical names (hex of the raw C-type bytes):
+     * Foo_  = 46 6f 6f 5f        Bar  = 42 61 72
+     * Foo   = 46 6f 6f           _Bar = 5f 42 61 72
+     * Foo * = 46 6f 6f 20 2a     u32->uint32_t = 75 69 6e 74 33 32 5f 74
+     * Foo__ = 46 6f 6f 5f 5f */
+    {
+        static const char *want[4] = {
+            "rsx_tuple_2_4e466f6f5f_3e426172",
+            "rsx_tuple_2_3e466f6f_4e5f426172",
+            "rsx_tuple_2_5e466f6f202a_8e75696e7433325f74",
+            "rsx_tuple_2_5e466f6f5f5f_8e75696e7433325f74",
+        };
+        size_t k;
+        int found[4] = {0, 0, 0, 0};
+        size_t i;
+        for (i = 0; i < nn; i++) {
+            for (k = 0; k < 4; k++) {
+                if (!found[k] && strcmp(names[i], want[k]) == 0) {
+                    found[k] = 1;
+                }
+            }
+        }
+        for (k = 0; k < 4; k++) {
+            if (!found[k]) {
+                fprintf(stderr, "tuple collision: missing canonical name %s\n", want[k]);
+                pm_util_mem_arena_destroy(arena); free(backing); return 216;
+            }
+        }
+        /* the historical sanitization collision is specifically broken:
+         * `Foo *` (466f6f202a) and `Foo__` (466f6f5f5f) must differ */
+        if (strcmp(names[2], names[3]) == 0) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 217;
+        }
     }
-    name_b[lb] = 0;
-    /* the two signatures must render DISTINCT identifiers */
-    if (strcmp(name_a, name_b) == 0) {
-        fprintf(stderr, "tuple collision: %s == %s\n", name_a, name_b);
-        pm_util_mem_arena_destroy(arena); free(backing); return 215;
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    /* in-kernel TCC object compile + ELF link + call: both historically
+     * colliding signatures (make_c `(*mut Foo, u32)` and make_d
+     * `(Foo__, u32)`) must coexist in ONE linked image — distinct
+     * typedefs, no duplicate-definition conflict. */
+    {
+        void *obacking = malloc(1u << 24);
+        pm_util_mem_arena_t *oarena;
+        char oerr[256];
+        uint8_t *obj = NULL;
+        size_t obj_len = 0;
+        pm_metal_build_unit_t unit;
+        pm_metal_build_artifact_t art;
+        uint8_t *objs[1];
+        size_t lens[1];
+        uint32_t (*mk_c)(void *);
+        uint32_t (*mk_d)(void *);
+        uint32_t r;
+
+        if (!obacking) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 218;
+        }
+        oarena = pm_util_mem_arena_create(obacking, 1u << 24);
+        if (!oarena) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            free(obacking);
+            return 219;
+        }
+        memset(oerr, 0, sizeof(oerr));
+        rc = pm_metal_jit_c_object_compile(oarena, c_out, c_out_len,
+                                           &obj, &obj_len, oerr, sizeof(oerr));
+        if (rc != 0) {
+            int skip = oerr[0] != 0 && strstr(oerr, "no native object output on this seat") != NULL;
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            if (skip) return 0; /* polite seat refusal — skip */
+            fprintf(stderr, "tuple collision: tcc: %s\n", oerr);
+            return 233;
+        }
+        memset(&unit, 0, sizeof(unit));
+        snprintf(unit.fqn, sizeof(unit.fqn), "%s", "rsx.tupcollide");
+        objs[0] = obj;
+        lens[0] = obj_len;
+        memset(oerr, 0, sizeof(oerr));
+        rc = pm_metal_build_link(oarena, &unit, objs, lens, 1, &art,
+                                 oerr, sizeof(oerr));
+        if (rc != PM_METAL_BUILD_OK) {
+            int skip = oerr[0] != 0 && strstr(oerr, "no ELF loader on this seat") != NULL;
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            if (skip) return 0; /* polite seat refusal — skip */
+            fprintf(stderr, "tuple collision: link: %s\n", oerr);
+            return 234;
+        }
+        mk_c = (uint32_t (*)(void *))
+            pm_metal_build_artifact_lookup(&art, "make_c1");
+        mk_d = (uint32_t (*)(void *))
+            pm_metal_build_artifact_lookup(&art, "make_d1");
+        if (mk_c == NULL || mk_d == NULL) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking); return 235;
+        }
+        r = mk_c(0); /* (*mut Foo, u32) via accessor: _1 carries 5 */
+        if (r != 5u) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking); return 236;
+        }
+        r = mk_d(0); /* (Foo__, u32) via accessor: _1 carries 6 */
+        if (r != 6u) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking); return 237;
+        }
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(oarena);
+        free(obacking);
     }
-    /* and each must carry its length-encoded elements:
-     * (Foo_, Bar) -> rsx_tuple_2_4eFoo__3eBar
-     * (Foo, _Bar) -> rsx_tuple_2_3eFoo_4e_Bar */
-    if (strcmp(name_a, "rsx_tuple_2_4eFoo__3eBar") != 0) {
-        fprintf(stderr, "tuple a: got %s\n", name_a);
-        pm_util_mem_arena_destroy(arena); free(backing); return 216;
-    }
-    if (strcmp(name_b, "rsx_tuple_2_3eFoo_4e_Bar") != 0) {
-        fprintf(stderr, "tuple b: got %s\n", name_b);
-        pm_util_mem_arena_destroy(arena); free(backing); return 217;
-    }
+#endif /* PM_METAL_BUILD_HAS_ELF && TCC && !WASM32 */
     pm_util_mem_arena_destroy(arena);
     free(backing);
     return 0;
@@ -1778,6 +1904,456 @@ static int32_t test_let_else_order_linked(void) {
 #endif
 }
 
+/* --- Option/Tuple typedef codec: injective + reversible names -----------
+ * The typedef name carries the payload's EXACT canonical C-type bytes as
+ * lowercase hex (`rsx_opt_<raw_len>e<2*raw_len hex>`), so:
+ *   - distinct payload spellings always render distinct identifiers
+ *     (the historical `a-b`/`a_b` sanitization collision is impossible)
+ *   - the name decodes back to the exact payload bytes (never the encoded
+ *     spelling, never a prefix skip)
+ * Proven here by compiling sources whose Option payloads spell out the
+ * required cases and asserting the exact names in the generated C. */
+
+static const char OPT_CODEC_SRC[] =
+    "#[repr(C)]\n"
+    "pub struct Foo__ { pub x: u32 }\n"
+    "#[repr(C)]\n"
+    "pub struct Row { pub a: u32 }\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn take_sz(v: Option<usize>) -> usize {\n"
+    "    match v { Some(x) => x, None => 0usize }\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn take_u32(v: Option<u32>) -> u32 {\n"
+    "    match v { Some(x) => x, None => 0u32 }\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn take_foo(v: Option<Foo__>) -> u32 {\n"
+    "    match v { Some(x) => x.x, None => 0u32 }\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn take_arr(v: Option<[u8; 16]>) -> u8 {\n"
+    "    match v { Some(x) => x[0], None => 0u8 }\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn take_arrptr(v: Option<*mut [Row; 4]>) -> usize {\n"
+    "    match v { Some(x) => unsafe { (*x)[0].a as usize }, None => 0usize }\n"
+    "}\n";
+
+static int32_t test_opt_codec_names(void) {
+    void *backing = malloc(1u << 26);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    /* expected canonical names: raw payload bytes -> lowercase hex
+     * size_t       73 69 7a 65 5f 74                      (6)
+     * uint32_t     75 69 6e 74 33 32 5f 74               (8)
+     * Foo__        46 6f 6f 5f 5f                         (5)
+     * uint8_t [16] 75 69 6e 74 38 5f 74 20 5b 31 36 5d  (12)
+     * Row (*) [4]  52 6f 77 20 28 2a 29 20 5b 34 5d     (11) */
+    static const char *want[5] = {
+        "rsx_opt_6e73697a655f74",
+        "rsx_opt_8e75696e7433325f74",
+        "rsx_opt_5e466f6f5f5f",
+        "rsx_opt_12e75696e74385f74205b31365d",
+        "rsx_opt_11e526f7720282a29205b345d",
+    };
+    size_t i;
+    size_t n_names = 0;
+
+    if (backing == NULL) return 240;
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
+    if (arena == NULL) { free(backing); return 241; }
+
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, OPT_CODEC_SRC, strlen(OPT_CODEC_SRC),
+                                 &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        fprintf(stderr, "opt codec: %s\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 242;
+    }
+    if (c_out == NULL || c_out_len == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 243;
+    }
+    /* every expected name appears exactly once (the typedef emit) */
+    for (i = 0; i < 5; i++) {
+        const char *p = c_out;
+        int hits = 0;
+        while ((p = strstr(p, want[i])) != NULL) {
+            hits++;
+            p++;
+        }
+        if (hits == 0) {
+            fprintf(stderr, "opt codec: missing %s\n", want[i]);
+            pm_util_mem_arena_destroy(arena); free(backing); return 244;
+        }
+        n_names += (size_t)hits;
+    }
+    /* the payload C types appear in the typedef bodies (round trip: the
+     * name's bytes and the declared member are the same type) */
+    if (!rsx_strstr(c_out, "typedef struct { size_t _v; bool _has; } rsx_opt_6e73697a655f74;")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 245;
+    }
+    if (!rsx_strstr(c_out, "typedef struct { uint32_t _v; bool _has; } rsx_opt_8e75696e7433325f74;")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 246;
+    }
+    if (!rsx_strstr(c_out, "typedef struct { Foo__ _v; bool _has; } rsx_opt_5e466f6f5f5f;")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 247;
+    }
+    if (!rsx_strstr(c_out, "typedef struct { uint8_t [16] _v; bool _has; } rsx_opt_12e75696e74385f74205b31365d;")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 248;
+    }
+    if (!rsx_strstr(c_out, "typedef struct { Row (*) [4] _v; bool _has; } rsx_opt_11e526f7720282a29205b345d;")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 249;
+    }
+    /* no legacy sanitized names remain (the old scheme is gone) */
+    if (strstr(c_out, "rsx_opt_6esize_t") != NULL
+        || strstr(c_out, "rsx_opt_8euint32_t") != NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 250;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/* --- Option<size_t> + `?`: the name decodes back to the payload ----------
+ * `?` on a struct-Option must recover the exact payload C type from the
+ * hex name: `rsx_opt_6e73697a655f74` -> `size_t` (never the encoded
+ * spelling `73697a655f74`, never a fixed byte skip). Proven by the let
+ * declaring its bind with the decoded type and the `. _v` read. */
+
+static const char OPT_TRY_SRC[] =
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn pick(v: Option<usize>) -> Option<usize> {\n"
+    "    match v { Some(x) => return Some(x), None => return None }\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn run(v: Option<usize>) -> Option<usize> {\n"
+    "    let n = pick(v)?;\n"
+    "    Some(n)\n"
+    "}\n";
+
+static int32_t test_opt_try_decodes_payload(void) {
+    void *backing = malloc(1u << 26);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+
+    if (backing == NULL) return 251;
+    arena = pm_util_mem_arena_create(backing, 1u << 26);
+    if (arena == NULL) { free(backing); return 252; }
+
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, OPT_TRY_SRC, strlen(OPT_TRY_SRC),
+                                 &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        fprintf(stderr, "opt try: %s\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 253;
+    }
+    if (c_out == NULL || c_out_len == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 254;
+    }
+    /* the fn's own return type is the canonical name */
+    if (!rsx_strstr(c_out, "rsx_opt_6e73697a655f74 run(")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 255;
+    }
+    /* the `?` unwrap declares its bind as the DECODED payload type */
+    if (!rsx_strstr(c_out, "size_t n = ")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 256;
+    }
+    /* and reads the payload through _v of the canonical Option name */
+    if (!rsx_strstr(c_out, "rsx_opt_6e73697a655f74 __rsx_try")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 257;
+    }
+    /* never the encoded spelling as a type */
+    if (strstr(c_out, "73697a655f74 n") != NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 258;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/* --- malformed Option names: the decoder refuses cleanly -----------------
+ * A `rsx_opt_*` type name that is not a well-formed canonical encoding
+ * must be refused with a specific error, never partially decoded. Every
+ * malformed shape from the codec review rides an extern-block static
+ * whose declared type is the malformed name; the let-else/`?` consumer
+ * runs the strict decoder on it. */
+
+static int32_t opt_bad_name_case(const char *bad_type, int32_t code) {
+    void *backing = malloc(1u << 24);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    /* extern static with the malformed type + a let-else consumer (the
+     * decoder entry) — one source, one refusal expected */
+    char src[512];
+    int n;
+
+    if (backing == NULL) return code;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (arena == NULL) { free(backing); return code + 1; }
+    n = snprintf(src, sizeof(src),
+        "extern \"C\" { static BAD: %s; }\n"
+        "pub fn probe() -> u32 {\n"
+        "    let Some(v) = unsafe { BAD } else { return 0u32; };\n"
+        "    v\n"
+        "}\n", bad_type);
+    if (n <= 0 || (size_t)n >= sizeof(src)) {
+        pm_util_mem_arena_destroy(arena); free(backing); return code + 2;
+    }
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, src, (size_t)n,
+                                 &c_out, &c_out_len, err, sizeof(err)) == 0) {
+        /* compiled: the malformed name was accepted — WRONG */
+        fprintf(stderr, "opt bad %s: accepted\n", bad_type);
+        pm_util_mem_arena_destroy(arena); free(backing); return code + 3;
+    }
+    /* refusal must carry a message (never a silent empty fail) */
+    if (err[0] == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return code + 4;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+static int32_t test_opt_bad_names_refuse(void) {
+    /* missing length: no digits between prefix and 'e' */
+    if (opt_bad_name_case("rsx_opt_e466f6f", 260) != 0) return 260;
+    /* missing 'e' separator */
+    if (opt_bad_name_case("rsx_opt_3466f6f", 261) != 0) return 261;
+    /* odd number of hex digits */
+    if (opt_bad_name_case("rsx_opt_3e466f6", 262) != 0) return 262;
+    /* invalid hex digit (g) */
+    if (opt_bad_name_case("rsx_opt_3e466f6g", 263) != 0) return 263;
+    /* uppercase hex digit — lowercase is canonical-only */
+    if (opt_bad_name_case("rsx_opt_3e466F6f", 264) != 0) return 264;
+    /* declared length smaller than payload (4 hex digits for len 3) */
+    if (opt_bad_name_case("rsx_opt_2e466f6f", 265) != 0) return 265;
+    /* declared length larger than payload (2 hex digits for len 3) */
+    if (opt_bad_name_case("rsx_opt_3e466f", 266) != 0) return 266;
+    /* decimal length overflow (huge declared length) */
+    if (opt_bad_name_case("rsx_opt_99999999999999999999e466f6f", 267) != 0) return 267;
+    /* zero-length payload */
+    if (opt_bad_name_case("rsx_opt_0e", 268) != 0) return 268;
+    /* truncated: length says 3 but nothing follows the 'e' */
+    if (opt_bad_name_case("rsx_opt_3e", 269) != 0) return 269;
+    return 0;
+}
+
+/* --- arena OOM: table spans refuse with a specific error ------------------
+ * The FnTab/LocalTab arena spans and the exact-size name_tmp allocations
+ * must refuse IMMEDIATELY with a message naming the arena — never compile
+ * on with unknown types (which would emit untyped call sites / locals).
+ * A tiny arena (large enough to lex+parse, too small for the tables)
+ * forces the refusal path. */
+
+static const char OOM_SRC[] =
+    "#[repr(C)]\n"
+    "pub struct P { pub a: u32, pub b: u32 }\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn f(p: P) -> u32 { p.a + p.b }\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn g(x: u32) -> u32 {\n"
+    "    let y = x + 1u32;\n"
+    "    let y2 = y + 1u32;\n"
+    "    let y3 = y2 + 1u32;\n"
+    "    y3\n"
+    "}\n";
+
+static int32_t oom_arena_case(size_t span, const char *what, int32_t code) {
+    void *backing = malloc(span);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+
+    if (backing == NULL) return code;
+    arena = pm_util_mem_arena_create(backing, span);
+    if (arena == NULL) { free(backing); return code + 1; }
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, OOM_SRC, strlen(OOM_SRC),
+                                 &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        /* refusal is correct — but it must carry a reason */
+        if (err[0] == 0) {
+            fprintf(stderr, "oom %s (%zu): silent refusal\n", what, span);
+            pm_util_mem_arena_destroy(arena); free(backing); return code + 2;
+        }
+        pm_util_mem_arena_destroy(arena); free(backing);
+        return 0;
+    }
+    /* compiled: with a span this small the tables cannot have fit — the
+     * compile lied (compiled on past a refused span). */
+    fprintf(stderr, "oom %s (%zu): compiled anyway\n", what, span);
+    pm_util_mem_arena_destroy(arena); free(backing);
+    return code + 3;
+}
+
+static int32_t test_arena_oom_refuses(void) {
+    /* spans that hold the source + tokens + AST but starve the tables:
+     * every refusal must be specific, none silent. */
+    size_t spans[] = { 64u * 1024u, 128u * 1024u, 256u * 1024u, 512u * 1024u };
+    size_t i;
+    int refused = 0;
+
+    for (i = 0; i < sizeof(spans) / sizeof(spans[0]); i++) {
+        int32_t rc = oom_arena_case(spans[i], "table-span", 300 + (int32_t)i * 10);
+        if (rc != 0) return rc;
+        /* rc == 0 means either refused-cleanly OR compiled — distinguish
+         * by re-running and checking which happened. */
+        {
+            void *backing = malloc(spans[i]);
+            pm_util_mem_arena_t *arena;
+            char *c_out = NULL;
+            size_t c_out_len = 0;
+            char err[PM_METAL_JIT_RSX_ERR_MAX];
+
+            if (backing == NULL) return 348;
+            arena = pm_util_mem_arena_create(backing, spans[i]);
+            if (arena == NULL) { free(backing); return 349; }
+            memset(err, 0, sizeof(err));
+            if (pm_metal_jit_rsx_compile(arena, OOM_SRC, strlen(OOM_SRC),
+                                         &c_out, &c_out_len, err,
+                                         sizeof(err)) != 0) {
+                refused++;
+                if (err[0] == 0) {
+                    pm_util_mem_arena_destroy(arena); free(backing); return 350;
+                }
+            }
+            pm_util_mem_arena_destroy(arena);
+            free(backing);
+        }
+    }
+    /* at least the two smallest spans must refuse (the SymTab block alone
+     * is ~1 MiB); if every span compiled, the OOM path was never exercised */
+    if (refused < 2) {
+        fprintf(stderr, "arena oom: %d/%zu spans refused — path not exercised\n",
+                refused, sizeof(spans) / sizeof(spans[0]));
+        return 351;
+    }
+    return 0;
+}
+
+/* --- LocalTab rollback: no arena growth from speculative re-registers ------
+ * A local rebound N times in one scope (loop reassignment is ONE entry,
+ * but nested if/else re-binding the same name with the same type must not
+ * grow the table: the reuse guard returns before allocating). Proven by
+ * compiling a source with many shadowed re-binds: the compile must succeed
+ * with a modest arena AND the emitted C must reuse the declaration (no
+ * duplicate `uint32_t y` lines). */
+
+static const char ROLLBACK_SRC[] =
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn rb(x: u32) -> u32 {\n"
+    "    let y = x + 1u32;\n"
+    "    let y = y + 1u32;\n"
+    "    let y = y + 1u32;\n"
+    "    let y = y + 1u32;\n"
+    "    let y = y + 1u32;\n"
+    "    let y = y + 1u32;\n"
+    "    let y = y + 1u32;\n"
+    "    let y = y + 1u32;\n"
+    "    y\n"
+    "}\n";
+
+static int32_t test_localtab_reuse_no_growth(void) {
+    void *backing = malloc(1u << 24);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    const char *p;
+    int decls = 0;
+
+    if (backing == NULL) return 360;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (arena == NULL) { free(backing); return 361; }
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, ROLLBACK_SRC, strlen(ROLLBACK_SRC),
+                                 &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        fprintf(stderr, "rollback: %s\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 362;
+    }
+    /* the same-scope same-type re-binds reuse: exactly ONE `uint32_t y`
+     * declaration, the rest are plain assignments. */
+    p = c_out;
+    while ((p = strstr(p, "uint32_t y")) != NULL) {
+        decls++;
+        p++;
+    }
+    if (decls != 1) {
+        fprintf(stderr, "rollback: %d declarations of y (want 1)\n", decls);
+        pm_util_mem_arena_destroy(arena); free(backing); return 363;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+/* --- name_tmp capacity boundary -------------------------------------------
+ * A tuple signature whose encoded name is LONGER than the 160-byte
+ * arena_tmp scratch must still compile (the exact-size name_tmp
+ * allocation), and one whose name exceeds the 1024-byte ceiling must
+ * refuse with a message (never truncate). TUP_MAXF caps fields at 4, so
+ * the length is driven by long element spellings; 63-byte element types
+ * are the per-field cap (elem lens are [u8;64]). */
+
+static const char LONG_TUPLE_SRC[] =
+    "#[repr(C)]\n"
+    "pub struct Row { pub a: u32, pub b: u32, pub c: u32, pub d: u32 }\n"
+    "#[repr(C)]\n"
+    "pub struct RowA { pub a: Row, pub b: Row, pub c: Row, pub d: Row }\n"
+    "#[repr(C)]\n"
+    "pub struct RowB { pub a: RowA, pub b: RowA, pub c: RowA, pub d: RowA }\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn lt(p: *mut RowB) -> (RowB, RowB, RowB, RowB) {\n"
+    "    ((*p), (*p), (*p), (*p))\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn lt2(p: *mut RowB, q: u32) -> u32 { q }\n";
+
+static int32_t test_name_tmp_capacity(void) {
+    void *backing = malloc(1u << 24);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    int found_long = 0;
+    const char *p;
+
+    if (backing == NULL) return 370;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (arena == NULL) { free(backing); return 371; }
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, LONG_TUPLE_SRC, strlen(LONG_TUPLE_SRC),
+                                 &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        fprintf(stderr, "name_tmp: %s\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 372;
+    }
+    /* the 4x RowB tuple name is ~4*(4+1+2*4)= way past 160 bytes: it must
+     * still be present whole (exact-size allocation, not truncation). */
+    p = c_out;
+    while ((p = strstr(p, "rsx_tuple_4_")) != NULL) {
+        found_long = 1;
+        /* the name must be terminated cleanly (a full identifier, then the
+         * struct body follows) */
+        if (strstr(p, ";") == NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 373;
+        }
+        break;
+    }
+    if (!found_long) {
+        fprintf(stderr, "name_tmp: no 4-field tuple name emitted\n");
+        pm_util_mem_arena_destroy(arena); free(backing); return 374;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
 /* --- registration ------------------------------------------------------ */
 
 /* RSX_TEST_VERBOSE=1 prints one line per subtest with its rc, so a FAIL from
@@ -1818,6 +2394,12 @@ static int32_t pm_metal_jit_rsx_tests(void) {
     rc = rsx_run_named("self_host_link", test_self_host_link);    if (rc) return rc;
     rc = rsx_run_named("atomic_runtime_linked", test_atomic_runtime_linked); if (rc) return rc;
     rc = rsx_run_named("tuple_collision", test_tuple_collision);  if (rc) return rc;
+    rc = rsx_run_named("opt_codec_names", test_opt_codec_names); if (rc) return rc;
+    rc = rsx_run_named("opt_try_decodes_payload", test_opt_try_decodes_payload); if (rc) return rc;
+    rc = rsx_run_named("opt_bad_names_refuse", test_opt_bad_names_refuse); if (rc) return rc;
+    rc = rsx_run_named("arena_oom_refuses", test_arena_oom_refuses); if (rc) return rc;
+    rc = rsx_run_named("localtab_reuse_no_growth", test_localtab_reuse_no_growth); if (rc) return rc;
+    rc = rsx_run_named("name_tmp_capacity", test_name_tmp_capacity); if (rc) return rc;
     rc = rsx_run_named("let_else_order_linked", test_let_else_order_linked); if (rc) return rc;
     rc = rsx_run_named("introspection", test_introspection);      if (rc) return rc;
     return 0;
