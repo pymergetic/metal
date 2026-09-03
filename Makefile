@@ -219,7 +219,7 @@ WASM_UPY := $(TOP)/ports/webassembly/build-metal/micropython.mjs
 WS ?= $(abspath $(TOP)/../..)
 VSCODE_CDB ?= $(WS)/.vscode/compile_commands.json
 
-.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico selfhost ksweep rsx-probe rsx-dump
+.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico selfhost ksweep rsx-probe rsx-dump rsx-hwm
 
 FORCE:
 
@@ -320,6 +320,24 @@ $(RSX_DUMP): $(RSX_DUMP_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OB
 
 rsx-dump: $(RSX_DUMP)
 	@echo "rsx-dump built: $(RSX_DUMP) <file.rs> [fqn...]"
+
+# rsx-hwm: arena high-water audit (tools/rsx_hwm.c) — compiles 1/10/40/200-
+# function sources and prints the heap draw per compile, proving the
+# LocalTab-per-function cost is bounded and linear. tools/ posture: same
+# link shape as rsx_probe / ksweep, not a prove gate.
+RSX_HWM := $(CURDIR)/build/rsx_hwm
+RSX_HWM_O := $(CURDIR)/build/rsx_hwm.o
+
+$(RSX_HWM_O): $(CURDIR)/tools/rsx_hwm.c
+	@mkdir -p $(dir $(RSX_HWM_O))
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+$(RSX_HWM): $(RSX_HWM_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+	@mkdir -p $(dir $(RSX_HWM))
+	$(CXX) -o $(RSX_HWM) $(RSX_HWM_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+
+rsx-hwm: $(RSX_HWM)
+	$(RSX_HWM)
 
 # selfhost self: the same feed entrypoint, but the rsx card's code comes from
 # gen-1 C (micro-rustc's own output) instead of the rustc boot build — the

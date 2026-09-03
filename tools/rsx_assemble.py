@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import pathlib
 import sys
 
@@ -80,7 +81,7 @@ def assemble() -> bytes:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true",
-                    help="fail on drift instead of writing")
+                    help="fail on drift instead of writing (never modifies)")
     ap.add_argument("--sha", action="store_true",
                     help="print the assembled sha256 and exit")
     args = ap.parse_args()
@@ -101,11 +102,22 @@ def main() -> int:
         return 0
 
     if args.check:
+        # --check is read-only by construction: the only write in this
+        # tool lives below, past this branch.
         print("rsx_assemble: __impl__.rs is not the assembly of parts/ — drift",
               file=sys.stderr)
         return 1
 
-    OUT.write_bytes(data)
+    # Atomic write: build the new bytes in a sibling temp file, fsync,
+    # then rename over __impl__.rs. A crash mid-write can never leave a
+    # torn assembly — every seat that parses one line of rsx sees either
+    # the whole old file or the whole new one.
+    tmp = OUT.with_suffix(OUT.suffix + ".tmp")
+    with open(tmp, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, OUT)
     return 0
 
 
