@@ -238,6 +238,18 @@ int32_t pm_metal_build_actor_cancel(pm_metal_build_actor_job_t *job);
  * PM_METAL_BUILD_ACTOR_DEPTH the cap. Returns 0. */
 int32_t pm_metal_build_actor_depth(uint32_t *depth);
 
+/* Reclaim a terminal job's memory. The submit deep-copies the unit and
+ * the seat fill into the boot arena so the job outlives the caller's
+ * arena; the boot arena's heap is tlsf-backed, so this free genuinely
+ * reclaims — a submit/release loop holds a stable high-water instead of
+ * growing the boot arena per job. Only a terminal (DONE/FAILED/CANCELLED)
+ * job may be released, and exactly once: after this call the job pointer
+ * is dangling (the queue no longer holds it — terminal jobs are dequeued
+ * inside the step that finished them). Returns 0, or negative when the
+ * job is not terminal (release the job after run/step reports its
+ * terminal state, never while queued). */
+int32_t pm_metal_build_actor_release(pm_metal_build_actor_job_t *job);
+
 /*------------------ dependency DAG executor (Phase 5) ------------------
  * graph_resolve orders units; the DAG executor RUNS that order with
  * dependency-failure isolation: a unit whose dependency failed is SKIPPED

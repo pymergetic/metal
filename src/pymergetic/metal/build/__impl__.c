@@ -2521,6 +2521,8 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_cancel, pm_metal_bu
     int32_t(pm_metal_build_actor_job_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_depth, pm_metal_build_actor_depth,
     int32_t(uint32_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_release, pm_metal_build_actor_release,
+    int32_t(pm_metal_build_actor_job_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_dag_run, pm_metal_build_dag_run,
     int32_t(pm_util_mem_arena_t *, pm_metal_build_unit_t *, uint32_t, const pm_metal_build_dag_opts_t *, pm_metal_build_dag_result_t *, char *, size_t));
 
@@ -2776,6 +2778,43 @@ static void actor_job_finish(pm_build_actor_t *a, pm_metal_build_actor_job_t *jo
 /* The job's own compile, run while it owns the serial section. Mirrors
  * pm_metal_build_unit_compile's loop, but re-entrant at phase boundaries:
  * next_src is the cursor. */
+/* Free one job's compile scratch. Every early exit of actor_job_run_locked
+ * calls this: a cancelled or failed compile leaves no all_includes joins,
+ * no arrays, no TCC object bytes behind in the boot arena. The blocks were
+ * allocated from the tlsf heap, so the free genuinely reclaims — this is
+ * the path the 10,000-job stress test measures as stable high-water. */
+static void actor_scratch_free(pm_util_mem_arena_t *arena,
+    uint8_t **objs, size_t *lens, const char **compiled_srcs,
+    const char **all_includes, uint32_t n_all_includes,
+    const char **all_defines, uint32_t n_compiled) {
+    uint32_t i;
+    if (objs != NULL) {
+        for (i = 0; i < n_compiled; i++) {
+            pm_util_mem_free(arena, objs[i]);
+        }
+        pm_util_mem_free(arena, objs);
+    }
+    if (lens != NULL) {
+        pm_util_mem_free(arena, lens);
+    }
+    if (compiled_srcs != NULL) {
+        pm_util_mem_free(arena, compiled_srcs);
+    }
+    if (all_includes != NULL) {
+        /* [0] and [1..unit.n_include_dirs] are join_path products;
+         * [1+n_unit_includes..] alias the caller's option arrays — not
+         * ours to free (distinguish by tracking how many we joined) */
+        for (i = 0; i < n_all_includes; i++) {
+            pm_util_mem_free(arena, (void *)all_includes[i]);
+        }
+        pm_util_mem_free(arena, all_includes);
+    }
+    if (all_defines != NULL) {
+        /* entries alias the caller's option arrays — only the array block */
+        pm_util_mem_free(arena, all_defines);
+    }
+}
+
 static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
     pm_util_mem_arena_t *arena = pm_metal_async_arena();
     const pm_metal_src_card_t *c = pm_metal_src_find(job->unit.fqn);
@@ -2784,6 +2823,8 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
     const char **compiled_srcs = NULL;
     const char **all_includes = NULL;
     uint32_t n_all_includes = 0;
+    /* how many of all_includes' entries are join_path products we own */
+    uint32_t n_joined_includes = 0;
     const char **all_defines = NULL;
     uint32_t n_all_defines = job->unit.n_defines + job->n_defines;
     uint32_t i;
@@ -2807,8 +2848,9 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
         return rc;
     }
 
-    /* the include/define joins are compile-scratch: they live in the boot
-     * arena for the job's lifetime (freed only by arena teardown) */
+    /* the include/define joins are compile-scratch: freed on every exit
+     * path of this function (actor_scratch_free) — the boot arena's tlsf
+     * heap reclaims them, keeping high-water stable across many jobs */
     n_all_includes = 1u + job->unit.n_include_dirs + job->n_include_dirs;
     all_includes = (const char **)pm_util_mem_alloc(
         arena, n_all_includes * sizeof(const char *));
@@ -2821,20 +2863,28 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
     if (all_includes == NULL || objs == NULL || lens == NULL
         || compiled_srcs == NULL) {
         err_set(job->err, sizeof(job->err), "actor: arena exhausted", 0);
+        actor_scratch_free(arena, objs, lens, compiled_srcs,
+            all_includes, 0, all_defines, 0);
         return PM_METAL_BUILD_ERR_NOMEM;
     }
     all_includes[0] = join_path(arena, job->unit_root, ".");
     if (all_includes[0] == NULL) {
         err_set(job->err, sizeof(job->err), "actor: arena exhausted", 0);
+        actor_scratch_free(arena, objs, lens, compiled_srcs,
+            all_includes, 0, all_defines, 0);
         return PM_METAL_BUILD_ERR_NOMEM;
     }
+    n_joined_includes = 1u;
     for (i = 0; i < job->unit.n_include_dirs; i++) {
         all_includes[1 + i] = join_path(
             arena, job->unit_root, job->unit.include_dirs[i]);
         if (all_includes[1 + i] == NULL) {
             err_set(job->err, sizeof(job->err), "actor: arena exhausted", 0);
+            actor_scratch_free(arena, objs, lens, compiled_srcs,
+                all_includes, n_joined_includes, all_defines, 0);
             return PM_METAL_BUILD_ERR_NOMEM;
         }
+        n_joined_includes++;
     }
     for (i = 0; i < job->n_include_dirs; i++) {
         all_includes[1 + job->unit.n_include_dirs + i] = job->include_dirs[i];
@@ -2844,6 +2894,8 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
             arena, n_all_defines * sizeof(const char *));
         if (all_defines == NULL) {
             err_set(job->err, sizeof(job->err), "actor: arena exhausted", 0);
+            actor_scratch_free(arena, objs, lens, compiled_srcs,
+                all_includes, n_joined_includes, all_defines, 0);
             return PM_METAL_BUILD_ERR_NOMEM;
         }
         for (i = 0; i < job->unit.n_defines; i++) {
@@ -2860,6 +2912,8 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
         const char *dot;
         /* the only cancellation point: between unit sources */
         if (__atomic_load_n(&job->cancel, __ATOMIC_ACQUIRE) != 0u) {
+            actor_scratch_free(arena, objs, lens, compiled_srcs,
+                all_includes, n_joined_includes, all_defines, n_objs);
             return PM_METAL_BUILD_ERR_CANCELLED;
         }
         {
@@ -2873,6 +2927,8 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
         }
         if (src == NULL) {
             err_set(job->err, sizeof(job->err), "actor: source not in embed", 0);
+            actor_scratch_free(arena, objs, lens, compiled_srcs,
+                all_includes, n_joined_includes, all_defines, n_objs);
             return PM_METAL_BUILD_ERR_COMPILE;
         }
         dot = strrchr(job->unit.sources[job->next_src], '.');
@@ -2884,6 +2940,8 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
                 all_includes, n_all_includes, all_defines, n_all_defines,
                 &objs[n_objs], &lens[n_objs], job->err, sizeof(job->err))
                 != PM_METAL_BUILD_OK) {
+            actor_scratch_free(arena, objs, lens, compiled_srcs,
+                all_includes, n_joined_includes, all_defines, n_objs);
             return PM_METAL_BUILD_ERR_COMPILE;
         }
         compiled_srcs[n_objs] = job->unit.sources[job->next_src];
@@ -2891,16 +2949,17 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
     }
     if (n_objs == 0) {
         err_set(job->err, sizeof(job->err), "actor: no compilable sources", 0);
+        actor_scratch_free(arena, objs, lens, compiled_srcs,
+            all_includes, n_joined_includes, all_defines, n_objs);
         return PM_METAL_BUILD_ERR_COMPILE;
     }
 
     rc = pm_metal_build_link(arena, &job->unit, objs, lens, n_objs,
         &job->artifact, job->err, sizeof(job->err));
-    if (rc != PM_METAL_BUILD_OK) {
-        return rc;
-    }
-    /* provenance record (same shape as unit_compile) */
-    {
+    if (rc == PM_METAL_BUILD_OK) {
+        /* provenance record (same shape as unit_compile) — written before
+         * the scratch free: rec->src_paths/obj_lens copy out of
+         * compiled_srcs/lens, they must still be alive here */
         pm_metal_build_record_t *rec = record_slot_acquire(job->unit.fqn);
         if (rec != NULL) {
             uint32_t cap = n_objs;
@@ -2926,7 +2985,13 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
 #endif
         }
     }
-    return PM_METAL_BUILD_OK;
+    /* the artifact owns its bytes (mmap'd image or loader handles) — the
+     * TCC object buffers were consumed by the link; free them with the
+     * rest of the scratch on every exit below. The record holds copies,
+     * nothing below reads the freed scratch. */
+    actor_scratch_free(arena, objs, lens, compiled_srcs,
+        all_includes, n_joined_includes, all_defines, n_objs);
+    return rc;
 }
 
 static pm_metal_async_status_t actor_job_step(pm_metal_async_coro_t *self) {
@@ -3035,6 +3100,74 @@ int32_t pm_metal_build_actor_depth(uint32_t *depth) {
     *depth = s_actor.q_count;
     pm_util_lock_release(&s_actor.lock);
     return 0;
+}
+
+int32_t pm_metal_build_actor_release(pm_metal_build_actor_job_t *job) {
+    pm_util_mem_arena_t *arena;
+    uint32_t i;
+
+    if (job == NULL) {
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    if (job->state != PM_METAL_BUILD_ACTOR_DONE
+        && job->state != PM_METAL_BUILD_ACTOR_FAILED
+        && job->state != PM_METAL_BUILD_ACTOR_CANCELLED) {
+        /* a queued/running job is still reachable from the queue —
+         * releasing it would leave a dangling pointer in q[] */
+        return PM_METAL_BUILD_ERR_BUSY;
+    }
+    arena = pm_metal_async_arena();
+    if (arena == NULL) {
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    /* free the deep-copied spans first, then the arrays, then the job
+     * block: the tlsf heap reclaims each (the boot arena never rewinds
+     * at runtime, so this is the only reclaim path for spent jobs) */
+    if (job->unit.sources != NULL) {
+        for (i = 0; i < job->unit.n_sources; i++) {
+            pm_util_mem_free(arena, (void *)job->unit.sources[i]);
+        }
+        pm_util_mem_free(arena, (void *)job->unit.sources);
+    }
+    if (job->unit.include_dirs != NULL) {
+        for (i = 0; i < job->unit.n_include_dirs; i++) {
+            pm_util_mem_free(arena, (void *)job->unit.include_dirs[i]);
+        }
+        pm_util_mem_free(arena, (void *)job->unit.include_dirs);
+    }
+    if (job->unit.defines != NULL) {
+        for (i = 0; i < job->unit.n_defines; i++) {
+            pm_util_mem_free(arena, (void *)job->unit.defines[i]);
+        }
+        pm_util_mem_free(arena, (void *)job->unit.defines);
+    }
+    if (job->unit.depends != NULL) {
+        for (i = 0; i < job->unit.n_depends; i++) {
+            pm_util_mem_free(arena, (void *)job->unit.depends[i]);
+        }
+        pm_util_mem_free(arena, (void *)job->unit.depends);
+    }
+    /* unit.fqn/impl/version are inline char[] (copied by value in
+     * actor_unit_copy) — not arena blocks, never freed. The artifact's
+     * bytes stay with the caller: release frees the job bookkeeping,
+     * pm_metal_build_artifact_destroy stays the artifact's own face. */
+    if (job->unit_root != NULL) {
+        pm_util_mem_free(arena, (void *)job->unit_root);
+    }
+    if (job->include_dirs != NULL) {
+        for (i = 0; i < job->n_include_dirs; i++) {
+            pm_util_mem_free(arena, (void *)job->include_dirs[i]);
+        }
+        pm_util_mem_free(arena, (void *)job->include_dirs);
+    }
+    if (job->defines != NULL) {
+        for (i = 0; i < job->n_defines; i++) {
+            pm_util_mem_free(arena, (void *)job->defines[i]);
+        }
+        pm_util_mem_free(arena, (void *)job->defines);
+    }
+    pm_util_mem_free(arena, job);
+    return PM_METAL_BUILD_OK;
 }
 
 /*------------------ dependency DAG executor (Phase 5) ------------------*/
@@ -3210,6 +3343,10 @@ int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
                 rows[ui].state = PM_METAL_BUILD_DAG_DONE;
                 rows[ui].image_len = job->artifact.len;
                 n_done++;
+                /* the image belongs to the run's caller via rows[] as
+                 * lengths only — the linked image itself is the caller's
+                 * to keep or destroy; the job block is reclaimable now */
+                pm_metal_build_artifact_destroy(&job->artifact);
             } else if (jrc == PM_METAL_BUILD_ERR_CANCELLED) {
                 rows[ui].state = PM_METAL_BUILD_DAG_SKIPPED;
                 snprintf(rows[ui].err, sizeof(rows[ui].err), "cancelled");
@@ -3219,6 +3356,18 @@ int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
                 rows[ui].rc = jrc;
                 snprintf(rows[ui].err, sizeof(rows[ui].err), "%s", job->err);
                 n_failed++;
+            }
+            /* every terminal job is released: the DAG never leaves job
+             * blocks behind in the boot arena (rows[] carry the results,
+             * the image was destroyed or belongs to a FAILED row's
+             * nothing — FAILED rows have no image) */
+            {
+                int32_t rrc = pm_metal_build_actor_release(job);
+                if (rrc != PM_METAL_BUILD_OK) {
+                    err_set(errbuf, errbuf_len,
+                        "dag_run: terminal job release refused", 0);
+                    return PM_METAL_BUILD_ERR_BUSY;
+                }
             }
             progressed = 1;
         }
