@@ -8,6 +8,8 @@
  *  - jit.c rebuilt from its embedded source: byte-identical object output,
  *    rebuilt async path, and the retained provenance record (Phase 8)
  *  - tcc self-rebuild: fresh tcc compiles, runs, matches object bytes
+ *  - Phase 3: retained state (records, ledger, at-slots) is arena-owned ctx
+ *    state and outlives a destroyed caller arena
  */
 #include "pymergetic/metal/async/__types__.h"
 #include "pymergetic/metal/build/__types__.h"
@@ -1344,6 +1346,93 @@ static int32_t test_accessor_spine(void) {
     return 0;
 }
 
+/* Phase 3: retained state is ctx-owned, not caller-arena-owned. A record,
+ * a ledger note and an at-slot are created inside one caller arena; that
+ * arena is then DESTROYED, and every retained face must still answer from
+ * the per-build ctx (the boot arena owns the bytes). Before the ctx this
+ * worked only because the state was in BSS — the point of the phase is
+ * that it keeps working with the state in exactly ONE arena-owned place,
+ * and that a caller arena dying never strands it. */
+static int32_t test_ctx_survives_caller_arena(void) {
+    pm_metal_build_at_handle_t h;
+    pm_metal_build_at_info_t info;
+    const pm_metal_build_record_t *rec;
+    char notes[256];
+    uint32_t n_notes = 0;
+    int32_t rc;
+    enum { SPAN = 1u << 20 };
+    void *backing = malloc(SPAN);
+    pm_util_mem_arena_t *arena;
+
+    if (backing == NULL) {
+        return 190;
+    }
+    arena = pm_util_mem_arena_create(backing, SPAN);
+    if (arena == NULL) {
+        free(backing);
+        return 191;
+    }
+
+    /* (a) retained state created under the caller arena: a note (ledger
+     * scratch rides the ctx) and an at-slot (ctx slots). The jit.c record
+     * from test_rebuild_jit_c is already live from a dead arena — this test
+     * must run before test_record_query resets it. */
+    rc = pm_metal_build_note_add("test.ctx.lifetime",
+        PM_METAL_BUILD_NOTE_DECISION,
+        "retained state must outlive the caller arena", NULL, 0);
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena);
+        free(backing);
+        return 192;
+    }
+
+    h = pm_metal_build_at("pymergetic.metal.build", "pm_metal_build_at");
+    if (h == PM_METAL_BUILD_AT_NONE) {
+        pm_util_mem_arena_destroy(arena);
+        free(backing);
+        return 193;
+    }
+
+    /* (b) destroy the caller arena — every ctx allocation must survive */
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+
+    /* (c) the at-slot answers from the ctx */
+    rc = pm_metal_build_at_info(h, &info);
+    if (rc != 0 || strcmp(info.name, "pm_metal_build_at") != 0) {
+        return 194;
+    }
+
+    /* (d) the note is still queryable (ledger scratch on the ctx) */
+    rc = pm_metal_build_notes_query("test.ctx.lifetime", -1,
+        notes, sizeof(notes), &n_notes);
+    if (rc < 0 || n_notes == 0
+        || strstr(notes, "outlive the caller arena") == NULL) {
+        return 195;
+    }
+
+    /* (e) the jit.c record from test_rebuild_jit_c is still served from the
+     * ctx — that compile's arena is long gone, and this arena died too */
+    rec = pm_metal_build_record_find("pymergetic.metal.jit.c");
+    if (rec == NULL || rec->n_sources == 0) {
+        return 196;
+    }
+
+    /* (f) record_reset still clears ctx state after the arena death */
+    pm_metal_build_record_reset();
+    if (pm_metal_build_record_find("pymergetic.metal.jit.c") != NULL) {
+        return 197;
+    }
+
+    /* (g) a fresh at() still works post-reset (ctx intact) */
+    h = pm_metal_build_at("pymergetic.metal.build", "pm_metal_build_at");
+    if (h == PM_METAL_BUILD_AT_NONE
+        || pm_metal_build_at_info(h, &info) != 0) {
+        return 198;
+    }
+    return 0;
+}
+
 static int32_t pm_metal_build_tests(void) {
     int32_t rc;
     rc = test_parse_real_tcc_manifest();
@@ -1363,6 +1452,10 @@ static int32_t pm_metal_build_tests(void) {
     rc = test_rebuild_jit_c();
     if (rc) return rc;
     rc = test_rebuild_tcc();
+    if (rc) return rc;
+    /* ctx-lifetime test must see the jit.c record from test_rebuild_jit_c —
+     * it runs before test_record_query, which resets the record table */
+    rc = test_ctx_survives_caller_arena();
     if (rc) return rc;
     rc = test_record_query();
     if (rc) return rc;

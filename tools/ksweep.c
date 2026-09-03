@@ -17,6 +17,7 @@
 #include "pymergetic/metal/build/__types__.h"
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
+#include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/guest.h"
 
 #include <stdio.h>
@@ -144,6 +145,14 @@ int main(int argc, char **argv) {
     arena = pm_util_mem_arena_create(backing, SPAN);
     if (!arena) { fprintf(stderr, "ksweep: no arena\n"); return 2; }
 
+    /* The build card's per-build ctx (exec-range table, records) is owned
+     * by the boot arena, so every seat that links must boot modules —
+     * ksweep is a linking seat. Same posture as host_test/rsx_probe. */
+    if (pm_mod_boot_run(arena) != 0) {
+        fprintf(stderr, "ksweep: module boot refused\n");
+        return 2;
+    }
+
     rc = pm_metal_build_discover(arena, &units, &n_units, err, sizeof(err));
     if (rc != PM_METAL_BUILD_OK) {
         fprintf(stderr, "ksweep: discover refused: %s\n", err);
@@ -258,6 +267,7 @@ int main(int argc, char **argv) {
     if (rep != stdout) { fclose(rep); printf("report: %s\n", report_path); }
 
     free(rows);
+    pm_mod_boot_unwind();
     pm_util_mem_arena_destroy(arena);
     free(backing);
     printf("ksweep done: %u/%u cards compiled in-kernel\n", n_ok,

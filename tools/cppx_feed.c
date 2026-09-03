@@ -18,6 +18,7 @@
 #include "pymergetic/metal/jit/c/__exports__.h"
 #include "pymergetic/metal/build/__exports__.h"
 #include "pymergetic/util/mem.h"
+#include "pymergetic/wasmmod/boot.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -105,6 +106,11 @@ int main(int argc, char **argv) {
     if (!backing) { printf("no backing\n"); return 2; }
     arena = pm_util_mem_arena_create(backing, 1u << 26);
     if (!arena) { printf("no arena\n"); return 2; }
+
+    /* --link is a linking seat: the build card's ctx (the exec-range table
+     * the resolver thunks through) is boot-arena-owned, so boot modules
+     * first, same posture as ksweep/selfhost_feed. */
+    if (pm_mod_boot_run(arena) != 0) { printf("BOOT REFUSED\n"); return 2; }
 
     memset(err, 0, sizeof(err));
     memset(&toks, 0, sizeof(toks));
@@ -294,5 +300,6 @@ int main(int argc, char **argv) {
         pm_util_mem_arena_destroy(oarena);
         free(obacking);
     }
+    pm_mod_boot_unwind();
     return 0;
 }
