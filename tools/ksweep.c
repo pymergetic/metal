@@ -217,8 +217,17 @@ int main(int argc, char **argv) {
         memset(&art, 0, sizeof(art));
         memset(err, 0, sizeof(err));
         t0 = now_ms();
-        rc = pm_metal_build_unit_compile(arena, u, unit_root,
-            includes, n_includes, defines, n_defines, &art, err, sizeof(err));
+        {
+            pm_metal_build_compile_opts_t copts;
+            memset(&copts, 0, sizeof(copts));
+            copts.unit_root = unit_root;
+            copts.include_dirs = includes;
+            copts.n_include_dirs = n_includes;
+            copts.defines = defines;
+            copts.n_defines = n_defines;
+            rc = pm_metal_build_unit_compile(arena, u, &copts,
+                &art, err, sizeof(err));
+        }
         rows[i].ms = now_ms() - t0;
         rows[i].rc = rc;
         snprintf(rows[i].err, sizeof(rows[i].err), "%s", err);

@@ -1784,8 +1784,17 @@ static int32_t build_rebuild_http(const char *method, const char *path,
     }
     memset(&art, 0, sizeof(art));
     err[0] = '\0';
-    st = pm_metal_build_unit_compile(arena, u, unit_root,
-        includes, n_inc, defines, n_def, &art, err, sizeof(err));
+    {
+        pm_metal_build_compile_opts_t copts;
+        memset(&copts, 0, sizeof(copts));
+        copts.unit_root = unit_root;
+        copts.include_dirs = includes;
+        copts.n_include_dirs = n_inc;
+        copts.defines = defines;
+        copts.n_defines = n_def;
+        st = pm_metal_build_unit_compile(arena, u, &copts,
+            &art, err, sizeof(err));
+    }
     if (st != PM_METAL_BUILD_OK) {
         goto fail;
     }

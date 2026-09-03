@@ -2043,9 +2043,8 @@ static int32_t unit_compile_py(pm_util_mem_arena_t *arena,
 }
 
 int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
-    const pm_metal_build_unit_t *unit, const char *unit_root,
-    const char **include_dirs, uint32_t n_include_dirs,
-    const char **extra_defines, uint32_t n_extra_defines,
+    const pm_metal_build_unit_t *unit,
+    const pm_metal_build_compile_opts_t *opts,
     pm_metal_build_artifact_t *artifact,
     char *errbuf, size_t errbuf_len) {
     uint8_t **objs;
@@ -2058,7 +2057,21 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
     uint32_t n_objs = 0;
     int32_t rc;
     pm_metal_build_record_t *rec = NULL;
+    const char *unit_root;
+    const char **include_dirs;
+    uint32_t n_include_dirs;
+    const char **extra_defines;
+    uint32_t n_extra_defines;
 
+    if (opts == NULL) {
+        err_set(errbuf, errbuf_len, "unit_compile: bad args", 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    unit_root = opts->unit_root;
+    include_dirs = opts->include_dirs;
+    n_include_dirs = opts->n_include_dirs;
+    extra_defines = opts->defines;
+    n_extra_defines = opts->n_defines;
     if (arena == NULL || unit == NULL || unit_root == NULL || artifact == NULL) {
         err_set(errbuf, errbuf_len, "unit_compile: bad args", 0);
         return PM_METAL_BUILD_ERR_COMPILE;
@@ -2472,9 +2485,7 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_discover, pm_metal_build_
     int32_t(pm_util_mem_arena_t *, pm_metal_build_unit_t **, uint32_t *,
         char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_unit_compile, pm_metal_build_unit_compile,
-    int32_t(pm_util_mem_arena_t *, const pm_metal_build_unit_t *, const char *,
-        const char **, uint32_t, const char **, uint32_t,
-        pm_metal_build_artifact_t *, char *, size_t));
+    int32_t(pm_util_mem_arena_t *, const pm_metal_build_unit_t *, const pm_metal_build_compile_opts_t *, pm_metal_build_artifact_t *, char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_record_find, pm_metal_build_record_find,
     const pm_metal_build_record_t *(const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_record_reset, pm_metal_build_record_reset,
@@ -2501,9 +2512,7 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_at_info, pm_metal_build_a
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_at_ast, pm_metal_build_at_ast,
     int32_t(pm_metal_build_at_handle_t, char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_submit, pm_metal_build_actor_submit,
-    int32_t(const pm_metal_build_unit_t *, const char *,
-        const char **, uint32_t, const char **, uint32_t,
-        pm_metal_build_actor_job_t **, char *, size_t));
+    int32_t(const pm_metal_build_unit_t *, const pm_metal_build_compile_opts_t *, pm_metal_build_actor_job_t **, char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_step, pm_metal_build_actor_step,
     pm_metal_async_status_t(pm_metal_build_actor_job_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_run, pm_metal_build_actor_run,
@@ -2512,15 +2521,25 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_cancel, pm_metal_bu
     int32_t(pm_metal_build_actor_job_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_depth, pm_metal_build_actor_depth,
     int32_t(uint32_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_dag_run, pm_metal_build_dag_run,
+    int32_t(pm_util_mem_arena_t *, pm_metal_build_unit_t *, uint32_t, const pm_metal_build_dag_opts_t *, pm_metal_build_dag_result_t *, char *, size_t));
 
 /*------------------ async compiler actor ----------------------------------
  * One dedicated actor owns EVERY TCC invocation in the process. Reason:
- * TCC's allocator routing is a single global (tcc_set_realloc +
- * s_tcc_arena in jit.c) — two compiles interleaved on different arenas
- * would corrupt each other's allocations, and no per-invocation context
- * can fix a process-global hook. Serializing here is not a missed
+ * TCC's allocator routing is a single global (tcc_set_realloc in libtcc.c
+ * plus the arena static in jit.c) — two compiles interleaved on different
+ * arenas would corrupt each other's allocations, and no per-invocation
+ * context can fix a process-global hook. Serializing here is not a missed
  * optimization: it is the only correct schedule. (Putting s_tcc_arena in
  * a struct would not fix this — the hook itself is global.)
+ *
+ * Phase 5 layered the correctness point into jit.c itself: the allocator
+ * window (pm_metal_jit_c_arena_acquire/release) is one lock-guarded
+ * exclusive window around every TCC allocation context transition. The
+ * actor's serial section sits ABOVE it (queue discipline: one job at a
+ * time, protecting the shared record table and boot-arena scratch). A
+ * non-actor caller (direct unit_compile) still cannot corrupt an actor
+ * job: the window refuses the overlap. Two locks, two layers, no gap.
  *
  * The queue is bounded (PM_METAL_BUILD_ACTOR_DEPTH). Backpressure is an
  * honest refusal: submit returns PM_METAL_BUILD_ERR_BUSY when full. Jobs
@@ -2609,19 +2628,29 @@ static int32_t actor_unit_copy(pm_util_mem_arena_t *arena,
 }
 
 int32_t pm_metal_build_actor_submit(
-    const pm_metal_build_unit_t *unit, const char *unit_root,
-    const char **include_dirs, uint32_t n_include_dirs,
-    const char **defines, uint32_t n_defines,
+    const pm_metal_build_unit_t *unit,
+    const pm_metal_build_compile_opts_t *opts,
     pm_metal_build_actor_job_t **job_out, char *errbuf, size_t errbuf_len) {
     pm_util_mem_arena_t *arena = pm_metal_async_arena();
     pm_metal_build_actor_job_t *job;
     pm_build_actor_t *a = &s_actor;
+    const char *unit_root;
+    const char **include_dirs;
+    uint32_t n_include_dirs;
+    const char **defines;
+    uint32_t n_defines;
     uint32_t i;
 
-    if (job_out == NULL || unit == NULL || unit_root == NULL) {
+    if (job_out == NULL || unit == NULL || opts == NULL
+        || opts->unit_root == NULL) {
         err_set(errbuf, errbuf_len, "actor_submit: bad args", 0);
         return PM_METAL_BUILD_ERR_COMPILE;
     }
+    unit_root = opts->unit_root;
+    include_dirs = opts->include_dirs;
+    n_include_dirs = opts->n_include_dirs;
+    defines = opts->defines;
+    n_defines = opts->n_defines;
     *job_out = NULL;
     if (arena == NULL) {
         err_set(errbuf, errbuf_len, "actor_submit: no boot arena", 0);
@@ -3006,6 +3035,201 @@ int32_t pm_metal_build_actor_depth(uint32_t *depth) {
     *depth = s_actor.q_count;
     pm_util_lock_release(&s_actor.lock);
     return 0;
+}
+
+/*------------------ dependency DAG executor (Phase 5) ------------------*/
+
+/* Find a unit's index by fqn (the DAG's identity map). */
+static int32_t dag_find(const pm_metal_build_unit_t *units, uint32_t n_units,
+    const char *fqn) {
+    uint32_t i;
+    for (i = 0; i < n_units; i++) {
+        if (strcmp(units[i].fqn, fqn) == 0) {
+            return (int32_t)i;
+        }
+    }
+    return -1;
+}
+
+/* Is unit i buildable right now? Every named dep must be DONE in rows. */
+static int dag_deps_ready(const pm_metal_build_unit_t *u,
+    const pm_metal_build_unit_t *units, uint32_t n_units,
+    const pm_metal_build_dag_row_t *rows) {
+    uint32_t d;
+    for (d = 0; d < u->n_depends; d++) {
+        int32_t di = dag_find(units, n_units, u->depends[d]);
+        if (di < 0) {
+            return 0;  /* graph_resolve already refused this shape */
+        }
+        if (rows[di].state != PM_METAL_BUILD_DAG_DONE) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
+    pm_metal_build_unit_t *units, uint32_t n_units,
+    const pm_metal_build_dag_opts_t *opts,
+    pm_metal_build_dag_result_t *out,
+    char *errbuf, size_t errbuf_len) {
+    const pm_metal_build_unit_t **order = NULL;
+    uint32_t n_order = 0;
+    pm_metal_build_dag_row_t *rows = NULL;
+    uint32_t n_done = 0;
+    uint32_t n_failed = 0;
+    uint32_t n_skipped = 0;
+    uint32_t progressed;
+    uint32_t i;
+    int32_t rc;
+    pm_metal_build_compile_opts_t unit_opts;
+    pm_metal_build_root_fn_t root_fn;
+    char *unit_root = NULL;
+
+    if (arena == NULL || units == NULL || out == NULL || opts == NULL
+        || opts->root_fn == NULL || opts->compile.unit_root == NULL) {
+        err_set(errbuf, errbuf_len, "dag_run: bad args", 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    root_fn = opts->root_fn;
+    /* the per-job fill is the run's compile opts with unit_root resolved
+     * per unit by the root resolver */
+    unit_opts = opts->compile;
+    out->rows = NULL;
+    out->n_rows = 0;
+    out->n_done = 0;
+    out->n_failed = 0;
+    out->n_skipped = 0;
+    if (n_units == 0) {
+        return PM_METAL_BUILD_OK;
+    }
+
+    /* the topological order first: cycles and missing deps refuse here,
+     * before any compile runs (nothing partial) */
+    rc = pm_metal_build_graph_resolve(arena, units, n_units,
+        &order, &n_order, errbuf, errbuf_len);
+    if (rc != PM_METAL_BUILD_OK) {
+        return rc;
+    }
+
+    rows = (pm_metal_build_dag_row_t *)pm_util_mem_alloc(
+        arena, n_units * sizeof(pm_metal_build_dag_row_t));
+    if (rows == NULL) {
+        err_set(errbuf, errbuf_len, "dag_run: arena exhausted", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    memset(rows, 0, n_units * sizeof(pm_metal_build_dag_row_t));
+    for (i = 0; i < n_units; i++) {
+        snprintf(rows[i].fqn, sizeof(rows[i].fqn), "%s", units[i].fqn);
+        rows[i].state = PM_METAL_BUILD_DAG_PENDING;
+    }
+
+    /* Kahn-style sweep over the resolved order. Each pass consumes every
+     * unit whose deps are settled, so one pass per dependency level —
+     * the order array guarantees progress, and the sweep terminates when
+     * a full pass adds nothing (every remaining unit is SKIPPED, its dep
+     * failed). */
+    unit_root = (char *)pm_util_mem_alloc(arena, PM_METAL_BUILD_ROOT_MAX);
+    if (unit_root == NULL) {
+        err_set(errbuf, errbuf_len, "dag_run: arena exhausted", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    /* every job's submit copies the root out of this one arena buffer
+     * before the next iteration overwrites it */
+    unit_opts.unit_root = unit_root;
+    progressed = 1;
+    while (progressed != 0) {
+        progressed = 0;
+        for (i = 0; i < n_order; i++) {
+            const pm_metal_build_unit_t *u = order[i];
+            int32_t ui = dag_find(units, n_units, u->fqn);
+            pm_metal_build_actor_job_t *job = NULL;
+            int32_t jrc;
+
+            if (ui < 0) {
+                continue;  /* cannot happen: order came from units */
+            }
+            if (rows[ui].state != PM_METAL_BUILD_DAG_PENDING) {
+                continue;  /* already settled */
+            }
+            if (!dag_deps_ready(u, units, n_units, rows)) {
+                /* a dep is not DONE: either still PENDING (a later pass
+                 * settles it) or terminally failed/skipped — mark the
+                 * isolation now, the row keeps its error for inspection */
+                uint32_t d;
+                int blocked = 0;
+                for (d = 0; d < u->n_depends; d++) {
+                    int32_t di = dag_find(units, n_units, u->depends[d]);
+                    if (di >= 0 && (rows[di].state == PM_METAL_BUILD_DAG_FAILED
+                            || rows[di].state == PM_METAL_BUILD_DAG_SKIPPED)) {
+                        snprintf(rows[ui].err, sizeof(rows[ui].err),
+                            "dependency %s %s", rows[di].fqn,
+                            rows[di].state == PM_METAL_BUILD_DAG_FAILED
+                                ? "failed" : "skipped");
+                        blocked = 1;
+                        break;
+                    }
+                }
+                if (blocked) {
+                    rows[ui].state = PM_METAL_BUILD_DAG_SKIPPED;
+                    n_skipped++;
+                    progressed = 1;
+                }
+                continue;
+            }
+
+            /* deps DONE: build this unit through the actor */
+            if (root_fn(u->fqn, unit_root, PM_METAL_BUILD_ROOT_MAX) != 0) {
+                rows[ui].state = PM_METAL_BUILD_DAG_FAILED;
+                rows[ui].rc = PM_METAL_BUILD_ERR_COMPILE;
+                snprintf(rows[ui].err, sizeof(rows[ui].err),
+                    "root resolver refused");
+                n_failed++;
+                progressed = 1;
+                continue;
+            }
+            rc = pm_metal_build_actor_submit(u, &unit_opts,
+                &job, rows[ui].err, sizeof(rows[ui].err));
+            if (rc == PM_METAL_BUILD_ERR_BUSY) {
+                /* the queue holds only this run's live jobs and each is
+                 * driven to completion before the next submit, so a full
+                 * queue cannot legitimately happen — refuse loudly */
+                err_set(errbuf, errbuf_len, "dag_run: actor queue wedged", 0);
+                return PM_METAL_BUILD_ERR_BUSY;
+            }
+            if (rc != PM_METAL_BUILD_OK) {
+                rows[ui].state = PM_METAL_BUILD_DAG_FAILED;
+                rows[ui].rc = rc;
+                n_failed++;
+                progressed = 1;
+                continue;
+            }
+            rows[ui].state = PM_METAL_BUILD_DAG_RUNNING;
+            jrc = pm_metal_build_actor_run(job);
+            if (jrc == PM_METAL_BUILD_OK) {
+                rows[ui].state = PM_METAL_BUILD_DAG_DONE;
+                rows[ui].image_len = job->artifact.len;
+                n_done++;
+            } else if (jrc == PM_METAL_BUILD_ERR_CANCELLED) {
+                rows[ui].state = PM_METAL_BUILD_DAG_SKIPPED;
+                snprintf(rows[ui].err, sizeof(rows[ui].err), "cancelled");
+                n_skipped++;
+            } else {
+                rows[ui].state = PM_METAL_BUILD_DAG_FAILED;
+                rows[ui].rc = jrc;
+                snprintf(rows[ui].err, sizeof(rows[ui].err), "%s", job->err);
+                n_failed++;
+            }
+            progressed = 1;
+        }
+    }
+
+    out->rows = rows;
+    out->n_rows = n_units;
+    out->n_done = n_done;
+    out->n_failed = n_failed;
+    out->n_skipped = n_skipped;
+    return PM_METAL_BUILD_OK;
 }
 
 /* Lifecycle: the ctx allocates lazily from the boot arena and is released

@@ -553,8 +553,11 @@ static int32_t test_discover(void) {
             if (strcmp(units[i].impl, "rs") == 0) { rs_unit = &units[i]; break; }
         }
         if (rs_unit != NULL) {
-            rc = pm_metal_build_unit_compile(arena, rs_unit, "", NULL, 0,
-                NULL, 0, &art, err, sizeof(err));
+            pm_metal_build_compile_opts_t copts;
+            memset(&copts, 0, sizeof(copts));
+            copts.unit_root = "";
+            rc = pm_metal_build_unit_compile(arena, rs_unit, &copts,
+                &art, err, sizeof(err));
             if (rc == PM_METAL_BUILD_OK) {
                 pm_metal_build_artifact_destroy(&art);
             } else if (strstr(err, "not yet buildable") != NULL) {
@@ -699,9 +702,16 @@ static int32_t test_rebuild_jit_c(void) {
     /* unit_root: the card's own dir (relative includes resolve there). */
     {
         char unit_root[2100];
+        pm_metal_build_compile_opts_t copts;
         snprintf(unit_root, sizeof(unit_root), "%s/pymergetic/metal/jit/c", src_root);
-        rc = pm_metal_build_unit_compile(arena, jit_unit, unit_root,
-            includes, 6, defines, n_defines, &art, err, sizeof(err));
+        memset(&copts, 0, sizeof(copts));
+        copts.unit_root = unit_root;
+        copts.include_dirs = includes;
+        copts.n_include_dirs = 6;
+        copts.defines = defines;
+        copts.n_defines = n_defines;
+        rc = pm_metal_build_unit_compile(arena, jit_unit, &copts,
+            &art, err, sizeof(err));
     }
     if (rc != PM_METAL_BUILD_OK) {
         pm_util_mem_arena_destroy(arena); free(backing); return 86;
@@ -1466,6 +1476,7 @@ static int32_t test_actor_roundtrip(void) {
     const char *includes[6];
     const char *defines[8];
     uint32_t n_defines = 0;
+    pm_metal_build_compile_opts_t opts;
 
     if (!backing) return 200;
     arena = pm_util_mem_arena_create(backing, SPAN);
@@ -1507,6 +1518,12 @@ static int32_t test_actor_roundtrip(void) {
             tcc_root);
         defines[n_defines++] = libdir_def;
     }
+    memset(&opts, 0, sizeof(opts));
+    opts.unit_root = unit_root;
+    opts.include_dirs = includes;
+    opts.n_include_dirs = 6;
+    opts.defines = defines;
+    opts.n_defines = n_defines;
 
     rc = pm_metal_build_discover(arena, &units, &n_units, err, sizeof(err));
     if (rc != PM_METAL_BUILD_OK) {
@@ -1524,8 +1541,8 @@ static int32_t test_actor_roundtrip(void) {
 
     /* (a) one job round-trips: submit (NEW, depth 1) -> step -> DONE */
     memset(err, 0, sizeof(err));
-    rc = pm_metal_build_actor_submit(rtc, unit_root, includes, 6,
-        defines, n_defines, &jobs[0], err, sizeof(err));
+    rc = pm_metal_build_actor_submit(rtc, &opts,
+        &jobs[0], err, sizeof(err));
     if (rc != PM_METAL_BUILD_OK || jobs[0] == NULL) {
         pm_util_mem_arena_destroy(arena); free(backing); return 204;
     }
@@ -1557,15 +1574,13 @@ static int32_t test_actor_roundtrip(void) {
      * the second PARKS (WAITING, no runner blocked) and completes on its
      * next step once the first released. */
     memset(err, 0, sizeof(err));
-    rc = pm_metal_build_actor_submit(rtc, unit_root, includes, 6,
-        defines, n_defines,
+    rc = pm_metal_build_actor_submit(rtc, &opts,
         &jobs[0], err, sizeof(err));
     if (rc != PM_METAL_BUILD_OK) {
         pm_util_mem_arena_destroy(arena); free(backing); return 210;
     }
     memset(err, 0, sizeof(err));
-    rc = pm_metal_build_actor_submit(rtc, unit_root, includes, 6,
-        defines, n_defines,
+    rc = pm_metal_build_actor_submit(rtc, &opts,
         &jobs[1], err, sizeof(err));
     if (rc != PM_METAL_BUILD_OK) {
         pm_util_mem_arena_destroy(arena); free(backing); return 211;
@@ -1588,8 +1603,7 @@ static int32_t test_actor_roundtrip(void) {
 
     /* (c) cancellation before run: NEW -> CANCELLED without compiling */
     memset(err, 0, sizeof(err));
-    rc = pm_metal_build_actor_submit(rtc, unit_root, includes, 6,
-        defines, n_defines,
+    rc = pm_metal_build_actor_submit(rtc, &opts,
         &jobs[0], err, sizeof(err));
     if (rc != PM_METAL_BUILD_OK) {
         pm_util_mem_arena_destroy(arena); free(backing); return 215;
@@ -1613,9 +1627,8 @@ static int32_t test_actor_roundtrip(void) {
      * NEW jobs (never stepped) and prove the DEPTH+1'th submit refuses. */
     for (i = 0; i < PM_METAL_BUILD_ACTOR_DEPTH; i++) {
         memset(err, 0, sizeof(err));
-        rc = pm_metal_build_actor_submit(rtc, unit_root, includes, 6,
-        defines, n_defines,
-            &jobs[i], err, sizeof(err));
+        rc = pm_metal_build_actor_submit(rtc, &opts,
+        &jobs[i], err, sizeof(err));
         if (rc != PM_METAL_BUILD_OK) {
             pm_util_mem_arena_destroy(arena); free(backing); return 219;
         }
@@ -1624,8 +1637,7 @@ static int32_t test_actor_roundtrip(void) {
         pm_util_mem_arena_destroy(arena); free(backing); return 220;
     }
     memset(err, 0, sizeof(err));
-    rc = pm_metal_build_actor_submit(rtc, unit_root, includes, 6,
-        defines, n_defines,
+    rc = pm_metal_build_actor_submit(rtc, &opts,
         &jobs[PM_METAL_BUILD_ACTOR_DEPTH], err, sizeof(err));
     if (rc != PM_METAL_BUILD_ERR_BUSY || err[0] == '\0') {
         pm_util_mem_arena_destroy(arena); free(backing); return 221;
@@ -1663,8 +1675,8 @@ static int32_t test_actor_roundtrip(void) {
         u.sources = srcs;
         u.n_sources = 1;
         memset(err, 0, sizeof(err));
-        rc = pm_metal_build_actor_submit(&u, unit_root, includes, 6,
-            defines, n_defines, &jobs[0], err, sizeof(err));
+        rc = pm_metal_build_actor_submit(&u, &opts,
+            &jobs[0], err, sizeof(err));
         if (rc != PM_METAL_BUILD_OK) {
             return 225;
         }
@@ -1678,6 +1690,243 @@ static int32_t test_actor_roundtrip(void) {
             return 227;
         }
     }
+    return 0;
+#else
+    return 0;
+#endif
+}
+
+/* DAG executor (Phase 5): topological order, dependency-failure isolation,
+ * and the honest serialized schedule. Five units:
+ *   pymergetic.metal.drivers.rtc.sim   — real card, no deps: DONE
+ *   pymergetic.metal.drivers.rtc.cmos  — real card, synthetic depends on
+ *                                        rtc.sim: builds AFTER it, DONE
+ *   test.dag.bad                       — fqn not in the embed table: FAILED
+ *                                        (the actor's honest refusal)
+ *   test.dag.victim                    — depends on bad: SKIPPED (isolated)
+ *   test.dag.grandchild                — depends on victim: SKIPPED too
+ * Expected: 2 DONE, 1 FAILED, 2 SKIPPED — the failure never cascades into
+ * misleading compile errors and never blocks the independent subtree. */
+static char s_dag_src_root[2048];
+
+static int32_t dag_root_fn(const char *fqn, char *buf, size_t cap) {
+    /* <metal>/src/<fqn with dots as slashes> — the same convention ksweep
+     * and the rebuild tests use for pymergetic.metal.* cards */
+    size_t n = strlen(s_dag_src_root);
+    size_t fl = strlen(fqn);
+    size_t k;
+    if (fqn == NULL || buf == NULL) return -1;
+    if (n + fl + 2u > cap) return -1;
+    memcpy(buf, s_dag_src_root, n);
+    buf[n] = '/';
+    memcpy(buf + n + 1u, fqn, fl + 1u);
+    for (k = n + 1u; k < n + 1u + fl; k++) {
+        if (buf[k] == '.') buf[k] = '/';
+    }
+    return 0;
+}
+
+static int32_t test_dag_run(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    enum { SPAN = 64u * 1024u * 1024u };
+    void *backing = malloc(SPAN);
+    pm_util_mem_arena_t *arena;
+    pm_metal_build_unit_t *discovered = NULL;
+    uint32_t n_discovered = 0;
+    pm_metal_build_unit_t units[5];
+    const char *srcs[1];
+    const char *deps_cmos[1];
+    const char *deps_victim[1];
+    const char *deps_gc[1];
+    pm_metal_build_dag_result_t res;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    char dir[512];
+    char tcc_root[2048], wasmmod_root[2048], wasmmod_src_root[2048],
+        top_root[2048];
+    const char *includes[6];
+    const char *defines[8];
+    uint32_t n_defines = 0;
+    int32_t rc;
+    uint32_t i;
+    int seen_sim = 0;
+    int seen_cmos = 0;
+    int seen_bad = 0;
+    int seen_victim = 0;
+    int seen_gc = 0;
+    const pm_metal_build_unit_t *sim = NULL;
+    const pm_metal_build_unit_t *cmos = NULL;
+
+    if (!backing) return 230;
+    arena = pm_util_mem_arena_create(backing, SPAN);
+    if (!arena) { free(backing); return 231; }
+
+    /* the same seat fill as every compile test (resolved from __FILE__) */
+    snprintf(dir, sizeof(dir), "%s", __FILE__);
+    {
+        char *slash = strrchr(dir, '/');
+        if (!slash) { pm_util_mem_arena_destroy(arena); free(backing); return 232; }
+        *slash = '\0';
+    }
+    {
+        char *slash = strrchr(dir, '/');
+        if (!slash) { pm_util_mem_arena_destroy(arena); free(backing); return 232; }
+        *slash = '\0';
+    }
+    snprintf(s_dag_src_root, sizeof(s_dag_src_root), "%s/../..", dir);
+    snprintf(tcc_root, sizeof(tcc_root), "%s/../../../externals/tcc", dir);
+    snprintf(wasmmod_root, sizeof(wasmmod_root), "%s/../../../../wasmmod", dir);
+    snprintf(wasmmod_src_root, sizeof(wasmmod_src_root),
+        "%s/../../../../wasmmod/src", dir);
+    snprintf(top_root, sizeof(top_root), "%s/../../../../..", dir);
+    includes[0] = s_dag_src_root;
+    includes[1] = wasmmod_src_root;
+    includes[2] = wasmmod_root;
+    includes[3] = top_root;
+    includes[4] = tcc_root;
+    includes[5] = tcc_root;
+    defines[n_defines++] = "PM_WASMMOD_GUEST=0";
+    defines[n_defines++] = "PM_MOD_TESTS=1";
+    defines[n_defines++] = "TCC_TARGET_X86_64";
+    defines[n_defines++] = "PM_HAS_TCC=1";
+    {
+        static char libdir_def[2100];
+        snprintf(libdir_def, sizeof(libdir_def), "PM_METAL_TCC_LIB_DIR=\"%s\"",
+            tcc_root);
+        defines[n_defines++] = libdir_def;
+    }
+
+    /* the two real cards come from discovery (their manifests carry the
+     * embedded-source fqns the actor resolves); the three fake units are
+     * hand-authored */
+    rc = pm_metal_build_discover(arena, &discovered, &n_discovered,
+        err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 233;
+    }
+    for (i = 0; i < n_discovered; i++) {
+        if (strcmp(discovered[i].fqn,
+                "pymergetic.metal.drivers.rtc.sim") == 0) {
+            sim = &discovered[i];
+        } else if (strcmp(discovered[i].fqn,
+                "pymergetic.metal.drivers.rtc.cmos") == 0) {
+            cmos = &discovered[i];
+        }
+    }
+    if (sim == NULL || cmos == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 234;
+    }
+
+    /* units[0] = sim (real, no deps); units[1] = cmos (real, + a synthetic
+     * depends edge on sim so the DAG must order it second); units[2..4] =
+     * the failure chain. The depends strings live in this test's arena —
+     * dag_run only reads them during the run. */
+    deps_cmos[0] = "pymergetic.metal.drivers.rtc.sim";
+    deps_victim[0] = "test.dag.bad";
+    deps_gc[0] = "test.dag.victim";
+    srcs[0] = "__impl__.c";
+
+    memset(units, 0, sizeof(units));
+    units[0] = *sim;
+    units[1] = *cmos;
+    units[1].depends = deps_cmos;
+    units[1].n_depends = 1;
+    snprintf(units[2].fqn, sizeof(units[2].fqn), "test.dag.bad");
+    snprintf(units[2].impl, sizeof(units[2].impl), "c");
+    units[2].sources = srcs;
+    units[2].n_sources = 1;
+    snprintf(units[3].fqn, sizeof(units[3].fqn), "test.dag.victim");
+    snprintf(units[3].impl, sizeof(units[3].impl), "c");
+    units[3].sources = srcs;
+    units[3].n_sources = 1;
+    units[3].depends = deps_victim;
+    units[3].n_depends = 1;
+    snprintf(units[4].fqn, sizeof(units[4].fqn), "test.dag.grandchild");
+    snprintf(units[4].impl, sizeof(units[4].impl), "c");
+    units[4].sources = srcs;
+    units[4].n_sources = 1;
+    units[4].depends = deps_gc;
+    units[4].n_depends = 1;
+
+    memset(&res, 0, sizeof(res));
+    memset(err, 0, sizeof(err));
+    {
+        pm_metal_build_dag_opts_t dopts;
+        memset(&dopts, 0, sizeof(dopts));
+        dopts.compile.unit_root = "";
+        dopts.compile.include_dirs = includes;
+        dopts.compile.n_include_dirs = 6;
+        dopts.compile.defines = defines;
+        dopts.compile.n_defines = n_defines;
+        dopts.root_fn = dag_root_fn;
+        rc = pm_metal_build_dag_run(arena, units, 5, &dopts,
+            &res, err, sizeof(err));
+    }
+    if (rc != PM_METAL_BUILD_OK) {
+        printf("dag_run refused: rc=%d err=%s\n", (int)rc, err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 235;
+    }
+    if (res.n_rows != 5) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 236;
+    }
+    if (res.n_done != 2u || res.n_skipped != 2u || res.n_failed != 1u) {
+        printf("dag counts: done=%u failed=%u skipped=%u\n",
+            res.n_done, res.n_failed, res.n_skipped);
+        for (i = 0; i < res.n_rows; i++) {
+            printf("  %-40s state=%d rc=%d err=%s\n", res.rows[i].fqn,
+                (int)res.rows[i].state, (int)res.rows[i].rc,
+                res.rows[i].err);
+        }
+        pm_util_mem_arena_destroy(arena); free(backing); return 237;
+    }
+    for (i = 0; i < res.n_rows; i++) {
+        if (strcmp(res.rows[i].fqn,
+                "pymergetic.metal.drivers.rtc.sim") == 0) {
+            seen_sim = 1;
+            if (res.rows[i].state != PM_METAL_BUILD_DAG_DONE
+                || res.rows[i].image_len == 0) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 238;
+            }
+        } else if (strcmp(res.rows[i].fqn,
+                "pymergetic.metal.drivers.rtc.cmos") == 0) {
+            seen_cmos = 1;
+            /* cmos built AFTER sim (its dep): DONE with a real image */
+            if (res.rows[i].state != PM_METAL_BUILD_DAG_DONE
+                || res.rows[i].image_len == 0) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 239;
+            }
+        } else if (strcmp(res.rows[i].fqn, "test.dag.bad") == 0) {
+            seen_bad = 1;
+            if (res.rows[i].state != PM_METAL_BUILD_DAG_FAILED
+                || res.rows[i].err[0] == '\0') {
+                pm_util_mem_arena_destroy(arena); free(backing); return 240;
+            }
+        } else if (strcmp(res.rows[i].fqn, "test.dag.victim") == 0) {
+            seen_victim = 1;
+            if (res.rows[i].state != PM_METAL_BUILD_DAG_SKIPPED
+                || strstr(res.rows[i].err, "test.dag.bad") == NULL) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 241;
+            }
+        } else if (strcmp(res.rows[i].fqn, "test.dag.grandchild") == 0) {
+            seen_gc = 1;
+            if (res.rows[i].state != PM_METAL_BUILD_DAG_SKIPPED
+                || strstr(res.rows[i].err, "test.dag.victim") == NULL) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 242;
+            }
+        }
+    }
+    if (!seen_sim || !seen_cmos || !seen_bad || !seen_victim || !seen_gc) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 243;
+    }
+    /* the actor queue is fully drained: every job reached a terminal state
+     * and left the queue */
+    {
+        uint32_t depth = 99;
+        if (pm_metal_build_actor_depth(&depth) != 0 || depth != 0u) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 244;
+        }
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
     return 0;
 #else
     return 0;
@@ -1705,6 +1954,8 @@ static int32_t pm_metal_build_tests(void) {
     rc = test_rebuild_tcc();
     if (rc) return rc;
     rc = test_actor_roundtrip();
+    if (rc) return rc;
+    rc = test_dag_run();
     if (rc) return rc;
     /* ctx-lifetime test must see the jit.c record from test_rebuild_jit_c —
      * it runs before test_record_query, which resets the record table */

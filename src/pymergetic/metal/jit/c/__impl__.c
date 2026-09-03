@@ -47,8 +47,17 @@ extern void *tcc_malloc(unsigned long size);
  * small-source SIGSEGV in tccelf_begin_file). tcc's reallocator is one
  * global, so the arena goes in a TU-static and the compile calls
  * save/restore around their arena window — the card contract is sequential
- * compiles (same posture as the nativecall artifact slot). */
+ * compiles (same posture as the nativecall artifact slot).
+ *
+ * Phase 5: the window is a first-class lock-guarded API. One pm_util_lock_t
+ * serializes every window transition; the arena static and the global
+ * reallocator are only written under it. object_compile_opts takes the
+ * window around its whole invocation; the build actor takes it around a
+ * whole unit compile. Nested windows are refused (the inner caller would
+ * restore the outer's reallocator early). */
 static pm_util_mem_arena_t *s_tcc_arena;
+static pm_util_lock_t s_tcc_arena_lock;   /* 0 = free: BSS zero is unlocked */
+static pm_util_mem_arena_t *s_tcc_arena_holder;  /* window owner when held */
 
 static void *pm_metal_jit_c_tcc_arena_realloc(void *ptr, unsigned long size) {
     if (s_tcc_arena == NULL) {
@@ -63,6 +72,10 @@ static void *pm_metal_jit_c_tcc_arena_realloc(void *ptr, unsigned long size) {
     }
     return pm_util_mem_realloc(s_tcc_arena, ptr, (size_t)size);
 }
+
+int32_t pm_metal_jit_c_arena_acquire(pm_util_mem_arena_t *arena);
+
+int32_t pm_metal_jit_c_arena_release(pm_util_mem_arena_t *arena);
 
 #if PM_HAS_TCC && defined(TCC_TARGET_WASM32)
 #define PM_METAL_JIT_C_WASM_PATH 1
@@ -86,6 +99,10 @@ static void wasm_tcc_add_include_path(void *s, const char *p) { tcc_add_include_
 static void wasm_tcc_set_output_type(void *s, int t) { tcc_set_output_type((TCCState *)s, t); }
 static int wasm_tcc_compile_string(void *s, const char *b) { return tcc_compile_string((TCCState *)s, b); }
 static void wasm_tcc_define_symbol(void *s, const char *sym, const char *val) { tcc_define_symbol((TCCState *)s, sym, val); }
+/* the allocator window routes tcc_set_realloc directly (the wasm-native
+ * seat's reallocator IS the unprefixed one) — the shim stays for the
+ * object paths' uniform call shape */
+__attribute__((unused))
 static void wasm_tcc_set_realloc(void *f) { tcc_set_realloc((TCCReallocFunc *)f); }
 static void wasm_tcc_free(void *p) { tcc_free(p); }
 static void wasm_tcc_set_error_func(void *s, void *opaque, TCCErrorFunc *cb) { tcc_set_error_func((TCCState *)s, opaque, cb); }
@@ -117,12 +134,70 @@ static void wasm_tcc_add_include_path(void *s, const char *p) { pm_tccw_tcc_add_
 static void wasm_tcc_set_output_type(void *s, int t) { pm_tccw_tcc_set_output_type(s, t); }
 static int wasm_tcc_compile_string(void *s, const char *b) { return pm_tccw_tcc_compile_string(s, b); }
 static void wasm_tcc_define_symbol(void *s, const char *sym, const char *val) { pm_tccw_tcc_define_symbol(s, sym, val); }
+/* the allocator window may not route the cross instance on every seat
+ * that links it (the window's cross clause needs PM_METAL_TCC_CROSS_WASM32
+ * and not TCC_TARGET_WASM32, but the object paths' callers select routes
+ * at runtime) — keep the shim linkable everywhere */
+__attribute__((unused))
 static void wasm_tcc_set_realloc(void *f) { pm_tccw_tcc_set_realloc(f); }
 static void wasm_tcc_free(void *p) { pm_tccw_tcc_free(p); }
 static void wasm_tcc_set_error_func(void *s, void *opaque, TCCErrorFunc *cb) { pm_tccw_tcc_set_error_func(s, opaque, cb); }
 static int wasm_build_mod(uint8_t **out_buf, int *out_len) { return pm_tccw_wasm_build_module(out_buf, out_len); }
 static void wasm_release_bufs(void) { pm_tccw_wasm_release_buffers(); }
 #endif
+
+/*------------------ allocator window (Phase 5) ------------------
+ * Implemented after the wasm shim block: on a cross seat the wasm32
+ * instance is a second, symbol-prefixed libtcc with its own reallocator
+ * global, so the window must route BOTH instances under one lock. */
+int32_t pm_metal_jit_c_arena_acquire(pm_util_mem_arena_t *arena) {
+    if (arena == NULL) {
+        return -1;
+    }
+    /* try-acquire, never spin: a compile holds this window for seconds, and
+     * the async seat's runner threads must not burn their cores spinning
+     * on it. A contended window refuses; the actor's serial section is the
+     * higher-level serializer that makes every TCC caller queue instead. */
+    if (pm_util_lock_try_acquire(&s_tcc_arena_lock) == 0) {
+        return -1;
+    }
+    if (s_tcc_arena_holder != NULL) {
+        pm_util_lock_release(&s_tcc_arena_lock);
+        return -1;
+    }
+    s_tcc_arena = arena;
+    s_tcc_arena_holder = arena;
+#if PM_HAS_TCC
+    tcc_set_realloc(pm_metal_jit_c_tcc_arena_realloc);
+#endif
+#if PM_METAL_JIT_C_WASM_PATH && defined(PM_METAL_TCC_CROSS_WASM32) \
+    && !defined(TCC_TARGET_WASM32)
+    /* cross seat: the prefixed wasm32 instance has its own reallocator
+     * global — route it through the same window */
+    wasm_tcc_set_realloc(pm_metal_jit_c_tcc_arena_realloc);
+#endif
+    return 0;
+}
+
+int32_t pm_metal_jit_c_arena_release(pm_util_mem_arena_t *arena) {
+    if (arena == NULL) {
+        return -1;
+    }
+    if (s_tcc_arena_holder != arena) {
+        return -1;
+    }
+#if PM_HAS_TCC
+    tcc_set_realloc(NULL);
+#endif
+#if PM_METAL_JIT_C_WASM_PATH && defined(PM_METAL_TCC_CROSS_WASM32) \
+    && !defined(TCC_TARGET_WASM32)
+    wasm_tcc_set_realloc(NULL);
+#endif
+    s_tcc_arena = NULL;
+    s_tcc_arena_holder = NULL;
+    pm_util_lock_release(&s_tcc_arena_lock);
+    return 0;
+}
 
 /* unused on cross seats' coro face (native_entry is the seat's own backend)
  * — object_compile_target is the only caller there */
@@ -141,12 +216,10 @@ static int pm_metal_jit_c_tcc_wasm_compile(const char *source,
      * arena (async_init's) */
     pm_util_mem_arena_t *a = pm_metal_async_arena();
     if (!a) return -1;
-    s_tcc_arena = a;
-    wasm_tcc_set_realloc(pm_metal_jit_c_tcc_arena_realloc);
+    if (pm_metal_jit_c_arena_acquire(a) != 0) return -1;
     s = wasm_tcc_new();
     if (!s) {
-        wasm_tcc_set_realloc(NULL);
-        s_tcc_arena = NULL;
+        pm_metal_jit_c_arena_release(a);
         return -1;
     }
     wasm_tcc_set_lib_path(s, PM_METAL_TCC_LIB_DIR);
@@ -155,15 +228,13 @@ static int pm_metal_jit_c_tcc_wasm_compile(const char *source,
     if (wasm_tcc_compile_string(s, source) != 0) {
         wasm_tcc_delete(s);
         wasm_release_bufs();
-        wasm_tcc_set_realloc(NULL);
-        s_tcc_arena = NULL;
+        pm_metal_jit_c_arena_release(a);
         return -1;
     }
     if (wasm_build_mod(&buf, &len) != 0 || !buf) {
         wasm_tcc_delete(s);
         wasm_release_bufs();
-        wasm_tcc_set_realloc(NULL);
-        s_tcc_arena = NULL;
+        pm_metal_jit_c_arena_release(a);
         return -1;
     }
     wasm_tcc_delete(s);
@@ -173,16 +244,14 @@ static int pm_metal_jit_c_tcc_wasm_compile(const char *source,
     if (len > (int)wasm_cap) {
         wasm_tcc_free(buf);
         wasm_release_bufs();
-        wasm_tcc_set_realloc(NULL);
-        s_tcc_arena = NULL;
+        pm_metal_jit_c_arena_release(a);
         return -1;
     }
     memcpy(wasm_out, buf, (size_t)len);
     *wasm_len = (size_t)len;
     wasm_tcc_free(buf);
     wasm_release_bufs();
-    wasm_tcc_set_realloc(NULL);
-    s_tcc_arena = NULL;
+    pm_metal_jit_c_arena_release(a);
     return 0;
 }
 #endif /* PM_METAL_JIT_C_WASM_PATH */
@@ -222,6 +291,14 @@ static int pm_metal_jit_c_tcc_native_compile(const char *source, pm_metal_jit_c_
 static int pm_metal_jit_c_tcc_wasm_compile(const char *source,
     uint8_t *wasm_out, size_t wasm_cap, size_t *wasm_len) {
     (void)source; (void)wasm_out; (void)wasm_cap; (void)wasm_len;
+    return -1;
+}
+int32_t pm_metal_jit_c_arena_acquire(pm_util_mem_arena_t *arena) {
+    (void)arena;
+    return -1;  /* no TCC on this seat: nothing to install */
+}
+int32_t pm_metal_jit_c_arena_release(pm_util_mem_arena_t *arena) {
+    (void)arena;
     return -1;
 }
 #endif /* PM_HAS_TCC */
@@ -387,18 +464,20 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     }
     close(fd);
 
-    /* route the whole compile's allocations through the arena (save the
-     * prior reallocator — tcc's is a single global) */
-    TCCReallocFunc *saved_realloc = NULL;
-    s_tcc_arena = arena;
-    tcc_set_realloc(pm_metal_jit_c_tcc_arena_realloc);
+    /* route the whole compile's allocations through the arena via the
+     * lock-guarded allocator window (Phase 5) */
+    if (pm_metal_jit_c_arena_acquire(arena) != 0) {
+        unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len,
+            "object_compile: allocator window busy");
+        return -1;
+    }
     /* the arena's own reallocation can move a block tcc still holds, but
      * tlsf_realloc copies contents — same contract as libc realloc */
 
     s = tcc_new();
     if (s == NULL) {
-        tcc_set_realloc(saved_realloc);
-        s_tcc_arena = NULL;
+        pm_metal_jit_c_arena_release(arena);
         unlink(tmpl);
         jit_c_obj_err(errbuf, errbuf_len, "object_compile: tcc_new failed");
         return -1;
@@ -431,8 +510,7 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
         }
         if (tcc_compile_string(s, source) != 0) {
             tcc_delete(s);
-            tcc_set_realloc(saved_realloc);
-            s_tcc_arena = NULL;
+            pm_metal_jit_c_arena_release(arena);
             unlink(tmpl);
             jit_c_obj_err_diag(errbuf, errbuf_len,
                 "object_compile: tcc compile failed", &diag);
@@ -440,8 +518,7 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
         }
         if (tcc_output_file(s, tmpl) != 0) {
             tcc_delete(s);
-            tcc_set_realloc(saved_realloc);
-            s_tcc_arena = NULL;
+            pm_metal_jit_c_arena_release(arena);
             unlink(tmpl);
             jit_c_obj_err_diag(errbuf, errbuf_len,
                 "object_compile: tcc_output_file failed", &diag);
@@ -449,10 +526,9 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
         }
         tcc_delete(s);
     }
-    /* restore the prior reallocator before the read-back — no tcc allocation
+    /* release the window before the read-back — no tcc allocation
      * happens below this point */
-    tcc_set_realloc(saved_realloc);
-    s_tcc_arena = NULL;
+    pm_metal_jit_c_arena_release(arena);
 
     f = fopen(tmpl, "rb");
     if (f == NULL) {
@@ -545,13 +621,16 @@ static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
     *obj_len = 0;
 
     /* the compile's scratch — and wasm32-gen's growable buffers — ride the
-     * caller's arena; saved/restored because tcc's reallocator is global */
-    s_tcc_arena = arena;
-    wasm_tcc_set_realloc(pm_metal_jit_c_tcc_arena_realloc);
+     * caller's arena through the lock-guarded allocator window */
+    if (pm_metal_jit_c_arena_acquire(arena) != 0) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "object_compile: allocator window busy");
+        }
+        return -1;
+    }
     s = wasm_tcc_new();
     if (s == NULL) {
-        wasm_tcc_set_realloc(NULL);
-        s_tcc_arena = NULL;
+        pm_metal_jit_c_arena_release(arena);
         if (errbuf != NULL && errbuf_len > 0) {
             snprintf(errbuf, errbuf_len, "object_compile: tcc_new failed");
         }
@@ -580,8 +659,7 @@ static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
     if (wasm_tcc_compile_string(s, source) != 0) {
         wasm_tcc_delete(s);
         wasm_release_bufs(); /* partial emission still rode this arena */
-        wasm_tcc_set_realloc(NULL);
-        s_tcc_arena = NULL;
+        pm_metal_jit_c_arena_release(arena);
         jit_c_obj_err_diag(errbuf, errbuf_len,
             "object_compile: tcc compile failed", &diag);
         return -1;
@@ -592,8 +670,7 @@ static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
         }
         wasm_tcc_delete(s);
         wasm_release_bufs(); /* same window: their backing is this arena */
-        wasm_tcc_set_realloc(NULL);
-        s_tcc_arena = NULL;
+        pm_metal_jit_c_arena_release(arena);
         if (errbuf != NULL && errbuf_len > 0) {
             snprintf(errbuf, errbuf_len, "object_compile: wasm serialize failed");
         }
@@ -604,19 +681,17 @@ static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
     if (buf == NULL) {
         wasm_tcc_free(mod); /* still inside the arena window */
         wasm_release_bufs();
-        wasm_tcc_set_realloc(NULL);
-        s_tcc_arena = NULL;
+        pm_metal_jit_c_arena_release(arena);
         if (errbuf != NULL && errbuf_len > 0) {
             snprintf(errbuf, errbuf_len, "object_compile: arena alloc failed");
         }
         return -1;
     }
     memcpy(buf, mod, (size_t)mod_len);
-    wasm_tcc_free(mod); /* must free before the restore — tcc_free after would be
+    wasm_tcc_free(mod); /* must free before the release — tcc_free after would be
      * libc free on an arena block */
     wasm_release_bufs();
-    wasm_tcc_set_realloc(NULL);
-    s_tcc_arena = NULL;
+    pm_metal_jit_c_arena_release(arena);
     *obj_out = buf;
     *obj_len = (size_t)mod_len;
     return 0;
@@ -756,5 +831,9 @@ PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_object_compile_target, pm
         const char **, uint32_t, const char **, uint32_t,
         int32_t,
         uint8_t **, size_t *, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_arena_acquire, pm_metal_jit_c_arena_acquire,
+    int32_t(pm_util_mem_arena_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_arena_release, pm_metal_jit_c_arena_release,
+    int32_t(pm_util_mem_arena_t *));
 
 PM_METAL_EXTERNAL_C(tcc, "0.9.28rc");

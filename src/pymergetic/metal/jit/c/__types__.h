@@ -92,6 +92,35 @@ int32_t pm_metal_jit_c_object_compile_target(pm_util_mem_arena_t *arena,
     uint8_t **obj_out, size_t *obj_len,
     char *errbuf, size_t errbuf_len);
 
+/*------------------ TCC allocator window (Phase 5) ------------------
+ * TCC's reallocator is ONE global (tcc_set_realloc in libtcc.c): every
+ * tcc_malloc/tcc_realloc/tcc_free call in the process dispatches through
+ * it, and its arena context lives in a TU-static here. That makes any
+ * TCC invocation an exclusive window: while one caller's arena is
+ * installed, another caller's compile would allocate from the wrong
+ * arena (and its diagnostics, Sym tables and emission buffers would be
+ * freed by the wrong teardown).
+ *
+ * The window API makes that contract first-class. acquire() installs
+ * arena as the allocator context and returns the previous reallocator;
+ * release() restores it. Both are guarded by one lock so two threads can
+ * never hold overlapping windows on seats with real threads — the lock
+ * IS the serialization, not an optimization. object_compile_opts takes
+ * the window internally (its callers need nothing); the build card's
+ * actor takes it around its whole unit compile so every TCC call in the
+ * job — per-source compiles and the link — shares one arena context.
+ * Nothing else may touch s_tcc_arena or tcc_set_realloc. */
+
+/* Install arena as TCC's allocator context. Returns 0 on success, -1
+ * when arena is NULL. The caller MUST release the window with the
+ * arena it acquired it with. Blocks while another window is held. */
+int32_t pm_metal_jit_c_arena_acquire(pm_util_mem_arena_t *arena);
+
+/* Release a window acquired with arena_acquire(arena). Restores the
+ * prior reallocator and clears the allocator context. Returns 0, -1
+ * when the window is not held for arena. */
+int32_t pm_metal_jit_c_arena_release(pm_util_mem_arena_t *arena);
+
 #ifdef __cplusplus
 }
 #endif

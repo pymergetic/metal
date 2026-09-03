@@ -21,6 +21,8 @@ extern "C" {
 
 #define PM_METAL_BUILD_ERR_MAX 160u
 #define PM_METAL_BUILD_STR_MAX 128u
+/* root path a root resolver may write (deep trees stay honest refusals) */
+#define PM_METAL_BUILD_ROOT_MAX 2048u
 #define PM_METAL_BUILD_MAX_OBJS 8u
 
 typedef struct pm_metal_build_unit {
@@ -66,6 +68,20 @@ typedef enum pm_metal_build_status {
     PM_METAL_BUILD_ERR_BUSY = -7,
     PM_METAL_BUILD_ERR_CANCELLED = -8,
 } pm_metal_build_status_t;
+
+/* Seat fill for every compile-shaped face: the unit's root directory and
+ * the seat's include roots / extra defines (what differs per seat, like
+ * io.fetch's fills — the module and the C face do not differ). Packed in
+ * one struct so each export's signature fits the registry's fixed
+ * SIG_CAP (160 bytes) — an over-cap sig is silently refused at
+ * registration, which would hide the face on every seat. */
+typedef struct pm_metal_build_compile_opts {
+    const char *unit_root;
+    const char **include_dirs;
+    uint32_t n_include_dirs;
+    const char **defines;
+    uint32_t n_defines;
+} pm_metal_build_compile_opts_t;
 
 /* Parse one manifest into unit (arena-backed; strings are copied into the
  * arena). Returns PM_METAL_BUILD_OK or a negative status; errbuf carries the
@@ -141,13 +157,12 @@ int32_t pm_metal_build_discover(pm_util_mem_arena_t *arena,
     char *errbuf, size_t errbuf_len);
 
 /* Compile every source of unit (via pm_metal_build_compile_source, rooted at
- * unit_root + include_dirs/extra_defines — the seat fill) and link the
- * objects through the in-tree ELF relocator with the process resolver.
- * One call: sources -> artifact. */
+ * opts->unit_root + opts->include_dirs / opts->defines — the seat fill) and
+ * link the objects through the in-tree ELF relocator with the process
+ * resolver. One call: sources -> artifact. */
 int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
-    const pm_metal_build_unit_t *unit, const char *unit_root,
-    const char **include_dirs, uint32_t n_include_dirs,
-    const char **extra_defines, uint32_t n_extra_defines,
+    const pm_metal_build_unit_t *unit,
+    const pm_metal_build_compile_opts_t *opts,
     pm_metal_build_artifact_t *artifact,
     char *errbuf, size_t errbuf_len);
 
@@ -194,12 +209,11 @@ typedef struct pm_metal_build_actor_job {
 /* Submit a compile job to the actor's queue. Returns PM_METAL_BUILD_OK and
  * the job pointer (state NEW) on accept, PM_METAL_BUILD_ERR_BUSY when the
  * bounded queue is full (backpressure — retry is the caller's policy),
- * negative otherwise. The job's strings/arrays are copied into the boot
- * arena; the caller's arena may die afterwards. */
+ * negative otherwise. opts is deep-copied into the boot arena with the
+ * unit; the caller's arena may die afterwards. */
 int32_t pm_metal_build_actor_submit(
-    const pm_metal_build_unit_t *unit, const char *unit_root,
-    const char **include_dirs, uint32_t n_include_dirs,
-    const char **defines, uint32_t n_defines,
+    const pm_metal_build_unit_t *unit,
+    const pm_metal_build_compile_opts_t *opts,
     pm_metal_build_actor_job_t **job_out, char *errbuf, size_t errbuf_len);
 
 /* Step a submitted job once: NEW/WAITING -> try to take the serial section
@@ -223,6 +237,71 @@ int32_t pm_metal_build_actor_cancel(pm_metal_build_actor_job_t *job);
 /* Actor queue occupancy for inspectors: *depth is the current fill,
  * PM_METAL_BUILD_ACTOR_DEPTH the cap. Returns 0. */
 int32_t pm_metal_build_actor_depth(uint32_t *depth);
+
+/*------------------ dependency DAG executor (Phase 5) ------------------
+ * graph_resolve orders units; the DAG executor RUNS that order with
+ * dependency-failure isolation: a unit whose dependency failed is SKIPPED
+ * (isolated, reported — never silently dropped and never a cascade of
+ * misleading compile errors). Scheduling goes through the bounded actor,
+ * so TCC stays serialized on every seat (see the parallelism note in the
+ * phase report — that is the honest posture, not a limitation to lift).
+ *
+ * The executor is synchronous: it drives each unit to completion through
+ * the actor (actor_run semantics). A bounded-queue backpressure refusal
+ * is fatal to the run (the queue drains before the next submit, so it
+ * cannot legitimately trigger; seeing one is a bug). */
+
+#define PM_METAL_BUILD_DAG_MAX PM_METAL_BUILD_ACTOR_DEPTH
+
+typedef enum pm_metal_build_dag_state {
+    PM_METAL_BUILD_DAG_PENDING = 0,   /* not reached yet */
+    PM_METAL_BUILD_DAG_RUNNING = 1,   /* in the actor */
+    PM_METAL_BUILD_DAG_DONE = 2,      /* compiled + linked */
+    PM_METAL_BUILD_DAG_FAILED = 3,    /* its own compile/link refused */
+    PM_METAL_BUILD_DAG_SKIPPED = 4,   /* a dependency FAILED/SKIPPED */
+} pm_metal_build_dag_state_t;
+
+/* Per-unit outcome row (arena-owned; the run fills n_rows of them). */
+typedef struct pm_metal_build_dag_row {
+    char fqn[PM_METAL_BUILD_STR_MAX];
+    pm_metal_build_dag_state_t state;
+    int32_t rc;                       /* PM_METAL_BUILD_* for FAILED rows */
+    char err[PM_METAL_BUILD_ERR_MAX]; /* refusal detail for FAILED rows */
+    size_t image_len;                 /* artifact bytes for DONE rows */
+} pm_metal_build_dag_row_t;
+
+typedef struct pm_metal_build_dag_result {
+    pm_metal_build_dag_row_t *rows;  /* arena array, n_rows long */
+    uint32_t n_rows;
+    uint32_t n_done;
+    uint32_t n_failed;
+    uint32_t n_skipped;
+} pm_metal_build_dag_result_t;
+
+/* DAG run seat fill: the compile opts every unit's job is submitted with,
+ * plus the root resolver. root_fn(fqn, buf, cap) resolves a unit's root
+ * directory (the manifest's own dir) — returning nonzero refuses that unit
+ * as FAILED (isolation: the run continues). */
+typedef int32_t (*pm_metal_build_root_fn_t)(const char *fqn, char *buf, size_t cap);
+
+typedef struct pm_metal_build_dag_opts {
+    pm_metal_build_compile_opts_t compile;   /* the seat fill */
+    pm_metal_build_root_fn_t root_fn;        /* unit -> its source dir */
+} pm_metal_build_dag_opts_t;
+
+/* Run every unit in topological order through the actor. units/n_units
+ * come from pm_metal_build_discover (or a caller-built set); opts carries
+ * the seat fill and the root resolver.
+ *
+ * On return every row carries its terminal state. Returns 0 when the whole
+ * run reached a terminal state (individual failures are in the rows), a
+ * negative status only for setup refusals (graph_resolve failure, actor
+ * submit backpressure, bad args). */
+int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
+    pm_metal_build_unit_t *units, uint32_t n_units,
+    const pm_metal_build_dag_opts_t *opts,
+    pm_metal_build_dag_result_t *out,
+    char *errbuf, size_t errbuf_len);
 
 /*------------------ build records (provenance chain) ------------------
  * Every unit_compile retains a record: the unit's sources, the per-source
