@@ -143,7 +143,29 @@ CPPFLAGS += -DPM_METAL_BUILD_HAS_ELF=1
 $(ELF_LOAD_OBJ): $(ELF_LOAD_SRC)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DMICROPY_PY_WASM_ELF=1 -c -o $@ $<
-# vendored mrustc (externals/mrustc) — in-process Rust→C JIT front-end. The card's
+# wasmmod C-card test objects — compiled here (not pulled from the static
+# archive, whose unreferenced __tests__ members the final link drops; same
+# posture as ELF_LOAD_OBJ above) so the widened host runner (host_test.c
+# walks every registered module, metal and wasmmod alike) executes them on
+# every `make test`. PM_MOD_TESTS is the guest.h gate that turns
+# PM_MOD_TEST_C into a real registration.
+WASMMOD_TESTS_OBJ := \
+	$(CURDIR)/build/wasmmod-tests/types.o \
+	$(CURDIR)/build/wasmmod-tests/io.o \
+	$(CURDIR)/build/wasmmod-tests/net-cdn.o
+
+$(CURDIR)/build/wasmmod-tests/types.o: $(WASMMOD_SRC)/pymergetic/types/__tests__.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DPM_MOD_TESTS=1 -c -o $@ $<
+
+$(CURDIR)/build/wasmmod-tests/io.o: $(WASMMOD_SRC)/pymergetic/wasmmod/io/__tests__.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DPM_MOD_TESTS=1 -c -o $@ $<
+
+$(CURDIR)/build/wasmmod-tests/net-cdn.o: $(WASMMOD_SRC)/pymergetic/wasmmod/net/cdn/__tests__.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DPM_MOD_TESTS=1 -c -o $@ $<
+
 # __impl__.c calls pm_metal_jit_rs_mrustc_compile() which is provided by the
 # tools/mrustc_embed C++ shim; the shim reproduces mrustc's CLI driver pipeline
 # (every pass is in bin/mrustc.a; only CLI main.o is excluded) and runs it in
@@ -246,9 +268,9 @@ $(CURDIR)/build/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-$(OUT): $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
+$(OUT): $(SRC_OBJS) $(WASMMOD_TESTS_OBJ) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(OUT))
-	$(CXX) -o $(OUT) $(SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
+	$(CXX) -o $(OUT) $(SRC_OBJS) $(WASMMOD_TESTS_OBJ) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC)
 
 $(BENCH_OUT): $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(BENCH_OUT))

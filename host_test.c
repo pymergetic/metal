@@ -1,6 +1,11 @@
 /* Host test runner for metal. Tests register with PM_MOD_TEST_C/RS!; this
  * binary boots, installs the monotonic clock fill, and walks the registry —
- * the same shape as host_bench.c, but a failing test gates the build. */
+ * the same shape as host_bench.c, but a failing test gates the build.
+ *
+ * Every registered module's tests run here — metal cards and the wasmmod
+ * util/wasmmod C cards this binary carries (util.mem, types, wasmmod.*).
+ * A test that only passes on the cargo host driver is a one-seat proof;
+ * this runner is the second, independent one. */
 #include "pymergetic/metal/async/__exports__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/boot.h"
@@ -10,18 +15,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-static int fqn_is_metal(const uint8_t *buf, uint32_t len) {
-    static const char pfx[] = "pymergetic.metal";
-    uint32_t n = (uint32_t)(sizeof(pfx) - 1u);
-    if (len < n) {
-        return 0;
-    }
-    if (memcmp(buf, pfx, n) != 0) {
-        return 0;
-    }
-    return len == n || buf[n] == '.';
-}
 
 static void teardown(pm_util_mem_arena_t *arena, void *backing) {
     pm_mod_boot_unwind();
@@ -80,9 +73,6 @@ int main(void) {
         uint32_t len = sizeof(buf);
         uint32_t tc;
         if (pm_wasmmod_registry_module_at(i, buf, &len) == 0 || len == 0) {
-            continue;
-        }
-        if (!fqn_is_metal(buf, len)) {
             continue;
         }
         tc = pm_wasmmod_registry_test_count(buf, len);
