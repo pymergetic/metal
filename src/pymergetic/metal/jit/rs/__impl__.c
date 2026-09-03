@@ -67,6 +67,19 @@ static int pm_metal_jit_rs_mrustc_to_c(
 #if defined(PM_HAS_TCC) && PM_HAS_TCC && defined(TCC_TARGET_WASM32)
 #include "libtcc.h"
 extern int wasm_build_module(uint8_t **out_buf, int *out_len);
+extern void wasm_release_buffers(void);
+/* tcc.h's pub allocators, declared by hand (same posture as jit.c: the
+ * public header does not carry them with MEM_DEBUG off). */
+extern void tcc_free(void *ptr);
+
+/* The TCC allocator window lives on the jit.c card (one window per process,
+ * lock-guarded, try-acquire): this card's C->WASM stage goes through it like
+ * every other TCC caller, so the wasm32 backend's scratch rides the boot
+ * arena and the global reallocator is never touched outside the window. The
+ * coro face carries no arena of its own — the window installs async's boot
+ * arena, same as jit.c's coro wasm path. */
+extern int32_t pm_metal_jit_c_arena_acquire(pm_util_mem_arena_t *arena);
+extern int32_t pm_metal_jit_c_arena_release(pm_util_mem_arena_t *arena);
 
 static int pm_metal_jit_rs_tcc_wasm_compile(
     const char *c_source, size_t c_len,
@@ -75,20 +88,46 @@ static int pm_metal_jit_rs_tcc_wasm_compile(
     TCCState *s;
     uint8_t *buf = NULL;
     int len = 0;
+    pm_util_mem_arena_t *a;
     (void)c_len;
 
+    a = pm_metal_async_arena();
+    if (!a) return -1;
+    if (pm_metal_jit_c_arena_acquire(a) != 0) return -1;
+
     s = tcc_new();
-    if (!s) return -1;
+    if (!s) { pm_metal_jit_c_arena_release(a); return -1; }
     tcc_set_lib_path(s, PM_METAL_TCC_LIB_DIR);
     tcc_add_library_path(s, PM_METAL_TCC_LIB_DIR);
     tcc_set_output_type(s, TCC_OUTPUT_MEMORY);
-    if (tcc_compile_string(s, c_source) != 0) { tcc_delete(s); return -1; }
-    if (wasm_build_module(&buf, &len) != 0 || !buf) { tcc_delete(s); return -1; }
-    if (len > (int)wasm_cap) { free(buf); tcc_delete(s); return -1; }
+    if (tcc_compile_string(s, c_source) != 0) {
+        tcc_delete(s);
+        wasm_release_buffers(); /* partial emission still rode this arena */
+        pm_metal_jit_c_arena_release(a);
+        return -1;
+    }
+    if (wasm_build_module(&buf, &len) != 0 || !buf) {
+        tcc_delete(s);
+        wasm_release_buffers();
+        pm_metal_jit_c_arena_release(a);
+        return -1;
+    }
+    if (len > (int)wasm_cap) {
+        /* too big: free while the arena reallocator still owns buf —
+         * tcc_free after the restore would be libc free on an arena block */
+        tcc_free(buf);
+        wasm_release_buffers();
+        tcc_delete(s);
+        pm_metal_jit_c_arena_release(a);
+        return -1;
+    }
     memcpy(wasm_out, buf, (size_t)len);
     *wasm_len = (size_t)len;
-    free(buf);
+    /* copy out, then free under the same window (same lifetime rule) */
+    tcc_free(buf);
+    wasm_release_buffers();
     tcc_delete(s);
+    pm_metal_jit_c_arena_release(a);
     return 0;
 }
 #else
