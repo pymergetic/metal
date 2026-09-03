@@ -1,0 +1,1153 @@
+/* ==== fn lowering + file driver ==== */
+
+impl Lower {
+    /* Params of a FN node: kids layout is attrs/quals(PARAM TYPE nodes and
+     * ATTR nodes), then PARAM nodes, then optional ret TYPE, then body
+     * BLOCK. layout_prefix_len tells how many kids are attrs. */
+    unsafe fn lower_fn(&mut self, fnitem: *const pm_jit_rsx_ast_t, declare_only: usize) {
+        let name = unsafe { (*fnitem).text };
+        let nlen = unsafe { (*fnitem).text_len };
+        let line = unsafe { (*fnitem).line };
+        let kids = unsafe { (*fnitem).kids };
+        let nk = unsafe { (*fnitem).n_kids } as usize;
+        /* split: attrs (ATTR), quals (ATTR/TYPE with unsafe/extern text),
+         * params (PARAM), ret (TYPE), body (BLOCK). The parser pushes them
+         * in order: attrs+vis, quals, params, ret, body. */
+        let mut params: [*const pm_jit_rsx_ast_t; 12] = [core::ptr::null(); 12];
+        let mut n_params = 0usize;
+        let mut ret: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut body: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut i = 0usize;
+        while i < nk {
+            let k = unsafe { *kids.add(i) };
+            let kk = unsafe { (*k).kind };
+            if kk == pm_jit_rsx_ast_kind::PARAM {
+                if n_params < 12 {
+                    params[n_params] = k;
+                    n_params += 1;
+                }
+            } else if kk == pm_jit_rsx_ast_kind::BLOCK {
+                body = k;
+            } else if kk == pm_jit_rsx_ast_kind::TYPE {
+                /* ret type is the last TYPE kid (quals also arrive as TYPE
+                 * with text "extern"/"unsafe" or the ABI string literal) */
+                let t = unsafe { (*k).text };
+                let tl = unsafe { (*k).text_len };
+                if tl == 0 || t.is_null() {
+                    continue;
+                }
+                if unsafe { z_eq(t, tl, b"unsafe\0".as_ptr()) }
+                    || unsafe { z_eq(t, tl, b"extern\0".as_ptr()) }
+                    || (unsafe { *t } == b'"')
+                {
+                    /* qualifier — skip */
+                } else {
+                    ret = k;
+                }
+            }
+            i += 1;
+        }
+        /* self param detection (method) for the mangled free-fn name. */
+        let has_self = n_params > 0
+            && unsafe { z_eq(
+                unsafe { (*params[0]).text },
+                unsafe { (*params[0]).text_len },
+                b"self\0".as_ptr(),
+            ) };
+        let is_method = has_self;
+        let _ = is_method;
+        /* A bare top-level FN node with a `self` receiver is not a valid
+         * free function — methods only appear inside impl blocks, where
+         * lower_impl sets the receiver type and mangles the name before
+         * delegating here. */
+        if has_self && self.recv_len == 0 {
+            unsafe {
+                self.err(b"method outside impl\0".as_ptr(), line);
+            }
+            return;
+        }
+        /* C type of the return */
+        let ret_ct = self.arena_tmp();
+        let mut ret_len = 0usize;
+        if !ret.is_null() {
+            ret_len = unsafe { self.ctype(ret, ret_ct, 128) };
+        } else {
+            ret_len = unsafe { zput(ret_ct, 128, 0, b"void\0".as_ptr()) };
+        }
+        if ret_len == 0 {
+            return;
+        }
+        /* #line + signature */
+        self.out.puts(b"#line \0".as_ptr());
+        unsafe { self.out.put_u32(line) };
+        self.out.puts(b" \"__impl__.rs\"\n\0".as_ptr());
+        self.out.put(ret_ct, ret_len);
+        self.out.putc(b' ');
+        self.out.put(name, nlen);
+        self.out.putc(b'(');
+        /* params */
+        let mut p = 0usize;
+        let mut first = true;
+        while p < n_params {
+            let pk = params[p];
+            let pt = unsafe { (*pk).text };
+            let ptl = unsafe { (*pk).text_len };
+            /* receiver params are `self`/`&self`/`&mut self` spellings; the
+             * method case was refused above, so this is a param named self
+             * in a free fn — treat as a typed param below. */
+            let is_recv = unsafe { z_eq(pt, ptl, b"self\0".as_ptr()) }
+                || unsafe { z_eq(pt, ptl, b"&self\0".as_ptr()) }
+                || unsafe { z_eq(pt, ptl, b"&mut self\0".as_ptr()) };
+            if is_recv {
+                if self.recv_len > 0 {
+                    if !first {
+                        self.out.puts(b", \0".as_ptr());
+                    }
+                    first = false;
+                    self.out.put(self.recv_type.as_ptr(), self.recv_len);
+                    self.out.puts(b" self\0".as_ptr());
+                }
+                p += 1;
+                continue;
+            }
+            if !first {
+                self.out.puts(b", \0".as_ptr());
+            }
+            first = false;
+            let pkk = unsafe { (*pk).kids };
+            let pkn = unsafe { (*pk).n_kids } as usize;
+            if pkn >= 1 {
+                let pty = unsafe { *pkk.add(0) };
+                let ct = self.arena_tmp();
+                let n = unsafe { self.ctype(pty, ct, 128) };
+                if n == 0 {
+                    return;
+                }
+                unsafe {
+                    self.emit_declarator(ct, n, pt, ptl);
+                }
+            } else {
+                /* untyped param — not valid Rust; refuse */
+                unsafe {
+                    self.err(b"parameter without a type\0".as_ptr(), line);
+                }
+                return;
+            }
+            p += 1;
+        }
+        if first {
+            self.out.puts(b"void\0".as_ptr());
+        }
+        self.out.puts(b")\n\0".as_ptr());
+        if declare_only != 0 {
+            self.out.puts(b";\n\0".as_ptr());
+            return;
+        }
+        /* body lowering from here on: `?` needs the fn's return type to
+         * soundly emit its early `return 0`. */
+        {
+            let mut j = 0usize;
+            while j < ret_len && j < 127 {
+                self.cur_ret[j] = unsafe { *ret_ct.add(j) };
+                j += 1;
+            }
+            self.cur_ret_len = j;
+        }
+        self.out.puts(b"{\n\0".as_ptr());
+        /* body: the tail expression of a value-returning fn becomes
+         * `return expr;` — C has no implicit block value. */
+        if !body.is_null() {
+            let locals = LocalTab::new(self.arena);
+            if locals.is_null() {
+                self.ok = false;
+                self.cur_ret_len = 0;
+                self.out.puts(b"}\n\0".as_ptr());
+                self.out.putc(b'\n');
+                return;
+            }
+            if self.recv_len > 0 {
+                unsafe {
+                    (*locals).add(b"self\0".as_ptr(), 4, self.recv_type.as_ptr(), self.recv_len, 1);
+                }
+            }
+            /* Register every parameter so body inference can see them. */
+            {
+                let mut p = 0usize;
+                while p < n_params {
+                    let pk = params[p];
+                    let pt = unsafe { (*pk).text };
+                    let ptl = unsafe { (*pk).text_len };
+                    let is_recv = unsafe { z_eq(pt, ptl, b"self\0".as_ptr()) }
+                        || unsafe { z_eq(pt, ptl, b"&self\0".as_ptr()) }
+                        || unsafe { z_eq(pt, ptl, b"&mut self\0".as_ptr()) };
+                    if !is_recv {
+                        let pkk = unsafe { (*pk).kids };
+                        let pkn = unsafe { (*pk).n_kids } as usize;
+                        if pkn >= 1 {
+                            let pty = unsafe { *pkk.add(0) };
+                            let ct = self.arena_tmp();
+                            let n = unsafe { self.ctype(pty, ct, 128) };
+                            if n > 0 {
+                                unsafe {
+                                    (*locals).add(pt, ptl, ct, n, 1);
+                                }
+                            }
+                        }
+                    }
+                    p += 1;
+                }
+            }
+            self.depth = 1;
+            if !ret.is_null() {
+                let bk = unsafe { (*body).kids };
+                let bn = unsafe { (*body).n_kids } as usize;
+                let mut i = 0usize;
+                while i + 1 < bn {
+                    let st = unsafe { *bk.add(i) };
+                    unsafe { self.emit_stmt(st, &mut *locals, 0) };
+                    i += 1;
+                }
+                if bn > 0 {
+                    let mut tail = unsafe { *bk.add(bn - 1) };
+                    /* a tail expr stmt (`if .. { a } else { b }` with no
+                     * trailing `;`) wraps the value form — unwrap so the
+                     * tail classification sees IF/MATCH, not EXPR_STMT. */
+                    if unsafe { (*tail).kind } == pm_jit_rsx_ast_kind::EXPR_STMT
+                        && unsafe { (*tail).n_kids } >= 1
+                    {
+                        tail = unsafe { *(*tail).kids.add(0) };
+                    }
+                    let k = unsafe { (*tail).kind };
+                    if k == pm_jit_rsx_ast_kind::IF {
+                        /* tail if: each branch returns its own tail expr */
+                        unsafe { self.emit_if_tail(tail, &mut *locals) };
+                    } else if k == pm_jit_rsx_ast_kind::MATCH {
+                        /* tail match: declare `ret` from the fn's C type and
+                         * let each arm store into it, then return. */
+                        self.indent();
+                        self.out.put(ret_ct, ret_len);
+                        self.out.puts(b" ret;\n\0".as_ptr());
+                        unsafe { self.emit_match_value(tail, &mut *locals, b"ret\0".as_ptr(), 3) };
+                        self.indent();
+                        self.out.puts(b"return ret;\n\0".as_ptr());
+                    } else if k == pm_jit_rsx_ast_kind::RETURN
+                        || k == pm_jit_rsx_ast_kind::LET
+                        || k == pm_jit_rsx_ast_kind::STMT
+                        || k == pm_jit_rsx_ast_kind::MACRO
+                        || k == pm_jit_rsx_ast_kind::EXPR_STMT
+                        || k == pm_jit_rsx_ast_kind::ASSIGN
+                        || k == pm_jit_rsx_ast_kind::LOOP
+                    {
+                        unsafe { self.emit_stmt(tail, &mut *locals, 0) };
+                    } else if k == pm_jit_rsx_ast_kind::BLOCK {
+                        /* tail block expr (typically an `unsafe { value }`
+                         * wrapper): walk to the inner tail and return it. */
+                        unsafe { self.emit_block_tail_ret(tail, &mut *locals) };
+                    } else {
+                        self.indent();
+                        self.out.puts(b"return \0".as_ptr());
+                        unsafe { self.emit_expr(tail, &mut *locals) };
+                        self.out.puts(b";\n\0".as_ptr());
+                    }
+                }
+            } else {
+                unsafe { self.emit_block_stmt(body, &mut *locals) };
+            }
+            self.depth = 0;
+            /* a span OOM inside this body's locals must refuse the whole
+             * compile (specific error), not degrade inference */
+            if unsafe { (*locals).oom } {
+                self.ok = false;
+            }
+        }
+        self.cur_ret_len = 0;
+        self.out.puts(b"}\n\0".as_ptr());
+        self.out.putc(b'\n');
+    }
+
+    /* Methods inside an impl: free fn `Type_method` / `Type_Trait_method`. */
+    unsafe fn lower_impl(&mut self, item: *const pm_jit_rsx_ast_t, declare_only: usize) {
+        let kids = unsafe { (*item).kids };
+        let nk = unsafe { (*item).n_kids } as usize;
+        /* self type: first TYPE-path kid; trait: a TYPE node with text "trait" */
+        let mut ty_name: *const u8 = b"\0".as_ptr();
+        let mut ty_len = 0usize;
+        let mut trait_name: *const u8 = b"\0".as_ptr();
+        let mut trait_len = 0usize;
+        let mut methods_start = 0usize;
+        let mut i = 0usize;
+        while i < nk {
+            let k = unsafe { *kids.add(i) };
+            if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::TYPE {
+                let t = unsafe { (*k).text };
+                let tl = unsafe { (*k).text_len };
+                if unsafe { z_eq(t, tl, b"trait\0".as_ptr()) } {
+                    /* trait TYPE node wraps the trait path */
+                    let tk = unsafe { (*k).kids };
+                    let tkn = unsafe { (*k).n_kids } as usize;
+                    if tkn >= 1 {
+                        let tpath = unsafe { *tk.add(0) };
+                        let pk = unsafe { (*tpath).kids };
+                        let pkn = unsafe { (*tpath).n_kids } as usize;
+                        if pkn >= 1 {
+                            let leaf = unsafe { *pk.add(pkn - 1) };
+                            trait_name = unsafe { (*leaf).text };
+                            trait_len = unsafe { (*leaf).text_len };
+                        }
+                    }
+                } else if unsafe { z_eq(t, tl, b"path\0".as_ptr()) }
+                    || unsafe { z_eq(t, tl, b"gpath\0".as_ptr()) }
+                {
+                    /* self type path — take the leaf */
+                    let pk = unsafe { (*k).kids };
+                    let pkn = unsafe { (*k).n_kids } as usize;
+                    if pkn >= 1 {
+                        let leaf = unsafe { *pk.add(pkn - 1) };
+                        ty_name = unsafe { (*leaf).text };
+                        ty_len = unsafe { (*leaf).text_len };
+                    }
+                }
+            }
+            if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::FN && methods_start == 0 {
+                methods_start = i;
+            }
+            i += 1;
+        }
+        if ty_len == 0 {
+            unsafe {
+                self.err(b"impl without a self type\0".as_ptr(), unsafe { (*item).line });
+            }
+            return;
+        }
+        if methods_start == 0 {
+            methods_start = nk;
+        }
+        i = methods_start;
+        while i < nk {
+            let k = unsafe { *kids.add(i) };
+            if unsafe { (*k).kind } != pm_jit_rsx_ast_kind::FN {
+                i += 1;
+                continue;
+            }
+            /* mangled: Type_method or Type_Trait_method */
+            let mname = self.arena_tmp();
+            let mut at = 0usize;
+            at = unsafe { bput(mname, 160, at, ty_name, ty_len) };
+            if trait_len > 0 {
+                at = unsafe { bput(mname, 160, at, b"_\0".as_ptr(), 1) };
+                at = unsafe { bput(mname, 160, at, trait_name, trait_len) };
+            }
+            at = unsafe { bput(mname, 160, at, b"_\0".as_ptr(), 1) };
+            at = unsafe { bput(mname, 160, at, unsafe { (*k).text }, unsafe { (*k).text_len }) };
+            unsafe {
+                *mname.add(at) = 0;
+            }
+            /* receiver C type: `Ty *` for &self/&mut self, `Ty` for self */
+            let recv_buf = self.arena_tmp();
+            let mut rl = unsafe { bput(recv_buf, 64, 0, ty_name, ty_len) };
+            let kids_k = unsafe { (*k).kids };
+            let nk_k = unsafe { (*k).n_kids } as usize;
+            let mut by_value = false;
+            let mut mi = 0usize;
+            while mi < nk_k {
+                let mk = unsafe { *kids_k.add(mi) };
+                if unsafe { (*mk).kind } == pm_jit_rsx_ast_kind::PARAM {
+                    let mt = unsafe { (*mk).text };
+                    let mtl = unsafe { (*mk).text_len };
+                    if unsafe { z_eq(mt, mtl, b"self\0".as_ptr()) } {
+                        by_value = true;
+                    }
+                    break;
+                }
+                mi += 1;
+            }
+            if !by_value {
+                rl = unsafe { bput(recv_buf, 64, rl, b" *\0".as_ptr(), 2) };
+            }
+            self.recv_len = 0usize;
+            let mut ri = 0usize;
+            while ri < rl && ri < 64 {
+                self.recv_type[ri] = unsafe { *recv_buf.add(ri) };
+                ri += 1;
+            }
+            self.recv_len = ri;
+            /* emit with the mangled name: reuse lower_fn logic via a temp
+             * FN-node copy with overridden text. */
+            let saved = self.arena_tmp();
+            unsafe {
+                let mut cpy: *mut pm_jit_rsx_ast_t = self.arena_tmp() as *mut pm_jit_rsx_ast_t;
+                core::ptr::copy_nonoverlapping(k, cpy, 1);
+                /* text override: the mangled name */
+                (*cpy).text = mname;
+                (*cpy).text_len = at;
+                self.lower_fn(cpy, declare_only);
+            }
+            self.recv_len = 0;
+            let _ = saved;
+            if !self.ok {
+                return;
+            }
+            i += 1;
+        }
+    }
+
+    /* Emit a pending tuple typedef (signature slot s) — the shared
+     * `struct { A _0; B _1; } rsx_tuple_A_B;`. */
+    unsafe fn tup_emit_one(&mut self, s: usize) {
+        if self.tup_done[s] {
+            return;
+        }
+        let n = self.tup_counts[s];
+        if n == 0 || n > TUP_MAXF {
+            return;
+        }
+        /* A tuple element may itself be a struct-Option
+         * (`rsx_opt_<raw_len>e<hex>`) whose typedef is still pending —
+         * emit those FIRST, or the tuple body references an undeclared
+         * name (tuple-of-Option, e.g. `(Option<u32>, Option<u32>)`).
+         * The element IS the Option's typedef name, so the lookup is by
+         * name. */
+        {
+            let mut f0 = 0usize;
+            while f0 < n {
+                let a = s * TUP_MAXF + f0;
+                let elen = self.tup_lens[a];
+                let elem = self.tup_elems[a].as_ptr();
+                unsafe { self.opt_emit_by_name(elem, elen) };
+                f0 += 1;
+            }
+        }
+        let base = self.tup_elems.as_ptr().add(s * TUP_MAXF);
+        let blens = self.tup_lens.as_ptr().add(s * TUP_MAXF);
+        let need = unsafe { Lower::tup_name_need(blens, n) };
+        if need == 0 {
+            unsafe {
+                self.err(b"internal: tuple typedef name too long\0".as_ptr(), 0);
+            }
+            return;
+        }
+        let tdn = unsafe { self.name_tmp(need) };
+        if tdn.is_null() {
+            unsafe {
+                self.err(b"internal: tuple typedef name too long\0".as_ptr(), 0);
+            }
+            return;
+        }
+        let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, n, tdn, need) };
+        if tdn_len == 0 {
+            unsafe {
+                self.err(b"internal: tuple typedef name too long\0".as_ptr(), 0);
+            }
+            return;
+        }
+        self.out.puts(b"typedef struct { \0".as_ptr());
+        let mut f = 0usize;
+        while f < n {
+            let a = s * TUP_MAXF + f;
+            let elen = self.tup_lens[a];
+            let elem = self.tup_elems[a].as_ptr();
+            self.out.put(elem, elen);
+            self.out.puts(b" _\0".as_ptr());
+            /* field index as ASCII — f < 4, one digit */
+            let d = b'0' + f as u8;
+            self.out.putc(d);
+            self.out.puts(b"; \0".as_ptr());
+            f += 1;
+        }
+        self.out.puts(b"} \0".as_ptr());
+        self.out.put(tdn, tdn_len);
+        self.out.puts(b";\n\0".as_ptr());
+        self.tup_done[s] = true;
+    }
+
+    /* Emit any still-pending struct-Option typedef whose RENDERED NAME
+     * equals `name` — a tuple-of-Option element references the Option by
+     * its typedef name (`rsx_opt_<raw_len>e<hex>`), so the pending Option
+     * is looked up by name, not by payload. */
+    unsafe fn opt_emit_by_name(&mut self, name: *const u8, nlen: usize) {
+        if nlen == 0 || name.is_null() || nlen > 160 {
+            return;
+        }
+        let mut s = 0usize;
+        while s < self.opt_n {
+            if unsafe { self.opt_done[s] } {
+                s += 1;
+                continue;
+            }
+            let elem = self.opt_elems[s].as_ptr();
+            let elen = self.opt_lens[s];
+            let tdn = self.arena_tmp();
+            let tdn_len = unsafe { Lower::opt_typedef_name(elem, elen, tdn, 160) };
+            if tdn_len > 0 && tdn_len == nlen {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < tdn_len {
+                    if unsafe { *tdn.add(j) } != unsafe { *name.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    self.out.puts(b"typedef struct { \0".as_ptr());
+                    self.out.put(elem, elen);
+                    self.out.puts(b" _v; bool _has; } \0".as_ptr());
+                    self.out.put(tdn, tdn_len);
+                    self.out.puts(b";\n\0".as_ptr());
+                    unsafe {
+                        self.opt_done[s] = true;
+                    }
+                }
+            }
+            s += 1;
+        }
+    }
+
+    /* Emit pending tuple typedefs whose element spelling names the type
+     * just declared — same pass-A ordering contract as opt_emit_for.
+     * Readiness: a tuple typedef body names EVERY element by value, so it
+     * may only land once each element that names a unit STRUCT has that
+     * struct's typedef complete. A tuple matching the just-declared type
+     * while another element still names an unemitted struct (file order
+     * puts it later) must wait: a later tup_emit_for for that struct, or
+     * tup_emit_rest after the type pass, emits it. */
+    unsafe fn tup_ready(
+        &mut self,
+        kids: *mut *mut pm_jit_rsx_ast_t,
+        nk: usize,
+        s: usize,
+    ) -> bool {
+        let n = self.tup_counts[s];
+        let mut f = 0usize;
+        while f < n {
+            let a = s * TUP_MAXF + f;
+            let elen = self.tup_lens[a];
+            let elem = self.tup_elems[a].as_ptr();
+            let dep = unsafe { self.tyorder_find(kids, nk, elem, elen) };
+            if !dep.is_null() && !unsafe { self.tydone_find(elem, elen) } {
+                return false;
+            }
+            f += 1;
+        }
+        true
+    }
+
+    unsafe fn tup_emit_for(
+        &mut self,
+        kids: *mut *mut pm_jit_rsx_ast_t,
+        nk: usize,
+        name: *const u8,
+        nlen: usize,
+    ) {
+        if nlen == 0 || name.is_null() {
+            return;
+        }
+        let mut s = 0usize;
+        while s < self.tup_n {
+            if self.tup_done[s] {
+                s += 1;
+                continue;
+            }
+            let n = self.tup_counts[s];
+            let mut matched = false;
+            let mut f = 0usize;
+            while f < n {
+                let a = s * TUP_MAXF + f;
+                if self.tup_lens[a] == nlen {
+                    let elen = self.tup_lens[a];
+                    let elem = self.tup_elems[a].as_ptr();
+                    let mut j = 0usize;
+                    let mut eq = true;
+                    while j < elen {
+                        if unsafe { *elem.add(j) } != unsafe { *name.add(j) } {
+                            eq = false;
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if eq {
+                        matched = true;
+                        break;
+                    }
+                }
+                f += 1;
+            }
+            if matched && unsafe { self.tup_ready(kids, nk, s) } {
+                unsafe { self.tup_emit_one(s) };
+            }
+            s += 1;
+        }
+    }
+
+    /* Emit every still-pending tuple typedef (primitive element types,
+     * and anything whose naming type never matched). */
+    unsafe fn tup_emit_rest(&mut self) {
+        let mut s = 0usize;
+        while s < self.tup_n {
+            unsafe { self.tup_emit_one(s) };
+            s += 1;
+        }
+    }
+
+    /* Emit struct-Option typedefs (`rsx_opt_<elem>`) whose payload spelling
+     * matches `name` — called right after the alias/struct declaring that
+     * name lands in the C, so the typedef body's payload is declared first.
+     * The preamble cannot hoist them: `rsx_opt_Handler` needs `Handler`, and
+     * structs with Option fields need `rsx_opt_*` — pass-A order is the only
+     * order that satisfies both directions. */
+    unsafe fn opt_emit_for(&mut self, name: *const u8, nlen: usize) {
+        if nlen == 0 || name.is_null() {
+            return;
+        }
+        let mut s = 0usize;
+        while s < self.opt_n {
+            if unsafe { self.opt_done[s] } {
+                s += 1;
+                continue;
+            }
+            let elen = self.opt_lens[s];
+            if elen != nlen {
+                s += 1;
+                continue;
+            }
+            let elem = self.opt_elems[s].as_ptr();
+            let mut j = 0usize;
+            let mut eq = true;
+            while j < elen {
+                if unsafe { *elem.add(j) } != unsafe { *name.add(j) } {
+                    eq = false;
+                    break;
+                }
+                j += 1;
+            }
+            if eq {
+                let tdn = self.arena_tmp();
+                let tdn_len = unsafe { Lower::opt_typedef_name(elem, elen, tdn, 160) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: Option typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                self.out.puts(b"typedef struct { \0".as_ptr());
+                self.out.put(elem, elen);
+                self.out.puts(b" _v; bool _has; } \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                unsafe {
+                    self.opt_done[s] = true;
+                }
+            }
+            s += 1;
+        }
+    }
+
+    /* Emit every still-pending Option typedef (primitive payloads — size_t
+     * and friends — and anything whose naming type never matched). */
+    unsafe fn opt_emit_rest(&mut self) {
+        let mut s = 0usize;
+        while s < self.opt_n {
+            if !unsafe { self.opt_done[s] } {
+                let elem = self.opt_elems[s].as_ptr();
+                let elen = self.opt_lens[s];
+                let tdn = self.arena_tmp();
+                let tdn_len = unsafe { Lower::opt_typedef_name(elem, elen, tdn, 160) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: Option typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                self.out.puts(b"typedef struct { \0".as_ptr());
+                self.out.put(elem, elen);
+                self.out.puts(b" _v; bool _has; } \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                unsafe {
+                    self.opt_done[s] = true;
+                }
+            }
+            s += 1;
+        }
+        self.out.putc(b'\n');
+    }
+
+    /* Record a bare type name seen in a signature/static for the opaque hoist.
+     * The hoist (opq_emit) re-checks syms/st/nt, so names this unit declares
+     * are filtered out; what remains are opaque extern types that need
+     * `typedef struct X X;` for the self-contained C to compile. */
+    unsafe fn opq_note(&mut self, name: *const u8, nlen: usize) {
+        if nlen == 0 || nlen >= 48 || name.is_null() || self.opq_n >= 24 {
+            return;
+        }
+        /* identifiers only — quals/ABI strings (`"C"`) reaching a type
+         * render must not become forward typedefs */
+        {
+            let c = unsafe { *name };
+            let okc = c == b'_'
+                || (c >= b'a' && c <= b'z')
+                || (c >= b'A' && c <= b'Z');
+            if !okc {
+                return;
+            }
+        }
+        let mut s = 0usize;
+        while s < self.opq_n {
+            if self.opq_lens[s] == nlen {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < nlen {
+                    if unsafe { *self.opq_names[s].as_ptr().add(j) } != unsafe { *name.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    return;
+                }
+            }
+            s += 1;
+        }
+        let mut j = 0usize;
+        while j < nlen {
+            unsafe {
+                self.opq_names[self.opq_n][j] = *name.add(j);
+            }
+            j += 1;
+        }
+        self.opq_lens[self.opq_n] = nlen;
+        self.opq_n += 1;
+    }
+
+    /* Hoist `typedef struct X X;` for recorded names that no pass declares.
+     * Flushed at the head of each emission pass (B/C/D): notes accrue as
+     * signatures render, so each flush emits only names new since the last
+     * (opq_flushed cursor); a second run would re-emit and clash. Names
+     * this unit declares (struct/enum in syms, type aliases by a file scan)
+     * are skipped — a hoisted typedef colliding with the real declaration
+     * would be a C redefinition error. */
+    unsafe fn opq_emit(&mut self, file: *const pm_jit_rsx_ast_t) {
+        let mut s = self.opq_flushed;
+        let mut emitted = false;
+        while s < self.opq_n {
+            let name = self.opq_names[s].as_ptr();
+            let nlen = self.opq_lens[s];
+            s += 1;
+            if nlen == 0 {
+                continue;
+            }
+            if unsafe { (*self.syms).find(name, nlen) } < SYM_CAP {
+                continue;
+            }
+            if unsafe { self.nt_find(name, nlen) } {
+                continue;
+            }
+            let stb = self.arena_tmp();
+            if unsafe { self.st_find(name, nlen, stb, 64) } > 0 {
+                continue;
+            }
+            let fs = unsafe { (*self.fns).slot(name, nlen) };
+            if fs < SYM_CAP && unsafe { (*self.fns).used[fs] } {
+                continue;
+            }
+            if nlen >= 8 && unsafe { z_eq(name, 8, b"rsx_opt_\0".as_ptr()) } {
+                continue;
+            }
+            /* a type alias of this name declares itself in pass A */
+            let mut is_alias = false;
+            if !file.is_null() {
+                let fk = unsafe { (*file).kids };
+                let fnn = unsafe { (*file).n_kids } as usize;
+                let mut i = 0usize;
+                while i < fnn {
+                    let it = unsafe { *fk.add(i) };
+                    if !it.is_null()
+                        && unsafe { (*it).kind } == pm_jit_rsx_ast_kind::TYPE_ALIAS
+                    {
+                        let tn = unsafe { (*it).text };
+                        let tnl = unsafe { (*it).text_len };
+                        if tnl == nlen {
+                            let mut j = 0usize;
+                            let mut eq = true;
+                            while j < tnl {
+                                if unsafe { *tn.add(j) } != unsafe { *name.add(j) } {
+                                    eq = false;
+                                    break;
+                                }
+                                j += 1;
+                            }
+                            if eq {
+                                is_alias = true;
+                                break;
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+            }
+            if is_alias {
+                continue;
+            }
+            self.out.puts(b"typedef struct \0".as_ptr());
+            self.out.put(name, nlen);
+            self.out.putc(b' ');
+            self.out.put(name, nlen);
+            self.out.puts(b";\n\0".as_ptr());
+            emitted = true;
+            s += 1;
+        }
+        self.opq_flushed = s;
+        if emitted {
+            self.out.putc(b'\n');
+        }
+    }
+
+    /* File: two passes — collect types, then emit in dependency order. */
+    unsafe fn lower_file(&mut self, file: *const pm_jit_rsx_ast_t) -> bool {
+        if file.is_null() || !self.ok {
+            return false;
+        }
+        unsafe { self.collect(file) };
+        if !self.ok {
+            return false;
+        }
+        self.out.puts(b"/* generated by pymergetic.metal.jit.rs.compiler */\n\0".as_ptr());
+        self.out.puts(b"#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <string.h>\n\0".as_ptr());
+        self.out.putc(b'\n');
+        /* struct-shaped Option typedefs are NOT hoisted into the preamble:
+         * a payload naming a type alias (`rsx_opt_Handler`) must follow that
+         * alias's typedef, and structs with Option fields must follow the
+         * Option typedef — pass A flushes them as each naming type lands,
+         * and any remainder (primitive payloads) follows pass A. */
+        let kids = unsafe { (*file).kids };
+        let nk = unsafe { (*file).n_kids } as usize;
+        /* loop slots — declared once; each pass reassigns (Rust shadowing
+         * per-pass would redeclare the same name in one C scope). */
+        let mut i = 0usize;
+        let mut item: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut kind = pm_jit_rsx_ast_kind::FILE;
+        /* Batching: a failed item records its refusal and the pass keeps
+         * scanning the remaining items, so one run reports every gap (the
+         * old single-refusal abort cost one rebuild per error). Output is
+         * discarded on failure anyway, so half-emitted items are harmless.
+         * `ok` is re-armed between items only inside the pass loops below. */
+        let mut bad = false;
+        /* pass 0a: consts — `#define`s first, so array-length constants are
+         * visible to every struct/field declaration below. Statics follow
+         * the type pass (0b): their declarations name struct/alias types. */
+        i = 0;
+        while i < nk {
+            item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            kind = unsafe { (*item).kind };
+            if kind == pm_jit_rsx_ast_kind::CONST {
+                unsafe { self.lower_static(item, 0) };
+            }
+            if !self.ok {
+                bad = true;
+                self.ok = true;
+            }
+            i += 1;
+        }
+        /* pass A0: enums first. An enum is an opaque integer tag in C —
+         * `typedef enum E E;` needs no other type — while a struct field
+         * can name one. Face splices append `#[path]` types after the
+         * muscle, so file order alone would emit a struct's field before
+         * the enum typedef it names; hoisting every ENUM item (a full
+         * sweep before the struct/alias sweep) makes the append-splice
+         * sound. Aliases stay in the later sweep — an alias may name a
+         * struct, so it must follow it. */
+        i = 0;
+        while i < nk {
+            item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            if unsafe { (*item).kind } == pm_jit_rsx_ast_kind::ENUM {
+                unsafe { self.lower_enum(item) };
+                unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                unsafe { self.tup_emit_for(kids, nk, unsafe { (*item).text }, unsafe { (*item).text_len }) };
+            }
+            if !self.ok {
+                bad = true;
+                self.ok = true;
+            }
+            i += 1;
+        }
+        /* pass A: struct/typedef items — dependency-ordered. A struct's
+         * by-value field naming another unit type needs that type's
+         * typedef complete first (C rule); pointer fields only need the
+         * forward declaration lower_struct already emits. File order is
+         * not a valid C order (face splices append types after the
+         * muscle), so emit_struct_ordered pulls deps ahead recursively.
+         * Aliases: the aliased type is by-value (`typedef S S2;` needs S
+         * complete) — dep-collect its TYPE node the same way, then emit
+         * the alias itself in file order. */
+        i = 0;
+        while i < nk {
+            item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            kind = unsafe { (*item).kind };
+            if kind == pm_jit_rsx_ast_kind::STRUCT {
+                unsafe { self.emit_struct_ordered(kids, nk, item) };
+            } else if kind == pm_jit_rsx_ast_kind::TYPE_ALIAS {
+                /* alias: pull in the struct/union the aliased type names
+                 * by value before the typedef renders it */
+                let akids = unsafe { (*item).kids };
+                let akn = unsafe { (*item).n_kids } as usize;
+                let mut ty: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+                let mut j = 0usize;
+                while j < akn {
+                    let k = unsafe { *akids.add(j) };
+                    if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::TYPE {
+                        ty = k;
+                    }
+                    j += 1;
+                }
+                if !ty.is_null() {
+                    let mut dep_bufs: [[u8; 48]; 16] = [[0; 48]; 16];
+                    let mut dep_lens: [usize; 16] = [0; 16];
+                    let mut dep_n: usize = 0;
+                    unsafe {
+                        self.dep_collect(
+                            ty,
+                            dep_bufs.as_mut_ptr() as *mut u8,
+                            dep_lens.as_mut_ptr(),
+                            &mut dep_n,
+                            16,
+                        );
+                    };
+                    let mut d = 0usize;
+                    while d < dep_n {
+                        let dn = dep_bufs[d].as_ptr();
+                        let dl = dep_lens[d];
+                        d += 1;
+                        if unsafe { self.tydone_find(dn, dl) } {
+                            continue;
+                        }
+                        let dep_item = unsafe { self.tyorder_find(kids, nk, dn, dl) };
+                        if dep_item.is_null() {
+                            continue;
+                        }
+                        self.tyorder_depth += 1;
+                        unsafe { self.emit_struct_ordered(kids, nk, dep_item) };
+                        self.tyorder_depth -= 1;
+                        if !self.ok {
+                            break;
+                        }
+                    }
+                }
+                unsafe { self.lower_type_alias(item) };
+                unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                unsafe { self.tup_emit_for(kids, nk, unsafe { (*item).text }, unsafe { (*item).text_len }) };
+            }
+            if !self.ok {
+                bad = true;
+                self.ok = true;
+            }
+            i += 1;
+        }
+        /* remaining tuple typedefs — primitive element types need no
+         * naming type; before the Option typedefs whose payloads may
+         * name them (rsx_opt_rsx_tuple_…) and before prototypes/fns */
+        /* from here on every unit type (struct/alias) is emitted, so a
+         * pending Option typedef can no longer name an unemitted payload
+         * — lower_static's flush becomes safe */
+        self.types_done = true;
+        unsafe { self.tup_emit_rest() };
+        /* remaining Option typedefs — primitive payloads need no naming
+         * type; emit before the prototypes/fns that use them */
+        unsafe { self.opt_emit_rest() };
+        /* pass 0b: statics — after the type pass, their declarations name
+         * struct/alias types; their initializers may also need complete
+         * types for compound literals. */
+        unsafe { self.opq_emit(file) };
+        i = 0;
+        while i < nk {
+            item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            kind = unsafe { (*item).kind };
+            if kind == pm_jit_rsx_ast_kind::STATIC {
+                /* fn-naming initializers defer to pass E (after prototypes) */
+                let mut defer = false;
+                {
+                    let sk = unsafe { (*item).kids };
+                    let sn = unsafe { (*item).n_kids } as usize;
+                    let mut j = 0usize;
+                    let mut initn: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+                    while j < sn {
+                        let k2 = unsafe { *sk.add(j) };
+                        let k2k = unsafe { (*k2).kind };
+                        if k2k == pm_jit_rsx_ast_kind::TYPE {
+                            if !initn.is_null() {
+                                initn = k2;
+                            }
+                        } else if k2k != pm_jit_rsx_ast_kind::ATTR {
+                            initn = k2;
+                        }
+                        j += 1;
+                    }
+                    if !initn.is_null() && unsafe { self.init_names_fn(initn) } {
+                        defer = true;
+                    }
+                }
+                if defer {
+                    unsafe { self.lower_static(item, 2) };
+                } else {
+                    unsafe { self.lower_static(item, 0) };
+                }
+            }
+            if !self.ok {
+                bad = true;
+                self.ok = true;
+            }
+            i += 1;
+        }
+        /* pass B: extern prototypes — after structs, they name borrowed
+         * types in their signatures. */
+        unsafe { self.opq_emit(file) };
+        i = 0;
+        while i < nk {
+            item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            if unsafe { (*item).kind } == pm_jit_rsx_ast_kind::EXTERN_BLOCK {
+                unsafe { self.lower_extern_block(item) };
+            }
+            if !self.ok {
+                bad = true;
+                self.ok = true;
+            }
+            i += 1;
+        }
+        /* pass C: fn prototypes + impl method prototypes */
+        unsafe { self.opq_emit(file) };
+        i = 0;
+        while i < nk {
+            item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            kind = unsafe { (*item).kind };
+            if kind == pm_jit_rsx_ast_kind::FN {
+                unsafe { self.lower_fn(item, 1) };
+            } else if kind == pm_jit_rsx_ast_kind::IMPL {
+                unsafe { self.lower_impl(item, 1) };
+            }
+            if !self.ok {
+                bad = true;
+                self.ok = true;
+            }
+            i += 1;
+        }
+        /* pass D: bodies */
+        unsafe { self.opq_emit(file) };
+        i = 0;
+        while i < nk {
+            item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            kind = unsafe { (*item).kind };
+            if kind == pm_jit_rsx_ast_kind::FN {
+                unsafe { self.lower_fn(item, 0) };
+            } else if kind == pm_jit_rsx_ast_kind::IMPL {
+                unsafe { self.lower_impl(item, 0) };
+            }
+            if !self.ok {
+                bad = true;
+                self.ok = true;
+            }
+            i += 1;
+        }
+        /* pass E: statics deferred past the fn-prototype pass — an
+         * initializer that names a fn (`listen: pm_metal_net_http_asgi_listen`)
+         * needs that fn declared before the file-scope initializer's C
+         * definition; pass 0 emitted them declare-only. */
+        i = 0;
+        while i < nk {
+            item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            if unsafe { (*item).kind } == pm_jit_rsx_ast_kind::STATIC {
+                let kids2 = unsafe { (*item).kids };
+                let nk2 = unsafe { (*item).n_kids } as usize;
+                let mut j = 0usize;
+                let mut initn: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+                while j < nk2 {
+                    let k2 = unsafe { *kids2.add(j) };
+                    let k2k = unsafe { (*k2).kind };
+                    if k2k == pm_jit_rsx_ast_kind::TYPE {
+                        if !initn.is_null() {
+                            initn = k2;
+                        }
+                    } else if k2k != pm_jit_rsx_ast_kind::ATTR {
+                        initn = k2;
+                    }
+                    j += 1;
+                }
+                if !initn.is_null() && unsafe { self.init_names_fn(initn) } {
+                    unsafe { self.lower_static(item, 0) };
+                }
+            }
+            if !self.ok {
+                bad = true;
+                self.ok = true;
+            }
+            i += 1;
+        }
+        if bad {
+            self.ok = false;
+            return false;
+        }
+        true
+    }
+
+    /* Does a static initializer mention a fn by name (a fn-ptr field)? Such
+     * initializers are legal C only after the named fns are declared, so pass
+     * 0 defers them and pass E emits them. */
+    unsafe fn init_names_fn(&mut self, e: *const pm_jit_rsx_ast_t) -> bool {
+        if e.is_null() {
+            return false;
+        }
+        let kind = unsafe { (*e).kind };
+        if kind == pm_jit_rsx_ast_kind::PATH {
+            let t = unsafe { (*e).text };
+            let tl = unsafe { (*e).text_len };
+            if tl > 0 && !t.is_null() {
+                let s = unsafe { (*self.fns).slot(t, tl) };
+                if s < SYM_CAP && unsafe { (*self.fns).used[s] } {
+                    return true;
+                }
+            }
+        }
+        let kids = unsafe { (*e).kids };
+        let nk = unsafe { (*e).n_kids } as usize;
+        let mut i = 0usize;
+        while i < nk {
+            if unsafe { self.init_names_fn(*kids.add(i)) } {
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+}
+
