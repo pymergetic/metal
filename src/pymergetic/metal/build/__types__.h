@@ -8,6 +8,7 @@
 #ifndef PYMERGETIC_METAL_BUILD_TYPES_H
 #define PYMERGETIC_METAL_BUILD_TYPES_H
 
+#include "pymergetic/metal/async/__types__.h"
 #include "pymergetic/util/mem/__types__.h"
 #include "pymergetic/wasmmod/registry/__types__.h"
 
@@ -60,6 +61,10 @@ typedef enum pm_metal_build_status {
     PM_METAL_BUILD_ERR_NOMEM = -4,
     PM_METAL_BUILD_ERR_COMPILE = -5,
     PM_METAL_BUILD_ERR_LINK = -6,
+    /* actor-only statuses: bounded-queue backpressure (retry is the
+     * caller's policy) and cancellation at a phase boundary */
+    PM_METAL_BUILD_ERR_BUSY = -7,
+    PM_METAL_BUILD_ERR_CANCELLED = -8,
 } pm_metal_build_status_t;
 
 /* Parse one manifest into unit (arena-backed; strings are copied into the
@@ -145,6 +150,79 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
     const char **extra_defines, uint32_t n_extra_defines,
     pm_metal_build_artifact_t *artifact,
     char *errbuf, size_t errbuf_len);
+
+/*------------------ async compiler actor (bounded queue) ------------------
+ * TCC's reallocator is ONE global (tcc_set_realloc), so every TCC invocation
+ * in the process must be serialized. The actor is that serialization point:
+ * jobs queue in a bounded FIFO, the actor drains them one at a time, and
+ * waiting jobs PARK (stackless coro frames on the boot arena) instead of
+ * blocking a runner. Backpressure is a refusal: submit fails with
+ * PM_METAL_BUILD_ERR_BUSY when the queue is at capacity — callers decide
+ * their own retry policy, the queue never grows unbounded. */
+
+#define PM_METAL_BUILD_ACTOR_DEPTH 16u
+
+typedef enum pm_metal_build_actor_state {
+    PM_METAL_BUILD_ACTOR_NEW = 0,        /* queued, never stepped */
+    PM_METAL_BUILD_ACTOR_RUNNING = 1,    /* owns the serial section */
+    PM_METAL_BUILD_ACTOR_WAITING = 2,    /* parked for the serial section */
+    PM_METAL_BUILD_ACTOR_DONE = 3,       /* artifact filled, job complete */
+    PM_METAL_BUILD_ACTOR_FAILED = 4,     /* errbuf carries the refusal */
+    PM_METAL_BUILD_ACTOR_CANCELLED = 5,  /* cancelled at a phase boundary */
+} pm_metal_build_actor_state_t;
+
+/* One queued compile job. The submitter keeps the pointer and polls it (or
+ * parks a coro of its own on it via pm_metal_async_await-style chaining —
+ * the actor never blocks the calling runner). All fields are written by the
+ * actor under the queue lock; state transitions are atomic releases. */
+typedef struct pm_metal_build_actor_job {
+    pm_metal_async_coro_t coro;    /* step = actor_job_step; parks on WAITING */
+    pm_metal_build_actor_state_t state;
+    int32_t rc;                    /* PM_METAL_BUILD_* once DONE/FAILED */
+    pm_metal_build_unit_t unit;    /* arena-copied manifest */
+    const char *unit_root;         /* arena-copied */
+    const char **include_dirs;     /* arena-copied (count below) */
+    uint32_t n_include_dirs;
+    const char **defines;          /* arena-copied (count below) */
+    uint32_t n_defines;
+    pm_metal_build_artifact_t artifact;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    uint32_t cancel;               /* 1 = cancel at the next phase boundary */
+    uint32_t next_src;             /* phase cursor: next source index */
+} pm_metal_build_actor_job_t;
+
+/* Submit a compile job to the actor's queue. Returns PM_METAL_BUILD_OK and
+ * the job pointer (state NEW) on accept, PM_METAL_BUILD_ERR_BUSY when the
+ * bounded queue is full (backpressure — retry is the caller's policy),
+ * negative otherwise. The job's strings/arrays are copied into the boot
+ * arena; the caller's arena may die afterwards. */
+int32_t pm_metal_build_actor_submit(
+    const pm_metal_build_unit_t *unit, const char *unit_root,
+    const char **include_dirs, uint32_t n_include_dirs,
+    const char **defines, uint32_t n_defines,
+    pm_metal_build_actor_job_t **job_out, char *errbuf, size_t errbuf_len);
+
+/* Step a submitted job once: NEW/WAITING -> try to take the serial section
+ * (runs the whole unit compile inside the call when it gets it — TCC is
+ * blocking, documented), or parks (returns WAITING, no runner blocked).
+ * DONE/FAILED/CANCELLED are sticky. This is the face a runner loop or a
+ * waiting parent coro drives; pm_metal_build_actor_run does it for you. */
+pm_metal_async_status_t pm_metal_build_actor_step(pm_metal_build_actor_job_t *job);
+
+/* Drive the actor until the job reaches a terminal state (blocking call —
+ * it pumps the async ring while the serial section is held by another job).
+ * tcc_compile_string inside the actor is a blocking call: the actor owns
+ * the serial section, this face just waits for it. */
+int32_t pm_metal_build_actor_run(pm_metal_build_actor_job_t *job);
+
+/* Request cancellation: the job stops at its next phase boundary (between
+ * unit sources, never inside a TCC invocation). Returns 0 when the flag is
+ * set; a job already terminal is left untouched. */
+int32_t pm_metal_build_actor_cancel(pm_metal_build_actor_job_t *job);
+
+/* Actor queue occupancy for inspectors: *depth is the current fill,
+ * PM_METAL_BUILD_ACTOR_DEPTH the cap. Returns 0. */
+int32_t pm_metal_build_actor_depth(uint32_t *depth);
 
 /*------------------ build records (provenance chain) ------------------
  * Every unit_compile retains a record: the unit's sources, the per-source

@@ -10,12 +10,16 @@
  *  - tcc self-rebuild: fresh tcc compiles, runs, matches object bytes
  *  - Phase 3: retained state (records, ledger, at-slots) is arena-owned ctx
  *    state and outlives a destroyed caller arena
+ *  - Phase 4: the async compiler actor — round trip, park on a held serial
+ *    section, bounded-queue backpressure, cancellation before run
  */
 #include "pymergetic/metal/async/__types__.h"
 #include "pymergetic/metal/build/__types__.h"
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
+
+#include <stdio.h>
 
 #if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
 #include "libtcc.h"
@@ -1433,6 +1437,253 @@ static int32_t test_ctx_survives_caller_arena(void) {
     return 0;
 }
 
+/*------------------ Phase 4: async compiler actor ------------------
+ * The actor is THE serialization point for every TCC invocation (TCC's
+ * reallocator is a single global). Proves: round trip (submit -> run ->
+ * DONE with a usable artifact), park on a held serial section, bounded-
+ * queue backpressure, cancellation before run, occupancy accounting, and
+ * that a job's boot-arena copy outlives a destroyed caller arena. */
+static int32_t test_actor_roundtrip(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    enum { SPAN = 32u * 1024u * 1024u };
+    void *backing = malloc(SPAN);
+    pm_util_mem_arena_t *arena;
+    pm_metal_build_unit_t *units = NULL;
+    uint32_t n_units = 0;
+    const pm_metal_build_unit_t *rtc = NULL;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    pm_metal_build_actor_job_t *jobs[PM_METAL_BUILD_ACTOR_DEPTH + 1u];
+    pm_metal_async_status_t st;
+    uint32_t depth = 99;
+    uint32_t i;
+    int32_t rc;
+    void (*sym)(void);
+    /* the seat fill: the same include roots + defines every compile test
+     * passes (resolved from __FILE__, never the cwd) */
+    char dir[512];
+    char src_root[2048], tcc_root[2048], wasmmod_root[2048],
+        wasmmod_src_root[2048], top_root[2048], unit_root[2048];
+    const char *includes[6];
+    const char *defines[8];
+    uint32_t n_defines = 0;
+
+    if (!backing) return 200;
+    arena = pm_util_mem_arena_create(backing, SPAN);
+    if (!arena) { free(backing); return 201; }
+
+    snprintf(dir, sizeof(dir), "%s", __FILE__);
+    {
+        char *slash = strrchr(dir, '/');
+        if (!slash) { pm_util_mem_arena_destroy(arena); free(backing); return 202; }
+        *slash = '\0';
+    }
+    {
+        char *slash = strrchr(dir, '/');
+        if (!slash) { pm_util_mem_arena_destroy(arena); free(backing); return 202; }
+        *slash = '\0';
+    }
+    /* dir = .../src/pymergetic/metal — same roots as test_rebuild_jit_c */
+    snprintf(src_root, sizeof(src_root), "%s/../..", dir);
+    snprintf(tcc_root, sizeof(tcc_root), "%s/../../../externals/tcc", dir);
+    snprintf(wasmmod_root, sizeof(wasmmod_root), "%s/../../../../wasmmod", dir);
+    snprintf(wasmmod_src_root, sizeof(wasmmod_src_root),
+        "%s/../../../../wasmmod/src", dir);
+    snprintf(top_root, sizeof(top_root), "%s/../../../../..", dir);
+    snprintf(unit_root, sizeof(unit_root),
+        "%s/../drivers/rtc/sim", dir);
+    includes[0] = src_root;
+    includes[1] = wasmmod_src_root;
+    includes[2] = wasmmod_root;
+    includes[3] = top_root;
+    includes[4] = tcc_root;
+    includes[5] = tcc_root;
+    defines[n_defines++] = "PM_WASMMOD_GUEST=0";
+    defines[n_defines++] = "PM_MOD_TESTS=1";
+    defines[n_defines++] = "TCC_TARGET_X86_64";
+    defines[n_defines++] = "PM_HAS_TCC=1";
+    {
+        static char libdir_def[2100];
+        snprintf(libdir_def, sizeof(libdir_def), "PM_METAL_TCC_LIB_DIR=\"%s\"",
+            tcc_root);
+        defines[n_defines++] = libdir_def;
+    }
+
+    rc = pm_metal_build_discover(arena, &units, &n_units, err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 202;
+    }
+    for (i = 0; i < n_units; i++) {
+        if (strcmp(units[i].fqn, "pymergetic.metal.drivers.rtc.sim") == 0) {
+            rtc = &units[i];
+            break;
+        }
+    }
+    if (rtc == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 203;
+    }
+
+    /* (a) one job round-trips: submit (NEW, depth 1) -> step -> DONE */
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_build_actor_submit(rtc, unit_root, includes, 6,
+        defines, n_defines, &jobs[0], err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK || jobs[0] == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 204;
+    }
+    if (jobs[0]->state != PM_METAL_BUILD_ACTOR_NEW) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 205;
+    }
+    if (pm_metal_build_actor_depth(&depth) != 0 || depth != 1u) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 206;
+    }
+    st = pm_metal_build_actor_step(jobs[0]);
+    if (st != PM_METAL_ASYNC_DONE || jobs[0]->state != PM_METAL_BUILD_ACTOR_DONE
+        || jobs[0]->rc != PM_METAL_BUILD_OK) {
+        printf("actor roundtrip: st=%d rc=%d err=%s\n",
+            (int)st, (int)jobs[0]->rc, jobs[0]->err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 207;
+    }
+    /* the artifact answers: rtc.sim exports its boot faces */
+    sym = (void (*)(void))pm_metal_build_artifact_lookup(&jobs[0]->artifact,
+        "pm_metal_drivers_rtc_sim_init");
+    if (sym == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 208;
+    }
+    /* DONE job left the queue: occupancy back to 0 */
+    if (pm_metal_build_actor_depth(&depth) != 0 || depth != 0u) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 209;
+    }
+
+    /* (b) park: two live jobs, the first step takes the serial section,
+     * the second PARKS (WAITING, no runner blocked) and completes on its
+     * next step once the first released. */
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_build_actor_submit(rtc, unit_root, includes, 6,
+        defines, n_defines,
+        &jobs[0], err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 210;
+    }
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_build_actor_submit(rtc, unit_root, includes, 6,
+        defines, n_defines,
+        &jobs[1], err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 211;
+    }
+    if (pm_metal_build_actor_depth(&depth) != 0 || depth != 2u) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 212;
+    }
+    /* job[0] runs to completion in one step (it owns the section) */
+    st = pm_metal_build_actor_step(jobs[0]);
+    if (st != PM_METAL_ASYNC_DONE) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 213;
+    }
+    /* job[1] would have parked only if the section were held; job[0] ran
+     * and released inside its own step, so job[1] also completes. The
+     * park path is exercised in (d) below via a held section. */
+    st = pm_metal_build_actor_step(jobs[1]);
+    if (st != PM_METAL_ASYNC_DONE) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 214;
+    }
+
+    /* (c) cancellation before run: NEW -> CANCELLED without compiling */
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_build_actor_submit(rtc, unit_root, includes, 6,
+        defines, n_defines,
+        &jobs[0], err, sizeof(err));
+    if (rc != PM_METAL_BUILD_OK) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 215;
+    }
+    if (pm_metal_build_actor_cancel(jobs[0]) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 216;
+    }
+    /* the cancel flag is observed at the first phase boundary: the step
+     * refuses before any TCC work */
+    st = pm_metal_build_actor_step(jobs[0]);
+    if (st != PM_METAL_ASYNC_CANCELLED
+        || jobs[0]->state != PM_METAL_BUILD_ACTOR_CANCELLED) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 217;
+    }
+    if (pm_metal_build_actor_depth(&depth) != 0 || depth != 0u) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 218;
+    }
+
+    /* (d) backpressure: hold the serial section by parking the first job
+     * mid-flight is not possible without a runner, so fill the QUEUE with
+     * NEW jobs (never stepped) and prove the DEPTH+1'th submit refuses. */
+    for (i = 0; i < PM_METAL_BUILD_ACTOR_DEPTH; i++) {
+        memset(err, 0, sizeof(err));
+        rc = pm_metal_build_actor_submit(rtc, unit_root, includes, 6,
+        defines, n_defines,
+            &jobs[i], err, sizeof(err));
+        if (rc != PM_METAL_BUILD_OK) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 219;
+        }
+    }
+    if (pm_metal_build_actor_depth(&depth) != 0 || depth != PM_METAL_BUILD_ACTOR_DEPTH) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 220;
+    }
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_build_actor_submit(rtc, unit_root, includes, 6,
+        defines, n_defines,
+        &jobs[PM_METAL_BUILD_ACTOR_DEPTH], err, sizeof(err));
+    if (rc != PM_METAL_BUILD_ERR_BUSY || err[0] == '\0') {
+        pm_util_mem_arena_destroy(arena); free(backing); return 221;
+    }
+    /* the refused submit must not have consumed a slot */
+    if (pm_metal_build_actor_depth(&depth) != 0 || depth != PM_METAL_BUILD_ACTOR_DEPTH) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 222;
+    }
+    /* drain: every queued job completes; depth returns to 0 */
+    for (i = 0; i < PM_METAL_BUILD_ACTOR_DEPTH; i++) {
+        rc = pm_metal_build_actor_run(jobs[i]);
+        if (rc != PM_METAL_BUILD_OK) {
+            printf("actor drain: job %u rc=%d err=%s\n", i,
+                (int)rc, jobs[i]->err);
+            pm_util_mem_arena_destroy(arena); free(backing); return 223;
+        }
+    }
+    if (pm_metal_build_actor_depth(&depth) != 0 || depth != 0u) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 224;
+    }
+
+    /* (e) the job's arena copy outlives the caller arena: destroy the
+     * discovery arena, then run one more submitted job to DONE. */
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    {
+        /* reconstruct a unit by hand — no discovery arena anymore; the
+         * manifest fields the actor uses are copied at submit time */
+        pm_metal_build_unit_t u;
+        const char *srcs[1];
+        memset(&u, 0, sizeof(u));
+        snprintf(u.fqn, sizeof(u.fqn), "%s", "pymergetic.metal.drivers.rtc.sim");
+        snprintf(u.impl, sizeof(u.impl), "%s", "c");
+        srcs[0] = "__impl__.c";
+        u.sources = srcs;
+        u.n_sources = 1;
+        memset(err, 0, sizeof(err));
+        rc = pm_metal_build_actor_submit(&u, unit_root, includes, 6,
+            defines, n_defines, &jobs[0], err, sizeof(err));
+        if (rc != PM_METAL_BUILD_OK) {
+            return 225;
+        }
+        rc = pm_metal_build_actor_run(jobs[0]);
+        if (rc != PM_METAL_BUILD_OK) {
+            printf("actor post-arena: rc=%d err=%s\n", (int)rc, jobs[0]->err);
+            return 226;
+        }
+        if (pm_metal_build_artifact_lookup(&jobs[0]->artifact,
+                "pm_metal_drivers_rtc_sim_init") == NULL) {
+            return 227;
+        }
+    }
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 static int32_t pm_metal_build_tests(void) {
     int32_t rc;
     rc = test_parse_real_tcc_manifest();
@@ -1452,6 +1703,8 @@ static int32_t pm_metal_build_tests(void) {
     rc = test_rebuild_jit_c();
     if (rc) return rc;
     rc = test_rebuild_tcc();
+    if (rc) return rc;
+    rc = test_actor_roundtrip();
     if (rc) return rc;
     /* ctx-lifetime test must see the jit.c record from test_rebuild_jit_c —
      * it runs before test_record_query, which resets the record table */

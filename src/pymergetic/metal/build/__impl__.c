@@ -14,6 +14,8 @@
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
 
+#include <stdatomic.h>
+
 /* Transpiler cards for the non-C impls: rs -> C (micro-rustc), cpp -> C,
  * py -> mpy bytecode. Plain link-time faces, same posture as jit.c's
  * object_compile_opts. The py face refuses politely on seats without
@@ -117,6 +119,9 @@ static pm_metal_build_ctx_t *s_build_ctx;
  * card never takes a link dependency on the async card's exports: the
  * async card's own header is only included where its coro types are used. */
 extern pm_util_mem_arena_t *pm_metal_async_arena(void);
+/* actor_run's wait pump: drive the async ring while another job holds the
+ * TCC serial section (the async card's poll drains ready tasks). */
+extern void pm_metal_async_poll(void);
 
 static pm_metal_build_ctx_t *build_ctx_acquire(void) {
     pm_util_mem_arena_t *arena;
@@ -2495,6 +2500,513 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_at_info, pm_metal_build_a
     int32_t(pm_metal_build_at_handle_t, pm_metal_build_at_info_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_at_ast, pm_metal_build_at_ast,
     int32_t(pm_metal_build_at_handle_t, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_submit, pm_metal_build_actor_submit,
+    int32_t(const pm_metal_build_unit_t *, const char *,
+        const char **, uint32_t, const char **, uint32_t,
+        pm_metal_build_actor_job_t **, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_step, pm_metal_build_actor_step,
+    pm_metal_async_status_t(pm_metal_build_actor_job_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_run, pm_metal_build_actor_run,
+    int32_t(pm_metal_build_actor_job_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_cancel, pm_metal_build_actor_cancel,
+    int32_t(pm_metal_build_actor_job_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_depth, pm_metal_build_actor_depth,
+    int32_t(uint32_t *));
+
+/*------------------ async compiler actor ----------------------------------
+ * One dedicated actor owns EVERY TCC invocation in the process. Reason:
+ * TCC's allocator routing is a single global (tcc_set_realloc +
+ * s_tcc_arena in jit.c) — two compiles interleaved on different arenas
+ * would corrupt each other's allocations, and no per-invocation context
+ * can fix a process-global hook. Serializing here is not a missed
+ * optimization: it is the only correct schedule. (Putting s_tcc_arena in
+ * a struct would not fix this — the hook itself is global.)
+ *
+ * The queue is bounded (PM_METAL_BUILD_ACTOR_DEPTH). Backpressure is an
+ * honest refusal: submit returns PM_METAL_BUILD_ERR_BUSY when full. Jobs
+ * are stackless coro frames on the boot arena; a job that cannot get the
+ * serial section PARKS (returns WAITING) — never blocks its runner.
+ *
+ * The serial section runs the compile blocking inside the step that won
+ * it (tcc_compile_string is a blocking actor call — documented at the
+ * actor_run face). Cancellation lands at phase boundaries only: between
+ * unit sources, never inside a TCC invocation. */
+
+typedef struct pm_build_actor {
+    pm_util_lock_t lock;            /* guards the queue + serial section */
+    pm_metal_build_actor_job_t *q[PM_METAL_BUILD_ACTOR_DEPTH];
+    uint32_t q_head, q_tail, q_count;
+    uint32_t serial_held;           /* 1 while a job owns the TCC section */
+} pm_build_actor_t;
+
+static pm_build_actor_t s_actor;    /* zero-state: lock word 0 = unlocked */
+
+static pm_metal_async_status_t actor_job_step(pm_metal_async_coro_t *self);
+
+/* Deep-copy one unit into the boot arena (submit's contract: the job must
+ * outlive the caller's arena, so no field may point into it). */
+static int32_t actor_unit_copy(pm_util_mem_arena_t *arena,
+    const pm_metal_build_unit_t *unit, pm_metal_build_unit_t *out) {
+    uint32_t i;
+    *out = *unit;
+    if (unit->n_sources > 0) {
+        out->sources = (const char **)pm_util_mem_alloc(
+            arena, unit->n_sources * sizeof(const char *));
+        if (out->sources == NULL) {
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        for (i = 0; i < unit->n_sources; i++) {
+            out->sources[i] = dup_str(
+                arena, unit->sources[i], strlen(unit->sources[i]));
+            if (out->sources[i] == NULL) {
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+        }
+    }
+    if (unit->n_include_dirs > 0) {
+        out->include_dirs = (const char **)pm_util_mem_alloc(
+            arena, unit->n_include_dirs * sizeof(const char *));
+        if (out->include_dirs == NULL) {
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        for (i = 0; i < unit->n_include_dirs; i++) {
+            out->include_dirs[i] = dup_str(
+                arena, unit->include_dirs[i], strlen(unit->include_dirs[i]));
+            if (out->include_dirs[i] == NULL) {
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+        }
+    }
+    if (unit->n_defines > 0) {
+        out->defines = (const char **)pm_util_mem_alloc(
+            arena, unit->n_defines * sizeof(const char *));
+        if (out->defines == NULL) {
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        for (i = 0; i < unit->n_defines; i++) {
+            out->defines[i] = dup_str(
+                arena, unit->defines[i], strlen(unit->defines[i]));
+            if (out->defines[i] == NULL) {
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+        }
+    }
+    if (unit->n_depends > 0) {
+        out->depends = (const char **)pm_util_mem_alloc(
+            arena, unit->n_depends * sizeof(const char *));
+        if (out->depends == NULL) {
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        for (i = 0; i < unit->n_depends; i++) {
+            out->depends[i] = dup_str(
+                arena, unit->depends[i], strlen(unit->depends[i]));
+            if (out->depends[i] == NULL) {
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+        }
+    }
+    return PM_METAL_BUILD_OK;
+}
+
+int32_t pm_metal_build_actor_submit(
+    const pm_metal_build_unit_t *unit, const char *unit_root,
+    const char **include_dirs, uint32_t n_include_dirs,
+    const char **defines, uint32_t n_defines,
+    pm_metal_build_actor_job_t **job_out, char *errbuf, size_t errbuf_len) {
+    pm_util_mem_arena_t *arena = pm_metal_async_arena();
+    pm_metal_build_actor_job_t *job;
+    pm_build_actor_t *a = &s_actor;
+    uint32_t i;
+
+    if (job_out == NULL || unit == NULL || unit_root == NULL) {
+        err_set(errbuf, errbuf_len, "actor_submit: bad args", 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    *job_out = NULL;
+    if (arena == NULL) {
+        err_set(errbuf, errbuf_len, "actor_submit: no boot arena", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    pm_util_lock_acquire(&a->lock);
+    if (a->q_count >= PM_METAL_BUILD_ACTOR_DEPTH) {
+        pm_util_lock_release(&a->lock);
+        err_set(errbuf, errbuf_len, "actor_submit: queue full (backpressure)", 0);
+        return PM_METAL_BUILD_ERR_BUSY;
+    }
+    pm_util_lock_release(&a->lock);
+
+    /* copy the whole request into the boot arena: the job must outlive the
+     * caller's compile arena (same lifetime rule as the ctx) */
+    job = (pm_metal_build_actor_job_t *)pm_util_mem_alloc(arena, sizeof(*job));
+    if (job == NULL) {
+        err_set(errbuf, errbuf_len, "actor_submit: arena exhausted", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    memset(job, 0, sizeof(*job));
+    job->coro.step = actor_job_step;
+    job->coro.status = PM_METAL_ASYNC_PENDING;
+    job->state = PM_METAL_BUILD_ACTOR_NEW;
+    {
+        int32_t crc = actor_unit_copy(arena, unit, &job->unit);
+        if (crc != PM_METAL_BUILD_OK) {
+            err_set(errbuf, errbuf_len, "actor_submit: arena exhausted", 0);
+            return crc;
+        }
+    }
+    job->unit_root = dup_str(arena, unit_root, strlen(unit_root));
+    if (job->unit_root == NULL) {
+        err_set(errbuf, errbuf_len, "actor_submit: arena exhausted", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    if (n_include_dirs > 0) {
+        job->include_dirs = (const char **)pm_util_mem_alloc(
+            arena, n_include_dirs * sizeof(const char *));
+        if (job->include_dirs == NULL) {
+            err_set(errbuf, errbuf_len, "actor_submit: arena exhausted", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        for (i = 0; i < n_include_dirs; i++) {
+            job->include_dirs[i] = dup_str(
+                arena, include_dirs[i], strlen(include_dirs[i]));
+            if (job->include_dirs[i] == NULL) {
+                err_set(errbuf, errbuf_len, "actor_submit: arena exhausted", 0);
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+        }
+        job->n_include_dirs = n_include_dirs;
+    }
+    if (n_defines > 0) {
+        job->defines = (const char **)pm_util_mem_alloc(
+            arena, n_defines * sizeof(const char *));
+        if (job->defines == NULL) {
+            err_set(errbuf, errbuf_len, "actor_submit: arena exhausted", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        for (i = 0; i < n_defines; i++) {
+            job->defines[i] = dup_str(arena, defines[i], strlen(defines[i]));
+            if (job->defines[i] == NULL) {
+                err_set(errbuf, errbuf_len, "actor_submit: arena exhausted", 0);
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+        }
+        job->n_defines = n_defines;
+    }
+
+    pm_util_lock_acquire(&a->lock);
+    if (a->q_count >= PM_METAL_BUILD_ACTOR_DEPTH) {
+        pm_util_lock_release(&a->lock);
+        err_set(errbuf, errbuf_len, "actor_submit: queue full (backpressure)", 0);
+        return PM_METAL_BUILD_ERR_BUSY;
+    }
+    a->q[a->q_tail] = job;
+    a->q_tail = (a->q_tail + 1u) % PM_METAL_BUILD_ACTOR_DEPTH;
+    a->q_count++;
+    pm_util_lock_release(&a->lock);
+    *job_out = job;
+    return PM_METAL_BUILD_OK;
+}
+
+/* Dequeue job from the actor FIFO (lock held). A finished job leaves the
+ * queue so occupancy reflects live work only. Ring compaction keeps the
+ * head/tail arithmetic exact after a middle removal. */
+static void actor_dequeue_locked(pm_build_actor_t *a,
+    pm_metal_build_actor_job_t *job) {
+    uint32_t i;
+    for (i = 0; i < PM_METAL_BUILD_ACTOR_DEPTH; i++) {
+        if (a->q[i] == job) {
+            uint32_t j = i;
+            while (j != a->q_tail) {
+                uint32_t next = (j + 1u) % PM_METAL_BUILD_ACTOR_DEPTH;
+                a->q[j] = a->q[next];
+                a->q[next] = NULL;
+                j = next;
+            }
+            a->q_tail = (a->q_tail + PM_METAL_BUILD_ACTOR_DEPTH - 1u)
+                % PM_METAL_BUILD_ACTOR_DEPTH;
+            a->q_count--;
+            return;
+        }
+    }
+}
+
+static void actor_job_finish(pm_build_actor_t *a, pm_metal_build_actor_job_t *job,
+    pm_metal_build_actor_state_t state) {
+    /* lock held: drop the job from the queue and free the serial section.
+     * Promotion is implicit: the next WAITING job's step re-checks the
+     * serial flag and takes the section itself (no spurious holder). */
+    actor_dequeue_locked(a, job);
+    job->state = state;
+    job->coro.status = state == PM_METAL_BUILD_ACTOR_DONE
+        ? PM_METAL_ASYNC_DONE
+        : (state == PM_METAL_BUILD_ACTOR_CANCELLED
+            ? PM_METAL_ASYNC_CANCELLED
+            : PM_METAL_ASYNC_ERROR);
+    a->serial_held = 0u;
+}
+
+/* The job's own compile, run while it owns the serial section. Mirrors
+ * pm_metal_build_unit_compile's loop, but re-entrant at phase boundaries:
+ * next_src is the cursor. */
+static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
+    pm_util_mem_arena_t *arena = pm_metal_async_arena();
+    const pm_metal_src_card_t *c = pm_metal_src_find(job->unit.fqn);
+    uint8_t **objs = NULL;
+    size_t *lens = NULL;
+    const char **compiled_srcs = NULL;
+    const char **all_includes = NULL;
+    uint32_t n_all_includes = 0;
+    const char **all_defines = NULL;
+    uint32_t n_all_defines = job->unit.n_defines + job->n_defines;
+    uint32_t i;
+    uint32_t n_objs = 0;
+    int32_t rc;
+
+    if (arena == NULL) {
+        err_set(job->err, sizeof(job->err), "actor: no boot arena", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    if (c == NULL) {
+        err_set(job->err, sizeof(job->err), "actor: card not in embed", 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    if (strcmp(job->unit.impl, "py") == 0) {
+        /* the py path allocates from the caller arena in unit_compile_py;
+         * the actor's serial section runs it identically */
+        memset(&job->artifact, 0, sizeof(job->artifact));
+        rc = unit_compile_py(arena, &job->unit, &job->artifact,
+            job->err, sizeof(job->err));
+        return rc;
+    }
+
+    /* the include/define joins are compile-scratch: they live in the boot
+     * arena for the job's lifetime (freed only by arena teardown) */
+    n_all_includes = 1u + job->unit.n_include_dirs + job->n_include_dirs;
+    all_includes = (const char **)pm_util_mem_alloc(
+        arena, n_all_includes * sizeof(const char *));
+    objs = (uint8_t **)pm_util_mem_alloc(
+        arena, job->unit.n_sources * sizeof(uint8_t *));
+    lens = (size_t *)pm_util_mem_alloc(
+        arena, job->unit.n_sources * sizeof(size_t));
+    compiled_srcs = (const char **)pm_util_mem_alloc(
+        arena, job->unit.n_sources * sizeof(const char *));
+    if (all_includes == NULL || objs == NULL || lens == NULL
+        || compiled_srcs == NULL) {
+        err_set(job->err, sizeof(job->err), "actor: arena exhausted", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    all_includes[0] = join_path(arena, job->unit_root, ".");
+    if (all_includes[0] == NULL) {
+        err_set(job->err, sizeof(job->err), "actor: arena exhausted", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    for (i = 0; i < job->unit.n_include_dirs; i++) {
+        all_includes[1 + i] = join_path(
+            arena, job->unit_root, job->unit.include_dirs[i]);
+        if (all_includes[1 + i] == NULL) {
+            err_set(job->err, sizeof(job->err), "actor: arena exhausted", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+    }
+    for (i = 0; i < job->n_include_dirs; i++) {
+        all_includes[1 + job->unit.n_include_dirs + i] = job->include_dirs[i];
+    }
+    if (n_all_defines > 0) {
+        all_defines = (const char **)pm_util_mem_alloc(
+            arena, n_all_defines * sizeof(const char *));
+        if (all_defines == NULL) {
+            err_set(job->err, sizeof(job->err), "actor: arena exhausted", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        for (i = 0; i < job->unit.n_defines; i++) {
+            all_defines[i] = job->unit.defines[i];
+        }
+        for (i = 0; i < job->n_defines; i++) {
+            all_defines[job->unit.n_defines + i] = job->defines[i];
+        }
+    }
+
+    for (job->next_src = 0; job->next_src < job->unit.n_sources;
+        job->next_src++) {
+        const char *src = NULL;
+        const char *dot;
+        /* the only cancellation point: between unit sources */
+        if (__atomic_load_n(&job->cancel, __ATOMIC_ACQUIRE) != 0u) {
+            return PM_METAL_BUILD_ERR_CANCELLED;
+        }
+        {
+            uint32_t f;
+            for (f = 0; f < c->nfiles; f++) {
+                if (strcmp(c->files[f].rel, job->unit.sources[job->next_src]) == 0) {
+                    src = (const char *)c->files[f].data;
+                    break;
+                }
+            }
+        }
+        if (src == NULL) {
+            err_set(job->err, sizeof(job->err), "actor: source not in embed", 0);
+            return PM_METAL_BUILD_ERR_COMPILE;
+        }
+        dot = strrchr(job->unit.sources[job->next_src], '.');
+        if (dot != NULL && strcmp(dot, ".h") == 0) {
+            continue;
+        }
+        if (unit_source_compile(arena, job->unit.fqn,
+                job->unit.sources[job->next_src], src,
+                all_includes, n_all_includes, all_defines, n_all_defines,
+                &objs[n_objs], &lens[n_objs], job->err, sizeof(job->err))
+                != PM_METAL_BUILD_OK) {
+            return PM_METAL_BUILD_ERR_COMPILE;
+        }
+        compiled_srcs[n_objs] = job->unit.sources[job->next_src];
+        n_objs++;
+    }
+    if (n_objs == 0) {
+        err_set(job->err, sizeof(job->err), "actor: no compilable sources", 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+
+    rc = pm_metal_build_link(arena, &job->unit, objs, lens, n_objs,
+        &job->artifact, job->err, sizeof(job->err));
+    if (rc != PM_METAL_BUILD_OK) {
+        return rc;
+    }
+    /* provenance record (same shape as unit_compile) */
+    {
+        pm_metal_build_record_t *rec = record_slot_acquire(job->unit.fqn);
+        if (rec != NULL) {
+            uint32_t cap = n_objs;
+            if (cap > PM_METAL_BUILD_MAX_OBJS) {
+                cap = PM_METAL_BUILD_MAX_OBJS;
+            }
+            for (i = 0; i < cap; i++) {
+                snprintf(rec->src_paths[i], PM_METAL_BUILD_MAX_SRC_PATH, "%s",
+                    compiled_srcs[i]);
+                rec->obj_lens[i] = (uint32_t)lens[i];
+            }
+            rec->n_sources = cap;
+#ifdef PM_METAL_BUILD_HAS_ELF
+            {
+                pm_build_rec_sym_ctx_t sctx;
+                sctx.r = rec;
+                sctx.w = 0;
+                mp_wasm_elf_foreach_func(
+                    (const mp_wasm_elf_image_t *)job->artifact.bytes,
+                    record_sym_cb, &sctx);
+                rec->n_syms = sctx.w;
+            }
+#endif
+        }
+    }
+    return PM_METAL_BUILD_OK;
+}
+
+static pm_metal_async_status_t actor_job_step(pm_metal_async_coro_t *self) {
+    pm_metal_build_actor_job_t *job =
+        (pm_metal_build_actor_job_t *)self;
+    pm_build_actor_t *a = &s_actor;
+
+    if (job == NULL) {
+        return PM_METAL_ASYNC_ERROR;
+    }
+    if (job->state == PM_METAL_BUILD_ACTOR_DONE
+        || job->state == PM_METAL_BUILD_ACTOR_FAILED
+        || job->state == PM_METAL_BUILD_ACTOR_CANCELLED) {
+        return job->coro.status;
+    }
+    pm_util_lock_acquire(&a->lock);
+    if (a->serial_held != 0u) {
+        /* serial section busy: park. The holder releases and dequeues when
+         * it finishes; a later step of this job re-checks the flag. */
+        job->state = PM_METAL_BUILD_ACTOR_WAITING;
+        job->coro.status = PM_METAL_ASYNC_WAITING;
+        pm_util_lock_release(&a->lock);
+        return PM_METAL_ASYNC_WAITING;
+    }
+    /* free serial section: this step takes it and runs the whole job
+     * (blocking TCC inside the step — documented at actor_run). */
+    a->serial_held = 1u;
+    job->state = PM_METAL_BUILD_ACTOR_RUNNING;
+    pm_util_lock_release(&a->lock);
+
+    job->rc = actor_job_run_locked(job);
+
+    pm_util_lock_acquire(&a->lock);
+    if (job->rc == PM_METAL_BUILD_ERR_CANCELLED) {
+        actor_job_finish(a, job, PM_METAL_BUILD_ACTOR_CANCELLED);
+        pm_util_lock_release(&a->lock);
+        return PM_METAL_ASYNC_CANCELLED;
+    }
+    if (job->rc != PM_METAL_BUILD_OK) {
+        actor_job_finish(a, job, PM_METAL_BUILD_ACTOR_FAILED);
+        pm_util_lock_release(&a->lock);
+        return PM_METAL_ASYNC_ERROR;
+    }
+    actor_job_finish(a, job, PM_METAL_BUILD_ACTOR_DONE);
+    pm_util_lock_release(&a->lock);
+    return PM_METAL_ASYNC_DONE;
+}
+
+pm_metal_async_status_t pm_metal_build_actor_step(pm_metal_build_actor_job_t *job) {
+    if (job == NULL) {
+        return PM_METAL_ASYNC_ERROR;
+    }
+    return actor_job_step(&job->coro);
+}
+
+int32_t pm_metal_build_actor_run(pm_metal_build_actor_job_t *job) {
+    pm_metal_async_status_t st;
+    uint32_t guard = 0;
+
+    if (job == NULL) {
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    for (;;) {
+        st = actor_job_step(&job->coro);
+        if (st == PM_METAL_ASYNC_DONE) {
+            return job->rc;
+        }
+        if (st == PM_METAL_ASYNC_CANCELLED) {
+            return job->rc == 0 ? PM_METAL_BUILD_ERR_CANCELLED : job->rc;
+        }
+        if (st == PM_METAL_ASYNC_ERROR) {
+            return job->rc != 0 ? job->rc : PM_METAL_BUILD_ERR_COMPILE;
+        }
+        /* WAITING: the serial section is held by another job. Pump the
+         * runner so the holder (and the rest of the ring) makes progress;
+         * re-check with a bounded guard so a wedged holder cannot spin us
+         * forever. This face is the documented blocking actor call. */
+        pm_metal_async_poll();
+        guard++;
+        if (guard > 10000000u) {
+            err_set(job->err, sizeof(job->err),
+                "actor_run: serial section holder wedged", 0);
+            return PM_METAL_BUILD_ERR_BUSY;
+        }
+    }
+}
+
+int32_t pm_metal_build_actor_cancel(pm_metal_build_actor_job_t *job) {
+    if (job == NULL) {
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    if (job->state == PM_METAL_BUILD_ACTOR_DONE
+        || job->state == PM_METAL_BUILD_ACTOR_FAILED
+        || job->state == PM_METAL_BUILD_ACTOR_CANCELLED) {
+        return 0;
+    }
+    __atomic_store_n(&job->cancel, 1u, __ATOMIC_RELEASE);
+    return 0;
+}
+
+int32_t pm_metal_build_actor_depth(uint32_t *depth) {
+    if (depth == NULL) {
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    pm_util_lock_acquire(&s_actor.lock);
+    *depth = s_actor.q_count;
+    pm_util_lock_release(&s_actor.lock);
+    return 0;
+}
 
 /* Lifecycle: the ctx allocates lazily from the boot arena and is released
  * by unregistering here — never freed directly (its memory belongs to the
