@@ -76,7 +76,7 @@ typedef struct {
     size_t errcap;
     uint32_t errline;
     bool ok;
-    FnTab fns;
+    FnTab *fns;
     ConstTab consts;
     EnumTab enums;
     size_t depth;
@@ -149,10 +149,11 @@ int main(void) {
     printf("Lower.st_cts      = %zu\n", sizeof(((Lower *)0)->st_cts));
     printf("Lower.nt_names    = %zu\n", sizeof(((Lower *)0)->nt_names));
     printf("LocalTab.names    = %zu\n", sizeof(((LocalTab *)0)->names));
-    /* one by-value Lower temporary in a caller frame (pm_metal_jit_rsx_lower
-     * today) costs sizeof(Lower) of stack; report it as the headline number
-     * Phase 1 removes. */
-    printf("one by-value Lower temp frame cost = %zu (%.1f KiB)\n",
-           sizeof(Lower), (double)sizeof(Lower) / 1024.0);
+    /* Phase 1 posture: Lower, FnTab, SymTab and every LocalTab are
+     * arena-resident blocks behind pointers — none of these sizeof values
+     * costs native stack anymore. The numbers stay as the arena budget a
+     * compile draws: Lower + FnTab + SymTab + one LocalTab per body. */
+    printf("arena draw per compile = Lower %zu + FnTab %zu + SymTab %zu + 1 LocalTab %zu\n",
+           sizeof(Lower), sizeof(FnTab), sizeof(SymTab), sizeof(LocalTab));
     return 0;
 }

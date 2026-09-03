@@ -2356,6 +2356,93 @@ static int32_t test_name_tmp_capacity(void) {
 
 /* --- registration ------------------------------------------------------ */
 
+/* --- stack independence: many bodies + deep nesting -----------------------
+ * Phase 1: Lower (26 KiB), FnTab (84 KiB) and every per-body LocalTab
+ * (23 KiB) are arena-resident — a compile's native frames are the small
+ * emit/parse locals only. A unit with MANY fn bodies (each body a fresh
+ * arena LocalTab) and DEEPLY nested expressions (the recursive parse and
+ * emit path) must compile in a normal-size thread stack. The old by-value
+ * Lower parked 110+ KiB on the stack at this exact entry; a tight thread
+ * (default 8 MiB here, but the shape matters for firmware stacks) would
+ * have burned most of it on one compile. */
+static int32_t test_stack_independence(void) {
+    /* 40 fns, each with nested if/else and a chain of lets — the body
+     * count multiplies LocalTab allocations, the nesting multiplies
+     * recursion depth. The body is authored once; each f<i> renders the
+     * name into the template by hand (no format string crossing — GCC
+     * checks every snprintf against its literal). */
+    static const char HEAD[] =
+        "#[repr(C)]\n"
+        "pub struct Ctx { pub a: u32, pub b: u32, pub c: u32 }\n";
+    static const char FN[] =
+        "#[no_mangle]\n"
+        "pub extern \"C\" fn f0000(x: u32) -> u32 {\n"
+        "    let a = x + 1u32;\n"
+        "    let b = a + 2u32;\n"
+        "    let c = if (b % 2u32) == 0u32 {\n"
+        "        if (b % 3u32) == 0u32 { b + 4u32 } else { b + 5u32 }\n"
+        "    } else {\n"
+        "        if (b % 5u32) == 0u32 { b + 6u32 } else { b + 7u32 }\n"
+        "    };\n"
+        "    let d = (c, c + 1u32, c + 2u32, c + 3u32);\n"
+        "    d.0 + d.1 + d.2 + d.3\n"
+        "}\n";
+    char src[16384];
+    size_t at = 0;
+    unsigned i;
+    void *backing = malloc(1u << 25);
+    pm_util_mem_arena_t *arena;
+    char *c_out = NULL;
+    size_t c_out_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    const char *p;
+
+    if (backing == NULL) return 380;
+    arena = pm_util_mem_arena_create(backing, 1u << 25);
+    if (arena == NULL) { free(backing); return 381; }
+
+    memcpy(src + at, HEAD, sizeof(HEAD) - 1);
+    at += sizeof(HEAD) - 1;
+    for (i = 0; i < 40; i++) {
+        /* render fNNNN into a fixed 5-byte name slot */
+        size_t fn_len = sizeof(FN) - 1;
+        if (at + fn_len + 1 >= sizeof(src)) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 382;
+        }
+        memcpy(src + at, FN, fn_len);
+        src[at + 32] = (char)('0' + ((i / 1000) % 10));
+        src[at + 33] = (char)('0' + ((i / 100) % 10));
+        src[at + 34] = (char)('0' + ((i / 10) % 10));
+        src[at + 35] = (char)('0' + (i % 10));
+        at += fn_len;
+    }
+
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, src, at,
+                                 &c_out, &c_out_len, err, sizeof(err)) != 0) {
+        fprintf(stderr, "stack-independence: %s\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 383;
+    }
+    /* every body lowered: 40 distinct fNNNN definitions present */
+    for (i = 0; i < 40; i++) {
+        char name[8];
+        snprintf(name, sizeof(name), "f%04u", i);
+        if (strstr(c_out, name) == NULL) {
+            fprintf(stderr, "stack-independence: %s missing\n", name);
+            pm_util_mem_arena_destroy(arena); free(backing); return 384;
+        }
+    }
+    /* tuple typedef emitted (the bodies construct 4-tuples) */
+    p = strstr(c_out, "rsx_tuple_");
+    if (p == NULL) {
+        fprintf(stderr, "stack-independence: no tuple typedef\n");
+        pm_util_mem_arena_destroy(arena); free(backing); return 385;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
 /* RSX_TEST_VERBOSE=1 prints one line per subtest with its rc, so a FAIL from
  * the registry entry can be attributed without re-running under a debugger. */
 static int32_t rsx_run_named(const char *name, int32_t (*fn)(void)) {
@@ -2400,6 +2487,7 @@ static int32_t pm_metal_jit_rsx_tests(void) {
     rc = rsx_run_named("arena_oom_refuses", test_arena_oom_refuses); if (rc) return rc;
     rc = rsx_run_named("localtab_reuse_no_growth", test_localtab_reuse_no_growth); if (rc) return rc;
     rc = rsx_run_named("name_tmp_capacity", test_name_tmp_capacity); if (rc) return rc;
+    rc = rsx_run_named("stack_independence", test_stack_independence); if (rc) return rc;
     rc = rsx_run_named("let_else_order_linked", test_let_else_order_linked); if (rc) return rc;
     rc = rsx_run_named("introspection", test_introspection);      if (rc) return rc;
     return 0;

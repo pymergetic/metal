@@ -6178,8 +6178,8 @@ struct FnTab {
      * only source of that shape is the callee's signature. */
     params: [*const u8; SYM_CAP * FN_MAXP],
     param_lens: [usize; SYM_CAP * FN_MAXP],
-    /* arena for the span copies (FnTab lives inside Lower, on the native
-     * stack — the spans must outlive it, so they live in the arena). */
+    /* arena for the span copies (FnTab lives inside the arena-resident
+     * Lower — the spans must outlive it, so they live in the arena). */
     arena: *mut pm_util_mem_arena_t,
     /* set when a span allocation refuses — the owning Lower turns it into
      * the immediate "arena exhausted" refusal instead of compiling on with
@@ -6188,19 +6188,25 @@ struct FnTab {
 }
 
 impl FnTab {
-    unsafe fn new(arena: *mut pm_util_mem_arena_t) -> FnTab {
-        FnTab {
-            names: [b"\0".as_ptr(); SYM_CAP],
-            name_lens: [0; SYM_CAP],
-            rets: [b"\0".as_ptr(); SYM_CAP],
-            ret_lens: [0; SYM_CAP],
-            n_params: [0; SYM_CAP],
-            used: [false; SYM_CAP],
-            params: [b"\0".as_ptr(); SYM_CAP * FN_MAXP],
-            param_lens: [0; SYM_CAP * FN_MAXP],
-            arena,
-            oom: false,
+    /* Arena-resident like its owning Lower: an ~84 KiB table must never be
+     * built by-value (that is a native-stack temporary of the same size).
+     * Zeroed block, armed arena; NULL = arena refused. */
+    unsafe fn new(arena: *mut pm_util_mem_arena_t) -> *mut FnTab {
+        let p = unsafe { pm_util_mem_alloc(arena, core::mem::size_of::<FnTab>()) } as *mut FnTab;
+        if p.is_null() {
+            return p;
         }
+        unsafe {
+            let zb = p as *mut u8;
+            let n = core::mem::size_of::<FnTab>();
+            let mut i = 0usize;
+            while i < n {
+                *zb.add(i) = 0;
+                i += 1;
+            }
+            (*p).arena = arena;
+        }
+        p
     }
 
     /* Length-aware compare — stored names point into the source and are
@@ -6515,7 +6521,10 @@ struct Lower {
     errline: u32,
     ok: bool,
     syms: *mut SymTab,
-    fns: FnTab,
+    /* arena-resident (an ~84 KiB by-value field would park the whole table
+     * on the native stack whenever a Lower temp existed — same discipline
+     * as syms above it) */
+    fns: *mut FnTab,
     consts: ConstTab,
     enums: EnumTab,
     depth: usize,
@@ -6615,6 +6624,39 @@ struct Lower {
 }
 
 impl Lower {
+    /* Arena-resident construction: the whole struct (its nested FnTab,
+     * ConstTab, EnumTab and every fixed array) lives in one arena block,
+     * zeroed then armed. No by-value Lower temporary can exist anywhere. */
+    unsafe fn new(
+        arena: *mut pm_util_mem_arena_t,
+        errbuf: *mut u8,
+        errcap: usize,
+    ) -> *mut Lower {
+        let p = unsafe { pm_util_mem_alloc(arena, core::mem::size_of::<Lower>()) } as *mut Lower;
+        if p.is_null() {
+            return p;
+        }
+        unsafe {
+            let zb = p as *mut u8;
+            let n = core::mem::size_of::<Lower>();
+            let mut i = 0usize;
+            while i < n {
+                *zb.add(i) = 0;
+                i += 1;
+            }
+            (*p).arena = arena;
+            (*p).out = Out::new(arena);
+            (*p).errbuf = errbuf;
+            (*p).errcap = errcap;
+            (*p).ok = true;
+            (*p).syms = SymTab::new(arena);
+            (*p).fns = FnTab::new(arena);
+            (*p).consts = ConstTab::new();
+            (*p).enums = EnumTab::new();
+        }
+        p
+    }
+
     unsafe fn err(&mut self, msg: *const u8, line: u32) {
         unsafe {
             if self.ok && self.nerrs == 0 {
@@ -7735,16 +7777,16 @@ impl Lower {
                             }
                             j2 += 1;
                         }
-                        let fs = unsafe { self.fns.add(ename, elen, ret, retlen) };
+                        let fs = unsafe { (*self.fns).add(ename, elen, ret, retlen) };
                         unsafe {
-                            self.fns.set_n_params(fs, nparams);
+                            (*self.fns).set_n_params(fs, nparams);
                         }
                         if fs < SYM_CAP {
                             let mut p = 0usize;
                             while p < FN_MAXP && p < nparams as usize {
                                 if plens[p] > 0 {
                                     unsafe {
-                                        self.fns.add_param(fs, p, ptypes[p], plens[p]);
+                                        (*self.fns).add_param(fs, p, ptypes[p], plens[p]);
                                     }
                                 }
                                 p += 1;
@@ -7813,16 +7855,16 @@ impl Lower {
                     }
                     j += 1;
                 }
-                let fs = unsafe { self.fns.add(name, nlen, ret, retlen) };
+                let fs = unsafe { (*self.fns).add(name, nlen, ret, retlen) };
                 unsafe {
-                    self.fns.set_n_params(fs, nparams);
+                    (*self.fns).set_n_params(fs, nparams);
                 }
                 if fs < SYM_CAP {
                     let mut p = 0usize;
                     while p < FN_MAXP && p < nparams as usize {
                         if plens[p] > 0 {
                             unsafe {
-                                self.fns.add_param(fs, p, ptypes[p], plens[p]);
+                                (*self.fns).add_param(fs, p, ptypes[p], plens[p]);
                             }
                         }
                         p += 1;
@@ -7899,9 +7941,9 @@ impl Lower {
                 }
                 j2 += 1;
             }
-            let fs = unsafe { self.fns.add(name_buf, at, ret, retlen) };
+            let fs = unsafe { (*self.fns).add(name_buf, at, ret, retlen) };
             unsafe {
-                self.fns.set_n_params(fs, 1);
+                (*self.fns).set_n_params(fs, 1);
             }
             j += 1;
         }
@@ -8445,7 +8487,7 @@ impl Lower {
                                     }
                                 }
                             }
-                            let n = unsafe { self.fns.ret_ctype(name, nl, out) };
+                            let n = unsafe { (*self.fns).ret_ctype(name, nl, out) };
                             if n > 0 {
                                 return n;
                             }
@@ -8465,7 +8507,7 @@ impl Lower {
                                     unsafe {
                                         *mbuf.add(mn3) = 0;
                                     }
-                                    let rn = unsafe { self.fns.ret_ctype(mbuf, mn3, out) };
+                                    let rn = unsafe { (*self.fns).ret_ctype(mbuf, mn3, out) };
                                     if rn > 0 {
                                         return rn;
                                     }
@@ -9288,7 +9330,7 @@ impl Lower {
                         unsafe {
                             *mbuf.add(mn3) = 0;
                         }
-                        let rn = unsafe { self.fns.ret_ctype(mbuf, mn3, out) };
+                        let rn = unsafe { (*self.fns).ret_ctype(mbuf, mn3, out) };
                         if rn > 0 {
                             return rn;
                         }
@@ -9380,7 +9422,7 @@ struct LocalTab {
     nmarks: usize,
     n: usize,
     epoch: usize,
-    /* arena for the span copies (LocalTab lives on the native stack). */
+    /* arena for the span copies (LocalTab is arena-resident). */
     arena: *mut pm_util_mem_arena_t,
     /* set the moment a span allocation refuses — the owning Lower reads
      * it after each fn body so an OOM is a refusal, never a silent
@@ -9389,21 +9431,28 @@ struct LocalTab {
 }
 
 impl LocalTab {
-    unsafe fn new(arena: *mut pm_util_mem_arena_t) -> LocalTab {
-        LocalTab {
-            names: [[0; 48]; LOCAL_CAP],
-            name_lens: [0; LOCAL_CAP],
-            ctypes: [b"\0".as_ptr(); LOCAL_CAP],
-            ctype_lens: [0; LOCAL_CAP],
-            depths: [0; LOCAL_CAP],
-            epochs: [0; LOCAL_CAP],
-            marks: [0; 64],
-            nmarks: 0,
-            n: 0,
-            epoch: 0,
-            arena,
-            oom: false,
+    /* Arena-resident: one table per fn body (and one per static
+     * initializer) is ~23 KiB — by-value construction parked that whole
+     * struct on the native stack for the duration of the body. The block
+     * is zeroed so every slot starts empty; the arena owns the lifetime
+     * (the body's span), so no free — scoped reuse is the marks/epochs
+     * machinery above. NULL = arena exhausted; callers must refuse. */
+    unsafe fn new(arena: *mut pm_util_mem_arena_t) -> *mut LocalTab {
+        let p = unsafe { pm_util_mem_alloc(arena, core::mem::size_of::<LocalTab>()) } as *mut LocalTab;
+        if p.is_null() {
+            return p;
         }
+        unsafe {
+            let zb = p as *mut u8;
+            let n = core::mem::size_of::<LocalTab>();
+            let mut i = 0usize;
+            while i < n {
+                *zb.add(i) = 0;
+                i += 1;
+            }
+            (*p).arena = arena;
+        }
+        p
     }
 
     /* Each C block that opens ({) is a fresh scope — reuse of a shadowed
@@ -14222,7 +14271,7 @@ impl Lower {
                         }
                         let pt = self.arena_tmp();
                         let pl = unsafe {
-                            self.fns.param_ctype(cname, cnamelen, i, pt)
+                            (*self.fns).param_ctype(cname, cnamelen, i, pt)
                         };
                         if pl == 0 {
                             unsafe {
@@ -14292,7 +14341,7 @@ impl Lower {
                             }
                             let pt = self.arena_tmp();
                             let pl = unsafe {
-                                self.fns.param_ctype(cname, cnamelen, i, pt)
+                                (*self.fns).param_ctype(cname, cnamelen, i, pt)
                             };
                             if pl == 0 {
                                 unsafe {
@@ -16517,11 +16566,15 @@ impl Lower {
                     return;
                 }
                 self.out.puts(b" = \0".as_ptr());
-                let mut locals = LocalTab::new(self.arena);
-                unsafe { self.emit_expr(init, &mut locals) };
+                let locals = LocalTab::new(self.arena);
+                if locals.is_null() {
+                    self.ok = false;
+                    return;
+                }
+                unsafe { self.emit_expr(init, &mut *locals) };
                 /* a span OOM inside this body's locals must refuse the
                  * whole compile (specific error), not degrade inference */
-                if locals.oom {
+                if unsafe { (*locals).oom } {
                     self.ok = false;
                 }
             }
@@ -16878,10 +16931,17 @@ impl Lower {
         /* body: the tail expression of a value-returning fn becomes
          * `return expr;` — C has no implicit block value. */
         if !body.is_null() {
-            let mut locals = LocalTab::new(self.arena);
+            let locals = LocalTab::new(self.arena);
+            if locals.is_null() {
+                self.ok = false;
+                self.cur_ret_len = 0;
+                self.out.puts(b"}\n\0".as_ptr());
+                self.out.putc(b'\n');
+                return;
+            }
             if self.recv_len > 0 {
                 unsafe {
-                    locals.add(b"self\0".as_ptr(), 4, self.recv_type.as_ptr(), self.recv_len, 1);
+                    (*locals).add(b"self\0".as_ptr(), 4, self.recv_type.as_ptr(), self.recv_len, 1);
                 }
             }
             /* Register every parameter so body inference can see them. */
@@ -16903,7 +16963,7 @@ impl Lower {
                             let n = unsafe { self.ctype(pty, ct, 128) };
                             if n > 0 {
                                 unsafe {
-                                    locals.add(pt, ptl, ct, n, 1);
+                                    (*locals).add(pt, ptl, ct, n, 1);
                                 }
                             }
                         }
@@ -16918,7 +16978,7 @@ impl Lower {
                 let mut i = 0usize;
                 while i + 1 < bn {
                     let st = unsafe { *bk.add(i) };
-                    unsafe { self.emit_stmt(st, &mut locals, 0) };
+                    unsafe { self.emit_stmt(st, &mut *locals, 0) };
                     i += 1;
                 }
                 if bn > 0 {
@@ -16934,14 +16994,14 @@ impl Lower {
                     let k = unsafe { (*tail).kind };
                     if k == pm_jit_rsx_ast_kind::IF {
                         /* tail if: each branch returns its own tail expr */
-                        unsafe { self.emit_if_tail(tail, &mut locals) };
+                        unsafe { self.emit_if_tail(tail, &mut *locals) };
                     } else if k == pm_jit_rsx_ast_kind::MATCH {
                         /* tail match: declare `ret` from the fn's C type and
                          * let each arm store into it, then return. */
                         self.indent();
                         self.out.put(ret_ct, ret_len);
                         self.out.puts(b" ret;\n\0".as_ptr());
-                        unsafe { self.emit_match_value(tail, &mut locals, b"ret\0".as_ptr(), 3) };
+                        unsafe { self.emit_match_value(tail, &mut *locals, b"ret\0".as_ptr(), 3) };
                         self.indent();
                         self.out.puts(b"return ret;\n\0".as_ptr());
                     } else if k == pm_jit_rsx_ast_kind::RETURN
@@ -16952,25 +17012,25 @@ impl Lower {
                         || k == pm_jit_rsx_ast_kind::ASSIGN
                         || k == pm_jit_rsx_ast_kind::LOOP
                     {
-                        unsafe { self.emit_stmt(tail, &mut locals, 0) };
+                        unsafe { self.emit_stmt(tail, &mut *locals, 0) };
                     } else if k == pm_jit_rsx_ast_kind::BLOCK {
                         /* tail block expr (typically an `unsafe { value }`
                          * wrapper): walk to the inner tail and return it. */
-                        unsafe { self.emit_block_tail_ret(tail, &mut locals) };
+                        unsafe { self.emit_block_tail_ret(tail, &mut *locals) };
                     } else {
                         self.indent();
                         self.out.puts(b"return \0".as_ptr());
-                        unsafe { self.emit_expr(tail, &mut locals) };
+                        unsafe { self.emit_expr(tail, &mut *locals) };
                         self.out.puts(b";\n\0".as_ptr());
                     }
                 }
             } else {
-                unsafe { self.emit_block_stmt(body, &mut locals) };
+                unsafe { self.emit_block_stmt(body, &mut *locals) };
             }
             self.depth = 0;
             /* a span OOM inside this body's locals must refuse the whole
              * compile (specific error), not degrade inference */
-            if locals.oom {
+            if unsafe { (*locals).oom } {
                 self.ok = false;
             }
         }
@@ -17461,8 +17521,8 @@ impl Lower {
             if unsafe { self.st_find(name, nlen, stb, 64) } > 0 {
                 continue;
             }
-            let fs = unsafe { self.fns.slot(name, nlen) };
-            if fs < SYM_CAP && unsafe { self.fns.used[fs] } {
+            let fs = unsafe { (*self.fns).slot(name, nlen) };
+            if fs < SYM_CAP && unsafe { (*self.fns).used[fs] } {
                 continue;
             }
             if nlen >= 8 && unsafe { z_eq(name, 8, b"rsx_opt_\0".as_ptr()) } {
@@ -17846,8 +17906,8 @@ impl Lower {
             let t = unsafe { (*e).text };
             let tl = unsafe { (*e).text_len };
             if tl > 0 && !t.is_null() {
-                let s = unsafe { self.fns.slot(t, tl) };
-                if s < SYM_CAP && unsafe { self.fns.used[s] } {
+                let s = unsafe { (*self.fns).slot(t, tl) };
+                if s < SYM_CAP && unsafe { (*self.fns).used[s] } {
                     return true;
                 }
             }
@@ -18079,89 +18139,56 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_lower(
         }
         return -1;
     }
-    let mut lw = Lower {
-        arena,
-        out: Out::new(arena),
-        errbuf,
-        errcap: errbuf_len,
-        errline: 0,
-        ok: true,
-        syms: SymTab::new(arena),
-        fns: FnTab::new(arena),
-        consts: ConstTab::new(),
-        enums: EnumTab::new(),
-        depth: 0,
-        cur_impl: [b"\0".as_ptr(); 16],
-        cur_impl_lens: [0; 16],
-        cur_impl_n: 0,
-        recv_type: [0; 64],
-        recv_len: 0,
-        cur_ret: [0; 128],
-        cur_ret_len: 0,
-        oom_buf: [0; 160],
-        nerrs: 0,
-        nt_names: [[0; 48]; NT_CAP],
-        nt_lens: [0; NT_CAP],
-        nt_n: 0,
-        cur_opt_elem: [0; 96],
-        cur_opt_elem_len: 0,
-        opt_elems: [[0; 64]; OPT_CAP],
-        opt_lens: [0; OPT_CAP],
-        opt_done: [false; OPT_CAP],
-        opt_n: 0,
-        types_done: false,
-        tup_elems: [[0; 64]; TUP_CAP * TUP_MAXF],
-        tup_lens: [0; TUP_CAP * TUP_MAXF],
-        tup_counts: [0; TUP_CAP],
-        tup_done: [false; TUP_CAP],
-        tup_n: 0,
-        tup_tmp_n: 0,
-        atom_tmp_n: 0,
-        opq_names: [[0; 48]; 24],
-        opq_lens: [0; 24],
-        opq_n: 0,
-        opq_flushed: 0,
-        st_names: [[0; 64]; ST_CAP],
-        st_name_lens: [0; ST_CAP],
-        st_cts: [[0; 128]; ST_CAP],
-        st_ct_lens: [0; ST_CAP],
-        st_n: 0,
-        tydone_names: [[0; 48]; TYD_CAP],
-        tydone_lens: [0; TYD_CAP],
-        tydone_n: 0,
-        tyorder_depth: 0,
-    };
+    /* Lower is ~110 KiB of resident tables — it is arena-resident, built
+     * through this pointer: no by-value temporary ever lands on the native
+     * stack. The block is zeroed first (tlsf does not zero), then the
+     * non-zero fields are set; NULL = the arena refused, and that refusal
+     * is the error. */
+    let lw = unsafe { Lower::new(arena, errbuf, errbuf_len) };
+    if lw.is_null() {
+        unsafe {
+            err_set(errbuf, errbuf_len, b"arena too small for the lowering tables\0".as_ptr(), 0);
+        }
+        return -1;
+    }
     /* SymTab is arena-backed — a span smaller than its block hands back
-     * NULL and every table probe would crash. Refuse instead. */
-    if lw.syms.is_null() {
+     * NULL and every table probe would crash. Refuse instead. Same for
+     * FnTab: a NULL table means every call-site lookup would crash. */
+    if unsafe { (*lw).syms.is_null() } {
         unsafe {
             err_set(errbuf, errbuf_len, b"arena too small for the symbol table\0".as_ptr(), 0);
         }
         return -1;
     }
-    let good = unsafe { lw.lower_file(unit) };
+    if unsafe { (*lw).fns.is_null() } {
+        unsafe {
+            err_set(errbuf, errbuf_len, b"arena too small for the fn table\0".as_ptr(), 0);
+        }
+        return -1;
+    }
+    let good = unsafe { (*lw).lower_file(unit) };
     /* FnTab span OOM: refuse with the specific error — compiling on with
      * unknown return/param types would emit untyped call sites. */
-    if lw.fns.oom {
+    if unsafe { (*(*lw).fns).oom } {
         unsafe {
             err_set(errbuf, errbuf_len, b"arena exhausted while lowering\0".as_ptr(), 0);
         }
         return -1;
     }
-    if !good || !lw.ok || !lw.out.ok {
+    if !good || unsafe { !(*lw).ok } || unsafe { !(*lw).out.ok } {
         /* aborted without a specific message (arena exhausted mid-render):
          * leave the caller a reason instead of an empty errbuf */
         unsafe {
-            if !lw.errbuf.is_null() && lw.errcap > 0 && *lw.errbuf == 0 {
-                err_set(lw.errbuf, lw.errcap, b"arena exhausted while lowering\0".as_ptr(), 0);
+            if !(*lw).errbuf.is_null() && (*lw).errcap > 0 && *(*lw).errbuf == 0 {
+                err_set((*lw).errbuf, (*lw).errcap, b"arena exhausted while lowering\0".as_ptr(), 0);
             }
         }
         return -1;
     }
     unsafe {
-        lw.out.putc(0);
-        *c_out = lw.out.p;
-        *c_out_len = lw.out.len - 1;
+        (*lw).out.putc(0);
+        *c_out = (*lw).out.p;
+        *c_out_len = (*lw).out.len - 1;
     }
     0
 }
