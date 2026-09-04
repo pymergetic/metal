@@ -292,11 +292,15 @@ $(CURDIR)/build/%.o: %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
 # jit/py embeds the upy faces and includes upstream upy headers (pystack.h's
-# mp_nonlocal_realloc inline has an unused parameter in some configs) -- this
-# one TU drops -Werror for that upstream warning class only.
+# mp_nonlocal_realloc inline has an unused parameter in some configs) -- these
+# two TUs drop -Werror for that upstream warning class only.
+UPY_TU_CFLAGS = $(filter-out -Werror,$(CFLAGS)) -Wno-unused-parameter
 $(CURDIR)/build/$(METAL_SRC)/pymergetic/metal/jit/py/__impl__.o: $(METAL_SRC)/pymergetic/metal/jit/py/__impl__.c
 	@mkdir -p $(dir $@)
-	$(CC) $(filter-out -Werror,$(CFLAGS)) $(CPPFLAGS) -Wno-unused-parameter -c -o $@ $<
+	$(CC) $(UPY_TU_CFLAGS) $(CPPFLAGS) -c -o $@ $<
+$(CURDIR)/build/$(METAL_SRC)/pymergetic/metal/jit/py/__tests__.o: $(METAL_SRC)/pymergetic/metal/jit/py/__tests__.c
+	@mkdir -p $(dir $@)
+	$(CC) $(UPY_TU_CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
 $(OUT): $(SRC_OBJS) $(WASMMOD_TESTS_OBJ) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(UPY_EMBED_OBJS_FILE) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(OUT))
