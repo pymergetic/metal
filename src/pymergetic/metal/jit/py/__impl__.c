@@ -90,11 +90,19 @@ pm_metal_async_status_t pm_metal_jit_py_compile_step(pm_metal_async_coro_t *self
     return PM_METAL_ASYNC_ERROR;
 #else
     pm_metal_jit_py_frame_t *f = (pm_metal_jit_py_frame_t *)self;
-    pm_metal_jit_py_result_t *r = &f->result;
+    pm_metal_jit_py_result_t *r;
     nlr_buf_t nlr;
     qstr mod_qstr;
     mp_obj_t module;
 
+    /* NULL/foreign frame is a loud refusal, not a dereference — the stub era
+     * guaranteed compile_step(NULL) == ERROR and that contract is seat-neutral
+     * (the upy seats step frames their own alloc produced; nothing else may
+     * hand the step a foreign pointer). */
+    if (f == NULL) {
+        return PM_METAL_ASYNC_ERROR;
+    }
+    r = &f->result;
     if (f->source == NULL || f->source_len == 0 || r->module_name == NULL) {
         r->ok = 0;
         return PM_METAL_ASYNC_ERROR;
@@ -333,6 +341,57 @@ int32_t pm_metal_jit_py_object_load(
 #endif /* MICROPY_PY_WASM && !PM_WASMMOD_GUEST && MICROPY_PERSISTENT_CODE_SAVE */
 
 #include "pymergetic/wasmmod/guest.h"
+
+/* --- Embedded-µPy lifecycle (host seat fill) ----------------------------
+ *
+ * On the µPy seats the port's own main() owns mp_init (unix main.c, the
+ * browser cell's boot) — the card must not touch it there, and nothing
+ * here compiles (PM_METAL_JIT_PY_EMBED is undefined on those builds).
+ * On the host C seat the kernel rides in via ports/embed: the card that
+ * owns the µPy faces owns the kernel's lifecycle, so jit.py boots it from
+ * its PM_MOD_BOOT_C slot: pm_mod_boot_run constructs every registered card
+ * before any test/ksweep call can reach object_compile.
+ *
+ * Heap: one malloc'd span, size chosen for the sweep (84 cards, the facade
+ * bodies are small), freed at deinit — explicit ownership, no leak; the
+ * process allocator is the same one host_test's own arena backing uses.
+ * GC threads through the generic gchelper (setjmp regs+stack walk, the
+ * embed package ships it); stack top is the init frame's, which is below
+ * every later call site, so all reachable frames are scanned. */
+#if defined(PM_METAL_JIT_PY_EMBED) && MICROPY_PY_WASM && !PM_WASMMOD_GUEST \
+    && MICROPY_PERSISTENT_CODE_SAVE
+#include "port/micropython_embed.h"
+#include <stdlib.h>
+
+enum { PM_JIT_PY_EMBED_HEAP = 16u << 20 };
+
+static void *s_embed_heap;
+
+static int32_t jit_py_embed_boot_init(pm_util_mem_arena_t *arena) {
+    char stack_top;
+    (void)arena;
+    if (s_embed_heap != NULL) {
+        return 0;
+    }
+    s_embed_heap = malloc(PM_JIT_PY_EMBED_HEAP);
+    if (s_embed_heap == NULL) {
+        return -1;
+    }
+    mp_embed_init(s_embed_heap, PM_JIT_PY_EMBED_HEAP, &stack_top);
+    return 0;
+}
+
+static void jit_py_embed_boot_deinit(void) {
+    if (s_embed_heap != NULL) {
+        mp_embed_deinit();
+        free(s_embed_heap);
+        s_embed_heap = NULL;
+    }
+}
+
+PM_MOD_BOOT_C(pymergetic.metal.jit.py, jit_py_embed_boot_init,
+    jit_py_embed_boot_deinit)
+#endif /* PM_METAL_JIT_PY_EMBED */
 
 PM_MOD_EXPORT_C(pymergetic.metal.jit.py, pm_metal_jit_py_compile_alloc, pm_metal_jit_py_compile_alloc,
     pm_metal_async_coro_t *(pm_util_mem_arena_t *, const char *, size_t, const char *));
