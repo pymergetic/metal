@@ -24,6 +24,14 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_lex(
     };
     unsafe { lx.run() };
     if !lx.ok || !lx.toks.ok {
+        /* aborted without a specific message (the token table's own
+         * arena alloc failed): leave the caller a reason instead of an
+         * empty errbuf — a refusal must carry a diagnostic */
+        unsafe {
+            if !errbuf.is_null() && errbuf_len > 0 && *errbuf == 0 {
+                err_set(errbuf, errbuf_len, b"arena exhausted while lexing\0".as_ptr(), 0);
+            }
+        }
         return -1;
     }
     unsafe {
@@ -70,6 +78,13 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_parse(
     };
     let file = unsafe { p.parse_file() };
     if !p.ok || !p.nd.ok || file.is_null() {
+        /* same contract as lex: an abort without a message still owes the
+         * caller a diagnostic (arena exhausted mid-tree) */
+        unsafe {
+            if !errbuf.is_null() && errbuf_len > 0 && *errbuf == 0 {
+                err_set(errbuf, errbuf_len, b"arena exhausted while parsing\0".as_ptr(), 0);
+            }
+        }
         return -1;
     }
     unsafe {
