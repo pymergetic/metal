@@ -141,6 +141,28 @@ impl Lower {
         is_unsafe_block: bool,
         saved_epoch: usize,
     ) {
+        /* Guard releases run at the closing brace: every lock-guard
+         * binding the dying scope owns (index >= its scope mark) is
+         * released before the locals table rewinds. Emission is on the
+         * Lower (it owns the Out); the table only holds the spans. */
+        unsafe {
+            let m = (*locals).nmarks;
+            let from = if m > 0 { (*locals).marks[m - 1] } else { 0 };
+            let mut s = (*locals).n;
+            while s > from {
+                s -= 1;
+                let ga = (*locals).guard_addrs[s];
+                let gl = (*locals).guard_lens[s];
+                if !ga.is_null() && gl > 0 {
+                    self.indent();
+                    self.out.puts(b"pm_util_lock_release(&\0".as_ptr());
+                    self.out.put(ga, gl);
+                    self.out.puts(b".raw);\n\0".as_ptr());
+                    (*locals).guard_addrs[s] = core::ptr::null();
+                    (*locals).guard_lens[s] = 0;
+                }
+            }
+        }
         if !is_unsafe_block {
             unsafe {
                 (*locals).drop_scope();
@@ -148,6 +170,31 @@ impl Lower {
         }
         unsafe {
             (*locals).epoch = saved_epoch;
+        }
+    }
+
+    /* Release every live lock guard (any surviving entry carries one —
+     * drop_scope already rewound the dead ones). Called before a fn's
+     * tail return and before the fn's closing brace: the value-tail
+     * paths never pass through end_block, so a fn-scope guard would
+     * otherwise leak its acquire. Emitting clears the note — a second
+     * call site (tail return + fn end) must not double-release. */
+    unsafe fn release_guards_all(&mut self, locals: *mut LocalTab) {
+        let mut s = 0usize;
+        unsafe {
+            while s < (*locals).n {
+                let ga = (*locals).guard_addrs[s];
+                let gl = (*locals).guard_lens[s];
+                if !ga.is_null() && gl > 0 {
+                    self.indent();
+                    self.out.puts(b"pm_util_lock_release(&\0".as_ptr());
+                    self.out.put(ga, gl);
+                    self.out.puts(b".raw);\n\0".as_ptr());
+                    (*locals).guard_addrs[s] = core::ptr::null();
+                    (*locals).guard_lens[s] = 0;
+                }
+                s += 1;
+            }
         }
     }
 
@@ -1028,6 +1075,76 @@ impl Lower {
             self.out.puts(b";\n\0".as_ptr());
             return;
         }
+        /* Lock guard: `let g = M.lock();` — the acquire runs as a
+         * statement here, the binding is the payload address, and the
+         * scope-exit release rides the LocalTab guard note (end_block
+         * emits it at the closing brace). The receiver must be a lock
+         * row (the method name alone is not validation — the recv's
+         * rendered C type gates it). */
+        if !init.is_null() && unsafe { (*init).kind } == pm_jit_rsx_ast_kind::METHOD_CALL {
+            let ikids = unsafe { (*init).kids };
+            let icn = unsafe { (*init).n_kids } as usize;
+            if icn >= 2 {
+                let recv = unsafe { *ikids.add(0) };
+                let mnode = unsafe { *ikids.add(1) };
+                let mt = unsafe { (*mnode).text };
+                let ml = unsafe { (*mnode).text_len };
+                let rbuf = self.arena_tmp();
+                let rl = unsafe { self.expr_ctype(recv, rbuf, 128, locals) };
+                if ml == 4
+                    && unsafe { z_eq(mt, ml, b"lock\0".as_ptr()) }
+                    && rl > 9
+                    && rl < 128
+                    && unsafe { z_eq(rbuf, 9, b"rsx_lock_\0".as_ptr()) }
+                {
+                        /* render the receiver's lvalue text into a
+                         * scratch Out (self.out is the C stream):
+                         * field-wise swap, Out is not Copy. */
+                        let saved_arena = self.out.arena;
+                        let saved_p = self.out.p;
+                        let saved_len = self.out.len;
+                        let saved_cap = self.out.cap;
+                        let saved_ok = self.out.ok;
+                        self.out.arena = self.arena;
+                        self.out.p = core::ptr::null_mut();
+                        self.out.len = 0;
+                        self.out.cap = 0;
+                        self.out.ok = true;
+                        unsafe { self.emit_expr(recv, locals) };
+                        let mut rtext: *const u8 = core::ptr::null();
+                        let mut rlen = 0usize;
+                        if self.out.ok && self.out.len > 0 && self.out.len < 4096 {
+                            rtext = self.out.p;
+                            rlen = self.out.len;
+                        }
+                        self.out.arena = saved_arena;
+                        self.out.p = saved_p;
+                        self.out.len = saved_len;
+                        self.out.cap = saved_cap;
+                        self.out.ok = saved_ok;
+                        if !rtext.is_null() {
+                            /* acquire statement */
+                            self.indent();
+                            self.out.puts(b"pm_util_lock_acquire(&\0".as_ptr());
+                            self.out.put(rtext, rlen);
+                            self.out.puts(b".raw);\n\0".as_ptr());
+                            /* bind: T *g = &recv.value; */
+                            self.indent();
+                            unsafe {
+                                self.emit_declarator(ct, ct_len, name, name_len);
+                            }
+                            self.out.puts(b" = &\0".as_ptr());
+                            self.out.put(rtext, rlen);
+                            self.out.puts(b".value;\n\0".as_ptr());
+                            /* guard note for the scope-exit release */
+                            unsafe {
+                                (*locals).mark_guard(rtext, rlen);
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
         /* locals are never const in C — Rust's deferred-init
          * (`let x; if c { x = 1 } else { x = 0 }`) writes them after the
          * declaration, and inference may have carried a `const ` prefix
@@ -1067,6 +1184,25 @@ impl Lower {
                     self.err(b"unsupported: closure in let initializer\0".as_ptr(), line);
                 }
                 return;
+            }
+            /* Block initializer with statements: the statements are the
+             * point (a guard binding ahead of a tail match — the lock-
+             * plane pattern). Declaring the name first, then running the
+             * block with the name as the value temp, keeps every
+             * statement and the tail's assignment in one C scope. A bare
+             * tail-only block keeps the plain `= { tail }` render. */
+            if ik == pm_jit_rsx_ast_kind::BLOCK {
+                let ikids = unsafe { (*init).kids };
+                let inkn = unsafe { (*init).n_kids } as usize;
+                if inkn >= 2 {
+                    self.indent();
+                    unsafe {
+                        self.emit_declarator(ct, ct_len, name, name_len);
+                    }
+                    self.out.puts(b";\n\0".as_ptr());
+                    unsafe { self.emit_block_value(init, locals, name, name_len) };
+                    return;
+                }
             }
         }
         self.indent();
@@ -2419,6 +2555,170 @@ impl Lower {
      * statement expression. Returns 1 when emitted (or refused with a
      * specific message); 0 only when the shape is not ours (caller
      * continues to the user-method path). */
+    /* `.map(|p| body)` on an Option receiver — 1 = emitted, 0 = not this
+     * shape (fall through), the err path already spoke. Receiver payload:
+     * struct-Option (rsx_opt_*) -> ._v under ._has; pointer-Option -> the
+     * value under a NULL test. The closure needs exactly one plain bind.
+     * The result: body type struct/other -> struct-Option out (payload
+     * registered in the opt table); body type pointer -> pointer-Option.
+     * The bind is a local of the statement expression scope (same
+     * discipline as the closure builtins), so the body's PATH lookups
+     * resolve through LocalTab. */
+    unsafe fn try_emit_opt_map(
+        &mut self,
+        recv: *const pm_jit_rsx_ast_t,
+        clo: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+        line: u32,
+    ) -> usize {
+        let ck = unsafe { (*clo).kids };
+        let cn = unsafe { (*clo).n_kids } as usize;
+        if cn < 2 {
+            unsafe {
+                self.err(b"unsupported: map closure needs one bind and a body\0".as_ptr(), line);
+            }
+            return 1;
+        }
+        let param = unsafe { *ck.add(0) };
+        let body = unsafe { *ck.add(cn - 1) };
+        if unsafe { (*param).kind } != pm_jit_rsx_ast_kind::PARAM {
+            unsafe {
+                self.err(b"unsupported: map closure needs one bind and a body\0".as_ptr(), line);
+            }
+            return 1;
+        }
+        let pk = unsafe { (*param).kids };
+        let pn = unsafe { (*param).n_kids } as usize;
+        if pn >= 1 {
+            let first = unsafe { *pk.add(0) };
+            if unsafe { (*first).kind } == pm_jit_rsx_ast_kind::UNARY {
+                unsafe {
+                    self.err(b"unsupported: map closure bind is by-value\0".as_ptr(), line);
+                }
+                return 1;
+            }
+        }
+        let bname = unsafe { (*param).text };
+        let blen = unsafe { (*param).text_len };
+        if blen == 0 || bname.is_null() {
+            return 0;
+        }
+        /* receiver's C type + Option shape */
+        let rbuf = self.arena_tmp();
+        let rn = unsafe { self.expr_ctype(recv, rbuf, 128, locals) };
+        if rn == 0 {
+            return 0;
+        }
+        let mut is_struct_opt = false;
+        let mut payload_buf = self.arena_tmp();
+        let mut payload_len = 0usize;
+        if rn >= 8 && unsafe { z_eq(rbuf, 8, b"rsx_opt_\0".as_ptr()) } {
+            is_struct_opt = true;
+            let eb = self.arena_tmp();
+            let el = unsafe { Lower::opt_typedef_elem(rbuf, rn, eb, 160) };
+            if el == 0 {
+                return 0;
+            }
+            payload_len = unsafe { bput(payload_buf, 160, 0, eb, el) };
+            unsafe {
+                *payload_buf.add(payload_len) = 0;
+            }
+        } else {
+            /* pointer-Option: the payload IS the receiver's spelling */
+            payload_len = unsafe { bput(payload_buf, 160, 0, rbuf, rn) };
+            unsafe {
+                *payload_buf.add(payload_len) = 0;
+            }
+        }
+        /* the result type: the body's type with the bind registered —
+         * scope-enter, register, type, and keep the registration for the
+         * emission pass below (the same stmt-expr scope). */
+        unsafe {
+            (*locals).note_scope();
+            (*locals).add(bname, blen, payload_buf, payload_len, self.depth);
+        }
+        let bbuf = self.arena_tmp();
+        let bn = unsafe { self.expr_ctype(body, bbuf, 128, locals) };
+        if bn == 0 {
+            unsafe {
+                (*locals).drop_scope();
+            }
+            return 0;
+        }
+        /* struct-Option out (payload in the opt table) or pointer out */
+        let mut out_struct = false;
+        let mut out_ptr = false;
+        if bn > 0 && unsafe { *bbuf.add(bn - 1) } == b'*' {
+            out_ptr = true;
+        } else {
+            out_struct = true;
+            let slot = unsafe { self.opt_add(bbuf, bn) };
+            if slot >= OPT_CAP {
+                unsafe {
+                    (*locals).drop_scope();
+                    self.err(b"option type table overflow\0".as_ptr(), line);
+                }
+                return 1;
+            }
+        }
+        let tdn = self.arena_tmp();
+        let mut tdn_len = 0usize;
+        if out_struct {
+            tdn_len = unsafe { Lower::opt_typedef_name(bbuf, bn, tdn, 160) };
+            if tdn_len == 0 {
+                unsafe {
+                    (*locals).drop_scope();
+                }
+                return 0;
+            }
+        }
+        /* the emission */
+        self.out.puts(b"({ \0".as_ptr());
+        if out_struct {
+            self.out.put(tdn, tdn_len);
+            self.out.puts(b" __m; \0".as_ptr());
+        } else {
+            self.out.put(bbuf, bn);
+            self.out.puts(b" __m; \0".as_ptr());
+        }
+        if is_struct_opt {
+            self.out.puts(b"if (\0".as_ptr());
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b"._has) { \0".as_ptr());
+        } else {
+            self.out.puts(b"if (\0".as_ptr());
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b") { \0".as_ptr());
+        }
+        /* bind: payload-ptr type <name> = <payload>; — the struct-Option
+         * payload is ._v, the pointer payload is the receiver itself. */
+        self.out.put(payload_buf, payload_len);
+        self.out.putc(b' ');
+        self.out.put(bname, blen);
+        self.out.puts(b" = \0".as_ptr());
+        if is_struct_opt {
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b"._v; \0".as_ptr());
+        } else {
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b"; \0".as_ptr());
+        }
+        if out_struct {
+            self.out.puts(b"__m._v = \0".as_ptr());
+            unsafe { self.emit_expr(body, locals) };
+            self.out.puts(b"; __m._has = 1; } else { __m._has = 0; }\0".as_ptr());
+        } else {
+            self.out.puts(b"__m = \0".as_ptr());
+            unsafe { self.emit_expr(body, locals) };
+            self.out.puts(b"; } else { __m = 0; }\0".as_ptr());
+        }
+        self.out.puts(b" __m; })\0".as_ptr());
+        unsafe {
+            (*locals).drop_scope();
+        }
+        1
+    }
+
     unsafe fn try_emit_closure_loop(
         &mut self,
         recv: *const pm_jit_rsx_ast_t,
@@ -2765,6 +3065,10 @@ impl Lower {
     }
 
     unsafe fn emit_return(&mut self, s: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
+        /* live guards release ahead of the return: a mid-body return with
+         * a guard in scope must not leak the acquire (the guard's own
+         * scope-exit release never runs past a return). */
+        unsafe { self.release_guards_all(locals) };
         self.indent();
         let kids = unsafe { (*s).kids };
         if unsafe { (*s).n_kids } >= 1 {

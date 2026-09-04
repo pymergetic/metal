@@ -92,12 +92,16 @@ impl Lower {
          * (their flushes are done-marked too). */
         if declare_only == 0 && !body.is_null() {
             let before = self.vecs.n;
+            let before_l = self.locks.n;
             self.pre_mode = true;
             unsafe { self.body_intern_types(fnitem) };
             self.pre_mode = false;
             self.pre_pool_at = 0;
             if self.vecs.n != before {
                 unsafe { self.vec_emit_rest() };
+            }
+            if self.locks.n != before_l {
+                unsafe { self.lock_emit_rest() };
             }
         }
         /* #line + signature */
@@ -251,6 +255,9 @@ impl Lower {
                         self.out.put(ret_ct, ret_len);
                         self.out.puts(b" ret;\n\0".as_ptr());
                         unsafe { self.emit_match_value(tail, &mut *locals, b"ret\0".as_ptr(), 3) };
+                        /* live guards release before the tail return — the
+                         * value-tail path skips end_block entirely. */
+                        unsafe { self.release_guards_all(&mut *locals) };
                         self.indent();
                         self.out.puts(b"return ret;\n\0".as_ptr());
                     } else if k == pm_jit_rsx_ast_kind::RETURN
@@ -272,6 +279,10 @@ impl Lower {
                         unsafe { self.emit_expr(tail, &mut *locals) };
                         self.out.puts(b";\n\0".as_ptr());
                     }
+                    /* any tail shape: live guards release before the fn's
+                     * closing brace (statement tails and diverging tails
+                     * both land here after their own emission). */
+                    unsafe { self.release_guards_all(&mut *locals) };
                 }
             } else {
                 unsafe { self.emit_block_stmt(body, &mut *locals) };
@@ -774,6 +785,52 @@ impl Lower {
         self.out.putc(b'\n');
     }
 
+    /* Lock-plane emission: one typedef per interned payload row —
+     * rsx_lock_<row> = { pm_util_lock_t raw; T value; } — plus the
+     * pm_util_lock_t typedef (the lock card's exact ABI shape:
+     * { uint32_t locked; }) and the extern prototypes for the card's
+     * own acquire/release faces (link-time resolved against the lock
+     * card's rs muscle — one mechanism, not a second C lock). The
+     * typedef is emitted only when a lock row exists: lock-free units
+     * keep their byte-identical output. A local pm_util_lock_t typedef
+     * collides with nothing in a unit that never declares its own —
+     * registry's muscle DOES declare one, but a lock row there means
+     * the muscle itself uses Mutex<T>, which its subset forbids. */
+    unsafe fn lock_emit_rest(&mut self) {
+        if self.locks.n == 0 {
+            return;
+        }
+        self.out.puts(b"typedef struct { uint32_t locked; } pm_util_lock_t;\n\0".as_ptr());
+        self.out.puts(b"extern void pm_util_lock_acquire(pm_util_lock_t *);\n\0".as_ptr());
+        self.out.puts(b"extern void pm_util_lock_release(pm_util_lock_t *);\n\0".as_ptr());
+        let mut s = 0usize;
+        while s < self.locks.n {
+            if !unsafe { self.locks.done[s] } {
+                let elem = self.locks.elems[s].as_ptr();
+                let elen = self.locks.elem_lens[s];
+                let tdn = self.arena_tmp();
+                let tdn_len = unsafe { LockTab::name_for(s, tdn, 96) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: lock typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                /* typedef struct { pm_util_lock_t raw; T value; } rsx_lock_<row>; */
+                self.out.puts(b"typedef struct { pm_util_lock_t raw; \0".as_ptr());
+                self.out.put(elem, elen);
+                self.out.puts(b" value; } \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                unsafe {
+                    self.locks.done[s] = true;
+                }
+            }
+            s += 1;
+        }
+        self.out.putc(b'\n');
+    }
+
     /* Recursive body pre-scan: render (and discard) every TYPE node's C
      * type so the container/tuple/Option tables intern everything the
      * body will name before its opening brace — the typedefs must sit at
@@ -1135,6 +1192,9 @@ impl Lower {
         /* Vec container typedefs + ops — before every fn whose signature
          * or body names one */
         unsafe { self.vec_emit_rest() };
+        /* Lock rows — same file-scope contract (a fn signature naming
+         * Mutex<T> needs the typedef complete before the prototype) */
+        unsafe { self.lock_emit_rest() };
         /* pass 0b: statics — after the type pass, their declarations name
          * struct/alias types; their initializers may also need complete
          * types for compound literals. */

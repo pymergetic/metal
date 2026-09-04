@@ -1922,6 +1922,38 @@ impl Lower {
                         return;
                     }
                 }
+                /* `Mutex::new(v)` / `SpinLock::new(v)` (any qualification
+                 * depth — `crate::util::lock::Mutex::new`): the lock ctor.
+                 * A one-arg call lowers to the compound literal
+                 * { {0}, (v) } — raw lock zeroed (UNLOCKED), payload
+                 * copied. The declaration context supplies the row type;
+                 * in a static initializer the all-zero path covers
+                 * `Mutex::new(None)` (the zero IS a valid lock+None). */
+                if unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"new\0".as_ptr()) }
+                    && unsafe { (*args).n_kids } as usize == 1
+                    && cn >= 2
+                {
+                    let wrap = unsafe { *ck.add(cn - 2) };
+                    let wt = unsafe { (*wrap).text };
+                    let wl = unsafe { (*wrap).text_len };
+                    if unsafe { z_eq(wt, wl, b"Mutex\0".as_ptr()) }
+                        || unsafe { z_eq(wt, wl, b"SpinLock\0".as_ptr()) }
+                    {
+                        let ak2 = unsafe { (*args).kids };
+                        /* None payload: the zero literal — both the lock
+                         * bit and the Option's tag/payload are zero, and
+                         * `Mutex::new(None)` in a static initializer
+                         * stays a constant expression. */
+                        if unsafe { self.expr_is_none(*ak2.add(0)) } {
+                            self.out.puts(b"{ {0}, {0} }\0".as_ptr());
+                            return;
+                        }
+                        self.out.puts(b"{ {0}, \0".as_ptr());
+                        unsafe { self.emit_expr(*ak2.add(0), locals) };
+                        self.out.puts(b" }\0".as_ptr());
+                        return;
+                    }
+                }
                 /* `Type::fn(..)` — associated fn: mangle to Type_fn. */
                 if cn >= 2 {
                     let head = unsafe { *ck.add(0) };
@@ -2290,6 +2322,38 @@ impl Lower {
                 }
             }
         }
+        /* Lock plane: `.lock()` on an rsx_lock_<row> receiver. The guard
+         * IS the payload address — acquire, then the expression's value
+         * is `&recv.value` (deref/deref-assign go through it, and the
+         * scope-end release is the block epilogue's job — the caller
+         * registers the guard for release when the binding leaves
+         * scope). try_lock is the same shape gated on the primitive's
+         * return. */
+        if (an == 0
+            && (unsafe { z_eq(mname, mlen, b"lock\0".as_ptr()) }
+                || unsafe { z_eq(mname, mlen, b"try_lock\0".as_ptr()) }))
+        {
+            let rct = self.arena_tmp();
+            let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+            if rctl > 9 && rctl < 128 && unsafe { z_eq(rct, 9, b"rsx_lock_\0".as_ptr()) } {
+                if an == 0 && unsafe { z_eq(mname, mlen, b"lock\0".as_ptr()) } {
+                    self.out.puts(b"(pm_util_lock_acquire(&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b".raw), (&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b".value))\0".as_ptr());
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"try_lock\0".as_ptr()) } {
+                    self.out.puts(b"(pm_util_lock_try_acquire(&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b".raw) ? (&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b".value) : 0)\0".as_ptr());
+                    return;
+                }
+            }
+        }
         /* Atomic loads/stores/swap on an `AtomicU32` (C: `_Atomic uint32_t`)
          * — a plain u32 field of the receiver. The GNU statement expression
          * holds the value tmp the pointer-based `__atomic_*` builtins need
@@ -2557,6 +2621,56 @@ impl Lower {
                 self.out.puts(b" == 0)\0".as_ptr());
             }
             return;
+        }
+        /* `.as_ref()` on a struct-shaped Option: the payload address
+         * (Some -> &recv._v, None -> NULL — a NULL test downstream works
+         * because the pointer is only dereferenced under the Some arm).
+         * A receiver that IS a pointer to the struct-Option (the lock
+         * guard) goes through ->_v. A pointer-Option's as_ref is the
+         * receiver unchanged. */
+        if an == 0 && unsafe { z_eq(mname, mlen, b"as_ref\0".as_ptr()) } {
+            let rbuf = self.arena_tmp();
+            let rn = unsafe { self.expr_ctype(recv, rbuf, 128, locals) };
+            let mut sp = rbuf;
+            let mut sl = rn;
+            if sl >= 6 && unsafe { z_eq(sp, 6, b"const \0".as_ptr()) } {
+                sp = unsafe { sp.add(6) };
+                sl -= 6;
+            }
+            let mut behind_ptr = false;
+            if sl > 2 && unsafe { *sp.add(sl - 1) } == b'*' {
+                behind_ptr = true;
+                sl -= 1;
+                while sl > 0 && unsafe { *sp.add(sl - 1) } == b' ' {
+                    sl -= 1;
+                }
+            }
+            if sl > 8 && unsafe { z_eq(sp, 8, b"rsx_opt_\0".as_ptr()) } {
+                self.out.puts(b"(&\0".as_ptr());
+                unsafe { self.emit_expr(recv, locals) };
+                if behind_ptr {
+                    self.out.puts(b"->_v)\0".as_ptr());
+                } else {
+                    self.out.puts(b"._v)\0".as_ptr());
+                }
+                return;
+            }
+        }
+        /* `.map(|p| body)` on an Option — the single-closure combinator.
+         * Receiver shape decides the payload: a struct-Option
+         * (rsx_opt_*) reads ._v/._has, a pointer-Option is the value/NULL
+         * test. The body types the result (struct -> struct-Option out,
+         * pointer -> pointer-Option out): the param binds as a local of
+         * the statement expression's scope, so the body's PATH lookups
+         * resolve. GNU statement expression, same posture as the closure
+         * builtins over arrays. */
+        if an == 1
+            && unsafe { z_eq(mname, mlen, b"map\0".as_ptr()) }
+            && unsafe { (**ak.add(0)).kind } == pm_jit_rsx_ast_kind::CLOSURE
+        {
+            if unsafe { self.try_emit_opt_map(recv, *ak.add(0), locals, unsafe { (*e).line }) } != 0 {
+                return;
+            }
         }
         /* Closure builtins over a fixed array: `.all(|&b| ..)`,
          * `.any(|&b| ..)`, `.position(|&b| ..)` — a GNU statement expression

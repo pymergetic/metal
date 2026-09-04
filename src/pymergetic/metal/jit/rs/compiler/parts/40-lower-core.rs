@@ -135,6 +135,9 @@ struct Lower {
     /* Vec container plane: interned element spellings -> named C types,
      * emitted once in the preamble. All-zero is a valid empty table. */
     vecs: VecTab,
+    /* Mutex<T>/SpinLock<T> plane: interned payload spellings -> named C
+     * rows { pm_util_lock_t raw; T value; }, same emission contract. */
+    locks: LockTab,
 }
 
 impl Lower {
@@ -857,7 +860,17 @@ impl Lower {
             }
             return 0;
         }
-        let first = unsafe { *kids.add(0) };
+        /* The generic HEAD: for a gpath the parser records the plain-
+         * segment count in int_val — the head is the LAST plain segment
+         * (`crate::util::lock::Mutex<T>`'s head is Mutex, not `crate`;
+         * the generic args are kids[nsegs..]). Legacy gpaths minted
+         * before the marker (int_val == 0) and single-segment paths
+         * keep head == kids[0]. A malformed marker (> nk) falls back
+         * to kids[0] and refuses downstream, never misrenders. */
+        let nsegs = unsafe { (*ty).int_val } as usize;
+        let head_i = if nsegs >= 1 && nsegs <= nk { nsegs - 1 } else { 0 };
+        let garg = if nsegs >= 1 && nsegs <= nk { nsegs } else { 1 };
+        let first = unsafe { *kids.add(head_i) };
         let fname = unsafe { (*first).text };
         let flen = unsafe { (*first).text_len };
         /* Option<T> */
@@ -868,7 +881,7 @@ impl Lower {
                 }
                 return 0;
             }
-            let inner = unsafe { *kids.add(1) };
+            let inner = unsafe { *kids.add(garg) };
             /* Option<ptr/fn-ptr> lowers to the inner pointer type; the
              * payload type decides (checked by the caller's sym table for
              * user types — here we accept any pointer-ish inner). */
@@ -942,7 +955,7 @@ impl Lower {
             && (unsafe { z_eq(fname, flen, b"UnsafeCell\0".as_ptr()) }
                 || unsafe { z_eq(fname, flen, b"Cell\0".as_ptr()) })
         {
-            let inner = unsafe { *kids.add(1) };
+            let inner = unsafe { *kids.add(garg) };
             let inner_buf = self.arena_tmp();
             let n = unsafe { self.ctype(inner, inner_buf, 128) };
             if n == 0 {
@@ -960,7 +973,7 @@ impl Lower {
             && nk >= 2
             && unsafe { self.nt_find(fname, flen) }
         {
-            let inner = unsafe { *kids.add(1) };
+            let inner = unsafe { *kids.add(garg) };
             let inner_buf = self.arena_tmp();
             let n = unsafe { self.ctype(inner, inner_buf, 128) };
             if n == 0 {
@@ -976,7 +989,7 @@ impl Lower {
          * mint the rsx_vec_<elem> typedef name (preamble emits the
          * struct + ops once), render the name. */
         if nk >= 2 && unsafe { z_eq(fname, flen, b"Vec\0".as_ptr()) } {
-            let inner = unsafe { *kids.add(1) };
+            let inner = unsafe { *kids.add(garg) };
             let inner_buf = self.arena_tmp();
             let n = unsafe { self.ctype(inner, inner_buf, 128) };
             if n == 0 {
@@ -994,6 +1007,46 @@ impl Lower {
             if tdn_len == 0 {
                 unsafe {
                     self.err(b"internal: vec typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                }
+                return 0;
+            }
+            at = unsafe { bput(out, cap, at, tdn, tdn_len) };
+            unsafe {
+                if at < cap {
+                    *out.add(at) = 0;
+                } else if cap > 0 {
+                    *out.add(cap - 1) = 0;
+                }
+            }
+            return if at >= cap { 0 } else { at };
+        }
+        /* Mutex<T>/SpinLock<T> (any qualification depth — the glue alias
+         * `crate::util::lock::Mutex` resolves by its head): the lock
+         * plane. Intern the payload's C type, mint rsx_lock_<row> (the
+         * preamble emits { pm_util_lock_t raw; T value; } + the extern
+         * acquire/release prototypes once). */
+        if nk >= 2
+            && (unsafe { z_eq(fname, flen, b"Mutex\0".as_ptr()) }
+                || unsafe { z_eq(fname, flen, b"SpinLock\0".as_ptr()) })
+        {
+            let inner = unsafe { *kids.add(garg) };
+            let inner_buf = self.arena_tmp();
+            let n = unsafe { self.ctype(inner, inner_buf, 128) };
+            if n == 0 {
+                return 0;
+            }
+            let slot = unsafe { self.locks.intern(inner_buf, n) };
+            if slot == LOCK_CAP {
+                unsafe {
+                    self.err(b"lock type table overflow\0".as_ptr(), unsafe { (*ty).line });
+                }
+                return 0;
+            }
+            let tdn = self.arena_tmp();
+            let tdn_len = unsafe { LockTab::name_for(slot, tdn, 96) };
+            if tdn_len == 0 {
+                unsafe {
+                    self.err(b"internal: lock typedef name too long\0".as_ptr(), unsafe { (*ty).line });
                 }
                 return 0;
             }
@@ -2804,6 +2857,85 @@ impl Lower {
                 let name = unsafe { *kids.add(1) };
                 let mname = unsafe { (*name).text };
                 let mlen = unsafe { (*name).text_len };
+                /* Lock plane: `.lock()` on an rsx_lock_<row> receiver
+                 * types as the payload pointer (the guard IS &value —
+                 * deref/deref-assign go through it). try_lock types the
+                 * same (NULL when not acquired). */
+                if (mlen == 4 || mlen == 9)
+                    && (unsafe { z_eq(mname, mlen, b"lock\0".as_ptr()) }
+                        || unsafe { z_eq(mname, mlen, b"try_lock\0".as_ptr()) })
+                {
+                    let rbuf = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                    if rl > 9 && rl < 128 && unsafe { z_eq(rbuf, 9, b"rsx_lock_\0".as_ptr()) } {
+                        let row = unsafe { self.locks.find_by_name(rbuf, rl) };
+                        if row < LOCK_CAP {
+                            let el = self.locks.elem_lens[row];
+                            let at = unsafe {
+                                bput(out, cap, 0, self.locks.elems[row].as_ptr(), el)
+                            };
+                            if at < cap {
+                                let at2 = unsafe { bput(out, cap, at, b" *\0".as_ptr(), 2) };
+                                unsafe {
+                                    if at2 < cap {
+                                        *out.add(at2) = 0;
+                                    } else if cap > 0 {
+                                        *out.add(cap - 1) = 0;
+                                    }
+                                }
+                                return if at2 >= cap { 0 } else { at2 };
+                            }
+                            unsafe {
+                                if cap > 0 {
+                                    *out.add(cap - 1) = 0;
+                                }
+                            }
+                            return if at >= cap { 0 } else { at };
+                        }
+                    }
+                }
+                /* `.as_ref()` on a struct-shaped Option (rsx_opt_<..>), by
+                 * value or behind a pointer: the payload pointer (Some ->
+                 * &._v, None -> NULL). A pointer-shaped Option already
+                 * types through the plain PATH arm. */
+                if mlen == 6 && unsafe { z_eq(mname, mlen, b"as_ref\0".as_ptr()) } {
+                    let rbuf = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                    if rl > 0 && rl < 128 {
+                        let mut sp = rbuf;
+                        let mut sl = rl;
+                        if sl >= 6 && unsafe { z_eq(sp, 6, b"const \0".as_ptr()) } {
+                            sp = unsafe { sp.add(6) };
+                            sl -= 6;
+                        }
+                        /* a receiver that IS a pointer to the struct-Option
+                         * (the lock guard): strip the trailing ` *` — the
+                         * payload spelling is the pointee's element. */
+                        let mut behind_ptr = false;
+                        if sl > 2 && unsafe { *sp.add(sl - 1) } == b'*' {
+                            behind_ptr = true;
+                            sl -= 1;
+                            while sl > 0 && unsafe { *sp.add(sl - 1) } == b' ' {
+                                sl -= 1;
+                            }
+                        }
+                        if sl > 8 && unsafe { z_eq(sp, 8, b"rsx_opt_\0".as_ptr()) } {
+                            let el = unsafe { Lower::opt_typedef_elem(sp, sl, out, cap) };
+                            if el > 0 && el + 2 < cap {
+                                let at = unsafe { bput(out, cap, el, b" *\0".as_ptr(), 2) };
+                                unsafe {
+                                    if at < cap {
+                                        *out.add(at) = 0;
+                                    } else if cap > 0 {
+                                        *out.add(cap - 1) = 0;
+                                    }
+                                }
+                                return if at >= cap { 0 } else { at };
+                            }
+                            return 0;
+                        }
+                    }
+                }
                 let mut user_method = false;
                 if unsafe { z_eq(mname, mlen, b"add\0".as_ptr()) }
                     || unsafe { z_eq(mname, mlen, b"sub\0".as_ptr()) }
@@ -3205,6 +3337,13 @@ struct LocalTab {
     ctype_lens: [usize; LOCAL_CAP],
     depths: [usize; LOCAL_CAP],
     epochs: [usize; LOCAL_CAP],
+    /* Lock guards: a local whose init was `.lock()` holds the receiver's
+     * rendered lvalue text (arena span, NUL'd) — the block epilogue emits
+     * pm_util_lock_release(&<addr>.raw) when the scope dies. NULL = not
+     * a guard. Reuse rows keep their guard note only in the same scope:
+     * drop_scope rewinds n, so stale notes die with their entries. */
+    guard_addrs: [*const u8; LOCAL_CAP],
+    guard_lens: [usize; LOCAL_CAP],
     marks: [usize; 64],
     nmarks: usize,
     n: usize,
@@ -3299,6 +3438,11 @@ impl LocalTab {
                     j += 1;
                 }
                 if eq {
+                    /* same binding re-registered (scope entry): its guard
+                     * note, if any, was already consumed or belongs to
+                     * this very binding — keep it (a re-execution of the
+                     * same let re-locks; the scope-exit release still
+                     * pairs with the epilogue's acquire). */
                     return;
                 }
             }
@@ -3333,6 +3477,28 @@ impl LocalTab {
         self.depths[s] = depth;
         self.epochs[s] = self.epoch;
         self.n += 1;
+    }
+
+    /* Tag the most recent binding as a lock guard holding <addr> (the
+     * receiver's rendered lvalue). The block epilogue releases it when
+     * the binding's scope dies. Arena span; a failed span drops the
+     * note (the guard still binds — the release is skipped, and the
+     * epilogue never dereferences a stale pointer). */
+    unsafe fn mark_guard(&mut self, addr: *const u8, alen: usize) {
+        if self.n == 0 || addr.is_null() || alen == 0 {
+            return;
+        }
+        let p = unsafe { pm_util_mem_alloc(self.arena, alen + 1) };
+        if p.is_null() {
+            return;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(addr, p, alen);
+            *p.add(alen) = 0;
+        }
+        let s = self.n - 1;
+        self.guard_addrs[s] = p;
+        self.guard_lens[s] = alen;
     }
 
     unsafe fn lookup(&self, name: *const u8, nlen: usize, out: *mut u8) -> usize {

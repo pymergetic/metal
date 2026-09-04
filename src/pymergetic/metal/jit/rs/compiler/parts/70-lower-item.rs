@@ -1313,15 +1313,23 @@ impl Lower {
         let mut interior_mut = false;
         {
             /* type nodes are TYPE-kind segs (`Mut`, `UnsafeCell`): the head
-             * segment of the declared type names the wrapper. */
+             * segment of the declared type names the wrapper. A qualified
+             * generic path (`crate::util::lock::Mutex<T>`) carries its
+             * plain-segment count in int_val — the wrapper is that count's
+             * last plain segment, not the path's first segment (the same
+             * head rule ctype_path applies). */
             let tk = unsafe { (*ty).kids };
             let tn = unsafe { (*ty).n_kids } as usize;
             if tn >= 1 {
-                let head = unsafe { *tk.add(0) };
+                let nsegs = unsafe { (*ty).int_val } as usize;
+                let head_i = if nsegs >= 1 && nsegs <= tn { nsegs - 1 } else { 0 };
+                let head = unsafe { *tk.add(head_i) };
                 let sn = unsafe { (*head).text };
                 let sl = unsafe { (*head).text_len };
                 if unsafe { z_eq(sn, sl, b"UnsafeCell\0".as_ptr()) }
                     || unsafe { z_eq(sn, sl, b"Cell\0".as_ptr()) }
+                    || unsafe { z_eq(sn, sl, b"Mutex\0".as_ptr()) }
+                    || unsafe { z_eq(sn, sl, b"SpinLock\0".as_ptr()) }
                     || unsafe { self.nt_find(sn, sl) }
                 {
                     interior_mut = true;
@@ -1446,6 +1454,8 @@ impl Lower {
                                         let wl = unsafe { (*wrap).text_len };
                                         if unsafe { z_eq(wt, wl, b"UnsafeCell\0".as_ptr()) }
                                             || unsafe { z_eq(wt, wl, b"Cell\0".as_ptr()) }
+                                            || unsafe { z_eq(wt, wl, b"Mutex\0".as_ptr()) }
+                                            || unsafe { z_eq(wt, wl, b"SpinLock\0".as_ptr()) }
                                         {
                                             ok_shape = true;
                                         }

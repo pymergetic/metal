@@ -839,3 +839,124 @@ impl VecTab {
         row
     }
 }
+
+/* ---- lock rows (the Mutex<T>/SpinLock<T> plane) ----
+ *
+ * `crate::util::lock::Mutex<T>` / `SpinLock<T>` (any qualification depth)
+ * lowers to a C struct row: { pm_util_lock_t raw; T value; } — the exact
+ * layout the glue alias (util/lock.rs SpinLock<T>) defines and the lock
+ * card's rs muscle exports the primitive for. acquire/release are the
+ * card's own C faces (pm_util_lock_acquire/pm_util_lock_release, link-
+ * time resolved): one mechanism, not two. Numbered rows mirror VecTab
+ * — deterministic interning keeps the self-host fixed point honest. */
+const LOCK_CAP: usize = 8;
+const LOCK_SIG: usize = 64;
+
+struct LockTab {
+    elems: [[u8; LOCK_SIG]; LOCK_CAP],
+    elem_lens: [usize; LOCK_CAP],
+    n: usize,
+    done: [bool; LOCK_CAP],
+}
+
+impl LockTab {
+    unsafe fn new() -> LockTab {
+        LockTab {
+            elems: [[0; LOCK_SIG]; LOCK_CAP],
+            elem_lens: [0; LOCK_CAP],
+            n: 0,
+            done: [false; LOCK_CAP],
+        }
+    }
+
+    /* typedef name: rsx_lock_<row> */
+    unsafe fn name_for(row: usize, out: *mut u8, cap: usize) -> usize {
+        let at = unsafe { bput(out, cap, 0, b"rsx_lock_\0".as_ptr(), 9) };
+        if at != 9 || cap <= 11 {
+            return 0;
+        }
+        if row >= LOCK_CAP {
+            return 0;
+        }
+        let d0 = b'0' + (row % 10) as u8;
+        let digs: [u8; 1] = [d0];
+        let at2 = unsafe { bput(out, cap, at, digs.as_ptr(), 1) };
+        if at2 >= cap {
+            return 0;
+        }
+        at2
+    }
+
+    unsafe fn intern(&mut self, elem: *const u8, elen: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.n {
+            if self.elem_lens[s] == elen {
+                let mut same = true;
+                let mut i = 0usize;
+                while i < elen {
+                    if self.elems[s][i] != unsafe { *elem.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        if self.n >= LOCK_CAP || elen >= LOCK_SIG {
+            return LOCK_CAP;
+        }
+        let mut i = 0usize;
+        while i < elen {
+            self.elems[self.n][i] = unsafe { *elem.add(i) };
+            i += 1;
+        }
+        self.elem_lens[self.n] = elen;
+        self.n += 1;
+        self.n - 1
+    }
+
+    unsafe fn find(&self, elem: *const u8, elen: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.n {
+            if self.elem_lens[s] == elen {
+                let mut same = true;
+                let mut i = 0usize;
+                while i < elen {
+                    if self.elems[s][i] != unsafe { *elem.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        LOCK_CAP
+    }
+
+    /* rsx_lock_<digit> -> row */
+    unsafe fn find_by_name(&self, name: *const u8, nlen: usize) -> usize {
+        if nlen != 10 {
+            return LOCK_CAP;
+        }
+        if !unsafe { z_eq(name, 9, b"rsx_lock_\0".as_ptr()) } {
+            return LOCK_CAP;
+        }
+        let ch = unsafe { *name.add(9) };
+        if ch < b'0' || ch > b'9' {
+            return LOCK_CAP;
+        }
+        let row = (ch - b'0') as usize;
+        if row >= self.n {
+            return LOCK_CAP;
+        }
+        row
+    }
+}

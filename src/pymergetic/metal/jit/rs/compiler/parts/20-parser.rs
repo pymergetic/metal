@@ -910,6 +910,7 @@ impl Parser {
     unsafe fn parse_path_type(&mut self) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
         let mut kids = Kids::new();
+        let mut nsegs = 0usize;
         loop {
             if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::IDENT {
                 unsafe {
@@ -928,6 +929,7 @@ impl Parser {
             unsafe {
                 kids.add(seg, self.arena);
             }
+            nsegs += 1;
             self.at += 1;
             if unsafe { self.is_punct(self.at, b'<') } {
                 /* `<` opens generics only when not a comparison — in type
@@ -974,9 +976,16 @@ impl Parser {
                 }
                 /* Path with generics ends here. The text spells "gpath" so
                  * the lower can tell a generic path from a plain multi-
-                 * segment one — the AST kind table stays stable (TYPE). */
+                 * segment one — the AST kind table stays stable (TYPE).
+                 * int_val carries the plain-segment count (kids[0..nsegs)
+                 * are path segments, kids[nsegs..] the generic args) — a
+                 * TYPE node's int_val is otherwise unused, and the lower
+                 * needs to know where the path ends to find the generic
+                 * HEAD (`crate::util::lock::Mutex<T>`'s head is Mutex,
+                 * not `crate`). */
                 let n = unsafe { self.mk(pm_jit_rsx_ast_kind::TYPE, line, b"gpath\0".as_ptr(), 5) };
                 unsafe {
+                    (*n).int_val = nsegs as i64;
                     self.set_kids(n, &kids);
                 }
                 return n;
