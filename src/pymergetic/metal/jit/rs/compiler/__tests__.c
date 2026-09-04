@@ -1515,6 +1515,170 @@ static int32_t test_atomic_runtime_linked(void) {
 #endif
 }
 
+/* --- Vec container plane: linked execution -------------------------------
+ * Audit items:
+ * (1) `Vec<T>` ascribes to a named rsx_vec_<elem> C type with a
+ *     (p, n, cap) slab struct and unit-static push/len helpers in the
+ *     preamble — the generated C must name them;
+ * (2) `Vec::new()` is the zero literal (empty container);
+ * (3) push/len/index/is_empty execute correctly through the kernel's
+ *     own TCC object + ELF link chain — the called fn answers from the
+ *     linked image.
+ * Ownership: the generated unit does not drop — the test's own fn
+ * frees via the emitted `_free` helper before returning. */
+
+static const char VEC_RT_SRC[] =
+    "#[repr(C)]\n"
+    "pub struct LiveExport { pub id: u32, pub kind: u32 }\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn rsx_vec_rt_main() -> u32 {\n"
+    "    let mut v: Vec<LiveExport> = Vec::new();\n"
+    "    if !v.is_empty() { return 0xDEAD0001; }\n"
+    "    v.push(LiveExport { id: 1, kind: 10 });\n"
+    "    v.push(LiveExport { id: 2, kind: 20 });\n"
+    "    v.push(LiveExport { id: 3, kind: 30 });\n"
+    "    if v.len() != 3 { return 0xDEAD0002; }\n"
+    "    if v.is_empty() { return 0xDEAD0003; }\n"
+    "    if v[0].id != 1 || v[1].id != 2 || v[2].kind != 30 {\n"
+    "        return 0xDEAD0004;\n"
+    "    }\n"
+    "    let mut sum: u32 = 0;\n"
+    "    let mut i: usize = 0;\n"
+    "    while i < v.len() {\n"
+    "        sum = sum + v[i].id * 100 + v[i].kind;\n"
+    "        i = i + 1;\n"
+    "    }\n"
+    "    v.free();\n"
+    "    if sum != 660 { return 0xDEAD0005; }\n"
+    "    0x600D600Du32\n"
+    "}\n";
+
+static int32_t test_vec_runtime_linked(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    void *backing = NULL, *obacking = NULL;
+    pm_util_mem_arena_t *arena = NULL, *oarena = NULL;
+    char *c = NULL;
+    size_t c_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    char oerr[256];
+    int32_t rc;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    pm_metal_build_unit_t unit;
+    pm_metal_build_artifact_t art;
+    uint8_t *objs[1];
+    size_t lens[1];
+    uint32_t (*l_main)(void);
+    uint32_t r;
+
+    /* --- (1) codegen shape: typedef + ops must be named --- */
+    backing = malloc(1u << 24);
+    if (!backing) return 220;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (!arena) { free(backing); return 221; }
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_rsx_compile(arena, VEC_RT_SRC,
+                                  strlen(VEC_RT_SRC),
+                                  &c, &c_len, err, sizeof(err));
+    if (rc != 0) {
+        fprintf(stderr, "vec_rt: compile refused: %s\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        return 222;
+    }
+    if (c == NULL || c_len < 200) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 223;
+    }
+    /* the typedef names the struct; push/len answer at the call sites */
+    if (strstr(c, "typedef struct { LiveExport *p; size_t n; size_t cap; } rsx_vec_") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 224;
+    }
+    if (strstr(c, "_push(&v, ") == NULL
+        || strstr(c, "_free(&v)") == NULL
+        || strstr(c, "(v).n") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 225;
+    }
+    /* (2) Vec::new() is the zero literal in the ascribed let */
+    if (strstr(c, "= {0};") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 226;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    arena = NULL;
+
+    /* --- (3) linked execution through the kernel's chain --- */
+    backing = malloc(1u << 24);
+    if (!backing) return 227;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (!arena) { free(backing); return 228; }
+    memset(err, 0, sizeof(err));
+    c = NULL; c_len = 0;
+    rc = pm_metal_jit_rsx_compile(arena, VEC_RT_SRC,
+                                  strlen(VEC_RT_SRC),
+                                  &c, &c_len, err, sizeof(err));
+    if (rc != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 229;
+    }
+    obacking = malloc(1u << 24);
+    if (!obacking) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 230;
+    }
+    oarena = pm_util_mem_arena_create(obacking, 1u << 24);
+    if (!oarena) {
+        pm_util_mem_arena_destroy(arena); free(backing); free(obacking);
+        return 231;
+    }
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_jit_c_object_compile(oarena, c, c_len, &obj, &obj_len,
+                                       oerr, sizeof(oerr));
+    if (rc != 0) {
+        if (strstr(oerr, "no native object output on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0; /* polite seat refusal — skip */
+        }
+        fprintf(stderr, "vec_rt: object compile failed: %s\n", oerr);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 232;
+    }
+    memset(&unit, 0, sizeof(unit));
+    snprintf(unit.fqn, sizeof(unit.fqn), "%s", "rsx.vec.rt");
+    objs[0] = obj;
+    lens[0] = obj_len;
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_build_link(oarena, &unit, objs, lens, 1, &art,
+                             oerr, sizeof(oerr));
+    if (rc != PM_METAL_BUILD_OK) {
+        if (strstr(oerr, "no ELF loader on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0; /* polite seat refusal — skip */
+        }
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 233;
+    }
+    l_main = (uint32_t (*)(void))
+        pm_metal_build_artifact_lookup(&art, "rsx_vec_rt_main");
+    if (l_main == NULL) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 234;
+    }
+    r = l_main();
+    pm_metal_build_artifact_destroy(&art);
+    pm_util_mem_arena_destroy(arena);
+    pm_util_mem_arena_destroy(oarena);
+    free(backing);
+    free(obacking);
+    /* push/len/index arithmetic all executed in the linked image — the
+     * fn reports each mismatch itself (0xDEAD0001..5) */
+    if (r != 0x600D600D) return 235;
+    return 0;
+#else
+    /* No native TCC object output / no ELF loader on this seat — skip */
+    return 0;
+#endif
+}
+
 /* --- tuple typedef collision ---------------------------------------------
  * The OLD naming schemes are NOT injective:
  *   join-only: `(Foo_, Bar)` and `(Foo, _Bar)` both sanitized to
@@ -2932,6 +3096,7 @@ static int32_t pm_metal_jit_rsx_tests(void) {
     rc = rsx_run_named("self_host_object", test_self_host_object); if (rc) return rc;
     rc = rsx_run_named("self_host_link", test_self_host_link);    if (rc) return rc;
     rc = rsx_run_named("atomic_runtime_linked", test_atomic_runtime_linked); if (rc) return rc;
+    rc = rsx_run_named("vec_runtime_linked", test_vec_runtime_linked); if (rc) return rc;
     rc = rsx_run_named("tuple_collision", test_tuple_collision);  if (rc) return rc;
     rc = rsx_run_named("opt_codec_names", test_opt_codec_names); if (rc) return rc;
     rc = rsx_run_named("opt_try_decodes_payload", test_opt_try_decodes_payload); if (rc) return rc;

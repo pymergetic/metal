@@ -77,6 +77,29 @@ impl Lower {
         if ret_len == 0 {
             return;
         }
+        /* Unit type pre-scan (bodies only — declare-only pass must not
+         * run it): intern every Vec container this fn names — params,
+         * ret, ascribed lets, casts — and flush their typedefs+ops at
+         * file scope BEFORE the signature. A typedef after the
+         * declarator (between it and the body's `{`) is a C parse
+         * error; the pre-scan makes the block land ahead of the
+         * definition. Idempotent by done[] marks. The opaque-hoist
+         * notes ctype makes for bare names stay body-time (after every
+         * opq_emit pass) exactly as before this pre-scan existed —
+         * running it in the prototype pass would note them ahead of
+         * pass D's hoist and mint bogus `typedef struct X * X *;`
+         * lines. Options and tuples ride the same walk harmlessly
+         * (their flushes are done-marked too). */
+        if declare_only == 0 && !body.is_null() {
+            let before = self.vecs.n;
+            self.pre_mode = true;
+            unsafe { self.body_intern_types(fnitem) };
+            self.pre_mode = false;
+            self.pre_pool_at = 0;
+            if self.vecs.n != before {
+                unsafe { self.vec_emit_rest() };
+            }
+        }
         /* #line + signature */
         self.out.puts(b"#line \0".as_ptr());
         unsafe { self.out.put_u32(line) };
@@ -672,6 +695,119 @@ impl Lower {
         self.out.putc(b'\n');
     }
 
+    /* Vec container typedefs + ops — one block per interned element
+     * spelling, emitted once (after the unit's own types, before the
+     * fns whose signatures name these). The ops are unit-static helpers
+     * against libc realloc/free: the generated unit is self-contained,
+     * the caller owns the container's lifetime exactly as the source's
+     * own free faces spell it (rsx lowers no drops). */
+    unsafe fn vec_emit_rest(&mut self) {
+        if self.vecs.n == 0 {
+            return;
+        }
+        /* the ops call realloc/free/abort: ISO C prototypes, else the
+         * implicit-int return truncates realloc's pointer (0x5555… ->
+         * low 32 bits) and the first store faults. <stdlib.h> is pulled
+         * in only with the container plane — container-free units keep
+         * their byte-identical output. */
+        self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
+        let mut s = 0usize;
+        while s < self.vecs.n {
+            if !unsafe { self.vecs.done[s] } {
+                let elem = self.vecs.elems[s].as_ptr();
+                let elen = self.vecs.elem_lens[s];
+                let tdn = self.arena_tmp();
+                let tdn_len = unsafe { VecTab::name_for(s, tdn, 96) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: vec typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                /* typedef struct { T *p; size_t n, cap; } rsx_vec_<elem>; */
+                self.out.puts(b"typedef struct { \0".as_ptr());
+                self.out.put(elem, elen);
+                self.out.puts(b" *p; size_t n; size_t cap; } \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                /* push: grow by doubling, refuse-on-OOM aborts the unit at
+                 * the C level (the generated C's contract is the source's
+                 * own: Rust Vec::push aborts the process on alloc failure,
+                 * the generated C matches with a hard exit). */
+                self.out.puts(b"static void *\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_grow(\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" *v, size_t need) {\n\0".as_ptr());
+                self.out.puts(b"    size_t c = v->cap ? v->cap * 2 : 8;\n\0".as_ptr());
+                self.out.puts(b"    while (c < need) { c *= 2; }\n\0".as_ptr());
+                self.out.puts(b"    void *q = realloc(v->p, c * sizeof(*v->p));\n\0".as_ptr());
+                self.out.puts(b"    if (!q) { abort(); }\n\0".as_ptr());
+                self.out.puts(b"    v->p = q; v->cap = c;\n\0".as_ptr());
+                self.out.puts(b"    return v;\n\0".as_ptr());
+                self.out.puts(b"}\n\0".as_ptr());
+                self.out.puts(b"static void \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_push(\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" *v, \0".as_ptr());
+                self.out.put(elem, elen);
+                self.out.puts(b" e) {\n\0".as_ptr());
+                self.out.puts(b"    if (v->n == v->cap) { \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_grow(v, v->n + 1); }\n\0".as_ptr());
+                self.out.puts(b"    v->p[v->n] = e; v->n++;\n\0".as_ptr());
+                self.out.puts(b"}\n\0".as_ptr());
+                self.out.puts(b"static void \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_free(\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" *v) {\n\0".as_ptr());
+                self.out.puts(b"    free(v->p); v->p = 0; v->n = 0; v->cap = 0;\n\0".as_ptr());
+                self.out.puts(b"}\n\0".as_ptr());
+                unsafe {
+                    self.vecs.done[s] = true;
+                }
+            }
+            s += 1;
+        }
+        self.out.putc(b'\n');
+    }
+
+    /* Recursive body pre-scan: render (and discard) every TYPE node's C
+     * type so the container/tuple/Option tables intern everything the
+     * body will name before its opening brace — the typedefs must sit at
+     * file scope. Runs under pre_mode: arena_tmp carves from the
+     * pre_pool instead of the arena, so the sweep costs no arena bytes
+     * for its scratch (see Lower's pre_pool doc). Recursion depth is
+     * bounded by the parser's own nesting (the AST is already built, so
+     * no new input blowup). */
+    unsafe fn body_intern_types(&mut self, e: *const pm_jit_rsx_ast_t) {
+        if e.is_null() || !self.ok {
+            return;
+        }
+        if unsafe { (*e).kind } == pm_jit_rsx_ast_kind::TYPE {
+            /* per-node pool reset: a render's outstanding tmps never
+             * span past its own return, so the next node's render can
+             * reuse every slot. out stays the caller's buffer — the
+             * pre-scan discards spellings anyway (it only interns). */
+            self.pre_pool_at = 0;
+            let sc = self.pre_pool.as_mut_ptr();
+            let _ = unsafe { self.ctype(e, sc, 160) };
+            return;
+        }
+        let kids = unsafe { (*e).kids };
+        let nk = unsafe { (*e).n_kids } as usize;
+        let mut i = 0usize;
+        while i < nk {
+            unsafe { self.body_intern_types(*kids.add(i)) };
+            if !self.ok {
+                return;
+            }
+            i += 1;
+        }
+    }
+
     /* Record a bare type name seen in a signature/static for the opaque hoist.
      * The hoist (opq_emit) re-checks syms/st/nt, so names this unit declares
      * are filtered out; what remains are opaque extern types that need
@@ -996,6 +1132,9 @@ impl Lower {
         /* remaining Option typedefs — primitive payloads need no naming
          * type; emit before the prototypes/fns that use them */
         unsafe { self.opt_emit_rest() };
+        /* Vec container typedefs + ops — before every fn whose signature
+         * or body names one */
+        unsafe { self.vec_emit_rest() };
         /* pass 0b: statics — after the type pass, their declarations name
          * struct/alias types; their initializers may also need complete
          * types for compound literals. */

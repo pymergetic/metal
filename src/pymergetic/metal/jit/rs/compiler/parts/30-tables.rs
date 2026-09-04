@@ -699,3 +699,143 @@ impl TraitTab {
         false
     }
 }
+
+/* Container plane (Vec/String/BTreeMap): distinct element-type
+ * spellings intern into named C types, emitted once per unit in the
+ * preamble — the same register/emit-once discipline as the Option and
+ * tuple tables. Vec<T> renders as
+ *   typedef struct { T *p; size_t n, cap; } rsx_vec_<elem>;
+ * with push/len/is_empty/free static ops in the preamble. */
+const VEC_CAP: usize = 16;
+const CT_SIG: usize = 64;
+
+struct VecTab {
+    /* canonical element C-type text (the same bytes the name mangles) */
+    elems: [[u8; CT_SIG]; VEC_CAP],
+    elem_lens: [usize; VEC_CAP],
+    n: usize,
+    done: [bool; VEC_CAP],
+}
+
+impl VecTab {
+    unsafe fn new() -> VecTab {
+        VecTab {
+            elems: [[0; CT_SIG]; VEC_CAP],
+            elem_lens: [0; VEC_CAP],
+            n: 0,
+            done: [false; VEC_CAP],
+        }
+    }
+
+    /* typedef name: rsx_vec_<row> — the row index of the interned element
+     * spelling. Numbered, not content-hexed: a content-hex name doubles at
+     * every composition level (a Vec of tuples of Vecs blows past any
+     * fixed Option/tuple payload cap), while numbering adds a constant
+     * ~10 bytes per level. Deterministic because interning order follows
+     * the unit's own deterministic collection order — the self-host
+     * fixed point (gen1 == gen2, byte for byte) gates exactly that. */
+    unsafe fn name_for(row: usize, out: *mut u8, cap: usize) -> usize {
+        let at = unsafe { bput(out, cap, 0, b"rsx_vec_\0".as_ptr(), 8) };
+        if at != 8 || cap <= 10 {
+            return 0;
+        }
+        /* decimal row, no leading zeros; row < VEC_CAP so <= 2 digits */
+        if row >= VEC_CAP {
+            return 0;
+        }
+        let d0 = b'0' + (row % 10) as u8;
+        let d1 = b'0' + (row / 10) as u8;
+        let at2 = if row >= 10 {
+            let digs: [u8; 2] = [d1, d0];
+            unsafe { bput(out, cap, at, digs.as_ptr(), 2) }
+        } else {
+            let digs: [u8; 1] = [d0];
+            unsafe { bput(out, cap, at, digs.as_ptr(), 1) }
+        };
+        if at2 >= cap {
+            return 0;
+        }
+        at2
+    }
+
+    /* find-or-create the row; VEC_CAP = full (caller refuses). */
+    unsafe fn intern(&mut self, elem: *const u8, elen: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.n {
+            if self.elem_lens[s] == elen {
+                let mut same = true;
+                let mut i = 0usize;
+                while i < elen {
+                    if self.elems[s][i] != unsafe { *elem.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        if self.n >= VEC_CAP || elen >= CT_SIG {
+            return VEC_CAP;
+        }
+        let mut i = 0usize;
+        while i < elen {
+            self.elems[self.n][i] = unsafe { *elem.add(i) };
+            i += 1;
+        }
+        self.elem_lens[self.n] = elen;
+        self.n += 1;
+        self.n - 1
+    }
+
+    unsafe fn find(&self, elem: *const u8, elen: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.n {
+            if self.elem_lens[s] == elen {
+                let mut same = true;
+                let mut i = 0usize;
+                while i < elen {
+                    if self.elems[s][i] != unsafe { *elem.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        VEC_CAP
+    }
+
+    /* reverse lookup — typedef name rsx_vec_<digits> -> row: the INDEX
+     * arm of expr_ctype maps `v[i]` on a Vec back to the element's C
+     * type from the rendered typedef name alone. */
+    unsafe fn find_by_name(&self, name: *const u8, nlen: usize) -> usize {
+        if nlen < 9 || nlen > 10 {
+            return VEC_CAP;
+        }
+        if !unsafe { z_eq(name, 8, b"rsx_vec_\0".as_ptr()) } {
+            return VEC_CAP;
+        }
+        let mut row: usize = 0;
+        let mut i = 8usize;
+        while i < nlen {
+            let ch = unsafe { *name.add(i) };
+            if ch < b'0' || ch > b'9' {
+                return VEC_CAP;
+            }
+            row = row * 10 + (ch - b'0') as usize;
+            i += 1;
+        }
+        if row >= self.n {
+            return VEC_CAP;
+        }
+        row
+    }
+}

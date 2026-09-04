@@ -7514,6 +7514,146 @@ impl TraitTab {
         false
     }
 }
+
+/* Container plane (Vec/String/BTreeMap): distinct element-type
+ * spellings intern into named C types, emitted once per unit in the
+ * preamble — the same register/emit-once discipline as the Option and
+ * tuple tables. Vec<T> renders as
+ *   typedef struct { T *p; size_t n, cap; } rsx_vec_<elem>;
+ * with push/len/is_empty/free static ops in the preamble. */
+const VEC_CAP: usize = 16;
+const CT_SIG: usize = 64;
+
+struct VecTab {
+    /* canonical element C-type text (the same bytes the name mangles) */
+    elems: [[u8; CT_SIG]; VEC_CAP],
+    elem_lens: [usize; VEC_CAP],
+    n: usize,
+    done: [bool; VEC_CAP],
+}
+
+impl VecTab {
+    unsafe fn new() -> VecTab {
+        VecTab {
+            elems: [[0; CT_SIG]; VEC_CAP],
+            elem_lens: [0; VEC_CAP],
+            n: 0,
+            done: [false; VEC_CAP],
+        }
+    }
+
+    /* typedef name: rsx_vec_<row> — the row index of the interned element
+     * spelling. Numbered, not content-hexed: a content-hex name doubles at
+     * every composition level (a Vec of tuples of Vecs blows past any
+     * fixed Option/tuple payload cap), while numbering adds a constant
+     * ~10 bytes per level. Deterministic because interning order follows
+     * the unit's own deterministic collection order — the self-host
+     * fixed point (gen1 == gen2, byte for byte) gates exactly that. */
+    unsafe fn name_for(row: usize, out: *mut u8, cap: usize) -> usize {
+        let at = unsafe { bput(out, cap, 0, b"rsx_vec_\0".as_ptr(), 8) };
+        if at != 8 || cap <= 10 {
+            return 0;
+        }
+        /* decimal row, no leading zeros; row < VEC_CAP so <= 2 digits */
+        if row >= VEC_CAP {
+            return 0;
+        }
+        let d0 = b'0' + (row % 10) as u8;
+        let d1 = b'0' + (row / 10) as u8;
+        let at2 = if row >= 10 {
+            let digs: [u8; 2] = [d1, d0];
+            unsafe { bput(out, cap, at, digs.as_ptr(), 2) }
+        } else {
+            let digs: [u8; 1] = [d0];
+            unsafe { bput(out, cap, at, digs.as_ptr(), 1) }
+        };
+        if at2 >= cap {
+            return 0;
+        }
+        at2
+    }
+
+    /* find-or-create the row; VEC_CAP = full (caller refuses). */
+    unsafe fn intern(&mut self, elem: *const u8, elen: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.n {
+            if self.elem_lens[s] == elen {
+                let mut same = true;
+                let mut i = 0usize;
+                while i < elen {
+                    if self.elems[s][i] != unsafe { *elem.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        if self.n >= VEC_CAP || elen >= CT_SIG {
+            return VEC_CAP;
+        }
+        let mut i = 0usize;
+        while i < elen {
+            self.elems[self.n][i] = unsafe { *elem.add(i) };
+            i += 1;
+        }
+        self.elem_lens[self.n] = elen;
+        self.n += 1;
+        self.n - 1
+    }
+
+    unsafe fn find(&self, elem: *const u8, elen: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.n {
+            if self.elem_lens[s] == elen {
+                let mut same = true;
+                let mut i = 0usize;
+                while i < elen {
+                    if self.elems[s][i] != unsafe { *elem.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        VEC_CAP
+    }
+
+    /* reverse lookup — typedef name rsx_vec_<digits> -> row: the INDEX
+     * arm of expr_ctype maps `v[i]` on a Vec back to the element's C
+     * type from the rendered typedef name alone. */
+    unsafe fn find_by_name(&self, name: *const u8, nlen: usize) -> usize {
+        if nlen < 9 || nlen > 10 {
+            return VEC_CAP;
+        }
+        if !unsafe { z_eq(name, 8, b"rsx_vec_\0".as_ptr()) } {
+            return VEC_CAP;
+        }
+        let mut row: usize = 0;
+        let mut i = 8usize;
+        while i < nlen {
+            let ch = unsafe { *name.add(i) };
+            if ch < b'0' || ch > b'9' {
+                return VEC_CAP;
+            }
+            row = row * 10 + (ch - b'0') as usize;
+            i += 1;
+        }
+        if row >= self.n {
+            return VEC_CAP;
+        }
+        row
+    }
+}
 /* One lowering context. */
 struct Lower {
     arena: *mut pm_util_mem_arena_t,
@@ -7547,6 +7687,19 @@ struct Lower {
      * failure also sets ok=false, so lowering aborts before the reused
      * bytes can matter — this only keeps the NULL deref off the OOM path. */
     oom_buf: [u8; 160],
+    /* the body pre-scan's scratch pool (body_intern_types): a fresh
+     * arena_tmp per TYPE node — and per nested generic arm inside one
+     * ctype render — burns arena bytes linear in the unit's
+     * ascription/cast count, and the compile shares its arena with
+     * everything else (ksweep's one backing for the whole tree). While
+     * pre_mode is on, arena_tmp carves 160-byte slices from this pool
+     * first (a ctype render holds at most a few outstanding tmps — the
+     * container arm's inner+typedef pair, the INDEX arm's base — so
+     * four slots cover; a deeper render falls back to the arena and
+     * stays correct, just not free). The pool resets per TYPE node. */
+    pre_mode: bool,
+    pre_pool: [u8; 640],
+    pre_pool_at: usize,
     /* refusals seen so far this pass — batching several into errbuf saves
      * the developer a rebuild per error; ok=false still stops the cascade
      * of follow-on diagnostics from a single fault. */
@@ -7635,6 +7788,9 @@ struct Lower {
     ti_trait: [[u8; 48]; TI_CAP],
     ti_trait_lens: [usize; TI_CAP],
     ti_n: usize,
+    /* Vec container plane: interned element spellings -> named C types,
+     * emitted once in the preamble. All-zero is a valid empty table. */
+    vecs: VecTab,
 }
 
 impl Lower {
@@ -8273,6 +8429,11 @@ impl Lower {
      * yields the shared oom_buf — lowering is already condemned (ok=false),
      * so no output built from it can ship. */
     unsafe fn arena_tmp(&mut self) -> *mut u8 {
+        if self.pre_mode && self.pre_pool_at + 160 <= 640 {
+            let p = self.pre_pool.as_mut_ptr().add(self.pre_pool_at);
+            self.pre_pool_at += 160;
+            return p;
+        }
         let p = unsafe { pm_util_mem_alloc(self.arena, 160) };
         if !p.is_null() {
             return p;
@@ -8466,6 +8627,41 @@ impl Lower {
                 *out.add(at) = 0;
             }
             return at;
+        }
+        /* Vec<T>: the container plane — intern the element's C type,
+         * mint the rsx_vec_<elem> typedef name (preamble emits the
+         * struct + ops once), render the name. */
+        if nk >= 2 && unsafe { z_eq(fname, flen, b"Vec\0".as_ptr()) } {
+            let inner = unsafe { *kids.add(1) };
+            let inner_buf = self.arena_tmp();
+            let n = unsafe { self.ctype(inner, inner_buf, 128) };
+            if n == 0 {
+                return 0;
+            }
+            let slot = unsafe { self.vecs.intern(inner_buf, n) };
+            if slot == VEC_CAP {
+                unsafe {
+                    self.err(b"vec type table overflow\0".as_ptr(), unsafe { (*ty).line });
+                }
+                return 0;
+            }
+            let tdn = self.arena_tmp();
+            let tdn_len = unsafe { VecTab::name_for(slot, tdn, 96) };
+            if tdn_len == 0 {
+                unsafe {
+                    self.err(b"internal: vec typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                }
+                return 0;
+            }
+            at = unsafe { bput(out, cap, at, tdn, tdn_len) };
+            unsafe {
+                if at < cap {
+                    *out.add(at) = 0;
+                } else if cap > 0 {
+                    *out.add(cap - 1) = 0;
+                }
+            }
+            return if at >= cap { 0 } else { at };
         }
         /* Any other generic path (`Vec<T>`, `Box<T>`, `HashMap<K, V>`, …)
          * must refuse, not render its leaf: the old fall-through silently
@@ -9880,6 +10076,24 @@ impl Lower {
             let bn = unsafe { self.expr_ctype(base, b_buf, 128, locals) };
             if bn == 0 {
                 return 0;
+            }
+            /* Vec base: the element type is the interned spelling the
+             * rsx_vec_<hex-of-elem> name encodes — reverse lookup. */
+            if bn > 8 && unsafe { z_eq(b_buf, 8, b"rsx_vec_\0".as_ptr()) } {
+                let vs = unsafe { self.vecs.find_by_name(b_buf, bn) };
+                if vs < VEC_CAP {
+                    let el = self.vecs.elem_lens[vs];
+                    if el >= cap {
+                        return 0;
+                    }
+                    let mut i = 0usize;
+                    while i < el {
+                        unsafe { *out.add(i) = self.vecs.elems[vs][i] };
+                        i += 1;
+                    }
+                    unsafe { *out.add(el) = 0 };
+                    return el;
+                }
             }
             /* pointer-to-array base (`Defer (*)[MAX_DEFER]` — `defers()[i]`):
              * the element type is what precedes the `(*)` declarator. */
@@ -14828,6 +15042,18 @@ impl Lower {
                             unsafe { self.emit_expr(lo, locals) };
                         }
                     } else {
+                        /* Vec base: the container indexes its heap slab —
+                         * `v.p[i]`. Gate on the rendered type (an interned
+                         * rsx_vec_<elem> typedef), not on the base's name. */
+                        let vct = self.arena_tmp();
+                        let vn = unsafe { self.expr_ctype(*kids.add(0), vct, 128, locals) };
+                        if vn > 8 && vn < 128 && unsafe { z_eq(vct, 8, b"rsx_vec_\0".as_ptr()) } {
+                            self.out.puts(b"(\0".as_ptr());
+                            unsafe { self.emit_expr(*kids.add(0), locals) };
+                            self.out.puts(b").p[\0".as_ptr());
+                            unsafe { self.emit_expr(idx, locals) };
+                            self.out.puts(b"]\0".as_ptr());
+                        } else {
                         /* pointer-to-array base (`&mut [T; N]` place): C
                          * `arr[i]` would index the pointer (stride = whole
                          * array) — deref to the array first: `(*arr)[i]`. */
@@ -14859,6 +15085,7 @@ impl Lower {
                         self.out.putc(b'[');
                         unsafe { self.emit_expr(idx, locals) };
                         self.out.putc(b']');
+                        }
                     }
                 }
                 self.out.putc(b')');
@@ -15527,6 +15754,27 @@ impl Lower {
                         return;
                     }
                 }
+                /* `Vec::new()` / `String::new()` / `BTreeMap::new()` — the
+                 * container ctors: a zero literal is the empty container
+                 * (p == 0, n == 0, cap == 0). The declaration context
+                 * (ascribed let / return / field init) supplies the type;
+                 * as a bare expression the `{0}` compound literal is not
+                 * typed, so the general zero-constructor path applies. */
+                if unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"new\0".as_ptr()) }
+                    && unsafe { (*args).n_kids } as usize == 0
+                    && cn >= 2
+                {
+                    let wrap = unsafe { *ck.add(cn - 2) };
+                    let wt = unsafe { (*wrap).text };
+                    let wl = unsafe { (*wrap).text_len };
+                    if unsafe { z_eq(wt, wl, b"Vec\0".as_ptr()) }
+                        || unsafe { z_eq(wt, wl, b"String\0".as_ptr()) }
+                        || unsafe { z_eq(wt, wl, b"BTreeMap\0".as_ptr()) }
+                    {
+                        self.out.puts(b"{0}\0".as_ptr());
+                        return;
+                    }
+                }
                 /* `Type::fn(..)` — associated fn: mangle to Type_fn. */
                 if cn >= 2 {
                     let head = unsafe { *ck.add(0) };
@@ -15849,6 +16097,51 @@ impl Lower {
             unsafe { self.emit_expr(recv, locals) };
             self.out.puts(b" == 0)\0".as_ptr());
             return;
+        }
+        /* Vec container ops — the receiver's rendered type names one of
+         * the interned rsx_vec_<elem> typedefs. Gate on that (the method
+         * name alone is not validation), then lower to the unit-static
+         * helpers the preamble emitted. push takes the element by value
+         * (v is &mut: pass the address); len/is_empty are reads. */
+        if (an == 1 && unsafe { z_eq(mname, mlen, b"push\0".as_ptr()) })
+            || (an == 0
+                && (unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) }
+                    || unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) }))
+            || (an == 0 && unsafe { z_eq(mname, mlen, b"free\0".as_ptr()) })
+        {
+            let rct = self.arena_tmp();
+            let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+            if rctl > 8 && rctl < 128 && unsafe { z_eq(rct, 8, b"rsx_vec_\0".as_ptr()) } {
+                /* the interned element spelling from the typedef name */
+                if an == 1 && unsafe { z_eq(mname, mlen, b"push\0".as_ptr()) } {
+                    self.out.put(rct, rctl);
+                    self.out.puts(b"_push(&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b", \0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                    self.out.puts(b")\0".as_ptr());
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) } {
+                    self.out.puts(b"(\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").n\0".as_ptr());
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) } {
+                    self.out.puts(b"((\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").n == 0)\0".as_ptr());
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"free\0".as_ptr()) } {
+                    self.out.put(rct, rctl);
+                    self.out.puts(b"_free(&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b")\0".as_ptr());
+                    return;
+                }
+            }
         }
         /* Atomic loads/stores/swap on an `AtomicU32` (C: `_Atomic uint32_t`)
          * — a plain u32 field of the receiver. The GNU statement expression
@@ -18346,6 +18639,29 @@ impl Lower {
         if ret_len == 0 {
             return;
         }
+        /* Unit type pre-scan (bodies only — declare-only pass must not
+         * run it): intern every Vec container this fn names — params,
+         * ret, ascribed lets, casts — and flush their typedefs+ops at
+         * file scope BEFORE the signature. A typedef after the
+         * declarator (between it and the body's `{`) is a C parse
+         * error; the pre-scan makes the block land ahead of the
+         * definition. Idempotent by done[] marks. The opaque-hoist
+         * notes ctype makes for bare names stay body-time (after every
+         * opq_emit pass) exactly as before this pre-scan existed —
+         * running it in the prototype pass would note them ahead of
+         * pass D's hoist and mint bogus `typedef struct X * X *;`
+         * lines. Options and tuples ride the same walk harmlessly
+         * (their flushes are done-marked too). */
+        if declare_only == 0 && !body.is_null() {
+            let before = self.vecs.n;
+            self.pre_mode = true;
+            unsafe { self.body_intern_types(fnitem) };
+            self.pre_mode = false;
+            self.pre_pool_at = 0;
+            if self.vecs.n != before {
+                unsafe { self.vec_emit_rest() };
+            }
+        }
         /* #line + signature */
         self.out.puts(b"#line \0".as_ptr());
         unsafe { self.out.put_u32(line) };
@@ -18941,6 +19257,119 @@ impl Lower {
         self.out.putc(b'\n');
     }
 
+    /* Vec container typedefs + ops — one block per interned element
+     * spelling, emitted once (after the unit's own types, before the
+     * fns whose signatures name these). The ops are unit-static helpers
+     * against libc realloc/free: the generated unit is self-contained,
+     * the caller owns the container's lifetime exactly as the source's
+     * own free faces spell it (rsx lowers no drops). */
+    unsafe fn vec_emit_rest(&mut self) {
+        if self.vecs.n == 0 {
+            return;
+        }
+        /* the ops call realloc/free/abort: ISO C prototypes, else the
+         * implicit-int return truncates realloc's pointer (0x5555… ->
+         * low 32 bits) and the first store faults. <stdlib.h> is pulled
+         * in only with the container plane — container-free units keep
+         * their byte-identical output. */
+        self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
+        let mut s = 0usize;
+        while s < self.vecs.n {
+            if !unsafe { self.vecs.done[s] } {
+                let elem = self.vecs.elems[s].as_ptr();
+                let elen = self.vecs.elem_lens[s];
+                let tdn = self.arena_tmp();
+                let tdn_len = unsafe { VecTab::name_for(s, tdn, 96) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: vec typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                /* typedef struct { T *p; size_t n, cap; } rsx_vec_<elem>; */
+                self.out.puts(b"typedef struct { \0".as_ptr());
+                self.out.put(elem, elen);
+                self.out.puts(b" *p; size_t n; size_t cap; } \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                /* push: grow by doubling, refuse-on-OOM aborts the unit at
+                 * the C level (the generated C's contract is the source's
+                 * own: Rust Vec::push aborts the process on alloc failure,
+                 * the generated C matches with a hard exit). */
+                self.out.puts(b"static void *\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_grow(\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" *v, size_t need) {\n\0".as_ptr());
+                self.out.puts(b"    size_t c = v->cap ? v->cap * 2 : 8;\n\0".as_ptr());
+                self.out.puts(b"    while (c < need) { c *= 2; }\n\0".as_ptr());
+                self.out.puts(b"    void *q = realloc(v->p, c * sizeof(*v->p));\n\0".as_ptr());
+                self.out.puts(b"    if (!q) { abort(); }\n\0".as_ptr());
+                self.out.puts(b"    v->p = q; v->cap = c;\n\0".as_ptr());
+                self.out.puts(b"    return v;\n\0".as_ptr());
+                self.out.puts(b"}\n\0".as_ptr());
+                self.out.puts(b"static void \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_push(\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" *v, \0".as_ptr());
+                self.out.put(elem, elen);
+                self.out.puts(b" e) {\n\0".as_ptr());
+                self.out.puts(b"    if (v->n == v->cap) { \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_grow(v, v->n + 1); }\n\0".as_ptr());
+                self.out.puts(b"    v->p[v->n] = e; v->n++;\n\0".as_ptr());
+                self.out.puts(b"}\n\0".as_ptr());
+                self.out.puts(b"static void \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_free(\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" *v) {\n\0".as_ptr());
+                self.out.puts(b"    free(v->p); v->p = 0; v->n = 0; v->cap = 0;\n\0".as_ptr());
+                self.out.puts(b"}\n\0".as_ptr());
+                unsafe {
+                    self.vecs.done[s] = true;
+                }
+            }
+            s += 1;
+        }
+        self.out.putc(b'\n');
+    }
+
+    /* Recursive body pre-scan: render (and discard) every TYPE node's C
+     * type so the container/tuple/Option tables intern everything the
+     * body will name before its opening brace — the typedefs must sit at
+     * file scope. Runs under pre_mode: arena_tmp carves from the
+     * pre_pool instead of the arena, so the sweep costs no arena bytes
+     * for its scratch (see Lower's pre_pool doc). Recursion depth is
+     * bounded by the parser's own nesting (the AST is already built, so
+     * no new input blowup). */
+    unsafe fn body_intern_types(&mut self, e: *const pm_jit_rsx_ast_t) {
+        if e.is_null() || !self.ok {
+            return;
+        }
+        if unsafe { (*e).kind } == pm_jit_rsx_ast_kind::TYPE {
+            /* per-node pool reset: a render's outstanding tmps never
+             * span past its own return, so the next node's render can
+             * reuse every slot. out stays the caller's buffer — the
+             * pre-scan discards spellings anyway (it only interns). */
+            self.pre_pool_at = 0;
+            let sc = self.pre_pool.as_mut_ptr();
+            let _ = unsafe { self.ctype(e, sc, 160) };
+            return;
+        }
+        let kids = unsafe { (*e).kids };
+        let nk = unsafe { (*e).n_kids } as usize;
+        let mut i = 0usize;
+        while i < nk {
+            unsafe { self.body_intern_types(*kids.add(i)) };
+            if !self.ok {
+                return;
+            }
+            i += 1;
+        }
+    }
+
     /* Record a bare type name seen in a signature/static for the opaque hoist.
      * The hoist (opq_emit) re-checks syms/st/nt, so names this unit declares
      * are filtered out; what remains are opaque extern types that need
@@ -19265,6 +19694,9 @@ impl Lower {
         /* remaining Option typedefs — primitive payloads need no naming
          * type; emit before the prototypes/fns that use them */
         unsafe { self.opt_emit_rest() };
+        /* Vec container typedefs + ops — before every fn whose signature
+         * or body names one */
+        unsafe { self.vec_emit_rest() };
         /* pass 0b: statics — after the type pass, their declarations name
          * struct/alias types; their initializers may also need complete
          * types for compound literals. */

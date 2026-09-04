@@ -31,6 +31,19 @@ struct Lower {
      * failure also sets ok=false, so lowering aborts before the reused
      * bytes can matter — this only keeps the NULL deref off the OOM path. */
     oom_buf: [u8; 160],
+    /* the body pre-scan's scratch pool (body_intern_types): a fresh
+     * arena_tmp per TYPE node — and per nested generic arm inside one
+     * ctype render — burns arena bytes linear in the unit's
+     * ascription/cast count, and the compile shares its arena with
+     * everything else (ksweep's one backing for the whole tree). While
+     * pre_mode is on, arena_tmp carves 160-byte slices from this pool
+     * first (a ctype render holds at most a few outstanding tmps — the
+     * container arm's inner+typedef pair, the INDEX arm's base — so
+     * four slots cover; a deeper render falls back to the arena and
+     * stays correct, just not free). The pool resets per TYPE node. */
+    pre_mode: bool,
+    pre_pool: [u8; 640],
+    pre_pool_at: usize,
     /* refusals seen so far this pass — batching several into errbuf saves
      * the developer a rebuild per error; ok=false still stops the cascade
      * of follow-on diagnostics from a single fault. */
@@ -119,6 +132,9 @@ struct Lower {
     ti_trait: [[u8; 48]; TI_CAP],
     ti_trait_lens: [usize; TI_CAP],
     ti_n: usize,
+    /* Vec container plane: interned element spellings -> named C types,
+     * emitted once in the preamble. All-zero is a valid empty table. */
+    vecs: VecTab,
 }
 
 impl Lower {
@@ -757,6 +773,11 @@ impl Lower {
      * yields the shared oom_buf — lowering is already condemned (ok=false),
      * so no output built from it can ship. */
     unsafe fn arena_tmp(&mut self) -> *mut u8 {
+        if self.pre_mode && self.pre_pool_at + 160 <= 640 {
+            let p = self.pre_pool.as_mut_ptr().add(self.pre_pool_at);
+            self.pre_pool_at += 160;
+            return p;
+        }
         let p = unsafe { pm_util_mem_alloc(self.arena, 160) };
         if !p.is_null() {
             return p;
@@ -950,6 +971,41 @@ impl Lower {
                 *out.add(at) = 0;
             }
             return at;
+        }
+        /* Vec<T>: the container plane — intern the element's C type,
+         * mint the rsx_vec_<elem> typedef name (preamble emits the
+         * struct + ops once), render the name. */
+        if nk >= 2 && unsafe { z_eq(fname, flen, b"Vec\0".as_ptr()) } {
+            let inner = unsafe { *kids.add(1) };
+            let inner_buf = self.arena_tmp();
+            let n = unsafe { self.ctype(inner, inner_buf, 128) };
+            if n == 0 {
+                return 0;
+            }
+            let slot = unsafe { self.vecs.intern(inner_buf, n) };
+            if slot == VEC_CAP {
+                unsafe {
+                    self.err(b"vec type table overflow\0".as_ptr(), unsafe { (*ty).line });
+                }
+                return 0;
+            }
+            let tdn = self.arena_tmp();
+            let tdn_len = unsafe { VecTab::name_for(slot, tdn, 96) };
+            if tdn_len == 0 {
+                unsafe {
+                    self.err(b"internal: vec typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                }
+                return 0;
+            }
+            at = unsafe { bput(out, cap, at, tdn, tdn_len) };
+            unsafe {
+                if at < cap {
+                    *out.add(at) = 0;
+                } else if cap > 0 {
+                    *out.add(cap - 1) = 0;
+                }
+            }
+            return if at >= cap { 0 } else { at };
         }
         /* Any other generic path (`Vec<T>`, `Box<T>`, `HashMap<K, V>`, …)
          * must refuse, not render its leaf: the old fall-through silently
@@ -2364,6 +2420,24 @@ impl Lower {
             let bn = unsafe { self.expr_ctype(base, b_buf, 128, locals) };
             if bn == 0 {
                 return 0;
+            }
+            /* Vec base: the element type is the interned spelling the
+             * rsx_vec_<hex-of-elem> name encodes — reverse lookup. */
+            if bn > 8 && unsafe { z_eq(b_buf, 8, b"rsx_vec_\0".as_ptr()) } {
+                let vs = unsafe { self.vecs.find_by_name(b_buf, bn) };
+                if vs < VEC_CAP {
+                    let el = self.vecs.elem_lens[vs];
+                    if el >= cap {
+                        return 0;
+                    }
+                    let mut i = 0usize;
+                    while i < el {
+                        unsafe { *out.add(i) = self.vecs.elems[vs][i] };
+                        i += 1;
+                    }
+                    unsafe { *out.add(el) = 0 };
+                    return el;
+                }
             }
             /* pointer-to-array base (`Defer (*)[MAX_DEFER]` — `defers()[i]`):
              * the element type is what precedes the `(*)` declarator. */

@@ -1189,6 +1189,18 @@ impl Lower {
                             unsafe { self.emit_expr(lo, locals) };
                         }
                     } else {
+                        /* Vec base: the container indexes its heap slab —
+                         * `v.p[i]`. Gate on the rendered type (an interned
+                         * rsx_vec_<elem> typedef), not on the base's name. */
+                        let vct = self.arena_tmp();
+                        let vn = unsafe { self.expr_ctype(*kids.add(0), vct, 128, locals) };
+                        if vn > 8 && vn < 128 && unsafe { z_eq(vct, 8, b"rsx_vec_\0".as_ptr()) } {
+                            self.out.puts(b"(\0".as_ptr());
+                            unsafe { self.emit_expr(*kids.add(0), locals) };
+                            self.out.puts(b").p[\0".as_ptr());
+                            unsafe { self.emit_expr(idx, locals) };
+                            self.out.puts(b"]\0".as_ptr());
+                        } else {
                         /* pointer-to-array base (`&mut [T; N]` place): C
                          * `arr[i]` would index the pointer (stride = whole
                          * array) — deref to the array first: `(*arr)[i]`. */
@@ -1220,6 +1232,7 @@ impl Lower {
                         self.out.putc(b'[');
                         unsafe { self.emit_expr(idx, locals) };
                         self.out.putc(b']');
+                        }
                     }
                 }
                 self.out.putc(b')');
@@ -1888,6 +1901,27 @@ impl Lower {
                         return;
                     }
                 }
+                /* `Vec::new()` / `String::new()` / `BTreeMap::new()` — the
+                 * container ctors: a zero literal is the empty container
+                 * (p == 0, n == 0, cap == 0). The declaration context
+                 * (ascribed let / return / field init) supplies the type;
+                 * as a bare expression the `{0}` compound literal is not
+                 * typed, so the general zero-constructor path applies. */
+                if unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"new\0".as_ptr()) }
+                    && unsafe { (*args).n_kids } as usize == 0
+                    && cn >= 2
+                {
+                    let wrap = unsafe { *ck.add(cn - 2) };
+                    let wt = unsafe { (*wrap).text };
+                    let wl = unsafe { (*wrap).text_len };
+                    if unsafe { z_eq(wt, wl, b"Vec\0".as_ptr()) }
+                        || unsafe { z_eq(wt, wl, b"String\0".as_ptr()) }
+                        || unsafe { z_eq(wt, wl, b"BTreeMap\0".as_ptr()) }
+                    {
+                        self.out.puts(b"{0}\0".as_ptr());
+                        return;
+                    }
+                }
                 /* `Type::fn(..)` — associated fn: mangle to Type_fn. */
                 if cn >= 2 {
                     let head = unsafe { *ck.add(0) };
@@ -2210,6 +2244,51 @@ impl Lower {
             unsafe { self.emit_expr(recv, locals) };
             self.out.puts(b" == 0)\0".as_ptr());
             return;
+        }
+        /* Vec container ops — the receiver's rendered type names one of
+         * the interned rsx_vec_<elem> typedefs. Gate on that (the method
+         * name alone is not validation), then lower to the unit-static
+         * helpers the preamble emitted. push takes the element by value
+         * (v is &mut: pass the address); len/is_empty are reads. */
+        if (an == 1 && unsafe { z_eq(mname, mlen, b"push\0".as_ptr()) })
+            || (an == 0
+                && (unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) }
+                    || unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) }))
+            || (an == 0 && unsafe { z_eq(mname, mlen, b"free\0".as_ptr()) })
+        {
+            let rct = self.arena_tmp();
+            let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+            if rctl > 8 && rctl < 128 && unsafe { z_eq(rct, 8, b"rsx_vec_\0".as_ptr()) } {
+                /* the interned element spelling from the typedef name */
+                if an == 1 && unsafe { z_eq(mname, mlen, b"push\0".as_ptr()) } {
+                    self.out.put(rct, rctl);
+                    self.out.puts(b"_push(&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b", \0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                    self.out.puts(b")\0".as_ptr());
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) } {
+                    self.out.puts(b"(\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").n\0".as_ptr());
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) } {
+                    self.out.puts(b"((\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").n == 0)\0".as_ptr());
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"free\0".as_ptr()) } {
+                    self.out.put(rct, rctl);
+                    self.out.puts(b"_free(&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b")\0".as_ptr());
+                    return;
+                }
+            }
         }
         /* Atomic loads/stores/swap on an `AtomicU32` (C: `_Atomic uint32_t`)
          * — a plain u32 field of the receiver. The GNU statement expression
