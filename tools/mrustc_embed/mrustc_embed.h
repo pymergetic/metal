@@ -25,6 +25,13 @@ int pm_metal_jit_rs_mrustc_compile(
     const char *rs_source, size_t rs_len,
     char *c_out, size_t c_out_cap, size_t *c_out_len);
 
+/* Same compile with an explicit edition: 2015 keeps the historical guest
+ * route byte-identical, 2024 is the kernel's card language (unsafe extern
+ * blocks, `crate::` paths). Edition numbers mirror rustc's. */
+int pm_metal_jit_rs_mrustc_compile_edition(
+    const char *rs_source, size_t rs_len, int edition,
+    char *c_out, size_t c_out_cap, size_t *c_out_len);
+
 #ifdef __cplusplus
 }
 #endif

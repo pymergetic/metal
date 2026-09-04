@@ -44,6 +44,9 @@ typedef struct {
 int pm_metal_jit_rs_mrustc_compile(
     const char *rs_source, size_t rs_len,
     char *c_out, size_t c_out_cap, size_t *c_out_len);
+int pm_metal_jit_rs_mrustc_compile_edition(
+    const char *rs_source, size_t rs_len, int edition,
+    char *c_out, size_t c_out_cap, size_t *c_out_len);
 
 static int pm_metal_jit_rs_mrustc_to_c(
     const char *rs_source, size_t rs_len,
@@ -52,12 +55,37 @@ static int pm_metal_jit_rs_mrustc_to_c(
     (void)errno;
     return pm_metal_jit_rs_mrustc_compile(rs_source, rs_len, c_out, c_out_cap, c_out_len);
 }
+
+/* Edition-selected compile: 2015 keeps the historical wasm-guest route
+ * byte-identical; 2024 is the kernel's card language (unsafe extern blocks,
+ * crate:: paths) — the build card's capability fallback for impl="rs" units
+ * whose Rust is beyond rsx's subset rides this. */
+int pm_metal_jit_rs_mrustc_to_c_edition(
+    const char *rs_source, size_t rs_len, int edition,
+    char *c_out, size_t c_out_cap, size_t *c_out_len)
+{
+    (void)errno;
+    return pm_metal_jit_rs_mrustc_compile_edition(rs_source, rs_len, edition,
+        c_out, c_out_cap, c_out_len);
+}
 #else
 static int pm_metal_jit_rs_mrustc_to_c(
     const char *rs_source, size_t rs_len,
     char *c_out, size_t c_out_cap, size_t *c_out_len)
 {
     (void)rs_source; (void)rs_len; (void)c_out; (void)c_out_cap; (void)c_out_len;
+    return -1;
+}
+
+/* Stub twin of the edition entry: seats without the embedded mrustc (the
+ * firmware trees) refuse loudly — the fallback caller must preserve rsx's
+ * refusal when this returns -1, never paper over it. */
+int pm_metal_jit_rs_mrustc_to_c_edition(
+    const char *rs_source, size_t rs_len, int edition,
+    char *c_out, size_t c_out_cap, size_t *c_out_len)
+{
+    (void)rs_source; (void)rs_len; (void)edition;
+    (void)c_out; (void)c_out_cap; (void)c_out_len;
     return -1;
 }
 #endif /* PM_HAS_MRUSTC */

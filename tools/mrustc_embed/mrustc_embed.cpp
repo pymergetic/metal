@@ -83,6 +83,13 @@ struct CoutRedirect {
 
 int pm_metal_jit_rs_mrustc_compile(
     const char *rs_source, size_t rs_len,
+    char *c_out, size_t c_out_cap, size_t *c_out_len) {
+    return pm_metal_jit_rs_mrustc_compile_edition(
+        rs_source, rs_len, 2015, c_out, c_out_cap, c_out_len);
+}
+
+int pm_metal_jit_rs_mrustc_compile_edition(
+    const char *rs_source, size_t rs_len, int edition,
     char *c_out, size_t c_out_cap, size_t *c_out_len)
 {
     if (!rs_source || rs_len == 0 || !c_out || !c_out_len || c_out_cap == 0) {
@@ -125,7 +132,17 @@ int pm_metal_jit_rs_mrustc_compile(
             AST::g_crate_load_dirs.push_back(libdir);
         }
 
-        AST::Crate crate = Parse_Crate(rs_file, AST::Edition::Rust2015);
+        // Edition from the caller: 2015 = the historical guest route
+        // (byte-identical), 2024 = the card language. Unknown values refuse.
+        AST::Edition ed = AST::Edition::Rust2015;
+        switch (edition) {
+        case 2015: ed = AST::Edition::Rust2015; break;
+        case 2018: ed = AST::Edition::Rust2018; break;
+        case 2021: ed = AST::Edition::Rust2021; break;
+        case 2024: ed = AST::Edition::Rust2024; break;
+        default: rc = -1; goto cleanup; break;
+        }
+        AST::Crate crate = Parse_Crate(rs_file, ed);
 
         AST::g_crate_overrides.clear();
         crate.load_externs();
@@ -221,6 +238,7 @@ int pm_metal_jit_rs_mrustc_compile(
         rc = -1;
     }
 
+cleanup:
     unlink(rs_file.c_str());
     return rc;
 }
