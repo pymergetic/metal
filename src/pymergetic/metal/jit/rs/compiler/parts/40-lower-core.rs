@@ -2020,10 +2020,21 @@ impl Lower {
                     let flen = unsafe { (*fname).text_len };
                     if flen > 0 && !ftxt.is_null() && unsafe { *ftxt } >= b'0' && unsafe { *ftxt } <= b'9' {
                         let bb = self.arena_tmp();
-                        let bl = unsafe { self.expr_ctype(base, bb, 128, locals) };
-                        if bl >= 10 && unsafe { z_eq(bb, 10, b"rsx_tuple_\0".as_ptr()) } {
+                        let bl_raw = unsafe { self.expr_ctype(base, bb, 128, locals) };
+                        /* `*const (..)` derefs register the pointee WITH the
+                         * `const ` qualifier — skip it so the tuple prefix
+                         * test sees rsx_tuple_, never `const rsx_tuple_`
+                         * (which would fall through and type the field as
+                         * the whole tuple). */
+                        let mut bb2 = bb;
+                        let mut bl = bl_raw;
+                        if bl >= 6 && unsafe { z_eq(bb, 6, b"const \0".as_ptr()) } {
+                            bb2 = unsafe { bb.add(6) };
+                            bl -= 6;
+                        }
+                        if bl >= 10 && unsafe { z_eq(bb2, 10, b"rsx_tuple_\0".as_ptr()) } {
                             let fi = (unsafe { *ftxt }) - b'0';
-                            let s = unsafe { self.tup_find(bb, bl) };
+                            let s = unsafe { self.tup_find(bb2, bl) };
                             if s >= TUP_CAP || (fi as usize) >= self.tup_counts[s] {
                                 return 0;
                             }
@@ -2350,7 +2361,8 @@ impl Lower {
                         {
                             let ak = unsafe { (*arm).kids };
                             let pat = unsafe { *ak.add(0) };
-                            let mut br = unsafe { *ak.add(1) };
+                            /* arm kids: [pat, body] or [pat, guard, body] */
+                            let mut br = unsafe { *ak.add(unsafe { (*arm).n_kids } as usize - 1) };
                             let mut bk = unsafe { (*br).kind };
                             while bk == pm_jit_rsx_ast_kind::EXPR_STMT
                                 && unsafe { (*br).n_kids } >= 1

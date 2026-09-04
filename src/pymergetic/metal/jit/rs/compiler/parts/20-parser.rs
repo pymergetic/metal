@@ -251,6 +251,153 @@ impl Kids {
     }
 }
 
+/* ---- cfg evaluation (`#[cfg(..)]` attrs against the active feature set) ----
+ *
+ * The ATTR text is the attribute's tokens joined with single spaces, e.g.
+ * `# cfg ( feature = "gen" )`. Predicates: feature = "x", not(..), all(..),
+ * any(..), test. Unknown predicates evaluate FALSE (never enable code the
+ * subset cannot see). */
+
+/* feature "x" active? feats: NUL-terminated comma list (no spaces). */
+unsafe fn cfg_feat_active(feats: *const u8, name: *const u8, name_len: usize) -> bool {
+    if feats.is_null() || name_len == 0 {
+        return false;
+    }
+    let mut p = feats;
+    unsafe {
+        while *p != 0 {
+            let seg = p;
+            while *p != 0 && *p != b',' {
+                p = p.add(1);
+            }
+            let seg_len = p as usize - seg as usize;
+            if seg_len == name_len {
+                let mut i = 0usize;
+                let mut eq = true;
+                while i < seg_len {
+                    if *seg.add(i) != *name.add(i) {
+                        eq = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if eq {
+                    return true;
+                }
+            }
+            if *p == b',' {
+                p = p.add(1);
+            }
+        }
+    }
+    false
+}
+
+/* Evaluate the cfg predicate at s[..len) — COMPACT form (no spaces):
+ * feature="x", not(..), all(..), any(..), test.
+ * Returns: 1 true, 0 false, -1 malformed (treated as false by the caller). */
+unsafe fn cfg_eval(s: *const u8, len: usize, feats: *const u8) -> i32 {
+    unsafe {
+        if len >= 8 && z_eq(s, 7, b"feature\0".as_ptr()) && *s.add(7) == b'=' {
+            /* feature="x" — the value is the quoted run right after '=' */
+            let mut i = 8usize;
+            while i < len && *s.add(i) != b'"' {
+                i += 1;
+            }
+            if i >= len {
+                return -1;
+            }
+            i += 1;
+            let v = s.add(i);
+            while i < len && *s.add(i) != b'"' {
+                i += 1;
+            }
+            if i >= len {
+                return -1;
+            }
+            return cfg_feat_active(feats, v, i - (v as usize - s as usize)) as i32;
+        }
+        if len >= 4 && z_eq(s, 3, b"not\0".as_ptr()) && *s.add(3) == b'(' {
+            /* not(inner) — the inner is s[4..len-1] (caller trims the
+             * matching ')' by scanning, so len-1 is that ')' here). */
+            let mut depth = 1i32;
+            let mut q = 4usize;
+            let mut close = len;
+            while q < len {
+                if *s.add(q) == b'(' {
+                    depth += 1;
+                } else if *s.add(q) == b')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = q;
+                        break;
+                    }
+                }
+                q += 1;
+            }
+            if close <= 4 {
+                return -1;
+            }
+            let v = cfg_eval(s.add(4), close - 4, feats);
+            return (v <= 0) as i32;
+        }
+        /* all(..) / any(..) — segments split at depth-1 `,`; the closing
+         * `)` is NOT part of a segment. The last segment ends at the
+         * `)` that returns depth to 0 — evaluate it before returning
+         * (the pre-fix loop broke on depth==0 without folding the
+         * trailing segment, so any(a, b) never saw b). */
+        if (len >= 4 && z_eq(s, 3, b"all\0".as_ptr()) && *s.add(3) == b'(')
+            || (len >= 4 && z_eq(s, 3, b"any\0".as_ptr()) && *s.add(3) == b'(')
+        {
+            let is_all = unsafe { z_eq(s, 3, b"all\0".as_ptr()) };
+            let mut i = 4usize;
+            let mut depth = 1i32;
+            let mut acc: i32 = if is_all { 1 } else { 0 };
+            while i < len {
+                let st = i;
+                let mut closed = false;
+                while i < len {
+                    if *s.add(i) == b'(' {
+                        depth += 1;
+                    } else if *s.add(i) == b')' {
+                        depth -= 1;
+                        if depth == 0 {
+                            closed = true;
+                            break;
+                        }
+                    } else if *s.add(i) == b',' && depth == 1 {
+                        break;
+                    }
+                    i += 1;
+                }
+                if i > st {
+                    let v = cfg_eval(s.add(st), i - st, feats);
+                    if is_all {
+                        if v <= 0 {
+                            acc = 0;
+                        }
+                    } else if v > 0 {
+                        acc = 1;
+                    }
+                }
+                if closed {
+                    return acc;
+                }
+                if i < len && *s.add(i) == b',' {
+                    i += 1;
+                } else {
+                    return acc;
+                }
+            }
+            return acc;
+        }
+        if len == 4 && z_eq(s, 4, b"test\0".as_ptr()) {
+            return 0;
+        }
+        -1
+    }
+}
+
 struct Parser {
     arena: *mut pm_util_mem_arena_t,
     toks: *const pm_jit_rsx_token_t,
@@ -261,10 +408,18 @@ struct Parser {
     /* true while parsing a `while`/`if`/`for` condition: a `{` after a path
      * is the body block, never a struct literal. */
     cond_ctx: bool,
+    /* true while parsing an `if` condition: a top-level `&&` is let-chain
+     * glue (Rust 2024 `if a && let Some(x) = e`), not a binary operator.
+     * Cleared inside `(` — parentheses bind `&&` as an operator again. */
+    chain_ctx: bool,
     /* `>>` (SHR) closes up to two open generic lists. When a generic list
      * eats a SHR token as its own `>`, the second close belongs to the
      * enclosing list: this counter is how the enclosing loop learns. */
     shr_closes: u32,
+    /* Active cargo features for cfg evaluation (NUL-terminated comma
+     * list, NULL = none): `#[cfg(feature = "x")]` items strip unless
+     * "x" is listed. `test` is never active. */
+    feats: *const u8,
 }
 
 impl Parser {
@@ -466,6 +621,13 @@ impl Parser {
 
     unsafe fn parse_type(&mut self) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
+        /* `dyn Trait` trait-object sugar: the subset spells the object
+         * type by the trait's leaf name (a `&mut dyn GenSink` is the
+         * trait-name reference) — skip the `dyn` and parse the path. */
+        if unsafe { self.is_kw(self.at, b"dyn\0".as_ptr()) } {
+            self.at += 1;
+            return unsafe { self.parse_type() };
+        }
         let k = unsafe { self.kind(self.at) };
         /* fn-ptr forms first: `fn(...)`, `unsafe extern "C" fn(...)`. */
         if k == pm_jit_rsx_tok_kind::IDENT {
@@ -919,7 +1081,15 @@ impl Parser {
 
     unsafe fn parse_pattern(&mut self) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
-        let k = unsafe { self.kind(self.at) };
+        let mut k = unsafe { self.kind(self.at) };
+        /* `mut ident` pattern binding (match arm / Some(mut x) inner):
+         * mutability is a source-side annotation only — the lower's
+         * bind decls are C locals (already assignable) — so skip the
+         * `mut` and parse the binding itself. */
+        if unsafe { self.is_kw(self.at, b"mut\0".as_ptr()) } {
+            self.at += 1;
+            k = unsafe { self.kind(self.at) };
+        }
         /* Tuple pattern `(a, &b)`, `(i, &b)`, `Some((x, y))`'s inner — a
          * TUPLE node of sub-patterns. The lower destructures it against
          * the scrutinee's tuple type (let/match) or the enumerate pair
@@ -1250,6 +1420,15 @@ impl Parser {
                 return lhs;
             }
             if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::ANDAND {
+                return lhs;
+            }
+            /* let-chain glue: in an `if` condition a top-level `&&` whose
+             * right side is a `let` joins chain segments (`a && let
+             * Some(x) = e && let ..`); the if parser consumes it, never the
+             * expression grammar. `&&` before a plain operand stays a
+             * binary operator — existing `if a && b` output is unchanged
+             * byte for byte. */
+            if self.chain_ctx && unsafe { self.is_kw(self.at + 1, b"let\0".as_ptr()) } {
                 return lhs;
             }
             if !unsafe { self.op_continues(lhs) } {
@@ -1718,7 +1897,27 @@ impl Parser {
                         self.at += 2;
                         let mut depth = 1i32;
                         while self.at < self.n_toks && depth > 0 {
-                            if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::PUNCT {
+                            let k = unsafe { self.kind(self.at) };
+                            /* `>>`/`<<` lex as single tokens but open or
+                             * close two generic lists each. */
+                            if k == pm_jit_rsx_tok_kind::SHL {
+                                depth += 2;
+                                self.at += 1;
+                                continue;
+                            }
+                            if k == pm_jit_rsx_tok_kind::SHR {
+                                depth -= 2;
+                                if depth <= 0 {
+                                    /* leave `at` ON the SHR: the shared
+                                     * tail below eats it as the final
+                                     * closing token. */
+                                    depth = 0;
+                                    break;
+                                }
+                                self.at += 1;
+                                continue;
+                            }
+                            if k == pm_jit_rsx_tok_kind::PUNCT {
                                 if unsafe { self.is_punct(self.at, b'<') } {
                                     depth += 1;
                                 } else if unsafe { self.is_punct(self.at, b'>') } {
@@ -1961,7 +2160,12 @@ impl Parser {
                     self.at += 1;
                     return unsafe { self.mk(pm_jit_rsx_ast_kind::TUPLE, line, b"()\0".as_ptr(), 2) };
                 }
+                /* parentheses bind `&&` as the binary operator again —
+                 * `if (a && b) && let ..` is one expr segment + a chain. */
+                let save_chain = self.chain_ctx;
+                self.chain_ctx = false;
                 let e = unsafe { self.parse_expr() };
+                self.chain_ctx = save_chain;
                 if unsafe { self.is_punct(self.at, b',') } {
                     /* tuple expression */
                     let mut kids = Kids::new();
@@ -2363,6 +2567,78 @@ impl Parser {
                         self.at += 1;
                     }
                 }
+                /* tuple-pattern bind `|(a, b)|` — one PARAM node
+                 * (text "tup") whose kids are the element PARAMs, so
+                 * closure builtins destructure element binds the same
+                 * way let-tuples do. */
+                if unsafe { self.is_punct(self.at, b'(') } {
+                    self.at += 1;
+                    let mut tk = Kids::new();
+                    loop {
+                        if !self.ok {
+                            return core::ptr::null_mut();
+                        }
+                        if unsafe { self.is_punct(self.at, b'&') } {
+                            self.at += 1;
+                            if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::LIFETIME {
+                                self.at += 1;
+                            }
+                        }
+                        if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::IDENT {
+                            unsafe {
+                                self.err(b"expected closure tuple parameter\0".as_ptr());
+                            }
+                            return core::ptr::null_mut();
+                        }
+                        let tp = unsafe {
+                            self.mk(
+                                pm_jit_rsx_ast_kind::PARAM,
+                                line,
+                                self.text(self.at),
+                                self.text_len(self.at),
+                            )
+                        };
+                        self.at += 1;
+                        unsafe {
+                            tk.add(tp, self.arena);
+                        }
+                        if unsafe { self.is_punct(self.at, b',') } {
+                            self.at += 1;
+                            if unsafe { self.is_punct(self.at, b')') } {
+                                self.at += 1;
+                                break;
+                            }
+                            continue;
+                        }
+                        if unsafe { self.is_punct(self.at, b')') } {
+                            self.at += 1;
+                            break;
+                        }
+                        unsafe {
+                            self.err(b"expected ',' or ')' in closure tuple parameter\0".as_ptr());
+                        }
+                        return core::ptr::null_mut();
+                    }
+                    let tup = unsafe {
+                        self.mk(pm_jit_rsx_ast_kind::PARAM, line, b"tup\0".as_ptr(), 3)
+                    };
+                    unsafe {
+                        self.set_kids(tup, &tk);
+                        kids.add(tup, self.arena);
+                    }
+                    if unsafe { self.is_punct(self.at, b',') } {
+                        self.at += 1;
+                        continue;
+                    }
+                    if !unsafe { self.is_punct(self.at, b'|') } {
+                        unsafe {
+                            self.err(b"expected '|' after closure parameters\0".as_ptr());
+                        }
+                        return core::ptr::null_mut();
+                    }
+                    self.at += 1;
+                    break;
+                }
                 if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::IDENT {
                     unsafe {
                         self.err(b"expected closure parameter\0".as_ptr());
@@ -2377,6 +2653,20 @@ impl Parser {
                         self.text_len(self.at),
                     )
                 };
+                self.at += 1;
+                /* optional `: TYPE` ascription — accepted and skipped:
+                 * the C closure body infers param types from the call
+                 * site, the same way unannotated params do. */
+                if unsafe { self.is_punct(self.at, b':') } {
+                    self.at += 1;
+                    let ty = unsafe { self.parse_type() };
+                    if !self.ok || ty.is_null() {
+                        return core::ptr::null_mut();
+                    }
+                    unsafe {
+                        kids.add(ty, self.arena);
+                    }
+                }
                 if by_ref {
                     let amp = unsafe { self.mk(pm_jit_rsx_ast_kind::UNARY, line, b"&\0".as_ptr(), 1) };
                     let mut pk = Kids::new();
@@ -2390,7 +2680,6 @@ impl Parser {
                 unsafe {
                     kids.add(p, self.arena);
                 }
-                self.at += 1;
                 if unsafe { self.is_punct(self.at, b',') } {
                     self.at += 1;
                     continue;
@@ -2526,7 +2815,26 @@ impl Parser {
                 self.at += 2;
                 let mut depth = 1i32;
                 while self.at < self.n_toks && depth > 0 {
-                    if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::PUNCT {
+                    let k = unsafe { self.kind(self.at) };
+                    /* `>>`/`<<` lex as single tokens but open or close
+                     * two generic lists each. */
+                    if k == pm_jit_rsx_tok_kind::SHL {
+                        depth += 2;
+                        self.at += 1;
+                        continue;
+                    }
+                    if k == pm_jit_rsx_tok_kind::SHR {
+                        depth -= 2;
+                        if depth <= 0 {
+                            /* leave `at` ON the SHR: the shared tail
+                             * below eats it as the final closing token. */
+                            depth = 0;
+                            break;
+                        }
+                        self.at += 1;
+                        continue;
+                    }
+                    if k == pm_jit_rsx_tok_kind::PUNCT {
                         if unsafe { self.is_punct(self.at, b'<') } {
                             depth += 1;
                         } else if unsafe { self.is_punct(self.at, b'>') } {
@@ -2671,108 +2979,260 @@ impl Parser {
         n
     }
 
-    unsafe fn parse_if_expr(&mut self) -> *mut pm_jit_rsx_ast_t {
-        let line = unsafe { self.line(self.at) };
-        self.at += 1;
-        /* `if let PAT = EXPR { .. } (else ..)` — desugared to a MATCH on
-         * EXPR with arms PAT and `_`, reusing the match machinery (which
-         * knows the Some/None shapes for both Option layouts). The else
-         * side (block, `else if`, or `else if let`) becomes the wildcard
-         * arm's body; no else means an empty block. */
-        if unsafe { self.is_kw(self.at, b"let\0".as_ptr()) } {
-            self.at += 1;
+    /* Parse one `if` chain segment: either `let PAT = EXPR` or a plain
+     * expression, into the out-params (is_let, pat, expr). */
+    unsafe fn parse_if_chain_seg(
+        &mut self,
+        is_let: bool,
+        pat_out: *mut *mut pm_jit_rsx_ast_t,
+        expr_out: *mut *mut pm_jit_rsx_ast_t,
+    ) -> bool {
+        if is_let {
+            self.at += 1; /* the `let` keyword */
             let pat = unsafe { self.parse_pattern() };
             if !self.ok || pat.is_null() {
-                return core::ptr::null_mut();
+                return false;
             }
             if !unsafe { self.is_punct(self.at, b'=') } {
                 unsafe {
                     self.err(b"expected '=' in if-let\0".as_ptr());
                 }
-                return core::ptr::null_mut();
+                return false;
             }
             self.at += 1;
             let save = self.cond_ctx;
             self.cond_ctx = true;
-            let scrut = unsafe { self.parse_expr() };
+            let e = unsafe { self.parse_expr() };
             self.cond_ctx = save;
-            if !self.ok {
-                return core::ptr::null_mut();
+            unsafe {
+                *pat_out = pat;
+                *expr_out = e;
             }
-            let then_b = unsafe { self.parse_block() };
-            if !self.ok {
-                return core::ptr::null_mut();
+            true
+        } else {
+            let save = self.cond_ctx;
+            self.cond_ctx = true;
+            let e = unsafe { self.parse_expr() };
+            self.cond_ctx = save;
+            unsafe {
+                *pat_out = core::ptr::null_mut();
+                *expr_out = e;
             }
-            /* wildcard arm: else-block / else-if chain / empty */
-            let els: *mut pm_jit_rsx_ast_t;
-            if unsafe { self.is_kw(self.at, b"else\0".as_ptr()) } {
-                self.at += 1;
-                if unsafe { self.is_kw(self.at, b"if\0".as_ptr()) } {
-                    els = unsafe { self.parse_if_expr() };
-                } else {
-                    els = unsafe { self.parse_block() };
-                }
-                if !self.ok {
-                    return core::ptr::null_mut();
-                }
+            !e.is_null()
+        }
+    }
+
+    /* Fold the parsed if-chain right-to-left around then/else.
+     * Parallel arrays hold the segments in source order (only n_seg
+     * live): seg_let[i] (is this a let segment), seg_pat[i] (its
+     * pattern), seg_expr[i] (its condition or scrutinee). The i-th
+     * segment wraps the (i+1)-th; the last wraps `then`. A false
+     * segment folds into an IF whose else is the continuation's failure
+     * branch — the else subtree is shared: lowering is a read-only
+     * printer and a plain block re-emits inside its own C scope. A let
+     * segment folds into a MATCH (the `if let` desugar, one arm per
+     * pattern + wildcard). */
+    unsafe fn fold_if_chain(
+        &mut self,
+        seg_let: *const bool,
+        seg_pat: *const *mut pm_jit_rsx_ast_t,
+        seg_expr: *const *mut pm_jit_rsx_ast_t,
+        n_seg: usize,
+        i: usize,
+        then_b: *mut pm_jit_rsx_ast_t,
+        els: *mut pm_jit_rsx_ast_t,
+        line: u32,
+    ) -> *mut pm_jit_rsx_ast_t {
+        if i == n_seg {
+            return then_b;
+        }
+        let is_let = unsafe { *seg_let.add(i) };
+        let pat = unsafe { *seg_pat.add(i) };
+        let e = unsafe { *seg_expr.add(i) };
+        if !is_let {
+            let inner = unsafe {
+                self.fold_if_chain(seg_let, seg_pat, seg_expr, n_seg, i + 1, then_b, els, line)
+            };
+            /* emit_if's then-slot holds a BLOCK: a bare continuation
+             * (nested IF/MATCH) rides inside a one-statement synthetic
+             * block — the same node the source `if e { if .. }` gives. */
+            let then_slot = if unsafe { (*inner).kind } == pm_jit_rsx_ast_kind::BLOCK {
+                inner
             } else {
-                els = unsafe {
+                let wrap = unsafe {
                     self.mk(pm_jit_rsx_ast_kind::BLOCK, line, b"block\0".as_ptr(), 5)
                 };
-            }
-            /* arm nodes: MATCH_ARM kids [pat, body] */
-            let a1 = unsafe { self.mk(pm_jit_rsx_ast_kind::MATCH_ARM, line, b"arm\0".as_ptr(), 3) };
-            let mut k1 = Kids::new();
+                let mut wk = Kids::new();
+                unsafe {
+                    wk.add(inner, self.arena);
+                    self.set_kids(wrap, &wk);
+                }
+                wrap
+            };
+            let mut kids = Kids::new();
             unsafe {
-                k1.add(pat, self.arena);
-                k1.add(then_b, self.arena);
-                self.set_kids(a1, &k1);
+                kids.add(e, self.arena);
+                kids.add(then_slot, self.arena);
+                kids.add(els, self.arena);
             }
-            let wc = unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, b"_\0".as_ptr(), 1) };
-            let a2 = unsafe { self.mk(pm_jit_rsx_ast_kind::MATCH_ARM, line, b"arm\0".as_ptr(), 3) };
-            let mut k2 = Kids::new();
+            let n = unsafe { self.mk(pm_jit_rsx_ast_kind::IF, line, b"if\0".as_ptr(), 2) };
             unsafe {
-                k2.add(wc, self.arena);
-                k2.add(els, self.arena);
-                self.set_kids(a2, &k2);
-            }
-            let n = unsafe { self.mk(pm_jit_rsx_ast_kind::MATCH, line, b"match\0".as_ptr(), 5) };
-            let mut mk = Kids::new();
-            unsafe {
-                mk.add(scrut, self.arena);
-                mk.add(a1, self.arena);
-                mk.add(a2, self.arena);
-                self.set_kids(n, &mk);
+                self.set_kids(n, &kids);
             }
             return n;
         }
-        let save = self.cond_ctx;
-        self.cond_ctx = true;
-        let cond = unsafe { self.parse_expr() };
-        self.cond_ctx = save;
-        let then_b = unsafe { self.parse_block() };
-        let mut kids = Kids::new();
+        /* let segment: MATCH on the scrutinee, pattern arm -> continuation,
+         * wildcard arm -> els. The continuation lands in an arm BODY slot —
+         * a bare node there emits statement-form (value dropped); a BLOCK
+         * body routes its value tail to emit_match_value with the temp. */
+        let cont = unsafe {
+            self.fold_if_chain(seg_let, seg_pat, seg_expr, n_seg, i + 1, then_b, els, line)
+        };
+        let inner = if unsafe { (*cont).kind } == pm_jit_rsx_ast_kind::BLOCK {
+            cont
+        } else {
+            let wrap = unsafe {
+                self.mk(pm_jit_rsx_ast_kind::BLOCK, line, b"block\0".as_ptr(), 5)
+            };
+            let mut wk = Kids::new();
+            unsafe {
+                wk.add(cont, self.arena);
+                self.set_kids(wrap, &wk);
+            }
+            wrap
+        };
+        let a1 = unsafe { self.mk(pm_jit_rsx_ast_kind::MATCH_ARM, line, b"arm\0".as_ptr(), 3) };
+        let mut k1 = Kids::new();
         unsafe {
-            kids.add(cond, self.arena);
-            kids.add(then_b, self.arena);
+            k1.add(pat, self.arena);
+            k1.add(inner, self.arena);
+            self.set_kids(a1, &k1);
         }
+        let wc = unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, b"_\0".as_ptr(), 1) };
+        let a2 = unsafe { self.mk(pm_jit_rsx_ast_kind::MATCH_ARM, line, b"arm\0".as_ptr(), 3) };
+        let mut k2 = Kids::new();
+        unsafe {
+            k2.add(wc, self.arena);
+            k2.add(els, self.arena);
+            self.set_kids(a2, &k2);
+        }
+        let n = unsafe { self.mk(pm_jit_rsx_ast_kind::MATCH, line, b"match\0".as_ptr(), 5) };
+        let mut mk = Kids::new();
+        unsafe {
+            mk.add(e, self.arena);
+            mk.add(a1, self.arena);
+            mk.add(a2, self.arena);
+            self.set_kids(n, &mk);
+        }
+        n
+    }
+
+    unsafe fn parse_if_expr(&mut self) -> *mut pm_jit_rsx_ast_t {
+        let line = unsafe { self.line(self.at) };
+        self.at += 1;
+        /* `if` conditions are let-chains (Rust 2024): `if a && let Some(x)
+         * = e && b { .. } else { .. }`. Each `&&`-joined segment is either
+         * a `let PAT = EXPR` or a plain expression; `parse_and_expr`
+         * leaves top-level `&&` for this parser when chain_ctx is set.
+         * Single-segment conditions build exactly the nodes the pre-chain
+         * parser built (`if let` desugar / plain IF); the chain fold only
+         * nests when there is a chain. */
+        let mut seg_let: [bool; 8] = [false; 8];
+        let mut seg_pat: [*mut pm_jit_rsx_ast_t; 8] = [core::ptr::null_mut(); 8];
+        let mut seg_expr: [*mut pm_jit_rsx_ast_t; 8] = [core::ptr::null_mut(); 8];
+        let mut n_seg = 0usize;
+        let save_chain = self.chain_ctx;
+        self.chain_ctx = true;
+        loop {
+            let is_let = unsafe { self.is_kw(self.at, b"let\0".as_ptr()) };
+            if n_seg == 8 {
+                unsafe {
+                    self.err(b"unsupported: if chain longer than 8 segments\0".as_ptr());
+                }
+                self.chain_ctx = save_chain;
+                return core::ptr::null_mut();
+            }
+            let mut pat: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+            let mut e: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+            if !unsafe { self.parse_if_chain_seg(is_let, &mut pat, &mut e) } || !self.ok {
+                self.chain_ctx = save_chain;
+                return core::ptr::null_mut();
+            }
+            seg_let[n_seg] = is_let;
+            seg_pat[n_seg] = pat;
+            seg_expr[n_seg] = e;
+            n_seg += 1;
+            if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::ANDAND {
+                break;
+            }
+            /* chain glue continues only into a `let` segment; `&& expr`
+             * was already folded into the segment's expression. */
+            if !unsafe { self.is_kw(self.at + 1, b"let\0".as_ptr()) } {
+                break;
+            }
+            /* chain glue — consume `&&`, loop parses the next segment */
+            self.at += 1;
+        }
+        self.chain_ctx = save_chain;
+        let then_b = unsafe { self.parse_block() };
+        if !self.ok {
+            return core::ptr::null_mut();
+        }
+        /* else: block / else-if chain / none. A no-else `if` carries NO
+         * else kid (the pre-chain AST shape) — the empty BLOCK placeholder
+         * exists only for the chain fold, where every nested if needs an
+         * else arm to lower honestly. `had_else` keeps the two paths
+         * distinct. */
+        let els: *mut pm_jit_rsx_ast_t;
+        let had_else: bool;
         if unsafe { self.is_kw(self.at, b"else\0".as_ptr()) } {
             self.at += 1;
-            let els: *mut pm_jit_rsx_ast_t;
+            had_else = true;
             if unsafe { self.is_kw(self.at, b"if\0".as_ptr()) } {
                 els = unsafe { self.parse_if_expr() };
             } else {
                 els = unsafe { self.parse_block() };
             }
-            unsafe {
-                kids.add(els, self.arena);
+            if !self.ok {
+                return core::ptr::null_mut();
             }
+        } else {
+            had_else = false;
+            els = unsafe {
+                self.mk(pm_jit_rsx_ast_kind::BLOCK, line, b"block\0".as_ptr(), 5)
+            };
         }
-        let n = unsafe { self.mk(pm_jit_rsx_ast_kind::IF, line, b"if\0".as_ptr(), 2) };
+        /* single plain segment: the pre-chain IF node (cond, then, [else])
+         * — byte-identical output to before. */
+        if n_seg == 1 && !seg_let[0] {
+            let mut kids = Kids::new();
+            unsafe {
+                kids.add(seg_expr[0], self.arena);
+                kids.add(then_b, self.arena);
+            }
+            if had_else {
+                unsafe {
+                    kids.add(els, self.arena);
+                }
+            }
+            let n = unsafe { self.mk(pm_jit_rsx_ast_kind::IF, line, b"if\0".as_ptr(), 2) };
+            unsafe {
+                self.set_kids(n, &kids);
+            }
+            return n;
+        }
         unsafe {
-            self.set_kids(n, &kids);
+            self.fold_if_chain(
+                seg_let.as_ptr(),
+                seg_pat.as_ptr(),
+                seg_expr.as_ptr(),
+                n_seg,
+                0,
+                then_b,
+                els,
+                line,
+            )
         }
-        n
     }
 
     unsafe fn parse_match_expr(&mut self) -> *mut pm_jit_rsx_ast_t {
@@ -2814,11 +3274,20 @@ impl Parser {
             unsafe {
                 ak.add(pat, self.arena);
             }
+            /* `pat if guard => body` — the guard rides as a middle kid on
+             * the arm; lowering ANDs it into the arm's `if (...)` test. */
             if unsafe { self.is_kw(self.at, b"if\0".as_ptr()) } {
-                unsafe {
-                    self.err(b"unsupported: match guard\0".as_ptr());
+                self.at += 1;
+                let save = self.cond_ctx;
+                self.cond_ctx = true;
+                let guard = unsafe { self.parse_expr() };
+                self.cond_ctx = save;
+                if !self.ok || guard.is_null() {
+                    return core::ptr::null_mut();
                 }
-                return core::ptr::null_mut();
+                unsafe {
+                    ak.add(guard, self.arena);
+                }
             }
             if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::FAT_ARROW {
                 unsafe {
@@ -2886,6 +3355,19 @@ impl Parser {
             }
             let before = self.at;
             let s = unsafe { self.parse_stmt() };
+            /* cfg-stripped statement: parsed-and-skipped, never lowered. */
+            if !s.is_null()
+                && unsafe { (*s).kind } == pm_jit_rsx_ast_kind::STMT
+                && unsafe { z_eq(unsafe { (*s).text }, unsafe { (*s).text_len }, b"cfgskip\0".as_ptr()) }
+            {
+                if self.ok && self.at == before {
+                    unsafe {
+                        self.err(b"internal: statement consumed no tokens\0".as_ptr());
+                    }
+                    return core::ptr::null_mut();
+                }
+                continue;
+            }
             unsafe {
                 kids.add(s, self.arena);
             }
@@ -2905,6 +3387,27 @@ impl Parser {
 
     unsafe fn parse_stmt(&mut self) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
+        /* Statement attributes: `#[cfg(..)]` is EVALUATED against the
+         * active features (a false cfg strips the statement the same way
+         * items strip); every other statement attribute parses into a
+         * scratch list and drops — the subset has no statement-attribute
+         * lowering (the same tokens ride an item's ATTR nodes). */
+        if unsafe { self.is_punct(self.at, b'#') } && unsafe { self.is_punct(self.at + 1, b'[') } {
+            let mut scratch = Kids::new();
+            unsafe { self.parse_outer_attrs(&mut scratch) };
+            if !self.ok {
+                return core::ptr::null_mut();
+            }
+            if unsafe { self.cfg_verdict(&scratch) } == 0 {
+                /* strip the statement: `{..}` block or up to `;` */
+                unsafe {
+                    self.skip_item_tokens();
+                }
+                return unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::STMT, line, b"cfgskip\0".as_ptr(), 7)
+                };
+            }
+        }
         if unsafe { self.is_kw(self.at, b"let\0".as_ptr()) } {
             return unsafe { self.parse_let() };
         }
@@ -3295,6 +3798,140 @@ impl Parser {
                 continue;
             }
             return;
+        }
+    }
+
+    /* Evaluate `#[cfg(..)]` ATTR kids against self.feats. Returns:
+     * 1 = at least one cfg and all cfgs true (keep, attrs already fine),
+     * 0 = a cfg is false (strip the item),
+     * -1 = no cfg attr present. */
+    unsafe fn cfg_verdict(&self, kids: &Kids) -> i32 {
+        let mut verdict: i32 = -1;
+        let mut i = 0usize;
+        while i < kids.n {
+            let k: *mut pm_jit_rsx_ast_t = if i < KIDS_INLINE {
+                unsafe { *kids.fixed.as_ptr().add(i) }
+            } else {
+                unsafe { *kids.spill.add(i - KIDS_INLINE) }
+            };
+            if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::ATTR {
+                let t = unsafe { (*k).text };
+                let tl = unsafe { (*k).text_len };
+                /* ATTR text shape: `# [ cfg ( feature = "gen" ) ]` (tokens
+                 * joined with single spaces). Compact it (drop spaces)
+                 * into an arena buffer so cfg_eval sees `#[cfg(...)`
+                 * forms without whitespace. */
+                if tl >= 3 && unsafe { *t == b'#' } {
+                    let buf = unsafe { pm_util_mem_alloc(self.arena, tl + 1) };
+                    if buf.is_null() {
+                        return -1;
+                    }
+                    let mut w = 0usize;
+                    let mut j = 0usize;
+                    while j < tl {
+                        let c = unsafe { *t.add(j) };
+                        if c != b' ' {
+                            unsafe {
+                                *buf.add(w) = c;
+                            }
+                            w += 1;
+                        }
+                        j += 1;
+                    }
+                    unsafe {
+                        *buf.add(w) = 0;
+                    }
+                    /* find `cfg(` */
+                    if w >= 6 {
+                        let mut p = 1usize;
+                        let mut found = false;
+                        while p + 4 <= w {
+                            if unsafe { z_eq(buf.add(p), 3, b"cfg\0".as_ptr()) }
+                                && unsafe { *buf.add(p + 3) } == b'('
+                            {
+                                found = true;
+                                break;
+                            }
+                            p += 1;
+                        }
+                        if found {
+                            /* inner = buf[p+4 .. close) where close is the
+                             * matching ')' — the attr's `)` (tokens end
+                             * with `) ]` so w-2 is the close in the plain
+                             * case; walk a paren count to be exact). */
+                            let inner = unsafe { buf.add(p + 4) };
+                            let mut depth = 1i32;
+                            let mut q = p + 4usize;
+                            let mut close = w;
+                            while q < w {
+                                if unsafe { *buf.add(q) } == b'(' {
+                                    depth += 1;
+                                } else if unsafe { *buf.add(q) } == b')' {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        close = q;
+                                        break;
+                                    }
+                                }
+                                q += 1;
+                            }
+                            let inner_len = close - (p + 4);
+                            let v = unsafe { cfg_eval(inner, inner_len, self.feats) };
+                            if verdict == -1 || verdict == 1 {
+                                verdict = if v > 0 { 1 } else { 0 };
+                            }
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        verdict
+    }
+
+    /* Skip one item's tokens: a `{ .. }` block (bracket-balanced) or
+     * anything up to and including a `;` at depth 0. Used by cfg-false
+     * items. A depth-0 `}` that closes the item body ends the item —
+     * but a `use a::{b, c};` tree also closes to depth 0 and its `;`
+     * still belongs to the item: when the next token is `;`, consume it
+     * too (a fn/impl body is never followed by `;`). Parens/brackets
+     * count toward depth so a `->` or param list cannot fake a stop. */
+    unsafe fn skip_item_tokens(&mut self) {
+        /* All three bracket kinds balance; only `}` (the item's body)
+         * or a depth-0 `;` terminates. `(`/`)` and `[`/`]` balance
+         * without terminating — a `fn name(params) -> T { .. }` skip
+         * must not stop at the param list's `)`. */
+        let mut depth = 0i32;
+        while self.at < self.n_toks {
+            let k = unsafe { self.kind(self.at) };
+            if k == pm_jit_rsx_tok_kind::PUNCT {
+                if unsafe { self.is_punct(self.at, b'{') }
+                    || unsafe { self.is_punct(self.at, b'(') }
+                    || unsafe { self.is_punct(self.at, b'[') }
+                {
+                    depth += 1;
+                } else if unsafe { self.is_punct(self.at, b')') }
+                    || unsafe { self.is_punct(self.at, b']') }
+                {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                } else if unsafe { self.is_punct(self.at, b'}') } {
+                    depth -= 1;
+                    self.at += 1;
+                    if depth <= 0 {
+                        if unsafe { self.is_punct(self.at, b';') } {
+                            self.at += 1;
+                        }
+                        return;
+                    }
+                    continue;
+                } else if depth == 0 && unsafe { self.is_punct(self.at, b';') } {
+                    self.at += 1;
+                    return;
+                }
+            }
+            self.at += 1;
         }
     }
 
@@ -4435,6 +5072,19 @@ impl Parser {
         if !self.ok {
             return core::ptr::null_mut();
         }
+        /* cfg-false item: strip (skip its tokens balanced). The lowered
+         * unit never sees it — same discipline as cfg(test) at splice
+         * time, but here inside rsx where the predicate is evaluated
+         * against the active feature set. */
+        if unsafe { self.cfg_verdict(&kids) } == 0 {
+            unsafe {
+                self.skip_item_tokens();
+            }
+            let line = unsafe { self.line(self.at) };
+            return unsafe {
+                self.mk(pm_jit_rsx_ast_kind::STMT, line, b"cfgskip\0".as_ptr(), 7)
+            };
+        }
         if unsafe { self.is_kw(self.at, b"use\0".as_ptr()) } {
             return unsafe { self.parse_use() };
         }
@@ -4623,6 +5273,12 @@ impl Parser {
                     self.err(b"internal: item consumed no tokens\0".as_ptr());
                 }
                 return core::ptr::null_mut();
+            }
+            /* cfg-stripped item: parsed-and-skipped, never lowered. */
+            if unsafe { (*item).kind } == pm_jit_rsx_ast_kind::STMT
+                && unsafe { z_eq(unsafe { (*item).text }, unsafe { (*item).text_len }, b"cfgskip\0".as_ptr()) }
+            {
+                continue;
             }
             unsafe {
                 kids.add(item, self.arena);

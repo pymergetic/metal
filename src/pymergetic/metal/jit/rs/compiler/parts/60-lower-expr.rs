@@ -2681,10 +2681,21 @@ impl Lower {
         let flen = unsafe { (*name).text_len };
         /* Numeric tuple field `.N`: on a transparent newtype the newtype IS
          * its inner in C (unwrap = the base itself); on a real tuple
-         * (rsx_tuple_*) it is the designated element field. */
+         * (rsx_tuple_*) it is the designated element field. The base may
+         * carry a `const ` prefix (a `*const (..)` deref registers the
+         * pointee WITH its qualifier) — skip it, the tuple check is a
+         * prefix test and `const rsx_tuple_` would otherwise fall through
+         * to the newtype path and silently emit the whole tuple. */
         if flen > 0 && !fname.is_null() && unsafe { *fname } >= b'0' && unsafe { *fname } <= b'9' {
             let bt0 = self.arena_tmp();
-            let bn0 = unsafe { self.expr_ctype(base, bt0, 128, locals) };
+            let mut bn0 = unsafe { self.expr_ctype(base, bt0, 128, locals) };
+            if bn0 >= 6 && unsafe { z_eq(bt0, 6, b"const \0".as_ptr()) } {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(bt0.add(6), bt0, bn0 - 6);
+                    *(bt0.add(bn0 - 6)) = 0;
+                }
+                bn0 -= 6;
+            }
             if bn0 >= 10 && unsafe { z_eq(bt0, 10, b"rsx_tuple_\0".as_ptr()) } {
                 self.out.puts(b"(\0".as_ptr());
                 self.out.putc(b'(');

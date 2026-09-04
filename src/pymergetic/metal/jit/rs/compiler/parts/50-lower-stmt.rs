@@ -500,12 +500,22 @@ impl Lower {
             init = unsafe { *(*init).kids.add(0) };
         }
         let ct = self.arena_tmp();
-        let ct_len = unsafe { self.expr_ctype(init, ct, 128, locals) };
+        let mut ct_len = unsafe { self.expr_ctype(init, ct, 128, locals) };
         if ct_len == 0 || ct_len >= 128 {
             unsafe {
                 self.err(b"cannot infer tuple let-else type\0".as_ptr(), line);
             }
             return;
+        }
+        /* `*const (..)` derefs carry a `const ` qualifier into the
+         * inferred type — strip it so the tuple prefix test and the
+         * signature lookup see the registered rsx_tuple_ name. */
+        if ct_len >= 6 && unsafe { z_eq(ct, 6, b"const \0".as_ptr()) } {
+            unsafe {
+                core::ptr::copy_nonoverlapping(ct.add(6), ct, ct_len - 6);
+                *(ct.add(ct_len - 6)) = 0;
+            }
+            ct_len -= 6;
         }
         if ct_len < 10 || !unsafe { z_eq(ct, 10, b"rsx_tuple_\0".as_ptr()) } {
             unsafe {
@@ -746,6 +756,16 @@ impl Lower {
                 self.err(b"cannot infer tuple let type - ascribe it\0".as_ptr(), line);
             }
             return;
+        }
+        /* `*const (..)` derefs carry a `const ` qualifier into the
+         * inferred type — strip it so the tuple prefix test and the
+         * signature lookup see the registered rsx_tuple_ name. */
+        if ct_len >= 6 && unsafe { z_eq(ct, 6, b"const \0".as_ptr()) } {
+            unsafe {
+                core::ptr::copy_nonoverlapping(ct.add(6), ct, ct_len - 6);
+                *(ct.add(ct_len - 6)) = 0;
+            }
+            ct_len -= 6;
         }
         if ct_len < 10 || !unsafe { z_eq(ct, 10, b"rsx_tuple_\0".as_ptr()) } {
             unsafe {
@@ -1155,7 +1175,13 @@ impl Lower {
         unsafe { self.emit_expr(cond, locals) };
         self.out.puts(b") {\n\0".as_ptr());
         self.depth += 1;
+        /* Each branch is its own C scope (the braces) — mark it in the
+         * locals table too, so a `let` in one branch never reuses the
+         * sibling branch's declaration (same name+type across branches
+         * is shadowing, not reuse: the if's decl is invisible in else). */
+        unsafe { (*locals).note_scope() };
         unsafe { self.emit_block_tail_ret(then_b, locals) };
+        unsafe { (*locals).drop_scope() };
         self.depth -= 1;
         if nk >= 3 {
             let els = unsafe { *kids.add(2) };
@@ -1171,7 +1197,9 @@ impl Lower {
             if ek == pm_jit_rsx_ast_kind::BLOCK {
                 self.out.puts(b"{\n\0".as_ptr());
                 self.depth += 1;
+                unsafe { (*locals).note_scope() };
                 unsafe { self.emit_block_tail_ret(els, locals) };
+                unsafe { (*locals).drop_scope() };
                 self.depth -= 1;
                 self.indent();
                 self.out.puts(b"}\n\0".as_ptr());
@@ -1272,11 +1300,36 @@ impl Lower {
                         a += 1;
                         continue;
                     }
-                    let n = unsafe { self.expr_ctype(body, ct, 128, locals) };
+                    /* a BLOCK arm body carries its value in the tail expr
+                     * (`0 => { 1 }`, or a let-chain fold's then-block):
+                     * unwrap so the type comes from the value, not from a
+                     * scrutinee fallback. EXPR_STMT wraps a statement
+                     * block's tail (`{ return e; }`). */
+                    let mut probe = body;
+                    if bk == pm_jit_rsx_ast_kind::BLOCK {
+                        let bkd = unsafe { (*body).kids };
+                        let bkn = unsafe { (*body).n_kids } as usize;
+                        if bkn == 0 {
+                            a += 1;
+                            continue;
+                        }
+                        probe = unsafe { *bkd.add(bkn - 1) };
+                        if unsafe { (*probe).kind } == pm_jit_rsx_ast_kind::EXPR_STMT
+                            && unsafe { (*probe).n_kids } >= 1
+                        {
+                            probe = unsafe { *(*probe).kids.add(0) };
+                        }
+                    }
+                    let n = unsafe { self.expr_ctype(probe, ct, 128, locals) };
                     if n > 0 {
                         ct_len = n;
+                        break;
                     }
-                    break;
+                    /* this arm yielded no type (e.g. its value rides in a
+                     * pattern-bound local invisible to expr_ctype) — the
+                     * next non-diverging arm decides; the wildcard arm of a
+                     * let-chain fold always carries an inferable body. */
+                    a += 1;
                 }
             }
             if ct_len == 0 {
@@ -1420,18 +1473,30 @@ impl Lower {
                 continue;
             }
             let pat = unsafe { *ak.add(0) };
-            let body = unsafe { *ak.add(1) };
+            /* arm kids: [pat, body] or [pat, guard, body] */
+            let has_guard = ank >= 3;
+            let body = unsafe { *ak.add(ank - 1) };
             self.indent();
             if !first {
                 self.out.puts(b"else \0".as_ptr());
             }
             first = false;
-            /* wildcard arm: unconditional else */
+            /* wildcard arm: unconditional else (unless a guard narrows it) */
             let is_wc = unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
                 && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"_\0".as_ptr()) };
-            if !is_wc {
+            if !is_wc || has_guard {
                 self.out.puts(b"if (\0".as_ptr());
-                unsafe { self.emit_pat_test(pat, temp, temp_len, locals) };
+                if !is_wc {
+                    unsafe { self.emit_pat_test(pat, temp, temp_len, locals) };
+                }
+                if has_guard {
+                    if !is_wc {
+                        self.out.puts(b" && \0".as_ptr());
+                    }
+                    self.out.puts(b"(\0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(1), locals) };
+                    self.out.puts(b")\0".as_ptr());
+                }
                 self.out.puts(b") \0".as_ptr());
             }
             self.out.puts(b"{\n\0".as_ptr());
@@ -1662,7 +1727,9 @@ impl Lower {
                 continue;
             }
             let pat = unsafe { *ak.add(0) };
-            let body = unsafe { *ak.add(1) };
+            /* arm kids: [pat, body] or [pat, guard, body] */
+            let has_guard = ank >= 3;
+            let body = unsafe { *ak.add(ank - 1) };
             self.indent();
             if !first {
                 self.out.puts(b"else \0".as_ptr());
@@ -1670,9 +1737,19 @@ impl Lower {
             first = false;
             let is_wc = unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
                 && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"_\0".as_ptr()) };
-            if !is_wc {
+            if !is_wc || has_guard {
                 self.out.puts(b"if (\0".as_ptr());
-                unsafe { self.emit_pat_test(pat, st, st_len, locals) };
+                if !is_wc {
+                    unsafe { self.emit_pat_test(pat, st, st_len, locals) };
+                }
+                if has_guard {
+                    if !is_wc {
+                        self.out.puts(b" && \0".as_ptr());
+                    }
+                    self.out.puts(b"(\0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(1), locals) };
+                    self.out.puts(b")\0".as_ptr());
+                }
                 self.out.puts(b") \0".as_ptr());
             }
             self.out.puts(b"{\n\0".as_ptr());

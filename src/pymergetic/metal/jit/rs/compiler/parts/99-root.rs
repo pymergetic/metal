@@ -64,7 +64,9 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_parse(
         },
         ok: true,
         cond_ctx: false,
+        chain_ctx: false,
         shr_closes: 0,
+        feats: core::ptr::null(),
     };
     let file = unsafe { p.parse_file() };
     if !p.ok || !p.nd.ok || file.is_null() {

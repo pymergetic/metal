@@ -489,6 +489,25 @@ impl Lexer {
         if unsafe { z_eq(wp, wn, b"r\0".as_ptr()) }
             && (unsafe { self.peek(0) } == b'"' || unsafe { self.peek(0) } == b'#')
         {
+            /* `r#ident` — a raw identifier (keyword escape), not a string:
+             * the token text is the bare ident (`r#gen` == `gen`), exactly
+             * what Rust name resolution sees. */
+            if unsafe { self.peek(0) } == b'#'
+                && self.pos + 1 < self.src_len
+                && is_ident_start(unsafe { *self.src.add(self.pos + 1) })
+            {
+                let id_start = self.pos + 1;
+                self.pos = id_start;
+                while self.pos < self.src_len
+                    && is_ident_cont(unsafe { *self.src.add(self.pos) })
+                {
+                    self.pos += 1;
+                }
+                unsafe {
+                    self.push(pm_jit_rsx_tok_kind::IDENT, id_start, self.pos);
+                }
+                return;
+            }
             unsafe {
                 self.lex_raw_string(start, 0);
             }

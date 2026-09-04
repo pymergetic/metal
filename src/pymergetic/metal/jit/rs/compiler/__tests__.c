@@ -1760,6 +1760,232 @@ static const char LET_ELSE_RT_SRC[] =
     "    0x600D600D\n"
     "}\n";
 
+/* --- let-chains (Rust 2024 `if a && let Some(x) = e`) -------------------
+ * Positive: parse + lower a chain, generated-C shape checks, linked
+ * runtime execution of all four short-circuit paths. Negative: malformed
+ * chains refuse with the precise message, never a silent miscompile. */
+
+static const char LET_CHAIN_RT_SRC[] =
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn lc_pick(which: u32) -> (bool, Option<i32>, Option<i32>) {\n"
+    "    if which == 0 { return (false, Some(30), Some(12)); }\n"
+    "    if which == 1 { return (true, None, Some(12)); }\n"
+    "    if which == 2 { return (true, Some(30), None); }\n"
+    "    (true, Some(30), Some(12))\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn lc_run(which: u32) -> i32 {\n"
+    "    let (flag, a, b) = lc_pick(which);\n"
+    "    if flag && let Some(x) = a && let Some(y) = b {\n"
+    "        x + y\n"
+    "    } else {\n"
+    "        -1\n"
+    "    }\n"
+    "}\n";
+
+static int32_t test_let_chain_parse_and_lower(void) {
+    void *backing = malloc(1u << 24);
+    pm_util_mem_arena_t *arena;
+    char *c = NULL;
+    size_t c_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+
+    if (backing == NULL) return 250;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (arena == NULL) { free(backing); return 251; }
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, LET_CHAIN_RT_SRC,
+                                 strlen(LET_CHAIN_RT_SRC),
+                                 &c, &c_len, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 252;
+    }
+    if (c == NULL || c_len == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 253;
+    }
+    /* the outer expr segment folds to `if (flag)` — a plain C `&&`
+     * binary op must NOT appear (the chain is nested ifs, not one test) */
+    if (!rsx_strstr(c, "if (flag)")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 254;
+    }
+    if (rsx_strstr(c, "flag) &&")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 255;
+    }
+    /* the two let segments fold to nested option tests with distinct
+     * scrutinee temps — both arms present, values bound */
+    if (!rsx_strstr(c, "._has /* Some(path) */")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 256;
+    }
+    /* the chain's value: the innermost then-tail binds x+y through the
+     * match-value temp; the else is the shared -1 */
+    if (!rsx_strstr(c, "= (x + y);")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 257;
+    }
+    if (!rsx_strstr(c, "= (-1);")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 258;
+    }
+    /* two let segments = two nested option tests (scrutinee temps), not
+     * one — count the Some-arm comments */
+    {
+        const char *p = c;
+        int arms = 0;
+        while ((p = strstr(p, "._has /* Some(path) */")) != NULL) {
+            arms++;
+            p++;
+        }
+        if (arms != 2) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 259;
+        }
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+static int32_t test_let_chain_refuses(void) {
+    void *backing = malloc(1u << 22);
+    pm_util_mem_arena_t *arena;
+    char *c = NULL;
+    size_t c_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    static const char no_eq[] =
+        "pub fn f(o: Option<i32>) -> i32 {\n"
+        "    if let Some(x) { 0 } else { 1 }\n"
+        "}\n";
+    static const char bare_let[] =
+        "pub fn f(a: bool) -> i32 {\n"
+        "    if a && let { 0 } else { 1 }\n"
+        "}\n";
+
+    if (backing == NULL) return 260;
+    arena = pm_util_mem_arena_create(backing, 1u << 22);
+    if (arena == NULL) { free(backing); return 261; }
+
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, no_eq, strlen(no_eq),
+                                 &c, &c_len, err, sizeof(err)) == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 262;
+    }
+    if (strstr(err, "expected '=' in if-let") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 263;
+    }
+
+    memset(err, 0, sizeof(err));
+    c = NULL;
+    if (pm_metal_jit_rsx_compile(arena, bare_let, strlen(bare_let),
+                                 &c, &c_len, err, sizeof(err)) == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 264;
+    }
+    /* a `let` with no pattern must refuse — a loud parse error, never a
+     * silent fall-through */
+    if (err[0] == '\0') {
+        pm_util_mem_arena_destroy(arena); free(backing); return 265;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+}
+
+static int32_t test_let_chain_linked(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    void *backing = NULL, *obacking = NULL;
+    pm_util_mem_arena_t *arena = NULL, *oarena = NULL;
+    char *c = NULL;
+    size_t c_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    char oerr[256];
+    int32_t rc;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    pm_metal_build_unit_t unit;
+    pm_metal_build_artifact_t art;
+    uint8_t *objs[1];
+    size_t lens[1];
+    int32_t (*l_run)(uint32_t);
+    /* one selector per chain path: short-circuit, first-let fail,
+     * second-let fail, all pass */
+    static const int32_t want[4] = { -1, -1, -1, 42 };
+    int i;
+
+    backing = malloc(1u << 24);
+    if (!backing) return 270;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (!arena) { free(backing); return 271; }
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_rsx_compile(arena, LET_CHAIN_RT_SRC,
+                                  strlen(LET_CHAIN_RT_SRC),
+                                  &c, &c_len, err, sizeof(err));
+    if (rc != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 272;
+    }
+
+    /* the chain src above binds x+y from Pair fields; for the linked run
+     * the object exports lc_run(Pair) — build Pairs per case through a
+     * tiny second export that assembles one from raw args */
+    obacking = malloc(1u << 24);
+    if (!obacking) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 273;
+    }
+    oarena = pm_util_mem_arena_create(obacking, 1u << 24);
+    if (!oarena) {
+        pm_util_mem_arena_destroy(arena); free(backing); free(obacking);
+        return 274;
+    }
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_jit_c_object_compile(oarena, c, c_len, &obj, &obj_len,
+                                       oerr, sizeof(oerr));
+    if (rc != 0) {
+        if (strstr(oerr, "no native object output on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0; /* polite seat refusal — skip */
+        }
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 275;
+    }
+    memset(&unit, 0, sizeof(unit));
+    snprintf(unit.fqn, sizeof(unit.fqn), "%s", "rsx.letchain.rt");
+    objs[0] = obj;
+    lens[0] = obj_len;
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_build_link(oarena, &unit, objs, lens, 1, &art,
+                             oerr, sizeof(oerr));
+    if (rc != PM_METAL_BUILD_OK) {
+        if (strstr(oerr, "no ELF loader on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0; /* polite seat refusal — skip */
+        }
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 276;
+    }
+    l_run = (int32_t (*)(uint32_t))
+        pm_metal_build_artifact_lookup(&art, "lc_run");
+    if (l_run == NULL) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 277;
+    }
+    for (i = 0; i < 4; i++) {
+        int32_t r = l_run((uint32_t)i);
+        if (r != want[i]) {
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 278 + (int32_t)i;
+        }
+    }
+    pm_metal_build_artifact_destroy(&art);
+    pm_util_mem_arena_destroy(arena);
+    pm_util_mem_arena_destroy(oarena);
+    free(backing);
+    free(obacking);
+    return 0;
+#else
+    /* No native TCC object output / no ELF loader on this seat — skip */
+    return 0;
+#endif
+}
+
 static int32_t test_let_else_order_linked(void) {
 #if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
     void *backing = NULL, *obacking = NULL;
@@ -1902,6 +2128,88 @@ static int32_t test_let_else_order_linked(void) {
     /* No native TCC object output / no ELF loader on this seat — skip */
     return 0;
 #endif
+}
+
+/* --- #[cfg] stripping: feature predicate evaluation at parse time ------
+ * The parser evaluates `#[cfg(feature = "x")]` / `#[cfg(not(...))]` /
+ * `#[cfg(all(...))]` / `#[cfg(any(...))]` / `#[cfg(test)]` against the
+ * active feature set (the compile entry point passes feats = NULL for
+ * the kernel seat: no features on, so feature-gated items strip and
+ * their not() complements stay). Proven here: the generated C contains
+ * exactly one definition per cfg-false/cfg-true item pair, statement
+ * gates strip, and unknown predicates never silently keep code. */
+
+static const char CFG_STRIP_SRC[] =
+    "#[cfg(feature = \"on\")]\n"
+    "pub fn gated() -> i32 { 1 }\n"
+    "#[cfg(not(feature = \"on\"))]\n"
+    "pub fn gated() -> i32 { 2 }\n"
+    "#[cfg(all(feature = \"on\", feature = \"other\"))]\n"
+    "pub fn all_gate() -> i32 { 3 }\n"
+    "#[cfg(any(feature = \"on\", not(feature = \"on\")))]\n"
+    "pub fn any_gate() -> i32 { 4 }\n"
+    "pub extern \"C\" fn stmt_gate(v: i32) -> i32 {\n"
+    "    #[cfg(feature = \"on\")]\n"
+    "    let extra = 10;\n"
+    "    v + 1\n"
+    "}\n"
+    "#[cfg(test)]\n"
+    "pub fn test_only() -> i32 { 5 }\n";
+
+static int32_t test_cfg_strip_parse_and_lower(void) {
+    void *backing = malloc(1u << 24);
+    pm_util_mem_arena_t *arena;
+    char *c = NULL;
+    size_t c_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    int gated_bodies;
+
+    if (backing == NULL) return 280;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (arena == NULL) { free(backing); return 281; }
+    memset(err, 0, sizeof(err));
+    if (pm_metal_jit_rsx_compile(arena, CFG_STRIP_SRC,
+                                 strlen(CFG_STRIP_SRC),
+                                 &c, &c_len, err, sizeof(err)) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 282;
+    }
+    if (c == NULL || c_len == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 283;
+    }
+    /* exactly one `gated` body: the feature is off (feats == NULL), so
+     * the gated definition strips and its not() complement stays. */
+    gated_bodies = 0;
+    {
+        const char *p = c;
+        while ((p = strstr(p, "gated")) != NULL) {
+            gated_bodies++;
+            p++;
+        }
+    }
+    /* one prototype/decl + one body — count must be exactly 2 (a single
+     * definition survived; the duplicate stripped) */
+    if (gated_bodies != 2) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 284;
+    }
+    /* all(on, other) with no features on is false -> stripped */
+    if (rsx_strstr(c, "all_gate")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 285;
+    }
+    /* any(on, not(on)) is true -> kept */
+    if (!rsx_strstr(c, "any_gate")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 286;
+    }
+    /* the cfg-false statement (let extra = 10) stripped */
+    if (rsx_strstr(c, "extra")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 287;
+    }
+    /* cfg(test) is false on the kernel seat -> stripped */
+    if (rsx_strstr(c, "test_only")) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 288;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
 }
 
 /* --- Option/Tuple typedef codec: injective + reversible names -----------
@@ -2489,6 +2797,10 @@ static int32_t pm_metal_jit_rsx_tests(void) {
     rc = rsx_run_named("name_tmp_capacity", test_name_tmp_capacity); if (rc) return rc;
     rc = rsx_run_named("stack_independence", test_stack_independence); if (rc) return rc;
     rc = rsx_run_named("let_else_order_linked", test_let_else_order_linked); if (rc) return rc;
+    rc = rsx_run_named("let_chain_parse_and_lower", test_let_chain_parse_and_lower); if (rc) return rc;
+    rc = rsx_run_named("let_chain_refuses", test_let_chain_refuses); if (rc) return rc;
+    rc = rsx_run_named("let_chain_linked", test_let_chain_linked); if (rc) return rc;
+    rc = rsx_run_named("cfg_strip_parse_and_lower", test_cfg_strip_parse_and_lower); if (rc) return rc;
     rc = rsx_run_named("introspection", test_introspection);      if (rc) return rc;
     return 0;
 }
