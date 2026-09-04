@@ -13,6 +13,7 @@
  *  - Phase 4: the async compiler actor — round trip, park on a held serial
  *    section, bounded-queue backpressure, cancellation before run
  */
+#include <stdio.h>
 #include "pymergetic/metal/async/__types__.h"
 #include "pymergetic/metal/async/__exports__.h"
 #include "pymergetic/metal/build/__types__.h"
@@ -2249,41 +2250,41 @@ static int32_t test_dag_run(void) {
 static int32_t pm_metal_build_tests(void) {
     int32_t rc;
     rc = test_parse_real_tcc_manifest();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest parse_real_tcc_manifest rc=%d\n", rc); return rc; }
     rc = test_graph_order();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest graph_order rc=%d\n", rc); return rc; }
     rc = test_graph_cycle();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest graph_cycle rc=%d\n", rc); return rc; }
     rc = test_multi_object_link();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest multi_object_link rc=%d\n", rc); return rc; }
     rc = test_wasm_seat_link();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest wasm_seat_link rc=%d\n", rc); return rc; }
     rc = test_compile_tcc_manifest_forwarding();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest compile_tcc_manifest_forwarding rc=%d\n", rc); return rc; }
     rc = test_discover();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest discover rc=%d\n", rc); return rc; }
     rc = test_rebuild_jit_c();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest rebuild_jit_c rc=%d\n", rc); return rc; }
     rc = test_rebuild_tcc();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest rebuild_tcc rc=%d\n", rc); return rc; }
     rc = test_actor_roundtrip();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest actor_roundtrip rc=%d\n", rc); return rc; }
     rc = test_actor_stress();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest actor_stress rc=%d\n", rc); return rc; }
     rc = test_dag_run();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest dag_run rc=%d\n", rc); return rc; }
     /* ctx-lifetime test must see the jit.c record from test_rebuild_jit_c —
      * it runs before test_record_query, which resets the record table */
     rc = test_ctx_survives_caller_arena();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest ctx_survives_caller_arena rc=%d\n", rc); return rc; }
     rc = test_record_query();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest record_query rc=%d\n", rc); return rc; }
     rc = test_ledger_roundtrip();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest ledger_roundtrip rc=%d\n", rc); return rc; }
     rc = test_accessor_spine();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest accessor_spine rc=%d\n", rc); return rc; }
     rc = test_two_build_isolation();
-    if (rc) return rc;
+    if (rc) { fprintf(stderr, "build subtest two_build_isolation rc=%d\n", rc); return rc; }
     return 0;
 }
 

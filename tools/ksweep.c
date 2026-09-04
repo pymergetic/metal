@@ -55,10 +55,13 @@ int main(int argc, char **argv) {
     pm_metal_build_unit_t *units = NULL;
     uint32_t n_units = 0;
     sweep_row_t *rows;
+    size_t image_len = 0;
     char err[PM_METAL_BUILD_ERR_MAX];
     int32_t rc;
     uint32_t i;
-    const char *report_path = argc > 1 ? argv[1] : "/tmp/ksweep_report.txt";
+    const char *only = NULL; /* --only <substring>: sweep that one unit */
+    int argi = 1;
+    const char *report_path = NULL;
     char dir[512];
     char src_root[2560], wasmmod_src_root[2560], wasmmod_root[2560],
         top_root[2560], tcc_root[2560], host_inc[2560], mpy_port[2560],
@@ -68,6 +71,17 @@ int main(int argc, char **argv) {
     const char *defines[12];
     uint32_t n_defines = 0;
     static char libdir_def[2600];
+
+    /* args: [--only <substring>] [report_path] */
+    while (argi < argc) {
+        if (strcmp(argv[argi], "--only") == 0 && argi + 1 < argc) {
+            only = argv[argi + 1];
+            argi += 2;
+        } else {
+            break;
+        }
+    }
+    report_path = argi < argc ? argv[argi] : "/tmp/ksweep_report.txt";
     static char triplet_def[128];
     static char triplet_val[160];
     FILE *rep;
@@ -140,6 +154,11 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* boot arena: discovery + module boot only — the unit compiles
+     * below each get a FRESH per-unit arena (see the loop), so one
+     * card's TCC draw (the 12MB embedded-source TU tokenizes ~16MB and
+     * its tok_str doublings strand ~15MB of holes) can not starve the
+     * next card on a shared backing. */
     backing = malloc(SPAN);
     if (!backing) { fprintf(stderr, "ksweep: no backing\n"); return 2; }
     arena = pm_util_mem_arena_create(backing, SPAN);
@@ -170,6 +189,9 @@ int main(int argc, char **argv) {
         double t0;
         const pm_metal_build_record_t *rec;
 
+        if (only != NULL && strstr(u->fqn, only) == NULL) {
+            continue;
+        }
         snprintf(rows[i].fqn, sizeof(rows[i].fqn), "%s", u->fqn);
         snprintf(rows[i].impl, sizeof(rows[i].impl), "%s", u->impl);
         rows[i].n_sources = u->n_sources;
@@ -218,6 +240,31 @@ int main(int argc, char **argv) {
         memset(err, 0, sizeof(err));
         t0 = now_ms();
         {
+            /* per-unit arena: a fresh backing per compile, destroyed
+             * after — the TCC draw is unit-local (records/at-slots the
+             * build retains are ctx-arena-owned and survive; this is
+             * the same contract test_ctx_survives_caller_arena
+             * proves). One shared arena for the whole sweep starved
+             * late cards: the biggest TU (the 12MB embedded-source
+             * include) strands ~15MB of tok_str holes next to its
+             * 16MB successor, and the earlier cards' records had
+             * already taken the rest of the backing. */
+            void *ubacking = malloc(SPAN);
+            pm_util_mem_arena_t *uarena;
+            if (!ubacking) {
+                rows[i].rc = -1003;
+                n_refused++;
+                printf("FAIL  %-44s no unit backing\n", u->fqn);
+                continue;
+            }
+            uarena = pm_util_mem_arena_create(ubacking, SPAN);
+            if (!uarena) {
+                free(ubacking);
+                rows[i].rc = -1003;
+                n_refused++;
+                printf("FAIL  %-44s no unit arena\n", u->fqn);
+                continue;
+            }
             pm_metal_build_compile_opts_t copts;
             memset(&copts, 0, sizeof(copts));
             copts.unit_root = unit_root;
@@ -225,15 +272,19 @@ int main(int argc, char **argv) {
             copts.n_include_dirs = n_includes;
             copts.defines = defines;
             copts.n_defines = n_defines;
-            rc = pm_metal_build_unit_compile(arena, u, &copts,
+            rc = pm_metal_build_unit_compile(uarena, u, &copts,
                 &art, err, sizeof(err));
+            image_len = art.len;
+            pm_metal_build_artifact_destroy(&art);
+            pm_util_mem_arena_destroy(uarena);
+            free(ubacking);
         }
         rows[i].ms = now_ms() - t0;
         rows[i].rc = rc;
         snprintf(rows[i].err, sizeof(rows[i].err), "%s", err);
 
         if (rc == PM_METAL_BUILD_OK) {
-            rows[i].image_len = art.len;
+            rows[i].image_len = image_len;
             rec = pm_metal_build_record_find(u->fqn);
             if (rec != NULL) {
                 rows[i].n_syms = rec->n_syms;
@@ -241,8 +292,7 @@ int main(int argc, char **argv) {
             }
             n_ok++;
             printf("ok    %-44s %u src, %zu image, %u syms, %.0fms\n",
-                u->fqn, u->n_sources, art.len, rows[i].n_syms, rows[i].ms);
-            pm_metal_build_artifact_destroy(&art);
+                u->fqn, u->n_sources, image_len, rows[i].n_syms, rows[i].ms);
         } else {
             n_refused++;
             printf("FAIL  %-44s rc=%d %s\n", u->fqn, rc, err);
