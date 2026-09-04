@@ -6251,6 +6251,155 @@ impl Parser {
         unsafe { self.parse_fn_sig(kids, declare_only) }
     }
 
+    /* Trait declaration item: `pub trait NAME[: Super] { fn sigs }`.
+     * Lowered as an IMPL-shaped node carrying a "traitdecl" ATTR marker
+     * — the trait object type (a `&mut dyn NAME`) is a C struct whose
+     * fields are the trait's method fn-ptrs (the vtable inlined), so
+     * the DECLARATION lowers a struct typedef + fn-ptr types, and the
+     * trait IMPLS fill it. Methods parse declare-only (parse_fn_sig
+     * with declare_only=1), including `&self`/`&mut self` receivers —
+     * the object is the first param in the fn-ptr type. Supertrait
+     * bounds (`: Send`) after the name are skipped balanced (like
+     * impl generics): the object's vtable covers the declared methods
+     * only; supertraits that are marker traits need no slots. */
+    unsafe fn parse_trait(&mut self, kids: &mut Kids) -> *mut pm_jit_rsx_ast_t {
+        let line = unsafe { self.line(self.at) };
+        self.at += 1;
+        /* the object name */
+        if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::IDENT {
+            unsafe {
+                self.err(b"expected trait name\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        let name_tok = self.at;
+        self.at += 1;
+        /* supertrait bounds: `: Send` / `: Send + Sync` — skip balanced
+         * to the '{' (bounds can carry generics/paths, none of which
+         * change the object shape: marker supertraits carry no slots,
+         * and the object type is spelled by leaf name anyway). */
+        if unsafe { self.is_punct(self.at, b':') } {
+            let mut depth = 0usize;
+            loop {
+                let k = unsafe { self.kind(self.at) };
+                if k == pm_jit_rsx_tok_kind::END {
+                    unsafe {
+                        self.err(b"expected '{' in trait\0".as_ptr());
+                    }
+                    return core::ptr::null_mut();
+                }
+                if unsafe { self.is_punct(self.at, b'{') } {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                } else if unsafe { self.is_punct(self.at, b'(') }
+                    || unsafe { self.is_punct(self.at, b'<') }
+                {
+                    depth += 1;
+                }
+                self.at += 1;
+            }
+        }
+        if !unsafe { self.is_punct(self.at, b'{') } {
+            unsafe {
+                self.err(b"expected '{' in trait\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        self.at += 1;
+        /* method sigs — declare-only FN kids (body-less) */
+        let mut body = Kids::new();
+        loop {
+            if unsafe { self.is_punct(self.at, b'}') } {
+                self.at += 1;
+                break;
+            }
+            if !self.ok {
+                return core::ptr::null_mut();
+            }
+            if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::END {
+                unsafe {
+                    self.err(b"expected '}' in trait before end of file\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            let before = self.at;
+            if unsafe { self.is_punct(self.at, b'#') } {
+                let mut ik = Kids::new();
+                unsafe {
+                    self.parse_outer_attrs(&mut ik);
+                }
+                if unsafe { self.is_kw(self.at, b"fn\0".as_ptr()) } {
+                    let f = unsafe { self.parse_fn_sig(&mut ik, 1) };
+                    unsafe {
+                        body.add(f, self.arena);
+                    }
+                    continue;
+                }
+                unsafe {
+                    self.err(b"unsupported: trait member\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            if unsafe { self.is_kw(self.at, b"fn\0".as_ptr()) } {
+                let mut ik = Kids::new();
+                let f = unsafe { self.parse_fn_sig(&mut ik, 1) };
+                unsafe {
+                    body.add(f, self.arena);
+                }
+                continue;
+            }
+            if self.ok && self.at == before {
+                unsafe {
+                    self.err(b"internal: trait member consumed no tokens\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            unsafe {
+                self.err(b"unsupported: trait member\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        /* TRAIT-kind node (the kind table's reserved slot 10): the
+         * object name as the node's text, the declare-only method sigs
+         * as FN kids. The item pass emits the object typedef (a C
+         * struct of method fn-ptrs — the vtable inlined) and records
+         * each method's slot for dyn dispatch; trait impls fill it. */
+        let n = unsafe {
+            self.mk(
+                pm_jit_rsx_ast_kind::TRAIT,
+                line,
+                self.text(name_tok),
+                self.text_len(name_tok),
+            )
+        };
+        let mut all = Kids::new();
+        let mut i = 0usize;
+        while i < kids.n {
+            unsafe {
+                all.add(*kids.fixed.as_ptr().add(i), self.arena);
+            }
+            i += 1;
+        }
+        let mut j = 0usize;
+        while j < body.n {
+            let one: *mut pm_jit_rsx_ast_t = if j < KIDS_INLINE {
+                unsafe { *body.fixed.as_ptr().add(j) }
+            } else {
+                unsafe { *body.spill.add(j - KIDS_INLINE) }
+            };
+            unsafe {
+                all.add(one, self.arena);
+            }
+            j += 1;
+        }
+        unsafe {
+            self.set_kids(n, &all);
+        }
+        n
+    }
+
     /* impl block: inherent or trait impl; members are fns. */
     unsafe fn parse_impl(&mut self, kids: &mut Kids) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
@@ -6284,24 +6433,33 @@ impl Parser {
                 self.at += 1;
             }
         }
-        /* Type path (no generics on the impl itself). */
-        let self_ty = unsafe { self.parse_path_type() };
+        /* Type path (no generics on the impl itself). In `impl Trait for
+         * Type` the FIRST path names the trait and the path after `for`
+         * names the SELF type — swap so self_ty stays the self type and
+         * the trait node wraps the trait path (both impl forms put the
+         * self type where the lowering's mangling and receiver typing
+         * read it). */
+        let mut self_ty = unsafe { self.parse_path_type() };
         let mut body = Kids::new();
-        /* `impl Trait for Type` — record the trait when present. */
+        /* `impl Trait for Type` — the first path names the TRAIT and the
+         * path after `for` names the SELF type: re-swap so self_ty is the
+         * self type and the trait node (TYPE with text "trait") wraps the
+         * trait path — the shape every lowering reader expects. */
         let mut trait_node: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
         if unsafe { self.is_kw(self.at, b"for\0".as_ptr()) } {
             self.at += 1;
-            let t = unsafe { self.parse_path_type() };
+            let real_self = unsafe { self.parse_path_type() };
             trait_node = unsafe {
                 self.mk(pm_jit_rsx_ast_kind::TYPE, line, b"trait\0".as_ptr(), 5)
             };
             let mut tk = Kids::new();
             unsafe {
-                tk.add(t, self.arena);
+                tk.add(self_ty, self.arena);
             }
             unsafe {
                 self.set_kids(trait_node, &tk);
             }
+            self_ty = real_self;
         }
         if !unsafe { self.is_punct(self.at, b'{') } {
             unsafe {
@@ -6522,8 +6680,10 @@ impl Parser {
         if unsafe { self.is_kw(self.at, b"mod\0".as_ptr()) } {
             return unsafe { self.parse_mod() };
         }
-        if unsafe { self.is_kw(self.at, b"trait\0".as_ptr()) }
-            || unsafe { self.is_kw(self.at, b"macro_rules\0".as_ptr()) }
+        if unsafe { self.is_kw(self.at, b"trait\0".as_ptr()) } {
+            return unsafe { self.parse_trait(&mut kids) };
+        }
+        if unsafe { self.is_kw(self.at, b"macro_rules\0".as_ptr()) }
             || unsafe { self.is_kw(self.at, b"async\0".as_ptr()) }
         {
             unsafe {
@@ -6685,6 +6845,17 @@ const TUP_MAXF: usize = 4;
  * struct/union/alias emitted this unit — 96 covers a card's types plus
  * the appended face's. */
 const TYD_CAP: usize = 96;
+/* Trait-object plane: declared traits per unit and methods per trait.
+ * A trait decl lowers ONE C typedef — `typedef struct { ret (*m)(..);
+ * .. } Name;` — the vtable inlined as fields; `&mut dyn Name` in a
+ * signature renders as `Name *` and a method call through it renders
+ * `p->m(p, args..)`. Small caps: the units this compiler carries declare
+ * a handful of traits with a handful of methods each. */
+const TRAIT_CAP: usize = 8;
+const TRAIT_MCAP: usize = 12;
+const TRAIT_SIG: usize = 192;
+/* trait impl pairs per unit (Type, Trait) — enough for the unit's impls. */
+const TI_CAP: usize = 16;
 
 /* A struct record: name, fields, C types of fields. Field names and C
  * types are arena spans (NUL-terminated copies), so the table stores
@@ -7187,6 +7358,162 @@ impl EnumTab {
     }
 }
 
+
+/* A trait record: the object name plus its methods' vtable slots. The
+ * fn-ptr signature of each method is rendered ONCE at collect (the sig
+ * AST is discarded after the collect pass) into a fixed inline string:
+ * `<ret> (*name)(Name *self, T p, ..)` — the body of a vtable field. The
+ * typedef emit reads the rendered sigs; the callsite dispatch only needs
+ * `p->name`; the impl-side vtable initializer reads method names. */
+struct TraitTab {
+    names: [[u8; 64]; TRAIT_CAP],
+    name_lens: [usize; TRAIT_CAP],
+    n: usize,
+    /* method rows: trait t, method m lives at row t * TRAIT_MCAP + m */
+    m_names: [[u8; 64]; TRAIT_CAP * TRAIT_MCAP],
+    m_name_lens: [usize; TRAIT_CAP * TRAIT_MCAP],
+    /* receiver by ref? `&self`/`&mut self` — the fn-ptr takes Name*;
+     * by-value self takes Name (rare; the dyn plane is ref-carried). */
+    m_ref_recv: [bool; TRAIT_CAP * TRAIT_MCAP],
+    /* rendered fn-ptr sig bodies, NUL-terminated */
+    m_sigs: [[u8; TRAIT_SIG]; TRAIT_CAP * TRAIT_MCAP],
+    m_sig_lens: [usize; TRAIT_CAP * TRAIT_MCAP],
+    m_counts: [usize; TRAIT_CAP],
+}
+
+impl TraitTab {
+    unsafe fn new() -> TraitTab {
+        TraitTab {
+            names: [[0; 64]; TRAIT_CAP],
+            name_lens: [0; TRAIT_CAP],
+            n: 0,
+            m_names: [[0; 64]; TRAIT_CAP * TRAIT_MCAP],
+            m_name_lens: [0; TRAIT_CAP * TRAIT_MCAP],
+            m_ref_recv: [false; TRAIT_CAP * TRAIT_MCAP],
+            m_sigs: [[0; TRAIT_SIG]; TRAIT_CAP * TRAIT_MCAP],
+            m_sig_lens: [0; TRAIT_CAP * TRAIT_MCAP],
+            m_counts: [0; TRAIT_CAP],
+        }
+    }
+
+    /* Find or create the trait's row; returns the slot, or TRAIT_CAP on
+     * overflow (the caller refuses loudly). */
+    unsafe fn intern(&mut self, name: *const u8, nlen: usize) -> usize {
+        let mut i = 0usize;
+        while i < self.n {
+            if self.name_lens[i] == nlen {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < nlen {
+                    if self.names[i][j] != unsafe { *name.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    return i;
+                }
+            }
+            i += 1;
+        }
+        if self.n >= TRAIT_CAP || nlen > 64 {
+            return TRAIT_CAP;
+        }
+        let mut k = 0usize;
+        while k < nlen {
+            self.names[self.n][k] = unsafe { *name.add(k) };
+            k += 1;
+        }
+        self.name_lens[self.n] = nlen;
+        self.n += 1;
+        self.n - 1
+    }
+
+    unsafe fn find(&self, name: *const u8, nlen: usize) -> usize {
+        let mut i = 0usize;
+        while i < self.n {
+            if self.name_lens[i] == nlen {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < nlen {
+                    if self.names[i][j] != unsafe { *name.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    return i;
+                }
+            }
+            i += 1;
+        }
+        TRAIT_CAP
+    }
+
+    /* Append a method row to trait slot t. Returns false on overflow
+     * (trait cap, method cap, name or sig too long) — the row index is
+     * t * TRAIT_MCAP + m, derivable by any caller that needs it. */
+    unsafe fn add_method(
+        &mut self,
+        t: usize,
+        mname: *const u8,
+        mlen: usize,
+        ref_recv: bool,
+        sig: *const u8,
+        sig_len: usize,
+    ) -> bool {
+        if t >= TRAIT_CAP || self.m_counts[t] >= TRAIT_MCAP || mlen > 64 || sig_len >= TRAIT_SIG {
+            return false;
+        }
+        let m = self.m_counts[t];
+        let row = t * TRAIT_MCAP + m;
+        let mut k = 0usize;
+        while k < mlen {
+            self.m_names[row][k] = unsafe { *mname.add(k) };
+            k += 1;
+        }
+        self.m_name_lens[row] = mlen;
+        self.m_ref_recv[row] = ref_recv;
+        let mut s = 0usize;
+        while s < sig_len {
+            self.m_sigs[row][s] = unsafe { *sig.add(s) };
+            s += 1;
+        }
+        self.m_sig_lens[row] = sig_len;
+        self.m_sigs[row][sig_len] = 0;
+        self.m_counts[t] = m + 1;
+        true
+    }
+
+    /* Find a trait's method row by name; false = absent. */
+    unsafe fn find_method(&self, t: usize, mname: *const u8, mlen: usize) -> bool {
+        if t >= TRAIT_CAP {
+            return false;
+        }
+        let mut m = 0usize;
+        while m < self.m_counts[t] {
+            let row = t * TRAIT_MCAP + m;
+            if self.m_name_lens[row] == mlen {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < mlen {
+                    if self.m_names[row][j] != unsafe { *mname.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    return true;
+                }
+            }
+            m += 1;
+        }
+        false
+    }
+}
 /* One lowering context. */
 struct Lower {
     arena: *mut pm_util_mem_arena_t,
@@ -7296,6 +7623,18 @@ struct Lower {
     /* recursion depth of emit_struct_ordered — the cycle refusal needs to
      * know the walk is still inside, not a fresh top-level call */
     tyorder_depth: usize,
+    /* Trait-object plane (dyn dispatch): declared traits, their method
+     * slots and rendered fn-ptr sigs. All-zero is a valid empty table,
+     * so the arena-zeroed construction needs no init. */
+    traits: TraitTab,
+    /* trait impl pairs seen this unit: (self type, trait name) — the
+     * vtable initializer of `impl T for S` and the coercion of `&mut S`
+     * to `TraitT *` both consult it. */
+    ti_self: [[u8; 48]; TI_CAP],
+    ti_self_lens: [usize; TI_CAP],
+    ti_trait: [[u8; 48]; TI_CAP],
+    ti_trait_lens: [usize; TI_CAP],
+    ti_n: usize,
 }
 
 impl Lower {
@@ -8545,9 +8884,170 @@ impl Lower {
                         p += 1;
                     }
                 }
+            } else if kind == pm_jit_rsx_ast_kind::TRAIT {
+                /* trait decl: intern the object, render each method's
+                 * vtable fn-ptr sig (ret (*name)(Name *self, params..)).
+                 * The typedef emits once in the type pass. */
+                self.collect_trait(item);
             } else if kind == pm_jit_rsx_ast_kind::IMPL {
                 /* methods: Type_method with self as first param. */
                 self.collect_impl(item);
+            }
+            i += 1;
+        }
+    }
+
+    /* Trait declaration: intern the object and its method slots. Each
+     * method's vtable fn-ptr sig is rendered here (the sig AST kids do
+     * not outlive collect): `ret (*name)(void *_self, T p, ..)` — the
+     * receiver is the DATA pointer the object carries, not the object
+     * itself (the trait object is `{ void *_self; fnptrs.. }`: a
+     * `&mut dyn T` lowers to `T *`, dispatch reads `p->m(p->_self, ..)`,
+     * and a coercion from `&mut S` materializes the object with
+     * `._self = &s` and the impl's mangled fns — the object carries both
+     * halves of Rust's fat pointer, C-style. A by-value self in a trait
+     * is refused: the vtable slot cannot copy a value the caller has
+     * no name for.) */
+    unsafe fn collect_trait(&mut self, item: *const pm_jit_rsx_ast_t) {
+        let tname = unsafe { (*item).text };
+        let tlen = unsafe { (*item).text_len };
+        let t = unsafe { self.traits.intern(tname, tlen) };
+        if t == TRAIT_CAP {
+            unsafe {
+                self.err(b"trait table overflow\0".as_ptr(), unsafe { (*item).line });
+            }
+            return;
+        }
+        let kids = unsafe { (*item).kids };
+        let nk = unsafe { (*item).n_kids } as usize;
+        let mut i = 0usize;
+        while i < nk {
+            let k = unsafe { *kids.add(i) };
+            if unsafe { (*k).kind } != pm_jit_rsx_ast_kind::FN {
+                i += 1;
+                continue;
+            }
+            /* receiver form: the first PARAM kid, if it is self-ish */
+            let fk = unsafe { (*k).kids };
+            let fnk = unsafe { (*k).n_kids } as usize;
+            let mut ref_recv = true;
+            let mut saw_recv = false;
+            let mut j = 0usize;
+            while j < fnk {
+                let p = unsafe { *fk.add(j) };
+                if unsafe { (*p).kind } == pm_jit_rsx_ast_kind::PARAM {
+                    let pt = unsafe { (*p).text };
+                    let ptl = unsafe { (*p).text_len };
+                    if ptl == 4 && !pt.is_null() && unsafe { z_eq(pt, ptl, b"self\0".as_ptr()) } {
+                        ref_recv = false;
+                        saw_recv = true;
+                    } else if !pt.is_null()
+                        && (unsafe { z_eq(pt, ptl, b"&self\0".as_ptr()) }
+                            || unsafe { z_eq(pt, ptl, b"&mut self\0".as_ptr()) })
+                    {
+                        ref_recv = true;
+                        saw_recv = true;
+                    }
+                    break;
+                }
+                j += 1;
+            }
+            if saw_recv && !ref_recv {
+                unsafe {
+                    self.err(
+                        b"unsupported: by-value self in trait\0".as_ptr(),
+                        unsafe { (*k).line },
+                    );
+                }
+                return;
+            }
+            /* render the fn-ptr sig body */
+            let sig = self.arena_tmp();
+            let mut at = 0usize;
+            /* ret: the last TYPE kid that is not a qual */
+            let mut ret = b"void\0".as_ptr();
+            let mut retlen = 4usize;
+            let mut j2 = 0usize;
+            while j2 < fnk {
+                let kk = unsafe { *fk.add(j2) };
+                if unsafe { (*kk).kind } == pm_jit_rsx_ast_kind::TYPE {
+                    let t2 = unsafe { (*kk).text };
+                    let t2l = unsafe { (*kk).text_len };
+                    let is_qual = t2l == 0
+                        || t2.is_null()
+                        || unsafe { z_eq(t2, t2l, b"unsafe\0".as_ptr()) }
+                        || unsafe { z_eq(t2, t2l, b"extern\0".as_ptr()) }
+                        || (unsafe { *t2 } == b'"');
+                    if !is_qual {
+                        let ct = self.arena_tmp();
+                        let n = unsafe { self.ctype(kk, ct, 128) };
+                        if n > 0 {
+                            ret = ct;
+                            retlen = n;
+                        }
+                    }
+                }
+                j2 += 1;
+            }
+            at = unsafe { bput(sig, TRAIT_SIG, at, ret, retlen) };
+            at = unsafe { bput(sig, TRAIT_SIG, at, b" (*\0".as_ptr(), 3) };
+            at = unsafe { bput(sig, TRAIT_SIG, at, unsafe { (*k).text }, unsafe { (*k).text_len }) };
+            at = unsafe { bput(sig, TRAIT_SIG, at, b")(void *_self\0".as_ptr(), 13) };
+            /* params: every PARAM kid after the receiver — each after the
+             * `void *_self` receiver, so EVERY one takes a leading comma */
+            let mut first = false;
+            let mut j3 = 0usize;
+            while j3 < fnk {
+                let p = unsafe { *fk.add(j3) };
+                if unsafe { (*p).kind } != pm_jit_rsx_ast_kind::PARAM {
+                    j3 += 1;
+                    continue;
+                }
+                let pt = unsafe { (*p).text };
+                let ptl = unsafe { (*p).text_len };
+                if !pt.is_null()
+                    && (unsafe { z_eq(pt, ptl, b"self\0".as_ptr()) }
+                        || unsafe { z_eq(pt, ptl, b"&self\0".as_ptr()) }
+                        || unsafe { z_eq(pt, ptl, b"&mut self\0".as_ptr()) })
+                {
+                    j3 += 1;
+                    continue;
+                }
+                if !first {
+                    at = unsafe { bput(sig, TRAIT_SIG, at, b", \0".as_ptr(), 2) };
+                }
+                first = false;
+                if unsafe { (*p).n_kids } >= 1 {
+                    let pty = unsafe { *(*p).kids.add(0) };
+                    let ct = self.arena_tmp();
+                    let n = unsafe { self.ctype(pty, ct, 128) };
+                    if n > 0 {
+                        at = unsafe { bput(sig, TRAIT_SIG, at, ct, n) };
+                    }
+                }
+                at = unsafe { bput(sig, TRAIT_SIG, at, b" \0".as_ptr(), 1) };
+                at = unsafe { bput(sig, TRAIT_SIG, at, pt, ptl) };
+                j3 += 1;
+            }
+            at = unsafe { bput(sig, TRAIT_SIG, at, b")\0".as_ptr(), 1) };
+            unsafe {
+                *sig.add(at) = 0;
+            }
+            let ok_add = unsafe {
+                self.traits.add_method(
+                    t,
+                    unsafe { (*k).text },
+                    unsafe { (*k).text_len },
+                    true,
+                    sig,
+                    at,
+                )
+            };
+            if !ok_add {
+                unsafe {
+                    self.err(b"trait method table overflow\0".as_ptr(), unsafe { (*k).line });
+                }
+                return;
             }
             i += 1;
         }
@@ -8560,21 +9060,63 @@ impl Lower {
         /* self type: first non-ATTR kid (a path TYPE node) */
         let mut self_ty: *const u8 = b"\0".as_ptr();
         let mut self_ty_len = 0usize;
+        /* trait impl? TYPE kid with text "trait" wraps the trait path */
+        let mut trait_nm: *const u8 = b"\0".as_ptr();
+        let mut trait_nl = 0usize;
         let mut j = 0usize;
         while j < nk {
             let k = unsafe { *kids.add(j) };
             if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::TYPE {
-                /* leaf of the path */
-                let kk = unsafe { (*k).kids };
-                let kn = unsafe { (*k).n_kids } as usize;
-                if kn > 0 {
-                    let leaf = unsafe { *kk.add(kn - 1) };
-                    self_ty = unsafe { (*leaf).text };
-                    self_ty_len = unsafe { (*leaf).text_len };
+                let t = unsafe { (*k).text };
+                let tl = unsafe { (*k).text_len };
+                if tl == 5 && !t.is_null() && unsafe { z_eq(t, tl, b"trait\0".as_ptr()) } {
+                    let tk = unsafe { (*k).kids };
+                    let tkn = unsafe { (*k).n_kids } as usize;
+                    if tkn >= 1 {
+                        let tpath = unsafe { *tk.add(0) };
+                        let pk = unsafe { (*tpath).kids };
+                        let pkn = unsafe { (*tpath).n_kids } as usize;
+                        if pkn >= 1 {
+                            let leaf = unsafe { *pk.add(pkn - 1) };
+                            trait_nm = unsafe { (*leaf).text };
+                            trait_nl = unsafe { (*leaf).text_len };
+                        }
+                    }
+                } else {
+                    /* leaf of the self-type path */
+                    let kk = unsafe { (*k).kids };
+                    let kn = unsafe { (*k).n_kids } as usize;
+                    if kn > 0 {
+                        let leaf = unsafe { *kk.add(kn - 1) };
+                        self_ty = unsafe { (*leaf).text };
+                        self_ty_len = unsafe { (*leaf).text_len };
+                    }
                 }
-                break;
             }
             j += 1;
+        }
+        /* record the (self type, trait) pair for vtable init + coercion */
+        if trait_nl > 0 && self_ty_len > 0 {
+            if self.ti_n < TI_CAP {
+                let mut a = 0usize;
+                while a < self_ty_len && a < 48 {
+                    self.ti_self[self.ti_n][a] = unsafe { *self_ty.add(a) };
+                    a += 1;
+                }
+                self.ti_self_lens[self.ti_n] = a;
+                let mut b2 = 0usize;
+                while b2 < trait_nl && b2 < 48 {
+                    self.ti_trait[self.ti_n][b2] = unsafe { *trait_nm.add(b2) };
+                    b2 += 1;
+                }
+                self.ti_trait_lens[self.ti_n] = b2;
+                self.ti_n += 1;
+            } else {
+                unsafe {
+                    self.err(b"trait impl table overflow\0".as_ptr(), unsafe { (*item).line });
+                }
+                return;
+            }
         }
         let mut methods_start = 0usize;
         while methods_start < nk {
@@ -15131,7 +15673,150 @@ impl Lower {
                         }
                     }
                     if !done_none {
-                        unsafe { self.emit_expr(*ak.add(i), locals) };
+                        /* dyn coercion: the param is a trait object
+                         * (`Trait *`) and the arg is a concrete struct
+                         * ref (`S *`) whose unit impls the trait —
+                         * materialize the object as a compound literal:
+                         * `&(Trait){ ._self = <arg>, .m = S_Trait_m, .. }`.
+                         * The literal lives for the full call expression
+                         * (C99), exactly Rust's reborrow window. A pair
+                         * (S, Trait) the unit never impls refuses loudly
+                         * — never a bare cast that would dispatch NULL
+                         * slots. */
+                        let mut done_coerce = false;
+                        if callok && !cname.is_null() && cnamelen > 0 {
+                            let pt = self.arena_tmp();
+                            let pl = unsafe {
+                                (*self.fns).param_ctype(cname, cnamelen, i, pt)
+                            };
+                            /* param `Trait *`? */
+                            if pl > 2 && unsafe { *pt.add(pl - 1) } == b'*' {
+                                let mut pl2 = pl - 1;
+                                while pl2 > 0 && unsafe { *pt.add(pl2 - 1) } == b' ' {
+                                    pl2 -= 1;
+                                }
+                                let tr = unsafe { self.traits.find(pt, pl2) };
+                                if tr < TRAIT_CAP {
+                                    let act = self.arena_tmp();
+                                    let al = unsafe {
+                                        self.expr_ctype(*ak.add(i), act, 128, locals)
+                                    };
+                                    /* arg `S *`? */
+                                    if al > 2 && unsafe { *act.add(al - 1) } == b'*' {
+                                        let mut al2 = al - 1;
+                                        while al2 > 0 && unsafe { *act.add(al2 - 1) } == b' ' {
+                                            al2 -= 1;
+                                        }
+                                        /* find the ti pair (S, Trait) */
+                                        let mut p2 = 0usize;
+                                        while p2 < self.ti_n {
+                                            let s_nm = self.ti_self[p2].as_ptr();
+                                            let s_ln = self.ti_self_lens[p2];
+                                            let t_nm2 = self.ti_trait[p2].as_ptr();
+                                            let t_ln2 = self.ti_trait_lens[p2];
+                                            if s_ln == al2
+                                                && t_ln2 == pl2
+                                                && unsafe { z_eq(act, al2, s_nm) }
+                                                && unsafe { z_eq(pt, pl2, t_nm2) }
+                                            {
+                                                /* materialize */
+                                                self.out.puts(b"&(\0".as_ptr());
+                                                self.out.put(pt, pl2);
+                                                self.out.puts(b"){ ._self = \0".as_ptr());
+                                                unsafe {
+                                                    self.emit_expr(*ak.add(i), locals)
+                                                };
+                                                let mut m2 = 0usize;
+                                                while m2 < self.traits.m_counts[tr] {
+                                                    let row = tr * TRAIT_MCAP + m2;
+                                                    self.out.puts(b", .\0".as_ptr());
+                                                    self.out.put(
+                                                        self.traits.m_names[row].as_ptr(),
+                                                        self.traits.m_name_lens[row],
+                                                    );
+                                                    self.out.puts(b" = \0".as_ptr());
+                                                    /* cast to the slot's fn-ptr type: the
+                                                     * impl fn takes S*, the slot takes
+                                                     * void* — same call shape, but the
+                                                     * init needs the explicit conversion
+                                                     * (gcc -Wpedantic and tcc both flag
+                                                     * the implicit one). The cast type is
+                                                     * the sig with the name spliced out:
+                                                     * `ret (*m)(..)` -> `ret (*)(..)`. */
+                                                    self.out.putc(b'(');
+                                                    {
+                                                        let sg = self.traits.m_sigs[row].as_ptr();
+                                                        let sl = self.traits.m_sig_lens[row];
+                                                        /* find "(*" then the matching name end ")"
+                                                         * — usize::MAX is not in the subset
+                                                         * (self-host: it would refuse), a
+                                                         * found flag + plain usize carry
+                                                         * the same sentinel contract. */
+                                                        let mut a = 0usize;
+                                                        let mut name_at = 0usize;
+                                                        let mut name_end = 0usize;
+                                                        let mut have = false;
+                                                        while a + 1 < sl {
+                                                            if unsafe { *sg.add(a) } == b'('
+                                                                && unsafe { *sg.add(a + 1) } == b'*'
+                                                            {
+                                                                name_at = a + 2;
+                                                                have = true;
+                                                                break;
+                                                            }
+                                                            a += 1;
+                                                        }
+                                                        if have {
+                                                            let mut b3 = name_at;
+                                                            while b3 < sl {
+                                                                if unsafe { *sg.add(b3) } == b')' {
+                                                                    name_end = b3;
+                                                                    break;
+                                                                }
+                                                                b3 += 1;
+                                                            }
+                                                        }
+                                                        if have && name_end > name_at {
+                                                            let mut r = 0usize;
+                                                            while r < sl {
+                                                                if r >= name_at && r < name_end {
+                                                                    r += 1;
+                                                                    continue;
+                                                                }
+                                                                self.out.putc(unsafe { *sg.add(r) });
+                                                                r += 1;
+                                                            }
+                                                        }
+                                                    }
+                                                    self.out.puts(b")\0".as_ptr());
+                                                    self.out.put(s_nm, s_ln);
+                                                    self.out.putc(b'_');
+                                                    self.out.put(pt, pl2);
+                                                    self.out.putc(b'_');
+                                                    self.out.put(
+                                                        self.traits.m_names[row].as_ptr(),
+                                                        self.traits.m_name_lens[row],
+                                                    );
+                                                    m2 += 1;
+                                                }
+                                                self.out.puts(b" }\0".as_ptr());
+                                                done_coerce = true;
+                                                break;
+                                            }
+                                            p2 += 1;
+                                        }
+                                    }
+                                    /* arg type unknown (al == 0): the
+                                     * pair scan found nothing — the
+                                     * plain emit below passes the arg
+                                     * as-is and the C compiler flags a
+                                     * genuinely wrong arg at TCC time. */
+                                }
+                            }
+                        }
+                        if !done_coerce {
+                            unsafe { self.emit_expr(*ak.add(i), locals) };
+                        }
                     }
                     i += 1;
                 }
@@ -15751,6 +16436,41 @@ impl Lower {
                     }
                     self.out.puts(b")\0".as_ptr());
                     return;
+                }
+                /* trait-object dispatch: the receiver's C type names a
+                 * declared trait (a `&mut dyn T` param/local lowers to
+                 * `T *`) — the method call is a vtable slot:
+                 * `p->m(p, args..)`. The receiver must arrive as the
+                 * object pointer (every trait receiver in the subset is
+                 * `&self`/`&mut self`, by-value self in a trait was
+                 * refused at collect), so the recv expression itself is
+                 * the first argument. */
+                if j > b0 {
+                    let tr = unsafe { self.traits.find(tbuf.add(b0), j - b0) };
+                    if tr < TRAIT_CAP
+                        && unsafe { self.traits.find_method(tr, mname, mlen) }
+                    {
+                        /* recv is the `Trait *` object; the slot takes
+                         * the DATA pointer: `p->m(p->_self, ..)` */
+                        unsafe { self.emit_expr(recv, locals) };
+                        self.out.putc(b'-');
+                        self.out.putc(b'>');
+                        self.out.put(mname, mlen);
+                        self.out.puts(b"(\0".as_ptr());
+                        unsafe { self.emit_expr(recv, locals) };
+                        self.out.puts(b"->_self\0".as_ptr());
+                        if an > 0 {
+                            let ak = unsafe { (*args).kids };
+                            let mut i = 0usize;
+                            while i < an {
+                                self.out.puts(b", \0".as_ptr());
+                                unsafe { self.emit_expr(*ak.add(i), locals) };
+                                i += 1;
+                            }
+                        }
+                        self.out.puts(b")\0".as_ptr());
+                        return;
+                    }
                 }
             }
         }
@@ -18303,6 +19023,12 @@ impl Lower {
             if nlen >= 8 && unsafe { z_eq(name, 8, b"rsx_opt_\0".as_ptr()) } {
                 continue;
             }
+            /* a declared trait names its own object typedef in pass A —
+             * hoisting `typedef struct X X;` would collide with the
+             * vtable struct's real typedef */
+            if unsafe { self.traits.find(name, nlen) } < TRAIT_CAP {
+                continue;
+            }
             /* a type alias of this name declares itself in pass A */
             let mut is_alias = false;
             if !file.is_null() {
@@ -18511,6 +19237,30 @@ impl Lower {
          * pending Option typedef can no longer name an unemitted payload
          * — lower_static's flush becomes safe */
         self.types_done = true;
+        /* trait-object typedefs: one `typedef struct { ret (*m)(..); .. }
+         * Name;` per declared trait — the vtable inlined as fields. The
+         * fn-ptr sigs were rendered at collect; a sig may name a struct
+         * (param/ret types), and pass A has now emitted every unit type,
+         * so the fields' C types are complete here. Traits are unit-local
+         * (no generic traits — a generic trait's object type has no
+         * single C spelling), and the dyn plane is ref-carried: the
+         * typedef is complete where declared. */
+        i = 0;
+        while i < nk {
+            item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            if unsafe { (*item).kind } == pm_jit_rsx_ast_kind::TRAIT {
+                unsafe { self.lower_trait_decl(item) };
+            }
+            if !self.ok {
+                bad = true;
+                self.ok = true;
+            }
+            i += 1;
+        }
         unsafe { self.tup_emit_rest() };
         /* remaining Option typedefs — primitive payloads need no naming
          * type; emit before the prototypes/fns that use them */
@@ -18698,8 +19448,40 @@ impl Lower {
         }
         false
     }
-}
+    /* Trait-object typedef: `typedef struct { void *_self; <sig0>;
+     * <sig1>; .. } Name;` — the vtable inlined as fn-ptr fields, each
+     * taking the DATA pointer the object carries (sigs rendered at
+     * collect with a void* receiver). */
+    unsafe fn lower_trait_decl(&mut self, item: *const pm_jit_rsx_ast_t) {
+        let tname = unsafe { (*item).text };
+        let tlen = unsafe { (*item).text_len };
+        let t = unsafe { self.traits.find(tname, tlen) };
+        if t >= TRAIT_CAP {
+            unsafe {
+                self.err(b"trait not collected\0".as_ptr(), unsafe { (*item).line });
+            }
+            return;
+        }
+        unsafe { self.out.puts(b"typedef struct {\n    void *_self;\n".as_ptr()) };
+        let mut m = 0usize;
+        while m < self.traits.m_counts[t] {
+            let row = t * TRAIT_MCAP + m;
+            unsafe { self.out.puts(b"    ".as_ptr()) };
+            unsafe {
+                self.out.put(
+                    self.traits.m_sigs[row].as_ptr(),
+                    self.traits.m_sig_lens[row],
+                )
+            };
+            unsafe { self.out.puts(b";\n".as_ptr()) };
+            m += 1;
+        }
+        unsafe { self.out.puts(b"} ".as_ptr()) };
+        unsafe { self.out.put(tname, tlen) };
+        unsafe { self.out.puts(b";\n".as_ptr()) };
+    }
 
+}
 /* ================= AST dump (inspect face) ================= */
 
 /* Renders into the caller's fixed buffer (the header's contract: bytes

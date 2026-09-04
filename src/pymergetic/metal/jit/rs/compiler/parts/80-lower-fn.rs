@@ -754,6 +754,12 @@ impl Lower {
             if nlen >= 8 && unsafe { z_eq(name, 8, b"rsx_opt_\0".as_ptr()) } {
                 continue;
             }
+            /* a declared trait names its own object typedef in pass A —
+             * hoisting `typedef struct X X;` would collide with the
+             * vtable struct's real typedef */
+            if unsafe { self.traits.find(name, nlen) } < TRAIT_CAP {
+                continue;
+            }
             /* a type alias of this name declares itself in pass A */
             let mut is_alias = false;
             if !file.is_null() {
@@ -962,6 +968,30 @@ impl Lower {
          * pending Option typedef can no longer name an unemitted payload
          * — lower_static's flush becomes safe */
         self.types_done = true;
+        /* trait-object typedefs: one `typedef struct { ret (*m)(..); .. }
+         * Name;` per declared trait — the vtable inlined as fields. The
+         * fn-ptr sigs were rendered at collect; a sig may name a struct
+         * (param/ret types), and pass A has now emitted every unit type,
+         * so the fields' C types are complete here. Traits are unit-local
+         * (no generic traits — a generic trait's object type has no
+         * single C spelling), and the dyn plane is ref-carried: the
+         * typedef is complete where declared. */
+        i = 0;
+        while i < nk {
+            item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            if unsafe { (*item).kind } == pm_jit_rsx_ast_kind::TRAIT {
+                unsafe { self.lower_trait_decl(item) };
+            }
+            if !self.ok {
+                bad = true;
+                self.ok = true;
+            }
+            i += 1;
+        }
         unsafe { self.tup_emit_rest() };
         /* remaining Option typedefs — primitive payloads need no naming
          * type; emit before the prototypes/fns that use them */
@@ -1149,5 +1179,37 @@ impl Lower {
         }
         false
     }
-}
+    /* Trait-object typedef: `typedef struct { void *_self; <sig0>;
+     * <sig1>; .. } Name;` — the vtable inlined as fn-ptr fields, each
+     * taking the DATA pointer the object carries (sigs rendered at
+     * collect with a void* receiver). */
+    unsafe fn lower_trait_decl(&mut self, item: *const pm_jit_rsx_ast_t) {
+        let tname = unsafe { (*item).text };
+        let tlen = unsafe { (*item).text_len };
+        let t = unsafe { self.traits.find(tname, tlen) };
+        if t >= TRAIT_CAP {
+            unsafe {
+                self.err(b"trait not collected\0".as_ptr(), unsafe { (*item).line });
+            }
+            return;
+        }
+        unsafe { self.out.puts(b"typedef struct {\n    void *_self;\n".as_ptr()) };
+        let mut m = 0usize;
+        while m < self.traits.m_counts[t] {
+            let row = t * TRAIT_MCAP + m;
+            unsafe { self.out.puts(b"    ".as_ptr()) };
+            unsafe {
+                self.out.put(
+                    self.traits.m_sigs[row].as_ptr(),
+                    self.traits.m_sig_lens[row],
+                )
+            };
+            unsafe { self.out.puts(b";\n".as_ptr()) };
+            m += 1;
+        }
+        unsafe { self.out.puts(b"} ".as_ptr()) };
+        unsafe { self.out.put(tname, tlen) };
+        unsafe { self.out.puts(b";\n".as_ptr()) };
+    }
 
+}

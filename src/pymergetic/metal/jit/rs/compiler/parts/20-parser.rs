@@ -4890,6 +4890,155 @@ impl Parser {
         unsafe { self.parse_fn_sig(kids, declare_only) }
     }
 
+    /* Trait declaration item: `pub trait NAME[: Super] { fn sigs }`.
+     * Lowered as an IMPL-shaped node carrying a "traitdecl" ATTR marker
+     * — the trait object type (a `&mut dyn NAME`) is a C struct whose
+     * fields are the trait's method fn-ptrs (the vtable inlined), so
+     * the DECLARATION lowers a struct typedef + fn-ptr types, and the
+     * trait IMPLS fill it. Methods parse declare-only (parse_fn_sig
+     * with declare_only=1), including `&self`/`&mut self` receivers —
+     * the object is the first param in the fn-ptr type. Supertrait
+     * bounds (`: Send`) after the name are skipped balanced (like
+     * impl generics): the object's vtable covers the declared methods
+     * only; supertraits that are marker traits need no slots. */
+    unsafe fn parse_trait(&mut self, kids: &mut Kids) -> *mut pm_jit_rsx_ast_t {
+        let line = unsafe { self.line(self.at) };
+        self.at += 1;
+        /* the object name */
+        if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::IDENT {
+            unsafe {
+                self.err(b"expected trait name\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        let name_tok = self.at;
+        self.at += 1;
+        /* supertrait bounds: `: Send` / `: Send + Sync` — skip balanced
+         * to the '{' (bounds can carry generics/paths, none of which
+         * change the object shape: marker supertraits carry no slots,
+         * and the object type is spelled by leaf name anyway). */
+        if unsafe { self.is_punct(self.at, b':') } {
+            let mut depth = 0usize;
+            loop {
+                let k = unsafe { self.kind(self.at) };
+                if k == pm_jit_rsx_tok_kind::END {
+                    unsafe {
+                        self.err(b"expected '{' in trait\0".as_ptr());
+                    }
+                    return core::ptr::null_mut();
+                }
+                if unsafe { self.is_punct(self.at, b'{') } {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                } else if unsafe { self.is_punct(self.at, b'(') }
+                    || unsafe { self.is_punct(self.at, b'<') }
+                {
+                    depth += 1;
+                }
+                self.at += 1;
+            }
+        }
+        if !unsafe { self.is_punct(self.at, b'{') } {
+            unsafe {
+                self.err(b"expected '{' in trait\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        self.at += 1;
+        /* method sigs — declare-only FN kids (body-less) */
+        let mut body = Kids::new();
+        loop {
+            if unsafe { self.is_punct(self.at, b'}') } {
+                self.at += 1;
+                break;
+            }
+            if !self.ok {
+                return core::ptr::null_mut();
+            }
+            if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::END {
+                unsafe {
+                    self.err(b"expected '}' in trait before end of file\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            let before = self.at;
+            if unsafe { self.is_punct(self.at, b'#') } {
+                let mut ik = Kids::new();
+                unsafe {
+                    self.parse_outer_attrs(&mut ik);
+                }
+                if unsafe { self.is_kw(self.at, b"fn\0".as_ptr()) } {
+                    let f = unsafe { self.parse_fn_sig(&mut ik, 1) };
+                    unsafe {
+                        body.add(f, self.arena);
+                    }
+                    continue;
+                }
+                unsafe {
+                    self.err(b"unsupported: trait member\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            if unsafe { self.is_kw(self.at, b"fn\0".as_ptr()) } {
+                let mut ik = Kids::new();
+                let f = unsafe { self.parse_fn_sig(&mut ik, 1) };
+                unsafe {
+                    body.add(f, self.arena);
+                }
+                continue;
+            }
+            if self.ok && self.at == before {
+                unsafe {
+                    self.err(b"internal: trait member consumed no tokens\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            unsafe {
+                self.err(b"unsupported: trait member\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        /* TRAIT-kind node (the kind table's reserved slot 10): the
+         * object name as the node's text, the declare-only method sigs
+         * as FN kids. The item pass emits the object typedef (a C
+         * struct of method fn-ptrs — the vtable inlined) and records
+         * each method's slot for dyn dispatch; trait impls fill it. */
+        let n = unsafe {
+            self.mk(
+                pm_jit_rsx_ast_kind::TRAIT,
+                line,
+                self.text(name_tok),
+                self.text_len(name_tok),
+            )
+        };
+        let mut all = Kids::new();
+        let mut i = 0usize;
+        while i < kids.n {
+            unsafe {
+                all.add(*kids.fixed.as_ptr().add(i), self.arena);
+            }
+            i += 1;
+        }
+        let mut j = 0usize;
+        while j < body.n {
+            let one: *mut pm_jit_rsx_ast_t = if j < KIDS_INLINE {
+                unsafe { *body.fixed.as_ptr().add(j) }
+            } else {
+                unsafe { *body.spill.add(j - KIDS_INLINE) }
+            };
+            unsafe {
+                all.add(one, self.arena);
+            }
+            j += 1;
+        }
+        unsafe {
+            self.set_kids(n, &all);
+        }
+        n
+    }
+
     /* impl block: inherent or trait impl; members are fns. */
     unsafe fn parse_impl(&mut self, kids: &mut Kids) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
@@ -4923,24 +5072,33 @@ impl Parser {
                 self.at += 1;
             }
         }
-        /* Type path (no generics on the impl itself). */
-        let self_ty = unsafe { self.parse_path_type() };
+        /* Type path (no generics on the impl itself). In `impl Trait for
+         * Type` the FIRST path names the trait and the path after `for`
+         * names the SELF type — swap so self_ty stays the self type and
+         * the trait node wraps the trait path (both impl forms put the
+         * self type where the lowering's mangling and receiver typing
+         * read it). */
+        let mut self_ty = unsafe { self.parse_path_type() };
         let mut body = Kids::new();
-        /* `impl Trait for Type` — record the trait when present. */
+        /* `impl Trait for Type` — the first path names the TRAIT and the
+         * path after `for` names the SELF type: re-swap so self_ty is the
+         * self type and the trait node (TYPE with text "trait") wraps the
+         * trait path — the shape every lowering reader expects. */
         let mut trait_node: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
         if unsafe { self.is_kw(self.at, b"for\0".as_ptr()) } {
             self.at += 1;
-            let t = unsafe { self.parse_path_type() };
+            let real_self = unsafe { self.parse_path_type() };
             trait_node = unsafe {
                 self.mk(pm_jit_rsx_ast_kind::TYPE, line, b"trait\0".as_ptr(), 5)
             };
             let mut tk = Kids::new();
             unsafe {
-                tk.add(t, self.arena);
+                tk.add(self_ty, self.arena);
             }
             unsafe {
                 self.set_kids(trait_node, &tk);
             }
+            self_ty = real_self;
         }
         if !unsafe { self.is_punct(self.at, b'{') } {
             unsafe {
@@ -5161,8 +5319,10 @@ impl Parser {
         if unsafe { self.is_kw(self.at, b"mod\0".as_ptr()) } {
             return unsafe { self.parse_mod() };
         }
-        if unsafe { self.is_kw(self.at, b"trait\0".as_ptr()) }
-            || unsafe { self.is_kw(self.at, b"macro_rules\0".as_ptr()) }
+        if unsafe { self.is_kw(self.at, b"trait\0".as_ptr()) } {
+            return unsafe { self.parse_trait(&mut kids) };
+        }
+        if unsafe { self.is_kw(self.at, b"macro_rules\0".as_ptr()) }
             || unsafe { self.is_kw(self.at, b"async\0".as_ptr()) }
         {
             unsafe {

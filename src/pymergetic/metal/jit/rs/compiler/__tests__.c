@@ -261,8 +261,10 @@ static int32_t test_parse_unsupported(void) {
     pm_jit_rsx_toklist_t toks;
     pm_jit_rsx_ast_t *unit = NULL;
     char err[PM_METAL_JIT_RSX_ERR_MAX];
-    static const char trait_src[] =
-        "trait Inner {\n"
+    /* trait items PARSE now (the dyn plane); async fn is the remaining
+     * refused item kind — the negative probe rides it. */
+    static const char async_src[] =
+        "async fn f() {\n"
         "}\n";
 
     if (backing == NULL) return 60;
@@ -271,7 +273,7 @@ static int32_t test_parse_unsupported(void) {
 
     memset(&toks, 0, sizeof(toks));
     memset(err, 0, sizeof(err));
-    if (pm_metal_jit_rsx_lex(arena, trait_src, strlen(trait_src), &toks, err, sizeof(err)) != 0) {
+    if (pm_metal_jit_rsx_lex(arena, async_src, strlen(async_src), &toks, err, sizeof(err)) != 0) {
         pm_util_mem_arena_destroy(arena); free(backing); return 62;
     }
     unit = NULL;
@@ -2751,6 +2753,148 @@ static int32_t test_stack_independence(void) {
     return 0;
 }
 
+
+/* --- trait / dyn plane: parse, generated-C shape, linked dispatch --- */
+
+static const char TRAIT_RT_SRC[] =
+    "pub struct Counter { pub n: u32 }\n"
+    "pub trait Sink { fn put(&mut self, x: u32); fn get(&self) -> u32; }\n"
+    "impl Sink for Counter {\n"
+    "    fn put(&mut self, x: u32) { self.n += x; }\n"
+    "    fn get(&self) -> u32 { self.n }\n"
+    "}\n"
+    "pub fn drive(s: &mut dyn Sink, v: u32) { s.put(v); }\n"
+    "#[no_mangle]\n"
+    "pub fn rsx_trait_rt_main() -> u32 {\n"
+    "    let mut c = Counter { n: 0 };\n"
+    "    drive(&mut c, 7);\n"
+    "    c.n\n"
+    "}\n";
+
+static int32_t test_trait_runtime_linked(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    void *backing = NULL, *obacking = NULL;
+    pm_util_mem_arena_t *arena = NULL, *oarena = NULL;
+    char *c = NULL;
+    size_t c_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    char oerr[256];
+    int32_t rc;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    pm_metal_build_unit_t unit;
+    pm_metal_build_artifact_t art;
+    uint8_t *objs[1];
+    size_t lens[1];
+    uint32_t (*l_main)(void);
+    uint32_t r;
+
+    backing = malloc(1u << 24);
+    if (!backing) return 240;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (!arena) { free(backing); return 241; }
+    memset(err, 0, sizeof(err));
+    c = NULL; c_len = 0;
+    rc = pm_metal_jit_rsx_compile(arena, TRAIT_RT_SRC,
+                                  strlen(TRAIT_RT_SRC),
+                                  &c, &c_len, err, sizeof(err));
+    if (rc != 0) {
+        fprintf(stderr, "trait_rt: compile failed: %s\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 242;
+    }
+    /* (1) the object typedef carries the vtable shape: a `_self` data
+     * field plus one fn-ptr per trait method. */
+    if (strstr(c, "void *_self;") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 243;
+    }
+    if (strstr(c, "void (*put)(void *_self, uint32_t x);") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 244;
+    }
+    if (strstr(c, "uint32_t (*get)(void *_self);") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 245;
+    }
+    /* (2) the impl methods mangle Type_Trait_method with the SELF-typed
+     * receiver (the pre-dyn-plane inversion bug: Trait_Type) */
+    if (strstr(c, "Counter_Sink_put(Counter * self") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 246;
+    }
+    /* (3) the callsite dispatches through the object: `s->put(s->_self, ..)` */
+    if (strstr(c, "s->put(s->_self, v)") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 247;
+    }
+    /* (4) the coercion materializes the object with the impl's fns */
+    if (strstr(c, "._self = (&c)") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 248;
+    }
+    /* (4b) the fn-ptr cast carries the slot's full fn-ptr type (params
+     * named, name spliced out): `ret (*)(void *_self, T p)`. */
+    if (strstr(c, ".put = (void (*)(void *_self, uint32_t x))Counter_Sink_put") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 249;
+    }
+
+    /* linked execution: the dispatch must actually run through the
+     * vtable slot and land in the impl method */
+    obacking = malloc(1u << 24);
+    if (!obacking) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 250;
+    }
+    oarena = pm_util_mem_arena_create(obacking, 1u << 24);
+    if (!oarena) {
+        pm_util_mem_arena_destroy(arena); free(backing); free(obacking);
+        return 251;
+    }
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_jit_c_object_compile(oarena, c, c_len, &obj, &obj_len,
+                                       oerr, sizeof(oerr));
+    if (rc != 0) {
+        if (strstr(oerr, "no native object output on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0; /* polite seat refusal — skip */
+        }
+        fprintf(stderr, "trait_rt: object compile failed: %s\n", oerr);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 252;
+    }
+    memset(&unit, 0, sizeof(unit));
+    snprintf(unit.fqn, sizeof(unit.fqn), "%s", "rsx.trait.rt");
+    objs[0] = obj;
+    lens[0] = obj_len;
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_build_link(oarena, &unit, objs, lens, 1, &art,
+                             oerr, sizeof(oerr));
+    if (rc != PM_METAL_BUILD_OK) {
+        if (strstr(oerr, "no ELF loader on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0; /* polite seat refusal — skip */
+        }
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 253;
+    }
+    l_main = (uint32_t (*)(void))
+        pm_metal_build_artifact_lookup(&art, "rsx_trait_rt_main");
+    if (l_main == NULL) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 254;
+    }
+    r = l_main();
+    pm_metal_build_artifact_destroy(&art);
+    pm_util_mem_arena_destroy(arena); free(backing);
+    pm_util_mem_arena_destroy(oarena); free(obacking);
+    if (r != 7) {
+        fprintf(stderr, "trait_rt: expected 7, got %u\n", r);
+        return 255;
+    }
+    return 0;
+#else
+    return 0; /* seats without the in-process TCC/ELF fills prove the
+               * parser and shape assertions elsewhere (rsx_dump); the
+               * linked loop is the host seat's fill */
+#endif
+}
+
 /* RSX_TEST_VERBOSE=1 prints one line per subtest with its rc, so a FAIL from
  * the registry entry can be attributed without re-running under a debugger. */
 static int32_t rsx_run_named(const char *name, int32_t (*fn)(void)) {
@@ -2800,6 +2944,7 @@ static int32_t pm_metal_jit_rsx_tests(void) {
     rc = rsx_run_named("let_chain_parse_and_lower", test_let_chain_parse_and_lower); if (rc) return rc;
     rc = rsx_run_named("let_chain_refuses", test_let_chain_refuses); if (rc) return rc;
     rc = rsx_run_named("let_chain_linked", test_let_chain_linked); if (rc) return rc;
+    rc = rsx_run_named("trait_runtime_linked", test_trait_runtime_linked); if (rc) return rc;
     rc = rsx_run_named("cfg_strip_parse_and_lower", test_cfg_strip_parse_and_lower); if (rc) return rc;
     rc = rsx_run_named("introspection", test_introspection);      if (rc) return rc;
     return 0;

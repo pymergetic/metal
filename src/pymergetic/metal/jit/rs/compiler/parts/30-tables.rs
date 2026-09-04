@@ -30,6 +30,17 @@ const TUP_MAXF: usize = 4;
  * struct/union/alias emitted this unit — 96 covers a card's types plus
  * the appended face's. */
 const TYD_CAP: usize = 96;
+/* Trait-object plane: declared traits per unit and methods per trait.
+ * A trait decl lowers ONE C typedef — `typedef struct { ret (*m)(..);
+ * .. } Name;` — the vtable inlined as fields; `&mut dyn Name` in a
+ * signature renders as `Name *` and a method call through it renders
+ * `p->m(p, args..)`. Small caps: the units this compiler carries declare
+ * a handful of traits with a handful of methods each. */
+const TRAIT_CAP: usize = 8;
+const TRAIT_MCAP: usize = 12;
+const TRAIT_SIG: usize = 192;
+/* trait impl pairs per unit (Type, Trait) — enough for the unit's impls. */
+const TI_CAP: usize = 16;
 
 /* A struct record: name, fields, C types of fields. Field names and C
  * types are arena spans (NUL-terminated copies), so the table stores
@@ -532,3 +543,159 @@ impl EnumTab {
     }
 }
 
+
+/* A trait record: the object name plus its methods' vtable slots. The
+ * fn-ptr signature of each method is rendered ONCE at collect (the sig
+ * AST is discarded after the collect pass) into a fixed inline string:
+ * `<ret> (*name)(Name *self, T p, ..)` — the body of a vtable field. The
+ * typedef emit reads the rendered sigs; the callsite dispatch only needs
+ * `p->name`; the impl-side vtable initializer reads method names. */
+struct TraitTab {
+    names: [[u8; 64]; TRAIT_CAP],
+    name_lens: [usize; TRAIT_CAP],
+    n: usize,
+    /* method rows: trait t, method m lives at row t * TRAIT_MCAP + m */
+    m_names: [[u8; 64]; TRAIT_CAP * TRAIT_MCAP],
+    m_name_lens: [usize; TRAIT_CAP * TRAIT_MCAP],
+    /* receiver by ref? `&self`/`&mut self` — the fn-ptr takes Name*;
+     * by-value self takes Name (rare; the dyn plane is ref-carried). */
+    m_ref_recv: [bool; TRAIT_CAP * TRAIT_MCAP],
+    /* rendered fn-ptr sig bodies, NUL-terminated */
+    m_sigs: [[u8; TRAIT_SIG]; TRAIT_CAP * TRAIT_MCAP],
+    m_sig_lens: [usize; TRAIT_CAP * TRAIT_MCAP],
+    m_counts: [usize; TRAIT_CAP],
+}
+
+impl TraitTab {
+    unsafe fn new() -> TraitTab {
+        TraitTab {
+            names: [[0; 64]; TRAIT_CAP],
+            name_lens: [0; TRAIT_CAP],
+            n: 0,
+            m_names: [[0; 64]; TRAIT_CAP * TRAIT_MCAP],
+            m_name_lens: [0; TRAIT_CAP * TRAIT_MCAP],
+            m_ref_recv: [false; TRAIT_CAP * TRAIT_MCAP],
+            m_sigs: [[0; TRAIT_SIG]; TRAIT_CAP * TRAIT_MCAP],
+            m_sig_lens: [0; TRAIT_CAP * TRAIT_MCAP],
+            m_counts: [0; TRAIT_CAP],
+        }
+    }
+
+    /* Find or create the trait's row; returns the slot, or TRAIT_CAP on
+     * overflow (the caller refuses loudly). */
+    unsafe fn intern(&mut self, name: *const u8, nlen: usize) -> usize {
+        let mut i = 0usize;
+        while i < self.n {
+            if self.name_lens[i] == nlen {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < nlen {
+                    if self.names[i][j] != unsafe { *name.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    return i;
+                }
+            }
+            i += 1;
+        }
+        if self.n >= TRAIT_CAP || nlen > 64 {
+            return TRAIT_CAP;
+        }
+        let mut k = 0usize;
+        while k < nlen {
+            self.names[self.n][k] = unsafe { *name.add(k) };
+            k += 1;
+        }
+        self.name_lens[self.n] = nlen;
+        self.n += 1;
+        self.n - 1
+    }
+
+    unsafe fn find(&self, name: *const u8, nlen: usize) -> usize {
+        let mut i = 0usize;
+        while i < self.n {
+            if self.name_lens[i] == nlen {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < nlen {
+                    if self.names[i][j] != unsafe { *name.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    return i;
+                }
+            }
+            i += 1;
+        }
+        TRAIT_CAP
+    }
+
+    /* Append a method row to trait slot t. Returns false on overflow
+     * (trait cap, method cap, name or sig too long) — the row index is
+     * t * TRAIT_MCAP + m, derivable by any caller that needs it. */
+    unsafe fn add_method(
+        &mut self,
+        t: usize,
+        mname: *const u8,
+        mlen: usize,
+        ref_recv: bool,
+        sig: *const u8,
+        sig_len: usize,
+    ) -> bool {
+        if t >= TRAIT_CAP || self.m_counts[t] >= TRAIT_MCAP || mlen > 64 || sig_len >= TRAIT_SIG {
+            return false;
+        }
+        let m = self.m_counts[t];
+        let row = t * TRAIT_MCAP + m;
+        let mut k = 0usize;
+        while k < mlen {
+            self.m_names[row][k] = unsafe { *mname.add(k) };
+            k += 1;
+        }
+        self.m_name_lens[row] = mlen;
+        self.m_ref_recv[row] = ref_recv;
+        let mut s = 0usize;
+        while s < sig_len {
+            self.m_sigs[row][s] = unsafe { *sig.add(s) };
+            s += 1;
+        }
+        self.m_sig_lens[row] = sig_len;
+        self.m_sigs[row][sig_len] = 0;
+        self.m_counts[t] = m + 1;
+        true
+    }
+
+    /* Find a trait's method row by name; false = absent. */
+    unsafe fn find_method(&self, t: usize, mname: *const u8, mlen: usize) -> bool {
+        if t >= TRAIT_CAP {
+            return false;
+        }
+        let mut m = 0usize;
+        while m < self.m_counts[t] {
+            let row = t * TRAIT_MCAP + m;
+            if self.m_name_lens[row] == mlen {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < mlen {
+                    if self.m_names[row][j] != unsafe { *mname.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    return true;
+                }
+            }
+            m += 1;
+        }
+        false
+    }
+}
