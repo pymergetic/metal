@@ -137,17 +137,24 @@ def _card_manifest(fqn: str, files: list[tuple[str, int]]) -> str:
 
 
 def _face_files(card_dir: pathlib.Path, impl: str) -> list[pathlib.Path]:
-    """Authored faces reachable by `#[path]` includes from other cards.
+    """Faces a consumer's rsx compile types against — embed-reachable.
 
-    Just `__types__.rs` today — the hand-written Rust twin of `__types__.h`.
-    Not a TU: never compiled standalone, only spliced into a unit that
-    `#[path]`-includes it (the generated `__exports__.rs`/`__types__.h`
-    stay out — those are regen artifacts, not authored).
+    `__types__.rs`: the hand-written Rust twin of `__types__.h` (ABI
+    shapes), never a TU — spliced into a unit that `#[path]`-includes
+    it. `__exports__.rs`: the generated consumer bindgen face (extern
+    fn declarations). The build card's use-chase splices both into a
+    unit that does `use crate::<this-card>::{..}`, so the consumer's
+    rsx compile sees the same declarations cargo does; regen artifacts
+    are still not authored muscle (never a TU, FACES list only).
     """
     if impl != "rs":
         return []
-    p = card_dir / "__types__.rs"
-    return [p] if p.is_file() else []
+    out = []
+    for name in ("__types__.rs", "__exports__.rs"):
+        p = card_dir / name
+        if p.is_file():
+            out.append(p)
+    return out
 
 
 def gather(card_roots: list[pathlib.Path]) -> list[dict]:

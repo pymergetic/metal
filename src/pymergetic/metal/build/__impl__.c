@@ -1744,9 +1744,258 @@ static int rs_attr_is_test(const char *ls, size_t len) {
     return 0;
 }
 
-static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
-    const char *src, uint32_t depth, char **buf_io, size_t *len_io,
+/* ---- `use crate::...` chase ----
+ *
+ * A `use crate::<path>::{...}` import names another card's exported ABI
+ * (functions the muscle calls, types the signatures ride on). The rsx
+ * compile is standalone, so the callee's declarations arrive the same
+ * way `#[path]` includes do: by splice. The referenced card's
+ * `__types__.rs` (real ABI shapes) then `__exports__.rs` (the generated
+ * consumer bindgen face — `unsafe extern "C" { pub fn ..; }` decls) are
+ * appended once per referenced card, depth-capped. Byte faces from the
+ * embed, one definition everywhere, no second copy of any declaration. */
+#define PM_BUILD_SPLICE_MAX_CARDS 24u
+
+typedef struct rs_splice_cards {
+    char names[PM_BUILD_SPLICE_MAX_CARDS][48u];
+    uint32_t n;
+} rs_splice_cards_t;
+
+static int rs_splice_card_seen(const rs_splice_cards_t *set, const char *name) {
+    uint32_t i;
+    for (i = 0u; i < set->n; i++) {
+        if (strcmp(set->names[i], name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int rs_splice_card_note(rs_splice_cards_t *set, const char *name) {
+    size_t n;
+    if (set->n >= PM_BUILD_SPLICE_MAX_CARDS) {
+        return 0;
+    }
+    n = strlen(name);
+    if (n >= sizeof(set->names[0])) {
+        return 0;
+    }
+    memcpy(set->names[set->n], name, n + 1u);
+    set->n++;
+    return 1;
+}
+
+/* Does `p` (line start) open a `use crate::...;` import? Returns 1 and
+ * advances `*at_io` past the terminating ';' (the full raw span, which
+ * may span lines when the import list is brace-formatted), 0 otherwise.
+ * `use` must be a word on its own — `reuse`, `fused`, attribute tails
+ * and string contents never match. */
+static int rs_use_crate_starts(const char *p, const char **at_io) {
+    const char *q = p;
+    if (!(q[0] == 'u' && q[1] == 's' && q[2] == 'e')) {
+        return 0;
+    }
+    q += 3;
+    if (*q != ' ' && *q != '\t') {
+        return 0;
+    }
+    while (*q == ' ' || *q == '\t') {
+        q++;
+    }
+    if (!(q[0] == 'c' && q[1] == 'r' && q[2] == 'a' && q[3] == 't'
+            && q[4] == 'e')) {
+        return 0;
+    }
+    q += 5;
+    if (!(*q == ':' && q[1] == ':' && q[2] != ':')) {
+        return 0;
+    }
+    q += 2;
+    /* span to the terminating ';' (multi-line brace lists included) */
+    {
+        const char *e = q;
+        while (*e != '\0' && *e != ';') {
+            e++;
+        }
+        if (*e == '\0') {
+            return 0;
+        }
+        *at_io = e + 1;
+    }
+    return 1;
+}
+
+/* Append one embedded face's bytes to the splice buffer. */
+static int32_t rs_splice_face(pm_util_mem_arena_t *arena,
+    const pm_metal_src_file_t *face, char **buf_io, size_t *len_io,
     char *errbuf, size_t errbuf_len) {
+    char *nb;
+    if (face == NULL) {
+        err_set(errbuf, errbuf_len, "splice: face not in embed", 0);
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    nb = (char *)pm_util_mem_alloc(arena, *len_io + (size_t)face->len + 4u);
+    if (nb == NULL) {
+        err_set(errbuf, errbuf_len, "splice: arena exhausted", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    memcpy(nb, *buf_io, *len_io);
+    memcpy(nb + *len_io, face->data, (size_t)face->len);
+    *len_io += (size_t)face->len;
+    nb[*len_io] = '\n';
+    (*len_io)++;
+    nb[*len_io] = '\0';
+    *buf_io = nb;
+    return PM_METAL_BUILD_OK;
+}
+
+static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
+    const char *src, uint32_t depth, rs_splice_cards_t *seen,
+    char **buf_io, size_t *len_io, char *errbuf, size_t errbuf_len);
+
+/* Chase one `use crate::<path>...` span: find the longest `<path>`
+ * prefix that names an embedded card, then splice that card's
+ * `__types__.rs` + `__exports__.rs` once. `crate::x::y` maps to the
+ * card fqn `pymergetic.x.y` (raw `r#` identifiers stripped). */
+static int32_t rs_splice_use_crate(pm_util_mem_arena_t *arena,
+    const char *span, rs_splice_cards_t *seen, uint32_t depth,
+    char **buf_io, size_t *len_io, char *errbuf, size_t errbuf_len) {
+    char fqn[96];
+    size_t nsegs;
+    const char *seg[16];
+    size_t segl[16];
+    const char *p = span;
+
+    /* the span begins past `crate::` (the caller strips the `use crate::`
+     * head), so segments collected here are the real card path */
+    if (!(p[0] == 'c' && p[1] == 'r' && p[2] == 'a' && p[3] == 't'
+            && p[4] == 'e' && p[5] == ':' && p[6] == ':')) {
+        return PM_METAL_BUILD_OK;
+    }
+    p += 7;
+
+    /* collect `::`-separated path segments until `{` or end */
+    nsegs = 0u;
+    while (*p != '\0') {
+        const char *e;
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+            p++;
+        }
+        if (*p == '{' || *p == '\0') {
+            break;
+        }
+        e = p;
+        while (*e != '\0' && *e != ':' && *e != '{'
+            && *e != ' ' && *e != '\t' && *e != '\n' && *e != '\r') {
+            e++;
+        }
+        if (e == p) {
+            p++;
+            continue;
+        }
+        if (nsegs < 16u) {
+            /* strip a raw-identifier `r#` prefix */
+            if (e - p >= 2 && p[0] == 'r' && p[1] == '#') {
+                p += 2;
+            }
+            seg[nsegs] = p;
+            segl[nsegs] = (size_t)(e - p);
+            nsegs++;
+        }
+        if (*e == ':') {
+            if (e[1] != ':') {
+                /* single ':' inside a use path — not a segment separator
+                 * we understand; stop collecting (rest is ignored). */
+                break;
+            }
+            p = e + 2;
+        } else {
+            p = e;
+        }
+    }
+    if (nsegs == 0u) {
+        return PM_METAL_BUILD_OK;
+    }
+    /* longest embedded-card prefix */
+    while (nsegs > 0u) {
+        size_t at = 0u, k;
+        int truncated = 0;
+        memcpy(fqn, "pymergetic.", 11u);
+        at = 11u;
+        for (k = 0u; k < nsegs; k++) {
+            if (at + segl[k] + 1u >= sizeof(fqn)) {
+                truncated = 1;
+                break;
+            }
+            memcpy(fqn + at, seg[k], segl[k]);
+            at += segl[k];
+            if (k + 1u < nsegs) {
+                fqn[at] = '.';
+                at++;
+            }
+        }
+        if (!truncated && pm_metal_src_find(fqn) != NULL) {
+            break;
+        }
+        nsegs--;
+    }
+    if (nsegs == 0u) {
+        /* not a card path — nothing to chase (a std/core path or a name
+         * the unit already declares) */
+        return PM_METAL_BUILD_OK;
+    }
+    if (rs_splice_card_seen(seen, fqn)) {
+        return PM_METAL_BUILD_OK;
+    }
+    if (depth + 1u > PM_BUILD_SPLICE_MAX_DEPTH) {
+        err_set(errbuf, errbuf_len, "splice: use-chase nesting too deep", 0);
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    if (!rs_splice_card_note(seen, fqn)) {
+        err_set(errbuf, errbuf_len, "splice: too many referenced cards", 0);
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    /* __types__.rs first (real ABI shapes), then __exports__.rs (the
+     * extern fn declarations consumers type against). Both are optional
+     * faces — a card without one simply contributes the other. */
+    {
+        const pm_metal_src_file_t *tf =
+            pm_metal_src_face_find(fqn, "__types__.rs");
+        int32_t rc;
+        if (tf != NULL) {
+            rc = rs_splice_face(arena, tf, buf_io, len_io, errbuf, errbuf_len);
+            if (rc != PM_METAL_BUILD_OK) {
+                return rc;
+            }
+            rc = rs_splice_into(arena, fqn, (const char *)tf->data, depth + 1u,
+                seen, buf_io, len_io, errbuf, errbuf_len);
+            if (rc != PM_METAL_BUILD_OK) {
+                return rc;
+            }
+        }
+    }
+    {
+        const pm_metal_src_file_t *ef =
+            pm_metal_src_face_find(fqn, "__exports__.rs");
+        int32_t rc;
+        if (ef != NULL) {
+            rc = rs_splice_face(arena, ef, buf_io, len_io, errbuf, errbuf_len);
+            if (rc != PM_METAL_BUILD_OK) {
+                return rc;
+            }
+            rc = rs_splice_into(arena, fqn, (const char *)ef->data, depth + 1u,
+                seen, buf_io, len_io, errbuf, errbuf_len);
+            if (rc != PM_METAL_BUILD_OK) {
+                return rc;
+            }
+        }
+    }
+    return PM_METAL_BUILD_OK;
+}
+
+static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
+    const char *src, uint32_t depth, rs_splice_cards_t *seen,
+    char **buf_io, size_t *len_io, char *errbuf, size_t errbuf_len) {
     const char *p = src;
     char *dir = fqn_to_dir(arena, fqn);
     /* Sticky while consecutive attribute lines stack above one item; a
@@ -1757,6 +2006,36 @@ static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
         return PM_METAL_BUILD_ERR_NOMEM;
     }
     while (*p != '\0') {
+        /* line-start `use crate::...;` — chase the referenced card's
+         * ABI faces. Runs before the attribute scan: a use line is
+         * never inside an attribute. */
+        {
+            const char *ws = p;
+            while (*ws == ' ' || *ws == '\t') {
+                ws++;
+            }
+            if (ws == p || p == src || p[-1] == '\n') {
+                const char *after = NULL;
+                if (rs_use_crate_starts(ws, &after)) {
+                    const char *span_end = after - 1;  /* at the ';' */
+                    const char *span = ws + 4;  /* past `use ` */
+                    size_t span_len = (size_t)(span_end - span);
+                    char *span_dup = (char *)dup_str(arena, span, span_len);
+                    int32_t rc;
+                    if (span_dup == NULL) {
+                        err_set(errbuf, errbuf_len, "splice: arena exhausted", 0);
+                        return PM_METAL_BUILD_ERR_NOMEM;
+                    }
+                    rc = rs_splice_use_crate(arena, span_dup, seen, depth,
+                        buf_io, len_io, errbuf, errbuf_len);
+                    if (rc != PM_METAL_BUILD_OK) {
+                        return rc;
+                    }
+                    p = after;
+                    continue;
+                }
+            }
+        }
         /* line-start `#[path ...` (after optional whitespace) */
         const char *ls = p;
         const char *le = p;
@@ -1883,7 +2162,7 @@ static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
                         }
                         {
                             int32_t rc = rs_splice_into(arena, tcard,
-                                (const char *)face->data, depth + 1u,
+                                (const char *)face->data, depth + 1u, seen,
                                 buf_io, len_io, errbuf, errbuf_len);
                             if (rc != PM_METAL_BUILD_OK) {
                                 return rc;
@@ -1913,12 +2192,14 @@ static const char *rs_splice(pm_util_mem_arena_t *arena, const char *fqn,
     const char *src, char *errbuf, size_t errbuf_len) {
     size_t len = strlen(src);
     char *buf = (char *)dup_str(arena, src, len);
+    rs_splice_cards_t seen;
     if (buf == NULL) {
         err_set(errbuf, errbuf_len, "splice: arena exhausted", 0);
         return NULL;
     }
-    if (rs_splice_into(arena, fqn, buf, 0u, &buf, &len, errbuf, errbuf_len)
-            != PM_METAL_BUILD_OK) {
+    memset(&seen, 0, sizeof(seen));
+    if (rs_splice_into(arena, fqn, buf, 0u, &seen, &buf, &len,
+            errbuf, errbuf_len) != PM_METAL_BUILD_OK) {
         return NULL;
     }
     return buf;
