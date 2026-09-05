@@ -1934,6 +1934,11 @@ static int32_t rs_splice_use_crate(pm_util_mem_arena_t *arena,
                 at++;
             }
         }
+        /* terminate before the find: pm_metal_src_find strcmps this as a
+         * C string, and an unterminated buffer reads stack residue past
+         * the copied bytes — the lookup then depends on what earlier
+         * compiles left on the stack (nondeterministic across sweeps). */
+        fqn[at] = '\0';
         if (!truncated && pm_metal_src_find(fqn) != NULL) {
             break;
         }

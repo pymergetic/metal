@@ -2019,6 +2019,29 @@ impl Lower {
                         return;
                     }
                 }
+                /* `String::from(x)` / `String::from_utf8_lossy(x)` — the
+                 * owned-String ctors: a fresh rsx_str_t built by append
+                 * from the arg's (ptr, len) shape. The lossy variant is
+                 * the same ctor at the ABI level: the kernel's from is
+                 * copy-out, and invalid UTF-8 sequences in registry
+                 * spellings are not a live path (the bytes come from C
+                 * strings; the op copies them verbatim). */
+                if (unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"from\0".as_ptr()) }
+                    || unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"from_utf8_lossy\0".as_ptr()) })
+                    && unsafe { (*args).n_kids } as usize == 1
+                    && cn >= 2
+                {
+                    let wrap = unsafe { *ck.add(cn - 2) };
+                    let wt = unsafe { (*wrap).text };
+                    let wl = unsafe { (*wrap).text_len };
+                    if unsafe { z_eq(wt, wl, b"String\0".as_ptr()) } {
+                        let ak2 = unsafe { (*args).kids };
+                        self.out.puts(b"({ rsx_str_t _t = {0}; rsx_str_append(&_t, \0".as_ptr());
+                        self.emit_str_arg_append(*ak2.add(0), locals);
+                        self.out.puts(b"); _t; })\0".as_ptr());
+                        return;
+                    }
+                }
                 /* `Vec::new()` / `String::new()` / `BTreeMap::new()` — the
                  * container ctors: a zero literal is the empty container
                  * (p == 0, n == 0, cap == 0). The declaration context
@@ -2033,9 +2056,18 @@ impl Lower {
                     let wt = unsafe { (*wrap).text };
                     let wl = unsafe { (*wrap).text_len };
                     if unsafe { z_eq(wt, wl, b"Vec\0".as_ptr()) }
-                        || unsafe { z_eq(wt, wl, b"String\0".as_ptr()) }
                         || unsafe { z_eq(wt, wl, b"BTreeMap\0".as_ptr()) }
                     {
+                        self.out.puts(b"{0}\0".as_ptr());
+                        return;
+                    }
+                    if unsafe { z_eq(wt, wl, b"String\0".as_ptr()) } {
+                        /* the owned row's zero IS the empty string; mark
+                         * the plane so the typedef lands before this
+                         * fn's body (the let typing may have taken the
+                         * cur_ret path, but a bare `String::new()` in
+                         * an expr position must not dangle) */
+                        self.str_own_used = true;
                         self.out.puts(b"{0}\0".as_ptr());
                         return;
                     }
@@ -2374,6 +2406,225 @@ impl Lower {
         }
     }
 
+    /* String-plane argument shape: lower a string-typed expr to the raw
+     * (ptr, len) pair the rsx_str_append face takes. The arg's own type
+     * decides — a literal lowers to (lit, strlen) [the compound literal
+     * a &str param takes; strlen is folded by C], an owned String to
+     * (s.p ? s.p : "", s.n), an &str fat ref to (r.p, r.n). The
+     * str_ref compound literal for a literal arg is the &str plane's
+     * own emission (emit_ret_value), so this only ever runs on values
+     * that ARE the fat ref shape already. */
+    unsafe fn emit_str_arg_append(&mut self, a: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
+        if a.is_null() {
+            self.out.puts(b"(const char *)\"\", 0\0".as_ptr());
+            return;
+        }
+        /* slice-ref argument `&arr[lo..hi]` / `&arr[..hi]` / `&vec[lo..hi]`:
+         * the (ptr, len) pair directly — base+lo pointer, hi-lo length.
+         * This is the `&[u8]` view String::from_utf8_lossy and friends
+         * consume; the plain emission path drops the hi bound (slices
+         * are ptr-only by convention) which loses exactly the length
+         * the string plane needs. */
+        {
+            let mut inner: *const pm_jit_rsx_ast_t = a;
+            let mut is_borrow = false;
+            if unsafe { (*inner).kind } == pm_jit_rsx_ast_kind::UNARY {
+                let t = unsafe { (*inner).text };
+                let tl = unsafe { (*inner).text_len };
+                if unsafe { z_eq(t, tl, b"&\0".as_ptr()) }
+                    || unsafe { z_eq(t, tl, b"&mut\0".as_ptr()) }
+                {
+                    let uk = unsafe { (*inner).kids };
+                    if unsafe { (*inner).n_kids } >= 1 {
+                        inner = unsafe { *uk.add(0) };
+                        is_borrow = true;
+                    }
+                }
+            }
+            if is_borrow && unsafe { rsx_idx_is_range(inner) } {
+                let ik = unsafe { (*inner).kids };
+                let base = unsafe { *ik.add(0) };
+                let rng = unsafe { *ik.add(1) };
+                let rk = unsafe { (*rng).kids };
+                let rn = unsafe { (*rng).n_kids } as usize;
+                /* BINARY(..) kids: [lo, hi] — lo may be an empty TUPLE
+                 * (the `..hi` form), hi is present for a bounded range */
+                let lo = if rn >= 1 { unsafe { *rk.add(0) } } else { core::ptr::null_mut() };
+                let hi = if rn >= 2 { unsafe { *rk.add(1) } } else { core::ptr::null_mut() };
+                let lo_empty = !lo.is_null()
+                    && unsafe { (*lo).kind } == pm_jit_rsx_ast_kind::TUPLE
+                    && unsafe { (*lo).n_kids } == 0;
+                let hi_empty = hi.is_null()
+                    || (unsafe { (*hi).kind } == pm_jit_rsx_ast_kind::TUPLE
+                        && unsafe { (*hi).n_kids } == 0);
+                if !hi_empty {
+                    /* Vec base: the slab lives in .p */
+                    let bct = self.arena_tmp();
+                    let bn2 = unsafe { self.expr_ctype(base, bct, 128, locals) };
+                    let is_vec = bn2 > 8 && bn2 < 128 && unsafe { z_eq(bct, 8, b"rsx_vec_\0".as_ptr()) };
+                    self.out.puts(b"(const char *)(\0".as_ptr());
+                    if is_vec {
+                        self.out.puts(b"(\0".as_ptr());
+                        unsafe { self.emit_expr(base, locals) };
+                        self.out.puts(b").p\0".as_ptr());
+                    } else {
+                        unsafe { self.emit_expr(base, locals) };
+                    }
+                    if !lo_empty {
+                        self.out.puts(b" + \0".as_ptr());
+                        unsafe { self.emit_expr(lo, locals) };
+                    }
+                    self.out.puts(b"), \0".as_ptr());
+                    /* length: hi - lo (lo=0 when empty) */
+                    unsafe { self.emit_expr(hi, locals) };
+                    if !lo_empty {
+                        self.out.puts(b" - \0".as_ptr());
+                        unsafe { self.emit_expr(lo, locals) };
+                    }
+                    return;
+                }
+            }
+        }
+        /* literal: emit as a NUL-terminated C string + strlen — the
+         * literal's bytes carry no escape hazards (the lexer scanned
+         * them raw; a Rust literal with quotes escapes at emit). */
+        if unsafe { (*a).kind } == pm_jit_rsx_ast_kind::LITERAL {
+            let t = unsafe { (*a).text };
+            let tl = unsafe { (*a).text_len };
+            if tl >= 2 && unsafe { *t } == b'"' {
+                self.out.puts(b"(const char *)\0".as_ptr());
+                self.out.put(t, tl);
+                self.out.puts(b", strlen(\0".as_ptr());
+                self.out.put(t, tl);
+                self.out.puts(b")\0".as_ptr());
+                return;
+            }
+        }
+        /* typed: owned String vs fat ref — the C spelling decides */
+        let ab = self.arena_tmp();
+        let mut probe = a;
+        /* unwrap a borrow: `&vec`/`&mut vec` (and `&str`-shaped refs)
+         * type through the inner expr — the rendered borrow spelling is
+         * a pointer, which loses the container identity. */
+        if !a.is_null() && unsafe { (*a).kind } == pm_jit_rsx_ast_kind::UNARY {
+            let t = unsafe { (*a).text };
+            let tl = unsafe { (*a).text_len };
+            if unsafe { z_eq(t, tl, b"&\0".as_ptr()) }
+                || unsafe { z_eq(t, tl, b"&mut\0".as_ptr()) }
+            {
+                if unsafe { (*a).n_kids } as usize >= 1 {
+                    probe = unsafe { *(*a).kids.add(0) };
+                }
+            }
+        }
+        let an2 = unsafe { self.expr_ctype(probe, ab, 128, locals) };
+        /* `&vec` (borrowed Vec<u8>): the (p, n) view of the slab — a
+         * String::from_utf8_lossy(&buf) takes the bytes, not the
+         * container. .p may be NULL on an empty Vec; the append's
+         * ternary guards it. The borrow unwraps above, so the pair
+         * selects on the place itself. */
+        if an2 > 8 && an2 < 128 && unsafe { z_eq(ab, 8, b"rsx_vec_\0".as_ptr()) } {
+            self.out.puts(b"((\0".as_ptr());
+            unsafe { self.emit_expr(probe, locals) };
+            self.out.puts(b").p ? (\0".as_ptr());
+            unsafe { self.emit_expr(probe, locals) };
+            self.out.puts(b").p : \"\", (\0".as_ptr());
+            unsafe { self.emit_expr(probe, locals) };
+            self.out.puts(b").n)\0".as_ptr());
+            return;
+        }
+        if an2 == 9 && unsafe { z_eq(ab, 9, b"rsx_str_t\0".as_ptr()) } {
+            /* owned: p may be NULL when empty — append guards it. Each
+             * select wraps its OWN copy of the receiver in parens
+             * (X may be a statement-expr — a bare `X).p` would leak its
+             * closing paren), and NO outer group: the comma between
+             * the ternary and the length must split at the CALL level
+             * so the append sees all three arguments. */
+            self.out.puts(b"(\0".as_ptr());
+            unsafe { self.emit_expr(a, locals) };
+            self.out.puts(b").p ? (\0".as_ptr());
+            unsafe { self.emit_expr(a, locals) };
+            self.out.puts(b").p : \"\", (\0".as_ptr());
+            unsafe { self.emit_expr(a, locals) };
+            self.out.puts(b").n\0".as_ptr());
+            return;
+        }
+        if an2 == 13 && unsafe { z_eq(ab, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+            /* fat ref: the struct value itself selects .p/.n — NO cast on
+             * the struct (a cast to char* would strip the struct and .p
+             * would be a member-of-scalar error); the .p SELECT is cast
+             * to const char* for rsx_str_append's signature. */
+            self.out.puts(b"(const char *)(\0".as_ptr());
+            unsafe { self.emit_expr(a, locals) };
+            self.out.puts(b").p, (\0".as_ptr());
+            unsafe { self.emit_expr(a, locals) };
+            self.out.puts(b").n\0".as_ptr());
+            return;
+        }
+        /* unknown shape — refuse loudly, never append garbage */
+        unsafe {
+            self.err(
+                b"unsupported: string append from a non-string value\0".as_ptr(),
+                unsafe { (*a).line },
+            );
+        }
+    }
+
+    /* .to_string()/.to_owned()/.into_owned() receiver gate: only a
+     * string-shaped receiver builds an owned String (an integer or
+     * user-struct receiver with the same method name must fall through
+     * to its own lowering, not miscompile into a bogus String). */
+    unsafe fn str_receiver_ok(&mut self, recv: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) -> bool {
+        if recv.is_null() {
+            return false;
+        }
+        /* a literal string receiver is string-shaped by construction */
+        if unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::LITERAL {
+            let t = unsafe { (*recv).text };
+            let tl = unsafe { (*recv).text_len };
+            if tl >= 2 && unsafe { *t } == b'"' {
+                return true;
+            }
+        }
+        let rb = self.arena_tmp();
+        let rn = unsafe { self.expr_ctype(recv, rb, 128, locals) };
+        if rn == 9 && unsafe { z_eq(rb, 9, b"rsx_str_t\0".as_ptr()) } {
+            return true;
+        }
+        if rn == 13 && unsafe { z_eq(rb, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+            return true;
+        }
+        false
+    }
+
+    /* one String-op call shape: op(amp-recv, str-arg) — used by push_str
+     * (the arg lowered to its (ptr,len) pair) and push(char) (the arg
+     * emitted raw, a char scalar). arg_pair decides the arg's shape;
+     * both op names are NUL-terminated literals (the puts contract). */
+    unsafe fn emit_str_call(
+        &mut self,
+        op: *const u8,
+        amp: *const u8,
+        recv: *const pm_jit_rsx_ast_t,
+        arg: *const pm_jit_rsx_ast_t,
+        arg_pair: bool,
+        locals: *mut LocalTab,
+    ) {
+        self.out.puts(op);
+        self.out.putc(b'(');
+        if !amp.is_null() {
+            self.out.puts(amp);
+        }
+        unsafe { self.emit_expr(recv, locals) };
+        self.out.puts(b", \0".as_ptr());
+        if arg_pair {
+            self.emit_str_arg_append(arg, locals);
+        } else {
+            unsafe { self.emit_expr(arg, locals) };
+        }
+        self.out.putc(b')');
+    }
+
     unsafe fn emit_method_call(&mut self, e: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
         /* kids: recv, name(PATH), args(TUPLE) */
         let kids = unsafe { (*e).kids };
@@ -2395,6 +2646,79 @@ impl Lower {
             self.out.puts(b" == 0)\0".as_ptr());
             return;
         }
+        /* `x.rsplit(SEP).next()` — the last-segment view: scan for the
+         * last SEP byte, yield Option<&str> (rsx_opt_rsx_str_ref_t):
+         * Some({p = x.p + i + 1, n = x.n - i - 1}) when found and the
+         * tail non-empty, the zero struct otherwise. The receiver types
+         * the fat ref; the separator arg is a char literal. */
+        if an == 0 && unsafe { z_eq(mname, mlen, b"next\0".as_ptr()) } {
+            if unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::METHOD_CALL
+                && unsafe { (*recv).n_kids } as usize >= 3
+            {
+                let rname = unsafe { *(*recv).kids.add(1) };
+                let rkids = unsafe { (*recv).kids };
+                if unsafe { (*rname).text_len } == 6
+                    && unsafe { z_eq(unsafe { (*rname).text }, 6, b"rsplit\0".as_ptr()) }
+                {
+                    let base = unsafe { *rkids.add(0) };
+                    let rargs = unsafe { *rkids.add(2) };
+                    let sb = self.arena_tmp();
+                    let sl = unsafe { self.expr_ctype(base, sb, 128, locals) };
+                    if sl == 13 && unsafe { z_eq(sb, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                        /* separator: a char literal 'c' — emit its byte */
+                        let sk = unsafe { (*rargs).kids };
+                        let sn = unsafe { (*rargs).n_kids } as usize;
+                        if sn >= 1 {
+                            let sep = unsafe { *sk.add(0) };
+                            if unsafe { (*sep).kind } == pm_jit_rsx_ast_kind::LITERAL {
+                                let st = unsafe { (*sep).text };
+                                let stl = unsafe { (*sep).text_len };
+                                if stl >= 3 && unsafe { *st } == b'\'' {
+                                    let ch = unsafe { *st.add(1) };
+                                    self.str_ref_used = true;
+                                    /* the ENCODED Option typedef name — same
+                                     * encoder as every Option row, so the
+                                     * Some-bind reads the payload back. */
+                                    let _ = unsafe { self.opt_add(b"rsx_str_ref_t\0".as_ptr(), 13) };
+                                    let tdn = self.name_tmp(160);
+                                    let tdn_len = unsafe {
+                                        Lower::opt_typedef_name(
+                                            b"rsx_str_ref_t\0".as_ptr(),
+                                            13,
+                                            tdn,
+                                            160,
+                                        )
+                                    };
+                                    if tdn_len == 0 {
+                                        unsafe {
+                                            self.err(
+                                                b"internal: option typedef name too long\0".as_ptr(),
+                                                unsafe { (*e).line },
+                                            );
+                                        }
+                                        return;
+                                    }
+                                    self.out.puts(b"({ \0".as_ptr());
+                                    self.out.put(tdn, tdn_len);
+                                    self.out.puts(b" _o = {0}; for (size_t _i = (\0".as_ptr());
+                                    unsafe { self.emit_expr(base, locals) };
+                                    self.out.puts(b").n; _i-- > 0; ) { if ((\0".as_ptr());
+                                    unsafe { self.emit_expr(base, locals) };
+                                    self.out.puts(b").p[_i] == '\0".as_ptr());
+                                    self.out.putc(ch);
+                                    self.out.puts(b"') { _o._v.p = (\0".as_ptr());
+                                    unsafe { self.emit_expr(base, locals) };
+                                    self.out.puts(b").p + _i + 1; _o._v.n = (\0".as_ptr());
+                                    unsafe { self.emit_expr(base, locals) };
+                                    self.out.puts(b").n - _i - 1; _o._has = _o._v.n != 0; break; } } _o; })\0".as_ptr());
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         /* Vec container ops — the receiver's rendered type names one of
          * the interned rsx_vec_<elem> typedefs. Gate on that (the method
          * name alone is not validation), then lower to the unit-static
@@ -2405,6 +2729,7 @@ impl Lower {
                 && (unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) }
                     || unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) }))
             || (an == 0 && unsafe { z_eq(mname, mlen, b"free\0".as_ptr()) })
+            || (an == 1 && unsafe { z_eq(mname, mlen, b"truncate\0".as_ptr()) })
         {
             let rct = self.arena_tmp();
             let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
@@ -2417,6 +2742,22 @@ impl Lower {
                     self.out.puts(b", \0".as_ptr());
                     unsafe { self.emit_expr(*ak.add(0), locals) };
                     self.out.puts(b")\0".as_ptr());
+                    return;
+                }
+                /* truncate(n): keep the first min(n, v.n) elements — the
+                 * length drop IS the whole op (the slab keeps its
+                 * allocation, matching Rust Vec::truncate). A by-value
+                 * statement-expr receiver would drop the write, so the
+                 * expression form is only sound on a place; gen's use is
+                 * exactly a let-bound local. */
+                if an == 1 && unsafe { z_eq(mname, mlen, b"truncate\0".as_ptr()) } {
+                    self.out.puts(b"{ size_t _tn = \0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                    self.out.puts(b"; if ((size_t)(\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").n > _tn) { (\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").n = _tn; } }\0".as_ptr());
                     return;
                 }
                 if an == 0 && unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) } {
@@ -2470,6 +2811,159 @@ impl Lower {
                     self.out.puts(b".value) : 0)\0".as_ptr());
                     return;
                 }
+            }
+        }
+        /* ---- owned-String plane ops ----
+         *
+         * Receiver-typed against the one monomorphic rsx_str_t — the
+         * method name alone is never validation (a user struct may own
+         * a push_str method; the C-type gate is what routes it). The
+         * unit-static ops the preamble emitted take &rsx_str_t; the
+         * receiver emits as the value (C's struct rvalue feeds &). */
+        if (an == 1
+            && (unsafe { z_eq(mname, mlen, b"push_str\0".as_ptr()) }
+                || unsafe { z_eq(mname, mlen, b"push\0".as_ptr()) }
+                || unsafe { z_eq(mname, mlen, b"contains\0".as_ptr()) }))
+            || (an == 0
+                && (unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) }
+                    || unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) }
+                    || unsafe { z_eq(mname, mlen, b"clear\0".as_ptr()) }
+                    || unsafe { z_eq(mname, mlen, b"clone\0".as_ptr()) }
+                    || unsafe { z_eq(mname, mlen, b"free\0".as_ptr()) }))
+        {
+            let rct = self.arena_tmp();
+            let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+            /* the value receiver (rsx_str_t) or the &mut/& receiver
+             * (rsx_str_t * — a fn param of type &mut String renders as
+             * the pointer; the ops take the address, and an emitted
+             * reference param IS the address, so no & prefix) */
+            let is_own = rctl == 9 && unsafe { z_eq(rct, 9, b"rsx_str_t\0".as_ptr()) };
+            let is_refptr = rctl == 11 && unsafe { z_eq(rct, 11, b"rsx_str_t *\0".as_ptr()) };
+            if is_own || is_refptr {
+                if an == 1 && unsafe { z_eq(mname, mlen, b"push_str\0".as_ptr()) } {
+                    /* append takes (ptr, len): the arg's shape decides —
+                     * literal, owned String or &str fat ref all lower
+                     * through the one face (emit_str_arg_append) */
+                    self.emit_str_call(
+                        b"rsx_str_append\0".as_ptr(),
+                        if is_refptr {
+                            core::ptr::null()
+                        } else {
+                            b"&\0".as_ptr()
+                        },
+                        recv,
+                        *ak.add(0),
+                        true,
+                        locals,
+                    );
+                    return;
+                }
+                if an == 1 && unsafe { z_eq(mname, mlen, b"push\0".as_ptr()) } {
+                    /* push(char) — the UTF-8 encoding face */
+                    self.emit_str_call(
+                        b"rsx_str_push_char\0".as_ptr(),
+                        if is_refptr {
+                            core::ptr::null()
+                        } else {
+                            b"&\0".as_ptr()
+                        },
+                        recv,
+                        *ak.add(0),
+                        false,
+                        locals,
+                    );
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) } {
+                    self.out.puts(b"(\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    if is_refptr {
+                        self.out.puts(b")->n\0".as_ptr());
+                    } else {
+                        self.out.puts(b").n\0".as_ptr());
+                    }
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) } {
+                    self.out.puts(b"((\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").n == 0)\0".as_ptr());
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"clear\0".as_ptr()) } {
+                    self.out.puts(b"rsx_str_clear(\0".as_ptr());
+                    if !is_refptr {
+                        self.out.puts(b"&\0".as_ptr());
+                    }
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b")\0".as_ptr());
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"clone\0".as_ptr()) } {
+                    self.out.puts(b"rsx_str_clone(\0".as_ptr());
+                    if !is_refptr {
+                        self.out.puts(b"&\0".as_ptr());
+                    }
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b")\0".as_ptr());
+                    return;
+                }
+                if an == 1 && unsafe { z_eq(mname, mlen, b"contains\0".as_ptr()) } {
+                    self.out.puts(b"rsx_str_contains(\0".as_ptr());
+                    if !is_refptr {
+                        self.out.puts(b"&\0".as_ptr());
+                    }
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b", \0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                    self.out.puts(b")\0".as_ptr());
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"free\0".as_ptr()) } {
+                    self.out.puts(b"rsx_str_free(\0".as_ptr());
+                    if !is_refptr {
+                        self.out.puts(b"&\0".as_ptr());
+                    }
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b")\0".as_ptr());
+                    return;
+                }
+            }
+            /* .contains() on the borrowed &str view (rsx_str_ref_t) —
+             * the view face, no owned temp */
+            if an == 1 && unsafe { z_eq(mname, mlen, b"contains\0".as_ptr()) } {
+                let rb2 = self.arena_tmp();
+                let rl2 = unsafe { self.expr_ctype(recv, rb2, 128, locals) };
+                if rl2 == 13 && unsafe { z_eq(rb2, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                    self.out.puts(b"rsx_view_contains((const char *)(\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").p, (\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").n, \0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                    self.out.puts(b")\0".as_ptr());
+                    return;
+                }
+            }
+        }
+        /* ---- str_ref/owned shared methods ----
+         *
+         * .to_string()/.to_owned()/.into_owned() on ANY string-shaped
+         * receiver (&str fat ref, &mut String via the guard, a plain
+         * String value) — the owned plane's one ctor: a fresh rsx_str_t
+         * built by append. emit_str_arg_append lowers the receiver's
+         * shape (the type gate lives there — a non-string receiver
+         * must refuse, not build a bogus String). */
+        if (an == 0 && unsafe { z_eq(mname, mlen, b"to_string\0".as_ptr()) })
+            || (an == 0 && unsafe { z_eq(mname, mlen, b"to_owned\0".as_ptr()) })
+            || (an == 0 && unsafe { z_eq(mname, mlen, b"into_owned\0".as_ptr()) })
+        {
+            let ok = self.str_receiver_ok(recv, locals);
+            if ok {
+                self.out.puts(b"({ rsx_str_t _t = {0}; rsx_str_append(&_t, \0".as_ptr());
+                self.emit_str_arg_append(recv, locals);
+                self.out.puts(b"); _t; })\0".as_ptr());
+                return;
             }
         }
         /* Atomic loads/stores/swap on an `AtomicU32` (C: `_Atomic uint32_t`)

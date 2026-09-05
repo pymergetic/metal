@@ -144,6 +144,14 @@ struct Lower {
      * selects instead of refusing. The typedef emits once per unit. */
     str_ref_used: bool,
     str_ref_done: bool,
+    /* owned-String plane: `String` renders as the by-value struct
+     * rsx_str_t { char *p; size_t n, cap; } (p NULL, n 0 when empty —
+     * the empty ctor is the {0} compound literal). Methods lower to
+     * calls into the unit-static ops block str_own_emit_rest emits
+     * (push_str/append/clone/eq/…), the same contract as the Vec rows.
+     * One shared type: String is monomorphic, no row interning. */
+    str_own_used: bool,
+    str_own_done: bool,
 }
 
 impl Lower {
@@ -562,7 +570,10 @@ impl Lower {
             return true;
         }
         /* list form: `, expr`* — elements typed individually (all must
-         * agree; the first wins and mismatches surface as C errors) */
+         * agree; the first wins and mismatches surface as C errors). A
+         * trailing comma is idiomatic Rust — the list ends at the final
+         * `,` when nothing follows (the sub-parse sits on the END
+         * sentinel by then). */
         let mut list: [*mut pm_jit_rsx_ast_t; 16] = [core::ptr::null_mut(); 16];
         let mut list_n = 0usize;
         let first = elem;
@@ -581,6 +592,10 @@ impl Lower {
                 break;
             }
             p.at += 1;
+            /* trailing comma: `,` then END — the list is closed */
+            if unsafe { p.kind(p.at) } == pm_jit_rsx_tok_kind::END {
+                break;
+            }
             any = unsafe { p.parse_expr() };
             if !p.ok || any.is_null() {
                 unsafe {
@@ -1585,6 +1600,32 @@ impl Lower {
                             self.consts.add(unsafe { (*item).text }, unsafe { (*item).text_len }, v);
                         }
                     }
+                }
+                /* String-plane pre-scan: pass 0a lowers CONSTs BEFORE any
+                 * typedef flush, so a `pub const X: &str`/`String` static
+                 * must set str_ref_used/str_own_used HERE — ctype() does
+                 * the marking when it renders the declared type, and this
+                 * is the last pass that runs before that declaration.
+                 * The probe's own refusals are DISCARDED (ok/nerrs saved
+                 * and restored): a Mut<[T; N]> interior-mut static, for
+                 * example, legitimately fails a bare ctype() here while
+                 * the real pass lowers it through its own wrapper path —
+                 * poisoning collect would refuse the whole unit for a
+                 * static that compiles fine. */
+                let mut cj = 0usize;
+                while cj < ink {
+                    let ckk = unsafe { *ikids.add(cj) };
+                    if unsafe { (*ckk).kind } == pm_jit_rsx_ast_kind::TYPE {
+                        let save_ok = self.ok;
+                        let save_nerrs = self.nerrs;
+                        self.ok = true;
+                        let cb = self.arena_tmp();
+                        let _ = unsafe { self.ctype(ckk, cb, 128) };
+                        self.ok = save_ok;
+                        self.nerrs = save_nerrs;
+                        break;
+                    }
+                    cj += 1;
                 }
             } else if kind == pm_jit_rsx_ast_kind::EXTERN_BLOCK {
                 /* extern fns: register name + return type + param types for
@@ -2677,6 +2718,20 @@ impl Lower {
                                     }
                                 }
                             }
+                            /* `String::from(..)` / `String::from_utf8_lossy(..)` —
+                             * the owned-String ctors: monomorphic rsx_str_t
+                             * regardless of the argument shape (&str, &str
+                             * view of bytes, char, another String). */
+                            if cn >= 2 {
+                                let head2 = unsafe { *ck.add(cn - 2) };
+                                if unsafe { z_eq(unsafe { (*head2).text }, unsafe { (*head2).text_len }, b"String\0".as_ptr()) }
+                                    && (unsafe { z_eq(name, nl, b"from\0".as_ptr()) }
+                                        || unsafe { z_eq(name, nl, b"from_utf8_lossy\0".as_ptr()) })
+                                {
+                                    self.str_own_used = true;
+                                    return unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
+                                }
+                            }
                             /* `Vec::new()` / `String::new()` — an empty
                              * container has no element type of its own;
                              * the binding's uses reveal it. The honest
@@ -2717,10 +2772,15 @@ impl Lower {
                                     }
                                     return j;
                                 }
+                                /* String::new — the owned row spelled
+                                 * exactly: rsx_str_t (NOT rsx_str_ref_t,
+                                 * the fat &str, which shares the
+                                 * 8-byte prefix). */
                                 if is_str
-                                    && self.cur_ret_len >= 8
-                                    && unsafe { z_eq(self.cur_ret.as_ptr(), 8, b"rsx_str_\0".as_ptr()) }
+                                    && self.cur_ret_len == 9
+                                    && unsafe { z_eq(self.cur_ret.as_ptr(), 9, b"rsx_str_t\0".as_ptr()) }
                                 {
+                                    self.str_own_used = true;
                                     let mut j = 0usize;
                                     while j < self.cur_ret_len {
                                         unsafe {
@@ -3294,6 +3354,62 @@ impl Lower {
                 let name = unsafe { *kids.add(1) };
                 let mname = unsafe { (*name).text };
                 let mlen = unsafe { (*name).text_len };
+                /* `.next()` on an `x.rsplit(SEP)` receiver — the one
+                 * iterator combinator the str plane lowers natively:
+                 * Option<&str> (the segment AFTER the last separator,
+                 * None when the separator never occurs or the tail is
+                 * empty). Types as the struct-shaped Option row with
+                 * the fat-ref payload; the emission is the statement
+                 * expr that scans for the last sep byte. */
+                if mlen == 4 && unsafe { z_eq(mname, mlen, b"next\0".as_ptr()) } {
+                    let recv = unsafe { *kids.add(0) };
+                    if unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::METHOD_CALL
+                        && unsafe { (*recv).n_kids } as usize >= 3
+                    {
+                        let rname = unsafe { *(*recv).kids.add(1) };
+                        if unsafe { (*rname).text_len } == 6
+                            && unsafe { z_eq(unsafe { (*rname).text }, 6, b"rsplit\0".as_ptr()) }
+                        {
+                            let base = unsafe { *(*recv).kids.add(0) };
+                            let sb = self.arena_tmp();
+                            let sl = unsafe { self.expr_ctype(base, sb, 128, locals) };
+                            let ok_shape = sl == 13
+                                && unsafe { z_eq(sb, 13, b"rsx_str_ref_t\0".as_ptr()) };
+                            if ok_shape {
+                                self.str_ref_used = true;
+                                let slot = unsafe { self.opt_add(b"rsx_str_ref_t\0".as_ptr(), 13) };
+                                if slot < OPT_CAP {
+                                    /* the ENCODED typedef name (raw_len'e'
+                                     * + 2*raw_len hex) — the same spelling
+                                     * opt_typedef_name gives every Option
+                                     * row, so opt_typedef_elem can read
+                                     * the payload back out at the match
+                                     * arm's Some-bind. */
+                                    let tdn = self.arena_tmp();
+                                    let tdn_len = unsafe {
+                                        Lower::opt_typedef_name(
+                                            b"rsx_str_ref_t\0".as_ptr(),
+                                            13,
+                                            tdn,
+                                            160,
+                                        )
+                                    };
+                                    if tdn_len > 0 && tdn_len < cap {
+                                        let at = unsafe { bput(out, cap, 0, tdn, tdn_len) };
+                                        unsafe {
+                                            if at < cap {
+                                                *out.add(at) = 0;
+                                            } else if cap > 0 {
+                                                *out.add(cap - 1) = 0;
+                                            }
+                                        }
+                                        return if at >= cap { 0 } else { at };
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 /* Lock plane: `.lock()` on an rsx_lock_<row> receiver
                  * types as the payload pointer (the guard IS &value —
                  * deref/deref-assign go through it). try_lock types the
@@ -3422,6 +3538,33 @@ impl Lower {
                             }
                         }
                         return if at >= cap { 0 } else { at };
+                    }
+                }
+                /* ---- owned-String plane typing ----
+                 *
+                 * Every String method whose C shape is knowable up front
+                 * types without consulting the receiver (the plane is
+                 * monomorphic — one rsx_str_t, no per-instance rows). */
+                if mlen == 9 && unsafe { z_eq(mname, mlen, b"to_string\0".as_ptr()) } {
+                    self.str_own_used = true;
+                    return unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
+                }
+                if mlen == 8 && unsafe { z_eq(mname, mlen, b"to_owned\0".as_ptr()) } {
+                    self.str_own_used = true;
+                    return unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
+                }
+                if mlen == 10 && unsafe { z_eq(mname, mlen, b"into_owned\0".as_ptr()) } {
+                    self.str_own_used = true;
+                    return unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
+                }
+                if mlen == 5 && unsafe { z_eq(mname, mlen, b"clone\0".as_ptr()) } {
+                    /* clone on a String receiver — the owned plane's
+                     * deep copy (the Vec rows' .clone() keeps its row). */
+                    let rbuf = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                    if rl == 9 && unsafe { z_eq(rbuf, 9, b"rsx_str_t\0".as_ptr()) } {
+                        self.str_own_used = true;
+                        return unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
                     }
                 }
                 let mut user_method = false;
@@ -3773,6 +3916,17 @@ impl Lower {
          * (see emit_method_call), never plain access. */
         if unsafe { z_eq(s, n, b"AtomicU32\0".as_ptr()) } {
             return unsafe { zput(out, cap, 0, b"_Atomic uint32_t\0".as_ptr()) };
+        }
+        /* String -> the owned-string plane: rsx_str_t { char *p; size_t
+         * n, cap; } — the same one-row-for-all-instances contract as the
+         * &str fat reference (rsx_str_ref_t), monomorphic because
+         * String has no type parameters. Marked used here so
+         * str_own_emit_rest emits the typedef before any reference; the
+         * owned plane always emits <stdlib.h> (realloc/free) for its
+         * ops, so no other include decision can dangle. */
+        if unsafe { z_eq(s, n, b"String\0".as_ptr()) } {
+            self.str_own_used = true;
+            return unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
         }
         unsafe { self.suffix_ctype(s, n, out, cap) }
     }

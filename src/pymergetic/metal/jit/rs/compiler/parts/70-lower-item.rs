@@ -1499,6 +1499,34 @@ impl Lower {
                     return;
                 }
                 self.out.puts(b" = \0".as_ptr());
+                /* &str const with a literal initializer: the fat struct,
+                 * not a bare char* — `(rsx_str_ref_t){"lit", sizeof-1}`.
+                 * A bare literal initializes only the first field and
+                 * leaves .n garbage (or fails outright). The owned
+                 * String plane has NO constant literal form (a String
+                 * owns heap bytes — a static initializer would point
+                 * into read-only storage) and refuses here instead. */
+                let is_str_ref = ct_len == 13
+                    && unsafe { z_eq(ct, 13, b"rsx_str_ref_t\0".as_ptr()) };
+                if is_str_ref
+                    && !init.is_null()
+                    && unsafe { (*init).kind } == pm_jit_rsx_ast_kind::LITERAL
+                {
+                    let t = unsafe { (*init).text };
+                    let tl = unsafe { (*init).text_len };
+                    if tl >= 2 && unsafe { *t } == b'"' {
+                        self.out.puts(b"(\0".as_ptr());
+                        self.out.put(ct, ct_len);
+                        self.out.puts(b"){ (const uint8_t *)\0".as_ptr());
+                        self.out.put(t, tl);
+                        self.out.puts(b", sizeof \0".as_ptr());
+                        self.out.put(t, tl);
+                        self.out.puts(b" - 1 }\0".as_ptr());
+                        self.out.puts(b";\n\0".as_ptr());
+                        self.out.putc(b'\n');
+                        return;
+                    }
+                }
                 let locals = LocalTab::new(self.arena);
                 if locals.is_null() {
                     self.ok = false;

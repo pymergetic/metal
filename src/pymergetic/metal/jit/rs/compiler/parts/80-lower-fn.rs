@@ -93,8 +93,37 @@ impl Lower {
         if declare_only == 0 && !body.is_null() {
             let before = self.vecs.n;
             let before_l = self.locks.n;
+            let before_o = self.opt_n;
+            /* Param-holding locals for the expression probes: the
+             * pre-scan now walks METHOD_CALL nodes too (a body-local
+             * `x.rsplit(c).next()` interns an Option row only expr_ctype
+             * can name), and its receiver is usually a param. The
+             * emission's own LocalTab registers the same names later —
+             * the pre-scan's table is separate and discarded here. */
+            let pre_locals = LocalTab::new(self.arena);
+            if !pre_locals.is_null() {
+                let mut p = 0usize;
+                while p < n_params {
+                    let pk = params[p];
+                    let pt = unsafe { (*pk).text };
+                    let ptl = unsafe { (*pk).text_len };
+                    let pkk = unsafe { (*pk).kids };
+                    let pkn = unsafe { (*pk).n_kids } as usize;
+                    if pkn >= 1 && ptl > 0 && !pt.is_null() {
+                        let pty = unsafe { *pkk.add(0) };
+                        let ct = self.arena_tmp();
+                        let n = unsafe { self.ctype(pty, ct, 128) };
+                        if n > 0 {
+                            unsafe {
+                                (*pre_locals).add(pt, ptl, ct, n, 1);
+                            }
+                        }
+                    }
+                    p += 1;
+                }
+            }
             self.pre_mode = true;
-            unsafe { self.body_intern_types(fnitem) };
+            unsafe { self.body_intern_types(fnitem, pre_locals) };
             self.pre_mode = false;
             self.pre_pool_at = 0;
             if self.vecs.n != before {
@@ -103,7 +132,11 @@ impl Lower {
             if self.locks.n != before_l {
                 unsafe { self.lock_emit_rest() };
             }
+            if self.opt_n != before_o {
+                unsafe { self.opt_emit_rest() };
+            }
             unsafe { self.str_emit_rest() };
+            unsafe { self.str_own_emit_rest() };
         }
         /* #line + signature */
         self.out.puts(b"#line \0".as_ptr());
@@ -848,6 +881,123 @@ impl Lower {
         self.str_ref_done = true;
     }
 
+    /* Owned-String plane: the one monomorphic struct + its unit-static
+     * ops. rsx_str_t is { char *p; size_t n, cap; } — p == NULL and
+     * n == 0 is the empty string (the {0} compound literal), so every
+     * empty ctor and static initializer is a constant expression. The
+     * ops mirror the Vec rows' contract: unit-local helpers against
+     * libc realloc/free, grow-by-double, refuse-on-OOM aborts (the
+     * process contract is the source's own — Rust's allocator aborts,
+     * the generated C matches). Appending takes raw ptr+len so the
+     * &str fat reference, String values and literals all feed one
+     * append face; ownership never transfers into p (the ops own
+     * their one allocation, the caller keeps the rest exactly as the
+     * source's own free faces spell it). */
+    unsafe fn str_own_emit_rest(&mut self) {
+        if self.str_own_done {
+            return;
+        }
+        if !self.str_own_used {
+            return;
+        }
+        self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
+        self.out.puts(
+            b"typedef struct { char *p; size_t n; size_t cap; } rsx_str_t;\n\0".as_ptr(),
+        );
+        /* grow: cap doubles to >= need; abort on OOM (the source's own
+         * process contract — see the Vec rows' note) */
+        self.out.puts(
+            b"static void rsx_str_grow(rsx_str_t *s, size_t need) {\n\0".as_ptr(),
+        );
+        self.out.puts(b"    size_t c = s->cap ? s->cap * 2 : 16;\n\0".as_ptr());
+        self.out.puts(b"    while (c < need) { c *= 2; }\n\0".as_ptr());
+        self.out.puts(
+            b"    char *q = (char *)realloc(s->p, c + 1);\n\0".as_ptr(),
+        );
+        self.out.puts(b"    if (!q) { abort(); }\n\0".as_ptr());
+        self.out.puts(b"    s->p = q; s->cap = c;\n\0".as_ptr());
+        self.out.puts(b"}\n\0".as_ptr());
+        /* append raw bytes: the one appending face every caller shape
+         * (literal, &str ref, owned String) lowers to */
+        self.out.puts(
+            b"static void rsx_str_append(rsx_str_t *s, const char *p, size_t n) {\n\0".as_ptr(),
+        );
+        self.out.puts(b"    if (n == 0) { return; }\n\0".as_ptr());
+        self.out.puts(b"    if (s->n + n > s->cap) { rsx_str_grow(s, s->n + n); }\n\0".as_ptr());
+        self.out.puts(b"    for (size_t i = 0; i < n; i++) { s->p[s->n + i] = p[i]; }\n\0".as_ptr());
+        self.out.puts(b"    s->n += n; s->p[s->n] = 0;\n\0".as_ptr());
+        self.out.puts(b"}\n\0".as_ptr());
+        /* append a NUL-terminated literal (strlen once) */
+        self.out.puts(
+            b"static void rsx_str_push_lit(rsx_str_t *s, const char *lit) {\n\0".as_ptr(),
+        );
+        self.out.puts(b"    rsx_str_append(s, lit, strlen(lit));\n\0".as_ptr());
+        self.out.puts(b"}\n\0".as_ptr());
+        /* append one char (Rust char is unicode scalar; the owned plane
+         * stores UTF-8 — a scalar <= 0x7F is one byte, anything larger
+         * encodes to up to 4 bytes) */
+        self.out.puts(
+            b"static void rsx_str_push_char(rsx_str_t *s, uint32_t ch) {\n\0".as_ptr(),
+        );
+        self.out.puts(b"    char b[4]; size_t k = 0;\n\0".as_ptr());
+        self.out.puts(b"    if (ch < 0x80) { b[k++] = (char)ch; }\n\0".as_ptr());
+        self.out.puts(b"    else if (ch < 0x800) { b[k++] = (char)(0xC0 | (ch >> 6)); b[k++] = (char)(0x80 | (ch & 0x3F)); }\n\0".as_ptr());
+        self.out.puts(b"    else if (ch < 0x10000) { b[k++] = (char)(0xE0 | (ch >> 12)); b[k++] = (char)(0x80 | ((ch >> 6) & 0x3F)); b[k++] = (char)(0x80 | (ch & 0x3F)); }\n\0".as_ptr());
+        self.out.puts(b"    else { b[k++] = (char)(0xF0 | (ch >> 18)); b[k++] = (char)(0x80 | ((ch >> 12) & 0x3F)); b[k++] = (char)(0x80 | ((ch >> 6) & 0x3F)); b[k++] = (char)(0x80 | (ch & 0x3F)); }\n\0".as_ptr());
+        self.out.puts(b"    rsx_str_append(s, b, k);\n\0".as_ptr());
+        self.out.puts(b"}\n\0".as_ptr());
+        /* clone: a deep copy — the source's clone() is a fresh owning
+         * String; the ops' one allocation + copy is exactly that */
+        self.out.puts(
+            b"static rsx_str_t rsx_str_clone(const rsx_str_t *s) {\n\0".as_ptr(),
+        );
+        self.out.puts(b"    rsx_str_t r = {0};\n\0".as_ptr());
+        self.out.puts(b"    rsx_str_append(&r, s->p ? s->p : \"\", s->n);\n\0".as_ptr());
+        self.out.puts(b"    return r;\n\0".as_ptr());
+        self.out.puts(b"}\n\0".as_ptr());
+        /* substring test against a NUL-terminated literal */
+        self.out.puts(
+            b"static int rsx_str_contains(const rsx_str_t *s, const char *lit) {\n\0".as_ptr(),
+        );
+        self.out.puts(b"    size_t m = strlen(lit);\n\0".as_ptr());
+        self.out.puts(b"    if (m == 0) { return 1; }\n\0".as_ptr());
+        self.out.puts(b"    if (m > s->n) { return 0; }\n\0".as_ptr());
+        self.out.puts(b"    for (size_t i = 0; i + m <= s->n; i++) {\n\0".as_ptr());
+        self.out.puts(b"        size_t j = 0;\n\0".as_ptr());
+        self.out.puts(b"        while (j < m && s->p[i + j] == lit[j]) { j++; }\n\0".as_ptr());
+        self.out.puts(b"        if (j == m) { return 1; }\n\0".as_ptr());
+        self.out.puts(b"    }\n\0".as_ptr());
+        self.out.puts(b"    return 0;\n\0".as_ptr());
+        self.out.puts(b"}\n\0".as_ptr());
+        /* substring test on a raw (p, n) view — the &str fat reference's
+         * shape, so a borrowed receiver never builds an owned temp */
+        self.out.puts(
+            b"static int rsx_view_contains(const char *p, size_t n, const char *lit) {\n\0".as_ptr(),
+        );
+        self.out.puts(b"    rsx_str_t v = { (char *)p, n, 0 };\n\0".as_ptr());
+        self.out.puts(b"    return rsx_str_contains(&v, lit);\n\0".as_ptr());
+        self.out.puts(b"}\n\0".as_ptr());
+        /* byte find: index of first ch, or s->n when absent (the
+         * lowering maps that to Option::None — see emit_method_call) */
+        self.out.puts(
+            b"static size_t rsx_str_find(const rsx_str_t *s, char ch) {\n\0".as_ptr(),
+        );
+        self.out.puts(b"    for (size_t i = 0; i < s->n; i++) { if (s->p[i] == ch) { return i; } }\n\0".as_ptr());
+        self.out.puts(b"    return s->n;\n\0".as_ptr());
+        self.out.puts(b"}\n\0".as_ptr());
+        /* clear: keep the allocation (Rust String::clear keeps cap) */
+        self.out.puts(b"static void rsx_str_clear(rsx_str_t *s) {\n\0".as_ptr());
+        self.out.puts(b"    s->n = 0; if (s->p) { s->p[0] = 0; }\n\0".as_ptr());
+        self.out.puts(b"}\n\0".as_ptr());
+        /* free: the explicit teardown face (the source spells its own
+         * drops; rsx lowers none implicitly) */
+        self.out.puts(b"static void rsx_str_free(rsx_str_t *s) {\n\0".as_ptr());
+        self.out.puts(b"    free(s->p); s->p = 0; s->n = 0; s->cap = 0;\n\0".as_ptr());
+        self.out.puts(b"}\n\0".as_ptr());
+        self.out.putc(b'\n');
+        self.str_own_done = true;
+    }
+
     /* Recursive body pre-scan: render (and discard) every TYPE node's C
      * type so the container/tuple/Option tables intern everything the
      * body will name before its opening brace — the typedefs must sit at
@@ -856,7 +1006,7 @@ impl Lower {
      * for its scratch (see Lower's pre_pool doc). Recursion depth is
      * bounded by the parser's own nesting (the AST is already built, so
      * no new input blowup). */
-    unsafe fn body_intern_types(&mut self, e: *const pm_jit_rsx_ast_t) {
+    unsafe fn body_intern_types(&mut self, e: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
         if e.is_null() || !self.ok {
             return;
         }
@@ -870,11 +1020,29 @@ impl Lower {
             let _ = unsafe { self.ctype(e, sc, 160) };
             return;
         }
+        if unsafe { (*e).kind } == pm_jit_rsx_ast_kind::METHOD_CALL && !locals.is_null() {
+            /* Expression probe: the container/Option planes intern rows
+             * from expr_ctype alone (x.rsplit(c).next() types the
+             * Option-of-str-ref row). The probe's own refusals are
+             * inert — pre_mode discards spellings; only the interned
+             * tables matter. err() poisons ok, so save/restore both
+             * around the probe (the real emission re-derives any real
+             * error later). */
+            self.pre_pool_at = 0;
+            let sc = self.pre_pool.as_mut_ptr();
+            let save_ok = self.ok;
+            let save_nerrs = self.nerrs;
+            self.ok = true;
+            let _ = unsafe { self.expr_ctype(e, sc, 160, locals) };
+            self.ok = save_ok;
+            self.nerrs = save_nerrs;
+            return;
+        }
         let kids = unsafe { (*e).kids };
         let nk = unsafe { (*e).n_kids } as usize;
         let mut i = 0usize;
         while i < nk {
-            unsafe { self.body_intern_types(*kids.add(i)) };
+            unsafe { self.body_intern_types(*kids.add(i), locals) };
             if !self.ok {
                 return;
             }
@@ -1031,6 +1199,16 @@ impl Lower {
         self.out.puts(b"/* generated by pymergetic.metal.jit.rs.compiler */\n\0".as_ptr());
         self.out.puts(b"#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <string.h>\n\0".as_ptr());
         self.out.putc(b'\n');
+        /* String-plane typedefs hoisted to the preamble. collect() has run,
+         * so the flags are already set for every type the file can name
+         * (fn sigs, struct fields, const/static declared types); pass 0a
+         * lowers CONSTs next and a `pub const X: &str` would otherwise
+         * spell rsx_str_ref_t before its typedef. The bodies' uses
+         * (String::from, .to_string(), …) mark the flags later but only
+         * add *functions* — the typedef itself is what must precede
+         * everything, and one emission here is exactly that. */
+        unsafe { self.str_emit_rest() };
+        unsafe { self.str_own_emit_rest() };
         /* struct-shaped Option typedefs are NOT hoisted into the preamble:
          * a payload naming a type alias (`rsx_opt_Handler`) must follow that
          * alias's typedef, and structs with Option fields must follow the
@@ -1212,6 +1390,13 @@ impl Lower {
             }
             i += 1;
         }
+        /* String-plane typedefs — BEFORE the tuple/Option/Vec/lock rows:
+         * a tuple row's element (or a Vec's, an Option's, a static's
+         * type) can name rsx_str_t / rsx_str_ref_t, and C needs those
+         * complete first. One-shot file-scope, same contract as the
+         * rows below them. */
+        unsafe { self.str_emit_rest() };
+        unsafe { self.str_own_emit_rest() };
         unsafe { self.tup_emit_rest() };
         /* remaining Option typedefs — primitive payloads need no naming
          * type; emit before the prototypes/fns that use them */
@@ -1222,8 +1407,6 @@ impl Lower {
         /* Lock rows — same file-scope contract (a fn signature naming
          * Mutex<T> needs the typedef complete before the prototype) */
         unsafe { self.lock_emit_rest() };
-        /* &str fat-reference typedef — same one-shot file-scope contract */
-        unsafe { self.str_emit_rest() };
         /* pass 0b: statics — after the type pass, their declarations name
          * struct/alias types; their initializers may also need complete
          * types for compound literals. */

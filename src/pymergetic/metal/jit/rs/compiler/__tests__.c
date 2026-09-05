@@ -2296,6 +2296,140 @@ static int32_t test_let_else_order_linked(void) {
 #endif
 }
 
+/* --- rsx_str_ref_t rsplit('.').next(): the Option<&str> plane ----------------
+ * `fqn.rsplit('.').next()` is the &str iterator chain gen's leaf-extraction
+ * runs inside a let-chain. Typing interns the Option-of-str-ref row through
+ * the codec name (opt_typedef_name), emission is a last-separator scan, and
+ * the Some-bind hands the payload to the body as an &str fat ref. Proven
+ * here END TO END: compile, object, link, run — the bound leaf's length and
+ * bytes both read back through the fat pointer, plus the None path when no
+ * separator exists. */
+static const char RSPLIT_NEXT_RT_SRC[] =
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn rn_leaf_len(fqn: &str) -> u32 {\n"
+    "    if let Some(leaf) = fqn.rsplit('.').next() {\n"
+    "        leaf.len() as u32\n"
+    "    } else {\n"
+    "        0u32\n"
+    "    }\n"
+    "}\n"
+    "#[no_mangle]\n"
+    "pub extern \"C\" fn rn_leaf_byte(fqn: &str, i: u32) -> u32 {\n"
+    "    if let Some(leaf) = fqn.rsplit('.').next() {\n"
+    "        if i < leaf.len() as u32 { leaf.as_bytes()[i as usize] as u32 } else { 0u32 }\n"
+    "    } else {\n"
+    "        0u32\n"
+    "    }\n"
+    "}\n";
+
+static int32_t test_rsplit_next_iflet_linked(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+    void *backing = NULL, *obacking = NULL;
+    pm_util_mem_arena_t *arena = NULL, *oarena = NULL;
+    char *c = NULL;
+    size_t c_len = 0;
+    char err[PM_METAL_JIT_RSX_ERR_MAX];
+    char oerr[256];
+    int32_t rc;
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    pm_metal_build_unit_t unit;
+    pm_metal_build_artifact_t art;
+    uint8_t *objs[1];
+    size_t lens[1];
+    uint32_t (*l_len)(const char *, size_t);
+    uint32_t (*l_byte)(const char *, size_t, uint32_t);
+
+    backing = malloc(1u << 24);
+    if (!backing) return 290;
+    arena = pm_util_mem_arena_create(backing, 1u << 24);
+    if (!arena) { free(backing); return 291; }
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_rsx_compile(arena, RSPLIT_NEXT_RT_SRC,
+                                  strlen(RSPLIT_NEXT_RT_SRC),
+                                  &c, &c_len, err, sizeof(err));
+    if (rc != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 292;
+    }
+    obacking = malloc(1u << 24);
+    if (!obacking) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 293;
+    }
+    oarena = pm_util_mem_arena_create(obacking, 1u << 24);
+    if (!oarena) {
+        pm_util_mem_arena_destroy(arena); free(backing); free(obacking);
+        return 294;
+    }
+    rc = pm_metal_jit_c_object_compile(oarena, c, c_len, &obj, &obj_len,
+                                       oerr, sizeof(oerr));
+    if (rc != 0) {
+        if (strstr(oerr, "no native object output on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0; /* polite seat refusal — skip */
+        }
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 295;
+    }
+    memset(&unit, 0, sizeof(unit));
+    snprintf(unit.fqn, sizeof(unit.fqn), "%s", "rsx.rsplit.rt");
+    objs[0] = obj;
+    lens[0] = obj_len;
+    memset(oerr, 0, sizeof(oerr));
+    rc = pm_metal_build_link(oarena, &unit, objs, lens, 1, &art,
+                             oerr, sizeof(oerr));
+    if (rc != PM_METAL_BUILD_OK) {
+        if (strstr(oerr, "no ELF loader on this seat") != NULL) {
+            pm_util_mem_arena_destroy(arena); free(backing);
+            pm_util_mem_arena_destroy(oarena); free(obacking);
+            return 0; /* polite seat refusal — skip */
+        }
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 296;
+    }
+    l_len = (uint32_t (*)(const char *, size_t))
+        pm_metal_build_artifact_lookup(&art, "rn_leaf_len");
+    l_byte = (uint32_t (*)(const char *, size_t, uint32_t))
+        pm_metal_build_artifact_lookup(&art, "rn_leaf_byte");
+    if (l_len == NULL || l_byte == NULL) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 297;
+    }
+    /* Some path: the leaf after the last '.' — length + bytes */
+    if (l_len("pymergetic.wasmmod.registry", 27) != 8) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 298;
+    }
+    if (l_byte("pymergetic.wasmmod.registry", 27, 0) != (uint32_t)'r') {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 299;
+    }
+    if (l_byte("pymergetic.wasmmod.registry", 27, 7) != (uint32_t)'y') {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 300;
+    }
+    /* None path: no separator at all */
+    if (l_len("registry", 8) != 0) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking); return 301;
+    }
+    pm_metal_build_artifact_destroy(&art);
+    pm_util_mem_arena_destroy(arena);
+    pm_util_mem_arena_destroy(oarena);
+    free(backing);
+    free(obacking);
+    return 0;
+#else
+    /* No native TCC object output / no ELF loader on this seat — skip */
+    return 0;
+#endif
+}
+
 /* --- #[cfg] stripping: feature predicate evaluation at parse time ------
  * The parser evaluates `#[cfg(feature = "x")]` / `#[cfg(not(...))]` /
  * `#[cfg(all(...))]` / `#[cfg(any(...))]` / `#[cfg(test)]` against the
@@ -3109,6 +3243,7 @@ static int32_t pm_metal_jit_rsx_tests(void) {
     rc = rsx_run_named("let_chain_parse_and_lower", test_let_chain_parse_and_lower); if (rc) return rc;
     rc = rsx_run_named("let_chain_refuses", test_let_chain_refuses); if (rc) return rc;
     rc = rsx_run_named("let_chain_linked", test_let_chain_linked); if (rc) return rc;
+    rc = rsx_run_named("rsplit_next_iflet_linked", test_rsplit_next_iflet_linked); if (rc) return rc;
     rc = rsx_run_named("trait_runtime_linked", test_trait_runtime_linked); if (rc) return rc;
     rc = rsx_run_named("cfg_strip_parse_and_lower", test_cfg_strip_parse_and_lower); if (rc) return rc;
     rc = rsx_run_named("introspection", test_introspection);      if (rc) return rc;
