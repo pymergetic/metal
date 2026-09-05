@@ -103,6 +103,7 @@ impl Lower {
             if self.locks.n != before_l {
                 unsafe { self.lock_emit_rest() };
             }
+            unsafe { self.str_emit_rest() };
         }
         /* #line + signature */
         self.out.puts(b"#line \0".as_ptr());
@@ -276,7 +277,7 @@ impl Lower {
                     } else {
                         self.indent();
                         self.out.puts(b"return \0".as_ptr());
-                        unsafe { self.emit_expr(tail, &mut *locals) };
+                        unsafe { self.emit_ret_value(tail, &mut *locals) };
                         self.out.puts(b";\n\0".as_ptr());
                     }
                     /* any tail shape: live guards release before the fn's
@@ -831,6 +832,22 @@ impl Lower {
         self.out.putc(b'\n');
     }
 
+    /* &str plane: the one fat-reference typedef, emitted at most once
+     * per unit (before the first use — the same contract as the
+     * Option/tuple typedefs: file scope, complete at every reference). */
+    unsafe fn str_emit_rest(&mut self) {
+        if self.str_ref_done {
+            return;
+        }
+        if !self.str_ref_used {
+            return;
+        }
+        self.out.puts(
+            b"typedef struct { const uint8_t *p; size_t n; } rsx_str_ref_t;\n\0".as_ptr(),
+        );
+        self.str_ref_done = true;
+    }
+
     /* Recursive body pre-scan: render (and discard) every TYPE node's C
      * type so the container/tuple/Option tables intern everything the
      * body will name before its opening brace — the typedefs must sit at
@@ -1068,9 +1085,19 @@ impl Lower {
                 continue;
             }
             if unsafe { (*item).kind } == pm_jit_rsx_ast_kind::ENUM {
-                unsafe { self.lower_enum(item) };
-                unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
-                unsafe { self.tup_emit_for(kids, nk, unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                /* One C definition per name: an enum emitted once is in
+                 * tydone, and a same-name struct later in the unit (the
+                 * exports face's opaque `_opaque` spelling of a type the
+                 * types face already declared) is skipped by the same
+                 * set — the real definition wins. */
+                let en = unsafe { (*item).text };
+                let el = unsafe { (*item).text_len };
+                if !unsafe { self.tydone_find(en, el) } {
+                    unsafe { self.tydone_add(en, el) };
+                    unsafe { self.lower_enum(item) };
+                    unsafe { self.opt_emit_for(en, el) };
+                    unsafe { self.tup_emit_for(kids, nk, en, el) };
+                }
             }
             if !self.ok {
                 bad = true;
@@ -1195,6 +1222,8 @@ impl Lower {
         /* Lock rows — same file-scope contract (a fn signature naming
          * Mutex<T> needs the typedef complete before the prototype) */
         unsafe { self.lock_emit_rest() };
+        /* &str fat-reference typedef — same one-shot file-scope contract */
+        unsafe { self.str_emit_rest() };
         /* pass 0b: statics — after the type pass, their declarations name
          * struct/alias types; their initializers may also need complete
          * types for compound literals. */

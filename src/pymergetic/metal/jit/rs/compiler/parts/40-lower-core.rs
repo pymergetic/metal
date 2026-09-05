@@ -138,6 +138,12 @@ struct Lower {
     /* Mutex<T>/SpinLock<T> plane: interned payload spellings -> named C
      * rows { pm_util_lock_t raw; T value; }, same emission contract. */
     locks: LockTab,
+    /* &str fat-reference plane: `&str` renders as the by-value struct
+     * rsx_str_ref_t { const uint8_t *p; size_t n; } — ABI-shaped like
+     * cargo's own (ptr,len) pair, so .len()/.as_ptr() lower to field
+     * selects instead of refusing. The typedef emits once per unit. */
+    str_ref_used: bool,
+    str_ref_done: bool,
 }
 
 impl Lower {
@@ -249,24 +255,31 @@ impl Lower {
                         i += 1;
                         j += 1;
                     }
-                    unsafe { *self.errbuf.add(i) = b'\'' };
-                    i += 1;
-                    if i + 2 < self.errcap {
-                        unsafe { *self.errbuf.add(i) = b' ' };
+                    if i + 1 < self.errcap {
+                        unsafe { *self.errbuf.add(i) = b'\'' };
                         i += 1;
-                        unsafe { *self.errbuf.add(i) = b'[' };
-                        i += 1;
-                        j = 0;
-                        while unsafe { *kind.add(j) } != 0 && i + 2 < self.errcap {
-                            unsafe { *self.errbuf.add(i) = *kind.add(j) };
+                        if i + 3 < self.errcap {
+                            unsafe { *self.errbuf.add(i) = b' ' };
                             i += 1;
-                            j += 1;
+                            unsafe { *self.errbuf.add(i) = b'[' };
+                            i += 1;
+                            j = 0;
+                            while unsafe { *kind.add(j) } != 0 && i + 2 < self.errcap {
+                                unsafe { *self.errbuf.add(i) = *kind.add(j) };
+                                i += 1;
+                                j += 1;
+                            }
+                            unsafe { *self.errbuf.add(i) = b']' };
+                            i += 1;
                         }
-                        unsafe { *self.errbuf.add(i) = b']' };
-                        i += 1;
                     }
+                    /* the buffer ALWAYS ends NUL-terminated, even when the
+                     * message filled it — an unterminated errbuf reads
+                     * past errcap in every downstream printer */
                     if i < self.errcap {
                         unsafe { *self.errbuf.add(i) = 0 };
+                    } else {
+                        unsafe { *self.errbuf.add(self.errcap - 1) = 0 };
                     }
                 }
             }
@@ -384,6 +397,227 @@ impl Lower {
             i += 1;
         }
         usize::MAX
+    }
+
+    /* Emit a return value expression: when the fn's return type is the
+     * fat `&str` (rsx_str_ref_t) and the value is a string literal, the
+     * literal becomes the compound (rsx_str_ref_t){ ptr, len } — a C
+     * char[] never converts to the struct implicitly. All other shapes
+     * emit unchanged. */
+    unsafe fn emit_ret_value(&mut self, v: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
+        if !v.is_null()
+            && unsafe { (*v).kind } == pm_jit_rsx_ast_kind::LITERAL
+            && self.cur_ret_len == 13
+            && unsafe { z_eq(self.cur_ret.as_ptr(), 13, b"rsx_str_ref_t\0".as_ptr()) }
+        {
+            let t = unsafe { (*v).text };
+            let tl = unsafe { (*v).text_len };
+            if tl > 0 && !t.is_null() && (unsafe { *t } == b'"' || (unsafe { *t } == b'b' && tl > 1 && unsafe { *t.add(1) } == b'"')) {
+                self.out.puts(b"(rsx_str_ref_t){ (const uint8_t *)\0".as_ptr());
+                self.out.put(t, tl);
+                self.out.puts(b", sizeof(\0".as_ptr());
+                self.out.put(t, tl);
+                self.out.puts(b") - 1 }\0".as_ptr());
+                return;
+            }
+        }
+        unsafe { self.emit_expr(v, locals) };
+    }
+
+    /* ---- vec! macro expansion ----
+     *
+     * `vec![E; N]` / `vec![a, b, ..]` (any `alloc::`/`::alloc::` prefix)
+     * parse as one MACRO node carrying the raw invocation text. The elem
+     * type + count are inside that text, so the expansion sub-lexes and
+     * sub-parses the body — a real parse, the same grammar, never a
+     * hand-rolled text scan. Results:
+     *   out_row: the interned VecTab row for the element type
+     *   out_count: the repeat form's count AST (repeat), or the list
+     *              form's element ASTs in elems[0..out_list_n]
+     *   out_list_n: >0 for the list form, 0 for the repeat form
+     * Returns true on a recognized `vec!` (even if its body then refuses),
+     * false when the macro is something else. */
+    unsafe fn vec_macro_scan(
+        &mut self,
+        text: *const u8,
+        tlen: usize,
+        locals: *mut LocalTab,
+        out_row: *mut usize,
+        out_count: *mut *mut pm_jit_rsx_ast_t,
+        out_elems: *mut *mut pm_jit_rsx_ast_t,
+        out_list_n: *mut usize,
+    ) -> bool {
+        /* strip `::alloc::` / `alloc::` before `vec!` */
+        let mut sp = text;
+        let mut sl = tlen;
+        if sl >= 9
+            && unsafe { *sp == b':' }
+            && unsafe { *sp.add(1) == b':' }
+            && unsafe { z_eq(sp.add(2), 6, b"alloc:\0".as_ptr()) }
+        {
+            sp = unsafe { sp.add(9) };
+            sl -= 9;
+        } else if sl >= 7 && unsafe { z_eq(sp, 6, b"alloc:\0".as_ptr()) } {
+            sp = unsafe { sp.add(7) };
+            sl -= 7;
+        }
+        /* `vec![` — raw byte compare on the invocation text */
+        if sl < 6 {
+            return false;
+        }
+        if unsafe { *sp } != b'v'
+            || unsafe { *sp.add(1) } != b'e'
+            || unsafe { *sp.add(2) } != b'c'
+            || unsafe { *sp.add(3) } != b'!'
+            || unsafe { *sp.add(4) } != b'['
+        {
+            return false;
+        }
+        /* body: [sp+5, sl-1) — `vec![` is 5 bytes; the invocation's LAST
+         * byte is the closing `]` (the lexer emits the whole invocation
+         * as one balanced token, so nothing can trail it) */
+        if unsafe { *sp.add(sl - 1) } != b']' {
+            return false;
+        }
+        let body = unsafe { sp.add(5) };
+        let blen = sl - 6;
+        /* sub-lex the body */
+        let mut toks: pm_jit_rsx_toklist_t = pm_jit_rsx_toklist_t {
+            toks: core::ptr::null_mut(),
+            n_toks: 0,
+        };
+        if unsafe {
+            pm_metal_jit_rsx_lex(
+                self.arena,
+                body,
+                blen,
+                &mut toks,
+                self.errbuf,
+                self.errcap,
+            )
+        } != 0
+        {
+            return true;
+        }
+        if toks.n_toks == 0 {
+            unsafe {
+                self.err(b"unsupported: empty vec!\0".as_ptr(), 0);
+            }
+            return true;
+        }
+        let mut p = Parser {
+            arena: self.arena,
+            toks: toks.toks,
+            n_toks: toks.n_toks,
+            at: 0,
+            nd: Node {
+                arena: self.arena,
+                errbuf: self.errbuf,
+                errcap: self.errcap,
+                errline: 0,
+                ok: true,
+            },
+            ok: true,
+            cond_ctx: false,
+            chain_ctx: false,
+            shr_closes: 0,
+            feats: core::ptr::null(),
+        };
+        /* element expression first */
+        let elem = unsafe { p.parse_expr() };
+        if !p.ok || elem.is_null() {
+            unsafe {
+                self.err(b"unsupported: vec! element\0".as_ptr(), 0);
+            }
+            return true;
+        }
+        /* repeat form: `; count` after the element */
+        if unsafe { p.is_punct(p.at, b';') } {
+            p.at += 1;
+            let count = unsafe { p.parse_expr() };
+            if !p.ok || count.is_null() {
+                unsafe {
+                    self.err(b"unsupported: vec! count\0".as_ptr(), 0);
+                }
+                return true;
+            }
+            /* intern the row on the element's C type */
+            let eb = self.arena_tmp();
+            let en = unsafe { self.expr_ctype(elem, eb, 128, locals) };
+            if en == 0 {
+                unsafe {
+                    self.err(b"unsupported: vec! element type\0".as_ptr(), 0);
+                }
+                return true;
+            }
+            let row = unsafe { self.vecs.intern(eb, en) };
+            unsafe {
+                *out_row = row;
+                *out_count = count;
+                *out_list_n = 0;
+                /* the repeat form needs E's AST too — vec![7u8; n] fills,
+                 * not zeroes (calloc only covers E == 0) */
+                *out_elems = elem;
+            }
+            return true;
+        }
+        /* list form: `, expr`* — elements typed individually (all must
+         * agree; the first wins and mismatches surface as C errors) */
+        let mut list: [*mut pm_jit_rsx_ast_t; 16] = [core::ptr::null_mut(); 16];
+        let mut list_n = 0usize;
+        let first = elem;
+        let mut any = first;
+        loop {
+            if list_n < 16 {
+                list[list_n] = any;
+                list_n += 1;
+            } else {
+                unsafe {
+                    self.err(b"unsupported: vec! list too long\0".as_ptr(), 0);
+                }
+                return true;
+            }
+            if !unsafe { p.is_punct(p.at, b',') } {
+                break;
+            }
+            p.at += 1;
+            any = unsafe { p.parse_expr() };
+            if !p.ok || any.is_null() {
+                unsafe {
+                    self.err(b"unsupported: vec! element list\0".as_ptr(), 0);
+                }
+                return true;
+            }
+        }
+        /* the lexer pushes a trailing END sentinel and counts it in
+         * n_toks; "fully consumed" means the cursor sits on END (the
+         * parser clamps out-of-range to that same sentinel) */
+        if unsafe { p.kind(p.at) } != pm_jit_rsx_tok_kind::END {
+            unsafe {
+                self.err(b"unsupported: vec! trailing tokens\0".as_ptr(), 0);
+            }
+            return true;
+        }
+        let eb = self.arena_tmp();
+        let en = unsafe { self.expr_ctype(first, eb, 128, locals) };
+        if en == 0 {
+            unsafe {
+                self.err(b"unsupported: vec! element type\0".as_ptr(), 0);
+            }
+            return true;
+        }
+        let row = unsafe { self.vecs.intern(eb, en) };
+        unsafe {
+            let mut k = 0usize;
+            while k < list_n {
+                *out_elems.add(k) = list[k];
+                k += 1;
+            }
+            *out_row = row;
+            *out_count = core::ptr::null_mut();
+            *out_list_n = list_n;
+        }
+        true
     }
 
     /* Rust type node -> C type into out (NUL-terminated); byte length or 0 on
@@ -605,14 +839,40 @@ impl Lower {
                 let nk = unsafe { (*ty).n_kids } as usize;
                 if nk >= 1 {
                     let inner = unsafe { *kids.add(0) };
+                    /* &str -> the fat rsx_str_ref_t (ptr+len struct, the
+                     * same shape cargo uses): .len()/.as_ptr() become
+                     * field selects, a str param carries its length.
+                     * `str` parses as a path type (leaf `str`, no generic
+                     * args) — test the leaf, not the rendered spelling. */
+                    let mut inner_is_str = false;
+                    if unsafe { (*inner).kind } == pm_jit_rsx_ast_kind::TYPE {
+                        let it = unsafe { (*inner).text };
+                        let itl = unsafe { (*inner).text_len };
+                        if unsafe { z_eq(it, itl, b"path\0".as_ptr()) }
+                            || unsafe { z_eq(it, itl, b"gpath\0".as_ptr()) }
+                        {
+                            let ik = unsafe { (*inner).kids };
+                            let ikn = unsafe { (*inner).n_kids } as usize;
+                            if ikn == 1 {
+                                let leaf = unsafe { *ik.add(0) };
+                                let lt = unsafe { (*leaf).text };
+                                let ltl = unsafe { (*leaf).text_len };
+                                if ltl == 3 && unsafe { z_eq(lt, 3, b"str\0".as_ptr()) } {
+                                    inner_is_str = true;
+                                }
+                            }
+                        } else if itl == 3 && unsafe { z_eq(it, 3, b"str\0".as_ptr()) } {
+                            inner_is_str = true;
+                        }
+                    }
                     let inner_buf = self.arena_tmp();
                     let n = unsafe { self.ctype(inner, inner_buf, 128) };
-                    if n == 0 {
+                    if n == 0 && !inner_is_str {
                         return 0;
                     }
-                    /* &str -> const char* */
-                    if unsafe { z_eq(inner_buf, n, b"char\0".as_ptr()) } {
-                        at = unsafe { zput(out, cap, at, b"const char *\0".as_ptr()) };
+                    if inner_is_str {
+                        self.str_ref_used = true;
+                        at = unsafe { zput(out, cap, at, b"rsx_str_ref_t\0".as_ptr()) };
                         unsafe {
                             *out.add(at) = 0;
                         }
@@ -1825,6 +2085,47 @@ impl Lower {
             /* no suffix: int */
             return unsafe { zput(out, cap, 0, b"int32_t\0".as_ptr()) };
         }
+        if kind == pm_jit_rsx_ast_kind::MACRO {
+            /* vec![..] — the one expression macro the container plane
+             * lowers; everything else refuses (loudly, in emit). */
+            let mut row: usize = 0;
+            let mut count: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+            let mut elems: [*mut pm_jit_rsx_ast_t; 16] = [core::ptr::null_mut(); 16];
+            let mut list_n: usize = 0;
+            if unsafe {
+                self.vec_macro_scan(
+                    (*e).text,
+                    (*e).text_len,
+                    locals,
+                    &mut row,
+                    &mut count,
+                    elems.as_mut_ptr(),
+                    &mut list_n,
+                )
+            } {
+                if !self.ok {
+                    return 0;
+                }
+                    let tdn = self.arena_tmp();
+                    let tdn_len = unsafe { VecTab::name_for(row, tdn, 96) };
+                    if tdn_len == 0 {
+                        unsafe {
+                            self.err(b"internal: vec typedef name too long\0".as_ptr(), 0);
+                        }
+                        return 0;
+                    }
+                    /* name_for fills raw bytes; bput + NUL into out */
+                    let at = unsafe { bput(out, cap, 0, tdn, tdn_len) };
+                    if at >= cap {
+                        return 0;
+                    }
+                    unsafe {
+                        *out.add(at) = 0;
+                    }
+                    return at;
+                }
+                return 0;
+        }
         if kind == pm_jit_rsx_ast_kind::CAST {
             /* kids: expr, type */
             let kids = unsafe { (*e).kids };
@@ -2153,6 +2454,85 @@ impl Lower {
             let kids = unsafe { (*e).kids };
             if unsafe { (*e).n_kids } >= 1 {
                 let callee = unsafe { *kids.add(0) };
+                /* Call through ANY fn-pointer expression (not only a local
+                 * bind): `(hook.f)(..)` types the callee expr — a fn-ptr
+                 * spelling `ret (*)(..)` yields ret; an alias (a type
+                 * alias used as the field's type) resolves via st_find.
+                 * The general callee-side twin of the PATH branch below. */
+                if unsafe { (*callee).kind } != pm_jit_rsx_ast_kind::PATH {
+                    let cb = self.arena_tmp();
+                    let cn = unsafe { self.expr_ctype(callee, cb, 128, locals) };
+                    if cn > 0 && cn < 128 {
+                        let mut sp = cb;
+                        let mut spl = cn;
+                        let mut ri = 0usize;
+                        let mut has_paren = false;
+                        while ri < spl {
+                            if unsafe { *sp.add(ri) } == b'(' {
+                                has_paren = true;
+                                break;
+                            }
+                            ri += 1;
+                        }
+                        if !has_paren {
+                            /* An alias (a fn-ptr type alias used as the
+                             * field's type) registers its RESOLVED RET in
+                             * the static table — the call's type IS that
+                             * ret. A raw fn-ptr spelling would carry `(`;
+                             * the alias never does, so a resolved hit
+                             * with no `(` is the answer itself. */
+                            let ab = self.arena_tmp();
+                            let an = unsafe { self.st_find(sp, spl, ab, 128) };
+                            if an > 0 {
+                                sp = ab;
+                                spl = an;
+                                ri = 0;
+                                while ri < spl {
+                                    if unsafe { *sp.add(ri) } == b'(' {
+                                        has_paren = true;
+                                        break;
+                                    }
+                                    ri += 1;
+                                }
+                                if !has_paren && spl < cap {
+                                    let mut j = 0usize;
+                                    while j < spl {
+                                        unsafe {
+                                            *out.add(j) = *sp.add(j);
+                                        }
+                                        j += 1;
+                                    }
+                                    unsafe {
+                                        *out.add(spl) = 0;
+                                    }
+                                    return spl;
+                                }
+                            }
+                        }
+                        if has_paren && ri > 0 && ri < cap {
+                            let mut j = 0usize;
+                            while j < ri {
+                                unsafe {
+                                    *out.add(j) = *sp.add(j);
+                                }
+                                j += 1;
+                            }
+                            /* strip one trailing space (ret " ("…) */
+                            let mut rl = ri;
+                            while rl > 0 && unsafe { *out.add(rl - 1) } == b' ' {
+                                rl -= 1;
+                            }
+                            unsafe {
+                                if rl < cap {
+                                    *out.add(rl) = 0;
+                                } else if cap > 0 {
+                                    *out.add(cap - 1) = 0;
+                                }
+                            }
+                            return if rl >= cap { 0 } else { rl };
+                        }
+                    }
+                }
                 if unsafe { (*callee).kind } == pm_jit_rsx_ast_kind::PATH {
                     /* call through a local fn-pointer bind (`if let Some(h)
                      * = r.handler`): the callee names a local whose type is
@@ -2295,6 +2675,63 @@ impl Lower {
                                     if unwrap {
                                         return unsafe { self.expr_ctype(*akids.add(0), out, cap, locals) };
                                     }
+                                }
+                            }
+                            /* `Vec::new()` / `String::new()` — an empty
+                             * container has no element type of its own;
+                             * the binding's uses reveal it. The honest
+                             * bounded context: when the enclosing fn's
+                             * return is that container (the let feeds the
+                             * tail), the row is cur_ret's. A wrong guess
+                             * surfaces as a loud C error at the first
+                             * mismatched push. */
+                            let an2: usize = if unsafe { (*e).n_kids } >= 2 {
+                                (unsafe { (*(*kids.add(1))).n_kids }) as usize
+                            } else {
+                                0
+                            };
+                            if an2 == 0
+                                && unsafe { z_eq(name, nl, b"new\0".as_ptr()) }
+                                && cn >= 2
+                                && self.cur_ret_len > 0
+                                && self.cur_ret_len < cap
+                            {
+                                let head = unsafe { *ck.add(cn - 2) };
+                                let hname = unsafe { (*head).text };
+                                let hlen = unsafe { (*head).text_len };
+                                let is_vec = unsafe { z_eq(hname, hlen, b"Vec\0".as_ptr()) };
+                                let is_str = unsafe { z_eq(hname, hlen, b"String\0".as_ptr()) };
+                                if is_vec
+                                    && self.cur_ret_len >= 8
+                                    && unsafe { z_eq(self.cur_ret.as_ptr(), 8, b"rsx_vec_\0".as_ptr()) }
+                                {
+                                    let mut j = 0usize;
+                                    while j < self.cur_ret_len {
+                                        unsafe {
+                                            *out.add(j) = self.cur_ret[j];
+                                        }
+                                        j += 1;
+                                    }
+                                    unsafe {
+                                        *out.add(j) = 0;
+                                    }
+                                    return j;
+                                }
+                                if is_str
+                                    && self.cur_ret_len >= 8
+                                    && unsafe { z_eq(self.cur_ret.as_ptr(), 8, b"rsx_str_\0".as_ptr()) }
+                                {
+                                    let mut j = 0usize;
+                                    while j < self.cur_ret_len {
+                                        unsafe {
+                                            *out.add(j) = self.cur_ret[j];
+                                        }
+                                        j += 1;
+                                    }
+                                    unsafe {
+                                        *out.add(j) = 0;
+                                    }
+                                    return j;
                                 }
                             }
                             let n = unsafe { (*self.fns).ret_ctype(name, nl, out) };
@@ -2934,6 +3371,57 @@ impl Lower {
                             }
                             return 0;
                         }
+                    }
+                }
+                /* &str plane: `.len()` on a fat rsx_str_ref_t types as
+                 * size_t; `.as_ptr()`/`.as_bytes()` as const uint8_t *;
+                 * `.is_empty()` as uint8_t (the kernel's bool). */
+                if mlen == 3 && unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) } {
+                    let rbuf = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                    if rl == 13 && rl < 128 && unsafe { z_eq(rbuf, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                        let at = unsafe { bput(out, cap, 0, b"size_t\0".as_ptr(), 6) };
+                        unsafe {
+                            if at < cap {
+                                *out.add(at) = 0;
+                            } else if cap > 0 {
+                                *out.add(cap - 1) = 0;
+                            }
+                        }
+                        return if at >= cap { 0 } else { at };
+                    }
+                }
+                if (mlen == 6 || mlen == 9)
+                    && (unsafe { z_eq(mname, mlen, b"as_ptr\0".as_ptr()) }
+                        || unsafe { z_eq(mname, mlen, b"as_bytes\0".as_ptr()) })
+                {
+                    let rbuf = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                    if rl == 13 && rl < 128 && unsafe { z_eq(rbuf, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                        let at = unsafe { bput(out, cap, 0, b"const uint8_t *\0".as_ptr(), 16) };
+                        unsafe {
+                            if at < cap {
+                                *out.add(at) = 0;
+                            } else if cap > 0 {
+                                *out.add(cap - 1) = 0;
+                            }
+                        }
+                        return if at >= cap { 0 } else { at };
+                    }
+                }
+                if mlen == 9 && unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) } {
+                    let rbuf = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                    if rl == 13 && rl < 128 && unsafe { z_eq(rbuf, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                        let at = unsafe { bput(out, cap, 0, b"uint8_t\0".as_ptr(), 7) };
+                        unsafe {
+                            if at < cap {
+                                *out.add(at) = 0;
+                            } else if cap > 0 {
+                                *out.add(cap - 1) = 0;
+                            }
+                        }
+                        return if at >= cap { 0 } else { at };
                     }
                 }
                 let mut user_method = false;

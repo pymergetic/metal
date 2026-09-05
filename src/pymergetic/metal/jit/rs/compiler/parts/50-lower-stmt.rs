@@ -1392,7 +1392,7 @@ impl Lower {
             }
             self.indent();
             self.out.puts(b"return \0".as_ptr());
-            unsafe { self.emit_expr(e, locals) };
+            unsafe { self.emit_ret_value(e, locals) };
             self.out.puts(b";\n\0".as_ptr());
             return;
         }
@@ -1486,7 +1486,7 @@ impl Lower {
         if valuey && k != pm_jit_rsx_ast_kind::BLOCK {
             self.indent();
             self.out.puts(b"return \0".as_ptr());
-            unsafe { self.emit_expr(st, locals) };
+            unsafe { self.emit_ret_value(st, locals) };
             self.out.puts(b";\n\0".as_ptr());
             return;
         }
@@ -3074,7 +3074,7 @@ impl Lower {
         if unsafe { (*s).n_kids } >= 1 {
             let v = unsafe { *kids.add(0) };
             self.out.puts(b"return \0".as_ptr());
-            unsafe { self.emit_expr(v, locals) };
+            unsafe { self.emit_ret_value(v, locals) };
             self.out.puts(b";\n\0".as_ptr());
             return;
         }

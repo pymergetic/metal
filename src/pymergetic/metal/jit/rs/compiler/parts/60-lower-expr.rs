@@ -1279,7 +1279,108 @@ impl Lower {
                 self.err(b"unsupported: closure\0".as_ptr(), unsafe { (*e).line });
             },
             pm_jit_rsx_ast_kind::MACRO => unsafe {
-                self.err(b"unsupported: expression macro\0".as_ptr(), unsafe { (*e).line });
+                /* vec![..] — emit the container ctor. The typing pass
+                 * (expr_ctype) already interned the row from the same
+                 * scan; re-scan here and emit either the repeat form
+                 * (calloc for zero elems, else a fill loop) or the list
+                 * form (malloc + per-element assignment). */
+                let mut row: usize = 0;
+                let mut count: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+                let mut elems: [*mut pm_jit_rsx_ast_t; 16] = [core::ptr::null_mut(); 16];
+                let mut list_n: usize = 0;
+                if !self.vec_macro_scan(
+                    (*e).text,
+                    (*e).text_len,
+                    locals,
+                    &mut row,
+                    &mut count,
+                    elems.as_mut_ptr(),
+                    &mut list_n,
+                ) {
+                    self.err(b"unsupported: expression macro\0".as_ptr(), unsafe { (*e).line });
+                    return;
+                }
+                if !self.ok {
+                    return;
+                }
+                let tdn = self.arena_tmp();
+                let tdn_len = unsafe { VecTab::name_for(row, tdn, 96) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: vec typedef name too long\0".as_ptr(), unsafe { (*e).line });
+                    }
+                    return;
+                }
+                /* the ELEMENT type — the row's interned spelling (the
+                 * p pointer's pointee, the malloc/calloc unit) */
+                let eln = self.vecs.elem_lens[row];
+                if eln == 0 {
+                    unsafe {
+                        self.err(b"internal: vec row has no element type\0".as_ptr(), unsafe { (*e).line });
+                    }
+                    return;
+                }
+                unsafe {
+                    self.out.puts(b"({ \0".as_ptr());
+                    self.out.put(tdn, tdn_len);
+                    self.out.puts(b" _r; _r.p = (\0".as_ptr());
+                    self.out.put(self.vecs.elems[row].as_ptr(), eln);
+                    self.out.puts(b"*)\0".as_ptr());
+                    if list_n > 0 {
+                        /* list form: malloc n * sizeof(elem) */
+                        self.out.puts(b"malloc(\0".as_ptr());
+                        self.out.put_u32(list_n as u32);
+                        self.out.puts(b" * sizeof(\0".as_ptr());
+                        self.out.put(self.vecs.elems[row].as_ptr(), eln);
+                        self.out.puts(b"))\0".as_ptr());
+                    } else {
+                        /* repeat form: calloc(n, sizeof(elem)) */
+                        self.out.puts(b"calloc((size_t)(\0".as_ptr());
+                        self.emit_expr(count, locals);
+                        self.out.puts(b"), sizeof(\0".as_ptr());
+                        self.out.put(self.vecs.elems[row].as_ptr(), eln);
+                        self.out.puts(b"))\0".as_ptr());
+                    }
+                    self.out.puts(b"; _r.n = _r.cap = \0".as_ptr());
+                    if list_n > 0 {
+                        self.out.put_u32(list_n as u32);
+                    } else {
+                        self.out.puts(b"(size_t)(\0".as_ptr());
+                        self.emit_expr(count, locals);
+                        self.out.puts(b")\0".as_ptr());
+                    }
+                    self.out.puts(b";\0".as_ptr());
+                    /* list form: fill */
+                    let mut i = 0usize;
+                    while i < list_n {
+                        self.out.puts(b" _r.p[\0".as_ptr());
+                        self.out.put_u32(i as u32);
+                        self.out.puts(b"] = \0".as_ptr());
+                        self.emit_expr(elems[i], locals);
+                        self.out.puts(b";\0".as_ptr());
+                        i += 1;
+                    }
+                    /* repeat form with a non-zero elem: fill loop */
+                    if list_n == 0 && !count.is_null() {
+                        let eb = self.arena_tmp();
+                        let en = unsafe { self.expr_ctype(elems[0], eb, 128, locals) };
+                        if en == 0 {
+                            return;
+                        }
+                        /* zero-literal elems keep calloc's zeros (vec![0..]) */
+                        let el = unsafe { (*elems[0]).text_len };
+                        let et = unsafe { (*elems[0]).text };
+                        let is_zero_lit = el > 0
+                            && unsafe { *et == b'0' }
+                            && (el == 1 || unsafe { *et.add(1) == b'u' } || unsafe { *et.add(1) == b'i' });
+                        if !is_zero_lit {
+                            self.out.puts(b" for (size_t _i = 0; _i < _r.n; _i++) _r.p[_i] = \0".as_ptr());
+                            self.emit_expr(elems[0], locals);
+                            self.out.puts(b";\0".as_ptr());
+                        }
+                    }
+                    self.out.puts(b" _r; })\0".as_ptr());
+                }
             },
             pm_jit_rsx_ast_kind::IF => unsafe {
                 /* value-position if: a two-branch value if lowers to the
@@ -1665,9 +1766,26 @@ impl Lower {
         let callee = unsafe { *kids.add(0) };
         let args = unsafe { *kids.add(1) };
         if unsafe { (*callee).kind } != pm_jit_rsx_ast_kind::PATH {
-            unsafe {
-                self.err(b"unsupported: call on non-path callee\0".as_ptr(), unsafe { (*e).line });
+            /* Call through any fn-pointer expression — `(hook.f)(x)` or the
+             * paren-less `hook.f(x)` field call. A non-PATH callee in call
+             * position IS a fn-ptr call: render the callee expression, then
+             * the arg list. The callee-side twin of the PATH local-bind
+             * arm and of the expr_ctype general fn-ptr arm. */
+            self.out.putc(b'(');
+            unsafe { self.emit_expr(callee, locals) };
+            self.out.putc(b')');
+            self.out.putc(b'(');
+            let an = unsafe { (*args).n_kids } as usize;
+            let ak = unsafe { (*args).kids };
+            let mut ai = 0usize;
+            while ai < an {
+                if ai > 0 {
+                    self.out.puts(b", \0".as_ptr());
+                }
+                unsafe { self.emit_expr(*ak.add(ai), locals) };
+                ai += 1;
             }
+            self.out.putc(b')');
             return;
         }
         /* Newtype constructor `Mut(x)` / transparent `UnsafeCell::new(x)`:
@@ -2851,6 +2969,23 @@ impl Lower {
             self.out.putc(b')');
             return;
         }
+        /* .as_ptr() / .as_mut_ptr() on an &str fat reference: the
+         * struct's p (a byte span pointer, not NUL-terminated) — BEFORE
+         * the generic identity arm, which would hand back the struct. */
+        if an == 0
+            && (unsafe { z_eq(mname, mlen, b"as_ptr\0".as_ptr()) }
+                || unsafe { z_eq(mname, mlen, b"as_mut_ptr\0".as_ptr()) }
+                || unsafe { z_eq(mname, mlen, b"as_bytes\0".as_ptr()) })
+        {
+            let tbuf = self.arena_tmp();
+            let tn = unsafe { self.expr_ctype(recv, tbuf, 128, locals) };
+            if tn == 13 && unsafe { z_eq(tbuf, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                self.out.putc(b'(');
+                unsafe { self.emit_expr(recv, locals) };
+                self.out.puts(b").p\0".as_ptr());
+                return;
+            }
+        }
         /* .as_ptr() / .as_mut_ptr() on a known literal/array — identity.
          * Pointer-to-array receiver (`T (*)[N]`): the identity would hand
          * back the array pointer itself, but `.as_ptr()` is the first
@@ -2918,10 +3053,17 @@ impl Lower {
                 return;
             }
             if unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) } {
-                /* `arr.len()` on a fixed-size array type: `sizeof(a)/sizeof(a[0])`.
-                 * Unsized slices still refuse — pass lengths explicitly. */
+                /* `s.len()` on an &str fat reference: the struct's n */
                 let tbuf = self.arena_tmp();
                 let tn = unsafe { self.expr_ctype(recv, tbuf, 128, locals) };
+                if tn == 13 && unsafe { z_eq(tbuf, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                    self.out.putc(b'(');
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").n\0".as_ptr());
+                    return;
+                }
+                /* `arr.len()` on a fixed-size array type: `sizeof(a)/sizeof(a[0])`.
+                 * Unsized slices still refuse — pass lengths explicitly. */
                 if tn > 3 && unsafe { *tbuf.add(tn - 1) } == b']' {
                     self.out.puts(b"((sizeof(\0".as_ptr());
                     unsafe { self.emit_expr(recv, locals) };
@@ -2932,8 +3074,20 @@ impl Lower {
                 }
                 unsafe {
                     self.err(b"unsupported: len() on a slice - pass lengths explicitly\0".as_ptr(), unsafe { (*e).line });
+                    self.err_parts(tbuf, tn, b"recv\0".as_ptr(), 4);
                 }
                 return;
+            }
+            /* .is_empty() on an &str fat reference */
+            if an == 0 && unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) } {
+                let tbuf = self.arena_tmp();
+                let tn = unsafe { self.expr_ctype(recv, tbuf, 128, locals) };
+                if tn == 13 && unsafe { z_eq(tbuf, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                    self.out.puts(b"((\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").n == 0)\0".as_ptr());
+                    return;
+                }
             }
         }
         /* User-defined method: `recv.m(args)` -> `Type_m(recv, args)`.
