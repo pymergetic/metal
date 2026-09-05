@@ -13,18 +13,20 @@ const SYM_CAP: usize = 512;
 /* fields per struct — the Lower struct itself has 43 (grew with the tuple
  * support's six state fields); the cap must carry the compiler's own
  * shape or the self-host prove fails field inference past slot 40. */
-const FPC: usize = 64;
+/* max fields per struct — Lower itself has 70 fields (self-host proves the
+ * cap every compile), so 64 silently dropped `arrs`/`locks` off SymTab. */
+const FPC: usize = 96;
 /* params per fn whose C types the FnTab records (for `None` args). */
 const FN_MAXP: usize = 8;
 
 /* Transparent newtype registry cap (single-field generic tuple structs). */
 const NT_CAP: usize = 16;
-const OPT_CAP: usize = 8;
+const OPT_CAP: usize = 24;
 const ST_CAP: usize = 64;
 /* Tuple signature cap: distinct (A, B, ..) spellings per unit. Tuples
  * render as named structs rsx_tuple_<sig>; the table mirrors the Option
  * payload table (register idempotent, emit once in the preamble). */
-const TUP_CAP: usize = 8;
+const TUP_CAP: usize = 24;
 const TUP_MAXF: usize = 4;
 /* Emitted-type set cap (dependency-ordered struct pass). One entry per
  * struct/union/alias emitted this unit — 96 covers a card's types plus
@@ -755,6 +757,13 @@ impl VecTab {
         if at2 >= cap {
             return 0;
         }
+        /* NUL-terminate: callers hand this buffer to zput/out.put, both
+         * NUL-scanning — an unterminated name leaks arena residue into
+         * the generated C whenever the arena block is recycled (the
+         * nondeterministic garbage-byte refusals). */
+        unsafe {
+            *out.add(at2) = 0;
+        }
         at2
     }
 
@@ -852,6 +861,141 @@ impl VecTab {
 const LOCK_CAP: usize = 8;
 const LOCK_SIG: usize = 64;
 
+/* ---- &[T] slice-reference rows ----
+ *
+ * A `&[T]` param/local lowers to a fat pointer { const T *p; size_t n; }
+ * interned per element C type (rsx_arr_<row>) — same discipline as the
+ * str plane's rsx_str_ref_t and the container plane's rsx_vec_<row>:
+ * the slice carries its length, so .iter()/.len()/closure builtins/
+ * for-in all walk .p[0..n) exactly like the Vec rows, and &Vec<T> ->
+ * &[T] coerces at call args with a compound literal {v.p, v.n}.
+ * Numbered rows keep names bounded and the interning order
+ * deterministic — the self-host fixed point gates exactly that. */
+const ARR_CAP: usize = 16;
+const ARR_SIG: usize = 64;
+
+struct ArrTab {
+    elems: [[u8; ARR_SIG]; ARR_CAP],
+    elem_lens: [usize; ARR_CAP],
+    n: usize,
+    done: [bool; ARR_CAP],
+}
+
+impl ArrTab {
+    unsafe fn new() -> ArrTab {
+        ArrTab {
+            elems: [[0; ARR_SIG]; ARR_CAP],
+            elem_lens: [0; ARR_CAP],
+            n: 0,
+            done: [false; ARR_CAP],
+        }
+    }
+
+    /* typedef name: rsx_arr_<row> */
+    unsafe fn name_for(row: usize, out: *mut u8, cap: usize) -> usize {
+        let at = unsafe { bput(out, cap, 0, b"rsx_arr_\0".as_ptr(), 8) };
+        if at != 8 || cap <= 10 || row >= ARR_CAP {
+            return 0;
+        }
+        let d0 = b'0' + (row % 10) as u8;
+        let d1 = b'0' + (row / 10) as u8;
+        let at2 = if row >= 10 {
+            let digs: [u8; 2] = [d1, d0];
+            unsafe { bput(out, cap, at, digs.as_ptr(), 2) }
+        } else {
+            let digs: [u8; 1] = [d0];
+            unsafe { bput(out, cap, at, digs.as_ptr(), 1) }
+        };
+        if at2 >= cap {
+            return 0;
+        }
+        /* NUL-terminate — see VecTab::name_for; zput/out.put scan to NUL
+         * and an unterminated row name leaks arena residue. */
+        unsafe {
+            *out.add(at2) = 0;
+        }
+        at2
+    }
+
+    unsafe fn intern(&mut self, elem: *const u8, elen: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.n {
+            if self.elem_lens[s] == elen {
+                let mut same = true;
+                let mut i = 0usize;
+                while i < elen {
+                    if self.elems[s][i] != unsafe { *elem.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        if self.n >= ARR_CAP || elen >= ARR_SIG {
+            return ARR_CAP;
+        }
+        let mut i = 0usize;
+        while i < elen {
+            self.elems[self.n][i] = unsafe { *elem.add(i) };
+            i += 1;
+        }
+        self.elem_lens[self.n] = elen;
+        self.n += 1;
+        self.n - 1
+    }
+
+    unsafe fn find(&self, elem: *const u8, elen: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.n {
+            if self.elem_lens[s] == elen {
+                let mut same = true;
+                let mut i = 0usize;
+                while i < elen {
+                    if self.elems[s][i] != unsafe { *elem.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        ARR_CAP
+    }
+
+    /* rsx_arr_<digits> -> row */
+    unsafe fn find_by_name(&self, name: *const u8, nlen: usize) -> usize {
+        if nlen < 9 || nlen > 10 {
+            return ARR_CAP;
+        }
+        if !unsafe { z_eq(name, 8, b"rsx_arr_\0".as_ptr()) } {
+            return ARR_CAP;
+        }
+        let mut row: usize = 0;
+        let mut i = 8usize;
+        while i < nlen {
+            let ch = unsafe { *name.add(i) };
+            if ch < b'0' || ch > b'9' {
+                return ARR_CAP;
+            }
+            row = row * 10 + (ch - b'0') as usize;
+            i += 1;
+        }
+        if row >= self.n {
+            return ARR_CAP;
+        }
+        row
+    }
+}
+
 struct LockTab {
     elems: [[u8; LOCK_SIG]; LOCK_CAP],
     elem_lens: [usize; LOCK_CAP],
@@ -883,6 +1027,10 @@ impl LockTab {
         let at2 = unsafe { bput(out, cap, at, digs.as_ptr(), 1) };
         if at2 >= cap {
             return 0;
+        }
+        /* NUL-terminate — see VecTab::name_for. */
+        unsafe {
+            *out.add(at2) = 0;
         }
         at2
     }

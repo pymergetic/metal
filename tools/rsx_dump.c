@@ -24,6 +24,10 @@ int main(int argc, char **argv) {
     char *c = NULL;
     size_t c_len = 0;
     char err[PM_METAL_BUILD_ERR_MAX];
+    /* refusal chain: the compiler caps its errbuf at
+     * PM_METAL_JIT_RSX_ERR_MAX (256) bytes per call — the dump hands it a
+     * roomier buffer so a long chain prints whole. */
+    char bigerr[4096];
     void *backing;
     pm_util_mem_arena_t *arena;
     const char *feed;
@@ -109,10 +113,11 @@ int main(int argc, char **argv) {
         feed_len = len;
     }
 
-    memset(err, 0, sizeof(err));
+    (void)err;
+    memset(bigerr, 0, sizeof(bigerr));
     if (pm_metal_jit_rsx_compile(arena, feed, feed_len,
-            &c, &c_len, err, sizeof(err)) != 0) {
-        fprintf(stderr, "rsx_dump: refused: %s\n", err);
+            &c, &c_len, bigerr, sizeof(bigerr)) != 0) {
+        fprintf(stderr, "rsx_dump: refused: %s\n", bigerr);
         return 1;
     }
     fwrite(c, 1u, c_len, stdout);

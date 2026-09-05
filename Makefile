@@ -264,7 +264,7 @@ WASM_UPY := $(TOP)/ports/webassembly/build-metal/micropython.mjs
 WS ?= $(abspath $(TOP)/../..)
 VSCODE_CDB ?= $(WS)/.vscode/compile_commands.json
 
-.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico selfhost ksweep rsx-probe rsx-dump rsx-hwm
+.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico selfhost ksweep rsx-probe rsx-dump rsx-hwm rsx-span
 
 FORCE:
 
@@ -394,6 +394,23 @@ $(RSX_HWM): $(RSX_HWM_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS
 
 rsx-hwm: $(RSX_HWM)
 	$(RSX_HWM)
+
+# rsx-span: same diagnostic shape as rsx_dump, but the arena span comes from
+# argv — bisecting the draw a unit needs (the self_host prove's 64 MiB gate
+# vs ksweep's 96 MiB per-unit arenas). Prints heap_used on success.
+RSX_SPAN := $(CURDIR)/build/rsx_span
+RSX_SPAN_O := $(CURDIR)/build/rsx_span.o
+
+$(RSX_SPAN_O): $(CURDIR)/tools/rsx_span.c
+	@mkdir -p $(dir $(RSX_SPAN_O))
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+$(RSX_SPAN): $(RSX_SPAN_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(UPY_EMBED_OBJS_FILE) $(METAL_STATICLIB)
+	@mkdir -p $(dir $(RSX_SPAN))
+	$(CXX) -o $(RSX_SPAN) $(RSX_SPAN_O) $(FEED_CARD_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC) $(LDFLAGS_UPY)
+
+rsx-span: $(RSX_SPAN)
+	@echo "rsx-span built: $(RSX_SPAN) <file.rs> <span_mb>"
 
 # selfhost self: the same feed entrypoint, but the rsx card's code comes from
 # gen-1 C (micro-rustc's own output) instead of the rustc boot build — the

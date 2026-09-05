@@ -748,7 +748,7 @@ impl Lower {
     /* Register a payload spelling (idempotent). Returns the slot, or
      * OPT_CAP when the table is full — the caller refuses then. */
     unsafe fn opt_add(&mut self, elem: *const u8, elen: usize) -> usize {
-        if elen >= 64 {
+        if elen >= 128 {
             return OPT_CAP;
         }
         let mut s = 0usize;
@@ -1269,10 +1269,17 @@ impl Lower {
          * payload may name a struct/alias the type passes have not
          * emitted yet (pass 0a consts run first and would emit the
          * Option typedef ahead of its own payload's typedef). The
-         * per-slot done marks keep each typedef to one emission. */
+         * per-slot done marks keep each typedef to one emission.
+         * &[T] rows need the same flush and must NOT wait for
+         * types_done: pass-0a consts (`const X: &[u8] = b".."`) intern
+         * their row at the first static render — the typedef has to land
+         * here or the declaration names an unknown type. Row typedefs
+         * only depend on the element spelling (never a later item), so
+         * the early flush is sound. */
         if self.types_done {
             unsafe { self.opt_emit_rest() };
         }
+        unsafe { self.arr_emit_rest() };
         if declare_only == 2 {
             self.out.puts(b"#line \0".as_ptr());
             unsafe { self.out.put_u32(line) };
@@ -1525,6 +1532,55 @@ impl Lower {
                         self.out.puts(b";\n\0".as_ptr());
                         self.out.putc(b'\n');
                         return;
+                    }
+                }
+                /* `static X: &[u8] = b"...";` — same fat-literal contract
+                 * as the &str case above, on the slice row's typedef: a
+                 * bare char* initializer would set only the first field
+                 * and leave .n garbage (or refuse in the C compiler —
+                 * tcc reports it as a mystery byte at the literal). */
+                if ct_len > 8
+                    && ct_len < 96
+                    && unsafe { z_eq(ct, 8, b"rsx_arr_\0".as_ptr()) }
+                    && !init.is_null()
+                    && unsafe { (*init).kind } == pm_jit_rsx_ast_kind::LITERAL
+                {
+                    /* only the u8 row: the literal's bytes ARE the
+                     * elements; any other element type has no literal
+                     * form (refuse below via the generic path). */
+                    let row = unsafe { self.arrs.find_by_name(ct, ct_len) };
+                    if row < ARR_CAP {
+                        let el = self.arrs.elems[row].as_ptr();
+                        let eln = self.arrs.elem_lens[row];
+                        if eln == 7 && unsafe { z_eq(el, 7, b"uint8_t\0".as_ptr()) } {
+                            let t = unsafe { (*init).text };
+                            let tl = unsafe { (*init).text_len };
+                            /* byte-string literal text carries its `b`
+                             * prefix (`b"asgi"`) — strip it for the C
+                             * spelling; a plain str literal rides the
+                             * &str arm above. */
+                            let lit = if tl >= 3
+                                && unsafe { *t } == b'b'
+                                && unsafe { *t.add(1) } == b'"'
+                            {
+                                t.add(1)
+                            } else {
+                                t
+                            };
+                            let ll = if lit != t { tl - 1 } else { tl };
+                            if ll >= 2 && unsafe { *lit } == b'"' {
+                                self.out.puts(b"(\0".as_ptr());
+                                self.out.put(ct, ct_len);
+                                self.out.puts(b"){ (const uint8_t *)\0".as_ptr());
+                                self.out.put(lit, ll);
+                                self.out.puts(b", sizeof \0".as_ptr());
+                                self.out.put(lit, ll);
+                                self.out.puts(b" - 1 }\0".as_ptr());
+                                self.out.puts(b";\n\0".as_ptr());
+                                self.out.putc(b'\n');
+                                return;
+                            }
+                        }
                     }
                 }
                 let locals = LocalTab::new(self.arena);

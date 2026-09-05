@@ -90,17 +90,29 @@ impl Lower {
          * pass D's hoist and mint bogus `typedef struct X * X *;`
          * lines. Options and tuples ride the same walk harmlessly
          * (their flushes are done-marked too). */
+        /* ONE LocalTab per fn, shared by the pre-scan and the body
+         * emission. The pre-scan's rows (params + speculative lets)
+         * are rewound before emission starts — the emission
+         * re-registers the same names itself. Two full tables per
+         * fn was ~60 KiB/fn of arena (the self-host draw crept past
+         * its 64 MiB gate); one table plus a rewind keeps the same
+         * semantics at half the cost. */
+        let mut locals: *mut LocalTab = core::ptr::null_mut();
         if declare_only == 0 && !body.is_null() {
             let before = self.vecs.n;
+            let before_a = self.arrs.n;
             let before_l = self.locks.n;
             let before_o = self.opt_n;
+            locals = LocalTab::new(self.arena);
+            if locals.is_null() {
+                self.ok = false;
+                return;
+            }
             /* Param-holding locals for the expression probes: the
              * pre-scan now walks METHOD_CALL nodes too (a body-local
              * `x.rsplit(c).next()` interns an Option row only expr_ctype
-             * can name), and its receiver is usually a param. The
-             * emission's own LocalTab registers the same names later —
-             * the pre-scan's table is separate and discarded here. */
-            let pre_locals = LocalTab::new(self.arena);
+             * can name), and its receiver is usually a param. */
+            let pre_locals = locals;
             if !pre_locals.is_null() {
                 let mut p = 0usize;
                 while p < n_params {
@@ -129,6 +141,9 @@ impl Lower {
             if self.vecs.n != before {
                 unsafe { self.vec_emit_rest() };
             }
+            if self.arrs.n != before_a {
+                unsafe { self.arr_emit_rest() };
+            }
             if self.locks.n != before_l {
                 unsafe { self.lock_emit_rest() };
             }
@@ -137,6 +152,16 @@ impl Lower {
             }
             unsafe { self.str_emit_rest() };
             unsafe { self.str_own_emit_rest() };
+            /* rewind the pre-scan's rows: the body emission below starts
+             * from a clean table (its own param/self registrations are
+             * authoritative). Stale spans are unreachable arena garbage,
+             * bounded by the pre-scan's walk — `oom` stays sticky so a
+             * pre-scan allocation failure still refuses the compile. */
+            unsafe {
+                (*locals).n = 0;
+                (*locals).nmarks = 0;
+                (*locals).epoch += 1;
+            }
         }
         /* #line + signature */
         self.out.puts(b"#line \0".as_ptr());
@@ -218,7 +243,12 @@ impl Lower {
         /* body: the tail expression of a value-returning fn becomes
          * `return expr;` — C has no implicit block value. */
         if !body.is_null() {
-            let locals = LocalTab::new(self.arena);
+            /* rename-shadow spellings are per-fn: name__0 restarts each
+             * body so generated C is deterministic across fns. */
+            self.shadow_ctr = 0;
+            /* the shared per-fn tab — allocated in the pre-scan above
+             * (declare_only==0 && body is guaranteed here: the fn
+             * returned early otherwise). */
             if locals.is_null() {
                 self.ok = false;
                 self.cur_ret_len = 0;
@@ -259,6 +289,7 @@ impl Lower {
                 }
             }
             self.depth = 1;
+            self.cur_body = body;
             if !ret.is_null() {
                 let bk = unsafe { (*body).kids };
                 let bn = unsafe { (*body).n_kids } as usize;
@@ -297,10 +328,15 @@ impl Lower {
                     } else if k == pm_jit_rsx_ast_kind::RETURN
                         || k == pm_jit_rsx_ast_kind::LET
                         || k == pm_jit_rsx_ast_kind::STMT
-                        || k == pm_jit_rsx_ast_kind::MACRO
                         || k == pm_jit_rsx_ast_kind::EXPR_STMT
                         || k == pm_jit_rsx_ast_kind::ASSIGN
                         || k == pm_jit_rsx_ast_kind::LOOP
+                        /* a value-typed fn with a statement-shaped macro
+                         * tail: the expression macros (vec!/format!)
+                         * ARE the return value; anything else keeps the
+                         * old statement-skip (void-tail call macros,
+                         * assert!-style) rather than a bogus `return`. */
+                        || (k == pm_jit_rsx_ast_kind::MACRO && !self.macro_is_value(tail))
                     {
                         unsafe { self.emit_stmt(tail, &mut *locals, 0) };
                     } else if k == pm_jit_rsx_ast_kind::BLOCK {
@@ -329,6 +365,7 @@ impl Lower {
             }
         }
         self.cur_ret_len = 0;
+        self.cur_body = core::ptr::null();
         self.out.puts(b"}\n\0".as_ptr());
         self.out.putc(b'\n');
     }
@@ -819,9 +856,43 @@ impl Lower {
         self.out.putc(b'\n');
     }
 
+    /* &[T] slice-ref rows: one typedef per interned element type —
+     * typedef struct { const T *p; size_t n; } rsx_arr_<row>;
+     * No ops (the fat pair is data, not a container): done-marked so
+     * the flush is idempotent across the pre-scan and body passes. */
+    unsafe fn arr_emit_rest(&mut self) {
+        if self.arrs.n == 0 {
+            return;
+        }
+        let mut s = 0usize;
+        while s < self.arrs.n {
+            if !unsafe { self.arrs.done[s] } {
+                let elem = self.arrs.elems[s].as_ptr();
+                let elen = self.arrs.elem_lens[s];
+                let tdn = self.arena_tmp();
+                let tdn_len = unsafe { ArrTab::name_for(s, tdn, 96) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: arr typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                self.out.puts(b"typedef struct { const \0".as_ptr());
+                self.out.put(elem, elen);
+                self.out.puts(b" *p; size_t n; } \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                unsafe {
+                    self.arrs.done[s] = true;
+                }
+            }
+            s += 1;
+        }
+        self.out.putc(b'\n');
+    }
+
     /* Lock-plane emission: one typedef per interned payload row —
-     * rsx_lock_<row> = { pm_util_lock_t raw; T value; } — plus the
-     * pm_util_lock_t typedef (the lock card's exact ABI shape:
+     * the pm_util_lock_t typedef (the lock card's exact ABI shape:
      * { uint32_t locked; }) and the extern prototypes for the card's
      * own acquire/release faces (link-time resolved against the lock
      * card's rs muscle — one mechanism, not a second C lock). The
@@ -878,6 +949,11 @@ impl Lower {
         self.out.puts(
             b"typedef struct { const uint8_t *p; size_t n; } rsx_str_ref_t;\n\0".as_ptr(),
         );
+        if self.strpair_used {
+            self.out.puts(
+                b"typedef struct { rsx_str_ref_t _0; rsx_str_ref_t _1; } rsx_strpair_t;\n\0".as_ptr(),
+            );
+        }
         self.str_ref_done = true;
     }
 
@@ -945,6 +1021,38 @@ impl Lower {
         self.out.puts(b"    else if (ch < 0x10000) { b[k++] = (char)(0xE0 | (ch >> 12)); b[k++] = (char)(0x80 | ((ch >> 6) & 0x3F)); b[k++] = (char)(0x80 | (ch & 0x3F)); }\n\0".as_ptr());
         self.out.puts(b"    else { b[k++] = (char)(0xF0 | (ch >> 18)); b[k++] = (char)(0x80 | ((ch >> 12) & 0x3F)); b[k++] = (char)(0x80 | ((ch >> 6) & 0x3F)); b[k++] = (char)(0x80 | (ch & 0x3F)); }\n\0".as_ptr());
         self.out.puts(b"    rsx_str_append(s, b, k);\n\0".as_ptr());
+        self.out.puts(b"}\n\0".as_ptr());
+        /* append an integer in decimal — the format! plane's {n} segment
+         * for every integer-shaped capture (counts, indices, sizes).
+         * Signed negatives print the '-' then digits; usize/uN values
+         * pass through as unsigned. */
+        self.out.puts(
+            b"static void rsx_str_push_i64(rsx_str_t *s, int64_t v) {\n\0".as_ptr(),
+        );
+        self.out.puts(b"    char b[24]; size_t k = sizeof b;\n\0".as_ptr());
+        self.out.puts(b"    uint64_t u; int neg = v < 0;\n\0".as_ptr());
+        self.out.puts(b"    if (neg) { u = (uint64_t)(-(v + 1)) + 1; } else { u = (uint64_t)v; }\n\0".as_ptr());
+        self.out.puts(b"    do { b[--k] = (char)('0' + (u % 10)); u /= 10; } while (u);\n\0".as_ptr());
+        self.out.puts(b"    if (neg) { b[--k] = '-'; }\n\0".as_ptr());
+        self.out.puts(b"    rsx_str_append(s, b + k, sizeof b - k);\n\0".as_ptr());
+        self.out.puts(b"}\n\0".as_ptr());
+        /* replace(from-char, to-lit): a fresh String with every byte
+         * equal to `from` swapped for the `to` bytes — &str.replace's
+         * one-arg-char shape (gen's path rewriting: '.' -> '/'). */
+        self.out.puts(
+            b"static rsx_str_t rsx_str_replace_ch(const uint8_t *p, size_t n, char from, const char *to, size_t to_n) {\n\0".as_ptr(),
+        );
+        self.out.puts(b"    rsx_str_t r = {0};\n\0".as_ptr());
+        self.out.puts(b"    size_t i, run = 0;\n\0".as_ptr());
+        self.out.puts(b"    for (i = 0; i < n; i++) {\n\0".as_ptr());
+        self.out.puts(b"        if (p[i] == (uint8_t)from) {\n\0".as_ptr());
+        self.out.puts(b"            if (i > run) { rsx_str_append(&r, (const char *)(p + run), i - run); }\n\0".as_ptr());
+        self.out.puts(b"            rsx_str_append(&r, to, to_n);\n\0".as_ptr());
+        self.out.puts(b"            run = i + 1;\n\0".as_ptr());
+        self.out.puts(b"        }\n\0".as_ptr());
+        self.out.puts(b"    }\n\0".as_ptr());
+        self.out.puts(b"    if (n > run) { rsx_str_append(&r, (const char *)(p + run), n - run); }\n\0".as_ptr());
+        self.out.puts(b"    return r;\n\0".as_ptr());
         self.out.puts(b"}\n\0".as_ptr());
         /* clone: a deep copy — the source's clone() is a fresh owning
          * String; the ops' one allocation + copy is exactly that */
@@ -1404,6 +1512,9 @@ impl Lower {
         /* Vec container typedefs + ops — before every fn whose signature
          * or body names one */
         unsafe { self.vec_emit_rest() };
+        /* &[T] slice-ref typedefs — same file-scope contract (a fn
+         * signature naming &[T] needs the fat pair complete) */
+        unsafe { self.arr_emit_rest() };
         /* Lock rows — same file-scope contract (a fn signature naming
          * Mutex<T> needs the typedef complete before the prototype) */
         unsafe { self.lock_emit_rest() };

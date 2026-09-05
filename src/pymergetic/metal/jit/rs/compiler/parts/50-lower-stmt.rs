@@ -441,6 +441,12 @@ impl Lower {
             }
             /* struct-Option: one temp; the ._has test runs BEFORE the
              * payload copy — no `._v` of a None is ever read */
+            /* the row may have interned past the preamble flush (the
+             * pre-scan can't type mid-body locals, so finds like
+             * `t.find('(')` register late) — flush pending typedefs
+             * right here (mid-function typedefs are C; before use is
+             * all the order the language needs) */
+            unsafe { self.opt_emit_rest() };
             self.indent();
             self.out.put(ct, ct_len);
             self.out.puts(b" __rsx_le = \0".as_ptr());
@@ -897,6 +903,12 @@ impl Lower {
             }
             unsafe { self.emit_match_value(init, locals, tmp, tmp_len) };
             self.cur_ret_len = saved_ret_len;
+        } else if ik == pm_jit_rsx_ast_kind::BLOCK && (unsafe { (*init).n_kids } as usize) >= 2 {
+            /* multi-statement value block: the temp is the block's value
+             * target — the block's own lets live in its scope, the tail
+             * tuple assigns the temp (typing walked the same lets via the
+             * forked tab). */
+            unsafe { self.emit_block_value(init, locals, tmp, tmp_len) };
         } else {
             self.indent();
             self.out.put(tmp, tmp_len);
@@ -948,6 +960,403 @@ impl Lower {
             }
             f += 1;
         }
+    }
+
+    /* `Vec::new()` — CALL whose callee path's leaf is `new` with the
+     * `Vec` segment before it (no args). */
+    unsafe fn init_is_vec_new(&mut self, init: *const pm_jit_rsx_ast_t) -> bool {
+        if unsafe { (*init).kind } != pm_jit_rsx_ast_kind::CALL {
+            return false;
+        }
+        let ik = unsafe { (*init).kids };
+        let ink = unsafe { (*init).n_kids } as usize;
+        if ink < 2 {
+            return false;
+        }
+        let callee = unsafe { *ik.add(0) };
+        if unsafe { (*callee).kind } != pm_jit_rsx_ast_kind::PATH {
+            return false;
+        }
+        let ck = unsafe { (*callee).kids };
+        let cn = unsafe { (*callee).n_kids } as usize;
+        if cn < 2 {
+            return false;
+        }
+        let leaf = unsafe { *ck.add(cn - 1) };
+        if !(unsafe { (*leaf).text_len } == 3 && unsafe { z_eq(unsafe { (*leaf).text }, 3, b"new\0".as_ptr()) }) {
+            return false;
+        }
+        let head = unsafe { *ck.add(cn - 2) };
+        unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Vec\0".as_ptr()) }
+    }
+
+    /* Depth-bounded body scan for the binding's first `<name>.push(x)`:
+     * returns the pushed element's ctype length into out (0 when none
+     * found). Walks statements, blocks, and match/if arms (depth cap 6
+     * guards against pathological nesting). */
+    unsafe fn scan_first_push(
+        &mut self,
+        name: *const u8,
+        nlen: usize,
+        node: *const pm_jit_rsx_ast_t,
+        out: *mut u8,
+        cap: usize,
+        locals: *mut LocalTab,
+        depth: usize,
+    ) -> usize {
+        if node.is_null() || depth > 6 || nlen == 0 {
+            return 0;
+        }
+        let nk = unsafe { (*node).n_kids } as usize;
+        let kk = unsafe { (*node).kids };
+        /* scope-aware walk: a LET or IF-LET above a push binds the names
+         * the push arg uses — register them (typed) so expr_ctype on the
+         * arg resolves. The registrations are bounded by the walk's own
+         * depth cap; the emission pass re-derives the real bindings
+         * (this table's rows are only the scan's inference input). */
+        let node_kind = unsafe { (*node).kind };
+        if node_kind == pm_jit_rsx_ast_kind::LET {
+            /* kids: name(PATH), [mut ATTR], [type TYPE], init — type the
+             * init (or the ascription) and add the bind. */
+            let mut bname: *const u8 = b"\0".as_ptr();
+            let mut blen = 0usize;
+            let mut bty: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            let mut binit: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            let mut j = 0usize;
+            while j < nk {
+                let kj = unsafe { *kk.add(j) };
+                let kjk = unsafe { (*kj).kind };
+                if kjk == pm_jit_rsx_ast_kind::PATH && blen == 0 {
+                    bname = unsafe { (*kj).text };
+                    blen = unsafe { (*kj).text_len };
+                } else if kjk == pm_jit_rsx_ast_kind::TYPE {
+                    bty = kj;
+                } else if kjk != pm_jit_rsx_ast_kind::ATTR {
+                    binit = kj;
+                }
+                j += 1;
+            }
+            if blen > 0 && !locals.is_null() {
+                let tb = self.arena_tmp();
+                let mut tn = 0usize;
+                if !bty.is_null() {
+                    tn = unsafe { self.ctype(bty, tb, 128) };
+                }
+                if tn == 0 && !binit.is_null() {
+                    let saved_pre = self.pre_pool_at;
+                    tn = unsafe { self.expr_ctype(binit, tb, 128, locals) };
+                    self.pre_pool_at = saved_pre;
+                }
+                if tn > 0 && tn < 128 {
+                    unsafe {
+                        (*locals).add(bname, blen, tb, tn, 0);
+                    }
+                }
+            }
+            /* `let (a, b, c) = init` — TUPLE pat: register every element
+             * bind from the registered rsx_tuple_<sig> signature so the
+             * later `opaques.push(ret_op_elem)` scan types. Mirrors
+             * emit_let_tuple's registration. */
+            if blen == 0 && !locals.is_null() && !binit.is_null() {
+                let pat0 = unsafe { *kk.add(0) };
+                if unsafe { (*pat0).kind } == pm_jit_rsx_ast_kind::TUPLE {
+                    let pn3 = unsafe { (*pat0).n_kids } as usize;
+                    if pn3 > 0 && pn3 <= TUP_MAXF {
+                        let tb = self.arena_tmp();
+                        let mut tn = 0usize;
+                        if !bty.is_null() {
+                            tn = unsafe { self.ctype(bty, tb, 128) };
+                        }
+                        if tn == 0 {
+                            let saved_pre = self.pre_pool_at;
+                            tn = unsafe { self.expr_ctype(binit, tb, 128, locals) };
+                            self.pre_pool_at = saved_pre;
+                        }
+                        if tn > 0 && tn < 128 {
+                            /* strip a `const ` qualifier the same way
+                             * emit_let_tuple does */
+                            if tn >= 6 && unsafe { z_eq(tb, 6, b"const \0".as_ptr()) } {
+                                unsafe {
+                                    core::ptr::copy_nonoverlapping(tb.add(6), tb, tn - 6);
+                                    *(tb.add(tn - 6)) = 0;
+                                }
+                                tn -= 6;
+                            }
+                            if tn >= 10 && unsafe { z_eq(tb, 10, b"rsx_tuple_\0".as_ptr()) } {
+                                let slot = unsafe { self.tup_find(tb, tn) };
+                                if slot < TUP_CAP && self.tup_counts[slot] == pn3 {
+                                    let pk3 = unsafe { (*pat0).kids };
+                                    let mut f3 = 0usize;
+                                    while f3 < pn3 {
+                                        let sub3 = unsafe { *pk3.add(f3) };
+                                        /* unwrap PATH("path", [leaf]) */
+                                        let mut bnode3 = sub3;
+                                        if unsafe { (*bnode3).kind } == pm_jit_rsx_ast_kind::PATH
+                                            && unsafe { z_eq((*bnode3).text, (*bnode3).text_len, b"path\0".as_ptr()) }
+                                            && unsafe { (*bnode3).n_kids } as usize == 1
+                                        {
+                                            bnode3 = unsafe { *(*bnode3).kids.add(0) };
+                                        }
+                                        if unsafe { (*bnode3).kind } == pm_jit_rsx_ast_kind::PATH {
+                                            let bn3 = unsafe { (*bnode3).text };
+                                            let bl3 = unsafe { (*bnode3).text_len };
+                                            /* `_` drops the bind */
+                                            if !(bl3 == 1 && unsafe { z_eq(bn3, 1, b"_\0".as_ptr()) }) {
+                                                let a3 = slot * TUP_MAXF + f3;
+                                                let elct = self.tup_elems[a3].as_ptr();
+                                                let elct_len = self.tup_lens[a3];
+                                                if elct_len > 0 && elct_len < 128 {
+                                                    unsafe {
+                                                        (*locals).add(bn3, bl3, elct, elct_len, 0);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        f3 += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if node_kind == pm_jit_rsx_ast_kind::IF && nk >= 2 {
+            /* if-let: kids[0] is the desugared condition carrying the
+             * Some(bind) pattern, kids[1] the then-block. Find the bind:
+             * the parser stores the pattern as a PATH [Some seg, bind]
+             * under the cond's first LET ("letelse") or IF-LET node. */
+            let cond = unsafe { *kk.add(0) };
+            if unsafe { (*cond).kind } == pm_jit_rsx_ast_kind::LET
+                && unsafe { (*cond).text_len } == 7
+                && unsafe { z_eq((*cond).text, 7, b"letelse\0".as_ptr()) }
+            {
+                let ck = unsafe { (*cond).kids };
+                let cn = unsafe { (*cond).n_kids } as usize;
+                if cn >= 3 {
+                    let pat = unsafe { *ck.add(0) };
+                    let pk2 = unsafe { (*pat).kids };
+                    let pn2 = unsafe { (*pat).n_kids } as usize;
+                    if pn2 >= 2 {
+                        let bind = unsafe { *pk2.add(1) };
+                        let bn3 = unsafe { (*bind).text };
+                        let bl3 = unsafe { (*bind).text_len };
+                        let mut init2: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+                        let mut j = 1usize;
+                        while j < cn {
+                            let kj = unsafe { *ck.add(j) };
+                            if unsafe { (*kj).kind } == pm_jit_rsx_ast_kind::BLOCK {
+                                break;
+                            }
+                            if unsafe { (*kj).kind } != pm_jit_rsx_ast_kind::ATTR {
+                                init2 = kj;
+                            }
+                            j += 1;
+                        }
+                        if bl3 > 0 && !init2.is_null() && !locals.is_null() {
+                            let tb = self.arena_tmp();
+                            let saved_pre = self.pre_pool_at;
+                            let tn = unsafe { self.expr_ctype(init2, tb, 128, locals) };
+                            self.pre_pool_at = saved_pre;
+                            if tn > 8
+                                && tn < 128
+                                && unsafe { z_eq(tb, 8, b"rsx_opt_\0".as_ptr()) }
+                            {
+                                /* the Option payload: decode the
+                                 * rsx_opt_<elem> name back to the elem
+                                 * spelling — that IS the bind's type. */
+                                let elem = self.arena_tmp();
+                                let eln = unsafe {
+                                    Lower::opt_typedef_elem(tb, tn, elem, 128)
+                                };
+                                if eln > 0 && eln < 128 {
+                                    unsafe {
+                                        (*locals).add(bn3, bl3, elem, eln, 0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        /* `if let` desugars to MATCH (one Some-arm + wildcard): type the
+         * scrutinee, decode the Option payload, register every Some-arm's
+         * bind so pushes inside the then-block type. */
+        if node_kind == pm_jit_rsx_ast_kind::MATCH && nk >= 2 && !locals.is_null() {
+            let scrut = unsafe { *kk.add(0) };
+            let sb2 = self.arena_tmp();
+            let saved_pre2 = self.pre_pool_at;
+            let sn2 = unsafe { self.expr_ctype(scrut, sb2, 128, locals) };
+            self.pre_pool_at = saved_pre2;
+            if sn2 > 8
+                && sn2 < 128
+                && unsafe { z_eq(sb2, 8, b"rsx_opt_\0".as_ptr()) }
+            {
+                let elem = self.arena_tmp();
+                let eln2 = unsafe { Lower::opt_typedef_elem(sb2, sn2, elem, 128) };
+                if eln2 > 0 && eln2 < 128 {
+                    let mut a2 = 1usize;
+                    while a2 < nk {
+                        let arm2 = unsafe { *kk.add(a2) };
+                        if unsafe { (*arm2).kind } == pm_jit_rsx_ast_kind::MATCH_ARM
+                            && unsafe { (*arm2).n_kids } as usize >= 2
+                        {
+                            let ak2 = unsafe { (*arm2).kids };
+                            let pat2 = unsafe { *ak2.add(0) };
+                            if unsafe { (*pat2).kind } == pm_jit_rsx_ast_kind::PATH {
+                                let pk2 = unsafe { (*pat2).kids };
+                                let pn2 = unsafe { (*pat2).n_kids } as usize;
+                                if pn2 >= 2 {
+                                    let head2 = unsafe { *pk2.add(0) };
+                                    let bind2 = unsafe { *pk2.add(1) };
+                                    if unsafe { (*head2).kind } == pm_jit_rsx_ast_kind::PATH
+                                        && unsafe { z_eq(unsafe { (*head2).text }, unsafe { (*head2).text_len }, b"Some\0".as_ptr()) }
+                                    {
+                                        /* Some(bind): one PATH bind of the
+                                         * payload's own type */
+                                        if unsafe { (*bind2).kind } == pm_jit_rsx_ast_kind::PATH
+                                            && unsafe { (*bind2).n_kids } as usize >= 1
+                                        {
+                                            let bleaf2 = unsafe { *(*bind2).kids.add(0) };
+                                            unsafe {
+                                                (*locals).add(
+                                                    unsafe { (*bleaf2).text },
+                                                    unsafe { (*bleaf2).text_len },
+                                                    elem,
+                                                    eln2,
+                                                    0,
+                                                );
+                                            }
+                                        }
+                                        /* Some((a, b)) on a strpair payload:
+                                         * each element bind types as the
+                                         * &str view. */
+                                        if unsafe { (*bind2).kind } == pm_jit_rsx_ast_kind::TUPLE
+                                            && eln2 == 13
+                                            && unsafe { z_eq(elem, 13, b"rsx_strpair_t\0".as_ptr()) }
+                                        {
+                                            let tk2 = unsafe { (*bind2).kids };
+                                            let tn2 = unsafe { (*bind2).n_kids } as usize;
+                                            let mut t2 = 0usize;
+                                            while t2 < tn2 && t2 < 2 {
+                                                let sub2 = unsafe { *tk2.add(t2) };
+                                                let mut bnode2 = sub2;
+                                                if unsafe { (*bnode2).kind } == pm_jit_rsx_ast_kind::PATH
+                                                    && unsafe { z_eq((*bnode2).text, (*bnode2).text_len, b"path\0".as_ptr()) }
+                                                    && unsafe { (*bnode2).n_kids } as usize == 1
+                                                {
+                                                    bnode2 = unsafe { *(*bnode2).kids.add(0) };
+                                                }
+                                                if unsafe { (*bnode2).kind } == pm_jit_rsx_ast_kind::PATH {
+                                                    let bn2 = unsafe { (*bnode2).text };
+                                                    let bl2 = unsafe { (*bnode2).text_len };
+                                                    if !(bl2 == 1 && unsafe { z_eq(bn2, 1, b"_\0".as_ptr()) }) {
+                                                        unsafe {
+                                                            (*locals).add(
+                                                                bn2,
+                                                                bl2,
+                                                                b"rsx_str_ref_t\0".as_ptr(),
+                                                                13,
+                                                                0,
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                                t2 += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        a2 += 1;
+                    }
+                }
+            }
+        }
+        let mut i = 0usize;
+        while i < nk {
+            let k = unsafe { *kk.add(i) };
+            if !k.is_null() && unsafe { (*k).kind } == pm_jit_rsx_ast_kind::METHOD_CALL {
+                let mk = unsafe { (*k).kids };
+                let mn = unsafe { (*k).n_kids } as usize;
+                if mn >= 3 {
+                    let recv = unsafe { *mk.add(0) };
+                    let mname = unsafe { *mk.add(1) };
+                    let margs = unsafe { *mk.add(2) };
+                    /* unwrap a "path" wrapper on the receiver */
+                    let mut bnode = recv;
+                    if unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::PATH
+                        && unsafe { z_eq(unsafe { (*recv).text }, unsafe { (*recv).text_len }, b"path\0".as_ptr()) }
+                        && unsafe { (*recv).n_kids } as usize == 1
+                    {
+                        bnode = unsafe { *(*recv).kids.add(0) };
+                    }
+                    let is_push = unsafe { z_eq(unsafe { (*mname).text }, unsafe { (*mname).text_len }, b"push\0".as_ptr()) }
+                        && (unsafe { (*margs).n_kids } as usize) == 1;
+                    /* extend(vec) — the element comes from the arg's own
+                     * Vec row: `opaques.extend(ops)` with ops: Vec<String>
+                     * gives String. */
+                    let is_extend = unsafe { z_eq(unsafe { (*mname).text }, unsafe { (*mname).text_len }, b"extend\0".as_ptr()) }
+                        && (unsafe { (*margs).n_kids } as usize) == 1;
+                    let same = unsafe { (*bnode).kind } == pm_jit_rsx_ast_kind::PATH
+                        && unsafe { (*bnode).text_len } == nlen;
+                    if (is_push || is_extend) && same {
+                        let mut j = 0usize;
+                        let bn2 = unsafe { (*bnode).text };
+                        while j < nlen {
+                            if unsafe { *bn2.add(j) } != unsafe { *name.add(j) } {
+                                break;
+                            }
+                            j += 1;
+                        }
+                        if j == nlen {
+                            let ak2 = unsafe { (*margs).kids };
+                            let arg = unsafe { *ak2.add(0) };
+                            if is_push {
+                                return unsafe { self.expr_ctype(arg, out, cap, locals) };
+                            }
+                            /* extend: the arg must type as a Vec row —
+                             * its element spelling is the answer. */
+                            let vb = self.arena_tmp();
+                            let vl = unsafe { self.expr_ctype(arg, vb, 128, locals) };
+                            if vl > 8
+                                && vl < 128
+                                && unsafe { z_eq(vb, 8, b"rsx_vec_\0".as_ptr()) }
+                            {
+                                let row = unsafe { self.vecs.find_by_name(vb, vl) };
+                                if row < VEC_CAP {
+                                    let el = self.vecs.elems[row].as_ptr();
+                                    let eln = self.vecs.elem_lens[row];
+                                    if eln > 0 && eln < cap {
+                                        let mut w = 0usize;
+                                        while w < eln {
+                                            unsafe {
+                                                *out.add(w) = *el.add(w);
+                                            }
+                                            w += 1;
+                                        }
+                                        unsafe {
+                                            *out.add(eln) = 0;
+                                        }
+                                        return eln;
+                                    }
+                                }
+                            }
+                            return 0;
+                        }
+                    }
+                }
+            }
+            /* recurse into every kid (blocks, arms, exprs) */
+            let r = unsafe { self.scan_first_push(name, nlen, k, out, cap, locals, depth + 1) };
+            if r > 0 {
+                return r;
+            }
+            i += 1;
+        }
+        0
     }
 
     unsafe fn emit_let(&mut self, s: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
@@ -1027,24 +1436,58 @@ impl Lower {
         } else if !init.is_null() {
             ct_len = unsafe { self.expr_ctype(init, ct, 128, locals) };
             if ct_len == 0 {
-                let mut kn = unsafe { ast_kind_name(unsafe { (*init).kind }) };
-                let mut init2 = init;
-                /* unwrap BLOCK/unsafe wrappers so the failing inner form shows */
-                let mut hops = 0;
-                while hops < 4 && unsafe { (*init2).kind } == pm_jit_rsx_ast_kind::BLOCK {
-                    let ikids = unsafe { (*init2).kids };
-                    let ink = unsafe { (*init2).n_kids } as usize;
-                    if ink == 0 {
-                        break;
+                /* `let v = Vec::new()` — an empty container typed by its
+                 * uses: scan the fn body for the binding's first .push(x)
+                 * and take the element from x (bounded, honest — a bad
+                 * guess surfaces as a loud C error at the first
+                 * mismatched push). */
+                let is_vec_new = unsafe { self.init_is_vec_new(init) };
+                if is_vec_new && !self.cur_body.is_null() {
+                    let el = self.arena_tmp();
+                    let eln = unsafe {
+                        self.scan_first_push(name, name_len, self.cur_body, el, 128, locals, 0)
+                    };
+                    if eln > 0 && eln < 128 {
+                        let row = unsafe { self.vecs.intern(el, eln) };
+                        if row < VEC_CAP {
+                            let nb = self.arena_tmp();
+                            let nn = unsafe { VecTab::name_for(row, nb, 96) };
+                            if nn > 0 && nn < 128 {
+                                let mut w = 0usize;
+                                while w < nn {
+                                    unsafe {
+                                        *ct.add(w) = *nb.add(w);
+                                    }
+                                    w += 1;
+                                }
+                                unsafe {
+                                    *ct.add(nn) = 0;
+                                }
+                                ct_len = nn;
+                            }
+                        }
                     }
-                    init2 = unsafe { *ikids.add(ink - 1) };
-                    kn = unsafe { ast_kind_name(unsafe { (*init2).kind }) };
-                    hops += 1;
                 }
-                unsafe {
-                    self.err_let_name2(b"cannot infer let type - add ': T'\0".as_ptr(), line, name, name_len, kn);
+                if ct_len == 0 {
+                    let mut kn = unsafe { ast_kind_name(unsafe { (*init).kind }) };
+                    let mut init2 = init;
+                    /* unwrap BLOCK/unsafe wrappers so the failing inner form shows */
+                    let mut hops = 0;
+                    while hops < 4 && unsafe { (*init2).kind } == pm_jit_rsx_ast_kind::BLOCK {
+                        let ikids = unsafe { (*init2).kids };
+                        let ink = unsafe { (*init2).n_kids } as usize;
+                        if ink == 0 {
+                            break;
+                        }
+                        init2 = unsafe { *ikids.add(ink - 1) };
+                        kn = unsafe { ast_kind_name(unsafe { (*init2).kind }) };
+                        hops += 1;
+                    }
+                    unsafe {
+                        self.err_let_name2(b"cannot infer let type - add ': T'\0".as_ptr(), line, name, name_len, kn);
+                    }
+                    return;
                 }
-                return;
             }
         } else {
             unsafe {
@@ -1055,12 +1498,154 @@ impl Lower {
         /* Shadowing: same spelling + same C type in the same block reuses
          * the declaration (plain assignment). Any other scope declares
          * fresh — C block scopes take care of nesting. */
+        /* locals are never const in C — Rust's deferred-init
+         * (`let x; if c { x = 1 } else { x = 0 }`) writes them after the
+         * declaration, and inference may have carried a `const ` prefix
+         * (deref of a `*const T`). Strip it before any shadow test —
+         * prior rows were registered stripped, so the type compare
+         * must see both sides normalized. */
+        if ct_len >= 6
+            && unsafe { *ct.add(0) } == b'c'
+            && unsafe { *ct.add(1) } == b'o'
+            && unsafe { *ct.add(2) } == b'n'
+            && unsafe { *ct.add(3) } == b's'
+            && unsafe { *ct.add(4) } == b't'
+            && unsafe { *ct.add(5) } == b' '
+        {
+            unsafe {
+                core::ptr::copy_nonoverlapping(ct.add(6), ct, ct_len - 6 + 1);
+            }
+            ct_len -= 6;
+        }
         let mut reuse = false;
         unsafe {
             if (*locals).same_type_same_scope(name, name_len, ct, ct_len, self.depth, (*locals).epoch)
             {
                 reuse = true;
             }
+        }
+        /* type-changing shadow: `let t = t.trim()` — C refuses to
+         * redeclare the name in one scope, so this binding gets a fresh
+         * C spelling name__N and later references emit it (LocalTab's
+         * cname rows). */
+        let mut cname: *const u8 = core::ptr::null_mut();
+        let mut cname_len = 0usize;
+        if !reuse {
+            let prior = self.arena_tmp();
+            let plen = unsafe { (*locals).same_scope_prior_type(name, name_len, self.depth, (*locals).epoch, prior) };
+            let mut same = plen == ct_len;
+            if same {
+                let mut j = 0usize;
+                while j < plen {
+                    if unsafe { *prior.add(j) } != unsafe { *ct.add(j) } {
+                        same = false;
+                        break;
+                    }
+                    j += 1;
+                }
+            }
+            if plen > 0 && !same {
+                let cb = self.arena_tmp();
+                let mut at = 0usize;
+                at = unsafe { bput(cb, 128, at, name, name_len) };
+                at = unsafe { bput(cb, 128, at, b"__\0".as_ptr(), 2) };
+                let mut digs = [0u8; 12];
+                let mut v = self.shadow_ctr;
+                let mut di = 0usize;
+                while v > 0 && di < 12 {
+                    digs[di] = b'0' + (v % 10) as u8;
+                    v /= 10;
+                    di += 1;
+                }
+                if di == 0 {
+                    digs[0] = b'0';
+                    di = 1;
+                }
+                let mut j = di;
+                while j > 0 {
+                    j -= 1;
+                    at = unsafe { bput(cb, 128, at, digs.as_ptr().add(j), 1) };
+                }
+                self.shadow_ctr += 1;
+                cname = cb;
+                cname_len = at;
+            }
+        }
+        /* type-changing shadow: the registration is DEFERRED until the
+         * initializer is emitted — Rust scoping has the new binding not
+         * yet live inside its own initializer, so every source reference
+         * there resolves to the prior binding's C spelling. The
+         * declaration (and later references) use the fresh C name. */
+        if cname_len > 0 {
+            if init.is_null() {
+                self.indent();
+                unsafe {
+                    self.emit_declarator(ct, ct_len, cname, cname_len);
+                }
+                self.out.puts(b";\n\0".as_ptr());
+                unsafe {
+                    (*locals).add_renamed(name, name_len, cname, cname_len, ct, ct_len, self.depth);
+                }
+                return;
+            }
+            let ik = unsafe { (*init).kind };
+            if ik == pm_jit_rsx_ast_kind::METHOD_CALL {
+                let ikids = unsafe { (*init).kids };
+                let inkn = unsafe { (*init).n_kids } as usize;
+                if inkn >= 2 {
+                    let mn = unsafe { *ikids.add(1) };
+                    if unsafe { (*mn).text_len } == 4
+                        && unsafe { z_eq(unsafe { (*mn).text }, 4, b"lock\0".as_ptr()) }
+                    {
+                        unsafe {
+                            self.err(
+                                b"unsupported: type-changing shadow of a lock guard\0".as_ptr(),
+                                line,
+                            );
+                        }
+                        return;
+                    }
+                }
+            }
+            if ik == pm_jit_rsx_ast_kind::IF || ik == pm_jit_rsx_ast_kind::MATCH {
+                self.indent();
+                unsafe {
+                    self.emit_declarator(ct, ct_len, cname, cname_len);
+                }
+                self.out.puts(b";\n\0".as_ptr());
+                if ik == pm_jit_rsx_ast_kind::IF {
+                    unsafe { self.emit_if_value(init, locals, cname, cname_len) };
+                } else {
+                    unsafe { self.emit_match_value(init, locals, cname, cname_len) };
+                }
+                unsafe {
+                    (*locals).add_renamed(name, name_len, cname, cname_len, ct, ct_len, self.depth);
+                }
+                return;
+            }
+            if ik == pm_jit_rsx_ast_kind::BLOCK && (unsafe { (*init).n_kids } as usize) >= 2 {
+                self.indent();
+                unsafe {
+                    self.emit_declarator(ct, ct_len, cname, cname_len);
+                }
+                self.out.puts(b";\n\0".as_ptr());
+                unsafe { self.emit_block_value(init, locals, cname, cname_len) };
+                unsafe {
+                    (*locals).add_renamed(name, name_len, cname, cname_len, ct, ct_len, self.depth);
+                }
+                return;
+            }
+            self.indent();
+            unsafe {
+                self.emit_declarator(ct, ct_len, cname, cname_len);
+            }
+            self.out.puts(b" = \0".as_ptr());
+            unsafe { self.emit_expr(init, locals) };
+            self.out.puts(b";\n\0".as_ptr());
+            unsafe {
+                (*locals).add_renamed(name, name_len, cname, cname_len, ct, ct_len, self.depth);
+            }
+            return;
         }
         unsafe {
             (*locals).add(name, name_len, ct, ct_len, self.depth);
@@ -1145,23 +1730,6 @@ impl Lower {
                     }
                 }
             }
-        /* locals are never const in C — Rust's deferred-init
-         * (`let x; if c { x = 1 } else { x = 0 }`) writes them after the
-         * declaration, and inference may have carried a `const ` prefix
-         * (deref of a `*const T`). Strip it. */
-        if ct_len >= 6
-            && unsafe { *ct.add(0) } == b'c'
-            && unsafe { *ct.add(1) } == b'o'
-            && unsafe { *ct.add(2) } == b'n'
-            && unsafe { *ct.add(3) } == b's'
-            && unsafe { *ct.add(4) } == b't'
-            && unsafe { *ct.add(5) } == b' '
-        {
-            unsafe {
-                core::ptr::copy_nonoverlapping(ct.add(6), ct, ct_len - 6 + 1);
-            }
-            ct_len -= 6;
-        }
         /* value-position init: if/match need the declare-then-assign shape. */
         if !init.is_null() {
             let ik = unsafe { (*init).kind };
@@ -1557,9 +2125,31 @@ impl Lower {
         if nk < 1 {
             return;
         }
-        let scrut = unsafe { *kids.add(0) };
+        let mut scrut = unsafe { *kids.add(0) };
         let temp = b"__rsx_m\0".as_ptr();
         let temp_len = 7usize;
+        /* let-chain sugar: the if-let segment's scrutinee parsed with
+         * cond_ctx=true, so `let P = X && guard` folded X && guard into
+         * one BINARY. When the LHS types as an Option, the RHS is an arm
+         * guard: unwrap it, AND it into every non-wildcard arm's test
+         * (the Some-binds are declared before the test, so the guard
+         * types against them). */
+        let mut chain_guard: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        if unsafe { (*scrut).kind } == pm_jit_rsx_ast_kind::BINARY
+            && (unsafe { (*scrut).n_kids } as usize) >= 2
+            && unsafe { z_eq(unsafe { (*scrut).text }, unsafe { (*scrut).text_len }, b"&&\0".as_ptr()) }
+        {
+            let sk = unsafe { (*scrut).kids };
+            let lhs = unsafe { *sk.add(0) };
+            let gb = self.arena_tmp();
+            let saved_pre = self.pre_pool_at;
+            let gl = unsafe { self.expr_ctype(lhs, gb, 128, locals) };
+            self.pre_pool_at = saved_pre;
+            if gl > 8 && gl < 128 && unsafe { z_eq(gb, 8, b"rsx_opt_\0".as_ptr()) } {
+                chain_guard = unsafe { *sk.add(1) };
+                scrut = lhs;
+            }
+        }
         let ct = self.arena_tmp();
         let ct_len = unsafe { self.expr_ctype(scrut, ct, 128, locals) };
         if ct_len == 0 {
@@ -1568,6 +2158,12 @@ impl Lower {
             }
             return;
         }
+        /* stash the scrutinee type for emit_pat_test — string-literal
+         * arms compare the view (len + memcmp), not a scalar == */
+        unsafe {
+            core::ptr::copy_nonoverlapping(ct, self.cur_scrut.as_mut_ptr(), ct_len);
+        }
+        self.cur_scrut_len = ct_len;
         /* struct-shaped Option (integer payload) arms test ._has, not
          * pointer nullity — stash the payload type for emit_pat_test.
          * Named typedef (rsx_opt_<elem>) or legacy inline struct. */
@@ -1620,6 +2216,69 @@ impl Lower {
             /* wildcard arm: unconditional else (unless a guard narrows it) */
             let is_wc = unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
                 && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"_\0".as_ptr()) };
+            /* Some(bind) with a guarded arm (explicit guard or a let-chain
+             * tail): the guard types against the bind, so the bind decl
+             * must precede the `if` test. Emitting it in the enclosing
+             * block breaks source shadowing (`let runner = ...; if let
+             * Some(runner) = runner` redeclares), so the whole arm gets
+             * its own C brace scope: binds + if + body inside it. */
+            let guarded = has_guard || !chain_guard.is_null();
+            let mut some_bind: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH {
+                let pk = unsafe { (*pat).kids };
+                let pnk = unsafe { (*pat).n_kids } as usize;
+                if pnk >= 2 {
+                    let head = unsafe { *pk.add(0) };
+                    let bind = unsafe { *pk.add(1) };
+                    if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH
+                        && unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Some\0".as_ptr()) }
+                        && (unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
+                            || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
+                    {
+                        some_bind = bind;
+                    }
+                }
+            }
+            if guarded && !some_bind.is_null() {
+                /* scoped arm: { T b = temp._v; if (pat && guard) { body } } */
+                self.depth += 1;
+                unsafe { (*locals).note_scope() };
+                unsafe { self.emit_some_binds(some_bind, temp, temp_len, ct, ct_len, locals) };
+                self.indent();
+                if !is_wc {
+                    self.out.puts(b"if (\0".as_ptr());
+                    unsafe { self.emit_pat_test(pat, temp, temp_len, locals) };
+                    if has_guard {
+                        self.out.puts(b" && (\0".as_ptr());
+                        unsafe { self.emit_expr(*ak.add(1), locals) };
+                        self.out.puts(b")\0".as_ptr());
+                    } else if !chain_guard.is_null() {
+                        self.out.puts(b" && (\0".as_ptr());
+                        unsafe { self.emit_expr(chain_guard, locals) };
+                        self.out.puts(b")\0".as_ptr());
+                    }
+                    self.out.puts(b") {\n\0".as_ptr());
+                } else {
+                    self.out.puts(b"{\n\0".as_ptr());
+                }
+                self.depth += 1;
+                unsafe { (*locals).note_scope() };
+                unsafe { self.emit_block_stmt(body, locals) };
+                unsafe { (*locals).drop_scope() };
+                self.depth -= 1;
+                self.indent();
+                self.out.puts(b"}\n\0".as_ptr());
+                unsafe { (*locals).drop_scope() };
+                self.depth -= 1;
+                i += 1;
+                continue;
+            }
+            let eff_guard: *const pm_jit_rsx_ast_t = if has_guard {
+                unsafe { *ak.add(1) }
+            } else {
+                chain_guard
+            };
+            let _ = eff_guard;
             if !is_wc || has_guard {
                 self.out.puts(b"if (\0".as_ptr());
                 if !is_wc {
@@ -1632,27 +2291,65 @@ impl Lower {
                     self.out.puts(b"(\0".as_ptr());
                     unsafe { self.emit_expr(*ak.add(1), locals) };
                     self.out.puts(b")\0".as_ptr());
+                } else if !chain_guard.is_null() && !is_wc {
+                    self.out.puts(b" && (\0".as_ptr());
+                    unsafe { self.emit_expr(chain_guard, locals) };
+                    self.out.puts(b")\0".as_ptr());
                 }
                 self.out.puts(b") \0".as_ptr());
             }
             self.out.puts(b"{\n\0".as_ptr());
+            /* Some(bind) on an unguarded arm: declare the bind inside the
+             * arm's braces (the C if scope) — shadowing stays legal. */
+            if !some_bind.is_null() {
+                unsafe { (*locals).note_scope() };
+                unsafe { self.emit_some_binds(some_bind, temp, temp_len, ct, ct_len, locals) };
+            }
             self.depth += 1;
             unsafe { (*locals).note_scope() };
-            /* Some(bind): declare the bind from the scrutinee temp before the
-             * body — pointer payload aliases the temp, integer payload (struct
-             * Option) copies ._v. Same shape as emit_match_value's arm. */
+            /* plain binding arm (`other => ..`) on a value-shaped scrutinee
+             * (&str, &[T], String, Vec rows): declare the bind as a copy of
+             * the scrutinee temp so the arm body can use it — the pattern
+             * test emitted `1` (matches anything), the bind is the value.
+             * Only fat/value rows take this; scalar scrutinees keep the
+             * bindless path (a scalar binding arm is not in the subset). */
             if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH {
-                let pk = unsafe { (*pat).kids };
-                let pnk = unsafe { (*pat).n_kids } as usize;
-                if pnk >= 2 {
-                    let head = unsafe { *pk.add(0) };
-                    let bind = unsafe { *pk.add(1) };
-                    if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH
-                        && unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Some\0".as_ptr()) }
-                        && (unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
-                            || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
-                    {
-                        unsafe { self.emit_some_binds(bind, temp, temp_len, ct, ct_len, locals) };
+                /* unwrap the parser's "path" wrapper when present */
+                let mut bnode = pat;
+                if unsafe { (*pat).n_kids } as usize == 1
+                    && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+                {
+                    bnode = unsafe { *(*pat).kids.add(0) };
+                }
+                let pk = unsafe { (*bnode).kids };
+                let pnk = unsafe { (*bnode).n_kids } as usize;
+                let pt = unsafe { (*bnode).text };
+                let ptl = unsafe { (*bnode).text_len };
+                let is_fat = ct_len == 13
+                    && unsafe { z_eq(ct, 13, b"rsx_str_ref_t\0".as_ptr()) };
+                let is_arr = ct_len > 8
+                    && ct_len < 128
+                    && unsafe { z_eq(ct, 8, b"rsx_arr_\0".as_ptr()) };
+                let is_vec = ct_len > 8
+                    && ct_len < 128
+                    && unsafe { z_eq(ct, 8, b"rsx_vec_\0".as_ptr()) };
+                let is_own = ct_len == 9 && unsafe { z_eq(ct, 9, b"rsx_str_t\0".as_ptr()) };
+                if pnk == 0
+                    && ptl > 0
+                    && !pt.is_null()
+                    && !(ptl == 1 && unsafe { z_eq(pt, 1, b"_\0".as_ptr()) })
+                    && !(ptl == 4 && unsafe { z_eq(pt, 4, b"None\0".as_ptr()) })
+                    && (is_fat || is_arr || is_vec || is_own)
+                {
+                    self.indent();
+                    self.out.put(ct, ct_len);
+                    self.out.putc(b' ');
+                    self.out.put(pt, ptl);
+                    self.out.puts(b" = \0".as_ptr());
+                    self.out.put(temp, temp_len);
+                    self.out.puts(b";\n\0".as_ptr());
+                    unsafe {
+                        (*locals).add(pt, ptl, ct, ct_len, self.depth);
                     }
                 }
             }
@@ -1667,6 +2364,7 @@ impl Lower {
         self.indent();
         self.out.putc(b'\n');
         self.cur_opt_elem_len = 0;
+        self.cur_scrut_len = 0;
     }
 
     /* match arms with pattern-local bindings: the binding declared inside the
@@ -1748,6 +2446,47 @@ impl Lower {
             /* payload spelling must be a registered tuple typedef */
             let pc = self.cur_opt_elem.as_ptr();
             let pl = self.cur_opt_elem_len;
+            /* rsx_strpair_t (the split_once payload): the dedicated
+             * (&str,&str) row — binds from _0/_1, both rsx_str_ref_t. */
+            if pl == 13 && unsafe { z_eq(pc, 13, b"rsx_strpair_t\0".as_ptr()) } {
+                if pn != 2 {
+                    unsafe {
+                        self.err(b"Some-tuple pattern arity mismatch\0".as_ptr(), unsafe { (*bind).line });
+                    }
+                    return;
+                }
+                let mut f3 = 0usize;
+                while f3 < 2 {
+                    let sub3 = unsafe { *pk.add(f3) };
+                    let mut bnode3 = sub3;
+                    if unsafe { (*bnode3).kind } == pm_jit_rsx_ast_kind::PATH
+                        && unsafe { z_eq((*bnode3).text, (*bnode3).text_len, b"path\0".as_ptr()) }
+                        && unsafe { (*bnode3).n_kids } as usize == 1
+                    {
+                        bnode3 = unsafe { *(*bnode3).kids.add(0) };
+                    }
+                    if unsafe { (*bnode3).kind } == pm_jit_rsx_ast_kind::PATH {
+                        let bn3 = unsafe { (*bnode3).text };
+                        let bl3 = unsafe { (*bnode3).text_len };
+                        if !(bl3 == 1 && unsafe { z_eq(bn3, 1, b"_\0".as_ptr()) }) {
+                            self.indent();
+                            self.out.puts(b"rsx_str_ref_t \0".as_ptr());
+                            self.out.put(bn3, bl3);
+                            self.out.puts(b" = \0".as_ptr());
+                            self.out.put(temp, temp_len);
+                            self.out.puts(b"._v._\0".as_ptr());
+                            let d = b'0' + f3 as u8;
+                            self.out.putc(d);
+                            self.out.puts(b";\n\0".as_ptr());
+                            unsafe {
+                                (*locals).add(bn3, bl3, b"rsx_str_ref_t\0".as_ptr(), 13, 1);
+                            }
+                        }
+                    }
+                    f3 += 1;
+                }
+                return;
+            }
             let slot = unsafe { self.tup_find(pc, pl) };
             if slot >= TUP_CAP {
                 unsafe {
@@ -1812,9 +2551,27 @@ impl Lower {
         if nk < 1 {
             return;
         }
-        let scrut = unsafe { *kids.add(0) };
+        let mut scrut = unsafe { *kids.add(0) };
         let st = b"__rsx_m\0".as_ptr();
         let st_len = 7usize;
+        /* let-chain sugar (see emit_match): unwrap `X && guard` when the
+         * LHS types as an Option — the guard ANDs into the arm tests. */
+        let mut chain_guard: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        if unsafe { (*scrut).kind } == pm_jit_rsx_ast_kind::BINARY
+            && (unsafe { (*scrut).n_kids } as usize) >= 2
+            && unsafe { z_eq(unsafe { (*scrut).text }, unsafe { (*scrut).text_len }, b"&&\0".as_ptr()) }
+        {
+            let sk = unsafe { (*scrut).kids };
+            let lhs = unsafe { *sk.add(0) };
+            let gb = self.arena_tmp();
+            let saved_pre = self.pre_pool_at;
+            let gl = unsafe { self.expr_ctype(lhs, gb, 128, locals) };
+            self.pre_pool_at = saved_pre;
+            if gl > 8 && gl < 128 && unsafe { z_eq(gb, 8, b"rsx_opt_\0".as_ptr()) } {
+                chain_guard = unsafe { *sk.add(1) };
+                scrut = lhs;
+            }
+        }
         let ct = self.arena_tmp();
         let ct_len = unsafe { self.expr_ctype(scrut, ct, 128, locals) };
         if ct_len == 0 {
@@ -1823,6 +2580,12 @@ impl Lower {
             }
             return;
         }
+        /* stash the scrutinee type for emit_pat_test — string-literal
+         * arms compare the view (len + memcmp), not a scalar == */
+        unsafe {
+            core::ptr::copy_nonoverlapping(ct, self.cur_scrut.as_mut_ptr(), ct_len);
+        }
+        self.cur_scrut_len = ct_len;
         /* struct-shaped Option: arms test ._has; the Some bind copies _v.
          * Named typedef (rsx_opt_<elem>) or legacy inline struct. */
         {
@@ -1873,6 +2636,59 @@ impl Lower {
             first = false;
             let is_wc = unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
                 && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"_\0".as_ptr()) };
+            /* Some(bind) with a guard: scoped arm (see emit_match) —
+             * binds + if + body in one brace scope so source shadowing
+             * stays legal. */
+            let guarded = has_guard || !chain_guard.is_null();
+            let mut some_bind: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH {
+                let pk = unsafe { (*pat).kids };
+                let pnk = unsafe { (*pat).n_kids } as usize;
+                if pnk >= 2 {
+                    let head = unsafe { *pk.add(0) };
+                    let bind = unsafe { *pk.add(1) };
+                    if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH
+                        && unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Some\0".as_ptr()) }
+                        && (unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
+                            || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
+                    {
+                        some_bind = bind;
+                    }
+                }
+            }
+            if guarded && !some_bind.is_null() {
+                self.depth += 1;
+                unsafe { (*locals).note_scope() };
+                unsafe { self.emit_some_binds(some_bind, st, st_len, ct, ct_len, locals) };
+                self.indent();
+                if !is_wc {
+                    self.out.puts(b"if (\0".as_ptr());
+                    unsafe { self.emit_pat_test(pat, st, st_len, locals) };
+                    if has_guard {
+                        self.out.puts(b" && (\0".as_ptr());
+                        unsafe { self.emit_expr(*ak.add(1), locals) };
+                        self.out.puts(b")\0".as_ptr());
+                    } else if !chain_guard.is_null() {
+                        self.out.puts(b" && (\0".as_ptr());
+                        unsafe { self.emit_expr(chain_guard, locals) };
+                        self.out.puts(b")\0".as_ptr());
+                    }
+                    self.out.puts(b") {\n\0".as_ptr());
+                } else {
+                    self.out.puts(b"{\n\0".as_ptr());
+                }
+                self.depth += 1;
+                unsafe { (*locals).note_scope() };
+                unsafe { self.emit_block_value(body, locals, temp, temp_len) };
+                unsafe { (*locals).drop_scope() };
+                self.depth -= 1;
+                self.indent();
+                self.out.puts(b"}\n\0".as_ptr());
+                unsafe { (*locals).drop_scope() };
+                self.depth -= 1;
+                i += 1;
+                continue;
+            }
             if !is_wc || has_guard {
                 self.out.puts(b"if (\0".as_ptr());
                 if !is_wc {
@@ -1885,28 +2701,61 @@ impl Lower {
                     self.out.puts(b"(\0".as_ptr());
                     unsafe { self.emit_expr(*ak.add(1), locals) };
                     self.out.puts(b")\0".as_ptr());
+                } else if !chain_guard.is_null() && !is_wc {
+                    self.out.puts(b" && (\0".as_ptr());
+                    unsafe { self.emit_expr(chain_guard, locals) };
+                    self.out.puts(b")\0".as_ptr());
                 }
                 self.out.puts(b") \0".as_ptr());
             }
             self.out.puts(b"{\n\0".as_ptr());
-            /* Some(bind): the scrutinee temp IS the inner pointer (pointer
-             * payload) or carries it in ._v (integer payload) — declare the
-             * bind as an alias so the arm body names it. */
+            /* Some(bind) on an unguarded arm: bind decl inside the arm
+             * braces — shadowing stays legal. */
+            if !some_bind.is_null() {
+                unsafe { (*locals).note_scope() };
+                unsafe { self.emit_some_binds(some_bind, st, st_len, ct, ct_len, locals) };
+            }
+            /* plain binding arm on a value-shaped scrutinee — same shape
+             * as emit_match's: declare the bind as a copy of the temp. */
             if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH {
-                let pk = unsafe { (*pat).kids };
-                let pnk = unsafe { (*pat).n_kids } as usize;
-                if pnk >= 2 {
-                    let head = unsafe { *pk.add(0) };
-                    let bind = unsafe { *pk.add(1) };
-                    if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH
-                        && unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Some\0".as_ptr()) }
-                        && (unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
-                            || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
-                    {
-                        self.depth += 1;
-                        unsafe { self.emit_some_binds(bind, st, st_len, ct, ct_len, locals) };
-                        self.depth -= 1;
+                let mut bnode = pat;
+                if unsafe { (*pat).n_kids } as usize == 1
+                    && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+                {
+                    bnode = unsafe { *(*pat).kids.add(0) };
+                }
+                let pk = unsafe { (*bnode).kids };
+                let pnk = unsafe { (*bnode).n_kids } as usize;
+                let pt = unsafe { (*bnode).text };
+                let ptl = unsafe { (*bnode).text_len };
+                let is_fat = ct_len == 13
+                    && unsafe { z_eq(ct, 13, b"rsx_str_ref_t\0".as_ptr()) };
+                let is_arr = ct_len > 8
+                    && ct_len < 128
+                    && unsafe { z_eq(ct, 8, b"rsx_arr_\0".as_ptr()) };
+                let is_vec = ct_len > 8
+                    && ct_len < 128
+                    && unsafe { z_eq(ct, 8, b"rsx_vec_\0".as_ptr()) };
+                let is_own = ct_len == 9 && unsafe { z_eq(ct, 9, b"rsx_str_t\0".as_ptr()) };
+                if pnk == 0
+                    && ptl > 0
+                    && !pt.is_null()
+                    && !(ptl == 1 && unsafe { z_eq(pt, 1, b"_\0".as_ptr()) })
+                    && !(ptl == 4 && unsafe { z_eq(pt, 4, b"None\0".as_ptr()) })
+                    && (is_fat || is_arr || is_vec || is_own)
+                {
+                    self.depth += 1;
+                    self.indent();
+                    self.out.put(ct, ct_len);
+                    self.out.putc(b' ');
+                    self.out.put(pt, ptl);
+                    self.out.puts(b" = \0".as_ptr());
+                    self.out.put(st, st_len);
+                    self.out.puts(b";\n\0".as_ptr());
+                    unsafe {
+                        (*locals).add(pt, ptl, ct, ct_len, self.depth);
                     }
+                    self.depth -= 1;
                 }
             }
             self.depth += 1;
@@ -1918,6 +2767,8 @@ impl Lower {
             self.out.puts(b"}\n\0".as_ptr());
             i += 1;
         }
+        self.cur_scrut_len = 0;
+        self.cur_opt_elem_len = 0;
     }
 
     /* Pattern test against scrutinee temp `sv` (a C rvalue): emits the test
@@ -1929,6 +2780,31 @@ impl Lower {
         }
         let kind = unsafe { (*pat).kind };
         if kind == pm_jit_rsx_ast_kind::LITERAL {
+            let pt = unsafe { (*pat).text };
+            let ptl = unsafe { (*pat).text_len };
+            /* string-literal pattern against an &str scrutinee: the view
+             * compare (length + memcmp), never a scalar == on a struct */
+            if ptl >= 2
+                && !pt.is_null()
+                && unsafe { *pt } == b'"'
+                && self.cur_scrut_len == 13
+                && unsafe { z_eq(self.cur_scrut.as_ptr(), 13, b"rsx_str_ref_t\0".as_ptr()) }
+            {
+                self.str_ref_used = true;
+                let inner = ptl - 2;
+                self.out.puts(b"((\0".as_ptr());
+                self.out.put(sv, sv_len);
+                self.out.puts(b").n == \0".as_ptr());
+                self.out.put_u32(unsafe { Lower::c_str_len(pt.add(1), inner) });
+                self.out.puts(b" && !memcmp((\0".as_ptr());
+                self.out.put(sv, sv_len);
+                self.out.puts(b").p, \0".as_ptr());
+                self.out.put(pt, ptl);
+                self.out.puts(b", \0".as_ptr());
+                self.out.put_u32(unsafe { Lower::c_str_len(pt.add(1), inner) });
+                self.out.puts(b"))\0".as_ptr());
+                return;
+            }
             self.out.put(sv, sv_len);
             self.out.puts(b" == \0".as_ptr());
             unsafe { self.emit_literal(unsafe { (*pat).text }, unsafe { (*pat).text_len }) };
@@ -2188,6 +3064,217 @@ impl Lower {
      * when emitted, 0 when the iterator shape is not enumerate (the range
      * refusal path handles that). X must be a value of array type (the
      * length is compile-time); slices refuse (no carried length). */
+    /* `for bind in <slice>` where <slice> types as a &[T] fat row
+     * (rsx_arr_<row>) — a slice param directly or `&vec` (the coercion
+     * types the borrow as the row). The fat pair carries .n/.p — bind
+     * element copies (field borrows inside the body take the copy's
+     * address, loop-body lifetime exactly as the source). Returns 1
+     * when handled, 0 when the receiver is not a slice row (fall
+     * through to the array/other paths). */
+    unsafe fn try_emit_for_arr(
+        &mut self,
+        s: *const pm_jit_rsx_ast_t,
+        pat: *const pm_jit_rsx_ast_t,
+        recv: *const pm_jit_rsx_ast_t,
+        body: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+    ) -> usize {
+        let rct = self.arena_tmp();
+        let rct_len = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+        if rct_len == 0 {
+            return 0;
+        }
+        /* element spelling + row: &[T] fat rows and Vec rows both carry
+         * .n/.p — the loop shape is shared. */
+        let mut el: usize = 0;
+        let mut eb: *mut u8 = core::ptr::null_mut();
+        if rct_len > 8 && unsafe { z_eq(rct, 8, b"rsx_arr_\0".as_ptr()) } {
+            let rs = unsafe { self.arrs.find_by_name(rct, rct_len) };
+            if rs < ARR_CAP {
+                el = self.arrs.elem_lens[rs];
+                if el > 0 && el < 128 {
+                    eb = self.arena_tmp();
+                    let mut w = 0usize;
+                    while w < el {
+                        unsafe {
+                            *eb.add(w) = self.arrs.elems[rs][w];
+                        }
+                        w += 1;
+                    }
+                    unsafe {
+                        *eb.add(el) = 0;
+                    }
+                }
+            }
+        }
+        if eb.is_null() && rct_len > 8 && unsafe { z_eq(rct, 8, b"rsx_vec_\0".as_ptr()) } {
+            let vs = unsafe { self.vecs.find_by_name(rct, rct_len) };
+            if vs < VEC_CAP {
+                el = self.vecs.elem_lens[vs];
+                if el > 0 && el < 128 {
+                    eb = self.arena_tmp();
+                    let mut w = 0usize;
+                    while w < el {
+                        unsafe {
+                            *eb.add(w) = self.vecs.elems[vs][w];
+                        }
+                        w += 1;
+                    }
+                    unsafe {
+                        *eb.add(el) = 0;
+                    }
+                }
+            }
+        }
+        if eb.is_null() {
+            if rct_len > 8
+                && (unsafe { z_eq(rct, 8, b"rsx_arr_\0".as_ptr()) }
+                    || unsafe { z_eq(rct, 8, b"rsx_vec_\0".as_ptr()) })
+            {
+                unsafe {
+                    self.err(b"internal: unknown container row\0".as_ptr(), unsafe { (*s).line });
+                }
+                return 1;
+            }
+            return 0;
+        }
+        /* pat: a PATH bind, or a TUPLE destructure over a tuple-typed
+         * element (e.g. `for (name, stub) in funcs` with
+         * funcs: &[(String, String)] — each element an interned
+         * rsx_tuple_ row; binds declare from elem._N). */
+        let mut tuple_pat: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::TUPLE {
+            tuple_pat = pat;
+        }
+        if tuple_pat.is_null() && unsafe { (*pat).kind } != pm_jit_rsx_ast_kind::PATH {
+            unsafe {
+                self.err(b"unsupported: for-iter pattern\0".as_ptr(), unsafe { (*s).line });
+            }
+            return 1;
+        }
+        /* tuple element: the row must be an interned tuple signature */
+        let mut tup_slot = TUP_CAP;
+        let mut tup_n = 0usize;
+        if !tuple_pat.is_null() {
+            if !(el >= 10 && unsafe { z_eq(eb, 10, b"rsx_tuple_\0".as_ptr()) }) {
+                unsafe {
+                    self.err(b"unsupported: for-iter tuple pattern on a non-tuple element\0".as_ptr(), unsafe { (*s).line });
+                }
+                return 1;
+            }
+            tup_slot = unsafe { self.tup_find(eb, el) };
+            tup_n = unsafe { (*tuple_pat).n_kids } as usize;
+            if tup_slot >= TUP_CAP
+                || tup_n == 0
+                || tup_n > TUP_MAXF
+                || self.tup_counts[tup_slot] != tup_n
+            {
+                unsafe {
+                    self.err(b"unsupported: for-iter tuple pattern arity\0".as_ptr(), unsafe { (*s).line });
+                }
+                return 1;
+            }
+        }
+        let mut bind = pat;
+        let mut vname: *const u8 = b"\0".as_ptr();
+        let mut vlen = 0usize;
+        if tuple_pat.is_null() {
+            if unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+                && unsafe { (*pat).n_kids } == 1
+            {
+                let pk = unsafe { (*pat).kids };
+                let seg: *mut pm_jit_rsx_ast_t = unsafe { *pk.add(0) };
+                if (unsafe { (*seg).kind }) == pm_jit_rsx_ast_kind::PATH {
+                    bind = seg;
+                }
+            }
+            vname = unsafe { (*bind).text };
+            vlen = unsafe { (*bind).text_len };
+            unsafe {
+                (*locals).add(vname, vlen, eb, el, self.depth + 1);
+            }
+        }
+        let labeled = unsafe { Lower::loop_is_labeled(s) };
+        let lt = unsafe { (*s).text };
+        let ll = unsafe { (*s).text_len };
+        self.indent();
+        if labeled {
+            unsafe { self.put_lbl(lt, ll, b"_\0".as_ptr()) };
+            self.out.puts(b": \0".as_ptr());
+        }
+        self.out.puts(b"for (size_t __rsx_fi = 0; __rsx_fi < (\0".as_ptr());
+        unsafe { self.emit_expr(recv, locals) };
+        self.out.puts(b").n; __rsx_fi++) {\n\0".as_ptr());
+        self.depth += 1;
+        if !tuple_pat.is_null() {
+            /* one hidden temp for the element, then a bind per field */
+            self.indent();
+            self.out.put(eb, el);
+            self.out.puts(b" __rsx_fe = (\0".as_ptr());
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b").p[__rsx_fi];\n\0".as_ptr());
+            let pk2 = unsafe { (*tuple_pat).kids };
+            let mut f2 = 0usize;
+            while f2 < tup_n {
+                let sub2 = unsafe { *pk2.add(f2) };
+                let mut bnode2 = sub2;
+                if unsafe { (*bnode2).kind } == pm_jit_rsx_ast_kind::PATH
+                    && unsafe { z_eq((*bnode2).text, (*bnode2).text_len, b"path\0".as_ptr()) }
+                    && unsafe { (*bnode2).n_kids } as usize == 1
+                {
+                    bnode2 = unsafe { *(*bnode2).kids.add(0) };
+                }
+                if unsafe { (*bnode2).kind } == pm_jit_rsx_ast_kind::PATH {
+                    let bn2 = unsafe { (*bnode2).text };
+                    let bl2 = unsafe { (*bnode2).text_len };
+                    if !(bl2 == 1 && unsafe { z_eq(bn2, 1, b"_\0".as_ptr()) }) {
+                        let a2 = tup_slot * TUP_MAXF + f2;
+                        let elct = self.tup_elems[a2].as_ptr();
+                        let elct_len = self.tup_lens[a2];
+                        self.indent();
+                        self.out.put(elct, elct_len);
+                        self.out.putc(b' ');
+                        self.out.put(bn2, bl2);
+                        self.out.puts(b" = __rsx_fe._\0".as_ptr());
+                        let d = b'0' + f2 as u8;
+                        self.out.putc(d);
+                        self.out.puts(b";\n\0".as_ptr());
+                        unsafe {
+                            (*locals).add(bn2, bl2, elct, elct_len, self.depth);
+                        }
+                    }
+                } else {
+                    unsafe {
+                        self.err(b"unsupported: for-iter tuple pattern element\0".as_ptr(), unsafe { (*s).line });
+                    }
+                    return 1;
+                }
+                f2 += 1;
+            }
+        } else {
+            self.indent();
+            self.out.put(eb, el);
+            self.out.putc(b' ');
+            self.out.put(vname, vlen);
+            self.out.puts(b" = (\0".as_ptr());
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b").p[__rsx_fi];\n\0".as_ptr());
+        }
+        unsafe { self.emit_block_stmt(body, locals) };
+        self.depth -= 1;
+        self.indent();
+        self.out.puts(b"}\n\0".as_ptr());
+        if labeled {
+            self.indent();
+            unsafe { self.put_lbl(lt, ll, b"_cont\0".as_ptr()) };
+            self.out.puts(b": ;\n\0".as_ptr());
+            self.indent();
+            unsafe { self.put_lbl(lt, ll, b"_end\0".as_ptr()) };
+            self.out.puts(b": ;\n\0".as_ptr());
+        }
+        1
+    }
+
     /* `for bind in X.iter()` / `X.iter_mut()` — X a fixed array (ctype
      * carries `[N]`). Emits an index loop whose bind is a pointer to the
      * element, so bodies read and write through it (const elided — a
@@ -2222,6 +3309,10 @@ impl Lower {
             unsafe {
                 self.err(b"cannot infer iter receiver type\0".as_ptr(), unsafe { (*s).line });
             }
+            return 1;
+        }
+        /* &[T] slice ref (rsx_arr_<row>) receiver — the shared loop */
+        if unsafe { self.try_emit_for_arr(s, pat, recv, body, locals) } != 0 || !self.ok {
             return 1;
         }
         /* find [N] — the element spelling is before the bracket, N after */
@@ -2328,6 +3419,149 @@ impl Lower {
         1
     }
 
+    /* `for (i, x) in <vec-expr>.into_iter().enumerate()` — an index loop
+     * over the Vec row: i is the index, x a copy of .p[i] (or &x a
+     * pointer to it). The vec expr is emitted twice (once for .n, once
+     * for .p) — the subset keeps call exprs side-effect-free. */
+    unsafe fn emit_for_enumerate_vec(
+        &mut self,
+        s: *const pm_jit_rsx_ast_t,
+        pat: *const pm_jit_rsx_ast_t,
+        body: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+        base: *const pm_jit_rsx_ast_t,
+        row: usize,
+    ) -> usize {
+        if unsafe { (*pat).kind } != pm_jit_rsx_ast_kind::TUPLE
+            || unsafe { (*pat).n_kids } as usize != 2
+        {
+            unsafe {
+                self.err(b"unsupported: enumerate pattern (expect (i, x) or (i, &x))\0".as_ptr(), unsafe { (*s).line });
+            }
+            return 1;
+        }
+        let pk = unsafe { (*pat).kids };
+        let idx_pat = unsafe { *pk.add(0) };
+        let val_pat = unsafe { *pk.add(1) };
+        let mut idx_name = idx_pat;
+        if unsafe { (*idx_name).kind } == pm_jit_rsx_ast_kind::PATH
+            && unsafe { z_eq((*idx_name).text, (*idx_name).text_len, b"path\0".as_ptr()) }
+            && unsafe { (*idx_name).n_kids } as usize == 1
+        {
+            idx_name = unsafe { *(*idx_name).kids.add(0) };
+        }
+        if unsafe { (*idx_name).kind } != pm_jit_rsx_ast_kind::PATH {
+            unsafe {
+                self.err(b"unsupported: enumerate index pattern\0".as_ptr(), unsafe { (*s).line });
+            }
+            return 1;
+        }
+        let iname2 = unsafe { (*idx_name).text };
+        let inl2 = unsafe { (*idx_name).text_len };
+        let mut is_ref = false;
+        let mut val_name = val_pat;
+        if unsafe { (*val_name).kind } == pm_jit_rsx_ast_kind::PATH
+            && unsafe { z_eq((*val_name).text, (*val_name).text_len, b"path\0".as_ptr()) }
+            && unsafe { (*val_name).n_kids } as usize == 1
+        {
+            val_name = unsafe { *(*val_name).kids.add(0) };
+        }
+        if unsafe { (*val_name).kind } == pm_jit_rsx_ast_kind::UNARY
+            && unsafe { z_eq((*val_name).text, (*val_name).text_len, b"&\0".as_ptr()) }
+            && unsafe { (*val_name).n_kids } as usize >= 1
+        {
+            let inner = unsafe { *(*val_name).kids.add(0) };
+            let mut inner2 = inner;
+            if unsafe { (*inner2).kind } == pm_jit_rsx_ast_kind::PATH
+                && unsafe { z_eq((*inner2).text, (*inner2).text_len, b"path\0".as_ptr()) }
+                && unsafe { (*inner2).n_kids } as usize == 1
+            {
+                inner2 = unsafe { *(*inner2).kids.add(0) };
+            }
+            if unsafe { (*inner2).kind } != pm_jit_rsx_ast_kind::PATH {
+                unsafe {
+                    self.err(b"unsupported: enumerate value pattern\0".as_ptr(), unsafe { (*s).line });
+                }
+                return 1;
+            }
+            is_ref = true;
+            val_name = inner2;
+        } else if unsafe { (*val_name).kind } != pm_jit_rsx_ast_kind::PATH {
+            unsafe {
+                self.err(b"unsupported: enumerate value pattern\0".as_ptr(), unsafe { (*s).line });
+            }
+            return 1;
+        }
+        let vname = unsafe { (*val_name).text };
+        let vlen = unsafe { (*val_name).text_len };
+        let elct = self.vecs.elems[row].as_ptr();
+        let elct_len = self.vecs.elem_lens[row];
+        let labeled = unsafe { Lower::loop_is_labeled(s) };
+        let lt = unsafe { (*s).text };
+        let ll = unsafe { (*s).text_len };
+        let ivar = self.arena_tmp();
+        let mut at = unsafe { bput(ivar, 160, 0, iname2, inl2) };
+        at = unsafe { bput(ivar, 160, at, b"_i\0".as_ptr(), 2) };
+        unsafe {
+            *ivar.add(at) = 0;
+        }
+        self.indent();
+        if labeled {
+            unsafe { self.put_lbl(lt, ll, b"_\0".as_ptr()) };
+            self.out.puts(b": \0".as_ptr());
+        }
+        self.out.puts(b"for (size_t \0".as_ptr());
+        self.out.put(ivar, at);
+        self.out.puts(b" = 0; \0".as_ptr());
+        self.out.put(ivar, at);
+        self.out.puts(b" < (\0".as_ptr());
+        unsafe { self.emit_expr(base, locals) };
+        self.out.puts(b").n; \0".as_ptr());
+        self.out.put(ivar, at);
+        self.out.puts(b"++) {\n\0".as_ptr());
+        self.depth += 1;
+        self.indent();
+        self.out.puts(b"size_t \0".as_ptr());
+        self.out.put(iname2, inl2);
+        self.out.puts(b" = \0".as_ptr());
+        self.out.put(ivar, at);
+        self.out.puts(b";\n\0".as_ptr());
+        unsafe {
+            (*locals).add(iname2, inl2, b"size_t\0".as_ptr(), 6, self.depth);
+        }
+        self.indent();
+        if is_ref {
+            self.out.put(elct, elct_len);
+            self.out.puts(b" *\0".as_ptr());
+            self.out.put(vname, vlen);
+            self.out.puts(b" = &(\0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            self.out.puts(b").p[\0".as_ptr());
+            self.out.put(ivar, at);
+            self.out.puts(b"];\n\0".as_ptr());
+            unsafe {
+                (*locals).add(vname, vlen, b"ptr\0".as_ptr(), 3, self.depth);
+            }
+        } else {
+            self.out.put(elct, elct_len);
+            self.out.putc(b' ');
+            self.out.put(vname, vlen);
+            self.out.puts(b" = (\0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            self.out.puts(b").p[\0".as_ptr());
+            self.out.put(ivar, at);
+            self.out.puts(b"];\n\0".as_ptr());
+            unsafe {
+                (*locals).add(vname, vlen, elct, elct_len, self.depth);
+            }
+        }
+        unsafe { self.emit_block_stmt(body, locals) };
+        self.depth -= 1;
+        self.indent();
+        self.out.puts(b"}\n\0".as_ptr());
+        return 1;
+    }
+
     unsafe fn try_emit_for_enumerate(
         &mut self,
         s: *const pm_jit_rsx_ast_t,
@@ -2391,6 +3625,17 @@ impl Lower {
             i2 += 1;
         }
         if bracket >= btn {
+            /* Vec<T> receiver (e.g. `f(x).into_iter().enumerate()`): the
+             * row carries the element spelling; the length is .n at
+             * runtime, the element .p[_i] — an index loop over the row. */
+            if btn > 8 && unsafe { z_eq(bt, 8, b"rsx_vec_\0".as_ptr()) } {
+                let row = unsafe { self.vecs.find_by_name(bt, btn) };
+                if row < VEC_CAP {
+                    return unsafe {
+                        self.emit_for_enumerate_vec(s, pat, body, locals, base, row)
+                    };
+                }
+            }
             unsafe {
                 self.err(b"unsupported: enumerate over a non-array (slices carry no length)\0".as_ptr(), unsafe { (*s).line });
             }
@@ -2719,6 +3964,331 @@ impl Lower {
         1
     }
 
+    /* `X.iter().map(|x| body).collect::<Vec<T>>()` — the map-collect
+     * chain over a Vec/&[T]/array base: one stmt-expr building an output
+     * row vec, pushing body(elem) per index. The closure's single param
+     * binds a copy of the element. Returns 1 when handled/refused, 0
+     * when the receiver is not this shape. */
+    unsafe fn try_emit_map_collect(
+        &mut self,
+        e: *const pm_jit_rsx_ast_t,
+        recv: *const pm_jit_rsx_ast_t,
+        margs: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+    ) -> usize {
+        /* recv must be X.iter().map(clo) */
+        if unsafe { (*recv).kind } != pm_jit_rsx_ast_kind::METHOD_CALL
+            || (unsafe { (*recv).n_kids } as usize) < 3
+        {
+            return 0;
+        }
+        let rk = unsafe { (*recv).kids };
+        let rname = unsafe { *rk.add(1) };
+        if !(unsafe { (*rname).text_len } == 3
+            && unsafe { z_eq(unsafe { (*rname).text }, 3, b"map\0".as_ptr()) })
+        {
+            return 0;
+        }
+        let map_args = unsafe { *rk.add(2) };
+        let mak = unsafe { (*map_args).kids };
+        let man = unsafe { (*map_args).n_kids } as usize;
+        if man != 1 {
+            return 0;
+        }
+        let map_arg = unsafe { *mak.add(0) };
+        /* `String::as_str` (a qualified fn path): the borrow combinator —
+         * the output element is rsx_str_ref_t (a view of each element). */
+        let mut as_str_fn = false;
+        if unsafe { (*map_arg).kind } == pm_jit_rsx_ast_kind::PATH {
+            let mkp = unsafe { (*map_arg).kids };
+            let mkn = unsafe { (*map_arg).n_kids } as usize;
+            if mkn >= 2 {
+                let seg_last = unsafe { *mkp.add(mkn - 1) };
+                let seg_prev = unsafe { *mkp.add(mkn - 2) };
+                if unsafe { (*seg_last).kind } == pm_jit_rsx_ast_kind::PATH
+                    && unsafe { (*seg_prev).kind } == pm_jit_rsx_ast_kind::PATH
+                    && unsafe { z_eq(unsafe { (*seg_last).text }, unsafe { (*seg_last).text_len }, b"as_str\0".as_ptr()) }
+                    && unsafe { z_eq(unsafe { (*seg_prev).text }, unsafe { (*seg_prev).text_len }, b"String\0".as_ptr()) }
+                {
+                    as_str_fn = true;
+                }
+            }
+        }
+        if !as_str_fn && unsafe { (*map_arg).kind } != pm_jit_rsx_ast_kind::CLOSURE {
+            return 0;
+        }
+        let clo = map_arg;
+        let map_recv = unsafe { *rk.add(0) };
+        /* unwrap .iter() / .into_iter() — both are the identity on the
+         * subset's containers */
+        let mut base = map_recv;
+        if unsafe { (*map_recv).kind } == pm_jit_rsx_ast_kind::METHOD_CALL
+            && (unsafe { (*map_recv).n_kids } as usize) >= 3
+        {
+            let mrk = unsafe { (*map_recv).kids };
+            let mrn = unsafe { *mrk.add(1) };
+            let mra = unsafe { *mrk.add(2) };
+            let mrn_len = unsafe { (*mrn).text_len };
+            let is_iter = mrn_len == 4
+                && unsafe { z_eq(unsafe { (*mrn).text }, 4, b"iter\0".as_ptr()) };
+            let is_into = mrn_len == 9
+                && unsafe { z_eq(unsafe { (*mrn).text }, 9, b"into_iter\0".as_ptr()) };
+            if (is_iter || is_into) && (unsafe { (*mra).n_kids } as usize) == 0 {
+                base = unsafe { *mrk.add(0) };
+            }
+        }
+        /* the input element + row spelling */
+        let bt = self.arena_tmp();
+        let btn = unsafe { self.expr_ctype(base, bt, 128, locals) };
+        /* String::as_str fast path: only over a Vec<String>/&[String] —
+         * the output is the Vec<&str> view row. */
+        if as_str_fn {
+            let mut eb_s: *const u8 = b"\0".as_ptr();
+            let mut el_s = 0usize;
+            if btn > 8 && unsafe { z_eq(bt, 8, b"rsx_vec_\0".as_ptr()) } {
+                let vs = unsafe { self.vecs.find_by_name(bt, btn) };
+                if vs < VEC_CAP {
+                    eb_s = self.vecs.elems[vs].as_ptr();
+                    el_s = self.vecs.elem_lens[vs];
+                }
+            } else if btn > 8 && unsafe { z_eq(bt, 8, b"rsx_arr_\0".as_ptr()) } {
+                let rs = unsafe { self.arrs.find_by_name(bt, btn) };
+                if rs < ARR_CAP {
+                    eb_s = self.arrs.elems[rs].as_ptr();
+                    el_s = self.arrs.elem_lens[rs];
+                }
+            }
+            if el_s == 9 && unsafe { z_eq(eb_s, 9, b"rsx_str_t\0".as_ptr()) } {
+                /* output row: Vec<rsx_str_ref_t> */
+                let row = unsafe { self.vecs.intern(b"rsx_str_ref_t\0".as_ptr(), 13) };
+                if row < VEC_CAP {
+                    let nb = self.arena_tmp();
+                    let nn = unsafe { VecTab::name_for(row, nb, 96) };
+                    if nn > 0 && nn < 128 {
+                        self.str_ref_used = true;
+                        self.str_own_used = true;
+                        self.out.puts(b"({ \0".as_ptr());
+                        self.out.put(nb, nn);
+                        self.out.puts(b" _o = {0}; for (size_t _i = 0; _i < (\0".as_ptr());
+                        unsafe { self.emit_expr(base, locals) };
+                        self.out.puts(b").n; _i++) { \0".as_ptr());
+                        self.out.put(nb, nn);
+                        self.out.puts(b"_push(&_o, (\0".as_ptr());
+                        unsafe { self.emit_expr(base, locals) };
+                        self.out.puts(b").p[_i]); } _o; })\0".as_ptr());
+                        return 1;
+                    }
+                }
+            }
+            unsafe {
+                self.err(b"unsupported: map-collect String::as_str on a non-String element\0".as_ptr(), unsafe { (*e).line });
+            }
+            return 1;
+        }
+        let mut eb: *const u8 = b"\0".as_ptr();
+        let mut el = 0usize;
+        let mut is_row = false; /* .n/.p shape vs fixed array */
+        if btn > 8 && unsafe { z_eq(bt, 8, b"rsx_vec_\0".as_ptr()) } {
+            let vs = unsafe { self.vecs.find_by_name(bt, btn) };
+            if vs < VEC_CAP {
+                eb = self.vecs.elems[vs].as_ptr();
+                el = self.vecs.elem_lens[vs];
+                is_row = true;
+            }
+        } else if btn > 8 && unsafe { z_eq(bt, 8, b"rsx_arr_\0".as_ptr()) } {
+            let rs = unsafe { self.arrs.find_by_name(bt, btn) };
+            if rs < ARR_CAP {
+                eb = self.arrs.elems[rs].as_ptr();
+                el = self.arrs.elem_lens[rs];
+                is_row = true;
+            }
+        } else {
+            let mut i = 0usize;
+            while i < btn {
+                if unsafe { *bt.add(i) } == b'[' {
+                    el = i;
+                    break;
+                }
+                i += 1;
+            }
+            if i < btn {
+                eb = bt;
+            }
+        }
+        if el == 0 || el >= 128 {
+            return 0;
+        }
+        /* closure: one PARAM + body */
+        let ck = unsafe { (*clo).kids };
+        let cn = unsafe { (*clo).n_kids } as usize;
+        if cn < 2 {
+            unsafe {
+                self.err(b"unsupported: map-collect closure shape\0".as_ptr(), unsafe { (*e).line });
+            }
+            return 1;
+        }
+        let param = unsafe { *ck.add(0) };
+        let body = unsafe { *ck.add(cn - 1) };
+        if unsafe { (*param).kind } != pm_jit_rsx_ast_kind::PARAM {
+            unsafe {
+                self.err(b"unsupported: map-collect closure shape\0".as_ptr(), unsafe { (*e).line });
+            }
+            return 1;
+        }
+        let bname = unsafe { (*param).text };
+        let blen = unsafe { (*param).text_len };
+        /* tuple param `|(a, b)|` (text "tup"): register each element
+         * bind from the tuple row's registered signature. */
+        let is_tup_param = blen == 3 && unsafe { z_eq(bname, 3, b"tup\0".as_ptr()) };
+        let mut tup_slot = TUP_CAP;
+        let mut tup_cnt = 0usize;
+        if is_tup_param {
+            if !(el >= 10 && unsafe { z_eq(eb, 10, b"rsx_tuple_\0".as_ptr()) }) {
+                unsafe {
+                    self.err(b"unsupported: map-collect tuple param on a non-tuple element\0".as_ptr(), unsafe { (*e).line });
+                }
+                return 1;
+            }
+            tup_slot = unsafe { self.tup_find(eb, el) };
+            let pk4 = unsafe { (*param).kids };
+            tup_cnt = unsafe { (*param).n_kids } as usize;
+            if tup_slot >= TUP_CAP
+                || tup_cnt == 0
+                || tup_cnt > TUP_MAXF
+                || self.tup_counts[tup_slot] != tup_cnt
+            {
+                unsafe {
+                    self.err(b"unsupported: map-collect tuple param arity\0".as_ptr(), unsafe { (*e).line });
+                }
+                return 1;
+            }
+            let _ = pk4;
+        }
+        /* the output element: the body's type with the param registered */
+        let ob = self.arena_tmp();
+        let mut on = 0usize;
+        if !locals.is_null() {
+            if is_tup_param {
+                let pk5 = unsafe { (*param).kids };
+                let mut f5 = 0usize;
+                while f5 < tup_cnt {
+                    let sub5 = unsafe { *pk5.add(f5) };
+                    if unsafe { (*sub5).kind } == pm_jit_rsx_ast_kind::PARAM {
+                        let sn5 = unsafe { (*sub5).text };
+                        let sl5 = unsafe { (*sub5).text_len };
+                        let a5 = tup_slot * TUP_MAXF + f5;
+                        let elct = self.tup_elems[a5].as_ptr();
+                        let elct_len = self.tup_lens[a5];
+                        unsafe {
+                            (*locals).add(sn5, sl5, elct, elct_len, 0);
+                        }
+                    }
+                    f5 += 1;
+                }
+            } else {
+                unsafe {
+                    (*locals).add(bname, blen, eb, el, 0);
+                }
+            }
+            on = unsafe { self.expr_ctype(body, ob, 128, locals) };
+        }
+        if on == 0 || on >= 128 {
+            unsafe {
+                self.err(b"unsupported: map-collect body type\0".as_ptr(), unsafe { (*e).line });
+            }
+            return 1;
+        }
+        let row = unsafe { self.vecs.intern(ob, on) };
+        if row >= VEC_CAP {
+            unsafe {
+                self.err(b"internal: map-collect output row overflow\0".as_ptr(), unsafe { (*e).line });
+            }
+            return 1;
+        }
+        let nb = self.arena_tmp();
+        let nn = unsafe { VecTab::name_for(row, nb, 96) };
+        if nn == 0 || nn >= 128 {
+            unsafe {
+                self.err(b"internal: map-collect row name\0".as_ptr(), unsafe { (*e).line });
+            }
+            return 1;
+        }
+        /* collect takes no args (a turbofish was skipped by the parser) */
+        if (unsafe { (*margs).n_kids } as usize) != 0 {
+            return 0;
+        }
+        /* emit: ({ out_row _o = {0}; for (i < n) { _push(&_o, body); } _o; }) */
+        self.out.puts(b"({ \0".as_ptr());
+        self.out.put(nb, nn);
+        self.out.puts(b" _o = {0}; for (size_t _i = 0; _i < \0".as_ptr());
+        if is_row {
+            self.out.puts(b"(\0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            self.out.puts(b").n; _i++) { \0".as_ptr());
+        } else {
+            self.out.puts(b"sizeof(\0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            self.out.puts(b") / sizeof((\0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            self.out.puts(b")[0]); _i++) { \0".as_ptr());
+        }
+        self.out.put(nb, nn);
+        self.out.puts(b"_push(&_o, \0".as_ptr());
+        /* register the param(s), emit the body inline */
+        if is_tup_param {
+            let pk5 = unsafe { (*param).kids };
+            self.out.put(eb, el);
+            self.out.puts(b" __rsx_me = (\0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            if is_row {
+                self.out.puts(b").p[_i]; \0".as_ptr());
+            } else {
+                self.out.puts(b")[_i]; \0".as_ptr());
+            }
+            let mut f5 = 0usize;
+            while f5 < tup_cnt {
+                let sub5 = unsafe { *pk5.add(f5) };
+                if unsafe { (*sub5).kind } == pm_jit_rsx_ast_kind::PARAM {
+                    let sn5 = unsafe { (*sub5).text };
+                    let sl5 = unsafe { (*sub5).text_len };
+                    let a5 = tup_slot * TUP_MAXF + f5;
+                    let elct = self.tup_elems[a5].as_ptr();
+                    let elct_len = self.tup_lens[a5];
+                    self.indent();
+                    self.out.put(elct, elct_len);
+                    self.out.putc(b' ');
+                    self.out.put(sn5, sl5);
+                    self.out.puts(b" = __rsx_me._\0".as_ptr());
+                    let d5 = b'0' + f5 as u8;
+                    self.out.putc(d5);
+                    self.out.puts(b"; \0".as_ptr());
+                    unsafe {
+                        (*locals).add(sn5, sl5, elct, elct_len, self.depth + 1);
+                    }
+                }
+                f5 += 1;
+            }
+        } else {
+            unsafe {
+                (*locals).add(bname, blen, eb, el, self.depth + 1);
+            }
+            /* the element copy: <elem> b = base.p[_i] (row) / base[_i] */
+            self.out.put(eb, el);
+            self.out.putc(b' ');
+            self.out.put(bname, blen);
+            self.out.puts(b" = (\0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            if is_row {
+                self.out.puts(b").p[_i]; \0".as_ptr());
+            } else {
+                self.out.puts(b")[_i]; \0".as_ptr());
+            }
+        }
+        unsafe { self.emit_expr(body, locals) };
+        self.out.puts(b"); } _o; })\0".as_ptr());
+        1
+    }
+
     unsafe fn try_emit_closure_loop(
         &mut self,
         recv: *const pm_jit_rsx_ast_t,
@@ -2745,25 +4315,82 @@ impl Lower {
                 }
             }
         }
-        /* receiver must be a fixed array: element spelling + compile-time
-         * length via sizeof. */
+        /* receiver must be a fixed array (element spelling + compile-time
+         * length via sizeof) or a Vec row (rsx_vec_<row> — the element
+         * spelling is the interned row's own bytes, the length `.n`). */
         let bt = self.arena_tmp();
         let btn = unsafe { self.expr_ctype(base, bt, 128, locals) };
         if btn == 0 {
             return 0;
         }
+        let mut bt_new: *mut u8 = core::ptr::null_mut();
+        let mut elem_len_new: usize = 0;
+        let mut is_vec = false;
+        if btn > 8 && unsafe { z_eq(bt, 8, b"rsx_vec_\0".as_ptr()) } {
+            let vs = unsafe { self.vecs.find_by_name(bt, btn) };
+            if vs < VEC_CAP {
+                let el = self.vecs.elem_lens[vs];
+                if el > 0 && el < 128 {
+                    let bt2 = self.arena_tmp();
+                    let mut w = 0usize;
+                    while w < el {
+                        unsafe {
+                            *bt2.add(w) = self.vecs.elems[vs][w];
+                        }
+                        w += 1;
+                    }
+                    unsafe {
+                        *bt2.add(el) = 0;
+                    }
+                    bt_new = bt2;
+                    elem_len_new = el;
+                    is_vec = true;
+                }
+            }
+        }
+        /* &[T] slice ref (rsx_arr_<row>): the fat pair carries .n and
+         * .p — the loop shape is the Vec's exactly, the element spelling
+         * comes from the ArrTab row. */
+        let mut is_arr = false;
+        if !is_vec && btn > 8 && unsafe { z_eq(bt, 8, b"rsx_arr_\0".as_ptr()) } {
+            let rs = unsafe { self.arrs.find_by_name(bt, btn) };
+            if rs < ARR_CAP {
+                let el = self.arrs.elem_lens[rs];
+                if el > 0 && el < 128 {
+                    let bt2 = self.arena_tmp();
+                    let mut w = 0usize;
+                    while w < el {
+                        unsafe {
+                            *bt2.add(w) = self.arrs.elems[rs][w];
+                        }
+                        w += 1;
+                    }
+                    unsafe {
+                        *bt2.add(el) = 0;
+                    }
+                    bt_new = bt2;
+                    elem_len_new = el;
+                    is_arr = true;
+                }
+            }
+        }
         let mut bracket = btn;
         let mut elem_len = 0usize;
-        let mut i = 0usize;
-        while i < btn {
-            if unsafe { *bt.add(i) } == b'[' {
-                bracket = i;
-                elem_len = i;
-                break;
+        if is_vec || is_arr {
+            bracket = btn;
+            elem_len = elem_len_new;
+        } else {
+            let mut i = 0usize;
+            while i < btn {
+                if unsafe { *bt.add(i) } == b'[' {
+                    bracket = i;
+                    elem_len = i;
+                    break;
+                }
+                i += 1;
             }
-            i += 1;
         }
-        if bracket >= btn {
+        if ((is_vec || is_arr) && elem_len == 0) || (!is_vec && !is_arr && bracket >= btn) {
             unsafe {
                 self.err(b"unsupported: closure builtin on a non-array (slices carry no length)\0".as_ptr(), line);
             }
@@ -2817,14 +4444,20 @@ impl Lower {
             *len_var.add(at2) = 0;
         }
         self.out.puts(b"({\0".as_ptr());
-        /* length once: size_t bn_n = sizeof(R)/sizeof(R[0]); */
+        /* length once: arrays via sizeof, Vec/slice rows via `.n` */
         self.out.puts(b"size_t \0".as_ptr());
         self.out.put(len_var, at2);
-        self.out.puts(b" = sizeof(\0".as_ptr());
-        unsafe { self.emit_expr(base, locals) };
-        self.out.puts(b") / sizeof((\0".as_ptr());
-        unsafe { self.emit_expr(base, locals) };
-        self.out.puts(b")[0]);\0".as_ptr());
+        if is_vec || is_arr {
+            self.out.puts(b" = (\0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            self.out.puts(b").n;\0".as_ptr());
+        } else {
+            self.out.puts(b" = sizeof(\0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            self.out.puts(b") / sizeof((\0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            self.out.puts(b")[0]);\0".as_ptr());
+        }
         if want_pos {
             /* not-found marker: (size_t)-1 — expressible at the call site,
              * so a chained .unwrap_or(x) can test it. */
@@ -2862,16 +4495,30 @@ impl Lower {
          * reference (the body sees the value), so the `&` is pattern
          * syntax only. A pointer bind would miscompile `b == 0` bodies. */
         let _ = by_ref;
-        self.out.put(bt, elem_len);
+        if is_vec || is_arr {
+            self.out.put(bt_new, elem_len_new);
+        } else {
+            self.out.put(bt, elem_len);
+        }
         self.out.putc(b' ');
         self.out.put(bname, blen);
         self.out.puts(b" = (\0".as_ptr());
         unsafe { self.emit_expr(base, locals) };
-        self.out.puts(b")[\0".as_ptr());
+        if is_vec || is_arr {
+            self.out.puts(b").p[\0".as_ptr());
+        } else {
+            self.out.puts(b")[\0".as_ptr());
+        }
         self.out.put(ivar, at);
         self.out.puts(b"];\n\0".as_ptr());
-        unsafe {
-            (*locals).add(bname, blen, bt, elem_len, self.depth);
+        if is_vec || is_arr {
+            unsafe {
+                (*locals).add(bname, blen, bt_new, elem_len_new, self.depth);
+            }
+        } else {
+            unsafe {
+                (*locals).add(bname, blen, bt, elem_len, self.depth);
+            }
         }
         self.indent();
         if want_pos {
@@ -2916,6 +4563,197 @@ impl Lower {
         1
     }
 
+    /* `for word in x.split(|c: char| pred)` — the &str split iterator:
+     * a byte-cursor loop over the fat-ref view. Rust's split yields
+     * every segment between pred-true bytes (empties included — the
+     * body's `is_empty` guard is the source's own). The closure's one
+     * param binds as a uint32_t char; the pred body emits inline in a
+     * GNU stmt-expr in the scan's condition. Returns 1 when handled
+     * (emitted or refused loudly), 0 when the iter is not this shape. */
+    unsafe fn try_emit_for_split(
+        &mut self,
+        s: *const pm_jit_rsx_ast_t,
+        pat: *const pm_jit_rsx_ast_t,
+        iter: *const pm_jit_rsx_ast_t,
+        body: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+    ) -> usize {
+        let ik = unsafe { (*iter).kids };
+        let ink = unsafe { (*iter).n_kids } as usize;
+        if ink < 3 {
+            return 0;
+        }
+        let recv = unsafe { *ik.add(0) };
+        let name = unsafe { *ik.add(1) };
+        let args = unsafe { *ik.add(2) };
+        let mname = unsafe { (*name).text };
+        let mlen = unsafe { (*name).text_len };
+        if !(mlen == 5 && unsafe { z_eq(mname, mlen, b"split\0".as_ptr()) }) {
+            return 0;
+        }
+        let ak = unsafe { (*args).kids };
+        let an = unsafe { (*args).n_kids } as usize;
+        if an != 1 {
+            return 0;
+        }
+        let clo = unsafe { *ak.add(0) };
+        if unsafe { (*clo).kind } != pm_jit_rsx_ast_kind::CLOSURE {
+            return 0;
+        }
+        /* the receiver must be the fat-ref view */
+        let rb = self.arena_tmp();
+        let rl = unsafe { self.expr_ctype(recv, rb, 128, locals) };
+        if !(rl == 13 && unsafe { z_eq(rb, 13, b"rsx_str_ref_t\0".as_ptr()) }) {
+            return 0;
+        }
+        /* closure: one bind (+ optional `: TYPE` ascription parsed as
+         * a TYPE kid BEFORE the bind) + body. */
+        let ck = unsafe { (*clo).kids };
+        let cn = unsafe { (*clo).n_kids } as usize;
+        if cn < 2 {
+            unsafe {
+                self.err(b"unsupported: split needs one bind and a body\0".as_ptr(), unsafe { (*s).line });
+            }
+            return 1;
+        }
+        let mut param = unsafe { *ck.add(0) };
+        {
+            let mut q = 1usize;
+            while q < cn && unsafe { (*param).kind } != pm_jit_rsx_ast_kind::PARAM {
+                param = unsafe { *ck.add(q) };
+                q += 1;
+            }
+        }
+        let cbody = unsafe { *ck.add(cn - 1) };
+        if unsafe { (*param).kind } != pm_jit_rsx_ast_kind::PARAM {
+            unsafe {
+                self.err(b"unsupported: split closure bind\0".as_ptr(), unsafe { (*s).line });
+            }
+            return 1;
+        }
+        let cname = unsafe { (*param).text };
+        let clen = unsafe { (*param).text_len };
+        /* the loop bind: one PATH identifier */
+        if unsafe { (*pat).kind } != pm_jit_rsx_ast_kind::PATH {
+            unsafe {
+                self.err(b"unsupported: split for binds one identifier\0".as_ptr(), unsafe { (*s).line });
+            }
+            return 1;
+        }
+        let pk = unsafe { (*pat).kids };
+        if (unsafe { (*pat).n_kids } as usize) < 1 {
+            unsafe {
+                self.err(b"unsupported: split for bind\0".as_ptr(), unsafe { (*s).line });
+            }
+            return 1;
+        }
+        let pleaf = unsafe { *pk.add(0) };
+        let bname = unsafe { (*pleaf).text };
+        let blen = unsafe { (*pleaf).text_len };
+        /* fresh cursor names (collide-proof against the body's own) */
+        let sv = self.arena_tmp();
+        let mut at = unsafe { bput(sv, 160, 0, bname, blen) };
+        at = unsafe { bput(sv, 160, at, b"_sv\0".as_ptr(), 3) };
+        unsafe {
+            *sv.add(at) = 0;
+        }
+        let iv = self.arena_tmp();
+        let mut at2 = unsafe { bput(iv, 160, 0, bname, blen) };
+        at2 = unsafe { bput(iv, 160, at2, b"_i\0".as_ptr(), 2) };
+        unsafe {
+            *iv.add(at2) = 0;
+        }
+        let ev = self.arena_tmp();
+        let mut at3 = unsafe { bput(ev, 160, 0, bname, blen) };
+        at3 = unsafe { bput(ev, 160, at3, b"_e\0".as_ptr(), 2) };
+        unsafe {
+            *ev.add(at3) = 0;
+        }
+        /* scope for the param + the loop bind */
+        unsafe {
+            (*locals).note_scope();
+        }
+        unsafe {
+            (*locals).add(cname, clen, b"uint32_t\0".as_ptr(), 8, self.depth + 1);
+        }
+        /* the loop bind is a fat-ref view segment */
+        self.str_ref_used = true;
+        unsafe {
+            (*locals).add(bname, blen, b"rsx_str_ref_t\0".as_ptr(), 13, self.depth + 1);
+        }
+        self.indent();
+        self.out.puts(b"{\n\0".as_ptr());
+        self.depth += 1;
+        self.indent();
+        self.out.puts(b"rsx_str_ref_t \0".as_ptr());
+        self.out.put(sv, at);
+        self.out.puts(b" = \0".as_ptr());
+        unsafe { self.emit_expr(recv, locals) };
+        self.out.puts(b"; size_t \0".as_ptr());
+        self.out.put(iv, at2);
+        self.out.puts(b" = 0;\n\0".as_ptr());
+        self.indent();
+        self.out.puts(b"while (\0".as_ptr());
+        self.out.put(iv, at2);
+        self.out.puts(b" < \0".as_ptr());
+        self.out.put(sv, at);
+        self.out.puts(b".n) {\n\0".as_ptr());
+        self.depth += 1;
+        self.indent();
+        self.out.putc(b's');
+        self.out.puts(b"ize_t \0".as_ptr());
+        self.out.put(ev, at3);
+        self.out.puts(b" = \0".as_ptr());
+        self.out.put(iv, at2);
+        self.out.puts(b";\n\0".as_ptr());
+        self.indent();
+        self.out.puts(b"while (\0".as_ptr());
+        self.out.put(ev, at3);
+        self.out.puts(b" < \0".as_ptr());
+        self.out.put(sv, at);
+        self.out.puts(b".n && ({ uint32_t \0".as_ptr());
+        self.out.put(cname, clen);
+        self.out.puts(b" = (\0".as_ptr());
+        self.out.put(sv, at);
+        self.out.puts(b").p[\0".as_ptr());
+        self.out.put(ev, at3);
+        self.out.puts(b"]; \0".as_ptr());
+        unsafe { self.emit_expr(cbody, locals) };
+        self.out.puts(b"; })) { \0".as_ptr());
+        self.out.put(ev, at3);
+        self.out.puts(b"++; }\n\0".as_ptr());
+        /* the bind: the segment [i, e) */
+        self.indent();
+        self.out.puts(b"rsx_str_ref_t \0".as_ptr());
+        self.out.put(bname, blen);
+        self.out.puts(b" = { (\0".as_ptr());
+        self.out.put(sv, at);
+        self.out.puts(b").p + \0".as_ptr());
+        self.out.put(iv, at2);
+        self.out.puts(b", \0".as_ptr());
+        self.out.put(ev, at3);
+        self.out.puts(b" - \0".as_ptr());
+        self.out.put(iv, at2);
+        self.out.puts(b" };\n\0".as_ptr());
+        /* body */
+        unsafe { self.emit_block_stmt(body, locals) };
+        self.indent();
+        self.out.put(iv, at2);
+        self.out.puts(b" = \0".as_ptr());
+        self.out.put(ev, at3);
+        self.out.puts(b" + 1;\n\0".as_ptr());
+        self.depth -= 1;
+        self.indent();
+        self.out.puts(b"}\n\0".as_ptr());
+        self.depth -= 1;
+        self.indent();
+        self.out.puts(b"}\n\0".as_ptr());
+        unsafe {
+            (*locals).drop_scope();
+        }
+        1
+    }
+
     unsafe fn emit_for(&mut self, s: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
         /* kids: pat(PATH bind), iter(range BINARY), body */
         let kids = unsafe { (*s).kids };
@@ -2941,12 +4779,206 @@ impl Lower {
              * an index loop binding a pointer to each element (bodies
              * read AND write through it — const-ness is elided, a
              * documented subset divergence). Slices refuse: no length. */
-            let ik = unsafe { (*iter).kids };
-            let ink = unsafe { (*iter).n_kids } as usize;
             if unsafe { self.try_emit_for_iter(s, pat, iter, body, locals) } != 0 || !self.ok {
                 return;
             }
-            /* not an enumerate/iter — fall through to the range refusal */
+            /* `for word in x.split(pred)` — the &str split cursor */
+            if unsafe { self.try_emit_for_split(s, pat, iter, body, locals) } != 0 || !self.ok {
+                return;
+            }
+            /* `for (i, ch) in s.char_indices()` — byte-index + char over
+             * a &str view. ASCII scanning (bytes are chars; the subset
+             * documents UTF-8 decode as unsupported — gen scans C
+             * signatures). Pattern: a 2-bind tuple. */
+            {
+                let ik2 = unsafe { (*iter).kids };
+                let ink2 = unsafe { (*iter).n_kids } as usize;
+                if ink2 >= 3 {
+                    let nm = unsafe { *ik2.add(1) };
+                    if unsafe { (*nm).text_len } == 12
+                        && unsafe { z_eq(unsafe { (*nm).text }, 12, b"char_indices\0".as_ptr()) }
+                    {
+                        let argsn = unsafe { *ik2.add(2) };
+                        if unsafe { (*argsn).n_kids } as usize == 0 {
+                            let recv = unsafe { *ik2.add(0) };
+                            let sb = self.arena_tmp();
+                            let sl = unsafe { self.expr_ctype(recv, sb, 128, locals) };
+                            if sl > 0
+                                && ((sl == 13 && unsafe { z_eq(sb, 13, b"rsx_str_ref_t\0".as_ptr()) })
+                                    || (sl == 9 && unsafe { z_eq(sb, 9, b"rsx_str_t\0".as_ptr()) }))
+                            {
+                                /* pat: TUPLE of two PATH binds (unwrap the
+                                 * "path" wrapper on each) */
+                                let mut okpat = false;
+                                let mut iv: *const u8 = core::ptr::null();
+                                let mut ivl = 0usize;
+                                let mut cv: *const u8 = core::ptr::null();
+                                let mut cvl = 0usize;
+                                if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::TUPLE {
+                                    let pk = unsafe { (*pat).kids };
+                                    if unsafe { (*pat).n_kids } as usize == 2 {
+                                        let mut b0 = unsafe { *pk.add(0) };
+                                        let mut b1 = unsafe { *pk.add(1) };
+                                        if unsafe { (*b0).kind } == pm_jit_rsx_ast_kind::PATH
+                                            && unsafe { z_eq(unsafe { (*b0).text }, unsafe { (*b0).text_len }, b"path\0".as_ptr()) }
+                                            && unsafe { (*b0).n_kids } as usize == 1
+                                        {
+                                            b0 = unsafe { *(*b0).kids.add(0) };
+                                        }
+                                        if unsafe { (*b1).kind } == pm_jit_rsx_ast_kind::PATH
+                                            && unsafe { z_eq(unsafe { (*b1).text }, unsafe { (*b1).text_len }, b"path\0".as_ptr()) }
+                                            && unsafe { (*b1).n_kids } as usize == 1
+                                        {
+                                            b1 = unsafe { *(*b1).kids.add(0) };
+                                        }
+                                        if unsafe { (*b0).kind } == pm_jit_rsx_ast_kind::PATH
+                                            && unsafe { (*b1).kind } == pm_jit_rsx_ast_kind::PATH
+                                        {
+                                            iv = unsafe { (*b0).text };
+                                            ivl = unsafe { (*b0).text_len };
+                                            cv = unsafe { (*b1).text };
+                                            cvl = unsafe { (*b1).text_len };
+                                            okpat = true;
+                                        }
+                                    }
+                                }
+                                if !okpat {
+                                    unsafe {
+                                        self.err(b"unsupported: char_indices pattern (expect two binds)\0".as_ptr(), unsafe { (*s).line });
+                                    }
+                                    return;
+                                }
+                                self.str_ref_used = true;
+                                unsafe {
+                                    (*locals).add(iv, ivl, b"size_t\0".as_ptr(), 7, self.depth + 1);
+                                    (*locals).add(cv, cvl, b"uint32_t\0".as_ptr(), 8, self.depth + 1);
+                                }
+                                let labeled = unsafe { Lower::loop_is_labeled(s) };
+                                let lt = unsafe { (*s).text };
+                                let ll = unsafe { (*s).text_len };
+                                self.indent();
+                                if labeled {
+                                    unsafe { self.put_lbl(lt, ll, b"_\0".as_ptr()) };
+                                    self.out.puts(b": \0".as_ptr());
+                                }
+                                self.out.puts(b"for (size_t __rsx_ci = 0; __rsx_ci < (\0".as_ptr());
+                                unsafe { self.emit_expr(recv, locals) };
+                                self.out.puts(b").n; __rsx_ci++) {\n\0".as_ptr());
+                                self.depth += 1;
+                                self.indent();
+                                self.out.puts(b"size_t \0".as_ptr());
+                                self.out.put(iv, ivl);
+                                self.out.puts(b" = __rsx_ci; uint32_t \0".as_ptr());
+                                self.out.put(cv, cvl);
+                                self.out.puts(b" = (\0".as_ptr());
+                                unsafe { self.emit_expr(recv, locals) };
+                                self.out.puts(b").p[__rsx_ci];\n\0".as_ptr());
+                                unsafe { self.emit_block_stmt(body, locals) };
+                                self.depth -= 1;
+                                self.indent();
+                                self.out.puts(b"}\n\0".as_ptr());
+                                if labeled {
+                                    self.indent();
+                                    unsafe { self.put_lbl(lt, ll, b"_cont\0".as_ptr()) };
+                                    self.out.puts(b": ;\n\0".as_ptr());
+                                    self.indent();
+                                    unsafe { self.put_lbl(lt, ll, b"_end\0".as_ptr()) };
+                                    self.out.puts(b": ;\n\0".as_ptr());
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            /* `for c in x.chars()` — a char bind over a &str view.
+             * ASCII scanning (the subset documents UTF-8 decode as
+             * unsupported — gen scans C signatures, ASCII domain). */
+            {
+                let ik3 = unsafe { (*iter).kids };
+                let ink3 = unsafe { (*iter).n_kids } as usize;
+                if ink3 >= 3 {
+                    let nm3 = unsafe { *ik3.add(1) };
+                    if unsafe { (*nm3).text_len } == 5
+                        && unsafe { z_eq(unsafe { (*nm3).text }, 5, b"chars\0".as_ptr()) }
+                    {
+                        let argsn3 = unsafe { *ik3.add(2) };
+                        if unsafe { (*argsn3).n_kids } as usize == 0 {
+                            let recv3 = unsafe { *ik3.add(0) };
+                            let sb3 = self.arena_tmp();
+                            let sl3 = unsafe { self.expr_ctype(recv3, sb3, 128, locals) };
+                            if sl3 > 0
+                                && ((sl3 == 13
+                                    && unsafe { z_eq(sb3, 13, b"rsx_str_ref_t\0".as_ptr()) })
+                                    || (sl3 == 9
+                                        && unsafe { z_eq(sb3, 9, b"rsx_str_t\0".as_ptr()) }))
+                            {
+                                /* pat: one PATH bind (unwrap "path") */
+                                let mut cv3: *const u8 = core::ptr::null();
+                                let mut cvl3 = 0usize;
+                                let mut bnode3 = pat;
+                                if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
+                                    && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+                                    && unsafe { (*pat).n_kids } as usize == 1
+                                {
+                                    bnode3 = unsafe { *(*pat).kids.add(0) };
+                                }
+                                if unsafe { (*bnode3).kind } == pm_jit_rsx_ast_kind::PATH {
+                                    cv3 = unsafe { (*bnode3).text };
+                                    cvl3 = unsafe { (*bnode3).text_len };
+                                }
+                                if cvl3 == 0 {
+                                    unsafe {
+                                        self.err(b"unsupported: chars pattern (expect one bind)\0".as_ptr(), unsafe { (*s).line });
+                                    }
+                                    return;
+                                }
+                                self.str_ref_used = true;
+                                unsafe {
+                                    (*locals).add(cv3, cvl3, b"uint32_t\0".as_ptr(), 8, self.depth + 1);
+                                }
+                                let labeled = unsafe { Lower::loop_is_labeled(s) };
+                                let lt = unsafe { (*s).text };
+                                let ll = unsafe { (*s).text_len };
+                                self.indent();
+                                if labeled {
+                                    unsafe { self.put_lbl(lt, ll, b"_\0".as_ptr()) };
+                                    self.out.puts(b": \0".as_ptr());
+                                }
+                                self.out.puts(b"for (size_t __rsx_ch = 0; __rsx_ch < (\0".as_ptr());
+                                unsafe { self.emit_expr(recv3, locals) };
+                                self.out.puts(b").n; __rsx_ch++) {\n\0".as_ptr());
+                                self.depth += 1;
+                                self.indent();
+                                self.out.puts(b"uint32_t \0".as_ptr());
+                                self.out.put(cv3, cvl3);
+                                self.out.puts(b" = (\0".as_ptr());
+                                unsafe { self.emit_expr(recv3, locals) };
+                                self.out.puts(b").p[__rsx_ch];\n\0".as_ptr());
+                                unsafe { self.emit_block_stmt(body, locals) };
+                                self.depth -= 1;
+                                self.indent();
+                                self.out.puts(b"}\n\0".as_ptr());
+                                if labeled {
+                                    self.indent();
+                                    unsafe { self.put_lbl(lt, ll, b"_cont\0".as_ptr()) };
+                                    self.out.puts(b": ;\n\0".as_ptr());
+                                    self.indent();
+                                    unsafe { self.put_lbl(lt, ll, b"_end\0".as_ptr()) };
+                                    self.out.puts(b": ;\n\0".as_ptr());
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            /* not an enumerate/iter/split — fall through to the range refusal */
+        }
+        /* `for bind in &v` / `for bind in slice_param` — the &[T] fat-row
+         * loop (a &Vec borrow types as the row via the coercion). */
+        if unsafe { self.try_emit_for_arr(s, pat, iter, body, locals) } != 0 || !self.ok {
+            return;
         }
         if unsafe { (*iter).kind } != pm_jit_rsx_ast_kind::BINARY {
             unsafe {

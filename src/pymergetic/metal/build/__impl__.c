@@ -2207,6 +2207,21 @@ static const char *rs_splice(pm_util_mem_arena_t *arena, const char *fqn,
             errbuf, errbuf_len) != PM_METAL_BUILD_OK) {
         return NULL;
     }
+#if !defined(PM_METAL_FIRMWARE)
+    {
+        /* debug tap (never on by default): RSX_DUMP_SPLICE=<path> writes
+         * the spliced source — splice-divergence hunts. Host/unix only:
+         * the firmware seats have no getenv/fopen in their libc shims. */
+        const char *tap = getenv("RSX_DUMP_SPLICE");
+        if (tap != NULL) {
+            FILE *o = fopen(tap, "wb");
+            if (o != NULL) {
+                fwrite(buf, 1u, len, o);
+                fclose(o);
+            }
+        }
+    }
+#endif
     return buf;
 }
 
@@ -2238,6 +2253,24 @@ static int32_t unit_source_compile(pm_util_mem_arena_t *arena,
                 return PM_METAL_BUILD_ERR_COMPILE;
             }
             csrc = transpiled;
+#if !defined(PM_METAL_FIRMWARE)
+            {
+                /* debug tap (never on by default): RSX_DUMP_UNIT=<path>
+                 * writes this unit's generated C — garbage-byte hunts and
+                 * ksweep-vs-dump divergences, same posture as rsx_span's
+                 * SPAN_OUT. Host/unix only: the firmware libc shims have
+                 * no getenv/fopen. */
+                const char *tap = getenv("RSX_DUMP_UNIT");
+                if (tap != NULL && rel != NULL
+                    && strstr(rel, "__impl__.rs") != NULL) {
+                    FILE *o = fopen(tap, "wb");
+                    if (o != NULL) {
+                        fwrite(transpiled, 1u, transpiled_len, o);
+                        fclose(o);
+                    }
+                }
+            }
+#endif
         } else if (strcmp(dot, ".cpp") == 0 || strcmp(dot, ".cxx") == 0
             || strcmp(dot, ".cc") == 0) {
             pm_jit_cpp_toklist_t toks;
