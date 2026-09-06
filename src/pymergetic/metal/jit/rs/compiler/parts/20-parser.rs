@@ -637,6 +637,40 @@ impl Parser {
             {
                 return unsafe { self.parse_fn_ptr_type() };
             }
+            /* `impl AsRef<[u8]>` — impl-Trait param sugar. The in-tree
+             * muscle instantiates it ONLY as &[u8] (every call site passes
+             * a byte slice), so the honest lowering is the slice itself:
+             * parse the bound, keep its slice arg as the param type.
+             * `impl Write` (and Write's qualified spellings) — the fill is
+             * the C stdio sink: every call site passes `&mut io::stdout()`
+             * or forwards the same param, so the param type is FILE *. */
+            if unsafe { self.is_kw(self.at, b"impl\0".as_ptr()) } {
+                self.at += 1;
+                if unsafe { self.is_kw(self.at, b"AsRef\0".as_ptr()) } {
+                    self.at += 1;
+                    if unsafe { self.is_punct(self.at, b'<') } {
+                        self.at += 1;
+                        let inner = unsafe { self.parse_type() };
+                        if !self.ok || inner.is_null() {
+                            return core::ptr::null_mut();
+                        }
+                        if unsafe { self.is_punct(self.at, b'>') } {
+                            self.at += 1;
+                        }
+                        return inner;
+                    }
+                }
+                if unsafe { self.is_kw(self.at, b"Write\0".as_ptr()) } {
+                    self.at += 1;
+                    return unsafe {
+                        self.mk(pm_jit_rsx_ast_kind::TYPE, line, b"FILE *\0".as_ptr(), 5)
+                    };
+                }
+                unsafe {
+                    self.err(b"unsupported: impl Trait param (only impl AsRef<[u8]> / impl Write)\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
             return unsafe { self.parse_path_type() };
         }
         if k == pm_jit_rsx_tok_kind::PUNCT {
@@ -1144,6 +1178,58 @@ impl Parser {
             }
             return n;
         }
+        /* slice/array pattern `[p0, p1, ..]` (incl. empty `[]`): kids are
+         * the element patterns. The lower tests the scrutinee's length
+         * and each element against the row's `.p[i]` view. */
+        if k == pm_jit_rsx_tok_kind::PUNCT && unsafe { self.is_punct(self.at, b'[') } {
+            self.at += 1;
+            let mut kids = Kids::new();
+            if unsafe { self.is_punct(self.at, b']') } {
+                self.at += 1;
+                let n = unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::ARRAY, line, b"[]\0".as_ptr(), 2)
+                };
+                unsafe {
+                    self.set_kids(n, &kids);
+                }
+                return n;
+            }
+            loop {
+                if !self.ok {
+                    return core::ptr::null_mut();
+                }
+                let sub = unsafe { self.parse_pattern() };
+                if sub.is_null() {
+                    return core::ptr::null_mut();
+                }
+                unsafe {
+                    kids.add(sub, self.arena);
+                }
+                if unsafe { self.is_punct(self.at, b',') } {
+                    self.at += 1;
+                    if unsafe { self.is_punct(self.at, b']') } {
+                        self.at += 1;
+                        break;
+                    }
+                    continue;
+                }
+                if unsafe { self.is_punct(self.at, b']') } {
+                    self.at += 1;
+                    break;
+                }
+                unsafe {
+                    self.err(b"expected ',' or ']' in slice pattern\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            let n = unsafe {
+                self.mk(pm_jit_rsx_ast_kind::ARRAY, line, b"tuple\0".as_ptr(), 5)
+            };
+            unsafe {
+                self.set_kids(n, &kids);
+            }
+            return n;
+        }
         if k == pm_jit_rsx_tok_kind::INT_LITERAL
             || k == pm_jit_rsx_tok_kind::FLOAT_LITERAL
             || k == pm_jit_rsx_tok_kind::CHAR_LITERAL
@@ -1260,6 +1346,28 @@ impl Parser {
                 let n = unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, b"pat\0".as_ptr(), 3) };
                 unsafe {
                     self.set_kids(n, &segs);
+                }
+                /* trailing or-alternatives: `Some(k) | None => ..` — fold
+                 * the ctor node and each `| alt` into one or-pattern. */
+                if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::PUNCT
+                    && unsafe { self.is_punct(self.at, b'|') }
+                {
+                    let mut okids = Kids::new();
+                    unsafe {
+                        okids.add(n, self.arena);
+                    }
+                    while unsafe { self.is_punct(self.at, b'|') } {
+                        self.at += 1;
+                        let alt = unsafe { self.parse_path_expr() };
+                        unsafe {
+                            okids.add(alt, self.arena);
+                        }
+                    }
+                    let on = unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, b"or\0".as_ptr(), 2) };
+                    unsafe {
+                        self.set_kids(on, &okids);
+                    }
+                    return on;
                 }
                 return n;
             }
@@ -2336,6 +2444,69 @@ impl Parser {
             }
             if unsafe { self.is_kw(self.at, b"while\0".as_ptr()) } {
                 self.at += 1;
+                /* `while let PAT = EXPR { .. }` — the if-let desugar as a
+                 * loop: MATCH(scrutinee, [PAT-arm -> body, _ -> break]).
+                 * parse_if_chain_seg owns the let-segment parse (pattern,
+                 * `=`, cond_ctx'd scrutinee); the fold builds the MATCH,
+                 * exactly the `if let` node shape the lower already runs. */
+                if unsafe { self.is_kw(self.at, b"let\0".as_ptr()) } {
+                    let mut pat: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+                    let mut scr: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+                    let seg_ok = unsafe {
+                        self.parse_if_chain_seg(true, &mut pat, &mut scr)
+                    };
+                    if !seg_ok || !self.ok || pat.is_null() || scr.is_null() {
+                        return core::ptr::null_mut();
+                    }
+                    let body = unsafe { self.parse_block() };
+                    if !self.ok {
+                        return core::ptr::null_mut();
+                    }
+                    /* break-arm body: an empty block riding the wildcard */
+                    let brk = unsafe {
+                        self.mk(pm_jit_rsx_ast_kind::BREAK, 0, b"break\0".as_ptr(), 5)
+                    };
+                    let a1 = unsafe {
+                        self.mk(pm_jit_rsx_ast_kind::MATCH_ARM, line, b"arm\0".as_ptr(), 3)
+                    };
+                    let mut k1 = Kids::new();
+                    unsafe {
+                        k1.add(pat, self.arena);
+                        k1.add(body, self.arena);
+                        self.set_kids(a1, &k1);
+                    }
+                    let wc = unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, b"_\0".as_ptr(), 1) };
+                    let a2 = unsafe {
+                        self.mk(pm_jit_rsx_ast_kind::MATCH_ARM, line, b"arm\0".as_ptr(), 3)
+                    };
+                    let mut k2 = Kids::new();
+                    unsafe {
+                        k2.add(wc, self.arena);
+                        k2.add(brk, self.arena);
+                        self.set_kids(a2, &k2);
+                    }
+                    let m = unsafe {
+                        self.mk(pm_jit_rsx_ast_kind::MATCH, line, b"match\0".as_ptr(), 5)
+                    };
+                    let mut mk = Kids::new();
+                    unsafe {
+                        mk.add(scr, self.arena);
+                        mk.add(a1, self.arena);
+                        mk.add(a2, self.arena);
+                        self.set_kids(m, &mk);
+                    }
+                    let mut lk = Kids::new();
+                    unsafe {
+                        lk.add(m, self.arena);
+                    }
+                    let n = unsafe {
+                        self.mk(pm_jit_rsx_ast_kind::LOOP, line, b"loop\0".as_ptr(), 4)
+                    };
+                    unsafe {
+                        self.set_kids(n, &lk);
+                    }
+                    return n;
+                }
                 let save = self.cond_ctx;
                 self.cond_ctx = true;
                 let cond = unsafe { self.parse_expr() };
@@ -2482,6 +2653,62 @@ impl Parser {
         }
         if unsafe { self.is_kw(self.at, b"while\0".as_ptr()) } {
             self.at += 1;
+            /* `while let` — the labeled twin of the plain-loop desugar. */
+            if unsafe { self.is_kw(self.at, b"let\0".as_ptr()) } {
+                let mut pat: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+                let mut scr: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+                let seg_ok = unsafe { self.parse_if_chain_seg(true, &mut pat, &mut scr) };
+                if !seg_ok || !self.ok || pat.is_null() || scr.is_null() {
+                    return core::ptr::null_mut();
+                }
+                let body = unsafe { self.parse_block() };
+                if !self.ok {
+                    return core::ptr::null_mut();
+                }
+                let brk = unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::BREAK, 0, b"break\0".as_ptr(), 5)
+                };
+                let a1 = unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::MATCH_ARM, line, b"arm\0".as_ptr(), 3)
+                };
+                let mut k1 = Kids::new();
+                unsafe {
+                    k1.add(pat, self.arena);
+                    k1.add(body, self.arena);
+                    self.set_kids(a1, &k1);
+                }
+                let wc = unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, b"_\0".as_ptr(), 1) };
+                let a2 = unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::MATCH_ARM, line, b"arm\0".as_ptr(), 3)
+                };
+                let mut k2 = Kids::new();
+                unsafe {
+                    k2.add(wc, self.arena);
+                    k2.add(brk, self.arena);
+                    self.set_kids(a2, &k2);
+                }
+                let m = unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::MATCH, line, b"match\0".as_ptr(), 5)
+                };
+                let mut mk = Kids::new();
+                unsafe {
+                    mk.add(scr, self.arena);
+                    mk.add(a1, self.arena);
+                    mk.add(a2, self.arena);
+                    self.set_kids(m, &mk);
+                }
+                let mut lk = Kids::new();
+                unsafe {
+                    lk.add(m, self.arena);
+                }
+                let n = unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::LOOP, line, b"loop\0".as_ptr(), 4)
+                };
+                unsafe {
+                    self.set_kids(n, &lk);
+                }
+                return unsafe { self.relabel(n, lname, llen) };
+            }
             let save = self.cond_ctx;
             self.cond_ctx = true;
             let cond = unsafe { self.parse_expr() };
@@ -2897,10 +3124,39 @@ impl Parser {
                     return core::ptr::null_mut();
                 }
                 if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::RANGE {
-                    unsafe {
-                        self.err(b"unsupported: struct update syntax\0".as_ptr());
+                    /* struct update `S { f: v, ..base }`: the base expr rides
+                     * as a STRUCT_FIELD node whose text is ".." followed by
+                     * the base expr kid — the lower emits the copy-then-
+                     * override statement-expression. */
+                    self.at += 1;
+                    let base = unsafe { self.parse_expr() };
+                    if !self.ok || base.is_null() {
+                        return core::ptr::null_mut();
                     }
-                    return core::ptr::null_mut();
+                    let un = unsafe {
+                        self.mk(pm_jit_rsx_ast_kind::STRUCT_FIELD, line, b"..\0".as_ptr(), 2)
+                    };
+                    let mut uk = Kids::new();
+                    unsafe {
+                        uk.add(base, self.arena);
+                        self.set_kids(un, &uk);
+                    }
+                    unsafe {
+                        fields.add(un, self.arena);
+                        fields.add(base, self.arena);
+                    }
+                    /* optional trailing comma, then the literal must close */
+                    if unsafe { self.is_punct(self.at, b',') } {
+                        self.at += 1;
+                    }
+                    if !unsafe { self.is_punct(self.at, b'}') } {
+                        unsafe {
+                            self.err(b"expected '}' after struct update base\0".as_ptr());
+                        }
+                        return core::ptr::null_mut();
+                    }
+                    self.at += 1;
+                    break;
                 }
                 if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::IDENT {
                     unsafe {
@@ -3420,6 +3676,26 @@ impl Parser {
         if unsafe { self.is_kw(self.at, b"let\0".as_ptr()) } {
             return unsafe { self.parse_let() };
         }
+        /* Local `const NAME: T = value;` — a value binding whose scope is
+         * the enclosing block, exactly a `let` for C lowering (a const
+         * local). Item-position consts still route through parse_item;
+         * this branch is body-position only (the next token after the
+         * name is `:`, never `fn`/generics). */
+        if unsafe { self.is_kw(self.at, b"const\0".as_ptr()) }
+            && unsafe { self.kind(self.at + 1) } == pm_jit_rsx_tok_kind::IDENT
+            && unsafe { self.is_punct(self.at + 2, b':') }
+        {
+            self.at += 1; /* `const` — the rest is the shared let tail */
+            let name = unsafe { self.text(self.at) };
+            let nlen = unsafe { self.text_len(self.at) };
+            self.at += 1;
+            let mut kids = Kids::new();
+            let pat = unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, name, nlen) };
+            unsafe {
+                kids.add(pat, self.arena);
+            }
+            return unsafe { self.parse_let_rest(line, kids, false) };
+        }
         if unsafe { self.is_punct(self.at, b';') } {
             /* empty statement */
             self.at += 1;
@@ -3643,12 +3919,14 @@ impl Parser {
             self.at += 1;
         }
         let mut kids = Kids::new();
-        /* `Some(bind)` let-pattern: same node shape parse_pattern builds
-         * (PATH "pat", kids = [Some seg, bind]) so the lower's match/let
-         * Some-branch reads both forms identically. */
+        /* `Some(bind)` / `Ok(bind)` let-pattern: same node shape
+         * parse_pattern builds (PATH "pat", kids = [ctor seg, bind]) so
+         * the lower's match/let Some-branch reads both forms identically.
+         * Ok is the Result twin — the lower tests `._ok` instead of
+         * `._has` but the node shape is one. */
         let mut is_some_pat = false;
-        if pat_len == 4
-            && unsafe { z_eq(pat_name, 4, b"Some\0".as_ptr()) }
+        let ctor_is_ok = pat_len == 2 && unsafe { z_eq(pat_name, 2, b"Ok\0".as_ptr()) };
+        if (pat_len == 4 && unsafe { z_eq(pat_name, 4, b"Some\0".as_ptr()) } || ctor_is_ok)
             && unsafe { self.is_punct(self.at, b'(') }
         {
             self.at += 1;
@@ -3658,13 +3936,17 @@ impl Parser {
             }
             if !unsafe { self.is_punct(self.at, b')') } {
                 unsafe {
-                    self.err(b"expected ')' in Some(bind) let pattern\0".as_ptr());
+                    self.err(b"expected ')' in Some/Ok(bind) let pattern\0".as_ptr());
                 }
                 return core::ptr::null_mut();
             }
             self.at += 1;
             let mut segs = Kids::new();
-            let seg = unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, b"Some\0".as_ptr(), 4) };
+            let seg = if ctor_is_ok {
+                unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, b"Ok\0".as_ptr(), 2) }
+            } else {
+                unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, b"Some\0".as_ptr(), 4) }
+            };
             unsafe {
                 segs.add(seg, self.arena);
                 segs.add(inner, self.arena);
@@ -3720,7 +4002,7 @@ impl Parser {
         if unsafe { self.is_kw(self.at, b"else\0".as_ptr()) } {
             if !is_some_pat {
                 unsafe {
-                    self.err(b"unsupported: let-else on a non-Some pattern\0".as_ptr());
+                    self.err(b"unsupported: let-else on a non-Some/Ok pattern\0".as_ptr());
                 }
                 return core::ptr::null_mut();
             }

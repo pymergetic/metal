@@ -13,6 +13,8 @@ struct Lower {
     fns: *mut FnTab,
     consts: ConstTab,
     enums: EnumTab,
+    enumpays: EnumPayTab,
+    enumtags: EnumTagTab,
     depth: usize,
     /* the struct type currently being lowered (for method resolution) */
     cur_impl: [*const u8; 16],
@@ -68,6 +70,13 @@ struct Lower {
      * emit_pat_test and the Some-bind declaration read it. */
     cur_opt_elem: [u8; 96],
     cur_opt_elem_len: usize,
+    /* Result scrutinee payload types (decoded from the rsx_res_ row the
+     * match temp carries) — the Ok/Err arm binds read ._v / ._e through
+     * these, the twin of cur_opt_elem for the Result plane. */
+    cur_res_ok: [u8; 96],
+    cur_res_ok_len: usize,
+    cur_res_err: [u8; 96],
+    cur_res_err_len: usize,
     /* The in-progress match's scrutinee C type (emit_match sets it;
      * emit_pat_test's string-literal arms compare views, not scalars).
      * len 0 = no match in progress. */
@@ -84,6 +93,15 @@ struct Lower {
     opt_lens: [usize; OPT_CAP],
     opt_done: [bool; OPT_CAP],
     opt_n: usize,
+    /* Result payload-pair spellings seen this unit (each renders as the
+     * named typedef rsx_res_<T>_<E> = struct { T _v; E _e; bool _ok; },
+     * emitted once — same one-C-type-per-signature rule as rsx_opt_). */
+    res_oks: [[u8; 128]; RES_CAP],
+    res_ok_lens: [usize; RES_CAP],
+    res_errs: [[u8; 128]; RES_CAP],
+    res_err_lens: [usize; RES_CAP],
+    res_done: [bool; RES_CAP],
+    res_n: usize,
     /* True once the struct/alias passes have run: every Option payload
      * that names a unit type is then either already flushed (matched the
      * naming type in opt_emit_for) or safe to flush (the naming type's
@@ -170,6 +188,23 @@ struct Lower {
      * One shared type: String is monomorphic, no row interning. */
     str_own_used: bool,
     str_own_done: bool,
+    /* the FILE * plane: an impl-Write param (or io::stdout()) pulls in
+     * <stdio.h>; writeln!/write! lower to fprintf/fputc calls. */
+    file_used: bool,
+    /* fn-pointer rows (rsx_fnp_<row>) — interned when a fn-ptr spelling
+     * rides an Option payload (the struct field plane); typedefs flush
+     * with the other preamble rows. */
+    fnps: FnPtrTab,
+    /* BTreeMap rows (rsx_btm_<row>) — the ordered-map plane. */
+    btms: BtmTab,
+    /* the enclosing impl's own type — `Self` in a method's signature or
+     * body renders as this C name (empty outside an impl method). */
+    self_ty: [u8; 64],
+    self_ty_len: usize,
+    /* ctype recursion flag: rendering an Option's payload — a fn-ptr
+     * payload interns as an rsx_fnp_<row> name instead of the long
+     * `RET (*)(..)` spelling. */
+    in_opt_payload: bool,
 }
 
 impl Lower {
@@ -202,6 +237,8 @@ impl Lower {
             (*p).fns = FnTab::new(arena);
             (*p).consts = ConstTab::new();
             (*p).enums = EnumTab::new();
+            (*p).enumpays = EnumPayTab::new();
+            (*p).enumtags = EnumTagTab::new();
             (*p).arrs = ArrTab::new();
         }
         p
@@ -903,6 +940,283 @@ impl Lower {
         true
     }
 
+    /* `write!(sink, ..)` / `writeln!(sink, ..)` — the io-Write macro as an
+     * EXPRESSION (`let _ = writeln!(out, ..)` — the result is discarded,
+     * the fill returns 0). Scans like format! but arg 0 is the sink
+     * (a FILE * — an impl-Write param or io::stdout()); a missing format
+     * literal is the bare newline/flush form. Returns true when the MACRO
+     * node was a write! family member (scan done, fields set). */
+    unsafe fn write_macro_scan(
+        &mut self,
+        text: *const u8,
+        tlen: usize,
+        locals: *mut LocalTab,
+        out_sink: *mut *mut pm_jit_rsx_ast_t,
+        out_fmt: *mut *const u8,
+        out_fmt_len: *mut usize,
+        out_args: *mut *mut pm_jit_rsx_ast_t,
+        out_args_n: *mut usize,
+        out_caps: *mut *mut pm_jit_rsx_ast_t,
+        out_caps_n: *mut usize,
+        out_newline: *mut bool,
+    ) -> bool {
+        let mut sp = text;
+        let mut sl = tlen;
+        /* `::std::io::` / `std::io::` prefixes */
+        loop {
+            let mut took = false;
+            if sl >= 11
+                && unsafe { *sp == b':' }
+                && unsafe { *sp.add(1) == b':' }
+                && unsafe { z_eq(sp.add(2), 8, b"std::io\0".as_ptr()) }
+                && unsafe { *sp.add(10) == b':' }
+            {
+                sp = unsafe { sp.add(11) };
+                sl -= 11;
+                took = true;
+            } else if sl >= 9
+                && unsafe { z_eq(sp, 8, b"std::io\0".as_ptr()) }
+                && unsafe { *sp.add(8) == b':' }
+            {
+                sp = unsafe { sp.add(9) };
+                sl -= 9;
+                took = true;
+            }
+            if !took {
+                break;
+            }
+        }
+        /* head: `write!(` (7) or `writeln!(` (9) */
+        let mut newline = false;
+        let mut hl = 7usize;
+        if sl < 7 {
+            return false;
+        }
+        if unsafe { *sp } != b'w'
+            || unsafe { *sp.add(1) } != b'r'
+            || unsafe { *sp.add(2) } != b'i'
+            || unsafe { *sp.add(3) } != b't'
+            || unsafe { *sp.add(4) } != b'e'
+        {
+            return false;
+        }
+        if unsafe { *sp.add(5) } == b'!' && unsafe { *sp.add(6) } == b'(' {
+            newline = false;
+            hl = 7;
+        } else if unsafe { *sp.add(5) } == b'l'
+            && unsafe { *sp.add(6) } == b'n'
+            && unsafe { *sp.add(7) } == b'!'
+            && unsafe { *sp.add(8) } == b'('
+        {
+            newline = true;
+            hl = 9;
+            if sl < 9 {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        if unsafe { *sp.add(sl - 1) } != b')' {
+            return false;
+        }
+        /* body: [sp+hl, sl-1) */
+        let body = unsafe { sp.add(hl) };
+        let blen = sl - hl - 1;
+        let mut toks: pm_jit_rsx_toklist_t = pm_jit_rsx_toklist_t {
+            toks: core::ptr::null_mut(),
+            n_toks: 0,
+        };
+        if unsafe {
+            pm_metal_jit_rsx_lex(
+                self.arena,
+                body,
+                blen,
+                &mut toks,
+                self.errbuf,
+                self.errcap,
+            )
+        } != 0
+        {
+            return true;
+        }
+        let mut p = Parser {
+            arena: self.arena,
+            toks: toks.toks,
+            n_toks: toks.n_toks,
+            at: 0,
+            nd: Node {
+                arena: self.arena,
+                errbuf: self.errbuf,
+                errcap: self.errcap,
+                errline: 0,
+                ok: true,
+            },
+            ok: true,
+            cond_ctx: false,
+            chain_ctx: false,
+            shr_closes: 0,
+            feats: core::ptr::null(),
+        };
+        /* arg 0: the sink */
+        let sink = unsafe { p.parse_expr() };
+        if !p.ok || sink.is_null() {
+            unsafe {
+                self.err(b"unsupported: write! sink argument\0".as_ptr(), 0);
+            }
+            return true;
+        }
+        /* the format literal + positional args may be absent
+         * (`writeln!(out)`) */
+        let mut fmt: *const u8 = core::ptr::null();
+        let mut fmt_len = 0usize;
+        let mut args: [*mut pm_jit_rsx_ast_t; 8] = [core::ptr::null_mut(); 8];
+        let mut args_n = 0usize;
+        if unsafe { p.is_punct(p.at, b',') } {
+            p.at += 1;
+            if unsafe { p.kind(p.at) } == pm_jit_rsx_tok_kind::STRING_LITERAL {
+                let lit_tok = unsafe { p.tok(p.at) };
+                let ltext = unsafe { (*lit_tok).text };
+                let llen = unsafe { (*lit_tok).text_len };
+                if llen < 2 || unsafe { *ltext } != b'"' {
+                    unsafe {
+                        self.err(b"unsupported: write! needs a string literal\0".as_ptr(), 0);
+                    }
+                    return true;
+                }
+                fmt = unsafe { ltext.add(1) };
+                fmt_len = llen - 2;
+                p.at += 1;
+                if unsafe { p.is_punct(p.at, b',') } {
+                    p.at += 1;
+                    while unsafe { p.kind(p.at) } != pm_jit_rsx_tok_kind::END {
+                        let a = unsafe { p.parse_expr() };
+                        if !p.ok || a.is_null() {
+                            unsafe {
+                                self.err(b"unsupported: write! argument\0".as_ptr(), 0);
+                            }
+                            return true;
+                        }
+                        if args_n < 8 {
+                            args[args_n] = a;
+                            args_n += 1;
+                        }
+                        if unsafe { p.is_punct(p.at, b',') } {
+                            p.at += 1;
+                            continue;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        if unsafe { p.kind(p.at) } != pm_jit_rsx_tok_kind::END {
+            unsafe {
+                self.err(b"unsupported: write! trailing tokens\0".as_ptr(), 0);
+            }
+            return true;
+        }
+        /* implicit captures over the literal — same walk as format! */
+        let mut caps: [*mut pm_jit_rsx_ast_t; 16] = [core::ptr::null_mut(); 16];
+        let mut caps_n = 0usize;
+        let mut i = 0usize;
+        while i < fmt_len {
+            if unsafe { *fmt.add(i) } != b'{' {
+                i += 1;
+                continue;
+            }
+            if i + 1 < fmt_len && unsafe { *fmt.add(i + 1) } == b'{' {
+                i += 2;
+                continue;
+            }
+            let mut j = i + 1;
+            let mut ok_ident = false;
+            while j < fmt_len {
+                let c = unsafe { *fmt.add(j) };
+                if c == b'}' {
+                    ok_ident = j > i + 1;
+                    break;
+                }
+                if !(c.is_ascii_alphanumeric() || c == b'_') {
+                    break;
+                }
+                j += 1;
+            }
+            if !ok_ident {
+                i = j + 1;
+                continue;
+            }
+            let ip = unsafe { fmt.add(i + 1) };
+            let il = j - i - 1;
+            let mut itoks: pm_jit_rsx_toklist_t = pm_jit_rsx_toklist_t {
+                toks: core::ptr::null_mut(),
+                n_toks: 0,
+            };
+            if unsafe {
+                pm_metal_jit_rsx_lex(
+                    self.arena,
+                    ip,
+                    il,
+                    &mut itoks,
+                    self.errbuf,
+                    self.errcap,
+                )
+            } != 0
+            {
+                return true;
+            }
+            let mut ip2 = Parser {
+                arena: self.arena,
+                toks: itoks.toks,
+                n_toks: itoks.n_toks,
+                at: 0,
+                nd: Node {
+                    arena: self.arena,
+                    errbuf: self.errbuf,
+                    errcap: self.errcap,
+                    errline: 0,
+                    ok: true,
+                },
+                ok: true,
+                cond_ctx: false,
+                chain_ctx: false,
+                shr_closes: 0,
+                feats: core::ptr::null(),
+            };
+            let cap = unsafe { ip2.parse_expr() };
+            if !ip2.ok || cap.is_null() {
+                unsafe {
+                    self.err(b"unsupported: write! capture\0".as_ptr(), 0);
+                }
+                return true;
+            }
+            if caps_n < 16 {
+                caps[caps_n] = cap;
+                caps_n += 1;
+            }
+            i = j + 1;
+        }
+        let _ = locals;
+        unsafe {
+            *out_sink = sink;
+            *out_fmt = fmt;
+            *out_fmt_len = fmt_len;
+            let mut k = 0usize;
+            while k < args_n {
+                *out_args.add(k) = args[k];
+                k += 1;
+            }
+            *out_args_n = args_n;
+            let mut k = 0usize;
+            while k < caps_n {
+                *out_caps.add(k) = caps[k];
+                k += 1;
+            }
+            *out_caps_n = caps_n;
+            *out_newline = newline;
+        }
+        true
+    }
+
     /* Is a MACRO node one of the plane's expression macros (vec!,
      * format!)? Statement macros keep the emit_stmt skip semantics. */
     unsafe fn macro_is_value(&mut self, e: *const pm_jit_rsx_ast_t) -> bool {
@@ -1329,9 +1643,13 @@ impl Lower {
                 if ret_len == 0 {
                     return 0;
                 }
-                /* C fn-pointer: `RET (*)(params)` */
-                at = unsafe { zput(out, cap, at, ret_buf) };
-                at = unsafe { zput(out, cap, at, b" (*)(\0".as_ptr()) };
+                /* C fn-pointer: `RET (*)(params)` — built in a scratch
+                 * first: an Option payload interns the spelling as an
+                 * rsx_fnp_<row> typedef (short alnum name), any other
+                 * context emits the full spelling inline. */
+                let sig = self.arena_tmp();
+                let mut sat = unsafe { zput(sig, 160, 0, ret_buf) };
+                sat = unsafe { bput(sig, 160, sat, b" (*)(\0".as_ptr(), 5) };
                 let mut i = 0usize;
                 let mut first = true;
                 while i + 1 < nk {
@@ -1353,21 +1671,45 @@ impl Lower {
                         }
                     }
                     if !first {
-                        at = unsafe { zput(out, cap, at, b", \0".as_ptr()) };
+                        sat = unsafe { bput(sig, 160, sat, b", \0".as_ptr(), 2) };
                     }
                     let p_buf = self.arena_tmp();
                     let pn = unsafe { self.ctype(pty, p_buf, 128) };
                     if pn == 0 {
                         return 0;
                     }
-                    at = unsafe { zput(out, cap, at, p_buf) };
+                    sat = unsafe { bput(sig, 160, sat, p_buf, pn) };
                     first = false;
                     i += 1;
                 }
                 if first {
-                    at = unsafe { zput(out, cap, at, b"void\0".as_ptr()) };
+                    sat = unsafe { bput(sig, 160, sat, b"void\0".as_ptr(), 4) };
                 }
-                at = unsafe { zput(out, cap, at, b")\0".as_ptr()) };
+                sat = unsafe { bput(sig, 160, sat, b")\0".as_ptr(), 1) };
+                if sat >= 160 {
+                    return 0;
+                }
+                unsafe {
+                    *sig.add(sat) = 0;
+                }
+                if self.in_opt_payload {
+                    let row = unsafe { self.fnps.intern(sig, sat) };
+                    if row >= FNP_CAP {
+                        unsafe {
+                            self.err(b"fn-pointer type table overflow\0".as_ptr(), unsafe { (*ty).line });
+                        }
+                        return 0;
+                    }
+                    let rn = unsafe { FnPtrTab::name_for(row, out, cap) };
+                    if rn == 0 {
+                        return 0;
+                    }
+                    return rn;
+                }
+                at = unsafe { bput(out, cap, 0, sig, sat) };
+                if at >= cap {
+                    return 0;
+                }
                 unsafe {
                     *out.add(at) = 0;
                 }
@@ -1402,6 +1744,35 @@ impl Lower {
     /* scratch buffer for nested ctype renders (arena, reused). On OOM it
      * yields the shared oom_buf — lowering is already condemned (ok=false),
      * so no output built from it can ship. */
+    /* Is a rendered C type a fixed array (`uint8_t [128]`, ends in
+     * `[N]`)? Arrays are not assignable in C — a let-init or `=` on one
+     * must memcpy, never `=` (TCC refuses `uint8_t a[128] = other;`
+     * with "'{' expected" — gcc silently accepts it, so the host prove
+     * alone never catches it). */
+    unsafe fn ctype_is_fixed_array(&self, ct: *const u8, len: usize) -> bool {
+        if len < 3 || ct.is_null() {
+            return false;
+        }
+        if unsafe { *ct.add(len - 1) } != b']' {
+            return false;
+        }
+        let mut i = 0usize;
+        while i < len {
+            let c = unsafe { *ct.add(i) };
+            if c == b'[' {
+                /* a `(` before the bracket is a fn-ptr / ptr-to-array
+                 * declarator (`uint8_t (*)[64]`, `size_t (*)(void)`) —
+                 * a pointer, not an array. */
+                return true;
+            }
+            if c == b'(' {
+                return false;
+            }
+            i += 1;
+        }
+        false
+    }
+
     unsafe fn arena_tmp(&mut self) -> *mut u8 {
         if self.pre_mode && self.pre_pool_at + 160 <= 640 {
             let p = self.pre_pool.as_mut_ptr().add(self.pre_pool_at);
@@ -1513,7 +1884,13 @@ impl Lower {
              * payload type decides (checked by the caller's sym table for
              * user types — here we accept any pointer-ish inner). */
             let inner_buf = self.arena_tmp();
+            /* a fn-ptr payload renders its row name instead of the long
+             * `RET (*)(..)` spelling — the hex Option name would double
+             * past every ctype buffer. The flag arms the fnptr branch. */
+            let saved_fnp = self.in_opt_payload;
+            self.in_opt_payload = true;
             let n = unsafe { self.ctype(inner, inner_buf, 128) };
+            self.in_opt_payload = saved_fnp;
             if n == 0 {
                 return 0;
             }
@@ -1539,7 +1916,24 @@ impl Lower {
                 }
             }
             if !is_ptr {
-                if n >= 48 {
+                /* alnum payloads take the short rsx_opt_R<raw> name (only
+                 * past the 48-byte hex gate — below it, every existing
+                 * card object spells the injective hex form); hex-named
+                 * payloads double, so their gate stays tight. */
+                let mut alnum = n >= 48;
+                {
+                    let mut q = 0usize;
+                    while alnum && q < n {
+                        let c = unsafe { *inner_buf.add(q) };
+                        if !(c.is_ascii_alphanumeric() || c == b'_') {
+                            alnum = false;
+                            break;
+                        }
+                        q += 1;
+                    }
+                }
+                let gate = if alnum { 110 } else { 48 };
+                if n >= gate {
                     unsafe {
                         self.err(b"unsupported: Option payload type too long\0".as_ptr(), unsafe { (*ty).line });
                     }
@@ -1574,6 +1968,68 @@ impl Lower {
                 *out.add(at) = 0;
             }
             return at;
+        }
+        /* Result<T, E> — the Ok/Err enum as one C struct:
+         * rsx_res_<T>_<E> = struct { T _v; E _e; bool _ok; }. Both
+         * payloads are always materialized (the unused one is
+         * zero-initialized garbage, never read — `_ok` gates every
+         * access, the same contract rsx_opt_._has carries). Unit T
+         * (`Result<(), E>`) still materializes `_v` as uint8_t: one
+         * struct shape per (T,E) pair keeps the typedef table flat. */
+        if unsafe { z_eq(fname, flen, b"Result\0".as_ptr()) } {
+            if nk < garg + 2 {
+                unsafe {
+                    self.err(b"bad Result type\0".as_ptr(), unsafe { (*ty).line });
+                }
+                return 0;
+            }
+            let okt = unsafe { *kids.add(garg) };
+            let ert = unsafe { *kids.add(garg + 1) };
+            let ob = self.arena_tmp();
+            let eb = self.arena_tmp();
+            let on = unsafe { self.ctype(okt, ob, 128) };
+            if on == 0 {
+                return 0;
+            }
+            let en = unsafe { self.ctype(ert, eb, 128) };
+            if en == 0 {
+                return 0;
+            }
+            /* unit Ok payload: () / void renders as no C type — use a
+             * 1-byte placeholder so the struct has a field */
+            let ok_is_unit = on == 0
+                || (on == 2 && unsafe { z_eq(ob, 2, b"()\0".as_ptr()) })
+                || (on == 4 && unsafe { z_eq(ob, 4, b"void\0".as_ptr()) });
+            let ok_v = if ok_is_unit {
+                b"uint8_t\0".as_ptr()
+            } else {
+                ob
+            };
+            let ok_l = if ok_is_unit { 7usize } else { on };
+            let row = unsafe { self.res_add(ok_v, ok_l, eb, en) };
+            if row >= RES_CAP {
+                unsafe {
+                    self.err(b"internal: too many Result payload pairs\0".as_ptr(), unsafe { (*ty).line });
+                }
+                return 0;
+            }
+            let tdn = self.arena_tmp();
+            let tdn_len = unsafe { Lower::res_typedef_name(ok_v, ok_l, eb, en, tdn, 192) };
+            if tdn_len == 0 {
+                unsafe {
+                    self.err(b"internal: Result typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                }
+                return 0;
+            }
+            at = unsafe { bput(out, cap, at, tdn, tdn_len) };
+            unsafe {
+                if at < cap {
+                    *out.add(at) = 0;
+                } else if cap > 0 {
+                    *out.add(cap - 1) = 0;
+                }
+            }
+            return if at >= cap { 0 } else { at };
         }
         /* UnsafeCell<T> / Cell<T>: a transparent wrapper — the inner type is
          * the C type (a `Mut<T>(UnsafeCell<T>)` static is exactly `T` in C;
@@ -1687,6 +2143,47 @@ impl Lower {
             }
             return if at >= cap { 0 } else { at };
         }
+        /* BTreeMap<K, V>: the ordered-map plane — intern the (K, V) pair,
+         * mint rsx_btm_<row> (the preamble emits the node + map structs
+         * and the get/insert/pairs ops once per row). */
+        if nk >= 3 && unsafe { z_eq(fname, flen, b"BTreeMap\0".as_ptr()) } {
+            let kty = unsafe { *kids.add(garg) };
+            let vty = unsafe { *kids.add(garg + 1) };
+            let kb = self.arena_tmp();
+            let kl = unsafe { self.ctype(kty, kb, 128) };
+            if kl == 0 {
+                return 0;
+            }
+            let vb = self.arena_tmp();
+            let vl = unsafe { self.ctype(vty, vb, 128) };
+            if vl == 0 {
+                return 0;
+            }
+            let row = unsafe { self.btms.intern(kb, kl, vb, vl) };
+            if row >= BTM_CAP {
+                unsafe {
+                    self.err(b"btree map type table overflow\0".as_ptr(), unsafe { (*ty).line });
+                }
+                return 0;
+            }
+            let tdn = self.arena_tmp();
+            let tdn_len = unsafe { BtmTab::name_for(row, tdn, 96) };
+            if tdn_len == 0 {
+                unsafe {
+                    self.err(b"internal: btree typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                }
+                return 0;
+            }
+            at = unsafe { bput(out, cap, at, tdn, tdn_len) };
+            unsafe {
+                if at < cap {
+                    *out.add(at) = 0;
+                } else if cap > 0 {
+                    *out.add(cap - 1) = 0;
+                }
+            }
+            return if at >= cap { 0 } else { at };
+        }
         /* Any other generic path (`Vec<T>`, `Box<T>`, `HashMap<K, V>`, …)
          * must refuse, not render its leaf: the old fall-through silently
          * took the last generic ARG as the type (`Vec<Export>` -> `Export`),
@@ -1778,6 +2275,18 @@ impl Lower {
                             unsafe { self.nt_add(unsafe { (*item).text }, unsafe { (*item).text_len }) };
                         }
                     }
+                    i += 1;
+                    continue;
+                }
+                /* One definition per name: a same-name struct later in
+                 * the unit (the exports face's opaque `_opaque` spelling
+                 * of a type the types face already declared) must not
+                 * alias the real struct's SymTab row — add() would zero
+                 * its field table. First definition wins, same rule the
+                 * emission passes enforce via tydone. */
+                if unsafe { (*self.syms).find(unsafe { (*item).text }, unsafe { (*item).text_len }) }
+                    < SYM_CAP
+                {
                     i += 1;
                     continue;
                 }
@@ -1884,6 +2393,21 @@ impl Lower {
                             *joined.add(at2) = 0;
                         }
                         unsafe { self.enums.add(joined, at2, val) };
+                        /* a payload variant (first kid a TYPE, not a
+                         * literal discriminant): register the payload's
+                         * C type — the tagged-union match/ctor planes
+                         * consult this row. */
+                        if vkn > 0 {
+                            let d0 = unsafe { *(*k).kids.add(0) };
+                            if unsafe { (*d0).kind } != pm_jit_rsx_ast_kind::LITERAL {
+                                let pb = self.arena_tmp();
+                                let pn = unsafe { self.ctype(d0, pb, 96) };
+                                if pn > 0 {
+                                    unsafe { self.enumpays.add(joined, at2, pb, pn) };
+                                    unsafe { self.enumtags.add(ename, elen) };
+                                }
+                            }
+                        }
                         next = val.wrapping_add(1);
                     }
                     j += 1;
@@ -2372,6 +2896,17 @@ impl Lower {
             }
             methods_start += 1;
         }
+        /* Self resolution during collection: the impl's own type —
+         * the FnTab's recorded return must be the resolved C type, not
+         * the literal `Self` spelling. */
+        {
+            let mut si = 0usize;
+            while si < self_ty_len && si < 64 {
+                self.self_ty[si] = unsafe { *self_ty.add(si) };
+                si += 1;
+            }
+            self.self_ty_len = si;
+        }
         j = methods_start;
         while j < nk {
             let k = unsafe { *kids.add(j) };
@@ -2410,6 +2945,7 @@ impl Lower {
             }
             j += 1;
         }
+        self.self_ty_len = 0;
     }
 
     /* Innermost tail node of a block (unwrapping BLOCK/STMT/EXPR_STMT). */
@@ -2940,6 +3476,15 @@ impl Lower {
                     let sname = unsafe { (*seg).text };
                     let slen = unsafe { (*seg).text_len };
                     if slen > 0 {
+                        /* `Self { .. }` — the enclosing impl's type */
+                        if unsafe { z_eq(sname, slen, b"Self\0".as_ptr()) }
+                            && self.self_ty_len > 0
+                        {
+                            let n3 = unsafe {
+                                zput(out, cap, 0, self.self_ty.as_ptr())
+                            };
+                            return if n3 >= cap { 0 } else { n3 };
+                        }
                         let n2 = unsafe { zput(out, cap, 0, sname) };
                         return if n2 >= cap { 0 } else { n2 };
                     }
@@ -2968,6 +3513,151 @@ impl Lower {
             let kids = unsafe { (*e).kids };
             if unsafe { (*e).n_kids } >= 1 {
                 let callee = unsafe { *kids.add(0) };
+                /* `Box::leak(s)` — the leaked 'static borrow of a string
+                 * value: the &str view (the arena-owned heap makes leak
+                 * the identity; emit_call renders the argument as-is). */
+                if unsafe { (*callee).kind } == pm_jit_rsx_ast_kind::PATH {
+                    let ck0 = unsafe { (*callee).kids };
+                    let cn0 = unsafe { (*callee).n_kids } as usize;
+                    if cn0 >= 2 && unsafe { (*e).n_kids } >= 2 {
+                        let leaf0 = unsafe { *ck0.add(cn0 - 1) };
+                        let lt0 = unsafe { (*leaf0).text };
+                        let ll0 = unsafe { (*leaf0).text_len };
+                        let wrap0 = unsafe { *ck0.add(cn0 - 2) };
+                        let wt0 = unsafe { (*wrap0).text };
+                        let wl0 = unsafe { (*wrap0).text_len };
+                        if unsafe { z_eq(lt0, ll0, b"leak\0".as_ptr()) }
+                            && unsafe { z_eq(wt0, wl0, b"Box\0".as_ptr()) }
+                        {
+                            let n0 = unsafe { zput(out, cap, 0, b"rsx_str_ref_t\0".as_ptr()) };
+                            return if n0 >= cap { 0 } else { n0 };
+                        }
+                    }
+                }
+                /* Enum payload ctor `E::V(x)`: the call's type is the
+                 * enum name (all callee segments before the variant). */
+                if unsafe { (*callee).kind } == pm_jit_rsx_ast_kind::PATH {
+                    let ck2 = unsafe { (*callee).kids };
+                    let cn2 = unsafe { (*callee).n_kids } as usize;
+                    if cn2 >= 2 {
+                        let mut full = self.arena_tmp();
+                        let mut at = 0usize;
+                        let mut ok_join = true;
+                        let mut ci = 0usize;
+                        while ci < cn2 {
+                            let seg = unsafe { *ck2.add(ci) };
+                            if unsafe { (*seg).kind } != pm_jit_rsx_ast_kind::PATH {
+                                ok_join = false;
+                                break;
+                            }
+                            if at > 0 {
+                                at = unsafe { bput(full, 128, at, b"_\0".as_ptr(), 1) };
+                            }
+                            at = unsafe { bput(full, 128, at, unsafe { (*seg).text }, unsafe { (*seg).text_len }) };
+                            ci += 1;
+                        }
+                        if ok_join {
+                            unsafe {
+                                *full.add(at) = 0;
+                            }
+                            let pvbuf = self.arena_tmp();
+                            let plen = unsafe { self.enumpays.lookup(full, at, pvbuf, 96) };
+                            if plen > 0 {
+                                let ename = self.arena_tmp();
+                                let mut eat = 0usize;
+                                eat = unsafe {
+                                    bput(ename, 96, eat, unsafe { (*(*ck2.add(0))).text }, unsafe { (*(*ck2.add(0))).text_len })
+                                };
+                                unsafe {
+                                    *ename.add(eat) = 0;
+                                }
+                                let w = unsafe { zput(out, cap, 0, ename) };
+                                return if w >= cap { 0 } else { w };
+                            }
+                        }
+                    }
+                    /* `alloc::boxed::Box::new(v)` — the box IS the pointee
+                     * pointer: types as `<arg> *` (the C heap is the arena
+                     * plane's malloc; emission builds the value). The
+                     * segment right before `new`/`from_raw`/`into_raw`
+                     * must be `Box` (any qualification depth). */
+                    if cn2 >= 2 {
+                        let last2 = unsafe { *ck2.add(cn2 - 1) };
+                        let l2t = unsafe { (*last2).text };
+                        let l2l = unsafe { (*last2).text_len };
+                        let prev = unsafe { *ck2.add(cn2 - 2) };
+                        let pt = unsafe { (*prev).text };
+                        let pl = unsafe { (*prev).text_len };
+                        if unsafe { z_eq(l2t, l2l, b"new\0".as_ptr()) }
+                            && unsafe { z_eq(pt, pl, b"Box\0".as_ptr()) }
+                            && unsafe { (*e).n_kids } >= 2
+                        {
+                            let argsn = unsafe { *(*e).kids.add(1) };
+                            let arg0 = unsafe { *(*argsn).kids.add(0) };
+                            let ab = self.arena_tmp();
+                            let an = unsafe { self.expr_ctype(arg0, ab, 128, locals) };
+                            if an > 0 && an + 2 < cap {
+                                let w = unsafe { zput(out, cap, 0, ab) };
+                                if w < cap - 1 {
+                                    unsafe { *out.add(w) = b' ' };
+                                    unsafe { *out.add(w + 1) = b'*' };
+                                    if w + 2 < cap {
+                                        unsafe { *out.add(w + 2) = 0 };
+                                    }
+                                    return w + 2;
+                                }
+                            }
+                            return 0;
+                        }
+                        /* `Box::from_raw(p)` / `Box::into_raw(b)` — the
+                         * pointer passes through unchanged: the argument's
+                         * type (a `T *` already). */
+                        if (unsafe { z_eq(l2t, l2l, b"from_raw\0".as_ptr()) }
+                            || unsafe { z_eq(l2t, l2l, b"into_raw\0".as_ptr()) })
+                            && unsafe { z_eq(pt, pl, b"Box\0".as_ptr()) }
+                            && unsafe { (*e).n_kids } >= 2
+                        {
+                            let argsn = unsafe { *(*e).kids.add(1) };
+                            let arg0 = unsafe { *(*argsn).kids.add(0) };
+                            return unsafe { self.expr_ctype(arg0, out, cap, locals) };
+                        }
+                    }
+                    /* `core::slice::from_raw_parts(p, n)` — the &[u8] view:
+                     * the rsx_arr row for a uint8_t element (the slice the
+                     * &str plane rides on; str vs [u8] is the same p/n
+                     * pair at this level). */
+                    if cn2 == 3 {
+                        let s0 = unsafe { *ck2.add(0) };
+                        let s1 = unsafe { *ck2.add(1) };
+                        let s2 = unsafe { *ck2.add(2) };
+                        if unsafe { z_eq(unsafe { (*s0).text }, unsafe { (*s0).text_len }, b"core\0".as_ptr()) }
+                            && unsafe { z_eq(unsafe { (*s1).text }, unsafe { (*s1).text_len }, b"slice\0".as_ptr()) }
+                            && unsafe { z_eq(unsafe { (*s2).text }, unsafe { (*s2).text_len }, b"from_raw_parts\0".as_ptr()) }
+                        {
+                            let row = unsafe { self.arrs.intern(b"uint8_t\0".as_ptr(), 7) };
+                            if row < ARR_CAP {
+                                let nb = self.arena_tmp();
+                                let nn = unsafe { ArrTab::name_for(row, nb, 96) };
+                                if nn > 0 {
+                                    let w = unsafe { zput(out, cap, 0, nb) };
+                                    return if w >= cap { 0 } else { w };
+                                }
+                            }
+                        }
+                        /* `core::str::from_utf8(bytes)` — Result<&str, _>;
+                         * `.ok()` turns it into the Option<&str> row. The
+                         * bytes are already UTF-8 by the callers' contract
+                         * (registry buffers), so the value is the view
+                         * itself; typing hands .ok() the str_ref payload. */
+                        if unsafe { z_eq(unsafe { (*s0).text }, unsafe { (*s0).text_len }, b"core\0".as_ptr()) }
+                            && unsafe { z_eq(unsafe { (*s1).text }, unsafe { (*s1).text_len }, b"str\0".as_ptr()) }
+                            && unsafe { z_eq(unsafe { (*s2).text }, unsafe { (*s2).text_len }, b"from_utf8\0".as_ptr()) }
+                        {
+                            let w = unsafe { zput(out, cap, 0, b"rsx_str_ref_t\0".as_ptr()) };
+                            return if w >= cap { 0 } else { w };
+                        }
+                    }
+                }
                 /* Call through ANY fn-pointer expression (not only a local
                  * bind): `(hook.f)(..)` types the callee expr — a fn-ptr
                  * spelling `ret (*)(..)` yields ret; an alias (a type
@@ -3048,6 +3738,178 @@ impl Lower {
                     }
                 }
                 if unsafe { (*callee).kind } == pm_jit_rsx_ast_kind::PATH {
+                    /* `Some(x)` — the Option row interned from x's own
+                     * type. Standalone typing (a let/if-value branch with
+                     * no ascription); the emission still needs the
+                     * expected type, which the let/if-value pass derives
+                     * from THIS row. */
+                    {
+                        let ck_s = unsafe { (*callee).kids };
+                        let cn_s = unsafe { (*callee).n_kids } as usize;
+                        if cn_s == 1 {
+                            let seg_s = unsafe { *ck_s.add(0) };
+                            if unsafe { (*seg_s).kind } == pm_jit_rsx_ast_kind::PATH
+                                && unsafe {
+                                    z_eq(unsafe { (*seg_s).text }, unsafe { (*seg_s).text_len }, b"Some\0".as_ptr())
+                                }
+                                && unsafe { (*e).n_kids } as usize >= 2
+                            {
+                                let args_s = unsafe { *kids.add(1) };
+                                if unsafe { (*args_s).n_kids } as usize == 1 {
+                                    let inner_s = unsafe { *(*args_s).kids.add(0) };
+                                    let ib = self.arena_tmp();
+                                    let il = unsafe { self.expr_ctype(inner_s, ib, 128, locals) };
+                                    if il > 0 && il < 96 {
+                                        let slot = unsafe { self.opt_add(ib, il) };
+                                        if slot < OPT_CAP {
+                                            let tdn = self.arena_tmp();
+                                            let tdn_len = unsafe {
+                                                Lower::opt_typedef_name(ib, il, tdn, 160)
+                                            };
+                                            if tdn_len > 0 && tdn_len < cap {
+                                                let at = unsafe { bput(out, cap, 0, tdn, tdn_len) };
+                                                unsafe {
+                                                    if at < cap {
+                                                        *out.add(at) = 0;
+                                                    } else if cap > 0 {
+                                                        *out.add(cap - 1) = 0;
+                                                    }
+                                                }
+                                                return if at >= cap { 0 } else { at };
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    /* `Ok(x)` / `Err(e)` — the Result row interned from the
+                     * payload type plus the expected Err type. Standalone
+                     * (no expected type): the Err payload defaults to the
+                     * unit-shaped 1-byte placeholder when the context (a
+                     * let ascription, a fn's return row) is unavailable —
+                     * but the common gen shape is an Err of String/&str,
+                     * which the ascribed let/return context supplies via
+                     * cur_ret. This branch is the NO-context fallback; the
+                     * ascribed path resolves through res_typedef_elem on
+                     * the expected row instead. */
+                    {
+                        let ck_s = unsafe { (*callee).kids };
+                        let cn_s = unsafe { (*callee).n_kids } as usize;
+                        if cn_s == 1 {
+                            let seg_s = unsafe { *ck_s.add(0) };
+                            if unsafe { (*seg_s).kind } == pm_jit_rsx_ast_kind::PATH
+                                && (unsafe {
+                                    z_eq(unsafe { (*seg_s).text }, unsafe { (*seg_s).text_len }, b"Ok\0".as_ptr())
+                                } || unsafe {
+                                    z_eq(unsafe { (*seg_s).text }, unsafe { (*seg_s).text_len }, b"Err\0".as_ptr())
+                                })
+                                && unsafe { (*e).n_kids } as usize >= 2
+                            {
+                                let is_ok = unsafe { z_eq(unsafe { (*seg_s).text }, unsafe { (*seg_s).text_len }, b"Ok\0".as_ptr()) };
+                                let args_s = unsafe { *kids.add(1) };
+                                let an_s = unsafe { (*args_s).n_kids } as usize;
+                                /* Err's payload may be `_` or an ident-less
+                                 * unit: Err(()) — the placeholder payload */
+                                let mut inner_s: *mut pm_jit_rsx_ast_t =
+                                    core::ptr::null_mut();
+                                if an_s == 1 {
+                                    inner_s = unsafe { *(*args_s).kids.add(0) };
+                                }
+                                /* expected Result row from cur_ret: use its
+                                 * (T, E) — the row this ctor must build */
+                                if self.cur_ret_len >= 8
+                                    && unsafe { z_eq(self.cur_ret.as_ptr(), 8, b"rsx_res_\0".as_ptr()) }
+                                {
+                                    let ob = self.arena_tmp();
+                                    let eb2 = self.arena_tmp();
+                                    let on = unsafe {
+                                        Lower::res_typedef_elem(
+                                            self.cur_ret.as_ptr(),
+                                            self.cur_ret_len,
+                                            ob,
+                                            96,
+                                            eb2,
+                                            96,
+                                        )
+                                    };
+                                    if on > 0 {
+                                        /* the Err payload's length:
+                                         * res_typedef_elem NUL-terminates
+                                         * both buffers — strlen is the
+                                         * C-type length */
+                                        let mut el2 = 0usize;
+                                        while el2 < 96 && unsafe { *eb2.add(el2) } != 0 {
+                                            el2 += 1;
+                                        }
+                                        let tdn = self.arena_tmp();
+                                        let tdn_len = unsafe {
+                                            Lower::res_typedef_name(
+                                                ob,
+                                                on,
+                                                eb2,
+                                                el2,
+                                                tdn,
+                                                192,
+                                            )
+                                        };
+                                        if tdn_len > 0 && tdn_len < cap {
+                                            let at = unsafe { bput(out, cap, 0, tdn, tdn_len) };
+                                            unsafe {
+                                                if at < cap {
+                                                    *out.add(at) = 0;
+                                                } else if cap > 0 {
+                                                    *out.add(cap - 1) = 0;
+                                                }
+                                            }
+                                            let _ = is_ok;
+                                            return if at >= cap { 0 } else { at };
+                                        }
+                                    }
+                                }
+                                /* no expected row: intern from the payload
+                                 * with a byte Err (Ok(x)) / byte Ok (Err(e))
+                                 * — the ascribed context re-interns the
+                                 * full row before emission. */
+                                if !inner_s.is_null() {
+                                    let ib = self.arena_tmp();
+                                    let il = unsafe { self.expr_ctype(inner_s, ib, 128, locals) };
+                                    if il > 0 && il < 96 {
+                                        let ta: *const u8 = if is_ok {
+                                            ib
+                                        } else {
+                                            b"uint8_t\0".as_ptr()
+                                        };
+                                        let la: usize = if is_ok { il } else { 7usize };
+                                        let tb: *const u8 = if is_ok {
+                                            b"uint8_t\0".as_ptr()
+                                        } else {
+                                            ib
+                                        };
+                                        let lb2: usize = if is_ok { 7usize } else { il };
+                                        let slot = unsafe { self.res_add(ta, la, tb, lb2) };
+                                        if slot < RES_CAP {
+                                            let tdn = self.arena_tmp();
+                                            let tdn_len = unsafe {
+                                                Lower::res_typedef_name(ta, la, tb, lb2, tdn, 192)
+                                            };
+                                            if tdn_len > 0 && tdn_len < cap {
+                                                let at = unsafe { bput(out, cap, 0, tdn, tdn_len) };
+                                                unsafe {
+                                                    if at < cap {
+                                                        *out.add(at) = 0;
+                                                    } else if cap > 0 {
+                                                        *out.add(cap - 1) = 0;
+                                                    }
+                                                }
+                                                return if at >= cap { 0 } else { at };
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     /* call through a local fn-pointer bind (`if let Some(h)
                      * = r.handler`): the callee names a local whose type is
                      * the fn-ptr spelling — either a raw render `ret (*)(..)`
@@ -4194,6 +5056,56 @@ impl Lower {
                  * separator, one rsx_str_t. Recognized as a whole chain
                  * (the intermediate Vec<&&str> materializes only inside
                  * the emission's stmt-expr, never as a C name). */
+                /* `Vec<String>.join(sep)` (by value or behind &): one
+                 * owned String — the parts concatenated with the sep
+                 * (a str literal arg). */
+                if mlen == 4
+                    && unsafe { z_eq(mname, mlen, b"join\0".as_ptr()) }
+                    && (unsafe { (*e).n_kids } as usize) >= 3
+                {
+                    let argk = unsafe { *kids.add(2) };
+                    if unsafe { (*argk).n_kids } as usize == 1 {
+                        let a0 = unsafe { *(*argk).kids.add(0) };
+                        let is_sep_lit = unsafe { (*a0).kind } == pm_jit_rsx_ast_kind::LITERAL
+                            && !unsafe { (*a0).text }.is_null()
+                            && unsafe { *(*a0).text } == b'"';
+                        if is_sep_lit {
+                            let rbuf = self.arena_tmp();
+                            let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                            /* strip a leading `const ` and a trailing ` *`
+                             * — both the row (by value) and the &Vec<T>
+                             * param spell the same rsx_vec_ row. */
+                            let mut b0 = 0usize;
+                            if rl > 6 && unsafe { z_eq(rbuf, 6, b"const \0".as_ptr()) } {
+                                b0 = 6;
+                            }
+                            let mut el = rl - b0;
+                            if el > 2 && unsafe { *rbuf.add(rl - 1) } == b'*' {
+                                el -= 2;
+                            }
+                            /* the row's element must be the owned String
+                             * (row names are numeric — read the element
+                             * off the interned row). */
+                            let mut is_vec_str = false;
+                            if el > 8 && unsafe { z_eq(rbuf.add(b0), 8, b"rsx_vec_\0".as_ptr()) } {
+                                let row = unsafe { self.vecs.find_by_name(rbuf.add(b0), el) };
+                                if row < VEC_CAP {
+                                    let elen2 = self.vecs.elem_lens[row];
+                                    is_vec_str = elen2 == 9
+                                        && unsafe {
+                                            z_eq(self.vecs.elems[row].as_ptr(), 9, b"rsx_str_t\0".as_ptr())
+                                        };
+                                }
+                            }
+                            if is_vec_str {
+                                self.str_ref_used = true;
+                                self.str_own_used = true;
+                                let n2 = unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
+                                return if n2 >= cap { 0 } else { n2 };
+                            }
+                        }
+                    }
+                }
                 if mlen == 4
                     && unsafe { z_eq(mname, mlen, b"join\0".as_ptr()) }
                     && (unsafe { (*e).n_kids } as usize) >= 3
@@ -4327,6 +5239,70 @@ impl Lower {
                                             }
                                         }
                                         return if at >= cap { 0 } else { at };
+                                    }
+                                }
+                            }
+                            /* find(&str) — the needle is a string literal
+                             * (or a MARK-style const &str local, typed by
+                             * the locals table): same Option<usize> row as
+                             * the char form, the scan is memcmp-based. */
+                            if unsafe { (*a0).kind } == pm_jit_rsx_ast_kind::LITERAL
+                                && unsafe { *(*a0).text } == b'"'
+                            {
+                                self.str_ref_used = true;
+                                let slot = unsafe { self.opt_add(b"size_t\0".as_ptr(), 6) };
+                                if slot < OPT_CAP {
+                                    let tdn = self.arena_tmp();
+                                    let tdn_len = unsafe {
+                                        Lower::opt_typedef_name(
+                                            b"size_t\0".as_ptr(),
+                                            6,
+                                            tdn,
+                                            160,
+                                        )
+                                    };
+                                    if tdn_len > 0 && tdn_len < cap {
+                                        let at = unsafe { bput(out, cap, 0, tdn, tdn_len) };
+                                        unsafe {
+                                            if at < cap {
+                                                *out.add(at) = 0;
+                                            } else if cap > 0 {
+                                                *out.add(cap - 1) = 0;
+                                            }
+                                        }
+                                        return if at >= cap { 0 } else { at };
+                                    }
+                                }
+                            }
+                            /* find(local): a MARK-style const &str bind —
+                             * the needle's own type is the view. */
+                            {
+                                let nb = self.arena_tmp();
+                                let nl = unsafe { self.expr_ctype(a0, nb, 128, locals) };
+                                if nl == 13 && unsafe { z_eq(nb, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                                    self.str_ref_used = true;
+                                    let slot = unsafe { self.opt_add(b"size_t\0".as_ptr(), 6) };
+                                    if slot < OPT_CAP {
+                                        let tdn = self.arena_tmp();
+                                        let tdn_len = unsafe {
+                                            Lower::opt_typedef_name(
+                                                b"size_t\0".as_ptr(),
+                                                6,
+                                                tdn,
+                                                160,
+                                            )
+                                        };
+                                        if tdn_len > 0 && tdn_len < cap {
+                                            let at = unsafe { bput(out, cap, 0, tdn, tdn_len) };
+                                            unsafe {
+                                                if at < cap {
+                                                    *out.add(at) = 0;
+                                                } else if cap > 0 {
+                                                    *out.add(cap - 1) = 0;
+                                                }
+                                            }
+                                            return if at >= cap { 0 } else { at };
+                                        }
                                     }
                                 }
                             }
@@ -4689,14 +5665,58 @@ impl Lower {
                  * Every String method whose C shape is knowable up front
                  * types without consulting the receiver (the plane is
                  * monomorphic — one rsx_str_t, no per-instance rows). */
-                /* `.as_str()` on an owned String: a borrow of its bytes —
-                 * the fat rsx_str_ref_t view. */
+                /* `.as_str()` — a borrow of the bytes: the fat
+                 * rsx_str_ref_t view. On an owned String receiver AND on
+                 * an &str receiver (identity — already a view; the method
+                 * exists on both in the source discipline, and match
+                 * scrutinees like `base.as_str()` must type). */
                 if mlen == 6 && unsafe { z_eq(mname, mlen, b"as_str\0".as_ptr()) } {
                     let rbuf = self.arena_tmp();
                     let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
-                    if rl == 9 && unsafe { z_eq(rbuf, 9, b"rsx_str_t\0".as_ptr()) } {
+                    if (rl == 9 && unsafe { z_eq(rbuf, 9, b"rsx_str_t\0".as_ptr()) })
+                        || (rl == 13 && unsafe { z_eq(rbuf, 13, b"rsx_str_ref_t\0".as_ptr()) })
+                    {
                         self.str_ref_used = true;
                         return unsafe { zput(out, cap, 0, b"rsx_str_ref_t\0".as_ptr()) };
+                    }
+                }
+                /* `.ok()` on `core::str::from_utf8(bytes)` — the
+                 * Result<&str, _> -> Option<&str> hop: the struct-shaped
+                 * Option row with the fat-ref payload. The bytes are the
+                 * view itself (UTF-8 by the callers' contract), so the
+                 * emission wraps them in `._has = 1`. */
+                if mlen == 3 && unsafe { z_eq(mname, mlen, b"ok\0".as_ptr()) } {
+                    let rbuf = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                    if rl == 13 && unsafe { z_eq(rbuf, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                        /* the receiver must be the from_utf8 call itself —
+                         * .ok() on a bare &str is not this plane */
+                        let recv = unsafe { *kids.add(0) };
+                        if unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::CALL {
+                            let rk = unsafe { (*recv).kids };
+                            let callee0 = unsafe { *rk.add(0) };
+                            if unsafe { (*callee0).kind } == pm_jit_rsx_ast_kind::PATH {
+                                let c0k = unsafe { (*callee0).kids };
+                                let c0n = unsafe { (*callee0).n_kids } as usize;
+                                if c0n == 3 {
+                                    let r2 = unsafe { *c0k.add(2) };
+                                    if unsafe { z_eq(unsafe { (*r2).text }, unsafe { (*r2).text_len }, b"from_utf8\0".as_ptr()) } {
+                                    self.str_ref_used = true;
+                                    let slot = unsafe { self.opt_add(b"rsx_str_ref_t\0".as_ptr(), 13) };
+                                    if slot < OPT_CAP {
+                                        let tdn = self.arena_tmp();
+                                        let tdn_len = unsafe {
+                                            Lower::opt_typedef_name(b"rsx_str_ref_t\0".as_ptr(), 13, tdn, 160)
+                                        };
+                                        if tdn_len > 0 {
+                                            let w = unsafe { zput(out, cap, 0, tdn) };
+                                            return if w >= cap { 0 } else { w };
+                                        }
+                                    }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 if mlen == 9 && unsafe { z_eq(mname, mlen, b"to_string\0".as_ptr()) } {
@@ -4708,6 +5728,12 @@ impl Lower {
                     return unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
                 }
                 if mlen == 10 && unsafe { z_eq(mname, mlen, b"into_owned\0".as_ptr()) } {
+                    self.str_own_used = true;
+                    return unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
+                }
+                /* `.into_boxed_str()` — Box str sugar: the owned String
+                 * (Box::leak then takes the p/n view of it). */
+                if mlen == 14 && unsafe { z_eq(mname, mlen, b"into_boxed_str\0".as_ptr()) } {
                     self.str_own_used = true;
                     return unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
                 }
@@ -5105,6 +6131,14 @@ impl Lower {
 
     /* Primitive Rust spelling -> C type; 0 when not a primitive. */
     unsafe fn prim_ctype(&mut self, s: *const u8, n: usize, out: *mut u8, cap: usize) -> usize {
+        /* `Self` — the enclosing impl's own type (empty outside an impl
+         * method: an honest refusal, never a stray C identifier) */
+        if unsafe { z_eq(s, n, b"Self\0".as_ptr()) } {
+            if self.self_ty_len == 0 {
+                return 0;
+            }
+            return unsafe { zput(out, cap, 0, self.self_ty.as_ptr()) };
+        }
         if unsafe { z_eq(s, n, b"c_void\0".as_ptr()) } {
             /* core::ffi::c_void (the leaf of the path) and a bare
              * `c_void` after `use core::ffi::c_void` — same void. */
@@ -5138,6 +6172,13 @@ impl Lower {
         if unsafe { z_eq(s, n, b"String\0".as_ptr()) } {
             self.str_own_used = true;
             return unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
+        }
+        /* `FILE *` — the impl-Write param fill (parse_type spells the
+         * sink as this leaf text). The space+star render is final: no
+         * caller appends a declarator. The unit then must see <stdio.h>. */
+        if n == 5 && unsafe { z_eq(s, n, b"FILE *\0".as_ptr()) } {
+            self.file_used = true;
+            return unsafe { zput(out, cap, 0, b"FILE *\0".as_ptr()) };
         }
         unsafe { self.suffix_ctype(s, n, out, cap) }
     }

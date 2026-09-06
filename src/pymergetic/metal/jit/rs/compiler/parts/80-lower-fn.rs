@@ -103,6 +103,7 @@ impl Lower {
             let before_a = self.arrs.n;
             let before_l = self.locks.n;
             let before_o = self.opt_n;
+            let before_t = self.tup_n;
             locals = LocalTab::new(self.arena);
             if locals.is_null() {
                 self.ok = false;
@@ -138,6 +139,12 @@ impl Lower {
             unsafe { self.body_intern_types(fnitem, pre_locals) };
             self.pre_mode = false;
             self.pre_pool_at = 0;
+            /* String typedefs land BEFORE the container rows: a tuple/vec/
+             * opt row with a String payload names rsx_str_t in its own
+             * typedef, so the string typedef must already exist (the
+             * pre-scan flush order is the C order). */
+            unsafe { self.str_emit_rest() };
+            unsafe { self.str_own_emit_rest() };
             if self.vecs.n != before {
                 unsafe { self.vec_emit_rest() };
             }
@@ -148,10 +155,12 @@ impl Lower {
                 unsafe { self.lock_emit_rest() };
             }
             if self.opt_n != before_o {
+                unsafe { self.fnp_emit_rest() };
                 unsafe { self.opt_emit_rest() };
             }
-            unsafe { self.str_emit_rest() };
-            unsafe { self.str_own_emit_rest() };
+            if self.tup_n != before_t {
+                unsafe { self.tup_emit_rest() };
+            }
             /* rewind the pre-scan's rows: the body emission below starts
              * from a clean table (its own param/self registrations are
              * authoritative). Stale spans are unreachable arena garbage,
@@ -476,6 +485,17 @@ impl Lower {
                 ri += 1;
             }
             self.recv_len = ri;
+            /* Self resolution: the impl's own type — ctype renders any
+             * `Self` spelling (return type, local ascriptions, struct
+             * literals) as this name while the method lowers. */
+            {
+                let mut si = 0usize;
+                while si < ty_len && si < 64 {
+                    self.self_ty[si] = unsafe { *ty_name.add(si) };
+                    si += 1;
+                }
+                self.self_ty_len = si;
+            }
             /* emit with the mangled name: reuse lower_fn logic via a temp
              * FN-node copy with overridden text. */
             let saved = self.arena_tmp();
@@ -488,6 +508,7 @@ impl Lower {
                 self.lower_fn(cpy, declare_only);
             }
             self.recv_len = 0;
+            self.self_ty_len = 0;
             let _ = saved;
             if !self.ok {
                 return;
@@ -747,6 +768,43 @@ impl Lower {
         }
     }
 
+    /* Emit the pending Option rows whose payload names an fn-ptr row
+     * (`rsx_opt_Rrsx_fnp_N`) — complete as soon as the fnp typedefs land,
+     * so a struct field naming one can flush them mid-pass-A without
+     * waiting for a naming struct. */
+    unsafe fn opt_emit_fnp(&mut self) {
+        let mut s = 0usize;
+        while s < self.opt_n {
+            if unsafe { self.opt_done[s] } {
+                s += 1;
+                continue;
+            }
+            let elen = self.opt_lens[s];
+            let elem = self.opt_elems[s].as_ptr();
+            if elen < 8 || !unsafe { z_eq(elem, 8, b"rsx_fnp_\0".as_ptr()) } {
+                s += 1;
+                continue;
+            }
+            let tdn = self.arena_tmp();
+            let tdn_len = unsafe { Lower::opt_typedef_name(elem, elen, tdn, 160) };
+            if tdn_len == 0 {
+                unsafe {
+                    self.err(b"internal: Option typedef name too long\0".as_ptr(), 0);
+                }
+                return;
+            }
+            self.out.puts(b"typedef struct { \0".as_ptr());
+            self.out.put(elem, elen);
+            self.out.puts(b" _v; bool _has; } \0".as_ptr());
+            self.out.put(tdn, tdn_len);
+            self.out.puts(b";\n\0".as_ptr());
+            unsafe {
+                self.opt_done[s] = true;
+            }
+            s += 1;
+        }
+    }
+
     /* Emit every still-pending Option typedef (primitive payloads — size_t
      * and friends — and anything whose naming type never matched). */
     unsafe fn opt_emit_rest(&mut self) {
@@ -775,6 +833,96 @@ impl Lower {
             s += 1;
         }
         self.out.putc(b'\n');
+    }
+
+    /* Emit every still-pending fn-pointer row typedef. Runs BEFORE the
+     * Option rows that name them (an rsx_opt_Rrsx_fnp_N payload needs the
+     * fn-ptr typedef complete first). */
+    unsafe fn fnp_emit_rest(&mut self) {
+        let mut s = 0usize;
+        while s < self.fnps.n {
+            if !self.fnps.done[s] {
+                let tdn = self.arena_tmp();
+                let tdn_len = unsafe { FnPtrTab::name_for(s, tdn, 96) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: fnptr typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                /* the stored sig is `RET (*)(params)` — the typedef needs
+                 * the name INSIDE the declarator parens: `typedef RET
+                 * (*name)(params)`. Splice at the first ` (*)`. A found
+                 * flag carries the sentinel — `usize::MAX` is not in the
+                 * subset (self-host: it would refuse at let inference). */
+                let sig = self.fnps.sigs[s].as_ptr();
+                let slen = self.fnps.sig_lens[s];
+                let mut star = 0usize;
+                let mut have = false;
+                let mut i = 0usize;
+                while i + 2 < slen {
+                    if unsafe { *sig.add(i) } == b' '
+                        && unsafe { *sig.add(i + 1) } == b'('
+                        && unsafe { *sig.add(i + 2) } == b'*'
+                        && i + 3 < slen
+                        && unsafe { *sig.add(i + 3) } == b')'
+                    {
+                        star = i;
+                        have = true;
+                        break;
+                    }
+                    i += 1;
+                }
+                if !have {
+                    unsafe {
+                        self.err(b"internal: fnptr sig has no declarator\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                self.out.puts(b"typedef \0".as_ptr());
+                self.out.put(sig, star);
+                self.out.puts(b" (*\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.put(sig.add(star + 3), slen - star - 3);
+                self.out.puts(b";\n\0".as_ptr());
+                self.fnps.done[s] = true;
+            }
+            s += 1;
+        }
+    }
+
+    /* Emit every still-pending Result typedef. Called after the type
+     * passes (a payload naming a unit struct needs that struct's
+     * typedef first) — the same window opt_emit_rest runs in. */
+    unsafe fn res_emit_rest(&mut self) {
+        let mut s = 0usize;
+        while s < self.res_n {
+            if !unsafe { self.res_done[s] } {
+                let okt = self.res_oks[s].as_ptr();
+                let okl = self.res_ok_lens[s];
+                let ert = self.res_errs[s].as_ptr();
+                let erl = self.res_err_lens[s];
+                let tdn = self.arena_tmp();
+                let tdn_len = unsafe { Lower::res_typedef_name(okt, okl, ert, erl, tdn, 192) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: Result typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                self.out.puts(b"typedef struct { \0".as_ptr());
+                self.out.put(okt, okl);
+                self.out.puts(b" _v; \0".as_ptr());
+                self.out.put(ert, erl);
+                self.out.puts(b" _e; bool _ok; } \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                unsafe {
+                    self.res_done[s] = true;
+                }
+            }
+            s += 1;
+        }
     }
 
     /* Vec container typedefs + ops — one block per interned element
@@ -849,6 +997,178 @@ impl Lower {
                 self.out.puts(b"}\n\0".as_ptr());
                 unsafe {
                     self.vecs.done[s] = true;
+                }
+            }
+            s += 1;
+        }
+        self.out.putc(b'\n');
+    }
+
+    /* BTreeMap rows: the node + map structs and the get/insert/entry/
+     * pairs ops, once per interned (K, V) pair. Key order: str-shaped
+     * keys compare (p, n) bytes; every other spelling compares raw
+     * bytes (integers/pointers — sizeof-based). */
+    unsafe fn btm_emit_rest(&mut self) {
+        if self.btms.n == 0 {
+            return;
+        }
+        self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
+        let mut s = 0usize;
+        while s < self.btms.n {
+            if !self.btms.done[s] {
+                let kb = self.btms.keys[s].as_ptr();
+                let kl = self.btms.key_lens[s];
+                let vb = self.btms.vals[s].as_ptr();
+                let vl = self.btms.val_lens[s];
+                let tdn = self.arena_tmp();
+                let tdn_len = unsafe { BtmTab::name_for(s, tdn, 96) };
+                let ndn = self.arena_tmp();
+                let ndn_len = unsafe { BtmTab::node_name_for(s, ndn, 96) };
+                if tdn_len == 0 || ndn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: btm typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                /* key compare: str-shaped keys are (p, n) memcmp; raw
+                 * memcmp otherwise (scalars, pointers). */
+                let k_is_str = (kl == 9 && unsafe { z_eq(kb, 9, b"rsx_str_t\0".as_ptr()) })
+                    || (kl == 13 && unsafe { z_eq(kb, 13, b"rsx_str_ref_t\0".as_ptr()) });
+                self.out.puts(b"typedef struct \0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b"_s { \0".as_ptr());
+                self.out.put(kb, kl);
+                self.out.puts(b" key; \0".as_ptr());
+                self.out.put(vb, vl);
+                self.out.puts(b" val; struct \0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b"_s *l; struct \0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b"_s *r; } \0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                self.out.puts(b"typedef struct { \0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b" *root; size_t n; } \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                /* key compare: <0 / 0 / >0 */
+                self.out.puts(b"static int \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_cmp(\0".as_ptr());
+                self.out.put(kb, kl);
+                self.out.puts(b" a, \0".as_ptr());
+                self.out.put(kb, kl);
+                self.out.puts(b" b) {\n\0".as_ptr());
+                if k_is_str {
+                    self.out.puts(b"    size_t m = a.n < b.n ? a.n : b.n; int c = m ? memcmp(a.p, b.p, m) : 0;\n\0".as_ptr());
+                    self.out.puts(b"    if (c) { return c; } return (int)(a.n > b.n) - (int)(a.n < b.n);\n\0".as_ptr());
+                } else {
+                    self.out.puts(b"    return memcmp(&a, &b, sizeof(\0".as_ptr());
+                    self.out.put(kb, kl);
+                    self.out.puts(b"));\n\0".as_ptr());
+                }
+                self.out.puts(b"}\n\0".as_ptr());
+                /* find: node* or NULL */
+                self.out.puts(b"static \0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b" *\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_find(\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" *m, \0".as_ptr());
+                self.out.put(kb, kl);
+                self.out.puts(b" k) {\n\0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b" *p = m->root;\n\0".as_ptr());
+                self.out.puts(b"    while (p) { int c = \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_cmp(k, p->key); if (c == 0) { return p; } p = c < 0 ? p->l : p->r; }\n\0".as_ptr());
+                self.out.puts(b"    return 0;\n\0".as_ptr());
+                self.out.puts(b"}\n\0".as_ptr());
+                /* get: V* or NULL */
+                self.out.puts(b"static \0".as_ptr());
+                self.out.put(vb, vl);
+                self.out.puts(b" *\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_get(\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" *m, \0".as_ptr());
+                self.out.put(kb, kl);
+                self.out.puts(b" k) {\n\0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b" *p = \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_find(m, k); return p ? &p->val : 0;\n\0".as_ptr());
+                self.out.puts(b"}\n\0".as_ptr());
+                /* insert: replace-on-existing, count only new nodes */
+                self.out.puts(b"static void \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_insert(\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" *m, \0".as_ptr());
+                self.out.put(kb, kl);
+                self.out.puts(b" k, \0".as_ptr());
+                self.out.put(vb, vl);
+                self.out.puts(b" v) {\n\0".as_ptr());
+                self.out.puts(b"    \0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b" **pp = &m->root;\n\0".as_ptr());
+                self.out.puts(b"    while (*pp) { int c = \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_cmp(k, (*pp)->key); if (c == 0) { (*pp)->val = v; return; } pp = c < 0 ? &(*pp)->l : &(*pp)->r; }\n\0".as_ptr());
+                self.out.puts(b"    *pp = (\0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b" *)calloc(1, sizeof(\0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b")); if (!*pp) { abort(); }\n\0".as_ptr());
+                self.out.puts(b"    (*pp)->key = k; (*pp)->val = v; m->n++;\n\0".as_ptr());
+                self.out.puts(b"}\n\0".as_ptr());
+                /* entry: the find-or-insert face returning V* — the
+                 * or_insert_with default is pre-evaluated by the lowering
+                 * (the in-tree ctors are pure; the divergence is
+                 * documented in the subset). */
+                self.out.puts(b"static \0".as_ptr());
+                self.out.put(vb, vl);
+                self.out.puts(b" *\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_entry(\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" *m, \0".as_ptr());
+                self.out.put(kb, kl);
+                self.out.puts(b" k, \0".as_ptr());
+                self.out.put(vb, vl);
+                self.out.puts(b" d) {\n\0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b" *p = \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_find(m, k);\n\0".as_ptr());
+                self.out.puts(b"    if (p) { return &p->val; }\n\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_insert(m, k, d); return \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_get(m, k);\n\0".as_ptr());
+                self.out.puts(b"}\n\0".as_ptr());
+                /* pairs: an in-order snapshot Vec row of the tuple
+                 * (K, V) — registered by the typing pass (btm_pairs_row);
+                 * iteration reuses the Vec-for machinery. */
+                self.out.puts(b"static \0".as_ptr());
+                self.out.put(vb, vl);
+                self.out.puts(b" *\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_entry_raw(\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" *m, \0".as_ptr());
+                self.out.put(kb, kl);
+                self.out.puts(b" k) {\n\0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b" *p = \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_find(m, k);\n\0".as_ptr());
+                self.out.puts(b"    return p ? &p->val : 0;\n\0".as_ptr());
+                self.out.puts(b"}\n\0".as_ptr());
+                unsafe {
+                    self.btms.done[s] = true;
                 }
             }
             s += 1;
@@ -1128,7 +1448,43 @@ impl Lower {
             let _ = unsafe { self.ctype(e, sc, 160) };
             return;
         }
-        if unsafe { (*e).kind } == pm_jit_rsx_ast_kind::METHOD_CALL && !locals.is_null() {
+        if unsafe { (*e).kind } == pm_jit_rsx_ast_kind::MATCH {
+            /* probe ONLY the scrutinee: arm patterns are TUPLE/ARRAY
+             * nodes too, but they are patterns — probing them renders
+             * garbage element "types" from binding names and interns
+             * bogus rows. Kids[0] is the scrutinee expr. */
+            let mk = unsafe { (*e).kids };
+            let mn = unsafe { (*e).n_kids } as usize;
+            if mn >= 1 && !mk.is_null() {
+                unsafe { self.body_intern_types(*mk.add(0), locals) };
+            }
+            /* arm bodies still get walked (a match arm can name a Vec in
+             * a later stmt) — but their pattern nodes are skipped by
+             * construction: each arm kid is (pat, [guard], body) and only
+             * the body subtree is recursed here. */
+            let mut mi = 1usize;
+            while mi < mn {
+                let arm = unsafe { *mk.add(mi) };
+                if arm.is_null() {
+                    mi += 1;
+                    continue;
+                }
+                let ak = unsafe { (*arm).kids };
+                let an = unsafe { (*arm).n_kids } as usize;
+                /* walk only the LAST kid (the arm body block); patterns
+                 * and guards are exprs the emission re-derives */
+                if an >= 1 {
+                    unsafe { self.body_intern_types(*ak.add(an - 1), locals) };
+                }
+                mi += 1;
+            }
+            return;
+        }
+        if (unsafe { (*e).kind } == pm_jit_rsx_ast_kind::METHOD_CALL
+                || unsafe { (*e).kind } == pm_jit_rsx_ast_kind::CALL
+                || unsafe { (*e).kind } == pm_jit_rsx_ast_kind::TUPLE
+                || unsafe { (*e).kind } == pm_jit_rsx_ast_kind::ARRAY)
+            && !locals.is_null() {
             /* Expression probe: the container/Option planes intern rows
              * from expr_ctype alone (x.rsplit(c).next() types the
              * Option-of-str-ref row). The probe's own refusals are
@@ -1375,10 +1731,23 @@ impl Lower {
                  * tydone, and a same-name struct later in the unit (the
                  * exports face's opaque `_opaque` spelling of a type the
                  * types face already declared) is skipped by the same
-                 * set — the real definition wins. */
+                 * set — the real definition wins. A TAGGED enum (payload
+                 * variants) only takes a forward tag here: its union
+                 * members name payload structs by value, which pass A
+                 * completes — the full tagged-union definition rides
+                 * pass A5, after structs. */
                 let en = unsafe { (*item).text };
                 let el = unsafe { (*item).text_len };
-                if !unsafe { self.tydone_find(en, el) } {
+                if unsafe { self.enumtags.has(en, el) } {
+                    /* tagged: forward tag only — pass A5 (after structs)
+                     * lowers the full body and marks tydone. Skip here
+                     * without marking, so A5 still owns it. */
+                    self.out.puts(b"typedef struct \0".as_ptr());
+                    self.out.put(en, el);
+                    self.out.putc(b' ');
+                    self.out.put(en, el);
+                    self.out.puts(b";\n\0".as_ptr());
+                } else if !unsafe { self.tydone_find(en, el) } {
                     unsafe { self.tydone_add(en, el) };
                     unsafe { self.lower_enum(item) };
                     unsafe { self.opt_emit_for(en, el) };
@@ -1506,9 +1875,19 @@ impl Lower {
         unsafe { self.str_emit_rest() };
         unsafe { self.str_own_emit_rest() };
         unsafe { self.tup_emit_rest() };
+        /* the FILE * plane: an impl-Write param / io::stdout() fill pulls
+         * in <stdio.h> (the space-star spelling is final, no typedef). */
+        if self.file_used {
+            self.out.puts(b"#include <stdio.h>\n\0".as_ptr());
+        }
         /* remaining Option typedefs — primitive payloads need no naming
-         * type; emit before the prototypes/fns that use them */
+         * type; emit before the prototypes/fns that use them. fn-ptr rows
+         * first: an Option payload can name rsx_fnp_<row>. */
+        unsafe { self.fnp_emit_rest() };
         unsafe { self.opt_emit_rest() };
+        /* Result typedefs — same window (payloads naming unit types are
+         * complete by now) */
+        unsafe { self.res_emit_rest() };
         /* Vec container typedefs + ops — before every fn whose signature
          * or body names one */
         unsafe { self.vec_emit_rest() };
@@ -1558,6 +1937,32 @@ impl Lower {
                     unsafe { self.lower_static(item, 2) };
                 } else {
                     unsafe { self.lower_static(item, 0) };
+                }
+            }
+            if !self.ok {
+                bad = true;
+                self.ok = true;
+            }
+            i += 1;
+        }
+        /* pass A5: tagged enums — after pass A completed every struct,
+         * the payload union members name complete types now. A0 emitted
+         * only the forward tag; the full tagged-union body lands here. */
+        i = 0;
+        while i < nk {
+            item = unsafe { *kids.add(i) };
+            if item.is_null() {
+                i += 1;
+                continue;
+            }
+            if unsafe { (*item).kind } == pm_jit_rsx_ast_kind::ENUM {
+                let en = unsafe { (*item).text };
+                let el = unsafe { (*item).text_len };
+                if unsafe { self.enumtags.has(en, el) }
+                    && !unsafe { self.tydone_find(en, el) }
+                {
+                    unsafe { self.tydone_add(en, el) };
+                    unsafe { self.lower_enum(item) };
                 }
             }
             if !self.ok {

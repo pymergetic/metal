@@ -65,9 +65,9 @@ int main(int argc, char **argv) {
     src[n] = 0;
     printf("source: %zu bytes\n", n);
 
-    backing = malloc(1u << 26);
+    backing = malloc(1u << 27);
     if (!backing) { printf("no backing\n"); return 2; }
-    arena = pm_util_mem_arena_create(backing, 1u << 26);
+    arena = pm_util_mem_arena_create(backing, 1u << 27);
     if (!arena) { printf("no arena\n"); return 2; }
 
     /* --link is a linking seat: the build card's ctx (exec-range table the
@@ -87,13 +87,14 @@ int main(int argc, char **argv) {
     printf("parse ok\n");
 
     if (do_dump) {
-        static char dbuf[1u << 21];
-        static char derr[256];
-        memset(dbuf, 0, sizeof(dbuf));
+        char *dbuf = NULL;
+        size_t dbuf_len = 0;
+        char derr[256];
         memset(derr, 0, sizeof(derr));
-        rc = pm_metal_jit_rsx_ast_dump(unit, dbuf, sizeof(dbuf), derr, sizeof(derr));
+        rc = pm_metal_jit_rsx_ast_dump_arena(arena, unit, &dbuf, &dbuf_len,
+            derr, sizeof(derr));
         if (rc < 0) { printf("DUMP REFUSED: %s\n", derr); return 1; }
-        fwrite(dbuf, 1, (size_t)rc, stdout);
+        fwrite(dbuf, 1u, dbuf_len, stdout);
         printf("\n");
     }
 
@@ -106,9 +107,12 @@ int main(int argc, char **argv) {
     else { perror(out_path); return 2; }
 
     if (do_object) {
-        /* 64MB: the in-arena TCC compile (jit.c's arena reallocator) needs
-         * the tccpp pools plus tables; small backings corrupt it. */
-        void *obacking = malloc(1u << 26);
+        /* 160MB: the in-arena TCC compile (jit.c's arena reallocator) needs
+         * the tccpp pools plus tables, and the LINKED compiler's own
+         * lex/parse/lower draw on the same backing — the Lower tables
+         * crossed the old 64MB ceiling once the Box/arr/ok planes landed.
+         * Small backings corrupt it. */
+        void *obacking = malloc(160u << 20);
         pm_util_mem_arena_t *oarena;
         uint8_t *obj = NULL;
         size_t obj_len = 0;
@@ -117,7 +121,7 @@ int main(int argc, char **argv) {
         const char *obj_path = argi + 2 < argc ? argv[argi + 2] : "/tmp/selfhost_out.o";
 
         if (!obacking) { printf("no object backing\n"); return 2; }
-        oarena = pm_util_mem_arena_create(obacking, 1u << 26);
+        oarena = pm_util_mem_arena_create(obacking, 160u << 20);
         if (!oarena) { printf("no object arena\n"); return 2; }
         memset(oerr, 0, sizeof(oerr));
         rc = pm_metal_jit_c_object_compile(oarena, c_out, c_out_len,
@@ -194,16 +198,24 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        /* run the LINKED compiler on the same source */
+        /* run the LINKED compiler on the same source — a FRESH arena:
+         * oarena is still holding the TCC compile's pools (the artifact
+         * tables reference its ranges), and the LINKED Lower draw is a
+         * full compiler run on top; sharing the backing starves it. */
+        void *lbacking = malloc(1u << 27);
+        pm_util_mem_arena_t *larena;
+        if (!lbacking) { printf("no linked backing\n"); return 2; }
+        larena = pm_util_mem_arena_create(lbacking, 1u << 27);
+        if (!larena) { printf("no linked arena\n"); return 2; }
         memset(&l_toks, 0, sizeof(l_toks));
         memset(err, 0, sizeof(err));
-        rc = l_lex(oarena, src, n, &l_toks, err, sizeof(err));
+        rc = l_lex(larena, src, n, &l_toks, err, sizeof(err));
         if (rc != 0) { printf("LINKED LEX REFUSED: %s\n", err); return 1; }
         memset(err, 0, sizeof(err));
-        rc = l_parse(oarena, &l_toks, &l_unit, err, sizeof(err));
+        rc = l_parse(larena, &l_toks, &l_unit, err, sizeof(err));
         if (rc != 0) { printf("LINKED PARSE REFUSED: %s\n", err); return 1; }
         memset(err, 0, sizeof(err));
-        rc = l_lower(oarena, l_unit, &l_c, &l_c_len, err, sizeof(err));
+        rc = l_lower(larena, l_unit, &l_c, &l_c_len, err, sizeof(err));
         if (rc != 0) { printf("LINKED LOWER REFUSED: %s\n", err); return 1; }
         printf("linked lower ok: %zu bytes of C\n", l_c_len);
 
@@ -213,6 +225,8 @@ int main(int argc, char **argv) {
         if (lo) { fwrite(l_c, 1, l_c_len, lo); fclose(lo); printf("written %s\n", out_path); }
         else { perror(out_path); return 2; }
         pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(larena);
+        free(lbacking);
         pm_util_mem_arena_destroy(oarena);
         free(obacking);
     }

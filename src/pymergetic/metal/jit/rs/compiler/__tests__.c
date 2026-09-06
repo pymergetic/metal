@@ -909,7 +909,8 @@ static int32_t test_ast_dump(void) {
     pm_util_mem_arena_t *arena;
     pm_jit_rsx_toklist_t toks;
     pm_jit_rsx_ast_t *unit = NULL;
-    char out[4096];
+    char *out = NULL;
+    size_t out_len = 0;
     char err[PM_METAL_JIT_RSX_ERR_MAX];
     static const char src[] =
         "extern \"C\" {\n"
@@ -928,8 +929,7 @@ static int32_t test_ast_dump(void) {
     if (pm_metal_jit_rsx_parse(arena, &toks, &unit, err, sizeof(err)) != 0) {
         pm_util_mem_arena_destroy(arena); free(backing); return 113;
     }
-    memset(out, 0, sizeof(out));
-    if (pm_metal_jit_rsx_ast_dump(unit, out, sizeof(out), err, sizeof(err)) < 0) {
+    if (pm_metal_jit_rsx_ast_dump_arena(arena, unit, &out, &out_len, err, sizeof(err)) < 0) {
         pm_util_mem_arena_destroy(arena); free(backing); return 114;
     }
     /* dump shows kind names, not empty output */
@@ -956,7 +956,10 @@ static int32_t test_self_host(void) {
     size_t c1_len = 0, c2_len = 0;
     char err[PM_METAL_JIT_RSX_ERR_MAX];
     int32_t rc;
-    /* both arenas stay alive until the compare — the C outputs live in them */
+    /* both arenas stay alive until the compare — the C outputs live in them.
+     * 128 MiB: the compiler's own source has grown past the old 64 MiB gate
+     * (Self resolution, FnPtrTab/BtmTab, write!/writeln!, BTreeMap planes)
+     * — the draw is ~70 MiB, the gate stays 2x the draw for headroom. */
     void *backing1 = NULL, *backing2 = NULL;
     pm_util_mem_arena_t *arena1 = NULL, *arena2 = NULL;
 
@@ -965,9 +968,9 @@ static int32_t test_self_host(void) {
     src_len = strlen(src);
     if (src_len < 100000) return 131; /* the real file is ~380 KB */
 
-    backing1 = malloc(1u << 26);
+    backing1 = malloc(1u << 27);
     if (!backing1) return 132;
-    arena1 = pm_util_mem_arena_create(backing1, 1u << 26);
+    arena1 = pm_util_mem_arena_create(backing1, 1u << 27);
     if (!arena1) { free(backing1); return 133; }
     memset(err, 0, sizeof(err));
     rc = pm_metal_jit_rsx_compile(arena1, src, src_len,
@@ -977,12 +980,12 @@ static int32_t test_self_host(void) {
         return 134;
     }
 
-    backing2 = malloc(1u << 26);
+    backing2 = malloc(1u << 27);
     if (!backing2) {
         pm_util_mem_arena_destroy(arena1); free(backing1);
         return 135;
     }
-    arena2 = pm_util_mem_arena_create(backing2, 1u << 26);
+    arena2 = pm_util_mem_arena_create(backing2, 1u << 27);
     if (!arena2) {
         pm_util_mem_arena_destroy(arena1); free(backing1);
         free(backing2);
@@ -1056,9 +1059,9 @@ static int32_t test_self_host_object(void) {
     src_len = strlen(src);
     if (src_len < 100000) return 151;
 
-    backing = malloc(1u << 26);
+    backing = malloc(1u << 27);
     if (!backing) return 152;
-    arena = pm_util_mem_arena_create(backing, 1u << 26);
+    arena = pm_util_mem_arena_create(backing, 1u << 27);
     if (!arena) { free(backing); return 153; }
     memset(err, 0, sizeof(err));
     rc = pm_metal_jit_rsx_compile(arena, src, src_len,
@@ -1152,10 +1155,12 @@ static int32_t test_self_host_link(void) {
     src_len = strlen(src);
     if (src_len < 100000) return 161;
 
-    /* boot compiler's output — the reference bytes */
-    backing = malloc(1u << 26);
+    /* boot compiler's output — the reference bytes (128 MiB: the source
+     * outgrew the old 64 MiB gate — Self resolution, FnPtrTab/BtmTab,
+     * write!/writeln!, BTreeMap planes; the draw is ~70 MiB). */
+    backing = malloc(1u << 27);
     if (!backing) return 162;
-    arena = pm_util_mem_arena_create(backing, 1u << 26);
+    arena = pm_util_mem_arena_create(backing, 1u << 27);
     if (!arena) { free(backing); return 163; }
     memset(err, 0, sizeof(err));
     rc = pm_metal_jit_rsx_compile(arena, src, src_len,
@@ -1165,10 +1170,11 @@ static int32_t test_self_host_link(void) {
         pm_util_mem_arena_destroy(arena); free(backing); return 165;
     }
 
-    /* object + link + run the linked compiler, all in a second arena */
-    obacking = malloc(1u << 26);
+    /* object + link + run the linked compiler, all in a second arena
+     * (128 MiB: the linked run redraws the same ~70 MiB compile). */
+    obacking = malloc(1u << 27);
     if (!obacking) { pm_util_mem_arena_destroy(arena); free(backing); return 166; }
-    oarena = pm_util_mem_arena_create(obacking, 1u << 26);
+    oarena = pm_util_mem_arena_create(obacking, 1u << 27);
     if (!oarena) {
         pm_util_mem_arena_destroy(arena); free(backing);
         free(obacking);

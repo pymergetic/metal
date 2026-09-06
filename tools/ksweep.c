@@ -332,9 +332,11 @@ int main(int argc, char **argv) {
     printf("ksweep done: %u/%u cards compiled in-kernel\n", n_ok,
         n_ok + n_refused);
     return 0;
+}
 #else
+int main(int argc, char **argv) {
     (void)argc; (void)argv;
     printf("ksweep: this seat has no in-kernel ELF link (no TCC / wasm32)\n");
     return 0;
-#endif
 }
+#endif

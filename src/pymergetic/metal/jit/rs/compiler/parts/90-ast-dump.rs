@@ -1,8 +1,43 @@
 /* ================= AST dump (inspect face) ================= */
 
-/* Renders into the caller's fixed buffer (the header's contract: bytes
- * written, or -1 when out_cap is short). Depth by two spaces per level. */
+/* Renders the tree through `Out` — the same arena-owned growable sink the
+ * emitted C rides (10-lexer.rs): a dump can never outgrow a fixed slab,
+ * the arena is the only ceiling. Depth by two spaces per level. */
 unsafe fn dump_node(
+    out: *mut Out,
+    n: *const pm_jit_rsx_ast_t,
+    depth: usize,
+) {
+    if n.is_null() {
+        return;
+    }
+    let mut i = 0usize;
+    while i < depth {
+        unsafe { (*out).puts(b"  \0".as_ptr()) };
+        i += 1;
+    }
+    unsafe { (*out).puts(unsafe { ast_kind_name(unsafe { (*n).kind }) }) };
+    if unsafe { (*n).text_len } > 0 {
+        unsafe { (*out).puts(b" \0".as_ptr()) };
+        unsafe { (*out).put(unsafe { (*n).text }, unsafe { (*n).text_len }) };
+    }
+    /* line tag on every node: refusal-to-AST correlation */
+    unsafe { (*out).puts(b" @\0".as_ptr()) };
+    unsafe { (*out).put_u32(unsafe { (*n).line }) };
+    unsafe { (*out).putc(b'\n') };
+    let kids = unsafe { (*n).kids };
+    let nk = unsafe { (*n).n_kids } as usize;
+    let mut j = 0usize;
+    while j < nk {
+        unsafe { dump_node(out, *kids.add(j), depth + 1) };
+        j += 1;
+    }
+}
+
+/* Fixed-buffer twin — the legacy C ABI's renderer (kept: the compiled
+ * tests call it; the Out sink above is the real one). Same shape, no
+ * growth: short buffers are the caller's to size. */
+unsafe fn dump_node_fixed(
     out: *mut u8,
     cap: usize,
     at_in: usize,
@@ -23,12 +58,15 @@ unsafe fn dump_node(
         at = unsafe { bput(out, cap, at, b" \0".as_ptr(), 1) };
         at = unsafe { bput(out, cap, at, unsafe { (*n).text }, unsafe { (*n).text_len }) };
     }
+    /* line tag on every node: refusal-to-AST correlation */
+    at = unsafe { bput(out, cap, at, b" @\0".as_ptr(), 2) };
+    at += unsafe { zput_num(out.add(at), cap - at, unsafe { (*n).line }) };
     at = unsafe { bput(out, cap, at, b"\n\0".as_ptr(), 1) };
     let kids = unsafe { (*n).kids };
     let nk = unsafe { (*n).n_kids } as usize;
     let mut j = 0usize;
     while j < nk {
-        at = unsafe { dump_node(out, cap, at, *kids.add(j), depth + 1) };
+        at = unsafe { dump_node_fixed(out, cap, at, *kids.add(j), depth + 1) };
         j += 1;
     }
     at

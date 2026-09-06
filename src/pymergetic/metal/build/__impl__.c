@@ -1636,7 +1636,7 @@ int32_t pm_metal_build_discover(pm_util_mem_arena_t *arena,
  * face may itself path-include (depth-capped, refuse deeper honestly).
  */
 
-#define PM_BUILD_SPLICE_MAX_DEPTH 2u
+#define PM_BUILD_SPLICE_MAX_DEPTH 8u
 
 static char *fqn_to_dir(pm_util_mem_arena_t *arena, const char *fqn) {
     size_t n = fqn != NULL ? strlen(fqn) : 0u;
@@ -1790,6 +1790,74 @@ static int rs_splice_card_note(rs_splice_cards_t *set, const char *name) {
  * may span lines when the import list is brace-formatted), 0 otherwise.
  * `use` must be a word on its own — `reuse`, `fused`, attribute tails
  * and string contents never match. */
+/* Line-start `pub mod NAME;` / `mod NAME;` — cargo resolves the module to
+ * a sibling `NAME.rs` (same dir as this file); the in-kernel splice does
+ * the same against the embedded card tree, so a multi-module card (util.gen's
+ * impl + sink.rs/cli.rs/discover.rs/host.rs) compiles as ONE rsx unit the
+ * way cargo compiles one crate. Guards: cfg(test)-guarded mod decls are
+ * skipped by the caller's test_guard pass; `mod NAME { .. }` (inline body)
+ * does not end in `;` and is left alone. Returns 1 with [name_io, name_len_io)
+ * the module ident and at_io just past the `;`. */
+static int rs_mod_decl_starts(const char *p, const char **name_io,
+    size_t *name_len_io, const char **at_io) {
+    const char *q = p;
+    const char *name;
+    size_t nlen;
+    /* optional `pub ` (plain or pub(crate)/pub(super)/pub(in ..) form —
+     * anything starting with `pub` followed by ws or `(`) */
+    if (q[0] == 'p' && q[1] == 'u' && q[2] == 'b'
+        && (q[3] == ' ' || q[3] == '\t' || q[3] == '(')) {
+        if (q[3] == '(') {
+            /* visibility scope: skip to the matching ')' */
+            int depth = 0;
+            q += 3;
+            while (*q != '\0') {
+                if (*q == '(') depth++;
+                else if (*q == ')') { depth--; if (depth == 0) { q++; break; } }
+                q++;
+            }
+        } else {
+            q += 3;
+        }
+        while (*q == ' ' || *q == '\t') {
+            q++;
+        }
+    }
+    if (!(q[0] == 'm' && q[1] == 'o' && q[2] == 'd')) {
+        return 0;
+    }
+    q += 3;
+    if (*q != ' ' && *q != '\t') {
+        return 0;
+    }
+    while (*q == ' ' || *q == '\t') {
+        q++;
+    }
+    /* ident: [A-Za-z_][A-Za-z0-9_]* (raw idents r#NAME strip the prefix) */
+    if (q[0] == 'r' && q[1] == '#') {
+        q += 2;
+    }
+    name = q;
+    if (!( (*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') || *q == '_' )) {
+        return 0;
+    }
+    while ( (*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z')
+        || (*q >= '0' && *q <= '9') || *q == '_') {
+        q++;
+    }
+    nlen = (size_t)(q - name);
+    while (*q == ' ' || *q == '\t') {
+        q++;
+    }
+    if (*q != ';') {
+        return 0;  /* `mod NAME { .. }` inline body — not a file module */
+    }
+    *name_io = name;
+    *name_len_io = nlen;
+    *at_io = q + 1;
+    return 1;
+}
+
 static int rs_use_crate_starts(const char *p, const char **at_io) {
     const char *q = p;
     if (!(q[0] == 'u' && q[1] == 's' && q[2] == 'e')) {
@@ -1825,6 +1893,38 @@ static int rs_use_crate_starts(const char *p, const char **at_io) {
     return 1;
 }
 
+/* Faces the splice inlined into a unit's root TU (mod-decl chases and
+ * #[path] includes of the SAME card). The unit compile skips exactly
+ * these as standalone TUs: they are already in the root's crate TU, and
+ * a second object would collide on every symbol at link. A companion
+ * the root does NOT reference (a cfg(test) bench) stays its own TU. */
+typedef struct rs_splice_inc {
+    const char *rel[32];
+    uint32_t n;
+} rs_splice_inc_t;
+
+static int32_t rs_splice_inc_add(pm_util_mem_arena_t *arena,
+    rs_splice_inc_t *inc, const char *rel) {
+    uint32_t i;
+    if (inc == NULL || rel == NULL) {
+        return PM_METAL_BUILD_OK;
+    }
+    for (i = 0; i < inc->n; i++) {
+        if (strcmp(inc->rel[i], rel) == 0) {
+            return PM_METAL_BUILD_OK;  /* already recorded */
+        }
+    }
+    if (inc->n >= 32u) {
+        return PM_METAL_BUILD_OK;  /* cap: deeper trees keep compiling solo */
+    }
+    inc->rel[inc->n] = dup_str(arena, rel, strlen(rel));
+    if (inc->rel[inc->n] == NULL) {
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    inc->n++;
+    return PM_METAL_BUILD_OK;
+}
+
 /* Append one embedded face's bytes to the splice buffer. */
 static int32_t rs_splice_face(pm_util_mem_arena_t *arena,
     const pm_metal_src_file_t *face, char **buf_io, size_t *len_io,
@@ -1849,9 +1949,34 @@ static int32_t rs_splice_face(pm_util_mem_arena_t *arena,
     return PM_METAL_BUILD_OK;
 }
 
+/* Find a card file by rel in EITHER table: `mod NAME;` names a muscle
+ * companion (sink.rs — FILES, the authored sources), while #[path] and
+ * use-crate faces are the generated ABI faces (FACES). The mod chase
+ * must see both; face_find alone misses every authored companion. */
+static const pm_metal_src_file_t *rs_card_file_find(
+    const char *fqn, const char *rel) {
+    const pm_metal_src_card_t *c = pm_metal_src_find(fqn);
+    uint32_t i;
+    if (c == NULL || rel == NULL) {
+        return NULL;
+    }
+    for (i = 0u; i < c->nfaces; i++) {
+        if (strcmp(c->faces[i].rel, rel) == 0) {
+            return &c->faces[i];
+        }
+    }
+    for (i = 0u; i < c->nfiles; i++) {
+        if (strcmp(c->files[i].rel, rel) == 0) {
+            return &c->files[i];
+        }
+    }
+    return NULL;
+}
+
 static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
     const char *src, uint32_t depth, rs_splice_cards_t *seen,
-    char **buf_io, size_t *len_io, char *errbuf, size_t errbuf_len);
+    char **buf_io, size_t *len_io, char *errbuf, size_t errbuf_len,
+    rs_splice_inc_t *inc);
 
 /* Chase one `use crate::<path>...` span: find the longest `<path>`
  * prefix that names an embedded card, then splice that card's
@@ -1859,7 +1984,8 @@ static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
  * card fqn `pymergetic.x.y` (raw `r#` identifiers stripped). */
 static int32_t rs_splice_use_crate(pm_util_mem_arena_t *arena,
     const char *span, rs_splice_cards_t *seen, uint32_t depth,
-    char **buf_io, size_t *len_io, char *errbuf, size_t errbuf_len) {
+    char **buf_io, size_t *len_io, char *errbuf, size_t errbuf_len,
+    rs_splice_inc_t *inc) {
     char fqn[96];
     size_t nsegs;
     const char *seg[16];
@@ -1973,7 +2099,7 @@ static int32_t rs_splice_use_crate(pm_util_mem_arena_t *arena,
                 return rc;
             }
             rc = rs_splice_into(arena, fqn, (const char *)tf->data, depth + 1u,
-                seen, buf_io, len_io, errbuf, errbuf_len);
+                seen, buf_io, len_io, errbuf, errbuf_len, inc);
             if (rc != PM_METAL_BUILD_OK) {
                 return rc;
             }
@@ -1989,7 +2115,7 @@ static int32_t rs_splice_use_crate(pm_util_mem_arena_t *arena,
                 return rc;
             }
             rc = rs_splice_into(arena, fqn, (const char *)ef->data, depth + 1u,
-                seen, buf_io, len_io, errbuf, errbuf_len);
+                seen, buf_io, len_io, errbuf, errbuf_len, inc);
             if (rc != PM_METAL_BUILD_OK) {
                 return rc;
             }
@@ -2000,12 +2126,17 @@ static int32_t rs_splice_use_crate(pm_util_mem_arena_t *arena,
 
 static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
     const char *src, uint32_t depth, rs_splice_cards_t *seen,
-    char **buf_io, size_t *len_io, char *errbuf, size_t errbuf_len) {
+    char **buf_io, size_t *len_io, char *errbuf, size_t errbuf_len,
+    rs_splice_inc_t *inc) {
     const char *p = src;
     char *dir = fqn_to_dir(arena, fqn);
     /* Sticky while consecutive attribute lines stack above one item; a
      * non-attribute line ends the run. */
     uint32_t test_guard = 0u;
+    /* A #[path] attr consumed on its own line: the immediately following
+     * line is the mod decl that names the spliced file — the decl itself
+     * must NOT be chased again (that would splice the file twice). */
+    uint32_t path_pending = 0u;
     if (dir == NULL) {
         err_set(errbuf, errbuf_len, "splice: arena exhausted", 0);
         return PM_METAL_BUILD_ERR_NOMEM;
@@ -2032,11 +2163,67 @@ static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
                         return PM_METAL_BUILD_ERR_NOMEM;
                     }
                     rc = rs_splice_use_crate(arena, span_dup, seen, depth,
-                        buf_io, len_io, errbuf, errbuf_len);
+                        buf_io, len_io, errbuf, errbuf_len, inc);
                     if (rc != PM_METAL_BUILD_OK) {
                         return rc;
                     }
                     p = after;
+                    continue;
+                }
+            }
+        }
+        /* line-start `pub mod NAME;` / `mod NAME;` — the sibling-file
+         * module include (cargo's own resolution). The referenced file
+         * rides in from the same card's embed; a name with no embedded
+         * file is left to rsx (its own module-refusal names the line).
+         * Depth-capped like every other chase. */
+        {
+            const char *ws2 = p;
+            while (*ws2 == ' ' || *ws2 == '\t') {
+                ws2++;
+            }
+            if (ws2 == p || p == src || p[-1] == '\n') {
+                const char *mname = NULL;
+                size_t mname_len = 0u;
+                const char *after2 = NULL;
+                if (path_pending == 0u && test_guard == 0u
+                    && rs_mod_decl_starts(ws2, &mname, &mname_len, &after2)) {
+                    char *mfile = (char *)pm_util_mem_alloc(
+                        arena, mname_len + 4u);
+                    const pm_metal_src_file_t *mface;
+                    if (mfile == NULL) {
+                        err_set(errbuf, errbuf_len, "splice: arena exhausted", 0);
+                        return PM_METAL_BUILD_ERR_NOMEM;
+                    }
+                    memcpy(mfile, mname, mname_len);
+                    memcpy(mfile + mname_len, ".rs", 3u);
+                    mfile[mname_len + 3u] = '\0';
+                    mface = rs_card_file_find(fqn, mfile);
+                    if (mface != NULL) {
+                        int32_t rc;
+                        if (depth + 1u > PM_BUILD_SPLICE_MAX_DEPTH) {
+                            err_set(errbuf, errbuf_len,
+                                "splice: mod include nesting too deep", 0);
+                            return PM_METAL_BUILD_ERR_PARSE;
+                        }
+                        rc = rs_splice_face(arena, mface, buf_io, len_io,
+                            errbuf, errbuf_len);
+                        if (rc != PM_METAL_BUILD_OK) {
+                            return rc;
+                        }
+                        rc = rs_splice_inc_add(arena, inc, mfile);
+                        if (rc != PM_METAL_BUILD_OK) {
+                            return rc;
+                        }
+                        rc = rs_splice_into(arena, fqn, (const char *)mface->data,
+                            depth + 1u, seen, buf_io, len_io, errbuf, errbuf_len,
+                            inc);
+                        if (rc != PM_METAL_BUILD_OK) {
+                            return rc;
+                        }
+                    }
+                    test_guard = 0u;
+                    p = after2;
                     continue;
                 }
             }
@@ -2054,6 +2241,7 @@ static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
         is_attr = ls[0] == '#' && ls[1] == '[';
         if (!is_attr) {
             test_guard = 0u;
+            path_pending = 0u;
         } else if (rs_attr_is_test(ls, (size_t)(le - ls))) {
             test_guard = 1u;
         }
@@ -2168,12 +2356,20 @@ static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
                         {
                             int32_t rc = rs_splice_into(arena, tcard,
                                 (const char *)face->data, depth + 1u, seen,
-                                buf_io, len_io, errbuf, errbuf_len);
+                                buf_io, len_io, errbuf, errbuf_len, inc);
                             if (rc != PM_METAL_BUILD_OK) {
                                 return rc;
                             }
                         }
-                        p = e + 1;
+                        path_pending = 1u;
+                        /* consume the rest of the attr line (p = e + 1
+                         * would leave the newline as its own iteration,
+                         * whose non-attr scan resets path_pending before
+                         * the mod decl line is ever seen). */
+                        p = le;
+                        if (*p == '\n') {
+                            p++;
+                        }
                         continue;
                     }
                 }
@@ -2194,7 +2390,8 @@ static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
  * honest); the appended faces shift beyond the file end, which only
  * affects diagnostics inside the face itself. */
 static const char *rs_splice(pm_util_mem_arena_t *arena, const char *fqn,
-    const char *src, char *errbuf, size_t errbuf_len) {
+    const char *src, char *errbuf, size_t errbuf_len,
+    rs_splice_inc_t *inc) {
     size_t len = strlen(src);
     char *buf = (char *)dup_str(arena, src, len);
     rs_splice_cards_t seen;
@@ -2204,7 +2401,7 @@ static const char *rs_splice(pm_util_mem_arena_t *arena, const char *fqn,
     }
     memset(&seen, 0, sizeof(seen));
     if (rs_splice_into(arena, fqn, buf, 0u, &seen, &buf, &len,
-            errbuf, errbuf_len) != PM_METAL_BUILD_OK) {
+            errbuf, errbuf_len, inc) != PM_METAL_BUILD_OK) {
         return NULL;
     }
 #if !defined(PM_METAL_FIRMWARE)
@@ -2244,7 +2441,8 @@ static int32_t unit_source_compile(pm_util_mem_arena_t *arena,
         if (strcmp(dot, ".rs") == 0) {
             /* `#[path]`-included faces ride in: the rsx compile is
              * standalone, cross-card ABI shapes arrive by splice. */
-            const char *spliced = rs_splice(arena, fqn, src, errbuf, errbuf_len);
+            const char *spliced = rs_splice(arena, fqn, src, errbuf, errbuf_len,
+                NULL);
             if (spliced == NULL) {
                 return PM_METAL_BUILD_ERR_COMPILE;
             }
@@ -2471,6 +2669,37 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
                 all_defines[unit->n_defines + i] = extra_defines[i];
             }
         }
+        /* impl = rs with a multi-module crate: the root TU's splice
+         * inlines every companion the crate root's mod decls name
+         * (cargo's own crate semantics — one TU). Those companions
+         * must NOT also compile standalone: the symbols would collide
+         * at link. Compute the root's inline set once, then skip
+         * exactly those sources. A companion the root does not name
+         * (cfg(test) benches, tests) keeps its own TU. */
+        rs_splice_inc_t inc;
+        const pm_metal_src_card_t *root_card = NULL;
+        const char *root_src = NULL;
+        memset(&inc, 0, sizeof(inc));
+        if (strcmp(unit->impl, "rs") == 0) {
+            root_card = pm_metal_src_find(unit->fqn);
+            if (root_card != NULL) {
+                uint32_t f;
+                for (f = 0; f < root_card->nfiles; f++) {
+                    if (strcmp(root_card->files[f].rel, "__impl__.rs") == 0) {
+                        root_src = (const char *)root_card->files[f].data;
+                        break;
+                    }
+                }
+            }
+            if (root_src != NULL) {
+                char serr[PM_METAL_BUILD_ERR_MAX];
+                if (rs_splice(arena, unit->fqn, root_src, serr, sizeof(serr),
+                        &inc) == NULL) {
+                    /* the root's own compile below reports this honestly */
+                    memset(&inc, 0, sizeof(inc));
+                }
+            }
+        }
         for (obj_i = 0; obj_i < unit->n_sources; obj_i++) {
             const pm_metal_src_card_t *c = pm_metal_src_find(unit->fqn);
             const char *src = NULL;
@@ -2491,6 +2720,21 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
             dot = strrchr(unit->sources[obj_i], '.');
             if (dot != NULL && strcmp(dot, ".h") == 0) {
                 continue;  /* headers ride the include path, never a TU */
+            }
+            if (dot != NULL && strcmp(dot, ".rs") == 0 && inc.n > 0u) {
+                /* a companion the root TU already inlined rides the
+                 * root's object; skip its standalone compile */
+                uint32_t k;
+                int inlined = 0;
+                for (k = 0; k < inc.n; k++) {
+                    if (strcmp(inc.rel[k], unit->sources[obj_i]) == 0) {
+                        inlined = 1;
+                        break;
+                    }
+                }
+                if (inlined) {
+                    continue;
+                }
             }
             if (unit_source_compile(arena, unit->fqn, unit->sources[obj_i], src,
                 all_includes, n_all_includes, all_defines, n_all_defines,

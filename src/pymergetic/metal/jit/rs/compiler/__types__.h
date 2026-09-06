@@ -184,6 +184,14 @@ int32_t pm_metal_jit_rsx_parse(pm_util_mem_arena_t *arena,
 int32_t pm_metal_jit_rsx_ast_dump(const pm_jit_rsx_ast_t *ast,
     char *out, size_t out_cap, char *errbuf, size_t errbuf_len);
 
+/* Arena-owned dump: the tree renders through the same growable arena sink
+ * the emitted C rides; the out/out_len pair names an arena-owned
+ * NUL-terminated buffer. No fixed slab to outgrow — the arena's refusal
+ * is the only failure mode (loud, not a "buffer too small" treadmill). */
+int32_t pm_metal_jit_rsx_ast_dump_arena(pm_util_mem_arena_t *arena,
+    const pm_jit_rsx_ast_t *ast,
+    char **out, size_t *out_len, char *errbuf, size_t errbuf_len);
+
 /* ---- lowering (AST -> C) ---- */
 
 /* Lower an AST to C. Output is NUL-terminated, arena-owned via *c_out.

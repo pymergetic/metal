@@ -95,6 +95,8 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_parse(
 
 /// Render an AST as indented text into the caller's buffer.
 /// Returns bytes written, or -1 when out_cap is too short.
+/// Fixed-buffer legacy face — the arena dump below is the real one;
+/// kept for the C ABI the tests already call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pm_metal_jit_rsx_ast_dump(
     ast: *const pm_jit_rsx_ast_t,
@@ -109,7 +111,7 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_ast_dump(
         }
         return -1;
     }
-    let at = unsafe { dump_node(out, out_cap, 0, ast, 0) };
+    let at = unsafe { dump_node_fixed(out, out_cap, 0, ast, 0) };
     if at + 1 >= out_cap {
         unsafe {
             err_set(errbuf, errbuf_len, b"dump buffer too small\0".as_ptr(), 0);
@@ -120,6 +122,47 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_ast_dump(
         *out.add(at) = 0;
     }
     at as i32
+}
+
+/// Arena-owned dump: the tree renders through `Out` (the same growable
+/// sink the emitted C rides), `*out`/`*out_len` name an arena-owned
+/// NUL-terminated buffer. "Dump buffer too small" is structurally gone —
+/// the arena is the only ceiling and its refusal is a loud diagnostic.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pm_metal_jit_rsx_ast_dump_arena(
+    arena: *mut pm_util_mem_arena_t,
+    ast: *const pm_jit_rsx_ast_t,
+    out: *mut *mut u8,
+    out_len: *mut usize,
+    errbuf: *mut u8,
+    errbuf_len: usize,
+) -> i32 {
+    if out.is_null() || out_len.is_null() {
+        unsafe {
+            err_set(errbuf, errbuf_len, b"no dump out slot\0".as_ptr(), 0);
+        }
+        return -1;
+    }
+    if arena.is_null() {
+        unsafe {
+            err_set(errbuf, errbuf_len, b"no arena for dump\0".as_ptr(), 0);
+        }
+        return -1;
+    }
+    let mut sink = unsafe { Out::new(arena) };
+    unsafe { dump_node(&mut sink, ast, 0) };
+    if !sink.ok {
+        unsafe {
+            err_set(errbuf, errbuf_len, b"arena exhausted while dumping\0".as_ptr(), 0);
+        }
+        return -1;
+    }
+    unsafe { sink.putc(0) };
+    unsafe {
+        *out = sink.p;
+        *out_len = sink.len - 1;
+    }
+    (*out_len) as i32
 }
 
 /// Lower a parsed AST to C text. Returns 0 and fills `*c_out`/`*c_out_len`

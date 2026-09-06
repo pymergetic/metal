@@ -28,6 +28,10 @@ const ST_CAP: usize = 64;
  * payload table (register idempotent, emit once in the preamble). */
 const TUP_CAP: usize = 24;
 const TUP_MAXF: usize = 4;
+/* Result payload-pair cap: distinct (T, E) spellings per unit. Results
+ * render as named structs rsx_res_<T>_<E>; the table mirrors the Option
+ * payload table (register idempotent, emit once per unit). */
+const RES_CAP: usize = 24;
 /* Emitted-type set cap (dependency-ordered struct pass). One entry per
  * struct/union/alias emitted this unit — 96 covers a card's types plus
  * the appended face's. */
@@ -546,6 +550,147 @@ impl EnumTab {
 }
 
 
+/* Tagged enums: names of payload-bearing (tagged-union) enums. Every
+ * variant test on such a name compares `._tag`, even fieldless variants
+ * (the C value is a struct, never a bare int). */
+struct EnumTagTab {
+    names: [[u8; 64]; ENUM_CAP],
+    name_lens: [usize; ENUM_CAP],
+    n: usize,
+}
+
+impl EnumTagTab {
+    unsafe fn new() -> EnumTagTab {
+        EnumTagTab {
+            names: [[0; 64]; ENUM_CAP],
+            name_lens: [0; ENUM_CAP],
+            n: 0,
+        }
+    }
+
+    unsafe fn add(&mut self, name: *const u8, nlen: usize) {
+        if self.n >= ENUM_CAP || nlen > 64 {
+            return;
+        }
+        let mut i = 0usize;
+        while i < nlen {
+            self.names[self.n][i] = unsafe { *name.add(i) };
+            i += 1;
+        }
+        self.name_lens[self.n] = nlen;
+        self.n += 1;
+    }
+
+    unsafe fn has(&self, s: *const u8, n: usize) -> bool {
+        if n == 0 || s.is_null() {
+            return false;
+        }
+        let mut i = 0usize;
+        while i < self.n {
+            if self.name_lens[i] == n {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < n {
+                    if self.names[i][j] != unsafe { *s.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    return true;
+                }
+            }
+            i += 1;
+        }
+        false
+    }
+}
+
+/* Data-carrying enum payloads: one row per `Enum_Variant` that carries a
+ * single payload — the variant's joined name plus its payload's C type.
+ * The match/ctor planes consult this to emit the tagged-union arm
+ * (fieldless variants have no row; their tag test is the enum table's). */
+struct EnumPayTab {
+    names: [[u8; 64]; ENUM_CAP],
+    name_lens: [usize; ENUM_CAP],
+    pays: [[u8; 96]; ENUM_CAP],
+    pay_lens: [usize; ENUM_CAP],
+    n: usize,
+}
+
+impl EnumPayTab {
+    unsafe fn new() -> EnumPayTab {
+        EnumPayTab {
+            names: [[0; 64]; ENUM_CAP],
+            name_lens: [0; ENUM_CAP],
+            pays: [[0; 96]; ENUM_CAP],
+            pay_lens: [0; ENUM_CAP],
+            n: 0,
+        }
+    }
+
+    unsafe fn add(&mut self, name: *const u8, nlen: usize, pay: *const u8, plen: usize) {
+        if self.n >= ENUM_CAP || nlen > 64 || plen >= 96 {
+            return;
+        }
+        let mut i = 0usize;
+        while i < nlen {
+            self.names[self.n][i] = unsafe { *name.add(i) };
+            i += 1;
+        }
+        let mut p = 0usize;
+        while p < plen {
+            self.pays[self.n][p] = unsafe { *pay.add(p) };
+            p += 1;
+        }
+        self.name_lens[self.n] = nlen;
+        self.pay_lens[self.n] = plen;
+        self.n += 1;
+    }
+
+    /* the payload's C type for a joined `Enum_Variant` name; 0 = no row */
+    unsafe fn lookup(&self, s: *const u8, n: usize, out: *mut u8, cap: usize) -> usize {
+        if n == 0 || s.is_null() || cap == 0 {
+            return 0;
+        }
+        let mut i = 0usize;
+        while i < self.n {
+            if self.name_lens[i] == n {
+                let mut j = 0usize;
+                let mut eq = true;
+                while j < n {
+                    if self.names[i][j] != unsafe { *s.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    let pl = self.pay_lens[i];
+                    if pl >= cap {
+                        return 0;
+                    }
+                    let mut w = 0usize;
+                    while w < pl {
+                        unsafe {
+                            *out.add(w) = self.pays[i][w];
+                        }
+                        w += 1;
+                    }
+                    unsafe {
+                        *out.add(pl) = 0;
+                    }
+                    return pl;
+                }
+            }
+            i += 1;
+        }
+        0
+    }
+}
+
+
 /* A trait record: the object name plus its methods' vtable slots. The
  * fn-ptr signature of each method is rendered ONCE at collect (the sig
  * AST is discarded after the collect pass) into a fixed inline string:
@@ -708,8 +853,99 @@ impl TraitTab {
  * tuple tables. Vec<T> renders as
  *   typedef struct { T *p; size_t n, cap; } rsx_vec_<elem>;
  * with push/len/is_empty/free static ops in the preamble. */
-const VEC_CAP: usize = 16;
-const CT_SIG: usize = 64;
+const VEC_CAP: usize = 96;
+const CT_SIG: usize = 160;
+
+/* Fn-pointer plane: full `RET (*)(params)` spellings are 50-70 bytes with
+ * spaces and parens — as an Option payload the hex name doubles past the
+ * ctype buffers. Intern each distinct signature once:
+ *   typedef RET (*)(params) rsx_fnp_<row>;
+ * The short alnum row name then rides the Option's raw (R) form. */
+const FNP_CAP: usize = 24;
+const FNP_SIG: usize = 192;
+
+struct FnPtrTab {
+    sigs: [[u8; FNP_SIG]; FNP_CAP],
+    sig_lens: [usize; FNP_CAP],
+    n: usize,
+    done: [bool; FNP_CAP],
+}
+
+impl FnPtrTab {
+    unsafe fn new() -> FnPtrTab {
+        FnPtrTab {
+            sigs: [[0; FNP_SIG]; FNP_CAP],
+            sig_lens: [0; FNP_CAP],
+            n: 0,
+            done: [false; FNP_CAP],
+        }
+    }
+
+    /* rsx_fnp_<row> — numbered like the Vec rows (deterministic under the
+     * same collection order contract). */
+    unsafe fn name_for(row: usize, out: *mut u8, cap: usize) -> usize {
+        let at = unsafe { bput(out, cap, 0, b"rsx_fnp_\0".as_ptr(), 8) };
+        if at != 8 || cap <= 10 {
+            return 0;
+        }
+        if row >= FNP_CAP {
+            return 0;
+        }
+        let d0 = b'0' + (row % 10) as u8;
+        let d1 = b'0' + (row / 10) as u8;
+        let at2 = if row >= 10 {
+            let digs: [u8; 2] = [d1, d0];
+            unsafe { bput(out, cap, at, digs.as_ptr(), 2) }
+        } else {
+            let digs: [u8; 1] = [d0];
+            unsafe { bput(out, cap, at, digs.as_ptr(), 1) }
+        };
+        if at2 >= cap {
+            return 0;
+        }
+        unsafe {
+            *out.add(at2) = 0;
+        }
+        at2
+    }
+
+    /* find-or-create; FNP_CAP = full (caller refuses). */
+    unsafe fn intern(&mut self, sig: *const u8, sig_len: usize) -> usize {
+        if sig_len >= FNP_SIG {
+            return FNP_CAP;
+        }
+        let mut s = 0usize;
+        while s < self.n {
+            if self.sig_lens[s] == sig_len {
+                let mut same = true;
+                let mut i = 0usize;
+                while i < sig_len {
+                    if self.sigs[s][i] != unsafe { *sig.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        if self.n >= FNP_CAP {
+            return FNP_CAP;
+        }
+        let slot = self.n;
+        let mut i = 0usize;
+        while i < sig_len {
+            self.sigs[slot][i] = unsafe { *sig.add(i) };
+            i += 1;
+        }
+        self.sig_lens[slot] = sig_len;
+        self.n += 1;
+        slot
+    }
+}
 
 struct VecTab {
     /* canonical element C-type text (the same bytes the name mangles) */
@@ -1104,6 +1340,150 @@ impl LockTab {
         let row = (ch - b'0') as usize;
         if row >= self.n {
             return LOCK_CAP;
+        }
+        row
+    }
+}
+
+/* BTreeMap plane: (K, V) C-type pairs intern into rows rendering as
+ *   typedef struct NODE { K key; V val; struct NODE *l, *r; } rsx_btmn_<row>;
+ *   typedef struct { rsx_btmn_<row> *root; size_t n; } rsx_btm_<row>;
+ * A sorted-insert BST: get/insert walk by key order, the pairs snapshot
+ * walks in-order (BTreeMap's ordered iteration). The ops are unit-static
+ * C emitted once per row, same contract as the Vec rows. */
+const BTM_CAP: usize = 8;
+const BTM_SIG: usize = 64;
+
+struct BtmTab {
+    keys: [[u8; BTM_SIG]; BTM_CAP],
+    key_lens: [usize; BTM_CAP],
+    vals: [[u8; BTM_SIG]; BTM_CAP],
+    val_lens: [usize; BTM_CAP],
+    n: usize,
+    done: [bool; BTM_CAP],
+}
+
+impl BtmTab {
+    unsafe fn new() -> BtmTab {
+        BtmTab {
+            keys: [[0; BTM_SIG]; BTM_CAP],
+            key_lens: [0; BTM_CAP],
+            vals: [[0; BTM_SIG]; BTM_CAP],
+            val_lens: [0; BTM_CAP],
+            n: 0,
+            done: [false; BTM_CAP],
+        }
+    }
+
+    /* rsx_btm_<row> — numbered like the Vec rows. */
+    unsafe fn name_for(row: usize, out: *mut u8, cap: usize) -> usize {
+        let at = unsafe { bput(out, cap, 0, b"rsx_btm_\0".as_ptr(), 8) };
+        if at != 8 || cap <= 10 {
+            return 0;
+        }
+        if row >= BTM_CAP {
+            return 0;
+        }
+        let d0 = b'0' + (row % 10) as u8;
+        let digs: [u8; 1] = [d0];
+        let at2 = unsafe { bput(out, cap, at, digs.as_ptr(), 1) };
+        if at2 >= cap {
+            return 0;
+        }
+        unsafe {
+            *out.add(at2) = 0;
+        }
+        at2
+    }
+
+    /* the node struct name rsx_btmn_<row> */
+    unsafe fn node_name_for(row: usize, out: *mut u8, cap: usize) -> usize {
+        let at = unsafe { bput(out, cap, 0, b"rsx_btmn_\0".as_ptr(), 9) };
+        if at != 9 || cap <= 11 {
+            return 0;
+        }
+        if row >= BTM_CAP {
+            return 0;
+        }
+        let d0 = b'0' + (row % 10) as u8;
+        let digs: [u8; 1] = [d0];
+        let at2 = unsafe { bput(out, cap, at, digs.as_ptr(), 1) };
+        if at2 >= cap {
+            return 0;
+        }
+        unsafe {
+            *out.add(at2) = 0;
+        }
+        at2
+    }
+
+    /* find-or-create; BTM_CAP = full (caller refuses). */
+    unsafe fn intern(&mut self, key: *const u8, klen: usize, val: *const u8, vlen: usize) -> usize {
+        if klen >= BTM_SIG || vlen >= BTM_SIG {
+            return BTM_CAP;
+        }
+        let mut s = 0usize;
+        while s < self.n {
+            if self.key_lens[s] == klen && self.val_lens[s] == vlen {
+                let mut same = true;
+                let mut i = 0usize;
+                while i < klen {
+                    if self.keys[s][i] != unsafe { *key.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    let mut i2 = 0usize;
+                    while i2 < vlen {
+                        if self.vals[s][i2] != unsafe { *val.add(i2) } {
+                            same = false;
+                            break;
+                        }
+                        i2 += 1;
+                    }
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        if self.n >= BTM_CAP {
+            return BTM_CAP;
+        }
+        let slot = self.n;
+        let mut i = 0usize;
+        while i < klen {
+            self.keys[slot][i] = unsafe { *key.add(i) };
+            i += 1;
+        }
+        let mut i2 = 0usize;
+        while i2 < vlen {
+            self.vals[slot][i2] = unsafe { *val.add(i2) };
+            i2 += 1;
+        }
+        self.key_lens[slot] = klen;
+        self.val_lens[slot] = vlen;
+        self.n += 1;
+        slot
+    }
+
+    unsafe fn find_by_name(&self, name: *const u8, nlen: usize) -> usize {
+        if nlen != 9 {
+            return BTM_CAP;
+        }
+        if !unsafe { z_eq(name, 8, b"rsx_btm_\0".as_ptr()) } {
+            return BTM_CAP;
+        }
+        let ch = unsafe { *name.add(8) };
+        if ch < b'0' || ch > b'9' {
+            return BTM_CAP;
+        }
+        let row = (ch - b'0') as usize;
+        if row >= self.n {
+            return BTM_CAP;
         }
         row
     }

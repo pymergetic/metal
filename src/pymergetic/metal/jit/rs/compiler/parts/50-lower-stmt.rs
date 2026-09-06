@@ -422,6 +422,47 @@ impl Lower {
         if ct_len >= 8 && unsafe { z_eq(ct, 8, b"rsx_opt_\0".as_ptr()) } {
             is_struct_opt = true;
         }
+        /* Result (rsx_res_<T>_<E>): `let Ok(x) = e else { .. }` — same
+         * shape as the struct-Option arm but the tag is `._ok` and the
+         * payload `._v`. The Ok-pat's ctor segment ("Ok") is kids[0][0]
+         * of the pat node; a Some-pat never types as rsx_res_, so the
+         * pair (pat-ctor, ct) decides the arm unambiguously. */
+        if ct_len >= 8 && unsafe { z_eq(ct, 8, b"rsx_res_\0".as_ptr()) } {
+            /* the Ok-payload C type: parse the typedef name back to its
+             * two payload spellings (res_typedef_elem mirrors
+             * opt_typedef_elem's <len>e<hex> decode). */
+            let ob = self.arena_tmp();
+            let eb2 = self.arena_tmp();
+            let on = unsafe { Lower::res_typedef_elem(ct, ct_len, ob, 96, eb2, 96) };
+            if on == 0 {
+                unsafe {
+                    self.err(b"internal: let-else result payload\0".as_ptr(), line);
+                }
+                return;
+            }
+            unsafe { self.res_emit_rest() };
+            self.indent();
+            self.out.put(ct, ct_len);
+            self.out.puts(b" __rsx_le = \0".as_ptr());
+            unsafe { self.emit_expr(init, locals) };
+            self.out.puts(b";\n\0".as_ptr());
+            self.indent();
+            self.out.puts(b"if (!__rsx_le._ok) {\n\0".as_ptr());
+            self.depth += 1;
+            unsafe { self.emit_block_stmt(els, locals) };
+            self.depth -= 1;
+            self.indent();
+            self.out.puts(b"}\n\0".as_ptr());
+            self.indent();
+            self.out.put(ob, on);
+            self.out.putc(b' ');
+            self.out.put(bname, blen);
+            self.out.puts(b" = __rsx_le._v;\n\0".as_ptr());
+            unsafe {
+                (*locals).add(bname, blen, ob, on, self.depth);
+            }
+            return;
+        }
         if !is_struct_opt {
             if ct_len < 2 || unsafe { *ct.add(ct_len - 1) } != b'*' {
                 unsafe {
@@ -446,6 +487,7 @@ impl Lower {
              * `t.find('(')` register late) — flush pending typedefs
              * right here (mid-function typedefs are C; before use is
              * all the order the language needs) */
+            unsafe { self.fnp_emit_rest() };
             unsafe { self.opt_emit_rest() };
             self.indent();
             self.out.put(ct, ct_len);
@@ -879,7 +921,11 @@ impl Lower {
         let ik = unsafe { (*init).kind };
         if ik == pm_jit_rsx_ast_kind::IF {
             /* cur_ret carries the expected tuple to the arm bodies so
-             * unsuffixed literals in `(0, 0)` mint the right signature */
+             * unsuffixed literals in `(0, 0)` mint the right signature.
+             * Bytes are saved too — a length-only restore corrupts the
+             * row name when the tuple row is shorter than the fn's
+             * own return type. */
+            let saved_ret: [u8; 128] = self.cur_ret;
             let saved_ret_len = self.cur_ret_len;
             {
                 let mut j = 0usize;
@@ -890,8 +936,10 @@ impl Lower {
                 self.cur_ret_len = ct_len;
             }
             unsafe { self.emit_if_value(init, locals, tmp, tmp_len) };
+            self.cur_ret = saved_ret;
             self.cur_ret_len = saved_ret_len;
         } else if ik == pm_jit_rsx_ast_kind::MATCH {
+            let saved_ret: [u8; 128] = self.cur_ret;
             let saved_ret_len = self.cur_ret_len;
             {
                 let mut j = 0usize;
@@ -902,6 +950,7 @@ impl Lower {
                 self.cur_ret_len = ct_len;
             }
             unsafe { self.emit_match_value(init, locals, tmp, tmp_len) };
+            self.cur_ret = saved_ret;
             self.cur_ret_len = saved_ret_len;
         } else if ik == pm_jit_rsx_ast_kind::BLOCK && (unsafe { (*init).n_kids } as usize) >= 2 {
             /* multi-statement value block: the temp is the block's value
@@ -1613,11 +1662,29 @@ impl Lower {
                     self.emit_declarator(ct, ct_len, cname, cname_len);
                 }
                 self.out.puts(b";\n\0".as_ptr());
+                /* cur_ret carries the let's own type into the branch
+                 * tails — bare `Some(x)`/`None` (no ascription) mint
+                 * the row from it, not the fn's return type. Save the
+                 * BYTES too: restoring only the length leaves the row
+                 * name corrupted whenever the let's type is shorter
+                 * than the enclosing return type. */
+                let saved_ret: [u8; 128] = self.cur_ret;
+                let saved_ret_len = self.cur_ret_len;
+                {
+                    let mut j = 0usize;
+                    while j < ct_len && j < 127 {
+                        self.cur_ret[j] = unsafe { *ct.add(j) };
+                        j += 1;
+                    }
+                    self.cur_ret_len = ct_len;
+                }
                 if ik == pm_jit_rsx_ast_kind::IF {
                     unsafe { self.emit_if_value(init, locals, cname, cname_len) };
                 } else {
                     unsafe { self.emit_match_value(init, locals, cname, cname_len) };
                 }
+                self.cur_ret = saved_ret;
+                self.cur_ret_len = saved_ret_len;
                 unsafe {
                     (*locals).add_renamed(name, name_len, cname, cname_len, ct, ct_len, self.depth);
                 }
@@ -1630,6 +1697,33 @@ impl Lower {
                 }
                 self.out.puts(b";\n\0".as_ptr());
                 unsafe { self.emit_block_value(init, locals, cname, cname_len) };
+                unsafe {
+                    (*locals).add_renamed(name, name_len, cname, cname_len, ct, ct_len, self.depth);
+                }
+                return;
+            }
+            /* fixed array: C arrays are not assignable — declare, then
+             * memcpy the initializer's bytes (`uint8_t a[128] = b;` is a
+             * gcc extension, never valid C; TCC refuses it). An ARRAY
+             * literal init keeps the brace-list render. */
+            if unsafe { self.ctype_is_fixed_array(ct, ct_len) }
+                && unsafe { (*init).kind } != pm_jit_rsx_ast_kind::ARRAY
+            {
+                self.indent();
+                unsafe {
+                    self.emit_declarator(ct, ct_len, cname, cname_len);
+                }
+                self.out.puts(b";\n\0".as_ptr());
+                self.indent();
+                self.out.puts(b"memcpy(\0".as_ptr());
+                self.out.putc(b'&');
+                self.out.put(cname, cname_len);
+                self.out.puts(b", \0".as_ptr());
+                self.out.putc(b'&');
+                unsafe { self.emit_expr(init, locals) };
+                self.out.puts(b", sizeof(\0".as_ptr());
+                self.out.put(cname, cname_len);
+                self.out.puts(b"));\n\0".as_ptr());
                 unsafe {
                     (*locals).add_renamed(name, name_len, cname, cname_len, ct, ct_len, self.depth);
                 }
@@ -1740,11 +1834,29 @@ impl Lower {
                     self.emit_declarator(ct, ct_len, name, name_len);
                 }
                 self.out.puts(b";\n\0".as_ptr());
+                /* cur_ret carries the let's own type into the branch
+                 * tails — bare `Some(x)`/`None` (no ascription) mint
+                 * the row from it, not the fn's return type. Save the
+                 * BYTES too: restoring only the length leaves the row
+                 * name corrupted whenever the let's type is shorter
+                 * than the enclosing return type. */
+                let saved_ret: [u8; 128] = self.cur_ret;
+                let saved_ret_len = self.cur_ret_len;
+                {
+                    let mut j = 0usize;
+                    while j < ct_len && j < 127 {
+                        self.cur_ret[j] = unsafe { *ct.add(j) };
+                        j += 1;
+                    }
+                    self.cur_ret_len = ct_len;
+                }
                 if ik == pm_jit_rsx_ast_kind::IF {
                     unsafe { self.emit_if_value(init, locals, name, name_len) };
                 } else {
                     unsafe { self.emit_match_value(init, locals, name, name_len) };
                 }
+                self.cur_ret = saved_ret;
+                self.cur_ret_len = saved_ret_len;
                 return;
             }
             if ik == pm_jit_rsx_ast_kind::CLOSURE {
@@ -1778,8 +1890,47 @@ impl Lower {
             self.emit_declarator(ct, ct_len, name, name_len);
         }
         if !init.is_null() {
+            /* fixed array: `uint8_t a[128] = b;` is a gcc extension
+             * (array copy) — valid C needs memcpy. TCC refuses the
+             * extension and the self-host prove compiles through TCC.
+             * An ARRAY literal init keeps the brace-list render ({0,..}
+             * is the one valid C array initializer). */
+            if unsafe { self.ctype_is_fixed_array(ct, ct_len) }
+                && unsafe { (*init).kind } != pm_jit_rsx_ast_kind::ARRAY
+            {
+                self.out.puts(b";\n\0".as_ptr());
+                self.indent();
+                self.out.puts(b"memcpy(&\0".as_ptr());
+                self.out.put(name, name_len);
+                self.out.puts(b", &\0".as_ptr());
+                unsafe { self.emit_expr(init, locals) };
+                self.out.puts(b", sizeof(\0".as_ptr());
+                self.out.put(name, name_len);
+                self.out.puts(b"));\n\0".as_ptr());
+                return;
+            }
             self.out.puts(b" = \0".as_ptr());
-            unsafe { self.emit_expr(init, locals) };
+            /* &str view from a literal: `rsx_str_ref_t s = "x";` is not C —
+             * wrap the bytes in the compound literal {p,n} (the same
+             * coercion the return-position str path emits). */
+            if ct_len == 13
+                && unsafe { z_eq(ct, 13, b"rsx_str_ref_t\0".as_ptr()) }
+                && unsafe { (*init).kind } == pm_jit_rsx_ast_kind::LITERAL
+                && !unsafe { (*init).text }.is_null()
+                && unsafe { *(*init).text } == b'"'
+            {
+                let lt = unsafe { (*init).text };
+                let ltl = unsafe { (*init).text_len };
+                let inner = if ltl >= 2 { ltl - 2 } else { 0 };
+                self.str_ref_used = true;
+                self.out.puts(b"(rsx_str_ref_t){ (const uint8_t *)\0".as_ptr());
+                self.out.put(lt, ltl);
+                self.out.puts(b", \0".as_ptr());
+                self.out.put_u32(inner as u32);
+                self.out.puts(b" }\0".as_ptr());
+            } else {
+                unsafe { self.emit_expr(init, locals) };
+            }
         }
         self.out.puts(b";\n\0".as_ptr());
     }
@@ -2187,6 +2338,38 @@ impl Lower {
             }
             self.cur_opt_elem_len = eln;
         }
+        /* Result scrutinee: decode both payload spellings for the Ok/Err
+         * arm binds (._v / ._e). */
+        {
+            let on = unsafe {
+                Lower::res_typedef_elem(
+                    ct,
+                    ct_len,
+                    self.cur_res_ok.as_mut_ptr(),
+                    96,
+                    self.cur_res_err.as_mut_ptr(),
+                    96,
+                )
+            };
+            self.cur_res_ok_len = on;
+            if on > 0 {
+                let mut el2 = 0usize;
+                while el2 < 96 && unsafe { *self.cur_res_err.as_ptr().add(el2) } != 0 {
+                    el2 += 1;
+                }
+                self.cur_res_err_len = el2;
+            } else {
+                self.cur_res_err_len = 0;
+            }
+        }
+        /* the scrutinee's row may have interned past the preamble flush
+         * (a find() over a mid-body local registers its Option row when
+         * the scrutinee types, after the pre-scan window) — flush pending
+         * typedefs before the temp decl names them (mid-fn typedefs are C;
+         * the let-else path does the same). */
+        unsafe { self.fnp_emit_rest() };
+        unsafe { self.opt_emit_rest() };
+        unsafe { self.res_emit_rest() };
         self.indent();
         self.out.put(ct, ct_len);
         self.out.putc(b' ');
@@ -2224,20 +2407,123 @@ impl Lower {
              * its own C brace scope: binds + if + body inside it. */
             let guarded = has_guard || !chain_guard.is_null();
             let mut some_bind: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            /* Result twin: the Ok(x)/Err(x) bind — res_is_ok tells which
+             * payload field the bind copies (._v / ._e). */
+            let mut res_bind: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            let mut res_is_ok = false;
+            /* Tagged-enum twin: `E::V(bind)` — the variant carries a
+             * payload; the bind copies `temp._u.<Variant>`. */
+            let mut enum_bind: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            let mut enum_pay: [u8; 96] = [0; 96];
+            let mut enum_pay_len: usize = 0;
+            let mut enum_vname: [u8; 64] = [0; 64];
+            let mut enum_vname_len: usize = 0;
             if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH {
                 let pk = unsafe { (*pat).kids };
                 let pnk = unsafe { (*pat).n_kids } as usize;
                 if pnk >= 2 {
                     let head = unsafe { *pk.add(0) };
                     let bind = unsafe { *pk.add(1) };
-                    if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH
-                        && unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Some\0".as_ptr()) }
-                        && (unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
-                            || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
-                    {
-                        some_bind = bind;
+                    if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH {
+                        let ht = unsafe { (*head).text };
+                        let hl = unsafe { (*head).text_len };
+                        if unsafe { z_eq(ht, hl, b"Some\0".as_ptr()) }
+                            && (unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
+                                || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
+                        {
+                            some_bind = bind;
+                        } else if (unsafe { z_eq(ht, hl, b"Ok\0".as_ptr()) }
+                            || unsafe { z_eq(ht, hl, b"Err\0".as_ptr()) })
+                            && unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
+                            && self.cur_res_ok_len > 0
+                        {
+                            res_bind = bind;
+                            res_is_ok = unsafe { z_eq(ht, hl, b"Ok\0".as_ptr()) };
+                        }
                     }
                 }
+                /* tagged-enum `E::V(bind)`: 3+ kids where the first two
+                 * join to an enumpays row. The bind is the LAST kid. */
+                if enum_bind.is_null() && pnk >= 3 {
+                    let mut joined = self.arena_tmp();
+                    let mut jat = 0usize;
+                    let mut ok_join = true;
+                    let mut ji = 0usize;
+                    while ji + 1 < pnk {
+                        let seg = unsafe { *pk.add(ji) };
+                        if unsafe { (*seg).kind } != pm_jit_rsx_ast_kind::PATH {
+                            ok_join = false;
+                            break;
+                        }
+                        if jat > 0 {
+                            jat = unsafe { bput(joined, 128, jat, b"_\0".as_ptr(), 1) };
+                        }
+                        jat = unsafe { bput(joined, 128, jat, unsafe { (*seg).text }, unsafe { (*seg).text_len }) };
+                        ji += 1;
+                    }
+                    if ok_join && jat > 0 {
+                        unsafe {
+                            *joined.add(jat) = 0;
+                        }
+                        let pvbuf = self.arena_tmp();
+                        let plen = unsafe { self.enumpays.lookup(joined, jat, pvbuf, 96) };
+                        if plen > 0 {
+                            /* the variant leaf text (2nd-to-last kid) */
+                            let vleaf = unsafe { *pk.add(pnk - 2) };
+                            let vt2 = unsafe { (*vleaf).text };
+                            let vl2 = unsafe { (*vleaf).text_len };
+                            if vl2 > 0 && vl2 < 64 && !vt2.is_null() {
+                                let mut c2 = 0usize;
+                                while c2 < vl2 {
+                                    enum_vname[c2] = unsafe { *vt2.add(c2) };
+                                    c2 += 1;
+                                }
+                                enum_vname_len = vl2;
+                                let mut c3 = 0usize;
+                                while c3 < plen {
+                                    enum_pay[c3] = unsafe { *pvbuf.add(c3) };
+                                    c3 += 1;
+                                }
+                                enum_pay_len = plen;
+                                enum_bind = unsafe { *pk.add(pnk - 1) };
+                            }
+                        }
+                    }
+                }
+            }
+            if guarded && !res_bind.is_null() {
+                /* scoped Result arm: { T b = temp._v; if (temp._ok && g) { body } } */
+                self.depth += 1;
+                unsafe { (*locals).note_scope() };
+                unsafe { self.emit_res_binds(res_bind, res_is_ok, temp, temp_len, locals) };
+                self.indent();
+                if !is_wc {
+                    self.out.puts(b"if (\0".as_ptr());
+                    unsafe { self.emit_pat_test(pat, temp, temp_len, locals) };
+                    if has_guard {
+                        self.out.puts(b" && (\0".as_ptr());
+                        unsafe { self.emit_expr(*ak.add(1), locals) };
+                        self.out.puts(b")\0".as_ptr());
+                    } else if !chain_guard.is_null() {
+                        self.out.puts(b" && (\0".as_ptr());
+                        unsafe { self.emit_expr(chain_guard, locals) };
+                        self.out.puts(b")\0".as_ptr());
+                    }
+                    self.out.puts(b") {\n\0".as_ptr());
+                } else {
+                    self.out.puts(b"{\n\0".as_ptr());
+                }
+                self.depth += 1;
+                unsafe { (*locals).note_scope() };
+                unsafe { self.emit_block_stmt(body, locals) };
+                unsafe { (*locals).drop_scope() };
+                self.depth -= 1;
+                self.indent();
+                self.out.puts(b"}\n\0".as_ptr());
+                unsafe { (*locals).drop_scope() };
+                self.depth -= 1;
+                i += 1;
+                continue;
             }
             if guarded && !some_bind.is_null() {
                 /* scoped arm: { T b = temp._v; if (pat && guard) { body } } */
@@ -2305,6 +2591,32 @@ impl Lower {
                 unsafe { (*locals).note_scope() };
                 unsafe { self.emit_some_binds(some_bind, temp, temp_len, ct, ct_len, locals) };
             }
+            /* Ok(bind)/Err(bind) unguarded: same arm-brace placement. */
+            if !res_bind.is_null() {
+                unsafe { (*locals).note_scope() };
+                unsafe { self.emit_res_binds(res_bind, res_is_ok, temp, temp_len, locals) };
+            }
+            /* E::V(bind) unguarded: the tagged-union payload copy. */
+            if !enum_bind.is_null() && enum_pay_len > 0 {
+                unsafe { (*locals).note_scope() };
+                let bleaf2 = unsafe { *(*enum_bind).kids.add(0) };
+                let bt2 = unsafe { (*bleaf2).text };
+                let btl2 = unsafe { (*bleaf2).text_len };
+                if !(btl2 == 1 && unsafe { z_eq(bt2, 1, b"_\0".as_ptr()) }) {
+                    self.indent();
+                    self.out.put(enum_pay.as_ptr(), enum_pay_len);
+                    self.out.putc(b' ');
+                    self.out.put(bt2, btl2);
+                    self.out.puts(b" = \0".as_ptr());
+                    self.out.put(temp, temp_len);
+                    self.out.puts(b"._u.\0".as_ptr());
+                    self.out.put(enum_vname.as_ptr(), enum_vname_len);
+                    self.out.puts(b";\n\0".as_ptr());
+                    unsafe {
+                        (*locals).add(bt2, btl2, enum_pay.as_ptr(), enum_pay_len, 1);
+                    }
+                }
+            }
             self.depth += 1;
             unsafe { (*locals).note_scope() };
             /* plain binding arm (`other => ..`) on a value-shaped scrutinee
@@ -2365,6 +2677,8 @@ impl Lower {
         self.out.putc(b'\n');
         self.cur_opt_elem_len = 0;
         self.cur_scrut_len = 0;
+        self.cur_res_ok_len = 0;
+        self.cur_res_err_len = 0;
     }
 
     /* match arms with pattern-local bindings: the binding declared inside the
@@ -2374,6 +2688,57 @@ impl Lower {
      * emit_pat_test's Some-branch does inline (it emits the decl after the
      * test, still inside the if's condition, which is wrong for scoping), so
      * match with Some-patterns uses a pre-declared temp instead. */
+
+    /* Declare Ok(bind)/Err(bind)'s bind from the Result scrutinee temp:
+     * `T b = temp._v;` (Ok) or `E b = temp._e;` (Err), the payload types
+     * decoded from the row (cur_res_ok / cur_res_err). */
+    unsafe fn emit_res_binds(
+        &mut self,
+        bind: *const pm_jit_rsx_ast_t,
+        is_ok: bool,
+        temp: *const u8,
+        temp_len: usize,
+        locals: *mut LocalTab,
+    ) {
+        if unsafe { (*bind).kind } != pm_jit_rsx_ast_kind::PATH
+            || (unsafe { (*bind).n_kids } as usize) < 1
+        {
+            return;
+        }
+        let bleaf = unsafe { *(*bind).kids.add(0) };
+        let bt = unsafe { (*bleaf).text };
+        let btl = unsafe { (*bleaf).text_len };
+        /* `_` bind: no declaration */
+        if btl == 1 && unsafe { z_eq(bt, 1, b"_\0".as_ptr()) } {
+            return;
+        }
+        /* payload pair without a tuple temp (a `let (a,b) = if..` here
+         * registers its row mid-fn, past lower_file's tup_emit_rest —
+         * the decl then names an unemitted typedef). */
+        let mut pct: *const u8 = self.cur_res_ok.as_ptr();
+        let mut pcl = self.cur_res_ok_len;
+        if !is_ok {
+            pct = self.cur_res_err.as_ptr();
+            pcl = self.cur_res_err_len;
+        }
+        if pcl == 0 {
+            return;
+        }
+        self.indent();
+        self.out.put(pct, pcl);
+        self.out.putc(b' ');
+        self.out.put(bt, btl);
+        self.out.puts(b" = \0".as_ptr());
+        self.out.put(temp, temp_len);
+        if is_ok {
+            self.out.puts(b"._v;\n\0".as_ptr());
+        } else {
+            self.out.puts(b"._e;\n\0".as_ptr());
+        }
+        unsafe {
+            (*locals).add(bt, btl, pct, pcl, 1);
+        }
+    }
 
     /* Declare Some(bind)'s binds from the scrutinee temp — one level of
      * destructure: a PATH bind aliases `temp` (pointer payload) or copies
@@ -2608,6 +2973,34 @@ impl Lower {
             }
             self.cur_opt_elem_len = eln;
         }
+        /* Result scrutinee: decode both payload spellings for the Ok/Err
+         * arm binds (._v / ._e) — the emit_match twin. */
+        {
+            let on = unsafe {
+                Lower::res_typedef_elem(
+                    ct,
+                    ct_len,
+                    self.cur_res_ok.as_mut_ptr(),
+                    96,
+                    self.cur_res_err.as_mut_ptr(),
+                    96,
+                )
+            };
+            self.cur_res_ok_len = on;
+            if on > 0 {
+                let mut el2 = 0usize;
+                while el2 < 96 && unsafe { *self.cur_res_err.as_ptr().add(el2) } != 0 {
+                    el2 += 1;
+                }
+                self.cur_res_err_len = el2;
+            } else {
+                self.cur_res_err_len = 0;
+            }
+        }
+        /* same late-intern flush as emit_match (see there). */
+        unsafe { self.fnp_emit_rest() };
+        unsafe { self.opt_emit_rest() };
+        unsafe { self.res_emit_rest() };
         self.indent();
         self.out.put(ct, ct_len);
         self.out.putc(b' ');
@@ -2641,20 +3034,119 @@ impl Lower {
              * stays legal. */
             let guarded = has_guard || !chain_guard.is_null();
             let mut some_bind: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            /* Result twin: the Ok(x)/Err(x) bind (see emit_match). */
+            let mut res_bind: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            let mut res_is_ok = false;
+            /* Tagged-enum twin: `E::V(bind)` (see emit_match). */
+            let mut enum_bind: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            let mut enum_pay: [u8; 96] = [0; 96];
+            let mut enum_pay_len: usize = 0;
+            let mut enum_vname: [u8; 64] = [0; 64];
+            let mut enum_vname_len: usize = 0;
             if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH {
                 let pk = unsafe { (*pat).kids };
                 let pnk = unsafe { (*pat).n_kids } as usize;
                 if pnk >= 2 {
                     let head = unsafe { *pk.add(0) };
                     let bind = unsafe { *pk.add(1) };
-                    if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH
-                        && unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Some\0".as_ptr()) }
-                        && (unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
-                            || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
-                    {
-                        some_bind = bind;
+                    if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH {
+                        let ht = unsafe { (*head).text };
+                        let hl = unsafe { (*head).text_len };
+                        if unsafe { z_eq(ht, hl, b"Some\0".as_ptr()) }
+                            && (unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
+                                || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
+                        {
+                            some_bind = bind;
+                        } else if (unsafe { z_eq(ht, hl, b"Ok\0".as_ptr()) }
+                            || unsafe { z_eq(ht, hl, b"Err\0".as_ptr()) })
+                            && unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
+                            && self.cur_res_ok_len > 0
+                        {
+                            res_bind = bind;
+                            res_is_ok = unsafe { z_eq(ht, hl, b"Ok\0".as_ptr()) };
+                        }
                     }
                 }
+                if enum_bind.is_null() && pnk >= 3 {
+                    let mut joined = self.arena_tmp();
+                    let mut jat = 0usize;
+                    let mut ok_join = true;
+                    let mut ji = 0usize;
+                    while ji + 1 < pnk {
+                        let seg = unsafe { *pk.add(ji) };
+                        if unsafe { (*seg).kind } != pm_jit_rsx_ast_kind::PATH {
+                            ok_join = false;
+                            break;
+                        }
+                        if jat > 0 {
+                            jat = unsafe { bput(joined, 128, jat, b"_\0".as_ptr(), 1) };
+                        }
+                        jat = unsafe { bput(joined, 128, jat, unsafe { (*seg).text }, unsafe { (*seg).text_len }) };
+                        ji += 1;
+                    }
+                    if ok_join && jat > 0 {
+                        unsafe {
+                            *joined.add(jat) = 0;
+                        }
+                        let pvbuf = self.arena_tmp();
+                        let plen = unsafe { self.enumpays.lookup(joined, jat, pvbuf, 96) };
+                        if plen > 0 {
+                            let vleaf = unsafe { *pk.add(pnk - 2) };
+                            let vt2 = unsafe { (*vleaf).text };
+                            let vl2 = unsafe { (*vleaf).text_len };
+                            if vl2 > 0 && vl2 < 64 && !vt2.is_null() {
+                                let mut c2 = 0usize;
+                                while c2 < vl2 {
+                                    enum_vname[c2] = unsafe { *vt2.add(c2) };
+                                    c2 += 1;
+                                }
+                                enum_vname_len = vl2;
+                                let mut c3 = 0usize;
+                                while c3 < plen {
+                                    enum_pay[c3] = unsafe { *pvbuf.add(c3) };
+                                    c3 += 1;
+                                }
+                                enum_pay_len = plen;
+                                enum_bind = unsafe { *pk.add(pnk - 1) };
+                            }
+                        }
+                    }
+                }
+            }
+            if guarded && !res_bind.is_null() {
+                /* scoped Result arm (see emit_match): binds + if + body
+                 * in one brace scope. */
+                self.depth += 1;
+                unsafe { (*locals).note_scope() };
+                unsafe { self.emit_res_binds(res_bind, res_is_ok, st, st_len, locals) };
+                self.indent();
+                if !is_wc {
+                    self.out.puts(b"if (\0".as_ptr());
+                    unsafe { self.emit_pat_test(pat, st, st_len, locals) };
+                    if has_guard {
+                        self.out.puts(b" && (\0".as_ptr());
+                        unsafe { self.emit_expr(*ak.add(1), locals) };
+                        self.out.puts(b")\0".as_ptr());
+                    } else if !chain_guard.is_null() {
+                        self.out.puts(b" && (\0".as_ptr());
+                        unsafe { self.emit_expr(chain_guard, locals) };
+                        self.out.puts(b")\0".as_ptr());
+                    }
+                    self.out.puts(b") {\n\0".as_ptr());
+                } else {
+                    self.out.puts(b"{\n\0".as_ptr());
+                }
+                self.depth += 1;
+                unsafe { (*locals).note_scope() };
+                unsafe { self.emit_block_value(body, locals, temp, temp_len) };
+                unsafe { (*locals).drop_scope() };
+                self.depth -= 1;
+                self.indent();
+                self.out.puts(b"}\n\0".as_ptr());
+                unsafe { (*locals).drop_scope() };
+                self.depth -= 1;
+                i += 1;
+                continue;
             }
             if guarded && !some_bind.is_null() {
                 self.depth += 1;
@@ -2715,6 +3207,108 @@ impl Lower {
                 unsafe { (*locals).note_scope() };
                 unsafe { self.emit_some_binds(some_bind, st, st_len, ct, ct_len, locals) };
             }
+            /* Ok(bind)/Err(bind) unguarded: same arm-brace placement. */
+            if !res_bind.is_null() {
+                unsafe { (*locals).note_scope() };
+                unsafe { self.emit_res_binds(res_bind, res_is_ok, st, st_len, locals) };
+            }
+            /* E::V(bind) unguarded: the tagged-union payload copy. */
+            if !enum_bind.is_null() && enum_pay_len > 0 {
+                unsafe { (*locals).note_scope() };
+                let bleaf2 = unsafe { *(*enum_bind).kids.add(0) };
+                let bt2 = unsafe { (*bleaf2).text };
+                let btl2 = unsafe { (*bleaf2).text_len };
+                if !(btl2 == 1 && unsafe { z_eq(bt2, 1, b"_\0".as_ptr()) }) {
+                    self.indent();
+                    self.out.put(enum_pay.as_ptr(), enum_pay_len);
+                    self.out.putc(b' ');
+                    self.out.put(bt2, btl2);
+                    self.out.puts(b" = \0".as_ptr());
+                    self.out.put(st, st_len);
+                    self.out.puts(b"._u.\0".as_ptr());
+                    self.out.put(enum_vname.as_ptr(), enum_vname_len);
+                    self.out.puts(b";\n\0".as_ptr());
+                    unsafe {
+                        (*locals).add(bt2, btl2, enum_pay.as_ptr(), enum_pay_len, 1);
+                    }
+                }
+            }
+            /* tuple-pattern binding arm `(x, y)`: declare each element
+             * bind from the temp's `_i` field with the row's element
+             * ctype. Non-binding elements (literals) declare nothing. */
+            if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::TUPLE {
+                let tk = unsafe { (*pat).kids };
+                let tn = unsafe { (*pat).n_kids } as usize;
+                unsafe { (*locals).note_scope() };
+                let mut ti = 0usize;
+                while ti < tn {
+                    let sub = unsafe { *tk.add(ti) };
+                    let mut bnode = sub;
+                    if unsafe { (*sub).kind } == pm_jit_rsx_ast_kind::PATH
+                        && unsafe { (*sub).n_kids } as usize == 1
+                        && unsafe { z_eq(unsafe { (*sub).text }, unsafe { (*sub).text_len }, b"path\0".as_ptr()) }
+                    {
+                        bnode = unsafe { *(*sub).kids.add(0) };
+                    }
+                    if unsafe { (*bnode).kind } != pm_jit_rsx_ast_kind::PATH {
+                        ti += 1;
+                        continue;
+                    }
+                    let bn = unsafe { (*bnode).text };
+                    let bnl = unsafe { (*bnode).text_len };
+                    if bnl == 0 || (bnl == 1 && unsafe { z_eq(bn, 1, b"_\0".as_ptr()) }) {
+                        ti += 1;
+                        continue;
+                    }
+                    /* element spelling: `(<temp>)._i` */
+                    let eb = self.arena_tmp();
+                    let mut eat = 0usize;
+                    eat = unsafe { bput(eb, 72, eat, b"(\0".as_ptr(), 1) };
+                    eat = unsafe { bput(eb, 72, eat, st, st_len) };
+                    eat = unsafe { bput(eb, 72, eat, b")._\0".as_ptr(), 3) };
+                    let mut digs = [0u8; 12];
+                    let mut v = ti as u64;
+                    let mut di = 0usize;
+                    while v > 0 && di < 12 {
+                        digs[di] = b'0' + (v % 10) as u8;
+                        v /= 10;
+                        di += 1;
+                    }
+                    if di == 0 {
+                        digs[0] = b'0';
+                        di = 1;
+                    }
+                    let mut dj = di;
+                    while dj > 0 {
+                        dj -= 1;
+                        eat = unsafe { bput(eb, 72, eat, digs.as_ptr().add(dj), 1) };
+                    }
+                    /* element ctype from the registered row */
+                    let ecb = self.arena_tmp();
+                    let el = unsafe {
+                        self.tup_row_elem_ctype(ct, ct_len, ti, ecb, 128)
+                    };
+                    if el == 0 {
+                        unsafe {
+                            self.err(b"cannot type tuple pattern binding\0".as_ptr(), unsafe { (*s).line });
+                        }
+                        return;
+                    }
+                    self.depth += 1;
+                    self.indent();
+                    self.out.put(ecb, el);
+                    self.out.putc(b' ');
+                    self.out.put(bn, bnl);
+                    self.out.puts(b" = \0".as_ptr());
+                    self.out.put(eb, eat);
+                    self.out.puts(b";\n\0".as_ptr());
+                    self.depth -= 1;
+                    unsafe {
+                        (*locals).add(bn, bnl, ecb, el, self.depth);
+                    }
+                    ti += 1;
+                }
+            }
             /* plain binding arm on a value-shaped scrutinee — same shape
              * as emit_match's: declare the bind as a copy of the temp. */
             if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH {
@@ -2769,6 +3363,56 @@ impl Lower {
         }
         self.cur_scrut_len = 0;
         self.cur_opt_elem_len = 0;
+        self.cur_res_ok_len = 0;
+        self.cur_res_err_len = 0;
+    }
+
+    /* Element ctype of a tuple ROW by its registered typedef name: render
+     * every interned row's name and compare against `row` (the scrutinee's
+     * ctype), then copy field `i`'s element type out. 0 when the name is
+     * not a registered row (a scalar scrutinee, a struct, ..). */
+    unsafe fn tup_row_elem_ctype(&mut self, row: *const u8, row_len: usize, i: usize, out: *mut u8, cap: usize) -> usize {
+        if row_len < 10 || row.is_null() || i >= TUP_MAXF {
+            return 0;
+        }
+        let mut slot = 0usize;
+        while slot < TUP_CAP {
+            let n = unsafe { *self.tup_counts.as_ptr().add(slot) };
+            if n == 0 {
+                break;
+            }
+            let base = self.tup_elems.as_ptr().add(slot * TUP_MAXF);
+            let blens = self.tup_lens.as_ptr().add(slot * TUP_MAXF);
+            let need = unsafe { Lower::tup_name_need(blens, n) };
+            if need > 0 && need < 1100 {
+                let nb = self.arena_tmp();
+                let nl = unsafe { Lower::tup_typedef_name(base, blens, n, nb, need) };
+                if nl == row_len {
+                    let mut j = 0usize;
+                    let mut eq = true;
+                    while j < nl {
+                        if unsafe { *nb.add(j) } != unsafe { *row.add(j) } {
+                            eq = false;
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if eq {
+                        let el = unsafe { *blens.add(i) };
+                        if el == 0 || el >= cap {
+                            return 0;
+                        }
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(base.add(i) as *const u8, out, el);
+                            *out.add(el) = 0;
+                        }
+                        return el;
+                    }
+                }
+            }
+            slot += 1;
+        }
+        0
     }
 
     /* Pattern test against scrutinee temp `sv` (a C rvalue): emits the test
@@ -2792,13 +3436,21 @@ impl Lower {
             {
                 self.str_ref_used = true;
                 let inner = ptl - 2;
-                self.out.puts(b"((\0".as_ptr());
-                self.out.put(sv, sv_len);
-                self.out.puts(b").n == \0".as_ptr());
+                /* one wrapped spelling of the scrutinee, reused for both
+                 * the .n and the .p reads — balance holds for a bare ident
+                 * AND for a pre-parenthesized field spelling. */
+                let wb = self.arena_tmp();
+                let mut wat = 0usize;
+                wat = unsafe { bput(wb, 72, 0, b"(\0".as_ptr(), 1) };
+                wat = unsafe { bput(wb, 72, wat, sv, sv_len) };
+                wat = unsafe { bput(wb, 72, wat, b")\0".as_ptr(), 1) };
+                self.out.putc(b'(');
+                self.out.put(wb, wat);
+                self.out.puts(b".n == \0".as_ptr());
                 self.out.put_u32(unsafe { Lower::c_str_len(pt.add(1), inner) });
-                self.out.puts(b" && !memcmp((\0".as_ptr());
-                self.out.put(sv, sv_len);
-                self.out.puts(b").p, \0".as_ptr());
+                self.out.puts(b" && !memcmp(\0".as_ptr());
+                self.out.put(wb, wat);
+                self.out.puts(b".p, \0".as_ptr());
                 self.out.put(pt, ptl);
                 self.out.puts(b", \0".as_ptr());
                 self.out.put_u32(unsafe { Lower::c_str_len(pt.add(1), inner) });
@@ -2918,6 +3570,34 @@ impl Lower {
                 self.out.puts(b" == 0\0".as_ptr());
                 return;
             }
+            /* Ok(bind) / Err(bind) — the Result arms. Presence is `._ok`;
+             * the bind (declared at the arm body top by emit_match's
+             * some_bind path) copies `._v` (Ok) or `._e` (Err). */
+            if nk >= 1
+                && unsafe { (**kids.add(0)).kind } == pm_jit_rsx_ast_kind::PATH
+                && (unsafe { z_eq(unsafe { (**kids.add(0)).text }, unsafe { (**kids.add(0)).text_len }, b"Ok\0".as_ptr()) }
+                    || unsafe { z_eq(unsafe { (**kids.add(0)).text }, unsafe { (**kids.add(0)).text_len }, b"Err\0".as_ptr()) })
+            {
+                let is_ok = unsafe { z_eq(unsafe { (**kids.add(0)).text }, unsafe { (**kids.add(0)).text_len }, b"Ok\0".as_ptr()) };
+                if is_ok {
+                    self.out.put(sv, sv_len);
+                    self.out.puts(b"._ok\0".as_ptr());
+                } else {
+                    self.out.put(sv, sv_len);
+                    self.out.puts(b"._ok == 0\0".as_ptr());
+                }
+                if nk >= 2 {
+                    let bind = unsafe { *kids.add(1) };
+                    let bt = unsafe { (*bind).text };
+                    let btl = unsafe { (*bind).text_len };
+                    self.out.puts(b" /* \0".as_ptr());
+                    self.out.put(unsafe { (**kids.add(0)).text }, 2);
+                    self.out.putc(b'(');
+                    self.out.put(bt, btl);
+                    self.out.puts(b") */\0".as_ptr());
+                }
+                return;
+            }
             if unsafe { z_eq(t, tl, b"_\0".as_ptr()) } {
                 self.out.putc(b'1');
                 return;
@@ -2928,28 +3608,72 @@ impl Lower {
             if nk >= 2 {
                 /* variant path — compare against VariantName */
                 let leaf = unsafe { *kids.add(nk - 1) };
-                self.out.put(sv, sv_len);
-                self.out.puts(b" == \0".as_ptr());
-                /* strip the enum prefix: emit just the leaf, uppercased? No —
-                 * enum variants lower to `Enum_Variant` constants. */
+                /* joined variant name from all PATH segments — the LAST
+                 * kid is the bind wrapper (PATH text `path` holding the
+                 * binding name) when this arm carries a payload bind;
+                 * the join stops before it. */
+                let bind_is_last = unsafe { (*leaf).kind } == pm_jit_rsx_ast_kind::PATH
+                    && unsafe { (*leaf).text_len } == 4
+                    && !unsafe { (*leaf).text }.is_null()
+                    && unsafe { z_eq(unsafe { (*leaf).text }, 4, b"path\0".as_ptr()) };
                 let mut full = self.arena_tmp();
                 let mut at = 0usize;
                 let mut i = 0usize;
                 while i < nk {
+                    if i + 1 == nk && bind_is_last {
+                        break;
+                    }
                     let seg = unsafe { *kids.add(i) };
                     if unsafe { (*seg).kind } != pm_jit_rsx_ast_kind::PATH {
+                        i += 1;
+                        continue;
+                    }
+                    let st = unsafe { (*seg).text };
+                    let sl = unsafe { (*seg).text_len };
+                    /* the bind segment: parser marks it `pat` */
+                    if sl == 3 && !st.is_null() && unsafe { z_eq(st, sl, b"pat\0".as_ptr()) } {
                         i += 1;
                         continue;
                     }
                     if at > 0 {
                         at = unsafe { bput(full, 128, at, b"_\0".as_ptr(), 1) };
                     }
-                    at = unsafe { bput(full, 128, at, unsafe { (*seg).text }, unsafe { (*seg).text_len }) };
+                    at = unsafe { bput(full, 128, at, st, sl) };
                     i += 1;
                 }
                 unsafe {
                     *full.add(at) = 0;
                 }
+                /* payload variant: the test is the tag compare — the
+                 * tagged-union shape. The bind's copy (`._u.<Variant>`)
+                 * is declared at the arm body top by emit_match. */
+                {
+                    let pb = self.arena_tmp();
+                    let pn = unsafe { self.enumpays.lookup(full, at, pb, 96) };
+                    if pn > 0 {
+                        self.out.put(sv, sv_len);
+                        self.out.puts(b"._tag == \0".as_ptr());
+                        self.out.put(full, at);
+                        return;
+                    }
+                    /* fieldless variant of a TAGGED enum: same tag
+                     * compare (the C value is the struct, never a bare
+                     * int). The enum name is the first joined segment. */
+                    if at > 0 {
+                        let mut fe = 0usize;
+                        while fe < at && unsafe { *full.add(fe) } != b'_' {
+                            fe += 1;
+                        }
+                        if fe > 0 && unsafe { self.enumtags.has(full, fe) } {
+                            self.out.put(sv, sv_len);
+                            self.out.puts(b"._tag == \0".as_ptr());
+                            self.out.put(full, at);
+                            return;
+                        }
+                    }
+                }
+                self.out.put(sv, sv_len);
+                self.out.puts(b" == \0".as_ptr());
                 self.out.put(full, at);
                 let _ = leaf;
                 return;
@@ -2964,6 +3688,156 @@ impl Lower {
              * enum elided (Rust allows it inside a match on that type) or a
              * plain binding — match anything (binding). */
             self.out.putc(b'1');
+            return;
+        }
+        /* tuple pattern `(p0, p1, ..)`: and-join of the element tests,
+         * each against the tuple scrutinee's `_i` field. Literal string
+         * elements route through the same LITERAL case below (recursed),
+         * so the view compare fires with the element's own ctype once the
+         * sub-test re-enters with the element spelling. */
+        if kind == pm_jit_rsx_ast_kind::TUPLE {
+            let kids = unsafe { (*pat).kids };
+            let nk = unsafe { (*pat).n_kids } as usize;
+            if nk == 0 {
+                /* `()` matches the unit — always true */
+                self.out.putc(b'1');
+                return;
+            }
+            let mut i = 0usize;
+            while i < nk {
+                if i > 0 {
+                    self.out.puts(b" && \0".as_ptr());
+                }
+                let sub = unsafe { *kids.add(i) };
+                let sk = unsafe { (*sub).kind };
+                if sk == pm_jit_rsx_ast_kind::LITERAL
+                    || sk == pm_jit_rsx_ast_kind::UNARY
+                    || sk == pm_jit_rsx_ast_kind::ARRAY
+                    || sk == pm_jit_rsx_ast_kind::TUPLE
+                {
+                    /* value pattern: recurse with the element spelling as
+                     * the scrutinee — the literal/string compare then runs
+                     * against the element expression. */
+                    let eb = self.arena_tmp();
+                    let mut at = 0usize;
+                    at = unsafe { bput(eb, 64, at, b"(\0".as_ptr(), 1) };
+                    at = unsafe { bput(eb, 64, at, sv, sv_len) };
+                    at = unsafe { bput(eb, 64, at, b")._\0".as_ptr(), 3) };
+                    let mut digs = [0u8; 12];
+                    let mut v = i as u64;
+                    let mut di = 0usize;
+                    while v > 0 && di < 12 {
+                        digs[di] = b'0' + (v % 10) as u8;
+                        v /= 10;
+                        di += 1;
+                    }
+                    if di == 0 {
+                        digs[0] = b'0';
+                        di = 1;
+                    }
+                    let mut j = di;
+                    while j > 0 {
+                        j -= 1;
+                        at = unsafe { bput(eb, 64, at, digs.as_ptr().add(j), 1) };
+                    }
+                    let saved_scrut: [u8; 128] = self.cur_scrut;
+                    let saved_scrut_len = self.cur_scrut_len;
+                    /* element ctype: a string-literal element against an
+                     * &str field needs the view compare — probe the field's
+                     * type by rendering the scrutinee's tuple row. The
+                     * honest minimal: re-run emit_pat_test with the element
+                     * spelling, with cur_scrut pointing at the field type
+                     * when the row is known (cur_tuple_elems). */
+                    let field_buf = self.arena_tmp();
+                    let flen = unsafe {
+                        self.tup_row_elem_ctype(self.cur_scrut.as_ptr(), self.cur_scrut_len, i, field_buf, 128)
+                    };
+                    if flen > 0 && flen < 128 {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                field_buf,
+                                self.cur_scrut.as_mut_ptr(),
+                                flen,
+                            );
+                        }
+                        self.cur_scrut_len = flen;
+                    }
+                    unsafe { self.emit_pat_test(sub, eb, at, locals) };
+                    self.cur_scrut = saved_scrut;
+                    self.cur_scrut_len = saved_scrut_len;
+                } else {
+                    /* binding element: matches anything (the bind itself
+                     * is declared by the arm machinery elsewhere) */
+                    self.out.putc(b'1');
+                }
+                i += 1;
+            }
+            return;
+        }
+        /* slice pattern `[p0, p1, ..]` against an rsx_arr row: length
+         * equality plus per-element tests on `W.p[i]`, with W the
+         * scrutinee wrapped once. An empty `[]` tests `.n == 0`. */
+        if kind == pm_jit_rsx_ast_kind::ARRAY {
+            let kids = unsafe { (*pat).kids };
+            let nk = unsafe { (*pat).n_kids } as usize;
+            let wb = self.arena_tmp();
+            let mut wat = 0usize;
+            wat = unsafe { bput(wb, 72, 0, b"(\0".as_ptr(), 1) };
+            wat = unsafe { bput(wb, 72, wat, sv, sv_len) };
+            wat = unsafe { bput(wb, 72, wat, b")\0".as_ptr(), 1) };
+            self.out.putc(b'(');
+            self.out.put(wb, wat);
+            self.out.puts(b".n == \0".as_ptr());
+            self.out.put_u32(nk as u32);
+            let mut i = 0usize;
+            while i < nk {
+                self.out.puts(b" && \0".as_ptr());
+                let sub = unsafe { *kids.add(i) };
+                let sk = unsafe { (*sub).kind };
+                if sk == pm_jit_rsx_ast_kind::LITERAL {
+                    /* string-literal element: view compare against
+                     * `W.p[i]` (an rsx_str_ref_t row) */
+                    let pt = unsafe { (*sub).text };
+                    let ptl = unsafe { (*sub).text_len };
+                    if ptl >= 2 && !pt.is_null() && unsafe { *pt } == b'"' {
+                        self.str_ref_used = true;
+                        let inner = ptl - 2;
+                        self.out.putc(b'(');
+                        self.out.put(wb, wat);
+                        self.out.puts(b".p[\0".as_ptr());
+                        self.out.put_u32(i as u32);
+                        self.out.puts(b"].n == \0".as_ptr());
+                        self.out.put_u32(unsafe { Lower::c_str_len(pt.add(1), inner) });
+                        self.out.puts(b" && !memcmp(\0".as_ptr());
+                        self.out.put(wb, wat);
+                        self.out.puts(b".p[\0".as_ptr());
+                        self.out.put_u32(i as u32);
+                        self.out.puts(b"].p, \0".as_ptr());
+                        self.out.put(pt, ptl);
+                        self.out.puts(b", \0".as_ptr());
+                        self.out.put_u32(unsafe { Lower::c_str_len(pt.add(1), inner) });
+                        self.out.puts(b"))\0".as_ptr());
+                    } else {
+                        self.out.putc(b'(');
+                        self.out.put(wb, wat);
+                        self.out.puts(b".p[\0".as_ptr());
+                        self.out.put_u32(i as u32);
+                        self.out.puts(b"] == \0".as_ptr());
+                        unsafe { self.emit_literal(pt, ptl) };
+                        self.out.putc(b')');
+                    }
+                } else if sk == pm_jit_rsx_ast_kind::PATH {
+                    /* binding element: matches any element */
+                    self.out.putc(b'1');
+                } else {
+                    unsafe {
+                        self.err(b"unsupported: slice pattern element\0".as_ptr(), unsafe { (*sub).line });
+                    }
+                    return;
+                }
+                i += 1;
+            }
+            self.out.putc(b')');
             return;
         }
         unsafe {
@@ -3009,7 +3883,14 @@ impl Lower {
         }
         self.out.puts(b"for (;;) {\n\0".as_ptr());
         self.depth += 1;
-        unsafe { self.emit_block_stmt(body, locals) };
+        if unsafe { (*body).kind } == pm_jit_rsx_ast_kind::BLOCK {
+            unsafe { self.emit_block_stmt(body, locals) };
+        } else {
+            /* a bare statement body — the while-let desugar's MATCH (no
+             * source braces to borrow); emit it statement-form inside
+             * the loop's own C braces. */
+            unsafe { self.emit_stmt(body, locals, 0) };
+        }
         self.depth -= 1;
         if labeled {
             self.indent();
@@ -4597,7 +5478,23 @@ impl Lower {
             return 0;
         }
         let clo = unsafe { *ak.add(0) };
-        if unsafe { (*clo).kind } != pm_jit_rsx_ast_kind::CLOSURE {
+        /* two arg shapes ride the same scan skeleton:
+         *   split('|c| ...')  — a pred closure over each byte
+         *   split('.')        — a char-literal separator: pred = (c == '.')
+         * The literal's text is the quoted char ('.' / b'.'-style); the
+         * scan emits the comparison directly, no closure body. */
+        let mut is_sep_lit = false;
+        let mut sep_val: u8 = 0;
+        if unsafe { (*clo).kind } == pm_jit_rsx_ast_kind::LITERAL {
+            let lt = unsafe { (*clo).text };
+            let ll = unsafe { (*clo).text_len };
+            /* quoted char: '<c>' — take the byte between the quotes */
+            if ll >= 3 && !lt.is_null() && unsafe { *lt } == b'\'' {
+                sep_val = unsafe { *lt.add(1) };
+                is_sep_lit = true;
+            }
+        }
+        if !is_sep_lit && unsafe { (*clo).kind } != pm_jit_rsx_ast_kind::CLOSURE {
             return 0;
         }
         /* the receiver must be the fat-ref view */
@@ -4607,32 +5504,38 @@ impl Lower {
             return 0;
         }
         /* closure: one bind (+ optional `: TYPE` ascription parsed as
-         * a TYPE kid BEFORE the bind) + body. */
-        let ck = unsafe { (*clo).kids };
-        let cn = unsafe { (*clo).n_kids } as usize;
-        if cn < 2 {
-            unsafe {
-                self.err(b"unsupported: split needs one bind and a body\0".as_ptr(), unsafe { (*s).line });
+         * a TYPE kid BEFORE the bind) + body — separator-literal form
+         * has neither; the scan compares the byte inline. */
+        let mut cname: *const u8 = b"_sep\0".as_ptr();
+        let mut clen = 4usize;
+        let mut cbody: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        if !is_sep_lit {
+            let ck = unsafe { (*clo).kids };
+            let cn = unsafe { (*clo).n_kids } as usize;
+            if cn < 2 {
+                unsafe {
+                    self.err(b"unsupported: split needs one bind and a body\0".as_ptr(), unsafe { (*s).line });
+                }
+                return 1;
             }
-            return 1;
-        }
-        let mut param = unsafe { *ck.add(0) };
-        {
-            let mut q = 1usize;
-            while q < cn && unsafe { (*param).kind } != pm_jit_rsx_ast_kind::PARAM {
-                param = unsafe { *ck.add(q) };
-                q += 1;
+            let mut param = unsafe { *ck.add(0) };
+            {
+                let mut q = 1usize;
+                while q < cn && unsafe { (*param).kind } != pm_jit_rsx_ast_kind::PARAM {
+                    param = unsafe { *ck.add(q) };
+                    q += 1;
+                }
             }
-        }
-        let cbody = unsafe { *ck.add(cn - 1) };
-        if unsafe { (*param).kind } != pm_jit_rsx_ast_kind::PARAM {
-            unsafe {
-                self.err(b"unsupported: split closure bind\0".as_ptr(), unsafe { (*s).line });
+            cbody = unsafe { *ck.add(cn - 1) };
+            if unsafe { (*param).kind } != pm_jit_rsx_ast_kind::PARAM {
+                unsafe {
+                    self.err(b"unsupported: split closure bind\0".as_ptr(), unsafe { (*s).line });
+                }
+                return 1;
             }
-            return 1;
+            cname = unsafe { (*param).text };
+            clen = unsafe { (*param).text_len };
         }
-        let cname = unsafe { (*param).text };
-        let clen = unsafe { (*param).text_len };
         /* the loop bind: one PATH identifier */
         if unsafe { (*pat).kind } != pm_jit_rsx_ast_kind::PATH {
             unsafe {
@@ -4718,7 +5621,16 @@ impl Lower {
         self.out.puts(b").p[\0".as_ptr());
         self.out.put(ev, at3);
         self.out.puts(b"]; \0".as_ptr());
-        unsafe { self.emit_expr(cbody, locals) };
+        if is_sep_lit {
+            /* the separator literal rides the same pred slot: the scan
+             * compares the byte inline — no closure body to emit. */
+            self.out.put(cname, clen);
+            self.out.puts(b" == \0".as_ptr());
+            self.out.put_u32(sep_val as u32);
+            self.out.puts(b"u\0".as_ptr());
+        } else {
+            unsafe { self.emit_expr(cbody, locals) };
+        }
         self.out.puts(b"; })) { \0".as_ptr());
         self.out.put(ev, at3);
         self.out.puts(b"++; }\n\0".as_ptr());
@@ -4742,6 +5654,141 @@ impl Lower {
         self.out.puts(b" = \0".as_ptr());
         self.out.put(ev, at3);
         self.out.puts(b" + 1;\n\0".as_ptr());
+        self.depth -= 1;
+        self.indent();
+        self.out.puts(b"}\n\0".as_ptr());
+        self.depth -= 1;
+        self.indent();
+        self.out.puts(b"}\n\0".as_ptr());
+        unsafe {
+            (*locals).drop_scope();
+        }
+        1
+    }
+
+    /* `for ch in s.bytes()` — a byte-index loop over the &str fat-ref
+     * view (or the owned String's .p/.n): the bind is a uint32_t byte,
+     * each iteration names `sv.p[i]`. ASCII scanning — bytes are chars,
+     * UTF-8 decode is the documented subset divergence. Returns 1 when
+     * handled (emitted or refused loudly), 0 when not this shape. */
+    unsafe fn try_emit_for_bytes(
+        &mut self,
+        s: *const pm_jit_rsx_ast_t,
+        pat: *const pm_jit_rsx_ast_t,
+        iter: *const pm_jit_rsx_ast_t,
+        body: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+    ) -> usize {
+        let ik = unsafe { (*iter).kids };
+        let ink = unsafe { (*iter).n_kids } as usize;
+        if ink < 3 {
+            return 0;
+        }
+        let recv = unsafe { *ik.add(0) };
+        let name = unsafe { *ik.add(1) };
+        let args = unsafe { *ik.add(2) };
+        let mname = unsafe { (*name).text };
+        let mlen = unsafe { (*name).text_len };
+        if !(mlen == 5 && unsafe { z_eq(mname, mlen, b"bytes\0".as_ptr()) }) {
+            return 0;
+        }
+        if unsafe { (*args).n_kids } as usize != 0 {
+            return 0;
+        }
+        /* the receiver: the fat-ref view or the owned String */
+        let rb = self.arena_tmp();
+        let rl = unsafe { self.expr_ctype(recv, rb, 128, locals) };
+        if !(rl == 13 && unsafe { z_eq(rb, 13, b"rsx_str_ref_t\0".as_ptr()) })
+            && !(rl == 9 && unsafe { z_eq(rb, 9, b"rsx_str_t\0".as_ptr()) })
+        {
+            return 0;
+        }
+        /* the loop bind: one PATH identifier */
+        if unsafe { (*pat).kind } != pm_jit_rsx_ast_kind::PATH {
+            unsafe {
+                self.err(b"unsupported: bytes for binds one identifier\0".as_ptr(), unsafe { (*s).line });
+            }
+            return 1;
+        }
+        let pk = unsafe { (*pat).kids };
+        if (unsafe { (*pat).n_kids } as usize) < 1 {
+            unsafe {
+                self.err(b"unsupported: bytes for bind\0".as_ptr(), unsafe { (*s).line });
+            }
+            return 1;
+        }
+        let pleaf = unsafe { *pk.add(0) };
+        let bname = unsafe { (*pleaf).text };
+        let blen = unsafe { (*pleaf).text_len };
+        /* fresh cursor names (collide-proof against the body's own) */
+        let sv = self.arena_tmp();
+        let mut at = unsafe { bput(sv, 160, 0, bname, blen) };
+        at = unsafe { bput(sv, 160, at, b"_sv\0".as_ptr(), 3) };
+        unsafe {
+            *sv.add(at) = 0;
+        }
+        let iv = self.arena_tmp();
+        let mut at2 = unsafe { bput(iv, 160, 0, bname, blen) };
+        at2 = unsafe { bput(iv, 160, at2, b"_i\0".as_ptr(), 2) };
+        unsafe {
+            *iv.add(at2) = 0;
+        }
+        /* scope for the loop bind */
+        unsafe {
+            (*locals).note_scope();
+        }
+        self.str_ref_used = true;
+        unsafe {
+            (*locals).add(bname, blen, b"uint32_t\0".as_ptr(), 8, self.depth + 1);
+        }
+        self.indent();
+        self.out.puts(b"{\n\0".as_ptr());
+        self.depth += 1;
+        self.indent();
+        /* the receiver renders once, into a local view copy: the fat-ref
+         * IS a view (plain parens); the owned String contributes its p/n
+         * pair as a compound literal. */
+        self.out.puts(b"rsx_str_ref_t \0".as_ptr());
+        self.out.put(sv, at);
+        self.out.puts(b" = \0".as_ptr());
+        if rl == 9 {
+            self.out.puts(b"(rsx_str_ref_t){ \0".as_ptr());
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b".p, \0".as_ptr());
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b".n };\n\0".as_ptr());
+        } else {
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b";\n\0".as_ptr());
+        }
+        self.indent();
+        let labeled = unsafe { Lower::loop_is_labeled(s) };
+        let lt = unsafe { (*s).text };
+        let ll = unsafe { (*s).text_len };
+        if labeled {
+            unsafe { self.put_lbl(lt, ll, b"_\0".as_ptr()) };
+            self.out.puts(b": \0".as_ptr());
+        }
+        self.out.puts(b"for (size_t \0".as_ptr());
+        self.out.put(iv, at2);
+        self.out.puts(b" = 0; \0".as_ptr());
+        self.out.put(iv, at2);
+        self.out.puts(b" < \0".as_ptr());
+        self.out.put(sv, at);
+        self.out.puts(b".n; \0".as_ptr());
+        self.out.put(iv, at2);
+        self.out.puts(b"++) {\n\0".as_ptr());
+        self.depth += 1;
+        self.indent();
+        self.out.puts(b"uint32_t \0".as_ptr());
+        self.out.put(bname, blen);
+        self.out.puts(b" = \0".as_ptr());
+        self.out.put(sv, at);
+        self.out.puts(b".p[\0".as_ptr());
+        self.out.put(iv, at2);
+        self.out.puts(b"];\n\0".as_ptr());
+        /* body */
+        unsafe { self.emit_block_stmt(body, locals) };
         self.depth -= 1;
         self.indent();
         self.out.puts(b"}\n\0".as_ptr());
@@ -4784,6 +5831,12 @@ impl Lower {
             }
             /* `for word in x.split(pred)` — the &str split cursor */
             if unsafe { self.try_emit_for_split(s, pat, iter, body, locals) } != 0 || !self.ok {
+                return;
+            }
+            /* `for ch in s.bytes()` — a byte-index loop over the &str
+             * view (ASCII: bytes are chars, UTF-8 decode is the
+             * documented subset divergence). The bind is a uint32_t. */
+            if unsafe { self.try_emit_for_bytes(s, pat, iter, body, locals) } != 0 || !self.ok {
                 return;
             }
             /* `for (i, ch) in s.char_indices()` — byte-index + char over

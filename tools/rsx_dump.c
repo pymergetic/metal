@@ -115,6 +115,36 @@ int main(int argc, char **argv) {
 
     (void)err;
     memset(bigerr, 0, sizeof(bigerr));
+    if (getenv("RSX_DUMP_AST") != NULL) {
+        /* diagnostic mode: the parse tree, not the C — pattern-shape
+         * hunts (a refusal names a construct; the tree shows what the
+         * parser built). Same one-shot arena, same splice feeding.
+         * The dump rides the arena-owned sink: no fixed slab to
+         * outgrow, the arena (SPAN above) is the only ceiling. */
+        pm_jit_rsx_toklist_t toks;
+        pm_jit_rsx_ast_t *ast = NULL;
+        char *dbuf = NULL;
+        size_t dbuf_len = 0;
+        memset(&toks, 0, sizeof(toks));
+        if (pm_metal_jit_rsx_lex(arena, feed, feed_len,
+                &toks, bigerr, sizeof(bigerr)) != 0) {
+            fprintf(stderr, "rsx_dump: lex refused: %s\n", bigerr);
+            return 1;
+        }
+        if (pm_metal_jit_rsx_parse(arena, &toks,
+                &ast, bigerr, sizeof(bigerr)) != 0) {
+            fprintf(stderr, "rsx_dump: parse refused: %s\n", bigerr);
+            return 1;
+        }
+        if (pm_metal_jit_rsx_ast_dump_arena(arena, ast,
+                &dbuf, &dbuf_len, bigerr, sizeof(bigerr)) < 0) {
+            fprintf(stderr, "rsx_dump: ast dump failed: %s\n", bigerr);
+            return 1;
+        }
+        fwrite(dbuf, 1u, dbuf_len, stdout);
+        putc('\n', stdout);
+        return 0;
+    }
     if (pm_metal_jit_rsx_compile(arena, feed, feed_len,
             &c, &c_len, bigerr, sizeof(bigerr)) != 0) {
         fprintf(stderr, "rsx_dump: refused: %s\n", bigerr);

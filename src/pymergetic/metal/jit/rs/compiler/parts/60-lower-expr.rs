@@ -195,7 +195,9 @@ impl Lower {
                     }
                     return;
                 }
-                /* 2-segment enum variant: `State::Ready` -> State_Ready */
+                /* 2-segment enum variant: `State::Ready` -> State_Ready.
+                 * A TAGGED enum's fieldless variant is a compound literal:
+                 * the value is the struct, never the bare tag constant. */
                 if unsafe { (*last).kind } == pm_jit_rsx_ast_kind::PATH {
                     let mut full = self.arena_tmp();
                     let mut at = 0usize;
@@ -204,6 +206,16 @@ impl Lower {
                     at = unsafe { bput(full, 128, at, ltext, llen) };
                     unsafe {
                         *full.add(at) = 0;
+                    }
+                    if unsafe { self.enumtags.has(ftext, flen) } {
+                        /* designated init zero-fills `_u` — no nested
+                         * brace warning for fieldless variants */
+                        self.out.putc(b'(');
+                        self.out.put(ftext, flen);
+                        self.out.puts(b"){ ._tag = \0".as_ptr());
+                        self.out.put(full, at);
+                        self.out.puts(b" }\0".as_ptr());
+                        return;
                     }
                     /* A 2-segment path may also be a static (SYM::NAME) —
                      * emit the joined name either way; C sees the typedef'd
@@ -654,6 +666,13 @@ impl Lower {
             let fnode = unsafe { *fk.add(i) };
             let v = unsafe { *fk.add(i + 1) };
             if unsafe { (*fnode).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD {
+                /* the `..base` marker is not a field — a copy of an
+                 * arbitrary base is never provably zero */
+                if unsafe { (*fnode).text_len } == 2
+                    && unsafe { z_eq(unsafe { (*fnode).text }, 2, b"..\0".as_ptr()) }
+                {
+                    return false;
+                }
                 if !unsafe { self.init_all_zero(v) } {
                     return false;
                 }
@@ -836,8 +855,23 @@ impl Lower {
             let kv = unsafe { *kids.add(f) };
             let n = unsafe { self.expr_ctype(kv, el_bufs[f].as_mut_ptr(), 64, locals) };
             if n == 0 || n >= 64 {
+                /* name the failing element's AST kind (a NUL-terminated
+                 * static string, so its own length is the z_len): a
+                 * refusal chain that stops here must point at the
+                 * poisoner, not just the tuple line */
+                let kb = unsafe { ast_kind_name(unsafe { (*kv).kind }) };
+                let mut kbl = 0usize;
+                while kbl < 24 && unsafe { *kb.add(kbl) } != 0 {
+                    kbl += 1;
+                }
                 unsafe {
-                    self.err(b"cannot infer tuple element type - ascribe it\0".as_ptr(), unsafe { (*e).line });
+                    self.err_let_name2(
+                        b"cannot infer tuple element type - ascribe it\0".as_ptr(),
+                        unsafe { (*e).line },
+                        kb,
+                        kbl,
+                        kb,
+                    );
                 }
                 return;
             }
@@ -941,8 +975,16 @@ impl Lower {
                 }
                 let sl2 = unsafe { (*seg).text_len };
                 if sl2 > 0 {
-                    tname = unsafe { (*seg).text };
-                    tlen = sl2;
+                    /* `Self { .. }` — the enclosing impl's type */
+                    if unsafe { z_eq(unsafe { (*seg).text }, sl2, b"Self\0".as_ptr()) }
+                        && self.self_ty_len > 0
+                    {
+                        tname = self.self_ty.as_ptr();
+                        tlen = self.self_ty_len;
+                    } else {
+                        tname = unsafe { (*seg).text };
+                        tlen = sl2;
+                    }
                     break;
                 }
             }
@@ -956,9 +998,82 @@ impl Lower {
         /* fields on sl's kids: alternating STRUCT_FIELD, value */
         let fk = unsafe { (*sl).kids };
         let fkn = unsafe { (*sl).n_kids } as usize;
+        /* struct update `..base` present? scan the STRUCT_FIELD nodes for
+         * the ".." marker — emission then switches from a compound
+         * literal to a copy-then-override statement expression. */
+        let mut up_base: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        {
+            let mut j = 0usize;
+            while j + 1 < fkn {
+                let fnode = unsafe { *fk.add(j) };
+                if unsafe { (*fnode).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD
+                    && unsafe { (*fnode).text_len } == 2
+                    && unsafe { z_eq(unsafe { (*fnode).text }, 2, b"..\0".as_ptr()) }
+                {
+                    up_base = unsafe { *fk.add(j + 1) };
+                    break;
+                }
+                j += 2;
+            }
+        }
         /* struct slot for field-ctype lookups (None needs the field's
          * Option shape to zero-init) */
         let ss = unsafe { (*self.syms).find(tname, tlen) };
+        if !up_base.is_null() {
+            /* ({ T _u = base; _u.f = v; ...; _u; }) — the base is copied
+             * whole, then the explicit fields override. */
+            let uvar = self.arena_tmp();
+            let mut ul = unsafe { bput(uvar, 160, 0, b"__rsx_u\0".as_ptr(), 7) };
+            let mut cnt = self.atom_tmp_n;
+            self.atom_tmp_n += 1;
+            let mut digs: [u8; 10] = [0; 10];
+            let mut nd = 0usize;
+            if cnt == 0 {
+                digs[0] = b'0';
+                nd = 1;
+            } else {
+                while cnt > 0 && nd < 10 {
+                    digs[nd] = b'0' + (cnt % 10) as u8;
+                    cnt /= 10;
+                    nd += 1;
+                }
+            }
+            let mut q = nd;
+            while q > 0 {
+                q -= 1;
+                ul = unsafe { bput(uvar, 160, ul, &digs[q], 1) };
+            }
+            unsafe {
+                *uvar.add(ul) = 0;
+            }
+            self.out.puts(b"({ \0".as_ptr());
+            self.out.put(tname, tlen);
+            self.out.putc(b' ');
+            self.out.put(uvar, ul);
+            self.out.puts(b" = \0".as_ptr());
+            unsafe { self.emit_expr(up_base, locals) };
+            self.out.puts(b"; \0".as_ptr());
+            let mut i = 0usize;
+            while i + 1 < fkn {
+                let fnode = unsafe { *fk.add(i) };
+                let v = unsafe { *fk.add(i + 1) };
+                if unsafe { (*fnode).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD
+                    && !(unsafe { (*fnode).text_len } == 2
+                        && unsafe { z_eq(unsafe { (*fnode).text }, 2, b"..\0".as_ptr()) })
+                {
+                    self.out.put(uvar, ul);
+                    self.out.puts(b".\0".as_ptr());
+                    self.out.put(unsafe { (*fnode).text }, unsafe { (*fnode).text_len });
+                    self.out.puts(b" = \0".as_ptr());
+                    unsafe { self.emit_expr(v, locals) };
+                    self.out.puts(b"; \0".as_ptr());
+                }
+                i += 2;
+            }
+            self.out.put(uvar, ul);
+            self.out.puts(b"; })\0".as_ptr());
+            return;
+        }
         self.out.puts(b"(\0".as_ptr());
         self.out.put(tname, tlen);
         self.out.puts(b"){ \0".as_ptr());
@@ -1358,7 +1473,11 @@ impl Lower {
                     elems.as_mut_ptr(),
                     &mut list_n,
                 ) {
-                    /* not a vec! — the format! interpolation macro is
+                    /* not a vec! — the write!/writeln! io macro is next */
+                    if unsafe { self.emit_write_macro(e, locals) } {
+                        return;
+                    }
+                    /* the format! interpolation macro is
                      * the other expression macro the plane lowers */
                     if unsafe { self.emit_format_value(e, locals) } {
                         return;
@@ -1637,6 +1756,61 @@ impl Lower {
         if unsafe { z_eq(op, op_len, b"&\0".as_ptr()) }
             || unsafe { z_eq(op, op_len, b"&mut\0".as_ptr()) }
         {
+            /* `&[a, b, …]`: a reference to an array literal — the slice
+             * fat pointer as a compound literal of the element's arr row.
+             * Static and expression positions share this shape (the SKIP
+             * pattern: `const X: &[&str] = &["a", "b"]`). The generic
+             * `(&inner)` fall-through would emit `(&{...})` — not C.
+             * The element spelling comes from the FIRST element's own
+             * ctype — `&str` literals type as rsx_str_ref_t there (the
+             * array-literal path types them as bare char*, a mismatch
+             * that would mint a second, wrong row). */
+            {
+                let inner0 = unsafe { *kids.add(0) };
+                if unsafe { (*inner0).kind } == pm_jit_rsx_ast_kind::ARRAY {
+                    let akids = unsafe { (*inner0).kids };
+                    let ank = unsafe { (*inner0).n_kids } as usize;
+                    if ank >= 1 {
+                        let e0 = unsafe { *akids.add(0) };
+                        /* unwrap a borrow on the element: `&lit`/`&mut x`
+                         * types through the inner expr */
+                        let mut e0p = e0;
+                        let mut hops = 0;
+                        while hops < 4
+                            && unsafe { (*e0p).kind } == pm_jit_rsx_ast_kind::UNARY
+                        {
+                            let t0 = unsafe { (*e0p).text };
+                            let t0l = unsafe { (*e0p).text_len };
+                            if (unsafe { z_eq(t0, t0l, b"&\0".as_ptr()) }
+                                || unsafe { z_eq(t0, t0l, b"&mut\0".as_ptr()) })
+                                && unsafe { (*e0p).n_kids } as usize >= 1
+                            {
+                                e0p = unsafe { *(*e0p).kids.add(0) };
+                            } else {
+                                break;
+                            }
+                            hops += 1;
+                        }
+                        let eb = self.arena_tmp();
+                        let en = unsafe { self.expr_ctype(e0p, eb, 128, locals) };
+                        if en > 0 && en < ARR_SIG {
+                            let row = unsafe { self.arrs.intern(eb, en) };
+                            if row < ARR_CAP {
+                                let nb = self.arena_tmp();
+                                let nn = unsafe { ArrTab::name_for(row, nb, 96) };
+                                if nn > 0 {
+                                    self.out.putc(b'(');
+                                    self.out.put(nb, nn);
+                                    self.out.puts(b"){ \0".as_ptr());
+                                    unsafe { self.emit_expr(inner0, locals) };
+                                    self.out.puts(b" }\0".as_ptr());
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             /* `&slice[lo..hi]` / `&arr[lo..hi]`: the range index already
              * lowers to the sub-slice pointer — taking its address would be
              * one indirection too many. Emit the index expr itself. */
@@ -1887,6 +2061,25 @@ impl Lower {
                 }
             }
         }
+        /* array-typed `=`: C arrays are not assignable — memcpy the
+         * bytes instead (`a = b;` on arrays is a gcc extension; TCC
+         * refuses it, and the self-host prove compiles through TCC). */
+        if op_len == 1 && unsafe { *op } == b'=' {
+            let lt = self.arena_tmp();
+            let ln = unsafe { self.expr_ctype(lhs, lt, 160, locals) };
+            if ln > 0 && unsafe { self.ctype_is_fixed_array(lt, ln) } {
+                self.out.puts(b"memcpy(\0".as_ptr());
+                self.out.putc(b'&');
+                unsafe { self.emit_expr(lhs, locals) };
+                self.out.puts(b", \0".as_ptr());
+                self.out.putc(b'&');
+                unsafe { self.emit_expr(rhs, locals) };
+                self.out.puts(b", sizeof(\0".as_ptr());
+                unsafe { self.emit_expr(lhs, locals) };
+                self.out.puts(b"))\0".as_ptr());
+                return;
+            }
+        }
         unsafe { self.emit_expr(lhs, locals) };
         self.out.putc(b' ');
         self.out.put(op, op_len);
@@ -1931,6 +2124,48 @@ impl Lower {
          * bare leaf; UnsafeCell/Cell::new unwraps unconditionally (they
          * are transparent by the type map). */
         {
+            /* `Box::leak(x)` — the escape hatch to a 'static borrow. The
+             * subset's String heap IS arena-owned (the compile arena
+             * outlives the value), so leak is the identity: the argument
+             * renders as-is and the let's ctype is the argument's. */
+            /* `Box::leak(x)` — the escape hatch to a 'static borrow. The
+             * subset's String heap IS arena-owned (the compile arena
+             * outlives the value), so leak is the identity value-wise;
+             * the borrow it hands back is the &str view of the same
+             * p/n pair — a str_ref even when the argument is an owned
+             * String (the let binding's ctype is rsx_str_ref_t). */
+            {
+                let ck2 = unsafe { (*callee).kids };
+                let cn2 = unsafe { (*callee).n_kids } as usize;
+                if cn2 >= 2 {
+                    let last = unsafe { *ck2.add(cn2 - 1) };
+                    let lt2 = unsafe { (*last).text };
+                    let ll2 = unsafe { (*last).text_len };
+                    let an2 = unsafe { (*args).n_kids } as usize;
+                    if an2 == 1 && unsafe { z_eq(lt2, ll2, b"leak\0".as_ptr()) } {
+                        let wrap = unsafe { *ck2.add(cn2 - 2) };
+                        let wt2 = unsafe { (*wrap).text };
+                        let wl2 = unsafe { (*wrap).text_len };
+                        if unsafe { z_eq(wt2, wl2, b"Box\0".as_ptr()) } {
+                            /* receiver shape: an owned String takes the
+                             * p/n view; a fat-ref passes through. */
+                            let arg0 = unsafe { *(*args).kids.add(0) };
+                            let rb = self.arena_tmp();
+                            let rl = unsafe { self.expr_ctype(arg0, rb, 128, locals) };
+                            if rl == 9 && unsafe { z_eq(rb, 9, b"rsx_str_t\0".as_ptr()) } {
+                                self.out.puts(b"(rsx_str_ref_t){ \0".as_ptr());
+                                unsafe { self.emit_expr(arg0, locals) };
+                                self.out.puts(b".p, \0".as_ptr());
+                                unsafe { self.emit_expr(arg0, locals) };
+                                self.out.puts(b".n }\0".as_ptr());
+                            } else {
+                                unsafe { self.emit_expr(arg0, locals) };
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
             let ck2 = unsafe { (*callee).kids };
             let cn2 = unsafe { (*callee).n_kids } as usize;
             if cn2 >= 1 {
@@ -1957,6 +2192,153 @@ impl Lower {
                     }
                     if unwrap {
                         unsafe { self.emit_expr(*ak.add(0), locals) };
+                        return;
+                    }
+                }
+            }
+        }
+        /* `alloc::boxed::Box::new(v)` — the box IS the pointee pointer: a
+         * malloc'd cell carrying v. Statement-expression (the same GNU
+         * shape to_string rides): `({ T *p = malloc(sizeof *p); *p = v;
+         * p; })`. `Box::from_raw(p)`/`into_raw(b)` — the pointer passes
+         * through unchanged (identity). */
+        {
+            let ck2 = unsafe { (*callee).kids };
+            let cn2 = unsafe { (*callee).n_kids } as usize;
+            if cn2 >= 2 {
+                let last2 = unsafe { *ck2.add(cn2 - 1) };
+                let l2t = unsafe { (*last2).text };
+                let l2l = unsafe { (*last2).text_len };
+                let prev = unsafe { *ck2.add(cn2 - 2) };
+                let pt = unsafe { (*prev).text };
+                let pl = unsafe { (*prev).text_len };
+                if unsafe { z_eq(pt, pl, b"Box\0".as_ptr()) }
+                    && unsafe { (*args).n_kids } as usize == 1
+                {
+                    let arg0 = unsafe { *(*args).kids.add(0) };
+                    if unsafe { z_eq(l2t, l2l, b"new\0".as_ptr()) } {
+                        let ab = self.arena_tmp();
+                        let an = unsafe { self.expr_ctype(arg0, ab, 128, locals) };
+                        if an > 0 {
+                            self.out.puts(b"({ \0".as_ptr());
+                            self.out.put(ab, an);
+                            self.out.puts(b" * _b = (\0".as_ptr());
+                            self.out.put(ab, an);
+                            self.out.puts(b" *)malloc(sizeof(\0".as_ptr());
+                            self.out.put(ab, an);
+                            self.out.puts(b")); if (_b) { *_b = \0".as_ptr());
+                            unsafe { self.emit_expr(arg0, locals) };
+                            self.out.puts(b"; } _b; })\0".as_ptr());
+                            return;
+                        }
+                    }
+                    if unsafe { z_eq(l2t, l2l, b"from_raw\0".as_ptr()) }
+                        || unsafe { z_eq(l2t, l2l, b"into_raw\0".as_ptr()) }
+                    {
+                        unsafe { self.emit_expr(arg0, locals) };
+                        return;
+                    }
+                }
+            }
+        }
+        /* `core::slice::from_raw_parts(p, n)` — the &[u8] view of a raw
+         * buffer: the rsx_arr compound literal (uint8_t row). */
+        {
+            let ck2 = unsafe { (*callee).kids };
+            let cn2 = unsafe { (*callee).n_kids } as usize;
+            if cn2 == 3 && unsafe { (*args).n_kids } as usize == 2 {
+                let s0 = unsafe { *ck2.add(0) };
+                let s1 = unsafe { *ck2.add(1) };
+                let s2 = unsafe { *ck2.add(2) };
+                if unsafe { z_eq(unsafe { (*s0).text }, unsafe { (*s0).text_len }, b"core\0".as_ptr()) }
+                    && unsafe { z_eq(unsafe { (*s1).text }, unsafe { (*s1).text_len }, b"slice\0".as_ptr()) }
+                    && unsafe { z_eq(unsafe { (*s2).text }, unsafe { (*s2).text_len }, b"from_raw_parts\0".as_ptr()) }
+                {
+                    let row = unsafe { self.arrs.intern(b"uint8_t\0".as_ptr(), 7) };
+                    if row < ARR_CAP {
+                        let nb = self.arena_tmp();
+                        let nn = unsafe { ArrTab::name_for(row, nb, 96) };
+                        if nn > 0 {
+                            let ak = unsafe { (*args).kids };
+                            self.out.putc(b'(');
+                            self.out.put(nb, nn);
+                            self.out.puts(b"){ \0".as_ptr());
+                            unsafe { self.emit_expr(*ak.add(0), locals) };
+                            self.out.puts(b", \0".as_ptr());
+                            unsafe { self.emit_expr(*ak.add(1), locals) };
+                            self.out.puts(b" }\0".as_ptr());
+                            return;
+                        }
+                    }
+                }
+                /* `core::str::from_utf8(bytes)` — the view itself (the
+                 * bytes are UTF-8 by the callers' contract); `.ok()` and
+                 * the Some-bind take it from here. */
+                if unsafe { z_eq(unsafe { (*s0).text }, unsafe { (*s0).text_len }, b"core\0".as_ptr()) }
+                    && unsafe { z_eq(unsafe { (*s1).text }, unsafe { (*s1).text_len }, b"str\0".as_ptr()) }
+                    && unsafe { z_eq(unsafe { (*s2).text }, unsafe { (*s2).text_len }, b"from_utf8\0".as_ptr()) }
+                {
+                    let ak = unsafe { (*args).kids };
+                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                    return;
+                }
+            }
+        }
+        /* Enum payload ctor `E::V(x)`: the tagged-union compound literal
+         * `(E){ E_V, { x } }`. The joined variant name must have an
+         * enumpays row (fieldless variants take the plain-constant path
+         * further down: they have no argument list at all). */
+        {
+            let ck2 = unsafe { (*callee).kids };
+            let cn2 = unsafe { (*callee).n_kids } as usize;
+            if cn2 >= 2 {
+                /* joined Enum_Variant — same spelling the tables hold */
+                let mut full = self.arena_tmp();
+                let mut at = 0usize;
+                let mut ok_join = true;
+                let mut ci = 0usize;
+                while ci < cn2 {
+                    let seg = unsafe { *ck2.add(ci) };
+                    if unsafe { (*seg).kind } != pm_jit_rsx_ast_kind::PATH {
+                        ok_join = false;
+                        break;
+                    }
+                    if at > 0 {
+                        at = unsafe { bput(full, 128, at, b"_\0".as_ptr(), 1) };
+                    }
+                    at = unsafe { bput(full, 128, at, unsafe { (*seg).text }, unsafe { (*seg).text_len }) };
+                    ci += 1;
+                }
+                if ok_join {
+                    unsafe {
+                        *full.add(at) = 0;
+                    }
+                    let pb = self.arena_tmp();
+                    let pn = unsafe { self.enumpays.lookup(full, at, pb, 96) };
+                    if pn > 0 && unsafe { (*args).n_kids } as usize == 1 {
+                        let ak = unsafe { (*args).kids };
+                        /* the enum name: all segments before the variant */
+                        let ename = self.arena_tmp();
+                        let mut eat = 0usize;
+                        eat = unsafe {
+                            bput(ename, 96, eat, unsafe { (*(*ck2.add(0))).text }, unsafe { (*(*ck2.add(0))).text_len })
+                        };
+                        unsafe {
+                            *ename.add(eat) = 0;
+                        }
+                        /* the variant's union field: the last segment */
+                        let vleaf = unsafe { *ck2.add(cn2 - 1) };
+                        let vt = unsafe { (*vleaf).text };
+                        let vl = unsafe { (*vleaf).text_len };
+                        self.out.putc(b'(');
+                        self.out.put(ename, eat);
+                        self.out.puts(b"){ ._tag = \0".as_ptr());
+                        self.out.put(full, at);
+                        self.out.puts(b", ._u = { .\0".as_ptr());
+                        self.out.put(vt, vl);
+                        self.out.puts(b" = \0".as_ptr());
+                        unsafe { self.emit_expr(*ak.add(0), locals) };
+                        self.out.puts(b" } }\0".as_ptr());
                         return;
                     }
                 }
@@ -1990,6 +2372,63 @@ impl Lower {
                             self.out.puts(b"){ ._v = \0".as_ptr());
                             unsafe { self.emit_expr(*ak.add(0), locals) };
                             self.out.puts(b", ._has = 1 }\0".as_ptr());
+                            return;
+                        }
+                    }
+                }
+                /* `Ok(x)` / `Err(e)` building the Result row from the
+                 * expected type (cur_ret — the let ascription, the fn's
+                 * own return, or the let-else initializer's row). The
+                 * compound literal fills BOTH payloads: the unused one
+                 * zeroes (never read — _ok gates). `Err(())`/`Ok(())`
+                 * unit payloads emit the 0 placeholder directly. */
+                if (an == 1 || an == 0)
+                    && (unsafe { z_eq(lname, llen, b"Ok\0".as_ptr()) }
+                        || unsafe { z_eq(lname, llen, b"Err\0".as_ptr()) })
+                    && self.cur_ret_len > 8
+                {
+                    let is_ok = unsafe { z_eq(lname, llen, b"Ok\0".as_ptr()) };
+                    let ob = self.arena_tmp();
+                    let eb2 = self.arena_tmp();
+                    let on = unsafe {
+                        Lower::res_typedef_elem(
+                            self.cur_ret.as_ptr(),
+                            self.cur_ret_len,
+                            ob,
+                            96,
+                            eb2,
+                            96,
+                        )
+                    };
+                    if on > 0 {
+                        let mut el2 = 0usize;
+                        while el2 < 96 && unsafe { *eb2.add(el2) } != 0 {
+                            el2 += 1;
+                        }
+                        let tdn = self.arena_tmp();
+                        let tdn_len = unsafe {
+                            Lower::res_typedef_name(ob, on, eb2, el2, tdn, 192)
+                        };
+                        if tdn_len > 0 {
+                            self.out.putc(b'(');
+                            self.out.put(tdn, tdn_len);
+                            if is_ok {
+                                self.out.puts(b"){ ._v = \0".as_ptr());
+                                if an == 1 {
+                                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                                } else {
+                                    self.out.putc(b'0');
+                                }
+                                self.out.puts(b", ._e = 0, ._ok = 1 }\0".as_ptr());
+                            } else {
+                                self.out.puts(b"){ ._v = 0, ._e = \0".as_ptr());
+                                if an == 1 {
+                                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                                } else {
+                                    self.out.putc(b'0');
+                                }
+                                self.out.puts(b", ._ok = 0 }\0".as_ptr());
+                            }
                             return;
                         }
                     }
@@ -2636,6 +3075,69 @@ impl Lower {
         len as u32
     }
 
+    /* write!(sink, ..) / writeln!(sink, ..) — the io-Write macro as a
+     * VALUE (`let _ = writeln!(out, ..)`): builds the payload with the
+     * same segment walker format! uses, fwrites it to the FILE * sink,
+     * appends the newline for writeln!, and yields 0 (the discarded
+     * io::Result — the `let _ =` shape is the only in-tree spelling).
+     * Returns true when the MACRO node was write-family (emission done). */
+    unsafe fn emit_write_macro(
+        &mut self,
+        e: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+    ) -> bool {
+        let mut sink: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut ffmt: *const u8 = core::ptr::null();
+        let mut ffmt_len: usize = 0;
+        let mut fargs: [*mut pm_jit_rsx_ast_t; 8] = [core::ptr::null_mut(); 8];
+        let mut fargs_n: usize = 0;
+        let mut fcaps: [*mut pm_jit_rsx_ast_t; 16] = [core::ptr::null_mut(); 16];
+        let mut fcaps_n: usize = 0;
+        let mut newline = false;
+        if !unsafe {
+            self.write_macro_scan(
+                (*e).text,
+                (*e).text_len,
+                locals,
+                &mut sink,
+                &mut ffmt,
+                &mut ffmt_len,
+                fargs.as_mut_ptr(),
+                &mut fargs_n,
+                fcaps.as_mut_ptr(),
+                &mut fcaps_n,
+                &mut newline,
+            )
+        } {
+            return false;
+        }
+        if !self.ok {
+            return true;
+        }
+        self.file_used = true;
+        if ffmt_len == 0 {
+            /* the bare form: writeln!(out) — one newline, no payload */
+            self.out.puts(b"({ fputc('\\n', \0".as_ptr());
+            unsafe { self.emit_expr(sink, locals) };
+            self.out.puts(b"); 0; })\0".as_ptr());
+            return true;
+        }
+        /* payload build + write + optional newline — one statement expr */
+        self.str_own_used = true;
+        self.out.puts(b"({ rsx_str_t _f = {0};\0".as_ptr());
+        let ok = unsafe { self.format_segments(e, ffmt, ffmt_len, &fargs, fargs_n, &fcaps, fcaps_n, locals) };
+        if !ok {
+            return true;
+        }
+        if newline {
+            self.out.puts(b" rsx_str_append(&_f, \"\\n\", 1);\0".as_ptr());
+        }
+        self.out.puts(b" fwrite(_f.p, 1, _f.n, \0".as_ptr());
+        unsafe { self.emit_expr(sink, locals) };
+        self.out.puts(b"); 0; })\0".as_ptr());
+        true
+    }
+
     /* format!(..) — the interpolation macro as a VALUE: a GNU statement
      * expression building a block-local rsx_str_t _f, segment by
      * segment (literal runs verbatim, `{ident}` implicit captures and
@@ -3130,6 +3632,69 @@ impl Lower {
                 }
             }
         }
+        /* `Vec<String>.join(sep)` — one owned String: each element's
+         * bytes appended, the sep literal between neighbors. Handles
+         * both the by-value row and the &Vec<T> param (auto-deref). */
+        if unsafe { z_eq(mname, mlen, b"join\0".as_ptr()) } && an == 1 {
+            let sep = unsafe { *ak.add(0) };
+            if unsafe { (*sep).kind } == pm_jit_rsx_ast_kind::LITERAL {
+                let st = unsafe { (*sep).text };
+                let stl = unsafe { (*sep).text_len };
+                if stl >= 2 && unsafe { *st } == b'"' {
+                    let rbuf = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(recv, rbuf, 128, locals) };
+                    let mut b0 = 0usize;
+                    if rl > 6 && unsafe { z_eq(rbuf, 6, b"const \0".as_ptr()) } {
+                        b0 = 6;
+                    }
+                    let mut el = rl - b0;
+                    let mut behind_ptr = false;
+                    if el > 2 && unsafe { *rbuf.add(rl - 1) } == b'*' {
+                        el -= 2;
+                        behind_ptr = true;
+                    }
+                    let mut is_vec_str = false;
+                    if el > 8 && unsafe { z_eq(rbuf.add(b0), 8, b"rsx_vec_\0".as_ptr()) } {
+                        let row = unsafe { self.vecs.find_by_name(rbuf.add(b0), el) };
+                        if row < VEC_CAP {
+                            let elen2 = self.vecs.elem_lens[row];
+                            is_vec_str = elen2 == 9
+                                && unsafe {
+                                    z_eq(self.vecs.elems[row].as_ptr(), 9, b"rsx_str_t\0".as_ptr())
+                                };
+                        }
+                    }
+                    if is_vec_str {
+                        let sep_inner = st.wrapping_add(1);
+                        let sep_c_len =
+                            unsafe { Lower::c_str_len(st.add(1), stl - 2) } as u64;
+                        self.str_ref_used = true;
+                        self.str_own_used = true;
+                        self.out.puts(b"({ rsx_str_t _j = {0}; size_t _k; for (_k = 0; _k < (\0".as_ptr());
+                        if behind_ptr {
+                            self.out.putc(b'*');
+                        }
+                        unsafe { self.emit_expr(recv, locals) };
+                        self.out.puts(b").n; _k++) { if (_k != 0) { rsx_str_append(&_j, \"\0".as_ptr());
+                        self.out.put(sep_inner, stl - 2);
+                        self.out.puts(b"\", \0".as_ptr());
+                        self.out.put_u32(sep_c_len as u32);
+                        self.out.puts(b"); } rsx_str_append(&_j, (\0".as_ptr());
+                        if behind_ptr {
+                            self.out.putc(b'*');
+                        }
+                        unsafe { self.emit_expr(recv, locals) };
+                        self.out.puts(b").p[_k].p, (\0".as_ptr());
+                        if behind_ptr {
+                            self.out.putc(b'*');
+                        }
+                        unsafe { self.emit_expr(recv, locals) };
+                        self.out.puts(b").p[_k].n); } _j; })\0".as_ptr());
+                        return;
+                    }
+                }
+            }
+        }
         /* .is_null() */
         if unsafe { z_eq(mname, mlen, b"is_null\0".as_ptr()) } && an == 0 {
             self.out.putc(b'(');
@@ -3397,6 +3962,134 @@ impl Lower {
                                 self.out.puts(b").p[_i] == '\0".as_ptr());
                                 self.out.putc(ch);
                                 self.out.puts(b"') { _o._v = _i; _o._has = 1; break; } } _o; })\0".as_ptr());
+                                }
+                                return;
+                            }
+                        }
+                        /* find(&str) — the needle is a string literal or a
+                         * &str-typed expr (a MARK-style const): a memcmp
+                         * window scan, Option<usize> of the first (resp.
+                         * last) byte index where the needle fits. */
+                        {
+                            /* literal needle: the bytes + the exact inner
+                             * length (the lexer's text keeps the quotes). */
+                            let mut lit_ptr: *const u8 = core::ptr::null_mut();
+                            let mut lit_len = 0usize;
+                            if unsafe { (*arg0).kind } == pm_jit_rsx_ast_kind::LITERAL
+                                && unsafe { *(*arg0).text } == b'"'
+                            {
+                                lit_ptr = unsafe { (*arg0).text };
+                                lit_len = unsafe { (*arg0).text_len } - 2;
+                            }
+                            if !lit_ptr.is_null() {
+                                self.str_ref_used = true;
+                                let _ = unsafe { self.opt_add(b"size_t\0".as_ptr(), 6) };
+                                let tdn = self.name_tmp(160);
+                                let tdn_len = unsafe {
+                                    Lower::opt_typedef_name(b"size_t\0".as_ptr(), 6, tdn, 160)
+                                };
+                                if tdn_len == 0 {
+                                    unsafe {
+                                        self.err(
+                                            b"internal: option typedef name too long\0".as_ptr(),
+                                            unsafe { (*e).line },
+                                        );
+                                    }
+                                    return;
+                                }
+                                if is_rfind {
+                                    self.out.puts(b"({ \0".as_ptr());
+                                    self.out.put(tdn, tdn_len);
+                                    self.out.puts(b" _o = {0}; for (size_t _i = (\0".as_ptr());
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.puts(b").n; _i-- > 0;) { if (\0".as_ptr());
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.put_u32(lit_len as u32);
+                                    self.out.puts(b" <= _i && !memcmp((\0".as_ptr());
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.puts(b").p + _i, \0".as_ptr());
+                                    self.out.put(lit_ptr, lit_len + 2);
+                                    self.out.puts(b", \0".as_ptr());
+                                    self.out.put_u32(lit_len as u32);
+                                    self.out.puts(b") { _o._v = _i; _o._has = 1; break; } } _o; })\0".as_ptr());
+                                } else {
+                                    self.out.puts(b"({ \0".as_ptr());
+                                    self.out.put(tdn, tdn_len);
+                                    self.out.puts(b" _o = {0}; if ((\0".as_ptr());
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.puts(b").n >= \0".as_ptr());
+                                    self.out.put_u32(lit_len as u32);
+                                    self.out.puts(b") { for (size_t _i = 0; _i + \0".as_ptr());
+                                    self.out.put_u32(lit_len as u32);
+                                    self.out.puts(b" <= (\0".as_ptr());
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.puts(b").n; _i++) { if (!memcmp((\0".as_ptr());
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.puts(b").p + _i, \0".as_ptr());
+                                    self.out.put(lit_ptr, lit_len + 2);
+                                    self.out.puts(b", \0".as_ptr());
+                                    self.out.put_u32(lit_len as u32);
+                                    self.out.puts(b")) { _o._v = _i; _o._has = 1; break; } } } _o; })\0".as_ptr());
+                                }
+                                return;
+                            }
+                        }
+                        {
+                            let nb = self.arena_tmp();
+                            let nl = unsafe { self.expr_ctype(arg0, nb, 128, locals) };
+                            let needle_is_view = (nl == 13
+                                && unsafe { z_eq(nb, 13, b"rsx_str_ref_t\0".as_ptr()) })
+                                || (nl == 9 && unsafe { z_eq(nb, 9, b"rsx_str_t\0".as_ptr()) });
+                            if needle_is_view {
+                                self.str_ref_used = true;
+                                let _ = unsafe { self.opt_add(b"size_t\0".as_ptr(), 6) };
+                                let tdn = self.name_tmp(160);
+                                let tdn_len = unsafe {
+                                    Lower::opt_typedef_name(b"size_t\0".as_ptr(), 6, tdn, 160)
+                                };
+                                if tdn_len == 0 {
+                                    unsafe {
+                                        self.err(
+                                            b"internal: option typedef name too long\0".as_ptr(),
+                                            unsafe { (*e).line },
+                                        );
+                                    }
+                                    return;
+                                }
+                                if is_rfind {
+                                    self.out.puts(b"({ \0".as_ptr());
+                                    self.out.put(tdn, tdn_len);
+                                    self.out.puts(b" _o = {0}; for (size_t _i = (\0".as_ptr());
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.puts(b").n; _i-- > 0;) { if (\0".as_ptr());
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.puts(b").n - _i >= (\0".as_ptr());
+                                    unsafe { self.emit_expr(arg0, locals) };
+                                    self.out.puts(b").n && !memcmp((\0".as_ptr());
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.puts(b").p + _i, (\0".as_ptr());
+                                    unsafe { self.emit_expr(arg0, locals) };
+                                    self.out.puts(b").p, (\0".as_ptr());
+                                    unsafe { self.emit_expr(arg0, locals) };
+                                    self.out.puts(b").n)) { _o._v = _i; _o._has = 1; break; } } _o; })\0".as_ptr());
+                                } else {
+                                    self.out.puts(b"({ \0".as_ptr());
+                                    self.out.put(tdn, tdn_len);
+                                    self.out.puts(b" _o = {0}; if ((\0".as_ptr());
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.puts(b").n >= (\0".as_ptr());
+                                    unsafe { self.emit_expr(arg0, locals) };
+                                    self.out.puts(b").n) { for (size_t _i = 0; _i + (\0".as_ptr());
+                                    unsafe { self.emit_expr(arg0, locals) };
+                                    self.out.puts(b").n <= (\0".as_ptr());
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.puts(b").n; _i++) { if (!memcmp((\0".as_ptr());
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.puts(b").p + _i, (\0".as_ptr());
+                                    unsafe { self.emit_expr(arg0, locals) };
+                                    self.out.puts(b").p, (\0".as_ptr());
+                                    unsafe { self.emit_expr(arg0, locals) };
+                                    self.out.puts(b").n)) { _o._v = _i; _o._has = 1; break; } } } _o; })\0".as_ptr());
                                 }
                                 return;
                             }
@@ -4181,6 +4874,40 @@ impl Lower {
                 }
             }
         }
+        /* `.ok()` on `core::str::from_utf8(bytes)` — Result<&str,_> to
+         * Option<&str>: the Some wrap of the view (typing's twin gate:
+         * the receiver is the from_utf8 call; the payload is the view). */
+        if an == 0 && unsafe { z_eq(mname, mlen, b"ok\0".as_ptr()) } {
+            let rb = self.arena_tmp();
+            let rl = unsafe { self.expr_ctype(recv, rb, 128, locals) };
+            if rl == 13 && unsafe { z_eq(rb, 13, b"rsx_str_ref_t\0".as_ptr()) }
+                && unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::CALL
+            {
+                let rk = unsafe { (*recv).kids };
+                let callee0 = unsafe { *rk.add(0) };
+                if unsafe { (*callee0).kind } == pm_jit_rsx_ast_kind::PATH {
+                    let c0k = unsafe { (*callee0).kids };
+                    let c0n = unsafe { (*callee0).n_kids } as usize;
+                    if c0n == 3 {
+                        let r2 = unsafe { *c0k.add(2) };
+                        if unsafe { z_eq(unsafe { (*r2).text }, unsafe { (*r2).text_len }, b"from_utf8\0".as_ptr()) } {
+                        let tdn = self.arena_tmp();
+                        let tdn_len = unsafe {
+                            Lower::opt_typedef_name(b"rsx_str_ref_t\0".as_ptr(), 13, tdn, 160)
+                        };
+                        if tdn_len > 0 {
+                            self.out.putc(b'(');
+                            self.out.put(tdn, tdn_len);
+                            self.out.puts(b"){ ._v = \0".as_ptr());
+                            unsafe { self.emit_expr(recv, locals) };
+                            self.out.puts(b", ._has = 1 }\0".as_ptr());
+                            return;
+                        }
+                    }
+                }
+            }
+            }
+        }
         /* ---- str_ref/owned shared methods ----
          *
          * .to_string()/.to_owned()/.into_owned() on ANY string-shaped
@@ -4192,6 +4919,7 @@ impl Lower {
         if (an == 0 && unsafe { z_eq(mname, mlen, b"to_string\0".as_ptr()) })
             || (an == 0 && unsafe { z_eq(mname, mlen, b"to_owned\0".as_ptr()) })
             || (an == 0 && unsafe { z_eq(mname, mlen, b"into_owned\0".as_ptr()) })
+            || (an == 0 && unsafe { z_eq(mname, mlen, b"into_boxed_str\0".as_ptr()) })
         {
             let ok = self.str_receiver_ok(recv, locals);
             if ok {
@@ -4736,6 +5464,15 @@ impl Lower {
                 self.out.puts(b").p, (\0".as_ptr());
                 unsafe { self.emit_expr(recv, locals) };
                 self.out.puts(b").n }\0".as_ptr());
+                return;
+            }
+            /* &str receiver: already the fat view — identity (the
+             * generic identity arm below would also work; keep this
+             * explicit so the arm reads as intent). */
+            if tn == 13 && unsafe { z_eq(tbuf, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                self.out.putc(b'(');
+                unsafe { self.emit_expr(recv, locals) };
+                self.out.putc(b')');
                 return;
             }
         }
