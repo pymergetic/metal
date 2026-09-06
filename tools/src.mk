@@ -25,10 +25,11 @@ PM_METAL_SRC_FAIL := $(shell python3 $(PM_METAL_SRC_TOOLS)/embed_src.py -o $(PM_
 ifneq ($(PM_METAL_SRC_FAIL),)
 $(error metal source embed failed — run $(PM_METAL_SRC_TOOLS)/embed_src.py)
 endif
-# The rsx compiler card's muscle is assembled from parts/ before anything
-# can embed or compile it (tools/rsx_assemble.py). Deterministic: bytes
-# identical leave __impl__.rs untouched, so a clean tree never rebuilds.
-PM_METAL_RSX_FAIL := $(shell python3 $(PM_METAL_SRC_TOOLS)/rsx_assemble.py || echo fail)
+# The rsx compiler card's muscle is authored as parts/ (spans of one TU);
+# the tree carries no flat assembly — this is the validity gate (the parts
+# assemble cleanly; every consumer gets the same bytes from its own
+# assembly path: kernel splice, build.rs OUT_DIR, selfhost_cycle WORK).
+PM_METAL_RSX_FAIL := $(shell python3 $(PM_METAL_SRC_TOOLS)/rsx_assemble.py --quiet || echo fail)
 ifneq ($(PM_METAL_RSX_FAIL),)
 $(error rsx assembly failed — run $(PM_METAL_SRC_TOOLS)/rsx_assemble.py)
 endif

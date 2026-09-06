@@ -171,6 +171,10 @@ struct Lower {
     vecs: VecTab,
     /* &[T] slice-ref rows (rsx_arr_<row>) — see ArrTab in 30-tables. */
     arrs: ArrTab,
+    /* BTreeMap<String, V> plane rows (rsx_map_<row>) — see MapTab in
+     * 30-tables: the growable kv spine, String keys, one row per value
+     * C-type. */
+    maps: MapTab,
     /* Mutex<T>/SpinLock<T> plane: interned payload spellings -> named C
      * rows { pm_util_lock_t raw; T value; }, same emission contract. */
     locks: LockTab,
@@ -240,6 +244,7 @@ impl Lower {
             (*p).enumpays = EnumPayTab::new();
             (*p).enumtags = EnumTagTab::new();
             (*p).arrs = ArrTab::new();
+            (*p).maps = MapTab::new();
         }
         p
     }

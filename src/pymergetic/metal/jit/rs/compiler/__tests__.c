@@ -963,7 +963,7 @@ static int32_t test_self_host(void) {
     void *backing1 = NULL, *backing2 = NULL;
     pm_util_mem_arena_t *arena1 = NULL, *arena2 = NULL;
 
-    src = pm_metal_inspect_src_read("pymergetic.metal.jit.rs.compiler", "__impl__.rs");
+    src = pm_metal_inspect_src_read("pymergetic.metal.jit.rs.compiler", "__flat__.rs");
     if (src == NULL) return 130;
     src_len = strlen(src);
     if (src_len < 100000) return 131; /* the real file is ~380 KB */
@@ -1054,7 +1054,7 @@ static int32_t test_self_host_object(void) {
     uint8_t *obj = NULL;
     size_t obj_len = 0;
 
-    src = pm_metal_inspect_src_read("pymergetic.metal.jit.rs.compiler", "__impl__.rs");
+    src = pm_metal_inspect_src_read("pymergetic.metal.jit.rs.compiler", "__flat__.rs");
     if (src == NULL) return 150;
     src_len = strlen(src);
     if (src_len < 100000) return 151;
@@ -1133,8 +1133,8 @@ static int32_t test_self_host_link(void) {
     char err[PM_METAL_JIT_RSX_ERR_MAX];
     char oerr[256];
     int32_t rc;
-    void *backing = NULL, *obacking = NULL;
-    pm_util_mem_arena_t *arena = NULL, *oarena = NULL;
+    void *backing = NULL, *obacking = NULL, *lbacking = NULL;
+    pm_util_mem_arena_t *arena = NULL, *oarena = NULL, *larena = NULL;
     uint8_t *obj = NULL;
     size_t obj_len = 0;
     pm_metal_build_unit_t unit;
@@ -1150,7 +1150,7 @@ static int32_t test_self_host_link(void) {
     pm_jit_rsx_ast_t *l_unit = NULL;
     pm_jit_rsx_toklist_t l_toks;
 
-    src = pm_metal_inspect_src_read("pymergetic.metal.jit.rs.compiler", "__impl__.rs");
+    src = pm_metal_inspect_src_read("pymergetic.metal.jit.rs.compiler", "__flat__.rs");
     if (src == NULL) return 160;
     src_len = strlen(src);
     if (src_len < 100000) return 161;
@@ -1230,22 +1230,45 @@ static int32_t test_self_host_link(void) {
 
     memset(&l_toks, 0, sizeof(l_toks));
     memset(err, 0, sizeof(err));
-    if (l_lex(oarena, src, src_len, &l_toks, err, sizeof(err)) != 0) {
+    /* The linked run gets its own arena (128 MiB): the TCC compile and the
+     * ELF link both drew from oarena already, and the linked compiler's
+     * own lex/parse/lower of a 1.4 MiB TU redraws ~70 MiB on top of those
+     * pools — reusing oarena starves it into SIGSEGV (the same starvation
+     * tools/selfhost_feed.c fixed for the cycle feed). */
+    lbacking = malloc(1u << 27);
+    if (!lbacking) {
         pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking);
+        return 175;
+    }
+    larena = pm_util_mem_arena_create(lbacking, 1u << 27);
+    if (!larena) {
+        free(lbacking);
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(arena); free(backing);
+        pm_util_mem_arena_destroy(oarena); free(obacking);
+        return 176;
+    }
+    if (l_lex(larena, src, src_len, &l_toks, err, sizeof(err)) != 0) {
+        pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(larena); free(lbacking);
         pm_util_mem_arena_destroy(arena); free(backing);
         pm_util_mem_arena_destroy(oarena); free(obacking);
         return 171;
     }
     memset(err, 0, sizeof(err));
-    if (l_parse(oarena, &l_toks, &l_unit, err, sizeof(err)) != 0) {
+    if (l_parse(larena, &l_toks, &l_unit, err, sizeof(err)) != 0) {
         pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(larena); free(lbacking);
         pm_util_mem_arena_destroy(arena); free(backing);
         pm_util_mem_arena_destroy(oarena); free(obacking);
         return 172;
     }
     memset(err, 0, sizeof(err));
-    if (l_lower(oarena, l_unit, &c_linked, &c_linked_len, err, sizeof(err)) != 0) {
+    if (l_lower(larena, l_unit, &c_linked, &c_linked_len, err, sizeof(err)) != 0) {
         pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(larena); free(lbacking);
         pm_util_mem_arena_destroy(arena); free(backing);
         pm_util_mem_arena_destroy(oarena); free(obacking);
         return 173;
@@ -1255,12 +1278,14 @@ static int32_t test_self_host_link(void) {
     if (c_linked_len != c_boot_len
         || memcmp(c_linked, c_boot, c_boot_len) != 0) {
         pm_metal_build_artifact_destroy(&art);
+        pm_util_mem_arena_destroy(larena); free(lbacking);
         pm_util_mem_arena_destroy(arena); free(backing);
         pm_util_mem_arena_destroy(oarena); free(obacking);
         return 174;
     }
 
     pm_metal_build_artifact_destroy(&art);
+    pm_util_mem_arena_destroy(larena); free(lbacking);
     pm_util_mem_arena_destroy(arena);
     pm_util_mem_arena_destroy(oarena);
     free(backing);

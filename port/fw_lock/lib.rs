@@ -201,7 +201,10 @@ mod asgi;
 
 /* micro-rustc joins the same cards: the build card's impl=rs dispatch
  * (rs -> C -> TCC -> link) needs pm_metal_jit_rsx_compile on this seat,
- * and the card is the one defining lang for it — same __impl__.rs as
- * cargo, no twin. */
-#[path = "../../src/pymergetic/metal/jit/rs/compiler/__impl__.rs"]
-mod rs_compiler;
+ * and the card is the one defining lang for it — same bytes as cargo,
+ * no twin. The card is authored as parts/ (spans of one TU); its flat
+ * form is assembled into the port build dir (make passes the path in
+ * PM_FW_RSX_FLAT — include! is a macro, so concat!/env! resolve it). */
+mod rs_compiler {
+    include!(concat!(env!("PM_FW_RSX_FLAT")));
+}

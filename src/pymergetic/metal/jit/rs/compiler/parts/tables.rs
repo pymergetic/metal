@@ -856,6 +856,11 @@ impl TraitTab {
 const VEC_CAP: usize = 96;
 const CT_SIG: usize = 160;
 
+/* Map plane: one row per distinct BTreeMap VALUE C-type (the key plane is
+ * rsx_str_t only). Registry/tree maps number in the tens — the same
+ * scale the lock/arr planes sized against. */
+const MAP_CAP: usize = 32;
+
 /* Fn-pointer plane: full `RET (*)(params)` spellings are 50-70 bytes with
  * spaces and parens — as an Option payload the hex name doubles past the
  * ctype buffers. Intern each distinct signature once:
@@ -1080,6 +1085,144 @@ impl VecTab {
         }
         if row >= self.n {
             return VEC_CAP;
+        }
+        row
+    }
+}
+
+/* ---- map rows (the BTreeMap<K, V> plane) ----
+ *
+ * `alloc::collections::BTreeMap<K, V>` / `std::collections::BTreeMap<K, V>`
+ * lowers to a C struct row: { rsx_map_kv_<row> *rows; size_t n, cap; } with
+ * the kv row { K k; V v; } — the growable-spine discipline the Vec plane
+ * rides, applied to an ordered kv store. Keys in the kernel discipline are
+ * Strings (rsx_str_t); linear scan is the map (registry/tree maps are
+ * dozens of rows, not millions — the C stays readable and the semantics
+ * match: get/insert/entry-or-insert on the exact key bytes).
+ * Numbered rows mirror VecTab: rsx_map_<row>, deterministic by collection
+ * order, the self-host fixed point gates that. */
+struct MapTab {
+    /* canonical value C-type text (the key plane is rsx_str_t only) */
+    vals: [[u8; CT_SIG]; MAP_CAP],
+    val_lens: [usize; MAP_CAP],
+    n: usize,
+    done: [bool; MAP_CAP],
+}
+
+impl MapTab {
+    unsafe fn new() -> MapTab {
+        MapTab {
+            vals: [[0; CT_SIG]; MAP_CAP],
+            val_lens: [0; MAP_CAP],
+            n: 0,
+            done: [false; MAP_CAP],
+        }
+    }
+
+    /* typedef name: rsx_map_<row> (row < MAP_CAP, <= 2 digits). */
+    unsafe fn name_for(row: usize, out: *mut u8, cap: usize) -> usize {
+        let at = unsafe { bput(out, cap, 0, b"rsx_map_\0".as_ptr(), 8) };
+        if at != 8 || cap <= 10 {
+            return 0;
+        }
+        if row >= MAP_CAP {
+            return 0;
+        }
+        let d0 = b'0' + (row % 10) as u8;
+        let d1 = b'0' + (row / 10) as u8;
+        let at2 = if row >= 10 {
+            let digs: [u8; 2] = [d1, d0];
+            unsafe { bput(out, cap, at, digs.as_ptr(), 2) }
+        } else {
+            let digs: [u8; 1] = [d0];
+            unsafe { bput(out, cap, at, digs.as_ptr(), 1) }
+        };
+        if at2 >= cap {
+            return 0;
+        }
+        unsafe {
+            *out.add(at2) = 0;
+        }
+        at2
+    }
+
+    /* find-or-create the row by the VALUE's C type (the key plane is
+     * fixed); MAP_CAP = full (caller refuses). */
+    unsafe fn intern(&mut self, val: *const u8, vlen: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.n {
+            if self.val_lens[s] == vlen {
+                let mut same = true;
+                let mut i = 0usize;
+                while i < vlen {
+                    if self.vals[s][i] != unsafe { *val.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        if self.n >= MAP_CAP || vlen >= CT_SIG {
+            return MAP_CAP;
+        }
+        let mut i = 0usize;
+        while i < vlen {
+            self.vals[self.n][i] = unsafe { *val.add(i) };
+            i += 1;
+        }
+        self.val_lens[self.n] = vlen;
+        self.n += 1;
+        self.n - 1
+    }
+
+    unsafe fn find(&self, val: *const u8, vlen: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.n {
+            if self.val_lens[s] == vlen {
+                let mut same = true;
+                let mut i = 0usize;
+                while i < vlen {
+                    if self.vals[s][i] != unsafe { *val.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        MAP_CAP
+    }
+
+    /* reverse lookup — rsx_map_<digits> -> row (the INDEX/value arm of
+     * expr_ctype maps a map back to its value's C type by name). */
+    unsafe fn find_by_name(&self, name: *const u8, nlen: usize) -> usize {
+        if nlen < 9 || nlen > 10 {
+            return MAP_CAP;
+        }
+        if !unsafe { z_eq(name, 8, b"rsx_map_\0".as_ptr()) } {
+            return MAP_CAP;
+        }
+        let mut row: usize = 0;
+        let mut i = 8usize;
+        while i < nlen {
+            let ch = unsafe { *name.add(i) };
+            if ch < b'0' || ch > b'9' {
+                return MAP_CAP;
+            }
+            row = row * 10 + (ch - b'0') as usize;
+            i += 1;
+        }
+        if row >= self.n {
+            return MAP_CAP;
         }
         row
     }

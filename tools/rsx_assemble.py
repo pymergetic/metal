@@ -1,62 +1,61 @@
 #!/usr/bin/env python3
-"""Deterministically assemble the rsx compiler's `__impl__.rs` from parts/.
+"""Assemble the rsx compiler's flat TU from parts/ — no tree output.
 
-The micro-rustc compiler card is authored as focused fragments under
-`parts/` (lexer, AST/parser, tables, lowering passes, root) and assembled
-into the card's single `__impl__.rs` TU. rsx compiles a card standalone —
-one `.rs` in, one C unit out; `mod name;` lowers to a comment — so the
-compiler's muscle stays ONE translation unit and the split is physical,
-not semantic: parts are concatenated in the fixed order below, byte for
-byte, no reformatting, no edits.
+The micro-rustc card is authored as focused fragments under `parts/`
+(lexer, AST/parser, tables, lowering passes, root). The parts are spans
+of ONE translation unit, not modules — `impl` blocks straddle part
+boundaries by design — so the flat TU they form is assembled, and every
+consumer gets the same bytes:
 
-The assembled `__impl__.rs` is byte-identical to the pre-split file (the
-split was mechanical: every fragment is an exact span of the original).
-That identity is the phase's fixed-point claim: the self-host loop, the
-embedded source pane, ksweep and every seat consume the same bytes they
-consumed before the split.
+  - the kernel's rsx (ksweep, the in-kernel self-host) never reads a flat
+    file: the build card's `#[path]` splice appends each part after the
+    card's shim (`__impl__.rs`), in the same ORDER — byte-identical to
+    this assembly, proven by ksweep and the self-host fixed point;
+  - cargo compiles the flat TU that `build.rs` writes into OUT_DIR (same
+    ORDER, same bytes; `compiler.rs` includes it);
+  - tools/selfhost_cycle.sh assembles it into its work dir for the boot
+    and self feeds;
+  - tools/embed_src.py embeds the card's authored files (shim + parts).
 
-Order is the tool's, not the filesystem's: `parts/00-head.rs` first (module
-docs + ABI mirrors + byte helpers), then lexer, parser, tables, the Lower
-passes, the AST dump, and the C ABI entry points last. A part that forgets
-its trailing newline, or a hand-edit to `__impl__.rs` that a part does not
-carry, is a build failure here — never silent drift.
+Nothing in this tool writes into the committed tree: the generated
+monolith that used to sit at `__impl__.rs` is gone — the parts ARE the
+card, and this tool is the reference assembler (build.rs ports it for
+cargo; `--check-flat` cross-checks the port against this one).
 
 Run from anywhere; paths resolve from this file's location:
 
-    python3 tools/rsx_assemble.py            # write when bytes differ
-    python3 tools/rsx_assemble.py --check    # exit 1 on drift
-
-The output is left untouched when identical (same posture as embed_src.py,
-so a clean tree does not recompile every consumer).
+    python3 tools/rsx_assemble.py                 # flat TU to stdout
+    python3 tools/rsx_assemble.py -o FILE         # ... or to a file
+    python3 tools/rsx_assemble.py --check-flat F  # F == assembly?
+    python3 tools/rsx_assemble.py --sha           # print sha256, exit
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 import pathlib
 import sys
 
 TOOLS = pathlib.Path(__file__).resolve().parent
 CARD = TOOLS.parent / "src" / "pymergetic" / "metal" / "jit" / "rs" / "compiler"
 PARTS = CARD / "parts"
-OUT = CARD / "__impl__.rs"
 
 # The assembly order. Names are the single source of truth; adding a part
 # means adding it here (a part on disk that this list omits is an error,
-# and so is a list entry with no part on disk).
+# and so is a list entry with no part on disk). build.rs and the card's
+# `mod` shim carry the same order — the three must stay in lockstep.
 ORDER = [
-    "00-head.rs",       # module docs, C ABI mirrors, byte helpers
-    "10-lexer.rs",      # Toks, Out, Lexer
-    "20-parser.rs",     # Node, Kids, Parser
-    "30-tables.rs",     # SymTab, FnTab, ConstTab, EnumTab, LocalTab
-    "40-lower-core.rs", # Lower struct + table/type helpers
-    "50-lower-stmt.rs", # statement/expression emitters
-    "60-lower-expr.rs", # expression emitter
-    "70-lower-item.rs", # item lowering + type ordering
-    "80-lower-fn.rs",   # fn lowering + file driver
-    "90-ast-dump.rs",   # AST dump (inspect face)
-    "99-root.rs",       # C ABI entry points + registration
+    "head.rs",          # module docs, C ABI mirrors, byte helpers
+    "lexer.rs",         # Toks, Out, Lexer
+    "parser.rs",        # Node, Kids, Parser
+    "tables.rs",        # SymTab, FnTab, ConstTab, EnumTab, LocalTab
+    "lower_core.rs",    # Lower struct + table/type helpers
+    "lower_stmt.rs",    # statement/expression emitters
+    "lower_expr.rs",    # expression emitter
+    "lower_item.rs",    # item lowering + type ordering
+    "lower_fn.rs",      # fn lowering + file driver
+    "ast_dump.rs",      # AST dump (inspect face)
+    "root.rs",          # C ABI entry points + registration
 ]
 
 
@@ -72,7 +71,8 @@ def assemble() -> bytes:
             print(f"rsx_assemble: {name} contains a NUL byte", file=sys.stderr)
             sys.exit(1)
         if not data.endswith(b"\n"):
-            print(f"rsx_assemble: {name} does not end with a newline", file=sys.stderr)
+            print(f"rsx_assemble: {name} does not end with a newline",
+                  file=sys.stderr)
             sys.exit(1)
         out += data
     return bytes(out)
@@ -80,10 +80,14 @@ def assemble() -> bytes:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--check", action="store_true",
-                    help="fail on drift instead of writing (never modifies)")
+    ap.add_argument("-o", "--out", metavar="FILE",
+                    help="write the flat TU here (default: stdout)")
+    ap.add_argument("--check-flat", metavar="FILE",
+                    help="exit 1 unless FILE is byte-identical to the assembly")
     ap.add_argument("--sha", action="store_true",
                     help="print the assembled sha256 and exit")
+    ap.add_argument("--quiet", "-q", action="store_true",
+                    help="assemble for validity only: no output on success")
     args = ap.parse_args()
 
     on_disk = {p.name for p in PARTS.glob("*.rs")} if PARTS.is_dir() else set()
@@ -98,26 +102,37 @@ def main() -> int:
         print(hashlib.sha256(data).hexdigest())
         return 0
 
-    if OUT.is_file() and OUT.read_bytes() == data:
+    if args.check_flat is not None:
+        flat = pathlib.Path(args.check_flat)
+        if not flat.is_file():
+            print(f"rsx_assemble: no flat file at {flat}", file=sys.stderr)
+            return 1
+        if flat.read_bytes() != data:
+            print(f"rsx_assemble: {flat} is not the assembly of parts/ — drift",
+                  file=sys.stderr)
+            return 1
         return 0
 
-    if args.check:
-        # --check is read-only by construction: the only write in this
-        # tool lives below, past this branch.
-        print("rsx_assemble: __impl__.rs is not the assembly of parts/ — drift",
-              file=sys.stderr)
-        return 1
+    if args.out is not None:
+        out = pathlib.Path(args.out)
+        # Atomic write: build the bytes in a sibling temp file, fsync,
+        # then rename over the target. A crash mid-write can never leave
+        # a torn assembly — every consumer sees either the whole old
+        # file or the whole new one.
+        tmp = out.with_suffix(out.suffix + ".tmp")
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            import os
+            os.fsync(f.fileno())
+        import os
+        os.replace(tmp, out)
+        return 0
 
-    # Atomic write: build the new bytes in a sibling temp file, fsync,
-    # then rename over __impl__.rs. A crash mid-write can never leave a
-    # torn assembly — every seat that parses one line of rsx sees either
-    # the whole old file or the whole new one.
-    tmp = OUT.with_suffix(OUT.suffix + ".tmp")
-    with open(tmp, "wb") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, OUT)
+    if args.quiet:
+        return 0
+
+    sys.stdout.buffer.write(data)
     return 0
 
 

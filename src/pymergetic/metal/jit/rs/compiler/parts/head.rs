@@ -1,114 +1,111 @@
-//! pymergetic.metal.jit.rs.compiler — micro-rustc: the kernel's Rust subset to
-//! C, written in that same subset (Phase 7 of the self-hosting plan).
-//!
-//! Pipeline: `pm_metal_jit_rsx_lex` -> `pm_metal_jit_rsx_parse` ->
-//! `pm_metal_jit_rsx_ast_dump` (inspect face) -> `pm_metal_jit_rsx_lower`;
-//! `pm_metal_jit_rsx_compile` is the one-shot prove path. The Phase 7 bar is
-//! the self-host prove in `__tests__.c`: this very file compiles through this
-//! very pipeline, byte-identically on two runs.
-//!
-//! ## Accepted subset (everything else is refused with
-//! `rsx: unsupported: <construct> at line N` — never a silent miscompile)
-//!
-//! Items: `#![...]` inner attrs (skipped), `use` (recorded, lowered to a
-//! comment), outer attrs `#[repr(C)] #[derive(..)] #[allow(..)] #[used]
-//! #[cfg_attr(..)] #[link_section = ".."] #[unsafe(no_mangle)]`, `pub` /
-//! `pub(crate)` visibility, named/tuple/unit `struct`, fieldless `enum` (data
-//! variants refused at lowering — C has no sum types), `impl Type` /
-//! `impl Trait for Type`, `extern "C" { fn .. }` blocks, `static`/`const`
-//! (literal initializers), `type` aliases, `fn` with `const`/`unsafe`/
-//! `extern "C"` qualifiers, `mod name;` / `mod name { .. }` items (module
-//! structure is compile-time — both forms lower to a comment, the inline
-//! body is not lowered). Refused: generics on items, `trait` items,
-//! `macro_rules!`, `async`/`const` blocks, nested items in fn bodies.
-//!
-//! Statements: `let` (ident / `mut ident` / `_`, optional type + init; let-else
-//! refused), `if`/`else`, `match`, `loop`, `while`, `for pat in a..b` /
-//! `a..=b`, `return`/`break`/`continue` (labeled too: `'l: for …` +
-//! `continue 'l` — C has no labeled break, so it lowers to goto labels),
-//! expression and assignment statements.
-//!
-//! Expressions: literals (int with suffixes, float, char, byte char/string,
-//! string, raw string), paths, calls, method calls, field access, indexing
-//! (incl. range indexes `a[..n]` `a[n..]` `a[n..m]` — the slice stays a
-//! pointer to the start element, the length side is not carried), casts,
-//! unary `! - * & &mut`, binary ops, ranges, parens, struct literals
-//! (`T { f: v }` — `..base` and shorthand refused), block-exprs, `unsafe`
-//! blocks, `expr?` (Option-of-pointer only, inside a pointer-returning fn —
-//! lowers to a GNU statement expression that early-returns `0`/None).
-//! Closures parse but lowering refuses them.
-//!
-//! Types: `u8..u64` `i8..i64` `usize` `isize` `f32` `f64` `bool` `char`
-//! (`u128`/`i128` have no C type), `*const T` `*mut T` `&T` `&mut T`
-//! (lifetimes skipped), `[T; N]` `[T]` `&[T]`, `()` (return only), paths
-//! with one generic list (`Option<T>` — pointer/fn-ptr payload only),
-//! `fn(..) -> R` and `unsafe extern "C" fn(..) -> R`, tuples `(A, B)` ->
-//! anonymous-layout structs `_0`/`_1`/... (let-pattern destructuring and
-//! numeric field access `t.0` included; tuple struct patterns refuse).
-//!
-//! ## Lowering rules
-//!
-//! - `struct S { f: T }` -> `typedef struct S { C_T f; } S;` (declaration
-//!   order is the layout; `#[repr(C)]` is accepted and recorded, non-repr
-//!   structs lower the same way — documented divergence).
-//! - `union U { f: T }` -> `typedef union U { C_T f; } U;` — same field
-//!   grammar as a struct, same registration; a literal `U { f: v }` is a
-//!   designated initializer (sets the active member), field access reads
-//!   the active member like any C union.
-//! - Type map: `uN`->`uintN_t`, `iN`->`intN_t`, `usize`->`size_t`,
-//!   `isize`->`intptr_t`, `f32`->`float`, `f64`->`double`, `bool`->`bool`,
-//!   `char`->`uint32_t`, `*const T`/`&T`->`const C_T *`, `*mut T`/`&mut T`->
-//!   `C_T *`, `&str`->`const char *`, `&[T]`/`[T]`->`const C_T *` (length is
-//!   not carried — the kernel passes ptr+len pairs; `.len()` on a slice is
-//!   refused), `()`->`void`, `Option<ptr-or-fn>` -> the inner C type
-//!   (`None`->`0`), `fn`/`unsafe extern "C" fn` -> function pointer.
-//! - `fn` -> C prototype + body; `unsafe`/`extern "C"`/`const` qualifiers
-//!   drop (C has no unsafe). Methods -> free functions `Type_method` (trait
-//!   impls: `Type_Trait_method`); `&self`/`&mut self` become `Type *self`.
-//! - `match` lowers to an `if`/`else` chain. Supported patterns: literals,
-//!   enum variant paths, `_`, `None`, `Some(bind)` (Option-of-pointer only —
-//!   the bind becomes an inner declaration), `&bind`, or-patterns of
-//!   literals/variants, literal range patterns `lo..=hi` (inclusive both
-//!   ends). Guards, open-ended ranges, tuple-of-Some `let-else` is the one
-//!   tuple form accepted; struct patterns refuse.
-//! - `for x in a..b` -> C `for` loop; `for` over anything else refuses.
-//! - `static` -> file-scope global (`const` qualified unless `static mut`),
-//!   `const` -> `static const`, `type` -> `typedef`.
-//! - Emission order: struct/enum/typedef items, extern prototypes, statics,
-//!   fn prototypes, fn bodies — so source order never breaks C name lookup.
-//! - Every item is preceded by `#line N "__impl__.rs"` (provenance chain:
-//!   the /src/<fqn> pane stays the primary source face).
-//! - Known paths/methods map to C: `core::ptr::null[_mut]`->`0`,
-//!   `core::ptr::copy_nonoverlapping(s,d,n)`->`memcpy(d,s,n * sizeof(*s))`
-//!   (Rust counts elements, memcpy counts bytes),
-//!   `core::mem::size_of::<T>()`->`sizeof(T)`, `iN::MIN/MAX`/`uN::`/`
-//!   `usize::MAX` -> stdint limit macros, `.is_null()`->`(x == 0)`,
-//!   `.add(k)`/`.sub(k)`->`(x + k)`/`(x - k)`, `.as_ptr()` -> identity
-//!   (on a pointer-to-array receiver: the C deref — the array lvalue
-//!   decays to the element pointer),
-//!   `.is_ascii_{digit,alphanumeric,alphabetic}()` -> range tests,
-//!   `.len()` -> literal/array constant only,
-//!   `AtomicU32` -> `_Atomic uint32_t`, `AtomicU32::new(v)` -> `(v)`,
-//!   `.load/.store/.swap(Ordering::X)` on an `AtomicU32` ->
-//!   `__atomic_load/_store/_exchange` builtins with the stdatomic.h
-//!   order numbering (Relaxed=0..SeqCst=5), `Ordering::X` -> the int,
-//!   `core::hint::spin_loop()` -> `0`. Anything else refuses.
-//! - Item-level `PM_MOD_EXPORT_RS!` / `PM_MOD_BOOT*_RS!` ctors lower to a
-//!   `//` comment (the registry table is built by the real toolchain).
-//!   Every other macro refuses.
-//! - Value-position `if`/`else` needs a type ascription (`let x: T = if ..`).
-//!
-//! ## Self-hosting discipline (this file is its own test input)
-//!
-//! The self-host prove compiles *this* file, so the file is written inside
-//! the subset above: no generics (the growables are concrete), no closures,
-//! no `Option`, no tuples, no slice methods — byte spans are raw
-//! `*const u8` + explicit `usize` lengths, internal fixed strings are
-//! NUL-terminated and passed as `b"...\0".as_ptr()`, integer constants are
-//! literals (no `1 << 20` folding needed).
-
-#![allow(clippy::missing_safety_doc)]
-#![allow(non_camel_case_types)]
+// pymergetic.metal.jit.rs.compiler — micro-rustc: the kernel's Rust subset to
+// C, written in that same subset (Phase 7 of the self-hosting plan).
+//
+// Pipeline: `pm_metal_jit_rsx_lex` -> `pm_metal_jit_rsx_parse` ->
+// `pm_metal_jit_rsx_ast_dump` (inspect face) -> `pm_metal_jit_rsx_lower`;
+// `pm_metal_jit_rsx_compile` is the one-shot prove path. The Phase 7 bar is
+// the self-host prove in `__tests__.c`: this very file compiles through this
+// very pipeline, byte-identically on two runs.
+//
+// ## Accepted subset (everything else is refused with
+// `rsx: unsupported: <construct> at line N` — never a silent miscompile)
+//
+// Items: `#![...]` inner attrs (skipped), `use` (recorded, lowered to a
+// comment), outer attrs `#[repr(C)] #[derive(..)] #[allow(..)] #[used]
+// #[cfg_attr(..)] #[link_section = ".."] #[unsafe(no_mangle)]`, `pub` /
+// `pub(crate)` visibility, named/tuple/unit `struct`, fieldless `enum` (data
+// variants refused at lowering — C has no sum types), `impl Type` /
+// `impl Trait for Type`, `extern "C" { fn .. }` blocks, `static`/`const`
+// (literal initializers), `type` aliases, `fn` with `const`/`unsafe`/
+// `extern "C"` qualifiers, `mod name;` / `mod name { .. }` items (module
+// structure is compile-time — both forms lower to a comment, the inline
+// body is not lowered). Refused: generics on items, `trait` items,
+// `macro_rules!`, `async`/`const` blocks, nested items in fn bodies.
+//
+// Statements: `let` (ident / `mut ident` / `_`, optional type + init; let-else
+// refused), `if`/`else`, `match`, `loop`, `while`, `for pat in a..b` /
+// `a..=b`, `return`/`break`/`continue` (labeled too: `'l: for …` +
+// `continue 'l` — C has no labeled break, so it lowers to goto labels),
+// expression and assignment statements.
+//
+// Expressions: literals (int with suffixes, float, char, byte char/string,
+// string, raw string), paths, calls, method calls, field access, indexing
+// (incl. range indexes `a[..n]` `a[n..]` `a[n..m]` — the slice stays a
+// pointer to the start element, the length side is not carried), casts,
+// unary `! - * & &mut`, binary ops, ranges, parens, struct literals
+// (`T { f: v }` — `..base` and shorthand refused), block-exprs, `unsafe`
+// blocks, `expr?` (Option-of-pointer only, inside a pointer-returning fn —
+// lowers to a GNU statement expression that early-returns `0`/None).
+// Closures parse but lowering refuses them.
+//
+// Types: `u8..u64` `i8..i64` `usize` `isize` `f32` `f64` `bool` `char`
+// (`u128`/`i128` have no C type), `*const T` `*mut T` `&T` `&mut T`
+// (lifetimes skipped), `[T; N]` `[T]` `&[T]`, `()` (return only), paths
+// with one generic list (`Option<T>` — pointer/fn-ptr payload only),
+// `fn(..) -> R` and `unsafe extern "C" fn(..) -> R`, tuples `(A, B)` ->
+// anonymous-layout structs `_0`/`_1`/... (let-pattern destructuring and
+// numeric field access `t.0` included; tuple struct patterns refuse).
+//
+// ## Lowering rules
+//
+// - `struct S { f: T }` -> `typedef struct S { C_T f; } S;` (declaration
+//   order is the layout; `#[repr(C)]` is accepted and recorded, non-repr
+//   structs lower the same way — documented divergence).
+// - `union U { f: T }` -> `typedef union U { C_T f; } U;` — same field
+//   grammar as a struct, same registration; a literal `U { f: v }` is a
+//   designated initializer (sets the active member), field access reads
+//   the active member like any C union.
+// - Type map: `uN`->`uintN_t`, `iN`->`intN_t`, `usize`->`size_t`,
+//   `isize`->`intptr_t`, `f32`->`float`, `f64`->`double`, `bool`->`bool`,
+//   `char`->`uint32_t`, `*const T`/`&T`->`const C_T *`, `*mut T`/`&mut T`->
+//   `C_T *`, `&str`->`const char *`, `&[T]`/`[T]`->`const C_T *` (length is
+//   not carried — the kernel passes ptr+len pairs; `.len()` on a slice is
+//   refused), `()`->`void`, `Option<ptr-or-fn>` -> the inner C type
+//   (`None`->`0`), `fn`/`unsafe extern "C" fn` -> function pointer.
+// - `fn` -> C prototype + body; `unsafe`/`extern "C"`/`const` qualifiers
+//   drop (C has no unsafe). Methods -> free functions `Type_method` (trait
+//   impls: `Type_Trait_method`); `&self`/`&mut self` become `Type *self`.
+// - `match` lowers to an `if`/`else` chain. Supported patterns: literals,
+//   enum variant paths, `_`, `None`, `Some(bind)` (Option-of-pointer only —
+//   the bind becomes an inner declaration), `&bind`, or-patterns of
+//   literals/variants, literal range patterns `lo..=hi` (inclusive both
+//   ends). Guards, open-ended ranges, tuple-of-Some `let-else` is the one
+//   tuple form accepted; struct patterns refuse.
+// - `for x in a..b` -> C `for` loop; `for` over anything else refuses.
+// - `static` -> file-scope global (`const` qualified unless `static mut`),
+//   `const` -> `static const`, `type` -> `typedef`.
+// - Emission order: struct/enum/typedef items, extern prototypes, statics,
+//   fn prototypes, fn bodies — so source order never breaks C name lookup.
+// - Every item is preceded by `#line N "__impl__.rs"` (provenance chain:
+//   the /src/<fqn> pane stays the primary source face).
+// - Known paths/methods map to C: `core::ptr::null[_mut]`->`0`,
+//   `core::ptr::copy_nonoverlapping(s,d,n)`->`memcpy(d,s,n * sizeof(*s))`
+//   (Rust counts elements, memcpy counts bytes),
+//   `core::mem::size_of::<T>()`->`sizeof(T)`, `iN::MIN/MAX`/`uN::`/`
+//   `usize::MAX` -> stdint limit macros, `.is_null()`->`(x == 0)`,
+//   `.add(k)`/`.sub(k)`->`(x + k)`/`(x - k)`, `.as_ptr()` -> identity
+//   (on a pointer-to-array receiver: the C deref — the array lvalue
+//   decays to the element pointer),
+//   `.is_ascii_{digit,alphanumeric,alphabetic}()` -> range tests,
+//   `.len()` -> literal/array constant only,
+//   `AtomicU32` -> `_Atomic uint32_t`, `AtomicU32::new(v)` -> `(v)`,
+//   `.load/.store/.swap(Ordering::X)` on an `AtomicU32` ->
+//   `__atomic_load/_store/_exchange` builtins with the stdatomic.h
+//   order numbering (Relaxed=0..SeqCst=5), `Ordering::X` -> the int,
+//   `core::hint::spin_loop()` -> `0`. Anything else refuses.
+// - Item-level `PM_MOD_EXPORT_RS!` / `PM_MOD_BOOT*_RS!` ctors lower to a
+//   `//` comment (the registry table is built by the real toolchain).
+//   Every other macro refuses.
+// - Value-position `if`/`else` needs a type ascription (`let x: T = if ..`).
+//
+// ## Self-hosting discipline (this file is its own test input)
+//
+// The self-host prove compiles *this* file, so the file is written inside
+// the subset above: no generics (the growables are concrete), no closures,
+// no `Option`, no tuples, no slice methods — byte spans are raw
+// `*const u8` + explicit `usize` lengths, internal fixed strings are
+// NUL-terminated and passed as `b"...\0".as_ptr()`, integer constants are
+// literals (no `1 << 20` folding needed).
 
 /* ---- C ABI mirrors (__types__.h is the contract) ---- */
 

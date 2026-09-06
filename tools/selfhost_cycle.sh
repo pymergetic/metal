@@ -45,9 +45,14 @@ set -euo pipefail
 
 METAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WASMMOD_DIR="$METAL_DIR/../wasmmod"
-RSX_SRC="$METAL_DIR/src/pymergetic/metal/jit/rs/compiler/__impl__.rs"
-CORPUS_DIR="$METAL_DIR/tools/selfhost_corpus"
+# The card's muscle is parts/ (eleven spans of one TU); the flat form the
+# feeds compile is assembled here — same bytes rsx splices in-kernel and
+# build.rs writes for cargo. No generated file is read from the tree.
 WORK="${PM_SELFHOST_WORK:-/tmp/selfhost_cycle}"
+mkdir -p "$WORK"
+RSX_SRC="$WORK/rsx_compiler_flat.rs"
+python3 "$METAL_DIR/tools/rsx_assemble.py" -o "$RSX_SRC"
+CORPUS_DIR="$METAL_DIR/tools/selfhost_corpus"
 TARGET_DIR="${PM_SELFHOST_CARGO_TARGET:-/tmp/selfhost_cycle/cargo}"
 
 SKIP_BUILD=0

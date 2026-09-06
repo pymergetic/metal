@@ -121,6 +121,15 @@ def _muscle_files(card_dir: pathlib.Path, impl: str) -> list[pathlib.Path]:
         if _is_face(p):
             continue
         out.append(p)
+    # RS cards authored as spans (the rsx compiler card): parts/ holds the
+    # real muscle — the tree carries no flat assembly, so the pane embeds
+    # the parts beside the shim, in TU order (a readable tree, not an
+    # alphabetical scramble).
+    if impl == "rs" and (card_dir / "parts").is_dir():
+        for name in _rsx_parts_order():
+            p = card_dir / "parts" / name
+            if p.is_file():
+                out.append(p)
     # Always lead with the muscle (the file people actually click).
     impl_file = [p for p in out if p.name.startswith("__impl__")]
     rest = [p for p in out if not p.name.startswith("__impl__")]
@@ -157,6 +166,22 @@ def _face_files(card_dir: pathlib.Path, impl: str) -> list[pathlib.Path]:
     return out
 
 
+def _rsx_parts_order() -> list[str]:
+    """The rsx compiler card's part order (tools/rsx_assemble.py's ORDER).
+
+    Single source of truth: this module imports the assembler's list, so
+    build.rs / rsx_assemble.py / this embed can never disagree. Returns []
+    when the assembler is unreachable (its absence is a build error the
+    caller reports when a parts/ card exists).
+    """
+    import importlib.util
+    asm = pathlib.Path(__file__).resolve().parent / "rsx_assemble.py"
+    spec = importlib.util.spec_from_file_location("rsx_assemble_ref", asm)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return list(mod.ORDER)
+
+
 def gather(card_roots: list[pathlib.Path]) -> list[dict]:
     cards: list[dict] = []
     seen: set[str] = set()
@@ -173,8 +198,27 @@ def gather(card_roots: list[pathlib.Path]) -> list[dict]:
                 continue  # impl="py" (pysample) or no native muscle: nothing to browse
             seen.add(fqn)
             faces = _face_files(card_dir, impl)
+            # An RS card authored as parts/ also ships its flat assembly as a
+            # synthetic entry: the in-kernel self-host prove and the REPL's
+            # rs compile read the card's full TU from the embed (firmware has
+            # no filesystem to splice parts/ from). One definition — assembled
+            # from the parts in the SAME ORDER tools/rsx_assemble.py and
+            # build.rs use (alphabetical would scramble the TU: the parts
+            # are spans of one translation unit, order is semantic).
+            extra: list[tuple[str, bytes]] = []
+            if impl == "rs" and (card_dir / "parts").is_dir():
+                order = _rsx_parts_order()
+                buf = bytearray()
+                for name in order:
+                    p = card_dir / "parts" / name
+                    if not p.is_file():
+                        print(f"embed_src: rsx part {name} missing in {card_dir}",
+                              file=sys.stderr)
+                        return 1
+                    buf += p.read_bytes()
+                extra.append(("__flat__.rs", bytes(buf)))
             cards.append({"fqn": fqn, "impl": impl, "dir": card_dir, "files": src,
-                          "faces": faces, "toml": toml})
+                          "faces": faces, "toml": toml, "extra": extra})
     cards.sort(key=lambda c: c["fqn"])
     return cards
 
@@ -205,6 +249,11 @@ def main() -> int:
                 print(f"embed_src: {path} contains a NUL byte; source embed is text-only", file=sys.stderr)
                 return 1
             _emit_array(buf, name, data + b"\x00")  # NUL-terminated for const char * bridge
+        for cname, cdata in card.get("extra", []):
+            if b"\x00" in cdata:
+                print(f"embed_src: {cname} contains a NUL byte; source embed is text-only", file=sys.stderr)
+                return 1
+            _emit_array(buf, _ident(card["fqn"], cname), cdata + b"\x00")
 
     buf.write("typedef struct {\n"
               "    const char *rel;\n"
@@ -228,6 +277,9 @@ def main() -> int:
         for path in card["files"]:
             name = _ident(card["fqn"], path.name)
             buf.write(f'    {{ "{path.name}", s_src_{name}, sizeof(s_src_{name}) - 1u }},\n')
+        for cname, _ in card.get("extra", []):
+            name = _ident(card["fqn"], cname)
+            buf.write(f'    {{ "{cname}", s_src_{name}, sizeof(s_src_{name}) - 1u }},\n')
         buf.write("};\n\n")
         buf.write(f"static const pm_metal_src_file_t PM_METAL_SRC_FACES_{ci}[] = {{\n")
         for path in card["faces"]:
@@ -236,7 +288,8 @@ def main() -> int:
         buf.write("};\n\n")
 
     for ci, card in enumerate(cards):
-        files = [(path.name, path.stat().st_size) for path in card["files"]]
+        files = ([(path.name, path.stat().st_size) for path in card["files"]]
+                 + [(cname, len(cdata)) for cname, cdata in card.get("extra", [])])
         man = _card_manifest(card["fqn"], files)
         name = _ident(card["fqn"], "manifest")
         toml_name = _ident(card["fqn"], "pmm")
@@ -260,7 +313,7 @@ def main() -> int:
             f'        "{card["fqn"]}",\n'
             f'        "{card["impl"]}",\n'
             f'        PM_METAL_SRC_FILES_{ci},\n'
-            f'        {len(card["files"])}u,\n'
+            f'        {len(card["files"]) + len(card.get("extra", []))}u,\n'
             f'        PM_METAL_SRC_FACES_{ci},\n'
             f'        {len(card["faces"])}u,\n'
             f'        (const char *)s_src_{name},\n'

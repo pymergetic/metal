@@ -1,7 +1,7 @@
 /* ================= AST dump (inspect face) ================= */
 
 /* Renders the tree through `Out` — the same arena-owned growable sink the
- * emitted C rides (10-lexer.rs): a dump can never outgrow a fixed slab,
+ * emitted C rides (lexer.rs): a dump can never outgrow a fixed slab,
  * the arena is the only ceiling. Depth by two spaces per level. */
 unsafe fn dump_node(
     out: *mut Out,

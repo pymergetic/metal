@@ -4,6 +4,15 @@ HELLO_WASM := $(WASMMOD)/examples/packs/pymergetic.wasmmod_examples.hello.wasm
 WAMR_OUT := $(BUILD)/wamr
 FW_WAMR_UEFI ?= 0
 FW_WAMR_ARCH ?= x86_64
+# The rsx compiler card's flat TU, assembled from parts/ into the port
+# build dir (same bytes tools/rsx_assemble.py makes everywhere; the tree
+# carries no flat file). fw_lock includes it through the env path.
+RSX_FLAT := $(BUILD)/rsx_compiler_flat.rs
+RSX_PARTS := $(wildcard $(METAL_SRC)/pymergetic/metal/jit/rs/compiler/parts/*.rs)
+
+$(RSX_FLAT): $(RSX_PARTS) $(PORT_DIR)/../tools/rsx_assemble.py | $(BUILD)
+	python3 $(PORT_DIR)/../tools/rsx_assemble.py -o $@
+
 ifeq ($(FW_WAMR_ARCH),armv7)
 FW_WAMR_BUILD_TARGET ?= -DBUILD_TARGET_ARM_VFP
 FW_RUSTC_REDZONE :=
@@ -59,7 +68,8 @@ $(BUILD)/libfw_lock.a: $(PORT_DIR)/fw_lock/lib.rs \
 		$(WASMMOD)/src/pymergetic/wasmmod/loader/__impl__.rs \
 		$(WASMMOD)/src/pymergetic/wasmmod/api/__impl__.rs \
 		$(METAL_SRC)/pymergetic/metal/net/http/asgi/__impl__.rs \
-		$(METAL_SRC)/pymergetic/metal/jit/rs/compiler/__impl__.rs | $(BUILD)
+		$(RSX_FLAT) | $(BUILD)
+	PM_FW_RSX_FLAT="$(abspath $(RSX_FLAT))" \
 	$(RUSTC) --edition 2024 --crate-type staticlib --crate-name fw_lock \
 		--target $(FW_RUSTC_TARGET) -C panic=abort -C opt-level=s \
 		$(FW_RUSTC_REDZONE) $(FW_RUSTC_CPU) \

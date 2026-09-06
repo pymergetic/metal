@@ -1567,6 +1567,17 @@ int32_t pm_metal_build_artifact_call(const pm_metal_build_artifact_t *artifact,
  * carries the card's impl and raw __pmm__.toml bytes, so discovery is pure
  * data — no filesystem walk, identical on every seat. */
 
+/* Faces a root TU inlines through `#[path]` (declared here so discover,
+ * which lives above the splice engine, can list only what a unit really
+ * compiles; the full struct docs ride the definition below). */
+typedef struct rs_splice_inc {
+    const char *rel[32];
+    uint32_t n;
+} rs_splice_inc_t;
+
+static const char *rs_splice(pm_util_mem_arena_t *arena, const char *fqn,
+    const char *src, char *errbuf, size_t errbuf_len, rs_splice_inc_t *inc);
+
 int32_t pm_metal_build_discover(pm_util_mem_arena_t *arena,
     pm_metal_build_unit_t **units, uint32_t *n_units,
     char *errbuf, size_t errbuf_len) {
@@ -1601,20 +1612,62 @@ int32_t pm_metal_build_discover(pm_util_mem_arena_t *arena,
             continue;  /* a broken manifest is skipped, not fatal */
         }
         /* sources: the card's embedded muscle file names (the parse filled
-         * everything else; a card unit has no extra relative paths). */
+         * everything else; a card unit has no extra relative paths).
+         * `__flat__.rs` is an embed-only synthetic — the parts' assembled
+         * TU the inspect tests read; it is not a compilable unit (the
+         * parts ride the root shim's #[path] splice, the flat would
+         * duplicate the same symbols). An rs root inlines its #[path]
+         * faces at compile (rs_splice); those faces are not standalone
+         * TUs either, so discover lists only what a unit compiles. */
         {
             const char **srcs = (const char **)pm_util_mem_alloc(
                 arena, c->nfiles * sizeof(const char *));
             uint32_t f;
+            uint32_t n_srcs = 0;
+            rs_splice_inc_t inc;
             if (srcs == NULL) {
                 err_set(errbuf, errbuf_len, "discover: arena exhausted", 0);
                 return PM_METAL_BUILD_ERR_NOMEM;
             }
+            memset(&inc, 0, sizeof(inc));
+            if (strcmp(out[w].impl, "rs") == 0) {
+                const char *root = NULL;
+                for (f = 0; f < c->nfiles; f++) {
+                    if (strcmp(c->files[f].rel, "__impl__.rs") == 0) {
+                        root = (const char *)c->files[f].data;
+                        break;
+                    }
+                }
+                if (root != NULL) {
+                    char serr[PM_METAL_BUILD_ERR_MAX];
+                    if (rs_splice(arena, out[w].fqn, root, serr, sizeof(serr),
+                            &inc) == NULL) {
+                        /* the unit compile reports splice errors honestly;
+                         * discover lists the raw files and lets it. */
+                        memset(&inc, 0, sizeof(inc));
+                    }
+                }
+            }
             for (f = 0; f < c->nfiles; f++) {
-                srcs[f] = c->files[f].rel;
+                uint32_t k;
+                int inlined = 0;
+                if (strcmp(c->files[f].rel, "__flat__.rs") == 0) {
+                    continue;
+                }
+                for (k = 0; k < inc.n; k++) {
+                    if (strcmp(inc.rel[k], c->files[f].rel) == 0) {
+                        inlined = 1;
+                        break;
+                    }
+                }
+                if (inlined) {
+                    continue;
+                }
+                srcs[n_srcs] = c->files[f].rel;
+                n_srcs++;
             }
             out[w].sources = srcs;
-            out[w].n_sources = c->nfiles;
+            out[w].n_sources = n_srcs;
         }
         w++;
     }
@@ -1897,12 +1950,8 @@ static int rs_use_crate_starts(const char *p, const char **at_io) {
  * #[path] includes of the SAME card). The unit compile skips exactly
  * these as standalone TUs: they are already in the root's crate TU, and
  * a second object would collide on every symbol at link. A companion
- * the root does NOT reference (a cfg(test) bench) stays its own TU. */
-typedef struct rs_splice_inc {
-    const char *rel[32];
-    uint32_t n;
-} rs_splice_inc_t;
-
+ * the root does NOT reference (a cfg(test) bench) stays its own TU.
+ * (typedef declared above discover; this is its doc home.) */
 static int32_t rs_splice_inc_add(pm_util_mem_arena_t *arena,
     rs_splice_inc_t *inc, const char *rel) {
     uint32_t i;
@@ -2460,7 +2509,8 @@ static int32_t unit_source_compile(pm_util_mem_arena_t *arena,
                  * no getenv/fopen. */
                 const char *tap = getenv("RSX_DUMP_UNIT");
                 if (tap != NULL && rel != NULL
-                    && strstr(rel, "__impl__.rs") != NULL) {
+                    && (strstr(rel, "__impl__.rs") != NULL
+                        || strstr(rel, "__flat__.rs") != NULL)) {
                     FILE *o = fopen(tap, "wb");
                     if (o != NULL) {
                         fwrite(transpiled, 1u, transpiled_len, o);
