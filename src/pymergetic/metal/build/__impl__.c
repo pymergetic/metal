@@ -1575,7 +1575,7 @@ typedef struct rs_splice_inc {
     uint32_t n;
 } rs_splice_inc_t;
 
-static const char *rs_splice(pm_util_mem_arena_t *arena, const char *fqn,
+static char *rs_splice(pm_util_mem_arena_t *arena, const char *fqn,
     const char *src, char *errbuf, size_t errbuf_len, rs_splice_inc_t *inc);
 
 int32_t pm_metal_build_discover(pm_util_mem_arena_t *arena,
@@ -1640,11 +1640,16 @@ int32_t pm_metal_build_discover(pm_util_mem_arena_t *arena,
                 }
                 if (root != NULL) {
                     char serr[PM_METAL_BUILD_ERR_MAX];
-                    if (rs_splice(arena, out[w].fqn, root, serr, sizeof(serr),
-                            &inc) == NULL) {
+                    char *sp = rs_splice(arena, out[w].fqn, root, serr, sizeof(serr),
+                        &inc);
+                    if (sp == NULL) {
                         /* the unit compile reports splice errors honestly;
                          * discover lists the raw files and lets it. */
                         memset(&inc, 0, sizeof(inc));
+                    } else {
+                        /* the splice only computed the inline set (inc);
+                         * the buffer itself is scratch this pass drops. */
+                        pm_util_mem_free(arena, sp);
                     }
                 }
             }
@@ -1795,6 +1800,22 @@ static int rs_attr_is_test(const char *ls, size_t len) {
         }
     }
     return 0;
+}
+
+/* An attribute line is ANY cfg guard (`#[cfg(..)]`). A cfg-guarded mod
+ * decl must NOT be spliced: the attr rides through ahead of the decl and
+ * rsx evaluates it against the kernel's feature set (empty — every
+ * feature cfg is false there), dropping the decl whole. Splicing would
+ * inline the file bytes after the attr, which then guards only the
+ * file's FIRST item — the rest of a `#[cfg(feature="gen")] mod host;`
+ * face (std::fs, toml, Path) would compile unguarded into a unit that
+ * must build freestanding. `#[cfg(test)]` is the same rule, already
+ * covered by test_guard. */
+static int rs_attr_is_cfg(const char *ls, size_t len) {
+    if (ls[0] != '#' || ls[1] != '[') {
+        return 0;
+    }
+    return build_memfind(ls, len, "cfg(") != NULL;
 }
 
 /* ---- `use crate::...` chase ----
@@ -2186,6 +2207,9 @@ static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
      * line is the mod decl that names the spliced file — the decl itself
      * must NOT be chased again (that would splice the file twice). */
     uint32_t path_pending = 0u;
+    /* A cfg guard (any `#[cfg(..)]`) parks the NEXT mod decl for rsx's
+     * own feature eval — a cfg-guarded mod is not chased. */
+    uint32_t cfg_guard = 0u;
     if (dir == NULL) {
         err_set(errbuf, errbuf_len, "splice: arena exhausted", 0);
         return PM_METAL_BUILD_ERR_NOMEM;
@@ -2235,7 +2259,7 @@ static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
                 const char *mname = NULL;
                 size_t mname_len = 0u;
                 const char *after2 = NULL;
-                if (path_pending == 0u && test_guard == 0u
+                if (path_pending == 0u && test_guard == 0u && cfg_guard == 0u
                     && rs_mod_decl_starts(ws2, &mname, &mname_len, &after2)) {
                     char *mfile = (char *)pm_util_mem_alloc(
                         arena, mname_len + 4u);
@@ -2272,6 +2296,7 @@ static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
                         }
                     }
                     test_guard = 0u;
+                    cfg_guard = 0u;
                     p = after2;
                     continue;
                 }
@@ -2291,8 +2316,13 @@ static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
         if (!is_attr) {
             test_guard = 0u;
             path_pending = 0u;
+            cfg_guard = 0u;
         } else if (rs_attr_is_test(ls, (size_t)(le - ls))) {
             test_guard = 1u;
+        } else if (rs_attr_is_cfg(ls, (size_t)(le - ls))) {
+            /* any cfg guard ahead of a mod decl parks the decl for rsx's
+             * own cfg eval — see rs_attr_is_cfg */
+            cfg_guard = 1u;
         }
         if (is_attr && test_guard) {
             /* cfg(test)-guarded `#[path] mod __tests__` — the test face is
@@ -2438,7 +2468,7 @@ static int32_t rs_splice_into(pm_util_mem_arena_t *arena, const char *fqn,
  * own text keeps its true line numbers (rsx #line diagnostics stay
  * honest); the appended faces shift beyond the file end, which only
  * affects diagnostics inside the face itself. */
-static const char *rs_splice(pm_util_mem_arena_t *arena, const char *fqn,
+static char *rs_splice(pm_util_mem_arena_t *arena, const char *fqn,
     const char *src, char *errbuf, size_t errbuf_len,
     rs_splice_inc_t *inc) {
     size_t len = strlen(src);
@@ -2485,20 +2515,27 @@ static int32_t unit_source_compile(pm_util_mem_arena_t *arena,
     const char *csrc = src;
     char *transpiled = NULL;
     size_t transpiled_len = 0;
+    int32_t rc;
 
     if (dot != NULL) {
         if (strcmp(dot, ".rs") == 0) {
             /* `#[path]`-included faces ride in: the rsx compile is
              * standalone, cross-card ABI shapes arrive by splice. */
-            const char *spliced = rs_splice(arena, fqn, src, errbuf, errbuf_len,
+            char *spliced = rs_splice(arena, fqn, src, errbuf, errbuf_len,
                 NULL);
             if (spliced == NULL) {
                 return PM_METAL_BUILD_ERR_COMPILE;
             }
             if (pm_metal_jit_rsx_compile(arena, spliced, strlen(spliced),
                     &transpiled, &transpiled_len, errbuf, errbuf_len) != 0) {
+                pm_util_mem_free(arena, spliced);
                 return PM_METAL_BUILD_ERR_COMPILE;
             }
+            /* the spliced source fed the transpiler; its bytes live on in
+             * the tokens/AST spans rsx copied out. Free the ~1.5 MB splice
+             * buffer before the C phase — the TCC compile below shares
+             * this arena and needs the headroom. */
+            pm_util_mem_free(arena, spliced);
             csrc = transpiled;
 #if !defined(PM_METAL_FIRMWARE)
             {
@@ -2538,9 +2575,22 @@ static int32_t unit_source_compile(pm_util_mem_arena_t *arena,
             csrc = transpiled;
         }
     }
-    if (pm_metal_jit_c_object_compile_opts(arena, csrc, strlen(csrc),
-            includes, n_includes, defines, n_defines,
-            obj_out, obj_len, errbuf, errbuf_len) != 0) {
+    rc = pm_metal_jit_c_object_compile_opts(arena, csrc, strlen(csrc),
+        includes, n_includes, defines, n_defines,
+        obj_out, obj_len, errbuf, errbuf_len);
+    /* the transpiled C is compile scratch — the TCC object carries the
+     * product now. Free it (and only after the window released — TCC's
+     * last byte of this block was read inside the compile above): the
+     * 1.9MB of generated C staying resident starved the next unit's
+     * arena in ksweep's per-unit backings. The rsx compile's own tables
+     * (tokens, AST, Lower) are arena leak-by-design for this card — the
+     * unit's arena dies at the sweep row anyway; what must release is
+     * the byte range a subsequent phase in THIS compile still needs to
+     * grow into. */
+    if (transpiled != NULL) {
+        pm_util_mem_free(arena, transpiled);
+    }
+    if (rc != 0) {
         return PM_METAL_BUILD_ERR_COMPILE;
     }
     return PM_METAL_BUILD_OK;
@@ -2743,10 +2793,15 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
             }
             if (root_src != NULL) {
                 char serr[PM_METAL_BUILD_ERR_MAX];
-                if (rs_splice(arena, unit->fqn, root_src, serr, sizeof(serr),
-                        &inc) == NULL) {
+                char *root_sp = rs_splice(arena, unit->fqn, root_src, serr, sizeof(serr),
+                    &inc);
+                if (root_sp == NULL) {
                     /* the root's own compile below reports this honestly */
                     memset(&inc, 0, sizeof(inc));
+                } else {
+                    /* same contract as discover's splice probe: the inline
+                     * set is the product, the buffer is scratch. */
+                    pm_util_mem_free(arena, root_sp);
                 }
             }
         }

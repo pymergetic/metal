@@ -101,8 +101,10 @@ impl Lower {
         if declare_only == 0 && !body.is_null() {
             let before = self.vecs.n;
             let before_a = self.arrs.n;
+            let before_b = self.btms.n;
             let before_l = self.locks.n;
             let before_o = self.opt_n;
+            let before_r = self.res_n;
             let before_t = self.tup_n;
             locals = LocalTab::new(self.arena);
             if locals.is_null() {
@@ -142,21 +144,31 @@ impl Lower {
             /* String typedefs land BEFORE the container rows: a tuple/vec/
              * opt row with a String payload names rsx_str_t in its own
              * typedef, so the string typedef must already exist (the
-             * pre-scan flush order is the C order). */
+             * pre-scan flush order is the C order). Every emit here is
+             * dep-gated (row_dep_pending), so a row the body names over
+             * a not-yet-complete dep self-defers to the next pre-scan
+             * or the file-scope fixpoint — the guards below only decide
+             * whether the flush call is worth making at all. */
             unsafe { self.str_emit_rest() };
             unsafe { self.str_own_emit_rest() };
+            if self.opt_n != before_o {
+                unsafe { self.fnp_emit_rest() };
+                unsafe { self.opt_emit_rest(0) };
+            }
+            if self.res_n != before_r {
+                unsafe { self.res_emit_rest() };
+            }
             if self.vecs.n != before {
-                unsafe { self.vec_emit_rest() };
+                unsafe { self.vec_emit_rest(0) };
             }
             if self.arrs.n != before_a {
-                unsafe { self.arr_emit_rest() };
+                unsafe { self.arr_emit_rest(0) };
+            }
+            if self.btms.n != before_b {
+                unsafe { self.btm_emit_rest(0) };
             }
             if self.locks.n != before_l {
                 unsafe { self.lock_emit_rest() };
-            }
-            if self.opt_n != before_o {
-                unsafe { self.fnp_emit_rest() };
-                unsafe { self.opt_emit_rest() };
             }
             if self.tup_n != before_t {
                 unsafe { self.tup_emit_rest() };
@@ -372,6 +384,15 @@ impl Lower {
             if unsafe { (*locals).oom } {
                 self.ok = false;
             }
+            /* the body is emitted: the LocalTab is fn-scoped scratch
+             * (every span it hands out is an arena COPY, names live
+             * inline) — free the ~23 KiB block so a 1400-fn unit does
+             * not strand 32 MB of dead tables ahead of the C-compile
+             * phase that shares this arena. The `oom` read above is the
+             * table's last consumer. */
+            unsafe {
+                pm_util_mem_free(self.arena, locals as *mut u8);
+            }
         }
         self.cur_ret_len = 0;
         self.cur_body = core::ptr::null();
@@ -487,13 +508,16 @@ impl Lower {
             self.recv_len = ri;
             /* Self resolution: the impl's own type — ctype renders any
              * `Self` spelling (return type, local ascriptions, struct
-             * literals) as this name while the method lowers. */
+             * literals) as this name while the method lowers. NUL-
+             * terminated: zput reads to the NUL and an unterminated
+             * tail renders stale bytes. */
             {
                 let mut si = 0usize;
-                while si < ty_len && si < 64 {
+                while si < ty_len && si < 63 {
                     self.self_ty[si] = unsafe { *ty_name.add(si) };
                     si += 1;
                 }
+                self.self_ty[si] = 0;
                 self.self_ty_len = si;
             }
             /* emit with the mangled name: reuse lower_fn logic via a temp
@@ -526,6 +550,23 @@ impl Lower {
         let n = self.tup_counts[s];
         if n == 0 || n > TUP_MAXF {
             return;
+        }
+        /* Any element naming an incomplete dep (a not-yet-emitted struct,
+         * a pending container row) defers the whole row — a later
+         * flush round (the file-scope fixpoint) retries it. Without
+         * this, a tuple over a tuple, or a tuple over a Vec row still
+         * pending, emits forward and names an unknown type. */
+        {
+            let mut fpre = 0usize;
+            while fpre < n {
+                let a = s * TUP_MAXF + fpre;
+                let elen = self.tup_lens[a];
+                let elem = self.tup_elems[a].as_ptr();
+                if unsafe { self.row_dep_pending(elem, elen) } {
+                    return;
+                }
+                fpre += 1;
+            }
         }
         /* A tuple element may itself be a struct-Option
          * (`rsx_opt_<raw_len>e<hex>`) whose typedef is still pending —
@@ -715,6 +756,54 @@ impl Lower {
         }
     }
 
+    /* ..._from variants: flush only rows with index >= from. The struct
+     * pass's two-phase flush snapshots each table's n before rendering
+     * fields — rows earlier passes interned (fn sigs the collect pass
+     * rendered, whose deps may include the very struct being emitted,
+     * which is only forward-declared at that moment) stay pending for
+     * the file-scope fixpoint. */
+    unsafe fn res_emit_rest_from(&mut self, from: usize) {
+        let mut s = from;
+        let mut flushed = false;
+        while s < self.res_n {
+            if !unsafe { self.res_done[s] } {
+                let okt = self.res_oks[s].as_ptr();
+                let okl = self.res_ok_lens[s];
+                let ert = self.res_errs[s].as_ptr();
+                let erl = self.res_err_lens[s];
+                if unsafe { self.row_dep_pending(okt, okl) }
+                    || unsafe { self.row_dep_pending(ert, erl) }
+                {
+                    s += 1;
+                    continue;
+                }
+                let tdn = self.arena_tmp();
+                let tdn_len = unsafe { Lower::res_typedef_name(okt, okl, ert, erl, tdn, 192) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: Result typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                self.out.puts(b"typedef struct { \0".as_ptr());
+                self.out.put(okt, okl);
+                self.out.puts(b" _v; \0".as_ptr());
+                self.out.put(ert, erl);
+                self.out.puts(b" _e; bool _ok; } \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                unsafe {
+                    self.res_done[s] = true;
+                }
+                flushed = true;
+            }
+            s += 1;
+        }
+        if flushed {
+            self.out.putc(b'\n');
+        }
+    }
+
     /* Emit struct-Option typedefs (`rsx_opt_<elem>`) whose payload spelling
      * matches `name` — called right after the alias/struct declaring that
      * name lands in the C, so the typedef body's payload is declared first.
@@ -807,12 +896,20 @@ impl Lower {
 
     /* Emit every still-pending Option typedef (primitive payloads — size_t
      * and friends — and anything whose naming type never matched). */
-    unsafe fn opt_emit_rest(&mut self) {
-        let mut s = 0usize;
+    unsafe fn opt_emit_rest(&mut self, from: usize) {
+        let mut s = from;
+        let mut flushed = false;
         while s < self.opt_n {
             if !unsafe { self.opt_done[s] } {
                 let elem = self.opt_elems[s].as_ptr();
                 let elen = self.opt_lens[s];
+                /* a payload naming an incomplete row/type waits for a
+                 * later flush round (Result<Option<Vec<u8>>, ..) — the
+                 * res row's payload names this opt row */
+                if unsafe { self.row_dep_pending(elem, elen) } {
+                    s += 1;
+                    continue;
+                }
                 let tdn = self.arena_tmp();
                 let tdn_len = unsafe { Lower::opt_typedef_name(elem, elen, tdn, 160) };
                 if tdn_len == 0 {
@@ -829,10 +926,13 @@ impl Lower {
                 unsafe {
                     self.opt_done[s] = true;
                 }
+                flushed = true;
             }
             s += 1;
         }
-        self.out.putc(b'\n');
+        if flushed {
+            self.out.putc(b'\n');
+        }
     }
 
     /* Emit every still-pending fn-pointer row typedef. Runs BEFORE the
@@ -896,12 +996,22 @@ impl Lower {
      * typedef first) — the same window opt_emit_rest runs in. */
     unsafe fn res_emit_rest(&mut self) {
         let mut s = 0usize;
+        let mut flushed = false;
         while s < self.res_n {
             if !unsafe { self.res_done[s] } {
                 let okt = self.res_oks[s].as_ptr();
                 let okl = self.res_ok_lens[s];
                 let ert = self.res_errs[s].as_ptr();
                 let erl = self.res_err_lens[s];
+                /* both payloads must be complete — a Result over a not-
+                 * yet-emitted row (Result<Option<Vec<u8>>, ..>) waits for
+                 * a later flush round instead of naming an unknown type */
+                if unsafe { self.row_dep_pending(okt, okl) }
+                    || unsafe { self.row_dep_pending(ert, erl) }
+                {
+                    s += 1;
+                    continue;
+                }
                 let tdn = self.arena_tmp();
                 let tdn_len = unsafe { Lower::res_typedef_name(okt, okl, ert, erl, tdn, 192) };
                 if tdn_len == 0 {
@@ -920,8 +1030,12 @@ impl Lower {
                 unsafe {
                     self.res_done[s] = true;
                 }
+                flushed = true;
             }
             s += 1;
+        }
+        if flushed {
+            self.out.putc(b'\n');
         }
     }
 
@@ -930,9 +1044,11 @@ impl Lower {
      * fns whose signatures name these). The ops are unit-static helpers
      * against libc realloc/free: the generated unit is self-contained,
      * the caller owns the container's lifetime exactly as the source's
-     * own free faces spell it (rsx lowers no drops). */
-    unsafe fn vec_emit_rest(&mut self) {
-        if self.vecs.n == 0 {
+     * own free faces spell it (rsx lowers no drops). `from` scopes the
+     * walk: the struct pass's two-phase flush passes its snapshot so
+     * rows earlier passes interned stay pending (see res_emit_rest_from). */
+    unsafe fn vec_emit_rest(&mut self, from: usize) {
+        if self.vecs.n == 0 || self.vecs.n <= from {
             return;
         }
         /* the ops call realloc/free/abort: ISO C prototypes, else the
@@ -941,11 +1057,18 @@ impl Lower {
          * in only with the container plane — container-free units keep
          * their byte-identical output. */
         self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
-        let mut s = 0usize;
+        let mut s = from;
         while s < self.vecs.n {
             if !unsafe { self.vecs.done[s] } {
                 let elem = self.vecs.elems[s].as_ptr();
                 let elen = self.vecs.elem_lens[s];
+                /* a row over an incomplete element (a struct pass A has
+                 * not emitted, a tuple row still pending) waits for a
+                 * later flush round — the ops sizeof() the element */
+                if unsafe { self.row_dep_pending(elem, elen) } {
+                    s += 1;
+                    continue;
+                }
                 let tdn = self.arena_tmp();
                 let tdn_len = unsafe { VecTab::name_for(s, tdn, 96) };
                 if tdn_len == 0 {
@@ -1008,33 +1131,61 @@ impl Lower {
      * pairs ops, once per interned (K, V) pair. Key order: str-shaped
      * keys compare (p, n) bytes; every other spelling compares raw
      * bytes (integers/pointers — sizeof-based). */
-    unsafe fn btm_emit_rest(&mut self) {
-        if self.btms.n == 0 {
+    unsafe fn btm_emit_rest(&mut self, from: usize) {
+        if self.btms.n == 0 || self.btms.n <= from {
             return;
         }
         self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
-        let mut s = 0usize;
+        let mut s = from;
         while s < self.btms.n {
+            let kb = self.btms.keys[s].as_ptr();
+            let kl = self.btms.key_lens[s];
+            let vb = self.btms.vals[s].as_ptr();
+            let vl = self.btms.val_lens[s];
+            let tdn = self.arena_tmp();
+            let tdn_len = unsafe { BtmTab::name_for(s, tdn, 96) };
+            let ndn = self.arena_tmp();
+            let ndn_len = unsafe { BtmTab::node_name_for(s, ndn, 96) };
+            if tdn_len == 0 || ndn_len == 0 {
+                unsafe {
+                    self.err(b"internal: btm typedef name too long\0".as_ptr(), 0);
+                }
+                return;
+            }
+            /* FORWARD half — map typedef + node fwd decl: names only the
+             * node POINTER, never the val, so it may precede the val
+             * type's body. A recursive val (TreeNode { kids: BTreeMap<
+             * String, TreeNode> }) closes through this half; the node
+             * body, which stores the val BY VALUE, waits below. */
+            if !self.btms.fwd_done[s] {
+                self.out.puts(b"typedef struct \0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b"_s \0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                self.out.puts(b"typedef struct { \0".as_ptr());
+                self.out.put(ndn, ndn_len);
+                self.out.puts(b" *root; size_t n; } \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                self.btms.fwd_done[s] = true;
+            }
+            /* BODY half — node struct (val by value) + the ops: waits
+             * until the val spelling is complete (row_dep_pending — a
+             * later flush round re-runs this loop and lands it). */
             if !self.btms.done[s] {
-                let kb = self.btms.keys[s].as_ptr();
-                let kl = self.btms.key_lens[s];
-                let vb = self.btms.vals[s].as_ptr();
-                let vl = self.btms.val_lens[s];
-                let tdn = self.arena_tmp();
-                let tdn_len = unsafe { BtmTab::name_for(s, tdn, 96) };
-                let ndn = self.arena_tmp();
-                let ndn_len = unsafe { BtmTab::node_name_for(s, ndn, 96) };
-                if tdn_len == 0 || ndn_len == 0 {
-                    unsafe {
-                        self.err(b"internal: btm typedef name too long\0".as_ptr(), 0);
-                    }
-                    return;
+                /* a value spelling that names an incomplete row/type
+                 * waits for a later flush round (the node stores the
+                 * value by value — sizeof rides the typedef) */
+                if unsafe { self.row_dep_pending(vb, vl) } {
+                    s += 1;
+                    continue;
                 }
                 /* key compare: str-shaped keys are (p, n) memcmp; raw
                  * memcmp otherwise (scalars, pointers). */
                 let k_is_str = (kl == 9 && unsafe { z_eq(kb, 9, b"rsx_str_t\0".as_ptr()) })
                     || (kl == 13 && unsafe { z_eq(kb, 13, b"rsx_str_ref_t\0".as_ptr()) });
-                self.out.puts(b"typedef struct \0".as_ptr());
+                self.out.puts(b"struct \0".as_ptr());
                 self.out.put(ndn, ndn_len);
                 self.out.puts(b"_s { \0".as_ptr());
                 self.out.put(kb, kl);
@@ -1044,14 +1195,7 @@ impl Lower {
                 self.out.put(ndn, ndn_len);
                 self.out.puts(b"_s *l; struct \0".as_ptr());
                 self.out.put(ndn, ndn_len);
-                self.out.puts(b"_s *r; } \0".as_ptr());
-                self.out.put(ndn, ndn_len);
-                self.out.puts(b";\n\0".as_ptr());
-                self.out.puts(b"typedef struct { \0".as_ptr());
-                self.out.put(ndn, ndn_len);
-                self.out.puts(b" *root; size_t n; } \0".as_ptr());
-                self.out.put(tdn, tdn_len);
-                self.out.puts(b";\n\0".as_ptr());
+                self.out.puts(b"_s *r; };\n\0".as_ptr());
                 /* key compare: <0 / 0 / >0 */
                 self.out.puts(b"static int \0".as_ptr());
                 self.out.put(tdn, tdn_len);
@@ -1179,16 +1323,25 @@ impl Lower {
     /* &[T] slice-ref rows: one typedef per interned element type —
      * typedef struct { const T *p; size_t n; } rsx_arr_<row>;
      * No ops (the fat pair is data, not a container): done-marked so
-     * the flush is idempotent across the pre-scan and body passes. */
-    unsafe fn arr_emit_rest(&mut self) {
-        if self.arrs.n == 0 {
+     * the flush is idempotent across the pre-scan and body passes.
+     * `from` scopes the walk (see res_emit_rest_from). */
+    unsafe fn arr_emit_rest(&mut self, from: usize) {
+        if self.arrs.n == 0 || self.arrs.n <= from {
             return;
         }
-        let mut s = 0usize;
+        let mut s = from;
+        let mut flushed = false;
         while s < self.arrs.n {
             if !unsafe { self.arrs.done[s] } {
                 let elem = self.arrs.elems[s].as_ptr();
                 let elen = self.arrs.elem_lens[s];
+                /* a row over an incomplete unit type waits for the struct
+                 * pass (pass-0a statics intern `&[LiveExport]` rows long
+                 * before pass A emits LiveExport) */
+                if unsafe { self.row_dep_pending(elem, elen) } {
+                    s += 1;
+                    continue;
+                }
                 let tdn = self.arena_tmp();
                 let tdn_len = unsafe { ArrTab::name_for(s, tdn, 96) };
                 if tdn_len == 0 {
@@ -1205,10 +1358,351 @@ impl Lower {
                 unsafe {
                     self.arrs.done[s] = true;
                 }
+                flushed = true;
             }
             s += 1;
         }
-        self.out.putc(b'\n');
+        if flushed {
+            self.out.putc(b'\n');
+        }
+    }
+
+    /* The pass-0a window's arr flush: rows whose deps are complete only
+     * (row_dep_pending). The const/static faces that need a row typedef
+     * here spell byte/prim elements (`const X: &[u8] = b".."`); a row
+     * over a unit type or another container row (a fn sig's
+     * `&[(String,String)]` param the collect pass interned before pass
+     * A) waits for the file-scope fixpoint flush, where its deps are
+     * complete. done[] keeps the two windows from double-emitting. */
+    unsafe fn arr_emit_prim_rest(&mut self) {
+        let mut s = 0usize;
+        let mut flushed = false;
+        while s < self.arrs.n {
+            if !unsafe { self.arrs.done[s] } {
+                let elem = self.arrs.elems[s].as_ptr();
+                let elen = self.arrs.elem_lens[s];
+                if unsafe { self.row_dep_pending(elem, elen) } {
+                    s += 1;
+                    continue;
+                }
+                let tdn = self.arena_tmp();
+                let tdn_len = unsafe { ArrTab::name_for(s, tdn, 96) };
+                if tdn_len == 0 {
+                    unsafe {
+                        self.err(b"internal: arr typedef name too long\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                self.out.puts(b"typedef struct { const \0".as_ptr());
+                self.out.put(elem, elen);
+                self.out.puts(b" *p; size_t n; } \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b";\n\0".as_ptr());
+                unsafe {
+                    self.arrs.done[s] = true;
+                }
+                flushed = true;
+            }
+            s += 1;
+        }
+        if flushed {
+            self.out.putc(b'\n');
+        }
+    }
+
+    /* Does the unit declare a STRUCT/ENUM/TYPE_ALIAS named (nm, nl)?
+     * Reads the FILE node lower_file parked — the pass-0a deferral test
+     * has no other view of the item list (collect's SymTab stores C
+     * spellings, not the declaring items). */
+    unsafe fn unit_type_exists(&mut self, nm: *const u8, nl: usize) -> bool {
+        let f = self.file_node;
+        if f.is_null() || nl == 0 || nl >= 48 {
+            return false;
+        }
+        let kids = unsafe { (*f).kids };
+        let nk = unsafe { (*f).n_kids } as usize;
+        let mut i = 0usize;
+        while i < nk {
+            let item = unsafe { *kids.add(i) };
+            if !item.is_null() {
+                let k = unsafe { (*item).kind };
+                /* byte compare, NOT z_eq: nm is a SPAN inside a row
+                 * buffer (`Foo` inside `Foo *`) with no NUL terminator —
+                 * z_eq would read past nl into the star/space and refuse
+                 * a name the unit does declare. */
+                if k == pm_jit_rsx_ast_kind::STRUCT
+                    || k == pm_jit_rsx_ast_kind::ENUM
+                    || k == pm_jit_rsx_ast_kind::TYPE_ALIAS
+                {
+                    let it = unsafe { (*item).text };
+                    let itl = unsafe { (*item).text_len };
+                    if itl == nl && !it.is_null() {
+                        let mut j = 0usize;
+                        let mut eq = true;
+                        while j < nl {
+                            if unsafe { *it.add(j) } != unsafe { *nm.add(j) } {
+                                eq = false;
+                                break;
+                            }
+                            j += 1;
+                        }
+                        if eq {
+                            return true;
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /* pending-row counters — the file-scope fixpoint loop's progress
+     * test (a round that flushes nothing new ends the loop). */
+    unsafe fn tup_pending_n(&mut self) -> usize {
+        let mut c = 0usize;
+        let mut s = 0usize;
+        while s < self.tup_n {
+            if !self.tup_done[s] {
+                c += 1;
+            }
+            s += 1;
+        }
+        c
+    }
+    unsafe fn opt_pending_n(&mut self) -> usize {
+        let mut c = 0usize;
+        let mut s = 0usize;
+        while s < self.opt_n {
+            if !self.opt_done[s] {
+                c += 1;
+            }
+            s += 1;
+        }
+        c
+    }
+    unsafe fn res_pending_n(&mut self) -> usize {
+        let mut c = 0usize;
+        let mut s = 0usize;
+        while s < self.res_n {
+            if !self.res_done[s] {
+                c += 1;
+            }
+            s += 1;
+        }
+        c
+    }
+    unsafe fn vec_pending_n(&mut self) -> usize {
+        let mut c = 0usize;
+        let mut s = 0usize;
+        while s < self.vecs.n {
+            if !self.vecs.done[s] {
+                c += 1;
+            }
+            s += 1;
+        }
+        c
+    }
+    unsafe fn btm_pending_n(&mut self) -> usize {
+        let mut c = 0usize;
+        let mut s = 0usize;
+        while s < self.btms.n {
+            if !self.btms.done[s] {
+                c += 1;
+            }
+            s += 1;
+        }
+        c
+    }
+    unsafe fn arr_pending_n(&mut self) -> usize {
+        let mut c = 0usize;
+        let mut s = 0usize;
+        while s < self.arrs.n {
+            if !self.arrs.done[s] {
+                c += 1;
+            }
+            s += 1;
+        }
+        c
+    }
+
+    /* Is a row/payload spelling (elem, elen) NOT complete yet — i.e. an
+     * emit_rest must NOT flush a row that names it? The container rows
+     * interleave with user types and with each other (a Vec over a
+     * tuple, a Result over an Option over a vec row), and the safe
+     * invariant is: flush only rows whose every named dep is complete.
+     * A pending row stays done[]=false and a later flush retries it —
+     * the file-scope window runs the flushes to a fixpoint, so no row
+     * is left behind. True = PENDING (do not emit). */
+    unsafe fn row_dep_pending(&mut self, elem: *const u8, elen: usize) -> bool {
+        if elen == 0 || elem.is_null() {
+            return false;
+        }
+        /* strip qualifiers/whitespace around the core spelling — a
+         * POINTER spelling carries the star after a space (`Foo *`):
+         * stripping the star alone leaves `Foo ` and the trailing space
+         * would fall into the primitive branch below, naming an
+         * undeclared struct. Alternate space/star from both ends until
+         * neither peels. */
+        let mut b0 = 0usize;
+        let mut bn = elen;
+        loop {
+            if b0 < bn
+                && (unsafe { *elem.add(b0) } == b' ' || unsafe { *elem.add(b0) } == b'*')
+            {
+                b0 += 1;
+                continue;
+            }
+            if bn > b0
+                && (unsafe { *elem.add(bn - 1) } == b' ' || unsafe { *elem.add(bn - 1) } == b'*')
+            {
+                bn -= 1;
+                continue;
+            }
+            break;
+        }
+        /* a spelling with an inner space (int32_t, const uint8_t,
+         * struct X) is a primitive/rendered C type — complete by the
+         * render that produced it. */
+        let nm = elem.add(b0);
+        let nl = bn - b0;
+        if nl == 0 {
+            return false;
+        }
+        let mut k = b0;
+        while k < bn {
+            if unsafe { *elem.add(k) } == b' ' {
+                return false;
+            }
+            k += 1;
+        }
+        /* the str plane: rsx_str_t / rsx_str_ref_t are complete after the
+         * preamble flushes (str_emit_rest runs before every row flush). */
+        if nl == 9 && unsafe { z_eq(nm, nl, b"rsx_str_t\0".as_ptr()) } {
+            return false;
+        }
+        if nl == 13 && unsafe { z_eq(nm, nl, b"rsx_str_ref_t\0".as_ptr()) } {
+            return false;
+        }
+        if nl == 12 && unsafe { z_eq(nm, nl, b"rsx_strpair_t\0".as_ptr()) } {
+            return false;
+        }
+        /* another container row: pending while its typedef is not done */
+        if nl > 8 && unsafe { z_eq(nm, 8, b"rsx_opt_\0".as_ptr()) } {
+            let mut s = 0usize;
+            while s < self.opt_n {
+                if !self.opt_done[s] {
+                    /* the row's typedef NAME — opt_typedef_name renders the
+                     * encoded spelling; compare against the queried name */
+                    let kb = self.arena_tmp();
+                    let kn = unsafe {
+                        Lower::opt_typedef_name(
+                            self.opt_elems[s].as_ptr(),
+                            self.opt_lens[s],
+                            kb,
+                            192,
+                        )
+                    };
+                    if kn == elen && kn > 0 && unsafe { z_eq(kb, kn, elem) } {
+                        return true;
+                    }
+                }
+                s += 1;
+            }
+            return false;
+        }
+        if nl > 8 && unsafe { z_eq(nm, 8, b"rsx_res_\0".as_ptr()) } {
+            let mut s = 0usize;
+            while s < self.res_n {
+                if !self.res_done[s] {
+                    let okn = self.res_ok_lens[s];
+                    let ern = self.res_err_lens[s];
+                    /* rsx_res_<hexlen>T_<hexlen>E: match row by payload
+                     * pair — decode lengths from the name would re-derive
+                     * the hex; the row's own spellings are exact. */
+                    let mut kb = self.arena_tmp();
+                    let kn = unsafe {
+                        Lower::res_typedef_name(
+                            self.res_oks[s].as_ptr(),
+                            okn,
+                            self.res_errs[s].as_ptr(),
+                            ern,
+                            kb,
+                            192,
+                        )
+                    };
+                    if kn == elen && kn > 0 && unsafe { z_eq(kb, kn, elem) } {
+                        return true;
+                    }
+                }
+                s += 1;
+            }
+            return false;
+        }
+        if nl > 8 && unsafe { z_eq(nm, 8, b"rsx_vec_\0".as_ptr()) } {
+            let row = unsafe { self.vecs.find_by_name(elem, elen) };
+            if row < VEC_CAP {
+                return !self.vecs.done[row];
+            }
+            return false;
+        }
+        if nl > 8 && unsafe { z_eq(nm, 8, b"rsx_arr_\0".as_ptr()) } {
+            let row = unsafe { self.arrs.find_by_name(elem, elen) };
+            if row < ARR_CAP {
+                return !self.arrs.done[row];
+            }
+            return false;
+        }
+        if nl > 8 && unsafe { z_eq(nm, 8, b"rsx_btm_\0".as_ptr()) } {
+            /* rsx_btm_<d> — the row number is the trailing digit(s) */
+            let mut v = 0usize;
+            let mut k2 = 8usize;
+            let mut ok = true;
+            while k2 < nl {
+                let c = unsafe { *nm.add(k2) };
+                if c < b'0' || c > b'9' {
+                    ok = false;
+                    break;
+                }
+                v = v * 10 + (c - b'0') as usize;
+                k2 += 1;
+            }
+            if ok && v < self.btms.n {
+                return !self.btms.done[v];
+            }
+            return false;
+        }
+        if nl > 10 && unsafe { z_eq(nm, 10, b"rsx_tuple_\0".as_ptr()) } {
+            let slot = unsafe { self.tup_find(elem, elen) };
+            if slot < TUP_CAP {
+                return !self.tup_done[slot];
+            }
+            return false;
+        }
+        /* a unit-declared type: pending until pass A/A0 emitted it. The
+         * struct CURRENTLY being emitted is a special case — its forward
+         * typedef exists but the body has not closed, so any row naming
+         * it (a fn sig's `Vec<ThisStruct>`) defers to the file-scope
+         * window even though tydone marks the name. */
+        if nl < 48 && nl == self.cur_emit_type_len && self.cur_emit_type_len > 0 {
+            let mut j2 = 0usize;
+            let mut same = true;
+            while j2 < nl {
+                if unsafe { *nm.add(j2) } != self.cur_emit_type[j2] {
+                    same = false;
+                    break;
+                }
+                j2 += 1;
+            }
+            if same {
+                return true;
+            }
+        }
+        if nl < 48 && unsafe { self.unit_type_exists(nm, nl) } {
+            return !unsafe { self.tydone_find(nm, nl) };
+        }
+        /* opaque extern (pm_util_lock_t etc.): hoisted early — complete */
+        false
     }
 
     /* Lock-plane emission: one typedef per interned payload row —
@@ -1261,6 +1755,15 @@ impl Lower {
      * Option/tuple typedefs: file scope, complete at every reference). */
     unsafe fn str_emit_rest(&mut self) {
         if self.str_ref_done {
+            /* the str typedef already landed — but a LATER split_once may
+             * still have armed strpair_used; the pair row rides its own
+             * done flag, not this early-return. */
+            if self.strpair_used && !self.strpair_done {
+                self.out.puts(
+                    b"typedef struct { rsx_str_ref_t _0; rsx_str_ref_t _1; } rsx_strpair_t;\n\0".as_ptr(),
+                );
+                self.strpair_done = true;
+            }
             return;
         }
         if !self.str_ref_used {
@@ -1273,6 +1776,7 @@ impl Lower {
             self.out.puts(
                 b"typedef struct { rsx_str_ref_t _0; rsx_str_ref_t _1; } rsx_strpair_t;\n\0".as_ptr(),
             );
+            self.strpair_done = true;
         }
         self.str_ref_done = true;
     }
@@ -1457,6 +1961,76 @@ impl Lower {
             let mn = unsafe { (*e).n_kids } as usize;
             if mn >= 1 && !mk.is_null() {
                 unsafe { self.body_intern_types(*mk.add(0), locals) };
+                /* if-let desugars to MATCH at parse: type the scrutinee,
+                 * decode the Option payload, register every Some-arm's
+                 * bind (SAME registration emit_stmt does) — otherwise a
+                 * method call on the bind (`leaf.as_bytes()[i]`) types
+                 * nowhere in the pre-scan, its rsx_arr_ row interns only
+                 * at emission (when no gated flush follows), and the
+                 * typedef never lands before the fn body that names it. */
+                if !locals.is_null() {
+                    let scrut = unsafe { *mk.add(0) };
+                    let sb = self.pre_pool.as_mut_ptr();
+                    let save_ok = self.ok;
+                    let save_nerrs = self.nerrs;
+                    self.ok = true;
+                    let sn = unsafe { self.expr_ctype(scrut, sb, 160, locals) };
+                    self.ok = save_ok;
+                    self.nerrs = save_nerrs;
+                    if sn > 8
+                        && sn < 160
+                        && unsafe { z_eq(sb, 8, b"rsx_opt_\0".as_ptr()) }
+                    {
+                        let elem = self.stable_tmp();
+                        let eln = unsafe { Lower::opt_typedef_elem(sb, sn, elem, 128) };
+                        if eln > 0 && eln < 128 {
+                            let mut a = 1usize;
+                            while a < mn {
+                                let arm = unsafe { *mk.add(a) };
+                                if arm.is_null() {
+                                    a += 1;
+                                    continue;
+                                }
+                                let ak2 = unsafe { (*arm).kids };
+                                let an2 = unsafe { (*arm).n_kids } as usize;
+                                if an2 >= 2
+                                    && unsafe { (*arm).kind } == pm_jit_rsx_ast_kind::MATCH_ARM
+                                {
+                                    let pat2 = unsafe { *ak2.add(0) };
+                                    if unsafe { (*pat2).kind } == pm_jit_rsx_ast_kind::PATH {
+                                        let pk2 = unsafe { (*pat2).kids };
+                                        let pn2 = unsafe { (*pat2).n_kids } as usize;
+                                        if pn2 >= 2 {
+                                            let head2 = unsafe { *pk2.add(0) };
+                                            let bind2 = unsafe { *pk2.add(1) };
+                                            if unsafe { (*head2).kind } == pm_jit_rsx_ast_kind::PATH
+                                                && unsafe { z_eq(unsafe { (*head2).text }, unsafe { (*head2).text_len }, b"Some\0".as_ptr()) }
+                                            {
+                                                /* bind2 is a PATH wrapper whose .text is the kind
+                                                 * label ("path") — the identifier is its kids[0]
+                                                 * (same shape emit_stmt's if-let registration
+                                                 * derefs). */
+                                                let bnode2 = if unsafe { (*bind2).n_kids } as usize >= 1 {
+                                                    unsafe { *(*bind2).kids.add(0) }
+                                                } else {
+                                                    bind2
+                                                };
+                                                let bn2 = unsafe { (*bnode2).text };
+                                                let bl2 = unsafe { (*bnode2).text_len };
+                                                if bl2 > 0 && !bn2.is_null() {
+                                                    unsafe {
+                                                        (*locals).add(bn2, bl2, elem, eln, 0);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                a += 1;
+                            }
+                        }
+                    }
+                }
             }
             /* arm bodies still get walked (a match arm can name a Vec in
              * a later stmt) — but their pattern nodes are skipped by
@@ -1480,6 +2054,265 @@ impl Lower {
             }
             return;
         }
+        if unsafe { (*e).kind } == pm_jit_rsx_ast_kind::LET
+            && !unsafe { ((*e).text_len == 7 && z_eq((*e).text, 7, b"letelse\0".as_ptr())) }
+            && !locals.is_null()
+        {
+            /* A plain `let name: Ty = init` — register the bind's C type
+             * so LATER probes in this pre-scan (a `for x in &name`'s
+             * iter expr, a method call on the bind) type instead of
+             * refusing. Kids: name(PATH), [mut ATTR], [type TYPE],
+             * [init expr] (same shape emit_let parses). The generic walk
+             * below still visits every kid, so rows the init itself
+             * interns (Vec::new's row) keep landing. */
+            let lk = unsafe { (*e).kids };
+            let ln = unsafe { (*e).n_kids } as usize;
+            let mut name: *const u8 = core::ptr::null();
+            let mut name_len: usize = 0;
+            let mut ty: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+            let mut j = 0usize;
+            while j < ln {
+                let kj = unsafe { *lk.add(j) };
+                let kk = unsafe { (*kj).kind };
+                if kk == pm_jit_rsx_ast_kind::PATH && name_len == 0 {
+                    /* PATH kid text is the kind label; the identifier is
+                     * kids[0]'s text (single-segment name shape) */
+                    let pn = unsafe { (*kj).n_kids } as usize;
+                    let mut bn = unsafe { (*kj).text };
+                    let mut bl = unsafe { (*kj).text_len };
+                    if pn >= 1 {
+                        let k0 = unsafe { *(*kj).kids.add(0) };
+                        if unsafe { (*k0).kind } == pm_jit_rsx_ast_kind::PATH {
+                            bn = unsafe { (*k0).text };
+                            bl = unsafe { (*k0).text_len };
+                        }
+                    }
+                    if bl > 0 && !bn.is_null() {
+                        name = bn;
+                        name_len = bl;
+                    }
+                } else if kk == pm_jit_rsx_ast_kind::TYPE {
+                    ty = kj;
+                }
+                j += 1;
+            }
+            if name_len > 0 && !ty.is_null() {
+                let ct = self.stable_tmp();
+                let n = unsafe { self.ctype(ty, ct, 128) };
+                if n > 0 {
+                    unsafe {
+                        (*locals).add(name, name_len, ct, n, 0);
+                    }
+                }
+            } else if name_len > 0 {
+                /* Unascribed `let name = init` — the bind's type is the
+                 * init's expr_ctype (the same inference the emission's
+                 * emit_let runs). Registering it here lets LATER probes
+                 * in this pre-scan type method calls on the bind
+                 * (`s.strip_prefix(..)`) and intern their Option/arr rows
+                 * in the pre-scan WINDOW — where the gated flush emits
+                 * the typedef at fn scope. Without this, the row interns
+                 * only at emission and its mid-fn typedef flush lands
+                 * inside the then-current block, whose closing brace
+                 * kills the type for every later outer-scope use. */
+                let ik = unsafe { (*e).kids };
+                let inn = unsafe { (*e).n_kids } as usize;
+                let mut init: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+                let mut j2 = 0usize;
+                while j2 < inn {
+                    let kj = unsafe { *ik.add(j2) };
+                    let kkj = unsafe { (*kj).kind };
+                    if kkj != pm_jit_rsx_ast_kind::PATH
+                        && kkj != pm_jit_rsx_ast_kind::TYPE
+                        && kkj != pm_jit_rsx_ast_kind::ATTR
+                    {
+                        init = kj;
+                    }
+                    j2 += 1;
+                }
+                /* unwrap EXPR_STMT wrappers (if-let desugar tails) */
+                let mut hops = 0usize;
+                while hops < 4
+                    && !init.is_null()
+                    && unsafe { (*init).kind } == pm_jit_rsx_ast_kind::EXPR_STMT
+                    && unsafe { (*init).n_kids } as usize >= 1
+                {
+                    init = unsafe { *(*init).kids.add(0) };
+                    hops += 1;
+                }
+                if !init.is_null() {
+                    let tb = self.pre_pool.as_mut_ptr();
+                    let save_ok = self.ok;
+                    let save_nerrs = self.nerrs;
+                    self.ok = true;
+                    let tn = unsafe { self.expr_ctype(init, tb, 160, locals) };
+                    self.ok = save_ok;
+                    self.nerrs = save_nerrs;
+                    if tn > 0 && tn < 128 {
+                        let ct = self.stable_tmp();
+                        let mut w = 0usize;
+                        while w < tn {
+                            unsafe {
+                                *ct.add(w) = *tb.add(w);
+                            }
+                            w += 1;
+                        }
+                        unsafe {
+                            *ct.add(tn) = 0;
+                        }
+                        unsafe {
+                            (*locals).add(name, name_len, ct, tn, 0);
+                        }
+                    }
+                }
+            }
+            /* fall through to the generic kid walk (rows + init probes) */
+        }
+        if unsafe { (*e).kind } == pm_jit_rsx_ast_kind::LET
+            && unsafe { (*e).text_len } == 7
+            && unsafe { z_eq((*e).text, 7, b"letelse\0".as_ptr()) }
+            && !locals.is_null()
+        {
+            /* if-let's desugared `let Some(bind) = init else {..}` — the
+             * pre-scan must register the bind's payload type, or a later
+             * method call on the bind (`leaf.as_bytes()[i]` interned at
+             * emission, when no flush follows) misses its row HERE:
+             * typing the init interned the Option row, decoding the
+             * payload registers `leaf` as rsx_str_ref_t, and the body
+             * walk then types `leaf.as_bytes()` — interning the
+             * rsx_arr_<uint8_t> row in the pre-scan window, where the
+             * gated flushes below can emit its typedef. Same shape as
+             * emit_stmt's if-let bind registration. */
+            let lk = unsafe { (*e).kids };
+            let ln = unsafe { (*e).n_kids } as usize;
+            if ln >= 3 {
+                let pat = unsafe { *lk.add(0) };
+                let pk2 = unsafe { (*pat).kids };
+                let pn2 = unsafe { (*pat).n_kids } as usize;
+                if pn2 >= 2 {
+                    let bind = unsafe { *pk2.add(1) };
+                    let bn3 = unsafe { (*bind).text };
+                    let bl3 = unsafe { (*bind).text_len };
+                    let mut init2: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+                    let mut j = 1usize;
+                    while j < ln {
+                        let kj = unsafe { *lk.add(j) };
+                        if unsafe { (*kj).kind } == pm_jit_rsx_ast_kind::BLOCK {
+                            break;
+                        }
+                        if unsafe { (*kj).kind } != pm_jit_rsx_ast_kind::ATTR {
+                            init2 = kj;
+                        }
+                        j += 1;
+                    }
+                    if bl3 > 0 && !init2.is_null() {
+                        let tb = self.pre_pool.as_mut_ptr();
+                        let save_ok = self.ok;
+                        let save_nerrs = self.nerrs;
+                        self.ok = true;
+                        let tn = unsafe { self.expr_ctype(init2, tb, 160, locals) };
+                        self.ok = save_ok;
+                        self.nerrs = save_nerrs;
+                        if tn > 8
+                            && tn < 160
+                            && unsafe { z_eq(tb, 8, b"rsx_opt_\0".as_ptr()) }
+                        {
+                            let elem = self.stable_tmp();
+                            let eln = unsafe { Lower::opt_typedef_elem(tb, tn, elem, 128) };
+                            if eln > 0 && eln < 128 {
+                                unsafe {
+                                    (*locals).add(bn3, bl3, elem, eln, 0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            /* still walk the kids: the else-block may name its own rows */
+            let kids = unsafe { (*e).kids };
+            let nk = unsafe { (*e).n_kids } as usize;
+            let mut i = 0usize;
+            while i < nk {
+                unsafe { self.body_intern_types(*kids.add(i), locals) };
+                if !self.ok {
+                    return;
+                }
+                i += 1;
+            }
+            return;
+        }
+        if unsafe { (*e).kind } == pm_jit_rsx_ast_kind::FOR && !locals.is_null() {
+            /* `for bind in iter { .. }`: the emission's try_emit_for_arr
+             * types the iter expr itself and interns its container row —
+             * but only at body time, when no gated flush follows. Probe
+             * the SAME expr here (the row lands in the pre-scan window
+             * where the gated flushes below emit its typedef), and
+             * register the bind with the element spelling so the body's
+             * own method probes (`inc.as_str()`) type against it. */
+            let fk = unsafe { (*e).kids };
+            let fn2 = unsafe { (*e).n_kids } as usize;
+            if fn2 >= 3 && !fk.is_null() {
+                let pat = unsafe { *fk.add(0) };
+                let iter = unsafe { *fk.add(1) };
+                let body = unsafe { *fk.add(2) };
+                /* probe the iter expr (row interning) */
+                self.pre_pool_at = 0;
+                let sc = self.pre_pool.as_mut_ptr();
+                let save_ok = self.ok;
+                let save_nerrs = self.nerrs;
+                self.ok = true;
+                let rl = unsafe { self.expr_ctype(iter, sc, 160, locals) };
+                self.ok = save_ok;
+                self.nerrs = save_nerrs;
+                /* bind registration: a plain PATH bind names the element
+                 * of the iter's container row (arr/vec share .p/.n). A
+                 * TUPLE pattern's binds are typed from the interned
+                 * tuple signature at emission; the row itself already
+                 * interned above via the element probe the tuple path
+                 * takes. */
+                if rl > 8 && rl < 160 {
+                    let mut eb: *const u8 = core::ptr::null();
+                    let mut el: usize = 0;
+                    if unsafe { z_eq(sc, 8, b"rsx_arr_\0".as_ptr()) } {
+                        let rs = unsafe { self.arrs.find_by_name(sc, rl) };
+                        if rs < ARR_CAP {
+                            eb = self.arrs.elems[rs].as_ptr();
+                            el = self.arrs.elem_lens[rs];
+                        }
+                    } else if unsafe { z_eq(sc, 8, b"rsx_vec_\0".as_ptr()) } {
+                        let vs = unsafe { self.vecs.find_by_name(sc, rl) };
+                        if vs < VEC_CAP {
+                            eb = self.vecs.elems[vs].as_ptr();
+                            el = self.vecs.elem_lens[vs];
+                        }
+                    }
+                    if !eb.is_null() && el > 0 && el < 128 {
+                        /* unwrap the "path" wrapper the parser wraps a
+                         * single-segment bind pattern in */
+                        let mut bnode = pat;
+                        if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
+                            && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+                            && unsafe { (*pat).n_kids } as usize == 1
+                        {
+                            bnode = unsafe { *(*pat).kids.add(0) };
+                        }
+                        if unsafe { (*bnode).kind } == pm_jit_rsx_ast_kind::PATH {
+                            let bn = unsafe { (*bnode).text };
+                            let bl = unsafe { (*bnode).text_len };
+                            if bl > 0 && !bn.is_null() {
+                                unsafe {
+                                    (*locals).add(bn, bl, eb, el, 0);
+                                }
+                            }
+                        }
+                    }
+                }
+                /* walk the body (binds the pattern declared above are
+                 * registered; the emission re-registers its own) */
+                unsafe { self.body_intern_types(body, locals) };
+                return;
+            }
+        }
         if (unsafe { (*e).kind } == pm_jit_rsx_ast_kind::METHOD_CALL
                 || unsafe { (*e).kind } == pm_jit_rsx_ast_kind::CALL
                 || unsafe { (*e).kind } == pm_jit_rsx_ast_kind::TUPLE
@@ -1500,6 +2333,46 @@ impl Lower {
             let _ = unsafe { self.expr_ctype(e, sc, 160, locals) };
             self.ok = save_ok;
             self.nerrs = save_nerrs;
+            /* The probe types the WHOLE call — but a receiver-op method
+             * expr_ctype does not know (push_str: the emission-side ops
+             * take the arg raw, no typing arm exists) never reaches the
+             * ARGS, so a type the arg alone interns (inc.as_str() marks
+             * the &str plane) is missed here and the typedef lands after
+             * the body that names it. Walk the arg kids after the probe
+             * — re-probing a nested call is idempotent (interning is
+             * table-keyed) and bounded by the expr's own depth. Kids[0]
+             * of a METHOD_CALL is the receiver (already typed by the
+             * probe); a CALL's kids[0] is the callee path (nothing to
+             * intern) — walking every kid keeps both shapes honest.
+             * A call's argument container is a TUPLE node with text
+             * "args" (parse 2233): it must NOT be probed as a value
+             * tuple (phantom rows from the arg types) — descend into it
+             * directly, one level of unwrapping that skips only the
+             * probe, not the args themselves. */
+            let kids = unsafe { (*e).kids };
+            let nk = unsafe { (*e).n_kids } as usize;
+            let mut i = 0usize;
+            while i < nk {
+                let kid = unsafe { *kids.add(i) };
+                if !kid.is_null()
+                    && unsafe { (*kid).kind } == pm_jit_rsx_ast_kind::TUPLE
+                    && unsafe { (*kid).text_len } == 4
+                    && unsafe { z_eq(unsafe { (*kid).text }, 4, b"args\0".as_ptr()) }
+                {
+                    /* the args container: walk ITS kids (each arg
+                     * expr), never the container probe */
+                    let ak = unsafe { (*kid).kids };
+                    let an = unsafe { (*kid).n_kids } as usize;
+                    let mut q = 0usize;
+                    while q < an {
+                        unsafe { self.body_intern_types(*ak.add(q), locals) };
+                        q += 1;
+                    }
+                } else {
+                    unsafe { self.body_intern_types(kid, locals) };
+                }
+                i += 1;
+            }
             return;
         }
         let kids = unsafe { (*e).kids };
@@ -1656,6 +2529,7 @@ impl Lower {
         if file.is_null() || !self.ok {
             return false;
         }
+        self.file_node = file;
         unsafe { self.collect(file) };
         if !self.ok {
             return false;
@@ -1843,14 +2717,70 @@ impl Lower {
          * pending Option typedef can no longer name an unemitted payload
          * — lower_static's flush becomes safe */
         self.types_done = true;
+        /* String-plane typedefs — BEFORE the tuple/Option/Vec/lock rows:
+         * a tuple row's element (or a Vec's, an Option's, a static's
+         * type) can name rsx_str_t / rsx_str_ref_t, and C needs those
+         * complete first. One-shot file-scope, same contract as the
+         * rows below them. */
+        unsafe { self.str_emit_rest() };
+        unsafe { self.str_own_emit_rest() };
+        unsafe { self.tup_emit_rest() };
+        /* the FILE * plane: an impl-Write param / io::stdout() fill pulls
+         * in <stdio.h> (the space-star spelling is final, no typedef). */
+        if self.file_used {
+            self.out.puts(b"#include <stdio.h>\n\0".as_ptr());
+        }
+        /* remaining Option typedefs — primitive payloads need no naming
+         * type; emit before the prototypes/fns that use them. fn-ptr rows
+         * first: an Option payload can name rsx_fnp_<row>. The whole
+         * window runs to a FIXPOINT: rows gate their own deps
+         * (row_dep_pending) and a round may leave rows pending (a Vec
+         * over a tuple, a Result over an Option); loop until a full
+         * round flushes nothing new. Every pass-A type is emitted by
+         * now, so the loop always terminates: each round either emits
+         * (progress) or nothing pending remains whose deps are all
+         * complete. */
+        {
+            let mut rounds = 0usize;
+            loop {
+                let before = self.tup_pending_n()
+                    + self.opt_pending_n()
+                    + self.res_pending_n()
+                    + self.vec_pending_n()
+                    + self.btm_pending_n()
+                    + self.arr_pending_n();
+                unsafe { self.tup_emit_rest() };
+                unsafe { self.fnp_emit_rest() };
+                unsafe { self.opt_emit_rest(0) };
+                unsafe { self.res_emit_rest() };
+                unsafe { self.vec_emit_rest(0) };
+                unsafe { self.btm_emit_rest(0) };
+                unsafe { self.arr_emit_rest(0) };
+                let after = self.tup_pending_n()
+                    + self.opt_pending_n()
+                    + self.res_pending_n()
+                    + self.vec_pending_n()
+                    + self.btm_pending_n()
+                    + self.arr_pending_n();
+                if after == before || rounds > 8 {
+                    break;
+                }
+                rounds += 1;
+            }
+        }
+        /* Lock rows — same file-scope contract (a fn signature naming
+         * Mutex<T> needs the typedef complete before the prototype) */
+        unsafe { self.lock_emit_rest() };
         /* trait-object typedefs: one `typedef struct { ret (*m)(..); .. }
          * Name;` per declared trait — the vtable inlined as fields. The
          * fn-ptr sigs were rendered at collect; a sig may name a struct
-         * (param/ret types), and pass A has now emitted every unit type,
-         * so the fields' C types are complete here. Traits are unit-local
-         * (no generic traits — a generic trait's object type has no
-         * single C spelling), and the dyn plane is ref-carried: the
-         * typedef is complete where declared. */
+         * (param/ret types — pass A has emitted every unit type) AND the
+         * container rows (a GenSink read slot names the Result/Option/
+         * Vec rows) — the flushes above have landed every one of those
+         * typedefs, so the fields' C types are complete here. Traits are
+         * unit-local (no generic traits — a generic trait's object type
+         * has no single C spelling), and the dyn plane is ref-carried:
+         * the typedef is complete where declared. */
         i = 0;
         while i < nk {
             item = unsafe { *kids.add(i) };
@@ -1867,36 +2797,6 @@ impl Lower {
             }
             i += 1;
         }
-        /* String-plane typedefs — BEFORE the tuple/Option/Vec/lock rows:
-         * a tuple row's element (or a Vec's, an Option's, a static's
-         * type) can name rsx_str_t / rsx_str_ref_t, and C needs those
-         * complete first. One-shot file-scope, same contract as the
-         * rows below them. */
-        unsafe { self.str_emit_rest() };
-        unsafe { self.str_own_emit_rest() };
-        unsafe { self.tup_emit_rest() };
-        /* the FILE * plane: an impl-Write param / io::stdout() fill pulls
-         * in <stdio.h> (the space-star spelling is final, no typedef). */
-        if self.file_used {
-            self.out.puts(b"#include <stdio.h>\n\0".as_ptr());
-        }
-        /* remaining Option typedefs — primitive payloads need no naming
-         * type; emit before the prototypes/fns that use them. fn-ptr rows
-         * first: an Option payload can name rsx_fnp_<row>. */
-        unsafe { self.fnp_emit_rest() };
-        unsafe { self.opt_emit_rest() };
-        /* Result typedefs — same window (payloads naming unit types are
-         * complete by now) */
-        unsafe { self.res_emit_rest() };
-        /* Vec container typedefs + ops — before every fn whose signature
-         * or body names one */
-        unsafe { self.vec_emit_rest() };
-        /* &[T] slice-ref typedefs — same file-scope contract (a fn
-         * signature naming &[T] needs the fat pair complete) */
-        unsafe { self.arr_emit_rest() };
-        /* Lock rows — same file-scope contract (a fn signature naming
-         * Mutex<T> needs the typedef complete before the prototype) */
-        unsafe { self.lock_emit_rest() };
         /* pass 0b: statics — after the type pass, their declarations name
          * struct/alias types; their initializers may also need complete
          * types for compound literals. */

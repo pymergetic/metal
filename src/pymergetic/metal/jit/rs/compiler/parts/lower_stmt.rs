@@ -25,7 +25,24 @@ impl Lower {
                     self.emit_if(s, locals);
                 }
             },
-            pm_jit_rsx_ast_kind::MATCH => unsafe { self.emit_match(s, locals) },
+            pm_jit_rsx_ast_kind::MATCH => unsafe {
+                /* one C brace scope per statement-position match: two
+                 * sequential if-lets each mint their own `__rsx_m` temp
+                 * (different Option rows — a shared spelling at fn scope
+                 * is a conflicting redeclaration) and their own arm
+                 * binds (`leaf` in the first if-let colliding with the
+                 * second's). The scope wraps the WHOLE match, so the
+                 * temp and binds die at the closing brace. */
+                self.indent();
+                self.out.puts(b"{\n\0".as_ptr());
+                self.depth += 1;
+                unsafe { (*locals).note_scope() };
+                self.emit_match(s, locals);
+                unsafe { (*locals).drop_scope() };
+                self.depth -= 1;
+                self.indent();
+                self.out.puts(b"}\n\0".as_ptr());
+            },
             pm_jit_rsx_ast_kind::LOOP => unsafe { self.emit_loop(s, locals) },
             pm_jit_rsx_ast_kind::WHILE => unsafe { self.emit_while(s, locals) },
             pm_jit_rsx_ast_kind::FOR => unsafe { self.emit_for(s, locals) },
@@ -226,7 +243,7 @@ impl Lower {
                 self.indent();
                 self.out.put(temp, temp_len);
                 self.out.puts(b" = \0".as_ptr());
-                unsafe { self.emit_expr(b, locals) };
+                unsafe { self.emit_assign_value(b, locals) };
                 self.out.puts(b";\n\0".as_ptr());
             } else {
                 self.indent();
@@ -246,6 +263,19 @@ impl Lower {
             unsafe {
                 (*locals).note_scope();
             }
+        }
+        /* a plain value block OPENS a C scope: its lets (`let (a,b,c) =
+         * { let base = ..; ..; (base, ..) }`) must not collide with the
+         * destructure binds that follow the block (same spellings, the
+         * outer tuple pattern's own). Statements emit INSIDE the
+         * braces; the tail assigns the temp — the temp is declared in
+         * the enclosing scope, so the assignment stays visible after
+         * the closing brace. An unsafe block adds no scope (same
+         * contract as emit_block_stmt). */
+        if !is_unsafe_block2 {
+            self.indent();
+            self.out.puts(b"{\n\0".as_ptr());
+            self.depth += 1;
         }
         let kids = unsafe { (*b).kids };
         let nk = unsafe { (*b).n_kids } as usize;
@@ -279,6 +309,11 @@ impl Lower {
                 {
                     unsafe { self.emit_stmt(st2, locals, 0) };
                     unsafe { self.end_block(locals, is_unsafe_block2, saved_epoch) };
+                    if !is_unsafe_block2 {
+                        self.depth -= 1;
+                        self.indent();
+                        self.out.puts(b"}\n\0".as_ptr());
+                    }
                     return;
                 }
                 let valuey = k == pm_jit_rsx_ast_kind::IF
@@ -294,6 +329,11 @@ impl Lower {
                         unsafe {
                             (*locals).epoch = saved_epoch;
                         }
+                        if !is_unsafe_block2 {
+                            self.depth -= 1;
+                            self.indent();
+                            self.out.puts(b"}\n\0".as_ptr());
+                        }
                         return;
                     }
                     if k == pm_jit_rsx_ast_kind::MATCH {
@@ -301,12 +341,22 @@ impl Lower {
                         unsafe {
                             (*locals).epoch = saved_epoch;
                         }
+                        if !is_unsafe_block2 {
+                            self.depth -= 1;
+                            self.indent();
+                            self.out.puts(b"}\n\0".as_ptr());
+                        }
                         return;
                     }
                     if k == pm_jit_rsx_ast_kind::BLOCK {
                         unsafe { self.emit_block_value(st2, locals, temp, temp_len) };
                         unsafe {
                             (*locals).epoch = saved_epoch;
+                        }
+                        if !is_unsafe_block2 {
+                            self.depth -= 1;
+                            self.indent();
+                            self.out.puts(b"}\n\0".as_ptr());
                         }
                         return;
                     }
@@ -317,6 +367,11 @@ impl Lower {
                         unsafe {
                             (*locals).epoch = saved_epoch;
                         }
+                        if !is_unsafe_block2 {
+                            self.depth -= 1;
+                            self.indent();
+                            self.out.puts(b"}\n\0".as_ptr());
+                        }
                         return;
                     }
                     unsafe {
@@ -326,6 +381,11 @@ impl Lower {
                         );
                     }
                     unsafe { self.end_block(locals, is_unsafe_block2, saved_epoch) };
+                    if !is_unsafe_block2 {
+                        self.depth -= 1;
+                        self.indent();
+                        self.out.puts(b"}\n\0".as_ptr());
+                    }
                     return;
                 }
                 /* plain tail expr: emit as `temp = expr;` when a temp is given */
@@ -333,9 +393,14 @@ impl Lower {
                     self.indent();
                     self.out.put(temp, temp_len);
                     self.out.puts(b" = \0".as_ptr());
-                    unsafe { self.emit_expr(st2, locals) };
+                    unsafe { self.emit_assign_value(st2, locals) };
                     self.out.puts(b";\n\0".as_ptr());
                     unsafe { self.end_block(locals, is_unsafe_block2, saved_epoch) };
+                    if !is_unsafe_block2 {
+                        self.depth -= 1;
+                        self.indent();
+                        self.out.puts(b"}\n\0".as_ptr());
+                    }
                     return;
                 }
             }
@@ -343,6 +408,11 @@ impl Lower {
             i += 1;
         }
         unsafe { self.end_block(locals, is_unsafe_block2, saved_epoch) };
+        if !is_unsafe_block2 {
+            self.depth -= 1;
+            self.indent();
+            self.out.puts(b"}\n\0".as_ptr());
+        }
     }
 
     /* `let Some(bind) = init else { diverging }` — the flat, single-eval
@@ -488,7 +558,7 @@ impl Lower {
              * right here (mid-function typedefs are C; before use is
              * all the order the language needs) */
             unsafe { self.fnp_emit_rest() };
-            unsafe { self.opt_emit_rest() };
+            unsafe { self.opt_emit_rest(0) };
             self.indent();
             self.out.put(ct, ct_len);
             self.out.puts(b" __rsx_le = \0".as_ptr());
@@ -919,39 +989,31 @@ impl Lower {
         self.out.put(tmp, tmp_len);
         self.out.puts(b" = {0};\n\0".as_ptr());
         let ik = unsafe { (*init).kind };
+        /* cur_ret carries the LET'S OWN tuple row (not the fn's return)
+         * into the initializer's emission: a block/if/match tail tuple
+         * picks its row from cur_ret when the arity matches, so the fn's
+         * return row would poison a same-arity-but-different destructure
+         * (`let (base, stars, is_const) = { ..; (base, stars, is_const) }`
+         * inside a fn returning (String, bool, Option<String>) minted
+         * the return row's cast and misdeclared every bind). Bytes are
+         * saved too — a length-only restore corrupts the row name when
+         * the tuple row is shorter than the fn's own return type. */
+        let saved_ret: [u8; 128] = self.cur_ret;
+        let saved_ret_len = self.cur_ret_len;
+        {
+            let mut j = 0usize;
+            while j < ct_len && j < 127 {
+                self.cur_ret[j] = unsafe { *ct.add(j) };
+                j += 1;
+            }
+            self.cur_ret_len = ct_len;
+        }
         if ik == pm_jit_rsx_ast_kind::IF {
             /* cur_ret carries the expected tuple to the arm bodies so
-             * unsuffixed literals in `(0, 0)` mint the right signature.
-             * Bytes are saved too — a length-only restore corrupts the
-             * row name when the tuple row is shorter than the fn's
-             * own return type. */
-            let saved_ret: [u8; 128] = self.cur_ret;
-            let saved_ret_len = self.cur_ret_len;
-            {
-                let mut j = 0usize;
-                while j < ct_len && j < 127 {
-                    self.cur_ret[j] = unsafe { *ct.add(j) };
-                    j += 1;
-                }
-                self.cur_ret_len = ct_len;
-            }
+             * unsuffixed literals in `(0, 0)` mint the right signature. */
             unsafe { self.emit_if_value(init, locals, tmp, tmp_len) };
-            self.cur_ret = saved_ret;
-            self.cur_ret_len = saved_ret_len;
         } else if ik == pm_jit_rsx_ast_kind::MATCH {
-            let saved_ret: [u8; 128] = self.cur_ret;
-            let saved_ret_len = self.cur_ret_len;
-            {
-                let mut j = 0usize;
-                while j < ct_len && j < 127 {
-                    self.cur_ret[j] = unsafe { *ct.add(j) };
-                    j += 1;
-                }
-                self.cur_ret_len = ct_len;
-            }
             unsafe { self.emit_match_value(init, locals, tmp, tmp_len) };
-            self.cur_ret = saved_ret;
-            self.cur_ret_len = saved_ret_len;
         } else if ik == pm_jit_rsx_ast_kind::BLOCK && (unsafe { (*init).n_kids } as usize) >= 2 {
             /* multi-statement value block: the temp is the block's value
              * target — the block's own lets live in its scope, the tail
@@ -965,6 +1027,8 @@ impl Lower {
             unsafe { self.emit_expr(init, locals) };
             self.out.puts(b";\n\0".as_ptr());
         }
+        self.cur_ret = saved_ret;
+        self.cur_ret_len = saved_ret_len;
         /* element binds from the temp's fields */
         let pk = unsafe { (*pat).kids };
         let mut f = 0usize;
@@ -2368,7 +2432,7 @@ impl Lower {
          * typedefs before the temp decl names them (mid-fn typedefs are C;
          * the let-else path does the same). */
         unsafe { self.fnp_emit_rest() };
-        unsafe { self.opt_emit_rest() };
+        unsafe { self.opt_emit_rest(0) };
         unsafe { self.res_emit_rest() };
         self.indent();
         self.out.put(ct, ct_len);
@@ -2712,6 +2776,36 @@ impl Lower {
         if btl == 1 && unsafe { z_eq(bt, 1, b"_\0".as_ptr()) } {
             return;
         }
+        /* literal payloads (`Ok(true)`, `Ok(0)`) are VALUE arms, not
+         * binds: the parser hands them as PATH leaves with literal
+         * spellings (true/false/numbers). Declaring them as a bind
+         * minted `bool true = ..` — not C. The test compares the
+         * payload to the literal (emit_pat_test's literal-arm twin
+         * handles the compare when the pattern rides the RES path). */
+        if (btl == 4 && unsafe { z_eq(bt, 4, b"true\0".as_ptr()) })
+            || (btl == 5 && unsafe { z_eq(bt, 5, b"false\0".as_ptr()) })
+        {
+            return;
+        }
+        let mut numeric = false;
+        if btl > 0 && !bt.is_null() {
+            let c0 = unsafe { *bt };
+            if (c0 >= b'0' && c0 <= b'9') || c0 == b'-' {
+                let mut j = 0usize;
+                numeric = true;
+                while j < btl {
+                    let ch = unsafe { *bt.add(j) };
+                    if !(ch >= b'0' && ch <= b'9') {
+                        numeric = false;
+                        break;
+                    }
+                    j += 1;
+                }
+            }
+        }
+        if numeric {
+            return;
+        }
         /* payload pair without a tuple temp (a `let (a,b) = if..` here
          * registers its row mid-fn, past lower_file's tup_emit_rest —
          * the decl then names an unemitted typedef). */
@@ -2999,7 +3093,7 @@ impl Lower {
         }
         /* same late-intern flush as emit_match (see there). */
         unsafe { self.fnp_emit_rest() };
-        unsafe { self.opt_emit_rest() };
+        unsafe { self.opt_emit_rest(0) };
         unsafe { self.res_emit_rest() };
         self.indent();
         self.out.put(ct, ct_len);
@@ -3590,6 +3684,55 @@ impl Lower {
                     let bind = unsafe { *kids.add(1) };
                     let bt = unsafe { (*bind).text };
                     let btl = unsafe { (*bind).text_len };
+                    /* literal payload (`Ok(true)`, `Ok(0)`): VALUE compare —
+                     * AND the presence test with the payload == literal.
+                     * No bind is declared (emit_res_binds skips literals);
+                     * without this the arm matched every Ok, not only the
+                     * literal's. */
+                    let is_true = btl == 4 && unsafe { z_eq(bt, 4, b"true\0".as_ptr()) };
+                    let is_false = btl == 5 && unsafe { z_eq(bt, 5, b"false\0".as_ptr()) };
+                    if is_true || is_false {
+                        self.out.puts(b" && \0".as_ptr());
+                        self.out.put(sv, sv_len);
+                        if is_ok {
+                            self.out.puts(b"._v == \0".as_ptr());
+                        } else {
+                            self.out.puts(b"._e == \0".as_ptr());
+                        }
+                        if is_true {
+                            self.out.puts(b"true\0".as_ptr());
+                        } else {
+                            self.out.puts(b"false\0".as_ptr());
+                        }
+                        return;
+                    }
+                    let mut numeric = false;
+                    if btl > 0 && !bt.is_null() {
+                        let c0 = unsafe { *bt };
+                        if c0 >= b'0' && c0 <= b'9' {
+                            let mut j = 0usize;
+                            numeric = true;
+                            while j < btl {
+                                let ch = unsafe { *bt.add(j) };
+                                if !(ch >= b'0' && ch <= b'9') {
+                                    numeric = false;
+                                    break;
+                                }
+                                j += 1;
+                            }
+                        }
+                    }
+                    if numeric {
+                        self.out.puts(b" && \0".as_ptr());
+                        self.out.put(sv, sv_len);
+                        if is_ok {
+                            self.out.puts(b"._v == \0".as_ptr());
+                        } else {
+                            self.out.puts(b"._e == \0".as_ptr());
+                        }
+                        self.out.put(bt, btl);
+                        return;
+                    }
                     self.out.puts(b" /* \0".as_ptr());
                     self.out.put(unsafe { (**kids.add(0)).text }, 2);
                     self.out.putc(b'(');
@@ -4807,25 +4950,34 @@ impl Lower {
             self.out.put(bbuf, bn);
             self.out.puts(b" __m; \0".as_ptr());
         }
+        /* the payload read happens BEFORE the bind's declaration: a
+         * closure param that shadows the receiver's own name (Rust's
+         * `f.map(|f| ..)`) would otherwise emit `T f = f._v;` — in C
+         * the declarator's own name is in scope in its initializer, so
+         * the `._v` would name the payload field of the payload. The
+         * temp carries the receiver's payload across the declaration. */
+        if is_struct_opt {
+            self.out.put(payload_buf, payload_len);
+            self.out.puts(b" __rsx_pv = \0".as_ptr());
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b"._v; \0".as_ptr());
+        }
         if is_struct_opt {
             self.out.puts(b"if (\0".as_ptr());
             unsafe { self.emit_expr(recv, locals) };
             self.out.puts(b"._has) { \0".as_ptr());
+            self.out.put(payload_buf, payload_len);
+            self.out.putc(b' ');
+            self.out.put(bname, blen);
+            self.out.puts(b" = __rsx_pv; \0".as_ptr());
         } else {
             self.out.puts(b"if (\0".as_ptr());
             unsafe { self.emit_expr(recv, locals) };
             self.out.puts(b") { \0".as_ptr());
-        }
-        /* bind: payload-ptr type <name> = <payload>; — the struct-Option
-         * payload is ._v, the pointer payload is the receiver itself. */
-        self.out.put(payload_buf, payload_len);
-        self.out.putc(b' ');
-        self.out.put(bname, blen);
-        self.out.puts(b" = \0".as_ptr());
-        if is_struct_opt {
-            unsafe { self.emit_expr(recv, locals) };
-            self.out.puts(b"._v; \0".as_ptr());
-        } else {
+            self.out.put(payload_buf, payload_len);
+            self.out.putc(b' ');
+            self.out.put(bname, blen);
+            self.out.puts(b" = \0".as_ptr());
             unsafe { self.emit_expr(recv, locals) };
             self.out.puts(b"; \0".as_ptr());
         }
@@ -5098,7 +5250,9 @@ impl Lower {
         if (unsafe { (*margs).n_kids } as usize) != 0 {
             return 0;
         }
-        /* emit: ({ out_row _o = {0}; for (i < n) { _push(&_o, body); } _o; }) */
+        /* emit: ({ out_row _o = {0}; for (i < n) { <elem decl>; row_push(&_o, body); } _o; })
+         * The param DECLARATION lands in the loop body's braces — a
+         * declaration inside _push's argument list is not C. */
         self.out.puts(b"({ \0".as_ptr());
         self.out.put(nb, nn);
         self.out.puts(b" _o = {0}; for (size_t _i = 0; _i < \0".as_ptr());
@@ -5113,9 +5267,7 @@ impl Lower {
             unsafe { self.emit_expr(base, locals) };
             self.out.puts(b")[0]); _i++) { \0".as_ptr());
         }
-        self.out.put(nb, nn);
-        self.out.puts(b"_push(&_o, \0".as_ptr());
-        /* register the param(s), emit the body inline */
+        /* register the param(s), DECLARE them in the loop scope, then push */
         if is_tup_param {
             let pk5 = unsafe { (*param).kids };
             self.out.put(eb, el);
@@ -5135,7 +5287,6 @@ impl Lower {
                     let a5 = tup_slot * TUP_MAXF + f5;
                     let elct = self.tup_elems[a5].as_ptr();
                     let elct_len = self.tup_lens[a5];
-                    self.indent();
                     self.out.put(elct, elct_len);
                     self.out.putc(b' ');
                     self.out.put(sn5, sl5);
@@ -5165,6 +5316,8 @@ impl Lower {
                 self.out.puts(b")[_i]; \0".as_ptr());
             }
         }
+        self.out.put(nb, nn);
+        self.out.puts(b"_push(&_o, \0".as_ptr());
         unsafe { self.emit_expr(body, locals) };
         self.out.puts(b"); } _o; })\0".as_ptr());
         1
@@ -5417,7 +5570,12 @@ impl Lower {
             }
             self.out.putc(b'(');
             unsafe { self.emit_expr(body, locals) };
-            self.out.puts(b") {\0".as_ptr());
+            /* BOTH parens close: the wrap's own and the if-cond's —
+             * `if (` + `(` + BODY + `) {` leaves the cond's paren
+             * dangling (TCC: "',' expected"); a body that is itself a
+             * parenthesized BINARY chain (`a || b`) re-balance-checks
+             * the same way, one close per open. */
+            self.out.puts(b")) {\0".as_ptr());
             if want_all {
                 self.out.put(bname, blen);
                 self.out.puts(b"_acc = 0;\0".as_ptr());

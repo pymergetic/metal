@@ -19,7 +19,6 @@ enum Other {
     Other_V,
 };
 
-
 #line 4 "__impl__.rs"
 int32_t chain(bool a, bool b, bool c)
 ;

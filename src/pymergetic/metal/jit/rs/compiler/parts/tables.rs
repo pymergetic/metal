@@ -13,9 +13,10 @@ const SYM_CAP: usize = 512;
 /* fields per struct — the Lower struct itself has 43 (grew with the tuple
  * support's six state fields); the cap must carry the compiler's own
  * shape or the self-host prove fails field inference past slot 40. */
-/* max fields per struct — Lower itself has 70 fields (self-host proves the
- * cap every compile), so 64 silently dropped `arrs`/`locks` off SymTab. */
-const FPC: usize = 96;
+/* max fields per struct — Lower itself is the ceiling case (self-host
+ * proves the cap every compile: 97 fields as of the Default plane), so
+ * the cap must clear the compiler's own shape with headroom to spare. */
+const FPC: usize = 128;
 /* params per fn whose C types the FnTab records (for `None` args). */
 const FN_MAXP: usize = 8;
 
@@ -25,8 +26,11 @@ const OPT_CAP: usize = 24;
 const ST_CAP: usize = 64;
 /* Tuple signature cap: distinct (A, B, ..) spellings per unit. Tuples
  * render as named structs rsx_tuple_<sig>; the table mirrors the Option
- * payload table (register idempotent, emit once in the preamble). */
-const TUP_CAP: usize = 24;
+ * payload table (register idempotent, emit once in the preamble). 48:
+ * pymergetic.util.gen's own face names 30+ distinct signatures (the
+ * collect pass renders every struct field and fn sig tuple before the
+ * bodies), and the self-host spine stays under 40. */
+const TUP_CAP: usize = 48;
 const TUP_MAXF: usize = 4;
 /* Result payload-pair cap: distinct (T, E) spellings per unit. Results
  * render as named structs rsx_res_<T>_<E>; the table mirrors the Option
@@ -1504,6 +1508,12 @@ struct BtmTab {
     val_lens: [usize; BTM_CAP],
     n: usize,
     done: [bool; BTM_CAP],
+    /* forward part emitted (map typedef + node fwd decl): the map row
+     * names only `node *root`, so the typedef may precede the val type's
+     * BODY — a recursive TreeNode { kids: BTreeMap<String, TreeNode> }
+     * closes through it (the node body, which names the val by value,
+     * waits in btm_emit_rest's gated half). */
+    fwd_done: [bool; BTM_CAP],
 }
 
 impl BtmTab {
@@ -1515,6 +1525,7 @@ impl BtmTab {
             val_lens: [0; BTM_CAP],
             n: 0,
             done: [false; BTM_CAP],
+            fwd_done: [false; BTM_CAP],
         }
     }
 

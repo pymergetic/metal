@@ -105,6 +105,22 @@ impl Lower {
                 }
                 return;
             }
+            /* Vec<T> / BTreeMap<K, V> / Result<T, E>: POINTER-shaped rows
+             * — the row's C type stores the payload behind a pointer
+             * (rsx_vec_'s p, the btm node's indirection, rsx_res_'s
+             * tagged union rides its own typedef), so a field naming the
+             * row needs only the ROW's typedef, never the payload's
+             * body. Do NOT collect the payload as a dep: a recursive
+             * shape (TreeNode { kids: BTreeMap<String, TreeNode> })
+             * would collect the struct as its own dep and refuse as a
+             * cycle, when the forward-emitted row typedef lets the
+             * struct close and the row's body half land after it. */
+            if unsafe { z_eq(fname, flen, b"Vec\0".as_ptr()) }
+                || unsafe { z_eq(fname, flen, b"BTreeMap\0".as_ptr()) }
+                || unsafe { z_eq(fname, flen, b"Result\0".as_ptr()) }
+            {
+                return;
+            }
             /* single-segment path: the leaf name is the dep candidate */
             if nk == 1 {
                 unsafe { self.dep_name(fname, flen, out, out_lens, out_n, cap) };
@@ -239,10 +255,14 @@ impl Lower {
             }
             return;
         }
-        /* deps first */
-        let mut dep_bufs: [[u8; 48]; 16] = [[0; 48]; 16];
-        let mut dep_lens: [usize; 16] = [0; 16];
+        /* deps first — DEP_CT caps one struct's by-value field deps
+         * (distinct type names, not fields); over-cap is a LOUD refusal:
+         * a silently dropped dep is a C use-before-definition the TCC
+         * pass would only name one instance of. */
+        let mut dep_bufs: [[u8; 48]; 32] = [[0; 48]; 32];
+        let mut dep_lens: [usize; 32] = [0; 32];
         let mut dep_n: usize = 0;
+        let mut dep_overflow = false;
         let ikids = unsafe { (*item).kids };
         let ikn = unsafe { (*item).n_kids } as usize;
         let mut j = 0usize;
@@ -259,12 +279,24 @@ impl Lower {
                             dep_bufs.as_mut_ptr() as *mut u8,
                             dep_lens.as_mut_ptr(),
                             &mut dep_n,
-                            16,
+                            32,
                         );
                     };
+                    if dep_n >= 32 {
+                        dep_overflow = true;
+                    }
                 }
             }
             j += 1;
+        }
+        if dep_overflow {
+            unsafe {
+                self.err(
+                    b"unsupported: struct by-value dep count over the order cap (32)\0".as_ptr(),
+                    unsafe { (*item).line },
+                );
+            }
+            return;
         }
         let mut d = 0usize;
         while d < dep_n {
@@ -473,6 +505,17 @@ impl Lower {
         self.out.puts(b"#line \0".as_ptr());
         unsafe { self.out.put_u32(line) };
         self.out.puts(b" \"__impl__.rs\"\n\0".as_ptr());
+        /* park the name for row_dep_pending: until the body closes, a
+         * row over this struct defers (only the forward typedef exists) */
+        {
+            let mut ci = 0usize;
+            while ci < nlen && ci < 47 {
+                self.cur_emit_type[ci] = unsafe { *name.add(ci) };
+                ci += 1;
+            }
+            self.cur_emit_type[ci] = 0;
+            self.cur_emit_type_len = ci;
+        }
         /* named-field struct: real body; unit struct: empty forward decl */
         let mut i = 0usize;
         let mut has_fields = false;
@@ -494,36 +537,80 @@ impl Lower {
             self.out.putc(b' ');
             self.out.put(name, nlen);
             self.out.puts(b";\n\0".as_ptr());
-            self.out.put(tag, tag_len);
-            self.out.putc(b' ');
-            self.out.put(name, nlen);
-            self.out.puts(b" {\n\0".as_ptr());
-            i = 0;
-            while i < nk {
-                let k = unsafe { *kids.add(i) };
-                if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD {
-                    let fk = unsafe { (*k).kids };
-                    let fkn = unsafe { (*k).n_kids } as usize;
-                    if fkn >= 1 {
-                        let fty = unsafe { *fk.add(0) };
-                        let ct = self.arena_tmp();
-                        let n = unsafe { self.ctype(fty, ct, 128) };
-                        if n == 0 {
-                            return;
+            /* two-PASS field render: pass 1 renders every field's ctype
+             * into a throwaway scratch (a field naming Vec/BTreeMap/&[T]/
+             * Result interns that container's row during the render —
+             * ctype is pure and idempotent, so pass 2 renders the same
+             * text again for the real emit), THEN the rows pass 1
+             * interned flush, THEN the body opens with pass 2. One-phase
+             * would name rsx_btm_<row> in a field before its own
+             * typedef exists (MemSink.files). NO field-count cap: the
+             * discarded pass-1 scratch is one arena_tmp, however wide
+             * the struct (the old [128;16] row cache silently truncated
+             * past 16 fields — the compiler card's own 93-field `Lower`
+             * emitted a half struct and only TCC's first "field not
+             * found" named it). FULL dep-gated flushes
+             * (row_dep_pending): a row over THIS struct defers
+             * (cur_emit_type — only the forward typedef exists while
+             * the body opens), every other complete-dep row the fields
+             * name lands here; the file-scope fixpoint owns the rest.
+             * Ordering: res (payload may name an opt/fnp row), then vec,
+             * then btm (payload names vec), then arr. */
+            {
+                i = 0;
+                while i < nk {
+                    let k = unsafe { *kids.add(i) };
+                    if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD {
+                        let fk = unsafe { (*k).kids };
+                        let fkn = unsafe { (*k).n_kids } as usize;
+                        if fkn >= 1 {
+                            let fty = unsafe { *fk.add(0) };
+                            let ct = self.arena_tmp();
+                            if unsafe { self.ctype(fty, ct, 128) } == 0 {
+                                return;
+                            }
                         }
-                        self.out.puts(b"    \0".as_ptr());
-                        unsafe {
-                            self.emit_declarator(
-                                ct,
-                                n,
-                                unsafe { (*k).text },
-                                unsafe { (*k).text_len },
-                            );
-                        }
-                        self.out.puts(b";\n\0".as_ptr());
                     }
+                    i += 1;
                 }
-                i += 1;
+                unsafe { self.fnp_emit_rest() };
+                unsafe { self.opt_emit_rest(0) };
+                unsafe { self.res_emit_rest() };
+                unsafe { self.vec_emit_rest(0) };
+                unsafe { self.btm_emit_rest(0) };
+                unsafe { self.arr_emit_rest(0) };
+                unsafe { self.tup_emit_rest() };
+                self.out.put(tag, tag_len);
+                self.out.putc(b' ');
+                self.out.put(name, nlen);
+                self.out.puts(b" {\n\0".as_ptr());
+                i = 0;
+                while i < nk {
+                    let k = unsafe { *kids.add(i) };
+                    if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD {
+                        let fk = unsafe { (*k).kids };
+                        let fkn = unsafe { (*k).n_kids } as usize;
+                        if fkn >= 1 {
+                            let fty = unsafe { *fk.add(0) };
+                            let ct = self.arena_tmp();
+                            let n = unsafe { self.ctype(fty, ct, 128) };
+                            if n == 0 {
+                                return;
+                            }
+                            self.out.puts(b"    \0".as_ptr());
+                            unsafe {
+                                self.emit_declarator(
+                                    ct,
+                                    n,
+                                    unsafe { (*k).text },
+                                    unsafe { (*k).text_len },
+                                );
+                            }
+                            self.out.puts(b";\n\0".as_ptr());
+                        }
+                    }
+                    i += 1;
+                }
             }
             self.out.puts(b"};\n\0".as_ptr());
             self.out.puts(b"typedef \0".as_ptr());
@@ -541,6 +628,23 @@ impl Lower {
             self.out.puts(b" \0".as_ptr());
             self.out.put(name, nlen);
             self.out.puts(b";\n\0".as_ptr());
+        }
+        self.cur_emit_type_len = 0;
+        /* #[derive(Default)]: the zeroed ctor rides the typedef — every
+         * field's zero IS its Default in the C layout (bools false,
+         * integers 0, pointers/containers/strings all-zero). */
+        if unsafe { self.has_default_derive(item) } {
+            unsafe { self.def_add(name, nlen) };
+            self.out.putc(b'\n');
+            self.out.put(name, nlen);
+            self.out.puts(b" _\0".as_ptr());
+            self.out.put(name, nlen);
+            self.out.puts(b"_default(void)\n\0".as_ptr());
+            self.out.puts(b"{\n    return (\0".as_ptr());
+            self.out.put(name, nlen);
+            self.out.puts(b"){0};\n}\n\0".as_ptr());
+            self.out.putc(b'\n');
+            return;
         }
         self.out.putc(b'\n');
     }
@@ -569,6 +673,7 @@ impl Lower {
         if self.nt_n >= NT_CAP || len > 48 {
             return;
         }
+
         let s = self.nt_n;
         let mut i = 0usize;
         while i < len {
@@ -599,6 +704,89 @@ impl Lower {
                 }
             }
             s += 1;
+        }
+        false
+    }
+
+    /* `#[derive(Default)]` registration + lookup — the table the
+     * X::default() / Self::default() call arms consult. */
+    unsafe fn def_add(&mut self, name: *const u8, len: usize) {
+        if self.def_n >= NT_CAP || len > 48 {
+            return;
+        }
+        /* idempotence: the collect pre-scan and the emission pass may
+         * both register the same struct */
+        if unsafe { self.def_find(name, len) } {
+            return;
+        }
+        let s = self.def_n;
+        let mut i = 0usize;
+        while i < len {
+            unsafe {
+                self.def_names[s][i] = *name.add(i);
+            }
+            i += 1;
+        }
+        self.def_lens[s] = len;
+        self.def_n += 1;
+    }
+
+    unsafe fn def_find(&self, name: *const u8, len: usize) -> bool {
+        let mut s = 0usize;
+        while s < self.def_n {
+            if self.def_lens[s] == len {
+                let mut i = 0usize;
+                let mut same = true;
+                while i < len {
+                    if unsafe { self.def_names[s][i] } != unsafe { *name.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return true;
+                }
+            }
+            s += 1;
+        }
+        false
+    }
+
+    /* Does this STRUCT item carry `#[derive(..)]` listing Default? The
+     * ATTR text is the full bracketed span (`#[ derive ( Clone ,
+     * Default ) ]`) joined by single spaces — the marker is the word
+     * `Default` delimited by '(' ',' ' ' or '[' before and ')' ',' ' '
+     * or ']' after. Only a derive ever lists Default, so any ATTR
+     * carrying the delimited word counts. */
+    unsafe fn has_default_derive(&self, item: *const pm_jit_rsx_ast_t) -> bool {
+        let kids = unsafe { (*item).kids };
+        let nk = unsafe { (*item).n_kids } as usize;
+        let mut i = 0usize;
+        while i < nk {
+            let k = unsafe { *kids.add(i) };
+            if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::ATTR {
+                let t = unsafe { (*k).text };
+                let tl = unsafe { (*k).text_len };
+                if tl >= 7 && !t.is_null() {
+                    let mut j = 0usize;
+                    while j + 7 <= tl {
+                        if unsafe { *t.add(j) } == b'D'
+                            && unsafe { z_eq(t.add(j), 7, b"Default\0".as_ptr()) }
+                        {
+                            let prev = if j > 0 { unsafe { *t.add(j - 1) } } else { b'(' };
+                            let next = if j + 7 < tl { unsafe { *t.add(j + 7) } } else { b')' };
+                            if (prev == b'(' || prev == b',' || prev == b' ' || prev == b'[')
+                                && (next == b')' || next == b',' || next == b' ' || next == b']' || next == 0)
+                            {
+                                return true;
+                            }
+                        }
+                        j += 1;
+                    }
+                }
+            }
+            i += 1;
         }
         false
     }
@@ -1590,9 +1778,19 @@ impl Lower {
          * only depend on the element spelling (never a later item), so
          * the early flush is sound. */
         if self.types_done {
-            unsafe { self.opt_emit_rest() };
+            unsafe { self.opt_emit_rest(0) };
         }
-        unsafe { self.arr_emit_rest() };
+        /* &[T] rows need the same flush and must NOT wait for
+         * types_done: pass-0a consts (`const X: &[u8] = b".."`) intern
+         * their row at the first static render — the typedef has to land
+         * here or the declaration names an unknown type. PRIMITIVE
+         * element rows only: a row over a unit type, a tuple, or another
+         * container (a fn sig's `&[(String,String)]` param, interned by
+         * the collect pass long before pass A) waits for the file-scope
+         * fixpoint flush — flushing it here would name a type nothing
+         * has emitted yet. done[] keeps the two windows from
+         * double-emitting. */
+        unsafe { self.arr_emit_prim_rest() };
         if declare_only == 2 {
             self.out.puts(b"#line \0".as_ptr());
             unsafe { self.out.put_u32(line) };
@@ -1939,6 +2137,9 @@ impl Lower {
                         let row = unsafe { self.arrs.find_by_name(ct, ct_len) };
                         if row >= ARR_CAP || ank == 0 {
                             self.ok = false;
+                            unsafe {
+                                pm_util_mem_free(self.arena, locals_sl as *mut u8);
+                            }
                             return;
                         }
                         let el = self.arrs.elems[row].as_ptr();
@@ -1985,6 +2186,11 @@ impl Lower {
                         self.out.put_u32(ank as u32);
                         self.out.puts(b" };\n\0".as_ptr());
                         self.out.putc(b'\n');
+                        /* slice-literal scratch: same contract — free before
+                         * the return (this path's spans are arena copies). */
+                        unsafe {
+                            pm_util_mem_free(self.arena, locals_sl as *mut u8);
+                        }
                         return;
                     }
                 }
@@ -1998,6 +2204,12 @@ impl Lower {
                  * whole compile (specific error), not degrade inference */
                 if unsafe { (*locals).oom } {
                     self.ok = false;
+                }
+                /* static-initializer scratch: same fn-body contract —
+                 * the spans it registered are arena copies, the table
+                 * block itself dies with the initializer. */
+                unsafe {
+                    pm_util_mem_free(self.arena, locals as *mut u8);
                 }
             }
             self.out.puts(b";\n\0".as_ptr());
@@ -2175,7 +2387,7 @@ impl Lower {
             i += 1;
         }
         if self.types_done {
-            unsafe { self.opt_emit_rest() };
+            unsafe { self.opt_emit_rest(0) };
         }
         i = 0;
         while i < nk {

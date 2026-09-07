@@ -780,9 +780,11 @@ impl Lower {
         let kids = unsafe { (*e).kids };
         let nk = unsafe { (*e).n_kids } as usize;
         if nk == 0 {
-            unsafe {
-                self.err(b"unsupported: tuple expression\0".as_ptr(), unsafe { (*e).line });
-            }
+            /* the unit `()` in value position: the Result plane
+             * materializes unit payloads as a 1-byte placeholder
+             * (rsx_res_._v is uint8_t), so the zero literal IS the unit
+             * value — `Ok(())` fills ._v with exactly this. */
+            self.out.puts(b"0\0".as_ptr());
             return;
         }
         if nk > TUP_MAXF {
@@ -1665,7 +1667,12 @@ impl Lower {
                 let other = if l_lit { r } else { l };
                 let ctb = self.arena_tmp();
                 let n2 = unsafe { self.expr_ctype(other, ctb, 128, locals) };
-                if n2 == 13 && unsafe { z_eq(ctb, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                /* the fat view OR the owned String — both carry the
+                 * same .p/.n members, so the one memcmp shape serves
+                 * either side of the compare. */
+                if (n2 == 13 && unsafe { z_eq(ctb, 13, b"rsx_str_ref_t\0".as_ptr()) })
+                    || (n2 == 9 && unsafe { z_eq(ctb, 9, b"rsx_str_t\0".as_ptr()) })
+                {
                     let lit = if l_lit { l } else { r };
                     let lit_t = unsafe { (*lit).text };
                     let lit_tl = unsafe { (*lit).text_len };
@@ -1865,14 +1872,21 @@ impl Lower {
              *    Sound only inside a fn whose own return is that pointer.
              *  - struct-Option (rsx_opt_<elem>): the payload is ._v, the
              *    test is ._has, and the fn's None is the zero struct. The
-             *    expression's value is the payload (usize etc.). */
+             *    expression's value is the payload (usize etc.).
+             *  - Result (rsx_res_<T>_<E>): the operand and the fn's own
+             *    return are the SAME row — test ._ok, on failure return
+             *    the fn's Err carrying the operand's ._e, yield ._v. The
+             *    Err type travels unchanged (sink.rs's `String` error
+             *    crosses apply_one -> apply_faces whole). */
             let is_ptr_ret = self.cur_ret_len > 0 && unsafe { self.cur_ret[self.cur_ret_len - 1] } == b'*';
             let is_opt_ret = self.cur_ret_len >= 8
                 && unsafe { z_eq(self.cur_ret.as_ptr(), 8, b"rsx_opt_\0".as_ptr()) };
-            if !is_ptr_ret && !is_opt_ret {
+            let is_res_ret = self.cur_ret_len >= 8
+                && unsafe { z_eq(self.cur_ret.as_ptr(), 8, b"rsx_res_\0".as_ptr()) };
+            if !is_ptr_ret && !is_opt_ret && !is_res_ret {
                 unsafe {
                     self.err(
-                        b"unsupported: ? outside a pointer- or Option-returning fn\0".as_ptr(),
+                        b"unsupported: ? outside a pointer-, Option- or Result-returning fn\0".as_ptr(),
                         unsafe { (*e).line },
                     );
                 }
@@ -1885,6 +1899,19 @@ impl Lower {
                 unsafe {
                     self.err(b"unsupported: ? on an untyped operand\0".as_ptr(), unsafe { (*e).line });
                 }
+                return;
+            }
+            if is_res_ret && ct_len >= 8 && unsafe { z_eq(ct, 8, b"rsx_res_\0".as_ptr()) } {
+                /* Result chain: same row as the fn's own return — the
+                 * early exit must produce the fn's Err, not a zero
+                 * struct: { ._v = 0, ._e = try._e, ._ok = 0 }. */
+                self.out.puts(b"({ \0".as_ptr());
+                self.out.put(ct, ct_len);
+                self.out.puts(b" __rsx_try = (\0".as_ptr());
+                unsafe { self.emit_expr(operand, locals) };
+                self.out.puts(b"); if (!__rsx_try._ok) { return (\0".as_ptr());
+                self.out.put(self.cur_ret.as_ptr(), self.cur_ret_len);
+                self.out.puts(b"){ ._v = 0, ._e = __rsx_try._e, ._ok = 0 }; } __rsx_try._v; })\0".as_ptr());
                 return;
             }
             if is_opt_ret && ct_len >= 8 && unsafe { z_eq(ct, 8, b"rsx_opt_\0".as_ptr()) } {
@@ -2065,6 +2092,31 @@ impl Lower {
          * bytes instead (`a = b;` on arrays is a gcc extension; TCC
          * refuses it, and the self-host prove compiles through TCC). */
         if op_len == 1 && unsafe { *op } == b'=' {
+            /* `str_ref = "lit"` — the fat-ref compound literal: a match
+             * arm (`"void" => "()"`) stores a literal into an
+             * rsx_str_ref_t binding; a raw "..." is char[N], not the
+             * struct. */
+            {
+                let lt = self.arena_tmp();
+                let ln = unsafe { self.expr_ctype(lhs, lt, 128, locals) };
+                if ln == 13 && unsafe { z_eq(lt, 13, b"rsx_str_ref_t\0".as_ptr()) }
+                    && unsafe { (*rhs).kind } == pm_jit_rsx_ast_kind::LITERAL
+                {
+                    let t = unsafe { (*rhs).text };
+                    let tl = unsafe { (*rhs).text_len };
+                    if tl >= 2 && unsafe { *t } == b'"' {
+                        unsafe { self.emit_expr(lhs, locals) };
+                        self.out.puts(b" = (rsx_str_ref_t){ (const uint8_t *)\0".as_ptr());
+                        self.out.put(t, tl);
+                        self.out.puts(b", \0".as_ptr());
+                        let lit_inner = t.wrapping_add(1);
+                        let clen = unsafe { Lower::c_str_len(lit_inner, tl.wrapping_sub(2)) };
+                        self.out.put_u32(clen);
+                        self.out.puts(b" }\0".as_ptr());
+                        return;
+                    }
+                }
+            }
             let lt = self.arena_tmp();
             let ln = unsafe { self.expr_ctype(lhs, lt, 160, locals) };
             if ln > 0 && unsafe { self.ctype_is_fixed_array(lt, ln) } {
@@ -2518,6 +2570,33 @@ impl Lower {
                     }
                     return;
                 }
+                if unsafe { z_eq(stext, slen, b"cmp\0".as_ptr()) }
+                    && (unsafe { z_eq(ltext, llen, b"min\0".as_ptr()) }
+                        || unsafe { z_eq(ltext, llen, b"max\0".as_ptr()) })
+                {
+                    /* cmp::min(a, b) / cmp::max(a, b) — the ternary; the
+                     * operands are the same type by construction (gen
+                     * clamps a len against a len), so the C type of the
+                     * whole is the first operand's. */
+                    let ak = unsafe { (*args).kids };
+                    if unsafe { (*args).n_kids } >= 2 {
+                        self.out.puts(b"((\0".as_ptr());
+                        unsafe { self.emit_expr(*ak.add(0), locals) };
+                        self.out.putc(b')');
+                        if unsafe { z_eq(ltext, llen, b"min\0".as_ptr()) } {
+                            self.out.puts(b" < (\0".as_ptr());
+                        } else {
+                            self.out.puts(b" > (\0".as_ptr());
+                        }
+                        unsafe { self.emit_expr(*ak.add(1), locals) };
+                        self.out.puts(b") ? (\0".as_ptr());
+                        unsafe { self.emit_expr(*ak.add(0), locals) };
+                        self.out.puts(b") : (\0".as_ptr());
+                        unsafe { self.emit_expr(*ak.add(1), locals) };
+                        self.out.puts(b"))\0".as_ptr());
+                        return;
+                    }
+                }
                 if unsafe { z_eq(stext, slen, b"ptr\0".as_ptr()) } {
                     if unsafe { z_eq(ltext, llen, b"copy_nonoverlapping\0".as_ptr()) } {
                         /* copy_nonoverlapping(src, dst, n) -> memcpy(dst, src,
@@ -2646,6 +2725,28 @@ impl Lower {
                          * an expr position must not dangle) */
                         self.str_own_used = true;
                         self.out.puts(b"{0}\0".as_ptr());
+                        return;
+                    }
+                }
+                /* `X::default()` — a #[derive(Default)] struct's zeroed
+                 * ctor (any qualification depth). `Self::default()` in
+                 * an impl resolves Self to the impl's type first. */
+                if unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"default\0".as_ptr()) }
+                    && unsafe { (*args).n_kids } as usize == 0
+                    && cn >= 2
+                {
+                    let wrap = unsafe { *ck.add(cn - 2) };
+                    let mut wt = unsafe { (*wrap).text };
+                    let mut wl = unsafe { (*wrap).text_len };
+                    /* Self -> the enclosing impl's type */
+                    if unsafe { z_eq(wt, wl, b"Self\0".as_ptr()) } && self.self_ty_len > 0 {
+                        wt = self.self_ty.as_ptr();
+                        wl = self.self_ty_len;
+                    }
+                    if wl > 0 && unsafe { self.def_find(wt, wl) } {
+                        self.out.puts(b"_\0".as_ptr());
+                        self.out.put(wt, wl);
+                        self.out.puts(b"_default()\0".as_ptr());
                         return;
                     }
                 }
@@ -3033,7 +3134,156 @@ impl Lower {
                                 }
                             }
                             if !done_arr {
-                                unsafe { self.emit_expr(*ak.add(i), locals) };
+                                /* `&str` param taking a LITERAL: the fat
+                                 * ref compound literal — a raw "..." is
+                                 * char[N] in C, not the struct (statics'
+                                 * FACE_* twins already coerce; the call
+                                 * arg path needs its own). */
+                                let mut done_lit = false;
+                                if callok && !cname.is_null() && cnamelen > 0 {
+                                    let pt = self.arena_tmp();
+                                    let pl = unsafe {
+                                        (*self.fns).param_ctype(cname, cnamelen, i, pt)
+                                    };
+                                    if pl == 13
+                                        && unsafe { z_eq(pt, 13, b"rsx_str_ref_t\0".as_ptr()) }
+                                    {
+                                        let argn = unsafe { *ak.add(i) };
+                                        if unsafe { (*argn).kind }
+                                            == pm_jit_rsx_ast_kind::LITERAL
+                                        {
+                                            let t = unsafe { (*argn).text };
+                                            let tl = unsafe { (*argn).text_len };
+                                            if tl >= 2 && unsafe { *t } == b'"' {
+                                                self.out.puts(
+                                                    b"(rsx_str_ref_t){ (const uint8_t *)\0"
+                                                        .as_ptr(),
+                                                );
+                                                self.out.put(t, tl);
+                                                self.out.puts(
+                                                    b", \0".as_ptr(),
+                                                );
+                                                let lit_inner = t.wrapping_add(1);
+                                                let clen = unsafe {
+                                                    Lower::c_str_len(
+                                                        lit_inner,
+                                                        tl.wrapping_sub(2),
+                                                    )
+                                                };
+                                                self.out.put_u32(clen);
+                                                self.out.puts(b" }\0".as_ptr());
+                                                done_lit = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                if !done_lit {
+                                    /* `&String` into an `&str` param
+                                     * (`c_sig_needs_local_types(&e.sig)`):
+                                     * the deref coercion — the fat view of
+                                     * the owned string, never the `T *`
+                                     * pointer a raw borrow renders. */
+                                    let mut done_deref = false;
+                                    if callok && !cname.is_null() && cnamelen > 0 {
+                                        let pt = self.arena_tmp();
+                                        let pl = unsafe {
+                                            (*self.fns).param_ctype(cname, cnamelen, i, pt)
+                                        };
+                                        if pl == 13
+                                            && unsafe { z_eq(pt, 13, b"rsx_str_ref_t\0".as_ptr()) }
+                                        {
+                                            let argn = unsafe { *ak.add(i) };
+                                            if unsafe { (*argn).kind }
+                                                == pm_jit_rsx_ast_kind::UNARY
+                                            {
+                                                let aop = unsafe { (*argn).text };
+                                                let aol = unsafe { (*argn).text_len };
+                                                if unsafe { z_eq(aop, aol, b"&\0".as_ptr()) }
+                                                    || unsafe {
+                                                        z_eq(aop, aol, b"&mut\0".as_ptr())
+                                                    }
+                                                {
+                                                    let ik = unsafe { (*argn).kids };
+                                                    if unsafe { (*argn).n_kids } as usize >= 1 {
+                                                        let inner = unsafe { *ik.add(0) };
+                                                        let ib = self.arena_tmp();
+                                                        let il = unsafe {
+                                                            self.expr_ctype(
+                                                                inner,
+                                                                ib,
+                                                                128,
+                                                                locals,
+                                                            )
+                                                        };
+                                                        if il == 9
+                                                            && unsafe {
+                                                                z_eq(
+                                                                    ib,
+                                                                    9,
+                                                                    b"rsx_str_t\0".as_ptr(),
+                                                                )
+                                                            }
+                                                        {
+                                                            self.out.puts(
+                                                                b"(rsx_str_ref_t){ (\0".as_ptr(),
+                                                            );
+                                                            unsafe {
+                                                                self.emit_expr(
+                                                                    inner, locals,
+                                                                )
+                                                            };
+                                                            self.out.puts(
+                                                                b").p, (\0".as_ptr(),
+                                                            );
+                                                            unsafe {
+                                                                self.emit_expr(
+                                                                    inner, locals,
+                                                                )
+                                                            };
+                                                            self.out.puts(
+                                                                b").n }\0".as_ptr(),
+                                                            );
+                                                            done_deref = true;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            if !done_deref {
+                                                /* bare owned String — `f(s)` where
+                                                 * s: String is the same deref
+                                                 * coercion `f(&s)` takes (the
+                                                 * arg itself types rsx_str_t,
+                                                 * no UNARY wrapper): the fat
+                                                 * view of the place. */
+                                                let ib = self.arena_tmp();
+                                                let il = unsafe {
+                                                    self.expr_ctype(argn, ib, 128, locals)
+                                                };
+                                                if il == 9
+                                                    && unsafe {
+                                                        z_eq(ib, 9, b"rsx_str_t\0".as_ptr())
+                                                    }
+                                                {
+                                                    self.out.puts(
+                                                        b"(rsx_str_ref_t){ (\0".as_ptr(),
+                                                    );
+                                                    unsafe {
+                                                        self.emit_expr(argn, locals)
+                                                    };
+                                                    self.out.puts(b").p, (\0".as_ptr());
+                                                    unsafe {
+                                                        self.emit_expr(argn, locals)
+                                                    };
+                                                    self.out.puts(b").n }\0".as_ptr());
+                                                    done_deref = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if !done_deref {
+                                        unsafe { self.emit_expr(*ak.add(i), locals) };
+                                    }
+                                }
                             }
                         }
                     }
@@ -3456,15 +3706,19 @@ impl Lower {
          * String::from_utf8_lossy(&buf) takes the bytes, not the
          * container. .p may be NULL on an empty Vec; the append's
          * ternary guards it. The borrow unwraps above, so the pair
-         * selects on the place itself. */
+         * selects on the place itself. NO outer group around the
+         * ternary+length pair — the comma must split at the CALL level
+         * (an outer group makes the append see one comma-expression
+         * arg: a pointer arg from the length integer, and one arg too
+         * few). Each select wraps its OWN copy of the place. */
         if an2 > 8 && an2 < 128 && unsafe { z_eq(ab, 8, b"rsx_vec_\0".as_ptr()) } {
-            self.out.puts(b"((\0".as_ptr());
+            self.out.puts(b"(\0".as_ptr());
             unsafe { self.emit_expr(probe, locals) };
             self.out.puts(b").p ? (\0".as_ptr());
             unsafe { self.emit_expr(probe, locals) };
             self.out.puts(b").p : \"\", (\0".as_ptr());
             unsafe { self.emit_expr(probe, locals) };
-            self.out.puts(b").n)\0".as_ptr());
+            self.out.puts(b").n\0".as_ptr());
             return;
         }
         if an2 == 9 && unsafe { z_eq(ab, 9, b"rsx_str_t\0".as_ptr()) } {
@@ -3473,13 +3727,31 @@ impl Lower {
              * (X may be a statement-expr — a bare `X).p` would leak its
              * closing paren), and NO outer group: the comma between
              * the ternary and the length must split at the CALL level
-             * so the append sees all three arguments. */
+             * so the append sees all three arguments.
+             * A `&call(..)` arg is not C — the call's result is an
+             * rvalue, it has no address — but the member selects read
+             * the VALUE, so the borrow is dropped: emit the operand
+             * (one hop, `&`/`&mut` only; a `*` deref keeps its own
+             * operand). `&place` keeps its meaning either way. */
+            let mut val = a;
+            let mut vh = 0;
+            while vh < 4
+                && unsafe { (*val).kind } == pm_jit_rsx_ast_kind::UNARY
+                && unsafe { (*val).n_kids } as usize >= 1
+                && (unsafe { z_eq(unsafe { (*val).text }, unsafe { (*val).text_len }, b"&\0".as_ptr()) }
+                    || unsafe {
+                        z_eq(unsafe { (*val).text }, unsafe { (*val).text_len }, b"&mut\0".as_ptr())
+                    })
+            {
+                val = unsafe { *(*val).kids.add(0) };
+                vh += 1;
+            }
             self.out.puts(b"(\0".as_ptr());
-            unsafe { self.emit_expr(a, locals) };
+            unsafe { self.emit_expr(val, locals) };
             self.out.puts(b").p ? (\0".as_ptr());
-            unsafe { self.emit_expr(a, locals) };
+            unsafe { self.emit_expr(val, locals) };
             self.out.puts(b").p : \"\", (\0".as_ptr());
-            unsafe { self.emit_expr(a, locals) };
+            unsafe { self.emit_expr(val, locals) };
             self.out.puts(b").n\0".as_ptr());
             return;
         }
@@ -4477,6 +4749,50 @@ impl Lower {
             if rctl > 8 && rctl < 128 && unsafe { z_eq(rct, 8, b"rsx_vec_\0".as_ptr()) } {
                 /* the interned element spelling from the typedef name */
                 if an == 1 && unsafe { z_eq(mname, mlen, b"push\0".as_ptr()) } {
+                    /* the arg may need the deref coercion to the row's
+                     * element: a Vec<&str> row (elem rsx_str_ref_t)
+                     * pushed with an owned String (or its &String borrow)
+                     * takes the FAT VIEW of the value, never the struct
+                     * itself (a raw struct is a type mismatch; a `&s`
+                     * would be a pointer). */
+                    let vs = unsafe { self.vecs.find_by_name(rct, rctl) };
+                    if vs < VEC_CAP {
+                        let el = self.vecs.elem_lens[vs];
+                        let eb = self.vecs.elems[vs].as_ptr();
+                        if el == 13
+                            && unsafe { z_eq(eb, 13, b"rsx_str_ref_t\0".as_ptr()) }
+                        {
+                            let ab = self.arena_tmp();
+                            let a0 = unsafe { *ak.add(0) };
+                            /* unwrap a `&`/`&mut` borrow on the arg */
+                            let mut inner = a0;
+                            let mut hops = 0;
+                            while hops < 2
+                                && unsafe { (*inner).kind } == pm_jit_rsx_ast_kind::UNARY
+                                && unsafe { (*inner).n_kids } as usize >= 1
+                                && (unsafe { z_eq(unsafe { (*inner).text }, unsafe { (*inner).text_len }, b"&\0".as_ptr()) }
+                                    || unsafe { z_eq(unsafe { (*inner).text }, unsafe { (*inner).text_len }, b"&mut\0".as_ptr()) })
+                            {
+                                inner = unsafe { *(*inner).kids.add(0) };
+                                hops += 1;
+                            }
+                            let al = unsafe { self.expr_ctype(inner, ab, 128, locals) };
+                            if al == 9
+                                && unsafe { z_eq(ab, 9, b"rsx_str_t\0".as_ptr()) }
+                            {
+                                self.str_ref_used = true;
+                                self.out.put(rct, rctl);
+                                self.out.puts(b"_push(&\0".as_ptr());
+                                unsafe { self.emit_expr(recv, locals) };
+                                self.out.puts(b", (rsx_str_ref_t){ (\0".as_ptr());
+                                unsafe { self.emit_expr(inner, locals) };
+                                self.out.puts(b").p, (\0".as_ptr());
+                                unsafe { self.emit_expr(inner, locals) };
+                                self.out.puts(b").n })\0".as_ptr());
+                                return;
+                            }
+                        }
+                    }
                     self.out.put(rct, rctl);
                     self.out.puts(b"_push(&\0".as_ptr());
                     unsafe { self.emit_expr(recv, locals) };
@@ -4651,6 +4967,211 @@ impl Lower {
                         self.err(b"unsupported: sort/dedup on non-String Vec elements\0".as_ptr(), unsafe { (*e).line });
                     }
                     return;
+                }
+            }
+        }
+        /* BTreeMap method plane — the receiver's rendered type names one
+         * of the interned rsx_btm_<row> typedefs; the unit-static ops the
+         * preamble emitted take the map by address. insert is the plain
+         * op call (void, statement position); get yields the payload
+         * POINTER (NULL = absent) — the pointer-Option convention the
+         * .map/.cloned combinators wrap. */
+        if (an == 2 && unsafe { z_eq(mname, mlen, b"insert\0".as_ptr()) })
+            || (an == 1 && unsafe { z_eq(mname, mlen, b"get\0".as_ptr()) })
+            || (an == 0 && (unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) }
+                || unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) }))
+        {
+            let rct = self.arena_tmp();
+            let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+            if rctl > 8 && rctl < 128 && unsafe { z_eq(rct, 8, b"rsx_btm_\0".as_ptr()) } {
+                if an == 2 && unsafe { z_eq(mname, mlen, b"insert\0".as_ptr()) } {
+                    self.out.put(rct, rctl);
+                    self.out.puts(b"_insert(&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b", \0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                    self.out.puts(b", \0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(1), locals) };
+                    self.out.puts(b")\0".as_ptr());
+                    return;
+                }
+                if an == 1 && unsafe { z_eq(mname, mlen, b"get\0".as_ptr()) } {
+                    self.out.put(rct, rctl);
+                    self.out.puts(b"_get(&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b", \0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                    self.out.putc(b')');
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) } {
+                    self.out.putc(b'(');
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").n\0".as_ptr());
+                    return;
+                }
+                if an == 0 && unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) } {
+                    self.out.putc(b'(');
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b").n == 0\0".as_ptr());
+                    return;
+                }
+            }
+        }
+        /* `.cloned()` on a btm `.get(k)` — the get's payload pointer
+         * materialized as the struct-Option of the payload row. The
+         * pointer is bound once in a stmt-expr (the get is pure but
+         * re-emitting the receiver twice would double the lookup). */
+        if an == 0 && mlen == 6 && unsafe { z_eq(mname, mlen, b"cloned\0".as_ptr()) } {
+            if unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::METHOD_CALL
+                && (unsafe { (*recv).n_kids } as usize) >= 3
+            {
+                let rk = unsafe { (*recv).kids };
+                let rname = unsafe { *rk.add(1) };
+                if unsafe { (*rname).text_len } == 3
+                    && unsafe { z_eq(unsafe { (*rname).text }, 3, b"get\0".as_ptr()) }
+                {
+                    let grb = self.arena_tmp();
+                    let grl = unsafe { self.expr_ctype(recv, grb, 128, locals) };
+                    if grl > 2
+                        && unsafe { *grb.add(grl - 1) } == b'*'
+                        && grl < 126
+                    {
+                        /* payload spelling without the trailing ` *` */
+                        let vl = grl - 2;
+                        /* opt row + typedef name */
+                        let slot = unsafe { self.opt_add(grb, vl) };
+                        if slot < OPT_CAP {
+                            let on = self.arena_tmp();
+                            let onl = unsafe { Lower::opt_typedef_name(grb, vl, on, 160) };
+                            if onl > 0 {
+                                self.out.puts(b"({ \0".as_ptr());
+                                self.out.put(grb, grl);
+                                self.out.puts(b" _g = \0".as_ptr());
+                                unsafe { self.emit_expr(recv, locals) };
+                                self.out.puts(b"; \0".as_ptr());
+                                self.out.put(on, onl);
+                                self.out.puts(b" _o; _o._has = (_g != 0); if (_g) { _o._v = (*_g); } else { _o._v = (\0".as_ptr());
+                                self.out.put(grb, vl);
+                                self.out.puts(b"){0}; } _o; })\0".as_ptr());
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        /* `.as_slice()` on a Vec row (or a &Vec row behind a pointer):
+         * the fat &[T] view of the container — (rsx_arr_<row>){ .p, .n }.
+         * The receiver emits once (the borrow is the same buffer). */
+        if an == 0 && mlen == 8 && unsafe { z_eq(mname, mlen, b"as_slice\0".as_ptr()) } {
+            let rct = self.arena_tmp();
+            let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+            let mut base = rct;
+            let mut basel = rctl;
+            /* `&Vec<T>` — strip `const `/`const ` + pointer */
+            if rctl > 6 && unsafe { z_eq(rct, 6, b"const \0".as_ptr()) } {
+                base = unsafe { base.add(6) };
+                basel -= 6;
+            }
+            if basel > 2
+                && unsafe { *base.add(basel - 1) } == b'*'
+                && basel > 8
+                && unsafe { z_eq(base, 8, b"rsx_vec_\0".as_ptr()) }
+            {
+                basel -= 1;
+                while basel > 0 && unsafe { *base.add(basel - 1) } == b' ' {
+                    basel -= 1;
+                }
+                let vs = unsafe { self.vecs.find_by_name(base, basel) };
+                if vs < VEC_CAP {
+                    /* the element spelling from the row */
+                    let ep = self.vecs.elems[vs].as_ptr();
+                    let el = self.vecs.elem_lens[vs];
+                    let row = unsafe { self.arrs.intern(ep, el) };
+                    if row < ARR_CAP {
+                        let an2 = self.arena_tmp();
+                        let an2l = unsafe { ArrTab::name_for(row, an2, 96) };
+                        if an2l > 0 {
+                            self.out.puts(b"(\0".as_ptr());
+                            self.out.put(an2, an2l);
+                            self.out.puts(b"){ (const \0".as_ptr());
+                            self.out.put(ep, el);
+                            self.out.puts(b" *)(\0".as_ptr());
+                            unsafe { self.emit_expr(recv, locals) };
+                            self.out.puts(b")->p, (\0".as_ptr());
+                            unsafe { self.emit_expr(recv, locals) };
+                            self.out.puts(b")->n }\0".as_ptr());
+                            return;
+                        }
+                    }
+                }
+            }
+            /* plain Vec<T> receiver */
+            if rctl > 8 && rctl < 128 && unsafe { z_eq(rct, 8, b"rsx_vec_\0".as_ptr()) } {
+                let vs = unsafe { self.vecs.find_by_name(rct, rctl) };
+                if vs < VEC_CAP {
+                    let ep = self.vecs.elems[vs].as_ptr();
+                    let el = self.vecs.elem_lens[vs];
+                    let row = unsafe { self.arrs.intern(ep, el) };
+                    if row < ARR_CAP {
+                        let an2 = self.arena_tmp();
+                        let an2l = unsafe { ArrTab::name_for(row, an2, 96) };
+                        if an2l > 0 {
+                            self.out.puts(b"(\0".as_ptr());
+                            self.out.put(an2, an2l);
+                            self.out.puts(b"){ (const \0".as_ptr());
+                            self.out.put(ep, el);
+                            self.out.puts(b" *)(\0".as_ptr());
+                            unsafe { self.emit_expr(recv, locals) };
+                            self.out.puts(b").p, (\0".as_ptr());
+                            unsafe { self.emit_expr(recv, locals) };
+                            self.out.puts(b").n }\0".as_ptr());
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        /* `.to_vec()` on an &[T] fat-ref receiver: the owned copy — a
+         * malloc'd buffer memcpy'd from the view (n bytes of T), then
+         * the rsx_vec_<row> triple. The unit aborts on OOM (Vec's own
+         * contract, same as _push/_grow). */
+        if an == 0 && mlen == 6 && unsafe { z_eq(mname, mlen, b"to_vec\0".as_ptr()) } {
+            let rct = self.arena_tmp();
+            let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+            let mut base = rct;
+            let mut basel = rctl;
+            if rctl > 6 && unsafe { z_eq(rct, 6, b"const \0".as_ptr()) } {
+                base = unsafe { base.add(6) };
+                basel -= 6;
+            }
+            if basel > 8 && basel < 128 && unsafe { z_eq(base, 8, b"rsx_arr_\0".as_ptr()) } {
+                let rs = unsafe { self.arrs.find_by_name(base, basel) };
+                if rs < ARR_CAP {
+                    let ep = self.arrs.elems[rs].as_ptr();
+                    let el = self.arrs.elem_lens[rs];
+                    let vrow = unsafe { self.vecs.intern(ep, el) };
+                    if vrow < VEC_CAP {
+                        let vn = self.arena_tmp();
+                        let vnl = unsafe { VecTab::name_for(vrow, vn, 96) };
+                        if vnl > 0 {
+                            self.out.puts(b"({ \0".as_ptr());
+                            self.out.put(vn, vnl);
+                            self.out.puts(b" _v; _v.n = _v.cap = (\0".as_ptr());
+                            unsafe { self.emit_expr(recv, locals) };
+                            self.out.puts(b").n; _v.p = (\0".as_ptr());
+                            self.out.put(ep, el);
+                            self.out.puts(b" *)malloc(_v.n ? _v.n * sizeof(\0".as_ptr());
+                            self.out.put(ep, el);
+                            self.out.puts(b") : 1); if (!_v.p) { abort(); } if (_v.n) { memcpy(_v.p, (\0".as_ptr());
+                            unsafe { self.emit_expr(recv, locals) };
+                            self.out.puts(b").p, _v.n * sizeof(\0".as_ptr());
+                            self.out.put(ep, el);
+                            self.out.puts(b")); } _v; })\0".as_ptr());
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -5349,7 +5870,10 @@ impl Lower {
                     }
                 }
             }
-            /* struct-Option receiver: the payload select. */
+            /* struct-Option receiver: the payload select. The default
+             * arg must land in the PAYLOAD's C type: `&String` against
+             * an rsx_str_ref_t payload is a fat view (a bare `&s` would
+             * hand the ternary an rsx_str_t * — a type mismatch). */
             {
                 let rb = self.arena_tmp();
                 let rl = unsafe { self.expr_ctype(recv, rb, 128, locals) };
@@ -5357,12 +5881,35 @@ impl Lower {
                     && rl < 128
                     && unsafe { z_eq(rb, 8, b"rsx_opt_\0".as_ptr()) }
                 {
+                    /* payload spelling: the Option row's elem */
+                    let pay = self.arena_tmp();
+                    let payn = unsafe { Lower::opt_typedef_elem(rb, rl, pay, 96) };
+                    let abuf = self.arena_tmp();
+                    let an_ = if an == 1 {
+                        unsafe { self.expr_ctype(*ak.add(0), abuf, 128, locals) }
+                    } else {
+                        0
+                    };
+                    let need_view = payn == 13
+                        && unsafe { z_eq(pay, 13, b"rsx_str_ref_t\0".as_ptr()) }
+                        && an == 1
+                        && an_ == 11
+                        && unsafe { z_eq(abuf, 11, b"rsx_str_t *\0".as_ptr()) };
                     self.out.puts(b"((\0".as_ptr());
                     unsafe { self.emit_expr(recv, locals) };
                     self.out.puts(b")._has ? (\0".as_ptr());
                     unsafe { self.emit_expr(recv, locals) };
                     self.out.puts(b")._v : (\0".as_ptr());
-                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                    if need_view {
+                        /* `&String` default: the fat view of the same value */
+                        self.out.puts(b"(rsx_str_ref_t){ (\0".as_ptr());
+                        unsafe { self.emit_expr(*ak.add(0), locals) };
+                        self.out.puts(b")->p, (\0".as_ptr());
+                        unsafe { self.emit_expr(*ak.add(0), locals) };
+                        self.out.puts(b")->n }\0".as_ptr());
+                    } else {
+                        unsafe { self.emit_expr(*ak.add(0), locals) };
+                    }
                     self.out.puts(b"))\0".as_ptr());
                     return;
                 }
@@ -5478,7 +6025,9 @@ impl Lower {
         }
         /* .as_ptr() / .as_mut_ptr() on an &str fat reference: the
          * struct's p (a byte span pointer, not NUL-terminated) — BEFORE
-         * the generic identity arm, which would hand back the struct. */
+         * the generic identity arm, which would hand back the struct.
+         * .as_bytes() is the FAT &[u8] view: the same p/n pair as an
+         * rsx_arr_<uint8_t> compound literal (its typing names that row). */
         if an == 0
             && (unsafe { z_eq(mname, mlen, b"as_ptr\0".as_ptr()) }
                 || unsafe { z_eq(mname, mlen, b"as_mut_ptr\0".as_ptr()) }
@@ -5487,14 +6036,70 @@ impl Lower {
             let tbuf = self.arena_tmp();
             let tn = unsafe { self.expr_ctype(recv, tbuf, 128, locals) };
             if tn == 13 && unsafe { z_eq(tbuf, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                if mlen == 8 {
+                    let row = unsafe { self.arrs.intern(b"uint8_t\0".as_ptr(), 7) };
+                    if row < ARR_CAP {
+                        let nb = self.arena_tmp();
+                        let nn = unsafe { ArrTab::name_for(row, nb, 96) };
+                        if nn > 0 {
+                            self.out.putc(b'(');
+                            self.out.put(nb, nn);
+                            self.out.puts(b"){ (\0".as_ptr());
+                            unsafe { self.emit_expr(recv, locals) };
+                            self.out.puts(b").p, (\0".as_ptr());
+                            unsafe { self.emit_expr(recv, locals) };
+                            self.out.puts(b").n }\0".as_ptr());
+                            return;
+                        }
+                    }
+                }
                 self.out.putc(b'(');
                 unsafe { self.emit_expr(recv, locals) };
                 self.out.puts(b").p\0".as_ptr());
                 return;
             }
             /* &[T] slice rows share the fat pair: .as_ptr() is the row's
-             * .p (a plain .as_bytes() on a &[u8] names the same bytes). */
+             * .p (a plain .as_bytes() on a &[u8] names the same bytes —
+             * identity, the slice already is the view). */
             if tn > 8 && tn < 128 && unsafe { z_eq(tbuf, 8, b"rsx_arr_\0".as_ptr()) } {
+                if mlen == 8 {
+                    self.out.putc(b'(');
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.putc(b')');
+                    return;
+                }
+                self.out.putc(b'(');
+                unsafe { self.emit_expr(recv, locals) };
+                self.out.puts(b").p\0".as_ptr());
+                return;
+            }
+            /* Vec<T> receiver: .as_ptr()/.as_mut_ptr() is the row's .p
+             * (a `T *`, mutable by the C type's own const-ness — the
+             * vec row's p is T*, not const T*); .as_bytes() the FAT view
+             * over the owned buffer. */
+            if tn > 8 && tn < 128 && unsafe { z_eq(tbuf, 8, b"rsx_vec_\0".as_ptr()) } {
+                let row = unsafe { self.vecs.find_by_name(tbuf, tn) };
+                if row < VEC_CAP {
+                    let el = self.vecs.elems[row].as_ptr();
+                    let eln = self.vecs.elem_lens[row];
+                    if mlen == 8 {
+                        let arow = unsafe { self.arrs.intern(el, eln) };
+                        if arow < ARR_CAP {
+                            let nb = self.arena_tmp();
+                            let nn = unsafe { ArrTab::name_for(arow, nb, 96) };
+                            if nn > 0 {
+                                self.out.putc(b'(');
+                                self.out.put(nb, nn);
+                                self.out.puts(b"){ (\0".as_ptr());
+                                unsafe { self.emit_expr(recv, locals) };
+                                self.out.puts(b").p, (\0".as_ptr());
+                                unsafe { self.emit_expr(recv, locals) };
+                                self.out.puts(b").n }\0".as_ptr());
+                                return;
+                            }
+                        }
+                    }
+                }
                 self.out.putc(b'(');
                 unsafe { self.emit_expr(recv, locals) };
                 self.out.puts(b").p\0".as_ptr());

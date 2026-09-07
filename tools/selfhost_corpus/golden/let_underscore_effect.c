@@ -12,7 +12,6 @@ struct Tab {
 };
 typedef struct Tab Tab;
 
-
 #line 11 "__impl__.rs"
 size_t Tab_reg(Tab * self, size_t slot)
 ;

@@ -4,7 +4,6 @@
 #include <stddef.h>
 #include <string.h>
 
-
 #line 5 "__impl__.rs"
 const uint8_t * pick(bool fixed)
 ;
@@ -16,15 +15,23 @@ const uint8_t * pick(bool fixed)
 {
     char * z;
     if (fixed) {
-        z = "[;]\0";
+        {
+            z = "[;]\0";
+        }
     } else {
-        z = "[]\0";
+        {
+            z = "[]\0";
+        }
     }
     int32_t zl;
     if (fixed) {
-        zl = 3;
+        {
+            zl = 3;
+        }
     } else {
-        zl = 2;
+        {
+            zl = 2;
+        }
     }
 zl;    return z;
 }

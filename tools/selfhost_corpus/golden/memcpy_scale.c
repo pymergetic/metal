@@ -12,7 +12,6 @@ struct Kid {
 };
 typedef struct Kid Kid;
 
-
 #line 11 "__impl__.rs"
 int32_t pack(Kid * * src, Kid * * dst, size_t count)
 ;

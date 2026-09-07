@@ -59,7 +59,25 @@ fn main() {
         }
         buf.extend_from_slice(&data);
     }
+    // The flat feeds compiler.rs through include!(concat!(env!(OUT_DIR)))
+    // — a path cargo's fingerprint cannot see through. When the assembled
+    // bytes change, bump compiler.rs's mtime so the lib unit recompiles:
+    // without this, a parts-only edit relinks the stale rlib (the build
+    // script reruns, the flat is fresh, and nothing notices).
+    let face = card.join("../compiler.rs");
+    let changed = match fs::read(&flat) {
+        Ok(old) => old != buf,
+        Err(_) => true,
+    };
     fs::write(&flat, &buf).unwrap();
+    if changed {
+        // bump compiler.rs's mtime — set_modified (stable) is enough;
+        // ignore errors (read-only trees still build, just stale).
+        let _ = fs::File::options()
+            .write(true)
+            .open(&face)
+            .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+    }
 
     // Re-run when any part changes (cargo can't see through our write).
     println!("cargo:rerun-if-changed={}", parts.display());
