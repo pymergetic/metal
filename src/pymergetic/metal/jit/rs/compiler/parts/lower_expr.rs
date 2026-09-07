@@ -4978,6 +4978,7 @@ impl Lower {
          * .map/.cloned combinators wrap. */
         if (an == 2 && unsafe { z_eq(mname, mlen, b"insert\0".as_ptr()) })
             || (an == 1 && unsafe { z_eq(mname, mlen, b"get\0".as_ptr()) })
+            || (an == 1 && unsafe { z_eq(mname, mlen, b"entry\0".as_ptr()) })
             || (an == 0 && (unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) }
                 || unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) }))
         {
@@ -5004,6 +5005,18 @@ impl Lower {
                     self.out.putc(b')');
                     return;
                 }
+                /* entry alone (rare in value position; the chain arm
+                 * below catches the or_insert_with form): find-only —
+                 * the caller inserts on NULL. */
+                if an == 1 && unsafe { z_eq(mname, mlen, b"entry\0".as_ptr()) } {
+                    self.out.put(rct, rctl);
+                    self.out.puts(b"_entry_raw(&\0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b", \0".as_ptr());
+                    unsafe { self.emit_expr(*ak.add(0), locals) };
+                    self.out.puts(b")\0".as_ptr());
+                    return;
+                }
                 if an == 0 && unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) } {
                     self.out.putc(b'(');
                     unsafe { self.emit_expr(recv, locals) };
@@ -5015,6 +5028,69 @@ impl Lower {
                     unsafe { self.emit_expr(recv, locals) };
                     self.out.puts(b").n == 0\0".as_ptr());
                     return;
+                }
+            }
+        }
+        /* `.entry(k).or_insert_with(Ctor)` — the tree-insert walk in one
+         * call: _entry(m, k, Ctor()) pre-evaluates the default (the
+         * in-tree ctors are pure; the subset documents the divergence)
+         * and hands back the slot pointer V *. */
+        if an == 1 && mlen == 14 && unsafe { z_eq(mname, mlen, b"or_insert_with\0".as_ptr()) } {
+            if unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::METHOD_CALL
+                && (unsafe { (*recv).n_kids } as usize) >= 3
+            {
+                let rk2 = unsafe { (*recv).kids };
+                let rname2 = unsafe { *rk2.add(1) };
+                if unsafe { (*rname2).text_len } == 5
+                    && unsafe { z_eq(unsafe { (*rname2).text }, 5, b"entry\0".as_ptr()) }
+                {
+                    let mrecv = unsafe { *rk2.add(0) };
+                    let margs = unsafe { *rk2.add(2) };
+                    if (unsafe { (*margs).n_kids } as usize) == 1 {
+                        let rct = self.arena_tmp();
+                        let rctl = unsafe { self.expr_ctype(mrecv, rct, 128, locals) };
+                        if rctl > 8 && rctl < 128 && unsafe { z_eq(rct, 8, b"rsx_btm_\0".as_ptr()) } {
+                            let mk = unsafe { (*margs).kids };
+                            self.out.put(rct, rctl);
+                            self.out.puts(b"_entry(&\0".as_ptr());
+                            unsafe { self.emit_expr(mrecv, locals) };
+                            self.out.puts(b", \0".as_ptr());
+                            unsafe { self.emit_expr(*mk.add(0), locals) };
+                            self.out.puts(b", \0".as_ptr());
+                            /* the default arg is the CTOR PATH (Node::new),
+                             * not a call: _entry takes the VALUE — render
+                             * the fn-item as its call. */
+                            let darg = unsafe { *ak.add(0) };
+                            let mut emitted = false;
+                            if unsafe { (*darg).kind } == pm_jit_rsx_ast_kind::PATH {
+                                let dk = unsafe { (*darg).kids };
+                                let dn = unsafe { (*darg).n_kids } as usize;
+                                if dn == 2 {
+                                    let ty0 = unsafe { *dk.add(0) };
+                                    let fn1 = unsafe { *dk.add(1) };
+                                    if unsafe { (*ty0).kind } == pm_jit_rsx_ast_kind::PATH
+                                        && unsafe { (*fn1).kind } == pm_jit_rsx_ast_kind::PATH
+                                        && unsafe { (*ty0).n_kids } as usize == 0
+                                    {
+                                        let tn = unsafe { (*ty0).text };
+                                        let tnl = unsafe { (*ty0).text_len };
+                                        let mn = unsafe { (*fn1).text };
+                                        let mnl = unsafe { (*fn1).text_len };
+                                        self.out.put(tn, tnl);
+                                        self.out.putc(b'_');
+                                        self.out.put(mn, mnl);
+                                        self.out.puts(b"()\0".as_ptr());
+                                        emitted = true;
+                                    }
+                                }
+                            }
+                            if !emitted {
+                                unsafe { self.emit_expr(darg, locals) };
+                            }
+                            self.out.puts(b")\0".as_ptr());
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -5204,6 +5280,99 @@ impl Lower {
                     unsafe { self.emit_expr(recv, locals) };
                     self.out.puts(b".value) : 0)\0".as_ptr());
                     return;
+                }
+            }
+        }
+        /* `.clone()` on a struct-Option (rsx_opt_<elem>) — a copy of the
+         * Option row. The payload needs a deep copy when it owns heap
+         * (rsx_str_t): _has and the payload's own clone ride the
+         * struct-Option's compound literal; every other payload is a
+         * plain value copy (the subset's structs are POD). */
+        if an == 0 && mlen == 5 && unsafe { z_eq(mname, mlen, b"clone\0".as_ptr()) } {
+            let rct = self.arena_tmp();
+            let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+            if rctl > 8 && rctl < 128 && unsafe { z_eq(rct, 8, b"rsx_opt_\0".as_ptr()) } {
+                let el = self.arena_tmp();
+                let ell = unsafe { Lower::opt_typedef_elem(rct, rctl, el, 128) };
+                if ell > 0 {
+                    let is_str = ell == 9 && unsafe { z_eq(el, 9, b"rsx_str_t\0".as_ptr()) };
+                    self.out.puts(b"({ \0".as_ptr());
+                    self.out.put(rct, rctl);
+                    self.out.puts(b" _c = \0".as_ptr());
+                    unsafe { self.emit_expr(recv, locals) };
+                    self.out.puts(b"; \0".as_ptr());
+                    self.out.put(rct, rctl);
+                    self.out.puts(b" _r; _r._has = _c._has; if (_c._has) { _r._v = \0".as_ptr());
+                    if is_str {
+                        self.out.puts(b"rsx_str_clone(&_c._v)\0".as_ptr());
+                    } else {
+                        self.out.puts(b"_c._v\0".as_ptr());
+                    }
+                    self.out.puts(b"; } else { _r._v = (\0".as_ptr());
+                    self.out.put(el, ell);
+                    self.out.puts(b"){0}; } _r; })\0".as_ptr());
+                    return;
+                }
+            }
+        }
+        /* `.is_terminal()` on `io::stdout()` — the tty probe: isatty(1).
+         * The receiver is the io::stdout() CALL (a FILE *); the method
+         * rides that plane's include. */
+        if an == 0 && mlen == 11 && unsafe { z_eq(mname, mlen, b"is_terminal\0".as_ptr()) } {
+            if unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::CALL {
+                let rname = unsafe { *(*recv).kids.add(0) };
+                if unsafe { (*rname).kind } == pm_jit_rsx_ast_kind::PATH
+                    && (unsafe { (*rname).n_kids } as usize) == 2
+                {
+                    let segs = unsafe { (*rname).kids };
+                    let s0 = unsafe { *segs.add(0) };
+                    let s1 = unsafe { *segs.add(1) };
+                    if unsafe { (*s0).kind } == pm_jit_rsx_ast_kind::PATH
+                        && unsafe { (*s1).kind } == pm_jit_rsx_ast_kind::PATH
+                        && unsafe { z_eq(unsafe { (*s0).text }, unsafe { (*s0).text_len }, b"io\0".as_ptr()) }
+                        && unsafe { z_eq(unsafe { (*s1).text }, unsafe { (*s1).text_len }, b"stdout\0".as_ptr()) }
+                    {
+                        self.unistd_used = true;
+                        self.file_used = true;
+                        self.out.puts(b"isatty(1)\0".as_ptr());
+                        return;
+                    }
+                }
+            }
+        }
+        /* `.is_some()` / `.is_none()` on `std::env::var_os("K")` — the
+         * env probe: getenv != NULL / == NULL. */
+        if an == 0
+            && (unsafe { z_eq(mname, mlen, b"is_some\0".as_ptr()) }
+                || unsafe { z_eq(mname, mlen, b"is_none\0".as_ptr()) })
+        {
+            if unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::CALL {
+                let rname = unsafe { *(*recv).kids.add(0) };
+                if unsafe { (*rname).kind } == pm_jit_rsx_ast_kind::PATH
+                    && (unsafe { (*rname).n_kids } as usize) == 3
+                {
+                    let segs = unsafe { (*rname).kids };
+                    let s2 = unsafe { *segs.add(2) };
+                    if unsafe { (*s2).kind } == pm_jit_rsx_ast_kind::PATH
+                        && unsafe { z_eq(unsafe { (*s2).text }, unsafe { (*s2).text_len }, b"var_os\0".as_ptr()) }
+                    {
+                        let argk = unsafe { *(*recv).kids.add(1) };
+                        if (unsafe { (*argk).n_kids } as usize) == 1 {
+                            let a0 = unsafe { *(*argk).kids.add(0) };
+                            if unsafe { (*a0).kind } == pm_jit_rsx_ast_kind::LITERAL {
+                                self.env_used = true;
+                                let lt = unsafe { (*a0).text };
+                                let ll = unsafe { (*a0).text_len };
+                                self.out.puts(b"(getenv(\0".as_ptr());
+                                self.out.put(lt, ll);
+                                self.out.puts(b") != NULL)\0".as_ptr());
+                                if unsafe { z_eq(mname, mlen, b"is_none\0".as_ptr()) } {
+                                    self.out.puts(b" == 0\0".as_ptr());
+                                }
+                                return;
+                            }
+                        }
+                    }
                 }
             }
         }

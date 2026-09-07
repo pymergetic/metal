@@ -219,6 +219,11 @@ struct Lower {
     /* the FILE * plane: an impl-Write param (or io::stdout()) pulls in
      * <stdio.h>; writeln!/write! lower to fprintf/fputc calls. */
     file_used: bool,
+    /* the terminal/env plane: io::stdout().is_terminal() pulls in
+     * <unistd.h> (isatty); std::env::var_os pulls in <stdlib.h>
+     * (getenv) when the String plane has not already. */
+    unistd_used: bool,
+    env_used: bool,
     /* fn-pointer rows (rsx_fnp_<row>) — interned when a fn-ptr spelling
      * rides an Option payload (the struct field plane); typedefs flush
      * with the other preamble rows. */
@@ -5897,6 +5902,76 @@ impl Lower {
                         }
                     }
                 }
+                /* `.is_terminal()` on io::stdout() — the tty probe, a
+                 * bool. */
+                if mlen == 11 && unsafe { z_eq(mname, mlen, b"is_terminal\0".as_ptr()) } {
+                    let recv0 = unsafe { *kids.add(0) };
+                    if unsafe { (*recv0).kind } == pm_jit_rsx_ast_kind::CALL {
+                        let rname = unsafe { *(*recv0).kids.add(0) };
+                        if unsafe { (*rname).kind } == pm_jit_rsx_ast_kind::PATH
+                            && (unsafe { (*rname).n_kids } as usize) == 2
+                        {
+                            let segs = unsafe { (*rname).kids };
+                            let s0 = unsafe { *segs.add(0) };
+                            let s1 = unsafe { *segs.add(1) };
+                            if unsafe { (*s0).kind } == pm_jit_rsx_ast_kind::PATH
+                                && unsafe { (*s1).kind } == pm_jit_rsx_ast_kind::PATH
+                                && unsafe { z_eq(unsafe { (*s0).text }, unsafe { (*s0).text_len }, b"io\0".as_ptr()) }
+                                && unsafe { z_eq(unsafe { (*s1).text }, unsafe { (*s1).text_len }, b"stdout\0".as_ptr()) }
+                            {
+                                /* the probe arms the includes here — the
+                                 * pre-scan runs before the type-pass
+                                 * flush, so the headers land at file
+                                 * scope before any fn body names them. */
+                                self.unistd_used = true;
+                                self.file_used = true;
+                                let n2 = unsafe { zput(out, cap, 0, b"bool\0".as_ptr()) };
+                                return if n2 >= cap { 0 } else { n2 };
+                            }
+                        }
+                    }
+                }
+                /* `.is_some()` / `.is_none()` on std::env::var_os("K") —
+                 * the env probe, a bool. */
+                if (mlen == 7 && unsafe { z_eq(mname, mlen, b"is_some\0".as_ptr()) })
+                    || (mlen == 7 && unsafe { z_eq(mname, mlen, b"is_none\0".as_ptr()) })
+                {
+                    let recv0 = unsafe { *kids.add(0) };
+                    if unsafe { (*recv0).kind } == pm_jit_rsx_ast_kind::CALL {
+                        let rname = unsafe { *(*recv0).kids.add(0) };
+                        if unsafe { (*rname).kind } == pm_jit_rsx_ast_kind::PATH
+                            && (unsafe { (*rname).n_kids } as usize) == 3
+                        {
+                            let segs = unsafe { (*rname).kids };
+                            let s2 = unsafe { *segs.add(2) };
+                            if unsafe { (*s2).kind } == pm_jit_rsx_ast_kind::PATH
+                                && unsafe { z_eq(unsafe { (*s2).text }, unsafe { (*s2).text_len }, b"var_os\0".as_ptr()) }
+                            {
+                                self.env_used = true;
+                                let n2 = unsafe { zput(out, cap, 0, b"bool\0".as_ptr()) };
+                                return if n2 >= cap { 0 } else { n2 };
+                            }
+                        }
+                    }
+                }
+                /* `.clone()` on a struct-Option (rsx_opt_<elem>) — the
+                 * same Option row (the emission deep-copies an owning
+                 * payload like rsx_str_t). */
+                if mlen == 5 && unsafe { z_eq(mname, mlen, b"clone\0".as_ptr()) } {
+                    let rbuf = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                    if rl > 8 && rl < 128 && unsafe { z_eq(rbuf, 8, b"rsx_opt_\0".as_ptr()) } {
+                        let at = unsafe { bput(out, cap, 0, rbuf, rl) };
+                        unsafe {
+                            if at < cap {
+                                *out.add(at) = 0;
+                            } else if cap > 0 {
+                                *out.add(cap - 1) = 0;
+                            }
+                        }
+                        return if at >= cap { 0 } else { at };
+                    }
+                }
                 /* BTreeMap method plane — the receiver's rendered type
                  * names one of the interned rsx_btm_<row> typedefs.
                  * insert is void (statement position in the subset);
@@ -5910,6 +5985,7 @@ impl Lower {
                 };
                 if (an2b == 2 && mlen == 6 && unsafe { z_eq(mname, mlen, b"insert\0".as_ptr()) })
                     || (an2b == 1 && mlen == 3 && unsafe { z_eq(mname, mlen, b"get\0".as_ptr()) })
+                    || (an2b == 1 && mlen == 5 && unsafe { z_eq(mname, mlen, b"entry\0".as_ptr()) })
                     || (an2b == 0 && mlen == 3 && unsafe { z_eq(mname, mlen, b"len\0".as_ptr()) })
                     || (an2b == 0 && mlen == 9 && unsafe { z_eq(mname, mlen, b"is_empty\0".as_ptr()) })
                 {
@@ -5929,9 +6005,13 @@ impl Lower {
                                 }
                                 return if at >= cap { 0 } else { at };
                             }
-                            if mlen == 3 && unsafe { z_eq(mname, mlen, b"get\0".as_ptr()) } {
+                            if (mlen == 3 && unsafe { z_eq(mname, mlen, b"get\0".as_ptr()) })
+                                || (mlen == 5 && unsafe { z_eq(mname, mlen, b"entry\0".as_ptr()) })
+                            {
                                 /* the row's payload pointer: V * (NULL =
-                                 * the absent key) */
+                                 * the absent key) — entry shares the get
+                                 * face's pointer typing so the chain's
+                                 * or_insert_with sees the same V *. */
                                 let vl = self.btms.val_lens[row];
                                 let vp = self.btms.vals[row].as_ptr();
                                 let at = unsafe { bput(out, cap, 0, vp, vl) };
@@ -5982,6 +6062,23 @@ impl Lower {
                                 }
                                 return if at >= cap { 0 } else { at };
                             }
+                        }
+                    }
+                }
+                /* `.or_insert_with(Ctor)` on a btm `.entry(k)` — the same
+                 * V * the entry hands back (the default is pre-evaluated
+                 * into the _entry call; the chain's value is the slot). */
+                if mlen == 14 && unsafe { z_eq(mname, mlen, b"or_insert_with\0".as_ptr()) } {
+                    let recv2 = unsafe { *kids.add(0) };
+                    if unsafe { (*recv2).kind } == pm_jit_rsx_ast_kind::METHOD_CALL
+                        && (unsafe { (*recv2).n_kids } as usize) >= 3
+                    {
+                        let rk2 = unsafe { (*recv2).kids };
+                        let rname2 = unsafe { *rk2.add(1) };
+                        if unsafe { (*rname2).text_len } == 5
+                            && unsafe { z_eq(unsafe { (*rname2).text }, 5, b"entry\0".as_ptr()) }
+                        {
+                            return unsafe { self.expr_ctype(recv2, out, cap, locals) };
                         }
                     }
                 }

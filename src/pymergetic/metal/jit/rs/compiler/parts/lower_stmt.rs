@@ -5655,10 +5655,12 @@ impl Lower {
         if !is_sep_lit && unsafe { (*clo).kind } != pm_jit_rsx_ast_kind::CLOSURE {
             return 0;
         }
-        /* the receiver must be the fat-ref view */
+        /* the receiver: the fat-ref view or the owned String */
         let rb = self.arena_tmp();
         let rl = unsafe { self.expr_ctype(recv, rb, 128, locals) };
-        if !(rl == 13 && unsafe { z_eq(rb, 13, b"rsx_str_ref_t\0".as_ptr()) }) {
+        if !(rl == 13 && unsafe { z_eq(rb, 13, b"rsx_str_ref_t\0".as_ptr()) })
+            && !(rl == 9 && unsafe { z_eq(rb, 9, b"rsx_str_t\0".as_ptr()) })
+        {
             return 0;
         }
         /* closure: one bind (+ optional `: TYPE` ascription parsed as
@@ -5749,8 +5751,22 @@ impl Lower {
         self.out.puts(b"rsx_str_ref_t \0".as_ptr());
         self.out.put(sv, at);
         self.out.puts(b" = \0".as_ptr());
-        unsafe { self.emit_expr(recv, locals) };
-        self.out.puts(b"; size_t \0".as_ptr());
+        if rl == 9 {
+            /* owned String: the p/n view of the same value, rendered
+             * once into the local copy (re-evaluating a field expr per
+             * iteration is both wasteful and unsafe if it mutates).
+             * The .p cast: rsx_str_t.p is char*, the view's is
+             * const uint8_t* — the same bytes, an explicit convert. */
+            self.out.puts(b"(rsx_str_ref_t){ (const uint8_t *)\0".as_ptr());
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b".p, \0".as_ptr());
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b".n }; \0".as_ptr());
+        } else {
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b"; \0".as_ptr());
+        }
+        self.out.puts(b"size_t \0".as_ptr());
         self.out.put(iv, at2);
         self.out.puts(b" = 0;\n\0".as_ptr());
         self.indent();
