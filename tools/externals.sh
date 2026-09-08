@@ -63,7 +63,7 @@ discover() {
         # #include chain so the manifest reads like the source.
         for f in libtcc.c tccpp.c tccgen.c tccelf.c tccasm.c tccdbg.c \
             tccrun.c tcctools.c i386-asm.c x86_64-gen.c x86_64-link.c \
-            wasm32-gen.c wasm32-link.c; do
+            wasm32-gen.c wasm32-link.c arm-gen.c arm-link.c arm-asm.c; do
             [ -f "$dir/$f" ] || {
                 echo "externals.sh: tcc discovery: missing $f" >&2
                 exit 1

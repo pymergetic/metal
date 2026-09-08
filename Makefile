@@ -138,9 +138,19 @@ ZP_CPPFLAGS := -DZENOH_GENERIC -I$(ZENOH_PICO_DIR)/include -I$(ZENOH_PICO_DIR)/s
 # they are the object's dependency list. Compiling them as separate objects
 # would need tcc.c (the CLI driver), which no seat links.
 include $(CURDIR)/tools/tcc.mk
+include $(CURDIR)/tools/tcc_instances.mk
 TCC_DIR ?= $(CURDIR)/externals/tcc
+TCC_DEPS := $(addprefix $(TCC_DIR)/,$(TCC_MANIFEST_SRCS))
+# Host seat instances (one recipe, N instances — tools/tcc_instances.mk):
+# native x86_64 plus both cross backends, so this binary can compile for
+# every arch. Cross objects rename every defined global (tcc_prefix_syms.sh)
+# so the three instances link side by side. TCC_OBJS feeds the same link
+# lines TCC_CROSS_OBJS already feeds — keep them disjoint.
 TCC_OBJS := $(CURDIR)/build/tcc/libtcc.o
-TCC_CROSS_OBJS := $(CURDIR)/build/tcc/libtcc_wasm_cross.o
+TCC_CROSS_OBJS := $(CURDIR)/build/tcc/libtcc_wasm_cross.o $(CURDIR)/build/tcc/libtcc_arm_cross.o
+$(eval $(call tcc_instance,x86_64,TCC_TARGET_X86_64,$(CURDIR)/build/tcc/libtcc.o,))
+$(eval $(call tcc_instance,wasm32_cross,TCC_TARGET_WASM32,$(CURDIR)/build/tcc/libtcc_wasm_cross.o,pm_tccw_))
+$(eval $(call tcc_instance,arm_eabi_cross,TCC_TARGET_ARM,$(CURDIR)/build/tcc/libtcc_arm_cross.o,pm_tcca_))
 # TCC runtime helpers (libtcc1 pieces): cards compiled in-kernel call these
 # (__va_arg from va_arg lowering, __atomic_* from _Atomic/__atomic_*).
 # The host seat binary defines them so the build card's process resolver
@@ -151,6 +161,7 @@ TCC1_OBJS := $(CURDIR)/build/tcc/libtcc1.o $(CURDIR)/build/tcc/libtcc1_atomic.o 
 TCC_DEPS := $(addprefix $(TCC_DIR)/,$(TCC_MANIFEST_SRCS))
 CPPFLAGS += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -I$(TCC_DIR) -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
 CPPFLAGS += -DPM_METAL_TCC_CROSS_WASM32=1
+CPPFLAGS += -DPM_METAL_TCC_CROSS_ARM_EABI=1
 # Absolute tree roots for the runtime build faces (inspect's /build rebuild
 # route, ksweep): __FILE__ is relative under make, so a route serving a
 # rebuild from any CWD needs the absolute anchors. Same pattern as
@@ -211,11 +222,6 @@ $(CURDIR)/build/zenoh-pico/%.o: $(ZENOH_PICO_DIR)/%.c
 	mkdir -p $(dir $@)
 	$(CC) -std=gnu11 -O1 -g -Wall -Wextra $(ZP_CPPFLAGS) -c -o $@ $<
 
-$(CURDIR)/build/tcc/libtcc.o: $(TCC_DEPS)
-	mkdir -p $(dir $@)
-	$(CC) -std=gnu11 -O1 -g -Wall -Wno-unused-parameter -Wno-sign-compare \
-		-I$(TCC_DIR) -DTCC_TARGET_X86_64 $(TCC_DEFINES) -c -o $@ $(TCC_DIR)/libtcc.c
-
 # tcc1 runtime: va_list.c defines __va_arg (and friends) in portable C;
 # atomic.S is hand-written x86_64 asm for the __atomic_* family.
 $(CURDIR)/build/tcc/libtcc1.o: $(TCC_DIR)/lib/va_list.c
@@ -233,14 +239,12 @@ $(CURDIR)/build/tcc/libtcc1_stdatomic.o: $(TCC_DIR)/lib/stdatomic.c
 	mkdir -p $(dir $@)
 	$(CC) -std=gnu11 -O1 -g -w -c -o $@ $(TCC_DIR)/lib/stdatomic.c
 
-# cross instance (host seat): wasm32 backend with pm_tccw_-prefixed symbols
-# (objcopy --redefine-sym on defined tcc_*/wasm_* only — --prefix-symbols
-# would rename the libc imports too). See metal.mk's comment for the seam.
-$(TCC_CROSS_OBJS): $(TCC_DEPS)
-	mkdir -p $(dir $@)
-	$(CC) -std=gnu11 -O1 -g -w -I$(TCC_DIR) -DTCC_TARGET_WASM32 $(TCC_DEFINES) -c -o $@.raw $(TCC_DIR)/libtcc.c
-	nm -g --defined-only $@.raw | awk '$$2 ~ /[TDBR]/ {print $$3}' | grep -E '^_?tcc_|^wasm_' | sed 's/.*/--redefine-sym &=pm_tccw_&/' | tr '\n' ' ' > $@.redef
-	objcopy $$(cat $@.redef) $@.raw $@ && rm -f $@.raw $@.redef
+# cross instances (host seat): wasm32 + arm-eabi backends, symbols renamed by
+# tools/tcc_instances.mk / tcc_prefix_syms.sh (rename ALL defined globals —
+# the old tcc_*/wasm_ grep leaked gen_negf, which both backends define).
+# jit.c's cross path declares the prefixed names by hand — each instance's
+# TCCState layout differs from the native one, so only opaque-pointer calls
+# cross that seam.
 
 # mrustc in-process embed shim: compile the C++ shim that drives mrustc.a
 $(MRUSTC_EMBED_O): $(MRUSTC_EMBED_DIR)/mrustc_embed.cpp $(MRUSTC_EMBED_DIR)/mrustc_embed.h $(MRUSTC_A) $(MRUSTC_COMMON_A)

@@ -15,6 +15,9 @@ sources = [
     "x86_64-link.c",
     "wasm32-gen.c",
     "wasm32-link.c",
+    "arm-gen.c",
+    "arm-link.c",
+    "arm-asm.c",
 ]
 include_dirs = ["."]
 defines = ["TCC_TARGET_X86_64"]

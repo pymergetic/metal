@@ -77,19 +77,25 @@ INC += -I$(ZENOH_PICO_DIR)/include -I$(ZENOH_PICO_DIR)/src -I$(ZENOH_CARD_DIR)
 CFLAGS_EXTMOD += -DZENOH_GENERIC
 
 # vendored TCC (externals/tcc) — ONE_SOURCE=1: only libtcc.c compiles all others via #include
-# The browser seat runs as wasm32 (emcc), so its embedded TCC targets WASM32:
-# C source is JIT'd to WASM and fed to WAMR, never to native x86_64. The unix
-# µPy seat is a native x86_64 process, so it keeps the native backend.
-# The source list (and thus the object's dependencies) is the manifest via
-# tools/tcc.mk — same one definition every seat reads.
+# One recipe, N instances (tools/tcc_instances.mk): each seat declares its
+# instance list; the rule exists once. The browser seat runs as wasm32
+# (emcc), so its NATIVE instance is the wasm32 backend (C source is JIT'd
+# to WASM and fed to WAMR, never to native x86_64). The unix µPy seat is a
+# native x86_64 process plus both cross instances — every seat builds every
+# arch. The source list (and thus each object's dependencies) is the
+# manifest via tools/tcc.mk — one definition every seat reads.
 TCC_DIR ?= $(TOP)/extmod/metal/externals/tcc
 include $(TOP)/extmod/metal/tools/tcc.mk
+include $(TOP)/extmod/metal/tools/tcc_instances.mk
 TCC_DEPS := $(addprefix $(TCC_DIR)/,$(TCC_MANIFEST_SRCS))
+$(eval $(if $(PM_METAL_BROWSER),\
+$(call tcc_instance,wasm32_native,TCC_TARGET_WASM32,$(BUILD)/externals/tcc/libtcc.o,),\
+$(call tcc_instance,x86_64,TCC_TARGET_X86_64,$(BUILD)/externals/tcc/libtcc.o,)))
 PY_O += $(BUILD)/externals/tcc/libtcc.o
 ifdef PM_METAL_BROWSER
-CFLAGS_EXTMOD += -DTCC_TARGET_WASM32 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(abspath $(TCC_DIR))\"
+CFLAGS_EXTMOD += -DTCC_TARGET_WASM32
 else
-CFLAGS_EXTMOD += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(abspath $(TCC_DIR))\"
+CFLAGS_EXTMOD += -DTCC_TARGET_X86_64
 # Absolute tree roots for the runtime build faces (inspect's /build rebuild
 # route): __FILE__ is relative, and the seat binary runs from any CWD.
 CFLAGS_EXTMOD += -DPM_METAL_ROOT=\"$(abspath $(TOP)/extmod/metal)\" -DPM_METAL_WASMMOD_ROOT=\"$(abspath $(TOP)/extmod/wasmmod)\" -DPM_METAL_TOP_ROOT=\"$(abspath $(TOP)/..)\"
@@ -97,12 +103,19 @@ CFLAGS_EXTMOD += -DPM_METAL_ROOT=\"$(abspath $(TOP)/extmod/metal)\" -DPM_METAL_W
 # unix compiles load.c (MICROPY_PY_WASM_ELF=1 default); the browser cell does
 # not (ELF=0 there — its TCC targets wasm32, objects are WASM not ET_REL).
 CFLAGS_EXTMOD += -DPM_METAL_BUILD_HAS_ELF=1
+# unix (ELF) seat: both cross instances so this binary compiles for every
+# arch. Cross objects rename every defined global (tcc_prefix_syms.sh —
+# the old tcc_*/wasm_ grep leaked gen_negf, which both backends define).
+TCC_CROSS_WASM_OBJ := $(BUILD)/externals/tcc/libtcc_wasm_cross.o
+TCC_CROSS_ARM_OBJ := $(BUILD)/externals/tcc/libtcc_arm_cross.o
+$(eval $(call tcc_instance,wasm32_cross,TCC_TARGET_WASM32,$(TCC_CROSS_WASM_OBJ),pm_tccw_))
+$(eval $(call tcc_instance,arm_eabi_cross,TCC_TARGET_ARM,$(TCC_CROSS_ARM_OBJ),pm_tcca_))
+PY_O += $(TCC_CROSS_WASM_OBJ) $(TCC_CROSS_ARM_OBJ)
+CFLAGS_EXTMOD += -DPM_METAL_TCC_CROSS_WASM32=1
+CFLAGS_EXTMOD += -DPM_METAL_TCC_CROSS_ARM_EABI=1
 endif
+CFLAGS_EXTMOD += -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(abspath $(TCC_DIR))\"
 INC += -I$(TCC_DIR)
-
-$(BUILD)/externals/tcc/libtcc.o: $(TCC_DEPS)
-	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS_EXTMOD) $(INC) -std=gnu11 -Wno-unused-parameter -Wno-sign-compare -Wno-error $(TCC_DEFINES) -c -o $@ $(TCC_DIR)/libtcc.c
 
 # tcc1 runtime helpers (va_list.c / atomic.S / stdatomic.c): cards compiled
 # in-kernel call __va_arg / __atomic_*; the seat binary defines them so the
@@ -123,25 +136,6 @@ $(BUILD)/externals/tcc/libtcc1_atomic.o: $(TCC_DIR)/lib/atomic.S
 $(BUILD)/externals/tcc/libtcc1_stdatomic.o: $(TCC_DIR)/lib/stdatomic.c
 	mkdir -p $(dir $@)
 	$(CC) -std=gnu11 -O1 -g -w -c -o $@ $(TCC_DIR)/lib/stdatomic.c
-
-# Cross-compile instance (ELF seats): a second libtcc compiled with
-# -DTCC_TARGET_WASM32 and every defined tcc_*/wasm_* symbol renamed to
-# pm_tccw_* (objcopy --redefine-sym; --prefix-symbols would rename the
-# libc imports too and break every strlen/memcpy reference). jit.c's
-# cross path declares the prefixed names by hand — the wasm instance's
-# TCCState layout differs from the native one, so only opaque-pointer
-# calls cross that seam. This is what makes compile_target(wasm32) work
-# on unix: one binary, two backends, no second card (one defining lang).
-ifndef PM_METAL_BROWSER
-PY_O += $(BUILD)/externals/tcc/libtcc_wasm_cross.o
-CFLAGS_EXTMOD += -DPM_METAL_TCC_CROSS_WASM32=1
-
-$(BUILD)/externals/tcc/libtcc_wasm_cross.o: $(TCC_DEPS)
-	mkdir -p $(dir $@)
-	$(CC) -DTCC_TARGET_WASM32 -DPM_HAS_TCC=1 -DPM_METAL_TCC_LIB_DIR=\"$(abspath $(TCC_DIR))\" $(TCC_DEFINES) $(INC) -std=gnu11 -w -c -o $@.raw $(TCC_DIR)/libtcc.c
-	nm -g --defined-only $@.raw | awk '$$2 ~ /[TDBR]/ {print $$3}' | grep -E '^_?tcc_|^wasm_' | sed 's/.*/--redefine-sym &=pm_tccw_&/' | tr '\n' ' ' > $@.redef
-	objcopy $$(cat $@.redef) $@.raw $@ && rm -f $@.raw $@.redef
-endif
 
 # zenoh-pico's api/macros.h is C11 _Generic; unix µPy defaults to gnu99 and the
 # browser seat forces gnu99 on all card objects, so the zenoh card + core objects

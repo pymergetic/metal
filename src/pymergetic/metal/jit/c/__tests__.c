@@ -199,6 +199,34 @@ static int32_t test_object_compile_target(void) {
     if (rc == 0) { pm_util_mem_arena_destroy(arena); free(backing); return 44; }
     if (err[0] == '\0') { pm_util_mem_arena_destroy(arena); free(backing); return 45; }
 #endif
+
+    /* arm-eabi cross knob: same probe, ELF magic + EM_ARM e_machine (40).
+     * The armv7 ELF is a distribution artifact — linking it is the target
+     * seat's business (load.c EM_ARM support), the emit is this seat's. */
+    obj = NULL;
+    obj_len = 0;
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_c_object_compile_target(arena, src, strlen(src),
+        NULL, 0, NULL, 0, (int32_t)PM_METAL_JIT_C_TARGET_ARM_EABI,
+        &obj, &obj_len, err, sizeof(err));
+#if defined(PM_METAL_TCC_CROSS_ARM_EABI)
+    if (rc != 0 || obj == NULL || obj_len < 52) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 46;
+    }
+    /* ELF magic + 32-bit little-endian (EI_CLASS=1, EI_DATA=1) + e_machine */
+    if (obj[0] != 0x7f || obj[1] != 'E' || obj[2] != 'L' || obj[3] != 'F') {
+        pm_util_mem_arena_destroy(arena); free(backing); return 47;
+    }
+    if (obj[4] != 1 || obj[5] != 1) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 48;
+    }
+    if (obj[18] != 40 || obj[19] != 0) {  /* EM_ARM = 40 */
+        pm_util_mem_arena_destroy(arena); free(backing); return 49;
+    }
+#else
+    if (rc == 0) { pm_util_mem_arena_destroy(arena); free(backing); return 50; }
+    if (err[0] == '\0') { pm_util_mem_arena_destroy(arena); free(backing); return 51; }
+#endif
     pm_util_mem_arena_destroy(arena);
     free(backing);
     return 0;

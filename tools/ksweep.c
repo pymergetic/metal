@@ -143,6 +143,7 @@ int main(int argc, char **argv) {
     snprintf(libdir_def, sizeof(libdir_def), "PM_METAL_TCC_LIB_DIR=\"%s\"", tcc_root);
     defines[n_defines++] = libdir_def;
     defines[n_defines++] = "PM_METAL_TCC_CROSS_WASM32=1";
+    defines[n_defines++] = "PM_METAL_TCC_CROSS_ARM_EABI=1";
     defines[n_defines++] = "PM_METAL_BUILD_HAS_ELF=1";
     {
         FILE *trip = popen("cc -print-multiarch 2>/dev/null", "r");

@@ -58,13 +58,15 @@ int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
     char *errbuf, size_t errbuf_len);
 
 /* Cross-compile target: which TCC backend produces the object. SEAT is the
- * backend this binary embeds natively; WASM32 asks for the wasm32 backend
- * when the seat links a second, symbol-prefixed instance (ELF seats that
- * enable PM_METAL_TCC_CROSS_WASM32). A seat without the requested backend
- * refuses with a clear errbuf — never silently falling back. */
+ * backend this binary embeds natively; WASM32 / ARM_EABI ask for that
+ * backend when the seat links a second, symbol-prefixed instance (ELF seats
+ * that enable PM_METAL_TCC_CROSS_WASM32 / PM_METAL_TCC_CROSS_ARM_EABI).
+ * A seat without the requested backend refuses with a clear errbuf —
+ * never silently falling back. */
 typedef enum pm_metal_jit_c_target {
     PM_METAL_JIT_C_TARGET_SEAT = 0,
     PM_METAL_JIT_C_TARGET_WASM32 = 1,
+    PM_METAL_JIT_C_TARGET_ARM_EABI = 2,
 } pm_metal_jit_c_target_t;
 
 /* compile_opts: the include/define seam the build card drives. include_dirs
