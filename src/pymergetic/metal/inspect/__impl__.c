@@ -1452,8 +1452,15 @@ static int32_t build_asgi_handler(const char *method, const char *path, uint8_t 
 #define INSPECT_BUILD_MAX_INC 12u
 #define INSPECT_BUILD_MAX_DEF 12u
 /* The discover+compile arena: one whole card's TCC objects + ELF image.
- * Same span the build card's rebuild test and ksweep use (64 MiB). */
-#define INSPECT_BUILD_SPAN (64u * 1024u * 1024u)
+ * Same span ksweep uses per unit (160 MiB): the compiler card's own TU
+ * — rsx tokens + AST + Lower plus TCC's tables over ~2.1 MB of
+ * generated C — outgrew the old 64 MiB window (the refusal read
+ * "arena exhausted" mid-lower; ksweep hit the same wall as a TCC
+ * section_realloc SIGSEGV before the span moved). Rebuilding
+ * pymergetic.metal.jit.rs.compiler from the REPL is the self-host
+ * showcase; the span must carry it. The build card's rebuild test
+ * keeps its own 64 MiB — it rebuilds jit.c, a small card. */
+#define INSPECT_BUILD_SPAN (160u * 1024u * 1024u)
 
 #if !defined(PM_METAL_FIRMWARE) && !defined(PM_METAL_BROWSER)
 static char ib_src_root[2560];
