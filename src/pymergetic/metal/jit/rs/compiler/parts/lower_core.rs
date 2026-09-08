@@ -37,6 +37,14 @@ struct Lower {
      * the next name__N spelling; per-fn (reset in lower_fn) — the C
      * collision domain is the fn body. */
     shadow_ctr: usize,
+    /* let-else temp counter: every let-else in one fn body declares its
+     * struct temp with the next __rsx_le<N> spelling — two let-elses in
+     * one C scope redeclare the shared name and tcc refuses the unit. */
+    le_ctr: usize,
+    /* the last le_temp() spelling and its length — the emission reads
+     * both across several puts. */
+    le_name: [u8; 24],
+    le_name_len: usize,
     /* the fn body currently being lowered (NULL outside a body) — the
      * Vec::new() let-inference scans it for the binding's first .push()
      * to type an empty container from its uses. */
@@ -224,6 +232,20 @@ struct Lower {
      * (getenv) when the String plane has not already. */
     unistd_used: bool,
     env_used: bool,
+    /* the path-metadata plane: Path::exists()/is_dir()/is_file() pull
+     * in <sys/stat.h> (stat/S_ISDIR/S_ISREG) — one flag for the one
+     * include, armed at both typing and emission (either pass may run
+     * first depending on ascription). */
+    stat_used: bool,
+    /* rsx_path_probe — the unit-static NUL-copy + stat helper the
+     * path-metadata methods call; returns 0 (missing), 1 (regular),
+     * 2 (dir). Emitted once in the preamble window when armed. */
+    path_probe_used: bool,
+    /* the argv plane: `for .. in env::args()` walks __rsx_argv/__rsx_argc
+     * globals the preamble declares when set (weak defaults: an empty
+     * walk on a seat that never sets them). */
+    env_args_used: bool,
+    env_args_done: bool,
     /* fn-pointer rows (rsx_fnp_<row>) — interned when a fn-ptr spelling
      * rides an Option payload (the struct field plane); typedefs flush
      * with the other preamble rows. */
@@ -844,6 +866,41 @@ impl Lower {
         out_caps: *mut *mut pm_jit_rsx_ast_t,
         out_caps_n: *mut usize,
     ) -> bool {
+        /* format! / println! / eprintln! / print! / eprint! all scan the
+         * same: literal head, positional args. Name decides. */
+        let mut name_len = 8usize; /* format!( */
+        if unsafe { sl_peek_print_len(text, tlen) } > 0 {
+            name_len = unsafe { sl_peek_print_len(text, tlen) };
+        }
+        unsafe {
+            self.format_macro_scan_named(
+                text,
+                tlen,
+                locals,
+                out_fmt,
+                out_fmt_len,
+                out_args,
+                out_args_n,
+                out_caps,
+                out_caps_n,
+                name_len,
+            )
+        }
+    }
+
+    unsafe fn format_macro_scan_named(
+        &mut self,
+        text: *const u8,
+        tlen: usize,
+        locals: *mut LocalTab,
+        out_fmt: *mut *const u8,
+        out_fmt_len: *mut usize,
+        out_args: *mut *mut pm_jit_rsx_ast_t,
+        out_args_n: *mut usize,
+        out_caps: *mut *mut pm_jit_rsx_ast_t,
+        out_caps_n: *mut usize,
+        name_len: usize,
+    ) -> bool {
         /* strip `::alloc::` / `alloc::` before `format!` */
         let mut sp = text;
         let mut sl = tlen;
@@ -858,27 +915,36 @@ impl Lower {
             sp = unsafe { sp.add(7) };
             sl -= 7;
         }
-        /* `format!(` — the invocation's LAST byte is `)` */
-        if sl < 9 {
+        /* `<name>(` — the invocation's LAST byte is `)` */
+        if sl < name_len + 1 {
             return false;
         }
-        if unsafe { *sp } != b'f'
-            || unsafe { *sp.add(1) } != b'o'
-            || unsafe { *sp.add(2) } != b'r'
-            || unsafe { *sp.add(3) } != b'm'
-            || unsafe { *sp.add(4) } != b'a'
-            || unsafe { *sp.add(5) } != b't'
-            || unsafe { *sp.add(6) } != b'!'
-            || unsafe { *sp.add(7) } != b'('
         {
-            return false;
+            /* verify the leading name bytes match the caller's claim:
+             * the scan trusts name_len only after checking the bytes
+             * spell a macro this plane knows (format! / println! /
+             * eprintln! / print! / eprint!) and end with `!(`. */
+            let mut ok_name = unsafe { *sp.add(name_len - 2) } == b'!'
+                && unsafe { *sp.add(name_len - 1) } == b'(';
+            if ok_name {
+                let nm = unsafe { sp.add(0) };
+                let nl = name_len - 2;
+                ok_name = (nl == 6 && unsafe { z_eq(nm, 6, b"format\0".as_ptr()) })
+                    || (nl == 7 && unsafe { z_eq(nm, 7, b"println\0".as_ptr()) })
+                    || (nl == 8 && unsafe { z_eq(nm, 8, b"eprintln\0".as_ptr()) })
+                    || (nl == 5 && unsafe { z_eq(nm, 5, b"print\0".as_ptr()) })
+                    || (nl == 6 && unsafe { z_eq(nm, 6, b"eprint\0".as_ptr()) });
+            }
+            if !ok_name {
+                return false;
+            }
         }
         if unsafe { *sp.add(sl - 1) } != b')' {
             return false;
         }
-        /* body: [sp+8, sl-1) — `format!(` is 8 bytes */
-        let body = unsafe { sp.add(8) };
-        let blen = sl - 9;
+        /* body: [sp+name_len, sl-1) */
+        let body = unsafe { sp.add(name_len) };
+        let blen = sl - name_len - 1;
         /* sub-lex the body */
         let mut toks: pm_jit_rsx_toklist_t = pm_jit_rsx_toklist_t {
             toks: core::ptr::null_mut(),
@@ -1347,6 +1413,51 @@ impl Lower {
         true
     }
 
+    /* `env!("NAME")` — the compile-time env var macro. The kernel has no
+     * compile-time host env, so the fill is the runtime getenv probe (the
+     * cli's `cargo run` seat has CARGO_MANIFEST_DIR set by cargo itself;
+     * every seat without the var sees the empty view). Returns the quoted
+     * NAME span [name_io, name_io + *name_len_io) when the MACRO text is
+     * the env! form, 0 otherwise. */
+    unsafe fn env_macro_name(
+        &self,
+        text: *const u8,
+        text_len: usize,
+        name_io: &mut *const u8,
+        name_len_io: &mut usize,
+    ) -> usize {
+        if text.is_null() || text_len < 8 {
+            return 0;
+        }
+        /* `env!` head + '(' */
+        if !(unsafe { *text } == b'e'
+            && unsafe { *text.add(1) } == b'n'
+            && unsafe { *text.add(2) } == b'v'
+            && unsafe { *text.add(3) } == b'!'
+            && unsafe { *text.add(4) } == b'(')
+        {
+            return 0;
+        }
+        let mut i = 5usize;
+        while i < text_len && (unsafe { *text.add(i) } == b' ' || unsafe { *text.add(i) } == b'\t') {
+            i += 1;
+        }
+        if i >= text_len || unsafe { *text.add(i) } != b'"' {
+            return 0;
+        }
+        i += 1;
+        let start = i;
+        while i < text_len && unsafe { *text.add(i) } != b'"' {
+            i += 1;
+        }
+        if i >= text_len || i == start {
+            return 0;
+        }
+        *name_io = unsafe { text.add(start) };
+        *name_len_io = i - start;
+        1
+    }
+
     /* Is a MACRO node one of the plane's expression macros (vec!,
      * format!)? Statement macros keep the emit_stmt skip semantics. */
     unsafe fn macro_is_value(&mut self, e: *const pm_jit_rsx_ast_t) -> bool {
@@ -1395,7 +1506,14 @@ impl Lower {
         };
         self.ok = save_ok;
         self.nerrs = save_nerrs;
-        is_vec
+        if is_vec {
+            return true;
+        }
+        /* env!("NAME") — the env probe macro types as a str view */
+        let mut en: *const u8 = core::ptr::null();
+        let mut enl: usize = 0;
+        let is_env = unsafe { self.env_macro_name((*e).text, (*e).text_len, &mut en, &mut enl) };
+        is_env != 0
     }
 
     /* Rust type node -> C type into out (NUL-terminated); byte length or 0 on
@@ -1636,6 +1754,12 @@ impl Lower {
                                 let lt = unsafe { (*leaf).text };
                                 let ltl = unsafe { (*leaf).text_len };
                                 if ltl == 3 && unsafe { z_eq(lt, 3, b"str\0".as_ptr()) } {
+                                    inner_is_str = true;
+                                }
+                                /* &Path / &std::path::Path — a path view IS
+                                 * the str view in this subset (Path::new is
+                                 * the identity borrow); same fat pair. */
+                                if ltl == 4 && unsafe { z_eq(lt, 4, b"Path\0".as_ptr()) } {
                                     inner_is_str = true;
                                 }
                             }
@@ -1915,6 +2039,73 @@ impl Lower {
         }
         self.ok = false;
         self.oom_buf.as_mut_ptr()
+    }
+
+    /* Emit a BTreeMap key argument, converting the source spelling to
+     * the row's key type when they differ in shape: a `&str` key
+     * (rsx_str_ref_t) on a String-keyed row (rsx_str_t) materializes an
+     * owned copy (rsx_btm_0_get takes the key BY VALUE — a fat-ref
+     * struct passed straight through is a struct-to-struct conversion C
+     * refuses). A key already in the row's shape emits as-is. */
+    unsafe fn emit_btm_key(&mut self, row: usize, key: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
+        let kt = self.arena_tmp();
+        let kn = unsafe { self.expr_ctype(key, kt, 128, locals) };
+        let rkn = if row < BTM_CAP {
+            self.btms.key_lens[row]
+        } else {
+            0
+        };
+        /* &str key, String row: the owned copy */
+        if kn == 13 && unsafe { z_eq(kt, 13, b"rsx_str_ref_t\0".as_ptr()) }
+            && rkn == 9
+            && unsafe { z_eq(self.btms.keys[row].as_ptr(), 9, b"rsx_str_t\0".as_ptr()) }
+        {
+            self.str_own_used = true;
+            self.out.puts(b"({ rsx_str_t _t = {0}; rsx_str_append(&_t, \0".as_ptr());
+            self.out.puts(b"(const char *)\0".as_ptr());
+            unsafe { self.emit_expr(key, locals) };
+            self.out.puts(b".p, \0".as_ptr());
+            unsafe { self.emit_expr(key, locals) };
+            self.out.puts(b".n); _t; })\0".as_ptr());
+            return;
+        }
+        unsafe { self.emit_expr(key, locals) };
+    }
+
+    /* The next let-else temp spelling: __rsx_le<N> — written into
+     * le_name/le_name_len (NUL'd) and returned as an arena span; callers
+     * emit the name several times (decl, test, payload copy). Per-fn
+     * unique via le_ctr: two let-elses in one C scope redeclare the
+     * shared __rsx_le and tcc refuses the unit. */
+    unsafe fn le_temp(&mut self) -> *const u8 {
+        let mut at = unsafe { bput(self.le_name.as_mut_ptr(), 24, 0, b"__rsx_le\0".as_ptr(), 8) };
+        let mut num = self.le_ctr;
+        self.le_ctr += 1;
+        let digs = self.arena_tmp();
+        let mut di = 0usize;
+        if num == 0 {
+            unsafe {
+                *digs.add(0) = b'0';
+            }
+            di = 1;
+        }
+        while num > 0 && di < 12 {
+            unsafe {
+                *digs.add(di) = b'0' + (num % 10) as u8;
+            }
+            num /= 10;
+            di += 1;
+        }
+        let mut dj = di;
+        while dj > 0 {
+            dj -= 1;
+            at = unsafe { bput(self.le_name.as_mut_ptr(), 24, at, digs.add(dj), 1) };
+        }
+        unsafe {
+            *self.le_name.as_mut_ptr().add(at) = 0;
+        }
+        self.le_name_len = at;
+        self.le_name.as_ptr()
     }
 
     /* Stable scratch for spellings that OUTLIVE the probe that renders
@@ -3236,6 +3427,20 @@ impl Lower {
                 let n2 = unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
                 return if n2 >= cap { 0 } else { n2 };
             }
+            /* env!("NAME") — the getenv probe macro types as the C str
+             * pointer (the runtime fill's view; .to_string() lowers the
+             * same borrow the literal string plane takes). */
+            {
+                let mut en: *const u8 = core::ptr::null();
+                let mut enl: usize = 0;
+                if unsafe { self.env_macro_name((*e).text, (*e).text_len, &mut en, &mut enl) }
+                    != 0
+                {
+                    self.env_used = true;
+                    let n3 = unsafe { zput(out, cap, 0, b"const char *\0".as_ptr()) };
+                    return if n3 >= cap { 0 } else { n3 };
+                }
+            }
             return 0;
         }
         if kind == pm_jit_rsx_ast_kind::CAST {
@@ -3718,6 +3923,17 @@ impl Lower {
                         let wl0 = unsafe { (*wrap0).text_len };
                         if unsafe { z_eq(lt0, ll0, b"leak\0".as_ptr()) }
                             && unsafe { z_eq(wt0, wl0, b"Box\0".as_ptr()) }
+                        {
+                            let n0 = unsafe { zput(out, cap, 0, b"rsx_str_ref_t\0".as_ptr()) };
+                            return if n0 >= cap { 0 } else { n0 };
+                        }
+                        /* `Path::new(s)` / `std::path::Path::new(s)` — a
+                         * path view IS the str view in this subset: the
+                         * identity borrow, the same fat pair. The wrap is
+                         * `Path` (or any qualified spelling's leaf-1:
+                         * std::path::Path::new — Path sits one before). */
+                        if unsafe { z_eq(lt0, ll0, b"new\0".as_ptr()) }
+                            && unsafe { z_eq(wt0, wl0, b"Path\0".as_ptr()) }
                         {
                             let n0 = unsafe { zput(out, cap, 0, b"rsx_str_ref_t\0".as_ptr()) };
                             return if n0 >= cap { 0 } else { n0 };
@@ -4814,7 +5030,7 @@ impl Lower {
                     /* plain binding arms on a fat scrutinee (&str, &[T],
                      * String, Vec rows): register the bind with the
                      * scrutinee's type before anything returns — arm bodies
-                     * (and downstream lets) type against the bind. */
+  4820|                     * (and downstream lets) type against the bind. */
                     {
                         let fat_is = (scn == 13
                             && unsafe { z_eq(sct, 13, b"rsx_str_ref_t\0".as_ptr()) })
@@ -4864,10 +5080,75 @@ impl Lower {
                      * or the bound `other`) — the value is the fat ref
                      * regardless of which arm's body types first (a bare
                      * literal would type as const char *, the wrong shape
-                     * for String::from/format! consumers). */
+                     * for String::from/format! consumers). Arms whose body
+                     * is NOT a str literal/view (a const-pattern dispatch
+                     * like `FACE_X => opt_h`) type from that body — the
+                     * match is a VALUE switch, not a str selection. */
                     if scn == 13 && unsafe { z_eq(sct, 13, b"rsx_str_ref_t\0".as_ptr()) } {
-                        self.str_ref_used = true;
-                        return unsafe { zput(out, cap, 0, b"rsx_str_ref_t\0".as_ptr()) };
+                        let mut all_str = true;
+                        {
+                            let kids2 = unsafe { (*e).kids };
+                            let nk2 = unsafe { (*e).n_kids } as usize;
+                            let mut i3 = 1usize;
+                            while i3 < nk2 {
+                                let arm3 = unsafe { *kids2.add(i3) };
+                                if unsafe { (*arm3).kind } == pm_jit_rsx_ast_kind::MATCH_ARM
+                                    && unsafe { (*arm3).n_kids } as usize >= 2
+                                {
+                                    let ak3 = unsafe { (*arm3).kids };
+                                    let body3 = unsafe { *ak3.add(1) };
+                                    let tb = self.stable_tmp();
+                                    let save_ok = self.ok;
+                                    let save_nerrs = self.nerrs;
+                                    self.ok = true;
+                                    let tn3 = unsafe { self.expr_ctype(body3, tb, 128, locals) };
+                                    self.ok = save_ok;
+                                    self.nerrs = save_nerrs;
+                                    /* str-ish: the fat ref, a str LITERAL
+                                     * body (types const char * — the
+                                     * same shape String::from/format!
+                                     * consumers take), or a char* view
+                                     * of the same bytes. A literal arm
+                                     * is the common spelling; treating
+                                     * it as "non-str" here mis-typed
+                                     * the whole match const char * and
+                                     * the bind's String::from(rust)
+                                     * refused downstream. */
+                                    let is_lit_str3 = unsafe { (*body3).kind }
+                                        == pm_jit_rsx_ast_kind::LITERAL
+                                        && !unsafe { (*body3).text }.is_null()
+                                        && unsafe { *(*body3).text } == b'"';
+                                    let is_strish = is_lit_str3
+                                        || (tn3 == 13
+                                            && unsafe { z_eq(tb, 13, b"rsx_str_ref_t\0".as_ptr()) })
+                                        || (tn3 == 12
+                                            && unsafe { z_eq(tb, 12, b"const char *\0".as_ptr()) });
+                                    if !is_strish {
+                                        all_str = false;
+                                        /* this arm's body type is the
+                                         * match's type (the first typed,
+                                         * non-str arm — const dispatch
+                                         * arms share one payload type) */
+                                        if tn3 > 0 && tn3 < 128 {
+                                            let at3 = unsafe { bput(out, cap, 0, tb, tn3) };
+                                            unsafe {
+                                                if at3 < cap {
+                                                    *out.add(at3) = 0;
+                                                } else if cap > 0 {
+                                                    *out.add(cap - 1) = 0;
+                                                }
+                                            }
+                                            return if at3 >= cap { 0 } else { at3 };
+                                        }
+                                    }
+                                }
+                                i3 += 1;
+                            }
+                        }
+                        if all_str {
+                            self.str_ref_used = true;
+                            return unsafe { zput(out, cap, 0, b"rsx_str_ref_t\0".as_ptr()) };
+                        }
                     }
                     let mut elem_buf: [u8; 96] = [0; 96];
                     let mut elem_len = 0usize;
@@ -4999,14 +5280,19 @@ impl Lower {
              * branch (core::ptr::null_mut() rendered generically) is only a
              * LAST resort: the other arm of `cond ? null_mut() : typed`
              * carries the real pointee, and the let must be typed by it or
-             * every later deref is a void operation. */
+             * every later deref is a void operation. A `const char *`
+             * branch (a "" literal) defers the same way: the other arm
+             * may carry the fat ref (`rsx_str_ref_t`), and a &str let
+             * must take that — `dir = s` with dir a char* is a struct
+             * conversion C refuses. */
             let kids = unsafe { (*e).kids };
             let nk = unsafe { (*e).n_kids } as usize;
             if nk < 2 {
                 return 0;
             }
-            let mut void_at = 0usize;
             let mut void_len = 0usize;
+            let mut charp_at = 0usize;
+            let mut charp_len = 0usize;
             let mut ti = 1usize;
             while ti < nk && ti < 3 {
                 let br = self.block_tail_node(unsafe { *kids.add(ti) });
@@ -5015,7 +5301,14 @@ impl Lower {
                     if n == 6 && unsafe { z_eq(out, n, b"void *\0".as_ptr()) } {
                         if void_len == 0 {
                             void_len = n;
-                            void_at = ti;
+                        }
+                        ti += 1;
+                        continue;
+                    }
+                    if n == 12 && unsafe { z_eq(out, n, b"const char *\0".as_ptr()) } {
+                        if charp_len == 0 {
+                            charp_len = n;
+                            charp_at = ti;
                         }
                         ti += 1;
                         continue;
@@ -5023,6 +5316,11 @@ impl Lower {
                     return n;
                 }
                 ti += 1;
+            }
+            if charp_len > 0 {
+                /* both arms plain char*: keep it (a C string either way) */
+                let n2 = unsafe { zput(out, cap, 0, b"const char *\0".as_ptr()) };
+                return if n2 >= cap { 0 } else { n2 };
             }
             if void_len > 0 {
                 let n2 = unsafe { zput(out, cap, 0, b"void *\0".as_ptr()) };
@@ -5159,6 +5457,48 @@ impl Lower {
                                 }
                             }
                         }
+                    }
+                }
+                /* `.pop()` on a Vec row: Option<elem> — the struct-shaped
+                 * row with the Vec's element payload (the emission is the
+                 * statement expr that hands back the tail element). */
+                if mlen == 3 && unsafe { z_eq(mname, mlen, b"pop\0".as_ptr()) } {
+                    let args_node = unsafe { *kids.add(2) };
+                    let argsn = unsafe { (*args_node).n_kids } as usize;
+                    if argsn == 0 {
+                    let recv = unsafe { *kids.add(0) };
+                    let rb = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(recv, rb, 128, locals) };
+                    if rl > 8
+                        && rl < 128
+                        && unsafe { z_eq(rb, 8, b"rsx_vec_\0".as_ptr()) }
+                    {
+                        let vs = unsafe { self.vecs.find_by_name(rb, rl) };
+                        if vs < VEC_CAP {
+                            let el = self.vecs.elem_lens[vs];
+                            let eb = self.vecs.elems[vs].as_ptr();
+                            if el > 0 && el < 96 {
+                                let slot = unsafe { self.opt_add(eb, el) };
+                                if slot < OPT_CAP {
+                                    let tdn = self.arena_tmp();
+                                    let tdn_len = unsafe {
+                                        Lower::opt_typedef_name(eb, el, tdn, 160)
+                                    };
+                                    if tdn_len > 0 && tdn_len < cap {
+                                        let at = unsafe { bput(out, cap, 0, tdn, tdn_len) };
+                                        unsafe {
+                                            if at < cap {
+                                                *out.add(at) = 0;
+                                            } else if cap > 0 {
+                                                *out.add(cap - 1) = 0;
+                                            }
+                                        }
+                                        return if at >= cap { 0 } else { at };
+                                    }
+                                }
+                            }
+                        }
+                    }
                     }
                 }
                 /* `X.iter().map(|x| body).collect()` — the map-collect
@@ -5485,6 +5825,27 @@ impl Lower {
                                 }
                             }
                         }
+                    }
+                }
+                /* `Path::join(arg)` on a path-shaped receiver (&Path
+                 * view rsx_str_ref_t, or an owned String): one owned
+                 * String — the joined path. Arms both string planes
+                 * (the emission appends under the same rules). */
+                if mlen == 4
+                    && unsafe { z_eq(mname, mlen, b"join\0".as_ptr()) }
+                    && (unsafe { (*e).n_kids } as usize) >= 3
+                    && (unsafe { (*(*kids.add(2))).n_kids } as usize) == 1
+                {
+                    let rbuf = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                    let is_view = rl == 13
+                        && unsafe { z_eq(rbuf, 13, b"rsx_str_ref_t\0".as_ptr()) };
+                    let is_own = rl == 9 && unsafe { z_eq(rbuf, 9, b"rsx_str_t\0".as_ptr()) };
+                    if is_view || is_own {
+                        self.str_ref_used = true;
+                        self.str_own_used = true;
+                        let n2 = unsafe { zput(out, cap, 0, b"rsx_str_t\0".as_ptr()) };
+                        return if n2 >= cap { 0 } else { n2 };
                     }
                 }
                 /* ---- &str view methods (receiver rsx_str_ref_t) ----
@@ -6453,6 +6814,53 @@ impl Lower {
                         return if at >= cap { 0 } else { at };
                     }
                 }
+                /* Path metadata on a path-shaped receiver (&Path/&str
+                 * view rsx_str_ref_t, or an owned String): one bool —
+                 * is_dir()/is_file()/exists() are the S_ISDIR/S_ISREG/
+                 * stat-success tests. Arms the stat include here (the
+                 * let-typing pass may run before emission). */
+                if !user_method
+                    && an2b == 0
+                    && (unsafe { z_eq(mname, mlen, b"is_dir\0".as_ptr()) }
+                        || unsafe { z_eq(mname, mlen, b"is_file\0".as_ptr()) }
+                        || unsafe { z_eq(mname, mlen, b"exists\0".as_ptr()) })
+                {
+                    let rbuf = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                    let is_view =
+                        rl == 13 && unsafe { z_eq(rbuf, 13, b"rsx_str_ref_t\0".as_ptr()) };
+                    let is_own = rl == 9 && unsafe { z_eq(rbuf, 9, b"rsx_str_t\0".as_ptr()) };
+                    if is_view || is_own {
+                        self.stat_used = true;
+                        let at = unsafe { bput(out, cap, 0, b"bool\0".as_ptr(), 4) };
+                        unsafe {
+                            if at < cap {
+                                *out.add(at) = 0;
+                            } else if cap > 0 {
+                                *out.add(cap - 1) = 0;
+                            }
+                        }
+                        return if at >= cap { 0 } else { at };
+                    }
+                }
+                /* `.as_path()` — the identity borrow: &Path -> &Path.
+                 * The receiver's own type either way (the emission
+                 * parenthesizes the receiver). */
+                if !user_method && an2b == 0 && unsafe { z_eq(mname, mlen, b"as_path\0".as_ptr()) } {
+                    let rbuf = self.arena_tmp();
+                    let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                    if rl == 13 && unsafe { z_eq(rbuf, 13, b"rsx_str_ref_t\0".as_ptr()) } {
+                        let at = unsafe { bput(out, cap, 0, rbuf, rl) };
+                        unsafe {
+                            if at < cap {
+                                *out.add(at) = 0;
+                            } else if cap > 0 {
+                                *out.add(cap - 1) = 0;
+                            }
+                        }
+                        return if at >= cap { 0 } else { at };
+                    }
+                }
                 /* `.get()` on a transparent newtype/UnsafeCell — Rust's
                  * `UnsafeCell::get()` returns `*mut T`; in C the receiver IS
                  * the value, so the result type is a pointer to it. */
@@ -6487,10 +6895,14 @@ impl Lower {
                 /* `.div_ceil(d)` / `.unwrap_or(x)` keep the receiver's
                  * integer type (position's unwrap_or is size_t either way).
                  * An Option receiver's unwrap_or is the PAYLOAD — decode
-                 * the rsx_opt_<elem> name back to the elem spelling. */
+                 * the rsx_opt_<elem> name back to the elem spelling.
+                 * `.unwrap_or_else(|| ..)` is the same payload select (the
+                 * default is the closure's body value), so it types the
+                 * same way. */
                 if !user_method
                     && (unsafe { z_eq(mname, mlen, b"div_ceil\0".as_ptr()) }
-                        || unsafe { z_eq(mname, mlen, b"unwrap_or\0".as_ptr()) })
+                        || unsafe { z_eq(mname, mlen, b"unwrap_or\0".as_ptr()) }
+                        || unsafe { z_eq(mname, mlen, b"unwrap_or_else\0".as_ptr()) })
                 {
                     let rbuf = self.arena_tmp();
                     let rl = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };

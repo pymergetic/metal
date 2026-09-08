@@ -363,6 +363,28 @@ unsafe fn z_eq(p: *const u8, n: usize, z: *const u8) -> bool {
     }
 }
 
+/* The print-family macro's `name!(` byte length at the head of a MACRO
+ * span (0 when the span is not print-family): the MACRO_INVOC token
+ * text is `ident!` + the balanced group, so the peek matches through
+ * the `!` and the open delimiter. println!( is 9, eprintln!( is 10,
+ * print!( is 7, eprint!( is 8. format! is NOT print-family (its scan
+ * caller defaults to its own 8). */
+unsafe fn sl_peek_print_len(p: *const u8, n: usize) -> usize {
+    if n >= 9 && unsafe { z_eq(p, 9, b"println!(\0".as_ptr()) } {
+        return 9;
+    }
+    if n >= 10 && unsafe { z_eq(p, 10, b"eprintln!(\0".as_ptr()) } {
+        return 10;
+    }
+    if n >= 7 && unsafe { z_eq(p, 7, b"print!(\0".as_ptr()) } {
+        return 7;
+    }
+    if n >= 8 && unsafe { z_eq(p, 8, b"eprint!(\0".as_ptr()) } {
+        return 8;
+    }
+    0
+}
+
 /* Does a block's control flow never fall off the end? let-else's flat
  * lowering is only sound when the else-block diverges (return/break/
  * continue as its last statement, or a nested block/stmt wrapper that

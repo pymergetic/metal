@@ -843,6 +843,33 @@ impl Lower {
         }
     }
 
+    /* True when a C type name (NUL-terminated) is an aggregate — an
+     * rsx_* composite (str, vec, arr, opt, res, btm, tuple) or a named
+     * struct from SymTab. Aggregates initialize with {0}; scalars (and
+     * pointers) with 0. `._e = 0` against a struct _e is invalid C —
+     * tcc reports it as a misleading field-not-found. */
+    unsafe fn ctype_is_aggregate(ct: *const u8, n: usize) -> bool {
+        if ct.is_null() || n == 0 {
+            return false;
+        }
+        if n >= 8 && unsafe { z_eq(ct, 8, b"rsx_str_\0".as_ptr()) } {
+            return true; /* rsx_str_t, rsx_str_ref_t */
+        }
+        if n >= 8
+            && (unsafe { z_eq(ct, 8, b"rsx_vec_\0".as_ptr()) }
+                || unsafe { z_eq(ct, 8, b"rsx_arr_\0".as_ptr()) }
+                || unsafe { z_eq(ct, 8, b"rsx_opt_\0".as_ptr()) }
+                || unsafe { z_eq(ct, 8, b"rsx_res_\0".as_ptr()) }
+                || unsafe { z_eq(ct, 8, b"rsx_btm_\0".as_ptr()) })
+        {
+            return true;
+        }
+        if n >= 10 && unsafe { z_eq(ct, 10, b"rsx_tuple_\0".as_ptr()) } {
+            return true;
+        }
+        false
+    }
+
     /* `<raw_len>e<2*raw_len lowercase hex digits>` — the canonical
      * injective byte encoding of one payload type. Every raw byte maps to
      * exactly two identifier-safe hex digits, so distinct payloads encode

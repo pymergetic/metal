@@ -2487,13 +2487,19 @@ static char *rs_splice(pm_util_mem_arena_t *arena, const char *fqn,
     {
         /* debug tap (never on by default): RSX_DUMP_SPLICE=<path> writes
          * the spliced source — splice-divergence hunts. Host/unix only:
-         * the firmware seats have no getenv/fopen in their libc shims. */
-        const char *tap = getenv("RSX_DUMP_SPLICE");
-        if (tap != NULL) {
-            FILE *o = fopen(tap, "wb");
-            if (o != NULL) {
-                fwrite(buf, 1u, len, o);
-                fclose(o);
+         * the firmware seats have no getenv/fopen in their libc shims.
+         * RSX_DUMP_SPLICE_FQN=<fqn> filters to one card (the sweep
+         * overwrites the file per unit otherwise). */
+        {
+            const char *tap = getenv("RSX_DUMP_SPLICE");
+            const char *tap_fqn = getenv("RSX_DUMP_SPLICE_FQN");
+            if (tap != NULL
+                && (tap_fqn == NULL || strcmp(tap_fqn, fqn) == 0)) {
+                FILE *o = fopen(tap, "wb");
+                if (o != NULL) {
+                    fwrite(buf, 1u, len, o);
+                    fclose(o);
+                }
             }
         }
     }
@@ -2526,6 +2532,27 @@ static int32_t unit_source_compile(pm_util_mem_arena_t *arena,
             if (spliced == NULL) {
                 return PM_METAL_BUILD_ERR_COMPILE;
             }
+#if !defined(PM_METAL_FIRMWARE)
+            {
+                /* debug tap (never on by default): RSX_SPLICE_OUT=<path>
+                 * writes this unit's spliced Rust — line-number mapping
+                 * between a refusal's unit line and the authored faces.
+                 * Host/unix only: the firmware libc shims have no
+                 * getenv/fopen. */
+                const char *tap = getenv("RSX_SPLICE_OUT");
+                const char *tap_fqn = getenv("RSX_SPLICE_FQN");
+                if (tap != NULL && rel != NULL
+                    && (tap_fqn == NULL
+                        || strcmp(tap_fqn, fqn) == 0)
+                    && (strstr(rel, ".rs") != NULL)) {
+                    FILE *o = fopen(tap, "wb");
+                    if (o != NULL) {
+                        fwrite(spliced, 1u, strlen(spliced), o);
+                        fclose(o);
+                    }
+                }
+            }
+#endif
             if (pm_metal_jit_rsx_compile(arena, spliced, strlen(spliced),
                     &transpiled, &transpiled_len, errbuf, errbuf_len) != 0) {
                 pm_util_mem_free(arena, spliced);
@@ -2545,9 +2572,11 @@ static int32_t unit_source_compile(pm_util_mem_arena_t *arena,
                  * SPAN_OUT. Host/unix only: the firmware libc shims have
                  * no getenv/fopen. */
                 const char *tap = getenv("RSX_DUMP_UNIT");
+                const char *tap_fqn = getenv("RSX_DUMP_UNIT_FQN");
                 if (tap != NULL && rel != NULL
-                    && (strstr(rel, "__impl__.rs") != NULL
-                        || strstr(rel, "__flat__.rs") != NULL)) {
+                    && (tap_fqn == NULL
+                        || strcmp(tap_fqn, fqn) == 0)
+                    && (strstr(rel, ".rs") != NULL)) {
                     FILE *o = fopen(tap, "wb");
                     if (o != NULL) {
                         fwrite(transpiled, 1u, transpiled_len, o);

@@ -511,13 +511,19 @@ impl Lower {
                 return;
             }
             unsafe { self.res_emit_rest() };
+            let le = unsafe { self.le_temp() };
+            let le_len = self.le_name_len;
             self.indent();
             self.out.put(ct, ct_len);
-            self.out.puts(b" __rsx_le = \0".as_ptr());
+            self.out.putc(b' ');
+            self.out.put(le, le_len);
+            self.out.puts(b" = \0".as_ptr());
             unsafe { self.emit_expr(init, locals) };
             self.out.puts(b";\n\0".as_ptr());
             self.indent();
-            self.out.puts(b"if (!__rsx_le._ok) {\n\0".as_ptr());
+            self.out.puts(b"if (!\0".as_ptr());
+            self.out.put(le, le_len);
+            self.out.puts(b"._ok) {\n\0".as_ptr());
             self.depth += 1;
             unsafe { self.emit_block_stmt(els, locals) };
             self.depth -= 1;
@@ -527,7 +533,9 @@ impl Lower {
             self.out.put(ob, on);
             self.out.putc(b' ');
             self.out.put(bname, blen);
-            self.out.puts(b" = __rsx_le._v;\n\0".as_ptr());
+            self.out.puts(b" = \0".as_ptr());
+            self.out.put(le, le_len);
+            self.out.puts(b"._v;\n\0".as_ptr());
             unsafe {
                 (*locals).add(bname, blen, ob, on, self.depth);
             }
@@ -559,13 +567,19 @@ impl Lower {
              * all the order the language needs) */
             unsafe { self.fnp_emit_rest() };
             unsafe { self.opt_emit_rest(0) };
+            let le = unsafe { self.le_temp() };
+            let le_len = self.le_name_len;
             self.indent();
             self.out.put(ct, ct_len);
-            self.out.puts(b" __rsx_le = \0".as_ptr());
+            self.out.putc(b' ');
+            self.out.put(le, le_len);
+            self.out.puts(b" = \0".as_ptr());
             unsafe { self.emit_expr(init, locals) };
             self.out.puts(b";\n\0".as_ptr());
             self.indent();
-            self.out.puts(b"if (!__rsx_le._has) {\n\0".as_ptr());
+            self.out.puts(b"if (!\0".as_ptr());
+            self.out.put(le, le_len);
+            self.out.puts(b"._has) {\n\0".as_ptr());
             self.depth += 1;
             unsafe { self.emit_block_stmt(els, locals) };
             self.depth -= 1;
@@ -575,13 +589,15 @@ impl Lower {
                 /* Option-of-tuple: cur_opt_elem drives the shared destructure */
                 unsafe { core::ptr::copy_nonoverlapping(elbuf, self.cur_opt_elem.as_mut_ptr(), eln) };
                 self.cur_opt_elem_len = eln;
-                unsafe { self.emit_some_binds(bind, b"__rsx_le\0".as_ptr(), 8, ct, ct_len, locals) };
+                unsafe { self.emit_some_binds(bind, le, le_len, ct, ct_len, locals) };
             } else {
                 self.indent();
                 self.out.put(elbuf, eln);
                 self.out.putc(b' ');
                 self.out.put(bname, blen);
-                self.out.puts(b" = __rsx_le._v;\n\0".as_ptr());
+                self.out.puts(b" = \0".as_ptr());
+                self.out.put(le, le_len);
+                self.out.puts(b"._v;\n\0".as_ptr());
                 unsafe {
                     (*locals).add(bname, blen, elbuf, eln, self.depth);
                 }
@@ -1531,9 +1547,16 @@ impl Lower {
             init = unsafe { *(*init).kids.add(0) };
         }
         /* `_`-binding: the *binding* is dropped, but the initializer still
-         * runs for side effects (registration calls, reserved values). */
+         * runs for side effects (registration calls, reserved values).
+         * A TUPLE init is pure value assembly — no side effects to keep,
+         * and its emission interns a row the discarded compound literal
+         * would name before its typedef lands (`let _ = (a, b);`). A
+         * tuple statement has no effect in C either, so the whole let
+         * drops. */
         if !have_name || (name_len == 1 && unsafe { z_eq(name, 1, b"_\0".as_ptr()) } && ty.is_null()) {
-            if !init.is_null() {
+            let is_pure_tuple = !init.is_null()
+                && unsafe { (*init).kind } == pm_jit_rsx_ast_kind::TUPLE;
+            if !init.is_null() && !is_pure_tuple {
                 unsafe { self.emit_expr(init, locals) };
                 self.out.puts(b";\0".as_ptr());
             }
@@ -2441,6 +2464,113 @@ impl Lower {
         self.out.puts(b" = \0".as_ptr());
         unsafe { self.emit_expr(scrut, locals) };
         self.out.puts(b";\n\0".as_ptr());
+        /* pre-declare guarded Some(bind) arms' binds BEFORE the chain: a
+         * guarded arm's guard types against the bind, but emitting the
+         * decl mid-chain (`else T b = ...; if`) is not C. One decl per
+         * arm (binds of distinct arms never clash — a match binds at
+         * most one arm; same-named binds across arms are shadowing the
+         * source level, one C decl serves both). */
+        {
+            let mut pi = 1usize;
+            while pi < nk {
+                let parm = unsafe { *kids.add(pi) };
+                let pak = unsafe { (*parm).kids };
+                let pank = unsafe { (*parm).n_kids } as usize;
+                /* guarded arms (explicit guard) always hoist; a let-chain
+                 * arm (2 kids + chain_guard) hoists too — its guard types
+                 * against the bind the same way. */
+                if pank >= 3 || (!chain_guard.is_null() && pank >= 2) {
+                    let ppat = unsafe { *pak.add(0) };
+                    if unsafe { (*ppat).kind } == pm_jit_rsx_ast_kind::PATH {
+                        let ppk = unsafe { (*ppat).kids };
+                        let ppnk = unsafe { (*ppat).n_kids } as usize;
+                        if ppnk >= 2 {
+                            let phead = unsafe { *ppk.add(0) };
+                            let pbind = unsafe { *ppk.add(1) };
+                            if unsafe { (*phead).kind } == pm_jit_rsx_ast_kind::PATH
+                                && unsafe { z_eq(unsafe { (*phead).text }, unsafe { (*phead).text_len }, b"Some\0".as_ptr()) }
+                                && (unsafe { (*pbind).kind } == pm_jit_rsx_ast_kind::PATH
+                                    || unsafe { (*pbind).kind } == pm_jit_rsx_ast_kind::TUPLE)
+                            {
+                                /* dedup (PATH binds only): a same-named bind
+                                 * hoisted by an earlier arm is already
+                                 * declared — a second C decl would clash. */
+                                let mut already = false;
+                                if unsafe { (*pbind).kind } == pm_jit_rsx_ast_kind::PATH {
+                                    let bleaf = unsafe { *(*pbind).kids.add(0) };
+                                    let ob = self.arena_tmp();
+                                    already = unsafe {
+                                        (*locals).lookup(unsafe { (*bleaf).text }, unsafe { (*bleaf).text_len }, ob) > 0
+                                    };
+                                }
+                                if !already {
+                                    unsafe { self.emit_some_binds(pbind, temp, temp_len, ct, ct_len, locals) };
+                                }
+                            }
+                        }
+                        /* a guarded PLAIN bind arm (`s if s.starts_with(..)
+                         * => ..`) on a value-shaped scrutinee: the guard
+                         * types against the bind, so it must be declared
+                         * before the chain — same hoist, the value-copy
+                         * shape (T b = temp). A bare bind parses as the
+                         * "path" wrapper over one segment (or a bare
+                         * single-segment PATH); unwrap both. A unit-static
+                         * name is a const pattern, not a bind; scalars
+                         * stay bindless (not in the subset). */
+                        {
+                            let mut pbind2 = ppat;
+                            if ppnk == 1
+                                && unsafe { z_eq(unsafe { (*ppat).text }, unsafe { (*ppat).text_len }, b"path\0".as_ptr()) }
+                            {
+                                pbind2 = unsafe { *(*ppat).kids.add(0) };
+                            }
+                            let pb2nk = unsafe { (*pbind2).n_kids } as usize;
+                            if pb2nk == 0 {
+                                let ptl = unsafe { (*pbind2).text_len };
+                                let pt = unsafe { (*pbind2).text };
+                                let is_fat = ct_len == 13
+                                    && unsafe { z_eq(ct, 13, b"rsx_str_ref_t\0".as_ptr()) };
+                                let is_arr = ct_len > 8
+                                    && ct_len < 128
+                                    && unsafe { z_eq(ct, 8, b"rsx_arr_\0".as_ptr()) };
+                                let is_vec = ct_len > 8
+                                    && ct_len < 128
+                                    && unsafe { z_eq(ct, 8, b"rsx_vec_\0".as_ptr()) };
+                                let is_own = ct_len == 9
+                                    && unsafe { z_eq(ct, 9, b"rsx_str_t\0".as_ptr()) };
+                                let is_unit_static = {
+                                    let sb = self.arena_tmp();
+                                    let sl = unsafe { self.st_find(pt, ptl, sb, 128) };
+                                    sl > 0
+                                };
+                                if ptl > 0
+                                    && !pt.is_null()
+                                    && !is_unit_static
+                                    && !(ptl == 1 && unsafe { z_eq(pt, 1, b"_\0".as_ptr()) })
+                                    && (is_fat || is_arr || is_vec || is_own)
+                                {
+                                    let ob2 = self.arena_tmp();
+                                    let already2 = unsafe { (*locals).lookup(pt, ptl, ob2) > 0 };
+                                    if !already2 {
+                                        self.indent();
+                                        self.out.put(ct, ct_len);
+                                        self.out.putc(b' ');
+                                        self.out.put(pt, ptl);
+                                        self.out.puts(b" = \0".as_ptr());
+                                        self.out.put(temp, temp_len);
+                                        self.out.puts(b";\n\0".as_ptr());
+                                        unsafe {
+                                            (*locals).add(pt, ptl, ct, ct_len, self.depth + 1);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                pi += 1;
+            }
+        }
         let mut i = 1usize;
         let mut first = true;
         while i < nk {
@@ -2455,6 +2585,10 @@ impl Lower {
             /* arm kids: [pat, body] or [pat, guard, body] */
             let has_guard = ank >= 3;
             let body = unsafe { *ak.add(ank - 1) };
+            /* true when this arm's Some(bind) was pre-declared before
+             * the chain (a guarded Some arm): the chain path emits test +
+             * body, the bind is already in scope. */
+            let mut hoisted_bind = false;
             self.indent();
             if !first {
                 self.out.puts(b"else \0".as_ptr());
@@ -2496,6 +2630,15 @@ impl Lower {
                                 || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
                         {
                             some_bind = bind;
+                            if guarded
+                                && (unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
+                                    || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
+                            {
+                                hoisted_bind = true;
+                            }
+                            /* let-chain arms are `guarded` by chain_guard —
+                             * same hoist, same flag (the bind was already
+                             * declared before the chain). */
                         } else if (unsafe { z_eq(ht, hl, b"Ok\0".as_ptr()) }
                             || unsafe { z_eq(ht, hl, b"Err\0".as_ptr()) })
                             && unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
@@ -2589,40 +2732,10 @@ impl Lower {
                 i += 1;
                 continue;
             }
-            if guarded && !some_bind.is_null() {
-                /* scoped arm: { T b = temp._v; if (pat && guard) { body } } */
-                self.depth += 1;
-                unsafe { (*locals).note_scope() };
-                unsafe { self.emit_some_binds(some_bind, temp, temp_len, ct, ct_len, locals) };
-                self.indent();
-                if !is_wc {
-                    self.out.puts(b"if (\0".as_ptr());
-                    unsafe { self.emit_pat_test(pat, temp, temp_len, locals) };
-                    if has_guard {
-                        self.out.puts(b" && (\0".as_ptr());
-                        unsafe { self.emit_expr(*ak.add(1), locals) };
-                        self.out.puts(b")\0".as_ptr());
-                    } else if !chain_guard.is_null() {
-                        self.out.puts(b" && (\0".as_ptr());
-                        unsafe { self.emit_expr(chain_guard, locals) };
-                        self.out.puts(b")\0".as_ptr());
-                    }
-                    self.out.puts(b") {\n\0".as_ptr());
-                } else {
-                    self.out.puts(b"{\n\0".as_ptr());
-                }
-                self.depth += 1;
-                unsafe { (*locals).note_scope() };
-                unsafe { self.emit_block_stmt(body, locals) };
-                unsafe { (*locals).drop_scope() };
-                self.depth -= 1;
-                self.indent();
-                self.out.puts(b"}\n\0".as_ptr());
-                unsafe { (*locals).drop_scope() };
-                self.depth -= 1;
-                i += 1;
-                continue;
-            }
+            /* guarded Some(bind) arms had their binds pre-declared above
+             * (hoisted_bind == true): fall through to the normal chain
+             * path — the test + body emit there, the bind is already in
+             * scope, and the else-chain stays one C statement. */
             let eff_guard: *const pm_jit_rsx_ast_t = if has_guard {
                 unsafe { *ak.add(1) }
             } else {
@@ -2650,8 +2763,10 @@ impl Lower {
             }
             self.out.puts(b"{\n\0".as_ptr());
             /* Some(bind) on an unguarded arm: declare the bind inside the
-             * arm's braces (the C if scope) — shadowing stays legal. */
-            if !some_bind.is_null() {
+             * arm's braces (the C if scope) — shadowing stays legal.
+             * Hoisted (guarded) arms skip: their bind was declared before
+             * the chain. */
+            if !some_bind.is_null() && !hoisted_bind {
                 unsafe { (*locals).note_scope() };
                 unsafe { self.emit_some_binds(some_bind, temp, temp_len, ct, ct_len, locals) };
             }
@@ -2710,22 +2825,45 @@ impl Lower {
                     && ct_len < 128
                     && unsafe { z_eq(ct, 8, b"rsx_vec_\0".as_ptr()) };
                 let is_own = ct_len == 9 && unsafe { z_eq(ct, 9, b"rsx_str_t\0".as_ptr()) };
+                /* a single-segment name that IS a unit static (a `pub
+                 * const X: &str`) is a CONST PATTERN, not a binding —
+                 * emit_pat_test compares against the value; declaring it
+                 * here would shadow the C static with a local. */
+                let is_unit_static = {
+                    let sb = self.arena_tmp();
+                    let sl = unsafe { self.st_find(pt, ptl, sb, 128) };
+                    sl > 0
+                };
                 if pnk == 0
                     && ptl > 0
                     && !pt.is_null()
+                    && !is_unit_static
                     && !(ptl == 1 && unsafe { z_eq(pt, 1, b"_\0".as_ptr()) })
                     && !(ptl == 4 && unsafe { z_eq(pt, 4, b"None\0".as_ptr()) })
                     && (is_fat || is_arr || is_vec || is_own)
                 {
-                    self.indent();
-                    self.out.put(ct, ct_len);
-                    self.out.putc(b' ');
-                    self.out.put(pt, ptl);
-                    self.out.puts(b" = \0".as_ptr());
-                    self.out.put(temp, temp_len);
-                    self.out.puts(b";\n\0".as_ptr());
-                    unsafe {
-                        (*locals).add(pt, ptl, ct, ct_len, self.depth);
+                    /* a guarded arm already hoisted this bind before the
+                     * chain — skip the second decl (the arm's braces open
+                     * a C scope where a re-decl would shadow, which C
+                     * allows, but the hoist is the one in scope for the
+                     * body either way; emitting both is noise). */
+                    let ob3 = self.arena_tmp();
+                    let already3 = if guarded {
+                        unsafe { (*locals).lookup(pt, ptl, ob3) > 0 }
+                    } else {
+                        false
+                    };
+                    if !already3 {
+                        self.indent();
+                        self.out.put(ct, ct_len);
+                        self.out.putc(b' ');
+                        self.out.put(pt, ptl);
+                        self.out.puts(b" = \0".as_ptr());
+                        self.out.put(temp, temp_len);
+                        self.out.puts(b";\n\0".as_ptr());
+                        unsafe {
+                            (*locals).add(pt, ptl, ct, ct_len, self.depth);
+                        }
                     }
                 }
             }
@@ -2850,6 +2988,12 @@ impl Lower {
     ) {
         if unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH && unsafe { (*bind).n_kids } >= 1 {
             let bleaf = unsafe { *(*bind).kids.add(0) };
+            /* `_` bind: no declaration (a C ident named _ is not valid) */
+            if unsafe { (*bleaf).text_len == 1 }
+                && unsafe { z_eq(unsafe { (*bleaf).text }, 1, b"_\0".as_ptr()) }
+            {
+                return;
+            }
             self.indent();
             let mut bct: *const u8 = ct;
             let mut bct_len = ct_len;
@@ -3102,6 +3246,112 @@ impl Lower {
         self.out.puts(b" = \0".as_ptr());
         unsafe { self.emit_expr(scrut, locals) };
         self.out.puts(b";\n\0".as_ptr());
+        /* pre-declare guarded Some(bind) arms' binds BEFORE the chain
+         * (see emit_match): a decl mid-chain (`else T b = ..; if`) is
+         * not C, so guarded Some arms hoist their bind. */
+        {
+            let mut pi = 1usize;
+            while pi < nk {
+                let parm = unsafe { *kids.add(pi) };
+                let pak = unsafe { (*parm).kids };
+                let pank = unsafe { (*parm).n_kids } as usize;
+                /* guarded arms (explicit guard) always hoist; a let-chain
+                 * arm (2 kids + chain_guard) hoists too — its guard types
+                 * against the bind the same way. */
+                if pank >= 3 || (!chain_guard.is_null() && pank >= 2) {
+                    let ppat = unsafe { *pak.add(0) };
+                    if unsafe { (*ppat).kind } == pm_jit_rsx_ast_kind::PATH {
+                        let ppk = unsafe { (*ppat).kids };
+                        let ppnk = unsafe { (*ppat).n_kids } as usize;
+                        if ppnk >= 2 {
+                            let phead = unsafe { *ppk.add(0) };
+                            let pbind = unsafe { *ppk.add(1) };
+                            if unsafe { (*phead).kind } == pm_jit_rsx_ast_kind::PATH
+                                && unsafe { z_eq(unsafe { (*phead).text }, unsafe { (*phead).text_len }, b"Some\0".as_ptr()) }
+                                && (unsafe { (*pbind).kind } == pm_jit_rsx_ast_kind::PATH
+                                    || unsafe { (*pbind).kind } == pm_jit_rsx_ast_kind::TUPLE)
+                            {
+                                /* dedup (PATH binds only): a same-named bind
+                                 * hoisted by an earlier arm is already
+                                 * declared — a second C decl would clash. */
+                                let mut already = false;
+                                if unsafe { (*pbind).kind } == pm_jit_rsx_ast_kind::PATH {
+                                    let bleaf = unsafe { *(*pbind).kids.add(0) };
+                                    let ob = self.arena_tmp();
+                                    already = unsafe {
+                                        (*locals).lookup(unsafe { (*bleaf).text }, unsafe { (*bleaf).text_len }, ob) > 0
+                                    };
+                                }
+                                if !already {
+                                    unsafe { self.emit_some_binds(pbind, st, st_len, ct, ct_len, locals) };
+                                }
+                            }
+                        }
+                        /* a guarded PLAIN bind arm (`s if s.starts_with(..)
+                         * => ..`) on a value-shaped scrutinee: the guard
+                         * types against the bind, so it must be declared
+                         * before the chain — same hoist (T b = temp). A
+                         * bare bind parses as the "path" wrapper over one
+                         * segment; unwrap. A unit-static name is a const
+                         * pattern, not a bind; scalars stay bindless. */
+                        {
+                            let mut pbind2 = ppat;
+                            if ppnk == 1
+                                && unsafe { z_eq(unsafe { (*ppat).text }, unsafe { (*ppat).text_len }, b"path\0".as_ptr()) }
+                            {
+                                pbind2 = unsafe { *(*ppat).kids.add(0) };
+                            }
+                            let pb2nk = unsafe { (*pbind2).n_kids } as usize;
+                            if pb2nk == 0 {
+                                let ptl = unsafe { (*pbind2).text_len };
+                                let pt = unsafe { (*pbind2).text };
+                                let is_fat = ct_len == 13
+                                    && unsafe { z_eq(ct, 13, b"rsx_str_ref_t\0".as_ptr()) };
+                                let is_arr = ct_len > 8
+                                    && ct_len < 128
+                                    && unsafe { z_eq(ct, 8, b"rsx_arr_\0".as_ptr()) };
+                                let is_vec = ct_len > 8
+                                    && ct_len < 128
+                                    && unsafe { z_eq(ct, 8, b"rsx_vec_\0".as_ptr()) };
+                                let is_own = ct_len == 9
+                                    && unsafe { z_eq(ct, 9, b"rsx_str_t\0".as_ptr()) };
+                                let is_unit_static = {
+                                    let sb = self.arena_tmp();
+                                    let sl = unsafe { self.st_find(pt, ptl, sb, 128) };
+                                    sl > 0
+                                };
+                                if ptl > 0
+                                    && !pt.is_null()
+                                    && !is_unit_static
+                                    && !(ptl == 1 && unsafe { z_eq(pt, 1, b"_\0".as_ptr()) })
+                                    && (is_fat || is_arr || is_vec || is_own)
+                                {
+                                    /* expr_ctype's MATCH pass pre-registered
+                                     * every plain-bind arm (type rows only —
+                                     * no C decl emitted), so the locals hit
+                                     * here is expected and NOT a duplicate:
+                                     * the guarded arm's guard needs the decl
+                                     * before the chain; unguarded arms
+                                     * re-declare inside their own block
+                                     * scope (legal C shadow). Always emit. */
+                                    self.indent();
+                                    self.out.put(ct, ct_len);
+                                    self.out.putc(b' ');
+                                    self.out.put(pt, ptl);
+                                    self.out.puts(b" = \0".as_ptr());
+                                    self.out.put(st, st_len);
+                                    self.out.puts(b";\n\0".as_ptr());
+                                    unsafe {
+                                        (*locals).add(pt, ptl, ct, ct_len, self.depth + 1);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                pi += 1;
+            }
+        }
         let mut i = 1usize;
         let mut first = true;
         while i < nk {
@@ -3116,6 +3366,10 @@ impl Lower {
             /* arm kids: [pat, body] or [pat, guard, body] */
             let has_guard = ank >= 3;
             let body = unsafe { *ak.add(ank - 1) };
+            /* true when this arm's Some(bind) was pre-declared before
+             * the chain (a guarded Some arm): the chain path emits test +
+             * body, the bind is already in scope. */
+            let mut hoisted_bind = false;
             self.indent();
             if !first {
                 self.out.puts(b"else \0".as_ptr());
@@ -3151,6 +3405,15 @@ impl Lower {
                                 || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
                         {
                             some_bind = bind;
+                            if guarded
+                                && (unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
+                                    || unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::TUPLE)
+                            {
+                                hoisted_bind = true;
+                            }
+                            /* let-chain arms are `guarded` by chain_guard —
+                             * same hoist, same flag (the bind was already
+                             * declared before the chain). */
                         } else if (unsafe { z_eq(ht, hl, b"Ok\0".as_ptr()) }
                             || unsafe { z_eq(ht, hl, b"Err\0".as_ptr()) })
                             && unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
@@ -3242,39 +3505,9 @@ impl Lower {
                 i += 1;
                 continue;
             }
-            if guarded && !some_bind.is_null() {
-                self.depth += 1;
-                unsafe { (*locals).note_scope() };
-                unsafe { self.emit_some_binds(some_bind, st, st_len, ct, ct_len, locals) };
-                self.indent();
-                if !is_wc {
-                    self.out.puts(b"if (\0".as_ptr());
-                    unsafe { self.emit_pat_test(pat, st, st_len, locals) };
-                    if has_guard {
-                        self.out.puts(b" && (\0".as_ptr());
-                        unsafe { self.emit_expr(*ak.add(1), locals) };
-                        self.out.puts(b")\0".as_ptr());
-                    } else if !chain_guard.is_null() {
-                        self.out.puts(b" && (\0".as_ptr());
-                        unsafe { self.emit_expr(chain_guard, locals) };
-                        self.out.puts(b")\0".as_ptr());
-                    }
-                    self.out.puts(b") {\n\0".as_ptr());
-                } else {
-                    self.out.puts(b"{\n\0".as_ptr());
-                }
-                self.depth += 1;
-                unsafe { (*locals).note_scope() };
-                unsafe { self.emit_block_value(body, locals, temp, temp_len) };
-                unsafe { (*locals).drop_scope() };
-                self.depth -= 1;
-                self.indent();
-                self.out.puts(b"}\n\0".as_ptr());
-                unsafe { (*locals).drop_scope() };
-                self.depth -= 1;
-                i += 1;
-                continue;
-            }
+            /* guarded Some(bind) arms had their binds pre-declared before
+             * the chain (the pre-scan above): fall through to the chain
+             * path — test + body emit there, bind already in scope. */
             if !is_wc || has_guard {
                 self.out.puts(b"if (\0".as_ptr());
                 if !is_wc {
@@ -3296,8 +3529,9 @@ impl Lower {
             }
             self.out.puts(b"{\n\0".as_ptr());
             /* Some(bind) on an unguarded arm: bind decl inside the arm
-             * braces — shadowing stays legal. */
-            if !some_bind.is_null() {
+             * braces — shadowing stays legal. Hoisted (guarded) arms
+             * skip: their bind was declared before the chain. */
+            if !some_bind.is_null() && !hoisted_bind {
                 unsafe { (*locals).note_scope() };
                 unsafe { self.emit_some_binds(some_bind, st, st_len, ct, ct_len, locals) };
             }
@@ -3425,25 +3659,46 @@ impl Lower {
                     && ct_len < 128
                     && unsafe { z_eq(ct, 8, b"rsx_vec_\0".as_ptr()) };
                 let is_own = ct_len == 9 && unsafe { z_eq(ct, 9, b"rsx_str_t\0".as_ptr()) };
+                /* a single-segment name that IS a unit static (a `pub
+                 * const X: &str`) is a CONST PATTERN, not a binding —
+                 * emit_pat_test compares against the value; declaring it
+                 * here would shadow the C static with a local. */
+                let is_unit_static = {
+                    let sb = self.arena_tmp();
+                    let sl = unsafe { self.st_find(pt, ptl, sb, 128) };
+                    sl > 0
+                };
                 if pnk == 0
                     && ptl > 0
                     && !pt.is_null()
+                    && !is_unit_static
                     && !(ptl == 1 && unsafe { z_eq(pt, 1, b"_\0".as_ptr()) })
                     && !(ptl == 4 && unsafe { z_eq(pt, 4, b"None\0".as_ptr()) })
                     && (is_fat || is_arr || is_vec || is_own)
                 {
-                    self.depth += 1;
-                    self.indent();
-                    self.out.put(ct, ct_len);
-                    self.out.putc(b' ');
-                    self.out.put(pt, ptl);
-                    self.out.puts(b" = \0".as_ptr());
-                    self.out.put(st, st_len);
-                    self.out.puts(b";\n\0".as_ptr());
-                    unsafe {
-                        (*locals).add(pt, ptl, ct, ct_len, self.depth);
+                    /* a guarded arm already hoisted this bind before the
+                     * chain — skip the second decl (same reasoning as
+                     * emit_match's plain-bind dedup). */
+                    let ob3 = self.arena_tmp();
+                    let already3 = if guarded {
+                        unsafe { (*locals).lookup(pt, ptl, ob3) > 0 }
+                    } else {
+                        false
+                    };
+                    if !already3 {
+                        self.depth += 1;
+                        self.indent();
+                        self.out.put(ct, ct_len);
+                        self.out.putc(b' ');
+                        self.out.put(pt, ptl);
+                        self.out.puts(b" = \0".as_ptr());
+                        self.out.put(st, st_len);
+                        self.out.puts(b";\n\0".as_ptr());
+                        unsafe {
+                            (*locals).add(pt, ptl, ct, ct_len, self.depth);
+                        }
+                        self.depth -= 1;
                     }
-                    self.depth -= 1;
                 }
             }
             self.depth += 1;
@@ -3828,8 +4083,41 @@ impl Lower {
                 return;
             }
             /* single-segment name in pattern position: enum variant with the
-             * enum elided (Rust allows it inside a match on that type) or a
-             * plain binding — match anything (binding). */
+             * enum elided (Rust allows it inside a match on that type), a
+             * plain binding (match anything), or a UNIT STATIC (`pub const
+             * X: &str`) — a const pattern comparing the static's VALUE. */
+            if nk == 0 && tl > 0 && !t.is_null() {
+                let sb = self.arena_tmp();
+                let sl = unsafe { self.st_find(t, tl, sb, 128) };
+                if sl > 0 {
+                    /* &str-typed const over an &str scrutinee: the view
+                     * compare (length + memcmp), the literal shape. */
+                    if sl == 13
+                        && unsafe { z_eq(sb, 13, b"rsx_str_ref_t\0".as_ptr()) }
+                        && self.cur_scrut_len == 13
+                        && unsafe { z_eq(self.cur_scrut.as_ptr(), 13, b"rsx_str_ref_t\0".as_ptr()) }
+                    {
+                        self.str_ref_used = true;
+                        self.out.putc(b'(');
+                        self.out.put(sv, sv_len);
+                        self.out.puts(b".n == \0".as_ptr());
+                        self.out.put(t, tl);
+                        self.out.puts(b".n && !memcmp(\0".as_ptr());
+                        self.out.put(sv, sv_len);
+                        self.out.puts(b".p, \0".as_ptr());
+                        self.out.put(t, tl);
+                        self.out.puts(b".p, \0".as_ptr());
+                        self.out.put(sv, sv_len);
+                        self.out.puts(b".n))\0".as_ptr());
+                        return;
+                    }
+                    /* scalar-typed const: the plain == */
+                    self.out.put(sv, sv_len);
+                    self.out.puts(b" == \0".as_ptr());
+                    self.out.put(t, tl);
+                    return;
+                }
+            }
             self.out.putc(b'1');
             return;
         }
@@ -4095,6 +4383,309 @@ impl Lower {
      * address, loop-body lifetime exactly as the source). Returns 1
      * when handled, 0 when the receiver is not a slice row (fall
      * through to the array/other paths). */
+    /* `for bind in [lit, lit, ...]` — an array literal of &str literals.
+     * Interned as an rsx_arr_ row over rsx_str_ref_t: a static const
+     * table at the loop head, then the shared .n/.p index loop. Only
+     * string literals ride this plane (the common `for s in ["a", "b"]`
+     * idiom); other element exprs refuse honestly below. */
+    unsafe fn try_emit_for_arr_literal(
+        &mut self,
+        s: *const pm_jit_rsx_ast_t,
+        pat: *const pm_jit_rsx_ast_t,
+        recv: *const pm_jit_rsx_ast_t,
+        body: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+    ) -> usize {
+        let kids = unsafe { (*recv).kids };
+        let nk = unsafe { (*recv).n_kids } as usize;
+        if nk == 0 || nk > 9 {
+            return 0;
+        }
+        /* every element must be a string literal (LITERAL starting '"') */
+        let mut k = 0usize;
+        while k < nk {
+            let e = unsafe { *kids.add(k) };
+            if unsafe { (*e).kind } != pm_jit_rsx_ast_kind::LITERAL {
+                return 0;
+            }
+            let tl = unsafe { (*e).text_len };
+            if tl < 2 || unsafe { *(*e).text } != b'"' {
+                return 0;
+            }
+            k += 1;
+        }
+        /* bind: PATH (unwrap the "path" wrapper) */
+        let mut bind = pat;
+        if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
+            && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+            && unsafe { (*pat).n_kids } as usize == 1
+        {
+            let seg = unsafe { *(*pat).kids.add(0) };
+            if unsafe { (*seg).kind } == pm_jit_rsx_ast_kind::PATH {
+                bind = seg;
+            }
+        }
+        if unsafe { (*bind).kind } != pm_jit_rsx_ast_kind::PATH {
+            return 0;
+        }
+        let vname = unsafe { (*bind).text };
+        let vlen = unsafe { (*bind).text_len };
+        /* intern the rsx_arr_ row over rsx_str_ref_t elements */
+        let row_slot = unsafe { self.arrs.intern(b"rsx_str_ref_t\0".as_ptr(), 13) };
+        if row_slot >= ARR_CAP {
+            unsafe {
+                self.err(b"internal: arr row overflow\0".as_ptr(), unsafe { (*s).line });
+            }
+            return 1;
+        }
+        let row = self.arena_tmp();
+        let row_len = unsafe { ArrTab::name_for(row_slot, row, 96) };
+        if row_len == 0 {
+            unsafe {
+                self.err(b"internal: arr row name\0".as_ptr(), unsafe { (*s).line });
+            }
+            return 1;
+        }
+        self.str_ref_used = true;
+        unsafe {
+            (*locals).add(vname, vlen, row, row_len, self.depth + 1);
+        }
+        let labeled = unsafe { Lower::loop_is_labeled(s) };
+        let lt = unsafe { (*s).text };
+        let ll = unsafe { (*s).text_len };
+        self.indent();
+        if labeled {
+            unsafe { self.put_lbl(lt, ll, b"_\0".as_ptr()) };
+            self.out.puts(b": \0".as_ptr());
+        }
+        /* static const table of {p, n} pairs — one per literal. The C
+         * byte length is the literal's own char count minus the quotes
+         * and escapes stay escapes (ASCII plane). */
+        self.out.puts(b"static const rsx_str_ref_t __rsx_al[\0".as_ptr());
+        {
+            let d = b'0' + nk as u8;
+            self.out.putc(d);
+        }
+        self.out.puts(b"] = {\0".as_ptr());
+        let mut i = 0usize;
+        while i < nk {
+            if i > 0 {
+                self.out.puts(b", \0".as_ptr());
+            }
+            self.out.puts(b"{ (const uint8_t *)\0".as_ptr());
+            let e = unsafe { *kids.add(i) };
+            /* emit the literal text whole (quotes included) — same
+             * pass-through emit_literal uses for strings */
+            self.out.put(unsafe { (*e).text }, unsafe { (*e).text_len });
+            self.out.puts(b", \0".as_ptr());
+            /* byte length: the quote-stripped, escape-folded span */
+            let bl = unsafe {
+                Lower::c_str_len(
+                    unsafe { (*e).text.add(1) },
+                    unsafe { (*e).text_len.saturating_sub(2) },
+                )
+            };
+            {
+                let mut tmp: [u8; 12] = [0; 12];
+                let mut wl = 0usize;
+                if bl == 0 {
+                    tmp[0] = b'0';
+                    wl = 1;
+                } else {
+                    let mut v = bl;
+                    while v > 0 {
+                        let d = b'0' + (v % 10) as u8;
+                        wl += 1;
+                        tmp[12 - wl] = d;
+                        v /= 10;
+                    }
+                }
+                self.out.put(tmp.as_ptr().add(12 - wl), wl);
+            }
+            self.out.puts(b" }\0".as_ptr());
+            i += 1;
+        }
+        self.out.puts(b"};\n\0".as_ptr());
+        self.indent();
+        self.out.puts(b"for (size_t __rsx_fi = 0; __rsx_fi < \0".as_ptr());
+        {
+            let d = b'0' + nk as u8;
+            self.out.putc(d);
+        }
+        self.out.puts(b"; __rsx_fi++) {\n\0".as_ptr());
+        self.depth += 1;
+        self.indent();
+        self.out.put(row, row_len);
+        self.out.putc(b' ');
+        self.out.put(vname, vlen);
+        self.out.puts(b" = __rsx_al[__rsx_fi];\n\0".as_ptr());
+        unsafe { self.emit_block_stmt(body, locals) };
+        self.depth -= 1;
+        self.indent();
+        self.out.puts(b"}\n\0".as_ptr());
+        if labeled {
+            self.indent();
+            unsafe { self.put_lbl(lt, ll, b"_cont\0".as_ptr()) };
+            self.out.puts(b": ;\n\0".as_ptr());
+            self.indent();
+            unsafe { self.put_lbl(lt, ll, b"_end\0".as_ptr()) };
+            self.out.puts(b": ;\n\0".as_ptr());
+        }
+        1
+    }
+
+    /* `for bind in env::args()` / `env::args().skip(N)` — the argv walk.
+     * The receiver chain is METHOD_CALL(skip) over CALL(env::args) (or a
+     * bare CALL). Each bind is a fresh rsx_str_t copy of the C argv
+     * string — Rust's Args yields owned Strings. The argv/argc globals
+     * ride the prelude (set once by the seat's main shim; a freestanding
+     * seat with no argv sees an empty walk). */
+    unsafe fn try_emit_for_args(
+        &mut self,
+        s: *const pm_jit_rsx_ast_t,
+        pat: *const pm_jit_rsx_ast_t,
+        iter: *const pm_jit_rsx_ast_t,
+        body: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+    ) -> usize {
+        /* unwrap `.skip(N)` / `.skip(1)` */
+        let mut skip_n: u64 = 0;
+        let mut call = iter;
+        if unsafe { (*iter).kind } == pm_jit_rsx_ast_kind::METHOD_CALL {
+            let ik = unsafe { (*iter).kids };
+            if unsafe { (*iter).n_kids } as usize >= 3 {
+                let nm = unsafe { *ik.add(1) };
+                let argsn = unsafe { *ik.add(2) };
+                if unsafe { (*nm).text_len } == 4
+                    && unsafe { z_eq(unsafe { (*nm).text }, 4, b"skip\0".as_ptr()) }
+                    && (unsafe { (*argsn).n_kids } as usize) == 1
+                {
+                    let a0 = unsafe { *(*argsn).kids.add(0) };
+                    if unsafe { (*a0).kind } != pm_jit_rsx_ast_kind::LITERAL {
+                        return 0;
+                    }
+                    let t = unsafe { (*a0).text };
+                    let tl = unsafe { (*a0).text_len };
+                    let mut i = 0usize;
+                    let mut ok = tl > 0;
+                    while i < tl {
+                        let ch = unsafe { *t.add(i) };
+                        if ch < b'0' || ch > b'9' {
+                            if ch == b'u' || ch == b'i' || ch == b'_' {
+                                i += 1;
+                                continue;
+                            }
+                            ok = false;
+                            break;
+                        }
+                        skip_n = skip_n * 10 + (ch - b'0') as u64;
+                        i += 1;
+                    }
+                    if !ok {
+                        return 0;
+                    }
+                    call = unsafe { *ik.add(0) };
+                } else {
+                    return 0;
+                }
+            } else {
+                return 0;
+            }
+        }
+        /* receiver must be the env::args() call: CALL(PATH[std, env, args]) */
+        if unsafe { (*call).kind } != pm_jit_rsx_ast_kind::CALL {
+            return 0;
+        }
+        {
+            let rname = unsafe { *(*call).kids.add(0) };
+            if unsafe { (*rname).kind } != pm_jit_rsx_ast_kind::PATH {
+                return 0;
+            }
+            let nseg = unsafe { (*rname).n_kids } as usize;
+            if nseg < 2 {
+                return 0;
+            }
+            let segs = unsafe { (*rname).kids };
+            let last = unsafe { *segs.add(nseg - 1) };
+            let prev = unsafe { *segs.add(nseg - 2) };
+            if !(unsafe { (*last).kind } == pm_jit_rsx_ast_kind::PATH
+                && unsafe { z_eq(unsafe { (*last).text }, unsafe { (*last).text_len }, b"args\0".as_ptr()) }
+                && unsafe { (*prev).kind } == pm_jit_rsx_ast_kind::PATH
+                && unsafe { z_eq(unsafe { (*prev).text }, unsafe { (*prev).text_len }, b"env\0".as_ptr()) })
+            {
+                return 0;
+            }
+        }
+        /* bind: PATH (unwrap the "path" wrapper) */
+        let mut bind = pat;
+        if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
+            && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+            && unsafe { (*pat).n_kids } as usize == 1
+        {
+            let seg = unsafe { *(*pat).kids.add(0) };
+            if unsafe { (*seg).kind } == pm_jit_rsx_ast_kind::PATH {
+                bind = seg;
+            }
+        }
+        if unsafe { (*bind).kind } != pm_jit_rsx_ast_kind::PATH {
+            return 0;
+        }
+        let vname = unsafe { (*bind).text };
+        let vlen = unsafe { (*bind).text_len };
+        self.str_own_used = true;
+        self.env_args_used = true;
+        unsafe {
+            (*locals).add(vname, vlen, b"rsx_str_t\0".as_ptr(), 9, self.depth + 1);
+        }
+        let labeled = unsafe { Lower::loop_is_labeled(s) };
+        let lt = unsafe { (*s).text };
+        let ll = unsafe { (*s).text_len };
+        self.indent();
+        if labeled {
+            unsafe { self.put_lbl(lt, ll, b"_\0".as_ptr()) };
+            self.out.puts(b": \0".as_ptr());
+        }
+        self.out.puts(b"for (int __rsx_ai = \0".as_ptr());
+        {
+            let mut tmp: [u8; 12] = [0; 12];
+            let mut wl = 0usize;
+            if skip_n == 0 {
+                tmp[0] = b'0';
+                wl = 1;
+            } else {
+                let mut v = skip_n;
+                while v > 0 {
+                    let d = b'0' + (v % 10) as u8;
+                    wl += 1;
+                    tmp[12 - wl] = d;
+                    v /= 10;
+                }
+            }
+            self.out.put(tmp.as_ptr().add(12 - wl), wl);
+        }
+        self.out.puts(b"; __rsx_ai < __rsx_argc; __rsx_ai++) {\n\0".as_ptr());
+        self.depth += 1;
+        self.indent();
+        self.out.puts(b"rsx_str_t \0".as_ptr());
+        self.out.put(vname, vlen);
+        self.out.puts(b" = {0}; rsx_str_push_lit(&\0".as_ptr());
+        self.out.put(vname, vlen);
+        self.out.puts(b", __rsx_argv[__rsx_ai]);\n\0".as_ptr());
+        unsafe { self.emit_block_stmt(body, locals) };
+        self.depth -= 1;
+        self.indent();
+        self.out.puts(b"}\n\0".as_ptr());
+        if labeled {
+            self.indent();
+            unsafe { self.put_lbl(lt, ll, b"_cont\0".as_ptr()) };
+            self.out.puts(b": ;\n\0".as_ptr());
+            self.indent();
+            unsafe { self.put_lbl(lt, ll, b"_end\0".as_ptr()) };
+            self.out.puts(b": ;\n\0".as_ptr());
+        }
+        1
+    }
+
     unsafe fn try_emit_for_arr(
         &mut self,
         s: *const pm_jit_rsx_ast_t,
@@ -4103,6 +4694,15 @@ impl Lower {
         body: *const pm_jit_rsx_ast_t,
         locals: *mut LocalTab,
     ) -> usize {
+        /* An ARRAY literal (`for sub in ["src", "examples"]`) types as
+         * `const char *[]` — not a fat row. Lower it to an rsx_arr_ row
+         * of rsx_str_ref_t elements: a static const table the loop
+         * walks .n/.p over, same shape as a slice param. */
+        if unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::ARRAY
+            && unsafe { self.try_emit_for_arr_literal(s, pat, recv, body, locals) } != 0
+        {
+            return 1;
+        }
         let rct = self.arena_tmp();
         let rct_len = unsafe { self.expr_ctype(recv, rct, 128, locals) };
         if rct_len == 0 {
@@ -5029,8 +5629,9 @@ impl Lower {
             return 0;
         }
         let map_arg = unsafe { *mak.add(0) };
-        /* `String::as_str` (a qualified fn path): the borrow combinator —
-         * the output element is rsx_str_ref_t (a view of each element). */
+        /* `String::as_str` / `Path::new` (qualified fn paths): the borrow
+         * combinators — the output element is rsx_str_ref_t (a view of
+         * each element; a &Path IS the str view in this subset). */
         let mut as_str_fn = false;
         if unsafe { (*map_arg).kind } == pm_jit_rsx_ast_kind::PATH {
             let mkp = unsafe { (*map_arg).kids };
@@ -5040,8 +5641,10 @@ impl Lower {
                 let seg_prev = unsafe { *mkp.add(mkn - 2) };
                 if unsafe { (*seg_last).kind } == pm_jit_rsx_ast_kind::PATH
                     && unsafe { (*seg_prev).kind } == pm_jit_rsx_ast_kind::PATH
-                    && unsafe { z_eq(unsafe { (*seg_last).text }, unsafe { (*seg_last).text_len }, b"as_str\0".as_ptr()) }
-                    && unsafe { z_eq(unsafe { (*seg_prev).text }, unsafe { (*seg_prev).text_len }, b"String\0".as_ptr()) }
+                    && ((unsafe { z_eq(unsafe { (*seg_last).text }, unsafe { (*seg_last).text_len }, b"as_str\0".as_ptr()) }
+                        && unsafe { z_eq(unsafe { (*seg_prev).text }, unsafe { (*seg_prev).text_len }, b"String\0".as_ptr()) })
+                        || (unsafe { z_eq(unsafe { (*seg_last).text }, unsafe { (*seg_last).text_len }, b"new\0".as_ptr()) }
+                            && unsafe { z_eq(unsafe { (*seg_prev).text }, unsafe { (*seg_prev).text_len }, b"Path\0".as_ptr()) }))
                 {
                     as_str_fn = true;
                 }
@@ -5106,9 +5709,16 @@ impl Lower {
                         unsafe { self.emit_expr(base, locals) };
                         self.out.puts(b").n; _i++) { \0".as_ptr());
                         self.out.put(nb, nn);
-                        self.out.puts(b"_push(&_o, (\0".as_ptr());
+                        /* the fat view of each owned element — the row's
+                         * element is rsx_str_ref_t, the pushed value is
+                         * the element's own p/n pair, not the struct.
+                         * The .p cast keeps char*-backed String rows and
+                         * uint8_t*-backed views one warning-free shape. */
+                        self.out.puts(b"_push(&_o, (rsx_str_ref_t){ (const uint8_t *)(\0".as_ptr());
                         unsafe { self.emit_expr(base, locals) };
-                        self.out.puts(b").p[_i]); } _o; })\0".as_ptr());
+                        self.out.puts(b").p[_i].p, (\0".as_ptr());
+                        unsafe { self.emit_expr(base, locals) };
+                        self.out.puts(b").p[_i].n }); } _o; })\0".as_ptr());
                         return 1;
                     }
                 }
@@ -5988,6 +6598,13 @@ impl Lower {
         let pat = unsafe { *kids.add(0) };
         let iter = unsafe { *kids.add(1) };
         let body = unsafe { *kids.add(2) };
+        /* `for bind in env::args().skip(1)` / `env::args()` — the argv
+         * walk: an index loop over the process argv, each bind a fresh
+         * rsx_str_t copy of the C string. The kernel seat's argv rides
+         * the same global main() contract the host CLI uses. */
+        if unsafe { self.try_emit_for_args(s, pat, iter, body, locals) } != 0 || !self.ok {
+            return;
+        }
         /* `for pat in X.iter().enumerate()` — an index+element pair over a
          * fixed array (the only receiver shape the subset carries a length
          * for). The pattern destructures `(i, bind)` / `(i, &bind)`. */

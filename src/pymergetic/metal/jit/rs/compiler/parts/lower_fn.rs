@@ -267,6 +267,7 @@ impl Lower {
             /* rename-shadow spellings are per-fn: name__0 restarts each
              * body so generated C is deterministic across fns. */
             self.shadow_ctr = 0;
+            self.le_ctr = 0;
             /* the shared per-fn tab — allocated in the pre-scan above
              * (declare_only==0 && body is guaranteed here: the fn
              * returned early otherwise). */
@@ -1117,6 +1118,29 @@ impl Lower {
                 self.out.put(tdn, tdn_len);
                 self.out.puts(b" *v) {\n\0".as_ptr());
                 self.out.puts(b"    free(v->p); v->p = 0; v->n = 0; v->cap = 0;\n\0".as_ptr());
+                self.out.puts(b"}\n\0".as_ptr());
+                /* clone: deep copy of the buffer (elements are POD —
+                 * memcpy; nested heap-owning elements are not in the
+                 * subset's clone plane, same contract as struct copies). */
+                self.out.puts(b"static \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b"_clone(const \0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" *v) {\n\0".as_ptr());
+                self.out.put(tdn, tdn_len);
+                self.out.puts(b" r; r.n = v->n; r.cap = v->n;\n\0".as_ptr());
+                self.out.puts(b"    r.p = (\0".as_ptr());
+                self.out.put(elem, elen);
+                self.out.puts(b" *)malloc(r.n ? r.n * sizeof(\0".as_ptr());
+                self.out.put(elem, elen);
+                self.out.puts(b") : 1);\n\0".as_ptr());
+                self.out.puts(b"    if (!r.p) { abort(); }\n\0".as_ptr());
+                self.out.puts(b"    if (r.n) { memcpy(r.p, v->p, r.n * sizeof(\0".as_ptr());
+                self.out.put(elem, elen);
+                self.out.puts(b")); }\n\0".as_ptr());
+                self.out.puts(b"    return r;\n\0".as_ptr());
                 self.out.puts(b"}\n\0".as_ptr());
                 unsafe {
                     self.vecs.done[s] = true;
@@ -2537,7 +2561,6 @@ impl Lower {
             self.out.put(name, nlen);
             self.out.puts(b";\n\0".as_ptr());
             emitted = true;
-            s += 1;
         }
         self.opq_flushed = s;
         if emitted {
@@ -2576,6 +2599,50 @@ impl Lower {
         }
         if self.env_used {
             self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
+        }
+        /* the path-metadata plane's include: stat/S_ISDIR/S_ISREG need
+         * <sys/stat.h> — armed by typing or emission, flushed once
+         * here (same window as unistd/env). */
+        if self.stat_used {
+            self.out.puts(b"#include <sys/stat.h>\n\0".as_ptr());
+        }
+        /* rsx_path_probe: the NUL-copy + stat helper the path-metadata
+         * methods call. 0 = missing, 1 = regular file, 2 = directory.
+         * PATH_PROBE_MAX bounds the copy: a longer path returns 0 (the
+         * honest answer — the OS would not open it either). */
+        if self.path_probe_used {
+            self.out.puts(
+                b"static int rsx_path_probe(const uint8_t *p, size_t n) {\n\0".as_ptr(),
+            );
+            self.out
+                .puts(b"    char _b[1024];\n\0".as_ptr());
+            self.out
+                .puts(b"    if (n == 0 || n >= sizeof(_b)) { return 0; }\n\0".as_ptr());
+            self.out
+                .puts(b"    for (size_t _i = 0; _i < n; _i++) { _b[_i] = (char)p[_i]; }\n\0".as_ptr());
+            self.out
+                .puts(b"    _b[n] = 0;\n\0".as_ptr());
+            self.out
+                .puts(b"    struct stat _st;\n\0".as_ptr());
+            self.out
+                .puts(b"    if (stat(_b, &_st) != 0) { return 0; }\n\0".as_ptr());
+            self.out
+                .puts(b"    if (S_ISDIR(_st.st_mode)) { return 2; }\n\0".as_ptr());
+            self.out
+                .puts(b"    if (S_ISREG(_st.st_mode)) { return 1; }\n\0".as_ptr());
+            self.out
+                .puts(b"    return 0;\n\0".as_ptr());
+            self.out.puts(b"}\n\0".as_ptr());
+        }
+        /* the argv plane's globals: env::args() walks these. Weak-backed
+         * so a seat that never sets them links an empty walk (argc 0);
+         * the host/main shim that wants argv assigns them at startup. */
+        if self.env_args_used && !self.env_args_done {
+            self.env_args_done = true;
+            self.out.puts(b"extern int __rsx_argc;\n\0".as_ptr());
+            self.out.puts(b"extern char **__rsx_argv;\n\0".as_ptr());
+            self.out.puts(b"__attribute__((weak)) int __rsx_argc = 0;\n\0".as_ptr());
+            self.out.puts(b"__attribute__((weak)) char **__rsx_argv = 0;\n\0".as_ptr());
         }
         /* String-plane typedefs hoisted to the preamble. collect() has run,
          * so the flags are already set for every type the file can name
@@ -3023,12 +3090,47 @@ impl Lower {
         if e.is_null() {
             return;
         }
+        if unsafe { (*e).kind } == pm_jit_rsx_ast_kind::CALL {
+            /* env::args() / env::args_os() — the argv walk arms the
+             * __rsx_argv/__rsx_argc globals + the owned-String plane. */
+            let kk = unsafe { (*e).kids };
+            if (unsafe { (*e).n_kids } as usize) >= 1 {
+                let hp = unsafe { *kk.add(0) };
+                if unsafe { (*hp).kind } == pm_jit_rsx_ast_kind::PATH {
+                    let hk = unsafe { (*hp).kids };
+                    let hn = unsafe { (*hp).n_kids } as usize;
+                    if hn >= 2 {
+                        let last = unsafe { *hk.add(hn - 1) };
+                        let prev = unsafe { *hk.add(hn - 2) };
+                        if unsafe { (*last).kind } == pm_jit_rsx_ast_kind::PATH
+                            && unsafe { z_eq(unsafe { (*last).text }, unsafe { (*last).text_len }, b"args\0".as_ptr()) }
+                            && unsafe { (*prev).kind } == pm_jit_rsx_ast_kind::PATH
+                            && unsafe { z_eq(unsafe { (*prev).text }, unsafe { (*prev).text_len }, b"env\0".as_ptr()) }
+                        {
+                            self.env_args_used = true;
+                            self.str_own_used = true;
+                        }
+                    }
+                }
+            }
+        }
         if unsafe { (*e).kind } == pm_jit_rsx_ast_kind::METHOD_CALL {
             let t = unsafe { (*e).text };
             let tl = unsafe { (*e).text_len };
             if tl == 11 && !t.is_null() && unsafe { z_eq(t, tl, b"is_terminal\0".as_ptr()) } {
                 self.unistd_used = true;
                 self.file_used = true;
+            } else if (tl == 6 && !t.is_null()
+                && (unsafe { z_eq(t, tl, b"is_dir\0".as_ptr()) }
+                    || unsafe { z_eq(t, tl, b"exists\0".as_ptr()) }))
+                || (tl == 7 && !t.is_null()
+                    && unsafe { z_eq(t, tl, b"is_file\0".as_ptr()) })
+            {
+                /* path metadata: stat probe plane — the include AND the
+                 * probe helper (typing arms stat only; emission arms
+                 * both, and this scan runs first). */
+                self.stat_used = true;
+                self.path_probe_used = true;
             } else if tl == 7 && !t.is_null()
                 && (unsafe { z_eq(t, tl, b"is_some\0".as_ptr()) }
                     || unsafe { z_eq(t, tl, b"is_none\0".as_ptr()) })
@@ -3059,6 +3161,23 @@ impl Lower {
                         }
                     }
                 }
+            }
+        }
+        if unsafe { (*e).kind } == pm_jit_rsx_ast_kind::MACRO {
+            /* env!("NAME") — the getenv probe macro arms stdlib (same
+             * include the var_os probe arms). */
+            let mut en: *const u8 = core::ptr::null();
+            let mut enl: usize = 0;
+            if unsafe {
+                self.env_macro_name(
+                    unsafe { (*e).text },
+                    unsafe { (*e).text_len },
+                    &mut en,
+                    &mut enl,
+                )
+            } != 0
+            {
+                self.env_used = true;
             }
         }
         let kids = unsafe { (*e).kids };

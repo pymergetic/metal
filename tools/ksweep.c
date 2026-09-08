@@ -49,7 +49,13 @@ static double now_ms(void) {
 }
 
 int main(int argc, char **argv) {
-    enum { SPAN = 96u * 1024u * 1024u };
+    /* Per-unit arena span. 96MB carried the whole tree at the 83/84
+     * point, but the compiler card's own TU has since grown past its
+     * window: rsx tokens+AST+Lower plus TCC's tables for ~2.1MB of
+     * generated C no longer fit. 160MB per unit restores headroom with
+     * the same fresh-backing-per-unit rule (freed before the next row,
+     * so the peak stays one unit at a time). */
+    enum { SPAN = 160u * 1024u * 1024u };
     void *backing;
     pm_util_mem_arena_t *arena;
     pm_metal_build_unit_t *units = NULL;

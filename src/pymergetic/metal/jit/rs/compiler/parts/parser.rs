@@ -5687,31 +5687,143 @@ impl Parser {
             if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::END {
                 break;
             }
-            /* inner attributes `#![...]` — skipped, not attached to an item.
-             * Anywhere in the file, not just the top: the build face
+            /* inner attributes `#![...]` — skipped, not attached to an
+             * item. Anywhere in the file, not just the top: the build face
              * splices `#[path]`-included face files into a unit, and a
-             * face carries its own `#![...]` where the splice lands. */
+             * face carries its own `#![...]` where the splice lands.
+             * ONE inner attr is semantic: `#![cfg(..)]` guards the whole
+             * file — cargo drops a module whose inner cfg is false
+             * (host.rs's `#![cfg(feature = "gen")]` is empty on every
+             * kernel seat), so the file node here lowers to no items
+             * either (an empty unit, the same verdict the outer-attr
+             * item pass reaches item-by-item). */
             if unsafe { self.is_punct(self.at, b'#') }
                 && unsafe { self.is_punct(self.at + 1, b'!') }
                 && unsafe { self.is_punct(self.at + 2, b'[') }
             {
-                /* skip to matching ']' */
-                self.at += 3;
+                /* capture the attr span first: evaluate before skipping */
+                let attr_first = self.at + 3;
                 let mut depth = 1i32;
-                while self.at < self.n_toks && depth > 0 {
-                    if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::PUNCT {
-                        if unsafe { self.is_punct(self.at, b'[') } {
+                let mut walk = attr_first;
+                while walk < self.n_toks && depth > 0 {
+                    if unsafe { self.kind(walk) } == pm_jit_rsx_tok_kind::PUNCT {
+                        if unsafe { self.is_punct(walk, b'[') } {
                             depth += 1;
-                        } else if unsafe { self.is_punct(self.at, b']') } {
+                        } else if unsafe { self.is_punct(walk, b']') } {
                             depth -= 1;
                             if depth == 0 {
                                 break;
                             }
                         }
                     }
-                    self.at += 1;
+                    walk += 1;
                 }
-                self.at += 1;
+                /* verdict: is this a `cfg(...)` inner attr, and is it
+                 * false under the kernel feature set? Join the attr
+                 * span's token texts (single spaces, the ATTR shape
+                 * cfg_verdict compacts) into one arena buffer. */
+                let mut cfg_false = false;
+                {
+                    let mut need = 4usize;
+                    let mut ti = attr_first;
+                    while ti < walk {
+                        need += unsafe { self.text_len(ti) } + 1;
+                        ti += 1;
+                    }
+                    let buf = unsafe { pm_util_mem_alloc(self.arena, need) } as *mut u8;
+                    if !buf.is_null() {
+                        let mut w = 0usize;
+                        let mut ti = attr_first;
+                        while ti < walk {
+                            let tl = unsafe { self.text_len(ti) };
+                            if tl > 0 {
+                                let tp = unsafe { self.text(ti) };
+                                let mut j = 0usize;
+                                while j < tl {
+                                    unsafe {
+                                        *buf.add(w) = *tp.add(j);
+                                    }
+                                    w += 1;
+                                    j += 1;
+                                }
+                            }
+                            if ti + 1 < walk {
+                                unsafe {
+                                    *buf.add(w) = b' ';
+                                }
+                                w += 1;
+                            }
+                            ti += 1;
+                        }
+                        unsafe {
+                            *buf.add(w) = 0;
+                        }
+                        /* compact: drop spaces so `cfg ( feature = "x" )` folds */
+                        let mut w2 = 0usize;
+                        let mut j = 0usize;
+                        while j < w {
+                            let c = unsafe { *buf.add(j) };
+                            if c != b' ' {
+                                unsafe {
+                                    *buf.add(w2) = c;
+                                }
+                                w2 += 1;
+                            }
+                            j += 1;
+                        }
+                        unsafe {
+                            *buf.add(w2) = 0;
+                        }
+                        /* `cfg(` sits at 0 here (no leading `#`: the attr's
+                         * span begins after `#![`), so this scan starts
+                         * at 0 — the outer-attr scan starts at 1 only
+                         * because its buffer opens with `#[`. */
+                        if w2 >= 4 {
+                            let mut p = 0usize;
+                            let mut found = false;
+                            while p + 4 <= w2 {
+                                if unsafe { z_eq(buf.add(p), 3, b"cfg\0".as_ptr()) }
+                                    && unsafe { *buf.add(p + 3) } == b'('
+                                {
+                                    found = true;
+                                    break;
+                                }
+                                p += 1;
+                            }
+                            if found {
+                                let inner = unsafe { buf.add(p + 4) };
+                                let mut dep = 1i32;
+                                let mut q = p + 4usize;
+                                let mut close = w2;
+                                while q < w2 {
+                                    if unsafe { *buf.add(q) } == b'(' {
+                                        dep += 1;
+                                    } else if unsafe { *buf.add(q) } == b')' {
+                                        dep -= 1;
+                                        if dep == 0 {
+                                            close = q;
+                                            break;
+                                        }
+                                    }
+                                    q += 1;
+                                }
+                                let inner_len = close - (p + 4);
+                                let v = unsafe { cfg_eval(inner, inner_len, self.feats) };
+                                if v == 0 {
+                                    cfg_false = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                /* advance past the attr (the original skip walk) */
+                self.at = walk + 1;
+                if cfg_false {
+                    /* the whole file is guarded out: consume every
+                     * remaining token — the FILE node lowers empty,
+                     * the same shape an all-outer-cfg file reaches. */
+                    self.at = self.n_toks;
+                }
                 continue;
             }
             let before = self.at;
