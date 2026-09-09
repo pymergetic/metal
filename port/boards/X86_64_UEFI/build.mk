@@ -88,9 +88,11 @@ FW_WAMR_UEFI := 1
 include $(PORT_DIR)/fw_cdn.mk
 include $(PORT_DIR)/fw_mbedtls.mk
 include $(PORT_DIR)/fw_zenoh.mk
-# In-kernel compile face: the vendored TCC, native x86_64 (the seat's own
-# arch — the every-seat-builds-every-arch matrix). Before fw_cards.mk so
-# jit.c compiles with PM_HAS_TCC=1 and the LIB_DIR. The PE toolchain seam:
+# In-kernel compile face: the vendored TCC, native x86_64 plus the cross
+# lanes (the every-seat-builds-every-arch matrix: this seat emits wasm32
+# and arm objects too). Before fw_cards.mk so jit.c compiles with
+# PM_HAS_TCC=1, the LIB_DIR, and the PM_METAL_TCC_CROSS_* gates.
+# The PE toolchain seam:
 # fw_tcc.mk's instance recipe compiles with TCC_CFLAGS, so lld-link gets a
 # COFF libtcc.o, not an ELF it refuses ("unknown file type").
 # -U_WIN32 -U_WIN64: the windows triplet defines _WIN32/_WIN64, which send
@@ -102,6 +104,7 @@ include $(PORT_DIR)/fw_zenoh.mk
 # and emits the same ELF ET_REL objects — one object format, one loader
 # (load.c), every seat.
 TCC_CFLAGS := --target=x86_64-unknown-windows -ffreestanding -fno-stack-protector -mno-red-zone -U_WIN32 -U_WIN64 -Wno-incompatible-library-redeclaration
+FW_TCC_CROSS := wasm32 arm
 include $(PORT_DIR)/fw_tcc.mk
 include $(PORT_DIR)/fw_cards.mk
 include $(PORT_DIR)/fw_wamr.mk

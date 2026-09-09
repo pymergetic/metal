@@ -55,6 +55,7 @@ FW_OBJS := \
 FW_RUSTC_TARGET := armv7a-none-eabihf
 FW_WAMR_ARCH := armv7
 FW_TCC_TARGET := arm
+FW_TCC_CROSS := x86_64 wasm32
 include $(PORT_DIR)/fw_cdn.mk
 include $(PORT_DIR)/fw_mbedtls.mk
 include $(PORT_DIR)/fw_zenoh.mk

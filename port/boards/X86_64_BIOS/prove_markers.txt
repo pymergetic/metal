@@ -33,5 +33,6 @@ upy zenoh
 upy jit py refuses
 upy jit py load refuses
 upy jit c tcc object
+upy jit c tcc cross wasm+arm
 upy process budget refuses
 upy types value loop

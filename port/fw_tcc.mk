@@ -1,17 +1,27 @@
 # Vendored TCC (externals/tcc) on the firmware seats — the in-kernel compile
-# face (jit.c object path: every seat builds objects for its native arch;
-# x64 boards native x86_64, the armv7 board native ARM, see the every-seat-
-# builds-every-arch matrix in the plan).
+# face (jit.c object path: every seat builds objects for every arch per the
+# matrix — the board's native backend plus the cross lanes below).
 #
 # Include from a board build.mk AFTER CFLAGS_METAL/INC exist and BEFORE
 # fw_cards.mk (jit.c must compile with PM_HAS_TCC=1 and the LIB_DIR).
 #
 # One TCC instance = one libtcc.c ONE_SOURCE compile via the shared recipe
-# (tools/tcc_instances.mk) — native only on firmware (cross instances are
-# the hosted seats' lane; no firmware seat links a second backend yet).
-# FW_TCC_TARGET selects the backend define (default x86_64; ARMV7_RV1106
-# sets the ARM triplet) and FW_TCC_LIB_DIR feeds jit.c's
-# tcc_set_lib_path/tcc_add_library_path so TCC never searches /usr/lib.
+# (tools/tcc_instances.mk). FW_TCC_TARGET selects the NATIVE backend define
+# (default x86_64; the armv7 boards set the ARM triplet). FW_TCC_CROSS is
+# the cross lane list — every other arch this board emits objects for
+# (space-separated, from: wasm32 arm x86_64; empty = native-only board).
+# FW_TCC_LIB_DIR feeds jit.c's tcc_set_lib_path/tcc_add_library_path so TCC
+# never searches /usr/lib.
+#
+# Cross instances on firmware are the same prefixed libtcc.c objects the
+# hosted seats link (tools/tcc_instances.mk): every defined global renamed
+# pm_tccw_/pm_tcca_/pm_tccx_, called only through jit.c's prefix-macro
+# shims. The prefix pass runs on the board's own toolchain objects (ELF32/
+# ELF64/COFF — plain nm/objcopy read them all; the browser seat is the one
+# that needs wasm_prefix_syms.py because emcc emits relocatable wasm).
+# TCC_NM/TCC_OBJCOPY default to the llvm twins — firmware boards have no
+# GNU binutils dependency, and llvm-nm/objcopy parse every object format
+# this tree links.
 #
 # Freestanding config (verified by compiling tccrun.c/libtcc.c against
 # fwinc — see the full probe in the phase-2 work):
@@ -66,6 +76,45 @@ ifeq ($(origin TCC_CFLAGS),undefined)
 TCC_CFLAGS := $(filter --target=% -m% -march=%,$(CFLAGS_METAL))
 endif
 
+# The prefix pass reads nm output of the board toolchain's objects — the
+# llvm twins parse every format this tree links (ELF32/ELF64/COFF).
+TCC_NM ?= llvm-nm-18
+TCC_OBJCOPY ?= llvm-objcopy-18
+
 include $(METAL_DIR)/tools/tcc_instances.mk
 
 $(eval $(call tcc_instance,$(FW_TCC_TARGET),$(FW_TCC_TARGET_DEFINE),$(FW_TCC_OBJ),,$(TCC_DEFINES_FIRMWARE)))
+
+# Cross lanes: every arch in FW_TCC_CROSS becomes a second prefixed libtcc
+# instance + the jit.c gate define that routes object_compile(target=N)
+# to it. The instance objects ride FW_OBJS like the native one.
+#   wasm32 -> pm_tccw_ / PM_METAL_TCC_CROSS_WASM32  (serialized module out)
+#   arm    -> pm_tcca_ / PM_METAL_TCC_CROSS_ARM_EABI (ET_REL ELF32)
+#   x86_64 -> pm_tccx_ / PM_METAL_TCC_CROSS_X86_64   (ET_REL ELF64)
+# The native backend is never re-declared as a cross (the router sends
+# TARGET_SEAT to the native instance), so a cross equal to FW_TCC_TARGET
+# is skipped — one board, one instance per backend, no duplicate objects.
+ifneq ($(filter wasm32,$(FW_TCC_CROSS)),)
+ifneq ($(FW_TCC_TARGET),wasm32)
+FW_TCC_CROSS_WASM_OBJ := $(BUILD)/tcc/libtcc_wasm_cross.o
+FW_OBJS += $(FW_TCC_CROSS_WASM_OBJ)
+CFLAGS_METAL += -DPM_METAL_TCC_CROSS_WASM32=1
+$(eval $(call tcc_instance,wasm32_cross,TCC_TARGET_WASM32,$(FW_TCC_CROSS_WASM_OBJ),pm_tccw_,$(TCC_DEFINES_FIRMWARE)))
+endif
+endif
+ifneq ($(filter arm,$(FW_TCC_CROSS)),)
+ifneq ($(FW_TCC_TARGET),arm)
+FW_TCC_CROSS_ARM_OBJ := $(BUILD)/tcc/libtcc_arm_cross.o
+FW_OBJS += $(FW_TCC_CROSS_ARM_OBJ)
+CFLAGS_METAL += -DPM_METAL_TCC_CROSS_ARM_EABI=1
+$(eval $(call tcc_instance,arm_eabi_cross,TCC_TARGET_ARM,$(FW_TCC_CROSS_ARM_OBJ),pm_tcca_,$(TCC_DEFINES_FIRMWARE)))
+endif
+endif
+ifneq ($(filter x86_64,$(FW_TCC_CROSS)),)
+ifneq ($(FW_TCC_TARGET),x86_64)
+FW_TCC_CROSS_X64_OBJ := $(BUILD)/tcc/libtcc_x64_cross.o
+FW_OBJS += $(FW_TCC_CROSS_X64_OBJ)
+CFLAGS_METAL += -DPM_METAL_TCC_CROSS_X86_64=1
+$(eval $(call tcc_instance,x86_64_cross,TCC_TARGET_X86_64,$(FW_TCC_CROSS_X64_OBJ),pm_tccx_,$(TCC_DEFINES_FIRMWARE)))
+endif
+endif

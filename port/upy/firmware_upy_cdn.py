@@ -196,6 +196,42 @@ if _fw_obj[18] != _fw_machine_hi or _fw_obj[19] != _fw_machine_lo:
     raise RuntimeError("jit c firmware object e_machine %d" % (_fw_obj[18],))
 print("upy jit c tcc object")
 
+# Cross lanes (the every-seat-builds-every-arch matrix): each firmware seat
+# also links prefixed TCC instances for every OTHER arch and emits that
+# arch's object in-kernel — x64 seats emit wasm32 + arm, arm seats emit
+# x64 + wasm32. Same asserts as the native lane, per target: wasm32 = a
+# serialized module (\0asm magic), arm = ELF32/EM_ARM, x64 = ELF64/EM_X86_64.
+# Index reads only (the firmware lexer has no slice syntax).
+_cross_src = "int fw_cross_probe(void) { return 0x2a; }\n"
+if _fw_class == 2:
+    _wasm_obj = jc.object_compile(_cross_src, target=1)
+    if _wasm_obj is None or len(_wasm_obj) < 8:
+        raise RuntimeError("jit c firmware wasm cross")
+    if not _wasm_obj.startswith(bytes([0, 97, 115, 109])):
+        raise RuntimeError("jit c firmware wasm cross magic")
+    _arm_obj = jc.object_compile(_cross_src, target=2)
+    if _arm_obj is None or len(_arm_obj) < 52:
+        raise RuntimeError("jit c firmware arm cross")
+    if not _arm_obj.startswith(bytes([127, 69, 76, 70])):
+        raise RuntimeError("jit c firmware arm cross not ELF")
+    if _arm_obj[4] != 1 or _arm_obj[18] != 40 or _arm_obj[19] != 0:
+        raise RuntimeError("jit c firmware arm cross class/machine")
+    print("upy jit c tcc cross wasm+arm")
+else:
+    _x64_obj = jc.object_compile(_cross_src, target=3)
+    if _x64_obj is None or len(_x64_obj) < 52:
+        raise RuntimeError("jit c firmware x64 cross")
+    if not _x64_obj.startswith(bytes([127, 69, 76, 70])):
+        raise RuntimeError("jit c firmware x64 cross not ELF")
+    if _x64_obj[4] != 2 or _x64_obj[18] != 62 or _x64_obj[19] != 0:
+        raise RuntimeError("jit c firmware x64 cross class/machine")
+    _wasm_obj = jc.object_compile(_cross_src, target=1)
+    if _wasm_obj is None or len(_wasm_obj) < 8:
+        raise RuntimeError("jit c firmware wasm cross")
+    if not _wasm_obj.startswith(bytes([0, 97, 115, 109])):
+        raise RuntimeError("jit c firmware wasm cross magic")
+    print("upy jit c tcc cross x64+wasm")
+
 # metal.process budget faces (firmware seat): the faces are wired here like
 # on every seat. A budget set succeeds (the sub-arena is small and the boot
 # arena has room), and a compile under it is still refused by the jit.py

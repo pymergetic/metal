@@ -58,9 +58,11 @@ FW_RUSTC_TARGET := x86_64-unknown-none
 include $(PORT_DIR)/fw_cdn.mk
 include $(PORT_DIR)/fw_mbedtls.mk
 include $(PORT_DIR)/fw_zenoh.mk
-# In-kernel compile face: the vendored TCC, native x86_64 (the seat's own
-# arch — the every-seat-builds-every-arch matrix). Before fw_cards.mk so
-# jit.c compiles with PM_HAS_TCC=1 and the LIB_DIR.
+# In-kernel compile face: the vendored TCC, native x86_64 plus the cross
+# lanes (the every-seat-builds-every-arch matrix: this seat emits wasm32
+# and arm objects too). Before fw_cards.mk so jit.c compiles with
+# PM_HAS_TCC=1, the LIB_DIR, and the PM_METAL_TCC_CROSS_* gates.
+FW_TCC_CROSS := wasm32 arm
 include $(PORT_DIR)/fw_tcc.mk
 include $(PORT_DIR)/fw_cards.mk
 include $(PORT_DIR)/fw_wamr.mk
