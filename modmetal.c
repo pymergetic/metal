@@ -27,6 +27,7 @@
 #include "pymergetic/metal/drivers/__types__.h"
 #include "pymergetic/metal/net/http/asgi.h"
 #include "pymergetic/metal/net/ssh.h"
+#include "pymergetic/metal/net/fwd/__exports__.h"
 #include "pymergetic/metal/services.h"
 #include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/net/cdn.h"
@@ -941,6 +942,18 @@ static mp_obj_t mp_metal_builtin_serve(void) {
         started += (id >= 0);
         mp_printf(&mp_plat_print, "+-- %-6s %s :%u (id=%d)\n", name ? name : "?",
             (id >= 0) ? "on " : "err", (unsigned)port, (int)id);
+    }
+    /* Mirror the just-started in-stack listeners onto real host sockets where
+     * the seat has a host to mirror to. net.fwd is the unix-seat transport:
+     * it compiled its real pthread impl there and a refusing stub everywhere
+     * else (same face, no dark port), so calling it here is platform-honest —
+     * `-1` on firmware/emcc prints "off", not a lie. One call per registered
+     * port; fwd.listen is idempotent on the port. */
+    for (i = 0; i < n; i++) {
+        uint16_t port = pm_metal_services_port(i);
+        int32_t fid = pm_metal_fwd_listen(port);
+        mp_printf(&mp_plat_print, "+-- fwd    %s :%u (host mirror)\n",
+            (fid >= 0) ? "on " : "off", (unsigned)port);
     }
     (void)started;
     mp_metal_packs_start();

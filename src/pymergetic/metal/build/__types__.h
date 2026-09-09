@@ -81,6 +81,10 @@ typedef struct pm_metal_build_compile_opts {
     uint32_t n_include_dirs;
     const char **defines;
     uint32_t n_defines;
+    /* cross-emit target (the every-seat-builds-every-arch matrix): 0 = the
+     * seat's own backend, 1 = wasm32, 2 = arm-eabi, 3 = x86_64 — same
+     * values as pm_metal_jit_c_target_t. 0 on seats that never pass it. */
+    int32_t target;
 } pm_metal_build_compile_opts_t;
 
 /* Parse one manifest into unit (arena-backed; strings are copied into the
@@ -201,6 +205,7 @@ typedef struct pm_metal_build_actor_job {
     uint32_t n_include_dirs;
     const char **defines;          /* arena-copied (count below) */
     uint32_t n_defines;
+    int32_t target;                /* cross-emit knob from opts (0 = native) */
     pm_metal_build_artifact_t artifact;
     char err[PM_METAL_BUILD_ERR_MAX];
     uint32_t cancel;               /* 1 = cancel at the next phase boundary */
@@ -326,6 +331,48 @@ int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
 #define PM_METAL_BUILD_MAX_SRC_PATH 96u
 #define PM_METAL_BUILD_MAX_SYMS 64u
 #define PM_METAL_BUILD_SYM_NAME_MAX 64u
+
+/*------------------ build event ring (factory floor telemetry) ----------
+ * Every observable transition in a unit_compile appends one fixed-size
+ * event to a ring on the build ctx: unit start/end, per-source compile,
+ * link, record. The factory page polls /build/events?since=<seq> and
+ * replays the ring's tail — the ring is the ONLY live build state (no
+ * per-lane coroutines), so the UI is a pure read face. Fixed-size, no
+ * pointers: the ring is copied by value under the ctx, never arena-owned,
+ * so a caller's arena dying mid-build cannot strand half an event. */
+#define PM_METAL_BUILD_EVENTS 64u
+#define PM_METAL_BUILD_EVENT_FQN 64u
+#define PM_METAL_BUILD_EVENT_SRC 40u
+
+typedef enum pm_metal_build_event_kind {
+    PM_METAL_BUILD_EVENT_UNIT_START = 0,
+    PM_METAL_BUILD_EVENT_COMPILE_START = 1,
+    PM_METAL_BUILD_EVENT_COMPILE_END = 2,
+    PM_METAL_BUILD_EVENT_LINK_END = 3,
+    PM_METAL_BUILD_EVENT_UNIT_END = 4,
+    PM_METAL_BUILD_EVENT_UNIT_FAIL = 5,
+} pm_metal_build_event_kind_t;
+
+typedef struct pm_metal_build_event {
+    uint32_t seq;                         /* monotonic, starts at 1 */
+    uint16_t kind;                        /* pm_metal_build_event_kind_t */
+    uint16_t target;                      /* 0 seat / 1 wasm32 / 2 arm / 3 x64 */
+    uint32_t t_us;                        /* boot mono clock at append */
+    uint32_t dur_us;                      /* stage duration (end events) */
+    uint32_t bytes;                       /* emitted object/link size */
+    char fqn[PM_METAL_BUILD_EVENT_FQN];
+    char src[PM_METAL_BUILD_EVENT_SRC];   /* file tail for compile events */
+} pm_metal_build_event_t;
+
+/* Copy events with seq > since into out (up to max), return the count.
+ * Also returns the ring's newest seq in *latest either way — the page's
+ * next poll passes it as since. Ring wraps: the tail is the truth. */
+uint32_t pm_metal_build_events_since(uint32_t since,
+    pm_metal_build_event_t *out, uint32_t max, uint32_t *latest);
+
+/* The newest seq currently in the ring (0 when nothing was ever built). */
+uint32_t pm_metal_build_events_latest(void);
+
 
 typedef struct pm_metal_build_record {
     char fqn[PM_METAL_BUILD_STR_MAX];

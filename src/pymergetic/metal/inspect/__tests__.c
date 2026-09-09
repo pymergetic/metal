@@ -465,6 +465,9 @@ static int32_t case_export_manifest(void) {
             /* the Phase-5 recorded blocker, now registered (SIG_CAP fix):
              * the wasmmod nativecall µPy path resolves this by name */
             { "pymergetic.metal.jit.c", "pm_metal_jit_c_object_compile_target" },
+            /* the factory floor's telemetry tail (28 exports now) */
+            { "pymergetic.metal.build", "pm_metal_build_events_since" },
+            { "pymergetic.metal.build", "pm_metal_build_events_latest" },
         };
         uint32_t k;
         for (k = 0; k < (uint32_t)(sizeof(must_exist) / sizeof(must_exist[0])); k++) {
@@ -478,16 +481,16 @@ static int32_t case_export_manifest(void) {
                 return fail("expected export missing from the registry");
             }
         }
-        /* expected == registered, exactly: the build card's face is 26
-         * exports (the 25 of Phase 5 + actor_release). A 27th export
-         * means a new face the manifest does not know; a lower count
-         * means a registration refused. */
+        /* expected == registered, exactly: the build card's face is 28
+         * exports (26 of the Phase-5/actor set + the two event-ring
+         * faces). A 29th export means a new face the manifest does not
+         * know; a lower count means a registration refused. */
         {
             uint32_t reg = pm_wasmmod_registry_export_count(
                 (const uint8_t *)"pymergetic.metal.build", 22u);
-            if (reg != 26u) {
+            if (reg != 28u) {
                 fprintf(stderr, "metal.inspect test: build face %u "
-                    "registered, 26 expected\n", (unsigned)reg);
+                    "registered, 28 expected\n", (unsigned)reg);
                 return fail("build export count != manifest");
             }
         }

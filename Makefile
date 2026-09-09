@@ -540,6 +540,13 @@ upy:
 	grep -q "upy cross compile arm loop" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy types value loop" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy build py unit_compile" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy build events ring" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy build all walk" $(CURDIR)/build/upy_guest_prove.log
+	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_serve_prove.py \
+		> $(CURDIR)/build/upy_serve.log 2>&1
+	grep -q "upy serve fwd mirror" $(CURDIR)/build/upy_serve.log
+	grep -q "upy serve inspect faces" $(CURDIR)/build/upy_serve.log
+	grep -q "upy serve prove" $(CURDIR)/build/upy_serve.log
 	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_runner_vm_prove.py
 	python3 $(CURDIR)/upy_cdn_prove_host.py \
 		$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_cdn_prove.py

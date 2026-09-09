@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Factory floor</title>
+  <link rel="stylesheet" href="/inspect/css/base.css" />
+  <link rel="stylesheet" id="theme-css" href="/inspect/css/themes/metal.css" />
+  <style>
+    /* factory floor — one page, three panes:
+     *   lane controls (what to build, for which target)
+     *   matrix grid  (every unit's last result per lane)
+     *   event stream (the ring's tail, 1 Hz)
+     * No framework: the page is a 60-line fetch loop over /build faces. */
+    .fx-controls {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      flex-wrap: wrap;
+      margin: 0.5rem 0 1rem;
+    }
+    .fx-controls select, .fx-controls button {
+      background: var(--bg-raised, #182028);
+      color: var(--fg);
+      border: 1px solid var(--muted);
+      border-radius: 4px;
+      padding: 0.45rem 0.9rem;
+      font: inherit;
+      cursor: pointer;
+    }
+    .fx-controls button:hover { border-color: var(--accent); }
+    .fx-controls button:disabled { opacity: 0.5; cursor: wait; }
+    #fx-status { color: var(--muted); font-size: 0.9em; }
+    #fx-status.busy { color: var(--accent); }
+
+    table.fx-matrix { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+    .fx-matrix th, .fx-matrix td {
+      text-align: left;
+      padding: 0.3rem 0.55rem;
+      border-bottom: 1px solid color-mix(in srgb, var(--muted) 25%, transparent);
+      white-space: nowrap;
+    }
+    .fx-matrix td.ok { color: var(--accent); }
+    .fx-matrix td.ref { color: #d08770; }
+    .fx-matrix td.idle { color: var(--muted); opacity: 0.6; }
+    .fx-matrix td.bytes { color: var(--fg); }
+
+    .fx-lane {
+      height: 4px;
+      background: color-mix(in srgb, var(--muted) 30%, transparent);
+      border-radius: 2px;
+      margin: 2px 0 8px;
+      overflow: hidden;
+    }
+    .fx-lane > i {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: var(--accent);
+      transition: width 0.3s ease;
+    }
+
+    #fx-events {
+      max-height: 46vh;
+      overflow-y: auto;
+      font-size: 0.8em;
+      line-height: 1.5;
+    }
+    #fx-events .ev { display: flex; gap: 0.75rem; }
+    #fx-events .ev .k { color: var(--accent); min-width: 8.5em; }
+    #fx-events .ev .s { color: var(--muted); }
+    #fx-events .ev .b { color: var(--fg); }
+    #fx-events .ev.fail .k { color: #d08770; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="brand">Factory floor</h1>
+    <p id="role">every seat builds every arch</p>
+  </header>
+  <main>
+    <section>
+      <h2>Controls</h2>
+      <div class="fx-controls">
+        <label for="fx-target">target</label>
+        <select id="fx-target">
+          <option value="0">seat-native</option>
+          <option value="1">wasm32</option>
+          <option value="2">arm-eabi</option>
+          <option value="3">x86-64</option>
+        </select>
+        <button type="button" id="fx-build-all">BUILD ALL</button>
+        <span id="fx-status">idle</span>
+      </div>
+      <div class="fx-lane"><i id="fx-lane-fill"></i></div>
+      <p class="hint">
+        BUILD ALL walks every discovered unit through the in-kernel chain
+        (POST /build?all=1) on the selected target lane; the event ring
+        streams each stage below.
+      </p>
+    </section>
+
+    <section>
+      <h2>Matrix <span id="fx-count" class="hint"></span></h2>
+      <table class="fx-matrix" id="fx-matrix">
+        <thead>
+          <tr><th>unit</th><th>impl</th><th>sources</th><th>status</th><th>last object</th><th></th></tr>
+        </thead>
+        <tbody id="fx-rows"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Event stream <span class="hint">(1 Hz, /build/events?since=)</span></h2>
+      <div id="fx-events"></div>
+    </section>
+  </main>
+  <script src="/inspect/js/factory.js"></script>
+</body>
+</html>

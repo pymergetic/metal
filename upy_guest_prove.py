@@ -368,6 +368,58 @@ if '"fqn":"pymergetic.wasmmod.net"' not in body:
     raise SystemExit("build py fqn %s" % (body,))
 print("upy build py unit_compile")
 
+# Factory floor (the every-seat-builds-every-arch UI): the rebuild above must
+# have landed on the build card's event ring, the /build/events?since= pane
+# reads it back seq-numbered, and the BUILD ALL walk drives every buildable
+# unit through the same chain with the same telemetry. The knobs:
+# ?target=N (cross lane) is pinned by the matrix proves; here the native
+# lane must report events and the walk must rebuild the py card again.
+st, body = handle("GET", "/build/events?since=0")
+if st != 200 or '"latest":' not in body or '"events":[' not in body:
+    raise SystemExit("build events %s %s" % (st, body))
+_ev_latest = 0
+try:
+    import json as _json
+    _ev = _json.loads(body)
+    _ev_latest = _ev.get("latest", 0)
+    if _ev_latest < 1:
+        raise SystemExit("build events empty ring")
+    _kinds = [e.get("kind") for e in _ev.get("events", [])]
+    if "unit_start" not in _kinds or "compile_start" not in _kinds:
+        raise SystemExit("build events kinds %s" % (_kinds,))
+except ImportError:
+    # a trimmed µPy without json: the marker strings above are the prove
+    _ev_latest = 1
+print("upy build events ring")
+
+# BUILD ALL: every unit in one walk — same refusal parity as the single
+# pane (the 5 mbedtls/zenoh/uzlib fills), the rest ok. Only the shape is
+# pinned here (ok + refused counts and the events ring growing), not the
+# exact census: the card set changes as the tree grows.
+st, body = handle("POST", "/build?all=1")
+if st != 200:
+    raise SystemExit("build all %s %s" % (st, body))
+if '"all":1' not in body or '"ok":' not in body or '"refused":' not in body:
+    raise SystemExit("build all shape %s" % (body,))
+_ok_i = body.rfind('"ok":')
+if _ok_i < 0:
+    raise SystemExit("build all ok count")
+_ok_n = 0
+try:
+    _all = _json.loads(body)
+    _ok_n = _all.get("ok", 0)
+    _ref_n = _all.get("refused", 0)
+    if _ok_n + _ref_n < 10:
+        raise SystemExit("build all census %d/%d" % (_ok_n, _ref_n))
+    if _ok_n < 1:
+        raise SystemExit("build all nothing ok")
+except NameError:
+    pass
+st, body = handle("GET", "/build/events?since=%d" % (_ev_latest,))
+if st != 200:
+    raise SystemExit("build events tail %s" % (st,))
+print("upy build all walk")
+
 # metal.jit.cpp REPL rebuild loop: the C++ card transpiles ITS OWN source
 # from the kernel fs (workspace) through lex -> parse -> lower, the lowered
 # C re-lowers byte-identical (the fixed point), TCC makes a real ELF object,

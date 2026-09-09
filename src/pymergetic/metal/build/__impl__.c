@@ -96,6 +96,10 @@ typedef struct pm_metal_build_ctx {
     /* change-ledger scratch: every ledger read path (read-modify-write
      * append + query scan) — never nested, one buffer on the ctx */
     uint8_t ledger_buf[PM_METAL_BUILD_LEDGER_MAX];
+    /* factory-floor event ring: fixed-size, seq-numbered, wraps at
+     * PM_METAL_BUILD_EVENTS. seq starts at 1 so 0 = "nothing yet". */
+    pm_metal_build_event_t events[PM_METAL_BUILD_EVENTS];
+    uint32_t event_seq;
     /* accessor-spine slots: round-robin handles into at_info/at_ast */
     pm_build_at_slot_t at[PM_METAL_BUILD_AT_SLOTS];
     uint32_t at_epoch;
@@ -122,6 +126,8 @@ extern pm_util_mem_arena_t *pm_metal_async_arena(void);
 /* actor_run's wait pump: drive the async ring while another job holds the
  * TCC serial section (the async card's poll drains ready tasks). */
 extern void pm_metal_async_poll(void);
+/* mono clock for the event ring's t_us/dur_us (same face ntp uses). */
+extern uint64_t pm_metal_async_mono_us(void);
 
 static pm_metal_build_ctx_t *build_ctx_acquire(void) {
     pm_util_mem_arena_t *arena;
@@ -139,6 +145,83 @@ static pm_metal_build_ctx_t *build_ctx_acquire(void) {
     }
     memset(s_build_ctx, 0, sizeof(*s_build_ctx));
     return s_build_ctx;
+}
+
+/*------------------ build event ring (factory floor telemetry) ----------
+ * One append face, one read face, zero per-lane state. emit() is a
+ * best-effort no-op when the ctx cannot be acquired (a build before the
+ * boot graph ran async): the build itself must never fail because the
+ * telemetry could not be served. The ring wraps; reads replay the tail. */
+static void build_event_emit(uint16_t kind, uint16_t target,
+    const char *fqn, const char *src, uint32_t dur_us, uint32_t bytes) {
+    pm_metal_build_ctx_t *ctx = build_ctx_acquire();
+    pm_metal_build_event_t *e;
+    if (ctx == NULL || fqn == NULL) {
+        return;
+    }
+    ctx->event_seq++;
+    /* wrap: slot = (seq-1) % EVENTS, so seq N and N+EVENTS collide and the
+     * older tail is naturally overwritten in arrival order */
+    e = &ctx->events[(ctx->event_seq - 1u) % PM_METAL_BUILD_EVENTS];
+    memset(e, 0, sizeof(*e));
+    e->seq = ctx->event_seq;
+    e->kind = kind;
+    e->target = target;
+    e->t_us = (uint32_t)(pm_metal_async_mono_us() & 0xffffffffu);
+    e->dur_us = dur_us;
+    e->bytes = bytes;
+    {
+        size_t i;
+        for (i = 0; i + 1 < PM_METAL_BUILD_EVENT_FQN && fqn[i] != '\0'; i++) {
+            e->fqn[i] = fqn[i];
+        }
+    }
+    if (src != NULL) {
+        size_t i;
+        /* the file TAIL carries more than the head (paths are rooted) */
+        size_t n = strlen(src);
+        if (n >= PM_METAL_BUILD_EVENT_SRC) {
+            src += n - (PM_METAL_BUILD_EVENT_SRC - 1u);
+        }
+        for (i = 0; i + 1 < PM_METAL_BUILD_EVENT_SRC && src[i] != '\0'; i++) {
+            e->src[i] = src[i];
+        }
+    }
+}
+
+uint32_t pm_metal_build_events_since(uint32_t since,
+    pm_metal_build_event_t *out, uint32_t max, uint32_t *latest) {
+    pm_metal_build_ctx_t *ctx = build_ctx_acquire();
+    uint32_t newest;
+    uint32_t first;
+    uint32_t n = 0;
+    if (ctx == NULL) {
+        if (latest != NULL) {
+            *latest = 0;
+        }
+        return 0;
+    }
+    newest = ctx->event_seq;
+    if (latest != NULL) {
+        *latest = newest;
+    }
+    if (out == NULL || max == 0 || since >= newest) {
+        return 0;
+    }
+    /* replay window: the tail the ring still holds, clipped to max */
+    first = since + 1u;
+    if (newest - first >= PM_METAL_BUILD_EVENTS) {
+        first = newest - PM_METAL_BUILD_EVENTS + 1u;
+    }
+    for (; first <= newest && n < max; first++) {
+        out[n++] = ctx->events[(first - 1u) % PM_METAL_BUILD_EVENTS];
+    }
+    return n;
+}
+
+uint32_t pm_metal_build_events_latest(void) {
+    pm_metal_build_ctx_t *ctx = build_ctx_acquire();
+    return ctx != NULL ? ctx->event_seq : 0;
 }
 
 /*------------------ build records (provenance chain) ------------------
@@ -2515,6 +2598,7 @@ static int32_t unit_source_compile(pm_util_mem_arena_t *arena,
     const char *fqn, const char *rel, const char *src,
     const char **includes, uint32_t n_includes,
     const char **defines, uint32_t n_defines,
+    int32_t target,
     uint8_t **obj_out, size_t *obj_len,
     char *errbuf, size_t errbuf_len) {
     const char *dot = rel != NULL ? strrchr(rel, '.') : NULL;
@@ -2604,9 +2688,18 @@ static int32_t unit_source_compile(pm_util_mem_arena_t *arena,
             csrc = transpiled;
         }
     }
-    rc = pm_metal_jit_c_object_compile_opts(arena, csrc, strlen(csrc),
-        includes, n_includes, defines, n_defines,
-        obj_out, obj_len, errbuf, errbuf_len);
+    /* target 0 keeps the seat-native path; the matrix knobs route through
+     * the target-aware jit.c face (the cross instance where linked, the
+     * honest errbuf refusal where not — never a silent fallback). */
+    if (target != 0) {
+        rc = pm_metal_jit_c_object_compile_target(arena, csrc, strlen(csrc),
+            includes, n_includes, defines, n_defines, target,
+            obj_out, obj_len, errbuf, errbuf_len);
+    } else {
+        rc = pm_metal_jit_c_object_compile_opts(arena, csrc, strlen(csrc),
+            includes, n_includes, defines, n_defines,
+            obj_out, obj_len, errbuf, errbuf_len);
+    }
     /* the transpiled C is compile scratch — the TCC object carries the
      * product now. Free it (and only after the window released — TCC's
      * last byte of this block was read inside the compile above): the
@@ -2642,6 +2735,9 @@ static int32_t unit_compile_py(pm_util_mem_arena_t *arena,
         err_set(errbuf, errbuf_len, "unit_compile: card not in embed", 0);
         return PM_METAL_BUILD_ERR_COMPILE;
     }
+    /* py units ride the same event ring (compile_start/end per source) so
+     * the factory floor sees them like any other lane */
+    build_event_emit(PM_METAL_BUILD_EVENT_UNIT_START, 0, unit->fqn, NULL, 0, 0);
     memset(artifact, 0, sizeof(*artifact));
     snprintf(artifact->fqn, sizeof(artifact->fqn), "%s", unit->fqn);
     artifact->is_mpy = 1;
@@ -2664,9 +2760,21 @@ static int32_t unit_compile_py(pm_util_mem_arena_t *arena,
             err_set(errbuf, errbuf_len, "unit_compile: source not in embed", 0);
             return PM_METAL_BUILD_ERR_COMPILE;
         }
-        if (pm_metal_jit_py_object_compile(arena, src, strlen(src),
-                unit->fqn, &mpy, &mpy_len, errbuf, errbuf_len) != 0) {
-            return PM_METAL_BUILD_ERR_COMPILE;
+        {
+            uint64_t t0 = pm_metal_async_mono_us();
+            build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_START, 0,
+                unit->fqn, unit->sources[obj_i], 0, 0);
+            if (pm_metal_jit_py_object_compile(arena, src, strlen(src),
+                    unit->fqn, &mpy, &mpy_len, errbuf, errbuf_len) != 0) {
+                build_event_emit(PM_METAL_BUILD_EVENT_UNIT_FAIL, 0,
+                    unit->fqn, unit->sources[obj_i],
+                    (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu), 0);
+                return PM_METAL_BUILD_ERR_COMPILE;
+            }
+            build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_END, 0,
+                unit->fqn, unit->sources[obj_i],
+                (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu),
+                (uint32_t)mpy_len);
         }
         if (artifact->bytes == NULL) {
             artifact->bytes = mpy;
@@ -2685,6 +2793,7 @@ static int32_t unit_compile_py(pm_util_mem_arena_t *arena,
         err_set(errbuf, errbuf_len, "unit_compile: no py source produced mpy", 0);
         return PM_METAL_BUILD_ERR_COMPILE;
     }
+    build_event_emit(PM_METAL_BUILD_EVENT_UNIT_END, 0, unit->fqn, NULL, 0, 0);
     return PM_METAL_BUILD_OK;
 }
 
@@ -2729,6 +2838,12 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
         err_set(errbuf, errbuf_len, msg, 0);
         return PM_METAL_BUILD_ERR_COMPILE;
     }
+    /* factory telemetry: every observable stage of this unit lands on the
+     * event ring. target rides opts->target (0 = seat-native, the matrix
+     * knobs 1..3 route the emit on cross seats). */
+    uint16_t copts_target = (uint16_t)(opts->target & 0xffffu);
+    build_event_emit(PM_METAL_BUILD_EVENT_UNIT_START,
+        copts_target, unit->fqn, NULL, 0, 0);
     if (unit->n_sources == 0) {
         err_set(errbuf, errbuf_len, "unit_compile: no sources", 0);
         return PM_METAL_BUILD_ERR_COMPILE;
@@ -2870,11 +2985,27 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
                     continue;
                 }
             }
-            if (unit_source_compile(arena, unit->fqn, unit->sources[obj_i], src,
-                all_includes, n_all_includes, all_defines, n_all_defines,
-                &objs[n_objs], &lens[n_objs], errbuf, errbuf_len)
-                    != PM_METAL_BUILD_OK) {
-                return PM_METAL_BUILD_ERR_COMPILE;
+            {
+                uint64_t t0 = pm_metal_async_mono_us();
+                build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_START,
+                    copts_target, unit->fqn,
+                    unit->sources[obj_i], 0, 0);
+                if (unit_source_compile(arena, unit->fqn, unit->sources[obj_i], src,
+                    all_includes, n_all_includes, all_defines, n_all_defines,
+                    copts_target,
+                    &objs[n_objs], &lens[n_objs], errbuf, errbuf_len)
+                        != PM_METAL_BUILD_OK) {
+                    build_event_emit(PM_METAL_BUILD_EVENT_UNIT_FAIL,
+                        copts_target, unit->fqn,
+                        unit->sources[obj_i],
+                        (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu), 0);
+                    return PM_METAL_BUILD_ERR_COMPILE;
+                }
+                build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_END,
+                    copts_target, unit->fqn,
+                    unit->sources[obj_i],
+                    (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu),
+                    (uint32_t)lens[n_objs]);
             }
             compiled_srcs[n_objs] = unit->sources[obj_i];
             n_objs++;
@@ -2885,10 +3016,20 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
         }
     }
 
-    rc = pm_metal_build_link(arena, unit, objs, lens, n_objs,
-        artifact, errbuf, errbuf_len);
-    if (rc != PM_METAL_BUILD_OK) {
-        return rc;
+    {
+        uint64_t t0 = pm_metal_async_mono_us();
+        rc = pm_metal_build_link(arena, unit, objs, lens, n_objs,
+            artifact, errbuf, errbuf_len);
+        if (rc != PM_METAL_BUILD_OK) {
+            build_event_emit(PM_METAL_BUILD_EVENT_UNIT_FAIL,
+                copts_target, unit->fqn, "link",
+                (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu), 0);
+            return rc;
+        }
+        build_event_emit(PM_METAL_BUILD_EVENT_LINK_END,
+            copts_target, unit->fqn, NULL,
+            (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu),
+            artifact->len);
     }
 
     /* provenance record: source paths + object lengths + linked symbols.
@@ -2918,6 +3059,9 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
         }
 #endif
     }
+    build_event_emit(PM_METAL_BUILD_EVENT_UNIT_END,
+        copts_target, unit->fqn, NULL,
+        0 /* the page sums stage durs; unit wall time is its span */, 0);
     return PM_METAL_BUILD_OK;
 }
 
@@ -3222,6 +3366,10 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_release, pm_metal_b
     int32_t(pm_metal_build_actor_job_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_dag_run, pm_metal_build_dag_run,
     int32_t(pm_util_mem_arena_t *, pm_metal_build_unit_t *, uint32_t, const pm_metal_build_dag_opts_t *, pm_metal_build_dag_result_t *, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_events_since, pm_metal_build_events_since,
+    uint32_t(uint32_t, pm_metal_build_event_t *, uint32_t, uint32_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_events_latest, pm_metal_build_events_latest,
+    uint32_t(void));
 
 /*------------------ async compiler actor ----------------------------------
  * One dedicated actor owns EVERY TCC invocation in the process. Reason:
@@ -3419,6 +3567,7 @@ int32_t pm_metal_build_actor_submit(
         }
         job->n_defines = n_defines;
     }
+    job->target = opts->target;
 
     pm_util_lock_acquire(&a->lock);
     if (a->q_count >= PM_METAL_BUILD_ACTOR_DEPTH) {
@@ -3632,14 +3781,30 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
         if (dot != NULL && strcmp(dot, ".h") == 0) {
             continue;
         }
-        if (unit_source_compile(arena, job->unit.fqn,
-                job->unit.sources[job->next_src], src,
-                all_includes, n_all_includes, all_defines, n_all_defines,
-                &objs[n_objs], &lens[n_objs], job->err, sizeof(job->err))
-                != PM_METAL_BUILD_OK) {
-            actor_scratch_free(arena, objs, lens, compiled_srcs,
-                all_includes, n_joined_includes, all_defines, n_objs);
-            return PM_METAL_BUILD_ERR_COMPILE;
+        {
+            uint64_t t0 = pm_metal_async_mono_us();
+            build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_START,
+                (uint16_t)(job->target & 0xffffu), job->unit.fqn,
+                job->unit.sources[job->next_src], 0, 0);
+            if (unit_source_compile(arena, job->unit.fqn,
+                    job->unit.sources[job->next_src], src,
+                    all_includes, n_all_includes, all_defines, n_all_defines,
+                    job->target,
+                    &objs[n_objs], &lens[n_objs], job->err, sizeof(job->err))
+                    != PM_METAL_BUILD_OK) {
+                build_event_emit(PM_METAL_BUILD_EVENT_UNIT_FAIL,
+                    (uint16_t)(job->target & 0xffffu), job->unit.fqn,
+                    job->unit.sources[job->next_src],
+                    (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu), 0);
+                actor_scratch_free(arena, objs, lens, compiled_srcs,
+                    all_includes, n_joined_includes, all_defines, n_objs);
+                return PM_METAL_BUILD_ERR_COMPILE;
+            }
+            build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_END,
+                (uint16_t)(job->target & 0xffffu), job->unit.fqn,
+                job->unit.sources[job->next_src],
+                (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu),
+                (uint32_t)lens[n_objs]);
         }
         compiled_srcs[n_objs] = job->unit.sources[job->next_src];
         n_objs++;

@@ -635,6 +635,10 @@ static int32_t build_index_http(const char *method, const char *path,
     char *out, uint32_t out_max, uint32_t *out_len);
 static int32_t build_rebuild_http(const char *method, const char *path,
     char *out, uint32_t out_max, uint32_t *out_len);
+static int32_t build_events_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len);
+static int32_t rebuild_unit_local(const pm_metal_build_unit_t *u,
+    int32_t target, char *rerr, size_t rerr_len);
 
 static int32_t fill(const char *method, const char *path, char *out, uint32_t out_max) {
     js_t j;
@@ -650,7 +654,9 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
     path = path_only(raw);
     if (method == NULL
         || (strcmp(method, "GET") != 0
-            && !(strcmp(method, "POST") == 0 && strncmp(path, "/build/", 7) == 0))) {
+            && !(strcmp(method, "POST") == 0
+                && (strncmp(path, "/build/", 7) == 0
+                    || path_is(path, "/build"))))) {
         js_raw(&j, "{\"error\":\"method\"}");
         return js_ok(&j) ? 405 : -1;
     }
@@ -745,6 +751,17 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
     if (path_is(path, "/build")) {
         uint32_t blen = 0;
         if (build_index_http(method, path, j.p, j.max, &blen) == 0) {
+            j.n = blen;
+            return 200;
+        }
+        js_raw(&j, "{\"error\":\"not_found\"}");
+        return 404;
+    }
+    /* /build/events?since=<seq> — the telemetry tail, local for the REPL
+     * and the proves (read pane only, never triggers a build). */
+    if (strncmp(path, "/build/events", 13) == 0) {
+        uint32_t blen = 0;
+        if (build_events_http(method, path, j.p, j.max, &blen) == 0) {
             j.n = blen;
             return 200;
         }
@@ -1581,6 +1598,53 @@ static void ib_row(js_t *j, const pm_metal_build_unit_t *u) {
 /* GET /build — the tree index: every discovered unit, its impl, and
  * whether the in-kernel chain can build it (c/rs/cpp/py all ride the
  * chain now: rs -> micro-rustc -> C, cpp -> lower -> C, py -> mpy). */
+
+/* One unit's full rebuild chain (the same one POST /build/<fqn> drives),
+ * callable from other panes. Re-enters build_rebuild_http through its HTTP
+ * shape with a private reply buffer — the chain (discover, unit_root
+ * resolution, compile, record) is exactly the single-fqn path, so the
+ * factory's BUILD ALL and the per-card button cannot drift apart. Returns
+ * 0 ok; on refusal copies the reply's error text into rerr. */
+static int32_t rebuild_unit_local(const pm_metal_build_unit_t *u,
+    int32_t target, char *rerr, size_t rerr_len) {
+    char path[256];
+    /* the ok reply carries the full record (objects + every symbol name),
+     * which is far past a small buffer — the refusal only needs the error
+     * tail. js_ok on a clipped reply is what turned a real ok into
+     * "rebuild refused" in the BUILD ALL walk. */
+    char reply[8192];
+    uint32_t rlen = 0;
+    int32_t st;
+    if (u == NULL) {
+        return -1;
+    }
+    if (target != 0) {
+        snprintf(path, sizeof(path), "/build/%s?target=%d", u->fqn, (int)target);
+    } else {
+        snprintf(path, sizeof(path), "/build/%s", u->fqn);
+    }
+    st = build_rebuild_http("POST", path, reply, sizeof(reply), &rlen);
+    if (st != 0) {
+        snprintf(rerr, rerr_len, "rebuild refused");
+        return -1;
+    }
+    /* the reply is {"fqn":...,"rebuild":"ok"} or {"rebuild":"refused",
+     * "error":"..."} — rc rides the rebuild field */
+    if (strstr(reply, "\"rebuild\":\"ok\"") == NULL) {
+        const char *e = strstr(reply, "\"error\":\"");
+        if (e != NULL && rerr != NULL && rerr_len > 0) {
+            const char *s = e + 9;
+            size_t i;
+            for (i = 0; i + 1 < rerr_len && s[i] != '\0' && s[i] != '"'; i++) {
+                rerr[i] = s[i];
+            }
+            rerr[i] = '\0';
+        }
+        return -1;
+    }
+    return 0;
+}
+
 static int32_t build_index_http(const char *method, const char *path,
     char *out, uint32_t out_max, uint32_t *out_len) {
     js_t j;
@@ -1591,6 +1655,82 @@ static int32_t build_index_http(const char *method, const char *path,
     char err[128];
     void *backing;
     pm_util_mem_arena_t *arena;
+
+    /* POST /build?all=1[&target=N] — the factory floor's BUILD ALL: walk
+     * every buildable unit through the same per-unit rebuild chain the
+     * POST /build/<fqn> pane drives (synchronous, sequential; the event
+     * ring streams each stage as it lands). The response is a per-unit
+     * ok/refused list, not each record — the records pane serves those. */
+    if (method != NULL && strcmp(method, "POST") == 0 && path != NULL
+        && strncmp(path, "/build?all=1", 12) == 0) {
+        int32_t target = 0;
+        uint32_t ok = 0;
+        uint32_t refused = 0;
+        {
+            const char *q = strstr(path, "&target=");
+            if (q != NULL) {
+                target = (int32_t)strtol(q + 8, NULL, 10);
+            }
+        }
+        backing = malloc(1u << 20);
+        if (backing == NULL) {
+            return -1;
+        }
+        arena = pm_util_mem_arena_create(backing, 1u << 20);
+        if (arena == NULL) {
+            free(backing);
+            return -1;
+        }
+        st = pm_metal_build_discover(arena, &units, &n_units, err, sizeof(err));
+        if (st != PM_METAL_BUILD_OK) {
+            pm_util_mem_arena_destroy(arena);
+            free(backing);
+            return -1;
+        }
+        j.p = out;
+        j.n = 0;
+        j.max = out_max;
+        js_raw(&j, "{\"all\":1,\"target\":");
+        js_u32(&j, (uint32_t)(target < 0 ? 0 : target));
+        js_raw(&j, ",\"units\":[");
+        for (i = 0; i < n_units; i++) {
+            char rerr[256];
+            int32_t rst;
+            if (i > 0) {
+                js_ch(&j, ',');
+            }
+            /* one fresh arena per unit: the rebuild chain allocates heavily
+             * (TCC scratch, transpiles); a shared arena would exhaust. */
+            rst = rebuild_unit_local(&units[i], target, rerr, sizeof(rerr));
+            js_ch(&j, '{');
+            js_raw(&j, "\"fqn\":");
+            js_str(&j, units[i].fqn);
+            js_raw(&j, ",\"rc\":");
+            js_u32(&j, (uint32_t)(rst == 0 ? 0u : 1u));
+            if (rst != 0 && rerr[0] != '\0') {
+                js_raw(&j, ",\"error\":");
+                js_str(&j, rerr);
+            }
+            js_ch(&j, '}');
+            if (rst == 0) {
+                ok++;
+            } else {
+                refused++;
+            }
+        }
+        js_raw(&j, "],\"ok\":");
+        js_u32(&j, ok);
+        js_raw(&j, ",\"refused\":");
+        js_u32(&j, refused);
+        js_ch(&j, '}');
+        pm_util_mem_arena_destroy(arena);
+        free(backing);
+        if (!js_ok(&j)) {
+            return -1;
+        }
+        *out_len = j.n;
+        return 0;
+    }
 
     if (method == NULL || strcmp(method, "GET") != 0 || path == NULL
         || !path_is(path, "/build")) {
@@ -1702,6 +1842,7 @@ static int32_t build_rebuild_http(const char *method, const char *path,
     size_t flen;
     const char *p;
     int32_t st;
+    int32_t target = 0;
     void *backing;
     pm_util_mem_arena_t *arena;
 
@@ -1715,6 +1856,16 @@ static int32_t build_rebuild_http(const char *method, const char *path,
         char *q = strchr(fqnbuf, '?');
         if (q != NULL) {
             *q = '\0';
+        }
+    }
+    /* ?target=N — the cross-emit matrix knob (0 seat / 1 wasm32 / 2 arm /
+     * 3 x86_64). Read from the ORIGINAL path (fqnbuf's copy is already
+     * split): routed by jit.c to the linked TCC instance, refused with a
+     * clear errbuf where the seat has none. */
+    {
+        const char *q = strchr(path, '?');
+        if (q != NULL && strncmp(q, "?target=", 8) == 0) {
+            target = (int32_t)strtol(q + 8, NULL, 10);
         }
     }
 
@@ -1799,6 +1950,7 @@ static int32_t build_rebuild_http(const char *method, const char *path,
         copts.n_include_dirs = n_inc;
         copts.defines = defines;
         copts.n_defines = n_def;
+        copts.target = target;
         st = pm_metal_build_unit_compile(arena, u, &copts,
             &art, err, sizeof(err));
     }
@@ -1871,6 +2023,83 @@ fail:
 static int32_t build_rebuild_asgi_handler(const char *method, const char *path,
     uint8_t *out, uint32_t out_max, uint32_t *out_len) {
     if (build_rebuild_http(method, path, (char *)out, out_max, out_len) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* GET /build/events?since=<seq> — the factory floor's telemetry tail.
+ * Body: {"latest":N,"events":[{"seq":n,"kind":"compile_end","target":0,
+ * "t_us":...,"dur_us":...,"bytes":...,"fqn":"...","src":"..."}]}. The ring
+ * is the build card's; this pane only reads it (same relay pattern as the
+ * other build panes). `since` defaults to 0 (replay the whole tail). */
+static int32_t build_events_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len) {
+    pm_metal_build_event_t ev[32];
+    uint32_t latest = 0;
+    uint32_t since = 0;
+    uint32_t n;
+    uint32_t i;
+    js_t j;
+    static const char *kinds[] = {
+        "unit_start", "compile_start", "compile_end",
+        "link_end", "unit_end", "unit_fail",
+    };
+    if (method == NULL || strcmp(method, "GET") != 0 || path == NULL) {
+        return -1;
+    }
+    if (strncmp(path, "/build/events", 13) != 0) {
+        return -1;
+    }
+    {
+        const char *q = strchr(path, '?');
+        const char *s;
+        if (q != NULL && strncmp(q, "?since=", 7) == 0) {
+            since = (uint32_t)strtoul(q + 7, NULL, 10);
+        }
+        (void)s;
+    }
+    n = pm_metal_build_events_since(since, ev, 32u, &latest);
+    j.p = out;
+    j.n = 0;
+    j.max = out_max;
+    js_raw(&j, "{\"latest\":");
+    js_u32(&j, latest);
+    js_raw(&j, ",\"events\":[");
+    for (i = 0; i < n; i++) {
+        if (i > 0) {
+            js_ch(&j, ',');
+        }
+        js_ch(&j, '{');
+        js_raw(&j, "\"seq\":");
+        js_u32(&j, ev[i].seq);
+        js_raw(&j, ",\"kind\":");
+        js_str(&j, ev[i].kind < 6u ? kinds[ev[i].kind] : "?");
+        js_raw(&j, ",\"target\":");
+        js_u32(&j, ev[i].target);
+        js_raw(&j, ",\"t_us\":");
+        js_u32(&j, ev[i].t_us);
+        js_raw(&j, ",\"dur_us\":");
+        js_u32(&j, ev[i].dur_us);
+        js_raw(&j, ",\"bytes\":");
+        js_u32(&j, ev[i].bytes);
+        js_raw(&j, ",\"fqn\":");
+        js_str(&j, ev[i].fqn);
+        js_raw(&j, ",\"src\":");
+        js_str(&j, ev[i].src);
+        js_ch(&j, '}');
+    }
+    js_raw(&j, "]}");
+    if (!js_ok(&j)) {
+        return -1;
+    }
+    *out_len = j.n;
+    return 0;
+}
+
+static int32_t build_events_asgi_handler(const char *method, const char *path,
+    uint8_t *out, uint32_t out_max, uint32_t *out_len) {
+    if (build_events_http(method, path, (char *)out, out_max, out_len) != 0) {
         return -1;
     }
     return 0;
@@ -2049,6 +2278,13 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
             "text/plain; charset=utf-8") != 0) {
         return -1;
     }
+    /* Events BEFORE the build wildcard route: asgi matches first, and
+     * /build/events would otherwise answer the record pane's 404. The pane
+     * is a pure read of the build card's telemetry ring. */
+    if (pm_metal_net_http_asgi_route_fn_ct("GET", "/build/events", build_events_asgi_handler,
+            "application/json") != 0) {
+        return -1;
+    }
     /* Build records: /build/<fqn> serves the provenance of the unit's last
      * runtime compile (objects + linked symbols). */
     if (pm_metal_net_http_asgi_route_fn_ct("GET", "/build/*", build_asgi_handler,
@@ -2061,6 +2297,14 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
      * and the browser cell wire the same routes; their rebuild fill answers
      * the honest refusal (the handlers exist on every seat). */
     if (pm_metal_net_http_asgi_route_fn_ct("GET", "/build", build_index_asgi_handler,
+            "application/json") != 0) {
+        return -1;
+    }
+    /* BUILD ALL: the factory floor's big button. POST /build?all=1 walks
+     * every buildable unit through the same chain (rebuild_unit_local),
+     * ?target=N fans the whole walk onto one cross lane. The GET shape
+     * stays the read-only index. */
+    if (pm_metal_net_http_asgi_route_fn_ct("POST", "/build", build_index_asgi_handler,
             "application/json") != 0) {
         return -1;
     }
