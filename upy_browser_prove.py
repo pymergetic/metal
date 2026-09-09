@@ -266,6 +266,40 @@ def _cdn(base):
         raise SystemExit("elf refuse %r" % (_elf_lk,))
     print("upy browser cross knob + elf refuse")
 
+    # every-seat-builds-every-arch, browser half: this seat's TCC also
+    # EMITS for the two arches it cannot link — x86_64 (target=3) and
+    # arm-eabi (target=2), both through their pm_tccx_ / pm_tcca_
+    # prefixed cross instances. Magic-byte + header asserts only: the
+    # objects are distribution artifacts; linking them is a property of
+    # the target seat (build.link on foreign ELF refuses — proven above).
+    _x64_obj = jc.object_compile(
+        "int x64_probe(void) { return 42; }\n",
+        target=3,
+    )
+    if not isinstance(_x64_obj, bytes) or len(_x64_obj) < 52:
+        raise SystemExit("x64 cross object %r" % (type(_x64_obj),))
+    if _x64_obj[:4] != b"\x7fELF":
+        raise SystemExit("x64 cross object not ELF")
+    if _x64_obj[4] != 2:
+        raise SystemExit("x64 cross object not ELF64")
+    if _x64_obj[16] != 1 or _x64_obj[17] != 0:
+        raise SystemExit("x64 cross object not ET_REL")
+    if _x64_obj[18] != 62 or _x64_obj[19] != 0:
+        raise SystemExit("x64 cross object e_machine %d" % (_x64_obj[18],))
+    _arm2_obj = jc.object_compile(
+        "int arm_probe(void) { return 42; }\n",
+        target=2,
+    )
+    if not isinstance(_arm2_obj, bytes) or len(_arm2_obj) < 52:
+        raise SystemExit("arm cross object %r" % (type(_arm2_obj),))
+    if _arm2_obj[:4] != b"\x7fELF":
+        raise SystemExit("arm cross object not ELF")
+    if _arm2_obj[4] != 1:
+        raise SystemExit("arm cross object not ELF32")
+    if _arm2_obj[18] != 40 or _arm2_obj[19] != 0:
+        raise SystemExit("arm cross object e_machine %d" % (_arm2_obj[18],))
+    print("upy browser x64+arm cross emit")
+
     # metal.jit.py object loop (browser seat): same card, same faces as the
     # unix seat — µPy compiles Python to mpy bytes and loads them back, all
     # inside the browser cell. No host tool, no fetch: the compiler is in

@@ -454,6 +454,25 @@ if build.artifact_call("cross_add", 19, 23) != 42:
 build.artifact_destroy()
 print("upy cross compile wasm loop")
 
+# the third TCC instance: arm-eabi (pm_tcca_). An ELF backend like the
+# seat's own, so the object path is tcc_output_file — ET_REL bytes back.
+# The compile asserts the artifact shape (ELF32, e_machine EM_ARM=40);
+# linking it is a property of an ARM target seat (the unix ELF relocator
+# gates on its own host arch and refuses foreign EM — correct behavior,
+# Phase 4's load.c work makes ARM the RV1106 seat's native object).
+_arm_obj = jc.object_compile(_cross_src, target=2)
+if not isinstance(_arm_obj, bytes) or len(_arm_obj) < 52:
+    raise SystemExit("arm cross object %r" % (type(_arm_obj),))
+if _arm_obj[:4] != b"\x7fELF":
+    raise SystemExit("arm cross object not ELF")
+if _arm_obj[4] != 1:
+    raise SystemExit("arm cross object not ELF32")
+if _arm_obj[16] != 1 or _arm_obj[17] != 0:
+    raise SystemExit("arm cross object not ET_REL")
+if _arm_obj[18] != 40 or _arm_obj[19] != 0:
+    raise SystemExit("arm cross object e_machine %d" % (_arm_obj[18],))
+print("upy cross compile arm loop")
+
 # metal.process memory budget: the REPL caps its own compile scratch and the
 # compile bridges honor it — a small compile still works inside the budget,
 # a compile whose object cannot fit the cap is refused (None), not an abort.

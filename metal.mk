@@ -94,6 +94,22 @@ $(call tcc_instance,x86_64,TCC_TARGET_X86_64,$(BUILD)/externals/tcc/libtcc.o,)))
 PY_O += $(BUILD)/externals/tcc/libtcc.o
 ifdef PM_METAL_BROWSER
 CFLAGS_EXTMOD += -DTCC_TARGET_WASM32
+# wasm-native rename pass: this seat's objects are relocatable wasm, which
+# GNU nm/objcopy cannot read — the python twin rewrites the linking
+# section directly. Same prefix, same argv shape, same every-defined-global
+# rule as tcc_prefix_syms.sh.
+TCC_PREFIX_SYMS := $(PM_METAL_TCC_TOOLS_DIR)wasm_prefix_syms.py
+# browser (wasm32-native) seat: cross instances for every OTHER arch —
+# x86_64 and arm-eabi. wasm32 is this seat's native instance (target=1 is
+# the same face as target=0), so no wasm32 cross object here. Same rename
+# rule (every defined global, see jit.c's seam block).
+TCC_CROSS_X64_OBJ := $(BUILD)/externals/tcc/libtcc_x64_cross.o
+TCC_CROSS_ARM_OBJ := $(BUILD)/externals/tcc/libtcc_arm_cross.o
+$(eval $(call tcc_instance,x86_64_cross,TCC_TARGET_X86_64,$(TCC_CROSS_X64_OBJ),pm_tccx_))
+$(eval $(call tcc_instance,arm_eabi_cross,TCC_TARGET_ARM,$(TCC_CROSS_ARM_OBJ),pm_tcca_))
+PY_O += $(TCC_CROSS_X64_OBJ) $(TCC_CROSS_ARM_OBJ)
+CFLAGS_EXTMOD += -DPM_METAL_TCC_CROSS_X86_64=1
+CFLAGS_EXTMOD += -DPM_METAL_TCC_CROSS_ARM_EABI=1
 else
 CFLAGS_EXTMOD += -DTCC_TARGET_X86_64
 # Absolute tree roots for the runtime build faces (inspect's /build rebuild

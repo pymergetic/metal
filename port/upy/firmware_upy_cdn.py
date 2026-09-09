@@ -162,6 +162,39 @@ if jpy.object_load(b"M\x06\x00\x00", "fw_jitpy_refuse") == 0:
     raise RuntimeError("jit py firmware load should refuse")
 print("upy jit py load refuses")
 
+# metal.jit.c object path (the in-kernel compile): the vendored TCC linked
+# into every firmware seat compiles a C string to a native ET_REL object
+# through the arena temp-FILE layer (port/lib.c) and hands the bytes back.
+# The prove pins the whole chain: compile, ELF magic, ET_REL type, and the
+# e_machine of the seat's own arch (BIOS/UEFI: x86_64 = 62, RV1106: arm = 40),
+# the same contract the cross-instance tests assert on the hosted seats.
+import pymergetic.metal.jit.c as jc
+
+# metal.jit.c object path (the in-kernel compile): the vendored TCC linked
+# into every firmware seat compiles a C string to a native ET_REL object
+# through the arena temp-FILE layer (port/lib.c) and hands the bytes back.
+# The prove pins the whole chain: compile, ELF magic (starts with the \x7fELF
+# bytes), 64-bit class, ET_REL type, and the e_machine of the seat's own arch
+# (BIOS/UEFI: x86_64 = 62, RV1106: arm = 40), the same contract the
+# cross-instance tests assert on the hosted seats. Index reads only: the
+# ASCII-only firmware lexer chokes on this script's slice syntax (verified
+# by bisect), so startswith() stands in for the magic compare.
+import pymergetic.metal.jit.c as jc
+
+_fw_src = "int fw_tcc_probe(void) { return 0x2a; }\n"
+_fw_obj = jc.object_compile(_fw_src)
+if _fw_obj is None or len(_fw_obj) < 52:
+    raise RuntimeError("jit c firmware object_compile")
+if not _fw_obj.startswith(bytes([127, 69, 76, 70])):
+    raise RuntimeError("jit c firmware object not ELF")
+if _fw_obj[4] != 2:
+    raise RuntimeError("jit c firmware object not ELF64")
+if _fw_obj[16] != 1 or _fw_obj[17] != 0:
+    raise RuntimeError("jit c firmware object not ET_REL")
+if _fw_obj[18] != 62 or _fw_obj[19] != 0:
+    raise RuntimeError("jit c firmware object e_machine %d" % (_fw_obj[18],))
+print("upy jit c tcc object")
+
 # metal.process budget faces (firmware seat): the faces are wired here like
 # on every seat. A budget set succeeds (the sub-arena is small and the boot
 # arena has room), and a compile under it is still refused by the jit.py

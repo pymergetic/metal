@@ -86,4 +86,22 @@ static inline __attribute__((unused)) float rintf(float x) {
 #define signbit(x) ((x) < 0)
 #endif
 
+/* ldexpl for the vendored TCC's float-literal scaling (tccpp.c: hex and
+ * decimal literal exponents scale a long double before narrowing). The
+ * fwinc set above are the zenoh/mbedtls shapes; this one is TCC's. Binary
+ * scaling keeps every exponent the parser can produce exact. */
+#ifndef ldexpl
+static inline __attribute__((unused)) long double ldexpl(long double x, int exp) {
+    while (exp > 0) {
+        x *= 2.0L;
+        exp--;
+    }
+    while (exp < 0) {
+        x *= 0.5L;
+        exp++;
+    }
+    return x;
+}
+#endif
+
 #endif

@@ -32,5 +32,6 @@ upy zenoh
 upy swarm
 upy jit py refuses
 upy jit py load refuses
+upy jit c tcc object
 upy process budget refuses
 upy types value loop

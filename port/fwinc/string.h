@@ -21,4 +21,11 @@ char *strcat(char *dst, const char *src);
 char *strstr(const char *hay, const char *needle);
 char *strtok_r(char *str, const char *delim, char **saveptr);
 
+/* strerror for the vendored TCC's I/O error paths (tcc_write_elf_file
+ * reports open/write failures through it). One fixed string for every
+ * errno: firmware I/O routes to the arena-backed temp layer in port/lib.c,
+ * whose failures are "not found" — the message is diagnostic, never
+ * parsed. */
+char *strerror(int errnum);
+
 #endif

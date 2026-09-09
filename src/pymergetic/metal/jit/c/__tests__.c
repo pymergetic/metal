@@ -227,6 +227,36 @@ static int32_t test_object_compile_target(void) {
     if (rc == 0) { pm_util_mem_arena_destroy(arena); free(backing); return 50; }
     if (err[0] == '\0') { pm_util_mem_arena_destroy(arena); free(backing); return 51; }
 #endif
+
+    /* x86_64 cross knob (wasm32-native seat — the browser): same probe,
+     * ELF64 magic + EM_X86_64 e_machine (62). Distribution artifact like
+     * the arm object above; emit is this seat's, linking the target seat's. */
+    obj = NULL;
+    obj_len = 0;
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_c_object_compile_target(arena, src, strlen(src),
+        NULL, 0, NULL, 0, (int32_t)PM_METAL_JIT_C_TARGET_X86_64,
+        &obj, &obj_len, err, sizeof(err));
+#if defined(PM_METAL_TCC_CROSS_X86_64)
+    if (rc != 0 || obj == NULL || obj_len < 52) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 52;
+    }
+    if (obj[0] != 0x7f || obj[1] != 'E' || obj[2] != 'L' || obj[3] != 'F') {
+        pm_util_mem_arena_destroy(arena); free(backing); return 53;
+    }
+    if (obj[4] != 2 || obj[5] != 1) {  /* ELF64, little-endian */
+        pm_util_mem_arena_destroy(arena); free(backing); return 54;
+    }
+    if (obj[16] != 1 || obj[17] != 0) {  /* ET_REL */
+        pm_util_mem_arena_destroy(arena); free(backing); return 55;
+    }
+    if (obj[18] != 62 || obj[19] != 0) {  /* EM_X86_64 = 62 */
+        pm_util_mem_arena_destroy(arena); free(backing); return 56;
+    }
+#else
+    if (rc == 0) { pm_util_mem_arena_destroy(arena); free(backing); return 57; }
+    if (err[0] == '\0') { pm_util_mem_arena_destroy(arena); free(backing); return 58; }
+#endif
     pm_util_mem_arena_destroy(arena);
     free(backing);
     return 0;

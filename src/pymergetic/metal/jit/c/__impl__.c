@@ -1,3 +1,10 @@
+/* mkstemp: POSIX, but musl (the browser seat's libc) declares it from
+ * stdlib.h, glibc from unistd.h — either way only with a feature-test
+ * macro under -std=c99. Defined before the first libc include; jit.c's
+ * object path (native or a cross instance, ELF backends all) writes its
+ * ET_REL object through a mkstemp temp file.
+ */
+#define _GNU_SOURCE 1
 #include "pymergetic/metal/jit/c/__exports__.h"
 #include "pymergetic/metal/async.h"
 #include "pymergetic/metal/boot/externals.h"
@@ -104,14 +111,18 @@ int32_t pm_metal_jit_c_arena_release(pm_util_mem_arena_t *arena);
     && !defined(TCC_TARGET_ARM)
 #define PM_TCC_CROSS_INSTANCE_ARM_EABI 1
 #endif
+#if PM_HAS_TCC && defined(PM_METAL_TCC_CROSS_X86_64) \
+    && !defined(TCC_TARGET_X86_64)
+#define PM_TCC_CROSS_INSTANCE_X86_64 1
+#endif
 
 #define PM_TCC_CROSS_INSTANCE(id, prefix) \
     extern void *prefix##tcc_new(void); \
     extern void prefix##tcc_delete(void *s); \
     extern void prefix##tcc_set_lib_path(void *s, const char *p); \
-    extern void prefix##tcc_add_library_path(void *s, const char *p); \
-    extern void prefix##tcc_add_include_path(void *s, const char *p); \
-    extern void prefix##tcc_set_output_type(void *s, int t); \
+    extern int prefix##tcc_add_library_path(void *s, const char *p); \
+    extern int prefix##tcc_add_include_path(void *s, const char *p); \
+    extern int prefix##tcc_set_output_type(void *s, int t); \
     extern int prefix##tcc_compile_string(void *s, const char *b); \
     extern void prefix##tcc_define_symbol(void *s, const char *sym, const char *val); \
     extern void prefix##tcc_set_realloc(TCCReallocFunc *f); \
@@ -121,9 +132,9 @@ int32_t pm_metal_jit_c_arena_release(pm_util_mem_arena_t *arena);
     __attribute__((unused)) static void *id##_tcc_new(void) { return prefix##tcc_new(); } \
     __attribute__((unused)) static void id##_tcc_delete(void *s) { prefix##tcc_delete(s); } \
     __attribute__((unused)) static void id##_tcc_set_lib_path(void *s, const char *p) { prefix##tcc_set_lib_path(s, p); } \
-    __attribute__((unused)) static void id##_tcc_add_library_path(void *s, const char *p) { prefix##tcc_add_library_path(s, p); } \
-    __attribute__((unused)) static void id##_tcc_add_include_path(void *s, const char *p) { prefix##tcc_add_include_path(s, p); } \
-    __attribute__((unused)) static void id##_tcc_set_output_type(void *s, int t) { prefix##tcc_set_output_type(s, t); } \
+    __attribute__((unused)) static int id##_tcc_add_library_path(void *s, const char *p) { return prefix##tcc_add_library_path(s, p); } \
+    __attribute__((unused)) static int id##_tcc_add_include_path(void *s, const char *p) { return prefix##tcc_add_include_path(s, p); } \
+    __attribute__((unused)) static int id##_tcc_set_output_type(void *s, int t) { return prefix##tcc_set_output_type(s, t); } \
     __attribute__((unused)) static int id##_tcc_compile_string(void *s, const char *b) { return prefix##tcc_compile_string(s, b); } \
     __attribute__((unused)) static void id##_tcc_define_symbol(void *s, const char *sym, const char *val) { prefix##tcc_define_symbol(s, sym, val); } \
     __attribute__((unused)) static void id##_tcc_set_realloc(void *f) { prefix##tcc_set_realloc(f); } \
@@ -173,6 +184,15 @@ static void wasm_release_bufs(void) { return pm_tccw_wasm_release_buffers(); }
 PM_TCC_CROSS_INSTANCE(arm, pm_tcca_)
 #endif
 
+#ifdef PM_TCC_CROSS_INSTANCE_X86_64
+/* Cross-compiled x86_64 instance (wasm32-native seat — the browser): same
+ * prefix macro, x86_64 backend. An ELF backend like arm — the object path
+ * is tcc_output_file (ET_REL ELF64). The emitted x86_64 object is a
+ * distribution artifact; linking it is a property of an x86_64 target
+ * seat, so this path proves the emitted object's shape only. */
+PM_TCC_CROSS_INSTANCE(x64, pm_tccx_)
+#endif
+
 /*------------------ allocator window (Phase 5) ------------------
  * Implemented after the shim blocks: on a cross seat every cross instance
  * is a second, symbol-prefixed libtcc with its own reallocator global, so
@@ -206,6 +226,10 @@ int32_t pm_metal_jit_c_arena_acquire(pm_util_mem_arena_t *arena) {
     /* same for the prefixed arm-eabi instance */
     arm_tcc_set_realloc(pm_metal_jit_c_tcc_arena_realloc);
 #endif
+#if defined(PM_TCC_CROSS_INSTANCE_X86_64)
+    /* same for the prefixed x86_64 instance (wasm32-native seat) */
+    x64_tcc_set_realloc(pm_metal_jit_c_tcc_arena_realloc);
+#endif
     return 0;
 }
 
@@ -224,6 +248,9 @@ int32_t pm_metal_jit_c_arena_release(pm_util_mem_arena_t *arena) {
 #endif
 #if defined(PM_TCC_CROSS_INSTANCE_ARM_EABI)
     arm_tcc_set_realloc(NULL);
+#endif
+#if defined(PM_TCC_CROSS_INSTANCE_X86_64)
+    x64_tcc_set_realloc(NULL);
 #endif
     s_tcc_arena = NULL;
     s_tcc_arena_holder = NULL;
@@ -450,10 +477,16 @@ static void jit_c_obj_err_diag(char *errbuf, size_t errbuf_len,
 }
 #endif /* PM_HAS_TCC */
 
-#if PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
+#if (PM_HAS_TCC && !defined(TCC_TARGET_WASM32)) \
+    || defined(PM_TCC_CROSS_INSTANCE_ARM_EABI) \
+    || defined(PM_TCC_CROSS_INSTANCE_X86_64)
 #define PM_METAL_JIT_C_OBJECT_PATH 1
 /* Object path (multi-object build): compile to ET_REL .o via tcc_output_file.
- * Same temp-file convention as the jit.rs mrustc embed (/tmp/.jit_*). */
+ * Same temp-file convention as the jit.rs mrustc embed (/tmp/.jit_*).
+ * Gate: any FILE-BACKED TCC backend on this seat — the native instance
+ * when it is not wasm32, or a cross instance (arm-eabi/x86_64 are ELF
+ * backends wherever they link, wasm32 seat included: emcc's libc has the
+ * POSIX calls, the object is an in-memory distribution artifact there). */
 #include <unistd.h>
 #include <fcntl.h>
 
@@ -462,6 +495,10 @@ static void jit_c_obj_err(char *errbuf, size_t errbuf_len, const char *msg) {
     snprintf(errbuf, errbuf_len, "%s", msg);
 }
 
+/* On the wasm32-native seat the router always picks the wasm path for
+ * TARGET_SEAT, so this body links but is never called there — the
+ * unused attribute matches the stub below it and silences -Wunused. */
+__attribute__((unused))
 static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     const char *source, size_t source_len,
     const char **include_dirs, uint32_t n_include_dirs,
@@ -765,6 +802,151 @@ static int32_t jit_c_object_compile_arm(pm_util_mem_arena_t *arena,
 }
 #endif /* PM_TCC_CROSS_INSTANCE_ARM_EABI */
 
+#if defined(PM_TCC_CROSS_INSTANCE_X86_64)
+/* x86_64 object path (cross instance on the wasm32-native seat): same
+ * tcc_output_file shape as the native and arm paths — the x86_64 backend
+ * is an ELF backend, the emitted ET_REL ELF64 is a distribution artifact
+ * for an x86_64 target seat. */
+static int32_t jit_c_object_compile_x64(pm_util_mem_arena_t *arena,
+    const char *source, size_t source_len,
+    const char **include_dirs, uint32_t n_include_dirs,
+    const char **defines, uint32_t n_defines,
+    uint8_t **obj_out, size_t *obj_len,
+    char *errbuf, size_t errbuf_len) {
+    char tmpl[] = "/tmp/.jit_c_x64_XXXXXX";
+    char diag_buf[1024]; /* TCC diagnostic capture — whole-invocation lifetime */
+    jit_c_diag_t diag;
+    int fd;
+    FILE *f;
+    long n;
+    uint8_t *buf;
+    void *s;
+    uint32_t i;
+
+    if (arena == NULL || source == NULL || source_len == 0
+        || obj_out == NULL || obj_len == NULL) {
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: bad args");
+        return -1;
+    }
+    if ((include_dirs == NULL && n_include_dirs != 0)
+        || (defines == NULL && n_defines != 0)) {
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: bad args");
+        return -1;
+    }
+    *obj_out = NULL;
+    *obj_len = 0;
+
+    fd = mkstemp(tmpl);
+    if (fd < 0) {
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: mkstemp failed");
+        return -1;
+    }
+    close(fd);
+
+    if (pm_metal_jit_c_arena_acquire(arena) != 0) {
+        unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len,
+            "object_compile: allocator window busy");
+        return -1;
+    }
+
+    s = x64_tcc_new();
+    if (s == NULL) {
+        pm_metal_jit_c_arena_release(arena);
+        unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: tcc_new failed");
+        return -1;
+    }
+    x64_tcc_set_lib_path(s, PM_METAL_TCC_LIB_DIR);
+    x64_tcc_add_library_path(s, PM_METAL_TCC_LIB_DIR);
+    x64_tcc_set_output_type(s, TCC_OUTPUT_OBJ);
+    {
+        diag.buf = diag_buf;
+        diag.len = 0;
+        diag.max = sizeof(diag_buf);
+        diag_buf[0] = '\0';
+        x64_tcc_set_error_func(s, &diag, jit_c_diag_cb);
+        for (i = 0; i < n_include_dirs; i++) {
+            if (include_dirs[i] != NULL && include_dirs[i][0] != '\0') {
+                x64_tcc_add_include_path(s, include_dirs[i]);
+            }
+        }
+        for (i = 0; i < n_defines; i++) {
+            if (defines[i] != NULL && defines[i][0] != '\0') {
+                x64_tcc_define_symbol(s, defines[i], NULL);
+            }
+        }
+        if (x64_tcc_compile_string(s, source) != 0) {
+            x64_tcc_delete(s);
+            pm_metal_jit_c_arena_release(arena);
+            unlink(tmpl);
+            jit_c_obj_err_diag(errbuf, errbuf_len,
+                "object_compile: tcc compile failed", &diag);
+            return -1;
+        }
+        if (x64_tcc_output_file(s, tmpl) != 0) {
+            x64_tcc_delete(s);
+            pm_metal_jit_c_arena_release(arena);
+            unlink(tmpl);
+            jit_c_obj_err_diag(errbuf, errbuf_len,
+                "object_compile: tcc_output_file failed", &diag);
+            return -1;
+        }
+        x64_tcc_delete(s);
+    }
+    pm_metal_jit_c_arena_release(arena);
+
+    f = fopen(tmpl, "rb");
+    if (f == NULL) {
+        unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: reopen failed");
+        return -1;
+    }
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    rewind(f);
+    if (n <= 0) {
+        fclose(f); unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: empty object");
+        return -1;
+    }
+    buf = (uint8_t *)pm_util_mem_alloc(arena, (size_t)n);
+    if (buf == NULL) {
+        fclose(f); unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: arena alloc failed");
+        return -1;
+    }
+    if (fread(buf, 1, (size_t)n, f) != (size_t)n) {
+        fclose(f); unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len, "object_compile: short read");
+        return -1;
+    }
+    fclose(f);
+    unlink(tmpl);
+    *obj_out = buf;
+    *obj_len = (size_t)n;
+    return 0;
+}
+#else
+/* seat without the x86_64 cross instance — the router refuses */
+static int32_t jit_c_object_compile_x64(pm_util_mem_arena_t *arena,
+    const char *source, size_t source_len,
+    const char **include_dirs, uint32_t n_include_dirs,
+    const char **defines, uint32_t n_defines,
+    uint8_t **obj_out, size_t *obj_len,
+    char *errbuf, size_t errbuf_len) {
+    (void)arena; (void)source; (void)source_len;
+    (void)include_dirs; (void)n_include_dirs;
+    (void)defines; (void)n_defines;
+    (void)obj_out; (void)obj_len;
+    if (errbuf != NULL && errbuf_len > 0) {
+        snprintf(errbuf, errbuf_len,
+            "object_compile: x86_64 target not available on this seat");
+    }
+    return -1;
+}
+#endif /* PM_TCC_CROSS_INSTANCE_X86_64 */
+
 #if PM_METAL_JIT_C_WASM_PATH
 /* WASM object path (wasm32 seats and cross seats): the wasm32 backend
  * serializes the module directly from its code buffer (wasm_build_module),
@@ -942,6 +1124,11 @@ int32_t pm_metal_jit_c_object_compile_target(pm_util_mem_arena_t *arena,
     }
     if (target == (int32_t)PM_METAL_JIT_C_TARGET_ARM_EABI) {
         return jit_c_object_compile_arm(arena, source, source_len,
+            include_dirs, n_include_dirs, defines, n_defines,
+            obj_out, obj_len, errbuf, errbuf_len);
+    }
+    if (target == (int32_t)PM_METAL_JIT_C_TARGET_X86_64) {
+        return jit_c_object_compile_x64(arena, source, source_len,
             include_dirs, n_include_dirs, defines, n_defines,
             obj_out, obj_len, errbuf, errbuf_len);
     }
