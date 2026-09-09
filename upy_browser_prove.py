@@ -159,7 +159,7 @@ def _cdn(base):
 
     if zenoh.peer is None:
         raise SystemExit("zenoh peer")
-    if zenoh.peer(0x7F000001, 7447, 0) != 0:
+    if zenoh.peer("127.0.0.1", 7447, 0) != 0:
         raise SystemExit("zenoh peer cfg")
     zenoh.up()
     for _ in range(4):

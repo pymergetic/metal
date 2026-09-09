@@ -100,19 +100,28 @@ int32_t pm_metal_boot_fill_want_dhcp(void) {
 
 void *pm_metal_wasm_malloc(size_t n) {
     pm_metal_upy_hdr_t *h;
-    size_t need;
+    uint8_t *payload;
     if (n == 0) {
         n = 1;
     }
     n = align16(n);
-    need = sizeof(*h) + n;
-    if (s_bump == NULL || s_bump + need > s_bump_end) {
+    if (s_bump == NULL) {
         return NULL;
     }
-    h = (pm_metal_upy_hdr_t *)(void *)s_bump;
+    /* The payload is what the caller sees, so the payload is what gets
+     * aligned — 16 on every pointer width (WAMR's GC pools demand 8). The
+     * size header sits directly before it: sizeof(*h) is 4 on ELF32 (arm)
+     * and 8 on ELF64, so aligning the bump instead would leave every ARM
+     * payload at bump+4 = 4 mod 8 and the GC rejects its pools. Realloc
+     * reads the header back as (hdr *)payload - 1, which stays true. */
+    payload = (uint8_t *)(void *)align16((size_t)s_bump + sizeof(*h));
+    h = (pm_metal_upy_hdr_t *)(void *)(payload - sizeof(*h));
+    if (payload + n > s_bump_end) {
+        return NULL;
+    }
     h->n = n;
-    s_bump += need;
-    return h + 1;
+    s_bump = payload + n;
+    return payload;
 }
 
 void pm_metal_wasm_free(void *p) {
@@ -236,8 +245,10 @@ int pm_metal_firmware_upy(void)
      * autoexec: it has no CDN fetch, so boot reaches the REPL + auto-served
      * httpd/sshd regardless of whether any host pack server is up. The prove
      * seat (REPL=0) runs the full CDN autoexec under the live host CDN. ARM
-     * hardware has no QEMU CDN (10.0.2.2), so it always uses ready. */
-#if defined(__arm__) || defined(__ARM_ARCH) || MICROPY_HELPER_REPL
+     * hardware with no QEMU CDN (10.0.2.2) — RV1106 on real metal — stays
+     * ready; the QEMU virt seat sees the user-net gateway like BIOS/UEFI, so
+     * its build.mk says PM_METAL_UPY_CDN=1 and it takes the same full prove. */
+#if (defined(__arm__) || defined(__ARM_ARCH)) && !defined(PM_METAL_UPY_CDN) || MICROPY_HELPER_REPL
     src = pm_metal_firmware_upy_ready_py();
     src_len = pm_metal_firmware_upy_ready_py_len();
 #else

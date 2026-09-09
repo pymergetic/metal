@@ -512,11 +512,13 @@ firmware:
 	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_BIOS all
 	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_UEFI all
 	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_RV1106 all
+	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_QEMU all
 
 firmware-prove:
 	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_BIOS prove
 	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_UEFI prove
 	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_RV1106 prove
+	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_QEMU prove
 
 firmware-check:
 	mkdir -p $(CURDIR)/build

@@ -48,6 +48,8 @@ struct vnet {
     uint16_t tx_nqoff;
     uint16_t rx_last;
     uint16_t tx_last;
+    uint16_t avail_last;
+    uint16_t tx_avail_last;
     uint8_t *vqmem;
     uint8_t *rx_data;
     uint8_t *tx_data;
@@ -432,10 +434,12 @@ static int32_t fw_setup_queue(struct vnet *d, uint16_t qidx, uint8_t *mem, uint8
     if (rx) {
         d->rx_nqoff = mmio_r16(c + 30);
         d->rx_last = 0;
+        d->avail_last = qsz; /* mirrors the avail idx we just published */
         fw_notify(d, 0, d->rx_nqoff);
     } else {
         d->tx_nqoff = mmio_r16(c + 30);
         d->tx_last = 0;
+        d->tx_avail_last = 0;
     }
     (void)used;
     return 0;
@@ -458,14 +462,24 @@ static int32_t fw_vnet_tx(struct vnet *d, const uint8_t *frame, uint16_t len) {
     if (d->tx_data == NULL || len == 0 || len > FRAME_MAX) {
         return -1;
     }
-    aidx = ring_ld16(avail + 2);
-    fw_vnet_tx_reap(d);
-    for (spins = 0; (uint16_t)(aidx - d->tx_last) >= (uint16_t)FW_QSZ; spins++) {
+    /* Claim the avail tail before touching the ring — tx is exported on the
+     * same face any core may call (the board proves tx unlocked next to the
+     * runners' locked pumps, same race the rx claim fixes). */
+    for (spins = 0; ; spins++) {
+        aidx = d->tx_avail_last;
+        fw_vnet_tx_reap(d);
+        if ((uint16_t)(aidx - d->tx_last) < (uint16_t)FW_QSZ) {
+            if (__atomic_compare_exchange_n(&d->tx_avail_last, &aidx, (uint16_t)(aidx + 1u), 1,
+                    __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+                break;
+            }
+            spins = 0;
+            continue;
+        }
         if (spins >= FW_TX_SPINS) {
             return -1;
         }
         pm_cpu_pause();
-        fw_vnet_tx_reap(d);
     }
     slot = (uint16_t)(aidx % FW_QSZ);
     buf = d->tx_data + (uint32_t)slot * (VNET_HDR + FRAME_MAX);
@@ -486,17 +500,41 @@ static int32_t fw_vnet_poll(struct vnet *d) {
     uint8_t *used = d->vqmem + 512;
     uint8_t *avail = d->vqmem + 256;
     uint16_t uidx;
-    uint16_t aidx;
     if (d->rx_data == NULL) {
         return -1;
     }
     uidx = ring_ld16(used + 2);
-    while (d->rx_last != uidx) {
-        uint32_t slot = (uint32_t)(d->rx_last % FW_QSZ);
-        uint8_t *ue = used + 4 + slot * 8u;
-        uint16_t id = (uint16_t)ring_ld16(ue);
-        uint16_t n = (uint16_t)ring_ld16(ue + 4);
-        uint8_t *pkt = d->rx_data + (uint32_t)id * (VNET_HDR + FRAME_MAX);
+    /* Claim-based consumption. The poll face is callable from any core: the
+     * async runners pump under the net.ip lock, but board proves poll a
+     * device directly, and on smp seats those overlap. The old
+     * `while (rx_last != uidx) rx_last++` equality exit turned one lost
+     * race into a catastrophe — a second incrementer overshooting the
+     * device's idx leaves rx_last "ahead", the equality never re-matches
+     * until the counter wraps, so a single poll spun up to 65536
+     * iterations re-queueing slot 0 and re-delivering stale frames (a
+     * boot rx storm of ~64k frames on one nic; every delivery acked). A
+     * claim re-checks the fresh gap before each increment, so two cores
+     * split the backlog and neither can pass the device's frontier. */
+    for (;;) {
+        uint16_t last = d->rx_last;
+        uint32_t slot;
+        uint8_t *ue;
+        uint16_t id;
+        uint16_t n;
+        uint8_t *pkt;
+        uint16_t at;
+        if ((uint16_t)(uidx - last) == 0u) {
+            break;
+        }
+        if (!__atomic_compare_exchange_n(&d->rx_last, &last, (uint16_t)(last + 1u), 1,
+                __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            continue; /* the other core claimed it; re-read the gap */
+        }
+        slot = (uint32_t)(last % FW_QSZ);
+        ue = used + 4 + slot * 8u;
+        id = (uint16_t)ring_ld16(ue);
+        n = (uint16_t)ring_ld16(ue + 4);
+        pkt = d->rx_data + (uint32_t)id * (VNET_HDR + FRAME_MAX);
         if (n > VNET_HDR) {
             n = (uint16_t)(n - VNET_HDR);
             if (n > FRAME_MAX) {
@@ -504,11 +542,18 @@ static int32_t fw_vnet_poll(struct vnet *d) {
             }
             (void)pm_metal_net_ip_rx_from(d->net_h, pkt + VNET_HDR, n);
         }
-        aidx = ring_ld16(avail + 2);
-        ring_st16(avail + 4 + (uint32_t)(aidx % FW_QSZ) * 2u, id);
+        /* Hand the buffer back: claim the avail tail the same way, so two
+         * pollers never write the same avail slot or double-bump its idx. */
+        at = d->avail_last;
+        for (;;) {
+            if (__atomic_compare_exchange_n(&d->avail_last, &at, (uint16_t)(at + 1u), 1,
+                    __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+                break;
+            }
+        }
+        ring_st16(avail + 4 + (uint32_t)(at % FW_QSZ) * 2u, id);
         pm_cpu_store_fence();
-        ring_st16(avail + 2, (uint16_t)(aidx + 1u));
-        d->rx_last++;
+        ring_st16(avail + 2, (uint16_t)(at + 1u));
         uidx = ring_ld16(used + 2);
     }
     fw_notify(d, 0, d->rx_nqoff);

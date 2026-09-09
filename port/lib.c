@@ -607,6 +607,19 @@ __attribute__((naked)) void longjmp(jmp_buf env, int val) {
         "mov r0, r2\n\t"
         "bx lr\n\t");
 }
+
+/* TCC's runtime flush (tccrun.c) calls this after writing generated arm
+ * code. MMU off + no D-cache worry: ICIALLU invalidates the whole I-cache,
+ * dsb/isb order it. The signature is the gcc/glibc one (two args, void
+ * return); tccrun.c's extern declaration matches. */
+__attribute__((naked)) void __clear_cache(void *beginning, void *end) {
+    __asm__ volatile(
+        "mov r0, #0\n\t"
+        "dsb sy\n\t"
+        "mcr p15, 0, r0, c7, c5, 0\n\t" /* ICIALLU */
+        "isb sy\n\t"
+        "bx lr\n\t");
+}
 #endif
 
 #if defined(__x86_64__) && !defined(PM_METAL_UEFI)

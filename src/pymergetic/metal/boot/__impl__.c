@@ -107,6 +107,12 @@ int pm_metal_ready(void) {
     return s_ready;
 }
 
+const char *pm_metal_boot_seat(void) {
+    /* Not a new fact — the same name the tree prints as `arch` and the fills
+     * answer; handed to the guest so a prove can branch on the seat. */
+    return pm_metal_boot_fill_seat();
+}
+
 pm_util_mem_arena_t *pm_metal_boot_arena(void) {
     return s_arena;
 }
@@ -241,6 +247,7 @@ int pm_metal_boot(void) {
 PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot, pm_metal_boot, int(void));
 PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_ready, pm_metal_ready, int(void));
 PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot_feed_span, pm_metal_boot_feed_span, int32_t(uint64_t, uint64_t));
+PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot_seat, pm_metal_boot_seat, const char *(void));
 
 /* tlsf.h: "Two Level Segregated Fit memory allocator, version 3.1." */
 PM_METAL_EXTERNAL_C(tlsf, "3.1");

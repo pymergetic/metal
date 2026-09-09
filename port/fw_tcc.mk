@@ -55,6 +55,16 @@ TCC_DEFINES_FIRMWARE := -DCONFIG_TCC_STATIC=1 -DCONFIG_TCC_SEMLOCK=0 \
 # freestanding TCC takes fwinc's FILE/stdio face, no glibc struct timespec
 # clash, no __isoc23_* strtoul renames (tcc_instances.mk's TCC_INC seam).
 TCC_INC := -I$(PORT_DIR)/fwinc
+# The recipe's libtcc.c compile must land in the SAME arch as the board
+# (tcc_instances.mk's TCC_CFLAGS seam). Hosted seats leave CC at default
+# because host==target; a firmware board with a cross clang (armv7) must
+# pass the same --target/-m flags the board itself uses, else the object
+# is host-arch and lld refuses it at link ("incompatible with crt0.o").
+# UEFI overrides TCC_CFLAGS itself (the COFF/PE seam — keep that override
+# whole; it already carries its --target).
+ifeq ($(origin TCC_CFLAGS),undefined)
+TCC_CFLAGS := $(filter --target=% -m% -march=%,$(CFLAGS_METAL))
+endif
 
 include $(METAL_DIR)/tools/tcc_instances.mk
 

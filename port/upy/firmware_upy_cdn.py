@@ -166,20 +166,21 @@ print("upy jit py load refuses")
 # into every firmware seat compiles a C string to a native ET_REL object
 # through the arena temp-FILE layer (port/lib.c) and hands the bytes back.
 # The prove pins the whole chain: compile, ELF magic, ET_REL type, and the
-# e_machine of the seat's own arch (BIOS/UEFI: x86_64 = 62, RV1106: arm = 40),
-# the same contract the cross-instance tests assert on the hosted seats.
+# ELF class + e_machine of the seat's own arch (x64 seats: ELF64/EM_X86_64
+# = 62; arm seats: ELF32/EM_ARM = 40), the same contract the cross-instance
+# tests assert on the hosted seats. The seat says which pair to expect via
+# pymergetic.metal.boot.seat() — the same name the tree prints as `arch`.
+# Index reads only: the ASCII-only firmware lexer chokes on slice syntax
+# (verified by bisect), so startswith() stands in for the magic compare.
 import pymergetic.metal.jit.c as jc
+import pymergetic.metal.boot as mboot
 
-# metal.jit.c object path (the in-kernel compile): the vendored TCC linked
-# into every firmware seat compiles a C string to a native ET_REL object
-# through the arena temp-FILE layer (port/lib.c) and hands the bytes back.
-# The prove pins the whole chain: compile, ELF magic (starts with the \x7fELF
-# bytes), 64-bit class, ET_REL type, and the e_machine of the seat's own arch
-# (BIOS/UEFI: x86_64 = 62, RV1106: arm = 40), the same contract the
-# cross-instance tests assert on the hosted seats. Index reads only: the
-# ASCII-only firmware lexer chokes on this script's slice syntax (verified
-# by bisect), so startswith() stands in for the magic compare.
-import pymergetic.metal.jit.c as jc
+_fw_class = 2
+_fw_machine_hi = 62
+_fw_machine_lo = 0
+if mboot.seat() == "armv7qemu" or mboot.seat() == "armv7rv1106":
+    _fw_class = 1
+    _fw_machine_hi = 40
 
 _fw_src = "int fw_tcc_probe(void) { return 0x2a; }\n"
 _fw_obj = jc.object_compile(_fw_src)
@@ -187,11 +188,11 @@ if _fw_obj is None or len(_fw_obj) < 52:
     raise RuntimeError("jit c firmware object_compile")
 if not _fw_obj.startswith(bytes([127, 69, 76, 70])):
     raise RuntimeError("jit c firmware object not ELF")
-if _fw_obj[4] != 2:
-    raise RuntimeError("jit c firmware object not ELF64")
+if _fw_obj[4] != _fw_class:
+    raise RuntimeError("jit c firmware object class %d" % (_fw_obj[4],))
 if _fw_obj[16] != 1 or _fw_obj[17] != 0:
     raise RuntimeError("jit c firmware object not ET_REL")
-if _fw_obj[18] != 62 or _fw_obj[19] != 0:
+if _fw_obj[18] != _fw_machine_hi or _fw_obj[19] != _fw_machine_lo:
     raise RuntimeError("jit c firmware object e_machine %d" % (_fw_obj[18],))
 print("upy jit c tcc object")
 
@@ -268,7 +269,7 @@ import pymergetic.metal.net.zenoh as zenoh
 
 if zenoh.peer is None:
     raise RuntimeError("zenoh peer")
-if zenoh.peer(0x7F000001, 7447, 0) != 0:
+if zenoh.peer("127.0.0.1", 7447, 0) != 0:
     raise RuntimeError("zenoh peer cfg")
 zenoh.up()
 for _ in range(4):

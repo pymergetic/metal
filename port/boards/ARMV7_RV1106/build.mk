@@ -51,6 +51,7 @@ CFLAGS_METAL := --target=$(CLANG_TARGET) -marm -mfpu=neon-vfpv4 -mfloat-abi=hard
 	-Wall -Wextra -Wno-unused-parameter -Os -DNDEBUG -std=gnu99 \
 	-DPM_METAL_FIRMWARE=1 -DPM_WASMMOD_GUEST=0 -DPM_WASMMOD_IO_FILE=0 \
 	-DPM_METAL_UART_REPL=1 \
+	-DPM_METAL_GMAC_BOARD=1 \
 	-DMICROPY_NLR_SETJMP=1 \
 	-DMICROPY_HW_MCU_NAME='"rv1106"'
 INC := -I$(PORT_DIR)/fwinc -I$(BOARD_DIR) -I$(PORT_DIR) -I$(PORT_DIR)/bringup -I$(METAL_SRC) -I$(WASMMOD_SRC) -I$(WASMMOD) \
@@ -71,9 +72,11 @@ FW_OBJS := \
 
 FW_RUSTC_TARGET := armv7a-none-eabihf
 FW_WAMR_ARCH := armv7
+FW_TCC_TARGET := arm
 include $(PORT_DIR)/fw_cdn.mk
 include $(PORT_DIR)/fw_mbedtls.mk
 include $(PORT_DIR)/fw_zenoh.mk
+include $(PORT_DIR)/fw_tcc.mk
 include $(PORT_DIR)/fw_cards.mk
 include $(PORT_DIR)/fw_wamr.mk
 include $(PORT_DIR)/upy.mk

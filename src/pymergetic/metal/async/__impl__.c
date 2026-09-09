@@ -175,6 +175,16 @@ static uint32_t cpu_id(void) {
         return 0;
     }
     return b;
+#elif defined(PM_METAL_FIRMWARE) && defined(__arm__) && !defined(__aarch64__)
+    uint32_t mpidr;
+    /* MPIDR Aff0 — the AP PSCI CPU_ON targeted (cpu index within the
+     * cluster; QEMU virt and RV1106 are single-cluster). */
+    __asm__ volatile("mrc p15, 0, %0, c0, c0, 5" : "=r"(mpidr));
+    mpidr &= 0xffu;
+    if (mpidr >= s_ncurrent) {
+        return 0;
+    }
+    return mpidr;
 #else
     return 0;
 #endif

@@ -1,6 +1,7 @@
 /* pymergetic.metal.drivers.net.gmac — Synopsys dwmac-4.20a.
- * RV1106 firmware: RMII MAC @ 0xffa80000, PHY MDIO addr 2, GRF RMII 100M.
- * Other seats: linked, probe/up fail closed (no MMIO). Same netdev face. */
+ * RV1106 firmware (PM_METAL_GMAC_BOARD in its build.mk): RMII MAC @
+ * 0xffa80000, PHY MDIO addr 2, GRF RMII 100M. Other seats: linked,
+ * probe/up fail closed (no MMIO). Same netdev face. */
 #include "pymergetic/metal/drivers/net/gmac/__exports__.h"
 
 #include "pymergetic/metal/dt.h"
@@ -10,7 +11,11 @@
 #include <stdint.h>
 #include <string.h>
 
-#if defined(PM_METAL_FIRMWARE) && defined(__arm__) && !defined(__aarch64__)
+/* GMAC HW needs the board's dwmac: RV1106 defines PM_METAL_GMAC_BOARD in
+ * its build.mk. Other seats (QEMU virt, BIOS, UEFI, host): linked, probe/up
+ * fail closed (no MMIO) — same netdev face. */
+#if defined(PM_METAL_FIRMWARE) && defined(__arm__) && !defined(__aarch64__) \
+    && defined(PM_METAL_GMAC_BOARD)
 #define PM_METAL_GMAC_HW 1
 #include "pm_cpu.h"
 #endif
