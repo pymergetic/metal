@@ -91,6 +91,15 @@ ents = []
 for f in sorted(metal.rglob("*")):
     if f.suffix not in {".c", ".h", ".cpp"} or "build" in f.parts:
         continue
+    rel = str(f.relative_to(metal))
+    # Vendored trees (externals/mrustc ~50k C++ files, zenoh-pico, tcc) get
+    # NO CDB entries: clangd background-indexes every entry, and 50k mrustc
+    # C++ TUs peg the indexer for hours and crash it — the headers these
+    # trees contribute are pulled in transitively when metal TUs include
+    # them, so they stay resolvable without per-file entries. Only the thin
+    # embed-glue dirs (mrustc_embed, zp_pico_prove) keep their entries.
+    if rel.startswith("externals/"):
+        continue
     if is_fw(f):
         pfx = (
             "clang -xc -std=gnu11 -ffreestanding -Wall -Wno-unknown-attributes "

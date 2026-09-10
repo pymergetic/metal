@@ -804,11 +804,11 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_reply_ct(
         let cur = *DEFER_CUR.0.get();
         let mut rc = -1;
         if cur >= 0 && (cur as usize) < MAX_DEFER {
-            let dp = unsafe { defers().add(cur as usize) };
-            let d = unsafe { *dp };
+            let dp = defers().add(cur as usize);
+            let d = *dp;
             let fits = (len as usize) <= BODY_MAX && (len == 0 || !body.is_null());
             if d.used && fits && (d.conn as usize) < MAX_CONN {
-                let c = unsafe { &mut *conns().add(d.conn as usize) };
+                let c = &mut *conns().add(d.conn as usize);
                 if len != 0 {
                     let arena = *ARENA.0.get();
                     if arena.is_null() {
@@ -831,11 +831,9 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_reply_ct(
                 /* Set last: the parked coroutine reads this to move on. */
                 c.defer_ready = true;
                 let waiter = d.waiter;
-                unsafe {
-                    (*dp).used = false;
-                    (*dp).taken = false;
-                    (*dp).waiter = ptr::null_mut();
-                }
+                (*dp).used = false;
+                (*dp).taken = false;
+                (*dp).waiter = ptr::null_mut();
                 *DEFER_CUR.0.get() = -1;
                 if !waiter.is_null() {
                     pm_metal_coop_post_task(waiter);
@@ -863,7 +861,7 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route_defer(
         let Some(slot) = routes_next_slot() else {
             return -1;
         };
-        let r = unsafe { &mut *routes_ptr().add(slot) };
+        let r = &mut *routes_ptr().add(slot);
         if !cstr_copy(r.method.as_mut_ptr(), 8, b"GET\0".as_ptr()) || !cstr_copy(r.path.as_mut_ptr(), 80, path) {
             return -1;
         }
@@ -1356,23 +1354,19 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_init(arena: *mut pm_util_mem_are
             listen_at_set(slot, -1);
             listen_addr_set(slot, 0, 0);
         }
-        unsafe {
-            let base = routes_ptr();
-            let n = routes_len();
-            let mut i = 0usize;
-            while i < n {
-                let r = &mut *base.add(i);
-                r.used = false;
-                i += 1;
-            }
+        let base = routes_ptr();
+        let n = routes_len();
+        let mut i = 0usize;
+        while i < n {
+            let r = &mut *base.add(i);
+            r.used = false;
+            i += 1;
         }
-        unsafe {
-            let cbase = conns();
-            let mut ci = 0usize;
-            while ci < MAX_CONN {
-                (*cbase.add(ci)).used = false;
-                ci += 1;
-            }
+        let cbase = conns();
+        let mut ci = 0usize;
+        while ci < MAX_CONN {
+            (*cbase.add(ci)).used = false;
+            ci += 1;
         }
         // Self-register the httpd service so m.serve()/m.services() see it.
         pm_metal_services_register(HTTPD_SVC.0.get() as *const pm_metal_service_t);
@@ -1390,17 +1384,15 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_deinit() {
             }
             listen_at_set(slot, -1);
         }
-        unsafe {
-            let cbase = conns();
-            let mut ci = 0usize;
-            while ci < MAX_CONN {
-                let c = &mut *cbase.add(ci);
-                if c.used {
-                    release_conn(c);
-                }
-                c.used = false;
-                ci += 1;
+        let cbase = conns();
+        let mut ci = 0usize;
+        while ci < MAX_CONN {
+            let c = &mut *cbase.add(ci);
+            if c.used {
+                release_conn(c);
             }
+            c.used = false;
+            ci += 1;
         }
         // Free the dynamic route table so a re-init starts clean and cannot
         // double-register over stale entries.
@@ -1432,7 +1424,7 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route(
         let Some(slot) = routes_next_slot() else {
             return -1;
         };
-        let r = unsafe { &mut *routes_ptr().add(slot) };
+        let r = &mut *routes_ptr().add(slot);
         if !cstr_copy(r.method.as_mut_ptr(), 8, method) || !cstr_copy(r.path.as_mut_ptr(), 80, path) {
             return -1;
         }
@@ -1463,7 +1455,7 @@ unsafe fn route_fn_claim(
     }
     unsafe {
         let slot = routes_next_slot()?;
-        let r = unsafe { &mut *routes_ptr().add(slot) };
+        let r = &mut *routes_ptr().add(slot);
         if !cstr_copy(r.method.as_mut_ptr(), 8, method) || !cstr_copy(r.path.as_mut_ptr(), 80, path) {
             return None;
         }
@@ -1524,7 +1516,7 @@ unsafe fn route_static_claim(
     }
     unsafe {
         let slot = routes_next_slot()?;
-        let r = unsafe { &mut *routes_ptr().add(slot) };
+        let r = &mut *routes_ptr().add(slot);
         if !cstr_copy(r.method.as_mut_ptr(), 8, b"GET\0".as_ptr()) || !cstr_copy(r.path.as_mut_ptr(), 80, url) {
             return None;
         }
@@ -1597,7 +1589,7 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route_static_copy(
             return -1;
         }
         ptr::copy_nonoverlapping(body, dst, n);
-        let r = unsafe { &mut *routes_ptr().add(slot) };
+        let r = &mut *routes_ptr().add(slot);
         if !cstr_copy(r.method.as_mut_ptr(), 8, b"GET\0".as_ptr()) || !cstr_copy(r.path.as_mut_ptr(), 80, url) {
             return -1;
         }
@@ -1633,7 +1625,7 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route_stream_fn(
         let Some(slot) = routes_next_slot() else {
             return -1;
         };
-        let r = unsafe { &mut *routes_ptr().add(slot) };
+        let r = &mut *routes_ptr().add(slot);
         if !cstr_copy(r.method.as_mut_ptr(), 8, method) || !cstr_copy(r.path.as_mut_ptr(), 80, path) {
             return -1;
         }

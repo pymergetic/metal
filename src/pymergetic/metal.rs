@@ -11,6 +11,13 @@
 //! handler come from `pymergetic_wasmmod`'s `upy-host`, so this crate must
 //! stay `no_std` or std would collide with them on `panic_impl`.
 #![cfg_attr(not(any(test, feature = "gen")), no_std)]
+// Same posture as the wasmmod crate root: this crate's muscle is C-ABI
+// faces and raw-pointer code in the pre-2024 `unsafe fn` style (no inner
+// blocks). Edition 2024's unsafe-op-in-unsafe-fn fires ~3,400 times across
+// the jit.rs compiler and the net/http faces; the crate-wide allow keeps
+// that deliberate style lint-clean without ~3,400 redundant inner
+// `unsafe {}` blocks carrying no extra safety information.
+#![allow(unsafe_op_in_unsafe_fn)]
 #[path = "metal/coop.rs"]
 pub mod coop;
 
