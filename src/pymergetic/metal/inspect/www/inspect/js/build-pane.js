@@ -1,11 +1,13 @@
-/* factory floor — the live view over the build card's telemetry.
+/* factory floor — the build card's live pane in the inspect console.
  *
- * Three faces, one page:
- *   GET  /build            the unit index (matrix rows)
- *   GET  /build/events?since=N  the ring tail (this page's heartbeat)
- *   POST /build?all=1[&target=N] the BUILD ALL walk
+ * Three faces, one pane:
+ *   GET  /build                     the unit index (matrix rows) + walk state
+ *   GET  /build/events?since=N      the ring tail (this pane's heartbeat)
+ *   POST /build?all=1[&target=N]    the BUILD ALL walk
  *
- * No framework, no state beyond `since` — the ring is the state. */
+ * No framework, no state beyond `since` — the ring is the state. Unit names
+ * are always the full FQN (pymergetic.metal.build, never a stripped label):
+ * the registry face is the authority and the pane must not rename it. */
 (function () {
   "use strict";
 
@@ -18,6 +20,7 @@
 
   function setStatus(text, busy) {
     var el = $("fx-status");
+    if (!el) return;
     el.textContent = text;
     el.className = busy ? "busy" : "";
   }
@@ -27,10 +30,6 @@
     if (n < 1024) return n + " B";
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KiB";
     return (n / 1024 / 1024).toFixed(1) + " MiB";
-  }
-
-  function shortFqn(fqn) {
-    return fqn.replace(/^pymergetic\.(metal|wasmmod|util)\./, "");
   }
 
   /* the matrix: one row per unit, its last per-lane state from the ring.
@@ -53,16 +52,18 @@
         bytes = st.bytes ? fmtBytes(st.bytes) : "";
       }
       html += "<tr>" +
-        "<td>" + shortFqn(u.fqn) + "</td>" +
+        "<td>" + u.fqn + "</td>" +
         "<td>" + (u.impl || "?") + "</td>" +
         "<td>" + (u.n_sources || 0) + "</td>" +
         '<td class="' + cls + '">' + label + "</td>" +
         '<td class="bytes">' + bytes + "</td>" +
-        "<td></td>" +
         "</tr>";
     }
     tbody.innerHTML = html;
-    $("fx-count").textContent = "(" + units.length + " units)";
+    var cnt = $("fx-count");
+    if (cnt) {
+      cnt.textContent = units.length + " units discovered";
+    }
   }
 
   /* the stream: append the ring's new tail, cap the DOM at ~200 rows */
@@ -72,13 +73,11 @@
     var html = "";
     for (var i = 0; i < events.length; i++) {
       var e = events[i];
-      var parts = e.fqn.split(".");
-      var unit = parts[parts.length - 1];
       html += '<div class="ev' +
         (e.kind === "unit_fail" ? " fail" : "") + '">' +
         '<span class="k">' + e.kind + "</span>" +
-        '<span class="s">' + shortFqn(e.fqn) +
-        (e.src ? " · " + e.src.split("/").pop() : "") + "</span>" +
+        '<span class="s">' + e.fqn +
+        (e.src ? " · " + e.src : "") + "</span>" +
         '<span class="b">' +
         (e.dur_us ? (e.dur_us / 1000).toFixed(1) + " ms" : "") +
         (e.bytes ? " · " + fmtBytes(e.bytes) : "") +
@@ -92,7 +91,7 @@
     box.scrollTop = box.scrollHeight;
   }
 
-  /* the walk is background: this page only starts it and watches the
+  /* the walk is background: this pane only starts it and watches the
    * walk object the /build index carries — the compile itself runs one
    * unit per runner quantum on the seat, this poll is a pure read. */
   function renderWalk() {
@@ -172,7 +171,13 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    $("fx-build-all").addEventListener("click", buildAll);
+    var btn = $("fx-build-all");
+    if (!btn) {
+      /* the pane is absent (a stripped host build) — stay quiet, the
+       * faces still answer /build for any other client */
+      return;
+    }
+    btn.addEventListener("click", buildAll);
     tick();
     setInterval(tick, 1000);
   });

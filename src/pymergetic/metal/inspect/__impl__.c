@@ -1678,8 +1678,9 @@ static int32_t build_index_http(const char *method, const char *path,
      * runner quantum (the ring rotates between compiles), and the event
      * ring streams every stage as it lands. The synchronous full-unit
      * list this call used to build blocked the pane thread for the whole
-     * walk; the factory page reads progress from /build (walk state
-     * below) and /build/events (the ring), not from this reply. */
+     * walk; the inspect console's factory-floor pane reads progress from
+     * /build (walk state below) and /build/events (the ring), not from
+     * this reply. */
     if (method != NULL && strcmp(method, "POST") == 0 && path != NULL
         && strncmp(path, "/build?all=1", 12) == 0) {
         int32_t target = 0;

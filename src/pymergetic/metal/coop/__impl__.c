@@ -345,7 +345,6 @@ static int32_t ring_claim(uint64_t *word_out, uint32_t *idx_out) {
     uint32_t n;
     uint32_t mask;
     uint32_t start;
-    uint32_t hunt;
     uint32_t i;
     if (in == NULL || atomic_load(&in->count) == 0u) {
         return -1;
@@ -353,11 +352,21 @@ static int32_t ring_claim(uint64_t *word_out, uint32_t *idx_out) {
     n = in->n;
     mask = in->mask;
     start = atomic_load(&in->head);
-    hunt = atomic_load(&in->count) + 16u;
-    if (hunt > n) {
-        hunt = n;
-    }
-    for (i = 0; i < hunt; i++) {
+    /* The window is the WHOLE ring, not count+16 from head: a push can
+     * fill a slot BEHIND head (claim's head jump skips the stretch
+     * between the old head and its claimed slot, and a concurrent push
+     * may fill one of those skipped slots right after the scan passed
+     * it). A count+16 window reaches that slot only after wrapping
+     * nearly the whole ring — when it is the last ref left, nothing
+     * else advances head and the window never reaches it: count>0,
+     * no READY slot in window, every runner spins claim-empty forever
+     * (the BUILD-ALL livelock: the walk's park ref and a NEW job's
+     * post ref both sat behind head; the census froze at 31 done / 4
+     * lanes). A full scan of n slots (256 on this seat's arena) makes
+     * every filled slot reachable by construction — count>0 with no
+     * claimable slot then genuinely means all counted slots are
+     * CLAIMED-in-flight, and idle_wait is the right answer. */
+    for (i = 0; i < n; i++) {
         uint32_t idx = (start + i) & mask;
         uint_least64_t word = atomic_load(&in->slot[idx]);
         if (ring_st((uint64_t)word) != PM_METAL_RING_ST_READY) {
@@ -780,7 +789,20 @@ static void drain_one(void) {
     pm_metal_coop_task_t *task = (pm_metal_coop_task_t *)pay_ptr(ring_pay(word));
     ring_release(idx);
     if (task == *current_slot()) {
-        (void)push_task_ref(task);
+        /* our own task (a nested run_until on this core owns its C
+         * frame): park it back, never step it here. The claimed ref
+         * (the pusher's, ours since the claim) is dropped — the
+         * re-push below takes its own fresh ref, and the two must
+         * not stack (an orphaned claimed ref inflates ring_refs past
+         * the slot count and pins the task block forever). */
+        if (push_task_ref(task) == 0) {
+            task_unref(task);
+        } else {
+            /* ring full: the claimed ref is the task's last live
+             * link — dropping it would strand the task. Step it
+             * nowhere; leave the ref and let the walk's own run_until
+             * drive it (on_c_stack pins it off this path anyway). */
+        }
         return;
     }
     step_task(task);

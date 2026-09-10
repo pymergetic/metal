@@ -139,3 +139,86 @@ summary {
   font-size: 0.85rem;
 }
 
+/* ---- factory floor (the build card's pane) ---- */
+#fx-status {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+#fx-status.busy {
+  color: var(--accent);
+}
+.fx-lane {
+  height: 4px;
+  background: color-mix(in srgb, var(--muted) 30%, transparent);
+  border-radius: 2px;
+  margin: 2px 0 8px;
+  overflow: hidden;
+}
+.fx-lane > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+table.fx-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.fx-matrix th,
+.fx-matrix td {
+  text-align: left;
+  padding: 0.3rem 0.55rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 25%, transparent);
+  white-space: nowrap;
+}
+.fx-matrix td.ok {
+  color: var(--accent);
+}
+.fx-matrix td.ref {
+  color: #d08770;
+}
+.fx-matrix td.idle {
+  color: var(--muted);
+  opacity: 0.6;
+}
+.fx-matrix td.busy {
+  color: #d4a15c;
+}
+.fx-matrix td.bytes {
+  color: var(--fg);
+}
+.fx-matrix td:first-child {
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-size: 0.78rem;
+}
+#fx-events {
+  max-height: 46vh;
+  overflow-y: auto;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border-radius: 4px;
+  padding: 0.75rem;
+}
+#fx-events .ev {
+  display: flex;
+  gap: 0.75rem;
+}
+#fx-events .ev .k {
+  color: var(--accent);
+  min-width: 8.5em;
+}
+#fx-events .ev .s {
+  color: var(--fg);
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-size: 0.72rem;
+}
+#fx-events .ev .b {
+  color: var(--muted);
+}
+#fx-events .ev.fail .k {
+  color: #d08770;
+}
+

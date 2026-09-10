@@ -489,11 +489,11 @@ static int32_t case_export_manifest(void) {
                 return fail("expected export missing from the registry");
             }
         }
-        /* expected == registered, exactly: the build card's face is 30
+        /* expected == registered, exactly: the build card's face is 31
          * exports (26 of the Phase-5/actor set + the two event-ring
-         * faces + the two walk faces). A 32nd export means a new face
-         * the manifest does not know; a lower count means a
-         * registration refused. */
+         * faces + the two walk faces + the actor post face). A 32nd
+         * export means a new face the manifest does not know; a
+         * lower count means a registration refused. */
         {
             uint32_t reg = pm_wasmmod_registry_export_count(
                 (const uint8_t *)"pymergetic.metal.build", 22u);

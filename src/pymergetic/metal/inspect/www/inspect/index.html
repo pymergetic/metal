@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Inspect</title>
-  <link rel="stylesheet" href="css/base.css" />
-  <link rel="stylesheet" id="theme-css" href="css/themes/metal.css" />
+  <link rel="stylesheet" href="/inspect/css/base.css" />
+  <link rel="stylesheet" id="theme-css" href="/inspect/css/themes/metal.css" />
 </head>
 <body>
   <header>
@@ -46,6 +46,37 @@
       </details>
     </section>
     <section>
+      <h2>Factory floor</h2>
+      <p class="hint">The build card's live face: every discovered unit, its
+        per-lane state from the event ring, and the in-kernel walk
+        (<code>POST /build?all=1&amp;target=N</code>). Same faces on every
+        seat — the fill differs (a seat without an ELF loader refuses the
+        rebuild, never hides the pane).</p>
+      <div class="reg-controls">
+        <label for="fx-target">target
+          <select id="fx-target">
+            <option value="0">seat-native</option>
+            <option value="1">wasm32</option>
+            <option value="2">arm-eabi</option>
+            <option value="3">x86-64</option>
+          </select>
+        </label>
+        <button type="button" id="fx-build-all">BUILD ALL</button>
+        <span id="fx-status">idle</span>
+      </div>
+      <div class="fx-lane"><i id="fx-lane-fill"></i></div>
+      <table class="fx-matrix" id="fx-matrix">
+        <thead>
+          <tr><th>unit</th><th>impl</th><th>sources</th><th>status</th><th>last object</th></tr>
+        </thead>
+        <tbody id="fx-rows"></tbody>
+      </table>
+      <p id="fx-count" class="hint"></p>
+      <h3>Event stream</h3>
+      <p class="hint">1 Hz tail of the ring — <code>/build/events?since=</code>.</p>
+      <div id="fx-events"></div>
+    </section>
+    <section>
       <h2>Modules &amp; RPC</h2>
       <p class="hint">Click a module to list its exports; drill a func detail; invoke a
         container (wasm/aot/elf) export when the device advertises <code>rpc</code>.</p>
@@ -65,6 +96,7 @@
       <pre id="rpc-out"></pre>
     </section>
   </main>
-  <script src="js/inspect.js"></script>
+  <script src="/inspect/js/inspect.js"></script>
+  <script src="/inspect/js/build-pane.js"></script>
 </body>
 </html>

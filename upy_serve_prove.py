@@ -1,9 +1,9 @@
 """m.serve() brings the whole UI stack up in one call.
 
 The unix seat's UI reachability is net.fwd's host mirror: the metal TCP
-stack's listeners exist only inside the process, so the factory page (and
-every other pane) is dead from the browser until something mirrors the
-port onto a real host socket. m.serve() starts every registered service
+stack's listeners exist only inside the process, so the inspect console
+(and every pane in it, the factory floor included) is dead from the
+browser until something mirrors the port onto a real host socket. m.serve() starts every registered service
 AND the mirror, so this prove pins that contract: serve, then fetch /health
 through the loopback guest client — the same path the mirrored bytes ride.
 """

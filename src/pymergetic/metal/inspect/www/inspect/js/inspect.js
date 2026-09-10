@@ -5,7 +5,7 @@
   function applyTheme(name) {
     theme = name || "metal";
     if (link) {
-      link.href = "css/themes/" + theme + ".css";
+      link.href = "/inspect/css/themes/" + theme + ".css";
     }
   }
   if (theme) {
@@ -55,9 +55,9 @@
       qs.set("detail", "1");
     }
     qs.set("fmt", "tree");
-    const treeUrl = "reg/completeness?" + qs.toString();
+    const treeUrl = "/inspect/reg/completeness?" + qs.toString();
     qs.set("fmt", "json");
-    const jsonUrl = "reg/completeness?" + qs.toString();
+    const jsonUrl = "/inspect/reg/completeness?" + qs.toString();
     try {
       const [tr, jr] = await Promise.all([fetch(treeUrl), fetch(jsonUrl)]);
       const treeText = await tr.text();
@@ -92,7 +92,7 @@
           btn.addEventListener("click", async function () {
             try {
               const r = await fetch(
-                "reg/method?module=" +
+                "/inspect/reg/method?module=" +
                   encodeURIComponent(g.module || "") +
                   "&func=" +
                   encodeURIComponent(g.func || "")
@@ -122,11 +122,11 @@
   }
 
   /* Relative to /inspect/ or /cdn/inspect/ → sibling host routes. */
-  await load("health", "../health");
-  await load("caps", "../capabilities");
-  await load("self", "self");
+  await load("health", "/health");
+  await load("caps", "/capabilities");
+  await load("self", "/inspect/self");
   try {
-    const r = await fetch("reg");
+    const r = await fetch("/inspect/reg");
     const t = await r.text();
     const el = document.getElementById("reg");
     if (el) {
@@ -193,7 +193,7 @@
   async function openModule(fqn) {
     rpcModule.value = fqn;
     try {
-      const r = await fetch("reg/" + encodeURIComponent(fqn));
+      const r = await fetch("/inspect/reg/" + encodeURIComponent(fqn));
       showOut(await r.text(), true);
     } catch (e) {
       showOut(String(e));
@@ -206,7 +206,7 @@
       return;
     }
     try {
-      const r = await fetch("reg");
+      const r = await fetch("/inspect/reg");
       const j = JSON.parse(await r.text());
       const mods = j.modules || [];
       navEl.textContent = "";
@@ -238,7 +238,7 @@
       const a0 = rpcArg ? rpcArg.value.trim() : "";
       try {
         const r = await fetch(
-          "call/" +
+          "/inspect/call/" +
             encodeURIComponent(m) +
             "/" +
             encodeURIComponent(f) +

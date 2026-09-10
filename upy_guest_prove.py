@@ -393,7 +393,7 @@ except ImportError:
 print("upy build events ring")
 
 # BUILD ALL is now the background walk: the POST only STARTS it (the
-# pane must answer fast — the factory page polls the walk object), so
+# pane must answer fast — the factory-floor pane polls the walk object), so
 # the prove polls the walk state to completion with the same census
 # shape as before (done + failed + skipped; the 5 mbedtls/zenoh/uzlib
 # fills refuse on the unix seat, the rest ok). The events ring grows

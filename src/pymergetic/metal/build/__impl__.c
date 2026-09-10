@@ -4494,7 +4494,8 @@ int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
  * ring task, await it (the actor's serial section keeps TCC serialized
  * inside the job's own step), then return WAITING so the runner re-posts
  * the walk after the ring has drained everything else. The pane thread
- * answered long ago; the factory page watches the event ring.
+ * answered long ago; the inspect console's factory-floor pane watches the
+ * event ring.
  *
  * Row states ride the units copy (walk_row_state below) — same Kahn pass
  * shape as dag_run, spread over N runner quanta instead of one C call. */

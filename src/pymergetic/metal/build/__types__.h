@@ -368,7 +368,8 @@ int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
 /*------------------ build event ring (factory floor telemetry) ----------
  * Every observable transition in a unit_compile appends one fixed-size
  * event to a ring on the build ctx: unit start/end, per-source compile,
- * link, record. The factory page polls /build/events?since=<seq> and
+ * link, record. The factory-floor pane in the inspect console polls
+ * /build/events?since=<seq> and
  * replays the ring's tail — the ring is the ONLY live build state (no
  * per-lane coroutines), so the UI is a pure read face. Fixed-size, no
  * pointers: the ring is copied by value under the ctx, never arena-owned,

@@ -85,11 +85,10 @@ def _cdn(base):
     if st != 200 or 'decision' not in (inspect.body() or ""):
         raise SystemExit("ledger seed %s" % (st,))
     print("upy ledger round-trip")
-    # Factory floor on the browser seat: the events pane reads the build
-    # card's telemetry ring (empty here — this seat has no ELF loader, so
-    # no rebuild ever runs — but the pane must answer the empty shape, not
-    # 404), and the factory page is part of the www mount. Same faces on
-    # every seat; the fill differs.
+    # Factory floor on the browser seat: the build pane in the inspect
+    # console reads the build card's telemetry ring (empty here — this seat
+    # has no ELF loader, so no rebuild ever runs — but the pane must answer
+    # the empty shape, not 404). Same faces on every seat; the fill differs.
     st = inspect.handle("GET", "/build/events?since=0")
     _evb = inspect.body() or ""
     if st != 200 or '"latest":' not in _evb or '"events":[' not in _evb:
