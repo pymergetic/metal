@@ -109,7 +109,8 @@
     if (building) {
       setStatus("walk #" + w.id + " on lane " + w.target + ": " +
         (w.done || 0) + " ok, " + (w.failed || 0) + " failed, " +
-        (w.skipped || 0) + " skipped of " + (w.total || 0), true);
+        (w.skipped || 0) + " skipped of " + (w.total || 0) +
+        " — " + (w.running || 0) + " lane(s) in flight", true);
     } else if (w.id && w.state === "done") {
       setStatus("walk #" + w.id + " done: " + (w.done || 0) + " ok, " +
         (w.failed || 0) + " failed, " + (w.skipped || 0) + " skipped", false);

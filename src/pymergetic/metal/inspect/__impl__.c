@@ -1796,6 +1796,8 @@ static int32_t build_index_http(const char *method, const char *path,
         js_u32(&j, wi.n_failed);
         js_raw(&j, ",\"skipped\":");
         js_u32(&j, wi.n_skipped);
+        js_raw(&j, ",\"running\":");
+        js_u32(&j, wi.n_running);
         js_ch(&j, '}');
     }
     js_ch(&j, '}');

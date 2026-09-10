@@ -301,30 +301,40 @@ static int32_t ring_push(uint64_t kind, void *payload) {
     uint32_t start;
     uint32_t hunt;
     uint32_t i;
+    uint32_t attempt;
     if (in == NULL) {
         return -1;
     }
     n = in->n;
     mask = in->mask;
-    if (atomic_load(&in->count) >= n) {
-        return -1;
-    }
-    start = atomic_load(&in->tail);
-    hunt = n - atomic_load(&in->count);
-    if (hunt > n) {
-        hunt = n;
-    }
-    hunt += 16u;
-    if (hunt > n) {
-        hunt = n;
-    }
-    for (i = 0; i < hunt; i++) {
-        uint32_t idx = (start + i) & mask;
-        uint_least64_t exp = 0;
-        if (atomic_compare_exchange_strong(&in->slot[idx], &exp, (uint_least64_t)neu)) {
-            atomic_store(&in->tail, (idx + 1u) & mask);
-            atomic_fetch_add(&in->count, 1u);
-            return 0;
+    /* Under concurrent pushers the tail snapshot can go stale mid-hunt
+     * (another core CAS'd tail forward), so the window computed from it can
+     * miss the free region and refuse spuriously — with a fan-out of
+     * submitters (walk + its job tasks) that misrefusal once killed a
+     * supervisor's self re-post and with it the whole walk. Retry the
+     * snapshot a few times: a genuinely full ring still refuses, a raced
+     * one resolves on the next attempt. */
+    for (attempt = 0; attempt < 4u; attempt++) {
+        start = atomic_load(&in->tail);
+        hunt = n - atomic_load(&in->count);
+        if (hunt > n) {
+            hunt = n;
+        }
+        hunt += 16u;
+        if (hunt > n) {
+            hunt = n;
+        }
+        for (i = 0; i < hunt; i++) {
+            uint32_t idx = (start + i) & mask;
+            uint_least64_t exp = 0;
+            if (atomic_compare_exchange_strong(&in->slot[idx], &exp, (uint_least64_t)neu)) {
+                atomic_store(&in->tail, (idx + 1u) & mask);
+                atomic_fetch_add(&in->count, 1u);
+                return 0;
+            }
+        }
+        if (atomic_load(&in->count) >= n) {
+            return -1;  /* genuinely full */
         }
     }
     return -1;
@@ -483,6 +493,23 @@ int32_t pm_metal_coop_task_reclaim(pm_metal_coop_task_t *task) {
     if (!task_is_terminal(task)) {
         return -1;
     }
+    task_mark_dead(task);
+    return 0;
+}
+
+int32_t pm_metal_coop_task_detach(pm_metal_coop_task_t *task) {
+    if (task == NULL) {
+        return -1;
+    }
+    if (!task_is_terminal(task)) {
+        return -1;
+    }
+    /* clear the root before marking dead: the last ref's unref reads
+     * root->auto_free to decide whether to free the frame too — a NULL
+     * root means "frame is the owner's business" and skips that read.
+     * The store is atomic because a concurrent unref on another core may
+     * read root the moment its own ref drops. */
+    __atomic_store_n(&task->root, NULL, __ATOMIC_RELEASE);
     task_mark_dead(task);
     return 0;
 }
@@ -731,8 +758,11 @@ static void step_task(pm_metal_coop_task_t *task) {
     atomic_fetch_sub(&s_busy, 1u);
     /* The step that produced the terminal state retires the task: an
      * auto_free coro's blocks are dead from here on (the caller's ref,
-     * dropped after this returns, is the last one). */
-    if (task_is_terminal(task) && task->root->auto_free != 0u) {
+     * dropped after this returns, is the last one). A detached root
+     * (owner already moved on) skips the frame-free retirement — the
+     * owner's own reclaim/detach owns that task block. */
+    if (task_is_terminal(task) && task->root != NULL
+        && task->root->auto_free != 0u) {
         task_mark_dead(task);
     }
 }

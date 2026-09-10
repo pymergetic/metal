@@ -3490,6 +3490,8 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_at_ast, pm_metal_build_at
     int32_t(pm_metal_build_at_handle_t, char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_submit, pm_metal_build_actor_submit,
     int32_t(const pm_metal_build_unit_t *, const pm_metal_build_compile_opts_t *, pm_metal_build_actor_job_t **, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_post, pm_metal_build_actor_post,
+    int32_t(pm_metal_build_actor_job_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_step, pm_metal_build_actor_step,
     pm_metal_coop_status_t(pm_metal_build_actor_job_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_run, pm_metal_build_actor_run,
@@ -3723,6 +3725,32 @@ int32_t pm_metal_build_actor_submit(
     return PM_METAL_BUILD_OK;
 }
 
+/* Give a submitted job its own ring task: the coop runners drive it from
+ * here (one step per ring hop — WAITING parks, the section holder's finish
+ * re-posts it). The task's root is the job's coro; the task block's
+ * lifetime is the coop card's refcount (this face's ref drops when the
+ * driving runner unrefs, terminal + auto_free reclaims the rest). The
+ * submitter keeps ownership: it still settles + releases the job. */
+int32_t pm_metal_build_actor_post(pm_metal_build_actor_job_t *job) {
+    if (job == NULL) {
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    if (job->task != NULL) {
+        return 0;  /* already posted */
+    }
+    if (job->state != PM_METAL_BUILD_ACTOR_NEW) {
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    /* the coro must not be auto-free while the job is queued: the job's
+     * arena-copied unit (not the coro frame) is the release unit — the
+     * submitter releases the whole job via actor_release once terminal */
+    job->task = pm_metal_coop_create_task(&job->coro);
+    if (job->task == NULL) {
+        return PM_METAL_BUILD_ERR_BUSY;
+    }
+    return 0;
+}
+
 /* Dequeue job from the actor FIFO (lock held). A finished job leaves the
  * queue so occupancy reflects live work only. Ring compaction keeps the
  * head/tail arithmetic exact after a middle removal. */
@@ -3749,8 +3777,22 @@ static void actor_dequeue_locked(pm_build_actor_t *a,
 static void actor_job_finish(pm_build_actor_t *a, pm_metal_build_actor_job_t *job,
     pm_metal_build_actor_state_t state) {
     /* lock held: drop the job from the queue and free the serial section.
-     * Promotion is implicit: the next WAITING job's step re-checks the
-     * serial flag and takes the section itself (no spurious holder). */
+     * Promotion is explicit now: every WAITING job still queued is re-posted
+     * so a runner re-steps it and the section handoff costs one ring hop
+     * instead of waiting for the parked job's next incidental poll. Under
+     * fan-out that is the difference between a section-wait and a section
+     * STALL: a parked job has no timer and no other driver, its ring ref
+     * was consumed by the step that parked it — without this re-post the
+     * section can sit idle while a ready job sleeps. */
+    pm_metal_build_actor_job_t *wake[PM_METAL_BUILD_ACTOR_DEPTH];
+    uint32_t n_wake = 0;
+    uint32_t i;
+    for (i = 0; i < PM_METAL_BUILD_ACTOR_DEPTH; i++) {
+        if (a->q[i] != NULL
+            && a->q[i]->state == PM_METAL_BUILD_ACTOR_WAITING) {
+            wake[n_wake++] = a->q[i];
+        }
+    }
     actor_dequeue_locked(a, job);
     job->state = state;
     job->coro.status = state == PM_METAL_BUILD_ACTOR_DONE
@@ -3759,6 +3801,11 @@ static void actor_job_finish(pm_build_actor_t *a, pm_metal_build_actor_job_t *jo
             ? PM_METAL_COOP_CANCELLED
             : PM_METAL_COOP_ERROR);
     a->serial_held = 0u;
+    pm_util_lock_release(&a->lock);
+    /* re-post outside the lock: post takes the ring lock, never ours */
+    for (i = 0; i < n_wake; i++) {
+        (void)pm_metal_coop_post_task(wake[i]->task);
+    }
 }
 
 /* The job's own compile, run while it owns the serial section. Mirrors
@@ -4064,16 +4111,13 @@ static pm_metal_coop_status_t actor_job_step(pm_metal_coop_coro_t *self) {
     pm_util_lock_acquire(&a->lock);
     if (job->rc == PM_METAL_BUILD_ERR_CANCELLED) {
         actor_job_finish(a, job, PM_METAL_BUILD_ACTOR_CANCELLED);
-        pm_util_lock_release(&a->lock);
         return PM_METAL_COOP_CANCELLED;
     }
     if (job->rc != PM_METAL_BUILD_OK) {
         actor_job_finish(a, job, PM_METAL_BUILD_ACTOR_FAILED);
-        pm_util_lock_release(&a->lock);
         return PM_METAL_COOP_ERROR;
     }
     actor_job_finish(a, job, PM_METAL_BUILD_ACTOR_DONE);
-    pm_util_lock_release(&a->lock);
     return PM_METAL_COOP_DONE;
 }
 
@@ -4152,6 +4196,19 @@ int32_t pm_metal_build_actor_release(pm_metal_build_actor_job_t *job) {
         /* a queued/running job is still reachable from the queue —
          * releasing it would leave a dangling pointer in q[] */
         return PM_METAL_BUILD_ERR_BUSY;
+    }
+    /* A posted job's ring task dies BEFORE the job block: the task's
+     * root points at job->coro (inside this block), and the coop
+     * reclaimer reads root->auto_free when the last ref drops. Detach
+     * clears the root first (the reclaimer then frees the task block
+     * alone, whenever the last in-flight ref drops — possibly on
+     * another core, after this release returns), so freeing the job
+     * here can never leave the reclaimer reading freed memory. The
+     * job's coro is never auto_free (the release unit is this whole
+     * block). */
+    if (job->task != NULL) {
+        (void)pm_metal_coop_task_detach(job->task);
+        job->task = NULL;
     }
     arena = pm_metal_coop_arena();
     if (arena == NULL) {
@@ -4449,14 +4506,24 @@ typedef enum pm_build_walk_row {
     PM_BUILD_WALK_ROW_SKIPPED = 4,
 } pm_build_walk_row_t;
 
+/* Fan-out lanes: how many units the walk keeps in flight at once. TCC
+ * itself stays one-at-a-time (the reallocator is a process-global), so
+ * the parallelism is pipeline-shaped — one job compiles while the rest
+ * park, and the section handoff costs one ring hop. The lane count
+ * bounds the boot-arena high-water (each job holds arena-copied unit +
+ * fill) and stays under PM_METAL_BUILD_ACTOR_DEPTH so the actor queue
+ * is never the bottleneck the walk overflows. 4: the seats' runner
+ * count (SMP boards boot 4), one holder + three parked. */
+#define PM_METAL_BUILD_WALK_FANOUT 4u
+
 typedef struct pm_build_walk {
     pm_metal_coop_coro_t coro;      /* first: the task's root coro */
     const pm_metal_build_unit_t **order;  /* graph-resolved, boot arena */
     pm_metal_build_unit_t *units;   /* deep copies, boot arena */
     uint32_t n_units;
     uint32_t *row;                  /* per-unit pm_build_walk_row_t, boot arena */
-    uint32_t next;                  /* Kahn cursor into order */
-    pm_metal_build_actor_job_t *job; /* the unit in flight (NULL between) */
+    pm_metal_build_actor_job_t *jobs[PM_METAL_BUILD_WALK_FANOUT]; /* lanes */
+    uint32_t inline_cnt;            /* lanes the walk drives itself (ring full) */
     pm_metal_build_root_fn_t root_fn;
     pm_metal_build_compile_opts_t opts;   /* deep-copied seat fill */
     char *unit_root;                /* one scratch buffer, reused per unit */
@@ -4482,6 +4549,20 @@ static void walk_release(pm_build_walk_t *w) {
     arena = pm_metal_coop_arena();
     if (arena == NULL) {
         return;
+    }
+    /* lane jobs: a DONE walk drained its lanes already (the terminal
+     * check requires live == 0), but a walk that never ran a full round
+     * (an error start) may still hold terminal/queued jobs — release
+     * them so their arena-copied unit + fill do not leak into the next
+     * walk's high-water. Non-terminal jobs are cancelled first; the
+     * release is best-effort by design (the actor queue may still drain
+     * a queued job — its block stays valid until its step finishes). */
+    for (i = 0; i < PM_METAL_BUILD_WALK_FANOUT; i++) {
+        if (w->jobs[i] != NULL) {
+            (void)pm_metal_build_actor_cancel(w->jobs[i]);
+            (void)pm_metal_build_actor_release(w->jobs[i]);
+            w->jobs[i] = NULL;
+        }
     }
     if (w->units != NULL) {
         for (i = 0; i < w->n_units; i++) {
@@ -4525,68 +4606,192 @@ static void walk_release(pm_build_walk_t *w) {
     pm_util_mem_free(arena, w);
 }
 
-/* The walk's step: exactly one unit's worth of work per call.
+/* The walk's step: a supervisor quantum over the fan-out lanes.
  *
- * The unit's actor job is driven INLINE (actor_step, not a second ring
- * task): the runner steps the walk task, the walk steps the job — TCC
- * stays serialized by the actor's serial section inside, and the walk
- * rotates one quantum per unit so the rest of the ring (httpd panes, net
- * pumps, REPL) runs between every two compiles. A job-task-per-unit
- * design would instead need the coop card to reclaim terminal task
- * blocks under a second ring claim — a UAF-shaped hazard this card does
- * not own (the honest fix is a coop-card epoch reclaimer, not a build-
- * card workaround). */
+ * Every runnable unit gets its OWN ring task (actor_post): the coop
+ * runners drive the jobs, one holds the TCC serial section at a time and
+ * the rest park — the holder's finish re-posts them, so the section
+ * hands off in one ring hop instead of waiting for the walk's next
+ * poll. The walk itself settles terminal jobs (the rows + census), then
+ * fills every free lane up to PM_METAL_BUILD_WALK_FANOUT, then yields
+ * one quantum so the ring (httpd panes, net pumps, REPL) runs between
+ * rounds. The task blocks are the coop card's refcounted property now
+ * (the fx-6f reclaimer) — the old job-task UAF hazard is gone at the
+ * card that owns it, and this card only releases the jobs it settled. */
 static pm_metal_coop_status_t walk_step(pm_metal_coop_coro_t *self) {
     pm_build_walk_t *w = (pm_build_walk_t *)self;
-    pm_metal_build_actor_job_t *job = NULL;
-    const pm_metal_build_unit_t *u;
-    int32_t ui;
-    int32_t rc;
-    pm_metal_coop_status_t js;
+    uint32_t i;
+    uint32_t live = 0;
 
     if (w == NULL) {
         return PM_METAL_COOP_ERROR;
     }
 
-    /* A job is in flight: step it one quantum. Terminal settles the row
-     * and rotates; WAITING (the actor's serial section is held by an
-     * outside driver) re-parks for a later quantum. */
-    if (w->job != NULL) {
-        js = pm_metal_build_actor_step(w->job);
-        if (js == PM_METAL_COOP_WAITING) {
-            return pm_metal_coop_yield_park(&w->coro);
+    /* Pass 1 — settle: every lane's terminal job closes its row here (the
+     * runner that finished it left it terminal in the slot; the census
+     * counts once, in the walk, never in the job's step). The state read
+     * is acquire-atomic: a runner on another core writes the terminal
+     * state under the actor lock, and the walk's census must not miss a
+     * just-settled lane (or release a job a runner still holds mid-step). */
+    for (i = 0; i < PM_METAL_BUILD_WALK_FANOUT; i++) {
+        pm_metal_build_actor_job_t *job = w->jobs[i];
+        pm_metal_build_actor_state_t st;
+        int32_t ui;
+        if (job == NULL) {
+            continue;
         }
-        ui = dag_find(w->units, w->n_units, w->job->unit.fqn);
-        if (js == PM_METAL_COOP_DONE && w->job->rc == PM_METAL_BUILD_OK) {
+        st = (pm_metal_build_actor_state_t)__atomic_load_n(
+            &job->state, __ATOMIC_ACQUIRE);
+        if (st != PM_METAL_BUILD_ACTOR_DONE
+            && st != PM_METAL_BUILD_ACTOR_FAILED
+            && st != PM_METAL_BUILD_ACTOR_CANCELLED) {
+            live++;
+            continue;
+        }
+        ui = dag_find(w->units, w->n_units, job->unit.fqn);
+        if (st == PM_METAL_BUILD_ACTOR_DONE) {
             if (ui >= 0) {
                 w->row[ui] = PM_BUILD_WALK_ROW_DONE;
             }
             w->info.n_done++;
-            pm_metal_build_artifact_destroy(&w->job->artifact);
+            pm_metal_build_artifact_destroy(&job->artifact);
         } else {
             if (ui >= 0) {
                 w->row[ui] = PM_BUILD_WALK_ROW_FAILED;
             }
             w->info.n_failed++;
         }
-        pm_metal_build_actor_release(w->job);
-        w->job = NULL;
-        /* one quantum of ring rotation between two compiles */
-        return pm_metal_coop_yield_park(&w->coro);
+        pm_metal_build_actor_release(job);
+        w->jobs[i] = NULL;
     }
 
-    /* Kahn cursor: skip settled rows, SKIP-isolate dep-blocked rows, and
-     * stop at the first PENDING unit whose deps are all DONE — that one
-     * becomes this quantum's job. A full sweep with nothing runnable and
-     * nothing new settled means every remaining row is dep-blocked. */
-    for (;;) {
-        if (w->next >= w->n_units) {
+    /* Pass 2 — SKIP-isolate: a FAILED/SKIPPED dep isolates its consumer
+     * rows as SKIPPED (dep-failure isolation, never a cascade of compile
+     * errors). Runs every quantum: a lane settling this round may
+     * isolate rows that were PENDING last round. */
+    for (i = 0; i < w->n_units; i++) {
+        uint32_t d;
+        int settled_skip = 0;
+        int dep_open = 0;
+        if (w->row[i] != PM_BUILD_WALK_ROW_PENDING) {
+            continue;
+        }
+        for (d = 0; d < w->units[i].n_depends; d++) {
+            int32_t di = dag_find(w->units, w->n_units,
+                w->units[i].depends[d]);
+            if (di < 0) {
+                continue;  /* external dep: graph_resolve already ok'd it */
+            }
+            if (w->row[di] == PM_BUILD_WALK_ROW_FAILED
+                || w->row[di] == PM_BUILD_WALK_ROW_SKIPPED) {
+                settled_skip = 1;
+                break;
+            }
+            if (w->row[di] != PM_BUILD_WALK_ROW_DONE) {
+                dep_open = 1;  /* PENDING or RUNNING producer */
+            }
+        }
+        if (settled_skip) {
+            w->row[i] = PM_BUILD_WALK_ROW_SKIPPED;
+            w->info.n_skipped++;
+        }
+        (void)dep_open;
+    }
+
+    /* Pass 3 — fill free lanes: the next PENDING rows whose deps are all
+     * DONE become new jobs. One sweep takes as many as fit; the order
+     * array is graph-resolved so independent rows sit adjacent in it. */
+    for (i = 0; i < w->n_units && live < PM_METAL_BUILD_WALK_FANOUT; i++) {
+        pm_metal_build_actor_job_t *job = NULL;
+        const pm_metal_build_unit_t *u;
+        uint32_t d;
+        uint32_t slot;
+        int32_t ui;
+        int runnable;
+
+        if (w->row[i] != PM_BUILD_WALK_ROW_PENDING) {
+            continue;
+        }
+        runnable = 1;
+        for (d = 0; d < w->units[i].n_depends; d++) {
+            int32_t di = dag_find(w->units, w->n_units,
+                w->units[i].depends[d]);
+            if (di >= 0 && w->row[di] != PM_BUILD_WALK_ROW_DONE) {
+                runnable = 0;
+                break;
+            }
+        }
+        if (!runnable) {
+            continue;
+        }
+        /* free lane for this unit */
+        for (slot = 0; slot < PM_METAL_BUILD_WALK_FANOUT; slot++) {
+            if (w->jobs[slot] == NULL) {
+                break;
+            }
+        }
+        if (slot >= PM_METAL_BUILD_WALK_FANOUT) {
+            break;  /* no free lane (live < FANOUT invariant guards this) */
+        }
+        u = &w->units[i];
+        if (w->root_fn(u->fqn, w->unit_root, PM_METAL_BUILD_ROOT_MAX) != 0) {
+            w->row[i] = PM_BUILD_WALK_ROW_FAILED;
+            w->info.n_failed++;
+            continue;
+        }
+        w->opts.unit_root = w->unit_root;
+        w->opts.target = w->info.target;
+        ui = pm_metal_build_actor_submit(u, &w->opts, &job, NULL, 0);
+        if (ui != PM_METAL_BUILD_OK) {
+            w->row[i] = PM_BUILD_WALK_ROW_FAILED;
+            w->info.n_failed++;
+            continue;
+        }
+        if (pm_metal_build_actor_post(job) != 0) {
+            /* ring full (or no runner ring): the walk drives this job
+             * inline from its own quanta — same semantics as the pre-
+             * fan-out walk, one actor_step per supervisor round. */
+            w->inline_cnt++;
+        }
+        w->row[i] = PM_BUILD_WALK_ROW_RUNNING;
+        w->jobs[slot] = job;
+        live++;
+    }
+
+    /* Inline drive: unposted jobs (ring full / runner-less seat) step
+     * here, one actor_step each — the walk's own quantum does the work
+     * the runners would have. WAITING (section held by a posted job)
+     * just parks for the next round. */
+    if (w->inline_cnt > 0) {
+        for (i = 0; i < PM_METAL_BUILD_WALK_FANOUT; i++) {
+            pm_metal_build_actor_job_t *job = w->jobs[i];
+            if (job == NULL || job->task != NULL) {
+                continue;
+            }
+            (void)pm_metal_build_actor_step(job);
+        }
+    }
+
+    /* Census published every quantum: the factory floor's running count
+     * is live lanes, not a stale snapshot. */
+    w->info.n_running = live;
+
+    /* Terminal: every row settled and every lane drained. */
+    if (live == 0) {
+        for (i = 0; i < w->n_units; i++) {
+            if (w->row[i] == PM_BUILD_WALK_ROW_PENDING
+                || w->row[i] == PM_BUILD_WALK_ROW_RUNNING) {
+                break;
+            }
+        }
+        if (i >= w->n_units) {
             /* walk terminal: publish DONE on the coro first (the runner
              * overwrites status from the return value only AFTER this
              * returns — task_reclaim must see terminal now), then send
              * the task block home (w itself stays for walk_state
              * readers until the next start releases it) */
             w->info.state = PM_METAL_BUILD_WALK_DONE;
+            w->info.n_running = 0;
             w->coro.status = (uint32_t)PM_METAL_COOP_DONE;
             {
                 pm_metal_coop_task_t *wt = pm_metal_coop_current_task();
@@ -4596,103 +4801,10 @@ static pm_metal_coop_status_t walk_step(pm_metal_coop_coro_t *self) {
             }
             return PM_METAL_COOP_DONE;
         }
-        u = w->order[w->next];
-        ui = dag_find(w->units, w->n_units, u->fqn);
-        if (ui < 0) {
-            w->next++;
-            continue;
-        }
-        if (w->row[ui] != PM_BUILD_WALK_ROW_PENDING) {
-            w->next++;
-            continue;
-        }
-        /* dep gate: FAILED/SKIPPED deps isolate this unit as SKIPPED;
-         * PENDING deps mean the producer comes first in order (it does
-         * not — graph_resolve's order is a level sequence), so a PENDING
-         * dep can only be a not-yet-reached row: leave this unit for a
-         * later quantum. */
-        {
-            uint32_t d;
-            int settled_skip = 0;
-            int dep_pending = 0;
-            for (d = 0; d < w->units[ui].n_depends; d++) {
-                int32_t di = dag_find(w->units, w->n_units,
-                    w->units[ui].depends[d]);
-                if (di < 0) {
-                    continue;  /* external dep: graph_resolve already ok'd it */
-                }
-                if (w->row[di] == PM_BUILD_WALK_ROW_FAILED
-                    || w->row[di] == PM_BUILD_WALK_ROW_SKIPPED) {
-                    settled_skip = 1;
-                    break;
-                }
-                if (w->row[di] == PM_BUILD_WALK_ROW_PENDING
-                    || w->row[di] == PM_BUILD_WALK_ROW_RUNNING) {
-                    dep_pending = 1;
-                }
-            }
-            if (settled_skip) {
-                w->row[ui] = PM_BUILD_WALK_ROW_SKIPPED;
-                w->info.n_skipped++;
-                w->next++;
-                continue;
-            }
-            if (dep_pending) {
-                /* not runnable this sweep: yield a quantum so the ring
-                 * runs (the producer is elsewhere in the order — the
-                 * cursor stays put and the next step re-sweeps) */
-                return pm_metal_coop_yield_park(&w->coro);
-            }
-        }
-
-        /* runnable: root-resolve, submit, and drive the job inline from the
-         * next quantum on (the first step of it runs THIS quantum — the
-         * walk's unit of work; TCC serial stays inside the actor) */
-        if (w->root_fn(u->fqn, w->unit_root, PM_METAL_BUILD_ROOT_MAX) != 0) {
-            w->row[ui] = PM_BUILD_WALK_ROW_FAILED;
-            w->info.n_failed++;
-            w->next++;
-            continue;
-        }
-        w->opts.unit_root = w->unit_root;
-        w->opts.target = w->info.target;
-        rc = pm_metal_build_actor_submit(u, &w->opts,
-            &job, NULL, 0);
-        if (rc != PM_METAL_BUILD_OK) {
-            w->row[ui] = PM_BUILD_WALK_ROW_FAILED;
-            w->info.n_failed++;
-            w->next++;
-            continue;
-        }
-        w->row[ui] = PM_BUILD_WALK_ROW_RUNNING;
-        w->job = job;
-        w->next++;
-        /* run the job's first quantum now; terminal states settle above
-         * on the next step (the job's compile is one quantum by design) */
-        js = pm_metal_build_actor_step(job);
-        if (js == PM_METAL_COOP_WAITING) {
-            return pm_metal_coop_yield_park(&w->coro);
-        }
-        /* ran to terminal inline: settle now, rotate after */
-        {
-            int32_t jui = dag_find(w->units, w->n_units, job->unit.fqn);
-            if (js == PM_METAL_COOP_DONE && job->rc == PM_METAL_BUILD_OK) {
-                if (jui >= 0) {
-                    w->row[jui] = PM_BUILD_WALK_ROW_DONE;
-                }
-                w->info.n_done++;
-                pm_metal_build_artifact_destroy(&job->artifact);
-            } else {
-                if (jui >= 0) {
-                    w->row[jui] = PM_BUILD_WALK_ROW_FAILED;
-                }
-                w->info.n_failed++;
-            }
-            pm_metal_build_actor_release(job);
-            w->job = NULL;
-            return pm_metal_coop_yield_park(&w->coro);
-        }
     }
+
+    /* one quantum of ring rotation between supervisor rounds */
+    return pm_metal_coop_yield_park(&w->coro);
 }
 
 int32_t pm_metal_build_walk_start(int32_t target,

@@ -225,6 +225,13 @@ typedef struct pm_metal_build_actor_job {
      * fallback (firmware's shim routes back to it anyway). */
     void *scratch_backing;
     pm_util_mem_arena_t *scratch;
+    /* Fan-out lane: the job's own ring task (created by the submitter's
+     * post face, NOT by the actor) so independent runners can drive it.
+     * The task's root is this job's coro; the coop card's refcounting
+     * (ring_refs + auto_free) owns the task block's lifetime — the actor
+     * never frees it directly. NULL while the job runs inline (a caller
+     * driving it via actor_step, pre-fan-out semantics). */
+    pm_metal_coop_task_t *task;
 } pm_metal_build_actor_job_t;
 
 /* Submit a compile job to the actor's queue. Returns PM_METAL_BUILD_OK and
@@ -243,6 +250,12 @@ int32_t pm_metal_build_actor_submit(
  * DONE/FAILED/CANCELLED are sticky. This is the face a runner loop or a
  * waiting parent coro drives; pm_metal_build_actor_run does it for you. */
 pm_metal_coop_status_t pm_metal_build_actor_step(pm_metal_build_actor_job_t *job);
+
+/* Give a submitted job its own runner-ring task so the coop runners drive
+ * it (fan-out: many jobs in flight, one holds the TCC serial section,
+ * the rest park — the holder's finish re-posts the parked ones). The
+ * submitter still owns the job's lifecycle: poll state, settle, release. */
+int32_t pm_metal_build_actor_post(pm_metal_build_actor_job_t *job);
 
 /* Drive the actor until the job reaches a terminal state (blocking call —
  * it pumps the async ring while the serial section is held by another job).
@@ -419,6 +432,7 @@ typedef struct pm_metal_build_walk_info {
     uint32_t n_done;                   /* rows DONE */
     uint32_t n_failed;                 /* rows FAILED */
     uint32_t n_skipped;                /* rows SKIPPED (dep isolation) */
+    uint32_t n_running;                /* jobs in flight (fan-out lanes) */
 } pm_metal_build_walk_info_t;
 
 /* Start a background walk of every discovered unit on lane `target`

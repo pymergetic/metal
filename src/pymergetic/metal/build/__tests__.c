@@ -2310,7 +2310,7 @@ static int32_t test_walk_all(void) {
     int32_t wid;
     int32_t wid2;
     pm_metal_build_walk_info_t wi;
-    uint32_t polls;
+    uint64_t deadline;
 
     if (!pm_metal_coop_ready()) {
         return 0;  /* no runner on this seat: the face refuses there */
@@ -2368,20 +2368,44 @@ static int32_t test_walk_all(void) {
         || wi.id != (uint32_t)wid) {
         return 252;
     }
-    polls = 0;
-    for (;;) {
-        pm_metal_coop_poll();
-        pm_metal_build_walk_state(&wi);
-        if (wi.state == PM_METAL_BUILD_WALK_DONE) {
-            break;
+    /* fan-out census: over the run the walk must have held MORE than one
+     * lane at once (serial semantics would pin n_running at 1) and must
+     * drain to 0 at the terminal state. The budget is TIME, not polls:
+     * under fan-out the compiles run on the coop runners, so this poll
+     * loop is a cheap supervisor spin — it burns thousands of polls per
+     * second while a single TCC unit compiles for tens of seconds, and a
+     * poll cap calibrated for the inline-drive walk (where every poll
+     * did compile work) expires long before the slow units settle. */
+    {
+        uint32_t peak_running = 0;
+        deadline = pm_metal_coop_mono_us() + 600ull * 1000000ull;
+        for (;;) {
+            pm_metal_coop_poll();
+            pm_metal_build_walk_state(&wi);
+            if (wi.n_running > peak_running) {
+                peak_running = wi.n_running;
+            }
+            if (wi.state == PM_METAL_BUILD_WALK_DONE) {
+                break;
+            }
+            if (pm_metal_coop_mono_us() > deadline) {
+                fprintf(stderr, "build subtest walk_all stuck: %u/%u ok=%u "
+                    "fail=%u skip=%u\n", wi.n_done, wi.n_total, wi.n_done,
+                    wi.n_failed, wi.n_skipped);
+                return 253;
+            }
+            pm_metal_coop_yield();
         }
-        if (++polls > 400000u) {
-            fprintf(stderr, "build subtest walk_all stuck: %u/%u ok=%u "
-                "fail=%u skip=%u\n", wi.n_done, wi.n_total, wi.n_done,
-                wi.n_failed, wi.n_skipped);
-            return 253;
+        if (peak_running < 2u) {
+            fprintf(stderr, "build subtest walk_all fan-out never "
+                "overlapped (peak lanes %u)\n", peak_running);
+            return 257;
         }
-        pm_metal_coop_yield();
+        if (wi.n_running != 0u) {
+            fprintf(stderr, "build subtest walk_all lanes not drained "
+                "(%u live at DONE)\n", wi.n_running);
+            return 258;
+        }
     }
     if (wi.n_done + wi.n_failed + wi.n_skipped != wi.n_total) {
         fprintf(stderr, "build subtest walk_all census %u+%u+%u != %u\n",
@@ -2399,14 +2423,16 @@ static int32_t test_walk_all(void) {
     if ((uint32_t)wid2 != wi.id + 1u) {
         return 256;
     }
-    polls = 0;
+    deadline = pm_metal_coop_mono_us() + 600ull * 1000000ull;
     for (;;) {
         pm_metal_coop_poll();
         pm_metal_build_walk_state(&wi);
         if (wi.state == PM_METAL_BUILD_WALK_DONE) {
             break;
         }
-        if (++polls > 400000u) {
+        if (pm_metal_coop_mono_us() > deadline) {
+            fprintf(stderr, "build subtest walk_all second stuck: %u/%u\n",
+                wi.n_done, wi.n_total);
             return 253;
         }
         pm_metal_coop_yield();

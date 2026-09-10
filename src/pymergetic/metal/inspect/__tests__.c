@@ -444,6 +444,7 @@ static int32_t case_export_manifest(void) {
             { "pymergetic.metal.build", "pm_metal_build_actor_submit" },
             { "pymergetic.metal.build", "pm_metal_build_actor_run" },
             { "pymergetic.metal.build", "pm_metal_build_actor_step" },
+            { "pymergetic.metal.build", "pm_metal_build_actor_post" },
             { "pymergetic.metal.build", "pm_metal_build_actor_cancel" },
             { "pymergetic.metal.build", "pm_metal_build_actor_depth" },
             { "pymergetic.metal.build", "pm_metal_build_actor_release" },
@@ -490,15 +491,15 @@ static int32_t case_export_manifest(void) {
         }
         /* expected == registered, exactly: the build card's face is 30
          * exports (26 of the Phase-5/actor set + the two event-ring
-         * faces + the two walk faces). A 31st export means a new face
+         * faces + the two walk faces). A 32nd export means a new face
          * the manifest does not know; a lower count means a
          * registration refused. */
         {
             uint32_t reg = pm_wasmmod_registry_export_count(
                 (const uint8_t *)"pymergetic.metal.build", 22u);
-            if (reg != 30u) {
+            if (reg != 31u) {
                 fprintf(stderr, "metal.inspect test: build face %u "
-                    "registered, 30 expected\n", (unsigned)reg);
+                    "registered, 31 expected\n", (unsigned)reg);
                 return fail("build export count != manifest");
             }
         }

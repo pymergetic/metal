@@ -91,6 +91,16 @@ void pm_metal_coop_coro_set_auto_free(pm_metal_coop_coro_t *coro);
  * task is terminal, so a live task cannot be yanked mid-flight. */
 int32_t pm_metal_coop_task_reclaim(pm_metal_coop_task_t *task);
 
+/* Detach + reclaim a terminal task whose ROOT FRAME is about to be
+ * freed by the task's owner (an embedded coro inside a larger struct —
+ * e.g. a build actor job). Same contract as task_reclaim, plus the
+ * root pointer is cleared first: the reclaimer would otherwise read
+ * root->auto_free when the last reference drops — a use-after-free if
+ * the owner freed the frame in between. After this the task block
+ * frees alone on the last drop; the caller frees its frame on its own
+ * schedule. Refuses (returns -1) unless the task is terminal. */
+int32_t pm_metal_coop_task_detach(pm_metal_coop_task_t *task);
+
 /* Async mutex: park-on-contention, never spin; same cast as sem/rwlock/cond. */
 void pm_metal_coop_mutex_init(pm_metal_coop_mutex_t *m);
 pm_metal_coop_status_t pm_metal_coop_mutex_try_acquire(pm_metal_coop_mutex_t *m, pm_metal_coop_coro_t *self);
