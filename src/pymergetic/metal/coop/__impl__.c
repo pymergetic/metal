@@ -480,11 +480,21 @@ static int32_t push_task_ref(pm_metal_coop_task_t *task) {
  * transient ref around the exchange closes the in-flight-push race (the
  * push's own unwind then sees the bit and takes the last drop itself). */
 static void task_mark_dead(pm_metal_coop_task_t *task) {
+    uint32_t one = 1u;
+    uint32_t old = 0u;
     if (task == NULL) {
         return;
     }
     __atomic_fetch_add(&task->ring_refs, 1u, __ATOMIC_ACQ_REL);
-    if (__atomic_exchange_n(&task->dead, 1u, __ATOMIC_ACQ_REL) != 0u) {
+    /* __atomic_exchange (ptr, &desired, &ret, order), not the _n spelling:
+     * the _n forms have no fallback in the vendored TCC's stdatomic.h
+     * (upstream 36ff4f5 added load_n/store_n/compare_exchange_n but skipped
+     * exchange_n), so TCC parses it as a plain call and the ksweep link
+     * refuses with an unresolved symbol. The plain form is the identical
+     * lock xchg; GCC/Clang lower it the same way, and old receives the
+     * previous dead bit. */
+    __atomic_exchange(&task->dead, &one, &old, __ATOMIC_ACQ_REL);
+    if (old != 0u) {
         task_unref(task);
         return;
     }
@@ -539,6 +549,11 @@ static void fire_timers(void) {
         s_timers = tm->next;
         pm_util_lock_release(&s_timer_lock);
         (void)push_task_ref(tm->task);
+        /* drop the timer's own ref (taken by sleep_us): the task outlives
+         * its timer even when it finished and was reclaimed between arming
+         * and firing — the stale-timer push above is refused on dead, and
+         * this unref is what retires a task that was parked when it ended. */
+        task_unref(tm->task);
         pm_util_mem_free(s_arena, tm);
         pm_util_lock_acquire(&s_timer_lock);
         now = pm_metal_coop_mono_us();
@@ -998,6 +1013,7 @@ void pm_metal_coop_deinit(void) {
     while (s_timers != NULL) {
         struct pm_metal_coop_timer *tm = s_timers;
         s_timers = tm->next;
+        task_unref(tm->task); /* the timer's own ref (sleep_us) goes home */
         if (s_arena != NULL) {
             pm_util_mem_free(s_arena, tm);
         }
@@ -1095,6 +1111,12 @@ pm_metal_coop_status_t pm_metal_coop_sleep_us(pm_metal_coop_coro_t *self, uint64
     tm->next = NULL;
     tm->deadline_us = pm_metal_coop_mono_us() + us;
     tm->task = t;
+    /* The timer owns a task ref for its lifetime: fire_timers pushes a fresh
+     * ref (the ring slot's) and drops this one, and deinit drops every armed
+     * timer's ref. Without it, a task that finished while parked (woken by
+     * an external post_task rather than its timer) is reclaimed before its
+     * timer fires — the stale timer then pushes freed memory. */
+    __atomic_fetch_add(&t->ring_refs, 1u, __ATOMIC_ACQ_REL);
     timer_insert(tm);
     self->status = PM_METAL_COOP_WAITING;
     return PM_METAL_COOP_WAITING;
