@@ -396,10 +396,6 @@ static void ring_release(uint32_t idx) {
     atomic_fetch_sub(&in->count, 1u);
 }
 
-static int ring_empty(void) {
-    return s_inbox == NULL || atomic_load(&s_inbox->count) == 0u;
-}
-
 static pm_metal_coop_task_t *task_of(pm_metal_coop_coro_t *c) {
     while (c != NULL) {
         if (c->task != NULL) {
@@ -776,15 +772,18 @@ static void step_task(pm_metal_coop_task_t *task) {
     }
 }
 
-static void drain_one(void) {
+/* 0 = claimed and ran (or parked) something, -1 = nothing claimable
+ * (empty ring, or every counted slot is CLAIMED-in-flight). Callers
+ * driving a loop use the signal to pick their idle nap length. */
+static int32_t drain_one(void) {
     uint64_t word;
     uint32_t idx;
     if (ring_claim(&word, &idx) != 0) {
-        return;
+        return -1;
     }
     if (ring_kind(word) == PM_METAL_RING_KIND_STOP) {
         ring_release(idx);
-        return;
+        return 0;
     }
     pm_metal_coop_task_t *task = (pm_metal_coop_task_t *)pay_ptr(ring_pay(word));
     ring_release(idx);
@@ -803,11 +802,12 @@ static void drain_one(void) {
              * nowhere; leave the ref and let the walk's own run_until
              * drive it (on_c_stack pins it off this path anyway). */
         }
-        return;
+        return 0;
     }
     step_task(task);
     /* the slot's ref (taken by the pusher) is ours to drop now */
     task_unref(task);
+    return 0;
 }
 
 static void runner_entry(void *arg) {
@@ -823,12 +823,39 @@ static void runner_entry(void *arg) {
     s_worker[cpu_slot()] = 1u;
     s_vm_capable[cpu_slot()] = (uint32_t)pm_metal_coop_runner_begin(cpu_slot());
     atomic_fetch_add(&s_alive, 1u);
+    /* Idle backoff ladder: after a claim ran work the runner naps at the
+     * floor (200us) for pickup latency; every consecutive nothing-claimable
+     * pass doubles the nap, up to a ceiling, and any claim resets it. The
+     * ceiling is clamped by the next timer deadline so a sleeping task
+     * never waits longer than its own deadline once the runner parks.
+     * Without this, an idle seat burns a full core per runner: 200us
+     * poll(2) + full ip pump + timer scan per pass is ~470us of work per
+     * ~200us nap, measured ~70% CPU per runner on a parked serve() REPL.
+     * Firmware (rdtsc pause) gets the same ladder; there the nap is a
+     * pause spin, so the ladder reads as progressive pause length. */
+    uint32_t backoff = 0u;
     while (atomic_load(&s_run) != 0u) {
+        int32_t claimed;
         pm_metal_net_ip_pump();
         fire_timers();
-        drain_one();
-        if (ring_empty()) {
-            idle_wait_us(200ull);
+        claimed = drain_one();
+        if (claimed == 0) {
+            backoff = 0u;
+        } else {
+            uint64_t nap = 200ull << backoff;
+            uint64_t next;
+            if (backoff < 6u) {
+                backoff++;
+            }
+            next = next_timer_deadline();
+            if (next != UINT64_MAX) {
+                uint64_t now = pm_metal_coop_mono_us();
+                uint64_t span = next > now ? next - now : 0ull;
+                if (span < nap) {
+                    nap = span;
+                }
+            }
+            idle_wait_us(nap);
         }
     }
 }

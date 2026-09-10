@@ -94,6 +94,7 @@ MP_REGISTER_ROOT_POINTER(mp_obj_t metal_drv_py_attach[PM_METAL_DRV_PY_MAX]);
 typedef struct {
     pm_metal_coop_coro_t coro;
     uint32_t slot;
+    uint64_t nap_us; /* self-park backoff: 1ms doubling to 64ms while the gen keeps yielding */
 } pm_metal_upy_frame_t;
 
 /* GIL release hook: called from MP_THREAD_GIL_EXIT after the REPL thread
@@ -153,10 +154,16 @@ static pm_metal_coop_status_t step_upy(pm_metal_coop_coro_t *self) {
         return PM_METAL_COOP_ERROR;
     }
     /* Trylock the GIL. On contention the REPL thread (or another worker) holds
-     * it. park-to-ready-ring — the GIL release hook kicks a poll cycle that
-     * drains the ring immediately rather than waiting for the next idle poll. */
+     * it — most of the time that is the interactive prompt: the REPL thread
+     * keeps the GIL while its stdin poll loop steps ready tasks re-entrantly
+     * (gil_owner == own tid), so a worker's trylock cannot succeed until the
+     * REPL executes something that releases. Re-posting to the ring made that
+     * a hot loop (claim -> trylock fail -> re-post, ~4k/s per runner, a full
+     * core each, measured on an idle serve() REPL). Park on a 1ms retry timer
+     * instead: the GIL release hook (metal_gil_wake -> coop poll) still claims
+     * ring-posted work immediately, and the gen retries within a slice. */
     if (!MP_THREAD_GIL_TRYLOCK()) {
-        return pm_metal_coop_yield_park(self);
+        return pm_metal_coop_sleep_us(self, 1000ull);
     }
     gen = MP_STATE_VM(metal_upy_gen)[f->slot];
     if (gen == MP_OBJ_NULL) {
@@ -168,7 +175,22 @@ static pm_metal_coop_status_t step_upy(pm_metal_coop_coro_t *self) {
             MP_STATE_VM(metal_upy_gen)[f->slot] = MP_OBJ_NULL;
             ret = PM_METAL_COOP_DONE;
         } else {
-            ret = pm_metal_coop_yield_park(self);
+            /* The generator yielded (not finished). Park it on a sleep timer
+             * instead of re-posting hot: a gen that re-posts spins a full
+             * core per gen (~1.4M claims/s measured on an idle serve REPL,
+             * three runners, zero VM work). The park backs off while the
+             * gen keeps yielding: consecutive yields double the nap from 1ms
+             * to a 64ms ceiling. Any externally posted wake (post_task from
+             * a C card — the asgi defer queue waking the render pump) claims
+             * the task immediately regardless of the timer, and a gen whose
+             * GIL handoff or consumer wants the next slice sooner is stepped
+             * then; the timer only bounds the SELF-park cadence. */
+            uint64_t park_us;
+            if (f->nap_us < 64000ull) {
+                f->nap_us = f->nap_us == 0ull ? 1000ull : f->nap_us * 2ull;
+            }
+            park_us = f->nap_us;
+            ret = pm_metal_coop_sleep_us(self, park_us);
         }
     } else {
         MP_STATE_VM(metal_upy_gen)[f->slot] = MP_OBJ_NULL;
@@ -215,6 +237,7 @@ static mp_obj_t metal_register_upy(mp_obj_t gen) {
      * on every guest task, forever. */
     pm_metal_coop_coro_set_auto_free(&frame->coro);
     frame->slot = i;
+    frame->nap_us = 0ull;
     MP_STATE_VM(metal_upy_gen)[i] = gen;
     if (pm_metal_coop_create_task(&frame->coro) == NULL) {
         MP_STATE_VM(metal_upy_gen)[i] = MP_OBJ_NULL;
