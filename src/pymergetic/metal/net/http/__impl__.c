@@ -74,7 +74,7 @@ static void http_close_fd(pm_metal_http_fetch_t *f) {
 static pm_metal_coop_status_t fetch_fail(pm_metal_http_fetch_t *f) {
     f->err = 1;
     http_close_fd(f);
-    return PM_METAL_ASYNC_ERROR;
+    return PM_METAL_COOP_ERROR;
 }
 
 static int32_t parse_http_uri(const char *uri, char *host, uint32_t host_cap, uint16_t *port,
@@ -220,7 +220,7 @@ static pm_metal_coop_status_t step_fetch(pm_metal_coop_coro_t *self) {
         int32_t st = pm_metal_net_ip_connect(f->fd, f->addr, f->port);
         if (st == 0) {
             f->step = 1;
-            return PM_METAL_ASYNC_WAITING;
+            return PM_METAL_COOP_WAITING;
         }
         if (st < 0) {
             return fetch_fail(f);
@@ -236,7 +236,7 @@ static pm_metal_coop_status_t step_fetch(pm_metal_coop_coro_t *self) {
         }
         int32_t st = pm_metal_net_tls_handshake(f->tls);
         if (st == 1) {
-            return PM_METAL_ASYNC_WAITING;
+            return PM_METAL_COOP_WAITING;
         }
         if (st < 0) {
             return fetch_fail(f);
@@ -293,7 +293,7 @@ static pm_metal_coop_status_t step_fetch(pm_metal_coop_coro_t *self) {
         while (f->snd_off < (uint32_t)n) {
             int32_t k = http_send(f, (const uint8_t *)req + f->snd_off, (uint32_t)n - f->snd_off);
             if (k == 0) {
-                return PM_METAL_ASYNC_WAITING;
+                return PM_METAL_COOP_WAITING;
             }
             if (k < 0) {
                 return fetch_fail(f);
@@ -304,7 +304,7 @@ static pm_metal_coop_status_t step_fetch(pm_metal_coop_coro_t *self) {
         while (body_off < f->req_body_len) {
             int32_t k = http_send(f, f->req_body + body_off, f->req_body_len - body_off);
             if (k == 0) {
-                return PM_METAL_ASYNC_WAITING;
+                return PM_METAL_COOP_WAITING;
             }
             if (k < 0) {
                 return fetch_fail(f);
@@ -318,18 +318,18 @@ static pm_metal_coop_status_t step_fetch(pm_metal_coop_coro_t *self) {
         uint8_t buf[4096];
         int32_t n = http_recv(f, buf, sizeof(buf));
         if (n == 0) {
-            return PM_METAL_ASYNC_WAITING;
+            return PM_METAL_COOP_WAITING;
         }
         if (n == -2 || n < 0) {
             int32_t body = finish_body(f);
             if (body == 0) {
                 http_close_fd(f);
-                return PM_METAL_ASYNC_DONE;
+                return PM_METAL_COOP_DONE;
             }
             if (n == -2 || body < 0) {
                 return fetch_fail(f);
             }
-            return PM_METAL_ASYNC_WAITING;
+            return PM_METAL_COOP_WAITING;
         }
         if (acc_put(f, buf, (uint32_t)n) != 0) {
             return fetch_fail(f);
@@ -342,7 +342,7 @@ static pm_metal_coop_status_t step_fetch(pm_metal_coop_coro_t *self) {
                     return fetch_fail(f);
                 }
                 http_close_fd(f);
-                return PM_METAL_ASYNC_DONE;
+                return PM_METAL_COOP_DONE;
             }
         }
     }

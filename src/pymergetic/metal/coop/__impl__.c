@@ -23,11 +23,11 @@
 #include <time.h>
 #if defined(__linux__) || defined(__APPLE__)
 #include <poll.h>
-#define PM_METAL_ASYNC_HAVE_POLL 1
+#define PM_METAL_COOP_HAVE_POLL 1
 #endif
 #if !defined(__EMSCRIPTEN__)
 #include <pthread.h>
-#define PM_METAL_ASYNC_PTHREAD 1
+#define PM_METAL_COOP_PTHREAD 1
 #endif
 #endif
 
@@ -39,17 +39,17 @@
 #define PM_METAL_RING_PAY_MASK 0x0000ffffffffffffull
 /* Ready-queue start size (slots). Each slot is 8 bytes; alloc() from the
  * arena heap, then shrink until it fits. Not a compile-time cap on tasks. */
-#define PM_METAL_ASYNC_RING_WANT (1u << 20)
-#define PM_METAL_ASYNC_RING_MIN 256u
+#define PM_METAL_COOP_RING_WANT (1u << 20)
+#define PM_METAL_COOP_RING_MIN 256u
 /* xAPIC CPUID leaf 1 id is 8-bit. Lookup width, not a core cap. */
-#define PM_METAL_ASYNC_APIC_N 256u
+#define PM_METAL_COOP_APIC_N 256u
 /* How long run_until keeps waiting with nothing runnable before it calls the
  * wait dead. Must survive one guest-TCP retransmit cycle: a dropped packet
  * on a real wire (QEMU user-net under load drops) waits out the initial RTO
  * (~200-300ms) with nothing runnable, and firing first turns a healthy
  * fetch into "fetch failed". 1s tolerates a retransmit and still catches a
  * genuinely dead wait far below any human timeout. */
-#define PM_METAL_ASYNC_STALL_US 1000000ull
+#define PM_METAL_COOP_STALL_US 1000000ull
 
 struct pm_metal_coop_timer {
     struct pm_metal_coop_timer *next;
@@ -81,18 +81,18 @@ static uint32_t s_ncpu;
 /* Worker (AP / runner pthread) marking per current-slot. Kept for CPU id / slot
  * bookkeeping; it no longer gates vm_only stepping. A plain slot array keeps
  * TLS out of firmware. */
-static uint32_t s_worker[PM_METAL_ASYNC_APIC_N];
+static uint32_t s_worker[PM_METAL_COOP_APIC_N];
 /* Per-slot: 1 if that runner installed MicroPython thread state and may re-enter
  * the bytecode VM. The boot thread (s_worker == 0) is always VM-capable. */
-static uint32_t s_vm_capable[PM_METAL_ASYNC_APIC_N];
-#if defined(PM_METAL_ASYNC_PTHREAD)
+static uint32_t s_vm_capable[PM_METAL_COOP_APIC_N];
+#if defined(PM_METAL_COOP_PTHREAD)
 static uint32_t s_njoin;
 static pthread_t *s_thread;
 static __thread uint32_t s_cpu;
 static __thread pm_metal_coop_task_t *s_current;
 #else
-static pm_metal_coop_task_t *s_current_cpu[PM_METAL_ASYNC_APIC_N];
-static uint32_t s_ncurrent = PM_METAL_ASYNC_APIC_N;
+static pm_metal_coop_task_t *s_current_cpu[PM_METAL_COOP_APIC_N];
+static uint32_t s_ncurrent = PM_METAL_COOP_APIC_N;
 #endif
 static atomic_uint s_alive;
 static atomic_uint s_run;
@@ -134,7 +134,7 @@ __attribute__((weak)) int32_t pm_metal_drivers_net_tap_fd(void) {
 #endif
 
 __attribute__((weak)) uint32_t pm_metal_coop_fill_ncpu(void) {
-#if defined(PM_METAL_ASYNC_PTHREAD)
+#if defined(PM_METAL_COOP_PTHREAD)
     return 4u;
 #else
     return 1u;
@@ -152,7 +152,7 @@ __attribute__((weak)) int pm_metal_coop_runner_begin(uint32_t slot) {
     return 0;
 }
 
-#if !defined(PM_METAL_ASYNC_PTHREAD)
+#if !defined(PM_METAL_COOP_PTHREAD)
 __attribute__((weak)) int32_t pm_metal_coop_fill_start_aps(pm_util_mem_arena_t *arena, uint32_t ncpu,
     void (*entry)(void *)) {
     (void)arena;
@@ -162,7 +162,7 @@ __attribute__((weak)) int32_t pm_metal_coop_fill_start_aps(pm_util_mem_arena_t *
 }
 #endif
 
-#if !defined(PM_METAL_ASYNC_PTHREAD)
+#if !defined(PM_METAL_COOP_PTHREAD)
 static uint32_t cpu_id(void) {
 #if defined(PM_METAL_FIRMWARE) && (defined(__x86_64__) || defined(__i386__))
     uint32_t a;
@@ -192,7 +192,7 @@ static uint32_t cpu_id(void) {
 #endif
 
 static pm_metal_coop_task_t **current_slot(void) {
-#if defined(PM_METAL_ASYNC_PTHREAD)
+#if defined(PM_METAL_COOP_PTHREAD)
     return &s_current;
 #else
     uint32_t id = cpu_id();
@@ -204,11 +204,11 @@ static pm_metal_coop_task_t **current_slot(void) {
 }
 
 static uint32_t cpu_slot(void) {
-#if defined(PM_METAL_ASYNC_PTHREAD)
+#if defined(PM_METAL_COOP_PTHREAD)
     return s_cpu;
 #else
     uint32_t id = cpu_id();
-    if (id >= PM_METAL_ASYNC_APIC_N) {
+    if (id >= PM_METAL_COOP_APIC_N) {
         id = 0;
     }
     return id;
@@ -239,7 +239,7 @@ static void idle_wait_us(uint64_t us) {
     }
 #else
     int32_t fd;
-#if defined(PM_METAL_ASYNC_HAVE_POLL)
+#if defined(PM_METAL_COOP_HAVE_POLL)
     struct pollfd pfd;
     int timeout_ms;
 #endif
@@ -247,7 +247,7 @@ static void idle_wait_us(uint64_t us) {
         return;
     }
     fd = pm_metal_drivers_net_tap_fd();
-#if defined(PM_METAL_ASYNC_HAVE_POLL)
+#if defined(PM_METAL_COOP_HAVE_POLL)
     if (fd >= 0) {
         pfd.fd = (int)fd;
         pfd.events = POLLIN;
@@ -278,8 +278,8 @@ static size_t inbox_bytes(uint32_t n) {
 }
 
 static pm_metal_coop_inbox_t *inbox_map(pm_util_mem_arena_t *arena) {
-    uint32_t n = PM_METAL_ASYNC_RING_WANT;
-    while (n >= PM_METAL_ASYNC_RING_MIN) {
+    uint32_t n = PM_METAL_COOP_RING_WANT;
+    while (n >= PM_METAL_COOP_RING_MIN) {
         size_t bytes = inbox_bytes(n);
         pm_metal_coop_inbox_t *in = (pm_metal_coop_inbox_t *)pm_util_mem_alloc(arena, bytes);
         if (in != NULL) {
@@ -391,6 +391,102 @@ static pm_metal_coop_task_t *task_of(pm_metal_coop_coro_t *c) {
     return NULL;
 }
 
+/* ===== Task reclamation (refcount, not epoch) =====
+ *
+ * A terminal task's blocks (task + optional coro frame) are freed when
+ * the LAST reference drops. References: every ready-ring slot holding
+ * the task (push +1; the driver that claims the slot holds that ref
+ * until it is done with the task), plus the dead-marker's transient ref
+ * around the dead transition. The ONLY free path is a decrement to zero
+ * with dead set — one place, no double free. Pushing a dead task is
+ * refused (and a push that raced the dead bit re-checks after its
+ * increment and unwinds), so the count cannot grow once dead is set.
+ * This closes the push/drain TOCTOU an epoch list has (a task pushed
+ * just as the ring emptied would dangle). */
+static int32_t task_is_terminal(pm_metal_coop_task_t *t) {
+    uint32_t st;
+    if (t == NULL || t->root == NULL) {
+        return 1;
+    }
+    st = t->root->status;
+    return st == PM_METAL_COOP_DONE || st == PM_METAL_COOP_CANCELLED
+        || st == PM_METAL_COOP_ERROR;
+}
+
+/* The one free path: last decrement with dead set. May free `task` (and
+ * the coro frame when the coro is auto_free — a coro_create block, coro
+ * first member); callers must not touch the task afterwards. */
+static void task_unref(pm_metal_coop_task_t *task) {
+    pm_util_mem_arena_t *arena;
+    pm_metal_coop_coro_t *root;
+    pm_metal_coop_coro_t *frame;
+    if (task == NULL) {
+        return;
+    }
+    if (__atomic_fetch_sub(&task->ring_refs, 1u, __ATOMIC_ACQ_REL) != 1u) {
+        return;
+    }
+    if (__atomic_load_n(&task->dead, __ATOMIC_ACQUIRE) == 0u) {
+        return;
+    }
+    arena = s_arena;
+    root = task->root;
+    frame = (root != NULL && root->auto_free != 0u) ? root : NULL;
+    pm_util_mem_free(arena, task);
+    if (frame != NULL) {
+        pm_util_mem_free(arena, frame);
+    }
+}
+
+/* Push one task ref. Returns -1 (and does not push) when the task is
+ * dead — a dead task's blocks are being freed; a ring slot to it would
+ * be a dangling payload. The dead re-check after the increment unwinds
+ * a push that raced the dead bit. */
+static int32_t push_task_ref(pm_metal_coop_task_t *task) {
+    if (task == NULL) {
+        return -1;
+    }
+    if (__atomic_load_n(&task->dead, __ATOMIC_ACQUIRE) != 0u) {
+        return -1;
+    }
+    __atomic_fetch_add(&task->ring_refs, 1u, __ATOMIC_ACQ_REL);
+    if (__atomic_load_n(&task->dead, __ATOMIC_ACQUIRE) != 0u) {
+        task_unref(task);
+        return -1;
+    }
+    if (ring_push(PM_METAL_RING_KIND_TASK, task) != 0) {
+        task_unref(task);
+        return -1;
+    }
+    return 0;
+}
+
+/* Mark a terminal task dead: its blocks go home on the last unref. The
+ * transient ref around the exchange closes the in-flight-push race (the
+ * push's own unwind then sees the bit and takes the last drop itself). */
+static void task_mark_dead(pm_metal_coop_task_t *task) {
+    if (task == NULL) {
+        return;
+    }
+    __atomic_fetch_add(&task->ring_refs, 1u, __ATOMIC_ACQ_REL);
+    if (__atomic_exchange_n(&task->dead, 1u, __ATOMIC_ACQ_REL) != 0u) {
+        task_unref(task);
+        return;
+    }
+    task_unref(task);
+}
+
+int32_t pm_metal_coop_task_reclaim(pm_metal_coop_task_t *task) {
+    if (task == NULL) {
+        return -1;
+    }
+    if (!task_is_terminal(task)) {
+        return -1;
+    }
+    task_mark_dead(task);
+    return 0;
+}
+
 static void timer_insert(struct pm_metal_coop_timer *tm) {
     struct pm_metal_coop_timer **pp;
     pm_util_lock_acquire(&s_timer_lock);
@@ -410,7 +506,7 @@ static void fire_timers(void) {
         struct pm_metal_coop_timer *tm = s_timers;
         s_timers = tm->next;
         pm_util_lock_release(&s_timer_lock);
-        (void)ring_push(PM_METAL_RING_KIND_TASK, tm->task);
+        (void)push_task_ref(tm->task);
         pm_util_mem_free(s_arena, tm);
         pm_util_lock_acquire(&s_timer_lock);
         now = pm_metal_coop_mono_us();
@@ -432,6 +528,12 @@ void pm_metal_coop_coro_set_vm_only(pm_metal_coop_coro_t *coro) {
     }
 }
 
+void pm_metal_coop_coro_set_auto_free(pm_metal_coop_coro_t *coro) {
+    if (coro != NULL) {
+        coro->auto_free = 1u;
+    }
+}
+
 /* ===== Async mutex: one reusable cast (park-on-contention, wake-on-release). ===== */
 
 void pm_metal_coop_mutex_init(pm_metal_coop_mutex_t *m) {
@@ -443,8 +545,8 @@ void pm_metal_coop_mutex_init(pm_metal_coop_mutex_t *m) {
 }
 
 /* Try to claim the mutex. On success (owner: NULL→task CAS passes) returns
- * PM_METAL_ASYNC_PENDING — the caller must then step the coro. On contention
- * the current task is parked on the FIFO and PM_METAL_ASYNC_WAITING is
+ * PM_METAL_COOP_PENDING — the caller must then step the coro. On contention
+ * the current task is parked on the FIFO and PM_METAL_COOP_WAITING is
  * returned; the runner hands the task back to the ready ring.
  *
  * Race window between CAS fail and push-to-FIFO: the holder may release and
@@ -455,20 +557,20 @@ pm_metal_coop_status_t pm_metal_coop_mutex_try_acquire(pm_metal_coop_mutex_t *m,
     pm_metal_coop_task_t *task;
     pm_metal_coop_task_t *expected = NULL;
     if (m == NULL || self == NULL) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     task = task_of(self);
     if (task == NULL) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     /* Re-entry after a wake: the mutex release transferred ownership to this
      * task already. Proceed without any CAS. */
     if (m->owner == task) {
-        return PM_METAL_ASYNC_PENDING;
+        return PM_METAL_COOP_PENDING;
     }
     if (__atomic_compare_exchange_n(&m->owner, &expected, task, 0, __ATOMIC_ACQ_REL,
             __ATOMIC_RELAXED)) {
-        return PM_METAL_ASYNC_PENDING;
+        return PM_METAL_COOP_PENDING;
     }
     /* Contended: park this task on the mutex FIFO under the fifo_lock, then
      * re-check — if owner changed to NULL between our CAS fail and this push,
@@ -504,10 +606,10 @@ pm_metal_coop_status_t pm_metal_coop_mutex_try_acquire(pm_metal_coop_mutex_t *m,
         }
         task->mutex_next = NULL;
         pm_util_lock_release(&m->fifo_lock);
-        return PM_METAL_ASYNC_PENDING;
+        return PM_METAL_COOP_PENDING;
     }
     pm_util_lock_release(&m->fifo_lock);
-    return PM_METAL_ASYNC_WAITING;
+    return PM_METAL_COOP_WAITING;
 }
 
 /* Release the mutex. If a task is waiting, transfer ownership directly (the
@@ -533,7 +635,7 @@ void pm_metal_coop_mutex_release(pm_metal_coop_mutex_t *m) {
     __atomic_store_n(&m->owner, wake, __ATOMIC_RELEASE);
     pm_util_lock_release(&m->fifo_lock);
     if (wake != NULL) {
-        (void)ring_push(PM_METAL_RING_KIND_TASK, wake);
+        (void)push_task_ref(wake);
     }
 }
 
@@ -542,14 +644,17 @@ static void step_task(pm_metal_coop_task_t *task) {
     if (task == NULL || task->root == NULL || task->on_c_stack) {
         return;
     }
-    if (task->root->status == PM_METAL_ASYNC_DONE || task->root->status == PM_METAL_ASYNC_ERROR
-        || task->root->status == PM_METAL_ASYNC_CANCELLED) {
+    if (task->root->status == PM_METAL_COOP_DONE || task->root->status == PM_METAL_COOP_ERROR
+        || task->root->status == PM_METAL_COOP_CANCELLED) {
+        /* terminal on arrival (a stale ring slot): the pusher's ref goes
+         * home; when dead, this is also the reclaimer's last drop. */
+        task_unref(task);
         return;
     }
     uint32_t expected = 0;
     if (!__atomic_compare_exchange_n(&task->running, &expected, 1u, 0, __ATOMIC_ACQ_REL,
             __ATOMIC_RELAXED)) {
-        (void)ring_push(PM_METAL_RING_KIND_TASK, task);
+        (void)push_task_ref(task);
         return;
     }
     atomic_fetch_add(&s_busy, 1u);
@@ -562,7 +667,7 @@ static void step_task(pm_metal_coop_task_t *task) {
             leaf = leaf->awaiting;
         }
         if (leaf->step == NULL) {
-            leaf->status = PM_METAL_ASYNC_ERROR;
+            leaf->status = PM_METAL_COOP_ERROR;
             break;
         }
         if (leaf->vm_only) {
@@ -577,7 +682,7 @@ static void step_task(pm_metal_coop_task_t *task) {
                     *cur = NULL;
                     __atomic_store_n(&task->running, 0u, __ATOMIC_RELEASE);
                     atomic_fetch_sub(&s_busy, 1u);
-                    (void)ring_push(PM_METAL_RING_KIND_TASK, task);
+                    (void)push_task_ref(task);
                     return;
                 }
             } else {
@@ -586,14 +691,14 @@ static void step_task(pm_metal_coop_task_t *task) {
                     *cur = NULL;
                     __atomic_store_n(&task->running, 0u, __ATOMIC_RELEASE);
                     atomic_fetch_sub(&s_busy, 1u);
-                    (void)ring_push(PM_METAL_RING_KIND_TASK, task);
+                    (void)push_task_ref(task);
                     return;
                 }
                 /* Try to claim the interpreter via the async mutex. On
                  * contention the task parks on the mutex FIFO and we hand it
                  * back — another core will wake it when it releases. */
                 mst = pm_metal_coop_mutex_try_acquire(&s_vm_mutex, leaf);
-                if (mst == PM_METAL_ASYNC_WAITING) {
+                if (mst == PM_METAL_COOP_WAITING) {
                     *cur = NULL;
                     __atomic_store_n(&task->running, 0u, __ATOMIC_RELEASE);
                     atomic_fetch_sub(&s_busy, 1u);
@@ -609,13 +714,13 @@ static void step_task(pm_metal_coop_task_t *task) {
             }
         }
         leaf->status = (uint32_t)st;
-        if (st == PM_METAL_ASYNC_WAITING) {
+        if (st == PM_METAL_COOP_WAITING) {
             if (leaf->awaiting != NULL) {
                 continue;
             }
             break;
         }
-        if (st == PM_METAL_ASYNC_DONE && leaf->waiter != NULL) {
+        if (st == PM_METAL_COOP_DONE && leaf->waiter != NULL) {
             leaf->waiter->awaiting = NULL;
             continue;
         }
@@ -624,6 +729,12 @@ static void step_task(pm_metal_coop_task_t *task) {
     *cur = NULL;
     __atomic_store_n(&task->running, 0u, __ATOMIC_RELEASE);
     atomic_fetch_sub(&s_busy, 1u);
+    /* The step that produced the terminal state retires the task: an
+     * auto_free coro's blocks are dead from here on (the caller's ref,
+     * dropped after this returns, is the last one). */
+    if (task_is_terminal(task) && task->root->auto_free != 0u) {
+        task_mark_dead(task);
+    }
 }
 
 static void drain_one(void) {
@@ -639,14 +750,16 @@ static void drain_one(void) {
     pm_metal_coop_task_t *task = (pm_metal_coop_task_t *)pay_ptr(ring_pay(word));
     ring_release(idx);
     if (task == *current_slot()) {
-        (void)ring_push(PM_METAL_RING_KIND_TASK, task);
+        (void)push_task_ref(task);
         return;
     }
     step_task(task);
+    /* the slot's ref (taken by the pusher) is ours to drop now */
+    task_unref(task);
 }
 
 static void runner_entry(void *arg) {
-#if defined(PM_METAL_ASYNC_PTHREAD)
+#if defined(PM_METAL_COOP_PTHREAD)
     s_cpu = (uint32_t)(uintptr_t)arg;
 #else
     (void)arg;
@@ -668,7 +781,7 @@ static void runner_entry(void *arg) {
     }
 }
 
-#if defined(PM_METAL_ASYNC_PTHREAD)
+#if defined(PM_METAL_COOP_PTHREAD)
 static void *pthread_entry(void *arg) {
     runner_entry(arg);
     return NULL;
@@ -698,35 +811,47 @@ int32_t pm_metal_coop_init(pm_util_mem_arena_t *arena, uint32_t ncpu) {
     s_ncpu = 1;
     atomic_store(&s_alive, 1u);
     atomic_store(&s_run, 1u);
-#if defined(PM_METAL_ASYNC_PTHREAD)
+#if defined(PM_METAL_COOP_PTHREAD)
     s_cpu = 0;
     s_current = NULL;
     s_thread = NULL;
     s_njoin = 0;
 #else
     memset(s_current_cpu, 0, sizeof(s_current_cpu));
-    s_ncurrent = PM_METAL_ASYNC_APIC_N;
+    s_ncurrent = PM_METAL_COOP_APIC_N;
 #endif
     s_ready = 1;
     want = ncpu;
     if (want > 1u) {
         int32_t st;
-#if defined(PM_METAL_ASYNC_PTHREAD)
+#if defined(PM_METAL_COOP_PTHREAD)
         {
             uint32_t i;
             s_thread = (pthread_t *)pm_util_mem_alloc(arena, (size_t)want * sizeof(*s_thread));
             if (s_thread == NULL) {
                 st = -1;
             } else {
+                pthread_attr_t attr;
                 memset(s_thread, 0, (size_t)want * sizeof(*s_thread));
                 st = 0;
-                for (i = 1; i < want; i++) {
-                    if (pthread_create(&s_thread[i], NULL, pthread_entry, (void *)(uintptr_t)i) != 0) {
+                /* Runner stacks must clear TCC's recursive parser with the
+                 * biggest card (zenoh's include tree eats several MiB of C
+                 * recursion) ON TOP of whatever nested work the task already
+                 * did — the build walk compiles units on runners now. The
+                 * default 8 MiB is marginal; 32 MiB virtual is cheap (lazy
+                 * pages) and headroom, not a raise of resident cost. */
+                if (pthread_attr_init(&attr) != 0
+                    || pthread_attr_setstacksize(&attr, 32u * 1024u * 1024u) != 0) {
+                    st = -1;
+                }
+                for (i = 1; st == 0 && i < want; i++) {
+                    if (pthread_create(&s_thread[i], &attr, pthread_entry, (void *)(uintptr_t)i) != 0) {
                         st = -1;
                         break;
                     }
                     s_njoin = i;
                 }
+                pthread_attr_destroy(&attr);
             }
         }
 #else
@@ -755,7 +880,7 @@ uint32_t pm_metal_coop_n_runners(void) {
 }
 
 const char *pm_metal_coop_runner_kind(void) {
-#if defined(PM_METAL_ASYNC_PTHREAD)
+#if defined(PM_METAL_COOP_PTHREAD)
     return "pthread";
 #elif defined(__EMSCRIPTEN__)
     return "sim asyncify";
@@ -781,7 +906,7 @@ void pm_metal_coop_deinit(void) {
             (void)ring_push(PM_METAL_RING_KIND_STOP, NULL);
         }
     }
-#if defined(PM_METAL_ASYNC_PTHREAD)
+#if defined(PM_METAL_COOP_PTHREAD)
     if (s_thread != NULL) {
         for (i = 1; i <= s_njoin; i++) {
             pthread_join(s_thread[i], NULL);
@@ -800,7 +925,7 @@ void pm_metal_coop_deinit(void) {
     }
     s_inbox = NULL;
     s_arena = NULL;
-#if defined(PM_METAL_ASYNC_PTHREAD)
+#if defined(PM_METAL_COOP_PTHREAD)
     s_current = NULL;
 #else
     memset(s_current_cpu, 0, sizeof(s_current_cpu));
@@ -819,7 +944,7 @@ pm_metal_coop_coro_t *pm_metal_coop_coro_create(pm_metal_coop_step_fn step, size
     }
     memset(c, 0, frame_bytes);
     c->step = step;
-    c->status = PM_METAL_ASYNC_PENDING;
+    c->status = PM_METAL_COOP_PENDING;
     return c;
 }
 
@@ -834,7 +959,11 @@ pm_metal_coop_task_t *pm_metal_coop_create_task(pm_metal_coop_coro_t *coro) {
     memset(t, 0, sizeof(*t));
     t->root = coro;
     coro->task = t;
-    if (ring_push(PM_METAL_RING_KIND_TASK, t) != 0) {
+    /* the initial ref: the slot this pushes, dropped by the driver that
+     * first claims it */
+    if (push_task_ref(t) != 0) {
+        coro->task = NULL;
+        pm_util_mem_free(s_arena, t);
         return NULL;
     }
     return t;
@@ -842,52 +971,54 @@ pm_metal_coop_task_t *pm_metal_coop_create_task(pm_metal_coop_coro_t *coro) {
 
 pm_metal_coop_status_t pm_metal_coop_await(pm_metal_coop_coro_t *self, pm_metal_coop_coro_t *child) {
     if (self == NULL || child == NULL) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     if (self->awaiting != NULL && self->awaiting != child) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
-    if (child->status == PM_METAL_ASYNC_DONE) {
+    if (child->status == PM_METAL_COOP_DONE) {
         self->awaiting = NULL;
-        return PM_METAL_ASYNC_DONE;
+        return PM_METAL_COOP_DONE;
     }
     self->awaiting = child;
     child->waiter = self;
     if (child->task == NULL) {
         child->task = task_of(self);
     }
-    self->status = PM_METAL_ASYNC_WAITING;
-    return PM_METAL_ASYNC_WAITING;
+    self->status = PM_METAL_COOP_WAITING;
+    return PM_METAL_COOP_WAITING;
 }
 
 pm_metal_coop_status_t pm_metal_coop_yield_park(pm_metal_coop_coro_t *self) {
     pm_metal_coop_task_t *t = task_of(self);
     if (t == NULL) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
-    self->status = PM_METAL_ASYNC_WAITING;
-    if (ring_push(PM_METAL_RING_KIND_TASK, t) != 0) {
-        return PM_METAL_ASYNC_ERROR;
+    self->status = PM_METAL_COOP_WAITING;
+    /* the pusher ref is dropped by the driver that claims the slot
+     * (drain_one/poll/run_until after step_task) */
+    if (push_task_ref(t) != 0) {
+        return PM_METAL_COOP_ERROR;
     }
-    return PM_METAL_ASYNC_WAITING;
+    return PM_METAL_COOP_WAITING;
 }
 
 pm_metal_coop_status_t pm_metal_coop_sleep_us(pm_metal_coop_coro_t *self, uint64_t us) {
     pm_metal_coop_task_t *t = task_of(self);
     if (t == NULL || !s_ready) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     struct pm_metal_coop_timer *tm =
         (struct pm_metal_coop_timer *)pm_util_mem_alloc(s_arena, sizeof(*tm));
     if (tm == NULL) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     tm->next = NULL;
     tm->deadline_us = pm_metal_coop_mono_us() + us;
     tm->task = t;
     timer_insert(tm);
-    self->status = PM_METAL_ASYNC_WAITING;
-    return PM_METAL_ASYNC_WAITING;
+    self->status = PM_METAL_COOP_WAITING;
+    return PM_METAL_COOP_WAITING;
 }
 
 uint32_t pm_metal_coop_yield(void) {
@@ -923,6 +1054,7 @@ void pm_metal_coop_poll(void) {
         pm_metal_coop_task_t *task = (pm_metal_coop_task_t *)pay_ptr(ring_pay(word));
         ring_release(idx);
         step_task(task);
+        task_unref(task);
         pm_metal_net_ip_pump();
         fire_timers();
     }
@@ -940,9 +1072,9 @@ int32_t pm_metal_coop_run_until(pm_metal_coop_coro_t *waiter) {
      * a packet the next pump will deliver, is still on its way. Give up only
      * when nothing has moved for a whole stall window, or a loaded box turns a
      * live wait into a failure. */
-    uint64_t stall_until = pm_metal_coop_mono_us() + PM_METAL_ASYNC_STALL_US;
-    while (waiter->status != PM_METAL_ASYNC_DONE && waiter->status != PM_METAL_ASYNC_ERROR
-        && waiter->status != PM_METAL_ASYNC_CANCELLED) {
+    uint64_t stall_until = pm_metal_coop_mono_us() + PM_METAL_COOP_STALL_US;
+    while (waiter->status != PM_METAL_COOP_DONE && waiter->status != PM_METAL_COOP_ERROR
+        && waiter->status != PM_METAL_COOP_CANCELLED) {
         pm_metal_net_ip_pump();
         fire_timers();
         uint64_t word;
@@ -954,17 +1086,19 @@ int32_t pm_metal_coop_run_until(pm_metal_coop_coro_t *waiter) {
             }
             pm_metal_coop_task_t *task = (pm_metal_coop_task_t *)pay_ptr(ring_pay(word));
             ring_release(idx);
-            stall_until = pm_metal_coop_mono_us() + PM_METAL_ASYNC_STALL_US;
+            stall_until = pm_metal_coop_mono_us() + PM_METAL_COOP_STALL_US;
             if (task == owner) {
+                task_unref(task);
                 continue;
             }
             step_task(task);
+            task_unref(task);
             continue;
         }
         uint64_t next = next_timer_deadline();
         if (next == UINT64_MAX) {
             if (atomic_load(&s_busy) != 0u) {
-                stall_until = pm_metal_coop_mono_us() + PM_METAL_ASYNC_STALL_US;
+                stall_until = pm_metal_coop_mono_us() + PM_METAL_COOP_STALL_US;
                 idle_wait_us(50ull);
                 continue;
             }
@@ -983,12 +1117,12 @@ int32_t pm_metal_coop_run_until(pm_metal_coop_coro_t *waiter) {
             wait = 1000000ull;
         }
         idle_wait_us(wait);
-        stall_until = pm_metal_coop_mono_us() + PM_METAL_ASYNC_STALL_US;
+        stall_until = pm_metal_coop_mono_us() + PM_METAL_COOP_STALL_US;
     }
     if (owner != NULL) {
         owner->on_c_stack = 0;
     }
-    return waiter->status == PM_METAL_ASYNC_DONE ? 0 : -1;
+    return waiter->status == PM_METAL_COOP_DONE ? 0 : -1;
 }
 
 int32_t pm_metal_coop_run(pm_metal_coop_task_t *task) {
@@ -1014,7 +1148,9 @@ int32_t pm_metal_coop_post_task(pm_metal_coop_task_t *task) {
     if (!s_ready || task == NULL) {
         return -1;
     }
-    return ring_push(PM_METAL_RING_KIND_TASK, task);
+    /* a dead task is never re-posted: the pusher ref is the ref the
+     * reclaimer drains — posting one would resurrect dangling blocks */
+    return push_task_ref(task);
 }
 
 static int32_t pm_metal_coop_boot(pm_util_mem_arena_t *arena) {

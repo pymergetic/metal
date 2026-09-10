@@ -76,12 +76,12 @@ static pm_metal_coop_status_t step_udp_rx(pm_metal_coop_coro_t *self) {
         f->n = pm_metal_net_ip_recvfrom(f->fd, f->buf, sizeof(f->buf), NULL, NULL);
         if (f->n == 0) {
             f->step = 1;
-            return PM_METAL_ASYNC_WAITING;
+            return PM_METAL_COOP_WAITING;
         }
-        return f->n > 0 ? PM_METAL_ASYNC_DONE : PM_METAL_ASYNC_ERROR;
+        return f->n > 0 ? PM_METAL_COOP_DONE : PM_METAL_COOP_ERROR;
     }
     f->n = pm_metal_net_ip_recvfrom(f->fd, f->buf, sizeof(f->buf), NULL, NULL);
-    return f->n > 0 ? PM_METAL_ASYNC_DONE : PM_METAL_ASYNC_ERROR;
+    return f->n > 0 ? PM_METAL_COOP_DONE : PM_METAL_COOP_ERROR;
 }
 
 static int32_t case_udp_park(void) {
@@ -106,11 +106,11 @@ static int32_t case_udp_park(void) {
      * pushed task first, so a single poll() can return before the step runs;
      * pump until the very first step has settled, then require it parked. */
     uint32_t settle = 0;
-    while (f->coro.status == PM_METAL_ASYNC_PENDING && settle < 100000u) {
+    while (f->coro.status == PM_METAL_COOP_PENDING && settle < 100000u) {
         pm_metal_coop_poll();
         settle++;
     }
-    if (f->coro.status != PM_METAL_ASYNC_WAITING) {
+    if (f->coro.status != PM_METAL_COOP_WAITING) {
         return fail("not parked");
     }
     const uint8_t msg[] = { 'z' };
@@ -178,13 +178,13 @@ static pm_metal_coop_status_t step_tcp_accept(pm_metal_coop_coro_t *self) {
     int32_t a = pm_metal_net_ip_accept(f->ls);
     if (a == -2) {
         f->step = 1;
-        return PM_METAL_ASYNC_WAITING;
+        return PM_METAL_COOP_WAITING;
     }
     if (a < 0) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     f->acc = a;
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 }
 
 static int32_t case_tcp_accept_park(void) {
@@ -212,11 +212,11 @@ static int32_t case_tcp_accept_park(void) {
      * single poll() can legitimately return before the step happens. The
      * invariant is the settle: once stepped, it must be parked (WAITING). */
     uint32_t settle = 0;
-    while (f->coro.status == PM_METAL_ASYNC_PENDING && settle < 100000u) {
+    while (f->coro.status == PM_METAL_COOP_PENDING && settle < 100000u) {
         pm_metal_coop_poll();
         settle++;
     }
-    if (f->coro.status != PM_METAL_ASYNC_WAITING) {
+    if (f->coro.status != PM_METAL_COOP_WAITING) {
         return fail("acc not parked");
     }
     if (pm_metal_net_ip_connect(cl, LO4, 9001) != 1) {

@@ -1,7 +1,7 @@
 /* pymergetic.metal.coop — stackless coro/task + lock-free ready ring.
  * Park = return WAITING; frame on util.mem. Not Asyncify. */
-#ifndef PYMERGETIC_METAL_ASYNC_TYPES_H
-#define PYMERGETIC_METAL_ASYNC_TYPES_H
+#ifndef PYMERGETIC_METAL_COOP_TYPES_H
+#define PYMERGETIC_METAL_COOP_TYPES_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -14,11 +14,11 @@ extern "C" {
 #endif
 
 typedef enum {
-    PM_METAL_ASYNC_PENDING = 0,
-    PM_METAL_ASYNC_WAITING = 1,
-    PM_METAL_ASYNC_DONE = 2,
-    PM_METAL_ASYNC_CANCELLED = 3,
-    PM_METAL_ASYNC_ERROR = 4,
+    PM_METAL_COOP_PENDING = 0,
+    PM_METAL_COOP_WAITING = 1,
+    PM_METAL_COOP_DONE = 2,
+    PM_METAL_COOP_CANCELLED = 3,
+    PM_METAL_COOP_ERROR = 4,
 } pm_metal_coop_status_t;
 
 typedef struct pm_metal_coop_coro pm_metal_coop_coro_t;
@@ -34,6 +34,7 @@ struct pm_metal_coop_coro {
     pm_metal_coop_task_t *task;     /* outer scheduled unit (set on create_task) */
     uint32_t status;
     uint32_t vm_only; /* 1 = step() re-enters the bytecode VM; stepped under the VM lock */
+    uint32_t auto_free; /* 1 = terminal task reclaims this frame too (coro_create block) */
 };
 
 struct pm_metal_coop_task {
@@ -42,6 +43,12 @@ struct pm_metal_coop_task {
     uint32_t running;    /* CAS: one runner steps a task at a time */
     uint32_t pid;        /* 0 = not a process (no human intent / id) */
     pm_metal_coop_task_t *mutex_next; /* intrusive FIFO link while parked on a mutex */
+    /* Reclamation bookkeeping. ring_refs counts ready-ring slots holding
+     * this task (push +1, the claiming driver's drop -1); dead marks a
+     * terminal task whose blocks the last drop frees. A push of a dead
+     * task is refused, so the count cannot grow once dead. */
+    uint32_t ring_refs;
+    uint32_t dead;      /* 1 = terminal + reclaimed: pushes refused, frees on 0 */
 };
 
 /* Async-aware mutex: CAS owner, park on contention, wake on release.
@@ -69,6 +76,21 @@ uint32_t pm_metal_coop_process_id(void);
  * serialized by the VM lock — not restricted to a single boot-thread slot. */
 void pm_metal_coop_coro_set_vm_only(pm_metal_coop_coro_t *coro);
 
+/* Mark a coro's task for auto-reclaim: when the task reaches a terminal
+ * status (DONE/CANCELLED/ERROR) and the last ring reference drops, the
+ * runner frees BOTH the task block and the coro's frame block (the block
+ * pm_metal_coop_coro_create returned — the coro must be its first member
+ * and must not be embedded in a larger caller-owned struct). For coros
+ * whose frame the caller owns (embedded structs, arena sub-spans), use
+ * pm_metal_coop_task_reclaim on the task alone instead. */
+void pm_metal_coop_coro_set_auto_free(pm_metal_coop_coro_t *coro);
+
+/* Declare a terminal task's block dead: the runner frees the TASK block
+ * (never the coro frame) once the last ring reference drops. The caller
+ * must not touch the task afterwards. Refuses (returns -1) unless the
+ * task is terminal, so a live task cannot be yanked mid-flight. */
+int32_t pm_metal_coop_task_reclaim(pm_metal_coop_task_t *task);
+
 /* Async mutex: park-on-contention, never spin; same cast as sem/rwlock/cond. */
 void pm_metal_coop_mutex_init(pm_metal_coop_mutex_t *m);
 pm_metal_coop_status_t pm_metal_coop_mutex_try_acquire(pm_metal_coop_mutex_t *m, pm_metal_coop_coro_t *self);
@@ -78,4 +100,4 @@ void pm_metal_coop_mutex_release(pm_metal_coop_mutex_t *m);
 }
 #endif
 
-#endif /* PYMERGETIC_METAL_ASYNC_TYPES_H */
+#endif /* PYMERGETIC_METAL_COOP_TYPES_H */

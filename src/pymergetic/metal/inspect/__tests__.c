@@ -1,4 +1,5 @@
 /* pymergetic.metal.inspect — live registry JSON + ASGI fetch. */
+#include "pymergetic/metal/build/__types__.h"
 #include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/inspect.h"
 #include "pymergetic/metal/net/http.h"
@@ -70,7 +71,10 @@ static int32_t case_handle(void) {
         return fail("404");
     }
     /* /build/<fqn>: unbuilt card is 404 — a record exists only after a
-     * runtime unit_compile, and this test has not built one. */
+     * runtime unit_compile. The build card's walk test (this process, run
+     * before this suite) compiles the whole tree, so reset the record table
+     * first to make the unbuilt case deterministic. */
+    pm_metal_build_record_reset();
     if (pm_metal_inspect_handle("GET", "/build/pymergetic.metal.jit.c") != 404) {
         return fail("build unbuilt 404");
     }
@@ -465,9 +469,12 @@ static int32_t case_export_manifest(void) {
             /* the Phase-5 recorded blocker, now registered (SIG_CAP fix):
              * the wasmmod nativecall µPy path resolves this by name */
             { "pymergetic.metal.jit.c", "pm_metal_jit_c_object_compile_target" },
-            /* the factory floor's telemetry tail (28 exports now) */
+            /* the factory floor's telemetry tail: the event ring's read
+             * faces and the background walk's start/state faces (30 now) */
             { "pymergetic.metal.build", "pm_metal_build_events_since" },
             { "pymergetic.metal.build", "pm_metal_build_events_latest" },
+            { "pymergetic.metal.build", "pm_metal_build_walk_start" },
+            { "pymergetic.metal.build", "pm_metal_build_walk_state" },
         };
         uint32_t k;
         for (k = 0; k < (uint32_t)(sizeof(must_exist) / sizeof(must_exist[0])); k++) {
@@ -481,16 +488,17 @@ static int32_t case_export_manifest(void) {
                 return fail("expected export missing from the registry");
             }
         }
-        /* expected == registered, exactly: the build card's face is 28
+        /* expected == registered, exactly: the build card's face is 30
          * exports (26 of the Phase-5/actor set + the two event-ring
-         * faces). A 29th export means a new face the manifest does not
-         * know; a lower count means a registration refused. */
+         * faces + the two walk faces). A 31st export means a new face
+         * the manifest does not know; a lower count means a
+         * registration refused. */
         {
             uint32_t reg = pm_wasmmod_registry_export_count(
                 (const uint8_t *)"pymergetic.metal.build", 22u);
-            if (reg != 28u) {
+            if (reg != 30u) {
                 fprintf(stderr, "metal.inspect test: build face %u "
-                    "registered, 28 expected\n", (unsigned)reg);
+                    "registered, 30 expected\n", (unsigned)reg);
                 return fail("build export count != manifest");
             }
         }

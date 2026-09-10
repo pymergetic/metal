@@ -14,6 +14,8 @@
  *    section, bounded-queue backpressure, cancellation before run
  */
 #include <stdio.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include "pymergetic/metal/coop/__types__.h"
 #include "pymergetic/metal/coop/__exports__.h"
 #include "pymergetic/metal/build/__types__.h"
@@ -790,7 +792,7 @@ static int32_t test_rebuild_jit_c(void) {
             pm_util_mem_arena_destroy(arena); free(backing); return 92;
         }
         st = rebuilt_step(coro);
-        if (st != PM_METAL_ASYNC_DONE) {
+        if (st != PM_METAL_COOP_DONE) {
             pm_metal_build_artifact_destroy(&art);
             pm_util_mem_arena_destroy(arena); free(backing); return 93;
         }
@@ -1555,7 +1557,7 @@ static int32_t test_actor_roundtrip(void) {
         pm_util_mem_arena_destroy(arena); free(backing); return 206;
     }
     st = pm_metal_build_actor_step(jobs[0]);
-    if (st != PM_METAL_ASYNC_DONE || jobs[0]->state != PM_METAL_BUILD_ACTOR_DONE
+    if (st != PM_METAL_COOP_DONE || jobs[0]->state != PM_METAL_BUILD_ACTOR_DONE
         || jobs[0]->rc != PM_METAL_BUILD_OK) {
         printf("actor roundtrip: st=%d rc=%d err=%s\n",
             (int)st, (int)jobs[0]->rc, jobs[0]->err);
@@ -1592,14 +1594,14 @@ static int32_t test_actor_roundtrip(void) {
     }
     /* job[0] runs to completion in one step (it owns the section) */
     st = pm_metal_build_actor_step(jobs[0]);
-    if (st != PM_METAL_ASYNC_DONE) {
+    if (st != PM_METAL_COOP_DONE) {
         pm_util_mem_arena_destroy(arena); free(backing); return 213;
     }
     /* job[1] would have parked only if the section were held; job[0] ran
      * and released inside its own step, so job[1] also completes. The
      * park path is exercised in (d) below via a held section. */
     st = pm_metal_build_actor_step(jobs[1]);
-    if (st != PM_METAL_ASYNC_DONE) {
+    if (st != PM_METAL_COOP_DONE) {
         pm_util_mem_arena_destroy(arena); free(backing); return 214;
     }
 
@@ -1616,7 +1618,7 @@ static int32_t test_actor_roundtrip(void) {
     /* the cancel flag is observed at the first phase boundary: the step
      * refuses before any TCC work */
     st = pm_metal_build_actor_step(jobs[0]);
-    if (st != PM_METAL_ASYNC_CANCELLED
+    if (st != PM_METAL_COOP_CANCELLED
         || jobs[0]->state != PM_METAL_BUILD_ACTOR_CANCELLED) {
         pm_util_mem_arena_destroy(arena); free(backing); return 217;
     }
@@ -1834,7 +1836,7 @@ static int32_t test_actor_stress(void) {
             }
             {
                 pm_metal_coop_status_t st = pm_metal_build_actor_step(job);
-                if (st != PM_METAL_ASYNC_CANCELLED
+                if (st != PM_METAL_COOP_CANCELLED
                     || job->state != PM_METAL_BUILD_ACTOR_CANCELLED) {
                     printf("stress: step %u st=%d state=%d\n", cycle,
                         (int)st, (int)job->state);
@@ -2247,6 +2249,174 @@ static int32_t test_dag_run(void) {
 #endif
 }
 
+/* The background walk (the factory floor's BUILD ALL): start, poll to
+ * terminal, census. Same seat fill and root probe shape as dag_run, but
+ * the walk runs as a coop task on the runner ring — this test pins that
+ * the POST /build?all=1 path's engine (walk_start + walk_state) settles
+ * every row, counts match the totals, and a second start reclaims the
+ * first walk's boot-arena spans (the high-water stability the repeated
+ * presses need). */
+static char s_walk_src_root[2048];
+static char s_walk_wasmmod_src_root[2048];
+
+/* the walk's root probe: the metal src root and the wasmmod src root
+ * (the same two-root convention the inspect fill's resolver uses) */
+static int32_t test_walk_root(const char *fqn, char *buf, size_t cap) {
+    static const char *roots[2] = { NULL, NULL };
+    size_t tl;
+    uint32_t r;
+    if (fqn == NULL || buf == NULL || cap == 0) {
+        return -1;
+    }
+    if (roots[0] == NULL) {
+        roots[0] = s_walk_src_root;
+        roots[1] = s_walk_wasmmod_src_root;
+    }
+    tl = strlen(fqn);
+    for (r = 0; r < 2; r++) {
+        size_t rl = strlen(roots[r]);
+        size_t k;
+        struct stat st_dir;
+        if (rl + tl + 2 > cap) {
+            continue;
+        }
+        memcpy(buf, roots[r], rl);
+        buf[rl] = '/';
+        memcpy(buf + rl + 1, fqn, tl);
+        buf[rl + 1 + tl] = '\0';
+        for (k = rl + 1; k < rl + 1 + tl; k++) {
+            if (buf[k] == '.') {
+                buf[k] = '/';
+            }
+        }
+        if (stat(buf, &st_dir) == 0 && S_ISDIR(st_dir.st_mode)) {
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int32_t test_walk_all(void) {
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32) \
+    && !defined(PM_METAL_FIRMWARE) && !defined(__EMSCRIPTEN__)
+    pm_metal_build_compile_opts_t copts;
+    char err[PM_METAL_BUILD_ERR_MAX];
+    char dir[512];
+    char tcc_root[2048], wasmmod_root[2048], top_root[2048];
+    static char libdir_def[2100];
+    const char *includes[6];
+    const char *defines[8];
+    uint32_t n_defines = 0;
+    int32_t wid;
+    int32_t wid2;
+    pm_metal_build_walk_info_t wi;
+    uint32_t polls;
+
+    if (!pm_metal_coop_ready()) {
+        return 0;  /* no runner on this seat: the face refuses there */
+    }
+
+    snprintf(dir, sizeof(dir), "%s", __FILE__);
+    {
+        char *slash = strrchr(dir, '/');
+        if (!slash) { return 250; }
+        *slash = '\0';
+    }
+    {
+        char *slash = strrchr(dir, '/');
+        if (!slash) { return 250; }
+        *slash = '\0';
+    }
+    snprintf(s_walk_src_root, sizeof(s_walk_src_root), "%s/../..", dir);
+    snprintf(tcc_root, sizeof(tcc_root), "%s/../../../externals/tcc", dir);
+    snprintf(wasmmod_root, sizeof(wasmmod_root),
+        "%s/../../../../wasmmod", dir);
+    snprintf(s_walk_wasmmod_src_root, sizeof(s_walk_wasmmod_src_root),
+        "%s/../../../../wasmmod/src", dir);
+    snprintf(top_root, sizeof(top_root), "%s/../../../../..", dir);
+
+    includes[0] = s_walk_src_root;
+    includes[1] = s_walk_wasmmod_src_root;
+    includes[2] = wasmmod_root;
+    includes[3] = top_root;
+    includes[4] = tcc_root;
+    includes[5] = tcc_root;
+    defines[n_defines++] = "PM_WASMMOD_GUEST=0";
+    defines[n_defines++] = "PM_MOD_TESTS=1";
+    defines[n_defines++] = "TCC_TARGET_X86_64";
+    defines[n_defines++] = "PM_HAS_TCC=1";
+    snprintf(libdir_def, sizeof(libdir_def), "PM_METAL_TCC_LIB_DIR=\"%s\"",
+        tcc_root);
+    defines[n_defines++] = libdir_def;
+
+    memset(&copts, 0, sizeof(copts));
+    copts.include_dirs = includes;
+    copts.n_include_dirs = 6;
+    copts.defines = defines;
+    copts.n_defines = n_defines;
+    copts.unit_root = s_walk_src_root;  /* per-unit root_fn overrides */
+    copts.target = 0;
+
+    wid = pm_metal_build_walk_start(0, &copts, test_walk_root, err,
+        sizeof(err));
+    if (wid < 0) {
+        fprintf(stderr, "build subtest walk_all refused: %s\n", err);
+        return 251;
+    }
+    pm_metal_build_walk_state(&wi);
+    if (wi.state != PM_METAL_BUILD_WALK_RUNNING || wi.n_total == 0
+        || wi.id != (uint32_t)wid) {
+        return 252;
+    }
+    polls = 0;
+    for (;;) {
+        pm_metal_coop_poll();
+        pm_metal_build_walk_state(&wi);
+        if (wi.state == PM_METAL_BUILD_WALK_DONE) {
+            break;
+        }
+        if (++polls > 400000u) {
+            fprintf(stderr, "build subtest walk_all stuck: %u/%u ok=%u "
+                "fail=%u skip=%u\n", wi.n_done, wi.n_total, wi.n_done,
+                wi.n_failed, wi.n_skipped);
+            return 253;
+        }
+        pm_metal_coop_yield();
+    }
+    if (wi.n_done + wi.n_failed + wi.n_skipped != wi.n_total) {
+        fprintf(stderr, "build subtest walk_all census %u+%u+%u != %u\n",
+            wi.n_done, wi.n_failed, wi.n_skipped, wi.n_total);
+        return 254;
+    }
+    /* a second start must succeed (the first walk released its spans) and
+     * bump the id — repeated BUILD ALL presses hold a stable high-water */
+    wid2 = pm_metal_build_walk_start(0, &copts, test_walk_root, err,
+        sizeof(err));
+    if (wid2 < 0) {
+        fprintf(stderr, "build subtest walk_all second refused: %s\n", err);
+        return 255;
+    }
+    if ((uint32_t)wid2 != wi.id + 1u) {
+        return 256;
+    }
+    polls = 0;
+    for (;;) {
+        pm_metal_coop_poll();
+        pm_metal_build_walk_state(&wi);
+        if (wi.state == PM_METAL_BUILD_WALK_DONE) {
+            break;
+        }
+        if (++polls > 400000u) {
+            return 253;
+        }
+        pm_metal_coop_yield();
+    }
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 static int32_t pm_metal_build_tests(void) {
     int32_t rc;
     rc = test_parse_real_tcc_manifest();
@@ -2285,6 +2455,11 @@ static int32_t pm_metal_build_tests(void) {
     if (rc) { fprintf(stderr, "build subtest accessor_spine rc=%d\n", rc); return rc; }
     rc = test_two_build_isolation();
     if (rc) { fprintf(stderr, "build subtest two_build_isolation rc=%d\n", rc); return rc; }
+    /* the walk last: it compiles the whole tree and repopulates the record
+     * table (its own census is self-contained; earlier tests' record
+     * preconditions are done by now) */
+    rc = test_walk_all();
+    if (rc) { fprintf(stderr, "build subtest walk_all rc=%d\n", rc); return rc; }
     return 0;
 }
 

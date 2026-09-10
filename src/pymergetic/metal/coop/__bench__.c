@@ -38,7 +38,7 @@ static pm_metal_coop_status_t step_tick(pm_metal_coop_coro_t *self) {
         f->count++;
         return pm_metal_coop_yield_park(self);
     }
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 }
 
 /* One park->resume hop (a task switch through the lock-free ready ring).
@@ -73,7 +73,7 @@ static pm_metal_coop_status_t step_sleep(pm_metal_coop_coro_t *self) {
         f->step = 1;
         return pm_metal_coop_sleep_us(self, f->dwell_us);
     }
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 }
 
 /* Parallel sleeps: one batch of up to 64 concurrent sleeps of a fixed dwell.

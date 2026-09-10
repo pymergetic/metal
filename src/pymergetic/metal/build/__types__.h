@@ -24,6 +24,12 @@ extern "C" {
 /* root path a root resolver may write (deep trees stay honest refusals) */
 #define PM_METAL_BUILD_ROOT_MAX 2048u
 #define PM_METAL_BUILD_MAX_OBJS 8u
+/* One actor job's compile scratch span: a fresh malloc'd arena per unit
+ * (ksweep's posture, ksweep's number — TCC's tokstr DOUBLES on growth,
+ * and the big cards reach a 32 MiB block, so 160 MiB is the span that
+ * survives the whole tree). The shared boot arena cannot reliably serve
+ * that next to the seat's retained state. */
+#define PM_METAL_BUILD_JOB_SPAN (160u * 1024u * 1024u)
 
 typedef struct pm_metal_build_unit {
     char fqn[PM_METAL_BUILD_STR_MAX];
@@ -210,6 +216,15 @@ typedef struct pm_metal_build_actor_job {
     char err[PM_METAL_BUILD_ERR_MAX];
     uint32_t cancel;               /* 1 = cancel at the next phase boundary */
     uint32_t next_src;             /* phase cursor: next source index */
+    /* The compile's own scratch span: a fresh malloc'd arena per job
+     * (ksweep's proven posture — a big unit's TCC tokstr wants a 16 MiB
+     * contiguous block, which a shared, long-lived arena cannot reliably
+     * supply next to the rest of the seat). The artifact does NOT live
+     * here (its image is self-owned), so destroying this span at release
+     * never dangles. NULL when malloc refused: the boot arena is the
+     * fallback (firmware's shim routes back to it anyway). */
+    void *scratch_backing;
+    pm_util_mem_arena_t *scratch;
 } pm_metal_build_actor_job_t;
 
 /* Submit a compile job to the actor's queue. Returns PM_METAL_BUILD_OK and
@@ -325,9 +340,14 @@ int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
  * Every unit_compile retains a record: the unit's sources, the per-source
  * object bytes, the linked image's exported symbols. The inspector serves
  * these as /build/<fqn> — authored source stays the primary pane, the
- * record is the build-product pane with the provenance chain in between. */
-
-#define PM_METAL_BUILD_MAX_RECORDS 8u
+ * record is the build-product pane with the provenance chain in between.
+ *
+ * 64 slots: a whole-tree BUILD ALL walk is a first-class operation now
+ * (~80 units), and the factory floor's per-unit pane serves the record —
+ * an eviction-wrapped table of 8 would leave the last 56 rows' provenance
+ * dark right after the walk that built them. ~5 KB/record, ~320 KB in the
+ * boot arena. */
+#define PM_METAL_BUILD_MAX_RECORDS 64u
 #define PM_METAL_BUILD_MAX_SRC_PATH 96u
 #define PM_METAL_BUILD_MAX_SYMS 64u
 #define PM_METAL_BUILD_SYM_NAME_MAX 64u
@@ -372,6 +392,50 @@ uint32_t pm_metal_build_events_since(uint32_t since,
 
 /* The newest seq currently in the ring (0 when nothing was ever built). */
 uint32_t pm_metal_build_events_latest(void);
+
+/*------------------ background walk (async BUILD ALL) --------------------
+ * The factory floor's BUILD ALL must not block the pane thread: the walk
+ * is one coop task (the runner's ring drives it), one unit per step —
+ * the actor keeps TCC serialized inside each step, and the step yields
+ * between units so the rest of the ring (httpd panes, net pumps) runs
+ * between every two compiles. The walk owns no arena: the submit-time
+ * deep copies (actor_submit) put each job in the boot arena, and the
+ * units table is copied there too — a walk outlives its starter.
+ *
+ * The walk is the DAG semantics on a task: dependency-ordered (the same
+ * graph_resolve), SKIP isolation on failed deps, per-unit telemetry on
+ * the event ring (the UI's live pane is the ring, same as the sync run). */
+typedef enum pm_metal_build_walk_state {
+    PM_METAL_BUILD_WALK_IDLE = 0,     /* no walk ever ran (or finished+read) */
+    PM_METAL_BUILD_WALK_RUNNING = 1,  /* the task is on the runner ring */
+    PM_METAL_BUILD_WALK_DONE = 2,     /* every row terminal; results held */
+} pm_metal_build_walk_status_t;
+
+typedef struct pm_metal_build_walk_info {
+    pm_metal_build_walk_status_t state;
+    int32_t target;                    /* lane the walk was started on */
+    uint32_t id;                       /* walk id, 1..N (0 = never) */
+    uint32_t n_total;                  /* units discovered for this walk */
+    uint32_t n_done;                   /* rows DONE */
+    uint32_t n_failed;                 /* rows FAILED */
+    uint32_t n_skipped;                /* rows SKIPPED (dep isolation) */
+} pm_metal_build_walk_info_t;
+
+/* Start a background walk of every discovered unit on lane `target`
+ * (0 seat-native / 1 wasm32 / 2 arm-eabi / 3 x86_64 — same values as
+ * pm_metal_jit_c_target_t). Returns the walk id (> 0), or negative:
+ *   -PM_METAL_BUILD_ERR_BUSY    a walk is already running (poll state)
+ *   -PM_METAL_BUILD_ERR_NOMEM   discover/copy refused (no walk started)
+ *   -PM_METAL_BUILD_ERR_PARSE   no units to build
+ * The starter's arena/deps (includes, defines) are deep-copied into the
+ * boot arena at start; the caller's arena may die right after. */
+int32_t pm_metal_build_walk_start(int32_t target,
+    const pm_metal_build_compile_opts_t *opts,
+    pm_metal_build_root_fn_t root_fn,
+    char *errbuf, size_t errbuf_len);
+
+/* The current walk's state (IDLE state zero-init when no walk ran). */
+void pm_metal_build_walk_state(pm_metal_build_walk_info_t *out);
 
 
 typedef struct pm_metal_build_record {

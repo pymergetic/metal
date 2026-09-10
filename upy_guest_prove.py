@@ -392,29 +392,50 @@ except ImportError:
     _ev_latest = 1
 print("upy build events ring")
 
-# BUILD ALL: every unit in one walk — same refusal parity as the single
-# pane (the 5 mbedtls/zenoh/uzlib fills), the rest ok. Only the shape is
-# pinned here (ok + refused counts and the events ring growing), not the
-# exact census: the card set changes as the tree grows.
+# BUILD ALL is now the background walk: the POST only STARTS it (the
+# pane must answer fast — the factory page polls the walk object), so
+# the prove polls the walk state to completion with the same census
+# shape as before (done + failed + skipped; the 5 mbedtls/zenoh/uzlib
+# fills refuse on the unix seat, the rest ok). The events ring grows
+# while it runs — the page's live pane is that ring.
+import time as _time
 st, body = handle("POST", "/build?all=1")
 if st != 200:
     raise SystemExit("build all %s %s" % (st, body))
-if '"all":1' not in body or '"ok":' not in body or '"refused":' not in body:
+if '"all":1' not in body or '"walk":' not in body:
     raise SystemExit("build all shape %s" % (body,))
-_ok_i = body.rfind('"ok":')
-if _ok_i < 0:
-    raise SystemExit("build all ok count")
+if '"error"' in body:
+    raise SystemExit("build all refused %s" % (body,))
+_walk_done = 0
 _ok_n = 0
-try:
-    _all = _json.loads(body)
-    _ok_n = _all.get("ok", 0)
-    _ref_n = _all.get("refused", 0)
-    if _ok_n + _ref_n < 10:
-        raise SystemExit("build all census %d/%d" % (_ok_n, _ref_n))
-    if _ok_n < 1:
-        raise SystemExit("build all nothing ok")
-except NameError:
-    pass
+_ref_n = 0
+_skip_n = 0
+for _i in range(600):
+    st, body = handle("GET", "/build")
+    if st != 200:
+        raise SystemExit("build all poll %s" % (st,))
+    try:
+        _idx = _json.loads(body)
+        _w = _idx.get("walk", {})
+        _st = _w.get("state", "")
+        _ok_n = _w.get("done", 0)
+        _ref_n = _w.get("failed", 0)
+        _skip_n = _w.get("skipped", 0)
+        if _st == "done":
+            _walk_done = 1
+            break
+    except NameError:
+        # no json: the state string is the fallback prove
+        if '"state":"done"' in body:
+            _walk_done = 1
+            break
+    _time.sleep_ms(100)
+if not _walk_done:
+    raise SystemExit("build all walk never finished")
+if _ok_n + _ref_n + _skip_n < 10:
+    raise SystemExit("build all census %d/%d/%d" % (_ok_n, _ref_n, _skip_n))
+if _ok_n < 1:
+    raise SystemExit("build all nothing ok")
 st, body = handle("GET", "/build/events?since=%d" % (_ev_latest,))
 if st != 200:
     raise SystemExit("build events tail %s" % (st,))

@@ -125,16 +125,14 @@ typedef struct pm_metal_build_ctx {
 
 static pm_metal_build_ctx_t *s_build_ctx;
 
-/* The boot arena this card's retained state allocates from (async's —
- * created by pm_metal_boot, freed only at teardown). Declared here so the
- * card never takes a link dependency on the async card's exports: the
- * async card's own header is only included where its coro types are used. */
-extern pm_util_mem_arena_t *pm_metal_coop_arena(void);
-/* actor_run's wait pump: drive the async ring while another job holds the
- * TCC serial section (the async card's poll drains ready tasks). */
-extern void pm_metal_coop_poll(void);
-/* mono clock for the event ring's t_us/dur_us (same face ntp uses). */
-extern uint64_t pm_metal_coop_mono_us(void);
+/* The coop card's faces this driver uses: the boot arena (created by
+ * pm_metal_boot, freed only at teardown), the poll pump (drive the ring
+ * while another job holds the TCC serial section), the mono clock (the
+ * event ring's t_us/dur_us), and the runner's task faces (the walk posts
+ * itself as a coop task; the actor parks its job coro on it). The barrel
+ * carries the prototypes; the link still goes through the same card
+ * embed — no second implementation anywhere. */
+#include "pymergetic/metal/coop.h"
 
 static pm_metal_build_ctx_t *build_ctx_acquire(void) {
     pm_util_mem_arena_t *arena;
@@ -992,6 +990,7 @@ int32_t pm_metal_build_graph_resolve(pm_util_mem_arena_t *arena,
         for (j = i + 1u; j < n_units; j++) {
             if (strcmp(units[i].fqn, units[j].fqn) == 0) {
                 err_set(errbuf, errbuf_len, units[i].fqn, 0);
+                pm_util_mem_free(arena, out);
                 return PM_METAL_BUILD_ERR_CYCLE;
             }
         }
@@ -1025,6 +1024,7 @@ int32_t pm_metal_build_graph_resolve(pm_util_mem_arena_t *arena,
                     }
                     if (!exists) {
                         err_set(errbuf, errbuf_len, units[i].depends[d], 0);
+                        pm_util_mem_free(arena, out);
                         return PM_METAL_BUILD_ERR_MISSING_DEP;
                     }
                 }
@@ -1034,6 +1034,7 @@ int32_t pm_metal_build_graph_resolve(pm_util_mem_arena_t *arena,
         }
         if (!progressed) {
             err_set(errbuf, errbuf_len, "dependency cycle", 0);
+            pm_util_mem_free(arena, out);
             return PM_METAL_BUILD_ERR_CYCLE;
         }
     }
@@ -3505,6 +3506,10 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_events_since, pm_metal_bu
     uint32_t(uint32_t, pm_metal_build_event_t *, uint32_t, uint32_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_events_latest, pm_metal_build_events_latest,
     uint32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_walk_start, pm_metal_build_walk_start,
+    int32_t(int32_t, const pm_metal_build_compile_opts_t *, pm_metal_build_root_fn_t, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_walk_state, pm_metal_build_walk_state,
+    void(pm_metal_build_walk_info_t *));
 
 /*------------------ async compiler actor ----------------------------------
  * One dedicated actor owns EVERY TCC invocation in the process. Reason:
@@ -3655,7 +3660,7 @@ int32_t pm_metal_build_actor_submit(
     }
     memset(job, 0, sizeof(*job));
     job->coro.step = actor_job_step;
-    job->coro.status = PM_METAL_ASYNC_PENDING;
+    job->coro.status = PM_METAL_COOP_PENDING;
     job->state = PM_METAL_BUILD_ACTOR_NEW;
     {
         int32_t crc = actor_unit_copy(arena, unit, &job->unit);
@@ -3749,10 +3754,10 @@ static void actor_job_finish(pm_build_actor_t *a, pm_metal_build_actor_job_t *jo
     actor_dequeue_locked(a, job);
     job->state = state;
     job->coro.status = state == PM_METAL_BUILD_ACTOR_DONE
-        ? PM_METAL_ASYNC_DONE
+        ? PM_METAL_COOP_DONE
         : (state == PM_METAL_BUILD_ACTOR_CANCELLED
-            ? PM_METAL_ASYNC_CANCELLED
-            : PM_METAL_ASYNC_ERROR);
+            ? PM_METAL_COOP_CANCELLED
+            : PM_METAL_COOP_ERROR);
     a->serial_held = 0u;
 }
 
@@ -3820,10 +3825,36 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
         err_set(job->err, sizeof(job->err), "actor: card not in embed", 0);
         return PM_METAL_BUILD_ERR_COMPILE;
     }
+    /* The compile runs in the job's own scratch span — ksweep's posture,
+     * one fresh arena per unit: a big unit's TCC tokstr wants a 16 MiB
+     * contiguous block that the shared boot arena cannot reliably serve
+     * next to the seat's retained state (the walk's BUILD ALL crashed
+     * exactly there: tal_new's 16 MiB ask against a fragmented 64 MiB
+     * boot arena). The artifact is self-owned (its ELF image holds its
+     * own mappings), so nothing the caller keeps survives here. When
+     * malloc refuses, the boot arena is the fallback — firmware's shim
+     * routes back to it, and that seat's cards fit. */
+    if (job->scratch == NULL) {
+        job->scratch_backing = malloc(PM_METAL_BUILD_JOB_SPAN);
+        if (job->scratch_backing != NULL) {
+            job->scratch = pm_util_mem_arena_create(
+                job->scratch_backing, PM_METAL_BUILD_JOB_SPAN);
+            if (job->scratch == NULL) {
+                free(job->scratch_backing);
+                job->scratch_backing = NULL;
+            }
+        }
+    }
+    if (job->scratch != NULL) {
+        arena = job->scratch;
+    }
     if (strcmp(job->unit.impl, "py") == 0) {
         /* the py path allocates from the caller arena in unit_compile_py;
-         * the actor's serial section runs it identically */
+         * the actor's serial section runs it identically — and the mpy
+         * bytes are arena-owned (artifact_destroy only NULLs them), so py
+         * stays on the boot arena: the scratch span dies at release */
         memset(&job->artifact, 0, sizeof(job->artifact));
+        arena = pm_metal_coop_arena();
         rc = unit_compile_py(arena, &job->unit, &job->artifact,
             job->err, sizeof(job->err));
         return rc;
@@ -4006,7 +4037,7 @@ static pm_metal_coop_status_t actor_job_step(pm_metal_coop_coro_t *self) {
     pm_build_actor_t *a = &s_actor;
 
     if (job == NULL) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     if (job->state == PM_METAL_BUILD_ACTOR_DONE
         || job->state == PM_METAL_BUILD_ACTOR_FAILED
@@ -4018,9 +4049,9 @@ static pm_metal_coop_status_t actor_job_step(pm_metal_coop_coro_t *self) {
         /* serial section busy: park. The holder releases and dequeues when
          * it finishes; a later step of this job re-checks the flag. */
         job->state = PM_METAL_BUILD_ACTOR_WAITING;
-        job->coro.status = PM_METAL_ASYNC_WAITING;
+        job->coro.status = PM_METAL_COOP_WAITING;
         pm_util_lock_release(&a->lock);
-        return PM_METAL_ASYNC_WAITING;
+        return PM_METAL_COOP_WAITING;
     }
     /* free serial section: this step takes it and runs the whole job
      * (blocking TCC inside the step — documented at actor_run). */
@@ -4034,21 +4065,21 @@ static pm_metal_coop_status_t actor_job_step(pm_metal_coop_coro_t *self) {
     if (job->rc == PM_METAL_BUILD_ERR_CANCELLED) {
         actor_job_finish(a, job, PM_METAL_BUILD_ACTOR_CANCELLED);
         pm_util_lock_release(&a->lock);
-        return PM_METAL_ASYNC_CANCELLED;
+        return PM_METAL_COOP_CANCELLED;
     }
     if (job->rc != PM_METAL_BUILD_OK) {
         actor_job_finish(a, job, PM_METAL_BUILD_ACTOR_FAILED);
         pm_util_lock_release(&a->lock);
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     actor_job_finish(a, job, PM_METAL_BUILD_ACTOR_DONE);
     pm_util_lock_release(&a->lock);
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 }
 
 pm_metal_coop_status_t pm_metal_build_actor_step(pm_metal_build_actor_job_t *job) {
     if (job == NULL) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     return actor_job_step(&job->coro);
 }
@@ -4062,13 +4093,13 @@ int32_t pm_metal_build_actor_run(pm_metal_build_actor_job_t *job) {
     }
     for (;;) {
         st = actor_job_step(&job->coro);
-        if (st == PM_METAL_ASYNC_DONE) {
+        if (st == PM_METAL_COOP_DONE) {
             return job->rc;
         }
-        if (st == PM_METAL_ASYNC_CANCELLED) {
+        if (st == PM_METAL_COOP_CANCELLED) {
             return job->rc == 0 ? PM_METAL_BUILD_ERR_CANCELLED : job->rc;
         }
-        if (st == PM_METAL_ASYNC_ERROR) {
+        if (st == PM_METAL_COOP_ERROR) {
             return job->rc != 0 ? job->rc : PM_METAL_BUILD_ERR_COMPILE;
         }
         /* WAITING: the serial section is held by another job. Pump the
@@ -4171,6 +4202,18 @@ int32_t pm_metal_build_actor_release(pm_metal_build_actor_job_t *job) {
             pm_util_mem_free(arena, (void *)job->defines[i]);
         }
         pm_util_mem_free(arena, (void *)job->defines);
+    }
+    /* The compile's scratch span dies with the job (the artifact is
+     * self-owned; records hold copies — nothing retained survives it).
+     * Freed after the boot-arena blocks above so the arena destroy's
+     * own bookkeeping never races a live heap. */
+    if (job->scratch != NULL) {
+        pm_util_mem_arena_destroy(job->scratch);
+        job->scratch = NULL;
+    }
+    if (job->scratch_backing != NULL) {
+        free(job->scratch_backing);
+        job->scratch_backing = NULL;
     }
     pm_util_mem_free(arena, job);
     return PM_METAL_BUILD_OK;
@@ -4385,6 +4428,477 @@ int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
     out->n_failed = n_failed;
     out->n_skipped = n_skipped;
     return PM_METAL_BUILD_OK;
+}
+
+/*------------------ background walk (async BUILD ALL) ------------------
+ * One coop task per walk; the frame (units copy + per-unit cursor +
+ * result counters) lives in the boot arena via coro_create. The step is
+ * one reschedule quantum: settle ONE unit — submit its actor job as a
+ * ring task, await it (the actor's serial section keeps TCC serialized
+ * inside the job's own step), then return WAITING so the runner re-posts
+ * the walk after the ring has drained everything else. The pane thread
+ * answered long ago; the factory page watches the event ring.
+ *
+ * Row states ride the units copy (walk_row_state below) — same Kahn pass
+ * shape as dag_run, spread over N runner quanta instead of one C call. */
+typedef enum pm_build_walk_row {
+    PM_BUILD_WALK_ROW_PENDING = 0,
+    PM_BUILD_WALK_ROW_RUNNING = 1,
+    PM_BUILD_WALK_ROW_DONE = 2,
+    PM_BUILD_WALK_ROW_FAILED = 3,
+    PM_BUILD_WALK_ROW_SKIPPED = 4,
+} pm_build_walk_row_t;
+
+typedef struct pm_build_walk {
+    pm_metal_coop_coro_t coro;      /* first: the task's root coro */
+    const pm_metal_build_unit_t **order;  /* graph-resolved, boot arena */
+    pm_metal_build_unit_t *units;   /* deep copies, boot arena */
+    uint32_t n_units;
+    uint32_t *row;                  /* per-unit pm_build_walk_row_t, boot arena */
+    uint32_t next;                  /* Kahn cursor into order */
+    pm_metal_build_actor_job_t *job; /* the unit in flight (NULL between) */
+    pm_metal_build_root_fn_t root_fn;
+    pm_metal_build_compile_opts_t opts;   /* deep-copied seat fill */
+    char *unit_root;                /* one scratch buffer, reused per unit */
+    /* the deep-copied string arrays, for the next start's free walk */
+    const char **inc_copy;
+    const char **def_copy;
+    pm_metal_build_walk_info_t info;
+} pm_build_walk_t;
+
+static pm_build_walk_t *s_walk;
+
+/* Reclaim a finished walk's boot-arena spans so a new start does not
+ * grow the heap by one walk per BUILD ALL press. The strings inside
+ * inc/def/units were dup'd individually — walk each array. The frame
+ * itself is freed last (the arena is tlsf-backed, so these frees really
+ * reclaim, same contract as actor_release). */
+static void walk_release(pm_build_walk_t *w) {
+    pm_util_mem_arena_t *arena;
+    uint32_t i;
+    if (w == NULL) {
+        return;
+    }
+    arena = pm_metal_coop_arena();
+    if (arena == NULL) {
+        return;
+    }
+    if (w->units != NULL) {
+        for (i = 0; i < w->n_units; i++) {
+            uint32_t k;
+            for (k = 0; k < w->units[i].n_sources; k++) {
+                pm_util_mem_free(arena, (void *)w->units[i].sources[k]);
+            }
+            pm_util_mem_free(arena, (void *)w->units[i].sources);
+            for (k = 0; k < w->units[i].n_include_dirs; k++) {
+                pm_util_mem_free(arena, (void *)w->units[i].include_dirs[k]);
+            }
+            pm_util_mem_free(arena, (void *)w->units[i].include_dirs);
+            for (k = 0; k < w->units[i].n_defines; k++) {
+                pm_util_mem_free(arena, (void *)w->units[i].defines[k]);
+            }
+            pm_util_mem_free(arena, (void *)w->units[i].defines);
+            for (k = 0; k < w->units[i].n_depends; k++) {
+                pm_util_mem_free(arena, (void *)w->units[i].depends[k]);
+            }
+            pm_util_mem_free(arena, (void *)w->units[i].depends);
+        }
+        pm_util_mem_free(arena, w->units);
+    }
+    if (w->inc_copy != NULL) {
+        uint32_t k;
+        for (k = 0; k < w->opts.n_include_dirs; k++) {
+            pm_util_mem_free(arena, (void *)w->inc_copy[k]);
+        }
+        pm_util_mem_free(arena, (void *)w->inc_copy);
+    }
+    if (w->def_copy != NULL) {
+        uint32_t k;
+        for (k = 0; k < w->opts.n_defines; k++) {
+            pm_util_mem_free(arena, (void *)w->def_copy[k]);
+        }
+        pm_util_mem_free(arena, (void *)w->def_copy);
+    }
+    pm_util_mem_free(arena, (void *)w->order);
+    pm_util_mem_free(arena, w->row);
+    pm_util_mem_free(arena, w->unit_root);
+    pm_util_mem_free(arena, w);
+}
+
+/* The walk's step: exactly one unit's worth of work per call.
+ *
+ * The unit's actor job is driven INLINE (actor_step, not a second ring
+ * task): the runner steps the walk task, the walk steps the job — TCC
+ * stays serialized by the actor's serial section inside, and the walk
+ * rotates one quantum per unit so the rest of the ring (httpd panes, net
+ * pumps, REPL) runs between every two compiles. A job-task-per-unit
+ * design would instead need the coop card to reclaim terminal task
+ * blocks under a second ring claim — a UAF-shaped hazard this card does
+ * not own (the honest fix is a coop-card epoch reclaimer, not a build-
+ * card workaround). */
+static pm_metal_coop_status_t walk_step(pm_metal_coop_coro_t *self) {
+    pm_build_walk_t *w = (pm_build_walk_t *)self;
+    pm_metal_build_actor_job_t *job = NULL;
+    const pm_metal_build_unit_t *u;
+    int32_t ui;
+    int32_t rc;
+    pm_metal_coop_status_t js;
+
+    if (w == NULL) {
+        return PM_METAL_COOP_ERROR;
+    }
+
+    /* A job is in flight: step it one quantum. Terminal settles the row
+     * and rotates; WAITING (the actor's serial section is held by an
+     * outside driver) re-parks for a later quantum. */
+    if (w->job != NULL) {
+        js = pm_metal_build_actor_step(w->job);
+        if (js == PM_METAL_COOP_WAITING) {
+            return pm_metal_coop_yield_park(&w->coro);
+        }
+        ui = dag_find(w->units, w->n_units, w->job->unit.fqn);
+        if (js == PM_METAL_COOP_DONE && w->job->rc == PM_METAL_BUILD_OK) {
+            if (ui >= 0) {
+                w->row[ui] = PM_BUILD_WALK_ROW_DONE;
+            }
+            w->info.n_done++;
+            pm_metal_build_artifact_destroy(&w->job->artifact);
+        } else {
+            if (ui >= 0) {
+                w->row[ui] = PM_BUILD_WALK_ROW_FAILED;
+            }
+            w->info.n_failed++;
+        }
+        pm_metal_build_actor_release(w->job);
+        w->job = NULL;
+        /* one quantum of ring rotation between two compiles */
+        return pm_metal_coop_yield_park(&w->coro);
+    }
+
+    /* Kahn cursor: skip settled rows, SKIP-isolate dep-blocked rows, and
+     * stop at the first PENDING unit whose deps are all DONE — that one
+     * becomes this quantum's job. A full sweep with nothing runnable and
+     * nothing new settled means every remaining row is dep-blocked. */
+    for (;;) {
+        if (w->next >= w->n_units) {
+            /* walk terminal: publish DONE on the coro first (the runner
+             * overwrites status from the return value only AFTER this
+             * returns — task_reclaim must see terminal now), then send
+             * the task block home (w itself stays for walk_state
+             * readers until the next start releases it) */
+            w->info.state = PM_METAL_BUILD_WALK_DONE;
+            w->coro.status = (uint32_t)PM_METAL_COOP_DONE;
+            {
+                pm_metal_coop_task_t *wt = pm_metal_coop_current_task();
+                if (wt != NULL) {
+                    (void)pm_metal_coop_task_reclaim(wt);
+                }
+            }
+            return PM_METAL_COOP_DONE;
+        }
+        u = w->order[w->next];
+        ui = dag_find(w->units, w->n_units, u->fqn);
+        if (ui < 0) {
+            w->next++;
+            continue;
+        }
+        if (w->row[ui] != PM_BUILD_WALK_ROW_PENDING) {
+            w->next++;
+            continue;
+        }
+        /* dep gate: FAILED/SKIPPED deps isolate this unit as SKIPPED;
+         * PENDING deps mean the producer comes first in order (it does
+         * not — graph_resolve's order is a level sequence), so a PENDING
+         * dep can only be a not-yet-reached row: leave this unit for a
+         * later quantum. */
+        {
+            uint32_t d;
+            int settled_skip = 0;
+            int dep_pending = 0;
+            for (d = 0; d < w->units[ui].n_depends; d++) {
+                int32_t di = dag_find(w->units, w->n_units,
+                    w->units[ui].depends[d]);
+                if (di < 0) {
+                    continue;  /* external dep: graph_resolve already ok'd it */
+                }
+                if (w->row[di] == PM_BUILD_WALK_ROW_FAILED
+                    || w->row[di] == PM_BUILD_WALK_ROW_SKIPPED) {
+                    settled_skip = 1;
+                    break;
+                }
+                if (w->row[di] == PM_BUILD_WALK_ROW_PENDING
+                    || w->row[di] == PM_BUILD_WALK_ROW_RUNNING) {
+                    dep_pending = 1;
+                }
+            }
+            if (settled_skip) {
+                w->row[ui] = PM_BUILD_WALK_ROW_SKIPPED;
+                w->info.n_skipped++;
+                w->next++;
+                continue;
+            }
+            if (dep_pending) {
+                /* not runnable this sweep: yield a quantum so the ring
+                 * runs (the producer is elsewhere in the order — the
+                 * cursor stays put and the next step re-sweeps) */
+                return pm_metal_coop_yield_park(&w->coro);
+            }
+        }
+
+        /* runnable: root-resolve, submit, and drive the job inline from the
+         * next quantum on (the first step of it runs THIS quantum — the
+         * walk's unit of work; TCC serial stays inside the actor) */
+        if (w->root_fn(u->fqn, w->unit_root, PM_METAL_BUILD_ROOT_MAX) != 0) {
+            w->row[ui] = PM_BUILD_WALK_ROW_FAILED;
+            w->info.n_failed++;
+            w->next++;
+            continue;
+        }
+        w->opts.unit_root = w->unit_root;
+        w->opts.target = w->info.target;
+        rc = pm_metal_build_actor_submit(u, &w->opts,
+            &job, NULL, 0);
+        if (rc != PM_METAL_BUILD_OK) {
+            w->row[ui] = PM_BUILD_WALK_ROW_FAILED;
+            w->info.n_failed++;
+            w->next++;
+            continue;
+        }
+        w->row[ui] = PM_BUILD_WALK_ROW_RUNNING;
+        w->job = job;
+        w->next++;
+        /* run the job's first quantum now; terminal states settle above
+         * on the next step (the job's compile is one quantum by design) */
+        js = pm_metal_build_actor_step(job);
+        if (js == PM_METAL_COOP_WAITING) {
+            return pm_metal_coop_yield_park(&w->coro);
+        }
+        /* ran to terminal inline: settle now, rotate after */
+        {
+            int32_t jui = dag_find(w->units, w->n_units, job->unit.fqn);
+            if (js == PM_METAL_COOP_DONE && job->rc == PM_METAL_BUILD_OK) {
+                if (jui >= 0) {
+                    w->row[jui] = PM_BUILD_WALK_ROW_DONE;
+                }
+                w->info.n_done++;
+                pm_metal_build_artifact_destroy(&job->artifact);
+            } else {
+                if (jui >= 0) {
+                    w->row[jui] = PM_BUILD_WALK_ROW_FAILED;
+                }
+                w->info.n_failed++;
+            }
+            pm_metal_build_actor_release(job);
+            w->job = NULL;
+            return pm_metal_coop_yield_park(&w->coro);
+        }
+    }
+}
+
+int32_t pm_metal_build_walk_start(int32_t target,
+    const pm_metal_build_compile_opts_t *opts,
+    pm_metal_build_root_fn_t root_fn,
+    char *errbuf, size_t errbuf_len) {
+    pm_util_mem_arena_t *arena;
+    pm_build_walk_t *w = NULL;
+    pm_metal_build_unit_t *units = NULL;
+    uint32_t n_units = 0;
+    uint32_t next_id = 1;
+    int32_t rc;
+
+    if (errbuf != NULL && errbuf_len > 0) {
+        errbuf[0] = '\0';
+    }
+    if (s_walk != NULL && s_walk->info.state == PM_METAL_BUILD_WALK_RUNNING) {
+        err_set(errbuf, errbuf_len, "walk_start: a walk is running", 0);
+        return PM_METAL_BUILD_ERR_BUSY;
+    }
+    if (root_fn == NULL || opts == NULL) {
+        err_set(errbuf, errbuf_len, "walk_start: bad args", 0);
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    arena = pm_metal_coop_arena();
+    if (arena == NULL) {
+        err_set(errbuf, errbuf_len, "walk_start: no boot arena", 0);
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    /* a finished walk's spans are reclaimed before the new one allocates —
+     * repeated BUILD ALL presses hold a stable high-water, not a growing one */
+    if (s_walk != NULL) {
+        next_id = s_walk->info.id + 1u;
+        walk_release(s_walk);
+        s_walk = NULL;
+    }
+
+    /* the units table is discovered into a scratch arena, then deep-copied
+     * into the boot arena: the walk must outlive the starter's arena */
+    {
+        void *backing = malloc(1u << 20);
+        pm_util_mem_arena_t *scratch;
+        char disc_err[PM_METAL_BUILD_ERR_MAX];
+        uint32_t i;
+        if (backing == NULL) {
+            err_set(errbuf, errbuf_len, "walk_start: no scratch", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        scratch = pm_util_mem_arena_create(backing, 1u << 20);
+        if (scratch == NULL) {
+            free(backing);
+            err_set(errbuf, errbuf_len, "walk_start: no scratch arena", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        rc = pm_metal_build_discover(scratch, &units, &n_units,
+            disc_err, sizeof(disc_err));
+        if (rc != PM_METAL_BUILD_OK) {
+            pm_util_mem_arena_destroy(scratch);
+            free(backing);
+            snprintf(errbuf, errbuf_len, "walk_start: discover: %.80s",
+                disc_err[0] != '\0' ? disc_err : "refused");
+            return rc;
+        }
+        if (n_units == 0) {
+            pm_util_mem_arena_destroy(scratch);
+            free(backing);
+            err_set(errbuf, errbuf_len, "walk_start: no units", 0);
+            return PM_METAL_BUILD_ERR_PARSE;
+        }
+        w = (pm_build_walk_t *)pm_util_mem_alloc(arena, sizeof(*w));
+        if (w == NULL) {
+            pm_util_mem_arena_destroy(scratch);
+            free(backing);
+            err_set(errbuf, errbuf_len, "walk_start: arena exhausted (walk)", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        memset(w, 0, sizeof(*w));
+        w->units = (pm_metal_build_unit_t *)pm_util_mem_alloc(
+            arena, n_units * sizeof(pm_metal_build_unit_t));
+        w->row = (uint32_t *)pm_util_mem_alloc(
+            arena, n_units * sizeof(uint32_t));
+        if (w->units == NULL || w->row == NULL) {
+            walk_release(w);
+            pm_util_mem_arena_destroy(scratch);
+            free(backing);
+            err_set(errbuf, errbuf_len, "walk_start: arena exhausted (rows)", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        memset(w->row, 0, n_units * sizeof(uint32_t));
+        /* count first: walk_release walks w->n_units, and the graph step
+         * below only fills w->n_units on success — a copy or graph refusal
+         * must still free the half-built units array (boot arena has no
+         * arena-destroy to reclaim it) */
+        w->n_units = n_units;
+        for (i = 0; i < n_units; i++) {
+            rc = actor_unit_copy(arena, &units[i], &w->units[i]);
+            if (rc != PM_METAL_BUILD_OK) {
+                walk_release(w);
+                pm_util_mem_arena_destroy(scratch);
+                free(backing);
+                err_set(errbuf, errbuf_len, "walk_start: arena exhausted (units)", 0);
+                return PM_METAL_BUILD_ERR_NOMEM;
+            }
+        }
+        /* graph-resolve into boot arena: the order array is the walk's
+         * sweep sequence (cycle/missing-dep refusals stop the walk before
+         * any compile runs) */
+        rc = pm_metal_build_graph_resolve(arena, w->units, n_units,
+            &w->order, &w->n_units, disc_err, sizeof(disc_err));
+        if (rc != PM_METAL_BUILD_OK) {
+            walk_release(w);
+            pm_util_mem_arena_destroy(scratch);
+            free(backing);
+            snprintf(errbuf, errbuf_len, "walk_start: graph: %.80s",
+                disc_err[0] != '\0' ? disc_err : "refused");
+            return rc;
+        }
+        /* the seat fill is deep-copied: strings (includes/defines) must
+         * outlive the starter's stack */
+        {
+            uint32_t k;
+            const char **inc = NULL;
+            const char **def = NULL;
+            if (opts->n_include_dirs > 0) {
+                inc = (const char **)pm_util_mem_alloc(
+                    arena, opts->n_include_dirs * sizeof(const char *));
+                if (inc == NULL) {
+                    rc = PM_METAL_BUILD_ERR_NOMEM;
+                    goto fill_fail;
+                }
+                for (k = 0; k < opts->n_include_dirs; k++) {
+                    inc[k] = dup_str(arena, opts->include_dirs[k],
+                        strlen(opts->include_dirs[k]));
+                    if (inc[k] == NULL) {
+                        rc = PM_METAL_BUILD_ERR_NOMEM;
+                        goto fill_fail;
+                    }
+                }
+            }
+            if (opts->n_defines > 0) {
+                def = (const char **)pm_util_mem_alloc(
+                    arena, opts->n_defines * sizeof(const char *));
+                if (def == NULL) {
+                    rc = PM_METAL_BUILD_ERR_NOMEM;
+                    goto fill_fail;
+                }
+                for (k = 0; k < opts->n_defines; k++) {
+                    def[k] = dup_str(arena, opts->defines[k],
+                        strlen(opts->defines[k]));
+                    if (def[k] == NULL) {
+                        rc = PM_METAL_BUILD_ERR_NOMEM;
+                        goto fill_fail;
+                    }
+                }
+            }
+            w->opts = *opts;
+            w->opts.include_dirs = inc;
+            w->opts.defines = def;
+            w->inc_copy = inc;
+            w->def_copy = def;
+            goto fill_done;
+fill_fail:
+            walk_release(w);
+            pm_util_mem_arena_destroy(scratch);
+            free(backing);
+            err_set(errbuf, errbuf_len, "walk_start: arena exhausted (fill)", 0);
+            return rc;
+fill_done:
+            ;
+        }
+        w->unit_root = (char *)pm_util_mem_alloc(arena, PM_METAL_BUILD_ROOT_MAX);
+        if (w->unit_root == NULL) {
+            walk_release(w);
+            pm_util_mem_arena_destroy(scratch);
+            free(backing);
+            err_set(errbuf, errbuf_len, "walk_start: arena exhausted (root)", 0);
+            return PM_METAL_BUILD_ERR_NOMEM;
+        }
+        w->root_fn = root_fn;
+        w->coro.step = walk_step;
+        w->coro.status = PM_METAL_COOP_PENDING;
+        w->info.state = PM_METAL_BUILD_WALK_RUNNING;
+        w->info.target = target;
+        w->info.n_total = n_units;
+        w->info.id = next_id;
+        pm_util_mem_arena_destroy(scratch);
+        free(backing);
+    }
+    /* post: the ring owns the drive from here; s_walk publishes the state */
+    if (pm_metal_coop_create_task(&w->coro) == NULL) {
+        walk_release(w);
+        err_set(errbuf, errbuf_len, "walk_start: runner ring full", 0);
+        return PM_METAL_BUILD_ERR_BUSY;
+    }
+    s_walk = w;
+    return (int32_t)w->info.id;
+}
+
+void pm_metal_build_walk_state(pm_metal_build_walk_info_t *out) {
+    if (out == NULL) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    if (s_walk != NULL) {
+        *out = s_walk->info;
+    }
 }
 
 /* Lifecycle: the ctx allocates lazily from the boot arena and is released

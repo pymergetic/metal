@@ -19,7 +19,10 @@ static int32_t fail(const char *why) {
 }
 
 static int32_t case_fetch_default(void) {
-    _Static_assert(sizeof(pm_metal_coop_coro_t) == 40, "asgi CoroHead");
+    /* CoroHead: the coro prefix embedded at the head of every asgi frame —
+     * drift here means the embedded-frame layouts (conn coro first) break.
+     * 6 words: step, awaiting, waiter, task, status, vm_only+auto_free pad. */
+    _Static_assert(sizeof(pm_metal_coop_coro_t) == 48, "asgi CoroHead");
     if (pm_metal_net_http_asgi_listen(LO4, ASGI_PORT) != 0) {
         return fail("listen");
     }

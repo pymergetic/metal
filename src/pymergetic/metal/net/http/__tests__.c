@@ -45,10 +45,10 @@ static pm_metal_coop_status_t step_server(pm_metal_coop_coro_t *self) {
     if (f->step == 0) {
         int32_t a = pm_metal_net_ip_accept(f->ls);
         if (a == -2) {
-            return PM_METAL_ASYNC_WAITING;
+            return PM_METAL_COOP_WAITING;
         }
         if (a < 0) {
-            return PM_METAL_ASYNC_ERROR;
+            return PM_METAL_COOP_ERROR;
         }
         f->acc = a;
         f->step = 1;
@@ -56,16 +56,16 @@ static pm_metal_coop_status_t step_server(pm_metal_coop_coro_t *self) {
     uint8_t buf[128];
     int32_t n = pm_metal_net_ip_recv(f->acc, buf, sizeof(buf));
     if (n == 0) {
-        return PM_METAL_ASYNC_WAITING;
+        return PM_METAL_COOP_WAITING;
     }
     if (n < 0) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     if (pm_metal_net_ip_send(f->acc, k_resp, sizeof(k_resp) - 1u) < 0) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     (void)pm_metal_net_ip_close(f->acc);
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 }
 
 static pm_metal_coop_status_t step_https_server(pm_metal_coop_coro_t *self) {
@@ -73,44 +73,44 @@ static pm_metal_coop_status_t step_https_server(pm_metal_coop_coro_t *self) {
     if (f->step == 0) {
         int32_t a = pm_metal_net_ip_accept(f->ls);
         if (a == -2) {
-            return PM_METAL_ASYNC_WAITING;
+            return PM_METAL_COOP_WAITING;
         }
         if (a < 0) {
-            return PM_METAL_ASYNC_ERROR;
+            return PM_METAL_COOP_ERROR;
         }
         f->acc = a;
         f->tls = pm_metal_net_tls_server(a, pm_metal_net_tls_test_cert, PM_METAL_NET_TLS_TEST_CERT_LEN,
             pm_metal_net_tls_test_key, PM_METAL_NET_TLS_TEST_KEY_LEN);
         if (f->tls == NULL) {
-            return PM_METAL_ASYNC_ERROR;
+            return PM_METAL_COOP_ERROR;
         }
         f->step = 1;
     }
     if (f->step == 1) {
         int32_t st = pm_metal_net_tls_handshake(f->tls);
         if (st == 1) {
-            return PM_METAL_ASYNC_WAITING;
+            return PM_METAL_COOP_WAITING;
         }
         if (st < 0) {
-            return PM_METAL_ASYNC_ERROR;
+            return PM_METAL_COOP_ERROR;
         }
         f->step = 2;
     }
     uint8_t buf[128];
     int32_t n = pm_metal_net_tls_recv(f->tls, buf, sizeof(buf));
     if (n == 0) {
-        return PM_METAL_ASYNC_WAITING;
+        return PM_METAL_COOP_WAITING;
     }
     if (n < 0) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     if (pm_metal_net_tls_send(f->tls, k_resp, sizeof(k_resp) - 1u) < 0) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     pm_metal_net_tls_close(f->tls);
     f->tls = NULL;
     (void)pm_metal_net_ip_close(f->acc);
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 }
 
 static int32_t serve_and_fetch(uint32_t addr, uint16_t port, int https, pm_metal_coop_step_fn srv_step,
@@ -188,10 +188,10 @@ static pm_metal_coop_status_t step_auth_server(pm_metal_coop_coro_t *self) {
     if (f->step == 0) {
         int32_t a = pm_metal_net_ip_accept(f->ls);
         if (a == -2) {
-            return PM_METAL_ASYNC_WAITING;
+            return PM_METAL_COOP_WAITING;
         }
         if (a < 0) {
-            return PM_METAL_ASYNC_ERROR;
+            return PM_METAL_COOP_ERROR;
         }
         f->acc = a;
         f->step = 1;
@@ -199,29 +199,29 @@ static pm_metal_coop_status_t step_auth_server(pm_metal_coop_coro_t *self) {
     uint8_t buf[256];
     int32_t n = pm_metal_net_ip_recv(f->acc, buf, sizeof(buf));
     if (n == 0) {
-        return PM_METAL_ASYNC_WAITING;
+        return PM_METAL_COOP_WAITING;
     }
     if (n < 0) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     if (f->req_len + (uint32_t)n >= sizeof(f->req)) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     memcpy(f->req + f->req_len, buf, (uint32_t)n);
     f->req_len += (uint32_t)n;
     f->req[f->req_len] = 0;
     if (strstr((const char *)f->req, "\r\n\r\n") == NULL) {
-        return PM_METAL_ASYNC_WAITING;
+        return PM_METAL_COOP_WAITING;
     }
     if (strstr((const char *)f->req, "Authorization: Bearer tok-cdn\r\n") == NULL
         || strstr((const char *)f->req, "X-Shell-Session-Id: sess-1\r\n") == NULL) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     if (pm_metal_net_ip_send(f->acc, k_resp, sizeof(k_resp) - 1u) < 0) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     (void)pm_metal_net_ip_close(f->acc);
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 }
 
 static int32_t case_auth_headers(void) {

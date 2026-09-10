@@ -1154,19 +1154,19 @@ int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
 }
 
 pm_metal_coop_status_t pm_metal_jit_c_compile_step(pm_metal_coop_coro_t *self) {
-    if (!self) return PM_METAL_ASYNC_ERROR;
+    if (!self) return PM_METAL_COOP_ERROR;
     pm_metal_jit_c_frame_t *f = (pm_metal_jit_c_frame_t *)self;
-    if (!f->source || !f->source_len) return PM_METAL_ASYNC_ERROR;
+    if (!f->source || !f->source_len) return PM_METAL_COOP_ERROR;
 #if PM_HAS_TCC && defined(TCC_TARGET_WASM32)
     if (pm_metal_jit_c_tcc_wasm_compile(f->source, f->wasmbuf,
-        PM_METAL_JIT_C_WASM_CAP, &f->result.wasm_len) != 0) return PM_METAL_ASYNC_ERROR;
+        PM_METAL_JIT_C_WASM_CAP, &f->result.wasm_len) != 0) return PM_METAL_COOP_ERROR;
     f->result.wasm_bytes = f->wasmbuf;
     f->result.ok = 1;
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 #else
-    if (pm_metal_jit_c_tcc_native_compile(f->source, &f->result) != 0) return PM_METAL_ASYNC_ERROR;
+    if (pm_metal_jit_c_tcc_native_compile(f->source, &f->result) != 0) return PM_METAL_COOP_ERROR;
     f->result.ok = 1;
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 #endif
 }
 

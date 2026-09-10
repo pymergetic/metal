@@ -56,7 +56,7 @@ static int32_t test_compile_error(void) {
         return 3;
     }
     pm_metal_coop_status_t st = pm_metal_jit_rs_compile_step(coro);
-    if (st != PM_METAL_ASYNC_ERROR) {
+    if (st != PM_METAL_COOP_ERROR) {
         pm_util_mem_arena_destroy(arena);
         free(backing);
         return 4;
@@ -71,7 +71,7 @@ static int32_t test_null_guard(void) {
     if (pm_metal_jit_rs_compile_alloc(NULL, "x", 1, "m") != NULL) {
         return 1;
     }
-    if (pm_metal_jit_rs_compile_step(NULL) != PM_METAL_ASYNC_ERROR) {
+    if (pm_metal_jit_rs_compile_step(NULL) != PM_METAL_COOP_ERROR) {
         return 1;
     }
     return 0;

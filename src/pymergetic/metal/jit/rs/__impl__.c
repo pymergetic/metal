@@ -222,14 +222,14 @@ pm_metal_coop_status_t pm_metal_jit_rs_compile_step(pm_metal_coop_coro_t *self) 
     size_t n;
 
     if (self == NULL) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     f = (pm_metal_jit_rs_frame_t *)self;
     r = &f->result;
 
     if (f->source == NULL || f->source_len == 0) {
         r->ok = 0;
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
 
     /* Stage 1: Rust -> C via mrustc */
@@ -245,7 +245,7 @@ pm_metal_coop_status_t pm_metal_jit_rs_compile_step(pm_metal_coop_coro_t *self) 
             r->error = f->errbuf;
         }
         r->ok = 0;
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
 
     /* Stage 2: C -> WASM via TCC/WASM32 backend */
@@ -260,12 +260,12 @@ pm_metal_coop_status_t pm_metal_jit_rs_compile_step(pm_metal_coop_coro_t *self) 
             r->error = f->errbuf;
         }
         r->ok = 0;
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
 
     r->wasm_bytes = f->wasmbuf;
     r->ok = 1;
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 }
 
 #include "pymergetic/wasmmod/guest.h"

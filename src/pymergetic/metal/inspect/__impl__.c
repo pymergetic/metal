@@ -637,8 +637,6 @@ static int32_t build_rebuild_http(const char *method, const char *path,
     char *out, uint32_t out_max, uint32_t *out_len);
 static int32_t build_events_http(const char *method, const char *path,
     char *out, uint32_t out_max, uint32_t *out_len);
-static int32_t rebuild_unit_local(const pm_metal_build_unit_t *u,
-    int32_t target, char *rerr, size_t rerr_len);
 
 static int32_t fill(const char *method, const char *path, char *out, uint32_t out_max) {
     js_t j;
@@ -1577,6 +1575,46 @@ static int32_t ib_fill(const char *includes[INSPECT_BUILD_MAX_INC],
     }
     return 0;
 }
+
+/* The walk's root resolver: same two-root probe as the sync rebuild
+ * path (metal cards under <metal>/src, wasmmod cards under
+ * <wasmmod>/src), packaged as the build card's root_fn so the walk can
+ * resolve long after this handler returned. The roots are baked at build
+ * time (PM_METAL_ROOT), so the resolver needs no captured state. */
+static int32_t ib_walk_root(const char *fqn, char *buf, size_t cap) {
+    static const char *roots[2] = { NULL, NULL };
+    size_t tl;
+    uint32_t r;
+    if (fqn == NULL || buf == NULL || cap == 0) {
+        return -1;
+    }
+    if (roots[0] == NULL) {
+        roots[0] = ib_src_root;
+        roots[1] = ib_wasmmod_src_root;
+    }
+    tl = strlen(fqn);
+    for (r = 0; r < 2; r++) {
+        size_t rl = strlen(roots[r]);
+        size_t k;
+        struct stat st_dir;
+        if (rl + tl + 2 > cap) {
+            continue;
+        }
+        memcpy(buf, roots[r], rl);
+        buf[rl] = '/';
+        memcpy(buf + rl + 1, fqn, tl);
+        buf[rl + 1 + tl] = '\0';
+        for (k = rl + 1; k < rl + 1 + tl; k++) {
+            if (buf[k] == '.') {
+                buf[k] = '/';
+            }
+        }
+        if (stat(buf, &st_dir) == 0 && S_ISDIR(st_dir.st_mode)) {
+            return 0;
+        }
+    }
+    return -1;
+}
 #endif /* !PM_METAL_FIRMWARE && !PM_METAL_BROWSER */
 
 /* Emit one unit row for the index. */
@@ -1599,52 +1637,6 @@ static void ib_row(js_t *j, const pm_metal_build_unit_t *u) {
  * whether the in-kernel chain can build it (c/rs/cpp/py all ride the
  * chain now: rs -> micro-rustc -> C, cpp -> lower -> C, py -> mpy). */
 
-/* One unit's full rebuild chain (the same one POST /build/<fqn> drives),
- * callable from other panes. Re-enters build_rebuild_http through its HTTP
- * shape with a private reply buffer — the chain (discover, unit_root
- * resolution, compile, record) is exactly the single-fqn path, so the
- * factory's BUILD ALL and the per-card button cannot drift apart. Returns
- * 0 ok; on refusal copies the reply's error text into rerr. */
-static int32_t rebuild_unit_local(const pm_metal_build_unit_t *u,
-    int32_t target, char *rerr, size_t rerr_len) {
-    char path[256];
-    /* the ok reply carries the full record (objects + every symbol name),
-     * which is far past a small buffer — the refusal only needs the error
-     * tail. js_ok on a clipped reply is what turned a real ok into
-     * "rebuild refused" in the BUILD ALL walk. */
-    char reply[8192];
-    uint32_t rlen = 0;
-    int32_t st;
-    if (u == NULL) {
-        return -1;
-    }
-    if (target != 0) {
-        snprintf(path, sizeof(path), "/build/%s?target=%d", u->fqn, (int)target);
-    } else {
-        snprintf(path, sizeof(path), "/build/%s", u->fqn);
-    }
-    st = build_rebuild_http("POST", path, reply, sizeof(reply), &rlen);
-    if (st != 0) {
-        snprintf(rerr, rerr_len, "rebuild refused");
-        return -1;
-    }
-    /* the reply is {"fqn":...,"rebuild":"ok"} or {"rebuild":"refused",
-     * "error":"..."} — rc rides the rebuild field */
-    if (strstr(reply, "\"rebuild\":\"ok\"") == NULL) {
-        const char *e = strstr(reply, "\"error\":\"");
-        if (e != NULL && rerr != NULL && rerr_len > 0) {
-            const char *s = e + 9;
-            size_t i;
-            for (i = 0; i + 1 < rerr_len && s[i] != '\0' && s[i] != '"'; i++) {
-                rerr[i] = s[i];
-            }
-            rerr[i] = '\0';
-        }
-        return -1;
-    }
-    return 0;
-}
-
 static int32_t build_index_http(const char *method, const char *path,
     char *out, uint32_t out_max, uint32_t *out_len) {
     js_t j;
@@ -1656,81 +1648,104 @@ static int32_t build_index_http(const char *method, const char *path,
     void *backing;
     pm_util_mem_arena_t *arena;
 
-    /* POST /build?all=1[&target=N] — the factory floor's BUILD ALL: walk
-     * every buildable unit through the same per-unit rebuild chain the
-     * POST /build/<fqn> pane drives (synchronous, sequential; the event
-     * ring streams each stage as it lands). The response is a per-unit
-     * ok/refused list, not each record — the records pane serves those. */
+#if defined(PM_METAL_FIRMWARE) || defined(PM_METAL_BROWSER)
+    /* Seat fill: these seats have no in-kernel rebuild chain (no host cc,
+     * no fs to stat the tree) — the walk cannot start, and the honest
+     * answer is the same refusal the per-unit pane gives, not a 405. */
     if (method != NULL && strcmp(method, "POST") == 0 && path != NULL
         && strncmp(path, "/build?all=1", 12) == 0) {
-        int32_t target = 0;
-        uint32_t ok = 0;
-        uint32_t refused = 0;
-        {
-            const char *q = strstr(path, "&target=");
-            if (q != NULL) {
-                target = (int32_t)strtol(q + 8, NULL, 10);
-            }
-        }
-        backing = malloc(1u << 20);
-        if (backing == NULL) {
-            return -1;
-        }
-        arena = pm_util_mem_arena_create(backing, 1u << 20);
-        if (arena == NULL) {
-            free(backing);
-            return -1;
-        }
-        st = pm_metal_build_discover(arena, &units, &n_units, err, sizeof(err));
-        if (st != PM_METAL_BUILD_OK) {
-            pm_util_mem_arena_destroy(arena);
-            free(backing);
-            return -1;
-        }
         j.p = out;
         j.n = 0;
         j.max = out_max;
-        js_raw(&j, "{\"all\":1,\"target\":");
-        js_u32(&j, (uint32_t)(target < 0 ? 0 : target));
-        js_raw(&j, ",\"units\":[");
-        for (i = 0; i < n_units; i++) {
-            char rerr[256];
-            int32_t rst;
-            if (i > 0) {
-                js_ch(&j, ',');
-            }
-            /* one fresh arena per unit: the rebuild chain allocates heavily
-             * (TCC scratch, transpiles); a shared arena would exhaust. */
-            rst = rebuild_unit_local(&units[i], target, rerr, sizeof(rerr));
-            js_ch(&j, '{');
-            js_raw(&j, "\"fqn\":");
-            js_str(&j, units[i].fqn);
-            js_raw(&j, ",\"rc\":");
-            js_u32(&j, (uint32_t)(rst == 0 ? 0u : 1u));
-            if (rst != 0 && rerr[0] != '\0') {
-                js_raw(&j, ",\"error\":");
-                js_str(&j, rerr);
-            }
-            js_ch(&j, '}');
-            if (rst == 0) {
-                ok++;
-            } else {
-                refused++;
-            }
-        }
-        js_raw(&j, "],\"ok\":");
-        js_u32(&j, ok);
-        js_raw(&j, ",\"refused\":");
-        js_u32(&j, refused);
-        js_ch(&j, '}');
-        pm_util_mem_arena_destroy(arena);
-        free(backing);
+#ifdef PM_METAL_FIRMWARE
+        js_raw(&j, "{\"all\":1,\"error\":\"seat fill: no in-kernel rebuild on firmware\"}");
+#else
+        js_raw(&j, "{\"all\":1,\"error\":\"seat fill: no ELF loader in the browser cell\"}");
+#endif
         if (!js_ok(&j)) {
             return -1;
         }
         *out_len = j.n;
         return 0;
     }
+#endif
+
+#if !defined(PM_METAL_FIRMWARE) && !defined(PM_METAL_BROWSER)
+    /* POST /build?all=1[&target=N] — the factory floor's BUILD ALL, as a
+     * background walk: this handler only STARTS it (the build card posts
+     * the walk task on the coop runner) and answers the walk id — the
+     * pane thread returns in one arena setup, the units compile one per
+     * runner quantum (the ring rotates between compiles), and the event
+     * ring streams every stage as it lands. The synchronous full-unit
+     * list this call used to build blocked the pane thread for the whole
+     * walk; the factory page reads progress from /build (walk state
+     * below) and /build/events (the ring), not from this reply. */
+    if (method != NULL && strcmp(method, "POST") == 0 && path != NULL
+        && strncmp(path, "/build?all=1", 12) == 0) {
+        int32_t target = 0;
+        int32_t wid;
+        const char *includes[INSPECT_BUILD_MAX_INC];
+        const char *defines[INSPECT_BUILD_MAX_DEF];
+        uint32_t n_inc = 0;
+        uint32_t n_def = 0;
+        char werr[PM_METAL_BUILD_ERR_MAX];
+        {
+            const char *q = strstr(path, "&target=");
+            if (q != NULL) {
+                target = (int32_t)strtol(q + 8, NULL, 10);
+            }
+        }
+        if (ib_fill(includes, &n_inc, defines, &n_def) != 0) {
+            js_raw(&j, "{\"all\":1,\"error\":\"seat fill\"}");
+            if (!js_ok(&j)) {
+                return -1;
+            }
+            *out_len = j.n;
+            return 0;
+        }
+        {
+            pm_metal_build_compile_opts_t copts;
+            memset(&copts, 0, sizeof(copts));
+            copts.include_dirs = includes;
+            copts.n_include_dirs = n_inc;
+            copts.defines = defines;
+            copts.n_defines = n_def;
+            copts.target = target;
+            /* unit_root is per-unit in the walk (the root resolver fills
+             * the walk's own scratch buffer); the fill's value is unused
+             * but non-NULL so the submit's arg check passes. */
+            copts.unit_root = ib_src_root;
+            wid = pm_metal_build_walk_start(target, &copts,
+                ib_walk_root, werr, sizeof(werr));
+        }
+        j.p = out;
+        j.n = 0;
+        j.max = out_max;
+        if (wid < 0) {
+            /* the honest refusal: BUSY (a walk is running), NOMEM, PARSE
+             * (no units) — same data-is-the-answer posture as the
+             * per-unit pane */
+            js_raw(&j, "{\"all\":1,\"error\":");
+            js_str(&j, werr[0] != '\0' ? werr : "walk refused");
+            js_ch(&j, '}');
+        } else {
+            pm_metal_build_walk_info_t wi;
+            pm_metal_build_walk_state(&wi);
+            js_raw(&j, "{\"all\":1,\"walk\":");
+            js_u32(&j, (uint32_t)wid);
+            js_raw(&j, ",\"target\":");
+            js_u32(&j, (uint32_t)(target < 0 ? 0 : target));
+            js_raw(&j, ",\"units\":");
+            js_u32(&j, wi.n_total);
+            js_ch(&j, '}');
+        }
+        if (!js_ok(&j)) {
+            return -1;
+        }
+        *out_len = j.n;
+        return 0;
+    }
+#endif /* POSIX walk start */
 
     if (method == NULL || strcmp(method, "GET") != 0 || path == NULL
         || !path_is(path, "/build")) {
@@ -1762,7 +1777,28 @@ static int32_t build_index_http(const char *method, const char *path,
         }
         ib_row(&j, &units[i]);
     }
-    js_raw(&j, "]}");
+    js_raw(&j, "],\"walk\":{");
+    {
+        pm_metal_build_walk_info_t wi;
+        static const char *wstates[] = { "idle", "running", "done" };
+        pm_metal_build_walk_state(&wi);
+        js_raw(&j, "\"state\":");
+        js_str(&j, wi.state < 3u ? wstates[wi.state] : "?");
+        js_raw(&j, ",\"id\":");
+        js_u32(&j, wi.id);
+        js_raw(&j, ",\"target\":");
+        js_u32(&j, (uint32_t)(wi.target < 0 ? 0 : wi.target));
+        js_raw(&j, ",\"total\":");
+        js_u32(&j, wi.n_total);
+        js_raw(&j, ",\"done\":");
+        js_u32(&j, wi.n_done);
+        js_raw(&j, ",\"failed\":");
+        js_u32(&j, wi.n_failed);
+        js_raw(&j, ",\"skipped\":");
+        js_u32(&j, wi.n_skipped);
+        js_ch(&j, '}');
+    }
+    js_ch(&j, '}');
     pm_util_mem_arena_destroy(arena);
     free(backing);
     if (!js_ok(&j)) {
@@ -2300,10 +2336,11 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
             "application/json") != 0) {
         return -1;
     }
-    /* BUILD ALL: the factory floor's big button. POST /build?all=1 walks
-     * every buildable unit through the same chain (rebuild_unit_local),
-     * ?target=N fans the whole walk onto one cross lane. The GET shape
-     * stays the read-only index. */
+    /* BUILD ALL: the factory floor's big button. POST /build?all=1 starts
+     * a background walk in the build card (units compile one per coop
+     * quantum; the pane thread only hands it the seat fill and gets the
+     * walk id back), ?target=N fans the whole walk onto one cross lane.
+     * The GET shape stays the read-only index + walk state. */
     if (pm_metal_net_http_asgi_route_fn_ct("POST", "/build", build_index_asgi_handler,
             "application/json") != 0) {
         return -1;

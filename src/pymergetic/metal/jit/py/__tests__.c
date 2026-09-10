@@ -35,7 +35,7 @@ static int32_t test_step_error(void) {
     /* compile_step on invalid frame is ERROR — seat-neutral contract that
      * must hold on the real path too, not just the stub. */
     pm_metal_coop_status_t st = pm_metal_jit_py_compile_step(NULL);
-    if (st != PM_METAL_ASYNC_ERROR) {
+    if (st != PM_METAL_COOP_ERROR) {
         return 1;
     }
     return 0;

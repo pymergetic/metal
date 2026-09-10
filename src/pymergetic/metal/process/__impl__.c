@@ -176,13 +176,13 @@ int32_t pm_metal_process_crown(void) {
 /* Park once. Do not yield_park (that re-queues and spins the SMP ring). */
 static pm_metal_coop_status_t idle_step(pm_metal_coop_coro_t *self) {
     if (self == NULL) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
-    if (self->status == PM_METAL_ASYNC_CANCELLED) {
-        return PM_METAL_ASYNC_CANCELLED;
+    if (self->status == PM_METAL_COOP_CANCELLED) {
+        return PM_METAL_COOP_CANCELLED;
     }
-    self->status = PM_METAL_ASYNC_WAITING;
-    return PM_METAL_ASYNC_WAITING;
+    self->status = PM_METAL_COOP_WAITING;
+    return PM_METAL_COOP_WAITING;
 }
 
 int32_t pm_metal_process_spawn(void) {
@@ -218,7 +218,7 @@ int32_t pm_metal_process_quit(int32_t pid) {
         if (s->task != NULL) {
             s->task->pid = 0;
             if (s->task->root != NULL) {
-                s->task->root->status = PM_METAL_ASYNC_CANCELLED;
+                s->task->root->status = PM_METAL_COOP_CANCELLED;
             }
         }
         s->used = 0;

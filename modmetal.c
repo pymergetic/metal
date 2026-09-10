@@ -150,7 +150,7 @@ static pm_metal_coop_status_t step_upy(pm_metal_coop_coro_t *self) {
     pm_metal_coop_status_t ret;
     nlr_buf_t nlr;
     if (f->slot >= PM_METAL_UPY_GEN_N) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     /* Trylock the GIL. On contention the REPL thread (or another worker) holds
      * it. park-to-ready-ring — the GIL release hook kicks a poll cycle that
@@ -160,19 +160,19 @@ static pm_metal_coop_status_t step_upy(pm_metal_coop_coro_t *self) {
     }
     gen = MP_STATE_VM(metal_upy_gen)[f->slot];
     if (gen == MP_OBJ_NULL) {
-        ret = PM_METAL_ASYNC_ERROR;
+        ret = PM_METAL_COOP_ERROR;
     } else if (nlr_push(&nlr) == 0) {
         mp_obj_t v = mp_iternext(gen);
         nlr_pop();
         if (v == MP_OBJ_STOP_ITERATION) {
             MP_STATE_VM(metal_upy_gen)[f->slot] = MP_OBJ_NULL;
-            ret = PM_METAL_ASYNC_DONE;
+            ret = PM_METAL_COOP_DONE;
         } else {
             ret = pm_metal_coop_yield_park(self);
         }
     } else {
         MP_STATE_VM(metal_upy_gen)[f->slot] = MP_OBJ_NULL;
-        ret = PM_METAL_ASYNC_ERROR;
+        ret = PM_METAL_COOP_ERROR;
     }
     MP_THREAD_GIL_EXIT();
     return ret;
@@ -209,6 +209,11 @@ static mp_obj_t metal_register_upy(mp_obj_t gen) {
      * runner core under the VM lock; each runner core that steps it has its own
      * MicroPython thread state (installed in pm_metal_coop_runner_begin). */
     pm_metal_coop_coro_set_vm_only(&frame->coro);
+    /* auto-reclaim: when the generator finishes (or errors), the runner
+     * frees this frame block and its task block — a finished Python task
+     * leaking one coro_create block per spawn would grow the boot arena
+     * on every guest task, forever. */
+    pm_metal_coop_coro_set_auto_free(&frame->coro);
     frame->slot = i;
     MP_STATE_VM(metal_upy_gen)[i] = gen;
     if (pm_metal_coop_create_task(&frame->coro) == NULL) {

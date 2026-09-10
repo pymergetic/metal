@@ -87,7 +87,7 @@ void pm_metal_jit_py_result_free(pm_util_mem_arena_t *arena, pm_metal_jit_py_res
 pm_metal_coop_status_t pm_metal_jit_py_compile_step(pm_metal_coop_coro_t *self) {
 #if !(MICROPY_PY_WASM && !PM_WASMMOD_GUEST)
     (void)self;
-    return PM_METAL_ASYNC_ERROR;
+    return PM_METAL_COOP_ERROR;
 #else
     pm_metal_jit_py_frame_t *f = (pm_metal_jit_py_frame_t *)self;
     pm_metal_jit_py_result_t *r;
@@ -100,18 +100,18 @@ pm_metal_coop_status_t pm_metal_jit_py_compile_step(pm_metal_coop_coro_t *self) 
      * (the upy seats step frames their own alloc produced; nothing else may
      * hand the step a foreign pointer). */
     if (f == NULL) {
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     r = &f->result;
     if (f->source == NULL || f->source_len == 0 || r->module_name == NULL) {
         r->ok = 0;
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     /* Non-blocking GIL: same reasoning as step_upy — vm_only step functions
      * run under s_vm_mutex, but the REPL thread may hold the GIL concurrently.
      * Trylock; park on contention instead of blocking the runner pthread. */
     if (!MP_THREAD_GIL_TRYLOCK()) {
-        return PM_METAL_ASYNC_WAITING;
+        return PM_METAL_COOP_WAITING;
     }
     mod_qstr = qstr_from_str(r->module_name);
 
@@ -135,11 +135,11 @@ pm_metal_coop_status_t pm_metal_jit_py_compile_step(pm_metal_coop_coro_t *self) 
         r->ok = 0;
         r->error = NULL;
         MP_THREAD_GIL_EXIT();
-        return PM_METAL_ASYNC_ERROR;
+        return PM_METAL_COOP_ERROR;
     }
     MP_THREAD_GIL_EXIT();
 
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 #endif
 }
 

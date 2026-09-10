@@ -32,9 +32,9 @@ static int32_t test_compile_real_c(void) {
     if (!coro) { pm_util_mem_arena_destroy(arena); free(backing); return 7; }
     pm_metal_coop_status_t st = pm_metal_jit_c_compile_step(coro);
 #if PM_HAS_TCC
-    if (st != PM_METAL_ASYNC_DONE) { pm_util_mem_arena_destroy(arena); free(backing); return 8; }
+    if (st != PM_METAL_COOP_DONE) { pm_util_mem_arena_destroy(arena); free(backing); return 8; }
 #else
-    if (st != PM_METAL_ASYNC_ERROR) { pm_util_mem_arena_destroy(arena); free(backing); return 8; }
+    if (st != PM_METAL_COOP_ERROR) { pm_util_mem_arena_destroy(arena); free(backing); return 8; }
 #endif
     pm_util_mem_arena_destroy(arena); free(backing);
     return 0;
@@ -43,7 +43,7 @@ static int32_t test_compile_real_c(void) {
 static int32_t test_null_guard(void) {
     if (pm_metal_jit_c_compile_alloc(NULL, "x", 1, "m") != NULL) return 9;
     if (pm_metal_jit_c_compile_alloc(NULL, NULL, 1, "m") != NULL) return 9;
-    if (pm_metal_jit_c_compile_step(NULL) != PM_METAL_ASYNC_ERROR) return 10;
+    if (pm_metal_jit_c_compile_step(NULL) != PM_METAL_COOP_ERROR) return 10;
     return 0;
 }
 

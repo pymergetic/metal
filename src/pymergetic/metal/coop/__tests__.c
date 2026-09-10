@@ -37,7 +37,7 @@ static pm_metal_coop_status_t step_count_yield(pm_metal_coop_coro_t *self) {
         (*f->counter)++;
         return pm_metal_coop_yield_park(self);
     }
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 }
 
 static pm_metal_coop_status_t step_sleep(pm_metal_coop_coro_t *self) {
@@ -46,7 +46,7 @@ static pm_metal_coop_status_t step_sleep(pm_metal_coop_coro_t *self) {
         f->step = 1;
         return pm_metal_coop_sleep_us(self, 2000ull);
     }
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 }
 
 static pm_metal_coop_status_t step_nest(pm_metal_coop_coro_t *self) {
@@ -55,11 +55,11 @@ static pm_metal_coop_status_t step_nest(pm_metal_coop_coro_t *self) {
         f->step = 1;
         f->child = pm_metal_coop_coro_create(step_sleep, sizeof(sleep_frame_t));
         if (f->child == NULL) {
-            return PM_METAL_ASYNC_ERROR;
+            return PM_METAL_COOP_ERROR;
         }
         return pm_metal_coop_await(self, f->child);
     }
-    return PM_METAL_ASYNC_DONE;
+    return PM_METAL_COOP_DONE;
 }
 
 static int32_t case_yield_two_tasks(void) {
@@ -82,15 +82,15 @@ static int32_t case_yield_two_tasks(void) {
     if (pm_metal_coop_run(ta) != 0) {
         return fail("run a");
     }
-    if (fa->coro.status != PM_METAL_ASYNC_DONE || a != 4) {
+    if (fa->coro.status != PM_METAL_COOP_DONE || a != 4) {
         return fail("a done");
     }
-    if (fb->coro.status != PM_METAL_ASYNC_DONE) {
+    if (fb->coro.status != PM_METAL_COOP_DONE) {
         if (pm_metal_coop_run(tb) != 0) {
             return fail("run b");
         }
     }
-    if (fb->coro.status != PM_METAL_ASYNC_DONE || b != 4) {
+    if (fb->coro.status != PM_METAL_COOP_DONE || b != 4) {
         return fail("b done");
     }
     return 0;
@@ -110,7 +110,7 @@ static int32_t case_sleep_idle(void) {
         return fail("sleep run");
     }
     uint64_t dt = pm_metal_coop_mono_us() - t0;
-    if (f->coro.status != PM_METAL_ASYNC_DONE) {
+    if (f->coro.status != PM_METAL_COOP_DONE) {
         return fail("sleep done");
     }
     if (dt < 1000ull) {
@@ -134,8 +134,8 @@ static int32_t case_nested_await(void) {
     if (pm_metal_coop_run(t) != 0) {
         return fail("nest run");
     }
-    if (f->coro.status != PM_METAL_ASYNC_DONE || f->child == NULL
-        || f->child->status != PM_METAL_ASYNC_DONE) {
+    if (f->coro.status != PM_METAL_COOP_DONE || f->child == NULL
+        || f->child->status != PM_METAL_COOP_DONE) {
         return fail("nest child");
     }
     return 0;
