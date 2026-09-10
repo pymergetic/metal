@@ -17,7 +17,7 @@
 #include "py/runtime.h"
 #include "py/mpstate.h"
 #include "py/mpthread.h"
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/boot/externals.h"
 #include "pymergetic/metal/boot/tree.h"
 #include "pymergetic/metal/jit/c.h"
@@ -51,7 +51,7 @@
 static mp_state_thread_t metal_upy_runner_ts[PM_METAL_UPY_RUNNER_N];
 static uint32_t metal_upy_runner_ts_used[PM_METAL_UPY_RUNNER_N];
 
-int pm_metal_async_runner_begin(uint32_t slot) {
+int pm_metal_coop_runner_begin(uint32_t slot) {
     mp_state_thread_t *ts;
     if (slot == 0u || slot >= PM_METAL_UPY_RUNNER_N) {
         return 0;
@@ -92,7 +92,7 @@ MP_REGISTER_ROOT_POINTER(mp_obj_t metal_upy_gen[PM_METAL_UPY_GEN_N]);
 MP_REGISTER_ROOT_POINTER(mp_obj_t metal_drv_py_attach[PM_METAL_DRV_PY_MAX]);
 
 typedef struct {
-    pm_metal_async_coro_t coro;
+    pm_metal_coop_coro_t coro;
     uint32_t slot;
 } pm_metal_upy_frame_t;
 
@@ -101,10 +101,10 @@ typedef struct {
  * immediately rather than waiting for the next 200µs idle timer. */
 #if MICROPY_PY_THREAD && MICROPY_PY_THREAD_GIL
 static void metal_gil_wake(void) {
-    pm_metal_async_poll();
+    pm_metal_coop_poll();
 }
 static void metal_gil_poll_hook(void) {
-    pm_metal_async_poll();
+    pm_metal_coop_poll();
 }
 #endif
 
@@ -114,12 +114,12 @@ static void metal_ensure(void) {
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("metal boot failed"));
     }
     #if MICROPY_PY_THREAD && MICROPY_PY_THREAD_GIL
-    if (pm_metal_async_gil_on_release == NULL && pm_metal_async_ready()) {
-        pm_metal_async_gil_on_release = metal_gil_wake;
+    if (pm_metal_coop_gil_on_release == NULL && pm_metal_coop_ready()) {
+        pm_metal_coop_gil_on_release = metal_gil_wake;
     }
     #if MICROPY_PY_METAL
-    if (pm_metal_async_gil_poll == NULL && pm_metal_async_ready()) {
-        pm_metal_async_gil_poll = metal_gil_poll_hook;
+    if (pm_metal_coop_gil_poll == NULL && pm_metal_coop_ready()) {
+        pm_metal_coop_gil_poll = metal_gil_poll_hook;
     }
     #endif
     #endif
@@ -139,15 +139,15 @@ static MP_DEFINE_CONST_FUN_OBJ_0(metal_ready_obj, metal_ready);
 
 static mp_obj_t metal_poll(void) {
     metal_ensure();
-    pm_metal_async_poll();
+    pm_metal_coop_poll();
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(metal_poll_obj, metal_poll);
 
-static pm_metal_async_status_t step_upy(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t step_upy(pm_metal_coop_coro_t *self) {
     pm_metal_upy_frame_t *f = (pm_metal_upy_frame_t *)self;
     mp_obj_t gen;
-    pm_metal_async_status_t ret;
+    pm_metal_coop_status_t ret;
     nlr_buf_t nlr;
     if (f->slot >= PM_METAL_UPY_GEN_N) {
         return PM_METAL_ASYNC_ERROR;
@@ -156,7 +156,7 @@ static pm_metal_async_status_t step_upy(pm_metal_async_coro_t *self) {
      * it. park-to-ready-ring — the GIL release hook kicks a poll cycle that
      * drains the ring immediately rather than waiting for the next idle poll. */
     if (!MP_THREAD_GIL_TRYLOCK()) {
-        return pm_metal_async_yield_park(self);
+        return pm_metal_coop_yield_park(self);
     }
     gen = MP_STATE_VM(metal_upy_gen)[f->slot];
     if (gen == MP_OBJ_NULL) {
@@ -168,7 +168,7 @@ static pm_metal_async_status_t step_upy(pm_metal_async_coro_t *self) {
             MP_STATE_VM(metal_upy_gen)[f->slot] = MP_OBJ_NULL;
             ret = PM_METAL_ASYNC_DONE;
         } else {
-            ret = pm_metal_async_yield_park(self);
+            ret = pm_metal_coop_yield_park(self);
         }
     } else {
         MP_STATE_VM(metal_upy_gen)[f->slot] = MP_OBJ_NULL;
@@ -200,18 +200,18 @@ static mp_obj_t metal_register_upy(mp_obj_t gen) {
     if (i >= PM_METAL_UPY_GEN_N) {
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("upy gen slots full"));
     }
-    frame = (pm_metal_upy_frame_t *)pm_metal_async_coro_create(step_upy, sizeof(*frame));
+    frame = (pm_metal_upy_frame_t *)pm_metal_coop_coro_create(step_upy, sizeof(*frame));
     if (frame == NULL) {
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("upy coro"));
     }
     /* step_upy re-enters the bytecode VM (nlr_push + mp_iternext on the global
      * metal_upy_gen root-pointer). The async card steps a vm_only coro on any
      * runner core under the VM lock; each runner core that steps it has its own
-     * MicroPython thread state (installed in pm_metal_async_runner_begin). */
-    pm_metal_async_coro_set_vm_only(&frame->coro);
+     * MicroPython thread state (installed in pm_metal_coop_runner_begin). */
+    pm_metal_coop_coro_set_vm_only(&frame->coro);
     frame->slot = i;
     MP_STATE_VM(metal_upy_gen)[i] = gen;
-    if (pm_metal_async_create_task(&frame->coro) == NULL) {
+    if (pm_metal_coop_create_task(&frame->coro) == NULL) {
         MP_STATE_VM(metal_upy_gen)[i] = MP_OBJ_NULL;
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("upy task"));
     }
@@ -403,7 +403,7 @@ static MP_DEFINE_CONST_FUN_OBJ_2(metal_PM_METAL_DRV_PLATFORM_obj, metal_PM_METAL
 
 static mp_obj_t mp_metal_builtin_quit(size_t n_args, const mp_obj_t *args) {
     /* Process = task with human intent + pid. System REPL has pid 0. */
-    uint32_t here = pm_metal_async_process_id();
+    uint32_t here = pm_metal_coop_process_id();
     uint32_t want = here;
     if (n_args == 1) {
         want = (uint32_t)mp_obj_get_int(args[0]);

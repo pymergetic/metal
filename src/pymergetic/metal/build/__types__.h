@@ -8,7 +8,7 @@
 #ifndef PYMERGETIC_METAL_BUILD_TYPES_H
 #define PYMERGETIC_METAL_BUILD_TYPES_H
 
-#include "pymergetic/metal/async/__types__.h"
+#include "pymergetic/metal/coop/__types__.h"
 #include "pymergetic/util/mem/__types__.h"
 #include "pymergetic/wasmmod/registry/__types__.h"
 
@@ -192,11 +192,11 @@ typedef enum pm_metal_build_actor_state {
 } pm_metal_build_actor_state_t;
 
 /* One queued compile job. The submitter keeps the pointer and polls it (or
- * parks a coro of its own on it via pm_metal_async_await-style chaining —
+ * parks a coro of its own on it via pm_metal_coop_await-style chaining —
  * the actor never blocks the calling runner). All fields are written by the
  * actor under the queue lock; state transitions are atomic releases. */
 typedef struct pm_metal_build_actor_job {
-    pm_metal_async_coro_t coro;    /* step = actor_job_step; parks on WAITING */
+    pm_metal_coop_coro_t coro;    /* step = actor_job_step; parks on WAITING */
     pm_metal_build_actor_state_t state;
     int32_t rc;                    /* PM_METAL_BUILD_* once DONE/FAILED */
     pm_metal_build_unit_t unit;    /* arena-copied manifest */
@@ -227,7 +227,7 @@ int32_t pm_metal_build_actor_submit(
  * blocking, documented), or parks (returns WAITING, no runner blocked).
  * DONE/FAILED/CANCELLED are sticky. This is the face a runner loop or a
  * waiting parent coro drives; pm_metal_build_actor_run does it for you. */
-pm_metal_async_status_t pm_metal_build_actor_step(pm_metal_build_actor_job_t *job);
+pm_metal_coop_status_t pm_metal_build_actor_step(pm_metal_build_actor_job_t *job);
 
 /* Drive the actor until the job reaches a terminal state (blocking call —
  * it pumps the async ring while the serial section is held by another job).

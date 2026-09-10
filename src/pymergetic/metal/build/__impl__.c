@@ -13,6 +13,7 @@
 #include "pymergetic/metal/build/__types__.h"
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
+#include "pymergetic/util/lock.h"
 
 #include <stdatomic.h>
 
@@ -60,7 +61,7 @@
  * still serves.
  *
  * Lifetime: the ctx allocates lazily from the boot arena
- * (pm_metal_async_arena — the arena pm_metal_boot created and nobody
+ * (pm_metal_coop_arena — the arena pm_metal_boot created and nobody
  * frees until teardown), because records/at-slots must outlive any single
  * unit_compile's caller arena. Faces that only need scratch within one
  * call keep taking the caller's arena argument; only the retained state
@@ -90,6 +91,12 @@ typedef struct pm_build_exec_range {
 #define PM_METAL_BUILD_AT_SLOTS 4u
 
 typedef struct pm_metal_build_ctx {
+    /* one lock guards every ctx mutation once jobs/pane reads can run on
+     * different cores: the event ring's seq+slot, the record table's
+     * slot pick + field writes, the accessor slots' epoch. BSS zero is
+     * the lock's unlocked state (same contract as the actor's), so the
+     * lazy ctx create needs no explicit init. */
+    pm_util_lock_t lock;
     /* build records (provenance chain) — retained per unit_compile */
     pm_metal_build_record_t records[PM_METAL_BUILD_MAX_RECORDS];
     uint32_t record_epoch;
@@ -122,19 +129,19 @@ static pm_metal_build_ctx_t *s_build_ctx;
  * created by pm_metal_boot, freed only at teardown). Declared here so the
  * card never takes a link dependency on the async card's exports: the
  * async card's own header is only included where its coro types are used. */
-extern pm_util_mem_arena_t *pm_metal_async_arena(void);
+extern pm_util_mem_arena_t *pm_metal_coop_arena(void);
 /* actor_run's wait pump: drive the async ring while another job holds the
  * TCC serial section (the async card's poll drains ready tasks). */
-extern void pm_metal_async_poll(void);
+extern void pm_metal_coop_poll(void);
 /* mono clock for the event ring's t_us/dur_us (same face ntp uses). */
-extern uint64_t pm_metal_async_mono_us(void);
+extern uint64_t pm_metal_coop_mono_us(void);
 
 static pm_metal_build_ctx_t *build_ctx_acquire(void) {
     pm_util_mem_arena_t *arena;
     if (s_build_ctx != NULL) {
         return s_build_ctx;
     }
-    arena = pm_metal_async_arena();
+    arena = pm_metal_coop_arena();
     if (arena == NULL) {
         return NULL;
     }
@@ -156,18 +163,24 @@ static void build_event_emit(uint16_t kind, uint16_t target,
     const char *fqn, const char *src, uint32_t dur_us, uint32_t bytes) {
     pm_metal_build_ctx_t *ctx = build_ctx_acquire();
     pm_metal_build_event_t *e;
+    uint32_t seq;
     if (ctx == NULL || fqn == NULL) {
         return;
     }
+    /* the ctx lock makes seq+slot pick + the whole record write one
+     * atomic append: a pane read on another core either sees the
+     * previous tail or this complete event, never a torn one */
+    pm_util_lock_acquire(&ctx->lock);
     ctx->event_seq++;
+    seq = ctx->event_seq;
     /* wrap: slot = (seq-1) % EVENTS, so seq N and N+EVENTS collide and the
      * older tail is naturally overwritten in arrival order */
-    e = &ctx->events[(ctx->event_seq - 1u) % PM_METAL_BUILD_EVENTS];
+    e = &ctx->events[(seq - 1u) % PM_METAL_BUILD_EVENTS];
     memset(e, 0, sizeof(*e));
-    e->seq = ctx->event_seq;
+    e->seq = seq;
     e->kind = kind;
     e->target = target;
-    e->t_us = (uint32_t)(pm_metal_async_mono_us() & 0xffffffffu);
+    e->t_us = (uint32_t)(pm_metal_coop_mono_us() & 0xffffffffu);
     e->dur_us = dur_us;
     e->bytes = bytes;
     {
@@ -187,6 +200,7 @@ static void build_event_emit(uint16_t kind, uint16_t target,
             e->src[i] = src[i];
         }
     }
+    pm_util_lock_release(&ctx->lock);
 }
 
 uint32_t pm_metal_build_events_since(uint32_t since,
@@ -201,11 +215,18 @@ uint32_t pm_metal_build_events_since(uint32_t since,
         }
         return 0;
     }
+    /* same lock as emit: the tail copy below reads whole events; without
+     * it a concurrent append on another core could be half-copied out */
+    pm_util_lock_acquire(&ctx->lock);
     newest = ctx->event_seq;
     if (latest != NULL) {
         *latest = newest;
     }
     if (out == NULL || max == 0 || since >= newest) {
+        /* empty-tail read: RELEASE before the early return — the ring is
+         * otherwise left locked and every later events pane (or emit)
+         * spins forever on the acquired lock. */
+        pm_util_lock_release(&ctx->lock);
         return 0;
     }
     /* replay window: the tail the ring still holds, clipped to max */
@@ -216,12 +237,20 @@ uint32_t pm_metal_build_events_since(uint32_t since,
     for (; first <= newest && n < max; first++) {
         out[n++] = ctx->events[(first - 1u) % PM_METAL_BUILD_EVENTS];
     }
+    pm_util_lock_release(&ctx->lock);
     return n;
 }
 
 uint32_t pm_metal_build_events_latest(void) {
     pm_metal_build_ctx_t *ctx = build_ctx_acquire();
-    return ctx != NULL ? ctx->event_seq : 0;
+    uint32_t latest;
+    if (ctx == NULL) {
+        return 0;
+    }
+    pm_util_lock_acquire(&ctx->lock);
+    latest = ctx->event_seq;
+    pm_util_lock_release(&ctx->lock);
+    return latest;
 }
 
 /*------------------ build records (provenance chain) ------------------
@@ -264,11 +293,16 @@ static pm_metal_build_record_t *record_slot(const char *fqn) {
     return NULL;
 }
 
-static pm_metal_build_record_t *record_slot_acquire(const char *fqn) {
+static pm_metal_build_record_t *record_slot_acquire_locked(const char *fqn) {
+    /* ctx lock held by the caller: pick + init one atomic slot transition.
+     * New slots publish valid AFTER the caller's field writes (record
+     * publish, the call sites below) — a reader on another core never
+     * sees a torn record. The refresh path (existing slot) relies on the
+     * caller's surrounding critical section, same as the emit ring. */
     pm_metal_build_ctx_t *ctx = build_ctx_acquire();
     pm_metal_build_record_t *r;
     if (ctx == NULL) {
-        return NULL;   /* no retained state without the boot arena */
+        return NULL;
     }
     r = record_slot(fqn);
     if (r != NULL) {
@@ -279,21 +313,44 @@ static pm_metal_build_record_t *record_slot_acquire(const char *fqn) {
     ctx->record_epoch++;
     memset(r, 0, sizeof(*r));
     snprintf(r->fqn, sizeof(r->fqn), "%s", fqn);
-    r->valid = 1;
     return r;
 }
 
+/* record publish: the writer's field writes end, the slot becomes visible
+ * to readers. Valid-before-fields is the torn-read the ctx lock's record
+ * section prevents; call exactly once after the last field write. */
+static void record_publish_locked(pm_metal_build_record_t *r) {
+    if (r != NULL) {
+        r->valid = 1;
+    }
+}
+
 const pm_metal_build_record_t *pm_metal_build_record_find(const char *fqn) {
+    pm_metal_build_record_t *r = NULL;
+    pm_metal_build_ctx_t *ctx;
     if (fqn == NULL) {
         return NULL;
     }
-    return record_slot(fqn);
+    ctx = build_ctx_acquire();
+    if (ctx == NULL) {
+        return NULL;
+    }
+    /* the scan is lock-held so the epoch/slot state it walks is stable;
+     * the returned record's fields are read outside — valid publishes
+     * after full writes (record_publish_locked), so a read sees either
+     * an old complete record or the new complete one */
+    pm_util_lock_acquire(&ctx->lock);
+    r = record_slot(fqn);
+    pm_util_lock_release(&ctx->lock);
+    return r;
 }
 
 void pm_metal_build_record_reset(void) {
     if (s_build_ctx != NULL) {
+        pm_util_lock_acquire(&s_build_ctx->lock);
         memset(s_build_ctx->records, 0, sizeof(s_build_ctx->records));
         s_build_ctx->record_epoch = 0;
+        pm_util_lock_release(&s_build_ctx->lock);
     }
 }
 
@@ -441,17 +498,21 @@ int32_t pm_metal_build_note_add(const char *target,
     if (w >= sizeof(line)) {
         return PM_METAL_BUILD_ERR_PARSE;
     }
-    /* read-modify-write append: fs_add refuses an existing path */
+    /* read-modify-write append: fs_add refuses an existing path. The ctx
+     * lock covers the whole ledger RMW — the buffer is shared ctx scratch
+     * and at_fill_notes may be reading it on another core right now. */
     {
         pm_metal_build_ctx_t *ctx = build_ctx_acquire();
         uint32_t got = 0;
         uint8_t *existing;
+        int32_t frc = 0;
         if (ctx == NULL) {
             return PM_METAL_BUILD_ERR_NOMEM;
         }
+        pm_util_lock_acquire(&ctx->lock);
         existing = ctx->ledger_buf;
         if (pm_metal_fs_stat(PM_METAL_BUILD_LEDGER_PATH, &existing_len) != 0) {
-            return PM_METAL_BUILD_ERR_NOMEM;
+            frc = PM_METAL_BUILD_ERR_NOMEM;
         }
         if (existing_len > 0) {
             got = existing_len;
@@ -459,19 +520,25 @@ int32_t pm_metal_build_note_add(const char *target,
                 got = sizeof(ctx->ledger_buf);
             }
             if (pm_metal_fs_read(PM_METAL_BUILD_LEDGER_PATH, existing, &got) != 0) {
-                return PM_METAL_BUILD_ERR_NOMEM;
+                frc = PM_METAL_BUILD_ERR_NOMEM;
             }
         }
-        if (got + w >= sizeof(ctx->ledger_buf)) {
-            return PM_METAL_BUILD_ERR_NOMEM;
+        if (frc == 0 && got + w >= sizeof(ctx->ledger_buf)) {
+            frc = PM_METAL_BUILD_ERR_NOMEM;
         }
-        if (pm_metal_fs_drop(PM_METAL_BUILD_LEDGER_PATH) != 0 && existing_len > 0) {
-            return PM_METAL_BUILD_ERR_NOMEM;
+        if (frc == 0 && pm_metal_fs_drop(PM_METAL_BUILD_LEDGER_PATH) != 0
+            && existing_len > 0) {
+            frc = PM_METAL_BUILD_ERR_NOMEM;
         }
-        memcpy(existing + got, line, w);
-        if (pm_metal_fs_add(PM_METAL_BUILD_LEDGER_PATH, existing, got + (uint32_t)w) < 0) {
-            return PM_METAL_BUILD_ERR_NOMEM;
+        if (frc == 0) {
+            memcpy(existing + got, line, w);
+            if (pm_metal_fs_add(PM_METAL_BUILD_LEDGER_PATH,
+                    existing, got + (uint32_t)w) < 0) {
+                frc = PM_METAL_BUILD_ERR_NOMEM;
+            }
         }
+        pm_util_lock_release(&ctx->lock);
+        return frc;
     }
     return PM_METAL_BUILD_OK;
 }
@@ -497,7 +564,11 @@ static int note_line_match(const char *ln, size_t n, const char *target,
     return build_memfind(ln, n, pat) != NULL;
 }
 
-int32_t pm_metal_build_notes_query(const char *target,
+/* The lock-free body. The ctx lock is NOT taken here: callers that hold
+ * the ctx lock (the at() fill, below) use this entry so the shared
+ * ledger scratch is protected by THEIR critical section; the exported
+ * face takes the lock and calls in. TU-local: no second card links it. */
+static int32_t pm_metal_build_notes_query_locked(const char *target,
     int32_t kind, char *out, size_t out_len, uint32_t *out_n) {
     pm_metal_build_ctx_t *ctx = build_ctx_acquire();
     uint32_t len = 0;
@@ -543,6 +614,22 @@ int32_t pm_metal_build_notes_query(const char *target,
     }
     *out_n = n_match;
     return (int32_t)n_match;
+}
+
+int32_t pm_metal_build_notes_query(const char *target,
+    int32_t kind, char *out, size_t out_len, uint32_t *out_n) {
+    pm_metal_build_ctx_t *ctx = build_ctx_acquire();
+    int32_t rc;
+    if (ctx == NULL) {
+        return PM_METAL_BUILD_ERR_NOMEM;
+    }
+    /* ledger read into shared ctx scratch: under the same lock as the
+     * RMW append and the at-slot fill's notes pass, so the buffer is
+     * never mid-swap under a reader */
+    pm_util_lock_acquire(&ctx->lock);
+    rc = pm_metal_build_notes_query_locked(target, kind, out, out_len, out_n);
+    pm_util_lock_release(&ctx->lock);
+    return rc;
 }
 
 int32_t pm_metal_build_note_has(const char *target,
@@ -2761,32 +2848,43 @@ static int32_t unit_compile_py(pm_util_mem_arena_t *arena,
             return PM_METAL_BUILD_ERR_COMPILE;
         }
         {
-            uint64_t t0 = pm_metal_async_mono_us();
+            uint64_t t0 = pm_metal_coop_mono_us();
             build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_START, 0,
                 unit->fqn, unit->sources[obj_i], 0, 0);
             if (pm_metal_jit_py_object_compile(arena, src, strlen(src),
                     unit->fqn, &mpy, &mpy_len, errbuf, errbuf_len) != 0) {
                 build_event_emit(PM_METAL_BUILD_EVENT_UNIT_FAIL, 0,
                     unit->fqn, unit->sources[obj_i],
-                    (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu), 0);
+                    (uint32_t)((pm_metal_coop_mono_us() - t0) & 0xffffffffu), 0);
                 return PM_METAL_BUILD_ERR_COMPILE;
             }
             build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_END, 0,
                 unit->fqn, unit->sources[obj_i],
-                (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu),
+                (uint32_t)((pm_metal_coop_mono_us() - t0) & 0xffffffffu),
                 (uint32_t)mpy_len);
         }
         if (artifact->bytes == NULL) {
             artifact->bytes = mpy;
             artifact->len = mpy_len;
         }
-        /* record the mpy lengths like object lengths (audit trail) */
-        rec = record_slot_acquire(unit->fqn);
-        if (rec != NULL && rec->n_sources < PM_METAL_BUILD_MAX_OBJS) {
-            snprintf(rec->src_paths[rec->n_sources], PM_METAL_BUILD_MAX_SRC_PATH,
-                "%s", unit->sources[obj_i]);
-            rec->obj_lens[rec->n_sources] = (uint32_t)mpy_len;
-            rec->n_sources++;
+        /* record the mpy lengths like object lengths (audit trail). One lock
+         * section per source: pick + one path/len pair — the record stays
+         * consistent for pane readers on other cores. First source
+         * publishes valid; later sources only append fields. */
+        {
+            pm_metal_build_ctx_t *rctx = build_ctx_acquire();
+            if (rctx != NULL) {
+                pm_util_lock_acquire(&rctx->lock);
+                rec = record_slot_acquire_locked(unit->fqn);
+                if (rec != NULL && rec->n_sources < PM_METAL_BUILD_MAX_OBJS) {
+                    snprintf(rec->src_paths[rec->n_sources],
+                        PM_METAL_BUILD_MAX_SRC_PATH, "%s", unit->sources[obj_i]);
+                    rec->obj_lens[rec->n_sources] = (uint32_t)mpy_len;
+                    rec->n_sources++;
+                }
+                record_publish_locked(rec);
+                pm_util_lock_release(&rctx->lock);
+            }
         }
     }
     if (artifact->bytes == NULL) {
@@ -2986,7 +3084,7 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
                 }
             }
             {
-                uint64_t t0 = pm_metal_async_mono_us();
+                uint64_t t0 = pm_metal_coop_mono_us();
                 build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_START,
                     copts_target, unit->fqn,
                     unit->sources[obj_i], 0, 0);
@@ -2998,13 +3096,13 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
                     build_event_emit(PM_METAL_BUILD_EVENT_UNIT_FAIL,
                         copts_target, unit->fqn,
                         unit->sources[obj_i],
-                        (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu), 0);
+                        (uint32_t)((pm_metal_coop_mono_us() - t0) & 0xffffffffu), 0);
                     return PM_METAL_BUILD_ERR_COMPILE;
                 }
                 build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_END,
                     copts_target, unit->fqn,
                     unit->sources[obj_i],
-                    (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu),
+                    (uint32_t)((pm_metal_coop_mono_us() - t0) & 0xffffffffu),
                     (uint32_t)lens[n_objs]);
             }
             compiled_srcs[n_objs] = unit->sources[obj_i];
@@ -3017,47 +3115,58 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
     }
 
     {
-        uint64_t t0 = pm_metal_async_mono_us();
+        uint64_t t0 = pm_metal_coop_mono_us();
         rc = pm_metal_build_link(arena, unit, objs, lens, n_objs,
             artifact, errbuf, errbuf_len);
         if (rc != PM_METAL_BUILD_OK) {
             build_event_emit(PM_METAL_BUILD_EVENT_UNIT_FAIL,
                 copts_target, unit->fqn, "link",
-                (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu), 0);
+                (uint32_t)((pm_metal_coop_mono_us() - t0) & 0xffffffffu), 0);
             return rc;
         }
         build_event_emit(PM_METAL_BUILD_EVENT_LINK_END,
             copts_target, unit->fqn, NULL,
-            (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu),
+            (uint32_t)((pm_metal_coop_mono_us() - t0) & 0xffffffffu),
             artifact->len);
     }
 
     /* provenance record: source paths + object lengths + linked symbols.
      * Best-effort — a record overflow truncates the lists, never fails the
-     * build (the artifact is the product; the record is the audit trail). */
-    rec = record_slot_acquire(unit->fqn);
-    if (rec != NULL) {
-        uint32_t cap = n_objs;
-        if (cap > PM_METAL_BUILD_MAX_OBJS) {
-            cap = PM_METAL_BUILD_MAX_OBJS;
-        }
-        for (i = 0; i < cap; i++) {
-            snprintf(rec->src_paths[i], PM_METAL_BUILD_MAX_SRC_PATH, "%s",
-                compiled_srcs[i]);
-            rec->obj_lens[i] = (uint32_t)lens[i];
-        }
-        rec->n_sources = cap;
+     * build (the artifact is the product; the record is the audit trail).
+     * The whole write block is one ctx-lock section (pick, fields, sym
+     * walk, valid publish) — the /build pane may read the table on
+     * another core mid-walk. */
+    {
+        pm_metal_build_ctx_t *rctx = build_ctx_acquire();
+        if (rctx != NULL) {
+            pm_util_lock_acquire(&rctx->lock);
+            rec = record_slot_acquire_locked(unit->fqn);
+            if (rec != NULL) {
+                uint32_t cap = n_objs;
+                if (cap > PM_METAL_BUILD_MAX_OBJS) {
+                    cap = PM_METAL_BUILD_MAX_OBJS;
+                }
+                for (i = 0; i < cap; i++) {
+                    snprintf(rec->src_paths[i], PM_METAL_BUILD_MAX_SRC_PATH, "%s",
+                        compiled_srcs[i]);
+                    rec->obj_lens[i] = (uint32_t)lens[i];
+                }
+                rec->n_sources = cap;
 #ifdef PM_METAL_BUILD_HAS_ELF
-        {
-            pm_build_rec_sym_ctx_t sctx;
-            sctx.r = rec;
-            sctx.w = 0;
-            mp_wasm_elf_foreach_func(
-                (const mp_wasm_elf_image_t *)artifact->bytes,
-                record_sym_cb, &sctx);
-            rec->n_syms = sctx.w;
-        }
+                {
+                    pm_build_rec_sym_ctx_t sctx;
+                    sctx.r = rec;
+                    sctx.w = 0;
+                    mp_wasm_elf_foreach_func(
+                        (const mp_wasm_elf_image_t *)artifact->bytes,
+                        record_sym_cb, &sctx);
+                    rec->n_syms = sctx.w;
+                }
 #endif
+                record_publish_locked(rec);
+            }
+            pm_util_lock_release(&rctx->lock);
+        }
     }
     build_event_emit(PM_METAL_BUILD_EVENT_UNIT_END,
         copts_target, unit->fqn, NULL,
@@ -3145,10 +3254,16 @@ static void at_fill_doc(pm_metal_build_at_info_t *info) {
     }
 }
 
-/* notes from our own ledger (raw JSONL lines, target = fqn). */
-static void at_fill_notes(pm_metal_build_at_info_t *info) {
-    int32_t rc = pm_metal_build_notes_query(info->fqn, -1,
+/* notes from our own ledger (raw JSONL lines, target = fqn). Runs under
+ * the caller's ctx lock when called from the at() fill — see
+ * notes_query_locked, the lock-free body shared with the export face. */
+static int32_t at_fill_notes_impl(pm_metal_build_at_info_t *info) {
+    return pm_metal_build_notes_query_locked(info->fqn, -1,
         info->notes, sizeof(info->notes), &info->n_notes);
+}
+
+static void at_fill_notes(pm_metal_build_at_info_t *info) {
+    int32_t rc = at_fill_notes_impl(info);
     if (rc < 0) {
         info->n_notes = 0;
     }
@@ -3199,6 +3314,13 @@ pm_metal_build_at_handle_t pm_metal_build_at(const char *fqn, const char *name) 
         return PM_METAL_BUILD_AT_NONE;
     }
 
+    /* slot pick under the ctx lock: the epoch round-robin + memset + fill
+     * + valid publish are one atomic slot transition — a concurrent
+     * at_info/at_ast on another core sees either the old slot or the
+     * fully-filled one, never a half-written reuse. The fills below call
+     * record_find/notes_query/deps fill, none of which take the ctx lock
+     * (they only read shared scratch), so the section cannot nest. */
+    pm_util_lock_acquire(&ctx->lock);
     slot = &ctx->at[ctx->at_epoch % PM_METAL_BUILD_AT_SLOTS];
     ctx->at_epoch++;
     memset(slot, 0, sizeof(*slot));
@@ -3251,8 +3373,11 @@ pm_metal_build_at_handle_t pm_metal_build_at(const char *fqn, const char *name) 
         /* card-level: no doc face, but the manifest may carry one */
     }
 
-    /* provenance: the build record (present when fqn was unit_compiled) */
-    rec = pm_metal_build_record_find(fqn);
+    /* provenance: the build record (present when fqn was unit_compiled).
+     * record_slot is the lock-free matcher — this whole fill runs under the
+     * ctx lock (the at() critical section), so the exported record_find
+     * (which takes the lock itself) must not be used here. */
+    rec = record_slot(fqn);
     if (rec != NULL) {
         info->has_record = 1;
         info->n_sources = rec->n_sources;
@@ -3262,6 +3387,7 @@ pm_metal_build_at_handle_t pm_metal_build_at(const char *fqn, const char *name) 
     at_fill_notes(info);
     at_fill_deps(info);
     slot->valid = 1;
+    pm_util_lock_release(&ctx->lock);
     return (pm_metal_build_at_handle_t)((uintptr_t)(slot - ctx->at) + 1u);
 }
 
@@ -3275,10 +3401,16 @@ int32_t pm_metal_build_at_info(pm_metal_build_at_handle_t handle,
         return -1;
     }
     slot = &ctx->at[handle - 1u];
+    /* copy under the ctx lock: the epoch round-robin may be mid-reuse of
+     * this slot on another core (4 slots, high-churn panes) — the lock
+     * makes the copy see one whole slot generation */
+    pm_util_lock_acquire(&ctx->lock);
     if (!slot->valid) {
+        pm_util_lock_release(&ctx->lock);
         return -1;
     }
     *info = slot->info;
+    pm_util_lock_release(&ctx->lock);
     return 0;
 }
 
@@ -3292,10 +3424,13 @@ int32_t pm_metal_build_at_ast(pm_metal_build_at_handle_t handle,
         return -1;
     }
     slot = &ctx->at[handle - 1u];
+    pm_util_lock_acquire(&ctx->lock);
     if (!slot->valid) {
+        pm_util_lock_release(&ctx->lock);
         return -1;
     }
     lang = slot->info.lang[0] != 0 ? slot->info.lang : "c";
+    pm_util_lock_release(&ctx->lock);
     if (lang_out != NULL && lang_max > 0) {
         snprintf(lang_out, lang_max, "%s", lang);
     }
@@ -3355,7 +3490,7 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_at_ast, pm_metal_build_at
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_submit, pm_metal_build_actor_submit,
     int32_t(const pm_metal_build_unit_t *, const pm_metal_build_compile_opts_t *, pm_metal_build_actor_job_t **, char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_step, pm_metal_build_actor_step,
-    pm_metal_async_status_t(pm_metal_build_actor_job_t *));
+    pm_metal_coop_status_t(pm_metal_build_actor_job_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_run, pm_metal_build_actor_run,
     int32_t(pm_metal_build_actor_job_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_actor_cancel, pm_metal_build_actor_cancel,
@@ -3407,7 +3542,7 @@ typedef struct pm_build_actor {
 
 static pm_build_actor_t s_actor;    /* zero-state: lock word 0 = unlocked */
 
-static pm_metal_async_status_t actor_job_step(pm_metal_async_coro_t *self);
+static pm_metal_coop_status_t actor_job_step(pm_metal_coop_coro_t *self);
 
 /* Deep-copy one unit into the boot arena (submit's contract: the job must
  * outlive the caller's arena, so no field may point into it). */
@@ -3478,7 +3613,7 @@ int32_t pm_metal_build_actor_submit(
     const pm_metal_build_unit_t *unit,
     const pm_metal_build_compile_opts_t *opts,
     pm_metal_build_actor_job_t **job_out, char *errbuf, size_t errbuf_len) {
-    pm_util_mem_arena_t *arena = pm_metal_async_arena();
+    pm_util_mem_arena_t *arena = pm_metal_coop_arena();
     pm_metal_build_actor_job_t *job;
     pm_build_actor_t *a = &s_actor;
     const char *unit_root;
@@ -3662,7 +3797,7 @@ static void actor_scratch_free(pm_util_mem_arena_t *arena,
 }
 
 static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
-    pm_util_mem_arena_t *arena = pm_metal_async_arena();
+    pm_util_mem_arena_t *arena = pm_metal_coop_arena();
     const pm_metal_src_card_t *c = pm_metal_src_find(job->unit.fqn);
     uint8_t **objs = NULL;
     size_t *lens = NULL;
@@ -3782,7 +3917,7 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
             continue;
         }
         {
-            uint64_t t0 = pm_metal_async_mono_us();
+            uint64_t t0 = pm_metal_coop_mono_us();
             build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_START,
                 (uint16_t)(job->target & 0xffffu), job->unit.fqn,
                 job->unit.sources[job->next_src], 0, 0);
@@ -3795,7 +3930,7 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
                 build_event_emit(PM_METAL_BUILD_EVENT_UNIT_FAIL,
                     (uint16_t)(job->target & 0xffffu), job->unit.fqn,
                     job->unit.sources[job->next_src],
-                    (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu), 0);
+                    (uint32_t)((pm_metal_coop_mono_us() - t0) & 0xffffffffu), 0);
                 actor_scratch_free(arena, objs, lens, compiled_srcs,
                     all_includes, n_joined_includes, all_defines, n_objs);
                 return PM_METAL_BUILD_ERR_COMPILE;
@@ -3803,7 +3938,7 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
             build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_END,
                 (uint16_t)(job->target & 0xffffu), job->unit.fqn,
                 job->unit.sources[job->next_src],
-                (uint32_t)((pm_metal_async_mono_us() - t0) & 0xffffffffu),
+                (uint32_t)((pm_metal_coop_mono_us() - t0) & 0xffffffffu),
                 (uint32_t)lens[n_objs]);
         }
         compiled_srcs[n_objs] = job->unit.sources[job->next_src];
@@ -3821,30 +3956,39 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
     if (rc == PM_METAL_BUILD_OK) {
         /* provenance record (same shape as unit_compile) — written before
          * the scratch free: rec->src_paths/obj_lens copy out of
-         * compiled_srcs/lens, they must still be alive here */
-        pm_metal_build_record_t *rec = record_slot_acquire(job->unit.fqn);
-        if (rec != NULL) {
-            uint32_t cap = n_objs;
-            if (cap > PM_METAL_BUILD_MAX_OBJS) {
-                cap = PM_METAL_BUILD_MAX_OBJS;
-            }
-            for (i = 0; i < cap; i++) {
-                snprintf(rec->src_paths[i], PM_METAL_BUILD_MAX_SRC_PATH, "%s",
-                    compiled_srcs[i]);
-                rec->obj_lens[i] = (uint32_t)lens[i];
-            }
-            rec->n_sources = cap;
+         * compiled_srcs/lens, they must still be alive here. One ctx-lock
+         * section (pick, fields, sym walk, publish): the actor's job may
+         * run on any core while a pane reads the table. */
+        pm_metal_build_ctx_t *rctx = build_ctx_acquire();
+        if (rctx != NULL) {
+            pm_metal_build_record_t *rec;
+            pm_util_lock_acquire(&rctx->lock);
+            rec = record_slot_acquire_locked(job->unit.fqn);
+            if (rec != NULL) {
+                uint32_t cap = n_objs;
+                if (cap > PM_METAL_BUILD_MAX_OBJS) {
+                    cap = PM_METAL_BUILD_MAX_OBJS;
+                }
+                for (i = 0; i < cap; i++) {
+                    snprintf(rec->src_paths[i], PM_METAL_BUILD_MAX_SRC_PATH, "%s",
+                        compiled_srcs[i]);
+                    rec->obj_lens[i] = (uint32_t)lens[i];
+                }
+                rec->n_sources = cap;
 #ifdef PM_METAL_BUILD_HAS_ELF
-            {
-                pm_build_rec_sym_ctx_t sctx;
-                sctx.r = rec;
-                sctx.w = 0;
-                mp_wasm_elf_foreach_func(
-                    (const mp_wasm_elf_image_t *)job->artifact.bytes,
-                    record_sym_cb, &sctx);
-                rec->n_syms = sctx.w;
-            }
+                {
+                    pm_build_rec_sym_ctx_t sctx;
+                    sctx.r = rec;
+                    sctx.w = 0;
+                    mp_wasm_elf_foreach_func(
+                        (const mp_wasm_elf_image_t *)job->artifact.bytes,
+                        record_sym_cb, &sctx);
+                    rec->n_syms = sctx.w;
+                }
 #endif
+                record_publish_locked(rec);
+            }
+            pm_util_lock_release(&rctx->lock);
         }
     }
     /* the artifact owns its bytes (mmap'd image or loader handles) — the
@@ -3856,7 +4000,7 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
     return rc;
 }
 
-static pm_metal_async_status_t actor_job_step(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t actor_job_step(pm_metal_coop_coro_t *self) {
     pm_metal_build_actor_job_t *job =
         (pm_metal_build_actor_job_t *)self;
     pm_build_actor_t *a = &s_actor;
@@ -3902,7 +4046,7 @@ static pm_metal_async_status_t actor_job_step(pm_metal_async_coro_t *self) {
     return PM_METAL_ASYNC_DONE;
 }
 
-pm_metal_async_status_t pm_metal_build_actor_step(pm_metal_build_actor_job_t *job) {
+pm_metal_coop_status_t pm_metal_build_actor_step(pm_metal_build_actor_job_t *job) {
     if (job == NULL) {
         return PM_METAL_ASYNC_ERROR;
     }
@@ -3910,7 +4054,7 @@ pm_metal_async_status_t pm_metal_build_actor_step(pm_metal_build_actor_job_t *jo
 }
 
 int32_t pm_metal_build_actor_run(pm_metal_build_actor_job_t *job) {
-    pm_metal_async_status_t st;
+    pm_metal_coop_status_t st;
     uint32_t guard = 0;
 
     if (job == NULL) {
@@ -3931,7 +4075,7 @@ int32_t pm_metal_build_actor_run(pm_metal_build_actor_job_t *job) {
          * runner so the holder (and the rest of the ring) makes progress;
          * re-check with a bounded guard so a wedged holder cannot spin us
          * forever. This face is the documented blocking actor call. */
-        pm_metal_async_poll();
+        pm_metal_coop_poll();
         guard++;
         if (guard > 10000000u) {
             err_set(job->err, sizeof(job->err),
@@ -3978,7 +4122,7 @@ int32_t pm_metal_build_actor_release(pm_metal_build_actor_job_t *job) {
          * releasing it would leave a dangling pointer in q[] */
         return PM_METAL_BUILD_ERR_BUSY;
     }
-    arena = pm_metal_async_arena();
+    arena = pm_metal_coop_arena();
     if (arena == NULL) {
         return PM_METAL_BUILD_ERR_NOMEM;
     }

@@ -68,12 +68,12 @@ struct pm_util_lock_t {
 }
 
 #[repr(C)]
-struct pm_metal_async_coro_t {
+struct pm_metal_coop_coro_t {
     _opaque: [u8; 0],
 }
 
 #[repr(C)]
-struct pm_metal_async_task_t {
+struct pm_metal_coop_task_t {
     _opaque: [u8; 0],
 }
 
@@ -87,17 +87,17 @@ unsafe extern "C" {
     fn pm_metal_net_ip_accept(fd: i32) -> i32;
     fn pm_metal_net_ip_send(fd: i32, buf: *const u8, len: u32) -> i32;
     fn pm_metal_net_ip_recv(fd: i32, buf: *mut u8, len: u32) -> i32;
-    fn pm_metal_async_coro_create(
-        step: unsafe extern "C" fn(*mut pm_metal_async_coro_t) -> i32,
+    fn pm_metal_coop_coro_create(
+        step: unsafe extern "C" fn(*mut pm_metal_coop_coro_t) -> i32,
         frame_bytes: usize,
-    ) -> *mut pm_metal_async_coro_t;
-    fn pm_metal_async_create_task(coro: *mut pm_metal_async_coro_t) -> *mut pm_metal_async_task_t;
+    ) -> *mut pm_metal_coop_coro_t;
+    fn pm_metal_coop_create_task(coro: *mut pm_metal_coop_coro_t) -> *mut pm_metal_coop_task_t;
     fn pm_metal_services_register(rec: *const pm_metal_service_t) -> i32;
     fn pm_util_lock_acquire(l: *mut pm_util_lock_t);
     fn pm_util_lock_release(l: *mut pm_util_lock_t);
-    fn pm_metal_async_current_task() -> *mut pm_metal_async_task_t;
-    fn pm_metal_async_post_task(t: *mut pm_metal_async_task_t) -> i32;
-    fn pm_metal_async_sleep_us(co: *mut pm_metal_async_coro_t, us: u64) -> i32;
+    fn pm_metal_coop_current_task() -> *mut pm_metal_coop_task_t;
+    fn pm_metal_coop_post_task(t: *mut pm_metal_coop_task_t) -> i32;
+    fn pm_metal_coop_sleep_us(co: *mut pm_metal_coop_coro_t, us: u64) -> i32;
 }
 
 /// C mirror of `pm_metal_service_t` (services __types__.h). The asgi RS card
@@ -239,7 +239,7 @@ struct Defer {
     path: [u8; 160],
     /* The parked coroutine's task. A WAITING task only runs again when someone
      * posts it back to the ready ring, so the reply must do exactly that. */
-    waiter: *mut pm_metal_async_task_t,
+    waiter: *mut pm_metal_coop_task_t,
 }
 
 static DEFERS: Mut<[Defer; MAX_DEFER]> = Mut(UnsafeCell::new([Defer {
@@ -714,7 +714,7 @@ fn defer_enqueue(conn: u32, path: *const u8, plen: usize) -> bool {
             d.used = true;
             d.taken = false;
             d.conn = conn;
-            d.waiter = pm_metal_async_current_task();
+            d.waiter = pm_metal_coop_current_task();
             let mut k = 0usize;
             while k < 160 {
                 d.path[k] = 0;
@@ -838,7 +838,7 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_reply_ct(
                 }
                 *DEFER_CUR.0.get() = -1;
                 if !waiter.is_null() {
-                    pm_metal_async_post_task(waiter);
+                    pm_metal_coop_post_task(waiter);
                 }
                 rc = 0;
             }
@@ -1029,7 +1029,7 @@ fn put_u64(dst: *mut u8, mut v: u64) -> usize {
     o
 }
 
-/// Must match `struct pm_metal_async_coro` in async/__types__.h.
+/// Must match `struct pm_metal_coop_coro` in async/__types__.h.
 #[repr(C)]
 struct CoroHead {
     step: *mut c_void,
@@ -1046,7 +1046,7 @@ struct ConnFrame {
     slot: u32,
 }
 
-    unsafe extern "C" fn step_conn_frame(self_: *mut pm_metal_async_coro_t) -> i32 {
+    unsafe extern "C" fn step_conn_frame(self_: *mut pm_metal_coop_coro_t) -> i32 {
     let f = self_ as *mut ConnFrame;    let slot = unsafe { (*f).slot as usize };
     if slot >= MAX_CONN {
         return ERROR;
@@ -1112,7 +1112,7 @@ struct ConnFrame {
                 c.step = 1;
             } else {
                 c.step = 3;
-                return unsafe { pm_metal_async_sleep_us(self_, DEFER_SLICE_US) };
+                return unsafe { pm_metal_coop_sleep_us(self_, DEFER_SLICE_US) };
             }
         } else {
             build_hdr(c, pbuf.as_ptr(), plen);
@@ -1124,7 +1124,7 @@ struct ConnFrame {
         if !c.defer_ready {
             c.defer_waits += 1;
             if c.defer_waits <= DEFER_MAX_WAITS {
-                return unsafe { pm_metal_async_sleep_us(self_, DEFER_SLICE_US) };
+                return unsafe { pm_metal_coop_sleep_us(self_, DEFER_SLICE_US) };
             }
             /* Nobody is draining the queue (no render pump running). Drop the
              * request from the queue and say so instead of hanging the client. */
@@ -1275,14 +1275,14 @@ fn spawn_conn(fd: i32) -> i32 {
             defer_waits: 0,
             defer_ready: false,
         };
-        let coro = pm_metal_async_coro_create(step_conn_frame, core::mem::size_of::<ConnFrame>());
+        let coro = pm_metal_coop_coro_create(step_conn_frame, core::mem::size_of::<ConnFrame>());
         if coro.is_null() {
             c.used = false;
             pm_metal_net_ip_close(fd);
             return -1;
         }
         (*(coro as *mut ConnFrame)).slot = slot as u32;
-        if pm_metal_async_create_task(coro).is_null() {
+        if pm_metal_coop_create_task(coro).is_null() {
             c.used = false;
             pm_metal_net_ip_close(fd);
             return -1;
@@ -1321,7 +1321,7 @@ unsafe fn listen_same(slot: usize, addr: u32, port: u16) -> bool {
     }
 }
 
-unsafe extern "C" fn step_listen(self_: *mut pm_metal_async_coro_t) -> i32 {
+unsafe extern "C" fn step_listen(self_: *mut pm_metal_coop_coro_t) -> i32 {
     let f = self_ as *mut ListenFrame;
     let slot = unsafe { (*f).slot as usize };
     if slot >= MAX_ASGI {
@@ -1674,8 +1674,8 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_listen(addr: u32, port: u16) -> 
             }
             listen_at_set(slot, fd);
             listen_addr_set(slot, addr, port);
-            let coro = pm_metal_async_coro_create(step_listen, core::mem::size_of::<ListenFrame>());
-            if coro.is_null() || pm_metal_async_create_task(coro).is_null() {
+            let coro = pm_metal_coop_coro_create(step_listen, core::mem::size_of::<ListenFrame>());
+            if coro.is_null() || pm_metal_coop_create_task(coro).is_null() {
                 pm_metal_net_ip_close(fd);
                 listen_at_set(slot, -1);
                 return -1;

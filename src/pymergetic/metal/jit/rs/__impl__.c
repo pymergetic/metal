@@ -8,7 +8,7 @@
 
 #include "pymergetic/metal/jit/rs/__exports__.h"
 
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/boot/externals.h"
 #include "pymergetic/metal/jit/c.h"
 #include "pymergetic/util/mem.h"
@@ -22,7 +22,7 @@
 #define PM_METAL_JIT_RS_WASM_CAP  (256u * 1024u)
 
 typedef struct {
-    pm_metal_async_coro_t coro;
+    pm_metal_coop_coro_t coro;
     pm_metal_jit_rs_result_t result;
     char errbuf[PM_METAL_JIT_RS_ERR_MAX];
     char cbuf[PM_METAL_JIT_RS_C_CAP];
@@ -119,7 +119,7 @@ static int pm_metal_jit_rs_tcc_wasm_compile(
     pm_util_mem_arena_t *a;
     (void)c_len;
 
-    a = pm_metal_async_arena();
+    a = pm_metal_coop_arena();
     if (!a) return -1;
     if (pm_metal_jit_c_arena_acquire(a) != 0) return -1;
 
@@ -170,7 +170,7 @@ static int pm_metal_jit_rs_tcc_wasm_compile(
 
 /* ---- Public API ---- */
 
-pm_metal_async_coro_t *pm_metal_jit_rs_compile_alloc(
+pm_metal_coop_coro_t *pm_metal_jit_rs_compile_alloc(
     pm_util_mem_arena_t *arena,
     const char *source,
     size_t source_len,
@@ -188,7 +188,7 @@ pm_metal_async_coro_t *pm_metal_jit_rs_compile_alloc(
         return NULL;
     }
     frame_bytes = sizeof(*f) + source_len + name_len + 1u;
-    f = (pm_metal_jit_rs_frame_t *)pm_metal_async_coro_create(
+    f = (pm_metal_jit_rs_frame_t *)pm_metal_coop_coro_create(
         pm_metal_jit_rs_compile_step, frame_bytes);
     if (f == NULL) {
         return NULL;
@@ -213,7 +213,7 @@ void pm_metal_jit_rs_result_free(pm_util_mem_arena_t *arena, pm_metal_jit_rs_res
     (void)r;
 }
 
-pm_metal_async_status_t pm_metal_jit_rs_compile_step(pm_metal_async_coro_t *self) {
+pm_metal_coop_status_t pm_metal_jit_rs_compile_step(pm_metal_coop_coro_t *self) {
     pm_metal_jit_rs_frame_t *f;
     pm_metal_jit_rs_result_t *r;
     size_t c_len = 0;
@@ -271,9 +271,9 @@ pm_metal_async_status_t pm_metal_jit_rs_compile_step(pm_metal_async_coro_t *self
 #include "pymergetic/wasmmod/guest.h"
 
 PM_MOD_EXPORT_C(pymergetic.metal.jit.rs, pm_metal_jit_rs_compile_alloc, pm_metal_jit_rs_compile_alloc,
-    pm_metal_async_coro_t *(pm_util_mem_arena_t *, const char *, size_t, const char *));
+    pm_metal_coop_coro_t *(pm_util_mem_arena_t *, const char *, size_t, const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.jit.rs, pm_metal_jit_rs_compile_step, pm_metal_jit_rs_compile_step,
-    pm_metal_async_status_t(pm_metal_async_coro_t *));
+    pm_metal_coop_status_t(pm_metal_coop_coro_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.jit.rs, pm_metal_jit_rs_result_free, pm_metal_jit_rs_result_free,
     void(pm_util_mem_arena_t *, pm_metal_jit_rs_result_t *));
 

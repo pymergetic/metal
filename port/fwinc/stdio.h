@@ -42,7 +42,7 @@ int fputs(const char *s, void *stream);
  * object files through FILE* (fdopen/fwrite/fputc/fclose in
  * tcc_write_elf_file) and jit.c reads them back with fopen/fread. This layer
  * serves exactly those calls, backed by one growable arena buffer per
- * stream. All bytes come from the boot arena (pm_metal_async_arena), so
+ * stream. All bytes come from the boot arena (pm_metal_coop_arena), so
  * they die with the arena — this is compile scratch, not a general fs.
  *
  * open() hands out a small integer fd into the layer's table;

@@ -9,7 +9,7 @@
 #ifndef PYMERGETIC_METAL_JIT_PY_TYPES_H
 #define PYMERGETIC_METAL_JIT_PY_TYPES_H
 
-#include "pymergetic/metal/async/__types__.h"
+#include "pymergetic/metal/coop/__types__.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -40,14 +40,14 @@ struct pm_metal_jit_py_result {
  * allocated from the caller's arena. The coroutine frame must embed the
  * source bytes and module_name. DONE means the module is in sys.modules;
  * ERROR means compilation failed (see result->error). */
-pm_metal_async_status_t pm_metal_jit_py_compile_step(pm_metal_async_coro_t *self);
+pm_metal_coop_status_t pm_metal_jit_py_compile_step(pm_metal_coop_coro_t *self);
 
 /* Free a result struct and its owned strings via the arena. */
 void pm_metal_jit_py_result_free(pm_util_mem_arena_t *arena, pm_metal_jit_py_result_t *r);
 
 /* Allocate a compile frame. source + module_name are copied into the frame;
  * caller keeps ownership of the original buffers. */
-pm_metal_async_coro_t *pm_metal_jit_py_compile_alloc(
+pm_metal_coop_coro_t *pm_metal_jit_py_compile_alloc(
     pm_util_mem_arena_t *arena,
     const char *source,
     size_t source_len,

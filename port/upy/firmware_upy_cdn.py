@@ -38,6 +38,26 @@ if st != 200 or 'decision' not in body:
     raise RuntimeError("changes ledger")
 print("upy changes ledger")
 
+# Factory floor panes on the firmware seat: the events ring answers (empty -
+# no in-kernel rebuild fill here, so nothing ever emits) and a rebuild POST
+# answers the honest refusal WITHOUT dirtying the ring. Same faces as unix;
+# the fill differs. The TCC object probes below prove the cross lanes that
+# this seat CAN do; the full rebuild chain is the unix fill's.
+st = inspect.handle("GET", "/build/events?since=0")
+body = inspect.body()
+if st != 200 or '"latest":' not in body or '"events":[' not in body:
+    raise RuntimeError("build events pane")
+print("upy build events pane")
+st = inspect.handle("POST", "/build/pymergetic.metal.util.ascii")
+body = inspect.body()
+if st != 200 or '"rebuild":"refused"' not in body:
+    raise RuntimeError("build refuse")
+st = inspect.handle("GET", "/build/events?since=0")
+body = inspect.body()
+if st != 200 or '"latest":0' not in body:
+    raise RuntimeError("build events refused ring")
+print("upy build refuse keeps ring empty")
+
 # metal.edit C editor (Phase 12): parse/locate/set_define on the firmware seat
 # - the editor is resident C, so the span splice works on arena memory with no
 # POSIX. The write-back gate (no note -> refusal) is the card contract.

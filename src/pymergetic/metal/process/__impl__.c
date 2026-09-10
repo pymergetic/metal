@@ -5,7 +5,7 @@
  * the boot arena in one shot. */
 #include "pymergetic/metal/process/__exports__.h"
 
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/boot/tree.h"
 #include "pymergetic/util/mem.h"
 
@@ -15,7 +15,7 @@ struct slot {
     struct slot *next;
     uint32_t used;
     int32_t pid;
-    pm_metal_async_task_t *task;
+    pm_metal_coop_task_t *task;
     pm_util_mem_arena_t *arena; /* NULL until a budget is set */
     void *backing;             /* boot-arena block the sub-arena runs on */
     size_t cap;                /* sub-arena size in bytes (== budget) */
@@ -103,7 +103,7 @@ int32_t pm_metal_process_at(int32_t i) {
 }
 
 int32_t pm_metal_process_current(void) {
-    return (int32_t)pm_metal_async_process_id();
+    return (int32_t)pm_metal_coop_process_id();
 }
 
 static struct slot *find_slot(int32_t pid) {
@@ -137,7 +137,7 @@ static void slot_budget_drop(struct slot *s) {
     s->cap = 0;
 }
 
-static int32_t crown_task(pm_metal_async_task_t *t) {
+static int32_t crown_task(pm_metal_coop_task_t *t) {
     struct slot *s;
     int32_t pid;
     if (s_arena == NULL || t == NULL || t->pid != 0u) {
@@ -170,11 +170,11 @@ static int32_t crown_task(pm_metal_async_task_t *t) {
 }
 
 int32_t pm_metal_process_crown(void) {
-    return crown_task(pm_metal_async_current_task());
+    return crown_task(pm_metal_coop_current_task());
 }
 
 /* Park once. Do not yield_park (that re-queues and spins the SMP ring). */
-static pm_metal_async_status_t idle_step(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t idle_step(pm_metal_coop_coro_t *self) {
     if (self == NULL) {
         return PM_METAL_ASYNC_ERROR;
     }
@@ -186,16 +186,16 @@ static pm_metal_async_status_t idle_step(pm_metal_async_coro_t *self) {
 }
 
 int32_t pm_metal_process_spawn(void) {
-    pm_metal_async_coro_t *c;
-    pm_metal_async_task_t *t;
-    if (s_arena == NULL || !pm_metal_async_ready()) {
+    pm_metal_coop_coro_t *c;
+    pm_metal_coop_task_t *t;
+    if (s_arena == NULL || !pm_metal_coop_ready()) {
         return -1;
     }
-    c = pm_metal_async_coro_create(idle_step, sizeof(*c));
+    c = pm_metal_coop_coro_create(idle_step, sizeof(*c));
     if (c == NULL) {
         return -1;
     }
-    t = pm_metal_async_create_task(c);
+    t = pm_metal_coop_create_task(c);
     if (t == NULL) {
         return -1;
     }
@@ -350,7 +350,7 @@ int32_t pm_metal_process_up(void) {
     if (pid < 1 || pm_metal_process_count() != n0 + 1) {
         return -1;
     }
-    pm_metal_async_poll();
+    pm_metal_coop_poll();
     if (pm_metal_process_quit(pid) != 0 || pm_metal_process_count() != n0) {
         return -1;
     }
@@ -375,5 +375,5 @@ PM_MOD_EXPORT_C(pymergetic.metal.process, pm_metal_process_budget_set, pm_metal_
 PM_MOD_EXPORT_C(pymergetic.metal.process, pm_metal_process_budget_used, pm_metal_process_budget_used, int32_t(int32_t));
 
 PM_MOD_BOOT_C(pymergetic.metal.process, pm_metal_process_init, pm_metal_process_deinit);
-PM_MOD_BOOTDEP_C(pymergetic.metal.process, pymergetic.metal.async);
+PM_MOD_BOOTDEP_C(pymergetic.metal.process, pymergetic.metal.coop);
 PM_MOD_BOOTDEP_C(pymergetic.metal.process, pymergetic.metal.boot.tree);

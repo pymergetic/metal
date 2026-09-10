@@ -1,5 +1,5 @@
 /* pymergetic.metal.inspect — live registry JSON + ASGI fetch. */
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/inspect.h"
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/http/asgi.h"
@@ -165,7 +165,7 @@ static int32_t case_http(void) {
     if (pm_metal_net_http_asgi_listen(LO4, INSPECT_PORT) != 0) {
         return fail("listen");
     }
-    pm_metal_async_poll();
+    pm_metal_coop_poll();
     st = pm_metal_net_http_fetch("http://127.0.0.1:8090/inspect/self", &body, &n, err, sizeof(err));
     if (st != PM_WASMMOD_IO_OK) {
         return fail(err[0] ? err : "fetch self");

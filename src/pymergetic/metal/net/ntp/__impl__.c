@@ -1,7 +1,7 @@
 /* pymergetic.metal.net.ntp — SNTP (mode 3 query, mode 4 reply) on ip UDP. */
 #include "pymergetic/metal/net/ntp/__exports__.h"
 
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/ip.h"
 
 #include <string.h>
@@ -91,7 +91,7 @@ int32_t pm_metal_net_ntp_poll(void) {
 /* Wait for the reply while driving the wire, and serve our own socket so a
  * query aimed at this box can be answered by it. */
 static int32_t await_reply(int32_t fd, uint8_t *buf, uint32_t cap) {
-    uint64_t t0 = pm_metal_async_mono_us();
+    uint64_t t0 = pm_metal_coop_mono_us();
     uint32_t spins = 0;
     for (;;) {
         int32_t n = pm_metal_net_ip_recvfrom(fd, buf, cap, NULL, NULL);
@@ -102,7 +102,7 @@ static int32_t await_reply(int32_t fd, uint8_t *buf, uint32_t cap) {
         if (s_fd >= 0) {
             (void)pm_metal_net_ntp_poll();
         }
-        if (pm_metal_async_mono_us() - t0 > NTP_WAIT_US || ++spins > NTP_SPINS) {
+        if (pm_metal_coop_mono_us() - t0 > NTP_WAIT_US || ++spins > NTP_SPINS) {
             return -1;
         }
     }
@@ -129,7 +129,7 @@ int32_t pm_metal_net_ntp_query(uint32_t server_be, uint16_t server_port, uint32_
     q[0] = 0x1b; /* VN=3, mode=3 */
     /* Our transmit timestamp; the server echoes it as origin and that is what
      * tells this reply apart from a stray datagram. */
-    xmt = (uint32_t)(pm_metal_async_mono_us() & 0xffffffffu) | 1u;
+    xmt = (uint32_t)(pm_metal_coop_mono_us() & 0xffffffffu) | 1u;
     put_be32(q + 40, xmt);
     if (pm_metal_net_ip_sendto(fd, q, NTP_LEN, server_be, server_port) < 0) {
         (void)pm_metal_net_ip_close(fd);

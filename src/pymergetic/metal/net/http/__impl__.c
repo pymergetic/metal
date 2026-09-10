@@ -2,7 +2,7 @@
  * Strong pm_metal_wasm_io_* (overrides ports/metal weak DECLINE). https via net.tls. */
 #include "pymergetic/metal/net/http/__exports__.h"
 
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/dns.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/tls.h"
@@ -15,7 +15,7 @@
 const char *pm_wasmmod_net_cdn_session_id(void) __attribute__((weak));
 
 typedef struct {
-    pm_metal_async_coro_t coro;
+    pm_metal_coop_coro_t coro;
     uint32_t step;
     int32_t fd;
     uint32_t addr;
@@ -71,7 +71,7 @@ static void http_close_fd(pm_metal_http_fetch_t *f) {
     }
 }
 
-static pm_metal_async_status_t fetch_fail(pm_metal_http_fetch_t *f) {
+static pm_metal_coop_status_t fetch_fail(pm_metal_http_fetch_t *f) {
     f->err = 1;
     http_close_fd(f);
     return PM_METAL_ASYNC_ERROR;
@@ -210,7 +210,7 @@ static int32_t finish_body(pm_metal_http_fetch_t *f) {
     return 0;
 }
 
-static pm_metal_async_status_t step_fetch(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t step_fetch(pm_metal_coop_coro_t *self) {
     pm_metal_http_fetch_t *f = (pm_metal_http_fetch_t *)self;
     if (f->step == 0) {
         f->fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
@@ -363,7 +363,7 @@ static pm_wasmmod_io_result_t http_do(const char *method, const char *uri, const
         return PM_WASMMOD_IO_DECLINE;
     }
     pm_metal_http_fetch_t *f =
-        (pm_metal_http_fetch_t *)pm_metal_async_coro_create(step_fetch, sizeof(*f));
+        (pm_metal_http_fetch_t *)pm_metal_coop_coro_create(step_fetch, sizeof(*f));
     if (f == NULL) {
         err_set(errbuf, errbuf_len, "coro");
         return PM_WASMMOD_IO_ERR;
@@ -383,11 +383,11 @@ static pm_wasmmod_io_result_t http_do(const char *method, const char *uri, const
     f->req_body_len = body_len;
     f->ctype = ctype;
     f->fd = -1;
-    if (pm_metal_async_create_task(&f->coro) == NULL) {
+    if (pm_metal_coop_create_task(&f->coro) == NULL) {
         err_set(errbuf, errbuf_len, "task");
         return PM_WASMMOD_IO_ERR;
     }
-    if (pm_metal_async_run_until(&f->coro) != 0 || f->out == NULL) {
+    if (pm_metal_coop_run_until(&f->coro) != 0 || f->out == NULL) {
         err_set(errbuf, errbuf_len, "fetch failed");
         return PM_WASMMOD_IO_ERR;
     }

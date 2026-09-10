@@ -13,7 +13,7 @@
  * Output is a readiness map, not a prove: a card that fails here is data
  * (what the seat fill still misses), never a regression. Not registered,
  * not shipped — tools/ owns it, same posture as selfhost_feed.c. */
-#include "pymergetic/metal/async/__types__.h"
+#include "pymergetic/metal/coop/__types__.h"
 #include "pymergetic/metal/build/__types__.h"
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"

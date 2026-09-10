@@ -1,4 +1,4 @@
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
@@ -12,7 +12,7 @@ static int32_t test_compile_alloc(void) {
     if (!backing) return 1;
     pm_util_mem_arena_t *arena = pm_util_mem_arena_create(backing, 65536);
     if (!arena) { free(backing); return 2; }
-    pm_metal_async_coro_t *coro = pm_metal_jit_c_compile_alloc(
+    pm_metal_coop_coro_t *coro = pm_metal_jit_c_compile_alloc(
         arena, "int main(){return 0;}", 21, "test_c_module");
     if (!coro) { pm_util_mem_arena_destroy(arena); free(backing); return 3; }
     if (coro->step != pm_metal_jit_c_compile_step) {
@@ -27,10 +27,10 @@ static int32_t test_compile_real_c(void) {
     if (!backing) return 5;
     pm_util_mem_arena_t *arena = pm_util_mem_arena_create(backing, 65536);
     if (!arena) { free(backing); return 6; }
-    pm_metal_async_coro_t *coro = pm_metal_jit_c_compile_alloc(
+    pm_metal_coop_coro_t *coro = pm_metal_jit_c_compile_alloc(
         arena, "int main(){return 42;}", 22, "test_c_module");
     if (!coro) { pm_util_mem_arena_destroy(arena); free(backing); return 7; }
-    pm_metal_async_status_t st = pm_metal_jit_c_compile_step(coro);
+    pm_metal_coop_status_t st = pm_metal_jit_c_compile_step(coro);
 #if PM_HAS_TCC
     if (st != PM_METAL_ASYNC_DONE) { pm_util_mem_arena_destroy(arena); free(backing); return 8; }
 #else

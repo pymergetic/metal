@@ -9,7 +9,7 @@
 #ifndef PYMERGETIC_METAL_JIT_RS_TYPES_H
 #define PYMERGETIC_METAL_JIT_RS_TYPES_H
 
-#include "pymergetic/metal/async/__types__.h"
+#include "pymergetic/metal/coop/__types__.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -36,7 +36,7 @@ typedef struct pm_metal_jit_rs_result {
  *
  * When mrustc+TCC are linked, the compile chain is:
  *   Rust src → mrustc → C src → TCC/WASM → WASM bytes */
-pm_metal_async_coro_t *pm_metal_jit_rs_compile_alloc(
+pm_metal_coop_coro_t *pm_metal_jit_rs_compile_alloc(
     pm_util_mem_arena_t *arena,
     const char *source,
     size_t source_len,
@@ -44,7 +44,7 @@ pm_metal_async_coro_t *pm_metal_jit_rs_compile_alloc(
 
 /* Step the compile coroutine. One step = full mrustc→TCC→WASM pipeline.
  * Returns DONE on success, ERROR on failure. */
-pm_metal_async_status_t pm_metal_jit_rs_compile_step(pm_metal_async_coro_t *self);
+pm_metal_coop_status_t pm_metal_jit_rs_compile_step(pm_metal_coop_coro_t *self);
 
 /* Free the result and its owned strings via the arena. */
 void pm_metal_jit_rs_result_free(pm_util_mem_arena_t *arena, pm_metal_jit_rs_result_t *r);

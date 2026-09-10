@@ -4,7 +4,7 @@
  * the in-process OFFER server, which only ever talks to this box. */
 #include "pymergetic/metal/net/dhcp/__exports__.h"
 
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/net/dns.h"
 #include "pymergetic/metal/net/ip.h"
@@ -300,7 +300,7 @@ static uint32_t opt_params(uint8_t *q, uint32_t at) {
 
 /* Wait for a reply of this type carrying our xid, driving the wire meanwhile. */
 static int32_t await_reply(int32_t fd, uint32_t xid, uint8_t want, uint8_t *buf, uint32_t cap) {
-    uint64_t deadline = pm_metal_async_mono_us() + s_wait_us;
+    uint64_t deadline = pm_metal_coop_mono_us() + s_wait_us;
     uint32_t spins;
     for (spins = 0; spins < DHCP_SPINS; spins++) {
         int32_t n = pm_metal_net_ip_recvfrom(fd, buf, cap, NULL, NULL);
@@ -314,7 +314,7 @@ static int32_t await_reply(int32_t fd, uint32_t xid, uint8_t want, uint8_t *buf,
                 return -1;
             }
         }
-        if (pm_metal_async_mono_us() >= deadline) {
+        if (pm_metal_coop_mono_us() >= deadline) {
             break;
         }
         pm_metal_net_ip_pump();

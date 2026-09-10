@@ -1,7 +1,7 @@
 /* Host bench runner for metal. Benches register with PM_MOD_BENCH_C/RS!;
  * this binary boots, installs the monotonic clock fill, and walks the
  * registry — the same shape as host_test.c, but benches never gate. */
-#include "pymergetic/metal/async/__exports__.h"
+#include "pymergetic/metal/coop/__exports__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/registry.h"
@@ -13,7 +13,7 @@
 
 /* Default ops per bench. Tune so the measured lap outlives the clock tick;
  * a host clock is µs-granular and a 1M-op lap gives sub-ns/op resolution. The
- * metal clock is `pm_metal_async_mono_us`, so anything >= ~10k ops keeps the
+ * metal clock is `pm_metal_coop_mono_us`, so anything >= ~10k ops keeps the
  * 1000x multiply from truncation while still finishing fast. */
 static uint64_t bench_iters(void) {
     const char *s = getenv("WASMMOD_BENCH_ITERS");
@@ -93,7 +93,7 @@ int main(void) {
 
     /* Per-seat clock fill: metal's monotonic timer. Without it every bench
      * reports "no clock"; with it the registry owns warmup + measured lap. */
-    pm_wasmmod_registry_set_bench_clock(pm_metal_async_mono_us);
+    pm_wasmmod_registry_set_bench_clock(pm_metal_coop_mono_us);
 
     n = pm_wasmmod_registry_module_count();
     for (i = 0; i < n; i++) {

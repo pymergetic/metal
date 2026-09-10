@@ -9,7 +9,7 @@
 #ifndef PYMERGETIC_METAL_NET_IP_PRIV_H
 #define PYMERGETIC_METAL_NET_IP_PRIV_H
 
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/util/lock.h"
 #include "pymergetic/util/mem.h"
 
@@ -92,7 +92,7 @@ struct pm_metal_sock {
     uint32_t rx_addr_be;
     uint16_t rx_port;
     uint32_t peer_fin;
-    pm_metal_async_task_t *waiter;
+    pm_metal_coop_task_t *waiter;
     int32_t listen_fd;
     int32_t accept_q[PM_METAL_IP_ACCEPT_MAX];
     uint32_t accept_n;

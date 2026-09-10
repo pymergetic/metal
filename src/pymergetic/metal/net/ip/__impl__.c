@@ -6,7 +6,7 @@
 
 #include "pymergetic/metal/net/ip/__priv__.h"
 
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/dt.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/util/lock.h"
@@ -89,7 +89,7 @@ void pm_ip_pump_locked(void);
 
 void pm_ip_sock_wake(struct pm_metal_sock *s) {
     if (s->waiter != NULL) {
-        (void)pm_metal_async_post_task(s->waiter);
+        (void)pm_metal_coop_post_task(s->waiter);
         s->waiter = NULL;
     }
 }
@@ -580,7 +580,7 @@ int32_t pm_ip_accept_locked(int32_t fd) {
         return -1;
     }
     if (s->accept_n == 0) {
-        pm_metal_async_task_t *cur = pm_metal_async_current_task();
+        pm_metal_coop_task_t *cur = pm_metal_coop_current_task();
         if (cur != NULL) {
             s->waiter = cur;
             return -2;
@@ -625,7 +625,7 @@ int32_t pm_ip_connect_locked(int32_t fd, uint32_t addr_be, uint16_t port_host) {
     if (s->tcp_st == TCP_ESTAB) {
         return 1;
     }
-    pm_metal_async_task_t *cur = pm_metal_async_current_task();
+    pm_metal_coop_task_t *cur = pm_metal_coop_current_task();
     if (cur != NULL) {
         s->waiter = cur;
         return 0;
@@ -665,7 +665,7 @@ int32_t pm_ip_send_locked(int32_t fd, const uint8_t *buf, uint32_t len) {
     uint32_t in_flight = s->snd_nxt - s->snd_una;
     if (in_flight >= s->snd_wnd) {
         /* Park the sending coroutine; tcp_input wakes it when an ACK opens space. */
-        pm_metal_async_task_t *cur = pm_metal_async_current_task();
+        pm_metal_coop_task_t *cur = pm_metal_coop_current_task();
         if (cur != NULL) {
             s->waiter = cur;
         }
@@ -687,7 +687,7 @@ int32_t pm_ip_send_locked(int32_t fd, const uint8_t *buf, uint32_t len) {
      * at the runner level with no wake source and a large (streamed) body stalls
      * mid-transfer. Register here so tcp_input resumes it on the next ACK. */
     if (request > len) {
-        pm_metal_async_task_t *cur = pm_metal_async_current_task();
+        pm_metal_coop_task_t *cur = pm_metal_coop_current_task();
         if (cur != NULL) {
             s->waiter = cur;
         }
@@ -714,7 +714,7 @@ int32_t pm_ip_recv_locked(int32_t fd, uint8_t *buf, uint32_t len) {
         /* Empty is wait, not an error — same as connect. A step that runs
          * without current_task (SMP runner vs run_until) used to return -1
          * after the first segment and abort a live GET. */
-        pm_metal_async_task_t *cur = pm_metal_async_current_task();
+        pm_metal_coop_task_t *cur = pm_metal_coop_current_task();
         if (cur != NULL) {
             s->waiter = cur;
         }
@@ -791,7 +791,7 @@ int32_t pm_ip_recvfrom_locked(int32_t fd, uint8_t *buf, uint32_t len, uint32_t *
     if (pcb->rx_len == 0) {
         /* Nothing queued is 0 bytes, never an error: a caller that polls has to
          * be able to tell an empty socket from a bad one. A task also parks. */
-        pm_metal_async_task_t *cur = pm_metal_async_current_task();
+        pm_metal_coop_task_t *cur = pm_metal_coop_current_task();
         if (cur != NULL) {
             pcb->waiter = cur;
         }
@@ -929,14 +929,14 @@ int32_t pm_metal_net_ip_ping4(uint32_t addr_be, const uint8_t *payload, uint32_t
          * call counter (no cycle counter under it), where the deadline alone
          * would take billions of polls to pass. Short locked rounds keep the
          * stack (and background runners) moving instead of holding pm_ip_lock. */
-        uint64_t deadline = pm_metal_async_mono_us() + PM_METAL_IP_PING_WAIT_US;
+        uint64_t deadline = pm_metal_coop_mono_us() + PM_METAL_IP_PING_WAIT_US;
         uint32_t spins;
         for (spins = 0; spins < PM_METAL_IP_PING_SPINS; spins++) {
             pm_util_lock_acquire(&pm_ip_lock);
             pm_ip_pump_locked();
             uint32_t got = pm_ip_ping_len;
             pm_util_lock_release(&pm_ip_lock);
-            if (got != 0 || pm_metal_async_mono_us() >= deadline) {
+            if (got != 0 || pm_metal_coop_mono_us() >= deadline) {
                 break;
             }
         }
@@ -995,6 +995,6 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_leave_group, pm_metal_n
 PM_MOD_EXPORT_C(pymergetic.metal.net.ip, pm_metal_net_ip_ping4, pm_metal_net_ip_ping4, int32_t(uint32_t, const uint8_t *, uint32_t, uint8_t *, uint32_t *));
 
 PM_MOD_BOOT_READY_C(pymergetic.metal.net.ip, pm_metal_net_ip_init, pm_metal_net_ip_deinit, pm_metal_net_ip_lo_up);
-PM_MOD_BOOTDEP_C(pymergetic.metal.net.ip, pymergetic.metal.async);
+PM_MOD_BOOTDEP_C(pymergetic.metal.net.ip, pymergetic.metal.coop);
 PM_MOD_BOOTDEP_C(pymergetic.metal.net.ip, pymergetic.metal.drivers.net);
 PM_MOD_BOOTDEP_C(pymergetic.metal.net.ip, pymergetic.metal.dt);

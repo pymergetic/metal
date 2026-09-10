@@ -6,7 +6,7 @@
  * util/wasmmod C cards this binary carries (util.mem, types, wasmmod.*).
  * A test that only passes on the cargo host driver is a one-seat proof;
  * this runner is the second, independent one. */
-#include "pymergetic/metal/async/__exports__.h"
+#include "pymergetic/metal/coop/__exports__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/registry.h"
@@ -65,7 +65,7 @@ int main(void) {
     }
 
     /* Per-seat clock fill: metal's monotonic timer. */
-    pm_wasmmod_registry_set_bench_clock(pm_metal_async_mono_us);
+    pm_wasmmod_registry_set_bench_clock(pm_metal_coop_mono_us);
 
     n = pm_wasmmod_registry_module_count();
     for (i = 0; i < n; i++) {

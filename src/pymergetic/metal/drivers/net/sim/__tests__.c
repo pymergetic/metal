@@ -1,5 +1,5 @@
 /* pymergetic.metal.drivers.net.sim — Ethernet loop UDP + TCP rexmit after drop. */
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/drivers.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/net/ip.h"

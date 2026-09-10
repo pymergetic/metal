@@ -19,7 +19,7 @@
 #include "pymergetic/metal/net/zenoh/__priv__.h"
 
 #include "pymergetic/metal/net/ip.h"
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/boot/externals.h"
 #include "pymergetic/util/mem.h"
 
@@ -220,7 +220,7 @@ static void zenoh_local_zid(uint8_t out[PM_METAL_NET_ZENOH_ZID_LEN]) {
         memcpy(out, s_local_zid, PM_METAL_NET_ZENOH_ZID_LEN);
         return;
     }
-    t = pm_metal_async_mono_us();
+    t = pm_metal_coop_mono_us();
     memset(s_local_zid, 0, PM_METAL_NET_ZENOH_ZID_LEN);
     s_local_zid[0] = 0x4d;
     s_local_zid[1] = 0x65;
@@ -536,7 +536,7 @@ static int32_t try_open(pm_metal_net_zenoh_ctx_t *sl) {
     if (sl->open_state == 2) {
         return 1;
     }
-    if (sl->open_state == 1 && pm_metal_async_mono_us() < sl->retry_at_us) {
+    if (sl->open_state == 1 && pm_metal_coop_mono_us() < sl->retry_at_us) {
         return 0; /* backoff: not time to retry yet */
     }
     if (sl->peer_ip == 0u) {
@@ -559,7 +559,7 @@ static int32_t try_open(pm_metal_net_zenoh_ctx_t *sl) {
     s_exec_in[(size_t)(sl - s_slots)] = 0;
     if (rc != Z_OK) {
         sl->open_state = 0;
-        sl->retry_at_us = pm_metal_async_mono_us() + 250000ull; /* 250 ms */
+        sl->retry_at_us = pm_metal_coop_mono_us() + 250000ull; /* 250 ms */
         return 0;
     }
     /* OPEN. Sync our ZID copy from the session. */
@@ -1094,7 +1094,7 @@ int32_t pm_metal_net_zenoh_scout(uint8_t what, uint8_t out_zid[PM_METAL_NET_ZENO
      * seat; the monotonic deadline caps the attempt, never blocking the card.
      * The reply only exists if the local answerer pumps a pending SCOUT, so
      * each wait round also drives scout_answer_pump() before reading. */
-    deadline = pm_metal_async_mono_us() + 500000ull; /* 500 ms */
+    deadline = pm_metal_coop_mono_us() + 500000ull; /* 500 ms */
     while (spins < 1024u) {
         _z_zbuf_t zbf;
         _z_scouting_message_t msg;
@@ -1119,7 +1119,7 @@ int32_t pm_metal_net_zenoh_scout(uint8_t what, uint8_t out_zid[PM_METAL_NET_ZENO
             }
             _z_s_msg_clear(&msg);
         }
-        if (pm_metal_async_mono_us() >= deadline) {
+        if (pm_metal_coop_mono_us() >= deadline) {
             break;
         }
         pm_metal_net_zenoh_yield();
@@ -1148,7 +1148,7 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_scout_answer_pump
 PM_MOD_EXPORT_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_scout, pm_metal_net_zenoh_scout, int32_t(uint8_t, uint8_t *, uint8_t *));
 
 PM_MOD_BOOT_READY_C(pymergetic.metal.net.zenoh, pm_metal_net_zenoh_init, pm_metal_net_zenoh_deinit, NULL);
-PM_MOD_BOOTDEP_C(pymergetic.metal.net.zenoh, pymergetic.metal.async);
+PM_MOD_BOOTDEP_C(pymergetic.metal.net.zenoh, pymergetic.metal.coop);
 PM_MOD_BOOTDEP_C(pymergetic.metal.net.zenoh, pymergetic.metal.net.ip);
 
 PM_METAL_EXTERNAL_C(zenoh_pico, "1.9.0");

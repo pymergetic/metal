@@ -1,7 +1,7 @@
 /* pymergetic.metal.net.tftp — RRQ → DATA block 1 on ip UDP. */
 #include "pymergetic/metal/net/tftp/__exports__.h"
 
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/ip.h"
 
 #include <string.h>
@@ -194,7 +194,7 @@ int32_t pm_metal_net_tftp_poll(void) {
 /* Wait for the next packet of the transfer while driving the wire, and serve
  * our own socket so a get aimed at this box can be answered by it. */
 static int32_t await_packet(int32_t fd, uint8_t *buf, uint32_t cap, uint32_t *src, uint16_t *sport) {
-    uint64_t t0 = pm_metal_async_mono_us();
+    uint64_t t0 = pm_metal_coop_mono_us();
     uint32_t spins = 0;
     for (;;) {
         int32_t n = pm_metal_net_ip_recvfrom(fd, buf, cap, src, sport);
@@ -205,7 +205,7 @@ static int32_t await_packet(int32_t fd, uint8_t *buf, uint32_t cap, uint32_t *sr
         if (s_fd >= 0) {
             (void)pm_metal_net_tftp_poll();
         }
-        if (pm_metal_async_mono_us() - t0 > TFTP_WAIT_US || ++spins > TFTP_SPINS) {
+        if (pm_metal_coop_mono_us() - t0 > TFTP_WAIT_US || ++spins > TFTP_SPINS) {
             return -1;
         }
     }

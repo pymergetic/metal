@@ -221,7 +221,7 @@ z_result_t _z_open_tcp(_z_sys_net_socket_t *sock, const _z_sys_net_endpoint_t re
     }
     /* crc == 0: SYN in flight. Wait for the SYN/ACK handshake with a bounded
      * cooperative spin. */
-    deadline = pm_metal_async_mono_us() + (uint64_t)(tout ? tout : PM_METAL_NET_ZENOH_CONNECT_WAIT_US);
+    deadline = pm_metal_coop_mono_us() + (uint64_t)(tout ? tout : PM_METAL_NET_ZENOH_CONNECT_WAIT_US);
     while (spins < PM_METAL_NET_ZENOH_YIELD_SPINS) {
         (void)pm_metal_net_ip_pump();
         establ = pm_metal_net_ip_established(fd);
@@ -233,7 +233,7 @@ z_result_t _z_open_tcp(_z_sys_net_socket_t *sock, const _z_sys_net_endpoint_t re
             sock->_fd = -1;
             _Z_ERROR_RETURN(_Z_ERR_GENERIC);
         }
-        if (pm_metal_async_mono_us() >= deadline) {
+        if (pm_metal_coop_mono_us() >= deadline) {
             break;
         }
         pm_metal_net_zenoh_yield();
@@ -343,7 +343,7 @@ size_t _z_send_tcp(const _z_sys_net_socket_t sock, const uint8_t *ptr, size_t le
     if (len == 0u) {
         return 0;
     }
-    deadline = pm_metal_async_mono_us() + (uint64_t)PM_METAL_NET_ZENOH_CONNECT_WAIT_US;
+    deadline = pm_metal_coop_mono_us() + (uint64_t)PM_METAL_NET_ZENOH_CONNECT_WAIT_US;
     while (off < len) {
         int32_t n = pm_metal_net_ip_send(sock._fd, ptr + off, (uint32_t)(len - off));
         if (n < 0) {
@@ -352,7 +352,7 @@ size_t _z_send_tcp(const _z_sys_net_socket_t sock, const uint8_t *ptr, size_t le
         if (n == 0) {
             /* No window right now: give the peer a cooperative turn to ACK and
              * open it, bounded by the deadline, then retry. */
-            if (pm_metal_async_mono_us() >= deadline) {
+            if (pm_metal_coop_mono_us() >= deadline) {
                 return SIZE_MAX;
             }
             pm_metal_net_ip_pump();

@@ -1,9 +1,9 @@
-/* pymergetic.metal.async — host benches (not product exports, not tests).
+/* pymergetic.metal.coop — host benches (not product exports, not tests).
  *
  * A bench is `(uint64_t iters) -> i32`: do `iters` units of work inside this
  * one call, return 0 = ok. The registry (pymergetic.wasmmod.registry) owns
  * warmup + the measured lap and divides wall time by `iters` to give ns/op.
- * The host binary installs the clock (`pm_metal_async_mono_us` here), so a
+ * The host binary installs the clock (`pm_metal_coop_mono_us` here), so a
  * clockless firmware seat reports "no clock" instead of a fake number.
  *
  * Two real measurements:
@@ -12,7 +12,7 @@
  *   2. parallel sleeps — N tasks each sleep the same fixed dwell; wall time
  *      compresses with runner threads, so ns/op *iterations grows ~1/ncpu
  *      smaller than the serial ceiling. Shows the SMP runners overlap. */
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
 
@@ -21,22 +21,22 @@
 #include <string.h>
 
 typedef struct {
-    pm_metal_async_coro_t coro;
+    pm_metal_coop_coro_t coro;
     uint64_t count;
     uint64_t target;
 } bench_tick_frame_t;
 
 typedef struct {
-    pm_metal_async_coro_t coro;
+    pm_metal_coop_coro_t coro;
     uint32_t step;
     uint64_t dwell_us;
 } bench_sleep_frame_t;
 
-static pm_metal_async_status_t step_tick(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t step_tick(pm_metal_coop_coro_t *self) {
     bench_tick_frame_t *f = (bench_tick_frame_t *)self;
     if (f->count < f->target) {
         f->count++;
-        return pm_metal_async_yield_park(self);
+        return pm_metal_coop_yield_park(self);
     }
     return PM_METAL_ASYNC_DONE;
 }
@@ -51,27 +51,27 @@ static int32_t bench_task_switch(uint64_t iters) {
         iters = 1;
     }
     bench_tick_frame_t *f = (bench_tick_frame_t *)
-        pm_metal_async_coro_create(step_tick, sizeof(*f));
+        pm_metal_coop_coro_create(step_tick, sizeof(*f));
     if (f == NULL) {
         return -1;
     }
     f->count = 0;
     f->target = iters;
-    pm_metal_async_task_t *t = pm_metal_async_create_task(&f->coro);
+    pm_metal_coop_task_t *t = pm_metal_coop_create_task(&f->coro);
     if (t == NULL) {
         return -1;
     }
-    if (pm_metal_async_run(t) != 0) {
+    if (pm_metal_coop_run(t) != 0) {
         return -1;
     }
     return 0;
 }
 
-static pm_metal_async_status_t step_sleep(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t step_sleep(pm_metal_coop_coro_t *self) {
     bench_sleep_frame_t *f = (bench_sleep_frame_t *)self;
     if (f->step == 0) {
         f->step = 1;
-        return pm_metal_async_sleep_us(self, f->dwell_us);
+        return pm_metal_coop_sleep_us(self, f->dwell_us);
     }
     return PM_METAL_ASYNC_DONE;
 }
@@ -96,8 +96,8 @@ static int32_t bench_parallel_sleeps(uint64_t iters) {
 
     bench_sleep_frame_t **frames =
         (bench_sleep_frame_t **)calloc(ntasks, sizeof(*frames));
-    pm_metal_async_task_t **tasks =
-        (pm_metal_async_task_t **)calloc(ntasks, sizeof(*tasks));
+    pm_metal_coop_task_t **tasks =
+        (pm_metal_coop_task_t **)calloc(ntasks, sizeof(*tasks));
     if (frames == NULL || tasks == NULL) {
         free(frames);
         free(tasks);
@@ -105,14 +105,14 @@ static int32_t bench_parallel_sleeps(uint64_t iters) {
     }
     for (uint64_t i = 0; i < ntasks; i++) {
         frames[i] = (bench_sleep_frame_t *)
-            pm_metal_async_coro_create(step_sleep, sizeof(*frames[i]));
+            pm_metal_coop_coro_create(step_sleep, sizeof(*frames[i]));
         if (frames[i] == NULL) {
             free(frames);
             free(tasks);
             return -1;
         }
         frames[i]->dwell_us = dwell_us;
-        tasks[i] = pm_metal_async_create_task(&frames[i]->coro);
+        tasks[i] = pm_metal_coop_create_task(&frames[i]->coro);
         if (tasks[i] == NULL) {
             free(frames);
             free(tasks);
@@ -120,7 +120,7 @@ static int32_t bench_parallel_sleeps(uint64_t iters) {
         }
     }
     for (uint64_t i = 0; i < ntasks; i++) {
-        if (pm_metal_async_run(tasks[i]) != 0) {
+        if (pm_metal_coop_run(tasks[i]) != 0) {
             free(frames);
             free(tasks);
             return -1;
@@ -131,5 +131,5 @@ static int32_t bench_parallel_sleeps(uint64_t iters) {
     return 0;
 }
 
-PM_MOD_BENCH_C(pymergetic.metal.async, ready_ring_task_switch, bench_task_switch);
-PM_MOD_BENCH_C(pymergetic.metal.async, parallel_sleeps, bench_parallel_sleeps);
+PM_MOD_BENCH_C(pymergetic.metal.coop, ready_ring_task_switch, bench_task_switch);
+PM_MOD_BENCH_C(pymergetic.metal.coop, parallel_sleeps, bench_parallel_sleeps);

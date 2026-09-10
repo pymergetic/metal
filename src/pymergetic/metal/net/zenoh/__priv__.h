@@ -9,7 +9,7 @@
 #define PYMERGETIC_METAL_NET_ZENOH_PRIV_H
 
 #include "pymergetic/metal/net/zenoh/__types__.h"
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/util/mem.h"
 

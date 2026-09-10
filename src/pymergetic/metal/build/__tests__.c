@@ -14,8 +14,8 @@
  *    section, bounded-queue backpressure, cancellation before run
  */
 #include <stdio.h>
-#include "pymergetic/metal/async/__types__.h"
-#include "pymergetic/metal/async/__exports__.h"
+#include "pymergetic/metal/coop/__types__.h"
+#include "pymergetic/metal/coop/__exports__.h"
 #include "pymergetic/metal/build/__types__.h"
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
@@ -585,9 +585,9 @@ static int32_t test_discover(void) {
 #if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
 typedef int32_t (*pm_build_obj_compile_fn)(pm_util_mem_arena_t *, const char *,
     size_t, uint8_t **, size_t *, char *, size_t);
-typedef pm_metal_async_coro_t *(*pm_build_alloc_fn)(pm_util_mem_arena_t *,
+typedef pm_metal_coop_coro_t *(*pm_build_alloc_fn)(pm_util_mem_arena_t *,
     const char *, size_t, const char *);
-typedef pm_metal_async_status_t (*pm_build_step_fn)(pm_metal_async_coro_t *);
+typedef pm_metal_coop_status_t (*pm_build_step_fn)(pm_metal_coop_coro_t *);
 #endif
 
 static int32_t test_rebuild_jit_c(void) {
@@ -614,7 +614,7 @@ static int32_t test_rebuild_jit_c(void) {
     const char *includes[6];
     const char *defines[6];
     uint32_t n_defines = 0;
-    pm_metal_async_coro_t *coro;
+    pm_metal_coop_coro_t *coro;
     const pm_metal_jit_c_result_t *r;
 
     if (!backing) return 80;
@@ -783,7 +783,7 @@ static int32_t test_rebuild_jit_c(void) {
     }
     {
         static const char *main_src = "int main(void) { return 7; }\n";
-        pm_metal_async_status_t st;
+        pm_metal_coop_status_t st;
         coro = rebuilt_alloc(arena, main_src, strlen(main_src), "rebuilt_jit_c");
         if (coro == NULL) {
             pm_metal_build_artifact_destroy(&art);
@@ -1465,7 +1465,7 @@ static int32_t test_actor_roundtrip(void) {
     const pm_metal_build_unit_t *rtc = NULL;
     char err[PM_METAL_BUILD_ERR_MAX];
     pm_metal_build_actor_job_t *jobs[PM_METAL_BUILD_ACTOR_DEPTH + 1u];
-    pm_metal_async_status_t st;
+    pm_metal_coop_status_t st;
     uint32_t depth = 99;
     uint32_t i;
     int32_t rc;
@@ -1812,7 +1812,7 @@ static int32_t test_actor_stress(void) {
         u.include_dirs = u_incs;
         u.n_include_dirs = 8;
 
-        hw0 = pm_util_mem_arena_heap_used(pm_metal_async_arena());
+        hw0 = pm_util_mem_arena_heap_used(pm_metal_coop_arena());
         hw_max = hw0;
         for (cycle = 0; cycle < CYCLES; cycle++) {
             memset(err, 0, sizeof(err));
@@ -1833,7 +1833,7 @@ static int32_t test_actor_stress(void) {
                 pm_util_mem_arena_destroy(arena); free(backing); return 306;
             }
             {
-                pm_metal_async_status_t st = pm_metal_build_actor_step(job);
+                pm_metal_coop_status_t st = pm_metal_build_actor_step(job);
                 if (st != PM_METAL_ASYNC_CANCELLED
                     || job->state != PM_METAL_BUILD_ACTOR_CANCELLED) {
                     printf("stress: step %u st=%d state=%d\n", cycle,
@@ -1848,7 +1848,7 @@ static int32_t test_actor_stress(void) {
                 pm_util_mem_arena_destroy(arena); free(backing); return 308;
             }
             released++;
-            hw = pm_util_mem_arena_heap_used(pm_metal_async_arena());
+            hw = pm_util_mem_arena_heap_used(pm_metal_coop_arena());
             if (hw > hw_max) {
                 hw_max = hw;
             }

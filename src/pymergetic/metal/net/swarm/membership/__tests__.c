@@ -8,7 +8,7 @@
  */
 #include "pymergetic/metal/net/swarm/membership/__exports__.h"
 #include "pymergetic/wasmmod/guest.h" /* PM_MOD_EXPORT_C / PM_MOD_TEST_C */
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/zenoh.h"
 #include "pymergetic/metal/net/swarm/membership.h"
 
@@ -56,7 +56,7 @@ static int32_t case_membership_single(void) {
             break;
         }
         (void)pm_metal_net_zenoh_poll();
-        (void)pm_metal_async_poll();
+        (void)pm_metal_coop_poll();
     }
     if ((uint32_t)pm_metal_net_zenoh_up() != 1u) {
         return fail_swarm("listener open");

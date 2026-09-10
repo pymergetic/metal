@@ -2,7 +2,7 @@
 #ifndef PYMERGETIC_METAL_H
 #define PYMERGETIC_METAL_H
 
-#include "pymergetic/metal/async.h" /* IWYU pragma: export */
+#include "pymergetic/metal/coop.h" /* IWYU pragma: export */
 #include "pymergetic/metal/boot.h" /* IWYU pragma: export */
 #include "pymergetic/metal/bus.h" /* IWYU pragma: export */
 #include "pymergetic/metal/console.h" /* IWYU pragma: export */

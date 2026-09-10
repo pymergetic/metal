@@ -3,7 +3,7 @@
  * Without mrustc+TCC linked, the compile step returns ERROR with a
  * diagnostic.  This test proves the API surface compiles, links, and
  * the error path works. */
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/jit/rs/__types__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
@@ -21,7 +21,7 @@ static int32_t test_compile_alloc(void) {
         free(backing);
         return 2;
     }
-    pm_metal_async_coro_t *coro = pm_metal_jit_rs_compile_alloc(
+    pm_metal_coop_coro_t *coro = pm_metal_jit_rs_compile_alloc(
         arena, "fn main() {}", 11, "test_rs_module");
     if (coro == NULL) {
         pm_util_mem_arena_destroy(arena);
@@ -48,14 +48,14 @@ static int32_t test_compile_error(void) {
         free(backing);
         return 2;
     }
-    pm_metal_async_coro_t *coro = pm_metal_jit_rs_compile_alloc(
+    pm_metal_coop_coro_t *coro = pm_metal_jit_rs_compile_alloc(
         arena, "fn main() {}", 11, "test_rs_module");
     if (coro == NULL) {
         pm_util_mem_arena_destroy(arena);
         free(backing);
         return 3;
     }
-    pm_metal_async_status_t st = pm_metal_jit_rs_compile_step(coro);
+    pm_metal_coop_status_t st = pm_metal_jit_rs_compile_step(coro);
     if (st != PM_METAL_ASYNC_ERROR) {
         pm_util_mem_arena_destroy(arena);
         free(backing);

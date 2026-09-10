@@ -1,7 +1,7 @@
 /* pymergetic.metal.net.dns — A lookup + tiny zone on ip UDP. */
 #include "pymergetic/metal/net/dns/__exports__.h"
 
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/ip.h"
 
 #include <string.h>
@@ -180,7 +180,7 @@ static uint16_t cli_port(void) {
  * zone, its socket is the only one nobody else pumps, so service it here too:
  * a lookup against our own resolver has to make progress. */
 static int32_t await_answer(int32_t fd, uint8_t *buf, uint32_t cap, uint32_t *addr, uint16_t *port) {
-    uint64_t t0 = pm_metal_async_mono_us();
+    uint64_t t0 = pm_metal_coop_mono_us();
     uint32_t spins = 0;
     for (;;) {
         int32_t n = pm_metal_net_ip_recvfrom(fd, buf, cap, addr, port);
@@ -191,7 +191,7 @@ static int32_t await_answer(int32_t fd, uint8_t *buf, uint32_t cap, uint32_t *ad
         if (s_fd >= 0) {
             (void)pm_metal_net_dns_poll();
         }
-        if (pm_metal_async_mono_us() - t0 > DNS_WAIT_US || ++spins > DNS_SPINS) {
+        if (pm_metal_coop_mono_us() - t0 > DNS_WAIT_US || ++spins > DNS_SPINS) {
             return -1;
         }
     }

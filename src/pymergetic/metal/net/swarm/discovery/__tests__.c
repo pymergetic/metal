@@ -10,7 +10,7 @@
  */
 #include "pymergetic/metal/net/swarm/discovery/__exports__.h"
 #include "pymergetic/wasmmod/guest.h" /* PM_MOD_EXPORT_C / PM_MOD_TEST_C */
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/zenoh.h"
 #include "pymergetic/metal/net/swarm/discovery.h"
@@ -55,7 +55,7 @@ static int32_t case_discovery_roundtrip(void) {
         rc = pm_metal_net_swarm_discovery_scout(peer_id, &whatami);
         (void)pm_metal_net_swarm_discovery_pump();
         (void)pm_metal_net_ip_pump();
-        (void)pm_metal_async_poll();
+        (void)pm_metal_coop_poll();
         if (rc == 1) {
             break;
         }

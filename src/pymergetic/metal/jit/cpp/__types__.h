@@ -9,7 +9,7 @@
 #ifndef PYMERGETIC_METAL_JIT_CPP_TYPES_H
 #define PYMERGETIC_METAL_JIT_CPP_TYPES_H
 
-#include "pymergetic/metal/async/__types__.h"
+#include "pymergetic/metal/coop/__types__.h"
 
 #include <stddef.h>
 #include <stdint.h>

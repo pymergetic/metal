@@ -48,12 +48,12 @@ void pm_ip_tcp_xmit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data,
         s->rexmit_len = dlen;
         s->rexmit_seq = seq;
         s->rexmit_flags = flags;
-        s->rexmit_at = pm_metal_async_mono_us() + PM_METAL_IP_RTO_US;
+        s->rexmit_at = pm_metal_coop_mono_us() + PM_METAL_IP_RTO_US;
     }
 }
 
 void pm_ip_tcp_check_timeouts(void) {
-    uint64_t now = pm_metal_async_mono_us();
+    uint64_t now = pm_metal_coop_mono_us();
     uint32_t i;
     for (i = 0; i < PM_METAL_IP_SOCK_MAX; i++) {
         struct pm_metal_sock *s = &pm_ip_sk[i];

@@ -579,6 +579,8 @@ browser:
 	grep -q "upy console ids" $(CURDIR)/build/browser_prove.log
 	grep -q "upy fs embed" $(CURDIR)/build/browser_prove.log
 	grep -q "upy ledger round-trip" $(CURDIR)/build/browser_prove.log
+	grep -q "upy build events pane" $(CURDIR)/build/browser_prove.log
+	grep -q "upy build refuse keeps ring empty" $(CURDIR)/build/browser_prove.log
 	grep -q "upy accessor spine" $(CURDIR)/build/browser_prove.log
 	grep -q "upy editor" $(CURDIR)/build/browser_prove.log
 	grep -q "upy process" $(CURDIR)/build/browser_prove.log

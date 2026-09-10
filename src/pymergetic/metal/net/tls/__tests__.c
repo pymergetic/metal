@@ -1,5 +1,5 @@
 /* pymergetic.metal.net.tls — lo handshake + ping (host prove, not product). */
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/tls.h"
 #include "pymergetic/metal/net/tls/__testcert__.h"
@@ -13,7 +13,7 @@
 #define TLS_PORT 8443
 
 typedef struct {
-    pm_metal_async_coro_t coro;
+    pm_metal_coop_coro_t coro;
     uint32_t step;
     int32_t ls;
     int32_t acc;
@@ -23,7 +23,7 @@ typedef struct {
 } tls_srv_t;
 
 typedef struct {
-    pm_metal_async_coro_t coro;
+    pm_metal_coop_coro_t coro;
     uint32_t step;
     int32_t fd;
     pm_metal_net_tls_session_t *tls;
@@ -36,7 +36,7 @@ static int32_t fail(const char *why) {
     return 1;
 }
 
-static pm_metal_async_status_t step_server(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t step_server(pm_metal_coop_coro_t *self) {
     tls_srv_t *f = (tls_srv_t *)self;
     if (f->step == 0) {
         int32_t a = pm_metal_net_ip_accept(f->ls);
@@ -84,7 +84,7 @@ static pm_metal_async_status_t step_server(pm_metal_async_coro_t *self) {
     return PM_METAL_ASYNC_DONE;
 }
 
-static pm_metal_async_status_t step_client(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t step_client(pm_metal_coop_coro_t *self) {
     tls_cli_t *f = (tls_cli_t *)self;
     if (f->step == 0) {
         f->fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
@@ -143,17 +143,17 @@ static int32_t case_lo_ping(void) {
     if (ls < 0 || pm_metal_net_ip_bind(ls, LO4, TLS_PORT) != 0 || pm_metal_net_ip_listen(ls, 1) != 0) {
         return fail("listen");
     }
-    tls_srv_t *srv = (tls_srv_t *)pm_metal_async_coro_create(step_server, sizeof(*srv));
-    tls_cli_t *cli = (tls_cli_t *)pm_metal_async_coro_create(step_client, sizeof(*cli));
+    tls_srv_t *srv = (tls_srv_t *)pm_metal_coop_coro_create(step_server, sizeof(*srv));
+    tls_cli_t *cli = (tls_cli_t *)pm_metal_coop_coro_create(step_client, sizeof(*cli));
     if (srv == NULL || cli == NULL) {
         return fail("coro");
     }
     srv->ls = ls;
     srv->acc = -1;
-    if (pm_metal_async_create_task(&srv->coro) == NULL || pm_metal_async_create_task(&cli->coro) == NULL) {
+    if (pm_metal_coop_create_task(&srv->coro) == NULL || pm_metal_coop_create_task(&cli->coro) == NULL) {
         return fail("task");
     }
-    if (pm_metal_async_run_until(&cli->coro) != 0) {
+    if (pm_metal_coop_run_until(&cli->coro) != 0) {
         return fail("run");
     }
     (void)pm_metal_net_ip_close(ls);

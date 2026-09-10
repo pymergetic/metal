@@ -1,7 +1,7 @@
 /* pymergetic.metal.net.ip — lo ping + UDP park prove, and one off-box prove
  * against a netdev that plays the far side of the wire: it answers ARP and
  * echo requests, and rejects any frame whose checksums do not add up. */
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/wasmmod/guest.h"
@@ -17,7 +17,7 @@
 #define FAR_IP 0x08080808u  /* off-subnet: reachable only through the gateway */
 
 typedef struct {
-    pm_metal_async_coro_t coro;
+    pm_metal_coop_coro_t coro;
     uint32_t step;
     int32_t fd;
     uint8_t buf[16];
@@ -70,7 +70,7 @@ static int32_t case_udp_lo_sync(void) {
     return 0;
 }
 
-static pm_metal_async_status_t step_udp_rx(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t step_udp_rx(pm_metal_coop_coro_t *self) {
     udp_rx_frame_t *f = (udp_rx_frame_t *)self;
     if (f->step == 0) {
         f->n = pm_metal_net_ip_recvfrom(f->fd, f->buf, sizeof(f->buf), NULL, NULL);
@@ -93,12 +93,12 @@ static int32_t case_udp_park(void) {
     if (pm_metal_net_ip_bind(rx, LO4, 7101) != 0 || pm_metal_net_ip_bind(tx, LO4, 7102) != 0) {
         return fail("park bind");
     }
-    udp_rx_frame_t *f = (udp_rx_frame_t *)pm_metal_async_coro_create(step_udp_rx, sizeof(*f));
+    udp_rx_frame_t *f = (udp_rx_frame_t *)pm_metal_coop_coro_create(step_udp_rx, sizeof(*f));
     if (f == NULL) {
         return fail("park coro");
     }
     f->fd = rx;
-    pm_metal_async_task_t *t = pm_metal_async_create_task(&f->coro);
+    pm_metal_coop_task_t *t = pm_metal_coop_create_task(&f->coro);
     if (t == NULL) {
         return fail("park task");
     }
@@ -107,7 +107,7 @@ static int32_t case_udp_park(void) {
      * pump until the very first step has settled, then require it parked. */
     uint32_t settle = 0;
     while (f->coro.status == PM_METAL_ASYNC_PENDING && settle < 100000u) {
-        pm_metal_async_poll();
+        pm_metal_coop_poll();
         settle++;
     }
     if (f->coro.status != PM_METAL_ASYNC_WAITING) {
@@ -117,7 +117,7 @@ static int32_t case_udp_park(void) {
     if (pm_metal_net_ip_sendto(tx, msg, 1, LO4, 7101) != 1) {
         return fail("park send");
     }
-    if (pm_metal_async_run(t) != 0) {
+    if (pm_metal_coop_run(t) != 0) {
         return fail("park run");
     }
     (void)pm_metal_net_ip_close(rx);
@@ -167,13 +167,13 @@ static int32_t case_tcp_lo_echo(void) {
 }
 
 typedef struct {
-    pm_metal_async_coro_t coro;
+    pm_metal_coop_coro_t coro;
     uint32_t step;
     int32_t ls;
     int32_t acc;
 } tcp_acc_frame_t;
 
-static pm_metal_async_status_t step_tcp_accept(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t step_tcp_accept(pm_metal_coop_coro_t *self) {
     tcp_acc_frame_t *f = (tcp_acc_frame_t *)self;
     int32_t a = pm_metal_net_ip_accept(f->ls);
     if (a == -2) {
@@ -196,13 +196,13 @@ static int32_t case_tcp_accept_park(void) {
     if (pm_metal_net_ip_bind(ls, LO4, 9001) != 0 || pm_metal_net_ip_listen(ls, 1) != 0) {
         return fail("acc listen");
     }
-    tcp_acc_frame_t *f = (tcp_acc_frame_t *)pm_metal_async_coro_create(step_tcp_accept, sizeof(*f));
+    tcp_acc_frame_t *f = (tcp_acc_frame_t *)pm_metal_coop_coro_create(step_tcp_accept, sizeof(*f));
     if (f == NULL) {
         return fail("acc coro");
     }
     f->ls = ls;
     f->acc = -1;
-    pm_metal_async_task_t *t = pm_metal_async_create_task(&f->coro);
+    pm_metal_coop_task_t *t = pm_metal_coop_create_task(&f->coro);
     if (t == NULL) {
         return fail("acc task");
     }
@@ -213,7 +213,7 @@ static int32_t case_tcp_accept_park(void) {
      * invariant is the settle: once stepped, it must be parked (WAITING). */
     uint32_t settle = 0;
     while (f->coro.status == PM_METAL_ASYNC_PENDING && settle < 100000u) {
-        pm_metal_async_poll();
+        pm_metal_coop_poll();
         settle++;
     }
     if (f->coro.status != PM_METAL_ASYNC_WAITING) {
@@ -222,7 +222,7 @@ static int32_t case_tcp_accept_park(void) {
     if (pm_metal_net_ip_connect(cl, LO4, 9001) != 1) {
         return fail("acc connect");
     }
-    if (pm_metal_async_run(t) != 0 || f->acc < 0) {
+    if (pm_metal_coop_run(t) != 0 || f->acc < 0) {
         return fail("acc run");
     }
     (void)pm_metal_net_ip_close(f->acc);

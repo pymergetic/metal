@@ -1,5 +1,5 @@
 /* pymergetic.metal.net.http — parked io.fetch on lo and sim L2. */
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/drivers/net/sim.h"
 #include "pymergetic/metal/net/dns.h"
@@ -25,7 +25,7 @@
 #define SIM_HTTP_PORT 8088
 
 typedef struct {
-    pm_metal_async_coro_t coro;
+    pm_metal_coop_coro_t coro;
     uint32_t step;
     int32_t ls;
     int32_t acc;
@@ -40,7 +40,7 @@ static int32_t fail(const char *why) {
 static const uint8_t k_resp[] =
     "HTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nhello";
 
-static pm_metal_async_status_t step_server(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t step_server(pm_metal_coop_coro_t *self) {
     http_srv_t *f = (http_srv_t *)self;
     if (f->step == 0) {
         int32_t a = pm_metal_net_ip_accept(f->ls);
@@ -68,7 +68,7 @@ static pm_metal_async_status_t step_server(pm_metal_async_coro_t *self) {
     return PM_METAL_ASYNC_DONE;
 }
 
-static pm_metal_async_status_t step_https_server(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t step_https_server(pm_metal_coop_coro_t *self) {
     http_srv_t *f = (http_srv_t *)self;
     if (f->step == 0) {
         int32_t a = pm_metal_net_ip_accept(f->ls);
@@ -113,22 +113,22 @@ static pm_metal_async_status_t step_https_server(pm_metal_async_coro_t *self) {
     return PM_METAL_ASYNC_DONE;
 }
 
-static int32_t serve_and_fetch(uint32_t addr, uint16_t port, int https, pm_metal_async_step_fn srv_step,
+static int32_t serve_and_fetch(uint32_t addr, uint16_t port, int https, pm_metal_coop_step_fn srv_step,
     const char *uri) {
     int32_t ls = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
     if (ls < 0 || pm_metal_net_ip_bind(ls, addr, port) != 0 || pm_metal_net_ip_listen(ls, 1) != 0) {
         return fail("listen");
     }
-    http_srv_t *srv = (http_srv_t *)pm_metal_async_coro_create(srv_step, sizeof(*srv));
+    http_srv_t *srv = (http_srv_t *)pm_metal_coop_coro_create(srv_step, sizeof(*srv));
     if (srv == NULL) {
         return fail("srv coro");
     }
     srv->ls = ls;
     srv->acc = -1;
-    if (pm_metal_async_create_task(&srv->coro) == NULL) {
+    if (pm_metal_coop_create_task(&srv->coro) == NULL) {
         return fail("srv task");
     }
-    pm_metal_async_poll();
+    pm_metal_coop_poll();
     uint8_t *body = NULL;
     uint32_t n = 0;
     char err[64];
@@ -175,7 +175,7 @@ static int32_t case_fetch_sim(void) {
 }
 
 typedef struct {
-    pm_metal_async_coro_t coro;
+    pm_metal_coop_coro_t coro;
     uint32_t step;
     int32_t ls;
     int32_t acc;
@@ -183,7 +183,7 @@ typedef struct {
     uint32_t req_len;
 } http_auth_srv_t;
 
-static pm_metal_async_status_t step_auth_server(pm_metal_async_coro_t *self) {
+static pm_metal_coop_status_t step_auth_server(pm_metal_coop_coro_t *self) {
     http_auth_srv_t *f = (http_auth_srv_t *)self;
     if (f->step == 0) {
         int32_t a = pm_metal_net_ip_accept(f->ls);
@@ -229,16 +229,16 @@ static int32_t case_auth_headers(void) {
     if (ls < 0 || pm_metal_net_ip_bind(ls, LO4, AUTH_PORT) != 0 || pm_metal_net_ip_listen(ls, 1) != 0) {
         return fail("auth listen");
     }
-    http_auth_srv_t *srv = (http_auth_srv_t *)pm_metal_async_coro_create(step_auth_server, sizeof(*srv));
+    http_auth_srv_t *srv = (http_auth_srv_t *)pm_metal_coop_coro_create(step_auth_server, sizeof(*srv));
     if (srv == NULL) {
         return fail("auth srv");
     }
     srv->ls = ls;
     srv->acc = -1;
-    if (pm_metal_async_create_task(&srv->coro) == NULL) {
+    if (pm_metal_coop_create_task(&srv->coro) == NULL) {
         return fail("auth task");
     }
-    pm_metal_async_poll();
+    pm_metal_coop_poll();
     pm_wasmmod_io_set_auth_bearer("tok-cdn");
     pm_wasmmod_net_cdn_set_session_id("sess-1");
     uint8_t *body = NULL;

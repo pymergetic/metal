@@ -14,6 +14,8 @@ upy native card import
 upy inspect
 upy inspect caps
 upy changes ledger
+upy build events pane
+upy build refuse keeps ring empty
 upy editor
 upy dns
 upy socket

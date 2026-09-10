@@ -11,8 +11,8 @@
 //! handler come from `pymergetic_wasmmod`'s `upy-host`, so this crate must
 //! stay `no_std` or std would collide with them on `panic_impl`.
 #![cfg_attr(not(any(test, feature = "gen")), no_std)]
-#[path = "metal/async.rs"]
-pub mod r#async;
+#[path = "metal/coop.rs"]
+pub mod coop;
 
 #[path = "metal/boot.rs"]
 pub mod boot;

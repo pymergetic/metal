@@ -359,7 +359,7 @@ int32_t pm_ip_arp_lookup(int32_t h, uint32_t addr_be, uint8_t mac[6]) {
     if (e == NULL || e->state != ARP_LIVE || mac == NULL) {
         return 0;
     }
-    if (pm_metal_async_mono_us() >= e->at_us) {
+    if (pm_metal_coop_mono_us() >= e->at_us) {
         e->state = ARP_FREE;
         return 0;
     }
@@ -375,7 +375,7 @@ void pm_ip_arp_learn(int32_t h, uint32_t addr_be, const uint8_t mac[6]) {
     e = arp_slot(h, addr_be);
     e->state = ARP_LIVE;
     e->tries = 0;
-    e->at_us = pm_metal_async_mono_us() + PM_METAL_IP_ARP_TTL_US;
+    e->at_us = pm_metal_coop_mono_us() + PM_METAL_IP_ARP_TTL_US;
     memcpy(e->mac, mac, 6);
     if (e->pend_len != 0) {
         uint32_t len = e->pend_len;
@@ -395,7 +395,7 @@ void pm_ip_arp_ask(int32_t h, uint32_t addr_be) {
     }
     e->state = ARP_ASKING;
     e->tries++;
-    e->at_us = pm_metal_async_mono_us() + PM_METAL_IP_ARP_RETRY_US;
+    e->at_us = pm_metal_coop_mono_us() + PM_METAL_IP_ARP_RETRY_US;
     arp_emit(h, 1u, arp_bcast, NULL, addr_be);
 }
 
@@ -410,7 +410,7 @@ void pm_ip_arp_queue(int32_t h, uint32_t addr_be, const uint8_t *pkt, uint32_t l
 }
 
 void pm_ip_arp_tick(void) {
-    uint64_t now = pm_metal_async_mono_us();
+    uint64_t now = pm_metal_coop_mono_us();
     uint32_t i;
     for (i = 0; i < PM_METAL_IP_ARP_MAX; i++) {
         struct pm_metal_ip_arp *e = &pm_ip_arp[i];

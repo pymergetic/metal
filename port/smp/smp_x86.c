@@ -22,7 +22,7 @@ extern char pm_metal_smp_tramp_end[];
 
 static int s_started;
 
-uint32_t pm_metal_async_fill_ncpu(void) {
+uint32_t pm_metal_coop_fill_ncpu(void) {
     return 4u;
 }
 
@@ -48,7 +48,7 @@ static void icr(uint32_t val) {
     }
 }
 
-int32_t pm_metal_async_fill_start_aps(pm_util_mem_arena_t *arena, uint32_t ncpu,
+int32_t pm_metal_coop_fill_start_aps(pm_util_mem_arena_t *arena, uint32_t ncpu,
     void (*entry)(void *)) {
     uint8_t *data;
     uint8_t *tramp;

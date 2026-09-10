@@ -1,4 +1,4 @@
-/* armv7 AP bring-up fill for pymergetic.metal.async (QEMU virt + RV1106).
+/* armv7 AP bring-up fill for pymergetic.metal.coop (QEMU virt + RV1106).
  * Same face as smp_x86.c: ncpu says how many cores the seat runs, start_aps
  * wakes 1..ncpu-1, each parking in the async runner entry on its own stack.
  * The conduit is PSCI 0.2 CPU_ON (0x84000003) over HVC — the virt machine
@@ -31,7 +31,7 @@ uintptr_t pm_metal_smp_ap_stk[PM_METAL_SMP_MAX] __attribute__((used));
 void pm_metal_smp_ap_entry(void);
 void pm_metal_smp_ap_runner(void) __attribute__((used, noreturn));
 
-uint32_t pm_metal_async_fill_ncpu(void) {
+uint32_t pm_metal_coop_fill_ncpu(void) {
     return 4u;
 }
 
@@ -67,7 +67,7 @@ void pm_metal_smp_ap_runner(void) {
     }
 }
 
-int32_t pm_metal_async_fill_start_aps(pm_util_mem_arena_t *arena, uint32_t ncpu,
+int32_t pm_metal_coop_fill_start_aps(pm_util_mem_arena_t *arena, uint32_t ncpu,
     void (*entry)(void *)) {
     uint32_t i;
     if (s_started) {

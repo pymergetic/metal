@@ -1,6 +1,6 @@
 /* pymergetic.metal.net.http.asgi — parked io.fetch to RS listen on lo. */
 #define _GNU_SOURCE
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/http/asgi.h"
 #include "pymergetic/metal/net/ip.h"
@@ -19,11 +19,11 @@ static int32_t fail(const char *why) {
 }
 
 static int32_t case_fetch_default(void) {
-    _Static_assert(sizeof(pm_metal_async_coro_t) == 40, "asgi CoroHead");
+    _Static_assert(sizeof(pm_metal_coop_coro_t) == 40, "asgi CoroHead");
     if (pm_metal_net_http_asgi_listen(LO4, ASGI_PORT) != 0) {
         return fail("listen");
     }
-    pm_metal_async_poll();
+    pm_metal_coop_poll();
     uint8_t *body = NULL;
     uint32_t n = 0;
     char err[64];
@@ -60,7 +60,7 @@ static int32_t case_route(void) {
     if (pm_metal_net_http_asgi_route("GET", "/hi", hello, 5) != 0) {
         return fail("route");
     }
-    pm_metal_async_poll();
+    pm_metal_coop_poll();
     st = pm_metal_net_http_fetch("http://127.0.0.1:8090/hi", &body, &n, err, sizeof(err));
     if (st != PM_WASMMOD_IO_OK) {
         return fail(err[0] ? err : "fetch route");
@@ -125,7 +125,7 @@ static int32_t case_big_body(void) {
     if (pm_metal_net_http_asgi_route_fn("GET", "/big", fn_big) != 0) {
         return fail("route_fn big");
     }
-    pm_metal_async_poll();
+    pm_metal_coop_poll();
     st = pm_metal_net_http_fetch("http://127.0.0.1:8090/big", &body, &n, err, sizeof(err));
     if (st != PM_WASMMOD_IO_OK) {
         return fail(err[0] ? err : "fetch big");
@@ -188,7 +188,7 @@ static int32_t case_stream(void) {
     if (pm_metal_net_http_asgi_route_stream_fn("GET", "/dl", &ctx, shake_size, shake_next) != 0) {
         return fail("route_stream");
     }
-    pm_metal_async_poll();
+    pm_metal_coop_poll();
     st = pm_metal_net_http_fetch("http://127.0.0.1:8090/dl", &body, &n, err, sizeof(err));
     if (st != PM_WASMMOD_IO_OK) {
         return fail(err[0] ? err : "fetch stream");
@@ -223,7 +223,7 @@ static int32_t case_multi_instance(void) {
     if (b <= a || pm_metal_net_http_asgi_status(b) != 1) {
         return fail("listen 2nd");
     }
-    pm_metal_async_poll();
+    pm_metal_coop_poll();
     st = pm_metal_net_http_fetch("http://127.0.0.1:8091/x", &body, &n, err, sizeof(err));
     if (st != PM_WASMMOD_IO_OK || n != 4 || body == NULL || memcmp(body, "asgi", 4) != 0) {
         return fail("fetch 2nd");
@@ -281,7 +281,7 @@ static int32_t raw_get(const char *path, uint8_t *out, uint32_t out_max, uint32_
     }
     for (i = 0; i < 400; i++) {
         pm_metal_net_ip_pump();
-        pm_metal_async_poll();
+        pm_metal_coop_poll();
         if (pm_metal_net_ip_send(fd, (const uint8_t *)req, (uint32_t)rn) == rn) {
             break;
         }
@@ -296,7 +296,7 @@ static int32_t raw_get(const char *path, uint8_t *out, uint32_t out_max, uint32_
             break;
         }
         pm_metal_net_ip_pump();
-        pm_metal_async_poll();
+        pm_metal_coop_poll();
     }
     (void)pm_metal_net_ip_close(fd);
     *out_len = got;
@@ -387,7 +387,7 @@ static int32_t case_defer(void) {
         }
         for (i = 0; i < 400; i++) {
             pm_metal_net_ip_pump();
-            pm_metal_async_poll();
+            pm_metal_coop_poll();
             if (pm_metal_net_ip_send(fd, (const uint8_t *)req, rn) == (int32_t)rn) {
                 break;
             }
@@ -420,7 +420,7 @@ static int32_t case_defer(void) {
                 break;
             }
             pm_metal_net_ip_pump();
-            pm_metal_async_poll();
+            pm_metal_coop_poll();
         }
         (void)pm_metal_net_ip_close(fd);
         if (!served) {
@@ -473,7 +473,7 @@ static int32_t case_defer_two(void) {
     /* Send both requests and let both connections park on the queue. */
     for (spin = 0; spin < 800; spin++) {
         pm_metal_net_ip_pump();
-        pm_metal_async_poll();
+        pm_metal_coop_poll();
         int all_sent = 1;
         for (i = 0; i < K; i++) {
             if (pm_metal_net_ip_send(fd[i], (const uint8_t *)req[i], rn[i]) != (int32_t)rn[i]) {
@@ -489,7 +489,7 @@ static int32_t case_defer_two(void) {
      * connections a fixed window to enqueue. */
     for (spin = 0; spin < 400; spin++) {
         pm_metal_net_ip_pump();
-        pm_metal_async_poll();
+        pm_metal_coop_poll();
     }
     /* Play the render pump: drain path[0] first, then path[1]. defer_next may
      * return either path first since two park concurrently, so accept either
@@ -498,7 +498,7 @@ static int32_t case_defer_two(void) {
         const char *p = (const char *)pm_metal_net_http_asgi_defer_next();
         if (p == NULL) {
             pm_metal_net_ip_pump();
-            pm_metal_async_poll();
+            pm_metal_coop_poll();
             continue;
         }
         int matched = -1;
@@ -529,7 +529,7 @@ static int32_t case_defer_two(void) {
                 break;
             }
             pm_metal_net_ip_pump();
-            pm_metal_async_poll();
+            pm_metal_coop_poll();
         }
         (void)pm_metal_net_ip_close(fd[i]);
         if (!saw[i]) {
@@ -572,7 +572,7 @@ static int32_t case_defer_burst(void) {
     }
     for (spin = 0; spin < 600; spin++) {
         pm_metal_net_ip_pump();
-        pm_metal_async_poll();
+        pm_metal_coop_poll();
         for (i = 0; i < BURST; i++) {
             if (fd[i] >= 0) {
                 (void)pm_metal_net_ip_send(fd[i], (const uint8_t *)req, rn);
@@ -593,7 +593,7 @@ static int32_t case_defer_burst(void) {
             }
         }
         pm_metal_net_ip_pump();
-        pm_metal_async_poll();
+        pm_metal_coop_poll();
     }
     for (i = 0; i < BURST; i++) {
         if (fd[i] >= 0) {
@@ -602,7 +602,7 @@ static int32_t case_defer_burst(void) {
     }
     for (spin = 0; spin < 2000; spin++) {
         pm_metal_net_ip_pump();
-        pm_metal_async_poll();
+        pm_metal_coop_poll();
     }
     /* The whole point: the server is still there. */
     {
@@ -624,7 +624,7 @@ static int32_t case_defer_burst(void) {
                 break;
             }
             pm_metal_net_ip_pump();
-            pm_metal_async_poll();
+            pm_metal_coop_poll();
         }
         (void)pm_metal_net_ip_close(c);
         if (memmem(rsp, n, "200 OK", 6) == NULL) {

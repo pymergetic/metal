@@ -1,7 +1,7 @@
 /* rsx_probe.c — one-card test diagnostic: boots the registry, runs ONLY the
  * jit.rs.compiler tests entry, prints the raw return code (host_test's
  * run_all prints just FAIL with no rc). tools/ posture: not a prove gate. */
-#include "pymergetic/metal/async/__exports__.h"
+#include "pymergetic/metal/coop/__exports__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/registry.h"
@@ -32,7 +32,7 @@ int main(void) {
         free(backing);
         return 3;
     }
-    pm_wasmmod_registry_set_bench_clock(pm_metal_async_mono_us);
+    pm_wasmmod_registry_set_bench_clock(pm_metal_coop_mono_us);
     tc = pm_wasmmod_registry_test_count((const uint8_t *)fqn, sizeof(fqn) - 1);
     printf("tests registered: %u\n", tc);
     rc = pm_wasmmod_registry_test_run_all((const uint8_t *)fqn, sizeof(fqn) - 1);

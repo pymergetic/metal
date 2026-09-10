@@ -124,7 +124,7 @@ def _cards(fqns, export_count=None):
     ``pymergetic.metal.*`` cards (build-time ledger or runtime registry) and the
     system ``pymergetic.wasmmod.*`` / guest-pack namespaces it can load. A
     namespace rule (not an export-count rule) is what correctly keeps e.g. the
-    real ``pymergetic.metal.async`` card even when it registers zero C/Rust
+    real ``pymergetic.metal.coop`` card even when it registers zero C/Rust
     exports, while still dropping interpreter/Python-implementation modules that
     never live under ``pymergetic.*``.
     """

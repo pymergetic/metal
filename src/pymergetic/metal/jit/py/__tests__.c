@@ -11,7 +11,7 @@
  *   exported face answers. That is the same chain ksweep's unit_compile_py
  *   drives for impl="py" cards, plus the load and the invocation ksweep
  *   deliberately does not do. */
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/jit/py/__types__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
@@ -21,7 +21,7 @@
 
 static int32_t test_stubs(void) {
     /* NULL args: compile_alloc always refuses (arena==NULL -> NULL). */
-    pm_metal_async_coro_t *coro = pm_metal_jit_py_compile_alloc(
+    pm_metal_coop_coro_t *coro = pm_metal_jit_py_compile_alloc(
         NULL, "x = 42\n", 6, "test_module");
     if (coro != NULL) {
         return 1;
@@ -34,7 +34,7 @@ static int32_t test_stubs(void) {
 static int32_t test_step_error(void) {
     /* compile_step on invalid frame is ERROR — seat-neutral contract that
      * must hold on the real path too, not just the stub. */
-    pm_metal_async_status_t st = pm_metal_jit_py_compile_step(NULL);
+    pm_metal_coop_status_t st = pm_metal_jit_py_compile_step(NULL);
     if (st != PM_METAL_ASYNC_ERROR) {
         return 1;
     }

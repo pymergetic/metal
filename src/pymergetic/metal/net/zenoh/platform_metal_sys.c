@@ -1,7 +1,7 @@
 /*
  * pymergetic.metal.net.zenoh — zenoh-pico OS-system platform on top of the
  * Metal cards: memory from pm_util_mem (the card arena), a monotonic clock
- * from pm_metal_async_mono_us, and a seedable PRNG for ZID/lease noise.
+ * from pm_metal_coop_mono_us, and a seedable PRNG for ZID/lease noise.
  *
  * Compiled everywhere (unix, emcc, firmware): everything here lives on the
  * Metal card faces, so there is no seat-specific #if except the Firmware/UEFI
@@ -56,7 +56,7 @@ static uint64_t s_rng_state;
 static uint8_t s_rng_seeded;
 
 static void rng_seed(void) {
-    uint64_t t = pm_metal_async_mono_us();
+    uint64_t t = pm_metal_coop_mono_us();
     uint64_t s = 0x9e3779b97f4a7c15ull; /* golden-ratio noise */
     if (s_rng_seeded) {
         return;
@@ -109,7 +109,7 @@ void z_random_fill(void *buf, size_t len) {
 /*------------------ Clock ------------------*/
 
 z_clock_t z_clock_now(void) {
-    return (z_clock_t)pm_metal_async_mono_us();
+    return (z_clock_t)pm_metal_coop_mono_us();
 }
 
 unsigned long zp_clock_elapsed_us_since(z_clock_t *instant, z_clock_t *epoch) {
@@ -128,15 +128,15 @@ unsigned long zp_clock_elapsed_s_since(z_clock_t *instant, z_clock_t *epoch) {
 }
 
 unsigned long z_clock_elapsed_us(z_clock_t *time) {
-    return zp_clock_elapsed_us_since(&(z_clock_t){pm_metal_async_mono_us()}, time);
+    return zp_clock_elapsed_us_since(&(z_clock_t){pm_metal_coop_mono_us()}, time);
 }
 
 unsigned long z_clock_elapsed_ms(z_clock_t *time) {
-    return zp_clock_elapsed_ms_since(&(z_clock_t){pm_metal_async_mono_us()}, time);
+    return zp_clock_elapsed_ms_since(&(z_clock_t){pm_metal_coop_mono_us()}, time);
 }
 
 unsigned long z_clock_elapsed_s(z_clock_t *time) {
-    return zp_clock_elapsed_s_since(&(z_clock_t){pm_metal_async_mono_us()}, time);
+    return zp_clock_elapsed_s_since(&(z_clock_t){pm_metal_coop_mono_us()}, time);
 }
 
 void z_clock_advance_us(z_clock_t *clock, unsigned long duration) {
@@ -154,9 +154,9 @@ void z_clock_advance_s(z_clock_t *clock, unsigned long duration) {
 /*------------------ Sleep ------------------*/
 
 z_result_t z_sleep_us(size_t time) {
-    uint64_t t0 = pm_metal_async_mono_us();
+    uint64_t t0 = pm_metal_coop_mono_us();
     uint64_t want = (uint64_t)time;
-    while (pm_metal_async_mono_us() - t0 < want) {
+    while (pm_metal_coop_mono_us() - t0 < want) {
         /* Busy-wait: firmware has no sleep syscall, and the zenoh spin mode
          * only ever naps microseconds in the bounded poll() step. */
     }
@@ -175,7 +175,7 @@ z_result_t z_sleep_s(size_t time) {
 
 z_time_t z_time_now(void) {
     z_time_t now;
-    uint64_t us = pm_metal_async_mono_us();
+    uint64_t us = pm_metal_coop_mono_us();
     now.secs = (uint32_t)(us / 1000000ull);
     now.nanos = (uint32_t)((us % 1000000ull) * 1000ull);
     return now;
@@ -190,7 +190,7 @@ const char *z_time_now_as_str(char *const buf, unsigned long buflen) {
 }
 
 unsigned long z_time_elapsed_us(z_time_t *time) {
-    uint64_t us = pm_metal_async_mono_us();
+    uint64_t us = pm_metal_coop_mono_us();
     uint64_t then_us = ((uint64_t)time->secs * 1000000ull) + ((uint64_t)time->nanos / 1000ull);
     return (unsigned long)(us > then_us ? us - then_us : 0);
 }
@@ -208,7 +208,7 @@ z_result_t _z_get_time_since_epoch(_z_time_since_epoch *t) {
     if (t == NULL) {
         _Z_ERROR_RETURN(_Z_ERR_GENERIC);
     }
-    us = pm_metal_async_mono_us();
+    us = pm_metal_coop_mono_us();
     t->secs = (uint32_t)(us / 1000000ull);
     t->nanos = (uint32_t)((us % 1000000ull) * 1000ull);
     return _Z_RES_OK;

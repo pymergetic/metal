@@ -3,7 +3,7 @@
  * 16-byte ZIDs, tears down cleanly across bounded poll() steps, interleaves
  * two cooperative sessions (listener + connector) on one thread over loopback,
  * and round-trips a PUT to a cross-peer SUBSCRIBER sample over that pair. */
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/zenoh.h"
 #include "pymergetic/wasmmod/guest.h"
@@ -102,7 +102,7 @@ static int32_t case_up_poll_bounded(void) {
     (void)pm_metal_net_zenoh_up();
     for (steps = 0; steps < 16u; steps++) {
         (void)pm_metal_net_zenoh_poll();
-        (void)pm_metal_async_poll();
+        (void)pm_metal_coop_poll();
         (void)pm_metal_net_ip_pump();
     }
     /* The ZID must still be resolvable (local identity persists pre-open). */
@@ -123,7 +123,7 @@ static void pump_both(void) {
     (void)pm_metal_net_zenoh_poll();
     (void)pm_metal_net_zenoh_sel(1);
     (void)pm_metal_net_zenoh_poll();
-    (void)pm_metal_async_poll();
+    (void)pm_metal_coop_poll();
     (void)pm_metal_net_ip_pump();
 }
 
@@ -372,7 +372,7 @@ static int32_t case_scout_roundtrip(void) {
     for (steps = 0; steps < 8u; steps++) {
         rc = pm_metal_net_zenoh_scout(2u /* Z_WHAT_PEER */, zid, &whatami);
         (void)pm_metal_net_zenoh_poll();
-        (void)pm_metal_async_poll();
+        (void)pm_metal_coop_poll();
         if (rc != 0) {
             return fail_zenoh("scout resolved with no answerer");
         }
@@ -399,7 +399,7 @@ static int32_t case_scout_roundtrip(void) {
         rc = pm_metal_net_zenoh_scout(2u /* Z_WHAT_PEER */, zid, &whatami);
         (void)pm_metal_net_zenoh_scout_answer_pump();
         (void)pm_metal_net_ip_pump();
-        (void)pm_metal_async_poll();
+        (void)pm_metal_coop_poll();
         if (rc == 1) {
             break;
         }

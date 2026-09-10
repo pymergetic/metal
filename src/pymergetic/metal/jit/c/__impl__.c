@@ -6,7 +6,7 @@
  */
 #define _GNU_SOURCE 1
 #include "pymergetic/metal/jit/c/__exports__.h"
-#include "pymergetic/metal/async.h"
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/boot/externals.h"
 #include "pymergetic/util/mem.h"
 #include <stdlib.h>
@@ -17,7 +17,7 @@
 #define PM_METAL_JIT_C_WASM_CAP (256u * 1024u)
 
 typedef struct {
-    pm_metal_async_coro_t coro;
+    pm_metal_coop_coro_t coro;
     /* Tag checked by pm_metal_jit_c_result_of — a pointer compare against
      * this TU's compile_step would reject a rebuilt (re-linked) copy of the
      * same card, whose step fn lives at a different address. */
@@ -274,7 +274,7 @@ static int pm_metal_jit_c_tcc_wasm_compile(const char *source,
     /* the coro face carries no arena of its own — the compile's scratch
      * (and wasm32-gen's growable emission buffers) go through the boot
      * arena (async_init's) */
-    pm_util_mem_arena_t *a = pm_metal_async_arena();
+    pm_util_mem_arena_t *a = pm_metal_coop_arena();
     if (!a) return -1;
     if (pm_metal_jit_c_arena_acquire(a) != 0) return -1;
     s = wasm_tcc_new();
@@ -363,13 +363,13 @@ int32_t pm_metal_jit_c_arena_release(pm_util_mem_arena_t *arena) {
 }
 #endif /* PM_HAS_TCC */
 
-pm_metal_async_coro_t *pm_metal_jit_c_compile_alloc(
+pm_metal_coop_coro_t *pm_metal_jit_c_compile_alloc(
     pm_util_mem_arena_t *arena, const char *source, size_t source_len, const char *module_name) {
     size_t name_len; pm_metal_jit_c_frame_t *f; char *src_copy;
     if (arena == NULL || source == NULL || module_name == NULL || source_len == 0) return NULL;
     name_len = strlen(module_name);
     if (!name_len) return NULL;
-    f = (pm_metal_jit_c_frame_t *)pm_metal_async_coro_create(
+    f = (pm_metal_jit_c_frame_t *)pm_metal_coop_coro_create(
         pm_metal_jit_c_compile_step, sizeof(*f) + source_len + 1u + name_len + 1u);
     if (!f) return NULL;
     f->magic = PM_METAL_JIT_C_FRAME_MAGIC;
@@ -1153,7 +1153,7 @@ int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
         NULL, 0, NULL, 0, obj_out, obj_len, errbuf, errbuf_len);
 }
 
-pm_metal_async_status_t pm_metal_jit_c_compile_step(pm_metal_async_coro_t *self) {
+pm_metal_coop_status_t pm_metal_jit_c_compile_step(pm_metal_coop_coro_t *self) {
     if (!self) return PM_METAL_ASYNC_ERROR;
     pm_metal_jit_c_frame_t *f = (pm_metal_jit_c_frame_t *)self;
     if (!f->source || !f->source_len) return PM_METAL_ASYNC_ERROR;
@@ -1171,7 +1171,7 @@ pm_metal_async_status_t pm_metal_jit_c_compile_step(pm_metal_async_coro_t *self)
 }
 
 const pm_metal_jit_c_result_t *pm_metal_jit_c_result_of(
-    const pm_metal_async_coro_t *self) {
+    const pm_metal_coop_coro_t *self) {
     const pm_metal_jit_c_frame_t *f;
     if (self == NULL) {
         return NULL;
@@ -1186,13 +1186,13 @@ const pm_metal_jit_c_result_t *pm_metal_jit_c_result_of(
 #include "pymergetic/wasmmod/guest.h"
 
 PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_compile_alloc, pm_metal_jit_c_compile_alloc,
-    pm_metal_async_coro_t *(pm_util_mem_arena_t *, const char *, size_t, const char *));
+    pm_metal_coop_coro_t *(pm_util_mem_arena_t *, const char *, size_t, const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_compile_step, pm_metal_jit_c_compile_step,
-    pm_metal_async_status_t(pm_metal_async_coro_t *));
+    pm_metal_coop_status_t(pm_metal_coop_coro_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_result_free, pm_metal_jit_c_result_free,
     void(pm_util_mem_arena_t *, pm_metal_jit_c_result_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_result_of, pm_metal_jit_c_result_of,
-    const pm_metal_jit_c_result_t *(const pm_metal_async_coro_t *));
+    const pm_metal_jit_c_result_t *(const pm_metal_coop_coro_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_object_compile, pm_metal_jit_c_object_compile,
     int32_t(pm_util_mem_arena_t *, const char *, size_t,
         uint8_t **, size_t *, char *, size_t));
