@@ -302,17 +302,50 @@ def _tree_of(fqns):
     return finish(root)
 
 
-def shell_ctx(catalog, *, title, active_package="", body_html="", nav_html_override=None, base_path=""):
+# Seat-only top-nav pages. Same chrome, same tokens, same sidebar as Browse —
+# they are views of this seat, not a second console.
+_SEAT_PAGES = (
+    ("reg", "Registry"),
+    ("factory", "Factory"),
+)
+
+
+def _nav_extra(nav_active):
+    """The shell's nav_extra slot: the seat's own pages beside Browse."""
+    out = []
+    for key, label in _SEAT_PAGES:
+        cls = "is-active" if nav_active == key else ""
+        out.append('<a href="%s" class="%s">%s</a>' % (_href(key), cls, label))
+    return "".join(out)
+
+
+def _console_head():
+    """The corner console panel, on every page the seat serves.
+
+    Attached from here rather than from shell.html: that template is the
+    chrome shared with the CDN, and this panel is a seat thing — it reads
+    console 0 of the box that served the page. Coming in through page_head
+    means the runtime-rendered package pages get it too, with no template of
+    their own to edit.
+    """
+    return ('<link rel="stylesheet" href="%s" />'
+            '<script src="%s" defer></script>'
+            % (_href("static", "css", "console.css"),
+               _href("static", "seat", "console.js")))
+
+
+def shell_ctx(catalog, *, title, active_package="", body_html="", nav_html_override=None,
+              base_path="", nav_active="browse", page_head="", page_js=None):
     d = {
         "title": title,
         "site_css": _href("static", "site.css"),
-        "page_head": "",
+        "page_head": page_head + _console_head(),
         "body_class": "",
         "base_path": base_path,
         "experimental": False,
         "experimental_message": "",
         "brand_name": "pymergetic.metal",
-        "home_href": _href("inspect", ""),
+        "home_href": "/",
         "brand_logo": _href("static", "img", "pymergetic.png"),
         "health_href": _href("health"),
         "main_class": "",
@@ -325,7 +358,8 @@ def shell_ctx(catalog, *, title, active_package="", body_html="", nav_html_overr
         "nav_sessions": "",  # no browser sessions to list on the seat
         "nav_docs": _href("docs"),  # FastAPI-style interactive docs on the seat
         "nav_login": "",
-        "nav_browse_cls": "is-active" if (nav_html_override is None or active_package == "") else "",
+        "nav_extra": _nav_extra(nav_active),
+        "nav_browse_cls": "is-active" if nav_active == "browse" else "",
         "nav_users_cls": "",
         "nav_publish_cls": "",
         "nav_sessions_cls": "",
@@ -345,9 +379,10 @@ def shell_ctx(catalog, *, title, active_package="", body_html="", nav_html_overr
         "content": body_html,
         "content_nav": nav_html_override if nav_html_override is not None else "",
         "app_version": "seat",
-        # The shared dual-pane Inspect commander, vendored here (www/static/inspect)
-        # exactly as the CDN serves it — not the plain /inspect console.
-        "inspect_js": _href("static", "inspect", "main.js"),
+        # The shell's one page-script slot. Browse and the package page load the
+        # shared dual-pane Inspect commander, vendored here (www/static/inspect)
+        # exactly as the CDN serves it; a seat page overrides it with its own.
+        "inspect_js": page_js if page_js else _href("static", "inspect", "main.js"),
     }
     return d
 
@@ -436,6 +471,40 @@ def render_home(registry, *, engine, template_dir="www", active_package=""):
     body = engine.render("home.html", {"catalog": catalog, "catalog_len": len(catalog)})
     shell = shell_ctx(catalog, title="pymergetic.metal — seat", body_html=body, nav_html_override=nav)
     return engine.render("shell.html", shell)
+
+
+def _seat_page(registry, *, engine, template, title, nav_active, script):
+    """Render one live seat page (registry / factory) in the shared chrome.
+
+    These pages are the seat's own faces, not the CDN's: their content is fetched
+    live by the page script from this seat's JSON API (/health, /inspect/reg*,
+    /build*). The HTML is therefore the same static shell every other view uses —
+    banner, package sidebar, footer, one token palette — so a seat page is a view
+    of the same UI, never a second console with its own theme.
+    """
+    fqns = _cards(_modules(registry))
+    body = engine.render(template, {})
+    shell = shell_ctx([], title=title, body_html=body,
+                      nav_html_override=_nav(_tree_of(sorted(fqns))),
+                      nav_active=nav_active,
+                      page_head='<link rel="stylesheet" href="%s" />'
+                                % _href("static", "css", "seat.css"),
+                      page_js=_href("static", "seat", script))
+    return engine.render("shell.html", shell)
+
+
+def render_reg(registry, *, engine, template_dir="www"):
+    """Render the registry console (reg.html in shell.html)."""
+    return _seat_page(registry, engine=engine, template="reg.html",
+                      title="registry — pymergetic.metal", nav_active="reg",
+                      script="reg.js")
+
+
+def render_factory(registry, *, engine, template_dir="www"):
+    """Render the factory floor (factory.html in shell.html)."""
+    return _seat_page(registry, engine=engine, template="factory.html",
+                      title="factory — pymergetic.metal", nav_active="factory",
+                      script="factory.js")
 
 
 def render_package(registry, name, *, engine, template_dir="www"):

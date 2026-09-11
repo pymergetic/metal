@@ -117,6 +117,38 @@ pm_util_mem_arena_t *pm_metal_boot_arena(void) {
     return s_arena;
 }
 
+/* A span of the seat's memory, page-aligned, for work that needs a large room
+ * for the length of one job and nothing afterwards — a compile's workspace, a
+ * link's relocation tables. Not the arena: on a hosted seat the arena is one
+ * mmap'd region of its own and a link's room is the size of the whole of it,
+ * so the span comes from where that region came from. A board has nowhere else
+ * to go, and no need to: its arena is the memmap.
+ *
+ * Give it back with the same length. NULL when the seat cannot spare it, which
+ * the caller answers as a refusal rather than a fault. */
+__attribute__((weak)) void *pm_metal_boot_fill_span_take(size_t len) {
+    return pm_util_mem_memalign(s_arena, 4096u, len);
+}
+
+__attribute__((weak)) void pm_metal_boot_fill_span_give(void *base, size_t len) {
+    (void)len;
+    pm_util_mem_free(s_arena, base);
+}
+
+void *pm_metal_boot_span_take(size_t len) {
+    if (len == 0) {
+        return NULL;
+    }
+    return pm_metal_boot_fill_span_take(len);
+}
+
+void pm_metal_boot_span_give(void *base, size_t len) {
+    if (base == NULL || len == 0) {
+        return;
+    }
+    pm_metal_boot_fill_span_give(base, len);
+}
+
 static void put_u32(uint8_t *p, uint32_t v) {
     p[0] = (uint8_t)v;
     p[1] = (uint8_t)(v >> 8);
@@ -248,6 +280,14 @@ PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot, pm_metal_boot, int(void));
 PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_ready, pm_metal_ready, int(void));
 PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot_feed_span, pm_metal_boot_feed_span, int32_t(uint64_t, uint64_t));
 PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot_seat, pm_metal_boot_seat, const char *(void));
+/* The seat's arena, for code that has to take a span from it rather than be
+ * handed one: the upy bridge builds a compile's workspace this way instead of
+ * carrying a static array for it. Registered so the bridge can reach it the
+ * way it reaches every other metal face — through the registry, not a link
+ * against this card. */
+PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot_arena, pm_metal_boot_arena, pm_util_mem_arena_t *(void));
+PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot_span_take, pm_metal_boot_span_take, void *(size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot_span_give, pm_metal_boot_span_give, void(void *, size_t));
 
 /* tlsf.h: "Two Level Segregated Fit memory allocator, version 3.1." */
 PM_METAL_EXTERNAL_C(tlsf, "3.1");

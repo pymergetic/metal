@@ -14,6 +14,7 @@ extern "C" {
 
 /* Stable order so the floor tree does not reshuffle when a new card attaches. */
 #define PM_METAL_BOOT_MSG_MEM 10u
+#define PM_METAL_BOOT_MSG_LIMITS 15u
 #define PM_METAL_BOOT_MSG_CPU 20u
 #define PM_METAL_BOOT_MSG_DEVICES 30u
 #define PM_METAL_BOOT_MSG_CONSOLE 35u

@@ -123,6 +123,15 @@ import pymergetic.metal.net.dns as dns
 
 if dns.resolve is None:
     raise SystemExit("dns")
+# An A record added from Python and resolved back. The name and the address
+# are two arguments the caller means: a face shaped (name, number) used to be
+# reachable from C and refused here, which is how a zone stayed unwritable
+# from the language the seat's REPL speaks.
+if dns.add("probe.metal", 0x7F000002) != 0:
+    raise SystemExit("dns add")
+_a = dns.resolve("probe.metal")
+if _a is None or _a[0] != 0 or _a[1] != 0x7F000002:
+    raise SystemExit("dns resolve added %r" % (_a,))
 print("upy dns")
 print("upy socket")
 import pymergetic.wasmmod as w
@@ -613,4 +622,245 @@ if t.registry_find("pymergetic.types.Nope") is not None:
 if t.registry_count() < 12:
     raise SystemExit("types registry count %r" % (t.registry_count(),))
 print("upy types value loop")
+
+# Every capacity the kernel has is a knob the software can read and move from
+# here — that is the whole point of the limits card, so the seat proves it from
+# Python and not only from C.
+import pymergetic.util.limits as limits
+
+if not limits.ready():
+    raise SystemExit("limits not ready")
+_n = limits.count()
+if _n < 20:
+    raise SystemExit("limits count %r" % (_n,))
+
+# The listing walks by name, in one order, and every name resolves.
+_name = limits.next("")
+_seen = []
+while _name is not None:
+    if limits.find(_name) < 0:
+        raise SystemExit("limits listing name %r does not resolve" % (_name,))
+    _seen.append(_name)
+    _name = limits.next(_name)
+if len(_seen) != _n:
+    raise SystemExit("limits walked %d of %d" % (len(_seen), _n))
+if sorted(_seen) != _seen:
+    raise SystemExit("limits listing out of order")
+
+# The same list asked by number, which is how a seat lists its knobs before it
+# knows any of their names. Same order, and nothing past the last one.
+_by_index = [limits.name(_k) for _k in range(_n)]
+if _by_index != _seen:
+    raise SystemExit("limits by index %r" % (_by_index,))
+if limits.name(_n) is not None:
+    raise SystemExit("a knob past the last one")
+
+# A knob a seat would actually turn: how many connections the HTTP server
+# takes. Software moves the soft, the hard is the wall.
+_i = limits.find("net.http.asgi.connection")
+if _i < 0:
+    raise SystemExit("no asgi connection knob")
+_was = limits.soft(_i)
+_hard = limits.hard(_i)
+if limits.default(_i) != _was:
+    raise SystemExit("asgi connection knob is not at its default")
+if limits.set("net.http.asgi.connection", _was + 8) != 0:
+    raise SystemExit("raise the asgi connection knob")
+if limits.soft(_i) != _was + 8:
+    raise SystemExit("asgi conn soft %r" % (limits.soft(_i),))
+if _hard != 0 and limits.set("net.http.asgi.connection", _hard + 1) != -2:
+    raise SystemExit("the soft went past its hard")
+if limits.reset("net.http.asgi.connection") != 0 or limits.soft(_i) != _was:
+    raise SystemExit("reset the asgi connection knob")
+if limits.set("nobody.asked", 1) != -1:
+    raise SystemExit("a name nobody registered was accepted")
+
+# A knob whose card has to reshape storage to honour it: the console's
+# scrollback. The seat keeps more of its own output and then stops.
+_ci = limits.find("console.scrollback")
+_cwas = limits.soft(_ci)
+if limits.set("console.scrollback", 512) != 0:
+    raise SystemExit("deepen the console")
+if limits.soft(_ci) != 512:
+    raise SystemExit("console scrollback soft %r" % (limits.soft(_ci),))
+if limits.reset("console.scrollback") != 0 or limits.soft(_ci) != _cwas:
+    raise SystemExit("reset the console scrollback")
+
+print("upy limits knob loop")
+
+# The rooms the bridge builds for one job are knobs too, and nothing is
+# reserved for them any more: the seat takes the pages when the work starts and
+# gives them back when it ends. A compile's workspace is the one every seat
+# uses, so it is the one proven here — shrink it and the compile refuses
+# (cleanly, with None), put it back and the same source compiles again.
+for _rn in ("upy.compile.arena", "upy.cpp.arena", "upy.link.arena", "upy.dump"):
+    _rj = limits.find(_rn)
+    if _rj < 0:
+        raise SystemExit("no room knob %r" % (_rn,))
+    if limits.soft(_rj) != limits.default(_rj):
+        raise SystemExit("room knob %r is not at its default" % (_rn,))
+_ri = limits.find("upy.compile.arena")
+if limits.set("upy.compile.arena", 4096) != 0:
+    raise SystemExit("shrink the compile room")
+if jpy.object_compile(_selfhost_src, "upy_room_toosmall") is not None:
+    raise SystemExit("a compile in a 4KB room should refuse")
+if limits.reset("upy.compile.arena") != 0 or limits.soft(_ri) != limits.default(_ri):
+    raise SystemExit("reset the compile room")
+_ragain = jpy.object_compile(_selfhost_src, "upy_room_again")
+if not isinstance(_ragain, bytes) or len(_ragain) < 8:
+    raise SystemExit("compile once the room is back %r" % (type(_ragain),))
+print("upy room knob loop")
+
+# The loader's image knob: a pack's bytes are an allocation of exactly the
+# pack's length now, not a reserved 64KB row (128 of those was 8.4MB of a
+# seat's bss for packs nobody had loaded). The refusal itself is proven on the
+# seats that fetch packs over a wire; here the knob is read, moved, put back.
+_lki = limits.find("wasmmod.loader.image")
+if _lki < 0:
+    raise SystemExit("no loader image knob")
+if limits.soft(_lki) != 65536 or limits.default(_lki) != 65536:
+    raise SystemExit("loader image knob default %r" % (limits.soft(_lki),))
+if limits.set("wasmmod.loader.image", 4 * 1024 * 1024) != 0 or limits.soft(_lki) != 4194304:
+    raise SystemExit("raise the loader image knob")
+if limits.reset("wasmmod.loader.image") != 0 or limits.soft(_lki) != 65536:
+    raise SystemExit("reset the loader image knob")
+print("upy loader image knob")
+
+# The registry's rows: an export, test or bench row is taken one at a time
+# now (128 modules x 64 reserved export rows was 3.6MB of a seat's bss), so
+# what a seat holds is these three knobs and `used` is what it holds. The
+# refusal is proven where a pack registers faces over a wire (the CDN prove,
+# the boards); here the knobs are read, moved and put back.
+for _name, _want in (
+    ("wasmmod.registry.exports", 1536),
+    ("wasmmod.registry.tests", 384),
+    ("wasmmod.registry.benches", 64),
+):
+    _at = limits.find(_name)
+    if _at < 0:
+        raise SystemExit("no %s knob" % _name)
+    if limits.soft(_at) != _want or limits.default(_at) != _want:
+        raise SystemExit("%s default %r" % (_name, limits.soft(_at)))
+    if limits.counted(_at) != 1:
+        raise SystemExit("%s does not count its rows" % _name)
+    if limits.set(_name, _want * 2) != 0 or limits.soft(_at) != _want * 2:
+        raise SystemExit("raise %s" % _name)
+    if limits.reset(_name) != 0 or limits.soft(_at) != _want:
+        raise SystemExit("reset %s" % _name)
+_rx = limits.find("wasmmod.registry.exports")
+if limits.used(_rx) == 0:
+    raise SystemExit("the seat's own exports are rows too")
+print("upy registry row knobs", limits.used(_rx))
+
+# The type registry's rows and facegen's staging rows are knobs on the same
+# list. Descriptors register from crt0 on a board, so the 512 the registry
+# boots with is a pre-heap floor it widens past with the knob, and staging —
+# a host tool's path, which is why this seat holds none — is a row per staged
+# type instead of the 96 x 12KB block that used to stand in every image.
+for _name, _want in (("types.stage", 96), ("types.registry", 512)):
+    _at = limits.find(_name)
+    if _at < 0:
+        raise SystemExit("no %s knob" % _name)
+    if limits.soft(_at) != _want or limits.default(_at) != _want:
+        raise SystemExit("%s default %r" % (_name, limits.soft(_at)))
+    if limits.counted(_at) != 1:
+        raise SystemExit("%s does not count what it holds" % _name)
+    if limits.set(_name, _want * 2) != 0 or limits.soft(_at) != _want * 2:
+        raise SystemExit("raise %s" % _name)
+    if limits.reset(_name) != 0 or limits.soft(_at) != _want:
+        raise SystemExit("reset %s" % _name)
+if limits.used(limits.find("types.stage")) != 0:
+    raise SystemExit("a seat stages nothing")
+_tr = limits.find("types.registry")
+if limits.used(_tr) == 0 or limits.used(_tr) != t.registry_count():
+    raise SystemExit("types.registry used is the live count")
+print("upy types row knobs", limits.used(_tr))
+
+# A NIC's ring is taken when the NIC attaches, not reserved per device per
+# image: the three net drivers each carry how many NICs they offer, how deep
+# a ring is and how big a frame may be. This seat's NIC is the sim one, so
+# that is where the refusal is proven: with the device knob down at what is
+# already bound, a probe finds no room and binds nothing.
+for _name, _want in (
+    ("drivers.net.sim.device", 4),
+    ("drivers.net.sim.queue", 8),
+    ("drivers.net.sim.frame", 2048),
+    ("drivers.net.virtio.device", 8),
+    ("drivers.net.virtio.queue", 8),
+    ("drivers.net.virtio.frame", 2048),
+    ("drivers.net.bge.device", 8),
+    ("drivers.net.bge.queue", 8),
+    ("drivers.net.bge.frame", 2048),
+    ("drivers.net.tap.device", 2),
+    ("drivers.net.tap.frame", 2048),
+):
+    _at = limits.find(_name)
+    if _at < 0:
+        raise SystemExit("no %s knob" % _name)
+    if limits.soft(_at) != _want or limits.default(_at) != _want:
+        raise SystemExit("%s default %r" % (_name, limits.soft(_at)))
+    if limits.set(_name, _want * 2) != 0 or limits.soft(_at) != _want * 2:
+        raise SystemExit("raise %s" % _name)
+    if limits.reset(_name) != 0 or limits.soft(_at) != _want:
+        raise SystemExit("reset %s" % _name)
+import pymergetic.metal.drivers.net.sim as _simnic
+
+if _simnic.up() != 0:
+    raise SystemExit("sim nic up")
+_sd = limits.find("drivers.net.sim.device")
+_bound = limits.used(_sd)
+if _bound == 0 or limits.counted(_sd) != 1:
+    raise SystemExit("the seat's NIC is a counted row")
+if limits.set("drivers.net.sim.device", _bound) != 0:
+    raise SystemExit("shrink the sim device knob")
+if _simnic.probe() >= 0:
+    raise SystemExit("a NIC over the device knob should refuse")
+if limits.used(_sd) != _bound:
+    raise SystemExit("a refused probe binds nothing")
+if limits.reset("drivers.net.sim.device") != 0:
+    raise SystemExit("reset the sim device knob")
+print("upy driver nic knobs", _bound)
+
+# Above the driver cards sit the class tables: how many NICs, scanouts,
+# disks, input devices and clocks this seat carries at all, whichever card
+# they came from. Each one widens a row at a time instead of standing at its
+# ceiling, and each counts what is bound.
+for _name, _want in (
+    ("drivers.net.device", 32),
+    ("drivers.gfx.device", 32),
+    ("drivers.blk.device", 8),
+    ("drivers.input.device", 8),
+    ("drivers.rtc.device", 4),
+    ("drivers.gfx.sim.device", 4),
+    ("drivers.gfx.sim.shadow", 1536),
+    ("drivers.blk.ide.device", 2),
+    ("drivers.blk.ide.sector", 256),
+    ("drivers.input.virtio.device", 4),
+    ("drivers.rtc.sim.device", 4),
+):
+    _at = limits.find(_name)
+    if _at < 0:
+        raise SystemExit("no %s knob" % _name)
+    if limits.soft(_at) != _want or limits.default(_at) != _want:
+        raise SystemExit("%s default %r" % (_name, limits.soft(_at)))
+    if limits.set(_name, _want * 2) != 0 or limits.soft(_at) != _want * 2:
+        raise SystemExit("raise %s" % _name)
+    if limits.reset(_name) != 0 or limits.soft(_at) != _want:
+        raise SystemExit("reset %s" % _name)
+_cn = limits.find("drivers.net.device")
+_cg = limits.find("drivers.gfx.device")
+if limits.counted(_cn) != 1 or limits.counted(_cg) != 1:
+    raise SystemExit("the class tables count what is bound")
+if limits.used(_cn) < 1 or limits.used(_cg) < 1:
+    raise SystemExit("this seat has a NIC and a scanout")
+# With the class table down at what is bound, the driver's own knob is wide
+# open and a NIC still finds no row.
+if limits.set("drivers.net.device", limits.used(_cn)) != 0:
+    raise SystemExit("shrink the class table knob")
+if _simnic.probe() >= 0:
+    raise SystemExit("a NIC over the class table knob should refuse")
+if limits.reset("drivers.net.device") != 0:
+    raise SystemExit("reset the class table knob")
+print("upy device class knobs", limits.used(_cn), limits.used(_cg))
+
 print("guest prove ok")

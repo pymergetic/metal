@@ -8,6 +8,7 @@
 #include "pymergetic/metal/edit/__types__.h"
 #include "pymergetic/metal/build/__types__.h"
 #include "pymergetic/metal/fs/__exports__.h"
+#include "pymergetic/util/limits.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
 
@@ -52,7 +53,10 @@ static const char *SRC =
 static int32_t test_parse(void) {
     pm_metal_edit_tree_t t;
     const pm_metal_edit_node_t *n;
-    if (pm_metal_edit_parse_c(&t, SRC, strlen(SRC)) != PM_METAL_EDIT_OK) {
+    if (setup()) {
+        return 100;
+    }
+    if (pm_metal_edit_parse_c(g_arena, &t, SRC, strlen(SRC)) != PM_METAL_EDIT_OK) {
         return 1;
     }
     /* two defines, two functions */
@@ -82,8 +86,13 @@ static int32_t test_parse(void) {
     if (pm_metal_edit_locate(&t, PM_METAL_EDIT_FN, "no_such") != NULL) {
         return 7;
     }
-    if (pm_metal_edit_parse_c(NULL, SRC, 10) != PM_METAL_EDIT_ERR_ARGS) {
+    if (pm_metal_edit_parse_c(g_arena, NULL, SRC, 10) != PM_METAL_EDIT_ERR_ARGS
+        || pm_metal_edit_parse_c(NULL, &t, SRC, 10) != PM_METAL_EDIT_ERR_ARGS) {
         return 8;
+    }
+    pm_metal_edit_tree_release(g_arena, &t);
+    if (t.n_nodes != 0 || t.nodes != NULL) {
+        return 101;
     }
     return 0;
 }
@@ -96,7 +105,7 @@ static int32_t test_set_define(void) {
     if (setup()) {
         return 10;
     }
-    if (pm_metal_edit_parse_c(&t, SRC, strlen(SRC)) != PM_METAL_EDIT_OK) {
+    if (pm_metal_edit_parse_c(g_arena, &t, SRC, strlen(SRC)) != PM_METAL_EDIT_OK) {
         return 11;
     }
     rc = pm_metal_edit_set_define(g_arena, &t, "TEST_EDIT_BUF", "128",
@@ -127,6 +136,7 @@ static int32_t test_set_define(void) {
     if (rc != PM_METAL_EDIT_ERR_NOT_FOUND) {
         return 17;
     }
+    pm_metal_edit_tree_release(g_arena, &t);
     return 0;
 }
 
@@ -137,7 +147,7 @@ static int32_t test_set_fn_body(void) {
     if (setup()) {
         return 20;
     }
-    if (pm_metal_edit_parse_c(&t, SRC, strlen(SRC)) != PM_METAL_EDIT_OK) {
+    if (pm_metal_edit_parse_c(g_arena, &t, SRC, strlen(SRC)) != PM_METAL_EDIT_OK) {
         return 21;
     }
     if (pm_metal_edit_set_fn_body(g_arena, &t, "test_edit_add",
@@ -161,6 +171,7 @@ static int32_t test_set_fn_body(void) {
             &out, &out_len) != PM_METAL_EDIT_ERR_NOT_FOUND) {
         return 26;
     }
+    pm_metal_edit_tree_release(g_arena, &t);
     return 0;
 }
 
@@ -200,7 +211,7 @@ static int32_t test_write_back_gates(void) {
     if (setup()) {
         return 40;
     }
-    if (pm_metal_edit_parse_c(&t, SRC, strlen(SRC)) != PM_METAL_EDIT_OK) {
+    if (pm_metal_edit_parse_c(g_arena, &t, SRC, strlen(SRC)) != PM_METAL_EDIT_OK) {
         return 41;
     }
     if (pm_metal_edit_set_define(g_arena, &t, "TEST_EDIT_BUF", "256",
@@ -261,6 +272,79 @@ static int32_t test_write_back_gates(void) {
         }
     }
     pm_metal_fs_drop(path);
+    pm_metal_edit_tree_release(g_arena, &t);
+    return 0;
+}
+
+/* The knobs: what the editor will take, how much of it it keeps, and how much
+ * of the seat one typecheck may borrow. Each is moved here and moved back, so
+ * every branch below is a limit doing something at runtime rather than a
+ * number chosen at build time. */
+static int32_t test_knobs(void) {
+    pm_metal_edit_tree_t t;
+    int32_t slot;
+    if (setup()) {
+        return 60;
+    }
+    slot = pm_util_limits_find("edit.node");
+    if (slot < 0 || pm_util_limits_default(slot) != PM_METAL_EDIT_NODES_DEFAULT) {
+        return 61;
+    }
+    /* SRC has four constructs: with room for two, the parse says so. */
+    if (pm_util_limits_set("edit.node", 2u) != 0) {
+        return 62;
+    }
+    if (pm_metal_edit_parse_c(g_arena, &t, SRC, strlen(SRC))
+            != PM_METAL_EDIT_ERR_NOMEM) {
+        return 63;
+    }
+    if (strstr(t.error, "edit.node") == NULL) {
+        return 64;
+    }
+    pm_metal_edit_tree_release(g_arena, &t);
+    if (pm_util_limits_reset("edit.node") != 0
+        || pm_metal_edit_parse_c(g_arena, &t, SRC, strlen(SRC)) != PM_METAL_EDIT_OK
+        || t.n_nodes != 4u) {
+        return 65;
+    }
+    /* The node list is the file's size, not the knob's: four constructs do
+     * not cost two hundred and fifty-six nodes. */
+    if (t.cap_nodes == 0u || t.cap_nodes > 64u) {
+        return 66;
+    }
+    pm_metal_edit_tree_release(g_arena, &t);
+    /* What the editor will accept at all. */
+    if (pm_util_limits_set("edit.source", 16u) != 0) {
+        return 67;
+    }
+    if (pm_metal_edit_parse_c(g_arena, &t, SRC, strlen(SRC))
+            != PM_METAL_EDIT_ERR_ARGS
+        || strstr(t.error, "edit.source") == NULL) {
+        return 68;
+    }
+    if (pm_util_limits_reset("edit.source") != 0) {
+        return 69;
+    }
+    /* And the scratch one typecheck borrows: too little and it is refused
+     * with the knob named, back at the default and it compiles. */
+    {
+        char err[PM_METAL_EDIT_ERR_MAX];
+        err[0] = 0;
+        if (pm_util_limits_set("edit.typecheck", 4096u) != 0) {
+            return 70;
+        }
+        if (pm_metal_edit_typecheck_c(SRC, strlen(SRC), err, sizeof(err))
+                == PM_METAL_EDIT_OK) {
+            return 71;
+        }
+        if (pm_util_limits_reset("edit.typecheck") != 0) {
+            return 72;
+        }
+        if (pm_metal_edit_typecheck_c(SRC, strlen(SRC), NULL, 0)
+                != PM_METAL_EDIT_OK) {
+            return 73;
+        }
+    }
     return 0;
 }
 
@@ -275,6 +359,8 @@ static int32_t pm_metal_edit_tests(void) {
     rc = test_typecheck_gate();
     if (rc) return rc;
     rc = test_write_back_gates();
+    if (rc) return rc;
+    rc = test_knobs();
     if (rc) return rc;
     if (g_arena != NULL) {
         pm_util_mem_arena_destroy(g_arena);

@@ -3,11 +3,12 @@
 
 #include "pymergetic/metal/dt.h"
 #include "pymergetic/metal/drivers/__types__.h"
+#include "pymergetic/util/limits.h"
 #include "pymergetic/metal/net/ip.h"
 
 #include <string.h>
 
-#define PM_METAL_NETDEV_MAX 32u
+#define PM_METAL_NETDEV_DEFAULT 32u
 
 struct pm_metal_netdev {
     uint32_t used;
@@ -21,72 +22,119 @@ struct pm_metal_netdev {
 };
 
 static pm_util_mem_arena_t *s_arena;
-static struct pm_metal_netdev s_dev[PM_METAL_NETDEV_MAX];
+/* The table of bound NICs, widened a step at a time under the device
+ * knob instead of reserved at its ceiling: a seat that binds one NIC
+ * carries one row. A handle is an index into this table, and nothing outside
+ * holds a pointer into it (each row keeps its driver's ctx, not the other way
+ * round), so the table may move when it grows. */
+static struct pm_metal_netdev *s_dev;
+static uint32_t s_dev_cap;
+static uint32_t s_dev_used;
+
+PM_UTIL_LIMIT_C(pm_metal_drivers_net_limit_device, "drivers.net.device",
+    PM_METAL_NETDEV_DEFAULT, 0u, &s_dev_used);
+
+/* A free row, widening the table if that is what the knob allows. Negative
+ * when this seat is already carrying every NIC it may. */
+static int32_t dev_slot(void) {
+    uint32_t i;
+    void *grown;
+    uint32_t cap = s_dev_cap;
+    /* The knob gates the row, not just the growth: a row left free by an
+     * unbind is one this seat already paid for, not a free pass over it. */
+    if (!PM_UTIL_LIMIT_ROOM(pm_metal_drivers_net_limit_device, s_dev_used)) {
+        return -1;
+    }
+    for (i = 0; i < s_dev_cap; i++) {
+        if (!s_dev[i].used) {
+            return (int32_t)i;
+        }
+    }
+    grown = pm_util_limits_grow(s_arena, s_dev, &cap, (uint32_t)sizeof(*s_dev), &pm_metal_drivers_net_limit_device);
+    if (grown == NULL || cap <= s_dev_cap) {
+        return -1;
+    }
+    i = s_dev_cap;
+    s_dev = grown;
+    s_dev_cap = cap;
+    return (int32_t)i;
+}
 
 int32_t pm_metal_drivers_net_init(pm_util_mem_arena_t *arena) {
     if (arena == NULL) {
         return -1;
     }
     s_arena = arena;
-    memset(s_dev, 0, sizeof(s_dev));
+    /* The rows came from the arena the last run was given; this one may be a
+     * different arena, so the table starts empty. */
+    s_dev = NULL;
+    s_dev_cap = 0;
+    s_dev_used = 0;
     return 0;
 }
 
 void pm_metal_drivers_net_deinit(void) {
     uint32_t i;
-    for (i = 0; i < PM_METAL_NETDEV_MAX; i++) {
+    for (i = 0; i < s_dev_cap; i++) {
         if (s_dev[i].used && s_dev[i].ops.close != NULL) {
             s_dev[i].ops.close(s_dev[i].ops.ctx);
         }
     }
-    memset(s_dev, 0, sizeof(s_dev));
+    s_dev = NULL;
+    s_dev_cap = 0;
+    s_dev_used = 0;
     s_arena = NULL;
 }
 
 int32_t pm_metal_drivers_net_bind(int32_t dt_id, const pm_metal_netdev_ops_t *ops) {
     uint32_t i;
+    int32_t slot;
     int32_t st;
     if (s_arena == NULL || dt_id < 0 || ops == NULL) {
         return -1;
     }
-    for (i = 0; i < PM_METAL_NETDEV_MAX; i++) {
+    for (i = 0; i < s_dev_cap; i++) {
         if (s_dev[i].used && s_dev[i].dt_id == dt_id) {
             return (int32_t)i;
         }
     }
-    for (i = 0; i < PM_METAL_NETDEV_MAX; i++) {
-        if (!s_dev[i].used) {
-            s_dev[i].ops = *ops;
-            if (s_dev[i].ops.open != NULL) {
-                st = s_dev[i].ops.open(s_dev[i].ops.ctx);
-                if (st != 0) {
-                    memset(&s_dev[i], 0, sizeof(s_dev[i]));
-                    return st;
-                }
-            }
-            s_dev[i].used = 1;
-            s_dev[i].dt_id = dt_id;
-            return (int32_t)i;
+    slot = dev_slot();
+    if (slot < 0) {
+        return -1;
+    }
+    i = (uint32_t)slot;
+    s_dev[i].ops = *ops;
+    if (s_dev[i].ops.open != NULL) {
+        st = s_dev[i].ops.open(s_dev[i].ops.ctx);
+        if (st != 0) {
+            memset(&s_dev[i], 0, sizeof(s_dev[i]));
+            return st;
         }
     }
-    return -1;
+    s_dev[i].used = 1;
+    s_dev[i].dt_id = dt_id;
+    s_dev_used++;
+    return (int32_t)i;
 }
 
 int32_t pm_metal_drivers_net_unbind(int32_t h) {
-    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used) {
+    if (h < 0 || (uint32_t)h >= s_dev_cap || !s_dev[h].used) {
         return -1;
     }
     if (s_dev[h].ops.close != NULL) {
         s_dev[h].ops.close(s_dev[h].ops.ctx);
     }
     memset(&s_dev[h], 0, sizeof(s_dev[h]));
+    if (s_dev_used != 0) {
+        s_dev_used--;
+    }
     return 0;
 }
 
 int32_t pm_metal_drivers_net_unbind_dt(int32_t dt_id) {
     uint32_t i;
     int32_t st = -1;
-    for (i = 0; i < PM_METAL_NETDEV_MAX; i++) {
+    for (i = 0; i < s_dev_cap; i++) {
         if (s_dev[i].used && s_dev[i].dt_id == dt_id) {
             st = pm_metal_drivers_net_unbind((int32_t)i);
         }
@@ -97,7 +145,7 @@ int32_t pm_metal_drivers_net_unbind_dt(int32_t dt_id) {
 int32_t pm_metal_drivers_net_count(void) {
     uint32_t i;
     int32_t n = 0;
-    for (i = 0; i < PM_METAL_NETDEV_MAX; i++) {
+    for (i = 0; i < s_dev_cap; i++) {
         if (s_dev[i].used) {
             n++;
         }
@@ -106,7 +154,7 @@ int32_t pm_metal_drivers_net_count(void) {
 }
 
 int32_t pm_metal_drivers_net_dt_id(int32_t h) {
-    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used) {
+    if (h < 0 || (uint32_t)h >= s_dev_cap || !s_dev[h].used) {
         return -1;
     }
     return s_dev[h].dt_id;
@@ -117,7 +165,7 @@ int32_t pm_metal_drivers_net_by_dt(int32_t dt_id) {
     if (dt_id < 0) {
         return -1;
     }
-    for (i = 0; i < PM_METAL_NETDEV_MAX; i++) {
+    for (i = 0; i < s_dev_cap; i++) {
         if (s_dev[i].used && s_dev[i].dt_id == dt_id) {
             return (int32_t)i;
         }
@@ -132,7 +180,7 @@ int32_t pm_metal_drivers_net_by_compat(const char *compat, int32_t nth) {
     if (compat == NULL || compat[0] == 0 || nth < 0) {
         return -1;
     }
-    for (i = 0; i < PM_METAL_NETDEV_MAX; i++) {
+    for (i = 0; i < s_dev_cap; i++) {
         if (!s_dev[i].used) {
             continue;
         }
@@ -149,7 +197,7 @@ int32_t pm_metal_drivers_net_by_compat(const char *compat, int32_t nth) {
 }
 
 int32_t pm_metal_drivers_net_poll(int32_t h) {
-    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used) {
+    if (h < 0 || (uint32_t)h >= s_dev_cap || !s_dev[h].used) {
         return -1;
     }
     if (s_dev[h].ops.poll == NULL) {
@@ -160,7 +208,7 @@ int32_t pm_metal_drivers_net_poll(int32_t h) {
 
 int32_t pm_metal_drivers_net_poll_all(void) {
     uint32_t i;
-    for (i = 0; i < PM_METAL_NETDEV_MAX; i++) {
+    for (i = 0; i < s_dev_cap; i++) {
         if (s_dev[i].used && s_dev[i].ops.poll != NULL) {
             (void)s_dev[i].ops.poll(s_dev[i].ops.ctx);
         }
@@ -169,7 +217,7 @@ int32_t pm_metal_drivers_net_poll_all(void) {
 }
 
 int32_t pm_metal_drivers_net_tx(int32_t h, const uint8_t *frame, uint16_t len) {
-    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used || s_dev[h].ops.tx == NULL) {
+    if (h < 0 || (uint32_t)h >= s_dev_cap || !s_dev[h].used || s_dev[h].ops.tx == NULL) {
         return -1;
     }
     {
@@ -184,28 +232,28 @@ int32_t pm_metal_drivers_net_tx(int32_t h, const uint8_t *frame, uint16_t len) {
 }
 
 void pm_metal_drivers_net_count_rx(int32_t h) {
-    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used) {
+    if (h < 0 || (uint32_t)h >= s_dev_cap || !s_dev[h].used) {
         return;
     }
     s_dev[h].rx_n++;
 }
 
 uint32_t pm_metal_drivers_net_tx_n(int32_t h) {
-    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used) {
+    if (h < 0 || (uint32_t)h >= s_dev_cap || !s_dev[h].used) {
         return 0;
     }
     return s_dev[h].tx_n;
 }
 
 uint32_t pm_metal_drivers_net_tx_err(int32_t h) {
-    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used) {
+    if (h < 0 || (uint32_t)h >= s_dev_cap || !s_dev[h].used) {
         return 0;
     }
     return s_dev[h].tx_err;
 }
 
 uint32_t pm_metal_drivers_net_rx_n(int32_t h) {
-    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used) {
+    if (h < 0 || (uint32_t)h >= s_dev_cap || !s_dev[h].used) {
         return 0;
     }
     return s_dev[h].rx_n;
@@ -216,7 +264,7 @@ void pm_metal_drivers_net_mac(int32_t h, uint8_t *out) {
         return;
     }
     memset(out, 0, 6);
-    if (h < 0 || (uint32_t)h >= PM_METAL_NETDEV_MAX || !s_dev[h].used || s_dev[h].ops.mac == NULL) {
+    if (h < 0 || (uint32_t)h >= s_dev_cap || !s_dev[h].used || s_dev[h].ops.mac == NULL) {
         return;
     }
     s_dev[h].ops.mac(s_dev[h].ops.ctx, out);

@@ -19,9 +19,11 @@ extern "C" {
 #define PM_METAL_UTIL_TREE_SGR_WARN "\033[33m"
 #define PM_METAL_UTIL_TREE_SGR_RST "\033[0m"
 
-/* Name column width for depth-0 lines with a trailing detail token, so the
- * detail values line up the way the boot tree does. */
-#define PM_METAL_UTIL_TREE_NAME_PAD 13u
+/* Column the detail starts in, counted from the left edge of the line and
+ * across every depth: stems and branch and name are padded out to it, so the
+ * values read down one edge however deep the node sits. A name that runs past
+ * it keeps a single space and pushes its own detail right. */
+#define PM_METAL_UTIL_TREE_DETAIL_COL 20u
 #define PM_METAL_UTIL_TREE_LINE 384u
 
 /* Write a raw line (and a trailing newline). NULL prints an empty line. */

@@ -257,8 +257,8 @@ static void ip_input(const uint8_t *pkt, uint32_t len) {
     if (proto == 1 && l4len >= 8u && l4[0] == 0) {
         /* Echo reply. Only the answer to our own outstanding ping counts, so a
          * stray reply cannot satisfy pm_metal_net_ip_ping4. */
-        if (pm_ip_read_be16(l4 + 4) == pm_ip_ping_id) {
-            uint32_t copy = l4len > PM_METAL_IP_RX_MAX ? PM_METAL_IP_RX_MAX : l4len;
+        if (pm_ip_read_be16(l4 + 4) == pm_ip_ping_id && pm_ip_ping_out != NULL) {
+            uint32_t copy = l4len > pm_ip_ping_cap ? pm_ip_ping_cap : l4len;
             memcpy(pm_ip_ping_out, l4, copy);
             pm_ip_ping_len = copy;
         }
@@ -296,11 +296,11 @@ static void ip_input(const uint8_t *pkt, uint32_t len) {
         const uint8_t *payload = l4 + 8;
         uint32_t plen = l4len - 8u;
         uint32_t i;
-        for (i = 0; i < PM_METAL_IP_SOCK_MAX; i++) {
-            struct pm_metal_sock *pcb = &pm_ip_sk[i];
+        for (i = 0; i < pm_ip_sk_cap; i++) {
+            struct pm_metal_sock *pcb = pm_ip_sk[i];
             uint32_t j;
             uint32_t member = 0;
-            if (!pcb->used || pcb->kind != SK_UDP || !pcb->bound) {
+            if (pcb == NULL || pcb->kind != SK_UDP || !pcb->bound) {
                 continue;
             }
             if (pcb->lport != dport) {
@@ -327,8 +327,8 @@ static void ip_input(const uint8_t *pkt, uint32_t len) {
             if (!member) {
                 continue;
             }
-            if (plen > PM_METAL_IP_RX_MAX) {
-                plen = PM_METAL_IP_RX_MAX;
+            if (plen > pcb->rx_cap) {
+                plen = pcb->rx_cap;
             }
             memcpy(pcb->rx, payload, plen);
             pcb->rx_len = plen;

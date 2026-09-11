@@ -18,18 +18,52 @@ pm_util_mem_arena_t *pm_ip_arena;
 uint32_t pm_ip_lo_up;
 uint32_t pm_ip_lo_addr_be = PM_METAL_IP_LO_BE;
 pm_util_lock_t pm_ip_lock;
-struct pm_metal_sock pm_ip_sk[PM_METAL_IP_SOCK_MAX];
-struct pm_metal_ip_l2 pm_ip_l2[PM_METAL_IP_L2_MAX];
+struct pm_metal_sock **pm_ip_sk;
+uint32_t pm_ip_sk_cap;
+uint32_t pm_ip_sock_used;
+struct pm_metal_ip_l2 *pm_ip_l2;
+uint32_t pm_ip_l2_cap;
 uint32_t pm_ip_l2_n;
 int32_t pm_ip_l2_cur = -1;
 uint32_t pm_ip_if_pending_be;
 uint32_t pm_ip_if_pending_mask;
-struct pm_metal_ip_rt pm_ip_rt[PM_METAL_IP_RT_MAX];
-struct pm_metal_ip_arp pm_ip_arp[PM_METAL_IP_ARP_MAX];
+struct pm_metal_ip_rt *pm_ip_rt;
+uint32_t pm_ip_rt_cap;
+uint32_t pm_ip_rt_used;
+struct pm_metal_ip_arp *pm_ip_arp;
+uint32_t pm_ip_arp_cap;
+uint32_t pm_ip_arp_used;
 int32_t pm_ip_rx_l2 = -1;
-uint8_t pm_ip_ping_out[PM_METAL_IP_RX_MAX];
+uint8_t *pm_ip_ping_out;
+uint32_t pm_ip_ping_cap;
 uint32_t pm_ip_ping_len;
 uint16_t pm_ip_ping_id;
+
+/* What this stack may grow to, and what a seat may move.
+ *
+ * Counts have no hard ceiling: a seat that wants ten thousand sockets is
+ * limited by the arena, which is the only honest limit there is. Sizes do have
+ * one — a receive ring is a length, and "no ceiling" would mean nothing, so
+ * the hard number is there to make an absurd value fail loudly at the call
+ * that sets it rather than at the allocation that follows. */
+PM_UTIL_LIMIT_C(pm_ip_limit_socket, "net.ip.socket", PM_METAL_IP_SOCK_DEFAULT, 0u, &pm_ip_sock_used);
+PM_UTIL_LIMIT_C(pm_ip_limit_receive, "net.ip.receive", PM_METAL_IP_RX_DEFAULT, 1048576u, NULL);
+PM_UTIL_LIMIT_C(pm_ip_limit_resend, "net.ip.resend", PM_METAL_IP_REXMIT_DEFAULT, 65536u, NULL);
+PM_UTIL_LIMIT_C(pm_ip_limit_backlog, "net.ip.backlog", PM_METAL_IP_ACCEPT_DEFAULT, 0u, NULL);
+PM_UTIL_LIMIT_C(pm_ip_limit_route, "net.ip.route", PM_METAL_IP_RT_DEFAULT, 0u, &pm_ip_rt_used);
+PM_UTIL_LIMIT_C(pm_ip_limit_neighbour, "net.ip.neighbour", PM_METAL_IP_ARP_DEFAULT, 0u, &pm_ip_arp_used);
+PM_UTIL_LIMIT_C(pm_ip_limit_interface, "net.ip.interface", PM_METAL_IP_L2_DEFAULT, 0u, &pm_ip_l2_n);
+PM_UTIL_LIMIT_C(pm_ip_limit_group, "net.ip.group", PM_METAL_IP_MCAST_DEFAULT, 0u, NULL);
+
+/* A size knob that has been set to nothing is not a zero-byte buffer; fall
+ * back to what the build shipped with. */
+static uint32_t size_of(const pm_util_limit_t *knob) {
+    return knob->soft != 0u ? knob->soft : knob->dflt;
+}
+
+void *pm_ip_table_grow(void *base, uint32_t *cap, uint32_t item, const pm_util_limit_t *knob) {
+    return pm_util_limits_grow(pm_ip_arena, base, cap, item, knob);
+}
 
 static uint16_t s_eph = 49152u;
 static uint16_t s_ping_seq;
@@ -94,30 +128,111 @@ void pm_ip_sock_wake(struct pm_metal_sock *s) {
     }
 }
 
+/* A socket and its buffers in one block: the struct, then the receive ring,
+ * then the resend slot. One allocation per open socket, none per closed one. */
+static struct pm_metal_sock *sock_new(int32_t slot, uint8_t kind) {
+    uint32_t rx_cap;
+    /* The knob counts open sockets, not slots: a table that once grew wide
+     * stays wide, and a seat that has since been told to hold fewer must be
+     * held to that on the next open, not on the next growth. */
+    if (!PM_UTIL_LIMIT_ROOM(pm_ip_limit_socket, pm_ip_sock_used)) {
+        return NULL;
+    }
+    rx_cap = size_of(&pm_ip_limit_receive);
+    uint32_t tx_cap = size_of(&pm_ip_limit_resend);
+    size_t need = sizeof(struct pm_metal_sock) + (size_t)rx_cap + (size_t)tx_cap;
+    struct pm_metal_sock *s;
+    s = pm_util_mem_alloc(pm_ip_arena, need);
+    if (s == NULL) {
+        return NULL;
+    }
+    memset(s, 0, need);
+    s->used = 1;
+    s->self_fd = slot;
+    s->kind = kind;
+    s->listen_fd = -1;
+    s->l2_h = -1;
+    s->rx = (uint8_t *)(s + 1);
+    s->rx_cap = rx_cap;
+    s->rexmit = s->rx + rx_cap;
+    s->rexmit_cap = tx_cap;
+    /* Before the peer tells us its window, assume it can hold what we can. */
+    s->snd_wnd = kind == SK_TCP ? rx_cap : 0u;
+    pm_ip_sk[slot] = s;
+    pm_ip_sock_used++;
+    return s;
+}
+
+/* Give a socket back: its buffers, its queues, and its slot. Card-wide because
+ * the TCP slice frees a child it had to reset. */
+void pm_ip_sock_drop(int32_t fd) {
+    struct pm_metal_sock *s = (fd >= 0 && (uint32_t)fd < pm_ip_sk_cap) ? pm_ip_sk[fd] : NULL;
+    if (s == NULL) {
+        return;
+    }
+    if (s->accept_q != NULL) {
+        pm_util_mem_free(pm_ip_arena, s->accept_q);
+    }
+    if (s->mcast_be != NULL) {
+        pm_util_mem_free(pm_ip_arena, s->mcast_be);
+    }
+    pm_ip_sk[fd] = NULL;
+    pm_util_mem_free(pm_ip_arena, s);
+    if (pm_ip_sock_used != 0u) {
+        pm_ip_sock_used--;
+    }
+}
+
+/* Every socket gone and the table with them: what init starts from and deinit
+ * leaves behind. */
+static void sock_clear(void) {
+    uint32_t i;
+    for (i = 0; i < pm_ip_sk_cap; i++) {
+        pm_ip_sock_drop((int32_t)i);
+    }
+    if (pm_ip_sk != NULL) {
+        pm_util_mem_free(pm_ip_arena, pm_ip_sk);
+    }
+    pm_ip_sk = NULL;
+    pm_ip_sk_cap = 0;
+    pm_ip_sock_used = 0;
+}
+
+/* Lowest free slot, growing the table when every one of them is taken. */
 int32_t pm_ip_sock_alloc(uint8_t kind) {
     uint32_t i;
-    for (i = 0; i < PM_METAL_IP_SOCK_MAX; i++) {
-        if (!pm_ip_sk[i].used) {
-            memset(&pm_ip_sk[i], 0, sizeof(pm_ip_sk[i]));
-            pm_ip_sk[i].used = 1;
-            pm_ip_sk[i].kind = kind;
-            pm_ip_sk[i].listen_fd = -1;
-            pm_ip_sk[i].l2_h = -1;
-            pm_ip_sk[i].snd_wnd = kind == SK_TCP ? SSND_WND_DEFAULT : 0u;
-            return (int32_t)i;
+    for (i = 0; i < pm_ip_sk_cap; i++) {
+        if (pm_ip_sk[i] == NULL) {
+            return sock_new((int32_t)i, kind) != NULL ? (int32_t)i : -1;
         }
     }
-    return -1;
+    {
+        struct pm_metal_sock **grown =
+            pm_ip_table_grow(pm_ip_sk, &pm_ip_sk_cap, (uint32_t)sizeof(*pm_ip_sk), &pm_ip_limit_socket);
+        if (grown == NULL) {
+            return -1;
+        }
+        pm_ip_sk = grown;
+    }
+    return sock_new((int32_t)i, kind) != NULL ? (int32_t)i : -1;
+}
+
+struct pm_metal_sock *pm_ip_sock_at(int32_t fd) {
+    if (fd < 0 || (uint32_t)fd >= pm_ip_sk_cap) {
+        return NULL;
+    }
+    return pm_ip_sk[fd];
 }
 
 static struct pm_metal_sock *sock_get(int32_t fd, uint8_t kind) {
-    if (fd < 0 || (uint32_t)fd >= PM_METAL_IP_SOCK_MAX || !pm_ip_sk[fd].used) {
+    struct pm_metal_sock *s = pm_ip_sock_at(fd);
+    if (s == NULL || !s->used) {
         return NULL;
     }
-    if (kind != 0 && pm_ip_sk[fd].kind != kind) {
+    if (kind != 0 && s->kind != kind) {
         return NULL;
     }
-    return &pm_ip_sk[fd];
+    return s;
 }
 
 static uint16_t eph_port(void) {
@@ -134,7 +249,9 @@ int32_t pm_metal_net_ip_init(pm_util_mem_arena_t *arena) {
     }
     pm_ip_arena = arena;
     pm_util_lock_init(&pm_ip_lock);
-    memset(pm_ip_sk, 0, sizeof(pm_ip_sk));
+    /* Nothing is taken here. The first socket brings the first table with it,
+     * so a seat that never opens one carries no stack at all. */
+    sock_clear();
     pm_ip_l2_clear();
     pm_ip_lo_up = 0;
     pm_ip_rx_l2 = -1;
@@ -142,14 +259,19 @@ int32_t pm_metal_net_ip_init(pm_util_mem_arena_t *arena) {
     pm_ip_ping_id = 0;
     s_eph = 49152u;
     s_ping_seq = 0;
-    (void)pm_ip_arena;
     return 0;
 }
 
 void pm_metal_net_ip_deinit(void) {
-    memset(pm_ip_sk, 0, sizeof(pm_ip_sk));
+    sock_clear();
     pm_ip_lo_up = 0;
-    pm_ip_l2_clear();
+    pm_ip_l2_clear(); /* takes the route and neighbour tables with it */
+    if (pm_ip_ping_out != NULL) {
+        pm_util_mem_free(pm_ip_arena, pm_ip_ping_out);
+        pm_ip_ping_out = NULL;
+        pm_ip_ping_cap = 0;
+        pm_ip_ping_len = 0;
+    }
     pm_ip_rx_l2 = -1;
     pm_ip_arena = NULL;
 }
@@ -310,7 +432,7 @@ int32_t pm_metal_net_ip_gw_set(uint32_t gw_be) {
 
 uint32_t pm_ip_gw_locked(void) {
     uint32_t i;
-    for (i = 0; i < PM_METAL_IP_RT_MAX; i++) {
+    for (i = 0; i < pm_ip_rt_cap; i++) {
         if (pm_ip_rt[i].used && pm_ip_rt[i].mask_be == 0) {
             return pm_ip_rt[i].gw_be;
         }
@@ -362,8 +484,13 @@ int32_t pm_ip_l2_attach_locked(int32_t h) {
             return 0;
         }
     }
-    if (pm_ip_l2_n >= PM_METAL_IP_L2_MAX) {
-        return -1;
+    if (pm_ip_l2_n == pm_ip_l2_cap) {
+        struct pm_metal_ip_l2 *grown =
+            pm_ip_table_grow(pm_ip_l2, &pm_ip_l2_cap, (uint32_t)sizeof(*pm_ip_l2), &pm_ip_limit_interface);
+        if (grown == NULL) {
+            return -1;
+        }
+        pm_ip_l2 = grown;
     }
     pm_ip_l2[pm_ip_l2_n].h = h;
     pm_ip_l2[pm_ip_l2_n].addr_be = 0;
@@ -453,21 +580,37 @@ int32_t pm_ip_socket_locked(int32_t type) {
 
 /* Outbound (client-ish) socket from the HIGH end of the table. Listeners park
  * in the low range (0..), so a fwd-side guest client can never alias a live
- * listener even if low fds churn during boot races — closing it is always safe. */
+ * listener even if low fds churn during boot races — closing it is always safe.
+ * With the table growing, the high end moves: a client takes the topmost free
+ * slot there is, and when there is none the new room is above everything. */
 int32_t pm_ip_out_socket_locked(int32_t type) {
     uint8_t kind = (type == PM_METAL_NET_IP_SOCK_DGRAM) ? SK_UDP : SK_TCP;
-    uint32_t i = PM_METAL_IP_SOCK_MAX;
+    uint32_t i = pm_ip_sk_cap;
+    struct pm_metal_sock *s;
     while (i-- > 0u) {
-        if (!pm_ip_sk[i].used) {
-            memset(&pm_ip_sk[i], 0, sizeof(pm_ip_sk[i]));
-            pm_ip_sk[i].used = 1;
-            pm_ip_sk[i].kind = kind;
-            pm_ip_sk[i].listen_fd = -1;
-            pm_ip_sk[i].l2_h = -1;
+        if (pm_ip_sk[i] == NULL) {
+            s = sock_new((int32_t)i, kind);
+            if (s == NULL) {
+                return -1;
+            }
+            s->snd_wnd = 0u;
             return (int32_t)i;
         }
     }
-    return -1;
+    {
+        struct pm_metal_sock **grown =
+            pm_ip_table_grow(pm_ip_sk, &pm_ip_sk_cap, (uint32_t)sizeof(*pm_ip_sk), &pm_ip_limit_socket);
+        if (grown == NULL) {
+            return -1;
+        }
+        pm_ip_sk = grown;
+        s = sock_new((int32_t)(pm_ip_sk_cap - 1u), kind);
+        if (s == NULL) {
+            return -1;
+        }
+        s->snd_wnd = 0u;
+        return s->self_fd;
+    }
 }
 
 int32_t pm_metal_net_ip_out_socket(int32_t type) {
@@ -496,10 +639,10 @@ int32_t pm_ip_close_locked(int32_t fd) {
      * are exactly what exhausted the shared 32-slot table across a boot in the
      * two-session zenoh prove and corrupted later tests (http.asgi). */
     if (s->kind == SK_TCP && s->tcp_st == TCP_LISTEN) {
-        for (i = 0; i < PM_METAL_IP_SOCK_MAX; i++) {
-            struct pm_metal_sock *c = &pm_ip_sk[i];
-            if (c != s && c->used && c->kind == SK_TCP && c->listen_fd == fd) {
-                c->used = 0;
+        for (i = 0; i < pm_ip_sk_cap; i++) {
+            struct pm_metal_sock *c = pm_ip_sk[i];
+            if (c != NULL && c != s && c->kind == SK_TCP && c->listen_fd == fd) {
+                pm_ip_sock_drop((int32_t)i);
             }
         }
     }
@@ -507,7 +650,7 @@ int32_t pm_ip_close_locked(int32_t fd) {
         pm_ip_tcp_xmit(s, (uint8_t)(TCP_FIN | TCP_ACK), NULL, 0);
         s->tcp_st = TCP_FIN_WAIT;
     }
-    memset(s, 0, sizeof(*s));
+    pm_ip_sock_drop(fd);
     return 0;
 }
 
@@ -559,9 +702,36 @@ int32_t pm_metal_net_ip_bind_l2(int32_t fd, int32_t h) {
 
 int32_t pm_ip_listen_locked(int32_t fd, int32_t backlog) {
     struct pm_metal_sock *s = sock_get(fd, SK_TCP);
-    (void)backlog;
     if (s == NULL || !s->bound) {
         return -1;
+    }
+    /* The depth this listener keeps for connections it has completed but the
+     * application has not taken yet. It used to be ignored and every listener
+     * got four, which is fewer than one browser page load opens at once — the
+     * ones past the fourth were dropped after the handshake, so an asset came
+     * back empty. Nothing (0 or less) means give me the knob's depth, and the
+     * queue is taken now, at the size this listener actually asked for. */
+    {
+        uint32_t want = backlog > 0 ? (uint32_t)backlog : size_of(&pm_ip_limit_backlog);
+        uint32_t ceiling = pm_ip_limit_backlog.soft;
+        int32_t *q;
+        if (ceiling != 0u && want > ceiling) {
+            want = ceiling;
+        }
+        if (want == 0u) {
+            want = 1u;
+        }
+        q = pm_util_mem_alloc(pm_ip_arena, (size_t)want * sizeof(*q));
+        if (q == NULL) {
+            return -1;
+        }
+        memset(q, 0, (size_t)want * sizeof(*q));
+        if (s->accept_q != NULL) {
+            pm_util_mem_free(pm_ip_arena, s->accept_q);
+        }
+        s->accept_q = q;
+        s->accept_cap = want;
+        s->accept_n = 0;
     }
     s->tcp_st = TCP_LISTEN;
     return 0;
@@ -748,7 +918,7 @@ int32_t pm_ip_sendto_locked(int32_t fd, const uint8_t *buf, uint32_t len, uint32
     if (pcb == NULL || buf == NULL) {
         return -1;
     }
-    if (!pcb->bound || len > PM_METAL_IP_RX_MAX) {
+    if (!pcb->bound || len > pcb->rx_cap) {
         return -1;
     }
     uint32_t total = 20u + 8u + len;
@@ -836,8 +1006,15 @@ int32_t pm_ip_join_group_locked(int32_t fd, uint32_t group_be) {
             return 0; /* already a member */
         }
     }
-    if (s->mcast_n >= PM_METAL_IP_MCAST_MAX) {
-        return -1;
+    /* Most sockets never join anything, so the membership list is taken on the
+     * first join and grows from there. */
+    if (s->mcast_n == s->mcast_cap) {
+        uint32_t *grown =
+            pm_ip_table_grow(s->mcast_be, &s->mcast_cap, (uint32_t)sizeof(*s->mcast_be), &pm_ip_limit_group);
+        if (grown == NULL) {
+            return -1;
+        }
+        s->mcast_be = grown;
     }
     s->mcast_be[s->mcast_n++] = group_be;
     return 0;
@@ -877,9 +1054,9 @@ int32_t pm_metal_net_ip_leave_group(int32_t fd, uint32_t group_be) {
 int32_t pm_ip_mcast_joined(uint32_t dst_be) {
     uint32_t i;
     uint32_t j;
-    for (i = 0; i < PM_METAL_IP_SOCK_MAX; i++) {
-        const struct pm_metal_sock *s = &pm_ip_sk[i];
-        if (!s->used || s->kind != SK_UDP) {
+    for (i = 0; i < pm_ip_sk_cap; i++) {
+        const struct pm_metal_sock *s = pm_ip_sk[i];
+        if (s == NULL || s->kind != SK_UDP) {
             continue;
         }
         for (j = 0; j < s->mcast_n; j++) {
@@ -919,6 +1096,18 @@ int32_t pm_metal_net_ip_ping4(uint32_t addr_be, const uint8_t *payload, uint32_t
     cs = pm_ip_csum(pkt + 20, icmp_len);
     pm_ip_write_be16(pkt + 22, cs);
     pm_util_lock_acquire(&pm_ip_lock);
+    /* Somewhere to keep the reply, taken the first time this seat pings and
+     * as big as a socket's receive ring — a seat that never pings pays
+     * nothing for the room an answer would need. */
+    if (pm_ip_ping_out == NULL) {
+        uint32_t cap = size_of(&pm_ip_limit_receive);
+        pm_ip_ping_out = pm_util_mem_alloc(pm_ip_arena, cap);
+        if (pm_ip_ping_out == NULL) {
+            pm_util_lock_release(&pm_ip_lock);
+            return -1;
+        }
+        pm_ip_ping_cap = cap;
+    }
     pm_ip_ping_len = 0;
     pm_ip_output(pkt, total);
     pm_util_lock_release(&pm_ip_lock);
@@ -943,12 +1132,13 @@ int32_t pm_metal_net_ip_ping4(uint32_t addr_be, const uint8_t *payload, uint32_t
     }
     pm_util_lock_acquire(&pm_ip_lock);
     uint32_t have = pm_ip_ping_len;
-    uint8_t tmp[PM_METAL_IP_RX_MAX];
     if (have != 0) {
+        /* Straight into the caller's buffer. This used to land in an 8 KiB
+         * frame first, which bought nothing: the copy is the same length
+         * either way and the lock is held for it either way. */
         uint32_t n = have < *out_len ? have : *out_len;
-        memcpy(tmp, pm_ip_ping_out, n);
+        memcpy(out, pm_ip_ping_out, n);
         pm_util_lock_release(&pm_ip_lock);
-        memcpy(out, tmp, n);
         *out_len = n;
         return 0;
     }

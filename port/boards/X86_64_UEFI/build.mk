@@ -21,7 +21,8 @@ CFLAGS_METAL := --target=x86_64-unknown-windows -ffreestanding -fno-stack-protec
 	-fno-stack-check -fno-strict-aliasing -fno-asynchronous-unwind-tables \
 	-mno-stack-arg-probe -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
 	-Wall -Wno-unused-parameter -Os -DNDEBUG -std=gnu99 \
-	-DPM_METAL_FIRMWARE=1 -DPM_WASMMOD_GUEST=0 -DPM_WASMMOD_IO_FILE=0 -DPM_METAL_UEFI=1
+	-DPM_METAL_FIRMWARE=1 -DPM_WASMMOD_GUEST=0 -DPM_WASMMOD_IO_FILE=0 -DPM_METAL_UEFI=1 \
+	-MMD -MP
 ifeq ($(REPL),1)
 CFLAGS_METAL += -DPM_METAL_UART_REPL=1
 endif
@@ -76,6 +77,7 @@ FW_OBJS := \
 	$(BUILD)/main.o \
 	$(BUILD)/lib.o \
 	$(BUILD)/mem.o \
+	$(BUILD)/limits.o \
 	$(BUILD)/types.o \
 	$(BUILD)/tlsf.o \
 	$(BUILD)/smp.o \
@@ -137,6 +139,9 @@ $(BUILD)/lib.o: $(PORT_DIR)/lib.c | $(BUILD)
 $(BUILD)/mem.o: $(WASMMOD_SRC)/pymergetic/util/mem/__impl__.c | $(BUILD)
 	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
 
+$(BUILD)/limits.o: $(WASMMOD_SRC)/pymergetic/util/limits/__impl__.c | $(BUILD)
+	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
+
 $(BUILD)/types.o: $(WASMMOD_SRC)/pymergetic/types/__impl__.c | $(BUILD)
 	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
 
@@ -180,3 +185,11 @@ run: $(BUILD)/esp.img $(BUILD)/blk.img
 
 upload: $(BUILD)/esp/EFI/BOOT/BOOTX64.EFI
 	$(PORT_DIR)/upload.sh uefi $(BUILD)
+
+# Header dependencies. Without these a card's __types__.h can change the shape
+# of a ring and the objects around it are not rebuilt, so the image is built
+# from two different opinions of that shape. The .d files sit beside the .o
+# they describe and only exist for objects that have been built, so whatever is
+# there is the whole list — cards, the board's own objects, mbedtls, zenoh. (µPy
+# brings its own: mkrules.mk reads a .P per object.)
+-include $(shell find $(BUILD) -name '*.d' 2>/dev/null)

@@ -32,6 +32,7 @@
 #include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/net/cdn.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #if MICROPY_PY_THREAD
@@ -923,17 +924,20 @@ MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_capabilities_obj, mp_metal_builtin_ca
  * renderer answers them off the connection threads. A seat that serves without
  * it would leave every catalog link timing out, so both entry points into
  * "serving" — m.serve() and the METAL_SERVE autostart — come through here. */
-void mp_metal_packs_start(void) {
+void mp_metal_packs_start(int last) {
     nlr_buf_t nlr;
     if (nlr_push(&nlr) == 0) {
         mp_obj_t mod = mp_import_name(MP_QSTR_metal_packs, mp_const_none,
             MP_OBJ_NEW_SMALL_INT(0));
         mp_obj_t res = mp_call_function_0(mp_load_attr(mod, MP_QSTR_start));
         nlr_pop();
-        mp_printf(&mp_plat_print, "`-- %s\n", mp_obj_str_get_str(res));
+        /* start() answers with the tree's own grammar ("ok  rendering"), so
+         * the node reads like every other one on the surface instead of a
+         * bare line printed after the tree had already closed. */
+        pm_metal_boot_msg_item(last, 0, 0, "packs", mp_obj_str_get_str(res));
         return;
     }
-    mp_printf(&mp_plat_print, "`-- packs renderer unavailable\n");
+    pm_metal_boot_msg_item(last, 0, 0, "packs", "FAIL  renderer unavailable");
 }
 
 /* Autostart for a seat that brings its listeners up by itself. Whoever starts
@@ -942,17 +946,16 @@ void mp_metal_packs_start(void) {
  * from mp_init(), far too early to touch Python — so it joins on the MOTD
  * surface, which walks once the VM is up, and reports in the same banner as the
  * rest of the seat's readiness. */
-static int s_packs_autostart;
-
-void mp_metal_packs_autostart(void) {
-    s_packs_autostart = 1;
+static void msg_packs(int last) {
+    mp_metal_packs_start(last);
 }
 
-static void msg_packs(int last) {
-    (void)last;
-    if (s_packs_autostart) {
-        mp_metal_packs_start();
-    }
+/* Attached here rather than from a constructor: a card that draws nothing
+ * still counts as a node on the surface, and the motd ends on its last card,
+ * so a silent one would leave the tree without a closing branch. */
+void mp_metal_packs_autostart(void) {
+    (void)pm_metal_boot_msg_attach(PM_METAL_BOOT_SURF_MOTD,
+        PM_METAL_BOOT_MSG_MOTD_REPL + 1u, msg_packs);
 }
 
 /* m.serve(): data-driven convenience — start the default instance of every
@@ -961,30 +964,34 @@ static void msg_packs(int last) {
 static mp_obj_t mp_metal_builtin_serve(void) {
     uint32_t n = pm_metal_services_count();
     uint32_t i;
-    int started = 0;
+    char detail[64];
     metal_ensure();
+    pm_metal_boot_msg_count(detail, sizeof(detail), "", n, "service");
+    pm_metal_boot_msg_item(0, 0, 0, "serve", detail);
     for (i = 0; i < n; i++) {
         const char *name = pm_metal_services_name(i);
         uint16_t port = pm_metal_services_port(i);
         int32_t id = pm_metal_services_start(i);
-        started += (id >= 0);
-        mp_printf(&mp_plat_print, "+-- %-6s %s :%u (id=%d)\n", name ? name : "?",
-            (id >= 0) ? "on " : "err", (unsigned)port, (int)id);
-    }
-    /* Mirror the just-started in-stack listeners onto real host sockets where
-     * the seat has a host to mirror to. net.fwd is the unix-seat transport:
-     * it compiled its real pthread impl there and a refusing stub everywhere
-     * else (same face, no dark port), so calling it here is platform-honest —
-     * `-1` on firmware/emcc prints "off", not a lie. One call per registered
-     * port; fwd.listen is idempotent on the port. */
-    for (i = 0; i < n; i++) {
-        uint16_t port = pm_metal_services_port(i);
+        /* Mirror the just-started in-stack listener onto a real host socket
+         * where the seat has a host to mirror to. net.fwd is the unix-seat
+         * transport: it compiled its real pthread impl there and a refusing
+         * stub everywhere else (same face, no dark port), so calling it here
+         * is platform-honest — `-1` on firmware/emcc says "fwd off", which is
+         * the truth, not a lie. fwd.listen is idempotent on the port. */
         int32_t fid = pm_metal_fwd_listen(port);
-        mp_printf(&mp_plat_print, "+-- fwd    %s :%u (host mirror)\n",
-            (fid >= 0) ? "on " : "off", (unsigned)port);
+        if (id >= 0) {
+            snprintf(detail, sizeof(detail), "ok  :%u  id=%d  fwd %s", (unsigned)port,
+                (int)id, (fid >= 0) ? "on" : "off");
+        } else {
+            snprintf(detail, sizeof(detail), "FAIL  :%u  rc=%d", (unsigned)port, (int)id);
+        }
+        pm_metal_boot_msg_item(i + 1u == n, 1, 1, name != NULL ? name : "?", detail);
     }
-    (void)started;
-    mp_metal_packs_start();
+    mp_metal_packs_start(1);
+    /* Close the surface the way the boot tree closes its own: on the autostart
+     * seat this block is followed by µPy's version banner, and without the
+     * blank the banner reads as another branch of the tree. */
+    pm_metal_boot_msg_line("");
     return mp_const_none;
 }
 MP_DEFINE_CONST_FUN_OBJ_0(mp_metal_builtin_serve_obj, mp_metal_builtin_serve);
@@ -1056,6 +1063,5 @@ MP_REGISTER_MODULE(MP_QSTR_pymergetic_dot_metal, mp_module_pymergetic_metal);
 
 /* Last on the MOTD surface: the renderer starts after every other card has
  * reported, so its line reads as the final step of coming up. */
-PM_METAL_BOOT_MSG_C(PM_METAL_BOOT_SURF_MOTD, PM_METAL_BOOT_MSG_MOTD_REPL + 1u, msg_packs);
 
 PM_METAL_EXTERNAL_C(micropython, MICROPY_VERSION_STRING);

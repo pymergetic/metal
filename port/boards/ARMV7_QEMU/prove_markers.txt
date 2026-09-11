@@ -39,3 +39,11 @@ upy jit c tcc object
 upy jit c tcc cross x64+wasm
 upy process budget refuses
 upy types value loop
+upy limits knob loop
+upy room knob loop
+upy registry row knobs
+upy types row knobs
+upy driver nic knobs
+upy device class knobs
+upy loader image knob
+upy console ring prove

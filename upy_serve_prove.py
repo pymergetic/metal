@@ -21,7 +21,23 @@ import pymergetic.metal.net.fwd as fwd
 
 n = fwd.count()
 if n < 1:
-    raise SystemExit("fwd mirror count %d" % (n,))
+    # Nearly always a port already in use, not a regression: another seat
+    # (or a leftover one) holds 8090/2222, the mirror cannot bind, and the
+    # seat is unreachable from a browser. Say which so the next reader does
+    # not go looking for a code fault. `fuser` may not exist; the message is
+    # still better than a bare count.
+    holders = ""
+    try:
+        import subprocess
+
+        holders = subprocess.check_output(
+            ["fuser", "-n", "tcp", "8090", "2222"],
+            stderr=subprocess.STDOUT).decode().strip()
+    except Exception as e:  # no fuser, no /proc, not permitted
+        holders = "(could not query port holders: %s)" % (e,)
+    raise SystemExit(
+        "fwd mirror count %d — ports 8090/2222 look taken by another seat. "
+        "Holders: %s" % (n, holders or "none reported"))
 print("upy serve fwd mirror %d" % (n,))
 
 # the packs renderer route: the deferred /packs page must be registered (the

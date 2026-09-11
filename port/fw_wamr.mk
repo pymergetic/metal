@@ -73,7 +73,16 @@ $(BUILD)/libfw_lock.a: $(PORT_DIR)/fw_lock/lib.rs \
 	$(RUSTC) --edition 2024 --crate-type staticlib --crate-name fw_lock \
 		--target $(FW_RUSTC_TARGET) -C panic=abort -C opt-level=s \
 		$(FW_RUSTC_REDZONE) $(FW_RUSTC_CPU) \
-		-o $@ $<
+		--emit=dep-info=$(BUILD)/libfw_lock.d.raw,link=$@ $<
+	sed -n 's|^libfw_lock\.a:|$@:|p' $(BUILD)/libfw_lock.d.raw > $(BUILD)/libfw_lock.d
+
+# The list above is by hand, so it is one forgotten card away from linking a
+# stale one. rustc's dep-info knows every `#[path]` the crate actually read
+# (it is written against the crate's own output name, so the line make can use
+# is lifted out under the real path). The named prerequisites stay because a
+# generated input (RSX_FLAT) has to be built before rustc runs, which a dep
+# file cannot say.
+-include $(BUILD)/libfw_lock.d
 
 FW_OBJS += $(BUILD)/metal_platform.o $(BUILD)/hello_pack.o
 FW_WAMR_LIBS := $(BUILD)/libfw_lock.a $(BUILD)/libwasmmod_wamr_freestanding.a

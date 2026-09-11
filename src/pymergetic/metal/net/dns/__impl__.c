@@ -227,7 +227,7 @@ uint32_t pm_metal_net_dns_server(void) {
     return s_server_be;
 }
 
-int32_t pm_metal_net_dns_add(const char *name, uint32_t addr_be) {
+int32_t pm_metal_net_dns_add(const char *name, pm_mod_value_t addr_be) {
     uint32_t i;
     if (name == NULL || name[0] == 0) {
         return -1;
@@ -405,7 +405,7 @@ int32_t pm_metal_net_dns_resolve(const char *name, uint32_t *out_be) {
 
 PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_init, pm_metal_net_dns_init, int32_t(pm_util_mem_arena_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_deinit, pm_metal_net_dns_deinit, void(void));
-PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_add, pm_metal_net_dns_add, int32_t(const char *, uint32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_add, pm_metal_net_dns_add, int32_t(const char *, pm_mod_value_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_listen, pm_metal_net_dns_listen, int32_t(uint32_t, uint16_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_poll, pm_metal_net_dns_poll, int32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.net.dns, pm_metal_net_dns_lookup, pm_metal_net_dns_lookup, int32_t(const char *, uint32_t, uint16_t, uint32_t *));

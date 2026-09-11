@@ -142,13 +142,20 @@ enum {
 #define USING_GLOBALS
 #include "tcc.h"
 
+/* The bare `arm` and `arm_elf` spellings this list used to carry are not in
+ * the implementation's namespace: they occupy identifiers a translation unit
+ * is entitled to use. Any card with a variable named `arm` stopped compiling
+ * on this target alone — the rsx card declares one per match arm, so the
+ * whole micro-rustc unit refused with "identifier expected" while every
+ * other target took it. gcc and clang define only the reserved spellings
+ * here, and so do this file's siblings (x86_64-gen.c defines __x86_64__ and
+ * nothing plain), so the two legacy names are gone rather than worked
+ * around in the sources that trip over them. */
 ST_DATA const char * const target_machine_defs =
     "__arm__\0"
     "__arm\0"
-    "arm\0"
     "__arm_elf__\0"
     "__arm_elf\0"
-    "arm_elf\0"
     "__ARM_ARCH_4__\0"
     "__ARMEL__\0"
     "__APCS_32__\0"

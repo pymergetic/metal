@@ -6,6 +6,7 @@
 #include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/net/zenoh.h"
+#include "pymergetic/util/limits.h"
 #include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
@@ -423,7 +424,52 @@ static int32_t case_scout_roundtrip(void) {
     return 0;
 }
 
+/* How many sessions the seat holds is net.zenoh.session, not a shape. Raising
+ * it makes a further slot selectable; the table is only reshaped while every
+ * session is closed, so a move with one open is refused and changes nothing.
+ * Runs last, after the session proves have deinit'ed their slots. */
+static int32_t case_session_knob(void) {
+    int32_t i = pm_util_limits_find("net.zenoh.session");
+    if (i < 0 || pm_util_limits_soft(i) != 2u) {
+        return fail_zenoh("the session knob is not on the seat at its default");
+    }
+    if (pm_metal_net_zenoh_sel(2) == 0) {
+        return fail_zenoh("a slot the seat does not offer was selected");
+    }
+    if (pm_util_limits_set("net.zenoh.session", 4u) != 0) {
+        return fail_zenoh("raise the session knob");
+    }
+    if (pm_metal_net_zenoh_sel(3) != 0) {
+        return fail_zenoh("the slot the knob just added is not there");
+    }
+    /* With a session live the table cannot move: zenoh-pico holds pointers
+     * into the slot it was handed. The knob stays where it was. */
+    (void)pm_metal_net_zenoh_sel(0);
+    if (pm_metal_net_zenoh_peer(ZENOH_ADDR_BE, ZENOH_PORT, 1) != 0) {
+        return fail_zenoh("peer for the refusal step");
+    }
+    if (pm_metal_net_zenoh_up() == 1) {
+        if (pm_util_limits_set("net.zenoh.session", 6u) != -3
+            || pm_util_limits_soft(i) != 4u) {
+            pm_metal_net_zenoh_deinit();
+            (void)pm_util_limits_reset("net.zenoh.session");
+            return fail_zenoh("the table moved under an open session");
+        }
+    }
+    pm_metal_net_zenoh_deinit();
+    if (pm_util_limits_reset("net.zenoh.session") != 0
+        || pm_util_limits_soft(i) != 2u) {
+        return fail_zenoh("reset the session knob");
+    }
+    if (pm_metal_net_zenoh_sel(3) == 0) {
+        return fail_zenoh("a slot survived the knob coming back down");
+    }
+    (void)pm_metal_net_zenoh_sel(0);
+    return 0;
+}
+
 PM_MOD_TEST_C(pymergetic.metal.net.zenoh, "zid_deterministic", case_zid_deterministic);
 PM_MOD_TEST_C(pymergetic.metal.net.zenoh, "up_poll_bounded", case_up_poll_bounded);
 PM_MOD_TEST_C(pymergetic.metal.net.zenoh, "two_session_roundtrip", case_two_session_roundtrip);
 PM_MOD_TEST_C(pymergetic.metal.net.zenoh, "scout_roundtrip", case_scout_roundtrip);
+PM_MOD_TEST_C(pymergetic.metal.net.zenoh, "session_knob", case_session_knob);

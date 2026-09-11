@@ -96,6 +96,18 @@ int32_t pm_metal_jit_c_object_compile_target(pm_util_mem_arena_t *arena,
     uint8_t **obj_out, size_t *obj_len,
     char *errbuf, size_t errbuf_len);
 
+/*------------------ which lanes this seat carries -------------------
+ * compile_target's refusals are all compile-time: a cross lane exists
+ * only where its instance was built in. Asking first is the difference
+ * between a greyed-out lane and 84 identical per-unit failures.
+ *
+ * mask() sets bit (1u << target) for every lane that can emit.
+ * arch() names the arch a lane emits for, with TARGET_SEAT reporting the
+ * backend this binary embeds — a cross lane whose arch equals SEAT's is
+ * absent *because* it is native, and SEAT is the lane to use for it. */
+uint32_t pm_metal_jit_c_target_mask(void);
+const char *pm_metal_jit_c_target_arch(int32_t target);
+
 /*------------------ TCC allocator window (Phase 5) ------------------
  * TCC's reallocator is ONE global (tcc_set_realloc in libtcc.c): every
  * tcc_malloc/tcc_realloc/tcc_free call in the process dispatches through

@@ -43,6 +43,14 @@ def _artifacts():
     return m
 
 
+def _repl():
+    try:
+        import metal_repl as m
+    except ImportError:  # host tooling imports it as the package submodule
+        from pymergetic.metal.inspect import metal_repl as m
+    return m
+
+
 def _asgi():
     import pymergetic.metal.net.http.asgi as asgi
 
@@ -65,6 +73,12 @@ _JSON_ROUTES = (
     ("/packages/*", "application/json"),
 )
 
+# The console panel's write half. It parks like a page does, but it runs a
+# line rather than rendering one, so it answers POST — asking for a page
+# twice is harmless and running a command twice is not. The read half is
+# GET /console/<id>?since= in the inspect card, which needs no interpreter.
+_EXEC_ROUTE = "/console/exec"
+
 
 def engine():
     global _engine
@@ -85,9 +99,22 @@ def install(pattern=None):
     for path, ctype in _JSON_ROUTES:
         if int(asgi.route_defer(path, ctype)) != 0:
             return -1
+    if int(asgi.route_defer_m("POST", _EXEC_ROUTE, "application/json")) != 0:
+        return -1
     if _openapi().install_openapi_deferred(asgi) != 0:
         return -1
     return 0
+
+
+def _console_seq():
+    """Where console 0 stood before a line ran, so the panel can tell which
+    output was that line's. Zero on a seat without the console card."""
+    try:
+        import pymergetic.metal.console as c
+
+        return int(c.seq())
+    except Exception:
+        return 0
 
 
 def render(path):
@@ -97,6 +124,16 @@ def render(path):
     NUL-terminated str when the reply should override it (a raw source file's
     own Content-Type).
     """
+    if path.startswith(_EXEC_ROUTE):
+        # The whole line is one query argument, so the split is on the first
+        # '=' only: a line with its own '?' or '&' in it must survive.
+        q = path[len(_EXEC_ROUTE):]
+        line = ""
+        if q.startswith("?cmd="):
+            line = _repl().unquote(q[5:])
+        seq_before = _console_seq()
+        rc = _repl().run(line)
+        return (b'{"rc":%d,"since":%d}' % (rc, seq_before)), None
     if path.startswith(_PREFIX):
         fqn = path[len(_PREFIX):]
         if fqn.endswith("/"):
@@ -197,22 +234,26 @@ def _pump_loop():
 def start(pattern=None):
     """Install the route and get pages rendering. Returns a one-line status.
 
+    The status leads with `ok` or `FAIL` because the seat prints it as the
+    detail of the boot tree's `packs` node, where those are the tokens the
+    tree paints green and red.
+
     The renderer is a vm_only coroutine handed to the async runtime: any
     async-runner core may step it under the VM lock. Seats that serve from a bare
     REPL additionally drive the async ring each loop so the pump advances.
     """
     if install(pattern) != 0:
-        return "packs route not registered"
+        return "FAIL  route not registered"
     try:
         import pymergetic.metal as m
     except ImportError:
-        return "packs ready (metal_packs.pump()/serve_forever() renders)"
+        return "ok  ready (metal_packs.pump()/serve_forever() renders)"
     try:
         m.register_upy(_pump_loop())
     except Exception as e:  # a seat without the vm-only runtime keeps its loop face
         _print_tb(e)
-        return "packs ready (metal_packs.serve_forever() renders)"
-    return "packs rendering"
+        return "ok  ready (metal_packs.serve_forever() renders)"
+    return "ok  rendering"
 
 
 def serve_forever(idle_ms=5):

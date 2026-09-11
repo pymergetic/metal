@@ -19,6 +19,7 @@
 #include "pymergetic/metal/coop/__types__.h"
 #include "pymergetic/metal/coop/__exports__.h"
 #include "pymergetic/metal/build/__types__.h"
+#include "pymergetic/util/limits.h"
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
@@ -2377,14 +2378,11 @@ static int32_t test_walk_all(void) {
      * poll cap calibrated for the inline-drive walk (where every poll
      * did compile work) expires long before the slow units settle. */
     {
-        uint32_t peak_running = 0;
+        uint32_t peak_running;
         deadline = pm_metal_coop_mono_us() + 600ull * 1000000ull;
         for (;;) {
             pm_metal_coop_poll();
             pm_metal_build_walk_state(&wi);
-            if (wi.n_running > peak_running) {
-                peak_running = wi.n_running;
-            }
             if (wi.state == PM_METAL_BUILD_WALK_DONE) {
                 break;
             }
@@ -2396,6 +2394,10 @@ static int32_t test_walk_all(void) {
             }
             pm_metal_coop_yield();
         }
+        /* The walk's own high-water, not this loop's samples: two short
+         * lanes can open and close between polls, and then a fanned-out
+         * walk looks serial from out here. */
+        peak_running = pm_metal_build_walk_peak();
         if (peak_running < 2u) {
             fprintf(stderr, "build subtest walk_all fan-out never "
                 "overlapped (peak lanes %u)\n", peak_running);
@@ -2443,6 +2445,78 @@ static int32_t test_walk_all(void) {
 #endif
 }
 
+/* The factory floor's capacities are knobs, not shapes: how many records the
+ * seat keeps, how deep the event log runs, and how much of the built product
+ * stays downloadable. Runs last, because moving any of them starts that
+ * history over — which is the behaviour it asserts. */
+static int32_t test_limits_knobs(void) {
+    int32_t rec = pm_util_limits_find("build.record");
+    int32_t ev = pm_util_limits_find("build.event");
+    int32_t keep = pm_util_limits_find("build.keep");
+    int32_t span = pm_util_limits_find("build.keep.span");
+
+    if (rec < 0 || ev < 0 || keep < 0 || span < 0) {
+        return 300;
+    }
+    if (pm_util_limits_soft(rec) != PM_METAL_BUILD_RECORD_DEFAULT
+        || pm_util_limits_soft(ev) != PM_METAL_BUILD_EVENT_DEFAULT
+        || pm_util_limits_soft(keep) != PM_METAL_BUILD_KEEP_DEFAULT
+        || pm_util_limits_soft(span) != PM_METAL_BUILD_KEEP_SPAN_DEFAULT) {
+        return 301;
+    }
+    /* The walk that just ran left records, events and retained objects. */
+    if (pm_metal_build_events_latest() == 0u) {
+        return 302;
+    }
+    if (pm_util_limits_used(keep) < 2u) {
+        return 303;
+    }
+
+    /* A shallower keep table lets the oldest downloads go and holds exactly
+     * what the seat now asks for. */
+    if (pm_util_limits_set("build.keep", 1u) != 0) {
+        return 304;
+    }
+    if (pm_util_limits_used(keep) != 1u) {
+        return 305;
+    }
+    /* Resizing the span is resizing the cache: what was retained is gone. */
+    if (pm_util_limits_set("build.keep.span", 8u * 1024u * 1024u) != 0) {
+        return 306;
+    }
+    if (pm_util_limits_used(keep) != 0u) {
+        return 307;
+    }
+
+    /* The event ring and the record table restart at their new depth rather
+     * than reporting old rows from the wrong slots. */
+    if (pm_util_limits_set("build.event", 64u) != 0) {
+        return 308;
+    }
+    if (pm_metal_build_events_latest() != 0u) {
+        return 309;
+    }
+    if (pm_util_limits_set("build.record", 8u) != 0) {
+        return 310;
+    }
+    if (pm_metal_build_record_find("pymergetic.metal.jit.c") != NULL
+        || pm_util_limits_used(rec) != 0u) {
+        return 311;
+    }
+
+    if (pm_util_limits_reset("build.record") != 0
+        || pm_util_limits_reset("build.event") != 0
+        || pm_util_limits_reset("build.keep") != 0
+        || pm_util_limits_reset("build.keep.span") != 0) {
+        return 312;
+    }
+    if (pm_util_limits_soft(keep) != PM_METAL_BUILD_KEEP_DEFAULT
+        || pm_util_limits_soft(rec) != PM_METAL_BUILD_RECORD_DEFAULT) {
+        return 313;
+    }
+    return 0;
+}
+
 static int32_t pm_metal_build_tests(void) {
     int32_t rc;
     rc = test_parse_real_tcc_manifest();
@@ -2486,6 +2560,10 @@ static int32_t pm_metal_build_tests(void) {
      * preconditions are done by now) */
     rc = test_walk_all();
     if (rc) { fprintf(stderr, "build subtest walk_all rc=%d\n", rc); return rc; }
+    /* after the walk: it is the run whose records, events and retained
+     * objects the knob prove moves */
+    rc = test_limits_knobs();
+    if (rc) { fprintf(stderr, "build subtest limits_knobs rc=%d\n", rc); return rc; }
     return 0;
 }
 

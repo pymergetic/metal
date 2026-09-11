@@ -27,7 +27,7 @@ static void emit_cdn(int last, int depth) {
         if (b == NULL || b[0] == 0) {
             b = "?";
         }
-        pm_metal_boot_msg_item(i + 1u == n, depth + 1, 1, b, NULL);
+        pm_metal_boot_msg_item(i + 1u == n, depth + 1, !last, b, NULL);
     }
 }
 
@@ -113,8 +113,7 @@ static void msg_net(int last) {
 }
 
 static void msg_cdn_motd(int last) {
-    (void)last;
-    emit_cdn(0, 0);
+    emit_cdn(last, 0);
 }
 
 PM_METAL_BOOT_MSG_C(PM_METAL_BOOT_SURF_TREE, PM_METAL_BOOT_MSG_NET, msg_net);

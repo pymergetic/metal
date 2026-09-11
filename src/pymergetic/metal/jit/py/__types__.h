@@ -59,7 +59,15 @@ pm_metal_coop_coro_t *pm_metal_jit_py_compile_alloc(
  * does). Together they close Python's in-kernel compile loop with no
  * host tool anywhere: Python source -> µPy compiler -> mpy bytes -> µPy
  * VM. Needs MICROPY_PERSISTENT_CODE_SAVE; seats without it refuse
- * politely (rc -1) so callers can skip. */
+ * politely (rc -1) so callers can skip.
+ *
+ * Two refusals, and callers must tell them apart:
+ *   -1  cannot — no persistent-code support, bad args, a real syntax error
+ *   -2  busy — the µPy GIL is held elsewhere right now, so nothing was
+ *       attempted. Transient by nature: these paths run on coop runners
+ *       while Python code (a poll loop, the REPL) holds the GIL, so a whole
+ *       walk would otherwise redden one py unit at random. Retry it. */
+#define PM_METAL_JIT_PY_BUSY (-2)
 int32_t pm_metal_jit_py_object_compile(
     pm_util_mem_arena_t *arena,
     const char *source, size_t source_len,

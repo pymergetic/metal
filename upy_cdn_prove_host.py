@@ -7,8 +7,13 @@ import sys
 import threading
 
 WASM = b"\x00asm\x01\x00\x00\x00"
-HELLO = pathlib.Path(__file__).resolve().parents[1] / "wasmmod" / "examples" / "packs" / "pymergetic.wasmmod_examples.hello.wasm"
+PACKS = pathlib.Path(__file__).resolve().parents[1] / "wasmmod" / "examples" / "packs"
+HELLO = PACKS / "pymergetic.wasmmod_examples.hello.wasm"
 HELLO_BYTES = HELLO.read_bytes()
+# A second pack, for the prove that a load refuses a pack larger than what the
+# seat's loader.image knob will take: it has to be one this seat has not
+# already imported.
+TEST_A_BYTES = (PACKS / "pymergetic.wasmmod_examples.test_a.wasm").read_bytes()
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -22,6 +27,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = WASM
         elif self.path == "/artifacts/lead/pymergetic.wasmmod_examples.hello.wasm":
             body = HELLO_BYTES
+        elif self.path == "/artifacts/lead/pymergetic.wasmmod_examples.test_a.wasm":
+            body = TEST_A_BYTES
         else:
             self.send_error(404)
             return

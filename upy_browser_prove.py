@@ -61,6 +61,138 @@ def _cdn(base):
     if hello is None:
         raise SystemExit("pack import")
     print("upy pack import")
+
+    # The pack above arrived in an allocation of exactly its length, taken from
+    # the runtime's allocator, not in a row reserving 65536 bytes whether or
+    # not a pack ever came. The knob is what this seat will take. A refused
+    # load is proven on the seats where a pack import is a plain call (unix
+    # CDN prove, the boards); here it would have to raise back through an
+    # Asyncify unwind, which is not this prove's business.
+    import pymergetic.util.limits as _llim
+
+    _lki = _llim.find("wasmmod.loader.image")
+    if _lki < 0:
+        raise SystemExit("no loader image knob")
+    if _llim.set("wasmmod.loader.image", 4 * 1024 * 1024) != 0 or _llim.soft(_lki) != 4194304:
+        raise SystemExit("raise the loader image knob")
+    if _llim.reset("wasmmod.loader.image") != 0 or _llim.soft(_lki) != _llim.default(_lki):
+        raise SystemExit("reset the loader image knob")
+    print("upy loader image knob")
+    # The faces that pack just registered are rows taken one at a time, from
+    # this seat's allocator, not 64 export rows reserved per module: these
+    # three knobs are what the seat will hold and `used` is what it holds.
+    for _name, _want in (
+        ("wasmmod.registry.exports", 1536),
+        ("wasmmod.registry.tests", 384),
+        ("wasmmod.registry.benches", 64),
+    ):
+        _at = _llim.find(_name)
+        if _at < 0:
+            raise SystemExit("no %s knob" % _name)
+        if _llim.soft(_at) != _want or _llim.default(_at) != _want:
+            raise SystemExit("%s default %r" % (_name, _llim.soft(_at)))
+        if _llim.counted(_at) != 1:
+            raise SystemExit("%s does not count its rows" % _name)
+        if _llim.set(_name, _want * 2) != 0 or _llim.soft(_at) != _want * 2:
+            raise SystemExit("raise %s" % _name)
+        if _llim.reset(_name) != 0 or _llim.soft(_at) != _want:
+            raise SystemExit("reset %s" % _name)
+    _rx = _llim.find("wasmmod.registry.exports")
+    if _llim.used(_rx) == 0:
+        raise SystemExit("the pack's faces are rows too")
+    print("upy registry row knobs", _llim.used(_rx))
+    # The type registry's rows and facegen's staging rows, same list: this
+    # seat's descriptors register from its cards, nothing stages (that is a
+    # host tool's path), and neither number is a reservation any more.
+    for _name, _want in (("types.stage", 96), ("types.registry", 512)):
+        _at = _llim.find(_name)
+        if _at < 0:
+            raise SystemExit("no %s knob" % _name)
+        if _llim.soft(_at) != _want or _llim.default(_at) != _want:
+            raise SystemExit("%s default %r" % (_name, _llim.soft(_at)))
+        if _llim.counted(_at) != 1:
+            raise SystemExit("%s does not count what it holds" % _name)
+        if _llim.set(_name, _want * 2) != 0 or _llim.soft(_at) != _want * 2:
+            raise SystemExit("raise %s" % _name)
+        if _llim.reset(_name) != 0 or _llim.soft(_at) != _want:
+            raise SystemExit("reset %s" % _name)
+    if _llim.used(_llim.find("types.stage")) != 0:
+        raise SystemExit("a seat stages nothing")
+    _tr = _llim.find("types.registry")
+    if _llim.used(_tr) == 0:
+        raise SystemExit("types.registry used is the live count")
+    print("upy types row knobs", _llim.used(_tr))
+    # A NIC's ring is taken when the NIC attaches. This seat's NIC is the sim
+    # one (js.fetch has no L2 of its own), so the refusal is proven there:
+    # with the device knob down at what is already bound, a probe binds
+    # nothing. The frame knob is what the ring's slots are cut to.
+    for _name, _want in (
+        ("drivers.net.sim.device", 4),
+        ("drivers.net.sim.queue", 8),
+        ("drivers.net.sim.frame", 2048),
+        ("drivers.net.virtio.device", 8),
+        ("drivers.net.bge.device", 8),
+        ("drivers.net.tap.device", 2),
+        ("drivers.net.tap.frame", 2048),
+    ):
+        _at = _llim.find(_name)
+        if _at < 0:
+            raise SystemExit("no %s knob" % _name)
+        if _llim.soft(_at) != _want or _llim.default(_at) != _want:
+            raise SystemExit("%s default %r" % (_name, _llim.soft(_at)))
+        if _llim.set(_name, _want * 2) != 0 or _llim.soft(_at) != _want * 2:
+            raise SystemExit("raise %s" % _name)
+        if _llim.reset(_name) != 0 or _llim.soft(_at) != _want:
+            raise SystemExit("reset %s" % _name)
+    import pymergetic.metal.drivers.net.sim as _simnic
+
+    _sd = _llim.find("drivers.net.sim.device")
+    _bound = _llim.used(_sd)
+    if _bound == 0 or _llim.counted(_sd) != 1:
+        raise SystemExit("the seat's NIC is a counted row")
+    if _llim.set("drivers.net.sim.device", _bound) != 0:
+        raise SystemExit("shrink the sim device knob")
+    if _simnic.probe() >= 0:
+        raise SystemExit("a NIC over the device knob should refuse")
+    if _llim.used(_sd) != _bound:
+        raise SystemExit("a refused probe binds nothing")
+    if _llim.reset("drivers.net.sim.device") != 0:
+        raise SystemExit("reset the sim device knob")
+    print("upy driver nic knobs", _bound)
+    # Above the driver cards sit the class tables: how many NICs, scanouts,
+    # disks, input devices and clocks this seat carries at all. Each widens a
+    # row at a time instead of standing at its ceiling.
+    for _name, _want in (
+        ("drivers.net.device", 32),
+        ("drivers.gfx.device", 32),
+        ("drivers.blk.device", 8),
+        ("drivers.input.device", 8),
+        ("drivers.rtc.device", 4),
+        ("drivers.gfx.sim.device", 4),
+        ("drivers.gfx.sim.shadow", 1536),
+        ("drivers.blk.ide.device", 2),
+        ("drivers.rtc.sim.device", 4),
+    ):
+        _at = _llim.find(_name)
+        if _at < 0:
+            raise SystemExit("no %s knob" % _name)
+        if _llim.soft(_at) != _want or _llim.default(_at) != _want:
+            raise SystemExit("%s default %r" % (_name, _llim.soft(_at)))
+        if _llim.set(_name, _want * 2) != 0 or _llim.soft(_at) != _want * 2:
+            raise SystemExit("raise %s" % _name)
+        if _llim.reset(_name) != 0 or _llim.soft(_at) != _want:
+            raise SystemExit("reset %s" % _name)
+    _cn = _llim.find("drivers.net.device")
+    _cg = _llim.find("drivers.gfx.device")
+    if _llim.counted(_cn) != 1 or _llim.used(_cn) < 1:
+        raise SystemExit("the class table counts every bound NIC")
+    if _llim.set("drivers.net.device", _llim.used(_cn)) != 0:
+        raise SystemExit("shrink the class table knob")
+    if _simnic.probe() >= 0:
+        raise SystemExit("a NIC over the class table knob should refuse")
+    if _llim.reset("drivers.net.device") != 0:
+        raise SystemExit("reset the class table knob")
+    print("upy device class knobs", _llim.used(_cn), _llim.used(_cg))
     cdn.reset()
     print("upy cdn js.fetch")
     if m.display.up() != 0:
@@ -416,3 +548,52 @@ if t.registry_find("pymergetic.types.Entity") is None:
 if t.registry_count() < 12:
     raise SystemExit("types registry count %r" % (t.registry_count(),))
 print("upy types value loop")
+
+# The same knobs, from inside the browser cell: the capacities a page's seat
+# runs on are readable and movable from the Python that runs there.
+import pymergetic.util.limits as limits
+
+if not limits.ready():
+    raise SystemExit("limits not ready")
+if limits.count() < 20:
+    raise SystemExit("limits count %r" % (limits.count(),))
+# The list asked by number, which is how a seat lists its knobs before it
+# knows any of their names: in order, and nothing past the last one.
+_names = [limits.name(_k) for _k in range(limits.count())]
+if sorted(_names) != _names or limits.name(limits.count()) is not None:
+    raise SystemExit("limits by index %r" % (_names,))
+_i = limits.find("net.http.asgi.connection")
+if _i < 0:
+    raise SystemExit("no asgi connection knob")
+_was = limits.soft(_i)
+if limits.set("net.http.asgi.connection", _was + 8) != 0 or limits.soft(_i) != _was + 8:
+    raise SystemExit("raise the asgi connection knob")
+if limits.reset("net.http.asgi.connection") != 0 or limits.soft(_i) != _was:
+    raise SystemExit("reset the asgi connection knob")
+_ci = limits.find("console.scrollback")
+_cwas = limits.soft(_ci)
+if limits.set("console.scrollback", 512) != 0 or limits.soft(_ci) != 512:
+    raise SystemExit("deepen the console")
+if limits.reset("console.scrollback") != 0 or limits.soft(_ci) != _cwas:
+    raise SystemExit("reset the console scrollback")
+print("upy limits knob loop")
+
+# The bridge's scratch rooms are knobs as well, and nothing is reserved for
+# them: the seat takes the pages for the job and gives them back after it.
+import pymergetic.metal.jit.py as _rjpy
+
+_rsrc = "RVAL = 5\n"
+for _rn in ("upy.compile.arena", "upy.cpp.arena", "upy.link.arena", "upy.dump"):
+    if limits.find(_rn) < 0:
+        raise SystemExit("no room knob %r" % (_rn,))
+_ri = limits.find("upy.compile.arena")
+if limits.set("upy.compile.arena", 4096) != 0:
+    raise SystemExit("shrink the compile room")
+if _rjpy.object_compile(_rsrc, "browser_room_toosmall") is not None:
+    raise SystemExit("a compile in a 4KB room should refuse")
+if limits.reset("upy.compile.arena") != 0 or limits.soft(_ri) != limits.default(_ri):
+    raise SystemExit("reset the compile room")
+if not isinstance(_rjpy.object_compile(_rsrc, "browser_room_again"), bytes):
+    raise SystemExit("compile once the room is back")
+print("upy room knob loop")
+

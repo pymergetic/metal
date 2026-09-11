@@ -1,6 +1,7 @@
 /* pymergetic.metal.net.http.asgi — parked io.fetch to RS listen on lo. */
 #define _GNU_SOURCE
 #include "pymergetic/metal/coop.h"
+#include "pymergetic/util/limits.h"
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/http/asgi.h"
 #include "pymergetic/metal/net/ip.h"
@@ -12,6 +13,8 @@
 
 #define LO4 0x7f000001u
 #define ASGI_PORT 8090
+/* Servers this case starts of its own, clear of 8090/8091 above. */
+#define KNOB_PORT 8100
 
 static int32_t fail(const char *why) {
     fprintf(stderr, "metal.net.http.asgi test: %s\n", why);
@@ -344,9 +347,10 @@ static int32_t case_route_ctype(void) {
     if (memmem(rsp, n, "Content-Type: text/html", 23) == NULL) {
         return fail("static ctype missing");
     }
-    /* An undeclared route still derives its type from the path extension. */
+    /* An undeclared route still derives its type from the path extension —
+     * nothing is mounted here, the path only has to carry one. */
     n = 0;
-    if (raw_get("/inspect/css/base.css", rsp, sizeof(rsp), &n) != 0) {
+    if (raw_get("/no/such/file.css", rsp, sizeof(rsp), &n) != 0) {
         return fail("raw get css");
     }
     if (memmem(rsp, n, "Content-Type: text/css", 22) == NULL) {
@@ -637,6 +641,190 @@ static int32_t case_defer_burst(void) {
     return 0;
 }
 
+/* The four knobs this card grows against. Nothing above may depend on the
+ * numbers this card shipped with: a seat that expects more traffic says so at
+ * runtime, and a seat that will not be asked for more keeps the memory. So
+ * this case starts more servers than the shipped table holds, and is refused
+ * the one the knob does not allow. */
+static int32_t case_server_knob(void) {
+    enum { EXTRA = 9 }; /* past the shipped 8, so the table has to grow */
+    int32_t ids[EXTRA];
+    uint32_t live = pm_metal_net_http_asgi_count();
+    int32_t slot = pm_util_limits_find("net.http.asgi.server");
+    int i;
+    if (slot < 0) {
+        return fail("the server knob is not on this seat");
+    }
+    if (pm_util_limits_default(slot) != 8u) {
+        return fail("asgi shipped with another server default");
+    }
+    if (pm_util_limits_used(slot) != live) {
+        return fail("the server knob lost count of the servers");
+    }
+    {
+        int32_t c = pm_util_limits_find("net.http.asgi.connection");
+        int32_t d = pm_util_limits_find("net.http.asgi.defer");
+        int32_t b = pm_util_limits_find("net.http.asgi.backlog");
+        if (c < 0 || d < 0 || b < 0) {
+            return fail("an asgi knob is missing");
+        }
+        if (pm_util_limits_default(c) != 16u || pm_util_limits_default(d) != 16u
+            || pm_util_limits_default(b) != 12u) {
+            return fail("asgi shipped with other defaults");
+        }
+    }
+    /* Room for exactly one more than there are now. */
+    if (pm_util_limits_set("net.http.asgi.server", live + 1u) != 0) {
+        return fail("set the server knob");
+    }
+    {
+        int32_t one = pm_metal_net_http_asgi_listen(LO4, KNOB_PORT);
+        if (one < 0) {
+            return fail("the one allowed server did not start");
+        }
+        if (pm_metal_net_http_asgi_listen(LO4, KNOB_PORT + 1) >= 0) {
+            return fail("a server started past its knob");
+        }
+        if (pm_metal_net_http_asgi_stop(one) != 0) {
+            return fail("stop the allowed server");
+        }
+    }
+    /* Now more than the shipped table holds. */
+    if (pm_util_limits_set("net.http.asgi.server", live + (uint32_t)EXTRA) != 0) {
+        return fail("raise the server knob");
+    }
+    for (i = 0; i < EXTRA; i++) {
+        ids[i] = pm_metal_net_http_asgi_listen(LO4, (uint16_t)(KNOB_PORT + i));
+        if (ids[i] < 0) {
+            return fail("raising the knob did not open the seat");
+        }
+    }
+    if (pm_util_limits_used(slot) != live + (uint32_t)EXTRA) {
+        return fail("the server knob miscounted a grown table");
+    }
+    /* The last one — the one only a grown table could hold — must serve. */
+    {
+        uint8_t *body = NULL;
+        uint32_t n = 0;
+        char url[64];
+        char err[64];
+        pm_wasmmod_io_result_t st;
+        (void)snprintf(url, sizeof(url), "http://127.0.0.1:%d/x", KNOB_PORT + EXTRA - 1);
+        pm_metal_coop_poll();
+        st = pm_metal_net_http_fetch(url, &body, &n, err, sizeof(err));
+        if (st != PM_WASMMOD_IO_OK || n != 4 || body == NULL || memcmp(body, "asgi", 4) != 0) {
+            return fail("the grown server does not answer");
+        }
+    }
+    for (i = 0; i < EXTRA; i++) {
+        if (pm_metal_net_http_asgi_stop(ids[i]) != 0) {
+            return fail("stop a grown server");
+        }
+    }
+    if (pm_util_limits_used(slot) != live) {
+        return fail("stopped servers kept their slot");
+    }
+    if (pm_util_limits_reset("net.http.asgi.server") != 0) {
+        return fail("reset the server knob");
+    }
+    return 0;
+}
+
+/* More clients at once than the shipped connection table holds, all answered,
+ * and every one of them handed its memory back. The old table was sixteen
+ * connections of .bss whether this seat served a request or not; this one is
+ * as wide as the traffic and as narrow as idle.
+ *
+ * The listener for this case is started after the knobs are moved, because a
+ * backlog is asked for once at listen(): twenty clients arriving together
+ * need somewhere to wait, and that is the backlog knob's whole job. */
+static int32_t case_conn_knob(void) {
+    enum { CLIENTS = 20, BURST_PORT = KNOB_PORT + 20 };
+    int32_t fd[CLIENTS];
+    uint32_t got[CLIENTS];
+    static uint8_t rsp[CLIENTS][256];
+    const char *req = "GET /x HTTP/1.0\r\nHost: x\r\n\r\n";
+    uint32_t rn = (uint32_t)strlen(req);
+    int32_t slot = pm_util_limits_find("net.http.asgi.connection");
+    int32_t srv;
+    int i;
+    int spin;
+    int answered = 0;
+    if (slot < 0) {
+        return fail("the connection knob is not on this seat");
+    }
+    if (pm_util_limits_used(slot) != 0u) {
+        return fail("a connection was still held before the burst");
+    }
+    /* net.ip.backlog is the ceiling under which the asgi one asks: the queue
+     * is the ip card's memory, so both have to be willing. */
+    if (pm_util_limits_set("net.http.asgi.connection", 32u) != 0
+        || pm_util_limits_set("net.http.asgi.backlog", 32u) != 0
+        || pm_util_limits_set("net.ip.backlog", 32u) != 0
+        || pm_util_limits_set("net.ip.socket", 96u) != 0) {
+        return fail("raise the knobs for the burst");
+    }
+    srv = pm_metal_net_http_asgi_listen(LO4, BURST_PORT);
+    if (srv < 0) {
+        return fail("the burst server did not start");
+    }
+    for (i = 0; i < CLIENTS; i++) {
+        got[i] = 0;
+        fd[i] = pm_metal_net_ip_out_socket(PM_METAL_NET_IP_SOCK_STREAM);
+        if (fd[i] < 0) {
+            return fail("out of client sockets");
+        }
+        if (pm_metal_net_ip_connect(fd[i], LO4, BURST_PORT) < 0) {
+            return fail("client connect");
+        }
+    }
+    for (spin = 0; spin < 8000 && answered < CLIENTS; spin++) {
+        answered = 0;
+        for (i = 0; i < CLIENTS; i++) {
+            if (got[i] == 0) {
+                (void)pm_metal_net_ip_send(fd[i], (const uint8_t *)req, rn);
+            }
+            if (got[i] < sizeof(rsp[i])) {
+                int32_t k = pm_metal_net_ip_recv(fd[i], rsp[i] + got[i],
+                    (uint32_t)sizeof(rsp[i]) - got[i]);
+                if (k > 0) {
+                    got[i] += (uint32_t)k;
+                }
+            }
+            if (got[i] != 0 && memmem(rsp[i], got[i], "200 OK", 6) != NULL) {
+                answered++;
+            }
+        }
+        pm_metal_net_ip_pump();
+        pm_metal_coop_poll();
+    }
+    for (i = 0; i < CLIENTS; i++) {
+        (void)pm_metal_net_ip_close(fd[i]);
+    }
+    for (spin = 0; spin < 3000; spin++) {
+        pm_metal_net_ip_pump();
+        pm_metal_coop_poll();
+    }
+    if (pm_metal_net_http_asgi_stop(srv) != 0) {
+        return fail("stop the burst server");
+    }
+    if (answered != CLIENTS) {
+        fprintf(stderr, "asgi burst: answered %d of %d, %u connection(s) still held\n",
+            answered, (int)CLIENTS, pm_util_limits_used(slot));
+        return fail("the raised connection knob did not serve every client");
+    }
+    if (pm_util_limits_used(slot) != 0u) {
+        return fail("finished connections did not go back to the arena");
+    }
+    if (pm_util_limits_reset("net.http.asgi.connection") != 0
+        || pm_util_limits_reset("net.http.asgi.backlog") != 0
+        || pm_util_limits_reset("net.ip.backlog") != 0
+        || pm_util_limits_reset("net.ip.socket") != 0) {
+        return fail("reset the knobs after the burst");
+    }
+    return 0;
+}
+
 int32_t pm_metal_net_http_asgi_tests(void) {
     if (case_fetch_default() != 0) {
         return 1;
@@ -666,6 +854,12 @@ int32_t pm_metal_net_http_asgi_tests(void) {
         return 1;
     }
     if (case_multi_instance() != 0) {
+        return 1;
+    }
+    if (case_server_knob() != 0) {
+        return 1;
+    }
+    if (case_conn_knob() != 0) {
         return 1;
     }
     return 0;

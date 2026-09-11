@@ -2,6 +2,7 @@
 #include "pymergetic/metal/build/__types__.h"
 #include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/inspect.h"
+#include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/http/asgi.h"
 #include "pymergetic/wasmmod/guest.h"
@@ -223,12 +224,172 @@ static int32_t case_http(void) {
     }
     body = NULL;
     n = 0;
-    st = pm_metal_net_http_fetch("http://127.0.0.1:8090/inspect/index.html", &body, &n, err, sizeof(err));
+    /* The unified UI: one shell chrome (banner + package sidebar + footer) over
+     * three views. Browse is the rendered catalog; /reg and /factory are this
+     * seat's own live faces in the same chrome, so each prove asserts both the
+     * shared chrome and that view's own pane. */
+    st = pm_metal_net_http_fetch("http://127.0.0.1:8090/", &body, &n, err, sizeof(err));
     if (st != PM_WASMMOD_IO_OK) {
         return fail(err[0] ? err : "fetch www");
     }
-    if (body == NULL || n == 0 || !has(body, n, "<title>Inspect</title>")) {
+    if (body == NULL || n == 0 || !has(body, n, "class=\"top-nav\"")
+        || !has(body, n, "id=\"pkg-catalog\"")) {
         return fail("fetch www body");
+    }
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch("http://127.0.0.1:8090/reg", &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch www reg");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "class=\"top-nav\"")
+        || !has(body, n, "id=\"reg-tree\"")) {
+        return fail("fetch www reg body");
+    }
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch("http://127.0.0.1:8090/factory", &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch www factory");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "class=\"top-nav\"")
+        || !has(body, n, "id=\"fx-matrix\"")) {
+        return fail("fetch www factory body");
+    }
+    /* The download faces. A build's objects and the host build's images are
+     * the two things "the binary" means here, and both are served in ?off=
+     * windows because the biggest of each dwarfs one body. This prove pins
+     * the whole contract: the list, the bytes, and that the bytes are a real
+     * ELF relocatable rather than a loaded image's struct. */
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch(
+        "http://127.0.0.1:8090/build/objects/pymergetic.metal.boot.tree",
+        &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch objects list");
+    }
+    /* Nothing was rebuilt over HTTP yet, so the honest answer is an empty
+     * list — the route must answer it, not 404. */
+    if (body == NULL || n == 0 || !has(body, n, "\"objects\":")) {
+        return fail("fetch objects list body");
+    }
+    {
+        /* Rebuild it, then the same list must carry the object it kept. The
+         * rebuild goes through the local handle because the seat's fetch face
+         * is GET-only; the cache it fills is the seat's, so the HTTP reads
+         * below see exactly what a browser would. */
+        const char *rb;
+        if (pm_metal_inspect_handle("POST", "/build/pymergetic.metal.boot.tree")
+                != 200) {
+            return fail("local rebuild for download");
+        }
+        rb = pm_metal_inspect_body();
+        if (rb == NULL || strstr(rb, "\"rebuild\":\"ok\"") == NULL) {
+            return fail("local rebuild for download body");
+        }
+    }
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch(
+        "http://127.0.0.1:8090/build/objects/pymergetic.metal.boot.tree",
+        &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch objects after build");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "\"src\":\"__impl__.c\"")
+        || !has(body, n, "\"len\":")) {
+        return fail("fetch objects after build body");
+    }
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch(
+        "http://127.0.0.1:8090/build/object/pymergetic.metal.boot.tree/0?off=0",
+        &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch object bytes");
+    }
+    if (body == NULL || n < 4u || body[0] != 0x7f || body[1] != 'E'
+        || body[2] != 'L' || body[3] != 'F') {
+        return fail("object bytes are not an ELF relocatable");
+    }
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch("http://127.0.0.1:8090/images",
+        &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch images");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "\"images\":")) {
+        return fail("fetch images body");
+    }
+    /* The browser build is an image too — the console panel's second tab boots
+     * it in the page — and it lives outside port/build, so it is listed under a
+     * board of its own. Only once it has been built: this prove is the first
+     * thing `prove-all` runs and the emcc lane is the last, so a tree that has
+     * never built it has nothing to serve. When it is there, the bytes must be
+     * a wasm module and not, say, the loader beside it. */
+    if (has(body, n, "\"board\":\"BROWSER\"")) {
+        if (!has(body, n, "\"micropython.wasm\"") || !has(body, n, "\"micropython.mjs\"")) {
+            return fail("browser image is listed without its pair");
+        }
+        body = NULL;
+        n = 0;
+        st = pm_metal_net_http_fetch(
+            "http://127.0.0.1:8090/images/BROWSER/micropython.wasm?off=0",
+            &body, &n, err, sizeof(err));
+        if (st != PM_WASMMOD_IO_OK) {
+            return fail(err[0] ? err : "fetch browser image bytes");
+        }
+        if (body == NULL || n < 4u || body[0] != 0x00 || body[1] != 'a'
+            || body[2] != 's' || body[3] != 'm') {
+            return fail("browser image bytes are not a wasm module");
+        }
+    }
+    /* The lane list, and the local/produce split it reports.
+     *
+     * The contract is "every target producible from every platform", so the
+     * seat's own arch must be producible by the lane that names it, not only
+     * by lane 0 — an x86-64 seat asked for x86-64 must emit, not refuse. And
+     * exactly the arches equal to the seat's may claim `local`, because
+     * local means link and publish into this running binary. */
+    {
+        uint32_t mask = pm_metal_jit_c_target_mask();
+        const char *sa = pm_metal_jit_c_target_arch(
+            PM_METAL_JIT_C_TARGET_SEAT);
+        uint32_t t;
+        if ((mask & (1u << PM_METAL_JIT_C_TARGET_SEAT)) == 0u) {
+            return fail("seat lane reported unproducible");
+        }
+        if (sa == NULL || strcmp(sa, "unknown") == 0) {
+            return fail("seat lane has no arch name");
+        }
+        if (strcmp(pm_metal_jit_c_target_arch(PM_METAL_JIT_C_TARGET_WASM32),
+                "wasm32") != 0) {
+            return fail("wasm32 lane arch name");
+        }
+        /* any lane naming the seat's arch is producible */
+        for (t = 0; t < 4u; t++) {
+            if (strcmp(pm_metal_jit_c_target_arch((int32_t)t), sa) == 0
+                && (mask & (1u << t)) == 0u) {
+                return fail("a lane naming the seat's own arch refuses");
+            }
+        }
+        if (pm_metal_inspect_handle("GET", "/build") != 200) {
+            return fail("build index for lanes");
+        }
+        {
+            const char *ib = pm_metal_inspect_body();
+            if (ib == NULL || strstr(ib, "\"lanes\":[") == NULL
+                || strstr(ib, "\"seat_arch\":") == NULL
+                || strstr(ib, "\"produce\":") == NULL
+                || strstr(ib, "\"local\":") == NULL) {
+                return fail("build index carries no lane list");
+            }
+            if (strstr(ib, sa) == NULL) {
+                return fail("lane list never names the seat arch");
+            }
+        }
     }
     /* Card source over HTTP: the /src/<fqn> manifest and /src/<fqn>/<file>
      * route serve the embedded C/Rust (the same bytes the commander's source
@@ -476,6 +637,16 @@ static int32_t case_export_manifest(void) {
             { "pymergetic.metal.build", "pm_metal_build_events_latest" },
             { "pymergetic.metal.build", "pm_metal_build_walk_start" },
             { "pymergetic.metal.build", "pm_metal_build_walk_state" },
+            { "pymergetic.metal.build", "pm_metal_build_walk_peak" },
+            /* the download faces: a build's objects die with the arena that
+             * made them, so these two read the cache that outlives it */
+            { "pymergetic.metal.build", "pm_metal_build_object_count" },
+            { "pymergetic.metal.build", "pm_metal_build_object_info" },
+            { "pymergetic.metal.build", "pm_metal_build_object_read" },
+            /* which cross lanes this seat carries, so a caller can ask
+             * before it submits instead of failing once per unit */
+            { "pymergetic.metal.jit.c", "pm_metal_jit_c_target_mask" },
+            { "pymergetic.metal.jit.c", "pm_metal_jit_c_target_arch" },
         };
         uint32_t k;
         for (k = 0; k < (uint32_t)(sizeof(must_exist) / sizeof(must_exist[0])); k++) {
@@ -489,17 +660,18 @@ static int32_t case_export_manifest(void) {
                 return fail("expected export missing from the registry");
             }
         }
-        /* expected == registered, exactly: the build card's face is 31
+        /* expected == registered, exactly: the build card's face is 35
          * exports (26 of the Phase-5/actor set + the two event-ring
-         * faces + the two walk faces + the actor post face). A 32nd
-         * export means a new face the manifest does not know; a
-         * lower count means a registration refused. */
+         * faces + the three walk faces + the actor post face + the three
+         * retained-object faces). A 36th export means a new face the
+         * manifest does not know; a lower count means a registration
+         * refused. */
         {
             uint32_t reg = pm_wasmmod_registry_export_count(
                 (const uint8_t *)"pymergetic.metal.build", 22u);
-            if (reg != 31u) {
+            if (reg != 35u) {
                 fprintf(stderr, "metal.inspect test: build face %u "
-                    "registered, 31 expected\n", (unsigned)reg);
+                    "registered, 35 expected\n", (unsigned)reg);
                 return fail("build export count != manifest");
             }
         }

@@ -29,9 +29,23 @@ extern "C" {
 #endif
 
 #define PM_METAL_EDIT_ERR_MAX 256u
-#define PM_METAL_EDIT_NODES_MAX 256u
 #define PM_METAL_EDIT_NAME_MAX 96u
-#define PM_METAL_EDIT_SRC_MAX (128u * 1024u)
+/* Where a parse starts, not where it stops. Each of these is the default of a
+ * knob on pymergetic.util.limits (edit.node, edit.source, edit.typecheck):
+ * the node list is arena memory that grows with the file, the source bound is
+ * what the editor will accept rather than what it holds, and the typecheck
+ * scratch is taken for one compile and given straight back. A seat editing
+ * something bigger than the defaults moves the knob; nothing here is standing
+ * memory waiting for an edit that may never come. */
+#define PM_METAL_EDIT_NODES_DEFAULT 256u
+#define PM_METAL_EDIT_SRC_DEFAULT (128u * 1024u)
+#if defined(PM_METAL_FIRMWARE)
+/* The tccpp pools are 2 x 256KB and a typecheck source is small; a board's
+ * whole free map may be only a few megabytes, so this seat starts tight. */
+#define PM_METAL_EDIT_TYPECHECK_DEFAULT (2u * 1024u * 1024u)
+#else
+#define PM_METAL_EDIT_TYPECHECK_DEFAULT (8u * 1024u * 1024u)
+#endif
 
 typedef enum pm_metal_edit_kind {
     PM_METAL_EDIT_NONE = 0,
@@ -57,7 +71,10 @@ typedef struct pm_metal_edit_tree {
     const char *src;
     size_t src_len;
     uint32_t n_nodes;
-    pm_metal_edit_node_t nodes[PM_METAL_EDIT_NODES_MAX];
+    /* arena-owned, grown under edit.node while the file needs it, handed
+     * back by pm_metal_edit_tree_release */
+    uint32_t cap_nodes;
+    pm_metal_edit_node_t *nodes;
     char error[PM_METAL_EDIT_ERR_MAX];
 } pm_metal_edit_tree_t;
 
@@ -77,8 +94,13 @@ typedef enum pm_metal_edit_status {
  * validated by a real TCC compile before write_back — a construct the
  * span-parse mislocates surfaces as a typecheck failure there, never a
  * silent mis-edit. Returns PM_METAL_EDIT_OK or a negative status. */
-int32_t pm_metal_edit_parse_c(pm_metal_edit_tree_t *tree,
-    const char *source, size_t source_len);
+int32_t pm_metal_edit_parse_c(pm_util_mem_arena_t *arena,
+    pm_metal_edit_tree_t *tree, const char *source, size_t source_len);
+
+/* Give a parsed tree's nodes back to the arena they came from. The tree is
+ * the caller's variable either way; this is the memory behind it. */
+void pm_metal_edit_tree_release(pm_util_mem_arena_t *arena,
+    pm_metal_edit_tree_t *tree);
 
 /* Find a node by kind + name. Returns the node or NULL. */
 const pm_metal_edit_node_t *pm_metal_edit_locate(

@@ -212,6 +212,16 @@ void nlr_jump_fail(void *val) {
     }
 }
 
+/* One embedded guest script, compiled and called. Raises through the
+ * caller's nlr like any other guest line. */
+static void firmware_upy_exec(const char *src, unsigned len) {
+    mp_lexer_t *lex = mp_lexer_new_from_str_len(MP_QSTR__lt_stdin_gt_, src, len, 0);
+    qstr source_name = lex->source_name;
+    mp_parse_tree_t tree = mp_parse(lex, MP_PARSE_FILE_INPUT);
+    mp_obj_t fn = mp_compile(&tree, source_name, false);
+    mp_call_function_0(fn);
+}
+
 #ifdef PM_METAL_UEFI
 int pm_metal_firmware_upy(void) {
     if (s_bump == NULL) {
@@ -236,6 +246,8 @@ int pm_metal_firmware_upy(void)
     extern unsigned pm_metal_firmware_upy_ready_py_len(void);
     extern const char *pm_metal_firmware_upy_cdn_py(void);
     extern unsigned pm_metal_firmware_upy_cdn_py_len(void);
+    extern const char *pm_metal_firmware_upy_console_py(void);
+    extern unsigned pm_metal_firmware_upy_console_py_len(void);
     extern const uint8_t *pm_metal_hello_wasm_bytes(void);
     extern unsigned pm_metal_hello_wasm_size(void);
     const char *src;
@@ -267,11 +279,16 @@ int pm_metal_firmware_upy(void)
         mp_wasm_ensure_inited();
         mp_wasm_register_local_bytes("pymergetic.wasmmod_examples.hello",
             pm_metal_hello_wasm_bytes(), pm_metal_hello_wasm_size());
-        mp_lexer_t *lex = mp_lexer_new_from_str_len(MP_QSTR__lt_stdin_gt_, src, src_len, 0);
-        qstr source_name = lex->source_name;
-        mp_parse_tree_t tree = mp_parse(lex, MP_PARSE_FILE_INPUT);
-        mp_obj_t fn = mp_compile(&tree, source_name, false);
-        mp_call_function_0(fn);
+        firmware_upy_exec(src, src_len);
+#if !MICROPY_HELPER_REPL
+        /* The corner panel's two faces, on the same script the unix and
+         * browser seats run: the ring is read by cursor over the local
+         * inspect face and a line is run through the packs exec route.
+         * Prove seats only — the run seat's boot ends in a REPL a person
+         * is waiting for. */
+        firmware_upy_exec(pm_metal_firmware_upy_console_py(),
+            pm_metal_firmware_upy_console_py_len());
+#endif
         nlr_pop();
     } else {
         mp_obj_print_exception(&mp_plat_print, MP_OBJ_FROM_PTR(nlr.ret_val));

@@ -456,21 +456,29 @@ static void jit_c_obj_err_diag(char *errbuf, size_t errbuf_len,
         size_t msg_len = strlen(msg);
         size_t room = errbuf_len > msg_len + 2
             ? errbuf_len - msg_len - 2 : 0;
-        const char *diag = d->buf;
+        size_t len = d->len;
         size_t skip = 0;
-        if (d->len + msg_len + 2 > errbuf_len) {
-            if (d->len > room) {
-                skip = d->len - room;
-                /* advance to the next line so the tail starts clean */
-                while (diag[skip] != '\0' && diag[skip] != '\n'
-                    && skip < d->len) {
-                    skip++;
-                }
-                if (skip < d->len) skip++;
-            }
-            diag = d->buf + skip;
+        /* the capture ends every line with a newline; the last one would
+         * ride into the caller's JSON, and the alignment below would read
+         * it as one more line worth skipping */
+        while (len > 0 && (d->buf[len - 1] == '\n' || d->buf[len - 1] == '\r')) {
+            len--;
         }
-        snprintf(errbuf, errbuf_len, "%s: %s", msg, diag);
+        if (len > room) {
+            size_t aligned = len - room;
+            skip = aligned;
+            /* start the tail on a line boundary — but only if there is
+             * another line to start. A single diagnostic longer than errbuf
+             * used to skip past its own only newline and report nothing. */
+            while (aligned < len && d->buf[aligned] != '\n') {
+                aligned++;
+            }
+            if (aligned < len) {
+                skip = aligned + 1;
+            }
+        }
+        snprintf(errbuf, errbuf_len, "%s: %.*s", msg,
+            (int)(len - skip), d->buf + skip);
     } else {
         snprintf(errbuf, errbuf_len, "%s", msg);
     }
@@ -964,6 +972,7 @@ static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
     jit_c_diag_t diag;
     uint8_t *mod = NULL;
     int mod_len = 0;
+    int wrc;
     uint8_t *buf;
     uint32_t i;
 
@@ -1028,15 +1037,25 @@ static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
             "object_compile: tcc compile failed", &diag);
         return -1;
     }
-    if (wasm_build_mod(&mod, &mod_len) != 0 || mod == NULL || mod_len <= 0) {
+    wrc = wasm_build_mod(&mod, &mod_len);
+    if (wrc != 0 || mod == NULL || mod_len <= 0) {
         if (mod != NULL) {
             wasm_tcc_free(mod); /* free under the arena window that allocated it */
         }
         wasm_tcc_delete(s);
         wasm_release_bufs(); /* same window: their backing is this arena */
         pm_metal_jit_c_arena_release(arena);
-        if (errbuf != NULL && errbuf_len > 0) {
-            snprintf(errbuf, errbuf_len, "object_compile: wasm serialize failed");
+        /* the serializer refuses through the same error func as the compile,
+         * so say what it said instead of just that it said no — and if it
+         * said nothing, say what it returned, which is the only other thing
+         * there is to know */
+        if (diag.buf != NULL && diag.buf[0] != '\0') {
+            jit_c_obj_err_diag(errbuf, errbuf_len,
+                "object_compile: wasm serialize failed", &diag);
+        } else if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len,
+                "object_compile: wasm serialize failed without a message"
+                " (rc=%d, %d bytes)", (int)wrc, (int)mod_len);
         }
         return -1;
     }
@@ -1105,6 +1124,19 @@ int32_t pm_metal_jit_c_object_compile_target(pm_util_mem_arena_t *arena,
     int32_t target,
     uint8_t **obj_out, size_t *obj_len,
     char *errbuf, size_t errbuf_len) {
+    /* A lane that names this seat's own arch is not a cross request. The
+     * cross instances exist only for foreign arches (that is how they are
+     * defined), so routing such a request to one refuses an arch the seat
+     * plainly emits — asking an x86-64 seat to produce x86-64 used to fail
+     * every unit. Every target is producible from every platform whose
+     * backend can emit it, and for the seat's own arch that backend is the
+     * native one. */
+    if (target != (int32_t)PM_METAL_JIT_C_TARGET_SEAT
+        && strcmp(pm_metal_jit_c_target_arch(target),
+            pm_metal_jit_c_target_arch(
+                (int32_t)PM_METAL_JIT_C_TARGET_SEAT)) == 0) {
+        target = (int32_t)PM_METAL_JIT_C_TARGET_SEAT;
+    }
     if (target == (int32_t)PM_METAL_JIT_C_TARGET_WASM32) {
 #if PM_METAL_JIT_C_WASM_PATH
         return jit_c_object_compile_wasm(arena, source, source_len,
@@ -1151,6 +1183,115 @@ int32_t pm_metal_jit_c_object_compile(pm_util_mem_arena_t *arena,
     char *errbuf, size_t errbuf_len) {
     return pm_metal_jit_c_object_compile_opts(arena, source, source_len,
         NULL, 0, NULL, 0, obj_out, obj_len, errbuf, errbuf_len);
+}
+
+/* Which arches this seat can produce for: bit (1u << target) per
+ * pm_metal_jit_c_target_t. Every refusal in the router is decided at compile
+ * time by which backends were built in, so a caller can know before it
+ * submits instead of discovering it as one refusal per unit.
+ *
+ * A lane naming the seat's own arch is always set: the router sends it to
+ * the native backend, which emits precisely that arch. So on an x86-64 seat
+ * both TARGET_SEAT and TARGET_X86_64 are producible, and they mean the same
+ * emitter — what differs is not the bytes but what the caller does with
+ * them (see the local/produce split in the build card). */
+/* Does the backend behind a lane lower ordinary C?
+ *
+ * Being linked is not the same as being able to compile. This flag used to
+ * be 0: the wasm32 backend covered straight-line integer code and refused
+ * the rest, so no card in the tree got through it. It now lowers the whole
+ * language — control flow through a dispatch loop, calls, symbol addresses,
+ * floats, long long, structs, varargs (see the header of
+ * externals/tcc/wasm32-gen.c) — and the tree builds on it.
+ *
+ * This is one flag rather than a runtime probe so that a poll of the lane
+ * list stays a pure read. jit/c's own prove compiles a canary (struct,
+ * static data, call, loop, branch) on every lane this mask advertises and
+ * requires a refusal from every lane it does not, so the flag cannot drift
+ * away from what the backends actually do. */
+#define PM_METAL_JIT_C_WASM32_LOWERS_C 1
+
+static int32_t lane_lowers_c(uint32_t target) {
+    if (target == (uint32_t)PM_METAL_JIT_C_TARGET_WASM32) {
+        return PM_METAL_JIT_C_WASM32_LOWERS_C;
+    }
+    /* the seat lane on a wasm32-native seat IS the wasm32 backend */
+    if (target == (uint32_t)PM_METAL_JIT_C_TARGET_SEAT) {
+        return strcmp(pm_metal_jit_c_target_arch(
+            (int32_t)PM_METAL_JIT_C_TARGET_SEAT), "wasm32") != 0
+            ? 1 : PM_METAL_JIT_C_WASM32_LOWERS_C;
+    }
+    return 1;
+}
+
+uint32_t pm_metal_jit_c_target_mask(void) {
+    uint32_t m = 0;
+    const char *seat;
+    uint32_t t;
+#if PM_HAS_TCC
+    m |= 1u << (uint32_t)PM_METAL_JIT_C_TARGET_SEAT;
+#endif
+#if PM_METAL_JIT_C_WASM_PATH
+    m |= 1u << (uint32_t)PM_METAL_JIT_C_TARGET_WASM32;
+#endif
+#if defined(PM_TCC_CROSS_INSTANCE_ARM_EABI)
+    m |= 1u << (uint32_t)PM_METAL_JIT_C_TARGET_ARM_EABI;
+#endif
+#if defined(PM_TCC_CROSS_INSTANCE_X86_64)
+    m |= 1u << (uint32_t)PM_METAL_JIT_C_TARGET_X86_64;
+#endif
+    /* the seat's own arch, by whichever lane names it */
+    if ((m & (1u << (uint32_t)PM_METAL_JIT_C_TARGET_SEAT)) != 0u) {
+        seat = pm_metal_jit_c_target_arch(
+            (int32_t)PM_METAL_JIT_C_TARGET_SEAT);
+        for (t = 0; t < 4u; t++) {
+            if (strcmp(pm_metal_jit_c_target_arch((int32_t)t), seat) == 0) {
+                m |= 1u << t;
+            }
+        }
+    }
+    /* drop whatever cannot actually build a card, last: the arch pass above
+     * adds lanes by name, and on a wasm32-native seat that would put the
+     * unfinished backend back in under two different lanes. */
+    for (t = 0; t < 4u; t++) {
+        if ((m & (1u << t)) != 0u && !lane_lowers_c(t)) {
+            m &= ~(1u << t);
+        }
+    }
+    return m;
+}
+
+/* The arch a lane emits for, as a stable short name. Lane SEAT reports the
+ * backend this binary actually embeds, which is what makes the mask
+ * readable: a cross lane is missing either because the instance was not
+ * built in, or because it IS the seat's own backend (the cross instances are
+ * defined only for a non-native arch). A caller that sees a lane's arch
+ * equal to SEAT's knows to use SEAT rather than report a failure. */
+const char *pm_metal_jit_c_target_arch(int32_t target) {
+    switch (target) {
+    case PM_METAL_JIT_C_TARGET_WASM32:
+        return "wasm32";
+    case PM_METAL_JIT_C_TARGET_ARM_EABI:
+        return "arm-eabi";
+    case PM_METAL_JIT_C_TARGET_X86_64:
+        return "x86-64";
+    case PM_METAL_JIT_C_TARGET_SEAT:
+#if defined(TCC_TARGET_WASM32)
+        return "wasm32";
+#elif defined(TCC_TARGET_ARM)
+        return "arm-eabi";
+#elif defined(TCC_TARGET_ARM64)
+        return "aarch64";
+#elif defined(TCC_TARGET_I386)
+        return "i386";
+#elif defined(TCC_TARGET_X86_64)
+        return "x86-64";
+#else
+        return "unknown";
+#endif
+    default:
+        return "unknown";
+    }
 }
 
 pm_metal_coop_status_t pm_metal_jit_c_compile_step(pm_metal_coop_coro_t *self) {
@@ -1205,6 +1346,10 @@ PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_object_compile_target, pm
         const char **, uint32_t, const char **, uint32_t,
         int32_t,
         uint8_t **, size_t *, char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_target_mask, pm_metal_jit_c_target_mask,
+    uint32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_target_arch, pm_metal_jit_c_target_arch,
+    const char *(int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_arena_acquire, pm_metal_jit_c_arena_acquire,
     int32_t(pm_util_mem_arena_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.jit.c, pm_metal_jit_c_arena_release, pm_metal_jit_c_arena_release,

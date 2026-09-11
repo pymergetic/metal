@@ -16,9 +16,16 @@ int pm_metal_ready(void);
 pm_util_mem_arena_t *pm_metal_boot_arena(void);
 int32_t pm_metal_boot_feed_span(uint64_t base, uint64_t len);
 
+/* A large room for the length of one job, from wherever this seat's memory
+ * comes from (see __impl__.c). Given back with the same length. */
+void *pm_metal_boot_span_take(size_t len);
+void pm_metal_boot_span_give(void *base, size_t len);
+
 /* Platform fills (weak defaults in __impl__.c). */
 int pm_metal_boot_fill_hosted_span(void **base, size_t *len);
 void pm_metal_boot_fill_release(void *base, size_t len);
+void *pm_metal_boot_fill_span_take(size_t len);
+void pm_metal_boot_fill_span_give(void *base, size_t len);
 void pm_metal_boot_fill_avoid(uint64_t *lo, uint64_t *hi);
 size_t pm_metal_boot_fill_arena_need(void);
 void pm_metal_boot_fill_io(void);

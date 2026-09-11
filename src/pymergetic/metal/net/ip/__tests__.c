@@ -3,7 +3,9 @@
  * echo requests, and rejects any frame whose checksums do not add up. */
 #include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/drivers/net.h"
+#include "pymergetic/util/limits.h"
 #include "pymergetic/metal/net/ip.h"
+#include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
@@ -662,6 +664,298 @@ static int32_t case_multicast_lo(void) {
     return 0;
 }
 
+/* A listener holds as many completed connections as it asked listen() for.
+ *
+ * This seat serves pages with no keep-alive, so a browser opens one connection
+ * per asset and a single reload arrives as six at once, the console panel
+ * polling beside them. Every listener used to hold four whatever it asked for,
+ * and the ones past the fourth finished their handshake and were then dropped
+ * on the floor: the peer held a connection that was up and would never be
+ * answered, which is a page that comes back missing a stylesheet.
+ *
+ * Past the backlog the peer is told. A reset is a connection a client can
+ * retry; silence is one it waits out. */
+#define BL_PORT 9010u
+#define BL_N 6
+
+static int32_t case_tcp_backlog(void) {
+    int32_t ls, over;
+    int32_t cl[BL_N];
+    int32_t sv[BL_N];
+    uint32_t i;
+    int32_t st = 0;
+    const uint8_t msg[] = { 'h', 'i' };
+
+    for (i = 0; i < BL_N; i++) {
+        cl[i] = -1;
+        sv[i] = -1;
+    }
+    ls = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    if (ls < 0 || pm_metal_net_ip_bind(ls, LO4, BL_PORT) != 0
+        || pm_metal_net_ip_listen(ls, BL_N) != 0) {
+        return fail("backlog listen");
+    }
+    /* Everything a page load opens, before the server takes any of it. */
+    for (i = 0; i < BL_N; i++) {
+        cl[i] = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+        if (cl[i] < 0 || pm_metal_net_ip_connect(cl[i], LO4, (uint16_t)BL_PORT) != 1) {
+            st = fail("backlog connect");
+            goto out;
+        }
+    }
+    for (i = 0; i < BL_N; i++) {
+        sv[i] = pm_metal_net_ip_accept(ls);
+        if (sv[i] < 0) {
+            st = fail("a connection the listener took on was dropped");
+            goto out;
+        }
+    }
+    /* And they are live connections, not slots that merely counted. */
+    if (pm_metal_net_ip_send(cl[BL_N - 1u], msg, sizeof(msg)) != (int32_t)sizeof(msg)) {
+        st = fail("backlog send");
+        goto out;
+    }
+    {
+        uint8_t buf[8];
+        uint32_t spin;
+        int32_t n = 0;
+        for (spin = 0; spin < 100u && n <= 0; spin++) {
+            n = pm_metal_net_ip_recv(sv[BL_N - 1u], buf, sizeof(buf));
+            pm_metal_net_ip_pump();
+        }
+        if (n != (int32_t)sizeof(msg) || buf[0] != 'h') {
+            st = fail("the last one queued is a working connection");
+            goto out;
+        }
+    }
+    /* One past a full queue: the peer must learn, not park. Give the slots
+     * back first — this table is shared with every other case. */
+    for (i = 0; i < BL_N; i++) {
+        (void)pm_metal_net_ip_close(sv[i]);
+        (void)pm_metal_net_ip_close(cl[i]);
+        sv[i] = -1;
+        cl[i] = -1;
+    }
+    for (i = 0; i < BL_N; i++) {
+        cl[i] = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+        if (cl[i] < 0 || pm_metal_net_ip_connect(cl[i], LO4, (uint16_t)BL_PORT) != 1) {
+            st = fail("backlog refill");
+            goto out;
+        }
+    }
+    over = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    if (over < 0) {
+        st = fail("backlog over socket");
+        goto out;
+    }
+    (void)pm_metal_net_ip_connect(over, LO4, (uint16_t)BL_PORT);
+    {
+        uint32_t spin;
+        int32_t sent = 0;
+        for (spin = 0; spin < 100u; spin++) {
+            pm_metal_net_ip_pump();
+            sent = pm_metal_net_ip_send(over, msg, sizeof(msg));
+            if (sent < 0) {
+                break;
+            }
+        }
+        if (sent >= 0) {
+            st = fail("one past the backlog was left hanging instead of reset");
+        }
+    }
+    (void)pm_metal_net_ip_close(over);
+out:
+    for (i = 0; i < BL_N; i++) {
+        if (sv[i] >= 0) {
+            (void)pm_metal_net_ip_close(sv[i]);
+        }
+        if (cl[i] >= 0) {
+            (void)pm_metal_net_ip_close(cl[i]);
+        }
+    }
+    (void)pm_metal_net_ip_close(ls);
+    return st;
+}
+
+/* There is no table to run out of any more. What used to be thirty-two
+ * sockets in .bss — a third of a megabyte a seat carried whether it served
+ * anything or not — is now one socket's worth of arena per open socket, and
+ * the seat gets it back on close. Forty-eight is past what this build ships
+ * with, so the seat says so first: that is a sentence a running program can
+ * write, where before it was a number somebody had to rebuild. */
+#define GROW_N 48u
+#define GROW_PORT 9100u
+
+static int32_t case_socket_growth(void) {
+    int32_t fd[GROW_N];
+    pm_util_mem_arena_t *arena = pm_metal_coop_arena();
+    size_t before;
+    size_t during;
+    size_t after;
+    uint32_t i;
+    int32_t st = 0;
+
+    for (i = 0; i < GROW_N; i++) {
+        fd[i] = -1;
+    }
+    if (pm_util_limits_set("net.ip.socket", GROW_N + 16u) != 0) {
+        return fail("asking for more sockets");
+    }
+    before = pm_util_mem_arena_heap_used(arena);
+    for (i = 0; i < GROW_N; i++) {
+        fd[i] = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_DGRAM);
+        if (fd[i] < 0) {
+            st = fail("the stack stopped opening sockets at a fixed count");
+            goto out;
+        }
+        if (pm_metal_net_ip_bind(fd[i], LO4, (uint16_t)(GROW_PORT + i)) != 0) {
+            st = fail("a socket past the old table does not work like the rest");
+            goto out;
+        }
+    }
+    during = pm_util_limits_used(pm_util_limits_find("net.ip.socket"));
+    if (during < GROW_N) {
+        st = fail("the listing does not show the sockets that are open");
+    }
+out:
+    for (i = 0; i < GROW_N; i++) {
+        if (fd[i] >= 0) {
+            (void)pm_metal_net_ip_close(fd[i]);
+            fd[i] = -1;
+        }
+    }
+    if (st == 0) {
+        /* Closed has to mean given back, not merely marked free. A leak would
+         * show here: the arena hands TLSF a pool at a time, so a thousand
+         * sockets' worth of never-returned memory forces it to grow one. */
+        uint32_t round;
+        for (round = 0; round < 1000u && st == 0; round++) {
+            int32_t one = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_DGRAM);
+            if (one < 0) {
+                st = fail("opening a socket stopped working partway through");
+                break;
+            }
+            (void)pm_metal_net_ip_close(one);
+        }
+        after = pm_util_mem_arena_heap_used(arena);
+        if (st == 0 && after != before) {
+            st = fail("closed sockets did not go back to the arena");
+        }
+    }
+    (void)pm_util_limits_reset("net.ip.socket");
+    return st;
+}
+
+/* The knob is what says no, and a seat may move it while it runs. */
+static int32_t case_socket_limit(void) {
+    int32_t k = pm_util_limits_find("net.ip.socket");
+    uint32_t live;
+    int32_t a = -1;
+    int32_t b = -1;
+    int32_t c = -1;
+    int32_t st = 0;
+
+    if (k < 0 || pm_util_limits_default(k) != 32u) {
+        return fail("net.ip.socket is not on the listing with the number it shipped with");
+    }
+    live = pm_util_limits_used(k);
+    if (pm_util_limits_set("net.ip.socket", live + 2u) != 0) {
+        return fail("set");
+    }
+    a = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_DGRAM);
+    b = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_DGRAM);
+    c = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_DGRAM);
+    if (a < 0 || b < 0) {
+        st = fail("the knob refused inside its own number");
+    } else if (c >= 0) {
+        st = fail("the knob was told two and gave three");
+    } else if (pm_util_limits_used(k) != live + 2u) {
+        st = fail("the listing does not show what is really open");
+    }
+    if (a >= 0) {
+        (void)pm_metal_net_ip_close(a);
+    }
+    if (b >= 0) {
+        (void)pm_metal_net_ip_close(b);
+    }
+    if (c >= 0) {
+        (void)pm_metal_net_ip_close(c);
+    }
+    if (pm_util_limits_reset("net.ip.socket") != 0) {
+        return fail("reset");
+    }
+    if (st == 0) {
+        /* And past the old wall once it is put back. */
+        int32_t d = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_DGRAM);
+        if (d < 0) {
+            st = fail("putting the knob back did not let the seat open sockets again");
+        } else {
+            (void)pm_metal_net_ip_close(d);
+        }
+    }
+    return st;
+}
+
+/* A listener's depth is its own, and a seat can raise the ceiling it is held
+ * to. Twenty at once is past what this build ships with (sixteen), so this
+ * only passes because the knob was moved first. */
+#define DEEP_PORT 9200u
+#define DEEP_N 20u
+
+static int32_t case_backlog_knob(void) {
+    int32_t ls;
+    int32_t cl[DEEP_N];
+    int32_t sv[DEEP_N];
+    uint32_t i;
+    int32_t st = 0;
+
+    for (i = 0; i < DEEP_N; i++) {
+        cl[i] = -1;
+        sv[i] = -1;
+    }
+    /* Twenty connections is forty-one sockets with their listener, so both
+     * knobs have to be moved — which is the whole exercise. */
+    if (pm_util_limits_set("net.ip.backlog", 32u) != 0
+        || pm_util_limits_set("net.ip.socket", 64u) != 0) {
+        return fail("backlog knob");
+    }
+    ls = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    if (ls < 0 || pm_metal_net_ip_bind(ls, LO4, DEEP_PORT) != 0
+        || pm_metal_net_ip_listen(ls, (int32_t)DEEP_N + 4) != 0) {
+        st = fail("deep listen");
+        goto out;
+    }
+    for (i = 0; i < DEEP_N; i++) {
+        cl[i] = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+        if (cl[i] < 0 || pm_metal_net_ip_connect(cl[i], LO4, (uint16_t)DEEP_PORT) != 1) {
+            st = fail("deep connect");
+            goto out;
+        }
+    }
+    for (i = 0; i < DEEP_N; i++) {
+        sv[i] = pm_metal_net_ip_accept(ls);
+        if (sv[i] < 0) {
+            st = fail("a listener told to hold twenty dropped one");
+            goto out;
+        }
+    }
+out:
+    for (i = 0; i < DEEP_N; i++) {
+        if (sv[i] >= 0) {
+            (void)pm_metal_net_ip_close(sv[i]);
+        }
+        if (cl[i] >= 0) {
+            (void)pm_metal_net_ip_close(cl[i]);
+        }
+    }
+    if (ls >= 0) {
+        (void)pm_metal_net_ip_close(ls);
+    }
+    (void)pm_util_limits_reset("net.ip.backlog");
+    (void)pm_util_limits_reset("net.ip.socket");
+    return st;
+}
+
 static int32_t case_offbox(void) {
     int32_t st;
     if (peer_up() != 0) {
@@ -699,6 +993,18 @@ int32_t pm_metal_net_ip_tests(void) {
         return 1;
     }
     if (case_tcp_accept_park() != 0) {
+        return 1;
+    }
+    if (case_tcp_backlog() != 0) {
+        return 1;
+    }
+    if (case_socket_growth() != 0) {
+        return 1;
+    }
+    if (case_socket_limit() != 0) {
+        return 1;
+    }
+    if (case_backlog_knob() != 0) {
         return 1;
     }
     if (case_multicast_lo() != 0) {

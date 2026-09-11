@@ -28,14 +28,17 @@ int32_t pm_metal_input_tests(void) {
     if (pm_metal_input_pop() != (int32_t)'A' || pm_metal_input_count() != 0) {
         return fail("pop");
     }
-    before = pm_metal_console_line_count();
+    /* By sequence, not by line count: the count stops rising once the ring
+     * is full, and by the time a seat has booted and run this far console 0
+     * may well be. The sequence counts lines ever committed. */
+    before = pm_metal_console_seq();
     if (pm_metal_input_push((int32_t)'Z') != 0 || pm_metal_input_push((int32_t)'\n') != 0) {
         return fail("push line");
     }
     if (pm_metal_input_feed_console() != 2) {
         return fail("feed");
     }
-    if (pm_metal_console_line_count() != before + 1u) {
+    if (pm_metal_console_seq() != before + 1u) {
         return fail("console line");
     }
     if (pm_metal_input_up() != 0) {

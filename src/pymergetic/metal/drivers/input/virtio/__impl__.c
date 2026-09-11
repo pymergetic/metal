@@ -7,6 +7,7 @@
 #include "pymergetic/metal/drivers/__types__.h"
 #include "pymergetic/metal/drivers/input.h"
 #include "pymergetic/metal/input.h"
+#include "pymergetic/util/limits/__types__.h"
 #include "pymergetic/util/mem.h"
 
 #if defined(PM_METAL_FIRMWARE)
@@ -15,7 +16,8 @@
 
 #include <string.h>
 
-#define IN_FILL_MAX 4u
+/* How many input devices this card offers. */
+#define IN_DEVICE_DEFAULT 4u
 #define EV_SYN 0
 #define EV_KEY 1
 #define EV_ABS 3
@@ -30,6 +32,7 @@
 
 struct in_fill {
     uint32_t used;
+    uint32_t unit;
     int32_t dt_id;
     int32_t in_h;
     pm_metal_input_ops_t ops;
@@ -46,10 +49,46 @@ struct in_fill {
     uint8_t *vqmem;
     uint8_t *evbuf;
 #endif
+    struct in_fill *next;
 };
 
 static pm_util_mem_arena_t *s_arena;
-static struct in_fill s_dev[IN_FILL_MAX];
+/* One row per input device, taken when it attaches and kept for the seat.
+ * The input core holds each row's address as its ops ctx, so rows are
+ * linked, never moved. */
+static struct in_fill *s_head;
+static uint32_t s_dev_used;
+
+PM_UTIL_LIMIT_C(pm_metal_input_virtio_limit_device, "drivers.input.virtio.device",
+    IN_DEVICE_DEFAULT, 0u, &s_dev_used);
+
+/* A row for one more device: a closed one first, then a fresh one. Either
+ * way the device knob says whether this card may offer another at all. */
+static struct in_fill *in_row(void) {
+    struct in_fill *d = s_head;
+    uint32_t rows = 0;
+    if (!PM_UTIL_LIMIT_ROOM(pm_metal_input_virtio_limit_device, s_dev_used)) {
+        return NULL;
+    }
+    while (d != NULL) {
+        if (!d->used) {
+            return d;
+        }
+        rows++;
+        d = d->next;
+    }
+    d = pm_util_mem_alloc(s_arena, sizeof(*d));
+    if (d == NULL) {
+        return NULL;
+    }
+    memset(d, 0, sizeof(*d));
+    d->unit = rows;
+    d->dt_id = -1;
+    d->in_h = -1;
+    d->next = s_head;
+    s_head = d;
+    return d;
+}
 
 static int32_t map_key(uint32_t code, uint32_t shift) {
     static const uint8_t letter[] = {
@@ -136,6 +175,9 @@ static int32_t fill_open(void *ctx) {
 static void fill_close(void *ctx) {
     struct in_fill *d = ctx;
     if (d != NULL) {
+        if (d->used != 0 && s_dev_used != 0) {
+            s_dev_used--;
+        }
         d->used = 0;
         d->dt_id = -1;
         d->in_h = -1;
@@ -327,7 +369,6 @@ static int32_t fill_inject(void *ctx, int32_t key) {
 }
 
 static int32_t bind_fill(struct in_fill *d, int32_t dt) {
-    memset(d, 0, sizeof(*d));
     d->used = 1;
     d->ops.open = fill_open;
     d->ops.close = fill_close;
@@ -340,11 +381,12 @@ static int32_t bind_fill(struct in_fill *d, int32_t dt) {
         d->used = 0;
         return -1;
     }
+    s_dev_used++;
     return d->in_h;
 }
 
 static int32_t virtio_attach(int32_t bus, uint32_t loc0, uint32_t loc1, uint32_t loc2, uint32_t loc3) {
-    uint32_t i;
+    struct in_fill *d;
     int32_t dt;
     if (s_arena == NULL) {
         return -1;
@@ -353,17 +395,16 @@ static int32_t virtio_attach(int32_t bus, uint32_t loc0, uint32_t loc1, uint32_t
     if (dt < 0) {
         return -1;
     }
-    for (i = 0; i < IN_FILL_MAX; i++) {
-        if (s_dev[i].used && s_dev[i].dt_id == dt) {
-            return s_dev[i].in_h;
+    for (d = s_head; d != NULL; d = d->next) {
+        if (d->used && d->dt_id == dt) {
+            return d->in_h;
         }
     }
-    for (i = 0; i < IN_FILL_MAX; i++) {
-        if (!s_dev[i].used) {
-            return bind_fill(&s_dev[i], dt);
-        }
+    d = in_row();
+    if (d == NULL) {
+        return -1;
     }
-    return -1;
+    return bind_fill(d, dt);
 }
 
 #if defined(PM_METAL_FIRMWARE)
@@ -398,16 +439,10 @@ static int32_t fw_attach_pci(uint32_t bus, uint32_t dev, uint32_t fn) {
     if ((mmio_r8(common + 20) & 8u) == 0) {
         return -1;
     }
-    for (i = 0; i < IN_FILL_MAX; i++) {
-        if (!s_dev[i].used) {
-            break;
-        }
-    }
-    if (i >= IN_FILL_MAX) {
+    d = in_row();
+    if (d == NULL) {
         return -1;
     }
-    d = &s_dev[i];
-    memset(d, 0, sizeof(*d));
     d->used = 1;
     d->common = common;
     d->notify = notify;
@@ -473,33 +508,38 @@ int32_t pm_metal_drivers_input_virtio_init(pm_util_mem_arena_t *arena) {
         return -1;
     }
     s_arena = arena;
-    memset(s_dev, 0, sizeof(s_dev));
+    /* Rows came from the arena the last run was given; this one may be a
+     * different arena, so the chain starts empty. */
+    s_head = NULL;
+    s_dev_used = 0;
     return 0;
 }
 
 void pm_metal_drivers_input_virtio_deinit(void) {
-    memset(s_dev, 0, sizeof(s_dev));
+    s_head = NULL;
+    s_dev_used = 0;
     s_arena = NULL;
 }
 
 int32_t pm_metal_drivers_input_virtio_probe(void) {
-    uint32_t i;
-    for (i = 0; i < IN_FILL_MAX; i++) {
-        if (!s_dev[i].used) {
-            return virtio_attach(PM_METAL_DT_BUS_PLATFORM, 0, 0, 0, i);
+    struct in_fill *d;
+    uint32_t unit = 0;
+    for (d = s_head; d != NULL; d = d->next) {
+        if (d->used) {
+            unit++;
         }
     }
-    return -1;
+    return virtio_attach(PM_METAL_DT_BUS_PLATFORM, 0, 0, 0, unit);
 }
 
 int32_t pm_metal_drivers_input_virtio_event(int32_t type, int32_t code, int32_t value) {
-    uint32_t i;
+    struct in_fill *d;
     int32_t st = -1;
-    for (i = 0; i < IN_FILL_MAX; i++) {
-        if (!s_dev[i].used) {
+    for (d = s_head; d != NULL; d = d->next) {
+        if (!d->used) {
             continue;
         }
-        if (apply_event(&s_dev[i], type, code, value) == 0) {
+        if (apply_event(d, type, code, value) == 0) {
             st = 0;
         }
     }
@@ -507,16 +547,16 @@ int32_t pm_metal_drivers_input_virtio_event(int32_t type, int32_t code, int32_t 
 }
 
 int32_t pm_metal_drivers_input_virtio_abs(int32_t *x, int32_t *y) {
-    uint32_t i;
-    for (i = 0; i < IN_FILL_MAX; i++) {
-        if (!s_dev[i].used) {
+    struct in_fill *d;
+    for (d = s_head; d != NULL; d = d->next) {
+        if (!d->used) {
             continue;
         }
         if (x != NULL) {
-            *x = s_dev[i].abs_x;
+            *x = d->abs_x;
         }
         if (y != NULL) {
-            *y = s_dev[i].abs_y;
+            *y = d->abs_y;
         }
         return 0;
     }
@@ -524,12 +564,12 @@ int32_t pm_metal_drivers_input_virtio_abs(int32_t *x, int32_t *y) {
 }
 
 int32_t pm_metal_drivers_input_virtio_up(void) {
-    uint32_t i;
+    struct in_fill *d;
     if (s_arena == NULL) {
         return -1;
     }
-    for (i = 0; i < IN_FILL_MAX; i++) {
-        if (s_dev[i].used) {
+    for (d = s_head; d != NULL; d = d->next) {
+        if (d->used) {
             return 0;
         }
     }

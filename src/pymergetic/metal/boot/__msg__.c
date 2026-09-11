@@ -1,7 +1,11 @@
-/* pymergetic.metal.boot — mem face on the boot.tree surface. */
+/* pymergetic.metal.boot — the rows for the two util cards a metal seat runs
+ * on: the arena it was handed (mem) and the capacities it grows against
+ * (limits). Both live in the wasmmod tree, so their boot-tree rows live here,
+ * with the card that boots them, rather than in a card that has no metal. */
 #include "pymergetic/metal/boot/__types__.h"
 #include "pymergetic/metal/boot/tree.h"
 #include "pymergetic/util/mem.h"
+#include "pymergetic/util/limits.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -97,3 +101,58 @@ static void msg_mem(int last) {
 }
 
 PM_METAL_BOOT_MSG_C(PM_METAL_BOOT_SURF_TREE, PM_METAL_BOOT_MSG_MEM, msg_mem);
+
+/* What this seat has been told it may grow to.
+ *
+ * The full listing belongs in `m.limits()`, not in a boot tree that has to fit
+ * on a console: the branch says how many knobs there are and then names only
+ * the ones this seat has moved off the number it shipped with. On a stock boot
+ * that is no rows at all, which is the honest answer. */
+static uint32_t moved_count(void) {
+    uint32_t n = pm_util_limits_count();
+    uint32_t moved = 0;
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        if (pm_util_limits_soft((int32_t)i) != pm_util_limits_default((int32_t)i)) {
+            moved++;
+        }
+    }
+    return moved;
+}
+
+static void msg_limits_tree(int last) {
+    char head[48];
+    char knobs[24];
+    uint32_t n = pm_util_limits_count();
+    uint32_t moved = moved_count();
+    uint32_t shown = 0;
+    uint32_t i;
+
+    pm_metal_boot_msg_count(knobs, sizeof(knobs), "", n, "knob");
+    snprintf(head, sizeof(head), "%s  %s", pm_util_limits_ready() ? "ok" : "-", knobs);
+    if (!pm_util_limits_ready()) {
+        pm_metal_boot_msg_fail();
+    }
+    pm_metal_boot_msg_item(last, 0, 1, "limits", head);
+
+    for (i = 0; i < n && moved != 0; i++) {
+        char row[64];
+        uint32_t soft = pm_util_limits_soft((int32_t)i);
+        uint32_t hard = pm_util_limits_hard((int32_t)i);
+        const char *name = pm_util_limits_name((int32_t)i);
+        if (soft == pm_util_limits_default((int32_t)i)) {
+            continue;
+        }
+        if (hard == 0u) {
+            snprintf(row, sizeof(row), "%u  of any  (was %u)", (unsigned)soft,
+                (unsigned)pm_util_limits_default((int32_t)i));
+        } else {
+            snprintf(row, sizeof(row), "%u  of %u  (was %u)", (unsigned)soft, (unsigned)hard,
+                (unsigned)pm_util_limits_default((int32_t)i));
+        }
+        shown++;
+        pm_metal_boot_msg_item(shown == moved, 1, !last, name != NULL ? name : "?", row);
+    }
+}
+
+PM_METAL_BOOT_MSG_C(PM_METAL_BOOT_SURF_TREE, PM_METAL_BOOT_MSG_LIMITS, msg_limits_tree);

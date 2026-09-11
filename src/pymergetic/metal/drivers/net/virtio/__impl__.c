@@ -7,6 +7,7 @@
 #include "pymergetic/metal/dt.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/net/ip.h"
+#include "pymergetic/util/limits/__types__.h"
 #include "pymergetic/util/mem.h"
 
 #if defined(PM_METAL_FIRMWARE)
@@ -16,26 +17,37 @@
 #include <stdint.h>
 #include <string.h>
 
-#define VQ_N 8
 /* virtio_net_hdr_v1: the version-1 layout always carries num_buffers, so the
  * header in front of every frame is 12 bytes, not the legacy 10. */
 #define VNET_HDR 12
-#define FRAME_MAX 2048
-#define VNET_MAX 8u
+/* What a NIC costs is its rings, and rings are taken when a NIC attaches:
+ * this table used to stand at 8 devices x 16 frames x 2KB in every image
+ * whether or not a virtio-net device was ever on the bus. The knobs are how
+ * many NICs this card offers, how deep the in-process ring is, and how big a
+ * frame may be — the last one bounds the DMA buffers too, so raising it can
+ * never let tx hand the device more than its descriptor holds. */
+#define VNET_DEVICE_DEFAULT 8u
+#define VNET_QUEUE_DEFAULT 8u
+#define VNET_FRAME_DEFAULT 2048u
 
 struct vnet {
     uint32_t used;
     uint8_t mac[6];
     uint16_t tx_avail;
     uint16_t tx_used;
-    uint8_t tx_buf[VQ_N][VNET_HDR + FRAME_MAX];
-    uint16_t tx_len[VQ_N];
+    /* `qn` slots of VNET_HDR + `qframe` (tx) and of `qframe` (rx), taken at
+     * attach. rx is handed straight up, so it needs no scratch frame. */
+    uint8_t *tx_buf;
+    uint16_t *tx_len;
     uint16_t rx_posted;
     uint16_t rx_filled;
     uint16_t rx_dev;
     uint16_t rx_drv;
-    uint8_t rx_buf[VQ_N][FRAME_MAX];
-    uint16_t rx_len[VQ_N];
+    uint8_t *rx_buf;
+    uint16_t *rx_len;
+    uint32_t qn;
+    uint32_t qframe;
+    uint32_t unit;
     int32_t dt_id;
     int32_t net_h;
     pm_metal_netdev_ops_t ops;
@@ -54,10 +66,74 @@ struct vnet {
     uint8_t *rx_data;
     uint8_t *tx_data;
 #endif
+    struct vnet *next;
 };
 
 static pm_util_mem_arena_t *s_arena;
-static struct vnet s_dev[VNET_MAX];
+/* One row per NIC, taken when it attaches and kept for the seat. The netdev
+ * core holds each row's address as its ops ctx, so rows are linked, never
+ * moved. */
+static struct vnet *s_head;
+static uint32_t s_dev_used;
+
+PM_UTIL_LIMIT_C(pm_metal_net_virtio_limit_device, "drivers.net.virtio.device",
+    VNET_DEVICE_DEFAULT, 0u, &s_dev_used);
+PM_UTIL_LIMIT_C(pm_metal_net_virtio_limit_queue, "drivers.net.virtio.queue",
+    VNET_QUEUE_DEFAULT, 0u, NULL);
+PM_UTIL_LIMIT_C(pm_metal_net_virtio_limit_frame, "drivers.net.virtio.frame",
+    VNET_FRAME_DEFAULT, 0u, NULL);
+
+/* The tx / rx slot at `i` in this NIC's in-process ring. */
+static uint8_t *vnet_tx_slot(struct vnet *d, uint32_t i) {
+    return d->tx_buf + (size_t)i * (VNET_HDR + d->qframe);
+}
+
+static uint8_t *vnet_rx_slot(struct vnet *d, uint32_t i) {
+    return d->rx_buf + (size_t)i * d->qframe;
+}
+
+/* This NIC's rings, at the depth and frame size the knobs say now. Kept
+ * across a close/attach cycle when they already match. */
+static int32_t vnet_ring_fit(struct vnet *d) {
+    uint32_t qn = pm_metal_net_virtio_limit_queue.soft;
+    uint32_t qframe = pm_metal_net_virtio_limit_frame.soft;
+    uint8_t *tx_buf;
+    uint8_t *rx_buf;
+    uint16_t *tx_len;
+    uint16_t *rx_len;
+    if (qn == 0u) {
+        qn = pm_metal_net_virtio_limit_queue.dflt;
+    }
+    if (qframe == 0u) {
+        qframe = pm_metal_net_virtio_limit_frame.dflt;
+    }
+    if (d->tx_buf != NULL && d->qn == qn && d->qframe == qframe) {
+        return 0;
+    }
+    tx_buf = pm_util_mem_alloc(s_arena, (size_t)qn * (VNET_HDR + qframe));
+    rx_buf = pm_util_mem_alloc(s_arena, (size_t)qn * qframe);
+    tx_len = pm_util_mem_alloc(s_arena, (size_t)qn * sizeof(*tx_len));
+    rx_len = pm_util_mem_alloc(s_arena, (size_t)qn * sizeof(*rx_len));
+    if (tx_buf == NULL || rx_buf == NULL || tx_len == NULL || rx_len == NULL) {
+        return -1;
+    }
+    d->tx_buf = tx_buf;
+    d->rx_buf = rx_buf;
+    d->tx_len = tx_len;
+    d->rx_len = rx_len;
+    d->qn = qn;
+    d->qframe = qframe;
+    return 0;
+}
+
+#if defined(PM_METAL_FIRMWARE)
+/* The frame size a NIC that has not attached yet will take. The firmware path
+ * sizes its DMA buffers with this before it has a row to read it from. */
+static uint32_t vnet_frame_now(void) {
+    uint32_t qframe = pm_metal_net_virtio_limit_frame.soft;
+    return qframe != 0u ? qframe : pm_metal_net_virtio_limit_frame.dflt;
+}
+#endif
 
 #if defined(PM_METAL_FIRMWARE)
 static int32_t fw_vnet_tx(struct vnet *d, const uint8_t *frame, uint16_t len);
@@ -67,7 +143,7 @@ static int32_t fw_vnet_poll(struct vnet *d);
 static void vq_reset(struct vnet *d) {
     d->tx_avail = 0;
     d->tx_used = 0;
-    d->rx_posted = VQ_N;
+    d->rx_posted = (uint16_t)d->qn;
     d->rx_filled = 0;
     d->rx_dev = 0;
     d->rx_drv = 0;
@@ -75,18 +151,18 @@ static void vq_reset(struct vnet *d) {
 
 static void device_run(struct vnet *d) {
     while (d->tx_used != d->tx_avail) {
-        uint16_t i = (uint16_t)(d->tx_used % VQ_N);
+        uint16_t i = (uint16_t)(d->tx_used % d->qn);
         uint16_t n = d->tx_len[i];
         d->tx_used++;
         if (n <= VNET_HDR || d->rx_posted == 0) {
             continue;
         }
         n = (uint16_t)(n - VNET_HDR);
-        if (n > FRAME_MAX) {
-            n = FRAME_MAX;
+        if (n > d->qframe) {
+            n = (uint16_t)d->qframe;
         }
-        memcpy(d->rx_buf[d->rx_dev % VQ_N], d->tx_buf[i] + VNET_HDR, n);
-        d->rx_len[d->rx_dev % VQ_N] = n;
+        memcpy(vnet_rx_slot(d, d->rx_dev % d->qn), vnet_tx_slot(d, i) + VNET_HDR, n);
+        d->rx_len[d->rx_dev % d->qn] = n;
         d->rx_dev++;
         d->rx_posted--;
         d->rx_filled++;
@@ -105,6 +181,9 @@ static int32_t virtio_open(void *ctx) {
 static void virtio_close(void *ctx) {
     struct vnet *d = ctx;
     if (d != NULL) {
+        if (d->used != 0 && s_dev_used != 0) {
+            s_dev_used--;
+        }
         d->used = 0;
         d->dt_id = -1;
         d->net_h = -1;
@@ -124,7 +203,7 @@ static int32_t virtio_tx(void *ctx, const uint8_t *frame, uint16_t len) {
     struct vnet *d = ctx;
     uint16_t pending;
     uint16_t i;
-    if (d == NULL || frame == NULL || len == 0 || len > FRAME_MAX) {
+    if (d == NULL || frame == NULL || len == 0 || len > d->qframe) {
         return -1;
     }
 #if defined(PM_METAL_FIRMWARE)
@@ -133,12 +212,12 @@ static int32_t virtio_tx(void *ctx, const uint8_t *frame, uint16_t len) {
     }
 #endif
     pending = (uint16_t)(d->tx_avail - d->tx_used);
-    if (pending >= VQ_N) {
+    if (pending >= d->qn) {
         return -1;
     }
-    i = (uint16_t)(d->tx_avail % VQ_N);
-    memset(d->tx_buf[i], 0, VNET_HDR);
-    memcpy(d->tx_buf[i] + VNET_HDR, frame, len);
+    i = (uint16_t)(d->tx_avail % d->qn);
+    memset(vnet_tx_slot(d, i), 0, VNET_HDR);
+    memcpy(vnet_tx_slot(d, i) + VNET_HDR, frame, len);
     d->tx_len[i] = (uint16_t)(VNET_HDR + len);
     d->tx_avail++;
     device_run(d);
@@ -157,18 +236,46 @@ static int32_t virtio_poll(void *ctx) {
 #endif
     device_run(d);
     while (d->rx_filled != 0) {
-        uint16_t i = (uint16_t)(d->rx_drv % VQ_N);
+        uint16_t i = (uint16_t)(d->rx_drv % d->qn);
         uint16_t n = d->rx_len[i];
         d->rx_drv++;
         d->rx_filled--;
         d->rx_posted++;
-        (void)pm_metal_net_ip_rx_from(d->net_h, d->rx_buf[i], n);
+        (void)pm_metal_net_ip_rx_from(d->net_h, vnet_rx_slot(d, i), n);
     }
     return 0;
 }
 
+/* A row for one more NIC: a closed one first, then a fresh one. Either way
+ * the device knob says whether this card may offer another NIC at all — a
+ * closed row is one this card already paid for, not a free pass over the knob. NULL when this card is already offering every NIC it may. */
+static struct vnet *vnet_row(void) {
+    struct vnet *d = s_head;
+    uint32_t rows = 0;
+    if (!PM_UTIL_LIMIT_ROOM(pm_metal_net_virtio_limit_device, s_dev_used)) {
+        return NULL;
+    }
+    while (d != NULL) {
+        if (!d->used) {
+            return d;
+        }
+        rows++;
+        d = d->next;
+    }
+    d = pm_util_mem_alloc(s_arena, sizeof(*d));
+    if (d == NULL) {
+        return NULL;
+    }
+    memset(d, 0, sizeof(*d));
+    d->unit = rows;
+    d->dt_id = -1;
+    d->net_h = -1;
+    d->next = s_head;
+    s_head = d;
+    return d;
+}
+
 static int32_t vnet_attach(int32_t bus, uint32_t loc0, uint32_t loc1, uint32_t loc2, uint32_t loc3) {
-    uint32_t i;
     struct vnet *d;
     int32_t dt;
     if (s_arena == NULL) {
@@ -178,35 +285,36 @@ static int32_t vnet_attach(int32_t bus, uint32_t loc0, uint32_t loc1, uint32_t l
     if (dt < 0) {
         return -1;
     }
-    for (i = 0; i < VNET_MAX; i++) {
-        if (s_dev[i].used && s_dev[i].dt_id == dt) {
-            return s_dev[i].net_h;
+    for (d = s_head; d != NULL; d = d->next) {
+        if (d->used && d->dt_id == dt) {
+            return d->net_h;
         }
     }
-    for (i = 0; i < VNET_MAX; i++) {
-        if (s_dev[i].used) {
-            continue;
-        }
-        d = &s_dev[i];
-        memset(d, 0, sizeof(*d));
-        d->used = 1;
-        d->mac[0] = 0x02;
-        d->mac[5] = (uint8_t)(0x04u + i);
-        d->ops.open = virtio_open;
-        d->ops.close = virtio_close;
-        d->ops.mac = virtio_mac;
-        d->ops.tx = virtio_tx;
-        d->ops.poll = virtio_poll;
-        d->ops.ctx = d;
-        d->dt_id = dt;
-        d->net_h = pm_metal_drivers_net_bind(dt, &d->ops);
-        if (d->net_h < 0) {
-            d->used = 0;
-            return -1;
-        }
-        return d->net_h;
+    d = vnet_row();
+    if (d == NULL) {
+        return -1;
     }
-    return -1;
+    if (vnet_ring_fit(d) != 0) {
+        return -1;
+    }
+    vq_reset(d);
+    d->mac[0] = 0x02;
+    d->mac[5] = (uint8_t)(0x04u + d->unit);
+    d->ops.open = virtio_open;
+    d->ops.close = virtio_close;
+    d->ops.mac = virtio_mac;
+    d->ops.tx = virtio_tx;
+    d->ops.poll = virtio_poll;
+    d->ops.ctx = d;
+    d->dt_id = dt;
+    d->used = 1;
+    d->net_h = pm_metal_drivers_net_bind(dt, &d->ops);
+    if (d->net_h < 0) {
+        d->used = 0;
+        return -1;
+    }
+    s_dev_used++;
+    return d->net_h;
 }
 
 int32_t pm_metal_drivers_net_virtio_init(pm_util_mem_arena_t *arena) {
@@ -214,32 +322,37 @@ int32_t pm_metal_drivers_net_virtio_init(pm_util_mem_arena_t *arena) {
         return -1;
     }
     s_arena = arena;
-    memset(s_dev, 0, sizeof(s_dev));
+    /* Rows came from the arena the last run was given; this one may be a
+     * different arena, so the chain starts empty. */
+    s_head = NULL;
+    s_dev_used = 0;
     return 0;
 }
 
 void pm_metal_drivers_net_virtio_deinit(void) {
-    memset(s_dev, 0, sizeof(s_dev));
+    s_head = NULL;
+    s_dev_used = 0;
     s_arena = NULL;
 }
 
 int32_t pm_metal_drivers_net_virtio_probe(void) {
-    uint32_t i;
-    for (i = 0; i < VNET_MAX; i++) {
-        if (!s_dev[i].used) {
-            return vnet_attach(PM_METAL_DT_BUS_VIRTIO, 0, 0, 0, i);
+    struct vnet *d;
+    uint32_t unit = 0;
+    for (d = s_head; d != NULL; d = d->next) {
+        if (d->used) {
+            unit++;
         }
     }
-    return -1;
+    return vnet_attach(PM_METAL_DT_BUS_VIRTIO, 0, 0, 0, unit);
 }
 
 int32_t pm_metal_drivers_net_virtio_up(void) {
-    uint32_t i;
+    struct vnet *d;
     if (s_arena == NULL) {
         return -1;
     }
-    for (i = 0; i < VNET_MAX; i++) {
-        if (s_dev[i].used) {
+    for (d = s_head; d != NULL; d = d->next) {
+        if (d->used) {
             return 0;
         }
     }
@@ -412,14 +525,14 @@ static int32_t fw_setup_queue(struct vnet *d, uint16_t qidx, uint8_t *mem, uint8
     memset(mem, 0, 4096);
     /* One buffer per descriptor. Both rings are the same size, so the data area
      * the caller passed is qsz buffers wide on the receive and the send side. */
-    memset(data, 0, (size_t)qsz * (VNET_HDR + FRAME_MAX));
+    memset(data, 0, (size_t)qsz * (VNET_HDR + d->qframe));
     for (i = 0; i < qsz; i++) {
-        uint64_t addr = (uint64_t)(uintptr_t)(data + i * (VNET_HDR + FRAME_MAX));
+        uint64_t addr = (uint64_t)(uintptr_t)(data + i * (VNET_HDR + d->qframe));
         uint8_t *de = desc + i * 16u;
         ring_st32(de, (uint32_t)addr);
         ring_st32(de + 4, (uint32_t)(addr >> 32));
         if (rx) {
-            ring_st32(de + 8, (uint32_t)(VNET_HDR + FRAME_MAX));
+            ring_st32(de + 8, (uint32_t)(VNET_HDR + d->qframe));
             ring_st16(de + 12, (uint16_t)FW_DESC_F_WRITE);
             ring_st16(avail + 4 + i * 2u, (uint16_t)i);
         }
@@ -459,7 +572,7 @@ static int32_t fw_vnet_tx(struct vnet *d, const uint8_t *frame, uint16_t len) {
     uint16_t aidx;
     uint16_t slot;
     uint32_t spins;
-    if (d->tx_data == NULL || len == 0 || len > FRAME_MAX) {
+    if (d->tx_data == NULL || len == 0 || len > d->qframe) {
         return -1;
     }
     /* Claim the avail tail before touching the ring — tx is exported on the
@@ -482,7 +595,7 @@ static int32_t fw_vnet_tx(struct vnet *d, const uint8_t *frame, uint16_t len) {
         pm_cpu_pause();
     }
     slot = (uint16_t)(aidx % FW_QSZ);
-    buf = d->tx_data + (uint32_t)slot * (VNET_HDR + FRAME_MAX);
+    buf = d->tx_data + (uint32_t)slot * (VNET_HDR + d->qframe);
     memset(buf, 0, VNET_HDR);
     memcpy(buf + VNET_HDR, frame, len);
     ring_st32(desc + (uint32_t)slot * 16u + 8u, (uint32_t)(VNET_HDR + len));
@@ -534,11 +647,11 @@ static int32_t fw_vnet_poll(struct vnet *d) {
         ue = used + 4 + slot * 8u;
         id = (uint16_t)ring_ld16(ue);
         n = (uint16_t)ring_ld16(ue + 4);
-        pkt = d->rx_data + (uint32_t)id * (VNET_HDR + FRAME_MAX);
+        pkt = d->rx_data + (uint32_t)id * (VNET_HDR + d->qframe);
         if (n > VNET_HDR) {
             n = (uint16_t)(n - VNET_HDR);
-            if (n > FRAME_MAX) {
-                n = FRAME_MAX;
+            if (n > d->qframe) {
+                n = (uint16_t)d->qframe;
             }
             (void)pm_metal_net_ip_rx_from(d->net_h, pkt + VNET_HDR, n);
         }
@@ -591,24 +704,23 @@ static int32_t fw_vnet_attach_pci(uint32_t bus, uint32_t dev, uint32_t fn) {
     if ((mmio_r8(common + 20) & 8u) == 0) {
         return -1;
     }
-    for (i = 0; i < VNET_MAX; i++) {
-        if (!s_dev[i].used) {
-            break;
-        }
-    }
-    if (i >= VNET_MAX) {
+    d = vnet_row();
+    if (d == NULL) {
         return -1;
     }
-    d = &s_dev[i];
-    memset(d, 0, sizeof(*d));
+    /* The in-process ring this row would use is not taken on a real device:
+     * the frames go through the vring below. The frame size is the same knob,
+     * so a seat that raises it raises what the descriptors hold too. */
+    d->qframe = vnet_frame_now();
+    d->qn = FW_QSZ;
     d->used = 1;
     d->common = common;
     d->notify = notify;
     d->notify_mult = notify_mult;
     d->qsz = (uint16_t)FW_QSZ;
     d->vqmem = pm_util_mem_memalign(s_arena, 4096, 8192);
-    d->rx_data = pm_util_mem_alloc(s_arena, (size_t)FW_QSZ * (VNET_HDR + FRAME_MAX));
-    d->tx_data = pm_util_mem_alloc(s_arena, (size_t)FW_QSZ * (VNET_HDR + FRAME_MAX));
+    d->rx_data = pm_util_mem_alloc(s_arena, (size_t)FW_QSZ * (VNET_HDR + d->qframe));
+    d->tx_data = pm_util_mem_alloc(s_arena, (size_t)FW_QSZ * (VNET_HDR + d->qframe));
     if (d->vqmem == NULL || d->rx_data == NULL || d->tx_data == NULL) {
         d->used = 0;
         return -1;
@@ -622,7 +734,7 @@ static int32_t fw_vnet_attach_pci(uint32_t bus, uint32_t dev, uint32_t fn) {
         memcpy(d->mac, (const void *)devcfg, 6);
     } else {
         d->mac[0] = 0x02;
-        d->mac[5] = (uint8_t)(0x10u + i);
+        d->mac[5] = (uint8_t)(0x10u + d->unit);
     }
     mmio_w8(common + 20, (uint8_t)(1u | 2u | 4u | 8u));
     d->ops.open = virtio_open;
@@ -643,6 +755,7 @@ static int32_t fw_vnet_attach_pci(uint32_t bus, uint32_t dev, uint32_t fn) {
         d->used = 0;
         return -1;
     }
+    s_dev_used++;
     return d->net_h;
 }
 #endif

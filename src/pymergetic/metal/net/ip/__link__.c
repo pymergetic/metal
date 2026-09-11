@@ -16,24 +16,38 @@ static uint32_t mask_bits(uint32_t m) {
     return n;
 }
 
-static void rt_clear(void) {
-    memset(pm_ip_rt, 0, sizeof(pm_ip_rt));
+/* Free the route table outright: it comes back the next time a route is
+ * added, so an interface that never routes keeps nothing. */
+void pm_ip_rt_clear(void) {
+    if (pm_ip_rt != NULL) {
+        pm_util_mem_free(pm_ip_arena, pm_ip_rt);
+    }
+    pm_ip_rt = NULL;
+    pm_ip_rt_cap = 0;
+    pm_ip_rt_used = 0;
+}
+
+static void rt_forget(uint32_t i) {
+    pm_ip_rt[i].used = 0;
+    if (pm_ip_rt_used != 0u) {
+        pm_ip_rt_used--;
+    }
 }
 
 void pm_ip_rt_del_h(int32_t h) {
     uint32_t i;
-    for (i = 0; i < PM_METAL_IP_RT_MAX; i++) {
+    for (i = 0; i < pm_ip_rt_cap; i++) {
         if (pm_ip_rt[i].used && pm_ip_rt[i].h == h) {
-            pm_ip_rt[i].used = 0;
+            rt_forget(i);
         }
     }
 }
 
 void pm_ip_rt_del(uint32_t dst_be, uint32_t mask_be) {
     uint32_t i;
-    for (i = 0; i < PM_METAL_IP_RT_MAX; i++) {
+    for (i = 0; i < pm_ip_rt_cap; i++) {
         if (pm_ip_rt[i].used && pm_ip_rt[i].dst_be == dst_be && pm_ip_rt[i].mask_be == mask_be) {
-            pm_ip_rt[i].used = 0;
+            rt_forget(i);
         }
     }
 }
@@ -41,7 +55,7 @@ void pm_ip_rt_del(uint32_t dst_be, uint32_t mask_be) {
 void pm_ip_rt_upsert(uint32_t dst_be, uint32_t mask_be, uint32_t gw_be, int32_t h) {
     uint32_t i;
     int32_t slot = -1;
-    for (i = 0; i < PM_METAL_IP_RT_MAX; i++) {
+    for (i = 0; i < pm_ip_rt_cap; i++) {
         if (pm_ip_rt[i].used && pm_ip_rt[i].dst_be == dst_be && pm_ip_rt[i].mask_be == mask_be) {
             pm_ip_rt[i].gw_be = gw_be;
             pm_ip_rt[i].h = h;
@@ -52,8 +66,15 @@ void pm_ip_rt_upsert(uint32_t dst_be, uint32_t mask_be, uint32_t gw_be, int32_t 
         }
     }
     if (slot < 0) {
-        return;
+        struct pm_metal_ip_rt *grown =
+            pm_ip_table_grow(pm_ip_rt, &pm_ip_rt_cap, (uint32_t)sizeof(*pm_ip_rt), &pm_ip_limit_route);
+        if (grown == NULL) {
+            return;
+        }
+        pm_ip_rt = grown;
+        slot = (int32_t)i;
     }
+    pm_ip_rt_used++;
     pm_ip_rt[slot].used = 1;
     pm_ip_rt[slot].dst_be = dst_be;
     pm_ip_rt[slot].mask_be = mask_be;
@@ -66,7 +87,7 @@ static const struct pm_metal_ip_rt *rt_match(uint32_t dst_be) {
     uint32_t best = 0;
     const struct pm_metal_ip_rt *hit = NULL;
     const struct pm_metal_ip_rt *def = NULL;
-    for (i = 0; i < PM_METAL_IP_RT_MAX; i++) {
+    for (i = 0; i < pm_ip_rt_cap; i++) {
         uint32_t bits;
         if (!pm_ip_rt[i].used) {
             continue;
@@ -93,12 +114,16 @@ static int32_t rt_lookup(uint32_t dst_be) {
 }
 
 void pm_ip_l2_clear(void) {
-    memset(pm_ip_l2, 0, sizeof(pm_ip_l2));
+    if (pm_ip_l2 != NULL) {
+        pm_util_mem_free(pm_ip_arena, pm_ip_l2);
+    }
+    pm_ip_l2 = NULL;
+    pm_ip_l2_cap = 0;
     pm_ip_l2_n = 0;
     pm_ip_l2_cur = -1;
     pm_ip_if_pending_be = 0;
     pm_ip_if_pending_mask = 0;
-    rt_clear();
+    pm_ip_rt_clear();
     pm_ip_arp_clear();
 }
 
@@ -308,7 +333,12 @@ static void arp_emit(int32_t h, uint16_t op, const uint8_t *dmac, const uint8_t 
 }
 
 void pm_ip_arp_clear(void) {
-    memset(pm_ip_arp, 0, sizeof(pm_ip_arp));
+    if (pm_ip_arp != NULL) {
+        pm_util_mem_free(pm_ip_arena, pm_ip_arp);
+    }
+    pm_ip_arp = NULL;
+    pm_ip_arp_cap = 0;
+    pm_ip_arp_used = 0;
 }
 
 /* A slot belongs to a neighbour from the moment it is claimed, whatever its
@@ -319,7 +349,7 @@ static struct pm_metal_ip_arp *arp_find(int32_t h, uint32_t addr_be) {
     if (addr_be == 0) {
         return NULL;
     }
-    for (i = 0; i < PM_METAL_IP_ARP_MAX; i++) {
+    for (i = 0; i < pm_ip_arp_cap; i++) {
         if (pm_ip_arp[i].addr_be == addr_be && pm_ip_arp[i].h == h) {
             return &pm_ip_arp[i];
         }
@@ -327,8 +357,9 @@ static struct pm_metal_ip_arp *arp_find(int32_t h, uint32_t addr_be) {
     return NULL;
 }
 
-/* The entry for this neighbour, made if need be. A full table gives up its
- * least recently touched entry — with any datagram still waiting on it. */
+/* The entry for this neighbour, made if need be. The table grows while the
+ * knob allows it; once it may not, the least recently touched entry is given
+ * up — with any datagram still waiting on it. */
 static struct pm_metal_ip_arp *arp_slot(int32_t h, uint32_t addr_be) {
     struct pm_metal_ip_arp *e = arp_find(h, addr_be);
     struct pm_metal_ip_arp *old = NULL;
@@ -336,7 +367,7 @@ static struct pm_metal_ip_arp *arp_slot(int32_t h, uint32_t addr_be) {
     if (e != NULL) {
         return e;
     }
-    for (i = 0; i < PM_METAL_IP_ARP_MAX; i++) {
+    for (i = 0; i < pm_ip_arp_cap; i++) {
         if (pm_ip_arp[i].addr_be == 0) {
             e = &pm_ip_arp[i];
             break;
@@ -346,11 +377,25 @@ static struct pm_metal_ip_arp *arp_slot(int32_t h, uint32_t addr_be) {
         }
     }
     if (e == NULL) {
-        e = old;
+        struct pm_metal_ip_arp *grown =
+            pm_ip_table_grow(pm_ip_arp, &pm_ip_arp_cap, (uint32_t)sizeof(*pm_ip_arp), &pm_ip_limit_neighbour);
+        if (grown != NULL) {
+            pm_ip_arp = grown;
+            e = &pm_ip_arp[i];
+        } else {
+            e = old;
+            if (e == NULL) {
+                return NULL; /* nothing to grow into and nothing to give up */
+            }
+            if (pm_ip_arp_used != 0u) {
+                pm_ip_arp_used--; /* the one being turned out */
+            }
+        }
     }
     memset(e, 0, sizeof(*e));
     e->h = h;
     e->addr_be = addr_be;
+    pm_ip_arp_used++;
     return e;
 }
 
@@ -373,6 +418,9 @@ void pm_ip_arp_learn(int32_t h, uint32_t addr_be, const uint8_t mac[6]) {
         return;
     }
     e = arp_slot(h, addr_be);
+    if (e == NULL) {
+        return;
+    }
     e->state = ARP_LIVE;
     e->tries = 0;
     e->at_us = pm_metal_coop_mono_us() + PM_METAL_IP_ARP_TTL_US;
@@ -390,7 +438,7 @@ void pm_ip_arp_ask(int32_t h, uint32_t addr_be) {
         return;
     }
     e = arp_slot(h, addr_be);
-    if (e->state == ARP_LIVE) {
+    if (e == NULL || e->state == ARP_LIVE) {
         return;
     }
     e->state = ARP_ASKING;
@@ -405,6 +453,9 @@ void pm_ip_arp_queue(int32_t h, uint32_t addr_be, const uint8_t *pkt, uint32_t l
         return;
     }
     e = arp_slot(h, addr_be);
+    if (e == NULL) {
+        return;
+    }
     memcpy(e->pend, pkt, len);
     e->pend_len = len;
 }
@@ -412,7 +463,7 @@ void pm_ip_arp_queue(int32_t h, uint32_t addr_be, const uint8_t *pkt, uint32_t l
 void pm_ip_arp_tick(void) {
     uint64_t now = pm_metal_coop_mono_us();
     uint32_t i;
-    for (i = 0; i < PM_METAL_IP_ARP_MAX; i++) {
+    for (i = 0; i < pm_ip_arp_cap; i++) {
         struct pm_metal_ip_arp *e = &pm_ip_arp[i];
         if (e->state == ARP_FREE || now < e->at_us) {
             continue;
@@ -425,6 +476,9 @@ void pm_ip_arp_tick(void) {
             /* Nobody answered. Release the slot and whatever waited on it, so a
              * later send starts a fresh round rather than inheriting this one. */
             memset(e, 0, sizeof(*e));
+            if (pm_ip_arp_used != 0u) {
+                pm_ip_arp_used--;
+            }
             continue;
         }
         e->tries++;

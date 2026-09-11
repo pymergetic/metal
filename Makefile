@@ -166,7 +166,7 @@ CPPFLAGS += -DPM_METAL_TCC_CROSS_ARM_EABI=1
 # route, ksweep): __FILE__ is relative under make, so a route serving a
 # rebuild from any CWD needs the absolute anchors. Same pattern as
 # PM_METAL_TCC_LIB_DIR above.
-CPPFLAGS += -DPM_METAL_ROOT=\"$(CURDIR)\" -DPM_METAL_WASMMOD_ROOT=\"$(abspath ../wasmmod)\" -DPM_METAL_TOP_ROOT=\"$(abspath ../../..)\"
+CPPFLAGS += -DPM_METAL_ROOT=\"$(CURDIR)\" -DPM_METAL_WASMMOD_ROOT=\"$(abspath ../wasmmod)\"
 
 # In-tree ELF64 ET_REL relocator (wasmmod) — the build card's multi-object
 # link drives it. Host seat only: the browser cell has no ELF loader
@@ -186,13 +186,18 @@ $(ELF_LOAD_OBJ): $(ELF_LOAD_SRC)
 WASMMOD_TESTS_OBJ := \
 	$(CURDIR)/build/wasmmod-tests/types.o \
 	$(CURDIR)/build/wasmmod-tests/io.o \
-	$(CURDIR)/build/wasmmod-tests/net-cdn.o
+	$(CURDIR)/build/wasmmod-tests/net-cdn.o \
+	$(CURDIR)/build/wasmmod-tests/util-limits.o
 
 $(CURDIR)/build/wasmmod-tests/types.o: $(WASMMOD_SRC)/pymergetic/types/__tests__.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DPM_MOD_TESTS=1 -c -o $@ $<
 
 $(CURDIR)/build/wasmmod-tests/io.o: $(WASMMOD_SRC)/pymergetic/wasmmod/io/__tests__.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DPM_MOD_TESTS=1 -c -o $@ $<
+
+$(CURDIR)/build/wasmmod-tests/util-limits.o: $(WASMMOD_SRC)/pymergetic/util/limits/__tests__.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DPM_MOD_TESTS=1 -c -o $@ $<
 
@@ -489,6 +494,7 @@ test: prove-all
 wasm32-prove:
 	mkdir -p $(CURDIR)/build
 	$(CC) -std=gnu11 -O1 -g -I$(TCC_DIR) -DTCC_TARGET_WASM32 -DONE_SOURCE \
+		-DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\" \
 		$(TCC_DIR)/wasm32_prove.c $(TCC_DIR)/libtcc.c \
 		-lm -ldl -o $(CURDIR)/build/wasm32_prove && $(CURDIR)/build/wasm32_prove
 
@@ -502,8 +508,13 @@ bench: $(BENCH_OUT)
 prove-zpico:
 	$(MAKE) -C $(CURDIR)/tools/zp_pico_prove prove
 
+# wasm32-prove is in the gate because leaving it out is how the wasm32
+# backend shipped a lane that emitted modules an engine loaded and computed
+# the wrong answers from. It is cheap (one libtcc build) and it pins what
+# that backend can and cannot lower.
 prove-all: $(OUT) firmware-check
 	$(OUT)
+	$(MAKE) wasm32-prove
 	$(MAKE) firmware-prove
 	$(MAKE) upy
 	$(MAKE) browser
@@ -539,6 +550,13 @@ upy:
 	grep -q "upy cross compile wasm loop" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy cross compile arm loop" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy types value loop" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy limits knob loop" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy room knob loop" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy loader image knob" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy registry row knobs" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy types row knobs" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy driver nic knobs" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy device class knobs" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy build py unit_compile" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy build events ring" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy build all walk" $(CURDIR)/build/upy_guest_prove.log
@@ -547,6 +565,13 @@ upy:
 	grep -q "upy serve fwd mirror" $(CURDIR)/build/upy_serve.log
 	grep -q "upy serve inspect faces" $(CURDIR)/build/upy_serve.log
 	grep -q "upy serve prove" $(CURDIR)/build/upy_serve.log
+	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_console_prove.py \
+		> $(CURDIR)/build/upy_console.log 2>&1 || (cat $(CURDIR)/build/upy_console.log; false)
+	grep -q "upy console ring prove" $(CURDIR)/build/upy_console.log
+	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_repl_prove.py \
+		> $(CURDIR)/build/upy_repl.log 2>&1 || (cat $(CURDIR)/build/upy_repl.log; false)
+	grep -q "upy console panel prove" $(CURDIR)/build/upy_repl.log
+	@echo upy console panel mirrors console 0 ok
 	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_runner_vm_prove.py
 	python3 $(CURDIR)/upy_cdn_prove_host.py \
 		$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_cdn_prove.py
@@ -563,8 +588,11 @@ browser:
 	PATH="$(BROWSER_PATH)" \
 		$(MAKE) -C $(TOP)/ports/webassembly MICROPY_PY_WASM=1 MICROPY_PY_METAL=1 BUILD=build-metal
 	$(NODE) $(CURDIR)/upy_browser_prove.mjs $(WASM_UPY) $(CURDIR)/upy_browser_prove.py \
+		$(CURDIR)/upy_console_prove.py $(CURDIR)/upy_repl_prove.py \
 		> $(CURDIR)/build/browser_prove.log 2>&1
 	cat $(CURDIR)/build/browser_prove.log
+	grep -q "upy console ring prove" $(CURDIR)/build/browser_prove.log
+	grep -q "upy console panel prove" $(CURDIR)/build/browser_prove.log
 	grep -q "upy cdn js.fetch" $(CURDIR)/build/browser_prove.log
 	grep -q "upy pack import" $(CURDIR)/build/browser_prove.log
 	grep -q "upy metal ready" $(CURDIR)/build/browser_prove.log
@@ -594,7 +622,22 @@ browser:
 	grep -q "upy browser cross knob + elf refuse" $(CURDIR)/build/browser_prove.log
 	grep -q "upy browser x64+arm cross emit" $(CURDIR)/build/browser_prove.log
 	grep -q "upy types value loop" $(CURDIR)/build/browser_prove.log
+	grep -q "upy limits knob loop" $(CURDIR)/build/browser_prove.log
+	grep -q "upy room knob loop" $(CURDIR)/build/browser_prove.log
+	grep -q "upy loader image knob" $(CURDIR)/build/browser_prove.log
+	grep -q "upy registry row knobs" $(CURDIR)/build/browser_prove.log
+	grep -q "upy types row knobs" $(CURDIR)/build/browser_prove.log
+	grep -q "upy driver nic knobs" $(CURDIR)/build/browser_prove.log
+	grep -q "upy device class knobs" $(CURDIR)/build/browser_prove.log
 	grep -q "compiled:" $(CURDIR)/build/browser_prove.log
+# The console panel's wasm tab boots this same image in the page, out of what
+# the seat serves it. Proved here rather than in the cell above: the thing under
+# test is the pair of files this lane just produced and the JS that boots them,
+# not anything running inside them.
+	$(NODE) $(CURDIR)/wasmseat_prove.mjs $(WASM_UPY) \
+		> $(CURDIR)/build/wasmseat_prove.log 2>&1
+	cat $(CURDIR)/build/wasmseat_prove.log
+	grep -q "wasm seat panel prove" $(CURDIR)/build/wasmseat_prove.log
 
 compile-commands:
 	python3 $(WASMMOD)/compile_commands.py $(WASMMOD) $(WS) $(VSCODE_CDB)

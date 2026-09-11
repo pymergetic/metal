@@ -13,14 +13,15 @@ PM_METAL_WWW_INC := $(PM_METAL_WWW_ROOT)/src/pymergetic/metal/inspect/www_embed.
 PM_METAL_WWW_DIR := $(PM_METAL_WWW_ROOT)/src/pymergetic/metal/inspect/www
 
 PM_METAL_CARD_ROOT := $(PM_METAL_WWW_ROOT)/src/pymergetic/metal
-# Card FQN ledger for the rendered home (every __pmm__.toml dir under the
+# Card FQN ledger for the rendered pages (every __pmm__.toml dir under the
 # metal tree, as a dotted pymergetic.metal.* name). Drives the build-time
-# CDN-catalog view at "/"; per-module detail is the live /inspect/reg RPC.
+# CDN-catalog view at "/" and the sidebar of the seat's own pages (/reg,
+# /factory); every live number on those is the JSON API, fetched at runtime.
 PM_METAL_HOME_FQNS := $(shell find $(PM_METAL_CARD_ROOT) -name __pmm__.toml | sed "s#$(PM_METAL_CARD_ROOT)/##; s#/__pmm__.toml##; s#/#.#g" | sed 's/^/pymergetic.metal./' | tr '\n' ' ')
 
 ifneq ($(MAKECMDGOALS),clean)
-# render_index imports the seat catalog driver (pymergetic.metal.*) to build
-# the CDN-catalog "/" page, so the metal + wasmmod source trees must be on the
+# render_pages imports the seat catalog driver (pymergetic.metal.*) to build
+# the "/", "/reg" and "/factory" pages, so the metal + wasmmod trees must be on the
 # embed's module path (namespace packages, no __init__.py on the host).
 # WASMMOD_SRC is only set by the host Makefile and the firmware boards; the
 # unix/webassembly ports leave it empty. Derive it here rather than emitting an
@@ -29,7 +30,7 @@ ifneq ($(MAKECMDGOALS),clean)
 # and break the render with an unrelated ImportError.
 PM_METAL_EMBED_WASMMOD := $(if $(WASMMOD_SRC),$(WASMMOD_SRC),$(PM_METAL_WWW_ROOT)/../wasmmod/src)
 PM_METAL_EMBED_PYTHONPATH := $(PM_METAL_WWW_ROOT)/src:$(PM_METAL_EMBED_WASMMOD)
-PM_METAL_WWW_FAIL := $(shell PYTHONPATH="$(PM_METAL_EMBED_PYTHONPATH)" python3 $(PM_METAL_WWW_TOOLS)/embed_www.py -o $(PM_METAL_WWW_INC) $(PM_METAL_WWW_DIR) --render-index "$(PM_METAL_HOME_FQNS)" || echo fail)
+PM_METAL_WWW_FAIL := $(shell PYTHONPATH="$(PM_METAL_EMBED_PYTHONPATH)" python3 $(PM_METAL_WWW_TOOLS)/embed_www.py -o $(PM_METAL_WWW_INC) $(PM_METAL_WWW_DIR) --render-pages "$(PM_METAL_HOME_FQNS)" || echo fail)
 ifneq ($(PM_METAL_WWW_FAIL),)
 $(error inspect www embed failed — run $(PM_METAL_WWW_TOOLS)/embed_www.py)
 endif

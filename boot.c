@@ -86,6 +86,33 @@ void pm_metal_boot_fill_release(void *base, size_t len) {
     }
 }
 
+/* A hosted seat's big rooms come from the platform, not from the arena: the
+ * arena is one mmap'd region of its own and a link's room is the size of the
+ * whole of it. mmap here is the same seam the arena's own region comes from —
+ * anonymous pages, so a room only costs what it touches; the browser has no
+ * mmap and its heap grows on demand, so malloc is that seat's version. */
+void *pm_metal_boot_fill_span_take(size_t len) {
+    void *p;
+#if defined(__EMSCRIPTEN__)
+    p = malloc(len);
+#else
+    p = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        p = NULL;
+    }
+#endif
+    return p;
+}
+
+void pm_metal_boot_fill_span_give(void *base, size_t len) {
+#if defined(__EMSCRIPTEN__)
+    (void)len;
+    free(base);
+#else
+    munmap(base, len);
+#endif
+}
+
 const char *pm_metal_boot_fill_seat(void) {
 #if defined(__EMSCRIPTEN__)
     return "emcc";

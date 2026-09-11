@@ -22,8 +22,21 @@ const ACCEPT_WAIT: i32 = -2;
 /* Concurrency / buffer budgets. These used to be env-derived (PM_METAL_ASGI_*)
  * via option_env!/const-eval, which the rsx subset refuses; no seat ever set
  * the envs, so the defaults below are the fixed contract. */
-const MAX_CONN: usize = 16;
-const MAX_ASGI: usize = 8;
+/* Connections the listener may hold before this server has taken them. A page
+ * here is HTML plus five assets and there is no keep-alive, so a browser opens
+ * six at once and the console panel polls alongside. Four (the old depth) lost
+ * the last two of every reload.
+ *
+ * These three are where the server starts, not where it stops: each is the
+ * default of a knob on pymergetic.util.limits, the tables behind them come
+ * from the arena as they fill, and a seat that expects more traffic says so
+ * (`m.limit("net.http.asgi.connection", 64)`) instead of being rebuilt. A
+ * connection carries its own receive, header and stream buffers — twenty-one
+ * kilobytes — which used to sit in .bss sixteen times over whether this seat
+ * ever served a request or not. */
+const LISTEN_BACKLOG_DEFAULT: u32 = 12;
+const MAX_CONN_DEFAULT: u32 = 16;
+const MAX_ASGI_DEFAULT: u32 = 8;
 const RX_MAX: usize = 4096;
 const HDR_MAX: usize = 1024;
 /* Response body budget for a single dynamic (route_fn) handler: 1 MiB on
@@ -75,6 +88,39 @@ struct pm_metal_coop_coro_t {
 #[repr(C)]
 struct pm_metal_coop_task_t {
     _opaque: [u8; 0],
+}
+
+/* pymergetic.util.limits — one knob: how far this card may grow, what it may
+ * never pass, and what it shipped with. The struct is ours; the card over
+ * there only threads them onto a list so a seat can find them by name. */
+#[repr(C)]
+struct pm_util_limit_t {
+    name: *const u8,
+    soft: u32,
+    hard: u32,
+    dflt: u32,
+    used: *const u32,
+    next: *mut pm_util_limit_t,
+    /* `int32_t (*apply)(pm_util_limit_t *)` on the C side: the hook a card
+     * fills in when moving the knob has to reshape storage there and then.
+     * This card grows on demand instead, so it stays null — spelled as the
+     * opaque pointer it is on every target, because spelling the fn type
+     * puts its typedef ahead of this struct in the in-kernel compile (rsx
+     * lowers a fn-pointer type in an earlier pass than the struct it names)
+     * and a card the kernel cannot rebuild is not a card. */
+    apply: *mut c_void,
+}
+
+unsafe extern "C" {
+    fn pm_util_limits_attach(knob: *mut pm_util_limit_t) -> i32;
+    fn pm_util_limits_detach(knob: *mut pm_util_limit_t) -> i32;
+    fn pm_util_limits_grow(
+        arena: *mut pm_util_mem_arena_t,
+        base: *mut u8,
+        cap: *mut u32,
+        item: u32,
+        knob: *const pm_util_limit_t,
+    ) -> *mut u8;
 }
 
 unsafe extern "C" {
@@ -141,7 +187,6 @@ struct Route {
 
 #[derive(Clone, Copy)]
 struct Conn {
-    used: bool,
     step: u32,
     fd: i32,
     rx: [u8; RX_MAX],
@@ -151,7 +196,7 @@ struct Conn {
     hdr: [u8; HDR_MAX],
     /* Body staging buffer (heap, via the arena) for a dynamic or deferred
      * handler. Allocated once a handler route matches, freed on release, so
-     * MAX_CONN does not scale BODY_MAX across .bss. Null while idle. */
+     * the connection count does not scale BODY_MAX. Null while idle. */
     body_buf: *mut u8,
     body: *const u8,
     body_len: u32,
@@ -173,12 +218,138 @@ struct Mut<T>(UnsafeCell<T>);
 unsafe impl<T> Sync for Mut<T> {}
 
 static ARENA: Mut<*mut pm_util_mem_arena_t> = Mut(UnsafeCell::new(ptr::null_mut()));
-static LISTEN_FDS: Mut<[i32; MAX_ASGI]> = Mut(UnsafeCell::new([-1; MAX_ASGI]));
-static LISTEN_ADDRS: Mut<[u32; MAX_ASGI]> = Mut(UnsafeCell::new([0; MAX_ASGI]));
-static LISTEN_PORTS: Mut<[u16; MAX_ASGI]> = Mut(UnsafeCell::new([0; MAX_ASGI]));
+/* Servers. One allocation holding fd, address and port side by side, taken
+ * the first time this seat listens and grown while the knob allows. */
+static LISTEN_FDS_PTR: Mut<*mut i32> = Mut(UnsafeCell::new(ptr::null_mut()));
+static LISTEN_ADDRS_PTR: Mut<*mut u32> = Mut(UnsafeCell::new(ptr::null_mut()));
+static LISTEN_PORTS_PTR: Mut<*mut u16> = Mut(UnsafeCell::new(ptr::null_mut()));
+static LISTEN_CAP: Mut<u32> = Mut(UnsafeCell::new(0));
+static LISTEN_USED: Mut<u32> = Mut(UnsafeCell::new(0));
+
+/* The knobs. Their fields are filled in and put on the list at init: a
+ * constructor is a C thing, and a card whose muscle is Rust has one moment
+ * that is just as early and far easier to read. */
+static CONN_KNOB: Mut<pm_util_limit_t> = Mut(UnsafeCell::new(pm_util_limit_t {
+    name: ptr::null(),
+    soft: MAX_CONN_DEFAULT,
+    hard: 0,
+    dflt: MAX_CONN_DEFAULT,
+    used: ptr::null(),
+    next: ptr::null_mut(),
+    apply: core::ptr::null_mut(),
+}));
+static SERVER_KNOB: Mut<pm_util_limit_t> = Mut(UnsafeCell::new(pm_util_limit_t {
+    name: ptr::null(),
+    soft: MAX_ASGI_DEFAULT,
+    hard: 0,
+    dflt: MAX_ASGI_DEFAULT,
+    used: ptr::null(),
+    next: ptr::null_mut(),
+    apply: core::ptr::null_mut(),
+}));
+static DEFER_KNOB: Mut<pm_util_limit_t> = Mut(UnsafeCell::new(pm_util_limit_t {
+    name: ptr::null(),
+    soft: MAX_DEFER_DEFAULT,
+    hard: 0,
+    dflt: MAX_DEFER_DEFAULT,
+    used: ptr::null(),
+    next: ptr::null_mut(),
+    apply: core::ptr::null_mut(),
+}));
+static BACKLOG_KNOB: Mut<pm_util_limit_t> = Mut(UnsafeCell::new(pm_util_limit_t {
+    name: ptr::null(),
+    soft: LISTEN_BACKLOG_DEFAULT,
+    hard: 0,
+    dflt: LISTEN_BACKLOG_DEFAULT,
+    used: ptr::null(),
+    next: ptr::null_mut(),
+    apply: core::ptr::null_mut(),
+}));
+
+/// Room for one more, by this card's own count. Zero is no ceiling at all.
+unsafe fn knob_room(knob: *const pm_util_limit_t, have: u32) -> bool {
+    let soft = unsafe { (*knob).soft };
+    soft == 0 || have < soft
+}
+
+/// Put this card's knobs where a seat can find them, and point each at the
+/// count it governs.
+unsafe fn knobs_attach() {
+    unsafe {
+        let c = CONN_KNOB.0.get();
+        (*c).name = b"net.http.asgi.connection\0".as_ptr();
+        (*c).used = CONNS_USED.0.get() as *const u32;
+        pm_util_limits_attach(c);
+        let s = SERVER_KNOB.0.get();
+        (*s).name = b"net.http.asgi.server\0".as_ptr();
+        (*s).used = LISTEN_USED.0.get() as *const u32;
+        pm_util_limits_attach(s);
+        let d = DEFER_KNOB.0.get();
+        (*d).name = b"net.http.asgi.defer\0".as_ptr();
+        (*d).used = DEFERS_USED.0.get() as *const u32;
+        pm_util_limits_attach(d);
+        let b = BACKLOG_KNOB.0.get();
+        (*b).name = b"net.http.asgi.backlog\0".as_ptr();
+        pm_util_limits_attach(b);
+    }
+}
+
+unsafe fn knobs_detach() {
+    unsafe {
+        pm_util_limits_detach(CONN_KNOB.0.get());
+        pm_util_limits_detach(SERVER_KNOB.0.get());
+        pm_util_limits_detach(DEFER_KNOB.0.get());
+        pm_util_limits_detach(BACKLOG_KNOB.0.get());
+    }
+}
+
+/// Room for one more server, growing the three side-by-side tables together.
+unsafe fn listen_room() -> bool {
+    unsafe {
+        let cap = *LISTEN_CAP.0.get();
+        let used = *LISTEN_USED.0.get();
+        if used < cap {
+            return true;
+        }
+        let arena = *ARENA.0.get();
+        if arena.is_null() || !knob_room(SERVER_KNOB.0.get(), cap) {
+            return false;
+        }
+        let mut c1 = cap;
+        let fds = pm_util_limits_grow(arena, *LISTEN_FDS_PTR.0.get() as *mut u8, &mut c1, 4,
+            SERVER_KNOB.0.get());
+        if fds.is_null() {
+            return false;
+        }
+        let mut c2 = cap;
+        let addrs = pm_util_limits_grow(arena, *LISTEN_ADDRS_PTR.0.get() as *mut u8, &mut c2, 4,
+            SERVER_KNOB.0.get());
+        let mut c3 = cap;
+        let ports = pm_util_limits_grow(arena, *LISTEN_PORTS_PTR.0.get() as *mut u8, &mut c3, 2,
+            SERVER_KNOB.0.get());
+        if addrs.is_null() || ports.is_null() {
+            return false;
+        }
+        *LISTEN_FDS_PTR.0.get() = fds as *mut i32;
+        *LISTEN_ADDRS_PTR.0.get() = addrs as *mut u32;
+        *LISTEN_PORTS_PTR.0.get() = ports as *mut u16;
+        /* A fresh fd slot reads as zero from grow(), and zero is a real fd. */
+        let mut i = cap;
+        while i < c1 {
+            *(fds as *mut i32).add(i as usize) = -1;
+            i += 1;
+        }
+        *LISTEN_CAP.0.get() = c1;
+        true
+    }
+}
+
+unsafe fn listen_cap() -> usize {
+    unsafe { *LISTEN_CAP.0.get() as usize }
+}
 
 unsafe fn listen_fds() -> *mut i32 {
-    LISTEN_FDS.0.get() as *mut i32
+    unsafe { *LISTEN_FDS_PTR.0.get() }
 }
 /* Route table storage. Not a fixed MAX_ROUTE array: routes are appended on
  * demand from the arena (grow-only within a session), so the table can never
@@ -186,28 +357,13 @@ unsafe fn listen_fds() -> *mut i32 {
  * after pm_net_http_asgi_init sets the arena. */
 static ROUTES_PTR: Mut<*mut Route> = Mut(UnsafeCell::new(ptr::null_mut()));
 static ROUTES_N: Mut<usize> = Mut(UnsafeCell::new(0));
-static CONNS: Mut<[Conn; MAX_CONN]> = Mut(UnsafeCell::new([Conn {
-    used: false,
-    step: 0,
-    fd: -1,
-    rx: [0; RX_MAX],
-    rx_len: 0,
-    snd_off: 0,
-    hdr_len: 0,
-    hdr: [0; HDR_MAX],
-    body_buf: ptr::null_mut(),
-    body: ptr::null(),
-    body_len: 0,
-    ctype: ptr::null(),
-    stream_ctx: ptr::null_mut(),
-    stream_size: None,
-    stream_prod: None,
-    stream_sent: 0,
-    stream_chunk: [0; STREAM_CHUNK],
-    stream_chunk_len: 0,
-    defer_waits: 0,
-    defer_ready: false,
-}; MAX_CONN]));
+/* Connections. Slots, not connections: an entry is null until someone is on
+ * it, and the connection itself — all twenty-one kilobytes of buffers — comes
+ * from the arena when it is accepted and goes back when it is done. The table
+ * of slots grows; a connection, once made, never moves. */
+static CONNS_PTR: Mut<*mut *mut Conn> = Mut(UnsafeCell::new(ptr::null_mut()));
+static CONNS_CAP: Mut<u32> = Mut(UnsafeCell::new(0));
+static CONNS_USED: Mut<u32> = Mut(UnsafeCell::new(0));
 static DEFAULT_BODY: &[u8] = b"asgi";
 static DEFER_BUSY_BODY: &[u8] = b"no renderer";
 const DEFAULT_BODY_LEN: u32 = 4;
@@ -222,39 +378,74 @@ const DEFER_BUSY_BODY_LEN: u32 = 12;
  * defer_next hands out the pending path and remembers it as *current*, so the
  * renderer needs no request id: one drainer at a time, which is what a render
  * pump is. */
-/* Mirrors MAX_CONN (16) — kept a literal: the rsx subset chains no const-to-const. */
-const MAX_DEFER: usize = 16;
+/* Mirrors net.http.asgi.connection (16) — kept a literal: the rsx subset
+ * chains no const-to-const. Its own knob, so a seat that raises one can raise
+ * the other. */
+const MAX_DEFER_DEFAULT: u32 = 16;
 /* A parked request sleeps in slices rather than waiting on nothing: the reply
  * posts the task for an immediate wake, and the timer bounds the wait when no
  * renderer is draining, so a missing pump answers instead of wedging the slot
- * (with MAX_CONN this small, a stuck request would take the server down). */
+ * (with the connection count this small, a stuck request would take the
+ * server down). */
 const DEFER_SLICE_US: u64 = 1_000;
 const DEFER_MAX_WAITS: u32 = 5_000;
+/* Request path, query included, as handed to a handler or a deferred
+ * renderer. A registered route's own path stays short (`Route.path`), but a
+ * request carries arguments: an object window's `?off=`, and the console's
+ * `POST /console/exec?cmd=`, which is a line of Python percent-encoded. 160
+ * cut those off mid-argument. */
+const PATH_MAX: usize = 512;
 
 #[derive(Clone, Copy)]
 struct Defer {
     used: bool,
     taken: bool,
     conn: u32,
-    path: [u8; 160],
+    path: [u8; PATH_MAX],
     /* The parked coroutine's task. A WAITING task only runs again when someone
      * posts it back to the ready ring, so the reply must do exactly that. */
     waiter: *mut pm_metal_coop_task_t,
 }
 
-static DEFERS: Mut<[Defer; MAX_DEFER]> = Mut(UnsafeCell::new([Defer {
-    used: false,
-    taken: false,
-    conn: 0,
-    path: [0; 160],
-    waiter: ptr::null_mut(),
-}; MAX_DEFER]));
+/* The queue, taken from the arena the first time something parks on it. */
+static DEFERS_PTR: Mut<*mut Defer> = Mut(UnsafeCell::new(ptr::null_mut()));
+static DEFERS_CAP: Mut<u32> = Mut(UnsafeCell::new(0));
+static DEFERS_USED: Mut<u32> = Mut(UnsafeCell::new(0));
 /* Slot handed out by the last defer_next, or -1 when the renderer is idle. */
 static DEFER_CUR: Mut<i32> = Mut(UnsafeCell::new(-1));
 static DEFER_LOCK: Mut<pm_util_lock_t> = Mut(UnsafeCell::new(pm_util_lock_t { locked: 0 }));
 
 unsafe fn defers() -> *mut Defer {
-    DEFERS.0.get() as *mut Defer
+    unsafe { *DEFERS_PTR.0.get() }
+}
+
+unsafe fn defers_cap() -> usize {
+    unsafe { *DEFERS_CAP.0.get() as usize }
+}
+
+/// Make room for one more parked request, under the knob. Callers hold the
+/// defer lock; growth moves the queue, which is why nothing outside this file
+/// ever keeps a Defer pointer across a call.
+unsafe fn defers_room() -> bool {
+    unsafe {
+        let cap = *DEFERS_CAP.0.get();
+        if *DEFERS_USED.0.get() < cap {
+            return true;
+        }
+        let arena = *ARENA.0.get();
+        if arena.is_null() || !knob_room(DEFER_KNOB.0.get(), cap) {
+            return false;
+        }
+        let mut c = cap;
+        let grown = pm_util_limits_grow(arena, *DEFERS_PTR.0.get() as *mut u8, &mut c,
+            core::mem::size_of::<Defer>() as u32, DEFER_KNOB.0.get());
+        if grown.is_null() {
+            return false;
+        }
+        *DEFERS_PTR.0.get() = grown as *mut Defer;
+        *DEFERS_CAP.0.get() = c;
+        true
+    }
 }
 
 unsafe fn defer_lock() -> *mut pm_util_lock_t {
@@ -372,8 +563,42 @@ unsafe fn routes_next_slot() -> Option<usize> {
     }
 }
 
-unsafe fn conns() -> *mut Conn {
-    CONNS.0.get() as *mut Conn
+unsafe fn conn_cap() -> usize {
+    unsafe { *CONNS_CAP.0.get() as usize }
+}
+
+/// The connection on a slot, or null when nobody is there.
+unsafe fn conn_at(slot: usize) -> *mut Conn {
+    unsafe {
+        let base = *CONNS_PTR.0.get();
+        if base.is_null() || slot >= conn_cap() {
+            return ptr::null_mut();
+        }
+        *base.add(slot)
+    }
+}
+
+/// Hand a slot back: the connection's own memory goes with it.
+unsafe fn conn_drop(slot: usize) {
+    unsafe {
+        let base = *CONNS_PTR.0.get();
+        if base.is_null() || slot >= conn_cap() {
+            return;
+        }
+        let c = *base.add(slot);
+        if c.is_null() {
+            return;
+        }
+        *base.add(slot) = ptr::null_mut();
+        let arena = *ARENA.0.get();
+        if !arena.is_null() {
+            pm_util_mem_free(arena, c as *mut u8);
+        }
+        let used = CONNS_USED.0.get();
+        if *used != 0 {
+            *used -= 1;
+        }
+    }
 }
 
 /// Copy a NUL-terminated static into a fixed route array, zeroing the rest.
@@ -591,14 +816,14 @@ fn lookup_into(c: &mut Conn, method: *const u8, mlen: usize, path: *const u8, pl
             }
             if let Some(h) = r.handler {
                 let mut mbuf = [0u8; 8];
-                let mut pbuf = [0u8; 160];
+                let mut pbuf = [0u8; PATH_MAX];
                 let mut k = 0usize;
                 while k < mlen && k < 7 {
                     mbuf[k] = *method.add(k);
                     k += 1;
                 }
                 let mut k = 0usize;
-                while k < plen && k < 159 {
+                while k < plen && k < PATH_MAX - 1 {
                     pbuf[k] = *path.add(k);
                     k += 1;
                 }
@@ -660,16 +885,47 @@ fn lookup_into(c: &mut Conn, method: *const u8, mlen: usize, path: *const u8, pl
     false
 }
 
+/// A free slot with a fresh connection on it, growing the table if every slot
+/// is taken and the knob allows one more.
 fn conn_slot() -> Option<usize> {
     unsafe {
+        let arena = *ARENA.0.get();
+        if arena.is_null() {
+            return None;
+        }
+        if !knob_room(CONN_KNOB.0.get(), *CONNS_USED.0.get()) {
+            return None;
+        }
+        let mut slot: usize = usize::MAX;
         let mut i = 0usize;
-        while i < MAX_CONN {
-            if !(*conns().add(i)).used {
-                return Some(i);
+        let cap = conn_cap();
+        let mut base = *CONNS_PTR.0.get();
+        while i < cap {
+            if (*base.add(i)).is_null() {
+                slot = i;
+                break;
             }
             i += 1;
         }
-        None
+        if slot == usize::MAX {
+            let mut c = cap as u32;
+            let grown = pm_util_limits_grow(arena, base as *mut u8, &mut c,
+                core::mem::size_of::<*mut Conn>() as u32, CONN_KNOB.0.get());
+            if grown.is_null() {
+                return None;
+            }
+            base = grown as *mut *mut Conn;
+            *CONNS_PTR.0.get() = base;
+            *CONNS_CAP.0.get() = c;
+            slot = cap;
+        }
+        let c = pm_util_mem_alloc(arena, core::mem::size_of::<Conn>()).cast::<Conn>();
+        if c.is_null() {
+            return None;
+        }
+        *base.add(slot) = c;
+        *CONNS_USED.0.get() += 1;
+        Some(slot)
     }
 }
 
@@ -697,30 +953,43 @@ unsafe fn release_conn(c: &mut Conn) {
 fn defer_enqueue(conn: u32, path: *const u8, plen: usize) -> bool {
     unsafe {
         pm_util_lock_acquire(defer_lock());
-        let arr = &mut *DEFERS.0.get();
-        let n_slots = MAX_DEFER;
-        let mut found = MAX_DEFER;
+        let mut found: usize = usize::MAX;
         let mut i = 0usize;
+        let mut n_slots = defers_cap();
+        /* Counted parks, not slots: a knob moved back down still holds. */
+        if !knob_room(DEFER_KNOB.0.get(), *DEFERS_USED.0.get()) {
+            pm_util_lock_release(defer_lock());
+            return false;
+        }
         while i < n_slots {
-            if !arr[i].used {
+            if !(*defers().add(i)).used {
                 found = i;
                 break;
             }
             i += 1;
         }
-        let out = found != MAX_DEFER;
+        if found == usize::MAX && defers_room() {
+            /* Room was made: the first of it is the slot past what there was. */
+            found = n_slots;
+            n_slots = defers_cap();
+            if found >= n_slots {
+                found = usize::MAX;
+            }
+        }
+        let out = found != usize::MAX;
         if out {
-            let d = &mut arr[found];
+            let d = &mut *defers().add(found);
             d.used = true;
+            *DEFERS_USED.0.get() += 1;
             d.taken = false;
             d.conn = conn;
             d.waiter = pm_metal_coop_current_task();
             let mut k = 0usize;
-            while k < 160 {
+            while k < PATH_MAX {
                 d.path[k] = 0;
                 k += 1;
             }
-            let n = plen.min(159);
+            let n = plen.min(PATH_MAX - 1);
             let mut k = 0usize;
             while k < n {
                 d.path[k] = *path.add(k);
@@ -736,13 +1005,16 @@ fn defer_enqueue(conn: u32, path: *const u8, plen: usize) -> bool {
 fn defer_drop(conn: u32) {
     unsafe {
         pm_util_lock_acquire(defer_lock());
-        let base = (*DEFERS.0.get()).as_mut_ptr();
+        let base = defers();
         let mut i = 0usize;
-        while i < MAX_DEFER {
+        while i < defers_cap() {
             let d = &mut *base.add(i);
             if d.used && d.conn == conn {
                 d.used = false;
                 d.taken = false;
+                if *DEFERS_USED.0.get() != 0 {
+                    *DEFERS_USED.0.get() -= 1;
+                }
                 d.waiter = ptr::null_mut();
                 if *DEFER_CUR.0.get() == i as i32 {
                     *DEFER_CUR.0.get() = -1;
@@ -762,9 +1034,9 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_next() -> *const u8 {
     unsafe {
         pm_util_lock_acquire(defer_lock());
         let mut out: *const u8 = ptr::null();
-        let base = (*DEFERS.0.get()).as_mut_ptr();
+        let base = defers();
         let mut i = 0usize;
-        while i < MAX_DEFER {
+        while i < defers_cap() {
             let d = &mut *base.add(i);
             if d.used && !d.taken {
                 d.taken = true;
@@ -803,24 +1075,32 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_reply_ct(
         pm_util_lock_acquire(defer_lock());
         let cur = *DEFER_CUR.0.get();
         let mut rc = -1;
-        if cur >= 0 && (cur as usize) < MAX_DEFER {
+        if cur >= 0 && (cur as usize) < defers_cap() {
             let dp = defers().add(cur as usize);
             let d = *dp;
             let fits = (len as usize) <= BODY_MAX && (len == 0 || !body.is_null());
-            if d.used && fits && (d.conn as usize) < MAX_CONN {
-                let c = &mut *conns().add(d.conn as usize);
+            /* Null when the connection hung up while the renderer worked: the
+             * reply has nowhere to go, so drop the slot and say so. */
+            let cp = conn_at(d.conn as usize);
+            if d.used && fits && !cp.is_null() {
+                let c = &mut *cp;
+                let mut held: *mut u8 = ptr::null_mut();
                 if len != 0 {
                     let arena = *ARENA.0.get();
-                    if arena.is_null() {
-                        return -1;
+                    if !arena.is_null() {
+                        held = pm_util_mem_alloc(arena, BODY_MAX);
                     }
-                    let dst = pm_util_mem_alloc(arena, BODY_MAX);
-                    if dst.is_null() {
-                        return -1;
-                    }
-                    ptr::copy_nonoverlapping(body, dst, len as usize);
-                    c.body_buf = dst;
-                    c.body = dst;
+                }
+                if len != 0 && held.is_null() {
+                    /* No body memory — leave the slot current so the renderer
+                     * may try again, and keep the lock's promise. */
+                    pm_util_lock_release(defer_lock());
+                    return -1;
+                }
+                if len != 0 {
+                    ptr::copy_nonoverlapping(body, held, len as usize);
+                    c.body_buf = held;
+                    c.body = held;
                 }
                 c.body_len = len;
                 /* Override the route's declared type when the reply says so
@@ -834,6 +1114,9 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_reply_ct(
                 (*dp).used = false;
                 (*dp).taken = false;
                 (*dp).waiter = ptr::null_mut();
+                if *DEFERS_USED.0.get() != 0 {
+                    *DEFERS_USED.0.get() -= 1;
+                }
                 *DEFER_CUR.0.get() = -1;
                 if !waiter.is_null() {
                     pm_metal_coop_post_task(waiter);
@@ -847,14 +1130,28 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_defer_reply_ct(
 }
 
 /// Register a page whose body an external renderer produces (`ctype` required —
-/// a deferred path has no extension to derive one from). GET only: this is for
-/// server-rendered pages, and the renderer runs wherever the templates live.
+/// a deferred path has no extension to derive one from), for GET. Server-
+/// rendered pages are the common case and this is their shape; a deferred
+/// route that acts rather than renders takes its verb through `_m` below.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pm_metal_net_http_asgi_route_defer(
     path: *const u8,
     ctype: *const u8,
 ) -> i32 {
-    if path.is_null() || ctype.is_null() {
+    unsafe { pm_metal_net_http_asgi_route_defer_m(b"GET\0".as_ptr(), path, ctype) }
+}
+
+/// The same park, for a caller that names the verb. A deferred route whose
+/// renderer runs something — the console's REPL line, say — answers POST,
+/// because asking for a page twice must not be the same as running a command
+/// twice.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pm_metal_net_http_asgi_route_defer_m(
+    method: *const u8,
+    path: *const u8,
+    ctype: *const u8,
+) -> i32 {
+    if method.is_null() || path.is_null() || ctype.is_null() {
         return -1;
     }
     unsafe {
@@ -862,7 +1159,7 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_route_defer(
             return -1;
         };
         let r = &mut *routes_ptr().add(slot);
-        if !cstr_copy(r.method.as_mut_ptr(), 8, b"GET\0".as_ptr()) || !cstr_copy(r.path.as_mut_ptr(), 80, path) {
+        if !cstr_copy(r.method.as_mut_ptr(), 8, method) || !cstr_copy(r.path.as_mut_ptr(), 80, path) {
             return -1;
         }
         r.body.fill(0);
@@ -1046,15 +1343,18 @@ struct ConnFrame {
 
     unsafe extern "C" fn step_conn_frame(self_: *mut pm_metal_coop_coro_t) -> i32 {
     let f = self_ as *mut ConnFrame;    let slot = unsafe { (*f).slot as usize };
-    if slot >= MAX_CONN {
+    let cp = unsafe { conn_at(slot) };
+    if cp.is_null() {
         return ERROR;
     }
-    let c = unsafe { &mut *conns().add(slot) };
+    let c = unsafe { &mut *cp };
     if c.step == 0 {
         let room = RX_MAX as u32 - c.rx_len;
         if room == 0 {
-            unsafe { release_conn(c) };
-            c.used = false;
+            unsafe {
+                release_conn(c);
+                conn_drop(slot);
+            }
             return ERROR;
         }
         let n = unsafe { pm_metal_net_ip_recv(c.fd, c.rx.as_mut_ptr().add(c.rx_len as usize), room) };
@@ -1062,8 +1362,10 @@ struct ConnFrame {
             return WAITING;
         }
         if n < 0 {
-            unsafe { release_conn(c) };
-            c.used = false;
+            unsafe {
+                release_conn(c);
+                conn_drop(slot);
+            }
             return ERROR;
         }
         c.rx_len += n as u32;
@@ -1076,14 +1378,16 @@ struct ConnFrame {
         let mut p_off = 0usize;
         let mut p_len2 = 0usize;
         if !parse_req(&c.rx, end, &mut m_off, &mut m_len2, &mut p_off, &mut p_len2) {
-            unsafe { release_conn(c) };
-            c.used = false;
+            unsafe {
+                release_conn(c);
+                conn_drop(slot);
+            }
             return ERROR;
         }
         let mut mbuf = [0u8; 8];
-        let mut pbuf = [0u8; 160];
+        let mut pbuf = [0u8; PATH_MAX];
         let mlen = m_len2.min(7);
-        let plen = p_len2.min(159);
+        let plen = p_len2.min(PATH_MAX - 1);
         /* span copy (subset: no copy_from_slice) */
         let mut k = 0usize;
         while k < mlen {
@@ -1143,8 +1447,10 @@ struct ConnFrame {
             return WAITING;
         }
         if n < 0 {
-            unsafe { release_conn(c) };
-            c.used = false;
+            unsafe {
+                release_conn(c);
+                conn_drop(slot);
+            }
             return ERROR;
         }
         c.snd_off += n as u32;
@@ -1185,8 +1491,10 @@ struct ConnFrame {
                         );
                     }
                     if rc != 0 {
-                        unsafe { release_conn(c) };
-                        c.used = false;
+                        unsafe {
+                            release_conn(c);
+                            conn_drop(slot);
+                        }
                         return ERROR;
                     }
                     c.stream_chunk_len = len;
@@ -1205,8 +1513,10 @@ struct ConnFrame {
                     return WAITING;
                 }
                 if n < 0 {
-                    unsafe { release_conn(c) };
-                    c.used = false;
+                    unsafe {
+                        release_conn(c);
+                        conn_drop(slot);
+                    }
                     return ERROR;
                 }
                 c.snd_off += n as u32;
@@ -1227,8 +1537,10 @@ struct ConnFrame {
                     return WAITING;
                 }
                 if n < 0 {
-                    unsafe { release_conn(c) };
-                    c.used = false;
+                    unsafe {
+                        release_conn(c);
+                        conn_drop(slot);
+                    }
                     return ERROR;
                 }
                 c.snd_off += n as u32;
@@ -1239,8 +1551,10 @@ struct ConnFrame {
             }
         }
     }
-    unsafe { release_conn(c) };
-    c.used = false;
+    unsafe {
+        release_conn(c);
+        conn_drop(slot);
+    }
     DONE
 }
 
@@ -1250,9 +1564,10 @@ fn spawn_conn(fd: i32) -> i32 {
         return -1;
     };
     unsafe {
-        let c = &mut *conns().add(slot);
+        let c = &mut *conn_at(slot);
+        /* The block is fresh from the arena: write the whole connection, so
+         * no field carries anything from whoever held this memory before. */
         *c = Conn {
-            used: true,
             step: 0,
             fd,
             rx: [0; RX_MAX],
@@ -1275,13 +1590,13 @@ fn spawn_conn(fd: i32) -> i32 {
         };
         let coro = pm_metal_coop_coro_create(step_conn_frame, core::mem::size_of::<ConnFrame>());
         if coro.is_null() {
-            c.used = false;
+            conn_drop(slot);
             pm_metal_net_ip_close(fd);
             return -1;
         }
         (*(coro as *mut ConnFrame)).slot = slot as u32;
         if pm_metal_coop_create_task(coro).is_null() {
-            c.used = false;
+            conn_drop(slot);
             pm_metal_net_ip_close(fd);
             return -1;
         }
@@ -1302,10 +1617,10 @@ unsafe fn listen_at_set(slot: usize, v: i32) {
     unsafe { *listen_fds().add(slot) = v; }
 }
 unsafe fn listen_addrs() -> *mut u32 {
-    LISTEN_ADDRS.0.get() as *mut u32
+    unsafe { *LISTEN_ADDRS_PTR.0.get() }
 }
 unsafe fn listen_ports() -> *mut u16 {
-    LISTEN_PORTS.0.get() as *mut u16
+    unsafe { *LISTEN_PORTS_PTR.0.get() }
 }
 unsafe fn listen_addr_set(slot: usize, addr: u32, port: u16) {
     unsafe {
@@ -1322,7 +1637,7 @@ unsafe fn listen_same(slot: usize, addr: u32, port: u16) -> bool {
 unsafe extern "C" fn step_listen(self_: *mut pm_metal_coop_coro_t) -> i32 {
     let f = self_ as *mut ListenFrame;
     let slot = unsafe { (*f).slot as usize };
-    if slot >= MAX_ASGI {
+    if slot >= unsafe { listen_cap() } {
         return ERROR;
     }
     let fd = unsafe { listen_at(slot) };
@@ -1350,10 +1665,7 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_init(arena: *mut pm_util_mem_are
     }
     unsafe {
         *ARENA.0.get() = arena;
-        for slot in 0..MAX_ASGI {
-            listen_at_set(slot, -1);
-            listen_addr_set(slot, 0, 0);
-        }
+        knobs_attach();
         let base = routes_ptr();
         let n = routes_len();
         let mut i = 0usize;
@@ -1361,12 +1673,6 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_init(arena: *mut pm_util_mem_are
             let r = &mut *base.add(i);
             r.used = false;
             i += 1;
-        }
-        let cbase = conns();
-        let mut ci = 0usize;
-        while ci < MAX_CONN {
-            (*cbase.add(ci)).used = false;
-            ci += 1;
         }
         // Self-register the httpd service so m.serve()/m.services() see it.
         pm_metal_services_register(HTTPD_SVC.0.get() as *const pm_metal_service_t);
@@ -1377,24 +1683,25 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_init(arena: *mut pm_util_mem_are
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pm_metal_net_http_asgi_deinit() {
     unsafe {
-        for slot in 0..MAX_ASGI {
+        let mut slot = 0usize;
+        while slot < listen_cap() {
             let fd = listen_at(slot);
             if fd >= 0 {
                 pm_metal_net_ip_close(fd);
             }
             listen_at_set(slot, -1);
+            slot += 1;
         }
-        let cbase = conns();
         let mut ci = 0usize;
-        while ci < MAX_CONN {
-            let c = &mut *cbase.add(ci);
-            if c.used {
-                release_conn(c);
+        while ci < conn_cap() {
+            let cp = conn_at(ci);
+            if !cp.is_null() {
+                release_conn(&mut *cp);
+                conn_drop(ci);
             }
-            c.used = false;
             ci += 1;
         }
-        // Free the dynamic route table so a re-init starts clean and cannot
+        // Give every table back so a re-init starts clean and cannot
         // double-register over stale entries.
         let arena = *ARENA.0.get();
         let rp = *ROUTES_PTR.0.get();
@@ -1403,6 +1710,41 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_deinit() {
         }
         *ROUTES_PTR.0.get() = ptr::null_mut();
         *ROUTES_N.0.get() = 0;
+        if !arena.is_null() {
+            let cp = *CONNS_PTR.0.get();
+            if !cp.is_null() {
+                pm_util_mem_free(arena, cp.cast::<u8>());
+            }
+            let dp = *DEFERS_PTR.0.get();
+            if !dp.is_null() {
+                pm_util_mem_free(arena, dp.cast::<u8>());
+            }
+            let lf = *LISTEN_FDS_PTR.0.get();
+            if !lf.is_null() {
+                pm_util_mem_free(arena, lf.cast::<u8>());
+            }
+            let la = *LISTEN_ADDRS_PTR.0.get();
+            if !la.is_null() {
+                pm_util_mem_free(arena, la.cast::<u8>());
+            }
+            let lp = *LISTEN_PORTS_PTR.0.get();
+            if !lp.is_null() {
+                pm_util_mem_free(arena, lp.cast::<u8>());
+            }
+        }
+        *CONNS_PTR.0.get() = ptr::null_mut();
+        *CONNS_CAP.0.get() = 0;
+        *CONNS_USED.0.get() = 0;
+        *DEFERS_PTR.0.get() = ptr::null_mut();
+        *DEFERS_CAP.0.get() = 0;
+        *DEFERS_USED.0.get() = 0;
+        *DEFER_CUR.0.get() = -1;
+        *LISTEN_FDS_PTR.0.get() = ptr::null_mut();
+        *LISTEN_ADDRS_PTR.0.get() = ptr::null_mut();
+        *LISTEN_PORTS_PTR.0.get() = ptr::null_mut();
+        *LISTEN_CAP.0.get() = 0;
+        *LISTEN_USED.0.get() = 0;
+        knobs_detach();
         *ARENA.0.get() = ptr::null_mut();
     }
 }
@@ -1647,46 +1989,67 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_listen(addr: u32, port: u16) -> 
         if (*ARENA.0.get()).is_null() {
             return -1;
         }
-        for slot in 0..MAX_ASGI {
+        let mut free_slot: usize = usize::MAX;
+        let mut slot = 0usize;
+        while slot < listen_cap() {
             // Idempotent: an existing instance on this exact addr:port is it.
             if listen_same(slot, addr, port) {
                 return slot as i32;
             }
-            if listen_at(slot) >= 0 {
-                continue;
+            if listen_at(slot) < 0 && free_slot == usize::MAX {
+                free_slot = slot;
             }
-            let fd = pm_metal_net_ip_socket(SOCK_STREAM);
-            if fd < 0 || pm_metal_net_ip_bind(fd, addr, port) != 0
-                || pm_metal_net_ip_listen(fd, 4) != 0
-            {
-                if fd >= 0 {
-                    pm_metal_net_ip_close(fd);
-                }
-                return -1;
-            }
-            listen_at_set(slot, fd);
-            listen_addr_set(slot, addr, port);
-            let coro = pm_metal_coop_coro_create(step_listen, core::mem::size_of::<ListenFrame>());
-            if coro.is_null() || pm_metal_coop_create_task(coro).is_null() {
-                pm_metal_net_ip_close(fd);
-                listen_at_set(slot, -1);
-                return -1;
-            }
-            (*(coro as *mut ListenFrame)).slot = slot as u32;
-            return slot as i32;
+            slot += 1;
         }
+        /* The knob counts servers, not slots: a table that has already grown
+         * wide must still refuse once the knob is moved back down. */
+        if !knob_room(SERVER_KNOB.0.get(), *LISTEN_USED.0.get()) {
+            return -1;
+        }
+        if free_slot == usize::MAX {
+            /* Every slot is serving: take one more if the knob allows. */
+            let had = listen_cap();
+            if !listen_room() || listen_cap() <= had {
+                return -1;
+            }
+            free_slot = had;
+        }
+        let slot = free_slot;
+        let backlog = (*BACKLOG_KNOB.0.get()).soft;
+        let fd = pm_metal_net_ip_socket(SOCK_STREAM);
+        if fd < 0 || pm_metal_net_ip_bind(fd, addr, port) != 0
+            || pm_metal_net_ip_listen(fd, backlog as i32) != 0
+        {
+            if fd >= 0 {
+                pm_metal_net_ip_close(fd);
+            }
+            return -1;
+        }
+        listen_at_set(slot, fd);
+        listen_addr_set(slot, addr, port);
+        *LISTEN_USED.0.get() += 1;
+        let coro = pm_metal_coop_coro_create(step_listen, core::mem::size_of::<ListenFrame>());
+        if coro.is_null() || pm_metal_coop_create_task(coro).is_null() {
+            pm_metal_net_ip_close(fd);
+            listen_at_set(slot, -1);
+            *LISTEN_USED.0.get() -= 1;
+            return -1;
+        }
+        (*(coro as *mut ListenFrame)).slot = slot as u32;
+        slot as i32
     }
-    -1
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pm_metal_net_http_asgi_count() -> u32 {
     unsafe {
         let mut n = 0u32;
-        for slot in 0..MAX_ASGI {
+        let mut slot = 0usize;
+        while slot < listen_cap() {
             if listen_at(slot) >= 0 {
                 n += 1;
             }
+            slot += 1;
         }
         n
     }
@@ -1694,7 +2057,7 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_count() -> u32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pm_metal_net_http_asgi_status(id: i32) -> i32 {
-    if id < 0 || id as usize >= MAX_ASGI {
+    if id < 0 || id as usize >= unsafe { listen_cap() } {
         return -1;
     }
     unsafe { if listen_at(id as usize) >= 0 { 1 } else { 0 } }
@@ -1702,7 +2065,7 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_status(id: i32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pm_metal_net_http_asgi_stop(id: i32) -> i32 {
-    if id < 0 || id as usize >= MAX_ASGI {
+    if id < 0 || id as usize >= unsafe { listen_cap() } {
         return -1;
     }
     unsafe {
@@ -1710,6 +2073,9 @@ pub unsafe extern "C" fn pm_metal_net_http_asgi_stop(id: i32) -> i32 {
             pm_metal_net_ip_close(listen_at(id as usize));
             listen_at_set(id as usize, -1);
             listen_addr_set(id as usize, 0, 0);
+            if *LISTEN_USED.0.get() != 0 {
+                *LISTEN_USED.0.get() -= 1;
+            }
         }
     }
     0
@@ -1749,6 +2115,11 @@ pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",
     pm_metal_net_http_asgi_route_defer,
     "int32_t(const char *, const char *)"
+);
+pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
+    "pymergetic.metal.net.http.asgi",
+    pm_metal_net_http_asgi_route_defer_m,
+    "int32_t(const char *, const char *, const char *)"
 );
 pymergetic_wasmmod::PM_MOD_EXPORT_RS!(
     "pymergetic.metal.net.http.asgi",

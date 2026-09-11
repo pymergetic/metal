@@ -114,7 +114,7 @@ else
 CFLAGS_EXTMOD += -DTCC_TARGET_X86_64
 # Absolute tree roots for the runtime build faces (inspect's /build rebuild
 # route): __FILE__ is relative, and the seat binary runs from any CWD.
-CFLAGS_EXTMOD += -DPM_METAL_ROOT=\"$(abspath $(TOP)/extmod/metal)\" -DPM_METAL_WASMMOD_ROOT=\"$(abspath $(TOP)/extmod/wasmmod)\" -DPM_METAL_TOP_ROOT=\"$(abspath $(TOP)/..)\"
+CFLAGS_EXTMOD += -DPM_METAL_ROOT=\"$(abspath $(TOP)/extmod/metal)\" -DPM_METAL_WASMMOD_ROOT=\"$(abspath $(TOP)/extmod/wasmmod)\"
 # The build card's multi-object link drives wasmmod's in-tree ELF relocator.
 # unix compiles load.c (MICROPY_PY_WASM_ELF=1 default); the browser cell does
 # not (ELF=0 there — its TCC targets wasm32, objects are WASM not ET_REL).

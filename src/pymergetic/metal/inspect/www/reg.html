@@ -1,0 +1,71 @@
+{% args d %}
+<section class="hero">
+  <p class="eyebrow">seat</p>
+  <h1>Registry</h1>
+  <p class="lede">
+    What actually registered on this seat, with which exports, and which faces
+    are still missing. Every number here is read live from
+    <code>/capabilities</code>, <code>/inspect/self</code> and
+    <code>/inspect/reg</code> — the same JSON any other client gets.
+  </p>
+</section>
+
+<section class="seat-panel">
+  <h2>Seat</h2>
+  <p class="hint" id="role">loading capabilities…</p>
+  <div class="seat-cols">
+    <div>
+      <h3>Health</h3>
+      <pre id="health"></pre>
+    </div>
+    <div>
+      <h3>Capabilities</h3>
+      <pre id="caps"></pre>
+    </div>
+    <div>
+      <h3>Self</h3>
+      <pre id="self"></pre>
+    </div>
+  </div>
+</section>
+
+<section class="seat-panel">
+  <h2>Completeness</h2>
+  <p class="hint">Cold-path multi-callee / face / honesty gaps (not hot dispatch).</p>
+  <p id="reg-summary" class="hint"></p>
+  <div class="seat-controls">
+    <label><input type="checkbox" id="gaps-only" /> gaps only</label>
+    <label><input type="checkbox" id="detail" /> detail</label>
+    <button type="button" id="reg-reload">Reload</button>
+  </div>
+  <pre id="reg-tree" class="reg-tree"></pre>
+  <div id="reg-modules"></div>
+  <details>
+    <summary>method drill</summary>
+    <pre id="reg-drill"></pre>
+  </details>
+  <details>
+    <summary>raw ledger JSON</summary>
+    <pre id="reg"></pre>
+  </details>
+</section>
+
+<section class="seat-panel">
+  <h2>Modules &amp; RPC</h2>
+  <p class="hint">Click a module to list its exports; drill a func detail; invoke a
+    container (wasm/aot/elf) export when the seat advertises <code>rpc</code>.</p>
+  <div id="mod-list" class="mod-list"></div>
+  <div id="rpc-ui" class="seat-controls" style="display:none">
+    <label>module
+      <input type="text" id="rpc-module" placeholder="pymergetic.metal.inspect" />
+    </label>
+    <label>func
+      <input type="text" id="rpc-func" placeholder="pm_metal_inspect_handle" />
+    </label>
+    <label>arg (i32:N or i64:N)
+      <input type="text" id="rpc-arg" placeholder="" />
+    </label>
+    <button type="button" id="rpc-run">Call</button>
+  </div>
+  <pre id="rpc-out"></pre>
+</section>

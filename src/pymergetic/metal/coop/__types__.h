@@ -43,12 +43,16 @@ struct pm_metal_coop_task {
     uint32_t running;    /* CAS: one runner steps a task at a time */
     uint32_t pid;        /* 0 = not a process (no human intent / id) */
     pm_metal_coop_task_t *mutex_next; /* intrusive FIFO link while parked on a mutex */
-    /* Reclamation bookkeeping. ring_refs counts ready-ring slots holding
-     * this task (push +1, the claiming driver's drop -1); dead marks a
-     * terminal task whose blocks the last drop frees. A push of a dead
-     * task is refused, so the count cannot grow once dead. */
+    /* Reclamation bookkeeping. The low 31 bits of ring_refs count ready-ring
+     * slots holding this task (push +1, the claiming driver's drop -1) and
+     * the top bit marks it dead, so "last ref dropped AND dead" is decided
+     * by one atomic word rather than by a count and a flag read apart from
+     * each other. A push of a dead task is refused, so the count cannot
+     * grow once dead. */
     uint32_t ring_refs;
-    uint32_t dead;      /* 1 = terminal + reclaimed: pushes refused, frees on 0 */
+    /* Advisory copy of the dead bit, for the push and park refusals; the
+     * word above is what decides who frees the blocks. */
+    uint32_t dead;
 };
 
 /* Async-aware mutex: CAS owner, park on contention, wake on release.
@@ -100,6 +104,21 @@ int32_t pm_metal_coop_task_reclaim(pm_metal_coop_task_t *task);
  * frees alone on the last drop; the caller frees its frame on its own
  * schedule. Refuses (returns -1) unless the task is terminal. */
 int32_t pm_metal_coop_task_detach(pm_metal_coop_task_t *task);
+
+/* Detach AND wait until no runner is inside the task's step, for an owner
+ * that is about to free the frame itself. Detach alone is not enough: a
+ * runner writes into the frame after the step function returns (it stores
+ * the returned status, then reads the root for the auto-free retirement),
+ * so a frame freed on the strength of the step's own terminal state can be
+ * written to — and then freed a second time through a garbage pointer —
+ * while that epilogue is still running.
+ *
+ * Accepts a task in any state (the owner is destroying the frame, so there
+ * is nothing to wait for it to finish). Returns 0 when the frame is safe to
+ * free, or -1 when a runner is still inside after a bounded wait, in which
+ * case the caller must keep the frame and retry. Retiring the task the
+ * calling runner is itself stepping returns 0 without waiting. */
+int32_t pm_metal_coop_task_retire(pm_metal_coop_task_t *task);
 
 /* Async mutex: park-on-contention, never spin; same cast as sem/rwlock/cond. */
 void pm_metal_coop_mutex_init(pm_metal_coop_mutex_t *m);

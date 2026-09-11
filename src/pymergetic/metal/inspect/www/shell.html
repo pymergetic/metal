@@ -23,6 +23,7 @@
       </a>
       <nav class="top-nav">
         <a href="{{ d.nav_browse }}" class="{{ d.nav_browse_cls }}">Browse</a>
+        {{ d.nav_extra }}
         {% if d.nav_users %}<a href="{{ d.nav_users }}" class="{{ d.nav_users_cls }}">Users</a>{% endif %}
         {% if d.nav_publish %}<a href="{{ d.nav_publish }}" class="{{ d.nav_publish_cls }}">Publish</a>{% endif %}
         {% if d.nav_federation %}

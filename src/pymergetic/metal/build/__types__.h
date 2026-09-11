@@ -23,13 +23,29 @@ extern "C" {
 #define PM_METAL_BUILD_STR_MAX 128u
 /* root path a root resolver may write (deep trees stay honest refusals) */
 #define PM_METAL_BUILD_ROOT_MAX 2048u
-#define PM_METAL_BUILD_MAX_OBJS 8u
+/* Objects one unit may carry. A cap below the widest unit does not stop it
+ * compiling — it stops the seat recording and serving what it just built,
+ * which read as "not buildable on this seat" for a unit the same walk had
+ * just reported ok. pymergetic.metal.jit.rs.compiler has 12 sources; 16
+ * leaves room without another such contradiction. */
+#define PM_METAL_BUILD_MAX_OBJS 16u
 /* One actor job's compile scratch span: a fresh malloc'd arena per unit
  * (ksweep's posture, ksweep's number — TCC's tokstr DOUBLES on growth,
  * and the big cards reach a 32 MiB block, so 160 MiB is the span that
  * survives the whole tree). The shared boot arena cannot reliably serve
  * that next to the seat's retained state. */
+/* How many times a walk re-submits one unit that refused transiently
+ * (PM_METAL_BUILD_ERR_BUSY — the µPy GIL held by the caller's own Python,
+ * not a fact about the unit). Small on purpose: a lane that is genuinely
+ * stuck must still settle as FAILED rather than spin the walk forever. */
+#define PM_METAL_BUILD_WALK_RETRIES 8u
+
 #define PM_METAL_BUILD_JOB_SPAN (160u * 1024u * 1024u)
+/* One discover pass's scratch: the unit table plus the `mod`-part splice
+ * discover runs per rs card to find which faces are spans of one TU. The
+ * biggest card's parts are ~36k lines, so this has to carry a whole card's
+ * text, not just the table. Transient — a caller frees it before compiling. */
+#define PM_METAL_BUILD_DISCOVER_SPAN (16u * 1024u * 1024u)
 
 typedef struct pm_metal_build_unit {
     char fqn[PM_METAL_BUILD_STR_MAX];
@@ -91,7 +107,28 @@ typedef struct pm_metal_build_compile_opts {
      * seat's own backend, 1 = wasm32, 2 = arm-eabi, 3 = x86_64 — same
      * values as pm_metal_jit_c_target_t. 0 on seats that never pass it. */
     int32_t target;
+    /* What the caller wants out of this build — two different jobs that
+     * used to be one knob, which is why an x86-64 seat asked for x86-64
+     * artifacts and got a refusal:
+     *
+     *   PM_METAL_BUILD_LOCAL    rebuild this running seat. Compiles for the
+     *                           seat's own arch, links through the ELF
+     *                           relocator and publishes the fresh symbols,
+     *                           so the live module is the new one. Only the
+     *                           seat's arch can do this — nothing else is
+     *                           loadable here.
+     *   PM_METAL_BUILD_PRODUCE  produce an artifact for a target, any arch
+     *                           the seat can emit, *including its own*.
+     *                           Stops at the object bytes: no link, no
+     *                           publish, nothing about the running seat
+     *                           changes. The product is the download.
+     *
+     * Local is the default (0) so every existing caller keeps its meaning. */
+    uint32_t mode;
 } pm_metal_build_compile_opts_t;
+
+#define PM_METAL_BUILD_LOCAL 0u
+#define PM_METAL_BUILD_PRODUCE 1u
 
 /* Parse one manifest into unit (arena-backed; strings are copied into the
  * arena). Returns PM_METAL_BUILD_OK or a negative status; errbuf carries the
@@ -151,6 +188,46 @@ void *pm_metal_build_artifact_lookup(const pm_metal_build_artifact_t *artifact,
  * seat, widened to i64 on return). */
 int32_t pm_metal_build_artifact_call(const pm_metal_build_artifact_t *artifact,
     const char *name, const int64_t *args, uint32_t n_args, int64_t *res);
+
+/*------------------ retained objects (the downloadable product) ----------
+ * A compile's object blobs live in the caller's arena and die with the
+ * request that made them, and the linked artifact is a loaded image (its
+ * `bytes` is the loader's struct, not a file) — so neither is servable
+ * afterwards. unit_compile therefore copies each object into this cache,
+ * which is what a download route reads.
+ *
+ * How much it holds is two knobs, build.keep (slots) and build.keep.span
+ * (bytes). The defaults come from the tree as it stands: a whole BUILD ALL of
+ * this repo is 103 objects and 18.1 MiB, with the biggest single object
+ * 5.6 MiB and most tens of KB. The span carries that with room for rebuild
+ * churn, and the slot count has to exceed the object count or the tail of a
+ * BUILD ALL evicts its own head — at 32 slots only the last handful of units
+ * kept a download. A seat with a bigger tree, or one that would rather spend
+ * its memory elsewhere, moves the knobs; moving the span drops what is
+ * retained, since the whole cache is the span.
+ *
+ * Entries are freed individually (oldest first) when room is needed, so a
+ * seat too small for the whole tree keeps a recent window instead of
+ * dropping everything. Callers must still treat a retained object as
+ * "recent": pm_metal_build_object_count is the only truth. */
+#define PM_METAL_BUILD_KEEP_SPAN_DEFAULT (64u * 1024u * 1024u)
+#define PM_METAL_BUILD_KEEP_DEFAULT 160u
+
+/* How many objects are currently retained for a unit (0 = nothing to
+ * serve: never built here, evicted for room, or a seat with no malloc). */
+uint32_t pm_metal_build_object_count(const char *fqn);
+
+/* Name and length of the idx'th retained object for a unit. The name is
+ * copied out because the slot can be evicted by the next build. */
+int32_t pm_metal_build_object_info(const char *fqn, uint32_t idx,
+    char *src_out, uint32_t src_max, uint32_t *len_out);
+
+/* One window of the idx'th retained object, copied into out. Sets *n_out to
+ * the bytes copied (0 once off is past the end). A window rather than a
+ * pointer because a download spans many requests and a concurrent build can
+ * evict the slot between any two of them. */
+int32_t pm_metal_build_object_read(const char *fqn, uint32_t idx,
+    uint32_t off, uint8_t *out, uint32_t out_max, uint32_t *n_out);
 
 /* Runtime card discovery: walk the embedded card source table (every seat
  * ships it — tools/embed_src.py), parse each card's raw __pmm__.toml with
@@ -212,6 +289,7 @@ typedef struct pm_metal_build_actor_job {
     const char **defines;          /* arena-copied (count below) */
     uint32_t n_defines;
     int32_t target;                /* cross-emit knob from opts (0 = native) */
+    uint32_t mode;                 /* PM_METAL_BUILD_LOCAL / _PRODUCE */
     pm_metal_build_artifact_t artifact;
     char err[PM_METAL_BUILD_ERR_MAX];
     uint32_t cancel;               /* 1 = cancel at the next phase boundary */
@@ -355,12 +433,14 @@ int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
  * these as /build/<fqn> — authored source stays the primary pane, the
  * record is the build-product pane with the provenance chain in between.
  *
- * 64 slots: a whole-tree BUILD ALL walk is a first-class operation now
- * (~80 units), and the factory floor's per-unit pane serves the record —
- * an eviction-wrapped table of 8 would leave the last 56 rows' provenance
- * dark right after the walk that built them. ~5 KB/record, ~320 KB in the
- * boot arena. */
-#define PM_METAL_BUILD_MAX_RECORDS 64u
+ * How many records the seat keeps is build.record. The table has to outlast
+ * a whole walk or the pane contradicts it — at 64 slots an 84-unit tree
+ * evicted 20 units while the walk was still reporting them as built, so the
+ * same page said "84 ok" and "64 built" and the earliest rows lost their
+ * download. The default is 128, above the tree as it stands today; a seat
+ * with a bigger tree raises the knob instead of waiting for a new build of
+ * the kernel. ~6 KB/record, so the default is ~800 KB of the boot arena. */
+#define PM_METAL_BUILD_RECORD_DEFAULT 128u
 #define PM_METAL_BUILD_MAX_SRC_PATH 96u
 #define PM_METAL_BUILD_MAX_SYMS 64u
 #define PM_METAL_BUILD_SYM_NAME_MAX 64u
@@ -372,9 +452,18 @@ int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
  * /build/events?since=<seq> and
  * replays the ring's tail — the ring is the ONLY live build state (no
  * per-lane coroutines), so the UI is a pure read face. Fixed-size, no
- * pointers: the ring is copied by value under the ctx, never arena-owned,
- * so a caller's arena dying mid-build cannot strand half an event. */
-#define PM_METAL_BUILD_EVENTS 64u
+ * pointers: events are copied by value into the ctx's own ring, never into
+ * a caller's arena, so an arena dying mid-build cannot strand half an
+ * event.
+ *
+ * How deep the ring is is build.event. The default holds one whole BUILD
+ * ALL, not a glance at one: a walk over the 84 discovered units emits ~2
+ * events per unit when the lane refuses fast (measured 174 in under a second
+ * on the x86_64 lane) and several more per source when it compiles. At 64 the
+ * ring wrapped between two 1 Hz polls and the pane's log showed a fragment of
+ * the run. 512 events is 63 KiB of the 4 MiB boot arena; a seat that watches
+ * longer runs raises the knob, and moving it starts the log over. */
+#define PM_METAL_BUILD_EVENT_DEFAULT 512u
 #define PM_METAL_BUILD_EVENT_FQN 64u
 #define PM_METAL_BUILD_EVENT_SRC 40u
 
@@ -428,12 +517,21 @@ typedef enum pm_metal_build_walk_state {
 typedef struct pm_metal_build_walk_info {
     pm_metal_build_walk_status_t state;
     int32_t target;                    /* lane the walk was started on */
+    uint32_t mode;                     /* PM_METAL_BUILD_LOCAL / _PRODUCE */
     uint32_t id;                       /* walk id, 1..N (0 = never) */
     uint32_t n_total;                  /* units discovered for this walk */
     uint32_t n_done;                   /* rows DONE */
     uint32_t n_failed;                 /* rows FAILED */
     uint32_t n_skipped;                /* rows SKIPPED (dep isolation) */
     uint32_t n_running;                /* jobs in flight (fan-out lanes) */
+    /* The first failure's unit and reason. A walk settles a lane by
+     * releasing its job, which used to drop the job's errbuf on the floor:
+     * the row went FAILED and the pane could say "failed" and nothing else,
+     * for a compile error and an exhausted arena alike. Bounded and
+     * first-only on purpose — one reason is what turns "1 failed" into
+     * something to act on, and the whole info struct stays copy-out. */
+    char fail_fqn[PM_METAL_BUILD_STR_MAX];
+    char fail_err[PM_METAL_BUILD_ERR_MAX];
 } pm_metal_build_walk_info_t;
 
 /* Start a background walk of every discovered unit on lane `target`
@@ -451,6 +549,12 @@ int32_t pm_metal_build_walk_start(int32_t target,
 
 /* The current walk's state (IDLE state zero-init when no walk ran). */
 void pm_metal_build_walk_state(pm_metal_build_walk_info_t *out);
+
+/* Most lanes the current (or last) walk ever held at once: 1 says it ran
+ * serially, 0 that no walk has started. The live count in the state above is
+ * a snapshot, so a caller polling it can miss an overlap that opened and
+ * closed between two polls. */
+uint32_t pm_metal_build_walk_peak(void);
 
 
 typedef struct pm_metal_build_record {

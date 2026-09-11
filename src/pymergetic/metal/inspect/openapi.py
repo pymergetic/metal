@@ -325,6 +325,9 @@ def docs_html():
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         "<title>pymergetic.metal — API</title>"
+        # The API page is reached from the same top nav as every other view, so
+        # it wears the same tokens/chrome sheet instead of arriving unstyled.
+        "<link rel=\"stylesheet\" href=\"/static/site.css\">"
         "<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css\" crossorigin>"
         "</head><body>"
         "<section class=\"docs-hero\"><p class=\"eyebrow\">OpenAPI</p>"

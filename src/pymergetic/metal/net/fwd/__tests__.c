@@ -7,6 +7,7 @@
  *  guest server (ANY) <--sim L2-- guest client (opened by fwd) <--shuttle-->
  *                                                            host socket
  */
+#include "pymergetic/util/limits.h"
 #include "pymergetic/metal/net/fwd.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/wasmmod/guest.h"
@@ -17,6 +18,7 @@
 
 #if !defined(PM_METAL_FIRMWARE) && !defined(__EMSCRIPTEN__)
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdlib.h>
@@ -314,8 +316,9 @@ static int32_t case_fwd_large(void) {
     return 0;
 }
 
-/* Slots must come back. The bridge has PM_METAL_FWD_MAX of them, so a seat that
- * leaks one per connection dies after a handful of page loads — and it dies for
+/* Slots must come back. A mirror carries the connections its knob allowed, so
+ * a seat that leaks one per connection dies after a handful of page loads —
+ * and it dies for
  * every route, not just the one that leaked. Cycling more clients than there are
  * slots, closing each, proves the reap path: the poll array is packed, so this
  * also pins the conn->pollfd mapping that a naive index walk gets wrong once any
@@ -358,6 +361,177 @@ static int32_t case_fwd_slot_reuse(void) {
     return 0;
 }
 
+/* A host that reads late. The host end of the shuttle is non-blocking, so a
+ * client slower than the seat — a browser pulling a multi-MB image while it
+ * renders — fills the kernel's send buffer and send() takes nothing. Those
+ * bytes are already out of the guest's ring, so dropping them (or hanging up on
+ * the client, which is what a plain `w <= 0` check does) loses the download
+ * partway through. The tail must wait for room and the body must arrive whole.
+ *
+ * The client's receive buffer is pinched to the kernel's floor before connect so
+ * the buffers between the two ends fill within this body rather than megabytes
+ * later. */
+#define FWD_SLOW_N 524288u /* 512 KiB */
+
+static int32_t case_fwd_slow_reader(void) {
+    const uint16_t port = (uint16_t)(FWD_PORT + 3u);
+    uint32_t sent = 0, got = 0, spins = 0, idle = 0;
+    int32_t sv, ls;
+    int h, rc = 0;
+    static uint8_t chunk[8192];
+    int small = 2048;
+
+    ls = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    if (ls < 0 || pm_metal_net_ip_bind(ls, 0u, port) != 0
+        || pm_metal_net_ip_listen(ls, 1) != 0) {
+        return fail("slow: guest listen");
+    }
+    if (pm_metal_fwd_listen(port) < 0) {
+        (void)pm_metal_net_ip_close(ls);
+        return fail("slow: fwd listen");
+    }
+    h = socket(AF_INET, SOCK_STREAM, 0);
+    if (h < 0) {
+        (void)pm_metal_net_ip_close(ls);
+        return fail("slow: host socket");
+    }
+    (void)setsockopt(h, SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
+    {
+        struct sockaddr_in sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sin_family = AF_INET;
+        sa.sin_addr.s_addr = htonl(0x7f000001u);
+        sa.sin_port = htons(port);
+        if (connect(h, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+            close(h);
+            (void)pm_metal_net_ip_close(ls);
+            return fail("slow: host connect");
+        }
+    }
+    {
+        int fl = fcntl(h, F_GETFL, 0);
+        if (fl >= 0) {
+            (void)fcntl(h, F_SETFL, fl | O_NONBLOCK);
+        }
+    }
+    if (pump_until_accept(ls, &sv) != 0) {
+        close(h);
+        (void)pm_metal_net_ip_close(ls);
+        return fail("slow: guest accept");
+    }
+    /* The guest keeps writing throughout; the host starts reading only once the
+     * buffers between them have had a chance to fill. */
+    while (got < FWD_SLOW_N && spins < 200000u) {
+        int moved = 0;
+        if (sent < FWD_SLOW_N) {
+            uint32_t take = FWD_SLOW_N - sent;
+            uint32_t i;
+            int32_t s;
+            if (take > sizeof(chunk)) {
+                take = sizeof(chunk);
+            }
+            for (i = 0; i < take; i++) {
+                chunk[i] = (uint8_t)((sent + i) % 251u);
+            }
+            s = pm_metal_net_ip_send(sv, chunk, take);
+            if (s < 0) {
+                rc = fail("slow: guest send");
+                break;
+            }
+            if (s > 0) {
+                sent += (uint32_t)s;
+                moved = 1;
+            }
+        }
+        pm_metal_net_ip_pump();
+        if (spins > 400u) {
+            uint8_t back[4096];
+            for (;;) {
+                ssize_t n = recv(h, back, sizeof(back), 0);
+                uint32_t i;
+                if (n <= 0) {
+                    break;
+                }
+                for (i = 0; i < (uint32_t)n; i++) {
+                    if (back[i] != (uint8_t)((got + i) % 251u)) {
+                        rc = fail("slow: body came back wrong");
+                        break;
+                    }
+                }
+                if (rc != 0) {
+                    break;
+                }
+                got += (uint32_t)n;
+                moved = 1;
+            }
+            if (rc != 0) {
+                break;
+            }
+        }
+        if (!moved) {
+            idle++;
+            nap();
+        }
+        spins++;
+    }
+    if (rc == 0 && got < FWD_SLOW_N) {
+        rc = fail("slow: the transfer died before the end");
+    }
+    close(h);
+    (void)pm_metal_net_ip_close(sv);
+    (void)pm_metal_net_ip_close(ls);
+    (void)idle;
+    return rc;
+}
+
+/* Mirrors are taken one at a time now, so how many a seat may run is a knob
+ * and not a number in this file. Twelve is past the eight this build ships
+ * with: it only works because the seat said so first, and each one has to be
+ * real — a mirror that reports itself running has a listener behind it. */
+#define MIRROR_N 12u
+#define MIRROR_PORT 19100u
+
+static int32_t case_fwd_mirror_knob(void) {
+    uint32_t i;
+    int32_t id[MIRROR_N];
+    int32_t rc = 0;
+    uint32_t before = pm_metal_fwd_count();
+
+    for (i = 0; i < MIRROR_N; i++) {
+        id[i] = -1;
+    }
+    if (pm_util_limits_set("net.fwd.mirror", MIRROR_N + 4u) != 0) {
+        return fail("mirror knob");
+    }
+    for (i = 0; i < MIRROR_N; i++) {
+        id[i] = pm_metal_fwd_listen((uint16_t)(MIRROR_PORT + i));
+        if (id[i] < 0) {
+            rc = fail("the bridge stopped mirroring at a fixed count");
+            break;
+        }
+        if (pm_metal_fwd_status(id[i]) != 1) {
+            rc = fail("a mirror that was handed back is not running");
+            break;
+        }
+    }
+    if (rc == 0 && pm_metal_fwd_count() != before + MIRROR_N) {
+        rc = fail("the bridge does not count the mirrors it started");
+    }
+    for (i = 0; i < MIRROR_N; i++) {
+        if (id[i] >= 0) {
+            (void)pm_metal_fwd_stop(id[i]);
+        }
+    }
+    if (rc == 0 && pm_metal_fwd_count() != before) {
+        rc = fail("a stopped mirror is still counted");
+    }
+    if (rc == 0 && pm_util_limits_used(pm_util_limits_find("net.fwd.mirror")) != before) {
+        rc = fail("a stopped mirror was never given back");
+    }
+    (void)pm_util_limits_reset("net.fwd.mirror");
+    return rc;
+}
+
 static int32_t pm_metal_net_fwd_tests(void) {
     if (case_fwd_roundtrip() != 0) {
         return 1;
@@ -365,7 +539,13 @@ static int32_t pm_metal_net_fwd_tests(void) {
     if (case_fwd_large() != 0) {
         return 1;
     }
-    return case_fwd_slot_reuse();
+    if (case_fwd_slot_reuse() != 0) {
+        return 1;
+    }
+    if (case_fwd_mirror_knob() != 0) {
+        return 1;
+    }
+    return case_fwd_slow_reader();
 }
 
 PM_MOD_TEST_C(pymergetic.metal.net.fwd, fwd, pm_metal_net_fwd_tests);

@@ -163,6 +163,176 @@ if test_a is None:
 if test_a.a_ping() != 11:
     raise RuntimeError("cdn fetch call")
 print("upy cdn fetch 11")
+
+# A registered face is a row taken when it registers, not one of 64 export
+# rows reserved per module whether or not a card has that many (which is what
+# this board's bss held before). These three knobs are what the board will
+# hold; `used` is what it holds, and on a board most of it is the cards' own
+# faces, registered from crt0 before there was an allocator at all.
+#
+# `mixed` is the pack the refusals below are proven with: it is this prove's
+# only use of it, so nothing is loaded until the knobs are back, and its two
+# exports are what is left of the loader's trampoline pool (8 slots, of which
+# hello took 2 and test_a 4) — a pack with four exports cannot be the third
+# one loaded on any seat, knob or no knob. A refused load rolls all the way
+# back, so the same pack lands once the knob is reset.
+import pymergetic.util.limits as _limits
+
+for _rname, _rwant in (
+    ("wasmmod.registry.exports", 1536),
+    ("wasmmod.registry.tests", 384),
+    ("wasmmod.registry.benches", 64),
+):
+    _rat = _limits.find(_rname)
+    if _rat < 0:
+        raise RuntimeError("no %s knob" % _rname)
+    if _limits.soft(_rat) != _rwant or _limits.default(_rat) != _rwant:
+        raise RuntimeError("%s default %r" % (_rname, _limits.soft(_rat)))
+    if _limits.counted(_rat) != 1:
+        raise RuntimeError("%s does not count its rows" % _rname)
+    if _limits.set(_rname, _rwant * 2) != 0 or _limits.soft(_rat) != _rwant * 2:
+        raise RuntimeError("raise %s" % _rname)
+    if _limits.reset(_rname) != 0 or _limits.soft(_rat) != _rwant:
+        raise RuntimeError("reset %s" % _rname)
+_rx = _limits.find("wasmmod.registry.exports")
+_rused = _limits.used(_rx)
+if _rused == 0:
+    raise RuntimeError("the board's own faces are rows too")
+if _limits.set("wasmmod.registry.exports", _rused) != 0:
+    raise RuntimeError("shrink the registry exports knob")
+_refused = False
+try:
+    import pymergetic.wasmmod_examples.mixed as _mixed
+except (ImportError, OSError):
+    _refused = True
+if not _refused:
+    raise RuntimeError("a pack over the registry exports knob should refuse")
+if _limits.reset("wasmmod.registry.exports") != 0:
+    raise RuntimeError("reset the registry exports knob")
+print("upy registry row knobs", _rused)
+
+# The type registry's rows and facegen's staging rows. Descriptors register
+# from this board's crt0, so the run they land in is the one in .bss (64 of
+# them, widened from a heap only on a seat that has one); staging is a host
+# tool's path, so a board holds none of it — where it used to carry 96 rows
+# of 64 fields each, better than a megabyte of this image's bss.
+for _tname, _twant in (("types.stage", 96), ("types.registry", 512)):
+    _tat = _limits.find(_tname)
+    if _tat < 0:
+        raise RuntimeError("no %s knob" % _tname)
+    if _limits.soft(_tat) != _twant or _limits.default(_tat) != _twant:
+        raise RuntimeError("%s default %r" % (_tname, _limits.soft(_tat)))
+    if _limits.counted(_tat) != 1:
+        raise RuntimeError("%s does not count what it holds" % _tname)
+    if _limits.set(_tname, _twant * 2) != 0 or _limits.soft(_tat) != _twant * 2:
+        raise RuntimeError("raise %s" % _tname)
+    if _limits.reset(_tname) != 0 or _limits.soft(_tat) != _twant:
+        raise RuntimeError("reset %s" % _tname)
+if _limits.used(_limits.find("types.stage")) != 0:
+    raise RuntimeError("a board stages nothing")
+_tregistry = _limits.used(_limits.find("types.registry"))
+if _tregistry == 0:
+    raise RuntimeError("types.registry used is the live count")
+print("upy types row knobs", _tregistry)
+
+# A NIC's ring is taken when the NIC attaches. This board's frames came in
+# over one of these three cards — virtio-net on the QEMU boards, the sim fill
+# elsewhere — and whichever it was, its ring was cut when it bound, not
+# reserved in this image for eight devices that never showed up.
+for _dname, _dwant in (
+    ("drivers.net.virtio.device", 8),
+    ("drivers.net.virtio.queue", 8),
+    ("drivers.net.virtio.frame", 2048),
+    ("drivers.net.bge.device", 8),
+    ("drivers.net.bge.queue", 8),
+    ("drivers.net.bge.frame", 2048),
+    ("drivers.net.sim.device", 4),
+    ("drivers.net.sim.queue", 8),
+    ("drivers.net.sim.frame", 2048),
+    ("drivers.net.tap.device", 2),
+    ("drivers.net.tap.frame", 2048),
+):
+    _dat = _limits.find(_dname)
+    if _dat < 0:
+        raise RuntimeError("no %s knob" % _dname)
+    if _limits.soft(_dat) != _dwant or _limits.default(_dat) != _dwant:
+        raise RuntimeError("%s default %r" % (_dname, _limits.soft(_dat)))
+    if _limits.set(_dname, _dwant * 2) != 0 or _limits.soft(_dat) != _dwant * 2:
+        raise RuntimeError("raise %s" % _dname)
+    if _limits.reset(_dname) != 0 or _limits.soft(_dat) != _dwant:
+        raise RuntimeError("reset %s" % _dname)
+_nics = 0
+for _dname in ("drivers.net.virtio.device", "drivers.net.bge.device", "drivers.net.sim.device"):
+    _dat = _limits.find(_dname)
+    if _limits.counted(_dat) != 1:
+        raise RuntimeError("%s does not count its NICs" % _dname)
+    _nics += _limits.used(_dat)
+if _nics == 0:
+    raise RuntimeError("this board got its packs over a NIC")
+print("upy driver nic knobs", _nics)
+
+# Above the driver cards sit the class tables: how many NICs, scanouts,
+# disks, input devices and clocks this board carries at all, whichever card
+# they came from. Each widens a row at a time instead of standing at its
+# ceiling in the image.
+for _dname, _dwant in (
+    ("drivers.net.device", 32),
+    ("drivers.gfx.device", 32),
+    ("drivers.blk.device", 8),
+    ("drivers.input.device", 8),
+    ("drivers.rtc.device", 4),
+    ("drivers.gfx.lfb.device", 4),
+    ("drivers.gfx.lfb.shadow", 1536),
+    ("drivers.blk.virtio.device", 4),
+    ("drivers.input.virtio.device", 4),
+    ("drivers.rtc.sim.device", 4),
+):
+    _dat = _limits.find(_dname)
+    if _dat < 0:
+        raise RuntimeError("no %s knob" % _dname)
+    if _limits.soft(_dat) != _dwant or _limits.default(_dat) != _dwant:
+        raise RuntimeError("%s default %r" % (_dname, _limits.soft(_dat)))
+    if _limits.set(_dname, _dwant * 2) != 0 or _limits.soft(_dat) != _dwant * 2:
+        raise RuntimeError("raise %s" % _dname)
+    if _limits.reset(_dname) != 0 or _limits.soft(_dat) != _dwant:
+        raise RuntimeError("reset %s" % _dname)
+_cnet = _limits.find("drivers.net.device")
+if _limits.counted(_cnet) != 1 or _limits.used(_cnet) < 1:
+    raise RuntimeError("the class table counts every bound NIC")
+print("upy device class knobs", _limits.used(_cnet))
+
+# The image a pack arrives as is a knob now, not a row reserving 64KB for a
+# pack that may never come: the loader owns one allocation of exactly the
+# pack's length, given back when the module unloads. Under a pack's size the
+# load refuses; put the knob back and the same pack lands. The wire race the
+# fetch above retries is retried here the same way.
+if _limits.set("wasmmod.loader.image", 1024) != 0:
+    raise RuntimeError("shrink the loader image knob")
+_refused = False
+try:
+    import pymergetic.wasmmod_examples.mixed as _mixed
+except ImportError:
+    _refused = True
+except OSError:
+    _refused = True
+if not _refused:
+    raise RuntimeError("a pack over the image knob should refuse")
+if _limits.reset("wasmmod.loader.image") != 0:
+    raise RuntimeError("reset the loader image knob")
+_mixed = None
+for _attempt in range(2):
+    try:
+        import pymergetic.wasmmod_examples.mixed as _mixed
+
+        break
+    except (ImportError, OSError) as e:
+        if _attempt == 1:
+            print("upy cdn fetch err", e)
+            raise
+        print("upy cdn fetch retry (image knob)")
+if _mixed is None or _mixed.mixed_answer() != 42:
+    raise RuntimeError("pack once the image knob is back")
+print("upy loader image knob")
 # Late `import pymergetic.metal.process` (and siblings) after CDN configure
 # parks the firmware hook. Cards are already on `m` from the first import.
 cdn.reset()
@@ -292,6 +462,67 @@ if t.registry_find("pymergetic.types.list") is None:
 if t.registry_count() < 12:
     raise RuntimeError("types registry count %r" % (t.registry_count(),))
 print("upy types value loop")
+
+# pymergetic.util.limits (firmware seat): the board's capacities are the same
+# knobs the hosted seats carry, readable and movable from the guest. A board is
+# exactly where this matters — its memory is what the seat found in the memmap,
+# so the number of connections it takes is a decision, not a compile-time one.
+import pymergetic.util.limits as limits
+
+if not limits.ready():
+    raise RuntimeError("limits not ready")
+if limits.count() < 20:
+    raise RuntimeError("limits count %r" % (limits.count(),))
+# The list asked by number, which is how a seat lists its knobs before it
+# knows any of their names: in order, and nothing past the last one.
+_lnames = [limits.name(_k) for _k in range(limits.count())]
+if sorted(_lnames) != _lnames or limits.name(limits.count()) is not None:
+    raise RuntimeError("limits by index %r" % (_lnames,))
+_li = limits.find("net.http.asgi.connection")
+if _li < 0:
+    raise RuntimeError("no asgi connection knob")
+_lwas = limits.soft(_li)
+if limits.set("net.http.asgi.connection", _lwas + 4) != 0 or limits.soft(_li) != _lwas + 4:
+    raise RuntimeError("raise the asgi connection knob")
+if limits.reset("net.http.asgi.connection") != 0 or limits.soft(_li) != _lwas:
+    raise RuntimeError("reset the asgi connection knob")
+_lci = limits.find("console.scrollback")
+_lcwas = limits.soft(_lci)
+if limits.set("console.scrollback", 128) != 0 or limits.soft(_lci) != 128:
+    raise RuntimeError("deepen the console")
+if limits.reset("console.scrollback") != 0 or limits.soft(_lci) != _lcwas:
+    raise RuntimeError("reset the console scrollback")
+print("upy limits knob loop")
+
+# The rooms the bridge builds for a job are knobs on a board too, and a board
+# is where it matters most: the compile workspace used to be reserved in bss
+# whether or not this seat ever compiled anything. Shrink it and the in-kernel
+# C compile refuses; put it back and it compiles again.
+for _rn in ("upy.compile.arena", "upy.cpp.arena", "upy.link.arena", "upy.dump"):
+    _rj = limits.find(_rn)
+    if _rj < 0:
+        raise RuntimeError("no room knob %r" % (_rn,))
+    if limits.soft(_rj) != limits.default(_rj):
+        raise RuntimeError("room knob %r is not at its default" % (_rn,))
+_lri = limits.find("upy.compile.arena")
+# The room a compile gets is the smaller of this knob and the process budget
+# the section above left set (64KB, which no C compile fits), and this test is
+# about the knob: lift the budget over the room for it and put it back after.
+# There is no clearing it — budget_set refuses a cap of 0.
+if proc.budget_set(0, 4 * 1024 * 1024) != 0:
+    raise RuntimeError("lift the process budget")
+if limits.set("upy.compile.arena", 4096) != 0:
+    raise RuntimeError("shrink the compile room")
+if jc.object_compile("int fw_room_probe(void) { return 1; }\n") is not None:
+    raise RuntimeError("a compile in a 4KB room should refuse")
+if limits.reset("upy.compile.arena") != 0 or limits.soft(_lri) != limits.default(_lri):
+    raise RuntimeError("reset the compile room")
+_lrobj = jc.object_compile("int fw_room_probe(void) { return 1; }\n")
+if _lrobj is None or len(_lrobj) < 52:
+    raise RuntimeError("compile once the room is back")
+if proc.budget_set(0, 64 * 1024) != 0:
+    raise RuntimeError("put the process budget back")
+print("upy room knob loop")
 
 if m.display.up() != 0:
     raise RuntimeError("display up")

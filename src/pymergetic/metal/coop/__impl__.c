@@ -428,29 +428,81 @@ static int32_t task_is_terminal(pm_metal_coop_task_t *t) {
         || st == PM_METAL_COOP_ERROR;
 }
 
-/* The one free path: last decrement with dead set. May free `task` (and
- * the coro frame when the coro is auto_free — a coro_create block, coro
- * first member); callers must not touch the task afterwards. */
-static void task_unref(pm_metal_coop_task_t *task) {
-    pm_util_mem_arena_t *arena;
-    pm_metal_coop_coro_t *root;
-    pm_metal_coop_coro_t *frame;
-    if (task == NULL) {
-        return;
-    }
-    if (__atomic_fetch_sub(&task->ring_refs, 1u, __ATOMIC_ACQ_REL) != 1u) {
-        return;
-    }
-    if (__atomic_load_n(&task->dead, __ATOMIC_ACQUIRE) == 0u) {
-        return;
-    }
-    arena = s_arena;
-    root = task->root;
-    frame = (root != NULL && root->auto_free != 0u) ? root : NULL;
+
+/* The dead bit rides in the ref word so that "last ref dropped AND dead"
+ * is one atomic transition instead of two steps with a window between
+ * them. Reading `dead` separately after the decrement let both an owner
+ * and the last ring slot conclude they were last: the slot's decrement
+ * took the count to zero, the owner's mark-dead then set the bit and took
+ * (and dropped) a transient ref of its own, so each side freed the block.
+ * The count only ever holds a handful of refs, so the top bit is free. */
+#define TASK_DEAD_BIT 0x80000000u
+#define TASK_REF_MASK 0x7fffffffu
+
+/* Frees `task` (and the coro frame when the coro is auto_free — a
+ * coro_create block, coro first member); callers must not touch the task
+ * afterwards. Reached from one place only: whoever performs the transition
+ * to "dead with no refs left". */
+static void task_free(pm_metal_coop_task_t *task) {
+    pm_util_mem_arena_t *arena = s_arena;
+    pm_metal_coop_coro_t *root = task->root;
+    pm_metal_coop_coro_t *frame =
+        (root != NULL && root->auto_free != 0u) ? root : NULL;
     pm_util_mem_free(arena, task);
     if (frame != NULL) {
         pm_util_mem_free(arena, frame);
     }
+}
+
+/* Drop one ref; frees when this is the drop that empties a dead task. */
+static void task_unref(pm_metal_coop_task_t *task) {
+    uint32_t was;
+    if (task == NULL) {
+        return;
+    }
+    was = __atomic_fetch_sub(&task->ring_refs, 1u, __ATOMIC_ACQ_REL);
+#if defined(PM_METAL_COOP_REF_DEBUG)
+    /* Catch an imbalance where it happens, not where it corrupts: a drop
+     * on a task with no refs left is an extra release, and it surfaces far
+     * away as a tlsf double free. Declared here rather than through stdio,
+     * which this card does not carry on the firmware seats. */
+    extern int puts(const char *);
+    extern void abort(void);
+    if ((was & TASK_REF_MASK) == 0u) {
+        puts("COOP REF UNDERFLOW: a task ref was dropped twice");
+        abort();
+    }
+#endif
+    /* Both halves of the decision come from the one word, so a mark-dead
+     * running alongside this decrement either set the bit before it (we
+     * free) or after it (that call frees) — never both. */
+    if ((was & TASK_REF_MASK) != 1u || (was & TASK_DEAD_BIT) == 0u) {
+        return;
+    }
+    task_free(task);
+}
+
+/* Take one ref without a ring slot, for a structure that stores a task
+ * pointer of its own (the mutex FIFO). Refs used to count ring slots
+ * only, so a task parked on that FIFO held none: step_task's waiting
+ * path returns without re-pushing and the drainer then drops the slot's
+ * ref, which could be the last one. The block went home while the FIFO
+ * still pointed at it, and the eventual mutex_release pushed a ref onto
+ * freed memory — the second abort in "block already marked as free".
+ * Refused on dead for the same reason push_task_ref is. */
+static int32_t hold_task_ref(pm_metal_coop_task_t *task) {
+    if (task == NULL) {
+        return -1;
+    }
+    if (__atomic_load_n(&task->dead, __ATOMIC_ACQUIRE) != 0u) {
+        return -1;
+    }
+    __atomic_fetch_add(&task->ring_refs, 1u, __ATOMIC_ACQ_REL);
+    if (__atomic_load_n(&task->dead, __ATOMIC_ACQUIRE) != 0u) {
+        task_unref(task);
+        return -1;
+    }
+    return 0;
 }
 
 /* Push one task ref. Returns -1 (and does not push) when the task is
@@ -482,11 +534,14 @@ static int32_t push_task_ref(pm_metal_coop_task_t *task) {
 static void task_mark_dead(pm_metal_coop_task_t *task) {
     uint32_t one = 1u;
     uint32_t old = 0u;
+    uint32_t prev;
     if (task == NULL) {
         return;
     }
-    __atomic_fetch_add(&task->ring_refs, 1u, __ATOMIC_ACQ_REL);
-    /* __atomic_exchange (ptr, &desired, &ret, order), not the _n spelling:
+    /* The advisory flag first, so a pusher or a parker refuses as early as
+     * it can; the word below is what decides the free.
+     *
+     * __atomic_exchange (ptr, &desired, &ret, order), not the _n spelling:
      * the _n forms have no fallback in the vendored TCC's stdatomic.h
      * (upstream 36ff4f5 added load_n/store_n/compare_exchange_n but skipped
      * exchange_n), so TCC parses it as a plain call and the ksweep link
@@ -494,11 +549,17 @@ static void task_mark_dead(pm_metal_coop_task_t *task) {
      * lock xchg; GCC/Clang lower it the same way, and old receives the
      * previous dead bit. */
     __atomic_exchange(&task->dead, &one, &old, __ATOMIC_ACQ_REL);
-    if (old != 0u) {
-        task_unref(task);
-        return;
+    prev = __atomic_fetch_or(&task->ring_refs, TASK_DEAD_BIT,
+        __ATOMIC_ACQ_REL);
+    /* No refs left, and this is the call that made it dead: nobody else
+     * will ever decrement, so the block is ours to free. With refs still
+     * out, the last unref frees it; if the bit was already set, that
+     * earlier call owns the decision. This is what the old transient ref
+     * was for, except that one briefly resurrected a task whose count had
+     * already reached zero, and a concurrent last unref then freed it too. */
+    if ((prev & TASK_REF_MASK) == 0u && (prev & TASK_DEAD_BIT) == 0u) {
+        task_free(task);
     }
-    task_unref(task);
 }
 
 int32_t pm_metal_coop_task_reclaim(pm_metal_coop_task_t *task) {
@@ -524,6 +585,41 @@ int32_t pm_metal_coop_task_detach(pm_metal_coop_task_t *task) {
      * root means "frame is the owner's business" and skips that read.
      * The store is atomic because a concurrent unref on another core may
      * read root the moment its own ref drops. */
+    __atomic_store_n(&task->root, NULL, __ATOMIC_RELEASE);
+    task_mark_dead(task);
+    return 0;
+}
+
+int32_t pm_metal_coop_task_retire(pm_metal_coop_task_t *task) {
+    if (task == NULL) {
+        return -1;
+    }
+    /* Our own task on this core: the caller IS the step, so there is no
+     * epilogue to outlast. */
+    if (task != *current_slot()
+        && __atomic_load_n(&task->running, __ATOMIC_ACQUIRE) != 0u) {
+        /* A runner is inside the step and keeps writing into the frame
+         * after the step function returns (it stores the returned status,
+         * then reads the root for the auto-free retirement). Refuse, and
+         * mutate nothing: the caller retries, and a second call must not
+         * find a task block that the first one already sent home.
+         *
+         * This does NOT wait. The first version spun here for up to a
+         * second, which deadlocked the seat: the waiter is itself a coop
+         * step holding one of four runners, so the very runners that had
+         * to finish those steps were the ones queuing behind it. Refusing
+         * lets the caller park and retry, which is this runtime's posture
+         * everywhere else.
+         *
+         * The check is safe against a step starting right after it: this
+         * face is for a frame whose coro is already terminal, and
+         * step_task returns on a terminal task before it takes `running`.
+         */
+        return -1;
+    }
+    /* Clear the root so no runner reaches the frame again (step_task
+     * returns on a NULL root, and so does the retirement check), then mark
+     * dead so the last ref sends the task block home. */
     __atomic_store_n(&task->root, NULL, __ATOMIC_RELEASE);
     task_mark_dead(task);
     return 0;
@@ -623,6 +719,15 @@ pm_metal_coop_status_t pm_metal_coop_mutex_try_acquire(pm_metal_coop_mutex_t *m,
      * re-check — if owner changed to NULL between our CAS fail and this push,
      * self-claim and proceed without waiting. */
     pm_util_lock_acquire(&m->fifo_lock);
+    /* The FIFO's own ref, held for exactly as long as the FIFO points at
+     * this task (dropped by the self-claim dequeue below, or by the release
+     * that pops it). A dead task is refused a ref and must not be parked at
+     * all: it will never run again, and queueing it would leave the pop
+     * dropping a ref the FIFO never took. */
+    if (hold_task_ref(task) != 0) {
+        pm_util_lock_release(&m->fifo_lock);
+        return PM_METAL_COOP_ERROR;
+    }
     task->mutex_next = NULL;
     if (m->waiters_tail != NULL) {
         m->waiters_tail->mutex_next = task;
@@ -637,6 +742,7 @@ pm_metal_coop_status_t pm_metal_coop_mutex_try_acquire(pm_metal_coop_mutex_t *m,
         /* Self-claimed after re-check: dequeue self from FIFO. */
         pm_metal_coop_task_t *prev = NULL;
         pm_metal_coop_task_t *cur = m->waiters_head;
+        int32_t was_queued = 0;
         while (cur != NULL && cur != task) {
             prev = cur;
             cur = cur->mutex_next;
@@ -650,9 +756,16 @@ pm_metal_coop_status_t pm_metal_coop_mutex_try_acquire(pm_metal_coop_mutex_t *m,
             if (m->waiters_tail == task) {
                 m->waiters_tail = prev;
             }
+            was_queued = 1;
         }
         task->mutex_next = NULL;
         pm_util_lock_release(&m->fifo_lock);
+        /* Only when this call actually took itself off the FIFO does the
+         * FIFO's ref go home here. A concurrent release may have popped
+         * us already, and that pop dropped it. */
+        if (was_queued != 0) {
+            task_unref(task);
+        }
         return PM_METAL_COOP_PENDING;
     }
     pm_util_lock_release(&m->fifo_lock);
@@ -682,7 +795,10 @@ void pm_metal_coop_mutex_release(pm_metal_coop_mutex_t *m) {
     __atomic_store_n(&m->owner, wake, __ATOMIC_RELEASE);
     pm_util_lock_release(&m->fifo_lock);
     if (wake != NULL) {
+        /* the ring's ref first, then drop the FIFO's: dropping first could
+         * free the block between the two calls */
         (void)push_task_ref(wake);
+        task_unref(wake);
     }
 }
 
@@ -693,9 +809,18 @@ static void step_task(pm_metal_coop_task_t *task) {
     }
     if (task->root->status == PM_METAL_COOP_DONE || task->root->status == PM_METAL_COOP_ERROR
         || task->root->status == PM_METAL_COOP_CANCELLED) {
-        /* terminal on arrival (a stale ring slot): the pusher's ref goes
-         * home; when dead, this is also the reclaimer's last drop. */
-        task_unref(task);
+        /* Terminal on arrival (a stale ring slot): nothing to step, and the
+         * ref is NOT ours to drop. Every caller of step_task follows it with
+         * its own task_unref for the slot's ref, so dropping it here too
+         * released one push twice. That let another holder's decrement
+         * become the premature last drop, freeing the block while a slot
+         * still pointed at it — the next drain freed it again and tlsf
+         * aborted the seat with "block already marked as free".
+         *
+         * It needs tasks that finish before they are drained, so a walk
+         * whose compiles all refuse (a lane whose backend rejects every
+         * unit) reproduces it in seconds, while a walk that builds cleanly
+         * almost never does. */
         return;
     }
     uint32_t expected = 0;

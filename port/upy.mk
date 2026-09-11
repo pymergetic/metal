@@ -48,7 +48,10 @@ SRC_UPY_WASMMOD += \
 endif
 SRC_QSTR += $(SRC_UPY_WASMMOD)
 
-CFLAGS += $(CFLAGS_METAL) $(INC) -I$(MPWM_TOP) -I$(BUILD) -I$(PORT_DIR) \
+# µPy tracks headers its own way (mkrules.mk turns each .d into a .P and reads
+# that), and a .d carrying -MP's phony targets is not something that sed
+# survives. So the seat's dep flags stop at this boundary.
+CFLAGS += $(filter-out -MMD -MP,$(CFLAGS_METAL)) $(INC) -I$(MPWM_TOP) -I$(BUILD) -I$(PORT_DIR) \
 	-include $(WASMMOD)/ports/micropython/mpconfig_wasm.h \
 	-DMICROPY_PY_WASM=1 -DMICROPY_PY_WASM_GEN=0 -DMICROPY_PY_WASM_ELF=0 \
 	-DMICROPY_PY_WASM_FULL=0 \
@@ -73,20 +76,28 @@ PM_METAL_PACKS_PY := \
 	$(PM_METAL_SEAT_PY)/catalog_render.py \
 	$(PM_METAL_SEAT_PY)/artifacts.py \
 	$(PM_METAL_SEAT_PY)/openapi.py \
-	$(PM_METAL_SEAT_PY)/metal_packs.py
+	$(PM_METAL_SEAT_PY)/metal_packs.py \
+	$(PM_METAL_SEAT_PY)/metal_repl.py
+
+# The console panel prove is the seat prove for the corner REPL, shared
+# verbatim with the unix and browser seats.
+PM_METAL_CONSOLE_PROVE_PY := $(METAL_DIR)/upy_console_prove.py
 
 $(BUILD)/firmware_upy_src.c: $(PORT_DIR)/upy/firmware_upy_ready.py \
 		$(PORT_DIR)/upy/firmware_upy_cdn.py $(PM_METAL_PACKS_PY) \
+		$(PM_METAL_CONSOLE_PROVE_PY) \
 		$(PORT_DIR)/embed_bytes.py | $(BUILD)
 	python3 $(PORT_DIR)/embed_bytes.py -o $@ \
 		--str pm_metal_firmware_upy_ready_py $(PORT_DIR)/upy/firmware_upy_ready.py \
 		--str pm_metal_firmware_upy_cdn_py $(PORT_DIR)/upy/firmware_upy_cdn.py \
+		--str pm_metal_firmware_upy_console_py $(PM_METAL_CONSOLE_PROVE_PY) \
 		--str pm_metal_seat_package_html_py $(PM_METAL_SEAT_PY)/www/_compiled/package_html.py \
 		--str pm_metal_seat_shell_html_py $(PM_METAL_SEAT_PY)/www/_compiled/shell_html.py \
 		--str pm_metal_seat_catalog_render_py $(PM_METAL_SEAT_PY)/catalog_render.py \
 		--str pm_metal_seat_artifacts_py $(PM_METAL_SEAT_PY)/artifacts.py \
 		--str pm_metal_seat_openapi_py $(PM_METAL_SEAT_PY)/openapi.py \
-		--str pm_metal_seat_metal_packs_py $(PM_METAL_SEAT_PY)/metal_packs.py
+		--str pm_metal_seat_metal_packs_py $(PM_METAL_SEAT_PY)/metal_packs.py \
+		--str pm_metal_seat_metal_repl_py $(PM_METAL_SEAT_PY)/metal_repl.py
 
 $(BUILD)/firmware_upy_src.o: $(BUILD)/firmware_upy_src.c
 	$(CC) $(CFLAGS_METAL) -c -o $@ $<

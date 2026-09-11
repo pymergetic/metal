@@ -1,0 +1,299 @@
+/* Seat pages (Registry + Factory) — panels, live ledgers, the build matrix.
+ *
+ * Loaded on top of site.css by the two seat pages only, so it inherits the one
+ * token palette (tokens.css) and the shell chrome instead of restating them.
+ * The only new value is a failure hue: the shared tokens carry ready/remote/
+ * arch, but no error colour. */
+:root {
+  --seat-fail: #d08770;
+}
+
+.seat-panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem 1.15rem 1.15rem;
+  margin-bottom: 1.25rem;
+}
+.seat-panel > h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+.seat-panel > h2 + .hint {
+  margin-top: 0;
+}
+.seat-panel h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.seat-panel .hint {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 0.35rem 0 0.75rem;
+}
+.seat-panel pre {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin: 0;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.seat-panel details {
+  margin-top: 1rem;
+}
+.seat-panel summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+.seat-panel details > pre {
+  margin-top: 0.5rem;
+}
+
+/* health | capabilities | self, side by side while there is room */
+.seat-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+}
+
+/* one row of controls: checkboxes, selects, text inputs, the action button */
+.seat-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: end;
+  margin: 0.5rem 0 0.85rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.seat-controls label {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+.seat-controls > label:has(input[type="text"]),
+.seat-controls > label:has(select) {
+  flex-direction: column;
+  align-items: start;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+}
+.seat-controls input[type="text"],
+.seat-controls select {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  /* The open dropdown is drawn by the browser, and none of the rules above
+   * reach it: it came up white under the dark chrome. color-scheme is what
+   * the popup follows. */
+  color-scheme: dark;
+}
+/* The list itself, for the browsers that let a page colour it (the rest
+ * take the dark scheme above). A lane the seat cannot emit for is disabled,
+ * and the default disabled grey on the popup's own background was almost
+ * unreadable — muted, not invisible: which lanes are out is information. */
+.seat-controls select option {
+  background: var(--card);
+  color: var(--fg);
+}
+.seat-controls select option:disabled {
+  color: var(--muted);
+}
+.seat-controls input[type="text"] {
+  min-width: 16rem;
+}
+.seat-controls button {
+  appearance: none;
+  background: rgba(61, 156, 253, 0.14);
+  color: var(--fg);
+  border: 1px solid rgba(61, 156, 253, 0.45);
+  border-radius: 6px;
+  padding: 0.4rem 0.85rem;
+  font: inherit;
+  cursor: pointer;
+}
+.seat-controls button:hover:not(:disabled) {
+  background: rgba(61, 156, 253, 0.24);
+}
+.seat-controls button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---- registry ---- */
+.reg-tree {
+  white-space: pre-wrap;
+}
+#reg-modules {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+}
+.gap-btn {
+  text-align: left;
+  background: var(--remote-dim);
+  color: var(--remote);
+  border: 1px solid rgba(201, 162, 39, 0.35);
+  border-radius: 6px;
+  padding: 0.4rem 0.65rem;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+.mod-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.25rem 0 0.85rem;
+}
+.mod-btn {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+}
+.mod-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+#rpc-out {
+  min-height: 1.5rem;
+}
+
+/* ---- factory floor ---- */
+#fx-status {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+#fx-status.busy {
+  color: var(--accent);
+}
+.fx-lane {
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.fx-lane > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+.fx-matrix-wrap {
+  overflow-x: auto;
+}
+table.fx-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+}
+.fx-matrix th,
+.fx-matrix td {
+  text-align: left;
+  padding: 0.3rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.fx-matrix th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.fx-matrix td:first-child {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+}
+.fx-matrix td.ok { color: var(--ready); }
+.fx-matrix td.fail { color: var(--seat-fail); }
+.fx-matrix td.busy { color: var(--remote); }
+.fx-matrix td.idle { color: var(--muted); opacity: 0.6; }
+.fx-matrix td.bytes { color: var(--fg); }
+.fx-dl {
+  font: inherit;
+  font-size: 0.74rem;
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+}
+.fx-dl:hover {
+  border-color: var(--ready);
+  color: var(--ready);
+}
+.fx-board {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+.fx-board-name {
+  min-width: 15rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+.fx-images {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.fx-images .fx-dl {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+}
+#fx-events {
+  max-height: 46vh;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem;
+  font-size: 0.79rem;
+  line-height: 1.55;
+}
+#fx-events .ev {
+  display: flex;
+  gap: 0.75rem;
+}
+#fx-events .ev .k {
+  color: var(--ready);
+  min-width: 8.5em;
+}
+#fx-events .ev .s {
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+#fx-events .ev .b {
+  color: var(--muted);
+}
+#fx-events .ev.fail .k {
+  color: var(--seat-fail);
+}

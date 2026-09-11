@@ -215,7 +215,7 @@ int32_t pm_metal_jit_py_object_compile(
 
     if (!MP_THREAD_GIL_TRYLOCK()) {
         if (errbuf && errbuf_len) snprintf(errbuf, errbuf_len, "object_compile: GIL busy");
-        return -1;
+        return PM_METAL_JIT_PY_BUSY;
     }
 
     mod_qstr = qstr_from_str(module_name);
@@ -275,7 +275,7 @@ int32_t pm_metal_jit_py_object_load(
 
     if (!MP_THREAD_GIL_TRYLOCK()) {
         if (errbuf && errbuf_len) snprintf(errbuf, errbuf_len, "object_load: GIL busy");
-        return -1;
+        return PM_METAL_JIT_PY_BUSY;
     }
 
     mod_qstr = qstr_from_str(module_name);

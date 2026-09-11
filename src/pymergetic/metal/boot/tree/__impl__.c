@@ -130,12 +130,17 @@ void pm_metal_boot_msg_item(int last, int depth, int parent_cont, const char *na
     pm_metal_util_tree_item(last, depth, parent_cont, name, detail);
 }
 
-static void walk(uint32_t surf) {
+/* `closes` says whether the surface ends with the cards: the floor tree prints
+ * its own `ready` node after the walk, so nothing a card draws there is the
+ * last line, while the motd ends on whichever card sorted last. The card gets
+ * that as its `last`, which is what decides `` `-- `` over `+--` and whether
+ * its children still need a bar down the left. */
+static void walk(uint32_t surf, int closes) {
     pm_metal_boot_msg_fn fns[PM_METAL_BOOT_MSG_MAX];
     uint32_t n = collect_surf(surf, fns, PM_METAL_BOOT_MSG_MAX);
     uint32_t i;
     for (i = 0; i < n; i++) {
-        fns[i](0);
+        fns[i](closes && (i + 1u == n));
     }
 }
 
@@ -351,14 +356,16 @@ static void msg_repl(int last) {
     char detail[192];
     const uint32_t n = pm_metal_services_count();
     uint32_t i;
-    (void)last;
-    /* Root: import + the start-all sample. */
+    /* Root: import + the start-all sample. The children hang under it, so the
+     * bar they draw on the left is there exactly while this node is not the
+     * last on the surface. */
+    const int cont = !last;
     snprintf(detail, sizeof(detail),
         "import pymergetic.metal as m" PM_METAL_BOOT_SGR_DIM "  run m.serve() ->"
         " every service" PM_METAL_BOOT_SGR_RST);
-    pm_metal_boot_msg_item(0, 0, 0, "repl", detail);
+    pm_metal_boot_msg_item(last, 0, 0, "repl", detail);
     if (n == 0u) {
-        pm_metal_boot_msg_item(1, 1, 0, "none",
+        pm_metal_boot_msg_item(1, 1, cont, "none",
             PM_METAL_BOOT_SGR_DIM "no service registered" PM_METAL_BOOT_SGR_RST);
         return;
     }
@@ -399,7 +406,7 @@ static void msg_repl(int last) {
                     mod, (unsigned)port);
             }
         }
-        pm_metal_boot_msg_item(is_last, 1, !is_last, name, detail);
+        pm_metal_boot_msg_item(is_last, 1, cont, name, detail);
     }
 }
 
@@ -413,7 +420,7 @@ int32_t pm_metal_boot_tree_print(void) {
     pm_metal_boot_msg_item(0, 0, 0, "pymergetic metal", PM_METAL_BOOT_TREE_VERSION);
     pm_metal_boot_msg_line(PM_METAL_BOOT_SGR_DIM "|" PM_METAL_BOOT_SGR_RST);
     pm_metal_boot_msg_item(0, 0, 0, "arch", seat != NULL ? seat : "host");
-    walk(PM_METAL_BOOT_SURF_TREE);
+    walk(PM_METAL_BOOT_SURF_TREE, 0);
     if (s_nfail == 0u) {
         pm_metal_boot_msg_item(1, 0, 0, "ready", "ok");
     } else {
@@ -436,7 +443,7 @@ void pm_metal_boot_motd(void) {
         PM_METAL_BOOT_SGR_RST, PM_METAL_BOOT_SGR_OK, PM_METAL_BOOT_TREE_VERSION,
         PM_METAL_BOOT_SGR_RST, seat);
     pm_metal_boot_msg_line(title);
-    walk(PM_METAL_BOOT_SURF_MOTD);
+    walk(PM_METAL_BOOT_SURF_MOTD, 1);
 }
 
 /* Portable ~1s busy-wait for the shutdown/reboot countdown. No POSIX

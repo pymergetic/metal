@@ -27,7 +27,7 @@ static void tcp_emit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data
     pm_ip_write_be32(pkt + 28, s->rcv_nxt);
     pkt[32] = 0x50;
     pkt[33] = flags;
-    uint32_t wnd = PM_METAL_IP_RX_MAX - s->rx_len; /* advertise real room */
+    uint32_t wnd = s->rx_cap - s->rx_len; /* advertise real room */
     pm_ip_write_be16(pkt + 34, wnd > 0xffffu ? 0xffffu : (uint16_t)wnd);
     if (dlen != 0 && data != NULL) {
         memcpy(pkt + 40, data, dlen);
@@ -43,7 +43,7 @@ void pm_ip_tcp_xmit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data,
     }
     s->snd_nxt += dlen;
     tcp_emit(s, flags, data, dlen, seq);
-    if (dlen != 0 && dlen <= PM_METAL_IP_REXMIT_MAX && s->snd_una < s->snd_nxt) {
+    if (dlen != 0 && dlen <= s->rexmit_cap && s->snd_una < s->snd_nxt) {
         memcpy(s->rexmit, data, dlen);
         s->rexmit_len = dlen;
         s->rexmit_seq = seq;
@@ -55,9 +55,9 @@ void pm_ip_tcp_xmit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data,
 void pm_ip_tcp_check_timeouts(void) {
     uint64_t now = pm_metal_coop_mono_us();
     uint32_t i;
-    for (i = 0; i < PM_METAL_IP_SOCK_MAX; i++) {
-        struct pm_metal_sock *s = &pm_ip_sk[i];
-        if (!s->used || s->kind != SK_TCP || s->rexmit_len == 0) {
+    for (i = 0; i < pm_ip_sk_cap; i++) {
+        struct pm_metal_sock *s = pm_ip_sk[i];
+        if (s == NULL || s->kind != SK_TCP || s->rexmit_len == 0) {
             continue;
         }
         if (now < s->rexmit_at) {
@@ -69,18 +69,31 @@ void pm_ip_tcp_check_timeouts(void) {
 }
 
 static void tcp_queue_accept(struct pm_metal_sock *ls, int32_t child) {
-    if (ls->accept_n < PM_METAL_IP_ACCEPT_MAX) {
+    struct pm_metal_sock *c = pm_ip_sock_at(child);
+    if (c == NULL) {
+        return;
+    }
+    if (ls->accept_q != NULL && ls->accept_n < ls->accept_cap) {
         ls->accept_q[ls->accept_n++] = child;
         pm_ip_sock_wake(ls);
+        return;
     }
+    /* Full. This handshake is already complete, so saying nothing leaves the
+     * peer holding a connection that is up and will never be answered — it
+     * waits out its own timeout and reports an empty reply, which is how a
+     * page load lost a script. Reset it instead: the peer learns now and can
+     * come back, and the slot does not sit used for a child no accept() will
+     * ever be handed. */
+    pm_ip_tcp_xmit(c, (uint8_t)(TCP_RST | TCP_ACK), NULL, 0);
+    pm_ip_sock_drop(child);
 }
 
 static struct pm_metal_sock *tcp_find(uint32_t src, uint16_t sport, uint32_t dst, uint16_t dport) {
     uint32_t i;
     struct pm_metal_sock *listen = NULL;
-    for (i = 0; i < PM_METAL_IP_SOCK_MAX; i++) {
-        struct pm_metal_sock *s = &pm_ip_sk[i];
-        if (!s->used || s->kind != SK_TCP) {
+    for (i = 0; i < pm_ip_sk_cap; i++) {
+        struct pm_metal_sock *s = pm_ip_sk[i];
+        if (s == NULL || s->kind != SK_TCP) {
             continue;
         }
         if (s->tcp_st == TCP_LISTEN && s->lport == dport) {
@@ -116,6 +129,17 @@ void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thl
     if (s == NULL) {
         return;
     }
+    /* A reset ends this connection now. Ignoring it left the socket sitting in
+     * ESTAB with a peer that is gone: a reader parked forever, a sender firing
+     * into nothing. Report it the way a closed peer is reported — readers get
+     * the end of the stream once what already arrived is drained, senders an
+     * error — and wake whoever was waiting. */
+    if ((flags & TCP_RST) != 0 && s->tcp_st != TCP_LISTEN) {
+        s->peer_fin = 1;
+        s->tcp_st = TCP_CLOSE_WAIT;
+        pm_ip_sock_wake(s);
+        return;
+    }
     if ((flags & TCP_ACK) != 0 && ack > s->snd_una && ack <= s->snd_nxt) {
         s->snd_una = ack;
         if (s->rexmit_len != 0 && s->snd_una >= s->rexmit_seq + s->rexmit_len) {
@@ -145,7 +169,10 @@ void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thl
         if (cfd < 0) {
             return;
         }
-        struct pm_metal_sock *c = &pm_ip_sk[cfd];
+        struct pm_metal_sock *c = pm_ip_sock_at(cfd);
+        if (c == NULL) {
+            return;
+        }
         c->bound = 1;
         c->l2_h = s->l2_h;
         c->laddr_be = s->laddr_be;
@@ -157,7 +184,7 @@ void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thl
         c->snd_una = c->iss;
         c->rcv_nxt = seq + 1u;
         c->tcp_st = TCP_SYN_RCVD;
-        c->listen_fd = (int32_t)(s - pm_ip_sk);
+        c->listen_fd = s->self_fd;
         pm_ip_tcp_xmit(c, (uint8_t)(TCP_SYN | TCP_ACK), NULL, 0);
         return;
     }
@@ -173,7 +200,10 @@ void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thl
         s->tcp_st = TCP_ESTAB;
         s->snd_una = s->snd_nxt;
         if (s->listen_fd >= 0) {
-            tcp_queue_accept(&pm_ip_sk[s->listen_fd], (int32_t)(s - pm_ip_sk));
+            struct pm_metal_sock *ls = pm_ip_sock_at(s->listen_fd);
+            if (ls != NULL) {
+                tcp_queue_accept(ls, s->self_fd);
+            }
         }
         return;
     }
@@ -183,7 +213,7 @@ void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thl
                 pm_ip_tcp_xmit(s, TCP_ACK, NULL, 0);
                 return;
             }
-            uint32_t room = PM_METAL_IP_RX_MAX - s->rx_len;
+            uint32_t room = s->rx_cap - s->rx_len;
             uint32_t n = dlen < room ? dlen : room;
             memcpy(s->rx + s->rx_len, data, n);
             s->rx_len += n;

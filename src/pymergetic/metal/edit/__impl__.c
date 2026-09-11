@@ -4,6 +4,7 @@
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/metal/build/__types__.h"
 #include "pymergetic/metal/fs/__exports__.h"
+#include "pymergetic/util/limits.h"
 #include "pymergetic/util/mem.h"
 
 #include <stdio.h>
@@ -23,6 +24,54 @@
  *
  * Everything else (comments, includes, other directives, statics) is span
  * noise the parse skips: the editor never edits what it cannot address. */
+
+/* The seat's arena, so a typecheck can borrow its scratch instead of a
+ * megabyte-sized static sitting in every image whether this seat ever edits
+ * anything or not. */
+static pm_util_mem_arena_t *s_arena;
+
+PM_UTIL_LIMIT_C(pm_edit_limit_node, "edit.node", PM_METAL_EDIT_NODES_DEFAULT, 0u, NULL);
+PM_UTIL_LIMIT_C(pm_edit_limit_source, "edit.source", PM_METAL_EDIT_SRC_DEFAULT,
+    16u * 1024u * 1024u, NULL);
+PM_UTIL_LIMIT_C(pm_edit_limit_typecheck, "edit.typecheck",
+    PM_METAL_EDIT_TYPECHECK_DEFAULT, 512u * 1024u * 1024u, NULL);
+
+static uint32_t limit_now(const pm_util_limit_t *knob) {
+    return knob->soft != 0u ? knob->soft : knob->dflt;
+}
+
+/* One more node for the parse, from the arena, while edit.node allows it. */
+static pm_metal_edit_node_t *node_push(pm_util_mem_arena_t *arena,
+    pm_metal_edit_tree_t *tree) {
+    pm_metal_edit_node_t *n;
+    if (tree->n_nodes >= tree->cap_nodes) {
+        uint32_t cap = tree->cap_nodes;
+        pm_metal_edit_node_t *grown = pm_util_limits_grow(arena, tree->nodes, &cap,
+            (uint32_t)sizeof(*tree->nodes), &pm_edit_limit_node);
+        if (grown == NULL || cap <= tree->n_nodes) {
+            snprintf(tree->error, sizeof(tree->error),
+                "parse_c: no room for node %u (edit.node is %u)",
+                (unsigned)tree->n_nodes + 1u, (unsigned)pm_edit_limit_node.soft);
+            return NULL;
+        }
+        tree->nodes = grown;
+        tree->cap_nodes = cap;
+    }
+    n = &tree->nodes[tree->n_nodes++];
+    memset(n, 0, sizeof(*n));
+    return n;
+}
+
+void pm_metal_edit_tree_release(pm_util_mem_arena_t *arena,
+    pm_metal_edit_tree_t *tree) {
+    if (tree == NULL) {
+        return;
+    }
+    if (arena != NULL && tree->nodes != NULL) {
+        pm_util_mem_free(arena, tree->nodes);
+    }
+    memset(tree, 0, sizeof(*tree));
+}
 
 static uint32_t line_of(const char *s, uint32_t off) {
     uint32_t line = 1;
@@ -79,18 +128,19 @@ static uint32_t match_paren(const char *s, size_t len, uint32_t off) {
     return (uint32_t)-1;
 }
 
-int32_t pm_metal_edit_parse_c(pm_metal_edit_tree_t *tree,
-    const char *source, size_t source_len) {
+int32_t pm_metal_edit_parse_c(pm_util_mem_arena_t *arena,
+    pm_metal_edit_tree_t *tree, const char *source, size_t source_len) {
     size_t len;
     uint32_t i = 0;
-    if (tree == NULL || source == NULL) {
+    if (tree == NULL || source == NULL || arena == NULL) {
         return PM_METAL_EDIT_ERR_ARGS;
     }
     memset(tree, 0, sizeof(*tree));
     len = source_len != 0 ? source_len : strlen(source);
-    if (len == 0 || len > PM_METAL_EDIT_SRC_MAX) {
+    if (len == 0 || len > limit_now(&pm_edit_limit_source)) {
         snprintf(tree->error, sizeof(tree->error),
-            "parse_c: source empty or too large (%zu)", len);
+            "parse_c: source empty or past edit.source (%zu of %u)", len,
+            (unsigned)limit_now(&pm_edit_limit_source));
         return PM_METAL_EDIT_ERR_ARGS;
     }
     tree->src = source;
@@ -117,13 +167,10 @@ int32_t pm_metal_edit_parse_c(pm_metal_edit_tree_t *tree,
                 while (ne < le && is_id_char(source[ne])) {
                     ne++;
                 }
-                if (tree->n_nodes >= PM_METAL_EDIT_NODES_MAX) {
-                    snprintf(tree->error, sizeof(tree->error),
-                        "parse_c: too many nodes (max %u)",
-                        (unsigned)PM_METAL_EDIT_NODES_MAX);
+                n = node_push(arena, tree);
+                if (n == NULL) {
                     return PM_METAL_EDIT_ERR_NOMEM;
                 }
-                n = &tree->nodes[tree->n_nodes++];
                 n->kind = PM_METAL_EDIT_DEFINE;
                 snprintf(n->name, sizeof(n->name), "%.*s",
                     (int)(ne - ns), source + ns);
@@ -259,16 +306,10 @@ int32_t pm_metal_edit_parse_c(pm_metal_edit_tree_t *tree,
                                 q++;
                             }
                             if (depth == 0) {
-                                pm_metal_edit_node_t *n;
-                                if (tree->n_nodes
-                                    >= PM_METAL_EDIT_NODES_MAX) {
-                                    snprintf(tree->error,
-                                        sizeof(tree->error),
-                                        "parse_c: too many nodes (max %u)",
-                                        (unsigned)PM_METAL_EDIT_NODES_MAX);
+                                pm_metal_edit_node_t *n = node_push(arena, tree);
+                                if (n == NULL) {
                                     return PM_METAL_EDIT_ERR_NOMEM;
                                 }
-                                n = &tree->nodes[tree->n_nodes++];
                                 n->kind = PM_METAL_EDIT_FN;
                                 snprintf(n->name, sizeof(n->name), "%.*s",
                                     (int)(id_end - id_start),
@@ -323,7 +364,7 @@ static int32_t splice(pm_util_mem_arena_t *arena, const char *source,
         return PM_METAL_EDIT_ERR_ARGS;
     }
     total = source_len - remove_len + ilen;
-    if (total >= PM_METAL_EDIT_SRC_MAX) {
+    if (total >= limit_now(&pm_edit_limit_source)) {
         return PM_METAL_EDIT_ERR_NOMEM;
     }
     buf = (char *)pm_util_mem_alloc(arena, total + 1u);
@@ -399,18 +440,15 @@ int32_t pm_metal_edit_set_fn_body(pm_util_mem_arena_t *arena,
 
 int32_t pm_metal_edit_typecheck_c(const char *source, size_t source_len,
     char *errbuf, size_t errbuf_len) {
-    /* static backing: the arena carries the whole in-arena TCC compile
-     * (jit.c's arena reallocator routes the compiler's pools and tables
-     * here too), and one typecheck runs at a time (the editor flow is
-     * sequential by contract). Firmware links this card and has no
-     * malloc — 2MB covers the small typecheck sources (the tccpp pools
-     * are 2 x 256KB); non-firmware seats get the full 32MB budget. */
-#if defined(PM_METAL_FIRMWARE)
-    static uint8_t backing[2u * 1024u * 1024u];
-#else
-    static uint8_t backing[32u * 1024u * 1024u];
-#endif
+    /* The scratch the in-arena TCC compile runs in (jit.c's arena
+     * reallocator routes the compiler's pools and tables through it too).
+     * It is borrowed from the seat for this one compile and given straight
+     * back: a typecheck is a moment, and the seat that never edits anything
+     * should not be carrying the room for one. One runs at a time — the
+     * editor flow is sequential by contract — so there is one block. */
+    uint32_t span = limit_now(&pm_edit_limit_typecheck);
     pm_util_mem_arena_t *arena;
+    uint8_t *block;
     uint8_t *obj = NULL;
     size_t obj_len = 0;
     int32_t rc;
@@ -420,13 +458,30 @@ int32_t pm_metal_edit_typecheck_c(const char *source, size_t source_len,
         }
         return PM_METAL_EDIT_ERR_ARGS;
     }
-    arena = pm_util_mem_arena_create(backing, sizeof(backing));
+    if (s_arena == NULL) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "typecheck: the card has no arena yet");
+        }
+        return PM_METAL_EDIT_ERR_NOMEM;
+    }
+    block = pm_util_mem_alloc(s_arena, span);
+    if (block == NULL) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len,
+                "typecheck: the seat would not lend %u bytes (edit.typecheck)",
+                (unsigned)span);
+        }
+        return PM_METAL_EDIT_ERR_NOMEM;
+    }
+    arena = pm_util_mem_arena_create(block, span);
     if (arena == NULL) {
+        pm_util_mem_free(s_arena, block);
         return PM_METAL_EDIT_ERR_NOMEM;
     }
     rc = pm_metal_jit_c_object_compile(arena, source, source_len,
         &obj, &obj_len, errbuf, errbuf_len);
     pm_util_mem_arena_destroy(arena);
+    pm_util_mem_free(s_arena, block);
     if (rc != 0) {
         return PM_METAL_EDIT_ERR_TYPECHECK;
     }
@@ -470,10 +525,24 @@ int32_t pm_metal_edit_write_back(const char *target, const char *path,
     return PM_METAL_EDIT_OK;
 }
 
+static int32_t pm_metal_edit_init(pm_util_mem_arena_t *arena) {
+    if (arena == NULL) {
+        return -1;
+    }
+    s_arena = arena;
+    return 0;
+}
+
+static void pm_metal_edit_deinit(void) {
+    s_arena = NULL;
+}
+
 #include "pymergetic/wasmmod/guest.h"
 
 PM_MOD_EXPORT_C(pymergetic.metal.edit, pm_metal_edit_parse_c, pm_metal_edit_parse_c,
-    int32_t(pm_metal_edit_tree_t *, const char *, size_t));
+    int32_t(pm_util_mem_arena_t *, pm_metal_edit_tree_t *, const char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.edit, pm_metal_edit_tree_release, pm_metal_edit_tree_release,
+    void(pm_util_mem_arena_t *, pm_metal_edit_tree_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.edit, pm_metal_edit_locate, pm_metal_edit_locate,
     const pm_metal_edit_node_t *(const pm_metal_edit_tree_t *,
         pm_metal_edit_kind_t, const char *));
@@ -488,3 +557,5 @@ PM_MOD_EXPORT_C(pymergetic.metal.edit, pm_metal_edit_typecheck_c, pm_metal_edit_
 PM_MOD_EXPORT_C(pymergetic.metal.edit, pm_metal_edit_write_back, pm_metal_edit_write_back,
     int32_t(const char *, const char *, const char *, size_t,
         char *, size_t));
+
+PM_MOD_BOOT_C(pymergetic.metal.edit, pm_metal_edit_init, pm_metal_edit_deinit);

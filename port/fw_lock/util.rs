@@ -1,3 +1,5 @@
+#[path = "../../../wasmmod/src/pymergetic/util/limits.rs"]
+pub mod limits;
 #[path = "../../../wasmmod/src/pymergetic/util/lock.rs"]
 pub mod lock;
 #[path = "../../../wasmmod/src/pymergetic/util/lz4/__impl__.rs"]

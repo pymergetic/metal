@@ -1,0 +1,64 @@
+{% args d %}
+<section class="hero">
+  <p class="eyebrow">seat</p>
+  <h1>Factory</h1>
+  <p class="lede">
+    The build card's live face: every discovered unit, its per-lane state from
+    the event ring, and the in-kernel walk. Same faces on every seat — only the
+    fill differs, so a seat without an ELF loader refuses the rebuild instead of
+    hiding the pane.
+  </p>
+</section>
+
+<section class="seat-panel">
+  <h2>Walk</h2>
+  <p class="hint">Units compile one per coop quantum. The two jobs are separate:
+    <b>rebuild</b> compiles for this seat's own arch and links the result into
+    the running process, so it is offered for that arch alone; <b>produce</b>
+    emits objects to download for any arch the seat can emit — including its
+    own — and never touches what is running.</p>
+  <div class="seat-controls">
+    <button type="button" id="fx-build-all">REBUILD THIS SEAT</button>
+    <span id="fx-status">idle</span>
+  </div>
+  <div class="seat-controls">
+    <label for="fx-target">produce for
+      <!-- filled from /build's lane list: a lane is offered when the seat has
+           a backend that emits that arch, which for the seat's own arch is the
+           native one — no cross instance needed -->
+      <select id="fx-target"></select>
+    </label>
+    <button type="button" id="fx-produce">PRODUCE OBJECTS</button>
+  </div>
+  <div class="fx-lane"><i id="fx-lane-fill"></i></div>
+</section>
+
+<section class="seat-panel">
+  <h2>Units</h2>
+  <div class="fx-matrix-wrap">
+    <table class="fx-matrix" id="fx-matrix">
+      <thead>
+        <tr><th>unit</th><th>impl</th><th>sources</th><th>status</th><th>last object</th><th>download</th></tr>
+      </thead>
+      <tbody id="fx-rows"></tbody>
+    </table>
+  </div>
+  <p id="fx-count" class="hint"></p>
+  <p class="hint">A build's objects are kept in a bounded cache, so
+    <code>download</code> appears only while this seat still holds the bytes —
+    rebuild a unit to get them back.</p>
+</section>
+
+<section class="seat-panel">
+  <h2>Images</h2>
+  <p class="hint">The whole binary: what the host build linked for each board,
+    from <code>/images</code>. Grouped by board; click a file to download it —
+    served in windows and stitched by this page.</p>
+  <div id="fx-images" class="fx-images"></div>
+</section>
+
+<section class="seat-panel">
+  <h2>Event stream</h2>
+  <p class="hint">1 Hz tail of the ring — <code>/build/events?since=</code>.</p>
+  <div id="fx-events"></div>
+</section>

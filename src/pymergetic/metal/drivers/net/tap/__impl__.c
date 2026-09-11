@@ -5,6 +5,8 @@
 #include "pymergetic/metal/dt.h"
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/net/ip.h"
+#include "pymergetic/util/limits/__types__.h"
+#include "pymergetic/util/mem.h"
 
 #include <string.h>
 
@@ -17,19 +19,55 @@
 #include <unistd.h>
 #endif
 
-#define TAP_MAX 2u
+/* The kernel holds this NIC's queue, so a tap row costs one frame to read
+ * into — taken when the NIC attaches, at the size the frame knob says. */
+#define TAP_DEVICE_DEFAULT 2u
+#define TAP_FRAME_DEFAULT 2048u
 
 struct tap_nic {
     uint32_t used;
     int fd;
     uint8_t mac[6];
+    uint8_t *rx;
+    uint32_t qframe;
+    uint32_t unit;
     int32_t dt_id;
     int32_t net_h;
     pm_metal_netdev_ops_t ops;
+    struct tap_nic *next;
 };
 
 static pm_util_mem_arena_t *s_arena;
-static struct tap_nic s_dev[TAP_MAX];
+/* One row per NIC, taken when it attaches and kept for the seat. The netdev
+ * core holds each row's address as its ops ctx, so rows are linked, never
+ * moved. */
+static struct tap_nic *s_head;
+static uint32_t s_dev_used;
+
+PM_UTIL_LIMIT_C(pm_metal_net_tap_limit_device, "drivers.net.tap.device",
+    TAP_DEVICE_DEFAULT, 0u, &s_dev_used);
+PM_UTIL_LIMIT_C(pm_metal_net_tap_limit_frame, "drivers.net.tap.frame",
+    TAP_FRAME_DEFAULT, 0u, NULL);
+
+/* The frame this NIC reads into, at the size the knob says now. Kept across a
+ * close/attach cycle when it already matches. */
+static int32_t tap_frame_fit(struct tap_nic *d) {
+    uint32_t qframe = pm_metal_net_tap_limit_frame.soft;
+    uint8_t *rx;
+    if (qframe == 0u) {
+        qframe = pm_metal_net_tap_limit_frame.dflt;
+    }
+    if (d->rx != NULL && d->qframe == qframe) {
+        return 0;
+    }
+    rx = pm_util_mem_alloc(s_arena, qframe);
+    if (rx == NULL) {
+        return -1;
+    }
+    d->rx = rx;
+    d->qframe = qframe;
+    return 0;
+}
 
 static int32_t tap_open(void *ctx) {
     struct tap_nic *d = ctx;
@@ -71,6 +109,9 @@ static void tap_close(void *ctx) {
     }
 #endif
     d->fd = -1;
+    if (d->used != 0 && s_dev_used != 0) {
+        s_dev_used--;
+    }
     d->used = 0;
     d->dt_id = -1;
     d->net_h = -1;
@@ -105,25 +146,54 @@ static int32_t tap_tx(void *ctx, const uint8_t *frame, uint16_t len) {
 static int32_t tap_poll(void *ctx) {
     struct tap_nic *d = ctx;
 #if defined(__linux__) && !defined(PM_METAL_FIRMWARE)
-    uint8_t buf[2048];
     ssize_t n;
-    if (d == NULL || d->fd < 0) {
+    if (d == NULL || d->fd < 0 || d->rx == NULL) {
         return 0;
     }
-    n = read(d->fd, buf, sizeof(buf));
+    n = read(d->fd, d->rx, d->qframe);
     if (n <= 0) {
         return 0;
     }
     (void)errno;
-    return pm_metal_net_ip_rx_from(d->net_h, buf, (uint16_t)n);
+    return pm_metal_net_ip_rx_from(d->net_h, d->rx, (uint16_t)n);
 #else
     (void)d;
     return 0;
 #endif
 }
 
+/* A row for one more NIC: a closed one first, then a fresh one. Either way
+ * the device knob says whether this card may offer another NIC at all — a
+ * closed row is one this card already paid for, not a free pass over the
+ * knob. NULL when it is already offering every NIC it may. */
+static struct tap_nic *tap_row(void) {
+    struct tap_nic *d = s_head;
+    uint32_t rows = 0;
+    if (!PM_UTIL_LIMIT_ROOM(pm_metal_net_tap_limit_device, s_dev_used)) {
+        return NULL;
+    }
+    while (d != NULL) {
+        if (!d->used) {
+            return d;
+        }
+        rows++;
+        d = d->next;
+    }
+    d = pm_util_mem_alloc(s_arena, sizeof(*d));
+    if (d == NULL) {
+        return NULL;
+    }
+    memset(d, 0, sizeof(*d));
+    d->unit = rows;
+    d->fd = -1;
+    d->dt_id = -1;
+    d->net_h = -1;
+    d->next = s_head;
+    s_head = d;
+    return d;
+}
+
 static int32_t tap_attach(uint32_t unit) {
-    uint32_t i;
     struct tap_nic *d;
     int32_t dt;
     if (s_arena == NULL) {
@@ -133,83 +203,83 @@ static int32_t tap_attach(uint32_t unit) {
     if (dt < 0) {
         return -1;
     }
-    for (i = 0; i < TAP_MAX; i++) {
-        if (s_dev[i].used && s_dev[i].dt_id == dt) {
-            return s_dev[i].net_h;
+    for (d = s_head; d != NULL; d = d->next) {
+        if (d->used && d->dt_id == dt) {
+            return d->net_h;
         }
     }
-    for (i = 0; i < TAP_MAX; i++) {
-        if (s_dev[i].used) {
-            continue;
-        }
-        d = &s_dev[i];
-        memset(d, 0, sizeof(*d));
-        d->used = 1;
-        d->fd = -1;
-        d->mac[0] = 0x02;
-        d->mac[5] = (uint8_t)(0x01u + i);
-        d->ops.open = tap_open;
-        d->ops.close = tap_close;
-        d->ops.mac = tap_mac;
-        d->ops.tx = tap_tx;
-        d->ops.poll = tap_poll;
-        d->ops.ctx = d;
-        d->dt_id = dt;
-        d->net_h = pm_metal_drivers_net_bind(dt, &d->ops);
-        if (d->net_h < 0) {
-            d->used = 0;
-            return -1;
-        }
-        return d->net_h;
+    d = tap_row();
+    if (d == NULL) {
+        return -1;
     }
-    return -1;
+    if (tap_frame_fit(d) != 0) {
+        return -1;
+    }
+    d->fd = -1;
+    d->mac[0] = 0x02;
+    d->mac[5] = (uint8_t)(0x01u + d->unit);
+    d->ops.open = tap_open;
+    d->ops.close = tap_close;
+    d->ops.mac = tap_mac;
+    d->ops.tx = tap_tx;
+    d->ops.poll = tap_poll;
+    d->ops.ctx = d;
+    d->dt_id = dt;
+    d->used = 1;
+    d->net_h = pm_metal_drivers_net_bind(dt, &d->ops);
+    if (d->net_h < 0) {
+        d->used = 0;
+        return -1;
+    }
+    s_dev_used++;
+    return d->net_h;
 }
 
 int32_t pm_metal_drivers_net_tap_init(pm_util_mem_arena_t *arena) {
-    uint32_t i;
     if (arena == NULL) {
         return -1;
     }
     s_arena = arena;
-    memset(s_dev, 0, sizeof(s_dev));
-    for (i = 0; i < TAP_MAX; i++) {
-        s_dev[i].fd = -1;
-    }
+    /* Rows came from the arena the last run was given; this one may be a
+     * different arena, so the chain starts empty. */
+    s_head = NULL;
+    s_dev_used = 0;
     return 0;
 }
 
 void pm_metal_drivers_net_tap_deinit(void) {
-    uint32_t i;
 #if defined(__linux__) && !defined(PM_METAL_FIRMWARE)
-    for (i = 0; i < TAP_MAX; i++) {
-        if (s_dev[i].fd >= 0) {
-            close(s_dev[i].fd);
+    struct tap_nic *d;
+    for (d = s_head; d != NULL; d = d->next) {
+        if (d->fd >= 0) {
+            close(d->fd);
+            d->fd = -1;
         }
     }
-#else
-    (void)i;
 #endif
-    memset(s_dev, 0, sizeof(s_dev));
+    s_head = NULL;
+    s_dev_used = 0;
     s_arena = NULL;
 }
 
 int32_t pm_metal_drivers_net_tap_probe(void) {
-    uint32_t i;
-    for (i = 0; i < TAP_MAX; i++) {
-        if (!s_dev[i].used) {
-            return tap_attach(i);
+    struct tap_nic *d;
+    uint32_t unit = 0;
+    for (d = s_head; d != NULL; d = d->next) {
+        if (d->used) {
+            unit++;
         }
     }
-    return -1;
+    return tap_attach(unit);
 }
 
 int32_t pm_metal_drivers_net_tap_up(void) {
-    uint32_t i;
+    struct tap_nic *d;
     if (s_arena == NULL) {
         return -1;
     }
-    for (i = 0; i < TAP_MAX; i++) {
-        if (s_dev[i].used) {
+    for (d = s_head; d != NULL; d = d->next) {
+        if (d->used) {
             return 0;
         }
     }
@@ -217,10 +287,10 @@ int32_t pm_metal_drivers_net_tap_up(void) {
 }
 
 int32_t pm_metal_drivers_net_tap_fd(void) {
-    uint32_t i;
-    for (i = 0; i < TAP_MAX; i++) {
-        if (s_dev[i].used && s_dev[i].fd >= 0) {
-            return s_dev[i].fd;
+    struct tap_nic *d;
+    for (d = s_head; d != NULL; d = d->next) {
+        if (d->used && d->fd >= 0) {
+            return d->fd;
         }
     }
     return -1;

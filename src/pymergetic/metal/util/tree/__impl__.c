@@ -108,59 +108,23 @@ void pm_metal_util_tree_paint_detail(char *dst, unsigned cap, const char *detail
 
 void pm_metal_util_tree_item(int last, int depth, int parent_cont, const char *name,
     const char *detail) {
-    char line[PM_METAL_UTIL_TREE_LINE];
-    char painted[160];
-    unsigned nlen = 0;
-    const char *br = last ? "`--" : "+--";
-    if (name == NULL) {
-        name = "?";
-    }
-    while (name[nlen] != 0) {
-        nlen++;
-    }
-    pm_metal_util_tree_paint_detail(painted, sizeof(painted), detail);
-
-    if (depth <= 0) {
-        /* Root line: `<dim>+-- <name>[ pad][ <detail>]`. */
-        if (detail != NULL && detail[0] != 0 && nlen < PM_METAL_UTIL_TREE_NAME_PAD) {
-            char padded[PM_METAL_UTIL_TREE_NAME_PAD + 1];
-            unsigned p;
-            for (p = 0; p < PM_METAL_UTIL_TREE_NAME_PAD; p++) {
-                padded[p] = (p < nlen) ? name[p] : ' ';
-            }
-            padded[PM_METAL_UTIL_TREE_NAME_PAD] = 0;
-            snprintf(line, sizeof(line), "%s%s %s%s%s", PM_METAL_UTIL_TREE_SGR_DIM, br,
-                padded, PM_METAL_UTIL_TREE_SGR_RST, painted);
-        } else if (detail != NULL && detail[0] != 0) {
-            snprintf(line, sizeof(line), "%s%s %s %s%s", PM_METAL_UTIL_TREE_SGR_DIM, br,
-                name, PM_METAL_UTIL_TREE_SGR_RST, painted);
-        } else {
-            snprintf(line, sizeof(line), "%s%s %s%s", PM_METAL_UTIL_TREE_SGR_DIM, br,
-                name, PM_METAL_UTIL_TREE_SGR_RST);
-        }
-        pm_metal_util_tree_line(line);
-        return;
-    }
-
-    /* Depth >= 1: `depth` stem segments then the branch. The deepest stem is
+    /* `depth` stem segments then the branch. The deepest stem is
      * parent_cont ? "|   " : "    "; every shallower ancestor is assumed to
-     * continue (it has deeper siblings along this path). depth 1 and 2 emit
-     * exactly what the boot tree rendered before (dim pad br name rst painted),
-     * so its lines are unchanged; deeper depths now draw correct bars too. */
-    {
-        char stems[PM_METAL_UTIL_TREE_LINE];
-        unsigned n = 0;
-        unsigned i;
-        for (i = 0; i < (unsigned)depth; i++) {
-            const char *seg = (i + 1u == (unsigned)depth && !parent_cont) ? "    " : "|   ";
-            unsigned k;
-            for (k = 0; seg[k] != 0 && n + 3u < (unsigned)sizeof(stems); k++) {
-                stems[n++] = seg[k];
-            }
+     * continue (it has deeper siblings along this path). Depth 0 is the same
+     * line with no stems at all, so it goes through the same renderer and
+     * lands its detail in the same column. */
+    char stems[PM_METAL_UTIL_TREE_LINE];
+    unsigned n = 0;
+    int i;
+    for (i = 0; i < depth; i++) {
+        const char *seg = (i + 1 == depth && !parent_cont) ? "    " : "|   ";
+        unsigned k;
+        for (k = 0; seg[k] != 0 && n + 3u < (unsigned)sizeof(stems); k++) {
+            stems[n++] = seg[k];
         }
-        stems[n] = 0;
-        pm_metal_util_tree_item_at(last, stems, name, detail);
     }
+    stems[n] = 0;
+    pm_metal_util_tree_item_at(last, stems, name, detail);
 }
 
 void pm_metal_util_tree_item_at(int last, const char *stems, const char *name,
@@ -199,9 +163,23 @@ void pm_metal_util_tree_item_at(int last, const char *stems, const char *name,
         for (k = 0; k < nlen && n + 3u < cap; k++) {
             body[n++] = name[k];
         }
+        if (detail != NULL && detail[0] != 0) {
+            /* Details line up in one column whatever the depth: the stems eat
+             * into the room a name has, so a deep node's name is padded less
+             * and the values still read down a single edge. One space is the
+             * floor, for a name that already runs past the column. */
+            unsigned col = PM_METAL_UTIL_TREE_DETAIL_COL;
+            unsigned min = n + 1u;
+            if (col < min) {
+                col = min;
+            }
+            while (n < col && n + 3u < cap) {
+                body[n++] = ' ';
+            }
+        }
         body[n] = 0;
         if (detail != NULL && detail[0] != 0) {
-            snprintf(line, sizeof(line), "%s%s  %s%s",
+            snprintf(line, sizeof(line), "%s%s%s%s",
                 PM_METAL_UTIL_TREE_SGR_DIM, body, PM_METAL_UTIL_TREE_SGR_RST, painted);
         } else {
             snprintf(line, sizeof(line), "%s%s%s", PM_METAL_UTIL_TREE_SGR_DIM, body,

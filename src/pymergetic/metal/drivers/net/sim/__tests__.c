@@ -4,6 +4,7 @@
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/drivers/net/sim.h"
+#include "pymergetic/util/limits.h"
 #include "pymergetic/wasmmod/guest.h"
 
 #include <stdint.h>
@@ -154,6 +155,121 @@ static int32_t case_tcp_rexmit(void) {
     return 0;
 }
 
+/* The NICs bound right now, so the device knob's count can be checked against
+ * something other than itself. */
+static uint32_t bound_nics(void) {
+    uint32_t n = 0;
+    while (pm_metal_drivers_net_by_compat("sim", (int32_t)n) >= 0) {
+        n++;
+    }
+    return n;
+}
+
+/* A NIC costs its ring, and the ring is cut when the NIC attaches: how many
+ * NICs, how deep each ring and how wide a frame are three knobs, and a NIC
+ * that attaches after one of them moves takes the new size. */
+static int32_t case_knobs(void) {
+    int32_t device = pm_util_limits_find("drivers.net.sim.device");
+    int32_t queue = pm_util_limits_find("drivers.net.sim.queue");
+    int32_t frame = pm_util_limits_find("drivers.net.sim.frame");
+    uint32_t bound;
+    int32_t h;
+    int32_t dt;
+    uint8_t junk[64];
+    uint32_t i;
+    if (device < 0 || queue < 0 || frame < 0) {
+        return fail("nic knobs");
+    }
+    if (pm_util_limits_default(device) != 4u || pm_util_limits_default(queue) != 8u
+        || pm_util_limits_default(frame) != 2048u) {
+        return fail("nic knob defaults");
+    }
+    if (pm_util_limits_counted(device) != 1u || pm_util_limits_counted(queue) != 0u) {
+        return fail("the device knob counts its NICs, the ring sizes do not");
+    }
+    bound = bound_nics();
+    if (bound == 0 || pm_util_limits_used(device) != bound) {
+        return fail("device knob count");
+    }
+
+    /* Down at what is already bound, one more NIC finds no room. */
+    if (pm_util_limits_set("drivers.net.sim.device", bound) != 0) {
+        return fail("shrink the device knob");
+    }
+    if (pm_metal_drivers_net_sim_probe() >= 0) {
+        return fail("a NIC over the device knob should refuse");
+    }
+    if (pm_util_limits_used(device) != bound || bound_nics() != bound) {
+        return fail("a refused probe binds nothing");
+    }
+    if (pm_util_limits_reset("drivers.net.sim.device") != 0) {
+        return fail("reset the device knob");
+    }
+
+    /* A deeper, narrower ring, and a NIC that takes it: 16 frames fit before
+     * tx has to refuse, and a frame over 512 bytes never does. */
+    if (pm_util_limits_set("drivers.net.sim.queue", 16u) != 0
+        || pm_util_limits_set("drivers.net.sim.frame", 512u) != 0) {
+        return fail("move the ring knobs");
+    }
+    h = pm_metal_drivers_net_sim_probe();
+    if (h < 0) {
+        return fail("probe under the moved knobs");
+    }
+    if (pm_metal_drivers_net_sim_queue_of(h) != 16
+        || pm_metal_drivers_net_sim_frame_of(h) != 512) {
+        return fail("the NIC took the ring the knobs said");
+    }
+    memset(junk, 0, sizeof(junk));
+    if (pm_metal_drivers_net_tx(h, junk, 600u) == 0) {
+        return fail("a frame over the frame knob should refuse");
+    }
+    for (i = 0; i < 16u; i++) {
+        if (pm_metal_drivers_net_tx(h, junk, (uint16_t)sizeof(junk)) != 0) {
+            return fail("the ring is as deep as the knob said");
+        }
+    }
+    if (pm_metal_drivers_net_tx(h, junk, (uint16_t)sizeof(junk)) == 0) {
+        return fail("a full ring should refuse");
+    }
+    (void)pm_metal_drivers_net_poll(h);
+    dt = pm_metal_drivers_net_dt_id(h);
+    if (dt < 0 || pm_metal_drivers_unbind(dt) != 0) {
+        return fail("unbind the knob NIC");
+    }
+    if (pm_util_limits_used(device) != bound) {
+        return fail("a closed NIC gives its count back");
+    }
+    if (pm_util_limits_reset("drivers.net.sim.queue") != 0
+        || pm_util_limits_reset("drivers.net.sim.frame") != 0) {
+        return fail("reset the ring knobs");
+    }
+
+    /* The class table is a knob of its own: how many NICs this seat carries
+     * at all, whichever card they came from. Down at what is bound, the
+     * driver's own knob is wide open and a NIC still finds no row. */
+    {
+        int32_t klass = pm_util_limits_find("drivers.net.device");
+        if (klass < 0 || pm_util_limits_default(klass) != 32u
+            || pm_util_limits_counted(klass) != 1u) {
+            return fail("the class table knob");
+        }
+        if (pm_util_limits_used(klass) < bound) {
+            return fail("the class table counts every bound NIC");
+        }
+        if (pm_util_limits_set("drivers.net.device", pm_util_limits_used(klass)) != 0) {
+            return fail("shrink the class table knob");
+        }
+        if (pm_metal_drivers_net_sim_probe() >= 0) {
+            return fail("a NIC over the class table knob should refuse");
+        }
+        if (pm_util_limits_reset("drivers.net.device") != 0) {
+            return fail("reset the class table knob");
+        }
+    }
+    return 0;
+}
+
 int32_t pm_metal_drivers_net_sim_tests(void) {
     if (case_udp() != 0) {
         return 1;
@@ -238,6 +354,9 @@ int32_t pm_metal_drivers_net_sim_tests(void) {
         (void)pm_metal_net_ip_close(a);
         (void)pm_metal_net_ip_close(b);
         (void)pm_metal_net_ip_close(rx);
+    }
+    if (case_knobs() != 0) {
+        return 1;
     }
     return 0;
 }

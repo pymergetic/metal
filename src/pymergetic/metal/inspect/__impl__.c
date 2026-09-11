@@ -1,8 +1,13 @@
 /* pymergetic.metal.inspect — live registry JSON + ASGI routes. */
 #include "pymergetic/metal/inspect/__exports__.h"
 
+#include "pymergetic/metal/console.h"
+/* for the mono clock a console tap is stamped with */
+#include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/http/asgi.h"
 #include "pymergetic/metal/build/__types__.h"
+/* for the lane list on /build: which cross targets this seat carries */
+#include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/registry.h"
 
@@ -14,6 +19,7 @@
 #include <string.h>
 #if !defined(PM_METAL_FIRMWARE) && !defined(PM_METAL_BROWSER)
 #include <sys/stat.h>
+#include <dirent.h>
 #endif
 
 #ifndef PM_METAL_INSPECT_BODY
@@ -68,16 +74,28 @@ static void js_u32(js_t *j, uint32_t v) {
 }
 
 static void js_str(js_t *j, const char *s) {
+    static const char hex[] = "0123456789abcdef";
     js_ch(j, '"');
     while (s != NULL && *s != 0) {
-        char c = *s++;
+        unsigned char c = (unsigned char)*s++;
         if (c == '"' || c == '\\') {
             js_ch(j, '\\');
-        }
-        if ((unsigned char)c < 0x20) {
+            js_ch(j, (char)c);
             continue;
         }
-        js_ch(j, c);
+        if (c < 0x20) {
+            /* Spelled out, not dropped. JSON has no raw control byte, and
+             * these are not noise: a console line's colour is ESC [ 3 2 m,
+             * and a reader that loses the ESC gets "[32mok" as text. */
+            js_ch(j, '\\');
+            js_ch(j, 'u');
+            js_ch(j, '0');
+            js_ch(j, '0');
+            js_ch(j, hex[(c >> 4) & 0xf]);
+            js_ch(j, hex[c & 0xf]);
+            continue;
+        }
+        js_ch(j, (char)c);
     }
     js_ch(j, '"');
 }
@@ -637,6 +655,17 @@ static int32_t build_rebuild_http(const char *method, const char *path,
     char *out, uint32_t out_max, uint32_t *out_len);
 static int32_t build_events_http(const char *method, const char *path,
     char *out, uint32_t out_max, uint32_t *out_len);
+static int32_t console_tail_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len);
+static int32_t build_objects_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len);
+/* The binary faces: bytes out, not JSON, so they take uint8_t *. */
+static int32_t build_object_bytes_http(const char *method, const char *path,
+    uint8_t *out, uint32_t out_max, uint32_t *out_len);
+static int32_t images_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len);
+static int32_t image_bytes_http(const char *method, const char *path,
+    uint8_t *out, uint32_t out_max, uint32_t *out_len);
 
 static int32_t fill(const char *method, const char *path, char *out, uint32_t out_max) {
     js_t j;
@@ -760,6 +789,60 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
     if (strncmp(path, "/build/events", 13) == 0) {
         uint32_t blen = 0;
         if (build_events_http(method, path, j.p, j.max, &blen) == 0) {
+            j.n = blen;
+            return 200;
+        }
+        js_raw(&j, "{\"error\":\"not_found\"}");
+        return 404;
+    }
+    /* /console/<id>?since=<seq> — the console ring by cursor, on the same
+     * local face, so a prove reads what the corner panel reads without a
+     * socket (the browser and firmware seats have no client to poll with). */
+    if (strncmp(path, "/console/", 9) == 0) {
+        uint32_t blen = 0;
+        if (console_tail_http(method, path, j.p, j.max, &blen) == 0) {
+            j.n = blen;
+            return 200;
+        }
+        js_raw(&j, "{\"error\":\"not_found\"}");
+        return 404;
+    }
+    /* The two object faces, ahead of the rebuild/record fallthrough for the
+     * same reason the asgi table registers them ahead of the build wildcard:
+     * both live under /build/ and a prefix match would swallow them.
+     * The bytes face writes binary into the same body buffer, so its window
+     * here is s_body — a caller stitches with ?off= exactly as over HTTP. */
+    if (path_is(path, "/images")) {
+        uint32_t blen = 0;
+        if (images_http(method, path, j.p, j.max, &blen) == 0) {
+            j.n = blen;
+            return 200;
+        }
+        js_raw(&j, "{\"error\":\"not_found\"}");
+        return 404;
+    }
+    if (strncmp(path, "/images/", 8) == 0) {
+        uint32_t blen = 0;
+        if (image_bytes_http(method, path, (uint8_t *)j.p, j.max, &blen) == 0) {
+            j.n = blen;
+            return 200;
+        }
+        js_raw(&j, "{\"error\":\"not_found\"}");
+        return 404;
+    }
+    if (strncmp(path, "/build/objects/", 15) == 0) {
+        uint32_t blen = 0;
+        if (build_objects_http(method, path, j.p, j.max, &blen) == 0) {
+            j.n = blen;
+            return 200;
+        }
+        js_raw(&j, "{\"error\":\"not_found\"}");
+        return 404;
+    }
+    if (strncmp(path, "/build/object/", 14) == 0) {
+        uint32_t blen = 0;
+        if (build_object_bytes_http(method, path, (uint8_t *)j.p, j.max,
+                &blen) == 0) {
             j.n = blen;
             return 200;
         }
@@ -1481,10 +1564,21 @@ static int32_t build_asgi_handler(const char *method, const char *path, uint8_t 
 static char ib_src_root[2560];
 static char ib_wasmmod_root[2560];
 static char ib_wasmmod_src_root[2560];
-static char ib_top_root[2560];
 static char ib_tcc_root[2560];
 static char ib_libdir_def[2600];
 static char ib_triplet_val[160];
+/* The rest of tools/ksweep.c's include list. ksweep TCC-compiles every card
+ * in the tree with the same build face this route calls, so its list is the
+ * one that is known to cover all of them; this fill carried only half of it,
+ * and the five cards that reach into the vendored trees (net.ssh, net.wg,
+ * trust, util.zlib, net.zenoh) refused with "include file 'mbedtls/aes.h'
+ * not found" while the other 79 rebuilt. Same list, not a second one. */
+static char ib_host_inc[2600];
+static char ib_upy_root[2600];
+static char ib_mpy_port[2600];
+static char ib_mbedtls_inc[2600];
+static char ib_zenoh_inc[2600];
+static char ib_zenoh_src[2600];
 
 static int32_t ib_fill(const char *includes[INSPECT_BUILD_MAX_INC],
     uint32_t *n_inc, const char *defines[INSPECT_BUILD_MAX_DEF],
@@ -1499,7 +1593,6 @@ static int32_t ib_fill(const char *includes[INSPECT_BUILD_MAX_INC],
         snprintf(ib_wasmmod_root, sizeof(ib_wasmmod_root), "%s", PM_METAL_WASMMOD_ROOT);
         snprintf(ib_wasmmod_src_root, sizeof(ib_wasmmod_src_root),
             "%s/src", PM_METAL_WASMMOD_ROOT);
-        snprintf(ib_top_root, sizeof(ib_top_root), "%s", PM_METAL_TOP_ROOT);
 #else
         /* fallback: derive from this file's compiled path (correct only when
          * the CWD is the metal root — the gen'd seats below pass the roots) */
@@ -1527,24 +1620,54 @@ static int32_t ib_fill(const char *includes[INSPECT_BUILD_MAX_INC],
         snprintf(ib_wasmmod_root, sizeof(ib_wasmmod_root), "%s/../../../../wasmmod", dirbuf);
         snprintf(ib_wasmmod_src_root, sizeof(ib_wasmmod_src_root),
             "%s/../../../../wasmmod/src", dirbuf);
-        snprintf(ib_top_root, sizeof(ib_top_root), "%s/../../../../..", dirbuf);
 #endif
+        /* Derived from the two roots both branches above already resolved, so
+         * one place knows the tree shape: ib_src_root is <metal>/src and
+         * ib_tcc_root is <metal>/externals/tcc. The µPy root is two levels
+         * above <metal> — ksweep's top_root, and derived here rather than
+         * baked: PM_METAL_TOP_ROOT named the packages dir, one level higher
+         * still, where no header resolves. */
+        snprintf(ib_host_inc, sizeof(ib_host_inc), "%s/../host_inc", ib_src_root);
+        snprintf(ib_upy_root, sizeof(ib_upy_root), "%s/../../..", ib_src_root);
+        snprintf(ib_mpy_port, sizeof(ib_mpy_port),
+            "%s/../../../ports/unix", ib_src_root);
+        snprintf(ib_mbedtls_inc, sizeof(ib_mbedtls_inc),
+            "%s/../../../lib/mbedtls/include", ib_src_root);
+        snprintf(ib_zenoh_inc, sizeof(ib_zenoh_inc),
+            "%s/../zenoh-pico/include", ib_tcc_root);
+        snprintf(ib_zenoh_src, sizeof(ib_zenoh_src),
+            "%s/../zenoh-pico/src", ib_tcc_root);
         snprintf(ib_libdir_def, sizeof(ib_libdir_def),
             "PM_METAL_TCC_LIB_DIR=\"%s\"", ib_tcc_root);
         ready = 1;
     }
+    /* ksweep's order: host_inc leads so its py/mpconfig.h stub wins over the
+     * real header under the µPy root, which a TCC include list cannot
+     * satisfy (no mpconfigport.h). */
     *n_inc = 0;
+    includes[(*n_inc)++] = ib_host_inc;
     includes[(*n_inc)++] = ib_src_root;
     includes[(*n_inc)++] = ib_wasmmod_src_root;
     includes[(*n_inc)++] = ib_wasmmod_root;
-    includes[(*n_inc)++] = ib_top_root;
+    includes[(*n_inc)++] = ib_upy_root;
+    includes[(*n_inc)++] = ib_mpy_port;
+    includes[(*n_inc)++] = ib_mbedtls_inc;
+    includes[(*n_inc)++] = ib_zenoh_inc;
+    includes[(*n_inc)++] = ib_zenoh_src;
     includes[(*n_inc)++] = ib_tcc_root;
     *n_def = 0;
+    defines[(*n_def)++] = "_POSIX_C_SOURCE=200809L";
     defines[(*n_def)++] = "PM_WASMMOD_GUEST=0";
     defines[(*n_def)++] = "PM_MOD_TESTS=1";
     defines[(*n_def)++] = "TCC_TARGET_X86_64";
     defines[(*n_def)++] = "PM_HAS_TCC=1";
     defines[(*n_def)++] = ib_libdir_def;
+    /* The carrier macros those trees compile under — the same ones the seat's
+     * Makefile passes. mbedtls reads its port config through the macro, and
+     * zenoh-pico's GENERIC branch is what the card's platform shim fills. */
+    defines[(*n_def)++] = "MBEDTLS_CONFIG_FILE=\"mbedtls/mbedtls_config_port.h\"";
+    defines[(*n_def)++] = "MICROPY_SSL_MBEDTLS=1";
+    defines[(*n_def)++] = "ZENOH_GENERIC";
     {
         /* triplet: same probe as the rebuild test — a static value, cached
          * on the first fill (popen is not reentrant in the request path).
@@ -1630,6 +1753,11 @@ static void ib_row(js_t *j, const pm_metal_build_unit_t *u) {
     js_ch(j, u->n_sources <= PM_METAL_BUILD_MAX_OBJS ? '1' : '0');
     js_raw(j, ",\"built\":");
     js_ch(j, rec != NULL ? '1' : '0');
+    /* Retained objects, so a pane offers a download only where the bytes
+     * are actually still held. A count, not the list — 84 rows of source
+     * names and lengths would not fit the smaller body window. */
+    js_raw(j, ",\"objects\":");
+    js_u32(j, pm_metal_build_object_count(u->fqn));
     js_ch(j, '}');
 }
 
@@ -1684,17 +1812,68 @@ static int32_t build_index_http(const char *method, const char *path,
     if (method != NULL && strcmp(method, "POST") == 0 && path != NULL
         && strncmp(path, "/build?all=1", 12) == 0) {
         int32_t target = 0;
+        uint32_t mode = PM_METAL_BUILD_LOCAL;
         int32_t wid;
         const char *includes[INSPECT_BUILD_MAX_INC];
         const char *defines[INSPECT_BUILD_MAX_DEF];
         uint32_t n_inc = 0;
         uint32_t n_def = 0;
         char werr[PM_METAL_BUILD_ERR_MAX];
+        /* the reply buffer is live from here, not from after the walk
+         * starts: the refusals below this point write into it, and one of
+         * them (the seat fill failure) has been writing into an unset js_t
+         * and answering 200 with an empty body. */
+        j.p = out;
+        j.n = 0;
+        j.max = out_max;
         {
             const char *q = strstr(path, "&target=");
             if (q != NULL) {
                 target = (int32_t)strtol(q + 8, NULL, 10);
             }
+            /* &mode=produce asks for an artifact for `target` and never
+             * touches the running seat; the default rebuilds this seat,
+             * which only its own arch can do. An arch that is not the
+             * seat's is production whether or not the caller said so —
+             * nothing else is loadable here. */
+            q = strstr(path, "&mode=produce");
+            if (q != NULL) {
+                mode = PM_METAL_BUILD_PRODUCE;
+            }
+        }
+        /* A lane the seat cannot emit for is refused here, once, instead of
+         * per unit: a whole-tree walk on an unavailable lane used to report
+         * 84 separate failures and read as a broken tree rather than an
+         * unavailable target. The mask is the same answer the lane list
+         * serves, so the refusal and the greyed-out option agree. */
+        if (target < 0 || target > 3
+            || (pm_metal_jit_c_target_mask() & (1u << (uint32_t)target)) == 0u) {
+            js_raw(&j, "{\"all\":1,\"error\":\"lane ");
+            js_raw(&j, (target >= 0 && target <= 3)
+                ? pm_metal_jit_c_target_arch(target) : "?");
+            js_raw(&j, " cannot be emitted by this seat\"}");
+            if (!js_ok(&j)) {
+                return -1;
+            }
+            *out_len = j.n;
+            return 0;
+        }
+        /* local means link and publish into this running process, which
+         * only this seat's own arch can be. A foreign arch asked for
+         * locally used to run and quietly behave like produce, so the walk
+         * reported a rebuild that never touched the seat. */
+        if (mode == PM_METAL_BUILD_LOCAL
+            && strcmp(pm_metal_jit_c_target_arch(target),
+                pm_metal_jit_c_target_arch(
+                    (int32_t)PM_METAL_JIT_C_TARGET_SEAT)) != 0) {
+            js_raw(&j, "{\"all\":1,\"error\":\"lane ");
+            js_raw(&j, pm_metal_jit_c_target_arch(target));
+            js_raw(&j, " cannot rebuild this seat; ask for produce\"}");
+            if (!js_ok(&j)) {
+                return -1;
+            }
+            *out_len = j.n;
+            return 0;
         }
         if (ib_fill(includes, &n_inc, defines, &n_def) != 0) {
             js_raw(&j, "{\"all\":1,\"error\":\"seat fill\"}");
@@ -1712,6 +1891,7 @@ static int32_t build_index_http(const char *method, const char *path,
             copts.defines = defines;
             copts.n_defines = n_def;
             copts.target = target;
+            copts.mode = mode;
             /* unit_root is per-unit in the walk (the root resolver fills
              * the walk's own scratch buffer); the fill's value is unused
              * but non-NULL so the submit's arg check passes. */
@@ -1719,9 +1899,6 @@ static int32_t build_index_http(const char *method, const char *path,
             wid = pm_metal_build_walk_start(target, &copts,
                 ib_walk_root, werr, sizeof(werr));
         }
-        j.p = out;
-        j.n = 0;
-        j.max = out_max;
         if (wid < 0) {
             /* the honest refusal: BUSY (a walk is running), NOMEM, PARSE
              * (no units) — same data-is-the-answer posture as the
@@ -1736,6 +1913,8 @@ static int32_t build_index_http(const char *method, const char *path,
             js_u32(&j, (uint32_t)wid);
             js_raw(&j, ",\"target\":");
             js_u32(&j, (uint32_t)(target < 0 ? 0 : target));
+            js_raw(&j, ",\"mode\":");
+            js_str(&j, mode == PM_METAL_BUILD_PRODUCE ? "produce" : "local");
             js_raw(&j, ",\"units\":");
             js_u32(&j, wi.n_total);
             js_ch(&j, '}');
@@ -1789,6 +1968,8 @@ static int32_t build_index_http(const char *method, const char *path,
         js_u32(&j, wi.id);
         js_raw(&j, ",\"target\":");
         js_u32(&j, (uint32_t)(wi.target < 0 ? 0 : wi.target));
+        js_raw(&j, ",\"mode\":");
+        js_str(&j, wi.mode == PM_METAL_BUILD_PRODUCE ? "produce" : "local");
         js_raw(&j, ",\"total\":");
         js_u32(&j, wi.n_total);
         js_raw(&j, ",\"done\":");
@@ -1799,7 +1980,57 @@ static int32_t build_index_http(const char *method, const char *path,
         js_u32(&j, wi.n_skipped);
         js_raw(&j, ",\"running\":");
         js_u32(&j, wi.n_running);
+        /* Why the first row failed. The event ring's records are fixed-size
+         * and carry no reason, so without this a pane can only say how many
+         * failed. Bounded: one fqn + one 160-char errbuf. */
+        if (wi.fail_err[0] != '\0') {
+            js_raw(&j, ",\"fail_fqn\":");
+            js_str(&j, wi.fail_fqn);
+            js_raw(&j, ",\"fail_error\":");
+            js_str(&j, wi.fail_err);
+        }
         js_ch(&j, '}');
+    }
+    /* The two different jobs, told apart per lane.
+     *
+     * `produce` is "can this seat emit an artifact for that arch" — true for
+     * every arch whose backend is built in, the seat's own included, because
+     * production is just the object bytes and a download.
+     *
+     * `local` is "can that arch rebuild THIS running seat" — true only for
+     * the seat's own arch, because linking and publishing means loading the
+     * result here. Conflating the two is what made an x86-64 seat refuse to
+     * produce x86-64: the request was read as a foreign-arch cross request
+     * when it was the seat's own emitter all along. */
+    {
+        static const char *lane_name[] = { "seat", "wasm32", "arm-eabi",
+            "x86-64" };
+        uint32_t mask = pm_metal_jit_c_target_mask();
+        const char *seat_arch = pm_metal_jit_c_target_arch(
+            PM_METAL_JIT_C_TARGET_SEAT);
+        uint32_t t;
+        js_raw(&j, ",\"seat_arch\":");
+        js_str(&j, seat_arch);
+        js_raw(&j, ",\"lanes\":[");
+        for (t = 0; t < 4u; t++) {
+            const char *arch = pm_metal_jit_c_target_arch((int32_t)t);
+            uint32_t can = (mask & (1u << t)) != 0u ? 1u : 0u;
+            if (t > 0) {
+                js_ch(&j, ',');
+            }
+            js_raw(&j, "{\"target\":");
+            js_u32(&j, t);
+            js_raw(&j, ",\"name\":");
+            js_str(&j, lane_name[t]);
+            js_raw(&j, ",\"arch\":");
+            js_str(&j, arch);
+            js_raw(&j, ",\"produce\":");
+            js_u32(&j, can);
+            js_raw(&j, ",\"local\":");
+            js_u32(&j, (can != 0u && strcmp(arch, seat_arch) == 0) ? 1u : 0u);
+            js_ch(&j, '}');
+        }
+        js_ch(&j, ']');
     }
     js_ch(&j, '}');
     pm_util_mem_arena_destroy(arena);
@@ -1990,6 +2221,15 @@ static int32_t build_rebuild_http(const char *method, const char *path,
         copts.defines = defines;
         copts.n_defines = n_def;
         copts.target = target;
+        /* One unit, same split as the walk: this seat's own arch rebuilds
+         * and publishes, a foreign arch stops at the object. Leaving the
+         * mode at LOCAL sent an arm object into the seat's loader, which
+         * refused it with "ELF e_machine != host arch" — a compile that had
+         * in fact succeeded, reported as a failure. */
+        copts.mode = (strcmp(pm_metal_jit_c_target_arch(target),
+                pm_metal_jit_c_target_arch(
+                    (int32_t)PM_METAL_JIT_C_TARGET_SEAT)) == 0)
+            ? PM_METAL_BUILD_LOCAL : PM_METAL_BUILD_PRODUCE;
         st = pm_metal_build_unit_compile(arena, u, &copts,
             &art, err, sizeof(err));
     }
@@ -2067,6 +2307,432 @@ static int32_t build_rebuild_asgi_handler(const char *method, const char *path,
     return 0;
 }
 
+/* GET /build/objects/<fqn> — what a build left downloadable for that unit.
+ * Body: {"fqn":"...","objects":[{"src":"__impl__.c","len":5872722}]}. An
+ * empty list is the honest answer everywhere the bytes are gone: a seat
+ * that refuses the rebuild, a unit never built here, or a unit the cache
+ * dropped when the span reset. */
+static int32_t build_objects_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len) {
+    char fqnbuf[PM_METAL_BUILD_STR_MAX];
+    uint32_t n;
+    uint32_t i;
+    js_t j;
+
+    if (method == NULL || strcmp(method, "GET") != 0 || path == NULL) {
+        return -1;
+    }
+    if (strncmp(path, "/build/objects/", 15) != 0) {
+        return -1;
+    }
+    {
+        size_t flen = strlen(path + 15);
+        const char *q;
+        if (flen == 0 || flen >= sizeof(fqnbuf)) {
+            return -1;
+        }
+        memcpy(fqnbuf, path + 15, flen + 1);
+        q = strchr(fqnbuf, '?');
+        if (q != NULL) {
+            fqnbuf[q - fqnbuf] = '\0';
+        }
+    }
+    n = pm_metal_build_object_count(fqnbuf);
+    j.p = out;
+    j.n = 0;
+    j.max = out_max;
+    js_raw(&j, "{\"fqn\":");
+    js_str(&j, fqnbuf);
+    js_raw(&j, ",\"objects\":[");
+    for (i = 0; i < n; i++) {
+        char src[PM_METAL_BUILD_MAX_SRC_PATH];
+        uint32_t len = 0;
+        src[0] = '\0';
+        if (pm_metal_build_object_info(fqnbuf, i, src, sizeof(src), &len)
+                != PM_METAL_BUILD_OK) {
+            break;
+        }
+        if (i > 0) {
+            js_ch(&j, ',');
+        }
+        js_raw(&j, "{\"src\":");
+        js_str(&j, src[0] != '\0' ? src : "object");
+        js_raw(&j, ",\"len\":");
+        js_u32(&j, len);
+        js_ch(&j, '}');
+    }
+    js_raw(&j, "]}");
+    if (!js_ok(&j)) {
+        return -1;
+    }
+    *out_len = j.n;
+    return 0;
+}
+
+static int32_t build_objects_asgi_handler(const char *method, const char *path,
+    uint8_t *out, uint32_t out_max, uint32_t *out_len) {
+    return build_objects_http(method, path, (char *)out, out_max, out_len);
+}
+
+/* GET /build/object/<fqn>/<i>?off=N — one window of that object's bytes.
+ * Serves from `off` up to whatever the caller's body holds, so the response
+ * length is the window size and a client that wants the whole object asks
+ * again at off += that. Out of range or nothing retained is a zero-length
+ * body, which is also what "already at the end" looks like — the length in
+ * /build/objects is what a client loops against. */
+static int32_t build_object_bytes_http(const char *method, const char *path,
+    uint8_t *out, uint32_t out_max, uint32_t *out_len) {
+    char fqnbuf[PM_METAL_BUILD_STR_MAX];
+    uint32_t idx = 0;
+    uint32_t off = 0;
+    uint32_t n = 0;
+
+    if (method == NULL || strcmp(method, "GET") != 0 || path == NULL) {
+        return -1;
+    }
+    if (strncmp(path, "/build/object/", 14) != 0) {
+        return -1;
+    }
+    {
+        const char *p = path + 14;
+        const char *q = strchr(p, '?');
+        const char *slash;
+        size_t flen;
+        if (q != NULL && strncmp(q, "?off=", 5) == 0) {
+            off = (uint32_t)strtoul(q + 5, NULL, 10);
+        }
+        flen = q != NULL ? (size_t)(q - p) : strlen(p);
+        /* the last path segment is the object index */
+        slash = NULL;
+        {
+            size_t k;
+            for (k = 0; k < flen; k++) {
+                if (p[k] == '/') {
+                    slash = p + k;
+                }
+            }
+        }
+        if (slash != NULL) {
+            idx = (uint32_t)strtoul(slash + 1, NULL, 10);
+            flen = (size_t)(slash - p);
+        }
+        if (flen == 0 || flen >= sizeof(fqnbuf)) {
+            return -1;
+        }
+        memcpy(fqnbuf, p, flen);
+        fqnbuf[flen] = '\0';
+    }
+    /* The cache copies the window out under its own lock, so a build that
+     * evicts this object mid-download costs a short read, not freed bytes. */
+    if (pm_metal_build_object_read(fqnbuf, idx, off, out, out_max, &n)
+            != PM_METAL_BUILD_OK) {
+        *out_len = 0;
+        return 0;
+    }
+    *out_len = n;
+    return 0;
+}
+
+static int32_t build_object_bytes_asgi_handler(const char *method,
+    const char *path, uint8_t *out, uint32_t out_max, uint32_t *out_len) {
+    return build_object_bytes_http(method, path, out, out_max, out_len);
+}
+
+/*------------------ built images (the whole-binary download) -------------
+ * The other thing "the binary" can mean: not one rebuilt card but the seat
+ * image the host build links — metal.elf and metal.bin per board, the UEFI
+ * .efi and its disk images. Those are files under <metal>/port/build, so
+ * this is a filesystem face and the fill differs by seat: a POSIX seat
+ * lists and serves them, firmware and the browser cell have no such tree
+ * and answer the empty list. Same routes everywhere; only the fill moves.
+ *
+ * Bytes ride the same ?off= window as the object face, for the same reason
+ * (an image is tens of MB against a 1 MiB body) and with the same contract:
+ * the length in /images is what a client loops against. */
+
+#define INSPECT_IMG_MAX 48u
+
+/* Names worth offering. A whitelist, not "every file in the build dir":
+ * that tree also holds thousands of .o files and generated C. */
+static int img_is_image(const char *name) {
+    /* .mjs/.wasm are the browser seat's image: emcc leaves a loader and a
+     * module rather than one file, and both are needed to run it. */
+    static const char *suffixes[] = { ".elf", ".bin", ".efi", ".img", ".mjs", ".wasm" };
+    size_t n = strlen(name);
+    uint32_t i;
+    for (i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
+        size_t s = strlen(suffixes[i]);
+        if (n > s && strcmp(name + n - s, suffixes[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+#if !defined(PM_METAL_FIRMWARE) && !defined(PM_METAL_BROWSER)
+/* <metal>/port/build, from the same root ib_fill resolved. */
+static const char *img_build_root(void) {
+    static char root[2600];
+    if (root[0] == '\0') {
+        const char *includes[INSPECT_BUILD_MAX_INC];
+        const char *defines[INSPECT_BUILD_MAX_DEF];
+        uint32_t n_inc = 0;
+        uint32_t n_def = 0;
+        if (ib_fill(includes, &n_inc, defines, &n_def) != 0) {
+            return NULL;
+        }
+        snprintf(root, sizeof(root), "%s/../port/build", ib_src_root);
+    }
+    return root;
+}
+
+/* The browser is a seat too, and the emcc build leaves its image outside
+ * port/build — under the µPy tree's own webassembly port. It is listed as its
+ * own board so a client asks one question to find any seat image, and so the
+ * console panel can fetch the pair it needs to run that seat here. */
+#define INSPECT_IMG_WASM_BOARD "BROWSER"
+
+static const char *img_wasm_dir(void) {
+    static char dir[2600];
+    if (dir[0] == '\0') {
+        const char *includes[INSPECT_BUILD_MAX_INC];
+        const char *defines[INSPECT_BUILD_MAX_DEF];
+        uint32_t n_inc = 0;
+        uint32_t n_def = 0;
+        if (ib_fill(includes, &n_inc, defines, &n_def) != 0) {
+            return NULL;
+        }
+        snprintf(dir, sizeof(dir), "%s/../../../ports/webassembly/build-metal", ib_src_root);
+    }
+    return dir;
+}
+
+/* dir + "/" + leaf into buf, or 0 when it would not fit. Explicit lengths
+ * rather than snprintf("%s/%s"): the roots are path-sized buffers, so the
+ * join has to carry its own bound (the rebuild handler's unit_root does the
+ * same). A path too deep for the buffer is skipped, never truncated into a
+ * different file's name. */
+static int img_join(char *buf, size_t cap, const char *dir, const char *leaf) {
+    size_t dl = strlen(dir);
+    size_t ll = strlen(leaf);
+    if (dl + ll + 2u > cap) {
+        return 0;
+    }
+    memcpy(buf, dir, dl);
+    buf[dl] = '/';
+    memcpy(buf + dl + 1u, leaf, ll);
+    buf[dl + 1u + ll] = '\0';
+    return 1;
+}
+
+/* Every image in one directory, reported under the board name given. */
+static uint32_t img_dir_each(const char *dir, const char *board, uint32_t seen,
+    void (*fn)(void *ctx, const char *board, const char *name, uint32_t len), void *ctx) {
+    DIR *d;
+    struct dirent *e;
+    if (dir == NULL) {
+        return seen;
+    }
+    d = opendir(dir);
+    if (d == NULL) {
+        return seen;
+    }
+    while ((e = readdir(d)) != NULL && seen < INSPECT_IMG_MAX) {
+        char full[3584];
+        struct stat st;
+        if (e->d_name[0] == '.' || !img_is_image(e->d_name)) {
+            continue;
+        }
+        if (!img_join(full, sizeof(full), dir, e->d_name)) {
+            continue;
+        }
+        if (stat(full, &st) != 0 || !S_ISREG(st.st_mode)) {
+            continue;
+        }
+        if (fn != NULL) {
+            fn(ctx, board, e->d_name, (uint32_t)st.st_size);
+        }
+        seen++;
+    }
+    closedir(d);
+    return seen;
+}
+
+/* Walk board dirs, calling back per image. Returns the count visited. */
+static uint32_t img_each(void (*fn)(void *ctx, const char *board,
+        const char *name, uint32_t len), void *ctx) {
+    const char *root = img_build_root();
+    DIR *d;
+    struct dirent *e;
+    uint32_t seen = 0;
+
+    seen = img_dir_each(img_wasm_dir(), INSPECT_IMG_WASM_BOARD, seen, fn, ctx);
+    if (root == NULL) {
+        return seen;
+    }
+    d = opendir(root);
+    if (d == NULL) {
+        return seen;
+    }
+    while ((e = readdir(d)) != NULL && seen < INSPECT_IMG_MAX) {
+        char board_dir[3072];
+        if (e->d_name[0] == '.') {
+            continue;
+        }
+        if (!img_join(board_dir, sizeof(board_dir), root, e->d_name)) {
+            continue;
+        }
+        seen = img_dir_each(board_dir, e->d_name, seen, fn, ctx);
+    }
+    closedir(d);
+    return seen;
+}
+
+typedef struct img_list_ctx {
+    js_t *j;
+    uint32_t n;
+} img_list_ctx_t;
+
+static void img_list_one(void *ctx, const char *board, const char *name,
+    uint32_t len) {
+    img_list_ctx_t *c = (img_list_ctx_t *)ctx;
+    if (c->n > 0) {
+        js_ch(c->j, ',');
+    }
+    js_raw(c->j, "{\"board\":");
+    js_str(c->j, board);
+    js_raw(c->j, ",\"file\":");
+    js_str(c->j, name);
+    js_raw(c->j, ",\"len\":");
+    js_u32(c->j, len);
+    js_ch(c->j, '}');
+    c->n++;
+}
+#endif /* POSIX */
+
+/* GET /images — every built image this seat can serve. */
+static int32_t images_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len) {
+    js_t j;
+    if (method == NULL || strcmp(method, "GET") != 0 || path == NULL) {
+        return -1;
+    }
+    j.p = out;
+    j.n = 0;
+    j.max = out_max;
+    js_raw(&j, "{\"images\":[");
+#if !defined(PM_METAL_FIRMWARE) && !defined(PM_METAL_BROWSER)
+    {
+        img_list_ctx_t c;
+        c.j = &j;
+        c.n = 0;
+        (void)img_each(img_list_one, &c);
+    }
+    js_raw(&j, "]}");
+#else
+    /* Seat fill: no filesystem to hold a linked image. The list is empty
+     * rather than absent — a client asks the same question on every seat. */
+    js_raw(&j, "],\"note\":\"seat fill: no image tree on this seat\"}");
+#endif
+    if (!js_ok(&j)) {
+        return -1;
+    }
+    *out_len = j.n;
+    return 0;
+}
+
+static int32_t images_asgi_handler(const char *method, const char *path,
+    uint8_t *out, uint32_t out_max, uint32_t *out_len) {
+    return images_http(method, path, (char *)out, out_max, out_len);
+}
+
+/* GET /images/<board>/<file>?off=N — one window of that image's bytes. */
+static int32_t image_bytes_http(const char *method, const char *path,
+    uint8_t *out, uint32_t out_max, uint32_t *out_len) {
+    if (method == NULL || strcmp(method, "GET") != 0 || path == NULL) {
+        return -1;
+    }
+    if (strncmp(path, "/images/", 8) != 0) {
+        return -1;
+    }
+#if defined(PM_METAL_FIRMWARE) || defined(PM_METAL_BROWSER)
+    (void)out;
+    (void)out_max;
+    *out_len = 0;
+    return 0;
+#else
+    {
+        const char *root = img_build_root();
+        const char *p = path + 8;
+        const char *q = strchr(p, '?');
+        const char *slash;
+        char board[256];
+        char name[256];
+        char board_dir[3072];
+        char full[3584];
+        uint32_t off = 0;
+        size_t seg = q != NULL ? (size_t)(q - p) : strlen(p);
+        FILE *f;
+        size_t got;
+
+        if (root == NULL) {
+            *out_len = 0;
+            return 0;
+        }
+        if (q != NULL && strncmp(q, "?off=", 5) == 0) {
+            off = (uint32_t)strtoul(q + 5, NULL, 10);
+        }
+        slash = memchr(p, '/', seg);
+        if (slash == NULL) {
+            return -1;
+        }
+        if ((size_t)(slash - p) >= sizeof(board)
+            || seg - (size_t)(slash - p) - 1u >= sizeof(name)) {
+            return -1;
+        }
+        memcpy(board, p, (size_t)(slash - p));
+        board[slash - p] = '\0';
+        memcpy(name, slash + 1, seg - (size_t)(slash - p) - 1u);
+        name[seg - (size_t)(slash - p) - 1u] = '\0';
+        /* No traversal: both segments are single path components, and the
+         * file must be one of the names /images would have listed. */
+        if (strstr(board, "..") != NULL || strchr(board, '/') != NULL
+            || strstr(name, "..") != NULL || strchr(name, '/') != NULL
+            || !img_is_image(name)) {
+            return -1;
+        }
+        if (strcmp(board, INSPECT_IMG_WASM_BOARD) == 0) {
+            const char *wdir = img_wasm_dir();
+            if (wdir == NULL || !img_join(full, sizeof(full), wdir, name)) {
+                return -1;
+            }
+        } else if (!img_join(board_dir, sizeof(board_dir), root, board)
+            || !img_join(full, sizeof(full), board_dir, name)) {
+            return -1;
+        }
+        f = fopen(full, "rb");
+        if (f == NULL) {
+            *out_len = 0;
+            return 0;
+        }
+        if (fseek(f, (long)off, SEEK_SET) != 0) {
+            fclose(f);
+            *out_len = 0;
+            return 0;
+        }
+        got = fread(out, 1u, (size_t)out_max, f);
+        fclose(f);
+        *out_len = (uint32_t)got;
+        return 0;
+    }
+#endif
+}
+
+static int32_t image_bytes_asgi_handler(const char *method, const char *path,
+    uint8_t *out, uint32_t out_max, uint32_t *out_len) {
+    return image_bytes_http(method, path, out, out_max, out_len);
+}
+
 /* GET /build/events?since=<seq> — the factory floor's telemetry tail.
  * Body: {"latest":N,"events":[{"seq":n,"kind":"compile_end","target":0,
  * "t_us":...,"dur_us":...,"bytes":...,"fqn":"...","src":"..."}]}. The ring
@@ -2074,7 +2740,20 @@ static int32_t build_rebuild_asgi_handler(const char *method, const char *path,
  * other build panes). `since` defaults to 0 (replay the whole tail). */
 static int32_t build_events_http(const char *method, const char *path,
     char *out, uint32_t out_max, uint32_t *out_len) {
-    pm_metal_build_event_t ev[32];
+    /* The drain window. 32 was smaller than a walk's per-second output, so a
+     * 1 Hz poller fell behind the ring and lost events it could still have
+     * read; 128 drains a full 84-unit walk in four polls. Static, not a
+     * frame: 128 events is 16 KiB, which does not belong on the serve loop's
+     * stack on a firmware seat, and the serve loop runs one handler at a
+     * time (no yield inside this function). */
+    static pm_metal_build_event_t ev[128];
+    /* How many of those actually fit the caller's body. The two callers do
+     * not share a size — the asgi route gets a 1 MiB window, the REPL and
+     * µPy handle() face answer into s_body (16 KiB) — so the window is cut
+     * to the buffer instead of to a constant that overflows the smaller one
+     * and fails the whole response. */
+    uint32_t n_fit;
+    uint32_t reported;
     uint32_t latest = 0;
     uint32_t since = 0;
     uint32_t n;
@@ -2098,12 +2777,28 @@ static int32_t build_events_http(const char *method, const char *path,
         }
         (void)s;
     }
-    n = pm_metal_build_events_since(since, ev, 32u, &latest);
+    n = pm_metal_build_events_since(since, ev,
+        (uint32_t)(sizeof(ev) / sizeof(ev[0])), &latest);
+    /* 384 bytes covers one event's worst case: the six numbers at full
+     * width, the longest kind, and fqn+src fully escaped. Envelope aside,
+     * the emit below cannot then reach j.max. One event always goes out
+     * even on a tiny buffer, or a client whose window fits none would poll
+     * the same `since` forever. */
+    n_fit = out_max > 64u ? (out_max - 64u) / 384u : 0u;
+    if (n_fit == 0u) {
+        n_fit = 1u;
+    }
+    if (n > n_fit) {
+        n = n_fit;
+    }
+    /* Truncated: report the last seq actually emitted, not the ring's
+     * newest, or the client's next `since` would step over the remainder. */
+    reported = (n > 0u && ev[n - 1u].seq < latest) ? ev[n - 1u].seq : latest;
     j.p = out;
     j.n = 0;
     j.max = out_max;
     js_raw(&j, "{\"latest\":");
-    js_u32(&j, latest);
+    js_u32(&j, reported);
     js_raw(&j, ",\"events\":[");
     for (i = 0; i < n; i++) {
         if (i > 0) {
@@ -2142,6 +2837,133 @@ static int32_t build_events_asgi_handler(const char *method, const char *path,
         return -1;
     }
     return 0;
+}
+
+/* GET /console/<id>?since=<seq> — the seat's console, as a second viewport.
+ *
+ * A viewport is a sink and has to be present when a line is written; a panel
+ * in a browser comes and goes, so it reads the console card's ring by the
+ * sequence cursor instead. Same protocol as /build/events: the answer says
+ * which sequence to ask for next, and a reader that fell behind the ring is
+ * told so ("dropped") rather than handed a silent gap.
+ *
+ * Body: {"id":0,"seq":N,"dropped":0,"lines":["..."],"pending":"...",
+ * "viewports":2} where `seq` is what to pass as the next `since`, and
+ * `pending` is the line being written right now, the one with no newline yet (a
+ * prompt, mid-build progress) — without it a panel sits blank through exactly
+ * the moments someone is watching. `viewports` counts everything looking at
+ * this console, sinks and cursor readers alike; a reader that passes `who=<n>`
+ * is counted apart from another one doing the same. */
+static int32_t console_tail_http(const char *method, const char *path,
+    char *out, uint32_t out_max, uint32_t *out_len) {
+    char line[PM_METAL_CONSOLE_READ_MAX];
+    int32_t id = 0;
+    uint32_t since = 0;
+    uint32_t who = 0;
+    uint32_t seq;
+    uint32_t oldest;
+    uint32_t dropped = 0;
+    uint32_t emitted = 0;
+    int first = 1;
+    js_t j;
+    if (method == NULL || strcmp(method, "GET") != 0 || path == NULL) {
+        return -1;
+    }
+    if (strncmp(path, "/console/", 9) != 0) {
+        return -1;
+    }
+    {
+        const char *p = path + 9;
+        const char *q;
+        if (*p < '0' || *p > '9') {
+            return -1;
+        }
+        id = (int32_t)strtol(p, NULL, 10);
+        if (id < 0 || (uint32_t)id >= pm_metal_console_count()) {
+            return -1;
+        }
+        q = strchr(path, '?');
+        while (q != NULL) {
+            const char *arg = q + 1;
+            if (strncmp(arg, "since=", 6) == 0) {
+                since = (uint32_t)strtoul(arg + 6, NULL, 10);
+            } else if (strncmp(arg, "who=", 4) == 0) {
+                who = (uint32_t)strtoul(arg + 4, NULL, 10);
+            }
+            q = strchr(arg, '&');
+        }
+    }
+    /* This reader is now one of the console's viewports, for as long as it
+     * keeps asking: the card cannot push to it, but the seat can still say it
+     * is being watched. A reader that names itself is told apart from another
+     * tab doing the same. */
+    (void)pm_metal_console_tap_id(id, who, (uint32_t)(pm_metal_coop_mono_us() / 1000u),
+        "http cursor");
+    seq = pm_metal_console_seq_id(id);
+    /* A cursor past the end is a reader whose seat restarted under it: the
+     * ring began again at zero and the sequence it held is from a previous
+     * life. Hand it the current end rather than a cursor it can never reach,
+     * so the panel picks up from now instead of going silent. */
+    if (since > seq) {
+        since = seq;
+    }
+    /* Where the ring still reaches. A first poll (since=0) on a seat that has
+     * been up a while starts at the oldest line it kept, not at line zero,
+     * and that is a scroll-back, not a drop. */
+    oldest = seq - pm_metal_console_line_count_id(id);
+    if (since < oldest) {
+        dropped = since == 0u ? 0u : oldest - since;
+        since = oldest;
+    }
+    j.p = out;
+    j.n = 0;
+    j.max = out_max;
+    js_raw(&j, "{\"id\":");
+    js_u32(&j, (uint32_t)id);
+    js_raw(&j, ",\"dropped\":");
+    js_u32(&j, dropped);
+    js_raw(&j, ",\"lines\":[");
+    while (since + emitted < seq) {
+        /* Leave room for the envelope's tail and one escaped line; stop on a
+         * short body and report the sequence actually reached, so the next
+         * poll picks up exactly where this one stopped. */
+        /* Six bytes of JSON per byte of line, worst case: a line of nothing
+         * but escape bytes, each spelled \u001b. */
+        if (j.n + (PM_METAL_CONSOLE_READ_MAX * 6u) + 64u >= j.max) {
+            break;
+        }
+        if (pm_metal_console_line_at_id(id, since + emitted, line, sizeof(line)) < 0) {
+            break;
+        }
+        if (!first) {
+            js_ch(&j, ',');
+        }
+        first = 0;
+        js_str(&j, line);
+        emitted++;
+    }
+    js_raw(&j, "],\"seq\":");
+    js_u32(&j, since + emitted);
+    js_raw(&j, ",\"pending\":");
+    (void)pm_metal_console_pending_id(id, line, sizeof(line));
+    js_str(&j, line);
+    /* Who else is on this console: the sinks written into plus the readers
+     * still pulling, this one included. The panel shows it, and it is the same
+     * number the boot tree's console node prints. */
+    js_raw(&j, ",\"viewports\":");
+    js_u32(&j, pm_metal_console_viewport_count_id(id)
+        + pm_metal_console_tap_count_id(id, (uint32_t)(pm_metal_coop_mono_us() / 1000u)));
+    js_ch(&j, '}');
+    if (!js_ok(&j)) {
+        return -1;
+    }
+    *out_len = j.n;
+    return 0;
+}
+
+static int32_t console_tail_asgi_handler(const char *method, const char *path,
+    uint8_t *out, uint32_t out_max, uint32_t *out_len) {
+    return console_tail_http(method, path, (char *)out, out_max, out_len);
 }
 
 /* /docs/<fqn>/<name> — the doc extract for one export face: prose, params,
@@ -2324,6 +3146,32 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
             "application/json") != 0) {
         return -1;
     }
+    /* Object download, also before the wildcard, and two routes because the
+     * two halves are two content types: /build/objects/<fqn> lists what is
+     * retained, /build/object/<fqn>/<i> is the bytes. The biggest card's
+     * object is ~6 MB against a 1 MiB body window, so the bytes route is a
+     * window on the blob (?off=) and the caller stitches — the alternative
+     * was a per-connection buffer six times larger for every request. */
+    if (pm_metal_net_http_asgi_route_fn_ct("GET", "/build/objects/*",
+            build_objects_asgi_handler, "application/json") != 0) {
+        return -1;
+    }
+    if (pm_metal_net_http_asgi_route_fn_ct("GET", "/build/object/*",
+            build_object_bytes_asgi_handler, "application/octet-stream") != 0) {
+        return -1;
+    }
+    /* The whole-image download, same two shapes: /images lists what the
+     * host build left on this seat, /images/<board>/<file> is the bytes.
+     * Every seat registers both; firmware and the browser cell have no
+     * image tree and answer the empty list there. */
+    if (pm_metal_net_http_asgi_route_fn_ct("GET", "/images", images_asgi_handler,
+            "application/json") != 0) {
+        return -1;
+    }
+    if (pm_metal_net_http_asgi_route_fn_ct("GET", "/images/*",
+            image_bytes_asgi_handler, "application/octet-stream") != 0) {
+        return -1;
+    }
     /* Build records: /build/<fqn> serves the provenance of the unit's last
      * runtime compile (objects + linked symbols). */
     if (pm_metal_net_http_asgi_route_fn_ct("GET", "/build/*", build_asgi_handler,
@@ -2349,6 +3197,15 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
         return -1;
     }
     if (pm_metal_net_http_asgi_route_fn_ct("POST", "/build/*", build_rebuild_asgi_handler,
+            "application/json") != 0) {
+        return -1;
+    }
+    /* The console, read by cursor: /console/<id>?since=<seq>. This is the
+     * seat's own output — the boot tree, m.serve(), anything a card printed
+     * — which is what the corner REPL panel mirrors. The line it types back
+     * is POST /console/exec, a deferred route the µPy side registers, since
+     * running a line needs the interpreter and this card is seat-agnostic C. */
+    if (pm_metal_net_http_asgi_route_fn_ct("GET", "/console/*", console_tail_asgi_handler,
             "application/json") != 0) {
         return -1;
     }
@@ -2394,3 +3251,5 @@ PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_example, pm_metal_ins
 
 PM_MOD_BOOT_C(pymergetic.metal.inspect, pm_metal_inspect_init, pm_metal_inspect_deinit);
 PM_MOD_BOOTDEP_C(pymergetic.metal.inspect, pymergetic.metal.net.http.asgi);
+/* /console/<id> reads that card's ring. */
+PM_MOD_BOOTDEP_C(pymergetic.metal.inspect, pymergetic.metal.console);

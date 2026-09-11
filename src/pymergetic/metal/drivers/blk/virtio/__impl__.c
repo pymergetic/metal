@@ -5,6 +5,7 @@
 #include "pymergetic/metal/bus/virtio.h"
 #include "pymergetic/metal/dt.h"
 #include "pymergetic/metal/drivers/blk.h"
+#include "pymergetic/util/limits/__types__.h"
 #include "pymergetic/util/mem.h"
 
 #if defined(PM_METAL_FIRMWARE)
@@ -13,16 +14,21 @@
 
 #include <string.h>
 
-#define VIRTIO_BLK_MAX 4u
 #define VIRTIO_BLK_SEC 512u
+/* How many disks this card offers and how many sectors the largest of them
+ * may hold. */
+#define VIRTIO_BLK_DEVICE_DEFAULT 4u
+#define VIRTIO_BLK_SECTOR_DEFAULT 256u
 
 struct virtio_blk {
     uint32_t used;
     uint32_t nsec;
+    uint32_t unit;
     uint8_t *data;
     int32_t dt_id;
     int32_t blk_h;
     pm_metal_blk_ops_t ops;
+    struct virtio_blk *next;
 #if defined(PM_METAL_FIRMWARE)
     volatile uint8_t *common;
     volatile uint8_t *notify;
@@ -37,7 +43,44 @@ struct virtio_blk {
 };
 
 static pm_util_mem_arena_t *s_arena;
-static struct virtio_blk s_dev[VIRTIO_BLK_MAX];
+/* One row per disk, taken when it attaches and kept for the seat. The blk
+ * core holds each row's address as its ops ctx, so rows are linked, never
+ * moved. */
+static struct virtio_blk *s_head;
+static uint32_t s_dev_used;
+
+PM_UTIL_LIMIT_C(pm_metal_blk_virtio_limit_device, "drivers.blk.virtio.device",
+    VIRTIO_BLK_DEVICE_DEFAULT, 0u, &s_dev_used);
+PM_UTIL_LIMIT_C(pm_metal_blk_virtio_limit_sector, "drivers.blk.virtio.sector",
+    VIRTIO_BLK_SECTOR_DEFAULT, 0u, NULL);
+
+/* A row for one more disk: a closed one first, then a fresh one. Either way
+ * the device knob says whether this card may offer another disk at all. */
+static struct virtio_blk *vb_row(void) {
+    struct virtio_blk *d = s_head;
+    uint32_t rows = 0;
+    if (!PM_UTIL_LIMIT_ROOM(pm_metal_blk_virtio_limit_device, s_dev_used)) {
+        return NULL;
+    }
+    while (d != NULL) {
+        if (!d->used) {
+            return d;
+        }
+        rows++;
+        d = d->next;
+    }
+    d = pm_util_mem_alloc(s_arena, sizeof(*d));
+    if (d == NULL) {
+        return NULL;
+    }
+    memset(d, 0, sizeof(*d));
+    d->unit = rows;
+    d->dt_id = -1;
+    d->blk_h = -1;
+    d->next = s_head;
+    s_head = d;
+    return d;
+}
 
 #if defined(PM_METAL_FIRMWARE)
 #define FW_BLK_QSZ 16u
@@ -283,6 +326,9 @@ static void vb_close(void *ctx) {
     if (d == NULL) {
         return;
     }
+    if (d->used != 0 && s_dev_used != 0) {
+        s_dev_used--;
+    }
     d->used = 0;
     d->data = NULL;
     d->nsec = 0;
@@ -303,57 +349,63 @@ int32_t pm_metal_drivers_blk_virtio_init(pm_util_mem_arena_t *arena) {
         return -1;
     }
     s_arena = arena;
-    memset(s_dev, 0, sizeof(s_dev));
+    /* Rows came from the arena the last run was given; this one may be a
+     * different arena, so the chain starts empty. */
+    s_head = NULL;
+    s_dev_used = 0;
     return 0;
 }
 
 void pm_metal_drivers_blk_virtio_deinit(void) {
-    memset(s_dev, 0, sizeof(s_dev));
+    s_head = NULL;
+    s_dev_used = 0;
     s_arena = NULL;
 }
 
 int32_t pm_metal_drivers_blk_virtio_probe(uint32_t nsec) {
-    uint32_t i;
     struct virtio_blk *d;
     size_t bytes;
-    if (s_arena == NULL || nsec == 0 || nsec > 256u) {
+    uint32_t most = pm_metal_blk_virtio_limit_sector.soft;
+    if (most == 0u) {
+        most = pm_metal_blk_virtio_limit_sector.dflt;
+    }
+    if (s_arena == NULL || nsec == 0 || nsec > most) {
         return -1;
     }
-    for (i = 0; i < VIRTIO_BLK_MAX; i++) {
-        if (s_dev[i].used) {
-            continue;
-        }
-        d = &s_dev[i];
-        memset(d, 0, sizeof(*d));
-        bytes = (size_t)nsec * VIRTIO_BLK_SEC;
+    d = vb_row();
+    if (d == NULL) {
+        return -1;
+    }
+    bytes = (size_t)nsec * VIRTIO_BLK_SEC;
+    if (d->data == NULL || d->nsec != nsec) {
         d->data = pm_util_mem_alloc(s_arena, bytes);
         if (d->data == NULL) {
             return -1;
         }
-        memset(d->data, 0, bytes);
-        d->nsec = nsec;
-        d->used = 1;
-        d->ops.ready = vb_ready;
-        d->ops.capacity = vb_cap;
-        d->ops.read = vb_read;
-        d->ops.write = vb_write;
-        d->ops.close = vb_close;
-        d->ops.ctx = d;
-        d->dt_id = pm_metal_dt_add(PM_METAL_DT_CLASS_BLK, "virtio-blk", PM_METAL_DT_BUS_VIRTIO, 0, 0,
-            0, i);
-        if (d->dt_id < 0) {
-            d->used = 0;
-            return -1;
-        }
-        d->blk_h = pm_metal_drivers_blk_bind(d->dt_id, &d->ops);
-        if (d->blk_h < 0) {
-            (void)pm_metal_dt_unbind(d->dt_id);
-            d->used = 0;
-            return -1;
-        }
-        return d->blk_h;
     }
-    return -1;
+    memset(d->data, 0, bytes);
+    d->nsec = nsec;
+    d->used = 1;
+    d->ops.ready = vb_ready;
+    d->ops.capacity = vb_cap;
+    d->ops.read = vb_read;
+    d->ops.write = vb_write;
+    d->ops.close = vb_close;
+    d->ops.ctx = d;
+    d->dt_id = pm_metal_dt_add(PM_METAL_DT_CLASS_BLK, "virtio-blk", PM_METAL_DT_BUS_VIRTIO, 0, 0,
+        0, d->unit);
+    if (d->dt_id < 0) {
+        d->used = 0;
+        return -1;
+    }
+    d->blk_h = pm_metal_drivers_blk_bind(d->dt_id, &d->ops);
+    if (d->blk_h < 0) {
+        (void)pm_metal_dt_unbind(d->dt_id);
+        d->used = 0;
+        return -1;
+    }
+    s_dev_used++;
+    return d->blk_h;
 }
 
 #if defined(PM_METAL_FIRMWARE)
@@ -388,16 +440,10 @@ static int32_t fw_blk_attach_pci(uint32_t bus, uint32_t dev, uint32_t fn) {
     if ((mmio_r8(common + 20) & 8u) == 0) {
         return -1;
     }
-    for (i = 0; i < VIRTIO_BLK_MAX; i++) {
-        if (!s_dev[i].used) {
-            break;
-        }
-    }
-    if (i >= VIRTIO_BLK_MAX) {
+    d = vb_row();
+    if (d == NULL) {
         return -1;
     }
-    d = &s_dev[i];
-    memset(d, 0, sizeof(*d));
     d->used = 1;
     d->common = common;
     d->notify = notify;
@@ -451,6 +497,7 @@ static int32_t fw_blk_attach_pci(uint32_t bus, uint32_t dev, uint32_t fn) {
         d->used = 0;
         return -1;
     }
+    s_dev_used++;
     return d->blk_h;
 }
 #endif

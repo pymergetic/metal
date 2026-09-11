@@ -1,12 +1,16 @@
 /* pymergetic.metal.net.zenoh — Zenoh v1 as a Metal card. One defining lang = C.
- * Owns a small set of wrapped zenoh-pico sessions ("slots", Z_FEATURE_MULTI_THREAD=0
+ * Owns a set of wrapped zenoh-pico sessions ("slots", Z_FEATURE_MULTI_THREAD=0
  * "spin" mode). Every step is a bounded, cooperative open or poll; nothing blocks
  * the card, and no pointer is held across a step (user callbacks resolve from the
  * session inside one poll()).
  *
- * Slots let one thread host a listener and a connector on the same _lo_ net.ip:
- * the two-session put/subscriber round-trip prove. sel(0/1) selects which slot the
- * peer()/up()/put()/subscribe() faces drive; poll() (and the platform yield)
+ * How many slots is net.zenoh.session, a knob with a default of two — enough to
+ * host a listener and a connector on the same _lo_ net.ip, which is the
+ * two-session put/subscriber round-trip prove. A seat that sits in more fleets
+ * than that raises the knob while its sessions are closed.
+ *
+ * sel(n) selects which slot the peer()/up()/put()/subscribe() faces drive;
+ * poll() (and the platform yield)
  * advance every open slot so the peer that must answer a handshake makes progress
  * while its partner waits.
  *
@@ -20,6 +24,7 @@
 
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/metal/coop.h"
+#include "pymergetic/util/limits.h"
 #include "pymergetic/metal/boot/externals.h"
 #include "pymergetic/util/mem.h"
 
@@ -83,7 +88,11 @@ typedef struct pm_metal_net_zenoh_ctx {
     uint32_t q_qlen;                              /* bytes accumulated in-q_buf */
 } pm_metal_net_zenoh_ctx_t;
 
-#define PM_METAL_NET_ZENOH_SLOTS 2u
+/* How many sessions this seat holds at once. A default, not a shape: a seat
+ * that wants to sit in three fleets at once raises net.zenoh.session and the
+ * slot table follows. Two is what the card needs to prove itself (a listener
+ * and a connector on one _lo_), so that is where it starts. */
+#define PM_METAL_NET_ZENOH_SESSION_DEFAULT 2u
 
 /* Cooperative-accept per-slot state. When a session is opened in peer/listen
  * mode, the card parks the stock accept task and drives the INIT/OPEN handshake
@@ -122,8 +131,12 @@ struct pm_metal_net_zenoh_reply {
     uint8_t _slot;
 };
 
-static pm_metal_net_zenoh_ctx_t s_slots[PM_METAL_NET_ZENOH_SLOTS];
-static pm_metal_net_zenoh_accept_t s_accept[PM_METAL_NET_ZENOH_SLOTS];
+/* The slot table, its accept states and its executor guards: one allocation
+ * each, taken when the card boots at the depth net.zenoh.session asks for. */
+static pm_metal_net_zenoh_ctx_t *s_slots;
+static pm_metal_net_zenoh_accept_t *s_accept;
+static uint32_t s_nslot;
+static uint32_t s_slot_used;
 static uint8_t s_sel;            /* slot the bounded faces drive */
 static pm_util_mem_arena_t *s_arena;
 static pm_metal_net_zenoh_yield_fn s_yield_hook;
@@ -131,12 +144,79 @@ static pm_metal_net_zenoh_yield_fn s_yield_hook;
  * z_open / zp_spin_once). The platform yield spins every open slot EXCEPT any
  * whose executor is already on the stack: that interleaves two sessions' blocked
  * handshake reads without re-entering a running executor. */
-static uint8_t s_exec_in[PM_METAL_NET_ZENOH_SLOTS];
+static uint8_t *s_exec_in;
 static uint8_t s_local_zid[PM_METAL_NET_ZENOH_ZID_LEN];
 static int32_t s_local_zid_init;
 /* Cooperative-accept border (defined further down); declared here so
  * spin_open_slots can step a peer/listen seat during a connector handshake. */
 static int32_t accept_pump(uint8_t slot);
+
+/* net.zenoh.session: how many sessions the seat can hold. The table is not
+ * reshaped while a session is live — zenoh-pico keeps pointers into the session
+ * it was handed — so the apply hook refuses a move that would have to move an
+ * open slot, and the seat closes its sessions first. */
+static int32_t slots_apply(pm_util_limit_t *knob);
+PM_UTIL_LIMIT_APPLY_C(pm_zenoh_limit_session, "net.zenoh.session",
+    PM_METAL_NET_ZENOH_SESSION_DEFAULT, 0u, &s_slot_used, slots_apply);
+
+/* The table is taken up front rather than grown per session, so "no ceiling"
+ * reads as "the number the build shipped with" here: there is nothing to hold
+ * an unbounded slot count in. */
+static uint32_t slots_want(const pm_util_limit_t *knob) {
+    return knob->soft != 0u ? knob->soft : knob->dflt;
+}
+
+/* Take (or retake) the slot table at n slots. Everything the card keeps per
+ * slot moves together, so one refusal leaves the card on the table it had. */
+static int32_t slots_fit(uint32_t n) {
+    pm_metal_net_zenoh_ctx_t *ctx;
+    pm_metal_net_zenoh_accept_t *acc;
+    uint8_t *exec;
+    uint32_t i;
+
+    if (s_arena == NULL || n == 0u) {
+        return -1;
+    }
+    ctx = pm_util_mem_alloc(s_arena, n * sizeof(*ctx));
+    acc = pm_util_mem_alloc(s_arena, n * sizeof(*acc));
+    exec = pm_util_mem_alloc(s_arena, n * sizeof(*exec));
+    if (ctx == NULL || acc == NULL || exec == NULL) {
+        pm_util_mem_free(s_arena, ctx);
+        pm_util_mem_free(s_arena, acc);
+        pm_util_mem_free(s_arena, exec);
+        return -1;
+    }
+    memset(ctx, 0, n * sizeof(*ctx));
+    memset(acc, 0, n * sizeof(*acc));
+    memset(exec, 0, n * sizeof(*exec));
+    for (i = 0; i < n; i++) {
+        acc[i].fd = -1;
+    }
+    pm_util_mem_free(s_arena, s_slots);
+    pm_util_mem_free(s_arena, s_accept);
+    pm_util_mem_free(s_arena, s_exec_in);
+    s_slots = ctx;
+    s_accept = acc;
+    s_exec_in = exec;
+    s_nslot = n;
+    if (s_sel >= n) {
+        s_sel = 0;
+    }
+    return 0;
+}
+
+static int32_t slots_apply(pm_util_limit_t *knob) {
+    uint32_t i;
+    if (s_slots == NULL) {
+        return 0; /* the card has not booted yet; init() reads the knob */
+    }
+    for (i = 0; i < s_nslot; i++) {
+        if (s_slots[i].open_state != 0 || s_accept[i].fd >= 0) {
+            return -1; /* a live session cannot be moved under zenoh-pico */
+        }
+    }
+    return slots_fit(slots_want(knob));
+}
 static void accept_reset(pm_metal_net_zenoh_accept_t *ac);/* Joined-group listener that answers a SCOUT with a HELLO (the card-level hello
  * side; zenoh-pico core has no SCOUT→HELLO answerer). One at a time. A live
  * card that has a session would send HELLOs from its own transport; this is the
@@ -163,9 +243,9 @@ void pm_metal_net_zenoh_set_yield(pm_metal_net_zenoh_yield_fn fn) {
  * yield from one session's blocked read spins the matching peer instead of
  * re-entering a running executor (zenoh-pico spin mode is not re-entrant). */
 static void spin_open_slots(void) {
-    uint8_t i;
+    uint32_t i;
     int s;
-    for (i = 0; i < PM_METAL_NET_ZENOH_SLOTS; i++) {
+    for (i = 0; i < s_nslot; i++) {
         if (s_slots[i].open_state != 2 || s_exec_in[i]) {
             continue;
         }
@@ -583,22 +663,20 @@ static int32_t try_open(pm_metal_net_zenoh_ctx_t *sl) {
             sl->token_set = 1;
         }
     sl->open_state = 2;
+    s_slot_used++;
     return 1;
 }
 
 int32_t pm_metal_net_zenoh_init(pm_util_mem_arena_t *arena) {
-    uint8_t i;
     if (arena == NULL) {
         return -1;
     }
-    memset(s_slots, 0, sizeof(s_slots));
-    memset(s_exec_in, 0, sizeof(s_exec_in));
-    memset(s_accept, 0, sizeof(s_accept));
-    for (i = 0; i < PM_METAL_NET_ZENOH_SLOTS; i++) {
-        s_accept[i].fd = -1;
+    s_arena = arena;
+    s_slot_used = 0;
+    if (slots_fit(slots_want(&pm_zenoh_limit_session)) != 0) {
+        return -1;
     }
     s_in_accept = 0;
-    s_arena = arena;
     s_sel = 0;
     s_yield_hook = NULL;
     s_local_zid_init = 0;
@@ -608,9 +686,9 @@ int32_t pm_metal_net_zenoh_init(pm_util_mem_arena_t *arena) {
 }
 
 void pm_metal_net_zenoh_deinit(void) {
-    uint8_t i;
+    uint32_t i;
     pm_metal_net_zenoh_scout_answer_off(); /* no stale group listener between tests */
-    for (i = 0; i < PM_METAL_NET_ZENOH_SLOTS; i++) {
+    for (i = 0; i < s_nslot; i++) {
         pm_metal_net_zenoh_ctx_t *sl = &s_slots[i];
         accept_reset(&s_accept[i]); /* tear down any dangling accept socket */
         if (sl->qle_set) {
@@ -642,7 +720,10 @@ void pm_metal_net_zenoh_deinit(void) {
         sl->mode = 0;
     }
     s_sel = 0;
+    s_slot_used = 0;
     s_yield_hook = NULL;
+    /* The slot table stays: a scout probe after a deinit still needs somewhere
+     * to work, and init() retakes it at whatever depth the knob reads then. */
     /* keep s_arena: it is the boot harness's arena, owned/held for the whole
      * boot and only destroyed at process teardown. Nulling it here meant the
      * next pre-open z_malloc (a SCOUT encode) got NULL and zenoh-pico aborted
@@ -651,7 +732,7 @@ void pm_metal_net_zenoh_deinit(void) {
 }
 
 int32_t pm_metal_net_zenoh_sel(uint8_t slot) {
-    if (slot >= PM_METAL_NET_ZENOH_SLOTS) {
+    if ((uint32_t)slot >= s_nslot) {
         return -1;
     }
     s_sel = slot;
@@ -675,7 +756,7 @@ int32_t pm_metal_net_zenoh_up(void) {
 }
 
 int32_t pm_metal_net_zenoh_poll(void) {
-    uint8_t i;
+    uint32_t i;
     /* Progress any pending open on the selected slot, then advance every open
      * slot so one pump loop makes a listener + connector handshake together. */
     if (s_slots[s_sel].open_state != 2) {
@@ -685,7 +766,7 @@ int32_t pm_metal_net_zenoh_poll(void) {
     if (s_slots[s_sel].open_state == 2) {
         pm_metal_net_zenoh_yield();   /* pump net.ip once more after the spins */
     }
-    for (i = 0; i < PM_METAL_NET_ZENOH_SLOTS; i++) {
+    for (i = 0; i < s_nslot; i++) {
         (void)try_open(&s_slots[i]);  /* retry slots that were not open yet */
     }
     /* Drive the scout/hello answerer so a SCOUT on the multicast group is
@@ -723,7 +804,7 @@ static void zenoh_sample_cb(_z_sample_t *sample, void *arg) {
     const z_loaned_bytes_t *pl;
     z_view_slice_t view;
     size_t used = 0;
-    if (idx >= (uintptr_t)PM_METAL_NET_ZENOH_SLOTS || sample == NULL) {
+    if (idx >= (uintptr_t)s_nslot || sample == NULL) {
         return;
     }
     /* Key: copy into a local view string via the keyexpr accessor. z_loaned_*
@@ -800,7 +881,7 @@ int32_t pm_metal_net_zenoh_subscribe(const char *key, pm_metal_net_zenoh_value_c
  * while the query callback is on the stack. */
 int32_t pm_metal_net_zenoh_reply_append(pm_metal_net_zenoh_reply_t *reply, const uint8_t *data, size_t len) {
     pm_metal_net_zenoh_ctx_t *sl;
-    if (reply == NULL || reply->_slot >= PM_METAL_NET_ZENOH_SLOTS) {
+    if (reply == NULL || (uint32_t)reply->_slot >= s_nslot) {
         return -1;
     }
     sl = &s_slots[reply->_slot];
@@ -834,7 +915,7 @@ static void zenoh_query_cb(z_loaned_query_t *q, void *arg) {
     z_owned_bytes_t payload;
     z_view_keyexpr_t rke;
     z_result_t rc;
-    if (idx >= (uintptr_t)PM_METAL_NET_ZENOH_SLOTS || q == NULL) {
+    if (idx >= (uintptr_t)s_nslot || q == NULL) {
         return;
     }
     pm_metal_net_zenoh_ctx_t *sl = &s_slots[idx];

@@ -224,8 +224,20 @@ static int32_t test_object_compile_target(void) {
         pm_util_mem_arena_destroy(arena); free(backing); return 49;
     }
 #else
-    if (rc == 0) { pm_util_mem_arena_destroy(arena); free(backing); return 50; }
-    if (err[0] == '\0') { pm_util_mem_arena_destroy(arena); free(backing); return 51; }
+    /* No arm cross instance in this binary. Which outcome is correct depends
+     * on the arch, not on the instance: a lane naming the seat's own arch is
+     * routed to the native backend and must emit (every target producible
+     * from every platform), while a genuinely foreign arch with no backend
+     * must refuse and say so. */
+    if (strcmp(pm_metal_jit_c_target_arch(PM_METAL_JIT_C_TARGET_ARM_EABI),
+            pm_metal_jit_c_target_arch(PM_METAL_JIT_C_TARGET_SEAT)) == 0) {
+        if (rc != 0 || obj == NULL || obj_len < 52) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 50;
+        }
+    } else {
+        if (rc == 0) { pm_util_mem_arena_destroy(arena); free(backing); return 50; }
+        if (err[0] == '\0') { pm_util_mem_arena_destroy(arena); free(backing); return 51; }
+    }
 #endif
 
     /* x86_64 cross knob (wasm32-native seat — the browser): same probe,
@@ -254,8 +266,24 @@ static int32_t test_object_compile_target(void) {
         pm_util_mem_arena_destroy(arena); free(backing); return 56;
     }
 #else
-    if (rc == 0) { pm_util_mem_arena_destroy(arena); free(backing); return 57; }
-    if (err[0] == '\0') { pm_util_mem_arena_destroy(arena); free(backing); return 58; }
+    /* Same rule as the arm lane above: on an x86-64 seat this lane names the
+     * seat's own arch, so it must produce an ELF64 EM_X86_64 object through
+     * the native backend rather than refuse for want of a cross instance. */
+    if (strcmp(pm_metal_jit_c_target_arch(PM_METAL_JIT_C_TARGET_X86_64),
+            pm_metal_jit_c_target_arch(PM_METAL_JIT_C_TARGET_SEAT)) == 0) {
+        if (rc != 0 || obj == NULL || obj_len < 52) {
+            pm_util_mem_arena_destroy(arena); free(backing); return 57;
+        }
+        if (obj[0] != 0x7f || obj[1] != 'E' || obj[2] != 'L' || obj[3] != 'F') {
+            pm_util_mem_arena_destroy(arena); free(backing); return 58;
+        }
+        if (obj[18] != 62 || obj[19] != 0) {  /* EM_X86_64 = 62 */
+            pm_util_mem_arena_destroy(arena); free(backing); return 59;
+        }
+    } else {
+        if (rc == 0) { pm_util_mem_arena_destroy(arena); free(backing); return 57; }
+        if (err[0] == '\0') { pm_util_mem_arena_destroy(arena); free(backing); return 58; }
+    }
 #endif
     pm_util_mem_arena_destroy(arena);
     free(backing);
@@ -377,6 +405,192 @@ static int32_t test_diag_isolation(void) {
 #endif
 }
 
+/* Every advertised lane must build a card-shaped translation unit, and
+ * every lane the mask leaves out must refuse and say why.
+ *
+ * The probes above compile `v * 3 + 1`, which asks a backend for nothing but
+ * straight-line integer arithmetic. The wasm32 backend does exactly that and
+ * no more, so it passed them while refusing — or worse, silently
+ * miscompiling — every real card: the lane was advertised, a whole-tree walk
+ * failed 80 of 84 units on it, and the artifacts it did emit for branches
+ * loaded in an engine and returned wrong values. This canary is the smallest
+ * unit shaped like a card instead: a struct, initialised static data, a call
+ * between two functions, a loop and a branch. A lane that cannot compile it
+ * cannot build this tree, and must not be offered as a target. */
+static int32_t test_lane_mask_is_honest(void) {
+#if PM_HAS_TCC
+    static const char *canary =
+        "struct lane_probe { int a; int b; };\n"
+        "static int lane_probe_tab[3] = { 1, 2, 3 };\n"
+        "static int lane_probe_add(int x, int y) { return x + y; }\n"
+        "int lane_probe_main(int n) {\n"
+        "    struct lane_probe s;\n"
+        "    int i;\n"
+        "    int acc = 0;\n"
+        "    s.a = 1;\n"
+        "    s.b = 2;\n"
+        "    for (i = 0; i < n; i++) { acc += lane_probe_tab[i % 3]; }\n"
+        "    if (acc > 100) { acc = 100; }\n"
+        "    return lane_probe_add(acc, s.a + s.b);\n"
+        "}\n";
+    uint32_t mask = pm_metal_jit_c_target_mask();
+    uint32_t t;
+    void *backing = malloc(1u << 25);
+    pm_util_mem_arena_t *arena;
+
+    if (!backing) return 70;
+    arena = pm_util_mem_arena_create(backing, 1u << 25);
+    if (!arena) { free(backing); return 71; }
+
+    for (t = 0; t < 4u; t++) {
+        uint8_t *obj = NULL;
+        size_t obj_len = 0;
+        char err[256];
+        int32_t rc;
+        int advertised = (mask & (1u << t)) != 0u;
+
+        memset(err, 0, sizeof(err));
+        rc = pm_metal_jit_c_object_compile_target(arena, canary,
+            strlen(canary), NULL, 0, NULL, 0, (int32_t)t,
+            &obj, &obj_len, err, sizeof(err));
+        if (advertised) {
+            /* offered as a target, so it has to deliver an object */
+            if (rc != 0 || obj == NULL || obj_len < 8) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 72;
+            }
+        } else {
+            /* left out, so it has to refuse rather than emit something */
+            if (rc == 0) {
+                pm_util_mem_arena_destroy(arena); free(backing); return 73;
+            }
+            if (err[0] == '\0') {
+                pm_util_mem_arena_destroy(arena); free(backing); return 74;
+            }
+        }
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
+/* The wasm32 lane's answers, not just its bytes.
+ *
+ * wasm32_prove.c (the standalone emitter prove) checks that a module tiles
+ * and indexes in range, which is all a binary without an engine can check.
+ * This seat has one: the wasmmod loader and WAMR are linked right here, and
+ * they are the same pair the build card links a wasm object with. So compile
+ * for the lane, load, call, compare — the loop that caught every real bug in
+ * this backend (a branch that took the wrong arm, a local array whose
+ * address was added twice, an i64 compare that re-tested stale flags).
+ *
+ * Cases stay int-in/int-out on purpose: the artifact_call transport is an
+ * i32 spine (see artifact_call_wasm), so a case that wants floats or long
+ * long computes with them inside and hands back an int. */
+#if defined(PM_METAL_TCC_CROSS_WASM32) || defined(TCC_TARGET_WASM32)
+#include "pymergetic/wasmmod/loader/__exports__.h"
+#include "pymergetic/wasmmod/registry.h"
+#include "wasm32_cases.inc.h"
+
+static int32_t wasm32_run(pm_util_mem_arena_t *arena, const char *name,
+    const char *src, const int *args, int n_args, const int *want) {
+    uint8_t *obj = NULL;
+    size_t obj_len = 0;
+    char err[256];
+    char modname[96];
+    pm_wasmmod_registry_handle_t h;
+    int32_t rc;
+    int i;
+    int32_t bad = 0;
+
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_c_object_compile_target(arena, src, strlen(src),
+        NULL, 0, NULL, 0, (int32_t)PM_METAL_JIT_C_TARGET_WASM32,
+        &obj, &obj_len, err, sizeof(err));
+    if (rc != 0 || obj == NULL || obj_len == 0) {
+        fprintf(stderr, "wasm32 run: %s: compile refused: %s\n", name, err);
+        return 1;
+    }
+    /* a name of this shape is what the build card publishes under */
+    snprintf(modname, sizeof(modname), "pymergetic.metal.jit.c.wasm32.%s", name);
+    h = pm_wasmmod_loader_load((const uint8_t *)modname,
+        (uint32_t)strlen(modname), obj, (uint32_t)obj_len);
+    if (h.index == UINT32_MAX) {
+        fprintf(stderr, "wasm32 run: %s: the loader refused the module"
+            " (%u bytes)\n", name, (unsigned)obj_len);
+        return 2;
+    }
+    for (i = 0; i < n_args; i++) {
+        pm_wasmmod_registry_value_t a, r;
+        int64_t got;
+        a.kind = PM_WASMMOD_REGISTRY_VALKIND_I32;
+        a.of.i32 = args[i];
+        r.kind = PM_WASMMOD_REGISTRY_VALKIND_I32;
+        r.of.i32 = 0;
+        rc = pm_wasmmod_registry_call((const uint8_t *)modname,
+            (uint32_t)strlen(modname), (const uint8_t *)"f", 1u,
+            &a, 1u, &r, 1u);
+        if (rc < 0) {
+            fprintf(stderr, "wasm32 run: %s: f(%d) trapped (%d)\n",
+                name, args[i], (int)rc);
+            bad = 3;
+            break;
+        }
+        switch (r.kind) {
+        case PM_WASMMOD_REGISTRY_VALKIND_I64: got = r.of.i64; break;
+        case PM_WASMMOD_REGISTRY_VALKIND_F32: got = (int64_t)r.of.f32; break;
+        case PM_WASMMOD_REGISTRY_VALKIND_F64: got = (int64_t)r.of.f64; break;
+        default: got = (int64_t)r.of.i32; break;
+        }
+        if (got != (int64_t)want[i]) {
+            fprintf(stderr, "wasm32 run: %s: f(%d) = %lld, wanted %d\n",
+                name, args[i], (long long)got, want[i]);
+            bad = 4;
+            break;
+        }
+    }
+    (void)pm_wasmmod_loader_unload(h);
+    return bad;
+}
+
+static int32_t test_wasm32_runs_real_c(void) {
+    void *backing;
+    pm_util_mem_arena_t *arena;
+    int32_t bad = 0;
+    int k;
+
+    if ((pm_metal_jit_c_target_mask()
+            & (1u << (uint32_t)PM_METAL_JIT_C_TARGET_WASM32)) == 0u) {
+        return 0;               /* a seat without the lane has nothing to run */
+    }
+    /* the engine comes up once per process; on a seat it is boot that does
+     * this, and a bare prove binary has no boot */
+    if (pm_wasmmod_loader_init() != 0) {
+        fprintf(stderr, "wasm32 run: the wasm runtime would not start\n");
+        return 84;
+    }
+    backing = malloc(1u << 25);
+    if (!backing) return 80;
+    arena = pm_util_mem_arena_create(backing, 1u << 25);
+    if (!arena) { free(backing); return 81; }
+
+    for (k = 0; k < WASM32_CASE_COUNT; k++) {
+        if (wasm32_run(arena, wasm32_cases[k].name, wasm32_cases[k].src,
+                wasm32_case_args, WASM32_CASE_NARGS,
+                wasm32_cases[k].want) != 0) {
+            bad = 82;
+        }
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return bad;
+}
+#else
+static int32_t test_wasm32_runs_real_c(void) { return 0; }
+#endif
+
 static int32_t pm_metal_jit_c_tests(void) {
     int32_t rc;
     rc = test_compile_alloc();
@@ -390,6 +604,10 @@ static int32_t pm_metal_jit_c_tests(void) {
     rc = test_object_self_host_tcc();
     if (rc) return rc;
     rc = test_object_compile_target();
+    if (rc) return rc;
+    rc = test_lane_mask_is_honest();
+    if (rc) return rc;
+    rc = test_wasm32_runs_real_c();
     if (rc) return rc;
     rc = test_diag_invalid_source();
     if (rc) return rc;

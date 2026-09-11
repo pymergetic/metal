@@ -97,15 +97,18 @@ typedef struct pm_metal_build_ctx {
      * the lock's unlocked state (same contract as the actor's), so the
      * lazy ctx create needs no explicit init. */
     pm_util_lock_t lock;
-    /* build records (provenance chain) — retained per unit_compile */
-    pm_metal_build_record_t records[PM_METAL_BUILD_MAX_RECORDS];
+    /* build records (provenance chain) — retained per unit_compile, as deep
+     * as build.record asks for when the ctx is taken */
+    pm_metal_build_record_t *records;
+    uint32_t n_records;
     uint32_t record_epoch;
     /* change-ledger scratch: every ledger read path (read-modify-write
      * append + query scan) — never nested, one buffer on the ctx */
     uint8_t ledger_buf[PM_METAL_BUILD_LEDGER_MAX];
-    /* factory-floor event ring: fixed-size, seq-numbered, wraps at
-     * PM_METAL_BUILD_EVENTS. seq starts at 1 so 0 = "nothing yet". */
-    pm_metal_build_event_t events[PM_METAL_BUILD_EVENTS];
+    /* factory-floor event ring: seq-numbered, as long as build.event asks
+     * for, wrapping there. seq starts at 1 so 0 = "nothing yet". */
+    pm_metal_build_event_t *events;
+    uint32_t n_events;
     uint32_t event_seq;
     /* accessor-spine slots: round-robin handles into at_info/at_ast */
     pm_build_at_slot_t at[PM_METAL_BUILD_AT_SLOTS];
@@ -133,9 +136,35 @@ static pm_metal_build_ctx_t *s_build_ctx;
  * carries the prototypes; the link still goes through the same card
  * embed — no second implementation anywhere. */
 #include "pymergetic/metal/coop.h"
+#include "pymergetic/util/limits.h"
+
+/* How much history the factory floor keeps. Both were sized by measuring a
+ * whole-tree BUILD ALL and rounding up, which is exactly the guess a knob
+ * replaces: a seat with a bigger tree raises build.record, a seat that only
+ * wants the last handful of events lowers build.event, and neither number is
+ * a shape the card was compiled around.
+ *
+ * Moving either one restarts that history. The tables are rings addressed by
+ * an epoch modulo their depth, so a table of a different depth holds those
+ * rows in different places; carrying them over would report the wrong build
+ * against the wrong unit, which is worse than an empty pane. */
+static int32_t records_apply(pm_util_limit_t *knob);
+static int32_t events_apply(pm_util_limit_t *knob);
+static uint32_t s_records_used;
+PM_UTIL_LIMIT_APPLY_C(pm_build_limit_record, "build.record",
+    PM_METAL_BUILD_RECORD_DEFAULT, 0u, &s_records_used, records_apply);
+PM_UTIL_LIMIT_APPLY_C(pm_build_limit_event, "build.event",
+    PM_METAL_BUILD_EVENT_DEFAULT, 0u, NULL, events_apply);
+
+/* A ring is taken whole, so "no ceiling" reads as the build's own number. */
+static uint32_t ring_want(const pm_util_limit_t *knob) {
+    return knob->soft != 0u ? knob->soft : knob->dflt;
+}
 
 static pm_metal_build_ctx_t *build_ctx_acquire(void) {
     pm_util_mem_arena_t *arena;
+    uint32_t nrec = ring_want(&pm_build_limit_record);
+    uint32_t nev = ring_want(&pm_build_limit_event);
     if (s_build_ctx != NULL) {
         return s_build_ctx;
     }
@@ -149,7 +178,78 @@ static pm_metal_build_ctx_t *build_ctx_acquire(void) {
         return NULL;
     }
     memset(s_build_ctx, 0, sizeof(*s_build_ctx));
+    s_build_ctx->records = pm_util_mem_alloc(arena,
+        (size_t)nrec * sizeof(*s_build_ctx->records));
+    s_build_ctx->events = pm_util_mem_alloc(arena,
+        (size_t)nev * sizeof(*s_build_ctx->events));
+    if (s_build_ctx->records == NULL || s_build_ctx->events == NULL) {
+        pm_util_mem_free(arena, s_build_ctx->records);
+        pm_util_mem_free(arena, s_build_ctx->events);
+        pm_util_mem_free(arena, s_build_ctx);
+        s_build_ctx = NULL;
+        return NULL;
+    }
+    memset(s_build_ctx->records, 0, (size_t)nrec * sizeof(*s_build_ctx->records));
+    memset(s_build_ctx->events, 0, (size_t)nev * sizeof(*s_build_ctx->events));
+    s_build_ctx->n_records = nrec;
+    s_build_ctx->n_events = nev;
     return s_build_ctx;
+}
+
+/* Retake one of the ctx's rings at n entries, empty. The caller holds the ctx
+ * lock, so no pane read is walking the table being swapped out. */
+static int32_t ring_fit(void **table, uint32_t *have, uint32_t n, size_t item) {
+    pm_util_mem_arena_t *arena = pm_metal_coop_arena();
+    void *next;
+    if (arena == NULL || n == 0u) {
+        return -1;
+    }
+    if (n == *have) {
+        return 0;
+    }
+    next = pm_util_mem_alloc(arena, (size_t)n * item);
+    if (next == NULL) {
+        return -1;
+    }
+    memset(next, 0, (size_t)n * item);
+    pm_util_mem_free(arena, *table);
+    *table = next;
+    *have = n;
+    return 0;
+}
+
+static int32_t records_apply(pm_util_limit_t *knob) {
+    int32_t rc;
+    if (s_build_ctx == NULL) {
+        return 0; /* nothing taken yet; the ctx reads the knob when it is */
+    }
+    pm_util_lock_acquire(&s_build_ctx->lock);
+    rc = ring_fit((void **)&s_build_ctx->records, &s_build_ctx->n_records,
+        ring_want(knob), sizeof(*s_build_ctx->records));
+    if (rc == 0) {
+        s_build_ctx->record_epoch = 0;
+        s_records_used = 0;
+    }
+    pm_util_lock_release(&s_build_ctx->lock);
+    return rc;
+}
+
+static int32_t events_apply(pm_util_limit_t *knob) {
+    int32_t rc;
+    if (s_build_ctx == NULL) {
+        return 0;
+    }
+    pm_util_lock_acquire(&s_build_ctx->lock);
+    rc = ring_fit((void **)&s_build_ctx->events, &s_build_ctx->n_events,
+        ring_want(knob), sizeof(*s_build_ctx->events));
+    if (rc == 0) {
+        /* The sequence starts over with the ring: a pane polling ?since=N
+         * is told the newest is 0 and begins again, rather than being
+         * handed rows the new depth places somewhere else. */
+        s_build_ctx->event_seq = 0;
+    }
+    pm_util_lock_release(&s_build_ctx->lock);
+    return rc;
 }
 
 /*------------------ build event ring (factory floor telemetry) ----------
@@ -173,7 +273,7 @@ static void build_event_emit(uint16_t kind, uint16_t target,
     seq = ctx->event_seq;
     /* wrap: slot = (seq-1) % EVENTS, so seq N and N+EVENTS collide and the
      * older tail is naturally overwritten in arrival order */
-    e = &ctx->events[(seq - 1u) % PM_METAL_BUILD_EVENTS];
+    e = &ctx->events[(seq - 1u) % ctx->n_events];
     memset(e, 0, sizeof(*e));
     e->seq = seq;
     e->kind = kind;
@@ -229,11 +329,11 @@ uint32_t pm_metal_build_events_since(uint32_t since,
     }
     /* replay window: the tail the ring still holds, clipped to max */
     first = since + 1u;
-    if (newest - first >= PM_METAL_BUILD_EVENTS) {
-        first = newest - PM_METAL_BUILD_EVENTS + 1u;
+    if (newest - first >= ctx->n_events) {
+        first = newest - ctx->n_events + 1u;
     }
     for (; first <= newest && n < max; first++) {
-        out[n++] = ctx->events[(first - 1u) % PM_METAL_BUILD_EVENTS];
+        out[n++] = ctx->events[(first - 1u) % ctx->n_events];
     }
     pm_util_lock_release(&ctx->lock);
     return n;
@@ -283,7 +383,7 @@ static pm_metal_build_record_t *record_slot(const char *fqn) {
     if (ctx == NULL) {
         return NULL;
     }
-    for (i = 0; i < PM_METAL_BUILD_MAX_RECORDS; i++) {
+    for (i = 0; i < ctx->n_records; i++) {
         if (ctx->records[i].valid && strcmp(ctx->records[i].fqn, fqn) == 0) {
             return &ctx->records[i];
         }
@@ -307,7 +407,7 @@ static pm_metal_build_record_t *record_slot_acquire_locked(const char *fqn) {
         return r;   /* rebuild of an already-recorded unit: refresh in place */
     }
     /* oldest-slot eviction: epoch round-robins through the table */
-    r = &ctx->records[ctx->record_epoch % PM_METAL_BUILD_MAX_RECORDS];
+    r = &ctx->records[ctx->record_epoch % ctx->n_records];
     ctx->record_epoch++;
     memset(r, 0, sizeof(*r));
     snprintf(r->fqn, sizeof(r->fqn), "%s", fqn);
@@ -346,8 +446,10 @@ const pm_metal_build_record_t *pm_metal_build_record_find(const char *fqn) {
 void pm_metal_build_record_reset(void) {
     if (s_build_ctx != NULL) {
         pm_util_lock_acquire(&s_build_ctx->lock);
-        memset(s_build_ctx->records, 0, sizeof(s_build_ctx->records));
+        memset(s_build_ctx->records, 0,
+            (size_t)s_build_ctx->n_records * sizeof(*s_build_ctx->records));
         s_build_ctx->record_epoch = 0;
+        s_records_used = 0;
         pm_util_lock_release(&s_build_ctx->lock);
     }
 }
@@ -1662,7 +1764,23 @@ static int32_t artifact_call_wasm(const pm_metal_build_artifact_t *artifact,
         return -3;
     }
     if (res != NULL) {
-        *res = (int64_t)wres.of.i32;
+        /* the trampoline reports the kind WAMR actually returned; reading
+         * the i32 arm of every result would cut a long long down to its
+         * low half and sign-extend that back */
+        switch (wres.kind) {
+        case PM_WASMMOD_REGISTRY_VALKIND_I64:
+            *res = wres.of.i64;
+            break;
+        case PM_WASMMOD_REGISTRY_VALKIND_F32:
+            *res = (int64_t)wres.of.f32;
+            break;
+        case PM_WASMMOD_REGISTRY_VALKIND_F64:
+            *res = (int64_t)wres.of.f64;
+            break;
+        default:
+            *res = (int64_t)wres.of.i32;
+            break;
+        }
     }
     return 0;
 }
@@ -1731,6 +1849,325 @@ int32_t pm_metal_build_artifact_call(const pm_metal_build_artifact_t *artifact,
 }
 
 #include "pymergetic/wasmmod/guest.h"
+
+/*------------------ retained objects (the downloadable product) ----------
+ * The cache the header describes: one arena over a malloc'd span, a flat
+ * slot table, and a reset when the next keep does not fit. Nothing here
+ * can fail a build — a seat whose malloc refuses simply retains nothing,
+ * and pm_metal_build_object_count answers 0 there like anywhere else. */
+
+typedef struct build_keep_obj {
+    char fqn[PM_METAL_BUILD_STR_MAX];
+    char src[PM_METAL_BUILD_MAX_SRC_PATH];
+    const uint8_t *bytes;
+    uint32_t len;
+} build_keep_obj_t;
+
+static build_keep_obj_t *s_keep;
+static uint32_t s_keep_cap;
+static uint32_t s_n_keep;
+static void *s_keep_backing;
+static pm_util_mem_arena_t *s_keep_arena;
+/* One lock over every field above. A walk runs PM_METAL_BUILD_WALK_FANOUT
+ * jobs at once on coop runners, so several units finish on different cores
+ * and all of them land here; the pane's download reads land here too. The
+ * first version of this cache was unguarded and re-created its arena when
+ * the span filled, which let two finishing jobs tlsf_destroy the same arena
+ * and abort the seat mid-build ("block already marked as free"). BSS zero is
+ * the unlocked state, same contract as the ctx lock. */
+static pm_util_lock_t s_keep_lock;
+
+/* Does this lane emit for an arch this seat cannot load?
+ *
+ * Not "target != 0": on the wasm32 seat the wasm32 lane IS the seat's
+ * backend and its module loads here, and on an x86-64 seat the x86-64 lane
+ * names the seat's own arch. The question is only whether the emitted
+ * object's arch matches the one this binary's loader relocates. */
+static int build_target_is_cross(int32_t target) {
+    const char *seat = pm_metal_jit_c_target_arch(
+        (int32_t)PM_METAL_JIT_C_TARGET_SEAT);
+    const char *want = pm_metal_jit_c_target_arch(target);
+    if (target == (int32_t)PM_METAL_JIT_C_TARGET_SEAT) {
+        return 0;
+    }
+    return strcmp(seat, want) != 0;
+}
+
+/* build.keep / build.keep.span: how many retained objects the seat serves and
+ * how much memory the cache may hold them in. Both are defaults a seat moves:
+ * a build host with a bigger tree wants more of both, a small seat would
+ * rather have the 64 MiB back and serve only the last few downloads.
+ *
+ * The slot table lives in the cache's own span, so the whole cache is one
+ * block the seat asked for and nothing here is reserved until a build
+ * actually retains something. */
+static int32_t keep_slots_apply(pm_util_limit_t *knob);
+static int32_t keep_span_apply(pm_util_limit_t *knob);
+PM_UTIL_LIMIT_APPLY_C(pm_build_limit_keep, "build.keep",
+    PM_METAL_BUILD_KEEP_DEFAULT, 0u, &s_n_keep, keep_slots_apply);
+PM_UTIL_LIMIT_APPLY_C(pm_build_limit_keep_span, "build.keep.span",
+    PM_METAL_BUILD_KEEP_SPAN_DEFAULT, 0u, NULL, keep_span_apply);
+
+static uint32_t keep_want(const pm_util_limit_t *knob) {
+    return knob->soft != 0u ? knob->soft : knob->dflt;
+}
+
+/* Free one slot's bytes and blank it. Caller holds s_keep_lock. */
+static void build_keep_drop(uint32_t i) {
+    if (s_keep[i].bytes != NULL && s_keep_arena != NULL) {
+        pm_util_mem_free(s_keep_arena, (void *)s_keep[i].bytes);
+    }
+    memset(&s_keep[i], 0, sizeof(s_keep[i]));
+}
+
+/* Remove slot i, keeping the rest in age order (oldest first). */
+static void build_keep_evict(uint32_t i) {
+    build_keep_drop(i);
+    if (i + 1u < s_n_keep) {
+        memmove(&s_keep[i], &s_keep[i + 1u],
+            (size_t)(s_n_keep - i - 1u) * sizeof(s_keep[0]));
+    }
+    s_n_keep--;
+    memset(&s_keep[s_n_keep], 0, sizeof(s_keep[0]));
+}
+
+/* The cache, at the span and slot count the knobs ask for right now. Taken on
+ * the first retained object and not before: a seat that never builds pays
+ * nothing. Caller holds s_keep_lock. Answers 0 when the seat will not lend the
+ * span — then nothing is downloadable and builds carry on regardless. */
+static int keep_ready(void) {
+    size_t span;
+    if (s_keep_arena != NULL && s_keep != NULL) {
+        return 1;
+    }
+    if (s_keep_backing == NULL) {
+        span = (size_t)keep_want(&pm_build_limit_keep_span);
+        s_keep_backing = malloc(span);
+        if (s_keep_backing == NULL) {
+            return 0;
+        }
+        s_keep_arena = pm_util_mem_arena_create(s_keep_backing, span);
+        if (s_keep_arena == NULL) {
+            free(s_keep_backing);
+            s_keep_backing = NULL;
+            return 0;
+        }
+    }
+    if (s_keep == NULL) {
+        uint32_t cap = keep_want(&pm_build_limit_keep);
+        s_keep = pm_util_mem_alloc(s_keep_arena, (size_t)cap * sizeof(*s_keep));
+        if (s_keep == NULL) {
+            return 0;
+        }
+        memset(s_keep, 0, (size_t)cap * sizeof(*s_keep));
+        s_keep_cap = cap;
+        s_n_keep = 0;
+    }
+    return 1;
+}
+
+/* build.keep moved: the same retained objects in a table of the new depth.
+ * A table that got smaller lets the oldest downloads go, which is what the
+ * cache does when it runs out of room anyway. */
+static int32_t keep_slots_apply(pm_util_limit_t *knob) {
+    uint32_t cap = keep_want(knob);
+    build_keep_obj_t *next;
+    int32_t rc = 0;
+    pm_util_lock_acquire(&s_keep_lock);
+    if (s_keep == NULL) {
+        pm_util_lock_release(&s_keep_lock);
+        return 0; /* nothing taken yet; the first keep reads the knob */
+    }
+    if (cap != s_keep_cap) {
+        next = pm_util_mem_alloc(s_keep_arena, (size_t)cap * sizeof(*next));
+        if (next == NULL) {
+            rc = -1;
+        } else {
+            while (s_n_keep > cap) {
+                build_keep_evict(0);
+            }
+            memset(next, 0, (size_t)cap * sizeof(*next));
+            memcpy(next, s_keep, (size_t)s_n_keep * sizeof(*next));
+            pm_util_mem_free(s_keep_arena, s_keep);
+            s_keep = next;
+            s_keep_cap = cap;
+        }
+    }
+    pm_util_lock_release(&s_keep_lock);
+    return rc;
+}
+
+/* build.keep.span moved: the cache is the span, so it is let go and taken
+ * again at the new size on the next retained object. Everything downloadable
+ * right now is dropped — the seat asked for a different cache. */
+static int32_t keep_span_apply(pm_util_limit_t *knob) {
+    (void)knob;
+    pm_util_lock_acquire(&s_keep_lock);
+    if (s_keep_backing != NULL) {
+        while (s_n_keep > 0) {
+            build_keep_evict(0);
+        }
+        if (s_keep_arena != NULL) {
+            pm_util_mem_arena_destroy(s_keep_arena);
+            s_keep_arena = NULL;
+        }
+        free(s_keep_backing);
+        s_keep_backing = NULL;
+        s_keep = NULL;
+        s_keep_cap = 0;
+    }
+    pm_util_lock_release(&s_keep_lock);
+    return 0;
+}
+
+/* Copy one unit's objects into the cache. Best effort: called after the
+ * compile succeeded, so a refusal here costs a download, never a build.
+ *
+ * The arena is created once and never destroyed. Entries are freed one at a
+ * time instead, because the span used to be reset wholesale: a whole BUILD
+ * ALL is 18 MiB over 103 objects (measured), so every extra round re-added
+ * that much until the span wrapped and all but the last few units lost their
+ * download. Freeing per entry keeps the steady state at one round's worth. */
+static void build_keep_objects(const char *fqn, const char **srcs,
+    uint8_t *const *objs, const size_t *lens, uint32_t n) {
+    uint32_t i;
+
+    if (fqn == NULL || n == 0) {
+        return;
+    }
+    pm_util_lock_acquire(&s_keep_lock);
+    if (!keep_ready()) {
+        /* no span on this seat: nothing is downloadable, builds are fine */
+        pm_util_lock_release(&s_keep_lock);
+        return;
+    }
+    /* A rebuild of the same unit replaces its slots rather than stacking a
+     * second copy: the newest bytes are the ones a download should serve. */
+    for (i = 0; i < s_n_keep;) {
+        if (strcmp(s_keep[i].fqn, fqn) == 0) {
+            build_keep_evict(i);
+        } else {
+            i++;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        uint8_t *copy;
+        if (objs[i] == NULL || lens[i] == 0) {
+            continue;
+        }
+        /* Make room by age: the oldest unit's objects go first, so a seat
+         * that cannot hold the whole tree still keeps a contiguous recent
+         * window rather than losing everything at once. */
+        while (s_n_keep >= s_keep_cap) {
+            build_keep_evict(0);
+        }
+        copy = (uint8_t *)pm_util_mem_alloc(s_keep_arena, lens[i]);
+        while (copy == NULL && s_n_keep > 0) {
+            build_keep_evict(0);
+            copy = (uint8_t *)pm_util_mem_alloc(s_keep_arena, lens[i]);
+        }
+        if (copy == NULL) {
+            break;    /* one object larger than the whole span */
+        }
+        memcpy(copy, objs[i], lens[i]);
+        snprintf(s_keep[s_n_keep].fqn, sizeof(s_keep[s_n_keep].fqn), "%s", fqn);
+        snprintf(s_keep[s_n_keep].src, sizeof(s_keep[s_n_keep].src), "%s",
+            (srcs != NULL && srcs[i] != NULL) ? srcs[i] : "object");
+        s_keep[s_n_keep].bytes = copy;
+        s_keep[s_n_keep].len = (uint32_t)lens[i];
+        s_n_keep++;
+    }
+    pm_util_lock_release(&s_keep_lock);
+}
+
+uint32_t pm_metal_build_object_count(const char *fqn) {
+    uint32_t i;
+    uint32_t n = 0;
+    if (fqn == NULL) {
+        return 0;
+    }
+    pm_util_lock_acquire(&s_keep_lock);
+    for (i = 0; i < s_n_keep; i++) {
+        if (strcmp(s_keep[i].fqn, fqn) == 0) {
+            n++;
+        }
+    }
+    pm_util_lock_release(&s_keep_lock);
+    return n;
+}
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_object_count,
+    pm_metal_build_object_count, uint32_t(const char *));
+
+/* Name and size of one retained object. Copies the name out: the slot it
+ * lives in can be evicted by the next build. */
+int32_t pm_metal_build_object_info(const char *fqn, uint32_t idx,
+    char *src_out, uint32_t src_max, uint32_t *len_out) {
+    uint32_t i;
+    uint32_t seen = 0;
+    int32_t rc = PM_METAL_BUILD_ERR_PARSE;
+    if (fqn == NULL) {
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    pm_util_lock_acquire(&s_keep_lock);
+    for (i = 0; i < s_n_keep; i++) {
+        if (strcmp(s_keep[i].fqn, fqn) != 0 || seen++ != idx) {
+            continue;
+        }
+        if (src_out != NULL && src_max > 0) {
+            snprintf(src_out, src_max, "%s", s_keep[i].src);
+        }
+        if (len_out != NULL) {
+            *len_out = s_keep[i].len;
+        }
+        rc = PM_METAL_BUILD_OK;
+        break;
+    }
+    pm_util_lock_release(&s_keep_lock);
+    return rc;
+}
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_object_info,
+    pm_metal_build_object_info,
+    int32_t(const char *, uint32_t, char *, uint32_t, uint32_t *));
+
+/* Copy one window of a retained object into the caller's buffer.
+ *
+ * A window rather than a pointer on purpose: a download is many requests and
+ * a concurrent build can evict the slot between any two of them, so handing
+ * out the arena pointer would let a route read freed bytes. Copying under
+ * the lock makes the worst case an honest short read. */
+int32_t pm_metal_build_object_read(const char *fqn, uint32_t idx,
+    uint32_t off, uint8_t *out, uint32_t out_max, uint32_t *n_out) {
+    uint32_t i;
+    uint32_t seen = 0;
+    int32_t rc = PM_METAL_BUILD_ERR_PARSE;
+    if (fqn == NULL || out == NULL) {
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    pm_util_lock_acquire(&s_keep_lock);
+    for (i = 0; i < s_n_keep; i++) {
+        uint32_t n = 0;
+        if (strcmp(s_keep[i].fqn, fqn) != 0 || seen++ != idx) {
+            continue;
+        }
+        if (off < s_keep[i].len) {
+            n = s_keep[i].len - off;
+            if (n > out_max) {
+                n = out_max;
+            }
+            memcpy(out, s_keep[i].bytes + off, n);
+        }
+        if (n_out != NULL) {
+            *n_out = n;
+        }
+        rc = PM_METAL_BUILD_OK;
+        break;
+    }
+    pm_util_lock_release(&s_keep_lock);
+    return rc;
+}
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_object_read,
+    pm_metal_build_object_read,
+    int32_t(const char *, uint32_t, uint32_t, uint8_t *, uint32_t, uint32_t *));
 
 /*------------------ runtime card discovery (Phase 4.4) ------------------
  * The embedded card table (tools/embed_src.py -> src_embed.inc.h, included
@@ -2852,17 +3289,32 @@ static int32_t unit_compile_py(pm_util_mem_arena_t *arena,
             uint64_t t0 = pm_metal_coop_mono_us();
             build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_START, 0,
                 unit->fqn, unit->sources[obj_i], 0, 0);
-            if (pm_metal_jit_py_object_compile(arena, src, strlen(src),
-                    unit->fqn, &mpy, &mpy_len, errbuf, errbuf_len) != 0) {
+            int32_t prc = pm_metal_jit_py_object_compile(arena, src,
+                strlen(src), unit->fqn, &mpy, &mpy_len, errbuf, errbuf_len);
+            if (prc != 0) {
                 build_event_emit(PM_METAL_BUILD_EVENT_UNIT_FAIL, 0,
                     unit->fqn, unit->sources[obj_i],
                     (uint32_t)((pm_metal_coop_mono_us() - t0) & 0xffffffffu), 0);
-                return PM_METAL_BUILD_ERR_COMPILE;
+                /* GIL busy is nothing about this unit: a runner tried to
+                 * compile Python while Python code held the GIL. Report it
+                 * as BUSY so a walk retries instead of reddening a row that
+                 * builds fine on its own. */
+                return prc == PM_METAL_JIT_PY_BUSY
+                    ? PM_METAL_BUILD_ERR_BUSY : PM_METAL_BUILD_ERR_COMPILE;
             }
             build_event_emit(PM_METAL_BUILD_EVENT_COMPILE_END, 0,
                 unit->fqn, unit->sources[obj_i],
                 (uint32_t)((pm_metal_coop_mono_us() - t0) & 0xffffffffu),
                 (uint32_t)mpy_len);
+            /* A py unit's product is its .mpy, and it dies with this arena
+             * exactly like a C object does — retain it on the same terms so
+             * py-impl rows are downloadable too, not the only rows without
+             * a button. */
+            {
+                const char *ksrc = unit->sources[obj_i];
+                size_t klen = mpy_len;
+                build_keep_objects(unit->fqn, &ksrc, &mpy, &klen, 1u);
+            }
         }
         if (artifact->bytes == NULL) {
             artifact->bytes = mpy;
@@ -3113,12 +3565,26 @@ int32_t pm_metal_build_unit_compile(pm_util_mem_arena_t *arena,
             err_set(errbuf, errbuf_len, "unit_compile: no compilable sources", 0);
             return PM_METAL_BUILD_ERR_COMPILE;
         }
+        /* The objects exist only here: the link below consumes them and the
+         * caller's arena frees them with the request. Copy them out now so
+         * a download route has something to serve. */
+        build_keep_objects(unit->fqn, compiled_srcs, objs, lens, n_objs);
     }
 
     {
         uint64_t t0 = pm_metal_coop_mono_us();
-        rc = pm_metal_build_link(arena, unit, objs, lens, n_objs,
-            artifact, errbuf, errbuf_len);
+        /* Same split the walk's actor makes (see its link gate): produce
+         * stops at the objects, which are already kept above. Linking a
+         * foreign object into this seat turned a successful emit into a
+         * refusal — "loader refused object 0" for a wasm module whose
+         * imports only exist in the seat it was produced for. */
+        if (opts->mode == PM_METAL_BUILD_PRODUCE
+            || build_target_is_cross(opts->target)) {
+            rc = PM_METAL_BUILD_OK;
+        } else {
+            rc = pm_metal_build_link(arena, unit, objs, lens, n_objs,
+                artifact, errbuf, errbuf_len);
+        }
         if (rc != PM_METAL_BUILD_OK) {
             build_event_emit(PM_METAL_BUILD_EVENT_UNIT_FAIL,
                 copts_target, unit->fqn, "link",
@@ -3512,6 +3978,8 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_walk_start, pm_metal_buil
     int32_t(int32_t, const pm_metal_build_compile_opts_t *, pm_metal_build_root_fn_t, char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_walk_state, pm_metal_build_walk_state,
     void(pm_metal_build_walk_info_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_walk_peak, pm_metal_build_walk_peak,
+    uint32_t(void));
 
 /*------------------ async compiler actor ----------------------------------
  * One dedicated actor owns EVERY TCC invocation in the process. Reason:
@@ -3710,6 +4178,7 @@ int32_t pm_metal_build_actor_submit(
         job->n_defines = n_defines;
     }
     job->target = opts->target;
+    job->mode = opts->mode;
 
     pm_util_lock_acquire(&a->lock);
     if (a->q_count >= PM_METAL_BUILD_ACTOR_DEPTH) {
@@ -4028,9 +4497,24 @@ static int32_t actor_job_run_locked(pm_metal_build_actor_job_t *job) {
             all_includes, n_joined_includes, all_defines, n_objs);
         return PM_METAL_BUILD_ERR_COMPILE;
     }
+    /* Same reason as unit_compile's keep: the link consumes the objects and
+     * the scratch free below reclaims them. A walk's units are downloadable
+     * on the same terms as a one-at-a-time rebuild. */
+    build_keep_objects(job->unit.fqn, compiled_srcs, objs, lens, n_objs);
 
-    rc = pm_metal_build_link(arena, &job->unit, objs, lens, n_objs,
-        &job->artifact, job->err, sizeof(job->err));
+    /* Link only what this seat can load. A cross lane's product is the
+     * object file itself — an armv7 ET_REL is a distribution artifact, and
+     * this seat's relocator rightly refuses it ("e_machine != host arch").
+     * Attempting it anyway turned a working emit into 80 failed rows and
+     * made a cross-lane BUILD ALL look like a broken tree. The objects are
+     * retained above, so the emit is what the caller downloads. */
+    if (job->mode == PM_METAL_BUILD_PRODUCE
+        || build_target_is_cross(job->target)) {
+        rc = PM_METAL_BUILD_OK;
+    } else {
+        rc = pm_metal_build_link(arena, &job->unit, objs, lens, n_objs,
+            &job->artifact, job->err, sizeof(job->err));
+    }
     if (rc == PM_METAL_BUILD_OK) {
         /* provenance record (same shape as unit_compile) — written before
          * the scratch free: rec->src_paths/obj_lens copy out of
@@ -4207,7 +4691,16 @@ int32_t pm_metal_build_actor_release(pm_metal_build_actor_job_t *job) {
      * job's coro is never auto_free (the release unit is this whole
      * block). */
     if (job->task != NULL) {
-        (void)pm_metal_coop_task_detach(job->task);
+        /* Retire, not just detach: this function frees the job block, and
+         * job->coro lives inside it. The runner that drove the final step
+         * is still in its epilogue (it stores the step's status into the
+         * coro and reads the root) at the moment the job's own state goes
+         * terminal, which is what the caller settled on. Freeing here
+         * would let that epilogue write into a released block and then
+         * free a garbage pointer. */
+        if (pm_metal_coop_task_retire(job->task) != 0) {
+            return PM_METAL_BUILD_ERR_BUSY;  /* keep the block, retry */
+        }
         job->task = NULL;
     }
     arena = pm_metal_coop_arena();
@@ -4523,8 +5016,25 @@ typedef struct pm_build_walk {
     pm_metal_build_unit_t *units;   /* deep copies, boot arena */
     uint32_t n_units;
     uint32_t *row;                  /* per-unit pm_build_walk_row_t, boot arena */
+    /* Per-unit retries spent on a transient refusal (boot arena). A py-impl
+     * unit compiles under the µPy GIL, which the caller's own Python holds
+     * between polls, so one unit in a walk would fail at random with "GIL
+     * busy" — a fact about timing, not about the unit. Bounded so a lane
+     * that is genuinely stuck still settles as FAILED. */
+    uint32_t *retry;
     pm_metal_build_actor_job_t *jobs[PM_METAL_BUILD_WALK_FANOUT]; /* lanes */
+    /* Lane already counted in the census, but its job block is not free
+     * yet: the release waits for the runner to leave the job's step, and
+     * refuses while it is still inside. Without this the retry would count
+     * the same unit again on every quantum. */
+    uint32_t counted[PM_METAL_BUILD_WALK_FANOUT];
     uint32_t inline_cnt;            /* lanes the walk drives itself (ring full) */
+    /* Most lanes ever live at once. The live count is a snapshot, so an
+     * outside observer can only sample it and can miss an overlap that
+     * opened and closed between two of its polls; the walk keeps the
+     * high-water itself so "did this fan out" is answerable after the
+     * fact. */
+    uint32_t peak_running;
     pm_metal_build_root_fn_t root_fn;
     pm_metal_build_compile_opts_t opts;   /* deep-copied seat fill */
     char *unit_root;                /* one scratch buffer, reused per unit */
@@ -4550,6 +5060,38 @@ static void walk_release(pm_build_walk_t *w) {
     arena = pm_metal_coop_arena();
     if (arena == NULL) {
         return;
+    }
+    /* Retire the walk's own coop task FIRST, before anything here frees the
+     * frame it points into. The task's root is &w->coro, so a ring slot that
+     * outlives this release has a runner step a freed frame: walk_step then
+     * runs over a recycled w, settles whatever its jobs[] happens to contain
+     * and releases those garbage pointers — which is how the seat aborted in
+     * tlsf_free on a block that the allocator had never handed out. It takes
+     * a previous walk to recycle the memory, so the first walk of a process
+     * looked fine and the crash arrived a walk or two later.
+     *
+     * Marking the coro terminal is what lets detach accept it; detach clears
+     * the root, so any surviving slot becomes a no-op (step_task returns on
+     * a NULL root) and the last ref frees the task block on its own. */
+    if (w->coro.task != NULL) {
+        if (w->coro.status != (uint32_t)PM_METAL_COOP_DONE
+            && w->coro.status != (uint32_t)PM_METAL_COOP_ERROR
+            && w->coro.status != (uint32_t)PM_METAL_COOP_CANCELLED) {
+            w->coro.status = (uint32_t)PM_METAL_COOP_CANCELLED;
+        }
+        /* Unlike the job case there is no later quantum to retry in: this
+         * runs on the starter's own thread, so wait for the runner to
+         * leave the step. Waiting here starves nothing — the runners are
+         * their own threads and this one is not among them. If it somehow
+         * does not clear, leave the frame alone: leaking one walk frame is
+         * harmless next to freeing memory a runner is still writing. */
+        uint64_t deadline = pm_metal_coop_mono_us() + 2000000u;
+        while (pm_metal_coop_task_retire(w->coro.task) != 0) {
+            if (pm_metal_coop_mono_us() > deadline) {
+                return;
+            }
+        }
+        w->coro.task = NULL;
     }
     /* lane jobs: a DONE walk drained its lanes already (the terminal
      * check requires live == 0), but a walk that never ran a full round
@@ -4603,6 +5145,7 @@ static void walk_release(pm_build_walk_t *w) {
     }
     pm_util_mem_free(arena, (void *)w->order);
     pm_util_mem_free(arena, w->row);
+    pm_util_mem_free(arena, w->retry);
     pm_util_mem_free(arena, w->unit_root);
     pm_util_mem_free(arena, w);
 }
@@ -4619,6 +5162,22 @@ static void walk_release(pm_build_walk_t *w) {
  * rounds. The task blocks are the coop card's refcounted property now
  * (the fx-6f reclaimer) — the old job-task UAF hazard is gone at the
  * card that owns it, and this card only releases the jobs it settled. */
+/* Record the walk's first failure reason. Every path that marks a row FAILED
+ * goes through here, so "1 failed" always carries a why — a lane's compile
+ * error, an unresolved unit root, or a refusal from the actor. First only:
+ * the later ones are usually dep fallout of this one. */
+static void walk_note_fail(pm_build_walk_t *w, const char *fqn,
+    const char *reason) {
+    if (w->info.fail_err[0] != '\0') {
+        return;
+    }
+    snprintf(w->info.fail_fqn, sizeof(w->info.fail_fqn), "%s",
+        fqn != NULL ? fqn : "?");
+    snprintf(w->info.fail_err, sizeof(w->info.fail_err), "%s",
+        (reason != NULL && reason[0] != '\0') ? reason
+                                              : "refused without a reason");
+}
+
 static pm_metal_coop_status_t walk_step(pm_metal_coop_coro_t *self) {
     pm_build_walk_t *w = (pm_build_walk_t *)self;
     uint32_t i;
@@ -4650,20 +5209,40 @@ static pm_metal_coop_status_t walk_step(pm_metal_coop_coro_t *self) {
             continue;
         }
         ui = dag_find(w->units, w->n_units, job->unit.fqn);
-        if (st == PM_METAL_BUILD_ACTOR_DONE) {
+        if (w->counted[i] != 0u) {
+            /* census already done last quantum; only the release is left */
+        } else if (st == PM_METAL_BUILD_ACTOR_DONE) {
             if (ui >= 0) {
                 w->row[ui] = PM_BUILD_WALK_ROW_DONE;
             }
             w->info.n_done++;
             pm_metal_build_artifact_destroy(&job->artifact);
+        } else if (job->rc == PM_METAL_BUILD_ERR_BUSY && ui >= 0
+                   && w->retry != NULL
+                   && w->retry[ui] < PM_METAL_BUILD_WALK_RETRIES) {
+            /* Transient: nothing was attempted, so put the row back and let
+             * a later quantum re-submit it. Not counted as done or failed —
+             * the census stays honest about what actually built. */
+            w->retry[ui]++;
+            w->row[ui] = PM_BUILD_WALK_ROW_PENDING;
         } else {
             if (ui >= 0) {
                 w->row[ui] = PM_BUILD_WALK_ROW_FAILED;
             }
+            /* Before the release below takes the job's errbuf with it. */
+            walk_note_fail(w, job->unit.fqn, job->err);
             w->info.n_failed++;
         }
-        pm_metal_build_actor_release(job);
+        w->counted[i] = 1u;
+        if (pm_metal_build_actor_release(job) == PM_METAL_BUILD_ERR_BUSY) {
+            /* A runner is still inside this job's step. Keep the block and
+             * the lane live so the walk cannot finish (or free) underneath
+             * it; the next quantum retries the release. */
+            live++;
+            continue;
+        }
         w->jobs[i] = NULL;
+        w->counted[i] = 0u;
     }
 
     /* Pass 2 — SKIP-isolate: a FAILED/SKIPPED dep isolates its consumer
@@ -4737,16 +5316,23 @@ static pm_metal_coop_status_t walk_step(pm_metal_coop_coro_t *self) {
         u = &w->units[i];
         if (w->root_fn(u->fqn, w->unit_root, PM_METAL_BUILD_ROOT_MAX) != 0) {
             w->row[i] = PM_BUILD_WALK_ROW_FAILED;
+            walk_note_fail(w, u->fqn, "walk: unit root not resolved");
             w->info.n_failed++;
             continue;
         }
         w->opts.unit_root = w->unit_root;
         w->opts.target = w->info.target;
-        ui = pm_metal_build_actor_submit(u, &w->opts, &job, NULL, 0);
-        if (ui != PM_METAL_BUILD_OK) {
-            w->row[i] = PM_BUILD_WALK_ROW_FAILED;
-            w->info.n_failed++;
-            continue;
+        {
+            char serr[PM_METAL_BUILD_ERR_MAX];
+            serr[0] = '\0';
+            ui = pm_metal_build_actor_submit(u, &w->opts, &job,
+                serr, sizeof(serr));
+            if (ui != PM_METAL_BUILD_OK) {
+                w->row[i] = PM_BUILD_WALK_ROW_FAILED;
+                walk_note_fail(w, u->fqn, serr);
+                w->info.n_failed++;
+                continue;
+            }
         }
         if (pm_metal_build_actor_post(job) != 0) {
             /* ring full (or no runner ring): the walk drives this job
@@ -4776,6 +5362,9 @@ static pm_metal_coop_status_t walk_step(pm_metal_coop_coro_t *self) {
     /* Census published every quantum: the factory floor's running count
      * is live lanes, not a stale snapshot. */
     w->info.n_running = live;
+    if (live > w->peak_running) {
+        w->peak_running = live;
+    }
 
     /* Terminal: every row settled and every lane drained. */
     if (live == 0) {
@@ -4808,7 +5397,7 @@ static pm_metal_coop_status_t walk_step(pm_metal_coop_coro_t *self) {
     return pm_metal_coop_yield_park(&w->coro);
 }
 
-int32_t pm_metal_build_walk_start(int32_t target,
+static int32_t walk_start_locked(int32_t target,
     const pm_metal_build_compile_opts_t *opts,
     pm_metal_build_root_fn_t root_fn,
     char *errbuf, size_t errbuf_len) {
@@ -4844,9 +5433,18 @@ int32_t pm_metal_build_walk_start(int32_t target,
     }
 
     /* the units table is discovered into a scratch arena, then deep-copied
-     * into the boot arena: the walk must outlive the starter's arena */
+     * into the boot arena: the walk must outlive the starter's arena.
+     *
+     * 16 MiB, not 1: discover splices every rs card's `mod` parts to learn
+     * which faces are spans of the unit's TU, and the compiler card's parts
+     * are 36k lines. At 1 MiB that splice ran out mid-file, so the unit was
+     * recorded with a short source list and the walk's compile of it died
+     * on the truncated TU ("rsx: expected '}' before end of file") — while
+     * the same unit rebuilt fine one at a time, because the /build/<fqn>
+     * route discovers into its own 160 MiB span. The arena is transient:
+     * freed a few lines below, before any job allocates. */
     {
-        void *backing = malloc(1u << 20);
+        void *backing = malloc(PM_METAL_BUILD_DISCOVER_SPAN);
         pm_util_mem_arena_t *scratch;
         char disc_err[PM_METAL_BUILD_ERR_MAX];
         uint32_t i;
@@ -4854,7 +5452,7 @@ int32_t pm_metal_build_walk_start(int32_t target,
             err_set(errbuf, errbuf_len, "walk_start: no scratch", 0);
             return PM_METAL_BUILD_ERR_NOMEM;
         }
-        scratch = pm_util_mem_arena_create(backing, 1u << 20);
+        scratch = pm_util_mem_arena_create(backing, PM_METAL_BUILD_DISCOVER_SPAN);
         if (scratch == NULL) {
             free(backing);
             err_set(errbuf, errbuf_len, "walk_start: no scratch arena", 0);
@@ -4887,7 +5485,9 @@ int32_t pm_metal_build_walk_start(int32_t target,
             arena, n_units * sizeof(pm_metal_build_unit_t));
         w->row = (uint32_t *)pm_util_mem_alloc(
             arena, n_units * sizeof(uint32_t));
-        if (w->units == NULL || w->row == NULL) {
+        w->retry = (uint32_t *)pm_util_mem_alloc(
+            arena, n_units * sizeof(uint32_t));
+        if (w->units == NULL || w->row == NULL || w->retry == NULL) {
             walk_release(w);
             pm_util_mem_arena_destroy(scratch);
             free(backing);
@@ -4895,6 +5495,7 @@ int32_t pm_metal_build_walk_start(int32_t target,
             return PM_METAL_BUILD_ERR_NOMEM;
         }
         memset(w->row, 0, n_units * sizeof(uint32_t));
+        memset(w->retry, 0, n_units * sizeof(uint32_t));
         /* count first: walk_release walks w->n_units, and the graph step
          * below only fills w->n_units on success — a copy or graph refusal
          * must still free the half-built units array (boot arena has no
@@ -4989,6 +5590,7 @@ fill_done:
         w->coro.status = PM_METAL_COOP_PENDING;
         w->info.state = PM_METAL_BUILD_WALK_RUNNING;
         w->info.target = target;
+        w->info.mode = opts != NULL ? opts->mode : PM_METAL_BUILD_LOCAL;
         w->info.n_total = n_units;
         w->info.id = next_id;
         pm_util_mem_arena_destroy(scratch);
@@ -5004,6 +5606,41 @@ fill_done:
     return (int32_t)w->info.id;
 }
 
+/* One start at a time.
+ *
+ * The "a walk is running" check above and everything after it — discover,
+ * the deep copy into the boot arena, releasing the finished walk, posting
+ * the new task, publishing s_walk — is a long non-atomic stretch, and two
+ * seats' worth of HTTP handler threads can be inside it at once. Two POSTs
+ * landing together both passed the check, both called walk_release() on the
+ * SAME finished walk, both posted a task, and the loser's s_walk write was
+ * overwritten by the winner's. What the callers saw was two different walks
+ * (one local, one produce) reporting the same id; what the seat could be
+ * left with was a published walk whose frame the other start had already
+ * released — state "running" with nothing in flight and no progress, while
+ * every runner sat idle. The page polls and a curl POST is enough to hit it.
+ *
+ * The gate is the claim the state read could not be: the loser gets the
+ * same BUSY refusal it would have got a moment later. */
+static uint32_t s_walk_gate;
+
+int32_t pm_metal_build_walk_start(int32_t target,
+    const pm_metal_build_compile_opts_t *opts,
+    pm_metal_build_root_fn_t root_fn,
+    char *errbuf, size_t errbuf_len) {
+    uint32_t expect = 0u;
+    int32_t rc;
+
+    if (!__atomic_compare_exchange_n(&s_walk_gate, &expect, 1u, 0,
+            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        err_set(errbuf, errbuf_len, "walk_start: a walk is starting", 0);
+        return PM_METAL_BUILD_ERR_BUSY;
+    }
+    rc = walk_start_locked(target, opts, root_fn, errbuf, errbuf_len);
+    __atomic_store_n(&s_walk_gate, 0u, __ATOMIC_RELEASE);
+    return rc;
+}
+
 void pm_metal_build_walk_state(pm_metal_build_walk_info_t *out) {
     if (out == NULL) {
         return;
@@ -5012,6 +5649,12 @@ void pm_metal_build_walk_state(pm_metal_build_walk_info_t *out) {
     if (s_walk != NULL) {
         *out = s_walk->info;
     }
+}
+
+/* Most lanes the current (or last) walk ever held at once. 1 says it ran
+ * serially, 0 that no walk has started. */
+uint32_t pm_metal_build_walk_peak(void) {
+    return (s_walk != NULL) ? s_walk->peak_running : 0u;
 }
 
 /* Lifecycle: the ctx allocates lazily from the boot arena and is released

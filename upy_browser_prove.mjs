@@ -10,6 +10,12 @@ import { pathToFileURL } from "node:url";
 const wasmMjs = path.resolve(process.argv[2]);
 const pyFile = path.resolve(process.argv[3]);
 const src = fs.readFileSync(pyFile, "utf8");
+/* Any further .py files run in this same cell, before the main prove: a
+ * prove written for the unix seat is the same prove here, and the cell has
+ * no filesystem to read it from itself. They run first so the main prove's
+ * `_cdn` call stays the last thing in the source. */
+const also = process.argv.slice(4)
+    .map((f) => fs.readFileSync(path.resolve(f), "utf8"));
 const helloPack = fs.readFileSync(path.resolve(
     path.dirname(pyFile),
     "../wasmmod/examples/packs/pymergetic.wasmmod_examples.hello.wasm",
@@ -72,6 +78,9 @@ const server = http.createServer((req, res) => {
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const { port } = server.address();
 try {
+    for (const extra of also) {
+        await execAsync(extra);
+    }
     await execAsync(`${src}\n_cdn("http://127.0.0.1:${port}")\n`);
 } catch (error) {
     if (error.name === "PythonError") {

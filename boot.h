@@ -17,8 +17,10 @@ void pm_metal_upy_port_init(void);
 
 /* The Python renderer behind the httpd's deferred page routes (modmetal.c).
  * `start` is what m.serve() calls; `autostart` marks it to be started from the
- * MOTD surface, for a seat that brought its listeners up on its own. */
-void mp_metal_packs_start(void);
+ * MOTD surface, for a seat that brought its listeners up on its own. It prints
+ * one boot-tree node, and `last` is whether that node closes the tree it is
+ * drawn into. */
+void mp_metal_packs_start(int last);
 void mp_metal_packs_autostart(void);
 
 void *pm_metal_wasm_malloc(size_t n);
