@@ -29,6 +29,8 @@
 #include "pymergetic/metal/net/ssh.h"
 #include "pymergetic/metal/net/fwd/__exports__.h"
 #include "pymergetic/metal/services.h"
+#include "pymergetic/metal/drivers/__types__.h"
+#include "pymergetic/util/limits.h"
 #include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/net/cdn.h"
 
@@ -49,12 +51,16 @@
 #ifndef PM_METAL_UPY_RUNNER_N
 #define PM_METAL_UPY_RUNNER_N 64
 #endif
+PM_UTIL_LIMIT_C(pm_metal_upy_limit_runner, pymergetic.metal, upyrunner, PM_METAL_UPY_RUNNER_N, 0u, NULL);
 static mp_state_thread_t metal_upy_runner_ts[PM_METAL_UPY_RUNNER_N];
 static uint32_t metal_upy_runner_ts_used[PM_METAL_UPY_RUNNER_N];
 
 int pm_metal_coop_runner_begin(uint32_t slot) {
     mp_state_thread_t *ts;
     if (slot == 0u || slot >= PM_METAL_UPY_RUNNER_N) {
+        return 0;
+    }
+    if (pm_metal_upy_limit_runner.soft != 0u && slot >= pm_metal_upy_limit_runner.soft) {
         return 0;
     }
     ts = &metal_upy_runner_ts[slot];
@@ -84,10 +90,12 @@ int pm_metal_coop_runner_begin(uint32_t slot) {
 #ifndef PM_METAL_UPY_GEN_N
 #define PM_METAL_UPY_GEN_N 8
 #endif
+PM_UTIL_LIMIT_C(pm_metal_upy_limit_gen, pymergetic.metal, upygen, PM_METAL_UPY_GEN_N, 0u, NULL);
 
 #ifndef PM_METAL_DRV_PY_MAX
 #define PM_METAL_DRV_PY_MAX 4
 #endif
+PM_UTIL_LIMIT_C(pm_metal_upy_limit_drv, pymergetic.metal, upydrv, PM_METAL_DRV_PY_MAX, 0u, NULL);
 
 MP_REGISTER_ROOT_POINTER(mp_obj_t metal_upy_gen[PM_METAL_UPY_GEN_N]);
 MP_REGISTER_ROOT_POINTER(mp_obj_t metal_drv_py_attach[PM_METAL_DRV_PY_MAX]);
@@ -215,13 +223,18 @@ static mp_obj_t metal_register_upy(mp_obj_t gen) {
      * it wedged the whole VM (and the serve seat before its REPL came up). The
      * runner threads that later step the coro acquire the GIL for their own
      * slice inside step_upy, so only that side touches the lock. */
-    for (i = 0; i < PM_METAL_UPY_GEN_N; i++) {
-        if (MP_STATE_VM(metal_upy_gen)[i] == MP_OBJ_NULL) {
-            break;
+    {
+        uint32_t ceiling = pm_metal_upy_limit_gen.soft;
+        if (ceiling == 0u) ceiling = PM_METAL_UPY_GEN_N;
+        if (ceiling > PM_METAL_UPY_GEN_N) ceiling = PM_METAL_UPY_GEN_N;
+        for (i = 0; i < ceiling; i++) {
+            if (MP_STATE_VM(metal_upy_gen)[i] == MP_OBJ_NULL) {
+                break;
+            }
         }
-    }
-    if (i >= PM_METAL_UPY_GEN_N) {
-        mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("upy gen slots full"));
+        if (i >= ceiling) {
+            mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("upy gen slots full"));
+        }
     }
     frame = (pm_metal_upy_frame_t *)pm_metal_coop_coro_create(step_upy, sizeof(*frame));
     if (frame == NULL) {
@@ -383,7 +396,7 @@ static int32_t drv_bind(const char *mod, uint32_t kind, uint32_t id0, uint32_t i
     if (!mp_obj_is_callable(attach)) {
         mp_raise_TypeError(MP_ERROR_TEXT("attach"));
     }
-    if (s_drv_n >= PM_METAL_DRV_PY_MAX) {
+    if (pm_metal_upy_limit_drv.soft != 0u && s_drv_n >= pm_metal_upy_limit_drv.soft) {
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("PM_METAL_DRV slots full"));
     }
     i = s_drv_n++;

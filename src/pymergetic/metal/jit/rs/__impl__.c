@@ -270,11 +270,21 @@ pm_metal_coop_status_t pm_metal_jit_rs_compile_step(pm_metal_coop_coro_t *self) 
 
 #include "pymergetic/wasmmod/guest.h"
 
+int32_t pm_metal_jit_rs_has_compiler(void) {
+#if defined(PM_HAS_MRUSTC) && PM_HAS_MRUSTC
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 PM_MOD_EXPORT_C(pymergetic.metal.jit.rs, pm_metal_jit_rs_compile_alloc, pm_metal_jit_rs_compile_alloc,
     pm_metal_coop_coro_t *(pm_util_mem_arena_t *, const char *, size_t, const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.jit.rs, pm_metal_jit_rs_compile_step, pm_metal_jit_rs_compile_step,
     pm_metal_coop_status_t(pm_metal_coop_coro_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.jit.rs, pm_metal_jit_rs_result_free, pm_metal_jit_rs_result_free,
     void(pm_util_mem_arena_t *, pm_metal_jit_rs_result_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.jit.rs, pm_metal_jit_rs_has_compiler, pm_metal_jit_rs_has_compiler,
+    int32_t(void));
 
 PM_METAL_EXTERNAL_C(mrustc, "1.90.0");

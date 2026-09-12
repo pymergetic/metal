@@ -8,6 +8,7 @@
 #include "pymergetic/metal/build/__types__.h"
 /* for the lane list on /build: which cross targets this seat carries */
 #include "pymergetic/metal/jit/c/__types__.h"
+#include "pymergetic/util/limits.h"
 #include "pymergetic/util/lock.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/registry.h"
@@ -32,6 +33,8 @@
 
 static char s_body[PM_METAL_INSPECT_BODY];
 static int32_t s_status;
+
+PM_UTIL_LIMIT_C(pm_inspect_limit_img, pymergetic.metal.inspect, img, 48u, 0u, NULL);
 
 typedef struct {
     char *p;
@@ -2455,8 +2458,6 @@ static int32_t build_object_bytes_asgi_handler(const char *method,
  * (an image is tens of MB against a 1 MiB body) and with the same contract:
  * the length in /images is what a client loops against. */
 
-#define INSPECT_IMG_MAX 48u
-
 /* Names worth offering. A whitelist, not "every file in the build dir":
  * that tree also holds thousands of .o files and generated C. */
 static int img_is_image(const char *name) {
@@ -2542,7 +2543,7 @@ static uint32_t img_dir_each(const char *dir, const char *board, uint32_t seen,
     if (d == NULL) {
         return seen;
     }
-    while ((e = readdir(d)) != NULL && seen < INSPECT_IMG_MAX) {
+    while ((e = readdir(d)) != NULL && PM_UTIL_LIMIT_ROOM(pm_inspect_limit_img, seen)) {
         char full[3584];
         struct stat st;
         if (e->d_name[0] == '.' || !img_is_image(e->d_name)) {
@@ -2579,7 +2580,7 @@ static uint32_t img_each(void (*fn)(void *ctx, const char *board,
     if (d == NULL) {
         return seen;
     }
-    while ((e = readdir(d)) != NULL && seen < INSPECT_IMG_MAX) {
+    while ((e = readdir(d)) != NULL && PM_UTIL_LIMIT_ROOM(pm_inspect_limit_img, seen)) {
         char board_dir[3072];
         if (e->d_name[0] == '.') {
             continue;

@@ -49,6 +49,12 @@ pm_metal_coop_status_t pm_metal_jit_rs_compile_step(pm_metal_coop_coro_t *self);
 /* Free the result and its owned strings via the arena. */
 void pm_metal_jit_rs_result_free(pm_util_mem_arena_t *arena, pm_metal_jit_rs_result_t *r);
 
+/* Has compiler: 1 when the mrustc backend is linked into this binary,
+ * 0 on seats that carry only the stub (firmware trees). Callers probe
+ * this before attempting a compile to get a clean refusal rather than
+ * an opaque -1 from the stub path. */
+int32_t pm_metal_jit_rs_has_compiler(void);
+
 #ifdef __cplusplus
 }
 #endif
