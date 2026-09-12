@@ -41,6 +41,7 @@ upy process budget refuses
 upy types value loop
 upy limits knob loop
 upy room knob loop
+upy knobs under their module
 upy registry row knobs
 upy types row knobs
 upy driver nic knobs

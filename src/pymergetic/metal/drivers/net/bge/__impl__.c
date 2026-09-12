@@ -46,11 +46,11 @@ static pm_util_mem_arena_t *s_arena;
 static struct bge_nic *s_head;
 static uint32_t s_dev_used;
 
-PM_UTIL_LIMIT_C(pm_metal_net_bge_limit_device, "drivers.net.bge.device",
+PM_UTIL_LIMIT_C(pm_metal_net_bge_limit_device, pymergetic.metal.drivers.net.bge, device,
     BGE_DEVICE_DEFAULT, 0u, &s_dev_used);
-PM_UTIL_LIMIT_C(pm_metal_net_bge_limit_queue, "drivers.net.bge.queue",
+PM_UTIL_LIMIT_C(pm_metal_net_bge_limit_queue, pymergetic.metal.drivers.net.bge, queue,
     BGE_QUEUE_DEFAULT, 0u, NULL);
-PM_UTIL_LIMIT_C(pm_metal_net_bge_limit_frame, "drivers.net.bge.frame",
+PM_UTIL_LIMIT_C(pm_metal_net_bge_limit_frame, pymergetic.metal.drivers.net.bge, frame,
     BGE_FRAME_DEFAULT, 0u, NULL);
 
 /* The slot at `i` in this NIC's ring. */

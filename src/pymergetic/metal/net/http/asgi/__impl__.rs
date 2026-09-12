@@ -30,7 +30,7 @@ const ACCEPT_WAIT: i32 = -2;
  * These three are where the server starts, not where it stops: each is the
  * default of a knob on pymergetic.util.limits, the tables behind them come
  * from the arena as they fill, and a seat that expects more traffic says so
- * (`m.limit("net.http.asgi.connection", 64)`) instead of being rebuilt. A
+ * (`m.limit("pymergetic.metal.net.http.asgi.connection", 64)`) instead of being rebuilt. A
  * connection carries its own receive, header and stream buffers — twenty-one
  * kilobytes — which used to sit in .bss sixteen times over whether this seat
  * ever served a request or not. */
@@ -96,6 +96,10 @@ struct pm_metal_coop_task_t {
 #[repr(C)]
 struct pm_util_limit_t {
     name: *const u8,
+    /// The card this knob is under, and what it counts there. `name` is the
+    /// two joined; a seat that asks a card for its knobs matches on `module`.
+    module: *const u8,
+    leaf: *const u8,
     soft: u32,
     hard: u32,
     dflt: u32,
@@ -231,6 +235,8 @@ static LISTEN_USED: Mut<u32> = Mut(UnsafeCell::new(0));
  * that is just as early and far easier to read. */
 static CONN_KNOB: Mut<pm_util_limit_t> = Mut(UnsafeCell::new(pm_util_limit_t {
     name: ptr::null(),
+    module: ptr::null(),
+    leaf: ptr::null(),
     soft: MAX_CONN_DEFAULT,
     hard: 0,
     dflt: MAX_CONN_DEFAULT,
@@ -240,6 +246,8 @@ static CONN_KNOB: Mut<pm_util_limit_t> = Mut(UnsafeCell::new(pm_util_limit_t {
 }));
 static SERVER_KNOB: Mut<pm_util_limit_t> = Mut(UnsafeCell::new(pm_util_limit_t {
     name: ptr::null(),
+    module: ptr::null(),
+    leaf: ptr::null(),
     soft: MAX_ASGI_DEFAULT,
     hard: 0,
     dflt: MAX_ASGI_DEFAULT,
@@ -249,6 +257,8 @@ static SERVER_KNOB: Mut<pm_util_limit_t> = Mut(UnsafeCell::new(pm_util_limit_t {
 }));
 static DEFER_KNOB: Mut<pm_util_limit_t> = Mut(UnsafeCell::new(pm_util_limit_t {
     name: ptr::null(),
+    module: ptr::null(),
+    leaf: ptr::null(),
     soft: MAX_DEFER_DEFAULT,
     hard: 0,
     dflt: MAX_DEFER_DEFAULT,
@@ -258,6 +268,8 @@ static DEFER_KNOB: Mut<pm_util_limit_t> = Mut(UnsafeCell::new(pm_util_limit_t {
 }));
 static BACKLOG_KNOB: Mut<pm_util_limit_t> = Mut(UnsafeCell::new(pm_util_limit_t {
     name: ptr::null(),
+    module: ptr::null(),
+    leaf: ptr::null(),
     soft: LISTEN_BACKLOG_DEFAULT,
     hard: 0,
     dflt: LISTEN_BACKLOG_DEFAULT,
@@ -277,19 +289,27 @@ unsafe fn knob_room(knob: *const pm_util_limit_t, have: u32) -> bool {
 unsafe fn knobs_attach() {
     unsafe {
         let c = CONN_KNOB.0.get();
-        (*c).name = b"net.http.asgi.connection\0".as_ptr();
+        (*c).name = b"pymergetic.metal.net.http.asgi.connection\0".as_ptr();
+        (*c).module = b"pymergetic.metal.net.http.asgi\0".as_ptr();
+        (*c).leaf = b"connection\0".as_ptr();
         (*c).used = CONNS_USED.0.get() as *const u32;
         pm_util_limits_attach(c);
         let s = SERVER_KNOB.0.get();
-        (*s).name = b"net.http.asgi.server\0".as_ptr();
+        (*s).name = b"pymergetic.metal.net.http.asgi.server\0".as_ptr();
+        (*s).module = b"pymergetic.metal.net.http.asgi\0".as_ptr();
+        (*s).leaf = b"server\0".as_ptr();
         (*s).used = LISTEN_USED.0.get() as *const u32;
         pm_util_limits_attach(s);
         let d = DEFER_KNOB.0.get();
-        (*d).name = b"net.http.asgi.defer\0".as_ptr();
+        (*d).name = b"pymergetic.metal.net.http.asgi.defer\0".as_ptr();
+        (*d).module = b"pymergetic.metal.net.http.asgi\0".as_ptr();
+        (*d).leaf = b"defer\0".as_ptr();
         (*d).used = DEFERS_USED.0.get() as *const u32;
         pm_util_limits_attach(d);
         let b = BACKLOG_KNOB.0.get();
-        (*b).name = b"net.http.asgi.backlog\0".as_ptr();
+        (*b).name = b"pymergetic.metal.net.http.asgi.backlog\0".as_ptr();
+        (*b).module = b"pymergetic.metal.net.http.asgi\0".as_ptr();
+        (*b).leaf = b"backlog\0".as_ptr();
         pm_util_limits_attach(b);
     }
 }
@@ -378,7 +398,7 @@ const DEFER_BUSY_BODY_LEN: u32 = 12;
  * defer_next hands out the pending path and remembers it as *current*, so the
  * renderer needs no request id: one drainer at a time, which is what a render
  * pump is. */
-/* Mirrors net.http.asgi.connection (16) — kept a literal: the rsx subset
+/* Mirrors the connection knob (16) — kept a literal: the rsx subset
  * chains no const-to-const. Its own knob, so a seat that raises one can raise
  * the other. */
 const MAX_DEFER_DEFAULT: u32 = 16;

@@ -35,11 +35,11 @@
 /* Mirrors this seat starts with, and connections each one carries. Both are
  * where it starts: a mirror is taken from the arena when a port is mirrored,
  * its connections when it opens, and a seat expecting more traffic says so
- * (`m.limit("net.fwd.connection", 64)`) rather than being rebuilt. */
+ * (`m.limit("pymergetic.metal.net.fwd.connection", 64)`) rather than being rebuilt. */
 #define PM_METAL_FWD_MIRROR_DEFAULT 8u
 #define PM_METAL_FWD_CONN_DEFAULT 8u
 /* Drain granularity for guest->host shuttling. Must be >= the guest TCP rx
- * window (net.ip.receive) so one pump tick can empty the whole guest
+ * window (pymergetic.metal.net.ip.receive) so one pump tick can empty the whole guest
  * client buffer. A small chunk (e.g. 1400) would free only that much of the
  * send window per tick, thrash the sender's window park, and stall large
  * responses — a browser hanging on a big page/download. */
@@ -48,9 +48,9 @@
 /* Declared on every seat, whatever the seat can do with them, so a listing
  * reads the same everywhere. */
 static uint32_t s_mirror_used;
-PM_UTIL_LIMIT_C(pm_fwd_limit_mirror, "net.fwd.mirror", PM_METAL_FWD_MIRROR_DEFAULT, 0u, &s_mirror_used);
-PM_UTIL_LIMIT_C(pm_fwd_limit_conn, "net.fwd.connection", PM_METAL_FWD_CONN_DEFAULT, 0u, NULL);
-PM_UTIL_LIMIT_C(pm_fwd_limit_chunk, "net.fwd.chunk", PM_METAL_FWD_CHUNK_DEFAULT, 1048576u, NULL);
+PM_UTIL_LIMIT_C(pm_fwd_limit_mirror, pymergetic.metal.net.fwd, mirror, PM_METAL_FWD_MIRROR_DEFAULT, 0u, &s_mirror_used);
+PM_UTIL_LIMIT_C(pm_fwd_limit_conn, pymergetic.metal.net.fwd, connection, PM_METAL_FWD_CONN_DEFAULT, 0u, NULL);
+PM_UTIL_LIMIT_C(pm_fwd_limit_chunk, pymergetic.metal.net.fwd, chunk, PM_METAL_FWD_CHUNK_DEFAULT, 1048576u, NULL);
 
 #if !defined(PM_METAL_FIRMWARE) && !defined(__EMSCRIPTEN__)
 

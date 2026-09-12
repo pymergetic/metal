@@ -31,7 +31,7 @@ extern "C" {
 #define PM_METAL_EDIT_ERR_MAX 256u
 #define PM_METAL_EDIT_NAME_MAX 96u
 /* Where a parse starts, not where it stops. Each of these is the default of a
- * knob on pymergetic.util.limits (edit.node, edit.source, edit.typecheck):
+ * knob on pymergetic.util.limits (node, source, typecheck):
  * the node list is arena memory that grows with the file, the source bound is
  * what the editor will accept rather than what it holds, and the typecheck
  * scratch is taken for one compile and given straight back. A seat editing
@@ -71,7 +71,7 @@ typedef struct pm_metal_edit_tree {
     const char *src;
     size_t src_len;
     uint32_t n_nodes;
-    /* arena-owned, grown under edit.node while the file needs it, handed
+    /* arena-owned, grown under the node knob while the file needs it, handed
      * back by pm_metal_edit_tree_release */
     uint32_t cap_nodes;
     pm_metal_edit_node_t *nodes;

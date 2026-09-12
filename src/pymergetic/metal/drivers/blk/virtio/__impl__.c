@@ -49,9 +49,9 @@ static pm_util_mem_arena_t *s_arena;
 static struct virtio_blk *s_head;
 static uint32_t s_dev_used;
 
-PM_UTIL_LIMIT_C(pm_metal_blk_virtio_limit_device, "drivers.blk.virtio.device",
+PM_UTIL_LIMIT_C(pm_metal_blk_virtio_limit_device, pymergetic.metal.drivers.blk.virtio, device,
     VIRTIO_BLK_DEVICE_DEFAULT, 0u, &s_dev_used);
-PM_UTIL_LIMIT_C(pm_metal_blk_virtio_limit_sector, "drivers.blk.virtio.sector",
+PM_UTIL_LIMIT_C(pm_metal_blk_virtio_limit_sector, pymergetic.metal.drivers.blk.virtio, sector,
     VIRTIO_BLK_SECTOR_DEFAULT, 0u, NULL);
 
 /* A row for one more disk: a closed one first, then a fresh one. Either way

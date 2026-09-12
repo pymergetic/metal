@@ -798,7 +798,7 @@ static int32_t case_socket_growth(void) {
     for (i = 0; i < GROW_N; i++) {
         fd[i] = -1;
     }
-    if (pm_util_limits_set("net.ip.socket", GROW_N + 16u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.net.ip.socket", GROW_N + 16u) != 0) {
         return fail("asking for more sockets");
     }
     before = pm_util_mem_arena_heap_used(arena);
@@ -813,7 +813,7 @@ static int32_t case_socket_growth(void) {
             goto out;
         }
     }
-    during = pm_util_limits_used(pm_util_limits_find("net.ip.socket"));
+    during = pm_util_limits_used(pm_util_limits_find("pymergetic.metal.net.ip.socket"));
     if (during < GROW_N) {
         st = fail("the listing does not show the sockets that are open");
     }
@@ -842,13 +842,13 @@ out:
             st = fail("closed sockets did not go back to the arena");
         }
     }
-    (void)pm_util_limits_reset("net.ip.socket");
+    (void)pm_util_limits_reset("pymergetic.metal.net.ip.socket");
     return st;
 }
 
 /* The knob is what says no, and a seat may move it while it runs. */
 static int32_t case_socket_limit(void) {
-    int32_t k = pm_util_limits_find("net.ip.socket");
+    int32_t k = pm_util_limits_find("pymergetic.metal.net.ip.socket");
     uint32_t live;
     int32_t a = -1;
     int32_t b = -1;
@@ -856,10 +856,10 @@ static int32_t case_socket_limit(void) {
     int32_t st = 0;
 
     if (k < 0 || pm_util_limits_default(k) != 32u) {
-        return fail("net.ip.socket is not on the listing with the number it shipped with");
+        return fail("pymergetic.metal.net.ip.socket is not on the listing with the number it shipped with");
     }
     live = pm_util_limits_used(k);
-    if (pm_util_limits_set("net.ip.socket", live + 2u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.net.ip.socket", live + 2u) != 0) {
         return fail("set");
     }
     a = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_DGRAM);
@@ -881,7 +881,7 @@ static int32_t case_socket_limit(void) {
     if (c >= 0) {
         (void)pm_metal_net_ip_close(c);
     }
-    if (pm_util_limits_reset("net.ip.socket") != 0) {
+    if (pm_util_limits_reset("pymergetic.metal.net.ip.socket") != 0) {
         return fail("reset");
     }
     if (st == 0) {
@@ -915,8 +915,8 @@ static int32_t case_backlog_knob(void) {
     }
     /* Twenty connections is forty-one sockets with their listener, so both
      * knobs have to be moved — which is the whole exercise. */
-    if (pm_util_limits_set("net.ip.backlog", 32u) != 0
-        || pm_util_limits_set("net.ip.socket", 64u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.net.ip.backlog", 32u) != 0
+        || pm_util_limits_set("pymergetic.metal.net.ip.socket", 64u) != 0) {
         return fail("backlog knob");
     }
     ls = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
@@ -951,8 +951,8 @@ out:
     if (ls >= 0) {
         (void)pm_metal_net_ip_close(ls);
     }
-    (void)pm_util_limits_reset("net.ip.backlog");
-    (void)pm_util_limits_reset("net.ip.socket");
+    (void)pm_util_limits_reset("pymergetic.metal.net.ip.backlog");
+    (void)pm_util_limits_reset("pymergetic.metal.net.ip.socket");
     return st;
 }
 

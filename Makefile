@@ -187,6 +187,7 @@ WASMMOD_TESTS_OBJ := \
 	$(CURDIR)/build/wasmmod-tests/types.o \
 	$(CURDIR)/build/wasmmod-tests/io.o \
 	$(CURDIR)/build/wasmmod-tests/net-cdn.o \
+	$(CURDIR)/build/wasmmod-tests/nativecall.o \
 	$(CURDIR)/build/wasmmod-tests/util-limits.o
 
 $(CURDIR)/build/wasmmod-tests/types.o: $(WASMMOD_SRC)/pymergetic/types/__tests__.c
@@ -204,6 +205,18 @@ $(CURDIR)/build/wasmmod-tests/util-limits.o: $(WASMMOD_SRC)/pymergetic/util/limi
 $(CURDIR)/build/wasmmod-tests/net-cdn.o: $(WASMMOD_SRC)/pymergetic/wasmmod/net/cdn/__tests__.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DPM_MOD_TESTS=1 -c -o $@ $<
+
+$(CURDIR)/build/wasmmod-tests/nativecall.o: $(WASMMOD_SRC)/pymergetic/wasmmod/nativecall/__tests__.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DPM_MOD_TESTS=1 -c -o $@ $<
+
+# The knob faces from C++ — the language the transpile chain and the mrustc shim
+# are written in. A consumer TU, compiled by $(CXX) and linked into the host
+# runner, so "reachable from C++" is a link and a run rather than a claim.
+LIMITS_CPP_PROVE_O := $(CURDIR)/build/host_test_cpp.o
+$(LIMITS_CPP_PROVE_O): $(CURDIR)/host_test_cpp.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) -std=c++17 -O2 -g -Wall -Wextra $(CPPFLAGS) -c -o $@ $<
 
 # __impl__.c calls pm_metal_jit_rs_mrustc_compile() which is provided by the
 # tools/mrustc_embed C++ shim; the shim reproduces mrustc's CLI driver pipeline
@@ -311,9 +324,9 @@ $(CURDIR)/build/$(METAL_SRC)/pymergetic/metal/jit/py/__tests__.o: $(METAL_SRC)/p
 	@mkdir -p $(dir $@)
 	$(CC) $(UPY_TU_CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-$(OUT): $(SRC_OBJS) $(WASMMOD_TESTS_OBJ) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(UPY_EMBED_OBJS_FILE) $(METAL_STATICLIB)
+$(OUT): $(SRC_OBJS) $(WASMMOD_TESTS_OBJ) $(LIMITS_CPP_PROVE_O) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(UPY_EMBED_OBJS_FILE) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(OUT))
-	$(CXX) -o $(OUT) $(SRC_OBJS) $(WASMMOD_TESTS_OBJ) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC) $(LDFLAGS_UPY)
+	$(CXX) -o $(OUT) $(SRC_OBJS) $(WASMMOD_TESTS_OBJ) $(LIMITS_CPP_PROVE_O) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(LDFLAGS_WASMMOD) $(LDFLAGS_MRUSTC) $(LDFLAGS_UPY)
 
 $(BENCH_OUT): $(BENCH_SRC_OBJS) $(MBEDTLS_OBJS) $(ZP_OBJS) $(TCC_OBJS) $(TCC_CROSS_OBJS) $(TCC1_OBJS) $(MRUSTC_EMBED_O) $(ELF_LOAD_OBJ) $(UPY_EMBED_OBJS_FILE) $(METAL_STATICLIB)
 	@mkdir -p $(dir $(BENCH_OUT))
@@ -552,6 +565,7 @@ upy:
 	grep -q "upy types value loop" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy limits knob loop" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy room knob loop" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy knobs under their module" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy loader image knob" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy registry row knobs" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy types row knobs" $(CURDIR)/build/upy_guest_prove.log
@@ -624,6 +638,7 @@ browser:
 	grep -q "upy types value loop" $(CURDIR)/build/browser_prove.log
 	grep -q "upy limits knob loop" $(CURDIR)/build/browser_prove.log
 	grep -q "upy room knob loop" $(CURDIR)/build/browser_prove.log
+	grep -q "upy knobs under their module" $(CURDIR)/build/browser_prove.log
 	grep -q "upy loader image knob" $(CURDIR)/build/browser_prove.log
 	grep -q "upy registry row knobs" $(CURDIR)/build/browser_prove.log
 	grep -q "upy types row knobs" $(CURDIR)/build/browser_prove.log

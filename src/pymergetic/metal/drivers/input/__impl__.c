@@ -25,7 +25,7 @@ static struct pm_metal_indev *s_dev;
 static uint32_t s_dev_cap;
 static uint32_t s_dev_used;
 
-PM_UTIL_LIMIT_C(pm_metal_drivers_input_limit_device, "drivers.input.device",
+PM_UTIL_LIMIT_C(pm_metal_drivers_input_limit_device, pymergetic.metal.drivers.input, device,
     PM_METAL_INPUT_DEFAULT, 0u, &s_dev_used);
 
 /* A free row, widening the table if that is what the knob allows. Negative

@@ -59,7 +59,7 @@ static pm_util_mem_arena_t *s_arena;
 static struct in_fill *s_head;
 static uint32_t s_dev_used;
 
-PM_UTIL_LIMIT_C(pm_metal_input_virtio_limit_device, "drivers.input.virtio.device",
+PM_UTIL_LIMIT_C(pm_metal_input_virtio_limit_device, pymergetic.metal.drivers.input.virtio, device,
     IN_DEVICE_DEFAULT, 0u, &s_dev_used);
 
 /* A row for one more device: a closed one first, then a fresh one. Either

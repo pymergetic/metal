@@ -14,7 +14,7 @@ typedef void (*pm_metal_console_sink_fn)(const char *s, uint32_t n);
  * to size a buffer for one line.
  *
  * The depth is where a console starts, not where it stops: it is the default
- * of console.scrollback, the ring is arena memory that grows with the output
+ * of the scrollback knob, the ring is arena memory that grows with the output
  * and follows the knob when a seat moves it, and a reader asking for a line
  * that has scrolled out is told so (`line_at` returns -1) rather than being
  * promised a fixed reach. */

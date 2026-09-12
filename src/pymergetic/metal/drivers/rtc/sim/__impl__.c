@@ -27,7 +27,7 @@ static pm_util_mem_arena_t *s_arena;
 static struct rtc_sim *s_head;
 static uint32_t s_dev_used;
 
-PM_UTIL_LIMIT_C(pm_metal_rtc_sim_limit_device, "drivers.rtc.sim.device",
+PM_UTIL_LIMIT_C(pm_metal_rtc_sim_limit_device, pymergetic.metal.drivers.rtc.sim, device,
     RTC_SIM_DEVICE_DEFAULT, 0u, &s_dev_used);
 
 /* A row for one more clock: a closed one first, then a fresh one. Either way

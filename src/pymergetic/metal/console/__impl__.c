@@ -18,7 +18,7 @@ void uart_write(const char *s, size_t n);
 #endif
 #endif
 
-/* Screens the seat offers (F1-F6), the default of console.screen. A screen
+/* Screens the seat offers (F1-F6), the default of the screen knob. A screen
  * costs nothing until something is printed on it: the knob says how many
  * there are to select, not how much memory is standing by. */
 #ifndef PM_METAL_CONSOLE_SCREEN_DEFAULT
@@ -76,16 +76,16 @@ static uint32_t s_c_used;
 
 static int32_t scrollback_apply(pm_util_limit_t *knob);
 
-PM_UTIL_LIMIT_C(pm_console_limit_screen, "console.screen",
+PM_UTIL_LIMIT_C(pm_console_limit_screen, pymergetic.metal.console, screen,
     PM_METAL_CONSOLE_SCREEN_DEFAULT, 0u, &s_c_used);
 /* A line is PM_METAL_CONSOLE_COLS bytes, so the hard ceiling is what keeps
  * "deeper scrollback" from meaning "the whole arena". The ring is reshaped
  * when this moves, by whoever moved it — see ring_fit. */
-PM_UTIL_LIMIT_APPLY_C(pm_console_limit_scrollback, "console.scrollback",
+PM_UTIL_LIMIT_APPLY_C(pm_console_limit_scrollback, pymergetic.metal.console, scrollback,
     PM_METAL_CONSOLE_LINES_DEFAULT, 65536u, NULL, scrollback_apply);
-PM_UTIL_LIMIT_C(pm_console_limit_viewport, "console.viewport",
+PM_UTIL_LIMIT_C(pm_console_limit_viewport, pymergetic.metal.console, viewport,
     PM_METAL_CONSOLE_VP_DEFAULT, 0u, NULL);
-PM_UTIL_LIMIT_C(pm_console_limit_tap, "console.tap",
+PM_UTIL_LIMIT_C(pm_console_limit_tap, pymergetic.metal.console, tap,
     PM_METAL_CONSOLE_TAP_DEFAULT, 0u, NULL);
 
 /* How many screens this seat offers right now. */
@@ -143,7 +143,7 @@ static pm_metal_console_t *console_make(int32_t id) {
     return c;
 }
 
-/* The ring at the depth console.scrollback asks for now.
+/* The ring at the depth the scrollback knob asks for now.
  *
  * Called when a console is opened and when a seat moves the knob — never
  * from the write path. Printing must not reach the allocator: a line can be
@@ -188,7 +188,7 @@ static int ring_fit(pm_metal_console_t *c) {
     return 0;
 }
 
-/* console.scrollback moved: every open console follows it, here and now, in
+/* The scrollback knob moved: every open console follows it, here and now, in
  * the context of whoever turned the knob. */
 static int32_t scrollback_apply(pm_util_limit_t *knob) {
     uint32_t i;
@@ -641,7 +641,7 @@ uint32_t pm_metal_console_line_count(void) {
  * seat's live output are read the same way.
  *
  * Sequence numbers are the line's identity, not its slot: the ring keeps as
- * many of them as console.scrollback allows, and asking for one that has
+ * many of them as the scrollback knob allows, and asking for one that has
  * scrolled out says so rather than handing back whatever now sits there. */
 uint32_t pm_metal_console_seq_id(int32_t id) {
     const pm_metal_console_t *c = console_get(id);

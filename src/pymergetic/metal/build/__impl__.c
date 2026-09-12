@@ -98,14 +98,14 @@ typedef struct pm_metal_build_ctx {
      * lazy ctx create needs no explicit init. */
     pm_util_lock_t lock;
     /* build records (provenance chain) — retained per unit_compile, as deep
-     * as build.record asks for when the ctx is taken */
+     * as the record knob asks for when the ctx is taken */
     pm_metal_build_record_t *records;
     uint32_t n_records;
     uint32_t record_epoch;
     /* change-ledger scratch: every ledger read path (read-modify-write
      * append + query scan) — never nested, one buffer on the ctx */
     uint8_t ledger_buf[PM_METAL_BUILD_LEDGER_MAX];
-    /* factory-floor event ring: seq-numbered, as long as build.event asks
+    /* factory-floor event ring: seq-numbered, as long as the event knob asks
      * for, wrapping there. seq starts at 1 so 0 = "nothing yet". */
     pm_metal_build_event_t *events;
     uint32_t n_events;
@@ -140,8 +140,8 @@ static pm_metal_build_ctx_t *s_build_ctx;
 
 /* How much history the factory floor keeps. Both were sized by measuring a
  * whole-tree BUILD ALL and rounding up, which is exactly the guess a knob
- * replaces: a seat with a bigger tree raises build.record, a seat that only
- * wants the last handful of events lowers build.event, and neither number is
+ * replaces: a seat with a bigger tree raises the record knob, a seat that only
+ * wants the last handful of events lowers the event knob, and neither number is
  * a shape the card was compiled around.
  *
  * Moving either one restarts that history. The tables are rings addressed by
@@ -151,9 +151,9 @@ static pm_metal_build_ctx_t *s_build_ctx;
 static int32_t records_apply(pm_util_limit_t *knob);
 static int32_t events_apply(pm_util_limit_t *knob);
 static uint32_t s_records_used;
-PM_UTIL_LIMIT_APPLY_C(pm_build_limit_record, "build.record",
+PM_UTIL_LIMIT_APPLY_C(pm_build_limit_record, pymergetic.metal.build, record,
     PM_METAL_BUILD_RECORD_DEFAULT, 0u, &s_records_used, records_apply);
-PM_UTIL_LIMIT_APPLY_C(pm_build_limit_event, "build.event",
+PM_UTIL_LIMIT_APPLY_C(pm_build_limit_event, pymergetic.metal.build, event,
     PM_METAL_BUILD_EVENT_DEFAULT, 0u, NULL, events_apply);
 
 /* A ring is taken whole, so "no ceiling" reads as the build's own number. */
@@ -1893,8 +1893,8 @@ static int build_target_is_cross(int32_t target) {
     return strcmp(seat, want) != 0;
 }
 
-/* build.keep / build.keep.span: how many retained objects the seat serves and
- * how much memory the cache may hold them in. Both are defaults a seat moves:
+/* The keep and cache knobs: how many retained objects the seat serves and how
+ * much memory it may hold them in. Both are defaults a seat moves:
  * a build host with a bigger tree wants more of both, a small seat would
  * rather have the 64 MiB back and serve only the last few downloads.
  *
@@ -1902,11 +1902,11 @@ static int build_target_is_cross(int32_t target) {
  * block the seat asked for and nothing here is reserved until a build
  * actually retains something. */
 static int32_t keep_slots_apply(pm_util_limit_t *knob);
-static int32_t keep_span_apply(pm_util_limit_t *knob);
-PM_UTIL_LIMIT_APPLY_C(pm_build_limit_keep, "build.keep",
+static int32_t cache_apply(pm_util_limit_t *knob);
+PM_UTIL_LIMIT_APPLY_C(pm_build_limit_keep, pymergetic.metal.build, keep,
     PM_METAL_BUILD_KEEP_DEFAULT, 0u, &s_n_keep, keep_slots_apply);
-PM_UTIL_LIMIT_APPLY_C(pm_build_limit_keep_span, "build.keep.span",
-    PM_METAL_BUILD_KEEP_SPAN_DEFAULT, 0u, NULL, keep_span_apply);
+PM_UTIL_LIMIT_APPLY_C(pm_build_limit_cache, pymergetic.metal.build, cache,
+    PM_METAL_BUILD_KEEP_SPAN_DEFAULT, 0u, NULL, cache_apply);
 
 static uint32_t keep_want(const pm_util_limit_t *knob) {
     return knob->soft != 0u ? knob->soft : knob->dflt;
@@ -1941,7 +1941,7 @@ static int keep_ready(void) {
         return 1;
     }
     if (s_keep_backing == NULL) {
-        span = (size_t)keep_want(&pm_build_limit_keep_span);
+        span = (size_t)keep_want(&pm_build_limit_cache);
         s_keep_backing = malloc(span);
         if (s_keep_backing == NULL) {
             return 0;
@@ -1966,7 +1966,7 @@ static int keep_ready(void) {
     return 1;
 }
 
-/* build.keep moved: the same retained objects in a table of the new depth.
+/* The keep knob moved: the same retained objects in a table of the new depth.
  * A table that got smaller lets the oldest downloads go, which is what the
  * cache does when it runs out of room anyway. */
 static int32_t keep_slots_apply(pm_util_limit_t *knob) {
@@ -1997,10 +1997,10 @@ static int32_t keep_slots_apply(pm_util_limit_t *knob) {
     return rc;
 }
 
-/* build.keep.span moved: the cache is the span, so it is let go and taken
+/* The cache knob moved: the cache is the span, so it is let go and taken
  * again at the new size on the next retained object. Everything downloadable
  * right now is dropped — the seat asked for a different cache. */
-static int32_t keep_span_apply(pm_util_limit_t *knob) {
+static int32_t cache_apply(pm_util_limit_t *knob) {
     (void)knob;
     pm_util_lock_acquire(&s_keep_lock);
     if (s_keep_backing != NULL) {

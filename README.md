@@ -97,14 +97,26 @@ connections, routes, console lines, build slots, every device table and the
 class tables above them are taken this way, which is why a board's `.bss` is
 1.44 MB rather than ~90 MB.
 
+A knob is a thing under a module, so it reads off the card it belongs to, and a
+module answers for the knobs it has:
+
 ```python
+>>> import pymergetic.metal as m
+>>> m.net.ip.limits.socket = 4096
+>>> m.console.limits
+<limits 'pymergetic.metal.console': screen=6, scrollback=1024>
+>>> m.drivers.limits.net.sim.device      # a branch reaches every card below it
+32
 >>> import pymergetic.util.limits as limits
->>> at = limits.find("drivers.net.device")
+>>> at = limits.find("pymergetic.metal.drivers.net.device")
 >>> (limits.default(at), limits.soft(at), limits.used(at))
 (32, 32, 1)
->>> limits.set("net.ip.socket", 4096)
-0
+>>> limits.of("pymergetic.metal.net.ip").backlog
+16
 ```
+
+C, C++ and Rust ask the same way — `pm_util_limits_count_of(module)`,
+`nth_of(module, i)`, `find_of(module, leaf)`, `set_at(i, value)`.
 
 ## Cards
 

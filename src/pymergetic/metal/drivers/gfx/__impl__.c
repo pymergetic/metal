@@ -26,7 +26,7 @@ static struct pm_metal_gfxdev *s_dev;
 static uint32_t s_dev_cap;
 static uint32_t s_dev_used;
 
-PM_UTIL_LIMIT_C(pm_metal_drivers_gfx_limit_device, "drivers.gfx.device",
+PM_UTIL_LIMIT_C(pm_metal_drivers_gfx_limit_device, pymergetic.metal.drivers.gfx, device,
     PM_METAL_GFX_DEFAULT, 0u, &s_dev_used);
 
 /* A free row, widening the table if that is what the knob allows. Negative

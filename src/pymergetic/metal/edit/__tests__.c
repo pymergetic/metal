@@ -286,23 +286,23 @@ static int32_t test_knobs(void) {
     if (setup()) {
         return 60;
     }
-    slot = pm_util_limits_find("edit.node");
+    slot = pm_util_limits_find("pymergetic.metal.edit.node");
     if (slot < 0 || pm_util_limits_default(slot) != PM_METAL_EDIT_NODES_DEFAULT) {
         return 61;
     }
     /* SRC has four constructs: with room for two, the parse says so. */
-    if (pm_util_limits_set("edit.node", 2u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.edit.node", 2u) != 0) {
         return 62;
     }
     if (pm_metal_edit_parse_c(g_arena, &t, SRC, strlen(SRC))
             != PM_METAL_EDIT_ERR_NOMEM) {
         return 63;
     }
-    if (strstr(t.error, "edit.node") == NULL) {
+    if (strstr(t.error, "pymergetic.metal.edit.node") == NULL) {
         return 64;
     }
     pm_metal_edit_tree_release(g_arena, &t);
-    if (pm_util_limits_reset("edit.node") != 0
+    if (pm_util_limits_reset("pymergetic.metal.edit.node") != 0
         || pm_metal_edit_parse_c(g_arena, &t, SRC, strlen(SRC)) != PM_METAL_EDIT_OK
         || t.n_nodes != 4u) {
         return 65;
@@ -314,15 +314,15 @@ static int32_t test_knobs(void) {
     }
     pm_metal_edit_tree_release(g_arena, &t);
     /* What the editor will accept at all. */
-    if (pm_util_limits_set("edit.source", 16u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.edit.source", 16u) != 0) {
         return 67;
     }
     if (pm_metal_edit_parse_c(g_arena, &t, SRC, strlen(SRC))
             != PM_METAL_EDIT_ERR_ARGS
-        || strstr(t.error, "edit.source") == NULL) {
+        || strstr(t.error, "pymergetic.metal.edit.source") == NULL) {
         return 68;
     }
-    if (pm_util_limits_reset("edit.source") != 0) {
+    if (pm_util_limits_reset("pymergetic.metal.edit.source") != 0) {
         return 69;
     }
     /* And the scratch one typecheck borrows: too little and it is refused
@@ -330,14 +330,14 @@ static int32_t test_knobs(void) {
     {
         char err[PM_METAL_EDIT_ERR_MAX];
         err[0] = 0;
-        if (pm_util_limits_set("edit.typecheck", 4096u) != 0) {
+        if (pm_util_limits_set("pymergetic.metal.edit.typecheck", 4096u) != 0) {
             return 70;
         }
         if (pm_metal_edit_typecheck_c(SRC, strlen(SRC), err, sizeof(err))
                 == PM_METAL_EDIT_OK) {
             return 71;
         }
-        if (pm_util_limits_reset("edit.typecheck") != 0) {
+        if (pm_util_limits_reset("pymergetic.metal.edit.typecheck") != 0) {
             return 72;
         }
         if (pm_metal_edit_typecheck_c(SRC, strlen(SRC), NULL, 0)

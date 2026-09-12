@@ -500,7 +500,7 @@ static int32_t case_fwd_mirror_knob(void) {
     for (i = 0; i < MIRROR_N; i++) {
         id[i] = -1;
     }
-    if (pm_util_limits_set("net.fwd.mirror", MIRROR_N + 4u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.net.fwd.mirror", MIRROR_N + 4u) != 0) {
         return fail("mirror knob");
     }
     for (i = 0; i < MIRROR_N; i++) {
@@ -525,10 +525,10 @@ static int32_t case_fwd_mirror_knob(void) {
     if (rc == 0 && pm_metal_fwd_count() != before) {
         rc = fail("a stopped mirror is still counted");
     }
-    if (rc == 0 && pm_util_limits_used(pm_util_limits_find("net.fwd.mirror")) != before) {
+    if (rc == 0 && pm_util_limits_used(pm_util_limits_find("pymergetic.metal.net.fwd.mirror")) != before) {
         rc = fail("a stopped mirror was never given back");
     }
-    (void)pm_util_limits_reset("net.fwd.mirror");
+    (void)pm_util_limits_reset("pymergetic.metal.net.fwd.mirror");
     return rc;
 }
 

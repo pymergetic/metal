@@ -55,11 +55,11 @@ static pm_util_mem_arena_t *s_arena;
 static struct sim_nic *s_head;
 static uint32_t s_dev_used;
 
-PM_UTIL_LIMIT_C(pm_metal_net_sim_limit_device, "drivers.net.sim.device",
+PM_UTIL_LIMIT_C(pm_metal_net_sim_limit_device, pymergetic.metal.drivers.net.sim, device,
     SIM_DEVICE_DEFAULT, 0u, &s_dev_used);
-PM_UTIL_LIMIT_C(pm_metal_net_sim_limit_queue, "drivers.net.sim.queue",
+PM_UTIL_LIMIT_C(pm_metal_net_sim_limit_queue, pymergetic.metal.drivers.net.sim, queue,
     SIM_QUEUE_DEFAULT, 0u, NULL);
-PM_UTIL_LIMIT_C(pm_metal_net_sim_limit_frame, "drivers.net.sim.frame",
+PM_UTIL_LIMIT_C(pm_metal_net_sim_limit_frame, pymergetic.metal.drivers.net.sim, frame,
     SIM_FRAME_DEFAULT, 0u, NULL);
 
 #if !defined(__EMSCRIPTEN__)

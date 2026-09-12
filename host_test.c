@@ -29,6 +29,9 @@ static int32_t late_boot_init(pm_util_mem_arena_t *a) {
 
 static void late_boot_deinit(void) {}
 
+/* host_test_cpp.cpp — the knob faces read from C++. */
+int pm_metal_host_cpp_limits_prove(void);
+
 int main(void) {
     /* Async's lock-free ready ring shrinks to fill the arena, so hand it a
      * generous span (see host_bench.c): a tight arena is what intermittently
@@ -84,6 +87,15 @@ int main(void) {
             bad++;
             printf("FAIL %.*s\n", (int)len, buf);
         }
+    }
+
+    /* The same knob faces from C++: a seat's transpile chain and its mrustc
+     * shim are C++, so capacity has to be reachable there too. One consumer TU
+     * (host_test_cpp.cpp), compiled by the C++ compiler, asks a card for its
+     * knobs and moves one. */
+    if (pm_metal_host_cpp_limits_prove() != 0) {
+        bad++;
+        printf("FAIL cpp limits prove\n");
     }
 
     printf("metal tests: %u run, %u not clean\n", ran, bad);

@@ -650,7 +650,7 @@ static int32_t case_server_knob(void) {
     enum { EXTRA = 9 }; /* past the shipped 8, so the table has to grow */
     int32_t ids[EXTRA];
     uint32_t live = pm_metal_net_http_asgi_count();
-    int32_t slot = pm_util_limits_find("net.http.asgi.server");
+    int32_t slot = pm_util_limits_find("pymergetic.metal.net.http.asgi.server");
     int i;
     if (slot < 0) {
         return fail("the server knob is not on this seat");
@@ -662,9 +662,9 @@ static int32_t case_server_knob(void) {
         return fail("the server knob lost count of the servers");
     }
     {
-        int32_t c = pm_util_limits_find("net.http.asgi.connection");
-        int32_t d = pm_util_limits_find("net.http.asgi.defer");
-        int32_t b = pm_util_limits_find("net.http.asgi.backlog");
+        int32_t c = pm_util_limits_find("pymergetic.metal.net.http.asgi.connection");
+        int32_t d = pm_util_limits_find("pymergetic.metal.net.http.asgi.defer");
+        int32_t b = pm_util_limits_find("pymergetic.metal.net.http.asgi.backlog");
         if (c < 0 || d < 0 || b < 0) {
             return fail("an asgi knob is missing");
         }
@@ -674,7 +674,7 @@ static int32_t case_server_knob(void) {
         }
     }
     /* Room for exactly one more than there are now. */
-    if (pm_util_limits_set("net.http.asgi.server", live + 1u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.net.http.asgi.server", live + 1u) != 0) {
         return fail("set the server knob");
     }
     {
@@ -690,7 +690,7 @@ static int32_t case_server_knob(void) {
         }
     }
     /* Now more than the shipped table holds. */
-    if (pm_util_limits_set("net.http.asgi.server", live + (uint32_t)EXTRA) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.net.http.asgi.server", live + (uint32_t)EXTRA) != 0) {
         return fail("raise the server knob");
     }
     for (i = 0; i < EXTRA; i++) {
@@ -724,7 +724,7 @@ static int32_t case_server_knob(void) {
     if (pm_util_limits_used(slot) != live) {
         return fail("stopped servers kept their slot");
     }
-    if (pm_util_limits_reset("net.http.asgi.server") != 0) {
+    if (pm_util_limits_reset("pymergetic.metal.net.http.asgi.server") != 0) {
         return fail("reset the server knob");
     }
     return 0;
@@ -745,7 +745,7 @@ static int32_t case_conn_knob(void) {
     static uint8_t rsp[CLIENTS][256];
     const char *req = "GET /x HTTP/1.0\r\nHost: x\r\n\r\n";
     uint32_t rn = (uint32_t)strlen(req);
-    int32_t slot = pm_util_limits_find("net.http.asgi.connection");
+    int32_t slot = pm_util_limits_find("pymergetic.metal.net.http.asgi.connection");
     int32_t srv;
     int i;
     int spin;
@@ -756,12 +756,12 @@ static int32_t case_conn_knob(void) {
     if (pm_util_limits_used(slot) != 0u) {
         return fail("a connection was still held before the burst");
     }
-    /* net.ip.backlog is the ceiling under which the asgi one asks: the queue
+    /* pymergetic.metal.net.ip.backlog is the ceiling under which the asgi one asks: the queue
      * is the ip card's memory, so both have to be willing. */
-    if (pm_util_limits_set("net.http.asgi.connection", 32u) != 0
-        || pm_util_limits_set("net.http.asgi.backlog", 32u) != 0
-        || pm_util_limits_set("net.ip.backlog", 32u) != 0
-        || pm_util_limits_set("net.ip.socket", 96u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.net.http.asgi.connection", 32u) != 0
+        || pm_util_limits_set("pymergetic.metal.net.http.asgi.backlog", 32u) != 0
+        || pm_util_limits_set("pymergetic.metal.net.ip.backlog", 32u) != 0
+        || pm_util_limits_set("pymergetic.metal.net.ip.socket", 96u) != 0) {
         return fail("raise the knobs for the burst");
     }
     srv = pm_metal_net_http_asgi_listen(LO4, BURST_PORT);
@@ -816,10 +816,10 @@ static int32_t case_conn_knob(void) {
     if (pm_util_limits_used(slot) != 0u) {
         return fail("finished connections did not go back to the arena");
     }
-    if (pm_util_limits_reset("net.http.asgi.connection") != 0
-        || pm_util_limits_reset("net.http.asgi.backlog") != 0
-        || pm_util_limits_reset("net.ip.backlog") != 0
-        || pm_util_limits_reset("net.ip.socket") != 0) {
+    if (pm_util_limits_reset("pymergetic.metal.net.http.asgi.connection") != 0
+        || pm_util_limits_reset("pymergetic.metal.net.http.asgi.backlog") != 0
+        || pm_util_limits_reset("pymergetic.metal.net.ip.backlog") != 0
+        || pm_util_limits_reset("pymergetic.metal.net.ip.socket") != 0) {
         return fail("reset the knobs after the burst");
     }
     return 0;

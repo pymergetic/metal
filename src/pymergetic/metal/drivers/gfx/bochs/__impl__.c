@@ -38,9 +38,9 @@ static pm_util_mem_arena_t *s_arena;
 static struct gfx_fill *s_head;
 static uint32_t s_dev_used;
 
-PM_UTIL_LIMIT_C(pm_metal_gfx_bochs_limit_device, "drivers.gfx.bochs.device",
+PM_UTIL_LIMIT_C(pm_metal_gfx_bochs_limit_device, pymergetic.metal.drivers.gfx.bochs, device,
     GFX_DEVICE_DEFAULT, 0u, &s_dev_used);
-PM_UTIL_LIMIT_C(pm_metal_gfx_bochs_limit_shadow, "drivers.gfx.bochs.shadow",
+PM_UTIL_LIMIT_C(pm_metal_gfx_bochs_limit_shadow, pymergetic.metal.drivers.gfx.bochs, shadow,
     GFX_SHADOW_DEFAULT, 0u, NULL);
 
 /* This scanout's shadow, at the size the knob says now. Kept across a

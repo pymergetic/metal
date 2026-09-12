@@ -76,11 +76,11 @@ static pm_util_mem_arena_t *s_arena;
 static struct vnet *s_head;
 static uint32_t s_dev_used;
 
-PM_UTIL_LIMIT_C(pm_metal_net_virtio_limit_device, "drivers.net.virtio.device",
+PM_UTIL_LIMIT_C(pm_metal_net_virtio_limit_device, pymergetic.metal.drivers.net.virtio, device,
     VNET_DEVICE_DEFAULT, 0u, &s_dev_used);
-PM_UTIL_LIMIT_C(pm_metal_net_virtio_limit_queue, "drivers.net.virtio.queue",
+PM_UTIL_LIMIT_C(pm_metal_net_virtio_limit_queue, pymergetic.metal.drivers.net.virtio, queue,
     VNET_QUEUE_DEFAULT, 0u, NULL);
-PM_UTIL_LIMIT_C(pm_metal_net_virtio_limit_frame, "drivers.net.virtio.frame",
+PM_UTIL_LIMIT_C(pm_metal_net_virtio_limit_frame, pymergetic.metal.drivers.net.virtio, frame,
     VNET_FRAME_DEFAULT, 0u, NULL);
 
 /* The tx / rx slot at `i` in this NIC's in-process ring. */

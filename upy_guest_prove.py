@@ -657,33 +657,33 @@ if limits.name(_n) is not None:
 
 # A knob a seat would actually turn: how many connections the HTTP server
 # takes. Software moves the soft, the hard is the wall.
-_i = limits.find("net.http.asgi.connection")
+_i = limits.find("pymergetic.metal.net.http.asgi.connection")
 if _i < 0:
     raise SystemExit("no asgi connection knob")
 _was = limits.soft(_i)
 _hard = limits.hard(_i)
 if limits.default(_i) != _was:
     raise SystemExit("asgi connection knob is not at its default")
-if limits.set("net.http.asgi.connection", _was + 8) != 0:
+if limits.set("pymergetic.metal.net.http.asgi.connection", _was + 8) != 0:
     raise SystemExit("raise the asgi connection knob")
 if limits.soft(_i) != _was + 8:
     raise SystemExit("asgi conn soft %r" % (limits.soft(_i),))
-if _hard != 0 and limits.set("net.http.asgi.connection", _hard + 1) != -2:
+if _hard != 0 and limits.set("pymergetic.metal.net.http.asgi.connection", _hard + 1) != -2:
     raise SystemExit("the soft went past its hard")
-if limits.reset("net.http.asgi.connection") != 0 or limits.soft(_i) != _was:
+if limits.reset("pymergetic.metal.net.http.asgi.connection") != 0 or limits.soft(_i) != _was:
     raise SystemExit("reset the asgi connection knob")
 if limits.set("nobody.asked", 1) != -1:
     raise SystemExit("a name nobody registered was accepted")
 
 # A knob whose card has to reshape storage to honour it: the console's
 # scrollback. The seat keeps more of its own output and then stops.
-_ci = limits.find("console.scrollback")
+_ci = limits.find("pymergetic.metal.console.scrollback")
 _cwas = limits.soft(_ci)
-if limits.set("console.scrollback", 512) != 0:
+if limits.set("pymergetic.metal.console.scrollback", 512) != 0:
     raise SystemExit("deepen the console")
 if limits.soft(_ci) != 512:
     raise SystemExit("console scrollback soft %r" % (limits.soft(_ci),))
-if limits.reset("console.scrollback") != 0 or limits.soft(_ci) != _cwas:
+if limits.reset("pymergetic.metal.console.scrollback") != 0 or limits.soft(_ci) != _cwas:
     raise SystemExit("reset the console scrollback")
 
 print("upy limits knob loop")
@@ -693,36 +693,111 @@ print("upy limits knob loop")
 # gives them back when it ends. A compile's workspace is the one every seat
 # uses, so it is the one proven here — shrink it and the compile refuses
 # (cleanly, with None), put it back and the same source compiles again.
-for _rn in ("upy.compile.arena", "upy.cpp.arena", "upy.link.arena", "upy.dump"):
+for _rn in ("pymergetic.wasmmod.nativecall.compile", "pymergetic.wasmmod.nativecall.cpp", "pymergetic.wasmmod.nativecall.link", "pymergetic.wasmmod.nativecall.dump"):
     _rj = limits.find(_rn)
     if _rj < 0:
         raise SystemExit("no room knob %r" % (_rn,))
     if limits.soft(_rj) != limits.default(_rj):
         raise SystemExit("room knob %r is not at its default" % (_rn,))
-_ri = limits.find("upy.compile.arena")
-if limits.set("upy.compile.arena", 4096) != 0:
+_ri = limits.find("pymergetic.wasmmod.nativecall.compile")
+if limits.set("pymergetic.wasmmod.nativecall.compile", 4096) != 0:
     raise SystemExit("shrink the compile room")
 if jpy.object_compile(_selfhost_src, "upy_room_toosmall") is not None:
     raise SystemExit("a compile in a 4KB room should refuse")
-if limits.reset("upy.compile.arena") != 0 or limits.soft(_ri) != limits.default(_ri):
+if limits.reset("pymergetic.wasmmod.nativecall.compile") != 0 or limits.soft(_ri) != limits.default(_ri):
     raise SystemExit("reset the compile room")
 _ragain = jpy.object_compile(_selfhost_src, "upy_room_again")
 if not isinstance(_ragain, bytes) or len(_ragain) < 8:
     raise SystemExit("compile once the room is back %r" % (type(_ragain),))
 print("upy room knob loop")
 
+# A knob belongs to a module, so it reads as one from here: the card's own
+# object, by leaf name, with assignment moving it and the hard limit refusing.
+# The same view comes back three ways — off the card, off a branch of the tree,
+# and by name through limits.of — because they are one object with one module in
+# it, not three lookups that could drift.
+_ipk = m.net.ip.limits
+if _ipk.socket != limits.soft(limits.find("pymergetic.metal.net.ip.socket")):
+    raise SystemExit("the card's knob and the listing disagree")
+_swas = _ipk.socket
+_ipk.socket = _swas + 16
+if limits.soft(limits.find("pymergetic.metal.net.ip.socket")) != _swas + 16:
+    raise SystemExit("moving a knob under its module did not move the knob")
+try:
+    _ipk.receive = 1 << 30
+    raise SystemExit("a knob under its module went past its hard limit")
+except ValueError:
+    pass
+try:
+    _ipk.nothing = 4
+    raise SystemExit("a name that is no knob of this card took a value")
+except AttributeError:
+    pass
+if limits.of("pymergetic.metal.net.ip").socket != _swas + 16:
+    raise SystemExit("limits.of does not see the same knob")
+if m.limits.net.ip.socket != _swas + 16:
+    raise SystemExit("the tree does not reach the same knob")
+_ipk.socket = _swas
+if limits.soft(limits.find("pymergetic.metal.net.ip.socket")) != _swas:
+    raise SystemExit("put the socket knob back")
+
+# "Give me the knobs of this module": the card answers with its own, in one
+# order, and the branch above it answers with everything below.
+_mod = "pymergetic.metal.net.ip"
+_own = [limits.leaf(limits.nth_of(_mod, _q)) for _q in range(limits.count_of(_mod))]
+if _own != sorted(_own) or "socket" not in _own or len(_own) < 8:
+    raise SystemExit("the knobs of a module %r" % (_own,))
+for _q, _leaf in enumerate(_own):
+    _k = limits.nth_of(_mod, _q)
+    if limits.module(_k) != _mod or limits.name(_k) != _mod + "." + _leaf:
+        raise SystemExit("a knob does not say where it belongs")
+    if limits.find_of(_mod, _leaf) != _k:
+        raise SystemExit("a card cannot find its own knob by leaf")
+if limits.nth_of(_mod, len(_own)) != -1 or limits.find_of(_mod, "nothing") != -1:
+    raise SystemExit("a module answered past its own knobs")
+if limits.count_of("pymergetic.metal.drivers") != 0:
+    raise SystemExit("a branch claimed a knob of a card below it")
+if limits.count_under("pymergetic.metal.drivers") < 30:
+    raise SystemExit("the driver branch does not answer as a branch")
+if m.drivers.limits.net.sim.device != limits.soft(
+        limits.find("pymergetic.metal.drivers.net.sim.device")):
+    raise SystemExit("a branch does not reach the card's knob under it")
+
+# The writers by index, for a caller that walked a module rather than a name.
+_wk = limits.find_of(_mod, "route")
+_rwas = limits.soft(_wk)
+if limits.set_at(_wk, _rwas + 4) != 0 or limits.soft(_wk) != _rwas + 4:
+    raise SystemExit("set a knob by index")
+if limits.reset_at(_wk) != 0 or limits.soft(_wk) != _rwas:
+    raise SystemExit("reset a knob by index")
+if limits.set_at(-1, 4) != -1 or limits.set_at(limits.count(), 4) != -1:
+    raise SystemExit("an index nobody has was accepted")
+# The rooms are a card of their own now, so they read like any other card's
+# knobs — under the module that owns them, by leaf name.
+import pymergetic.wasmmod.nativecall as _nc
+if _nc.limits.compile != limits.soft(limits.find("pymergetic.wasmmod.nativecall.compile")):
+    raise SystemExit("the bridge card's knob and the listing disagree")
+_ncwas = _nc.limits.compile
+_nc.limits.compile = _ncwas // 2
+if limits.soft(limits.find("pymergetic.wasmmod.nativecall.compile")) != _ncwas // 2:
+    raise SystemExit("moving a room under its module did not move the knob")
+_nc.limits.compile = _ncwas
+if limits.count_of("pymergetic.wasmmod.nativecall") != 6:
+    raise SystemExit("the bridge's rooms are not six knobs under that card")
+print("upy knobs under their module")
+
 # The loader's image knob: a pack's bytes are an allocation of exactly the
 # pack's length now, not a reserved 64KB row (128 of those was 8.4MB of a
 # seat's bss for packs nobody had loaded). The refusal itself is proven on the
 # seats that fetch packs over a wire; here the knob is read, moved, put back.
-_lki = limits.find("wasmmod.loader.image")
+_lki = limits.find("pymergetic.wasmmod.loader.image")
 if _lki < 0:
     raise SystemExit("no loader image knob")
 if limits.soft(_lki) != 65536 or limits.default(_lki) != 65536:
     raise SystemExit("loader image knob default %r" % (limits.soft(_lki),))
-if limits.set("wasmmod.loader.image", 4 * 1024 * 1024) != 0 or limits.soft(_lki) != 4194304:
+if limits.set("pymergetic.wasmmod.loader.image", 4 * 1024 * 1024) != 0 or limits.soft(_lki) != 4194304:
     raise SystemExit("raise the loader image knob")
-if limits.reset("wasmmod.loader.image") != 0 or limits.soft(_lki) != 65536:
+if limits.reset("pymergetic.wasmmod.loader.image") != 0 or limits.soft(_lki) != 65536:
     raise SystemExit("reset the loader image knob")
 print("upy loader image knob")
 
@@ -732,9 +807,9 @@ print("upy loader image knob")
 # refusal is proven where a pack registers faces over a wire (the CDN prove,
 # the boards); here the knobs are read, moved and put back.
 for _name, _want in (
-    ("wasmmod.registry.exports", 1536),
-    ("wasmmod.registry.tests", 384),
-    ("wasmmod.registry.benches", 64),
+    ("pymergetic.wasmmod.registry.exports", 1536),
+    ("pymergetic.wasmmod.registry.tests", 384),
+    ("pymergetic.wasmmod.registry.benches", 64),
 ):
     _at = limits.find(_name)
     if _at < 0:
@@ -747,7 +822,7 @@ for _name, _want in (
         raise SystemExit("raise %s" % _name)
     if limits.reset(_name) != 0 or limits.soft(_at) != _want:
         raise SystemExit("reset %s" % _name)
-_rx = limits.find("wasmmod.registry.exports")
+_rx = limits.find("pymergetic.wasmmod.registry.exports")
 if limits.used(_rx) == 0:
     raise SystemExit("the seat's own exports are rows too")
 print("upy registry row knobs", limits.used(_rx))
@@ -757,7 +832,7 @@ print("upy registry row knobs", limits.used(_rx))
 # boots with is a pre-heap floor it widens past with the knob, and staging —
 # a host tool's path, which is why this seat holds none — is a row per staged
 # type instead of the 96 x 12KB block that used to stand in every image.
-for _name, _want in (("types.stage", 96), ("types.registry", 512)):
+for _name, _want in (("pymergetic.types.stage", 96), ("pymergetic.types.registry", 512)):
     _at = limits.find(_name)
     if _at < 0:
         raise SystemExit("no %s knob" % _name)
@@ -769,11 +844,11 @@ for _name, _want in (("types.stage", 96), ("types.registry", 512)):
         raise SystemExit("raise %s" % _name)
     if limits.reset(_name) != 0 or limits.soft(_at) != _want:
         raise SystemExit("reset %s" % _name)
-if limits.used(limits.find("types.stage")) != 0:
+if limits.used(limits.find("pymergetic.types.stage")) != 0:
     raise SystemExit("a seat stages nothing")
-_tr = limits.find("types.registry")
+_tr = limits.find("pymergetic.types.registry")
 if limits.used(_tr) == 0 or limits.used(_tr) != t.registry_count():
-    raise SystemExit("types.registry used is the live count")
+    raise SystemExit("pymergetic.types.registry used is the live count")
 print("upy types row knobs", limits.used(_tr))
 
 # A NIC's ring is taken when the NIC attaches, not reserved per device per
@@ -782,17 +857,17 @@ print("upy types row knobs", limits.used(_tr))
 # that is where the refusal is proven: with the device knob down at what is
 # already bound, a probe finds no room and binds nothing.
 for _name, _want in (
-    ("drivers.net.sim.device", 4),
-    ("drivers.net.sim.queue", 8),
-    ("drivers.net.sim.frame", 2048),
-    ("drivers.net.virtio.device", 8),
-    ("drivers.net.virtio.queue", 8),
-    ("drivers.net.virtio.frame", 2048),
-    ("drivers.net.bge.device", 8),
-    ("drivers.net.bge.queue", 8),
-    ("drivers.net.bge.frame", 2048),
-    ("drivers.net.tap.device", 2),
-    ("drivers.net.tap.frame", 2048),
+    ("pymergetic.metal.drivers.net.sim.device", 4),
+    ("pymergetic.metal.drivers.net.sim.queue", 8),
+    ("pymergetic.metal.drivers.net.sim.frame", 2048),
+    ("pymergetic.metal.drivers.net.virtio.device", 8),
+    ("pymergetic.metal.drivers.net.virtio.queue", 8),
+    ("pymergetic.metal.drivers.net.virtio.frame", 2048),
+    ("pymergetic.metal.drivers.net.bge.device", 8),
+    ("pymergetic.metal.drivers.net.bge.queue", 8),
+    ("pymergetic.metal.drivers.net.bge.frame", 2048),
+    ("pymergetic.metal.drivers.net.tap.device", 2),
+    ("pymergetic.metal.drivers.net.tap.frame", 2048),
 ):
     _at = limits.find(_name)
     if _at < 0:
@@ -807,17 +882,17 @@ import pymergetic.metal.drivers.net.sim as _simnic
 
 if _simnic.up() != 0:
     raise SystemExit("sim nic up")
-_sd = limits.find("drivers.net.sim.device")
+_sd = limits.find("pymergetic.metal.drivers.net.sim.device")
 _bound = limits.used(_sd)
 if _bound == 0 or limits.counted(_sd) != 1:
     raise SystemExit("the seat's NIC is a counted row")
-if limits.set("drivers.net.sim.device", _bound) != 0:
+if limits.set("pymergetic.metal.drivers.net.sim.device", _bound) != 0:
     raise SystemExit("shrink the sim device knob")
 if _simnic.probe() >= 0:
     raise SystemExit("a NIC over the device knob should refuse")
 if limits.used(_sd) != _bound:
     raise SystemExit("a refused probe binds nothing")
-if limits.reset("drivers.net.sim.device") != 0:
+if limits.reset("pymergetic.metal.drivers.net.sim.device") != 0:
     raise SystemExit("reset the sim device knob")
 print("upy driver nic knobs", _bound)
 
@@ -826,17 +901,17 @@ print("upy driver nic knobs", _bound)
 # they came from. Each one widens a row at a time instead of standing at its
 # ceiling, and each counts what is bound.
 for _name, _want in (
-    ("drivers.net.device", 32),
-    ("drivers.gfx.device", 32),
-    ("drivers.blk.device", 8),
-    ("drivers.input.device", 8),
-    ("drivers.rtc.device", 4),
-    ("drivers.gfx.sim.device", 4),
-    ("drivers.gfx.sim.shadow", 1536),
-    ("drivers.blk.ide.device", 2),
-    ("drivers.blk.ide.sector", 256),
-    ("drivers.input.virtio.device", 4),
-    ("drivers.rtc.sim.device", 4),
+    ("pymergetic.metal.drivers.net.device", 32),
+    ("pymergetic.metal.drivers.gfx.device", 32),
+    ("pymergetic.metal.drivers.blk.device", 8),
+    ("pymergetic.metal.drivers.input.device", 8),
+    ("pymergetic.metal.drivers.rtc.device", 4),
+    ("pymergetic.metal.drivers.gfx.sim.device", 4),
+    ("pymergetic.metal.drivers.gfx.sim.shadow", 1536),
+    ("pymergetic.metal.drivers.blk.ide.device", 2),
+    ("pymergetic.metal.drivers.blk.ide.sector", 256),
+    ("pymergetic.metal.drivers.input.virtio.device", 4),
+    ("pymergetic.metal.drivers.rtc.sim.device", 4),
 ):
     _at = limits.find(_name)
     if _at < 0:
@@ -847,19 +922,19 @@ for _name, _want in (
         raise SystemExit("raise %s" % _name)
     if limits.reset(_name) != 0 or limits.soft(_at) != _want:
         raise SystemExit("reset %s" % _name)
-_cn = limits.find("drivers.net.device")
-_cg = limits.find("drivers.gfx.device")
+_cn = limits.find("pymergetic.metal.drivers.net.device")
+_cg = limits.find("pymergetic.metal.drivers.gfx.device")
 if limits.counted(_cn) != 1 or limits.counted(_cg) != 1:
     raise SystemExit("the class tables count what is bound")
 if limits.used(_cn) < 1 or limits.used(_cg) < 1:
     raise SystemExit("this seat has a NIC and a scanout")
 # With the class table down at what is bound, the driver's own knob is wide
 # open and a NIC still finds no row.
-if limits.set("drivers.net.device", limits.used(_cn)) != 0:
+if limits.set("pymergetic.metal.drivers.net.device", limits.used(_cn)) != 0:
     raise SystemExit("shrink the class table knob")
 if _simnic.probe() >= 0:
     raise SystemExit("a NIC over the class table knob should refuse")
-if limits.reset("drivers.net.device") != 0:
+if limits.reset("pymergetic.metal.drivers.net.device") != 0:
     raise SystemExit("reset the class table knob")
 print("upy device class knobs", limits.used(_cn), limits.used(_cg))
 

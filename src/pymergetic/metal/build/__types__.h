@@ -196,8 +196,7 @@ int32_t pm_metal_build_artifact_call(const pm_metal_build_artifact_t *artifact,
  * afterwards. unit_compile therefore copies each object into this cache,
  * which is what a download route reads.
  *
- * How much it holds is two knobs, build.keep (slots) and build.keep.span
- * (bytes). The defaults come from the tree as it stands: a whole BUILD ALL of
+ * How much it holds is two knobs, keep (slots) and cache (bytes). The defaults come from the tree as it stands: a whole BUILD ALL of
  * this repo is 103 objects and 18.1 MiB, with the biggest single object
  * 5.6 MiB and most tens of KB. The span carries that with room for rebuild
  * churn, and the slot count has to exceed the object count or the tail of a
@@ -433,7 +432,7 @@ int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
  * these as /build/<fqn> — authored source stays the primary pane, the
  * record is the build-product pane with the provenance chain in between.
  *
- * How many records the seat keeps is build.record. The table has to outlast
+ * How many records the seat keeps is the record knob. The table has to outlast
  * a whole walk or the pane contradicts it — at 64 slots an 84-unit tree
  * evicted 20 units while the walk was still reporting them as built, so the
  * same page said "84 ok" and "64 built" and the earliest rows lost their
@@ -456,7 +455,7 @@ int32_t pm_metal_build_dag_run(pm_util_mem_arena_t *arena,
  * a caller's arena, so an arena dying mid-build cannot strand half an
  * event.
  *
- * How deep the ring is is build.event. The default holds one whole BUILD
+ * How deep the ring is is the event knob. The default holds one whole BUILD
  * ALL, not a glance at one: a walk over the 84 discovered units emits ~2
  * events per unit when the lane refuses fast (measured 174 in under a second
  * on the x86_64 lane) and several more per source when it compiles. At 64 the

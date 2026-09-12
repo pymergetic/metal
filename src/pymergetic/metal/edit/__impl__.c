@@ -30,17 +30,19 @@
  * anything or not. */
 static pm_util_mem_arena_t *s_arena;
 
-PM_UTIL_LIMIT_C(pm_edit_limit_node, "edit.node", PM_METAL_EDIT_NODES_DEFAULT, 0u, NULL);
-PM_UTIL_LIMIT_C(pm_edit_limit_source, "edit.source", PM_METAL_EDIT_SRC_DEFAULT,
+PM_UTIL_LIMIT_C(pm_edit_limit_node, pymergetic.metal.edit, node, PM_METAL_EDIT_NODES_DEFAULT, 0u, NULL);
+PM_UTIL_LIMIT_C(pm_edit_limit_source, pymergetic.metal.edit, source, PM_METAL_EDIT_SRC_DEFAULT,
     16u * 1024u * 1024u, NULL);
-PM_UTIL_LIMIT_C(pm_edit_limit_typecheck, "edit.typecheck",
+PM_UTIL_LIMIT_C(pm_edit_limit_typecheck, pymergetic.metal.edit, typecheck,
     PM_METAL_EDIT_TYPECHECK_DEFAULT, 512u * 1024u * 1024u, NULL);
 
 static uint32_t limit_now(const pm_util_limit_t *knob) {
     return knob->soft != 0u ? knob->soft : knob->dflt;
 }
 
-/* One more node for the parse, from the arena, while edit.node allows it. */
+/* One more node for the parse, from the arena, while the node knob allows it.
+ * A message that says which knob bit names it from the knob, so the two can
+ * never drift apart. */
 static pm_metal_edit_node_t *node_push(pm_util_mem_arena_t *arena,
     pm_metal_edit_tree_t *tree) {
     pm_metal_edit_node_t *n;
@@ -50,8 +52,9 @@ static pm_metal_edit_node_t *node_push(pm_util_mem_arena_t *arena,
             (uint32_t)sizeof(*tree->nodes), &pm_edit_limit_node);
         if (grown == NULL || cap <= tree->n_nodes) {
             snprintf(tree->error, sizeof(tree->error),
-                "parse_c: no room for node %u (edit.node is %u)",
-                (unsigned)tree->n_nodes + 1u, (unsigned)pm_edit_limit_node.soft);
+                "parse_c: no room for node %u (%s is %u)",
+                (unsigned)tree->n_nodes + 1u, pm_edit_limit_node.name,
+                (unsigned)pm_edit_limit_node.soft);
             return NULL;
         }
         tree->nodes = grown;
@@ -139,7 +142,8 @@ int32_t pm_metal_edit_parse_c(pm_util_mem_arena_t *arena,
     len = source_len != 0 ? source_len : strlen(source);
     if (len == 0 || len > limit_now(&pm_edit_limit_source)) {
         snprintf(tree->error, sizeof(tree->error),
-            "parse_c: source empty or past edit.source (%zu of %u)", len,
+            "parse_c: source empty or past %s (%zu of %u)",
+            pm_edit_limit_source.name, len,
             (unsigned)limit_now(&pm_edit_limit_source));
         return PM_METAL_EDIT_ERR_ARGS;
     }
@@ -468,8 +472,8 @@ int32_t pm_metal_edit_typecheck_c(const char *source, size_t source_len,
     if (block == NULL) {
         if (errbuf != NULL && errbuf_len > 0) {
             snprintf(errbuf, errbuf_len,
-                "typecheck: the seat would not lend %u bytes (edit.typecheck)",
-                (unsigned)span);
+                "typecheck: the seat would not lend %u bytes (%s)",
+                (unsigned)span, pm_edit_limit_typecheck.name);
         }
         return PM_METAL_EDIT_ERR_NOMEM;
     }

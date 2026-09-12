@@ -2450,10 +2450,10 @@ static int32_t test_walk_all(void) {
  * stays downloadable. Runs last, because moving any of them starts that
  * history over — which is the behaviour it asserts. */
 static int32_t test_limits_knobs(void) {
-    int32_t rec = pm_util_limits_find("build.record");
-    int32_t ev = pm_util_limits_find("build.event");
-    int32_t keep = pm_util_limits_find("build.keep");
-    int32_t span = pm_util_limits_find("build.keep.span");
+    int32_t rec = pm_util_limits_find("pymergetic.metal.build.record");
+    int32_t ev = pm_util_limits_find("pymergetic.metal.build.event");
+    int32_t keep = pm_util_limits_find("pymergetic.metal.build.keep");
+    int32_t span = pm_util_limits_find("pymergetic.metal.build.cache");
 
     if (rec < 0 || ev < 0 || keep < 0 || span < 0) {
         return 300;
@@ -2474,14 +2474,14 @@ static int32_t test_limits_knobs(void) {
 
     /* A shallower keep table lets the oldest downloads go and holds exactly
      * what the seat now asks for. */
-    if (pm_util_limits_set("build.keep", 1u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.build.keep", 1u) != 0) {
         return 304;
     }
     if (pm_util_limits_used(keep) != 1u) {
         return 305;
     }
     /* Resizing the span is resizing the cache: what was retained is gone. */
-    if (pm_util_limits_set("build.keep.span", 8u * 1024u * 1024u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.build.cache", 8u * 1024u * 1024u) != 0) {
         return 306;
     }
     if (pm_util_limits_used(keep) != 0u) {
@@ -2490,13 +2490,13 @@ static int32_t test_limits_knobs(void) {
 
     /* The event ring and the record table restart at their new depth rather
      * than reporting old rows from the wrong slots. */
-    if (pm_util_limits_set("build.event", 64u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.build.event", 64u) != 0) {
         return 308;
     }
     if (pm_metal_build_events_latest() != 0u) {
         return 309;
     }
-    if (pm_util_limits_set("build.record", 8u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.build.record", 8u) != 0) {
         return 310;
     }
     if (pm_metal_build_record_find("pymergetic.metal.jit.c") != NULL
@@ -2504,10 +2504,10 @@ static int32_t test_limits_knobs(void) {
         return 311;
     }
 
-    if (pm_util_limits_reset("build.record") != 0
-        || pm_util_limits_reset("build.event") != 0
-        || pm_util_limits_reset("build.keep") != 0
-        || pm_util_limits_reset("build.keep.span") != 0) {
+    if (pm_util_limits_reset("pymergetic.metal.build.record") != 0
+        || pm_util_limits_reset("pymergetic.metal.build.event") != 0
+        || pm_util_limits_reset("pymergetic.metal.build.keep") != 0
+        || pm_util_limits_reset("pymergetic.metal.build.cache") != 0) {
         return 312;
     }
     if (pm_util_limits_soft(keep) != PM_METAL_BUILD_KEEP_DEFAULT

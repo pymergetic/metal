@@ -19,7 +19,7 @@
 /* The numbers below are where this stack starts, not where it stops. Each one
  * is the default of a knob on pymergetic.util.limits; the tables they name are
  * taken from the arena as the seat fills them, and a seat that needs more says
- * so (`m.limit("net.ip.socket", 256)`) without a rebuild. Nothing here is
+ * so (`m.limit("pymergetic.metal.net.ip.socket", 256)`) without a rebuild. Nothing here is
  * reserved at link time any more: an idle seat holds one empty pointer table,
  * and a socket costs its own bytes for as long as it is open. */
 #define PM_METAL_IP_SOCK_DEFAULT 32u

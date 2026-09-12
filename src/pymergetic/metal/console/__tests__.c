@@ -37,7 +37,7 @@ static void quiet_sink(const char *s, uint32_t n) {
  * screens of scrollback only if six screens are printed on: the knob says how
  * many there are to select, and the memory follows the printing. */
 static int32_t case_screen_knob(void) {
-    int32_t slot = pm_util_limits_find("console.screen");
+    int32_t slot = pm_util_limits_find("pymergetic.metal.console.screen");
     uint32_t offered = pm_metal_console_count();
     if (slot < 0) {
         return fail("the screen knob is not on this seat");
@@ -51,7 +51,7 @@ static int32_t case_screen_knob(void) {
     if (pm_metal_console_write_id((int32_t)offered, "x\n", 2) == 0) {
         return fail("wrote to a screen the seat does not offer");
     }
-    if (pm_util_limits_set("console.screen", offered + 2u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.console.screen", offered + 2u) != 0) {
         return fail("set the screen knob");
     }
     if (pm_metal_console_count() != offered + 2u) {
@@ -61,7 +61,7 @@ static int32_t case_screen_knob(void) {
         || pm_metal_console_line_count_id((int32_t)offered) != 1u) {
         return fail("the new screen kept nothing");
     }
-    if (pm_util_limits_reset("console.screen") != 0
+    if (pm_util_limits_reset("pymergetic.metal.console.screen") != 0
         || pm_metal_console_count() != offered) {
         return fail("reset did not put the screens back");
     }
@@ -75,13 +75,13 @@ static int32_t case_screen_knob(void) {
  * never reaches the allocator — so this walks the knob and then the output. */
 static int32_t case_scrollback_knob(void) {
     char buf[PM_METAL_CONSOLE_READ_MAX];
-    int32_t slot = pm_util_limits_find("console.scrollback");
+    int32_t slot = pm_util_limits_find("pymergetic.metal.console.scrollback");
     uint32_t base;
     uint32_t i;
     if (slot < 0 || pm_util_limits_default(slot) != PM_METAL_CONSOLE_LINES_DEFAULT) {
         return fail("console shipped with another scrollback default");
     }
-    if (pm_util_limits_set("console.scrollback", 200u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.console.scrollback", 200u) != 0) {
         return fail("set the scrollback knob");
     }
     base = pm_metal_console_seq_id(DEEP_CONSOLE);
@@ -102,7 +102,7 @@ static int32_t case_scrollback_knob(void) {
     }
     /* And back down: the newest lines survive, the oldest are let go, and the
      * reader is told which is which rather than handed a stale slot. */
-    if (pm_util_limits_reset("console.scrollback") != 0) {
+    if (pm_util_limits_reset("pymergetic.metal.console.scrollback") != 0) {
         return fail("reset the scrollback knob");
     }
     if (pm_metal_console_line_count_id(DEEP_CONSOLE) != PM_METAL_CONSOLE_LINES_DEFAULT) {
@@ -131,8 +131,8 @@ static int32_t case_view_knobs(void) {
     static const char *kinds[6] = { "v0", "v1", "v2", "v3", "v4", "v5" };
     const uint32_t t = 60000u;
     uint32_t i;
-    if (pm_util_limits_default(pm_util_limits_find("console.viewport")) != 4u
-        || pm_util_limits_default(pm_util_limits_find("console.tap")) != 4u) {
+    if (pm_util_limits_default(pm_util_limits_find("pymergetic.metal.console.viewport")) != 4u
+        || pm_util_limits_default(pm_util_limits_find("pymergetic.metal.console.tap")) != 4u) {
         return fail("console shipped with other view defaults");
     }
     for (i = 0; i < 4u; i++) {
@@ -143,19 +143,19 @@ static int32_t case_view_knobs(void) {
     if (pm_metal_console_viewport_attach_id(VP_CONSOLE, kinds[4], quiet_sink) == 0) {
         return fail("a viewport attached past its knob");
     }
-    if (pm_util_limits_set("console.viewport", 6u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.console.viewport", 6u) != 0) {
         return fail("set the viewport knob");
     }
     if (pm_metal_console_viewport_attach_id(VP_CONSOLE, kinds[4], quiet_sink) != 0
         || pm_metal_console_viewport_count_id(VP_CONSOLE) != 5u) {
         return fail("raising the knob did not take the viewport");
     }
-    if (pm_util_limits_reset("console.viewport") != 0) {
+    if (pm_util_limits_reset("pymergetic.metal.console.viewport") != 0) {
         return fail("reset the viewport knob");
     }
     /* Taps: six readers on one screen, which the shipped four would have
      * turned into four by evicting the quietest. */
-    if (pm_util_limits_set("console.tap", 8u) != 0) {
+    if (pm_util_limits_set("pymergetic.metal.console.tap", 8u) != 0) {
         return fail("set the tap knob");
     }
     for (i = 0; i < 6u; i++) {
@@ -166,7 +166,7 @@ static int32_t case_view_knobs(void) {
     if (pm_metal_console_tap_count_id(DEEP_CONSOLE, t) != 6u) {
         return fail("a raised tap knob still evicted a reader");
     }
-    if (pm_util_limits_reset("console.tap") != 0) {
+    if (pm_util_limits_reset("pymergetic.metal.console.tap") != 0) {
         return fail("reset the tap knob");
     }
     return 0;

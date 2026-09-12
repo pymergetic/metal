@@ -179,9 +179,9 @@ print("upy cdn fetch 11")
 import pymergetic.util.limits as _limits
 
 for _rname, _rwant in (
-    ("wasmmod.registry.exports", 1536),
-    ("wasmmod.registry.tests", 384),
-    ("wasmmod.registry.benches", 64),
+    ("pymergetic.wasmmod.registry.exports", 1536),
+    ("pymergetic.wasmmod.registry.tests", 384),
+    ("pymergetic.wasmmod.registry.benches", 64),
 ):
     _rat = _limits.find(_rname)
     if _rat < 0:
@@ -194,11 +194,11 @@ for _rname, _rwant in (
         raise RuntimeError("raise %s" % _rname)
     if _limits.reset(_rname) != 0 or _limits.soft(_rat) != _rwant:
         raise RuntimeError("reset %s" % _rname)
-_rx = _limits.find("wasmmod.registry.exports")
+_rx = _limits.find("pymergetic.wasmmod.registry.exports")
 _rused = _limits.used(_rx)
 if _rused == 0:
     raise RuntimeError("the board's own faces are rows too")
-if _limits.set("wasmmod.registry.exports", _rused) != 0:
+if _limits.set("pymergetic.wasmmod.registry.exports", _rused) != 0:
     raise RuntimeError("shrink the registry exports knob")
 _refused = False
 try:
@@ -207,7 +207,7 @@ except (ImportError, OSError):
     _refused = True
 if not _refused:
     raise RuntimeError("a pack over the registry exports knob should refuse")
-if _limits.reset("wasmmod.registry.exports") != 0:
+if _limits.reset("pymergetic.wasmmod.registry.exports") != 0:
     raise RuntimeError("reset the registry exports knob")
 print("upy registry row knobs", _rused)
 
@@ -216,7 +216,7 @@ print("upy registry row knobs", _rused)
 # them, widened from a heap only on a seat that has one); staging is a host
 # tool's path, so a board holds none of it — where it used to carry 96 rows
 # of 64 fields each, better than a megabyte of this image's bss.
-for _tname, _twant in (("types.stage", 96), ("types.registry", 512)):
+for _tname, _twant in (("pymergetic.types.stage", 96), ("pymergetic.types.registry", 512)):
     _tat = _limits.find(_tname)
     if _tat < 0:
         raise RuntimeError("no %s knob" % _tname)
@@ -228,11 +228,11 @@ for _tname, _twant in (("types.stage", 96), ("types.registry", 512)):
         raise RuntimeError("raise %s" % _tname)
     if _limits.reset(_tname) != 0 or _limits.soft(_tat) != _twant:
         raise RuntimeError("reset %s" % _tname)
-if _limits.used(_limits.find("types.stage")) != 0:
+if _limits.used(_limits.find("pymergetic.types.stage")) != 0:
     raise RuntimeError("a board stages nothing")
-_tregistry = _limits.used(_limits.find("types.registry"))
+_tregistry = _limits.used(_limits.find("pymergetic.types.registry"))
 if _tregistry == 0:
-    raise RuntimeError("types.registry used is the live count")
+    raise RuntimeError("pymergetic.types.registry used is the live count")
 print("upy types row knobs", _tregistry)
 
 # A NIC's ring is taken when the NIC attaches. This board's frames came in
@@ -240,17 +240,17 @@ print("upy types row knobs", _tregistry)
 # elsewhere — and whichever it was, its ring was cut when it bound, not
 # reserved in this image for eight devices that never showed up.
 for _dname, _dwant in (
-    ("drivers.net.virtio.device", 8),
-    ("drivers.net.virtio.queue", 8),
-    ("drivers.net.virtio.frame", 2048),
-    ("drivers.net.bge.device", 8),
-    ("drivers.net.bge.queue", 8),
-    ("drivers.net.bge.frame", 2048),
-    ("drivers.net.sim.device", 4),
-    ("drivers.net.sim.queue", 8),
-    ("drivers.net.sim.frame", 2048),
-    ("drivers.net.tap.device", 2),
-    ("drivers.net.tap.frame", 2048),
+    ("pymergetic.metal.drivers.net.virtio.device", 8),
+    ("pymergetic.metal.drivers.net.virtio.queue", 8),
+    ("pymergetic.metal.drivers.net.virtio.frame", 2048),
+    ("pymergetic.metal.drivers.net.bge.device", 8),
+    ("pymergetic.metal.drivers.net.bge.queue", 8),
+    ("pymergetic.metal.drivers.net.bge.frame", 2048),
+    ("pymergetic.metal.drivers.net.sim.device", 4),
+    ("pymergetic.metal.drivers.net.sim.queue", 8),
+    ("pymergetic.metal.drivers.net.sim.frame", 2048),
+    ("pymergetic.metal.drivers.net.tap.device", 2),
+    ("pymergetic.metal.drivers.net.tap.frame", 2048),
 ):
     _dat = _limits.find(_dname)
     if _dat < 0:
@@ -262,7 +262,7 @@ for _dname, _dwant in (
     if _limits.reset(_dname) != 0 or _limits.soft(_dat) != _dwant:
         raise RuntimeError("reset %s" % _dname)
 _nics = 0
-for _dname in ("drivers.net.virtio.device", "drivers.net.bge.device", "drivers.net.sim.device"):
+for _dname in ("pymergetic.metal.drivers.net.virtio.device", "pymergetic.metal.drivers.net.bge.device", "pymergetic.metal.drivers.net.sim.device"):
     _dat = _limits.find(_dname)
     if _limits.counted(_dat) != 1:
         raise RuntimeError("%s does not count its NICs" % _dname)
@@ -276,16 +276,16 @@ print("upy driver nic knobs", _nics)
 # they came from. Each widens a row at a time instead of standing at its
 # ceiling in the image.
 for _dname, _dwant in (
-    ("drivers.net.device", 32),
-    ("drivers.gfx.device", 32),
-    ("drivers.blk.device", 8),
-    ("drivers.input.device", 8),
-    ("drivers.rtc.device", 4),
-    ("drivers.gfx.lfb.device", 4),
-    ("drivers.gfx.lfb.shadow", 1536),
-    ("drivers.blk.virtio.device", 4),
-    ("drivers.input.virtio.device", 4),
-    ("drivers.rtc.sim.device", 4),
+    ("pymergetic.metal.drivers.net.device", 32),
+    ("pymergetic.metal.drivers.gfx.device", 32),
+    ("pymergetic.metal.drivers.blk.device", 8),
+    ("pymergetic.metal.drivers.input.device", 8),
+    ("pymergetic.metal.drivers.rtc.device", 4),
+    ("pymergetic.metal.drivers.gfx.lfb.device", 4),
+    ("pymergetic.metal.drivers.gfx.lfb.shadow", 1536),
+    ("pymergetic.metal.drivers.blk.virtio.device", 4),
+    ("pymergetic.metal.drivers.input.virtio.device", 4),
+    ("pymergetic.metal.drivers.rtc.sim.device", 4),
 ):
     _dat = _limits.find(_dname)
     if _dat < 0:
@@ -296,7 +296,7 @@ for _dname, _dwant in (
         raise RuntimeError("raise %s" % _dname)
     if _limits.reset(_dname) != 0 or _limits.soft(_dat) != _dwant:
         raise RuntimeError("reset %s" % _dname)
-_cnet = _limits.find("drivers.net.device")
+_cnet = _limits.find("pymergetic.metal.drivers.net.device")
 if _limits.counted(_cnet) != 1 or _limits.used(_cnet) < 1:
     raise RuntimeError("the class table counts every bound NIC")
 print("upy device class knobs", _limits.used(_cnet))
@@ -306,7 +306,7 @@ print("upy device class knobs", _limits.used(_cnet))
 # pack's length, given back when the module unloads. Under a pack's size the
 # load refuses; put the knob back and the same pack lands. The wire race the
 # fetch above retries is retried here the same way.
-if _limits.set("wasmmod.loader.image", 1024) != 0:
+if _limits.set("pymergetic.wasmmod.loader.image", 1024) != 0:
     raise RuntimeError("shrink the loader image knob")
 _refused = False
 try:
@@ -317,7 +317,7 @@ except OSError:
     _refused = True
 if not _refused:
     raise RuntimeError("a pack over the image knob should refuse")
-if _limits.reset("wasmmod.loader.image") != 0:
+if _limits.reset("pymergetic.wasmmod.loader.image") != 0:
     raise RuntimeError("reset the loader image knob")
 _mixed = None
 for _attempt in range(2):
@@ -478,19 +478,19 @@ if limits.count() < 20:
 _lnames = [limits.name(_k) for _k in range(limits.count())]
 if sorted(_lnames) != _lnames or limits.name(limits.count()) is not None:
     raise RuntimeError("limits by index %r" % (_lnames,))
-_li = limits.find("net.http.asgi.connection")
+_li = limits.find("pymergetic.metal.net.http.asgi.connection")
 if _li < 0:
     raise RuntimeError("no asgi connection knob")
 _lwas = limits.soft(_li)
-if limits.set("net.http.asgi.connection", _lwas + 4) != 0 or limits.soft(_li) != _lwas + 4:
+if limits.set("pymergetic.metal.net.http.asgi.connection", _lwas + 4) != 0 or limits.soft(_li) != _lwas + 4:
     raise RuntimeError("raise the asgi connection knob")
-if limits.reset("net.http.asgi.connection") != 0 or limits.soft(_li) != _lwas:
+if limits.reset("pymergetic.metal.net.http.asgi.connection") != 0 or limits.soft(_li) != _lwas:
     raise RuntimeError("reset the asgi connection knob")
-_lci = limits.find("console.scrollback")
+_lci = limits.find("pymergetic.metal.console.scrollback")
 _lcwas = limits.soft(_lci)
-if limits.set("console.scrollback", 128) != 0 or limits.soft(_lci) != 128:
+if limits.set("pymergetic.metal.console.scrollback", 128) != 0 or limits.soft(_lci) != 128:
     raise RuntimeError("deepen the console")
-if limits.reset("console.scrollback") != 0 or limits.soft(_lci) != _lcwas:
+if limits.reset("pymergetic.metal.console.scrollback") != 0 or limits.soft(_lci) != _lcwas:
     raise RuntimeError("reset the console scrollback")
 print("upy limits knob loop")
 
@@ -498,24 +498,24 @@ print("upy limits knob loop")
 # is where it matters most: the compile workspace used to be reserved in bss
 # whether or not this seat ever compiled anything. Shrink it and the in-kernel
 # C compile refuses; put it back and it compiles again.
-for _rn in ("upy.compile.arena", "upy.cpp.arena", "upy.link.arena", "upy.dump"):
+for _rn in ("pymergetic.wasmmod.nativecall.compile", "pymergetic.wasmmod.nativecall.cpp", "pymergetic.wasmmod.nativecall.link", "pymergetic.wasmmod.nativecall.dump"):
     _rj = limits.find(_rn)
     if _rj < 0:
         raise RuntimeError("no room knob %r" % (_rn,))
     if limits.soft(_rj) != limits.default(_rj):
         raise RuntimeError("room knob %r is not at its default" % (_rn,))
-_lri = limits.find("upy.compile.arena")
+_lri = limits.find("pymergetic.wasmmod.nativecall.compile")
 # The room a compile gets is the smaller of this knob and the process budget
 # the section above left set (64KB, which no C compile fits), and this test is
 # about the knob: lift the budget over the room for it and put it back after.
 # There is no clearing it — budget_set refuses a cap of 0.
 if proc.budget_set(0, 4 * 1024 * 1024) != 0:
     raise RuntimeError("lift the process budget")
-if limits.set("upy.compile.arena", 4096) != 0:
+if limits.set("pymergetic.wasmmod.nativecall.compile", 4096) != 0:
     raise RuntimeError("shrink the compile room")
 if jc.object_compile("int fw_room_probe(void) { return 1; }\n") is not None:
     raise RuntimeError("a compile in a 4KB room should refuse")
-if limits.reset("upy.compile.arena") != 0 or limits.soft(_lri) != limits.default(_lri):
+if limits.reset("pymergetic.wasmmod.nativecall.compile") != 0 or limits.soft(_lri) != limits.default(_lri):
     raise RuntimeError("reset the compile room")
 _lrobj = jc.object_compile("int fw_room_probe(void) { return 1; }\n")
 if _lrobj is None or len(_lrobj) < 52:
@@ -523,6 +523,48 @@ if _lrobj is None or len(_lrobj) < 52:
 if proc.budget_set(0, 64 * 1024) != 0:
     raise RuntimeError("put the process budget back")
 print("upy room knob loop")
+
+# A knob belongs to a module, so it reads as one from here too: the same object
+# a hosted seat gets, on a card every board carries.
+_ckn = m.console.limits
+_cwas2 = _ckn.scrollback
+if _ckn.scrollback != _limits.soft(_limits.find("pymergetic.metal.console.scrollback")):
+    raise RuntimeError("the card's knob and the listing disagree")
+_ckn.scrollback = 256
+if _limits.soft(_limits.find("pymergetic.metal.console.scrollback")) != 256:
+    raise RuntimeError("moving a knob under its module did not move the knob")
+_ckn.scrollback = _cwas2
+try:
+    _ckn.nothing = 4
+    raise RuntimeError("a name that is no knob of this card took a value")
+except AttributeError:
+    pass
+_cmod = "pymergetic.metal.console"
+_cown = [_limits.leaf(_limits.nth_of(_cmod, _q)) for _q in range(_limits.count_of(_cmod))]
+if "scrollback" not in _cown:
+    raise RuntimeError("the knobs of a module %r" % (_cown,))
+_q = 0
+while _q < len(_cown):
+    _leaf = _cown[_q]
+    if _q > 0 and _cown[_q - 1] >= _leaf:
+        raise RuntimeError("a card's knobs do not list in name order")
+    _k = _limits.nth_of(_cmod, _q)
+    if _limits.module(_k) != _cmod or _limits.name(_k) != _cmod + "." + _leaf:
+        raise RuntimeError("a knob does not say where it belongs")
+    if _limits.find_of(_cmod, _leaf) != _k:
+        raise RuntimeError("a card cannot find its own knob by leaf")
+    _q += 1
+if _limits.nth_of(_cmod, len(_cown)) != -1 or _limits.find_of(_cmod, "nothing") != -1:
+    raise RuntimeError("a module answered past its own knobs")
+if _limits.count_under("pymergetic.metal.drivers") < 4:
+    raise RuntimeError("the driver branch does not answer as a branch")
+_wk2 = _limits.find_of(_cmod, "screen")
+_wwas = _limits.soft(_wk2)
+if _limits.set_at(_wk2, _wwas + 1) != 0 or _limits.soft(_wk2) != _wwas + 1:
+    raise RuntimeError("set a knob by index")
+if _limits.reset_at(_wk2) != 0 or _limits.soft(_wk2) != _wwas:
+    raise RuntimeError("reset a knob by index")
+print("upy knobs under their module")
 
 if m.display.up() != 0:
     raise RuntimeError("display up")

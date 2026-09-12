@@ -46,14 +46,14 @@ uint16_t pm_ip_ping_id;
  * one — a receive ring is a length, and "no ceiling" would mean nothing, so
  * the hard number is there to make an absurd value fail loudly at the call
  * that sets it rather than at the allocation that follows. */
-PM_UTIL_LIMIT_C(pm_ip_limit_socket, "net.ip.socket", PM_METAL_IP_SOCK_DEFAULT, 0u, &pm_ip_sock_used);
-PM_UTIL_LIMIT_C(pm_ip_limit_receive, "net.ip.receive", PM_METAL_IP_RX_DEFAULT, 1048576u, NULL);
-PM_UTIL_LIMIT_C(pm_ip_limit_resend, "net.ip.resend", PM_METAL_IP_REXMIT_DEFAULT, 65536u, NULL);
-PM_UTIL_LIMIT_C(pm_ip_limit_backlog, "net.ip.backlog", PM_METAL_IP_ACCEPT_DEFAULT, 0u, NULL);
-PM_UTIL_LIMIT_C(pm_ip_limit_route, "net.ip.route", PM_METAL_IP_RT_DEFAULT, 0u, &pm_ip_rt_used);
-PM_UTIL_LIMIT_C(pm_ip_limit_neighbour, "net.ip.neighbour", PM_METAL_IP_ARP_DEFAULT, 0u, &pm_ip_arp_used);
-PM_UTIL_LIMIT_C(pm_ip_limit_interface, "net.ip.interface", PM_METAL_IP_L2_DEFAULT, 0u, &pm_ip_l2_n);
-PM_UTIL_LIMIT_C(pm_ip_limit_group, "net.ip.group", PM_METAL_IP_MCAST_DEFAULT, 0u, NULL);
+PM_UTIL_LIMIT_C(pm_ip_limit_socket, pymergetic.metal.net.ip, socket, PM_METAL_IP_SOCK_DEFAULT, 0u, &pm_ip_sock_used);
+PM_UTIL_LIMIT_C(pm_ip_limit_receive, pymergetic.metal.net.ip, receive, PM_METAL_IP_RX_DEFAULT, 1048576u, NULL);
+PM_UTIL_LIMIT_C(pm_ip_limit_resend, pymergetic.metal.net.ip, resend, PM_METAL_IP_REXMIT_DEFAULT, 65536u, NULL);
+PM_UTIL_LIMIT_C(pm_ip_limit_backlog, pymergetic.metal.net.ip, backlog, PM_METAL_IP_ACCEPT_DEFAULT, 0u, NULL);
+PM_UTIL_LIMIT_C(pm_ip_limit_route, pymergetic.metal.net.ip, route, PM_METAL_IP_RT_DEFAULT, 0u, &pm_ip_rt_used);
+PM_UTIL_LIMIT_C(pm_ip_limit_neighbour, pymergetic.metal.net.ip, neighbour, PM_METAL_IP_ARP_DEFAULT, 0u, &pm_ip_arp_used);
+PM_UTIL_LIMIT_C(pm_ip_limit_interface, pymergetic.metal.net.ip, interface, PM_METAL_IP_L2_DEFAULT, 0u, &pm_ip_l2_n);
+PM_UTIL_LIMIT_C(pm_ip_limit_group, pymergetic.metal.net.ip, group, PM_METAL_IP_MCAST_DEFAULT, 0u, NULL);
 
 /* A size knob that has been set to nothing is not a zero-byte buffer; fall
  * back to what the build shipped with. */

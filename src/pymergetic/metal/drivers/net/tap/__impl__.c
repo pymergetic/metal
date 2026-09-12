@@ -44,9 +44,9 @@ static pm_util_mem_arena_t *s_arena;
 static struct tap_nic *s_head;
 static uint32_t s_dev_used;
 
-PM_UTIL_LIMIT_C(pm_metal_net_tap_limit_device, "drivers.net.tap.device",
+PM_UTIL_LIMIT_C(pm_metal_net_tap_limit_device, pymergetic.metal.drivers.net.tap, device,
     TAP_DEVICE_DEFAULT, 0u, &s_dev_used);
-PM_UTIL_LIMIT_C(pm_metal_net_tap_limit_frame, "drivers.net.tap.frame",
+PM_UTIL_LIMIT_C(pm_metal_net_tap_limit_frame, pymergetic.metal.drivers.net.tap, frame,
     TAP_FRAME_DEFAULT, 0u, NULL);
 
 /* The frame this NIC reads into, at the size the knob says now. Kept across a

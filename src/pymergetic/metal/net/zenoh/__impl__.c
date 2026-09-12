@@ -4,7 +4,7 @@
  * the card, and no pointer is held across a step (user callbacks resolve from the
  * session inside one poll()).
  *
- * How many slots is net.zenoh.session, a knob with a default of two — enough to
+ * How many slots is the session knob, with a default of two — enough to
  * host a listener and a connector on the same _lo_ net.ip, which is the
  * two-session put/subscriber round-trip prove. A seat that sits in more fleets
  * than that raises the knob while its sessions are closed.
@@ -89,7 +89,7 @@ typedef struct pm_metal_net_zenoh_ctx {
 } pm_metal_net_zenoh_ctx_t;
 
 /* How many sessions this seat holds at once. A default, not a shape: a seat
- * that wants to sit in three fleets at once raises net.zenoh.session and the
+ * that wants to sit in three fleets at once raises the session knob and the
  * slot table follows. Two is what the card needs to prove itself (a listener
  * and a connector on one _lo_), so that is where it starts. */
 #define PM_METAL_NET_ZENOH_SESSION_DEFAULT 2u
@@ -132,7 +132,7 @@ struct pm_metal_net_zenoh_reply {
 };
 
 /* The slot table, its accept states and its executor guards: one allocation
- * each, taken when the card boots at the depth net.zenoh.session asks for. */
+ * each, taken when the card boots at the depth the session knob asks for. */
 static pm_metal_net_zenoh_ctx_t *s_slots;
 static pm_metal_net_zenoh_accept_t *s_accept;
 static uint32_t s_nslot;
@@ -151,12 +151,12 @@ static int32_t s_local_zid_init;
  * spin_open_slots can step a peer/listen seat during a connector handshake. */
 static int32_t accept_pump(uint8_t slot);
 
-/* net.zenoh.session: how many sessions the seat can hold. The table is not
+/* The session knob: how many sessions the seat can hold. The table is not
  * reshaped while a session is live — zenoh-pico keeps pointers into the session
  * it was handed — so the apply hook refuses a move that would have to move an
  * open slot, and the seat closes its sessions first. */
 static int32_t slots_apply(pm_util_limit_t *knob);
-PM_UTIL_LIMIT_APPLY_C(pm_zenoh_limit_session, "net.zenoh.session",
+PM_UTIL_LIMIT_APPLY_C(pm_zenoh_limit_session, pymergetic.metal.net.zenoh, session,
     PM_METAL_NET_ZENOH_SESSION_DEFAULT, 0u, &s_slot_used, slots_apply);
 
 /* The table is taken up front rather than grown per session, so "no ceiling"

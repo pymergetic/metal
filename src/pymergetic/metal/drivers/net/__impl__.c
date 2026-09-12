@@ -31,7 +31,7 @@ static struct pm_metal_netdev *s_dev;
 static uint32_t s_dev_cap;
 static uint32_t s_dev_used;
 
-PM_UTIL_LIMIT_C(pm_metal_drivers_net_limit_device, "drivers.net.device",
+PM_UTIL_LIMIT_C(pm_metal_drivers_net_limit_device, pymergetic.metal.drivers.net, device,
     PM_METAL_NETDEV_DEFAULT, 0u, &s_dev_used);
 
 /* A free row, widening the table if that is what the knob allows. Negative

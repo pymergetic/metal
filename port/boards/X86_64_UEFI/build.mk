@@ -78,6 +78,7 @@ FW_OBJS := \
 	$(BUILD)/lib.o \
 	$(BUILD)/mem.o \
 	$(BUILD)/limits.o \
+	$(BUILD)/nativecall_card.o \
 	$(BUILD)/types.o \
 	$(BUILD)/tlsf.o \
 	$(BUILD)/smp.o \
@@ -140,6 +141,12 @@ $(BUILD)/mem.o: $(WASMMOD_SRC)/pymergetic/util/mem/__impl__.c | $(BUILD)
 	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
 
 $(BUILD)/limits.o: $(WASMMOD_SRC)/pymergetic/util/limits/__impl__.c | $(BUILD)
+	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
+
+# pymergetic.wasmmod.nativecall — the rooms the µPy bridge's calls work in. The
+# glue (ports/micropython/nativecall.c) names its faces, so a board that carries
+# the glue carries the card.
+$(BUILD)/nativecall_card.o: $(WASMMOD_SRC)/pymergetic/wasmmod/nativecall/__impl__.c | $(BUILD)
 	$(CC) $(CFLAGS_METAL) $(INC) -c -o $@ $<
 
 $(BUILD)/types.o: $(WASMMOD_SRC)/pymergetic/types/__impl__.c | $(BUILD)
