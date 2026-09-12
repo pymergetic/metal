@@ -23,6 +23,11 @@ int32_t pm_metal_fs_import_blk(int32_t);
 int32_t pm_metal_fs_reserve(const char *, uint32_t, uint8_t **);
 int32_t pm_metal_fs_drop(const char *);
 int32_t pm_metal_fs_write(const char *, const uint8_t *, uint32_t);
+const char *pm_metal_fs_name_by_id(uint32_t);
+int32_t pm_metal_fs_stat_by_id(uint32_t, uint32_t *);
+int32_t pm_metal_fs_read_by_id(uint32_t, uint8_t *, uint32_t *);
+uint32_t pm_metal_fs_count(void);
+int32_t pm_metal_fs_list_at(uint32_t, uint32_t *, const char **, uint32_t *);
 void pm_metal_fs_fat_bind(pm_util_mem_arena_t *);
 void pm_metal_fs_fat_reset(void);
 int32_t pm_metal_fs_fat_stat(const char *, uint32_t *);
@@ -184,6 +189,83 @@ int32_t pm_metal_fs_read(const char *path, uint8_t *out, uint32_t *len) {
     return pm_metal_fs_fat_read(path, out, len);
 }
 
+static struct file *find_by_id(uint32_t id) {
+    struct file *f;
+    for (f = s_head; f != NULL; f = f->next) {
+        if (f->used && f->id == id) {
+            return f;
+        }
+    }
+    return NULL;
+}
+
+const char *pm_metal_fs_name_by_id(uint32_t id) {
+    struct file *f = find_by_id(id);
+    return f != NULL ? f->name : NULL;
+}
+
+int32_t pm_metal_fs_stat_by_id(uint32_t id, uint32_t *len) {
+    struct file *f = find_by_id(id);
+    if (f == NULL) {
+        return -1;
+    }
+    if (len != NULL) {
+        *len = f->len;
+    }
+    return 0;
+}
+
+int32_t pm_metal_fs_read_by_id(uint32_t id, uint8_t *out, uint32_t *len) {
+    struct file *f = find_by_id(id);
+    uint32_t n;
+    if (f == NULL || out == NULL || len == NULL) {
+        return -1;
+    }
+    n = f->len;
+    if (*len < n) {
+        n = *len;
+    }
+    memcpy(out, f->data, n);
+    *len = n;
+    return 0;
+}
+
+uint32_t pm_metal_fs_count(void) {
+    uint32_t n = 0;
+    struct file *f;
+    for (f = s_head; f != NULL; f = f->next) {
+        if (f->used) {
+            n++;
+        }
+    }
+    return n;
+}
+
+int32_t pm_metal_fs_list_at(uint32_t index, uint32_t *id, const char **name,
+    uint32_t *len) {
+    uint32_t i = 0;
+    struct file *f;
+    for (f = s_head; f != NULL; f = f->next) {
+        if (!f->used) {
+            continue;
+        }
+        if (i == index) {
+            if (id != NULL) {
+                *id = f->id;
+            }
+            if (name != NULL) {
+                *name = f->name;
+            }
+            if (len != NULL) {
+                *len = f->len;
+            }
+            return 0;
+        }
+        i++;
+    }
+    return -1;
+}
+
 int32_t pm_metal_fs_up(void) {
     static const uint8_t hello[] = "metal fs\n";
     uint32_t len = 0;
@@ -235,6 +317,11 @@ PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_write, pm_metal_fs_write, int32
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_drop, pm_metal_fs_drop, int32_t(const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_stat, pm_metal_fs_stat, int32_t(const char *, uint32_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_read, pm_metal_fs_read, int32_t(const char *, uint8_t *, uint32_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_name_by_id, pm_metal_fs_name_by_id, const char *(uint32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_stat_by_id, pm_metal_fs_stat_by_id, int32_t(uint32_t, uint32_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_read_by_id, pm_metal_fs_read_by_id, int32_t(uint32_t, uint8_t *, uint32_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_count, pm_metal_fs_count, uint32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_list_at, pm_metal_fs_list_at, int32_t(uint32_t, uint32_t *, const char **, uint32_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_import_blk, pm_metal_fs_import_blk, int32_t(int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.fs, pm_metal_fs_up, pm_metal_fs_up, int32_t(void));
 

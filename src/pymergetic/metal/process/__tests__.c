@@ -166,6 +166,40 @@ int32_t pm_metal_process_tests(void) {
             free(tb);
             return fail("budget set on dead pid");
         }
+
+        /* budget_set(0) clears it and returns to boot-arena sharing */
+        {
+            pid = pm_metal_process_spawn();
+            if (pid < 1) {
+                free(tb);
+                return fail("spawn for budget clear");
+            }
+            if (pm_metal_process_budget_set(pid, 64u * 1024u) != 0) {
+                free(tb);
+                return fail("budget set before clear");
+            }
+            if (pm_metal_process_arena(pid) == NULL) {
+                free(tb);
+                return fail("arena before clear");
+            }
+            if (pm_metal_process_budget_set(pid, 0) != 0) {
+                free(tb);
+                return fail("budget clear");
+            }
+            if (pm_metal_process_budget(pid) != 0) {
+                free(tb);
+                return fail("budget after clear");
+            }
+            if (pm_metal_process_arena(pid) != NULL) {
+                free(tb);
+                return fail("arena after clear");
+            }
+            if (pm_metal_process_quit(pid) != 0) {
+                free(tb);
+                return fail("quit budget clear pid");
+            }
+        }
+
         pm_metal_process_deinit();
         pm_util_mem_arena_destroy(ta);
         free(tb);
@@ -207,6 +241,19 @@ int32_t pm_metal_process_tests(void) {
         if (pm_metal_process_arena(0) == NULL) {
             free(tb);
             return fail("repl arena");
+        }
+        /* clear the REPL budget */
+        if (pm_metal_process_budget_set(0, 0) != 0) {
+            free(tb);
+            return fail("repl budget clear");
+        }
+        if (pm_metal_process_budget(0) != 0) {
+            free(tb);
+            return fail("repl budget after clear");
+        }
+        if (pm_metal_process_arena(0) != NULL) {
+            free(tb);
+            return fail("repl arena after clear");
         }
         /* a spawned pid may not touch the REPL budget */
         {

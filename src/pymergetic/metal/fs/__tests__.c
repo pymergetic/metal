@@ -175,6 +175,74 @@ int32_t pm_metal_fs_tests(void) {
             return fail("import bad");
         }
     }
+    /* id→file and list faces */
+    {
+        uint32_t id = (uint32_t)pm_metal_fs_add("/metal/list/a.txt",
+            (const uint8_t *)"aaa", 3);
+        if (pm_metal_fs_add("/metal/list/b.bin",
+            (const uint8_t *)"bb", 2) < 0) {
+            return fail("add for list");
+        }
+        /* by-id lookup */
+        {
+            const char *name = pm_metal_fs_name_by_id(id);
+            if (name == NULL || strcmp(name, "/metal/list/a.txt") != 0) {
+                return fail("name_by_id");
+            }
+            if (pm_metal_fs_name_by_id(0xFFFFFFFFu) != NULL) {
+                return fail("name_by_id missing");
+            }
+        }
+        /* stat_by_id */
+        {
+            uint32_t len = 0;
+            if (pm_metal_fs_stat_by_id(id, &len) != 0 || len != 3u) {
+                return fail("stat_by_id");
+            }
+            if (pm_metal_fs_stat_by_id(0xFFFFFFFFu, NULL) != -1) {
+                return fail("stat_by_id missing");
+            }
+        }
+        /* read_by_id */
+        {
+            uint32_t gn = 4;
+            uint8_t buf[4] = {0};
+            if (pm_metal_fs_read_by_id(id, buf, &gn) != 0 || gn != 3u
+                || memcmp(buf, "aaa", 3) != 0) {
+                return fail("read_by_id");
+            }
+            gn = 4;
+            if (pm_metal_fs_read_by_id(0xFFFFFFFFu, buf, &gn) != -1) {
+                return fail("read_by_id missing");
+            }
+        }
+        /* count */
+        {
+            uint32_t n = pm_metal_fs_count();
+            if (n < 2u) {
+                return fail("count");
+            }
+        }
+        /* list_at — walk the full list, check each entry has a name */
+        {
+            uint32_t i;
+            uint32_t n = pm_metal_fs_count();
+            for (i = 0; i < n; i++) {
+                uint32_t fid = 0;
+                const char *fname = NULL;
+                uint32_t flen = 0;
+                if (pm_metal_fs_list_at(i, &fid, &fname, &flen) != 0) {
+                    return fail("list_at");
+                }
+                if (fname == NULL || fname[0] == 0) {
+                    return fail("list_at name");
+                }
+            }
+            if (pm_metal_fs_list_at(n, NULL, NULL, NULL) != -1) {
+                return fail("list_at past end");
+            }
+        }
+    }
     return 0;
 }
 

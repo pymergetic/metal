@@ -243,12 +243,41 @@ int32_t pm_metal_process_budget(int32_t pid) {
 
 /* budget_set cap is int32_t on the wire (not size_t): the Python bridge
  * composes i32 sigs only, and every real budget (compile scratch, arenas)
- * is far below 2GB — negative caps are rejected below. */
+ * is far below 2GB — negative caps are rejected below.
+ *
+ * cap == 0 clears the budget: the pid returns to sharing the boot arena
+ * with no per-process book-keeping, the same as a freshly-crowned slot.
+ * This is the same contract as knobs: 0 = no ceiling, not "no allocation
+ * at all". */
 int32_t pm_metal_process_budget_set(int32_t pid, int32_t cap) {
     struct slot *s = find_slot(pid);
     void *nb;
-    if (s_arena == NULL || cap <= 0) {
+
+    if (s_arena == NULL || cap < 0) {
         return -1;
+    }
+    /* Drop: return the pid to boot-arena sharing. */
+    if (cap == 0) {
+        if (pid == 0) {
+            if (pm_metal_process_current() != 0) {
+                return -1;
+            }
+            if (s_repl_arena != NULL) {
+                pm_util_mem_arena_destroy(s_repl_arena);
+                s_repl_arena = NULL;
+            }
+            if (s_repl_backing != NULL) {
+                pm_util_mem_free(s_arena, s_repl_backing);
+                s_repl_backing = NULL;
+            }
+            s_repl_cap = 0;
+            return 0;
+        }
+        if (s == NULL) {
+            return -1;
+        }
+        slot_budget_drop(s);
+        return 0;
     }
     if (pid == 0) {
         if (pm_metal_process_current() != 0) {

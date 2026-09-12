@@ -508,7 +508,6 @@ _lri = limits.find("pymergetic.wasmmod.nativecall.compile")
 # The room a compile gets is the smaller of this knob and the process budget
 # the section above left set (64KB, which no C compile fits), and this test is
 # about the knob: lift the budget over the room for it and put it back after.
-# There is no clearing it — budget_set refuses a cap of 0.
 if proc.budget_set(0, 4 * 1024 * 1024) != 0:
     raise RuntimeError("lift the process budget")
 if limits.set("pymergetic.wasmmod.nativecall.compile", 4096) != 0:
