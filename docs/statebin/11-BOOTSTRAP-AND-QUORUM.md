@@ -36,7 +36,7 @@ are content-derived. Therefore:
 > A lineage is a pure function of `(seed commit, journal)`. Replay both on a fresh machine
 > and you must get the running artifact byte-for-byte — or the lineage is not what it claims.
 
-This turns the external build into a measuring stick: `git fetch && build && stbn replay
+This turns the external build into a measuring stick: `git fetch && build && rxf replay
 --journal <j>`, byte-compare against the running generation. A match certifies the lineage; a
 mismatch *locates* the divergence — an unjournaled change, writer nondeterminism, or a change
 that bypassed the journal. Enforcement posture (decided): **audit at re-anchor time, prove in
@@ -56,16 +56,16 @@ Writer determinism rules that make this true (checked in CI, not by convention):
 
 Pure Python, stdlib-only for the core — `hashlib`, `mmap`, `struct`, `dataclasses`, nothing
 else. One `py3-none-any` wheel covers every platform and Python version, no compiler, no
-toolchain; channels are extras (`stbn[fuse]`, `stbn[http]`, `stbn[ftp]`), so the certification
-path never installs one. The wheel is the IDE-phase "single binary": `pip install stbn` gives
+toolchain; channels are extras (`rxf[fuse]`, `rxf[http]`, `rxf[ftp]`), so the certification
+path never installs one. The wheel is the IDE-phase "single binary": `pip install rxf` gives
 the whole tool on any host.
 
 ```
-stbn/schema.py      the axioms: every primitive's canonical little-endian layout, one table
-stbn/ (core)        reader/checker, viewgen, writer/formatter, face impl, builder sugar
-stbn/channels/      fuse (pyfuse3, extra), http (FastAPI, extra), ftp (pyftpdlib, extra)
-include/stbn.h      GENERATED view of schema.py — banner-gated, the metal mod sync pattern
-stbn.schema.json    GENERATED view of schema.py — ships in the wheel as a data file
+rxf/schema.py      the axioms: every primitive's canonical little-endian layout, one table
+rxf/ (core)        reader/checker, viewgen, writer/formatter, face impl, builder sugar
+rxf/channels/      fuse (pyfuse3, extra), http (FastAPI, extra), ftp (pyftpdlib, extra)
+include/rxf.h      GENERATED view of schema.py — banner-gated, the metal mod sync pattern
+rxf.schema.json    GENERATED view of schema.py — ships in the wheel as a data file
 ```
 
 **Why Python is the right outside, stated as a rule:** the tool stays small in any language
@@ -88,8 +88,8 @@ objects and typed refusals as exceptions.
 
 Two distribution paths, two trust roles:
 
-- `pip install stbn` — convenience, for users and agents. Someone else's build.
-- `git clone && python -m stbn ...` — **certification**. "I built this myself from commit X."
+- `pip install rxf` — convenience, for users and agents. Someone else's build.
+- `git clone && python -m rxf ...` — **certification**. "I built this myself from commit X."
   A fresh certification build consumes zero artifact-derived state and zero third-party
   dependencies: the repo and CPython are the entire trusted computing base. That smallness is
   the point — a compiled toolchain's dependency graph would make the measuring stick the
@@ -117,9 +117,12 @@ system's own successors, development direction inverts — every change to the a
 authored as a view write -> delta -> successor, including changes to its own type records.
 
 Do not share code between external and internal cores. Share the **byte schema** and the
-**face**. The intrinsics are hand-written twice (~50 lines each side — Python axioms in
-`schema.py`, C structs in the contained core), with the corpus schema dump asserting the two
-spellings agree. Everything above the intrinsics is derived, in both places, from the same
+**face** — and never trade input domains either. The external core consumes authoring
+material (models, JSON, views) and writes seeds; the contained core consumes live state
+through the face and writes successors. The external core never executes the artifact; the
+contained core never reads an authoring file. The intrinsics are hand-written twice
+(~50 lines each side — Python axioms in `schema.py`, C structs in the contained core), with
+the corpus schema dump asserting the two spellings agree. Everything above the intrinsics is derived, in both places, from the same
 meta-objects. The Python builder that minted gen-0 is frozen: regenerating from it must
 reproduce the seed byte-for-byte, and from gen-1 on, meta-object changes go through the
 artifact's own write path only.
@@ -170,14 +173,14 @@ floor of zero and never reaches it.
 
 ## Phase A milestones (replacing the stage-1..3 prefix of `09-PLAN.md`)
 
-1. **Spine**: stdlib-only `stbn` core + face + CLI/REPL + builder sugar + corpus, all
+1. **Spine**: stdlib-only `rxf` core + face + CLI/REPL + builder sugar + corpus, all
    `direct`-channel. First prove: the seed as byte-frozen builder output — regenerate on the
    CI platforms and under different `PYTHONHASHSEED`s, digests match.
-2. **Inspector**: FastAPI over the face (`stbn[http]`). Pretty immediately — it is where humans
+2. **Inspector**: FastAPI over the face (`rxf[http]`). Pretty immediately — it is where humans
    and agents live, and it is the embryo of the artifact's HTTP channel.
-3. **FUSE**: the mount (`stbn[fuse]`); `diff -r` between two mounts becomes the successor
+3. **FUSE**: the mount (`rxf[fuse]`); `diff -r` between two mounts becomes the successor
    review workflow.
-4. **FTP**: the stress test (`stbn[ftp]`), last on purpose — the face must survive the
+4. **FTP**: the stress test (`rxf[ftp]`), last on purpose — the face must survive the
    crankiest client without special cases.
 
 Stage 2 of the old plan (compiler refusal) already holds in-tree: the nomem escape is armed

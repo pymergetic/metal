@@ -8,6 +8,7 @@
 #include "pymergetic/metal/build/__types__.h"
 /* for the lane list on /build: which cross targets this seat carries */
 #include "pymergetic/metal/jit/c/__types__.h"
+#include "pymergetic/util/lock.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/registry.h"
 
@@ -1669,13 +1670,16 @@ static int32_t ib_fill(const char *includes[INSPECT_BUILD_MAX_INC],
     defines[(*n_def)++] = "MICROPY_SSL_MBEDTLS=1";
     defines[(*n_def)++] = "ZENOH_GENERIC";
     {
-        /* triplet: same probe as the rebuild test — a static value, cached
-         * on the first fill (popen is not reentrant in the request path).
+        /* triplet: same probe as the rebuild test — cached on the first
+         * fill, guarded by a lock so two concurrent inspect requests do
+         * not race on the popen path (popen is not reentrant).
          * Firmware has no host cc and no stdio files; the seat's rebuild
          * fill refuses elsewhere, so the probe simply stays empty there. */
         static char triplet[64];
         static int triplet_ready = 0;
+        static pm_util_lock_t triplet_lock;
 #ifndef PM_METAL_FIRMWARE
+        pm_util_lock_acquire(&triplet_lock);
         if (!triplet_ready) {
             FILE *t = popen("cc -print-multiarch 2>/dev/null", "r");
             if (t != NULL) {
@@ -1689,6 +1693,7 @@ static int32_t ib_fill(const char *includes[INSPECT_BUILD_MAX_INC],
             }
             triplet_ready = 1;
         }
+        pm_util_lock_release(&triplet_lock);
 #endif
         if (triplet[0] != '\0') {
             snprintf(ib_triplet_val, sizeof(ib_triplet_val),

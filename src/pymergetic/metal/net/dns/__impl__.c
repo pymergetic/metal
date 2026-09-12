@@ -3,10 +3,12 @@
 
 #include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/ip.h"
+#include "pymergetic/util/limits.h"
+#include "pymergetic/util/mem.h"
 
 #include <string.h>
 
-#define ZONE_MAX 8
+#define ZONE_DEFAULT 8u
 #define NAME_MAX 80
 #define DNS_MAX 512
 #define DNS_PORT 53u
@@ -20,11 +22,15 @@ struct zone {
 };
 
 static pm_util_mem_arena_t *s_arena;
-static struct zone s_zone[ZONE_MAX];
+static struct zone *s_zone;
+static uint32_t s_zone_cap;
+static uint32_t s_zone_used;
 static int32_t s_fd = -1;
 static uint16_t s_xid = 1;
 static uint16_t s_cport = 49500;
 static uint32_t s_server_be;
+
+PM_UTIL_LIMIT_C(pm_dns_limit_zone, pymergetic.metal.net.dns, zone, ZONE_DEFAULT, 0u, &s_zone_used);
 
 static uint32_t name_eq(const char *a, const char *b) {
     uint32_t i;
@@ -113,12 +119,12 @@ static int32_t dec_name(const uint8_t *msg, uint32_t len, uint32_t *off, char *o
 
 static uint32_t zone_find(const char *name) {
     uint32_t i;
-    for (i = 0; i < ZONE_MAX; i++) {
+    for (i = 0; i < s_zone_cap; i++) {
         if (s_zone[i].used && name_eq(s_zone[i].name, name)) {
             return i;
         }
     }
-    return ZONE_MAX;
+    return s_zone_cap;
 }
 
 static void dns_reply(const uint8_t *q, uint32_t qlen, uint32_t src, uint16_t sport) {
@@ -135,7 +141,7 @@ static void dns_reply(const uint8_t *q, uint32_t qlen, uint32_t src, uint16_t sp
         return;
     }
     zi = zone_find(name);
-    if (zi >= ZONE_MAX) {
+    if (zi >= s_zone_cap) {
         return;
     }
     if (qlen > DNS_MAX - 16u) {
@@ -202,7 +208,14 @@ int32_t pm_metal_net_dns_init(pm_util_mem_arena_t *arena) {
         return -1;
     }
     s_arena = arena;
-    memset(s_zone, 0, sizeof(s_zone));
+    s_zone_cap = ZONE_DEFAULT;
+    s_zone_used = 0;
+    s_zone = (struct zone *)pm_util_mem_alloc(arena,
+        (size_t)s_zone_cap * sizeof(*s_zone));
+    if (s_zone == NULL) {
+        return -1;
+    }
+    memset(s_zone, 0, (size_t)s_zone_cap * sizeof(*s_zone));
     s_fd = -1;
     s_server_be = 0;
     s_cport = 49500;
@@ -215,6 +228,9 @@ void pm_metal_net_dns_deinit(void) {
         s_fd = -1;
     }
     s_server_be = 0;
+    s_zone = NULL;
+    s_zone_cap = 0;
+    s_zone_used = 0;
     s_arena = NULL;
 }
 
@@ -232,7 +248,7 @@ int32_t pm_metal_net_dns_add(const char *name, pm_mod_value_t addr_be) {
     if (name == NULL || name[0] == 0) {
         return -1;
     }
-    for (i = 0; i < ZONE_MAX; i++) {
+    for (i = 0; s_zone != NULL && i < s_zone_cap; i++) {
         if (!s_zone[i].used) {
             uint32_t n = 0;
             while (name[n] != 0 && n + 1u < NAME_MAX) {
@@ -242,10 +258,30 @@ int32_t pm_metal_net_dns_add(const char *name, pm_mod_value_t addr_be) {
             s_zone[i].name[n] = 0;
             s_zone[i].addr_be = addr_be;
             s_zone[i].used = 1;
+            s_zone_used++;
             return 0;
         }
     }
-    return -1;
+    {
+        struct zone *grown = pm_util_limits_grow(s_arena, s_zone, &s_zone_cap,
+            (uint32_t)sizeof(*s_zone), &pm_dns_limit_zone);
+        if (grown == NULL) {
+            return -1;
+        }
+        s_zone = grown;
+        {
+            uint32_t n = 0;
+            while (name[n] != 0 && n + 1u < NAME_MAX) {
+                s_zone[s_zone_cap - 1u].name[n] = name[n];
+                n++;
+            }
+            s_zone[s_zone_cap - 1u].name[n] = 0;
+            s_zone[s_zone_cap - 1u].addr_be = addr_be;
+            s_zone[s_zone_cap - 1u].used = 1;
+            s_zone_used++;
+            return 0;
+        }
+    }
 }
 
 int32_t pm_metal_net_dns_listen(uint32_t addr_be, uint16_t port) {
@@ -390,7 +426,7 @@ int32_t pm_metal_net_dns_resolve(const char *name, uint32_t *out_be) {
     }
     {
         uint32_t zi = zone_find(name);
-        if (zi < ZONE_MAX) {
+        if (zi < s_zone_cap) {
             *out_be = s_zone[zi].addr_be;
             return 0;
         }

@@ -121,7 +121,7 @@ authored as a view write -> delta -> successor, including changes to its own typ
 
 *Prove:* the ladder's fixed points, on unix first (mmap + the in-tree ELF relocator, no board
 bring-up in the loop), then the firmware seats with only the channel fills differing. Then:
-`stbn replay --journal` re-derives the running artifact byte-for-byte (the certification
+`rxf replay --journal` re-derives the running artifact byte-for-byte (the certification
 invariant of `11`), and the quorum disagrees loudly on any divergence.
 
 ## Structural work that runs alongside

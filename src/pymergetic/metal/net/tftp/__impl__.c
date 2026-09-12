@@ -3,10 +3,12 @@
 
 #include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/ip.h"
+#include "pymergetic/util/limits.h"
+#include "pymergetic/util/mem.h"
 
 #include <string.h>
 
-#define FILE_MAX 4
+#define FILE_DEFAULT 4u
 #define NAME_MAX 40
 #define DATA_MAX 512
 #define FILE_BYTES 2048
@@ -31,10 +33,14 @@ struct xfer {
 };
 
 static pm_util_mem_arena_t *s_arena;
-static struct file s_file[FILE_MAX];
+static struct file *s_file;
+static uint32_t s_file_cap;
+static uint32_t s_file_used;
 static struct xfer s_xfer;
 static int32_t s_fd = -1;
 static uint16_t s_cport = 49700;
+
+PM_UTIL_LIMIT_C(pm_tftp_limit_file, pymergetic.metal.net.tftp, file, FILE_DEFAULT, 0u, &s_file_used);
 
 static uint32_t name_eq(const char *a, const char *b) {
     uint32_t i;
@@ -51,7 +57,14 @@ int32_t pm_metal_net_tftp_init(pm_util_mem_arena_t *arena) {
         return -1;
     }
     s_arena = arena;
-    memset(s_file, 0, sizeof(s_file));
+    s_file_cap = FILE_DEFAULT;
+    s_file_used = 0;
+    s_file = (struct file *)pm_util_mem_alloc(arena,
+        (size_t)s_file_cap * sizeof(*s_file));
+    if (s_file == NULL) {
+        return -1;
+    }
+    memset(s_file, 0, (size_t)s_file_cap * sizeof(*s_file));
     memset(&s_xfer, 0, sizeof(s_xfer));
     s_fd = -1;
     return 0;
@@ -62,6 +75,9 @@ void pm_metal_net_tftp_deinit(void) {
         (void)pm_metal_net_ip_close(s_fd);
         s_fd = -1;
     }
+    s_file = NULL;
+    s_file_cap = 0;
+    s_file_used = 0;
     s_arena = NULL;
 }
 
@@ -71,7 +87,7 @@ int32_t pm_metal_net_tftp_add(const char *name, const uint8_t *data, uint16_t le
     if (name == NULL || name[0] == 0 || data == NULL || len == 0 || len > FILE_BYTES) {
         return -1;
     }
-    for (i = 0; i < FILE_MAX; i++) {
+    for (i = 0; i < s_file_cap; i++) {
         if (s_file[i].used) {
             continue;
         }
@@ -84,9 +100,28 @@ int32_t pm_metal_net_tftp_add(const char *name, const uint8_t *data, uint16_t le
         memcpy(s_file[i].data, data, len);
         s_file[i].len = len;
         s_file[i].used = 1;
+        s_file_used++;
         return 0;
     }
-    return -1;
+    {
+        struct file *grown = pm_util_limits_grow(s_arena, s_file, &s_file_cap,
+            (uint32_t)sizeof(*s_file), &pm_tftp_limit_file);
+        if (grown == NULL) {
+            return -1;
+        }
+        s_file = grown;
+        n = 0;
+        while (name[n] != 0 && n + 1u < NAME_MAX) {
+            s_file[s_file_cap - 1u].name[n] = name[n];
+            n++;
+        }
+        s_file[s_file_cap - 1u].name[n] = 0;
+        memcpy(s_file[s_file_cap - 1u].data, data, len);
+        s_file[s_file_cap - 1u].len = len;
+        s_file[s_file_cap - 1u].used = 1;
+        s_file_used++;
+        return 0;
+    }
 }
 
 int32_t pm_metal_net_tftp_listen(uint32_t addr_be, uint16_t port) {
@@ -175,7 +210,7 @@ int32_t pm_metal_net_tftp_poll(void) {
         off++;
     }
     name[off] = 0;
-    for (i = 0; i < FILE_MAX; i++) {
+    for (i = 0; i < s_file_cap; i++) {
         if (!s_file[i].used || !name_eq(s_file[i].name, name)) {
             continue;
         }

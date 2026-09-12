@@ -8,6 +8,8 @@
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/net/dns.h"
 #include "pymergetic/metal/net/ip.h"
+#include "pymergetic/util/limits.h"
+#include "pymergetic/util/mem.h"
 
 #include <string.h>
 
@@ -27,18 +29,17 @@
 #define DHCP_WAIT_DEFAULT_US 2000000ull
 #define DHCP_SPINS 200000u
 /* Interfaces whose address came from a server, so the box can say which. */
-#define DHCP_HELD_MAX 8
+#define DHCP_HELD_DEFAULT 8u
 
-static pm_util_mem_arena_t *s_arena;
-static int32_t s_fd = -1;
-static uint32_t s_offer_be = 0x0a000002u;
-static uint32_t s_xid = 1;
-static uint64_t s_wait_us = DHCP_WAIT_DEFAULT_US;
-
-static struct {
+typedef struct {
     int32_t h;
     pm_metal_net_dhcp_lease_t lease;
-} s_held[DHCP_HELD_MAX];
+} dhcp_held_t;
+
+typedef struct {
+    int32_t h;
+    uint8_t how;
+} dhcp_ask_t;
 
 /* What happened the last time each interface asked. "Asked and got nothing" is
  * a different fact from "never asked", and the boot tree has to say which. */
@@ -46,25 +47,49 @@ static struct {
 #define DHCP_ASK_SILENT 1
 #define DHCP_ASK_LEASED 2
 
-static struct {
-    int32_t h;
-    uint8_t how;
-} s_ask[DHCP_HELD_MAX];
+static pm_util_mem_arena_t *s_arena;
+static int32_t s_fd = -1;
+static uint32_t s_offer_be = 0x0a000002u;
+static uint32_t s_xid = 1;
+static uint64_t s_wait_us = DHCP_WAIT_DEFAULT_US;
+
+static dhcp_held_t *s_held;
+static uint32_t s_held_used;
+static uint32_t s_held_cap;
+static dhcp_ask_t *s_ask;
+static uint32_t s_ask_cap;
+
+PM_UTIL_LIMIT_C(pm_dhcp_limit_held, pymergetic.metal.net.dhcp, held, DHCP_HELD_DEFAULT, 0u, &s_held_used);
 
 static void ask_note(int32_t h, uint8_t how) {
     uint32_t i;
-    for (i = 0; i < DHCP_HELD_MAX; i++) {
+    if (s_ask == NULL) {
+        return;
+    }
+    for (i = 0; i < s_ask_cap; i++) {
         if (s_ask[i].how == DHCP_ASK_NONE || s_ask[i].h == h) {
             s_ask[i].h = h;
             s_ask[i].how = how;
             return;
         }
     }
+    {
+        dhcp_ask_t *grown = pm_util_limits_grow(s_arena, s_ask, &s_ask_cap,
+            (uint32_t)sizeof(*s_ask), &pm_dhcp_limit_held);
+        if (grown != NULL) {
+            s_ask = grown;
+            s_ask[s_ask_cap - 1u].h = h;
+            s_ask[s_ask_cap - 1u].how = how;
+        }
+    }
 }
 
 static const pm_metal_net_dhcp_lease_t *held(int32_t h) {
     uint32_t i;
-    for (i = 0; i < DHCP_HELD_MAX; i++) {
+    if (s_held == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < s_held_cap; i++) {
         if (s_held[i].h == h && s_held[i].lease.addr_be != 0) {
             return &s_held[i].lease;
         }
@@ -74,11 +99,27 @@ static const pm_metal_net_dhcp_lease_t *held(int32_t h) {
 
 static void hold(int32_t h, const pm_metal_net_dhcp_lease_t *lease) {
     uint32_t i;
-    for (i = 0; i < DHCP_HELD_MAX; i++) {
+    if (s_held == NULL) {
+        return;
+    }
+    for (i = 0; i < s_held_cap; i++) {
         if (s_held[i].lease.addr_be == 0 || s_held[i].h == h) {
             s_held[i].h = h;
             s_held[i].lease = *lease;
+            if (s_held[i].lease.addr_be != 0) {
+                s_held_used++;
+            }
             return;
+        }
+    }
+    {
+        dhcp_held_t *grown = pm_util_limits_grow(s_arena, s_held, &s_held_cap,
+            (uint32_t)sizeof(*s_held), &pm_dhcp_limit_held);
+        if (grown != NULL) {
+            s_held = grown;
+            s_held[s_held_cap - 1u].h = h;
+            s_held[s_held_cap - 1u].lease = *lease;
+            s_held_used++;
         }
     }
 }
@@ -122,8 +163,18 @@ int32_t pm_metal_net_dhcp_init(pm_util_mem_arena_t *arena) {
     s_fd = -1;
     s_offer_be = 0x0a000002u;
     s_wait_us = DHCP_WAIT_DEFAULT_US;
-    memset(s_held, 0, sizeof(s_held));
-    memset(s_ask, 0, sizeof(s_ask));
+    s_held_used = 0;
+    s_held_cap = DHCP_HELD_DEFAULT;
+    s_ask_cap = DHCP_HELD_DEFAULT;
+    s_held = (dhcp_held_t *)pm_util_mem_alloc(arena,
+        (size_t)s_held_cap * sizeof(*s_held));
+    s_ask = (dhcp_ask_t *)pm_util_mem_alloc(arena,
+        (size_t)s_ask_cap * sizeof(*s_ask));
+    if (s_held == NULL || s_ask == NULL) {
+        return -1;
+    }
+    memset(s_held, 0, (size_t)s_held_cap * sizeof(*s_held));
+    memset(s_ask, 0, (size_t)s_ask_cap * sizeof(*s_ask));
     return 0;
 }
 
@@ -137,8 +188,11 @@ void pm_metal_net_dhcp_deinit(void) {
         (void)pm_metal_net_ip_close(s_fd);
         s_fd = -1;
     }
-    memset(s_held, 0, sizeof(s_held));
-    memset(s_ask, 0, sizeof(s_ask));
+    s_held_used = 0;
+    s_held = NULL;
+    s_held_cap = 0;
+    s_ask = NULL;
+    s_ask_cap = 0;
     s_arena = NULL;
 }
 
@@ -409,9 +463,21 @@ int32_t pm_metal_net_dhcp_up(int32_t h, pm_metal_net_dhcp_lease_t *out) {
         ask_note(h, DHCP_ASK_SILENT);
         return -1;
     }
-    /* A server that sends no mask leaves us to assume the classful one; /24 is
-     * what every seat we boot on hands out. */
-    mask = lease.mask_be != 0 ? lease.mask_be : 0xffffff00u;
+    /* A server that sends no mask leaves us to assume the classful one:
+     * class A 1.0.0.0–127.0.0.0 → /8, B 128.0.0.0–191.255.0.0 → /16,
+     * C 192.0.0.0–223.255.255.0 → /24, rest default to /24. */
+    if (lease.mask_be != 0) {
+        mask = lease.mask_be;
+    } else {
+        uint8_t class_byte = (uint8_t)(lease.addr_be >> 24);
+        if (class_byte >= 1u && class_byte <= 127u) {
+            mask = 0xff000000u;   /* A: /8 */
+        } else if (class_byte >= 128u && class_byte <= 191u) {
+            mask = 0xffff0000u;   /* B: /16 */
+        } else {
+            mask = 0xffffff00u;   /* C or higher: /24 */
+        }
+    }
     if (pm_metal_net_ip_if_up_mask(h, lease.addr_be, mask) != 0) {
         return -1;
     }
@@ -435,7 +501,7 @@ int32_t pm_metal_net_dhcp_leased(int32_t h) {
 
 int32_t pm_metal_net_dhcp_asked(int32_t h) {
     uint32_t i;
-    for (i = 0; i < DHCP_HELD_MAX; i++) {
+    for (i = 0; s_ask != NULL && i < s_ask_cap; i++) {
         if (s_ask[i].h == h && s_ask[i].how != DHCP_ASK_NONE) {
             return (int32_t)s_ask[i].how;
         }

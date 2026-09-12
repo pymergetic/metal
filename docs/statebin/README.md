@@ -27,6 +27,7 @@ let a separate gate accept it, activate transactionally — is the companion fil
 | `09-PLAN.md` | Stages, each with a prove on every seat |
 | `10-FACE-AND-CHANNELS.md` | The one door: the VFS face's rank, its ops, and the channel bindings |
 | `11-BOOTSTRAP-AND-QUORUM.md` | Germline and soma, the porting ladder, and the permanent external quorum |
+| `12-AUTHORING.md` | Models, templates, and the one format: how content gets written before self-editing |
 
 `08-INVENTORY.md` is the one to read first if you want to know how far away this is.
 The short version: the *tools* mostly exist (an in-image C compiler, an in-image
@@ -106,6 +107,18 @@ host-only capability: in-kernel linking needs `dlopen`, `mmap(MAP_32BIT)` and
 (`src/pymergetic/metal/build/__impl__.c:1599`, "link: no loader on this seat").
 The id-based reference model in `04-REFERENCES.md` is what closes that gap.
 
+## Naming
+
+The format is **RXF — Reversible eXecutable Format** ("reversible" = successors are
+checked deltas over node ids, replayable and certifiable; "executable" = it boots).
+One spelling everywhere, the house pattern (`tar`, `zip`, `sqlite`): file extension
+`.rxf`, repo `pymergetic/rxf`, package and CLI `rxf` (`pip install rxf`, `rxf replay`).
+The name rhymes with ELF on purpose — ELF froze the executable at link time; RXF is the
+executable whose state stays alive and journaled. Checked free on PyPI; the four legacy
+`.rxf` extension squatters (roof geometry, GPS routes, recipes, REIMSnet XML) are
+document/data formats outside the executable/systems space. "State binary" remains the
+*description* of the artifact; RXF is its name.
+
 ## Provisional naming
 
 Card names are proposals, not decisions. The split follows where the work has to run:
@@ -120,9 +133,9 @@ Card names are proposals, not decisions. The split follows where the work has to
 
 The first three sit in wasmmod so the metal-less seats (`packages/micropython-wasmmod`)
 get them too; only the last two need a board. The external toolchain is a separate
-pill, not a card: a stdlib-only Python package distributed as a wheel, per `11`. Names
-use the ABI convention already in force: `init` pairs with `deinit`, `create` with
-`destroy`, and `fini` is not a word (`.cursor/rules/c-abi-names.mdc`).
+pill, not a card: the `rxf` repo, a stdlib-only Python package distributed as a wheel,
+per `11`. Names use the ABI convention already in force: `init` pairs with `deinit`,
+`create` with `destroy`, and `fini` is not a word (`.cursor/rules/c-abi-names.mdc`).
 
 ## Status
 

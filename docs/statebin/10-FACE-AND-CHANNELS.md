@@ -84,7 +84,7 @@ acquisition) is transport syntax; resolution, normalization and write policy rem
 
 | Channel | Role | Phase A (IDE) | Phase B (self-host) |
 |---|---|---|---|
-| `direct` | in-process client lib | the `stbn` CLI/REPL — primary authoring/inspection surface | face impl ported inward, C |
+| `direct` | in-process client lib | the `rxf` CLI/REPL — primary authoring/inspection surface | face impl ported inward, C |
 | `vfs` | kernel mediation | pyfuse3 mount — `grep`/`diff` is dev workflow, not deployment | external mount driver (stays host-side per claim (62)) |
 | `http` | network mediation, trust boundary | FastAPI inspector (browser dev-UI, agent surface) | same binding; the gate's read path for acceptance |
 | `ftp` | the weird-channel stress test | pyftpdlib | the conformance toy it always was |
