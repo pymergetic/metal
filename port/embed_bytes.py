@@ -71,7 +71,15 @@ def main() -> int:
             raise SystemExit("embed_bytes.py: nothing to emit")
         return buf.getvalue()
 
-    out_path.write_text(write_into(), encoding="ascii")
+    # Same bytes, same file: the ledger and tccsrc embeds run at make parse
+    # time, so writing unconditionally bumps the mtime on every invocation and
+    # every object that includes the generated header rebuilds -- on the host
+    # seat that is all 146 card objects, every make, whether anything changed
+    # or not. tools/embed_www.py already leaves its output alone this way.
+    text = write_into()
+    if out_path.is_file() and out_path.read_text(encoding="ascii") == text:
+        return 0
+    out_path.write_text(text, encoding="ascii")
     return 0
 
 

@@ -29,6 +29,11 @@ CC ?= cc
 CXX ?= g++
 NODE ?= node
 CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O1 -g -pthread
+# Header dependencies, the same posture every board build.mk already takes.
+# A separate += rather than part of the ?= above: an environment CFLAGS must
+# not be able to switch dependency tracking off. The .d files land beside the
+# .o they describe and are read back at the foot of this file.
+CFLAGS += -MMD -MP
 # host_upy first: py/mpconfig.h's <mpconfigport.h> must resolve to the host
 # seat's embedded µPy config (host_upy/), never to ports/unix/ (whose variant
 # include the metal build cannot satisfy). ports/embed is the config's
@@ -216,7 +221,7 @@ $(CURDIR)/build/wasmmod-tests/nativecall.o: $(WASMMOD_SRC)/pymergetic/wasmmod/na
 LIMITS_CPP_PROVE_O := $(CURDIR)/build/host_test_cpp.o
 $(LIMITS_CPP_PROVE_O): $(CURDIR)/host_test_cpp.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) -std=c++17 -O2 -g -Wall -Wextra $(CPPFLAGS) -c -o $@ $<
+	$(CXX) -std=c++17 -O2 -g -Wall -Wextra -MMD -MP $(CPPFLAGS) -c -o $@ $<
 
 # __impl__.c calls pm_metal_jit_rs_mrustc_compile() which is provided by the
 # tools/mrustc_embed C++ shim; the shim reproduces mrustc's CLI driver pipeline
@@ -238,13 +243,13 @@ LDFLAGS_MRUSTC := -Wl,--whole-archive $(MRUSTC_A) -Wl,--no-whole-archive $(MRUST
 
 $(CURDIR)/build/zenoh-pico/%.o: $(ZENOH_PICO_DIR)/%.c
 	mkdir -p $(dir $@)
-	$(CC) -std=gnu11 -O1 -g -Wall -Wextra $(ZP_CPPFLAGS) -c -o $@ $<
+	$(CC) -std=gnu11 -O1 -g -Wall -Wextra -MMD -MP $(ZP_CPPFLAGS) -c -o $@ $<
 
 # tcc1 runtime: va_list.c defines __va_arg (and friends) in portable C;
 # atomic.S is hand-written x86_64 asm for the __atomic_* family.
 $(CURDIR)/build/tcc/libtcc1.o: $(TCC_DIR)/lib/va_list.c
 	mkdir -p $(dir $@)
-	$(CC) -std=gnu11 -O1 -g -w -I$(TCC_DIR) -I$(TCC_DIR)/lib \
+	$(CC) -std=gnu11 -O1 -g -w -MMD -MP -I$(TCC_DIR) -I$(TCC_DIR)/lib \
 		-c -o $@ $(TCC_DIR)/lib/va_list.c
 
 $(CURDIR)/build/tcc/libtcc1_atomic.o: $(TCC_DIR)/lib/atomic.S
@@ -255,7 +260,7 @@ $(CURDIR)/build/tcc/libtcc1_atomic.o: $(TCC_DIR)/lib/atomic.S
 # (generated from one macro) on top of the load/store/cmpxchg primitives.
 $(CURDIR)/build/tcc/libtcc1_stdatomic.o: $(TCC_DIR)/lib/stdatomic.c
 	mkdir -p $(dir $@)
-	$(CC) -std=gnu11 -O1 -g -w -c -o $@ $(TCC_DIR)/lib/stdatomic.c
+	$(CC) -std=gnu11 -O1 -g -w -MMD -MP -c -o $@ $(TCC_DIR)/lib/stdatomic.c
 
 # cross instances (host seat): wasm32 + arm-eabi backends, symbols renamed by
 # tools/tcc_instances.mk / tcc_prefix_syms.sh (rename ALL defined globals —
@@ -306,7 +311,7 @@ gen:
 
 $(CURDIR)/build/mbedtls/%.o: $(MBEDTLS_DIR)/library/%.c
 	mkdir -p $(dir $@)
-	$(CC) -std=gnu11 -O1 -g $(MBEDTLS_CPPFLAGS) -c -o $@ $<
+	$(CC) -std=gnu11 -O1 -g -MMD -MP $(MBEDTLS_CPPFLAGS) -c -o $@ $<
 
 # Compile every C source to an object in build/ mirroring the source tree.
 $(CURDIR)/build/%.o: %.c
@@ -660,3 +665,12 @@ compile-commands:
 
 clean:
 	rm -rf $(CURDIR)/build
+
+# Header dependencies. Without these a card's __types__.h can change the shape
+# of a ring and the objects around it are not rebuilt, so the binary is linked
+# from two different opinions of that shape. The .d files sit beside the .o
+# they describe and only exist for objects that have been built, so whatever is
+# there is the whole list — cards, the host's own objects, the wasmmod tests,
+# mbedtls, zenoh. (The vendored TCC instances carry their dependency list in
+# the manifest instead: tools/tcc.mk's TCC_HDRS.)
+-include $(shell find $(CURDIR)/build -name '*.d' 2>/dev/null)

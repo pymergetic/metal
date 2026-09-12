@@ -20,6 +20,13 @@ ifeq ($(TCC_MANIFEST_SRCS),)
 $(error tools/tcc.mk: externals.sh list tcc returned nothing)
 endif
 
+# The manifest is .c only, and libtcc.c is a ONE_SOURCE unity build, so a
+# header edit (tcc.h's TCCState, libtcc.h's public face, the *-tok.h tables)
+# reaches every instance object on every seat while changing none of the
+# listed prerequisites. Without this an edited TCCState field leaves libtcc.o
+# stale and the seat links two opinions of the struct.
+TCC_HDRS := $(wildcard $(TCC_DIR)/*.h)
+
 # config.h defines CONFIG_TRIPLET only when no TCC_TARGET_* is predefined; every
 # seat predefines one, so without this the embedded library searches /usr/lib
 # (no libc.so on multiarch hosts) and tcc_relocate fails with "library 'c' not

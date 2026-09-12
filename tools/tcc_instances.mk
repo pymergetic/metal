@@ -28,7 +28,7 @@
 # separate objects (they already are separate objects by construction).
 #
 # Companions:
-#   tools/tcc.mk             — the shared source manifest + TCC_DEFINES
+#   tools/tcc.mk             — the shared source manifest, TCC_HDRS, TCC_DEFINES
 #   tools/tcc_prefix_syms.sh — the nm → objcopy rename pass (one place)
 
 ifndef PM_METAL_TCC_INSTANCES_MK
@@ -58,7 +58,7 @@ TCC_CFLAGS ?=
 # set (CONFIG_TCC_STATIC/SEMLOCK=0/BACKTRACE=0/BCHECK=0) so libtcc.o drops
 # the POSIX machinery fwinc has no answer for. Appended after TCC_DEFINES.
 define tcc_instance
-$(3): $$(TCC_DEPS)
+$(3): $$(TCC_DEPS) $$(TCC_HDRS)
 	mkdir -p $$(dir $$@)
 	$$(CC) -std=gnu11 -O1 -g -w $(TCC_CFLAGS) $(TCC_INC) -I$$(TCC_DIR) -D$(2) $$(TCC_DEFINES) $(5) -c -o $$@.raw $$(TCC_DIR)/libtcc.c
 	$(if $(4),$$(TCC_PREFIX_SYMS) $(4) $$@.raw $$@ $$(TCC_NM) $$(TCC_OBJCOPY),mv -f $$@.raw $$@)

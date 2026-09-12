@@ -52,6 +52,13 @@ $(error fw_tcc.mk: externals.sh list tcc returned nothing)
 endif
 
 TCC_DEPS := $(addprefix $(TCC_DIR)/,$(FW_TCC_SRCS))
+# Headers too, for the same reason tools/tcc.mk lists them on the hosted seats:
+# the manifest is .c only and libtcc.c is a ONE_SOURCE unity build, so an edit
+# to tcc.h or libtcc.h reaches every instance object while changing none of the
+# listed prerequisites. This board does not read tools/tcc.mk (it derives the
+# host triplet, which a cross build has no use for), so the list is spelled
+# here — same variable name, same meaning, read by the shared recipe.
+TCC_HDRS := $(wildcard $(TCC_DIR)/*.h)
 FW_TCC_OBJ := $(BUILD)/tcc/libtcc.o
 FW_OBJS += $(FW_TCC_OBJ)
 
