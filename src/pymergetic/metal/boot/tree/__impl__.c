@@ -15,9 +15,13 @@
 #include <string.h>
 
 #define PM_METAL_BOOT_TREE_VERSION "0.1.0"
+#ifndef PM_METAL_BOOT_UTIL_MAX
 #define PM_METAL_BOOT_UTIL_MAX 16
+#endif
 #define PM_METAL_BOOT_UTIL_NAME 24
+#ifndef PM_METAL_BOOT_MSG_MAX
 #define PM_METAL_BOOT_MSG_MAX 16
+#endif
 
 /* Style shorthand used by motd/shutdown/print — the shared palettes from the
  * pymergetic.metal.util.tree card (the only place SGR codes are defined). */

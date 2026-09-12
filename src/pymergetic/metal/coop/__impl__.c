@@ -42,7 +42,9 @@
 #define PM_METAL_COOP_RING_WANT (1u << 20)
 #define PM_METAL_COOP_RING_MIN 256u
 /* xAPIC CPUID leaf 1 id is 8-bit. Lookup width, not a core cap. */
+#ifndef PM_METAL_COOP_APIC_N
 #define PM_METAL_COOP_APIC_N 256u
+#endif
 /* How long run_until keeps waiting with nothing runnable before it calls the
  * wait dead. Must survive one guest-TCP retransmit cycle: a dropped packet
  * on a real wire (QEMU user-net under load drops) waits out the initial RTO
