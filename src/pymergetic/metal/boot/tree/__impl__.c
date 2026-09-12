@@ -7,6 +7,8 @@
 #include "pymergetic/metal/services.h"
 #include "pymergetic/metal/util/ascii.h"
 #include "pymergetic/metal/util/tree.h"
+#include "pymergetic/util/limits.h"
+#include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/boot.h"
 #include "pymergetic/wasmmod/registry.h"
 
@@ -21,6 +23,12 @@
 #define PM_METAL_BOOT_UTIL_NAME 24
 #ifndef PM_METAL_BOOT_MSG_MAX
 #define PM_METAL_BOOT_MSG_MAX 16
+#endif
+/* Pre-init pool — constructors run before init, so they need a static home.
+ * After init copies them to the arena pool this is never touched again.
+ * Sized to PM_METAL_BOOT_MSG_MAX so every constructor fits before init. */
+#ifndef PM_METAL_BOOT_MSG_PRE_N
+#define PM_METAL_BOOT_MSG_PRE_N PM_METAL_BOOT_MSG_MAX
 #endif
 
 /* Style shorthand used by motd/shutdown/print — the shared palettes from the
@@ -44,7 +52,18 @@ typedef struct {
     pm_metal_boot_msg_fn fn;
 } pm_metal_boot_msg_slot_t;
 
-static pm_metal_boot_msg_slot_t s_msg[PM_METAL_BOOT_MSG_MAX];
+/* Pre-init pool: static .bss so constructors can attach before init runs.
+ * Sized for the few built-in cards (mods, wasm, repl); a seat that needs
+ * more grows the knob. After init copies them to the arena pool, these
+ * are never read again. */
+static pm_metal_boot_msg_slot_t s_msg_pre[PM_METAL_BOOT_MSG_PRE_N];
+
+/* Arena-backed pool (NULL until init). */
+static pm_metal_boot_msg_slot_t *s_msg;
+static uint32_t s_msg_cap;
+
+/* Knob — soft grows the msg pool; hard pins the ceiling. */
+PM_UTIL_LIMIT_C(pm_boot_limit_msg, pymergetic.metal.boot.tree, msg, PM_METAL_BOOT_MSG_MAX, 0u, NULL);
 static uint32_t s_nfail;
 
 void pm_metal_boot_msg_fail(void) {
@@ -72,21 +91,32 @@ void pm_metal_boot_msg_line(const char *s) {
 
 int32_t pm_metal_boot_msg_attach(uint32_t surf, uint32_t order, pm_metal_boot_msg_fn fn) {
     uint32_t i;
+    uint32_t cap;
+    pm_metal_boot_msg_slot_t *pool;
     if (fn == NULL || (surf != PM_METAL_BOOT_SURF_TREE && surf != PM_METAL_BOOT_SURF_MOTD)) {
         return -1;
     }
-    for (i = 0; i < PM_METAL_BOOT_MSG_MAX; i++) {
-        if (s_msg[i].used && s_msg[i].surf == surf && s_msg[i].fn == fn) {
-            s_msg[i].order = order;
+    /* Pre-init: the arena pool isn't up yet; constructors land in the static
+     * pre-pool. After init, s_msg points at the arena-backed array. */
+    if (s_msg != NULL) {
+        pool = s_msg;
+        cap = s_msg_cap;
+    } else {
+        pool = s_msg_pre;
+        cap = PM_METAL_BOOT_MSG_PRE_N;
+    }
+    for (i = 0; i < cap; i++) {
+        if (pool[i].used && pool[i].surf == surf && pool[i].fn == fn) {
+            pool[i].order = order;
             return 0;
         }
     }
-    for (i = 0; i < PM_METAL_BOOT_MSG_MAX; i++) {
-        if (!s_msg[i].used) {
-            s_msg[i].used = 1;
-            s_msg[i].surf = surf;
-            s_msg[i].order = order;
-            s_msg[i].fn = fn;
+    for (i = 0; i < cap; i++) {
+        if (!pool[i].used) {
+            pool[i].used = 1;
+            pool[i].surf = surf;
+            pool[i].order = order;
+            pool[i].fn = fn;
             return 0;
         }
     }
@@ -96,8 +126,10 @@ int32_t pm_metal_boot_msg_attach(uint32_t surf, uint32_t order, pm_metal_boot_ms
 uint32_t pm_metal_boot_msg_attached(uint32_t surf) {
     uint32_t i;
     uint32_t n = 0;
-    for (i = 0; i < PM_METAL_BOOT_MSG_MAX; i++) {
-        if (s_msg[i].used && s_msg[i].surf == surf) {
+    pm_metal_boot_msg_slot_t *pool = (s_msg != NULL) ? s_msg : s_msg_pre;
+    uint32_t cap = (s_msg != NULL) ? s_msg_cap : PM_METAL_BOOT_MSG_PRE_N;
+    for (i = 0; i < cap; i++) {
+        if (pool[i].used && pool[i].surf == surf) {
             n++;
         }
     }
@@ -108,19 +140,24 @@ static uint32_t collect_surf(uint32_t surf, pm_metal_boot_msg_fn *out, uint32_t 
     uint32_t i;
     uint32_t n = 0;
     uint32_t order[PM_METAL_BOOT_MSG_MAX];
-    for (i = 0; i < PM_METAL_BOOT_MSG_MAX; i++) {
+    pm_metal_boot_msg_slot_t *pool = (s_msg != NULL) ? s_msg : s_msg_pre;
+    uint32_t pool_cap = (s_msg != NULL) ? s_msg_cap : PM_METAL_BOOT_MSG_PRE_N;
+    if (pool_cap > PM_METAL_BOOT_MSG_MAX) {
+        pool_cap = PM_METAL_BOOT_MSG_MAX;
+    }
+    for (i = 0; i < pool_cap; i++) {
         uint32_t j;
-        if (!s_msg[i].used || s_msg[i].surf != surf || n >= cap) {
+        if (!pool[i].used || pool[i].surf != surf || n >= cap) {
             continue;
         }
         j = n;
-        while (j > 0 && order[j - 1u] > s_msg[i].order) {
+        while (j > 0 && order[j - 1u] > pool[i].order) {
             out[j] = out[j - 1u];
             order[j] = order[j - 1u];
             j--;
         }
-        out[j] = s_msg[i].fn;
-        order[j] = s_msg[i].order;
+        out[j] = pool[i].fn;
+        order[j] = pool[i].order;
         n++;
     }
     return n;
@@ -141,7 +178,8 @@ void pm_metal_boot_msg_item(int last, int depth, int parent_cont, const char *na
  * its children still need a bar down the left. */
 static void walk(uint32_t surf, int closes) {
     pm_metal_boot_msg_fn fns[PM_METAL_BOOT_MSG_MAX];
-    uint32_t n = collect_surf(surf, fns, PM_METAL_BOOT_MSG_MAX);
+    uint32_t cap = (s_msg_cap > PM_METAL_BOOT_MSG_MAX) ? PM_METAL_BOOT_MSG_MAX : s_msg_cap;
+    uint32_t n = collect_surf(surf, fns, cap);
     uint32_t i;
     for (i = 0; i < n; i++) {
         fns[i](closes && (i + 1u == n));
@@ -149,11 +187,47 @@ static void walk(uint32_t surf, int closes) {
 }
 
 static int32_t pm_metal_boot_tree_init(pm_util_mem_arena_t *arena) {
-    (void)arena;
+    uint32_t cap;
+    uint32_t i;
+    if (s_msg != NULL) {
+        return 0; /* already initialised (selfhost first-touch) */
+    }
+    cap = pm_boot_limit_msg.soft;
+    if (cap == 0u || cap > PM_METAL_BOOT_MSG_MAX) {
+        cap = PM_METAL_BOOT_MSG_MAX;
+    }
+    s_msg = (pm_metal_boot_msg_slot_t *)pm_util_mem_alloc(arena,
+        (size_t)cap * sizeof(pm_metal_boot_msg_slot_t));
+    if (s_msg == NULL) {
+        return -1;
+    }
+    memset(s_msg, 0, (size_t)cap * sizeof(pm_metal_boot_msg_slot_t));
+    s_msg_cap = cap;
+    /* Copy pre-init slots into the new pool. Constructors ran before us and
+     * attached into s_msg_pre; the arena pool is the canonical home from
+     * here on. */
+    for (i = 0; i < PM_METAL_BOOT_MSG_PRE_N; i++) {
+        if (!s_msg_pre[i].used) {
+            continue;
+        }
+        /* All pre-pool entries should fit — the soft defaults to at least
+         * the pre-pool size. If not, the soft was tightened too far; drop
+         * the overflow rather than silently corrupting. */
+        if (i >= cap) {
+            s_msg_pre[i].used = 0;
+            continue;
+        }
+        memcpy(&s_msg[i], &s_msg_pre[i], sizeof(pm_metal_boot_msg_slot_t));
+        s_msg_pre[i].used = 0; /* track migration: no dangling refs */
+    }
     return 0;
 }
 
-static void pm_metal_boot_tree_deinit(void) {}
+static void pm_metal_boot_tree_deinit(void) {
+    /* Arena-reclaim steals the memory back; just forget the pointer. */
+    s_msg = NULL;
+    s_msg_cap = 0u;
+}
 
 static int fqn_has_pfx(const char *s, uint32_t n, const char *pfx) {
     uint32_t i = 0;

@@ -579,6 +579,10 @@ upy:
 	grep -q "upy build py unit_compile" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy build events ring" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy build all walk" $(CURDIR)/build/upy_guest_prove.log
+# Auto-kill any stale micropython process holding serve ports (8090/2222)
+# so the upy serve prove begins with clean sockets.
+	fuser -k 8090/tcp 40993/tcp 2>/dev/null || true
+	fuser -k 2222/tcp 2>/dev/null || true
 	$(TOP)/ports/unix/build-metal/micropython $(CURDIR)/upy_serve_prove.py \
 		> $(CURDIR)/build/upy_serve.log 2>&1
 	grep -q "upy serve fwd mirror" $(CURDIR)/build/upy_serve.log

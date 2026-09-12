@@ -13,6 +13,7 @@
 
 #include "pymergetic/util/lock.h"
 #include "pymergetic/util/mem.h"
+#include "pymergetic/util/limits.h"
 
 #include <stdatomic.h>
 #include <stddef.h>
@@ -83,19 +84,20 @@ static uint32_t s_ncpu;
 /* Worker (AP / runner pthread) marking per current-slot. Kept for CPU id / slot
  * bookkeeping; it no longer gates vm_only stepping. A plain slot array keeps
  * TLS out of firmware. */
-static uint32_t s_worker[PM_METAL_COOP_APIC_N];
+static uint32_t *s_worker;
 /* Per-slot: 1 if that runner installed MicroPython thread state and may re-enter
  * the bytecode VM. The boot thread (s_worker == 0) is always VM-capable. */
-static uint32_t s_vm_capable[PM_METAL_COOP_APIC_N];
+static uint32_t *s_vm_capable;
 #if defined(PM_METAL_COOP_PTHREAD)
 static uint32_t s_njoin;
 static pthread_t *s_thread;
 static __thread uint32_t s_cpu;
 static __thread pm_metal_coop_task_t *s_current;
 #else
-static pm_metal_coop_task_t *s_current_cpu[PM_METAL_COOP_APIC_N];
-static uint32_t s_ncurrent = PM_METAL_COOP_APIC_N;
+static pm_metal_coop_task_t **s_current_cpu;
+static uint32_t s_current_n;
 #endif
+PM_UTIL_LIMIT_C(pm_coop_limit_apic, pymergetic.metal.coop, apic, PM_METAL_COOP_APIC_N, 0u, NULL);
 static atomic_uint s_alive;
 static atomic_uint s_run;
 static atomic_uint s_busy;
@@ -173,7 +175,7 @@ static uint32_t cpu_id(void) {
     uint32_t d;
     __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
     b = (b >> 24) & 0xffu;
-    if (b >= s_ncurrent) {
+    if (b >= s_current_n) {
         return 0;
     }
     return b;
@@ -183,7 +185,7 @@ static uint32_t cpu_id(void) {
      * cluster; QEMU virt and RV1106 are single-cluster). */
     __asm__ volatile("mrc p15, 0, %0, c0, c0, 5" : "=r"(mpidr));
     mpidr &= 0xffu;
-    if (mpidr >= s_ncurrent) {
+    if (mpidr >= s_current_n) {
         return 0;
     }
     return mpidr;
@@ -198,7 +200,7 @@ static pm_metal_coop_task_t **current_slot(void) {
     return &s_current;
 #else
     uint32_t id = cpu_id();
-    if (id >= s_ncurrent) {
+    if (id >= s_current_n) {
         id = 0;
     }
     return &s_current_cpu[id];
@@ -1027,8 +1029,33 @@ int32_t pm_metal_coop_init(pm_util_mem_arena_t *arena, uint32_t ncpu) {
     pm_metal_coop_mutex_init(&s_vm_mutex);
     s_vm_lock_ready = 1;
     s_timers = NULL;
-    memset(s_worker, 0, sizeof(s_worker));
-    memset(s_vm_capable, 0, sizeof(s_vm_capable));
+    {
+        uint32_t n = pm_coop_limit_apic.soft;
+        if (n == 0u || n > PM_METAL_COOP_APIC_N) {
+            n = PM_METAL_COOP_APIC_N;
+        }
+        s_worker = (uint32_t *)pm_util_mem_alloc(arena, (size_t)n * sizeof(uint32_t));
+        if (s_worker == NULL) {
+            s_arena = NULL;
+            return -1;
+        }
+        memset(s_worker, 0, (size_t)n * sizeof(uint32_t));
+        s_vm_capable = (uint32_t *)pm_util_mem_alloc(arena, (size_t)n * sizeof(uint32_t));
+        if (s_vm_capable == NULL) {
+            s_arena = NULL;
+            return -1;
+        }
+        memset(s_vm_capable, 0, (size_t)n * sizeof(uint32_t));
+#if !defined(PM_METAL_COOP_PTHREAD)
+        s_current_cpu = (pm_metal_coop_task_t **)pm_util_mem_alloc(arena, (size_t)n * sizeof(pm_metal_coop_task_t *));
+        if (s_current_cpu == NULL) {
+            s_arena = NULL;
+            return -1;
+        }
+        memset(s_current_cpu, 0, (size_t)n * sizeof(pm_metal_coop_task_t *));
+        s_current_n = n;
+#endif
+    }
     s_ncpu = 1;
     atomic_store(&s_alive, 1u);
     atomic_store(&s_run, 1u);
@@ -1037,9 +1064,6 @@ int32_t pm_metal_coop_init(pm_util_mem_arena_t *arena, uint32_t ncpu) {
     s_current = NULL;
     s_thread = NULL;
     s_njoin = 0;
-#else
-    memset(s_current_cpu, 0, sizeof(s_current_cpu));
-    s_ncurrent = PM_METAL_COOP_APIC_N;
 #endif
     s_ready = 1;
     want = ncpu;
@@ -1150,7 +1174,9 @@ void pm_metal_coop_deinit(void) {
 #if defined(PM_METAL_COOP_PTHREAD)
     s_current = NULL;
 #else
-    memset(s_current_cpu, 0, sizeof(s_current_cpu));
+    if (s_current_cpu != NULL) {
+        memset(s_current_cpu, 0, (size_t)s_current_n * sizeof(pm_metal_coop_task_t *));
+    }
 #endif
     s_ncpu = 0;
     s_ready = 0;
