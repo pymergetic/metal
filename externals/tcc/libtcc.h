@@ -14,6 +14,22 @@ extern "C" {
 typedef void *TCCReallocFunc(void *ptr, unsigned long size);
 LIBTCCAPI void tcc_set_realloc(TCCReallocFunc *my_realloc);
 
+/* Where an out-of-room unwinds to outside a compile. A reallocator that can
+   fail (a bounded arena, say) makes every tcc_* call a possible refusal, and
+   only the ones inside tcc_compile have an escape of their own; tcc_new, the
+   path setters and tcc_output_file do not. Pass a jmp_buf whose setjmp is live
+   for the whole sequence of calls, NULL to disarm:
+
+     jmp_buf oom;
+     if (setjmp(oom) != 0) { ... refuse ... }
+     else { tcc_set_nomem_jmp(&oom); ...calls...; tcc_set_nomem_jmp(NULL); }
+
+   The unwind leaves whatever the library had allocated allocated, so this is
+   for a caller that drops the whole allocation region afterwards rather than
+   one that calls tcc_delete. void * and not jmp_buf * so <setjmp.h> stays out
+   of this header. */
+LIBTCCAPI void tcc_set_nomem_jmp(void *env);
+
 /*****************************/
 typedef struct TCCState TCCState;
 

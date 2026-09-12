@@ -591,6 +591,80 @@ static int32_t test_wasm32_runs_real_c(void) {
 static int32_t test_wasm32_runs_real_c(void) { return 0; }
 #endif
 
+/* An arena too small to compile in refuses, and the seat compiles afterwards.
+ *
+ * Two things had to change for this to hold. TCC's allocators handed back
+ * whatever the reallocator returned without looking, so an exhausted arena
+ * reached tcc_mallocz's memset and tcc_strdup's strcpy on NULL — which is why
+ * the tests above give the compiler 32MB and say why. And TCC builds its
+ * identifier table, token pools and section headers inside tcc_compile, so an
+ * allocation that fails while it is coming up unwinds into a teardown that
+ * walks those half-built tables; measured, 512KB and below aborted in there.
+ * A compile that cannot come up is therefore refused before it starts.
+ *
+ * Both sizes are below that floor, one either side of the arena's own 8-page
+ * minimum. The compile on a healthy arena afterwards is the other half of the
+ * claim: nothing was left holding the allocator window or the compile lock. */
+static int32_t test_out_of_room_refuses(void) {
+#if PM_HAS_TCC
+    static const size_t small[] = { 64u * 1024u, 512u * 1024u };
+    static const char *src = "int room_probe(int v) { return v + 1; }\n";
+    size_t k;
+    void *backing;
+    pm_util_mem_arena_t *arena;
+    uint8_t *obj;
+    size_t obj_len;
+    char err[256];
+    int32_t rc;
+
+    for (k = 0; k < sizeof(small) / sizeof(small[0]); k++) {
+        backing = malloc(small[k]);
+        if (!backing) return 90;
+        arena = pm_util_mem_arena_create(backing, small[k]);
+        if (!arena) { free(backing); return 91; }
+        obj = NULL;
+        obj_len = 0;
+        memset(err, 0, sizeof(err));
+        rc = pm_metal_jit_c_object_compile(arena, src, strlen(src),
+            &obj, &obj_len, err, sizeof(err));
+        if (rc == 0) {
+            fprintf(stderr, "out of room: %zuB arena compiled anyway\n", small[k]);
+            pm_util_mem_arena_destroy(arena); free(backing); return 92;
+        }
+        if (err[0] == '\0') {
+            fprintf(stderr, "out of room: %zuB arena refused silently\n", small[k]);
+            pm_util_mem_arena_destroy(arena); free(backing); return 93;
+        }
+        fprintf(stderr, "out of room: %zuB arena refused: %s\n", small[k], err);
+        pm_util_mem_arena_destroy(arena);
+        free(backing);
+    }
+
+    /* the seat still compiles */
+    backing = malloc(1u << 25);
+    if (!backing) return 94;
+    arena = pm_util_mem_arena_create(backing, 1u << 25);
+    if (!arena) { free(backing); return 95; }
+    obj = NULL;
+    obj_len = 0;
+    memset(err, 0, sizeof(err));
+    rc = pm_metal_jit_c_object_compile(arena, src, strlen(src),
+        &obj, &obj_len, err, sizeof(err));
+    if (rc != 0) {
+        fprintf(stderr, "out of room: healthy arena refused after: %s\n", err);
+        pm_util_mem_arena_destroy(arena); free(backing); return 96;
+    }
+    if (obj == NULL || obj_len == 0) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 97;
+    }
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 static int32_t pm_metal_jit_c_tests(void) {
     int32_t rc;
     rc = test_compile_alloc();
@@ -612,6 +686,8 @@ static int32_t pm_metal_jit_c_tests(void) {
     rc = test_diag_invalid_source();
     if (rc) return rc;
     rc = test_diag_isolation();
+    if (rc) return rc;
+    rc = test_out_of_room_refuses();
     if (rc) return rc;
     return 0;
 }

@@ -9,6 +9,7 @@
 #include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/boot/externals.h"
 #include "pymergetic/util/mem.h"
+#include <setjmp.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -126,6 +127,7 @@ int32_t pm_metal_jit_c_arena_release(pm_util_mem_arena_t *arena);
     extern int prefix##tcc_compile_string(void *s, const char *b); \
     extern void prefix##tcc_define_symbol(void *s, const char *sym, const char *val); \
     extern void prefix##tcc_set_realloc(TCCReallocFunc *f); \
+    extern void prefix##tcc_set_nomem_jmp(void *env); \
     extern void prefix##tcc_free(void *ptr); \
     extern void prefix##tcc_set_error_func(void *s, void *opaque, TCCErrorFunc *cb); \
     extern int prefix##tcc_output_file(void *s, const char *filename); \
@@ -138,6 +140,7 @@ int32_t pm_metal_jit_c_arena_release(pm_util_mem_arena_t *arena);
     __attribute__((unused)) static int id##_tcc_compile_string(void *s, const char *b) { return prefix##tcc_compile_string(s, b); } \
     __attribute__((unused)) static void id##_tcc_define_symbol(void *s, const char *sym, const char *val) { prefix##tcc_define_symbol(s, sym, val); } \
     __attribute__((unused)) static void id##_tcc_set_realloc(void *f) { prefix##tcc_set_realloc(f); } \
+    __attribute__((unused)) static void id##_tcc_set_nomem_jmp(void *env) { prefix##tcc_set_nomem_jmp(env); } \
     __attribute__((unused)) static void id##_tcc_free(void *p) { prefix##tcc_free(p); } \
     __attribute__((unused)) static void id##_tcc_set_error_func(void *s, void *opaque, TCCErrorFunc *cb) { prefix##tcc_set_error_func(s, opaque, cb); } \
     __attribute__((unused)) static int id##_tcc_output_file(void *s, const char *filename) { return prefix##tcc_output_file(s, filename); }
@@ -162,6 +165,8 @@ static void wasm_tcc_define_symbol(void *s, const char *sym, const char *val) { 
  * object paths' uniform call shape */
 __attribute__((unused))
 static void wasm_tcc_set_realloc(void *f) { tcc_set_realloc((TCCReallocFunc *)f); }
+__attribute__((unused))
+static void wasm_tcc_set_nomem_jmp(void *env) { tcc_set_nomem_jmp(env); }
 static void wasm_tcc_free(void *p) { tcc_free(p); }
 static void wasm_tcc_set_error_func(void *s, void *opaque, TCCErrorFunc *cb) { tcc_set_error_func((TCCState *)s, opaque, cb); }
 static int wasm_build_mod(uint8_t **out_buf, int *out_len) { return wasm_build_module(out_buf, out_len); }
@@ -197,6 +202,30 @@ PM_TCC_CROSS_INSTANCE(x64, pm_tccx_)
  * Implemented after the shim blocks: on a cross seat every cross instance
  * is a second, symbol-prefixed libtcc with its own reallocator global, so
  * the window must route ALL instances under one lock. */
+/* Arm (or disarm, with NULL) the out-of-room escape on every instance in this
+ * binary. A compile path arms it with its own jmp_buf right after taking the
+ * window: inside a compile TCC unwinds through its own escape and the refusal
+ * comes back as a return code, but tcc_new, the path setters and
+ * tcc_output_file run outside any compile, and an arena that cannot serve them
+ * would otherwise be fatal (libtcc.h: tcc_set_nomem_jmp). */
+static void pm_metal_jit_c_nomem_arm(void *env) {
+#if PM_HAS_TCC
+    tcc_set_nomem_jmp(env);
+#endif
+#if defined(PM_TCC_CROSS_INSTANCE_WASM32)
+    wasm_tcc_set_nomem_jmp(env);
+#endif
+#if defined(PM_TCC_CROSS_INSTANCE_ARM_EABI)
+    arm_tcc_set_nomem_jmp(env);
+#endif
+#if defined(PM_TCC_CROSS_INSTANCE_X86_64)
+    x64_tcc_set_nomem_jmp(env);
+#endif
+#if !PM_HAS_TCC
+    (void)env;
+#endif
+}
+
 int32_t pm_metal_jit_c_arena_acquire(pm_util_mem_arena_t *arena) {
     if (arena == NULL) {
         return -1;
@@ -252,6 +281,12 @@ int32_t pm_metal_jit_c_arena_release(pm_util_mem_arena_t *arena) {
 #if defined(PM_TCC_CROSS_INSTANCE_X86_64)
     x64_tcc_set_realloc(NULL);
 #endif
+    /* The out-of-room escape is disarmed here rather than by each compile
+     * path: it is only meaningful while the window holds a fallible arena,
+     * and the jmp_buf it points at belongs to the frame that took the
+     * window. Every exit from a compile path passes through this release,
+     * including the escape branch itself. */
+    pm_metal_jit_c_nomem_arm(NULL);
     s_tcc_arena = NULL;
     s_tcc_arena_holder = NULL;
     pm_util_lock_release(&s_tcc_arena_lock);
@@ -445,6 +480,43 @@ static void jit_c_diag_cb(void *opaque, const char *msg) {
     }
 }
 
+/* Smallest arena a compile is allowed to start in.
+ *
+ * TCC comes up before it can refuse anything: the identifier table, the two
+ * 256KB tccpp pools, the CString buffers and the section headers are all built
+ * inside tcc_compile, and an allocation that fails in there unwinds through
+ * TCC's escape into a teardown that walks those half-built tables (tccpp_delete
+ * frees table_ident entry by entry). So a compile that cannot come up is
+ * refused before it starts rather than half-started and unwound.
+ *
+ * The number is measured, not chosen: with a one-line function on the host
+ * seat, a 512KB region aborts in that teardown and a 1MB region compiles
+ * cleanly. 1MB is also the smallest arena this tree is already known to compile
+ * in — the build card's compile_source test uses exactly that — so the floor is
+ * one megabyte. The comparison is against arena_bytes, which is the region less
+ * the arena's own header (one page today); the 8KB allowance keeps a caller who
+ * passes exactly 1MB from being refused over bookkeeping.
+ *
+ * Running out of room after TCC is up is the other case and is handled where it
+ * happens: the allocators raise, TCC unwinds through its own escape, and the
+ * refusal arrives as a return code with "memory full" in the diagnostics. */
+#define PM_METAL_JIT_C_MIN_ARENA ((1u * 1024u * 1024u) - (8u * 1024u))
+
+static int jit_c_room_refuses(const pm_util_mem_arena_t *arena,
+    char *errbuf, size_t errbuf_len) {
+    size_t have = pm_util_mem_arena_bytes(arena);
+    if (have >= (size_t)PM_METAL_JIT_C_MIN_ARENA) {
+        return 0;
+    }
+    if (errbuf != NULL && errbuf_len > 0) {
+        snprintf(errbuf, errbuf_len,
+            "object_compile: arena too small to compile in (%zu bytes, a"
+            " compile needs %zu to come up)",
+            have, (size_t)PM_METAL_JIT_C_MIN_ARENA);
+    }
+    return 1;
+}
+
 /* Fold the captured diagnostics into errbuf (kept when non-empty; the
  * "compile failed" prefix stays so callers still see the stage). TCC
  * diagnostics end with the error line, so when the whole capture does
@@ -515,6 +587,7 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     char *errbuf, size_t errbuf_len) {
     char tmpl[] = "/tmp/.jit_c_obj_XXXXXX";
     char diag_buf[1024]; /* TCC diagnostic capture — whole-invocation lifetime */
+    jmp_buf oom;         /* where an out-of-room outside a compile lands */
     int fd;
     FILE *f;
     long n;
@@ -542,6 +615,11 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     }
     close(fd);
 
+    if (jit_c_room_refuses(arena, errbuf, errbuf_len)) {
+        unlink(tmpl);
+        return -1;
+    }
+
     /* route the whole compile's allocations through the arena via the
      * lock-guarded allocator window (Phase 5) */
     if (pm_metal_jit_c_arena_acquire(arena) != 0) {
@@ -552,6 +630,23 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     }
     /* the arena's own reallocation can move a block tcc still holds, but
      * tlsf_realloc copies contents — same contract as libc realloc */
+
+    /* Out of room outside a compile is a refusal too. tcc_new, the setters
+     * below and tcc_output_file after all allocate on this arena with no
+     * compile escape of their own armed; inside tcc_compile_string TCC unwinds
+     * through its own and the refusal arrives as a return code instead.
+     * Nothing is freed on the way out on purpose: the library's structures are
+     * half-built on the caller's arena, tcc_delete would walk them, and the
+     * arena is the caller's to drop. */
+    if (setjmp(oom) != 0) {
+        pm_metal_jit_c_nomem_arm(NULL);
+        pm_metal_jit_c_arena_release(arena);
+        unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len,
+            "object_compile: out of room (tcc refused an allocation)");
+        return -1;
+    }
+    pm_metal_jit_c_nomem_arm(&oom);
 
     s = tcc_new();
     if (s == NULL) {
@@ -677,6 +772,7 @@ static int32_t jit_c_object_compile_arm(pm_util_mem_arena_t *arena,
     char tmpl[] = "/tmp/.jit_c_arm_XXXXXX";
     char diag_buf[1024]; /* TCC diagnostic capture — whole-invocation lifetime */
     jit_c_diag_t diag;
+    jmp_buf oom;         /* where an out-of-room outside a compile lands */
     int fd;
     FILE *f;
     long n;
@@ -704,6 +800,11 @@ static int32_t jit_c_object_compile_arm(pm_util_mem_arena_t *arena,
     }
     close(fd);
 
+    if (jit_c_room_refuses(arena, errbuf, errbuf_len)) {
+        unlink(tmpl);
+        return -1;
+    }
+
     /* route the whole compile's allocations through the arena via the
      * lock-guarded allocator window (N-instance generalization) */
     if (pm_metal_jit_c_arena_acquire(arena) != 0) {
@@ -712,6 +813,18 @@ static int32_t jit_c_object_compile_arm(pm_util_mem_arena_t *arena,
             "object_compile: allocator window busy");
         return -1;
     }
+
+    /* same out-of-room escape as the native path above: this instance's
+     * tcc_new / setters / tcc_output_file run outside any compile */
+    if (setjmp(oom) != 0) {
+        pm_metal_jit_c_nomem_arm(NULL);
+        pm_metal_jit_c_arena_release(arena);
+        unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len,
+            "object_compile: out of room (tcc refused an allocation)");
+        return -1;
+    }
+    pm_metal_jit_c_nomem_arm(&oom);
 
     s = arm_tcc_new();
     if (s == NULL) {
@@ -824,6 +937,7 @@ static int32_t jit_c_object_compile_x64(pm_util_mem_arena_t *arena,
     char tmpl[] = "/tmp/.jit_c_x64_XXXXXX";
     char diag_buf[1024]; /* TCC diagnostic capture — whole-invocation lifetime */
     jit_c_diag_t diag;
+    jmp_buf oom;         /* where an out-of-room outside a compile lands */
     int fd;
     FILE *f;
     long n;
@@ -851,12 +965,28 @@ static int32_t jit_c_object_compile_x64(pm_util_mem_arena_t *arena,
     }
     close(fd);
 
+    if (jit_c_room_refuses(arena, errbuf, errbuf_len)) {
+        unlink(tmpl);
+        return -1;
+    }
+
     if (pm_metal_jit_c_arena_acquire(arena) != 0) {
         unlink(tmpl);
         jit_c_obj_err(errbuf, errbuf_len,
             "object_compile: allocator window busy");
         return -1;
     }
+
+    /* same out-of-room escape as the native and arm paths above */
+    if (setjmp(oom) != 0) {
+        pm_metal_jit_c_nomem_arm(NULL);
+        pm_metal_jit_c_arena_release(arena);
+        unlink(tmpl);
+        jit_c_obj_err(errbuf, errbuf_len,
+            "object_compile: out of room (tcc refused an allocation)");
+        return -1;
+    }
+    pm_metal_jit_c_nomem_arm(&oom);
 
     s = x64_tcc_new();
     if (s == NULL) {
@@ -970,6 +1100,7 @@ static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
     void *s;
     char diag_buf[1024]; /* TCC diagnostic capture — whole-invocation lifetime */
     jit_c_diag_t diag;
+    jmp_buf oom;         /* where an out-of-room outside a compile lands */
     uint8_t *mod = NULL;
     int mod_len = 0;
     int wrc;
@@ -993,6 +1124,10 @@ static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
     *obj_out = NULL;
     *obj_len = 0;
 
+    if (jit_c_room_refuses(arena, errbuf, errbuf_len)) {
+        return -1;
+    }
+
     /* the compile's scratch — and wasm32-gen's growable buffers — ride the
      * caller's arena through the lock-guarded allocator window */
     if (pm_metal_jit_c_arena_acquire(arena) != 0) {
@@ -1001,6 +1136,23 @@ static int32_t jit_c_object_compile_wasm(pm_util_mem_arena_t *arena,
         }
         return -1;
     }
+    /* same out-of-room escape as the ELF paths above. release_bufs runs on the
+     * way out here because the wasm32 backend's growable buffers are tracked
+     * in its own globals: dropping the arena without clearing them would leave
+     * the next compile holding pointers into freed space. Freeing cannot
+     * itself run out of room, so it will not re-enter this escape. */
+    if (setjmp(oom) != 0) {
+        pm_metal_jit_c_nomem_arm(NULL);
+        wasm_release_bufs();
+        pm_metal_jit_c_arena_release(arena);
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len,
+                "object_compile: out of room (tcc refused an allocation)");
+        }
+        return -1;
+    }
+    pm_metal_jit_c_nomem_arm(&oom);
+
     s = wasm_tcc_new();
     if (s == NULL) {
         pm_metal_jit_c_arena_release(arena);

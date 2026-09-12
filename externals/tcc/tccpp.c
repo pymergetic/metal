@@ -400,6 +400,14 @@ ST_FUNC void cstr_new(CString *cstr)
 ST_FUNC void cstr_free(CString *cstr)
 {
     tcc_free(cstr->data);
+    /* Actually reset it, as the line above says. Several CStrings are globals
+       that outlive a compile (tccgen.c's initstr, freed by tccgen_finish), so
+       leaving the pointer behind means the next teardown frees it again. That
+       stayed invisible while every free landed in a libc heap that tolerated
+       it; on a seat where the compile runs on an arena, the second free is a
+       block in whatever arena is current — a compile that refuses before
+       tccgen_init reaches finish with initstr already freed. */
+    cstr_new(cstr);
 }
 
 /* reset string to empty */

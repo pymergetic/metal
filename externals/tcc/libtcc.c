@@ -253,11 +253,11 @@ static void *default_reallocator(void *ptr, unsigned long size)
         ptr1 = NULL;
     }
     else {
+        /* Out of room is raised by tcc_malloc/tcc_realloc below, in one place,
+           so this reallocator and a seat's own (tcc_set_realloc) behave the
+           same instead of one exiting here and the other returning NULL into
+           callers that never check it. */
         ptr1 = realloc(ptr, size);
-        if (!ptr1) {
-            fprintf(stderr, "tcc: memory full\n");
-            exit (1);
-        }
     }
     return ptr1;
 }
@@ -291,14 +291,66 @@ PUB_FUNC void tcc_free(void *ptr)
     reallocator(ptr, 0);
 }
 
+/* Out of room, from either reallocator. The callers below never checked what
+   they got back: tcc_mallocz memsets it and tcc_strdup strcpys into it, so an
+   exhausted arena took the process down instead of refusing the compile.
+
+   Two things this must not do. It must not format through the cstr machinery
+   error1() uses — reporting an allocation failure by allocating is how out of
+   room turns back into a crash — and it must not return, because no caller
+   checks.
+
+   While a compile runs, the state's own escape is armed (tcc_compile), so the
+   unwind lands there and tcc_compile's tail still runs tccgen_finish,
+   preprocess_end and tcc_exit_state: the compile semaphore is released and the
+   state stays walkable for tcc_delete. Outside a compile there is no state and
+   no semaphore held, and a seat that armed tcc_set_nomem_jmp takes the unwind
+   there — that covers tcc_new, the path setters and tcc_output_file, which run
+   on the seat's arena but outside any compile. With neither armed this is the
+   fatal it has always been. */
+static void *nomem_jmp; /* jmp_buf * or NULL — armed per libtcc instance */
+
+LIBTCCAPI void tcc_set_nomem_jmp(void *env)
+{
+    nomem_jmp = env;
+}
+
+static void tcc_mem_full(void)
+{
+    TCCState *s1 = tcc_state;
+
+    if (s1) {
+        /* error1() opens the same way: leaving the state is what releases the
+           compile semaphore, and it is a no-op while the compile's own escape
+           is armed (tcc_compile's tail leaves the state then). */
+        tcc_exit_state(s1);
+        s1->nb_errors++;
+        if (s1->error_func)
+            s1->error_func(s1->error_opaque, "tcc: error: memory full");
+        if (s1->error_set_jmp_enabled)
+            longjmp(s1->error_jmp_buf, 1);
+    }
+    if (nomem_jmp)
+        longjmp(*(jmp_buf *)nomem_jmp, 1);
+    fprintf(stderr, "tcc: memory full\n");
+    fflush(stderr);
+    exit (1);
+}
+
 PUB_FUNC void *tcc_malloc(unsigned long size)
 {
-    return reallocator(0, size);
+    void *ptr = reallocator(0, size);
+    if (!ptr && size)
+        tcc_mem_full();
+    return ptr;
 }
 
 PUB_FUNC void *tcc_realloc(void *ptr, unsigned long size)
 {
-    return reallocator(ptr, size);
+    void *ptr1 = reallocator(ptr, size);
+    if (!ptr1 && size)
+        tcc_mem_full();
+    return ptr1;
 }
 
 PUB_FUNC void *tcc_mallocz(unsigned long size)
