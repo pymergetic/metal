@@ -753,9 +753,19 @@ static void fill_rpc_handlers(js_t *j) {
 static void fill_rpc_calls(js_t *j) {
     pm_metal_rpc_result_t r;
     uint32_t first;
+    uint32_t guard;
     js_raw(j, "{\"pending\":[");
     first = 1;
-    while (pm_metal_rpc_poll(&r) == 0) {
+    /* pm_metal_rpc_poll() returns 1 when it delivered a result, 0 when the
+     * ring is empty. Loop on delivery — the old `== 0` inverted test spun
+     * forever on an empty ring and hex-encoded an UNINITIALISED r (garbage
+     * result_len) straight off the stack into the guard page (SIGSEGV on
+     * repeated /p2p loads). The guard caps the drain so a stuck ring can't
+     * monopolise the reply budget either. */
+    for (guard = 0; guard < PM_METAL_RPC_CALLS_MAX; guard++) {
+        if (pm_metal_rpc_poll(&r) != 1) {
+            break;
+        }
         if (first) first = 0; else js_ch(j, ',');
         js_ch(j, '{');
         js_raw(j, "\"call_id\":"); js_u64(j, r.call_id);
