@@ -296,6 +296,20 @@ static int32_t case_http(void) {
         || !has(body, n, "id=\"fx-matrix\"")) {
         return fail("fetch www factory body");
     }
+    /* The console is page-independent: its asset carries tab-scoped viewport
+     * persistence and a ring-only reload control on every shell page. */
+    body = NULL;
+    n = 0;
+    st = pm_metal_net_http_fetch(
+        "http://127.0.0.1:8090/static/seat/console.js", &body, &n, err, sizeof(err));
+    if (st != PM_WASMMOD_IO_OK) {
+        return fail(err[0] ? err : "fetch console asset");
+    }
+    if (body == NULL || n == 0 || !has(body, n, "id=\"mc-reload\"")
+        || !has(body, n, "sessionStorage.setItem(VIEW_KEY")
+        || !has(body, n, "console reloaded from the seat ring")) {
+        return fail("console persistence asset");
+    }
     /* The download faces. A build's objects and the host build's images are
      * the two things "the binary" means here, and both are served in ?off=
      * windows because the biggest of each dwarfs one body. This prove pins

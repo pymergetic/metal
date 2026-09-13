@@ -43,6 +43,7 @@ const POLL_MS = 250;
 const MAX_LINES = 600;
 const HISTORY_MAX = 100;
 const STATE_KEY = "pymergetic.metal.console.size";
+const VIEW_KEY = "pymergetic.metal.console.view.v1";
 
 /* --- ANSI ---------------------------------------------------------------
  * The ring holds what the seat printed, escape codes and all: the boot tree
@@ -138,6 +139,7 @@ function build() {
               title="The browser build of this seat, booted and running in this page">wasm</button>
       <span class="metal-console-status" id="mc-status">…</span>
       <span class="metal-console-spacer"></span>
+      <button type="button" id="mc-reload" title="Reload this console from the seat ring">reload</button>
       <button type="button" id="mc-size" title="Panel size: corner / tall">size</button>
       <button type="button" id="mc-follow" aria-pressed="true" title="Stay at the newest line">follow</button>
     </div>
@@ -187,8 +189,38 @@ function start() {
   let since = 0;
   let seen = 0;
   let inFlight = false;
+  let pollGeneration = 0;
   const history = [];
   let histAt = 0;
+
+  function loadView() {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(VIEW_KEY) || "{}");
+      follow = saved.follow !== false;
+      since = Number.isFinite(saved.since) && saved.since >= 0 ? saved.since : 0;
+      for (const line of saved.lines || []) appendLine(String(line));
+      for (const line of saved.history || []) history.push(String(line));
+      while (history.length > HISTORY_MAX) history.shift();
+      histAt = history.length;
+      input.value = typeof saved.draft === "string" ? saved.draft : "";
+    } catch (_) {
+      sessionStorage.removeItem(VIEW_KEY);
+    }
+  }
+
+  function saveView() {
+    const lines = [];
+    for (const node of out.children) lines.push(node.textContent || "");
+    try {
+      sessionStorage.setItem(VIEW_KEY, JSON.stringify({
+        since: since,
+        follow: follow,
+        lines: lines.slice(-MAX_LINES),
+        history: history.slice(-HISTORY_MAX),
+        draft: input.value,
+      }));
+    } catch (_) { /* Storage can be unavailable; the live console still works. */ }
+  }
   /* Which tab is showing. Never restored from the session: opening the wasm
    * one downloads a seat image, and that is a thing to ask for, not to inherit
    * from a page you visited earlier. */
@@ -249,12 +281,14 @@ function start() {
   async function poll() {
     if (inFlight) return;
     inFlight = true;
+    const generation = pollGeneration;
     const asked = since;
     try {
       const r = await fetch(`/console/${CONSOLE_ID}?since=${asked}&who=${WHO}`,
         { cache: "no-store" });
       if (!r.ok) throw new Error("http " + r.status);
       const d = await r.json();
+      if (generation !== pollGeneration) return;
       /* A ring cannot go backwards, so an answer behind the cursor it was
        * asked for is a seat that began again at zero under us. The next poll
        * reads its ring from the oldest line it kept. */
@@ -284,6 +318,7 @@ function start() {
         const vp = typeof d.viewports === "number" ? ` · ${d.viewports} viewports` : "";
         setStatus(`live · ${since}${vp}`, "is-live");
       }
+      saveView();
     } catch (e) {
       if (!onWasm) setStatus("seat unreachable", "is-lost");
     } finally {
@@ -417,6 +452,18 @@ function start() {
     await poll();
   }
 
+  $("mc-reload").addEventListener("click", async () => {
+    pollGeneration++;
+    while (out.firstChild) out.removeChild(out.firstChild);
+    seen = 0;
+    since = 0;
+    appendNote("… console reloaded from the seat ring");
+    setStatus("reloading…", "is-busy");
+    saveView();
+    /* Let an older request leave its finally block before starting the fresh read. */
+    while (inFlight) await new Promise((resolve) => setTimeout(resolve, 10));
+    await poll();
+  });
   $("mc-size").addEventListener("click", () => {
     size = (size + 1) % SIZES.length;
     apply();
@@ -428,6 +475,7 @@ function start() {
     follow = !follow;
     followBtn.setAttribute("aria-pressed", follow ? "true" : "false");
     if (follow) view().scrollTop = view().scrollHeight;
+    saveView();
   });
   for (const t of [term, wterm]) {
     t.addEventListener("scroll", () => {
@@ -437,6 +485,7 @@ function start() {
       if (atEnd !== follow) {
         follow = atEnd;
         followBtn.setAttribute("aria-pressed", follow ? "true" : "false");
+        saveView();
       }
     });
     t.addEventListener("mouseup", () => {
@@ -476,8 +525,12 @@ function start() {
     });
   }
 
+  loadView();
+  followBtn.setAttribute("aria-pressed", follow ? "true" : "false");
+  input.addEventListener("input", saveView);
+  window.addEventListener("pagehide", saveView);
   apply();
-  setStatus("connecting…");
+  setStatus(since ? `resuming · ${since}` : "connecting…");
   poll();
   setInterval(poll, POLL_MS);
 }
