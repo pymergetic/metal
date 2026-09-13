@@ -727,6 +727,7 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
 
 /* P2P endpoint fillers — live JSON from each neighbour/orchestration card. */
 static void fill_neighbors(js_t *j, const char *raw);
+static void fill_services(js_t *j);
 static void fill_rpc_handlers(js_t *j);
 static void fill_rpc_calls(js_t *j);
 static void fill_dstate_entries(js_t *j);
@@ -757,6 +758,46 @@ static void fill_neighbors(js_t *j, const char *raw) {
         js_ch(j, '}');
     }
     js_raw(j, "]}");
+}
+
+static void fill_services(js_t *j) {
+    uint32_t nnb = pm_metal_neighbors_count();
+    uint32_t nsvc = pm_metal_services_count();
+    uint32_t i;
+    uint32_t first;
+    js_raw(j, "{\"schema\":1,\"hosts\":[");
+    js_raw(j, "{\"peer_id\":0,\"host\":\"localhost\",\"local\":true,\"alive\":true}");
+    for (i = 0; i < nnb; i++) {
+        pm_metal_neighbor_t nb;
+        if (pm_metal_neighbors_at(i, &nb) != 0) continue;
+        js_raw(j, ",{\"peer_id\":"); js_u32(j, nb.peer_id);
+        js_raw(j, ",\"host\":"); js_str(j, nb.host);
+        js_raw(j, ",\"zenoh_id\":"); js_str(j, nb.zenoh_id);
+        js_raw(j, ",\"local\":false,\"alive\":");
+        js_raw(j, nb.alive ? "true" : "false");
+        js_ch(j, '}');
+    }
+    js_raw(j, "],\"services\":[");
+    first = 1;
+    for (i = 0; i < nsvc; i++) {
+        uint32_t peer = pm_metal_services_peer_of(i);
+        const char *name = pm_metal_services_name(i);
+        const char *fqn = pm_metal_services_fqn(i);
+        uint32_t instances = pm_metal_services_instances(i);
+        if (!first) js_ch(j, ','); else first = 0;
+        js_raw(j, "{\"index\":"); js_u32(j, i);
+        js_raw(j, ",\"peer_id\":"); js_u32(j, peer);
+        js_raw(j, ",\"local\":"); js_raw(j, peer == 0u ? "true" : "false");
+        js_raw(j, ",\"name\":"); js_str(j, name != NULL ? name : "");
+        js_raw(j, ",\"fqn\":"); js_str(j, fqn != NULL ? fqn : "");
+        js_raw(j, ",\"port\":"); js_u32(j, pm_metal_services_port(i));
+        js_raw(j, ",\"instances\":"); js_u32(j, instances);
+        js_raw(j, ",\"status_queryable\":"); js_raw(j, peer == 0u ? "true" : "false");
+        js_ch(j, '}');
+    }
+    js_raw(j, "],\"host_count\":"); js_u32(j, nnb + 1u);
+    js_raw(j, ",\"service_count\":"); js_u32(j, nsvc);
+    js_ch(j, '}');
 }
 
 static void fill_rpc_handlers(js_t *j) {
@@ -1072,6 +1113,10 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
      * fetches all six and renders the unified dashboard. */
     if (path_is(path, "/p2p/neighbors")) {
         fill_neighbors(&j, raw);
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
+    }
+    if (path_is(path, "/p2p/services")) {
+        fill_services(&j);
         s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
     if (path_is(path, "/p2p/rpc/handlers")) {
@@ -3616,6 +3661,7 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
      * body as the local dispatch, reachable from JS via the panel. */
     (void)add_route("/p2p/self");
     (void)add_route("/p2p/neighbors");
+    (void)add_route("/p2p/services");
     (void)add_route("/p2p/rpc/handlers");
     (void)add_route("/p2p/rpc/calls");
     (void)add_route("/p2p/dstate");

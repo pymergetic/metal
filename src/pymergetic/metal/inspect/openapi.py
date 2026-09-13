@@ -194,6 +194,9 @@ def build():
             "/p2p/self": {
                 "get": _op("local loopback peer identity", {"type": "object"}, tags=["p2p"]),
             },
+            "/p2p/services": {
+                "get": _op("network hosts and advertised services", {"type": "object"}, tags=["p2p"]),
+            },
             "/p2p/neighbors": {
                 "get": _op("remote neighbor table", {"type": "object"}, tags=["p2p"]),
             },

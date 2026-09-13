@@ -1,0 +1,22 @@
+{% args d %}
+<section class="hero">
+  <p class="eyebrow">mesh</p>
+  <h1>Services</h1>
+  <p class="lede">Choose a host to inspect the application services it advertises across the P2P network. Localhost is always available; discovered peers appear as they join the mesh.</p>
+</section>
+
+<section class="seat-panel">
+  <div class="seat-controls">
+    <label>Host
+      <select id="svc-host" aria-label="Network host"><option value="0">localhost (this seat)</option></select>
+    </label>
+    <span id="svc-host-status" class="hint">loading&hellip;</span>
+  </div>
+</section>
+
+<section class="seat-panel">
+  <h2 id="svc-title">Services on localhost</h2>
+  <p class="hint" id="svc-summary">loading&hellip;</p>
+  <div id="svc-grid" class="service-grid"></div>
+  <p class="hint" id="svc-empty" hidden>No services advertised by this host.</p>
+</section>

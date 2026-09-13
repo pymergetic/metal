@@ -325,3 +325,36 @@ table.p2p-table {
 #fx-events .ev.fail .k {
   color: var(--seat-fail);
 }
+
+/* ---- network service browser ---- */
+.service-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 0.8rem;
+}
+.service-card {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0.85rem;
+  background: rgba(255, 255, 255, 0.025);
+}
+.service-card h3 {
+  color: var(--fg);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 1rem;
+}
+.service-card dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.3rem 0.7rem;
+  margin: 0.7rem 0 0;
+  font-size: 0.8rem;
+}
+.service-card dt { color: var(--muted); }
+.service-card dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}

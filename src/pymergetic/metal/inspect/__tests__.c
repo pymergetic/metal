@@ -164,6 +164,16 @@ static int32_t case_handle(void) {
         || strstr(body, "\"host\":\"localhost\"") == NULL) {
         return fail("p2p self body");
     }
+    if (pm_metal_inspect_handle("GET", "/p2p/services") != 200) {
+        return fail("p2p services status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"peer_id\":0") == NULL
+        || strstr(body, "\"host\":\"localhost\"") == NULL
+        || strstr(body, "\"services\":[") == NULL
+        || strstr(body, "\"status_queryable\":true") == NULL) {
+        return fail("p2p services body");
+    }
     if (pm_metal_inspect_handle("GET", "/p2p/rpc/calls") != 200) {
         return fail("p2p rpc calls status");
     }
