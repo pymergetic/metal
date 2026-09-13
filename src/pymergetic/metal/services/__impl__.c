@@ -58,6 +58,9 @@ int32_t pm_metal_services_init(pm_util_mem_arena_t *arena) {
     }
     memset(s_svcs, 0, (size_t)cap * sizeof(pm_metal_service_record_t));
     s_svcs_cap = cap;
+    /* Reset count: constructors already put entries in s_svcs_pre via
+     * s_nsvc. We copy them into s_svcs starting at 0. */
+    s_nsvc = 0;
     /* Copy pre-init entries. Constructors ran before us. */
     for (i = 0; i < PM_METAL_SERVICES_PRE_N && s_nsvc < cap; i++) {
         if (s_svcs_pre[i].svc != NULL) {

@@ -143,12 +143,32 @@
   }
 
   function poll() {
+    json_get("/capabilities", fill_self);
     json_get("/p2p/neighbors", fill_neighbors);
     json_get("/p2p/rpc/handlers", fill_rpc_handlers);
     json_get("/p2p/rpc/calls", fill_rpc_calls);
     json_get("/p2p/dstate", fill_dstate);
     json_get("/p2p/cloud", fill_cloud);
     json_get("/p2p/workspace", fill_workspace);
+  }
+
+  /* ---- Self Identity (from /capabilities + /inspect/self) ---- */
+  function fill_self(data) {
+    if (!data) return;
+    if (el("p2p-self-peer")) el("p2p-self-peer").textContent = "1 (local)";
+    if (el("p2p-self-zid") && data.zenoh_zid)
+      el("p2p-self-zid").textContent = data.zenoh_zid;
+    if (el("p2p-self-arch") && data.arch)
+      el("p2p-self-arch").textContent = data.arch;
+    /* /capabilities doesn't carry neighbor count — derive from the
+     * neighbors pane once it loads, or leave as-is. */
+    json_get("/inspect/self", function (sd) {
+      if (!sd) return;
+      if (el("p2p-self-nb") && sd.name)
+        el("p2p-self-nb").textContent = sd.name + " / " + (sd.arch || "?");
+      if (el("p2p-self-svc") && sd.services !== undefined)
+        el("p2p-self-svc").textContent = sd.services + " registered";
+    });
   }
 
   poll();
