@@ -36,6 +36,7 @@ def render_pages(module_names, template_dir):
         ("/", cr.render_home(registry, engine=engine)),
         ("/reg", cr.render_reg(registry, engine=engine)),
         ("/factory", cr.render_factory(registry, engine=engine)),
+        ("/p2p", cr.render_p2p(registry, engine=engine)),
     ]
 
 
