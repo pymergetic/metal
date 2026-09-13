@@ -16,6 +16,11 @@
 
 #define PM_METAL_JIT_C_ERR_MAX 256u
 #define PM_METAL_JIT_C_WASM_CAP (256u * 1024u)
+/* Temp directory for compile artifacts. A seat without /tmp (firmware,
+ * bare-metal) can override via -DPM_METAL_JIT_C_TMPDIR=/ram0/. */
+#ifndef PM_METAL_JIT_C_TMPDIR
+#define PM_METAL_JIT_C_TMPDIR "/tmp"
+#endif
 
 typedef struct {
     pm_metal_coop_coro_t coro;
@@ -585,8 +590,9 @@ static int32_t jit_c_object_compile_native(pm_util_mem_arena_t *arena,
     const char **defines, uint32_t n_defines,
     uint8_t **obj_out, size_t *obj_len,
     char *errbuf, size_t errbuf_len) {
-    char tmpl[] = "/tmp/.jit_c_obj_XXXXXX";
+    char tmpl[256];
     char diag_buf[1024]; /* TCC diagnostic capture — whole-invocation lifetime */
+    snprintf(tmpl, sizeof(tmpl), "%s/.jit_c_obj_XXXXXX", PM_METAL_JIT_C_TMPDIR);
     jmp_buf oom;         /* where an out-of-room outside a compile lands */
     int fd;
     FILE *f;
@@ -769,8 +775,9 @@ static int32_t jit_c_object_compile_arm(pm_util_mem_arena_t *arena,
     const char **defines, uint32_t n_defines,
     uint8_t **obj_out, size_t *obj_len,
     char *errbuf, size_t errbuf_len) {
-    char tmpl[] = "/tmp/.jit_c_arm_XXXXXX";
+    char tmpl[256];
     char diag_buf[1024]; /* TCC diagnostic capture — whole-invocation lifetime */
+    snprintf(tmpl, sizeof(tmpl), "%s/.jit_c_arm_XXXXXX", PM_METAL_JIT_C_TMPDIR);
     jit_c_diag_t diag;
     jmp_buf oom;         /* where an out-of-room outside a compile lands */
     int fd;
@@ -934,7 +941,8 @@ static int32_t jit_c_object_compile_x64(pm_util_mem_arena_t *arena,
     const char **defines, uint32_t n_defines,
     uint8_t **obj_out, size_t *obj_len,
     char *errbuf, size_t errbuf_len) {
-    char tmpl[] = "/tmp/.jit_c_x64_XXXXXX";
+    char tmpl[256];
+    snprintf(tmpl, sizeof(tmpl), "%s/.jit_c_x64_XXXXXX", PM_METAL_JIT_C_TMPDIR);
     char diag_buf[1024]; /* TCC diagnostic capture — whole-invocation lifetime */
     jit_c_diag_t diag;
     jmp_buf oom;         /* where an out-of-room outside a compile lands */

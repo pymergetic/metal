@@ -6,7 +6,9 @@
 
 #include <string.h>
 
+#ifndef NTP_LEN
 #define NTP_LEN 48u
+#endif
 #define NTP_UNIX 0x83aa7e80u
 #define NTP_WAIT_US 2000000ull
 #define NTP_SPINS 200000u

@@ -2,6 +2,7 @@
 #include "pymergetic/metal/display/__exports__.h"
 
 #include "pymergetic/metal/drivers/gfx.h"
+#include "pymergetic/util/limits.h"
 #include "pymergetic/util/mem.h"
 
 #include <string.h>
@@ -12,6 +13,9 @@
 #ifndef PM_METAL_DISPLAY_DEF_H
 #define PM_METAL_DISPLAY_DEF_H 16u
 #endif
+#ifndef PM_METAL_DISPLAY_MAX_BYTES
+#define PM_METAL_DISPLAY_MAX_BYTES (16u * 1024u * 1024u)
+#endif
 
 static pm_util_mem_arena_t *s_arena;
 static uint8_t *s_pix;
@@ -19,6 +23,9 @@ static uint32_t s_w;
 static uint32_t s_h;
 static uint32_t s_stride;
 static int32_t s_gfx_h;
+
+PM_UTIL_LIMIT_C(pm_display_limit_size, pymergetic.metal.display, max_bytes,
+    PM_METAL_DISPLAY_MAX_BYTES, 0u, NULL);
 
 int32_t pm_metal_display_init(pm_util_mem_arena_t *arena) {
     if (arena == NULL) {
@@ -65,6 +72,7 @@ int32_t pm_metal_display_attach_h(int32_t gfx_h) {
         return -1;
     }
     if (s_pix == NULL) {
+        size_t want;
         if (w == 0 || h == 0) {
             w = PM_METAL_DISPLAY_DEF_W;
             h = PM_METAL_DISPLAY_DEF_H;
@@ -73,7 +81,11 @@ int32_t pm_metal_display_attach_h(int32_t gfx_h) {
         if (stride < w * 3u) {
             stride = w * 3u;
         }
-        s_pix = pm_util_mem_alloc(s_arena, (size_t)stride * (size_t)h);
+        want = (size_t)stride * (size_t)h;
+        if (pm_display_limit_size.soft != 0u && want > (size_t)pm_display_limit_size.soft) {
+            return -1;
+        }
+        s_pix = pm_util_mem_alloc(s_arena, want);
         if (s_pix == NULL) {
             return -1;
         }

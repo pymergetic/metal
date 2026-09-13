@@ -175,6 +175,9 @@ const char *pm_metal_external_version(uint32_t i) {
 
 static int32_t pm_metal_boot_externals_init(pm_util_mem_arena_t *arena) {
     (void)arena;
+    /* This card is a read-only catalogue of vendored external TUs (TCC,
+     * mbedtls, zenoh-pico) that were linked into the binary at compile
+     * time. It has no runtime state — the arena is unused by design. */
     return 0;
 }
 

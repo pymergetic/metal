@@ -163,7 +163,6 @@ $(eval $(call tcc_instance,arm_eabi_cross,TCC_TARGET_ARM,$(CURDIR)/build/tcc/lib
 # posture as libgcc's __floatundixf shims in the build card's tests.
 TCC1_OBJS := $(CURDIR)/build/tcc/libtcc1.o $(CURDIR)/build/tcc/libtcc1_atomic.o \
 	$(CURDIR)/build/tcc/libtcc1_stdatomic.o
-TCC_DEPS := $(addprefix $(TCC_DIR)/,$(TCC_MANIFEST_SRCS))
 CPPFLAGS += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -I$(TCC_DIR) -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
 CPPFLAGS += -DPM_METAL_TCC_CROSS_WASM32=1
 CPPFLAGS += -DPM_METAL_TCC_CROSS_ARM_EABI=1
@@ -193,7 +192,11 @@ WASMMOD_TESTS_OBJ := \
 	$(CURDIR)/build/wasmmod-tests/io.o \
 	$(CURDIR)/build/wasmmod-tests/net-cdn.o \
 	$(CURDIR)/build/wasmmod-tests/nativecall.o \
-	$(CURDIR)/build/wasmmod-tests/util-limits.o
+	$(CURDIR)/build/wasmmod-tests/util-limits.o \
+	$(CURDIR)/build/wasmmod-tests/verify.o \
+	$(CURDIR)/build/wasmmod-tests/verify-impl.o \
+	$(CURDIR)/build/wasmmod-tests/pyexport.o \
+	$(CURDIR)/build/wasmmod-tests/pyexport-impl.o
 
 $(CURDIR)/build/wasmmod-tests/types.o: $(WASMMOD_SRC)/pymergetic/types/__tests__.c
 	@mkdir -p $(dir $@)
@@ -214,6 +217,22 @@ $(CURDIR)/build/wasmmod-tests/net-cdn.o: $(WASMMOD_SRC)/pymergetic/wasmmod/net/c
 $(CURDIR)/build/wasmmod-tests/nativecall.o: $(WASMMOD_SRC)/pymergetic/wasmmod/nativecall/__tests__.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DPM_MOD_TESTS=1 -c -o $@ $<
+
+$(CURDIR)/build/wasmmod-tests/pyexport.o: $(WASMMOD_SRC)/pymergetic/wasmmod/pyexport/__tests__.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DPM_MOD_TESTS=1 -c -o $@ $<
+
+$(CURDIR)/build/wasmmod-tests/pyexport-impl.o: $(WASMMOD_SRC)/pymergetic/wasmmod/pyexport/__impl__.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -c -o $@ $<
+
+$(CURDIR)/build/wasmmod-tests/verify.o: $(WASMMOD_SRC)/pymergetic/wasmmod/verify/__tests__.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) -DPM_MOD_TESTS=1 -c -o $@ $<
+
+$(CURDIR)/build/wasmmod-tests/verify-impl.o: $(WASMMOD_SRC)/pymergetic/wasmmod/verify/__impl__.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(WASMMOD_SRC) -I$(WASMMOD) $(CPPFLAGS) -UMICROPY_WASM_VERIFY -DMICROPY_WASM_VERIFY=0 -c -o $@ $<
 
 # The knob faces from C++ — the language the transpile chain and the mrustc shim
 # are written in. A consumer TU, compiled by $(CXX) and linked into the host
@@ -291,7 +310,7 @@ WASM_UPY := $(TOP)/ports/webassembly/build-metal/micropython.mjs
 WS ?= $(abspath $(TOP)/../..)
 VSCODE_CDB ?= $(WS)/.vscode/compile_commands.json
 
-.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico selfhost ksweep rsx-probe rsx-dump rsx-hwm rsx-span
+.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico selfhost ksweep rsx-probe rsx-dump rsx-hwm rsx-span wasm32-prove selfhost-feed cppx-feed cppx-self selfhost-self
 
 FORCE:
 

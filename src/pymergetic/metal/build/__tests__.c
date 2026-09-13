@@ -24,8 +24,6 @@
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
 
-#include <stdio.h>
-
 #if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
 #include "libtcc.h"
 #include <unistd.h>
@@ -44,7 +42,6 @@ unsigned __fixunsxfsi(long double v) {
 }
 #endif
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 

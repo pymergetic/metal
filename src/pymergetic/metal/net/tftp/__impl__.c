@@ -9,16 +9,24 @@
 #include <string.h>
 
 #define FILE_DEFAULT 4u
+#ifndef NAME_MAX
 #define NAME_MAX 40
+#endif
+#ifndef DATA_MAX
 #define DATA_MAX 512
+#endif
+#ifndef FILE_BYTES
 #define FILE_BYTES 2048
+#endif
+PM_UTIL_LIMIT_C(pm_tftp_limit_data, pymergetic.metal.net.tftp, data, FILE_BYTES, 0u, NULL);
 #define TFTP_WAIT_US 3000000ull
 #define TFTP_SPINS 200000u
 
 struct file {
     uint32_t used;
     char name[NAME_MAX];
-    uint8_t data[FILE_BYTES];
+    uint8_t *data;
+    uint32_t data_cap;
     uint16_t len;
 };
 
@@ -75,6 +83,13 @@ void pm_metal_net_tftp_deinit(void) {
         (void)pm_metal_net_ip_close(s_fd);
         s_fd = -1;
     }
+    {
+        uint32_t i;
+        for (i = 0; s_file != NULL && i < s_file_cap; i++) {
+            s_file[i].data = NULL;
+            s_file[i].data_cap = 0;
+        }
+    }
     s_file = NULL;
     s_file_cap = 0;
     s_file_used = 0;
@@ -84,9 +99,13 @@ void pm_metal_net_tftp_deinit(void) {
 int32_t pm_metal_net_tftp_add(const char *name, const uint8_t *data, uint16_t len) {
     uint32_t i;
     uint32_t n;
-    if (name == NULL || name[0] == 0 || data == NULL || len == 0 || len > FILE_BYTES) {
+    uint32_t dcap;
+    if (name == NULL || name[0] == 0 || data == NULL || len == 0) {
         return -1;
     }
+    dcap = pm_tftp_limit_data.soft;
+    if (dcap == 0u || dcap > FILE_BYTES) dcap = FILE_BYTES;
+    if (len > dcap) return -1;
     for (i = 0; i < s_file_cap; i++) {
         if (s_file[i].used) {
             continue;
@@ -97,6 +116,11 @@ int32_t pm_metal_net_tftp_add(const char *name, const uint8_t *data, uint16_t le
             n++;
         }
         s_file[i].name[n] = 0;
+        if (s_file[i].data == NULL) {
+            s_file[i].data = pm_util_mem_alloc(s_arena, dcap);
+            if (s_file[i].data == NULL) return -1;
+            s_file[i].data_cap = dcap;
+        }
         memcpy(s_file[i].data, data, len);
         s_file[i].len = len;
         s_file[i].used = 1;
@@ -116,6 +140,9 @@ int32_t pm_metal_net_tftp_add(const char *name, const uint8_t *data, uint16_t le
             n++;
         }
         s_file[s_file_cap - 1u].name[n] = 0;
+        s_file[s_file_cap - 1u].data = pm_util_mem_alloc(s_arena, dcap);
+        if (s_file[s_file_cap - 1u].data == NULL) return -1;
+        s_file[s_file_cap - 1u].data_cap = dcap;
         memcpy(s_file[s_file_cap - 1u].data, data, len);
         s_file[s_file_cap - 1u].len = len;
         s_file[s_file_cap - 1u].used = 1;

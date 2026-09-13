@@ -31,10 +31,13 @@
 #define PM_METAL_INSPECT_MOD_MAX 256u
 #endif
 
-static char s_body[PM_METAL_INSPECT_BODY];
+static char *s_body;
+static uint32_t s_body_cap;
 static int32_t s_status;
 
 PM_UTIL_LIMIT_C(pm_inspect_limit_img, pymergetic.metal.inspect, img, 48u, 0u, NULL);
+PM_UTIL_LIMIT_C(pm_inspect_limit_body, pymergetic.metal.inspect, body, PM_METAL_INSPECT_BODY, 0u, NULL);
+PM_UTIL_LIMIT_C(pm_inspect_limit_mod, pymergetic.metal.inspect, mod, PM_METAL_INSPECT_MOD_MAX, 0u, NULL);
 
 typedef struct {
     char *p;
@@ -186,8 +189,10 @@ static void fill_caps(js_t *j) {
 }
 
 static void fill_reg(js_t *j, int tree) {
-    uint16_t idx[PM_METAL_INSPECT_MOD_MAX];
-    uint32_t n = sorted_ids(idx, PM_METAL_INSPECT_MOD_MAX);
+    uint32_t mod_cap = pm_inspect_limit_mod.soft;
+    if (mod_cap == 0u || mod_cap > PM_METAL_INSPECT_MOD_MAX) mod_cap = PM_METAL_INSPECT_MOD_MAX;
+    uint16_t *idx = (uint16_t *)__builtin_alloca(mod_cap * sizeof(uint16_t));
+    uint32_t n = sorted_ids(idx, mod_cap);
     uint32_t i;
     if (tree) {
         js_raw(j, "registry  ");
@@ -880,7 +885,7 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
  * body = pm_metal_inspect_body();  // {"ok":true}
  */
 int32_t pm_metal_inspect_handle(const char *method, const char *path) {
-    s_status = fill(method, path, s_body, sizeof(s_body));
+    s_status = fill(method, path, s_body, s_body_cap);
     return s_status;
 }
 
@@ -3122,9 +3127,19 @@ static int32_t add_route(const char *path) {
 }
 
 int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
+    uint32_t body_cap;
     if (arena == NULL) {
         return -1;
     }
+    body_cap = pm_inspect_limit_body.soft;
+    if (body_cap == 0u || body_cap > PM_METAL_INSPECT_BODY) {
+        body_cap = PM_METAL_INSPECT_BODY;
+    }
+    s_body = (char *)pm_util_mem_alloc(arena, (size_t)body_cap);
+    if (s_body == NULL) {
+        return -1;
+    }
+    s_body_cap = body_cap;
     s_body[0] = 0;
     s_status = 0;
     (void)add_route("/health");
@@ -3234,7 +3249,8 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
 }
 
 void pm_metal_inspect_deinit(void) {
-    s_body[0] = 0;
+    s_body = NULL;
+    s_body_cap = 0;
     s_status = 0;
 }
 

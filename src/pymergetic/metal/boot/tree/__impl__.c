@@ -64,6 +64,7 @@ static uint32_t s_msg_cap;
 
 /* Knob — soft grows the msg pool; hard pins the ceiling. */
 PM_UTIL_LIMIT_C(pm_boot_limit_msg, pymergetic.metal.boot.tree, msg, PM_METAL_BOOT_MSG_MAX, 0u, NULL);
+PM_UTIL_LIMIT_C(pm_boot_limit_util, pymergetic.metal.boot.tree, util, PM_METAL_BOOT_UTIL_MAX, 0u, NULL);
 static uint32_t s_nfail;
 
 void pm_metal_boot_msg_fail(void) {
@@ -292,6 +293,8 @@ static void msg_mods(int last) {
     int have_wasm;
 
     (void)last;
+    uint32_t util_cap = pm_boot_limit_util.soft;
+    if (util_cap == 0u || util_cap > PM_METAL_BOOT_UTIL_MAX) util_cap = PM_METAL_BOOT_UTIL_MAX;
     memset(leaves, 0, sizeof(leaves));
     for (i = 0; i < nmod; i++) {
         uint8_t buf[192];
@@ -323,7 +326,7 @@ static void msg_mods(int last) {
                 break;
             }
         }
-        if (!seen && nleaf < PM_METAL_BOOT_UTIL_MAX) {
+        if (!seen && nleaf < util_cap) {
             memcpy(leaves[nleaf], leaf, PM_METAL_BOOT_UTIL_NAME);
             nleaf++;
         }

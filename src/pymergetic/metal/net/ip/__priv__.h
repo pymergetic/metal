@@ -24,7 +24,9 @@
  * and a socket costs its own bytes for as long as it is open. */
 #define PM_METAL_IP_SOCK_DEFAULT 32u
 #define PM_METAL_IP_RX_DEFAULT 8192u
+#ifndef PM_METAL_IP_PKT_MAX
 #define PM_METAL_IP_PKT_MAX 8232
+#endif
 #define PM_METAL_IP_TCP_MSS (PM_METAL_IP_PKT_MAX - 40u)
 
 #define PM_METAL_IP_LO_BE 0x7f000001u

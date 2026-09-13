@@ -9,8 +9,12 @@
 #include <string.h>
 
 #define ZONE_DEFAULT 8u
+#ifndef NAME_MAX
 #define NAME_MAX 80
+#endif
+#ifndef DNS_MAX
 #define DNS_MAX 512
+#endif
 #define DNS_PORT 53u
 #define DNS_WAIT_US 2000000ull
 #define DNS_SPINS 200000u

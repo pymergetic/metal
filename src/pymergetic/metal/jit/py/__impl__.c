@@ -153,7 +153,6 @@ pm_metal_coop_status_t pm_metal_jit_py_compile_step(pm_metal_coop_coro_t *self) 
 #if MICROPY_PY_WASM && !PM_WASMMOD_GUEST && MICROPY_PERSISTENT_CODE_SAVE
 #include "py/persistentcode.h"
 #include "py/mpprint.h"
-#include "py/objmodule.h"
 
 typedef struct {
     pm_util_mem_arena_t *arena;
