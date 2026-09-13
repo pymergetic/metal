@@ -149,6 +149,7 @@ static MP_DEFINE_CONST_FUN_OBJ_0(metal_ready_obj, metal_ready);
 
 static mp_obj_t metal_poll(void) {
     metal_ensure();
+    mp_metal_packs_try_start();
     pm_metal_coop_poll();
     return mp_const_none;
 }
@@ -953,22 +954,23 @@ void mp_metal_packs_start(int last) {
     pm_metal_boot_msg_item(last, 0, 0, "packs", "FAIL  renderer unavailable");
 }
 
-/* Autostart for a seat that brings its listeners up by itself. Whoever starts
- * them says so here; this file must not read the environment, because firmware
- * has none. The renderer cannot start at that moment anyway — listeners come up
- * from mp_init(), far too early to touch Python — so it joins on the MOTD
- * surface, which walks once the VM is up, and reports in the same banner as the
- * rest of the seat's readiness. */
-static void msg_packs(int last) {
-    mp_metal_packs_start(last);
+/* Deferred: report "pending" inline so the MOTD closes cleanly. The packs
+ * renderer imports Python modules (utemplate, catalog_render, openapi, ...)
+ * and walks all 76 cards for API docs — a deep import chain that triggers GC
+ * stack scans. Doing it synchronously from the MOTD hook crashes the coop
+ * runner (SIGSEGV at spare TLSF boundary). Start lazily on first poll. */
+static bool s_packs_pending = false;
+
+void mp_metal_packs_autostart(void) {
+    pm_metal_boot_msg_item(1, 0, 0, "packs", "ok  pending");
+    s_packs_pending = true;
 }
 
-/* Attached here rather than from a constructor: a card that draws nothing
- * still counts as a node on the surface, and the motd ends on its last card,
- * so a silent one would leave the tree without a closing branch. */
-void mp_metal_packs_autostart(void) {
-    (void)pm_metal_boot_msg_attach(PM_METAL_BOOT_SURF_MOTD,
-        PM_METAL_BOOT_MSG_MOTD_REPL + 1u, msg_packs);
+void mp_metal_packs_try_start(void) {
+    if (s_packs_pending) {
+        s_packs_pending = false;
+        mp_metal_packs_start(1);
+    }
 }
 
 /* m.serve(): data-driven convenience — start the default instance of every

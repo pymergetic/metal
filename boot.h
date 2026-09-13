@@ -22,6 +22,7 @@ void pm_metal_upy_port_init(void);
  * drawn into. */
 void mp_metal_packs_start(int last);
 void mp_metal_packs_autostart(void);
+void mp_metal_packs_try_start(void);
 
 void *pm_metal_wasm_malloc(size_t n);
 void pm_metal_wasm_free(void *p);

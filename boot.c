@@ -25,7 +25,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <signal.h>
 #if !defined(__EMSCRIPTEN__)
+#include <execinfo.h>
 #include <sys/mman.h>
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
@@ -42,6 +45,16 @@
 #endif
 #ifndef PM_METAL_CDN_DEFAULT
 #define PM_METAL_CDN_DEFAULT "https://cdn.pymergetic.com/cdn"
+#endif
+
+#if !defined(__EMSCRIPTEN__)
+static void bt_sigsegv(int sig, siginfo_t *si, void *ctx) {
+    void *bt[64];
+    int n = backtrace(bt, 64);
+    fprintf(stderr, "\n=== SIGSEGV si_addr=%p ===\n", si->si_addr);
+    backtrace_symbols_fd(bt, n, STDERR_FILENO);
+    _exit(128 + sig);
+}
 #endif
 
 static void *s_backing;
@@ -177,6 +190,20 @@ void pm_metal_upy_port_init(void) {
     if (pm_metal_boot() != 0) {
         fputs("metal boot failed\n", stderr);
     }
+#if !defined(__EMSCRIPTEN__)
+    /* Catch crashes AFTER boot (Rust ctors already set up alt stack).
+     * SA_SIGINFO|SA_ONSTACK|SA_RESETHAND — fires once, prints backtrace,
+     * exits. Runs on the altstack Rust already configured. */
+    {
+        struct sigaction sa;
+        sigaction(SIGSEGV, NULL, &sa);
+        sa.sa_sigaction = bt_sigsegv;
+        sa.sa_flags |= SA_SIGINFO | SA_RESETHAND;
+        sigaction(SIGSEGV, &sa, NULL);
+        sigaction(SIGBUS, NULL, &sa);
+        sigaction(SIGBUS, &sa, NULL);
+    }
+#endif
     /* Give the seat a bench clock so wm.bench_all()/wm.bench() report ns/op
      * instead of "no clock". Benches are informational and never gate; without
      * this a bench just stays honest. The clock is the async mono_us the
