@@ -138,6 +138,22 @@ def render(path):
         fqn = path[len(_PREFIX):]
         if fqn.endswith("/"):
             fqn = fqn[:-1]
+        if fqn == "docs" or fqn == "docs/":
+            # /packs/docs — API docs rendered through the shared shell chrome.
+            # openapi.docs_inner_html() is the swagger bloc; shell wraps it.
+            body_html = _openapi().docs_inner_html().decode("utf-8", errors="replace")
+            fqns = _cr._cards(_cr._modules(_registry()))
+            nav = _cr._nav(_cr._tree_of(sorted(fqns)))
+            shell = _cr.shell_ctx([], title="API — pymergetic.metal",
+                                  body_html=body_html, nav_html_override=nav,
+                                  nav_active="docs",
+                                  page_head='<link rel="stylesheet" href="/static/css/swagger-theme.css" />'
+                                            '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" crossorigin>',
+                                  page_js=None)
+            # The API docs page loads swagger-ui bundle, not the Inspect commander.
+            shell["inspect_js"] = ""
+            html = _cr.FrozenEngine().render("shell.html", shell)
+            return html.encode(), None
         html = None
         if fqn:
             html = _cr.render_package(_registry(), fqn, engine=engine())
@@ -150,6 +166,20 @@ def render(path):
         return html.encode(), None
     # The shared commander's API: artifact + package-catalog routes and the
     # FastAPI-style docs page. One pump answers all of them.
+    if path == "/docs" or path == "/docs/":
+        # Render through the shared shell chrome when the seat has the renderer.
+        body_html = _openapi().docs_inner_html().decode("utf-8", errors="replace")
+        fqns = _cr._cards(_cr._modules(_registry()))
+        nav = _cr._nav(_cr._tree_of(sorted(fqns)))
+        shell = _cr.shell_ctx([], title="API — pymergetic.metal",
+                              body_html=body_html, nav_html_override=nav,
+                              nav_active="docs",
+                              page_head='<link rel="stylesheet" href="/static/css/swagger-theme.css" />'
+                                        '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" crossorigin>',
+                              page_js=None)
+        shell["inspect_js"] = ""
+        html = _cr.FrozenEngine().render("shell.html", shell)
+        return html.encode(), None
     body, _status = _openapi().route(path)
     if body is not None:
         return body, None

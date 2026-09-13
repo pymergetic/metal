@@ -340,7 +340,12 @@ def shell_ctx(catalog, *, title, active_package="", body_html="", nav_html_overr
         "title": title,
         "site_css": _href("static", "site.css"),
         "page_head": page_head + _console_head(),
-        "body_class": "",
+        "body_class": (
+            "page-docs" if nav_active == "docs"
+            else "page-reg" if nav_active == "reg"
+            else "page-factory" if nav_active == "factory"
+            else ""
+        ),
         "base_path": base_path,
         "experimental": False,
         "experimental_message": "",
@@ -363,7 +368,7 @@ def shell_ctx(catalog, *, title, active_package="", body_html="", nav_html_overr
         "nav_users_cls": "",
         "nav_publish_cls": "",
         "nav_sessions_cls": "",
-        "nav_docs_cls": "",
+        "nav_docs_cls": "is-active" if nav_active == "docs" else "",
         "nav_login_cls": "",
         "nav_federation": "",
         "nav_federation_cls": "",

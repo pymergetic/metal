@@ -217,6 +217,89 @@ def build():
                     tags=["inspect"],
                 ),
             },
+            "/build": {
+                "post": _op(
+                    "rebuild all cards",
+                    {"type": "object"},
+                    tags=["build"],
+                ),
+            },
+            "/build/{fqn}": {
+                "post": _op(
+                    "rebuild one card",
+                    {"type": "object"},
+                    params=[_param("fqn", "path", True, {"type": "string"})],
+                    tags=["build"],
+                ),
+            },
+            "/build/events": {
+                "get": _op(
+                    "build event log",
+                    {"type": "array"},
+                    tags=["build"],
+                ),
+            },
+            "/build/objects": {
+                "get": _op(
+                    "retained object manifest",
+                    {"type": "array"},
+                    tags=["build"],
+                ),
+            },
+            "/build/objects/{name}": {
+                "get": _op(
+                    "one retained object (binary .a)",
+                    {"type": "string", "format": "byte"},
+                    params=[_param("name", "path", True, {"type": "string"})],
+                    tags=["build"],
+                ),
+            },
+            "/images": {
+                "get": _op(
+                    "firmware image manifest",
+                    {"type": "array"},
+                    tags=["firmware"],
+                ),
+            },
+            "/images/{name}": {
+                "get": _op(
+                    "one firmware image (binary)",
+                    {"type": "string", "format": "byte"},
+                    params=[_param("name", "path", True, {"type": "string"})],
+                    tags=["firmware"],
+                ),
+            },
+            "/console/{id}": {
+                "get": _op(
+                    "console output since last poll",
+                    {"type": "object"},
+                    params=[_param("id", "path", True, {"type": "integer"})],
+                    tags=["console"],
+                ),
+            },
+            "/console/exec": {
+                "post": _op(
+                    "execute a line on the REPL",
+                    {"type": "object"},
+                    tags=["console"],
+                ),
+            },
+            "/docs/{fqn}": {
+                "get": _op(
+                    "card documentation",
+                    {"type": "object"},
+                    params=[_param("fqn", "path", True, {"type": "string"})],
+                    tags=["inspect"],
+                ),
+            },
+            "/changes/{fqn}": {
+                "get": _op(
+                    "card version / changelog",
+                    {"type": "object"},
+                    params=[_param("fqn", "path", True, {"type": "string"})],
+                    tags=["inspect"],
+                ),
+            },
             "/artifacts/lead/{artifact}/inspect": {
                 "get": _op(
                     "artifact inspect digest",
@@ -322,17 +405,31 @@ def openapi_json_bytes():
 
 def docs_html():
     """The /docs page — reuses the same swagger-ui CDN tag as the CDN's docs.html."""
+    inner = docs_inner_html()
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         "<title>pymergetic.metal — API</title>"
-        # The API page is reached from the same top nav as every other view, so
-        # it wears the same tokens/chrome sheet instead of arriving unstyled.
         "<link rel=\"stylesheet\" href=\"/static/site.css\">"
+        "<link rel=\"stylesheet\" href=\"/static/css/swagger-theme.css\">"
         "<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css\" crossorigin>"
-        "</head><body>"
-        "<section class=\"docs-hero\"><p class=\"eyebrow\">OpenAPI</p>"
+        "</head><body class=\"page-docs\">"
+        + inner.decode("utf-8", errors="replace") +
+        "</body></html>"
+    ).encode()
+
+
+def docs_inner_html():
+    """Return the swagger-ui content bloc (no outer <html>/<head>/<body>).
+    The shell wraps this into the shared chrome on seats that render
+    through the utemplate engine, and docs_html() wraps it in a minimal
+    standalone document for seats that don't have the renderer."""
+    return (
+        "<section class=\"docs-hero\">"
+        "<p class=\"eyebrow\">OpenAPI</p>"
         "<h1>API</h1>"
-        "<p class=\"lede\">Interactive schema for the seat's inspect, artifact, and package API.</p></section>"
+        "<p class=\"lede\">Interactive schema for every seat endpoint — inspect, "
+        "artifacts, packages, build, console, images, and the full registry.</p>"
+        "</section>"
         "<div id=\"swagger-ui\" class=\"swagger-host\"></div>"
         "<script src=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js\" crossorigin></script>"
         "<script>window.ui = SwaggerUIBundle({"
@@ -347,7 +444,6 @@ def docs_html():
         "docExpansion: \"list\","
         "defaultModelsExpandDepth: 1"
         "});</script>"
-        "</body></html>"
     ).encode()
 
 
