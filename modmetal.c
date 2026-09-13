@@ -946,36 +946,23 @@ static bool s_packs_pending = false;
  * it would leave every catalog link timing out, so both entry points into
  * "serving" — m.serve() and the METAL_SERVE autostart — come through here.
  *
- * Auto-GC is disabled during the import: Python imports in the packs renderer
- * chain trigger GC stack scans. The coop runner's C stack contains pointers
- * into the spare TLSF pool — GC follows them, corrupts TLSF metadata, crashes
- * at the next allocation (SIGSEGV 4 MB below arena).  We collect once before
- * to clean roots, disable auto-GC, import, then re-enable.
- *
  * s_packs_pending is cleared so try_start won't double-fire after a direct
  * serve() call. */
 void mp_metal_packs_start(int last) {
     nlr_buf_t nlr;
     /* Prevent try_start from double-firing after serve() already ran. */
     s_packs_pending = false;
-    /* Disable auto-GC: coop runner C stack has stale spare-TLSF pointers. */
-    mp_state_ctx.mem.gc_auto_collect_enabled = 0;
-    /* Force one clean collect with the main-thread stack so GC knows real roots. */
-    extern void gc_collect(void);
-    gc_collect();
     if (nlr_push(&nlr) == 0) {
         mp_obj_t mod = mp_import_name(MP_QSTR_metal_packs, mp_const_none,
             MP_OBJ_NEW_SMALL_INT(0));
         mp_obj_t res = mp_call_function_0(mp_load_attr(mod, MP_QSTR_start));
         nlr_pop();
-        mp_state_ctx.mem.gc_auto_collect_enabled = 1;
         /* start() answers with the tree's own grammar ("ok  rendering"), so
          * the node reads like every other one on the surface instead of a
          * bare line printed after the tree had already closed. */
         pm_metal_boot_msg_item(last, 0, 0, "packs", mp_obj_str_get_str(res));
         return;
     }
-    mp_state_ctx.mem.gc_auto_collect_enabled = 1;
     pm_metal_boot_msg_item(last, 0, 0, "packs", "FAIL  renderer unavailable");
 }
 

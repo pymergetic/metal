@@ -90,7 +90,9 @@ int64_t pm_metal_cloud_offer(const char *target, const uint8_t *source, uint32_t
     src_hash = fnv1a_32(source, source_len);
     memset(&s_jobs[s_n], 0, sizeof(s_jobs[s_n]));
     s_jobs[s_n].job_id = s_next_job_id++;
-    s_jobs[s_n].peer_id = 0; /* unclaimed */
+    /* OFFERED state means unclaimed. peer_id 0 is the loopback host, the
+     * same localhost convention used by the services registry. */
+    s_jobs[s_n].peer_id = 0;
     strncpy(s_jobs[s_n].target, target, sizeof(s_jobs[s_n].target) - 1);
     s_jobs[s_n].target[sizeof(s_jobs[s_n].target) - 1] = '\0';
     s_jobs[s_n].src_hash = src_hash;
@@ -106,9 +108,6 @@ int64_t pm_metal_cloud_offer(const char *target, const uint8_t *source, uint32_t
 /* ---------------- claim ---------------- */
 int32_t pm_metal_cloud_claim(uint64_t job_id, uint32_t peer_id) {
     int32_t idx;
-    if (peer_id == 0) {
-        return -1;
-    }
     idx = find_job(job_id);
     if (idx < 0) {
         return -1; /* not found */

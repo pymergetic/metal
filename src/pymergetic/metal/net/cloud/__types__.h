@@ -35,7 +35,7 @@ typedef enum pm_metal_cloud_job_state {
 
 typedef struct pm_metal_cloud_job {
     uint64_t job_id;
-    uint32_t peer_id;           /* peer that claimed it (0 = unclaimed) */
+    uint32_t peer_id;           /* claimant; 0 = this host (localhost) */
     char target[PM_METAL_CLOUD_TARGET_MAX];  /* what to compile */
     uint32_t src_hash;          /* hash of source (for cache matching) */
     pm_metal_cloud_job_state_t state;

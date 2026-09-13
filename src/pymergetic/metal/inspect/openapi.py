@@ -191,6 +191,30 @@ def build():
             "/inspect/self": {
                 "get": _op("self description", {"type": "object"}, tags=["inspect"]),
             },
+            "/p2p/self": {
+                "get": _op("local loopback peer identity", {"type": "object"}, tags=["p2p"]),
+            },
+            "/p2p/neighbors": {
+                "get": _op("remote neighbor table", {"type": "object"}, tags=["p2p"]),
+            },
+            "/p2p/rpc/handlers": {
+                "get": _op("RPC handler registry", {"type": "object"}, tags=["p2p"]),
+            },
+            "/p2p/rpc/calls": {
+                "get": _op("completed RPC calls", {"type": "object"}, tags=["p2p"]),
+            },
+            "/p2p/dstate": {
+                "get": _op("distributed state replica", {"type": "object"}, tags=["p2p"]),
+            },
+            "/p2p/cloud": {
+                "get": _op("cloud compile jobs", {"type": "object"}, tags=["p2p"]),
+            },
+            "/p2p/cloud/test": {
+                "post": _op("run loopback cloud orchestration test", {"type": "object"}, tags=["p2p"]),
+            },
+            "/p2p/workspace": {
+                "get": _op("shared workspace files", {"type": "object"}, tags=["p2p"]),
+            },
             "/inspect/reg": {
                 "get": _op(
                     "registry ledger",

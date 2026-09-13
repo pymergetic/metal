@@ -4,16 +4,18 @@
 
   function el(id) { return document.getElementById(id); }
 
-  function json_get(url, cb) {
+  function json_request(method, url, cb) {
     var x = new XMLHttpRequest();
     x.onload = function () {
       try { cb(JSON.parse(x.responseText || "{}"), null); }
       catch (e) { cb(null, e); }
     };
     x.onerror = function () { cb(null, "fetch failed"); };
-    x.open("GET", url);
+    x.open(method, url);
     x.send();
   }
+
+  function json_get(url, cb) { json_request("GET", url, cb); }
 
   /* ---- Neighbors ---- */
   function fill_neighbors(data) {
@@ -106,7 +108,7 @@
         var tr = tbody.insertRow();
         tr.insertCell().textContent = j.job_id;
         tr.insertCell().textContent = j.target || "";
-        tr.insertCell().textContent = j.peer_id || "—";
+        tr.insertCell().textContent = j.peer_id === 0 ? "0 (localhost)" : (j.peer_id || "—");
         tr.insertCell().textContent = j.state || "—";
         var art = "";
         if (j.state === "done" && j.artifact_len)
@@ -143,7 +145,7 @@
   }
 
   function poll() {
-    json_get("/capabilities", fill_self);
+    json_get("/p2p/self", fill_self);
     json_get("/p2p/neighbors", fill_neighbors);
     json_get("/p2p/rpc/handlers", fill_rpc_handlers);
     json_get("/p2p/rpc/calls", fill_rpc_calls);
@@ -155,22 +157,37 @@
   /* ---- Self Identity (from /capabilities + /inspect/self) ---- */
   function fill_self(data) {
     if (!data) return;
-    if (el("p2p-self-peer")) el("p2p-self-peer").textContent = "1 (local)";
-    if (el("p2p-self-zid") && data.zenoh_zid)
-      el("p2p-self-zid").textContent = data.zenoh_zid;
-    if (el("p2p-self-arch") && data.arch)
-      el("p2p-self-arch").textContent = data.arch;
-    /* /capabilities doesn't carry neighbor count — derive from the
-     * neighbors pane once it loads, or leave as-is. */
-    json_get("/inspect/self", function (sd) {
-      if (!sd) return;
-      if (el("p2p-self-nb") && sd.name)
-        el("p2p-self-nb").textContent = sd.name + " / " + (sd.arch || "?");
-      if (el("p2p-self-svc") && sd.services !== undefined)
-        el("p2p-self-svc").textContent = sd.services + " registered";
+    if (el("p2p-self-peer"))
+      el("p2p-self-peer").textContent = String(data.peer_id) + " (loopback)";
+    if (el("p2p-self-host")) el("p2p-self-host").textContent = data.host || "localhost";
+    if (el("p2p-self-zid")) el("p2p-self-zid").textContent = data.zenoh_zid || "unavailable";
+    if (el("p2p-self-arch"))
+      el("p2p-self-arch").textContent = (data.arch || "unknown") + " / " + (data.board || data.seat || "unknown");
+    if (el("p2p-self-nb")) el("p2p-self-nb").textContent = String(data.neighbor_count || 0) + " remote";
+    if (el("p2p-self-svc"))
+      el("p2p-self-svc").textContent = String(data.local_services || 0) + " local, " + String(data.remote_services || 0) + " remote";
+  }
+
+  function cloud_test() {
+    var button = el("p2p-cloud-test");
+    var status = el("p2p-cloud-test-status");
+    if (button) button.disabled = true;
+    if (status) status.textContent = "running loopback orchestration test…";
+    json_request("POST", "/p2p/cloud/test", function (data, err) {
+      if (button) button.disabled = false;
+      if (err || !data || !data.ok) {
+        if (status) status.textContent = "test failed" + (data && data.error ? ": " + data.error : "");
+        return;
+      }
+      if (status) status.textContent = "job " + data.job_id + " completed on " + data.executor
+        + " (" + data.artifact_len + " B probe artifact)";
+      json_get("/p2p/cloud", fill_cloud);
     });
   }
 
+  var cloudButton = el("p2p-cloud-test");
+  if (cloudButton) cloudButton.addEventListener("click", cloud_test);
+  json_get("/p2p/self", fill_self);
   poll();
   setInterval(poll, POLL_MS);
 })();

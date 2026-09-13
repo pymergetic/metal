@@ -51,7 +51,12 @@ static int32_t case_handle(void) {
         return fail("self status");
     }
     body = pm_metal_inspect_body();
-    if (body == NULL || strstr(body, "\"name\":\"pymergetic.metal\"") == NULL) {
+    if (body == NULL || strstr(body, "\"name\":\"pymergetic.metal\"") == NULL
+        || strstr(body, "\"peer_id\":0") == NULL
+        || strstr(body, "\"local\":true") == NULL
+        || strstr(body, "\"host\":\"localhost\"") == NULL
+        || strstr(body, "\"zenoh_zid\":\"") == NULL
+        || strstr(body, "\"local_services\":") == NULL) {
         return fail("self body");
     }
     if (pm_metal_inspect_handle("GET", "/inspect/reg") != 200) {
@@ -150,6 +155,31 @@ static int32_t case_handle(void) {
         if (pm_metal_inspect_example("pymergetic.metal.inspect", "no_such_face") != NULL) {
             return fail("example unknown face");
         }
+    }
+    if (pm_metal_inspect_handle("GET", "/p2p/self") != 200) {
+        return fail("p2p self status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"peer_id\":0") == NULL
+        || strstr(body, "\"host\":\"localhost\"") == NULL) {
+        return fail("p2p self body");
+    }
+    if (pm_metal_inspect_handle("GET", "/p2p/rpc/calls") != 200) {
+        return fail("p2p rpc calls status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strcmp(body, "{\"pending\":[]}") != 0) {
+        return fail("p2p rpc calls empty body");
+    }
+    if (pm_metal_inspect_handle("POST", "/p2p/cloud/test") != 200) {
+        return fail("p2p cloud test status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"ok\":true") == NULL
+        || strstr(body, "\"mode\":\"loopback-orchestration\"") == NULL
+        || strstr(body, "\"executor\":\"localhost\"") == NULL
+        || strstr(body, "\"state\":\"done\"") == NULL) {
+        return fail("p2p cloud test body");
     }
     if (pm_metal_inspect_handle("GET", "/capabilities") != 200) {
         return fail("caps status");

@@ -2,6 +2,9 @@
 #include "pymergetic/metal/inspect/__exports__.h"
 
 #include "pymergetic/metal/console.h"
+#include "pymergetic/metal/boot/__exports__.h"
+#include "pymergetic/metal/services/__exports__.h"
+#include "pymergetic/metal/net/zenoh/__exports__.h"
 /* for the mono clock a console tap is stamped with */
 #include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/http/asgi.h"
@@ -55,6 +58,8 @@ typedef struct {
     uint32_t n;
     uint32_t max;
 } js_t;
+
+static void js_hex(js_t *j, const uint8_t *data, uint32_t len);
 
 static int js_ok(const js_t *j) {
     return j->n < j->max;
@@ -183,9 +188,34 @@ static uint32_t sorted_ids(uint16_t *idx, uint32_t idx_max) {
 }
 
 static void fill_self(js_t *j) {
+    uint8_t zid[PM_METAL_NET_ZENOH_ZID_LEN];
+    uint32_t nsvc = pm_metal_services_count();
+    uint32_t local_svc = 0;
+    uint32_t remote_svc = 0;
+    uint32_t i;
+    const char *seat = pm_metal_boot_seat();
+    int have_zid = pm_metal_net_zenoh_zid(zid) == 1;
+    for (i = 0; i < nsvc; i++) {
+        if (pm_metal_services_peer_of(i) == 0u) local_svc++;
+        else remote_svc++;
+    }
     js_raw(j, "{\"schema\":1,\"name\":\"pymergetic.metal\",\"role\":\"kernel\",");
     js_raw(j, "\"product\":\"metal\",\"org\":\"pymergetic\",\"theme\":\"metal\",");
-    js_raw(j, "\"has_source\":false,\"has_pack\":true,\"static_backend\":\"embed\",");
+    /* peer_id 0 is the explicit loopback identity throughout services: it is
+     * this host, never a remote neighbor. */
+    js_raw(j, "\"peer_id\":0,\"local\":true,\"host\":\"localhost\",");
+    js_raw(j, "\"seat\":"); js_str(j, seat != NULL ? seat : "unknown");
+    js_raw(j, ",\"arch\":");
+    js_str(j, pm_metal_jit_c_target_arch(PM_METAL_JIT_C_TARGET_SEAT));
+    js_raw(j, ",\"board\":"); js_str(j, seat != NULL ? seat : "unknown");
+    js_raw(j, ",\"zenoh_zid\":");
+    if (have_zid) { js_ch(j, '"'); js_hex(j, zid, sizeof(zid)); js_ch(j, '"'); }
+    else js_raw(j, "null");
+    js_raw(j, ",\"neighbor_count\":"); js_u32(j, pm_metal_neighbors_count());
+    js_raw(j, ",\"services\":"); js_u32(j, nsvc);
+    js_raw(j, ",\"local_services\":"); js_u32(j, local_svc);
+    js_raw(j, ",\"remote_services\":"); js_u32(j, remote_svc);
+    js_raw(j, ",\"has_source\":false,\"has_pack\":true,\"static_backend\":\"embed\",");
     js_raw(j, "\"source_files\":[],\"pack_files\":[\"httpd.json\"],");
     js_raw(j, "\"tags\":{\"role\":\"kernel\",\"product\":\"metal\",\"org\":\"pymergetic\"}}");
 }
@@ -809,6 +839,46 @@ static void fill_dstate_entries(js_t *j) {
     js_raw(j, "]}");
 }
 
+static pm_util_lock_t s_cloud_test_lock;
+static uint64_t s_cloud_test_job_id;
+
+static void fill_cloud_test(js_t *j) {
+    static const uint8_t source[] = "int cloud_probe(void) { return 42; }";
+    static const uint8_t artifact[] = { 'P', 'M', 'C', 'L', 'D', 1u };
+    pm_metal_cloud_job_t job;
+    int64_t jid;
+    int32_t rc;
+    pm_util_lock_acquire(&s_cloud_test_lock);
+    if (s_cloud_test_job_id != 0u
+        && pm_metal_cloud_job_state(s_cloud_test_job_id, &job) == 0) {
+        jid = (int64_t)s_cloud_test_job_id;
+        rc = 0;
+    } else {
+        jid = pm_metal_cloud_offer(
+            pm_metal_jit_c_target_arch(PM_METAL_JIT_C_TARGET_SEAT),
+            source, (uint32_t)(sizeof(source) - 1u));
+        rc = jid < 0 ? -1 : pm_metal_cloud_claim((uint64_t)jid, 0u);
+        if (rc == 0) {
+            rc = pm_metal_cloud_submit((uint64_t)jid, artifact,
+                (uint32_t)sizeof(artifact), 0, NULL);
+        }
+        if (rc == 0) s_cloud_test_job_id = (uint64_t)jid;
+    }
+    js_raw(j, "{\"ok\":"); js_raw(j, rc == 0 ? "true" : "false");
+    js_raw(j, ",\"mode\":\"loopback-orchestration\"");
+    js_raw(j, ",\"executor\":\"localhost\"");
+    if (jid >= 0) { js_raw(j, ",\"job_id\":"); js_u64(j, (uint64_t)jid); }
+    if (rc == 0 && pm_metal_cloud_job_state((uint64_t)jid, &job) == 0) {
+        js_raw(j, ",\"state\":\"done\",\"artifact_len\":");
+        js_u32(j, job.artifact_len);
+        js_raw(j, ",\"src_hash\":"); js_u32(j, job.src_hash);
+    } else {
+        js_raw(j, ",\"error\":\"cloud loopback refused\"");
+    }
+    js_raw(j, ",\"note\":\"offer, local claim, and result submission; no remote compiler claimed this probe\"}");
+    pm_util_lock_release(&s_cloud_test_lock);
+}
+
 static void fill_cloud_jobs(js_t *j, const char *raw) {
     uint32_t n;
     uint32_t i;
@@ -916,7 +986,8 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
         || (strcmp(method, "GET") != 0
             && !(strcmp(method, "POST") == 0
                 && (strncmp(path, "/build/", 7) == 0
-                    || path_is(path, "/build"))))) {
+                    || path_is(path, "/build")
+                    || path_is(path, "/p2p/cloud/test"))))) {
         js_raw(&j, "{\"error\":\"method\"}");
         s_body_len = j.n; return js_ok(&j) ? 405 : -1;
     }
@@ -928,7 +999,7 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
         fill_caps(&j);
         s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
-    if (path_is(path, "/inspect/self")) {
+    if (path_is(path, "/inspect/self") || path_is(path, "/p2p/self")) {
         fill_self(&j);
         s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
@@ -1017,6 +1088,10 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
     }
     if (path_is(path, "/p2p/cloud")) {
         fill_cloud_jobs(&j, raw);
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
+    }
+    if (path_is(path, "/p2p/cloud/test")) {
+        fill_cloud_test(&j);
         s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
     if (path_is(path, "/p2p/workspace")) {
@@ -3539,11 +3614,14 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
     }
     /* P2P orchestration — one read-only JSON route per card, same
      * body as the local dispatch, reachable from JS via the panel. */
+    (void)add_route("/p2p/self");
     (void)add_route("/p2p/neighbors");
     (void)add_route("/p2p/rpc/handlers");
     (void)add_route("/p2p/rpc/calls");
     (void)add_route("/p2p/dstate");
     (void)add_route("/p2p/cloud");
+    (void)pm_metal_net_http_asgi_route_fn_ct("POST", "/p2p/cloud/test",
+        asgi_handler, "application/json");
     (void)add_route("/p2p/workspace");
     return 0;
 }

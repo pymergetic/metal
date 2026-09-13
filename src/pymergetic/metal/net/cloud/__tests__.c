@@ -157,7 +157,8 @@ static int32_t case_null_reject(void) {
     if (pm_metal_cloud_offer(NULL, src, 1) != -1) return fail_cl("offer NULL target");
     if (pm_metal_cloud_offer("", src, 1) != -1) return fail_cl("offer empty target");
     if (pm_metal_cloud_offer("x", NULL, 1) != -1) return fail_cl("offer NULL source nonzero len");
-    if (pm_metal_cloud_claim(0, 0) != -1) return fail_cl("claim peer_id 0");
+    /* Peer 0 is localhost, but a missing job is still refused. */
+    if (pm_metal_cloud_claim(0, 0) != -1) return fail_cl("claim missing local job");
     if (pm_metal_cloud_claim(1, 1) != -1) return fail_cl("claim nonexistent job");
     if (pm_metal_cloud_job_state(1, NULL) != -1) return fail_cl("job_state NULL out");
 

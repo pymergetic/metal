@@ -15,6 +15,7 @@
   <table class="p2p-table">
     <tbody>
       <tr><th>Peer ID</th><td id="p2p-self-peer">—</td></tr>
+      <tr><th>Host</th><td id="p2p-self-host">—</td></tr>
       <tr><th>Zenoh UUID</th><td id="p2p-self-zid">—</td></tr>
       <tr><th>Arch / Board</th><td id="p2p-self-arch">—</td></tr>
       <tr><th>Neighbors</th><td id="p2p-self-nb">—</td></tr>
@@ -62,6 +63,11 @@
 
 <section class="seat-panel">
   <h2>Cloud Compile</h2>
+  <p class="hint">The loopback probe exercises offer, local claim, and result submission. It does not pretend a remote compiler participated.</p>
+  <div class="seat-controls">
+    <button type="button" id="p2p-cloud-test">Run loopback cloud test</button>
+    <span id="p2p-cloud-test-status" aria-live="polite">idle</span>
+  </div>
   <p class="hint" id="p2p-cc-count">loading&hellip;</p>
   <table id="p2p-cc-table" class="p2p-table" hidden>
     <thead><tr>
