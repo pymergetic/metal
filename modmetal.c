@@ -977,9 +977,7 @@ void mp_metal_packs_try_start(void) {
  * registered service (ssh :2222, httpd :8090, ...). `serve` is just a walk of
  * the services registry; adding a service card auto-extends it.
  *
- * Packs autostart is deferred to the coop pump (mp_metal_packs_try_start).
- * Doing it synchronously here imports deep Python chains (openapi → 76-card
- * doc walk → GC stack scan → stale pointer → SIGSEGV in spare TLSF). */
+ * Packs install (route registrations) is safe: openapi is imported lazily. */
 static mp_obj_t mp_metal_builtin_serve(void) {
     uint32_t n = pm_metal_services_count();
     uint32_t i;
@@ -1006,8 +1004,7 @@ static mp_obj_t mp_metal_builtin_serve(void) {
         }
         pm_metal_boot_msg_item(i + 1u == n, 1, 1, name != NULL ? name : "?", detail);
     }
-    /* Defer packs start to the coop pump (safe: arena is stable, GC is idle). */
-    s_packs_pending = true;
+    mp_metal_packs_start(1);
     /* Close the surface the way the boot tree closes its own: on the autostart
      * seat this block is followed by µPy's version banner, and without the
      * blank the banner reads as another branch of the tree. */
