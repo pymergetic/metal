@@ -33,6 +33,7 @@
 
 static char *s_body;
 static uint32_t s_body_cap;
+static uint32_t s_body_len;
 static int32_t s_status;
 
 PM_UTIL_LIMIT_C(pm_inspect_limit_img, pymergetic.metal.inspect, img, 48u, 0u, NULL);
@@ -680,6 +681,7 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
     js_t j;
     const char *raw;
     if (out == NULL || out_max < 2) {
+        s_body_len = 0;
         return -1;
     }
     out[0] = 0;
@@ -694,27 +696,27 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
                 && (strncmp(path, "/build/", 7) == 0
                     || path_is(path, "/build"))))) {
         js_raw(&j, "{\"error\":\"method\"}");
-        return js_ok(&j) ? 405 : -1;
+        s_body_len = j.n; return js_ok(&j) ? 405 : -1;
     }
     if (path_is(path, "/health")) {
         js_raw(&j, "{\"ok\":true}");
-        return js_ok(&j) ? 200 : -1;
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
     if (path_is(path, "/capabilities")) {
         fill_caps(&j);
-        return js_ok(&j) ? 200 : -1;
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
     if (path_is(path, "/inspect/self")) {
         fill_self(&j);
-        return js_ok(&j) ? 200 : -1;
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
     if (path_is(path, "/inspect/reg") || path_is(path, "/inspect/reg/completeness")) {
         fill_reg(&j, path_is(path, "/inspect/reg/completeness") && path_has(raw, "fmt=tree"));
-        return js_ok(&j) ? 200 : -1;
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
     if (path_is(path, "/inspect/reg/seats")) {
         js_raw(&j, "{\"schema\":1,\"seats\":[\"this\"],\"note\":\"this_seat_registry\"}");
-        return js_ok(&j) ? 200 : -1;
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
     if (strncmp(path, "/inspect/reg/", 13) == 0) {
         /* /inspect/reg/<fqn> (exports) or /inspect/reg/<fqn>/<func> (detail).
@@ -732,13 +734,13 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
                 } else {
                     fill_exports(&j, fqn);
                 }
-                return js_ok(&j) ? 200 : -1;
+                s_body_len = j.n; return js_ok(&j) ? 200 : -1;
             }
         }
     }
     if (strncmp(path, "/inspect/call/", 14) == 0) {
         fill_call(&j, raw);
-        return js_ok(&j) ? 200 : -1;
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
     /* /docs/<fqn>/<name> — doc extract for one export face. Same body the
      * /docs asgi route serves; this local path is what REPL callers and
@@ -751,11 +753,13 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
         const char *doc;
         if (slash == NULL) {
             js_raw(&j, "{\"error\":\"not_found\"}");
+            s_body_len = j.n;
             return 404;
         }
         flen = (size_t)(slash - p);
         if (flen == 0 || flen >= sizeof(fqnbuf)) {
             js_raw(&j, "{\"error\":\"not_found\"}");
+            s_body_len = j.n;
             return 404;
         }
         memcpy(fqnbuf, p, flen);
@@ -763,10 +767,11 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
         doc = pm_metal_inspect_doc(fqnbuf, slash + 1);
         if (doc == NULL) {
             js_raw(&j, "{\"error\":\"not_found\"}");
+            s_body_len = j.n;
             return 404;
         }
         js_raw(&j, doc);
-        return js_ok(&j) ? 200 : -1;
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
     /* /changes/<target> — the ledger read pane, same body the /changes asgi
      * route serves; local path for REPL + host prove without a listener. */
@@ -774,9 +779,11 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
         uint32_t blen = 0;
         if (changes_http(method, path, j.p, j.max, &blen) == 0) {
             j.n = blen;
+            s_body_len = j.n;
             return 200;
         }
         js_raw(&j, "{\"error\":\"not_found\"}");
+        s_body_len = j.n;
         return 404;
     }
     /* /build — the tree index (GET) and /build/<fqn> rebuild (POST): same
@@ -788,9 +795,11 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
         uint32_t blen = 0;
         if (build_index_http(method, path, j.p, j.max, &blen) == 0) {
             j.n = blen;
+            s_body_len = j.n;
             return 200;
         }
         js_raw(&j, "{\"error\":\"not_found\"}");
+        s_body_len = j.n;
         return 404;
     }
     /* /build/events?since=<seq> — the telemetry tail, local for the REPL
@@ -799,9 +808,11 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
         uint32_t blen = 0;
         if (build_events_http(method, path, j.p, j.max, &blen) == 0) {
             j.n = blen;
+            s_body_len = j.n;
             return 200;
         }
         js_raw(&j, "{\"error\":\"not_found\"}");
+        s_body_len = j.n;
         return 404;
     }
     /* /console/<id>?since=<seq> — the console ring by cursor, on the same
@@ -811,9 +822,11 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
         uint32_t blen = 0;
         if (console_tail_http(method, path, j.p, j.max, &blen) == 0) {
             j.n = blen;
+            s_body_len = j.n;
             return 200;
         }
         js_raw(&j, "{\"error\":\"not_found\"}");
+        s_body_len = j.n;
         return 404;
     }
     /* The two object faces, ahead of the rebuild/record fallthrough for the
@@ -825,27 +838,33 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
         uint32_t blen = 0;
         if (images_http(method, path, j.p, j.max, &blen) == 0) {
             j.n = blen;
+            s_body_len = j.n;
             return 200;
         }
         js_raw(&j, "{\"error\":\"not_found\"}");
+        s_body_len = j.n;
         return 404;
     }
     if (strncmp(path, "/images/", 8) == 0) {
         uint32_t blen = 0;
         if (image_bytes_http(method, path, (uint8_t *)j.p, j.max, &blen) == 0) {
             j.n = blen;
+            s_body_len = j.n;
             return 200;
         }
         js_raw(&j, "{\"error\":\"not_found\"}");
+        s_body_len = j.n;
         return 404;
     }
     if (strncmp(path, "/build/objects/", 15) == 0) {
         uint32_t blen = 0;
         if (build_objects_http(method, path, j.p, j.max, &blen) == 0) {
             j.n = blen;
+            s_body_len = j.n;
             return 200;
         }
         js_raw(&j, "{\"error\":\"not_found\"}");
+        s_body_len = j.n;
         return 404;
     }
     if (strncmp(path, "/build/object/", 14) == 0) {
@@ -853,25 +872,31 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
         if (build_object_bytes_http(method, path, (uint8_t *)j.p, j.max,
                 &blen) == 0) {
             j.n = blen;
+            s_body_len = j.n;
             return 200;
         }
         js_raw(&j, "{\"error\":\"not_found\"}");
+        s_body_len = j.n;
         return 404;
     }
     if (strncmp(path, "/build/", 7) == 0) {
         uint32_t blen = 0;
         if (build_rebuild_http(method, path, j.p, j.max, &blen) == 0) {
             j.n = blen;
+            s_body_len = j.n;
             return 200;
         }
         if (build_http(method, path, j.p, j.max, &blen) == 0) {
             j.n = blen;
+            s_body_len = j.n;
             return 200;
         }
         js_raw(&j, "{\"error\":\"not_found\"}");
+        s_body_len = j.n;
         return 404;
     }
     js_raw(&j, "{\"error\":\"not_found\"}");
+    s_body_len = j.n;
     return js_ok(&j) ? 404 : -1;
 }
 
@@ -885,11 +910,27 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
  * body = pm_metal_inspect_body();  // {"ok":true}
  */
 int32_t pm_metal_inspect_handle(const char *method, const char *path) {
+    s_body_len = 0;
     s_status = fill(method, path, s_body, s_body_cap);
     return s_status;
 }
 
 const char *pm_metal_inspect_body(void) {
+    return s_body;
+}
+
+int32_t pm_metal_inspect_body_len(void) {
+    return (int32_t)s_body_len;
+}
+
+int32_t pm_metal_inspect_body_at(int32_t i) {
+    if (i < 0 || (uint32_t)i >= s_body_len) {
+        return -1;
+    }
+    return (int32_t)(uint8_t)s_body[i];
+}
+
+void *pm_metal_inspect_body_addr(void) {
     return s_body;
 }
 
@@ -3140,6 +3181,7 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
         return -1;
     }
     s_body_cap = body_cap;
+    s_body_len = 0;
     s_body[0] = 0;
     s_status = 0;
     (void)add_route("/health");
@@ -3251,6 +3293,7 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
 void pm_metal_inspect_deinit(void) {
     s_body = NULL;
     s_body_cap = 0;
+    s_body_len = 0;
     s_status = 0;
 }
 
@@ -3262,6 +3305,9 @@ PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_deinit, pm_metal_insp
 PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_handle, pm_metal_inspect_handle,
     int32_t(const char *, const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_body, pm_metal_inspect_body, const char *(void));
+PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_body_len, pm_metal_inspect_body_len, int32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_body_at, pm_metal_inspect_body_at, int32_t(int32_t));
+PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_body_addr, pm_metal_inspect_body_addr, void *(void));
 PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_src_manifest, pm_metal_inspect_src_manifest,
     const char *(const char *));
 PM_MOD_EXPORT_C(pymergetic.metal.inspect, pm_metal_inspect_src_read, pm_metal_inspect_src_read,

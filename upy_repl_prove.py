@@ -47,9 +47,37 @@ def check(name, ok, detail: object = ""):
     _report.append("  %-52s %s" % (name, "ok" if ok else "FAIL"))
 
 
+def _body_bytes():
+    """Return the body as a str, handling binary content safely.
+
+    MicroPython's FFI decodes const char * returns as UTF-8 str, which
+    fails for binary content (e.g. .mjs / .wasm windowed fetches).
+    When the raw body isn't valid UTF-8, we read byte-by-byte through
+    the card's body_at(i) face and decode with replacement chars."""
+    try:
+        return inspect.body()
+    except UnicodeError:
+        n = inspect.body_len()
+        if n <= 0:
+            return ""
+        # MicroPython cannot catch UnicodeError from FFI return conversion,
+        # and uctypes.addressof const char * returns a big-endian word in
+        # some builds. The safe path: body_at(i) via the card itself.
+        out = bytearray()
+        for i in range(n):
+            ch = inspect.body_at(i)
+            if ch < 0:
+                break
+            out.append(ch)
+        try:
+            return bytes(out).decode("utf-8", "replace")
+        except Exception:
+            return str(bytes(out))
+
+
 def get(path):
     st = inspect.handle("GET", path)
-    return st, inspect.body()
+    return st, _body_bytes()
 
 
 check("the line is percent-decoded",
