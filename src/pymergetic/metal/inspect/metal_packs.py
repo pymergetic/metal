@@ -101,7 +101,14 @@ def install(pattern=None):
             return -1
     if int(asgi.route_defer_m("POST", _EXEC_ROUTE, "application/json")) != 0:
         return -1
-    if _openapi().install_openapi_deferred(asgi) != 0:
+    # Register /openapi.json and /docs routes directly — no eager import of the
+    # openapi module. Importing openapi walks all 76 cards for API doc generation
+    # and triggers MicroPython GC stack scans on unstable boot stacks, crashing
+    # into unmapped memory 4 MB below the spare TLSF pool. The module is only
+    # imported lazily when a request actually hits /docs or /openapi.json.
+    if int(asgi.route_defer("/openapi.json", "application/json")) != 0:
+        return -1
+    if int(asgi.route_defer("/docs", "text/html; charset=utf-8")) != 0:
         return -1
     return 0
 
