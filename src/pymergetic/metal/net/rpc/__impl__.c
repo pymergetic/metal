@@ -277,6 +277,21 @@ int32_t pm_metal_rpc_handle(const char *key, const uint8_t *args, uint32_t args_
         s_handlers[slot].user);
 }
 
+uint32_t pm_metal_rpc_handler_count(void) {
+    return s_nh;
+}
+
+const char *pm_metal_rpc_handler_key_at(uint32_t idx) {
+    uint32_t i;
+    uint32_t seen = 0;
+    for (i = 0; i < PM_METAL_RPC_HANDLERS_MAX; i++) {
+        if (!s_handlers[i].used) continue;
+        if (seen == idx) return s_handlers[i].key;
+        seen++;
+    }
+    return NULL;
+}
+
 #include "pymergetic/wasmmod/guest.h"
 
 PM_MOD_EXPORT_C(pymergetic.metal.net.rpc, pm_metal_rpc_register, pm_metal_rpc_register, int32_t(const char *, pm_metal_rpc_handler_t, void *));
@@ -284,3 +299,5 @@ PM_MOD_EXPORT_C(pymergetic.metal.net.rpc, pm_metal_rpc_unregister, pm_metal_rpc_
 PM_MOD_EXPORT_C(pymergetic.metal.net.rpc, pm_metal_rpc_invoke, pm_metal_rpc_invoke, int64_t(const char *, const char *, const uint8_t *, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.net.rpc, pm_metal_rpc_poll, pm_metal_rpc_poll, int32_t(pm_metal_rpc_result_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.net.rpc, pm_metal_rpc_handle, pm_metal_rpc_handle, int32_t(const char *, const uint8_t *, uint32_t, uint8_t *, uint32_t *));
+PM_MOD_EXPORT_C(pymergetic.metal.net.rpc, pm_metal_rpc_handler_count, pm_metal_rpc_handler_count, uint32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.net.rpc, pm_metal_rpc_handler_key_at, pm_metal_rpc_handler_key_at, const char *(uint32_t));

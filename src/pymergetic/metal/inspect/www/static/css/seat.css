@@ -230,6 +230,34 @@ table.fx-matrix {
 .fx-matrix td.busy { color: var(--remote); }
 .fx-matrix td.idle { color: var(--muted); opacity: 0.6; }
 .fx-matrix td.bytes { color: var(--fg); }
+/* ---- P2P orchestration tables ---- */
+table.p2p-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+  margin-top: 0.5rem;
+}
+.p2p-table th,
+.p2p-table td {
+  text-align: left;
+  padding: 0.3rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.p2p-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.p2p-table td:first-child {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+}
 .fx-dl {
   font: inherit;
   font-size: 0.74rem;

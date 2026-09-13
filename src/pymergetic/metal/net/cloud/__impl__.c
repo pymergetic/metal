@@ -234,6 +234,14 @@ uint32_t pm_metal_cloud_running(void) {
     return n;
 }
 
+uint32_t pm_metal_cloud_count(void) {
+    return s_n;
+}
+
+pm_metal_cloud_job_t *pm_metal_cloud_at(uint32_t idx) {
+    return (idx < s_n) ? &s_jobs[idx] : NULL;
+}
+
 #include "pymergetic/wasmmod/guest.h"
 
 PM_MOD_EXPORT_C(pymergetic.metal.net.cloud, pm_metal_cloud_init, pm_metal_cloud_init, int32_t(uint32_t));

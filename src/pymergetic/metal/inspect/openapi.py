@@ -413,7 +413,7 @@ def docs_html():
         "<link rel=\"stylesheet\" href=\"/static/css/swagger-theme.css\">"
         "<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css\" crossorigin>"
         "</head><body class=\"page-docs\">"
-        + inner.decode("utf-8", errors="replace") +
+        + inner.decode("utf-8", "replace") +
         "</body></html>"
     ).encode()
 

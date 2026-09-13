@@ -1,0 +1,69 @@
+{% args d %}
+<section class="hero">
+  <p class="eyebrow">seat</p>
+  <h1>P2P / Orchestration</h1>
+  <p class="lede">
+    Live neighbour table, RPC handlers, distributed state, cloud compile
+    jobs, and shared workspace — all six panes read this seat's own
+    <code>/p2p/&hellip;</code> JSON endpoints and poll every 3&nbsp;s.
+  </p>
+</section>
+
+<section class="seat-panel">
+  <h2>Neighbors</h2>
+  <p class="hint" id="p2p-nb-count">loading&hellip;</p>
+  <table id="p2p-nb-table" class="p2p-table" hidden>
+    <thead><tr>
+      <th>ID</th><th>Zenoh UUID</th><th>Host</th><th>Caps</th><th>Alive</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="hint" id="p2p-nb-empty">No neighbours discovered yet.</p>
+</section>
+
+<section class="seat-panel">
+  <h2>RPC</h2>
+  <div class="seat-cols">
+    <div>
+      <h3>Registered Handlers</h3>
+      <pre id="p2p-rpc-handlers">loading&hellip;</pre>
+    </div>
+    <div>
+      <h3>Pending Calls</h3>
+      <pre id="p2p-rpc-calls">loading&hellip;</pre>
+    </div>
+  </div>
+</section>
+
+<section class="seat-panel">
+  <h2>Distributed State</h2>
+  <p class="hint" id="p2p-ds-count">loading&hellip;</p>
+  <table id="p2p-ds-table" class="p2p-table" hidden>
+    <thead><tr>
+      <th>Key</th><th>Value (hex)</th><th>Version</th><th>Peer</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section class="seat-panel">
+  <h2>Cloud Compile</h2>
+  <p class="hint" id="p2p-cc-count">loading&hellip;</p>
+  <table id="p2p-cc-table" class="p2p-table" hidden>
+    <thead><tr>
+      <th>Job</th><th>Target</th><th>Peer</th><th>State</th><th>Artifact</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section class="seat-panel">
+  <h2>Shared Workspace</h2>
+  <p class="hint" id="p2p-ws-count">loading&hellip;</p>
+  <table id="p2p-ws-table" class="p2p-table" hidden>
+    <thead><tr>
+      <th>Path</th><th>Size</th><th>Author</th><th>Hash</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+</section>

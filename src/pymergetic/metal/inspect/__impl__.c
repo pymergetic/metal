@@ -8,6 +8,16 @@
 #include "pymergetic/metal/build/__types__.h"
 /* for the lane list on /build: which cross targets this seat carries */
 #include "pymergetic/metal/jit/c/__types__.h"
+#include "pymergetic/metal/net/neighbors/__exports__.h"
+#include "pymergetic/metal/net/rpc/__exports__.h"
+#include "pymergetic/metal/net/dstate/__exports__.h"
+#include "pymergetic/metal/net/cloud/__exports__.h"
+#include "pymergetic/metal/net/workspace/__exports__.h"
+/* Additional enumeration exports not yet in auto-generated headers. */
+uint32_t pm_metal_rpc_handler_count(void);
+const char *pm_metal_rpc_handler_key_at(uint32_t idx);
+uint32_t pm_metal_cloud_count(void);
+pm_metal_cloud_job_t *pm_metal_cloud_at(uint32_t idx);
 #include "pymergetic/util/limits.h"
 #include "pymergetic/util/lock.h"
 #include "pymergetic/util/mem.h"
@@ -497,6 +507,40 @@ static void js_i32(js_t *j, int32_t v) {
     }
 }
 
+static void js_u64(js_t *j, uint64_t v) {
+    char tmp[21];
+    uint32_t i = 0;
+    if (v == 0) {
+        js_ch(j, '0');
+        return;
+    }
+    while (v != 0 && i < sizeof(tmp)) {
+        tmp[i++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    while (i > 0) {
+        js_ch(j, tmp[--i]);
+    }
+}
+
+static void js_i64(js_t *j, int64_t v) {
+    if (v < 0) {
+        js_ch(j, '-');
+        js_u64(j, (uint64_t)(-v));
+    } else {
+        js_u64(j, (uint64_t)v);
+    }
+}
+
+static void js_hex(js_t *j, const uint8_t *data, uint32_t len) {
+    static const char hexc[] = "0123456789abcdef";
+    uint32_t i;
+    for (i = 0; i < len && j->n + 2u < j->max; i++) {
+        js_ch(j, hexc[(data[i] >> 4) & 0xfu]);
+        js_ch(j, hexc[data[i] & 0xfu]);
+    }
+}
+
 static void fill_call(js_t *j, const char *path) {
     char fqn[192];
     char func[128];
@@ -651,6 +695,174 @@ static void fill_call(js_t *j, const char *path) {
 
 static int32_t fill(const char *method, const char *path, char *out, uint32_t out_max);
 
+/* P2P endpoint fillers — live JSON from each neighbour/orchestration card. */
+static void fill_neighbors(js_t *j, const char *raw);
+static void fill_rpc_handlers(js_t *j);
+static void fill_rpc_calls(js_t *j);
+static void fill_dstate_entries(js_t *j);
+static void fill_cloud_jobs(js_t *j, const char *raw);
+static void fill_workspace_files(js_t *j);
+
+static void fill_neighbors(js_t *j, const char *raw) {
+    uint32_t n;
+    uint32_t i;
+    uint32_t save;
+    (void)raw;
+    n = pm_metal_neighbors_count();
+    js_ch(j, '{');
+    js_raw(j, "\"schema\":1");
+    js_raw(j, ",\"neighbors\":[");
+    save = 1;
+    for (i = 0; i < n; i++) {
+        pm_metal_neighbor_t nb;
+        if (pm_metal_neighbors_at(i, &nb) != 0) continue;
+        if (save) save = 0; else js_ch(j, ',');
+        js_ch(j, '{');
+        js_raw(j, "\"peer_id\":"); js_u32(j, nb.peer_id);
+        js_raw(j, ",\"zenoh_id\":\""); js_raw(j, nb.zenoh_id); js_ch(j, '"');
+        js_raw(j, ",\"host\":\""); js_raw(j, nb.host); js_ch(j, '"');
+        js_raw(j, ",\"caps\":"); js_u32(j, nb.caps);
+        js_raw(j, ",\"last_seen_us\":"); js_i64(j, nb.last_seen_us);
+        js_raw(j, ",\"alive\":"); js_u32(j, nb.alive != 0 ? 1u : 0u);
+        js_ch(j, '}');
+    }
+    js_raw(j, "]}");
+}
+
+static void fill_rpc_handlers(js_t *j) {
+    uint32_t n;
+    uint32_t i;
+    uint32_t save;
+    n = pm_metal_rpc_handler_count();
+    js_ch(j, '{');
+    js_raw(j, "\"schema\":1");
+    js_raw(j, ",\"handler_count\":"); js_u32(j, n);
+    js_raw(j, ",\"handlers\":[");
+    save = 1;
+    for (i = 0; i < n; i++) {
+        const char *key = pm_metal_rpc_handler_key_at(i);
+        if (key == NULL) continue;
+        if (save) save = 0; else js_ch(j, ',');
+        js_ch(j, '"');
+        js_raw(j, key);
+        js_ch(j, '"');
+    }
+    js_raw(j, "]}");
+}
+
+static void fill_rpc_calls(js_t *j) {
+    pm_metal_rpc_result_t r;
+    uint32_t first;
+    js_raw(j, "{\"pending\":[");
+    first = 1;
+    while (pm_metal_rpc_poll(&r) == 0) {
+        if (first) first = 0; else js_ch(j, ',');
+        js_ch(j, '{');
+        js_raw(j, "\"call_id\":"); js_u64(j, r.call_id);
+        js_raw(j, ",\"status\":"); js_i32(j, r.status);
+        if (r.result_len > 0) {
+            js_raw(j, ",\"result\":\"");
+            js_hex(j, r.result, r.result_len);
+            js_ch(j, '"');
+        }
+        js_ch(j, '}');
+    }
+    js_raw(j, "]}");
+}
+
+static void fill_dstate_entries(js_t *j) {
+    uint32_t n;
+    uint32_t i;
+    uint32_t save;
+    n = pm_metal_dstate_count();
+    js_ch(j, '{');
+    js_raw(j, "\"schema\":1");
+    js_raw(j, ",\"entries\":[");
+    save = 1;
+    for (i = 0; i < n; i++) {
+        pm_metal_dstate_entry_t e;
+        if (pm_metal_dstate_at(i, &e) != 0) continue;
+        if (save) save = 0; else js_ch(j, ',');
+        js_ch(j, '{');
+        js_raw(j, "\"key\":\""); js_raw(j, e.key); js_ch(j, '"');
+        js_raw(j, ",\"value_len\":"); js_u32(j, e.value_len);
+        js_raw(j, ",\"version\":"); js_u64(j, e.version);
+        js_raw(j, ",\"peer_id\":"); js_u32(j, e.peer_id);
+        /* value may be binary — hex-encode */
+        if (e.value_len > 0) {
+            js_raw(j, ",\"value_hex\":\"");
+            js_hex(j, e.value, e.value_len);
+            js_ch(j, '"');
+        }
+        js_ch(j, '}');
+    }
+    js_raw(j, "]}");
+}
+
+static void fill_cloud_jobs(js_t *j, const char *raw) {
+    uint32_t n;
+    uint32_t i;
+    uint32_t save;
+    (void)raw;
+    n = pm_metal_cloud_count();
+    js_ch(j, '{');
+    js_raw(j, "\"pending\":"); js_u32(j, pm_metal_cloud_pending());
+    js_raw(j, ",\"running\":"); js_u32(j, pm_metal_cloud_running());
+    js_raw(j, ",\"total\":"); js_u32(j, n);
+    js_raw(j, ",\"jobs\":[");
+    save = 1;
+    for (i = 0; i < n; i++) {
+        pm_metal_cloud_job_t *jb = pm_metal_cloud_at(i);
+        if (jb == NULL || jb->state == PM_METAL_CLOUD_JOB_IDLE) continue;
+        if (save) save = 0; else js_ch(j, ',');
+        js_ch(j, '{');
+        js_raw(j, "\"job_id\":"); js_u64(j, jb->job_id);
+        js_raw(j, ",\"target\":\""); js_raw(j, jb->target); js_ch(j, '"');
+        js_raw(j, ",\"peer_id\":"); js_u32(j, jb->peer_id);
+        js_raw(j, ",\"state\":");
+        switch (jb->state) {
+        case PM_METAL_CLOUD_JOB_OFFERED: js_raw(j, "\"offered\""); break;
+        case PM_METAL_CLOUD_JOB_CLAIMED: js_raw(j, "\"claimed\""); break;
+        case PM_METAL_CLOUD_JOB_RUNNING: js_raw(j, "\"running\""); break;
+        case PM_METAL_CLOUD_JOB_DONE:    js_raw(j, "\"done\"");    break;
+        case PM_METAL_CLOUD_JOB_FAILED:  js_raw(j, "\"failed\"");  break;
+        default: js_raw(j, "\"idle\""); break;
+        }
+        js_raw(j, ",\"src_hash\":"); js_u32(j, jb->src_hash);
+        if (jb->state == PM_METAL_CLOUD_JOB_FAILED && jb->error[0] != 0) {
+            js_raw(j, ",\"error\":\""); js_raw(j, jb->error); js_ch(j, '"');
+        }
+        if (jb->state == PM_METAL_CLOUD_JOB_DONE && jb->artifact_len > 0) {
+            js_raw(j, ",\"artifact_len\":"); js_u32(j, jb->artifact_len);
+        }
+        js_ch(j, '}');
+    }
+    js_raw(j, "]}");
+}
+
+static void fill_workspace_files(js_t *j) {
+    uint32_t n;
+    uint32_t i;
+    uint32_t save;
+    n = pm_metal_workspace_count();
+    js_ch(j, '{');
+    js_raw(j, "\"schema\":1");
+    js_raw(j, ",\"files\":[");
+    save = 1;
+    for (i = 0; i < n; i++) {
+        pm_metal_workspace_file_t f;
+        if (pm_metal_workspace_at(i, &f) != 0) continue;
+        if (save) save = 0; else js_ch(j, ',');
+        js_ch(j, '{');
+        js_raw(j, "\"path\":\""); js_raw(j, f.path); js_ch(j, '"');
+        js_raw(j, ",\"content_len\":"); js_u32(j, f.content_len);
+        js_raw(j, ",\"mtime_us\":"); js_u64(j, f.mtime_us);
+        js_raw(j, ",\"author_peer\":"); js_u32(j, f.author_peer);
+        js_raw(j, ",\"content_hash\":"); js_u32(j, f.content_hash);
+        js_ch(j, '}');
+    }
+    js_raw(j, "]}");
+}
 /* /changes/<target> — the ledger read pane (defined after fill; the local
  * dispatch in fill and the asgi route both serve it). */
 static int32_t changes_http(const char *method, const char *path,
@@ -771,6 +983,34 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
             return 404;
         }
         js_raw(&j, doc);
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
+    }
+    /* P2P orchestration — live read-pane JSON from every
+     * neighbour / RPC / distributed-state / cloud-compile /
+     * workspace card. One URL per card; the JS panel
+     * fetches all six and renders the unified dashboard. */
+    if (path_is(path, "/p2p/neighbors")) {
+        fill_neighbors(&j, raw);
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
+    }
+    if (path_is(path, "/p2p/rpc/handlers")) {
+        fill_rpc_handlers(&j);
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
+    }
+    if (path_is(path, "/p2p/rpc/calls")) {
+        fill_rpc_calls(&j);
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
+    }
+    if (path_is(path, "/p2p/dstate")) {
+        fill_dstate_entries(&j);
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
+    }
+    if (path_is(path, "/p2p/cloud")) {
+        fill_cloud_jobs(&j, raw);
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
+    }
+    if (path_is(path, "/p2p/workspace")) {
+        fill_workspace_files(&j);
         s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
     /* /changes/<target> — the ledger read pane, same body the /changes asgi
@@ -3287,6 +3527,14 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
     if (inspect_www_mount() != 0) {
         return -1;
     }
+    /* P2P orchestration — one read-only JSON route per card, same
+     * body as the local dispatch, reachable from JS via the panel. */
+    (void)add_route("/p2p/neighbors");
+    (void)add_route("/p2p/rpc/handlers");
+    (void)add_route("/p2p/rpc/calls");
+    (void)add_route("/p2p/dstate");
+    (void)add_route("/p2p/cloud");
+    (void)add_route("/p2p/workspace");
     return 0;
 }
 

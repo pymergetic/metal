@@ -307,6 +307,7 @@ def _tree_of(fqns):
 _SEAT_PAGES = (
     ("reg", "Registry"),
     ("factory", "Factory"),
+    ("p2p", "P2P"),
 )
 
 
@@ -344,6 +345,7 @@ def shell_ctx(catalog, *, title, active_package="", body_html="", nav_html_overr
             "page-docs" if nav_active == "docs"
             else "page-reg" if nav_active == "reg"
             else "page-factory" if nav_active == "factory"
+            else "page-p2p" if nav_active == "p2p"
             else ""
         ),
         "base_path": base_path,
@@ -510,6 +512,13 @@ def render_factory(registry, *, engine, template_dir="www"):
     return _seat_page(registry, engine=engine, template="factory.html",
                       title="factory — pymergetic.metal", nav_active="factory",
                       script="factory.js")
+
+
+def render_p2p(registry, *, engine, template_dir="www"):
+    """Render the P2P orchestration panel (p2p.html in shell.html)."""
+    return _seat_page(registry, engine=engine, template="p2p.html",
+                      title="P2P — pymergetic.metal", nav_active="p2p",
+                      script="p2p.js")
 
 
 def render_package(registry, name, *, engine, template_dir="www"):

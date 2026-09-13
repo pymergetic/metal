@@ -242,6 +242,44 @@
 
 .swagger-ui svg { fill: var(--muted); }
 
+/* Copy-to-clipboard button — show always (no hover-only reveal that
+ * awkwardly overlaps the expand arrow when it fades out). */
+.swagger-ui .opblock-summary .copy-to-clipboard {
+  position: static !important;
+  display: inline-flex !important;
+  align-items: center;
+  opacity: 0.45;
+  margin-left: 0.35rem;
+}
+.swagger-ui .opblock-summary .copy-to-clipboard:hover,
+.swagger-ui .opblock-summary .copy-to-clipboard:focus {
+  opacity: 0.75;
+}
+.swagger-ui .opblock-summary .copy-to-clipboard button {
+  background: transparent !important;
+  border: 0 !important;
+  padding: 2px 4px !important;
+  cursor: pointer;
+}
+.swagger-ui .opblock-summary .copy-to-clipboard svg {
+  fill: var(--fg) !important;
+}
+
+/* Expand/collapse arrow — dark-on-dark is unreadable, make it visible. */
+.swagger-ui .opblock-control-arrow svg,
+.swagger-ui .expand-operation svg {
+  fill: var(--muted) !important;
+}
+.swagger-ui .opblock-control-arrow svg polygon,
+.swagger-ui .expand-operation svg polygon {
+  fill: var(--muted) !important;
+}
+/* The arrow sits in a ::before/::after pseudo element in some swagger builds;
+ * catch those too. */
+.swagger-ui .arrow {
+  fill: var(--muted) !important;
+}
+
 /* Buttons inside models (Expand all) must not inherit light chips */
 .swagger-ui section.models button,
 .swagger-ui .model-box button,

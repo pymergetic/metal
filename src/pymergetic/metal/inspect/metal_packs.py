@@ -141,7 +141,7 @@ def render(path):
         if fqn == "docs" or fqn == "docs/":
             # /packs/docs — API docs rendered through the shared shell chrome.
             # openapi.docs_inner_html() is the swagger bloc; shell wraps it.
-            body_html = _openapi().docs_inner_html().decode("utf-8", errors="replace")
+            body_html = _openapi().docs_inner_html().decode("utf-8", "replace")
             fqns = _cr._cards(_cr._modules(_registry()))
             nav = _cr._nav(_cr._tree_of(sorted(fqns)))
             shell = _cr.shell_ctx([], title="API — pymergetic.metal",
@@ -168,7 +168,7 @@ def render(path):
     # FastAPI-style docs page. One pump answers all of them.
     if path == "/docs" or path == "/docs/":
         # Render through the shared shell chrome when the seat has the renderer.
-        body_html = _openapi().docs_inner_html().decode("utf-8", errors="replace")
+        body_html = _openapi().docs_inner_html().decode("utf-8", "replace")
         fqns = _cr._cards(_cr._modules(_registry()))
         nav = _cr._nav(_cr._tree_of(sorted(fqns)))
         shell = _cr.shell_ctx([], title="API — pymergetic.metal",
